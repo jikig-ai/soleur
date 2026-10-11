@@ -4,11 +4,11 @@ type: counsel-review
 date: 2026-10-11
 issue: 9372
 pr: PENDING
-status: DRAFT — pending CLO-agent attestation (this record is not signed off until that line is replaced)
-signed_off_at: null
-signed_off_by: null
-reviewed_commit: PENDING
-disposition: PENDING
+status: ATTESTED (CLO-agent v1 internal attestation, Soleur-as-tenant-zero; the owner retains a veto, not yet exercised) — conditional on this change merging
+signed_off_at: 2026-10-11
+signed_off_by: "CLO agent (attestation authority for the Soleur-as-tenant-zero v1 posture; the owner retains an optional veto)"
+reviewed_commit: "the working tree of the change at commit 5f81147782 plus the corrections commit that follows it on its branch; the CLO review's six corrections were applied after the review"
+disposition: "DISCHARGED for the bounded claims in section 2 (formatted/opened plus green probes on a volume that holds no personal data); two open conditions below"
 blocking_findings: []
 conditions:
   - "C-9372-1 — Not discharged, lapses when web-2 receives serving weight or personal data: passphrase-loss recovery for a data-bearing web-class host (Art. 32(1)(c)), #9948; the escrow=missing re-escrow step, #9949; state restore substrate (unversioned Terraform state is one of two passphrase copies), #7992; and the open conditions C3 and C6 of the 2026-10-04 record for #9377 (2026-10-counsel-review-9377.md)."
@@ -35,13 +35,13 @@ The Article 30 register and the compliance posture each carried a conditional of
 | Compliance posture, T-1 row | "Once web-2 has been converted" | marker |
 | `workspaces-plaintext-destruction-record.md` | "Other copies of workspace data" | dated pointer note below the table |
 
-The three "IF AND WHEN … describe it as encrypted." spans are 314 characters and byte-identical after bold removal, and the marker inserted after each is byte-identical after bold removal (checked once at authoring time; the markers are append-only, so no committed test guards them).
+The three "IF AND WHEN … describe it as encrypted." spans are 314 characters and byte-identical after bold removal. The marker inserted after each carries the same evidence sentence; the cross-host replication row and the Hetzner DPA-scope row additionally name the present-tense sentence they supersede in their lead-in (CLO correction, 2026-10-11), so the three markers are no longer byte-identical (checked at authoring time; the markers are append-only, so no committed test guards them).
 
 ## 2. The marker and its evidence
 
 Marker (as inserted; the lead-in varies per placement):
 
-> **Superseded 2026-10-11 (#9372), …:** web-2's `/workspaces` volume (Hetzner id 107059048, born raw 2026-10-06) is LUKS-formatted and was opened by the running instance (readiness row `luks=1 luks_arm=opened escrow=ok`, boot dd08ac9d, 2026-10-07T20:07Z), and the daily luks-monitor probe rows read `crypto_LUKS` on `/dev/mapper/workspaces` on three distinct days (the #6931 grader returned PASS on 2026-10-10). That is formatted/opened plus green probes; it does not show that the volume can be reopened after a host restart, which has not been exercised (ADR-263 addendum 2026-10-08). web-2 still holds no personal data and sits at serving weight 0. The recovery sentences in this cell are unchanged and stay conditioned on the data-bearing period (#9948, #9949, #7992).
+> **Superseded 2026-10-11 (#9372), …:** web-2's `/workspaces` volume (Hetzner id 107059048, born raw 2026-10-06) is LUKS-formatted and was opened by the running instance (readiness row `luks=1 luks_arm=opened escrow=ok`, boot dd08ac9d, 2026-10-07T20:07Z), and the daily luks-monitor probe rows read `crypto_LUKS` on `/dev/mapper/workspaces` on three distinct days (the #6931 grader returned PASS on 2026-10-10). That is formatted/opened plus green probes; it does not show that the volume can be reopened after a host restart, which no controlled test has exercised (ADR-263 addendum 2026-10-08). This marker records that the condition's two limbs are met; it does not adopt the boot-time consequent of the sentence it supersedes. web-2 still holds no personal data and sits at serving weight 0. The recovery sentence wording differs by placement: the cross-host replication row and the Hetzner DPA-scope row carry recovery sentences and say "The recovery sentences in this cell are unchanged and stay conditioned on the data-bearing period (#9948, #9949, #7992)."; the other five placements carry no recovery sentence and instead say "Recovery for the data-bearing period is recorded in the cross-host replication row of the Article 30 register and the Hetzner DPA-scope row of the compliance posture, and stays conditioned on that period (#9948, #9949, #7992)."
 
 | Claim in the marker | Evidence (read 2026-10-11, no SSH, no dashboard) |
 |---|---|
@@ -49,6 +49,7 @@ Marker (as inserted; the lead-in varies per placement):
 | LUKS-formatted and opened by the running instance | Better Stack: `SOLEUR_FRESH_BOOT_READY` row `luks=1 luks_arm=opened escrow=ok`, boot dd08ac9d, 2026-10-07T20:07Z (read through the grader) |
 | probe rows read `crypto_LUKS` on three distinct days | host-side luks-monitor rows `device_type=crypto_LUKS mount_source=/dev/mapper/workspaces`; the grader reported three distinct green days at its 2026-10-10 PASS, and four distinct days when re-run on 2026-10-11 (`scripts/followthroughs/web2-luks-live-6931.sh`, exit 0, newest probe row about 12 hours old) |
 | grader PASS 2026-10-10 | sweeper run 38083925201 |
+| `luks_arm=opened` denotes the arm that opens an already-formatted header; boot 77985247 (2026-10-06T18:24Z) reported `luks_arm=formatted`, and boots 479cd3f3 (2026-10-06T19:36Z) and dd08ac9d (2026-10-07T20:07Z) reported `opened` (Better Stack, read 2026-10-11) | self-reported rows, instance identity a weak anchor (ADR-263 addendum 2026-10-08); this record does not treat them as a reopen test and does not claim boot dd08ac9d as one |
 | holds no personal data, serving weight 0 | unchanged premise; the anti-pooling gate (`lb-weight-gate.sh`) keeps web-2 out of the pool; not re-measured by this change |
 
 ## 3. Bounded Art. 5(2) statement for web-2's deleted plaintext volume
@@ -58,7 +59,7 @@ Marker (as inserted; the lead-in varies per placement):
 - Dispatch and approval: dispatched by the repository owner and approved by the repository owner (the workflow records the same actor in both roles), after plan-only run 37508066236 (2026-10-06T18:03Z) returned the same emptiness verdict.
 - Emptiness evidence: size only. The gate read used bytes over 169 hours (newest sample 94 seconds old): maximum 16,027,648 bytes, minimum 15,556,608 bytes, spread 471,040 bytes, against a 1 GiB ceiling, volume not detached. No probe read the volume's contents, and this record does not interpret what the 16 MB consists of.
 - No zeroing step ran; the volume was deleted, not wiped.
-- No workspace data was ever routed to web-2 (serving weight 0, never pooled).
+- No routing of workspace data to web-2 is recorded (serving weight 0, anti-pooling gate); the routing history was not re-read by this review.
 - **Not claimed:** that the deleted volume was verified empty. The statement is that the available evidence (size, serving weight, absence of routing) is consistent with it holding no personal data, and that no stronger evidence exists because the volume no longer exists.
 
 ## 4. NOT DISCHARGED — lapses when web-2 receives serving weight or personal data
@@ -77,4 +78,6 @@ Marker (as inserted; the lead-in varies per placement):
 
 ## 6. Attestation
 
-PENDING — to be replaced by the CLO-agent attestation line and the owner-veto note when the review below has run.
+On 2026-10-11 the CLO agent, as v1 internal attestation authority, reviewed the append-only supersession markers, the destruction-record pointer and the `hcloud_volume.workspaces` ledger flip against the evidence table, and attests them as bounded to formatted/opened plus green probes on a volume that holds no personal data, with reopen after a host restart, passphrase-loss recovery and the emptiness of the deleted volume expressly not claimed, subject to corrections 1 to 6 being applied; external counsel re-review stays reserved for the frontmatter triggers.
+
+Corrections applied after that review (2026-10-11): (1) the lead-ins of the cross-host replication row and the Hetzner DPA-scope row now name the present-tense sentences they supersede; (2) every marker states that it records the condition's two limbs as met and does not adopt the boot-time consequent of the superseded sentence; (3) the recovery sentence wording was corrected in the five placements that carry no recovery sentence; (4) the routing statement in section 3 was narrowed to what is recorded; (5) "has not been exercised" became "no controlled test has exercised", with an evidence row for the three readiness rows (one `formatted` boot, two later `opened` boots) that this record does not treat as a reopen test; (6) the ledger row's `defends_against` and `does_not_defend` now say web-2 holds no workspace data and that no at-rest claim is made for workspace data on it. Bold nesting in three compliance-posture markers was also corrected. The owner's veto is not assumed: it is surfaced in the pull request.
