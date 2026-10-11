@@ -400,3 +400,19 @@ owned by tracked work, not a count.
 - **Delivery is an automatic replace.** `hcloud_server.registry` carries no `ignore_changes` on `user_data`, so merging a change to the rendered registry user_data makes
   `registry-host-replace-dispatch.yml` dispatch `-replace=hcloud_server.registry` with no reviewer gate (ADR-096, ADR-190, and the runbook `registry-host-replace-dispatch.md`). The running
   host keeps the argv form until that replace is delivered; the new host boots the converted scripts. The registry changes sit in ONE commit (the template, the suites that execute it, the battery's registry rows and this section). Declining the replace is only possible BEFORE the merge, by reverting that commit: a squash merge collapses the slice into one commit and merging dispatches the replace, so after the merge there is nothing left to revert. After the revert the registry row stays in baseline E and needs its own owner line (a `#N` comment above it, which the battery requires).
+
+## Amendment 2026-10-11 (#9999) — the canonical alphabet governs every credential-shape pin
+
+Scope clarification; the decisions and addenda above are unchanged and dated. The `[A-Za-z0-9._~+/=-]` class `bc_ok` enforces was adopted here as the alphabet a credential may occupy on curl's stdin
+config channel — RFC 6750's b64token grammar, the maximal alphabet a bearer value may carry. This amendment extends the same contract to **every credential-shape pattern in the repo**: any
+sentinel, detection, redaction, filter or validation expression that judges the *value* of a credential uses the canonical alphabet for that value's character run, or documents at the site why a
+narrower class is correct. Anchoring elements are not narrowed by this clause — a `ghs_`/`github_pat_` prefix, an `sk-ant-` infix or a `{36}`-style length bound may stay; what may not stay is a
+body alphabet narrower than `[A-Za-z0-9._~+/=-]` justified only by "the vendor issues base62 today".
+
+### Rejected alternative: per-site vendor-format pins
+
+Modelling each pattern on the vendor's currently issued shape (`ghs_[A-Za-z0-9_]{20,}` and kin) was rejected on measurement, not taste: what a vendor issues is mutable surface the repo cannot
+observe, so the pin's correctness is hostage to a rotation that arrives with no notice. The incident chain is the measured cost. When GitHub rotated `ghs_` installation tokens to a ~390-520-char
+shape over the b64token alphabet, a `[A-Za-z0-9_]` guard refused a valid live-minted token and the #9972 repair had to convert the bespoke guard to the canonical body; #9999 then swept the
+surviving vendor-format pins in detection, sentinel and documentation sites onto the canonical class. Per-site vendor pins cost one pipeline outage per rotation plus a repo-wide sweep; the
+canonical alphabet costs nothing at rotation time because it is already the maximal set the channel can carry.

@@ -117,7 +117,7 @@ printf '::compound-promote-week-cap::%d\n' "$REMAINING"
 # are the second and third lines of defense. The runbook acknowledges that
 # novel shapes (phone numbers, customer slugs, prod IDs without prefix) still
 # slip through.
-PII_REGEX='([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})|([0-9]{1,3}(\.[0-9]{1,3}){3})|([A-Z]{2}[0-9]{2}[A-Z0-9]{4}[0-9]{7}([A-Z0-9]?){0,16})|(eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)|(sk-ant-[A-Za-z0-9_-]{20,})|(gh[psr]_[A-Za-z0-9]{20,})|(AKIA[0-9A-Z]{16})|((sk|pk)_(live|test)_[A-Za-z0-9]{20,})|(xox[baprs]-[A-Za-z0-9-]{10,})'
+PII_REGEX='([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})|([0-9]{1,3}(\.[0-9]{1,3}){3})|([A-Z]{2}[0-9]{2}[A-Z0-9]{4}[0-9]{7}([A-Z0-9]?){0,16})|(eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)|(sk-ant-[A-Za-z0-9_-]{20,})|(gh[psr]_[A-Za-z0-9._~+/=-]{20,})|(AKIA[0-9A-Z]{16})|((sk|pk)_(live|test)_[A-Za-z0-9]{20,})|(xox[baprs]-[A-Za-z0-9-]{10,})'
 SAFE_FILES=()
 if [[ -d "$LEARNINGS_DIR" ]]; then
   while IFS= read -r -d '' file; do

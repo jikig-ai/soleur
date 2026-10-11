@@ -72,6 +72,39 @@ describe("redactGithubSourcedText", () => {
       expect(out).not.toContain(`${"ghp"+"_"}abcdefghijklmnopqrstuvwxyz`);
     });
 
+    it("redacts a rotated new-shape ghs_ installation token (~390 chars, canonical alphabet)", () => {
+      // GitHub rotated ghs_ installation tokens to a ~390-520-char shape
+      // over the canonical b64token alphabet [A-Za-z0-9._~+/=-]
+      // (`scripts/lib/bearer-curl.sh` `bc_ok`, ADR-280). The legacy
+      // [A-Za-z0-9_-] class truncated the mask at the first
+      // `.`/`~`/`+`/`/`/`=` byte and shipped the live tail to the
+      // approval-card / run-log / destroy-ask / debug-event sinks.
+      // Split-assembled so push-protection / staged-index scans see no
+      // contiguous token-shaped literal (precedent: "ghp"+"_" above).
+      const body = "aBcD1234.~+/=-_x".repeat(24) + "yZ9"; // 387-char body
+      const ghs = "ghs" + "_" + body;
+      // Self-check: the fixture carries every rotated-alphabet byte the
+      // legacy class dropped, and ends on a word char so the whole token
+      // is inside the match (a trailing non-word byte would strand the
+      // `\b` and leave that byte behind).
+      for (const b of [".", "-", "_", "~", "+", "/", "="]) {
+        expect(ghs).toContain(b);
+      }
+      expect(ghs.length).toBeGreaterThanOrEqual(380);
+      const out = redactGithubSourcedText(`install token: ${ghs} end`);
+      expect(out).toContain("[redacted-key]");
+      // Zero residual fixture bytes past the prefix — the whole token,
+      // punctuation-carrying tail included, is inside the mask.
+      expect(out).toBe("install token: [redacted-key] end");
+    });
+
+    it("still redacts a legacy ~40-char base62 ghs_ token", () => {
+      const out = redactGithubSourcedText(
+        `install token: ${"ghs" + "_" + "abcdefghijklmnopqrstuvwxyz0123456789"} end`,
+      );
+      expect(out).toBe("install token: [redacted-key] end");
+    });
+
     it("redacts an sk-ant- key", () => {
       const out = redactGithubSourcedText(
         `anthropic key: ${"sk"+"-"+"ant"+"-"}api03-AAAAAAAAAAAAAAAAAAAAAAAAAAA`,

@@ -138,10 +138,10 @@ redact_pii() {
     s/eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/<jwt>/g;
     s/sk-ant-[A-Za-z0-9_-]{8,}/<anthropic-key>/g;
     s/sk-[A-Za-z0-9]{20,}/<openai-key>/g;
-    s/\bghp_[A-Za-z0-9]{20,}/<github-pat>/g;
-    s/\bgho_[A-Za-z0-9]{20,}/<github-oauth>/g;
-    s/\bghs_[A-Za-z0-9]{20,}/<github-server>/g;
-    s/\bghr_[A-Za-z0-9]{20,}/<github-refresh>/g;
+    s/\bghp_[A-Za-z0-9._~+/=-]{20,}/<github-pat>/g;
+    s/\bgho_[A-Za-z0-9._~+/=-]{20,}/<github-oauth>/g;
+    s/\bghs_[A-Za-z0-9._~+/=-]{20,}/<github-server>/g;
+    s/\bghr_[A-Za-z0-9._~+/=-]{20,}/<github-refresh>/g;
     s/\bglpat-[A-Za-z0-9_-]{8,}/<gitlab-pat>/g;
     s/dp\.ct\.[A-Za-z0-9_-]{20,}/<doppler-token>/g;
     s/dp\.pt\.[A-Za-z0-9_-]{20,}/<doppler-token>/g;

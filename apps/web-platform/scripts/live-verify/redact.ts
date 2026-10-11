@@ -59,8 +59,8 @@ const RULES: Array<[RegExp, string]> = [
   // service/personal/service-account/CLI/scim/audit token classes.
   [/dp\.(?:st|pt|sa|ct|scim|audit)\.[A-Za-z0-9._-]{10,}/g, "[REDACTED_DOPPLER]"],
   // GitHub tokens (#5487): the trigger-gate step runs `gh api` with GH_TOKEN.
-  [/gh[pousr]_[A-Za-z0-9]{20,}/g, "[REDACTED_GH_TOKEN]"],
-  [/github_pat_[A-Za-z0-9_]{20,}/g, "[REDACTED_GH_TOKEN]"],
+  [/gh[pousr]_[A-Za-z0-9._~+/=-]{20,}/g, "[REDACTED_GH_TOKEN]"],
+  [/github_pat_[A-Za-z0-9._~+/=-]{20,}/g, "[REDACTED_GH_TOKEN]"],
   // JSON token keys: "access_token":"...", "refresh_token":"...", etc.
   [
     /(["'](?:access_token|refresh_token|provider_token)["']\s*:\s*")[^"]+/gi,
