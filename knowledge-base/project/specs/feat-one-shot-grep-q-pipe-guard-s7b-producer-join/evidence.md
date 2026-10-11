@@ -196,3 +196,112 @@ tests/scripts/test-git-data-birth-readiness-gate.sh | grep | exempt | pass-throu
 - `sweep-followthroughs.test.sh` has four T18 failures in the isolated run (the sourced script runs `gh repo view` at source time with no network); the other assertions pass and the hits are valid, so the pair stays EXEC. Its fifth stub definition (line 99) is a loud safety net no case reaches.
 - Two stubs are shims that exec the real tool (`jq` in test-argv-bearer-sweep.sh and the stub-world `jq`, `grep` in the birth-readiness suite). A leading drain would consume the bytes the real tool must read, so they are `pass-through` rows, not `drains` rows.
 - Shell hazard of the probe itself: a command text containing a literal `secrets set` is refused by a pre-tool hook; any scripted pass over the doppler stubs must not spell it in a command line.
+
+
+## Phase 1 to 6 results (appended; Ref #9217)
+
+### Red first (Phase 1)
+
+First run of the guard with the derivation and an empty `PRODUCER_JOIN` table, from a clean checkout under `ulimit -v 6000000`: rc 1 with 60 lines `FAIL: unlisted pair: <suite> stubs '<verb>' and names a non-test file that pipes text into it`, one per derived pair (the first is `.claude/hooks/grep-rewrite.test.sh` with `jq`). Output kept in the session scratchpad as `guard-red1.out`. With the 61 rows filled in the guard passes: `PASS: grep-q-producer-join (60 derived pairs; 13 drains rows verified, 48 exempt rows with a vocabulary reason)`, plus one `JOINED:` line per row and one recall row.
+
+### AC-4: the bash derivation against J0
+
+The bash/awk derivation `pj_join_pairs` yields the same 60 (test file, verb) pairs as `j0-derive.py` (`j0-plan-time-output.txt`). Where the Python measurement and the awk derivation could differ, the awk derivation is authoritative; they did not differ on this tree.
+
+### AC-6: pair runs at base and head (same machine)
+
+Base is `31ada28352b0`. Head is the branch tip. "Serial" means one run at a time with nothing else of mine running; the host carried other sessions (load average 10 to 40), so the parallel-era runs include load flakes on both sides.
+
+| Suite | Base | Head | Reading |
+|---|---|---|---|
+| apps/web-platform/infra/ci-deploy.test.sh | serial base2, base3: 565 pass, 2 fail (rc 1) | serial head3, head4: 565 pass, 2 fail (rc 1) | Identical. The two failures are the `inngest-server` start-writer inventory (`git grep` rc 128, the isolated sandbox has no `.git`) and the assertion-count floor that follows from it; both fail at base. Earlier runs under load differed (base 564/3, head 564/3, head2 563/4: the extra two are timing assertions) and are load flakes, not a head effect. |
+| apps/web-platform/infra/cron-egress-nftables.test.sh | rc 0 | rc 0 (head2) | The first head run was rc 1 with 16 failures: the stub's `PATH` has no `timeout`, so the new `timeout 2 cat` drain was not found. The stub now drains with `cat` alone; head2 is rc 0. |
+| apps/web-platform/infra/registry-luks-escrow.test.sh | rc 0, 52 pass | rc 0, 52 pass | Identical. |
+| plugins/soleur/test/operator-ack-guard.test.sh | rc 0 | rc 0 | Identical. |
+| plugins/soleur/test/operator-digest-provision.test.sh | rc 0 | rc 0 | Identical. |
+| scripts/followthroughs/workspaces-plaintext-hold-9348.test.sh | rc 0, 34 pass | rc 0, 34 pass | Identical. |
+| scripts/sweep-followthroughs.test.sh | rc 1, 277 pass, 8 fail | rc 1, 277 pass, 8 fail | Identical failing set (the `gh repo view` call at source time has no network in the isolated run). |
+| .claude/hooks/grep-rewrite.test.sh | rc 0, 71 pass | rc 0, 71 pass | Identical. |
+| scripts/rotate-supabase-db-credential.test.sh | rc 0, 17 cases, 0 failures | rc 0, 17 cases, 0 failures | Identical (this stub was edited after the battery, see below). |
+
+`git diff --stat` for each edited suite shows only the three kinds of edit (a keyed drain as the stub's first statement, the capture moved there, a wire assert); a search of the added lines for a reach-probe marker finds none. `cloud-init-inngest-bootstrap.test.sh` is untouched (red at base, #9956).
+
+### AC-7: mutation and harness battery
+
+Every row ran one at a time in a scratch worktree under `ulimit -v 6000000`, against the committed guard at the commit named below. The guard's own mutants only read; none of the rows executes an owner suite. Grades are from the harness (`results.json`), re-read by hand for M2 and M12.
+
+| Row | Mutation | Expected | Result | Grade |
+|---|---|---|---|---|
+| M1 | new producer into gh plus a new suite that stubs gh and names it | RED expected | rc 1 | RED-AS-EXPECTED |
+| M2 | second member: another suite that stubs an already-listed verb and names an already-listed producer | RED expected | rc 1 | RED-AS-EXPECTED |
+| M3 | delete one row and leave its pair | RED expected | rc 1 | RED-AS-EXPECTED |
+| M4 | keep a row whose stub was renamed in its suite | RED expected | rc 1 | RED-AS-EXPECTED |
+| M5 | own dispatch: the listing returns nothing | RED expected | rc 3 | RED-AS-EXPECTED |
+| M6 | narrow the stub detector: drop the stub-helper-call arm | RED expected | rc 1 | RED-AS-EXPECTED |
+| M7 | narrow the stub detector: drop the function-definition arm | RED expected | rc 1 | RED-AS-EXPECTED |
+| M8 | narrow the stub detector: drop the sourced-file hop | RED expected | rc 1 | RED-AS-EXPECTED |
+| M9 | narrow the text-pipe pattern: drop echo producers | RED expected | rc 1 | RED-AS-EXPECTED |
+| M10 | drop the status of the one site behind a single-site pair | RED expected | rc 1 | RED-AS-EXPECTED |
+| M11 | delete the drain from one compliant stub | RED expected | rc 1 | RED-AS-EXPECTED |
+| M12 | REORDER: the drain moved below the first dispatch | RED expected | rc 1 | RED-AS-EXPECTED |
+| M13 | second member: a second definition with no drain after a compliant one | RED expected | rc 1 | RED-AS-EXPECTED |
+| M14 | the drain left only in a comment | RED expected | rc 1 | RED-AS-EXPECTED |
+| M15 | remove the flag token and keep an unconditional cat | RED expected | rc 1 | RED-AS-EXPECTED |
+| M16 | own dispatch: the definition opener renamed so the finder sees zero | RED expected | rc 3 | RED-AS-EXPECTED |
+| M17 | an exempt row whose reason is outside the vocabulary | RED expected | rc 1 | RED-AS-EXPECTED |
+| M17b | an exempt row with an empty reason | RED expected | rc 1 | RED-AS-EXPECTED |
+| M18 | make the control stub drain | RED expected | rc 1 | RED-AS-EXPECTED |
+| M19 | shrink the payload to a few bytes (the timing-dependent shape; there is no sentinel in this design) | RED expected | rc 1 | RED-AS-EXPECTED |
+| M20 | add a non-reading spelling to the accepted array | RED expected | rc 1 | RED-AS-EXPECTED |
+| M21 | own dispatch: empty the accepted array | RED expected | rc 1 | RED-AS-EXPECTED |
+| H1 | delete the recall check tail | RED expected | rc 1 | RED-AS-EXPECTED |
+| H3 | opener finder accepts only a function opener | RED expected | rc 3 | RED-AS-EXPECTED |
+| H5 | delete the dynamic control tail | RED expected | rc 1 | RED-AS-EXPECTED |
+| H2a | a suite naming a listed producer only in a comment derives no pair | PASS expected | rc 0 | PASS-AS-EXPECTED |
+| H2b | a row with extra whitespace around the separators parses | PASS expected | rc 0 | PASS-AS-EXPECTED |
+| H2c | a suite naming xs7b-h2c.sh does not become an owner of s7b-h2c.sh | PASS expected | rc 0 | PASS-AS-EXPECTED |
+| H4 | the flag spelled with [[ ]] instead of case still counts as a keyed drain | PASS expected | rc 0 | PASS-AS-EXPECTED |
+| H6 | a [[ ]] spelling tagged sh fails the dynamic run (a bash-tagged spelling is not exercised under sh) | RED expected | rc 1 | RED-AS-EXPECTED |
+
+M2 (a second new producer for a stub already in a listed pair) and M12 (the drain moved below the first dispatch arm) both read RED. H1 and H5 go RED through the probe-count pin, which is the intended net for a deleted check; their own check lines are what the count protects. M19 differs from the S7a design because this guard has no sentinel: the control writes 1 MiB and needs none.
+
+H3 was UNVERIFIED in the first battery run (its harness anchored a string that occurs twice in the guard) and was repaired and re-run, so it is graded above.
+
+#### What the battery found, and the fix
+
+1. M11 and M14 (delete the drain, or leave it only in a comment, in the wildcard-keyed `curl` stub of git-data-root-key) first read WRONG, rc 0. The definition finder counted the opener line `cat > "$STUB/curl" <<'SH'` itself as a drain, because a `*` flag token is "seen" from the first line. The finder now strips the opener's own heredoc writer before testing for a drain. Both rows then read RED.
+2. H6 (a bash-only spelling tagged `sh`) first read WRONG on this host, where `/bin/sh` is bash. The dynamic run now runs `sh`-tagged spellings under `dash` when the host has it (CI's `/bin/sh` is dash), else under `/bin/sh`. H6 then reads RED.
+3. Fix 1 exposed one real stub: the `doppler` stub in `scripts/rotate-supabase-db-credential.test.sh` read stdin only inside its `secrets set` arm. It now drains first, keyed on the set subcommand, and the row pins that token instead of `*` (pair run above).
+4. Two cheap scans in the derivation are now gated on a substring (an extension for the token scan, a producer word for the pipe scan). The derivation and the 61 `JOINED:` lines are byte-identical before and after.
+
+The full battery was re-run after each guard change; the table is the run at the final guard commit.
+
+### AC-8: the dynamic control
+
+Control stub (`:`, never reads) fails the pipeline in all four cases (SIGPIPE ignored and default, `sh` stub and bash stub): a producer writing 1 MiB takes SIGPIPE (141) or EPIPE (rc 1). Each accepted spelling (7) passes under the interpreter it is tagged for, in both dispositions; each non-reading spelling (5) fails in both; the detector shared with the positional pin agrees on every spelling. `producer-drain-zero` requires the run count to equal 2 x (accepted + non-reading) with both lists non-empty, so zero spellings is never a pass (M21 reads RED).
+
+### AC-9: lints
+
+| Lint | Result |
+|---|---|
+| `python3 scripts/lint-shell-capture-exit.py --baseline scripts/lint-shell-capture-exit.baseline.txt` | 0 new findings, 224 baselined |
+| `bash scripts/guard-vacuity-floor.test.sh` | 23 passed, 0 failed |
+| `bash scripts/lint-orphan-test-suites.sh` | 663 covered, 0 orphaned |
+| `python3 scripts/lint-guard-contract.py` on the plan | 1 plan with a Guard Contract, 3 guard entries, rc 0 |
+| `bash scripts/test-affected-kb-consumers.test.sh` (once, before the push) | First run: 21 passed, 2 failed (cases 2 and b1). The guard's table names three suites whose bodies, one hop away, name knowledge-base files (`followthrough-convention.md`, `inngest-server.md`, and a spec `bootstrap.sh`); the guard reads none of them. The gate's own regeneration (`--write-baseline`) added exactly those three rows to `scripts/test-affected-kb-consumers.baseline.txt`, as it already holds six rows for this guard. Re-run after: 23 passed, 0 failed. |
+| `shellcheck -S warning`, base vs head, guard and each edited suite | unchanged (ci-deploy 19 and 19, operator-ack-guard 1 and 1, rotate-supabase 2 and 2, the rest 0 and 0) |
+
+### AC-10: probe count and wall time
+
+`SWEEP_PROBE_CHECKS` is 45: the S7a count was 36 (recomputed from `origin/main` with the header recipe), and this change adds 9 checks. The header recipe, run on the branch, prints 45.
+
+The derivation reads files with one `git ls-files` listing plus one `git ls-files -z` pass and one awk run (one token set per test file); there is no per-pair scan of the corpus. Cost, measured on a host carrying other sessions' load:
+
+| Measure | Base guard | Head guard | Load average at the time |
+|---|---|---|---|
+| wall, plain, 2 runs | 3.6 and 3.7 s | 10.4 and 10.0 s | 12 |
+| wall, plain, 3 runs | | 20.6, 19.6, 20.9 s | 37 to 40 |
+| wall, Check 10-shaped read-only bwrap, 3 runs | | 19.2, 20.3, 18.8 s | 38 to 40 |
+| CPU (user+sys), interleaved | 14.6 and 14.3 s | 23.1 and 23.2 s | 33 |
+
+Reading: the join adds about 6 s wall when the host is quiet-ish and about 9 CPU seconds, almost all in the one derivation awk (it reads about 42 MB over 1,699 tracked files). Under the host's heavy load the 15 s preflight cap is not met by wall time, and the base guard's own time doubles with it. This is recorded as context, not a gate, as AC-10 says; the larger-than-planned cost (the plan expected about 1.4 s extra) is listed in the NOT-fixed list as a follow-on (a per-file map step, or starting the derivation before the sweep so the two overlap).
