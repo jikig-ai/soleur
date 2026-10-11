@@ -100,56 +100,82 @@ CLOSED_PORT="$(python3 -I -c 'import socket; s=socket.socket(); s.bind(("127.0.0
 # --- the fakes -----------------------------------------------------------------------------------
 FAKES="$SCRATCH/fakes"
 mkdir -p "$FAKES"
+# Every fake accepts exactly the argv the script is meant to pass and refuses anything else with
+# exit 64 and a line in fake.refused (the sibling suites' "unexpected argv" convention; T0 asserts
+# that no fixture in the behavioural section ever refused). A fake that ignored its selectors would
+# let `findmnt -o SOURCE` or `systemctl show -p LoadState` through, and those print something
+# different on a real host.
 # mountpoint(1): exit 0 mounted, 32 an existing directory that is NOT a mountpoint, 1 an error (a
-# missing path). An operand other than the store root is a refusal the suite asserts never happens.
+# missing path).
 cat > "$FAKES/mountpoint" <<'EOS'
 #!/bin/bash
-[ "${*: -1}" = "$GDL_FX/store" ] || { echo "mountpoint $*" >> "$GDL_FX/fake.refused"; exit 97; }
+[ "$*" = "-q $GDL_FX/store" ] || { echo "mountpoint $*" >> "$GDL_FX/fake.refused"; exit 64; }
 exit "$(cat "$GDL_FX/mp_rc" 2>/dev/null || echo 0)"
 EOS
 cat > "$FAKES/findmnt" <<'EOS'
 #!/bin/bash
-[ "${*: -1}" = "$GDL_FX/store" ] || { echo "findmnt $*" >> "$GDL_FX/fake.refused"; exit 97; }
+[ "$*" = "-n -o SOURCE,OPTIONS --target $GDL_FX/store" ] || { echo "findmnt $*" >> "$GDL_FX/fake.refused"; exit 64; }
 [ ! -e "$GDL_FX/findmnt_rc" ] || exit "$(cat "$GDL_FX/findmnt_rc")"
 opts=rw,relatime; [ ! -e "$GDL_FX/findmnt_opts" ] || opts="$(cat "$GDL_FX/findmnt_opts")"
 if [ -e "$GDL_FX/findmnt_out" ]; then src="$(cat "$GDL_FX/findmnt_out")"; else src=/dev/mapper/git-data; fi
+if [ -e "$GDL_FX/findmnt_nospace" ]; then printf '%s\n' "$src"; exit 0; fi
 [ -z "$src" ] || while IFS= read -r l; do printf '%s %s\n' "$l" "$opts"; done <<<"$src"
 EOS
 cat > "$FAKES/df" <<'EOS'
 #!/bin/bash
 [ ! -e "$GDL_FX/df_broken" ] || exit 1
-[ ! -e "$GDL_FX/df_hang" ] || exec "$GDL_REAL_SLEEP" "$(cat "$GDL_FX/df_hang")"
 field="" path=""
 for a in "$@"; do
-  case "$a" in --output=*) field="${a#--output=}" ;; *) path="$a" ;; esac
+  case "$a" in --output=pcent|--output=ipcent) field="${a#--output=}" ;; --output=*) field="?" ;; *) path="$a" ;; esac
 done
-case "$path" in */store) where=store ;; *) where=root ;; esac
+case "$path" in "$GDL_FX/store") where=store ;; /) where=root ;; *) where="?" ;; esac
+{ [ "$field" != "?" ] && [ -n "$field" ] && [ "$where" != "?" ] && [ "$#" -eq 2 ]; } || { echo "df $*" >> "$GDL_FX/fake.refused"; exit 64; }
+# df_hang hangs the STORE df; with df_hang_root present it hangs the ROOT df instead.
+if [ -e "$GDL_FX/df_hang" ] && { { [ "$where" = store ] && [ ! -e "$GDL_FX/df_hang_root" ]; } || { [ "$where" = root ] && [ -e "$GDL_FX/df_hang_root" ]; }; }; then
+  [ ! -e "$GDL_FX/df_hang_term" ] || trap '' TERM
+  exec "$GDL_REAL_SLEEP" "$(cat "$GDL_FX/df_hang")"
+fi
 f="$GDL_FX/df_${field}_${where}"
 if [ -e "$f" ]; then v="$(cat "$f")"
 else case "$field/$where" in pcent/root) v=20 ;; *) v=1 ;; esac; fi
 [ "$v" != unreadable ] || exit 0
 printf 'Use%%\n %s%%\n' "$v"
 EOS
-# systemctl show -p LoadState -p ActiveState <unit>: a unit that does not exist prints
-# LoadState=not-found with ActiveState=inactive and exits 0 (measured), which is why the script
-# reads the load state too.
+# systemctl show -p LoadState -p ActiveState <unit>: prints ONLY the requested properties. A unit
+# that does not exist prints LoadState=not-found with ActiveState=inactive and exits 0 (measured),
+# which is why the script reads the load state too.
 cat > "$FAKES/systemctl" <<'EOS'
 #!/bin/bash
 [ ! -e "$GDL_FX/systemctl_rc" ] || exit "$(cat "$GDL_FX/systemctl_rc")"
-unit="${*: -1}"; unit="${unit%.service}"
-case "$unit" in git-data-luks-reopen|git-data-nftables|ssh) : ;; *) echo "systemctl $*" >> "$GDL_FX/fake.refused"; exit 97 ;; esac
+[ "$1" = show ] || { echo "systemctl $*" >> "$GDL_FX/fake.refused"; exit 64; }
+shift; props=""
+while [ "$#" -gt 1 ]; do
+  [ "$1" = -p ] && { [ "$2" = LoadState ] || [ "$2" = ActiveState ]; } || { echo "systemctl show $*" >> "$GDL_FX/fake.refused"; exit 64; }
+  props="$props $2"; shift 2
+done
+unit="${1:-}"; unit="${unit%.service}"
+case "$unit" in git-data-luks-reopen|git-data-nftables|ssh) : ;; *) echo "systemctl show $unit" >> "$GDL_FX/fake.refused"; exit 64 ;; esac
 f="$GDL_FX/unit_$unit"
 if [ -e "$f" ]; then v="$(cat "$f")"; else v=active; fi
 [ "$v" != unreadable ] || exit 1
-if [ "$v" = not-found ]; then printf 'LoadState=not-found\nActiveState=inactive\n'; exit 0; fi
-printf 'LoadState=loaded\nActiveState=%s\n' "$v"
+case "$v" in
+  not-found|masked|error|bad-setting|stub|merged) load="$v"; act=inactive ;;
+  *) load=loaded; act="$v" ;;
+esac
+for p in $props; do case "$p" in LoadState) echo "LoadState=$load" ;; ActiveState) echo "ActiveState=$act" ;; esac; done
 EOS
 cat > "$FAKES/find" <<'EOS'
 #!/bin/bash
 [ "$1" = "$GDL_FX/store" ] || exec /usr/bin/find "$@"
-[ "$*" = "$GDL_FX/store -maxdepth 1 -mindepth 1 -print -quit" ] || { echo "find $*" >> "$GDL_FX/fake.refused"; exit 97; }
+[ "$*" = "$GDL_FX/store -maxdepth 1 -mindepth 1 -print -quit" ] || { echo "find $*" >> "$GDL_FX/fake.refused"; exit 64; }
 [ ! -e "$GDL_FX/find_rc" ] || exit "$(cat "$GDL_FX/find_rc")"
 exec /usr/bin/find "$@"
+EOS
+# dd: one uncached block read of the LUKS mapper, to /dev/null.
+cat > "$FAKES/dd" <<'EOS'
+#!/bin/bash
+[ "$*" = "if=/dev/mapper/git-data of=/dev/null bs=4096 count=1 iflag=direct" ] || { echo "dd $*" >> "$GDL_FX/fake.refused"; exit 64; }
+exit "$(cat "$GDL_FX/dd_rc" 2>/dev/null || echo 0)"
 EOS
 cat > "$FAKES/curl" <<'EOS'
 #!/bin/bash
@@ -251,7 +277,11 @@ ok "$(! grep -qE -- '--retry|[[:space:]]-k([[:space:]]|$)|--insecure' "$FX/curl.
 ok "$([ "$(stat -c %a "$FX/run" 2>/dev/null)" = 700 ]; echo $?)" "T2 the run dir is mode 0700"
 ok "$([ "$(stat -c %a "$FX/run/url" 2>/dev/null)" = 600 ]; echo $?)" "T2 the URL cache is mode 0600"
 ok "$(grep -qF -- '--project soleur --config prd_git_data --only-secrets GIT_DATA_HOST_HEARTBEAT_URL --no-fallback --' "$FX/doppler.calls"; echo $?)" "T2 doppler is called with the scoped config, one secret and no fallback cache"
-ok "$(grep -qF -- '/usr/bin/env -u GIT_DATA_LIVENESS_PATH_PREPEND -u GIT_DATA_LIVENESS_EMIT -u GIT_DATA_LIVENESS_ROOT' "$FX/doppler.calls"; echo $?)" "T2 the Doppler child runs with the test seams stripped (only the run dir survives)"
+# The seams the script READS (a ${GIT_DATA_LIVENESS_X expansion), derived, minus the run dir it keeps on
+# purpose, must equal the -u operands the Doppler child is started with, compared as sets.
+seams_read=$(grep -o '\${GIT_DATA_LIVENESS_[A-Z_]*' "$SCRIPT" | sed 's/^\${//' | sort -u | grep -vx 'GIT_DATA_LIVENESS_RUN')
+seams_unset=$(grep -o -- '-u GIT_DATA_LIVENESS_[A-Z_]*' "$FX/doppler.calls" | sed 's/^-u //' | sort -u)
+ok "$([ -n "$seams_read" ] && [ "$seams_read" = "$seams_unset" ]; echo $?)" "T2 the Doppler child strips EVERY seam the script reads but the run dir (read: $(echo $seams_read | wc -w), stripped: $(echo $seams_unset | wc -w))"
 
 # T3: the gating checks. Each negative is paired with the healthy positive control above.
 new_fixture t3a; run_feeder GIT_DATA_LIVENESS_SSH_PORT="$CLOSED_PORT"
@@ -277,6 +307,12 @@ ok "$(( $(pings) != 1 ))" "T3r an option list that merely CONTAINS ro-looking te
 new_fixture t3r3; echo 5 > "$FX/find_rc"; run_feeder
 ok "$(( $(pings) != 0 ))" "T3r a store root whose first entry cannot be read (a device read fails behind a present mount) withholds the ping"
 ok "$(grep -qF 'code=store_unreadable' <<<"$(last_emit)"; echo $?)" "T3r …and names store_unreadable"
+
+new_fixture t3r4; echo 1 > "$FX/dd_rc"; run_feeder
+ok "$(( $(pings) != 0 ))" "T3r a mapper whose uncached block read fails (a dead device behind a warm cache) withholds the ping"
+ok "$(grep -qF 'code=store_unreadable' <<<"$(last_emit)"; echo $?)" "T3r …and names store_unreadable"
+new_fixture t3r5; echo /dev/mapper/git-data > "$FX/findmnt_out"; : > "$FX/findmnt_nospace"; run_feeder
+ok "$(grep -qF 'code=unmeasured:mount_source' <<<"$(last_emit)"; echo $?)" "T3r a findmnt line with no options field is unmeasured, NOT store_readonly"
 
 new_fixture t3e; echo /dev/sda1 > "$FX/findmnt_out"; run_feeder
 ok "$(( $(pings) != 0 ))" "T3e a store served from a plaintext device withholds the ping"
@@ -329,6 +365,11 @@ done
 new_fixture t5m; echo not-found > "$FX/unit_git-data-nftables"; run_feeder
 ok "$(( $(pings) != 0 ))" "T5 a unit that does not EXIST (LoadState=not-found, ActiveState=inactive, rc 0) withholds the ping"
 ok "$(grep -qF 'code=unit_missing:git-data-nftables' <<<"$(last_emit)"; echo $?)" "T5 …and names unit_missing, never reading the ghost unit as healthy"
+for ls in masked error bad-setting stub merged; do
+  new_fixture "t5l-$ls"; echo "$ls" > "$FX/unit_git-data-luks-reopen"; run_feeder
+  ok "$(( $(pings) != 0 ))" "T5 a unit whose LoadState is $ls (not loaded) withholds the ping"
+  ok "$(grep -qF 'code=unit_missing:git-data-luks-reopen' <<<"$(last_emit)"; echo $?)" "T5 …and names unit_missing for $ls"
+done
 new_fixture t5e; echo inactive > "$FX/unit_ssh"; run_feeder
 ok "$(( $(pings) != 1 ))" "T5 an inactive ssh.service on a host whose listener answers is HEALTHY (socket activation)"
 new_fixture t5f; echo /dev/sda1 > "$FX/findmnt_out"; echo 95 > "$FX/df_ipcent_store"; echo failed > "$FX/unit_git-data-luks-reopen"; run_feeder
@@ -384,6 +425,7 @@ ok "$([ -s "$FX/run/url.last" ] && [ ! -e "$FX/run/url" ]; echo $?)" "T7 a rejec
 rm -f "$FX/curl_rc"; echo 1 > "$FX/doppler_rc"; NOW_T=1000120; run_feeder
 ok "$(grep -qF 'state=ok' <<<"$(last_emit)"; echo $?)" "T7 a vendor blip followed by a Doppler outage still pings from the last-good URL (no false page)"
 ok "$([ -s "$FX/run/url" ] && [ ! -e "$FX/run/url.last" ]; echo $?)" "T7 …and a last-good URL that worked is promoted back to the cache"
+ok "$(grep -qF 'code=ok:last_good' <<<"$(last_emit)"; echo $?)" "T7 …and the event says the URL was not freshly fetched (code ok:last_good)"
 new_fixture t7b; echo "22 0" > "$FX/curl_seq"; run_feeder
 ok "$(( $(pings) != 2 ))" "T7 one vendor blip is absorbed by the second attempt (2 curl calls)"
 ok "$(grep -qF 'state=ok' <<<"$(last_emit)"; echo $?)" "T7 …and the tick reads ok"
@@ -455,9 +497,16 @@ new_fixture t10c; run_feeder GIT_DATA_LIVENESS_SSH_PORT="$SILENT_PORT"
 ok "$(( ELAPSED > 9 ))" "T10 a listener that accepts and stays silent is cut at the banner bound (took ${ELAPSED}s)"
 ok "$(grep -qF 'code=ssh_no_banner' <<<"$(last_emit)"; echo $?)" "T10 …and names ssh_no_banner"
 ok "$(( $(pings) != 0 ))" "T10 …with no ping"
-new_fixture t10d; echo 30 > "$FX/df_hang"; run_feeder
-ok "$(( ELAPSED > 20 ))" "T10 a hung df (a wedged store) is cut at the instrument bound and recorded, not left to the unit timeout (took ${ELAPSED}s)"
+new_fixture t10d; echo 8 > "$FX/df_hang"; run_feeder
+ok "$(( ELAPSED > 7 ))" "T10 a hung store df is cut at the instrument bound and recorded, not left to the unit timeout (took ${ELAPSED}s)"
 ok "$(grep -qF 'unmeasured:df_bytes' <<<"$(last_emit)"; echo $?)" "T10 …as unmeasured:df_bytes in an emitted event"
+new_fixture t10e; echo 8 > "$FX/df_hang"; : > "$FX/df_hang_term"; run_feeder
+ok "$(( ELAPSED > 10 ))" "T10 a store df that IGNORES TERM is still cut (KILL one second later; took ${ELAPSED}s, an unbounded run takes 16 s)"
+ok "$(grep -qF 'unmeasured:df_bytes' <<<"$(last_emit)"; echo $?)" "T10 …and is recorded as unmeasured:df_bytes"
+new_fixture t10f; echo 8 > "$FX/df_hang"; : > "$FX/df_hang_root"; run_feeder
+ok "$(( ELAPSED > 7 ))" "T10 a hung ROOT df is cut too (took ${ELAPSED}s)"
+ok "$(( $(pings) != 1 ))" "T10 …and does not gate the ping (root usage is report-only), with root_pct=?"
+ok "$(grep -qF 'root_pct=?' <<<"$(last_emit)"; echo $?)" "T10 …reported as root_pct=?"
 
 # T11: refusal under trace, and a corrupt state file.
 new_fixture t11; assert_fixture_dir "$FX"; RC=0
@@ -487,6 +536,17 @@ ok "$(( $(emits) != 2 ))" "T11 …and the 10-minute summary is due again 601 s o
 ok "$([ "$(stat -c %a "$FX/run/state" 2>/dev/null)" = 600 ]; echo $?)" "T12 the state file is mode 0600"
 ok "$(! grep -qE '^/(mnt|var)/' "$FX/run/state"; echo $?)" "T12 state lives under the run dir only"
 
+# T13: the run-dir seam refuses every spelling that reaches a place it must not write.
+new_fixture t13; mkdir -p "$FX/store/sub"
+for bad in "relative/run" "/" "//mnt/x" "/./mnt/x" "$FX/run/./x" "$FX/run//x" "/mnt" "/media" "/proc/x" "$FX/store" "$FX/store/sub"; do
+  run_feeder GIT_DATA_LIVENESS_RUN="$bad"
+  ok "$(( RC != 2 || $(pings) != 0 ))" "T13 the run-dir seam '$bad' is refused (exit 2, no ping; rc=$RC)"
+done
+
+# T0: every fake was called with exactly the operands it models, in every fixture above.
+n=$(find "$SCRATCH" -maxdepth 2 -name fake.refused | grep -c . || true)
+ok "$((n != 0))" "T0 no behavioural fixture ever called a fake with an operand it does not model (fake.refused files: $n)"
+
 # =====================================================================================
 # STATIC — the script, the unit pair
 # =====================================================================================
@@ -513,14 +573,20 @@ c_ping=$(sed -n 's/^readonly PING_TIMEOUT=\([0-9]*\)$/\1/p' "$SCRIPT_BODY")
 c_pause=$(sed -n 's/^readonly PING_PAUSE=\([0-9]*\)$/\1/p' "$SCRIPT_BODY")
 c_fetch=$(sed -n 's/.*FETCH_TIMEOUT="$(_num "${GIT_DATA_LIVENESS_FETCH_TIMEOUT:-}" \([0-9]*\))".*/\1/p' "$SCRIPT_BODY")
 c_emit=$(sed -n 's/.*EMIT_TIMEOUT="$(_num "${GIT_DATA_LIVENESS_EMIT_TIMEOUT:-}" \([0-9]*\))".*/\1/p' "$SCRIPT_BODY")
+c_kill=$(sed -n 's/^readonly INSTR_KILL_AFTER=\([0-9]*\)$/\1/p' "$SCRIPT_BODY")
 n_sites=$(grep -E '(^|[^[:alnum:]_])_i [a-z]' "$SCRIPT_BODY" | grep -vc '^_i()' || true)
-# Call sites that run more than once: _pct runs for root, bytes and inodes (+2), the unit loop twice (+1).
-n_exec=$((n_sites + 3))
+# Repeats DERIVED from the script: the df site runs once per _pct call, the systemctl site once per
+# unit in the gate loop, every other site once.
+n_pct=$(grep -cE '(^|[^[:alnum:]_])_pct [a-z]' "$SCRIPT_BODY" || true)
+n_units=$(sed -n 's/^  for u in \(.*\); do$/\1/p' "$SCRIPT_BODY" | wc -w)
+n_exec=$((n_sites - 2 + n_pct + n_units))
+cap=$(( ${c_instr:-99} + ${c_kill:-99} ))
 path_a=$(( ${c_banner:-99} + ${c_fetch:-99} + 2 * ${c_ping:-99} + ${c_pause:-99} + ${c_emit:-99} ))
-path_b=$(( ${c_banner:-99} + n_exec * ${c_instr:-99} + ${c_emit:-99} ))
-ok "$(( !( ${tstart:-0} > 0 && path_a <= ${tstart:-0} && path_b <= ${tstart:-0} && ${tstart:-0} < 60 ) ))" "S6 the tick budget derived from the script's own constants holds: healthy path ${path_a} s and hung-instrument path ${path_b} s (${n_exec} instrument runs) fit TimeoutStartSec=${tstart:-?} and stay inside the 60 s tick"
-ok "$((n_sites != 5))" "S6 the instrument call sites are exactly the five the budget assumes (mountpoint, findmnt, find, df, systemctl; got $n_sites)"
-ok "$(grep -qxF 'readonly OK_SUMMARY_S=600' "$SCRIPT_BODY" && grep -qxF 'readonly MISS_REEMIT_S=1800' "$SCRIPT_BODY" && grep -qxF 'readonly PING_PAUSE=1' "$SCRIPT_BODY" && grep -qxF 'readonly BANNER_TIMEOUT=5' "$SCRIPT_BODY" && grep -qxF 'readonly INSTR_TIMEOUT=3' "$SCRIPT_BODY" && grep -qxF 'readonly PING_TIMEOUT=10' "$SCRIPT_BODY"; echo $?)" "S6 the cadence and bound constants are pinned (10 min summary, 30 min re-emit, 1 s pause, 5 s banner, 3 s instrument, 10 s ping)"
+path_b=$(( ${c_banner:-99} + n_exec * cap + ${c_emit:-99} ))
+path_c=$(( cap + ${c_fetch:-99} + 2 * ${c_ping:-99} + ${c_pause:-99} + ${c_emit:-99} ))
+ok "$(( !( ${tstart:-0} > 0 && path_a <= ${tstart:-0} && path_b <= ${tstart:-0} && path_c <= ${tstart:-0} && ${tstart:-0} < 60 ) ))" "S6 the tick budget derived from the script's own constants holds: healthy ${path_a} s, every instrument hung ${path_b} s (${n_exec} runs at ${cap} s), root df hung but healthy ${path_c} s, against TimeoutStartSec=${tstart:-?} and the 60 s tick"
+ok "$((n_sites != 6 || n_pct != 3 || n_units != 2))" "S6 the instrument shape is the one the budget assumes (6 sites: mountpoint, findmnt, find, dd, df, systemctl; df runs ${n_pct}x, the unit loop ${n_units}x)"
+ok "$(grep -qxF 'readonly OK_SUMMARY_S=600' "$SCRIPT_BODY" && grep -qxF 'readonly MISS_REEMIT_S=1800' "$SCRIPT_BODY" && grep -qxF 'readonly PING_PAUSE=1' "$SCRIPT_BODY" && grep -qxF 'readonly BANNER_TIMEOUT=5' "$SCRIPT_BODY" && grep -qxF 'readonly INSTR_TIMEOUT=2' "$SCRIPT_BODY" && grep -qxF 'readonly INSTR_KILL_AFTER=1' "$SCRIPT_BODY" && grep -qxF 'readonly PING_TIMEOUT=10' "$SCRIPT_BODY"; echo $?)" "S6 the cadence and bound constants are pinned (10 min summary, 30 min re-emit, 1 s pause, 5 s banner, 2 s instrument then KILL 1 s later, 10 s ping)"
 n=$(grep -cE '(^|[^[:alnum:]_/-])(wget|nc|ncat|socat|openssl|python3?)([^[:alnum:]_-]|$)' "$SCRIPT_BODY" || true)
 ok "$((n != 0))" "S11 no other network-capable tool appears in the script (curl in _ping is the only sender; got $n)"
 n=$(grep -c '/dev/tcp' "$SCRIPT_BODY" || true)
@@ -536,7 +602,9 @@ cfg_res=$(awk '/^resource "doppler_config" "git_data_prd" \{/{f=1} f&&/^[[:space
 cfg_sec=$(awk '/^resource "doppler_secret" "git_data_host_heartbeat_url_prd" \{/{f=1} f&&/^[[:space:]]*config[[:space:]]*=/{gsub(/.*= *"|"$/,""); print; exit}' "$GIT_DATA_TF")
 cfg_sh=$(sed -n 's/^readonly PRODUCTION_CONFIG=\(.*\)$/\1/p' "$SCRIPT_BODY")
 ok "$([ -n "$cfg_sh" ] && [ "$cfg_sh" = "$cfg_tf" ] && [ "$cfg_sh" = "$cfg_res" ] && [ "$cfg_sh" = "$cfg_sec" ]; echo $?)" "S14 the production config name agrees across the feeder ($cfg_sh), the host's doppler_config_name ($cfg_tf), the config resource ($cfg_res) and the heartbeat secret ($cfg_sec)"
-n=$( { grep -rl 'GIT_DATA_HOST_HEARTBEAT_URL' "$DIR/rung2-rehearsal" "$DIR/../../../.github/workflows/git-data-rung2-rehearsal.yml" 2>/dev/null || true; } | grep -c . || true)
+RH_WF="$DIR/../../../.github/workflows/git-data-rung2-rehearsal.yml"
+ok "$([ -d "$DIR/rung2-rehearsal" ] && [ -f "$RH_WF" ]; echo $?)" "S15 control: the rehearsal root and workflow exist at the paths S15 scans (a rename would otherwise empty the population)"
+n=$( { grep -rl 'GIT_DATA_HOST_HEARTBEAT_URL' "$DIR/rung2-rehearsal" "$RH_WF" 2>/dev/null || true; } | grep -c . || true)
 ok "$((n != 0))" "S15 the rehearsal root and workflow never name the heartbeat secret (a rehearsal host cannot be given the production URL; got $n)"
 ok "$(grep -qxF 'Wants=network-online.target' "$UNIT_BODY"; echo $?)" "U3b the unit also Wants=network-online.target like its siblings"
 ok "$(grep -qE '^#!/bin/bash$' "$SCRIPT"; echo $?)" "S7 the script is bash"
@@ -696,6 +764,20 @@ p_emit_retry() {  # 17: a failed emit is retried next tick
 p_script_config_literal() {  # 18: the doppler call keeps the exact --config "$GIT_DATA_DOPPLER_CONFIG" form
   grep -qF -- '--config "$GIT_DATA_DOPPLER_CONFIG" ' "$1"
 }
+p_selectors() {  # 26/27: the instrument selectors the fakes (and real tools) require
+  local SUT="$1"
+  new_fixture p26; run_feeder; [ "$(pings)" -eq 1 ] && [ ! -e "$FX/fake.refused" ]
+}
+p_term_bound() {  # 28: a TERM-ignoring instrument is KILLed
+  local SUT="$1"
+  new_fixture p28; echo 8 > "$FX/df_hang"; : > "$FX/df_hang_term"; run_feeder
+  [ "$ELAPSED" -le 10 ] && grep -qF 'unmeasured:df_bytes' <<<"$(last_emit)"
+}
+p_device_read() {  # 29: a failing uncached device read withholds the ping
+  local SUT="$1"
+  new_fixture p29a; run_feeder; [ "$(pings)" -eq 1 ] || return 1
+  new_fixture p29b; echo 1 > "$FX/dd_rc"; run_feeder; [ "$(pings)" -eq 0 ]
+}
 p_unit_no_requires() { ! grep -qE '^(Requires|RequiresMountsFor|BindsTo|Requisite)=' <<<"$(strip "$1")"; }
 p_unit_home() { grep -qxF 'Environment=HOME=/root' <<<"$(strip "$1")"; }
 p_arm_line() { grep -qF 'systemctl enable --now git-data-liveness.timer' <<<"$(strip "$1")"; }
@@ -707,7 +789,7 @@ p_service_name() {
 
 assert_red 1  p_inodes script        's/\[ "\$v" -ge "\$INODE_PCT_LIMIT" \] && miss inodes_full/:/'
 assert_red 2  p_unconditional script 's/if \[ "\$\{#MISSES\[@\]\}" -gt 0 \]; then/if false; then/'
-assert_red 3  p_second_miss script   's@\*/failed\) miss "unit_failed:\$u" ;;@*/failed) : ;;@'
+assert_red 3  p_second_miss script   's@loaded/failed\) miss "unit_failed:\$u" ;;@loaded/failed) : ;;@'
 assert_red 4  p_boundary script      's/"\$v" -ge "\$DISK_PCT_LIMIT"/"$v" -gt "$DISK_PCT_LIMIT"/'
 assert_red 5  p_unconditional script 's/^main$/:/' dispatch
 assert_red 6  p_argv script          's/--config - 2>\/dev\/null < <\(printf .url = "%s"\\n. "\$URL"\)/"$URL" 2>\/dev\/null/'
@@ -758,15 +840,19 @@ p_store_read() {  # 24: an unreadable store root withholds the ping
 p_instr_bound() {  # 25: a hung instrument is cut and recorded
   local SUT="$1"
   new_fixture p25; echo 8 > "$FX/df_hang"; run_feeder
-  [ "$ELAPSED" -le 20 ] && grep -qF 'unmeasured:df_bytes' <<<"$(last_emit)"
+  [ "$ELAPSED" -le 7 ] && grep -qF 'unmeasured:df_bytes' <<<"$(last_emit)"
 }
 assert_red 19 p_unmounted_real_rc script 's@^    32\) miss store_unmounted ;;$@    1) miss store_unmounted ;;@'
 assert_red 20 p_readonly script          's@case ",\$opts," in \*,rw,\*\) : ;; \*\) miss store_readonly ;; esac@:@'
-assert_red 21 p_unit_missing script      's@not-found/\*\|masked/\*\|error/\*\)@masked/*|error/*)@'
+assert_red 21 p_unit_missing script      's@^        \*\) miss "unit_missing:\$u" ;;$@        *) : ;;@'
 assert_red 22 p_state_octal script       's@LAST_TS=\$\(\(10#\$v\)\)@LAST_TS=$v@'
 assert_red 23 p_last_good script         's@\[ -s "\$\{RUN_DIR:\?\}/url\.last" \]@false@'
-assert_red 24 p_store_read script        's@^      _i find "\$STORE_ROOT" -maxdepth 1 -mindepth 1 -print -quit >/dev/null 2>&1 \|\| miss store_unreadable$@      :@'
-assert_red 25 p_instr_bound script       's#^_i\(\) \{ timeout "\$INSTR_TIMEOUT" "\$@"; \}$#_i() { "$@"; }#'
+assert_red 24 p_store_read script        's@^      _i find "\$STORE_ROOT" -maxdepth 1 -mindepth 1 -print -quit >/dev/null 2>&1 \|\| rd=1$@      :@'
+assert_red 25 p_instr_bound script       's#^_i\(\) \{ timeout -k "\$INSTR_KILL_AFTER" "\$INSTR_TIMEOUT" "\$@"; \}$#_i() { "$@"; }#'
+assert_red 26 p_selectors script         's@findmnt -n -o SOURCE,OPTIONS --target@findmnt -n -o SOURCE --target@' dispatch
+assert_red 27 p_selectors script         's@show -p LoadState -p ActiveState@show -p LoadState@' dispatch
+assert_red 28 p_term_bound script        's#^_i\(\) \{ timeout -k "\$INSTR_KILL_AFTER" #_i() { timeout #'
+assert_red 29 p_device_read script       's@^      _i dd if=.*$@      :@'
 
 # Harness rows: the suite's own instruments must notice a broken instrument.
 new_fixture h1; cp "$FAKES/curl" "$SCRATCH/curl.orig"
@@ -790,7 +876,7 @@ if [ "$passes" -ne $((_can_p0 + 2)) ] || [ "$fails" -ne $((_can_f0 + 2)) ] || [ 
 fi
 passes=$_can_p0; fails=$_can_f0; cases=$_can_c0
 
-MIN_ASSERTIONS=234
+MIN_ASSERTIONS=270
 total=$((passes + fails))
 if [ "$cases" -lt "$MIN_ASSERTIONS" ]; then
   printf 'FAIL: ran only %s assertion call sites (floor %s) — suite did not execute fully\n' "$cases" "$MIN_ASSERTIONS" >&2

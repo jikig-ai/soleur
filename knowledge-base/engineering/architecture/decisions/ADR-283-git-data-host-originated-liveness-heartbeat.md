@@ -31,15 +31,17 @@ inode table, a closed or unmounted LUKS store, a failed security unit, or a dead
 
 1. **A host-originated feeder, gated on local checks.** `git-data-liveness.timer` runs `git-data-liveness.sh` every 60 s. It pings a new,
    dedicated heartbeat (`soleur-git-data-host-prd`, period 60, grace 300) only when the loopback sshd answers with an `SSH-` banner, the store
-   is mounted from `/dev/mapper/git-data`, bytes and inodes are under 90 %, and neither `git-data-luks-reopen.service` nor
-   `git-data-nftables.service` has failed. An unreadable measurement withholds the beat; it never reads as healthy. Absence of the ping is
+   is mounted read-write from `/dev/mapper/git-data`, its root lists and one uncached block of the mapper reads, bytes and inodes are
+   under 90 %, and `git-data-luks-reopen.service` and `git-data-nftables.service` are loaded and not failed. An unreadable measurement withholds the beat; it never reads as healthy. Absence of the ping is
    the alert. `git-data-gc.service` is deliberately not gating (the paging policy for it stays on #8093), and `/` usage is reported on every
    event but does not gate.
 2. **A withheld ping says why.** Every state change, and a `state=ok` summary every 10 minutes while healthy, is emitted through the existing
    `git-data-emit` channel at level `info`, stage `liveness`. It is deliberately unrouted: the page is the heartbeat, the event only explains.
    The registry's post-mortem (a feeder that only gates cannot explain its own silence) is the design input.
 3. **The URL is read at runtime, never baked.** The host reads `GIT_DATA_HOST_HEARTBEAT_URL` from the scoped read-only Doppler config it
-   already holds a token for, through `doppler run --config "$GIT_DATA_DOPPLER_CONFIG"`, and caches it on tmpfs at `0600`. It reaches curl on
+   already holds a token for, through `doppler run --config "$GIT_DATA_DOPPLER_CONFIG"`, and caches it on tmpfs at `0600`. The cache has no TTL: while pings succeed the secret is not re-read, so a
+   rotation takes effect on the first rejected ping or at the next boot, and a fetch that returns nothing falls back to the
+   last-tried URL, reported as `ok:last_good`. It reaches curl on
    stdin through a process substitution with a shape guard (ADR-280's rule), never on an argument list. Because the URL is not in
    `user_data`, the rung-2 rehearsal render carries no production monitor, and a rehearsal host (whose scratch config lacks the secret) is
    structurally unable to ping it; the config name is compared by exact equality, never by prefix.
@@ -70,7 +72,9 @@ inode table, a closed or unmounted LUKS store, a failed security unit, or a dead
 
 ## Consequences
 
-- One more recurring emitter on a host that already has two: the cost is about 3.8 KB of stored `user_data` (measured with
+- The arming tooling (`--status` and `--arm-one` in `arm-heartbeats.sh`) must land before the owner's arm; it is tracked on #9980,
+  a separate issue because the record PR closes #9438.
+- One more recurring emitter on a host that already has two: the cost is about 4 KB of stored `user_data` (measured with
   `git-data-userdata-budget.sh`, recorded in the PR body) against the 32 KB cap.
 - A known-benign `miss` on a healthy fresh host is a payload defect fixed forward through the two-PR sequence; the thresholds are hash-bound
   and there is no agent waiver.
@@ -85,7 +89,11 @@ inode table, a closed or unmounted LUKS store, a failed security unit, or a dead
   "never baked and never on an argument list", not "present nowhere else on the host".
 - The checks read the mount table, `statfs`, the mount options and a directory listing; the store is never written (a probe write would
   move the mtime the cutover's quiescence check reads). `mountpoint` exits 32, not 1, for an existing directory that is not a mountpoint,
-  and a unit that does not exist reads `inactive` with exit 0, so the feeder reads the load state too. Every instrument runs under a 3 s cap.
+  and a unit that does not exist reads `inactive` with exit 0, so the feeder reads the load state too, and judges only `loaded` units by their
+  active state. Every instrument runs under a 2 s cap, then a KILL one second later. The cap holds for a hang that dies on TERM or
+  KILL; a process in uninterruptible sleep on a dead device survives both, the tick is then ended by `TimeoutStartSec=58` with nothing
+  emitted, and the page, which is the heartbeat's absence, needs no event to fire. The first-entry listing of the store root is
+  usually served from cache, which is why one uncached block of the mapper is read as well.
 - The emitted event can flap: a changed code re-emits at once, so a value hovering at a threshold can emit every tick (at most 1440 a day).
   Accepted: the page is the heartbeat, and the event is unrouted.
 

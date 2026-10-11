@@ -34,7 +34,7 @@ than a second blanket fan-out over a plan that had just absorbed ten reviews.
 
 ### New considerations discovered
 
-- The deepen sweep found no stale literal (`TimeoutStartSec=55`, `state=ok`, `GIT_DATA_HOST_HEARTBEAT_URL`, `push = false` agree across
+- The deepen sweep found no stale literal (`TimeoutStartSec=58`, `state=ok`, `GIT_DATA_HOST_HEARTBEAT_URL`, `push = false` agree across
   every section) and no fabricated or retired rule id (the one `wg-architecture-decision-is-a-plan-deliverable` is migrated and active).
 - The uptime heartbeat host is not yet verified reachable from the git-data host; only the Better Stack ingest host is (a
   `boot_complete` row exists since the 2026-09-25 replace). The first measured beat is the verification, and the soak read shows
@@ -122,7 +122,7 @@ what".
 | ADR-103 and ADR-198 "addenda" | P5 | One new ADR carries the decision; each older ADR gets a one-line pointer, not a section |
 | Edits to `git_data_host_replace_gate` or the replace job's `-target` set | P6 | The URL is not in the host's graph (Doppler route), so the scoped recreate set is unchanged and the gate stays exact |
 | `arm_one` line for the new monitor in the per-merge arm step | P7 | Would unpause, wait out the deadline, roll back and return rc=1 on every merge until the owner replaces the host |
-| Arming modes inside THIS PR | P7 | Nothing in the payload needs them to merge; moved to a small second PR (1b) that lands before the replace |
+| Arming modes inside THIS PR | P7 | Nothing in the payload needs them to merge; moved to a small second PR (1b), tracked on #9980, that lands before the ARM (the runbook's order; it was written "before the replace" at plan time) |
 | Bundling the `AuthorizedKeysFile` move (#8093 item 2) | P6 | Moves a literal five birth-gate arms key on; its own note calls it "its own hash-bound change" (DC-2) |
 | Deciding the `gc_timer` paging policy (#8093 item 4) | P6 | A policy decision the owner owns; the feeder leaves `git-data-gc.service` out of its failed-unit set so it neither makes nor hides it |
 
@@ -231,6 +231,11 @@ to a gate is a later, measured change.
 Thresholds are `readonly` constants at the top of the script, each with its rationale beside it, exercised at the boundary (one below,
 at, one above) by the suite.
 
+> **Superseded by review (PR #9936):** the table above is the PLAN-time contract. The shipped checks add `store_readonly` (the mount
+> options carry no `rw`), `store_unreadable` (the store root does not list, or one uncached `dd iflag=direct` block of the mapper does not
+> read) and `unit_missing:<name>` (any `LoadState` but `loaded`); instruments run under a 2 s cap with a KILL 1 s later; the ping can come
+> from the last-tried URL (`ok:last_good`). The runbook's decision table and ADR-283 are the current record.
+
 **Writers of every on-host identity the checks read** (a guard that reads an identity nothing writes asserts a premise, not a fact):
 `/mnt/git-data` is `GIT_DATA_ROOT` in `git-data-bootstrap.sh`, and `git-data-luks-reopen.sh` refuses any fstab target other than it;
 `/dev/mapper/git-data` is `STORE_DEVICE` in the bootstrap and `MAPPER_NAME` in the reopen script's `luksOpen`;
@@ -263,14 +268,14 @@ as a `state=ok` summary every 10 minutes while healthy, carrying `state`, `code`
 feeder from a dead timer, a dropped log line or a failed emit, but a missing summary can. `info` is queryable (Better Stack source
 2734275 and Sentry) and unrouted by design; the heartbeat absence is the page.
 
-**Order inside a tick, and its budget.** checks, then ping (the primary signal), then persist state, then emit. The state is written
-before the emit so a killed emit cannot repeat a transition forever; `last_emitted_state` is advanced only after the emit returns 0, so
-a failed emit is retried on the next tick. The emit is bounded by `timeout 20` (`git-data-emit` alone can take 40 to 50 s degraded).
-Worst case: a 10 s cache fetch, two 10 s pings and a 1 s sleep, a 20 s emit, which is 51 s inside `TimeoutStartSec=55`, inside the 60 s
-tick. An emit that fails never changes the ping decision or the exit code.
+**Order inside a tick, and its budget.** checks, then ping (the primary signal), then emit, then persist state. The state is advanced
+only after the emit returns 0, so a killed or failed emit is retried on the next tick (superseding the plan-time draft, which wrote it
+first). The emit is bounded by `timeout 20` (`git-data-emit` alone can take 40 to 50 s degraded).
+Worst case: a 5 s banner, a 10 s cache fetch, two 10 s pings and a 1 s sleep, a 20 s emit, which is 56 s inside `TimeoutStartSec=58`,
+inside the 60 s tick; the suite derives this and two more paths from the script's own constants. An emit that fails never changes the ping decision or the exit code.
 
 **Service shape.** `Environment=HOME=/root` (a root unit's Doppler CLI dies without it), `PrivateTmp=yes`, `LimitCORE=0`,
-`TMPDIR=/dev/shm`, `EnvironmentFile=-/etc/default/git-data-doppler`, `UMask=0077`, `TimeoutStartSec=55`. Ordering only:
+`TMPDIR=/dev/shm`, `EnvironmentFile=-/etc/default/git-data-doppler`, `UMask=0077`, `TimeoutStartSec=58`. Ordering only:
 `After=network-online.target` and nothing in the `Requires=`, `RequiresMountsFor=` or `BindsTo=` family, because the feeder must
 OBSERVE an unmounted store and a Requires-strength directive would mount it. Exit 0 on every path except xtrace refusal; a feeder that
 cannot run produces no beat. The xtrace refusal is spelled `[[ $- == *x* ]]`; the literal text `set -x` appears nowhere in the script
@@ -337,7 +342,7 @@ and the flip comes last.
 | 3. **Evidence-only PR** | agent, after step 2 | Lands the evidence file alone (Guard 4 refuses any other file in the commit) | `Refs #9438` |
 | 3b. Pre-replace read (read-only, owner-authorized token) | agent | `--status` reads `paused` and the `prd_git_data` secret exists. Otherwise the new host boots into `url_unavailable` (it self-heals on the next tick once the secret exists, without a second replace) | |
 | 4. Host replace with key rotation (ADR-220 D6) | **owner's decision**; never performed or dispatched by an agent. This is the replace the runbook already requires before the cutover, so this change adds no second replace. The monitor is paused, so this replace pages nothing | | |
-| 5. Pre-arm read | **owner-authorized** agent step | `scripts/betterstack-query.sh --grep SOLEUR_GIT_DATA_LIVENESS`, filtered to the production config and to events after the new host's `boot_complete`: require at least four consecutive `state=ok` events spanning at least 30 minutes and no other state after the first `ok`. The 30-minute floor is the owner's to lengthen; a longer soak widens the replace-to-flip interval that ADR-220 D6 wants short (DC-6) | |
+| 5. Pre-arm read | **owner-authorized** agent step | the runbook's step-6 query (pinned `--table t520508_soleur_git_data_prd_logs --table-s3 ...`, `stage = 'liveness'`, production `host_name` and `config`, rows after the replace run's boot-trail anchor; the bare `--grep` form reads the default source and exits 0 empty): require at least four consecutive `state=ok` events spanning at least 30 minutes and no other state after the first `ok`. The 30-minute floor is the owner's to lengthen; a longer soak widens the replace-to-flip interval that ADR-220 D6 wants short (DC-6) | |
 | 5b. If the soak fails | owner decides | A `miss` code on a healthy fresh host is a payload defect: fix forward through the two-PR sequence (the thresholds are hash-bound). Only the owner can accept a known-benign miss, by a recorded waiver comment on #9438; an agent never waives. A failed `--arm-one` rolls the monitor back to paused and the flip stays blocked | |
 | 6. Arm | **owner-authorized** agent step | `--arm-one` on `betteruptime_heartbeat.git_data_host_prd`: unpause, require a real `up` transition, roll back if none | |
 | 7. **Dependent record PR** | agent | Removes `arming_pending` from the manifest row, ticks the runbook precondition with the run ids and times, refreshes the Better Stack ledger row (its `verify_by` estimate is overdue and its "never born" note is stale), and cites one Better Stack incident delivered to the Slack channel since ADR-260 as read-only proof that the account route delivers (DC-4). Touches no hash-bound input, so the evidence from step 3 stays valid | **`Closes #9438`** |
@@ -369,7 +374,7 @@ gate. If the owner prefers closing earlier, step 3's PR body is the only other d
   emit spy's args; xtrace refusal; the production config versus the rehearsal config name (exact equality) on an absent secret;
   cache empty then filled, retried each tick; cache dropped on a ping failure; a `doppler` fake that exits 0 empty; transition emit and
   the 10-minute `ok` summary; an emit spy that fails and a feeder that still exits 0 with the same ping decision; a hung `doppler`
-  and a hung emit keeping the whole tick under 55 s; `unmeasured` on an empty `df`; `HOME=/root` present in the unit.
+  and a hung emit keeping the whole tick under 58 s; `unmeasured` on an empty `df`; `HOME=/root` present in the unit.
 - The Guard Contract mutation matrix below, written before the script.
 - Manifest row and parity rows (RED until the TF pair and the cloud-init arming line exist).
 - Registration (a glob claim is a claim to measure): regenerate the infra shard manifest, then run
@@ -519,7 +524,7 @@ failure_modes:
     alert_route: no record PR until it is cited
 
 logs:
-  where: Better Stack Logs source 2734275 (table soleur_git_data_prd) and Sentry; query with scripts/betterstack-query.sh --grep SOLEUR_GIT_DATA_LIVENESS
+  where: Better Stack Logs source 2734275 (table soleur_git_data_prd) and Sentry; query with the runbook's pinned step-6 query (scripts/betterstack-query.sh with --table/--table-s3, never the bare --grep form)
   retention: 90 days (Better Stack source setting recorded in expenses.md)
 
 discoverability_test:
@@ -777,7 +782,7 @@ are pinned by boundary rows, so a one-line threshold relaxation fails a row it d
   nor its test (PR 1b); it may list the pipeline's own writes (`knowledge-base/INDEX.md`, `specs/<branch>/session-state.md`).
 - [x] The feeder script and its unit contain the xtrace refusal as `[[ $- == *x* ]]` and the literal text `set -x` appears in neither
   (`git-data-luks.test.sh` A28a); `GIT_DATA_REPO_ROOT` appears in neither; the unit has `Environment=HOME=/root`, no `Requires=`,
-  `RequiresMountsFor=` or `BindsTo=`, and `TimeoutStartSec=55`; no `RuntimeDirectory=`.
+  `RequiresMountsFor=` or `BindsTo=`, and `TimeoutStartSec=58`; no `RuntimeDirectory=`.
 
 ### Quality Gates (targeted suites only)
 
@@ -894,7 +899,7 @@ Service-layer hypotheses (feeder bug, vendor outage) are only entertained after 
 - Labels used on #9943 (`domain/engineering`, `type/chore`, `priority/p3-low`, `deferred-automation`) exist.
 - ADR ordinal 283: `ls decisions` on a freshly fetched tree and a sweep of all 117 `origin/*` refs show 282 claimed by
   `feat-one-shot-9879-luks-sole-copy-protection` and nothing at 283.
-- Section literals (`TimeoutStartSec=55`, `state=ok`, `SOLEUR_GIT_DATA_LIVENESS`, `GIT_DATA_HOST_HEARTBEAT_URL`,
+- Section literals (`TimeoutStartSec=58`, `state=ok`, `SOLEUR_GIT_DATA_LIVENESS`, `GIT_DATA_HOST_HEARTBEAT_URL`,
   `soleur-git-data-host-prd`, `push = false`) are identical across Proposed Solution, Observability, Guard Contract, Acceptance Criteria
   and tasks.md.
 - Lints green at this commit: `lint-guard-contract.py`, `lint-infra-no-human-steps.py`, `lint-encryption-posture.py`,
@@ -916,7 +921,7 @@ Service-layer hypotheses (feeder bug, vendor outage) are only entertained after 
 - URL with an embedded newline or a non-Better-Stack host: refused before any request.
 - `set -x`: refuses to run (exit 78).
 - A `doppler` fake that exits 0 with empty output: treated as an absent secret, never as a valid URL.
-- A hung `doppler` fetch and a hung emit: the tick still finishes inside 55 s and the ping decision is unchanged.
+- A hung `doppler` fetch and a hung emit: the tick still finishes inside 58 s and the ping decision is unchanged.
 - An emit that fails: exit 0, ping sent, the transition retried next tick.
 - `unit_failed`: the LUKS reopen service fails and then recovers; pinging resumes after the unit's next successful run.
 - Fresh host after key rotation: every check reads healthy and the first tick emits `state=ok`.
