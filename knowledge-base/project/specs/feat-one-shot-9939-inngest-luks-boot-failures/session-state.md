@@ -45,3 +45,14 @@ systemd-row scoped; betterstack-assert-absence gained `--absence-require` (AND t
 probe now needs 'SYSLOG_IDENTIFIER":"systemd' + '"host":"soleur-inngest"'; plan's
 discoverability_test command updated; scoped probe verified `outcome=clean` live
 (absence_rows=0, control_rows=545).
+
+## Ship + merge (2026-10-11)
+
+- PR #9944 MERGED at 2026-10-11T01:36:22Z via merge queue (squash bd1813c730).
+- CI: lint-bot-statuses flake fixed (human-actor phrasing in plan); workspaces-luks-freeze
+  flake re-run green; test-all-orphan-log-retention flake re-run green; GuardA carrier drift
+  expected (reconciles at vinngest-v1.1.50 pin bump — mint chain running on main);
+  parity-mutation suite red on main too (pre-existing, non-required).
+- Auto-merge armed; merge queue ran full CI on the group head — success.
+- Post-merge: vinngest-v1.1.50 build dispatched; rehearsal 38102470173 dispatched
+  (dry_run=false) for acceptance evidence.
