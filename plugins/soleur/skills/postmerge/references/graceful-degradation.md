@@ -17,3 +17,4 @@ carried in every `soleur:postmerge` body (ADR-229).
 | CI run not found | Poll up to 5 minutes, then warn and proceed |
 | No UI files in diff | Skip browser verification entirely |
 | No linked issue | Skip issue comment |
+| No `doppler`, or no `HCLOUD_TOKEN_READONLY` in `prd_terraform`, or no `apply-web-platform-infra.yml` run for the merge SHA (Phase 5.7) | Report `Sole-copy read-back: <missing-token / no word / not delivered>`; never dispatch an apply on a missing read; `missing-token` also files the O5 issue; no run within about 50 min is "not delivered or superseded": read back anyway |

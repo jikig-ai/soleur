@@ -11,6 +11,7 @@ amended_by:
   - "#9307 (2026-09-30) — anchored edge matching, the runner-subcommand skip, `--print-selection` / `--paths`, and the evidence-based always-on audit; see ## Amendment — 2026-09-30"
   - "#9400 (2026-10-01) — the affected-ratchets pre-push lane moves the cheap ratchet net earlier than the local gate (push time, merged tree); the required `test` context remains the merge gate; see ## Amendment — 2026-10-01 (#9400)"
   - "#9813 (2026-10-10) — decision 22: the `glob:<literal-head>/<glob-tail>` declared-edge kind for corpus walkers, the five-site malformed-shape doctrine, and the per-suite dispositions; see ## Amendment — 2026-10-10 (#9813)"
+  - "#9814 (2026-10-11) — the local weight-drift detector: TEST_TIMING_LOG defaults on affected-shaped local runs and the epilogue emits advisory WEIGHT_DRIFT lines against committed weights; see ## Amendment — 2026-10-11 (#9814)"
 ---
 
 # ADR-242: `test-all.sh` — the local gate defaults to the affected set plus always-on ratchets (#8322)
@@ -624,3 +625,54 @@ Alternatives added by this amendment:
 | Keep `knowledge-base/` and accept the over-selection | The measured cost is ~331 committed seconds per kb-markdown diff — the entire motivation for the ticket. |
 | A regex edge kind instead of the bash-pattern glob | Bash `[[ == ]]` patterns are already the runner's grammar (`*.test.sh` glob registration, anchored edge matching); a second matcher family adds a semantics to keep consistent at the mint/hit/census sites for zero measured need. |
 | Malformed `glob:` mints a bare `^` | A bare `^` evaluates `*\n\n*` against the normalized blob — it matches only diffs containing an EMPTY line, which narrows instead of widening. `^glob:<verbatim>` is the always-match shape the hit arm recognizes by rule. |
+
+## Amendment — 2026-10-11 (#9814)
+
+A local run reports local-vs-committed weight drift as an advisory line, never
+a gate. `scripts/test-all.sh` defaults `TEST_TIMING_LOG` to
+`$_durable_log_dir/suite-timings.tsv` on local affected-shaped runs
+(`CI` unset, `TEST_TIMING_LOG` unset, `TEST_GROUP=affected` or
+`_AFFECTED==1` on the all-group default — the two selectors stay disjoint by
+design, and enumerate/print paths decline before paying a `mkdir`), guarded
+by a `mkdir -p` + `[[ -w && -O ]]` probe — `-w` degrades an unwritable target
+to "no timing log" instead of a `>>`-under-`set -e` mid-run abort, and `-O`
+declines a co-tenant-owned pre-created leaf (the `basename-$$-EPOCHSECONDS`
+name is predictable), followed by `: >` truncation so a bash-3.2 PID-reused
+dir never serves stale rows, and an armed `[note]` naming the log path.
+The assignment is IN-SHELL, never `export`: every consumer (`run_suite`'s
+`>>`, `_emit_bytes_probe`, the epilogue emit) reads it in the runner's own
+process, and an exported var would leak this run's log path into every
+nested copy of the runner that runner-SUT suites spawn — phantom
+`committed=unmeasured` lines on exactly the runner-touching diffs this
+feature is for. (Corollary: every runner-SUT sandbox inherits the arm —
+sibling fixtures opt out with `TEST_TIMING_LOG=/dev/null`.) The epilogue then calls
+`weight_drift_report` (`scripts/lib/test-weight-drift.sh`, one `LC_ALL=C awk`
+pass, bash-3.2-safe, always returns 0) over `"$_scriptdir"/suite-durations*.tsv`
+— the glob, not two literals, so a future manifest joins the comparison
+instead of mis-reporting `unmeasured`. The emit sits in the post-marker NOTE
+region: `=== N/N suites passed ===` stays the last `===`-shaped line and a
+monitor exiting on the marker never sees the lines, which is accepted — they
+live in run output and the durable TSV. The predicate is strict
+`local > 2*committed AND local > 10000` (`WEIGHT_DRIFT_FLOOR_MS`, value-pinned
+beside `LOCAL_FAST_CAP_MS`'s convention); ran rows with no committed row emit
+`committed=unmeasured` (absence is visible, never silent), `floor`-class
+anchors add `basis=floor`, and a log whose ran rows all show `elapsed_ms=0`
+emits `WEIGHT_DRIFT_UNAVAILABLE` once — the bash-3.2 vacuity is named, not
+read as clean. Lines dual-emit to stdout and stderr: a line that only reaches
+stderr is invisible to the invoking agent's stdout capture. The new suite
+registers as `ALWAYS_ON_SUITES` + an `AFFECTED_*_PATHS` block whose manifest
+edge is `glob:scripts/*.tsv` — not `suite-durations*`: the #9813 grammar
+requires a /-terminated literal head, so a file-prefix glob cannot be declared
+and covering the manifest class is the honest widening — and its committed
+weight row is
+written only by `regenerate-shard-manifest.py --incremental --write`
+(ADR-240: generated, never hand-edited).
+
+Alternatives added by this amendment:
+
+| Alternative | Why not |
+|---|---|
+| Gate on drift (fail the run) | A contended host inflates every ratio (7.6x and 6.0x measured on the 2026-10-09 spot-check); a gate would flake every local run on a loaded machine. The issue's own posture is warn-only. |
+| Opt-in only (no default; require TEST_TIMING_LOG set) | An opt-in instrument is invisible by default — the exact shape that let the 185s-vs-8.5s suite slip through #9763 unnoticed. |
+| Local-median baseline file | Needs a local timing corpus that does not exist; committed rows are the only baseline, and they are what the fast-tier ratchet is charged against, so drift-from-committed is the meaningful signal. |
+| Compare against `_suite_budget_ms` declared budgets | That predicate compares per-suite DECLARED budgets, not committed CI weights; a suite with no declared budget is invisible — the same unaccountability class this amendment closes. |

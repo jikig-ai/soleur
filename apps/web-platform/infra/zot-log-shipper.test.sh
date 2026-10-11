@@ -278,20 +278,33 @@ chmod +x "$BIN/journalctl"
 # past the hole" can exist (#7444 R17).
 cat > "$BIN/curl" <<'EOS'
 #!/usr/bin/env bash
-body=""; has_m=0; url=""; auth=""; prev=""
+body=""; has_m=0; url=""; auth=""; prev=""; argvauth=""; cfg=0; disable=0; noproxy=0
 for a in "$@"; do
   case "$a" in
     http*://*) url="$a" ;;
-    "Authorization: Bearer "*) auth="$a" ;;
+    --disable) disable=1 ;;
   esac
   [[ "$prev" == "--data-raw" ]] && body="$a"
+  # any spelling of the header on the argument list (case, glued -H, --header); the POST BODY is data and may legitimately quote one
+  [[ "$prev" != "--data-raw" && "$a" == *[Aa]uthorization* ]] && argvauth="$a"
   [[ "$prev" == "-m" || "$prev" == "--max-time" ]] && has_m=1
+  [[ "$prev" == "--config" && "$a" == "-" ]] && cfg=1
+  [[ "$prev" == "--noproxy" && "$a" == "*" ]] && noproxy=1
   prev="$a"
 done
+# The credential reaches curl on its stdin config (ADR-280), never on its argument list: read the config only when `--config -` is
+# asked for, as real curl does, and take the bearer from its `header = "Authorization: Bearer ..."` line.
+if [[ "$cfg" == 1 ]]; then
+  while IFS= read -r l; do
+    [[ "$l" == 'header = "Authorization: Bearer '*'"' ]] && auth="$l"
+  done
+fi
 printf 'm=%s url=%s auth=%s\n' "$has_m" "$url" "${auth:+yes}" >> "$STUB_CURLARGS"
 [[ "$has_m" == 1 ]] || { echo "curl stub: unbounded call (no -m/--max-time)" >&2; exit 64; }
 [[ -n "$url"  ]] || { echo "curl stub: no URL argument" >&2; exit 64; }
-[[ -n "$auth" ]] || { echo "curl stub: no Authorization: Bearer header" >&2; exit 64; }
+[[ -z "$argvauth" ]] || { echo "curl stub: the credential is on the argument list" >&2; exit 64; }
+[[ "$disable" == 1 && "$noproxy" == 1 ]] || { echo "curl stub: the call is not confined (--disable and --noproxy '*')" >&2; exit 64; }
+[[ -n "$auth" ]] || { echo "curl stub: no Authorization: Bearer header on the stdin config" >&2; exit 64; }
 if [[ "${STUB_POST_FAIL:-0}" == 1 ]]; then exit 22; fi
 if [[ -n "${STUB_POST_FAIL_MATCH:-}" && "$body" == *"$STUB_POST_FAIL_MATCH"* ]]; then exit 22; fi
 printf '%s\n' "$body" >> "$STUB_POSTS"

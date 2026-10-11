@@ -1407,7 +1407,10 @@ _docker_login_capture() {
 #        defensive tripwire there — a 403 must never be silently read as an authn failure.
 #     2. A BROKEN zot accessControl is NOT observable here at all: login SUCCEEDS, ZOT_ACTIVE=1,
 #        and the failure surfaces later at pull time. The login probe is the wrong layer for it;
-#        `zot-entry-gate.sh` is where zot's real 403 lives.
+#        `web-zot-consumer-probe.sh` is the layer meant to see it: a 403 on its `tags/list` read
+#        with the pull credential lands in its unexpected-code arm (`SUPPRESS ping`). Only the
+#        manifest-read 403 is measured (zot-image.provenance.md, claim register row 1); the
+#        `tags/list` 403 is not.
 # ghcr.io: UNMEASURED. Do NOT inherit zot's finding — GHCR can and does answer 403 (SAML/SSO
 #   enforcement, org package policy, IP allow-lists), so for GHCR `authz_denied` is a LIVE arm,
 #   not a tripwire, and consequence 2 above has no GHCR meaning. This paragraph says `unmeasured`
@@ -1634,8 +1637,9 @@ _cred_err_tail() {
 # Contract: it can never change the deploy's verdict. Callers invoke it only as `... || true`; it touches
 # no global, never BWRAP_RC/BWRAP_ERR/CANARY_HEALTHY or the state file; the exec is bounded by
 # CANARY_DIAG_TIMEOUT (+3 s kill-after) and its output by `head -c`, every host-side docker call by
-# `timeout 3`; and every value passes through _cred_err_tail (shape + env-value redaction, 200-char
-# tail) before it reaches a sink. It prints derived facts only -- no environment dump: the only
+# `timeout 3` and each host kernel-log read by `timeout -k 1 3` (_canary_kdeny_read; census D10g);
+# and every value passes through _cred_err_tail (shape + env-value redaction, 200-char tail) before
+# it reaches a sink. It prints derived facts only -- no environment dump: the only
 # printenv calls name BUILD_SHA / BUILD_VERSION. Run as the image USER, the same uid and caps the
 # failing probe had. The two call sites are mutually exclusive in one run (a legacy failure exits
 # before the faithful canary runs), so there is no once-per-deploy latch. Rows are short on purpose:
@@ -1645,8 +1649,9 @@ _cred_err_tail() {
 # a `done` row carrying the exec's own exit status, so "ran and found nothing" is distinguishable
 # from "timed out" (124) or "never ran". Section meanings: runbook canary-probe-set.md, "Canary
 # sandbox DIAG bundle".
-CANARY_DIAG_TIMEOUT="${CANARY_DIAG_TIMEOUT:-25}"
-[[ "$CANARY_DIAG_TIMEOUT" =~ ^[1-9][0-9]?$ ]] && (( CANARY_DIAG_TIMEOUT <= 60 )) || CANARY_DIAG_TIMEOUT=25
+# Default 30: the in-container script runs five `timeout 5` probes (25 s worst case), so a 25 s cap left no margin for the last row.
+CANARY_DIAG_TIMEOUT="${CANARY_DIAG_TIMEOUT:-30}"
+[[ "$CANARY_DIAG_TIMEOUT" =~ ^[1-9][0-9]?$ ]] && (( CANARY_DIAG_TIMEOUT <= 60 )) || CANARY_DIAG_TIMEOUT=30
 CANARY_DIAG_SCRIPT='p() { printf "%s %s\n" "$1" "$2"; }
 k() { cat "$1" 2>/dev/null || echo n/a; }
 p id "uid=$(id -u) gid=$(id -g)"
@@ -1666,6 +1671,8 @@ v=$(timeout 5 /usr/bin/bwrap --new-session --dev /dev --unshare-pid --bind / / -
 p direct_probe "rc=$r $(printf %s "$v" | head -n 1 | cut -c1-120)"
 v=$(timeout 5 /usr/bin/bwrap --unshare-user --unshare-pid --proc /proc --dev /dev --bind / / -- true 2>&1); r=$?
 p sdk_probe "rc=$r $(printf %s "$v" | head -n 1 | cut -c1-120)"
+v=$(timeout 5 /usr/bin/bwrap --unshare-user --unshare-pid --dev /dev --bind / / -- true 2>&1); r=$?
+p sdk_noproc "rc=$r $(printf %s "$v" | head -n 1 | cut -c1-120)"
 p kernel_ns "restrict=$(k /proc/sys/kernel/apparmor_restrict_unprivileged_userns) clone=$(k /proc/sys/kernel/unprivileged_userns_clone) max=$(k /proc/sys/user/max_user_namespaces)"'
 
 # _canary_diag_emit <trigger> <section> <raw>: the ONLY emitter. Scrubs first, then writes one line with
@@ -1679,9 +1686,102 @@ _canary_diag_emit() {
   return 0
 }
 
+# _canary_kdeny_read: one bounded, scrubbed read of the HOST kernel stream, printed as ONE status line.
+#   src=<journal|dmesg|none> j=<state> d=<skip|state> total=<n> hits=<n> mproc=<n> [fields]
+# Why it exists: the first real bundle (#9860) narrowed the failure to `sdk_probe` ("Can't mount proc ...
+# Operation not permitted") and ruled out the image, file caps, exec and the legacy probe. What is left is
+# a kernel-side refusal, and the only host-side witness would be an AppArmor/audit line. "Could not read the
+# stream" and "read it, nothing there" are DIFFERENT facts and only the second is evidence, so each rung
+# reports its own state: ok (at least one real line and rc 0, or an anchored denial: readable text, NOT proof that audit records
+# reach this stream) | empty (rc 0, no hint, no lines: what journalctl prints on systemd 261 for a user outside
+# adm/systemd-journal) | noaccess (journalctl's or dmesg's own hint line and no real lines) | absent (127) |
+# timeout (124/137) | error (any other rc, unless an anchored denial was read before the non-zero exit: that
+# line is a real record, error text cannot match the anchor).
+# The ladder is journal, then dmesg only when the journal is not ok.
+# deploy runs unprivileged (no sudo grant covers the kernel log; kernel.dmesg_restrict=1 is the host
+# baseline), so `noaccess`/`empty` is the EXPECTED outcome and the row says so rather than hiding it.
+# Counts: a hit is an AUDIT RECORD (the line starts, after dmesg's optional `[ts] `, with `audit: type=1400|1326
+# audit(<ts>:<n>): `) that carries apparmor="DENIED" or is the seccomp type 1326. Anchoring matters: printk
+# lines that merely echo tenant-chosen text (a segfault line naming a mapped file) must not be able to carry the
+# markers. Type 1400 alone is not enough (it also carries complain-mode ALLOWED/AUDIT records); `mproc` = the
+# hits that are a procfs MOUNT denial (operation="mount" AND fstype="proc"). A bare profile name or comm="bwrap"
+# is NOT a hit test: the production container shares the soleur-bwrap profile, so a hit is HOST-wide, and the
+# dmesg rung is not time-bound. `fields` come from a CLOSED key allowlist with no name/comm/pid key and are cut
+# from anchored records only, with `fstype` limited to a short token (mount(2) lets a tenant pick that string).
+# This is the sanctioned exception to git-data-bootstrap.sh's "never raw kernel lines" rule: values of a fixed key
+# set, not lines. Both reads take the NEWEST lines first (tac), so the 64 KiB cap drops the oldest, never the
+# denial that happened seconds ago. No sudo, no /var/log, no follow flag: every read is `timeout -k 1 3`.
+# SOLEUR-DEBT: diagnostic row added for the #9860 sandbox failure (cause named H6; the shim-side fix is
+# #10032). Keep it while src=none: a least-privilege kernel-stream read grant for the deploy user is the
+# open follow-up (#10045); demote or remove once that lands or #9860's closure makes the row moot.
+_canary_kdeny_read() {
+  local rung raw rc state src=none j=none d=skip total=0 hits=0 mproc=0 fields="" counts first line t h m hint
+  for rung in journal dmesg; do
+    rc=0
+    if [[ "$rung" == journal ]]; then
+      raw="$(timeout -k 1 3 journalctl -k -n 400 --since=-5min --no-pager -o cat 2>&1 | tac | head -c 65536; exit "${PIPESTATUS[0]}")" || rc=$?
+    else
+      raw="$(timeout -k 1 3 dmesg 2>&1 | tail -n 400 | tac | head -c 65536; exit "${PIPESTATUS[0]}")" || rc=$?
+    fi
+    counts="$(printf '%s\n' "$raw" | awk '
+      /^Hint: You are currently not seeing messages/ || /^No journal files were opened due to insufficient permissions/ || /^dmesg: read kernel buffer failed:/ || /^Failed to .*(Permission denied|Operation not permitted)/ { hint++; next }
+      /^[[:space:]]+(Users in groups .* can see all messages\.|Pass -q to turn off this notice\.)$/ { next }
+      /^-- / || /^[[:space:]]*$/ { next }
+      { total++
+        if ($0 ~ /^(\[[ 0-9.]+\] )?audit: type=(1400|1326) audit\([0-9.]+:[0-9]+\): / && ($0 ~ /apparmor="DENIED"/ || $0 ~ /^(\[[ 0-9.]+\] )?audit: type=1326 audit\(/)) {
+          hits++
+          if ($0 ~ /operation="mount"/ && $0 ~ /fstype="proc"/) { mproc++; if (mline == "") mline = $0 }
+          else if (hline == "") hline = $0
+        }
+      }
+      END { printf "%d %d %d %d\n%s\n", total + 0, hits + 0, mproc + 0, hint + 0, (mline != "" ? mline : hline) }')" || counts=""
+    first="${counts%%$'\n'*}"; line=""
+    if [[ "$counts" == *$'\n'* ]]; then line="${counts#*$'\n'}"; fi
+    IFS=' ' read -r t h m hint <<< "$first" || true
+    [[ "${t:-}" =~ ^[0-9]+$ ]] || t=0
+    [[ "${h:-}" =~ ^[0-9]+$ ]] || h=0
+    [[ "${m:-}" =~ ^[0-9]+$ ]] || m=0
+    [[ "${hint:-}" =~ ^[0-9]+$ ]] || hint=0
+    if (( t > 9999 )); then t=9999; fi
+    if (( h > 9999 )); then h=9999; fi
+    if (( m > 9999 )); then m=9999; fi
+    state=ok
+    if (( rc == 127 )); then state=absent
+    elif (( rc == 124 || rc == 137 )); then state=timeout
+    elif (( t == 0 )); then
+      if (( hint > 0 )); then state=noaccess
+      elif (( rc == 0 )); then state=empty
+      else state=error
+      fi
+    elif (( rc != 0 && h == 0 )); then state=error
+    fi
+    if [[ "$rung" == journal ]]; then j="$state"; else d="$state"; fi
+    if [[ "$state" == ok ]]; then
+      if [[ "$rung" == journal ]]; then src=journal; else src=dmesg; fi
+      total=$t; hits=$h; mproc=$m
+      if [[ -n "$line" ]]; then
+        fields="$(printf '%s\n' "$line" | awk '
+          BEGIN { q = "\""; n = split("operation profile fstype error info requested_mask denied_mask syscall", K, " ") }
+          { for (i = 1; i <= n; i++) {
+              k = K[i]
+              if (match($0, "(^| )" k "=" q "[^" q "]*" q) || match($0, "(^| )" k "=[^ ]+")) {
+                v = substr($0, RSTART, RLENGTH); sub(/^ /, "", v)
+                if (k == "fstype" && v !~ /^fstype=([A-Za-z0-9_.-]+|"[A-Za-z0-9_.-]+")$/) continue
+                out = out v " "
+              } } }
+          END { printf "%s", out }')" || fields=""
+        fields="${fields% }"; fields="${fields:0:130}"
+      fi
+      break
+    fi
+  done
+  printf 'src=%s j=%s d=%s total=%s hits=%s mproc=%s%s' "$src" "$j" "$d" "$total" "$hits" "$mproc" "${fields:+ $fields}"
+  return 0
+}
+
 # emit_canary_sandbox_diag <legacy|faithful>: always returns 0. In-container section names are an
 # allowlist -- anything else the exec prints (a daemon error, a forged first word) is `raw`, so only
-# this function can mint host/hostsec/kernel/done.
+# this function can mint host/hostsec/kernel/kdeny/done.
 emit_canary_sandbox_diag() {
   local trigger="${1:-legacy}" out line sec rest n=0 capped=0 exec_rc=0
   out="$(timeout -k 3 "$CANARY_DIAG_TIMEOUT" docker exec soleur-web-platform-canary /bin/sh -c "$CANARY_DIAG_SCRIPT" soleur-canary-diag 2>&1 | head -c 8192; exit "${PIPESTATUS[0]}")" || exec_rc=$?
@@ -1690,12 +1790,13 @@ emit_canary_sandbox_diag() {
     if (( n >= 16 )); then capped=1; break; fi
     n=$(( n + 1 ))
     sec="${line%% *}"; rest="${line#* }"
-    if ! [[ "$sec" =~ ^(id|proc|lsm|files|caps|prov|direct_version|direct_probe|sdk_probe|kernel_ns)$ && "$line" == *" "* ]]; then sec="raw"; rest="$line"; fi
+    if ! [[ "$sec" =~ ^(id|proc|lsm|files|caps|prov|direct_version|direct_probe|sdk_probe|sdk_noproc|kernel_ns)$ && "$line" == *" "* ]]; then sec="raw"; rest="$line"; fi
     _canary_diag_emit "$trigger" "$sec" "$rest"
   done <<< "$out"
   _canary_diag_emit "$trigger" host "$(timeout 3 docker inspect -f 'capadd={{.HostConfig.CapAdd}} capdrop={{.HostConfig.CapDrop}} priv={{.HostConfig.Privileged}} aa={{.AppArmorProfile}}' soleur-web-platform-canary 2>&1 | head -c 400)"
   _canary_diag_emit "$trigger" hostsec "$(timeout 3 docker inspect -f '{{range .HostConfig.SecurityOpt}}{{printf "%.40s" .}} {{end}}' soleur-web-platform-canary 2>&1 | head -c 400)"
   _canary_diag_emit "$trigger" kernel "kernel=$(uname -r 2>&1) docker=$(timeout 3 docker version --format '{{.Server.Version}}' 2>&1 | head -c 60)"
+  _canary_diag_emit "$trigger" kdeny "$(_canary_kdeny_read)"
   _canary_diag_emit "$trigger" "done" "exec_rc=$exec_rc lines=$n capped=$capped bytes=${#out}"
   return 0
 }
@@ -2748,7 +2849,7 @@ verify_image_signature() {
 # Each arm's soak lives in its own state file.
 run_canary_replay() {
   local mode_flag="$1" state_file="$2" sentry_op="$3" label="$4"
-  local verdict reason sdk_version exec_rc out err_file docker_err
+  local verdict reason sdk_version exec_rc out err_file docker_err detail
   # Capture docker's OWN stderr so a persistent infra_error (rc 126/127: "no such
   # container", "exec format error") carries its CAUSE onto the no-SSH surfaces —
   # the numeric rc alone would otherwise be the only signal (obs review P2).
@@ -2781,6 +2882,13 @@ run_canary_replay() {
     # re-blank it. Missing key ⇒ "" (the soak surface's sdk_version was empty
     # before this — the key never matched).
     sdk_version="$(printf '%s' "$out" | jq -r '.sdkVersion // .sdk_version // ""' 2>/dev/null || echo '')"
+    # #10032: the 65-refusal verdict carries the first `bwrap-shim:` line as
+    # `.detail` — ~10 distinct refusal classes share `bwrap_shim_refused`, and
+    # docker exec's stderr is already consumed by classification (agent-native
+    # review W2: a flat reason gives the no-SSH operator nothing to triage).
+    # Fold it into the reason the same way docker_exec_rc folds its stderr.
+    detail="$(printf '%s' "$out" | jq -r '.detail // ""' 2>/dev/null | tr -dc '[:print:]' | cut -c1-200 || echo '')"
+    [[ -n "$detail" ]] && reason="$reason: $detail"
   fi
   if [[ "$err_file" != "/dev/null" ]]; then rm -f "$err_file" 2>/dev/null || true; fi
   write_sandbox_canary_state "$verdict" "$reason" "$sdk_version" "$state_file" \

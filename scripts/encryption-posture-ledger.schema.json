@@ -60,9 +60,26 @@
           "required": ["volume", "attachment", "mapper"],
           "additionalProperties": false,
           "properties": {
-            "volume": { "type": "string" },
-            "attachment": { "type": "string" },
-            "mapper": { "type": "string", "description": "The resolved /dev/mapper/<name> name; must match the luksOpen operand (after one level of ${VAR:-default} resolution) AND the mount/gate." }
+            "volume": { "type": "string", "minLength": 1 },
+            "attachment": { "type": "string", "minLength": 1 },
+            "mapper": { "type": "string", "minLength": 1, "description": "The resolved /dev/mapper/<name> name; must match the luksOpen operand (after one level of ${VAR:-default} resolution) AND the mount/gate." },
+            "apparatus": {
+              "description": "#9372/#9572: the repo-relative file under apps/*/infra/ that holds THIS volume's cryptsetup luksFormat and luksOpen. Only for an indexed ([each.key]) binding, where it is REQUIRED (resolving the mapper by name would reach a sibling volume's apparatus); a singleton row may not carry it. At most one row may pin a given file.",
+              "type": "string",
+              "minLength": 1
+            },
+            "key_chain": {
+              "description": "#9372/#9572: passphrase custody for a host that reads the key through a fresh-boot token. Only for an indexed binding, where it is REQUIRED; a singleton row may not carry it. It replaces the same-file random_password+doppler_secret pair check for that row.",
+              "type": "object",
+              "required": ["consumer", "token", "secret", "password"],
+              "additionalProperties": false,
+              "properties": {
+                "consumer": { "type": "string", "minLength": 1, "description": "The hcloud_server whose user_data carries the volume id and the token." },
+                "token": { "type": "string", "minLength": 1, "description": "The doppler_service_token the host reads the key with; its config must equal the secret's." },
+                "secret": { "type": "string", "minLength": 1, "description": "The doppler_secret holding the passphrase; its value must be <password>.result." },
+                "password": { "type": "string", "minLength": 1, "pattern": "^random_password\\.", "description": "The random_password this row claims; no password may be claimed by two luks rows." }
+              }
+            }
           }
         },
         "at_rest": {

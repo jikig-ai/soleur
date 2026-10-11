@@ -121,7 +121,7 @@ mkdir -p "$T/mut" || { printf 'FAIL SETUP: mkdir %s/mut\n' "$T" >&2; exit 1; }
 printf '\n=== infra-privileged tier census (Guards 1, 2 and 4; #8209, ADR-241) ===\n\n'
 
 cat > "$T/ipt.py" <<'PY'
-import sys, os, re, json, yaml, subprocess, glob, posixpath
+import sys, os, re, json, yaml, subprocess, glob, posixpath, tempfile
 
 GHDIR, REPO = sys.argv[1], sys.argv[2]
 STATE_LIST = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] else ""
@@ -402,7 +402,7 @@ def tf_roots():
 
 def block_bodies(text, opener):
     """Brace-counted bodies of every block whose opening line matches `opener` (a compiled regex
-    anchored at column 0). Returns (match, body)."""
+    anchored at line start, optional indentation allowed for the removed/moved openers). Returns (match, body)."""
     res = []
     for m in opener.finditer(text):
         i = text.index("{", m.end() - 1) if "{" not in m.group(0) else m.start() + m.group(0).index("{")
@@ -419,7 +419,49 @@ def block_bodies(text, opener):
     return res
 
 RES_OPEN = re.compile(r'^resource\s+"([A-Za-z0-9_]+)"\s+"([A-Za-z0-9_]+)"\s*\{', re.M)
-REMOVED_OPEN = re.compile(r'^removed\s*\{', re.M)
+# `removed`/`moved` may be INDENTED (HCL ignores indentation), so the openers allow leading blanks; the scan runs on
+# hcl_code_only(text) so a `removed {` inside a comment or a heredoc body is not a block.
+REMOVED_OPEN = re.compile(r'^[ \t]*removed\s*\{', re.M)
+MOVED_OPEN = re.compile(r'^[ \t]*moved\s*\{', re.M)
+_HCL_HEREDOC = re.compile(r"<<-?[ \t]*([A-Za-z_][A-Za-z0-9_]*)[ \t]*\r?$", re.M)
+def hcl_code_only(text):
+    """`text` with every `#` / `//` comment, `/* */` comment and heredoc body overwritten by spaces (newlines kept, so
+    offsets and line starts are unchanged). Quoted strings are tracked (a `//` inside "https://x" is not a comment);
+    HCL strings never span lines, so a newline closes one. FAIL-OPEN direction, stated plainly: an unterminated
+    heredoc or block comment blanks to end of file, and hiding a `removed`/`moved` block turns G4h green. Two things
+    bound that: terraform rejects an unterminated heredoc or comment, so such a file cannot reach apply; and G4h4 pins
+    the LIVE removed/moved counts to the unscrubbed count, so a real block blanked on a real file reds it. The G4h
+    probe strings below only cover the shapes written into them, not an arbitrary real file."""
+    out, i, n, in_str = [], 0, len(text), False
+    blank = lambda seg: re.sub(r"[^\n]", " ", seg)
+    while i < n:
+        c = text[i]
+        if in_str:
+            if c == "\\" and i + 1 < n:
+                out.append(text[i:i + 2]); i += 2; continue
+            if c in '"\n':
+                in_str = False
+            out.append(c); i += 1; continue
+        if c == '"':
+            in_str = True; out.append(c); i += 1; continue
+        if c == "#" or text.startswith("//", i):
+            j = text.find("\n", i); j = n if j < 0 else j
+            out.append(blank(text[i:j])); i = j; continue
+        if text.startswith("/*", i):
+            j = text.find("*/", i + 2); j = n if j < 0 else j + 2
+            out.append(blank(text[i:j])); i = j; continue
+        hm = _HCL_HEREDOC.match(text, i) if text.startswith("<<", i) else None
+        if hm:
+            em = re.compile(r"^[ \t]*" + re.escape(hm.group(1)) + r"[ \t]*\r?$", re.M).search(text, hm.end())
+            k = em.end() if em else n
+            out.append(text[i:hm.end()]); out.append(blank(text[hm.end():k])); i = k; continue
+        out.append(c); i += 1
+    return "".join(out)
+def read_tf(path):
+    """The ONE reader of a `.tf` file for Guard 4: the file's text with comments and heredoc bodies blanked
+    (hcl_code_only). Every Guard 4 reader (the removed/moved collectors, declared_addrs, base_declared) goes through
+    it, so a resource wrapped in a comment is not "declared" and a `removed {` in a comment is not a block."""
+    return hcl_code_only(open(path, encoding="utf-8", errors="replace").read())
 BACKEND_OPEN = re.compile(r'^\s*backend\s+"s3"\s*\{', re.M)
 
 tf_root_files = {r: tf_files(r) for r in tf_roots()}
@@ -747,15 +789,31 @@ check("G2c: the loader step precedes every `doppler run` and every terraform ste
 # runtime identity — the key the web app mints every connected user's installation token from.
 # A `removed` block that destroys instead of forgetting disconnects every connected user.
 removed_blocks, g4_files = [], 0
+# `moved` blocks get their OWN collector (G4h, #9879): `removed_blocks` also feeds G4a/G4b/G4c, which demand a `from`
+# and `lifecycle { destroy = false }` of every entry, so a `moved` block put there would false-RED them.
+moved_blocks = []
+MOVED_ATTR = re.compile(r"(?:^|[\s{;])(from|to)\s*=\s*([A-Za-z0-9_.\[\]\"-]+)")
+def moved_collect(text, rel, root):
+    out = []
+    for _m, b in block_bodies(text, MOVED_OPEN):
+        attrs = {}
+        for ln in b.splitlines():
+            if ln.lstrip().startswith(("#", "//")):
+                continue
+            for k, v in MOVED_ATTR.findall(ln):
+                attrs.setdefault(k, v)
+        out.append((root, rel, attrs.get("from", ""), attrs.get("to", "")))
+    return out
 for r in GUARD4_ROOTS:
     for p in tf_files(r):
         g4_files += 1
-        t = open(p, encoding="utf-8", errors="replace").read()
+        t = read_tf(p)
         for _m, b in block_bodies(t, REMOVED_OPEN):
             fr = re.search(r"^\s*from\s*=\s*([A-Za-z0-9_.\[\]\"-]+)\s*$", b, re.M)
             lif = [lb for _lm, lb in block_bodies(b, re.compile(r"^\s*lifecycle\s*\{", re.M))]
             guarded = any(re.search(r"^\s*destroy\s*=\s*false\s*$", lb, re.M) for lb in lif)
             removed_blocks.append((r, os.path.relpath(p, REPO), fr.group(1) if fr else "", guarded))
+        moved_blocks.extend(moved_collect(t, os.path.relpath(p, REPO), r))
 print("IPT_G4_FILES=%d" % g4_files, file=sys.stderr)
 
 ungrd = ["%s %s" % (f, a or "<no from>") for _r, f, a, g in removed_blocks if not (g and a)]
@@ -793,13 +851,22 @@ check("G4b: every `removed` address is reached by its root's apply — in the `-
       "so the forget never happens and the resource is orphaned under management",
       not unreached, unreached[:8])
 
+def declared_in(text):
+    """The `type.name` addresses of the resource blocks in `text` (already read through read_tf)."""
+    return {"%s.%s" % (m.group(1), m.group(2)) for m, _b in block_bodies(text, RES_OPEN)}
+# Reader probe (G4c): a real .tf FILE holding one resource inside a multi-line comment and one real resource must read
+# as exactly the real one. It drives read_tf itself (a path in, not a text), so a reader that stops scrubbing reds it.
+with tempfile.TemporaryDirectory() as _td:
+    _tp = os.path.join(_td, "probe.tf")
+    with open(_tp, "w", encoding="utf-8") as _fh:
+        _fh.write('/*\nresource "x_y" "commented" {\n  a = 1\n}\n*/\n# resource "x_y" "hashed" {\n'
+                  'resource "x_y" "real" {\n  a = 1\n}\n')
+    g4c_probe_ok = declared_in(read_tf(_tp)) == {"x_y.real"}
 declared_addrs, forgotten_addrs = {}, {}
 for r in GUARD4_ROOTS:
     declared_addrs[r] = set()
     for p in tf_files(r):
-        t = open(p, encoding="utf-8", errors="replace").read()
-        for m, _b in block_bodies(t, RES_OPEN):
-            declared_addrs[r].add("%s.%s" % (m.group(1), m.group(2)))
+        declared_addrs[r] |= declared_in(read_tf(p))
     forgotten_addrs[r] = {a for rr, _f, a, _g in removed_blocks if rr == r and a}
 
 # Row 3: a resource block deleted with NO `removed` block. The only sound signal is the BASE
@@ -817,9 +884,7 @@ if BASE_ROOT:
             if not f.endswith(".tf"):
                 continue
             n_base += 1
-            t = open(os.path.join(d, f), encoding="utf-8", errors="replace").read()
-            for m, _b in block_bodies(t, RES_OPEN):
-                base_declared[r].add("%s.%s" % (m.group(1), m.group(2)))
+            base_declared[r] |= declared_in(read_tf(os.path.join(d, f)))
 # INTENDED DESTROYS. A resource block deleted ON PURPOSE so the per-merge apply destroys it: a bare
 # `-target=` on an address with no configuration plans its delete (the #9062 precedent). An entry
 # is honoured only when its root's apply still targets it bare (else the delete is never planned
@@ -848,14 +913,23 @@ RETIRED_STATE_ABSENT = {
     },
 }
 # Never destroyable and never "retired": the App identity (forget-only) and the SOLE-COPY live stores (the Inngest LUKS
-# volume, its attachment, passphrase and key secret, web-1's workspaces LUKS volume). A later PR that lists one of these
+# volume, its attachment, passphrase and key secret, web-1's workspaces LUKS volume and its attachment, and the two
+# Inngest Doppler parents doppler_project.inngest and doppler_environment.inngest_prd, #9879). A later PR that lists one of these
 # in INTENDED_DESTROYS or RETIRED_STATE_ABSENT trips G4f instead of silently masking its destroy (#8285 PR B review).
 G4_PROTECTED = {
     "doppler_secret.github_app_id", "doppler_secret.github_app_private_key",
     "hcloud_volume.inngest_redis_luks", "hcloud_volume_attachment.inngest_redis_luks",
     "random_password.inngest_redis_luks", "doppler_secret.inngest_redis_luks_key",
     "hcloud_volume.workspaces_luks", "hcloud_volume_attachment.workspaces_luks",
+    # #9879: the Inngest Doppler parents. Replacing either strands the LUKS passphrase secret above it (the sole copy of
+    # the key). One address per line: the mutation row deletes exactly one.
+    "doppler_project.inngest",
+    "doppler_environment.inngest_prd",
 }
+# The two App-identity entries are the ONLY protected addresses with legitimate `removed` blocks (forget-only, in
+# github-app.tf). G4H_SOLE_COPY is DERIVED from the single list above, never a second hand-written list.
+G4_APP_IDENTITY = frozenset({"doppler_secret.github_app_id", "doppler_secret.github_app_private_key"})
+G4H_SOLE_COPY = frozenset(G4_PROTECTED) - G4_APP_IDENTITY
 orphans = []
 for r in GUARD4_ROOTS:
     for a in sorted(base_declared.get(r, set())):
@@ -870,8 +944,8 @@ for r in GUARD4_ROOTS:
 check("G4c: every `resource` block the base ref declares and HEAD no longer declares is claimed by a "
       "`removed` block — a deleted resource block with none leaves the resource managed with no HCL, "
       "and the next apply plans a plain DESTROY [base .tf files: %d]" % n_base,
-      bool(BASE_ROOT) and n_base >= 1 and not orphans,
-      ("base unavailable" if not BASE_ROOT else "orphans=%s" % orphans[:8]))
+      bool(BASE_ROOT) and n_base >= 1 and g4c_probe_ok and not orphans,
+      ("base unavailable" if not BASE_ROOT else "declared-reader probe failed (a commented-out resource read as declared, or a real one did not)" if not g4c_probe_ok else "orphans=%s" % orphans[:8]))
 bad_intended = sorted({a for _r, d in list(INTENDED_DESTROYS.items()) + list(RETIRED_STATE_ABSENT.items()) for a in d if a in G4_PROTECTED})
 check("G4f: no INTENDED_DESTROYS or RETIRED_STATE_ABSENT entry names a protected address (the App identity, which "
       "may only ever be FORGOTTEN, or a sole-copy live store: %s)" % ", ".join(sorted(G4_PROTECTED)), not bad_intended, bad_intended)
@@ -881,6 +955,83 @@ check("G4f: no INTENDED_DESTROYS or RETIRED_STATE_ABSENT entry names a protected
 redeclared = sorted("%s %s" % (r, a) for r, d in RETIRED_STATE_ABSENT.items() for a in d if a in declared_addrs.get(r, set()))
 check("G4g: no RETIRED_STATE_ABSENT address is declared at HEAD (the allowance is only for an address that is "
       "gone; a re-declared one must go through `removed` or INTENDED_DESTROYS)", not redeclared, redeclared)
+
+# ── G4h (#9879, ADR-282): no `removed {}` or `moved {}` over a sole-copy address ─────────────────────────────
+# A `removed` block (forget) or a `moved` block (rename) naming one of these addresses detaches or renames the object
+# the `prevent_destroy` / `delete_protection` pins are written against, so the pins stop applying while the object
+# lives on unprotected (or, with `destroy = true`, is deleted). Both attributes, both block kinds, every `.tf` under
+# every GUARD4_ROOTS entry. An index suffix (`x["k"]`) is stripped before comparing.
+def _g4h_addr(a):
+    return re.sub(r"\[.*$", "", a.strip().strip('"'))
+# Dispatch non-vacuity: the `moved` collector must read a known block out of a synthetic probe. A collector that
+# silently reads zero blocks (a broken opener regex) would leave every `moved` clause below vacuously green.
+_probe = moved_collect('moved {\n  from = hcloud_volume.p\n  to   = hcloud_volume.q["k"]\n}\n', "probe.tf", "probe")
+g4h_probe_ok = _probe == [("probe", "probe.tf", "hcloud_volume.p", 'hcloud_volume.q["k"]')]
+# Second probe: an INDENTED `moved`/`removed` is read, and a commented or heredoc one is not (hcl_code_only).
+_p2 = hcl_code_only('# moved { from = a.b }\n  moved {\n    from = a.b\n    to = a.c\n  }\n'
+                    'x = <<EOT\n  removed {\n  from = a.d\n  }\nEOT\n/* moved {\n from = a.e\n} */\n  removed {\n    from = a.f\n  }\n')
+g4h_probe_ok = (g4h_probe_ok
+                and [(a, b) for _r, _f, a, b in moved_collect(_p2, "probe2.tf", "probe")] == [("a.b", "a.c")]
+                and [fr.group(1) for _m, bb in block_bodies(_p2, REMOVED_OPEN)
+                     for fr in [re.search(r"^\s*from\s*=\s*(\S+)\s*$", bb, re.M)]] == ["a.f"])
+# Third probe: the scrubber's comment/string lexing. Each shape sits AHEAD of an indented `removed {` that must STILL be
+# read; a scrubber that mis-lexes the shape blanks that block (a `/*` opens a block comment to EOF, a `<<EOF` opens a
+# heredoc to EOF). Shapes: `#` line comment holding `/*`; `//` line comment holding `/*`; a quoted string holding `/*`
+# (string tracking); a trailing `#` comment holding a heredoc opener. Neutering the `#`/`//` branch or the string
+# tracking turns this red (checker-copy mutants g4h-9 and g4h-10).
+_p3 = hcl_code_only('# glob /mnt/*\n  removed {\n    from = a.g\n  }\n'
+                    '// glob /mnt/*\n  removed {\n    from = a.h\n  }\n'
+                    'x = "/mnt/*"\n  removed {\n    from = a.i\n  }\n'
+                    'x = 1 # see <<EOF\n  removed {\n    from = a.j\n  }\n')
+g4h_probe_ok = (g4h_probe_ok
+                and [fr.group(1) for _m, bb in block_bodies(_p3, REMOVED_OPEN)
+                     for fr in [re.search(r"^\s*from\s*=\s*(\S+)\s*$", bb, re.M)]] == ["a.g", "a.h", "a.i", "a.j"])
+g4h_hits = []
+for _r, f, a, _g in removed_blocks:
+    if a and _g4h_addr(a) in G4H_SOLE_COPY:
+        g4h_hits.append("removed from=%s (%s)" % (a, f))
+for _r, f, a, b_ in moved_blocks:
+    for k, v in (("from", a), ("to", b_)):
+        if v and _g4h_addr(v) in G4H_SOLE_COPY:
+            g4h_hits.append("moved %s=%s (%s)" % (k, v, f))
+print("IPT_G4H=removed:%d moved:%d probe:%d hits:%d" % (len(removed_blocks), len(moved_blocks), int(g4h_probe_ok), len(g4h_hits)), file=sys.stderr)
+check("G4h: no `removed` or `moved` block names a sole-copy address (G4H_SOLE_COPY, %d addresses) as `from` or `to` "
+      "[%d removed + %d moved blocks over %d .tf files; %d hits]"
+      % (len(G4H_SOLE_COPY), len(removed_blocks), len(moved_blocks), g4_files, len(g4h_hits)),
+      g4_files >= 1 and g4h_probe_ok and not g4h_hits,
+      ("moved collector probe failed" if not g4h_probe_ok else sorted(g4h_hits)[:8]))
+# G4h2: the exact-set pin. G4H_SOLE_COPY is derived from G4_PROTECTED, so deleting an entry from G4_PROTECTED would
+# silently shrink what G4h guards. The literal below is the second side of that comparison; a reviewer reads both when
+# either changes (lifting protection is a reviewed two-step change, ADR-282).
+G4H_EXPECTED = frozenset({
+        "hcloud_volume.inngest_redis_luks", "hcloud_volume_attachment.inngest_redis_luks",
+        "random_password.inngest_redis_luks", "doppler_secret.inngest_redis_luks_key",
+        "hcloud_volume.workspaces_luks", "hcloud_volume_attachment.workspaces_luks",
+        "doppler_project.inngest", "doppler_environment.inngest_prd",
+})
+g4h_drift = sorted((G4H_SOLE_COPY ^ G4H_EXPECTED)) + sorted(G4_APP_IDENTITY - G4_PROTECTED)
+check("G4h2: G4H_SOLE_COPY (G4_PROTECTED minus the two App-identity entries) equals the pinned sole-copy set "
+      "[%d addresses] and both App-identity entries stay protected" % len(G4H_EXPECTED), not g4h_drift, g4h_drift)
+
+# G4h4: the LIVE collectors read every real `removed`/`moved` block. G4h reads its blocks through hcl_code_only, which
+# fails OPEN (an unterminated heredoc or comment blanks to EOF and a hidden block cannot trip G4h), and its probe strings
+# only cover the shapes written into them. So the live counts are pinned to the UNSCRUBBED opener count over the same
+# files: a scrubber regression that blanks a real block on a real file reads as a count mismatch here, not as zero
+# blocks and a green G4h. Derived, never hardcoded. A heredoc body or block comment that merely LOOKS like a block makes
+# the raw count exceed the scrubbed one; that is a reviewed case (M-g4h-8 drives it), not a silent pass.
+raw_removed = raw_moved = 0
+for r in GUARD4_ROOTS:
+    for p in tf_files(r):
+        _raw = open(p, encoding="utf-8", errors="replace").read()
+        raw_removed += len(REMOVED_OPEN.findall(_raw))
+        raw_moved += len(MOVED_OPEN.findall(_raw))
+print("IPT_G4H4=raw_removed:%d raw_moved:%d scrubbed_removed:%d scrubbed_moved:%d" % (raw_removed, raw_moved, len(removed_blocks), len(moved_blocks)), file=sys.stderr)
+check("G4h4: the scrubbed removed/moved collectors read exactly as many blocks as an unscrubbed grep of the same files "
+      "(no real block blanked by hcl_code_only) [%d removed + %d moved scrubbed vs %d + %d raw]"
+      % (len(removed_blocks), len(moved_blocks), raw_removed, raw_moved),
+      g4_files >= 1 and raw_removed + raw_moved >= 1
+      and raw_removed == len(removed_blocks) and raw_moved == len(moved_blocks),
+      "scrubbed removed=%d moved=%d, raw removed=%d moved=%d" % (len(removed_blocks), len(moved_blocks), raw_removed, raw_moved))
 
 if STATE_LIST:
     live = set(open(STATE_LIST, encoding="utf-8", errors="replace").read().split())
@@ -1736,7 +1887,7 @@ check("G6u: every unit or drop-in that loads /etc/default/soleur-doppler-token a
 
 print("\n".join(out))
 PY
-CENSUS_ROWS=42  # 22 -> 23 (#9215): G1i-rk, the root-key extract-precedence row. 23 -> 34 (#8609): Guard 6, G6a..G6l.
+CENSUS_ROWS=46  # 43 -> 45 (#9879): +2 rows, G4h (no removed/moved over a sole-copy address) and G4h2 (the exact sole-copy set); main carries 43 live rows against a floor of 42 (the floor sat one below the live count), and the floor is now exactly the live count. 45 -> 46 (#9879 round 2): +1 row, G4h4 (the live removed/moved counts equal the unscrubbed count). 22 -> 23 (#9215): G1i-rk, the root-key extract-precedence row. 23 -> 34 (#8609): Guard 6, G6a..G6l.
 # 41 -> 42 (#9321 PR-2, 2026-10-03): G7f, the App-token composite and callers source-shape row.
 # 34 -> 38 (#8609 review): G6o (plan-context invariance), G6q (exact opt-in set), G6s (cosign
 # caller-ref pin), G6u (UnsetEnvironment sweep).
@@ -2224,6 +2375,15 @@ removed {
   lifecycle {
     destroy = false
   }
+}
+EOF
+
+# G4h (#9879): a benign `moved` block between UNPROTECTED addresses (the shape placement-group.tf has live). The control
+# must stay green on it, and the harness reads the collector's count of it back (IPT_G4H moved:1) as its non-vacuity.
+cat > "$FIX/tree/apps/web-platform/infra/placement-group.tf" <<'EOF'
+moved {
+  from = hcloud_server.web
+  to   = hcloud_server.web["web-1"]
 }
 EOF
 
@@ -2955,6 +3115,159 @@ if mutate g4-11-redeclared "$MUTDIR/tree/apps/web-platform/infra/github-app.tf" 
   mutant_red g4-11-allowance-entry-redeclared wf_row "$T/mut/g4-11.tsv" "G4g:"
 fi
 
+# ── G4h (#9879): no `removed` / `moved` block over a sole-copy address ───────────────────────────────────────────────
+# MUST-PASS arm first: the compliant fixture carries the two App-identity forget-only `removed` blocks (github-app.tf)
+# and a benign `moved` block (placement-group.tf), and G4h and G4h2 stay green on all of them.
+_g4h_ctl="$(sed -n 's/^IPT_G4H=//p' "$T/control.tsv.err" | tail -1)"
+if grep -q 'from = doppler_secret.github_app_id' "$FIX/tree/apps/web-platform/infra/github-app.tf" \
+   && grep -q 'from = doppler_secret.github_app_private_key' "$FIX/tree/apps/web-platform/infra/github-app.tf" \
+   && wf_row "$T/control.tsv" "G4h:" && wf_row "$T/control.tsv" "G4h2:" \
+   && grep -q "^ok$(printf '\t')G4h: " "$T/control.tsv" && grep -q "^ok$(printf '\t')G4h2: " "$T/control.tsv" \
+   && case "$_g4h_ctl" in "removed:6 moved:1 probe:1 hits:0") true ;; *) false ;; esac; then
+  pass "M-g4h-must-pass: the App-identity forget-only removed blocks and a benign moved block stay green on G4h and G4h2 ($_g4h_ctl)"
+else
+  fail "M-g4h-must-pass: G4h/G4h2 refused the App-identity forget-only blocks or a benign moved block, or the collector counts drifted" "ipt=$_g4h_ctl $(grep -E 'G4h' "$T/control.tsv" | cut -c1-200)"
+fi
+# Row 1 — a `removed` block forgetting the Inngest LUKS volume: its pins stop applying and the volume lives on unprotected.
+MUTDIR="$(fixcopy g4h-1)"; assert_fixture_dir "$MUTDIR"
+if mutate g4h-1-removed-sole-copy "$MUTDIR/tree/apps/web-platform/infra/github-app.tf" 6 '$a\removed {\n  from = hcloud_volume.inngest_redis_luks\n  lifecycle {\n    destroy = false\n  }\n}'; then
+  fixcensus "$MUTDIR" "$T/mut/g4h-1.tsv" ""
+  mutant_red g4h-1-removed-sole-copy wf_row "$T/mut/g4h-1.tsv" "G4h:"
+fi
+# Row 2 — a `moved` block renaming the volume (state-only): the address the pins name no longer exists.
+MUTDIR="$(fixcopy g4h-2)"; assert_fixture_dir "$MUTDIR"
+if mutate g4h-2-moved-from-sole-copy "$MUTDIR/tree/apps/web-platform/infra/placement-group.tf" 4 '$a\moved {\n  from = hcloud_volume.inngest_redis_luks\n  to   = hcloud_volume.renamed\n}'; then
+  fixcensus "$MUTDIR" "$T/mut/g4h-2.tsv" ""
+  mutant_red g4h-2-moved-from-sole-copy wf_row "$T/mut/g4h-2.tsv" "G4h:"
+fi
+# Row 2b — the same through `to`, and through an indexed address: neither attribute nor an index suffix may hide it.
+MUTDIR="$(fixcopy g4h-2b)"; assert_fixture_dir "$MUTDIR"
+if mutate g4h-2b-moved-to-sole-copy-indexed "$MUTDIR/tree/apps/web-platform/infra/placement-group.tf" 4 '$a\moved {\n  from = hcloud_volume.elsewhere\n  to   = hcloud_volume.workspaces_luks["web-1"]\n}'; then
+  fixcensus "$MUTDIR" "$T/mut/g4h-2b.tsv" ""
+  mutant_red g4h-2b-moved-to-sole-copy-indexed wf_row "$T/mut/g4h-2b.tsv" "G4h:"
+fi
+# Row 3 — SECOND-MEMBER: a compliant `removed` block for an UNPROTECTED address first, then a second one for a Doppler
+# parent. A scan that stopped at the first compliant block would stay green.
+MUTDIR="$(fixcopy g4h-3)"; assert_fixture_dir "$MUTDIR"
+if mutate g4h-3-second-member-doppler-parent "$MUTDIR/tree/apps/web-platform/infra/github-app.tf" 12 '$a\removed {\n  from = doppler_service_token.unrelated\n  lifecycle {\n    destroy = false\n  }\n}\nremoved {\n  from = doppler_environment.inngest_prd\n  lifecycle {\n    destroy = false\n  }\n}'; then
+  fixcensus "$MUTDIR" "$T/mut/g4h-3.tsv" ""
+  mutant_red g4h-3-second-member-doppler-parent wf_row "$T/mut/g4h-3.tsv" "G4h:"
+fi
+# Must-pass — a `removed` block for an UNPROTECTED address with `lifecycle { destroy = false }` (the G4a shape) is green.
+MUTDIR="$(fixcopy g4h-mp)"; assert_fixture_dir "$MUTDIR"
+if mutate g4h-mp-unprotected-removed "$MUTDIR/tree/apps/web-platform/infra/github-app.tf" 6 '$a\removed {\n  from = doppler_service_token.unrelated\n  lifecycle {\n    destroy = false\n  }\n}'; then
+  fixcensus "$MUTDIR" "$T/mut/g4h-mp.tsv" ""
+  if wf_row "$T/mut/g4h-mp.tsv" "G4h:" && grep -q "^ok$(printf '\t')G4h: " "$T/mut/g4h-mp.tsv" \
+     && grep -q '^IPT_G4H=removed:7 moved:1 probe:1 hits:0$' "$T/mut/g4h-mp.tsv.err"; then
+    pass "M-g4h-mp-unprotected-removed: a compliant removed block for an unprotected address is ACCEPTED by G4h"
+  else
+    fail "M-g4h-mp-unprotected-removed: G4h refused a compliant removed block for an unprotected address" "$(grep G4h "$T/mut/g4h-mp.tsv" | cut -c1-240)"
+  fi
+fi
+# Row 4 — `doppler_environment.inngest_prd` deleted from G4_PROTECTED while its `removed` block stays. G4h itself goes green
+# (the address left the set), so the EXACT-SET row (G4h2) is what must red; the mutant is a copy of the checker.
+MUTDIR="$(fixcopy g4h-4)"; assert_fixture_dir "$MUTDIR"
+cp "$T/ipt.py" "$T/ipt-g4h-4.py" || { printf 'FAIL SETUP: g4h-4 checker copy\n' >&2; exit 1; }
+if mutate g4h-4-removed-block-stays "$MUTDIR/tree/apps/web-platform/infra/github-app.tf" 6 '$a\removed {\n  from = doppler_environment.inngest_prd\n  lifecycle {\n    destroy = false\n  }\n}' \
+   && mutate g4h-4-protected-entry-deleted "$T/ipt-g4h-4.py" 1 '/^    "doppler_environment\.inngest_prd",$/d'; then
+  python3 "$T/ipt-g4h-4.py" "$MUTDIR/tree/.github" "$MUTDIR/tree" "" "$MUTDIR/base" > "$T/mut/g4h-4.tsv" 2> "$T/mut/g4h-4.tsv.err"
+  mutant_red g4h-4-protected-entry-deleted wf_row "$T/mut/g4h-4.tsv" "G4h2:"
+fi
+# Row 5 — DISPATCH NON-VACUITY: the `moved` collector reads zero blocks (opener regex broken) on a fixture that holds a
+# `moved` block over a sole-copy address. The collector probe must fail G4h; without it the moved clause is vacuously green.
+MUTDIR="$(fixcopy g4h-5)"; assert_fixture_dir "$MUTDIR"
+cp "$T/ipt.py" "$T/ipt-g4h-5.py" || { printf 'FAIL SETUP: g4h-5 checker copy\n' >&2; exit 1; }
+if mutate g4h-5-moved-in-fixture "$MUTDIR/tree/apps/web-platform/infra/placement-group.tf" 4 '$a\moved {\n  from = hcloud_volume.inngest_redis_luks\n  to   = hcloud_volume.renamed\n}' \
+   && mutate g4h-5-collector-blind "$T/ipt-g4h-5.py" 2 "/^MOVED_OPEN = /s/moved/movedX/"; then
+  python3 "$T/ipt-g4h-5.py" "$MUTDIR/tree/.github" "$MUTDIR/tree" "" "$MUTDIR/base" > "$T/mut/g4h-5.tsv" 2> "$T/mut/g4h-5.tsv.err"
+  if grep -q '^IPT_G4H=.* moved:0 probe:0 ' "$T/mut/g4h-5.tsv.err"; then
+    mutant_red g4h-5-collector-blind wf_row "$T/mut/g4h-5.tsv" "G4h:"
+  else
+    fail "M-g4h-5-collector-blind: the blinded collector did not read zero moved blocks" "$(grep IPT_G4H "$T/mut/g4h-5.tsv.err")"
+  fi
+fi
+# Row 6 — an INDENTED `moved` block over the volume. HCL ignores indentation; an opener anchored at column 0 read zero
+# blocks here and left G4h and G4h2 green.
+MUTDIR="$(fixcopy g4h-6)"; assert_fixture_dir "$MUTDIR"
+if mutate g4h-6-indented-moved-sole-copy "$MUTDIR/tree/apps/web-platform/infra/placement-group.tf" 4 '$a\  moved {\n    from = hcloud_volume.inngest_redis_luks\n    to   = hcloud_volume.renamed\n  }'; then
+  fixcensus "$MUTDIR" "$T/mut/g4h-6.tsv" ""
+  mutant_red g4h-6-indented-moved-sole-copy wf_row "$T/mut/g4h-6.tsv" "G4h:"
+fi
+# Row 7 — an INDENTED `removed` block over a Doppler parent, compliant in every other respect (from + destroy = false).
+MUTDIR="$(fixcopy g4h-7)"; assert_fixture_dir "$MUTDIR"
+if mutate g4h-7-indented-removed-doppler-parent "$MUTDIR/tree/apps/web-platform/infra/github-app.tf" 6 '$a\  removed {\n    from = doppler_environment.inngest_prd\n    lifecycle {\n      destroy = false\n    }\n  }'; then
+  fixcensus "$MUTDIR" "$T/mut/g4h-7.tsv" ""
+  mutant_red g4h-7-indented-removed-doppler-parent wf_row "$T/mut/g4h-7.tsv" "G4h:"
+fi
+# Must-pass — a `removed` / `moved` look-alike that is NOT a block: a line comment, a heredoc body (indented, as a shell
+# or JSON payload would carry it) and a block comment, all naming sole-copy addresses. The scan runs on comment- and
+# heredoc-blanked text, so G4h stays green and the collector counts are the control's.
+MUTDIR="$(fixcopy g4h-8)"; assert_fixture_dir "$MUTDIR"
+if mutate g4h-8-lookalikes-in-comment-and-heredoc "$MUTDIR/tree/apps/web-platform/infra/github-app.tf" 19 '$a\# removed {\n#   from = hcloud_volume.inngest_redis_luks\n# }\nlocals {\n  g4h_note = <<-EOT\n    moved {\n      from = hcloud_volume.inngest_redis_luks\n      to   = hcloud_volume.renamed\n    }\n    removed {\n      from = doppler_environment.inngest_prd\n    }\n  EOT\n}\n/*\n  moved {\n    from = hcloud_volume.inngest_redis_luks\n  }\n*/'; then
+  fixcensus "$MUTDIR" "$T/mut/g4h-8.tsv" ""
+  if wf_row "$T/mut/g4h-8.tsv" "G4h:" && grep -q "^ok$(printf '\t')G4h: " "$T/mut/g4h-8.tsv" && grep -q "^ok$(printf '\t')G4h2: " "$T/mut/g4h-8.tsv" \
+     && grep -q '^IPT_G4H=removed:6 moved:1 probe:1 hits:0$' "$T/mut/g4h-8.tsv.err" \
+     && grep -q '^IPT_G4H4=raw_removed:7 raw_moved:3 scrubbed_removed:6 scrubbed_moved:1$' "$T/mut/g4h-8.tsv.err" && wf_red "$T/mut/g4h-8.tsv" "G4h4:"; then
+    pass "M-g4h-8-lookalikes: a removed/moved look-alike in a comment, a heredoc body and a block comment is NOT read as a block (G4h stays green, counts unchanged; G4h4 reds on the 3 look-alikes the raw grep sees, by design)"
+  else
+    fail "M-g4h-8-lookalikes: G4h read a comment or heredoc look-alike as a block, or the collector counts drifted" "$(grep -E 'G4h' "$T/mut/g4h-8.tsv" | cut -c1-240) $(grep IPT_G4H "$T/mut/g4h-8.tsv.err")"
+  fi
+fi
+# Rows g4h-9 / g4h-10 — the hcl_code_only scrubber's lexing, pinned by the third probe (_p3): each is a COPY of the checker
+# with one branch neutered, run over the unmutated fixture. Neutering the `#`/`//` comment branch (g4h-9) or the string
+# tracking (g4h-10) lets a `/*` or `<<EOF` inside a comment or string open a block comment / heredoc to EOF, which
+# blanks a real `removed {` that follows; the probe reads fewer blocks and G4h reds ("moved collector probe failed").
+MUTDIR="$(fixcopy g4h-9)"; assert_fixture_dir "$MUTDIR"
+cp "$T/ipt.py" "$T/ipt-g4h-9.py" || { printf 'FAIL SETUP: g4h-9 checker copy\n' >&2; exit 1; }
+if mutate g4h-9-line-comment-branch-neutered "$T/ipt-g4h-9.py" 2 '/^        if c == "#" or text\.startswith\("\/\/", i\):$/s/.*/        if False:/'; then
+  python3 "$T/ipt-g4h-9.py" "$MUTDIR/tree/.github" "$MUTDIR/tree" "" "$MUTDIR/base" > "$T/mut/g4h-9.tsv" 2> "$T/mut/g4h-9.tsv.err"
+  mutant_red g4h-9-line-comment-branch-neutered wf_row "$T/mut/g4h-9.tsv" "G4h:"
+fi
+MUTDIR="$(fixcopy g4h-10)"; assert_fixture_dir "$MUTDIR"
+cp "$T/ipt.py" "$T/ipt-g4h-10.py" || { printf 'FAIL SETUP: g4h-10 checker copy\n' >&2; exit 1; }
+if mutate g4h-10-string-tracking-neutered "$T/ipt-g4h-10.py" 2 "/^        if c == '\"':\$/s/.*/        if False:/"; then
+  python3 "$T/ipt-g4h-10.py" "$MUTDIR/tree/.github" "$MUTDIR/tree" "" "$MUTDIR/base" > "$T/mut/g4h-10.tsv" 2> "$T/mut/g4h-10.tsv.err"
+  mutant_red g4h-10-string-tracking-neutered wf_row "$T/mut/g4h-10.tsv" "G4h:"
+fi
+# Row g4h-11 — the LIVE-count pin (G4h4). An unterminated heredoc at the top of the file that holds the fixture's
+# `removed` blocks makes hcl_code_only blank them to EOF: G4h itself stays green (a hidden block cannot be a hit; the
+# fail-open case), so the count pin is the only row that can see it. Asserted both ways: G4h green, G4h4 red.
+MUTDIR="$(fixcopy g4h-11)"; assert_fixture_dir "$MUTDIR"
+if mutate g4h-11-unterminated-heredoc-hides-removed "$MUTDIR/tree/apps/web-platform/infra/github-app.tf" 1 '1i\x = <<EOT'; then
+  fixcensus "$MUTDIR" "$T/mut/g4h-11.tsv" ""
+  if grep -q "^ok$(printf '\t')G4h: " "$T/mut/g4h-11.tsv"; then
+    mutant_red g4h-11-unterminated-heredoc-hides-removed wf_row "$T/mut/g4h-11.tsv" "G4h4:"
+  else
+    fail "M-g4h-11-unterminated-heredoc-hides-removed: G4h was not green, so the fixture does not model the fail-open case" "$(grep -E 'G4h' "$T/mut/g4h-11.tsv" | cut -c1-240)"
+  fi
+fi
+# Row g4c-read-tf — Guard 4's declared-address reader must scrub. A copy of the checker whose read_tf returns the raw file
+# reads a resource wrapped in a multi-line comment as declared; the G4c reader probe reds.
+MUTDIR="$(fixcopy g4c-read-tf)"; assert_fixture_dir "$MUTDIR"
+cp "$T/ipt.py" "$T/ipt-g4c-read-tf.py" || { printf 'FAIL SETUP: g4c-read-tf checker copy\n' >&2; exit 1; }
+if mutate g4c-read-tf-unscrubbed "$T/ipt-g4c-read-tf.py" 2 '/^    return hcl_code_only\(open\(path, /s/.*/    return open(path, encoding="utf-8", errors="replace").read()/'; then
+  python3 "$T/ipt-g4c-read-tf.py" "$MUTDIR/tree/.github" "$MUTDIR/tree" "" "$MUTDIR/base" > "$T/mut/g4c-read-tf.tsv" 2> "$T/mut/g4c-read-tf.tsv.err"
+  mutant_red g4c-read-tf-unscrubbed wf_row "$T/mut/g4c-read-tf.tsv" "G4c:"
+fi
+# Row presence — G4 row PRESENCE (a count floor cannot tell a renamed or dropped row from a duplicated one), as G6h2/G7h2
+# do for their guards: the pin must RED when G4h is removed from a copy of the control TSV.
+G4_ROW_IDS="G4a G4b G4c G4d G4e G4f G4g G4h G4h2 G4h4"
+# rows_present <tsv> <ids> — shared by g4_present/g6_present/g7_present (one idiom, three row-id lists): rc 0 = every id present, 1 = one absent, 2 = UNRESOLVED (TSV missing or empty).
+rows_present() { [ -s "$1" ] || { printf 'UNRESOLVED: census TSV %s is missing or empty\n' "$1" >&2; return 2; }; local id; for id in $2; do awk -F'\t' -v p="$id: " 'index($2, p) == 1 { f = 1 } END { exit f ? 0 : 1 }' "$1" || return 1; done; }
+g4_present() { rows_present "$1" "$G4_ROW_IDS"; }
+if g4_present "$T/live.tsv" && g4_present "$T/control.tsv"; then
+  pass "G4h3: every named G4 row id ($G4_ROW_IDS) is present in the live and the control census"
+else
+  fail "G4h3: a named G4 row id is missing from the live or the control census"
+fi
+grep -v "$(printf '\tG4h: ')" "$T/control.tsv" > "$T/mut/g4h-presence.tsv"
+if [ "$(grep -c . "$T/mut/g4h-presence.tsv")" -eq "$(( $(grep -c . "$T/control.tsv") - 1 ))" ]; then
+  MUTANTS_RUN=$((MUTANTS_RUN + 1)); pass "M-g4h-presence-row-missing: exactly one G4 row (G4h) removed from a copy of the control TSV"
+  mutant_red g4h-presence-row-missing g4_present "$T/mut/g4h-presence.tsv"
+else
+  fail "M-g4h-presence-row-missing: the removal did not land on exactly one line"
+fi
+
 # ── Guard 6 (#8609): the soleur-github-app read token stays in Tier B ───────────────────
 # Row a — REORDER: after the compliant Tier-B job, a SECOND job with no `environment:` reads the
 # token. The scan must not stop at the first (compliant) referencing job.
@@ -3489,7 +3802,7 @@ if mutate g7f-h4-lowercase-narrow-token "$MUTDIR/tree/.github/workflows/release.
 fi
 # G7 row PRESENCE (a count floor cannot tell a renamed or dropped row from a duplicated one), as G6h2 does for Guard 6.
 G7_ROW_IDS="G7c G7d G7e G7f"
-g7_present() { [ -s "$1" ] || { printf 'UNRESOLVED: census TSV %s is missing or empty\n' "$1" >&2; return 2; }; local id; for id in $G7_ROW_IDS; do awk -F'\t' -v p="$id: " 'index($2, p) == 1 { f = 1 } END { exit f ? 0 : 1 }' "$1" || return 1; done; }
+g7_present() { rows_present "$1" "$G7_ROW_IDS"; }
 if g7_present "$T/live.tsv" && g7_present "$T/control.tsv"; then
   pass "G7h2: every named G7 row id ($G7_ROW_IDS) is present in the live and the control census"
 else
@@ -3515,17 +3828,18 @@ fi
 # G6h2 — PRESENCE of every named G6 row (a count floor cannot tell a renamed or dropped row from
 # a duplicated one). Positive on the live and control TSVs, negative on a control with one removed.
 G6_ROW_IDS="G6a G6a2 G6a3 G6b G6c G6c2 G6d G6e G6m G6n G6l G6o G6q G6s G6u"
-g6_present() { [ -s "$1" ] || { printf 'UNRESOLVED: census TSV %s is missing or empty\n' "$1" >&2; return 2; }; local id; for id in $G6_ROW_IDS; do awk -F'\t' -v p="$id: " 'index($2, p) == 1 { f = 1 } END { exit f ? 0 : 1 }' "$1" || return 1; done; }
+g6_present() { rows_present "$1" "$G6_ROW_IDS"; }
 # The presence helpers get the same third direction as wf_row (a missing or empty TSV is UNRESOLVED, rc 2, never the
 # "a row is absent" verdict that mutant_red reads as RED); subshells roll the counters back, printf + exit on a miss.
-for _st in "g7_present $T/st-missing.tsv" "g7_present $T/st-empty.tsv" "g6_present $T/st-missing.tsv" "g6_present $T/st-empty.tsv"; do
+for _st in "g7_present $T/st-missing.tsv" "g7_present $T/st-empty.tsv" "g6_present $T/st-missing.tsv" "g6_present $T/st-empty.tsv" \
+           "g4_present $T/st-missing.tsv" "g4_present $T/st-empty.tsv"; do
   # shellcheck disable=SC2086  # the helper name and its arguments are split on purpose
   _mr="$( (mutant_red st-unresolved-presence $_st >/dev/null 2>&1; printf '%s,%s' "$passes" "$fails") )"
   if [ "$_mr" != "$passes,$((fails + 1))" ]; then
     printf 'FAIL INSTRUMENT: mutant_red read a missing/empty TSV as RED for [%s] (got "%s" from %s,%s)\n' "$_st" "$_mr" "$passes" "$fails" >&2; exit 1
   fi
 done
-pass "H8: the G6/G7 presence helpers read a missing or empty census TSV as UNRESOLVED, never as an absent row that reads RED (4 drives)"
+pass "H8: the G4/G6/G7 presence helpers read a missing or empty census TSV as UNRESOLVED, never as an absent row that reads RED (6 drives)"
 if g6_present "$T/live.tsv" && g6_present "$T/control.tsv"; then
   pass "G6h2: every named G6 row id ($G6_ROW_IDS) is present in the live and the control census"
 else
@@ -3563,7 +3877,13 @@ fi
 #   allowance; 1 landing), g4-11 (allowance entry re-declared at HEAD; 1 landing). Measured: 120 ran.
 # 120 -> 125 (#8285 PR B fix round): g4-12 (live store in the allowance; 1 landing), g4-13/g4-14 (space-form `-target ADDR` and
 #   `-replace=ADDR` on a plan step; 2 landings each). Measured: 125 ran.
-MUTANT_FLOOR=125
+# 125 -> 135 (#9879, G4h): g4h-1, g4h-2, g4h-2b, g4h-3, g4h-mp (1 landing each), g4h-4 and g4h-5 (2 landings each: a tree edit
+#   and a checker edit), and the G4h presence-row removal (1). Measured: 135 ran.
+# 135 -> 138 (#9879 review): g4h-6 (indented `moved` over the volume), g4h-7 (indented `removed` over a Doppler parent) and g4h-8
+#   (comment / heredoc / block-comment look-alikes stay green); 1 landing each. Measured: 138 ran.
+# 138 -> 142 (#9879 round 2): g4h-9 (scrubber `#`/`//` branch neutered), g4h-10 (string tracking neutered), g4h-11 (unterminated
+#   heredoc hides the fixture's removed blocks; only the G4h4 count pin sees it) and g4c-read-tf (Guard 4 reader unscrubbed); 1 landing each. Measured: 142 ran.
+MUTANT_FLOOR=142
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -3593,7 +3913,11 @@ _ran=$((passes + fails))
 # 296 -> 298 (#8285 PR B): g4-8 landing + verdict. Measured: 298 ran.
 # 298 -> 306 (#8285 PR B review): live G4g (1), g4-9 (2 landings + 1 verdict), g4-10 (1 + 1), g4-11 (1 + 1). Measured: 306 ran.
 # 306 -> 314 (#8285 PR B fix round): g4-12 (1 landing + 1 verdict), g4-13 and g4-14 (2 landings + 1 verdict each). Measured: 314 ran.
-FLOOR=314
+# 314 -> 336 (#9879, G4h): live G4h and G4h2 (2), the must-pass control row (1), g4h-1/2/2b/3 (1 landing + 1 verdict each), g4h-mp (1 + 1),
+#   g4h-4 and g4h-5 (2 landings + 1 verdict each), the G4 presence row (1), the presence-row removal (1 + 1). Measured: 336 ran.
+# 336 -> 342 (#9879 review): g4h-6 and g4h-7 (1 landing + 1 verdict each), g4h-8 (1 landing + 1 must-pass verdict). Measured: 342 ran.
+# 342 -> 351 (#9879 round 2): live G4h4 (1), g4h-9 / g4h-10 / g4h-11 / g4c-read-tf (1 landing + 1 verdict each); g4h-8 gains clauses inside its one must-pass verdict (0). Measured: 351 ran.
+FLOOR=351
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s — cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1

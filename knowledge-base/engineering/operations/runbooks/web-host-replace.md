@@ -319,6 +319,8 @@ instance, at the end of a boot that got through. Read the signals in this order,
 
 #### A `discriminate` fatal, and replacing web-2 before the live conversion
 
+> **Superseded 2026-10-11 (#9372), as to this section's present tense:** the volume rebirth has run (2026-10-06); web-2's volume (id 107059048) is LUKS-formatted and is attached to a host that opened it, so the `ext4` state described below no longer exists on web-2. The text stays as the account of the pre-rebirth behaviour and of the circular-replace trap for any volume that is not raw.
+
 The workspaces volume is never in a replace's destroy set (`prevent_destroy`), so a replace re-attaches
 the **same** volume. For a volume that is not raw, "fix the cause and replace the host again" is
 therefore circular: the new host meets the same `ext4` and takes the same fatal. The live web-2 volume
@@ -333,7 +335,7 @@ volume re-attaches to the new host.
 The `web2_marker` job of `workspaces-luks-verify.yml` (default branch only: a schedule event, or a dispatch from `main`)
 prints one reason token in its `::error title=web-2 LUKS evidence is RED::` line, or in its
 `::notice title=web-2 not live yet::` line while the marker is absent and web-2 has no evidence that certifies this
-instance (`no_probe_row`, `no_ready_row` or `probe_predates_ready`). Until #9372 has run, that notice is the expected state.
+instance (`no_probe_row`, `no_ready_row` or `probe_predates_ready`). Until #9372 has run, that notice is the expected state. **[Superseded 2026-10-11 (#9372):** the rebirth has run and the grader reports PASS; the notice is expected only while the marker is absent and no evidence certifies the running instance.]**
 
 The join is instance-level (ADR-263 D5; `boot_id` is printed for diagnosis and never compared). The marker is
 **earned** only when the newest probe row is green and fresh AND the newest readiness row is green, not newer
@@ -453,4 +455,4 @@ decision tree below is what it is reporting against.
 - `tests/scripts/lib/web-host-replace-gate.sh` — the gate, with its full arm-by-arm rationale
 - `tests/scripts/test-web-host-replace-gate.sh` — the mutation battery proving no arm is vacuous, including the key-conditional web-1 arms (#9356, arms-only)
 - [Runbook — birthing a web host](./web-host-birth.md)
-- [Runbook — the web-2 LUKS rebirth (#9372, single-use)](./web2-luks-rebirth-9372.md) — converts web-2's empty plaintext volume; until it runs a plain replace of web-2 re-attaches the ext4 volume
+- [Runbook — the web-2 LUKS rebirth (#9372, single-use)](./web2-luks-rebirth-9372.md) — converts web-2's empty plaintext volume; until it runs a plain replace of web-2 re-attaches the ext4 volume **[Superseded 2026-10-11 (#9372):** it has run; web-2's volume is now LUKS-formatted.]**

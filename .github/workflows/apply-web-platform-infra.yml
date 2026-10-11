@@ -123,7 +123,7 @@ on:
       # wrong-volume mis-dispatch a typo rather than an impossibility.
       #
       # PROVENANCE — read it from the Hetzner API, NOT from a drift run's log:
-      #   curl -s -H "Authorization: Bearer $HCLOUD_TOKEN" \
+      #   printf 'Authorization: Bearer %s' "$HCLOUD_TOKEN" | curl -s -H @- \
       #     'https://api.hetzner.cloud/v1/volumes?name=soleur-registry-store' | jq -r '.volumes[0].id'
       # scheduled-terraform-drift.yml captures its plan into a command substitution, so the
       # `Refreshing state... [id=...]` line NEVER reaches the step log; `gh run view` shows only
@@ -763,14 +763,15 @@ jobs:
           # header is still cut from the old one. The store then cannot be opened, on a host with
           # no SSH and no console, and what it holds is user prompts and agent output.
           if [[ "$luks_rotations" -gt 0 ]]; then
-            echo "::error::terraform plan would CREATE, UPDATE, DELETE or FORGET ${luks_rotations} LUKS passphrase resource(s) (inngest or workspaces: random_password.inngest_redis_luks, doppler_secret.inngest_redis_luks_key, random_password.workspaces_luks, doppler_secret.workspaces_luks_key, random_password.workspaces_luks_web, doppler_secret.workspaces_luks_web_key) on the per-PR apply path (a CREATE counts only at the web-class passphrase), or emitted a change there whose action list could not be read."
-            echo "::error::A rotation mints a new passphrase while the LUKS header on the live volume is still cut from the OLD one. The store becomes unopenable and the AOF is unrecoverable — there is no second copy of the header key, and the host has no SSH and no console."
+            echo "::error::terraform plan would CREATE, UPDATE, DELETE or FORGET ${luks_rotations} LUKS passphrase resource(s) (inngest or workspaces: random_password.inngest_redis_luks, doppler_secret.inngest_redis_luks_key, random_password.workspaces_luks, doppler_secret.workspaces_luks_key, random_password.workspaces_luks_web, doppler_secret.workspaces_luks_web_key) on the per-PR apply path (a CREATE counts at the web-class and inngest passphrases), or emitted a change there whose action list could not be read."
+            echo "::error::A rotation mints a new passphrase while the LUKS header on the live volume is still cut from the OLD one. The store becomes unopenable and the AOF is unrecoverable — the OLD value is not recoverable once state is overwritten (the state copy is the second copy), and the host has no SSH and no console."
             echo "::error::[ack-destroy] deliberately does NOT reach this HALT: a replace also trips resource_deletes, so acking an unrelated destructive change in the same merge would ack this one through with it."
             echo "::error::Remediation depends on what you intended:"
-            echo "::error::  • You did NOT intend to touch the passphrase → something upstream forced a replace (a changed keeper, length, or the Doppler project/config reference). Revert that change; a passphrase must never be a side effect."
-            echo "::error::  • You DID intend to rotate it → the store must be re-cut from empty in the same operation, which has NO automated route since the recut dispatch was retired (#8285): stop and escalate (ADR-142). Rotating the value without re-cutting the header strands the volume."
-            echo "::error::  • A workspaces pair (web-1 or the web host class) → NEVER a replace, and never this path. Rotating a populated volume's passphrase is a header re-key (cryptsetup luksChangeKey) followed by an intentional state change under review, and recovering a tainted first create is terraform untaint or a reviewed state-entry removal. NO automated route exists for either yet; the web-host rebirth work owns it (#9372). Until then merge with [skip-web-platform-apply] and escalate. A CREATE of the web-class passphrase (random_password.workspaces_luks_web, alone or with its Doppler copy) is refused too: the single-use escrow-create workflow is retired, so a planned create means state lost the entry, and applying it would mint a new passphrase over the header of any formatted web-class volume. Do not apply. There is no documented or verified automated recovery: importing the existing value is NOT a supported route (the import plans a replacement over the live passphrase). The live value is unharmed while its Doppler copy exists. Merge with [skip-web-platform-apply] and escalate to the owner, who decides the repair. A create of the Doppler copy alone, with the passphrase intact in state, restores the same value and is not refused."
-            echo "::error::  • A bare update on a doppler_secret.*_key copy with no passphrase change in the diff → the Doppler value was edited out of band and drifted from the generator. Restore the previous value in Doppler; never apply over it, the header is cut from the old one."
+            echo "::error::  • You did NOT intend to touch the passphrase → something upstream forced a replace (a changed keeper, length or project/config reference). Revert that change."
+            echo "::error::  • You DID intend to rotate it → the store must be re-cut from empty in the same operation, which has NO automated route since the recut dispatch was retired (#8285): stop and escalate (ADR-142)."
+            echo "::error::  • A workspaces pair (web-1 or the web host class) → NEVER a replace, and never this path. Rotating a populated volume's passphrase is a header re-key (cryptsetup luksChangeKey) followed by an intentional state change under review, and recovering a tainted first create is terraform untaint or a reviewed state-entry removal. NO automated route exists for either yet; #9372 owns it. Until then merge with [skip-web-platform-apply] and escalate. A CREATE of the web-class passphrase (random_password.workspaces_luks_web, alone or with its Doppler copy) is refused too: the single-use escrow-create workflow is retired, so a planned create means state lost the entry, and applying it would mint a new passphrase over the header of any formatted web-class volume. Do not apply. There is no documented or verified automated recovery: importing the existing value is NOT a supported route. A create of the Doppler copy alone, with the passphrase intact in state, restores the same value and is not refused."
+            echo "::error::  • A CREATE of random_password.inngest_redis_luks (alone or with its Doppler copy) → state lost the entry. Do NOT apply: a new value over the live header strands the volume. Merge with [skip-web-platform-apply] only after the owner is told, and escalate (runbook inngest-luks-cutover-6894.md §5c)."
+            echo "::error::  • A bare update on a doppler_secret.*_key copy with no passphrase change in the diff → the Doppler value was edited out of band and drifted from the generator. Restore the previous value in Doppler; never apply over it."
             echo "::error::UNWEDGE (immediate): add a line containing exactly '[skip-web-platform-apply]' to the merge commit message. It skips the apply, it does not perform it."
             grep -F -e random_password.inngest_redis_luks -e doppler_secret.inngest_redis_luks_key -e random_password.workspaces_luks -e doppler_secret.workspaces_luks_key -e random_password.workspaces_luks_web -e doppler_secret.workspaces_luks_web_key -e 'Plan:' tfplan.txt >&2 || true
             exit 1
@@ -1100,6 +1101,100 @@ jobs:
           cloudflared-version: ${{ env.CLOUDFLARED_VERSION }}
           cloudflared-sha256: ${{ env.CLOUDFLARED_SHA256 }}
 
+      - name: SSH forward to web-2 through the web-1 bastion
+        if: steps.ssh_token_gate.outputs.ssh_apply_skip != 'true'
+        run: |
+          set -euo pipefail
+          command -v ssh >/dev/null || { echo "::error::ssh client not found on this runner — the web-2 forward cannot open."; exit 1; }
+          command -v iptables >/dev/null || { echo "::error::iptables not found — the web-2 NAT redirect cannot install."; exit 1; }
+
+          # `terraform output` reads STATE, and a new output is only recorded
+          # there by the first apply that contains it — the bootstrap apply this
+          # step exists to enable. Read the same attributes from state directly
+          # (hcloud_server.web["web-2"].ipv4_address is what the output renders;
+          # hcloud_server_network.web["web-2"].ip is the private side). Works
+          # identically before and after the outputs land in state, and each
+          # lookup fails closed on an empty/non-IPv4 result below.
+          WEB_2_STATE="$(terraform -chdir="$INFRA_DIR" show -json)" \
+            || { echo "::error::terraform show -json failed — cannot resolve web-2's addresses."; exit 1; }
+          WEB_2_IP="$(printf '%s' "$WEB_2_STATE" | jq -r \
+            '.values.root_module.resources[]? | select(.address == "hcloud_server.web[\"web-2\"]") | .values.ipv4_address // empty')"
+          WEB_2_PRIVATE="$(printf '%s' "$WEB_2_STATE" | jq -r \
+            '.values.root_module.resources[]? | select(.address == "hcloud_server_network.web[\"web-2\"]") | .values.ip // empty')"
+          [[ "$WEB_2_IP" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] \
+            || { echo "::error::could not resolve web-2's public IPv4 — hcloud_server.web[\"web-2\"].ipv4_address absent from state."; exit 1; }
+          [[ "$WEB_2_PRIVATE" =~ ^10\.0\.1\.[0-9]{1,3}$ ]] \
+            || { echo "::error::could not resolve web-2's private IPv4 — hcloud_server_network.web[\"web-2\"].ip absent from state."; exit 1; }
+          echo "WEB_2_IP=$WEB_2_IP" >> "$GITHUB_ENV"
+
+          # 0600 keyfile from the bridge-exported key material. `ssh -i` requires a
+          # file; the variable itself is multi-line PEM and survives the round trip.
+          WEB2_KEYFILE="$(mktemp /tmp/web2-fwd-key.XXXXXX)"
+          chmod 600 "$WEB2_KEYFILE"
+          printf '%s\n' "${TF_VAR_ci_ssh_private_key:?bridge did not export the CI key}" > "$WEB2_KEYFILE"
+          ssh-keygen -yf "$WEB2_KEYFILE" >/dev/null \
+            || { echo "::error::the CI key material did not parse as a private key."; exit 1; }
+          echo "WEB2_KEYFILE=$WEB2_KEYFILE" >> "$GITHUB_ENV"
+
+          # Pinned host keys for BOTH hops — the writer is the shape check every
+          # CI consumer applies; -F /dev/null so no runner-side config can widen it.
+          bash "$GITHUB_WORKSPACE/.github/actions/cf-tunnel-ssh-bridge/write-known-hosts.sh" \
+            web-1 "$GITHUB_WORKSPACE/apps/web-platform/infra/web-1-ssh-host-key.pub" \
+            "$RUNNER_TEMP/web-1.known_hosts"
+          bash "$GITHUB_WORKSPACE/.github/actions/cf-tunnel-ssh-bridge/write-known-hosts.sh" \
+            web-2 "$GITHUB_WORKSPACE/apps/web-platform/infra/web-2-ssh-host-key.pub" \
+            "$RUNNER_TEMP/web-2.known_hosts"
+
+          : > /tmp/web2-forward.log
+          ssh -N -F /dev/null \
+              -o ExitOnForwardFailure=yes \
+              -o StrictHostKeyChecking=yes \
+              -o HostKeyAlias=web-1 \
+              -o UserKnownHostsFile="$RUNNER_TEMP/web-1.known_hosts" \
+              -o GlobalKnownHostsFile=/dev/null \
+              -o HostKeyAlgorithms=ecdsa-sha2-nistp256 \
+              -o UpdateHostKeys=no \
+              -o BatchMode=yes \
+              -o ServerAliveInterval=30 -o ServerAliveCountMax=6 \
+              -i "$WEB2_KEYFILE" \
+              -L 127.0.0.1:2223:"${WEB_2_PRIVATE}:22" \
+              root@127.0.0.1 -p 2222 2>>/tmp/web2-forward.log &
+          WEB2_FORWARD_PID=$!
+          echo "WEB2_FORWARD_PID=$WEB2_FORWARD_PID" >> "$GITHUB_ENV"
+
+          up=0
+          for i in $(seq 1 30); do
+            if ! kill -0 "$WEB2_FORWARD_PID" 2>/dev/null; then break; fi
+            if (exec 3<>"/dev/tcp/127.0.0.1/2223") 2>/dev/null; then exec 3>&- 3<&- || true; up=1; break; fi
+            sleep 1
+          done
+          if [[ "$up" != 1 ]]; then
+            echo "::error::web-2 SSH forward did not open 127.0.0.1:2223 within 30s. Usual causes: AllowTcpForwarding=no on web-1's sshd, web-2's :22 closed on the private net, or the bastion auth failing."
+            tail -n 50 /tmp/web2-forward.log >&2 || true
+            exit 1
+          fi
+          echo "web-2 forward is up on 127.0.0.1:2223 (attempt ${i:-?})"
+
+          # End-to-end probe: authenticate to web-2 through the forward with the
+          # web-2 PINNED host key — proves the full path (tunnel + bastion +
+          # private-net forward + sshd auth + host-key pin) before Terraform plans
+          # against it. A failure here is a broken route, not a slow one.
+          timeout 30 ssh -F /dev/null -o BatchMode=yes -o ConnectTimeout=10 \
+              -o StrictHostKeyChecking=yes \
+              -o HostKeyAlias=web-2 \
+              -o UserKnownHostsFile="$RUNNER_TEMP/web-2.known_hosts" \
+              -o GlobalKnownHostsFile=/dev/null \
+              -o HostKeyAlgorithms=ecdsa-sha2-nistp256 \
+              -o UpdateHostKeys=no \
+              -i "$WEB2_KEYFILE" -p 2223 root@127.0.0.1 true \
+            || { echo "::error::end-to-end web-2 SSH probe failed — the forward is up but web-2 refused (auth, host key, or sshd config)."; tail -n 50 /tmp/web2-forward.log >&2 || true; exit 1; }
+          echo "end-to-end web-2 probe: root@web-2 ($WEB_2_PRIVATE) accepted the CI key and pinned host key"
+
+          sudo iptables -t nat -A OUTPUT -d "$WEB_2_IP" -p tcp --dport 22 \
+            -j REDIRECT --to-ports 2223
+          echo "NAT: $WEB_2_IP:22 → 127.0.0.1:2223 → $WEB_2_PRIVATE:22"
+
+
       - name: Terraform apply (SSH-provisioned resources, over the bridge)
         if: steps.ssh_token_gate.outputs.ssh_apply_skip != 'true'
         working-directory: ${{ env.INFRA_DIR }}
@@ -1327,6 +1422,14 @@ jobs:
             sudo iptables -t nat -D OUTPUT \
               -d "$SERVER_IP" -p tcp --dport 22 \
               -j REDIRECT --to-ports 2222 2>/dev/null || true
+          fi
+          if [[ -n "${WEB_2_IP:-}" ]]; then
+            sudo iptables -t nat -D OUTPUT \
+              -d "$WEB_2_IP" -p tcp --dport 22 \
+              -j REDIRECT --to-ports 2223 2>/dev/null || true
+          fi
+          if [[ -n "${WEB2_FORWARD_PID:-}" ]]; then
+            kill "$WEB2_FORWARD_PID" 2>/dev/null || true
           fi
           if [[ -n "${CLOUDFLARED_PID:-}" ]]; then
             kill "$CLOUDFLARED_PID" 2>/dev/null || true
@@ -2266,11 +2369,15 @@ jobs:
         run: |
           set +e
           STATUS="unavailable (lookup failed or not yet ingested)"
+          # The API token reaches curl on its stdin config, never on its argument list (ADR-280). A library that cannot
+          # be loaded leaves the status "unavailable"; there is no argv fallback. A refused token prints the value-free
+          # refusal marker (curl's stderr is not silenced) and the step stays green.
+          source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || echo "::warning::scripts/lib/bearer-curl.sh could not be loaded from the job checkout; the heartbeat status lookup was skipped."
           TOKEN=$(doppler secrets get BETTERSTACK_API_TOKEN --plain 2>/dev/null)
-          if [[ -n "$TOKEN" ]]; then
+          if [[ -n "$TOKEN" ]] && declare -F bc_curl > /dev/null; then
             printf '::add-mask::%s\n' "$TOKEN"
-            BODY=$(curl -fsS --max-time 10 -H "Authorization: Bearer ${TOKEN}" \
-              https://uptime.betterstack.com/api/v2/heartbeats 2>/dev/null)
+            BODY=$(bc_curl apply-web-platform-infra 'Authorization:Bearer :TOKEN' -- -fsS --max-time 10 \
+              https://uptime.betterstack.com/api/v2/heartbeats)
             if [[ -n "$BODY" ]]; then
               S=$(printf '%s' "$BODY" | jq -r '.data[]? | select(.attributes.name=="soleur-registry-disk-prd") | .attributes.status' 2>/dev/null | head -1)
               [[ -n "$S" ]] && STATUS="$S"
@@ -2500,11 +2607,15 @@ jobs:
         run: |
           set +e
           STATUS="unavailable (lookup failed or not yet ingested)"
+          # The API token reaches curl on its stdin config, never on its argument list (ADR-280). A library that cannot
+          # be loaded leaves the status "unavailable"; there is no argv fallback. A refused token prints the value-free
+          # refusal marker (curl's stderr is not silenced) and the step stays green.
+          source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || echo "::warning::scripts/lib/bearer-curl.sh could not be loaded from the job checkout; the heartbeat status lookup was skipped."
           TOKEN=$(doppler secrets get BETTERSTACK_API_TOKEN --plain 2>/dev/null)
-          if [[ -n "$TOKEN" ]]; then
+          if [[ -n "$TOKEN" ]] && declare -F bc_curl > /dev/null; then
             printf '::add-mask::%s\n' "$TOKEN"
-            BODY=$(curl -fsS --max-time 10 -H "Authorization: Bearer ${TOKEN}" \
-              https://uptime.betterstack.com/api/v2/heartbeats 2>/dev/null)
+            BODY=$(bc_curl apply-web-platform-infra 'Authorization:Bearer :TOKEN' -- -fsS --max-time 10 \
+              https://uptime.betterstack.com/api/v2/heartbeats)
             if [[ -n "$BODY" ]]; then
               S=$(printf '%s' "$BODY" | jq -r '.data[]? | select(.attributes.name=="soleur-registry-disk-prd") | .attributes.status' 2>/dev/null | head -1)
               [[ -n "$S" ]] && STATUS="$S"
@@ -2607,7 +2718,7 @@ jobs:
           if [[ ! "$EXPECTED_VOLUME_ID" =~ ^[0-9]+$ ]]; then
             echo "::error::registry-luks-recut requires expected_registry_store_volume_id=<numeric Hetzner id of the zot store volume>. The gate PINS the replaced volume's before.id to this value, so a state corruption that mapped this ADDRESS onto a different physical volume cannot silently destroy it."
             echo "::error::Read it with ONE bounded command (NOT from a drift run — that log never contains the id):"
-            echo "::error::  curl -s -H \"Authorization: Bearer \$HCLOUD_TOKEN\" 'https://api.hetzner.cloud/v1/volumes?name=soleur-registry-store' | jq -r '.volumes[0].id'"
+            echo "::error::  printf 'Authorization: Bearer %s' \"\$HCLOUD_TOKEN\" | curl -s -H @- 'https://api.hetzner.cloud/v1/volumes?name=soleur-registry-store' | jq -r '.volumes[0].id'"
             exit 1
           fi
           echo "confirm + id-pin accepted (volume id ${EXPECTED_VOLUME_ID})."
@@ -2637,16 +2748,20 @@ jobs:
             exit 1
           fi
           printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
+          # The Hetzner token reaches curl on its stdin config, never on its argument list (ADR-280). Fail-closed: a library
+          # that cannot be loaded is a probe that cannot be sent, and an unsent probe is not evidence of absence. A REFUSED
+          # token (outside the token alphabet) prints the value-free marker and makes the call return 2, which the
+          # `|| PROBE_STATUS="000"` below folds into `unknown-000`: the existing class, never `absent` (that needs a 404).
+          source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::registry-luks-recut ABORT: scripts/lib/bearer-curl.sh could not be loaded from the job checkout — cannot run the live existence probe. Fail-closed: an unsent probe is not evidence of absence."; exit 1; }
 
-          PROBE_STATUS=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
-            -H "Authorization: Bearer ${HCLOUD_TOKEN}" \
-            "https://api.hetzner.cloud/v1/volumes/${EXPECTED_VOLUME_ID}" 2>/dev/null) || PROBE_STATUS="000"
+          PROBE_STATUS=$(bc_curl apply-web-platform-infra 'Authorization:Bearer :HCLOUD_TOKEN' -- -s -o /dev/null -w '%{http_code}' --max-time 15 \
+            "https://api.hetzner.cloud/v1/volumes/${EXPECTED_VOLUME_ID}") || PROBE_STATUS="000"
 
           # Name-scoped corroboration. `.volumes | length` over an exact-name query; any
           # non-numeric result (error envelope, transport failure) is treated as UNKNOWN, never
           # as zero — a failed lookup must not read as "no volume by that name".
-          NAME_COUNT=$(curl -s --max-time 15 -H "Authorization: Bearer ${HCLOUD_TOKEN}" \
-            'https://api.hetzner.cloud/v1/volumes?name=soleur-registry-store' 2>/dev/null \
+          NAME_COUNT=$(bc_curl apply-web-platform-infra 'Authorization:Bearer :HCLOUD_TOKEN' -- -s --max-time 15 \
+            'https://api.hetzner.cloud/v1/volumes?name=soleur-registry-store' \
             | jq -r 'if (.volumes | type) == "array" then (.volumes | length) else "unknown" end' 2>/dev/null) || NAME_COUNT="unknown"
           [[ "$NAME_COUNT" =~ ^[0-9]+$ ]] || NAME_COUNT="unknown"
 
@@ -2659,7 +2774,7 @@ jobs:
           # "absent" requires BOTH signals to agree. A 404 on the pinned id while a volume of
           # that name still exists means the id is wrong, not that the store is gone.
           if [[ "$PROBE_RESULT" == "absent" && "$NAME_COUNT" != "0" ]]; then
-            echo "::error::registry-luks-recut ABORT: the pinned volume id ${EXPECTED_VOLUME_ID} returned 404, but a volume named soleur-registry-store still exists (name_count=${NAME_COUNT}). That combination means the ID IS WRONG, not that the store was destroyed. Re-read it: curl -s -H \"Authorization: Bearer \$HCLOUD_TOKEN\" 'https://api.hetzner.cloud/v1/volumes?name=soleur-registry-store' | jq -r '.volumes[0].id'"
+            echo "::error::registry-luks-recut ABORT: the pinned volume id ${EXPECTED_VOLUME_ID} returned 404, but a volume named soleur-registry-store still exists (name_count=${NAME_COUNT}). That combination means the ID IS WRONG, not that the store was destroyed. Re-read it: printf 'Authorization: Bearer %s' \"\$HCLOUD_TOKEN\" | curl -s -H @- 'https://api.hetzner.cloud/v1/volumes?name=soleur-registry-store' | jq -r '.volumes[0].id'"
             exit 1
           fi
 
@@ -3011,7 +3126,7 @@ jobs:
           if [[ ! "$EXPECTED_VOLUME_ID" =~ ^[0-9]+$ ]]; then
             echo "::error::registry-luks-recut requires expected_registry_store_volume_id=<numeric Hetzner id of the zot store volume>. The gate PINS the replaced volume's before.id to this value, so a state corruption that mapped this ADDRESS onto a different physical volume cannot silently destroy it."
             echo "::error::Read it with ONE bounded command (NOT from a drift run — that log never contains the id):"
-            echo "::error::  curl -s -H \"Authorization: Bearer \$HCLOUD_TOKEN\" 'https://api.hetzner.cloud/v1/volumes?name=soleur-registry-store' | jq -r '.volumes[0].id'"
+            echo "::error::  printf 'Authorization: Bearer %s' \"\$HCLOUD_TOKEN\" | curl -s -H @- 'https://api.hetzner.cloud/v1/volumes?name=soleur-registry-store' | jq -r '.volumes[0].id'"
             exit 1
           fi
           echo "confirm + id-pin accepted (volume id ${EXPECTED_VOLUME_ID})."
@@ -3287,11 +3402,15 @@ jobs:
         run: |
           set +e
           STATUS="unavailable (lookup failed or not yet ingested)"
+          # The API token reaches curl on its stdin config, never on its argument list (ADR-280). A library that cannot
+          # be loaded leaves the status "unavailable"; there is no argv fallback. A refused token prints the value-free
+          # refusal marker (curl's stderr is not silenced) and the step stays green.
+          source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || echo "::warning::scripts/lib/bearer-curl.sh could not be loaded from the job checkout; the heartbeat status lookup was skipped."
           TOKEN=$(doppler secrets get BETTERSTACK_API_TOKEN --plain 2>/dev/null)
-          if [[ -n "$TOKEN" ]]; then
+          if [[ -n "$TOKEN" ]] && declare -F bc_curl > /dev/null; then
             printf '::add-mask::%s\n' "$TOKEN"
-            BODY=$(curl -fsS --max-time 10 -H "Authorization: Bearer ${TOKEN}" \
-              https://uptime.betterstack.com/api/v2/heartbeats 2>/dev/null)
+            BODY=$(bc_curl apply-web-platform-infra 'Authorization:Bearer :TOKEN' -- -fsS --max-time 10 \
+              https://uptime.betterstack.com/api/v2/heartbeats)
             if [[ -n "$BODY" ]]; then
               S=$(printf '%s' "$BODY" | jq -r '.data[]? | select(.attributes.name=="soleur-registry-disk-prd") | .attributes.status' 2>/dev/null | head -1)
               [[ -n "$S" ]] && STATUS="$S"

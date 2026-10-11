@@ -118,7 +118,7 @@ cat > "$skeleton" << 'EOF'
         "min_entries_to_merge": 1,
         "min_entries_to_merge_wait_minutes": 0,
         "max_entries_to_build": 2,
-        "check_response_timeout_minutes": 60
+        "check_response_timeout_minutes": 75
       }
     }
   ]

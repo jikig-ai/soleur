@@ -209,7 +209,7 @@
 1	apps/web-platform/infra/ssl-full-mitigation-mutation.test.sh
 2	apps/web-platform/infra/web2-luks-rebirth-workflow.test.sh
 1	apps/web-platform/infra/web-git-data-probe.sh
-2	apps/web-platform/infra/web-zot-consumer-probe.sh
+1	apps/web-platform/infra/web-zot-consumer-probe.sh
 6	apps/web-platform/infra/workspaces-boot-unlock.test.sh
 9	apps/web-platform/infra/workspaces-cutover.sh
 11	apps/web-platform/infra/workspaces-luks-freeze.test.sh
@@ -450,7 +450,8 @@
 2	scripts/test-all-killed-classification.test.sh
 3	scripts/test-all-orphan-log-retention.test.sh
 1	scripts/test-all-runtime-ceiling.test.sh
-5	scripts/test-all.sh
+6	scripts/test-all.sh
+2	scripts/test-all-weight-drift.test.sh
 5	scripts/test-contention.test.sh
 4	scripts/test-content-publisher.sh
 6	scripts/tmpfs-guard.sh

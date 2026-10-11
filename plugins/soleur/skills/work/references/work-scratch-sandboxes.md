@@ -92,6 +92,10 @@ A sandbox copy bounds file removal, not signals. A mutant of a line inside a hel
   `md5sum` before/after per mutation.
 - Run `TEST_GROUP=affected` (and any gate runner) from the LIVE tree only, never from inside the sandbox: it has
   no `.git`, so the affected-set selection has no diff to read.
+- Measure an assertion floor (`CI_DEPLOY_ASSERT_FLOOR` and its siblings) on the LIVE tree, never in the sandbox. Rows that
+  `git grep` or `git ls-files` fail with `git-grep-rc=128` here, and rows that read `knowledge-base/` change what runs, so the
+  sandbox TOTAL differs from CI's (measured 605 with one failure in a sandbox, 608/608 live, for the same tree). Use the sandbox
+  for mutants and the trimmed D-block harness, and the live tree for the number that becomes the floor.
 - NO `knowledge-base/` (the bulk of non-code bytes; seats mutate code, not docs). A suite that reads
   `knowledge-base/` will SKIP or find nothing in the sandbox and can print GREEN without exercising anything:
   prove the unmutated control non-vacuous (the suite's executed count is above zero, and one deliberately broken

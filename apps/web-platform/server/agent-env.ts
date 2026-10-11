@@ -74,7 +74,7 @@ const AGENT_ENV_OVERRIDES = Object.freeze({
   // server-side scheduled agents that load the plugin through their own `--plugin-dir` spawn build their
   // env with a per-function `buildSpawnEnv` allowlist and never receive these overrides (ADR-277).
   SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK: "1",
-  // `destructive-command-guard.sh` is a no-op in hosted sessions by decision D8 (ADR-277), which also states what actually gates hosted Bash.
+  // `destructive-command-guard.sh` is a no-op in hosted sessions by decision D8 (ADR-277), which also states what actually gates hosted Bash. Hosted `canUseTool` asks, through a must-ask lane, before common forms of a default-branch force-push or delete, terraform destroy and a gh ref or repository delete (ADR-284, #9776); the hook itself stays off here and enabling it is a later consolidation.
   SOLEUR_DISABLE_DESTRUCTIVE_GUARD: "1",
 } as const);
 
