@@ -14,6 +14,22 @@ brand_survival_threshold: none
 
 # chore(infra): least-privilege kernel-stream read for the deploy user (canary kdeny src=none)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-11 (soleur:deepen-plan; `Reviewed-Coverage: sequential-fallback` — no agent-spawn capability in the planning subagent; gates and lenses run inline)
+**Sections enhanced:** Proposed Solution (sudoers `=` escape nuance), Technical Considerations, Risks (precedent-diff), Hypotheses (deep-dive status)
+
+### Key Improvements
+
+1. **sudoers `=` escape documented** — sudoers syntax requires `,` `:` `=` `\` backslash-escaped inside command arguments (sudoers(5)); `--since=-5min` carries one. The in-file precedent (`WEBHOOK_SELF_RESTART`'s `--unit=`/`--on-active=`, live and policy-probed under the fleet's sudo-rs) shows the unescaped form resolves on this fleet — the plan standardizes on it for lockstep-comparability, with the escaped spelling recorded as the fallback if a future sudo rejects it.
+2. **Verify-the-negative pass ran** — every load-bearing negative claim grepped against the tree (FILE_MAP sudoers exclusion at `infra-config-apply.sh`, `ignore_changes=[user_data]`, deploy user's no-SSH-key + docker-group posture); all confirmed.
+3. **Halt gates swept:** 4.6 user-brand (scope-out present), 4.7 observability (5 fields, allowlisted probe verb, literal `expected_output`, `credentials_required`), 4.8 PAT (no hits), 4.9 UI-wireframe (no UI surface), 4.10 encryption (all fields, no exception needed), 4.11 guard-contract lint (2 entries, green), 4.12 scope-check (single section, all rows mapped/justified), 4.55 downtime (no trigger — no serving-surface reboot/replace/migration).
+
+### New Considerations Discovered
+
+- `visudo -cf` parses both escaped and unescaped `=` in argv (verified locally, GNU sudo) — syntax is not the arbiter; runtime argv matching is, and the fleet's live `--unit=`/`--on-active=` aliases + provisioner probes prove unescaped resolution.
+- `cloud-init-inngest.yml`'s `ci-deploy.sh` mentions are comment-only — the canary/kdeny path exists only on web hosts; git-data/inngest/registry stay role-only.
+
 ## Overview
 
 The canary DIAG `kdeny` row (PR #9938, tracking #9860) reads `src=none j=noaccess d=noaccess` on
@@ -224,6 +240,15 @@ journal rung did not answer; under the grant it stays `d=skip`).
   assertion class (proves the grant effective, not merely present). The existing `sudo -n -l -U
   deploy` list-mode availability preflight already runs in both blocks, so no new canary is needed;
   the execute probe's failure text names the grant so a denial cannot masquerade as a probe-bug.
+- **sudoers `=` escaping (deepen finding):** sudoers(5) requires `,` `:` `=` `\` backslash-escaped
+  inside command arguments, and our argv carries one: `--since=-5min`. The in-file precedent —
+  `WEBHOOK_SELF_RESTART`'s `--unit=webhook-self-restart` / `--on-active=3s` — is written
+  UNESCAPED and resolves on the fleet's sudo (its `sudo -n -l -U` policy probe runs in every
+  bridge apply). This plan standardizes on the unescaped spelling to match precedent AND keep the
+  Guard-1 argv comparison byte-literal (alias body == invoked argv, no unescaping step). If a
+  future sudo/sudo-rs build ever rejects it, the documented fallback is the escaped spelling
+  `--since\=-5min` — and the provisioner execute probe is what arbitrates, failing the apply
+  rather than shipping a non-resolving grant.
 - **Environment:** `NOPASSWD` + default `env_reset` means the escalated journalctl runs with a
   scrubbed env (no `PAGER`, no `SYSTEMD_*` overrides) — `--no-pager` is belt-and-braces.
 - **Audit routing caveat (unchanged):** `j=ok hits=0` can still be a false negative where auditd
@@ -276,6 +301,11 @@ dependency the provisioners carry.
    key lands via `terraform_data.root_authorized_keys`. No sshd/fail2ban change is proposed by
    this plan. [verified — out of scope, no service-layer hypothesis needed]
 
+**Deep-dive status (deepen-plan Phase 4.5):** all four layers carry a cited artifact or an explicit
+out-of-scope note above; no unverified service-layer hypothesis precedes them. No gaps to close
+before implementation — the apply path introduces zero new connectivity (the same bridges already
+deliver this file on every sudoers edit).
+
 ## Implementation Phases
 
 ### Phase 1 — Grant definition + delivery plumbing (sudoers, cloud-init, server.tf)
@@ -327,7 +357,9 @@ dependency the provisioners carry.
 8. `cloud-init-inngest-bootstrap.test.sh`: extend the AC5 block with a kdeny argv-lockstep assert
    (mirror the `inngest-bootstrap` "invokes the sudoers-pinned path" assert): extract the journalctl
    argv ci-deploy.sh passes to sudo, assert the `Cmnd_Alias` body matches it exactly in BOTH the
-   `.sudoers` source and the cloud-init inline block.
+   `.sudoers` source and the cloud-init inline block. Extraction note: split the alias line on its
+   FIRST `=` only (the assignment operator) — the argv itself contains `=` inside `--since=-5min`,
+   so a naive `cut -d= -f2` truncates mid-flag.
 9. `infra-config-handler-bootstrap.test.sh`: extend the verify-block asserts to pin the new
    `grep -q KDENY_KERNEL_STREAM` + `runuser … journalctl` execute-probe lines in the remote-exec
    (the file's existing AC7-style asserts are the pattern).
@@ -375,9 +407,7 @@ None. (No new provisioner, helper, or test file — all changes extend existing 
 - **Threshold decision (challengeable):** the change is a bounded, audited diagnostic read on
   operator-owned infra with no tenant-data adjacency — a level below `single-user incident`.
 
-*Scope-out override (diff touches a sensitive path — `*.sudoers`, host IaC):* `threshold: none,
-reason: the grant is a read-only, fixed-argv, per-invocation-audited diagnostic capability on a
-user already documented root-equivalent; no tenant-facing surface changes`.
+*Scope-out override (diff touches a sensitive path — `*.sudoers`, host IaC):* `threshold: none, reason: the grant is a read-only, fixed-argv, per-invocation-audited diagnostic capability on a user already documented root-equivalent; no tenant-facing surface changes`.
 
 ## Observability
 
@@ -697,6 +727,14 @@ No other open code-review issue bodies name a planned file.
 
 ## Risks
 
+- **Precedent diff (Phase 4.4):** the grant's shape is NOT novel — `deploy-inngest-bootstrap.sudoers`
+  carries nine sibling `Cmnd_Alias`+grant pairs with the same form (issue-tagged comment, alias
+  pinned argv, `NOPASSWD` line), and the `visudo → install 0440 → grep → policy probe` battery is
+  the established delivery-tail. The delta vs. precedent: (1) our alias's argv contains `=` inside
+  `--since=-5min` (precedent: `WEBHOOK_SELF_RESTART`'s `--unit=`/`--on-active=`, also unescaped —
+  see the Technical Considerations deepen note); (2) the grant drives a *read* inside a diagnostic
+  row rather than an action — the new surface is the reader's fallback branch, which the sibling
+  grants do not have (they hard-fail on denial; `kdeny` must not, per Property 5).
 - **argv drift (denial, not widening):** the whole contract is literal-string matching; mitigated
   by Guard 1's lockstep across the three text surfaces and by fail-closed semantics.
 - **sudo-rs behavioral deltas:** `sudo -n -l -U` availability is itself probed before use (#7220

@@ -7,7 +7,10 @@ Issue: #10045 · Lane: cross-domain (fail-closed default — no spec.md existed)
 
 - [ ] 1.1 `apps/web-platform/infra/deploy-inngest-bootstrap.sudoers`: append
       `Cmnd_Alias KDENY_KERNEL_STREAM = /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat`
-      + `deploy ALL=(root) NOPASSWD: KDENY_KERNEL_STREAM` with a #10045 rationale comment.
+      + `deploy ALL=(root) NOPASSWD: KDENY_KERNEL_STREAM` with a #10045 rationale comment. Write
+      `--since=-5min` UNESCAPED, matching the in-file `--unit=`/`--on-active=` precedent
+      (plan Technical Considerations); escaped `--since\=-5min` is the documented fallback if
+      sudo-rs ever rejects the unescaped form.
 - [ ] 1.2 `apps/web-platform/infra/cloud-init.yml`: mirror the same content lines (compressed
       comment per byte budget) into the `/etc/sudoers.d/deploy-inngest-bootstrap` write_files
       block — comment-stripped parity with the source (AC5).
