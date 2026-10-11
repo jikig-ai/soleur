@@ -43,6 +43,13 @@ MUTATE="${SANDBOX_MASKED_PROC_MUTATE:-}"
 IMG="soleur-masked-proc-regression:$$"
 CTR="smp$$"
 WORK="$(mktemp -d "${TMPDIR:-/var/tmp}/sandbox-masked-proc.XXXXXXXX")"
+# The bounded-apt lib (also used by the image build below) carries the repo's canonical fixture-dir guard: an empty,
+# relative or root-like TMPDIR must end the shell before any rm -rf or redirect below is rooted at it.
+APT_LIB="${SCRIPT_DIR}/lib/apt-bounded.sh"
+[[ -r "$APT_LIB" ]] || { echo "FAIL: IMAGE_BUILD_FAILED: ${APT_LIB} is missing, the apt cycle could not be bounded"; exit 1; }
+# shellcheck source=lib/apt-bounded.sh
+. "$APT_LIB"
+assert_fixture_dir "$WORK"
 PASS=0
 FAIL=0
 
@@ -51,6 +58,7 @@ fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 die() { echo "$1" >&2; echo "FAIL: $1"; exit 1; }
 
 cleanup() {
+  assert_fixture_dir "$WORK"
   docker rm -f "$CTR" "$CTR-build" "$CTR-ctrl" "$CTR-pos" >/dev/null 2>&1 || true
   docker rmi -f "$IMG" >/dev/null 2>&1 || true
   rm -rf "$WORK"
@@ -101,11 +109,7 @@ BASE="$(grep -m1 -E '^FROM node:22-slim@sha256:[0-9a-f]{64}' "$DOCKERFILE" | awk
 [[ -n "$BASE" ]] || die "IMAGE_BUILD_FAILED: could not read the node:22-slim@sha256 base from $DOCKERFILE"
 # Bounded apt (#9395): the image build shares lib/apt-bounded.sh with the git-data suites (one budget of apt seconds,
 # expiry routed to FIXTURE_APT_FAILED + exit 100). Never a skip here: any non-zero rc is IMAGE_BUILD_FAILED.
-APT_LIB="${SCRIPT_DIR}/lib/apt-bounded.sh"
 APT_BUDGET_S=150
-[[ -r "$APT_LIB" ]] || die "IMAGE_BUILD_FAILED: ${APT_LIB} is missing, the apt cycle could not be bounded"
-# shellcheck source=lib/apt-bounded.sh
-. "$APT_LIB"
 gd_apt_state_arm "$WORK/aptstate" "$APT_BUDGET_S" || { echo "IMAGE_BUILD_FAILED: the shared apt budget could not be armed" >&2; exit 2; }
 # shellcheck disable=SC2016  # single-quoted on purpose: the script expands inside the container
 docker run --name "$CTR-build" -v "$GD_APT_STATE:/work/apt" "$BASE" bash -c '
