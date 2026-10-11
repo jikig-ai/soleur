@@ -1103,12 +1103,13 @@ _eqv() { # <shell> [flags added on the grep -c side only: a deliberately wrong c
   done
   printf '%s' "$out"
 }
-eqv_neg="$(_eqv bash v)"
-eqv_bash="$(_eqv bash)"
+EQV_BASH=bash; EQV_SH=sh   # one name per pass, used by the table run and its negative control alike, so neither can be pointed elsewhere alone
+eqv_neg="$(_eqv "$EQV_BASH" v)"
+eqv_bash="$(_eqv "$EQV_BASH")"
 [[ -z "$eqv_bash" && -n "$eqv_neg" ]] \
   || sweep_probe_fail+=("equivalence-bash: rows whose exit status differs between grep -q and grep -c >/dev/null: ${eqv_bash:-none}; the same table with a deliberately wrong converted form (an added -v) reported ${eqv_neg:-NOTHING} (want a difference, so the harness can see one)")
-eqv_neg_sh="$(_eqv sh v)"
-eqv_sh="$(_eqv sh)"
+eqv_neg_sh="$(_eqv "$EQV_SH" v)"
+eqv_sh="$(_eqv "$EQV_SH")"
 [[ -z "$eqv_sh" && -n "$eqv_neg_sh" ]] \
   || sweep_probe_fail+=("equivalence-sh: rows whose exit status differs under sh: ${eqv_sh:-none}; the same table with the wrong converted form reported ${eqv_neg_sh:-NOTHING} (want a difference, so the sh pass can see one)")
 

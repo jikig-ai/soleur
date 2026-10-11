@@ -96,3 +96,19 @@ Recorded as NOT fixed, with reasons:
 - `SWEEP_FLOOR=1400` slack (about 400 files), a colon in a swept filename dropping its hits from comment stripping, and unswept extensions (`.ts` 1 hit, `.md`, extensionless): pre-existing, already stated limits of the sweep.
 - `grep` on `${BASH_SOURCE[0]}` without `--` (a script path starting with `-`): unreachable, the runner passes a `.claude/...` or absolute path.
 - The `-x` anchor of the canary loop has no decoy row (a decoy `vendor/.claude/hooks/guardrails.test.sh` with the real one hidden would pass if `-x` were dropped): accepted, the identity pin and the hidden-file listing cover the realistic cases.
+
+## Review round 2 (4 fix-round seats at `ae0da93576`; fixes in the three commits after it)
+
+New PR-introduced defects found and fixed, each proven RED in a sandbox (control rc 0, one mutation at a time, restored from HEAD):
+
+| Row | Mutation | Result |
+|---|---|---|
+| L1 | a row's mode written `< =` (blank inside the mode) | RED `1 rows use mode <=` (the count now uses the parser's own whitespace stripping) |
+| L2 | capture and fold in an UNINDENTED `if false` branch | RED `return-wiring ... SWEEP_N=''` (a sweep that never ran leaves `SWEEP_N` empty) |
+| L3 | the verdict gate's `FAIL=1` and `exit 1` removed with a forced probe failure | RED `the gate's FAIL=1 0 and its exit 1 0` (both are pinned) |
+| L4b/L4c | the equivalence pass pointed at `true` (sh, then bash) | RED `equivalence-sh` / `equivalence-bash` (one `EQV_SH`/`EQV_BASH` name drives the run and its negative control) |
+| R1 to R4 | regressions of round 1 (gate `>= 0`, indented dead branch, hidden skills tests, blind harness) | RED as before |
+| C1 | comment-only edit (must-PASS) | rc 0 |
+
+Still recorded as NOT fixed, one class with one reason: the guard cannot defend its own control flow beyond text pins. A statement placed between the pins and the gate (`exit`, an assignment, `sweep_probe_fail=()`), a deleted direct block, a trap override, and a decoy that fabricates a whole `|| sweep_probe_fail+=(` line each need an edit of the guard itself, which a reviewer reads; pinning each shape moves `SWEEP_PROBE_CHECKS` again without closing the class. The header comment states this limit.
+

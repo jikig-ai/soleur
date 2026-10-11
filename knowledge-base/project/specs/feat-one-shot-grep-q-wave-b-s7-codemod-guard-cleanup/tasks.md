@@ -15,16 +15,16 @@ Plan: knowledge-base/project/plans/2026-10-11-chore-grep-q-wave-b-s7-codemod-gua
 
 ## Phase 2 Test canaries (D3)
 
-- 2.1 Add `SWEEP_TEST_CANARIES` (four tracked paths) with a pinned count and the selection rule comment.
+- 2.1 Add `SWEEP_TEST_CANARIES` (nine tracked paths after review) with a pinned count and the selection rule comment.
 - 2.2 Add one probe check listing the real tree with `SWEEP_PATHSPEC` (rc above 1 is UNRESOLVED, exit 3); message says "canary moved: update SWEEP_TEST_CANARIES, not the sweep".
 
 ## Phase 3 Wiring pins (D4)
 
-- 3.1 Add one probe check for the anchored `sweep_main ... || sweep_rc=$?` and `sweep_fold "$sweep_rc"` statements, patterns assembled from two parts; message names protects, expects, fix.
+- 3.1 Add one probe check for the anchored `sweep_main ... || sweep_rc=$?` and `sweep_fold "$sweep_rc"` statements, patterns anchored at column 0; message names protects, expects, fix.
 
 ## Phase 4 Deletion (D1)
 
-- 4.1 `git rm scripts/grep-q-drain-codemod.py`; delete guard lines 1051 to 1392.
+- 4.1 `git rm scripts/grep-q-drain-codemod.py`; delete base guard lines 1051 to 1391.
 - 4.2 Recompute `SWEEP_PROBE_CHECKS` from the file; run the guard.
 
 ## Phase 5 Wording (D5)
