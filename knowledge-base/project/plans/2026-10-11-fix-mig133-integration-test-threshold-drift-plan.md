@@ -20,13 +20,16 @@ brand_survival_threshold: none
 ### Key Improvements (deepen-plan)
 
 1. **Widened the sweep beyond the brief's population** — found the same mig-133
-   120→240 drift in `lib/ws-client.ts` (user-facing `~3 minutes` → `~5
+   120→240 drift in `lib/ws-client.ts` (user-facing `~3 minutes` → `~10
    minutes`), `server/host-identity.ts` (operator-facing `up to 120s` → 240 s),
    `test/ws-protocol.test.ts` (coupled assertion), and
    `test/ws-handler-cap-hit-self-heal.test.ts` (stale comment). Folded in.
 2. **Copy math re-derived against ADR-124** — the cap-hit reap is
-   threshold-independent, but the background reaper's worst case remains 60 s
-   tick + 240 s ≈ 5 min; `~5 minutes` is the conservative correct figure.
+   threshold-independent, but the background reaper's worst case is the
+   300 s poll (`STUCK_ACTIVE_CHECK_INTERVAL_MS`, widened 60→300 s on
+   2026-06-02) + 240 s staleness ≈ ~9 min; `~10 minutes` is the
+   conservative correct figure. *(Post-review correction: the pre-merge
+   derivation cited a "60 s reaper tick" retired by #4801.)*
 3. **Sensitive-path re-check post fold-in** — `server/host-identity.ts` puts the
    diff inside the sensitive-path regex; scope-out reason updated, GDPR gate
    fired and assessed inline.
@@ -63,7 +66,7 @@ every nightly run and keep re-commenting on tracker #9993.
 carries the same stale-threshold assumption" census found the same mig-133
 120→240 drift in four files outside the brief's integration-test population —
 two of them in user/operator-facing strings (`lib/ws-client.ts`'s
-`CONCURRENCY_CAP` copy "~3 minutes" → ~5 min under 60 s tick + 240 s threshold;
+`CONCURRENCY_CAP` copy "~3 minutes" → ~10 min under 240 s threshold + 300 s poll;
 `server/host-identity.ts`'s thrown error "up to 120s" → 240 s). They are folded
 into this plan as `inferred` items: identical defect class, all comment/string
 literals, and deferring ~15 one-token edits to a second PR is disproportionate.
@@ -135,10 +138,10 @@ Comments may retain the token `120` only inside an explicit historical citation
 
 | File | Site | Before | After |
 |---|---|---|---|
-| `apps/web-platform/lib/ws-client.ts` | comment :204 | `(60 s reaper tick + 120 s threshold ≈ 3 min)` | `(60 s reaper tick + 240 s threshold ≈ 5 min)` |
-| `apps/web-platform/lib/ws-client.ts` | `CONCURRENCY_CAP` reason :210 | `…reclaim it within ~3 minutes.` | `…reclaim it within ~5 minutes.` |
-| `apps/web-platform/test/ws-protocol.test.ts` | comment :486 | `~3 min = 60 s tick + 120 s threshold` | `~5 min = 60 s tick + 240 s threshold` |
-| `apps/web-platform/test/ws-protocol.test.ts` | assertion :492 | `.toContain("3 minutes")` | `.toContain("5 minutes")` |
+| `apps/web-platform/lib/ws-client.ts` | comment :204 | `(60 s reaper tick + 120 s threshold ≈ 3 min)` | `(240 s staleness + up to one 300 s reaper poll ≈ ~9 min)` |
+| `apps/web-platform/lib/ws-client.ts` | `CONCURRENCY_CAP` reason :210 | `…reclaim it within ~3 minutes.` | `…reclaim it within ~10 minutes.` |
+| `apps/web-platform/test/ws-protocol.test.ts` | comment :486 | `~3 min = 60 s tick + 120 s threshold` | `~10 min ≈ 240 s staleness + up to one 300 s reaper poll` |
+| `apps/web-platform/test/ws-protocol.test.ts` | assertion :492 | `.toContain("3 minutes")` | `.toContain("10 minutes")` |
 | `apps/web-platform/server/host-identity.ts` | comments :5, :26 | `120s lockout` / `for up to 120s` | `240s lockout` / `for up to 240s` |
 | `apps/web-platform/server/host-identity.ts` | thrown error string :38 | `each recreate-deploy out of its own worktree for up to 120s.` | `each recreate-deploy out of its own worktree for up to 240s.` |
 | `apps/web-platform/test/ws-handler-cap-hit-self-heal.test.ts` | comment :373 | `stale (>120s)` | `stale (>240s)` |
@@ -165,12 +168,14 @@ Comments may retain the token `120` only inside an explicit historical citation
   `deleteUser` 500s recur during verification (#9994, out of scope), the slot
   file's hook failure must be read as non-blocking per the brief — per-test
   results are the verdict. Do NOT soften the throw in this PR.
-- **`~5 minutes` is the correct figure, not a paraphrase:** ADR-124 added a
+- **`~10 minutes` is the correct figure, not a paraphrase:** ADR-124 added a
   threshold-INDEPENDENT immediate reap on `start_session` cap-hit, but the
-  background `find_stuck_active_conversations` reaper (60 s tick over the
-  240 s threshold) remains the worst-case path for a genuinely-stuck row —
-  60 + 240 = 300 s ≈ 5 min. The `ws-protocol.test.ts` assertion pins the
-  string (`"3 minutes"`), so copy and assertion must move together in one diff.
+  background `find_stuck_active_conversations` reaper (300 s poll over the
+  240 s threshold — `STUCK_ACTIVE_CHECK_INTERVAL_MS`, widened 60→300 s by
+  #4801 on 2026-06-02) remains the worst-case path for a genuinely-stuck
+  row — 240 + 300 = 540 s ≈ 9 min, rounded to `~10 minutes` for the copy.
+  The `ws-protocol.test.ts` assertion pins the
+  string (`"10 minutes"`), so copy and assertion must move together in one diff.
 - **`lib/ws-client.ts` stays a literal:** it is client-side (`react`,
   `@/lib/supabase/client`) — importing `server/concurrency.ts` would cross the
   client/server import boundary, so the threshold-derived copy cannot be
@@ -265,7 +270,7 @@ discoverability_test:
 | sweep census + AC6 | ask 3 (quoted above) | asked |
 | live-dev verification AC5 | ask 4 (quoted above) | asked |
 | named constant `STALE_*_AGE_S = 300` | — | inferred — justification: three identical `ageHeartbeat(121)` literals were the partial-update-drift vector; a single named constant concentrates the margin rationale in one comment and one edit site |
-| `lib/ws-client.ts` comment + `~3 minutes` copy edits | — | inferred — justification: found by the ask-3 sweep outside the stated integration-test population; same mig-133 drift class reaching user-facing copy that over-promises the reclaim window (~3 min vs ~5 min actual); a second PR for one word + one comment is disproportionate |
+| `lib/ws-client.ts` comment + `~3 minutes` copy edits | — | inferred — justification: found by the ask-3 sweep outside the stated integration-test population; same mig-133 drift class reaching user-facing copy that under-bounds the reclaim window (~3 min vs ~9 min actual); a second PR for one word + one comment is disproportionate |
 | `test/ws-protocol.test.ts` comment + assertion edits | — | inferred — justification: mechanically coupled to the ws-client copy change — the assertion pins `"3 minutes"` and must move in the same diff or CI reds |
 | `server/host-identity.ts` comment + error-string edits | — | inferred — justification: same ask-3 sweep find; "up to 120s" names `LEASE_LIVENESS_WINDOW_MS` (now 240 s) in an operator-facing thrown error; identical defect class |
 | `test/ws-handler-cap-hit-self-heal.test.ts` comment edit | — | inferred — justification: same ask-3 sweep find; `>120s` comment beside mocks already at 240 — one-token documentation fix |
@@ -289,7 +294,7 @@ discoverability_test:
   (the non-zero pass counts themselves prove the env gates fired — a skipped suite reports 0 tests; afterAll `deleteUser` 500 noise is non-blocking per brief; per-test results are the verdict)
 - [ ] AC6: grep census confirms no other `*.test.ts` carries a heartbeat-aging literal or a 120 s-derived staleness assumption (evidence recorded in Research Insights)
 - [ ] AC7: PR body does NOT use `Closes #9993` — sibling legs (#9994, #9995) keep the tracker open; reference `issue #9993` only
-- [ ] AC8: `lib/ws-client.ts` `CONCURRENCY_CAP` reason reads `~5 minutes` and its derivation comment reads `240 s threshold ≈ 5 min`; `npm run test:ci -- test/ws-protocol.test.ts --project unit` passes (the pinned assertion moves to `"5 minutes"` in the same diff)
+- [ ] AC8: `lib/ws-client.ts` `CONCURRENCY_CAP` reason reads `~10 minutes` and its derivation comment reads `240 s staleness + up to one 300 s reaper poll ≈ ~9 min`; `npm run test:ci -- test/ws-protocol.test.ts --project unit` passes (the pinned assertion moves to `"10 minutes"` in the same diff)
 - [ ] AC9: `server/host-identity.ts` and `test/ws-handler-cap-hit-self-heal.test.ts` contain no `120` token presented as the live lockout/staleness figure (each → `240s`)
 
 ## Domain Review
@@ -310,7 +315,7 @@ migration.
 - **AC2(c/e/f) re-acquire boundary (integration):** Given a held lease whose heartbeat is aged 300 s (past the 240 s mig-133 expiry), when a different host calls `acquire_worktree_lease`, then it takes over with gen+1.
 - **Stale-slot lazy sweep (integration):** Given a slot heartbeat backdated 300 s under cap=1, when a new conversation acquires, then the lazy sweep reaps the stale row and status is `ok`.
 - **Fresh-slot negative gate (integration):** Given a slot heartbeat backdated 60 s (inside 240 s), when a new conversation acquires under cap=1, then `cap_hit` fires — the boundary's lower bound.
-- **Copy-assertion parity (unit):** Given `CONCURRENCY_CAP` copy updated to `~5 minutes`, when `ws-protocol.test.ts` runs, then the `toContain("5 minutes")` assertion passes — copy and pin move atomically.
+- **Copy-assertion parity (unit):** Given `CONCURRENCY_CAP` copy updated to `~10 minutes`, when `ws-protocol.test.ts` runs, then the `toContain("10 minutes")` assertion passes — copy and pin move atomically.
 - **Verification commands (deterministic):** the two `doppler run -p soleur -c dev_scheduled` invocations quoted in AC5, plus `npm run test:ci -- test/ws-protocol.test.ts --project unit` for AC8.
 
 ## Success Metrics
@@ -397,6 +402,10 @@ Sweep over `apps/web-platform/{test,lib,server}` for `ageHeartbeat`, `backdate`,
   `ws-handler-cap-hit-self-heal.test.ts:109` mock `…: 240`; all
   heartbeat-cadence comments in `concurrency.ts`/`worktree-write-lease.ts`
   already read `25s→50s` / `30 s→60 s` / `4.8 missed 50 s beats`.
+  *(Post-review addendum: that file's `:11` header still claimed the 60 s
+  cadence — folded into this PR along with the `ws-handler.ts` `≤60 s`
+  reaper comments and the `conversations-tools.ts` `~3 min` agent-facing
+  description the `~3 min`-shaped census missed.)*
 - **Excluded lookalikes:** see Technical Considerations — queue/render/clone/
   retry/vitest 120 s constants unrelated to mig-133; `test/supabase-migrations/*`
   sentinels pin historical bodies by design.

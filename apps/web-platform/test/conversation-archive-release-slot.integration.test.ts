@@ -307,7 +307,8 @@ describe.skipIf(!INTEGRATION_ENABLED)(
     // that backs Phase 1's application-layer sync-reap. The application
     // layer detects `last_heartbeat_at < now() - 240s` and reaps; the
     // lazy sweep in `acquire_conversation_slot` uses the IDENTICAL predicate
-    // (written by mig 029, raised 120→240 by mig 133). These tests verify
+    // (authored mig 029, verbatim from mig 093, raised 120→240 by mig 133).
+    // These tests verify
     // the predicate's boundary behavior end-to-end: a slot just past 240s
     // is reaped on next acquire (allowing a stuck row to resolve), and a
     // slot under 240s is preserved (cap_hit fires for a genuinely-active
@@ -330,12 +331,12 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       ).toBeNull();
     }
 
-    test("stale-heartbeat slot (300 s old) is reaped by lazy sweep on next acquire — dead-end window now past the 240 s threshold", async () => {
+    test(`stale-heartbeat slot (${STALE_SLOT_AGE_S} s old) is reaped by lazy sweep on next acquire — dead-end window now past the 240 s threshold`, async () => {
       // Reproduces the May-6 dead-end at the SQL boundary:
       // user has a stuck conversation whose slot's heartbeat lapsed past
-      // 240 s (raised 120→240 in mig 133). A new conversation must be able
-      // to acquire a slot under
-      // cap=1 because the lazy sweep reaps the stale row. Pre-fix this
+      // 240 s (raised 120→240 in mig 133). A new conversation must be
+      // able to acquire a slot under cap=1 because the lazy sweep reaps
+      // the stale row. Pre-fix this
       // worked through the lazy sweep alone; the application-layer
       // reap (Phase 1) uses the identical SQL predicate so this test
       // also pins the contract the new code depends on.
