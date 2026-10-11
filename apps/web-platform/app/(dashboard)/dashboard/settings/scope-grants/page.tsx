@@ -191,8 +191,11 @@ export default async function ScopeGrantsPage() {
           <p className="mb-4 text-sm text-soleur-text-secondary">
             The Concierge runs commands to get work done. With autonomous mode
             on it runs non-blocked commands without asking you to approve each
-            one; with it off, it asks before every command. The blocklist
-            (curl, wget, sudo, …) and secret redaction always apply.
+            one, except that it pauses to ask before common forms of a
+            default-branch force-push or delete, terraform destroy, or gh ref
+            or repository delete (it does not recognise every spelling); with
+            it off, it asks before every command. The blocklist (curl, wget,
+            sudo, …) applies, but no blocklist is perfect.
           </p>
           <BashAutonomousToggle
             initialAutonomous={autonomous}
