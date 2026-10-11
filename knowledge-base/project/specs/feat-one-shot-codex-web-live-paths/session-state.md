@@ -1097,3 +1097,43 @@
   lint. No local suite, image/recovery retry, browser/provider operation,
   shared-production write, deployment, review or promotion gate ran. All
   previously recorded holds remain in force; the PR stays draft and disarmed.
+
+## Continuation update — 2026-10-11 sandbox and Vitest maintenance sync
+
+- Resumed `aae99b6eb87626edd23e2ceeef380adf3bbbe87e`: PR #9051 was
+  verified OPEN, draft and auto-merge disarmed; Ref #9791 was verified OPEN.
+  Final prior-head description guards
+  [38169731465](https://github.com/jikig-ai/soleur/actions/runs/38169731465)
+  completed successfully. No held gate was released.
+- Pinned main `ac26dd4ff796318b95e81229bccef553b28b520a` merged cleanly
+  at `944c95e5a5ff7e87f5768953019bc2cdccb55bb2`: four commits, 44 paths.
+  Incoming changes cover the procfs-neutralizing sandbox shim and literal fd
+  mounts, egress loader delivery/self-heal, local Vitest related selection
+  and the weekly weakness digest. Workflow files and migration bodies are
+  unchanged by this sync. The inherited compliance-posture addendum is source
+  documentation, not a new mode-specific CLO disposition or runtime finding.
+- Shell syntax for the changed runtime/selection scripts, workflow actionlint
+  with ShellCheck disabled, feature-range whitespace and the encryption static
+  scan passed. The latter measured 22 stores, 10 connections, zero unledgered
+  stores/failing checks; six inherited 2026-10-22 expiry warnings remain
+  (#6897 verified OPEN; #7772 verified CLOSED). No exception was renewed.
+  Git hooks remain disabled at `/dev/null`; no hook verdict is claimed.
+  The infrastructure-step documentation lint passed; the Markdown invoker
+  excluded both documentation paths, so no Markdown lint was executed.
+  Fresh pushed-head CI and description guards must cover the ensuing push.
+- Session-start cleanup completed after retrying the sandbox lock denials
+  outside the sandbox. Its temporary sweep reported lock contention. The
+  session gate generated stale local-main MCP bytes in this worktree; those
+  edits were reversed after the yielded gate finished, and the config was
+  verified identical to branch HEAD. No browser or credential operation ran.
+  Session errors and prevention are appended to the existing
+  [MCP guard learning](../../learnings/2026-10-06-a-guard-folded-its-probe-error-into-untracked-and-my-fix-broke-the-bare-root.md).
+- Earlier selected30/image evidence cannot qualify this changed source.
+  No local suite, C.9 rerun, recovery rebuild/retry, infrastructure dispatch,
+  authenticated QA, routine qualification, Web/CLO matrix, full review or
+  promotion ran. Credential/provider/browser-auth, account/shared-write,
+  deployment and flag/cohort holds persist. Keep draft/default-off and
+  customer content blocked. Remaining AC: current-source/full-production
+  recovery → authenticated screenshots → eligible routine consumer → permitted
+  Web matrices and attributable mode-specific CLO → full review/promotion.
+  Project sharing, retention/inheritance and configured regions remain unknown.
