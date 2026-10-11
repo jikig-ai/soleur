@@ -1,6 +1,6 @@
 # Phase 0 Measurements — #10032 sandbox shim procfs-free realization
 
-Date: 2026-10-13. Host: Omarchy dev (docker 29.7.2, bwrap 0.12.0).
+Date: 2026-10-11. Host: Omarchy dev (docker 29.7.2, bwrap 0.12.0).
 Image: `soleur-codex9051-production-candidate:a2ff13ca8d56` (bwrap 0.8.0, `/usr/local/bin/bwrap`=shim, `/usr/bin/bwrap`=real).
 
 ## Deviation from prod posture

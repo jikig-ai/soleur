@@ -14,7 +14,7 @@
 
 ### Decisions
 
-- Chosen fix shape: shim argv rewrite — neutralize vendored tail `--bind /proc /proc` so `denyRead: "/proc"`'s `--tmpfs /proc` becomes the realized #9723 mask; re-home `/proc/self/fd/N` command refs via `--ro-bind`/`--perms 0755 --bind-data` rungs, fail closed otherwise. `--bind-fd` absent on prod bwrap 0.8.0.
+- Chosen fix shape: shim argv rewrite — neutralize vendored tail `--bind /proc /proc` so `denyRead: "/proc"`'s `--tmpfs /proc` becomes the realized #9723 mask; re-home `/proc/self/fd/N` command refs via `--ro-bind` — the only viable rung on prod bwrap 0.8.0 (rung-2 `--bind-data` EBADFs at write; `--bind-fd` parses but cannot resolve its fd source — measured in-image), fail closed otherwise.
 - `systempaths=unconfined` retained only as review-gated fallback (widens /proc/sys writable container-wide; scope enumerated for CTO+CLO review + ADR-075 addendum).
 - Kernel-stream grant (`kdeny src=none`) deferred to tracking issue #10045 (filed).
 - `proc_mask` canary probe re-spec'd: assertion is "no `/proc/<pid>` dirs" (not `/proc/self/environ`, which dies by design under tmpfs); drivable-red mutation pinned.

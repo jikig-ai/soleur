@@ -99,7 +99,17 @@ function classifyShared({ bwrapExitCode, bwrapStderr = "", spawnErrorCode }) {
     // is a deterministic deployed-hardening defect, not the flake class
     // `canary_infra_error` exists to absorb — escalate it as sandbox_broken.
     if (/bwrap-shim:/.test(bwrapStderr)) {
-      return { verdict: "sandbox_broken", reason: "bwrap_shim_refused" };
+      // #10032: ~10 distinct shim refusal classes all land on the same reason
+      // — carry the first `bwrap-shim:` line as `detail` so the no-SSH
+      // surfaces (deploy-state, Sentry extra) can tell them apart without
+      // the stderr stream (which classifyShared owns and drops).
+      const detail =
+        bwrapStderr.match(/bwrap-shim: ([^\n]+)/)?.[1]?.slice(0, 200) ?? "";
+      return {
+        verdict: "sandbox_broken",
+        reason: "bwrap_shim_refused",
+        ...(detail ? { detail: `bwrap-shim: ${detail}` } : {}),
+      };
     }
     // bwrap merges its userns/seccomp stderr into this stream; the EPERM
     // phrase is the load-bearing signature (Phase-0 spike; matches the
@@ -444,8 +454,10 @@ const HARDENING_PROBES = [
     // an empty tmpfs `/proc` (optionally carrying apply-seccomp re-home
     // mounts under self/fd/, which no `/proc/[0-9]*` glob can match).
     // Glob+test only, no external binaries — safe under the masked /proc.
+    // The `[ -d /proc ]` guard is anti-vacuity: a /proc-less namespace
+    // would iterate the literal glob and pass without ever discriminating.
     argv: ["/bin/sh", "-c",
-      `for d in /proc/[0-9]*; do [ -d "$d" ] && exit 1; done; exit 0`],
+      `[ -d /proc ] || exit 1; for d in /proc/[0-9]*; do [ -d "$d" ] && exit 1; done; exit 0`],
     classify: classifyProcMaskProbe,
   },
   {

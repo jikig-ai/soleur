@@ -187,6 +187,33 @@ norm_dest() { # norm_dest <path> → stdout
   printf '%s' "${out:-/}"
 }
 
+# proc_dest <raw-dest> — truthy iff the dest normalizes to /proc. Literal
+# fast-path for the common case: only a dest containing `//`, a `.`/`..`
+# segment, or a trailing slash can normalize to /proc without already being
+# it — the $(norm_dest) fork runs only on those spellings (the file's
+# latency discipline: per-token $() dominates spawn cost — perf review).
+proc_dest() {
+  case "$1" in
+    /proc) return 0 ;;
+    [!/]*|*//*|*/|*/.*) [ "$(norm_dest "$1")" = "/proc" ] ;;
+    *) return 1 ;;
+  esac
+}
+
+# proc_src <src> — truthy iff a bind SOURCE normalizes at-or-under /proc:
+# a bind whose source is procfs-resident mounts procfs AT ITS DEST —
+# dest-only detection would let `--bind /proc /x` carry host procfs into
+# the sandbox at /x (security-review F3). Bare-token fast-path first;
+# non-absolute or mutable spellings normalize.
+proc_src() {
+  case "$1" in
+    /proc|/proc/*|[!/]*|*//*|*/|*/.*)
+      local n="$(norm_dest "$1")"
+      [ "$n" = /proc ] || [[ "$n" == /proc/* ]] ;;
+    *) return 1 ;;
+  esac
+}
+
 # The ONE arity walk over a token array. Emits "<boundary> <operand> <pidns>
 # <userns> <procexpose> <fdlist>" — indices of the first option-position `--`
 # and first bare operand (-1 when absent), whether an option-position
@@ -199,9 +226,9 @@ norm_dest() { # norm_dest <path> → stdout
 # plus a space-separated list of fd-valued option values found before either
 # marker (fds the setup argv references by NUMBER; a `--` or operand ends
 # the scan). Command-side tokens never walked.
-setup_marks() { # setup_marks <tok>… → stdout "<boundary> <operand> <pidns> <userns> <expose> <fds>"
+setup_marks() { # setup_marks <tok>… → stdout "<boundary> <operand> <pidns> <userns> <expose> <mask> <fds>"
   local toks=("$@") n=$# i=0 tok kind="" skip=0 expect_fd=0 extra_skip=0
-  local fds="" pidns=0 userns=0 expose=0 dest=""
+  local fds="" pidns=0 userns=0 expose=0 mask=0
   while [ "$i" -lt "$n" ]; do
     tok="${toks[$i]}"
     if [ "$skip" -gt 0 ]; then skip=$((skip - 1))
@@ -219,38 +246,34 @@ setup_marks() { # setup_marks <tok>… → stdout "<boundary> <operand> <pidns> 
         --unshare-all) pidns=1; userns=1 ;;
       esac
       case "$kind" in
-        boundary) printf '%s -1 %s %s %s%s\n' "$i" "$pidns" "$userns" "$expose" "$fds"; return ;;
+        boundary) printf '%s -1 %s %s %s %s%s\n' "$i" "$pidns" "$userns" "$expose" "$mask" "$fds"; return ;;
         fd1) expect_fd=1 ;;
         fd2)
           # --bind-fd/--ro-bind-fd: arg1 is the fd, arg2 is the DEST — a
           # procfs fd bound at /proc is the same exposure class.
           case "$tok" in
             --bind-fd|--ro-bind-fd)
-              dest="$(norm_dest "${toks[$((i + 2))]:-}")"
-              [ "$dest" = "/proc" ] && expose=1 ;;
+              proc_dest "${toks[$((i + 2))]:-}" && expose=1 ;;
           esac
           expect_fd=1; extra_skip=1 ;;
         a1)
-          if [ "$tok" = "--proc" ]; then
-            dest="$(norm_dest "${toks[$((i + 1))]:-}")"
-            [ "$dest" = "/proc" ] && expose=1
-          fi
+          [ "$tok" = "--proc" ] && expose=1
+          [ "$tok" = "--tmpfs" ] && proc_dest "${toks[$((i + 1))]:-}" && mask=1
           skip=1 ;;
         a2)
           case "$tok" in
             --bind|--bind-try|--dev-bind|--dev-bind-try|--ro-bind|--ro-bind-try)
-              dest="$(norm_dest "${toks[$((i + 2))]:-}")"
-              [ "$dest" = "/proc" ] && expose=1 ;;
+              { proc_dest "${toks[$((i + 2))]:-}" || proc_src "${toks[$((i + 1))]:-}"; } && expose=1 ;;
           esac
           skip=2 ;;
         a3) skip=3 ;;
-        operand) printf -- '-1 %s %s %s %s%s\n' "$i" "$pidns" "$userns" "$expose" "$fds"; return ;;
+        operand) printf -- '-1 %s %s %s %s %s%s\n' "$i" "$pidns" "$userns" "$expose" "$mask" "$fds"; return ;;
         *) ;;                       # other — zero-arg assumption
       esac
     fi
     i=$((i + 1))
   done
-  printf -- '-1 -1 %s %s %s%s\n' "$pidns" "$userns" "$expose" "$fds"
+  printf -- '-1 -1 %s %s %s %s%s\n' "$pidns" "$userns" "$expose" "$mask" "$fds"
 }
 
 # Drop every procfs-mount-at-/proc token run from the setup side of the
@@ -260,9 +283,12 @@ setup_marks() { # setup_marks <tok>… → stdout "<boundary> <operand> <pidns> 
 # stream — the denyRead entry the tail bind exists to shadow). Same dest
 # detection as the exposure gate: bind-family and --proc with normalized
 # dest /proc, plus --bind-fd/--ro-bind-fd with dest /proc.
-filter_proc_exposure() { # filter_proc_exposure <array-name>
+filter_proc_exposure() { # filter_proc_exposure <array-name> [payload]
+  # [payload] mode: an --args token in option position would hand upstream a
+  # nested stream this shim never filtered — refuse (vendored builder emits
+  # flat --args only; security-review F2).
   local -n _A=$1
-  local _i=0 _n=${#_A[@]} _tok _kind _dest
+  local _i=0 _n=${#_A[@]} _tok _kind _pl=${2:-}
   local _out=()
   FDROPPED=0; FMASK=0
   while [ "$_i" -lt "$_n" ]; do
@@ -272,20 +298,17 @@ filter_proc_exposure() { # filter_proc_exposure <array-name>
       boundary|operand) _out+=("${_A[@]:$_i}"); break ;;
       a1)
         if [ "$_tok" = "--proc" ]; then
-          _dest="$(norm_dest "${_A[$((_i + 1))]:-}")"
-          if [ "$_dest" = "/proc" ]; then
-            FDROPPED=$((FDROPPED + 1)); _i=$((_i + 2)); continue
-          fi
+          FDROPPED=$((FDROPPED + 1)); _i=$((_i + 2)); continue
         elif [ "$_tok" = "--tmpfs" ]; then
-          _dest="$(norm_dest "${_A[$((_i + 1))]:-}")"
-          [ "$_dest" = "/proc" ] && FMASK=1
+          proc_dest "${_A[$((_i + 1))]:-}" && FMASK=1
         fi
         _out+=("${_A[@]:$_i:2}"); _i=$((_i + 2)) ;;
       a2)
         case "$_tok" in
           --bind|--bind-try|--dev-bind|--dev-bind-try|--ro-bind|--ro-bind-try)
-            _dest="$(norm_dest "${_A[$((_i + 2))]:-}")"
-            if [ "$_dest" = "/proc" ]; then
+            # procfs at dest OR procfs as SOURCE — a `--bind /proc /x` mount
+            # carries host procfs into the sandbox at /x (security F3)
+            if proc_dest "${_A[$((_i + 2))]:-}" || proc_src "${_A[$((_i + 1))]:-}"; then
               FDROPPED=$((FDROPPED + 1)); _i=$((_i + 3)); continue
             fi ;;
         esac
@@ -293,8 +316,7 @@ filter_proc_exposure() { # filter_proc_exposure <array-name>
       fd2)
         case "$_tok" in
           --bind-fd|--ro-bind-fd)
-            _dest="$(norm_dest "${_A[$((_i + 2))]:-}")"
-            if [ "$_dest" = "/proc" ]; then
+            if proc_dest "${_A[$((_i + 2))]:-}"; then
               # The mount is gone — its fd has no surviving consumer. Strip it
               # from `preserve` so the sweep closes it: an O_PATH procfs dirfd
               # riding into the sandbox re-opens the cross-tenant read
@@ -302,14 +324,28 @@ filter_proc_exposure() { # filter_proc_exposure <array-name>
               # (review R1). Wrap before substituting — the last token has no
               # trailing delimiter.
               preserve=" ${preserve} "
-              preserve="${preserve// ${_A[$((_i + 1))]} / }"
+              case "${_A[$((_i + 1))]}" in
+                *[!0-9]*) ;;  # never preserved (non-numeric); also keeps a
+                              # glob-metachar fd token out of the strip pattern
+                *)
+                  # Loop until stable — a global //replace can't collapse
+                  # adjacent duplicates (" N N" leaves one behind).
+                  while [ "${preserve/ ${_A[$((_i + 1))]} / }" != "$preserve" ]; do
+                    preserve="${preserve// ${_A[$((_i + 1))]} / }"
+                  done ;;
+              esac
               preserve="${preserve# }"; preserve="${preserve% }"
               FDROPPED=$((FDROPPED + 1)); _i=$((_i + 3)); continue
             fi ;;
         esac
         _out+=("${_A[@]:$_i:3}"); _i=$((_i + 3)) ;;
-      fd1) _out+=("${_A[@]:$_i:2}"); _i=$((_i + 2)) ;;
-      a3)  _out+=("${_A[@]:$_i:3}"); _i=$((_i + 3)) ;;
+      fd1)
+        [ "$_pl" = payload ] && [ "$_tok" = "--args" ] && \
+          fail "nested --args inside an --args payload cannot be filtered — refusing"
+        _out+=("${_A[@]:$_i:2}"); _i=$((_i + 2)) ;;
+      a3)  _out+=("${_A[@]:$_i:4}"); _i=$((_i + 4)) ;;  # opt + THREE values —
+          # striding 3 would re-scan the last value as an operand and break
+          # early, leaving any downstream /proc exposure unfiltered (review C1).
       *)   _out+=("$_tok"); _i=$((_i + 1)) ;;   # other — zero-arg assumption
     esac
   done
@@ -338,6 +374,7 @@ rescan_outer() {
       a1) i=$((i + 1)) ;;
       a2) i=$((i + 2)) ;;
       a3) i=$((i + 3)) ;;
+      other) ;;
     esac
     i=$((i + 1))
   done
@@ -371,7 +408,9 @@ boundary=-1   # argv index of the first `--` in option position
 operand=-1    # argv index of the first bare operand (the no-`--` command form)
 pidns=0       # an OPTION-position --unshare-pid/--unshare-all was seen
 userns=0      # an OPTION-position --unshare-user/--unshare-all was seen
-expose=0      # the setup stream mounts procfs at /proc (bind-family or --proc)
+expose=0      # the setup stream mounts procfs at /proc (bind-family or --proc,
+              # dest OR source side)
+have_mask=0   # a `--tmpfs /proc` survives anywhere in the merged stream
 i=0
 while [ "$i" -lt "$argc" ]; do
   tok="${argv[$i]}"
@@ -396,23 +435,19 @@ while [ "$i" -lt "$argc" ]; do
       # way --bind does.
       [ "$kind" = fd2 ] && case "$tok" in
         --bind-fd|--ro-bind-fd)
-          dest="$(norm_dest "${argv[$((i + 2))]:-}")"
-          [ "$dest" = "/proc" ] && expose=1 ;;
+          proc_dest "${argv[$((i + 2))]:-}" && expose=1 ;;
       esac
       i=$((i + 1))  # the fd VALUE token is consumed too
       [ "$kind" = fd2 ] && i=$((i + 1))
       ;;
     a1)
-      if [ "$tok" = "--proc" ]; then
-        dest="$(norm_dest "${argv[$((i + 1))]:-}")"
-        [ "$dest" = "/proc" ] && expose=1
-      fi
+      [ "$tok" = "--proc" ] && expose=1
+      [ "$tok" = "--tmpfs" ] && proc_dest "${argv[$((i + 1))]:-}" && have_mask=1
       i=$((i + 1)) ;;
     a2)
       case "$tok" in
         --bind|--bind-try|--dev-bind|--dev-bind-try|--ro-bind|--ro-bind-try)
-          dest="$(norm_dest "${argv[$((i + 2))]:-}")"
-          [ "$dest" = "/proc" ] && expose=1 ;;
+          { proc_dest "${argv[$((i + 2))]:-}" || proc_src "${argv[$((i + 1))]:-}"; } && expose=1 ;;
       esac
       i=$((i + 2)) ;;
     a3) i=$((i + 3)) ;;
@@ -443,8 +478,8 @@ fi
 # position of the MERGED stream is always in the outer argv — that is where
 # any appended mask / re-home mounts go (stage 2).
 nread=0
-mask=0        # a `--tmpfs /proc` survives anywhere in the merged stream
 dropped=0     # procfs-mount-at-/proc ops removed across the merged stream
+outer_expose=$expose   # stage-1 outer-walk exposure (payload merges below)
 if [ "${#args_pos[@]}" -gt 0 ]; then
   for pos in "${args_pos[@]}"; do
     fd="${argv[$pos]}"
@@ -453,11 +488,12 @@ if [ "${#args_pos[@]}" -gt 0 ]; then
     mapfile -d '' -t pl <&"$fd" || fail "cannot read --args fd $fd"
     [ "${#pl[@]}" -gt 0 ] || fail "empty --args payload on fd $fd"
     eval "exec $fd<&-" 2>/dev/null || true
-    read -r pboundary poperand ppidns puserns pexpose pfds <<< "$(setup_marks "${pl[@]}")"
+    read -r pboundary poperand ppidns puserns pexpose pmask pfds <<< "$(setup_marks "${pl[@]}")"
     [ -n "$pfds" ] && preserve="$preserve $pfds"
     [ "$ppidns" = 1 ] && pidns=1
     [ "$puserns" = 1 ] && userns=1
     [ "$pexpose" = 1 ] && expose=1
+    [ "$pmask" = 1 ] && have_mask=1
     pcmd=$(( pboundary >= 0 ? pboundary + 1 : poperand >= 0 ? poperand : ${#pl[@]} ))
     [ "$pcmd" -lt "${#pl[@]}" ] && add_cmd_fd_refs "${pl[@]:$pcmd}"
     # Keep consuming: under upstream parse_args_recurse the OUTER parser
@@ -466,24 +502,37 @@ if [ "${#args_pos[@]}" -gt 0 ]; then
     # fd refs all count toward the merged stream. (An earlier version broke
     # here, which would have silently passed through a tail payload carrying
     # the very bind this rewrite exists to defeat.)
+    # A nested --args inside the payload would recurse into a stream we
+    # never filtered (upstream parse_args_recurse) — refuse rather than
+    # pass an unfiltered nested stream through (security-review F2).
+    for tok in "${pl[@]}"; do
+      [ "$tok" = "--args" ] &&         fail "nested --args inside an --args payload cannot be filtered — refusing"
+    done
     filter_proc_exposure pl
     dropped=$((dropped + FDROPPED))
-    [ "$FMASK" = 1 ] && mask=1
+    [ "$FMASK" = 1 ] && have_mask=1
     unset -n pl
     nread=$((nread + 1))
   done
 fi
 
-# Neutralize the outer argv the same way, then recompute the emit/renumber
-# positions — dropped runs shift every index after them.
-filter_proc_exposure argv
-dropped=$((dropped + FDROPPED))
-[ "$FMASK" = 1 ] && mask=1
-rescan_outer
+# Neutralize the outer argv the same way — only when ITS walk flagged an
+# exposure (outer_expose is the stage-1 outer-walk value, before payload
+# merges; a payload-only exposure leaves the outer argv unchanged, so the
+# filter and the position rescan are both dead walks — perf F6). When the
+# filter ran, dropped runs shift every index after them → rescan_outer.
+if [ "$outer_expose" = 1 ]; then
+  filter_proc_exposure argv
+  dropped=$((dropped + FDROPPED))
+  rescan_outer
+fi
 
-# The rewrite engages when the merged setup mounts procfs at /proc
-# (expose=1 ⇒ dropped>0 by construction — the gate and the filter share the
-# same dest detection). An exposed argv we cannot neutralize refuses:
+# The rewrite engages when the merged setup mounts procfs at /proc.
+# Detection and drop must agree by construction (shared proc_dest); a
+# divergence — exposure flagged but nothing removed — is a filter defect,
+# refuse rather than trust the flag's complement (review C1 belt).
+[ "$expose" = 1 ] && [ "$dropped" -eq 0 ] &&   fail "proc exposure detected but neutralization dropped nothing — detection divergence, refusing"
+# An exposed argv we cannot neutralize refuses:
 #   - pidns: preserved from the #9723 contract — the vendored shape always
 #     carries it; a procfs-mount argv without it is an anomaly worth
 #     refusing rather than silently re-shaping.
@@ -522,8 +571,13 @@ declare -A _refseen=()
 for n in $cmd_fd_refs; do
   [ -n "${_refseen[$n]:-}" ] && continue
   _refseen[$n]=1
-  tgt="$(readlink "/proc/self/fd/$n" 2>/dev/null)" || \
-    fail "command-side /proc/self/fd/$n is not an open fd — cannot re-home the vendored multicall ref"
+  # A ref naming an fd that is NOT open in the shim cannot be a live
+  # vendored multicall ref (its fd is always open) — it is a command-side
+  # MENTION (a path inside an arg or -c string). Skip rather than refuse:
+  # inside the sandbox it ENOENTs, the same outcome the command had
+  # pre-#10032, and refusing every mention is a spawn-DoS (security F5 /
+  # agent-native W1). Open-but-unresolvable fds still refuse below.
+  tgt="$(readlink "/proc/self/fd/$n" 2>/dev/null)" || continue
   case "$tgt" in
     *" (deleted)")
       fail "command-side /proc/self/fd/$n resolves to a deleted path — no viable re-home rung on bwrap 0.8.0" ;;
@@ -534,7 +588,16 @@ for n in $cmd_fd_refs; do
       # binding it would carry host procfs content INTO the mask the
       # neutralization just built. Refuse rather than re-expose.
       fail "command-side /proc/self/fd/$n resolves to a procfs path $tgt — refusing to bind host procfs content into the mask" ;;
+    /sys|/sys/*)
+      fail "command-side /proc/self/fd/$n resolves to a sysfs path $tgt — refusing" ;;
     *)
+      # $tgt is canonical at readlink time; real bwrap re-resolves at mount
+      # time — the contract trusts the resolved source to be
+      # non-tenant-writable (the vendored fd resolves to the CLI binary
+      # under image-controlled /app). A tenant-writable tgt path component
+      # would be a TOCTOU re-exposure window — refuse is the documented
+      # answer if the vendored fd ever resolves under a workspace root
+      # (security-review F6).
       [ -r "/proc/self/fd/$n" ] || \
         fail "command-side /proc/self/fd/$n resolves to $tgt but is unreadable — cannot re-home"
       rehome+=(--ro-bind "$tgt" "/proc/self/fd/$n") ;;
@@ -571,8 +634,10 @@ done
 # zero bytes (a `printf '%s\0'` on the empty array would emit a lone NUL:
 # one empty-string token real bwrap would parse as an operand).
 emit=()
-{ [ "$dropped" -gt 0 ] || [ -n "$cmd_fd_refs" ]; } && [ "$mask" != 1 ] && emit+=(--tmpfs /proc)
-emit+=("${rehome[@]}")
+if [ "$dropped" -gt 0 ] || [ -n "$cmd_fd_refs" ]; then
+  [ "$have_mask" -eq 0 ] && emit+=(--tmpfs /proc)
+  emit+=("${rehome[@]}")
+fi
 if [ "${#emit[@]}" -gt 0 ]; then
   if [ "$boundary" -ge 0 ]; then
     argv=("${argv[@]:0:$boundary}" "${emit[@]}" "${argv[@]:$boundary}")
@@ -590,9 +655,9 @@ if [ "$nread" -gt 0 ]; then
   while [ "$k" -lt "$nread" ]; do
     declare -n "pl=pl$k"
     if [ "${#pl[@]}" -eq 0 ]; then
-      exec {newfd}</dev/null || fail "cannot re-emit --args payload"
+      exec {newfd}</dev/null || fail "cannot re-emit --args payload ${args_pos[$k]}"
     else
-      exec {newfd}< <(printf '%s\0' "${pl[@]}") || fail "cannot re-emit --args payload"
+      exec {newfd}< <(printf '%s\0' "${pl[@]}") || fail "cannot re-emit --args payload ${args_pos[$k]}"
     fi
     argv[${args_pos[$k]}]=$newfd
     unset -n pl

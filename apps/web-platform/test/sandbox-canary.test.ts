@@ -81,6 +81,19 @@ describe("classifyReplayVerdict — exit-code classification (false-rollback pre
         bwrapStderr: "bwrap-shim: seccomp artifact not readable: /app/infra/bwrap-userns-clone3-deny.bpf",
       }),
     ).toMatchObject({ verdict: "sandbox_broken", reason: "bwrap_shim_refused" });
+    // #10032 (agent-native W2): the refusal's `detail` carries the first
+    // bwrap-shim: line so deploy-state/Sentry can tell the ~10 refusal
+    // classes apart — a flat reason is a no-SSH blind spot.
+    expect(
+      classifyReplayVerdict({
+        bwrapExitCode: 65,
+        bwrapStderr:
+          "bwrap-shim: command-side /proc/self/fd/9 resolves to a deleted path — no viable re-home rung\nbwrap-shim: second line ignored",
+      }),
+    ).toMatchObject({
+      detail:
+        "bwrap-shim: command-side /proc/self/fd/9 resolves to a deleted path — no viable re-home rung",
+    });
   });
 
   it("ambiguous non-zero bwrap exit (no EPERM signature) ⇒ canary_infra_error, not sandbox_broken", () => {
@@ -1303,7 +1316,11 @@ describe("classifyOuterWrapReplayVerdict — three-way discrimination", () => {
         bwrapExitCode: 65,
         bwrapStderr: "bwrap-shim: refusing CLONE_NEWUSER argv",
       }),
-    ).toEqual({ verdict: "sandbox_broken", reason: "bwrap_shim_refused" });
+    ).toEqual({
+      verdict: "sandbox_broken",
+      reason: "bwrap_shim_refused",
+      detail: "bwrap-shim: refusing CLONE_NEWUSER argv",
+    });
   });
 
   it("payload FAIL markers ⇒ sandbox_broken isolation_probe_failed (a realized violation, never infra)", () => {

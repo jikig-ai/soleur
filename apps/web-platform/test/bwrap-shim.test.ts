@@ -812,6 +812,111 @@ describe("bwrap PATH shim (#8752)", () => {
     }
   });
 
+  it("an a3 option (--overlay) before an exposure does not desync the filter — review C1/a3-stride", () => {
+    const r = mkRoot();
+    try {
+      // --overlay consumes 4 tokens; a 3-stride mis-walks its third value as
+      // an operand and copies the rest verbatim — including the tail bind.
+      const res = spawnSync(SHIM, [
+        "--unshare-user", "--unshare-pid",
+        "--overlay", "/a", "/b", "/c",
+        "--bind", "/proc", "/proc",
+        "--", "/usr/bin/true",
+      ], { env: r.env(), encoding: "utf8" });
+      expect(res.status, String(res.stderr)).toBe(0);
+      const { args } = r.read();
+      expect(args).not.toContain("--bind");
+      const bi = args.indexOf("--");
+      expect(args.slice(bi - 2, bi)).toEqual(["--tmpfs", "/proc"]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("a payload carrying --bind-fd at /proc is neutralized AND its fd is swept", () => {
+    const r = mkRoot();
+    const plFile = join(mkdtempSync(join(tmpdir(), "shim-pl-")), "pl");
+    // payload: --bind-fd 4 /proc (fd 4 = a /proc dirfd)
+    const procFd = openSync("/proc", "r");
+    writeFileSync(plFile, "--bind-fd\x004\x00/proc\x00--\x00/usr/bin/true\x00");
+    const plFd = openSync(plFile, "r");
+    try {
+      const res = spawnSync(SHIM, ["--args", "3", "--unshare-user", "--unshare-pid"], {
+        env: r.env(), encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe", plFd, procFd],
+      });
+      expect(res.status, String(res.stderr)).toBe(0);
+      const { payload, fds } = r.read();
+      expect(payload).not.toContain("--bind-fd");
+      expect(fds.get("4"), "dropped payload bind-fd's /proc dirfd must be swept").not.toBe("/proc");
+    } finally {
+      closeSync(plFd); closeSync(procFd); cleanup();
+    }
+  });
+
+  it("a bind with a procfs SOURCE at a non-/proc dest is also exposure — dropped (security F3)", () => {
+    const r = mkRoot();
+    try {
+      const res = spawnSync(SHIM, [
+        "--unshare-user", "--unshare-pid",
+        "--ro-bind", "/", "/",
+        "--bind", "/proc", "/x",
+        "--", "/usr/bin/true",
+      ], { env: r.env(), encoding: "utf8" });
+      expect(res.status, String(res.stderr)).toBe(0);
+      const { args } = r.read();
+      expect(args).not.toContain("--bind");
+      const bi = args.indexOf("--");
+      expect(args.slice(bi - 2, bi)).toEqual(["--tmpfs", "/proc"]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("a command-side ref to an fd that is NOT open skips re-home instead of refusing (mention-DoS, security F5)", () => {
+    const r = mkRoot();
+    try {
+      const res = spawnSync(SHIM, [
+        "--unshare-user", "--unshare-pid", "--ro-bind", "/", "/",
+        "--", "/bin/sh", "-c", "cat /proc/self/fd/99 2>/dev/null || true",
+      ], { env: r.env(), encoding: "utf8" });
+      expect(res.status, String(res.stderr)).toBe(0);
+      const { args } = r.read();
+      // a non-open ref still triggers the rewrite arm (tmpfs mask emitted —
+      // a real procfs ref can never resolve inside, so the mask is the
+      // conservative realization) but no re-home mount is emitted.
+      const bi = args.indexOf("--");
+      expect(args.slice(bi - 2, bi)).toEqual(["--tmpfs", "/proc"]);
+      // no /proc/self/fd/ mount token in the SETUP argv (the command's own
+      // mention stays — it fails ENOENT inside, same as pre-#10032)
+      expect(args.slice(0, bi).join(" ")).not.toContain("self/fd");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("adjacent duplicate preserve entries collapse fully on bind-fd strip (review F2)", () => {
+    const r = mkRoot();
+    const procFd = openSync("/proc", "r");
+    try {
+      // fd 3 enters preserve twice: once via --sync-fd (surviving option),
+      // once via the dropped --bind-fd 3 /proc. The strip is consumer-scoped
+      // to the DROPPED option — but a same-number second preserve entry is
+      // over-stripped (documented: loud EBADF direction, not a leak). The
+      // pinned contract: the procfs dirfd never survives the sweep.
+      const res = spawnSync(SHIM, [
+        "--unshare-user", "--unshare-pid",
+        "--sync-fd", "3", "--bind-fd", "3", "/proc",
+        "--", "/usr/bin/true",
+      ], { env: r.env(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe", procFd] });
+      expect(res.status, String(res.stderr)).toBe(0);
+      const { fds } = r.read();
+      expect(fds.get("3"), "the procfs dirfd must not reach the sandbox").not.toBe("/proc");
+    } finally {
+      closeSync(procFd); cleanup();
+    }
+  });
+
   it("an exposure in a payload AFTER a command-carrying payload still triggers the mask (resume semantics)", () => {
     const r = root();
     // Upstream parse_args_recurse resumes outer-argv option parsing after
@@ -975,21 +1080,26 @@ describe("bwrap PATH shim (#8752)", () => {
     }
   });
 
-  it("a `/proc/self/fd/N` path in SETUP position is NOT preserved (command-side scan only)", () => {
+  it("a `/proc/self/fd/N` path in SETUP position is dropped as a procfs-source bind AND not cmd-preserved", () => {
     const r = root();
     const fdFile = join(r.root, "setup-fd");
     writeFileSync(fdFile, "setup side fd");
     const setupFd = openSync(fdFile, "r"); // child fd 4 — an option-position
-    // path ref must not pin it (over-preserve is the leak direction).
+    // path ref must not pin it (over-preserve is the leak direction). The
+    // procfs-resident SOURCE also makes the bind an exposure (security F3):
+    // with a userns the mount is neutralized — it never becomes a cmd ref.
     try {
       const res = spawnSync(
         SHIM,
-        ["--unshare-pid", "--ro-bind", "/proc/self/fd/4", "/mnt/x", "--", "/usr/bin/true"],
+        ["--unshare-user", "--unshare-pid", "--ro-bind", "/proc/self/fd/4", "/mnt/x", "--", "/usr/bin/true"],
         { env: r.env(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe", "ignore", setupFd] },
       );
       expect(res.status, res.stderr).toBe(0);
-      const { fds } = r.read();
+      const { args, fds } = r.read();
       expect(fds.get("4")).not.toBe(fdFile);
+      const bi = args.indexOf("--");
+      expect(args.slice(bi - 2, bi), "the procfs-source bind is dropped; the mask follows").toEqual(["--tmpfs", "/proc"]);
+      expect(args).not.toContain("/proc/self/fd/4");
     } finally {
       cleanup();
     }
@@ -1065,19 +1175,24 @@ describe("bwrap PATH shim (#8752)", () => {
     }
   });
 
-  it("#10032: a command-side fd ref whose fd is NOT open refuses — exit 65", () => {
+  it("#10032: a command-side fd ref whose fd is NOT open is skipped — ENOENT inside, never a spawn-DoS", () => {
     const r = root();
     try {
-      // fd 9 was never handed to the child — the ref cannot be re-homed, and
-      // passing it through would leave a silently-broken multicall path.
+      // fd 9 was never handed to the child — a ref naming a non-open fd is a
+      // MENTION, not a live multicall ref (its fd is always open). The shim
+      // skips it: inside the sandbox the path ENOENTs — the pre-#10032
+      // outcome — instead of refusing the whole spawn (security F5). The
+      // tmpfs mask is still emitted (the ref CAN never resolve, so the
+      // conservative realization applies); no re-home mount appears.
       const res = spawnSync(
         SHIM,
         ["--unshare-user", "--unshare-pid", "--tmpfs", "/proc", "--", "/bin/sh", "-c", "/proc/self/fd/9"],
         { env: r.env(), encoding: "utf8" },
       );
-      expect(res.status).toBe(65);
-      expect(res.stderr).toContain("bwrap-shim:");
-      expect(res.stderr).toContain("/proc/self/fd/9");
+      expect(res.status, String(res.stderr)).toBe(0);
+      const { args } = r.read();
+      const bi = args.indexOf("--");
+      expect(args.slice(0, bi).join(" ")).not.toContain("self/fd");
     } finally {
       cleanup();
     }
@@ -1410,7 +1525,7 @@ describe.skipIf(!BWRAP_OK)("bwrap shim end-to-end with the real binary", () => {
       // canary's), and no procfs self-view (environ is gone BY DESIGN; the
       // vendored apply-seccomp fd path is re-homed as a mount, not resolved
       // through procfs). This is the new mask discrimination.
-      const probe = `! ls /proc | grep -qE "^[0-9]+$" && test ! -e /proc/self/environ`;
+      const probe = `for d in /proc/[0-9]*; do [ -d "$d" ] && exit 7; done; test ! -e /proc/self/environ`;
       const throughShim = spawnSync(SHIM, ["--args", "3", "--unshare-pid", "--", "/usr/bin/sh", "-c", probe], {
         env,
         encoding: "utf8",
