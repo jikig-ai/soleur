@@ -2917,7 +2917,12 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // TRUTH: the AC4 faithful-canary verdict is a deployed signal read from deploy-state +
   // `doppler run -c prd -- scripts/betterstack-query.sh` — the local stand-ins verify code, not
   // the deployed observability state. NO SUBSTITUTE: no unauthenticated path reaches either. Genuine.
-  const BASELINE_DECLARED_PROBES = 60;
+  // #9860 (2026-10-11): +1 (60 -> 61) for `2026-10-11-fix-agent-sandbox-proc-mask-systempaths-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the event is read with a Sentry API token (Doppler prd); the event store has no anonymous query
+  // form. NO SUBSTITUTE: the tag and user shape is pinned offline by cc-dispatcher-bash-sandbox-sentry-path.test.ts,
+  // but that verifies code, not the deployed event stream. Genuine.
+  const BASELINE_DECLARED_PROBES = 61;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
