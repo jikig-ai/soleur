@@ -11,6 +11,26 @@ branch: feat-one-shot-bot-digest-pr-ci-runs-held-for-approval
 issue: 9454
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-11
+**Gates run:** User-Brand Impact (4.6, pass with scope-out line), Observability (4.7, pass; command is an allowlisted `grep`, literal `expected_output`), PAT-shape sweep (4.8, no hits), UI wireframe (4.9, not triggered),
+Encryption posture (4.10, not triggered: no store or connection), Guard Contract (4.11, lint green and assembly structural), Scope Check (4.12, pass), rule-id and issue-state verification.
+**Agents used:** learnings-researcher, dhh-rails-reviewer, kieran-rails-reviewer, code-simplicity-reviewer, cto (devex), security-sentinel, architecture-strategist.
+
+### Key improvements
+1. The branch push now runs as the App too (Control A's exact configuration), using the env-only extra-header pattern, so the one unmeasured variable of the split-credential design is gone.
+2. `weakness-miner.yml` is split into `mine` (no secrets), `open-pr` (credential, fresh checkout, one artifact in) and `notify`, closing the workspace-poisoning path a same-job miner left open.
+3. The composite is fail-closed: tokens are copied to unexported variables and unset, there is no step-level `GH_TOKEN`, and a bare `gh` call fails instead of silently authoring as the workflow token.
+4. The ADR is a new ADR (ADR-285, provisional), worded as evidence with the enqueuer/approval confound, and states the key-level exposure.
+5. The guard moved into the existing registered suite with a 12-row mutation matrix; the standalone suite, the separate presence-check step, the ADR-032 pointer and a third deferral issue were cut.
+
+### New considerations discovered
+- The C4 gate that goes red is `c4-model-freshness`, not `c4-count-parity`; the tracked JSON is regenerated with `plugins/soleur/scripts/render-c4-model.sh`.
+- `lint-shell-trace-credential-refusal` Rules A to D are `*.sh`-only and Rule E is curl-only, so none scores the composite's git header; the prologue and the shape check are required by convention, not by that lint.
+- The `cla-check` synthetic text names `github-actions[bot]` and is now false; it becomes author-neutral.
+- PR 10013's second queue entry was armed by a human after the held runs were approved, so the author-versus-enqueuer split is unproven; the post-merge criteria include an explicit "premise wrong, stop" arm.
+
 ## Overview
 
 The weekly weakness-miner workflow opens a digest PR as `github-actions[bot]` (the default workflow
@@ -142,22 +162,36 @@ own `pull_request` runs were created held. Each Sunday's digest is therefore exp
 Author the digest PR as the `soleur-infra` GitHub App, exactly as the inngest pin-bump already does (ADR-232 section 3): the App creates the PR, arms auto-merge, enters the queue
 and pushes the branch (Control A's configuration). Keep only the synthetic check-run posts on the workflow token, because the ruleset's 15368 match requires that identity.
 
-1. `weakness-miner.yml`: job `mine` gains `if: github.ref == 'refs/heads/main'`, `environment: infra-privileged` and a `timeout-minutes` raised above the sum of its step caps (today `5`;
-   the added Doppler install and mint steps alone carry 2 minutes each, so use 12 and give the new steps their own `timeout-minutes`). The checkout step gains `persist-credentials: false`
-   (as `mint-inngest-bootstrap-tag.yml` does) so no credential sits in `.git/config` while `scripts/weakness-miner.sh` runs. Steps in order: checkout, `Run weakness-miner`, install the Doppler CLI
-   (reuse the pinned `DopplerHQ/cli-action` SHA of `mint-inngest-bootstrap-tag.yml`), mint a scoped installation token with `./.github/actions/mint-infra-app-token` (narrow shape: no
-   `doppler-project`, `doppler-token: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}`, installation `166065653`, permissions `{"contents":"write","pull_requests":"write"}`, repositories `soleur`),
-   then the composite with `pr-token: ${{ steps.<mint-id>.outputs.token }}` and `gh-token: ${{ github.token }}`. No separate "token present" step: the mint composite already refuses an empty
-   `doppler-token` with a routable `::error::`. Workflow `permissions:` become `contents: read` and `checks: write` (the App now pushes and writes PRs).
-2. `bot-pr-with-synthetic-checks/action.yml`: new input `pr-token`. At the very top of the run step, BEFORE the "No changes to commit" early exit (so a misconfiguration is not hidden on an
-   unchanged week), refuse an empty `pr-token` and a `pr-token` byte-equal to `gh-token`, with a fixed message naming this issue and never printing either value. `git push`, `gh pr create`,
-   `gh pr edit --add-label` and `gh pr merge --squash --auto` run under the PR token: `gh` reads it as `GH_TOKEN="$PR_TOKEN"` per command; `git push` carries it as an
-   `Authorization: basic` extra header in the per-command `GIT_CONFIG_COUNT/KEY_0/VALUE_0` environment (header built by `printf ... | base64` into an unexported shell variable, never on an
-   argument list, `GIT_TRACE*` and `GIT_CURL_VERBOSE` unset), copied from `git_remote` in `.github/scripts/bump-inngest-bootstrap-pin.sh`. The `check-runs` POST loop keeps `gh-token`.
-   Update the description's "PRs created with GITHUB_TOKEN don't re-trigger workflows" sentence. `CHANGELOG.md` gets a v4 entry (one line on migration: the single in-repo caller moves in the same change).
+1. `weakness-miner.yml` becomes three jobs, so no content-processing step ever shares a job (or a git directory) with the credential (security review: a miner step that runs before the mint could still
+   poison `$GITHUB_ENV`, `$GITHUB_PATH`, `.git/config` hooks or the workspace scripts the mint and the composite later execute, and `persist-credentials: false` does not close that):
+   - `mine` (no environment, no secrets): checkout with `fetch-depth: 0`, `Run weakness-miner`, then upload ONLY `knowledge-base/project/weakness-digest.md` as an artifact
+     (SHA-pinned `actions/upload-artifact`, the pin already used in the repo; one file, short retention). Permissions `contents: read`.
+   - `open-pr` (`needs: mine`, `if: github.ref == 'refs/heads/main'`, `environment: infra-privileged`, `timeout-minutes` above the sum of its step caps, 12): FRESH checkout of `main` with
+     `persist-credentials: false` and no miner output in the tree, download the artifact to the single allowlisted path, install the Doppler CLI (reuse the pinned `DopplerHQ/cli-action` SHA of
+     `mint-inngest-bootstrap-tag.yml`, a 40-character pin), mint a scoped installation token with `./.github/actions/mint-infra-app-token` (narrow shape: no `doppler-project`,
+     `doppler-token: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}`, installation `166065653`, permissions `{"contents":"write","pull_requests":"write"}`, repositories `soleur`), then the composite with
+     `pr-token: ${{ steps.<mint-id>.outputs.token }}` and `gh-token: ${{ github.token }}`. No separate "token present" step: the mint composite already refuses an empty `doppler-token` with a routable
+     `::error::`. Workflow-token permissions `contents: read` and `checks: write`. The artifact is the only data crossing the boundary and the composite's allowlist plus its earned-green scans
+     (gitleaks, lint-fixture-content, credential-path literals) run over it before any PR exists.
+   - `notify` (`needs: [mine, open-pr]`, `if: failure()`): the existing `notify-ops-email` failure step, so the credential job never holds the email secret and the email covers both jobs.
+   A non-main `workflow_dispatch` skips `open-pr` and ends green with no digest PR; that is intended (the `infra-privileged` branch policy would refuse it anyway).
+2. `bot-pr-with-synthetic-checks/action.yml`: new input `pr-token`, and the identity becomes fail-closed. The step `env:` carries only `PR_TOKEN` (from `pr-token`) and `GATE_TOKEN` (from `gh-token`); NO step-level
+   `GH_TOKEN`. Order of the first statements, all before the "No changes to commit" early exit (so a misconfiguration is not hidden on an unchanged week) and before any repo script runs:
+   (a) the xtrace refusal prologue as the very first statement (`lint-shell-trace-credential-refusal` Rules A and B apply to shell that binds a live credential; copy the bump script's preamble);
+   (b) refuse an empty `PR_TOKEN`, refuse one outside the canonical token alphabet (`_bearer_ok` from the bump script, value never printed), refuse `[[ "$PR_TOKEN" == "$GATE_TOKEN" ]]` (RHS quoted, fixed message naming
+   this issue, neither value interpolated), refuse `GITHUB_REF != refs/heads/main` (a new early copy; the existing later refusal stays untouched);
+   (c) copy both into unexported shell variables and `unset PR_TOKEN GATE_TOKEN GH_TOKEN`, so the gitleaks download, `node lint-fixture-content.mjs`, `python3 lint-credential-path-literals.py` and any git hook never inherit a token;
+   (d) define two helpers, `gh_app() { GH_TOKEN="$_pr" gh "$@"; }` and `gh_gate() { GH_TOKEN="$_gate" gh "$@"; }`; every PR write (`gh pr create`, `gh pr edit --add-label`, `gh pr merge --squash --auto`) goes through `gh_app`,
+   the `check-runs` POST loop through `gh_gate`, and a bare `gh` has no token and fails (a future call added without a helper fails closed instead of silently authoring as the workflow token);
+   (e) `git push` carries the App token as an `Authorization: basic` extra header in the per-command `GIT_CONFIG_COUNT/KEY_0/VALUE_0` environment, copied from `git_remote` in `.github/scripts/bump-inngest-bootstrap-pin.sh`:
+   header built by `printf '%s' "x-access-token:${_pr}" | base64 -w0` (or `| tr -d '\n'`; the token is about 390 characters and `base64` wraps at 76), held in an unexported shell variable, never on an argument list, and the bump
+   script's full trace-variable unset list copied verbatim (`GIT_TRACE`, `GIT_TRACE_CURL`, `GIT_TRACE_REDACT`, `GIT_TRACE2*`, `GIT_CURL_VERBOSE`, `GIT_HTTP_TRACE_AUTH_HEADER` or whatever that script lists) and proven with a synthetic header.
+   The `cla-check` synthetic summary string "github-actions[bot] is in CLA allowlist" becomes author-neutral (the PR author is now the App; both identities are allowlisted). Update the description's "PRs created with
+   GITHUB_TOKEN don't re-trigger workflows" sentence. `CHANGELOG.md` gets a v4 entry: the contract change, the single in-repo caller moving in the same change, and a note that commits still carry the `github-actions[bot]`
+   git identity while the PR author is the App.
 3. A static guard in the EXISTING `tests/scripts/test-weakness-miner.sh` (registered in `scripts/test-all.sh`, so it runs inside the required `test` aggregate): a new function that derives every
-   workflow step calling the composite (floor of one) and asserts the identity wiring (Guard Contract below). One home, not two.
-4. Governance and records the census and the C4 parity gate force: census row G7f caller count 3 to 4 (dated edit), runbook Group 4 row, C4 edge prose, ADR-232 amendment, ADR-241 amendment-log line.
+   workflow step calling the composite (floor of one) and asserts the identity wiring across both files (Guard Contract below). One home, not two.
+4. Governance and records: census row G7f caller count 3 to 4 (dated edit; the census fails `test` otherwise), runbook Group 4 row (documentation, not cross-checked by the census), C4 edge prose and the regenerated model (gated by `c4-model-freshness`), a new ADR plus an ADR-241 amendment-log line and a one-line ADR-232 pointer.
 
 No repo setting is required and no human click is needed: `DOPPLER_TOKEN_INFRA_APP` already exists on the `infra-privileged` environment (verified: environment secrets are
 `DOPPLER_TOKEN_INFRA_APP`, `DOPPLER_TOKEN_INFRA_PRIVILEGED`, `DOPPLER_TOKEN_WRITE`; branch policy `main` only), and the App installation already holds `contents:write` and
@@ -186,32 +220,39 @@ No repo setting is required and no human click is needed: `DOPPLER_TOKEN_INFRA_A
 
 ### Phase 2 - Composite and caller
 
-2.1 Edit the composite as in Proposed Solution 2. Do not touch the earned-green blocks, the allowlist or the off-main refusal. Validate the composite's `run:` body with `bash -n` on an extracted copy;
-    do NOT run `actionlint` on `action.yml` (it emits spurious schema errors against the action schema).
-2.2 Edit `weakness-miner.yml` as in Proposed Solution 1; correct its header comment (the "Uses only GITHUB_TOKEN" line becomes false). `actionlint` on this workflow only.
-2.3 `CHANGELOG.md` v4 entry.
+2.1 Edit the composite as in Proposed Solution 2. Do not remove or alter the earned-green blocks, the allowlist or the existing off-main refusal (additions only; the AC checks that no line of those blocks is deleted).
+    Validate the composite's `run:` body with `bash -n` on an extracted copy; do NOT run `actionlint` on `action.yml` (it emits spurious schema errors against the action schema).
+2.2 Edit `weakness-miner.yml` as in Proposed Solution 1 (three jobs); correct its header comment (the "Uses only GITHUB_TOKEN" line becomes false). `actionlint` on this workflow only. Check that the pinned
+    `actions/upload-artifact` and `actions/download-artifact` SHAs are 40 characters (`git grep -hE 'uses: actions/(upload|download)-artifact@[0-9a-f]+' -- .github | awk -F@ '{print $2}' | awk '{print $1}' | sort -u` and
+    assert every entry has length 40) and that the census does not forbid a download step in a Tier-B job (it forbids UPLOADS from Tier-B jobs, row G6e; `open-pr` only downloads).
+2.3 `CHANGELOG.md` v4 entry (contents in Proposed Solution 2).
+2.4 Confirm no ruleset or branch rule treats an App push to `ci/*` differently from a `github-actions` push: `grep -n "ref_name\|bypass" infra/github/*.tf` (planning-time grep found no `ci/` ref restriction).
 
 ### Phase 3 - Governance that goes red otherwise
 
-3.1 `tests/scripts/test-infra-privileged-tier-census.sh`: G7f caller count `3` to `4` (the line-1642 comment and the line-1744 `!= 3` check and its message) with a dated comment (2026-10-11, #9454 item 4,
-    `weakness-miner.yml::mine`). Run the whole census before and after and diff the row list; every other row must be unchanged. The narrow shape and a scalar `environment: infra-privileged`
-    already satisfy G7f, G1b and G1c per review.
-3.2 `knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md`: add a Group 4 row for `weakness-miner.yml::mine` (schedule and workflow_dispatch; `infra-privileged`;
-    `DOPPLER_TOKEN_INFRA_APP`; writes PRs and branches only; tier B).
-3.3 `model.c4`: edge `github -> doppler`. Read all three `.c4` files first. Edit more than the count: the sentence "two unattended App-token consumers ... build-inngest-bootstrap-image.yml's
-    bump-cloud-init-pin and mint-inngest-bootstrap-tag.yml's mint" and the follow-on "those two consumers read the NARROW Doppler project ... neither job holds ..." both name the set, and the
-    "composite's third caller, apply-github-infra.yml" sentence stays true. Regenerate the tracked `model.likec4.json` (it is tracked; find the generator with `git grep -n "likec4.json"`).
-    Run `bash plugins/soleur/test/c4-count-parity.test.sh` and the c4 syntax and render tests.
-3.4 ADR-232 dated amendment and ADR-241 amendment-log line (see Architecture Decision). ADR-270 and the canary-log runbook row for item 4
+3.1 `tests/scripts/test-infra-privileged-tier-census.sh`: G7f caller count `3` to `4` (the line-1642 comment, the line-1744 `!= 3` check and its message) with a dated comment (2026-10-11, #9454 item 4,
+    `weakness-miner.yml::open-pr`), and reword comments that call the narrow shape "the release jobs" (the new caller is not a release job; the same wording is in ADR-241 D11, fixed by the amendment line). Run the whole
+    census before and after and diff the row list; every other row must be unchanged. The narrow shape and a scalar `environment: infra-privileged` already satisfy G7f, G1b and G1c per review; confirm the new `open-pr`
+    job passes the G1/G4 rows that derive the Tier-B job set from references to `DOPPLER_TOKEN_INFRA_APP` and from declared environments.
+3.2 `knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md`: add a Group 4 row for `weakness-miner.yml::open-pr` (schedule and workflow_dispatch; `infra-privileged`;
+    `DOPPLER_TOKEN_INFRA_APP`; writes PRs and branches only; tier B). Documentation: the census does not cross-check this table.
+3.3 `model.c4`, edge `github -> doppler`. Read all three `.c4` files first. The edit is for accuracy and is gated by `plugins/soleur/test/c4-model-freshness.test.sh` (byte-identity of the committed
+    `model.likec4.json` against the compiler), not by `c4-count-parity` (which has no clause for App-token consumers; verified). Three places in that edge name the job set and must agree: the list of what `infra-privileged`
+    serves ("unattended apply-on-merge and drift paths and, since #9262, the inngest pin bump and auto-mint"), "SINCE #9262 two unattended App-token consumers ... bump-cloud-init-pin ... mint", and the follow-on "those two
+    consumers read the NARROW Doppler project ... neither job holds ..." plus the "composite's third caller, apply-github-infra.yml" sentence (its ordinal becomes ambiguous; reword to name the callers).
+    Regenerate the tracked `model.likec4.json` with `bash plugins/soleur/scripts/render-c4-model.sh` (the one canonical writer) and check `node plugins/soleur/lib/c4-canonical-cli.mjs --check
+    knowledge-base/engineering/architecture/diagrams/model.likec4.json` prints `canonical`. Run `c4-model-freshness.test.sh`, `c4-count-parity.test.sh`, `plugins/soleur/test/c4-canonical.test.ts` and the c4 syntax/render tests.
+3.4 New ADR (see Architecture Decision), ADR-241 amendment-log line, one-line pointer under ADR-232 section 3. ADR-270 and the canary-log runbook row for item 4
     (`knowledge-base/engineering/operations/runbooks/merge-queue-canary-log.md`) are NOT edited: that row records a measurement and stays as it is until a later bot PR is measured.
 
 ### Phase 4 - Verification before PR
 
 4.1 `bash tests/scripts/test-weakness-miner.sh` GREEN and each battery row RED; `bash tests/scripts/test-infra-privileged-tier-census.sh`,
-    `plugins/soleur/test/required-checks-canonical-parity.test.sh`, `plugins/soleur/test/lint-bot-synthetic-completeness.test.sh`, `plugins/soleur/test/c4-count-parity.test.sh`,
+    `plugins/soleur/test/required-checks-canonical-parity.test.sh`, `plugins/soleur/test/lint-bot-synthetic-completeness.test.sh`, the c4 tests of 3.3,
     `python3 scripts/lint-guard-contract.py <this plan>`.
-4.2 The composite now binds a live credential in an inline script: run `bash scripts/lint-shell-trace-credential-refusal.test.sh` and `bash tests/scripts/test-argv-bearer-sweep.sh` and confirm
-    neither scope widens onto `action.yml`; if one does, satisfy it the way `bump-inngest-bootstrap-pin.sh` does (xtrace refusal prologue, `_bearer_ok` shape check).
+4.2 The composite now binds a live credential in an inline script. Planning-time finding: `scripts/lint-shell-trace-credential-refusal.py` Rules A to D are `*.sh`-only and Rule E (argv credential ratchet) is curl-only for YAML,
+    so neither scores the git header; the xtrace refusal prologue and the `_bearer_ok` shape check are still required here unconditionally (they are the repo's convention for any script that binds a live credential).
+    Run `bash scripts/lint-shell-trace-credential-refusal.test.sh` and `bash tests/scripts/test-argv-bearer-sweep.sh` and confirm both stay green and neither baseline moves.
 4.3 PR body: `Ref #9454`, one prose sentence mentioning the 2026-10-11 stall-watchdog issue (10019, closed; not reopened or closed here), no close keyword near either number,
     no statement that ADR-270 is accepted.
 
@@ -221,8 +262,8 @@ No repo setting is required and no human click is needed: `DOPPLER_TOKEN_INFRA_A
   workflows that open PRs with the workflow token" (`git grep -ln "gh pr create\|create-pull-request" -- .github/workflows` lists `cla-evidence-timestamp.yml`,
   `cleanup-unmerged-bot-branches.yml`, `fix-constraints-stage-b.yml`, `git-data-rung2-rehearsal.yml`; none was in the stall evidence). Re-evaluate on 2026-11-01 or after two measured Sunday runs,
   whichever is later; touches ADR-139, parity test 8, `lint-bot-synthetic-completeness.sh`. Milestone from `knowledge-base/product/roadmap.md`.
-- File B: "`scripts/audit-bot-codeql-coverage.sh` samples `--author app/github-actions`; weakness digests are now `app/soleur-infra`" (advisory audit loses its only live sample as old PRs age out of
-  the 100-PR window; widen the author filter; relates to #3595).
+- File B: "`scripts/audit-bot-codeql-coverage.sh` samples `--author app/github-actions`; weakness digests are now `app/soleur-infra`" (advisory audit stops sampling new digest PRs; it does not fail, because the
+  author-filtered list keeps its 48 historical PRs; widen the author filter and its test `tests/scripts/test-audit-bot-codeql-coverage.sh`; relates to #3595).
 - Link both from the PR body as prose; neither blocks this PR.
 
 ### Post-merge measurement (carried by #9454 item 4, not by this PR)
@@ -241,11 +282,12 @@ never "canary closed", and #9454 stays open. A follow-through enrollment is deli
 - `tests/scripts/test-infra-privileged-tier-census.sh`
 - `knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md`
 - `knowledge-base/engineering/architecture/diagrams/model.c4` and `knowledge-base/engineering/architecture/diagrams/model.likec4.json` (tracked, regenerated)
-- `knowledge-base/engineering/architecture/decisions/ADR-232-inngest-bootstrap-pin-bumps-are-authored-by-the-publish-workflow.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-232-inngest-bootstrap-pin-bumps-are-authored-by-the-publish-workflow.md` (one-line pointer only)
 - `knowledge-base/engineering/architecture/decisions/ADR-241-terraform-credentials-are-tiered-main-only-environment-secrets.md`
 
 ## Files to Create
 
+- `knowledge-base/engineering/architecture/decisions/ADR-285-bot-prs-are-authored-pushed-and-armed-by-the-soleur-infra-app.md` (provisional ordinal: highest on `origin/main` and on every remote ref is ADR-284 at planning time; `soleur:ship` re-verifies)
 - `knowledge-base/project/specs/feat-one-shot-bot-digest-pr-ci-runs-held-for-approval/tasks.md`
 
 All paths were checked with `git ls-files`; `tests/scripts/test-weakness-miner.sh` is registered at `scripts/test-all.sh` (`run_suite "tests/scripts/weakness-miner"`).
@@ -275,14 +317,15 @@ All paths were checked with `git ls-files`; `tests/scripts/test-weakness-miner.s
 | guard function in `test-weakness-miner.sh` | "Add a test or lint guarding the fix where feasible" | asked |
 | census G7f 3 to 4 | - | inferred - justification: the census fails `test` otherwise (a fourth caller is a "deliberate, dated edit" by its own contract) |
 | runbook Group 4 row | - | inferred - justification: the runbook is the credential inventory the census cross-checks (ADR-241 D2) |
-| C4 edge prose and JSON | - | inferred - justification: `c4-count-parity` gates the "two unattended App-token consumers" count |
-| ADR-232 amendment and ADR-241 log line | - | inferred - justification: gate `wg-architecture-decision-is-a-plan-deliverable` (the decision extends ADR-232 to a second workflow and adds a Tier-B consumer) |
+| C4 edge prose and JSON | - | inferred - justification: `c4-model-freshness` fails `test` if the tracked JSON drifts from the edited prose, and the edge would otherwise state a false consumer set |
+| new ADR, ADR-241 log line, ADR-232 pointer | - | inferred - justification: gate `wg-architecture-decision-is-a-plan-deliverable` (a repo-wide rule for bot PR authorship under the merge queue, plus a fourth Tier-B consumer) |
 | two deferral issues | - | inferred - justification: deferral-tracking rule (a deferred item without an issue is invisible) |
+| three-job split of `weakness-miner.yml` | "open the digest PR under a GitHub App installation token" | inferred - justification: a miner step sharing a job with the credential can poison `$GITHUB_ENV`, `$GITHUB_PATH`, git config or the workspace scripts the mint executes (security review); the split is what makes the ordering claim true |
 
 ### Split Assessment
 
 - Subsystems touched: 3 (`.github/` workflow and composite, `tests/`, `knowledge-base/` records)
-- Planned files: 10 | Estimated changed lines: about 250 plus the regenerated JSON
+- Planned files: 11 | Estimated changed lines: about 350 plus the regenerated JSON
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
 - Recommendation: single PR
 
@@ -290,19 +333,19 @@ All paths were checked with `git ls-files`; `tests/scripts/test-weakness-miner.s
 
 ### Pre-merge (PR)
 
-- [ ] `weakness-miner.yml` job `mine` has `if: github.ref == 'refs/heads/main'`, `environment: infra-privileged`, a `timeout-minutes` greater than the sum of its step caps, and the checkout step has
-      `persist-credentials: false`. The mint step uses `./.github/actions/mint-infra-app-token` in the narrow shape with permissions exactly `{"contents":"write","pull_requests":"write"}`, repositories `soleur`,
-      sits after `Run weakness-miner` and before the composite step; the composite receives `pr-token` from that step's `token` output and `gh-token: ${{ github.token }}`; workflow `permissions:` are
-      `contents: read` and `checks: write` only.
-- [ ] The composite declares `pr-token`; its first statements refuse an empty value and a value equal to `gh-token` before the no-change early exit; `git push`, `gh pr create`, `gh pr edit` and `gh pr merge`
-      run under the PR token; the `check-runs` POST runs under `gh-token`. Command:
-      `git diff -U0 origin/main -- .github/actions/bot-pr-with-synthetic-checks/action.yml | grep -E '^[+-].*(GITLEAKS_|lint-fixture-content|lint-credential-path-literals|ALLOWED_PATHS|GITHUB_REF)'` prints nothing
-      (earned-green, allowlist and off-main blocks untouched).
+- [ ] `weakness-miner.yml` has three jobs. `mine` has no `environment:` and no secret reference, uploads only `knowledge-base/project/weakness-digest.md`. `open-pr` has `needs: mine`, `if: github.ref == 'refs/heads/main'`,
+      `environment: infra-privileged`, a `timeout-minutes` greater than the sum of its step caps, a fresh checkout with `persist-credentials: false`, the artifact download, and the mint step in the narrow shape with permissions
+      exactly `{"contents":"write","pull_requests":"write"}`, repositories `soleur`, before the composite step; the composite receives `pr-token` from that step's `token` output and `gh-token: ${{ github.token }}`;
+      workflow-token `permissions:` are `contents: read` and `checks: write` only. `notify` (`if: failure()`, `needs: [mine, open-pr]`) is the only job referencing the email secret.
+- [ ] The composite declares `pr-token`; its first statement is the xtrace refusal; before the no-change exit it refuses an empty, non-canonical or `gh-token`-equal `PR_TOKEN` (quoted comparison, no value printed) and a non-main ref;
+      it copies both tokens into unexported variables and unsets `PR_TOKEN GATE_TOKEN GH_TOKEN`; it has no step-level `GH_TOKEN`; every `gh pr` write runs through `gh_app` and the `check-runs` POST through `gh_gate`; no bare `gh`
+      invocation remains; `git push` carries the header via the per-command `GIT_CONFIG_*` environment with a `base64 -w0` (or newline-stripped) header and the trace-variable unset list from the bump script. Command (nothing
+      deleted from the protected blocks): `git diff -U0 origin/main -- .github/actions/bot-pr-with-synthetic-checks/action.yml | grep -E '^-[^-].*(GITLEAKS_|lint-fixture-content|lint-credential-path-literals|ALLOWED_PATHS|GITHUB_REF)'` prints nothing.
 - [ ] `bash tests/scripts/test-weakness-miner.sh` is green on the branch, and each Guard Contract mutation row turns it RED (battery output in the PR).
-- [ ] The census, `required-checks-canonical-parity.test.sh`, `lint-bot-synthetic-completeness.test.sh`, `c4-count-parity.test.sh`, the c4 syntax and render tests, `lint-shell-trace-credential-refusal.test.sh`
+- [ ] The census, `required-checks-canonical-parity.test.sh`, `lint-bot-synthetic-completeness.test.sh`, `c4-model-freshness.test.sh`, `c4-count-parity.test.sh`, `c4-canonical.test.ts`, `lint-shell-trace-credential-refusal.test.sh`
       and `test-argv-bearer-sweep.sh` are green; `bash scripts/lint-orphan-test-suites.sh` reports no orphan.
 - [ ] `python3 scripts/lint-guard-contract.py knowledge-base/project/plans/2026-10-11-fix-bot-digest-pr-ci-runs-held-for-approval-plan.md` exits 0 and reports one entry.
-- [ ] ADR-232 carries an amendment dated 2026-10-11 whose wording states the evidence, not a proven rule (see Architecture Decision); ADR-241's amendment log carries one line;
+- [ ] The new ADR exists, its wording states the evidence and the confound (not a proven rule), and it states the key-level exposure; ADR-241's amendment log carries one line; ADR-232 carries only a one-line pointer;
       `git diff --stat origin/main -- knowledge-base/engineering/architecture/decisions/ADR-270* knowledge-base/engineering/operations/runbooks/merge-queue-canary-log.md` is empty.
 - [ ] `gh pr view --json body --jq .body | grep -inE '(close[sd]?|fix(e[sd])?|resolve[sd]?) +#(9454|10019)'` prints nothing, and the body contains `Ref #9454`.
 - [ ] No change to `.github/workflows/ci.yml`, to repository variables `CI_PUSH_DEDUPE` or `CI_DRAFT_LIGHT`, or to any Actions repo setting.
@@ -336,7 +379,7 @@ liveness_signal:
   what: "Scheduled: Weakness Miner workflow run (weekly) and the digest PR it opens, as GitHub Actions run records"
   cadence: "weekly, Sunday 06:00 UTC"
   alert_target: "ops email via the existing notify-ops-email failure step; merge-queue-stall issue from the stall watchdog"
-  configured_in: ".github/workflows/weakness-miner.yml (failure step) and .github/workflows/merge-queue-stall-check.yml"
+  configured_in: ".github/workflows/weakness-miner.yml (notify job) and .github/workflows/merge-queue-stall-check.yml"
 
 error_reporting:
   destination: "GitHub Actions run annotations plus ops email (RESEND_API_KEY already wired in weakness-miner.yml)"
@@ -345,7 +388,7 @@ error_reporting:
 failure_modes:
   - mode: "App token mint fails (Doppler read, missing environment secret, grant mismatch)"
     detection: "the mint composite exits non-zero with a sanitized ::error:: naming DOPPLER_TOKEN_INFRA_APP and the runbook; the job fails before any branch push"
-    alert_route: "ops email from the failure step"
+    alert_route: "ops email from the notify job (needs both jobs, if failure())"
   - mode: "pr-token empty or equal to gh-token (a caller regression)"
     detection: "composite refuses before any git or gh write, on changed and unchanged weeks alike; the static guard is red in the required test aggregate before merge"
     alert_route: "PR check failure; ops email if it reaches a scheduled run"
@@ -361,7 +404,7 @@ logs:
   retention: "GitHub Actions default retention (90 days)"
 
 discoverability_test:
-  command: "grep -cF 'pr-token: ${{ steps.' .github/workflows/weakness-miner.yml"
+  command: grep -c "pr-token: ${{ steps" .github/workflows/weakness-miner.yml
   expected_output: "1"
 ```
 
@@ -369,9 +412,9 @@ discoverability_test:
 
 ### Guard 1 - bot-PR author identity
 
-**Property.** Every caller of the bot-PR composite supplies a PR-write token minted in the same job by the `soleur-infra` App composite (scoped to `contents:write` and `pull_requests:write` on `soleur`, in the `infra-privileged` environment) and supplies the workflow token only as the synthetic-check identity, and the composite itself performs its push and its three PR writes under the PR token and its check-run posts under the workflow token.
+**Property.** Every caller of the bot-PR composite supplies a PR-write token minted in the same job by the `soleur-infra` App composite (scoped to `contents:write` and `pull_requests:write` on `soleur`, in the `infra-privileged` environment, in a job that runs no content-producing step) and supplies the workflow token only as the synthetic-check identity, and the composite itself performs its push and its three PR writes under the PR token and its check-run posts under the workflow token, failing closed for any other `gh` call.
 
-**Assembly.** The population is derived, never listed: every job step in `.github/workflows/*.yml` whose `uses` resolves to `./.github/actions/bot-pr-with-synthetic-checks`, floor of at least one caller. The chokepoints are two. (a) The caller side: the step's `with:` block (`pr-token`, `gh-token`), the job's `environment:`, and the ordering and scope of the mint step relative to the composite step in the same job. (b) The composite side: the push and the three PR-write command sites (`gh pr create`, `gh pr edit --add-label`, `gh pr merge --squash --auto`) and the single check-run POST loop, read from the comment-stripped `run:` body. A guard scoped to the one caller that exists today would miss the second caller the property quantifies over, so the guard evaluates every derived member, not the first.
+**Assembly.** The population is derived, never listed: every job step in `.github/workflows/*.yml` whose `uses` resolves to `./.github/actions/bot-pr-with-synthetic-checks`, floor of at least one caller. The chokepoints are two. (a) The caller side: the step's `with:` block (`pr-token`, `gh-token`), the job's `environment:`, the job's `needs:` chain back to a job with no secrets and no environment, and the ordering and scope of the mint step relative to the composite step in the same job. (b) The composite side: the `run:` body read comment-stripped, every `gh` invocation (each must go through `gh_app` or `gh_gate`, a bare `gh` is a violation), the push, the three PR-write command sites, the single check-run POST loop, the `unset` of the token variables, and the absence of a step-level `GH_TOKEN`. A guard scoped to the one caller that exists today would miss the second caller the property quantifies over, so the guard evaluates every derived member, not the first.
 
 **Mutation matrix:**
 
@@ -383,10 +426,12 @@ discoverability_test:
 | 4 | Remove `environment: infra-privileged` from the job | RED |
 | 5 | Add a second compliant job that calls the composite, then a third that passes `${{ github.token }}` as `pr-token` (a check that stops at the first member passes this) | RED |
 | 6 | Point the guard at a workflows directory with zero callers (its dispatch override) | RED (floor: "0 callers checked" must fail, not pass) |
-| 7 | In the composite, drop the `GH_TOKEN="$PR_TOKEN"` prefix from `gh pr merge`, then separately from `gh pr create` | RED (two rows) |
-| 8 | In the composite, run the `git push` without the PR-token header (back to the checkout credential) | RED |
-| 9 | In the composite, run the `check-runs` POST under `PR_TOKEN` (a different integration id fails the ruleset match) | RED |
-| 10 | In the composite, delete the empty and equality refusal | RED |
+| 7 | In the composite, add a bare `gh pr view` (or any `gh` call with no helper) | RED |
+| 8 | In the composite, route `gh pr merge`, then separately `gh pr create`, then separately `gh pr edit`, through `gh_gate` instead of `gh_app` | RED (three rows) |
+| 9 | In the composite, run the `git push` without the PR-token header (back to the checkout credential) | RED |
+| 10 | In the composite, route the `check-runs` POST through `gh_app` (a different integration id fails the ruleset match) | RED |
+| 11 | In the composite, delete the empty and equality refusal, or the `unset PR_TOKEN GATE_TOKEN GH_TOKEN`, or add a step-level `GH_TOKEN:` | RED (three rows) |
+| 12 | In `weakness-miner.yml`, move `Run weakness-miner` into the `open-pr` job (miner and credential share a job), or give `mine` an `environment:` or a secret reference | RED (two rows) |
 
 **Harness rows.** (H1) The guard's own positive control: a synthetic known-bad caller is evaluated before any verdict and must come back RED, otherwise the guard aborts, so a blind population walk cannot report green. (H2) A must-PASS input that differs from the canonical in permitted ways: a caller whose mint step id is `appmint` instead of `mint`, with unrelated steps between mint and composite, `pr-token` spelled `${{steps.appmint.outputs.token}}` (no inner spaces), in a differently named workflow file and job; it must come back GREEN, so a guard that rejects everything is caught.
 
@@ -396,19 +441,23 @@ discoverability_test:
 
 ### ADR
 
-Amend **ADR-232** (dated amendment 2026-10-11, #9454 item 4), as an amendment rather than a new ADR because the decision is the same one extended to a second workflow (taste: a new ADR is the alternative; recorded in `decision-challenges.md`).
-State the evidence, not a proven rule: workflow-token-armed queue entries received no `merge_group` runs and their PR runs were held; the same PR's second entry, armed by a human, did get runs, so the enqueuer is a
-discriminating variable and the author-versus-enqueuer split is not separated by the data; the App configuration (Control A) works end to end. Therefore the weakness-miner digest PR is authored, pushed, and armed by the `soleur-infra` App, and the
-workflow token keeps only the check-run posts. State the exposure honestly: the minted token is scoped, but the Doppler read token behind the mint reads the App key, whose grant includes `administration:write`
-and `secrets:write`; scoping is a property of the composite, the same exposure the other three callers carry. Name the trigger for revisiting: if a lower-grant App for digest-class PRs is created, this caller moves (deferral issue A).
-Add one line to **ADR-241**'s Amendment log naming the fourth composite caller (`weakness-miner.yml::mine`, narrow source, `infra-privileged`). ADR-270 stays `adopting` and is not edited or cited as accepted. ADR-032 is not edited.
+Create a new ADR, **ADR-285** (provisional ordinal: highest on `origin/main` and on every remote ref at planning time is ADR-284; `soleur:ship` re-verifies), with the next-ordinal derivation redone from a freshly fetched `origin/main` at work time. A new ADR rather than an
+amendment of ADR-232, because ADR-232's title, decision and rejected alternatives are about the inngest pin-bump workflow, while this decision is a rule across the bot-PR composite's callers, triggered by merge-queue adoption
+(ADR-270, ADR-276), and adds a fourth `infra-privileged` App-token consumer (an ADR-241 exposure decision). It cites ADR-232 section 3, ADR-241 D11, ADR-270 and ADR-139. Decision: the weakness-miner digest PR is authored,
+pushed and armed by the `soleur-infra` App; the workflow token keeps only the check-run posts; the credential job runs no content-producing step. Evidence wording, not a proven rule: workflow-token-armed queue entries
+received no `merge_group` runs and their PR runs were held; the same PR's second entry, armed by a human after the held runs were approved, did get runs, so the enqueuer and the approval state moved together and the
+author-versus-enqueuer split is not separated by the data; the App configuration (Control A) works end to end. State the exposure honestly: the minted token is scoped, but the Doppler read token behind the mint reads the App
+key, whose grant includes `administration:write` and `secrets:write`; scoping is a property of the mint composite's exact-grant check, the same exposure the other three callers carry, and the three-job split exists to keep
+content-producing steps out of that job. Name the revisit trigger: if a lower-grant App for digest-class PRs is created, this caller moves (deferral issue A). Status `adopting` until the first measured post-merge run.
+Add one line to **ADR-241**'s Amendment log (fourth composite caller `weakness-miner.yml::open-pr`, narrow source, `infra-privileged`; the "release jobs" wording of D11 is widened to "unattended App-token jobs") and a one-line pointer
+under ADR-232 section 3. ADR-270 stays `adopting` and is not edited or cited as accepted. ADR-032 is not edited.
 
 ### C4 views
 
 Planning-time check: the `model.c4` `github -> doppler` edge (line 702 at the time of writing) is the one edge whose prose names the App-token consumers; a grep of all three `.c4` files for `weakness`, `mint-infra`, `bot-pr` and `soleur-infra` found no other element or edge about this workflow. This is a grep, not a read, so the implementer must still read all three files in full before concluding. Enumeration for this feature:
 (a) external human actors: none new; (b) external systems: GitHub (already `github`), Doppler (already `doppler`), the `soleur-infra` App (already described on the `github -> doppler` and `github -> soleurMarketplace` edges); (c) data stores: none;
-(d) actor-to-surface access relationships: the set "two unattended App-token consumers on infra-privileged" and its follow-on sentence change to three. Edit that edge's prose in `model.c4`, regenerate the tracked `model.likec4.json`, and confirm `views.c4`
-and `spec.c4` need no edit (no new element or relationship, so no `view ... include` change). Run `plugins/soleur/test/c4-count-parity.test.sh` (it gates derived cardinalities in edge prose) plus the c4 syntax and render tests.
+(d) actor-to-surface access relationships: the set "two unattended App-token consumers on infra-privileged", its follow-on sentence and the `infra-privileged` served-jobs list change to include `weakness-miner.yml`'s `open-pr` job. Edit that edge's prose in `model.c4`, regenerate the tracked `model.likec4.json`, and confirm `views.c4`
+and `spec.c4` need no edit (no new element or relationship, so no `view ... include` change). Run `plugins/soleur/test/c4-model-freshness.test.sh` (the gate that reddens when the tracked JSON drifts from the sources), `c4-count-parity.test.sh` (derived cardinalities; it has no App-token-consumer clause) and the c4 syntax and render tests.
 
 ### Sequencing
 
@@ -434,10 +483,11 @@ No cross-domain implications detected: an engineering CI/tooling change with no 
 - **R1: the identity premise is inferred, not directly experimented.** Controls A and B and the human-armed second entry support it; no pre-merge run is possible (`infra-privileged` is main-only; a dispatch needs the file on the default branch). The post-merge criteria include an explicit "premise wrong" stop. The branch push now runs as the App so the configuration matches Control A in every variable.
 - **R2: real PR CI now runs on the digest PR** (one `pull_request` CI run per week, mostly short-circuited by the docs path in `detect-changes`). The synthetic checks remain and are redundant; how the ruleset evaluates a real failure beside a synthetic success is unmeasured, hence the post-merge fact check and deferral issue A.
 - **R3: `infra-privileged` is main-only.** A dispatch from another ref is refused by the environment, by the job `if`, and by the composite's off-main refusal.
-- **R4: the miner script and the credential share a job.** Checkout uses `persist-credentials: false`, the token is minted after the miner step, and the composite is repo code from `main`; exposure equals the pin-bump job's.
+- **R4: miner and credential are in separate jobs.** `mine` never sees the credential; `open-pr` checks out `main` fresh and consumes one artifact file that the composite's allowlist and earned-green scans then vet. Residual: the artifact content is untrusted text that lands in the digest commit, bounded by the single-path allowlist and the gitleaks, fixture and credential-path scans; exposure is otherwise the pin-bump job's.
 - **R5: consumers of the PR author identity.** `scripts/audit-bot-codeql-coverage.sh` filters `--author app/github-actions` (advisory; deferral issue B). `cleanup-unmerged-bot-branches.yml` keys on the `ci/` head prefix, so it keeps working. `cla.yml` already allowlists `soleur-infra[bot]`; the merge-queue CLA verify reads check-runs by name under integration 15368, and PR 10027 (same identity) passed it.
 - **R6: constraint compliance.** `ci.yml`, `CI_PUSH_DEDUPE`, `CI_DRAFT_LIGHT` and every Actions setting are untouched; no BEHIND PR is hand-synced; the PR carries no close keyword for #9454.
-- **R7: a git extra-header with the persisted checkout header would double the Authorization header (HTTP 400).** Avoided by `persist-credentials: false`; the guard asserts it.
+- **R7: a git extra-header with the persisted checkout header would double the Authorization header (HTTP 400).** Avoided by `persist-credentials: false` in `open-pr`; the guard asserts it.
+- **R8: `cla-check` synthetic text, commit identity.** The composite still sets the git commit author to `github-actions[bot]`, so the commit author differs from the PR author (the App); both are allowlisted in `cla.yml`. Stated in the CHANGELOG.
 
 ## Sharp Edges
 
