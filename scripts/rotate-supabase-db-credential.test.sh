@@ -46,7 +46,7 @@ setup() {
 #!/usr/bin/env bash
 set -euo pipefail
 S="$STUB_STATE/secrets.json"
-in_=""; case " $* " in *" secrets set "*) [ -t 0 ] || in_="$(cat)" ;; esac
+in_=""; case " $* " in *" secrets set "*) [ -t 0 ] || in_="$(timeout 2 cat)" ;; esac
 case "$1 ${2:-}" in
   "configs -p") echo '[{"name":"dev"}]' ;;
   "secrets get")

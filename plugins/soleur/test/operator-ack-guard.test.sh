@@ -379,7 +379,7 @@ make_stubs() { # <dir> <logging:1|0>
   assert_fixture_dir "$d"
   cat > "$d/doppler" <<'STUB'
 #!/usr/bin/env bash
-case " $* " in *" secrets set "*) [ -t 0 ] || timeout 2 cat >/dev/null ;; esac
+case " $* " in *" secrets set "*) [ -t 0 ] || if command -v timeout >/dev/null 2>&1; then timeout 2 cat >/dev/null; else cat >/dev/null; fi ;; esac
 [[ "${STUB_LOGGING:-1}" == 1 ]] && printf 'doppler %s\n' "$(printf '%q ' "$@")" >> "$STUB_LOG"
 if [[ "${1:-}" == secrets && "${2:-}" == get ]]; then
   case "${3:-}" in

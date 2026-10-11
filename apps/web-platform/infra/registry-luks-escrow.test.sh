@@ -70,8 +70,8 @@ check "the five seams landed" \
 
 # --- Stubs -----------------------------------------------------------------------------------
 # Every stub records its argv to $CALLS, which the key canary reads: the key must never be an
-# argument. cryptsetup reads stdin only for luksOpen, and records what it read to $KEYSEEN so the
-# suite can prove the key arrived through the pipe.
+# argument. cryptsetup drains stdin first for every `--key-file -` call (a producer piping the key must not take SIGPIPE) and records
+# what it read to $KEYSEEN so the suite can prove the key arrived through the pipe.
 cat > "$BIN/findmnt" <<'EOS'
 #!/usr/bin/env bash
 echo "findmnt $*" >> "$CALLS"

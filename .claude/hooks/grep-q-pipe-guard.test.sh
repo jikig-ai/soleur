@@ -139,10 +139,9 @@ PATTERN_PIPED_SCORER='(^|[^|])\|&?[[:space:]]*grep([[:space:]]+-[A-Za-z]+)*[[:sp
 # THE PRODUCER SIDE of the pipe (a stub that never reads the stdin a `printf |` feeds it, so the writer takes the signal) is
 # invisible to any line search: it needs a join from each production pipe to the owning suite's stub. S7b (#9217) adds that join
 # (the block headed THE PRODUCER SIDE near the end of this file): it derives every (test file, verb) pair, requires a PRODUCER_JOIN row
-# for each, pins the stdin drain of every `drains` row positionally, and runs the hazard once for real. What it does NOT cover:
-# stubs built through a helper it cannot read, stubs sourced two or more hops away, verbs named through a variable, pipes written with
-# a process substitution (no pipeline status is observed there), and a pair whose suite never reaches the stub (an exempt text-only
-# row says so). Follow-on slices of #9217 remain open (affected-edge selection for a changed producer, and the other wave A3 carriers);
+# for each, pins the stdin drain of every `drains` row within a four-line text window, and runs the hazard for real. What it does NOT
+# cover is listed under STATED LIMITS in that block (pipes split over lines, wrapped verbs, helper-built stubs, variable verbs, process
+# substitutions, and a pair whose suite never reaches the stub: an exempt text-only row says so). Follow-on slices of #9217 remain open (affected-edge selection for a changed producer, and the other wave A3 carriers);
 # this header does not claim the series is finished.
 
 # PATTERN_V2 is the widened reader pattern the DERIVED SWEEP (scan_sweep, below) uses. The four named
@@ -1121,72 +1120,73 @@ eqv_sh="$(_eqv "$EQV_SH")"
   || sweep_probe_fail+=("equivalence-sh: rows whose exit status differs under sh: ${eqv_sh:-none}; the same table with the wrong converted form reported ${eqv_neg_sh:-NOTHING} (want a difference, so the sh pass can see one)")
 
 # ---------------------------------------------------------------------------------------------------------------------
-# THE PRODUCER SIDE (S7b, #9217 Arm P). The consumer side above bans `| grep -q`; this half bans the OTHER end of the same
+# THE PRODUCER SIDE (S7b, #9217 Arm P). The consumer side above bans `| grep -q`; this half covers the OTHER end of the same
 # pipe: a non-test script feeds text into a verb, and a test STUB for that verb exits without reading stdin, so the writer dies
 # (SIGPIPE 141, or EPIPE where CI ignores SIGPIPE). Three guards share one table, PRODUCER_JOIN, whose evidence is
 # knowledge-base/project/specs/feat-one-shot-grep-q-pipe-guard-s7b-producer-join/evidence.md.
-#   1. The population is CLOSED. pj_join_pairs derives every (test file, verb) pair where the test file names a non-test file
-#      that pipes printf/echo/cat into the verb under pipefail with its status observed, and the test file (or one sourced file)
-#      stubs that verb. Every derived pair has exactly one row and every row still derives.
-#   2. A `drains` row's stub reads stdin early: in each of its N stub definitions a drain keyed on the flag token sits inside the
-#      first PJ_DRAIN_WINDOW code lines (a log line may precede it). A positional pin, not an end-of-definition search.
+#   1. SET IDENTITY over what the derivation can see. pj_join_pairs derives every (test file, verb) pair where the test file names
+#      a non-test file that pipes printf/echo/cat into the verb ON ONE LINE, in a file that mentions pipefail, with its status
+#      observed, and the test file (or one sourced file) stubs that verb. Every derived pair has exactly one row and every row still
+#      derives. PJ_TRIPLES pins the (test file, verb, producer file) count, so a new producer of an already-listed pair is a
+#      deliberate edit and not a silent pass.
+#   2. A `drains` row's stub reads stdin early: in each of its N stub definitions a drain keyed on the flag token sits in the
+#      opener line or the next PJ_DRAIN_WINDOW code lines of the SAME definition, with no bare exit or return before it. This is a
+#      four-line TEXT window; it does not prove that the arm the producer reaches reads.
 #   3. The hazard is real and the checker can see a vacuous stub (the dynamic control below).
-# STATED LIMITS: a stub built through a helper whose body the finder cannot read, a stub sourced two or more hops away, a stub
-# spelled in a way none of the arms detects, and a verb named through a variable are invisible; known ones are `exempt` rows.
-# The reach column of the evidence file, not this table, says which pairs ran at all. This bash derivation is AUTHORITATIVE;
-# j0-derive.py in the spec directory is a point-in-time measurement and differs from it where its comment says so.
+# STATED LIMITS (each is a follow-on slice of #9217, the derivation-recall slice): a pipe split over lines by a trailing backslash or
+# pipe (about 24 more pairs), a verb behind a wrapper (timeout, env, command), a producer other than printf/echo/cat, a pipe in a
+# library with no pipefail token of its own, a stub built through a helper that takes an argument or a loop over verb names, a stub
+# sourced two or more hops away, a verb named through a variable, and a producer in a file type outside .sh .bash .yml .yaml.
+# Only tracked files are read, so a new untracked file is invisible until it is staged. An `exempt` row is an attestation: only its
+# first word is checked, and the reach column of the evidence file (not this table) says which pairs ran at all. This bash
+# derivation is AUTHORITATIVE; j0-derive.py in the spec directory is a point-in-time measurement of the base commit.
 PJ_DRAIN_WINDOW=4
 PJ_ALL="$(git ls-files)"
-# pj_by_base <basename> -> the tracked paths with exactly that basename (a fixed-string compare: a sourced name may hold $( or a dot).
-pj_by_base() { awk -v b="$1" '{ n = length($0) - length(b); if (n >= 0 && substr($0, n + 1) == b && (n == 0 || substr($0, n, 1) == "/")) print }' <<<"$PJ_ALL"; }
+PJ_TRIPLES=113   # recomputed below from a green run: the number of distinct (test file, verb, producer file) triples
 PJ_VOCAB=' not-a-command text-only unverified helper-built-stub variable-named-verb pass-through deliberate-fault arm-drain '
 PRODUCER_JOIN=(
   '.claude/hooks/grep-rewrite.test.sh | jq | drains | 2 | *'
-  'apps/web-platform/infra/ci-deploy.test.sh | curl | exempt | text-only derived sites cloud-init-inngest.yml:336,426 are grep-pinned only; ci-deploy.sh:378 feeds --config -'
+  'apps/web-platform/infra/ci-deploy.test.sh | curl | exempt | text-only derived sites cloud-init-inngest.yml:336,426 are grep-pinned only; ci-deploy.sh:378 feeds --config - via < <(printf) not a pipe'
   'apps/web-platform/infra/ci-deploy.test.sh | docker | drains | 2 | --password-stdin'
-  'apps/web-platform/infra/ci-deploy.test.sh | openssl | exempt | text-only derived sites scripts/cutover-inngest.sh:1372,1546 not executed here; fan_out no longer calls openss'
+  'apps/web-platform/infra/ci-deploy.test.sh | openssl | exempt | text-only derived sites scripts/cutover-inngest.sh:1372,1546 not executed here; fan_out no longer calls openssl'
   'apps/web-platform/infra/ci-deploy.test.sh | rc | exempt | not-a-command rc is a variable written by printf > $d/rc, no stub exists'
-  'apps/web-platform/infra/ci-deploy.test.sh | tr | exempt | deliberate-fault stub exits 3 on purpose; pipeline status is the second tr, decided by the stub, not by a writ'
+  'apps/web-platform/infra/ci-deploy.test.sh | tr | exempt | deliberate-fault stub exits 3 on purpose; pipeline status is the second tr, decided by the stub, not by a write race'
   'apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh | docker | exempt | blocked-#9956 suite red at origin/main'
   'apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh | timeout | exempt | blocked-#9956 suite red at origin/main'
-  'apps/web-platform/infra/cloud-init-web-zot-seed.test.sh | curl | exempt | text-only derived sites cloud-init-inngest.yml:336,426 not executed; hits 806x11 are < <(printf) in scripts/fr'
+  'apps/web-platform/infra/cloud-init-web-zot-seed.test.sh | curl | exempt | text-only derived sites cloud-init-inngest.yml:336,426 not executed; hits 806x11 are < <(printf) in scripts/fresh-host-boot-trail.sh:94,263'
   'apps/web-platform/infra/cloud-init-web-zot-seed.test.sh | timeout | exempt | pass-through wrapper logs then execs the wrapped command, which reads'
-  'apps/web-platform/infra/cron-egress-firewall.test.sh | curl | exempt | text-only the only derived sites are ::error:: message strings in apply-web-platform-infra.yml that show the operator a printf-to-curl command, not executed pipes'
-  'apps/web-platform/infra/cron-egress-firewall.test.sh | docker | exempt | text-only derived sites are apply-web-platform-infra.yml docker login lines, grep-pinned; resolve.sh:305 docke'
+  'apps/web-platform/infra/cron-egress-firewall.test.sh | docker | exempt | text-only derived sites are apply-web-platform-infra.yml docker login lines, grep-pinned; resolve.sh:305 docker exec -i not reached (container absent in RB run)'
   'apps/web-platform/infra/cron-egress-firewall.test.sh | nft | exempt | helper-built-stub the RB resolver run pipes echo|nft -f - into rbmk-built stub (compliant, first stmt drains);'
   'apps/web-platform/infra/cron-egress-ghcr-probe.test.sh | nft | exempt | text-only suite extracts only the GHCR probe fn and constants; resolve.sh:492 apply is not run'
   'apps/web-platform/infra/cron-egress-nftables.test.sh | nft | drains | 1 | -f'
-  'apps/web-platform/infra/cron-egress-self-heal.test.sh | nft | exempt | text-only suite extracts enforcement_probe/enforcement_extra and the self-heal block only; resolve.sh:492 not '
-  'apps/web-platform/infra/cutover-inngest-workflow.test.sh | curl | exempt | text-only the hits are process substitutions; the one executed pipe (cutover-inngest.sh:557) is invisible to t'
-  'apps/web-platform/infra/doppler-download-error-channel.test.sh | curl | exempt | text-only the only derived sites are ::error:: message strings in apply-web-platform-infra.yml that show the operator a printf-to-curl command, not executed pipes'
-  'apps/web-platform/infra/fresh-boot-ready.test.sh | curl | exempt | text-only the derived site is only text-pinned; the executed pipe (soleur-host-bootstrap.sh:1062) runs without'
-  'apps/web-platform/infra/git-data-bootstrap-store-verify.test.sh | cryptsetup | exempt | text-only luksOpen pipe site git-data-bootstrap.sh:102 is outside the extracted store-verify unit; stub answer'
+  'apps/web-platform/infra/cron-egress-self-heal.test.sh | nft | exempt | text-only suite extracts enforcement_probe/enforcement_extra and the self-heal block only; resolve.sh:492 not extracted'
+  'apps/web-platform/infra/cutover-inngest-workflow.test.sh | curl | exempt | text-only the hits are process substitutions; the one executed pipe (cutover-inngest.sh:557) is invisible to the join and its stub drains'
+  'apps/web-platform/infra/fresh-boot-ready.test.sh | curl | exempt | text-only the derived site is only text-pinned; the executed pipe (soleur-host-bootstrap.sh:1062) runs without pipefail'
+  'apps/web-platform/infra/git-data-bootstrap-store-verify.test.sh | cryptsetup | exempt | text-only luksOpen pipe site git-data-bootstrap.sh:102 is outside the extracted store-verify unit; stub answers isLuks only'
   'apps/web-platform/infra/git-data-luks-reopen.test.sh | cryptsetup | exempt | arm-drain the luksOpen arm reads the key (cat to key_seen) before any exit; keyed on the subcommand, not the flag'
   'apps/web-platform/infra/git-data-root-key.test.sh | curl | drains | 1 | *'
-  'apps/web-platform/infra/git-data-rung2-rehearsal.test.sh | curl | exempt | text-only the only derived sites are ::error:: message strings in apply-web-platform-infra.yml that show the operator a printf-to-curl command, not executed pipes'
-  'apps/web-platform/infra/infra-config-apply.test.sh | sha256sum | exempt | text-only sha256sum is the pipe producer with a file operand at infra-config-apply.sh:489,512; no stdin is pip'
+  'apps/web-platform/infra/infra-config-apply.test.sh | sha256sum | exempt | text-only sha256sum is the pipe producer with a file operand at infra-config-apply.sh:489,512; no stdin is piped into it'
   'apps/web-platform/infra/inngest-boot-emitter.test.sh | curl | drains | 2 | *'
   'apps/web-platform/infra/inngest-dedicated-host-classify.test.sh | jq | drains | 1 | -R'
   'apps/web-platform/infra/inngest.test.sh | curl | exempt | text-only the probe body under test never pipes into curl; both stubs ignore stdin'
   'apps/web-platform/infra/luks-monitor.test.sh | cryptsetup | drains | 2 | --key-file -'
   'apps/web-platform/infra/luks-monitor.test.sh | curl | exempt | text-only no producer pipes into curl in luks-monitor.sh or workspaces-luks-emit.sh'
   'apps/web-platform/infra/registry-luks-escrow.test.sh | cryptsetup | drains | 1 | --key-file -'
-  'apps/web-platform/infra/resend-inbound-bootstrap.test.sh | doppler | exempt | text-only step 4 pipe (resend-inbound-bootstrap.sh:252) is unreachable: the curl shim returns an empty domain '
+  'apps/web-platform/infra/resend-inbound-bootstrap.test.sh | doppler | exempt | text-only step 4 pipe (resend-inbound-bootstrap.sh:252) is unreachable: the curl shim returns an empty domain list so step 1 exits first'
   'apps/web-platform/infra/scripts/sigpipe-triage-feasibility.test.sh | grep | exempt | arm-drain the shims drain on purpose and only when reading stdin (the suite negative arms depend on it)'
   'apps/web-platform/infra/web-ghcr-deny.test.sh | docker | exempt | text-only the shim only sees `timeout 120 sudo docker pull` with no piped stdin'
   'apps/web-platform/infra/web-ghcr-deny.test.sh | timeout | exempt | text-only no pipe feeds the timeout shim here (cloud-init-registry.yml:2085 is not run)'
-  'apps/web-platform/infra/web-probes-token-rotation.test.sh | curl | exempt | text-only the only derived sites are ::error:: message strings in apply-web-platform-infra.yml that show the operator a printf-to-curl command, not executed pipes'
-  'apps/web-platform/infra/web-zot-consumer-probe.test.sh | curl | exempt | text-only the only derived sites are ::error:: message strings in apply-web-platform-infra.yml that show the operator a printf-to-curl command, not executed pipes'
+  'apps/web-platform/infra/web-zot-consumer-probe.test.sh | curl | exempt | text-only the suite names cloud-init-inngest.yml only to read its ZIREF pin; that file printf-to-curl -K - pipes (lines 336, 426) are not run, the suite curl stub serves the probe script'
   'apps/web-platform/infra/workspaces-boot-unlock.test.sh | cryptsetup | exempt | arm-drain the luksOpen arm reads the key (cat to key_seen) before any exit; keyed on the subcommand, not the flag'
   'apps/web-platform/infra/workspaces-luks-freeze.test.sh | cryptsetup | exempt | text-only no piped call observed; the sourced harness stubs drain'
   'apps/web-platform/infra/workspaces-luks-rollback-refusal.test.sh | cryptsetup | exempt | unverified suite exits 2 in the isolated run (finds no block device); the sourced harness stubs drain'
   'apps/web-platform/infra/workspaces-luks-rollback-refusal.test.sh | rc | exempt | not-a-command rc is the f6() stub-exit-code parameter (F6_RC), not a command'
   'apps/web-platform/infra/workspaces-luks-staging.test.sh | cryptsetup | exempt | text-only no piped call observed; the sourced harness stubs drain'
-  'apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh | jq | exempt | text-only the stub is on PATH only for the web2_marker g3 sandbox, whose judge reads file operands, never a pi'
-  'apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh | ssh | exempt | variable-named-verb workflow calls ${WEB_HOST_SSH}, bound to the sshstub stand-in; arms drain for luks-monitor'
-  'apps/web-platform/infra/zot-disk-heartbeat-redaction.test.sh | cryptsetup | exempt | text-only the heartbeat only runs `cryptsetup status`; luksOpen pipes (cloud-init-registry.yml:1968,2085,2446)'
+  'apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh | jq | exempt | text-only the stub is on PATH only for the web2_marker g3 sandbox, whose judge reads file operands, never a pipe'
+  'apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh | ssh | exempt | variable-named-verb workflow calls ${WEB_HOST_SSH}, bound to the sshstub stand-in; arms drain for luks-monitor.sh and tar xzf'
+  'apps/web-platform/infra/zot-disk-heartbeat-redaction.test.sh | cryptsetup | exempt | text-only the heartbeat only runs `cryptsetup status`; luksOpen pipes (cloud-init-registry.yml:1968,2085,2446) are outside the rendered heartbeat'
   'plugins/soleur/skills/community/test/community-argv.test.sh | hmac_sha1_b64 | exempt | not-a-command shell function in scripts/lib/hmac-sha1-b64.sh'
-  'plugins/soleur/skills/community/test/community-argv.test.sh | jq | exempt | pass-through shim: logs argv then execs the real jq, which reads (its one exit-5 arm is the unpiped createSess'
+  'plugins/soleur/skills/community/test/community-argv.test.sh | jq | exempt | pass-through shim: logs argv then execs the real jq, which reads (its one exit-5 arm is the unpiped createSession program)'
   'plugins/soleur/test/flag-detach-shared.test.sh | doppler | exempt | unverified suite fails at base under the isolated run (rc1 at 21s); stub set arm never reads'
   'plugins/soleur/test/flag-org-scoping-pr2.test.sh | doppler | exempt | unverified suite fails at base under the isolated run (rc1 at 15s); stub set arm never reads'
   'plugins/soleur/test/operator-9321-stages.test.sh | jq | exempt | pass-through shim in lib/operator-stub-world.sh: logs then execs the real jq'
@@ -1196,23 +1196,17 @@ PRODUCER_JOIN=(
   'plugins/soleur/test/operator-stage-approval-hook.test.sh | doppler | exempt | text-only no piped call observed (rc0 12s)'
   'plugins/soleur/test/operator-stage-approval-hook.test.sh | jq | exempt | text-only no piped call observed (rc0 12s); stub-world jq is a pass-through exec'
   'plugins/soleur/test/ship-followthrough-directive.test.sh | parse_directive | exempt | not-a-command shell function in scripts/sweep-followthroughs.sh'
-  'scripts/check-cloudflare-token-drift.test.sh | curl | exempt | text-only the only derived sites are ::error:: message strings in apply-web-platform-infra.yml that show the operator a printf-to-curl command, not executed pipes'
-  'scripts/ci-demand-census.test.sh | jq | exempt | text-only no piped jq in scripts/ci-demand-census.sh (every jq reads a file operand); the ci.yml sites in site'
+  'scripts/ci-demand-census.test.sh | jq | exempt | text-only no piped jq in scripts/ci-demand-census.sh (every jq reads a file operand); the ci.yml sites in sites.txt are fixture names, not exercised'
   'scripts/followthroughs/workspaces-plaintext-hold-9348.test.sh | jq | drains | 1 | *'
-  'scripts/followthroughs/zot-soak-6122.test.sh | curl | exempt | text-only no | curl producer: soak feeds --config - via `< <(printf ...)` process substitution (zot-soak-6122.'
+  'scripts/followthroughs/zot-soak-6122.test.sh | curl | exempt | text-only no pipe into curl: the soak feeds --config - via a process substitution `< <(printf ...)` (zot-soak-6122.sh:274-276) whose writer status is never observed'
   'scripts/lint-workflow-local-action-checkout.test.sh | bc_hmac_sha256_hex | exempt | not-a-command shell function sourced from scripts/lib/bearer-curl.sh, the suite only lints track.sh text'
-  'scripts/marketplace-drift-check.test.sh | jq | exempt | text-only the checked step (scheduled-marketplace-drift.yml check) reads jq stdin by here-string `<<<` only, n'
+  'scripts/marketplace-drift-check.test.sh | jq | exempt | text-only the checked step (scheduled-marketplace-drift.yml check) reads jq stdin by here-string `<<<` only, never a pipe into jq'
   'scripts/rotate-supabase-db-credential.test.sh | doppler | drains | 1 | secrets set'
   'scripts/sweep-followthroughs.test.sh | gh | drains | 5 | --body-file -'
   'scripts/watch-registration-narrowing-9564.test.sh | gh | exempt | arm-drain the issue comment arm reads stdin in both branches before exit; keyed on the subcommand'
   'scripts/web2-rebirth-recovery-check.test.sh | cryptsetup | exempt | arm-drain the open arm reads the key (cat to cs-stdin) before any exit; keyed on the subcommand'
-  'scripts/web2-rebirth.test.sh | curl | exempt | text-only the only derived sites are ::error:: message strings in apply-web-platform-infra.yml that show the operator a printf-to-curl command, not executed pipes'
-  'tests/scripts/test-argv-bearer-sweep.sh | curl | exempt | text-only the only derived sites are ::error:: message strings in apply-web-platform-infra.yml that show the operator a printf-to-curl command, not executed pipes'
   'tests/scripts/test-argv-bearer-sweep.sh | jq | exempt | pass-through shim records argv then execs the real jq on every path'
-  'tests/scripts/test-git-data-birth-readiness-gate.sh | curl | exempt | text-only the only derived sites are ::error:: message strings in apply-web-platform-infra.yml that show the operator a printf-to-curl command, not executed pipes'
-  'tests/scripts/test-git-data-birth-readiness-gate.sh | grep | exempt | pass-through shim execs the real grep; its exit-2 fault arm is reached only through a here-string since #9210,'
-  'tests/scripts/test-preapply-entrypoint-gate.sh | curl | exempt | text-only the only derived sites are ::error:: message strings in apply-web-platform-infra.yml that show the operator a printf-to-curl command, not executed pipes'
-  'tests/scripts/test-stock-preflight-gate.sh | curl | exempt | text-only the only derived sites are ::error:: message strings in apply-web-platform-infra.yml that show the operator a printf-to-curl command, not executed pipes'
+  'tests/scripts/test-git-data-birth-readiness-gate.sh | grep | exempt | pass-through shim execs the real grep; its exit-2 fault arm is reached only through a here-string since #9210, so no pipe reaches it'
 )
 # One awk program: the five definitions of the derivation. mawk-safe (no \b, no gensub, no intervals).
 #   non-test file  tracked .sh .bash .yml .yaml, not test-shaped, not under knowledge-base/ or fixtures/
@@ -1229,7 +1223,7 @@ BEGIN {
   PIPE = "(^|[^|])(printf|echo|cat)([^A-Za-z0-9_|][^|]*)?\\|[ \t]*(sudo[ \t]+(-[A-Za-z0-9_]+[ \t]+)*)?[A-Za-z_][A-Za-z0-9_.-]*"
   UNOBS = "\\|\\|[ \t]*(true|:)([^A-Za-z0-9_]|$)"
   FNRE = "^[ \t]*(function[ \t]+)?[A-Za-z_][A-Za-z0-9_-]*[ \t]*\\(\\)[ \t]*\\{"
-  PATHRE = "(cat|printf)[^|]*>[ \t]*\"?[^ \"]*/[A-Za-z][A-Za-z0-9_.-]*\"?([ \t]|$)"
+  PATHRE = "(cat|printf)[^|]*>[ \t]*\"?[^ \"]*/[A-Za-z][A-Za-z0-9_.-]*\"?([ \t;]|$)"
   HELPRE = "(make_stub|write_stub|stub_cmd|mkstub|stub)[ \t]+\"?[A-Za-z][A-Za-z0-9_.-]*"
   SRCRE = "^[ \t]*(\\.|source)[ \t]+\"?[^\" \t;]+"
   TOKRE = "[A-Za-z0-9_.-]+[.](sh|bash|yml|yaml)([^A-Za-z0-9_.-]|$)"
@@ -1268,7 +1262,7 @@ FNR == 1 {
   l = $0
   if (index(l, "pipefail")) pf = 1
   if (isy && l ~ /shell:[ \t]*bash/) pf = 1
-  if (isnt && index(l, "|") && (index(l, "printf") || index(l, "echo") || index(l, "cat"))) {
+  if (isnt && index(l, "|") && (index(l, "printf") || index(l, "echo") || index(l, "cat")) && l !~ /::(error|warning|notice)::/) {   # an annotation echo that shows the operator a command is text, not a pipe
     o = (l !~ UNOBS); s = l
     while (match(s, PIPE)) {
       m = substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH)
@@ -1321,38 +1315,31 @@ END {
 }'
 # pj_join_pairs -> "<test file>\t<verb>\t<non-test file>" per derived pair x producer, unsorted. Tracked files only, so an untracked
 # scratch file cannot move the set. rc 0 whatever it derives; the caller treats an empty result as UNRESOLVED. One awk run over one
-# `git ls-files` listing, one token set per test file; the cheap `index` tests in front of each regex are what keep it near 2 s.
+# `git ls-files` listing, one token set per test file; the cheap `index` tests in front of each regex keep it to a few seconds (it reads about 42 MB;
+# measured 1.5 s CPU on an idle host, 5 s under load). LC_ALL=C: no locale-dependent classes, and one tracked fixture holds invalid UTF-8.
 pj_join_pairs() {
   local -a pj_files=()
   local f
   while IFS= read -r -d '' f; do pj_files+=("$f"); done < <(git ls-files -z -- '*.sh' '*.bash' '*.yml' '*.yaml' ':(exclude)knowledge-base')
   (( ${#pj_files[@]} > 0 )) || return 0
-  awk "$PJ_AWK" <(printf '%s\n' "$PJ_ALL") "${pj_files[@]}"
+  LC_ALL=C awk "$PJ_AWK" <(printf '%s\n' "$PJ_ALL") "${pj_files[@]}"
 }
-# pj_pair_set: the derived (test file, verb) pairs, one `<test file>|<verb>` per line, sorted and unique.
-pj_pair_set() { pj_join_pairs | LC_ALL=C awk -F'\t' '{ print $1 "|" $2 }' | LC_ALL=C sort -u; }
-# pj_row_field <row> <n>: field n of a PRODUCER_JOIN row (1 suite, 2 verb, 3 kind, 4 rest-of-row), blanks trimmed.
-pj_row_field() {
-  local a b c d
-  IFS='|' read -r a b c d <<<"$1"
-  case "$2" in 1) f="$a" ;; 2) f="$b" ;; 3) f="$c" ;; *) f="$d" ;; esac
-  f="${f#"${f%%[![:space:]]*}"}"; f="${f%"${f##*[![:space:]]}"}"
-  printf '%s' "$f"
-}
-# pj_sourced <test file> -> the tracked .sh files it sources, one hop, by unique basename (the derivation's rule).
+# pj_pair_set: stdin is pj_join_pairs output; prints the derived (test file, verb) pairs, one `<test file>|<verb>` per line, sorted and unique.
+pj_pair_set() { LC_ALL=C awk -F'\t' '{ print $1 "|" $2 }' | LC_ALL=C sort -u; }
+# pj_trim <variable name>: strip leading and trailing blanks from the named variable.
+pj_trim() { local __t="${!1}"; __t="${__t#"${__t%%[![:space:]]*}"}"; __t="${__t%"${__t##*[![:space:]]}"}"; printf -v "$1" '%s' "$__t"; }
+# pj_sourced <test file> -> the tracked .sh files it sources, one hop, by unique basename (the derivation's rule: one awk, one index of PJ_ALL).
 pj_sourced() {
-  local ref b hit
-  while IFS= read -r ref; do
-    b="${ref##*/}"
-    hit="$(pj_by_base "$b")"
-    [[ -n "$hit" && "$(grep -c . <<<"$hit")" == 1 && "$hit" == *.sh && "$hit" != "$1" ]] && printf '%s\n' "$hit"
-  done < <(awk '/^[ \t]*#/ { next } match($0, /^[ \t]*(\.|source)[ \t]+"?[^" \t;]+/) { m = substr($0, RSTART, RLENGTH); sub(/^[ \t]*(\.|source)[ \t]+"?/, "", m); print m }' "$1")
+  awk -v self="$1" 'NR == FNR { b = $0; sub(/^.*\//, "", b); bc[b]++; bp[b] = $0; next }
+    /^[ \t]*#/ { next }
+    match($0, /^[ \t]*(\.|source)[ \t]+"?[^" \t;]+/) { m = substr($0, RSTART, RLENGTH); sub(/^[ \t]*(\.|source)[ \t]+"?/, "", m); sub(/^.*\//, "", m)
+      if (bc[m] == 1 && bp[m] ~ /\.sh$/ && bp[m] != self) print bp[m] }' <(printf '%s\n' "$PJ_ALL") "$1"
 }
 # pj_defs <file> <verb> <token> -> one line per stub definition of the verb in the file: `ok <file>:<line>` when a drain keyed on the
 # token (any drain when the token is *; the token may sit on an earlier line of the window than the drain) sits in the definition's
 # opener line or in the PJ_DRAIN_WINDOW code lines after it, else
 # `no <file>:<line>`. The openers are a function opener, a file written to .../VERB by cat or printf, and a stub-helper call at the
-# start of a statement. A drain is a bare cat or a cat with a redirect or a command substitution (not `cat FILE`), or dd of=.
+# start of a statement. A drain is a bare cat or a cat with a redirect or a command substitution (not `cat FILE`, not `cat < FILE`), or dd of=.
 PJ_DEFS_AWK='
 BEGIN {
   FNRE = "^[ \t]*(function[ \t]+)?" verb "[ \t]*\\(\\)[ \t]*\\{"
@@ -1365,78 +1352,104 @@ BEGIN {
   if ($0 ~ FNRE || $0 ~ PATHRE || $0 ~ HELPRE) op[++no] = nc }
 END {
   for (i = 1; i <= no; i++) {
-    ok = 0; seen = (token == "*")
-    for (k = op[i]; k <= op[i] + win && k <= nc; k++) {
+    ok = 0; dead = 0; seen = (token == "*")
+    lim = (i < no) ? op[i + 1] - 1 : nc   # a window never crosses into the next definition of the verb
+    for (k = op[i]; k <= op[i] + win && k <= lim; k++) {
       ln = code[k]
       if (k == op[i]) gsub(OPENRE, "", ln)   # the heredoc writer on the opener line is not a drain
+      sub(/[ \t]#.*$/, "", ln)               # a trailing comment is not code
       if (index(ln, token) > 0) seen = 1
-      if (seen && ln ~ detect) ok = 1
+      if (seen && !dead && ln ~ detect && ln !~ nodrain) ok = 1
+      if (ln ~ /^[ \t]*(exit|return)([ \t;]|$)/) dead = 1   # a bare exit or return ahead of the drain: it never runs
     }
     print (ok ? "ok" : "no") " " FILENAME ":" cl[op[i]]
   }
 }'
 # The ONE drain detector, shared by the pin above and the dynamic control below (bracket expressions, no backslashes: it travels through awk -v).
-PJ_DETECT='(^|[^[:alnum:]_./-])(cat([[:space:]]*([)]|>|;|[}]|[|][|]|$)|[[:space:]]*<)|dd[[:space:]]+of=)'
-pj_defs() { awk -v verb="$2" -v token="$3" -v win="$PJ_DRAIN_WINDOW" -v detect="$PJ_DETECT" "$PJ_DEFS_AWK" "$1"; }
-pj_detects() { awk -v detect="$PJ_DETECT" 'BEGIN { exit !(ARGV[1] ~ detect) }' "$1"; }
+PJ_DETECT='(^|[^[:alnum:]_./-])(cat([[:space:]]*([)]|>|;|[}]|[|][|]|$))|dd[[:space:]]+of=)'
+# ...minus the shapes that look like a drain and are not one: cat as the right side of a pipe, behind a constant short-circuit, behind a
+# non-negated tty test (it reads only on a terminal), backgrounded, or with a heredoc (cat <<EOF reads the heredoc, not the pipe).
+PJ_NODRAIN='[^|][|][[:space:]]*cat|(true|false|:)[[:space:]]*(&&|[|][|])[[:space:]]*cat|[[][[:space:]]+-t[[:space:]]+0[[:space:]]+[]][[:space:]]*&&|[^&]&[[:space:]]*$|cat[^|;]*<<'
+pj_defs() { awk -v verb="$2" -v token="$3" -v win="$PJ_DRAIN_WINDOW" -v detect="$PJ_DETECT" -v nodrain="$PJ_NODRAIN" "$PJ_DEFS_AWK" "$1"; }
+pj_detects() { awk -v detect="$PJ_DETECT" -v nodrain="$PJ_NODRAIN" 'BEGIN { exit !(ARGV[1] ~ detect && ARGV[1] !~ nodrain) }' "$1"; }
 PJ_FAIL=0
-pj_pairs="$(pj_pair_set)" || pj_pairs=""
+pj_fail() { PJ_FAIL=1; printf 'FAIL: %s\n' "$*"; }
+# pj_judge <pairs>: the table's rows on stdin, one per line. Prints one FAIL line per way the rows disagree with the derived pairs (unlisted
+# pair, stale row, duplicate, reason outside the vocabulary, unknown kind). It touches no stub file, so the probe can drive it with fixtures.
+pj_judge() {
+  local pairs="$1" row s v k r w keys="" vnv="" sorted unl stale dupes p
+  while IFS= read -r row; do
+    [[ -z "$row" ]] && continue
+    IFS='|' read -r s v k r <<<"$row"; pj_trim s; pj_trim v; pj_trim k; pj_trim r
+    keys+="$s|$v"$'\n'
+    w="${r%%[[:space:]]*}"
+    case "$k" in
+      drains) ;;
+      exempt)
+        [[ "$PJ_VOCAB" == *" $w "* || "$w" =~ ^blocked-#[0-9]+$ ]] \
+          || echo "FAIL: exempt row without a vocabulary reason: $s | $v | exempt | ${r:0:60} (reason must be one of:$PJ_VOCAB blocked-#N)"
+        # a variable-named-verb row is never stale (the derivation cannot see such a verb), but its suite must still exist
+        [[ "$w" == variable-named-verb && -f "$s" ]] && vnv+="$s|$v"$'\n' ;;
+      *) echo "FAIL: PRODUCER_JOIN row for $s $v has kind '$k' (want drains or exempt)" ;;
+    esac
+  done
+  sorted="$(LC_ALL=C sort <<<"${keys%$'\n'}")"
+  unl="$(LC_ALL=C comm -23 <(printf '%s\n' "$pairs") <(printf '%s\n' "$sorted"))"
+  stale="$(LC_ALL=C comm -13 <(printf '%s\n' "$pairs") <(printf '%s\n' "$sorted") | { grep -vxF -f <(printf '%s' "$vnv") || true; })"
+  dupes="$(uniq -d <<<"$sorted")"
+  while IFS= read -r p; do
+    [[ -z "$p" ]] && continue
+    echo "FAIL: unlisted pair: ${p%%|*} stubs '${p#*|}' and names a non-test file that pipes text into it — add a PRODUCER_JOIN row: '${p%%|*} | ${p#*|} | drains | <definitions> | <flag token or *>' (drain form: the case line in the FAIL text of a drains row) or an exempt row with a reason from:$PJ_VOCAB blocked-#N"
+  done <<<"$unl"
+  while IFS= read -r p; do
+    [[ -z "$p" ]] && continue
+    echo "FAIL: stale join row: ${p%%|*} | ${p#*|} no longer derives (its stub, its producer or its suite is gone) — delete the row"
+  done <<<"$stale"
+  [[ -z "$dupes" ]] || echo "FAIL: duplicate PRODUCER_JOIN row(s): ${dupes//$'\n'/ }"
+}
+pj_raw="$(pj_join_pairs)" || pj_raw=""
+pj_pairs=""; pj_tri_n=0
+if [[ -n "$pj_raw" ]]; then
+  pj_pairs="$(pj_pair_set <<<"$pj_raw")"
+  pj_tri_n=$(LC_ALL=C sort -u <<<"$pj_raw" | grep -c . || true)
+fi
 pj_n=$(grep -c . <<<"$pj_pairs" || true)
 if (( pj_n == 0 )); then
   echo "UNRESOLVED: the producer-side join derived zero pairs (tracked-file listing or awk failed) — it asserted nothing"
   exit 3
 fi
-pj_rows=""; pj_joined=""; pj_drain_n=0; pj_exempt_n=0
+pj_drain_n=0; pj_exempt_n=0; pj_vnv=""; pj_joined=""
 for _row in ${PRODUCER_JOIN[@]+"${PRODUCER_JOIN[@]}"}; do
-  _s="$(pj_row_field "$_row" 1)"; _v="$(pj_row_field "$_row" 2)"; _k="$(pj_row_field "$_row" 3)"; _r="$(pj_row_field "$_row" 4)"
-  pj_rows+="$_s|$_v"$'\n'
+  IFS='|' read -r _s _v _k _r <<<"$_row"; pj_trim _s; pj_trim _v; pj_trim _k; pj_trim _r
   case "$_k" in
     drains)
       IFS='|' read -r _d _t <<<"$_r"
-      _d="${_d//[[:space:]]/}"; _t="${_t#"${_t%%[![:space:]]*}"}"; _t="${_t%"${_t##*[![:space:]]}"}"
-      if [[ ! "$_d" =~ ^[1-9][0-9]*$ || -z "$_t" ]]; then PJ_FAIL=1; echo "FAIL: malformed drains row for $_s $_v: want '<suite> | <verb> | drains | <definitions> | <flag token or *>'"; continue; fi
-      _res=""; _found=0
+      _d="${_d//[[:space:]]/}"; pj_trim _t
+      if [[ ! "$_d" =~ ^[1-9][0-9]*$ || -z "$_t" ]]; then pj_fail "malformed drains row for $_s $_v: want '<suite> | <v> | drains | <definitions> | <flag token or *>'"; continue; fi
+      grep -qxF -- "$_s|$_v" <<<"$pj_pairs" || continue   # the pair no longer derives: pj_judge reports the stale row, and a finder run would only add noise
+      _res=""
       for _f in "$_s" $(pj_sourced "$_s"); do _res+="$(pj_defs "$_f" "$_v" "$_t")"$'\n'; done
       _found=$(grep -c . <<<"$_res" || true)
       if (( _found == 0 )); then echo "UNRESOLVED: the drains row for $_s $_v found 0 stub definitions — a definition finder that sees nothing asserts nothing"; exit 3; fi
-      (( _found == _d )) || { PJ_FAIL=1; echo "FAIL: $_s stubs '$_v' in $_found definitions, the row pins $_d — a definition was added or removed; edit the row and give every definition the drain"; }
+      (( _found == _d )) || pj_fail "$_s stubs '$_v' in $_found definitions, the row pins $_d — a definition was added or removed; edit the row and give every definition the drain"
+      _hint='[ -t 0 ] || timeout 2 cat >/dev/null'; [[ "$_t" == "*" ]] || _hint="case \" \$* \" in *\" $_t \"*) $_hint ;; esac"
       while IFS= read -r _l; do
         [[ "$_l" == no\ * ]] || continue
-        PJ_FAIL=1; echo "FAIL: ${_l#no } defines the '$_v' stub with no stdin drain keyed on '$_t' in its opener line or the first $PJ_DRAIN_WINDOW code lines — a stub that exits unread makes the producer's printf take SIGPIPE/EPIPE under pipefail; start the stub with: case \" \$* \" in *\" $_t \"*) [ -t 0 ] || timeout 2 cat >/dev/null ;; esac"
+        pj_fail "${_l#no } defines the '$_v' stub with no stdin drain keyed on '$_t' in its opener line or the next $PJ_DRAIN_WINDOW code lines of the same definition, or a bare exit comes first — a stub that exits unread makes the producer's printf take SIGPIPE/EPIPE under pipefail; start the stub with: $_hint"
       done <<<"$_res"
       pj_drain_n=$((pj_drain_n + 1)); pj_joined+="JOINED: $_s | $_v | drains | $_d | $_t"$'\n' ;;
     exempt)
-      _w="${_r%%[[:space:]]*}"
-      if [[ "$PJ_VOCAB" != *" $_w "* && ! "$_w" =~ ^blocked-#[0-9]+$ ]]; then PJ_FAIL=1; echo "FAIL: exempt row without a vocabulary reason: $_s | $_v | exempt | ${_r:0:60} (reason must be one of:$PJ_VOCAB blocked-#N)"; fi
+      [[ "${_r%%[[:space:]]*}" == variable-named-verb && -f "$_s" ]] && pj_vnv+="$_s|$_v"$'\n'
       pj_exempt_n=$((pj_exempt_n + 1)); pj_joined+="JOINED: $_s | $_v | exempt | ${_r:0:80}"$'\n' ;;
-    *) PJ_FAIL=1; echo "FAIL: PRODUCER_JOIN row for $_s $_v has kind '$_k' (want drains or exempt)" ;;
   esac
 done
-pj_rows_sorted="$(LC_ALL=C sort <<<"${pj_rows%$'\n'}")"
-pj_unlisted="$(LC_ALL=C comm -23 <(printf '%s\n' "$pj_pairs") <(printf '%s\n' "$pj_rows_sorted"))"
-# A row that no longer derives is stale, except a variable-named-verb row: the derivation cannot see a verb named through a variable.
-pj_vnv=""
-for _row in ${PRODUCER_JOIN[@]+"${PRODUCER_JOIN[@]}"}; do
-  [[ "$(pj_row_field "$_row" 4)" == variable-named-verb* ]] && pj_vnv+="$(pj_row_field "$_row" 1)|$(pj_row_field "$_row" 2)"$'\n'
-done
-pj_stale="$(LC_ALL=C comm -13 <(printf '%s\n' "$pj_pairs") <(printf '%s\n' "$pj_rows_sorted") | { grep -vxF -f <(printf '%s' "$pj_vnv") || true; })"
-pj_dupes="$(uniq -d <<<"$pj_rows_sorted")"
-while IFS= read -r _p; do
-  [[ -z "$_p" ]] && continue
-  PJ_FAIL=1
-  echo "FAIL: unlisted pair: ${_p%%|*} stubs '${_p#*|}' and names a non-test file that pipes text into it — add a PRODUCER_JOIN row: '${_p%%|*} | ${_p#*|} | drains | <definitions> | <flag token or *>' (drain form: the case line in the FAIL text of a drains row) or an exempt row with a reason from:$PJ_VOCAB blocked-#N"
-done <<<"$pj_unlisted"
-while IFS= read -r _p; do
-  [[ -z "$_p" ]] && continue
-  PJ_FAIL=1; echo "FAIL: stale join row: ${_p%%|*} | ${_p#*|} no longer derives (its stub or its producer is gone) — delete the row"
-done <<<"$pj_stale"
-[[ -z "$pj_dupes" ]] || { PJ_FAIL=1; echo "FAIL: duplicate PRODUCER_JOIN row(s): ${pj_dupes//$'\n'/ }"; }
-printf '%s' "$pj_joined"
-if (( PJ_FAIL == 0 )); then
-  echo "PASS: grep-q-producer-join ($pj_n derived pairs; $pj_drain_n drains rows verified, $pj_exempt_n exempt rows with a vocabulary reason)"
-else
-  FAIL=1
-fi
+pj_j="$(printf '%s\n' ${PRODUCER_JOIN[@]+"${PRODUCER_JOIN[@]}"} | pj_judge "$pj_pairs")"
+[[ -z "$pj_j" ]] || { PJ_FAIL=1; printf '%s\n' "$pj_j"; }
+(( pj_tri_n == PJ_TRIPLES )) \
+  || pj_fail "the derivation found $pj_tri_n (test file, verb, producer file) triples and PJ_TRIPLES pins $PJ_TRIPLES — a producer of an already-listed pair appeared or went away; re-check the exempt rows of the pairs it feeds (a text-only row may now be an executed pipe), then update PJ_TRIPLES"
+printf '%s' "${pj_joined-}"
+if (( PJ_FAIL == 0 )); then echo "PASS: grep-q-producer-join ($pj_n derived pairs, $pj_tri_n producer triples; $pj_drain_n drains rows verified, $pj_exempt_n exempt rows with a vocabulary reason)"; fi
+(( PJ_FAIL == 0 )) || FAIL=1
 
 # ---- controls over the join's own instruments (each one fails the probe, not the repo) ----
 # Recall: the two instances that motivated the guard are asserted by name, so a narrowing of the derivation that loses one is red
@@ -1446,10 +1459,21 @@ grep -qxF -- 'apps/web-platform/infra/luks-monitor.test.sh|cryptsetup' <<<"$pj_p
   || sweep_probe_fail+=("producer-join-recall: luks-monitor.test.sh with cryptsetup no longer derives — its stub lives in the sourced harness, so the one-hop sourced-stub arm of pj_join_pairs is broken")
 [[ "$pj_vnv" == *"apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh|ssh"* ]] \
   || sweep_probe_fail+=("producer-join-recall-ssh: the variable-named ssh stand-in of workspaces-luks-verify-workflow.test.sh has no exempt variable-named-verb row")
-# Empty-table comparison: with no rows every derived pair must read as unlisted, or the comparison could not fail.
-pj_empty_n=$(LC_ALL=C comm -23 <(printf '%s\n' "$pj_pairs") <(printf '') | grep -c . || true)
-[[ "$pj_empty_n" == "$pj_n" ]] \
-  || sweep_probe_fail+=("producer-join-empty-table: with an empty table ${pj_empty_n:-<err>} of $pj_n derived pairs read as unlisted (want all)")
+# The table's verdicts, driven with one-row fixtures (a verdict with no negative control is a verdict that can be neutered unseen). With an
+# empty table every real derived pair must read as unlisted, or the comparison could not fail.
+pj_jfail=""
+pj_jc() { local want="$1" pairs="$2" out; shift 2; out="$(printf '%s\n' "$@" | pj_judge "$pairs")"
+  if [[ -z "$want" ]]; then [[ -z "$out" ]] || pj_jfail+="[clean table printed: ${out:0:50}]"; else [[ "$out" == *"$want"* ]] || pj_jfail+="[no '$want' for a fixture that must print it]"; fi; }
+pj_jc '' 'a.test.sh|v' 'a.test.sh | v | exempt | text-only x'
+pj_jc 'unlisted pair' 'a.test.sh|v' ''
+pj_jc 'stale join row' '' 'a.test.sh | v | exempt | text-only x'
+pj_jc 'duplicate PRODUCER_JOIN' 'a.test.sh|v' 'a.test.sh | v | exempt | text-only x' 'a.test.sh | v | exempt | text-only x'
+pj_jc 'without a vocabulary reason' 'a.test.sh|v' 'a.test.sh | v | exempt | banana x'
+pj_jc "has kind 'exemptt'" 'a.test.sh|v' 'a.test.sh | v | exemptt | text-only x'
+pj_jc 'stale join row' '' 'ghost.test.sh | v | exempt | variable-named-verb x'
+pj_empty_n=$(pj_judge "$pj_pairs" </dev/null | grep -c 'unlisted pair' || true)
+[[ -z "$pj_jfail" && "$pj_empty_n" == "$pj_n" ]] \
+  || sweep_probe_fail+=("producer-join-judge: the table verdicts misread their fixtures ${pj_jfail:-none}; with an empty table ${pj_empty_n:-<err>} of $pj_n derived pairs read as unlisted (want all)")
 # The stub finder, driven over fixtures built with printf (so no fixture line is a statement of this file).
 mkdir -p "$probe/pj"
 printf '%s\n' 'curl() {' '  case " $* " in *" -K - "*) [ -t 0 ] || timeout 2 cat >/dev/null ;; esac' '  exit 0' '}' > "$probe/pj/ok.sh"
@@ -1467,6 +1491,19 @@ pj_f_two="$(pj_defs "$probe/pj/two.sh" curl '-K -' | cut -d' ' -f1 | tr '\n' ' '
   || sweep_probe_fail+=("producer-join-finder-positive: a keyed first-statement drain read as [${pj_f_ok:-none}] (want ok), a two-definition stub with one drain as [${pj_f_two:-none}] (want ok no)")
 [[ "$pj_f_bad" == "no |no |no |no |no |" ]] \
   || sweep_probe_fail+=("producer-join-finder-negative: no-drain / drain below the window / drain in a comment / unkeyed drain / cat of a file read as [$pj_f_bad] (want five no)")
+# Edges of the pin, each a fixture that must NOT read as a drain unless stated: a heredoc writer on the opener line of a wildcard-keyed
+# stub, a bare exit ahead of the drain, a token that sits only in a trailing comment, and a window that would reach the next definition.
+_cw='cat > "$d/'   # split so that no line of this file reads as a stub written to .../curl
+printf '%s\n' "${_cw}curl\" <<'EOF'" 'exit 0' 'EOF' > "$probe/pj/opener.sh"
+printf '%s\n' "${_cw}curl\" <<'EOF'" '[ -t 0 ] || cat >/dev/null' 'EOF' > "$probe/pj/opener-ok.sh"
+printf '%s\n' 'curl() {' '  exit 0' '  case " $* " in *" -K - "*) timeout 2 cat >/dev/null ;; esac' '}' > "$probe/pj/exitfirst.sh"
+printf '%s\n' 'curl() {' '  case " $* " in *" -K x "*) timeout 2 cat >/dev/null ;; esac  # -K -' '}' > "$probe/pj/trailing.sh"
+printf '%s\n' 'curl() {' '  exit 0' '}' 'curl() {' '  cat >/dev/null' '}' > "$probe/pj/bounded.sh"
+pj_e_ok="$(pj_defs "$probe/pj/opener-ok.sh" curl '*' | cut -d' ' -f1 | tr '\n' ' ')"
+pj_e_bad="$(for _n in opener exitfirst trailing; do _tok='-K -'; [[ "$_n" == opener ]] && _tok='*'; pj_defs "$probe/pj/$_n.sh" curl "$_tok" | cut -d' ' -f1 | tr '\n' ' '; echo -n '|'; done)"
+pj_e_two="$(pj_defs "$probe/pj/bounded.sh" curl '*' | cut -d' ' -f1 | tr '\n' ' ')"
+[[ "$pj_e_ok" == "ok " && "$pj_e_bad" == "no |no |no |" && "$pj_e_two" == "no ok " ]] \
+  || sweep_probe_fail+=("producer-join-finder-edges: heredoc-writer opener with a drain [${pj_e_ok:-none}] (want ok); heredoc opener / exit first / token only in a trailing comment [${pj_e_bad:-none}] (want no |no |no |); a window past the next definition [${pj_e_two:-none}] (want no ok)")
 # THE DYNAMIC CONTROL. A pin reads text; this runs the hazard. The producer writes more than a pipe buffer holds (1 MiB), so a stub
 # that exits unread fails the pipeline under pipefail whatever the timing, with SIGPIPE ignored (CI: EPIPE, rc 1) and with the default
 # disposition (rc 141); a stub that drains it succeeds. Each spelling runs under the interpreter it is tagged for. Both arrays feed the
@@ -1486,6 +1523,11 @@ PJ_DRAIN_BAD=(
   'sh|: < /dev/null'
   'bash|cat "$0" >/dev/null'
   'bash|[ ! -t 0 ] || true'
+  'sh|cat < /dev/null'
+  'bash|[ -t 0 ] && cat >/dev/null'
+  'sh|printf x | cat >/dev/null'
+  'sh|true || cat >/dev/null'
+  'sh|cat >/dev/null &'
 )
 # pj_hazard <interp> <ignore|default> <spelling> -> the pipeline's exit status under pipefail, on stdout
 # An sh-tagged spelling runs under dash where the host has it (where /bin/sh is bash a bash-only spelling would pass as sh), else under /bin/sh.
@@ -1506,7 +1548,7 @@ for _d in ignore default; do
   done
   for _e in ${PJ_DRAIN_BAD[@]+"${PJ_DRAIN_BAD[@]}"}; do
     pj_dyn_n=$((pj_dyn_n + 1))
-    [[ "$(pj_hazard "${_e%%|*}" "$_d" "${_e#*|}")" != 0 ]] || pj_dyn_bad+="[${_e%%|*}/$_d ${_e#*|}]"
+    case "$(pj_hazard "${_e%%|*}" "$_d" "${_e#*|}")" in 1|141) ;; *) pj_dyn_bad+="[${_e%%|*}/$_d ${_e#*|}]" ;; esac   # only EPIPE (1) and SIGPIPE (141) mean "failed because unread": a syntax error, exit 3 or a missing shell is an instrument fault
   done
 done
 pj_det_bad=""
@@ -1537,6 +1579,13 @@ wire_adj=$(grep -A1 -E '^sweep_main \. "\$SWEEP_FLOOR" \|\| sweep_rc=\$\?[[:spac
   || sweep_probe_fail+=("return-wiring: unindented capture ${wire_a:-<err>}, fold ${wire_b:-<err>}, capture immediately followed by the fold ${wire_adj:-<err>} (want exactly 1 each). This protects the path by which the sweep verdict reaches this suite's exit status. Expected, at column 0 and once each: 'sweep_main . \"\$SWEEP_FLOOR\" || sweep_rc=\$?' directly followed by 'sweep_fold \"\$sweep_rc\"'. Fix: restore the statement; if it moved legitimately, update this pin, not the sweep")
 # The verdict gate and the final exit are pinned the same way, but they report DIRECTLY (FAIL and exit 1 below, just ahead of the gate): a failure
 # appended to sweep_probe_fail is read by that very gate, so a gate edited to always pass would silence its own pin.
+# The producer-join verdict sink: every FAIL line of the PJ block goes through pj_fail (or the one judge merge), and a single column-0 fold turns the
+# flag into the suite verdict. Without these pins a neutered assignment prints FAIL lines and still exits 0.
+wire_pjf=$(grep -cE '^pj_fail\(\) \{ PJ_FAIL=1; printf ' <<<"$_code" || true)
+wire_pjn=$(grep -cE '^\[\[ -z "\$pj_j" \]\] \|\| \{ PJ_FAIL=1; ' <<<"$_code" || true)
+wire_pjg=$(grep -cE '^\(\( PJ_FAIL == 0 \)\) \|\| FAIL=1[[:space:]]*$' <<<"$_code" || true)
+[[ "$wire_pjf" == 1 && "$wire_pjn" == 1 && "$wire_pjg" == 1 ]] \
+  || sweep_probe_fail+=("producer-join-wiring: pj_fail definition ${wire_pjf:-<err>} (want 1), the pj_judge merge ${wire_pjn:-<err>} (want 1), column-0 fold into FAIL ${wire_pjg:-<err>} (want 1)")
 wire_gate=$(grep -cE '^if \(\( \$\{#sweep_probe_fail\[@\]\} == 0 \)\); then[[:space:]]*$' <<<"$_code" || true)
 wire_exit=$(grep -cE '^exit "\$FAIL"[[:space:]]*$' <<<"$_code" || true)
 wire_else=$(grep -B1 -E '[e]cho "FAIL: the derived sweep.s own probe is broken' <<<"$_code" | grep -cE '^  FAIL=1[[:space:]]*$' || true)
@@ -1547,7 +1596,7 @@ wire_exit1=$(grep -A2 -E '[e]cho "FAIL: the derived sweep.s own probe is broken'
 # of checks (the pin's own line included); comment lines are excluded, so rewording a comment can neither hide a deletion nor trip the pin,
 # and the append is counted only where an `||` or `&&` operator immediately precedes it, so a bare tail with no operator cannot stand in for
 # a deleted check (a decoy that fabricates a whole `|| sweep_probe_fail+=(` line is an edit of the probe itself, which review reads).
-SWEEP_PROBE_CHECKS=45
+SWEEP_PROBE_CHECKS=47
 probe_checks=$(grep -cE '(\|\||&&)[[:space:]]+sweep_probe_fail\+=\(' <<<"$_code" || true)
 [[ "$probe_checks" == "$SWEEP_PROBE_CHECKS" ]] \
   || sweep_probe_fail+=("probe-count: this probe carries ${probe_checks:-<err>} checks, pinned at $SWEEP_PROBE_CHECKS — a deleted check cannot fail, so restore it or, if you ADDED one, raise SWEEP_PROBE_CHECKS")
