@@ -1,7 +1,6 @@
 .claude/hooks/brand-hex-commit-gate.test.sh	knowledge-base/marketing/brand-guide.md
 .claude/hooks/browser-snapshot-credential-guard.test.sh	knowledge-base/project/specs
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base
-.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/architecture/decisions/ADR-136-preapply-entrypoint-enumeration-gate.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/followthrough-convention.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/inngest-server.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md
