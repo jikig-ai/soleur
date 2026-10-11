@@ -1269,7 +1269,7 @@ echo "--- AO8 an exported ARM_ONE_ID is inert on --arm"
 case_setup ao8
 ARM_ONE_ID=1 run_sut
 assert_eq "AO8 --arm still exits 0" "0" "$RC"
-assert "AO8 and never reads id 1" "! get_urls | grep -qx 1"
+assert "AO8 and never reads id 1" "! grep -qx 1 < <(get_urls)"
 
 echo "--- AO9 --help documents the new modes"
 # shellcheck disable=SC2034  # consumed by `assert` through eval
@@ -1572,7 +1572,7 @@ assert "AO31 the verdict after a page-2 failure says id=none" "[[ \"\$(last_verd
 new_case ao32
 BIDI="$(printf '\xe2\x80\xae')"
 UTF8_OK=0
-if printf 'x' | LC_ALL=C.UTF-8 grep -q x 2>/dev/null && [[ "$(LC_ALL=C.UTF-8 bash -c 'printf "%s" "$LC_ALL"' 2>/dev/null)" == C.UTF-8 ]]; then UTF8_OK=1; fi
+if LC_ALL=C.UTF-8 grep -q x <<<x 2>/dev/null && [[ "$(LC_ALL=C.UTF-8 bash -c 'printf "%s" "$LC_ALL"' 2>/dev/null)" == C.UTF-8 ]]; then UTF8_OK=1; fi
 LC_ALL=C.UTF-8 FAKE_CURL_COST=1 ARMONE_BOOKS="$CASE/x${BIDI}Y/books" run_named --arm-one "$HOST_NAME" --id "$ID_HOST"
 assert "AO32 the refusal for that path is printed" "[[ \"\$OUT\" == *'must be absent or a readable, writable regular file'* ]]"
 if [[ "$UTF8_OK" -eq 1 ]]; then
@@ -2092,7 +2092,7 @@ fi
 if mutate override-from-env 1 's@given_id="\${4:-}"@given_id="${4:-${ARM_ONE_ID:-}}"@'; then
   case_setup m33
   ARM_ONE_ID=1 run_sut "$MUTANT"
-  assert "M33 RED: --arm reads monitor id 1 because the environment said so" "get_urls | grep -qx 1"
+  assert "M33 RED: --arm reads monitor id 1 because the environment said so" "grep -qx 1 < <(get_urls)"
 fi
 
 # --- M35-M42 (#9980 review round) ------------------------------------------------------------------
@@ -2122,14 +2122,14 @@ fi
 if mutate status-falls-through 1 's@^if \[\[ "\$MODE" == status \]\]; then status_main; exit \$?; fi@if [[ "$MODE" == status ]]; then status_main; fi@'; then
   new_case m37
   NEW_SUT="$MUTANT" NEW_TFSTATE=1 run_named --status "$HOST_NAME"
-  assert "M37 RED: --status then reads the six per-merge monitors" "get_urls | grep -qx '$ID_ZOT1'"
+  assert "M37 RED: --status then reads the six per-merge monitors" "grep -qx '$ID_ZOT1' < <(get_urls)"
 fi
 # shellcheck disable=SC2016  # the sed program is data; expanding it here is the bug
 if mutate armone-falls-through 1 's@^if \[\[ "\$MODE" == armone \]\]; then armone_main; exit \$?; fi@if [[ "$MODE" == armone ]]; then armone_main; fi@'; then
   new_case m38
   echo 30 > "$FAKE_STATE/$ID_HOST.upat"
   NEW_SUT="$MUTANT" NEW_TFSTATE=1 FAKE_CURL_COST=1 run_named --arm-one "$HOST_NAME" --id "$ID_HOST"
-  assert "M38 RED: --arm-one then walks the six per-merge monitors too" "get_urls | grep -qx '$ID_ZOT1'"
+  assert "M38 RED: --arm-one then walks the six per-merge monitors too" "grep -qx '$ID_ZOT1' < <(get_urls)"
 fi
 
 # M39 — a malformed .pagination reads as "no next page": a duplicate on the unread pages is never seen.
