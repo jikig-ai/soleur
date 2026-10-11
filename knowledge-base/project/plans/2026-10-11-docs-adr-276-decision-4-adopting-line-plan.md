@@ -87,6 +87,7 @@ excluded because S3 is not live.
 
 - `knowledge-base/project/plans/2026-10-11-docs-adr-276-decision-4-adopting-line-plan.md` (this plan)
 - `knowledge-base/project/specs/feat-one-shot-adr276-decision4-adopting-line/tasks.md`
+- `knowledge-base/project/specs/feat-one-shot-adr276-decision4-adopting-line/session-state.md`
 
 ## Implementation
 
@@ -94,7 +95,7 @@ Single Edit: insert immediately after the line beginning `- 2026-10-09 S3 amende
 content, not a line number) the following bullet, kept as one source line like its neighbours:
 
 ```markdown
-- 2026-10-11 Decision 4 adopting (#9728; first condition of the CTO review comment on the status-flip PR, <https://github.com/jikig-ai/soleur/pull/9876#issuecomment-6107725381>): draft-PR light checks shipped in #9885 and `CI_DRAFT_LIGHT` has been `on` since 2026-10-11T09:43:31Z (`S3-ACTIVATED` on #9728), so Decision 4 is now the adopting shape of stage 3, no longer the proposed one; Decision 5 stays the proposed shape of stage 4. `S3 live` is NOT recorded: the soak runs until at least 2026-10-18 and the exit census is not taken. ADR-270 `accepted` is not canary evidence (that evidence is open on #9454, items 4, 5 and 6).
+- 2026-10-11 S3 activated, Decision 4 adopting (#9728; condition 1 of the agent-run CTO review comment on the status-flip PR, <https://github.com/jikig-ai/soleur/pull/9876#issuecomment-6107725381>, posted 2026-10-11T09:46:49Z): draft-PR light checks shipped in #9885 and `CI_DRAFT_LIGHT` has been `on` since 2026-10-11T09:43:31Z (`S3-ACTIVATED`, <https://github.com/jikig-ai/soleur/issues/9728#issuecomment-6107700815>), so Decision 4 is now the adopting shape of stage 3, no longer the proposed one; Decision 5 stays the proposed shape of stage 4. Order of events: activation rested on the operator's go (`S3-CONFIRMED`, which recorded the CTO confirmation as still owed) and preceded that review comment by about three minutes; this line records the comment as received, and whether an agent-run review stands in for the human CTO confirmation owed on the 2026-10-09 status-flip line is the operator's call. `S3 live` is NOT recorded and still waits for the exit census: the soak runs until at least 2026-10-18. CTO conditions 2 to 4 are tracked on #9454, #9729 and #9728 and are not claimed here. ADR-270 `accepted` is not canary evidence (that evidence is open on #9454, items 4, 5 and 6).
 ```
 
 Wording rules, each tied to the brief:
@@ -109,7 +110,7 @@ Wording rules, each tied to the brief:
 ## Acceptance Criteria
 
 - [ ] `git diff origin/main --stat` shows exactly one ADR file changed with one added line and zero removed lines, plus
-  the plan and tasks files; no other path.
+  the plan, tasks and session-state files; no other path.
 - [ ] `git diff origin/main -- <ADR>` has no `-` content lines (append-only), and the added line sits after the
   `2026-10-09 S3 amended` line and before `## Context`.
 - [ ] The added line contains `Decision 4 adopting`, `#9728`, `2026-10-11T09:43:31Z` and `2026-10-18`, and it states
