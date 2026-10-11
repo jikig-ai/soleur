@@ -602,6 +602,7 @@ sweep_fold() {
   fi
 }
 sweep_rc=0
+unset SWEEP_N   # an ambient value must not satisfy the evidence that the sweep ran (sweep_fold and the return-wiring block read it)
 sweep_main . "$SWEEP_FLOOR" || sweep_rc=$?
 sweep_fold "$sweep_rc"
 
@@ -1120,7 +1121,8 @@ eqv_sh="$(_eqv "$EQV_SH")"
 # included) is caught separately: SWEEP_N, set only by sweep_main, must hold a swept-file count. Statements that can still reach the exit (an
 # inserted assignment or `exit` or a trap between these pins and the gate, a deleted direct block, an `exit` ahead of the pins) are not pinned
 # here: the guard cannot defend its own control flow beyond these text pins, and a diff that edits it is reviewed.
-_code=$(grep -vE '^[[:space:]]*#' "${BASH_SOURCE[0]}" || true)
+_self="$(cd -P "$REPO_ROOT/.claude/hooks" && pwd -P)/grep-q-pipe-guard.test.sh"   # absolute: the script has cd'd to the repo root, a relative ${BASH_SOURCE[0]} would not resolve
+_code=$(grep -vE '^[[:space:]]*#' "$_self" || true)
 wire_a=$(grep -cE '^sweep_main \. "\$SWEEP_FLOOR" \|\| sweep_rc=\$\?[[:space:]]*$' <<<"$_code" || true)
 wire_b=$(grep -cE '^sweep_fold "\$sweep_rc"[[:space:]]*$' <<<"$_code" || true)
 wire_adj=$(grep -A1 -E '^sweep_main \. "\$SWEEP_FLOOR" \|\| sweep_rc=\$\?[[:space:]]*$' <<<"$_code" | grep -cE '^sweep_fold "\$sweep_rc"[[:space:]]*$' || true)
@@ -1131,7 +1133,7 @@ wire_adj=$(grep -A1 -E '^sweep_main \. "\$SWEEP_FLOOR" \|\| sweep_rc=\$\?[[:spac
 wire_gate=$(grep -cE '^if \(\( \$\{#sweep_probe_fail\[@\]\} == 0 \)\); then[[:space:]]*$' <<<"$_code" || true)
 wire_exit=$(grep -cE '^exit "\$FAIL"[[:space:]]*$' <<<"$_code" || true)
 wire_else=$(grep -B1 -E '[e]cho "FAIL: the derived sweep.s own probe is broken' <<<"$_code" | grep -cE '^  FAIL=1[[:space:]]*$' || true)
-wire_exit1=$(grep -A2 -E '[e]cho "FAIL: the derived sweep.s own probe is broken' <<<"$_code" | grep -cE '^  exit 1[[:space:]]' || true)
+wire_exit1=$(grep -A2 -E '[e]cho "FAIL: the derived sweep.s own probe is broken' <<<"$_code" | grep -cE '^  exit 1([[:space:]]|$)' || true)
 
 # A probe check that is DELETED cannot fail, so the number of checks is pinned: every check above ends in
 # `|| sweep_probe_fail+=(...)` (or `&& ...` for a negative control), so the count of NON-COMMENT lines carrying that tail is the count
@@ -1143,7 +1145,7 @@ probe_checks=$(grep -cE '(\|\||&&)[[:space:]]+sweep_probe_fail\+=\(' <<<"$_code"
 [[ "$probe_checks" == "$SWEEP_PROBE_CHECKS" ]] \
   || sweep_probe_fail+=("probe-count: this probe carries ${probe_checks:-<err>} checks, pinned at $SWEEP_PROBE_CHECKS — a deleted check cannot fail, so restore it or, if you ADDED one, raise SWEEP_PROBE_CHECKS")
 if [[ "$wire_gate" != 1 || "$wire_exit" != 1 || "$wire_else" != 1 || "$wire_exit1" != 1 || ! "${SWEEP_N:-}" =~ ^[1-9][0-9]*$ ]]; then
-  echo "FAIL: return-wiring: the probe verdict gate matched ${wire_gate:-<err>} lines, the final exit ${wire_exit:-<err>}, the gate's FAIL=1 ${wire_else:-<err>} and its exit 1 ${wire_exit1:-<err>} (want exactly 1 each, at column 0), and the sweep recorded SWEEP_N='${SWEEP_N:-}' (want a swept-file count: a sweep that never ran leaves it empty). Expected 'if (( \${#sweep_probe_fail[@]} == 0 )); then' and 'exit \"\$FAIL\"'. Fix: restore the statement; if it moved legitimately, update this pin, not the sweep"
+  echo "FAIL: return-wiring: the probe verdict gate matched ${wire_gate:-<err>} lines, the final exit ${wire_exit:-<err>}, the gate's FAIL=1 ${wire_else:-<err>} and its exit 1 ${wire_exit1:-<err>} (want exactly 1 each, at column 0; the gate's else body keeps the bare lines \'  FAIL=1\' and \'  exit 1\' directly around its echo and printf), and the sweep recorded SWEEP_N='${SWEEP_N:-}' (want a swept-file count: a sweep that never ran leaves it empty). Expected 'if (( \${#sweep_probe_fail[@]} == 0 )); then' and 'exit \"\$FAIL\"'. Fix: restore the statement; if it moved legitimately, update this pin, not the sweep"
   exit 1
 fi
 if (( ${#sweep_probe_fail[@]} == 0 )); then
