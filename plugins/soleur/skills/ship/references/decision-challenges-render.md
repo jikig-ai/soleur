@@ -33,12 +33,17 @@ Phase 6 **full-replaces** the body, so fold the artifact into the generated body
    here, in the main context, so a wrong assumption does not ride through `work` and `review`.
 2. **ship Phase 5.5:** `--branch` (the artifact check; it also looks under `specs/archive/` for this branch).
 3. **ship Phase 6, right after the `gh pr edit` that writes the final body and before `gh pr ready`:**
-   `b=$(mktemp -t pr-body.XXXXXXXX); gh pr view PR_NUMBER --json body --jq .body > "$b"; bash <gate> --pr-body "$b"; rc=$?`
-   (read `rc` on its own line). Phase 6 full-replaces the body, so the body must be checked after it is written.
+   `b=$(mktemp -t pr-body.XXXXXXXX) && gh pr view PR_NUMBER --json body --jq .body > "$b" && bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/technical-ruling-gate.sh" --pr-body "$b"; rc=$?; rm -f "$b"`
+   (read `rc` on its own line). Exit 0: go on to `gh pr ready`. Exit 1: remedy item 4 below, then `gh pr edit` and re-run. Exit 2
+   (the fetch failed, the body is empty, or the file is unreadable): fix the fetch and re-run; never `gh pr ready` past it.
+   Phase 6 full-replaces the body, so the body must be checked after it is written.
 
-An absent artifact is `[PASS] no decision-challenges artifact`. An artifact with no `| Item | Class | Ruling |` table is a `[WARN]` and exit 0
-(the label and `pending` lints still ran; add the table when the artifact lists decisions). A table with 0 rows, or an unreadable
-file, is exit 2: fix the file or the invocation, never continue past it.
+The plugin root is `${CLAUDE_PLUGIN_ROOT}` (cloud shells do not export it: resolve it as the Cloud Mode paragraph of ship/SKILL.md does).
+An absent artifact is `[PASS] no decision-challenges artifact`. Rulings render into a PUBLIC PR body: leave secrets, credentials and
+unfixed-vulnerability detail out of the ruling text and out of the `domain/engineering` issue (carry the question and a pointer, not evidence snippets). An artifact with no `| Item | Class | Ruling |` table is a `[WARN]` and exit 0
+(the label and `pending` lints still ran; add the table when the artifact lists decisions). A table with 0 rows, a drifted header, an unclosed code fence, an empty PR body or an unreadable
+file is exit 2: fix the file or the invocation, never continue past it. A table row written after a blank line is outside the
+table: a later writer adds its own `| Item | Class | Ruling |` header and separator.
 
 ## Remedy procedure (a `[FAIL]` is never a bare stop)
 

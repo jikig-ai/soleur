@@ -46,7 +46,7 @@ questions they can't answer or hang the pipeline on `AskUserQuestion`.
 
 ## Addendum — 2026-10-11 (#10055): consequence class is not authority class
 
-A technical ruling reached the founder twice on 2026-10-11, through the pipeline this ADR defines: `plan` persisted it to `decision-challenges.md`, `ship` Phase 6 rendered it and filed an `action-required` issue "Decide how strict …". Decisions 2 and 5 above answer "may the session model auto-decide this?" and "where does an operator-legible record go?"; they were silently reused as "who rules this?". This addendum narrows them. The original text above stays as the dated record.
+A technical ruling reached the founder twice (the emptiness-evidence threshold, filed as an `action-required` issue on 2026-10-06, and an ADR status flip raised on 2026-10-11), through the pipeline this ADR defines: `plan` persisted it to `decision-challenges.md`, `ship` Phase 6 rendered it and filed an `action-required` issue "Decide how strict …". Decisions 2 and 5 above answer "may the session model auto-decide this?" and "where does an operator-legible record go?"; they were silently reused as "who rules this?". This addendum narrows them. The original text above stays as the dated record.
 
 Ruled by CTO agent, 2026-10-11: amend this ADR rather than mint a new one; the rule `hr-technical-fork-is-not-an-operator-question` is amended in place; the chat-prose Stop-hook arm is not built (13-of-15 over-block record in `unkept-promise-hook.sh`); the plugin port of the pre-ask gate is deferred (subagents cannot call AskUserQuestion).
 

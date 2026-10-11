@@ -37,17 +37,29 @@
 # authorizations to the permitting side. Test D4 pins the ordering behaviourally.
 #
 # THE SECOND CARVE-OUT: the TECHNICAL-RULING arm below (after the expert arm, ahead of the authority
-# short-circuit) inverts the same polarity a second time. It is a BACKSTOP for AskUserQuestion only: the
-# observed 2026-10-11 carrier was an artifact pipeline (ship's Technical-Ruling Gate covers that), and the
-# hook is repo-local. It denies on the cues its regex names ("how strict", an evidence bar/threshold, a
-# status flip, approach/variant A-vs-B; NOT a bare "threshold", which also names money and priority
-# questions) without requiring
-# an investigative signal, and it is reachable ahead of AUTHORITY_RE for the same reason the expert arm
-# is: a ruling question carries "dispatched", "deleted" or a money word in the same breath. Its
-# exemption is a PERMISSION shape ("may I", "approve", "ack-destroy"), evaluated PER QUESTION over that
-# question's TEXT only, never over the concatenation of questions and never over option labels. The
-# residual is stated at the arm (appending "Approve ...?" exempts a question). Tests R1-R10, Z1-Z4, V4
-# and V5 pin the ordering, the per-question scope and the exemption vocabulary.
+# short-circuit) inverts the same polarity a second time. It is a NARROW BACKSTOP for AskUserQuestion
+# only: the observed 2026-10-11 carrier was an artifact pipeline (ship's Technical-Ruling Gate covers
+# that), and the hook is repo-local. It is NOT a general "which of two designs" detector. It denies only
+# on the cues its regexes name, and each weak cue needs a TECHNICAL CO-SIGNAL in the same question:
+#   - "how strict" / "strictness" / "stricter" / "stringent" AND an evidence noun (evidence, proof, check,
+#     gate, guard, validation, verification, criteria, assertion, test, lint), in the asking sentence;
+#   - an evidence/proof/emptiness bar, threshold, ceiling, floor or standard; "is the evidence enough";
+#     "adopting ... accepted";
+#   - "status flip/move/change" AND an ADR word (adr, adopting, accepted, decision record);
+#   - "approach/variant/option A|B" or "A or B" AND a technical noun (design, architecture, schema,
+#     algorithm, retry, queue, cache, api, library, migration, index, ...), read from the QUESTION TEXT
+#     only, never from an option label.
+# An operator-class question (money, scope, priority, schedule, a production authorization, legal risk,
+# brand) that merely carries a cue word without its technical co-signal is ALLOWED: "Which pricing plan,
+# A or B?", "Should the spend cap be stricter?", "Close issue 123 (status change to done)?". A bare
+# "threshold" is not a cue at all, since it also names money and priority questions. The arm needs no
+# investigative signal and is reachable ahead of AUTHORITY_RE for the same reason the expert arm is: a
+# ruling question carries "dispatched", "deleted" or a money word in the same breath. Its exemption is a
+# PERMISSION shape ("may I", "ok to", "approve", "ack-destroy"), evaluated PER QUESTION over that
+# question's TEXT only, never over the concatenation of questions and never over option labels; "can
+# I/we", "may we" and "should I/we" are ruling shapes and do not exempt. The residual is stated at the
+# arm (appending "Approve ...?" exempts a question). Tests R1-R10, Z1-Z4, W, C, E, F, O, V4 and V5 pin
+# the ordering, the per-question scope, the co-signals and the exemption vocabulary.
 #
 # Escape hatch: SOLEUR_ACK_TECHNICAL_FORK=1 — announced, never silent.
 #
@@ -262,52 +274,108 @@ See hr-technical-fork-is-not-an-operator-question."
 fi
 
 # TECHNICAL-RULING signal — a question whose answer is a TECHNICAL RULING: how strict an evidence bar
-# must be, whether evidence suffices, which of two designs or approaches, whether a status moves, which
-# threshold. The operator is non-technical by design and cannot rule on it; the CTO agent can. The
-# deny names soleur:engineering:cto and the shared reference, and tells the asker to SPLIT the item and
-# put the operator only the authorization that remains.
+# must be, whether evidence suffices, whether an ADR status moves, which of two named technical designs.
+# The operator is non-technical by design and cannot rule on it; the CTO agent can. The deny names
+# soleur:engineering:cto and the shared reference, and tells the asker to SPLIT the item and put the
+# operator only the authorization that remains.
 #
 # THIS ARM IS EVALUATED AHEAD OF `AUTHORITY_RE` FOR THE SAME REASON THE EXPERT ARM IS. A ruling question
 # arrives carrying "dispatched", "deleted" or a money word ("one more run costs ..."), and
 # `AUTHORITY_RE` matches those and wins outright; behind it this arm is unreachable (suite row R1/R3).
 #
-# EVERY QUESTION IS JUDGED ALONE. The cue reads one question's text plus its own option labels and
-# descriptions; the exemption reads that question's TEXT only. Over a concatenation of questions,
-# question 1's "Approve ..." would exempt question 2's ruling (R4); over option labels, a button
-# labelled "Approve" would be a one-word bypass (R7).
+# THE ARM'S WORSE FAILURE MODE IS A WRONG DENY of an operator-class question, so every cue that also
+# reads as an ordinary word needs a co-signal (suite rows W1-W15 measured the bare cues wrongly denying
+# pricing, scope, schedule, brand and merge questions):
+#   RULING_STRICT_RE  strictness words (C1, C2) AND RULING_EVID_NOUN_RE, both inside the INTERROGATIVE
+#                     sentences of the question (so "Merge PR 9628 now? It adds the stricter evidence gate."
+#                     is a merge ask, not a ruling) plus the option text;
+#   RULING_BAR_RE     an evidence/proof/emptiness bar, "is the evidence enough", "adopting ... accepted"
+#                     (C3, C4, C5): technical on their own;
+#   RULING_STATUS_RE  a status flip AND RULING_ADR_RE (C6): "close issue 123 (status change)" is not an ADR;
+#   RULING_AB_RE      approach/variant/option A|B or "A or B" AND RULING_TECH_RE (C7), over the QUESTION
+#                     TEXT ONLY: an option labelled "Approach A" is a button, not a ruling.
+# A bare `thresholds?` and a bare `ceiling` are not cues ("raise the spend ceiling" is a money ask).
 #
-# THE EXEMPTION IS A PERMISSION SHAPE, NOT AN ACTION VERB. "May I ...", "approve", "ack-destroy" ask
-# for consent; a bare `dispatch`/`delete`/`deploy` would exempt every ruling that merely MENTIONS the
-# action it gates (R1), so V4 refuses any such member. `should I|we` is deliberately absent: "Should I
-# use approach A or approach B" is the exact ruling shape. `ceiling` is not a bare cue token either
-# ("raise the spend ceiling" is a money authorization); it counts only as an evidence bound.
+# EVERY QUESTION IS JUDGED ALONE. The cue reads one question's text plus its own option labels and
+# descriptions (the A/B cue: text only); the exemption reads that question's TEXT only. Over a
+# concatenation of questions, question 1's "Approve ..." would exempt question 2's ruling (R4); over
+# option labels, a button labelled "Approve" would be a one-word bypass (R7). An empty question has
+# nothing to judge, and a non-string question is skipped with a stderr announcement; the `header` field
+# is never read.
+#
+# THE EXEMPTION IS A PERMISSION SHAPE, NOT AN ACTION VERB. "May I ...", "ok to", "approve", "ack-destroy"
+# ask for consent; a bare `dispatch`/`delete`/`deploy`/`flip`/`apply` would exempt every ruling that
+# merely MENTIONS the action it gates (R1), so V4 refuses any such member. `can I`, `can we`, `may we` and
+# `should I|we` are deliberately absent: "Can we tighten the evidence threshold?" and "Should I use
+# approach A or approach B" are the exact ruling shapes (F1-F4, Z2). `is it ok to` needs no member of its
+# own, `ok(ay)? to` covers it.
 #
 # THE RESIDUAL, STATED. Appending "Approve the stricter threshold?" to a ruling question exempts the
 # whole question (R6 pins it): wrongly blocking an authorization is the failure this header calls
 # worse, so the arm judges the question, not the sentence. The ship gate and the skill text are the
 # primary defence; this arm is the backstop at the moment of asking.
-RULING_CUE_RE='(\bhow (strict|stringent|rigorous)|\b(strictness|stricter|stringen)|\b(evidence|proof|emptiness) (bar|threshold|ceiling|floor|standard)|\b(is|are) (the )?(evidence|proof) (enough|sufficient)|\badopting\b.*\baccepted\b|\bstatus (flip|move|change)|\b(approach|variant) [ab]\b|\b[ab] (or|vs\.?) [ab]\b)'
-RULING_PERM_RE='(\bmay i\b|\bmay we\b|\bcan i\b|\bcan we\b|\bis it (ok|okay|fine) to\b|\bok(ay)? to\b|\bgo-ahead\b|\bapprove|\bauthori[sz]e|\back-destroy)'
-# One tab-separated row per question: its text, then its text plus its own options. A non-zero jq
-# status means the shape is unreadable: skip the arm (permit), never judge a partial question.
+RULING_STRICT_RE='(\bhow (strict|stringent|rigorous)|\b(strictness|stricter|stringen[a-z]*))'
+RULING_EVID_NOUN_RE='\b(evidence|proof|check|gate|guard|validation|verification|criteria|assertion|test|lint)\b'
+RULING_BAR_RE='(\b(evidence|proof|emptiness) (bar|threshold|ceiling|floor|standard)|\b(is|are) (the )?(evidence|proof) (enough|sufficient|adequate)|\badopting\b.*\baccepted\b)'
+RULING_STATUS_RE='\bstatus (flip|move|change)'
+RULING_ADR_RE='\b(adr|adopting|accepted|decision record)\b'
+RULING_AB_RE='(\b(approach|variant|option) [ab]\b|\b[ab] (or|vs\.?) [ab]\b)'
+RULING_TECH_RE='\b(design|architecture|schema|algorithm|substrate|data model|retry|queue|cache|api|library|implementation|refactor|migration|index)\b'
+RULING_PERM_RE='(\bmay i\b|\bis it fine to\b|\bok(ay)? to\b|\bgo-ahead\b|\bapprove|\bauthori[sz]e|\back-destroy)'
+# One row per question, fields separated by the non-whitespace unit separator (a tab is IFS whitespace and
+# `read` would drop an empty leading field): its lowercased text, then its own options. Whitespace is mapped to
+# a plain space by code point (linear), never by a jq regex gsub (quadratic: a 32 KB question took 9.5 s),
+# and runs of spaces are squeezed by tr. A question that is absent yields an empty row; one that is not a
+# string yields a \001 marker row, announced and skipped below. A non-zero jq status means the shape is
+# unreadable: announce, skip the arm (permit), never judge a partial question.
 __RQS_RC=0
 RULING_ROWS="$(printf '%s' "$__HI_RAW" | jq -r '
+  def ws: explode | map(if . >= 9 and . <= 13 then 32 else . end) | implode;
+  def s: if type == "string" then . else "" end;
   ( .tool_input.questions // [] )[]
-  | (.question // "") as $q
-  | [ $q,
-      ( [ $q, ( (.options // [])[]
-                | if type == "string" then . else (.label // ""), (.description // "") end ) ]
-        | join(" ") ) ]
-  | map(ascii_downcase | gsub("\\s+"; " ")) | @tsv
-' 2>/dev/null)" || __RQS_RC=$?
-if [[ "$__RQS_RC" -eq 0 && -n "$RULING_ROWS" ]]; then
-  while IFS=$'\t' read -r __rq __rf; do
-    [[ -n "$__rf" ]] || continue
-    grep -qE "$RULING_CUE_RE" <<<"$__rf" || continue
+  | if (.question | type) == "string" then
+      [ (.question | ascii_downcase | ws),
+        ( [ (.options // [])[]
+            | if type == "string" then .
+              elif type == "object" then ((.label | s), (.description | s))
+              else "" end ]
+          | join(" ") | ascii_downcase | ws ) ]
+    elif .question == null then ["", ""]
+    else ["\u0001", ""] end
+  | join("\u001f")
+' 2>/dev/null | tr -s ' ')" || __RQS_RC=$?
+if [[ "$__RQS_RC" -ne 0 ]]; then
+  printf 'pre-ask-technical-fork-gate: technical-ruling parse skipped (jq rc=%s) — unrecognised questions shape, allowing without ruling classification.\n' \
+    "$__RQS_RC" >&2
+elif [[ -n "$RULING_ROWS" ]]; then
+  while IFS=$'\037' read -r __rq __ro; do
+    if [[ "$__rq" == $'\001' ]]; then
+      printf 'pre-ask-technical-fork-gate: technical-ruling parse skipped for a question whose text is not a string — that question was not classified.\n' >&2
+      continue
+    fi
+    [[ -n "$__rq" ]] || continue
+    __rf="$__rq $__ro"
+    __hit=0
+    # C1/C2: a strictness word and an evidence noun, both in the asking (interrogative) sentences.
+    if grep -qE "$RULING_STRICT_RE" <<<"$__rf"; then
+      __asked="$__rq"
+      if [[ "$__rq" == *"?"* ]]; then
+        __asked="$(grep -oE '([^.!?]|\.[^ ?!])*\?' <<<"$__rq" | tr '\n' ' ')"
+      fi
+      __hay="$__asked $__ro"
+      if grep -qE "$RULING_STRICT_RE" <<<"$__hay" && grep -qE "$RULING_EVID_NOUN_RE" <<<"$__hay"; then __hit=1; fi
+    fi
+    # C3/C4/C5: technical on their own.
+    if [[ "$__hit" -eq 0 ]] && grep -qE "$RULING_BAR_RE" <<<"$__rf"; then __hit=1; fi
+    # C6: a status flip that names an ADR word.
+    if [[ "$__hit" -eq 0 ]] && grep -qE "$RULING_STATUS_RE" <<<"$__rf" && grep -qE "$RULING_ADR_RE" <<<"$__rf"; then __hit=1; fi
+    # C7: approach/variant A|B naming a technical noun, over the QUESTION TEXT only.
+    if [[ "$__hit" -eq 0 ]] && grep -qE "$RULING_AB_RE" <<<"$__rq" && grep -qE "$RULING_TECH_RE" <<<"$__rq"; then __hit=1; fi
+    [[ "$__hit" -eq 1 ]] || continue
     grep -qE "$RULING_PERM_RE" <<<"$__rq" && continue
     RULING_REASON="BLOCKED: this AskUserQuestion puts a TECHNICAL RULING to the operator.
 
-How strict an evidence bar must be, whether the evidence is sufficient, which of two designs or approaches, whether a status moves, which threshold — these are engineering calls. The operator is non-technical and cannot rule on them; asking stalls the pipeline until someone guesses.
+How strict an evidence bar must be, whether the evidence is sufficient, whether an ADR status moves, which of two named technical designs or approaches — these are engineering calls. The operator is non-technical and cannot rule on them; asking stalls the pipeline until someone guesses.
 
 Delegate it: spawn soleur:engineering:cto with the question and the facts, and act on its ruling. The procedure and the closed list of rulings that do NOT go to the CTO are in technical-ruling-delegation.md (plugins/soleur/skills/brainstorm-techniques/references/technical-ruling-delegation.md).
 

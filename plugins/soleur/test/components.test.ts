@@ -572,6 +572,26 @@ describe("Technical-ruling delegation wiring", () => {
     expect(existsSync(resolve(PLUGIN_ROOT, "skills/ship/references/decision-challenges-render.md"))).toBe(true);
   });
 
+  test("the gate is invoked at all three call sites, through the plugin root, with each exit handled", () => {
+    const GATE = 'skills/ship/scripts/technical-ruling-gate.sh';
+    const oneShot = read("skills/one-shot/SKILL.md");
+    const ship = read("skills/ship/SKILL.md");
+    // one-shot: the plan-phase call, the plugin-root form, and all three exit codes named.
+    const os = oneShot.slice(oneShot.indexOf("**Technical-ruling gate (before `work`)."));
+    expect(os.startsWith("**Technical-ruling gate"), "one-shot lost its gate step").toBe(true);
+    const osStep = os.slice(0, os.indexOf("\n"));
+    expect(osStep.includes("${CLAUDE_PLUGIN_ROOT}/" + GATE) && osStep.includes("--branch")).toBe(true);
+    for (const exit of ["**0**", "**1**", "**2**"]) expect(osStep.includes(exit), `one-shot gate step lost ${exit}`).toBe(true);
+    // ship Phase 5.5 (--branch) and Phase 6 step 4.5 (--pr-body), both via the plugin root, never a repo-relative path.
+    const gateSection = ship.slice(ship.indexOf("### Technical-Ruling Gate (mandatory)"));
+    expect(gateSection.slice(0, 1200).includes("${CLAUDE_PLUGIN_ROOT}/" + GATE) && gateSection.slice(0, 1200).includes("--branch")).toBe(true);
+    const step45 = ship.slice(ship.indexOf("4.5. **Technical-ruling body check"));
+    expect(step45.slice(0, 700).includes("${CLAUDE_PLUGIN_ROOT}/" + GATE) && step45.slice(0, 700).includes("--pr-body")).toBe(true);
+    for (const f of [oneShot, ship, read("skills/ship/references/decision-challenges-render.md")]) {
+      expect(/bash\s+"?plugins\/soleur\/skills\/ship\/scripts\/technical-ruling-gate\.sh/.test(f), "a repo-relative gate path breaks end-user installs").toBe(false);
+    }
+  });
+
   test("the gate script exists and is executable", () => {
     const f = resolve(PLUGIN_ROOT, "skills/ship/scripts/technical-ruling-gate.sh");
     expect(existsSync(f)).toBe(true);

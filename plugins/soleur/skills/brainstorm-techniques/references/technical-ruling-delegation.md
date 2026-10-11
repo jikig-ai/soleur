@@ -25,6 +25,8 @@ evidence suffices, and a status flip. Consequence is not the test: a decision ca
 the CTO's to make. The four NEVER-Mechanical classes in
 [decision-principles.md](./decision-principles.md) decide whether the session model may auto-decide, never who rules.
 
+- **WHAT to build is the operator's (a product-direction choice is `taste` or `operator (scope)`); HOW to build it is technical.**
+  The brainstorm skill's "which approach do you prefer" about product direction stays a question to the operator.
 - A **mixed item is split** into one technical ruling and one operator authorization. The threshold that guards a
   destructive step is technical; the authorization to run the step is the operator's, and names the ACTION.
 - An **ADR status flip whose criterion the ADR itself states** is mechanical: run the grader, cite its output, flip.
@@ -47,14 +49,25 @@ When a phase reaches a technical ruling, spawn the owner of the domain and conti
   `soleur:legal:clo`. Require **drafted replacement wording** back, not only a verdict.
 - Other domains: the domain leader through the existing domain-leader pattern.
 
-The brief carries: the evidence with `file:line`, the question, the options with trade-offs, the plan's
-`brand_survival_threshold`, the facts that would DISQUALIFY the option not preferred, and the sentence "do NOT use
-AskUserQuestion" (leaders default to orchestrator mode and would hang a headless run). The agent returns **Decision /
-Rationale / Rejected alternatives / Dissent line**. Implement exactly what it returns. This is a routing rule, not an
+Copy this brief, filling the angle brackets (a CTO that is not told the shape returns an options menu, which is not a ruling):
+
+```text
+Rule on this technical question. Do NOT use AskUserQuestion. Choose ONE option; do not return a menu.
+Question: <the question>
+Evidence (file:line, command output): <evidence>
+Options and trade-offs: <options>
+Brand-survival threshold: <the plan's value>
+Facts that would DISQUALIFY the option not preferred: <facts>
+Reply with exactly these four headings: Decision: / Rationale: / Rejected alternatives: / Dissent:
+```
+
+For legal posture add the governing records (determination, Art. 30 / 30(2) registers, LIA, any instrument) and the binding
+constraints to the brief, and require drafted replacement wording back. Qualified-counsel review is a different act with a
+different cost: it goes through the threshold catalog, never as an inline question. Implement exactly what it returns. This is a routing rule, not an
 approval gate, so it fires in pipeline mode too. **Weight is not a routing signal**: a decision feeling consequential
 is the reason to route it to its owner, never past it. A headless Task subagent that has the `Agent` tool spawns the
 leader itself; one that does not returns the row as `pending - assumed: <default>` and its parent obtains the ruling
-(one-shot right after the plan phase, otherwise `ship` Phase 5.5).
+(one-shot right after the plan phase, otherwise `ship` Phase 5.5). **One batched spawn carries ALL pending rows**; the two-spawn cap counts spawns, not rows, and each spawn is added to the pipeline tally (`incr agent_rounds`).
 
 Reserve external escalation (qualified counsel, a vendor, a regulator) for what cannot be decided in-house, through
 the threshold catalog in `knowledge-base/legal/recommended-tools.md` plus a tracked issue, never as an inline operator
@@ -83,14 +96,15 @@ Soleur users (`decision-challenges.md` of that branch: "Surfaced, not decided, a
 
 ## 6. The `decision-challenges.md` classification table
 
-`knowledge-base/project/specs/<branch>/decision-challenges.md` carries one `## Decision Classes` pipe table with one row
+`knowledge-base/project/specs/<branch>/decision-challenges.md` carries at least one `## Decision Classes` pipe table with one row
 per persisted decision, whatever shape the free-form body uses. Columns: `Item | Class | Ruling`.
 
 - **Class:** `technical`, `taste`, or `operator (<category>)` with a category from section 1; a bare `operator` is
   invalid. `taste` is the user-legible Taste class of [decision-principles.md](./decision-principles.md): auto-decided
   with a recommendation and rendered under Model Dissents; it needs no ruling cell and files no issue. A user-visible
-  *preference* is `taste`, never an operator category.
-- **Ruling, technical row:** `Ruled by CTO agent, <date>: <decision> - <rationale>` (and `Dissent: <line>` when
+  *preference* is `taste`, never an operator category. A technical row that overrides a direction the operator STATED also
+  gets an `operator (scope)` row naming that override, so the operator sees it.
+- **Ruling, technical row:** `Ruled by CTO agent, <date>: <decision> - <rationale>` (`CLO` for legal; and `Dissent: <line>` when
   present). If the ruling differs from what a headless subagent assumed and built, re-enter `work` for the item.
 - **Ruling, operator row:** the ACTION being authorised, citing the sibling technical row's item id when split.
 - `pending - assumed: <default>` is the placeholder a subagent without the `Agent` tool writes; the main context
