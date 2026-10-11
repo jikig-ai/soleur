@@ -409,10 +409,15 @@ sentinel, detection, redaction, filter or validation expression that judges the 
 narrower class is correct. Anchoring elements are not narrowed by this clause — a `ghs_`/`github_pat_` prefix, an `sk-ant-` infix or a `{36}`-style length bound may stay; what may not stay is a
 body alphabet narrower than `[A-Za-z0-9._~+/=-]` justified only by "the vendor issues base62 today".
 
+Enforcement: the Guard-3 census in `scripts/lint-shell-trace-credential-refusal.test.sh` sweeps the tracked corpus for GitHub-prefix char-class literals (`gh[opsur]`/`github_pat_` forms — literal,
+bracketed, alternation, factored-prefix, and single-backslash-escaped spellings) and fails on any non-canonical class. A documented-narrower disposition is discharged by a slot in
+`_ghs_census_allow()` (keyed on file + exact literal) in that suite, not merely by a comment at the site; the census's own header enumerates the sweep's residual blind spots (extensionless files,
+multi-line assembly, separator obfuscation, and the prefixes outside the GitHub family — `sbp_`/`xox`/`sk-ant`/`AKIA` siblings keep their vendor shapes until a rotation teaches otherwise).
+
 ### Rejected alternative: per-site vendor-format pins
 
 Modelling each pattern on the vendor's currently issued shape (`ghs_[A-Za-z0-9_]{20,}` and kin) was rejected on measurement, not taste: what a vendor issues is mutable surface the repo cannot
 observe, so the pin's correctness is hostage to a rotation that arrives with no notice. The incident chain is the measured cost. When GitHub rotated `ghs_` installation tokens to a ~390-520-char
-shape over the b64token alphabet, a `[A-Za-z0-9_]` guard refused a valid live-minted token and the #9972 repair had to convert the bespoke guard to the canonical body; #9999 then swept the
+shape over the b64token alphabet, a `[A-Za-z0-9_-]{30,128}` format guard warned on every valid live-minted token and the #9972 repair had to convert the bespoke guard to the canonical body; #9999 then swept the
 surviving vendor-format pins in detection, sentinel and documentation sites onto the canonical class. Per-site vendor pins cost one pipeline outage per rotation plus a repo-wide sweep; the
 canonical alphabet costs nothing at rotation time because it is already the maximal set the channel can carry.

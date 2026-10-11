@@ -395,6 +395,11 @@ describe("gitWithInstallationAuth", () => {
     // Under the retired {30,128} bound's shortest accepted row — now below
     // the vendor {36,} floor, so it warns (and still resolves: warn-not-throw).
     "ghs" + "_" + "a".repeat(30),
+    // One below the {36,} floor — pins the floor, not just "short".
+    "ghs" + "_" + "a".repeat(35),
+    // An out-of-alphabet byte pins the class in the negative direction —
+    // the alphabet is not "any string ≥36".
+    "ghs" + "_" + "a".repeat(35) + "!",
   ])(
     "token-format mismatch warns but does NOT throw: %s",
     async (tok) => {

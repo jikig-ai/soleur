@@ -69,6 +69,17 @@ else
   bad "awk extraction of redact_pii yielded EMPTY — the function text drifted and the rows below cannot pass legitimately"
 fi
 
+# The capture must END at the lone-quote line — if the closing-quote terminator
+# drifts, the extractor runs into run-scan.sh's top-level tail (mkdir, a
+# `find -exec rm -rf` reaper, jq writes) and the generated driver would
+# EXECUTE it. Assert the captured program's last line is exactly `'`.
+last_line="$(printf '%s\n' "$EXTRACTED" | tail -1)"
+if [[ "$last_line" =~ ^[[:space:]]*\'[[:space:]]*$ ]]; then
+  ok "extraction is bounded: the captured program ends at its lone-quote terminator"
+else
+  bad "extraction overran the lone-quote terminator (last line: ${last_line:0:60}) — the driver would execute run-scan.sh tail code"
+fi
+
 # The capture must run the FULL program: the ghs_ arm sits mid-list, so also
 # pin the LAST arm (AKIA) to prove the closing-quote terminator was not
 # reached early. `${pfx}_` keeps `ghs_` non-contiguous even in assertions.
@@ -105,6 +116,8 @@ if bash -n "$DRIVER" 2>/dev/null; then
   ok "the extracted program forms a syntactically valid driver"
 else
   bad "the extracted program does not parse (bash -n) — the capture is malformed"
+  echo "fatal: refusing to execute a malformed driver" >&2
+  exit 1
 fi
 
 # --- Anti-vacuity arm 2 (extraction dispatch): an EMPTY extraction must RED ---
@@ -190,6 +203,16 @@ else
   bad "tail bytes SURVIVED the mask (partial disclosure; output: ${out_a:0:100})"
 fi
 
+# --- Row (a2): embedded context — the token mid-line must mask exactly ------
+# The real call site scans multi-field lines; a token inside `x <tok> y` text
+# must collapse to `x <github-server> y` with the surrounding bytes intact.
+out_a2="$(printf 'x %s y\n' "$tok" | bash "$DRIVER" 2>/dev/null)"
+if [[ "$out_a2" == "x $MASK y" ]]; then
+  ok "embedded token mid-line masks to exactly 'x $MASK y'"
+else
+  bad "embedded token mid-line did not mask cleanly (output: ${out_a2:0:100})"
+fi
+
 # --- Row (b): a legacy base62 token still masks (positive control) ------------
 # Proves the widened arm did not become a tautology that only this fixture
 # satisfies: the ~40-char base62 shape must still collapse to the mask.
@@ -199,6 +222,14 @@ if [[ "$out_b" == "$MASK" ]]; then
   ok "legacy ~40-char base62 ${pfx}_ token still masks to exactly $MASK (positive control)"
 else
   bad "legacy base62 ${pfx}_ token no longer masks cleanly (output: ${out_b:0:80})"
+fi
+
+# Anti-gutting floor: a neutered suite (deleted behavioural rows) greens
+# silently without a counted-assertions ratchet (ADR-193's failure shape).
+if [[ $((PASS + FAIL)) -ge 15 ]]; then
+  ok "assertion floor: $((PASS + FAIL)) rows executed (floor 15)"
+else
+  bad "only $((PASS + FAIL)) assertions ran — rows were silently dropped (floor 15)"
 fi
 
 echo "=== redact-pii-ghs-shape: $PASS passed, $FAIL failed ==="

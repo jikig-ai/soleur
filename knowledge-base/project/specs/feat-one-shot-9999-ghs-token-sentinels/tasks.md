@@ -38,6 +38,24 @@ Issue: #9999 — Update legacy `ghs_` token-format sentinels for GitHub's rotate
 > GitHub's own push-protection regex), non-`ghs_` arms in `boundary.test.sh` +
 > `work/SKILL.md` drift pins, and the `git-auth.ts` comment's verbatim vendor regex.
 
+> Review-round-2 extension (12-seat panel): `server/inngest/
+> cron-bash-allowlist-hook.mjs` (`SECRET_QUERY_PATTERNS` — a live stale site the
+> census could not see; `*.mjs` et al. added to the sweep) and `preflight/scripts/
+> founder-check.py` (a `)[_-]` separator spelling no arm reaches — widened, and the
+> shape recorded as a blind spot). Also folded in: `run-scan.sh` gained `ghu_` +
+> `github_pat_` arms and the `ghs_` arm now precedes the `eyJ` JWT arm so a
+> composite `ghs_<appid>_<jwt>` masks whole; the `PII_REGEX` pair covers `gh[pousr]`
+> + `github_pat_`; trailing `\b` dropped on the GitHub mask arms
+> (redaction-allowlist, repo-resolver-divergence, digest-scrub, redact-engine) so a
+> non-word tail byte cannot strand; `boundary.test.sh`/`work/SKILL.md` drift pins
+> widened to the full canonical prefix set (their allowlist slots removed);
+> `work/SKILL.md`'s `dp\.` arm's literal `\|` alternation fixed; the kb-search
+> SKILL.md documents the new slug false-positive class (`ghs_<slug>` → refusal,
+> `--no-paraphrase` recovers); the PII gate's over-exclusion posture is documented
+> in a comment; and the census classifier is now per-class over every `[…]` span
+> in a hit (two-segment `github_pat_` forms judged on both classes), order-agnostic
+> per byte incl. `_`, range-stripped for `-`, and alnum-range-gated.
+
 
 - [x] 2.1 `plugins/soleur/skills/skill-security-scan/scripts/run-scan.sh` — `redact_pii` GitHub family (`ghp_`/`gho_`/`ghs_`/`ghr_`) → `[A-Za-z0-9._~+/=-]{20,}`
 - [x] 2.2 `scripts/learning-retrieval-bench.sh` + `plugins/soleur/skills/kb-search/SKILL.md` — GitHub alternation (`ghp_`/`gho_`/`ghs_` `{36}`, `github_pat_` `{40,}`) → canonical class, byte-identical literals in both files, same commit
