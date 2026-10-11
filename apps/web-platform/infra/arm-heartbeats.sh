@@ -582,8 +582,15 @@ arm_one() {
 # RES_* are written by hb_resolve_name and read by the two mains. The resolver is always called
 # DIRECTLY (never inside $( ) or a `| while read` pipeline), so they survive in this shell.
 RES_COUNT=0; RES_ID=""; RES_IDS=""; RES_PAUSED=""; RES_STATUS=""; RES_PERIOD=""; RES_GRACE=""
+# The ONE list read. The destination is the PINNED base plus the caller's validated query ($1, a positional
+# exactly like hb_fetch's id), so it can never name another host.
+hb_list_page() {  # <query> -> the page body on stdout; non-zero when the read failed
+  local page_body
+  page_body=$(bs_api -fsS --max-time "$ARM_CURL_MAX_TIME_S" "${BS_API_BASE}/heartbeats?$1") || return 1
+  printf '%s' "$page_body"
+}
 hb_resolve_name() {  # <name> -> 0 when the whole list was read (RES_COUNT says how many matched); 1 otherwise
-  local name="$1" query pages=0 body rows next rest rid rstatus rpaused rperiod rgrace
+  local name="$1" query pages=0 body rows next rid rstatus rpaused rperiod rgrace
   RES_COUNT=0; RES_ID=""; RES_IDS=""; RES_PAUSED=""; RES_STATUS=""; RES_PERIOD=""; RES_GRACE=""
   query="per_page=250"
   while [[ -n "$query" ]]; do
@@ -592,8 +599,13 @@ hb_resolve_name() {  # <name> -> 0 when the whole list was read (RES_COUNT says 
       echo "::error::arm-heartbeats.sh: the heartbeat list did not end within ${ARM_LIST_MAX_PAGES} pages — refusing to resolve '${name}' from a partial read."
       return 1
     fi
-    # The URL is the PINNED base plus a query this function validated: it can never name another host.
-    if ! body=$(bs_api -fsS --max-time "$ARM_CURL_MAX_TIME_S" "${BS_API_BASE}/heartbeats?${query}"); then
+    # The query is the ONLY thing this function varies, and it is pinned to page/per_page numbers: a vendor
+    # `pagination.next` that is off-origin, off-path or carries any other parameter never reaches a request.
+    if [[ ! "$query" =~ ^(page|per_page)=[0-9]+(\&(page|per_page)=[0-9]+)?$ ]]; then
+      echo "::error::arm-heartbeats.sh: refusing to follow a pagination.next that leaves ${BS_API_BASE}/heartbeats (page, per_page only)."
+      return 1
+    fi
+    if ! body=$(hb_list_page "$query"); then
       echo "::error::arm-heartbeats.sh: GET of the heartbeat list (page ${pages}) failed — cannot resolve '${name}'."
       return 1
     fi
@@ -626,17 +638,10 @@ hb_resolve_name() {  # <name> -> 0 when the whole list was read (RES_COUNT says 
       RES_ID="$rid"; RES_STATUS="$rstatus"; RES_PAUSED="$rpaused"; RES_PERIOD="$rperiod"; RES_GRACE="$rgrace"
     done <<< "$rows"
     next=$(printf '%s' "$body" | jq -r '.pagination.next // empty' 2>/dev/null | tr -d '\r\n')
+    # Stripping the pinned prefix leaves a bare query; anything that was not under that prefix stays a full
+    # URL, which the pin above then refuses.
     query=""
-    if [[ -n "$next" ]]; then
-      # Followed only when it stays on the pinned origin and path and carries nothing but page/per_page.
-      # The prefix is QUOTED: an unquoted `?` in a pattern is a glob character.
-      rest="${next#"${BS_API_BASE}/heartbeats?"}"
-      if [[ "$rest" == "$next" || ! "$rest" =~ ^(page|per_page)=[0-9]+(\&(page|per_page)=[0-9]+)?$ ]]; then
-        echo "::error::arm-heartbeats.sh: refusing to follow a pagination.next that leaves ${BS_API_BASE}/heartbeats (page, per_page only)."
-        return 1
-      fi
-      query="$rest"
-    fi
+    if [[ -n "$next" ]]; then query="${next#"${BS_API_BASE}/heartbeats?"}"; fi
   done
   return 0
 }

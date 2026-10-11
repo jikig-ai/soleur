@@ -1595,13 +1595,16 @@ if mutate preflight-ungated 1 's@^if \[\[ "\$MODE" == arm \]\]; then@if true; th
   assert "M29 and says so" "[[ \"\$OUT\" == *'TFSTATE_JSON is unset'* ]]"
 fi
 
-# M30 — drop the pagination.next confinement: the bearer follows a link off the vendor's origin.
+# M30 — drop the query pin: a vendor `pagination.next` that is NOT a bare page/per_page query is then followed.
+# The destination is always the pinned base plus that query, so the bearer never leaves the vendor's host;
+# what the pin buys is that nothing but a page number reaches a request. The mutant makes a second list call.
 # shellcheck disable=SC2016  # the sed program is data; expanding it here is the bug
-if mutate next-unconfined 1 's@^      if \[\[ "\$rest" == "\$next" .*$@      if false; then@'; then
+if mutate query-unpinned 1 's@^    if \[\[ ! "\$query" =~ .*$@    if false; then@'; then
   new_case m30
   write_page 1 "https://evil.example/api/v2/heartbeats?page=2&per_page=250" "$(hb_row "$ID_DECOY" "decoy-one" up)"
   NEW_SUT="$MUTANT" run_new --status "$HOST_NAME"
-  assert "M30 RED: the mutant sends a request to the off-origin host" "grep -q 'evil.example' '$FAKE_CALLS'"
+  assert "M30 RED: the mutant makes a request for a next URL the baseline refuses ($(list_count) list calls)" \
+    "[[ \$(list_count) -gt 1 ]]"
 fi
 
 # M31 — drop the `.data is an array` check. A 200 whose `.data` is an OBJECT iterates its values in
