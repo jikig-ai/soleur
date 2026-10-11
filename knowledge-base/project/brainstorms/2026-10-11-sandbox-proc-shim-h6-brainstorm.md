@@ -9,6 +9,14 @@ brand_survival_threshold: single-user incident
 
 # Brainstorm: agent sandbox shim fix for H6 (#10032)
 
+> **Superseded 2026-10-11 (append-only record; the body below is the decision AS MADE and is kept unedited).**
+> PR #10039 merged the same day and fixed #10032 by making the shim DROP procfs mounts, and it measured and
+> rejected `systempaths=unconfined`. This work's lab then showed the flag unnecessary (the shipped shim passes the
+> canary replay under docker's default masks). The operator chose to re-scope to what #10039 left open: a
+> production-posture CI regression suite, a Sentry mirror for Bash sandbox denials, and one comment fix. See
+> `knowledge-base/project/specs/feat-sandbox-proc-shim-h6/spec.md`. Everything below about the flag, the ADR-075
+> widening addendum and the CLO attestation for it no longer applies.
+
 Ref #9860 (never Closes: it stays open until the faithful canary passes).
 
 ## What We're Building

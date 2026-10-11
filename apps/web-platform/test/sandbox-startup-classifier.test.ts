@@ -9,7 +9,10 @@
 // in that exact shape (cq-test-fixtures-synthesized-only) — no LLM in the
 // assertion path.
 import { describe, it, expect } from "vitest";
-import { classifySandboxStartupError } from "@/server/sandbox-startup-classifier";
+import {
+  classifySandboxStartupError,
+  classifyBashSandboxFailure,
+} from "@/server/sandbox-startup-classifier";
 
 // The #5873 shape: bwrap fails to set up the userns after the split unshare()
 // because the container seccomp profile denied the second unshare() call.
@@ -124,3 +127,63 @@ describe("classifySandboxStartupError — sandboxKind (Phase-0 shape, #5875)", (
 // covered end-to-end by test/agent-runner-sandbox-config.test.ts (positive:
 // iterator-throw still tags with streamStartSent===true) and
 // test/cc-dispatcher-real-factory.test.ts (T16).
+
+// #10032 (ADR-075 addendum 2026-10-11) — a Bash tool_result whose output carries a bwrap denial. The session-start
+// classifier above only sees errors THROWN out of the SDK iterator; a failed sandbox spawn that the SDK returns to
+// the model as a tool_result (the shape the shim's fresh `--proc /proc` refusal takes under docker's masked /proc)
+// reached Sentry as nothing. Fixtures use bwrap's REAL stderr text, never a paraphrase.
+describe("classifyBashSandboxFailure — Bash tool_result sandbox denial (#10032)", () => {
+  const PROC_MOUNT_EPERM = "bwrap: Can't mount proc on /newroot/proc: Operation not permitted";
+
+  it("classifies the shim's fresh-procfs refusal as proc_mount_eperm and returns ONLY the matched line", () => {
+    const f = classifyBashSandboxFailure(PROC_MOUNT_EPERM, "0.3.284");
+    expect(f).not.toBeNull();
+    expect(f?.errorCode).toBe("proc_mount_eperm");
+    expect(f?.sdkVersion).toBe("0.3.284");
+    expect(f?.matchedLine).toBe(PROC_MOUNT_EPERM);
+  });
+
+  it("data minimisation: a secret-looking neighbour line never reaches the result (Art. 5(1)(c))", () => {
+    const secretLine = "DATABASE_URL=postgres://user:hunter2@db.internal/prod";
+    const out = `${secretLine}\n${PROC_MOUNT_EPERM}\nsk-ant-api03-notarealkeynotarealkeynotarealkey\n`;
+    const f = classifyBashSandboxFailure(out, "0.3.284");
+    expect(f?.matchedLine).toBe(PROC_MOUNT_EPERM);
+    expect(JSON.stringify(f)).not.toContain("hunter2");
+    expect(JSON.stringify(f)).not.toContain("sk-ant-api03");
+  });
+
+  it("scrubs workspace paths and uuids out of the matched line", () => {
+    const uuid = "754ee124-706a-4f21-a4f4-e828257b0380";
+    const line = `bwrap: Can't bind mount /workspaces/${uuid}/repo on /newroot/workspaces/${uuid}/repo: Operation not permitted`;
+    const f = classifyBashSandboxFailure(line, null);
+    expect(f).not.toBeNull();
+    expect(f?.matchedLine).not.toContain(uuid);
+    expect(f?.matchedLine).not.toContain("/workspaces/");
+    expect(f?.matchedLine).toContain("Operation not permitted");
+  });
+
+  it("caps the matched line (no unbounded tool output reaches Sentry)", () => {
+    const f = classifyBashSandboxFailure(`bwrap: ${"x".repeat(5000)}: Operation not permitted`, null);
+    expect(f).not.toBeNull();
+    expect(f!.matchedLine.length).toBeLessThanOrEqual(300);
+  });
+
+  it("classifies a generic bwrap namespace EPERM as bwrap_eperm", () => {
+    const f = classifyBashSandboxFailure("bwrap: Creating new namespace failed: Operation not permitted", null);
+    expect(f?.errorCode).toBe("bwrap_eperm");
+  });
+
+  it("returns null for an ordinary permission error with no sandbox token", () => {
+    expect(classifyBashSandboxFailure("cat: /etc/shadow: Permission denied", null)).toBeNull();
+    expect(classifyBashSandboxFailure("rm: cannot remove 'x': Operation not permitted", null)).toBeNull();
+  });
+
+  it("returns null when the output merely MENTIONS bwrap without a denial on the same line", () => {
+    expect(classifyBashSandboxFailure("$ which bwrap\n/usr/local/bin/bwrap\n", null)).toBeNull();
+    expect(classifyBashSandboxFailure("bubblewrap 0.8.0", null)).toBeNull();
+  });
+
+  it("returns null for empty and non-string-ish input", () => {
+    expect(classifyBashSandboxFailure("", null)).toBeNull();
+  });
+});

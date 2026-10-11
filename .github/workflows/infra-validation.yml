@@ -922,6 +922,20 @@ jobs:
           SDK_SANDBOX_REGRESSION_DOCKER: "1"
         run: bash apps/web-platform/scripts/sandbox-canary-regression.test.sh
 
+      # (#9860 / #10032) THE PRODUCTION-POSTURE GATE FOR THE SANDBOX /proc MASK. The step above is deliberately
+      # NEVER-FAIL (it skips on an unusable runner) and runs under apparmor=unconfined, which is how a fresh
+      # `--proc /proc` the shim spliced shipped green while docker's default masked /proc refused it on every
+      # sandboxed spawn. This suite runs the shipped shim in a container carrying the production tuple (the
+      # committed seccomp + soleur-bwrap AppArmor profiles, uid 1001, the Debian bubblewrap the production base
+      # installs, docker's DEFAULT masks): a control arm proves the runner really has masks, the canary replay
+      # must pass, and a sibling process must be invisible through the shim and visible through the real bwrap.
+      # It NEVER self-skips: an unusable docker/AppArmor/sysctl fails with a literal token. It loads an AppArmor
+      # profile and sets a sysctl, so it runs under sudo (PRIVILEGED_WHY in run-registered-suites.sh keeps it off
+      # the unprivileged matrix legs). The bound is the step's own timeout: image build + five docker execs.
+      - name: Run sandbox masked-/proc docker regression (production posture; never skips)
+        timeout-minutes: 10
+        run: sudo bash apps/web-platform/infra/sandbox-masked-proc-docker.test.sh
+
       # (#7025) THE REHEARSAL ROOT GETS NO `terraform validate` FROM THE `validate` JOB.
       # That job derives its matrix with `sed -E 's|^(apps/[^/]+/infra)/.*|\1|'`, which
       # COLLAPSES apps/web-platform/infra/rung2-rehearsal/... to apps/web-platform/infra and

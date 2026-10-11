@@ -392,6 +392,7 @@ declare -A PRIVILEGED_WHY=(
   [git-data-plaintext-snapshot-loopback.test.sh]="dm-snapshot/mkfs evidence needs root (#5274)"
   [inngest-redis-luks-loopback.test.sh]="LUKS loopback blkid apparatus needs root (#7695)"
   [workspaces-luks-loopback.test.sh]="cryptsetup loopback needs root (#6588)"
+  [sandbox-masked-proc-docker.test.sh]="apparmor_parser + sysctl + docker daemon need root (#10032)"
 )
 PRIV_SUITES=()
 SUITES=()

@@ -573,9 +573,12 @@ export function buildAgentSandboxConfig(
     failIfUnavailable: true,
     autoAllowBashIfSandboxed: true,
     allowUnsandboxedCommands: false,
-    // Docker containers cannot mount proc inside user namespaces (kernel
-    // restriction). enableWeakerNestedSandbox skips --proc /proc in bwrap
-    // (#1557). `denyRead` is not what protects the CLI parent's environment;
+    // A fresh procfs mount inside a nested user namespace is refused (EPERM) under
+    // docker's default masked /proc, so enableWeakerNestedSandbox makes the vendored
+    // builder emit a tail `--bind /proc /proc` instead of `--proc /proc` (#1557). The
+    // bwrap shim then DROPS that tail bind (#10039), so the vendored `--tmpfs /proc`
+    // is the realized mask: no procfs at all inside the sandbox. `denyRead` alone is
+    // not what protects the CLI parent's environment;
     // the outcome (no readable environ carries the key) is measured in ADR-272
     // and pinned by sandbox-credential-deny-runtime.test.ts, the mechanism is not.
     enableWeakerNestedSandbox: true,

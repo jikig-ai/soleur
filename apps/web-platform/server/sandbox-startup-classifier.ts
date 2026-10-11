@@ -165,6 +165,57 @@ export function classifySandboxStartupError(
   return { sandboxKind: "other", errorCode: "unclassified", sdkVersion, stderr };
 }
 
+/** A sandbox denial found in a Bash `tool_result`'s output (#10032 follow-up). */
+export interface BashSandboxFailure {
+  errorCode: "proc_mount_eperm" | "bwrap_eperm";
+  /** ONLY the matched line, scrubbed and capped — never the surrounding tool output. */
+  matchedLine: string;
+  sdkVersion: string | null;
+}
+
+/** Longest matched line forwarded to Sentry. */
+const BASH_MATCHED_LINE_CAP = 300;
+const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+// Any path token under a workspace/worktree root. A solo workspace's id IS the user id, so the path is PII-adjacent.
+const WORKSPACE_PATH_RE = /\/[^\s:'"]*\/(?:workspaces|worktrees)\/[^\s:'"]*|\/(?:workspaces|worktrees)\/[^\s:'"]*/g;
+
+/**
+ * Classify a Bash `tool_result` output as a sandbox denial.
+ *
+ * Why this exists: `classifySandboxStartupError` only sees errors THROWN out of the SDK iterator. A sandbox
+ * spawn that the SDK returns to the model as a tool_result — the shape a bwrap refusal takes mid-session —
+ * reached Sentry as nothing, so a fleet-wide sandbox outage with no thrown error was invisible (#10032 left
+ * tenant impact unobservable).
+ *
+ * Data minimisation (Art. 5(1)(c)): a tool_result is ARBITRARY command output, which can carry tenant file
+ * contents next to the bwrap line. The result carries ONLY the single matched line — scrubbed of workspace
+ * paths and uuids, capped at 300 chars — never the surrounding output and never the command.
+ *
+ * A line matches only when ONE line carries both a sandbox namespace token and a denial (`Operation not
+ * permitted` / `EPERM`): a command that merely prints "bwrap", or an unrelated EPERM, never matches.
+ */
+export function classifyBashSandboxFailure(
+  output: string,
+  sdkVersion: string | null = resolveSdkVersion(),
+): BashSandboxFailure | null {
+  if (typeof output !== "string" || output.length === 0) return null;
+  for (const raw of output.split(/\r?\n/)) {
+    if (!SANDBOX_NAMESPACE_SIGNATURES.some((re) => re.test(raw))) continue;
+    if (!OPERATION_NOT_PERMITTED.test(raw)) continue;
+    const matchedLine = raw
+      .replace(UUID_RE, "<uuid>")
+      .replace(WORKSPACE_PATH_RE, "<workspace-path>")
+      .trim()
+      .slice(0, BASH_MATCHED_LINE_CAP);
+    return {
+      errorCode: /can't mount proc/i.test(raw) ? "proc_mount_eperm" : "bwrap_eperm",
+      matchedLine,
+      sdkVersion,
+    };
+  }
+  return null;
+}
+
 // NOTE (CTO ruling, ADR-079): there is deliberately NO stream-phase gate here.
 // A caught session error is tagged `feature:"agent-sandbox"` at both catch sites
 // IFF `classifySandboxStartupError(err).sandboxKind !== "other"`. The signature
