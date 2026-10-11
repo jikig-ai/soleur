@@ -62,8 +62,20 @@ bad "instrument self-test (fail path, expected)" >/dev/null
 if [ $((PASS - p0)) -ne 1 ] || [ $((FAIL - f0)) -ne 1 ]; then printf 'HALT: the pass/fail helpers did not both move\n'; exit 1; fi
 PASS=$p0 FAIL=$f0
 
-SB="$(mktemp -d /var/tmp/destroy-ask-mut.XXXXXXXX)" || exit 2
-cleanup() { rm -rf "$SB"; }
+SB="$(mktemp -d "${TMPDIR:-/var/tmp}/destroy-ask-mut.XXXXXXXX")" || exit 2
+# Canonical assert_fixture_dir — byte-identical copy (fixture-scan.py requires the verbatim body).
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+assert_fixture_dir "$SB"
+cleanup() { assert_fixture_dir "$SB"; rm -rf "$SB"; }
 trap cleanup EXIT
 PRISTINE="$SB/.pristine"
 REPO="$(cd "$APP/../.." && pwd)"
@@ -74,6 +86,7 @@ ln -s "$REPO/plugins" "$SB/plugins" || exit 2
 
 git_status() { git -C "$APP" status --porcelain -- . 2>/dev/null | sort; }
 STATUS_BEFORE="$(git_status)"
+assert_fixture_dir "$SB"
 
 tar -C "$APP" --exclude=./node_modules --exclude=./.next --exclude=./e2e --exclude=./public --exclude=./docs -cf - . | tar -C "$APPCOPY" -xf -
 rc=$?; [ "$rc" = 0 ] || { printf 'HALT: could not copy the app tree (rc=%s)\n' "$rc"; exit 2; }
@@ -144,6 +157,7 @@ open(path, "w", encoding="utf-8").write(out)
 PY
 }
 
+assert_fixture_dir "$SB"
 MIN_MUTANTS=101
 TOTAL="$(jq 'length' "$MUTANTS")"
 if [ "$TOTAL" -lt "$MIN_MUTANTS" ]; then printf 'HALT: mutant table has %s rows, floor %s: a truncated table is vacuous\n' "$TOTAL" "$MIN_MUTANTS"; exit 1; fi
