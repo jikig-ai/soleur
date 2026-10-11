@@ -450,6 +450,31 @@ describe("feeder manifest — every arming claim is executable (#6537)", () => {
   });
 });
 
+/**
+ * Evidence SHAPE — a two-arm alternation, each arm bound on BOTH file and pattern (#9703):
+ *  - on-host arm: a timer-enable line or a `cron.d` drop-in delivered by a file under
+ *    apps/web-platform/infra/ (the original #6537 shapes);
+ *  - repo-side arm: a clock-dispatched verifier workflow (`.github/workflows/<x>.yml`) whose
+ *    arming construct is a `bash scripts/<x>.sh` invocation on a run line.
+ * A free-form pattern, or a path outside these two homes, matches neither arm. The pairing is what
+ * keeps the relaxation a shape rather than a hole: a workflow path with an infra-style pattern (or
+ * the reverse) is rejected.
+ */
+const ON_HOST_EVIDENCE = {
+  file: /^apps\/web-platform\/infra\//,
+  pattern: /^(systemctl enable --now [\w.-]+\.timer|- path: \/etc\/cron\.d\/[\w.-]+)$/,
+};
+const REPO_WORKFLOW_EVIDENCE = {
+  file: /^\.github\/workflows\/[\w.-]+\.yml$/,
+  pattern: /^bash scripts\/[\w.-]+\.sh$/,
+};
+function evidenceShapeOk(file: string, pattern: string): boolean {
+  return (
+    (ON_HOST_EVIDENCE.file.test(file) && ON_HOST_EVIDENCE.pattern.test(pattern)) ||
+    (REPO_WORKFLOW_EVIDENCE.file.test(file) && REPO_WORKFLOW_EVIDENCE.pattern.test(pattern))
+  );
+}
+
 describe("feeder guard is load-bearing (non-vacuity, #6537)", () => {
   const exists = (rel: string) => existsSync(resolve(REPO_ROOT, rel));
   const read = (rel: string) => readFileSync(resolve(REPO_ROOT, rel), "utf8");
@@ -530,12 +555,57 @@ describe("feeder guard is load-bearing (non-vacuity, #6537)", () => {
     for (const e of MANIFEST) {
       if (e.feeder.kind === "none") continue;
       const { file, pattern } = e.feeder.evidence;
-      expect(pattern).toMatch(/^(systemctl enable --now [\w.-]+\.timer|- path: \/etc\/cron\.d\/[\w.-]+)$/);
-      expect(file).toMatch(/^apps\/web-platform\/infra\//);
+      expect(evidenceShapeOk(file, pattern), `${e.name}: evidence ${file} / ${pattern} matches neither the on-host arm nor the repo-workflow arm`).toBe(true);
       const hits = stripCommentLines(read(file)).split(pattern).length - 1;
       expect(hits).toBeGreaterThan(0);
       expect(hits).toBeLessThanOrEqual(2); // bounded: a pattern matching everywhere proves nothing
     }
+  });
+
+  test("the evidence-shape alternation is a SHAPE, not one literal, and stays bound on both file and pattern (#9703 G3)", () => {
+    // Must-PASS non-canonical: a DIFFERENT workflow filename and script name of the allowed shapes.
+    expect(evidenceShapeOk(".github/workflows/scheduled-other-feeder.yml", "bash scripts/other-feeder.sh")).toBe(true);
+    // The original on-host arm is unchanged.
+    expect(evidenceShapeOk("apps/web-platform/infra/server.tf", "systemctl enable --now web-git-data-probe.timer")).toBe(true);
+    // A non-workflow, non-infra path is rejected even with a valid pattern.
+    expect(evidenceShapeOk("scripts/x.yml", "bash scripts/x.sh")).toBe(false);
+    // A free-form pattern is rejected even with a valid workflow path.
+    expect(evidenceShapeOk(".github/workflows/scheduled-x.yml", "echo bash scripts/x.sh")).toBe(false);
+    expect(evidenceShapeOk(".github/workflows/scheduled-x.yml", "bash scripts/x.sh --flag")).toBe(false);
+    // The arms are PAIRED: an infra file with a workflow-style pattern, and the reverse, match neither.
+    expect(evidenceShapeOk("apps/web-platform/infra/server.tf", "bash scripts/x.sh")).toBe(false);
+    expect(evidenceShapeOk(".github/workflows/scheduled-x.yml", "systemctl enable --now x.timer")).toBe(false);
+    // Nested path traversal / subdirectory is not a workflow file.
+    expect(evidenceShapeOk(".github/workflows/sub/x.yml", "bash scripts/x.sh")).toBe(false);
+  });
+
+  test("a workflow feeder whose script invocation is ABSENT or only in a comment FAILS checkFeeders (#9703 Guard 2 suite mutation)", () => {
+    const wfBase: ManifestEntry = {
+      name: "synthetic_workflow_fed",
+      arming: "external-probe",
+      paused: true,
+      exempt_reason: "x",
+      feeder: {
+        kind: "cron",
+        evidence: { file: ".github/workflows/scheduled-x.yml", pattern: "bash scripts/x.sh" },
+      },
+    };
+    const wfExists = () => true;
+    // Absent entirely: the "survives only in a comment / absent" violation must fire.
+    const absent = checkFeeders([wfBase], wfExists, () => "jobs:\n  a:\n    steps:\n      - run: echo hi\n", noFeeder);
+    expect(absent.some((x) => x.includes("does NOT contain"))).toBe(true);
+    // Only in a comment line: stripCommentLines must hide it.
+    const commented = checkFeeders([wfBase], wfExists, () => "      # bash scripts/x.sh\n      - run: echo hi\n", noFeeder);
+    expect(commented.some((x) => x.includes("does NOT contain"))).toBe(true);
+    // Present on a run line: passes (a regex-relaxed-to-match-everything check could not tell these apart).
+    const present = checkFeeders([wfBase], wfExists, () => "      - run: bash scripts/x.sh\n", noFeeder);
+    expect(present).toEqual([]);
+    // A DIFFERENT workflow filename and script name of the allowed shapes also passes end to end.
+    const other: ManifestEntry = {
+      ...wfBase,
+      feeder: { kind: "cron", evidence: { file: ".github/workflows/scheduled-y.yml", pattern: "bash scripts/y-feeder.sh" } },
+    };
+    expect(checkFeeders([other], wfExists, () => "      - run: bash scripts/y-feeder.sh\n", noFeeder)).toEqual([]);
   });
 });
 

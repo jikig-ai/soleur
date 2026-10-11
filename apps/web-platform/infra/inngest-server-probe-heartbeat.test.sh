@@ -11,7 +11,8 @@
 # recorded DP-10/#6210 discipline, with its URL provisioned in Doppler and BOTH resources riding
 # the per-merge -target= allow-list in apply-web-platform-infra.yml (the #8754 git_data_prd
 # precedent — terraform-target-parity.test.ts requires it), plus an honest
-# heartbeat-manifest.ts row (feeder.kind = "none" + tracking_issue + arming_pending).
+# heartbeat-manifest.ts row (feeder.kind = "cron" evidencing the #9703 verifier workflow, plus
+# arming_pending while the heartbeat is still paused).
 #
 # Every grep is anchored on a syntactic construct, never a bare token that also appears in a
 # comment (cq-assert-anchor-not-bare-token), and resource assertions bind to the extracted
@@ -163,22 +164,24 @@ else
 fi
 
 # (h) The heartbeat-manifest row is honest: discovered ⊆ manifest (ADR-117 parity) with a
-#     declared unfed state + tracked arming.
+#     declared FED state (the #9703 verifier workflow) + tracked, still-pending arming.
 mf_window="$(grep -A 30 'name: "inngest_server_probe"' "$MANIFEST" | head -30)"
 if has "$mf_window" 'name:[[:space:]]*"inngest_server_probe"'; then
   ok "heartbeat-manifest.ts carries an inngest_server_probe row (discovered⊆manifest parity)"
 else
   no "heartbeat-manifest.ts MANIFEST must carry name: \"inngest_server_probe\""
 fi
-if has "$mf_window" 'kind:[[:space:]]*"none"' && has "$mf_window" 'INNGEST_SERVER_PROBE_HEARTBEAT_URL'; then
-  ok "feeder declared kind \"none\" + url_secret INNGEST_SERVER_PROBE_HEARTBEAT_URL (honest-unfed)"
+if has "$mf_window" 'kind:[[:space:]]*"cron"' \
+  && has "$mf_window" 'file:[[:space:]]*"\.github/workflows/scheduled-inngest-probe-heartbeat\.yml"' \
+  && has "$mf_window" 'pattern:[[:space:]]*"bash scripts/inngest-probe-heartbeat-feeder\.sh"'; then
+  ok "feeder declared kind \"cron\" with the #9703 verifier workflow as evidence.file and its run-line as evidence.pattern"
 else
-  no "the row must declare feeder kind \"none\" with url_secret INNGEST_SERVER_PROBE_HEARTBEAT_URL"
+  no "the row must declare feeder kind \"cron\" with evidence.file .github/workflows/scheduled-inngest-probe-heartbeat.yml and evidence.pattern \"bash scripts/inngest-probe-heartbeat-feeder.sh\""
 fi
-if has "$mf_window" 'tracking_issue:[[:space:]]*[0-9]+' && has "$mf_window" 'arming_pending'; then
-  ok "tracking_issue + arming_pending present (deferred capability is tracked, not silent)"
+if has "$mf_window" 'arming_pending:[[:space:]]*\{[[:space:]]*tracking_issue:[[:space:]]*[0-9]+'; then
+  ok "arming_pending carries a positive tracking_issue (deferred arming is tracked, not silent)"
 else
-  no "the row must carry a positive tracking_issue and an arming_pending block (wg-when-deferring-a-capability)"
+  no "the row must carry an arming_pending block with a positive tracking_issue (wg-when-deferring-a-capability)"
 fi
 
 # Anti-vacuity: exact assertion count — deleting a block must not leave the suite green.
