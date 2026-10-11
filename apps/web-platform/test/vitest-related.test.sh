@@ -159,7 +159,7 @@ run_arm() {
   ARM_RC=$?
   # Strip ANSI: CI runners emit colorized vitest output (FORCE_COLOR-style
   # env in the job image) — the count assertions must read plain text.
-  ARM_OUT=$(sed -e $'s/\\033\\[[0-9;]*m//g' <<<"$ARM_OUT")
+  ARM_OUT=$(sed -e $'s/\033\[[0-9;]*m//g' <<<"$ARM_OUT")
   return 0
 }
 
