@@ -1278,8 +1278,8 @@ authorization; a menu answer is not authorization.
    | `already-up` | 0 | the monitor was already `up`; nothing was unpaused (a stale line for it is removed from the books) | counts toward the soak ONLY if the books file was empty or absent and the pre-arm read said `paused=true`; otherwise an earlier run was interrupted, so read why before recording anything |
    | `live-not-up` | 1 | the monitor is live but `down`, `pending` or otherwise not `up`: NOT armed by this run | re-read `--status` after 60-120 s (`pending` right after an unpause is normal). If it reaches `up`, paste that read as an already-live monitor, not as this run's measurement; if it stays not-`up`, pause it in Better Stack and record it on #9438 |
    | `rolled-back` | 2 | no beat within the deadline; the monitor is back to paused | the soak is not satisfied and the flip stays blocked: read the host's `liveness` events (step 6 query). If the books file still lists the id, the rollback is not recorded as clean: run the recovery below |
-   | `failed` | 1 | nothing is left live by this run: a refused collision, pin, ceiling or books path, an unreadable list or monitor, a definite 4xx on the unpause, or every status read failing (rolled back) | read `--status`; it must say `paused=true` |
-   | `unpause-unknown` | 1 | the unpause request failed ambiguously (5xx or no reply) and could not be settled; its id IS on the books | wait 60-120 s and read `--status`: `paused=true` means delete the books file; anything else means run the recovery below |
+   | `failed` | 1 | nothing is left live by this run: a refused collision, pin, ceiling or books path, an unreadable list or monitor, a definite 4xx on the unpause, or every status read failing (rolled back) | read `--status`; it must say `paused=true`. If it does not (a gate read that never answered can hide a live monitor), run the recovery below |
+   | `unpause-unknown` | 1 | the unpause request failed ambiguously (5xx or no reply) and could not be settled; its id IS on the books | wait 60-120 s and read `--status`: `paused=true` means remove that id's line (delete the file only if it lists nothing else); anything else means run the recovery below |
    | `unpause-recovered` | 1 | an unpause reply was lost, the monitor went live and was rolled back to paused | read `--status` (it must say `paused=true`); investigate the API error |
    | `rollback-failed` | 1 | the monitor is LIVE and unfed and its re-pause failed; its id is on the books | run the recovery below at once |
    | `refused` | 1 | the run stopped at the token, name resolution, pin or ceiling | nothing was changed |
@@ -1293,11 +1293,15 @@ authorization; a menu answer is not authorization.
    (`$HOME/.arm-one-books`), or the one printed on the `arm-one books:` line. Read `--status` FIRST and
    decide before running anything, because the sweep re-pauses every id the file lists:
 
-   - `paused=true`: nothing is live. Delete the books file; do not sweep.
-   - `status=up` (a real beat landed before the interruption): the monitor is armed. Record the read on
+   - `paused=true`: nothing is live. Remove only that id's line from the books file (delete the file only if it lists nothing else, and only if it is yours and private); do not sweep.
+   - `status=up` (a real beat landed before the interruption, or after a failed re-pause: record it as an
+     already-live monitor, not as this run's measurement): the monitor is armed. Record the read on
      #9438, remove only that id's line from the books (other ids on a shared file may be live and
      unfed), and do NOT sweep.
-   - anything else (live and not up): run the sweep.
+   - anything else (live and not up): inspect the file first (a stale id left by an earlier run would be re-paused too), then run the sweep.
+
+   Never run two `--arm-one` at once, and never against a books file another run is using: each rewrites the
+   file when it finishes and a concurrent append can be lost.
 
    ```bash
    doppler run --only-secrets BETTERSTACK_API_TOKEN -p soleur -c prd_terraform -- \

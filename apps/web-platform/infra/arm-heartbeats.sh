@@ -263,6 +263,11 @@ bs_api() {  # <transport args...> <url>
 
 now_s() { date +%s; }
 
+# Operator-supplied or vendor-supplied text is shown with every non-printable byte replaced and a length
+# cap, so it can neither forge a `::notice::` line (newline) nor drive the terminal (ESC, bidi override).
+# The C locale makes `[:print:]` ASCII-only: in a UTF-8 locale U+202E and U+200B count as printable.
+show() { local LC_ALL=C t="${1:0:200}"; t="${t//[^[:print:]]/?}"; printf '%s' "$t"; }
+
 # --- the unconfirmed-arm state file -------------------------------------------------------
 # One id per line. `state_add` fires immediately after a successful unpause; `state_remove`
 # fires ONLY on a 2xx rollback or on reaching `up`.
@@ -270,12 +275,22 @@ state_add() {  # <id> [pre-unpause]
   # An append that fails is NOT ignorable (#7658 E4): the monitor is already LIVE at this point,
   # so a silently dropped id is a monitor off the sweep's books with nothing feeding it — the
   # exact state the file exists to make impossible.
-  if ! printf '%s\n' "$1" >> "$ARMED_UNCONFIRMED"; then
+  # A hand-edited file may not end in a newline: appending to it would GLUE this id onto the last
+  # line (99 + 42 = 9942, a different monitor), so a leading newline is written in that case.
+  local lead=""
+  if [[ -s "$ARMED_UNCONFIRMED" && -n "$(tail -c1 "$ARMED_UNCONFIRMED" 2>/dev/null)" ]]; then lead=$'\n'; fi
+  if ! printf '%s%s\n' "$lead" "$1" >> "$ARMED_UNCONFIRMED"; then
     if [[ "${2:-}" == pre-unpause ]]; then
-      echo "::error::arm-heartbeats.sh: could not record monitor $1 in ${ARMED_UNCONFIRMED} BEFORE unpausing it — nothing was changed; refusing to unpause a monitor with nowhere to record it."
+      echo "::error::arm-heartbeats.sh: could not record monitor $1 in $(show "$ARMED_UNCONFIRMED") BEFORE unpausing it — nothing was changed; refusing to unpause a monitor with nowhere to record it."
       return 1
     fi
-    echo "::error::arm-heartbeats.sh: could not record monitor $1 in ${ARMED_UNCONFIRMED} — it is UNPAUSED and OFF the re-pause sweep's books. Re-pause it by hand: Better Stack → Heartbeats → $1 → Pause."
+    echo "::error::arm-heartbeats.sh: could not record monitor $1 in $(show "$ARMED_UNCONFIRMED") — it is UNPAUSED and OFF the re-pause sweep's books. Re-pause it by hand: Better Stack → Heartbeats → $1 → Pause."
+    return 1
+  fi
+  # Before the unpause the id must be READ BACK: an append that "succeeds" into a file that does not
+  # keep it (a procfs entry, a glued line) would let the monitor go live off the books.
+  if [[ "${2:-}" == pre-unpause ]] && ! grep -qxF -- "$1" "$ARMED_UNCONFIRMED" 2>/dev/null; then
+    echo "::error::arm-heartbeats.sh: monitor $1 was appended to $(show "$ARMED_UNCONFIRMED") but could not be read back from it — nothing was changed; refusing to unpause a monitor that is not on the books."
     return 1
   fi
 }
@@ -283,7 +298,7 @@ state_remove() {
   [[ -f "$ARMED_UNCONFIRMED" ]] || return 0
   local keep grc
   if ! keep=$(mktemp "${ARMED_UNCONFIRMED}.keep.XXXXXX"); then
-    echo "::error::arm-heartbeats.sh: could not create a scratch file beside ${ARMED_UNCONFIRMED}; leaving it INTACT. The re-pause sweep will re-PATCH ${1}, which is idempotent."
+    echo "::error::arm-heartbeats.sh: could not create a scratch file beside $(show "$ARMED_UNCONFIRMED"); leaving it INTACT. The re-pause sweep will re-PATCH ${1}, which is idempotent."
     return 1
   fi
   # `grep -vxF` exits 1 when it selects nothing, which is the ORDINARY case here (the last id
@@ -296,12 +311,12 @@ state_remove() {
   grc=$?
   if [[ "$grc" -ge 2 || ! -f "$keep" ]]; then
     rm -f "$keep"
-    echo "::error::arm-heartbeats.sh: could not rewrite ${ARMED_UNCONFIRMED} (grep rc=${grc}); leaving it INTACT. The re-pause sweep will re-PATCH ${1}, which is idempotent."
+    echo "::error::arm-heartbeats.sh: could not rewrite $(show "$ARMED_UNCONFIRMED") (grep rc=${grc}); leaving it INTACT. The re-pause sweep will re-PATCH ${1}, which is idempotent."
     return 1
   fi
   if ! mv -f "$keep" "$ARMED_UNCONFIRMED"; then
     rm -f "$keep"
-    echo "::error::arm-heartbeats.sh: could not install the rewritten ${ARMED_UNCONFIRMED}; leaving it INTACT."
+    echo "::error::arm-heartbeats.sh: could not install the rewritten $(show "$ARMED_UNCONFIRMED"); leaving it INTACT."
     return 1
   fi
 }
@@ -333,6 +348,9 @@ hb_fetch() {  # <id> -> 0 and sets HB_STATUS/HB_UPDATED_AT; non-zero when the lo
   # ONE guard that decides, and M10 proves deleting it changes the verdict.
   HB_STATUS=$(printf '%s' "$body" | jq -r '.data.attributes.status // empty' 2>/dev/null | tr -d '\r\n')
   HB_UPDATED_AT=$(printf '%s' "$body" | jq -r '.data.attributes.updated_at // "unreported"' 2>/dev/null | tr -d '\r\n')
+  # Vendor text reaches the operator's terminal (the rollback-failed line, the poll notices): reduce it to a harmless charset.
+  HB_STATUS="${HB_STATUS//[^A-Za-z0-9_.-]/?}"
+  HB_UPDATED_AT="${HB_UPDATED_AT//[^A-Za-z0-9_.:+-]/?}"
   [[ -n "$HB_STATUS" ]] || return 1
   return 0
 }
@@ -566,7 +584,7 @@ arm_one() {
   fi
   # The id is on the sweep's books from the instant the monitor is live, not from the instant
   # we decide to give up: everything between those two points is exactly the window in which an
-  # externally-imposed cut leaves it unpaused-and-unfed. (--arm-one already recorded it above.)
+  # externally-imposed cut leaves it unpaused-and-unfed. (--arm-one recorded it BEFORE the unpause; this per-merge path records after.)
   if [[ -z "$given_id" ]]; then state_add "$id"; fi
   started=$(now_s)
   elapsed=0
@@ -639,7 +657,7 @@ arm_one() {
 # =================================================================================================
 # RES_* are written by hb_resolve_name and read by the two mains. The resolver is always called
 # DIRECTLY (never inside $( ) or a `| while read` pipeline), so they survive in this shell.
-RES_COUNT=0; RES_ID=""; RES_IDS=""; RES_PAUSED=""; RES_STATUS=""; RES_PERIOD=""; RES_GRACE=""
+RES_COUNT=0; RES_ID=""; RES_IDS=""; RES_PAUSED=""; RES_STATUS=""; RES_PERIOD=""; RES_GRACE=""; RES_COMPLETE=0
 # The ONE list read. The destination is the PINNED base plus the caller's validated query ($1, a positional
 # exactly like hb_fetch's id), so it can never name another host.
 hb_list_page() {  # <query> -> the page body on stdout; non-zero when the read failed
@@ -649,7 +667,7 @@ hb_list_page() {  # <query> -> the page body on stdout; non-zero when the read f
 }
 hb_resolve_name() {  # <name> -> 0 when the whole list was read (RES_COUNT says how many matched); 1 otherwise
   local name="$1" query pages=0 body rows next rid rstatus rpaused rperiod rgrace
-  RES_COUNT=0; RES_ID=""; RES_IDS=""; RES_PAUSED=""; RES_STATUS=""; RES_PERIOD=""; RES_GRACE=""
+  RES_COUNT=0; RES_ID=""; RES_IDS=""; RES_PAUSED=""; RES_STATUS=""; RES_PERIOD=""; RES_GRACE=""; RES_COMPLETE=0
   query="per_page=250"
   while [[ -n "$query" ]]; do
     pages=$(( pages + 1 ))
@@ -706,7 +724,7 @@ hb_resolve_name() {  # <name> -> 0 when the whole list was read (RES_COUNT says 
     # string. Anything else is a FAILED read: treating it as "no next page" would resolve from a partial list.
     if ! next=$(printf '%s' "$body" | jq -r '
         if (.pagination == null) or ((.pagination | type) == "object" and ((.pagination | has("next") | not) or (.pagination.next == null) or ((.pagination.next | type) == "string")))
-        then (.pagination.next // "") else error("malformed pagination") end' 2>/dev/null); then
+        then ((.pagination.next // "") | if (length > 0) and (gsub("[\r\n]"; "") | length) == 0 then error("empty pagination.next") else . end) else error("malformed pagination") end' 2>/dev/null); then
       echo "::error::arm-heartbeats.sh: page ${pages} of the heartbeat list carries a malformed .pagination — refusing to resolve '${name}' from a partial read."
       return 1
     fi
@@ -723,6 +741,7 @@ hb_resolve_name() {  # <name> -> 0 when the whole list was read (RES_COUNT says 
       fi
     fi
   done
+  RES_COMPLETE=1
   return 0
 }
 
@@ -759,7 +778,7 @@ ARM_ONE_OUTCOME=refused
 arm_one_verdict() {  # <rc>
   # The id is claimed only when exactly ONE monitor matched; a collision or an unread list has no single id.
   local vid=none
-  if [[ "$RES_COUNT" -eq 1 ]]; then vid="$RES_ID"; fi
+  if [[ "$RES_COUNT" -eq 1 && "$RES_COMPLETE" -eq 1 ]]; then vid="$RES_ID"; fi
   echo "::notice::arm-one-result name=${NAME} id=${vid} outcome=${ARM_ONE_OUTCOME} rc=$1"
 }
 # Absolute path of this script, for the printed recovery command. CDPATH is cleared for the `cd`: a
@@ -773,14 +792,12 @@ self_path() {
   fi
 }
 recovery_cmd() {
-  printf 'ARMED_UNCONFIRMED=%q bash %q --sweep   # needs the SAME WRITE-scope BS_TOKEN (runbook step 7 shows the doppler wrapper)' "$ARMED_UNCONFIRMED" "$(self_path)"
+  # LC_ALL=C makes %q escape every non-ASCII byte, so a bidi override in a path cannot ride into the pasteable line.
+  local LC_ALL=C
+  printf 'ARMED_UNCONFIRMED=%q bash %q --sweep   # needs the SAME WRITE-scope BS_TOKEN (runbook step 7 shows the doppler wrapper); read --status FIRST: if it says status=up do NOT sweep' "$ARMED_UNCONFIRMED" "$(self_path)"
 }
-# Operator-supplied or vendor-supplied text is shown with every non-printable byte replaced and a length
-# cap, so it can neither forge a `::notice::` line (newline) nor drive the terminal (ESC, bidi override).
-show() { local t="${1:0:200}"; t="${t//[^[:print:]]/?}"; printf '%s' "$t"; }
-
 armone_run() {
-  local own_books=0 max rc=0 on_books=0 left safe_status
+  local own_books=0 max rc=0 on_books=0 left safe_status probe
   named_token_check || return 1
   resolve_exactly_one || return 1
   if [[ "$HAVE_ID" -eq 1 && "$PIN_ID" != "$RES_ID" ]]; then
@@ -806,8 +823,10 @@ armone_run() {
     fi
     own_books=1
   elif [[ -L "$ARMED_UNCONFIRMED" ]] || { [[ -e "$ARMED_UNCONFIRMED" ]] && { [[ ! -f "$ARMED_UNCONFIRMED" ]] || [[ ! -r "$ARMED_UNCONFIRMED" ]]; }; } \
-       || ! : >> "$ARMED_UNCONFIRMED"; then
-    # Absent, or a plain readable regular file we can append to. A symlink, a device (/dev/null swallows every
+       || ! { : >> "$ARMED_UNCONFIRMED"; } 2>/dev/null \
+       || ! { probe=$(mktemp "${ARMED_UNCONFIRMED}.probe.XXXXXX" 2>/dev/null) && rm -f "$probe"; }; then
+    # Absent, or a plain readable regular file we can append to AND rewrite beside (state_remove needs a sibling
+    # scratch file; without one a successful arm would leave its id on the books). A symlink, a device (/dev/null swallows every
     # write), a FIFO or a directory would let the unpause land with nothing real on the books.
     echo "::error::arm-heartbeats.sh: ARMED_UNCONFIRMED=$(show "$ARMED_UNCONFIRMED") must be absent or a readable, writable regular file (not a symlink) — refusing to unpause a monitor with nowhere to record it."
     return 1
@@ -876,10 +895,14 @@ armone_run() {
   [[ $? -eq 1 ]] || on_books=1
   if [[ "$on_books" -eq 1 ]]; then
     case "$ARM_ONE_OUTCOME" in
-      armed|already-up|rolled-back|unpause-recovered|failed)
+      armed|already-up|rolled-back|unpause-recovered)
         left=paused
         [[ "$ARM_ONE_OUTCOME" == armed || "$ARM_ONE_OUTCOME" == already-up ]] && left=up
         echo "::warning::arm-heartbeats.sh: the books file $(show "$ARMED_UNCONFIRMED") still lists ${RES_ID}, which this run left ${left}. Remove ONLY that line (other ids on it may be live and unfed). Do not run --sweep while '${NAME}' is ${left}-and-listed unless you mean to pause it." ;;
+      failed)
+        # `failed` includes a gate read that never answered: this run did not establish the monitor's state, so
+        # nothing here may claim one.
+        echo "::warning::arm-heartbeats.sh: the books file $(show "$ARMED_UNCONFIRMED") still lists ${RES_ID} and this run did not establish whether '${NAME}' is paused. Read --status FIRST: if it says paused=true remove ONLY that line; if it is live, run --sweep (or, if status=up, leave the monitor and remove that line)." ;;
     esac
   elif [[ "$own_books" -eq 1 && ! -s "$ARMED_UNCONFIRMED" ]]; then
     rm -f "$ARMED_UNCONFIRMED"
