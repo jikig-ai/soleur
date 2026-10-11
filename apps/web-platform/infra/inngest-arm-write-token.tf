@@ -30,7 +30,8 @@
 # matching the read token's by-reference wiring (inngest-host.tf:174-175). Consequence: the
 # per-merge `-target` of this token is a STANDING transitive path onto the excluded project/env.
 # A teardown/re-provision of doppler_project.inngest must be OPERATOR-applied FIRST — else the
-# next per-merge CI apply recreates the isolated project unattended. (Precedent for the
+# next per-merge CI apply recreates the isolated project unattended. It now ALSO needs a reviewed
+# lift of its prevent_destroy first (runbook "Sole-copy protection and key loss", #9879). (Precedent for the
 # transitive-edge concern: doppler_service_token.inngest, by-reference; NOT
 # doppler_service_token.write, which is a string-literal token with zero edges.)
 #

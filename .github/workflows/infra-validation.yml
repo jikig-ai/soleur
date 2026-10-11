@@ -173,6 +173,16 @@ on:
       # a stale row reads green) would skip the guard whose job is to turn that red.
       - "scripts/lib/web2-luks-rows.sh"
       - "scripts/betterstack-query.sh"
+      # (#9879) The shared HCL effective-text lexer sourced by workspaces-luks.test.sh (Guard B4) and
+      # inngest-luks-sole-copy.test.sh (Guard 1). It sits under tests/scripts/lib/, outside every glob
+      # above, so a lexer-ONLY edit (weakening strip_comments, say) would skip both consuming suites.
+      - "tests/scripts/lib/hcl-effective-text.sh"
+      # (#9879) inngest-luks-sole-copy.test.sh (under apps/*/infra/**) asserts that the runbook heading every
+      # failure message cites exists (H1b) and that the read-back command it carries matches the postmerge
+      # skill's (H2). A docs-only heading rename or runbook command edit would otherwise skip the suite. PR list only:
+      # the push list above is deliberately narrower.
+      - "knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md"
+      - "plugins/soleur/skills/postmerge/SKILL.md"
       # (#3366) supabase-advisor/scan-workflow.test.sh reads all of these. The
       # guard's whole job is to catch a gate that looks present but does nothing
       # — so a guard that cannot fire when its own subjects are edited would be
