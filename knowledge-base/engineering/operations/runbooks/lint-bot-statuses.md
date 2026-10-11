@@ -103,17 +103,28 @@ Verify locally before pushing: `bash scripts/lint-bot-synthetic-completeness.sh`
 
 ### Adding a new bot workflow
 
-Prefer the composite action. Create `.github/workflows/<feature>.yml` (any filename except `pr-quality-guards.yml`) with:
+Prefer the composite action. Since #9454 it needs a `soleur-infra` App token for the PR itself, so the workflow follows the shape of `weakness-miner.yml` (ADR-285): a job with no secrets produces the content, and a second job on the main-only `infra-privileged` environment mints the token and calls the composite. Create `.github/workflows/<feature>.yml` (any filename except `pr-quality-guards.yml`); the credential job's steps are:
 
 ```yaml
+- id: app
+  uses: ./.github/actions/mint-infra-app-token
+  with:
+    doppler-token: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}
+    installation-id: "166065653"
+    permissions: '{"contents":"write","pull_requests":"write"}'
+    repositories: soleur
 - uses: ./.github/actions/bot-pr-with-synthetic-checks
   with:
-    branch: ci/<feature>-<date>
-    title: "<feature>: <date>"
-    body: "..."
+    add-paths: <one allowlisted path>
+    branch-prefix: ci/<feature>-
+    commit-message: "<feature>: weekly"
+    pr-title-prefix: "<feature>: weekly"
+    pr-body: "<single line>"
+    pr-token: ${{ steps.app.outputs.token }}
+    gh-token: ${{ github.token }}
 ```
 
-The composite action handles synthetic posting for ALL required checks automatically. No `lint-bot-statuses` action required.
+The composite action handles synthetic posting for ALL required checks automatically. No `lint-bot-statuses` action required. `tests/scripts/test-weakness-miner.sh` (`t_workflow_pr_identity`) evaluates every caller of the composite and goes red on a missing or workflow-token `pr-token`; a new caller also needs a dated edit to census row G7f in `tests/scripts/test-infra-privileged-tier-census.sh`.
 
 If you need inline synthetic posting (e.g., a bot workflow that has additional state-machine logic), follow the pattern in [`scheduled-content-publisher.yml`](../../../../.github/workflows/scheduled-content-publisher.yml) or [`scheduled-disk-io-24h-recheck.yml`](../../../../.github/workflows/scheduled-disk-io-24h-recheck.yml). Verify locally before pushing.
 

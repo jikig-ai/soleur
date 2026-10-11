@@ -234,25 +234,39 @@ GHSTUB
 }
 
 # T13 (#9454): the bot-PR sample is drawn from BOTH authors, since the weakness-digest PR is
-# authored by the soleur-infra App and the other bot PRs by github-actions. The stub records
-# every `gh pr list` argument line; an audit that asks for one author only is RED.
+# authored by the soleur-infra App and the other bot PRs by github-actions. The stub serves
+# DIFFERENT payloads per author (one github-actions ci/ PR; a soleur-infra ci/ digest PR and a
+# soleur/inngest-pin-* PR) and records every `gh pr list` author and `gh pr view` number: an audit
+# that asks for one author only, drops the ci/ filter on the App list, or loses the merge is RED.
 t_both_authors_sampled() {
   local tmp; tmp=$(mktemp -d)
   cat > "$tmp/gh" <<'GHSTUB'
 #!/usr/bin/env bash
 if [[ "$1" == "pr" && "$2" == "list" ]]; then
-  printf '%s\n' "$*" >> "${GH_CALLS:?}"
-  echo '[]'
+  author=""
+  for ((i = 1; i <= $#; i++)); do
+    if [[ "${!i}" == "--author" ]]; then j=$((i + 1)); author="${!j}"; fi
+  done
+  printf '%s\n' "list author=$author" >> "${GH_CALLS:?}"
+  case "$author" in
+    app/github-actions) echo '[{"number":11,"headRefName":"ci/other-bot-2026-10-10"}]' ;;
+    app/soleur-infra) echo '[{"number":12,"headRefName":"ci/weakness-digest-2026-10-11"},{"number":13,"headRefName":"soleur/inngest-pin-v1.2.3"}]' ;;
+    *) echo '[]' ;;
+  esac
+elif [[ "$1" == "pr" && "$2" == "view" ]]; then
+  printf '%s\n' "view $3" >> "${GH_CALLS:?}"
+  echo ''
 fi
 GHSTUB
   chmod +x "$tmp/gh"
   : > "$tmp/calls"
   GH_CALLS="$tmp/calls" PATH="$tmp:$PATH" AUDIT_TELEMETRY_DIR="$tmp/state" \
     bash "$SCRIPT" >"$tmp/stdout" 2>"$tmp/stderr" || true
-  if grep -qF -- '--author app/github-actions' "$tmp/calls" && grep -qF -- '--author app/soleur-infra' "$tmp/calls"; then
-    _report "T13 bot-PR sample asks for both app/github-actions and app/soleur-infra" ok
+  if grep -qxF 'list author=app/github-actions' "$tmp/calls" && grep -qxF 'list author=app/soleur-infra' "$tmp/calls" \
+     && grep -qxF 'view 11' "$tmp/calls" && grep -qxF 'view 12' "$tmp/calls" && ! grep -qxF 'view 13' "$tmp/calls"; then
+    _report "T13 bot-PR sample merges app/github-actions and the ci/ PRs of app/soleur-infra, never an inngest-pin PR" ok
   else
-    _report "T13 bot-PR sample asks for both app/github-actions and app/soleur-infra" fail "calls=$(tr '\n' '|' < "$tmp/calls")"
+    _report "T13 bot-PR sample merges app/github-actions and the ci/ PRs of app/soleur-infra, never an inngest-pin PR" fail "calls=$(tr '\n' '|' < "$tmp/calls")"
   fi
   rm -rf "$tmp"
 }

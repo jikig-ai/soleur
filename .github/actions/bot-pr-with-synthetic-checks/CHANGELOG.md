@@ -24,8 +24,11 @@ queue entry received no `merge_group` runs (PR 10013, 2026-10-11).
   (the `actions/checkout` form), never on an argument list. The caller's checkout must therefore use
   `persist-credentials: false`, or git sends two Authorization headers.
 - The `cla-check` synthetic summary is author-neutral.
-- Commits still carry the `github-actions[bot]` git identity while the PR author is the App; both are
-  in the `cla.yml` allowlist.
+- The commit identity is the App's too (`soleur-infra[bot]`, the pair the pin-bump script pins), so the
+  commit author, the pusher and the PR author are one identity; `cla.yml` allowlists it. Before this
+  version the commit author was `github-actions[bot]`.
+- The step refuses a non-regular-file path before staging, and refuses a push when the date-suffixed
+  branch already exists on origin (a same-day re-run), naming the delete command in the error.
 - The single in-repo caller (`weakness-miner.yml`) moves in the same change; the static guard in
   `tests/scripts/test-weakness-miner.sh` evaluates every caller. The earned-green blocks, the
   allowlist and the off-main refusal are unchanged.

@@ -67,6 +67,7 @@ jobs:
           path: knowledge-base/project/weakness-digest.md
           if-no-files-found: error
           retention-days: 1
+          overwrite: true   # a re-run of the whole workflow re-uploads under the same run id
 
   open-pr:
     needs: mine
@@ -77,8 +78,8 @@ jobs:
     environment: infra-privileged
     runs-on: ubuntu-latest
     # Above the sum of every step's own cap (checkout 3 + download 2 + Doppler install 2 +
-    # mint 2 + composite 3), so a hung step fails as a step.
-    timeout-minutes: 12
+    # mint 2 + composite 3 = 12), so a hung step fails as a step and the job cap never fires first.
+    timeout-minutes: 15
     permissions:
       contents: read   # checkout
       checks: write    # the synthetic check-runs, posted under the workflow token
@@ -129,7 +130,7 @@ jobs:
 
   notify:
     needs: [mine, open-pr]
-    if: failure()
+    if: failure() || cancelled()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

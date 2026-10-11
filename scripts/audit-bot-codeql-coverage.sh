@@ -286,14 +286,17 @@ TOTAL=$((PASSING + DRIFT + IN_PROGRESS))
 # passes, 131,072 B fails E2BIG. That is NOT `getconf ARG_MAX` (2,097,152 B here); a
 # payload at 6% of ARG_MAX still dies.
 #
-# The bound is `gh pr list --state all --limit 100` in the bot-PR collection above: at
-# most 100 PRs are sampled, so at most 100 drift entries reach that line. Measured
-# 19,186 B at the full 100-PR sample — 15% of MAX_ARG_STRLEN. That is why this site is
-# NOT converted to --rawfile: it would be churn against a bound that holds by construction.
+# The bound is the two `gh pr list --state all --limit 100` calls in the bot-PR collection
+# above (app/github-actions, and the `ci/` branches of app/soleur-infra since #9454): at
+# most 200 PRs are sampled, so at most 200 drift entries reach that line. Measured
+# 19,186 B at a 100-PR sample, so about 38 KB at 200 — 29% of MAX_ARG_STRLEN. That is why
+# this site is NOT converted to --rawfile: it would be churn against a bound that holds by
+# construction.
 #
-# So `--limit 100` is load-bearing for more than sampling cost. Raising it to ~680 puts
-# this jq at the ceiling and the audit dies with `Argument list too long`; dropping the
-# flag makes `gh pr list` unbounded and the failure certain on any mature repo. If the
+# So `--limit 100` is load-bearing for more than sampling cost. Raising the limits until
+# the two lists reach ~680 entries puts this jq at the ceiling and the audit dies with
+# `Argument list too long`; dropping the flag makes `gh pr list` unbounded and the failure
+# certain on any mature repo. If the
 # sample is ever widened past a few hundred, spool $DRIFT_ENTRIES to a file and bind
 # `--rawfile … | fromjson` first (see plugins/soleur/scripts/domain-model-drift.sh).
 #

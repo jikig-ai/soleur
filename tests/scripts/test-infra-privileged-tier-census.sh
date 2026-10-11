@@ -1618,7 +1618,8 @@ check("G7e: no workflow, action, reachable script, .tf, .tmpl or cloud-init file
 
 # G7f (#9321, ADR-241 D11) -- every call of the App-token composite is exactly ONE of two source shapes, and the
 # composite itself offers nothing else:
-#   narrow  no `doppler-project` input; `doppler-token` is secrets.DOPPLER_TOKEN_INFRA_APP (the release jobs);
+#   narrow  no `doppler-project` input; `doppler-token` is secrets.DOPPLER_TOKEN_INFRA_APP (the release jobs and,
+#           since #9454, the weekly digest job);
 #   broad   `doppler-project: soleur-infra-privileged` and secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED, and only in
 #           a job that also calls the infra-credentials loader (it already holds the whole Tier-B project).
 # The composite's `doppler-project` default is the narrow project, its allow-list is exactly the two project
@@ -1640,8 +1641,9 @@ check("G7e: no workflow, action, reachable script, .tf, .tmpl or cloud-init file
 # loader: a release job that later adds the loader escapes the broad-shape restriction; the per-suite
 # no-broad-tier-b rows pin the two named jobs.
 # The live tree has exactly four callers (a fifth is a deliberate, dated edit here); a fixture needs >= 1.
-# 3 -> 4 (2026-10-11, #9454 item 4, ADR-285): weakness-miner.yml::open-pr, the fourth narrow-shape caller
-# (unlike the other three it is not a release job: it authors the weekly digest PR as the App).
+# 3 -> 4 (2026-10-11, #9454 item 4, ADR-285): weakness-miner.yml::open-pr, the third narrow-shape caller
+# (the fourth overall; apply-github-infra.yml is the broad one). Unlike the two release jobs it
+# authors the weekly digest PR as the App.
 G7F_COMP_REL = "actions/mint-infra-app-token/action.yml"
 G7F_NARROW, G7F_BROAD = "soleur-infra-app", "soleur-infra-privileged"
 G7F_NARROW_TOK, G7F_BROAD_TOK = "DOPPLER_TOKEN_INFRA_APP", "DOPPLER_TOKEN_INFRA_PRIVILEGED"

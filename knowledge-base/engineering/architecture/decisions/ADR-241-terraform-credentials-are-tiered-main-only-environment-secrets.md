@@ -1026,7 +1026,7 @@ This supersedes the 2026-10-01 bullet "Pre-existing, unchanged here" for the app
 
 ### 2026-10-11 (#9454): `weakness-miner.yml::open-pr` is a fourth composite caller (narrow source, `infra-privileged`)
 
-One dated line, no status change: the weekly digest PR is authored, pushed and armed as the `soleur-infra` App from the new `open-pr` job (narrow source `soleur-infra-app`, `DOPPLER_TOKEN_INFRA_APP`, scoped to `contents:write` + `pull_requests:write` on `soleur`; ADR-285). D11's "release jobs" wording is widened to "unattended App-token jobs"; census row G7f counts four callers. Inventory row: `infra-credential-tiers-8209.md` (Group 4).
+One dated line, no status change: the weekly digest PR is authored, pushed and armed as the `soleur-infra` App from the new `open-pr` job (narrow source `soleur-infra-app`, `DOPPLER_TOKEN_INFRA_APP`, scoped to `contents:write` + `pull_requests:write` on `soleur`; ADR-285). Read D11's "release jobs" as "unattended App-token jobs" from here (D11's text is not rewritten); census row G7f counts four callers. Inventory row: `infra-credential-tiers-8209.md` (Group 4).
 
 ## References
 

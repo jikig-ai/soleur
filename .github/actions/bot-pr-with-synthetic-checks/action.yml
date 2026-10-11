@@ -130,7 +130,7 @@ runs:
           exit 1
         fi
         if [[ "$PR_TOKEN" == "$GATE_TOKEN" ]]; then
-          echo "::error::bot-pr-with-synthetic-checks: pr-token must not be the workflow token; a PR authored and armed as the workflow token gets held runs and no merge_group runs (#9454 item 4, ADR-285)."
+          echo "::error::bot-pr-with-synthetic-checks: pr-token must not be the workflow token; a PR authored and armed as the workflow token had held runs and no merge_group runs on 2026-10-11 (#9454 item 4, ADR-285)."
           exit 1
         fi
         # Early copy of the off-main refusal below: a non-main run exits here, before any no-change exit.
@@ -237,8 +237,19 @@ runs:
             exit 1
           fi
         done
-        git config user.name "github-actions[bot]"
-        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        # Commit identity is the soleur-infra App's, the same pair the pin-bump script pins
+        # (bump-inngest-bootstrap-pin.sh BOT_NAME/BOT_EMAIL): the PR author, the pusher and the
+        # commit author are then one identity (ADR-285). cla.yml allowlists soleur-infra[bot].
+        git config user.name "soleur-infra[bot]"
+        git config user.email "335404629+soleur-infra[bot]@users.noreply.github.com"
+        # Each staged path must be a regular file: a symlink or directory at an allowlisted
+        # path would stage a tree the string-equality allowlist above never looked at.
+        for p in "${PATHS[@]}"; do
+          if [[ ! -f "$p" || -L "$p" ]]; then
+            echo "::error::add-path '$p' is not a regular file (missing, a directory or a symlink); refusing to stage it."
+            exit 1
+          fi
+        done
         git add -- "${PATHS[@]}"
         if git diff --cached --quiet; then
           echo "No changes to commit"
@@ -321,8 +332,6 @@ runs:
         fi
         DATE_SUFFIX="$(date -u +%Y-%m-%d)"
         BRANCH="${BRANCH_PREFIX}${DATE_SUFFIX}"
-        git checkout -b "$BRANCH"
-        git commit -m "$COMMIT_MESSAGE"
         # The App token reaches git as a per-command extra header (the form actions/checkout
         # uses, built newline-free), never on an argument list and never in .git/config; the
         # caller's checkout keeps no credential (persist-credentials: false), so the header
@@ -332,6 +341,23 @@ runs:
           GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
             GIT_CONFIG_VALUE_0="$_hdr" git "$@"
         }
+        # A same-day re-run finds the branch a failed earlier run left behind, and a plain push
+        # would then be rejected as non-fast-forward with only raw git output. Name the recovery.
+        ls_rc=0
+        git_remote ls-remote --exit-code --heads origin "refs/heads/${BRANCH}" >/dev/null 2>&1 || ls_rc=$?
+        case "$ls_rc" in
+          2) : ;;
+          0)
+            echo "::error::branch ${BRANCH} already exists on origin (an earlier run today pushed it). Close its PR if any, then delete it: gh api -X DELETE repos/${REPO}/git/refs/heads/${BRANCH} — or let the next scheduled run take a new date-suffixed branch."
+            exit 1
+            ;;
+          *)
+            echo "::error::could not check origin for branch ${BRANCH} (git ls-remote rc=${ls_rc}); refusing to push blind."
+            exit 1
+            ;;
+        esac
+        git checkout -b "$BRANCH"
+        git commit -m "$COMMIT_MESSAGE"
         git_remote push -u origin "$BRANCH"
         # Pass PR body via --body-file so multi-line content would round-trip
         # cleanly if the single-line guard is ever relaxed.
@@ -361,8 +387,9 @@ runs:
         COMMIT_SHA=$(git rev-parse HEAD)
         # Synthetic checks — satisfies CI Required + CLA Required rulesets on
         # main. Use the Checks API (/check-runs), NOT Statuses API; rulesets
-        # require Check Runs from integration_id 15368. PRs created with
-        # GITHUB_TOKEN don't re-trigger CI, so each required check is posted here.
+        # require Check Runs from integration_id 15368. PRs authored as
+        # the workflow token don't re-trigger CI, and the rulesets match integration 15368 (the
+        # workflow token), so each required check is posted here under gh-token.
         #
         # CHECK_NAMES is DERIVED from scripts/required-checks.txt (the SSOT) —
         # NOT hardcoded. #6049 fixed the drift where a hardcoded 6-name array
