@@ -19,9 +19,9 @@
 #   [apply only] delete volume by API -> state rm -> `post` plan graded -> apply -> readiness row -> recovery check -> reboot.
 # The classifier makes every re-dispatch heal the window a crash left, or refuse BEFORE writing.
 #
-# WHAT THIS WORKFLOW NEVER CLAIMS: that the volume reopens after a reboot (the reboot is ISSUED here; the graded proof is a later
-# luks-monitor probe row on a new boot_id, via the follow-through on #6931), that recovery was tested, or that web-2 may take
-# data or weight. The soak marker, and with it any weight, waits for that reboot proof (scripts/lib/web2-luks-rows.sh).
+# WHAT THIS WORKFLOW NEVER CLAIMS: that the volume reopens after a reboot (the reboot is ISSUED here, but the evidence rule no
+# longer needs it: ADR-263 addendum 2026-10-08), that recovery was tested, or that web-2 may take data or weight. The proof is the
+# #6931 grader's PASS (scripts/followthroughs/web2-luks-live-6931.sh); the soak marker is only a shape-only input to the weight gate.
 #
 # THE LIVE WEB-1 IS NEVER REACHABLE: its key is refused by name in the plan gate, every destroy is pinned to a physical id
 # captured from Hetzner, and the reboot re-resolves web-2 by name and refuses web-1's id.
@@ -312,7 +312,7 @@ jobs:
           export HCLOUD_TOKEN
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
           if ! stock_preflight_gate tfplan-pre.json; then
-            echo "::error::stock preflight ABORTED: the planned server_type is not orderable in its target location."
+            stock_abort_closing web2-luks-rebirth-pre "the PRE plan."
             exit 1
           fi
           echo "pre plan graded and stock preflight passed"
@@ -388,7 +388,7 @@ jobs:
             export HCLOUD_TOKEN
             source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
             if ! stock_preflight_gate tfplan-post.json; then
-              echo "::error::stock preflight ABORTED on the post plan."
+              stock_abort_closing web2-luks-rebirth-post "the POST plan."
               exit 1
             fi
           fi
@@ -403,6 +403,9 @@ jobs:
           set -euo pipefail
           if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan-post; then
+            # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
+            source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
+            stock_recovery_report web2-luks-rebirth tfplan-post.json --probe-state
             echo "::error::terraform apply (rebirth of web-2) failed. The empty volume is already gone; web-2 is dark and standby-only. Re-dispatch with the same inputs: the classifier names the window and heals it."
             exit 1
           fi
@@ -436,7 +439,7 @@ jobs:
           if [[ -s "$facts" ]]; then printf 'facts=%s\n' "$(head -c 600 "$facts" | tr '\n' ' ')" >> "$GITHUB_OUTPUT"; fi
           exit "$rc"
 
-      - name: Issue the hcloud reboot (the reopen is graded later, never claimed here)
+      - name: Issue the hcloud reboot (a reopen is not graded; ADR-263 addendum 2026-10-08)
         if: ${{ env.APPLY == 'yes' }}
         env:
           # The script REFUSES to reboot without the never-pooled proof: with the soak marker present web-2 may already hold data.

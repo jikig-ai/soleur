@@ -672,6 +672,19 @@ run armed >/dev/null 2>&1 || true
 : > "$W/flag.log"; : > "$W/systemctl.log"   # the setup run's stops are not this case's evidence
 run rollback 999999999
 if [ "$RC" -ne 0 ] && reason_seen rollback-pointer-mismatch && ! grep -q '^stop ' "$W/systemctl.log"; then ok "rollback: a pointer naming a volume this host does not own is refused before anything stops"; else no "rb-pointer-mismatch: rc=$RC stops=$(grep -c '^stop ' "$W/systemctl.log") reasons=[$(grep -o '\"reason\":\"[^\"]*' "$W/log" | tr '\n' ' ')]"; fi
+# The backstop is DETACHED (PR A's detach phase, or a host replace after it): rollback() refuses
+# `rollback-no-backstop` on the absent plaintext by-id alias BEFORE freeze_writers, so the scheduler
+# is never stopped for a rollback that has nothing to roll back onto. Both halves are pinned: the
+# reason, and that no writer was frozen (no `stop`, no freeze record, the encrypted store still
+# mounted, Redis still up).
+world rb-no-backstop
+run armed >/dev/null 2>&1 || true
+: > "$W/flag.log"; : > "$W/systemctl.log"
+assert_fixture_dir "$W/state"; rm -f "$W/state/frozen-active"
+rm -f "$W/byid/scsi-0HC_Volume_${PLAIN_ID}" || { printf '[FATAL] rb-no-backstop: could not detach the plaintext alias\n' >&2; exit 2; }
+if [ -e "$W/byid/scsi-0HC_Volume_${PLAIN_ID}" ] || [ -L "$W/byid/scsi-0HC_Volume_${PLAIN_ID}" ]; then printf '[FATAL] rb-no-backstop: the plaintext alias is still present, so the row cannot discriminate\n' >&2; exit 2; fi
+run rollback "$LUKS_ID"
+if [ "$RC" -ne 0 ] && reason_seen rollback-no-backstop && ! grep -q '^stop ' "$W/systemctl.log" && [ ! -e "$W/state/frozen-active" ] && [ "$(src_of "$W/mnt/data")" = "$W/mapper/inngest-redis" ] && [ -e "$W/units/inngest-redis.service" ]; then ok "rollback: the plaintext backstop DETACHED -> refused rollback-no-backstop BEFORE freeze_writers (nothing stopped, no freeze record, the encrypted store still mounted, Redis up)"; else no "rb-no-backstop: rc=$RC stops=$(grep -c '^stop ' "$W/systemctl.log") freeze-record=$([ -e "$W/state/frozen-active" ] && echo present || echo absent) /mnt/data=[$(src_of "$W/mnt/data")] reasons=[$(grep -o '"reason":"[^"]*' "$W/log" | tr '\n' ' ')]"; fi
 world rb-dst-holder
 run armed >/dev/null 2>&1 || true
 : > "$W/flag.log"
@@ -817,6 +830,10 @@ if [ "$_ms" -eq 0 ]; then ok "mounted_from does NOT match the SHADOWED mapper ro
 _dw_total="$(grep -cE '^[^#]*doppler secrets (set|delete) ' "$SUT")"
 _dw_bad="$(grep -E '^[^#]*doppler secrets (set|delete) ' "$SUT" | grep -cv '>/dev/null' || true)"
 if [ "$_dw_total" -ge 3 ] && [ "$_dw_bad" -eq 0 ]; then ok "structural: all ${_dw_total} Doppler writes discard stdout (it lists every secret, and stdout is shipped off-box)"; else no "structural: ${_dw_bad} of ${_dw_total} Doppler writes leak stdout"; fi
+# #9175: every Doppler call resolves the config name from DOPPLER_CONFIG (env-defaulted prd) —
+# never a literal name — so the rehearsal host's scratch config reaches the flag/pointer writes.
+_dcfg_bad="$(grep -E '^[^#]*doppler secrets ' "$SUT" | grep -cv -- '--config "${DOPPLER_CONFIG:-prd}"' || true)"
+if [ "$_dcfg_bad" -eq 0 ]; then ok "structural: every doppler secrets call is --config \"\${DOPPLER_CONFIG:-prd}\" (#9175)"; else no "structural: ${_dcfg_bad} doppler secrets call(s) carry a literal --config"; fi
 # The seam list is DERIVED, not trusted: every LUKS_* read in the body is in the gate's unset list.
 # A name the script ASSIGNS is not a seam (the environment value is overwritten), so it is excluded.
 _assigned="$(grep -oE '^[[:space:]]*LUKS_[A-Z_]+=' "$SUT" | tr -d ' =' | LC_ALL=C sort -u)"
@@ -835,7 +852,7 @@ _unverified="$(awk '/^ *copy_store "/{c=NR; getline nxt; if (nxt !~ /t2_verify/)
 if [ "$_copies" -ge 3 ] && [ "$_unverified" -eq 0 ] && [ "$(grep -cE '^[^#]*cp -a ' "$SUT")" -eq 1 ]; then ok "structural: ${_copies} copy sites, each immediately T2-verified, through one cp -a"; else no "structural: copy sites=${_copies} unverified=${_unverified} cp-a=$(grep -cE '^[^#]*cp -a ' "$SUT")"; fi
 
 # ═══ FLOOR — reported directly, never through ok()/no() ═══════════════════════════════════════
-_floor=96
+_floor=97
 if [ "$executed" -lt "$_floor" ]; then printf '[FATAL] assertion floor: %s ran, floor %s\n' "$executed" "$_floor" >&2; exit 1; fi
 if [ "${#FAILED[@]}" -ne "$fail" ]; then printf '[FATAL] ledger %s != fail counter %s\n' "${#FAILED[@]}" "$fail" >&2; exit 1; fi
 printf '\n=== inngest-luks-cutover.test.sh: %s passed, %s failed (%s assertions, floor %s) ===\n' "$pass" "$fail" "$executed" "$_floor"

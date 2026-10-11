@@ -284,7 +284,7 @@ cmd_reboot() {
   for _ in $(seq 1 24); do
     code="$(hapi GET "/actions/${action_id}")"; [[ "$code" == 200 ]] || fail "action ${action_id} -> ${code}"
     st="$(jq -r '.action.status' "$HBODY")"
-    [[ "$st" == success ]] && { echo "reboot issued: server ${sid} (${WEB2_NAME}), action ${action_id} accepted. The reopen is NOT proven by this step: the next luks-monitor probe row on a new boot_id is the evidence."; return 0; }
+    [[ "$st" == success ]] && { echo "reboot issued: server ${sid} (${WEB2_NAME}), action ${action_id} accepted. The reopen is NOT proven by this step, and the evidence rule no longer needs it (ADR-263 addendum 2026-10-08)."; return 0; }
     [[ "$st" == error ]] && fail "reboot action ${action_id} failed"
     sleep "$ACTION_POLL_S"
   done
@@ -360,7 +360,7 @@ cmd_summary() {
         else
           echo "The rebirth applied and a reboot was **issued**."
         fi
-        echo "**Nothing is claimed until the graded reboot proof:** a luks-monitor probe row on a boot_id other than the readiness row's, crypto_LUKS on /dev/mapper/workspaces. Until then web-2 is *provisioned, proof pending*; the soak marker (and so any weight) waits for that proof, and web-2 holds no workspace data."
+        echo "**Nothing is claimed until the #6931 grader reports PASS:** this instance's readiness row says luks_arm formatted|opened, and three distinct days of crypto_LUKS probe rows on /dev/mapper/workspaces follow it (no reboot is required, ADR-263 addendum 2026-10-08). Until then web-2 is *provisioned, proof pending*; the soak marker is a shape-only input to the weight gate, not that proof, and web-2 holds no workspace data."
         echo ""
         echo "Follow-through: a directive for scripts/followthroughs/web2-luks-live-6931.sh is already enrolled on #6931; UPDATE its \`earliest=\` to ${earliest} (rebirth + 3 days). Do not add a second directive." ;;
       *) echo "**The rebirth did not complete (job status $(clean "$status")).** Re-dispatch with the same inputs: the classifier names the window and heals it, resumes the post-apply stages (resume:post_apply), or refuses before writing." ;;

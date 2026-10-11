@@ -1,6 +1,6 @@
 ---
 title: Merge queue with advisory CodeQL and a post-merge alert gate
-status: adopting
+status: accepted
 date: 2026-10-03
 supersedes: ADR-032 (the 2026-07-01 "keep CodeQL required, no queue" decision and the 2026-09-14 capacity rejection, in part)
 issue: 9454
@@ -154,6 +154,36 @@ Adopt option A, as declarative IaC in `infra/github/ruleset-ci-required.tf`:
      queued PR shows, and the removal-event payload (`reason`, timestamp ordering against
      the re-arm and the head commit) on a real ejection. The detection rule does not depend
      on the first; the "current event" test depends on the second.
+   - Amendment 2026-10-07 (#9710): the Phase 7 fences do not sync an armed PR that reads
+     BEHIND when `main` has a `merge_queue` rule. Before this the queued-skip
+     covered only a PR already IN the queue, and an armed PR spends its whole CI cycle
+     before enqueue, which is where the sync loop restarted CI on every `main` merge.
+     Queue mode (`QUEUE_RULE=1`, read once from `gh api repos/{owner}/{repo}/rules/branches/main`
+     by `.type == "merge_queue"`, never by position, and only with a non-empty required-check set;
+     the fence reads `main`'s rules, as its required-check read does) applies only to a BEHIND
+     reading GitHub itself reported (not one the DIRTY block derived), with auto-merge armed (read
+     per tick) and auto-sync usable. It waits for GitHub to enqueue the PR (measured, see the canary
+     addendum: GitHub enqueues an armed PR whose head is behind `main` on its own under the strict
+     policy, so no explicit enqueue and no ruleset change), reports the enqueue once
+     (`[ship.phase7.queued]`, at the first 5th-tick read that finds the PR queued; that reading also
+     restarts the idle count, so while each 5th-tick read answers queued the PR does not expire), and is bounded: more than 5
+     CONSECUTIVE wait ticks (the 6th) with no pending REQUIRED check latches back to today's sync for
+     the rest of that poll (`[ship.phase7.queue_wait_expired]`), and that sync's `--step` still skips
+     a queued PR through its own queue gate and stops on an unreadable queue read; `MAX_POLL_MIN` still
+     caps a PR whose required checks never settle or whose state keeps flapping (any tick that is not
+     a wait tick restarts the idle count). Every unreadable answer falls toward today's sync in the fence (the standalone script's rules read is the one
+     new exception, see the 2026-10-09 addendum): a failed
+     rules read or an empty required-check set leaves queue mode off for the poll, a failed armed read
+     ends the wait for that tick, and a failed checks read counts as idle. A repo with no `merge_queue`
+     rule runs today's code unchanged. `sync-pr-behind.sh --step` and the `pre-merge-rebase.sh` hook are not
+     changed (the hook runs once per `gh pr merge`, not per poll tick; the script's standalone loop gained a guard, see
+     the 2026-10-09 addendum). Accepted residuals: (1) some
+     required contexts post a PASS on `merge_group` without re-running their suites
+     (`tenant-integration-required` and `vendor-pin-required`; see each workflow's `merge_group`
+     comment), so in queue mode their only real run is the PR-time one against the PR-time base,
+     where the sync used to re-run the PR-event versions on a fresher base; (2) a wait tick makes no
+     `--step` call, so the seen-queued marker is not written during the wait, and a dequeue is found
+     only by a current removal event, on the next 5th-tick read.
    - The `pre-merge-rebase.sh` hook reads the same state and skips its origin/main
      merge-and-push for an already queued PR. It resolves the PR from the bare number,
      the number plus flags in any order, `#N`, `-R/--repo` forms and a `cd <wt> &&` or
@@ -188,7 +218,7 @@ Adopt option A, as declarative IaC in `infra/github/ruleset-ci-required.tf`:
 | `min_entries_to_merge` | `1` | Merge a green candidate immediately. |
 | `min_entries_to_merge_wait_minutes` | `0` | The provider default (5) would add five minutes to every merge. |
 | `max_entries_to_build` | `2` | Speculation (the point of the queue) with bounded runner contention: each entry runs all 25 contexts, so three parallel builds is about 3x the jobs. Raise to 3 only after the canary shows contention is not binding. |
-| `check_response_timeout_minutes` | `60` | Must exceed the slowest required check on `merge_group` including runner start spread: PR wall-clock max 32.8 min plus ADR-032's 2026-09-14 measurement of a 28-minute (1708 s) maximum start spread on a drained group puts spread plus critical path near 43 min. The earlier value (15) was sized on an 8-minute critical path; an under-set value dequeues a green PR and re-creates the starvation. The stall probe threshold is 45 minutes, below this, so a stuck entry can be reported before the queue ejects it silently (best-effort: see "Stall probe"). |
+| `check_response_timeout_minutes` | `75` | Must exceed the slowest required check on `merge_group` including runner start spread: PR wall-clock max 32.8 min plus ADR-032's 2026-09-14 measurement of a 28-minute (1708 s) maximum start spread on a drained group puts spread plus critical path near 43 min. The earlier value (15) was sized on an 8-minute critical path; an under-set value dequeues a green PR and re-creates the starvation. Raised from 60 to 75 on 2026-10-11 after canary item 5 measured a 60.5-minute success (see "Addendum 2026-10-11"). The stall probe threshold is 45 minutes, below this, so a stuck entry can be reported before the queue ejects it silently (best-effort: see "Stall probe"). |
 
 The values equal the `.tf`, the DR skeleton and the `infra/github/README.md`
 table; the parity gate in `tests/scripts/test-audit-ruleset-bypass.sh` (successor
@@ -246,7 +276,7 @@ fire `push` workflows); queue merges are not token pushes, and canary 6 checks i
 `merge-queue-stall-check.yml` files `merge-queue stall: PR #N` (labels
 `merge-queue-stall` and `action-required`, with agent-runnable `gh api graphql` and
 `gh run list --event merge_group` commands in the body) for a queue entry pending
-past 45 minutes, below the 60-minute timeout. It ages only entries at
+past 45 minutes, below the 75-minute timeout. It ages only entries at
 `position <= max_entries_to_build` (2), because an entry deeper in a healthy drain
 waits its turn and can pass 45 minutes from `enqueuedAt` without being stalled
 (`position` being 1-based is assumed, not yet observed on a live entry; if it is
@@ -255,11 +285,11 @@ latency is the threshold plus the schedule delivery delay, and GitHub `schedule:
 delivery on this repository is degraded: the sibling `*/15` workflow
 `scheduled-inngest-health.yml` measured a median gap of about 275 min (n=59 fires,
 max about 479) and `scheduled-actions-queue-health.yml` (`*/30`) gaps of 2.7 to 6 h.
-Against the 15-minute window between threshold and timeout the probe will often miss a
+Against the 30-minute window between threshold and timeout the probe will often miss a
 stuck entry, so no issue is not proof of a healthy queue; it is best-effort. A filed
 issue is a SUSPECTED stall that needs verification, not a confirmed one: the age counts
 from `enqueuedAt`, so an entry promoted to position 1 or 2 after waiting behind others,
-or a healthy slow build near the roughly 50-minute `merge_group` CI maximum (n=99), can
+or a healthy slow build near the `merge_group` CI maximum (about 50 minutes at n=99; 60.5 at n=240, see "Addendum 2026-10-11"), can
 pass 45 minutes without being stalled. The position filter reduces those false positives
 and does not remove them. The title ends `(suspected, verify first)` and the body leads
 with the agent-runnable triage (live queue read, the entry's `merge_group` runs: an
@@ -564,7 +594,7 @@ order.
    fence sync pushes per merged PR (before and after the queue).
 10. Measure the `schedule`-event gap of `merge-queue-stall-check.yml`
     (`gh run list --workflow merge-queue-stall-check.yml --event schedule`) against
-    the 15-minute window between the 45-minute threshold and the 60-minute timeout;
+    the 30-minute window between the 45-minute threshold and the 75-minute timeout;
     a wider median gap makes Follow-up (a) the next change (Follow-up (a) landed; the
     dispatched-run spacing and runner-start latency are measured on #9482 after merge).
 
@@ -590,6 +620,68 @@ Definitions, commands and caveats are in [the #9482 measurement comment](https:/
 - Item 9: sync merges (proxy for sync pushes) per merged human PR: 2.50 before (n=40), 0.83 after (n=12, about 17 h), a delta of 1.67 against the 1.3 break-even; first reading, small after-window.
 - Item 10: dispatched runs of `merge-queue-stall-check.yml` start 10.0 min apart (within 10 s) with 4 to 5 s runner start (n=5, quiet window); no executor heartbeat. A red executor run alerts nobody (tracked in #9513).
 - Item 3 (partial): push SHA equals `merge_group.head_sha` for 13 of the 15 completed push runs on `main` (snapshot 2026-10-05 ~09:50Z); the other 2 are the adoption merge and the admin-bypass canary (Follow-up (c), tracked in #9512).
+
+### Addendum 2026-10-07 (#9710): enqueue while BEHIND
+
+Measured read-only for the queue-mode design. Question: does GitHub enqueue an armed PR whose head is behind `main` once its
+checks are green, under `strict_required_status_checks_policy = true`? Answer: yes.
+
+- PR #9697: `auto_merge_enabled` 2026-10-07T11:02:22Z; last commit dated 11:53:47Z (head `4b0bb6d78d`, merge-base
+  `8b43d09caa`); `added_to_merge_queue` 12:39:57Z with no push in between. Two `main` commits landed between the
+  merge-base and the enqueue, not counting the PR's own squash commit (the queue dates that commit at the enqueue
+  instant, so a `--before <enqueue>` date filter run after the merge counts 3). The one queued reading taken (#9697 after
+  the enqueue) was `OPEN CLEAN` with auto-merge disarmed (n=1).
+- Five further PRs merged through the queue that day were enqueued with a single enqueue event while 1 to 14 `main`
+  commits behind, 9 to 47 minutes after auto-merge was armed; method and table in
+  `knowledge-base/project/plans/2026-10-07-fix-ship-phase-7-merge-queue-aware-behind-sync-plan.md`.
+- The plan records BEHIND showing only while a check was pending; that reading is why the idle count keys on
+  pending REQUIRED checks and not on `mergeStateStatus`. Not measured: the last-green-to-enqueue latency over more
+  than one sample. The 5-tick grace is a chosen margin, to be re-derived from that latency.
+- Dogfood finding (PR #9710's own poll, same day): the idle count keyed on pending REQUIRED checks *present in the list*, but
+  the aggregate required context `test` does not exist until its shards finish, so 24 of 25 required contexts were
+  complete (last at 20:45:17Z) while the shards ran and the count expired on tick 6, syncing mid-CI (push at 20:50:54Z).
+  The expiry fallback did its job (a sync, today's behaviour) but defeated the wait for the whole shard window. Fixed in
+  the same PR: a required context that is absent counts as pending while any check is pending, and as idle when nothing
+  is (fixtures Q12, Q12b). This run therefore says nothing about enqueue latency: it expired before the required set could
+  complete.
+
+### Addendum 2026-10-09: the sync script refuses an armed BEHIND PR on a merge-queue repo
+
+Decision: the BEHIND-sync executable carries the queue-mode refusal for its standalone entry, so the rule no longer
+lives only in a bash fence an agent pastes. `sync-pr-behind.sh <PR>` answers `kind=queue_wait` (exit 0, nothing fetched,
+merged or pushed) when GitHub reports the PR BEHIND (not DIRTY), auto-merge is armed and `main` has a `merge_queue` rule
+(read by `.type`, never by position). An unreadable rules read while armed (after the same one retry the queue read
+has) fails closed (`kind=gh`, exit 4, cause in the line). That supersedes, for the standalone loop only, the Decision 5
+rule that every unreadable answer falls toward today's sync: the fence keeps that rule, but a standalone run has no
+poll behind it and an unknown answer is not a yes. The standalone answer has no expiry of its own; re-arming the Phase 7
+poll, whose fallback sync is the sanctioned one, is the bound. `--step` stays the Phase 7 fence's unguarded call: the fence owns the rule, armed, expiry and
+DIRTY decisions, and its expiry fallback must keep syncing. Trigger: PR 9839 (2026-10-09) took a resync push 12 minutes
+after it was armed and before it was enqueued, because a hand-written poll loop treated BEHIND as an error; the skill
+text scoped the ban to a Phase 7 poll that had already emitted `queue_wait`, a marker a hand-written loop never emits. Accepted residual: a loop that calls `--step` directly, and the `pre-merge-rebase.sh` hook, are still unguarded
+(tracked in #9869). Rationale and boundaries: `plugins/soleur/skills/ship/references/queue-mode.md`, "Standalone guard".
+
+### Addendum 2026-10-11 (#9454, canary item 5): `check_response_timeout_minutes` 60 to 75
+
+Canary item 5 measured 240 `merge_group` `ci.yml` runs since adoption (2026-10-04, 7 of the 14 days): run
+duration p50 25.0, p95 44.1, longest success 60.5 minutes (above the then-live 60), maximum 106.3 (a stalled run),
+and one `checks_timed_out` ejection (PR #9687, 2026-10-07). 37 of 240 runs failed or were cancelled (15.4%, against
+the 11% flake baseline). The measurement is at run level and the slowest single required check was not measured, so
+item 5's literal trigger (a required check over 30 minutes) is NOT demonstrated: a 60.5-minute run does not show any
+one check exceeded 30. The change rests on the run-level evidence instead, because the ejection clock may count from
+the time the entry joined the queue, so the whole entry duration is what the timeout is compared against. Whether the
+ejected candidate (PR #9687) was otherwise green is not established. Raising `check_response_timeout_minutes` in the
+same Terraform root is the action item 5 prescribes; the operator approved it in session on 2026-10-11.
+
+The value is sized as the longest observed success plus about 15 minutes (75 against 60.5, a 14.5-minute margin), not
+by ADR-032's rule of at least 1.5 times the slowest check, which would give about 91, and it supersedes the 43-minute
+model in the Parameters row and ADR-032's 2026-09-14 derivation, which the 60.5-minute success falsifies. The
+departure is deliberate:
+a larger value lengthens how long a hung entry holds the queue. Cost of the choice: a hung entry now holds the queue
+up to 15 minutes longer, and the entry behind it is rebuilt after the ejection, so its total delay is the timeout plus
+a fresh build. The stall probe threshold stays 45 minutes, so the window between threshold and timeout widens from 15
+to 30 minutes. The Parameters row, the "Stall probe" section and canary item 10 state the new value; dated records
+above (Canary results of 2026-10-04, item 5's measurement text, the 2026-10-09 amendment quotation) are left as
+written. Raise again if a success approaches 75. The live value is verified after the apply on #9454.
 
 ## Cost Impacts
 
@@ -627,3 +719,71 @@ and `bash plugins/soleur/test/c4-count-parity.test.sh` passes 12/12.
   Cloudflare rulesets, unrelated to the CI Required ruleset.
 - Data stores: none (the workflows are stateless; the gate keeps no cache or artifact).
 - Access relationships: unchanged.
+
+## Amendment 2026-10-09 (accepted by operator direction)
+
+Status moves `adopting` to `accepted` on 2026-10-09 by the operator's (founder's) direction, given in their own
+words that day: "yes please accept and flip to adopting and start S3" (answering: accept ADR-270 and flip ADR-276
+to adopting so S3 can start). The Status section above says the flip waits for the post-apply canary to pass; that
+condition is NOT met. This amendment records that acceptance came first, so the record does not read as a passed
+canary.
+
+The canary items not yet recorded as measured at this date are items 1, 3, 4, 5, 7, 8, 9 and 10 of "Canary
+measurements" (items 2 and 6 are recorded under "Canary results"; items 3, 4, 9 and 10 carry only first, partial or
+pending readings in the 2026-10-05 addendum, not a completed measurement). Item 1 has a PASS recorded outside this
+file, in the #9454 comment of 2026-10-04T15:46Z (#9485 admin-merged past the queue at 15:20:13Z, not strictly first as
+the item requires), so it is listed here because this file's Canary results do not carry it. Item 6 is recorded as one
+GREEN verdict with 0 candidates (run 37210557735); this file records no run of the post-merge alert gate going RED on
+a real critical or high alert, so the compensating control for advisory CodeQL is evidenced on its green path only. Item 4 waits for the next
+`weakness-miner.yml` PR; the next scheduled fire is 2026-10-11T06:00Z. Their text, verbatim from "Canary
+measurements":
+
+> 1. **FIRST, before anything else: the admin bypass.** One `gh pr merge --admin` of a
+>    trivial PR merges past the queue (`bypass_actors` `RepositoryRole 5`, mode
+>    `pull_request`). The rollback depends on it. A failure is an IMMEDIATE rollback
+>    trigger: PUT the queue-less payload to the existing ruleset (see the rollback
+>    recipe above), and amend this ADR before the queue is left on.
+> 3. Canary human PR via `gh pr merge --squash --auto`: it enters the queue, all 25
+>    contexts (23 plus `cla-check` and `cla-evidence`) report on the temp ref, and it
+>    merges. Record enqueue-to-merge minutes, the observed `mergeStateStatus` of a
+>    queued PR (unmeasured; the dequeue rule no longer depends on it, the queued-skip is
+>    correct either way), the removal-event payload (`reason`, and its timestamp against the
+>    auto-merge enable and the head commit) on a real ejection if one occurs, the observed
+>    queue entry `state` and `position` values on a real entry (is `position` 1-based,
+>    which the stall filter assumes; which `state` a never-reporting head entry shows),
+>    the candidate squash shape recorded (number of parents, and whether the PR head is
+>    one; the first adoption measured one parent) and which check-run names and apps land
+>    on the candidate (the CLA verify relies on neither parent shape nor extra names,
+>    so a surprise here is a finding). Also record that the push SHA equals
+>    `merge_group.head_sha` (Follow-up (c)'s premise).
+> 4. Canary bot PR (next `weakness-miner.yml` PR): flows through without stalling. If a
+>    `GITHUB_TOKEN`-armed bot PR sits pending, the queue stays on for human PRs only if
+>    bot PRs fall back to the admin-merge path and a follow-up to arm bot PRs with an
+>    App token is filed in the same session.
+> 5. `merge_group` CI wall-clock and runner start spread, against the push-run proxy
+>    (p95 37.3, p99 44.2, max 50.8 min, n=99), whose headroom under the 60-minute
+>    timeout is 9 to 23 min. If the slowest required check on a real candidate exceeds
+>    30 minutes, raise `check_response_timeout_minutes` in the same Terraform root (one
+>    line); keep `max_entries_to_build` at 2 until contention is measured. Record the
+>    candidate failure rate against the 11% post-merge flake rate.
+> 7. PRs armed before the apply (`gh pr list --state open --json number,autoMergeRequest`)
+>    each show a `mergeQueueEntry` within minutes or merge.
+> 8. Inspect the queue-built squash commit: record whether the message came from the
+>    commits or from the PR title and body, and what happens when
+>    `check_response_timeout_minutes` is exceeded.
+> 9. Confirm `pre-merge-rebase.sh` is a no-op for an enqueue of an up-to-date branch
+>    and skips the sync for an already-queued PR, and record the head-change and CI
+>    cost of its sync for a not-yet-queued behind branch, as the count of hook and
+>    fence sync pushes per merged PR (before and after the queue).
+> 10. Measure the `schedule`-event gap of `merge-queue-stall-check.yml`
+>     (`gh run list --workflow merge-queue-stall-check.yml --event schedule`) against
+>     the 15-minute window between the 45-minute threshold and the 60-minute timeout;
+>     a wider median gap makes Follow-up (a) the next change (Follow-up (a) landed; the
+>     dispatched-run spacing and runner-start latency are measured on #9482 after merge).
+
+Nothing above this heading is edited by this amendment except the frontmatter `status:` line. The earlier Status
+sentence "Flips to `accepted` when the post-apply canary ... passes" (the lead beginning "**Adopting — 2026-10-03**"),
+the heading "Canary measurements (flip `adopting` to `accepted` when these hold)" and the Item 4 sentence "Status stays
+`adopting` until one clean pass" are superseded by this amendment, not rewritten.
+The pending measurements keep being recorded on #9454 as each completes; a measured failure of item 1 (the admin
+bypass) still triggers the rollback recipe above regardless of this status.

@@ -191,7 +191,7 @@ wait_unlock() { for _ in $(seq 1 200); do [[ ! -d "$STUB_DB_DIR/lock.d" ]] && re
 # === Case: free acquire — marker observed, ACQUIRED banner, holder alive =====
 setup_case free
 rc=0; out=$(_acquire ti-main-run1 a 2>&1) || rc=$?
-if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -qE 'DEV_SUITE_MUTEX_ACQUIRED wait_ms=[0-9]+'; then
+if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -cE >/dev/null 'DEV_SUITE_MUTEX_ACQUIRED wait_ms=[0-9]+'; then
   ok "free acquire emits DEV_SUITE_MUTEX_ACQUIRED wait_ms=<N> (rc=0)"
 else
   bad "free acquire: rc=$rc out=$out"
@@ -258,7 +258,7 @@ else
   bad "acquire did not connect via DATABASE_URL_POOLER"
 fi
 rrc=0; rel=$(_release ti-main-run1 a) || rrc=$?
-if [[ "$rrc" == "0" ]] && printf '%s' "$rel" | grep -q 'DEV_SUITE_MUTEX_RELEASED'; then
+if [[ "$rrc" == "0" ]] && printf '%s' "$rel" | grep -c >/dev/null 'DEV_SUITE_MUTEX_RELEASED'; then
   ok "release emits DEV_SUITE_MUTEX_RELEASED (rc=0)"
 else
   bad "release: rc=$rrc out=$rel"
@@ -281,7 +281,7 @@ fi
 # ~10s, so a dead client is detected at the next statement boundary.
 setup_case chunked
 rc=0; out=$(HOLD_S=25 _acquire ti-main-runZ chunk 2>&1) || rc=$?
-if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -qE 'DEV_SUITE_MUTEX_ACQUIRED'; then
+if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -cE >/dev/null 'DEV_SUITE_MUTEX_ACQUIRED'; then
   ok "chunked-hold acquire succeeds"
 else
   bad "chunked-hold acquire: rc=$rc out=$out"
@@ -312,17 +312,17 @@ wait_lock || bad "first holder never took the stub lock"
 # `WAIT_S=1 _acquire` prefix — a var-prefix on a FUNCTION call persists in this
 # shell after return and would silently leak the budget into later cases.
 rc=0; out=$(_acquire ti-pr-runB B 'DEV_SUITE_MUTEX_WAIT_S=1' 'STUB_HOLDER_NAME=ti-sibling-ref-run99' 2>&1) || rc=$?
-if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -q 'DEV_SUITE_MUTEX_WAITING'; then
+if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -c >/dev/null 'DEV_SUITE_MUTEX_WAITING'; then
   ok "contended acquire announces DEV_SUITE_MUTEX_WAITING"
 else
   bad "contended acquire: no WAITING (rc=$rc out=$out)"
 fi
-if printf '%s' "$out" | grep -q 'DEV_SUITE_MUTEX_CONTENDED_PROCEEDING'; then
+if printf '%s' "$out" | grep -c >/dev/null 'DEV_SUITE_MUTEX_CONTENDED_PROCEEDING'; then
   ok "wait-budget expiry emits DEV_SUITE_MUTEX_CONTENDED_PROCEEDING (rc=0, fail-open)"
 else
   bad "contended acquire did not reach CONTENDED_PROCEEDING (rc=$rc out=$out)"
 fi
-if printf '%s' "$out" | grep -q 'holder=ti-sibling-ref-run99'; then
+if printf '%s' "$out" | grep -c >/dev/null 'holder=ti-sibling-ref-run99'; then
   ok "contended banner names the holder's application_name"
 else
   bad "contended banner does not name the holder (out=$out)"
@@ -343,8 +343,8 @@ _acquire ti-main-runC C 'STUB_HOLD_S=2' >/dev/null 2>&1 &
 wait_lock || bad "first holder never took the stub lock (waitacq)"
 rc=0; out=$(_acquire ti-pr-runD D 'DEV_SUITE_MUTEX_WAIT_S=15' 2>&1) || rc=$?
 if [[ "$rc" == "0" ]] \
-  && printf '%s' "$out" | grep -q 'DEV_SUITE_MUTEX_WAITING' \
-  && printf '%s' "$out" | grep -qE 'DEV_SUITE_MUTEX_ACQUIRED wait_ms=[0-9]+'; then
+  && printf '%s' "$out" | grep -c >/dev/null 'DEV_SUITE_MUTEX_WAITING' \
+  && printf '%s' "$out" | grep -cE >/dev/null 'DEV_SUITE_MUTEX_ACQUIRED wait_ms=[0-9]+'; then
   ok "second acquire waits then ACQUIRED after holder release"
 else
   bad "wait-then-acquire: rc=$rc out=$out"
@@ -364,12 +364,12 @@ _release ti-pr-runD D >/dev/null
 # === Case: marker never printed — budget exhausts to CONTENDED_PROCEEDING ====
 setup_case nevermark
 rc=0; out=$(_acquire ti-main-runE E 'DEV_SUITE_MUTEX_WAIT_S=1' 'STUB_NEVER_MARK=1' 2>&1) || rc=$?
-if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -q 'DEV_SUITE_MUTEX_CONTENDED_PROCEEDING'; then
+if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -c >/dev/null 'DEV_SUITE_MUTEX_CONTENDED_PROCEEDING'; then
   ok "silent holder exhausts the wait budget -> CONTENDED_PROCEEDING"
 else
   bad "never-mark arm: rc=$rc out=$out"
 fi
-if printf '%s' "$out" | grep -qE 'DEV_SUITE_MUTEX_ACQUIRED'; then
+if printf '%s' "$out" | grep -cE >/dev/null 'DEV_SUITE_MUTEX_ACQUIRED'; then
   bad "never-mark arm falsely claimed ACQUIRED"
 else
   ok "never-mark arm never claims ACQUIRED"
@@ -395,7 +395,7 @@ rc=0; out=$(env PATH="$STUB_BIN:$PATH" STUB_DB_DIR="$STUB_DB_DIR" \
       DEV_SUITE_MUTEX_STATE_DIR="$STATE" \
       env -u DATABASE_URL_POOLER -u DATABASE_URL \
       bash "$SUT" acquire 2>&1) || rc=$?
-if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -q 'DEV_SUITE_MUTEX_UNAVAILABLE'; then
+if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -c >/dev/null 'DEV_SUITE_MUTEX_UNAVAILABLE'; then
   ok "no DB url -> DEV_SUITE_MUTEX_UNAVAILABLE + rc=0 (fail-open)"
 else
   bad "no-url arm: rc=$rc out=$out"
@@ -413,7 +413,7 @@ rc=0; out=$(env PATH="$STUB_BIN:$PATH" STUB_DB_DIR="$STUB_DB_DIR" \
       DEV_SUITE_MUTEX_WAIT_S=10 DEV_SUITE_MUTEX_HOLD_S=30 \
       env -u DATABASE_URL_POOLER \
       bash "$SUT" acquire 2>&1) || rc=$?
-if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -qE 'DEV_SUITE_MUTEX_ACQUIRED'; then
+if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -cE >/dev/null 'DEV_SUITE_MUTEX_ACQUIRED'; then
   ok "direct DATABASE_URL acquire succeeds"
 else
   bad "direct-url arm: rc=$rc out=$out"
@@ -448,7 +448,7 @@ rc=0; out=$(env PATH="$STUB_BIN:$PATH" STUB_DB_DIR="$STUB_DB_DIR" \
       DEV_SUITE_MUTEX_WAIT_S=10 DEV_SUITE_MUTEX_HOLD_S=30 \
       env -u DATABASE_URL_POOLER \
       bash "$SUT" acquire 2>&1) || rc=$?
-if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -qE 'DEV_SUITE_MUTEX_ACQUIRED' \
+if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -cE >/dev/null 'DEV_SUITE_MUTEX_ACQUIRED' \
   && grep -qF "$MUTEX_SQL" "$STUB_DB_DIR/calls.log"; then
   ok "direct :6543 URL acquires via xact lock (session-leak class unexpressible)"
 else
@@ -460,7 +460,7 @@ env STUB_DB_DIR="$STUB_DB_DIR" DEV_SUITE_MUTEX_STATE_DIR="$STATE" \
 # === Case: DEV_SUITE_MUTEX_DISABLE=1 — the emergency valve fails open =======
 setup_case disabled
 rc=0; out=$(_acquire ti-main-runM M 'DEV_SUITE_MUTEX_DISABLE=1' 2>&1) || rc=$?
-if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -q 'DEV_SUITE_MUTEX_UNAVAILABLE reason=disabled'; then
+if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -c >/dev/null 'DEV_SUITE_MUTEX_UNAVAILABLE reason=disabled'; then
   ok "DEV_SUITE_MUTEX_DISABLE=1 -> UNAVAILABLE reason=disabled (rc=0)"
 else
   bad "disable valve: rc=$rc out=$out"
@@ -478,7 +478,7 @@ rc=0; out=$(env PATH="$STUB_BIN:$PATH" STUB_DB_DIR="$STUB_DB_DIR" \
       DEV_SUITE_MUTEX_IDENTITY=ti-main-runN \
       DEV_SUITE_MUTEX_STATE_DIR="relative/state" \
       bash "$SUT" acquire 2>&1) || rc=$?
-if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -q 'FATAL: fixture dir'; then
+if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -c >/dev/null 'FATAL: fixture dir'; then
   ok "relative STATE_DIR is refused closed (exit 2, no writes under CWD)"
 else
   bad "relative STATE_DIR: rc=$rc out=$out"
@@ -488,7 +488,7 @@ fi
 setup_case stateunwritable
 : >"$WORK/blockfile"  # a FILE, so install -d on its 'child' must fail
 rc=0; out=$(_acquire ti-main-runO O 'DEV_SUITE_MUTEX_STATE_DIR='"$WORK/blockfile/child" 2>&1) || rc=$?
-if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -q 'DEV_SUITE_MUTEX_UNAVAILABLE reason=state_dir_unwritable'; then
+if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -c >/dev/null 'DEV_SUITE_MUTEX_UNAVAILABLE reason=state_dir_unwritable'; then
   ok "unwritable STATE_DIR -> UNAVAILABLE reason=state_dir_unwritable (rc=0)"
 else
   bad "state_dir_unwritable arm: rc=$rc out=$out"
@@ -497,12 +497,12 @@ fi
 # === Case: holder exits before the marker — holder_exited, not ACQUIRED =====
 setup_case holderexited
 rc=0; out=$(_acquire ti-main-runP P 'STUB_DIE=1' 2>&1) || rc=$?
-if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -q 'DEV_SUITE_MUTEX_UNAVAILABLE reason=holder_exited'; then
+if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -c >/dev/null 'DEV_SUITE_MUTEX_UNAVAILABLE reason=holder_exited'; then
   ok "dead holder -> UNAVAILABLE reason=holder_exited (rc=0)"
 else
   bad "holder_exited arm: rc=$rc out=$out"
 fi
-if printf '%s' "$out" | grep -qE 'DEV_SUITE_MUTEX_ACQUIRED'; then
+if printf '%s' "$out" | grep -cE >/dev/null 'DEV_SUITE_MUTEX_ACQUIRED'; then
   bad "holder_exited arm falsely claimed ACQUIRED"
 else
   ok "holder_exited arm never claims ACQUIRED"
@@ -513,14 +513,14 @@ fi
 # phase 2 and still acquires; probe reports PROBE_UNAVAILABLE.
 setup_case probefail
 rc=0; out=$(_acquire ti-main-runQ Q 'STUB_FAIL=probe' 2>&1) || rc=$?
-if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -qE 'DEV_SUITE_MUTEX_ACQUIRED'; then
+if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -cE >/dev/null 'DEV_SUITE_MUTEX_ACQUIRED'; then
   ok "probe failure falls through to the blocking holder and acquires"
 else
   bad "probe-failure fallthrough: rc=$rc out=$out"
 fi
 _release ti-main-runQ Q >/dev/null
 rc=0; out=$(_probe ti-main-runQ 'STUB_FAIL=probe' 2>&1) || rc=$?
-if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -q 'DEV_SUITE_MUTEX_PROBE_UNAVAILABLE reason=query_failed'; then
+if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -c >/dev/null 'DEV_SUITE_MUTEX_PROBE_UNAVAILABLE reason=query_failed'; then
   ok "failed probe -> PROBE_UNAVAILABLE reason=query_failed (rc=0)"
 else
   bad "probe query_failed arm: rc=$rc out=$out"
@@ -533,7 +533,7 @@ hpid=$(cat "$STUB_DB_DIR/state-R/holder.pid" 2>/dev/null || true)
 kill -9 "$hpid" 2>/dev/null || true
 for _ in $(seq 1 50); do kill -0 "$hpid" 2>/dev/null || break; sleep 0.1; done
 rc=0; out=$(_release ti-main-runR R 2>&1) || rc=$?
-if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -q 'DEV_SUITE_MUTEX_HOLDER_LOST'; then
+if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -c >/dev/null 'DEV_SUITE_MUTEX_HOLDER_LOST'; then
   ok "dead holder at release -> HOLDER_LOST (rc=0), not a false RELEASED"
 else
   bad "holder-lost exited arm: rc=$rc out=$out"
@@ -549,7 +549,7 @@ sleep 60 & innocent=$!
 assert_fixture_dir "$STUB_DB_DIR"  # P1b: setup_case bound it inside a function
 printf '%s\n' "$innocent" >"$STUB_DB_DIR/state-S/holder.pid"
 rc=0; out=$(_release ti-main-runS S 2>&1) || rc=$?
-if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -qE 'DEV_SUITE_MUTEX_HOLDER_LOST pid=[0-9]+ recycled'; then
+if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -cE >/dev/null 'DEV_SUITE_MUTEX_HOLDER_LOST pid=[0-9]+ recycled'; then
   ok "recycled pid -> HOLDER_LOST recycled (rc=0)"
 else
   bad "holder-lost recycled arm: rc=$rc out=$out"
@@ -564,7 +564,7 @@ kill "$innocent" 2>/dev/null || true
 # === Case: non-numeric WAIT_S coerces to the default ========================
 setup_case waitinvalid
 rc=0; out=$(_acquire ti-main-runT T 'DEV_SUITE_MUTEX_WAIT_S=abc' 2>&1) || rc=$?
-if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -qE 'DEV_SUITE_MUTEX_ACQUIRED'; then
+if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -cE >/dev/null 'DEV_SUITE_MUTEX_ACQUIRED'; then
   ok "non-numeric DEV_SUITE_MUTEX_WAIT_S coerces and acquires"
 else
   bad "WAIT_S coercion: rc=$rc out=$out"
@@ -575,7 +575,7 @@ _release ti-main-runT T >/dev/null
 setup_case identbad
 rc=0; out=$(_acquire 'ti bad'"'"'ident'$'\x01' U 2>&1) || rc=$?
 if [[ "$rc" == "0" ]] \
-  && printf '%s' "$out" | grep -qE 'DEV_SUITE_MUTEX_ACQUIRED wait_ms=[0-9]+ identity=[A-Za-z0-9._/-]+$'; then
+  && printf '%s' "$out" | grep -cE >/dev/null 'DEV_SUITE_MUTEX_ACQUIRED wait_ms=[0-9]+ identity=[A-Za-z0-9._/-]+$'; then
   ok "hostile identity is charset-normalized (identity= is a single safe token)"
 else
   bad "identity sanitize: rc=$rc out=$out"
@@ -589,7 +589,7 @@ _release ti-main-runU U >/dev/null
 
 # === Case: unknown subcommand — usage error exit 2 ==========================
 rc=0; out=$(bash "$SUT" bogus 2>&1) || rc=$?
-if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -q "FATAL: unknown subcommand 'bogus'"; then
+if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -c >/dev/null "FATAL: unknown subcommand 'bogus'"; then
   ok "unknown subcommand -> exit 2 + FATAL"
 else
   bad "unknown subcommand: rc=$rc out=$out"
@@ -598,7 +598,7 @@ fi
 # === Case: non-canonical identity — green must not depend on fixture values ==
 setup_case noncanonical
 rc=0; out=$(_acquire 'ti-refs/pull/9999/merge-run424242' K 2>&1) || rc=$?
-if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -q 'DEV_SUITE_MUTEX_ACQUIRED'; then
+if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -c >/dev/null 'DEV_SUITE_MUTEX_ACQUIRED'; then
   ok "non-canonical identity acquires cleanly"
 else
   bad "non-canonical identity: rc=$rc out=$out"
@@ -608,7 +608,7 @@ _release 'ti-refs/pull/9999/merge-run424242' K >/dev/null
 # === Case: release idempotence ==============================================
 setup_case relidem
 rc=0; out=$(_release ti-main-runK K 2>&1) || rc=$?
-if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -q 'DEV_SUITE_MUTEX_RELEASED'; then
+if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -c >/dev/null 'DEV_SUITE_MUTEX_RELEASED'; then
   ok "release with nothing held is idempotent (RELEASED, rc=0)"
 else
   bad "idempotent release: rc=$rc out=$out"
@@ -619,7 +619,7 @@ setup_case probe
 _acquire ti-main-runL L >/dev/null 2>&1 &
 wait_lock || bad "first holder never took the stub lock (probe)"
 rc=0; out=$(_probe ti-main-runL 'STUB_HOLDER_NAME=ti-main-runL' 2>&1) || rc=$?
-if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -q 'DEV_SUITE_MUTEX_HELD_BY ti-main-runL'; then
+if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -c >/dev/null 'DEV_SUITE_MUTEX_HELD_BY ti-main-runL'; then
   ok "probe names the current holder (HELD_BY banner form)"
 else
   bad "probe held: rc=$rc out=$out"
@@ -627,7 +627,7 @@ fi
 _release ti-main-runL L >/dev/null
 wait_unlock || bad "stub lock never freed (probe)"
 rc=0; out=$(_probe ti-main-runL 2>&1) || rc=$?
-if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -q 'DEV_SUITE_MUTEX_FREE'; then
+if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -c >/dev/null 'DEV_SUITE_MUTEX_FREE'; then
   ok "probe reports DEV_SUITE_MUTEX_FREE after release"
 else
   bad "probe free: rc=$rc out=$out"
@@ -635,7 +635,7 @@ fi
 
 # === Case: --help is discoverable ===========================================
 rc=0; out=$(bash "$SUT" --help 2>&1) || rc=$?
-if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -q 'Usage: dev-suite-mutex.sh'; then
+if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -c >/dev/null 'Usage: dev-suite-mutex.sh'; then
   ok "--help prints usage naming dev-suite-mutex"
 else
   bad "--help: rc=$rc out=$out"

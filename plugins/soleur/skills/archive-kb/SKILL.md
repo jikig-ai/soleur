@@ -19,11 +19,17 @@ The script generates timestamps internally and uses `git mv` to preserve history
 > `ship` Phase 6 reads `decision-challenges.md` from it (ADR-084 §5), and one such gate
 > has already been built and reverted for that reason.
 >
-> This script is unchanged and still works for brainstorms. Retiring its spec/plan
-> discovery paths is tracked by **#7400**; until then it is neither enforced nor removed.
-> Known discovery gaps: `derive_slug()` strips a `fix-` prefix and then probes
-> `specs/feat-${slug}`, so `fix-*` spec dirs are unreachable; plans are matched by a
-> `*<slug>*` glob, so a topic-named plan is missed and the run still reports success.
+> Retiring its spec/plan discovery paths is tracked by **#7400**. Discovery is now
+> two axes: the slug match (below) UNIONED with the branch diff — files added or
+> modified on the branch under `knowledge-base/project/{plans,brainstorms,specs}`
+> are this feature's artifacts by commit provenance, so a topic-named plan
+> (`2026-10-08-...-plan.md` never matches the slug glob) and a non-`feat-*` spec
+> dir are both found. The partial-run WARNING stays: it fires when exactly one
+> class is found and the other is silent.
+>
+> **ship integration:** `ship` Phase 6 step 5.5 invokes this script after its last
+> live-artifact reads (decision-challenges render, `## Operator Holds`) and the
+> `git mv` rides the feature PR — archival is part of ship, not a follow-up.
 
 ## Usage
 

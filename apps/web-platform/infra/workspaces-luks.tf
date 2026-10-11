@@ -816,7 +816,7 @@ resource "github_actions_secret" "workspaces_luks_boot_token" {
 # git-data-luks.tf sets `format = "ext4"` and its own comment admits the format is
 # pointless (the guest's luksFormat overwrites the header region anyway). Copying it
 # here would be actively harmful: `format = "ext4"` makes the fresh volume carry
-# TYPE=ext4, BYTE-INDISTINGUISHABLE from the live plaintext volume. That destroys the
+# TYPE=ext4, BYTE-INDISTINGUISHABLE from a plaintext source volume. That destroys the
 # only sound luksFormat guard — "format only a device with NO filesystem signature".
 #
 # With no `format`, the device is raw and the discriminator exists:
@@ -877,6 +877,26 @@ resource "github_actions_secret" "workspaces_luks_boot_token" {
 # Size and location track web-1's live volume exactly: `var.volume_size` is the same
 # input `hcloud_volume.workspaces` uses, so the target can never be born smaller than
 # the source, and the location must match the server for attachment to be legal.
+#
+# THE SOLE COPY (#6604 step 7). web-1's plaintext volume is wiped, deleted and forgotten, so this
+# volume now holds the ONLY copy of every workspace. Two independent destroy guards:
+#   - delete_protection = true — Hetzner-side: the API refuses DELETE /volumes/{id} from every
+#     client (Terraform, hcloud CLI, console) until someone holding a write token lifts it with
+#     `change_protection`. It does NOT stop a detach. Changing it is a free in-place update,
+#     delivered by the post-merge `manual-rerun` apply.
+#   - prevent_destroy = true — Terraform-side: any plan that would destroy or replace this volume
+#     fails at plan time. That retires the `apply_target=workspaces-luks-recut` `-replace` arm: it
+#     now plan-fails with `Instance cannot be destroyed`, which IS the guard, not a defect. It also
+#     fails any plan touching a ForceNew attribute here (e.g. a var.web_hosts["web-1"].location edit).
+#
+# ORDERING TRAP for #6931 (whoever lifts these deliberately): lift delete_protection FIRST, in its
+# own reviewed apply, and only then remove prevent_destroy (here AND on the attachment below). If
+# prevent_destroy is removed while delete_protection stays on, a destroy apply detaches the mounted
+# volume and THEN fails the delete — an outage with nothing gained. Two detaches happen before the
+# refusal: the attachment depends on the volume, so Terraform destroys it first; and the provider's
+# own delete detaches before it deletes (terraform-provider-hcloud v1.63.0, the version
+# .terraform.lock.hcl pins, internal/volume/resource.go resourceVolumeDelete: `if volume.Server !=
+# nil` → c.Volume.Detach, then c.Volume.Delete, with no protection check in between).
 resource "hcloud_volume" "workspaces_luks" {
   name     = "soleur-web-platform-data-luks"
   size     = var.volume_size
@@ -885,12 +905,19 @@ resource "hcloud_volume" "workspaces_luks" {
   labels = {
     app = "soleur-web-platform"
   }
+
+  delete_protection = true
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
-# Attached ALONGSIDE the live plaintext volume — the additive design's two-copy state.
-# The old volume keeps serving /mnt/data throughout Phases 3-4; this one receives the
-# rsync. That two-copy state IS the verified-restorable backup (CPO C3), and it beats
-# a Hetzner snapshot: it is a live, mountable device the cutover rehearses, not a blob
+# HISTORICAL (the cutover design; web-1's plaintext volume is retired since #6604 step 7):
+# attached ALONGSIDE the then-serving plaintext volume — the additive design's two-copy state.
+# The old volume kept serving /mnt/data throughout Phases 3-4; this one received the
+# rsync. That two-copy state WAS the verified-restorable backup (CPO C3), and it beat
+# a Hetzner snapshot: it was a live, mountable device the cutover rehearsed, not a blob
 # nobody has ever restored — and it manufactures no indefinitely-retained plaintext
 # copy, which is what made the snapshot wrong (CTO/COO).
 #
@@ -903,18 +930,39 @@ resource "hcloud_volume" "workspaces_luks" {
 # decisive ground for refusing a web-1 replace; it is corrected at source here so the
 # next reader does not re-inherit it.
 #
-# The live hazard is the OPPOSITE of ambiguity — it is determinism pointed at the wrong
-# volume. /mnt/data pins by-id to hcloud_volume.workspaces[key], the PLAINTEXT volume,
-# which the 2026-07-23 cutover SUPERSEDED (live data is on this LUKS volume; see the
-# encryption-posture ledger). The guest-side fresh-boot path (workspaces-luks-provision.sh, #6931)
-# opens a LUKS volume it is pointed at, but a rebuilt web-1 is pointed at the superseded plaintext
-# backstop, whose ext4 signature it REFUSES: the host fails closed (an outage, never a silent
-# plaintext mount) while this volume sits attached and unopened. This attachment is bound to web-1
-# and outside the web-host-create birth fan-out (#6964); web-host-birth-gate.sh refuses web-1 by
-# name so a dispatch cannot strand it.
+# HISTORICAL (until #6604 step 7): the hazard was the OPPOSITE of ambiguity — determinism
+# pointed at the wrong volume. /mnt/data pinned by-id to hcloud_volume.workspaces["web-1"],
+# the PLAINTEXT volume the 2026-07-23 cutover SUPERSEDED, so a rebuilt web-1 would have
+# mounted that stale backstop while this volume sat attached and unopened.
+#
+# Since #6604 step 7 that volume is wiped, deleted and out of state, and web-1's cloud-init
+# workspaces_volume_id is the literal "retired-6604" (server.tf). A rebuilt web-1 now finds
+# no such by-id device: cloud-init emits `workspaces_mount fatal` and boots on an EMPTY
+# /mnt/data (fails loud, serves no stale data). Nothing on a fresh boot opens the mapper —
+# crypttab is written with keyfile `none` (soleur-host-bootstrap.sh) and the guest-side
+# unlock path for the template web-1 was built from has no opener. The fresh-boot guest-side path
+# (workspaces-luks-provision.sh, #6931, ADR-263) serves FRESH hosts only: it opens a LUKS volume it is
+# pointed at, and a rebuilt web-1 is pointed at no volume at all, so a rebuild is still not a recovery
+# path for web-1. web-host-birth-gate.sh refuses web-1 by name so a dispatch cannot strand this attachment.
+#
+# prevent_destroy (#6604 step 7 review): volume_id and server_id are both ForceNew, so ANY replace
+# of this attachment DETACHES the sole copy from web-1, and delete_protection on the volume does not
+# stop a detach. Reaching paths: a web-1 server replace (new server_id), a volume address that fell
+# out of state while this one stayed (a recut then plans a bare volume create plus an attachment
+# replace that the volume's own prevent_destroy never sees), or a re-pointed server_id. Any plan
+# whose graph includes this attachment and would destroy it now fails at plan time with
+# `Instance cannot be destroyed`. CONSEQUENCE, fail-closed and intended: a deliberate web-1 replace
+# that includes this address (the #6931 unblock of web_host_replace, ADR-148) cannot plan until this
+# lifecycle is lifted in that same reviewed change. web_host_replace refuses web-1 by name today,
+# and its -target set does not include this address, so nothing that runs now is newly blocked.
+# Guard B4 rows 9a/9b/8c pin it (workspaces-luks.test.sh).
 resource "hcloud_volume_attachment" "workspaces_luks" {
   volume_id = hcloud_volume.workspaces_luks.id
   server_id = hcloud_server.web["web-1"].id
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # GitHub Environment with a required-reviewer protection rule — the SOLE human

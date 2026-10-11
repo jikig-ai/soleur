@@ -272,6 +272,29 @@ export const MANIFEST: ManifestEntry[] = [
     replace_target: { choice: "registry-host-replace", server: "hcloud_server.registry" },
   },
   {
+    name: "git_data_host_prd",
+    // #9438: the git-data HOST's own recurring liveness beat (git-data-liveness.timer), distinct
+    // from git_data_prd above, which is fed by a web-host cron and proves only that some web host
+    // can open a TCP connection to the port. Armed by the host's OWN cloud-init, so it is
+    // dedicated-host-boot, which makes ADR-103's replace_target requirement fire: cloud-init is
+    // per-instance, so the feeder reaches the host only on a fresh boot (git-data-host-replace).
+    arming: "dedicated-host-boot",
+    // Born paused and stays paused in source; live arming is the owner-authorized, measured
+    // arm step after the replaced host's first beats (ADR-117, ADR-283).
+    paused: true,
+    feeder: {
+      kind: "timer",
+      evidence: {
+        file: "apps/web-platform/infra/cloud-init-git-data.yml",
+        pattern: "systemctl enable --now git-data-liveness.timer",
+      },
+    },
+    replace_target: { choice: "git-data-host-replace", server: "hcloud_server.git_data" },
+    // The monitor is deliberately paused-yet-fed between the replace and the arm. Removed by the
+    // record PR once a measured beat has armed it (the issue it names stays open until then).
+    arming_pending: { tracking_issue: 9438 },
+  },
+  {
     name: "registry_disk_prd",
     arming: "dedicated-host-boot",
     paused: false,
@@ -286,5 +309,22 @@ export const MANIFEST: ManifestEntry[] = [
       },
     },
     replace_target: { choice: "registry-host-replace", server: "hcloud_server.registry" },
+  },
+  {
+    name: "inngest_server_probe",
+    // #8516 — the dead-probe sibling of logtail_exploration_alert.inngest_luks_wrong_volume:
+    // a pusher beats it only while a fresh host_role=dedicated inngest-server-probe row
+    // reaches the warehouse (hourly emission cadence; period 3600 + grace 1800). DP-10's delivery
+    // shape: born paused with the feeder deliberately deferred — candidate shapes live on #9703.
+    arming: "external-probe",
+    paused: true,
+    feeder: {
+      kind: "none",
+      url_secret: "INNGEST_SERVER_PROBE_HEARTBEAT_URL",
+      tracking_issue: 9703,
+    },
+    arming_pending: { tracking_issue: 9703 },
+    exempt_reason:
+      "the feeder is a repo-side verifier (or a later host-side push) — remediation never requires an inngest-host-replace, precisely because a host push cannot see Vector-allowlist or sink failures (#6780). Not dedicated-host-boot, so ADR-103's replace_target requirement correctly does not fire.",
   },
 ];

@@ -1894,3 +1894,13 @@ Three related changes, all on the surfaces this ADR owns. It amends no Decision.
   `in-progress`, probe-fault, and every unexpected shape each refuse with their own remediation.
   The check sits after G3's audibility gate and before the mutating `flushed` write, so a
   refusal costs nothing to leave.
+
+## Addendum — 2026-10-09 (#8285)
+
+Appended; nothing above is changed. Where this ADR names `apply_target=inngest-volume-recut` as a
+remediation dispatch, that dispatch no longer exists once PR A of #8285 has merged (the job is
+converted into `inngest-backstop-retire`, which retires the plaintext Redis backstop and recuts
+nothing). A standing flush latch therefore has no in-repo remediation dispatch (#7777, closed, is the
+record of why the latch has no append-only clear). See the ADR-142 addendum of 2026-10-08.
+
+**Appended 2026-10-09 (#8285 PR B).** The `inngest-backstop-retire` dispatch the paragraph above says PR A converted the recut job into has itself been deleted: it ran three times on 2026-10-09 (runs 37950928039, 37955244979, 37958051426), the plaintext volume answered 404, and PR B removed the job, its gate library and its wipe host. The Inngest dispatch surfaces that share the `deploy-inngest-restart` mutex are now `inngest-host`, `inngest-host-replace`, `cutover-inngest.yml` (`op=luks-cutover` and the rest; `op=luks-rollback` is retired), `deploy-inngest-image.yml` and `restart-inngest-server.yml`. See the ADR-142 addendum of 2026-10-09.

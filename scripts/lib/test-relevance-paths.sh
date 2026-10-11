@@ -145,7 +145,7 @@ CF_TUNNEL_BATTERY_PATHS=(
   ".github/workflows/apply-deploy-pipeline-fix.yml"         # W7_EXPECTED
   ".github/workflows/apply-web-platform-infra.yml"          # W7_EXPECTED (also APPLY_REL)
   ".github/workflows/git-data-cutover.yml"                  # W7_EXPECTED, and mutated directly by M4
-  ".github/workflows/workspaces-luks-cutover.yml"           # W7_EXPECTED (three call sites)
+  ".github/workflows/workspaces-luks-cutover.yml"           # W7_EXPECTED (two call sites)
   ".github/workflows/workspaces-luks-verify.yml"            # W7_EXPECTED
   "${PR_GATE_MACHINERY_PATHS[@]}"
   "scripts/cf-tunnel-liveness-gate-mutations.test.sh"       # SELF — see the note above

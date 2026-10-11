@@ -207,3 +207,5 @@ a row, that is a gap in the emitter — not grounds for opening a shell on a hos
 | Rule 4, identity-only liveness (tighten `host`/`host_name`) — added 2026-09-24 | Both fields are identical across a host replace (AP-027); this is the defect the rule-4 amendment fixes. |
 | Rule 4, pin the newest rows' `_MACHINE_ID`/`_BOOT_ID` — added 2026-09-24 | Circular: in the failure window the newest rows ARE the predecessor's. |
 | Rule 4, a freshness bound on the newest row — added 2026-09-24 | A heuristic with no authority behind it; a predecessor's last rows can be minutes old, exactly as on 2026-09-24. |
+
+**Appended 2026-10-09 (#8285 PR B).** `op=luks-rollback`, named in the G3 passages above, was retired together with the plaintext volume it copied back to; `op=luks-cutover` keeps its G3 liveness guard unchanged. See the ADR-142 addendum of 2026-10-09.

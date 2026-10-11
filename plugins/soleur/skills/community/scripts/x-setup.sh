@@ -18,10 +18,16 @@
 #
 # Exit codes:
 #   0 - Success
-#   1 - General error
+#   1 - General error, including missing credentials and a write-env value outside the .env
+#       allow-list. The two are told apart by the stderr marker, which ONLY the allow-list refusal
+#       emits: `SOLEUR_CREDENTIAL_REFUSED ... var=<NAME> phase=write-env` (value-free). Exit 1 with
+#       that marker is the allow-list; exit 1 without it is a missing credential.
 #
 # Output: JSON or plain text to stdout
-# Errors: Messages to stderr, exit 1
+# Errors: Messages to stderr, exit 1. The exception is `write-env`, which has no stdout payload and
+#         whose human text is therefore all on STDOUT (agent runtimes surface stdout and swallow
+#         stderr): the missing-credentials diagnostic, the allow-list line, and the "Wrote N
+#         variables" confirmation. Only the allow-list marker stays on stderr.
 
 set -euo pipefail
 
@@ -157,6 +163,18 @@ report_transport_failure() {
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../../../scripts/resolve-git-root.sh"
+# (#9597) OAuth 1.0a request signing (HMAC-SHA1) without the key on any process's argument list.
+# A function of this name inherited from the environment (an exported bash function) is dropped
+# first, so it cannot stand in for the library's when the library loads without defining it
+# (truncated or emptied); the check after the load refuses to run at all in that case. Only an
+# inherited function NAMED hmac_sha1_b64 is closed here: the key stays readable by any other
+# exported function, the same exposure as the exported secret variables.
+unset -f hmac_sha1_b64 2>/dev/null || true
+source "$SCRIPT_DIR/lib/hmac-sha1-b64.sh"
+if ! declare -F hmac_sha1_b64 >/dev/null; then
+  echo "Error: the OAuth signing helper did not define hmac_sha1_b64; refusing to run." >&2
+  exit 1
+fi
 
 # readonly (#7898 review): `cmd_verify` and friends run `set -a; source "$env_file"; set +a`
 # BELOW this line, so a plain assignment here is rebindable by the repo's .env --
@@ -164,6 +182,45 @@ source "$SCRIPT_DIR/../../../scripts/resolve-git-root.sh"
 # That is the "--disable and --noproxy are intact and irrelevant" shape this change
 # exists to close, one layer up. readonly makes the destination non-rebindable.
 readonly X_API="https://api.x.com"
+
+# (#9597) write-env value allow-list. `.env` values are written UNQUOTED and later SOURCED
+# (`verify`, the community scripts), so a value holding a command substitution, a backtick, a
+# quote, a semicolon, a space or a newline would execute or split on the next source, and a leading
+# tilde would silently change a stored credential (tilde expansion on source). Validation is an
+# allow-list, fail-closed, and runs for EVERY value BEFORE the first write: a refused value prints
+# the value-free marker plus ONE human line naming only the VARIABLE, writes nothing, exits 1 and
+# leaves any existing .env untouched. A value outside the list that is legitimate is added to .env
+# by hand. The glob runs under LC_ALL=C and is not grep, which is line-oriented and lets a
+# multi-line value through.
+_wenv_class() { # <value>: 0 allowed, 1 outside the allow-list or empty, 2 holds a control character
+  local LC_ALL=C
+  case "${1-}" in
+    '') return 1 ;;
+    *[[:cntrl:]]*) return 2 ;;
+    *[!A-Za-z0-9._:/@%+=,-]*) return 1 ;;
+  esac
+  return 0
+}
+_wenv_refuse() { # <reason> <VARIABLE>
+  printf 'SOLEUR_CREDENTIAL_REFUSED script=%s reason=%s var=%s phase=write-env\n' "$SOLEUR_TRANSPORT_SCRIPT" "$1" "$2" >&2
+  echo "Error: ${2} holds a character this script does not write to .env (allowed: letters, digits and . _ : / @ % + = , -), so nothing was written and your existing .env is unchanged. The value is not shown. If the value is legitimate, add it to .env by hand."
+  exit 1
+}
+# _wenv_validate <VARIABLE>...: every NON-EMPTY named variable passes the allow-list. The required
+# variables are checked non-empty by the caller before this runs; an empty optional one is skipped.
+_wenv_validate() {
+  local _wn _wrc
+  for _wn in "$@"; do
+    [[ -n "${!_wn:-}" ]] || continue
+    _wrc=0
+    _wenv_class "${!_wn}" || _wrc=$?
+    case "$_wrc" in
+      0) ;;
+      2) _wenv_refuse control_char "$_wn" ;;
+      *) _wenv_refuse token_shape "$_wn" ;;
+    esac
+  done
+}
 
 # --- Dependency checks ---
 
@@ -208,7 +265,7 @@ require_credentials() {
     echo "  1. Go to https://developer.x.com/en/portal/dashboard" >&2
     echo "  2. Create or select a project and app" >&2
     echo "  3. Generate API Key, API Secret, Access Token, and Access Token Secret" >&2
-    echo "  4. Export them as environment variables" >&2
+    echo "  4. Export them as environment variables, without typing a value into the command (its text is kept in the transcript and the shell history): in a terminal, read -rs X_API_KEY; export X_API_KEY, and the same for each of the other three" >&2
     exit 1
   fi
 }
@@ -226,8 +283,11 @@ _cfg_q() { local v="${1-}"; v=${v//\\/\\\\}; v=${v//\"/\\\"}; printf '%s' "$v"; 
 
 # --- OAuth 1.0a signing ---
 
-# URL-encode a string per RFC 3986
+# URL-encode a string per RFC 3986 (RFC 5849 3.6 for OAuth). Byte-wise: under LC_ALL=C each byte
+# is one character, so a multi-byte UTF-8 character encodes as its bytes (%C3%A9), not as a
+# code point (the `printf '%02X' "'é"` form gives E9 in a UTF-8 locale, which is not the encoding).
 urlencode() {
+  local LC_ALL=C
   local string="$1"
   local encoded=""
   local i c o
@@ -289,12 +349,19 @@ oauth_sign() {
   # Build signature base string
   local base_string="${method}&$(urlencode "$url")&$(urlencode "$param_string")"
 
-  # Build signing key
+  # Build signing key (read BY NAME inside the HMAC function below)
+  # shellcheck disable=SC2034
   local signing_key="$(urlencode "${X_API_SECRET}")&$(urlencode "${X_ACCESS_TOKEN_SECRET}")"
 
-  # Generate HMAC-SHA1 signature
+  # Generate HMAC-SHA1 signature (#9597). The signing key is handed to the function by NAME and
+  # lives only in bash builtins and pipes: it is on no process's argument list. A failed
+  # computation yields no signature and the request is never sent unsigned.
   local signature
-  signature=$(printf '%s' "$base_string" | openssl dgst -sha1 -hmac "$signing_key" -binary | base64)
+  signature=$(printf '%s' "$base_string" | hmac_sha1_b64 signing_key) || signature=""
+  if [[ -z "$signature" ]]; then
+    echo "Error: could not compute the OAuth signature; refusing to send an unsigned request." >&2
+    return 1
+  fi
 
   # Build Authorization header
   local auth_header="OAuth "
@@ -384,7 +451,11 @@ cmd_validate_credentials() {
 }
 
 cmd_write_env() {
-  require_credentials
+  # write-env has no stdout payload, so its missing-credentials diagnostic goes to STDOUT too
+  # (require_credentials writes it to stderr, shared with the other commands; exit 1 either way).
+  require_credentials 2>&1
+  # Every value is checked BEFORE the first write (see the allow-list above).
+  _wenv_validate X_API_KEY X_API_SECRET X_ACCESS_TOKEN X_ACCESS_TOKEN_SECRET
 
   local repo_root="$GIT_ROOT"
   local env_file="${repo_root}/.env"
@@ -412,7 +483,7 @@ cmd_write_env() {
     echo "X_ACCESS_TOKEN_SECRET=${X_ACCESS_TOKEN_SECRET}"
   } >> "$env_file"
 
-  echo "Wrote 4 variables to ${env_file} (permissions: 600)" >&2
+  echo "Wrote 4 variables to ${env_file} (permissions: 600)"
 }
 
 cmd_verify() {

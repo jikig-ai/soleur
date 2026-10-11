@@ -329,7 +329,7 @@ $WRITE"
 mutate_file "4 a job-level concurrency keyed on github.ref is added" \
 "$READ
 import re
-s=re.sub(r'^(  test-bun:\n)(    runs-on: [^\n]*\n)',
+s=re.sub(r'^(  test-bun:\n(?:    (?:needs|if): [^\n]*\n)*)(    runs-on: [^\n]*\n)',
          r'\1\2    concurrency:\n      group: legacy-\${{ github.ref }}\n      cancel-in-progress: false\n',
          s, count=1, flags=re.M)
 $WRITE"

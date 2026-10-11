@@ -231,7 +231,14 @@ s = s.replace(old, old + '''  # SANDBOX corpus trim (#8322 suite): only the labe
     tests/commands/sync-domain-model|\\
     plugins/soleur/test/c4-model-freshness.test.sh|\\
     test/x-community|plugins/soleur|zz/new-suite|scripts/lint-dual_lockfile|\\
-    tests/hooks/drop_sentinel-parity) : ;;
+    tests/hooks/drop_sentinel-parity|\\
+    plugins/soleur/test/operator-ack-guard.test.sh|\\
+    plugins/soleur/test/operator-script.test.sh|\\
+    plugins/soleur/test/operator-agent-runnable.test.sh|\\
+    scripts/lint-trap-tempfile-ownership|\\
+    scripts/lint-shell-capture-exit-live|\\
+    scripts/lint-shell-trace-credential-refusal|\\
+    scripts/test-affected-kb-consumers) : ;;
     *) return 0 ;;
   esac
 ''', 1)
@@ -717,6 +724,20 @@ m_s_path_dotdot_mid() { rc_ins "$1" "$RC_TWO" '  run_suite "x/new" bash a/../b.s
 m_ok_python_pytest() { rc_ins "$1" "$RC_TWO" '  run_suite "x/pt" python3 -m pytest tests/x'; }
 m_ok_node()        { rc_ins "$1" "$RC_TWO" '  run_suite "x/nd" node scripts/x.mjs --flag=1'; }
 m_s_idx_nested()   { m_ok_single "$1"; rc_lib_ins "$1" '  "a/two.test.sh"' $'AFFECTED_X_NEW_PATHS=(\n  "x/new.test.sh"\n)'; }
+# GLOBENT (#9813): a well-formed `glob:` member is a declared-entry shape the grammar admits;
+# every malformed variant stays semantic — the closed grammar must never carry a bad shape
+# into a bounded selection.
+m_ok_idx_glob()    { m_ok_single "$1"; rc_lib_append "$1" $'AFFECTED_X_NEW_PATHS=(\n  "glob:knowledge-base/**.sh"\n  "scripts/lib/test-affected-paths.sh"   # THIS FILE\n)'; }
+# Deliberate superset pin: GLOBENT admits a `../`-headed glob the semantic doctrine
+# calls malformed — admission only marks the diff registration-only (the malformed
+# member still mints always-match and the census REDs it; it can never narrow).
+m_ok_idx_glob_dotdot() { m_ok_single "$1"; rc_lib_append "$1" $'AFFECTED_X_NEW_PATHS=(\n  "glob:../x/*.sh"\n  "scripts/lib/test-affected-paths.sh"   # THIS FILE\n)'; }
+m_ok_idx_glob_anchor() { m_ok_single "$1"; rc_lib_append "$1" $'AFFECTED_X_NEW_PATHS=(\n  "glob:knowledge-base/**.sh"\n\n  "x/new.test.sh"\n  "scripts/lib/test-affected-paths.sh"   # THIS FILE\n)'; }
+m_s_idx_glob_qmark() { m_ok_single "$1"; rc_lib_append "$1" $'AFFECTED_X_NEW_PATHS=(\n  "glob:knowledge-base/x?y"\n)'; }
+m_s_idx_glob_bracket() { m_ok_single "$1"; rc_lib_append "$1" $'AFFECTED_X_NEW_PATHS=(\n  "glob:knowledge-base/x[y]"\n)'; }
+m_s_idx_glob_badhead() { m_ok_single "$1"; rc_lib_append "$1" $'AFFECTED_X_NEW_PATHS=(\n  "glob:a*/b"\n)'; }
+m_s_idx_glob_nostar() { m_ok_single "$1"; rc_lib_append "$1" $'AFFECTED_X_NEW_PATHS=(\n  "glob:knowledge-base/x"\n)'; }
+m_s_idx_glob_always() { m_ok_single "$1"; rc_lib_ins "$1" '  "a/one"' '  "glob:knowledge-base/**.sh"'; }
 m_s_idx_comment_alone() { rc_lib_append "$1" '# a note'; }
 m_s_idx_removed()  { local d="$1"; assert_fixture_dir "$d"; grep -v 'THIS FILE' "$d/scripts/lib/test-affected-paths.sh" > "$d/.rc.tmp" && mv "$d/.rc.tmp" "$d/scripts/lib/test-affected-paths.sh"; m_ok_single "$d"; }
 m_s_committed()    { assert_fixture_dir "$1"; rc_ins "$1" "$RC_TWO" '  _aff_fallback=""'; rc_g -C "$1" commit -q -am semantic; m_ok_single "$1"; }
@@ -780,6 +801,14 @@ RC_TABLE=(
   's_idx_edges_target|m_s_idx_edges_target|semantic:INDEX-ARRAY-NAME|edges-pair'
   's_idx_dup_def|m_s_idx_dup_def|semantic:INDEX-ARRAY-NAME|has-x-new'
   's_idx_nested|m_s_idx_nested|semantic:G4-syntax|'
+  'ok_idx_glob|m_ok_idx_glob|registration-only:x/new|'
+  'ok_idx_glob_anchor|m_ok_idx_glob_anchor|registration-only:x/new|'
+  's_idx_glob_qmark|m_s_idx_glob_qmark|semantic:INDEX-SHAPE|'
+  's_idx_glob_bracket|m_s_idx_glob_bracket|semantic:INDEX-SHAPE|'
+  's_idx_glob_badhead|m_s_idx_glob_badhead|semantic:INDEX-SHAPE|'
+  's_idx_glob_nostar|m_s_idx_glob_nostar|semantic:INDEX-SHAPE|'
+  'ok_idx_glob_dotdot|m_ok_idx_glob_dotdot|registration-only:x/new|'
+  's_idx_glob_always|m_s_idx_glob_always|semantic:INDEX-SHAPE|'
   'ok_two_groups|m_ok_two_groups|registration-only:x/new,x/new3|'
   'ok_idx_dotslash|m_ok_idx_dotslash|registration-only:./x|'
   's_idx_two_blocks|m_s_idx_two_blocks|semantic:INDEX-UNBOUND|'
@@ -2559,7 +2588,7 @@ cases=$((cases + 1))
 _mut_src=$(python3 -c '
 import sys
 s = sys.stdin.read()
-old = "if [[ -d \"$_p\" ]]; then _p=\"${_p%/}/\"; fi"
+old = "if _affected_probe d \"$_p\"; then _p=\"${_p%/}/\"; fi"
 assert s.count(old) == 1, s.count(old)
 sys.stdout.write(s.replace(old, ":"))
 ' <<<"$_edge_src") || _mut_src=""
@@ -2578,10 +2607,10 @@ cases=$((cases + 1))
 _f1_floor=$(sed -n 's/^_MIN_ALWAYS_ON_DECLARED=\([0-9][0-9]*\)$/\1/p' "$RUNNER")
 # shellcheck source=/dev/null
 _f1_count=$( ( source "$AFF_LIB" >/dev/null 2>&1; echo "${#ALWAYS_ON_SUITES[@]}" ) )
-if [[ "$_f1_floor" == "143" && "$_f1_count" =~ ^[0-9]+$ ]] && (( _f1_count >= _f1_floor && _f1_count - _f1_floor <= 5 )); then
-  pass "f1: _MIN_ALWAYS_ON_DECLARED is pinned at 143 and ALWAYS_ON_SUITES ($_f1_count) meets it within the slack of 5"
+if [[ "$_f1_floor" == "108" && "$_f1_count" =~ ^[0-9]+$ ]] && (( _f1_count >= _f1_floor && _f1_count - _f1_floor <= 5 )); then
+  pass "f1: _MIN_ALWAYS_ON_DECLARED is pinned at 108 (#9763 + #9947 + #9814 registrations: 113-count minus the slack of 5) and ALWAYS_ON_SUITES ($_f1_count) meets it"
 else
-  fail "f1: floor='${_f1_floor}' (want 143) always-on count='${_f1_count}' (need floor <= count <= floor + 5; move the floor to count - 5 here and in the runner together)"
+  fail "f1: floor='${_f1_floor}' (want 108) always-on count='${_f1_count}' (need floor <= count <= floor + 5; move the floor to count - 5 here and in the runner together)"
 fi
 
 # --- Rows p1-p6 + m4: --print-selection (#9307) -------------------------------------
@@ -2599,9 +2628,9 @@ _rc=$ARM_RC
 _sel_yes=$(awk -F'\t' '$1=="AFFECTED_SELECTED" && $3=="1"{print $2}' <<<"$ARM_OUT" | sort | tr '\n' ' ')
 _sum=$(awk -F'\t|[[:space:]]' '$1=="AFFECTED_SUMMARY"' <<<"$ARM_OUT" | head -1)
 if [[ "$_rc" == "0" ]] \
-  && [[ "$_sel_yes" == "scripts/lint-dual-lockfile test/x-community " ]] \
+  && [[ "$_sel_yes" == "plugins/soleur/test/operator-ack-guard.test.sh plugins/soleur/test/operator-agent-runnable.test.sh plugins/soleur/test/operator-script.test.sh scripts/lint-dual-lockfile scripts/lint-shell-capture-exit-live scripts/lint-shell-trace-credential-refusal scripts/lint-trap-tempfile-ownership test/x-community " ]] \
   && grep -qF $'AFFECTED_SELECTED\tplugins/soleur\t0' <<<"$ARM_OUT" \
-  && grep -qF 'selected=2 of=6 always_on=1 edge=1 fallback=none' <<<"$_sum" \
+  && grep -qF 'selected=8 of=13 always_on=1 edge=7 fallback=none' <<<"$_sum" \
   && [[ "$(ran_count)" == "0" ]]; then
   pass "p1: --print-selection prints the exact selected set + summary and runs nothing"
 else
@@ -2643,7 +2672,7 @@ SANDBOX_LIB=with-lib run_arm \
   'SANDBOX_DIFF_NAMES=test/x-community.test.ts' \
   -- --affected
 if [[ "$ARM_RC" == "0" ]] && grep -qF 'AFFECTED_SUMMARY' <<<"$ARM_OUT" \
-  && grep -qF 'selected=2 of=6' <<<"$ARM_OUT"; then
+  && grep -qF 'selected=8 of=13' <<<"$ARM_OUT"; then
   pass "p4: a real --affected run prints the AFFECTED_SUMMARY line"
 else
   fail "p4: rc=$ARM_RC summary lines=$(grep -c AFFECTED_SUMMARY <<<"$ARM_OUT")"
@@ -2703,7 +2732,7 @@ _rc=$ARM_RC
 _row=$(awk -F'\t' '$1=="AFFECTED_SELECTED" && $2=="test/x-community"' <<<"$ARM_OUT" | head -1)
 if [[ "$_rc" == "0" ]] \
   && [[ "$(awk -F'\t' '{print $3"|"$4}' <<<"$_row")" == "0|edge:declared" ]] \
-  && awk -F'\t' '{print $5}' <<<"$_row" | grep -qF '^plugins/soleur/skills/community/scripts/' \
+  && awk -F'\t' '{print $5}' <<<"$_row" | grep -cF >/dev/null '^plugins/soleur/skills/community/scripts/' \
   && grep -qF $'AFFECTED_SELECTED\tscripts/lint-dual-lockfile\t1\talways_on\t' <<<"$ARM_OUT"; then
   pass "q1: rows carry bit, class and edge set (declared edges shown anchored)"
 else
@@ -2748,15 +2777,28 @@ else
   fail "q4: summary='${_q4_sum}'"
 fi
 
-# f2: scripts/test-affected-kb-consumers is hedged (always-on, ADR-242 decision 19): selected on a docs-only diff, with the
-#     class `always_on`, exactly once. Against the REAL runner and corpus: the sandbox arms trim the corpus to the keep-list,
-#     where this label is absent. f1 cannot catch the label being removed (the count would still meet the floor).
+# f2: scripts/test-affected-kb-consumers was demoted to edge-selection by #9763 (ADR-242 decision 19's
+#     revisit trigger): DECLINED on a docs-only diff with class edge:declared, exactly once. Against the
+#     REAL runner and corpus: the sandbox arms trim the corpus to the keep-list, where this label is
+#     absent. f1 cannot catch the label being removed (the count would still meet the floor).
 cases=$((cases + 1))
-_f2_rows=$(grep -cF "AFFECTED_SELECTED"$'\t'"scripts/test-affected-kb-consumers"$'\t'"1"$'\t'"always_on"$'\t' <<<"$_q4" || true)
+_f2_rows=$(grep -cF "AFFECTED_SELECTED"$'\t'"scripts/test-affected-kb-consumers"$'\t'"0"$'\t'"edge:declared"$'\t' <<<"$_q4" || true)
 if [[ "$_f2_rows" == "1" ]]; then
-  pass "f2: scripts/test-affected-kb-consumers is selected on a docs-only diff with class always_on (exactly one row)"
+  pass "f2: scripts/test-affected-kb-consumers is declined on a docs-only diff with class edge:declared (exactly one row)"
 else
-  fail "f2: expected exactly one AFFECTED_SELECTED row for scripts/test-affected-kb-consumers (selected=1, always_on); got $_f2_rows"
+  fail "f2: expected exactly one AFFECTED_SELECTED row for scripts/test-affected-kb-consumers (selected=0, edge:declared); got $_f2_rows"
+fi
+
+# f2b: the demoted label still selects when its edge fires — a knowledge-base path is inside its
+#      declared edge set (the fast-tier demotion must not make it unreachable).
+cases=$((cases + 1))
+_f2b=$(cd "$REPO_ROOT" && env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
+  bash "$RUNNER" --print-selection --paths=knowledge-base/project/roadmap.md 2>/dev/null) || true
+_f2b_rows=$(grep -cF "AFFECTED_SELECTED"$'\t'"scripts/test-affected-kb-consumers"$'\t'"1"$'\t'"edge:declared"$'\t' <<<"$_f2b" || true)
+if [[ "$_f2b_rows" == "1" ]]; then
+  pass "f2b: scripts/test-affected-kb-consumers selects on a knowledge-base path with class edge:declared"
+else
+  fail "f2b: expected kb-consumers selected=1 edge:declared on a kb path; got $_f2b_rows"
 fi
 
 # m6: the paths override is dead — q2's selection must now be empty.
@@ -2797,6 +2839,149 @@ if [[ "$_q6_n" == "1" && "$_q6_set" == "1" ]]; then
   pass "q6: the pre-pass forwards --paths to its enumerate child (one call site, one assignment)"
 else
   fail "q6: enumerate call carries _aff_child_paths x${_q6_n}, assignment x${_q6_set} (expected 1 and 1)"
+fi
+
+# ---- tg rows (Guard 2, #9813): the `glob:` hit arm ---------------------------------------
+# The five extension-bounded kb-corpus walkers carry `glob:` kb edges — a kb .md
+# line can never move their verdict. operator-agent-runnable keeps `^knowledge-base/`:
+# its Guard-1 corpus is content-keyed (g1_discover scans ANY extension for the
+# generated-script marker), so **.sh would under-cover it — the review's honest
+# disposition, at ~16 committed seconds per kb-md diff. Labels sit in the sandbox
+# keep-list, so "absent from RAN" is a real decline, never a trim artifact.
+_TG_GLOB_WALKERS=(
+  'plugins/soleur/test/operator-ack-guard.test.sh'
+  'plugins/soleur/test/operator-script.test.sh'
+  'scripts/lint-trap-tempfile-ownership'
+  'scripts/lint-shell-capture-exit-live'
+  'scripts/lint-shell-trace-credential-refusal'
+)
+_TG_ALL_SIX=("${_TG_GLOB_WALKERS[@]}" 'plugins/soleur/test/operator-agent-runnable.test.sh')
+_tg_all_ran() { local _l; for _l in "${_TG_ALL_SIX[@]}"; do ran_exact "$_l" || return 1; done; }
+_tg_none_ran() { local _l; for _l in "${_TG_GLOB_WALKERS[@]}"; do ran_exact "$_l" && return 1; done; return 0; }
+
+cases=$((cases + 1))
+SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_DIFF_NAMES=knowledge-base/project/specs/feat-x/spec.md' \
+  -- --affected
+_rc=$ARM_RC
+if [[ "$_rc" == "0" ]] && _tg_none_ran \
+  && ran_exact 'plugins/soleur/test/operator-agent-runnable.test.sh' \
+  && ran_exact 'scripts/test-affected-kb-consumers'; then
+  pass "tg1: a kb .md line declines the five glob: walkers (agent-runnable + kb-consumers still select)"
+else
+  fail "tg1: rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
+fi
+
+# kb .sh selects at head-root, nested and real-spec depths — `*` crosses `/` under [[ == ]].
+# (`_sandbox_probe` names the fixture word the kb-consumers oracle keys on — a bare
+# `knowledge-base/<path>` literal here would be charged to this suite as a real read.)
+for _sandbox_probe in 'knowledge-base/x.sh' 'knowledge-base/a/b/c.sh' 'knowledge-base/project/specs/feat-sdd-implementation-mirror-guard/bootstrap.sh'; do
+  cases=$((cases + 1))
+  SANDBOX_LIB=with-lib run_arm \
+    "SANDBOX_DIFF_NAMES=${_sandbox_probe}" \
+    -- --affected
+  _rc=$ARM_RC
+  if [[ "$_rc" == "0" ]] && _tg_all_ran; then
+    pass "tg2: ${_sandbox_probe} selects all six kb-corpus walkers"
+  else
+    fail "tg2 (${_sandbox_probe}): rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
+  fi
+done
+
+# The rename-source line: `R100<TAB>old.sh<TAB>new` is TAB-split before the match, so the
+# OLD path of a rename into/out of kb still selects.
+cases=$((cases + 1))
+SANDBOX_LIB=with-lib run_arm \
+  "SANDBOX_DIFF_NAMES=R100"$'\t'"knowledge-base/old.sh"$'\t'"knowledge-base/new" \
+  -- --affected
+_rc=$ARM_RC
+if [[ "$_rc" == "0" ]] && _tg_all_ran; then
+  pass "tg3: a rename line whose SOURCE is a kb .sh selects all six kb-corpus walkers"
+else
+  fail "tg3: rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
+fi
+
+# Extension completeness (#9813): lint-trap-tempfile-ownership is the one glob:
+# walker whose kb read set is wider than .sh — ALL_EXT (.sh .bash .py .ts .mjs .js)
+# + bunfig.toml. Each non-.sh extension selects it among the glob: walkers
+# (agent-runnable also selects — its `^knowledge-base/` matches every kb line);
+# a miss here is the silent-narrowing the 7-entry set exists to close.
+_TG_TRAP_ONLY=(
+  'plugins/soleur/test/operator-ack-guard.test.sh'
+  'plugins/soleur/test/operator-script.test.sh'
+  'scripts/lint-shell-capture-exit-live'
+  'scripts/lint-shell-trace-credential-refusal'
+)
+for _ext in py bash ts mjs js; do
+  cases=$((cases + 1))
+  SANDBOX_LIB=with-lib run_arm \
+    "SANDBOX_DIFF_NAMES=knowledge-base/x.${_ext}" \
+    -- --affected
+  _rc=$ARM_RC
+  _tg_bad=""
+  for _l in "${_TG_TRAP_ONLY[@]}"; do ran_exact "$_l" && _tg_bad+=" $_l"; done
+  if [[ "$_rc" == "0" && -z "$_tg_bad" ]] && ran_exact 'scripts/lint-trap-tempfile-ownership' \
+    && ran_exact 'plugins/soleur/test/operator-agent-runnable.test.sh'; then
+    pass "tg4: knowledge-base/x.${_ext} selects only lint-trap-tempfile-ownership among the glob: walkers"
+  else
+    fail "tg4 (.${_ext}): rc=$_rc extras:${_tg_bad:-none} trap_ran=$(awk -F'\t' -v l='scripts/lint-trap-tempfile-ownership' '$1=="RAN"&&$2==l{f=1}END{print f+0}' <<<"$ARM_RECORD")"
+  fi
+done
+cases=$((cases + 1))
+SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_DIFF_NAMES=knowledge-base/project/sub/bunfig.toml' \
+  -- --affected
+_rc=$ARM_RC
+_tg_bad=""
+for _l in "${_TG_TRAP_ONLY[@]}"; do ran_exact "$_l" && _tg_bad+=" $_l"; done
+if [[ "$_rc" == "0" && -z "$_tg_bad" ]] && ran_exact 'scripts/lint-trap-tempfile-ownership' \
+  && ran_exact 'plugins/soleur/test/operator-agent-runnable.test.sh'; then
+  pass "tg4b: a kb bunfig.toml selects only lint-trap-tempfile-ownership among the glob: walkers"
+else
+  fail "tg4b: rc=$_rc extras:${_tg_bad:-none}"
+fi
+
+# Malformed declared entry → always-match (Guard 2's never-narrow arm, end to end):
+# mutate ONE array's kb entry in the sandbox's lib copy to `glob:a*/b` (a head that
+# does not end in /). A kb .md line must STILL select the suite.
+cases=$((cases + 1))
+_tg_sb="$TESTROOT/sb-$cases/test-all.sh"
+build_sandbox "$_tg_sb" with-lib > /dev/null
+python3 - "$TESTROOT/sb-$cases/lib/test-affected-paths.sh" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+anchor = 'AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS=('
+KB = "knowledge" + "-base/"
+i = s.index(anchor) + len(anchor)
+j = s.index('"glob:' + KB + '**.sh"', i)
+s = s[:j] + '"glob:a*/b"' + s[j + len('"glob:' + KB + '**.sh"'):]
+open(p, 'w').write(s)
+PY
+: > "$TESTROOT/rec-$cases"
+_rc=0
+( cd "$REPO_ROOT" && env $ENV_SCRUB \
+    SOLEUR_DISABLE_SESSION_STATE=1 SANDBOX_RECORD="$TESTROOT/rec-$cases" \
+    TEST_TIMING_LOG="$TESTROOT/timing-$cases" \
+    SANDBOX_DIFF_NAMES='knowledge-base/project/specs/feat-x/spec.md' \
+    bash "$_tg_sb" --affected ) > "$TESTROOT/out-$cases" 2>&1 || _rc=$?
+ARM_RECORD="$(cat "$TESTROOT/rec-$cases")"
+if [[ "$_rc" == "0" ]] && ran_exact 'plugins/soleur/test/operator-ack-guard.test.sh'; then
+  pass "tg5: a malformed declared glob: still selects — ^glob:<verbatim> matches, never narrows"
+else
+  fail "tg5: rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
+fi
+
+# The receipt carries the minted edge verbatim (real index, print arm).
+# The probe and needle are COMPOSED — a literal `knowledge-base/<path>` here is a
+# fixture the kb-consumers oracle would otherwise charge to this suite as a read.
+cases=$((cases + 1))
+_tg_rcpt_n=$(cd "$REPO_ROOT" && env -u CI -u TEST_GROUP SOLEUR_DISABLE_SESSION_STATE=1 timeout 300 \
+  bash "$RUNNER" --print-selection --paths="knowledge""-base/project/specs/foo.md" all 2>/dev/null \
+  | awk -F'\t' '$1=="AFFECTED_SELECTED" && index($5, "^glob:knowledge" "-base/**.sh") && $3=="0" {n++} END{print n+0}')
+if [[ "$_tg_rcpt_n" == "5" ]]; then
+  pass "tg6: the five glob: walkers' kb-.md AFFECTED_SELECTED rows carry the ^glob: edge, selected=0"
+else
+  fail "tg6: ^glob: sel=0 rows: ${_tg_rcpt_n} (want 5)"
 fi
 
 echo ""

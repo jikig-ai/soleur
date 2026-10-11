@@ -46,6 +46,7 @@ apps/web-platform/infra/git-data-bootstrap-store-verify.test.sh	4
 apps/web-platform/infra/git-data-cutover-access.test.sh	3
 apps/web-platform/infra/git-data-emit.test.sh	3
 apps/web-platform/infra/git-data-flag-precheck.test.sh	3
+apps/web-platform/infra/git-data-liveness.test.sh	4
 apps/web-platform/infra/git-data-luks-reopen.test.sh	4
 apps/web-platform/infra/git-data-luks.test.sh	4
 apps/web-platform/infra/git-data-nftables-syntax.test.sh	1
@@ -83,6 +84,7 @@ apps/web-platform/infra/inngest-host-state-workflow-guard.test.sh	2
 apps/web-platform/infra/inngest-host.test.sh	1
 apps/web-platform/infra/inngest-inventory.test.sh	3
 apps/web-platform/infra/inngest-luks-cutover.test.sh	1
+apps/web-platform/infra/inngest-luks-sole-copy.test.sh	1
 apps/web-platform/infra/inngest-nic-wait.test.sh	2
 apps/web-platform/infra/inngest-rearm-reminders.test.sh	4
 apps/web-platform/infra/inngest-redis-luks.test.sh	2
@@ -159,19 +161,17 @@ apps/web-platform/infra/workspaces-luks-header-web.test.sh	1
 apps/web-platform/infra/workspaces-luks-header.test.sh	2
 apps/web-platform/infra/workspaces-luks-host-token-refresh.test.sh	3
 apps/web-platform/infra/workspaces-luks-provision.test.sh	1
+apps/web-platform/infra/workspaces-luks-rollback-refusal.test.sh	2
 apps/web-platform/infra/workspaces-luks-staging.test.sh	1
 apps/web-platform/infra/workspaces-luks-t2-rehearsal.test.sh	2
 apps/web-platform/infra/workspaces-luks-verify-root-mtime.test.sh	3
 apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh	1
 apps/web-platform/infra/workspaces-luks-verify.test.sh	4
-apps/web-platform/infra/workspaces-luks-wipe.test.sh	2
 apps/web-platform/infra/workspaces-luks.test.sh	1
-apps/web-platform/infra/workspaces-plaintext-forget-workflow.test.sh	4
 apps/web-platform/infra/www-apex-canonicalizer-mutation.test.sh	4
 apps/web-platform/infra/www-apex-canonicalizer.test.sh	3
 apps/web-platform/infra/zot-config-deadlines.test.sh	1
 apps/web-platform/infra/zot-disk-heartbeat-redaction.test.sh	3
-apps/web-platform/infra/zot-entry-gate.test.sh	3
 apps/web-platform/infra/zot-image-fetch.test.sh	2
 apps/web-platform/infra/zot-image-oci-archive.test.sh	3
 apps/web-platform/infra/zot-image-staleness-mutation.test.sh	1

@@ -33,15 +33,16 @@
 # CF_ACCESS_CLIENT_SECRET (or CI_SSH_ACCESS_TOKEN_ID/SECRET fallback),
 # APP_DOMAIN_BASE (default soleur.ai); (BS): doppler CLI + prd_terraform creds.
 #
-# Exit: 0 parity; 1 drift/missing/transport failure (each named); 2 usage;
-# 78 trace refusal with a live credential set (#7797).
+# Exit: 0 parity; 1 drift/missing/transport failure (each named); 2 usage, or a credential/signature
+# refusal (an unusable Cloudflare Access value or request signature: SOLEUR_CREDENTIAL_REFUSED, no request
+# sent); 78 trace refusal with a live credential set (#7797).
 set -uo pipefail
 
 # (#7797) Refuse to run under shell tracing while a live credential is set: `set -x`
 # would trace the token into whatever collects this script's output.
 case "$-" in
   *x*)
-    if [ -n "${CF_ACCESS_CLIENT_SECRET:+x}${CI_SSH_ACCESS_TOKEN_SECRET:+x}${WEBHOOK_DEPLOY_SECRET:+x}" ]; then
+    if [ -n "${CF_ACCESS_CLIENT_SECRET:+x}${CI_SSH_ACCESS_TOKEN_SECRET:+x}${HMAC_KEY:+x}${WEBHOOK_DEPLOY_SECRET:+x}" ]; then
       printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
       exit 78
     fi
@@ -151,14 +152,21 @@ if [[ "$STATUS_ARM" -eq 1 ]]; then
     CF_ID="${CF_ACCESS_CLIENT_ID:-${CI_SSH_ACCESS_TOKEN_ID:-}}"
     CF_SEC="${CF_ACCESS_CLIENT_SECRET:-${CI_SSH_ACCESS_TOKEN_SECRET:-}}"
     : "${CF_ID:?CF Access client id required}" "${CF_SEC:?CF Access secret required}"
-    HMAC="$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_DEPLOY_SECRET" | sed 's/.*= //')"
+    # (#9597, S2) The three credentials ride curl's stdin as `header = "..."` config lines, values checked first (the why and the
+    # process-substitution rule: the comment above `_bs_refuse` in scripts/betterstack-query.sh). The signature must be exactly 64
+    # lowercase hex (python3 missing or an empty key leaves HMAC empty, and an unsigned request must never be sent). Every refusal
+    # is exit 2 (this script's usage-class refusal; exit 1 is DRIFT), sends no request, and prints one value-free marker.
+    _bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+    _refuse() { echo "check-deploy-script-parity: refusing to send credentials: $1 is unusable" >&2; echo "SOLEUR_CREDENTIAL_REFUSED script=check-deploy-script-parity reason=token_shape" >&2; exit 2; }
+    _bearer_ok "$CF_ID" || _refuse "the Cloudflare Access client id"
+    _bearer_ok "$CF_SEC" || _refuse "the Cloudflare Access client secret"
+    HMAC="$(printf '' | HMAC_KEY="$WEBHOOK_DEPLOY_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())' 2>/dev/null)" || HMAC=""
+    [[ "$HMAC" =~ ^[0-9a-f]{64}$ ]] || _refuse "the request signature (python3 missing or the webhook key empty)"
     STATUS_TMP="$(mktemp)" || { echo "FATAL: mktemp failed" >&2; exit 1; }
     trap 'rm -f "$STATUS_TMP"' EXIT
-    code="$(curl -s -o "$STATUS_TMP" -w '%{http_code}' --max-time 20 \
-      --disable --noproxy '*' --proto '=https' \
-      -H "X-Signature-256: sha256=${HMAC}" \
-      -H "CF-Access-Client-Id: ${CF_ID}" -H "CF-Access-Client-Secret: ${CF_SEC}" \
-      "https://deploy.${BASE}/hooks/deploy-status" 2>/dev/null || echo 000)"
+    code="$(curl --disable --noproxy '*' --proto '=https' -s -o "$STATUS_TMP" -w '%{http_code}' --max-time 20 \
+      "https://deploy.${BASE}/hooks/deploy-status" \
+      --config - < <(printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' "$HMAC" "$CF_ID" "$CF_SEC") 2>/dev/null || echo 000)"
     if [[ "$code" != "200" ]]; then
       echo "DRIFT(status): /hooks/deploy-status returned HTTP $code — web-1 parity cannot be read" >&2; fail=1
       body=""

@@ -39,7 +39,7 @@ export async function startAnthropicStub(command: string): Promise<AnthropicStub
       const tiny = typeof parsed.max_tokens === "number" && parsed.max_tokens <= 1;
       const toolTurn =
         !hasResult && !tiny && Array.isArray(parsed.tools) && parsed.tools.length > 0;
-      const model = parsed.model ?? "claude-haiku-4-5-20251001";
+      const model = parsed.model ?? "claude-haiku-5-5";
       const stop = toolTurn ? "tool_use" : "end_turn";
       const text = tiny ? "ok" : "done";
 

@@ -550,6 +550,27 @@ write_files:
     owner: root:root
     permissions: '0644'
 
+  # (#9438) The host-originated liveness feeder. A 60 s timer runs the script, which pings a
+  # dedicated Better Stack heartbeat only when the host's own checks pass; the URL is read at
+  # runtime from the scoped Doppler config, never baked here. Armed by the last runcmd item.
+  - path: /usr/local/bin/git-data-liveness.sh
+    content: |
+      ${indent(6, git_data_liveness)}
+    owner: root:root
+    permissions: '0755'
+
+  - path: /etc/systemd/system/git-data-liveness.service
+    content: |
+      ${indent(6, git_data_liveness_service)}
+    owner: root:root
+    permissions: '0644'
+
+  - path: /etc/systemd/system/git-data-liveness.timer
+    content: |
+      ${indent(6, git_data_liveness_timer)}
+    owner: root:root
+    permissions: '0644'
+
   # --- (#7772 item 2) The metadata-endpoint egress closure --------------------------------
   #
   # WHAT IT CLOSES. hcloud_firewall.git_data declares ZERO rules, which under Hetzner semantics
@@ -1344,5 +1365,25 @@ runcmd:
       [ -s "$_gc_detail" ] || _gc_detail="git-data gc timer failed to arm (rc=$_gc_rc): no stderr captured"
       /usr/local/bin/git-data-emit "SOLEUR_GIT_DATA_GC timer failed to arm" "$STAGE" warning \
         "$_gc_detail" "gc_timer=unarmed" || true
+    fi
+
+  # (#9438) Arm the host-originated liveness timer, AFTER the gc_timer item: that item is itself
+  # after the bootstrap stage and boot_complete, so no tick overlaps the store mount at birth.
+  # MUST-TOLERATE, like the gc timer: a feeder that fails to arm is a degraded steady state, not
+  # a reason to abort a boot, and the missing beat is the alert. It is REPORTED, at info: an
+  # unrouted stage, so this adds no Sentry rule and no routed stage. Same substitution-plus-`if`
+  # shape as the gc_timer item above.
+  - |
+    STAGE=liveness_timer
+    ( : > "$GIT_DATA_RUNCMD_DETAIL" ) 2>/dev/null || true
+    systemctl daemon-reload || true
+    _lv_rc=0
+    _lv_err="$(systemctl enable --now git-data-liveness.timer 2>&1)" || _lv_rc=$?
+    if [ "$_lv_rc" -ne 0 ]; then
+      _lv_detail=/run/git-data-liveness-timer.err
+      [ -z "$_lv_err" ] || ( umask 077; printf '%s\n' "$_lv_err" > "$_lv_detail" ) 2>/dev/null || true
+      [ -s "$_lv_detail" ] || _lv_detail="git-data liveness timer failed to arm (rc=$_lv_rc): no stderr captured"
+      /usr/local/bin/git-data-emit "SOLEUR_GIT_DATA_LIVENESS timer failed to arm" "$STAGE" info \
+        "$_lv_detail" "liveness_timer=unarmed" || true
     fi
 

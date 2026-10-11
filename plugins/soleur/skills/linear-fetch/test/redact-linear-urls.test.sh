@@ -106,7 +106,7 @@ echo "Test 7: five URLs across three lines"
 multi=$'line1 https://uploads.linear.app/TEST-FIXTURE-NOT-REAL-a.png https://uploads.linear.app/TEST-FIXTURE-NOT-REAL-b.png\nline2 https://uploads.linear.app/TEST-FIXTURE-NOT-REAL-c.png\nline3 https://uploads.linear.app/TEST-FIXTURE-NOT-REAL-d.png https://uploads.linear.app/TEST-FIXTURE-NOT-REAL-e.png'
 run_redact "$multi"
 # Each URL becomes [linear-image: REDACTED]
-if ! printf '%s' "$OUT" | grep -q 'uploads.linear.app'; then pass "no CDN URL remains"; else fail "URL still present in: '$OUT'"; fi
+if ! printf '%s' "$OUT" | grep -c >/dev/null 'uploads.linear.app'; then pass "no CDN URL remains"; else fail "URL still present in: '$OUT'"; fi
 [[ "$ERR" == "5" ]] && pass "count=5" || fail "count (got: '$ERR')"
 
 # ------------------------------------------------------------------------
@@ -172,7 +172,7 @@ url_then_u2028=$(printf 'before https://uploads.linear.app/TEST-FIXTURE-NOT-REAL
 run_redact "$url_then_u2028"
 # After redaction, the U+2028 and trailing text MUST remain (URL match
 # cannot extend into the separator's bytes).
-if printf '%s' "$OUT" | grep -q 'after' && printf '%s' "$OUT" | grep -q '\[linear-image: REDACTED\]'; then
+if printf '%s' "$OUT" | grep -c >/dev/null 'after' && printf '%s' "$OUT" | grep -c >/dev/null '\[linear-image: REDACTED\]'; then
   pass "U+2028 terminates URL match cleanly"
 else
   fail "U+2028 not handled (got: '$OUT')"
@@ -186,7 +186,7 @@ fi
 echo "Test 14: URL followed by NBSP"
 url_then_nbsp=$(printf 'leading https://uploads.linear.app/TEST-FIXTURE-NOT-REAL-nbsp.png\xc2\xa0trailing')
 run_redact "$url_then_nbsp"
-if printf '%s' "$OUT" | grep -q 'trailing' && printf '%s' "$OUT" | grep -q '\[linear-image: REDACTED\]'; then
+if printf '%s' "$OUT" | grep -c >/dev/null 'trailing' && printf '%s' "$OUT" | grep -c >/dev/null '\[linear-image: REDACTED\]'; then
   pass "NBSP terminates URL match cleanly"
 else
   fail "NBSP not handled (got: '$OUT')"

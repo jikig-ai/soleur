@@ -127,7 +127,7 @@ mk_stub "$TMP/rows_partial" 0
 run_sut
 missing=0
 for k in fs_size_gb pcent boot_id zot_restarts sample_at sample_age_s; do
-  printf '%s\n' "$OUT" | grep -qE "^${k}=" || missing=$((missing + 1))
+  printf '%s\n' "$OUT" | grep -cE >/dev/null "^${k}=" || missing=$((missing + 1))
 done
 [[ "$missing" -eq 0 ]] \
   && pass "a field the marker omitted is printed EMPTY, so a fixed-key consumer cannot skip it" \

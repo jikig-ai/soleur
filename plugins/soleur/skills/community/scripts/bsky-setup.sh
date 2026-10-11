@@ -15,10 +15,16 @@
 #
 # Exit codes:
 #   0 - Success
-#   1 - General error
+#   1 - General error, including missing credentials and a write-env value outside the .env
+#       allow-list. The two are told apart by the stderr marker, which ONLY the allow-list refusal
+#       emits: `SOLEUR_CREDENTIAL_REFUSED ... var=<NAME> phase=write-env` (value-free). Exit 1 with
+#       that marker is the allow-list; exit 1 without it is a missing credential.
 #
 # Output: JSON to stdout
-# Errors: Messages to stderr, exit 1
+# Errors: Messages to stderr, exit 1. The exception is `write-env`, which has no stdout payload and
+#         whose human text is therefore all on STDOUT (agent runtimes surface stdout and swallow
+#         stderr): the missing-credentials diagnostic, the allow-list line, and the "Wrote N
+#         variables" confirmation. Only the allow-list marker stays on stderr.
 
 set -euo pipefail
 
@@ -170,6 +176,72 @@ readonly BSKY_API="https://bsky.social/xrpc"
 # JWT/base64url alphabet BEFORE the value is formatted into the stream, and never echoes it.
 _bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
 
+# --- createSession body transport (#9597) ---
+# The createSession body carries the app password and a user-supplied handle. Neither may
+# ride curl's argument list (readable by every local user in /proc/<pid>/cmdline). The
+# createSession call has no bearer config, so curl's stdin is free: `jq` builds the body and
+# pipes it to `curl --data-binary @-` (NOT `-d @-`, which strips CR/LF). The values reach
+# `jq` through its ENVIRONMENT as an inline assignment prefix (`$ENV.X`), never `jq --arg`
+# (jq's own argv is world-readable too). The BSKY_ID / BSKY_PW aliases are never `export`ed:
+# they live on the one jq child only. RESIDUAL: `verify` sources the .env under `set -a`, so
+# every OTHER variable in that file is exported to later children; the two credential names
+# are un-exported again right after (`export -n`), but that is the only thing narrowed.
+# No file, no trap: the secret exists only in the processes' memory and the pipe.
+
+# A control character can never be part of a handle or an app password. Refusing one
+# before anything is sent keeps garbage off the wire; jq escapes everything else (a handle
+# holding a double quote is escaped, never injected into the JSON).
+_bsky_cred_ok() { local LC_ALL=C; case "${1:-}" in ''|*[[:cntrl:]]*) return 1 ;; esac; }
+
+# A fixed, value-free marker plus ONE human line on stderr, naming only which FIELD was
+# refused (never the handle or the password), and a non-zero exit. $2 is the variable name.
+# Exit 1 (never 0): this script has no `post`; the hosted content-publisher path lives in
+# bsky-community.sh, which carries the same refusal shape.
+bsky_refuse() {
+  printf 'SOLEUR_CREDENTIAL_REFUSED script=%s reason=%s\n' "$SOLEUR_TRANSPORT_SCRIPT" "$1" >&2
+  echo "Error: ${2} is empty or contains a control character (for example a stray carriage return or newline from a copy-paste or a CRLF .env file), so nothing was sent. Remove it and retry. The value is not shown." >&2
+  exit 1
+}
+
+# (#9597) write-env value allow-list. `.env` values are written UNQUOTED and later SOURCED
+# (`verify`, the community scripts), so a value holding a command substitution, a backtick, a
+# quote, a semicolon, a space or a newline would execute or split on the next source, and a leading
+# tilde would silently change a stored credential (tilde expansion on source). Validation is an
+# allow-list, fail-closed, and runs for EVERY value BEFORE the first write: a refused value prints
+# the value-free marker plus ONE human line naming only the VARIABLE, writes nothing, exits 1 and
+# leaves any existing .env untouched. A value outside the list that is legitimate is added to .env
+# by hand. The glob runs under LC_ALL=C and is not grep, which is line-oriented and lets a
+# multi-line value through.
+_wenv_class() { # <value>: 0 allowed, 1 outside the allow-list or empty, 2 holds a control character
+  local LC_ALL=C
+  case "${1-}" in
+    '') return 1 ;;
+    *[[:cntrl:]]*) return 2 ;;
+    *[!A-Za-z0-9._:/@%+=,-]*) return 1 ;;
+  esac
+  return 0
+}
+_wenv_refuse() { # <reason> <VARIABLE>
+  printf 'SOLEUR_CREDENTIAL_REFUSED script=%s reason=%s var=%s phase=write-env\n' "$SOLEUR_TRANSPORT_SCRIPT" "$1" "$2" >&2
+  echo "Error: ${2} holds a character this script does not write to .env (allowed: letters, digits and . _ : / @ % + = , -), so nothing was written and your existing .env is unchanged. The value is not shown. If the value is legitimate, add it to .env by hand."
+  exit 1
+}
+# _wenv_validate <VARIABLE>...: every NON-EMPTY named variable passes the allow-list. The required
+# variables are checked non-empty by the caller before this runs; an empty optional one is skipped.
+_wenv_validate() {
+  local _wn _wrc
+  for _wn in "$@"; do
+    [[ -n "${!_wn:-}" ]] || continue
+    _wrc=0
+    _wenv_class "${!_wn}" || _wrc=$?
+    case "$_wrc" in
+      0) ;;
+      2) _wenv_refuse control_char "$_wn" ;;
+      *) _wenv_refuse token_shape "$_wn" ;;
+    esac
+  done
+}
+
 # --- Dependency checks ---
 
 require_jq() {
@@ -198,7 +270,7 @@ require_credentials() {
     echo "To configure:" >&2
     echo "  1. Create an account at https://bsky.app" >&2
     echo "  2. Go to Settings > App Passwords > Add App Password" >&2
-    echo "  3. Export BSKY_HANDLE and BSKY_APP_PASSWORD as environment variables" >&2
+    echo "  3. Export BSKY_HANDLE and BSKY_APP_PASSWORD as environment variables, without typing a value into the command (its text is kept in the transcript and the shell history): in a terminal, read -rs BSKY_APP_PASSWORD; export BSKY_APP_PASSWORD" >&2
     exit 1
   fi
 }
@@ -206,7 +278,11 @@ require_credentials() {
 # --- Commands ---
 
 cmd_write_env() {
-  require_credentials
+  # write-env has no stdout payload, so its missing-credentials diagnostic goes to STDOUT too
+  # (require_credentials writes it to stderr, shared with the other commands; exit 1 either way).
+  require_credentials 2>&1
+  # Every value is checked BEFORE the first write (see the allow-list above).
+  _wenv_validate BSKY_HANDLE BSKY_APP_PASSWORD
 
   local repo_root="$GIT_ROOT"
   local env_file="${repo_root}/.env"
@@ -230,7 +306,7 @@ cmd_write_env() {
     echo "BSKY_APP_PASSWORD=${BSKY_APP_PASSWORD}"
   } >> "$env_file"
 
-  echo "Wrote 2 variables to ${env_file} (permissions: 600)" >&2
+  echo "Wrote 2 variables to ${env_file} (permissions: 600)"
 }
 
 cmd_verify() {
@@ -252,6 +328,9 @@ cmd_verify() {
   _env_rc=0
   source "$env_file" || _env_rc=$?
   set +a
+  # `set -a` exported everything the .env defined; stop the two credentials riding every
+  # later child's environment (the curl calls need neither). The value stays bound.
+  export -n BSKY_HANDLE BSKY_APP_PASSWORD
   if (( _env_rc != 0 )); then
     printf 'Note: at least one assignment in %s was refused. A pinned request destination cannot be overridden from .env -- your credentials loaded normally and the request still goes to the real API.\n' "$env_file"
     emit_transport_diag "none" "env-rebind-refused"
@@ -262,10 +341,25 @@ cmd_verify() {
   # Create session to verify credentials
   local response http_code body
   local __curl_rc=0
-  response=$(curl --disable --noproxy '*' -s -w "\n%{http_code}" \
+  # Refuse BEFORE the body is built so a refused value never reaches a child process.
+  _bsky_cred_ok "${BSKY_HANDLE:-}" || bsky_refuse control_char BSKY_HANDLE
+  _bsky_cred_ok "${BSKY_APP_PASSWORD:-}" || bsky_refuse control_char BSKY_APP_PASSWORD
+  # The body is built into a variable FIRST, so a jq failure is classified as what it is (a
+  # body-build failure) and never reaches curl: it does not depend on `pipefail`, and it can
+  # never read as a transport failure or as a successful empty POST. The credentials reach jq
+  # only through its inline environment prefix; `printf` is a builtin, so the body (which holds
+  # the password) is on no argv; curl reads it from stdin.
+  local req_body
+  req_body=$(BSKY_ID="$BSKY_HANDLE" BSKY_PW="$BSKY_APP_PASSWORD" \
+    jq -n '{identifier: $ENV.BSKY_ID, password: $ENV.BSKY_PW}') || {
+    echo "Error: could not build the Bluesky createSession request body (jq failed); nothing was sent." >&2
+    exit 1
+  }
+  response=$(printf '%s' "$req_body" \
+    | curl --disable --noproxy '*' -s -w "\n%{http_code}" \
     -X POST \
     -H "Content-Type: application/json" \
-    -d "{\"identifier\": \"${BSKY_HANDLE}\", \"password\": \"${BSKY_APP_PASSWORD}\"}" \
+    --data-binary @- \
     "${BSKY_API}/com.atproto.server.createSession" 2>/dev/null) || __curl_rc=$?
   if (( __curl_rc != 0 )); then
     report_transport_failure "$__curl_rc" "Failed to connect to Bluesky API."

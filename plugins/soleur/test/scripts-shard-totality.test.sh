@@ -995,7 +995,7 @@ else
     [[ -f "$REPO_ROOT/$_lf" ]] || continue
     case "$_lf" in
       *.sh|*.bash) printf '%s\0' "$REPO_ROOT/$_lf" >> "$WORK/dir1_libs" ;;
-      *) if [[ "${_lf##*/}" != *.* ]] && head -1 "$REPO_ROOT/$_lf" 2>/dev/null | grep -qE "$_SH_SHEBANG_RE"; then
+      *) if [[ "${_lf##*/}" != *.* ]] && head -1 "$REPO_ROOT/$_lf" 2>/dev/null | grep -cE >/dev/null "$_SH_SHEBANG_RE"; then
            printf '%s\0' "$REPO_ROOT/$_lf" >> "$WORK/dir1_libs"
          fi ;;
     esac
@@ -1051,7 +1051,7 @@ else
     [[ -f "$REPO_ROOT/$_cand" ]] || continue
     case "$_cand" in
       *.sh|*.bash) printf '%s\0' "$REPO_ROOT/$_cand" >> "$WORK/decl_shell_files" ;;
-      *) if [[ "${_cand##*/}" != *.* ]] && head -1 "$REPO_ROOT/$_cand" 2>/dev/null | grep -qE "$_SH_SHEBANG_RE"; then
+      *) if [[ "${_cand##*/}" != *.* ]] && head -1 "$REPO_ROOT/$_cand" 2>/dev/null | grep -cE >/dev/null "$_SH_SHEBANG_RE"; then
            printf '%s\0' "$REPO_ROOT/$_cand" >> "$WORK/decl_shell_files"
          fi ;;
     esac

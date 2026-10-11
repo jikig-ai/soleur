@@ -54,7 +54,7 @@ export CHECKPOINT_DISABLE=1 TF_IN_AUTOMATION=1 TF_INPUT=0
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${DIR}/../../.." && pwd)"
 RUNBOOK="${ROOT}/knowledge-base/engineering/operations/runbooks/workspaces-luks-t2-collapse-9357.md"
-FORGET_WF="${ROOT}/.github/workflows/workspaces-plaintext-forget.yml"
+APPLY_WF="${ROOT}/.github/workflows/apply-web-platform-infra.yml"
 
 passes=0
 fails=0
@@ -76,15 +76,15 @@ tool_missing() {
 command -v terraform >/dev/null 2>&1 || tool_missing terraform
 command -v jq >/dev/null 2>&1 || tool_missing jq
 [ -r "$RUNBOOK" ] || { printf '[FATAL] runbook not readable: %s\n' "$RUNBOOK" >&2; exit 1; }
-[ -r "$FORGET_WF" ] || { printf '[FATAL] forget workflow not readable: %s\n' "$FORGET_WF" >&2; exit 1; }
+[ -r "$APPLY_WF" ] || { printf '[FATAL] apply workflow not readable: %s\n' "$APPLY_WF" >&2; exit 1; }
 
-# Pin: the version CI runs is the forget workflow's TERRAFORM_VERSION (single source).
-PINNED_TF="$(sed -n 's/^[[:space:]]*TERRAFORM_VERSION:[[:space:]]*"\{0,1\}\([0-9][0-9.]*\)"\{0,1\}[[:space:]]*$/\1/p' "$FORGET_WF" | sed -n '1p')"
-[ -n "$PINNED_TF" ] || { printf '[FATAL] could not read TERRAFORM_VERSION from %s\n' "$FORGET_WF" >&2; exit 1; }
+# Pin: the version CI runs is the apply workflow's TERRAFORM_VERSION (single source; the single-use forget workflow that carried the same pin is deleted by #9348).
+PINNED_TF="$(sed -n 's/^[[:space:]]*TERRAFORM_VERSION:[[:space:]]*"\{0,1\}\([0-9][0-9.]*\)"\{0,1\}[[:space:]]*$/\1/p' "$APPLY_WF" | sed -n '1p')"
+[ -n "$PINNED_TF" ] || { printf '[FATAL] could not read TERRAFORM_VERSION from %s\n' "$APPLY_WF" >&2; exit 1; }
 INSTALLED_TF="$(terraform version -json 2>/dev/null | jq -r '.terraform_version // empty' 2>/dev/null)"
 if [ "$INSTALLED_TF" != "$PINNED_TF" ]; then
   if [ -n "${CI:-}" ]; then
-    printf '[FATAL] terraform %s installed but CI pins %s (TERRAFORM_VERSION in workspaces-plaintext-forget.yml).\n' "${INSTALLED_TF:-unknown}" "$PINNED_TF" >&2
+    printf '[FATAL] terraform %s installed but CI pins %s (TERRAFORM_VERSION in apply-web-platform-infra.yml).\n' "${INSTALLED_TF:-unknown}" "$PINNED_TF" >&2
     exit 1
   fi
   printf '  note terraform %s here, CI pins %s: local run is NOT version-pinned (CI enforces the pin).\n' "${INSTALLED_TF:-unknown}" "$PINNED_TF"

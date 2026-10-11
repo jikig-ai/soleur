@@ -57,7 +57,7 @@ run "no token -> 3 and no doppler call" 3 array_absent ""
 [[ ! -s "$TMP/calls" ]] && echo "  ok   no doppler call without a token" || { echo "  FAIL the script called doppler without a token"; fails=$((fails + 1)); }
 run "absent run" 0 array_absent
 if grep -qE ' (set|delete|upload|run|download)( |$)' "$TMP/calls" || ! grep -q -- '--only-names' "$TMP/calls"; then echo "  FAIL the call was not a names-only read: $(cat "$TMP/calls")"; fails=$((fails + 1)); else echo "  ok   only a names-only list was issued"; fi
-if grep -nE 'secrets[^#]*(get|set|delete|upload|download)\b|doppler run' "$SCRIPT" | grep -v '^[0-9]*:#' | grep -q .; then echo "  FAIL the script mentions a value read or a write verb"; fails=$((fails + 1)); else echo "  ok   the script carries no value read and no write verb"; fi
+if grep -nE 'secrets[^#]*(get|set|delete|upload|download)\b|doppler run' "$SCRIPT" | grep -v '^[0-9]*:#' | grep -c >/dev/null .; then echo "  FAIL the script mentions a value read or a write verb"; fails=$((fails + 1)); else echo "  ok   the script carries no value read and no write verb"; fi
 # mutation: dropping the exact-name test must go red
 cp "$SCRIPT" "$TMP/mut.sh"; mkdir -p "$TMP/lib"; cp "$DIR/lib/"*.sh "$TMP/lib/"; cp "$TMP/mut.sh" "$TMP/web2-rebirth-never-pooled.sh"
 sed -i -E 's/any\(\. == \$n\)/any(. != $n)/' "$TMP/web2-rebirth-never-pooled.sh"

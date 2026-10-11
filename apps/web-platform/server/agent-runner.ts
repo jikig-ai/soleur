@@ -2114,6 +2114,11 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
       prompt,
       options: buildAgentQueryOptions({
         workspacePath,
+        // Outer-wrap cohort + log-correlation fields (#5863) — same identity
+        // pair cc-dispatcher passes; the flag's workspace allowlist keys off
+        // the workspaceId (basename fallback is coincidence, not contract).
+        workspaceId: activeWorkspaceId,
+        sessionId: conversationId,
         pluginPath,
         // Legacy domain-leader runner is always Command Center execution:
         // workspace cwd + workspace write (byte-identical to the prior default).

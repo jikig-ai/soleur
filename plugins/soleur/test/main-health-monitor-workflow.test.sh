@@ -1376,7 +1376,7 @@ for SHELLOPTS_ARM in "-e" "-eo pipefail"; do
   row "(B12b)$ARM the runner's parent-process-gone line is shown under its own label" \
     "without it the reader infers a kill from a missing breakdown instead of reading the runner say so" \
     "$(b_has_line '--- runner evidence of a kill ---' \
-        && grep -A1 -xF -- '--- runner evidence of a kill ---' "$BEHAVE_DIR/run/issue-body.md" | grep -q '^ERROR: parent process gone'; echo $?)"
+        && grep -A1 -xF -- '--- runner evidence of a kill ---' "$BEHAVE_DIR/run/issue-body.md" | grep -c >/dev/null '^ERROR: parent process gone'; echo $?)"
 
   # P2: a [FAIL] artefact of a kill, with no breakdown at all, is not "tests failing" either.
   run_filer "$BEHAVE_DIR/fx-fail-no-breakdown.txt" "$NO_TRACKER" "$SHELLOPTS_ARM"

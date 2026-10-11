@@ -472,6 +472,67 @@ the expected case. Any `kind=` other than none is reported verbatim with the run
 action (`knowledge-base/engineering/operations/runbooks/registry-host-replace-dispatch.md`);
 this phase reports, it does not block "done".
 
+## Phase 5.7: Sole-copy protection read-back (path-triggered, REPORT-ONLY)
+
+When the merged PR touched `apps/web-platform/infra/inngest-redis-luks.tf` (`gh pr diff <number> --name-only`), the merge's
+per-merge apply is what delivers the Hetzner delete protection on the Inngest sole-copy volume (#9879, ADR-282), so a green
+merge proves nothing about it. Otherwise record `Sole-copy read-back: SKIPPED (no triggering paths)` and continue. This phase
+reports; it never dispatches a production apply on its own.
+
+1. **Derive the expected word** (never hard-code it): `git fetch origin main`, then
+   `git show <merge-sha>:apps/web-platform/infra/inngest-redis-luks.tf` and read `delete_protection` on
+   `hcloud_volume.inngest_redis_luks`. `true` expects `protected`, `false` expects `not-protected`. The sanctioned lift PR
+   (runbook break-glass step 1, deliberate unprotect step 1) expects `not-protected` and is NOT a failure. Report a
+   mismatch only.
+2. **Find the merge-SHA run and wait for it:**
+   `gh run list --workflow apply-web-platform-infra.yml --commit <merge-sha> --limit 5 --json databaseId,status,conclusion`. An empty
+   list right after the merge is retried (every 30 s, up to 10 min), not read as "no run". Watch the id under Monitor
+   (`gh run watch <id>`; never `run_in_background` polling), bounded to about 50 min (the job runs up to 41 min plus queueing
+   on the shared concurrency group). `success` is read back. `cancelled`, `timed_out`, `startup_failure`, `skipped`,
+   `failure` or no run within the bound mean **not delivered or superseded**: read back anyway (a merge-SHA run can be
+   `cancelled` by the shared concurrency group and still have delivered); the read-back is the arbiter.
+3. **Run the read-back** from runbook `knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md` §5c
+   (read-only, token on stdin, one word). Run exactly:
+
+```bash
+doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; r=$(printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl -sS --config - -w "\n%{http_code}" https://api.hetzner.cloud/v1/volumes/106903269) || { echo read-failed; exit 2; }; case "$(printf %s "$r" | tail -n 1)" in 200) w=$(printf %s "$r" | sed "\$d" | jq -r "if .volume.protection.delete == true then \"protected\" elif .volume.protection.delete == false then \"not-protected\" else \"read-failed\" end" 2>/dev/null);; 404) w=volume-gone;; *) w=read-failed;; esac; case "$w" in protected) echo protected;; not-protected) echo not-protected; exit 1;; volume-gone) echo volume-gone; exit 4;; *) echo read-failed; exit 2;; esac'
+```
+
+4. **Route on the word, compared with the expected one.** `protected` / `not-protected` equal to the expected word passes;
+   a mismatch is a red status. `volume-gone` (HTTP 404) is not a read problem: report it and route to the runbook's "After
+   a total loss". `read-failed` (an HTTP error such as a 401, a network error, a non-JSON body or a missing field) and a
+   **missing word** (nothing printed: `doppler` absent or unauthenticated, an error before the command ran) mean the read
+   did not happen: report them, never dispatch on their account. `missing-token` means `HCLOUD_TOKEN_READONLY` is absent from
+   `prd_terraform`; minting it is operator step O5 in `knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md`.
+   Report `missing-token` and file an issue (the idiom of Phase 5.5, with the same label and the repo milestone):
+
+```bash
+gh issue create --label type/chore --milestone "Post-MVP / Later" \
+  --title "sole-copy read-back missing-token: mint HCLOUD_TOKEN_READONLY (PR #<number>)" \
+  --body "Post-merge read-back of the Inngest sole-copy volume could not run: HCLOUD_TOKEN_READONLY is absent from Doppler prd_terraform (operator step O5, infra-credential-tiers-8209.md). Until it is minted the delete protection on the only copy of the user queue and run state cannot be verified after a merge. Re-evaluate when O5 is done."
+```
+
+5. **`not-protected` when `protected` was expected: report, recommend, wait.** Name the exact command and ask the owner for an
+   explicit per-command go-ahead naming it; a menu answer is not one (`hr-menu-option-ack-not-prod-write-auth`). Never
+   dispatch it on your own. It applies the **whole per-merge plan**, not only the protection:
+   `gh workflow run apply-web-platform-infra.yml --ref main -f apply_target=manual-rerun -f reason='deliver sole-copy protection'`.
+   After a go-ahead and the dispatch: note the newest run id first, then
+   `gh run list --workflow apply-web-platform-infra.yml --event workflow_dispatch --limit 1 --json databaseId,status`
+   (an empty or unchanged id is stale: retry), watch it under Monitor bounded to about 50 min, then read back again.
+   `success` is read back; `cancelled`, `timed_out`, `startup_failure`, `skipped` or no run within the bound mean not
+   delivered or superseded: read back anyway, and if it is still `not-protected` recommend the dispatch again (go-ahead).
+6. **On a `protected` read-back that matches the expected word, and only while ADR-282's status is still `adopting`, file ONE tracking issue** so the status flip does not depend
+   on memory (skip if one is already open: `gh issue list --state open --limit 20 --search "flip ADR-282" --json number`):
+
+```bash
+gh issue create --label type/chore --milestone "Post-MVP / Later" \
+  --title "chore: flip ADR-282 adopting to accepted (and the sister records)" \
+  --body "The Inngest sole-copy delete protection was read back as protected after PR #<number>. ADR-282, runbook inngest-luks-cutover-6894.md section 5c, the ADR-119, ADR-142 and ADR-263 addenda, the C4 model, the Art. 30 register, compliance-posture and the encryption-posture ledger still say adopting, so a reader treats a verified protection on user data as a plan. Flip them to accepted in one follow-up PR."
+```
+
+A failed or unrun read-back is a **red post-merge status**: report it verbatim as `Sole-copy read-back: <word>` in the Phase 6
+comment and the Phase 7 summary. It does not itself block "done" (report-only, like Phases 5.5 and 5.6).
+
 ## Phase 6: Update Issue and Compound
 
 If the PR body contained `Closes #N`, update the linked issue with verification results:
@@ -486,6 +547,7 @@ gh issue comment <issue-number> --body "Post-merge verification complete for PR 
 - File freshness: <PASSED/N files checked>
 - Browser verification: <PASSED/SKIPPED/DELEGATED-TO-LIVE-VERIFY>
 - Live verification: <PASS/FAIL/CANT-RUN:reason/SKIPPED> (report-only, #5463)
+- Sole-copy read-back: <protected/not-protected/volume-gone/read-failed/missing-token/no word/SKIPPED> (report-only, #9879)
 "
 ```
 
@@ -511,6 +573,7 @@ Sentry error-count delta: <AUTO-RESOLVED/STOPPED/STILL-FIRING/SKIPPED>
 File freshness: <N files verified>
 Browser verification: <PASSED/SKIPPED/DELEGATED-TO-LIVE-VERIFY>
 Live verification: <PASS/FAIL/CANT-RUN:reason/SKIPPED> (report-only, #5463)
+Sole-copy read-back: <protected/not-protected/volume-gone/read-failed/missing-token/no word/SKIPPED> (report-only, #9879)
 Feature-tweet draft: <path + "flip publish_date + status: scheduled to publish" / CATCH-UP: run soleur:feature-tweet #N / NONE — ineligible>
 ```
 

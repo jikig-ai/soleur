@@ -18,9 +18,9 @@
 #     engine actually asks for — cannot pass.
 #   * Fixtures are keyed PER REF on disk, so an engine that processed only the first entry and
 #     broke out of the loop is detectable (the later entries' fixtures go unconsumed).
-#   * Every predicate greps a FILE directly. Never `producer | grep -q`: under `set -o pipefail`
-#     an early match closes the pipe, the producer takes SIGPIPE (141), and the pipeline reports
-#     non-zero even though grep matched — which fails OPEN on every negative assertion.
+#   * Predicates grep a FILE directly or drain a pipe (`producer | grep -c ... >/dev/null`, same exit
+#     status, reads to EOF). Never `producer | grep -q`: under `set -o pipefail` an early match
+#     takes SIGPIPE (141) and the pipeline reports non-zero though grep matched — failing OPEN.
 #   * Harness setup failures ABORT (exit 2) rather than degrading into a confident wrong verdict
 #     about the engine.
 #
@@ -418,14 +418,14 @@ else
 fi
 
 grep -qF "restore_summary" "$calls" 2>/dev/null # (calls file holds crane argv, not the summary)
-if printf '%s' "$out" | grep -qF "restored=2"; then
+if printf '%s' "$out" | grep -cF >/dev/null "restored=2"; then
   pass "the machine-readable summary reports restored=2 (the required floor)"
 else
   fail "summary must report restored=2" "$rc" "$out"
 fi
 
 # The conditional entry must be a DECLARED SKIP, not a silent omission and not an abort.
-if printf '%s' "$out" | grep -qF "skipped=1"; then
+if printf '%s' "$out" | grep -cF >/dev/null "skipped=1"; then
   pass "the conditional entry absent at GHCR is a declared skip, not an abort"
 else
   fail "an absent conditional entry must record a declared skip" "$rc" "$out"
@@ -511,7 +511,7 @@ fi
 # The message may not claim the image is GONE. Measured 2026-08-05: GHCR masks a repo that exists
 # but is not visible to the credential as MANIFEST_UNKNOWN, identical to genuinely-absent — so
 # "absent" would name a cause the engine did not measure.
-if printf '%s' "$out" | grep -qiE 'not visible|not readable by|credential'; then
+if printf '%s' "$out" | grep -ciE >/dev/null 'not visible|not readable by|credential'; then
   pass "the NOTFOUND message admits 'absent OR not visible to this credential'"
 else
   fail "NOTFOUND must not assert the image is gone (GHCR masks permission as MANIFEST_UNKNOWN)" "$rc" "$out"
@@ -592,7 +592,7 @@ fixture "$fx" "copy:${TARGET}/${WP}:sha256-${D1#sha256:}" 0 ""
 fixture "$fx" "${TARGET}/${WP}:sha256-${D1#sha256:}" 1 "" \
   "Error: GET http://${TARGET}/v2/${WP}/manifests/sha256-${D1#sha256:}: MANIFEST_UNKNOWN: manifest unknown"
 out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
-if [[ "$rc" -eq 4 ]] && printf '%s' "$out" | grep -qiF "restored UNSIGNED"; then
+if [[ "$rc" -eq 4 ]] && printf '%s' "$out" | grep -ciF >/dev/null "restored UNSIGNED"; then
   pass "signature copy reports ok but read-back is empty => exit 4 (no silent unsigned restore)"
 else
   fail "an unverifiable sink-side signature must exit 4 naming the unsigned state" "$rc" "$out"
@@ -606,7 +606,7 @@ ok_fixtures "$fx" "$TARGET"
 fixture "$fx" "ghcr.io/${WP}:sha256-${D1#sha256:}" 1 "" \
   "Error: GET https://ghcr.io/v2/${WP}/manifests/sha256-${D1#sha256:}: MANIFEST_UNKNOWN: manifest unknown"
 out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
-if [[ "$rc" -eq 4 ]] && printf '%s' "$out" | grep -qiF "no unsigned-restore arm"; then
+if [[ "$rc" -eq 4 ]] && printf '%s' "$out" | grep -ciF >/dev/null "no unsigned-restore arm"; then
   pass "no signature at GHCR => exit 4 (there is no unsigned-restore arm)"
 else
   fail "a missing source signature must exit 4, not warn" "$rc" "$out"
@@ -624,7 +624,7 @@ EOF
 fx="$TMP/fx-dup"; calls="$TMP/calls-dup"; : > "$calls"
 ok_fixtures "$fx" "$TARGET"
 out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$DUP_MANIFEST")"; rc=$?
-if [[ "$rc" -ne 0 ]] && printf '%s' "$out" | grep -qiE 'distinct|duplicat'; then
+if [[ "$rc" -ne 0 ]] && printf '%s' "$out" | grep -ciE >/dev/null 'distinct|duplicat'; then
   pass "a duplicated required entry cannot satisfy the floor"
 else
   fail "duplicate required entries must be rejected by name" "$rc" "$out"
@@ -643,7 +643,7 @@ fi
 # BOTH credential variables need their own row. With only the token row, a mutation deleting the
 # user check survives — the token guard fires first and masks it.
 out="$(ZOT_PUSH_USER="" run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
-if [[ "$rc" -eq 5 ]] && printf '%s' "$out" | grep -qF "ZOT_PUSH_USER"; then
+if [[ "$rc" -eq 5 ]] && printf '%s' "$out" | grep -cF >/dev/null "ZOT_PUSH_USER"; then
   pass "empty ZOT_PUSH_USER => exit 5, named separately from the token"
 else
   fail "a missing sink user must exit 5 and name ZOT_PUSH_USER" "$rc" "$out"
@@ -680,7 +680,7 @@ fx="$TMP/fx-empty"; calls="$TMP/calls-empty"; : > "$calls"
 out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$EMPTY_MANIFEST")"; rc=$?
 # Assert the SPECIFIC guard, not merely a non-zero exit: several guards can reject this manifest,
 # and a row that accepts any of them cannot tell which one is still alive.
-if [[ "$rc" -ne 0 ]] && printf '%s' "$out" | grep -qiF "ZERO required entries"; then
+if [[ "$rc" -ne 0 ]] && printf '%s' "$out" | grep -ciF >/dev/null "ZERO required entries"; then
   pass "empty inventory => rejected BY THE EMPTY-INVENTORY GUARD (named, not incidental)"
 else
   fail "an empty inventory must be rejected by its own named guard" "$rc" "$out"
@@ -703,7 +703,7 @@ fi
 # ── Argument validation. ─────────────────────────────────────────────────────────────────────
 fx="$TMP/fx-args"; calls="$TMP/calls-args"; : > "$calls"
 out="$(run_engine "$fx" "$calls" --tags-from "$MANIFEST")"; rc=$?
-if [[ "$rc" -ne 0 ]] && printf '%s' "$out" | grep -qF -- "--target"; then
+if [[ "$rc" -ne 0 ]] && printf '%s' "$out" | grep -cF >/dev/null -- "--target"; then
   pass "--target is required"
 else
   fail "a missing --target must be rejected by name" "$rc" "$out"
@@ -726,7 +726,7 @@ fi
 # reaching for the network.
 calls="$TMP/calls-selftarget"; : > "$calls"
 out="$(run_engine "$fx" "$calls" --target "ghcr.io" --tags-from "$MANIFEST")"; rc=$?
-if [[ "$rc" -ne 0 ]] && printf '%s' "$out" | grep -qF -- "--target" && [[ ! -s "$calls" ]]; then
+if [[ "$rc" -ne 0 ]] && printf '%s' "$out" | grep -cF >/dev/null -- "--target" && [[ ! -s "$calls" ]]; then
   pass "--target ghcr.io rejected by the engine before any crane call (self-copy would verify green)"
 else
   fail "the source registry must be rejected by name, before the first crane invocation" "$rc" \
@@ -734,7 +734,7 @@ else
 fi
 
 out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST" --nope)"; rc=$?
-if [[ "$rc" -ne 0 ]] && printf '%s' "$out" | grep -qiF "unknown argument"; then
+if [[ "$rc" -ne 0 ]] && printf '%s' "$out" | grep -ciF >/dev/null "unknown argument"; then
   pass "unknown argument rejected"
 else
   fail "an unknown argument must be rejected" "$rc" "$out"
@@ -777,7 +777,7 @@ NET_ERR='Error: Get "https://sink/v2/": dial tcp: lookup sink: no such host'
 # does not fail, it never returns.
 for _flag in --target --tags-from; do
   out="$(timeout 10 bash "$ENGINE" "$_flag" 2>&1)"; rc=$?
-  if [[ "$rc" -ne 0 && "$rc" -ne 124 ]] && printf '%s' "$out" | grep -qF "requires a value"; then
+  if [[ "$rc" -ne 0 && "$rc" -ne 124 ]] && printf '%s' "$out" | grep -cF >/dev/null "requires a value"; then
     pass "argv: ${_flag} with no value => refuses immediately (never spins to a job timeout)"
   else
     fail "a missing flag value must refuse, not hang — rc 124 means it is still spinning" "$rc" "$out"
@@ -795,7 +795,7 @@ ok_fixtures "$fx" "$TARGET"
 fixture "$fx" "ghcr.io/${IC}:latest" 1 "" \
   "$(printf 'Error: GET https://ghcr.io/v2/%s/manifests/latest: MANIFEST_UNKNOWN: manifest unknown\nError: GET https://ghcr.io/token: UNAUTHORIZED: authentication required' "$IC")"
 out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
-if [[ "$rc" -eq 2 ]] && printf '%s' "$out" | grep -qF "rejected this credential"; then
+if [[ "$rc" -eq 2 ]] && printf '%s' "$out" | grep -cF >/dev/null "rejected this credential"; then
   pass "last_err: a conditional entry's auth failure ABORTS — never swallowed as a declared skip"
 else
   fail "a byte-tail lets an earlier 'manifest unknown' outrank the real verdict and skip silently" "$rc" "$out"
@@ -808,7 +808,7 @@ fx="$TMP/fx-readback-net"; calls="$TMP/calls-readback-net"; : > "$calls"
 ok_fixtures "$fx" "$TARGET"
 fixture "$fx" "${TARGET}/${WP}:v0.249.4" 1 "" "$NET_ERR"
 out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
-if [[ "$rc" -eq 3 ]] && printf '%s' "$out" | grep -qF "could not read"; then
+if [[ "$rc" -eq 3 ]] && printf '%s' "$out" | grep -cF >/dev/null "could not read"; then
   pass "an UNAVAILABLE sink on read-back => exit 3 (retryable), not 4 (corrupt restore)"
 else
   fail "an unreadable read-back must classify as availability, not as a digest mismatch" "$rc" "$out"
@@ -820,7 +820,7 @@ fx="$TMP/fx-sigcopy-net"; calls="$TMP/calls-sigcopy-net"; : > "$calls"
 ok_fixtures "$fx" "$TARGET"
 fixture "$fx" "copy:${TARGET}/${WP}:sha256-${D1#sha256:}" 1 "" "$NET_ERR"
 out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
-if [[ "$rc" -eq 3 ]] && printf '%s' "$out" | grep -qF "signature"; then
+if [[ "$rc" -eq 3 ]] && printf '%s' "$out" | grep -cF >/dev/null "signature"; then
   pass "an UNAVAILABLE sink during the signature copy => exit 3, naming the signature"
 else
   fail "a transient failure copying the signature must be retryable, not a permanent verdict" "$rc" "$out"
@@ -835,7 +835,7 @@ grep -qF 'not-a-number' "$BADFLOOR" || { echo "harness: the bad-floor fixture di
 fx="$TMP/fx-badfloor"; calls="$TMP/calls-badfloor"; : > "$calls"
 ok_fixtures "$fx" "$TARGET"
 out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$BADFLOOR")"; rc=$?
-if [[ "$rc" -eq 1 ]] && printf '%s' "$out" | grep -qF "numeric .floor"; then
+if [[ "$rc" -eq 1 ]] && printf '%s' "$out" | grep -cF >/dev/null "numeric .floor"; then
   pass "a non-numeric manifest floor => exit 1 naming the floor (not an arithmetic 0)"
 else
   fail "a corrupt floor must be a manifest fault, not a short restore" "$rc" "$out"
@@ -847,7 +847,7 @@ fi
 fx="$TMP/fx-noman"; calls="$TMP/calls-noman"; : > "$calls"
 ok_fixtures "$fx" "$TARGET"
 out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$TMP/definitely-absent.json")"; rc=$?
-if [[ "$rc" -eq 1 ]] && printf '%s' "$out" | grep -qF "not readable"; then
+if [[ "$rc" -eq 1 ]] && printf '%s' "$out" | grep -cF >/dev/null "not readable"; then
   pass "an unreadable manifest => exit 1 naming READABILITY (never 'treated as empty')"
 else
   fail "an unreadable inventory must not be diagnosed as a malformed one" "$rc" "$out"
@@ -877,7 +877,7 @@ fi
 
 # followed by `::add-mask::` in that stderr would execute. Collapsing newlines makes the whole
 # capture one un-parseable payload. Lifted from build-inngest-bootstrap-image.yml.
-if sed -n '/^last_err() {/,/^}/p' "$ENGINE" | grep -qE "tr '\\\\n' ' '"; then
+if sed -n '/^last_err() {/,/^}/p' "$ENGINE" | grep -cE >/dev/null "tr '\\\\n' ' '"; then
   pass "registry stderr is collapsed through tr (workflow-command injection guard)"
 else
   fail "captured stderr must be newline-collapsed before interpolation" "?" \
@@ -1018,7 +1018,7 @@ ok_fixtures "$fx" "$TARGET"
 fixture "$fx" "blob:${TARGET}/${WP}@${D_SIG_LAYER}" 1 "" \
   "Error: GET http://${TARGET}/v2/${WP}/blobs/${D_SIG_LAYER}: BLOB_UNKNOWN: blob unknown to registry"
 out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
-if [[ "$rc" -eq 4 ]] && printf '%s' "$out" | grep -qF "cosign signature"; then
+if [[ "$rc" -eq 4 ]] && printf '%s' "$out" | grep -cF >/dev/null "cosign signature"; then
   pass "an evicted cosign PAYLOAD blob fails (exit 4), not just an absent signature manifest"
 else
   fail "the signature payload blob must be verified, not only its manifest digest" "$rc" "$out"
@@ -1063,7 +1063,7 @@ att_shape_case() { # <name> <index-json> <expected-rc> <expected-message-substri
   rm -f "$fx/$(key "validate:${TARGET}/${WP}:v0.249.4")".rc
   local out rc
   out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
-  if [[ "$rc" -eq "$want" ]] && printf '%s' "$out" | grep -qF "$anchor"; then
+  if [[ "$rc" -eq "$want" ]] && printf '%s' "$out" | grep -cF >/dev/null "$anchor"; then
     pass "index shape '$name' => exit $want naming '$anchor'"
   else
     fail "index shape '$name' must exit $want naming '$anchor'" "$rc" "$out"
@@ -1121,7 +1121,7 @@ verdict_case() { # <name> <stub-stderr> <expected-anchor> <forbidden-anchor>
   fixture "$fx" "validate:${TARGET}/${WP}@${D_AMD64}" 1 "" "$err"
   local out rc
   out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
-  if [[ "$rc" -eq 4 ]] && printf '%s' "$out" | grep -qF "$want" && ! printf '%s' "$out" | grep -qF "$nope"; then
+  if [[ "$rc" -eq 4 ]] && printf '%s' "$out" | grep -cF >/dev/null "$want" && ! printf '%s' "$out" | grep -cF >/dev/null "$nope"; then
     pass "verdict '$name' names '$want' and not '$nope'"
   else
     fail "verdict '$name' must name '$want' and not '$nope'" "$rc" "$out"
@@ -1139,7 +1139,7 @@ fx="$TMP/fx-layerfmt-action"; calls="$TMP/calls-layerfmt-action"; : > "$calls"
 att_index_fixtures "$fx" "$TARGET"
 fixture "$fx" "validate:${TARGET}/${WP}@${D_AMD64}" 1 "" 'Error: validating layers: gzip: invalid header'
 out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
-if printf '%s' "$out" | grep -qF 'crane validate --remote ghcr.io/'; then
+if printf '%s' "$out" | grep -cF >/dev/null 'crane validate --remote ghcr.io/'; then
   pass "the layer-format verdict names the GHCR control read that discriminates the two causes"
 else
   fail "a layer-format verdict must give the discriminating command, not just a prohibition" "$rc" "$out"
@@ -1220,8 +1220,8 @@ out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; r
 # Anchored on the VERDICT, not just rc 4. The pre-fix engine also exits 4 here — with "declares no
 # blobs", i.e. the right code for the wrong reason — so an rc-only assertion passes under both
 # engines and discriminates nothing. The evicted-blob path must name BLOB-INCOMPLETE.
-if [[ "$rc" -eq 4 ]] && printf '%s' "$out" | grep -qF "BLOB-INCOMPLETE" \
-   && ! printf '%s' "$out" | grep -qF "declares no blobs"; then
+if [[ "$rc" -eq 4 ]] && printf '%s' "$out" | grep -cF >/dev/null "BLOB-INCOMPLETE" \
+   && ! printf '%s' "$out" | grep -cF >/dev/null "declares no blobs"; then
   pass "an index-shaped signature with an evicted bundle blob exits 4 naming BLOB-INCOMPLETE"
 else
   fail "an evicted sigstore bundle blob must exit 4 naming BLOB-INCOMPLETE" "$rc" "$out"
@@ -1234,7 +1234,7 @@ sigx_fixtures "$fx" "$TARGET"
 fx_oci_raw "$fx" "${TARGET}/${WP}@${D_OTHER}" \
   '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[]}'
 out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
-if [[ "$rc" -eq 4 ]] && printf '%s' "$out" | grep -qF "no children"; then
+if [[ "$rc" -eq 4 ]] && printf '%s' "$out" | grep -cF >/dev/null "no children"; then
   pass "a signature index with zero children exits 4 and names the empty index"
 else
   fail "an empty signature index must exit 4 naming the cause" "$rc" "$out"
@@ -1246,7 +1246,7 @@ sigx_fixtures "$fx" "$TARGET"
 fx_oci_raw "$fx" "${TARGET}/${WP}@${D_SIGX_CHILD}" \
   '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"'"$D_SIGX_BUNDLE"'"}]}'
 out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
-if [[ "$rc" -eq 4 ]] && printf '%s' "$out" | grep -qF "nested inside another index"; then
+if [[ "$rc" -eq 4 ]] && printf '%s' "$out" | grep -cF >/dev/null "nested inside another index"; then
   pass "an index nested inside a signature index fails closed at depth 2"
 else
   fail "a depth-2 nested index must fail closed" "$rc" "$out"
@@ -1258,7 +1258,7 @@ sigx_fixtures "$fx" "$TARGET"
 fx_oci_raw "$fx" "${TARGET}/${WP}@${D_OTHER}" \
   '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","size":876}]}'
 out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
-if [[ "$rc" -eq 4 ]] && printf '%s' "$out" | grep -qF "declares no digest"; then
+if [[ "$rc" -eq 4 ]] && printf '%s' "$out" | grep -cF >/dev/null "declares no digest"; then
   pass "a signature-index child with no digest exits 4 rather than being skipped"
 else
   fail "a digest-less signature child must exit 4" "$rc" "$out"
@@ -1336,7 +1336,7 @@ sig2_fixtures "$fx" "$TARGET"
 fixture "$fx" "blob:${TARGET}/${WP}@${D_SIGX_BUNDLE2}" 1 "" \
   "Error: GET http://${TARGET}/v2/${WP}/blobs/${D_SIGX_BUNDLE2}: BLOB_UNKNOWN: blob unknown to registry"
 out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
-if [[ "$rc" -eq 4 ]] && printf %s "$out" | grep -qF "BLOB-INCOMPLETE"; then
+if [[ "$rc" -eq 4 ]] && printf %s "$out" | grep -cF >/dev/null "BLOB-INCOMPLETE"; then
   pass "the SECOND child's evicted blob exits 4 (the walk does not stop at child 1)"
 else
   fail "a walk that stops at child 1 must not read as verified" "$rc" "$out"
@@ -1348,7 +1348,7 @@ sigx_fixtures "$fx" "$TARGET"
 fx_oci_raw "$fx" "${TARGET}/${WP}@${D_SIGX_CHILD}" \
   '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.empty.v1+json","digest":"'"$D_SIGX_CFG"'","size":2},"layers":[]}'
 out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
-if [[ "$rc" -eq 4 ]] && printf %s "$out" | grep -qF "NO layers"; then
+if [[ "$rc" -eq 4 ]] && printf %s "$out" | grep -cF >/dev/null "NO layers"; then
   pass "a signature child with a config but no layers exits 4 (the empty config is not evidence)"
 else
   fail "a layerless signature child must exit 4" "$rc" "$out"
@@ -1360,7 +1360,7 @@ sigx_fixtures "$fx" "$TARGET"
 fx_oci_raw "$fx" "${TARGET}/${WP}@${D_SIGX_CHILD}" \
   '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","artifactType":"application/vnd.dev.sigstore.bundle.v0.3+json","subject":{"digest":"'"$D_OTHER"'"},"config":{"mediaType":"application/vnd.oci.empty.v1+json","digest":"'"$D_SIGX_CFG"'","size":2},"layers":[{"mediaType":"application/vnd.dev.sigstore.bundle.v0.3+json","digest":"'"$D_SIGX_BUNDLE"'","size":10559}]}'
 out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
-if [[ "$rc" -eq 4 ]] && printf %s "$out" | grep -qF "signs a DIFFERENT image"; then
+if [[ "$rc" -eq 4 ]] && printf %s "$out" | grep -cF >/dev/null "signs a DIFFERENT image"; then
   pass "a signature with valid blobs but the WRONG subject exits 4"
 else
   fail "a wrong-subject signature must exit 4" "$rc" "$out"
@@ -1373,7 +1373,7 @@ fx="$TMP/fx-sig-parity"; calls="$TMP/calls-sig-parity"; : > "$calls"
 sigx_fixtures "$fx" "$TARGET"
 fixture "$fx" "${TARGET}/${WP}:sha256-${D1#sha256:}" 0 "$D_SIGX_CHILD2"
 out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
-if [[ "$rc" -eq 4 ]] && printf %s "$out" | grep -qF "differs between GHCR"; then
+if [[ "$rc" -eq 4 ]] && printf %s "$out" | grep -cF >/dev/null "differs between GHCR"; then
   pass "a sink serving a DIFFERENT signature than GHCR exits 4 (digest parity is not a tautology)"
 else
   fail "signature digest parity must be enforced" "$rc" "$out"
@@ -1387,8 +1387,8 @@ sigx_fixtures "$fx" "$TARGET"
 fx_oci_raw "$fx" "${TARGET}/${WP}@${D_OTHER}" \
   '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[{"digest":""}]}'
 out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
-if [[ "$rc" -eq 4 ]] && printf %s "$out" | grep -qF "enumerated ZERO rows but the index declares 1" \
-   && ! printf %s "$out" | grep -qF "is an index with no children"; then
+if [[ "$rc" -eq 4 ]] && printf %s "$out" | grep -cF >/dev/null "enumerated ZERO rows but the index declares 1" \
+   && ! printf %s "$out" | grep -cF >/dev/null "is an index with no children"; then
   pass "an index child with an EMPTY digest names the empty digest, not 'no children'"
 else
   fail "an empty child digest must not be reported as an absent child" "$rc" "$out"
@@ -1399,8 +1399,8 @@ sigx_fixtures "$fx" "$TARGET"
 fx_oci_raw "$fx" "${TARGET}/${WP}@${D_SIGX_CHILD}" \
   '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"digest":""},"layers":[{"digest":""}]}'
 out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
-if [[ "$rc" -eq 4 ]] && printf %s "$out" | grep -qF "enumerated ZERO rows but the manifest declares 2" \
-   && ! printf %s "$out" | grep -qF "declares no blobs"; then
+if [[ "$rc" -eq 4 ]] && printf %s "$out" | grep -cF >/dev/null "enumerated ZERO rows but the manifest declares 2" \
+   && ! printf %s "$out" | grep -cF >/dev/null "declares no blobs"; then
   pass "blobs with EMPTY digests name the empty digest, not 'declares no blobs' (the #7378 string)"
 else
   fail "empty blob digests must not be reported as 'declares no blobs'" "$rc" "$out"

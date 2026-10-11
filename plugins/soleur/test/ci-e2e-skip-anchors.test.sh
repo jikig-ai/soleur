@@ -171,7 +171,7 @@ e2e_section="$(awk '/^  e2e:/{f=1} f && !/^  e2e:/ && /^  [a-zA-Z0-9_-]+:/{exit}
 
 anchor_in_e2e() { # <desc> <fixed-string> — must appear INSIDE the e2e job.
   local desc="$1" needle="$2"
-  if printf '%s\n' "$e2e_section" | grep -qF -e "$needle"; then
+  if printf '%s\n' "$e2e_section" | grep -cF >/dev/null -e "$needle"; then
     PASS=$((PASS + 1)); echo "ok   $desc"
   else
     FAIL=$((FAIL + 1)); echo "FAIL $desc (missing in e2e job section: $needle)"
@@ -181,7 +181,7 @@ anchor_in_e2e() { # <desc> <fixed-string> — must appear INSIDE the e2e job.
 # Boundary-anchored, not substring: `id: detector` must NOT satisfy this —
 # `steps.detect.outputs.applicable` would resolve empty and e2e green-skips
 # on every PR with every assertion green (demonstrated in review).
-if printf '%s\n' "$e2e_section" | grep -qE '^[[:space:]]+id: detect[[:space:]]*$'; then
+if printf '%s\n' "$e2e_section" | grep -cE >/dev/null '^[[:space:]]+id: detect[[:space:]]*$'; then
   PASS=$((PASS + 1)); echo "ok   e2e classify step id: detect (line-anchored)"
 else
   FAIL=$((FAIL + 1)); echo "FAIL e2e classify step id: detect missing/renamed"
@@ -212,8 +212,16 @@ anchor_absent "no trigger-level paths: on e2e/CI"       "paths-ignore"
 # rejected. And an `if:` on the classify STEP is worse: `applicable` resolves
 # empty, every gate and the verdict step evaluate false, job greens doing
 # nothing. Neither is pinned by presence anchors — assert absence.
-if printf '%s\n' "$e2e_section" | awk '/^    steps:/{exit} /^    (if|needs):/{bad=1} END{exit bad}'; then
-  PASS=$((PASS + 1)); echo "ok   e2e job carries no job-level if:/needs:"
+# ONE carve-out (ADR-276 S2, #9512): the push-dedupe elision. `e2e` may carry exactly `needs: [push-dedupe]` and
+# exactly the canonical condition below, nothing else. That is not the #5585 shape: push-dedupe cannot needs-skip
+# `e2e` by failing (the condition opens with the status function !cancelled(), so a failed or skipped need still runs
+# the job), it is skipped off the push event, and the elision needs a green identical-SHA merge_group run (whether a
+# required context is evaluated on a direct push to main is not settled from the repo, so the defense rests on the
+# proof, not on that premise). scripts/ci-push-dedupe.test.sh evaluates the condition over the event x output truth table.
+E2E_ELIDE_NEEDS="needs: [push-dedupe]"
+E2E_ELIDE_IF="if: \${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') }}"
+if printf '%s\n' "$e2e_section" | awk -v en="    $E2E_ELIDE_NEEDS" -v ei="    $E2E_ELIDE_IF" '/^    steps:/{exit} /^    (if|needs):/{ if ($0 != en && $0 != ei) bad=1 } END{exit bad}'; then
+  PASS=$((PASS + 1)); echo "ok   e2e job carries no job-level if:/needs: other than the push-dedupe elision pair"
 else
   FAIL=$((FAIL + 1)); echo "FAIL e2e job has a job-level if:/needs: (skipped required check posts green)"
 fi
@@ -221,7 +229,7 @@ detect_step="$(printf '%s\n' "$e2e_section" | awk '
   /^      - name: Classify e2e applicability/{f=1}
   f && /^      - / && !/Classify e2e applicability/{exit}
   f{print}')"
-if [ -n "$detect_step" ] && ! printf '%s\n' "$detect_step" | grep -qE '^\s+if:'; then
+if [ -n "$detect_step" ] && ! printf '%s\n' "$detect_step" | grep -cE >/dev/null '^\s+if:'; then
   PASS=$((PASS + 1)); echo "ok   classify step carries no if: (verdict always populated)"
 else
   FAIL=$((FAIL + 1)); echo "FAIL classify step is conditional or not found (empty verdict green-skips the job)"

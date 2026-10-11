@@ -1174,6 +1174,9 @@ export interface QueryFactoryArgs {
   prompt: AsyncIterable<SDKUserMessage>;
   systemPrompt: string;
   resumeSessionId?: string;
+  /** #5863 — the SDK session id when the dispatch already carries one
+   *  (resume/cold-start seed); `op:tenant-outer-wrap` log correlation only. */
+  sessionId?: string | null;
   pluginPath: string;
   cwd: string;
   /** #5402 — routines authoring mode flag; realSdkQueryFactory appends the
@@ -3155,6 +3158,7 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
             crmLead: args.crmLead,
           }),
           resumeSessionId,
+          sessionId: args.sessionId,
           pluginPath,
           cwd,
           userId,

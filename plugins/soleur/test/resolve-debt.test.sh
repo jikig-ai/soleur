@@ -55,7 +55,7 @@ assert_contains "$out" "legacy-schema-fixture" "T2: lists legacy-schema entry"
 assert_contains "$out" "current-schema-fixture" "T2: lists current-schema entry"
 assert_contains "$out" "low-severity-fixture" "T2: lists low-severity entry"
 # Resolved entry is filtered out
-if echo "$out" | grep -q "already-resolved-fixture"; then
+if echo "$out" | grep -c >/dev/null "already-resolved-fixture"; then
   echo "  FAIL: T2: --list must filter out status: resolved entries"
   FAIL=$((FAIL + 1))
 else
@@ -332,7 +332,7 @@ chmod +x "$STUB_DIR_NV/gh"
 out=$(printf "1\nresolved\n2723\n" | PATH="$STUB_DIR_NV:$PATH" python3 "$SCRIPT" --no-verify --allow-fixture --ledger "$WORK_DIR" 2>&1)
 rc=$?
 assert_eq "0" "$rc" "T-noverify-positive: exits 0 (gh stub not invoked)"
-if echo "$out" | grep -q "FAIL: --no-verify did not skip gh"; then
+if echo "$out" | grep -c >/dev/null "FAIL: --no-verify did not skip gh"; then
   echo "  FAIL: T-noverify-positive: gh stub WAS invoked despite --no-verify"
   FAIL=$((FAIL + 1))
 else

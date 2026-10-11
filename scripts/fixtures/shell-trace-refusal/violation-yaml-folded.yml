@@ -1,0 +1,16 @@
+# Rule E must fire ONCE. The offending step is a FOLDED scalar (run: >-): the body reaches
+# bash as ONE line, which a raw-line feeder would never see as a curl command.
+name: fixture-folded
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: compliant first
+        run: |
+          curl --disable --noproxy '*' -sS --config - "$SINK_URL" < <(printf 'header = "Authorization: Bearer %s"\n' "$FIXTURE_TOKEN")
+      - name: offending folded scalar
+        run: >-
+          curl --disable --noproxy '*' -sS
+          -H "Authorization: Bearer ${FIXTURE_TOKEN}"
+          "$SINK_URL"

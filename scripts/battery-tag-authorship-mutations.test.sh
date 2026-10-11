@@ -108,7 +108,7 @@ row() {
   if [[ "$want" == RED ]]; then
     if [[ "$rc" == "0" ]]; then
       fail "$id [$axis] — guard stayed GREEN under a mutation that must red it"
-    elif { grep -vE '^  \[ok\] ' "$WORK/out" | grep -qF "$expect"; }; then
+    elif { grep -vE '^  \[ok\] ' "$WORK/out" | grep -cF >/dev/null "$expect"; }; then
       pass "$id [$axis] — guard red with its own diagnostic"
     else
       fail "$id [$axis] — guard red, but NOT for the planted reason (expected: $expect)"

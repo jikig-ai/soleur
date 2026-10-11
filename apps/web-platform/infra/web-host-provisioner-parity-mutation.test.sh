@@ -277,9 +277,15 @@ PYEOF
 
 mutations_run=0
 
-# expect_red <label> <file> <expected-anchor> <mutator>
+# expect_red <label> <file> <expected-anchor> <mutator> [<extra-needle>...]
+# The Python mutator is always the 4th argument; extra needles trail it. Every extra
+# needle must be a substring of the guard's [FAIL] output (mutation_scorer_failed_on
+# all-of semantics) — used when a mutation is expected to red via MORE than one
+# diagnostic arm (M4j pins uncovered + stale).
 expect_red() {
   local label="$1" file="$2" anchor="$3" script="$4"
+  shift 4
+  local extra_needles=("$@")
   cases=$((cases + 1))
   restore
   if ! apply_mutation "$file" "$script"; then
@@ -291,7 +297,7 @@ expect_red() {
   mutations_run=$((mutations_run + 1))
   if run_guard; then
     no "$label: guard still PASSED with the invariant broken -- it cannot detect this"
-  elif mutation_scorer_failed_on "$OUT" '\[FAIL\]' "$anchor"; then
+  elif mutation_scorer_failed_on "$OUT" '\[FAIL\]' "$anchor" ${extra_needles[@]+"${extra_needles[@]}"}; then
     ok "$label: guard went RED on '$anchor'"
   else
     no "$label: guard went red but NOT via '$anchor'. Either it failed for an unrelated reason
@@ -330,7 +336,7 @@ fi
 
 # ── §1: resource enumeration and host-pinning ────────────────────────────────────────
 expect_red "M1 (§1 floor: a provisioner deleted)" server.tf \
-  "1: swept only 18 SSH-connected" '
+  "1: swept only 20 SSH-connected" '
 import re
 m = re.search(r"resource \"terraform_data\" \"orphan_reaper_install\" \{", s)
 assert m, "anchor missing"
@@ -368,7 +374,7 @@ s = s.replace(old, "    host        = local.web1_ip\n    user        = \"root\"\
 # Repointing the sibling's dial to web-1 removes it from W2_DIALERS, so the presence check
 # (deploy_pipeline_fix_web2 present=) fires -- the class rule, not the pin check.
 expect_red "M4a (§1: web-2 sibling repointed to web-1)" server.tf \
-  "deploy_pipeline_fix_web2 present=False" '
+  "web-2 dialers=['egress_gateway_web2']" '
 old = "    host        = hcloud_server.web[\"web-2\"].ipv4_address"
 assert old in s
 s = s.replace(old, "    host        = hcloud_server.web[\"web-1\"].ipv4_address", 1)
@@ -431,13 +437,94 @@ assert old in s
 s = s.replace(old, "  provisioner \"remote-exec\" {\n    inline = [\"install /tmp/x /etc/soleur/singleline-inline.conf\"]\n  }\n  provisioner \"remote-exec\" {\n    inline = [\n      \"set -e\",\n      \"mkdir -p /etc/soleur /etc/systemd/system/vector.service.d /etc/systemd/system/inngest-heartbeat.service.d /etc/systemd/system/inngest-server.service.d /etc/systemd/system/inngest-redis.service.d\",", 1)
 '
 
-# Terraform identifiers legally contain uppercase and hyphens. v1 matched `[a-z_0-9]+`, so such
-# a resource was skipped by every section at once -- and because all floors are `>=`, invisibly.
-# This is a GREEN control: after the rename the resource must still be swept (count unchanged).
-expect_green "control-C (uppercase/hyphen resource name is still swept)" server.tf '
+# #9534: a NEW web-1-only SSH dialer must be forced through the fleet-sibling
+# classification — without it a running sibling silently never receives the artifact.
+expect_red "M4h (§1: unclassified web-1-only dialer reds)" server.tf \
+  "uncovered=['phantom_w1_probe@web-2']" '
+old = "resource \"terraform_data\" \"egress_gateway_web2\" {"
+assert old in s
+s = s.replace(old, """resource "terraform_data" "phantom_w1_probe" {
+  triggers_replace = { h = timestamp() }
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-1"].ipv4_address
+    user        = "root"
+    host_key    = local.web_1_ssh_host_key
+  }
+  provisioner "remote-exec" { inline = ["set -e", "true"] }
+}
+
+""" + old, 1)
+'
+
+# #9534 N-host: a web-3 SSH dialer reds on EVERY guard at once — the host-pinning
+# allow-set, the fleet roster (dialers on undeclared hosts), and G2's host_key
+# allow-set. The roster is declared, not discovered, so a fleet grow is a deliberate
+# edit with all three tripwires live.
+expect_red "M4i (§1: a web-3 dialer hits the undeclared-host clause)" server.tf \
+  "dialers on undeclared hosts" '
+old = "resource \"terraform_data\" \"egress_gateway_web2\" {"
+assert old in s
+s = s.replace(old, """resource "terraform_data" "phantom_w3_probe" {
+  triggers_replace = { h = timestamp() }
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-3"].ipv4_address
+    user        = "root"
+    host_key    = local.web_1_ssh_host_key
+  }
+  provisioner "remote-exec" { inline = ["set -e", "true"] }
+}
+
+""" + old, 1)
+'
+
+# Terraform identifiers legally contain uppercase and hyphens. With `_norm()` normalizing
+# at the classification boundary (lower + hyphen->underscore) (#9970), `Cosign-Trusted_Root`
+# and `cosign_trusted_root` resolve to ONE resource identity — this rename is swept AND
+# stays justified, so the correct verdict is GREEN. The row pins that transparency:
+# deleting `_norm` re-breaks it via `uncovered` + `stale`, and narrowing the `hcl_blocks`
+# `([^"]+)` name capture to `[a-z_0-9]+` re-breaks it via `stale` + the swept floors
+# (an unswept resource can never be `uncovered`; the second `_all_tf_names` capture
+# feeds only the twin-base exemption — control-D below pins its `_norm` call site).
+expect_green "control-C (uppercase/hyphen rename is swept by the classification)" server.tf '
 old = "resource \"terraform_data\" \"cosign_trusted_root\" {"
 assert old in s
 s = s.replace(old, "resource \"terraform_data\" \"Cosign-Trusted_Root\" {", 1)
+'
+
+# Normalization must not swallow detection (#9970): a rename landing on a normalized-UNIQUE
+# name still lands in `ssh_resources` but loses its `ONLY_JUSTIFIED` key, so the
+# classification must still RED it — `uncovered` for the new name plus `stale` for the
+# vacated one (both needles pinned).
+expect_red "M4j (§1: a normalized-unique rename is uncovered+stale)" server.tf \
+  "uncovered=['cosign_trusted_root_v2@web-2']" '
+old = "resource \"terraform_data\" \"cosign_trusted_root\" {"
+assert old in s
+s = s.replace(old, "resource \"terraform_data\" \"cosign_trusted_root_v2\" {", 1)
+' "stale entries=['cosign_trusted_root@web-2']"
+
+# The collision emit (names collide after normalization) is the only diagnostic that names
+# the collision — two SSH resources whose spellings normalize to ONE key, the later block
+# silently shadowing the earlier key. `stale` and the two swept floors co-fire as
+# side-effects, but none discriminates: deleting the collide check alone flips this row
+# to red-not-via-anchor. Rename onto apparmor_bwrap_profile's normalized identity (#9970).
+expect_red "M4k (§1: two names normalizing to one key collide)" server.tf \
+  "collide after normalization" '
+old = "resource \"terraform_data\" \"cosign_trusted_root\" {"
+assert old in s
+s = s.replace(old, "resource \"terraform_data\" \"Apparmor-Bwrap_Profile\" {", 1)
+'
+
+# `_all_tf_names` is normalized at the same boundary (#9970): the non-SSH twin base
+# `deploy_pipeline_fix` (local-exec, never enters `ssh_resources`) supplies `_base`
+# coverage for `deploy_pipeline_fix_web2` only via the NORMALIZED name — a case/hyphen
+# rename must stay GREEN; deleting `_norm` at the `_all_tf_names` call site re-breaks
+# the web-2 twin as `uncovered`.
+expect_green "control-D (case/hyphen rename of a non-SSH twin base stays covered)" server.tf '
+old = "resource \"terraform_data\" \"deploy_pipeline_fix\" {"
+assert old in s
+s = s.replace(old, "resource \"terraform_data\" \"Deploy-Pipeline_Fix\" {", 1)
 '
 
 # ── §2: the destination sweep (the load-bearing invariant) ───────────────────────────
@@ -818,11 +905,12 @@ s = s.replace(a, a + """
 # Measured: 2 [FAIL] lines. That is the deliberate cost of margin-zero floors on overlapping
 # sweeps -- the anchor still attributes this case to FLOOR_DESTS, which is what the rule requires.
 # The expected count tracks FLOOR_DESTS - 1 and must be re-derived whenever the baseline
-# moves: 56 while the baseline was 57, 58 since #7539 took it to 59. A stale literal here does
+# moves: 56 while the baseline was 57, 58 since #7539 took it to 59, 78 since #9534 took
+# it to 79. A stale literal here does
 # not fail loudly -- the guard still goes red, just via a different message -- so the battery
 # reports "red but NOT via <expected>" and the mutation stops being attributed to this floor.
 expect_red "M30 (§2 floor: one delivered artifact removed)" server.tf \
-  "2: swept only 74 destinations" '
+  "2: swept only 78 destinations" '
 blk = """  provisioner "file" {
     source      = "${path.module}/cron-egress-alarm@.service"
     destination = "/etc/systemd/system/cron-egress-alarm@.service"
@@ -920,7 +1008,7 @@ s = s.replace(old, ins + old, 1)
 # -- the exact "clean sweep of nothing" the new floor exists to name. §2 co-fires with fifteen
 # uncovered destinations, which is inherent: §3 quantifies over an intersection §2 also owns.
 expect_red "M35 (§3 floor: the seed-baked check quietly stops checking anything)" soleur-host-bootstrap.sh \
-  "3: the seed-baked check ran over only 27" '
+  "3: the seed-baked check ran over only 31" '
 old = "install -D -m 0644 -o root -g root \"$SEED/$f\" \"/etc/systemd/system/$f\""
 assert old in s
 s = s.replace(old, "install -D -m 0644 -o root -g root \"$SEED/$f\" \"/etc/systemd/units.d/$f\"", 1)
@@ -1390,7 +1478,7 @@ fi
 # the ADR-193 defect: a floor whose failure arm routes through the suite's own verdict helper
 # cannot witness that helper being neutered -- the assertion rows go quiet AND so does the floor
 # meant to notice the quiet. Each carries a DISTINCT message so a failure says WHICH tripped.
-FLOOR=57  # +5 #9151 mutation arms (M4a, M4b, G2-15, G2-16, G2-17; G2-C4 is a green control and does not increment) +7 review-pass arms (M2b, M4c, M4d, M4e, M4f, M4g, G2-18). Re-derive from the battery log when adding rows.
+FLOOR=58  # +5 #9151 mutation arms (M4a, M4b, G2-15, G2-16, G2-17; G2-C4 is a green control and does not increment) +7 review-pass arms (M2b, M4c, M4d, M4e, M4f, M4g, G2-18); +1 net #9970: control-C moved to expect_green (-1), M4j+M4k added (+2), control-D is a green control (+0). Re-derive from the battery log when adding rows.
 if (( mutations_run < FLOOR )); then
   printf '\n[FATAL] anti-vacuity floor (mutations): only %d landed, attributed mutation(s) ran, expected >= %d.\n' \
     "$mutations_run" "$FLOOR" >&2

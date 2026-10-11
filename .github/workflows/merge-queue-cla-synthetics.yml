@@ -20,7 +20,7 @@ name: Merge queue CLA synthetics
 # ANY failure (verify, checkout, the success step itself) runs the failure step, which posts BOTH
 # names on the candidate with conclusion=failure and a title naming the reason, then the job
 # stays failed. Without it the verify failure posts nothing, the required contexts stay pending
-# and the queue entry waits out check_response_timeout_minutes (60) instead of being dequeued at
+# and the queue entry waits out check_response_timeout_minutes (75) instead of being dequeued at
 # once. The reason is the verify script's fixed die() text (steps.verify.outputs.reason), never
 # PR or event content; when verify recorded none, steps.verify.outcome picks the wording (verify
 # passed and the success post failed / verify failed unrecorded / checkout failed before verify). The failure step is the only step with an `if:`, and it can only post

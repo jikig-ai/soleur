@@ -182,9 +182,10 @@ resource "logtail_exploration_alert" "monitor_send_failed" {
 # landing UNENCRYPTED again, which is the one thing this whole change exists to prevent. Nothing
 # else notices: the scheduler is healthy in every one of those states, so uptime stays green.
 #
-# WHAT IT DELIBERATELY DOES NOT DETECT: the plaintext backstop volume merely staying ATTACHED
-# while the store is correctly on the encrypted one. That is the additive design's rollback route,
-# and retiring it is a Terraform declaration change, tracked with an expiry in issue #8285.
+# WHAT IT DELIBERATELY DID NOT DETECT: the plaintext backstop volume merely staying ATTACHED
+# while the store was correctly on the encrypted one (the additive design's rollback route). That
+# volume was destroyed on 2026-10-09 (#8285), so the state this paragraph excluded no longer exists;
+# the rule's scope (a probe row pinning a non-encrypted alias) is unchanged.
 #
 # WHY IT SHIPPED PAUSED, AND WHY IT NO LONGER IS. Before the cutover the correct value of that
 # field WAS the plaintext alias, so an armed rule would have paged continuously from merge until
@@ -266,6 +267,15 @@ resource "logtail_exploration_alert" "inngest_luks_wrong_volume" {
   # "no rows" between emissions, and with treat_as_zero that reads as healthy rather than as
   # "nothing measured". recovery_period covers two emissions, so one good row does not close an
   # incident the next row would re-open.
+  #
+  # #8516 — the same treat_as_zero also blinds this alert to the probe going SILENT: a dead
+  # emitter, a Vector journald-allowlist regression, or a sink outage all read as zero
+  # wrong-volume rows while the store sitting on a non-encrypted device goes unpaged (the plaintext
+  # volume hcloud_volume.inngest_redis this once named was destroyed 2026-10-09, #8285).
+  # The dead-probe sibling that carries the absence-of-signal case is
+  # betteruptime_heartbeat.inngest_server_probe (uptime-alerts.tf), born paused pending its
+  # feeder (tracked there, #9703); scripts/followthroughs/inngest-luks-property-8296.sh reports the
+  # same silence as a daily CANNOT ESTABLISH on that tracker in the interim.
   alert_type          = "threshold"
   operator            = "higher_than"
   value               = 0
@@ -884,7 +894,7 @@ resource "logtail_exploration_alert" "workspaces_luks_deadman_fired" {
   sms            = false
   critical_alert = false
 
-  incident_cause = "The workspaces-LUKS dead-man FIRED on web-1: the cutover's backstop timer stopped the app, unmounted the encrypted /workspaces volume and remounted the retained plaintext one. Writes since the freeze may be stranded on the LUKS volume. Read the SOLEUR_WORKSPACES_LUKS_DEADMAN rows (result=ok or result=fail) to see how the revert ended, then follow the runbook. This incident auto-resolves after 10 quiet minutes; resolution does NOT mean the stranded writes were reconciled, only that no new fire row arrived. Runbook: ${local.workspaces_luks_deadman_runbook_url}"
+  incident_cause = "The workspaces-LUKS dead-man FIRED on web-1: the cutover's backstop timer ran. While the retained plaintext volume still exists, a fire stops the app, unmounts the encrypted /workspaces volume and remounts the plaintext one (result=ok reason=plaintext_remounted), so writes since the freeze may be stranded on the LUKS volume. Once the plaintext wipe (#6604 step 7) has run, a fire refuses instead (result=fail reason=refused_plaintext_wiped or refused_plaintext_record_gone) and leaves the LUKS mount untouched. Read the SOLEUR_WORKSPACES_LUKS_DEADMAN rows (result= and reason=) to see how it ended, then follow the runbook. This incident auto-resolves after 10 quiet minutes; resolution does NOT mean any stranded writes were reconciled, only that no new fire row arrived. Runbook: ${local.workspaces_luks_deadman_runbook_url}"
   metadata = {
     runbook = local.workspaces_luks_deadman_runbook_url
   }
@@ -1113,6 +1123,164 @@ resource "logtail_exploration_alert" "ghcr_hostsfile_deny_lost" {
   incident_cause = "A host reports that its hosts-file GHCR deny is no longer in force: ghcr.io resolved to a real address (ci-deploy GHCR_DENY ghcr_blocked=0 on a web host, or the registry heartbeat's ghcr_blocked=0). The deny is an accident guard on name resolution and deploy pulls are zot-only, so this is not a deploy or user outage; host processes and host-network containers on that host could resolve ghcr.io. The web arm samples only when ci-deploy runs. This incident auto-resolves after 30 quiet minutes, which does NOT mean the deny is back. Decode the arm and host, and pick the repair route per host, in the runbook: ${local.ghcr_hostsfile_deny_lost_runbook_url}"
   metadata = {
     runbook = local.ghcr_hostsfile_deny_lost_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}
+
+# ── #9534: egress gateway — deny-class spike + probe silence ────────────────────
+#
+# WHAT THEY DETECT. The gateway's sole security surface is its deny decisions
+# (Squid TCP_DENIED on the shared CIDR ACL + kernel `egress-gw-deny:` drops are
+# the same class). A spike means something is actively probing internal space —
+# a prompt-injected session reaching for metadata/RFC1918, or a confused-deputy
+# forwarder. During the PR-A dark launch the only legitimate deny traffic is the
+# synthetic probe's one row per 5 min, so a sustained rate above that pages.
+#
+# The heartbeat alert is the absence detector: cron-egress-resolve emits one
+# `egress_gw_probe` line every 5 min under SYSLOG_IDENTIFIER=egress-gw-probe.
+# Silence means the resolver timer died, the gateway container is gone (the
+# probe skips with gw_absent — a row, not silence), or Vector stopped — none of
+# which may read as green. The deny SPIKE is deliberately NOT on the probe row
+# itself: a probe that only emits failures still pages via Sentry
+# (egress_gw_probe_fail op), and the deny spike counts SQUID decisions, which a
+# dead gateway cannot produce either — the two rules cover distinct failure
+# arms (no gateway at all vs a live gateway mis-ACL'd).
+#
+# WHAT THEY DELIBERATELY DO NOT DETECT: allowed-traffic abuse/volume anomalies
+# (documented gap — CMO review; tracked in the spec's open questions), and
+# domain-fronting/SNI-vs-CONNECT drift (Squid cannot see past the tunnel; the
+# residual is recorded in the ADR).
+locals {
+  # Squid's soleur_json logformat puts the decision in `decision` (%Ss);
+  # TCP_DENIED is Squid's refusal class (ACL deny + auth deny both land here —
+  # a brute-forcing unauthenticated client is the same signal worth paging).
+  egress_gw_deny_spike_sql = <<-SQL
+    SELECT {{time}} AS time, count(*) AS value
+    FROM {{source}}
+    WHERE time BETWEEN {{start_time}} AND {{end_time}}
+      AND JSONExtractString(raw, 'CONTAINER_NAME') = 'soleur-egress-gw'
+      AND position(JSONExtractString(raw, 'message'), 'TCP_DENIED') > 0
+    GROUP BY time
+  SQL
+
+  egress_gw_probe_silent_sql = <<-SQL
+    SELECT {{time}} AS time, count(*) AS value
+    FROM {{source}}
+    WHERE time BETWEEN {{start_time}} AND {{end_time}}
+      AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'egress-gw-probe'
+    GROUP BY time
+  SQL
+
+  egress_gw_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md#egress-gateway-better-stack-alerts"
+}
+
+resource "logtail_exploration" "egress_gw_deny_spike" {
+  name      = "soleur-egress-gw-deny-spike-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    sql_query       = replace(trimspace(local.egress_gw_deny_spike_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "egress_gw_deny_spike" {
+  exploration_id = logtail_exploration.egress_gw_deny_spike.id
+  name           = "soleur-egress-gw-deny-spike-prd"
+
+  # > 20 deny rows in 5 min. Dark-launch baseline is ~1 row per probe pair; the
+  # 20x headroom keeps a few noisy-but-legit client retries sub-paging while any
+  # sustained internal-space scan clears it in one window.
+  alert_type          = "threshold"
+  operator            = "higher_than"
+  value               = 20
+  check_period        = 300
+  query_period        = 300
+  confirmation_period = 0
+  recovery_period     = 1800
+  on_missing_data     = "treat_as_zero"
+
+  paused = false
+
+  email          = true
+  push           = false
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "Sustained Squid TCP_DENIED volume on soleur-egress-gw — sessions are attempting CONNECT to denied destination classes (metadata/RFC1918/ULA). Check which workspace tokens are generating denies; revocation is deleting the token file. Runbook: ${local.egress_gw_runbook_url}"
+  metadata = {
+    runbook = local.egress_gw_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}
+
+resource "logtail_exploration" "egress_gw_probe_silent" {
+  name      = "soleur-egress-gw-probe-silent-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    sql_query       = replace(trimspace(local.egress_gw_probe_silent_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "egress_gw_probe_silent" {
+  exploration_id = logtail_exploration.egress_gw_probe_silent.id
+  name           = "soleur-egress-gw-probe-silent-prd"
+
+  # < 1 heartbeat row in 15 min (probe emits every 5 min when due). No rows ->
+  # the absence is the alert; treat_as_zero makes "no bucket" read as 0 beats.
+  alert_type          = "threshold"
+  operator            = "lower_than"
+  value               = 1
+  check_period        = 300
+  query_period        = 900
+  confirmation_period = 0
+  recovery_period     = 900
+  on_missing_data     = "treat_as_zero"
+
+  paused = false
+
+  email          = true
+  push           = false
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "No egress_gw_probe heartbeat from cron-egress-resolve for 15+ min — the resolver timer, the Vector pipeline, or the host journal is dead. The gateway's allow/deny verification is dark. Runbook: ${local.egress_gw_runbook_url}"
+  metadata = {
+    runbook = local.egress_gw_runbook_url
   }
 
   escalation_target {

@@ -9,8 +9,9 @@ decision_record: knowledge-base/project/specs/feat-one-shot-6588-legal-clause-re
 site_dispositions: knowledge-base/project/specs/feat-one-shot-6588-legal-clause-retraction/site-dispositions.md
 adr: knowledge-base/engineering/architecture/decisions/ADR-119-luks-at-rest-for-the-live-workspaces-volume.md
 status: "SIGNED-OFF WITH ACCEPTED RESIDUAL — final. Re-attested against HEAD c9747f0aa; pre-merge condition E-1 DISCHARGED 2026-08-02 by `workspaces-luks-verify` run 30749271370 (verified independently, §A3). All five A–E defects are CURED. The DC-1 retained-plaintext residual is carried forward unamended and is ACCEPTED, not cured. CLEAR TO MERGE."
+status_on_attestation_6604: "SIGNED-OFF as to DC-1 — CLO-agent-attested 2026-10-08 at 611051949cbe3539385a68ed8ac5609c699dce13 (knowledge-base/legal/audits/2026-10-counsel-review-6604.md). The DC-1 retained-plaintext residual is CURED as to web-1's retained copy ONLY (`hcloud_volume.workspaces[\"web-1\"]`, Hetzner volume 105149570): logically zeroed, verified by a full-device direct-IO read-back (readback=zero over 21474836480 bytes), detached and deleted through the Hetzner API 2026-10-08T15:42:04Z; physical media reclamation per the Hetzner DPA; physical erasure of the underlying media is not attested. The status above is unchanged history (SIGNED-OFF WITH ACCEPTED RESIDUAL as of 2026-08-02) and the disposition does NOT become unqualified: web-2's plaintext volume (#6931) and the plaintext git_data volume (#6897) stay open. This record takes effect on the merge of PR #9348; the cure itself is a fact of 2026-10-08. See `residual_cured`."
 ship_gate_disposition: "DISCHARGED — the ship Phase 5.5 Counsel-Review CLO-Attestation gate is satisfied. No outstanding pre-merge condition."
-superseded_by: "§Amendment No. 3 — E-1 discharge and final disposition, 2026-08-02 (supersedes §Amendment No. 2 → §Amendment No. 1 → the 2026-07-24 review)"
+superseded_by: "§Amendment No. 3 — E-1 discharge and final disposition, 2026-08-02 (supersedes §Amendment No. 2 → §Amendment No. 1 → the 2026-07-24 review) [Appended 2026-10-08 (#6604): the Addendum (2026-10-01, #6604), CLO-attested 2026-10-08 at 611051949cbe3539385a68ed8ac5609c699dce13 (knowledge-base/legal/audits/2026-10-counsel-review-6604.md), controls over §Amendment No. 3 as to DC-1 only, from the merge of PR #9348.]"
 signed_off_at: 2026-08-02
 signed_off_at_withdrawn: 2026-07-24
 amended_at: 2026-08-02
@@ -21,8 +22,10 @@ signed_off_by: "WITHDRAWN. The 2026-07-24 attribution is preserved below for the
 tier_classification: "Tier 1 (material) per `knowledge-base/legal/tc-version-bump-policy.md` — retraction of published Article 32 TOM claims plus re-scoping of a surviving one. NO `TC_VERSION` bump: that constant governs `docs/legal/terms-and-conditions.md` exclusively (`apps/web-platform/lib/legal/tc-version.ts:14,17,26-27`); the three documents amended here are notice/disclosure documents with no re-acceptance gate."
 brand_survival_threshold: single-user incident
 accepted_residual: "The re-scoped LUKS clause ships while a full un-wiped plaintext copy of every workspace remains on the superseded pre-cutover volume `hcloud_volume.workspaces` (`format = \"ext4\"`, `apps/web-platform/infra/server.tf`), retained attached-unmounted as the ADR-119 rollback backstop. Users are not told. CLO block B1 recommended an accompanying retained-plaintext disclosure sentence; the operator reaffirmed the UC-3 hold on 2026-07-24 and B1 was OVERRIDDEN. Tracking issue: #6808 (escalated by this PR to priority/p1-high + type/security). Ledgered internally as `plaintext-exception` (`tracking_issue: \"#6897\"`, `expires_on: 2026-10-22` — an INTERNAL commitment, never published) and named in the Article 30 register PA-1(g) and PA-2(g)."
-re_evaluation_triggers: "(1) **#6808 clears** — `WORKSPACES_LUKS_HEARTBEAT_URL` wired, the ADR-119 soak clock starts, and the Phase-5 plaintext wipe of `hcloud_volume.workspaces` completes: at that point the accepted residual is cured by reality and this audit's disposition upgrades from SIGNED-OFF-WITH-RESIDUAL to unqualified. (2) **First arms-length data subject** — if #3723 (or any other path) onboards a non-Soleur user while #6808 is open, the bounding fact that carries this residual (zero arms-length data subjects) is gone: the residual becomes p0, the hold MUST be re-raised, and the published wording must be qualified before onboarding, not after. (3) **Any regression of the LUKS mount** — `workspaces-luks-verify` reporting anything other than `device_type=crypto_LUKS` on `/dev/mapper/workspaces`, or an escrow/header failure, falsifies the one Article 32 claim this PR retains and makes the retained clause itself an over-claim (the #6812 silent-revert failure mode is documented on this exact surface). (4) **Any future edit that would add the held disclosure sentence** — the Path-2 wording preserved in the plan §3b must be reviewed against the then-current infrastructure before publication, and must anchor on **Art. 12(1) + 5(1)(a)**, not Art. 13(3). (5) Standard inherited triggers: an EEA-out transfer, a regulated-industry data subject, or any change of Hetzner locative away from `hel1` only."
+re_evaluation_triggers: "(1) **#6808 clears** — `WORKSPACES_LUKS_HEARTBEAT_URL` wired, the ADR-119 soak clock starts, and the Phase-5 plaintext wipe of `hcloud_volume.workspaces` completes: at that point the accepted residual is cured by reality and this audit's disposition upgrades from SIGNED-OFF-WITH-RESIDUAL to unqualified. (2) **First arms-length data subject** — if #3723 (or any other path) onboards a non-Soleur user while #6808 is open, the bounding fact that carries this residual (zero arms-length data subjects) is gone: the residual becomes p0, the hold MUST be re-raised, and the published wording must be qualified before onboarding, not after. (3) **Any regression of the LUKS mount** — `workspaces-luks-verify` reporting anything other than `device_type=crypto_LUKS` on `/dev/mapper/workspaces`, or an escrow/header failure, falsifies the one Article 32 claim this PR retains and makes the retained clause itself an over-claim (the #6812 silent-revert failure mode is documented on this exact surface). (4) **Any future edit that would add the held disclosure sentence** — the Path-2 wording preserved in the plan §3b must be reviewed against the then-current infrastructure before publication, and must anchor on **Art. 12(1) + 5(1)(a)**, not Art. 13(3). (5) Standard inherited triggers: an EEA-out transfer, a regulated-industry data subject, or any change of Hetzner locative away from `hel1` only. [Superseded 2026-10-08 (#6604), as to (1) and (2): (1) fired as to DC-1 only, on 2026-10-08, when the wipe dispatch D (run 37801674740) concluded with delete_issued=true: #6808 closed 2026-08-06 and the ADR-119 soak passed 2026-09-24; web-1's retained copy (volume 105149570) was logically zeroed, verified by a full-device direct-IO read-back (`readback=zero` over 21474836480 bytes, 15:41:41Z), and deleted 2026-10-08T15:42:04Z; the disposition does NOT upgrade to unqualified, because web-2's plaintext volume (#6931) and the plaintext git_data volume (#6897) are outside DC-1; `hcloud_volume.workspaces` remains for web-2 (serving-weight 0, intended empty, contents unprobed, #6931), outside DC-1 per §A3.3. (2) is dispositioned, not fired: the copy was frozen at the 2026-07-23 cutover, before the first arm's-length onboarding on 2026-08-06 (tester #1, knowledge-base/engineering/operations/runbooks/alpha-tester-onboarding.md), so no arm's-length user's data was ever on it, and the erasures it could defeat are bounded to the owners of the 8 workspaces frozen on it. Triggers (3), (4), (5) and the claim-decay trigger stand unamended. See the Addendum (2026-10-01, #6604).]"
 addendum_2026_09_21: "Conditioned on the merge of PR #8511 — #7226 channel residual recorded; a host-key failure counts as unavailable, not re-evaluation trigger (3). Disposition unchanged. See the Addendum (2026-09-21, #7226) at the end."
+residual_cured: "DC-1 (web-1 retained copy, `hcloud_volume.workspaces[\"web-1\"]`, Hetzner volume 105149570) ONLY — CURED 2026-10-08: logically zeroed, verified by a full-device direct-IO read-back (readback=zero over 21474836480 bytes, wiped row 15:41:41Z), detached and deleted through the Hetzner API (DELETE 204, final GET 404, 15:42:04Z). Physical media reclamation per the Hetzner DPA; physical erasure of the underlying network-volume media is not attested. Evidence: dispatch run 37801674740, forget run 37803274724 and post-dispatch verify run 37804427597, in knowledge-base/legal/audits/workspaces-plaintext-destruction-record.md; CLO-attested 2026-10-08 at 611051949cbe3539385a68ed8ac5609c699dce13 (knowledge-base/legal/audits/2026-10-counsel-review-6604.md). Not cured: web-2's plaintext, intended-empty (contents unprobed) instance of hcloud_volume.workspaces (#6931) and the plaintext git_data volume (#6897). Accepted: the LUKS volume 106443278 is now the sole copy of the workspace data, with no backup or snapshot (#5274, #8625). Re-evaluation triggers (2)–(5) and the claim-decay trigger stand. accepted_residual is kept as history."
+addendum_2026_10_01: "Drafted 2026-10-01 in PR #9348 (#6604 step 7, PR B); evidence run 37801674740, forget run 37803274724. Records the DC-1 cure scoped to web-1's copy, the trigger (2) disposition, and what changes on the merge of PR #9348. CLO-attested SIGNED-OFF 2026-10-08 at 611051949cbe3539385a68ed8ac5609c699dce13 per knowledge-base/legal/audits/2026-10-counsel-review-6604.md (the draft verdict BLOCKED (evidence pending) is superseded). See the Addendum (2026-10-01, #6604) at the end."
 ---
 
 # Counsel review audit — #6588 (Article 32 TOM retraction + LUKS re-scope)
@@ -39,6 +42,17 @@ addendum_2026_09_21: "Conditioned on the merge of PR #8511 — #7226 channel res
 >
 > Everything before `§Amendment No. 3` is superseded history, preserved deliberately. Read order:
 > this notice → `§Amendment No. 3` → the rest only if you need to know how the position got here.
+>
+> **Superseded 2026-10-08 (#6604), as to "accepted and undisclosed, not cured":** the DC-1 retained copy
+> — web-1's `hcloud_volume.workspaces["web-1"]`, Hetzner volume `105149570` — was logically zeroed,
+> verified by a full-device direct-IO read-back (`readback=zero` over 21474836480 bytes), and detached and
+> deleted through the Hetzner API on 2026-10-08 (deleted 15:42:04Z); the residual is cured as to that copy
+> only. Physical media reclamation is per the Hetzner DPA; physical erasure of the underlying media is not
+> attested. CLO-attested 2026-10-08 at `611051949cbe3539385a68ed8ac5609c699dce13`; this marker takes
+> effect on the merge of PR #9348. Not cured: web-2's plaintext volume (#6931) and the plaintext
+> `git_data` volume (#6897). The LUKS volume `106443278` is now the sole copy of the workspace data (no
+> backup or snapshot, #5274, #8625). Read the Addendum (2026-10-01, #6604) at the end after
+> `§Amendment No. 3`; it controls as to DC-1.
 
 ---
 
@@ -977,6 +991,19 @@ at the moment anyone notices.
 Separately tracked and not part of this residual: **#6931** (web-2's plaintext-but-empty volume),
 now correctly outside the published claim per §A3.3.
 
+**Superseded 2026-10-08 (#6604), as to "remains on `hcloud_volume.workspaces`,
+attached, un-wiped":** that copy was web-1's instance (`hcloud_volume.workspaces["web-1"]`, Hetzner
+volume `105149570`). It was retained, attached and unmounted, from the 2026-07-23 cutover (run
+29995956562) until the wipe job's detach on 2026-10-08. On 2026-10-08 the wipe dispatch D (run
+37801674740) concluded with `delete_issued=true`: the volume was logically zeroed, verified by a
+full-device direct-IO read-back (`readback=zero` over 21474836480 bytes, 15:41:41Z), and deleted
+through the Hetzner API (15:42:04Z); the forget (run 37803274724) removed its two Terraform state
+addresses (destruction record). "Tracked on **#6808**" is as recorded 2026-08-02; #6808 closed
+2026-08-06; the soak passed 2026-09-24. On the merge of PR #9348 the `plaintext-exception` ledger row
+is re-scoped to web-2's instance (`tracking_issue: "#6931"`, `expires_on: 2026-12-29`, internal).
+`hcloud_volume.workspaces` itself remains, for web-2 only. Physical erasure of the underlying media is
+not attested. See the Addendum (2026-10-01, #6604).
+
 ## A3.6 — Final disposition
 
 **SIGNED-OFF WITH ACCEPTED RESIDUAL.**
@@ -1006,6 +1033,13 @@ operator retains an optional veto. **External** counsel re-review remains reserv
 frontmatter re-evaluation triggers — unchanged, live, and now joined by the claim-decay trigger
 in §A3.4. All output in this PR and in this audit remains **draft material requiring professional
 legal review**.
+
+**Superseded 2026-10-08 (#6604), as to "Accepted residual: one — the DC-1 retained
+plaintext volume, accepted and undisclosed, not cured, tracked #6808 / #6897":** cured as to that
+copy (web-1's, volume `105149570`) only, on 2026-10-08, CLO-attested 2026-10-08 at
+`611051949cbe3539385a68ed8ac5609c699dce13`; the frontmatter `residual_cured` key scopes the cure.
+#6931 stays a follow-up. The gate status above was the
+2026-08-02 gate for PR #6938 and is not reopened. See the Addendum (2026-10-01, #6604).
 
 ---
 
@@ -1046,3 +1080,80 @@ breach-notice triage (`knowledge-base/legal/recommended-tools.md#breach-notice-t
 72-hour notification clock runs from awareness. The operational steps are in
 `knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md`, "Host-key mismatch
 (H4)".
+
+---
+
+# Addendum (2026-10-01, #6604) — retiring the DC-1 retained copy (#6604 step 7, PR B #9348)
+
+> **Drafted 2026-10-01, before the evidence exists.** The destructive dispatch and the state forget
+> have not run when this is written. Every fact only they can supply is a PENDING-EVIDENCE
+> marker, and this addendum is not attested until those markers are replaced from the runs' own
+> output. The draft-time verdict is **BLOCKED (evidence pending)**:
+> `knowledge-base/legal/audits/2026-10-counsel-review-6604.md`. `§Amendment No. 3` stays the
+> controlling section for everything except DC-1.
+>
+> **Superseded 2026-10-08 (#6604), as to "Drafted 2026-10-01, before the evidence exists" and "have
+> not run when this is written":** the destructive dispatch D (run 37801674740) and the state forget
+> (run 37803274724) ran on 2026-10-08; every evidence marker in this addendum was replaced from
+> their output, and the verdict is SIGNED-OFF, CLO-agent-attested at
+> `611051949cbe3539385a68ed8ac5609c699dce13`
+> (`knowledge-base/legal/audits/2026-10-counsel-review-6604.md`). The merge-only statements below still
+> read "on the merge of PR #9348".
+
+**What happens to DC-1.** The DC-1 residual is web-1's retained plaintext volume,
+`hcloud_volume.workspaces["web-1"]` (Hetzner volume `105149570`), retained, attached and unmounted
+since the 2026-07-23 cutover (run 29995956562) until 2026-10-08, when the wipe dispatch D (run
+37801674740) concluded with `delete_issued=true`: the volume was logically zeroed, verified by a
+full-device direct-IO read-back (`readback=zero` over 21474836480 bytes, 15:41:41Z), and deleted through
+the Hetzner API (15:42:04Z). Physical media reclamation is per the Hetzner DPA; physical erasure of the
+underlying media is not attested. The evidence is the Art. 5(2) destruction record,
+`knowledge-base/legal/audits/workspaces-plaintext-destruction-record.md`, which reads
+`status: complete` before ADR-119 reads `accepted`.
+
+**Evidence already in hand (2026-09-30).** The rehearsal run `36769782488` proved the target was the
+pinned plaintext volume and not the LUKS mapper's backing device (`target=/dev/sdb`,
+`backing=/dev/sdc`, `holders=0 dependents=0`), that the sole live copy was recoverable (W3–W5), and
+that no workspace existed only on the retained copy (`plaintext_only=0`). The same-day verify run
+`36770448813` read `ready=true workspace_count=9 expected=8` on the live LUKS volume.
+
+**Evidence at attestation (2026-10-08).** Dispatch run 37801674740 (arm `first_wipe`, head
+`57cc8494d58626f02c47f35f15e1b7219133c9b7`) zeroed volume 105149570, read back all 21474836480 bytes as
+zero (`readback=zero`), detached it (action 660248143891602) and deleted it (`DELETE` 204; final `GET`
+404; web-1 left holding only `106443278`), with `plaintext_only=0`. The forget run 37803274724 (head
+`425ea0fc1fda3624e53c46771d76580c43d36e90`) removed exactly `hcloud_volume.workspaces["web-1"]` and
+`hcloud_volume_attachment.workspaces["web-1"]` (serial 1762 -> 1763, lineage unchanged). Both heads show
+no diff from the rehearsed `59abf6a76c` over the wipe and forget code. The post-dispatch verify run
+37804427597 read `ready=true`, `workspace_count=9` (the same-day baseline was 9), `crypto_LUKS` on
+`/dev/mapper/workspaces`, `escrow=ok header=readable` and `/health` 200; an independent read-only Hetzner
+API read returned 404 for the volume while web-1 answered 200.
+
+**The cure is scoped to DC-1.** Re-evaluation trigger (1) fired on 2026-10-08 as to
+web-1's copy only. The disposition does not become unqualified. Not cured, and not part of DC-1: web-2's plaintext, intended-empty (unprobed) instance of `hcloud_volume.workspaces` (#6931,
+outside the published claim per §A3.3) and the plaintext `git_data` volume (#6897).
+`hcloud_volume.workspaces` itself still exists, for web-2. Triggers (2)–(5) and the claim-decay
+trigger of §A3.4 stand.
+
+**Trigger (2), dispositioned.** The copy was frozen at the 2026-07-23 cutover. The first arm's-length
+onboarding was on 2026-08-06 (tester #1:
+`knowledge-base/engineering/operations/runbooks/alpha-tester-onboarding.md`;
+`knowledge-base/legal/audits/2026-08-06-alpha-tester-controller-processor-determination.md`), after the freeze, so no arm's-length user's data was ever on the copy.
+The erasures the copy could have defeated are bounded to the owners of the 8 workspaces frozen on it
+(cutover run 29995956562's persisted count).
+
+**What changes on the merge of PR #9348, and only then.** Terraform declares no plaintext workspaces
+volume for web-1; the single-use wipe and state-forget code is deleted; Terraform declares
+`prevent_destroy` and `delete_protection` on `hcloud_volume.workspaces_luks` (volume `106443278`) and
+`prevent_destroy` on its attachment, the Hetzner-side delete protection being effective only after
+the post-merge SSH-stage apply; and the `plaintext-exception`
+ledger row is re-scoped to web-2's instance (`tracking_issue: "#6931"`, `expires_on: 2026-12-29`,
+internal, never published). The Article 30 register's PA-1 (g)(17) and PA-2 (g)(21) carry the matching
+markers.
+
+**A residual this addendum states rather than hides.** From the deletion, the LUKS volume holds the only
+copy of every workspace. There is no backup or snapshot of it; escrow covers key loss, not data loss;
+hardware loss stays open (#5274, #8625). Also stated, not hidden: physical erasure of the underlying network-volume media is not attested, and Art. 17 erasures made between 2026-07-23 and 2026-10-08 are bounded to the owners of the 8 workspaces frozen on the copy (counted by owners, not by request).
+
+**Published text.** No published legal sentence mentions the retained copy, so none changes here;
+`docs/legal/**` is not edited by PR #9348.
+
+`accepted_residual` in the frontmatter is kept as history.

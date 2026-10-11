@@ -14,7 +14,7 @@ description: "This skill should be used when auditing the recurring per-Anthropi
 # Model-launch review
 
 `model-launch-review` runs the recurring per-Anthropic-model-release checklist. Each release
-(Opus 4.6 → 4.7 → 4.8 → Fable 5 → Fable 5.1 → Opus 5.5 → Sonnet 5.5) recurs the same Anthropic audit; an xAI
+(Opus 4.6 → 4.7 → 4.8 → Fable 5 → Fable 5.1 → Opus 5.5 → Sonnet 5.5 → Haiku 5.5) recurs the same Anthropic audit; an xAI
 release adds item 6. This skill **audits** every item,
 **auto-fixes** the one mechanical-bulk item (stale model-ID swaps) into a **CI-gated PR**
 under operator identity, and **flags** the rest for human sign-off. ADR-053 names this skill as
@@ -108,9 +108,12 @@ Only item 1 is auto-applied. Items 2–6 are reported in the PR body for human s
    `cron-bash-allowlist-hook.mjs`. Probe it for real: settings = `DEFAULT_CLAUDE_SETTINGS` + that
    hook under a `*` matcher (copied under its ORIGINAL filename — its main guard is keyed on it,
    and a renamed copy allows everything), then run
-   `npx -y @anthropic-ai/claude-code@<v> -p --output-format json --model claude-haiku-4-5` asking for
+   `npx -y @anthropic-ai/claude-code@<v> -p --output-format json --model claude-sonnet-5-5` asking for
    a non-allowlisted `echo`, and require the command in `.permission_denials[]` — with the old
-   version as the control (#8601).
+   version as the control (#8601). Pick a `--model` that BOTH the old and the new pin know
+   (`claude-sonnet-5-5` for the Haiku 5.5 bump): the old pin cannot resolve the new id, so a probe
+   on the new id makes the control fail on model resolution instead of on the hook, and the
+   comparison measures nothing.
 
    Probe the PLATFORM package, never the `@anthropic-ai` scope: `claude-agent-sdk` and
    `claude-agent-sdk-linux-x64` both carry `claude-sonnet-5`, so a scope-wide grep answers
@@ -191,6 +194,29 @@ change" trigger never fired when Fable 5 shipped. The cron files an issue, never
   2026-09-01 with no second edit; Anthropic then cancelled that increase. Re-read the live
   source when the trigger fires — the deferral records what was true when it was written.
 - Inventory by independent grep, not by a checklist's file list (inventories undercount).
+- **A model with prompt-length-tiered pricing needs its boundary pinned, and the audit's pricing
+  flag (item 4) cannot see it.** Haiku 5.5 is $0.10/$0.50 per MTok up to 100,000 prompt tokens and
+  $0.50/$2.50 above, while `MODEL_PRICING` was a flat per-token row feeding a WORM ledger. Item 4
+  compares rates, never the structure that selects between them, so a second card goes unnoticed
+  unless the row is read against the pricing page's own table. When a launch prices by prompt
+  length: add the second card to `MODEL_PRICING`, pin the comparison's operator (the page says
+  "over 100,000", so strictly greater) and which token types enter the length (the page does not
+  say whether cached tokens count, so use the superset, which can only over-attribute), and test
+  the exact boundary reached through each input-side token type. Re-read the Sonnet and Opus rows
+  at the same time: the Haiku 5.5 launch also showed `cacheReadPerToken` for Sonnet 5.5 recorded
+  at $0.20 against the page's $0.10 (0.05x base), a carry-over error invisible to a diff.
+- **A launch can change request semantics for small-`max_tokens` callers, not just the id.** Haiku 5.5
+  runs adaptive thinking by default and thinking tokens count against `max_tokens`, so a 200-token
+  classifier can spend its budget before emitting a text block. Item 3 covers the CLI path; the
+  direct-SDK and `fetch` callers need their own live cell (default vs `output_config.effort:
+  "low"`, N=5, synthesized input) before the id flips, plus a message-path `reportSilentFallback`
+  (`err = null`) for the no-text-block case so a silent fallback becomes visible.
+- **A carve-out for consumers that resolve models through a bundled CLI must name the pin whose
+  bump retires it, and a test must expire it.** The Agent SDK scripts stayed on `claude-haiku-4-5`
+  because the pinned `claude-agent-sdk` bundle did not know the new id. The exemption in
+  `audit-models.sh` (`SDK_PATH_CARVEOUT`) lists EXACT paths (a directory would hide a genuinely
+  stale sibling) and `model-launch-review.test.ts` fails once the SDK pin reaches the first
+  release that knows the id, so the exemption cannot outlive its reason.
 - **When the launch migration bumps the Anthropic SDK toolchain in
   `apps/web-platform/package.json` (`@anthropic-ai/claude-code`,
   `@anthropic-ai/claude-agent-sdk`, `@anthropic-ai/sdk`), regenerate

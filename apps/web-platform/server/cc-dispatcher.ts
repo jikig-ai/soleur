@@ -131,7 +131,7 @@ import { resolveEffectiveInstallationId } from "./cc-effective-installation";
 // Session-start self-heal: if the active workspace has a connected repo but no
 // matching clone on disk, clone/repair it so the Concierge has a real git repo
 // to work in (fixes the "No git repository found" blocker). Generic per-user.
-import { getCurrentRepoUrl, getCurrentRepoStatus } from "./current-repo-url";
+import { readCurrentRepoUrlResult, getCurrentRepoStatus } from "./current-repo-url";
 import {
   ensureWorkspaceRepoCloned,
   ensureWorkspaceDirExists,
@@ -181,11 +181,23 @@ import {
 // Issue B part 2 — per-workspace autonomous Bash toggle (fail-closed read).
 import { resolveBashAutonomous } from "./resolve-bash-autonomous";
 import { resolveDebugMode } from "./resolve-debug-mode";
+// feat-open-web-egress (#9534) — workspace "Agent web access" grant (member-
+// checked, fail-closed) + the per-session loopback forwarder lifecycle.
+import {
+  resolveWebEgress,
+  resolveWebEgressStrict,
+} from "./resolve-web-egress";
+import {
+  egressForwarderWorkspaceId,
+  spawnEgressForwarder,
+  teardownEgressForwarder,
+} from "./egress-forwarder";
 import {
   resolveC4Eligible,
   resolveC4FlagEnabled,
 } from "./resolve-c4-eligible";
 import { parseConnectedRepo } from "./github-repo-parse";
+import { createProtectedBranchResolver } from "./resolve-protected-branches";
 import { emitDebugEvent } from "./debug-event";
 // feat-bash-autonomous-default-on — first-run consent soft-gate inputs:
 // the ack timestamp (fail-closed null = HOLD) + workspace-ownership (fail-closed
@@ -221,8 +233,9 @@ import { buildAgentQueryOptions } from "./agent-runner-query-options";
 import { getPluginPath } from "./plugin-path";
 // In-sandbox raw-git credential path (plan item 1). `writeAskpassScriptTo`
 // writes the fixed-body GIT_ASKPASS helper UNDER the user's `workspacePath`
-// (the agent's OWN workspace — read+write in the sandbox because it is NOT in
-// the per-sibling `denyRead`; sibling workspaces stay hidden); the token rides
+// (the agent's OWN workspace — read+write in the sandbox: it sits under the
+// parent `denyRead` tmpfs but the vendored builder re-binds it rw after the
+// mask; sibling workspaces stay hidden); the token rides
 // GIT_INSTALLATION_TOKEN env, never the script body. NEVER logged.
 import { writeAskpassScriptTo } from "./git-auth";
 import {
@@ -397,6 +410,20 @@ const GH_NO_NETWORK_PROMPT_ADDENDUM =
   "the platform will not retry them. If the user asks for GitHub " +
   "operations, tell them to connect a repository first (Workspace settings " +
   "→ Connect repository).";
+
+// feat-open-web-egress (#9534) — appended ONLY to an entitled session (the
+// webEgress handle's presence is the entitled+forwarder-verified condition).
+const WEB_EGRESS_PROMPT_ADDENDUM =
+  "## Web access enabled for this session\n" +
+  "Your workspace owner enabled Agent web access. `WebFetch` is available " +
+  "and reaches the public internet through a dedicated, audited gateway — " +
+  "HTTPS only; destinations that resolve to private/link-local/metadata " +
+  "ranges are refused, and every decision is logged with workspace " +
+  "attribution. Sandboxed commands run without stored credentials: in-sandbox " +
+  "`gh` and git network operations will fail at AUTH (not network) — do not " +
+  "retry them and do not promise the user a retry. If `WebFetch` fails with a " +
+  "proxy/connection error mid-session, report it rather than retrying in a " +
+  "loop — the session's web access may have been revoked.";
 
 // feat-reasoning-chat-boxes (#5370) — instructs the Concierge to drive the
 // always-registered narrate/summarize tools. Appended UNCONDITIONALLY (the
@@ -1618,6 +1645,11 @@ export function handleCcCloseQuery({
   reason?: "disconnected" | "stale-resume";
 }): void {
   cleanupCcBashGatesForConversation(userId, conversationId);
+  // feat-open-web-egress (#9534) — kill the session's loopback forwarder and
+  // delete its token file (the file is the gateway-side validity window).
+  // Fires from EVERY close path (emit/reap/bare close) — the token must die
+  // with the session even when `onWorkflowEnded` does not run. Idempotent.
+  teardownEgressForwarder(conversationId);
   // TR3 (#5843) — flush the aggregated tool-attempt row for this session. Once
   // per ActiveQuery (closeQuery is `state.closed`-guarded at every call site);
   // fire-and-forget + fail-open (never throws, mirrors to Sentry on DB failure).
@@ -1806,18 +1838,26 @@ export const realSdkQueryFactory: QueryFactory = async (
     // consumers now receive the ONE resolved id (no second divergent resolve).
     const [
       workspacePath,
-      serviceTokens,
+      serviceTokensRaw,
       installationId,
       bashAutonomous,
       autonomousAckAt,
       isWorkspaceOwner,
-      repoUrl,
+      repoUrlResult,
       repoReadinessRow,
+      webEgressEntitled,
     ] =
       await Promise.all([
         fetchUserWorkspacePath(args.userId, activeWorkspaceId),
         getUserServiceTokens(args.userId),
-        resolveInstallationId(args.userId, activeWorkspaceId),
+        // #9558 — support (`runRepoLifecycle:false`) never resolves an
+        // installation: the id's only consumers are the repo-lifecycle
+        // self-heal/clone, the GH_TOKEN mint and the C4 write tool, and none
+        // of them run for a read-only docs session. null keeps every
+        // downstream gate closed by construction.
+        mode.runRepoLifecycle
+          ? resolveInstallationId(args.userId, activeWorkspaceId)
+          : Promise.resolve(null),
         // Issue B part 2 — fail-closed false; bypasses the Bash review-gate
         // when the active workspace owner enabled the autonomous toggle.
         // ADR-044 PR-1: the autonomous-toggle trio (bash-autonomous / ack /
@@ -1840,14 +1880,36 @@ export const realSdkQueryFactory: QueryFactory = async (
         // Per-user connected repo (normalized, membership-checked). Drives the
         // session-start ensure-repo self-heal below. null = not connected.
         // ADR-044 PR-1: keyed on the unified activeWorkspaceId.
-        getCurrentRepoUrl(args.userId, activeWorkspaceId),
+        // The degrade-aware variant is used so the support deny→handoff flag
+        // can distinguish "no repo" from a transient resolve failure.
+        readCurrentRepoUrlResult(args.userId, activeWorkspaceId),
         // #5394 — active workspace repo readiness (repo_status from workspaces,
         // sanitized reason from users.repo_error). Joins the Promise.all so it
         // adds ZERO sequential await on the cold-start hot path. Fail-open
         // internally (a read blip → not_connected, never blocks a ready founder).
         // ADR-044 PR-1: keyed on the unified activeWorkspaceId.
         getCurrentRepoStatus(args.userId, activeWorkspaceId),
+        // feat-open-web-egress (#9534) — the workspace's `web_egress` grant.
+        // Pure read in the Promise.all (zero extra round-trips); the
+        // member-checked RPC returns NULL→false on a non-member claim, so a
+        // resolver blip or membership reset can never over-grant egress.
+        // Keyed on the unified activeWorkspaceId (repoUrl precedent).
+        resolveWebEgress(args.userId, activeWorkspaceId),
       ]);
+
+    // #9558 — a write-closed sandbox must carry NO GitHub credential at all:
+    // the user's stored GITHUB_TOKEN (the `github` Connected-Services
+    // provider) would sit readable in the env — and echoable into the
+    // transcript — while every GitHub egress domain is closed. The rest of
+    // the service-token map stays (ADR-113 records that deliberate choice).
+    const serviceTokens = { ...serviceTokensRaw };
+    if (mode.sandboxWrite === "none") delete serviceTokens.GITHUB_TOKEN;
+
+    // #9556 — every existing consumer below reads the bare url; the support
+    // deny→handoff flag additionally reads `repoUrlResult.degraded` so a
+    // transient resolve failure emits `undefined` (legacy caveat arm) rather
+    // than a false "not connected" verdict.
+    const repoUrl = repoUrlResult.url;
 
     // #5394 Layer A — the single Concierge dispatch readiness gate. Runs AFTER
     // repoUrl/repo_status resolve and BEFORE ensureWorkspaceDirExists /
@@ -1981,11 +2043,17 @@ export const realSdkQueryFactory: QueryFactory = async (
     // install and falsely report "workspace reclaimed — couldn't restore" for an
     // org repo a cold turn could recover (#5340 review finding). Best-effort:
     // returns the stored install on any probe failure, never widening access.
-    const effectiveInstallationId = await resolveEffectiveInstallationId({
-      userId: args.userId,
-      installationId,
-      repoUrl,
-    });
+    // #9558 — gated on runRepoLifecycle: the self-heal is repo-lifecycle
+    // machinery (its every consumer — clone, mint, C4 write — is already
+    // mode-gated). Support resolves to null, which also closes the mint +
+    // askpass arms below regardless of env state.
+    const effectiveInstallationId = mode.runRepoLifecycle
+      ? await resolveEffectiveInstallationId({
+          userId: args.userId,
+          installationId,
+          repoUrl,
+        })
+      : null;
 
     // Unconditional pre-sandbox workspace-dir guarantee (feat-one-shot-warm-
     // reprovision-ensure-dir-presandbox). The bwrap sandbox binds `cwd` to THIS
@@ -2043,7 +2111,8 @@ export const realSdkQueryFactory: QueryFactory = async (
     // `.git` FILE at the workspace root passes isValidGitWorkTree (lstat) but
     // strands the agent's IN-BWRAP `git rev-parse` when its `gitdir:` target
     // resolves OUTSIDE the agent's own workspace (sibling workspaces are
-    // per-sibling `denyRead`-hidden; #5848 → per-sibling deny). The prompt-driven
+    // hidden by the parent-root `denyRead` tmpfs; #5848 regression → #5864 per-sibling deny,
+    // #5862 → constant parent deny). The prompt-driven
     // `/soleur:go` Step 0.0 then self-stops with NO server event — the dark
     // surface all three prior fixes missed. One `probeGitWorktreeShape` (sync
     // lstat(s); a small pointer-body read only when `.git` is a FILE) drives BOTH
@@ -2236,41 +2305,48 @@ export const realSdkQueryFactory: QueryFactory = async (
     // flips `repo_status→error` ONLY on the solo/owner path after a post-clone
     // `.git`-absence CAS, and returns `"block"` so the dispatch honest-blocks
     // instead of spawning a doomed agent. NO new clone site; NO service-role read.
-    const dispatchCloneOutcome = await ensureWorkspaceRepoCloned({
-      userId: args.userId,
-      workspacePath,
-      installationId: effectiveInstallationId,
-      repoUrl,
-    });
-    if (
-      (await consumeDispatchCloneOutcome(
-        {
-          outcome: dispatchCloneOutcome,
-          userId: args.userId,
-          activeWorkspaceId,
-          workspacePath,
-        },
-        {
-          // F4 status write via the SECURITY DEFINER RPC on the TENANT client
-          // (cc-dispatcher stays OFF the service-role allowlist). Minted only on
-          // the rare failure path, never on the common success hot path.
-          setRepoStatus: async (status, reason) => {
-            const tenant = await getFreshTenantClient(args.userId);
-            const { error } = await tenant.rpc("set_repo_status", {
-              p_workspace_id: activeWorkspaceId,
-              p_status: status,
-              p_error: reason,
-            });
-            if (error) throw error;
+    // #9558 — the clone is repo-lifecycle machinery (it mints an installation
+    // token via gitWithInstallationAuth to authenticate the clone). Support
+    // never runs it: not "called then early-returns on a null install", but
+    // not called at all — the null-id early return inside
+    // ensureWorkspaceRepoCloned stays as the defense-in-depth floor.
+    if (mode.runRepoLifecycle) {
+      const dispatchCloneOutcome = await ensureWorkspaceRepoCloned({
+        userId: args.userId,
+        workspacePath,
+        installationId: effectiveInstallationId,
+        repoUrl,
+      });
+      if (
+        (await consumeDispatchCloneOutcome(
+          {
+            outcome: dispatchCloneOutcome,
+            userId: args.userId,
+            activeWorkspaceId,
+            workspacePath,
           },
-        },
-      )) === "block"
-    ) {
-      throw new RepoNotReadyError(
-        "error",
-        "Your workspace's repository couldn't be set up — the automatic clone failed. Please re-connect the repository in Settings → Repository.",
-        "repo_setup_failed",
-      );
+          {
+            // F4 status write via the SECURITY DEFINER RPC on the TENANT client
+            // (cc-dispatcher stays OFF the service-role allowlist). Minted only on
+            // the rare failure path, never on the common success hot path.
+            setRepoStatus: async (status, reason) => {
+              const tenant = await getFreshTenantClient(args.userId);
+              const { error } = await tenant.rpc("set_repo_status", {
+                p_workspace_id: activeWorkspaceId,
+                p_status: status,
+                p_error: reason,
+              });
+              if (error) throw error;
+            },
+          },
+        )) === "block"
+      ) {
+        throw new RepoNotReadyError(
+          "error",
+          "Your workspace's repository couldn't be set up — the automatic clone failed. Please re-connect the repository in Settings → Repository.",
+          "repo_setup_failed",
+        );
+      }
     }
 
     // #5733 deliverable A — the host `git rev-parse` CONFIRM. Runs AFTER the
@@ -2327,8 +2403,12 @@ export const realSdkQueryFactory: QueryFactory = async (
     // token, NEVER a PAT, and the value is NEVER logged. (Sentry
     // 512e253141294ac1a808b2ef03a21289 — cron-follow-through-monitor — is the
     // cron-side root cause this mirrors for the interactive path.)
+    // #9558 — the double gate is deliberate: runRepoLifecycle closes the whole
+    // repo-credential surface for support, and sandboxWrite!=="none" is the
+    // issue's literal invariant — a read-only dispatch must never mint a
+    // write-capable credential even if a future caller reaches here with one.
     let ghToken: string | undefined;
-    if (effectiveInstallationId !== null) {
+    if (effectiveInstallationId !== null && mode.sandboxWrite !== "none") {
       try {
         ghToken = await generateInstallationToken(effectiveInstallationId, {
           minRemainingMs: GH_TOKEN_MIN_LIFETIME_MS,
@@ -2348,7 +2428,13 @@ export const realSdkQueryFactory: QueryFactory = async (
     // buildAgentQueryOptions (both-or-nothing). Boolean only — NEVER the
     // token (AC6-class guard from #5041).
     log.info(
-      { userId: args.userId, githubEgress: Boolean(ghToken) },
+      {
+        userId: args.userId,
+        githubEgress: Boolean(ghToken),
+        // #9558 — attribute the posture to the persona so a support dispatch
+        // that ever opened egress is directly queryable in Sentry.
+        persona: args.persona,
+      },
       "Concierge sandbox GitHub egress posture",
     );
 
@@ -2617,9 +2703,9 @@ export const realSdkQueryFactory: QueryFactory = async (
   // authenticates the `gh` CLI; raw `git push`/`fetch`/`pull` in the bwrap
   // sandbox needs a GIT_ASKPASS helper the sandbox can read+exec. The only
   // sandbox read+writable dir is `workspacePath` — the agent's OWN workspace
-  // is NOT in the per-sibling `denyRead`, so the base `--ro-bind / /` grants
-  // read and `allowWrite:[workspacePath]` grants write (see
-  // `buildAgentSandboxConfig`; #5848 → per-sibling deny — the earlier
+  // sits under the parent `denyRead` tmpfs and the vendored builder's
+  // deny-then-restore ordering re-binds it rw (see `buildAgentSandboxConfig`;
+  // #5848 regression → #5864 per-sibling deny → #5862 constant parent deny — the earlier
   // `allowRead:[workspacePath]` re-bind was read-only and shadowed the write
   // bind, breaking writes) plus `createSandboxHook` realpath-containment;
   // `$HOME`/`/tmp` bwrap-visibility is unverifiable. We write the helper into
@@ -2643,8 +2729,11 @@ export const realSdkQueryFactory: QueryFactory = async (
   // degradation parity with GH_TOKEN. The token rides GIT_INSTALLATION_TOKEN
   // env, NEVER the script body or a remote URL, and is NEVER logged
   // (hr-github-app-auth-not-pat).
+  // #9558 — `ghToken` already can't exist under sandboxWrite==="none", but the
+  // file write is the side effect the issue names (a helper landing in the
+  // user's .git/) — keep the literal predicate as the second gate.
   let gitAskpassScriptPath: string | undefined;
-  if (ghToken) {
+  if (ghToken && mode.sandboxWrite !== "none") {
     // nosemgrep: path-join-resolve-traversal -- workspacePath is server-resolved (fetchUserWorkspacePath, ADR-044), never user-tainted input.
     const gitDir = path.join(workspacePath, ".git");
     const askpassDir = existsSync(gitDir) ? gitDir : workspacePath;
@@ -2693,10 +2782,37 @@ export const realSdkQueryFactory: QueryFactory = async (
     // auto-running.
     autonomousAckAt: autonomousAckAtMs,
     isOwner: isWorkspaceOwner,
+    // #9556 — support deny→handoff flag. `repoUrl` was already resolved in the
+    // unconditional Promise.all fan-out above (every dispatch, support persona
+    // included), so recording it on the escalation costs ZERO extra DB reads.
+    // Deliberately `repoUrl !== null`, not repoStatus: `cloning`/`error` still
+    // means a repo IS connected — the destination surface explains its own
+    // state. `degraded` (a transient tenant-mint/query blip, not an honest
+    // "no repo") emits `undefined` → the legacy caveat arm rather than telling
+    // a connected user to connect. Snapshot scope: resolved once at cold
+    // dispatch — a warm-turn Query reuse keeps this value for the Query's
+    // lifetime (bounded by the idle reaper), so mid-conversation connect or
+    // disconnect events are not re-read; both stale arms self-correct at the
+    // destination. The deny() wrapper in permission-callback.ts stamps this
+    // onto the escalation record; the route emits it on the `support_handoff`
+    // frame.
+    repoConnected: repoUrlResult.degraded ? undefined : repoUrl !== null,
     // P1 stale-snapshot — read the LIVE in-session ack posture (flipped by the
     // ws-handler on a successful ack) so command #2 after an ack is friction-free
     // instead of re-holding on the frozen cold-start snapshot.
     resolveAckPosture: () => autonomousAckPosture,
+    // #9776 / ADR-284 — hosted must-ask lane inputs. The resolver reads the connected repo's default
+    // branch with the SELF-HEALED installation id (`effectiveInstallationId`), the repo owner/name that
+    // `parseConnectedRepo` validated from the server-resolved repoUrl, and the user's workspace path (never
+    // `ctx.repoOwner`/`ctx.repoName`, which this dispatcher passes as empty strings). One resolver per session
+    // record: memoised inside, awaited only after a force, delete or mirror push is found.
+    resolveProtectedBranches: createProtectedBranchResolver({
+      owner: connectedOwner,
+      repo: connectedRepo,
+      installationId: effectiveInstallationId,
+      workspacePath,
+    }),
+    connectedRepoSlug: connectedOwner && connectedRepo ? `${connectedOwner}/${connectedRepo}` : "",
     // P1 defense-in-depth — re-read the persisted ack after a disclosure-hold
     // releases, BEFORE allowing the held command. A release that did not
     // actually write the ack (cross-frame attempt, transient ack-write fault)
@@ -2835,6 +2951,53 @@ export const realSdkQueryFactory: QueryFactory = async (
       toolAttemptCollector,
     );
 
+    // feat-open-web-egress (#9534) — spawn the per-session loopback
+    // forwarder ONLY when the workspace grant resolved true for this
+    // dispatch. Scoped to the Command Center persona: the read-only support
+    // session (plugin-corpus cwd) never carries a workspace egress grant —
+    // widening it would expose the platform plugin root's network surface
+    // for no user-facing gain. Spawn runs LAST among the side-effects, just
+    // before sdkQuery: on ANY failure (token write, bind, gateway-side
+    // start) the session degrades to zero-egress (`webEgress` stays
+    // undefined → no proxy env, WebFetch stays disallowed, no credential
+    // census change) + Sentry — a dead forwarder must never produce a
+    // session whose CLI env proxies to a refused listener.
+    let webEgress:
+      | { workspaceId: string; token: string; port: number }
+      | undefined;
+    if (webEgressEntitled && mode.runRepoLifecycle) {
+      try {
+        const fwd = await spawnEgressForwarder(
+          args.conversationId,
+          activeWorkspaceId,
+        );
+        webEgress = {
+          workspaceId: activeWorkspaceId,
+          token: fwd.token,
+          port: fwd.port,
+        };
+        log.info(
+          {
+            feature: "cc-dispatcher",
+            op: "web-egress",
+            conversationId: args.conversationId,
+            workspaceId: activeWorkspaceId,
+            forwarderPort: fwd.port,
+            forwarderPid: fwd.pid,
+          },
+          "cc-dispatcher: web egress forwarder bound",
+        );
+      } catch (err) {
+        reportSilentFallback(err, {
+          feature: "cc-dispatcher",
+          op: "web-egress-forwarder-spawn",
+          extra: { userId: args.userId, workspaceId: activeWorkspaceId },
+          message:
+            "web-egress forwarder spawn failed; session proceeds zero-egress",
+        });
+      }
+    }
+
     return sdkQuery({
       prompt: args.prompt,
       options: buildAgentQueryOptions({
@@ -2845,6 +3008,9 @@ export const realSdkQueryFactory: QueryFactory = async (
         workspacePath: agentWorkspacePath,
         pluginPath,
         mode,
+        // #5863 — outer-wrap rollout cohort key + log correlation.
+        workspaceId: activeWorkspaceId,
+        sessionId: args.sessionId ?? undefined,
         credential,
         serviceTokens,
         // Issue A — minted GH_TOKEN (or undefined when no repo connected).
@@ -2853,8 +3019,18 @@ export const realSdkQueryFactory: QueryFactory = async (
         // undefined when no token was minted). The askpass token IS `ghToken`
         // (threaded as gitInstallationToken inside buildAgentEnv).
         gitAskpassScriptPath,
-        systemPrompt: effectiveSystemPrompt,
+        // feat-open-web-egress (#9534): the honest-capability addendum is
+        // gated on the LIVE forwarder handle, not the resolved entitlement —
+        // a spawn-degraded session keeps WebFetch disallowed and gets no
+        // addendum claiming egress.
+        systemPrompt:
+          effectiveSystemPrompt +
+          (webEgress ? `\n\n${WEB_EGRESS_PROMPT_ADDENDUM}` : ""),
         resumeSessionId: safeResumeSessionId,
+        // feat-open-web-egress (#9534) — live forwarder handle. Presence IS
+        // the entitlement+spawn-verified condition (fail-closed: undefined
+        // when the grant is off or the spawn degraded).
+        webEgress,
         // readCcMcpAllowlist() (Phase 1: {}) plus the flag-gated, single-tool
         // soleur_platform server (edit_c4_diagram) merged in above.
         mcpServers: c4McpServers,
@@ -2867,11 +3043,19 @@ export const realSdkQueryFactory: QueryFactory = async (
         // support with no persona belt ever seeing the call. Filter the
         // overlap for support; the read tools support needs (Read/Glob/Grep/
         // LS/NotebookRead, kb-search's corpus path) stay auto-approved.
-        allowedTools: CC_PATH_ALLOWED_TOOLS.filter(
-          (t) =>
-            args.persona !== "support" ||
-            !SUPPORT_EXTRA_DISALLOWED_TOOLS.includes(t),
-        ),
+        allowedTools: [
+          ...CC_PATH_ALLOWED_TOOLS.filter(
+            (t) =>
+              args.persona !== "support" ||
+              !SUPPORT_EXTRA_DISALLOWED_TOOLS.includes(t),
+          ),
+          // feat-open-web-egress (#9534): WebFetch leaves disallowedTools
+          // when the forwarder is live, but it is an ask-class tool and
+          // would still die at createCanUseTool's deny-default — entitled
+          // sessions auto-approve it here (the Squid gateway is the policy
+          // boundary, not a per-URL human review).
+          ...(webEgress ? ["WebFetch"] : []),
+        ],
         // #3338 — HARD-BLOCK Edit/Write at the SDK level so the model
         // cannot emit them. Bash is intentionally NOT in this list — it is
         // sandbox-gated (permission-callback Bash gate / safe-bash /
@@ -2955,6 +3139,11 @@ export const realSdkQueryFactory: QueryFactory = async (
     // indefinitely — wedging the workspace for every other host. No-op when the
     // lease path is gated off or the acquire never registered.
     await releaseCcWorktreeLease(args.userId, args.conversationId);
+    // feat-open-web-egress (#9534) — same leak class: a factory throw after
+    // the forwarder spawned must not leave a live token file + listener
+    // bound to a Query that never entered `activeQueries` (the close hook
+    // teardown only fires once registered).
+    teardownEgressForwarder(args.conversationId);
     // TR3 (#5843) — same leak class: the collector was registered just above, but
     // a factory throw means the Query never enters `activeQueries` so
     // `handleCcCloseQuery` never fires. Drop it here (flush is a harmless no-op —
@@ -3126,6 +3315,11 @@ export function getSoleurGoRunner(
     return _runner;
   }
   _runnerSendToClient = sendToClient;
+  // feat-open-web-egress (#9534) — orphan reaper. First runner construction
+  // is the dispatcher's startup boundary: kill any egress-forwarder.mjs
+  // left by a previous process (its ppid watchdog can't fire once
+  // reparented to init) and delete its stale token files. Best-effort —
+  // never throws into runner construction.
   _runner = createSoleurGoRunner({
     queryFactory: realSdkQueryFactory,
     pendingPrompts: getPendingPromptRegistry(),
@@ -3820,6 +4014,49 @@ export async function dispatchSoleurGo(
       });
     });
 
+  // feat-open-web-egress (#9534) — live-revocation on the warm path. The
+  // grant is resolved INSIDE `realSdkQueryFactory` (cold Query
+  // construction); on warm-query reuse the factory does not re-run, so an
+  // owner toggling "Agent web access" OFF mid-conversation would leave the
+  // forwarder + token file alive until session close — contradicting the
+  // toggle copy's "turning off revokes live web access". Re-resolve
+  // per-dispatch (same fire-and-forget pattern as resolveBashAutonomous
+  // above): a `false` result kills the forwarder + deletes the token file
+  // NOW — the CLI subprocess keeps its (dead) proxy env, so in-sandbox
+  // egress fails closed at the refused listener while the gateway-side
+  // token is already gone. A resolver ERROR must not tear down a live
+  // grant (a Supabase blip revoking egress = availability loss under a
+  // flag the owner still holds), so the catch leaves the forwarder be and
+  // mirrors. Enabling mid-session cannot retro-fit the already-spawned
+  // CLI's env — the on-flip applies to the NEXT cold dispatch, matching
+  // the toggle copy ("applies to sessions started after enabling").
+  // Only a conversation WITH a live forwarder has anything to revoke —
+  // skip the read entirely when none is registered (an unentitled cold
+  // dispatch must not pay an RPC it never needed, and a post-teardown
+  // dispatch has no grant to kill). The re-resolve keys on the workspace
+  // the forwarder was MINTED for — not the user's current active
+  // workspace — so a mid-session workspace switch can never kill or
+  // spare the wrong session's egress. `resolveWebEgressStrict` rethrows
+  // read faults: an RPC/Supabase blip must not masquerade as an
+  // off-grant and kill a legitimately-entitled session's forwarder —
+  // there is no mid-session re-spawn path, so a revoked-then-recovered
+  // grant would leave the CLI holding a dead proxy URL with WebFetch
+  // still admitted. Only a DEFINITIVE false tears down.
+  const fwdWorkspaceId = egressForwarderWorkspaceId(conversationId);
+  if (fwdWorkspaceId) {
+    void resolveWebEgressStrict(userId, fwdWorkspaceId)
+      .then((entitled) => {
+        if (!entitled) teardownEgressForwarder(conversationId);
+      })
+      .catch((err) => {
+        reportSilentFallback(err, {
+          feature: "cc-dispatcher",
+          op: "web-egress-re-resolve",
+          extra: { userId, conversationId, workspaceId: fwdWorkspaceId },
+        });
+      });
+  }
+
   // #5340 / #5240 design item #2 — deterministic workspace re-provision on
   // reconnect. After a sandbox/host reclaim the resolved workspace path can be a
   // fresh filesystem with no repo. The factory-internal self-heal
@@ -3846,7 +4083,12 @@ export async function dispatchSoleurGo(
   // feeds both the validity probe and the clone), so a valid-`.git` warm turn
   // pays only the resolve the LEADER already pays — never the 120s clone.
   let reprovisionOutcome: ReprovisionOutcome | undefined;
-  if (runner.hasActiveQuery(conversationId)) {
+  // #9558 — the reprovision is repo-lifecycle machinery (installation resolve +
+  // ensureWorkspaceRepoCloned, which mints a GitHub installation token to
+  // clone). A support-persona turn has no workspace repo to recover, so BOTH
+  // arms are skipped — the await AND the fire-and-forget publish. A read-only
+  // docs dispatch must never mint or clone into the user's workspace.
+  if (resolveWorkspaceMode(args.persona).runRepoLifecycle && runner.hasActiveQuery(conversationId)) {
     // WARM: the factory did NOT run this turn — gate the agent start on the
     // awaited re-clone. The entire gate is self-contained (it sits BEFORE the
     // `runner.dispatch` try below) so it can NEVER reject out of dispatch.
@@ -3875,10 +4117,11 @@ export async function dispatchSoleurGo(
         extra: { userId, conversationId },
       });
     }
-  } else {
+  } else if (resolveWorkspaceMode(args.persona).runRepoLifecycle) {
     // COLD: the factory owns the await before `query()` construction. Keep the
     // fire-and-forget publish so the honest-message branch can still read the
-    // outcome without delaying the cold dispatch.
+    // outcome without delaying the cold dispatch. Support (runRepoLifecycle:
+    // false) reaches neither arm — #9558.
     void reprovisionWorkspaceOnDispatch(userId)
       .then((outcome) => {
         reprovisionOutcome = outcome;
@@ -3917,7 +4160,13 @@ export async function dispatchSoleurGo(
     ...CC_REGISTERED_PLATFORM_TOOL_NAMES,
     ...crmLeadPermissionToolNames(args.crmLead === true),
   ];
-  void resolveC4Eligible(userId)
+  // #9558 — resolveC4Eligible resolves installations and can MINT an
+  // installation token (cc-effective-installation) + probe api.github.com —
+  // repo-lifecycle machinery a support dispatch must never run.
+  void (resolveWorkspaceMode(args.persona).runRepoLifecycle
+    ? resolveC4Eligible(userId)
+    : Promise.resolve(false)
+  )
     .then((eligible) => {
       // #9539 — support dispatches never register the c4 write tool (gated in
       // the factory), so the advertise list must not claim it either.

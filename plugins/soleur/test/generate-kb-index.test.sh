@@ -420,7 +420,7 @@ fi
 # Torn lines are the race's signature: a spliced value that is not a real tag.
 # Every emitted tag must be one this fixture actually declares.
 CASES=$((CASES + 1))
-if printf '%s\n' "$tags_a" | grep -qvE '^(contention-tag-[0-9]+|shared-tag|another-shared-tag)$'; then
+if printf '%s\n' "$tags_a" | grep -cvE >/dev/null '^(contention-tag-[0-9]+|shared-tag|another-shared-tag)$'; then
   echo "  FAIL: kb-tags.txt contains a value no fixture declares (torn line)"
   printf '%s\n' "$tags_a" | grep -vE '^(contention-tag-[0-9]+|shared-tag|another-shared-tag)$' | head -3 | sed 's/^/        /'
   FAIL=$((FAIL + 1))

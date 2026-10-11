@@ -18,6 +18,16 @@
 #     tick — INCLUDING an expected-but-absent dynamic env var (a Doppler
 #     rename must never prune the live Supabase/Sentry IPs) — skip ALL
 #     deletes.
+#   - TOTAL-TICK DNS BUDGET: each name burns up to `timeout 10` in a serial
+#     loop, so a mass upstream flap (~100 CNAME chains at once) can starve a
+#     tick past TimeoutStartSec=120 and the nft -f transaction never runs
+#     (measured 2026-10-08: Traffic Manager NXDOMAIN flap killed every tick
+#     for 40+ min on both web hosts). Cumulative resolution is capped at
+#     RESOLVE_TICK_BUDGET_SECS; unattempted names count as FAILED_HOSTS
+#     (additive-only — prior + grace-pool addresses kept) without bumping
+#     their per-host failcount, which stays honest for tried-and-failed
+#     answers, and the tick emits one journal WARN + one deduped Sentry
+#     event (cleared on the first within-budget tick).
 #   - BOTH RESOLVER VIEWS: the container resolves via ITS resolv.conf
 #     (Docker substitutes 8.8.8.8/8.8.4.4 when the host's stub is
 #     loopback-only) while this script runs on the HOST; CDN/geo answers can
@@ -65,7 +75,7 @@ CONTAINER="soleur-web-platform"
 SENTRY_SLUG="cron-egress-resolve"
 LOG_TAG="cron-egress-resolve"
 LOADER="${LOADER:-/usr/local/bin/cron-egress-nftables.sh}"
-LOCK_FILE="/run/cron-egress-resolve.lock"
+LOCK_FILE="${CRON_EGRESS_LOCK_FILE:-/run/cron-egress-resolve.lock}"
 FAILCOUNT_DIR="${FAILCOUNT_DIR:-/run/cron-egress-resolve-failcount}"
 assert_fixture_dir() {
   case "${1-}" in
@@ -272,18 +282,44 @@ done
 HOSTS_SORTED="$(printf '%s\n' "${HOSTS[@]}" | sort -u)"
 
 # --- Resolve (host view + container view) --------------------------------------
+# RESOLVE_TICK_BUDGET_SECS is the cumulative DNS ceiling for the whole tick
+# (SECONDS is the script's own elapsed clock, so heal/probe time already spent
+# counts against it). 90 leaves ~30s under TimeoutStartSec=120 for the nft -f
+# transaction, seen-pool write, drop sampler and the Sentry check-in; the GHCR
+# and egress-gw probes skip themselves past their own smaller budgets.
+RESOLVE_TICK_BUDGET_SECS="${RESOLVE_TICK_BUDGET_SECS:-90}"
+[[ "$RESOLVE_TICK_BUDGET_SECS" =~ ^[0-9]{1,3}$ ]] || RESOLVE_TICK_BUDGET_SECS=90
+DNS_SKIPPED=0
+
 # Container view: ONE docker exec resolving the full host list with the
-# container's OWN resolvers — the answers it will actually dial.
+# container's OWN resolvers — the answers it will actually dial. Its own
+# timeout shrinks to whatever the tick budget still affords (a flapping
+# in-container serial getent would otherwise burn a fixed 60s before the
+# host loop starts).
 CONTAINER_VIEW=""
 if container_running; then
-  CONTAINER_VIEW="$(printf '%s\n' "$HOSTS_SORTED" \
-    | timeout 60 docker exec -i "$CONTAINER" sh -c \
-        'while read -r h; do getent ahostsv4 "$h" 2>/dev/null | awk "{print \$1}"; done' \
-    2>/dev/null || true)"
+  CV_CAP=$(( RESOLVE_TICK_BUDGET_SECS - SECONDS - 10 ))
+  (( CV_CAP > 60 )) && CV_CAP=60
+  if (( CV_CAP >= 5 )); then
+    CONTAINER_VIEW="$(printf '%s\n' "$HOSTS_SORTED" \
+      | timeout "$CV_CAP" docker exec -i "$CONTAINER" sh -c \
+          'while read -r h; do getent ahostsv4 "$h" 2>/dev/null | awk "{print \$1}"; done' \
+      2>/dev/null || true)"
+  else
+    log "WARN: DNS tick budget nearly spent (${SECONDS}s of ${RESOLVE_TICK_BUDGET_SECS}s) — skipping the container resolver view this tick"
+  fi
 fi
 
 DESIRED_ALLOW=""
 for host in $HOSTS_SORTED; do
+  if (( SECONDS >= RESOLVE_TICK_BUDGET_SECS )); then
+    # Budget exhausted: never attempted, so the name's existing set/grace
+    # entries are kept (additive-only) but its failcount is NOT bumped —
+    # that counter means "tried and failed", not "starved".
+    DNS_SKIPPED=$((DNS_SKIPPED + 1))
+    FAILED_HOSTS=$((FAILED_HOSTS + 1))
+    continue
+  fi
   ips="$(timeout 10 getent ahostsv4 "$host" 2>/dev/null | awk '{print $1}' | sort -u || true)"
   # Link-local answers are dropped HERE so that "every record was link-local" reads as a resolution failure of
   # this host (additive-only tick); the merged sets are scrubbed again below, for every feeder.
@@ -315,6 +351,21 @@ for host in $HOSTS_SORTED; do
   DESIRED_ALLOW+="$ips"$'\n'
 done
 DESIRED_ALLOW+="$CONTAINER_VIEW"$'\n'
+if (( DNS_SKIPPED > 0 )); then
+  log "WARN: DNS tick budget (${RESOLVE_TICK_BUDGET_SECS}s) exhausted — $DNS_SKIPPED host(s) unattempted this tick (additive-only; prior/grace addresses kept)"
+  # Deduped Sentry: first starved tick posts, the marker suppresses repeats
+  # until a tick resolves within budget again (same doctrine as ll_report).
+  if [[ ! -e "$FAILCOUNT_DIR/.budget-skip" ]]; then
+    SENTRY_EVENT_SENT=0
+    sentry_event \
+      "cron-egress-resolve: DNS tick budget exhausted — $DNS_SKIPPED host(s) never attempted (upstream resolution slower than the tick budget; allowlist additive-only until it recovers)" \
+      "resolve_tick_budget" \
+      "$(jq -nc --argjson n "$DNS_SKIPPED" --argjson budget "$RESOLVE_TICK_BUDGET_SECS" '{skipped_hosts: $n, budget_secs: $budget, remediation: "upstream resolver flap or too many slow names in cron-egress-allowlist.txt — check resolver health; the 24h grace pool covers retained addresses"}')"
+    if (( SENTRY_EVENT_SENT )); then : > "$FAILCOUNT_DIR/.budget-skip"; fi
+  fi
+else
+  rm -f "$FAILCOUNT_DIR/.budget-skip"
+fi
 DESIRED_ALLOW="$(echo "$DESIRED_ALLOW" | strict_ipv4_lines | sort -u || true)"
 # The container's own getent view is a second feeder: scrub it before anything is recorded in SEEN_DIR.
 cv_ll="$(printf '%s\n' "$CONTAINER_VIEW" | ll_only)"
@@ -467,32 +518,46 @@ fi
 # quote excludes the log rule's "... default drop log").
 enforcement_probe() {
   ENF_JUMP=unreadable; ENF_DROP=unreadable; ENF_LOG=unreadable
+  ENF_GWJUMP=unreadable; ENF_REPLY=unreadable; ENF_GWDROP=unreadable
   ENF_RC_JUMP=0; ENF_RC_DROP=0; ENF_READ_FAILED=false; ENF_READ_RETRIED=false; ENF_HEAL=false
-  local out_jump="" out_chain="" attempt jump_gone=false drop_gone=false
+  local out_jump="" out_chain="" out_gw="" attempt jump_gone=false drop_gone=false gw_gone=false
   local jump_re='jump[[:space:]]+SOLEUR-EGRESS([[:space:]]|$)'
+  # Egress-gateway legs (#9534): the egress0 GW jump (its own needle — the
+  # ([[:space:]]|$) boundary keeps `SOLEUR-EGRESS` from matching -GW), the
+  # established/related reply accept (the CONNECT tunnel's return path), and
+  # the SOLEUR-EGRESS-GW chain's deny drop. Any absent = heal via loader.
+  local gwyjump_re='jump[[:space:]]+SOLEUR-EGRESS-GW([[:space:]]|$)'
+  local reply_re='established,related'
   local sleep_s="${NFT_RETRY_SLEEP:-1}"
   [[ "$sleep_s" =~ ^[0-9]$ ]] || sleep_s=1
   for attempt in 1 2; do
-    jump_gone=false; drop_gone=false
+    jump_gone=false; drop_gone=false; gw_gone=false
     ENF_RC_JUMP=0; out_jump="$(nft list chain ip filter DOCKER-USER 2>&1)" || ENF_RC_JUMP=$?
     ENF_RC_DROP=0; out_chain="$(nft list chain ip filter SOLEUR-EGRESS 2>&1)" || ENF_RC_DROP=$?
+    out_gw="$(nft list chain ip filter SOLEUR-EGRESS-GW 2>&1)" || true
     if (( ENF_RC_JUMP == 1 )) && [[ "$out_jump" == "Error: No such file or directory"* ]]; then jump_gone=true; fi
     if (( ENF_RC_DROP == 1 )) && [[ "$out_chain" == "Error: No such file or directory"* ]]; then drop_gone=true; fi
+    if [[ "$out_gw" == "Error: No such file or directory"* ]]; then gw_gone=true; fi
     if { (( ENF_RC_JUMP == 0 )) || [[ "$jump_gone" == true ]]; } && { (( ENF_RC_DROP == 0 )) || [[ "$drop_gone" == true ]]; }; then break; fi
     ENF_READ_RETRIED=true
     if (( attempt == 1 )); then sleep "$sleep_s"; fi
   done
   if (( ENF_RC_JUMP == 0 )) || [[ "$jump_gone" == true ]]; then
-    ENF_JUMP=absent
+    ENF_JUMP=absent; ENF_GWJUMP=absent; ENF_REPLY=absent
     if [[ "$out_jump" =~ $jump_re ]]; then ENF_JUMP=present; fi
+    if [[ "$out_jump" =~ $gwyjump_re ]]; then ENF_GWJUMP=present; fi
+    if [[ "$out_jump" =~ $reply_re ]]; then ENF_REPLY=present; fi
   fi
   if (( ENF_RC_DROP == 0 )) || [[ "$drop_gone" == true ]]; then
     ENF_DROP=absent; ENF_LOG=absent
     if [[ "$out_chain" == *'comment "soleur-egress: default drop"'* ]]; then ENF_DROP=present; fi
     if [[ "$out_chain" == *'comment "soleur-egress: default drop log"'* ]]; then ENF_LOG=present; fi
   fi
+  ENF_GWDROP=absent
+  if [[ "$out_gw" == *'comment "soleur-egress-gw: deny drop"'* ]]; then ENF_GWDROP=present; fi
   if [[ "$ENF_JUMP" == unreadable || "$ENF_DROP" == unreadable ]]; then ENF_READ_FAILED=true; fi
-  if [[ "$ENF_JUMP" != present || "$ENF_DROP" != present || "$ENF_LOG" != present ]]; then ENF_HEAL=true; fi
+  if [[ "$ENF_JUMP" != present || "$ENF_DROP" != present || "$ENF_LOG" != present \
+     || "$ENF_GWJUMP" != present || "$ENF_REPLY" != present || "$ENF_GWDROP" != present ]]; then ENF_HEAL=true; fi
 }
 
 # The Sentry `extra` for op=enforcement_missing: which cause class fired. $1 = the loader
@@ -530,7 +595,7 @@ enforcement_extra() {
 if [[ "${CRON_EGRESS_FROM_LOADER:-}" != "1" ]]; then
   enforcement_probe
   if [[ "$ENF_HEAL" == true ]]; then
-    log "WARN: enforcement rules missing — re-running loader (self-heal) jump=$ENF_JUMP drop=$ENF_DROP log=$ENF_LOG read_failed=$ENF_READ_FAILED"
+    log "WARN: enforcement rules missing — re-running loader (self-heal) jump=$ENF_JUMP drop=$ENF_DROP log=$ENF_LOG gwjump=$ENF_GWJUMP reply=$ENF_REPLY gwdrop=$ENF_GWDROP read_failed=$ENF_READ_FAILED"
     loader_rc=0
     timeout -k 2 60 "$LOADER" || loader_rc=$?
     extra="$(enforcement_extra "$loader_rc")"
@@ -789,9 +854,90 @@ ghcr_probe_filter_or_keep() {
   printf '%s\n' "$out"
 }
 
+# --- Egress-gateway synthetic CONNECT probe (#9534) ------------------------------
+# Heartbeat + live allow/deny verification on the REAL gateway path (the
+# dark-launch's only traffic until PR-B routes sessions). Every
+# EGRESS_GW_PROBE_INTERVAL seconds: mint a one-run token into the session-token
+# dir (revocation = the file's absence), CONNECT an allowed target AND the
+# metadata-IP denied target through the gateway via `docker exec` inside the
+# app container, then emit exactly one `egress_gw_probe result=<...>` journald
+# line — the heartbeat Better Stack's absence alert watches. A fail also posts
+# a Sentry event. Trust boundary identical to the GHCR probe: a root-compromised
+# app container can forge the verdict; this is a drift detector, not an anchor.
+EGRESS_GW_PROBE_INTERVAL="${EGRESS_GW_PROBE_INTERVAL:-300}"
+EGRESS_GW_TOKEN_DIR="${EGRESS_GW_TOKEN_DIR:-/var/lib/soleur/egress-tokens}"
+EGRESS_GW_ALLOW_TARGET="${EGRESS_GW_ALLOW_TARGET:-https://api.github.com/}"
+EGRESS_GW_DENY_TARGET="${EGRESS_GW_DENY_TARGET:-https://169.254.169.254/}"
+
+run_egress_gw_probe() {
+  local now last stamp gw_ip tok result reason rc code
+  if [[ "${CRON_EGRESS_FROM_LOADER:-}" == "1" ]]; then return 0; fi
+  now="$(date +%s)"
+  stamp="$FAILCOUNT_DIR/egress_gw_probe.stamp"
+  last="$(cat "$stamp" 2>/dev/null || true)"
+  [[ "$last" =~ ^[0-9]{1,12}$ ]] || last=0
+  if (( now - 10#$last < EGRESS_GW_PROBE_INTERVAL )); then return 0; fi
+  echo "$now" > "$stamp"
+
+  if (( SECONDS > 60 )); then
+    log "egress_gw_probe result=skipped reason=budget"
+    return 0
+  fi
+  if [[ ! -d "$EGRESS_GW_TOKEN_DIR" ]] || ! grep -qx soleur-egress-gw < <(docker ps --format '{{.Names}}'); then
+    log "egress_gw_probe result=skipped reason=gw_absent"
+    return 0
+  fi
+  if ! container_running; then
+    log "egress_gw_probe result=skipped reason=container_absent"
+    return 0
+  fi
+  gw_ip="$(docker inspect soleur-egress-gw -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' 2>/dev/null || true)"
+  if [[ ! "$gw_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    log "egress_gw_probe result=skipped reason=no_gw_ip"
+    return 0
+  fi
+
+  tok="probe-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+  : > "$EGRESS_GW_TOKEN_DIR/$tok" || { log "egress_gw_probe result=skipped reason=token_dir_unwritable"; return 0; }
+
+  result=ok; reason=""
+  rc=0
+  code="$(timeout -k 2 20 docker exec "$CONTAINER" curl -q -s -o /dev/null \
+    --proxy "http://probe:${tok}@${gw_ip}:8443" \
+    --connect-timeout 8 --max-time 15 \
+    -w '%{http_code}' "$EGRESS_GW_ALLOW_TARGET" 2>/dev/null | head -c 8; exit "${PIPESTATUS[0]}")" || rc=$?
+  if (( rc != 0 )) || [[ ! "$code" =~ ^[0-9]{3}$ ]] || [[ "$code" == "000" || "$code" == "407" ]]; then
+    result=fail; reason="allow_rc=${rc} code=${code:-empty}"
+  fi
+  if [[ "$result" == "ok" ]]; then
+    rc=0
+    docker exec "$CONTAINER" curl -q -s -o /dev/null \
+      --proxy "http://probe:${tok}@${gw_ip}:8443" \
+      --connect-timeout 5 --max-time 10 "$EGRESS_GW_DENY_TARGET" 2>/dev/null || rc=$?
+    if (( rc == 0 )); then result=fail; reason="deny_bypassed"; fi
+  fi
+  rm -f "$EGRESS_GW_TOKEN_DIR/$tok"
+
+  # Dedicated tag: cron-egress-resolve is NOT in Vector's SYSLOG_IDENTIFIER
+  # allowlist (a per-tick tag would ship ~2k rows/day), so the heartbeat line
+  # is emitted under `egress-gw-probe` — the only resolver line Better Stack
+  # sees, ~288 rows/day. journald-local visibility is unchanged.
+  logger -t egress-gw-probe "egress_gw_probe result=$result ${reason:+reason=$reason}"
+  if [[ "$result" == "fail" ]]; then
+    sentry_event \
+      "cron-egress-firewall: egress gateway CONNECT probe FAILED (${reason})" \
+      "egress_gw_probe_fail" \
+      "$(jq -n --arg reason "$reason" --arg gw_ip "$gw_ip" \
+        '{reason: $reason, gw_ip: $gw_ip,
+          remediation: "check soleur-egress-gw container health + squid ACLs; runbook: knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md"}')"
+  fi
+  return 0
+}
+
 # Placed AFTER the self-heal block and BEFORE the drop sampler so a probe failure
 # can never skip `sentry_checkin ok`: errors inside run under `||` do not abort.
 run_ghcr_probe || log "WARN: GHCR probe errored (non-fatal)"
+run_egress_gw_probe || log "WARN: egress-gw probe errored (non-fatal)"
 
 # --- Fail-loud: surface kernel drops to Sentry -----------------------------------
 # BOTH drop prefixes are counted: `egress-blocked: ` (off-allowlist) AND
@@ -802,7 +948,7 @@ run_ghcr_probe || log "WARN: GHCR probe errored (non-fatal)"
 # sample is included. Window is 3min on a 1-min cadence — overlap is safe
 # (Sentry dedupes into one issue), a gap is not. The GHCR probe's own drops are
 # removed by filter_ghcr_probe_drops via ghcr_probe_filter_or_keep (see above).
-KERNEL_DROPS="$(journalctl -k --since "-3min" --no-pager 2>/dev/null | grep -E 'egress-(blocked|dns-exfil): ' || true)"
+KERNEL_DROPS="$(journalctl -k --since "-3min" --no-pager 2>/dev/null | grep -E 'egress-(blocked|dns-exfil|gw-deny): ' || true)"
 KERNEL_DROPS="$(printf '%s\n' "$KERNEL_DROPS" | ghcr_probe_filter_or_keep)"
 BLOCK_HITS="$(printf '%s\n' "$KERNEL_DROPS" | grep -c . || true)"
 if [[ "${BLOCK_HITS:-0}" -gt 0 ]]; then

@@ -44,6 +44,75 @@ disable the CI job to "unblock" a PR; if a finding is a false positive, add
 a per-rule `[[rules.allowlists]]` block in `.gitleaks.toml` or a `# gitleaks:allow`
 waiver in the source file.
 
+## Smoke matrix is skipped by design on PRs that touch no smoke subject path
+
+The `smoke (<case>)` matrix on a PR is gated by the `smoke-relevance` job (#9727, ADR-276 S1).
+It lists the PR's files through the API and writes `smoke=false` only when the list is complete,
+current (the PR head did not move) and no file matches `SUBJECT_RE` (in that job's step body). The
+subject set is a superset of what the ten cases execute, read or create: `secret-scan.yml`,
+`.gitleaks.toml`, `.gitleaksignore`, anything under `apps/web-platform/scripts/`, `.gitignore` or
+`.gitattributes` at any depth, any path component named `smoke` (a directory or a file), everything
+at and under `apps/web-platform/test/__synthesized__`, the directories the cases `mkdir -p` on the
+way to a fixture (a tracked file at one of those paths would collide), `gitleaks` /
+`gitleaks.tgz` at the repo root, and this runbook by exact path (the rename-laundering case only
+quotes it in a `::warning::` message; listing it is over-inclusive on purpose, so a docs-only edit of
+this page runs the matrix).
+
+For such a PR the matrix renders as ONE skipped row named `smoke (${{ matrix.case }})` (GitHub does
+not expand the matrix of a skipped job into ten rows), not ten grey rows. That is intended, not a
+stall.
+
+The gate **fails open**: a failed or partial file-list fetch, an empty list, an entry count that
+differs from the event's `changed_files`, a list at the API's 3000-entry cap (`CHANGED_FILES >= 3000`),
+a failed head lookup, a PR head that moved since the event, a matcher error, or a failure of the job
+itself all leave the matrix running. To force the smoke matrix on a PR, touch a subject file. The
+five required contexts (`gitleaks scan`, `lint fixture content`, `allowlist-diff`, `rename-guard`,
+`waiver discipline`) have no `needs:` edge to the gate and run on every PR as before. `smoke` must
+never become a required context: a required rollup would make `skipped` read as green and turn this
+cost optimisation into a control (ADR-032; `scripts/secret-scan-smoke-gate.test.sh` asserts neither
+`scripts/required-checks.txt` nor the canonical ruleset JSON names a `smoke` context).
+
+The gate is a cost optimisation, not a control. `scripts/secret-scan-smoke-gate.test.sh` pins it,
+and CODEOWNERS covers the workflow and that suite, but code-owner review is **advisory until the CI
+ruleset requires it**: a PR can edit the gate and its suite together.
+
+### Reading the verdict (agents and operators)
+
+The step summary and the job outputs have no API. The verdict is a `::notice::` annotation, readable
+as soon as the gate job has finished, even while the rest of the run is still going:
+
+```bash
+JOB_ID=$(gh run view <run-id> --json jobs --jq '.jobs[]|select(.name|startswith("smoke-relevance"))|.databaseId')
+gh api "repos/{owner}/{repo}/check-runs/$JOB_ID/annotations" --jq '.[].message'
+```
+
+The message reads `smoke-relevance: smoke=<true|false> (<reason>)`; every `true` carries the reason it
+failed open or the subject path rule that fired. `gh run view --job "$JOB_ID" --log | grep
+'smoke-relevance: smoke='` prints the same line, but only once the whole run has completed (while it is
+in progress `gh` answers that logs are not available yet).
+
+Observed on the real runner before merge (scratch commits on this PR, reverted): with the subject
+alternatives this PR touches neutralised, run 37861019697 gave `smoke=false (no subject path changed)`
+and the matrix posted one skipped row, `smoke (${{ matrix.case }})`; with the step forced to fail, run
+37861115263 failed the gate and all ten legs ran.
+
+### Accepted residuals
+
+- A runner-image or tool change is no longer surfaced by every PR's smoke run; the next PR that
+  touches a subject path is the drift canary for it.
+- The file list can be stale for the window of GitHub API lag; the head check narrows that window
+  but cannot close it.
+- A cancelled run skips the matrix (`!cancelled()` stops a superseded run); the superseding run
+  decides.
+- The suite's operand anchor derives the subject set from the smoke job by membership: a whole token
+  that is a tracked file, or a nested tracked directory. It cannot see a glob (`cat scripts/lint-*.sh`),
+  a directory change followed by a bare name (`cd scripts && bash lint-workflows.sh`), a path composed
+  from a variable, or a bare top-level directory word (`ls scripts`). A future smoke step that reads an
+  input only in one of those forms would not be flagged, so a PR editing that input could skip the
+  matrix. The five required scanners still run on every PR, and review of the new step is the check.
+  These forms are recorded as decisions (shape rows expecting zero operands) in
+  `scripts/secret-scan-smoke-gate.test.sh`.
+
 ## Ref scope per event: which commits each trigger actually scans
 
 `gitleaks git` scans a **commit range**, not the working tree. Fixing a file in a

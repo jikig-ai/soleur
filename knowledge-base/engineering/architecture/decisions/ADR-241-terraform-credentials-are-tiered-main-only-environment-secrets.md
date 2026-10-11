@@ -114,7 +114,7 @@ A new environment, **`infra-privileged`**, carries the `main` policy and has **n
 serves the unattended Tier-B jobs — apply-on-merge and the scheduled drift check — which a reviewer
 gate would deadlock. *(Note, 2026-09-28, #6604 step 7: it also serves one dispatched state-forget,
 `workspaces-plaintext-forget.yml`, a `terraform state rm` that only forgets addresses whose object is
-measured gone; the census now classifies `terraform state rm|mv|push` as a state write.)* *(Note,
+measured gone; the census now classifies `terraform state rm|mv|push` as a state write.)* *(Note, 2026-10-01, #6604 PR B (#9348): `workspaces-plaintext-forget.yml` stays on `main` until #6604 PR B merges and is deleted by that PR, after its run from `main`, run 37803274724; from that merge it is cited by name at `59abf6a76c` and this environment no longer serves it.)* *(Note,
 2026-09-30, #9262: it also serves the two inngest-release App-token consumers, the auto-mint
 `mint-inngest-bootstrap-tag.yml::mint` and the pin bump
 `build-inngest-bootstrap-image.yml::bump-cloud-init-pin`. Both mint the `soleur-infra` App token
@@ -979,6 +979,51 @@ One dated line, no status change: the dispatch-only `web-host-reboot.yml` job `r
 
 **The approval gate on this consumer is a rule, not a platform separation (measured 2026-10-07).** `web-platform-infra-apply` has a custom deployment branch policy that lists exactly `main`, a single required reviewer whose login is `deruelle` (the owner), and `prevent_self_review` false. The dispatching agent's `gh` identity is that same login, so the platform enforces only the branch (a run from another ref never starts the gated job) and does not separate dispatching from approving. The separation is the owner's explicit per-dispatch go-ahead naming the production write (`hr-menu-option-ack-not-prod-write-auth`) and the owner doing the approving; an agent never approves its own dispatch. The issue records the same property for the other gated environments. Whether destructive dispatches should be two-party (`prevent_self_review` and a distinct agent identity, a `.tf` change) is tracked on #8044 and is not decided here. A re-run of the workflow is refused by design (a `github.run_attempt` guard), so an approval is never silently reused for a second request.
 
+### 2026-10-08 (#8767): `cutover-inngest.yml` `op=backup` is Tier B, and currently ungated
+
+`op=backup`'s Hetzner `create_image` is a **write**, so its `HCLOUD_TOKEN` read is **Tier B**; the generation-anchor read stays Tier A (`HCLOUD_TOKEN_READONLY`). The runbook row for `cutover-inngest.yml::cutover` is split in two accordingly (a tier classification change, recorded here rather than as a new ADR, as the 2026-09-30 and 2026-10-02 entries do).
+
+**Open gap, stated plainly.** The workflow's `environment:` expression lists arm, rollback, resume, reflush, luks-cutover and luks-rollback and not `backup`, so today the write runs on a repo-secret-reachable Doppler token with no reviewer-gated environment, and step O10 (which removes the token from `prd_terraform`) breaks `op=backup` outright. The classification is not enforced by anything yet: the tier census cannot see a script-level read. Closing it changes the workflow expression and the pinned infra suite that asserts the membership list, both under `apps/web-platform/infra/**` (merging them fires the production apply), so it is tracked as #9755, with the O10 re-plumb, and is not part of the argv-credential sweep slice that found it (#9597). An in-script ref check was considered and rejected: the dispatched ref supplies the script, so it is not a boundary.
+
+What the same slice did change for this consumer: the token is masked before first use and shape-checked, the HTTP code is the only response data printed, and the action-error branch no longer prints the action body.
+
+### 2026-10-10 (#9362): `apply-github-infra.yml` feeds no Terraform variable from `prd_terraform`, and a pre-apply gate checks the required checks by value
+
+This supersedes the 2026-10-01 bullet "Pre-existing, unchanged here" for the apply path (the earlier entry is kept as written). It changes no decision's status. It also qualifies D6: "the loader's values win by construction" holds only for names that also exist in the Tier-B project, and `ACTIONS_INTEGRATION_ID`, `CODEQL_INTEGRATION_ID`, `GH_OWNER` and `GH_REPO` were never shadowed, which is why removing the injection, not shadowing it, was the fix.
+
+- **The injection is gone.** The job's four Terraform invocations (the two imports, the plan, the apply) no longer run under
+  `doppler run` over `prd_terraform` with the tf-var name transformer, and the now-unused step `DOPPLER_TOKEN` env is removed from
+  those three steps. Every `infra/github/variables.tf` input has a default and every provider input arrives from the Tier-B loader, so the
+  set this root needs from `prd_terraform` is empty; the only Tier-A reads left in the job are the two backend keys in
+  `Extract backend credentials`. Those two reach `$GITHUB_ENV` as `K=V` lines, so the step now refuses a value that is not a
+  single-line credential (a multi-line value would otherwise write further environment lines); the drift workflow's copy of the step
+  has the same check. A value planted in that config can therefore no longer change `ACTIONS_INTEGRATION_ID`,
+  `CODEQL_INTEGRATION_ID`, `GH_OWNER` or `GH_REPO`. An `--only-secrets` allowlist was rejected: the set is empty, and
+  `knowledge-base/project/learnings/2026-03-21-doppler-tf-var-naming-alignment.md` records that it fails with the tf-var transformer.
+- **O11 does not cover it.** O11 ran on 2026-10-04 and removed repo secrets and revoked two tokens; `prd_terraform` stays Tier A by D1
+  because the PR plan jobs need it, so no O-step removes this path.
+- **A pre-apply by-value gate.** A step between plan and apply pipes `terraform show -json tfplan` into
+  `scripts/verify-ruleset-required-checks.sh`, once per ruleset, comparing the planned `{context, integration_id}` set with the committed
+  canonical files. A mismatch fails the job before any write. The gate checks required-check bindings only; the destroy guard still owns
+  deletes and the daily ruleset audit still owns after-the-fact drift. **Intended behaviour, not to be removed under pressure:** the
+  gate has no override. A legitimate change to a required check updates the canonical file in the same reviewed PR; the
+  `[skip-github-apply]` kill switch skips the whole job. A canonical-only fix matches none of the workflow's push paths, so after it
+  merges the apply is re-run by `workflow_dispatch`; a re-run of the red run replays its own canonical. The two addresses are the
+  only gated ones: a new ruleset resource with required checks is ungated until the workflow lists it, and retiring one of the two
+  needs the workflow edited in the same PR. Enforcement, bypass actors and the target repository are outside the gate.
+- **Who can plant, and the replay window.** Writing `prd_terraform` is what the gate defends against; it does not defend against a
+  PR that edits the `.tf` and the canonical together (CODEOWNERS and review own that). The tree-equals-main assertion now also covers
+  the gate script, its projection library and both canonicals, so a replay of a post-merge run cannot use a stale gate. A pre-merge
+  apply run still replays the old workflow if re-run (GitHub allows it for 30 days); deleting those runs is the owner's call. The same assertion has a fail-closed cost: the gate's inputs are not push paths, so a `.tf` apply that is queued or running when a canonical-only or gate-only PR merges sees a diff against `origin/main` and refuses; the `.tf` change then waits for a `workflow_dispatch`. Adding them to the push paths was rejected: it would make this change itself fire an apply on merge.
+- **Pins.** `tests/scripts/test-apply-github-infra-mint-shape.sh` pins both the absence of any Tier-A injection in the apply job and the gate
+  (its position, its two invocations, its paths), and drives the script over plans built from a real `terraform show -json` capture. The
+  script, the CLA canonical and the suite carry CODEOWNERS rows.
+- **The drift detector matches the apply.** The scheduled drift workflow's `infra/github` leg runs its read-only plan with the same
+  inputs as the apply (no `doppler run`, no tf-var transformer), so a planted value cannot change what the detector measures.
+- **Left open, tracked in #9914.** The PR plan job (`infra-validation.yml`) still reads `prd_terraform` under the tf-var layer for the
+  `infra/github` root, and the root's README still carries stale local-apply recipes. Neither can write; a planted value shows up there as a
+  plan difference.
+
 ## References
 
 - Plan: `knowledge-base/project/plans/2026-09-22-feat-evict-privileged-terraform-credentials-plan.md`
@@ -1002,3 +1047,5 @@ One dated line, no status change: the dispatch-only `web-host-reboot.yml` job `r
 - D5 apply-path note (2026-10-01): #9360, #9361, #9362
 - D11 (2026-10-01, switch 2026-10-03, `accepted` 2026-10-04): #9321, #9462
 - D2 note (2026-10-04): #9377, #9461
+- `op=backup` tier note (2026-10-08): #8767, #9755
+- Apply-path injection removed and by-value gate (2026-10-10): #9362, #9914

@@ -33,10 +33,10 @@ So the live operation pauses push-apply, moves state, then merges the HCL (prece
 2. **A web-1 de-pet rebuild issue exists and is scheduled.** T2 removes the by-id pin hazard only for the keyed topology; the rebuild of
    web-1 itself is tracked separately, and #9357 is blocked by it.
 3. **Push-apply is paused and idle**: both `apply-web-platform-infra.yml` and `apply-deploy-pipeline-fix.yml` read `disabled_manually`
-   with no queued or running run, checked the way `assert_apply_paused_idle` does in `workspaces-plaintext-forget.yml`.
+   with no queued or running run, checked the way `assert_apply_paused_idle` did in the single-use `workspaces-plaintext-forget.yml` (deleted by #9348; read it with `git show 59abf6a76c:.github/workflows/workspaces-plaintext-forget.yml`), or the way `pause_real` does in `scripts/web2-rebirth.sh`.
 4. **Physical-id pins**: the state instance at `hcloud_volume.workspaces_luks` carries the pinned LUKS volume id, selected by exact `.type`
    and `.name` (never an address prefix: `workspaces_luks` shares the `hcloud_volume.workspaces` prefix). The pinned constants live in the
-   live workflow's own `env`, as in `workspaces-plaintext-forget.yml`.
+   live workflow's own `env`, as in `apply-web-platform-infra.yml`.
 5. **The two keyed slots are empty**: `terraform state list` shows neither `hcloud_volume.workspaces["web-1"]` nor
    `hcloud_volume_attachment.workspaces["web-1"]`.
 6. **Re-read this page after #9348 merges.** #9348 edits the same surfaces (`workspaces-luks.tf`, the encryption-posture ledger row,

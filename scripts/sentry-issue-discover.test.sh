@@ -82,13 +82,13 @@ else
 
 # ── the query composition — the half no stubbed-reader test can see ────────────────
 run 200 --host-events "$H" --stats-period 30d >/dev/null
-if argv | grep -qF -- "query=host_name:${H} level:fatal"; then
+if argv | grep -cF >/dev/null -- "query=host_name:${H} level:fatal"; then
   pass "host-events filters on level:fatal AT THE EVENT LEVEL (#7481 defect 1)"
 else
   fail "host-events filters on level:fatal AT THE EVENT LEVEL (#7481 defect 1)" "$(argv | head -1)"
 fi
 for f in timestamp level host_name stage rc detail action; do
-  if argv | grep -qF -- "field=$f"; then
+  if argv | grep -cF >/dev/null -- "field=$f"; then
     pass "host-events projects field=$f"
   else
     fail "host-events projects field=$f" "dropping field=detail restores the verdict-without-a-cause incident"
@@ -100,7 +100,7 @@ done
 # fatals Sentry's default order decides which 20 the operator reads — a stale cause shown, the
 # current one hidden. Pinned by exact spelling because `-timestamp` vs `timestamp` is the
 # whole difference.
-if argv | grep -qF -- 'sort=-timestamp'; then
+if argv | grep -cF >/dev/null -- 'sort=-timestamp'; then
   pass "host-events sorts NEWEST-FIRST (sort=-timestamp)"
 else
   fail "host-events sorts NEWEST-FIRST (sort=-timestamp)" "$(argv | head -1)"
@@ -113,18 +113,18 @@ fi
 # and reports TRANSIENT on every rehearsal), the shape validator deleted, and the credential
 # pins (`--disable --noproxy '*'`) dropped. Four rows, on the same curl spy.
 run 200 --host-events "$H" --stats-period 30d --stage luks_reopen_ok >/dev/null
-if argv | grep -qF -- "query=host_name:${H} stage:luks_reopen_ok"; then
+if argv | grep -cF >/dev/null -- "query=host_name:${H} stage:luks_reopen_ok"; then
   pass "--stage replaces the level:fatal term with stage:<name> (the info success row is reachable)"
 else
   fail "--stage replaces the level:fatal term with stage:<name>" "$(argv | head -1)"; fi
-if argv | grep -qF -- 'level:fatal'; then
+if argv | grep -cF >/dev/null -- 'level:fatal'; then
   fail "--stage leaves NO level:fatal term in the query (a fatal-pinned read cannot see level:info)" "$(argv | head -1)"
 else
   pass "--stage leaves NO level:fatal term in the query"; fi
-if argv | grep -qF -- 'field=action'; then pass "--stage projects field=action (the reboot verdict discriminates on it)"; else
+if argv | grep -cF >/dev/null -- 'field=action'; then pass "--stage projects field=action (the reboot verdict discriminates on it)"; else
   fail "--stage projects field=action" "$(argv | head -1)"; fi
 # The spy records `$*`, so the shell-quoted '*' arrives as a bare `*`.
-if head -1 "$ARGV" | grep -qE -- "^--disable --noproxy \* "; then
+if head -1 "$ARGV" | grep -cE >/dev/null -- "^--disable --noproxy \* "; then
   pass "the credentialed curl argv BEGINS --disable --noproxy * (Rule D pins survive the --stage path)"
 else
   fail "the credentialed curl argv BEGINS --disable --noproxy *" "$(head -1 "$ARGV" | cut -c1-120)"; fi
@@ -138,9 +138,9 @@ if [[ "$(rc)" -eq 64 ]]; then pass "--stage outside --host-events is refused (rc
 run 200 --host-events "$H" --stats-period 30d >/dev/null
 
 # ── the pins — defect 2, on all three operands ────────────────────────────────────
-if argv | grep -qF -- 'project=4511404943671376'; then pass "the project id is PINNED into the request"; else
+if argv | grep -cF >/dev/null -- 'project=4511404943671376'; then pass "the project id is PINNED into the request"; else
   fail "the project id is PINNED into the request" "$(argv | head -1)"; fi
-if argv | grep -qF -- 'https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/events/'; then
+if argv | grep -cF >/dev/null -- 'https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/events/'; then
   pass "org AND host are pinned into the URL"
 else
   fail "org AND host are pinned into the URL" "$(argv | head -1)"; fi
@@ -150,8 +150,8 @@ else
 PATH="$TMP/bin:$PATH" SPY_ARGV="$ARGV" SPY_HTTP=200 \
   SENTRY_ISSUE_RO_TOKEN='ro-fake' SENTRY_ORG='attacker-org' SENTRY_API_HOST='evil.example.com' \
   bash "$SUT" --host-events "$H" --stats-period 30d >/dev/null 2>&1
-if argv | grep -qF 'jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/events/' \
-   && ! argv | grep -qF 'evil.example.com' && ! argv | grep -qF 'attacker-org'; then
+if argv | grep -cF >/dev/null 'jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/events/' \
+   && ! argv | grep -cF >/dev/null 'evil.example.com' && ! argv | grep -cF >/dev/null 'attacker-org'; then
   pass "SENTRY_ORG and SENTRY_API_HOST in the environment CANNOT redirect a discover read"
 else
   fail "SENTRY_ORG and SENTRY_API_HOST in the environment CANNOT redirect a discover read" "$(argv | head -1)"
@@ -159,12 +159,12 @@ fi
 
 # ── the liveness anchor must EXCLUDE its host, or it is vacuous when it matters ────
 run 200 --liveness "$H" --stats-period 90d >/dev/null
-if argv | grep -qF -- "query=!host_name:${H}"; then
+if argv | grep -cF >/dev/null -- "query=!host_name:${H}"; then
   pass "liveness EXCLUDES the anchored host (a bare host_name: makes it vacuous)"
 else
   fail "liveness EXCLUDES the anchored host (a bare host_name: makes it vacuous)" "$(argv | head -1)"
 fi
-if argv | grep -qF -- 'field=count()' && ! argv | grep -qF -- 'field=detail'; then
+if argv | grep -cF >/dev/null -- 'field=count()' && ! argv | grep -cF >/dev/null -- 'field=detail'; then
   pass "liveness projects a COUNT only — never event content into a public artifact"
 else
   fail "liveness projects a COUNT only — never event content into a public artifact" "$(argv | head -1)"

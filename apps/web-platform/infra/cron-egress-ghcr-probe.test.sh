@@ -479,7 +479,7 @@ run_ghcr_probe "$now"; now=$((now + 300))
 check "25th run: silent again" "4" "$(ev_count ghcr_deny_probe_blind)"
 blind_msgs="$(awk -F'\t' '$1 == "ghcr_deny_probe_blind" { print $2 }' "$EVENTS" | sort -u | wc -l)"
 check "blind message is one static literal" "1" "$blind_msgs"
-if awk -F'\t' '$1 == "ghcr_deny_probe_blind" { print $2 }' "$EVENTS" | grep -qE '[$]|ghcr[.]io'; then rc_static=1; else rc_static=0; fi
+if awk -F'\t' '$1 == "ghcr_deny_probe_blind" { print $2 }' "$EVENTS" | grep -cE >/dev/null '[$]|ghcr[.]io'; then rc_static=1; else rc_static=0; fi
 okc "blind message has no \$ / name" "$rc_static"
 check "blind extra.last_rc" "127" "$(awk -F'\t' '$1 == "ghcr_deny_probe_blind" { print $3; exit }' "$EVENTS" | jq -r .last_rc)"
 check "blind extra.name present" "ghcr.io" "$(awk -F'\t' '$1 == "ghcr_deny_probe_blind" { print $3; exit }' "$EVENTS" | jq -r .name)"
@@ -792,7 +792,7 @@ n_lo="$(grep -cF 'GHCR_PROBE_PORT_LO' "$RESOLVER")"
 [[ "$n_lo" -ge 3 ]]; okc "GHCR_PROBE_PORT_LO referenced at definition, curl flag and sampler ($n_lo)" $?
 grep -qF -- '--local-port "${GHCR_PROBE_PORT_LO}-${GHCR_PROBE_PORT_HI}"' "$RESOLVER"; okc "curl --local-port derives from the constants" $?
 grep -qF -- '-v plo="$GHCR_PROBE_PORT_LO" -v phi="$GHCR_PROBE_PORT_HI"' "$RESOLVER"; okc "sampler awk derives from the constants" $?
-grep -qE "egress-\(blocked\|dns-exfil\): " "$RESOLVER"; okc "both drop prefixes (trailing space) still counted" $?
+grep -qE "egress-\(blocked\|dns-exfil\|gw-deny\): " "$RESOLVER"; okc "all three drop prefixes (trailing space) still counted (#9534 adds gw-deny)" $?
 
 # --- end of run: accounting identity, then the outer floor ---------------------------------
 echo

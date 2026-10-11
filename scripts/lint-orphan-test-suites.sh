@@ -107,7 +107,8 @@ tracked_n=$(wc -l < "$WORK/tracked" | tr -d ' ')
 # live — arrays here carry both shapes (`apps/web-platform/` and
 # `plugins/soleur` style bare dirs), so the helper checks both. The one residual
 # difference is glob metacharacters in the declared path itself (pathspec vs
-# [[ == ]] pattern semantics), which these arrays never carry.
+# [[ == ]] pattern semantics) — `glob:` members carry `*` in their tails, but the
+# declared-member census's `glob:*` arm handles them before this helper sees them.
 _TRACKED_SET=$'\n'"$(git -C "$REPO_ROOT" ls-files)"$'\n'
 _tracked_member() {
   [[ "$1" == "." ]] && { [[ "$_TRACKED_SET" != $'\n'$'\n' ]]; return; }
@@ -1110,15 +1111,78 @@ else
       continue
     fi
     for p in "${aff_elems[@]}"; do
-      if [[ "$p" == */ ]]; then
-        [[ -d "$REPO_ROOT/$p" ]] || {
-          echo "ERROR: ${aff_arr} declares directory prefix '${p}', which does not exist -- a dead edge can never match a diff." >&2
-          fails=$((fails + 1))
-        }
-      elif ! _tracked_member "$p"; then
-        echo "ERROR: ${aff_arr} declares '${p}', which is not a tracked file -- a dead edge can never match a diff." >&2
-        fails=$((fails + 1))
-      fi
+      case "$p" in
+        glob:*)
+          # Third declared kind (#9813): glob:<literal-head>/<glob-tail>.
+          # malformed-shape invariant — ONE doctrine, FIVE sites: the mint arm
+          # in _affected_add_edge, the in-flight revalidation in _diff_edge_hit,
+          # this census arm, and the covers() oracle in
+          # scripts/test-affected-kb-consumers.test.sh must classify a shape
+          # identically; GLOBENT (registration-only classifier) is a deliberate
+          # superset — admission can only widen, never narrow (the census is
+          # where a bad shape becomes loud). Here a malformed or dead declared
+          # glob is a static RED, not a
+          # runtime narrow: a bad entry degrades WIDER than declared — and a
+          # `..`/`/`-headed glob can pass the -d probe while matching no
+          # repo-relative diff line ever (a dead edge that narrows).
+          _cg="${p#glob:}"
+          _cg_why=""
+          case "$_cg" in
+            *[\*?[]*)
+              case "$_cg" in
+                *[?[]*) _cg_why="contains ? or [ (outside the grammar)" ;;
+                *[!A-Za-z0-9_./*-]*) _cg_why="contains a byte outside the grammar charset" ;;
+                *)
+                  _cgh="${_cg%%[*?[]*}"
+                  case "$_cgh" in
+                    /*|./*|../*|*"//"*|*"/./"*|*"/../"*) _cg_why="its head is not a repo-relative prefix" ;;
+                    */)
+                      _cgt="${_cg#$_cgh}"
+                      case "$_cgt" in
+                        */) _cg_why="its tail ends in / — no path can match it" ;;
+                        *\**) [[ -d "$REPO_ROOT/${_cgh%/}" ]] || _cg_why="its head dir ${_cgh} does not exist" ;;
+                        *) _cg_why="its tail carries no *" ;;
+                      esac
+                      ;;
+                    *) _cg_why="its head does not end in /" ;;
+                  esac
+                  ;;
+              esac
+              ;;
+            *)
+              # No metachar: the mint recurses it as a literal path entry —
+              # the census checks it as one. A miss here mints NOTHING — the
+              # entry is dead, which narrows (the opposite direction from the
+              # malformed branch's degrade-wider).
+              if [[ "$_cg" == */ ]]; then
+                [[ -d "$REPO_ROOT/$_cg" ]] || _cg_why="a literal dir entry that does not exist -- a dead edge that can never match a diff"
+              elif ! _tracked_member "$_cg"; then
+                _cg_why="a literal entry that is not a tracked file -- a dead edge that can never match a diff"
+              fi
+              ;;
+          esac
+          if [[ -n "$_cg_why" ]]; then
+            if [[ "$_cg_why" == *"dead edge"* ]]; then
+              echo "ERROR: ${aff_arr} declares glob: edge '${p}', ${_cg_why}." >&2
+            else
+              echo "ERROR: ${aff_arr} declares glob: edge '${p}', ${_cg_why} -- it degrades wider than declared and would silently widen every diff's selection." >&2
+            fi
+            fails=$((fails + 1))
+          fi
+          ;;
+        */)
+          [[ -d "$REPO_ROOT/$p" ]] || {
+            echo "ERROR: ${aff_arr} declares directory prefix '${p}', which does not exist -- a dead edge can never match a diff." >&2
+            fails=$((fails + 1))
+          }
+          ;;
+        *)
+          _tracked_member "$p" || {
+            echo "ERROR: ${aff_arr} declares '${p}', which is not a tracked file -- a dead edge can never match a diff." >&2
+            fails=$((fails + 1))
+          }
+          ;;
+      esac
     done
     # Self-inclusion: an array that cannot see edits to the edge index itself
     # ships a narrowed selection unexercised — same argument as the relevance

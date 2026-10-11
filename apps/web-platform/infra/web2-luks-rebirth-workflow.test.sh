@@ -140,7 +140,7 @@ PY2
   chk "S14 the plan gate is called with the right mode at both plans" "$([[ "$(jq -r --argjson i "$ipre" '.[$i].run' <<<"$steps")" == *"if ! web_host_rebirth_gate pre tfplan-pre.json web-2"* && "$(jq -r --argjson i "$ipost" '.[$i].run' <<<"$steps")" == *'if ! web_host_rebirth_gate "$MODE" tfplan-post.json web-2'* ]]; echo $?)"
   chk "S15 the classifier runs with APPLY and the delete and state-rm steps receive its verdict" "$([[ "$(jq -r --argjson i "$ic" '.[$i].run' <<<"$steps")" == *'web2-rebirth.sh classify "$APPLY"'* && "$(jq -r --argjson i "$ds" '.[$i].env.VERDICT' <<<"$steps")" == *steps.classify.outputs.verdict* && "$(jq -r --argjson i "$sr" '.[$i].env.VERDICT' <<<"$steps")" == *steps.classify.outputs.verdict* ]]; echo $?)"
   chk "S16 no plan file is uploaded and no artifact step exists" "$([[ "$(jqs '[.[] | select((.uses // "") | test("upload-artifact|cache"))] | length')" == 0 ]]; echo $?)"
-  chk "S17 no xtrace, no insecure curl, no token in a command line" "$(! grep -nE '(^|[^[:alnum:]_])set -[a-z]*x|-k |--insecure|Bearer \$' "$wf" | grep -v '^[0-9]*:\s*#' | grep -q .; echo $?)"
+  chk "S17 no xtrace, no insecure curl, no token in a command line" "$(! grep -nE '(^|[^[:alnum:]_])set -[a-z]*x|-k |--insecure|Bearer \$' "$wf" | grep -v '^[0-9]*:\s*#' | grep -c >/dev/null .; echo $?)"
   chk "S18 the cleanup step runs always and removes the plan files" "$([[ "$(jq -r '[.[] | select(.name | startswith("Remove plan files"))][0] | "\(.if)|\(.run)"' <<<"$steps")" == "always()|"*tfplan-pre*tfplan-post* ]]; echo $?)"
   chk "S19 the typed confirm and the image-tag shape are validated by the first step" "$([[ "$(jq -r '.[0].run' <<<"$steps")" == *'"REBIRTH-web-2-LUKS"'* && "$(jq -r '.[0].run' <<<"$steps")" == *'PINNED_VOLUME_ID'* ]]; echo $?)"
   chk "S20 the flip precondition runs for every dispatch (plan_only reports it, apply refuses)" "$([[ "$(jq -r --argjson i "$ifl" '.[$i].if' <<<"$steps")" == null && "$(jq -r --argjson i "$ifl" '.[$i].run' <<<"$steps")" == *'flip-precondition "$APPLY"'* ]]; echo $?)"
@@ -194,6 +194,7 @@ PY3
   cp "$REPO/tests/scripts/lib/web-host-rebirth-gate.sh" "$REPO/tests/scripts/lib/plan-gate-preamble.sh" "$sb/tests/scripts/lib/"
   cat > "$sb/tests/scripts/lib/stock-preflight-gate.sh" <<'SH'
 stock_preflight_gate() { [[ -z "${STOCK_FAIL:-}" ]]; }
+stock_recovery_report() { echo "stub recovery-report invoked: $*"; return 0; }
 SH
   cat > "$sb/bin/doppler" <<'SH'
 #!/usr/bin/env bash
@@ -336,9 +337,9 @@ mutate "the APPLY guard is removed from the delete step" "        id: delete
         if: \${{ env.APPLY == 'yes' }}
 " "        id: delete
 "
-mutate "the APPLY guard is removed from the reboot step" "      - name: Issue the hcloud reboot (the reopen is graded later, never claimed here)
+mutate "the APPLY guard is removed from the reboot step" "      - name: Issue the hcloud reboot (a reopen is not graded; ADR-263 addendum 2026-10-08)
         if: \${{ env.APPLY == 'yes' }}
-" "      - name: Issue the hcloud reboot (the reopen is graded later, never claimed here)
+" "      - name: Issue the hcloud reboot (a reopen is not graded; ADR-263 addendum 2026-10-08)
 "
 mutate "the APPLY guard is removed from the post plan" "      - name: Terraform plan \`post\` (graded; the raw volume is created, or on resume only missing siblings are added) + stock preflight
         if: \${{ env.APPLY == 'yes' }}

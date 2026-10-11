@@ -207,7 +207,7 @@ g1_check() {
   local script="$1" v=0 stages name class plan_digest ops stripped table fn
   [[ -r "$script" ]] || { echo "g1: ${script} is not readable"; return 1; }
   # Population membership: the caller says what it expects; a stripped v2 header is a population miss.
-  if ! sed -n '2p' "$script" | grep -qx '# SOLEUR-GENERATED-OPERATOR-SCRIPT v2'; then
+  if ! sed -n '2p' "$script" | grep -cx >/dev/null '# SOLEUR-GENERATED-OPERATOR-SCRIPT v2'; then
     echo "g1: ${script}: population != expected — line 2 is not the v2 header (a v1 script must be one of the legacy paths, not driven here)"; return 1
   fi
   g1_world "run-$(basename "$(dirname "$script")")-$$-$RANDOM" || { echo "g1: stub world failed"; return 1; }
@@ -328,7 +328,7 @@ g1_population() {
   if [[ -z "$found" ]]; then echo "g1: the population is EMPTY — nothing was checked"; return 1; fi
   while IFS= read -r f; do
     [[ -n "$f" ]] || continue
-    if ! sed -n '2p' "$root/$f" | grep -qE '^# SOLEUR-GENERATED-OPERATOR-SCRIPT v[0-9]+$'; then
+    if ! sed -n '2p' "$root/$f" | grep -cE >/dev/null '^# SOLEUR-GENERATED-OPERATOR-SCRIPT v[0-9]+$'; then
       echo "g1: ${f}: carries the generated-script header but NOT on line 2 — the approval hook and this guard recognise line 2 only"; v=1; continue
     fi
     ver="$(sed -n '2p' "$root/$f" | sed -E 's/.* v([0-9]+)$/\1/')"
@@ -361,7 +361,7 @@ g1_base_v1() { # <outfile>
   while IFS= read -r f; do
     [[ -n "$f" ]] || continue
     case "$f" in *test/*|*.test.sh|*fixtures/*) continue ;; esac
-    if git -C "$REPO_ROOT" show "${base}:${f}" 2>/dev/null | sed -n '2p' | grep -qx '# SOLEUR-GENERATED-OPERATOR-SCRIPT v1'; then printf '%s\n' "$f" >> "$1"; fi
+    if git -C "$REPO_ROOT" show "${base}:${f}" 2>/dev/null | sed -n '2p' | grep -cx >/dev/null '# SOLEUR-GENERATED-OPERATOR-SCRIPT v1'; then printf '%s\n' "$f" >> "$1"; fi
   done < <(git -C "$REPO_ROOT" ls-tree -r --name-only "$base" -- knowledge-base plugins 2>/dev/null | grep -E '\.sh$')
   return 0
 }
@@ -375,7 +375,7 @@ else
   fail "the merge-base v1 set could not be derived: $(cat "$SB/base-v1.err")"
 fi
 FOUND="$(g1_discover "$REPO_ROOT")"
-V2_COUNT="$(grep -c . < <(for f in $FOUND; do sed -n '2p' "$REPO_ROOT/$f" | grep -qx '# SOLEUR-GENERATED-OPERATOR-SCRIPT v2' && echo "$f"; done) || true)"
+V2_COUNT="$(grep -c . < <(for f in $FOUND; do sed -n '2p' "$REPO_ROOT/$f" | grep -cx >/dev/null '# SOLEUR-GENERATED-OPERATOR-SCRIPT v2' && echo "$f"; done) || true)"
 if [[ "$V2_COUNT" -ge 2 ]] && grep -qxF 'plugins/soleur/skills/operator-bootstrap/template.sh' <<<"$FOUND" && grep -qxF 'knowledge-base/project/specs/feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh' <<<"$FOUND"; then
   pass "the discovered v2 population holds the template and the re-cut 9321 script (${V2_COUNT} v2 script(s))"
 else
@@ -385,7 +385,7 @@ fi
 echo "== Guard 1 — every discovered v2 script =="
 while IFS= read -r f; do
   [[ -n "$f" ]] || continue
-  sed -n '2p' "$REPO_ROOT/$f" | grep -qx '# SOLEUR-GENERATED-OPERATOR-SCRIPT v2' || continue
+  sed -n '2p' "$REPO_ROOT/$f" | grep -cx >/dev/null '# SOLEUR-GENERATED-OPERATOR-SCRIPT v2' || continue
   script="$REPO_ROOT/$f"
   # the template is driven from its baked copy (the placeholder is not a path)
   [[ "$f" == "plugins/soleur/skills/operator-bootstrap/template.sh" ]] && script="$SB/fx/template-baked.sh"

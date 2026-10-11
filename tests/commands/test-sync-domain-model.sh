@@ -46,7 +46,7 @@ echo "CREATE TABLE only_tbl (id uuid PRIMARY KEY);" > "$mig/001.sql"
 reg="$smoke/register.md"
 printf '# Register\n## Business Rules\n| ID | Rule | Statement | Source |\n|---|---|---|---|\n| BR-1 | doc | The `only_tbl` table. | migration 001 |\n\n## Auto-inferred (unreviewed)\n| Anchor | Candidate statement |\n|---|---|\n' > "$reg"
 report="$(bash "$DRIFT" drift --repo "$smoke" --register "$reg" 2>/dev/null)"; rc=$?
-echo "$report" | grep -qi "NOT a security audit" && _r "report carries completeness disclaimer" ok || _r "report carries completeness disclaimer" fail
+echo "$report" | grep -ci >/dev/null "NOT a security audit" && _r "report carries completeness disclaimer" ok || _r "report carries completeness disclaimer" fail
 [[ "$rc" -eq 0 ]] && _r "clean fixture → drift exit 0" ok || _r "clean fixture → drift exit 0" fail "rc=$rc"
 rm -rf "$smoke"
 

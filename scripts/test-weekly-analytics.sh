@@ -268,10 +268,10 @@ fi
 
 # Test: error message includes context string
 vjr_error=$(validate_json_response "$VJR_DIR/invalid.txt" "preflight check" 2>&1 || true)
-assert_eq "validate_json-error-context" "true" "$(echo "$vjr_error" | grep -q 'preflight check' && echo "true" || echo "false")"
+assert_eq "validate_json-error-context" "true" "$(echo "$vjr_error" | grep -c >/dev/null 'preflight check' && echo "true" || echo "false")"
 
 # Test: error message includes response body snippet
-assert_eq "validate_json-error-body" "true" "$(echo "$vjr_error" | grep -q '402 Payment Required' && echo "true" || echo "false")"
+assert_eq "validate_json-error-body" "true" "$(echo "$vjr_error" | grep -c >/dev/null '402 Payment Required' && echo "true" || echo "false")"
 
 # Test: HTML error page (realistic proxy error) fails validation
 cat > "$VJR_DIR/html.txt" <<'HTML'

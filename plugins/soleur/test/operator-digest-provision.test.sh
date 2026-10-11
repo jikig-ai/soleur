@@ -35,7 +35,7 @@ trap 'rm -rf "$tmproot"' EXIT
 # --- Structural: the secret reaches gh via stdin (a pipe), never via --body on argv ---
 if grep -qE '\|[[:space:]]*gh secret set' "$PROVISION"; then ok; else
   bad "secret must be piped into 'gh secret set' (stdin), found no '| gh secret set'"; fi
-if grep -E 'gh secret set' "$PROVISION" | grep -qE -- '--body'; then
+if grep -E 'gh secret set' "$PROVISION" | grep -cE >/dev/null -- '--body'; then
   bad "'gh secret set' must NOT use --body (argv secret leak)"; else ok; fi
 
 # --- Behavioral harness: a mock PATH that captures gh argv + stdin ---

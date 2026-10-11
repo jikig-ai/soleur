@@ -2729,3 +2729,49 @@ resource "sentry_alert" "inngest_provision_degraded" {
     ignore_changes = [environment]
   }
 }
+
+# Haiku "no usable answer" rate. server/domain-router.ts (feature domain-router) and
+# server/email-triage/summarize.ts (feature email-triage) report op `no-text-block` on
+# Sentry's MESSAGE path when a Haiku 5.5 turn has no text block, ends at max_tokens or is
+# refused (adaptive thinking spends the same max_tokens budget as the answer). Both callers
+# degrade gracefully (the router falls back to its default leader, the summarizer stores a
+# neutral summary), so one isolated empty turn is noise. A RUN of them means the effort or
+# budget setting no longer fits the model, and that is the signal. Hence a RATE trigger and
+# no first-seen/regression/reappeared page.
+#
+# The emitter uses a constant message per site, so each site is ONE Sentry issue and
+# `event_frequency_count` (per issue) counts it correctly. The threshold of 4 events in one
+# hour is PROVISIONAL: the sites shipped on 2026-10-08 and no baseline exists. Recalibrate it
+# from the first 14 days of data, on or after 2026-10-23 (ADR-053 addendum 2026-10-09; the
+# owner is whoever next edits this file or reads an alert email from it). The `feature` list is the
+# set of emit sites under server/; test/sentry-no-text-block-alert-op-contract.test.ts
+# derives that set by scanning server/ and refuses a rule that omits or adds one.
+# `frequency_minutes = 37` is unused elsewhere in the root (Sentry dedups identical rules).
+resource "sentry_alert" "haiku_no_text_block_rate" {
+  organization      = var.sentry_org
+  name              = "haiku-no-text-block-rate"
+  enabled           = true
+  frequency_minutes = 37
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { event_frequency_count = { interval = "1h", value = 4 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "feature", match = "in", value = "domain-router,email-triage" } },
+        { tagged_event = { key = "op", match = "eq", value = "no-text-block" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}

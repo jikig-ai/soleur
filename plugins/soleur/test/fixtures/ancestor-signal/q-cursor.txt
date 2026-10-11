@@ -1,0 +1,3 @@
+# fixture data, never executed: the cursor substitution is double-quoted; one W, bounded=no
+p="$(awk '{print $4}' "/proc/$p/stat")"
+kill -TERM "$p"

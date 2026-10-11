@@ -436,7 +436,7 @@ check_r9() {
     # `/opt/.devin/plugins`. On a Devin CLI host — the audience #8401 exists for — R4, R6 and
     # R6c would silently change verdict with no diff change, which is the one thing this
     # suite's own header says a MUST-PASS suite may not do.
-    ck; if printf '%s\n' "$code" | grep -qF '${SOLEUR_DEVIN_CACHE_OPT:-/opt/.devin/plugins}'; then
+    ck; if printf '%s\n' "$code" | grep -cF >/dev/null '${SOLEUR_DEVIN_CACHE_OPT:-/opt/.devin/plugins}'; then
       pass "$label: ${GATE_NAMES[$i]} reads the /opt arm through the containment override"
     else
       fail "$label: ${GATE_NAMES[$i]} hard-codes /opt/.devin/plugins — this suite's verdict becomes a property of the host"

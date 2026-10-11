@@ -193,6 +193,15 @@ locals {
     "cron-egress-resolve.timer",
     "cron-egress-alarm@.service",
     "cron-egress-postapply-assert.sh",
+    # Egress gateway artifacts (#9534): Squid conf + token auth helper + the
+    # shared deny set + bring-up script, installed by soleur-host-bootstrap.sh
+    # and mounted :ro into soleur-egress-gw. The forwarder rides the app image
+    # (same COPY set) — it executes in-container, not on the host.
+    "egress-gateway-squid.conf",
+    "egress-auth-helper.sh",
+    "egress-deny-cidrs.txt",
+    "egress-gateway-bootstrap.sh",
+    "egress-forwarder.mjs",
     # Fresh-host POST-CONTAINER egress-enforcement probe (#5933 item 3). The SSH
     # provisioner's cron-egress-postapply-assert.sh SKIPS the container probes on a
     # fresh host (no container yet); this baked script runs them at boot AFTER the app
@@ -533,7 +542,12 @@ resource "hcloud_server" "web" {
     # glob: once the LUKS volume attaches, the glob matches TWO devices and the "which is LUKS"
     # predicate binds to the wrong one. Same by-id + nofail shape as cloud-init-git-data.yml,
     # cloud-init-inngest.yml, cloud-init-registry.yml (web-platform was the lone glob holdout).
-    workspaces_volume_id = hcloud_volume.workspaces[each.key].id
+    # #6604 step 7 — web-1 no longer owns a plaintext workspaces volume (wiped, deleted, forgotten
+    # from state), so web-1 renders the literal "retired-6604": a rebuilt web-1 finds no such
+    # by-id device and cloud-init emits `workspaces_mount fatal` (fails loud). Unreachable while
+    # user_data is ignore_changes and the replace path refuses web-1. NOT the LUKS volume's id:
+    # that would couple this plaintext mount line to the sole copy. Guard B4 (workspaces-luks.test.sh).
+    workspaces_volume_id = contains(keys(local.plaintext_workspaces_hosts), each.key) ? hcloud_volume.workspaces[each.key].id : "retired-6604"
     # (#6931, ADR-263; #9377) The fresh-host scoped READ token for the WEB-CLASS config prd_workspaces_luks_web
     # (workspaces-luks-fresh-boot.tf), NOT web-1's prd_workspaces_luks: a fresh host's token must not resolve
     # web-1's escrow credential pair. cloud-init writes it to /etc/default/luks-monitor so the baked
@@ -962,13 +976,13 @@ locals {
   ghcr_deny_sh        = <<-EOT
     for f in /etc/hosts /etc/cloud/templates/hosts.debian.tmpl; do
       [ -f "$f" ] || continue
-      for h in ghcr.io pkg-containers.githubusercontent.com; do
+      for h in ghcr.io pkg-containers.githubusercontent.com docker.pkg.github.com; do
         grep -qE "^0\.0\.0\.0[[:space:]]+$h([[:space:]]|$)" "$f" || printf '0.0.0.0 %s\n:: %s\n' "$h" "$h" >> "$f"
       done
     done
   EOT
   ghcr_deny_assert_sh = <<-EOT
-    for h in ghcr.io pkg-containers.githubusercontent.com; do
+    for h in ghcr.io pkg-containers.githubusercontent.com docker.pkg.github.com; do
       a=$(timeout 10 getent ahosts "$h" | awk '{print $1}' | sort -u)
       if [ -z "$a" ] || printf '%s\n' "$a" | grep -cvxE '0\.0\.0\.0|::' >/dev/null; then
         echo "FATAL: $h does not resolve ONLY to the sinkhole after the deny (#9169). Route back: the resource is now tainted, so push a fix commit or gh workflow run the owning apply workflow; never gh run rerun --failed." >&2
@@ -2664,13 +2678,172 @@ resource "terraform_data" "cron_egress_firewall" {
   }
 }
 
+# Egress gateway delivery to the RUNNING web-1 (#9534). Fresh hosts get the
+# gateway via the baked set + cloud-init runcmd; web-1's cloud-init is frozen
+# (ignore_changes = [user_data]), so this provisioner is the sanctioned path.
+# Shape mirrors terraform_data.cron_egress_firewall: config_hash folds every
+# delivered artifact, server_id re-provisions a replaced VM.
+resource "terraform_data" "egress_gateway" {
+  triggers_replace = {
+    config_hash = sha256(join(",", [
+      file("${path.module}/egress-gateway-squid.conf"),
+      file("${path.module}/egress-auth-helper.sh"),
+      file("${path.module}/egress-deny-cidrs.txt"),
+      file("${path.module}/egress-gateway-bootstrap.sh"),
+    ]))
+    server_id = hcloud_server.web["web-1"].id
+  }
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-1"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key         # null in operator-local context
+    agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+    host_key    = local.web_1_ssh_host_key
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "mkdir -p /etc/soleur /var/lib/soleur/egress-tokens",
+      "chown 1001:1001 /var/lib/soleur/egress-tokens && chmod 0711 /var/lib/soleur/egress-tokens",
+    ]
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/egress-gateway-squid.conf"
+    destination = "/usr/local/bin/egress-gateway-squid.conf"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/egress-auth-helper.sh"
+    destination = "/usr/local/bin/egress-auth-helper.sh"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/egress-deny-cidrs.txt"
+    destination = "/etc/soleur/egress-deny-cidrs.txt"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/egress-gateway-bootstrap.sh"
+    destination = "/usr/local/bin/egress-gateway-bootstrap.sh"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "chmod +x /usr/local/bin/egress-gateway-bootstrap.sh /usr/local/bin/egress-auth-helper.sh",
+      "bash /usr/local/bin/egress-gateway-bootstrap.sh",
+      # Re-run the nftables loader so the three gateway legs (forward accept,
+      # reply accept, SOLEUR-EGRESS-GW deny chain) install on the live host.
+      "systemctl restart cron-egress-firewall.service",
+    ]
+  }
+}
+
+# Same delivery to the RUNNING web-2 (#9534). Without this a running web-2
+# waits for its next -replace for the baked set, and an entitled session
+# landing there fails closed — safe, but silently dark on half the fleet.
+# Identical artifact set + order; only the host identity differs (web-2's
+# host key local is the #9393 deploy_pipeline_fix_web2 one).
+#
+# RUNNING-WEB-2 DELIVERY CENSUS (frozen cloud-init → these are the only
+# hot-delivery channels today; update when adding one):
+#   terraform_data.deploy_pipeline_fix_web2 — the full deploy-pipeline set
+#     (ci-deploy, webhook.service, infra-config, inngest-*, service drop-ins)
+#     + the three cron-egress artifacts (resolver, allowlist-cidr,
+#     post-apply assert) (#9151, #9393)
+#   terraform_data.egress_gateway_web2    — four gateway artifacts
+#     (squid.conf, auth helper, deny CIDRs, bootstrap) (#9534)
+# Everything else reaches a running web-2 only via -replace (birth set) or
+# not at all by role. web-host-provisioner-parity.test.sh forces every new
+# web-1 SSH provisioner through this classification — add the twin here or
+# record the W1_ONLY_JUSTIFIED reason.
+resource "terraform_data" "egress_gateway_web2" {
+  triggers_replace = {
+    config_hash = sha256(join(",", [
+      file("${path.module}/egress-gateway-squid.conf"),
+      file("${path.module}/egress-auth-helper.sh"),
+      file("${path.module}/egress-deny-cidrs.txt"),
+      file("${path.module}/egress-gateway-bootstrap.sh"),
+    ]))
+    server_id = hcloud_server.web["web-2"].id
+  }
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-2"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key         # null in operator-local context
+    agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+    host_key    = local.web_2_ssh_host_key
+    # #8706 rule: %RAND% in script_path — a collision with an earlier provisioner run's
+    # copied script body would replay STALE commands under a fresh hash.
+    script_path = "/root/tf-egress-gateway-web2-%RAND%.sh"
+    # web-2's SSH route is slow (~70s per dial — 4 file uploads alone burn ~4m40s
+    # before remote-exec + docker pull start; the 2026-10-11 apply died at 5m03s).
+    timeout = "15m"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "mkdir -p /etc/soleur /var/lib/soleur/egress-tokens",
+      "chown 1001:1001 /var/lib/soleur/egress-tokens && chmod 0711 /var/lib/soleur/egress-tokens",
+    ]
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/egress-gateway-squid.conf"
+    destination = "/usr/local/bin/egress-gateway-squid.conf"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/egress-auth-helper.sh"
+    destination = "/usr/local/bin/egress-auth-helper.sh"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/egress-deny-cidrs.txt"
+    destination = "/etc/soleur/egress-deny-cidrs.txt"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/egress-gateway-bootstrap.sh"
+    destination = "/usr/local/bin/egress-gateway-bootstrap.sh"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "chmod +x /usr/local/bin/egress-gateway-bootstrap.sh /usr/local/bin/egress-auth-helper.sh",
+      "bash /usr/local/bin/egress-gateway-bootstrap.sh",
+      # Re-run the nftables loader so the three gateway legs (forward accept,
+      # reply accept, SOLEUR-EGRESS-GW deny chain) install on the live host.
+      "systemctl restart cron-egress-firewall.service",
+    ]
+  }
+}
+
+locals {
+  # #6604 step 7 — web-1's plaintext workspaces volume (105149570) was zeroed, read back,
+  # detached and deleted, and its two addresses were forgotten from state (ADR-119 addendum;
+  # knowledge-base/legal/audits/workspaces-plaintext-destruction-record.md). Only the hosts
+  # listed here still own a per-host plaintext volume; web-1's /workspaces lives solely on
+  # hcloud_volume.workspaces_luks (workspaces-luks.tf). Guard B4 (workspaces-luks.test.sh).
+  plaintext_workspaces_hosts = { for k, v in var.web_hosts : k => v if k != "web-1" }
+}
+
 # Per-host local worktree volume (multi-host /workspaces, #5274 Phase 3). Each web
 # host has its OWN /workspaces block volume (per-user worktrees live host-local on
-# NVMe — ADR-068 §1). web-1 keeps its exact current name/location so the `moved`
-# migration below is 0-destroy (a volume location change would force-replace and
-# drop the live data).
+# NVMe — ADR-068 §1). web-1 kept its exact name/location so the `moved` migration
+# (placement-group.tf) was 0-destroy. Since #6604 step 7 web-1 is excluded from
+# for_each (local.plaintext_workspaces_hosts); the name expression's web-1 arm is
+# historical and left byte-identical so web-2's name never diffs.
 resource "hcloud_volume" "workspaces" {
-  for_each = var.web_hosts
+  for_each = local.plaintext_workspaces_hosts
   name     = each.key == "web-1" ? "soleur-web-platform-data" : "soleur-web-platform-data-${each.key}"
   size     = var.volume_size
   location = each.value.location
@@ -2684,10 +2857,13 @@ resource "hcloud_volume" "workspaces" {
   }
 
   # (ADR-143 Phase 4.2 / #6459) prevent_destroy on the per-host /workspaces block volumes so a
-  # stray `terraform destroy` / for_each key churn cannot silently drop a volume. web-1's LIVE
-  # sole-copy data is on the additive LUKS singleton hcloud_volume.workspaces_luks
-  # (workspaces-luks.tf, ADR-119); this keyed volume is web-1's superseded plaintext backstop and
-  # the store a fresh web host (web-2) formats LUKS at first boot once it is reborn raw (ADR-263, #9372).
+  # stray `terraform destroy` / for_each key churn cannot silently drop a volume. This is the
+  # per-host plaintext volume (web-2 only, since #6604 step 7); web-1's sole-copy data is on the
+  # additive LUKS singleton hcloud_volume.workspaces_luks (workspaces-luks.tf, ADR-119), which
+  # since #6604 step 7 carries its own prevent_destroy AND delete_protection (the
+  # `apply_target=workspaces-luks-recut` `-replace` escape hatch is retired with it). The keyed volume
+  # is the store a fresh web host (web-2) formats LUKS at first boot once it is reborn raw (ADR-263, #9372).
+  # Not in the push-apply `-target` allow-list, so this adds no merge-apply behavior.
   #
   # `ignore_changes = [format]` is CREATION-ONLY and load-bearing; it is pinned together with the absent
   # `format` above by fresh-boot-parity.test.sh section 19. MEASURED on hcloud 1.63.0 (offline plan, 2026-10-01):
@@ -2703,7 +2879,7 @@ resource "hcloud_volume" "workspaces" {
 }
 
 resource "hcloud_volume_attachment" "workspaces" {
-  for_each  = var.web_hosts
+  for_each  = local.plaintext_workspaces_hosts
   volume_id = hcloud_volume.workspaces[each.key].id
   server_id = hcloud_server.web[each.key].id
 }

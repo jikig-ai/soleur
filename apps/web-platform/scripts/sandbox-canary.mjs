@@ -32,9 +32,11 @@ import { spawnSync } from "node:child_process";
 import {
   chmodSync,
   closeSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   openSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   renameSync,
@@ -42,11 +44,24 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const DEFAULT_FIXTURE_URL = new URL(
   "../infra/sandbox-canary-argv.json",
+  import.meta.url,
+);
+const DEFAULT_OUTER_FIXTURE_URL = new URL(
+  "../infra/agent-outer-wrap-argv.json",
+  import.meta.url,
+);
+// The SHARED realized-isolation payload run inside the outer wrap — the same
+// assertion set the founder check (tenant-isolation-probe.sh) and the test
+// suite use, so the canary cannot drift green while the deployed guard
+// regresses (#5863 T3.2). Passed to `bash -s` on stdin: nothing under
+// /app/scripts is bound inside the wrap.
+const INNER_PROBE_URL = new URL(
+  "./tenant-isolation-inner-probe.sh",
   import.meta.url,
 );
 
@@ -56,21 +71,20 @@ const DEFAULT_FIXTURE_URL = new URL(
 // ---------------------------------------------------------------------------
 
 /**
- * Map a replayed bwrap outcome to a canary verdict.
+ * Shared classifier arms for BOTH replays — spawn errors, bwrap's own
+ * refusal/EPERM stderr signatures, and the generic-exit tail. Kept in ONE
+ * place so a new reason never lands on only one arm (the inner/outer
+ * classifiers re-spelled these verbatim until review flagged the drift).
  *
  * Exit-code classification is the false-rollback guard (#4941): ONLY a bwrap
  * "Operation not permitted" (EPERM — the #5873 seccomp/userns-denial shape) is
  * `sandbox_broken`; a missing binary, OOM, or any other non-zero exit is
  * `canary_infra_error` (non-blocking — never rolls back).
  *
- * @param {{ bwrapExitCode?: number | null, bwrapStderr?: string, spawnErrorCode?: string }} [args]
- * @returns {{ verdict: "pass" | "sandbox_broken" | "canary_infra_error", reason: string }}
+ * @returns {{verdict: string, reason: string} | null} a verdict when the
+ *   shared arms decide, else null (arm-specific logic continues).
  */
-export function classifyReplayVerdict({
-  bwrapExitCode,
-  bwrapStderr = "",
-  spawnErrorCode,
-} = {}) {
+function classifyShared({ bwrapExitCode, bwrapStderr = "", spawnErrorCode }) {
   if (spawnErrorCode === "ENOENT") {
     return { verdict: "canary_infra_error", reason: "bwrap_spawn_enoent" };
   }
@@ -80,28 +94,45 @@ export function classifyReplayVerdict({
       reason: `bwrap_spawn_${String(spawnErrorCode).toLowerCase()}`,
     };
   }
-  if (bwrapExitCode === 0) {
-    return { verdict: "pass", reason: "ok" };
-  }
-  // #8752: our own shim's refusal marker (exit 65, `bwrap-shim:` on stderr) is
-  // a deterministic deployed-hardening defect, not the flake class
-  // `canary_infra_error` exists to absorb — escalate it as sandbox_broken.
-  if (/bwrap-shim:/.test(bwrapStderr)) {
-    return { verdict: "sandbox_broken", reason: "bwrap_shim_refused" };
-  }
-  // bwrap merges its userns/seccomp stderr into this stream; the EPERM phrase is
-  // the load-bearing signature (Phase-0 spike; matches the seccomp `unshare`
-  // denial that took down the Concierge sandbox for all tenants under SDK 0.3.x).
-  if (/operation not permitted/i.test(bwrapStderr)) {
+  if (bwrapExitCode !== 0) {
+    // #8752: our own shim's refusal marker (exit 65, `bwrap-shim:` on stderr)
+    // is a deterministic deployed-hardening defect, not the flake class
+    // `canary_infra_error` exists to absorb — escalate it as sandbox_broken.
+    if (/bwrap-shim:/.test(bwrapStderr)) {
+      return { verdict: "sandbox_broken", reason: "bwrap_shim_refused" };
+    }
+    // bwrap merges its userns/seccomp stderr into this stream; the EPERM
+    // phrase is the load-bearing signature (Phase-0 spike; matches the
+    // seccomp `unshare` denial that took down the Concierge sandbox for all
+    // tenants under SDK 0.3.x).
+    if (/operation not permitted/i.test(bwrapStderr)) {
+      return {
+        verdict: "sandbox_broken",
+        reason: "bwrap_operation_not_permitted",
+      };
+    }
     return {
-      verdict: "sandbox_broken",
-      reason: "bwrap_operation_not_permitted",
+      verdict: "canary_infra_error",
+      reason: `bwrap_exit_${bwrapExitCode ?? "null"}`,
     };
   }
-  return {
-    verdict: "canary_infra_error",
-    reason: `bwrap_exit_${bwrapExitCode ?? "null"}`,
-  };
+  return null;
+}
+
+/**
+ * Map a replayed bwrap outcome to a canary verdict.
+ *
+ * @param {{ bwrapExitCode?: number | null, bwrapStderr?: string, spawnErrorCode?: string }} [args]
+ * @returns {{ verdict: "pass" | "sandbox_broken" | "canary_infra_error", reason: string }}
+ */
+export function classifyReplayVerdict({
+  bwrapExitCode,
+  bwrapStderr = "",
+  spawnErrorCode,
+} = {}) {
+  const shared = classifyShared({ bwrapExitCode, bwrapStderr, spawnErrorCode });
+  if (shared) return shared;
+  return { verdict: "pass", reason: "ok" };
 }
 
 /**
@@ -198,19 +229,27 @@ export function buildBwrapInvocation(fixture) {
 //     CLONE_NEWNS needs a CAP_SYS_ADMIN it does not hold: EPERM on every
 //     kernel, measured 2026-10-06 / bwrap 0.12. A real fork is the
 //     blanket-clone-deny tripwire.)
-//   fd_census — `ls /proc/self/fd | wc -l` inside MUST stay within
-//     `4 + #(fd-valued argv options)` — stdio 0-2, ls's own transient dir fd,
-//     plus any fd the SETUP argv itself references (none today; the
-//     vocabulary below stays in step with the shim's preserve-set). Larger =
-//     an inherited fd leaked into the sandbox → `fd_hygiene_bypass`. `ls`
-//     (not a glob echo) so a missing /proc bind fails LOUD (ls exit 2 →
-//     infra error) instead of a vacuous `$#`=1 green.
+//   proc_mask — /proc inside MUST be pidns-scoped, not the host's (the
+//     shim's tail `--proc /proc`, #9723). Asserts the CANARY'S OWN host pid
+//     is absent in-sandbox AND /proc/self/environ exists (the self-view the
+//     vendor's apply-seccomp helper needs). Host procfs re-exposed by the
+//     vendor tail `--bind /proc /proc` lands as `proc_mask_defeated`
+//     (sandbox_broken), not infra.
+//   fd_census — procfs-free fd enumeration (dup-test every fd 3..255; the
+//     realized mask takes /proc/self/fd away) MUST stay within
+//     `3 + #(fd-valued argv options)` — stdio 0-2, plus any fd the SETUP argv
+//     itself references (none today; the vocabulary below stays in step with
+//     the shim's preserve-set). Larger = an inherited fd leaked into the
+//     sandbox → `fd_hygiene_bypass`. Each fd is probed by a redirect in a
+//     subshell — no /proc dependency — so the census keeps discriminating
+//     under the mask.
 //   args_fd_transport — the SDK's real spawn shape: setup argv rides
-//     `--args <fd>` NUL-separated on a pipe the shim's preserve-set must
-//     keep. Replay that shape with the fd carrying the same setup argv so a
-//     sweep regression that closes it lands HERE — not on every session's
-//     first Bash call (pre-merge tests cover `--args` against a stub;
-//     nothing else covers it at deploy time).
+//     `--args <fd>` NUL-separated on a pipe the shim consumes and re-emits
+//     on a fresh fd (the #9723 mask splice needs the content). Replay that
+//     shape with the fd carrying the same setup argv so a regression in the
+//     read/re-emit path lands HERE — not on every session's first Bash call
+//     (pre-merge tests cover `--args` against a stub; nothing else covers it
+//     at deploy time).
 // ---------------------------------------------------------------------------
 
 // bwrap options whose FIRST argument is an fd NUMBER — the complete
@@ -301,6 +340,10 @@ export function classifyForkProbe({ status, stderr = "", errorCode } = {}) {
   return null;
 }
 
+/** stdio 0-2 baseline for the fd census — exported so tests pin the impl
+ *  constant rather than re-deriving the formula. */
+export const FD_CENSUS_BASELINE = 3;
+
 /**
  * Classify the in-sandbox fd census against `fdLimit`. Returns a verdict or
  * null.
@@ -324,8 +367,8 @@ export function classifyFdCensusProbe({ status, stdout = "", errorCode } = {}, f
     };
   }
   const n = Number(stdout.trim());
-  // Lower bound too: stdio 0-2 always exist, so n < 3 means the census read
-  // nothing real (an absent /proc glob echoes back empty — a vacuous pass).
+  // Lower bound too: the enumerator reports 3 even if every probe fails, so
+  // n < 3 means the output was never produced by it (a vacuous pass).
   if (!Number.isInteger(n) || n < 3) {
     return { verdict: "canary_infra_error", reason: "fd_census_unparseable", probe: "fd_census" };
   }
@@ -335,8 +378,68 @@ export function classifyFdCensusProbe({ status, stdout = "", errorCode } = {}, f
   return null;
 }
 
-/** The three probes, in order; `classify` returns a verdict or null (ok). */
+/**
+ * Classify the /proc mask probe. Returns a verdict or null (masked).
+ * Discrimination mirrors the fork probe: a signal kill or a bwrap/exec setup
+ * line is infra; a clean non-zero payload exit means real procfs was visible
+ * in-sandbox — the vendor tail bind defeated the mask (#9723).
+ *
+ * @param {{ status?: number | null, stderr?: string, errorCode?: string }} res
+ */
+export function classifyProcMaskProbe({ status, stderr = "", errorCode } = {}) {
+  if (errorCode) {
+    return {
+      verdict: "canary_infra_error",
+      reason: `proc_mask_spawn_${String(errorCode).toLowerCase()}`,
+      probe: "proc_mask",
+    };
+  }
+  if (status === null || /(^|\n)bwrap:|execvp |No such file/.test(`${stderr}`)) {
+    return {
+      verdict: "canary_infra_error",
+      reason: `proc_mask_exit_${status === null ? "null" : status}`,
+      probe: "proc_mask",
+    };
+  }
+  if (status !== 0) {
+    // Either of the probe's halves failed: host-pid visible (mask defeated)
+    // OR /proc/self gone (procfs missing entirely — e.g. an empty tmpfs).
+    // The reason name keys on the defect class this probe exists to catch;
+    // stderr carries the probe's detail if the mechanism was different.
+    return { verdict: "sandbox_broken", reason: "proc_mask_defeated", probe: "proc_mask" };
+  }
+  return null;
+}
+
+// The procfs-free fd enumerator: dup-test every fd 3..255 in a subshell — an
+// open fd accepts `<&` (read) or `>&` (write); a closed one fails both.
+// Stdio 0-2 are assumed present (the n<3 lower bound in the classifier stays
+// the "census read nothing" tripwire) so a weird stdin posture cannot flake.
+// No external binaries — /bin/sh builtins only, safe under the masked /proc.
+// Bounds: 255 covers every fd the SDK spawn shape can hand down (well under
+// RLIMIT_NOFILE); an O_PATH fd fails both arms and reads as closed — an
+// under-count (toward ok), never a false leak verdict, and argv-referenced
+// fds above the bound still widen the classifier's fdLimit via
+// countFdValuedOptions.
+const FD_ENUM_SCRIPT =
+  "n=3; fd=3; " +
+  "while [ $fd -le 255 ]; do " +
+  "if (: <&$fd) 2>/dev/null || (: >&$fd) 2>/dev/null; then n=$((n+1)); fi; " +
+  "fd=$((fd+1)); " +
+  "done; echo $n";
+
+/** The probes, in order; `classify` returns a verdict or null (ok). */
 const HARDENING_PROBES = [
+  {
+    // #9723 — mask check FIRST: the cheapest tripwire on the vendor tail bind.
+    // process.pid is the canary's own host-side pid: present under a bound
+    // host procfs, absent under the pidns-scoped `--proc` the shim installs.
+    // The `self/environ` half pins that the procfs is real (not missing) —
+    // the sandbox's own apply-seccomp path needs /proc/self/fd to exist.
+    argv: ["/bin/sh", "-c",
+      `test ! -d /proc/${process.pid} && test -e /proc/self/environ`],
+    classify: classifyProcMaskProbe,
+  },
   {
     argv: ["/usr/bin/unshare", "-U", "/usr/bin/true"],
     classify: classifyUsernsDenyProbe,
@@ -346,7 +449,7 @@ const HARDENING_PROBES = [
     classify: classifyForkProbe,
   },
   {
-    argv: ["/bin/sh", "-c", "/usr/bin/ls /proc/self/fd | /usr/bin/wc -l"],
+    argv: ["/bin/sh", "-c", FD_ENUM_SCRIPT],
     classify: classifyFdCensusProbe,
     leakFd: true,
   },
@@ -360,7 +463,9 @@ const HARDENING_PROBES = [
  * Exported for the live real-bwrap row in test/bwrap-shim.test.ts.
  */
 export function runHardeningProbes(setupArgv) {
-  const fdLimit = 4 + countFdValuedOptions(setupArgv);
+  // Baseline 3 = stdio only (the dup-test enumerator opens nothing of its
+  // own); fd-valued setup options are the argv-driven slack.
+  const fdLimit = FD_CENSUS_BASELINE + countFdValuedOptions(setupArgv);
   for (const probe of HARDENING_PROBES) {
     // fd_census carries a deliberately UNREFERENCED fd (child fd 3): swept by
     // the shim ⇒ count stays at the bound; a sweep regression ⇒ +1 over the
@@ -460,15 +565,6 @@ export function runArgsFdTransportProbe(setupArgv) {
   }
 }
 
-/**
- * Deterministic sort for capture normalization. `enumerateSiblingDenyPaths`
- * returns readdir order, which is not stable across runners; sorting makes the
- * captured argv byte-reproducible so `--verify`'s diff does not false-fail.
- */
-export function sortDenyPaths(paths) {
-  return [...paths].sort();
-}
-
 // ---------------------------------------------------------------------------
 // CAPTURE-side pure logic (#5913 / ADR-079 deferral B). LLM-free: the model
 // turn decides only WHETHER the SDK builds+spawns bwrap; these functions decide
@@ -520,9 +616,12 @@ export function parseShimSetupArgv(rawArgv) {
  * runtime, not here. Given the same `base`, always returns byte-identical
  * paths — the property that makes the captured argv reproducible.
  *
- * The own workspace is the ONLY entry under `root`, so
- * `enumerateSiblingDenyPaths` returns exactly `["/proc"]` and the emitted argv
- * is deterministic by construction (no readdir-order hazard, no sort needed).
+ * The own workspace is the ONLY entry under `root`. Under the #5862 constant
+ * parent deny the deny list is `["/tmp/soleur-sandbox-canary", <c4>, "/proc"]`
+ * regardless of contents; the zero-sibling hermetic invariant still matters
+ * because the vendor's deny-then-restore emits a restore bind PER covered
+ * allowWrite path — extra entries under root would add non-deterministic
+ * restore binds to the captured argv.
  *
  * @param {string} [base]
  * @returns {{ root: string, ownWorkspacePath: string, prepDirs: string[] }}
@@ -1005,6 +1104,321 @@ function runReplay(fixtureUrl) {
   return 0;
 }
 
+// ---------------------------------------------------------------------------
+// Outer-wrap arm (#5863, arm F). The inner replay above proves the SDK's
+// captured Bash-tier sandbox builds; this arm replays the SELF-AUTHORED
+// outer mount table (buildOuterWrapArgv → the committed
+// agent-outer-wrap-argv.json fixture) inside the canary container and runs
+// the shared isolation payload in it. It answers two questions the inner
+// arm cannot:
+//   1. does the file-cap'd /usr/bin/bwrap still build the mountns-only wrap
+//      on THIS deploy (setcap + --cap-add SYS_ADMIN posture), and
+//   2. does the realized namespace actually exclude sibling workspaces
+//      (Guard 1's realized-state property), measured by the same payload
+//      the founder check runs.
+// Report-only at first deploy (wg-dark-launch-deploy-gates): ci-deploy.sh
+// records the verdict + pages Sentry on sandbox_broken but never gates.
+// ---------------------------------------------------------------------------
+
+/**
+ * Validate the outer-wrap fixture (`outer-bwrap-v1`). Unlike the captured
+ * canonical fixture this one is SELF-AUTHORED (buildOuterWrapArgv output
+ * pinned by Guard 2), so status is "generated", not "captured".
+ * @param {unknown} obj
+ * @returns {{ schema: string, status: string, prepDirs: string[], prepFiles: string[], bwrapSetupArgv: string[] }}
+ */
+export function validateOuterWrapFixture(obj) {
+  const err = (m) => new Error(`outer-wrap fixture invalid: ${m}`);
+  if (obj == null || typeof obj !== "object") throw err("not an object");
+  const f = obj;
+  if (f.schema !== "outer-bwrap-v1") throw err(`schema ${f.schema}`);
+  if (f.status !== "generated" && f.status !== "captured") throw err(`status ${f.status}`);
+  for (const key of ["prepDirs", "prepFiles", "bwrapSetupArgv"]) {
+    if (!Array.isArray(f[key]) || !f[key].every((t) => typeof t === "string")) {
+      throw err(`${key} must be a string array`);
+    }
+  }
+  // Prep entries MUST carry {{ROOT}} — the replay mkdir/touches them inside
+  // the canary container (which mounts the shared /workspaces volume rw);
+  // a bare absolute path would write outside the scratch root.
+  for (const key of ["prepDirs", "prepFiles"]) {
+    if (!f[key].every((t) => t.startsWith("{{ROOT}}"))) {
+      throw err(`${key} entries must start with {{ROOT}}`);
+    }
+  }
+  if (f.bwrapSetupArgv.length === 0) throw err("empty setup argv");
+  if (f.bwrapSetupArgv[f.bwrapSetupArgv.length - 1] !== "--") {
+    throw err("setup argv must end with '--' (it is followed by the payload)");
+  }
+  return f;
+}
+
+/**
+ * Substitute the outer fixture's `{{ROOT}}` placeholder. The whole derived
+ * state tree (workspace, home, plugin root) hangs off one scratch root so
+ * the replay creates it in one mkdtemp.
+ * @param {string[]} tokens
+ * @param {string} root
+ */
+export function substituteOuterRoot(tokens, root) {
+  return tokens.map((t) => {
+    const sub = t.replaceAll("{{ROOT}}", root);
+    // Traversal guard (same as normalizeCapturedArgv's checkNoTraversal): a
+    // fixture token like `{{ROOT}}/../x` substitutes into an escape path for
+    // prep dirs or bind sources.
+    if (t.includes("{{ROOT}}") && /(^|\/)\.\.(\/|$)/.test(sub)) {
+      throw new Error(`outer fixture path escapes root after substitution: ${t}`);
+    }
+    return sub;
+  });
+}
+
+/** The own-workspace path inside a substituted outer argv — the LAST
+ *  `--chdir` target (same convention as the founder probe). */
+export function outerWrapChdirTarget(argv) {
+  const i = argv.lastIndexOf("--chdir");
+  return i !== -1 ? argv[i + 1] : undefined;
+}
+
+/**
+ * Classify an outer-wrap replay. Distinguishes THREE failure shapes:
+ *   - EPERM building the mountns → sandbox_broken (the file-cap posture
+ *     regressed — the #5863 arm-F mechanism itself),
+ *   - the shared payload's FAIL markers → sandbox_broken (isolation
+ *     property violated — a sibling-bearing mount reached the namespace),
+ *   - anything else non-zero/missing → canary_infra_error (the #4941
+ *     false-rollback guard).
+ * @param {{ bwrapExitCode?: number | null, bwrapStdout?: string, bwrapStderr?: string, spawnErrorCode?: string }} [args]
+ */
+export function classifyOuterWrapReplayVerdict({
+  bwrapExitCode,
+  bwrapStdout = "",
+  bwrapStderr = "",
+  spawnErrorCode,
+} = {}) {
+  if (spawnErrorCode) {
+    return classifyShared({ bwrapExitCode, bwrapStderr, spawnErrorCode });
+  }
+  if (bwrapExitCode === 0 && /^isolation_ok$/m.test(bwrapStdout)) {
+    // An isolation green built on the implicit-userns fallback is the WRONG
+    // mechanism: the arm needs the file-cap'd mountns (an outer userns is
+    // fatal to the inner sandbox — Phase 0 measurement). The deploy canary
+    // must report the elevation it actually took, not just that the table
+    // held — pass requires an explicit `elevation=privileged`; `userns` OR a
+    // missing marker (drifted payload) is sandbox_broken. The founder check
+    // tolerates userns explicitly; the canary does not.
+    if (/^elevation=privileged$/m.test(bwrapStdout)) {
+      return { verdict: "pass", reason: "ok" };
+    }
+    return {
+      verdict: "sandbox_broken",
+      reason: /^elevation=userns$/m.test(bwrapStdout)
+        ? "wrong_elevation_userns"
+        : "wrong_elevation_unreported",
+    };
+  }
+  // The payload's own verdict markers — a realized isolation VIOLATION is a
+  // sandbox verdict, never infra flake.
+  if (/^FAIL:/m.test(bwrapStdout) || bwrapStdout.includes("isolation_fail")) {
+    return { verdict: "sandbox_broken", reason: "isolation_probe_failed" };
+  }
+  const shared = classifyShared({ bwrapExitCode, bwrapStderr, spawnErrorCode });
+  if (shared) return shared;
+  // bwrap ran the payload but it produced no verdict line — the probe
+  // could not have run its assertions; not an isolation signal.
+  return { verdict: "canary_infra_error", reason: "probe_output_missing" };
+}
+
+/**
+ * `--replay-outer` (deploy-time, report-only): replay the committed
+ * self-authored outer-wrap argv verbatim inside the canary container and
+ * run the shared isolation payload in the resulting namespace.
+ * `/usr/bin/bwrap` absolute — the same privileged binary the production
+ * spawn uses (never the PATH shim).
+ */
+function runOuterReplay(fixtureUrl) {
+  let fixture;
+  try {
+    fixture = validateOuterWrapFixture(
+      JSON.parse(readFileSync(fixtureUrl, "utf8")),
+    );
+  } catch (err) {
+    const code = err && err.code === "ENOENT" ? "fixture_missing" : "fixture_invalid";
+    emitVerdict({ verdict: "canary_infra_error", reason: code, arm: "outer-wrap" });
+    return 0;
+  }
+
+  const root = mkdtempSync(join(tmpdir(), "canary-outer-wrap-"));
+  try {
+    // Prep the fixture's declared tree, then the sibling the probe asserts
+    // against (a REPLAY-time addition — never part of the mount table).
+    for (const d of substituteOuterRoot(fixture.prepDirs, root)) {
+      mkdirSync(d, { recursive: true });
+    }
+    for (const f of substituteOuterRoot(fixture.prepFiles, root)) {
+      mkdirSync(dirname(f), { recursive: true });
+      try {
+        writeFileSync(f, "", { flag: "wx" });
+      } catch (err) {
+        if (err?.code !== "EEXIST") throw err;
+      }
+    }
+    const argv = substituteOuterRoot(fixture.bwrapSetupArgv, root);
+    const own = outerWrapChdirTarget(argv);
+    // strict containment — a shared string prefix (`${root}XYZ`) is not under root.
+    if (!own || (own !== root && !own.startsWith(root + "/"))) {
+      emitVerdict({
+        verdict: "canary_infra_error",
+        reason: "fixture_no_chdir_target",
+        arm: "outer-wrap",
+      });
+      return 0;
+    }
+    const parent = dirname(own);
+    const sibling = join(parent, "ws-bbbb");
+    mkdirSync(sibling, { recursive: true });
+    writeFileSync(join(sibling, "marker.txt"), "sibling-canary\n");
+
+    const probe = readFileSync(INNER_PROBE_URL, "utf8");
+    const res = spawnSync(
+      "/usr/bin/bwrap",
+      [...argv, "/bin/bash", "-s", "--", parent, own, sibling],
+      { input: probe, encoding: "utf8", timeout: 60_000 },
+    );
+    const verdict = classifyOuterWrapReplayVerdict({
+      bwrapExitCode: res.status,
+      bwrapStdout: `${res.stdout ?? ""}`,
+      bwrapStderr: `${res.stderr ?? ""}`,
+      spawnErrorCode: res.error?.code,
+    });
+    emitVerdict({ ...verdict, arm: "outer-wrap" });
+    return 0;
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+/**
+ * `--smoke-outer <appRoot>` (CI, capture-gate job): the dep-bump smoke for
+ * #5863 T3.6. The vendored CLI's fs needs are empirical — every SDK bump
+ * can add a path the derived mount table misses — so on a bump we exec the
+ * REAL cli inside the REAL buildOuterWrapArgv table and assert it launches.
+ * The in-image env has no file-cap'd bwrap, so `--unshare-user` is added
+ * out front (the outer wrap itself stays mount-only; the smoke does not
+ * exercise the inner sandbox, which is the only thing an outer userns
+ * breaks — plan Phase-0 spike).
+ */
+async function runOuterSmoke(appRoot) {
+  const root = mkdtempSync(join(tmpdir(), "canary-outer-smoke-"));
+  try {
+    const ws = join(root, "workspaces", "ws-smoke");
+    const home = join(root, "home");
+    const plugin = join(root, "plugin");
+    mkdirSync(ws, { recursive: true });
+    mkdirSync(home, { recursive: true });
+    mkdirSync(plugin, { recursive: true });
+
+    let buildOuterWrapArgv;
+    try {
+      ({ buildOuterWrapArgv } = await import(
+        new URL("../server/agent-outer-wrap.ts", import.meta.url).href
+      ));
+    } catch (err) {
+      emitVerdict({
+        verdict: "canary_infra_error",
+        reason: `outer_wrap_import_${err?.code ?? "failed"}`,
+        arm: "outer-wrap",
+      });
+      return 0;
+    }
+
+    let argv;
+    try {
+      argv = buildOuterWrapArgv({
+        workspacePath: ws,
+        home,
+        pluginPath: plugin,
+        appRoot,
+      });
+    } catch {
+      emitVerdict({
+        verdict: "canary_infra_error",
+        reason: "outer_wrap_argv_build_failed",
+        arm: "outer-wrap",
+      });
+      return 0;
+    }
+
+    // The vendored CLI the SDK spawns — the dep-bump surface under test.
+    // `bin/claude.exe` is only the "native binary not installed" stub; the
+    // SDK resolves the platform-native package directly, so the smoke must
+    // too: @anthropic-ai/claude-code-<platform>-<arch>/claude. Scan for a
+    // sibling package as fallback so a rename is loud, not a silent miss.
+    const nmAi = join(appRoot, "node_modules", "@anthropic-ai");
+    const named = join(
+      nmAi,
+      `claude-code-${process.platform}-${process.arch}`,
+      "claude",
+    );
+    let cli = existsSync(named) ? named : undefined;
+    if (!cli) {
+      try {
+        for (const d of readdirSync(nmAi)) {
+          const cand = join(nmAi, d, "claude");
+          if (d.startsWith("claude-code-") && existsSync(cand)) {
+            cli = cand;
+            break;
+          }
+        }
+      } catch {
+        // nmAi unreadable — cli stays undefined, infra verdict below.
+      }
+    }
+    if (!cli) {
+      emitVerdict({
+        verdict: "canary_infra_error",
+        reason: "cli_binary_missing",
+        arm: "outer-wrap",
+      });
+      return 0;
+    }
+
+    // HOME must point at the bound scratch home — inheriting /root (the
+    // in-image user) leaves the CLI's config dir unmounted → cli_exit_1.
+    const res = spawnSync("/usr/bin/bwrap", ["--unshare-user", ...argv, cli, "--version"], {
+      encoding: "utf8",
+      timeout: 60_000,
+      env: { ...process.env, HOME: home, TMPDIR: "/tmp" },
+    });
+    let verdict;
+    if (res.error) {
+      verdict = {
+        verdict: "canary_infra_error",
+        reason: `bwrap_spawn_${String(res.error?.code ?? "error").toLowerCase()}`,
+      };
+    } else if (res.status === 0) {
+      verdict = { verdict: "smoke_ok", reason: "ok" };
+    } else if (/operation not permitted|no permissions to create new namespace/i.test(`${res.stderr ?? ""}`)) {
+      // In-image envs that forbid unprivileged userns land here (bwrap's
+      // denial text is "No permissions to create new namespace" — NOT the
+      // EPERM phrase; both shapes must classify) — infra, not a mount-table
+      // defect (the deploy replay is the EPERM signal).
+      verdict = { verdict: "canary_infra_error", reason: "bwrap_operation_not_permitted" };
+    } else {
+      // The CLI started and failed INSIDE the wrap — the case this smoke
+      // exists for: the bumped CLI needs a path the table does not bind.
+      verdict = {
+        verdict: "smoke_fail",
+        reason: `cli_exit_${res.status ?? "null"}`,
+      };
+    }
+    emitVerdict({ ...verdict, arm: "outer-wrap" });
+    return 0;
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 // Reserved exit code for a capture-MECHANISM failure (model never spawned
 // bwrap, query() threw, import failed, secret-scrub reject). Distinct from the
 // taken codes — 0 (replay verdict-is-payload), 2 (env/usage error), 3 (legacy
@@ -1121,10 +1535,17 @@ export async function doCapture({
   const captureFile = join(shimDir, "captured-argv.jsonl");
   const prevPath = process.env.PATH;
   const prevWorkspacesRoot = process.env.WORKSPACES_ROOT;
+  const prevWorktreeRoot = process.env.WORKTREE_ROOT;
   const prevC4Staging = process.env.C4_RENDER_STAGING_ROOT;
+  // #9725: the ADR-068 git-data root is a SECOND unconditional tenant deny
+  // landing. Pin it to a fixed /tmp canary path (created below) so the
+  // captured argv carries it byte-deterministically — an unset var would
+  // capture the host default (or be skipped by the vendor when absent).
+  const worktreeRootDir = join(CANARY_ROOT_BASE, "soleur-sandbox-canary-worktrees");
   // #8623: point the C4 staging root (a denyRead entry) at a throwaway dir so
   // the projection can placeholder it — never under the hermetic workspaces
-  // root, where it would become a sibling and break the zero-sibling invariant.
+  // root, where it would add a second covered path to the vendor's
+  // deny-then-restore set and break byte-determinism.
   const c4StagingDir = realpathSync(mkdtempSync(join(tmpdir(), "soleur-canary-c4-")));
   // #9614/#9618: the bundled CLI derives its bridge-spawn dir as
   // `join(homedir(), ".claude", "bridge-spawn")` — a raw homedir() join with no
@@ -1135,12 +1556,15 @@ export async function doCapture({
 
   try {
     process.env.C4_RENDER_STAGING_ROOT = c4StagingDir;
-    // Hermetic zero-sibling root: own workspace is the ONLY entry under root, so
-    // enumerateSiblingDenyPaths → denyRead:["/proc"] and the argv is byte-det.
+    // Hermetic zero-sibling root: own workspace is the ONLY entry under root,
+    // so the vendor's per-path restore set (deny-then-restore under the #5862
+    // constant parent deny) is deterministic and the argv is byte-det.
     mkdirSync(ownWorkspacePath, { recursive: true });
+    mkdirSync(worktreeRootDir, { recursive: true });
     const resolvedRoot = realpathSync(root);
     const resolvedOwn = realpathSync(ownWorkspacePath);
     process.env.WORKSPACES_ROOT = resolvedRoot;
+    process.env.WORKTREE_ROOT = worktreeRootDir;
 
     // bwrap shim FIRST on PATH (mktemp -d 0700 — a predictable /tmp shim path
     // is a pre-seeding/symlink vector; security-sentinel).
@@ -1228,8 +1652,15 @@ export async function doCapture({
     else process.env.PATH = prevPath;
     if (prevWorkspacesRoot === undefined) delete process.env.WORKSPACES_ROOT;
     else process.env.WORKSPACES_ROOT = prevWorkspacesRoot;
+    if (prevWorktreeRoot === undefined) delete process.env.WORKTREE_ROOT;
+    else process.env.WORKTREE_ROOT = prevWorktreeRoot;
     if (prevC4Staging === undefined) delete process.env.C4_RENDER_STAGING_ROOT;
     else process.env.C4_RENDER_STAGING_ROOT = prevC4Staging;
+    try {
+      rmSync(worktreeRootDir, { recursive: true, force: true });
+    } catch {
+      /* best-effort */
+    }
     try {
       rmSync(c4StagingDir, { recursive: true, force: true });
     } catch {
@@ -1407,16 +1838,24 @@ async function runCapture(fixtureUrl, { verify = false } = {}) {
 
 async function main(argv) {
   const mode = argv.find((a) => a.startsWith("--"))?.slice(2) ?? "replay";
-  const fixtureArg = argv.find((a) => !a.startsWith("--"));
-  const fixtureUrl = fixtureArg
-    ? pathToFileURL(fixtureArg)
+  const positional = argv.find((a) => !a.startsWith("--"));
+  const defaultFixture =
+    mode === "replay-outer" ? DEFAULT_OUTER_FIXTURE_URL : DEFAULT_FIXTURE_URL;
+  const fixtureUrl = positional
+    ? pathToFileURL(positional)
     : (process.env.SANDBOX_CANARY_FIXTURE
         ? pathToFileURL(process.env.SANDBOX_CANARY_FIXTURE)
-        : DEFAULT_FIXTURE_URL);
+        : defaultFixture);
 
   switch (mode) {
     case "replay":
       return runReplay(fixtureUrl);
+    case "replay-outer":
+      return runOuterReplay(fixtureUrl);
+    case "smoke-outer":
+      // Positional is the app root (default /app — the prod image layout;
+      // the in-image verify passes /build).
+      return runOuterSmoke(positional ?? "/app");
     case "capture":
       return runCapture(fixtureUrl, { verify: false });
     case "verify":

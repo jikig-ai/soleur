@@ -152,6 +152,18 @@ Live standing alarms over this source:
   is back. Defined in `apps/web-platform/infra/betterstack-logs-alerts.tf`; drift guard
   `apps/web-platform/test/infra/ghcr-blocked-alert.test.sh`. Decode, silent states and per-host repair:
   [`cron-egress-blocked.md`](./cron-egress-blocked.md#hosts-file-deny-lost-better-stack-alert).
+- **`logtail_exploration_alert.egress_gw_deny_spike`** (#9534, `higher_than 20` over 300 s, missing
+  data counts as zero): `soleur-egress-gw-deny-spike-prd`. Pages on sustained Squid `TCP_DENIED`
+  volume from `CONTAINER_NAME=soleur-egress-gw` — the deny-class signal for sessions attempting
+  CONNECT to metadata/RFC1918/ULA destinations. Dark-launch baseline is ~1 row per 5-min probe pair,
+  so 20 clears only a real burst. Decode + revocation path:
+  [`cron-egress-blocked.md`](./cron-egress-blocked.md#egress-gateway-better-stack-alerts).
+- **`logtail_exploration_alert.egress_gw_probe_silent`** (#9534, `lower_than 1` over 900 s, missing
+  data counts as zero): `soleur-egress-gw-probe-silent-prd`. Pages when the resolver's
+  `egress_gw_probe` heartbeat (`SYSLOG_IDENTIFIER=egress-gw-probe`, one row per 5 min) has been
+  absent for 15+ min — a dead timer or dead gateway can never read as green. Defined in
+  `apps/web-platform/infra/betterstack-logs-alerts.tf`. Decode:
+  [`cron-egress-blocked.md`](./cron-egress-blocked.md#egress-gateway-better-stack-alerts).
 - **`scheduled-zot-restart-loop.yml`** (#6291; hourly, dispatched by the web-server watchdog clock since #8495 with a GHA-cron fallback — see `inngest-server.md` "How the external watchdogs are triggered") — the zot registry restart-loop
   recurrence alarm. Reads the `SOLEUR_ZOT_DISK` marker, fires a deduped `[ci/zot-restart-loop]`
   issue on a newest-`boot_id` OOM/crash-loop and a `[ci/zot-telemetry-silent]` issue if the
@@ -242,7 +254,9 @@ List existing connections: `GET https://logs.betterstack.com/api/v1/connections`
 ## Query mechanics
 
 - Endpoint: `POST https://$BETTERSTACK_QUERY_HOST?output_format_pretty_row_numbers=0`, Basic auth, body = SQL, `Content-type: plain/text`.
-- **(#7898) The destination is PINNED, and so are the table arguments.** `scripts/betterstack-query.sh` extracts the authority from `BETTERSTACK_QUERY_HOST` and refuses anything that is not `*.betterstackdata.com` (exit 2) before it attaches the credential — `curl -u` sends Basic auth preemptively on the first request, so an unpinned host hands the ClickHouse read credential to whoever set the variable. `BS_TABLE` / `BS_TABLE_S3` (env or `--table` / `--table-s3`) must match `^[A-Za-z0-9_]+$`, because they interpolate into `remote()` and `s3Cluster()` whose leading arguments are an address and a URL; `--limit` must be numeric.
+- **(#7898) The destination is PINNED, and so are the table arguments.** `scripts/betterstack-query.sh` extracts the authority from `BETTERSTACK_QUERY_HOST` and refuses anything that is not `*.betterstackdata.com` (exit 2) before it attaches the credential — curl sends Basic auth preemptively on the first request, so an unpinned host hands the ClickHouse read credential to whoever set the variable. (Since #9597 the pair rides curl's stdin as one `user = "USER:PASS"` config line, no longer `-u USER:PASS` on the argument list, which every local user reads from `/proc/<pid>/cmdline`.) `BS_TABLE` / `BS_TABLE_S3` (env or `--table` / `--table-s3`) must match `^[A-Za-z0-9_]+$`, because they interpolate into `remote()` and `s3Cluster()` whose leading arguments are an address and a URL; `--limit` must be numeric.
+  - **(#9597) Exit 2 is also a credential-SHAPE refusal, not only the destination pin.** The reader checks the two values before it builds the stdin config line, because a quote, a backslash or a newline changes how curl parses `user = "..."` (a newline starts a second directive). It refuses any control character, a double quote, a backslash, a colon in `BETTERSTACK_QUERY_USERNAME` (the first colon is the user/password separator) and an empty value (empties normally exit 3 first, at the credential guard). Nothing is sent. stderr carries one line that names only the VARIABLE (never a value) and one marker line, `SOLEUR_CREDENTIAL_REFUSED script=betterstack-query reason=control_char` or `reason=token_shape`. `scripts/lib/betterstack-read-classify.sh` files it under `reader-refusal` with the other rc 2/64/78 causes, so read the message to tell them apart. The remedy is to re-mint that credential (or correct its Doppler value); it is not a reader bug and not a reason to file an issue about the reader.
+    - **Self-check without SSH and without printing a value:** run the reader itself with the credentials injected, `doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 1m --no-archive --limit 1 >/dev/null`. A refusal exits 2 with the marker and the variable name on stderr and sends no request; a usable pair exits 0 (or 22 for a rejected-but-well-formed credential, which is a different fault). In CI or a sweeper run log, search the job output for `SOLEUR_CREDENTIAL_REFUSED script=betterstack-query`; the marker line is value-free, so it is safe in a public log.
   - **Consequence for a re-mint:** a connection minted in a region whose host falls outside that apex would be refused. Every observed value is under it; if the vendor ever changes the apex, the allowlist in `scripts/betterstack-query.sh` is the one place to update.
   - **Consequence for a test:** there is deliberately no host-override seam. A suite that needs to exercise the egress path shims `curl` — `run_sql()` is the sole egress site — and uses a synthetic vendor-shaped host. Worked examples: `tests/scripts/test-betterstack-query-archive.sh` (shell-function shim) and `tests/scripts/test-git-data-rung2-evidence-capture.sh` (shim on `PATH`).
   - **Read the residual plainly:** `*.betterstackdata.com` covers every Better Stack *tenant*, not just ours. The pin narrows the adversary set from anyone to any Better Stack customer; it does not close it (ADR-052).
@@ -253,6 +267,7 @@ List existing connections: `GET https://logs.betterstack.com/api/v1/connections`
 - **(#8296) Three reads that report a false ABSENCE.** `--grep` is a literal `LIKE '%…%'` — `'a\|b'` matches the six-character string, never an alternation; run one grep per term. A tag read with `--limit` lets heartbeats scroll a rare transition row out of the window (the LUKS FSM `cutover-complete` row was "absent" for 30 min while present) — grep the transition REASON, not the tag. And an FSM row's `message` is a JSON OBJECT, so `.message[0:230]` errors and reads as no rows; test `type` before slicing. A negative read must also be bounded AFTER the action's own timestamp with slack: a window ending at `14:50:16` missed a write at `14:50:16.9`.
 - **(#8754) Counting a RARE event (a successful login, a single error class) across a long window: use the event's exact string, one window at a time, and a positive control that proves the window is covered.** `--grep` is a substring `LIKE`, so `Accepted` also matches sshd's `signature algorithm ssh-rsa not in PubkeyAcceptedAlgorithms` REJECTIONS; grep `Accepted publickey` / `session opened for user` instead. A noisy grep (`sshd`) hits `--limit 5000` in every multi-day window, so a count taken from it is a count of the rows returned, not of the rows that exist; the rare string itself returns well under the cap. A zero only means "did not happen" once a common row from the SAME host in the SAME window comes back (for example `Invalid user` with `--limit 50`). If no such row comes back, the window is not covered (the logs were not shipped, or were not retained) and the answer is INCONCLUSIVE, not zero.
 - Columns: `dt` (use for WHERE/ORDER), `raw` (the full log line as text/JSON). **What `dt` measures depends on the emitter.** For the Vector-shipped inngest source it is the warehouse's RECEIVE time, not the host's event time — measured 2026-09-24 (#8759): `dt` equals the `ingest_time` column byte-for-byte, sits ~1 s after the row's own journald `timestamp`, and one HTTP batch shares one `dt`. The host's own clock is inside `raw` (`timestamp`, `__REALTIME_TIMESTAMP`). Before treating `dt` as either clock for a new source, measure it: `SELECT dt, ingest_time, raw … LIMIT 5`.
+- **(#9784) The `dt` measurement above is per-emitter.** A host that HTTP-POSTs its own top-level `"dt"` (the Inngest backstop wipe host) may have it kept as the row time; measure with `SELECT dt, ingest_time, raw` before treating `dt` as receive time for that source.
 - Recent logs: `remote(t520508_..._logs)`. Older than the hot window: `s3Cluster(primary, t520508_..._s3)` with `WHERE _row_type = 1`, `UNION ALL`-combined.
 
 ## App container pino lines (cron failures) — now queryable (#4773, 2026-06-02)
@@ -772,7 +787,7 @@ the flood (crash-loop / pull storm) that accompanies disk growth:
 | `executing gc` | the **denominator** — gc started |
 | `gc successfully completed` | gc finished |
 | `garbage collected blobs` | gc actually reclaimed |
-| `PatchBlobUpload` | orphaned `.uploads/` evidence (i/o timeouts). The shipper's exempt arm keys on a `PatchBlobUpload*` message prefix, but the live error line's message is `unexpected error, removing .uploads/ files` (handler only in `func:`), so it is rate-capped, not exempt (measured 2026-10-01; fix tracked in the shipper follow-up for #7556). Grade upload failures on the paired `HTTP API` row (5xx on `/blobs/uploads/`), which is exempt. |
+| `PatchBlobUpload` | orphaned `.uploads/` evidence (i/o timeouts). The live error line's message is `unexpected error, removing .uploads/ files` and the handler is named only in `func:`, so the shipper classifies it on the parsed `func` field (suffix `(*RouteHandler).PatchBlobUpload`, admitted through the upload sub-quota, 8 per tick). Hosts replaced before that change (#9373) still rate-cap it (inferred from the 2026-09-28 event: no SOLEUR_ZOT_LOG error row existed for it, so the earlier message-prefix arm did not admit the line). Grade upload failures on the paired `HTTP API` row (5xx on `/blobs/uploads/`), which is exempt. |
 
 `gc` runs hourly (`"gc": true`, `gcDelay`/`gcInterval` 1h). **A stalled gc emits a start
 with no completion**, so the start/complete *ratio* is the discriminator — which is why
@@ -837,7 +852,7 @@ Two heartbeat families watch the image-pull path. Neither needs SSH to diagnose.
 
 | Heartbeat | Fed by | Period / grace | A missing beat means |
 |---|---|---|---|
-| `soleur-web-zot-consumer-web-1`, `-web-2` | `web-zot-consumer-probe.sh` on each web host, every 60 s | 180 / 60 | That web host could not get a servable tag list from zot for about 4 min |
+| `soleur-web-zot-consumer-web-1`, `-web-2` | `web-zot-consumer-probe.sh` on each web host, every 60 s | 180 / 60 | That web host could not get a servable tag list from zot for ANY probed repository (the web image or `jikig-ai/soleur-inngest-bootstrap`; web-2 still probes the web image only until its next replace) for about 4 min |
 | `soleur-registry-prd` | `zot-liveness-heartbeat.sh` on the registry host, every 60 s | 60 / 30 | zot did not answer on the host's private IP, or the beat itself did not arrive, for 90 s |
 
 **Step 1: was it a planned registry replace?** Every `soleur-registry-prd` incident since the
@@ -849,7 +864,7 @@ gh run list -R jikig-ai/soleur -w apply-web-platform-infra.yml -L 5
 ```
 
 A replace run finishing within a few minutes of the incident, plus a new `boot_id` in the query
-below, explains it. Those incidents last seconds, and each web host logs about 2 SUPPRESS rows.
+below, explains it. Those incidents last seconds, and web-1 logs about 4 SUPPRESS rows (one per probed repo per tick), web-2 about 2 until its next replace.
 Nothing needs doing.
 
 **Step 2: what the web hosts saw.** Consumer-probe verdicts by hour and host, last 7 days. The
@@ -875,6 +890,20 @@ ORDER BY hour FORMAT TSVWithNames
 SQL
 )"
 ```
+
+On a host running the new script (web-1 now, web-2 after its next replace) every fault line ends with
+`repo=<path>`, so read WHICH repository faulted from it: query the fault rows (`--grep 'SUPPRESS ping'` and
+`--grep 'HARD FAILURE'`) and read the trailing `repo=`. Do NOT grep `repo=<path>` alone: a healthy marker row
+contains that substring too. The aggregate above does not split by repo. A healthy
+run is silent, so the positive per-repo proof is the marker row, at most once per 30 min per host:
+
+```bash
+doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h \
+  --grep SOLEUR_ZOT_PROBE_VERDICT --limit 20
+```
+
+`repo=<path> code=200 verdict=servable` for both repositories is a healthy host. The beat goes absent when
+ANY repository does not serve, so a bootstrap-repo fault pages as "web zot consumer down" for the host.
 
 `auth_broken` above 0 is a credential fault (the probe exits 3), not an outage. For a web-2 page,
 also check `soleur-web-nic-guard-web-2`. When both page together, the whole host was dark, not zot.

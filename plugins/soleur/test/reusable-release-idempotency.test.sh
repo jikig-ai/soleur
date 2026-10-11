@@ -14,12 +14,15 @@
 # This test removes the live GitHub API from the assertion path by executing the
 # REAL `Check idempotency` run-block (extracted verbatim from the workflow) under
 # a deterministic `gh` stub, then statically asserts the create/finalise gating
-# wiring. Run via:  bash plugins/soleur/test/reusable-release-idempotency.test.sh
+# wiring. T6b/T7b (#7256) pin the BLOCKED-release Slack notifier on the parsed workflow.
+# Run via:  bash plugins/soleur/test/reusable-release-idempotency.test.sh
 
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-WF="$REPO_ROOT/.github/workflows/reusable-release.yml"
+# REUSABLE_RELEASE_WF is a TEST-ONLY hook so a mutation proof can edit a COPY of the
+# workflow (#7256); CI never sets it, and the real run must have it unset.
+WF="${REUSABLE_RELEASE_WF:-$REPO_ROOT/.github/workflows/reusable-release.yml}"
 
 PASS=0
 FAIL=0
@@ -44,6 +47,17 @@ assert_eq() {
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
+
+if [[ -n "${REUSABLE_RELEASE_WF:-}" ]]; then
+  echo "NOTE: REUSABLE_RELEASE_WF override active -> $WF"
+fi
+# T6b/T7b read the workflow through PyYAML; without it every helper call is an opaque
+# `<rc=1>` mismatch, so name the cause once instead.
+if ! python3 -I -c 'import yaml' 2>/dev/null; then
+  fail "PyYAML is required (python3 -c 'import yaml') for T6b/T7b"
+  echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
+  exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # Extract the `Check idempotency` step's `run:` block verbatim from the workflow.
@@ -403,6 +417,346 @@ NODESTUB
   else
     fail "AC5: fallback body must be sed-escaped (got: $fallback_text)"
   fi
+fi
+
+# ---------------------------------------------------------------------------
+# T6b (#7256): the BLOCKED-release Slack notifier. The success step carries a
+# plain `if:` (implicit success()), so a release job that fails (zot mirror gate)
+# skips it; a failure-gated SIBLING announces the blocked release. Everything is
+# read from the PARSED workflow (yaml.safe_load): comments are structurally
+# excluded and every `if:` is compared as a whole value, never grepped for a
+# token. A missing step / empty lookup / YAML error is an explicit FAIL.
+# ---------------------------------------------------------------------------
+echo "T6b: BLOCKED-release Slack notifier gate (#7256)"
+
+STEP_OK="Post to Slack (release)"
+STEP_BLOCKED="Post to Slack (release BLOCKED)"
+STEP_EMAIL_FAILED="Email notification (release FAILED)"
+
+# wf_step_field <step name> <field> -- prints the field of the step whose name is
+# EXACTLY <step name>. Fields: if (whitespace-collapsed), env.<KEY>,
+# continue-on-error, run. Exit 3 = step not found, 4 = field absent.
+wf_step_field() {
+  WF_PATH="$WF" STEP="$1" FIELD="$2" python3 -I -c '
+import os, sys, yaml
+doc = yaml.safe_load(open(os.environ["WF_PATH"]))
+steps = []
+for job in (doc.get("jobs") or {}).values():
+    steps.extend(job.get("steps") or [])
+hits = [s for s in steps if s.get("name") == os.environ["STEP"]]
+if len(hits) != 1:
+    sys.exit(3)
+st, f = hits[0], os.environ["FIELD"]
+if f.startswith("env."):
+    v = (st.get("env") or {}).get(f[4:])
+else:
+    v = st.get(f)
+if v is None:
+    sys.exit(4)
+print(" ".join(str(v).split()) if f == "if" else v)
+' 2>/dev/null
+}
+
+# wf_slack_census -- names of every step whose structure references the releases
+# webhook secret, sorted, one per line. Derived from the parsed workflow so a
+# THIRD notifier with a plain `if:` cannot appear unnoticed.
+wf_slack_census() {
+  WF_PATH="$WF" python3 -I -c '
+import json, os, yaml
+doc = yaml.safe_load(open(os.environ["WF_PATH"]))
+names = []
+for job in (doc.get("jobs") or {}).values():
+    for s in job.get("steps") or []:
+        if "secrets.SLACK_RELEASES_WEBHOOK_URL" in json.dumps(s):
+            names.append(str(s.get("name")))
+print("\n".join(sorted(names)))
+' 2>/dev/null
+}
+
+# wf_step_index <name> -- 0-based position of the step with EXACTLY that name in its job.
+wf_step_index() {
+  WF_PATH="$WF" STEP="$1" python3 -I -c '
+import os, sys, yaml
+doc = yaml.safe_load(open(os.environ["WF_PATH"]))
+for job in (doc.get("jobs") or {}).values():
+    for i, s in enumerate(job.get("steps") or []):
+        if s.get("name") == os.environ["STEP"]:
+            print(i); sys.exit(0)
+sys.exit(3)
+' 2>/dev/null
+}
+
+# wf_ref_check <name> -- "refs=<sorted ids>;unresolved=<ids no step defines>" for every
+# `steps.<id>.` token in that step's `if:` and `env:`. An id that no step defines resolves to
+# the empty string in Actions, so a renamed id silently blanks the value (T7b sets env directly
+# and cannot see it).
+wf_ref_check() {
+  WF_PATH="$WF" STEP="$1" python3 -I -c '
+import json, os, re, sys, yaml
+doc = yaml.safe_load(open(os.environ["WF_PATH"]))
+for job in (doc.get("jobs") or {}).values():
+    steps = job.get("steps") or []
+    ids = {s.get("id") for s in steps if s.get("id")}
+    for s in steps:
+        if s.get("name") == os.environ["STEP"]:
+            blob = json.dumps([s.get("if"), s.get("env")])
+            refs = sorted(set(re.findall(r"steps\.([A-Za-z0-9_-]+)\.", blob)))
+            print("refs=" + ",".join(refs) + ";unresolved=" + ",".join(r for r in refs if r not in ids))
+            sys.exit(0)
+sys.exit(3)
+' 2>/dev/null
+}
+
+# wf_env_keys <name> -- sorted env keys of the step, comma-joined (an extra key is a wiring change).
+wf_env_keys() {
+  WF_PATH="$WF" STEP="$1" python3 -I -c '
+import os, sys, yaml
+doc = yaml.safe_load(open(os.environ["WF_PATH"]))
+for job in (doc.get("jobs") or {}).values():
+    for s in job.get("steps") or []:
+        if s.get("name") == os.environ["STEP"]:
+            print(",".join(sorted((s.get("env") or {}).keys()))); sys.exit(0)
+sys.exit(3)
+' 2>/dev/null
+}
+
+GATE_INFLIGHT="steps.check_changed.outputs.changed == 'true' && (steps.create_release.outputs.released == 'true' || steps.idempotency.outputs.draft_exists == 'true')"
+
+assert_eq "success announcer gate unchanged (P3, byte-for-byte)" \
+  "$(wf_step_field "$STEP_OK" if || echo "<rc=$?>")" "$GATE_INFLIGHT"
+assert_eq "BLOCKED notifier gate: !cancelled() && failure() && release-in-flight (P1, P2)" \
+  "$(wf_step_field "$STEP_BLOCKED" if || echo "<rc=$?>")" "!cancelled() && failure() && $GATE_INFLIGHT"
+assert_eq "failure email gate unchanged (P4)" \
+  "$(wf_step_field "$STEP_EMAIL_FAILED" if || echo "<rc=$?>")" "failure()"
+assert_eq "BLOCKED notifier is continue-on-error" \
+  "$(wf_step_field "$STEP_BLOCKED" continue-on-error || echo "<rc=$?>")" "True"
+assert_eq "Slack census: exactly the success announcer and the BLOCKED notifier" \
+  "$(wf_slack_census | tr '\n' '|')" "$STEP_BLOCKED|$STEP_OK|"
+
+# Env wiring: T7b sets env directly and cannot see a mis-wired `env:` line.
+for pair in \
+  "MIRROR_REASON=\${{ steps.zot_mirror.outputs.mirror_reason }}" \
+  "TOKEN_VERDICT=\${{ steps.token_preflight.outputs.verdict }}" \
+  "TAG=\${{ steps.version.outputs.tag }}" \
+  "VERSION=\${{ steps.version.outputs.next }}" \
+  "SLACK_RELEASES_WEBHOOK_URL=\${{ secrets.SLACK_RELEASES_WEBHOOK_URL }}" \
+  "COMPONENT_DISPLAY=\${{ inputs.component_display }}" \
+  "RUN_URL=\${{ github.server_url }}/\${{ github.repository }}/actions/runs/\${{ github.run_id }}"; do
+  key="${pair%%=*}"
+  assert_eq "BLOCKED notifier env.$key wiring" \
+    "$(wf_step_field "$STEP_BLOCKED" "env.$key" || echo "<rc=$?>")" "${pair#*=}"
+done
+assert_eq "BLOCKED notifier env key set is exactly the seven wired keys" \
+  "$(wf_env_keys "$STEP_BLOCKED" || echo "<rc=$?>")" \
+  "COMPONENT_DISPLAY,MIRROR_REASON,RUN_URL,SLACK_RELEASES_WEBHOOK_URL,TAG,TOKEN_VERDICT,VERSION"
+assert_eq "BLOCKED notifier: every steps.<id> it reads is defined by a step" \
+  "$(wf_ref_check "$STEP_BLOCKED" || echo "<rc=$?>")" \
+  "refs=check_changed,create_release,idempotency,token_preflight,version,zot_mirror;unresolved="
+# T7b runs the block under `bash`; a `shell:` override would change what Actions runs.
+assert_eq "BLOCKED notifier carries no shell: override" \
+  "$(wf_step_field "$STEP_BLOCKED" shell || echo "<rc=$?>")" "<rc=4>"
+
+# Position: `failure()` is evaluated when the step is reached, so the notifier only works
+# AFTER every step that can fail the release, and `released` is only set by create_release.
+idx_blocked=$(wf_step_index "$STEP_BLOCKED" || echo -1)
+idx_finalise=$(wf_step_index "Finalise release (publish draft)" || echo 999999)
+idx_teardown=$(wf_step_index "Tear down cloudflared registry bridge" || echo 999999)
+idx_create=$(wf_step_index "Create GitHub Release (as draft)" || echo 999999)
+if [[ "$idx_blocked" -gt "$idx_finalise" && "$idx_blocked" -gt "$idx_teardown" && "$idx_blocked" -gt "$idx_create" ]]; then
+  pass "BLOCKED notifier runs after create_release, teardown and Finalise"
+else
+  fail "BLOCKED notifier misplaced (blocked=$idx_blocked finalise=$idx_finalise teardown=$idx_teardown create=$idx_create)"
+fi
+
+# The in-flight predicate is defined by Finalise and shared by the announcers; derive parity
+# from the real steps rather than trusting one literal copied into two of four sites.
+assert_eq "Finalise gate == in-flight predicate" \
+  "$(wf_step_field "Finalise release (publish draft)" if || echo "<rc=$?>")" "$GATE_INFLIGHT"
+assert_eq "Email (release) gate == in-flight predicate" \
+  "$(wf_step_field "Email notification (release)" if || echo "<rc=$?>")" "$GATE_INFLIGHT"
+
+# ---------------------------------------------------------------------------
+# T7b (#7256): execute the BLOCKED step's REAL run block (parsed, so the dedent is
+# faithful) under the curl stub, `bash -eo pipefail` as CI runs it. Unambiguous
+# sentinels: ordinary prose or the remedy sentence could contain "bridge"/"live".
+# ---------------------------------------------------------------------------
+echo "T7b: BLOCKED-release Slack payload contract (#7256)"
+
+BLOCKED_BLOCK="$TMP/slack-blocked.sh"
+wf_step_field "$STEP_BLOCKED" run > "$BLOCKED_BLOCK" || : > "$BLOCKED_BLOCK"
+
+if [[ ! -s "$BLOCKED_BLOCK" ]]; then
+  fail "could not extract '$STEP_BLOCKED' run block from $WF (step missing or no run:)"
+else
+  cat > "$GH_STUB_DIR/curl" <<'STUB'
+#!/usr/bin/env bash
+# Records argv (one per line) to $CURL_ARGV and the -d payload to $CURL_TRACE, and
+# returns HTTP $CURL_CODE (default 200) -- or exits non-zero when CURL_FAIL=1,
+# simulating a transport failure. Real curl has already printed -w "%{http_code}" (000)
+# by then, so the stub does too -- otherwise a doubled `|| echo 000` fallback is invisible.
+if [[ "${CURL_FAIL:-0}" == 1 ]]; then echo -n "000"; exit 7; fi
+printf '%s\n' "$@" > "${CURL_ARGV:-/dev/null}"
+prev=""
+for a in "$@"; do
+  if [[ "$prev" == "-d" ]]; then printf '%s' "$a" > "$CURL_TRACE"; fi
+  prev="$a"
+done
+echo -n "${CURL_CODE:-200}"
+STUB
+  chmod +x "$GH_STUB_DIR/curl"
+
+  # run_blocked <webhook> <mirror_reason> <token_verdict> [curl_fail] [curl_code]
+  # (stdout of the block lands in $TMP/out-b; curl argv in $TMP/argv-b)
+  run_blocked() {
+    : > "$TMP/curl-trace-b"; : > "$TMP/argv-b"; : > "$TMP/out-b"
+    ( cd "$REPO_ROOT" && \
+      SLACK_RELEASES_WEBHOOK_URL="$1" \
+      MIRROR_REASON="$2" \
+      TOKEN_VERDICT="$3" \
+      CURL_FAIL="${4:-0}" \
+      CURL_CODE="${5:-200}" \
+      CURL_ARGV="$TMP/argv-b" \
+      TAG="web-v1.2.3" \
+      VERSION="9.8.7" \
+      COMPONENT_DISPLAY="Web Platform" \
+      RUN_URL="https://github.com/jikig-ai/soleur/actions/runs/42" \
+      CURL_TRACE="$TMP/curl-trace-b" \
+      PATH="$GH_STUB_DIR:$PATH" \
+        bash -eo pipefail "$BLOCKED_BLOCK" > "$TMP/out-b" 2>&1 )
+  }
+
+  # (a) empty webhook -> rc 0, curl never invoked
+  run_blocked "" "zz_stage_7256" "zz_verdict_7256"
+  assert_eq "BLOCKED: empty webhook -> exit 0, no curl call" \
+    "$? $(wc -c < "$TMP/curl-trace-b" | tr -d ' ')" "0 0"
+
+  # (b) canonical: both reason and verdict set
+  run_blocked "https://hooks.example.invalid/stub" "zz_stage_7256" "zz_verdict_7256"
+  rc_b=$?
+  payload_b=$(cat "$TMP/curl-trace-b")
+  assert_eq "BLOCKED: configured webhook -> exit 0" "$rc_b" "0"
+  if jq -e . >/dev/null 2>&1 <<<"$payload_b"; then
+    pass "BLOCKED: payload is valid JSON"
+  else
+    fail "BLOCKED: payload is not valid JSON (got: ${payload_b:-<empty>})"
+  fi
+  assert_eq "BLOCKED: unfurl_links disabled" "$(jq -r '.unfurl_links' <<<"$payload_b" 2>/dev/null)" "false"
+  text_b=$(jq -r '.text' <<<"$payload_b" 2>/dev/null)
+  # VERSION (9.8.7) is deliberately NOT a substring of TAG (web-v1.2.3), so a dropped
+  # version slot cannot hide behind the tag.
+  for want in "Web Platform v9.8.7 release BLOCKED" "the GitHub release was NOT published" \
+    "(the draft is kept)" "zot mirror stage" "zz_stage_7256" "zz_verdict_7256" \
+    "https://github.com/jikig-ai/soleur/actions/runs/42" "Re-run failed jobs" "web-v1.2.3"; do
+    if [[ "$text_b" == *"$want"* ]]; then
+      pass "BLOCKED: message contains '$want'"
+    else
+      fail "BLOCKED: message must contain '$want' (got: ${text_b:0:200})"
+    fi
+  done
+  case "$text_b" in
+    *"released!"*) fail "BLOCKED: message must never claim 'released!'" ;;
+    *) pass "BLOCKED: message never claims 'released!'" ;;
+  esac
+  # ADR-166: GHCR tags and the image are pushed BEFORE the mirror gate, so the message
+  # must not say nothing was published.
+  case "$text_b" in
+    *"nothing was published"*) fail "BLOCKED: message must not claim 'nothing was published' (ADR-166)" ;;
+    *) pass "BLOCKED: message never claims 'nothing was published'" ;;
+  esac
+  # The request itself: the stub records argv, so a wrong URL/header/timeout/protocol is visible.
+  assert_eq "BLOCKED: curl target is the webhook (last argv)" \
+    "$(tail -n 1 "$TMP/argv-b")" "https://hooks.example.invalid/stub"
+  for want in "Content-Type: application/json" "--max-time" "--proto" "=https" "-d" "-s"; do
+    if grep -qxF -- "$want" "$TMP/argv-b"; then
+      pass "BLOCKED: curl argv carries '$want'"
+    else
+      fail "BLOCKED: curl argv must carry '$want' (got: $(tr '\n' ' ' < "$TMP/argv-b"))"
+    fi
+  done
+  # The webhook is masked, and the raw value is printed nowhere else.
+  if grep -qxF "::add-mask::https://hooks.example.invalid/stub" "$TMP/out-b"; then
+    pass "BLOCKED: webhook is ::add-mask::ed"
+  else
+    fail "BLOCKED: webhook must be ::add-mask::ed (stdout: $(head -c 200 "$TMP/out-b"))"
+  fi
+  assert_eq "BLOCKED: raw webhook appears only in the add-mask line" \
+    "$(grep -cF "https://hooks.example.invalid/stub" "$TMP/out-b")" "1"
+
+  # (c) must-PASS non-canonical input (plugin release): both empty -> registry
+  # lines suppressed, message still sent.
+  run_blocked "https://hooks.example.invalid/stub" "" ""
+  rc_c=$?
+  text_c=$(jq -r '.text' <<<"$(cat "$TMP/curl-trace-b")" 2>/dev/null)
+  assert_eq "BLOCKED (plugin shape): exit 0" "$rc_c" "0"
+  if [[ "$text_c" == *"release BLOCKED"* && "$text_c" != *"zot mirror stage"* \
+    && "$text_c" != *"unmeasured"* && "$text_c" != *"outside the mirror step"* ]]; then
+    pass "BLOCKED (plugin shape): sent, registry lines suppressed"
+  else
+    fail "BLOCKED (plugin shape): must send without registry lines (got: ${text_c:0:200})"
+  fi
+
+  # (d) only one var set -> the other renders its fallback, no empty backticks
+  run_blocked "https://hooks.example.invalid/stub" "zz_stage_7256" ""
+  text_d=$(jq -r '.text' <<<"$(cat "$TMP/curl-trace-b")" 2>/dev/null)
+  if [[ "$text_d" == *"zz_stage_7256"* && "$text_d" == *"unmeasured"* && "$text_d" != *'``'* ]]; then
+    pass "BLOCKED: reason only -> verdict renders 'unmeasured'"
+  else
+    fail "BLOCKED: reason only must render verdict fallback (got: ${text_d:0:200})"
+  fi
+  run_blocked "https://hooks.example.invalid/stub" "" "zz_verdict_7256"
+  text_e=$(jq -r '.text' <<<"$(cat "$TMP/curl-trace-b")" 2>/dev/null)
+  # A successful mirror also leaves mirror_reason empty (only degraded() writes it), so the
+  # fallback must not claim the stage was "not reached" -- the job did not measure that.
+  if [[ "$text_e" == *"zz_verdict_7256"* && "$text_e" == *"outside the mirror step"* \
+    && "$text_e" != *"not reached"* && "$text_e" != *'``'* ]]; then
+    pass "BLOCKED: verdict only -> reason renders a non-committal fallback"
+  else
+    fail "BLOCKED: verdict only must render reason fallback (got: ${text_e:0:200})"
+  fi
+
+  # (e) entity-escape: & < > in a free-form reason must not reach Slack raw
+  run_blocked "https://hooks.example.invalid/stub" 'a&b<!channel>' 'v&<x>'
+  text_f=$(jq -r '.text' <<<"$(cat "$TMP/curl-trace-b")" 2>/dev/null)
+  if [[ "$text_f" == *"a&amp;b&lt;!channel&gt;"* && "$text_f" == *"v&amp;&lt;x&gt;"* \
+    && "$text_f" != *"<!channel>"* ]]; then
+    pass "BLOCKED: & < > in MIRROR_REASON and TOKEN_VERDICT entity-escaped"
+  else
+    fail "BLOCKED: MIRROR_REASON and TOKEN_VERDICT must be entity-escaped (got: ${text_f:0:200})"
+  fi
+
+  # (f) transport failure keeps the step green (|| echo 000 tail)
+  run_blocked "https://hooks.example.invalid/stub" "zz_stage_7256" "zz_verdict_7256" 1
+  rc_g=$?
+  assert_eq "BLOCKED: curl transport failure -> step still exits 0" "$rc_g" "0"
+  # curl's own -w already printed 000 on a real transport failure, so the fallback must not
+  # double it (`|| echo 000` printed 000000).
+  if grep -qxF "::warning::Slack notification failed (HTTP 000)" "$TMP/out-b"; then
+    pass "BLOCKED: transport failure warns with HTTP 000"
+  else
+    fail "BLOCKED: transport failure must warn 'HTTP 000' (stdout: $(head -c 200 "$TMP/out-b"))"
+  fi
+
+  # (g) non-2xx answer keeps the step green and warns with the real code
+  run_blocked "https://hooks.example.invalid/stub" "zz_stage_7256" "zz_verdict_7256" 0 500
+  rc_h=$?
+  assert_eq "BLOCKED: HTTP 500 -> step still exits 0" "$rc_h" "0"
+  if grep -qxF "::warning::Slack notification failed (HTTP 500)" "$TMP/out-b"; then
+    pass "BLOCKED: HTTP 500 warns with the real code"
+  else
+    fail "BLOCKED: HTTP 500 must warn 'HTTP 500' (stdout: $(head -c 200 "$TMP/out-b"))"
+  fi
+fi
+
+# Anti-vacuity floor (#7256): without it, deleting the T6b/T7b sections (or neutering the
+# assertion helpers) leaves a suite that prints `passed` and exits 0. Reported by printf +
+# exit, never through the fail() it backstops. Ratchet MIN_ASSERTIONS in the same commit as
+# any added assertion; slack in a floor is attack budget.
+ASSERTED=$((PASS + FAIL))
+MIN_ASSERTIONS=77
+if [[ "$ASSERTED" -lt "$MIN_ASSERTIONS" ]]; then
+  printf '[FATAL] anti-vacuity floor: only %d assertions ran, expected >= %d - the suite was stranded, not clean.\n' \
+    "$ASSERTED" "$MIN_ASSERTIONS" >&2
+  exit 1
 fi
 
 echo ""

@@ -362,7 +362,10 @@ RUNNER EDITS (a diff touching scripts/test-all.sh or scripts/lib/test-affected-p
   path, and it cannot be combined with --affected. It is not an escape from the fallback.
 
 Recovery levers: --full (explicit), SOLEUR_TEST_FORCE_ALL=1 (legacy spelling of
-the same intent), SOLEUR_ALLOW_FULL_GATE=1 (names a refusal you mean to bypass).
+the same intent), SOLEUR_ALLOW_FULL_GATE=1 (names a refusal you mean to bypass),
+SOLEUR_AFFECTED_DERIVE_CACHE=0 (bypass the per-worktree derive cache at
+.soleur/cache/affected-derive/ — selection is unchanged either way; a run that
+consulted it prints AFFECTED_DERIVE_CACHE hits=/misses=/derived=).
 
 Run machinery (#8993/#8940): the parent-death watchdog self-terminates an
 orphaned run plus its suite children — SOLEUR_TEST_ALL_ALLOW_ORPHAN=1 opts
@@ -371,6 +374,16 @@ interval (default 1, floor 1). Each suite tees to a per-run scratch log;
 non-ok classes copy it under
 ${SOLEUR_SCRATCH_BASE:-/var/tmp}/soleur-test-all-logs/ and print
 log=<path> on the summary line — SOLEUR_TEST_ALL_LOG_DIR relocates it.
+
+Weight drift (#9814): local affected-shaped runs (TEST_TIMING_LOG unset, CI
+unset, TEST_GROUP=affected or the all-group default) default TEST_TIMING_LOG
+to <log-dir>/suite-timings.tsv and the epilogue compares each ran suite's
+local ms against committed scripts/suite-durations*.tsv weights — warn-only
+WEIGHT_DRIFT <label> committed=<ms|unmeasured> [basis=floor] local=<ms>
+lines when local > 2x committed AND > 10s, WEIGHT_DRIFT_UNAVAILABLE when a
+bash-3.2 host writes all-zero elapsed, WEIGHT_DRIFT_LOG <path> trailer.
+Caller-set TEST_TIMING_LOG wins; CI never defaults; enumerate/print paths
+decline. Lines emit to stdout AND stderr — dedupe when capturing merged.
 
 Enumerate modes die at a hard wall-clock deadline — SOLEUR_ENUM_DEADLINE_S
 seconds (default 900); a deleted-cwd walk exits 4, it never spins.
@@ -499,6 +512,14 @@ if declare -F soleur_scratch_session_begin >/dev/null 2>&1; then
   soleur_scratch_session_begin "$TMPDIR" || true
 fi
 declare -F _soleur_scratch_cleanup >/dev/null 2>&1 || _soleur_scratch_cleanup() { :; }
+# #9814: opportunistic weight-drift comparator — a missing lib degrades the
+# epilogue emit to "no WEIGHT_DRIFT block" (the declare -F gate there), never
+# blocks the gate.
+_WDRIFT_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/test-weight-drift.sh"
+if [[ -f "$_WDRIFT_LIB" ]]; then
+  # shellcheck source=scripts/lib/test-weight-drift.sh
+  source "$_WDRIFT_LIB" || true
+fi
 # Provisional owner for the window below: the full EXIT trap (which composes this cleanup) is installed ~2900
 # lines down, and every early `exit` before it (flag modes, usage errors, a timeout kill) left a marker-only
 # root behind -- measured: --enumerate-commands, --list and a bad flag each leaked one per invocation. The
@@ -525,9 +546,14 @@ export TC_TMPDIR="${TC_TMPDIR:-/tmp}"
 # See: knowledge-base/project/learnings/2026-03-20-bun-fpe-spawn-count-sensitivity.md
 #
 # Per-suite timing: when TEST_TIMING_LOG is set to a writable path, each
-# run_suite() invocation appends "<label>\t<elapsed_ms>[\tFAIL|\tKILLED]" to that
-# path. Field 3 carries the result class for any non-passing suite; KILLED means
-# signal-shaped and UNRESOLVED, not failed (#7424).
+# run_suite()/skip_suite() invocation appends "<label>\t<elapsed_ms>[\t<class>]"
+# to that path. Field 3 is the labelled class slot: `skip=<reason>` marks a
+# counted decline, a bare class (FAIL / KILLED / TRIPWIRE) marks a ran-but-not-ok
+# suite — wall-clock is consumed either way — and `tmp_delta=`/`bytes_tmp=` are
+# instrumentation, not suite rows. Extension convention (#9814's comparator is
+# the first external consumer): new decline classes carry the `^skip=` prefix;
+# any other labelled class defaults to "ran". KILLED means signal-shaped and
+# UNRESOLVED, not failed (#7424).
 # Elapsed time uses bash 5.0+ EPOCHREALTIME (microsecond precision, no
 # coreutils dependency, portable across Linux + Homebrew bash on macOS).
 # CI runs ubuntu-latest (bash 5.x). macOS default /bin/bash is 3.2 — install
@@ -666,7 +692,7 @@ esac
 # Bare repos contain stale working-tree files that diverge from HEAD.
 # Running tests from a bare root produces phantom failures.
 # Use a worktree instead: cd .worktrees/<name> && bash ../../scripts/test-all.sh
-if git rev-parse --is-bare-repository 2>/dev/null | grep -q true; then
+if git rev-parse --is-bare-repository 2>/dev/null | grep -c >/dev/null true; then
   echo "ERROR: Cannot run tests from a bare repository root." >&2
   echo "Stale files at the bare root diverge from HEAD and produce phantom test failures." >&2
   echo "Run from a worktree instead: cd .worktrees/<name> && bash ../../scripts/test-all.sh" >&2
@@ -887,7 +913,8 @@ fi
 # spanning both would report health from whichever is roomier, which is
 # indistinguishable from a healthy mount.
 #
-# Gated on TEST_TIMING_LOG, so a default local run pays nothing for it.
+# Gated on TEST_TIMING_LOG — caller-set was opt-in; #9814's default arm also
+# arms it on local affected-shaped runs, so the two df probes ride that arm.
 _emit_bytes_probe() {
   [[ -n "${TEST_TIMING_LOG:-}" ]] || return 0
   local tmpfs_bytes disk_bytes
@@ -978,6 +1005,20 @@ if [[ -f "$_AFF_LIB" ]]; then
 fi
 if declare -p ALWAYS_ON_SUITES >/dev/null 2>&1; then
   _AFF_LIB_OK=1
+fi
+
+# --- Derive-result cache (#9812) --------------------------------------------------
+# Same degrade-never-block class as _AFF_LIB above: a missing/broken cache lib leaves
+# _affected_classify_cached undefined, _ADC_LIB_OK stays 0, and the selection walk takes the
+# plain-classify arm. The lib itself is advisory-only — every failure falls back to a fresh derive.
+_ADC_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/test-affected-derive-cache.sh"
+_ADC_LIB_OK=0
+if [[ -f "$_ADC_LIB" ]]; then
+  # shellcheck source=scripts/lib/test-affected-derive-cache.sh
+  source "$_ADC_LIB" || true
+fi
+if declare -F _affected_classify_cached >/dev/null 2>&1; then
+  _ADC_LIB_OK=1
 fi
 
 # --- Test group selector ---
@@ -2063,7 +2104,9 @@ _NL=$'\n'
 
 # Anchored edge match (#9307). `_affected_add_edge` mints `^`-prefixed edges:
 # `^dir/` is a path PREFIX (a diff line that STARTS with dir/), `^file` an EXACT
-# line. The legacy substring match let the bare command word `test` in
+# line, and `^glob:<pattern>` (#9813) a bash-pattern match over the whole line
+# (`*` crosses `/`; every malformed shape matches, so the kind can only widen).
+# The legacy substring match let the bare command word `test` in
 # `bun test <file>` -- which resolves to the repo-root test/ directory -- select
 # its suite for any diff path that merely CONTAINED "test", a knowledge-base-only
 # diff included. Edges without the `^` mark (the relevance arrays, which reach
@@ -2089,6 +2132,43 @@ _diff_edge_hit() {
   fi
   local _n="$_DEH_N"
   case "$e" in
+    glob:*)
+      # Third edge kind (#9813): glob:<literal-head>/<glob-tail> minted by
+      # _affected_add_edge. A diff line under <literal-head> matching <glob-tail>
+      # (bash [[ == ]] semantics — `*` crosses `/`, so `knowledge-base/**.sh`
+      # covers `knowledge-base/x.sh` and `knowledge-base/a/b/c.sh` alike).
+      # malformed-shape invariant — ONE doctrine, FIVE sites: the mint arm in
+      # _affected_add_edge, this in-flight revalidation, the census arm in
+      # scripts/lint-orphan-test-suites.sh, and the covers() oracle in
+      # scripts/test-affected-kb-consumers.test.sh must classify a shape
+      # identically; GLOBENT (registration-only classifier) is a deliberate
+      # superset — admission can only widen, never narrow (see the mint arm).
+      # Every malformed shape returns MATCH here — a glob edge can only widen a
+      # selection, never narrow it. The deeper arms (non-repo-relative head,
+      # non-`/` head, `*`-less tail) are unreachable from minted edges (their
+      # `:` trips the charset arm first) but ARE reachable via hand-placed
+      # `^glob:` entries in relevance arrays — defense-in-depth for that channel.
+      local _g="${e#glob:}" _gh _gt _line
+      case "$_g" in
+        *[!A-Za-z0-9_./*-]*) return 0 ;;    # byte outside the grammar charset → match
+      esac
+      _gh="${_g%%[*?[]*}"
+      case "$_gh" in
+        /*|./*|../*|*"//"*|*"/./"*|*"/../"*) return 0 ;;  # not repo-relative → match
+      esac
+      # (shape checks as [[ ]] — a bare `*) return 0 ;;` here would collide the
+      # substring-unique budget anchor in test-all-killed-classification's fixture)
+      [[ "$_gh" == */ ]] || return 0        # head not /-terminated → match
+      _gt="${_g#$_gh}"
+      [[ "$_gt" == */ ]] && return 0        # tail ends / — unmatchable → match
+      [[ "$_gt" == *\** ]] || return 0      # tail without * → match
+      # Cheap head pre-check — no line under the head means no line can match.
+      [[ "$_n" == *"${_NL}${_gh}"* ]] || return 1
+      while IFS= read -r _line; do
+        [[ -n "$_line" && "$_line" == "$_gh"* && "$_line" == $_g ]] && return 0
+      done <<< "$_DEH_N"
+      return 1
+      ;;
     */) [[ "$_n" == *"${_NL}${e}"* ]] ;;
     *)  [[ "$_n" == *"${_NL}${e}${_NL}"* ]] ;;
   esac
@@ -2259,6 +2339,11 @@ _aff_classify_runner_diff() {
     BEGIN { RUNNER = "scripts/test-all.sh"; INDEX = "scripts/lib/test-affected-paths.sh"
             file = ""; inhunk = 0; seen = 0; nadd = 0; blk = 0
             root = ENVIRON["AFF_RD_ROOT"]
+            # GLOBENT (#9813): the third declared-member shape, admitted wherever the
+            # grammar reads an array-entry line — `glob:<head>/<tail>` with a
+            # metachar-free head ending in /, a tail carrying * and no ?/[.
+            # Anything outside this shape stays semantic — the closed grammar.
+            GLOBENT = "^  \"glob:[A-Za-z0-9_.\\/-]+\\/[A-Za-z0-9_.\\/*-]*\\*[A-Za-z0-9_.\\/*-]*\"( +#.*)?$"
             load(RUNNER, post); load(INDEX, post) }
     {
       line = $0
@@ -2278,17 +2363,17 @@ _aff_classify_runner_diff() {
             # label added in the same diff, and the injectivity rules, are checked by the caller.
             if (body ~ /\r/) { viol("G2-cr", file, cur) }
             else if (blk == 1) {
-              if (body ~ /^  "[A-Za-z0-9_.\/-]+\/?"( +#.*)?$/ || body ~ /^[ \t]*$/ || body ~ /^[ \t]*#/) { }
+              if (body ~ /^  "[A-Za-z0-9_.\/-]+\/?"( +#.*)?$/ || body ~ GLOBENT || body ~ /^[ \t]*$/ || body ~ /^[ \t]*#/) { }
               else if (body == ")") { blk = 0 }
               else { viol("INDEX-SHAPE", file, cur); blk = 0 }
             } else if (body ~ /^[ \t]*$/ || body ~ /^[ \t]*#/) {
               j = cur - 1
               while (j >= 1 && (post[file, j] ~ /^[ \t]*$/ || post[file, j] ~ /^[ \t]*#/)) j--
-              if (!(j >= 1 && (post[file, j] == ")" || post[file, j] ~ /^  "[A-Za-z0-9_.\/-]+\/?"( +#.*)?$/))) viol("INDEX-ANCHOR", file, cur)
+              if (!(j >= 1 && (post[file, j] == ")" || post[file, j] ~ /^  "[A-Za-z0-9_.\/-]+\/?"( +#.*)?$/ || post[file, j] ~ GLOBENT))) viol("INDEX-ANCHOR", file, cur)
             } else if (body ~ /^AFFECTED_[A-Z0-9_]+_PATHS=\($/) {
               j = cur - 1
               while (j >= 1 && (post[file, j] ~ /^[ \t]*$/ || post[file, j] ~ /^[ \t]*#/)) j--
-              if (j >= 1 && (post[file, j] == ")" || post[file, j] ~ /^  "[A-Za-z0-9_.\/-]+\/?"( +#.*)?$/)) {
+              if (j >= 1 && (post[file, j] == ")" || post[file, j] ~ /^  "[A-Za-z0-9_.\/-]+\/?"( +#.*)?$/ || post[file, j] ~ GLOBENT)) {
                 blk = 1; nm = body; sub(/=\($/, "", nm); printf "R\t%s\n", nm
               } else viol("INDEX-ANCHOR", file, cur)
             } else if (body ~ /^  "[A-Za-z0-9_.\/-]+"( +#.*)?$/) {
@@ -2633,24 +2718,128 @@ _affected_resolve_edges() {
   done
 }
 
+# --- derive-input recording (the cross-run derive cache, #9812) ---------------------------------
+# The derive is a pure function of its inputs; to cache its output across runs the wrapper records
+# every input the derive consults — file reads (recorded at _affected_file_edges entry, covering
+# both fresh reads and _FE_FILES memo replays) and every existence probe. `_affected_probe` IS the
+# probe: same truth table as the bare `[[ -<k> ]]` it replaces, plus a recording side-channel active
+# only while the cache wrapper holds _ADC_REC=1. When the cache lib was never sourced the slots are
+# unset and the ${...:-} guards make recording a no-op — the probe still evaluates correctly
+# (degrade-never-block, the _AFF_LIB class of contract). The `[[ -d "$PWD" ]]` liveness probe
+# (_wt_missing_die) is named-exempt: it is not an edge input.
+_affected_probe() { # <e|f|d> <path> — evaluate the [[ -<k> path ]] test; record it when caching
+  local _k="$1" _pp="$2" _rc=0 _nl=$'\n'
+  case "$_k" in
+    e) [[ -e "$_pp" ]] || _rc=$? ;;
+    f) [[ -f "$_pp" ]] || _rc=$? ;;
+    d) [[ -d "$_pp" ]] || _rc=$? ;;
+    *) return 1 ;;
+  esac
+  if (( ${_ADC_REC:-0} )); then
+    case "$_pp" in
+      # An operand carrying \n or \t could never be written into a record faithfully — and via the
+      # _FE_PROBESETS slice it would split into FORGED entries on memo replay. Record nothing and
+      # poison the record so the store refuses it whole rather than write an under-recorded set.
+      *$'\n'*|*$'\t'*) _ADC_REC_BAD=1 ;;
+      *)
+        case "${_ADC_REC_PSET:-$_nl}" in
+          *"${_nl}${_k}|${_pp}${_nl}"*) : ;;   # same run, same answer — first record stands
+          *)
+            _ADC_REC_PSET+="${_k}|${_pp}${_nl}"
+            _ADC_REC_PROBES+=("${_k}"$'\t'"${_rc}"$'\t'"${_pp}")
+            ;;
+        esac
+        ;;
+    esac
+  fi
+  return $_rc
+}
+
+# Record a file the derive's output depends on. Called at _affected_file_edges entry so both the
+# fresh-read and the _FE_FILES memo-replay arms count it. Deduped via the newline-bracketed shadow.
+_affected_rec_read() { # <path>
+  (( ${_ADC_REC:-0} )) || return 0
+  case "${_ADC_REC_RSET:-$'\n'}" in
+    *$'\n'"$1"$'\n'*) return 0 ;;
+  esac
+  _ADC_REC_READS+=("$1")
+  _ADC_REC_RSET+="$1"$'\n'
+  return 0
+}
+
 # Append an edge if it resolves inside the repo and is not already present.
 # `[[ -e ]]` is the whole test: argv words, `-c` payload tokens and resolved
 # source/import paths are all filtered through it, so garbage never lands in
 # the edge set. A surviving edge is stored ANCHORED (#9307): `^dir/` for a
-# directory (a path prefix), `^file` for a file (an exact line) -- see
-# _diff_edge_hit. Anything rooted at `.`/`..` keeps the legacy unanchored form:
+# directory (a path prefix), `^file` for a file (an exact line), `^glob:` for a
+# declared `glob:<literal-head>/<glob-tail>` entry (#9813) -- see _diff_edge_hit.
+# Anything rooted at `.`/`..` keeps the legacy unanchored form:
 # `.` names the whole tree, and an anchored `^./` could never match a diff line,
 # which would turn a select-everything edge into a select-nothing one.
 _affected_add_edge() {
-  local _p="$1" _nl=$'\n'
+  local _p="$1" _nl=$'\n' _g _gh _gt
   # A newline in a name would forge two entries in the shadow set; it cannot arise from `read` lines.
   case "$_p" in *"$_nl"*) return 0 ;; esac
-  [[ -n "$_p" && -e "$_p" ]] || return 0
   case "$_p" in
-    .|..|./*|../*) ;;
+    glob:*)
+      # Third declared-entry kind (#9813): glob:<literal-head>/<glob-tail> — a diff
+      # line under <literal-head> matching <glob-tail>. Minted `^glob:<pattern>`;
+      # the hit arm in _diff_edge_hit owns the match. Fail-toward-match at every
+      # step: a missing head dir degrades to `^<head>/` — the dir-prefix edge the
+      # entry replaced, never narrower; a malformed entry mints `^glob:<entry
+      # verbatim>`, which the hit arm's own malformed rule matches (a bare `^`
+      # would evaluate `*\n\n*` and narrow).
+      _g="${_p#glob:}"
+      case "$_g" in
+        *[\*?[]*) : ;;                      # a metachar is present — the glob grammar applies
+        *) _affected_add_edge "$_g"; return 0 ;;   # none: a literal path entry
+      esac
+      # malformed-shape invariant — ONE doctrine, FIVE sites: this mint arm, the
+      # in-flight revalidation in _diff_edge_hit's glob:* arm, the census arm in
+      # scripts/lint-orphan-test-suites.sh, and the covers() oracle in
+      # scripts/test-affected-kb-consumers.test.sh must classify a shape
+      # identically. Site five — the GLOBENT line shape in the registration-only
+      # classifier — is a DELIBERATE SUPERSET (admits e.g. `../` heads): admission
+      # only marks a diff registration-only, a malformed member still mints
+      # always-match here, and the census REDs it — the superset can never narrow.
+      # The grammar is a CLOSED charset (any byte outside [-A-Za-z0-9_./:*]'s
+      # entry set is malformed — ? [ \ space : are all outside it) and the head
+      # must be a clean repo-relative prefix: a `..` or `/`-headed glob can pass
+      # a -d probe while matching no diff line ever — a dead edge that narrows.
+      # Note the arm also intercepts `glob:`-spelled tokens minted from file
+      # CONTENT (not only declared arrays): a metachar-bearing one mints
+      # malformed → always-match (widen-only by design); a metachar-free one
+      # takes the literal-path recursion above — a real edge if the path exists,
+      # nothing otherwise.
+      case "$_g" in
+        *[!A-Za-z0-9_./*-]*) _p="^glob:${_p}" ;;   # byte outside the grammar charset → verbatim
+        *)
+          _gh="${_g%%[*?[]*}"               # longest leading metachar-free run
+          case "$_gh" in
+            /*|./*|../*|*"//"*|*"/./"*|*"/../"*) _p="^glob:${_p}" ;;  # not repo-relative → verbatim
+            */)
+              _gt="${_g#$_gh}"
+              case "$_gt" in
+                */) _p="^glob:${_p}" ;;     # _gt ends / — no path can match it → verbatim
+                *\**)                       # _gt carries a *
+                  if _affected_probe d "$_gh"; then _p="^glob:${_g}"; else _p="^${_gh}"; fi ;;
+                *) _p="^glob:${_p}" ;;      # _gt without * → malformed → verbatim
+              esac
+              ;;
+            *) _p="^glob:${_p}" ;;          # _gh does not end in / → malformed → verbatim
+          esac
+          ;;
+      esac
+      ;;
     *)
-      if [[ -d "$_p" ]]; then _p="${_p%/}/"; fi
-      _p="^$_p"
+      [[ -n "$_p" ]] && _affected_probe e "$_p" || return 0
+      case "$_p" in
+        .|..|./*|../*) ;;
+        *)
+          if _affected_probe d "$_p"; then _p="${_p%/}/"; fi
+          _p="^$_p"
+          ;;
+      esac
       ;;
   esac
   [[ "${_AC_ESET-}" == *"${_nl}${_p}${_nl}"* ]] && return 0
@@ -2740,7 +2929,7 @@ _affected_edge_token() {
       case "$_p" in ../*|..|.) _p="" ;; esac
       ;;
   esac
-  if [[ -n "$_p" && ! -e "$_p" && "$_p" =~ ^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)+$ ]]; then
+  if [[ -n "$_p" ]] && ! _affected_probe e "$_p" && [[ "$_p" =~ ^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)+$ ]]; then
     _p="$(printf '%s' "$_p" | tr '.' '/').py"
   fi
   _affected_buf_add "$_p"
@@ -2767,16 +2956,24 @@ _affected_edge_token() {
 # between seconds and minutes. Parallel arrays, not assoc: bash 3.2.
 _FE_FILES=()
 _FE_EDGES=()
+# _FE_PROBESETS is the #9812 parallel memo: the probe slice a file's extraction consumed. A memo hit
+# must hand the consumer's cache record the SAME input set the extractor's record carries — without
+# it, a path that probed-miss inside a shared helper validates forever for every memo consumer, and
+# creating that file later would narrow their selection silently (review P1).
+_FE_PROBESETS=()
+# _FE_RECTRACKED: parallel flag — 1 when the entry's extraction ran under _ADC_REC=1 (slice exists),
+# 0 when it ran cold. A memo consumer recording under REC=1 refuses to store on a 0-flagged entry.
+_FE_RECTRACKED=()
 
 # `_FE_BUF` is the per-file accumulator: _affected_file_edges_uncached and
-# _affected_edge_token append through _affected_buf_add so the CACHE records
+# _affected_edge_token append through _affected_buf_add so the _FE_ memo records
 # the file's complete edge set — recording only what survived _AC_EDGES dedup
 # would silently drop edges another suite already contributed, and replaying
 # that for a later suite would under-edge it.
 _FE_BUF=()
 _affected_buf_add() {
   local _p="$1"
-  [[ -n "$_p" && -e "$_p" ]] || return 0
+  [[ -n "$_p" ]] && _affected_probe e "$_p" || return 0
   _EB_HIT=1
   _affected_in_list "$_p" ${_FE_BUF[@]+"${_FE_BUF[@]}"} && return 0
   _FE_BUF+=("$_p")
@@ -2821,10 +3018,39 @@ _affected_resolve_vars() {
 
 _affected_file_edges() {
   local _f="$1"
-  [[ -f "$_f" ]] || return 0
+  _affected_probe f "$_f" || return 0
+  # Record the read BEFORE the memo check: a _FE_FILES replay still consumed the file's content —
+  # the memo carries an earlier read of the same bytes the validator will re-hash.
+  _affected_rec_read "$_f"
   local _ci
   for (( _ci=0; _ci<${#_FE_FILES[@]}; _ci++ )); do
     if [[ "${_FE_FILES[$_ci]}" == "$_f" ]]; then
+      # Replay the file's probe slice into the current record: pure string copies, no syscalls.
+      # The slice entries are the probe lines the extractor recorded (kind \t rc \t path); PSET
+      # dedup keeps the kind|path key shape _affected_probe writes.
+      # A memo entry populated under _ADC_REC=0 has NO slice (_FE_RECTRACKED) — replaying it into
+      # a record would mint an under-recorded input set. Poison the record instead: the edges are
+      # still correct for this process, the record is just never stored. (Unreachable today —
+      # every caching context records from the first classify — belt for a future call site.)
+      if (( ${_ADC_REC:-0} )) && [[ "${_FE_RECTRACKED[$_ci]:-0}" != "1" ]]; then
+        _ADC_REC_BAD=1
+      fi
+      if (( ${_ADC_REC:-0} )) && [[ -n "${_FE_PROBESETS[$_ci]:-}" ]]; then
+        local _pe _pk _ppath _prest _nl2=$'\n'
+        while IFS= read -r _pe; do
+          [[ -n "$_pe" ]] || continue
+          _pk="${_pe%%$'\t'*}"
+          _prest="${_pe#*$'\t'}"
+          _ppath="${_prest#*$'\t'}"
+          case "${_ADC_REC_PSET:-$_nl2}" in
+            *"${_nl2}${_pk}|${_ppath}${_nl2}"*) : ;;
+            *)
+              _ADC_REC_PSET+="${_pk}|${_ppath}${_nl2}"
+              _ADC_REC_PROBES+=("$_pe")
+              ;;
+          esac
+        done <<< "${_FE_PROBESETS[$_ci]}"
+      fi
       local _ce
       while IFS= read -r _ce; do
         _affected_add_edge "$_ce"
@@ -2833,6 +3059,8 @@ _affected_file_edges() {
     fi
   done
   _FE_BUF=()
+  local _fe_ps_start=0
+  if (( ${_ADC_REC:-0} )); then _fe_ps_start=${#_ADC_REC_PROBES[@]}; fi
   _affected_file_edges_uncached "$_f"
   local _j _joined=""
   for _j in ${_FE_BUF[@]+"${_FE_BUF[@]}"}; do
@@ -2841,6 +3069,19 @@ _affected_file_edges() {
   done
   _FE_FILES+=("$_f")
   _FE_EDGES+=("$_joined")
+  # _FE_RECTRACKED marks whether the extraction ran under recording (its slice is trustworthy); a
+  # legitimately empty slice (a file with no candidate tokens) stays distinguishable this way.
+  if (( ${_ADC_REC:-0} )); then
+    local _fe_ps="" _fe_pe
+    for _fe_pe in ${_ADC_REC_PROBES[@]+"${_ADC_REC_PROBES[@]:$_fe_ps_start}"}; do
+      _fe_ps+="$_fe_pe"$'\n'
+    done
+    _FE_PROBESETS+=("$_fe_ps")
+    _FE_RECTRACKED+=("1")
+  else
+    _FE_PROBESETS+=("")
+    _FE_RECTRACKED+=("0")
+  fi
 }
 
 _affected_file_edges_uncached() {
@@ -2965,13 +3206,19 @@ _affected_derive() {
         # A `-c` payload is a script string, not a path: word-split it and keep
         # the tokens that resolve — `cd apps/web-platform && npm run x` yields
         # the directory edge, which is the whole point of looking inside.
-        local _w _pw=""
+        # set -f around the split: unquoted expansion would ALSO pathname-expand `*`/`?`/`[]`
+        # tokens against cwd — a directory-listing input no recorded probe can later invalidate
+        # (#9812 structural-enum review). The sibling invocation arm already splits glob-free
+        # via `IFS=' ' read -ra`; this arm matches it.
+        local _w _pw="" _gw=$-
+        set -f
         for _w in $_tok; do
           _w="${_w%\"}"; _w="${_w#\"}"; _w="${_w%\'}"; _w="${_w#\'}"
           if _affected_runner_subcmd "$_pw" "$_w"; then _pw="$_w"; continue; fi
           _pw="$_w"
           _affected_add_edge "$_w"
         done
+        case "$_gw" in *f*) : ;; *) set +f ;; esac
         ;;
     esac
     # A runner SUBCOMMAND is not an operand — see _affected_runner_subcmd.
@@ -2984,19 +3231,19 @@ _affected_derive() {
         ;;
       *.sh|*.ts|*.tsx|*.mjs|*.js|*.py|*.rb)
         _affected_add_edge "$_tok"
-        [[ -z "$_suite_file" && -f "$_tok" ]] && _suite_file="$_tok"
+        if [[ -z "$_suite_file" ]] && _affected_probe f "$_tok"; then _suite_file="$_tok"; fi
         ;;
       *.*)
         # Literal first (`config.yml` resolves as itself); THEN the
         # dotted-module reading (`tests.scripts.test_x` -> tests/scripts/…),
         # which only lands when the literal did not.
         _affected_add_edge "$_tok"
-        if [[ ! -e "$_tok" && "$_tok" =~ ^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)+$ ]]; then
+        if ! _affected_probe e "$_tok" && [[ "$_tok" =~ ^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)+$ ]]; then
           local _mod; _mod="$(printf '%s' "$_tok" | tr '.' '/')"
           _affected_add_edge "$_mod"
           _affected_add_edge "$_mod.py"
           _affected_add_edge "$_mod.sh"
-          [[ -z "$_suite_file" && -f "$_mod.py" ]] && _suite_file="$_mod.py"
+          if [[ -z "$_suite_file" ]] && _affected_probe f "$_mod.py"; then _suite_file="$_mod.py"; fi
         fi
         ;;
       *)
@@ -3068,7 +3315,7 @@ _affected_derive() {
         local _i _new
         for (( _i=_pre_n; _i<${#_AC_EDGES[@]}; _i++ )); do
           _new="${_AC_EDGES[$_i]#^}"
-          if [[ -f "$_new" ]]; then
+          if _affected_probe f "$_new"; then
             case "$_sset" in *"$_snl$_new$_snl"*) ;; *) _sset+="$_new$_snl"; _next+=("$_new") ;; esac
           fi
         done
@@ -3489,7 +3736,8 @@ _aff_runner_banner() {
 # effective selected set of zero means the run would certify a battery that
 # never executes. Both exit 4 — "refused, nothing ran" — NOT 3, which #7424
 # reserved for a suite TERMINATED mid-coverage.
-_MIN_ALWAYS_ON_DECLARED=143
+# #9763: 38 heavy/stale labels withdrawn to edge-selection; the floor pins count-5.
+_MIN_ALWAYS_ON_DECLARED=108
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate
@@ -3603,7 +3851,14 @@ if (( _AFFECTED == 1 && _ENUMERATE == 0 )) && [[ "$TEST_GROUP" == "all" ]]; then
             _aff_label[$_aff_ordinal]="${_aff_fields[1]}"
             [[ "$_aff_line" == SUITE_COMMAND$'\t'* ]] || continue
             _aff_cmd_records=$(( _aff_cmd_records + 1 ))
-            _affected_classify "${_aff_fields[1]}" ${_aff_fields[@]+"${_aff_fields[@]:2}"}
+            # Cache wrapper (#9812): only on the selection walk — TEST_GROUP=all and NOT
+            # --print-affected-set receipt mode (whose edge set is deliberately partial, so it
+            # must never write records). Kill switch and init failure degrade to plain classify.
+            if (( _ADC_LIB_OK == 1 )) && [[ "${TEST_GROUP:-all}" == "all" ]] && (( _PRINT_AFFECTED == 0 )); then
+              _affected_classify_cached "${_aff_fields[1]}" ${_aff_fields[@]+"${_aff_fields[@]:2}"}
+            else
+              _affected_classify "${_aff_fields[1]}" ${_aff_fields[@]+"${_aff_fields[@]:2}"}
+            fi
             _aff_cls[$_aff_ordinal]="$_AC_CLASS"
             if (( _PRINT_SELECTION == 1 )); then
               _aff_ej=""
@@ -3620,6 +3875,19 @@ if (( _AFFECTED == 1 && _ENUMERATE == 0 )) && [[ "$TEST_GROUP" == "all" ]]; then
             ;;
         esac
       done <<< "$_aff_stream"
+      # Cache telemetry (#9812): hits+misses+derived ≈ classify calls served; a warm unchanged run
+      # should print misses=0 derived=0. stderr, not stdout — --print-selection's stdout is a
+      # machine-compared surface (the bench's determinism gate cmp's repeat runs byte-for-byte, and
+      # cold-vs-warm counters would differ legitimately). Emitted unconditionally — zeros plus
+      # state=off are the honest "cache not consulted" reading; a silently-absent line is how a dead
+      # cache regresses unnoticed.
+      _adc_state=off
+      if (( _ADC_LIB_OK == 1 )) && [[ "${SOLEUR_AFFECTED_DERIVE_CACHE:-1}" != "0" ]] \
+        && (( ${_ADC_READY:-0} == 1 )); then
+        _adc_state=on
+      fi
+      printf 'AFFECTED_DERIVE_CACHE\tstate=%s\thits=%d\tmisses=%d\tderived=%d\n' \
+        "$_adc_state" "${_ADC_HITS:-0}" "${_ADC_MISSES:-0}" "${_ADC_DERIVED:-0}" >&2
       if (( _aff_selected == 0 )); then
         # The EFFECTIVE selected set, not the derived one: a run whose whole
         # reachable selection is empty would exit green having executed
@@ -4054,6 +4322,48 @@ case "${_durable_log_dir}/" in
     ;;
 esac
 
+# wd-default-arm-begin
+# #9814: a local affected-shaped run pays near-nothing for the timing data the
+# weight-drift comparator needs — default TEST_TIMING_LOG into the per-run
+# durable dir (it rides the #9117 age-reap like the suite logs beside it).
+# In-shell, NEVER export: suite children that spawn a nested copy of this
+# runner would otherwise append THEIR fixture rows into this run's log —
+# phantom committed=unmeasured lines on every runner-touching diff (the
+# documented hazard test-all-infra-coverage-notice.test.sh names outright;
+# every consumer here — run_suite's >>, _emit_bytes_probe, the epilogue emit —
+# reads it in this process). The writability probe is load-bearing: run_suite
+# appends with >> under set -e, so an unwritable target aborts the run
+# mid-suite — degrade to "no timing log", never to "dead runner".
+# TEST_GROUP=affected (#8591) and _AFFECTED==1 on the all-group local default
+# (ADR-242) are the two disjoint selectors; enumerate/print paths are
+# side-effect-free by contract, so they decline before paying a mkdir.
+if [[ -z "${TEST_TIMING_LOG:-}" ]] && [[ -z "${CI:-}" ]] \
+  && (( _ENUMERATE == 0 && _PRINT_SELECTION == 0 )) \
+  && { [[ "${TEST_GROUP:-}" == "affected" ]] \
+       || { [[ "${TEST_GROUP:-all}" == "all" ]] && (( _AFFECTED == 1 )); }; }; then
+  if mkdir -p "$_durable_log_dir" 2>/dev/null \
+    && [[ -w "$_durable_log_dir" && -O "$_durable_log_dir" ]]; then
+    # -O: the leaf name is predictable (basename-$$-EPOCHSECONDS); a co-tenant
+    # pre-creating it could plant a read-only or symlinked suite-timings.tsv —
+    # ownership required, not just writability. The truncate doubles as the
+    # file-level probe AND closes the bash-3.2 (no EPOCHSECONDS) PID-reuse
+    # stale-row read — a non-writable stale leaf declines the arm rather than
+    # letting the first >> abort the run mid-suite.
+    TEST_TIMING_LOG="$_durable_log_dir/suite-timings.tsv"
+    if : > "$TEST_TIMING_LOG" 2>/dev/null; then
+      printf '[note] weight-drift: timing log at %s\n' "$TEST_TIMING_LOG" >&2
+    else
+      printf '[note] weight-drift: timing log declined — %s not writable; WEIGHT_DRIFT lines will not emit\n' \
+        "$TEST_TIMING_LOG" >&2
+      TEST_TIMING_LOG=""
+    fi
+  else
+    printf '[note] weight-drift: timing log declined — %s not writable; WEIGHT_DRIFT lines will not emit\n' \
+      "$_durable_log_dir" >&2
+  fi
+fi
+# wd-default-arm-end
+
 # _gc_durable_logs <namespace-dir> <days> — age-reap <label>-<pid>-<epoch> run
 # dirs from the DEDICATED durable-log namespace (#9117). The one place a
 # recursive delete on a shared base is acceptable: this namespace is created
@@ -4293,6 +4603,20 @@ if (( _ENUMERATE == 1 )); then SOLEUR_DISABLE_SESSION_STATE=1; fi
 # A zombie or reparented-dead parent fires the same way as a dead one:
 # `ps -o stat=` reports Z for an unreaped corpse.
 #
+# Debounce (#9686): the verdict is per-POLL, not per-READ — one anomalous
+# sample (a transient `kill -0` ESRCH, a one-shot `stat==Z` answer, or an
+# `lstart` mismatch under the fork churn a long suite generates) must not
+# reap a live-parent run. Each poll produces a single verdict from the
+# parent legs; only N CONSECUTIVE failed polls (default 3, knob
+# SOLEUR_TEST_ALL_WD_FAILS_N) reach the terminate path — and only after a
+# deciding-poll re-verify of the parent's identity, so a read that recovers
+# on the boundary resets rather than reaps. The counter is consecutive-only,
+# never cumulative: a sustained failure still terminates within ~N polls +
+# the unchanged reap chain. Every failed poll prints a WARN naming the leg
+# so a recurrence is self-describing. The runner-liveness leg above it gets
+# the same consecutive counter — a transient ESRCH there had the identical
+# false-reap blast radius.
+#
 # On fire: in-flight suite children are killed BEFORE the runner — a wedged
 # suite child inherits the lock fd (no CLOEXEC) so terminating the runner
 # alone releases nothing; killing children first is also what keeps the
@@ -4303,6 +4627,16 @@ if (( _ENUMERATE == 1 )); then SOLEUR_DISABLE_SESSION_STATE=1; fi
 _RUN_WD_POLL_S="${SOLEUR_TEST_ALL_WD_POLL_S:-1}"
 # 0 is not a valid floor — `sleep 0` busy-spins the poll into a CPU burn.
 [[ "$_RUN_WD_POLL_S" =~ ^[0-9]+$ ]] && (( 10#$_RUN_WD_POLL_S >= 1 )) || _RUN_WD_POLL_S=1
+# Consecutive-failure threshold (#9686). Same parse idiom as _RUN_WD_POLL_S;
+# floor 1 preserves the pre-debounce single-poll semantics for tests; the
+# ceiling bounds a garbage digit-string rather than letting the threshold
+# become unreachable (which would silently disarm the #8993 guarantee).
+# The 10# re-assignment matters: `10#` appears in the GUARD only, while the
+# consumer `(( _wd_fails >= _RUN_WD_FAILS_N ))` re-parses the raw string —
+# `08`/`09` would fail as octal there and turn `(( ))` permanently false.
+_RUN_WD_FAILS_N="${SOLEUR_TEST_ALL_WD_FAILS_N:-3}"
+[[ "$_RUN_WD_FAILS_N" =~ ^[0-9]+$ ]] && (( 10#$_RUN_WD_FAILS_N >= 1 && 10#$_RUN_WD_FAILS_N <= 3600 )) || _RUN_WD_FAILS_N=3
+_RUN_WD_FAILS_N=$(( 10#${_RUN_WD_FAILS_N} ))
 # Opt-out, stated rather than hidden: SOLEUR_TEST_ALL_ALLOW_ORPHAN=1 skips the
 # arm for a caller that deliberately backgrounds this runner (a supervising
 # wrapper that must outlive the launcher). Silence here would make "watchdog
@@ -4312,59 +4646,169 @@ if [[ "${SOLEUR_TEST_ALL_ALLOW_ORPHAN:-}" == "1" ]]; then
 elif (( _ENUMERATE == 0 )) && [[ -n "${PPID:-}" ]]; then
   _RUN_WD_TOP_PID=$$
   _RUN_WD_PARENT_PID=$PPID
-  _RUN_WD_PARENT_LSTART="$(ps -o lstart= -p "$_RUN_WD_PARENT_PID" 2>/dev/null)"
-  _RUN_WD_TOP_LSTART="$(ps -o lstart= -p "$_RUN_WD_TOP_PID" 2>/dev/null)"
+  _RUN_WD_PARENT_LSTART="$(ps -o lstart= -p "$_RUN_WD_PARENT_PID" 2>/dev/null || true)"
+  _RUN_WD_TOP_LSTART="$(ps -o lstart= -p "$_RUN_WD_TOP_PID" 2>/dev/null || true)"
   (
     _wd_sleep=""
-    # Nested bash's $PPID is THIS subshell's pid — the portable spelling
-    # (bash 3.2 lacks $BASHPID; the enumerate watchdog above uses the same
-    # idiom). Needed to exclude the watchdog itself from the child sweep.
-    _wd_self="$(bash -c 'echo "$PPID"')"
+    # Own-pid discovery: $BASHPID reports THIS subshell's pid directly
+    # (subshells share $$) — no fork, no ps, and no spawned child that can
+    # outlive the watchdog and leak a `tr: write error` onto the run's
+    # stderr if the disarm TERM lands mid-startup (measured in CI: the
+    # probe+ps+tr startup raced disarm under shard load and the orphaned
+    # tr printed EPIPE into the clean-run tail, breaking AC8's byte-shape
+    # baseline, #9686).
+    # bash 3.2 lacks BASHPID (var unset, not wrong) → the spawned-child
+    # probe stays as the fallback path.
+    _wd_self="${BASHPID:-}"
+    if [[ -z "$_wd_self" || "$_wd_self" == "$$" ]]; then
+      # A spawned child's PPID names THIS subshell unambiguously on every
+      # bash version — the nested-bash `echo $PPID` cmdsub idiom is
+      # unreliable because bash may fork rather than exec the inner
+      # command, reporting the cmdsub's own pid. The probe child must
+      # outlive the ps read (0.5s, not 0.01 — a near-zero sleep races the
+      # fork+exec and loses on a loaded box); `|| true` is load-bearing
+      # under pipefail or a failing ps aborts this subshell under set -e
+      # before the first poll; ps column output is padded (` 691177`),
+      # which silently no-ops both exact-match consumers (the
+      # _wd_descendants `a == excl` ancestor break and the grep -vxF
+      # whole-line filters) — a wrong _wd_self lets the watchdog's own
+      # pid stay in the reap list, where the first `kill -TERM`
+      # self-terminates it mid-reap (#9686).
+      sleep 0.5 & _wd_probe=$!
+      _wd_self="$(ps -o ppid= -p "$_wd_probe" 2>/dev/null | tr -d '[:space:]' || true)"
+      [[ -n "$_wd_self" ]] || _wd_self="$(bash -c 'echo "$PPID"' || true)"
+    fi
     trap '[[ -n "$_wd_sleep" ]] && kill -TERM "$_wd_sleep" 2>/dev/null; exit 0' TERM
     # SIGPIPE must not kill the watchdog mid-fire: the run's stderr reader is
     # often already gone on exactly the path that needs the kill.
     trap '' PIPE
     _wd_kids=""
+    _wd_fails=0
+    _wd_top_fails=0
     while :; do
       # Refresh the direct-child snapshot every poll — it is the ONLY record
       # of the runner's suite children once the runner is dead (they
       # reparent to init and pgrep -P on a dead pid enumerates nothing).
-      _wd_kids="$(pgrep -P "$_RUN_WD_TOP_PID" 2>/dev/null || true)"
+      # Keep the LAST NON-EMPTY snapshot: after the runner dies pgrep -P
+      # returns empty on every poll, and an unconditional overwrite would
+      # drain the record before the debounce's N-poll threshold can reap it.
+      # Bound, stated honestly: a child born <1 poll interval before an
+      # untrappable runner death is never sampled — its ppid rewrites to
+      # init before any enumeration can see it, and no post-mortem walk can
+      # recover it. Real suite children outlive the interval by orders of
+      # magnitude; the gap is the residual, not the contract (#9686).
+      # grep -vxF strips the watchdog itself: it is a direct child of the
+      # runner, so pgrep -P returns it on every live poll, and a reap list
+      # carrying it self-TERMs the watchdog mid-sweep (#9686).
+      _wd_kids_new="$(pgrep -P "$_RUN_WD_TOP_PID" 2>/dev/null | grep -vxF "$_wd_self" || true)"
+      [[ -n "$_wd_kids_new" ]] && _wd_kids="$_wd_kids_new"
       # Runner liveness FIRST: a runner-side untrappable death (SIGKILL/OOM)
       # while the parent lives leaves this subshell holding the inherited
       # stdout/stderr fds — a gone-but-held-pipe deadlock between a dead
       # run's watchdog and a live parent whose pipe reader never sees EOF.
       # The snapshot's children still hold the inherited lock fd — reap
-      # them, then exit: there is no runner left to signal.
+      # them, then exit: there is no runner left to signal. Debounced like
+      # the parent leg (#9686): a transient ESRCH on a live runner had the
+      # same false-reap blast radius.
+      _wd_top_bad=""
       if ! kill -0 "$_RUN_WD_TOP_PID" 2>/dev/null; then
-        printf 'ERROR: runner died untrappably — reaping its in-flight suite children (#8993)\n' >&2 || true
-        _wd_kids="$(_wd_descendants "$_wd_self" $_wd_kids)"
-        for _wd_kid in $_wd_kids; do
-          kill -TERM "$_wd_kid" 2>/dev/null || true
-        done
-        sleep 2 & _wd_sleep=$!
-        wait "$_wd_sleep" 2>/dev/null || true
-        for _wd_kid in $_wd_kids; do
-          kill -KILL "$_wd_kid" 2>/dev/null || true
-        done
-        exit 0
+        _wd_top_bad=kill0
+      elif [[ -n "$_RUN_WD_TOP_LSTART" ]]; then
+        # Identity check (#9686): a recycled runner pid still answers
+        # kill -0 — only lstart tells "same pid, new process" apart. An
+        # unreadable lstart is inconclusive (empty), never a failure.
+        _wd_tlstart="$(ps -o lstart= -p "$_RUN_WD_TOP_PID" 2>/dev/null || true)"
+        [[ -n "$_wd_tlstart" && "$_wd_tlstart" != "$_RUN_WD_TOP_LSTART" ]] && _wd_top_bad=lstart
       fi
-      # Parent liveness = alive AND not-zombie AND (when we captured a
-      # baseline) the SAME process — pid reuse after parent death must not
-      # read as "parent still alive".
-      kill -0 "$_RUN_WD_PARENT_PID" 2>/dev/null || break
-      _wd_pstat="$(ps -o stat= -p "$_RUN_WD_PARENT_PID" 2>/dev/null)"
-      [[ "$_wd_pstat" == Z* ]] && break
-      if [[ -n "$_RUN_WD_PARENT_LSTART" ]]; then
-        _wd_plstart="$(ps -o lstart= -p "$_RUN_WD_PARENT_PID" 2>/dev/null)"
-        [[ -n "$_wd_plstart" && "$_wd_plstart" != "$_RUN_WD_PARENT_LSTART" ]] && break
+      if [[ -n "$_wd_top_bad" ]]; then
+        _wd_top_fails=$(( _wd_top_fails + 1 ))
+        printf 'WARN: runner-liveness poll failed (leg=%s, %s/%s consecutive) (#9686)\n' \
+          "$_wd_top_bad" "$_wd_top_fails" "$_RUN_WD_FAILS_N" >&2 || true
+        if (( _wd_top_fails >= _RUN_WD_FAILS_N )); then
+          # No deciding-poll re-verify here — kill -0 on a LIVE pid does not
+          # produce transient ESRCH the way a ps read produces transient
+          # answers, and each extra poll costs a _RUN_WD_POLL_S delay to a
+          # leg whose only job is fd release + child reap. Asymmetry with
+          # the parent leg is deliberate (#9686).
+          printf 'ERROR: runner died untrappably — reaping its in-flight suite children (#8993)\n' >&2 || true
+          # Union the retained direct-children snapshot with their
+          # descendants — _wd_descendants emits only the descendants, and
+          # the lock-fd holders are the direct children themselves. Then
+          # strip this watchdog's own pid: `for ... kill` hits list members
+          # in order and a self-TERM exits mid-sweep, leaving every later
+          # member alive (#9686).
+          _wd_kids="$_wd_kids $(_wd_descendants "$_wd_self" $_wd_kids || true)"
+          _wd_kids="$(printf '%s\n' $_wd_kids | grep -vxF "$_wd_self" || true)"
+          for _wd_kid in $_wd_kids; do
+            kill -TERM "$_wd_kid" 2>/dev/null || true
+          done
+          sleep 2 & _wd_sleep=$!
+          wait "$_wd_sleep" 2>/dev/null || true
+          for _wd_kid in $_wd_kids; do
+            kill -KILL "$_wd_kid" 2>/dev/null || true
+          done
+          exit 0
+        fi
+      else
+        _wd_top_fails=0
+      fi
+      # Parent liveness verdict — ONE per poll (#9686): alive AND not-zombie
+      # AND (when we captured a baseline) the SAME process — pid reuse after
+      # parent death must not read as "parent still alive". A failed verdict
+      # increments the consecutive counter; a healthy poll resets it.
+      _wd_bad=""
+      # `|| true` on every ps read: a non-zero ps (pid dying in the
+      # kill-0→ps gap, fork/exec failure under churn) would otherwise abort
+      # this subshell under set -e — a silent, permanent fail-open (#9686).
+      if ! kill -0 "$_RUN_WD_PARENT_PID" 2>/dev/null; then
+        _wd_bad=kill0
+      else
+        _wd_pstat="$(ps -o stat= -p "$_RUN_WD_PARENT_PID" 2>/dev/null || true)"
+        if [[ "$_wd_pstat" == Z* ]]; then
+          _wd_bad=zombie
+        elif [[ -n "$_RUN_WD_PARENT_LSTART" ]]; then
+          _wd_plstart="$(ps -o lstart= -p "$_RUN_WD_PARENT_PID" 2>/dev/null || true)"
+          [[ -n "$_wd_plstart" && "$_wd_plstart" != "$_RUN_WD_PARENT_LSTART" ]] && _wd_bad=lstart
+        fi
+      fi
+      if [[ -z "$_wd_bad" ]]; then
+        _wd_fails=0
+      else
+        _wd_fails=$(( _wd_fails + 1 ))
+        printf 'WARN: parent-liveness poll failed (leg=%s, %s/%s consecutive) (#9686)\n' \
+          "$_wd_bad" "$_wd_fails" "$_RUN_WD_FAILS_N" >&2 || true
+        if (( _wd_fails >= _RUN_WD_FAILS_N )); then
+          # Deciding-poll re-verify (#9686): a run that reached the threshold
+          # gets one fresh probe of the parent's identity before the reap —
+          # a recovered read resets the counter instead of firing, closing
+          # the window between the Nth sample and the kill. Keep the three
+          # leg shapes IDENTICAL to the poll verdict above — a leg added to
+          # one site only would accumulate to the threshold, then always be
+          # erased here, and could never fire.
+          _wd_bad=""
+          if ! kill -0 "$_RUN_WD_PARENT_PID" 2>/dev/null; then
+            _wd_bad=kill0
+          else
+            _wd_pstat="$(ps -o stat= -p "$_RUN_WD_PARENT_PID" 2>/dev/null || true)"
+            if [[ "$_wd_pstat" == Z* ]]; then
+              _wd_bad=zombie
+            elif [[ -n "$_RUN_WD_PARENT_LSTART" ]]; then
+              _wd_plstart="$(ps -o lstart= -p "$_RUN_WD_PARENT_PID" 2>/dev/null || true)"
+              [[ -n "$_wd_plstart" && "$_wd_plstart" != "$_RUN_WD_PARENT_LSTART" ]] && _wd_bad=lstart
+            fi
+          fi
+          if [[ -n "$_wd_bad" ]]; then
+            break
+          fi
+          _wd_fails=0
+        fi
       fi
       sleep "$_RUN_WD_POLL_S" & _wd_sleep=$!
       wait "$_wd_sleep" 2>/dev/null || true
     done
     # Parent is gone (or unverifiably recycled). Runner identity check before
     # the kill — same pid-reuse discipline as the enumerate watchdog.
-    _wd_now="$(ps -o lstart= -p "$_RUN_WD_TOP_PID" 2>/dev/null)"
+    _wd_now="$(ps -o lstart= -p "$_RUN_WD_TOP_PID" 2>/dev/null || true)"
     if [[ -z "$_RUN_WD_TOP_LSTART" || -z "$_wd_now" \
         || "$_wd_now" == "$_RUN_WD_TOP_LSTART" ]]; then
       # Announce FIRST: the runner's own EXIT trap disarms this watchdog,
@@ -4375,7 +4819,11 @@ elif (( _ENUMERATE == 0 )) && [[ -n "${PPID:-}" ]]; then
       # so a runner-TERM sent first lets a TERM-resistant suite child (the
       # wedge class the reap exists for) survive holding the inherited lock
       # fd — the disarm would land mid-grace and the -9 leg would never run.
-      _wd_kids="$(_wd_descendants "$_wd_self" "$_RUN_WD_TOP_PID")"
+      # _wd_descendants excludes pids whose ancestor chain reaches
+      # _wd_self — but defence in depth: strip the watchdog pid itself too,
+      # since a self-TERM mid-loop truncates the rest of the reap (#9686).
+      _wd_kids="$(_wd_descendants "$_wd_self" "$_RUN_WD_TOP_PID" || true)"
+      _wd_kids="$(printf '%s\n' $_wd_kids | grep -vxF "$_wd_self" || true)"
       for _wd_kid in $_wd_kids; do
         kill -TERM "$_wd_kid" 2>/dev/null || true
       done
@@ -4388,6 +4836,13 @@ elif (( _ENUMERATE == 0 )) && [[ -n "${PPID:-}" ]]; then
       sleep 5 & _wd_sleep=$!
       wait "$_wd_sleep" 2>/dev/null || true
       kill -KILL "$_RUN_WD_TOP_PID" 2>/dev/null || true
+    else
+      # The runner pid was recycled between the Nth failure and now: the
+      # verdict fired but the pid no longer names the run it would kill.
+      # Say so — a silent skip leaves reparented children holding the lock
+      # fd with no trace of why nobody reaped them (#9686).
+      printf 'WARN: parent-death reap skipped — runner pid %s no longer names this run (identity changed) (#9686)\n' \
+        "$_RUN_WD_TOP_PID" >&2 || true
     fi
   ) &
   _RUN_WD_PID=$!
@@ -4550,6 +5005,9 @@ if want_scripts; then
   run_suite "scripts/lint-migrated-rule-ids-live" bash scripts/lint-migrated-rule-ids.sh
   run_suite "scripts/lint-migrated-rule-ids-unit" bash scripts/lint-migrated-rule-ids.test.sh
   run_suite "scripts/lint-infra-no-human-steps" bash scripts/lint-infra-no-human-steps.test.sh
+  # Image CVE scan (W3, epic #9601): hermetic suite (stub Grype/curl, file:// /health); scripts/*.test.sh is
+  # not in SUITE_GLOBS, so it is registered explicitly.
+  run_suite "scripts/image-cve-scan" bash scripts/image-cve-scan.test.sh
   # Doppler's API caps a doppler_* `description` at 255; the provider schema and `terraform plan`
   # do not, so a 273-char doppler_project.infra_privileged reddened every push apply after the
   # credential-tiering merge. -live asserts the real tree; -unit is the mutation matrix.
@@ -4787,6 +5245,12 @@ if want_scripts; then
   # the auto-glob below, so an unregistered suite is an ORPHAN that gates
   # nothing (the #5417 class). lint-orphan-test-suites.sh enforces this line.
   run_suite "scripts/test-contention" bash scripts/test-contention.test.sh
+  # #9763: the fast-tier budget ratchet — pins always-on committed weight to
+  # <=10s per suite and <=300s total so the local tier cannot silently regrow.
+  run_suite "scripts/test-all-fast-tier-budget" bash scripts/test-all-fast-tier-budget.test.sh
+  # #9814: the local weight-drift detector — warns when a suite's local actual
+  # exceeds its committed weight by >2x AND >10s (advisory lines, never a gate).
+  run_suite "scripts/test-all-weight-drift" bash scripts/test-all-weight-drift.test.sh
   # Guard 1 for the #7869 runtime ceiling. Registered here rather than left to a
   # glob: nothing auto-discovers this directory, so an unregistered suite is
   # silently never gated — locally or in CI.
@@ -4884,15 +5348,23 @@ if want_scripts; then
   # a DECLARED_TOTAL bump in the battery needs all four edited together, and the shard-totality suites
   # pin both halves (plugins/soleur/test/scripts-shard-totality*.sh).
   if _diff_touches --pr-gated "${LINT_ORPHAN_BATTERY_PATHS[@]}"; then
-    run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-10
-    run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 11-20
+    run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-13
+    run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 14-27
   else
     _relevance_declined=$((_relevance_declined + 2))
     skip_suite "scripts/lint-orphan-test-suites-mutations-a" "relevance" \
-      "bash scripts/lint-orphan-test-suites.test.sh --rows 1-10"
+      "bash scripts/lint-orphan-test-suites.test.sh --rows 1-13"
     skip_suite "scripts/lint-orphan-test-suites-mutations-b" "relevance" \
-      "bash scripts/lint-orphan-test-suites.test.sh --rows 11-20"
+      "bash scripts/lint-orphan-test-suites.test.sh --rows 14-27"
   fi
+  # #9855 env-gate dormancy sentinel. The LIVE line points the census at this
+  # working tree; the battery builds synthetic fixture repos and proves each
+  # mutation row reddens — same live+unit pairing as the orphan lint above.
+  # Registered unconditionally: seconds on a scratch tree, and the sentinel is
+  # the durability half of the scheduled-integration-suites leg, so a PR that
+  # adds a gated suite must meet it on every run, not only on diff-touch.
+  run_suite "scripts/lint-integration-env-gates-live" bash scripts/lint-integration-env-gates.sh
+  run_suite "scripts/lint-integration-env-gates-battery" bash scripts/lint-integration-env-gates.test.sh
   # #7387 legal-corpus write-time gates. Each gate registers its unit suite AND a LIVE run
   # against the working tree: the unit suite proves the gate detects a planted defect in a
   # sandbox, the live line is the only thing that ever points it at the real corpus. The unit
@@ -5022,12 +5494,31 @@ if want_scripts; then
   # sweeper closes issue 8651 as completed — the observed-evidence condition zot-soak-6122.sh's
   # WEB_BLOCKER arm requires — so every sweeper exit code is driven by a fixture.
   run_suite "scripts/web-fresh-boot-zot-8651" bash scripts/followthroughs/web-fresh-boot-zot-8651.test.sh
+  # #9826 (W3, epic #9601): exit-code harness for the image-CVE-scan dark-launch window probe. Registered
+  # explicitly — scripts/followthroughs/*.test.sh is not in SUITE_GLOBS. A vacuous PASS would close the
+  # tracker on an unmeasured window.
+  run_suite "scripts/image-cve-scan-window-9826" bash scripts/followthroughs/image-cve-scan-window-9826.test.sh
+  # #9776 (epic #9601): exit-code harness for the hosted must-ask lane soak probe (CPO4-R5 revert and tune
+  # thresholds). Registered explicitly: scripts/followthroughs/*.test.sh is not in SUITE_GLOBS. A vacuous PASS
+  # would let the soak window read clean on an unmeasured stream.
+  run_suite "scripts/hosted-destroy-ask-window-9776" bash scripts/followthroughs/hosted-destroy-ask-window-9776.test.sh
+  # #5863: exit-code harness for the outer-wrap soak follow-through (stub-curl
+  # arms for verdict binding, freshness window, and HTTP classes). Registered
+  # explicitly (orphan-suite class above) — its PASS authorizes promoting the
+  # report-only canary to gating, so the promotion decision must be driven.
+  run_suite "scripts/tenant-outer-wrap-soak-5863" bash scripts/followthroughs/tenant-outer-wrap-soak-5863.test.sh
   # #9237: exit-code harness for the watchdog-arm soak probe. Registered
   # explicitly (orphan-suite class above). The probe is notify-only (never 0/1);
   # its arms drive whether the sweeper reports NOT YET / CANNOT ESTABLISH /
   # ACTION REQUIRED correctly — a vacuous or mis-routed verdict would either
   # stall the arm silently or cry wolf daily.
   run_suite "scripts/watchdog-arm-soak-9237" bash scripts/followthroughs/watchdog-arm-soak-9237.test.sh
+  # #9686: exit-code harness for the watchdog-debounce post-merge soak probe. Registered
+  # explicitly (orphan-suite class — scripts/followthroughs/*.test.sh is not in
+  # SUITE_GLOBS). The probe is notify-only (never 0/1); its arms drive whether the
+  # sweeper reports NOT YET / CANNOT ESTABLISH / ACTION REQUIRED correctly — a
+  # vacuous PASS would close the soak tracker on an unmeasured window.
+  run_suite "scripts/watchdog-debounce-soak-9686" bash scripts/followthroughs/watchdog-debounce-soak-9686.test.sh
   # #8036 1c: exit-code harness for the host-side-GHCR-retirement follow-through. Registered
   # EXPLICITLY — `scripts/followthroughs/*.test.sh` is not in SUITE_GLOBS, so a new probe's
   # harness gates nothing until this line exists (the orphan-suite class). Its exit code decides
@@ -5070,6 +5561,10 @@ if want_scripts; then
   # calls). Each FAIL arm is driven by one field; the dark-channel arm (0 markers ⇒ FAIL) pins
   # "could not measure" apart from a clean zero.
   run_suite "scripts/anthropic-double-bill-8611" bash scripts/followthroughs/anthropic-double-bill-8611.test.sh
+  # #9905: first-real-runs probe for the S4 credential conversions. The false-FAIL regression arm
+  # (marker text echoed inside a step's run: source) and the per-step exercised proof are driven
+  # through a stub gh that exits 64 on any request it does not expect.
+  run_suite "scripts/bearer-curl-s4-first-runs-9905" bash scripts/followthroughs/bearer-curl-s4-first-runs-9905.test.sh
   # #8151 AC-PM1: exit-code harness for the event-ship-merge merge-base verdict probe.
   # Registered explicitly (orphan-suite class above). Same CONTAMINATION arm as #6297/#8281:
   # every live Better Stack hit for the probe's marker strings has been a `"caller":"api"`
@@ -5376,6 +5871,12 @@ if want_scripts; then
   # replace only the host, never the dirtied plaintext volume or the LUKS volume. Registered
   # here for the reason above: nothing auto-discovers tests/scripts/.
   run_suite "tests/scripts/git-data-rung2-plan-shape" bash tests/scripts/test-git-data-rung2-plan-shape.sh
+  # (#9175) The inngest-provision rehearsal's plan-shape chokepoint (Phase A additive-only /
+  # Phase B exactly-the-NIC-create) and its evidence-capture decision function (the verdict
+  # that decides whether evidence attaches to #9175). Registered here for the same reason as
+  # the rung2 entries above: nothing auto-discovers tests/scripts/ or scripts/followthroughs/.
+  run_suite "tests/scripts/inngest-provision-plan-shape" bash tests/scripts/test-inngest-provision-plan-shape.sh
+  run_suite "scripts/followthroughs/inngest-provision-rehearsal-capture" bash scripts/followthroughs/inngest-provision-rehearsal-capture.test.sh
   # (#7226 / #5914, ADR-237) SSH host-key pinning guards. Registered HERE for the same
   # reason as the lines above: nothing auto-discovers tests/scripts/. Guard 1 (no unpinned
   # host-key option anywhere in the tree), its mutation harness, and the track.sh
@@ -5483,10 +5984,6 @@ if want_scripts; then
   # #6197: inngest-host-replace scoped-recreate destroy-guard (same sourced-gate shape the
   # web2-recreate gate used before #6575 deleted it).
   run_suite "tests/scripts/inngest-host-replace-gate" bash tests/scripts/test-inngest-host-replace-gate.sh
-  # #7695 — the two guards on apply_target=inngest-volume-recut. NOTHING auto-discovers
-  # tests/scripts/: the `*.test.sh` glob elsewhere in this file cannot match a `test-*` prefix, so
-  # an unregistered suite here never gates and the failure is silent-and-green.
-  run_suite "tests/scripts/inngest-volume-recut-gate" bash tests/scripts/test-inngest-volume-recut-gate.sh
   run_suite "tests/scripts/inngest-host-dark-gate" bash tests/scripts/test-inngest-host-dark-gate.sh
   # #6894 — ADR-142 Guard 3: the per-address plan-shape gate on the inngest-host dispatch (which
   # also creates the additive LUKS volume). Same orphan trap as above: nothing globs tests/scripts/test-*.sh.
@@ -5633,6 +6130,10 @@ if want_scripts; then
   # gate is separate: the unit suite stubs psql and cannot see YAML — only
   # this file asserts the workflow actually wires acquire/release/anchors.
   run_suite "tests/scripts/dev-suite-mutex-wiring" bash tests/scripts/test-dev-suite-mutex-wiring.sh
+  # Same wiring-gate shape for the shared dev-Doppler boundary script
+  # (#9947): three workflows consume it, and a consumer that drops the call
+  # fails silently — dev writes would run unasserted.
+  run_suite "tests/scripts/assert-dev-doppler-scope-wiring" bash tests/scripts/test-assert-dev-doppler-scope-wiring.sh
   # #8203 — the fail-closed verdict of the `vendor-pin-required` aggregator
   # (#5585 pattern instance #3). Registered HERE for the same reason: nothing
   # under tests/scripts/ is auto-discovered, and an unregistered verdict suite
@@ -5762,6 +6263,44 @@ if want_scripts; then
   # scripts/followthroughs/ matches no SUITE_GLOBS entry; appended LAST in the block so no earlier
   # registration's positional-shard ordinal moves. Its manifest rows come from the shard regeneration.
   run_suite "scripts/followthroughs/tty-ack-migration-9387" bash scripts/followthroughs/tty-ack-migration-9387.test.sh
+  # #9727 (ADR-276 S1): the hosted-runner demand census (golden totals, the C1/C2/non-vacuity self-checks and
+  # a gh-shim round trip over a committed fixture; offline). Explicit run_suite because scripts/*.test.sh is
+  # covered by no glob here; appended LAST in the block so no earlier registration's positional-shard ordinal
+  # moves. Its manifest rows come from the shard regeneration.
+  run_suite "scripts/ci-demand-census" bash scripts/ci-demand-census.test.sh
+  # #9727: the secret-scan smoke path gate. Extracts the smoke-relevance step body from secret-scan.yml and
+  # EXECUTES it under the Actions shell (the smoke-tests `if:` is pinned by exact string equality, not evaluated),
+  # so it is what separates "the gate skipped smoke correctly" from "the gate never looked". Same
+  # explicit-registration and LAST-in-block reasons as above.
+  run_suite "scripts/secret-scan-smoke-gate" bash scripts/secret-scan-smoke-gate.test.sh
+  # The bench's own --self-test (#9823), run ONCE as a subprocess under a hostile environment (NO_PARAPHRASE=1,
+  # an exported key, CURL_BIN, GIT_DIR, a quote-laden TMPDIR). Nothing ran that self-test in CI, so it sat red for 18 days
+  # (2026-09-20 to 2026-10-08) and a caller's environment could change its verdict. Explicit run_suite
+  # because scripts/*.test.sh is covered by no glob here; appended LAST in the block so no earlier
+  # registration's positional-shard ordinal moves. Its manifest rows come from the shard regeneration.
+  run_suite "scripts/learning-retrieval-bench" bash scripts/learning-retrieval-bench.test.sh
+  # #9512 (ADR-276 S2): the push-dedupe proof. Extracts the proof step body from ci.yml and EXECUTES it under the
+  # Actions shell against a gh shim, and pins the eight gated conditions, the `test` aggregator and the wrapper.
+  # Same explicit-registration and LAST-in-block reasons as above.
+  run_suite "scripts/ci-push-dedupe" bash scripts/ci-push-dedupe.test.sh
+  # #9512: the push-dedupe soak probe's exit-code contract (a fake gh, an injected clock, and mutation rows over
+  # copies of the probe). Same explicit-registration and LAST-in-block reasons as above.
+  run_suite "scripts/followthroughs/ci-push-dedupe-soak-9512" bash scripts/followthroughs/ci-push-dedupe-soak-9512.test.sh
+  # #9728 (ADR-276 S3, entry gate 6): the draft-push census instrument (synthesized fixtures, the verdict table by
+  # integer cross-multiplication, the REFUSED mutation matrix and a gh-shim round trip; offline). Same
+  # explicit-registration and LAST-in-block reasons as above.
+  run_suite "scripts/ci-draft-push-census" bash scripts/ci-draft-push-census.test.sh
+  # #9728 (ADR-276 S3): the draft-light proof. Extracts the draft-light step body, the four gated conditions and the
+  # test aggregator's draft arm from ci.yml and EXECUTES them under the Actions shell; mutation rows over copies.
+  # Same explicit-registration and LAST-in-block reasons as above.
+  run_suite "scripts/ci-draft-light" bash scripts/ci-draft-light.test.sh
+  # #9728 (ADR-276 S3): the soak probe's exit-code contract (a fake gh, an injected clock, a stub resolver and mutation
+  # rows over copies of the probe). Same explicit-registration and LAST-in-block reasons as above.
+  run_suite "scripts/followthroughs/ci-draft-light-soak-9728" bash scripts/followthroughs/ci-draft-light-soak-9728.test.sh
+  # (#9812) the derive cache lib and the runner's recording/dispatch instrumentation. Explicit
+  # run_suite for the same no-`scripts/*.test.sh`-glob reason; appended LAST in the block so no
+  # earlier registration's positional-shard ordinal moves. Declared edge set, not always-on.
+  run_suite "scripts/test-affected-derive-cache" bash scripts/test-affected-derive-cache.test.sh
 fi
 
 # Named bun-test entries — bun shard.
@@ -5901,6 +6440,11 @@ if want_webplat; then
   # it there would make the only cross-implementation check in the pair fail on a missing
   # binary rather than on a disagreement.
   run_suite "scripts/followthroughs/ccla-representative-icla-7922" bash scripts/followthroughs/ccla-representative-icla-7922.test.sh
+  # #9776 / ADR-284: the hosted must-ask lane's mutation battery (90 anchor-asserted mutants, one targeted vitest file
+  # each, on a COPY of the app tree). EXPLICIT, and in THIS shard: `apps/web-platform/test/*.test.sh` matches no
+  # SUITE_GLOBS entry, and the battery needs apps/web-platform/node_modules/.bin/vitest, which the `test-scripts`
+  # shard does not install. Its own control run reds the suite when the unedited copy is not green.
+  run_suite "apps/web-platform/test/destroy-ask-mutation" bash apps/web-platform/test/destroy-ask-mutation.test.sh
 fi
 
 # plugins/soleur bun-test recursion + blog-link-validation — bun shard.
@@ -6024,6 +6568,10 @@ if want_scripts; then
   # so it never takes the real advisory lock.
   run_suite "scripts/test-all-group-affected" bash scripts/test-all-group-affected.test.sh
   run_suite "scripts/battery-ref-guard" bash scripts/battery-ref-guard.test.sh
+  # W2 (#9601): the agent-security discoverability probe's own suite. Registered explicitly for the
+  # reason its neighbours state (repo-root `scripts/*.test.sh` is not auto-globbed). It drives COPIES of
+  # the plugin hooks through the probe's SLICE1_PLUGIN_ROOT seam and never writes the live hook.
+  run_suite "scripts/verify-agent-security-slice1" bash scripts/verify-agent-security-slice1.test.sh
   # MOVED: scripts/battery-tag-authorship-mutations now registers under want_scripts_heavy
   # in the carve-out near the end of this file (#8006).
   # The patterns are declared ONCE, at the top of this file, and published by
@@ -6318,7 +6866,7 @@ if [[ "$_repo_guard_ok" == 1 ]]; then
         # good-sha/bad-sha and nothing to restore, so printing the steps there would send the
         # operator through irrelevant ref surgery. The per-dimension `next:` line above carries
         # each of those dimensions' own remedy.
-        if printf '%s\n' "$_repo_fatal" | grep -qE '^FATAL[[:space:]]+(head|worktree)'; then
+        if printf '%s\n' "$_repo_fatal" | grep -cE >/dev/null '^FATAL[[:space:]]+(head|worktree)'; then
           echo "        Committed work survives; UNCOMMITTED work may not. Recover in this order:" >&2
           echo "          1. git push origin <good-sha>:refs/heads/<branch>   # durability BEFORE local surgery" >&2
           echo "          2. git update-ref refs/heads/<branch> <good-sha> <bad-sha>   # compare-and-swap" >&2
@@ -6520,6 +7068,24 @@ if (( _ceiling_declined > 0 )); then
   echo "      starting suites: declined_suites=${_ceiling_declined}. Nothing above is evidence"
   echo "      for them. This run exits 3 — UNRESOLVED, not green and not a failure."
 fi
+
+# wd-epilogue-emit-begin
+# #9814: warn-only local-vs-committed weight drift — emitted in the post-marker
+# NOTE region so `=== N/N suites passed ===` stays the last ===-shaped line.
+# The glob, not two literals: absence in one manifest is not absence, and a
+# future suite-durations-*.tsv joins the comparison instead of mis-reporting
+# unmeasured. `|| true` — the report can never set the exit code.
+if [[ -z "${CI:-}" && -n "${TEST_TIMING_LOG:-}" ]] \
+   && [[ -r "${TEST_TIMING_LOG}" ]] \
+   && declare -F weight_drift_report >/dev/null 2>&1; then
+  _wdrift_scriptdir="$(dirname "${BASH_SOURCE[0]}")"
+  weight_drift_report "${TEST_TIMING_LOG}" "$_wdrift_scriptdir"/suite-durations*.tsv || true
+elif [[ -z "${CI:-}" && -s "${TEST_TIMING_LOG:-/dev/null}" ]] \
+   && ! declare -F weight_drift_report >/dev/null 2>&1; then
+  printf '[note] weight-drift: comparator lib absent — timing rows at %s unreported\n' \
+    "${TEST_TIMING_LOG}" >&2
+fi
+# wd-epilogue-emit-end
 
 if [[ "$failed" -gt 0 ]]; then
   exit 1

@@ -405,7 +405,7 @@ else
     [[ -n "$v3_m" ]] || continue
     v3_n=$((v3_n+1))
     v3_bare="${v3_m//\\b/}"
-    printf '%s\n' "$v3_authority" | tr '|' '\n' | sed 's/\\b//g' | grep -qxF -- "$v3_bare" \
+    printf '%s\n' "$v3_authority" | tr '|' '\n' | sed 's/\\b//g' | grep -cxF >/dev/null -- "$v3_bare" \
       || v3_missing="$v3_missing $v3_m"
   done <<< "$(printf '%s\n' "$v3_authz" | tr '|' '\n')"
   # Non-vacuity: a split that yielded nothing would report perfect containment.

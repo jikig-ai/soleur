@@ -345,3 +345,102 @@ landed:
   failed probe left behind (tracked in the deferred-items issue).
 
 Plan: `knowledge-base/project/plans/archive/20261003-090828-2026-10-02-feat-git-data-cutover-residual-real-mode-gaps-plan.md`.
+
+## Amendment 2026-10-09 — plaintext-volume retention end and lock-name status (#9066)
+
+- **The lock name carries no subject id: already true on main; no payload change.** Since PR #9226 both
+  wrappers open one shared `${REPO_ROOT}/.init.lock`, so a completed erasure and a "not present" erasure leave
+  no file named for the user. The rung-2 boot evidence for that exact payload is current
+  (`RUNG2_TEMPLATE_SHA256` equals the hash of the tree), so this amendment edits no hash-bound file, and the
+  two-PR payload sequence has already run for this change. A new check in the wrappers' unbound test files pins
+  the property for the repo root: after an erasure, a provision or a refusal, no entry under the repo root
+  other than `<id>.git` carries the workspace id in its name, its content or a symlink target.
+- **What was already written is a different question.** A plain `git_data_host_replace` (its
+  both-volumes-preserved assert passed) ran on 2026-10-08 as workflow run 37846545572 from head `d0b5d2e35b`,
+  which contains #9226, so erasures since then are expected to write only the shared lock; that was read from
+  the run and its head, not from the host. Both volumes were preserved across that replace. Any per-id
+  `.<id>.init.lock` files from earlier erasures therefore remain where they were written: on the retained
+  plaintext volume for erasures from host birth (2026-09-14) until that host was destroyed on 2026-09-24 by
+  replace run 35979304442 (its replacement refused to serve, so nothing served between), and on the LUKS-served
+  store for erasures from the first LUKS-serving host (replace run 36118115758, 2026-09-25, recorded in the
+  2026-09-27 amendment) until the 2026-10-08 replace. No count sees them (the counters skip
+  `.*.init.lock`), so whether any exist is not measured. The in-freeze purge (2026-09-30 amendment) will remove
+  the served-store ones when a freeze window runs; none has run, and neither the purge nor any other removal is
+  taken by this amendment. That amendment's binding of the residue to the freeze window is narrowed here to the
+  served store; the plaintext-volume limb is separate and ends as below.
+- **Retention end for the plaintext volume.** The residue on `hcloud_volume.git_data` ends when that volume is
+  destroyed by the DL-2 destructive wipe (#6897). The wipe PR must include the destroy of the volume itself:
+  emptying `git_data_volume_id` alone leaves the volume, and the Hetzner volume delete, recorded in that PR's
+  evidence, is the end event. D2 ("never writable") holds until the volume is destroyed, so there is no
+  zeroing write and no purge in place: the volume is never mounted to remove the files. **Target: 2026-10-22**,
+  the ledger `expires_on` for this store and two days before the 2026-10-24 date in the issue. Hetzner-side
+  snapshot retention of the volume remains unmeasured (Art. 30 PA-36 (f)), so this records an end for the
+  device and claims nothing about copies of it.
+- **A second id-bearing file the repo-root check cannot see: the gc cursor.** `git-data-gc.sh` writes the
+  basename of the last repo it completed (`<id>.git`) to `.gc-cursor` at the mount root, one level above the
+  repo root, and a later run that completes a repo overwrites it. The timer is nominally weekly (Sunday 03:20), but a
+  run that skips, fails or finds the store unverified leaves the old value, and `MODE=freeze` stops the timer,
+  so after an erasure the erased id can remain there until a later run completes a repo, and indefinitely if
+  no repo remains on the store to be completed. Whether a stale cursor also sits on the plaintext volume is not
+  measured. Neither the new check nor the in-freeze purge covers it. Closing it changes a hash-bound
+  payload (`git-data-gc.sh`, or the remove wrapper clearing a matching cursor), so it needs the rung-2
+  two-PR sequence and is not part of this change; it is recorded on #9066.
+- **The date is a target, not a fact.** The wipe body was deleted from `git-data-cutover.sh` in #8189 (landed
+  via PR #8206) and does not exist on main. It will be a hash-bound PR with a rung-2 rehearsal of its own (see
+  the Consequences bullet on the wipe branch), and it is gated by the flip chain (#8573, #8609, #8209 and a fresh
+  replace). **If the date will pass with the volume present, this amendment is re-opened together with the ledger
+  exception and the CLO before 2026-10-23, the first day the ledger lint fails; the date is not extended
+  quietly.** Until the volume is deleted, the files remain readable to anyone holding the volume or a snapshot of
+  it. The lint warns inside 14 days of `expires_on` and fails CI after it.
+- **Inputs for the CLO re-ruling.** The issue sets the trigger: if the fix and the served-store purge slip past
+  2026-10-24, the CLO re-rules on the DPD §10.3(b) disclosure. The re-ruling needs the state of four things: the
+  wipe (done, with Hetzner delete evidence, or slipped), the served-store purge (run, with its count, or not),
+  the flip (slipped, so the wipe, which is gated behind it, has not been reached), and the gc cursor (fixed by a
+  hash-bound payload change, declined by the owner, or still open).
+
+Alternatives considered and rejected: purging the files in place by mounting the volume (violates D2); a
+standalone dated purge (needs the same writable mount); extending the date without re-opening this ADR
+(storage limitation; the ledger records `expires_on` as deliberately not extended).
+
+Plan: `knowledge-base/project/plans/2026-10-09-fix-git-data-lock-no-subject-id-9066-plan.md`.
+
+## Amendment 2026-10-09 — the gc timer is not a cutover precondition; the probe verifies first; the unwind marks the attempt (#9439)
+
+Three contracts this ADR states in prose changed, all runner-side (`git-data-cutover.sh`, `git-data-cutover.yml`); no
+hash-bound host payload moved.
+
+- **`mode_unfreeze` has a hard post-condition: the gc timer is started.** After the sentinel is cleared it starts
+  `git-data-gc.timer`, with one immediate retry (no sleep), and exits **6** (`gc_timer_restart_failed`) if both
+  attempts fail. The sentinel is already gone at that point, so the workflow treats this as degraded housekeeping, not
+  a switch-back trigger: the unfreeze step goes red, the replication probe and the cutover stamp still run (they key on
+  "the sentinel was cleared", not "unfreeze succeeded"), the finalizer does not unwind a flip it would otherwise call
+  concluded, and notify carries `GC_TIMER_STOPPED` (one new job output, `gc_timer_stopped`) rather than `FREEZE_HELD`.
+  The freeze still fences the store whenever the finalizer does unwind, because the timer is never started before the
+  sentinel clear (`git-data-gc.sh` does not read the sentinel). This refines the 2026-10-02 sentence that the probe runs
+  "after its unfreeze succeeds" to "after the sentinel is cleared". Accepted cost: the stamp can be written with gc
+  stopped; it anchors the ledger on data location, which gc does not affect. Ruled by the CTO agent after three review
+  seats showed the earlier fatal-and-unwind default orphaned writes through a writable-store window and repeated on a
+  standing cause (`gc_timer=unarmed` at boot is documented as tolerated).
+- **The probe verifies the store before it provisions.** `mode_probe` runs the proof's mount, mapper and store-verified
+  checks first (`STORE_SOURCE` is read from the mount, never assumed), in a `verified-only` form: the marker, the UUID
+  and ANY held sentinel (a probe has no resume arm A), and not the repositories directory or the entry count, so a
+  rollback probing a store a live flip has filled is not refused. A booting host reads as its store verdict
+  (`old_store_unmounted`, `store_not_on_mapper`, `store_unverified`, `cutover_frozen`) instead of
+  `probe_failed reason=provision`, and nothing is pushed or removed against it. A missing repositories directory still
+  surfaces later as `probe_failed reason=provision`.
+- **The flip unwind keys on "a flag write was attempted".** The `flag_write` step touches `flag_write_attempted` before
+  the write runs (mirroring `freeze_held`), and the finalizer's flip arm switches the flag off on `flag_written` or
+  `flag_write_attempted`. A write that lands and then fails its read-back is therefore unwound. The cost is stated in
+  the runbook: a transient `flag_write_failed` that never landed also runs the unwind (a flag-off write and a
+  both-host redeploy). Rollback conditions are unchanged.
+
+The 2026-10-02 sentence that `mode=proof` is the read-only re-verification refines the same way: the proof re-verifies the
+STORE only, and no mode re-runs the rollback's erasure probe, so a green proof is not evidence that erasure works.
+
+Still open, tracked rather than fixed here (follow-up tracker #9897): a probe or stamp failure after the
+sentinel clear unwinds through a writable window (pre-existing); flip resume arm B never unwinds the flag; a rollback whose
+flag-off write landed but whose read-back failed leaves the fleet on the old env (`mode=redeploy` converges it). One live-only
+assumption: the probe `if:` reads the unfreeze step's `gc_timer_failed` output after the step exited non-zero; that is documented
+runner behaviour and is checked by the first real dispatch, not by any offline suite.
+
+Plan: `knowledge-base/project/plans/archive/20261009-234236-2026-10-09-fix-git-data-cutover-residual-state-matrix-gaps-plan.md`.

@@ -214,7 +214,7 @@ battery() {
   # ---- delete-volume ----
   world; VERDICT=proceed EXTRA_ENV="VERDICT=proceed" run "delete: detach then delete, then 404 proven" 0 "is gone" delete-volume
   check "delete: write order is DETACH then DELETE-VOLUME" "$([[ "$(writes)" == "DETACH DELETE-VOLUME " ]]; echo $?)"
-  check "delete: no request ever names another volume id" "$(! grep -E '/volumes/[0-9]+' "$WORLD/calls.log" | grep -vq "/volumes/$PIN"; echo $?)"
+  check "delete: no request ever names another volume id" "$(! grep -E '/volumes/[0-9]+' "$WORLD/calls.log" | grep -vc >/dev/null "/volumes/$PIN"; echo $?)"
   world detached; EXTRA_ENV="VERDICT=heal:detach_done" run "delete: detach-done window skips the detach" 0 "is gone" delete-volume
   check "delete: no second detach" "$([[ "$(writes)" == "DELETE-VOLUME " ]]; echo $?)"
   world pin_gone; EXTRA_ENV="VERDICT=heal:delete_done" run "delete: later windows skip" 0 "skipped" delete-volume
@@ -324,9 +324,10 @@ battery() {
   check "summary: plan_only never claims a rebirth or prints the follow-through" "$([[ "$LASTOUT" != *provisioned* && "$LASTOUT" != *Follow-through* ]]; echo $?)"
   world; EXTRA_ENV="MODE=apply JOB_STATUS=failure VERDICT=proceed" run "summary: a failed apply run" 0 "did not complete" summary
   check "summary: a failed run does not claim provisioning or the follow-through" "$([[ "$LASTOUT" != *provisioned* && "$LASTOUT" != *Follow-through* ]]; echo $?)"
-  world; EXTRA_ENV="MODE=apply JOB_STATUS=success VERDICT=proceed RUN_ID=77 EMPTINESS=PASS-x" run "summary: a successful apply run" 0 "Nothing is claimed until the graded reboot proof" summary
+  world; EXTRA_ENV="MODE=apply JOB_STATUS=success VERDICT=proceed RUN_ID=77 EMPTINESS=PASS-x" run "summary: a successful apply run" 0 "Nothing is claimed until the #6931 grader reports PASS" summary
   check "summary: success prints the reborn host, the approver and the update-not-enrol instruction" "$([[ "$LASTOUT" == *"server_id=1001"* && "$LASTOUT" == *approver-one* && "$LASTOUT" == *"already enrolled"* ]]; echo $?)"
-  check "summary: the step summary file received the same text" "$(grep -q 'Nothing is claimed until the graded reboot proof' "$WORLD/summary"; echo $?)"
+  check "summary: the step summary file received the same text" "$(grep -q 'Nothing is claimed until the #6931 grader reports PASS' "$WORLD/summary"; echo $?)"
+  check "summary: success states the rule without a reboot and not the old boot_id proof" "$([[ "$LASTOUT" == *"no reboot is required"* && "$LASTOUT" == *"luks_arm formatted|opened"* && "$LASTOUT" != *"boot_id other than"* ]]; echo $?)"
   world; EXTRA_ENV="MODE=apply JOB_STATUS=success VERDICT=resume:post_apply RUN_ID=77" run "summary: a RESUME run says nothing was replaced" 0 "This was a RESUME" summary
   local want_earliest; want_earliest="$(date -u -d "@$(( $(date -u +%s) - 7200 + 259200 ))" +%Y-%m-%d)"
   check "summary: a resume run does not claim the rebirth applied, and the follow-through date is the server's creation + 3 days" "$([[ "$LASTOUT" != *"The rebirth applied"* && "$LASTOUT" == *"to ${want_earliest} (rebirth + 3 days)"* ]]; echo $?)"

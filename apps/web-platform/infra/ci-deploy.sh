@@ -356,7 +356,12 @@ fan_out_to_peers() {
 
   local payload sig
   payload=$(jq -cn --arg cmd "${SSH_ORIGINAL_COMMAND:-}" '{command:$cmd}')
-  sig=$(printf '%s' "$payload" | openssl dgst -sha256 -hmac "$secret" | sed 's/.*= //')
+  # The key rides the python3 child's ENVIRONMENT only (owner-only /proc/<pid>/environ), never argv.
+  sig=$(printf '%s' "$payload" | HMAC_KEY="$secret" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || sig=""
+  if [[ ! "$sig" =~ ^[0-9a-f]{64}$ ]]; then
+    logger -t "$LOG_TAG" "FANOUT: could not compute the request signature (python3 unavailable or the signer failed) — not forwarding an unsigned request"
+    return 1
+  fi
 
   local rc=0 peer code _peer_arr
   IFS=',' read -ra _peer_arr <<< "$peers_csv"
@@ -364,11 +369,15 @@ fan_out_to_peers() {
     peer="${peer//[[:space:]]/}"
     [[ -n "$peer" ]] || continue
     [[ "$self_ips" == *" $peer "* ]] && continue # never forward to self
-    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
+    # The HMAC SIGNATURE header goes in on curl's stdin config channel, never its argv
+    # (/proc/<pid>/cmdline and `ps` are readable by every local user; lint Rule E, #9597).
+    # The shared secret is likewise environment-only (see the signer above).
+    code=$(curl --disable --noproxy '*' -s -o /dev/null -w '%{http_code}' --max-time 30 \
       -X POST "http://${peer}:9000/hooks/deploy-peer" \
       -H "Content-Type: application/json" \
-      -H "X-Signature-256: sha256=${sig}" \
-      --data-binary "$payload" 2>/dev/null || echo "000")
+      --config - \
+      --data-binary "$payload" \
+      < <(printf 'header = "X-Signature-256: sha256=%s"\n' "$sig") 2>/dev/null || echo "000")
     if [[ "$code" == "202" ]]; then
       logger -t "$LOG_TAG" "FANOUT: peer $peer accepted deploy (HTTP $code)"
     else
@@ -414,8 +423,50 @@ CRON_DRAIN_STATE_FILE="${CRON_DRAIN_STATE_FILE:-/var/run/ci-deploy-cron-drain.js
 # durability tier as CRON_DEPLOY_LEASE_FILE. Reader default MUST match
 # cat-deploy-state.sh sandbox_canary_json().
 SANDBOX_CANARY_STATE_FILE="${SANDBOX_CANARY_STATE_FILE:-/mnt/data/ci-deploy-sandbox-canary.json}"
+# #5863 arm F: the outer-wrap canary gets its OWN durable soak state — same
+# cross-deploy accumulator shape as the inner canary but a separate ledger so
+# the two arms' soak windows never alias. Report-only at first deploy
+# (wg-dark-launch-deploy-gates); the #5863 follow-through script reads this
+# file via /hooks/deploy-status's outer_wrap_canary field.
+SANDBOX_OUTER_WRAP_CANARY_STATE_FILE="${SANDBOX_OUTER_WRAP_CANARY_STATE_FILE:-/mnt/data/ci-deploy-outer-wrap-canary.json}"
+# Aliasing guard: an env override pointing the outer ledger at the inner file
+# would let the #5863 soak read the #8752 arm's state (wrong mechanism's
+# greens counting toward promotion). Warn AND skip the outer arm entirely —
+# interleaved writes under one file is worse than a missing arm.
+OUTER_LEDGER_ALIAS=0
+if [[ "$SANDBOX_OUTER_WRAP_CANARY_STATE_FILE" == "$SANDBOX_CANARY_STATE_FILE" ]]; then
+  OUTER_LEDGER_ALIAS=1
+  logger -t "$LOG_TAG" "SANDBOX_OUTER_WRAP_CANARY_STATE_FILE == SANDBOX_CANARY_STATE_FILE ($SANDBOX_OUTER_WRAP_CANARY_STATE_FILE) — outer canary SKIPPED: aliasing would let the inner ledger's greens count toward the #5863 soak; fix the env override"
+fi
 # Where the canary payload + fixture live INSIDE the image (Dockerfile COPY).
 SANDBOX_CANARY_MJS="${SANDBOX_CANARY_MJS:-/app/scripts/sandbox-canary.mjs}"
+# Cross-workspace isolation probe verdict (#2640). Written per deploy by
+# write_workspace_isolation_state, surfaced on /hooks/deploy-status by
+# cat-deploy-state.sh (workspace_isolation_json). DURABLE on purpose, same
+# /mnt/data rationale as SANDBOX_CANARY_STATE_FILE directly above: this file
+# alone carries the probe's CROSS-DEPLOY soak accumulator (consecutive_pass +
+# first_pass_at) — a tmpfs wipe would silently reset the promotion soak. Reader
+# default MUST match cat-deploy-state.sh workspace_isolation_json().
+WORKSPACE_ISOLATION_STATE_FILE="${WORKSPACE_ISOLATION_STATE_FILE:-/mnt/data/ci-deploy-workspace-isolation.json}"
+# Host-side cap on the probe's `docker exec` (report-only NFR: the probe adds
+# <= ~5 min worst-case to a deploy; the observed direct-tier runtime is seconds
+# to low tens). rc 124 is its own verdict class (workspace_isolation_timeout) —
+# a wedged suite is a RED verdict, not an infra hiccup. Env-overridable pure
+# timing knob (the CRON_DRAIN_TIMEOUT convention), NOT a secret.
+WORKSPACE_ISOLATION_TIMEOUT="${WORKSPACE_ISOLATION_TIMEOUT:-300}"
+# 0/non-numeric would DISABLE the cap (timeout(1) treats 0 as unbounded) —
+# that is the opposite of the knob's contract; fail-safe back to the default.
+[[ "$WORKSPACE_ISOLATION_TIMEOUT" =~ ^[1-9][0-9]*$ ]] || WORKSPACE_ISOLATION_TIMEOUT=300
+# Same aliasing failure class as OUTER_LEDGER_ALIAS above: an env override
+# pointing the #2640 ledger at either canary ledger would interleave verdict
+# vocabularies (sandbox_broken vs workspace_isolation_*) and corrupt both
+# soaks. Warn AND skip the probe entirely — a missing arm beats a wrong file.
+WORKSPACE_ISOLATION_LEDGER_ALIAS=0
+if [[ "$WORKSPACE_ISOLATION_STATE_FILE" == "$SANDBOX_CANARY_STATE_FILE" \
+   || "$WORKSPACE_ISOLATION_STATE_FILE" == "$SANDBOX_OUTER_WRAP_CANARY_STATE_FILE" ]]; then
+  WORKSPACE_ISOLATION_LEDGER_ALIAS=1
+  logger -t "$LOG_TAG" "WORKSPACE_ISOLATION_STATE_FILE aliases a canary ledger ($WORKSPACE_ISOLATION_STATE_FILE) — workspace-isolation probe SKIPPED: interleaved writes would corrupt both soaks; fix the env override" || true
+fi
 # #8609: the GitHub App key probe baked into the image (Dockerfile `COPY --from=builder
 # /app/scripts/github-app-key-probe.mjs ./scripts/…` under WORKDIR /app). soleur-host-bootstrap.sh's
 # check and ci-deploy.test.sh Guard 7 (7.w) pin the same path; a drift reads as `probe_absent`.
@@ -636,17 +687,35 @@ write_cron_drain_state() {
 #                       first green (self-pins the soak window strictly after this
 #                       deploy — no operator timestamp to hand-pin).
 #   - `sandbox_broken`→ reset both to 0 (a faithful FAIL restarts the soak).
+#     (reset set is actually $5 reset_re — `sandbox_broken` is just the
+#     default for the faithful/outer-wrap callers; the #2640 probe passes its
+#     own RED classes.)
 #   - infra_error/*   → HOLD prior counters (a docker/exec hiccup or the
 #                       dark-launch `fixture_uncaptured` state is a non-signal).
+# $6 ledger: an identity stamp naming WHICH mechanism's ledger this write
+# belongs to (the Sentry-op vocabulary: sandbox-canary / sandbox-canary-
+# outer-wrap / workspace-isolation). The readers in cat-deploy-state.sh refuse
+# a file whose stamp is present-but-foreign — closing the env-alias blind spot
+# where an override points a canary ledger AT another ledger's path and foreign
+# `pass` verdicts would otherwise inflate the wrong soak.
 write_sandbox_canary_state() {
-  local verdict="$1" reason="$2" sdk_version="${3:-}" tmp now prior_pass prior_first
+  # $5 reset_re: an ERE alternation naming this ledger's RED verdict classes
+  # (soak-reset). Internal literal from the call sites, never operator input.
+  local verdict="$1" reason="$2" sdk_version="${3:-}" state_file="${4:-$SANDBOX_CANARY_STATE_FILE}" reset_re="${5:-sandbox_broken}" ledger="${6:-sandbox-canary}" tmp now prior_pass prior_first
   now="$(date +%s)"
   prior_pass=0; prior_first=0
-  if [[ -f "$SANDBOX_CANARY_STATE_FILE" ]]; then
-    prior_pass="$(jq -r '.consecutive_pass // 0' "$SANDBOX_CANARY_STATE_FILE" 2>/dev/null || echo 0)"
-    prior_first="$(jq -r '.first_pass_at // 0' "$SANDBOX_CANARY_STATE_FILE" 2>/dev/null || echo 0)"
-    [[ "$prior_pass" =~ ^[0-9]+$ ]] || prior_pass=0
-    [[ "$prior_first" =~ ^[0-9]+$ ]] || prior_first=0
+  if [[ -f "$state_file" ]]; then
+    # Foreign-ledger guard: a file carrying another mechanism's `ledger` stamp
+    # (an env-alias misconfig interleaving vocabularies) contributes NO prior
+    # counters — the soak restarts rather than inheriting foreign greens.
+    local prior_ledger
+    prior_ledger="$(jq -r '.ledger // ""' "$state_file" 2>/dev/null || echo "")"
+    if [[ -z "$prior_ledger" || "$prior_ledger" == "$ledger" ]]; then
+      prior_pass="$(jq -r '.consecutive_pass // 0' "$state_file" 2>/dev/null || echo 0)"
+      prior_first="$(jq -r '.first_pass_at // 0' "$state_file" 2>/dev/null || echo 0)"
+      [[ "$prior_pass" =~ ^[0-9]+$ ]] || prior_pass=0
+      [[ "$prior_first" =~ ^[0-9]+$ ]] || prior_first=0
+    fi
   fi
   local consecutive_pass first_pass_at
   case "$verdict" in
@@ -654,18 +723,20 @@ write_sandbox_canary_state() {
       consecutive_pass=$((prior_pass + 1))
       if [[ "$prior_first" -gt 0 ]]; then first_pass_at="$prior_first"; else first_pass_at="$now"; fi
       ;;
-    sandbox_broken)
-      consecutive_pass=0; first_pass_at=0 ;;
     *)
-      consecutive_pass="$prior_pass"; first_pass_at="$prior_first" ;;
+      if [[ "$verdict" =~ ^($reset_re)$ ]]; then
+        consecutive_pass=0; first_pass_at=0
+      else
+        consecutive_pass="$prior_pass"; first_pass_at="$prior_first"
+      fi ;;
   esac
-  tmp="$(mktemp "${SANDBOX_CANARY_STATE_FILE}.XXXXXX" 2>/dev/null)" || return 0
+  tmp="$(mktemp "${state_file}.XXXXXX" 2>/dev/null)" || return 0
   jq -nc \
-    --arg v "$verdict" --arg r "$reason" --arg s "$sdk_version" --argjson ts "$now" \
+    --arg v "$verdict" --arg r "$reason" --arg s "$sdk_version" --arg l "$ledger" --argjson ts "$now" \
     --argjson cp "$consecutive_pass" --argjson fp "$first_pass_at" \
-    '{verdict:$v, reason:$r, sdk_version:$s, checked_at:$ts, consecutive_pass:$cp, first_pass_at:$fp}' \
+    '{verdict:$v, reason:$r, sdk_version:$s, checked_at:$ts, consecutive_pass:$cp, first_pass_at:$fp, ledger:$l}' \
     > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 0; }
-  mv "$tmp" "$SANDBOX_CANARY_STATE_FILE" 2>/dev/null || { rm -f "$tmp"; return 0; }
+  mv "$tmp" "$state_file" 2>/dev/null || { rm -f "$tmp"; return 0; }
   return 0
 }
 
@@ -673,14 +744,14 @@ write_sandbox_canary_state() {
 # signal #5873 lacked (hr-no-ssh-fallback-in-runbooks: never journald-only). Best-
 # effort + env-guarded, mirrors report_cron_drain_timeout. Fail-open under set -e.
 sandbox_canary_sentry_event() {
-  local verdict="$1" reason="$2" sdk_version="${3:-}"
-  logger -t "$LOG_TAG" "SANDBOX_CANARY_FAIL: verdict=$verdict reason=$reason sdk=$sdk_version (faithful canary; legacy probe gated the deploy)"
+  local verdict="$1" reason="$2" sdk_version="${3:-}" op="${4:-sandbox-canary}"
+  logger -t "$LOG_TAG" "SANDBOX_CANARY_FAIL: verdict=$verdict reason=$reason sdk=$sdk_version (op=$op; report-only canary, never gated)"
   if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
     local payload
-    payload="$(jq -n --arg v "$verdict" --arg r "$reason" --arg s "$sdk_version" \
-      '{message: ("faithful sandbox canary " + $v + " (" + $r + ") — SDK " + $s),
+    payload="$(jq -n --arg v "$verdict" --arg r "$reason" --arg s "$sdk_version" --arg o "$op" \
+      '{message: (($o | sub("^sandbox-canary"; "sandbox canary"; "i")) + " " + $v + " (" + $r + ")" + (if ($s | length) > 0 then " — SDK " + $s else "" end) + " — report-only canary; deploy NOT rolled back"),
         level: "error", platform: "other", logger: "ci-deploy",
-        tags: {feature: "agent-sandbox", op: "sandbox-canary", verdict: $v},
+        tags: {feature: "agent-sandbox", op: $o, verdict: $v},
         extra: {reason: $r, sdk_version: $s}}' 2>/dev/null)" || return 0
     curl --disable --noproxy '*' -s -o /dev/null --max-time 10 -X POST \
       "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
@@ -689,6 +760,31 @@ sandbox_canary_sentry_event() {
       -d "$payload" 2>/dev/null \
       || logger -t "$LOG_TAG" "SANDBOX_CANARY: Sentry POST failed"
   fi
+}
+
+# write_workspace_isolation_state: persist the workspace-isolation probe verdict
+# for the no-SSH deploy-status surface (#2640) — a thin wrapper over
+# write_sandbox_canary_state (#5875 / ADR-079), which is already parameterized
+# by state file. Deltas: no sdk_version (a vitest run carries none) and a
+# different reset set — `workspace_isolation_failed`/`workspace_isolation_timeout`
+# are this probe's RED classes (its `sandbox_broken` equivalent). Always
+# returns 0: NON-BLOCKING dark-launch (wg-dark-launch-deploy-gates), so a
+# state-write failure must never abort a deploy.
+write_workspace_isolation_state() {
+  write_sandbox_canary_state "$1" "$2" "" "$WORKSPACE_ISOLATION_STATE_FILE" \
+    'workspace_isolation_failed|workspace_isolation_timeout' 'workspace-isolation'
+}
+
+# workspace_isolation_sentry_event: loud, no-SSH page on a RED isolation verdict
+# (#2640) — fires ONLY on workspace_isolation_failed / workspace_isolation_timeout,
+# NEVER on canary_infra_error (expected while pre-tooling canary images still
+# deploy) or pass. Emits its own WORKSPACE_ISOLATION_FAIL marker (the runbook
+# keys on it) and delegates the payload to sandbox_canary_sentry_event with
+# op=workspace-isolation. Best-effort + env-guarded. Fail-open under set -e.
+workspace_isolation_sentry_event() {
+  local verdict="$1" reason="$2"
+  logger -t "$LOG_TAG" "WORKSPACE_ISOLATION_FAIL: verdict=$verdict reason=$reason (report-only canary probe; deploy NOT rolled back)" || true
+  sandbox_canary_sentry_event "$verdict" "$reason" "" "workspace-isolation" || true
 }
 
 # cosign_verify_event: loud, no-SSH page on an image-signature verify failure
@@ -1300,8 +1396,10 @@ _docker_login_capture() {
 # send the operator hunting an authz bug that does not exist.
 #
 # --- Per-registry measured behaviour ---------------------------------------------------------
-# zot v2.1.20 (local.zot_image_amd64 in zot-registry.tf), with this repo's exact accessControl,
-# MEASURED 2026-08-05 by running the pinned image locally against this config (#7282):
+# zot, with this repo's exact accessControl. The version, the date and the re-measurement status of
+# the claim below live in zot-image.provenance.md, '## Version-scoped claim register' (row 1), not
+# here: this file feeds triggers_replace, so a version or date in it would make every zot bump edit it.
+# The measurement (#9252) was made by running the pinned image locally against this config:
 #   GET /v2/ answers 200 or 401 — NEVER 403. A user with ZERO accessControl policies still gets
 #   `Login Succeeded` (200); zot enforces authz at the MANIFEST endpoint (/v2/<repo>/manifests/
 #   <tag> -> 403), which the login path never touches. Consequences, both zot-scoped:
@@ -1309,7 +1407,10 @@ _docker_login_capture() {
 #        defensive tripwire there — a 403 must never be silently read as an authn failure.
 #     2. A BROKEN zot accessControl is NOT observable here at all: login SUCCEEDS, ZOT_ACTIVE=1,
 #        and the failure surfaces later at pull time. The login probe is the wrong layer for it;
-#        `zot-entry-gate.sh` is where zot's real 403 lives.
+#        `web-zot-consumer-probe.sh` is the layer meant to see it: a 403 on its `tags/list` read
+#        with the pull credential lands in its unexpected-code arm (`SUPPRESS ping`). Only the
+#        manifest-read 403 is measured (zot-image.provenance.md, claim register row 1); the
+#        `tags/list` 403 is not.
 # ghcr.io: UNMEASURED. Do NOT inherit zot's finding — GHCR can and does answer 403 (SAML/SSO
 #   enforcement, org package policy, IP allow-lists), so for GHCR `authz_denied` is a LIVE arm,
 #   not a tripwire, and consequence 2 above has no GHCR meaning. This paragraph says `unmeasured`
@@ -1523,6 +1624,181 @@ _cred_err_tail() {
   if (( ${#_e} > 200 )); then _e="${_e:$(( ${#_e} - 200 ))}"; fi
   printf '%s' "$_e"
 }
+
+# CANARY_DIAG_BEGIN
+# Canary sandbox self-diagnosis (#9871 / #9860). Two production deploy failures (a file-capped bwrap
+# refusing with "Unexpected capabilities", then execve EPERM once the bounding grant was removed) were
+# diagnosed from a 200-character stderr tail and cost hours, because nothing recorded the container's
+# capability sets, the binary's file caps, its provenance or the posture it ran under. When the blocking
+# probe fails -- or the faithful canary reports sandbox_broken -- this runs ONE bounded read-only bundle
+# inside the still-running canary and emits it as SOLEUR_CANARY_SANDBOX_DIAG journald lines, which ship
+# to Better Stack with the rest of the ci-deploy tag.
+#
+# Contract: it can never change the deploy's verdict. Callers invoke it only as `... || true`; it touches
+# no global, never BWRAP_RC/BWRAP_ERR/CANARY_HEALTHY or the state file; the exec is bounded by
+# CANARY_DIAG_TIMEOUT (+3 s kill-after) and its output by `head -c`, every host-side docker call by
+# `timeout 3` and each host kernel-log read by `timeout -k 1 3` (_canary_kdeny_read; census D10g);
+# and every value passes through _cred_err_tail (shape + env-value redaction, 200-char tail) before
+# it reaches a sink. It prints derived facts only -- no environment dump: the only
+# printenv calls name BUILD_SHA / BUILD_VERSION. Run as the image USER, the same uid and caps the
+# failing probe had. The two call sites are mutually exclusive in one run (a legacy failure exits
+# before the faithful canary runs), so there is no once-per-deploy latch. Rows are short on purpose:
+# _cred_err_tail keeps the LAST 200 characters, so a long value loses its identifying head. The
+# host-side posture is therefore split (`host` = caps + AppArmor, `hostsec` = SecurityOpt entries
+# cut to 40 chars -- docker inlines the whole ~12 KB seccomp profile there) and the bundle ends with
+# a `done` row carrying the exec's own exit status, so "ran and found nothing" is distinguishable
+# from "timed out" (124) or "never ran". Section meanings: runbook canary-probe-set.md, "Canary
+# sandbox DIAG bundle".
+# Default 30: the in-container script runs five `timeout 5` probes (25 s worst case), so a 25 s cap left no margin for the last row.
+CANARY_DIAG_TIMEOUT="${CANARY_DIAG_TIMEOUT:-30}"
+[[ "$CANARY_DIAG_TIMEOUT" =~ ^[1-9][0-9]?$ ]] && (( CANARY_DIAG_TIMEOUT <= 60 )) || CANARY_DIAG_TIMEOUT=30
+CANARY_DIAG_SCRIPT='p() { printf "%s %s\n" "$1" "$2"; }
+k() { cat "$1" 2>/dev/null || echo n/a; }
+p id "uid=$(id -u) gid=$(id -g)"
+p proc "$(sed -n "s/^\(Cap[A-Za-z]*\|NoNewPrivs\|Seccomp\):[[:space:]]*/\1=/p" /proc/$$/status | tr "\n" " ")"
+p lsm "$(cat /proc/self/attr/current 2>&1 | cut -c1-100)"
+p files "bwrap=$(stat -c "%a/%U/%s" /usr/bin/bwrap 2>&1) shim=$(stat -c "%a/%U/%s" /usr/local/bin/bwrap 2>&1) which=$(command -v bwrap) real=$(readlink -f /usr/bin/bwrap)"
+if command -v getcap >/dev/null 2>&1; then
+  c=$(timeout 5 getcap /usr/bin/bwrap /usr/local/bin/bwrap 2>&1 | tr "\n" " ")
+  p caps "bwrap=${c:-none}"
+else
+  p caps "getcap=absent"
+fi
+p prov "sha=$(printenv BUILD_SHA) ver=$(printenv BUILD_VERSION)"
+v=$(timeout 5 /usr/bin/bwrap --version 2>&1); r=$?
+p direct_version "rc=$r $(printf %s "$v" | head -n 1 | cut -c1-100)"
+v=$(timeout 5 /usr/bin/bwrap --new-session --dev /dev --unshare-pid --bind / / -- true 2>&1); r=$?
+p direct_probe "rc=$r $(printf %s "$v" | head -n 1 | cut -c1-120)"
+v=$(timeout 5 /usr/bin/bwrap --unshare-user --unshare-pid --proc /proc --dev /dev --bind / / -- true 2>&1); r=$?
+p sdk_probe "rc=$r $(printf %s "$v" | head -n 1 | cut -c1-120)"
+v=$(timeout 5 /usr/bin/bwrap --unshare-user --unshare-pid --dev /dev --bind / / -- true 2>&1); r=$?
+p sdk_noproc "rc=$r $(printf %s "$v" | head -n 1 | cut -c1-120)"
+p kernel_ns "restrict=$(k /proc/sys/kernel/apparmor_restrict_unprivileged_userns) clone=$(k /proc/sys/kernel/unprivileged_userns_clone) max=$(k /proc/sys/user/max_user_namespaces)"'
+
+# _canary_diag_emit <trigger> <section> <raw>: the ONLY emitter. Scrubs first, then writes one line with
+# the free text LAST and quote-bounded (ADR-115 trusted region: consumers anchor on val="[^"]*"$). The
+# `||` printf keeps the record on the webhook leg if journald is unavailable.
+_canary_diag_emit() {
+  local val
+  val="$(_cred_err_tail "${3:-}")" || val="<sanitize_failed>"
+  logger -t "$LOG_TAG" "SOLEUR_CANARY_SANDBOX_DIAG: image=$IMAGE:$TAG trigger=$1 section=$2 val=\"${val:-<empty>}\"" \
+    || printf '%s\n' "SOLEUR_CANARY_SANDBOX_DIAG: image=$IMAGE:$TAG trigger=$1 section=$2 val=\"${val:-<empty>}\""
+  return 0
+}
+
+# _canary_kdeny_read: one bounded, scrubbed read of the HOST kernel stream, printed as ONE status line.
+#   src=<journal|dmesg|none> j=<state> d=<skip|state> total=<n> hits=<n> mproc=<n> [fields]
+# Why it exists: the first real bundle (#9860) narrowed the failure to `sdk_probe` ("Can't mount proc ...
+# Operation not permitted") and ruled out the image, file caps, exec and the legacy probe. What is left is
+# a kernel-side refusal, and the only host-side witness would be an AppArmor/audit line. "Could not read the
+# stream" and "read it, nothing there" are DIFFERENT facts and only the second is evidence, so each rung
+# reports its own state: ok (at least one real line and rc 0, or an anchored denial: readable text, NOT proof that audit records
+# reach this stream) | empty (rc 0, no hint, no lines: what journalctl prints on systemd 261 for a user outside
+# adm/systemd-journal) | noaccess (journalctl's or dmesg's own hint line and no real lines) | absent (127) |
+# timeout (124/137) | error (any other rc, unless an anchored denial was read before the non-zero exit: that
+# line is a real record, error text cannot match the anchor).
+# The ladder is journal, then dmesg only when the journal is not ok.
+# deploy runs unprivileged (no sudo grant covers the kernel log; kernel.dmesg_restrict=1 is the host
+# baseline), so `noaccess`/`empty` is the EXPECTED outcome and the row says so rather than hiding it.
+# Counts: a hit is an AUDIT RECORD (the line starts, after dmesg's optional `[ts] `, with `audit: type=1400|1326
+# audit(<ts>:<n>): `) that carries apparmor="DENIED" or is the seccomp type 1326. Anchoring matters: printk
+# lines that merely echo tenant-chosen text (a segfault line naming a mapped file) must not be able to carry the
+# markers. Type 1400 alone is not enough (it also carries complain-mode ALLOWED/AUDIT records); `mproc` = the
+# hits that are a procfs MOUNT denial (operation="mount" AND fstype="proc"). A bare profile name or comm="bwrap"
+# is NOT a hit test: the production container shares the soleur-bwrap profile, so a hit is HOST-wide, and the
+# dmesg rung is not time-bound. `fields` come from a CLOSED key allowlist with no name/comm/pid key and are cut
+# from anchored records only, with `fstype` limited to a short token (mount(2) lets a tenant pick that string).
+# This is the sanctioned exception to git-data-bootstrap.sh's "never raw kernel lines" rule: values of a fixed key
+# set, not lines. Both reads take the NEWEST lines first (tac), so the 64 KiB cap drops the oldest, never the
+# denial that happened seconds ago. No sudo, no /var/log, no follow flag: every read is `timeout -k 1 3`.
+# SOLEUR-DEBT: one-incident diagnostic row for the #9860 sandbox failure; remove or demote it once the issue closes with the cause named
+_canary_kdeny_read() {
+  local rung raw rc state src=none j=none d=skip total=0 hits=0 mproc=0 fields="" counts first line t h m hint
+  for rung in journal dmesg; do
+    rc=0
+    if [[ "$rung" == journal ]]; then
+      raw="$(timeout -k 1 3 journalctl -k -n 400 --since=-5min --no-pager -o cat 2>&1 | tac | head -c 65536; exit "${PIPESTATUS[0]}")" || rc=$?
+    else
+      raw="$(timeout -k 1 3 dmesg 2>&1 | tail -n 400 | tac | head -c 65536; exit "${PIPESTATUS[0]}")" || rc=$?
+    fi
+    counts="$(printf '%s\n' "$raw" | awk '
+      /^Hint: You are currently not seeing messages/ || /^No journal files were opened due to insufficient permissions/ || /^dmesg: read kernel buffer failed:/ || /^Failed to .*(Permission denied|Operation not permitted)/ { hint++; next }
+      /^[[:space:]]+(Users in groups .* can see all messages\.|Pass -q to turn off this notice\.)$/ { next }
+      /^-- / || /^[[:space:]]*$/ { next }
+      { total++
+        if ($0 ~ /^(\[[ 0-9.]+\] )?audit: type=(1400|1326) audit\([0-9.]+:[0-9]+\): / && ($0 ~ /apparmor="DENIED"/ || $0 ~ /^(\[[ 0-9.]+\] )?audit: type=1326 audit\(/)) {
+          hits++
+          if ($0 ~ /operation="mount"/ && $0 ~ /fstype="proc"/) { mproc++; if (mline == "") mline = $0 }
+          else if (hline == "") hline = $0
+        }
+      }
+      END { printf "%d %d %d %d\n%s\n", total + 0, hits + 0, mproc + 0, hint + 0, (mline != "" ? mline : hline) }')" || counts=""
+    first="${counts%%$'\n'*}"; line=""
+    if [[ "$counts" == *$'\n'* ]]; then line="${counts#*$'\n'}"; fi
+    IFS=' ' read -r t h m hint <<< "$first" || true
+    [[ "${t:-}" =~ ^[0-9]+$ ]] || t=0
+    [[ "${h:-}" =~ ^[0-9]+$ ]] || h=0
+    [[ "${m:-}" =~ ^[0-9]+$ ]] || m=0
+    [[ "${hint:-}" =~ ^[0-9]+$ ]] || hint=0
+    if (( t > 9999 )); then t=9999; fi
+    if (( h > 9999 )); then h=9999; fi
+    if (( m > 9999 )); then m=9999; fi
+    state=ok
+    if (( rc == 127 )); then state=absent
+    elif (( rc == 124 || rc == 137 )); then state=timeout
+    elif (( t == 0 )); then
+      if (( hint > 0 )); then state=noaccess
+      elif (( rc == 0 )); then state=empty
+      else state=error
+      fi
+    elif (( rc != 0 && h == 0 )); then state=error
+    fi
+    if [[ "$rung" == journal ]]; then j="$state"; else d="$state"; fi
+    if [[ "$state" == ok ]]; then
+      if [[ "$rung" == journal ]]; then src=journal; else src=dmesg; fi
+      total=$t; hits=$h; mproc=$m
+      if [[ -n "$line" ]]; then
+        fields="$(printf '%s\n' "$line" | awk '
+          BEGIN { q = "\""; n = split("operation profile fstype error info requested_mask denied_mask syscall", K, " ") }
+          { for (i = 1; i <= n; i++) {
+              k = K[i]
+              if (match($0, "(^| )" k "=" q "[^" q "]*" q) || match($0, "(^| )" k "=[^ ]+")) {
+                v = substr($0, RSTART, RLENGTH); sub(/^ /, "", v)
+                if (k == "fstype" && v !~ /^fstype=([A-Za-z0-9_.-]+|"[A-Za-z0-9_.-]+")$/) continue
+                out = out v " "
+              } } }
+          END { printf "%s", out }')" || fields=""
+        fields="${fields% }"; fields="${fields:0:130}"
+      fi
+      break
+    fi
+  done
+  printf 'src=%s j=%s d=%s total=%s hits=%s mproc=%s%s' "$src" "$j" "$d" "$total" "$hits" "$mproc" "${fields:+ $fields}"
+  return 0
+}
+
+# emit_canary_sandbox_diag <legacy|faithful>: always returns 0. In-container section names are an
+# allowlist -- anything else the exec prints (a daemon error, a forged first word) is `raw`, so only
+# this function can mint host/hostsec/kernel/kdeny/done.
+emit_canary_sandbox_diag() {
+  local trigger="${1:-legacy}" out line sec rest n=0 capped=0 exec_rc=0
+  out="$(timeout -k 3 "$CANARY_DIAG_TIMEOUT" docker exec soleur-web-platform-canary /bin/sh -c "$CANARY_DIAG_SCRIPT" soleur-canary-diag 2>&1 | head -c 8192; exit "${PIPESTATUS[0]}")" || exec_rc=$?
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    if (( n >= 16 )); then capped=1; break; fi
+    n=$(( n + 1 ))
+    sec="${line%% *}"; rest="${line#* }"
+    if ! [[ "$sec" =~ ^(id|proc|lsm|files|caps|prov|direct_version|direct_probe|sdk_probe|sdk_noproc|kernel_ns)$ && "$line" == *" "* ]]; then sec="raw"; rest="$line"; fi
+    _canary_diag_emit "$trigger" "$sec" "$rest"
+  done <<< "$out"
+  _canary_diag_emit "$trigger" host "$(timeout 3 docker inspect -f 'capadd={{.HostConfig.CapAdd}} capdrop={{.HostConfig.CapDrop}} priv={{.HostConfig.Privileged}} aa={{.AppArmorProfile}}' soleur-web-platform-canary 2>&1 | head -c 400)"
+  _canary_diag_emit "$trigger" hostsec "$(timeout 3 docker inspect -f '{{range .HostConfig.SecurityOpt}}{{printf "%.40s" .}} {{end}}' soleur-web-platform-canary 2>&1 | head -c 400)"
+  _canary_diag_emit "$trigger" kernel "kernel=$(uname -r 2>&1) docker=$(timeout 3 docker version --format '{{.Server.Version}}' 2>&1 | head -c 60)"
+  _canary_diag_emit "$trigger" kdeny "$(_canary_kdeny_read)"
+  _canary_diag_emit "$trigger" "done" "exec_rc=$exec_rc lines=$n capped=$capped bytes=${#out}"
+  return 0
+}
+# CANARY_DIAG_END
 
 # _now_ms: milliseconds since the epoch, from bash's own EPOCHREALTIME.
 #
@@ -2565,7 +2841,12 @@ verify_image_signature() {
 # "faithful FAIL + legacy PASS" disagreement is the alertable promote signal).
 # Exit-code classification: a failed `docker exec` (125/126/127 / ENOENT) is a
 # canary_infra_error, NOT sandbox_broken — the #4941 false-rollback guard.
-run_faithful_sandbox_canary() {
+# run_canary_replay <mode-flag> <state-file> <sentry-op> <label>: the shared
+# canary runner — one copy of the false-rollback guard (docker/exec failures
+# classify canary_infra_error, never sandbox_broken) for both replay arms.
+# Each arm's soak lives in its own state file.
+run_canary_replay() {
+  local mode_flag="$1" state_file="$2" sentry_op="$3" label="$4"
   local verdict reason sdk_version exec_rc out err_file docker_err
   # Capture docker's OWN stderr so a persistent infra_error (rc 126/127: "no such
   # container", "exec format error") carries its CAUSE onto the no-SSH surfaces —
@@ -2577,7 +2858,7 @@ run_faithful_sandbox_canary() {
   set +o pipefail
   # `if` (not a bare capture + `exec_rc=$?`): under `set -e` a failed docker exec
   # aborts before the read, leaving the infra classification below unreachable.
-  if out="$(docker exec soleur-web-platform-canary node "$SANDBOX_CANARY_MJS" --replay 2>"$err_file")"; then
+  if out="$(docker exec soleur-web-platform-canary node "$SANDBOX_CANARY_MJS" "$mode_flag" 2>"$err_file")"; then
     exec_rc=0
   else
     exec_rc=$?
@@ -2591,6 +2872,7 @@ run_faithful_sandbox_canary() {
     verdict="canary_infra_error"; reason="docker_exec_rc_${exec_rc}${docker_err:+: $docker_err}"; sdk_version=""
   else
     verdict="$(printf '%s' "$out" | jq -r '.verdict // "canary_infra_error"' 2>/dev/null || echo canary_infra_error)"
+    verdict="${verdict:-canary_infra_error}" # empty docker-exec stdout → empty jq output, never a silent ""
     reason="$(printf '%s' "$out" | jq -r '.reason // "unparseable"' 2>/dev/null || echo unparseable)"
     # sandbox-canary.mjs emits the SDK version as the camelCase key `sdkVersion`
     # (JS-idiomatic); this deploy-state chain is snake_case, so translate at the
@@ -2600,13 +2882,174 @@ run_faithful_sandbox_canary() {
     sdk_version="$(printf '%s' "$out" | jq -r '.sdkVersion // .sdk_version // ""' 2>/dev/null || echo '')"
   fi
   if [[ "$err_file" != "/dev/null" ]]; then rm -f "$err_file" 2>/dev/null || true; fi
-  write_sandbox_canary_state "$verdict" "$reason" "$sdk_version"
-  echo "Faithful sandbox canary (non-blocking): verdict=$verdict reason=$reason"
-  # Page only on a faithful FAIL (sandbox_broken) — the disagreement signal.
-  # canary_infra_error is expected during dark-launch (fixture not yet captured)
-  # and must not page.
+  write_sandbox_canary_state "$verdict" "$reason" "$sdk_version" "$state_file" \
+    "sandbox_broken" "$sentry_op"
+  echo "$label: verdict=$verdict reason=$reason"
+  # Page only on a sandbox_broken verdict — canary_infra_error is expected
+  # during dark-launch (fixture not yet captured) and must not page.
   if [[ "$verdict" == "sandbox_broken" ]]; then
-    sandbox_canary_sentry_event "$verdict" "$reason" "$sdk_version" || true
+    # #9860: this verdict has been recorded since 2026-10-09 with no cause beyond
+    # bwrap_operation_not_permitted. Only the inner faithful canary (sentry_op sandbox-canary) is
+    # diagnosed: the outer-wrap arm's sandbox_broken is the expected report-only state.
+    sandbox_canary_sentry_event "$verdict" "$reason" "$sdk_version" "$sentry_op" || true
+    # After the page, so a slow bundle never delays it.
+    if [[ "$sentry_op" == "sandbox-canary" ]]; then
+      emit_canary_sandbox_diag faithful || true
+    fi
+  fi
+  return 0
+}
+
+run_faithful_sandbox_canary() {
+  # Faithful inner canary (#5875 / ADR-079): NON-BLOCKING dark-launch. Runs
+  # the SDK-captured split-unshare argv the legacy probe does not exercise
+  # (that gap is why #5849 shipped green).
+  run_canary_replay "--replay" "$SANDBOX_CANARY_STATE_FILE" "sandbox-canary" \
+    "Faithful sandbox canary (non-blocking)"
+}
+
+# run_outer_wrap_canary: the #5863 outer-wrap arm — NON-BLOCKING report-only.
+# Replays the SELF-AUTHORED outer mount-table fixture inside the canary
+# container (the elevation posture the prod wrap depends on)
+# and runs the shared isolation payload in the resulting namespace. Its
+# verdict accumulates in SANDBOX_OUTER_WRAP_CANARY_STATE_FILE for the
+# #5863 soak follow-through; promotion to gating is a separate change after
+# a green soak.
+run_outer_wrap_canary() {
+  if [[ "$OUTER_LEDGER_ALIAS" == "1" ]]; then
+    return 0 # aliased ledger: refuse to write into the inner ledger
+  fi
+  run_canary_replay "--replay-outer" "$SANDBOX_OUTER_WRAP_CANARY_STATE_FILE" \
+    "sandbox-canary-outer-wrap" "Outer-wrap canary (report-only)"
+}
+
+# run_workspace_isolation_probe: NON-BLOCKING dark-launch (#2640; the
+# run_faithful_sandbox_canary precedent, #5875 / ADR-079). Runs the direct tier
+# of the cross-workspace isolation suite (test/sandbox-isolation.test.ts under
+# the image-baked vitest config test/vitest.canary.config.ts) INSIDE the canary
+# container, records the classified verdict to deploy-state, and pages Sentry on
+# a RED verdict — but NEVER rolls back (report-only per
+# wg-dark-launch-deploy-gates; blocking promotion is a tracked follow-through
+# gated on observed real-deploy passes).
+# Deliberately NOT a run_canary_replay caller (documented divergence, same
+# class cat-deploy-state.sh's SOLEUR-DEBT notes record): the
+# replay helper is bound to the .mjs contract (stdout verdict JSON, any
+# non-zero rc = canary_infra_error, sdk_version). This probe has a different
+# contract end-to-end — vitest argv, a host-side `timeout` cap, and rc-ONLY
+# classification into a 4-verdict taxonomy where 124 is a RED class — so
+# folding would need ~4 behavioral knobs for ~15 shared lines.
+# SOLEUR_ISOLATION_IN_IMAGE=1 is load-bearing: in-image PATH `bwrap` IS the
+# deployed shim and the repo-side shim path is not baked, which makes FR7b
+# structurally un-runnable — the suite self-skips it under this flag
+# (its shim-splice property is pinned by bwrap-shim.test.ts + the faithful
+# canary replay, so nothing is lost).
+# docker-exec exit-code classification (mirrors run_faithful_sandbox_canary):
+#   0             -> pass (the direct tier held inside the canary image)
+#   124           -> workspace_isolation_timeout (the host `timeout` cap fired —
+#                    a wedged suite is a RED verdict, not an infra hiccup)
+#   125/126/127   -> canary_infra_error (daemon trouble / vitest absent from the
+#                    canary image — expected while pre-tooling images deploy,
+#                    never a sandbox verdict: the #4941 false-rollback guard)
+#   other non-zero-> workspace_isolation_failed (the suite ran and FAILED —
+#                    cross-tenant isolation regressed in this exact image)
+run_workspace_isolation_probe() {
+  if [[ "$WORKSPACE_ISOLATION_LEDGER_ALIAS" == "1" ]]; then
+    return 0 # aliased ledger: refuse to write into a canary ledger
+  fi
+  local verdict reason exec_rc out err_file docker_err test_detail
+  # Capture docker's OWN stderr so a persistent canary_infra_error (rc 126/127:
+  # vitest absent, exec-format error) or a failed run carries its CAUSE onto the
+  # no-SSH surfaces — the numeric rc alone would otherwise be the only signal
+  # (mirrors the faithful-canary obs review P2).
+  err_file="$(mktemp 2>/dev/null || echo /dev/null)"
+  # `if` (not a bare capture + `exec_rc=$?`): under `set -e` a failed exec aborts
+  # before the read, leaving the classification below unreachable.
+  # `/usr/bin/env -i` scrubs the exec'd process's environment (the
+  # github_app_key_canary_check precedent): `docker exec` inherits the canary's
+  # Config.Env — the FULL prd env-file — and this suite spawns
+  # adversarially-probed inner sandboxes whose parent env is the exfil channel
+  # under test. Scrubbing means even a REAL isolation break cannot leak
+  # credential material, and the vitest output folded into `reason` below can
+  # never carry it. The SOLEUR_ISOLATION_* knobs ride env -i's own assignments;
+  # docker `-e` flags would be redundant (env -i overrides inheritance anyway).
+  # Side effect: CANARY_NODE_OPTIONS (the heap cap) is scrubbed too — vitest
+  # runs at default heap inside the container's --memory cap; a runaway run
+  # OOMs loud (rc 137 → workspace_isolation_failed), never silently wrong.
+  # --no-color is load-bearing, not cosmetic: vitest 4.x emits ANSI escapes
+  # even under env -i + CI=true (`Tests  \e[1m\e[32m13 passed`), and the
+  # escapes interleave between the summary tokens the vacuous-green =~ below
+  # greps — a passing suite then reports `vacuous_green_no_tests_passed`
+  # (observed on the first deploy carrying a loadable config, #9860). The
+  # flag is pinned by CWI-1.
+  if out="$(timeout "$WORKSPACE_ISOLATION_TIMEOUT" docker exec -w /app \
+      soleur-web-platform-canary /usr/bin/env -i \
+      PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp \
+      CI=true SOLEUR_ISOLATION_TEST_HOST=1 SOLEUR_ISOLATION_TIERS=direct SOLEUR_ISOLATION_IN_IMAGE=1 \
+      /usr/local/bin/vitest run \
+      --config test/vitest.canary.config.ts --no-color 2>"$err_file")"; then
+    exec_rc=0
+  else
+    exec_rc=$?
+  fi
+  # Strip any ANSI residue so the marker greps below read plain text — vitest
+  # wraps both the summary counters AND the FAIL/`AssertionError` detail in
+  # escapes. --no-color already prevents them, but if the flag is ever lost
+  # (CWI-1 pins the argv) a colored `Tests  \e[1m\e[32m13 passed` still
+  # matches and a colored FAIL line still reaches `reason`.
+  out="$(printf '%s' "$out" | sed -E 's/\x1b\[[0-9;]*m//g')"
+  if [[ "$exec_rc" -eq 0 ]]; then
+    # rc-0 alone is not proof the suite RAN: a future skip-knob regression (or a
+    # tier-filter bug) can green a zero-test run — vitest exits 0 when every
+    # collected test skips. Require the reporter's nonzero-passed marker;
+    # absent, this is a vacuous green and reads RED (loud, never promoting).
+    # Bash =~, not `grep -q`: under pipefail a `grep -q` early-exit SIGPIPEs the
+    # printf and the pipeline reports 141 even on a match.
+    if [[ "$out" =~ Tests\ +[1-9][0-9]*\ passed ]]; then
+      verdict="pass"; reason="ok"
+    else
+      verdict="workspace_isolation_failed"
+      reason="vacuous_green_no_tests_passed"
+    fi
+  else
+    # Diagnostics, sanitized through _cred_err_tail (the shared
+    # secret-shape/env-value scrubber the blocking bwrap probe uses — a bare
+    # `tr -dc` fold would let a runc-formatted error carry an env value onto
+    # journald/Sentry). Vitest writes failure detail to STDOUT (stderr's first
+    # line is its decorative banner), so prefer the first `FAIL <file>`/
+    # `AssertionError` line of `out`; fall back to docker's own stderr line.
+    # (while-read, not `grep -m1`: an early-exiting grep SIGPIPEs its producer
+    # under pipefail — the grep-q-pipe-guard lint's banned shape, #9217.)
+    test_detail=""
+    while IFS= read -r _line; do
+      if [[ "$_line" =~ FAIL\ +[^[:space:]]|AssertionError ]]; then
+        test_detail="$_line"; break
+      fi
+    done <<< "$out"
+    if [[ -z "$test_detail" ]]; then
+      test_detail="$(head -1 "$err_file" 2>/dev/null)"
+    fi
+    docker_err="$(_cred_err_tail "$test_detail" | cut -c1-120)"
+    case "$exec_rc" in
+      124)
+        verdict="workspace_isolation_timeout"
+        reason="host_timeout_${WORKSPACE_ISOLATION_TIMEOUT}s${docker_err:+: $docker_err}" ;;
+      125|126|127)
+        verdict="canary_infra_error"
+        reason="docker_exec_rc_${exec_rc}${docker_err:+: $docker_err}" ;;
+      *)
+        verdict="workspace_isolation_failed"
+        reason="vitest_rc_${exec_rc}${docker_err:+: $docker_err}" ;;
+    esac
+  fi
+  if [[ "$err_file" != "/dev/null" ]]; then rm -f "$err_file" 2>/dev/null || true; fi
+  write_workspace_isolation_state "$verdict" "$reason"
+  logger -t "$LOG_TAG" "WORKSPACE_ISOLATION: verdict=$verdict reason=$reason" || true
+  echo "Workspace isolation probe (non-blocking): verdict=$verdict reason=$reason"
+  # Page only on a RED verdict — canary_infra_error is expected during the
+  # dark-launch window (pre-tooling canary images) and must not page, and a
+  # green probe never pages.
+  if [[ "$verdict" == "workspace_isolation_failed" || "$verdict" == "workspace_isolation_timeout" ]]; then
+    workspace_isolation_sentry_event "$verdict" "$reason" || true
   fi
   return 0
 }
@@ -3285,7 +3728,7 @@ unset _dt_state _ci_deploy_script_sha _ci_deploy_script_sha_full
 # registry heartbeat's ghcr_blocked (cloud-init-registry.yml): 1 = ghcr.io resolves ONLY to the
 # sinkhole (0.0.0.0 / ::), 0 = it resolves to any other address, unknown = it does not resolve
 # (or getent is absent/hangs). Probes ghcr.io only, for registry parity; the apply-time assertion
-# in server.tf proves pkg-containers.githubusercontent.com too. Fail-open: the probe is bounded by
+# in server.tf proves pkg-containers.githubusercontent.com and docker.pkg.github.com too. Fail-open: the probe is bounded by
 # `timeout 5` (this script already needs coreutils timeout; a missing one reads `unknown`) and can
 # never stop a deploy. A separate marker so the DEPLOY_SCRIPT_SHA parser
 # (check-deploy-script-parity.sh) and the IMAGE_VERIFY consumers stay byte-stable.
@@ -4037,6 +4480,9 @@ case "$COMPONENT" in
         # webhook leg rather than losing it.
         BWRAP_LINE="DEPLOY_ROLLBACK: bwrap sandbox non-functional in $IMAGE:$TAG rc=$BWRAP_RC ms=$BWRAP_MS cstate=$BWRAP_CSTATE err_chars=${#BWRAP_ERR} bwrap_err=\"${BWRAP_ERR_SAN:-<empty>}\""
         logger -t "$LOG_TAG" "$BWRAP_LINE" || printf '%s\n' "$BWRAP_LINE"
+        # #9871: record WHY, while the failing container is still up. Bounded, read-only, `|| true`
+        # (see CANARY_DIAG_BEGIN); it cannot alter the rollback below.
+        emit_canary_sandbox_diag legacy || true
         { docker stop soleur-web-platform-canary 2>/dev/null || true; }
         { docker rm soleur-web-platform-canary 2>/dev/null || true; }
         # ENV_FILE trap still runs to clean up the secrets file.
@@ -4060,6 +4506,16 @@ case "$COMPONENT" in
       # on a faithful FAIL, but never gates/rolls back this deploy. `|| true`
       # keeps a canary hiccup from aborting the deploy under set -e.
       run_faithful_sandbox_canary || true
+      # Outer-wrap canary (#5863) — report-only, same non-blocking posture.
+      run_outer_wrap_canary || true
+
+      # Cross-workspace isolation probe (#2640) — NON-BLOCKING dark-launch
+      # (wg-dark-launch-deploy-gates). Runs the direct tier of the cross-workspace
+      # isolation suite inside the canary via the image-baked vitest, records a
+      # classified verdict + pages Sentry on red, but never gates/rolls back this
+      # deploy. `|| true` is LOAD-BEARING — a probe hiccup must never abort a
+      # deploy under set -e.
+      run_workspace_isolation_probe || true
     fi
 
     # #8609 (plan §3.3): the GitHub App key check is the last gate before promotion.

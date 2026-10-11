@@ -318,7 +318,12 @@ elif case == 'S3':
     # STUB ARGV — THE HMAC VALUE. The header was pinned by PRESENCE only (`X-Signature-256:*`),
     # so an empty or malformed signature passed. In production that request 401s and the gate
     # reports a transport failure it cannot explain.
-    sub(VERIFY, 'X-Signature-256: sha256=${HMAC}', 'X-Signature-256: sha256=')
+    #
+    # The signature now rides curl's STDIN config channel (#9597), so the mutation targets the
+    # `printf` that writes the `X-Signature-256` directive: its first argument (the signature) is
+    # emptied. The pre-guard judges the variable BEFORE the poll and is untouched, so the
+    # empty value reaches the stub, which rejects it exactly as before.
+    sub(VERIFY, '"$HMAC" "$CF_ACCESS_ID" "$CF_ACCESS_SECRET")', '"" "$CF_ACCESS_ID" "$CF_ACCESS_SECRET")')
 
 elif case == 'S4':
     # STUB ARGV — THE SECRET NAME.

@@ -100,6 +100,19 @@
 # "orderable elsewhere" suggestion would advise putting a prod host in Singapore.
 STOCK_PREFLIGHT_EU_LOCATIONS="${STOCK_PREFLIGHT_EU_LOCATIONS:-nbg1 fsn1 hel1}"
 
+# _STOCK_LAST_CLASS — the class of the most recent verdict in THIS shell (#9510).
+# stock_preflight overwrites it on every return (orderable|stock|config|unreachable|malformed);
+# stock_preflight_gate resets it on entry and folds every failed row's class into it — a
+# plan-shape abort (unreadable plan, create row with no address/type/location) reads 'plan',
+# and two rows failing on different classes fold to 'mixed'. It exists so a caller's CLOSING
+# line can name the class that actually fired: the eight `stock-preflight ABORTED` lines in
+# apply-web-platform-infra.yml used to claim "not orderable" for all four classes, which sends
+# a mid-incident reader waiting on stock for a typo, a dead token, or a changed contract.
+# It is a sourced-shell global, so readers must invoke the gate in the step's own shell
+# (`if ! stock_preflight_gate tfplan.json` — a $(...) capture would run it in a subshell and
+# lose the write). Readers MUST NOT rely on it surviving across a subshell boundary.
+_STOCK_LAST_CLASS=""
+
 # Injectable fetch seam. The test redefines this to cat a synthesized fixture, so the
 # suite is hermetic (no network, no HCLOUD_TOKEN). Never inline curl at a call site.
 _STOCK_DEFAULT_API="https://api.hetzner.cloud/v1"
@@ -231,7 +244,9 @@ stock_preflight() {
   local want_type="$1" want_loc="$2"
   local types_json="" verdict="" reason="" elsewhere="" api_err="" fetch_rc=0
 
+  _STOCK_LAST_CLASS=""
   if [[ -z "$want_type" || -z "$want_loc" ]]; then
+    _STOCK_LAST_CLASS=config
     echo "::error::stock-preflight ABORT: class=config — called without server_type/location (got '${want_type}'/'${want_loc}'). Fail-closed." >&2
     return 1
   fi
@@ -247,10 +262,12 @@ stock_preflight() {
   # lowercase alnum with an optional dash (fsn1, hel1, ash). Anything else fails closed —
   # a value we cannot safely ask about is not evidence of availability.
   if [[ ! "$want_type" =~ ^[a-z0-9]+$ ]]; then
+    _STOCK_LAST_CLASS=config
     echo "::error::stock-preflight ABORT: class=config — server_type '${want_type}' is not a valid Hetzner type name (expected lowercase alphanumeric). Fail-closed — a value that cannot be safely queried must never authorize a destroy." >&2
     return 1
   fi
   if [[ ! "$want_loc" =~ ^[a-z0-9-]+$ ]]; then
+    _STOCK_LAST_CLASS=config
     echo "::error::stock-preflight ABORT: class=config — location '${want_loc}' is not a valid Hetzner location name (expected lowercase alphanumeric/dash). Fail-closed." >&2
     return 1
   fi
@@ -274,23 +291,28 @@ stock_preflight() {
   # multi-line verdict, aborts. Four DISTINCT classes (`class=` token) with different advice, so an operator
   # mid-incident does not read a changed contract as a shortage or a typo as an outage.
   case "$verdict" in
-    ORDERABLE) _stock_deprecation_note "$types_json" "$want_type" "$want_loc"; return 0 ;;
+    ORDERABLE) _STOCK_LAST_CLASS=orderable; _stock_deprecation_note "$types_json" "$want_type" "$want_loc"; return 0 ;;
     UNAVAILABLE) ;;   # falls through to the stock-miss abort and the remediation menu below
     UNKNOWN_TYPE)
+      _STOCK_LAST_CLASS=config
       echo "::error::stock-preflight ABORT: class=config — unknown server_type '${want_type}' (no match at /server_types?name=). Fail-closed — a typo must never authorize a destroy." >&2
       return 1 ;;
     UNKNOWN_LOCATION)
+      _STOCK_LAST_CLASS=config
       echo "::error::stock-preflight ABORT: class=config — unknown location '${want_loc}' for server_type '${want_type}' (not in its /server_types locations[]: a mistyped location, or a type Hetzner does not offer there — check \`location\` in the plan and variables.tf). Fail-closed." >&2
       return 1 ;;
     UNREACHABLE:*)
+      _STOCK_LAST_CLASS=unreachable
       echo "::error::stock-preflight ABORT: class=unreachable — cannot PROVE stock for '${want_type}' in '${want_loc}' (Hetzner did not answer /server_types with a 2xx: ${verdict#UNREACHABLE:}; curl exit 22 means an HTTP error status). An unreachable API is not evidence of availability. Transient — re-dispatch once: a curl exit other than 22 (timeout, DNS, connect), api_error=rate_limit_exceeded, or exit 22 with no api_error (a gateway error page). NOT transient: any other api_error (deprecated_api_endpoint, unauthorized, forbidden, ...) or the same failure on consecutive dispatches — the API contract changed or HCLOUD_TOKEN is wrong: do NOT blind re-dispatch (changelog and probe command: header of tests/scripts/lib/stock-preflight-gate.sh, https://docs.hetzner.cloud/changelog#2026-06-02-datacenters-deprecated)." >&2
       return 1 ;;
     *)
+      _STOCK_LAST_CLASS=malformed
       if [[ "$verdict" == *$'\n'* ]]; then reason="multiple JSON documents"; else reason="${verdict:-unreadable body (trailing data, or a member jq could not read)}"; fi
       echo "::error::stock-preflight ABORT: class=malformed — cannot PROVE stock for '${want_type}' in '${want_loc}' (Hetzner answered /server_types in a shape this gate does not accept: ${reason}; body=$(_stock_shape_hint "$types_json")). This is NOT a stock shortage: the API contract may have changed. Open an issue naming this line; do NOT blind re-dispatch (probe command: header of tests/scripts/lib/stock-preflight-gate.sh)." >&2
       return 1 ;;
   esac
 
+  _STOCK_LAST_CLASS=stock
   elsewhere=$(_stock_eu_locations_for "$types_json" "$want_type") || elsewhere=""
   echo "::error::stock-preflight ABORT: class=stock — server_type '${want_type}' is reported NOT orderable in '${want_loc}' today by Hetzner (orderable in EU: ${elsewhere:-<none>}). That is an indicator, not a guarantee, so it can block a replace that would have succeeded — but a -replace DESTROYS before it creates, and this recreate would strand the fleet with no rollback if the create fails (#6393, #6463)." >&2
   # REMEDIATION MENU — order is the point: the cheapest correct action first, so an operator
@@ -360,8 +382,36 @@ stock_preflight() {
 # `.address` cannot (a) split into extra fields and mis-pair a server_type with the wrong
 # location, or (b) smuggle a newline into the `echo "::error::..."` below and forge a
 # GitHub Actions workflow command. Field delimiters are the sole surviving real tabs.
+#
+# The extraction lives in _stock_plan_creates so stock_recovery_report (#9510) grades the
+# SAME population the gate did — a re-derived copy could disagree on what counts as a create.
+_stock_plan_creates() {
+  jq -r '
+    .resource_changes[]
+    | select(.type == "hcloud_server")
+    | select(.change.actions | index("create"))
+    | [.address, (.change.after.server_type // ""), (.change.after.location // "")]
+    | @tsv
+  ' "$1" 2>/dev/null
+}
+
+# _stock_gate_fold <class> — accumulate the class of each FAILED row into
+# _STOCK_GATE_CLASS: first failure wins; a second failure of a DIFFERENT class folds
+# to 'mixed' so the closing line never names one class over a multi-cause abort.
+_stock_gate_fold() {
+  case "$_STOCK_GATE_CLASS" in
+    "")   _STOCK_GATE_CLASS="$1" ;;
+    "$1") ;;
+    *)    _STOCK_GATE_CLASS="mixed" ;;
+  esac
+}
+
 stock_preflight_gate() {
   local plan_json="$1" pairs n=0 rc=0 addr stype sloc row rest
+  # 'plan' until a probe says otherwise: every early plan-shape abort below returns with
+  # this class, which is exactly right — none of them ever asked Hetzner.
+  _STOCK_LAST_CLASS=plan
+  _STOCK_GATE_CLASS=""
 
   if [[ -z "$plan_json" || ! -r "$plan_json" ]]; then
     echo "::error::stock-preflight ABORT: plan JSON '${plan_json}' missing or unreadable. Fail-closed." >&2
@@ -391,13 +441,7 @@ stock_preflight_gate() {
   # web2-recreate-gate.sh (removed with its job, #6575) carried this same check for this same
   # stated reason — "A jq null/empty would evaluate false in the arithmetic below and could
   # silently mis-decide; fail LOUD instead." — recorded here so the rationale outlives it.
-  if ! pairs=$(jq -r '
-    .resource_changes[]
-    | select(.type == "hcloud_server")
-    | select(.change.actions | index("create"))
-    | [.address, (.change.after.server_type // ""), (.change.after.location // "")]
-    | @tsv
-  ' "$plan_json" 2>/dev/null); then
+  if ! pairs=$(_stock_plan_creates "$plan_json"); then
     echo "::error::stock-preflight ABORT: jq extraction failed on '${plan_json}' — cannot enumerate planned server creates. Fail-closed: a plan we cannot read is not evidence of availability." >&2
     return 1
   fi
@@ -414,6 +458,7 @@ stock_preflight_gate() {
     # which is the one place an operator looks. Every sibling *-gate.sh in this directory echoes
     # a positive line on its success path for this reason.
     echo "stock-preflight: 0 planned server creates in '${plan_json}' — nothing to preflight (in-place update / volume-only / no-op)." >&2
+    _STOCK_LAST_CLASS=orderable
     return 0
   fi
 
@@ -430,20 +475,24 @@ stock_preflight_gate() {
       # A create row that cannot be NAMED cannot be reconciled with what the plan will order. This used to `continue`
       # silently, so one valid row beside one addressless row passed with a single fetch. Fail closed, per row.
       echo "::error::stock-preflight ABORT: a planned server create row carries no resource address (type '${stype}', location '${sloc}'). Fail-closed — a create we cannot name is not evidence of availability." >&2
+      _stock_gate_fold plan
       rc=1
       continue
     fi
     n=$((n + 1))
     if [[ -z "$stype" || -z "$sloc" ]]; then
       echo "::error::stock-preflight ABORT: ${addr} plans a create but carries no server_type/location in change.after. Fail-closed — cannot prove stock for an unknown target." >&2
+      _stock_gate_fold plan
       rc=1
       continue
     fi
     # No per-address tine scoping remains: the only address-scoped suggestion was the web-2
     # warm-standby tine, deleted with its subject (#6575). The surviving menu is correct for
     # every host, so the address is reported by the trailing "...while preflighting" line only.
+    # Only FAILED probes fold a class — a passing row contributes no class to the abort.
     if ! stock_preflight "$stype" "$sloc"; then
       echo "::error::  ...while preflighting ${addr} (${stype} @ ${sloc})." >&2
+      _stock_gate_fold "$_STOCK_LAST_CLASS"
       rc=1
     fi
   done <<<"$pairs"
@@ -454,6 +503,7 @@ stock_preflight_gate() {
   # scoped recreate. It used to be the ONLY thing standing between that shape and `return 0`.
   if [[ "$n" -eq 0 ]]; then
     echo "::error::stock-preflight ABORT: extracted $(printf '%s' "$pairs" | grep -c '') row(s) from '${plan_json}' but none carried a resource address. Fail-closed: an unreadable plan is not evidence of availability." >&2
+    [[ -n "$_STOCK_GATE_CLASS" ]] && _STOCK_LAST_CLASS="$_STOCK_GATE_CLASS"
     return 1
   fi
 
@@ -462,7 +512,134 @@ stock_preflight_gate() {
   # half existed, and a gate that is silent on success cannot be distinguished from a gate
   # that has rotted into a no-op. Mirrors the sibling gates' `PASS —` lines.
   if [[ "$rc" -eq 0 ]]; then
+    _STOCK_LAST_CLASS=orderable
     echo "stock-preflight PASS: ${n} planned server create(s) reported available in target location(s) (an indicator, not a reservation)." >&2
+  else
+    _STOCK_LAST_CLASS="${_STOCK_GATE_CLASS:-plan}"
   fi
   return "$rc"
+}
+
+# stock_abort_closing <label> [tail]
+# The workflow's closing line after `stock_preflight_gate` returns non-zero. It renders the
+# class that ACTUALLY fired from _STOCK_LAST_CLASS (#9510): before this helper, all eight call
+# sites printed "<target> stock-preflight ABORTED: the planned server_type is not orderable"
+# for every class, so a `config`, `unreachable` or `malformed` abort still told the operator to
+# wait for stock. `class=stock` keeps that wording; every other class names what to do instead.
+# The class vocabulary is gate-side: 'plan' covers a plan-shape abort (no probe ran), 'mixed'
+# covers two rows failing on different classes, 'none' covers an unset/stale global.
+stock_abort_closing() {
+  local label="$1" tail="${2:-}" cls="${_STOCK_LAST_CLASS:-none}" advice
+  case "$cls" in
+    orderable)
+      advice="the gate's last verdict was ORDERABLE — if this line is visible a wrapper is printing an abort after a pass; read the lines above." ;;
+    stock)
+      advice="a planned server_type is reported NOT orderable in its target location by Hetzner. Refusing to apply — the destroy would succeed and the create could not, stranding the host with no rollback (#6393, #6463). Wait for stock and re-dispatch." ;;
+    config)
+      advice="NOT a stock shortage — the plan names a server_type or location Hetzner does not list, or an unsafe value never reached the network (the ::error:: line above names the row). Do NOT re-dispatch until the plan/vars are fixed." ;;
+    unreachable)
+      advice="NOT a stock shortage — Hetzner did not answer 2xx, so stock could not be proven (the ::error:: line above carries the curl status / api_error). Re-dispatch ONCE only if it is a transient shape; a repeat, or a non-transient api_error, means the token or the API contract changed — do NOT blind re-dispatch." ;;
+    malformed)
+      advice="NOT a stock shortage — Hetzner answered 2xx in a shape this gate does not accept: a contract change. Do NOT re-dispatch; open an issue naming the ::error:: line above." ;;
+    plan)
+      advice="NOT a stock verdict — the plan itself could not be classified (unreadable JSON, or a create row with no address / server_type / location; the ::error:: lines above name the row). Reconcile the plan." ;;
+    mixed)
+      advice="the aborts above carry MORE THAN ONE failure class — read every ::error:: line; at least one of them is not a stock shortage." ;;
+    *)
+      advice="the gate aborted — read the ::error:: lines above for the cause (no probe verdict was recorded)." ;;
+  esac
+  echo "::error::${label} stock-preflight ABORTED (class=${cls}): ${advice}${tail:+ ${tail}}" >&2
+}
+
+# stock_recovery_report <label> <plan_json> [state_json | --probe-state]
+# Post-apply-failure diagnostic for the destroy-first replace paths (#9510 Item A). A -replace
+# destroys before it creates, so a create that fails after the destroy strands the host with no
+# rollback. The recovery that already exists is a NEW DISPATCH: the job's gates pin the data
+# volumes out of the destroy set, so a re-dispatch re-plans a create + reattach against the
+# retained volumes (the absent-vs-tainted two-arm doctrine is in
+# knowledge-base/engineering/operations/runbooks/web-host-replace.md). What the failure run was
+# missing is the DIAGNOSTIC — did the create fail on stock, or on a cause stock says nothing
+# about. This function re-reads Hetzner for every planned create (a FRESH fetch through
+# stock_preflight — never a replayed verdict), names the current class per address, reads a
+# post-failure `terraform show -json` dump when supplied to say whether the address is absent
+# (the re-dispatch plans a bare create) or tainted/present (the re-dispatch plans delete+create
+# or nothing), and prints the doctrine. It NEVER authorizes anything: it is an annotation, so it
+# returns 0 unconditionally — the job's own `exit 1` carries the failure.
+stock_recovery_report() {
+  local label="$1" plan_json="$2" state_src="${3:-}"
+  local pairs row addr stype sloc rest pcls pstate state_note="no post-failure state read"
+  local state_file="" cleanup_state=""
+  echo "::error::${label} recovery-read: the apply failed; re-reading Hetzner stock for every planned server create so a stock-caused failure is distinguishable from a config/contract/apply one. Diagnostic only — this annotates the failure, it does not change it." >&2
+
+  case "$state_src" in
+    --probe-state)
+      # The job's working dir is the infra root and `terraform init` already ran there;
+      # AWS_* backend creds reach this step through the loader's $GITHUB_ENV export.
+      # $RUNNER_TEMP, not /tmp (#7661 G10): `terraform show -json` does not redact sensitive
+      # values — the state dump can carry live tokens, so the file must not sit at a
+      # predictable world-readable path. mktemp's own file is 0600 regardless.
+      if command -v terraform >/dev/null 2>&1; then
+        # `local -x TMPDIR` + `mktemp -t`: the fixture-scan rule counts only the bare/`-t`
+        # forms as provably absolute, and the function-scoped export keeps RUNNER_TEMP
+        # honoured at runtime without leaking an env var into the caller's shell.
+        local -x TMPDIR="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
+        # lint-trap-ownership: ok — every return path rm -f's it, and a sourced library must not trap EXIT over its caller's (ADR-129 rule (c))
+        state_file="$(mktemp -t stock-recovery-state.XXXXXXXX)" && cleanup_state=1
+        if [[ -n "$state_file" ]]; then
+          terraform show -json > "$state_file" 2>/dev/null || { rm -f "$state_file"; state_file=""; }
+        fi
+        [[ -z "$state_file" ]] && state_note="terraform show -json failed — post-failure state unreadable"
+      else
+        state_note="terraform not on PATH — post-failure state unreadable"
+      fi ;;
+    "") ;;
+    *)  if [[ -r "$state_src" ]]; then state_file="$state_src"
+        else state_note="state file '${state_src}' unreadable"; fi ;;
+  esac
+
+  pairs=""
+  if [[ -r "$plan_json" ]]; then pairs=$(_stock_plan_creates "$plan_json" 2>/dev/null) || pairs=""; fi
+  if [[ -z "$pairs" ]]; then
+    echo "::error::${label} recovery-read: no planned server creates could be read from '${plan_json}' — the failure was not a server create; the apply error above is the record." >&2
+  else
+    while IFS= read -r row; do
+      addr="${row%%$'\t'*}"; rest="${row#*$'\t'}"
+      stype="${rest%%$'\t'*}"; sloc="${rest#*$'\t'}"
+      if [[ -z "$addr" || -z "$stype" || -z "$sloc" ]]; then
+        echo "::error::${label} recovery-read: a planned-create row is unreadable (addr='${addr}' type='${stype}' loc='${sloc}') — skipping its probe." >&2
+        continue
+      fi
+      pstate="unprobed (${state_note})"
+      if [[ -n "$state_file" ]]; then
+        # Scope the descent to .values (post-apply STATE) — `.configuration` also carries
+        # `address` keys for everything the plan declared, so an unscoped `..` would read a
+        # destroyed-but-declared server as "present", picking the wrong recovery arm.
+        pstate=$(jq -r --arg a "$addr" '
+          [.values | .. | objects | select(.address? == $a and .type? == "hcloud_server")] as $m
+          | if ($m | length) == 0 then "absent — the create never landed; a re-dispatch plans a bare create"
+            elif ([$m[] | (.status? // "")] | any(. == "tainted")) then "tainted in state — the create landed and a LATER step failed; a re-dispatch of the replace target plans delete+create"
+            else "present in state — the create landed; a re-dispatch plans no server create for it" end
+        ' "$state_file" 2>/dev/null) || pstate=""
+        [[ -z "$pstate" ]] && pstate="unreadable — the state file did not parse"
+      fi
+      # FRESH read — emits its own ::error:: evidence line, and sets _STOCK_LAST_CLASS.
+      stock_preflight "$stype" "$sloc" >&2 || true
+      pcls="${_STOCK_LAST_CLASS:-none}"
+      echo "::error::${label} recovery-read: ${addr} wants ${stype}@${sloc} — post-failure stock class=${pcls}; state=${pstate}." >&2
+      case "$pcls" in
+        stock)
+          echo "::error::${label}   → the create most likely failed on stock — wait for stock to return, then re-dispatch this job's documented recovery arm (the stock gate re-runs on that dispatch)." >&2 ;;
+        orderable)
+          echo "::error::${label}   → stock is orderable NOW — the create failed for a non-stock cause (quota, image, attach, bootstrap); a re-dispatch retries the SAME failure until that cause is fixed — read the apply error above." >&2 ;;
+        unreachable)
+          echo "::error::${label}   → the re-read could not prove stock (see the curl/api_error line above); retry the probe later, and treat a repeat like a contract problem." >&2 ;;
+        *)
+          echo "::error::${label}   → a config/contract fault, NOT stock — do NOT re-dispatch until the plan or the API contract is fixed." >&2 ;;
+      esac
+    done <<<"$pairs"
+  fi
+
+  echo "::error::${label} recovery doctrine: the data volumes are pinned out of the destroy set and are retained across the failed create — a re-dispatch re-plans a create that reattaches them. Recovery is a NEW workflow_dispatch per this job's annotation below; there is NO [ack-destroy] bypass and no saved-plan re-apply. (${state_note})" >&2
+  [[ -n "$cleanup_state" && -n "$state_file" ]] && rm -f "$state_file"
+  return 0
 }

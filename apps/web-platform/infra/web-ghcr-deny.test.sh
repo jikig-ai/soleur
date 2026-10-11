@@ -23,6 +23,10 @@
 #             hcloud_server.web's user_data is the plain cloud-init.yml render
 #   census    across the infra .tf/.sh/.yml/.tmpl files: the deny loop header appears only in its
 #             three sanctioned copies, and nothing writes /etc/hosts or cloud-init's hosts template
+#   probe     the rehearsal's dockerd deny probe (#9799 item 5), static over zot-image-rehearse.sh: one pull,
+#             inside assert_dockerd_denied, output kept, the call after the deny and followed by `|| die`; and the
+#             extracted function is DRIVEN against shimmed sudo/docker/sleep/timeout (a refused pull returns 0 after a
+#             >= 6 s sleep, a successful or timed-out pull returns 1)
 #
 # The render/console half needs terraform: SKIP locally without it, FAIL CLOSED under CI.
 # Every fixture is synthesized (cq-test-fixtures-synthesized-only).
@@ -71,13 +75,13 @@ assert_fixture_dir "$WORK"
 cat > "$WORK/g2.py" <<'PY'
 import base64, os, re, sys, yaml
 
-HDR = "for h in ghcr.io pkg-containers.githubusercontent.com; do"
+HDR = "for h in ghcr.io pkg-containers.githubusercontent.com docker.pkg.github.com; do"
 LOC_START = re.compile(r"^\s*ghcr_deny_sh\s*=\s*<<-EOT\s*$")
 ASSERT_START = re.compile(r"^\s*ghcr_deny_assert_sh\s*=\s*<<-EOT\s*$")
 EOT = re.compile(r"^\s*EOT\s*$")
 # A shell loop over the deny's names, in either order (`for h in ... ; do`). A string that merely
 # NAMES the header (zot-image-rehearse.sh finds the registry entry by it) is not a loop.
-DENY_LOOP = re.compile(r"\bfor\s+h\s+in\s+[^;\n\"']*\b(?:ghcr\.io|pkg-containers\.githubusercontent\.com)\b[^;\n\"']*;\s*do\b")
+DENY_LOOP = re.compile(r"\bfor\s+h\s+in\s+[^;\n\"']*\b(?:ghcr\.io|pkg-containers\.githubusercontent\.com|docker\.pkg\.github\.com)\b[^;\n\"']*;\s*do\b")
 # A write to the hosts file or cloud-init's hosts template, in any of the usual shell shapes, plus a
 # FILE_MAP destination (infra-config-apply.sh's `B64|/dest|mode|owner` rows).
 HOSTS_WRITE = re.compile(
@@ -246,10 +250,16 @@ chk_parity() {  # <root>
   local arm
   for arm in false true; do
     render_a "$1" "$WORK/a-$arm" "$arm" || { echo "copy A (web_tunnel_connector=$arm): $(cat "$WORK/a-$arm/why" 2>/dev/null)"; return 1; }
+    [[ "$(cat "$WORK/a-$arm/count")" == 1 ]] || { echo "copy A (web_tunnel_connector=$arm): expected exactly one deny entry (the three-name header), found $(cat "$WORK/a-$arm/count") -- the header drifted, so the entry cannot be compared"; return 1; }
     same "$WORK/a-$arm/A" "$WORK/copyR" || { echo "copy A (cloud-init.yml runcmd deny entry, web_tunnel_connector=$arm) differs from copy R (the registry entry)"; return 1; }
   done
   copy_b "$1" "$WORK/b"
   same "$WORK/b/deny.sh" "$WORK/copyR" || { echo "copy B (local.ghcr_deny_sh) differs from copy R"; return 1; }
+  # The assertion is the only per-name proof on a running host, and nothing else derives its name list
+  # from the deny loop's: a name added to the deny but not to the assertion would be denied unproven.
+  local bn an
+  bn=$(grep -m1 -oE 'for h in [^;]+; do' "$WORK/b/deny.sh"); an=$(grep -m1 -oE 'for h in [^;]+; do' "$WORK/b/assert.sh")
+  [[ -n "$bn" && "$bn" == "$an" ]] || { echo "copy B: the assertion's name list ('$an') differs from the deny loop's ('$bn')"; return 1; }
 }
 chk_order() {  # <root>
   local arm
@@ -271,7 +281,7 @@ chk_exec() {  # <root> — copy B runs the way remote-exec runs it: POSIX sh, se
   rc=0; sh "$w/run.sh" && sh "$w/run.sh" || rc=$?
   [[ "$rc" == 0 ]] || { echo "copy B exited $rc under sh + set -e"; return 1; }
   for f in hosts tmpl; do
-    for n in ghcr.io pkg-containers.githubusercontent.com; do
+    for n in ghcr.io pkg-containers.githubusercontent.com docker.pkg.github.com; do
       [[ "$(grep -cxF "0.0.0.0 $n" "$w/$f")" == 1 && "$(grep -cxF ":: $n" "$w/$f")" == 1 ]] \
         || { echo "$f: want exactly one '0.0.0.0 $n' and one ':: $n' after two runs"; return 1; }
     done
@@ -281,12 +291,12 @@ chk_exec() {  # <root> — copy B runs the way remote-exec runs it: POSIX sh, se
   rm -f "$w/tmpl"; printf '10.0.0.1 other\n0.0.0.0\tghcr.io\n' > "$w/hosts"
   rc=0; sh "$w/run.sh" || rc=$?
   [[ "$rc" == 0 && ! -e "$w/tmpl" && "$(grep -c 'ghcr\.io' "$w/hosts")" == 1 && "$(head -1 "$w/hosts")" == "10.0.0.1 other" \
-    && "$(grep -c 'pkg-containers' "$w/hosts")" == 2 ]] \
-    || { echo "pre-seeded hosts: ghcr.io duplicated, an unrelated line changed, or the absent template was created (rc=$rc)"; return 1; }
+    && "$(grep -c 'pkg-containers' "$w/hosts")" == 2 && "$(grep -c 'docker\.pkg\.github\.com' "$w/hosts")" == 2 ]] \
+    || { echo "pre-seeded hosts: ghcr.io duplicated, an unrelated line changed, the absent template was created, or a name not appended exactly once (rc=$rc)"; return 1; }
 }
 chk_agree() {  # <root>
   copy_b "$1" "$WORK/b" || { echo "copy B unreadable"; return 1; }
-  local s="$WORK/shim" row gh pk want_reg want_ci want_as reg ci as rc err bad=""
+  local s="$WORK/shim" row gh pk dk want_reg want_ci want_as reg ci as rc err exp_name bad=""
   assert_fixture_dir "$WORK"; mkdir -p "$s"
   cat > "$s/getent" <<'EOF'
 #!/usr/bin/env bash
@@ -294,6 +304,7 @@ chk_agree() {  # <root>
 case "$2" in
   ghcr.io) v="${GE_GHCR-}" ;;
   pkg-containers.githubusercontent.com) v="${GE_PKG-}" ;;
+  docker.pkg.github.com) v="${GE_DOCKERPKG-}" ;;
   *) echo "getent shim: unexpected name: $2" >&2; exit 64 ;;
 esac
 [[ -n "$v" ]] || exit 2
@@ -304,30 +315,40 @@ EOF
   [[ -s "$WORK/ci-fn.sh" ]] || { echo "_ghcr_blocked_state not found in ci-deploy.sh"; return 1; }
   local SINK='0.0.0.0 STREAM x\n0.0.0.0 DGRAM\n:: STREAM\n' ROUT='140.82.121.34 STREAM x\n' \
     MIX='0.0.0.0 STREAM x\n140.82.121.34 STREAM\n' V6='2606:50c0:8000::154 STREAM x\n' LOOP='127.0.0.1 STREAM x\n'
-  # ghcr | pkg | registry | ci-deploy | assertion. The two one-name-sinked rows are the NAMED
-  # expected difference: both classifiers probe ghcr.io only (registry parity) while the assertion
-  # checks both names — so it must fail whichever of the two is not sinked.
+  # ghcr | pkg | docker-pkg | registry | ci-deploy | assertion. The one-name-not-sinked rows are the
+  # NAMED expected difference: both classifiers probe ghcr.io only (registry parity) while the
+  # assertion checks all three names — so it must fail whichever of the three is not sinked.
   # Each implementation runs under its production shell: the registry heartbeat script is bash,
   # ci-deploy.sh is bash with set -euo pipefail, and a remote-exec inline script runs under sh.
-  while IFS='|' read -r row gh pk want_reg want_ci want_as; do
-    reg=$(env GE_GHCR="$gh" GE_PKG="$pk" PATH="$s:$PATH" bash -c ". '$WORK/reg-classifier.sh'; printf %s \"\$GHCR_BLOCKED\"" 2>/dev/null)
-    ci=$(env GE_GHCR="$gh" GE_PKG="$pk" PATH="$s:$PATH" bash -euo pipefail -c ". '$WORK/ci-fn.sh'; _ghcr_blocked_state" 2>/dev/null)
-    rc=0; env GE_GHCR="$gh" GE_PKG="$pk" PATH="$s:$PATH" sh -c "set -e; $(cat "$WORK/b/assert.sh")" >/dev/null 2>"$WORK/as.err" || rc=$?
+  while IFS='|' read -r row gh pk dk want_reg want_ci want_as; do
+    reg=$(env GE_GHCR="$gh" GE_PKG="$pk" GE_DOCKERPKG="$dk" PATH="$s:$PATH" bash -c ". '$WORK/reg-classifier.sh'; printf %s \"\$GHCR_BLOCKED\"" 2>/dev/null)
+    ci=$(env GE_GHCR="$gh" GE_PKG="$pk" GE_DOCKERPKG="$dk" PATH="$s:$PATH" bash -euo pipefail -c ". '$WORK/ci-fn.sh'; _ghcr_blocked_state" 2>/dev/null)
+    rc=0; env GE_GHCR="$gh" GE_PKG="$pk" GE_DOCKERPKG="$dk" PATH="$s:$PATH" sh -c "set -e; $(cat "$WORK/b/assert.sh")" >/dev/null 2>"$WORK/as.err" || rc=$?
     as=pass; [[ "$rc" == 0 ]] || as=fail
     err=""
     if [[ "$as" == fail ]] && ! grep -qE '^FATAL: .* \(#9169\)\. Route back: .*never gh run rerun --failed\.$' "$WORK/as.err"; then err=" (FATAL text/route-back missing)"; fi
+    # The FATAL must name the host that actually failed, not just look like a FATAL.
+    exp_name=""
+    case "$row" in
+      ghcr-sinked-pkg-routable) exp_name=pkg-containers.githubusercontent.com ;;
+      ghcr-routable-pkg-sinked) exp_name=ghcr.io ;;
+      dockerpkg-*) exp_name=docker.pkg.github.com ;;
+    esac
+    if [[ "$as" == fail && -n "$exp_name" ]] && ! grep -qF "FATAL: $exp_name does not resolve ONLY" "$WORK/as.err"; then err="$err (FATAL does not name $exp_name)"; fi
     if [[ "$reg" != "$want_reg" || "$ci" != "$want_ci" || "$as" != "$want_as" || -n "$err" ]]; then
       bad="$bad [$row: registry=$reg/$want_reg ci-deploy=$ci/$want_ci assert=$as/$want_as$err]"
     fi
   done <<EOF
-sink-only|$SINK|$SINK|1|1|pass
-routable-v4|$ROUT|$ROUT|0|0|fail
-sink+routable|$MIX|$MIX|0|0|fail
-routable-v6-with-::|$V6|$V6|0|0|fail
-loopback-127|$LOOP|$LOOP|0|0|fail
-unresolvable|||unknown|unknown|fail
-ghcr-sinked-pkg-routable|$SINK|$ROUT|1|1|fail
-ghcr-routable-pkg-sinked|$ROUT|$SINK|0|0|fail
+sink-only|$SINK|$SINK|$SINK|1|1|pass
+routable-v4|$ROUT|$ROUT|$ROUT|0|0|fail
+sink+routable|$MIX|$MIX|$MIX|0|0|fail
+routable-v6-with-::|$V6|$V6|$V6|0|0|fail
+loopback-127|$LOOP|$LOOP|$LOOP|0|0|fail
+unresolvable||||unknown|unknown|fail
+ghcr-sinked-pkg-routable|$SINK|$ROUT|$SINK|1|1|fail
+ghcr-routable-pkg-sinked|$ROUT|$SINK|$SINK|0|0|fail
+dockerpkg-routable-others-sinked|$SINK|$SINK|$ROUT|1|1|fail
+dockerpkg-unresolvable-others-sinked|$SINK|$SINK||1|1|fail
 EOF
   [[ -z "$bad" ]] || { echo "classifier disagreement:$bad"; return 1; }
 }
@@ -339,7 +360,83 @@ chk_census() {  # <root>
   local o; o=$(python3 "$WORK/g2.py" census "$1")
   [[ "$o" == OK ]] || { printf '%s — %s\n' "$(tr '\n' ';' <<<"$o")" "$RETIRE"; return 1; }
 }
-CHECKS="nonempty parity order exec agree wiring census"
+chk_probe() {  # <root>: the rehearsal's dockerd deny probe (#9799 item 5); static, over zot-image-rehearse.sh
+  # Pins the dockerd probe's spelling and wiring, not every ghcr.io contact: the builder's curl calls run
+  # before the deny on purpose and are not read here.
+  local f="$1/zot-image-rehearse.sh" code body pulls n wait_s waits pull_ln sleep_ln deny_ln call_ln
+  [[ -s "$f" ]] || { echo "zot-image-rehearse.sh is missing or empty"; return 1; }
+  code=$(grep -nvE '^[[:space:]]*#' "$f")   # "<lineno>:<line>" for every non-comment line
+  pulls=$(grep -E '\b(docker|dk)\b.*\bpull\b' <<<"$code" || true)
+  n=$(grep -c . <<<"$pulls" || true)
+  [[ "$n" == 1 ]] || { echo "expected exactly one non-comment docker/dk pull in zot-image-rehearse.sh, found $n"; return 1; }
+  grep -qF '/dev/null' <<<"$pulls" && { echo "the docker pull discards its output (/dev/null): a recurrence of the bypass would be undiagnosable"; return 1; }
+  pull_ln=${pulls%%:*}
+  body=$(awk '/^assert_dockerd_denied\(\) \{/{f=1} f{print NR":"$0} f&&/^}/{exit}' "$f" | grep -vE '^[0-9]+:[[:space:]]*#' || true)
+  [[ -n "$body" ]] || { echo "assert_dockerd_denied is missing"; return 1; }
+  grep -qE "^${pull_ln}:" <<<"$body" || { echo "the docker pull (line ${pull_ln}) is not inside assert_dockerd_denied"; return 1; }
+  waits=$(grep -c 'HOSTS_CACHE_WAIT_S=' <<<"$code" || true)
+  [[ "$waits" == 1 ]] || { echo "HOSTS_CACHE_WAIT_S must be assigned exactly once (found $waits)"; return 1; }
+  wait_s=$(sed -n 's/^HOSTS_CACHE_WAIT_S=\([1-9][0-9]*\)$/\1/p' "$f")
+  [[ "$wait_s" =~ ^[1-9][0-9]*$ ]] || { echo "HOSTS_CACHE_WAIT_S is not a bare positive integer on a line of its own"; return 1; }
+  (( wait_s >= 6 )) || { echo "HOSTS_CACHE_WAIT_S is $wait_s; it must be >= 6 (Go caches the hosts file for 5 s)"; return 1; }
+  sleep_ln=$(grep -E '^[0-9]+:[[:space:]]+sleep "\$HOSTS_CACHE_WAIT_S"[[:space:]]*$' <<<"$body" | head -n 1); sleep_ln=${sleep_ln%%:*}
+  [[ "$sleep_ln" =~ ^[0-9]+$ ]] && (( sleep_ln < pull_ln )) \
+    || { echo "assert_dockerd_denied has no 'sleep \"\$HOSTS_CACHE_WAIT_S\"' before the docker pull (line ${pull_ln})"; return 1; }
+  grep -qF '&& rc=0 || rc=$?' <<<"$body" || { echo "assert_dockerd_denied no longer captures the pull status with '&& rc=0 || rc=\$?'"; return 1; }
+  grep -qE '^[0-9]+:[[:space:]]+return 1$' <<<"$body" || { echo "assert_dockerd_denied has no 'return 1' (a successful pull must fail the rehearsal)"; return 1; }
+  deny_ln=$(grep -E '^[0-9]+:sudo sh "\$W/deny\.sh"[[:space:]]*$' <<<"$code" | head -n 1); deny_ln=${deny_ln%%:*}
+  call_ln=$(grep -E '^[0-9]+:assert_dockerd_denied ' <<<"$code" | head -n 1); call_ln=${call_ln%%:*}
+  [[ "$deny_ln" =~ ^[0-9]+$ && "$call_ln" =~ ^[0-9]+$ ]] && (( deny_ln < call_ln )) \
+    || { echo "the assert_dockerd_denied call (line '${call_ln}') does not come after the deny application (line '${deny_ln}')"; return 1; }
+  [[ "$(grep -c '^[0-9]*:assert_dockerd_denied() {' <<<"$code" || true)" == 1 && "$(grep -c 'assert_dockerd_denied' <<<"$code" || true)" == 2 ]] \
+    || { echo "assert_dockerd_denied must appear on exactly two code lines, its definition and the one call (a redefinition, function/alias/eval form or second call would shadow the probe)"; return 1; }
+  grep -qF "${call_ln}:"'assert_dockerd_denied /etc/hosts "ghcr.io/project-zot/zot-linux-amd64@sha256:$D" \' <<<"$code" \
+    || { echo "the assert_dockerd_denied call (line ${call_ln}) no longer probes the upstream ref ghcr.io/project-zot/zot-linux-amd64@sha256:\$D on /etc/hosts"; return 1; }
+  grep -qE "^$((call_ln + 1)):[[:space:]]+\|\| die \"dockerd could still pull from ghcr\.io after the deny" <<<"$code" \
+    || { echo "the line after the assert_dockerd_denied call is not '|| die \"dockerd could still pull ...\"': a successful pull would not fail the rehearsal"; return 1; }
+  chk_probe_run "$1"
+}
+chk_probe_run() {  # <root>: drive the extracted assert_dockerd_denied against shimmed sudo/docker/sleep/timeout
+  local f="$1/zot-image-rehearse.sh" t mode want rc log first_sleep first_pull slept
+  [[ -s "$f" ]] || { echo "zot-image-rehearse.sh is missing or empty"; return 1; }
+  t=$(mktemp -d "$WORK/probe-run.XXXXXX") || { echo "could not create the probe scratch dir"; return 1; }
+  assert_fixture_dir "$t"; mkdir "$t/bin"
+  { echo 'dk() { sudo docker "$@"; }'; sed -n '/^HOSTS_CACHE_WAIT_S=/p' "$f"; sed -n '/^assert_dockerd_denied() {/,/^}/p' "$f"; } > "$t/fn.sh"
+  printf '#!/bin/sh\nexec "$@"\n' > "$t/bin/sudo"
+  cat > "$t/bin/sleep" <<'SHIM'
+#!/bin/sh
+echo "sleep $1" >> "$SHIMLOG"
+SHIM
+  printf '#!/bin/sh\nshift\n[ "$DOCKER_PULL" = timeout ] && exit 124\nexec "$@"\n' > "$t/bin/timeout"
+  cat > "$t/bin/docker" <<'SHIM'
+#!/bin/sh
+echo "docker $*" >> "$SHIMLOG"
+case "$1" in
+  pull) if [ "$DOCKER_PULL" = ok ]; then echo "Status: Downloaded newer image"; exit 0; fi
+        echo "Error: dial tcp 0.0.0.0:443: connect: connection refused"; exit 1 ;;
+  image) exit 1 ;;
+  version) echo 28.0.4 ;;
+  info) echo "http= https=" ;;
+esac
+SHIM
+  chmod +x "$t/bin/"*
+  for mode in refused:0 ok:1 timeout:1; do
+    want=${mode#*:}; mode=${mode%%:*}; log="$t/log-$mode"
+    assert_fixture_dir "$log"
+    : > "$log"
+    SHIMLOG="$log" DOCKER_PULL="$mode" PATH="$t/bin:$PATH" bash --noprofile --norc -c \
+      'source "$1"; assert_dockerd_denied /etc/hosts ghcr.io/x@sha256:abc' _ "$t/fn.sh" >/dev/null 2>&1
+    rc=$?
+    [[ "$rc" == "$want" ]] || { echo "assert_dockerd_denied returned $rc for a '$mode' pull, want $want (a successful or timed-out pull must fail the rehearsal)"; rm -rf "$t"; return 1; }
+    [[ "$mode" == timeout ]] && continue
+    first_sleep=$(grep -n '^sleep ' "$log" | head -n 1); first_pull=$(grep -n '^docker pull ' "$log" | head -n 1)
+    slept=${first_sleep#*:sleep }
+    [[ -n "$first_sleep" && -n "$first_pull" && "${first_sleep%%:*}" -lt "${first_pull%%:*}" && "$slept" =~ ^[0-9]+$ ]] && (( slept >= 6 )) \
+      || { echo "in a '$mode' run the probe did not sleep >= 6 s before the docker pull (sleep: '${first_sleep}', pull: '${first_pull}')"; rm -rf "$t"; return 1; }
+  done
+  rm -rf "$t"
+}
+CHECKS="nonempty parity order exec agree wiring census probe"
 
 # ── the live tree ─────────────────────────────────────────────────────────────────────────────────
 echo "--- Guard 2 on the live tree ---"
@@ -454,6 +551,74 @@ row "18 hcloud_server.web user_data post-processed instead of the plain render" 
 sub variables.tf $'    "web-2" = { location = "hel1", private_ip = "10.0.1.11", server_type = "cpx22" }\n' \
   $'    "web-2" = { location = "hel1", private_ip = "10.0.1.11", server_type = "cpx22" }\n    "web-3" = { location = "hel1", private_ip = "10.0.1.12", server_type = "cpx22" }\n'
 row "19 a third web host that neither running-host route reaches" wiring variables.tf
+# #9390: the deny names THREE hosts. Rows 20-24 each break exactly one copy or the assertion for the third
+# (docker.pkg.github.com) name. Copy R is the reference every check compares against, so a BODY drift in R
+# alone is caught on the LIVE tree (A and B then differ from it: parity red) and a HEADER drift in R exits 2
+# as a harness fault (no entry matches HDR); the rows below mutate A and B.
+OLD_HDR='for h in ghcr.io pkg-containers.githubusercontent.com; do'
+NEW_HDR='for h in ghcr.io pkg-containers.githubusercontent.com docker.pkg.github.com; do'
+sub cloud-init.yml "$NEW_HDR" "$OLD_HDR"
+row "20 the third name dropped from copy A only" parity cloud-init.yml
+sub cloud-init.yml "$NEW_HDR" "$OLD_HDR"
+row "21 the third name dropped from copy A, read as ZERO deny entries by the order check" order cloud-init.yml
+sub server.tf $'    for h in ghcr.io pkg-containers.githubusercontent.com docker.pkg.github.com; do\n      a=$(timeout 10 getent ahosts "$h"' \
+  $'    for h in ghcr.io pkg-containers.githubusercontent.com; do\n      a=$(timeout 10 getent ahosts "$h"'
+row "22 the third name dropped from the apply-time assertion only, deny loop unchanged" agree server.tf
+sub cloud-init.yml "$NEW_HDR" $'for g in example.invalid; do :; done\n      '"$NEW_HDR"
+row "23 a fourth name loop added to copy A beside the compliant three-name header (found, but its bytes differ)" parity cloud-init.yml
+sub server.tf "$NEW_HDR" 'for h in docker.pkg.github.com ghcr.io pkg-containers.githubusercontent.com; do'
+row "24 the names reordered in copy B's deny loop only" parity server.tf
+assert_fixture_dir "$SB"
+cat > "$SB/extra-deny-dockerpkg.tf" <<'EOF'
+resource "terraform_data" "handcopied_dockerpkg_deny" {
+  provisioner "remote-exec" {
+    inline = ["for h in docker.pkg.github.com; do printf '0.0.0.0 %s\\n' \"$h\" >> \"$f\"; done"]
+  }
+}
+EOF
+row "25 a hand-copied deny loop naming ONLY the third host, writing through \"\$f\" (only DENY_LOOP can see it)" census extra-deny-dockerpkg.tf
+sub server.tf $'    for h in ghcr.io pkg-containers.githubusercontent.com docker.pkg.github.com; do\n      a=$(timeout 10 getent ahosts "$h"' \
+  $'    for h in ghcr.io pkg-containers.githubusercontent.com; do\n      a=$(timeout 10 getent ahosts "$h"'
+row "26 the assertion's name list no longer equals the deny loop's (parity, not only the per-name agree rows)" parity server.tf
+sub server.tf 'echo "FATAL: $h does not resolve ONLY' 'echo "FATAL: ghcr.io does not resolve ONLY'
+row "27 the assertion's FATAL always names ghcr.io whichever host failed (an operator would chase the wrong host)" agree server.tf
+
+# The rehearsal's dockerd deny probe (#9799 item 5): each row reverts one property of assert_dockerd_denied.
+ZR=zot-image-rehearse.sh
+sub $ZR 'out="$(timeout 120 sudo docker pull "$ref" 2>&1)"' 'out="$(timeout 120 sudo docker pull "$ref" 2>/dev/null)"'
+row "28 the dockerd probe discards the pull output (a recurrence of the bypass would be undiagnosable)" probe $ZR
+sub $ZR $'  sleep "$HOSTS_CACHE_WAIT_S"\n' $'  :\n'
+row "29 the 7 s wait before the pull is deleted (the probe races Go's hosts-file cache again)" probe $ZR
+sub $ZR 'HOSTS_CACHE_WAIT_S=7' 'HOSTS_CACHE_WAIT_S=1'
+row "30 the wait is shortened below the 5 s cache" probe $ZR
+sub $ZR '  || die "dockerd could still pull' '  || true "dockerd could still pull'
+row "31 the call no longer dies: a successful pull would not fail the rehearsal" probe $ZR
+sub $ZR 'sudo sh "$W/deny.sh"' 'true'
+row "32 the deny is no longer applied before the probe" probe $ZR
+sub $ZR $'step "fetch + verify + load the published asset"' $'dk pull "ghcr.io/x@sha256:$D" >/dev/null 2>&1 || true\nstep "fetch + verify + load the published asset"'
+row "33 a second pull, spelled dk pull, outside the probe (invisible to a literal 'docker pull' count)" probe $ZR
+sub $ZR '2>&1)" && rc=0 || rc=$?' '2>&1)" && rc=0 || rc=0'
+row "34 the pull status is forced to success, so a refused pull and a successful one read alike" probe $ZR
+sub $ZR $'  fi\n  echo "dockerd pulled' $'  fi\n  return 0\n  echo "dockerd pulled'
+row "35 the success path returns 0, so a successful post-deny pull passes the rehearsal" probe $ZR
+sub $ZR 'if (( rc != 0 )); then' 'if (( rc >= 0 )); then'
+row "36 the pull-status test is inverted, so every pull reads as refused" probe $ZR
+sub $ZR 'if (( rc == 124 )); then' 'if (( rc == 999 )); then'
+row "37 the timeout branch is dead, so a timed-out pull reads as a denial" probe $ZR
+sub $ZR '  sleep "$HOSTS_CACHE_WAIT_S"' '  if false; then sleep "$HOSTS_CACHE_WAIT_S"; fi'
+row "38 the wait sits in a dead branch (text intact, nothing waits)" probe $ZR
+sub $ZR 'sha256:$D" \' 'sha256:$D-none" \'
+row "39 the probe targets a ref that cannot exist, so the pull fails whether or not the deny holds" probe $ZR
+sub $ZR $'  || die "dockerd could still pull' $'  || true  # was: || die "dockerd could still pull'
+row "40 the die is spoofed by a trailing comment" probe $ZR
+sub $ZR $'  sleep "$HOSTS_CACHE_WAIT_S"\n' $'  (( HOSTS_CACHE_WAIT_S = 1 ))\n  sleep "$HOSTS_CACHE_WAIT_S"\n'
+row "41 the wait is reassigned by arithmetic just before the sleep (the text and the assignment count are intact)" probe $ZR
+sub $ZR 'STORE="${1:-}"' $'assert_dockerd_denied() { return 0; }\nSTORE="${1:-}"'
+row "42 the probe is redefined as a no-op after its definition" probe $ZR
+sub $ZR '2>&1)" && rc=0 || rc=$?' $'2>&1)" && rc=0 || rc=$?\n  rc=0'
+row "43 the pull status is forced to success after the capture (the capture text is intact)" probe $ZR
+sub $ZR $'  if (( rc == 124 )); then\n    echo "dockerd pull TIMED OUT after 120 s: inconclusive, not a denial"\n    return 1\n  fi\n' ''
+row "44 the timeout branch is deleted outright, so a timed-out pull falls through to 'refused'" probe $ZR
 
 # Harness row (must PASS): copy A re-indented under its `- |` parses to the same entry.
 python3 - "$SB/cloud-init.yml" <<'PY' || harness "re-indent anchor missing"
@@ -476,11 +641,18 @@ if ( same() { return 0; }; chk_parity "$SB" >/dev/null 2>&1 ); then
   pass "harness: with same() forced true, row 1's mutation goes undetected (the comparator is load-bearing)"
 else fail "harness: row 1 was detected even with same() forced true — parity is not decided by the comparator"; fi
 sandbox
+# Harness row (must RED the benign edit): row() itself must count a surviving mutation as a FAIL. Every
+# other row passes only if row() is honest, and a row() reduced to `if false` left the suite green.
+printf '\n# harmless trailing comment\n' >> "$SB/server.tf"
+SURV_FAILS=$( ( PASS=0; FAIL=0; row "benign edit" parity server.tf >/dev/null 2>&1; echo "$FAIL" ) )
+if [[ "$SURV_FAILS" == 1 ]]; then pass "harness: row() reports a mutation that no check detects as a FAIL (a benign edit survives, and is counted)"
+else fail "harness: row() did not count a surviving mutation (FAIL count '$SURV_FAILS', want 1) -- the whole battery is unfalsifiable"; fi
+sandbox
 
-# Floor at the MEASURED count (7 live checks + control + 19 rows + 2 harness rows = 29, #9169
-# review round). Reported with printf + exit DIRECTLY, never through pass()/fail() (the floor
-# polices them).
-MIN_ASSERTIONS=29
+# Floor at the MEASURED count (8 live checks + control + 44 rows + 3 harness rows = 56; was 29 before
+# #9390 added rows 20-27 and the row() honesty control). Reported with printf + exit DIRECTLY, never
+# through pass()/fail() (the floor polices them).
+MIN_ASSERTIONS=56
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
   exit 1

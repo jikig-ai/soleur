@@ -1143,6 +1143,12 @@ now has a monitor.**
   routing-graph passage). That equality described the pre-#8630 org, in which no cron detector
   routed. The healthy state is now `class_a_count == 0`; a non-zero count lists each unrouted slug
   (a pending two-PR route or live drift) and emits a `::warning::` on the apply run.
+  - **Amended 2026-10-08.** The healthy state is `class_a_count == 0` over *undeclared* unrouted
+    detectors. A detector whose monitor is a key of `local.cron_monitor_alert_unrouted` in the same
+    Terraform root is declared pending: listed in the report, not counted, not warned. A stale key
+    is inert. Rejected: warning for declared-pending too (permanent noise on a route that is
+    pending on purpose, which trains the reader to skip the line that also carries real drift).
+    The check proves consistency with the declared record, not integrity of the record.
 - **The monitor-binding gate becomes address-aware.** `scripts/sentry-monitor-binding-gate.sh`
   still requires every other `sentry_alert` to bind exactly the issue-stream detector. The
   cron-bound address set is a literal in the gate: `sentry_alert.cron_monitor_failure` must bind a

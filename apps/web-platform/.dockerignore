@@ -22,6 +22,13 @@ infra/
 # can read it with no network; without this re-include the builder-stage
 # `COPY . .` drops it and the runner COPY fails the image build.
 !infra/sandbox-canary-argv.json
+# Same release-break class for the #5863 outer-wrap canary arm: the runner
+# stage bakes `infra/agent-outer-wrap-argv.json` and
+# `scripts/tenant-isolation-inner-probe.sh` (`COPY --from=builder`) so
+# ci-deploy.sh's `--replay-outer` can build + verify the outer mount table
+# inside the canary container. Both live under excluded dirs — each must be
+# re-included or the runner COPY fails the image build.
+!infra/agent-outer-wrap-argv.json
 # Same three-surface rule for the #8752 shared sandbox hardening pair: the
 # Dockerfile runner stage bakes the committed nested-userns filter
 # (`COPY --from=builder /app/infra/bwrap-userns-clone3-deny.bpf`) and the bwrap
@@ -62,6 +69,11 @@ infra/
 !infra/cron-egress-resolve.timer
 !infra/cron-egress-alarm@.service
 !infra/cron-egress-postapply-assert.sh
+!infra/egress-gateway-squid.conf
+!infra/egress-auth-helper.sh
+!infra/egress-deny-cidrs.txt
+!infra/egress-gateway-bootstrap.sh
+!infra/egress-forwarder.mjs
 !infra/cron-egress-enforce-probe.sh
 !infra/hooks.json.tmpl
 !infra/journald-soleur.conf
@@ -120,6 +132,9 @@ scripts/
 !scripts/sandbox-canary.mjs
 # Same shape for the #8609 GitHub App key probe (`COPY --from=builder /app/scripts/github-app-key-probe.mjs`).
 !scripts/github-app-key-probe.mjs
+# #5863 outer-wrap canary shared payload — baked for the `--replay-outer`
+# arm (the probe content is piped into the realized mountns via `bash -s`).
+!scripts/tenant-isolation-inner-probe.sh
 
 .git
 .gitignore
@@ -171,6 +186,20 @@ test/
 # import `esbuild` and `@anthropic-ai/claude-agent-sdk` — and `next build`
 # would then type-check them inside the image.
 !test/helpers/mock-supabase.ts
+
+# Re-include the cross-workspace isolation canary payload (#2640). The
+# Dockerfile runner stage bakes these three files into /app/test/ via
+# `COPY --from=builder` so ci-deploy.sh can `docker exec … vitest run` the
+# deterministic direct-bwrap tier inside the canary container; without these
+# re-includes the builder-stage `COPY . .` drops them and the runner COPY fails
+# the image build — the same three-surface rule as !infra/* and !scripts/*
+# above. Exact-path bangs only: a bare `!test/` or `!test/helpers/` directory
+# bang is RECURSIVE and would re-include every sibling suite (measured on this
+# repo for the mock-supabase note above) — pulling files that import devDeps
+# absent from the runner image and widening the `next build` type-check set.
+!test/sandbox-isolation.test.ts
+!test/helpers/sandbox-isolation-fixtures.ts
+!test/vitest.canary.config.ts
 
 # Migrations/templates not needed at runtime
 supabase/

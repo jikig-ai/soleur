@@ -12,7 +12,9 @@
  * per-run spending limit — your own Anthropic credits"), so it is a dollar
  * promise before it is a knob. Work is bounded elsewhere: Layer 3
  * (LEADER_MAX_TURNS × LEADER_MAX_TOKENS) caps the loop physically, ≈$0.33
- * worst-case at current rates — ~8x below this ceiling.
+ * worst-case at current rates — ~8x below this ceiling. Haiku 5.5 turns (the
+ * Haiku-tier leader classes) cost a small fraction of that, so the ceiling
+ * is not what bounds them; Layer 3 does.
  *
  * 260 = $2.60. Raised from the brainstorm-locked $2.00 by ~30% in #5849: the
  * Opus-4.7-family tokenizer emits ~1.0–1.35x more tokens for the same text, so
@@ -45,9 +47,15 @@ export const LEADER_MAX_TURNS = 8;
 /** Per-turn max-tokens bound (passed to anthropic.messages.create). */
 export const LEADER_MAX_TOKENS = 4096;
 
-/** Anthropic model ids. */
+/**
+ * Anthropic model ids. Both tiers are fixed ids with no date suffix and no separate
+ * alias (alias == id), so the constant is also the string the API and the pinned
+ * claude-code CLI resolve. Haiku moved from the dated 4.5 id to 5.5 on 2026-10-08:
+ * the CLI pin had to reach 2.1.293 first (earlier bundles do not know the id),
+ * which claude-cli-pin-knows-models.test.ts enforces.
+ */
 export const SONNET_MODEL = "claude-sonnet-5-5" as const;
-export const HAIKU_MODEL = "claude-haiku-4-5-20251001" as const;
+export const HAIKU_MODEL = "claude-haiku-5-5" as const;
 
 export type AnthropicModelId = typeof SONNET_MODEL | typeof HAIKU_MODEL;
 

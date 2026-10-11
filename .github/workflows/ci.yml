@@ -3,7 +3,10 @@ name: CI
 on:
   push:
     branches: [main]
+  # `ready_for_review` is listed so a draft PR that is marked ready gets a FULL run (ADR-276 S3, #9728); naming only the new
+  # type would drop the defaults, so the whole list is spelled out.
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   # Merge queue (#5780). The queue dispatches `merge_group` against the
   # gh-readonly-queue/main/* temp ref. INVARIANT: EVERY job that produces a
   # required status context (the full set is scripts/required-checks.txt minus
@@ -12,8 +15,13 @@ on:
   # `rule-body-lint`, `grok-fidelity`, `credential-path-guard`) must run on
   # `merge_group` — do NOT add an `event_name == 'pull_request'` gate to any of
   # them or that required context never reports → the queue entry stalls pending
-  # forever. None gate on the event today, so they run unconditionally. This is a
-  # non-exhaustive example list, not the authority; required-checks.txt is.
+  # forever. Since ADR-276 S2 (#9512) the heavy jobs, incl. `test` and `e2e`, DO carry an event-aware `if:` whose
+  # condition names merge_group positively and is true on every event except an elided push (see `push-dedupe`);
+  # all others run unconditionally. The example list above is non-exhaustive and not the authority;
+  # required-checks.txt is.
+  # ADR-276 S3 (#9728): while the repository variable CI_DRAFT_LIGHT is exactly `on`, a push to a DRAFT pull request skips the four
+  # heavy families (see `draft-light`) and the `test` aggregator then concludes RED by design (Option R), so a light run can never
+  # admit a merge; the `ready_for_review` run, every later run and every `merge_group` run are full.
   # `tc-document-sha-guard` additionally
   # receives `MERGE_GROUP_BASE_SHA` so its T&C TC_VERSION-bump bypass still works
   # on the candidate (github.base_ref is empty on merge_group). `detect-changes`
@@ -118,6 +126,209 @@ jobs:
           else
             printf 'docs=false\n' >> "$GITHUB_OUTPUT"
           fi
+
+  # push-dedupe (ADR-276 S2, #9512): skip the second full run of this workflow on a push to main when an
+  # identical-SHA merge_group run of this same workflow already passed. A COST lever, allowed to fail in one
+  # direction only: any unknown (variable not exactly `on`, any API error, no match, a non-success conclusion,
+  # a re-run) runs the full battery. The run still concludes `success` because this job is `continue-on-error`
+  # (below), so the deploy arm (web-platform-release.yml, workflow_run) sees what it sees today. The ungated cheap
+  # guards only keep an elided run from being all-skipped. A failing job shows as a red check on a green run and
+  # pages nobody: the soak probe (scripts/followthroughs/ci-push-dedupe-soak-9512.sh) counts those failures.
+  #
+  # DARK UNTIL ACTIVATED: with the repository variable CI_PUSH_DEDUPE unset, this job only annotates
+  # `would_elide` and every gated job runs. Activation is a separate, authorized step (see the ADR-276 S2 amendment).
+  # The gated set is eight jobs: test-webplat, test-bun, test-scripts, test-scripts-heavy, web-platform-build,
+  # shard-totality-mutations, e2e and the `test` aggregator. A NEW HEAVY JOB MUST JOIN THE GATED SET
+  # (needs: [push-dedupe] plus the same condition); scripts/ci-push-dedupe.test.sh enforces the set in both
+  # directions. The `test` aggregator body is deliberately untouched: it is skipped, not taught to tolerate skips.
+  #
+  # The gated conditions name merge_group positively on purpose: scripts/probe-merge-group-coverage.sh proves a
+  # required context runs on the queue only from an event-independent status term or a positive merge_group term,
+  # and `event != push` alone is (by its design) never sufficient. The disjunct is redundant in logic, not in proof.
+  #
+  # Off the push event this job is skipped before it takes a runner. `timeout-minutes` is written alone on
+  # its line on purpose: the release workflow's CI budget awk reads that exact shape (slack was 5 minutes).
+  # The proof is least-privilege (actions: read), has no checkout and no `uses:`, and takes every input
+  # through env:. Nothing an API returns is ever echoed into an output or an annotation.
+  push-dedupe:
+    if: github.event_name == 'push'
+    # Job-level continue-on-error, on purpose: a job failure here (a lost runner, a platform fault) would otherwise
+    # conclude the whole push run `failure` and block that SHA's deploy (`ci_not_green`) even while the switch is
+    # off. This is a COST lever; it must never be able to redden a run. A failed job leaves `elide` empty, so every
+    # gated job runs (`!= 'true'`).
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      actions: read
+    outputs:
+      elide: ${{ steps.proof.outputs.elide }}
+    steps:
+      - name: Prove an identical-SHA merge_group run passed
+        id: proof
+        shell: bash
+        continue-on-error: true
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          SWITCH: ${{ vars.CI_PUSH_DEDUPE }}
+        run: |
+          # Every unknown is a full run: nothing in this step may fail the job. Verdicts are literals only.
+          set +x
+          emit() { printf '%s\n' "$1" >> "$GITHUB_OUTPUT"; }
+          elide=false
+          would=false
+          reason=proof_error
+          mg=none
+          note=invalid
+          emit "elide=false"
+          emit "would_elide=false"
+          finish() {
+            if [ "$reason" = proof_error ]; then
+              printf '::warning title=ci-push-dedupe::sha=%s would_elide=%s elide=%s reason=%s mg_run=%s\n' "$note" "$would" "$elide" "$reason" "$mg"
+            else
+              printf '::notice title=ci-push-dedupe::sha=%s would_elide=%s elide=%s reason=%s mg_run=%s\n' "$note" "$would" "$elide" "$reason" "$mg"
+            fi
+            printf 'push-dedupe: reason=%s would_elide=%s elide=%s mg_run=%s\n' "$reason" "$would" "$elide" "$mg" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+            exit 0
+          }
+          reason=not_push
+          [ "$EVENT_NAME" = push ] || finish
+          reason=not_main
+          [ "$REF" = refs/heads/main ] || finish
+          reason=rerun
+          [ "$RUN_ATTEMPT" = 1 ] || finish
+          reason=bad_sha
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || finish
+          note="$SHA"
+          reason=proof_error
+          runs=$(timeout 20 gh api "repos/${GH_REPO}/actions/workflows/ci.yml/runs?event=merge_group&head_sha=${SHA}&per_page=100" 2>/dev/null) || finish
+          printf '%s' "$runs" | jq -e '.workflow_runs | type == "array"' >/dev/null 2>&1 || finish
+          id=$(printf '%s' "$runs" | jq -r --arg sha "$SHA" --arg repo "$GH_REPO" '[.workflow_runs[] | select(.event == "merge_group" and .status == "completed" and .conclusion == "success" and .head_sha == $sha and .path == ".github/workflows/ci.yml" and .head_repository.full_name == $repo and ((.head_branch // "") | startswith("gh-readonly-queue/main/"))) | .id] | first // empty' 2>/dev/null) || finish
+          reason=no_mg_success
+          [ -n "$id" ] || finish
+          reason=proof_error
+          [[ "$id" =~ ^[0-9]+$ ]] || finish
+          mg="$id"
+          jobs=$(timeout 20 gh api "repos/${GH_REPO}/actions/runs/${mg}/jobs?per_page=100&filter=latest" 2>/dev/null) || finish
+          n=$(printf '%s' "$jobs" | jq -r '[.jobs[] | select(.name == "test" and .conclusion == "success")] | length' 2>/dev/null) || finish
+          [[ "$n" =~ ^[0-9]+$ ]] || finish
+          reason=no_test_job
+          [ "$n" -ge 1 ] || finish
+          would=true
+          emit "would_elide=true"
+          reason=switch_off
+          if [ "$SWITCH" = on ]; then
+            reason=ok
+            elide=true
+            emit "elide=true"
+          fi
+          finish
+      - name: Proof holds for this SHA
+        id: would-elide
+        if: steps.proof.outputs.would_elide == 'true'
+        env:
+          ELIDE: ${{ steps.proof.outputs.elide }}
+        run: |
+          echo "push-dedupe: the proof holds for this SHA (elide=${ELIDE})"
+
+  # draft-light (ADR-276 S3, #9728, Option R): decide whether a push to a DRAFT pull request may skip the four heavy families
+  # (test-webplat, test-scripts, test-scripts-heavy, shard-totality-mutations). A COST lever, allowed to fail in one direction
+  # only: any unknown (variable not exactly `on`, a `ready_for_review` event, a fork or deleted-fork head, any API error, a
+  # timeout, a null or non-boolean `draft`) runs the full battery. It emits `light=true` LAST and only when ALL of those hold,
+  # and the decision rests on a bounded LIVE read of the pull request: the event payload's draft flag is deliberately NOT an
+  # input (a re-run reuses a stale payload), and the `ready_for_review` run is excluded by its action. A NEW run or "Re-run
+  # all jobs" re-reads live; "Re-run failed jobs" reuses this job's CACHED output (`light=true`), which fails safe: that
+  # re-run concludes red again (the aggregator arm below), never green, and a ready PR then needs a fresh ready run.
+  #
+  # DARK UNTIL ACTIVATED: with the repository variable CI_DRAFT_LIGHT unset the job only annotates `would_light` and every gated
+  # job runs. Activation is a separate, authorized step (see the ADR-276 S3 amendment). A NEW HEAVY JOB MUST JOIN THE GATED SET
+  # (needs: [push-dedupe, draft-light] plus `&& needs.draft-light.outputs.light != 'true'` appended to its `if:`);
+  # scripts/ci-draft-light.test.sh enforces the set in both directions. `e2e`, `test-bun`, `web-platform-build` and the cheap
+  # guards are the light set and carry no draft-light term (`e2e` is a required context that must report on drafts, #8450).
+  # The `test` aggregator reads the output once (DRAFT_LIGHT) and, only on a `pull_request` run with `light=true`, exits 1 with
+  # `draft: full battery owed at ready` before its final check.
+  #
+  # Off a pull_request this job is skipped before it takes a runner; the gated jobs keep `!cancelled()` and compare `!= 'true'`, so
+  # a skipped or failed draft-light is full CI. `timeout-minutes` is written alone on its line on purpose: the release workflow's
+  # CI budget awk reads that exact shape. draft-light is a parallel ROOT beside push-dedupe, so the longest declared `needs:` path
+  # does not lengthen. The step is least-privilege (pull-requests: read), has no checkout and no `uses:`, takes every input through
+  # env:, and nothing an API returns is ever echoed into an output or an annotation.
+  draft-light:
+    if: github.event_name == 'pull_request'
+    # Job-level continue-on-error, on purpose: a job failure here (a lost runner, a platform fault) would otherwise conclude the
+    # whole run `failure`. This is a COST lever; it must never be able to redden the run it saves. A failed job leaves `light`
+    # empty, so every gated job runs (`!= 'true'`).
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      pull-requests: read
+    outputs:
+      light: ${{ steps.light.outputs.light }}
+    steps:
+      - name: Decide whether this draft push may run the light set
+        id: light
+        shell: bash
+        continue-on-error: true
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          ACTION: ${{ github.event.action }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          SWITCH: ${{ vars.CI_DRAFT_LIGHT }}
+        run: |
+          # Every unknown is a full run: nothing in this step may fail the job. Verdicts are literals only.
+          set +x
+          emit() { printf '%s\n' "$1" >> "$GITHUB_OUTPUT"; }
+          would=false
+          light=false
+          reason=lever_error
+          note=invalid
+          finish() {
+            if [ "$reason" = read_error ] || [ "$reason" = lever_error ]; then
+              printf '::warning title=ci-draft-light::pr=%s would_light=%s light=%s reason=%s\n' "$note" "$would" "$light" "$reason"
+            else
+              printf '::notice title=ci-draft-light::pr=%s would_light=%s light=%s reason=%s\n' "$note" "$would" "$light" "$reason"
+            fi
+            printf 'draft-light: reason=%s would_light=%s light=%s\n' "$reason" "$would" "$light" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+            exit 0
+          }
+          reason=bad_pr
+          [[ "$PR_NUMBER" =~ ^[0-9]+$ ]] || finish
+          note="$PR_NUMBER"
+          reason=ready
+          [ "$ACTION" != ready_for_review ] || finish
+          reason=fork
+          { [ -n "$HEAD_REPO" ] && [ "$HEAD_REPO" = "$GH_REPO" ]; } || finish
+          reason=read_error
+          pull=$(timeout 20 gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}" 2>/dev/null) || finish
+          printf '%s' "$pull" | jq -e 'type == "object"' >/dev/null 2>&1 || finish
+          reason=not_draft
+          printf '%s' "$pull" | jq -e '.draft == true' >/dev/null 2>&1 || finish
+          would=true
+          emit "would_light=true"
+          reason=switch_off
+          if [ "$SWITCH" = on ]; then
+            reason=ok
+            light=true
+            emit "light=true"
+          fi
+          finish
+      - name: This draft push would run the light set
+        id: would-light
+        if: steps.light.outputs.would_light == 'true'
+        env:
+          LIGHT: ${{ steps.light.outputs.light }}
+        run: |
+          echo "draft-light: this draft push qualifies for the light set (light=${LIGHT:-false})"
 
   # BLOCKING required check (#6882). Registered in scripts/required-checks.txt,
   # scripts/ci-required-ruleset-canonical-required-status-checks.json, and
@@ -231,6 +442,14 @@ jobs:
         run: python3 scripts/lint-shell-trace-credential-refusal.py --changed --base origin/main
       - name: Lint orphan test suites (every tracked *.test.sh must be registered)
         run: bash scripts/lint-orphan-test-suites.sh
+      # Same advisory level as the job: absent from required-checks.txt + the
+      # ruleset. A red still reds the run conclusion and lands in the
+      # main-health-monitor sweep via its test-all.sh registration — born-
+      # advisory, same promotion path as the lints above. The sentinel is
+      # deterministic (git grep + grep over the tracked tree, no network).
+      - name: Lint integration env gates (every process.env gate must be wired + collected)
+        if: ${{ !cancelled() }}
+        run: bash scripts/lint-integration-env-gates.sh
       # THE THIRD DISPATCH of the no-list guard (#8289). lefthook's pre-commit and pre-push
       # entries see only the staged / pushed set; `git commit --no-verify` and a
       # merge-resolution commit reach the repository through neither. So CI walks the WHOLE
@@ -654,7 +873,7 @@ jobs:
         run: |
           git fetch --no-tags origin main 2>/dev/null || true  # NOT --depth=1: a shallow base has no merge base, so `git log base..HEAD` exits 128 and the ack scan silently reads empty
           CHANGED="$(git diff --name-only origin/main...HEAD 2>/dev/null || true)"
-          if printf '%s\n' "$CHANGED" | grep -cE 'apps/web-platform/(package-lock\.json|server/agent-runner-sandbox-config\.ts|server/agent-auth-env-vars\.ts|server/c4-staging-root\.ts|scripts/sandbox-canary\.mjs|infra/sandbox-canary-argv\.json)' >/dev/null; then
+          if printf '%s\n' "$CHANGED" | grep -cE 'apps/web-platform/(package-lock\.json|Dockerfile|server/agent-runner-sandbox-config\.ts|server/agent-auth-env-vars\.ts|server/c4-staging-root\.ts|server/agent-outer-wrap\.ts|server/agent-runner-query-options\.ts|scripts/sandbox-canary\.mjs|scripts/sandbox-canary-verify-in-image\.sh|scripts/tenant-isolation-inner-probe\.sh|infra/sandbox-canary-argv\.json|infra/agent-outer-wrap-argv\.json)' >/dev/null; then
             echo "hit=1" >> "$GITHUB_OUTPUT"
           else
             echo "hit=0" >> "$GITHUB_OUTPUT"
@@ -815,6 +1034,8 @@ jobs:
   # nothing (measured on this job's first run, 34774037658: zero CACHED steps).
   # Every run is cold by construction.
   web-platform-build:
+    needs: [push-dedupe]
+    if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') }}
     # 10m — measured 1m52s cold for the builder step alone on the first run of this shape
     # (run 34774037658: buildkit 9s, `npm ci` 33s, `next build` 44s), against 1m53s-2m00s
     # for the full-checkout form it replaced (#8020 measured max 2.2m). The `cli-tools` step
@@ -916,6 +1137,8 @@ jobs:
   # aggregator (below) reads `needs.test-webplat.result` which rolls up
   # the matrix outcome — failure on any shard fails the whole job.
   test-webplat:
+    needs: [push-dedupe, draft-light]
+    if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') && needs.draft-light.outputs.light != 'true' }}
     runs-on: ubuntu-latest
     # Bounds a HUNG job (#7902). Sized ~5x the measured p90 (4.37 min) for this job's slowest
     # leg, and no suite on this path declares a per-suite budget, so it cannot fire before a
@@ -1013,6 +1236,8 @@ jobs:
         run: bash scripts/test-all.sh webplat
 
   test-bun:
+    needs: [push-dedupe]
+    if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') }}
     runs-on: ubuntu-latest
     # Bounds a HUNG job (#7902). Measured p90 under 2 min; 20 is deliberate slack for a cold
     # runner. No suite on this path declares a per-suite budget.
@@ -1049,6 +1274,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   test-scripts:
+    needs: [push-dedupe, draft-light]
+    if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') && needs.draft-light.outputs.light != 'true' }}
     runs-on: ubuntu-latest
     # MATRIX SHARDED (#7902), K=8 after the heavy carve-out (#8006 phase 2) and
     # the K=6 -> K=7 -> K=8 rebalances (history and measurements: the runbook
@@ -1279,6 +1506,8 @@ jobs:
   # exact shape), so the install steps below mirror test-scripts, except for likec4 (this job
   # runs no likec4 suite and every consumer falls back to `npx`).
   test-scripts-heavy:
+    needs: [push-dedupe, draft-light]
+    if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') && needs.draft-light.outputs.light != 'true' }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -1367,6 +1596,8 @@ jobs:
   # this context is a ruleset + canonical-JSON + synthetic-check-fabrication change and is
   # tracked separately rather than folded into a production unblock.
   shard-totality-mutations:
+    needs: [push-dedupe, draft-light]
+    if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') && needs.draft-light.outputs.light != 'true' }}
     runs-on: ubuntu-latest
     # THREE-LEG ROW SPLIT (#9035). The battery declares 42 numbered row
     # sites and takes `--rows A-B`; each leg runs its third plus the
@@ -1611,6 +1842,8 @@ jobs:
   # `if: always()`, the default `needs:` semantics produce `skipped` when
   # any dependency fails — and some branch-protection configs treat
   # `skipped` as success (fail-open). No `|| true`, no `continue-on-error`.
+  # (ADR-276 S2: the `if:` below is `always()` ANDed with the push-dedupe elision condition. It is true on every
+  # event except an elided push, so the status-function protection above holds wherever `test` is required.)
   # Per-shard `result` is read via env: + quoted "$VAR" per workflow-injection
   # guidance (https://github.blog/security/vulnerability-research/how-to-catch-github-actions-workflow-injections-before-attackers-do/).
   test:
@@ -1619,11 +1852,12 @@ jobs:
     # this needs: list), so a red build could not stop auto-merge — release
     # 34773058045 broke production past a green `test`. Adding it here is the
     # one-line-per-site edit the loop below documents; no ruleset change.
-    needs: [test-webplat, test-bun, test-scripts, test-scripts-heavy, web-platform-build, encryption-posture]
-    if: always()
+    needs: [test-webplat, test-bun, test-scripts, test-scripts-heavy, web-platform-build, encryption-posture, push-dedupe, draft-light]
+    if: ${{ always() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') }}
     runs-on: ubuntu-latest
-    # Bounds a HUNG job (#7902). This job only reads six `needs.*.result` strings (measured
-    # p50 0.05 min) and runs no suite, so 10 minutes cannot fire before any loud bound.
+    # Bounds a HUNG job (#7902). This job only reads six leg `needs.*.result` strings (push-dedupe is a seventh,
+    # non-leg need the body never reads; draft-light is an eighth, read once through DRAFT_LIGHT) (measured p50 0.05 min) and runs no suite, so 10 minutes cannot fire
+    # before any loud bound.
     #
     # RETIRED 2026-09-09 (#7931 part 2). This used to read: "Everything below this line is
     # byte-unchanged from before the shard (#7902 AC5) ... which is what proves matrix legs roll
@@ -1652,6 +1886,9 @@ jobs:
           # reachable where `cancel-in-progress` is true, which since #7931 part 1
           # is pull_request only — see the SUPERSEDED arm below.
           EVENT_NAME: ${{ github.event_name }}
+          # ADR-276 S3 (#9728, Option R): the `draft-light` output, a literal `true` or empty. It is an intra-run, red-only value
+          # that is only ever read on a `pull_request` run (the arm below); it never becomes a green or a skipped required row.
+          DRAFT_LIGHT: ${{ needs.draft-light.outputs.light }}
         run: |
           # NAME THE MEASURED CAUSE, NEVER A GUESSED ONE (#7931 part 2).
           #
@@ -1755,6 +1992,15 @@ jobs:
                 ;;
             esac
           done
+          # OPTION R (ADR-276 S3, #9728): a light draft concludes RED. The skipped heavy legs above already set fail=1; this arm makes
+          # the verdict independent of how skips are classified, so a later "tolerate skipped" edit cannot turn a draft green. It is
+          # placed AFTER the loop and BEFORE the final check on purpose (after the final check it would be unreachable), runs only on
+          # a pull_request run, and the ready_for_review run is never light (draft-light excludes it), so the ready run reports the
+          # real results and clears this red.
+          if [[ "$EVENT_NAME" == "pull_request" && "$DRAFT_LIGHT" == "true" ]]; then
+            echo "draft: full battery owed at ready" >&2
+            exit 1
+          fi
           if [[ $fail -ne 0 ]]; then
             exit 1
           fi
@@ -1773,6 +2019,8 @@ jobs:
   # for this job, root for critical-css-gate); the two jobs are deliberately
   # decoupled and a "tidying" unification will break browser-binary lookup.
   e2e:
+    needs: [push-dedupe]
+    if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') }}
     # 20m — measured max 4.2m over 10 successful main runs (#8020);
     # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
     timeout-minutes: 20
@@ -1805,7 +2053,10 @@ jobs:
       # gated on it. Deliberately NOT a detect-changes output + `needs:` edge:
       # a failed upstream job would needs-skip `e2e`, and a skipped required
       # check posts GREEN — the fail-open shape this file warns about. A
-      # classify-step failure reds the job instead.
+      # classify-step failure reds the job instead. (The ONE job-level
+      # `needs: [push-dedupe]` this job now carries is the ADR-276 S2 exception,
+      # safe because its `if:` opens with `!cancelled()`: a failed or skipped
+      # push-dedupe never skips e2e. ci-e2e-skip-anchors.test.sh pins the exact pair.)
       - name: Classify e2e applicability
         id: detect
         env:

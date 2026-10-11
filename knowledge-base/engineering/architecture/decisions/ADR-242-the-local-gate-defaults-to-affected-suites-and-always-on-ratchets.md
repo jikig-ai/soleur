@@ -10,6 +10,8 @@ amended_by:
   - "#9173 (2026-09-29) — the diff-source scope axis (`--affected-scope=staged`) and the scope-aware `runner-changed` arm; see ## Amendment — 2026-09-29"
   - "#9307 (2026-09-30) — anchored edge matching, the runner-subcommand skip, `--print-selection` / `--paths`, and the evidence-based always-on audit; see ## Amendment — 2026-09-30"
   - "#9400 (2026-10-01) — the affected-ratchets pre-push lane moves the cheap ratchet net earlier than the local gate (push time, merged tree); the required `test` context remains the merge gate; see ## Amendment — 2026-10-01 (#9400)"
+  - "#9813 (2026-10-10) — decision 22: the `glob:<literal-head>/<glob-tail>` declared-edge kind for corpus walkers, the five-site malformed-shape doctrine, and the per-suite dispositions; see ## Amendment — 2026-10-10 (#9813)"
+  - "#9814 (2026-10-11) — the local weight-drift detector: TEST_TIMING_LOG defaults on affected-shaped local runs and the epilogue emits advisory WEIGHT_DRIFT lines against committed weights; see ## Amendment — 2026-10-11 (#9814)"
 ---
 
 # ADR-242: `test-all.sh` — the local gate defaults to the affected set plus always-on ratchets (#8322)
@@ -535,3 +537,142 @@ receipt is a `RATCHET_LANE verdict=` line, not a battery verdict.
     is a reviewed act" is a property worth keeping). Index declarations (G3/G5) ship in their own commit and are separable: dropping them changes no
     runner-only line. They serve about 3.5% of the measured demand (5 of the commits that fit the grammar touched the index at all: 4 array blocks, 1 entry) and
     were kept because the operator named "a new AFFECTED_*_PATHS array" as registration-only.
+
+## Amendment — 2026-10-09 (#9812)
+
+21. **The derive's per-registration classification is a cacheable pure function; verdicts are not.** The
+    `_aff_stream` walk paid one fresh `_affected_classify` per registration on every local run (~150 s CPU
+    measured on a contended host — the dominant cost of the local fast tier, #9763 arc). A classify is a pure
+    function of (label, argv, the derive code, the environment channels that reach it, and the file contents +
+    existence probes it consults), so `scripts/lib/test-affected-derive-cache.sh` caches its OUTPUT — class,
+    ordered edge set, suite file — as one record per registration under
+    `.soleur/cache/affected-derive/v<schema>/`, keyed on schema + derive-code hash (the EXTRACTED derive span,
+    not the whole runner — an unrelated `test-all.sh` edit no longer flushes every record; both anchor legs
+    must extract non-empty or the whole file hashes, a flush never a stale serve) + environment fingerprint
+    (BASH_VERSION, the locale set, glob/case shell options, IFS — a record minted under one semantics cannot
+    replay under another) + label + length-prefixed argv, and validates a hit by re-hashing every recorded read
+    (`git hash-object --no-filters --stdin-paths`, one batched fork per record) and re-running every recorded
+    `-e`/`-f`/`-d` probe. Any drift, a malformed or corrupted record (an `end` trailer plus a `sum` cksum over
+    the body — a cut file can never serve a partial edge set and an in-body bit-flip cannot ride structure
+    checks alone), a schema or worktree or cwd mismatch, an unwritable cache dir, or a missing git re-derives
+    that record only — the cache is advisory and can never narrow a selection.
+    `SOLEUR_AFFECTED_DERIVE_CACHE=0` is the kill switch. The runner instruments the derive span
+    (`_affected_probe`, `_affected_rec_read`, inside the extraction anchors so the derive suite carries them)
+    rather than duplicating the algorithm, so the recorded input set is the real one; the `[[ -d "$PWD" ]]`
+    `_wt_missing_die` liveness probe is named-exempt, and the `-c` payload word-split is `set -f` so glob
+    tokens can never pathname-expand into an unrecordable directory listing. The `_FE_FILES` memo carries a
+    parallel `_FE_PROBESETS` slice so a memo consumer's record inherits the extractor's probes — without it a
+    created-at-recorded-miss path inside a shared helper invalidated only the extractor (review P1). What is
+    cached is selection METADATA only — `_diff_touches` still runs fresh per record and suite verdicts are
+    never memoised (the twice-rejected suite-result shape, #7454 / #9804 Proposal 2). The walk emits
+    `AFFECTED_DERIVE_CACHE state=/hits=/misses=/derived=` on stderr (stdout is the bench's machine-compared
+    surface) so a dead cache is visible rather than silent. Identity gate: `affected-prepass-bench
+    --added-edges` exits 0 with byte-identical `AFFECTED_SELECTED` cold AND warm (the bench's own second probe
+    serves the warm arm); measured warm derive ~11–20 s CPU vs ~88–126 s base (6.3–7.8x) on probe 2, ~9 s wall
+    vs ~2 min locally, cold arm ~27–71 s slower once per record per tree-state under contention. Per-record
+    files (not one JSON) keep a single corrupt record's blast radius at one registration; `.soleur/`
+    (gitignored, per-worktree) over XDG because a record is meaningless outside its worktree and the
+    `worktree`+`cwd` fields refuse a moved checkout or a subdirectory invocation. The input-site census row in
+    `scripts/test-affected-derive-cache.test.sh` fails on any future probe, file read, or out-of-span
+    derive-family helper added to the derive span without recording — the standing guard against a silent
+    invalidation weakening. Residual accepted and documented: a file edited mid-walk can mint a torn record
+    (edges of content v1 keyed to hash v2, sticky until the next change) — hashing at read time would cost the
+    per-file forks the design exists to avoid.
+
+## Amendment — 2026-10-10 (#9813)
+
+22. **The declared-edge grammar has a third kind, `glob:<literal-head>/<glob-tail>`, for corpus
+    walkers whose read set is narrower than a directory.** Six `*.sh` corpus walkers declared
+    `knowledge-base/` — honest at prefix granularity (generated operator scripts ship under
+    `knowledge-base/project/specs/`) but over-broad in practice: a `.md`-only kb diff could never
+    move their verdict yet selected all six for ~264 committed seconds (the issue's ~331 s figure
+    counted `test-affected-kb-consumers` too, which still selects on any kb path by design; the
+    five extension-bounded walkers that took the glob account for ~248 s of it). A
+    `glob:` entry mints `^glob:<pattern>`; a diff line under the literal head matching the tail
+    under bash `[[ == ]]` semantics (`*` crosses `/`, so `knowledge-base/**.sh` covers both `x.sh`
+    and `a/b/c.sh`) selects the suite. The degrade ladder always fails toward coverage: a missing
+    head dir mints `^<head>/` (the dir-prefix edge the entry replaced), a malformed entry mints
+    `^glob:<entry verbatim>` — an always-match shape, since a bare `^` would evaluate `*\n\n*` and
+    narrow — and a `glob:` with no metachar recurses as a literal path entry. `glob:` is
+    declaration-array-only by intent: the token extractors never emit it on purpose (a
+    `glob:`-spelled literal in scanned content still hits the same mint arm — widen-only), and the
+    relevance arrays stay verbatim substring edges. The malformed-shape doctrine — a closed
+    charset (`[-A-Za-z0-9_./]` plus `*` in the tail) and a repo-relative head (a `..`/`/`/`//`
+    head can pass a `-d` probe while matching no diff line ever — review B1) — is pinned
+    identical at five sites: the mint arm in `_affected_add_edge`, the in-flight revalidation in
+    `_diff_edge_hit`, the census arm in `scripts/lint-orphan-test-suites.sh` (a static RED, since
+    a bad entry widens every diff's selection), the `covers()` oracle in
+    `scripts/test-affected-kb-consumers.test.sh`, and the `GLOBENT` shape in the
+    registration-only classifier, which admits the shape as registration-only; every other added
+    line stays semantic. The real `.md` read under kb the consumer ratchet surfaced —
+    the provision-script `DPA_FILE` closure for `operator-ack-guard` — is a literal file edge:
+    the issue's `.md`-only-decline contract holds for the corpus scan, not for reads a suite
+    actually has. `lint-trap-tempfile-ownership` carries the wider seven-entry set its
+    `ALL_EXT` corpus (.sh .bash .py .ts .mjs .js + bunfig.toml) reads, so an extension the
+    issue's `*.sh` framing never named is not silently under-covered. Two suites keep
+    `knowledge-base/` because their corpora are NOT extension-bounded:
+    `scripts/test-affected-kb-consumers` (any kb file can be a consumer) and
+    `plugins/soleur/test/operator-agent-runnable` — its Guard-1 discovery is `git grep
+    --untracked` for the generated-script marker on ANY extension, a content-keyed read the
+    review surfaced (a kb `.md` quoting the marker is in its corpus; `**.sh` would
+    under-cover, ~16 committed seconds is the price of honesty).
+
+Alternatives added by this amendment:
+
+| Alternative | Why not |
+|---|---|
+| Per-suffix literal edges (one `^`-anchored file edge per corpus member) | A new `.sh` file under kb would silently under-cover until the arrays were re-edited — the exact drift class the glob tail exists to absorb. |
+| Keep `knowledge-base/` and accept the over-selection | The measured cost is ~331 committed seconds per kb-markdown diff — the entire motivation for the ticket. |
+| A regex edge kind instead of the bash-pattern glob | Bash `[[ == ]]` patterns are already the runner's grammar (`*.test.sh` glob registration, anchored edge matching); a second matcher family adds a semantics to keep consistent at the mint/hit/census sites for zero measured need. |
+| Malformed `glob:` mints a bare `^` | A bare `^` evaluates `*\n\n*` against the normalized blob — it matches only diffs containing an EMPTY line, which narrows instead of widening. `^glob:<verbatim>` is the always-match shape the hit arm recognizes by rule. |
+
+## Amendment — 2026-10-11 (#9814)
+
+A local run reports local-vs-committed weight drift as an advisory line, never
+a gate. `scripts/test-all.sh` defaults `TEST_TIMING_LOG` to
+`$_durable_log_dir/suite-timings.tsv` on local affected-shaped runs
+(`CI` unset, `TEST_TIMING_LOG` unset, `TEST_GROUP=affected` or
+`_AFFECTED==1` on the all-group default — the two selectors stay disjoint by
+design, and enumerate/print paths decline before paying a `mkdir`), guarded
+by a `mkdir -p` + `[[ -w && -O ]]` probe — `-w` degrades an unwritable target
+to "no timing log" instead of a `>>`-under-`set -e` mid-run abort, and `-O`
+declines a co-tenant-owned pre-created leaf (the `basename-$$-EPOCHSECONDS`
+name is predictable), followed by `: >` truncation so a bash-3.2 PID-reused
+dir never serves stale rows, and an armed `[note]` naming the log path.
+The assignment is IN-SHELL, never `export`: every consumer (`run_suite`'s
+`>>`, `_emit_bytes_probe`, the epilogue emit) reads it in the runner's own
+process, and an exported var would leak this run's log path into every
+nested copy of the runner that runner-SUT suites spawn — phantom
+`committed=unmeasured` lines on exactly the runner-touching diffs this
+feature is for. (Corollary: every runner-SUT sandbox inherits the arm —
+sibling fixtures opt out with `TEST_TIMING_LOG=/dev/null`.) The epilogue then calls
+`weight_drift_report` (`scripts/lib/test-weight-drift.sh`, one `LC_ALL=C awk`
+pass, bash-3.2-safe, always returns 0) over `"$_scriptdir"/suite-durations*.tsv`
+— the glob, not two literals, so a future manifest joins the comparison
+instead of mis-reporting `unmeasured`. The emit sits in the post-marker NOTE
+region: `=== N/N suites passed ===` stays the last `===`-shaped line and a
+monitor exiting on the marker never sees the lines, which is accepted — they
+live in run output and the durable TSV. The predicate is strict
+`local > 2*committed AND local > 10000` (`WEIGHT_DRIFT_FLOOR_MS`, value-pinned
+beside `LOCAL_FAST_CAP_MS`'s convention); ran rows with no committed row emit
+`committed=unmeasured` (absence is visible, never silent), `floor`-class
+anchors add `basis=floor`, and a log whose ran rows all show `elapsed_ms=0`
+emits `WEIGHT_DRIFT_UNAVAILABLE` once — the bash-3.2 vacuity is named, not
+read as clean. Lines dual-emit to stdout and stderr: a line that only reaches
+stderr is invisible to the invoking agent's stdout capture. The new suite
+registers as `ALWAYS_ON_SUITES` + an `AFFECTED_*_PATHS` block whose manifest
+edge is `glob:scripts/*.tsv` — not `suite-durations*`: the #9813 grammar
+requires a /-terminated literal head, so a file-prefix glob cannot be declared
+and covering the manifest class is the honest widening — and its committed
+weight row is
+written only by `regenerate-shard-manifest.py --incremental --write`
+(ADR-240: generated, never hand-edited).
+
+Alternatives added by this amendment:
+
+| Alternative | Why not |
+|---|---|
+| Gate on drift (fail the run) | A contended host inflates every ratio (7.6x and 6.0x measured on the 2026-10-09 spot-check); a gate would flake every local run on a loaded machine. The issue's own posture is warn-only. |
+| Opt-in only (no default; require TEST_TIMING_LOG set) | An opt-in instrument is invisible by default — the exact shape that let the 185s-vs-8.5s suite slip through #9763 unnoticed. |
+| Local-median baseline file | Needs a local timing corpus that does not exist; committed rows are the only baseline, and they are what the fast-tier ratchet is charged against, so drift-from-committed is the meaningful signal. |
+| Compare against `_suite_budget_ms` declared budgets | That predicate compares per-suite DECLARED budgets, not committed CI weights; a suite with no declared budget is invisible — the same unaccountability class this amendment closes. |

@@ -33,6 +33,8 @@ the follow-through rather than leaving it at "not yet" forever. It is enrolled a
 by #9372, because its `earliest` date is the rebirth plus three days; the workflow-issued reboot proof under
 "Live conversion" is part of #9372's acceptance.
 
+> **Superseded 2026-10-08 (#9372), in part:** the reboot-proof requirement stated above (including `w2l_reboot_seen` and `reboot_not_seen`) no longer holds; see the addendum "evidence rule: immutability, not reboot" at the end of this ADR.
+
 ## Context
 
 web-1 runs on LUKS (the additive volume `hcloud_volume.workspaces_luks`, ADR-119), but only because a
@@ -248,6 +250,8 @@ consumers affected in that window is in the LUKS path, but `apply-deploy-pipelin
 pin is re-captured. The window is web-2 only (weight 0, serving nothing, holding no user data); web-1 is
 untouched. #9372 also owns the ledger flip (D6), the follow-through enrollment's `earliest` date and the
 escalation if web-2 never produces rows.
+
+> **Superseded 2026-10-08 (#9372), in part:** the reboot-proof requirement stated above (including `w2l_reboot_seen` and `reboot_not_seen`) no longer holds; see the addendum "evidence rule: immutability, not reboot" at the end of this ADR.
 
 ## Consequences
 
@@ -759,6 +763,8 @@ verdicts (known and different), and both the marker-absent branch of `w2l_judge`
 weight, cannot be written on the readiness row alone) and the follow-through require it. A new `reboot_not_seen` reason is
 `not_live`, not red, between a rebirth and its first reboot.
 
+> **Superseded 2026-10-08 (#9372), in part:** the reboot-proof requirement stated above (including `w2l_reboot_seen` and `reboot_not_seen`) no longer holds; see the addendum "evidence rule: immutability, not reboot" at the end of this ADR.
+
 **Known limits and what is unconfirmed.** The Better Stack JSON paths for the used-bytes series and whether `dm-*` excludes the
 mapper device in `vector.toml` are unverified until the first live query (an absent field fails closed). `cryptsetup open
 --test-passphrase` against a header-image file is covered by shims only. The birth-time recovery check (the escrowed header
@@ -796,3 +802,48 @@ rotation HALT's `create` exemption, which the apply path of this workflow requir
 ## Addendum — 2026-10-07 (#9372, the reboot workflow)
 
 **An agent-dispatchable soft reboot of the allow-listed web-2 standby (`.github/workflows/web-host-reboot.yml`) is the path for the graded reboot evidence.** It issues one Hetzner reboot request behind the `web-platform-infra-apply` environment approval and then reads Better Stack rows, reporting PASS (row presence only), FAIL or NOT YET. It states nothing about the volume or its encryption: a fixed footer on every output path names `scripts/followthroughs/web2-luks-live-6931.sh` as the grader, and web-2 stays *provisioned, proof pending* until that grader reports PASS. **The gate is a rule, not a platform separation:** that environment's sole reviewer is the owner's own login and `prevent_self_review` is off (measured 2026-10-07), so the dispatching agent's identity could approve its own dispatch; what separates the two is the owner's go-ahead per dispatch and the owner doing the approving, recorded in ADR-241 (dated section 2026-10-07; whether destructive dispatches should be two-party is tracked on #8044). It depends on the never-pooled reader, refuses web-1 by id at four layers, refuses a re-run by design, and is dispatch-only, so merging it mutates nothing. It is retired in the rebirth closing change together with `scripts/web2-rebirth*.sh` and its own tests (closing row 5 of the rebirth runbook), or kept only by a recorded owner decision made in the same change that edits the tombstone rows in both suites. Operations: `knowledge-base/engineering/operations/runbooks/web-host-reboot.md`. No new Alternatives rows: the two rejected routes (dispatching the rebirth workflow for a plain reboot, and a Hetzner web-console reboot) are recorded in that runbook and the plan.
+
+> **Superseded 2026-10-08 (#9372), in part:** the workflow is no longer "the path for the graded reboot evidence"; no reboot is part of the evidence rule. See the addendum at the end of this ADR.
+
+## Addendum — 2026-10-08 (#9372, evidence rule: immutability, not reboot)
+
+**Decision.** The owner decided on 2026-10-07: "Immutability is the principle I want to encode". A host is replaced, not rebooted, so the evidence criterion for web-2 is amended and web-2 is not rebooted to satisfy it. This supersedes the reboot-proof requirement wherever it is stated above (the status paragraph, "Live conversion", "What this change altered outside the workflow"; each is marked in place). `w2l_reboot_seen` and the `reboot_not_seen` reason are removed from `scripts/lib/web2-luks-rows.sh` and from the not-live condition of `workspaces-luks-verify.yml`. Both consumers of the old rule change together in one PR, because they share the lib predicate.
+
+**The rule.** The evidence is the readiness row of the instance that is running. It is green (`luks=1`, `luks_arm` in `formatted|opened`, `escrow=ok`), so that boot reports having brought the volume up (self-reported; the probe rows are the independent check). For the #6931 grader, probe rows after it are green (`device_type=crypto_LUKS`, `mount_source=/dev/mapper/workspaces`, escrow ok) on at least 3 distinct days, and any non-green probe row after it spoils the soak. A reboot is not required, and the `boot_id` of the probe rows is no longer compared with the readiness row's. `luks_arm=noop` is not accepted, although `w2l_ready_verdict` still tolerates it for the rebirth ready-poll; a noop or arm-less boot is a standing `ready_luks_arm` RED that only replacing the host clears, because the readiness row is written once per instance. The predicate is `w2l_ready_arm` in the lib, judged on the newest readiness row, and is used by the grader (arm 4) and by `w2l_judge` (the marker-absent branch).
+
+**Instance identity is a weak anchor, and it is an advisory deviation from AP-027.** Rows carry no server id, so "the running instance's readiness row" means "the newest readiness row for the host". The readiness POST is best-effort, so a replacement whose POST is lost leaves its predecessor's row as the newest and the rule cannot tell. A marker that is already present is kept on the newest probe row alone, so a replacement inside the daily cadence can inherit it. The reboot rule did not close either gap (a replacement has a different `boot_id` too); this addendum records them instead of claiming them closed.
+
+**What the marker gates (coupling #2).** `WORKSPACES_LUKS_CUTOVER_AT` is the fence in `lb-weight-gate.sh` (B.6-B.10, ADR-143 D3 coupling #2): a weight flip is the only way user data reaches web-2, and a flip requires the marker aged at least 3 days. The check is shape-only (ISO shape and soak age, not provenance). After this addendum web-2 can earn the marker on the first `web2_marker` run without a reboot, from one fresh green probe row and the readiness arm, and the 3-day age runs from the write. A marker that is already present keeps its original write time, so a replacement that inherits it (see above) arrives with the predecessor's age already met: marker age must never stand in for the new instance's soak. That is a loosening of what earns the marker, made on purpose. **A present marker is not a #6931 PASS** (no three distinct days, no scan for non-green rows) **and no longer evidences that the volume reopens after a reboot.** The flip orchestrator (#9358) must require the grader's PASS and the on-host runtime-bind probe, and ADR-263 "Known limits" still holds web-2 at weight 0 with no workspace data until the recovery acceptance and #7992 are done. Nothing calls the gate today. Once the marker is present, the never-pooled gate of the `web-host-reboot` workflow refuses reboots of web-2 by design.
+
+**What is unchanged.** Every other judge and grader arm, the 72 h minimum, the 26 h freshness, the window rule, deletion of the marker on RED, and the #6931 directive. The wording in `scripts/web2-rebirth.sh` and `web2-luks-rebirth.yml` that named the old boot-id proof is corrected in the same PR; the restart step inside the rebirth workflow stays until the cleanup PR retires it together with the `web-host-reboot` workflow (closing row 5 of the rebirth runbook).
+
+**Status of the claim.** The rule is not yet met by graded rows. web-2 remains *provisioned, proof pending* until the #6931 grader reports PASS. Nothing in this addendum is evidence for the encryption-posture ledger, Article 30 or any customer-facing sentence.
+
+> **Superseded 2026-10-11 (#9372), as to "not yet met by graded rows":** the #6931 grader reported PASS on 2026-10-10 (sweeper run 38083925201). See the addendum at the end of this ADR.
+
+## Addendum — 2026-10-10 (#9879, divergence note for the inngest sole copy)
+
+Appended; nothing above is edited. **A deliberate divergence from the web-1 pin set (ADR-119 D1), recorded so it is not mistaken for a
+gap.** ADR-282 gives the Inngest sole-copy volume (`hcloud_volume.inngest_redis_luks`) delete protection plus
+`prevent_destroy` on the volume, its passphrase pair and the two Doppler cascade parents, but **no `prevent_destroy` on its
+attachment**, where the web-1 pin set puts one on `hcloud_volume_attachment.workspaces_luks` (that pin is ADR-119 D1, declared in
+`apps/web-platform/infra/workspaces-luks.tf`; this ADR does not introduce it). The reason is
+structural: web-1's host-replace dispatch refuses web-1 by name, so nothing sanctioned replaces that attachment, while the
+sanctioned `inngest-host-replace` replaces the Inngest server and therefore its attachment (ForceNew on `server_id`).
+The Inngest attachment is protected by the dispatch gates and the reachability pins instead. This note changes nothing about
+web-1, web-2 or this ADR's decision. It takes effect on the merge of PR #9925 (adopting until that merge's apply and
+read-back, per ADR-282).
+
+## Addendum — 2026-10-11 (#9372, the grade and the ledger flip)
+
+**The grade.** The #6931 grader (`scripts/followthroughs/web2-luks-live-6931.sh`) reported PASS on 2026-10-10 (sweeper run 38083925201: three distinct green days of probe rows after the readiness row of the running instance, boot dd08ac9d, no non-green row) and again on 2026-10-11 (four distinct days, newest probe row about 12 hours old). By the rule of the 2026-10-08 addendum, web-2 moves from *provisioned, proof pending* to *provisioned, proof graded*. The Hetzner read on 2026-10-11 shows the volume (id 107059048, born raw 2026-10-06T18:21Z) attached to web-2 and the old plaintext volume (id 106466179) gone (404).
+
+**The flip.** The `hcloud_volume.workspaces` row of `scripts/encryption-posture-ledger.json` reads `luks` with `live_verification: available`, its exception removed, and `live_coverage_floor` 3. The linter accepts it through the indexed-binding arm (ADR-140 addendum 2026-10-10): one identical `for_each` on the volume and its attachment, a key chain tied to the host, and the apparatus pinned to `workspaces-luks-provision.sh`. The Article 30 register and the compliance posture carry dated supersession markers; the counsel record is `knowledge-base/legal/audits/2026-10-counsel-review-9372.md`.
+
+**The claim boundary.** What the grade establishes is formatted/opened plus green probes. It does not establish that the volume can be reopened after a host restart (the rule decided on 2026-10-07 is immutability, and no restart is graded), and the static chain behind `available` describes new hosts only, because `user_data` is under `ignore_changes`; the running web-2 is covered by the probe rows alone. web-2 is not routed personal data (serving weight 0, no DNS or load-balancer route; its volume contents are not probed): the anti-pooling gate is unchanged, and the marker it reads still checks shape only (#9358).
+
+**Not discharged.** Passphrase-loss recovery for a data-bearing web-class host (#9948), the `escrow=missing` re-escrow step (#9949), the state restore substrate (#7992), and the emptiness-evidence strictness decision (#9642, owner-gated, undecided here). These stay conditioned on the data-bearing period and lapse the moment web-2 receives weight or data.
+
+**Hosts, restarts and readiness rows.** The volume was formatted at boot 77985247 (readiness row `luks_arm=formatted`, 2026-10-06T18:24Z; the row carries no server id, and the rebirth run's target was server 169085156); a reboot of server 169085156 was requested at the end of the rebirth run 37508997529 (2026-10-06T18:26Z); a later server 169095540 (created 2026-10-06T19:32Z) was the target of a graded-reboot dispatch, run 37671563967 (2026-10-07T19:04Z), whose observer reported NOT YET and whose run concluded failure; and as of 2026-10-11 the volume is attached to server 169271252. Readiness rows with `luks_arm=opened` exist for boots 479cd3f3 (2026-10-06T19:36Z) and dd08ac9d (2026-10-07T20:07Z). None of this is graded as a reopen test: the rule is immutability (2026-10-08 addendum), the rows are self-reported, and instance identity is a weak anchor.
+
+**Status.** Unchanged by this change: `adopting`. The Status section above ties `accepted` to the grader's PASS, and that condition is now met; the frontmatter flip is left to the ADR owner (who also holds #9642) rather than made as a side effect of a records change.

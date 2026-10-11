@@ -27,6 +27,7 @@
 // A file escapes only when its longest `..` run EXCEEDS its depth below
 // `apps/web-platform`, or it names a repo-root helper (GIT_ROOT, repoRoot, …).
 export const REPO_WIDE_SUITES: readonly string[] = [
+  "test/agent-outer-wrap.test.ts",
   "test/agent-runner-system-prompt.test.ts",
   "test/c4-canonical-mirror.test.ts",
   "test/c4-config-name-parity.test.ts",
@@ -44,6 +45,7 @@ export const REPO_WIDE_SUITES: readonly string[] = [
   "test/context-queries-hook.test.ts",
   "test/context-queries-shell-parity.test.ts",
   "test/conversations-update-grep-detector.test.ts",
+  "test/destroy-ask-hook-parity.test.ts",
   "test/dsar-worm-guc-sites.test.ts",
   "test/eslint-config.test.ts",
   "test/git-config-atomic.test.ts",
@@ -64,6 +66,7 @@ export const REPO_WIDE_SUITES: readonly string[] = [
   "test/phase-surface-hint-shell-parity.test.ts",
   "test/phase-surface-map-parity.test.ts",
   "test/plugin-root-anchoring.test.ts",
+  "test/plugin-pretooluse-hooks-web-parity.test.ts",
   "test/plugin-stop-hooks-web-parity.test.ts",
   "test/plugin-root-list-carveout-coupling.test.ts",
   "test/anthropic-text-block-parity.test.ts",
@@ -98,6 +101,7 @@ export const REPO_WIDE_SUITES: readonly string[] = [
   "test/server/inngest/execution-placement.test.ts",
   "test/server/inngest/filing-shape-corpus-parity.test.ts",
   "test/server/inngest/leader-prompts/tool-surface.test.ts",
+  "test/server/inngest/model-tiers.test.ts",
   "test/server/inngest/rule-body-gate-recursion-invariant.test.ts",
   "test/server/inngest/sentry-cron-monitor-routing-parity.test.ts",
   "test/server/inngest/sentry-monitor-iac-parity.test.ts",

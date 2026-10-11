@@ -118,7 +118,7 @@ expect_fail_mode() {
     fail "$label" "expected non-zero exit, got 0 — THIS IS THE FAIL-OPEN CLASS. out: $(printf '%s' "$OUT" | tr '\n' ' ' | head -c 200)"
     return
   fi
-  if ! printf '%s' "$OUT" | grep -qF "fail_mode=$want"; then
+  if ! printf '%s' "$OUT" | grep -cF >/dev/null "fail_mode=$want"; then
     # Quote both operands with %q: a comparison that fails while printing two
     # identical-looking strings is hiding the difference in whitespace, a CR,
     # or an unflushed partial write. %q makes any such artifact visible instead
@@ -240,7 +240,7 @@ advisor_fires
 export STUB_OBJ_BODY='[{"relrowsecurity":true}]'
 run_scan
 expect_clean "advisor fires + catalog clean + named table now RLS-on -> WARN, pass (benign self-heal)"
-if [[ "$RC" -eq 0 ]] && printf '%s' "$OUT" | grep -qF 'stale_advisor'; then
+if [[ "$RC" -eq 0 ]] && printf '%s' "$OUT" | grep -cF >/dev/null 'stale_advisor'; then
   pass "  ...and the WARN is actually emitted as stale_advisor"
 else
   fail "stale_advisor WARN emitted" "expected a stale_advisor warning in output"
@@ -309,7 +309,7 @@ expect_fail_mode "advisor DEAD + catalog DIRTY -> still pages as a VIOLATION (cl
 
 # And the violation detail must name the table — an operator paged at p1 for a
 # data exposure cannot act on a bare count.
-if printf '%s' "$OUT" | grep -qF 'public.leaky_a'; then
+if printf '%s' "$OUT" | grep -cF >/dev/null 'public.leaky_a'; then
   pass "  ...and the violation names the offending table (actionable without the dashboard)"
 else
   fail "violation names the table" "expected 'public.leaky_a' in the output; a bare count sends the operator to the Supabase dashboard"

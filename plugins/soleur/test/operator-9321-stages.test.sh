@@ -218,7 +218,7 @@ mkdir -p "$STUB_ROOT/doppler/tokens"; printf 'slug99|release-app-mint\n' >> "$ST
 OUT="$(env -u CLAUDE_PLUGIN_ROOT "${CHILD_ENV[@]}" timeout 60 bash -c "$newc" </dev/null 2>&1)"; RC=$?
 [[ "$RC" -eq 75 && "$(mut)" -eq 0 ]] && grep -qF 'SOLEUR_BOOTSTRAP_PLAN_DRIFT stage=mint-and-store-token' <<<"$OUT"
 check "a vendor change after the approval: PLAN_DRIFT, exit 75, zero writes" $?
-ls "$XDG_STATE_HOME/soleur/approvals" | grep -qv '\.consumed$' && fail "the receipt is still live after plan drift" || pass "the receipt was burned on plan drift"
+ls "$XDG_STATE_HOME/soleur/approvals" | grep -cv >/dev/null '\.consumed$' && fail "the receipt is still live after plan drift" || pass "the receipt was burned on plan drift"
 
 echo "== failure paths keep their safety =="
 world vfail
@@ -306,7 +306,7 @@ else
   fail "census G7d did not report ok for the re-cut script (census rc ${census_rc}): $(grep -E 'G7d' <<<"$census_out" | head -2 | tr '\n' ' ')"
 fi
 grep -qE '^GH_ENVIRONMENT="infra-privileged"$' "$S"; check "GH_ENVIRONMENT=\"infra-privileged\" stays pinned on its own line, top-level" $?
-! grep -vE '^[[:space:]]*#' "$S" | grep -qE 'soleur_op_gh_secret_set|gh variable set'; check "no other store path exists in the script (no soleur_op_gh_secret_set, no gh variable set)" $?
+! grep -vE '^[[:space:]]*#' "$S" | grep -cE >/dev/null 'soleur_op_gh_secret_set|gh variable set'; check "no other store path exists in the script (no soleur_op_gh_secret_set, no gh variable set)" $?
 
 echo "== the approved flow: no child inherits the nonce, no secret on argv, the approval binds the script bytes =="
 world flow
@@ -326,7 +326,7 @@ printf '\n# edited after the plan\n' >> "$EDITED"
 OUT="$(env -u CLAUDE_PLUGIN_ROOT "${CHILD_ENV[@]}" timeout 60 bash -c "$newc" </dev/null 2>&1)"; RC=$?
 [[ -n "$newc" && "$RC" -eq 75 && "$(mut)" -eq 0 ]]
 check "a script edited AFTER its plan and approval no longer matches (exit 75, zero writes): the approval binds the bytes (rc ${RC})" $?
-ls "$XDG_STATE_HOME/soleur/approvals" | grep -qv '\.consumed$' && fail "the receipt is still live after the edit was refused" || pass "the receipt was burned when the edited script was refused"
+ls "$XDG_STATE_HOME/soleur/approvals" | grep -cv >/dev/null '\.consumed$' && fail "the receipt is still live after the edit was refused" || pass "the receipt was burned when the edited script was refused"
 
 echo "== the live-App proof is a real JWT check, not a 200 that ignores the request =="
 world jwt

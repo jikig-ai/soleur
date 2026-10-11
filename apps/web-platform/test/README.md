@@ -7,8 +7,19 @@ This directory holds the unit + integration test files for the web platform. Tes
 | Test file | Env flag | Purpose |
 |---|---|---|
 | `byok.integration.test.ts` | `BYOK_INTEGRATION_TEST=1` | Per-tenant ciphertext isolation against the real `api_keys` table + crypto round-trip. |
+| `beta-crm-dsar.integration.test.ts` | `SUPABASE_DEV_INTEGRATION=1` | Beta-CRM DSAR flows against the shared dev project. |
+| `cc-dispatcher-cross-tenant.integration.test.ts` | `SUPABASE_DEV_INTEGRATION=1` | Command-center dispatcher cross-tenant isolation. |
 | `conversations-rail-cross-tenant.integration.test.ts` | `SUPABASE_DEV_INTEGRATION=1` | User A's `command-center` Realtime subscription receives ZERO `postgres_changes` payloads from user B's INSERT/UPDATE/DELETE on `conversations`. Load-bearing case is DELETE (bypasses RLS by Postgres design). |
+| `dsar-author-redaction.integration.test.ts` | `SUPABASE_DEV_INTEGRATION=1` | DSAR author-redaction against dev. |
+| `dsar-export-cross-tenant.integration.test.ts` | `SUPABASE_DEV_INTEGRATION=1` | DSAR export cross-tenant isolation. |
 | `server/conversation-visibility.tenant-isolation.test.ts` | `SUPABASE_DEV_INTEGRATION=1` | Dual-predicate visibility RLS (mig 075) + `set_conversation_visibility` SECURITY DEFINER RPC: owner-only writes, workspace-shared reads, cross-workspace deny. Asserts the **RLS-effective** write contract, not the column-level REVOKE (a no-op against any real Supabase project — see the test's AC8 `SOLEUR-DEBT` note). |
+| `worktree-write-lease.integration.test.ts` | `WORKTREE_LEASE_INTEGRATION_TEST=1` | Worktree write-lease acquire/release against dev. |
+| `concurrency-acquire-slot-workspace-id.integration.test.ts` | `ACQUIRE_SLOT_WS_INTEGRATION_TEST=1` | Workspace-id slot acquisition concurrency. |
+| `conversation-archive-release-slot.integration.test.ts` | `SLOT_TRIGGER_INTEGRATION_TEST=1` | Archive-trigger slot release against dev. |
+| `workspace-binding-restart-survival.integration.test.ts` | `WORKSPACE_BINDING_INTEGRATION_TEST=1` | Workspace binding survives restart. |
+| `mu1.integration.test.ts` | `MU1_INTEGRATION=1` | MU1 signup→clone path; AC-2 mints a live GitHub App installation token + clones the fixture repo (requires `MU1_FIXTURE_*` + `GITHUB_APP_*`). |
+| `dsar-departed-member.integration.test.ts` | `TENANT_INTEGRATION_TEST=1` | Departed-member DSAR; lives at `test/` root, so it runs in the scheduled leg — NOT in `tenant-integration.yml`'s `test/server/` leg. |
+| `server/**/*.tenant-isolation.test.ts` + other `test/server/` files | `TENANT_INTEGRATION_TEST=1` | The ~38-file tenant-isolation family, run per-PR by `tenant-integration.yml` over the `test/server/` dir filter. |
 
 > **Two env-flag conventions (historical).** `SUPABASE_DEV_INTEGRATION=1` gates the suites above; the broader `*.tenant-isolation.test.ts` family (~55 suites) gates on `TENANT_INTEGRATION_TEST=1`. Both exist; neither was renamed. Set whichever a given file reads (the file's header docstring states it), or set both when running a mixed batch.
 
@@ -33,6 +44,12 @@ doppler run -p soleur -c dev -- env SUPABASE_DEV_INTEGRATION=1 \
 ```
 
 CI without the env flag runs the suite with `it.skipIf(...)` short-circuiting these files cleanly. Operators MUST run the cross-tenant suite locally before marking the rail PR ready — it's the merge-gate per the plan's HARD ACCEPTANCE CRITERION.
+
+### CI wiring
+
+`.github/workflows/scheduled-integration-suites.yml` runs every env-gated suite in this table nightly at 04:30 UTC (`workflow_dispatch`-able), inside the dev-suite mutex on the **shared dev project**, after applying merged migrations. It exports all eight gates: `SUPABASE_DEV_INTEGRATION`, `WORKTREE_LEASE_INTEGRATION_TEST`, `ACQUIRE_SLOT_WS_INTEGRATION_TEST`, `BYOK_INTEGRATION_TEST`, `SLOT_TRIGGER_INTEGRATION_TEST`, `WORKSPACE_BINDING_INTEGRATION_TEST`, `MU1_INTEGRATION`, and `TENANT_INTEGRATION_TEST` (for `dsar-departed-member` only — the rest of that family runs per-PR in `tenant-integration.yml`). A red leg files or comments a `ci/integration-suites` GitHub issue naming the failing step; a green one auto-closes the stale tracker; a missed run pages the `scheduled-integration-suites` Sentry cron monitor.
+
+**Shared-dev substrate vs. the dedicated-project guidance above.** The dedicated-project paragraph remains the correct advice for *deterministic local full-batch runs*. The scheduled leg deliberately runs on shared dev — the substrate `tenant-integration.yml`'s ~55 suites already use (ADR-061 substrate; ADR-023's Free-tier quota has both projects allocated) — accepting grant/cruft divergence in exchange for exercising the real dev state migrations actually land on. **Revisit trigger:** two consecutive `ci/integration-suites` filings attributable to substrate cruft (not a product defect) → re-evaluate a dedicated project. The dormancy guard `scripts/lint-integration-env-gates.sh` (advisory step in `lint-bot-statuses`, registered in `scripts/test-all.sh`) keeps this table honest: any new `process.env.X === "1"` gate that no workflow sets — or whose file no workflow collects — fails it.
 
 ### Synthetic email allowlist
 

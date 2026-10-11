@@ -54,6 +54,10 @@ set -uo pipefail
 
 export TMPDIR="${TMPDIR:-/var/tmp}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# The pin is owned by git-data-runcmd-rehearsal.test.sh (rule-audit.yml watches that copy); read it
+# from there so a bump cannot leave Tier B on a stale image. Read at setup so a bad pin fails early.
+UBUNTU_BASE="$(sed -nE "s/^UBUNTU_BASE='(ubuntu:24\.04@sha256:[0-9a-f]{64})'\$/\1/p" "${SCRIPT_DIR}/git-data-runcmd-rehearsal.test.sh" 2>/dev/null | head -1)"
+[ -n "$UBUNTU_BASE" ] || { echo "FAIL SETUP: no UBUNTU_BASE pin readable from git-data-runcmd-rehearsal.test.sh" >&2; exit 1; }
 BUDGET="$SCRIPT_DIR/inngest-userdata-budget.sh"
 EXPECTED_ROWS=83
 EXPECTED_RED=74
@@ -85,7 +89,7 @@ W="$(mktemp -d -t provision-unit-XXXXXX)" || die "mktemp -d failed"
 case "$W" in /*/provision-unit-*) : ;; *) die "scratch dir $W is not an absolute mktemp path" ;; esac
 TIERB_CTR=""
 cleanup() {
-  [ -n "$TIERB_CTR" ] && docker rm -f "$TIERB_CTR" >/dev/null 2>&1
+  [ -n "$TIERB_CTR" ] && docker rm -f "$TIERB_CTR" "$TIERB_CTR-build" >/dev/null 2>&1
   if [ -n "${PU_KEEP_WORK:-}" ]; then echo "(kept $W)" >&2; else rm -rf "$W"; fi
 }
 trap cleanup EXIT
@@ -467,6 +471,10 @@ def cmd_static(render):
     envblk = [s for _, s in L if re.match(r'^env\s+"INNGEST_CLI_VERSION=', s)]
     chk("G4: the bootstrap env list passes the literal \"DOPPLER_PROJECT=soleur-inngest\"",
         any(re.search(r'(^|\s)"DOPPLER_PROJECT=soleur-inngest"(\s|$)', s) for s in envblk), "env lines=%d" % len(envblk))
+    # #9175: on the RENDER (what this suite reads) the template arg has already resolved, so the
+    # prod-render invariant is "DOPPLER_CONFIG=prd" — the rehearsal render carries its scratch name.
+    chk("G4: the bootstrap env list passes the resolved \"DOPPLER_CONFIG=prd\" (#9175 — prod renders prd; rehearsal renders rehearsal_<runid>)",
+        any(re.search(r'(^|\s)"DOPPLER_CONFIG=prd"(\s|$)', s) for s in envblk), "env lines=%d" % len(envblk))
     guards = [x for x in its if "WRITE_GUARD_EOV" in x and "[!A-Za-z0-9._:/-]" in x and re.search(r"\bexit 1\b", x)]
     chk("G4: both credential files are charset-guarded before they are written (inngest-doppler, soleur-zot-read)",
         len(guards) == 2 and any("zot-read-write-REFUSED" in g for g in guards)
@@ -1013,7 +1021,7 @@ echo "  C0: $C0_PASS assertions, all PASS"
 # EXACT, not a floor with slack: the control's assertion inventory is fixed by this file, so a
 # count that drifts (an assertion deleted, a scenario silently not run) is itself a RED. Bump it in
 # the same edit that adds an assertion.
-C0_EXPECTED=160
+C0_EXPECTED=161
 [ "$C0_PASS" -eq "$C0_EXPECTED" ] || { echo "  FAIL: C0 anti-vacuity — $C0_PASS assertions ran, the inventory is exactly $C0_EXPECTED"; exit 1; }
 
 # =================================================================================================
@@ -1222,7 +1230,7 @@ ls = lines(); ls[d[0] + 1:d[0] + 1] = [ind(d[0]) + "DIAG2=\"$(env -i doppler sec
 row G4-r4 RED "G4: HOME=/root reaches the unit environment" '
 del_line("Environment=HOME=/root"); raw_rep("printf \x27HOME=/root\\nDOPPLER_TOKEN=", "printf \x27DOPPLER_TOKEN="); save()'
 row G4-r5 RED "G4: the bootstrap env list passes the literal" '
-rep_line("\"DOPPLER_PROJECT=soleur-inngest\" \\", "\"DOPPLER_PROJECT=soleur\" \\"); save()'
+rep_line("\"DOPPLER_PROJECT=soleur-inngest\" \"DOPPLER_CONFIG=prd\" \\", "\"DOPPLER_PROJECT=soleur\" \"DOPPLER_CONFIG=prd\" \\"); save()'
 row G4-r6 PASS - '
 ins_after("Environment=HOME=/root", ["Environment=DOPPLER_ENABLE_VERSION_CHECK=false"]); save()'
 
@@ -1272,7 +1280,7 @@ row G7-r3 RED "no 'parameter not set' in stderr" '
 f = one(ISO_PASSED); e = one("fi", after=f)
 ls = lines(); ls[e + 1:e + 1] = [ind(e) + "echo \"$DOPPLER_PROJECT_OVERRIDE\" >/dev/null"]; put(ls); save()'
 row G7-r4 RED "TA T2: exits 0" '
-raw_rep("DOPPLER_TOKEN=%s\\nDOPPLER_CONFIG_DIR=/tmp/.doppler\\nDOPPLER_ENABLE_VERSION_CHECK=false\\n\x27 \x27", "DOPPLER_TOKEN=%s\\nDOPPLER_ENABLE_VERSION_CHECK=false\\n\x27 \x27"); save()'
+raw_rep("DOPPLER_TOKEN=%s\\nDOPPLER_CONFIG_DIR=/tmp/.doppler\\nDOPPLER_ENABLE_VERSION_CHECK=false\\nDOPPLER_CONFIG=prd\\n\x27 \x27", "DOPPLER_TOKEN=%s\\nDOPPLER_ENABLE_VERSION_CHECK=false\\n\x27 \x27"); save()'
 row G7-r5 PASS - '
 ins_after("attempt=0", [": \"${SOLEUR_PU_UNSET_OK:-default}\""]); save()'
 
@@ -1389,7 +1397,6 @@ fi
 # =================================================================================================
 echo ""
 echo "--- Tier B: systemd as PID 1 in the pinned ubuntu:24.04 image ---"
-UBUNTU_BASE='ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517'
 TIERB_RESULT=""
 TB_FAIL=0
 tb_skip() { echo "  SKIP (Tier B): $1"; TIERB_RESULT="skipped: $1"; }
@@ -1401,9 +1408,33 @@ tb_unbootable() {
   else tb_skip "unbootable systemd container: $1"; fi
 }
 tb_ok() { if [ "$1" -eq 0 ]; then echo "  PASS: $2"; else echo "  FAIL: $2"; TB_FAIL=$((TB_FAIL + 1)); fi; }
+# Bounded apt (#9395): the image build shares lib/apt-bounded.sh with the git-data suites (one budget of apt
+# seconds, expiry routed to FIXTURE_APT_FAILED + exit 100). Healthy cost measured in the pinned image on
+# 2026-10-08: update 8 s + install 12 s = 20 s; 150 s fits one 90 s-capped stall plus a healthy retry.
+APT_LIB="${SCRIPT_DIR}/lib/apt-bounded.sh"
+APT_BUDGET_S=150
+[ -r "$APT_LIB" ] || die "${APT_LIB} is missing — the Tier B apt cycle could not be bounded"
+# shellcheck source=lib/apt-bounded.sh
+. "$APT_LIB"
+# Verdict for the image-build `docker run`: ok | skip | fail. Only the apt decline (the marker WITH the helper's
+# own rc 100) or docker failing to create the container (125) is the ADR-188 skip; 97/98/124/126/127/137 are
+# harness defects and must never read as the decline. Executed below as an instrument check, docker or not.
+tb_build_verdict() {
+  local rc="$1" log="$2"
+  if [ "$rc" -eq 0 ]; then echo ok
+  elif [ "$rc" -eq 100 ] && grep -qx FIXTURE_APT_FAILED "$log"; then echo skip
+  elif [ "$rc" -eq 125 ]; then echo skip
+  else echo fail; fi
+}
+_vm="$W/verdict-marker.log"; _ve="$W/verdict-empty.log"
+printf 'FIXTURE_APT_CAUSE: x\nFIXTURE_APT_FAILED\n' > "$_vm"; : > "$_ve"
+_vchk() { [ "$(tb_build_verdict "$1" "$2")" = "$3" ] || die "tb_build_verdict $1 $(basename "$2") != $3"; }
+_vchk 0 "$_vm" ok;    _vchk 0 "$_ve" ok;     _vchk 100 "$_vm" skip; _vchk 125 "$_ve" skip
+_vchk 137 "$_vm" fail; _vchk 97 "$_vm" fail;  _vchk 100 "$_ve" fail; _vchk 124 "$_ve" fail
+_vchk 98 "$_ve" fail;  _vchk 126 "$_ve" fail; _vchk 127 "$_ve" fail
 
 tierb() {
-  local img_tag ctr="pu-tierb-$$" x
+  local img_tag ctr="pu-tierb-$$" x rc
   if [ "${PU_TIERB:-1}" = 0 ]; then
     [ -n "${CI:-}" ] && { echo "  FAIL: PU_TIERB=0 is refused under CI"; TB_FAIL=1; return; }
     tb_skip "PU_TIERB=0 (operator opt-out, local only)"; return
@@ -1413,11 +1444,30 @@ tierb() {
     tb_skip "docker absent or unreachable (local host)"; return
   fi
   img_tag="soleur-pu-tierb:$(printf '%s systemd systemd-sysv dbus jq v1' "$UBUNTU_BASE" | sha256sum | cut -c1-12)"
+  TIERB_CTR="$ctr"
   if ! docker image inspect "$img_tag" >/dev/null 2>&1; then
     docker rm -f "$ctr-build" >/dev/null 2>&1
-    if ! docker run --name "$ctr-build" "$UBUNTU_BASE" sh -c 'export DEBIAN_FRONTEND=noninteractive; for _ in 1 2 3; do apt-get update -qq -o Acquire::Retries=5 && apt-get install -y -qq --no-install-recommends -o Acquire::Retries=5 systemd systemd-sysv dbus jq && exit 0; sleep 5; done; exit 100' > "$W/tierb-apt.log" 2>&1; then
+    gd_apt_state_arm "$W/aptstate" "$APT_BUDGET_S" || { echo "FIXTURE-FAIL: the shared apt budget could not be armed" >&2; exit 2; }
+    # shellcheck disable=SC2016  # single-quoted on purpose: the script expands inside the container
+    docker run --name "$ctr-build" -v "$GD_APT_STATE:/work/apt" "$UBUNTU_BASE" bash -c '
+      export DEBIAN_FRONTEND=noninteractive
+      . /work/apt/apt-bounded.sh || exit 97
+      gd_apt_install_bounded --no-install-recommends systemd systemd-sysv dbus jq || exit $?
+    ' > "$W/tierb-apt.log" 2>&1
+    rc=$?
+    gd_apt_state_summary
+    if [ "$rc" -ne 0 ]; then
       docker rm -f "$ctr-build" >/dev/null 2>&1
-      tb_skip "ADR-188 arm_skip: the ubuntu apt archive did not serve systemd/jq ($(tail -1 "$W/tierb-apt.log" | head -c 160))"; return
+      if [ "$(tb_build_verdict "$rc" "$W/tierb-apt.log")" = skip ]; then
+        if [ "$rc" -eq 125 ]; then
+          tb_skip "ADR-188 arm_skip: docker could not create the image-build container (rc=125: $(tail -n 2 "$W/tierb-apt.log" | tr '\n' ' ' | head -c 200))"
+        else
+          tb_skip "ADR-188 arm_skip: the ubuntu apt archive did not serve systemd/jq ($(grep -a FIXTURE_APT_CAUSE "$W/tierb-apt.log" | tail -1 | head -c 200))"
+        fi
+        return
+      fi
+      echo "  FAIL: Tier B: image build failed rc=$rc, not the apt decline ($(tail -n 2 "$W/tierb-apt.log" | tr '\n' ' ' | head -c 300))"
+      TB_FAIL=$((TB_FAIL + 1)); TIERB_RESULT="FAIL: image build rc=$rc"; return
     fi
     docker commit "$ctr-build" "$img_tag" >/dev/null && docker rm "$ctr-build" >/dev/null
   fi
@@ -1542,7 +1592,7 @@ STUB
   tb_ok "$( [ "$(grep -c ' phone provision-attempt-start attempt=1 ' <<<"$x")" = 1 ] && [ "$(grep -c ' phone provision-attempt-start ' <<<"$x")" = 1 ] && echo 0 || echo 1)" "T12: exactly one provision-attempt-start attempt=1 after arming (a single first-boot trigger)"
   tb_ok "$( [ "$(X systemctl is-active soleur-inngest-provision.timer)" = inactive ] && [ "$(X systemctl is-enabled soleur-inngest-provision.timer)" = enabled ] && echo 0 || echo 1)" "T12: the timer is enabled but NOT active (armed without --now)"
   tb_ok "$(grep -q ' phone provision-unit-armed ' <<<"$x" && echo 0 || echo 1)" "T12: provision-unit-armed is emitted by the rendered arming items"
-  tb_ok "$( [ "$(grep -c ' doppler ' <<<"$x")" -ge 2 ] && ! grep ' doppler ' <<<"$x" | grep -vq "TOKEN=$(sed -n 's/^DOPPLER_TOKEN=//p' "$W/c0/inngest-doppler.fixture") HOME=/root$" && echo 0 || echo 1)" "T6: every doppler call received DOPPLER_TOKEN and HOME=/root through real EnvironmentFile= parsing"
+  tb_ok "$( [ "$(grep -c ' doppler ' <<<"$x")" -ge 2 ] && ! grep -vq "TOKEN=$(sed -n 's/^DOPPLER_TOKEN=//p' "$W/c0/inngest-doppler.fixture") HOME=/root$" < <(grep ' doppler ' <<<"$x") && echo 0 || echo 1)" "T6: every doppler call received DOPPLER_TOKEN and HOME=/root through real EnvironmentFile= parsing"
   tb_ok "$(X test -e /var/lib/soleur-inngest-provision/done && echo 0 || echo 1)" "T12: the attempt latched"
 
   # ---- T9: TimeoutStartSec kill -> the TERM trap reports before SIGKILL, then attempt N+1 ------
@@ -1613,7 +1663,7 @@ STUB
   wait_boot || { echo "  FAIL: T11 container did not come back"; TB_FAIL=$((TB_FAIL + 1)); return; }
   local t11_up; t11_up="$(date +%s.%N)"
   XS 'printf tok > /run/inngest-bs-logs-token'
-  poll 20 "awk 'f; \$2 == \"PHASE\" && \$3 == \"T11a\" {f=1}' $LOGF | grep -q ' phone provision-attempt-exit-1 '"
+  poll 20 "grep -q ' phone provision-attempt-exit-1 ' < <(awk 'f; \$2 == \"PHASE\" && \$3 == \"T11a\" {f=1}' $LOGF)"
   x="$(lines_from T11a)"
   local t11_s; t11_s="$(awk '$2 == "phone" && $3 == "provision-attempt-start" {print $1; exit}' <<<"$x")"
   tb_ok "$( [ -n "$t11_s" ] && awk -v s="$t11_s" -v u="$t11_up" 'BEGIN { exit !((s - u) <= 15) }' && echo 0 || echo 1)" "T11: after a reboot with no latch the timer starts the unit within 15s of multi-user.target (up $t11_up, start ${t11_s:-none})"
@@ -1630,7 +1680,7 @@ STUB
   # attempts, then a success" is six failing pulls and then a served one.
   XS 'echo "1 1 1 1 1 1 0" > /var/lib/tierb/ctl/pull_rc'
   X systemctl start --no-block soleur-inngest-provision.service
-  poll 40 "awk 'f; \$2 == \"PHASE\" && \$3 == \"T10\" {f=1}' $LOGF | grep -q ' phone provision-attempt-exit-1 '"
+  poll 40 "grep -q ' phone provision-attempt-exit-1 ' < <(awk 'f; \$2 == \"PHASE\" && \$3 == \"T10\" {f=1}' $LOGF)"
   X systemctl start soleur-inngest-provision.timer >/dev/null 2>&1
   poll 90 '[ "$(systemctl show -p SubState --value soleur-inngest-provision.service)" = exited ]'
   x="$(lines_from T10)"

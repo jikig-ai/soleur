@@ -172,7 +172,7 @@ job_id_token_verdict() {
     # Block form: scan the sub-block (indent deeper than the 4-space key) until
     # the next 4-space job key, and require id-token WITHIN it (not the whole job).
     sub="$(printf '%s\n' "$block" | awk -v s="$lineno" 'NR > s { if ($0 ~ /^    [A-Za-z0-9_-]+:/) exit; print }')"
-    if printf '%s\n' "$sub" | grep -qE "$ID_TOKEN_ERE"; then
+    if printf '%s\n' "$sub" | grep -cE >/dev/null "$ID_TOKEN_ERE"; then
       echo "granted"
     else
       echo "denied"
@@ -184,7 +184,7 @@ job_id_token_verdict() {
   # does not.
   case "$value" in
     write-all) echo "granted" ;;
-    *) if printf '%s\n' "$value" | grep -qE "$ID_TOKEN_FLOW_ERE"; then
+    *) if printf '%s\n' "$value" | grep -cE >/dev/null "$ID_TOKEN_FLOW_ERE"; then
          echo "granted"
        else
          echo "denied"
@@ -206,7 +206,7 @@ if [[ ! -f "$REUSABLE" ]]; then
   echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
   exit 1
 fi
-if named_job_permissions_block "$REUSABLE" release | grep -qE "$ID_TOKEN_ERE"; then
+if named_job_permissions_block "$REUSABLE" release | grep -cE >/dev/null "$ID_TOKEN_ERE"; then
   pass "reusable release job requires id-token: write"
 else
   fail "reusable release job no longer declares id-token: write — revisit this guard's premise (cosign signing removed?)"
@@ -253,7 +253,7 @@ for file in "${callers[@]}"; do
         fail "$name [$job]: job-level permissions: WITHOUT id-token: write (job-level REPLACES workflow-level → startup_failure)"
         ;;
       none)
-        if workflow_perms "$file" | grep -qE "$ID_TOKEN_ERE"; then
+        if workflow_perms "$file" | grep -cE >/dev/null "$ID_TOKEN_ERE"; then
           pass "$name [$job]: calling job inherits workflow-level id-token: write"
         else
           fail "$name [$job]: no id-token: write at job level OR workflow level → the reusable release job will startup_failure"

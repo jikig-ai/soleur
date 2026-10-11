@@ -187,11 +187,15 @@ jobs:
           # binds a digest to an arch -- and that is the shape the bump procedure produces
           # (one paste session, two files). Measured: correct pairing 200, swapped 404.
           # Anonymous pull token, no secrets.
+          # The anonymous pull tokens reach curl on its stdin config (ADR-280). A refusal is a curl
+          # failure here: PROBE_RC / the empty-token arm below record it in PROBLEMS. Nothing branches on rc 2.
+          source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout."; exit 1; }
           for A in amd64 arm64; do
             set +e
             D="$(grep -oE "^[[:space:]]*zot_image_${A}[[:space:]]*=[[:space:]]*\"ghcr\.io/project-zot/zot-linux-$A:v[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}\"" "$TF" | grep -oE 'sha256:[0-9a-f]{64}' | head -1)"
+            # shellcheck disable=SC2034  # T is read by NAME inside bc_curl
             T="$(curl -sS --max-time 20 "https://ghcr.io/token?scope=repository:project-zot/zot-linux-$A:pull&service=ghcr.io" | jq -r .token)"
-            CODE="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 -I -H "Authorization: Bearer $T" -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' "https://ghcr.io/v2/project-zot/zot-linux-$A/manifests/$D")"
+            CODE="$(bc_curl rule-audit 'Authorization:Bearer :T' -- -sS -o /dev/null -w '%{http_code}' --max-time 20 -I -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' "https://ghcr.io/v2/project-zot/zot-linux-$A/manifests/$D")"
             PROBE_RC=$?
             set -e
             if [ "$PROBE_RC" -ne 0 ] || [ -z "$CODE" ] || [ "$CODE" = "000" ]; then
@@ -242,8 +246,9 @@ jobs:
           else
             set +e
             UB_TOK_RC=0
+            # shellcheck disable=SC2034  # read by NAME inside bc_curl
             UB_T="$(curl -sS --max-time 20 "https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/ubuntu:pull" 2>/dev/null | jq -r '.token // empty')" || UB_TOK_RC=$?
-            UB_HDR="$(curl -sS --max-time 20 -o /dev/null -D - -H "Authorization: Bearer ${UB_T}" -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' "https://registry-1.docker.io/v2/library/ubuntu/manifests/24.04" 2>/dev/null)"
+            UB_HDR="$(bc_curl rule-audit 'Authorization:Bearer :UB_T' -- -sS --max-time 20 -o /dev/null -D - -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' "https://registry-1.docker.io/v2/library/ubuntu/manifests/24.04")"
             UB_RC=$?
             set -e
             UB_LIVE="$(printf '%s' "$UB_HDR" | grep -i '^docker-content-digest:' | tr -d '\r' | awk '{print $2}')"
@@ -363,6 +368,102 @@ jobs:
 
           # A probe that could not run is a DETECTOR failure: exit non-zero so the ops email
           # fires. Drift alone exits 0 -- the issue is the channel for that.
+          if [ -n "$PROBLEMS" ]; then
+            echo "one or more probes could not complete; see the filed issue." >&2
+            exit 1
+          fi
+
+      # DETECTION half of the egress-gateway Squid pin (#9534). Same two-condition
+      # split as the zot step: (1) offline staleness gate (committed files) +
+      # (2) live Docker Hub index-digest poll. One idempotent `egress-gw-pin-drift`
+      # + `action-required` issue; NEVER edits the pin.
+      - name: Detect egress-gw image drift
+        if: ${{ !cancelled() }}
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          BS=apps/web-platform/infra/egress-gateway-bootstrap.sh
+          DRIFT=""; PROBLEMS=""
+
+          set +e
+          OUT="$(bash apps/web-platform/infra/egress-gw-image-staleness.test.sh 2>&1)"
+          RC=$?
+          set -e
+          if [ "$RC" -eq 2 ]; then
+            echo "egress-gw-image-staleness.test.sh reported DETECTOR FAILURE (rc=2); failing step." >&2
+            echo "$OUT" >&2
+            exit 2
+          elif [ "$RC" -ne 0 ] && [ "$RC" -ne 10 ] && [ "$RC" -ne 1 ]; then
+            echo "egress-gw-image-staleness.test.sh exited unexpectedly (rc=$RC); failing step." >&2
+            echo "$OUT" >&2
+            exit "$RC"
+          fi
+          [ "$RC" -eq 10 ] && DRIFT="stale"
+          if [ "$RC" -eq 1 ]; then
+            PROBLEMS="${PROBLEMS}- offline staleness gate FAILED (incoherence, not age; see output)."$'\n'
+          fi
+
+          # Anchored-ish parse: the digest literal only exists once (comment-free).
+          PINNED="$(grep -oE 'ubuntu/squid@sha256:[0-9a-f]{64}' "$BS" | head -1)"
+
+          set +e
+          T="$(curl -sS --max-time 20 "https://auth.docker.io/token?service=registry.docker.io&scope=repository:ubuntu/squid:pull" | jq -r '.token // empty')"
+          LIVE="$(curl -sS --max-time 20 -o /dev/null -w '%{header_json}' --config - \
+            -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' \
+            "https://registry-1.docker.io/v2/ubuntu/squid/manifests/latest" \
+            < <(printf 'header = "Authorization: Bearer %s"\n' "$T") \
+            | jq -r '.["docker-content-digest"][0] // empty')"
+          POLL_RC=$?
+          set -e
+          if [ "$POLL_RC" -ne 0 ] || [ -z "$T" ] || [ -z "$LIVE" ]; then
+            PROBLEMS="${PROBLEMS}- upstream digest poll failed (rc=$POLL_RC); cannot tell whether we are behind."$'\n'
+          elif [ -z "$PINNED" ]; then
+            PROBLEMS="${PROBLEMS}- could not parse the pinned reference from $BS."$'\n'
+          elif [ "ubuntu/squid@$LIVE" != "$PINNED" ]; then
+            DRIFT="${DRIFT:+$DRIFT+}behind"
+          fi
+
+          if [ -z "$DRIFT" ] && [ -z "$PROBLEMS" ]; then
+            echo "egress-gw pin is current ($PINNED)."
+            exit 0
+          fi
+
+          gh label create egress-gw-pin-drift --color FBCA04 \
+            --description "the egress gateway Squid image pin is stale or behind upstream (#9534)" \
+            --force >/dev/null 2>&1 || true
+          {
+            echo "The pinned egress-gateway Squid image needs attention (condition: \`${DRIFT:-probe-failure}\`)."
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Pinned | \`${PINNED:-unparsed}\` |"
+            echo "| Upstream \`latest\` index digest | \`${LIVE:-unavailable}\` |"
+            echo
+            if [ -n "$PROBLEMS" ]; then echo "$PROBLEMS"; echo; fi
+            echo "Offline gate output:"
+            echo
+            echo '```'
+            echo "$OUT"
+            echo '```'
+            echo
+            echo "Remediation — follow \`## Re-pin procedure\` in"
+            echo "\`apps/web-platform/infra/egress-gw-image.provenance.md\`."
+            echo
+            echo "_Filed automatically by rule-audit.yml image-pin drift detection (#9534)._"
+          } > "$RUNNER_TEMP/egress-gw-drift-body.md"
+          EXISTING="$(gh issue list --label egress-gw-pin-drift --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body-file "$RUNNER_TEMP/egress-gw-drift-body.md"
+            echo "Updated existing egress-gw-pin-drift issue #$EXISTING."
+          else
+            gh issue create --label egress-gw-pin-drift --label action-required \
+              --title "egress-gw-pin-drift: gateway Squid image pin needs attention" \
+              --body-file "$RUNNER_TEMP/egress-gw-drift-body.md"
+          fi
+
           if [ -n "$PROBLEMS" ]; then
             echo "one or more probes could not complete; see the filed issue." >&2
             exit 1

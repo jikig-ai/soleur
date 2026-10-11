@@ -67,7 +67,7 @@ PROC_BLOCK=$(awk '
   in_block && /^###[^#]/ { in_block=0 }
   in_block { print }
 ' "$BRAINSTORM_SKILL")
-if printf '%s\n' "$PROC_BLOCK" | grep -qE '^0\.[[:space:]].*LANE'; then
+if printf '%s\n' "$PROC_BLOCK" | grep -cE >/dev/null '^0\.[[:space:]].*LANE'; then
   echo "  PASS: Phase 0.5 step 0 references LANE"
   PASS=$((PASS + 1))
 else
@@ -83,7 +83,7 @@ P36_BLOCK=$(awk '
   in_block && /^### / { in_block=0 }
   in_block { print }
 ' "$BRAINSTORM_SKILL")
-if printf '%s\n' "$P36_BLOCK" | grep -qE 'lane:.*spec\.md|spec\.md.*lane:'; then
+if printf '%s\n' "$P36_BLOCK" | grep -cE >/dev/null 'lane:.*spec\.md|spec\.md.*lane:'; then
   echo "  PASS: Phase 3.6 mentions 'lane:' and spec.md together"
   PASS=$((PASS + 1))
 else
@@ -99,7 +99,7 @@ SAVE_BLOCK=$(awk '
   in_block && /^## / { in_block=0 }
   in_block { print }
 ' "$PLAN_SKILL")
-if printf '%s\n' "$SAVE_BLOCK" | grep -q "lane:" && printf '%s\n' "$SAVE_BLOCK" | grep -q "spec.md"; then
+if printf '%s\n' "$SAVE_BLOCK" | grep -c >/dev/null "lane:" && printf '%s\n' "$SAVE_BLOCK" | grep -c >/dev/null "spec.md"; then
   echo "  PASS: plan/SKILL.md Save Tasks references lane: and spec.md"
   PASS=$((PASS + 1))
 else
@@ -115,7 +115,7 @@ P0_BLOCK=$(awk '
   in_block && /^### / { in_block=0 }
   in_block { print }
 ' "$WORK_SKILL")
-if printf '%s\n' "$P0_BLOCK" | grep -q "lane:" && printf '%s\n' "$P0_BLOCK" | grep -qE 'lane=.*value|lane=<value>|append.*lane'; then
+if printf '%s\n' "$P0_BLOCK" | grep -c >/dev/null "lane:" && printf '%s\n' "$P0_BLOCK" | grep -cE >/dev/null 'lane=.*value|lane=<value>|append.*lane'; then
   echo "  PASS: work/SKILL.md Phase 0 reads lane: and conditionally announces it"
   PASS=$((PASS + 1))
 else

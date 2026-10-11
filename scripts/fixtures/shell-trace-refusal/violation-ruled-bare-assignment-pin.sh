@@ -18,5 +18,5 @@ esac
 INGEST_URL="$FIXTURE_INGEST_URL"
 
 curl --disable --noproxy '*' --silent \
-  -u "svc:${SENTRY_AUTH_TOKEN}" \
+  --oauth2-bearer "${SENTRY_AUTH_TOKEN}" \
   "$INGEST_URL" || true

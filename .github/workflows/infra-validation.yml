@@ -78,6 +78,16 @@ on:
       # three paths, and PR #7094 ran this job only incidentally, because it also touched
       # apps/web-platform/infra/ (already covered by the first glob above).
       - ".github/workflows/git-data-rung2-rehearsal.yml"
+      # (#9175) Same defect class for the inngest provision-race rehearsal route:
+      # inngest-provision-rehearsal.test.sh asserts ~60 properties across the workflow, the
+      # plan-shape guard, the capture script and the probe — none of which matched a glob
+      # above, so a PR editing ONLY one of them would skip the suite that guards it.
+      - ".github/workflows/inngest-provision-rehearsal.yml"
+      - "scripts/inngest-provision-plan-shape.sh"
+      - "scripts/inngest-provision-rehearsal-probe.sh"
+      - "scripts/followthroughs/inngest-provision-rehearsal-capture.sh"
+      - "scripts/followthroughs/inngest-provision-rehearsal-capture.test.sh"
+      - "tests/scripts/test-inngest-provision-plan-shape.sh"
       # (#8189) Same defect for the two workflows git-data-root-key.test.sh and
       # git-data-cutover-access.test.sh parse: a PR editing only one of them must run its guard.
       - ".github/workflows/apply-git-data-root-key.yml"
@@ -163,6 +173,16 @@ on:
       # a stale row reads green) would skip the guard whose job is to turn that red.
       - "scripts/lib/web2-luks-rows.sh"
       - "scripts/betterstack-query.sh"
+      # (#9879) The shared HCL effective-text lexer sourced by workspaces-luks.test.sh (Guard B4) and
+      # inngest-luks-sole-copy.test.sh (Guard 1). It sits under tests/scripts/lib/, outside every glob
+      # above, so a lexer-ONLY edit (weakening strip_comments, say) would skip both consuming suites.
+      - "tests/scripts/lib/hcl-effective-text.sh"
+      # (#9879) inngest-luks-sole-copy.test.sh (under apps/*/infra/**) asserts that the runbook heading every
+      # failure message cites exists (H1b) and that the read-back command it carries matches the postmerge
+      # skill's (H2). A docs-only heading rename or runbook command edit would otherwise skip the suite. PR list only:
+      # the push list above is deliberately narrower.
+      - "knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md"
+      - "plugins/soleur/skills/postmerge/SKILL.md"
       # (#3366) supabase-advisor/scan-workflow.test.sh reads all of these. The
       # guard's whole job is to catch a gate that looks present but does nothing
       # — so a guard that cannot fire when its own subjects are edited would be
@@ -935,6 +955,17 @@ jobs:
           terraform init -backend=false -input=false -lockfile=readonly
           terraform validate
 
+      # (#9175) Same gap again: the inngest rehearsal root nests under the infra dir, so the
+      # validate matrix never parses it — without this step a syntax error surfaces only at
+      # dispatch, after the environment approval. -backend=false, TF_DATA_DIR out of tree.
+      - name: Terraform validate the inngest provision rehearsal root
+        working-directory: apps/web-platform/infra/inngest-provision-rehearsal
+        env:
+          TF_DATA_DIR: ${{ runner.temp }}/inngest-provision-rehearsal-tf
+        run: |
+          terraform init -backend=false -input=false -lockfile=readonly
+          terraform validate
+
 
       # (#7025, R11) THE RUNG-2 GATE AS A PR CHECK, active only once evidence exists.
       #
@@ -1003,9 +1034,11 @@ jobs:
             apps/web-platform/infra/git-data-gc.timer \
             apps/web-platform/infra/git-data-luks-reopen.service \
             apps/web-platform/infra/git-data-luks-reopen-failure.service \
-            apps/web-platform/infra/git-data-luks-reopen.timer 2>&1 || true)
+            apps/web-platform/infra/git-data-luks-reopen.timer \
+            apps/web-platform/infra/git-data-liveness.service \
+            apps/web-platform/infra/git-data-liveness.timer 2>&1 || true)
           echo "$out"
-          if printf '%s' "$out" | grep -E 'git-data-(gc|luks-reopen)[^:]*\.(service|timer):' ; then
+          if printf '%s' "$out" | grep -E 'git-data-(gc|luks-reopen|liveness)[^:]*\.(service|timer):' ; then
             echo "::error::systemd-analyze verify reported problems in the git-data unit set"
             exit 1
           fi

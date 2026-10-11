@@ -143,6 +143,29 @@ all. Relaxing requires: #6931, plus key-conditional requirement arms for
 `hcloud_volume_attachment.workspaces_luks` and `cloudflare_record.app`, plus a rehearsal on a
 non-production host. Tracker: **#6964**.
 
+> **Note, 2026-10-01 (#6604 step 7, PR B #9348) — the "plaintext by-id pin" reason is superseded.**
+> On the merge of PR #9348, web-1 owns no `hcloud_volume.workspaces` instance: PR #9348 merges only
+> after the wipe dispatch D has concluded with `delete_issued=true` on its plaintext volume
+> (`105149570`), evidenced in the destruction record
+> (`knowledge-base/legal/audits/workspaces-plaintext-destruction-record.md`), and web-1's
+> `workspaces_volume_id` template argument is the literal `"retired-6604"`. A rebuilt web-1 would no
+> longer mount the superseded backstop rolled back to 2026-07-23; it would emit
+> `workspaces_mount fatal` and keep booting on an empty, writable root-disk `/mnt/data` (fails loud,
+> not closed). The refusal of web-1 **stands** on its other grounds: the guest-side LUKS unlock is
+> still deferred to #6931, the LUKS attachment and `cloudflare_record.app` arms do not exist, and
+> `hcloud_volume.workspaces_luks` (`106443278`) is then the sole copy of every workspace. Terraform
+> declares `prevent_destroy` and `delete_protection` on that volume and `prevent_destroy` on
+> `hcloud_volume_attachment.workspaces_luks`; the Hetzner-side `delete_protection` is effective only
+> after the post-merge SSH-stage apply. The text above is kept as the record of why the refusal was
+> taken.
+>
+> **A second barrier, from the same merge.** Replacing `hcloud_server.web["web-1"]` forces a new
+> `hcloud_volume_attachment.workspaces_luks` (its `server_id` is ForceNew), and that attachment's
+> `prevent_destroy` makes the plan fail closed with `Instance cannot be destroyed`. So a web-1
+> host-replace plan now fails even if the name refusal above were removed. A deliberate web-1
+> replacement (the #6964 path) needs a reviewed PR that relaxes that protection for the move; it is
+> never worked around at dispatch time.
+
 The refusal is keyed on `_WEB_HOST_REPLACE_LUKS_PINNED_KEY`. The workflow repeats the refusal as a fail-fast input check purely so the
 operator reads the reason before a digest resolve and a terraform plan; the gate remains the
 load-bearing control, and `terraform-target-parity.test.ts` binds the two literals.

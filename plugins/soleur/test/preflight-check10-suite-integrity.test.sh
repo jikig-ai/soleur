@@ -454,7 +454,7 @@ for f in "${SUITES[@]}"; do
   SUPPRESS_RE='(test|it|describe)[[:space:]]*(\.[[:space:]]*(skip|only|todo|failing)[A-Za-z]*[[:space:]]*\(|\[[[:space:]]*["'"'"'](skip|only|todo|failing)[A-Za-z]*["'"'"'][[:space:]]*\][[:space:]]*\()'
   # One check is about to be decided — counted HERE, outside the verdict helpers.
   cases=$((cases + 1))
-  if tr '\n' ' ' < "$f" | grep -qE "$SUPPRESS_RE"; then
+  if tr '\n' ' ' < "$f" | grep -cE >/dev/null "$SUPPRESS_RE"; then
     # Braces are required: `$SUPPRESS_RE[` parses as array-index syntax (SC1087).
     tr '\n' ' ' < "$f" | grep -oE "${SUPPRESS_RE}[^)]{0,80}" | head -5
     fail "$f contains a suppressed or exclusive test (see above)"
@@ -473,7 +473,7 @@ for f in "${SUITES[@]}"; do
   # Adds no expect() calls, so MIN_ASSERTIONS is unaffected.
   REBIND_RE='(^|[;{}[:space:]])(const|let|var|function)[[:space:]]+(test|it|describe)([[:space:]]|=|;|\()'
   cases=$((cases + 1))
-  if tr '\n' ' ' < "$f" | grep -qE "$REBIND_RE"; then
+  if tr '\n' ' ' < "$f" | grep -cE >/dev/null "$REBIND_RE"; then
     tr '\n' ' ' < "$f" | grep -oE "${REBIND_RE}[^;]{0,60}" | head -5
     fail "$f REBINDS test/it/describe — the source-pattern gate can be aliased around"
   else

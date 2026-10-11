@@ -2844,7 +2844,75 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler soleur/prd_terraform) alone and prints web-2's newest
   // readiness, probe and journald boot rows as ids and ages. NO SUBSTITUTE: those rows land only in the Logs
   // warehouse, which has no unauthenticated read path. Genuine.
-  const BASELINE_DECLARED_PROBES = 48;
+  // #9372 (2026-10-08): +1 (48 -> 49) for `2026-10-08-fix-web2-luks-evidence-immutability-not-reboot-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the probe (`scripts/followthroughs/web2-luks-live-6931.sh`) reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}
+  // (Doppler soleur/prd_terraform) alone and grades web-2's readiness and probe rows. NO SUBSTITUTE: those rows land
+  // only in the Logs warehouse, which has no unauthenticated read path. Genuine.
+  // #9252/#9390 (2026-10-08): +1 (49 -> 50) for `2026-10-08-chore-zot-pin-v2-1-22-and-docker-pkg-github-deny-registry-replace-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`scripts/betterstack-query.sh --grep SOLEUR_ZOT_DISK`) reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}
+  // (Doppler soleur/prd_terraform) and the post-replace registry host's own heartbeat rows are graded for
+  // `zot_image_digest=<final D12>`. NO SUBSTITUTE: those rows land only in the Logs warehouse, which has no
+  // unauthenticated read path. Genuine.
+  // #1285/#2640 (2026-10-09): +1 (50 -> 51) for `2026-10-09-feat-sys-denyread-isolation-deploy-gate-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line
+  // (a double-quoted scalar). TRUTH: the probe (`curl -fsS https://deploy.soleur.ai/hooks/deploy-status`)
+  // signs the GET with a WEBHOOK_DEPLOY_SECRET HMAC over the empty body plus the
+  // CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET service-token pair (Doppler soleur/prd_terraform) —
+  // the same credential shape `scripts/followthroughs/workspace-isolation-verdict-2640.sh` uses.
+  // NO SUBSTITUTE: the endpoint answers 403 without them and the `.workspace_isolation` verdict lives
+  // only in the deploy host's state file surfaced through that gate, so no unauthenticated read can
+  // verify the live verdict. Genuine.
+  // #9826 (2026-10-09): +1 (51 -> 52) for `2026-10-09-feat-runtime-image-cve-scan-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`scripts/betterstack-query.sh SOLEUR_IMAGE_CVE_SCAN`) reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}
+  // (Doppler soleur/prd_terraform). NO SUBSTITUTE: the per-finding marker is private BY DESIGN (the repository is public, so
+  // the job log carries counts only) and lands only in the Logs warehouse, which has no unauthenticated read path. Genuine.
+  // #9871/#9860 (2026-10-09): +1 (52 -> 53) for `2026-10-09-fix-canary-sandbox-failure-self-diagnosis-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`scripts/betterstack-query.sh SOLEUR_CANARY_SANDBOX_DIAG`) reads
+  // BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler soleur/prd_terraform). NO SUBSTITUTE: the bundle is
+  // emitted only when a canary sandbox probe fails, and lands only in the Logs warehouse, which has no
+  // unauthenticated read path; the deploy-status hook carries the verdict but not the cause. Genuine.
+  // #9939 (2026-10-10): +1 (53 -> 54) for `2026-10-10-chore-inngest-luks-first-boot-envfile-ordering-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`scripts/betterstack-assert-absence.sh --host soleur-inngest-prd …`) reads
+  // BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler soleur/prd_terraform). NO SUBSTITUTE: the journal
+  // channel rows it asserts absent live only in the Logs warehouse, which has no unauthenticated read
+  // path — the host itself is no-SSH. Genuine.
+  // #9373 (2026-10-11): +1 (54 -> 55) for `2026-10-10-fix-zot-shipper-cap-exempt-patchblobupload-func-plan.md`
+  // (archived under plans/archive/ at ship). PLACEMENT: a correctly-indented child of its
+  // `discoverability_test:` sub-block, value on one line. TRUTH: the command
+  // (`scripts/betterstack-query.sh --grep SOLEUR_ZOT_DISK`) reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}
+  // (Doppler soleur/prd_terraform). NO SUBSTITUTE: the property is the post-replace registry host's own
+  // heartbeat rows (new boot_id, zot_restarts, log_shipper_post_fail), which land only in the Logs
+  // warehouse, which has no unauthenticated read path. Genuine.
+  // #9438 (2026-10-10): +1 (55 -> 56) for `2026-10-10-feat-git-data-host-recurring-liveness-signal-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`bun plugins/soleur/scripts/reconcile-live-heartbeats.ts`) reads the Better Stack uptime API with
+  // BETTERSTACK_API_TOKEN, to confirm the new `soleur-git-data-host-prd` monitor exists live. NO SUBSTITUTE: a live monitor's
+  // existence has no unauthenticated read path; the offline wiring is covered by heartbeat-reprovision-parity and
+  // terraform-target-parity. Genuine.
+  // #9776 (2026-10-11): +1 (56 -> 57) for `2026-10-10-feat-hosted-autonomous-ask-before-destroy-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the per-ask lines (`decision:"destroy-ask"`) are read by `scripts/betterstack-query.sh` through the soak probe, which
+  // needs BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler soleur/prd_terraform). NO SUBSTITUTE: the per-rule ask counts live
+  // only in the private Better Stack sink (the Sentry events are capped per context and carry no per-rule totals), so no
+  // unauthenticated read verifies the runtime stream; the static `git grep` in the same block proves only that the emitter exists. Genuine.
+  // #7258 Step A (2026-10-11): +1 (57 -> 58) for `2026-10-11-chore-zot-consumer-probe-covers-inngest-bootstrap-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`scripts/betterstack-query.sh --since 1h --grep SOLEUR_ZOT_PROBE_VERDICT`) reads
+  // BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler soleur/prd_terraform). NO SUBSTITUTE: the property is
+  // the per-repository marker rows web-1's probe emits (journald -> vector Source 4 -> the Logs warehouse),
+  // which have no unauthenticated read path; the host itself is no-SSH. Genuine.
+  // #9860 (2026-10-10): +1 (58 -> 59) for `2026-10-10-fix-canary-diag-kernel-denial-and-proc-mask-rows-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`scripts/betterstack-query.sh --grep SOLEUR_CANARY_SANDBOX_DIAG`) reads
+  // BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler soleur/prd_terraform) and expects a `section=kdeny` row.
+  // NO SUBSTITUTE: the bundle is emitted only when a canary sandbox probe fails, and lands only in the Logs
+  // warehouse, which has no unauthenticated read path. Genuine.
+  const BASELINE_DECLARED_PROBES = 59;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

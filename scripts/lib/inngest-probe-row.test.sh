@@ -143,9 +143,10 @@ declare -A ALLOW=(
 
 # Files that MUST be discovered (#8873 review: a `>= N` count floor let the discovery drop the
 # watchdog workflow — the consumer that caused the incident — and stay green).
+# (#8285 PR B: apply-web-platform-infra.yml left this list; its only probe-row reader was the retired
+# inngest_backstop_retire live-store gate, deleted with that job.)
 MUST_FIND=(
   ".github/workflows/scheduled-inngest-health.yml"
-  ".github/workflows/apply-web-platform-infra.yml"
   "scripts/cutover-inngest.sh"
   "tests/scripts/lib/inngest-host-dark-gate.sh"
   "scripts/followthroughs/inngest-host-not-serving-7674.sh"

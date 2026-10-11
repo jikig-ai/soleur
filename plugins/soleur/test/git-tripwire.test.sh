@@ -112,23 +112,23 @@ printf '\n=== K: the abort message names the FOUND variable and a remedy that cl
 # refuses nine variables, so an environment carrying GIT_TEMPLATE_DIR was told to unset three names
 # that would not clear it, re-ran, and aborted again with the same message.
 msg=$(cd "$REPO_ROOT" && GIT_TEMPLATE_DIR=/tmp/hostile-probe bun test "$PROBE" 2>&1)
-if printf '%s' "$msg" | grep -qF -- 'GIT_TEMPLATE_DIR=/tmp/hostile-probe'; then
+if printf '%s' "$msg" | grep -cF >/dev/null -- 'GIT_TEMPLATE_DIR=/tmp/hostile-probe'; then
   ok "abort message names the offending variable and its value"
 else
   bad "abort message does not name the offending variable"
 fi
-if printf '%s' "$msg" | grep -qE '^[[:space:]]*unset[[:space:]]+GIT_TEMPLATE_DIR[[:space:]]+&&'; then
+if printf '%s' "$msg" | grep -cE >/dev/null '^[[:space:]]*unset[[:space:]]+GIT_TEMPLATE_DIR[[:space:]]+&&'; then
   ok "remedy names the variable actually found (not a fixed spelling)"
 else
   bad "remedy does not name the found variable — an operator following it would loop"
-  printf '%s\n' "$msg" | grep -m1 'unset' | sed 's/^/        got: /'
+  grep -m1 'unset' <<<"$msg" | sed 's/^/        got: /'
 fi
 
 printf '\n=== K: the escape hatch works and ANNOUNCES itself ===\n'
 esc=$(cd "$REPO_ROOT" && env GIT_DIR=/tmp/hostile SOLEUR_GIT_TRIPWIRE_ALLOW=1 bun test "$PROBE" 2>&1)
 esc_rc=$?
 if (( esc_rc == 0 )); then ok "SOLEUR_GIT_TRIPWIRE_ALLOW=1 permits the run"; else bad "escape hatch did not permit the run (rc=$esc_rc)"; fi
-if printf '%s' "$esc" | grep -qF 'DISARMED by SOLEUR_GIT_TRIPWIRE_ALLOW=1'; then
+if printf '%s' "$esc" | grep -cF >/dev/null 'DISARMED by SOLEUR_GIT_TRIPWIRE_ALLOW=1'; then
   ok "the escape announces itself on stderr"
 else
   bad "the escape is SILENT — a switch that disarms a write-boundary guard with no trace"

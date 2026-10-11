@@ -56,7 +56,7 @@ b_fixture="$TMP/excluded.json"
 fake_key="sk-ant-""api03-""AAAABBBBCCCCDDDDEEEEFFFF"  # concatenated; no contiguous literal in source
 jq --arg k "$fake_key" '. + [{"type":"diagnostic","leaked_secret":$k}]' "$FIXTURE" > "$b_fixture"
 out_b="$($SCRIPT "$b_fixture")"
-echo "$out_b" | grep -q "sk-ant" && fail "(b) excluded-field key leaked into output" || pass "(b) excluded-field key absent from output"
+echo "$out_b" | grep -c >/dev/null "sk-ant" && fail "(b) excluded-field key leaked into output" || pass "(b) excluded-field key absent from output"
 
 # --- Case (c): a fake key injected INSIDE an allowlisted value (model) is scrubbed ---
 # The redaction boundary must fail-closed when a secret shape appears in ANY value,
@@ -66,7 +66,7 @@ jq --arg k "claude-3-$fake_key" '(.[] | select(.type=="assistant") | .message.mo
 set +e
 out_c="$($SCRIPT "$c_fixture")"; rc_c=$?
 set -e
-if echo "$out_c" | grep -q "sk-ant"; then
+if echo "$out_c" | grep -c >/dev/null "sk-ant"; then
   fail "(c) value-injection: secret-shaped substring reached output"
 else
   pass "(c) value-injection: no sk-ant substring in output (fail-closed)"

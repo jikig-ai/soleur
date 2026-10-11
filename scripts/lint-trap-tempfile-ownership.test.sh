@@ -217,7 +217,7 @@ add_commit() {
   cp "$FIX/$fx" "$REPO/$rel"
   g add -- "$rel"
   g commit -q -m "add $rel"
-  g diff --name-only main...HEAD | grep -qxF -- "$rel" || { echo "builder: $rel is NOT an added path" >&2; return 1; }
+  g diff --name-only main...HEAD | grep -cxF >/dev/null -- "$rel" || { echo "builder: $rel is NOT an added path" >&2; return 1; }
 }
 
 # lint_in_repo [args...] : rc and stderr of the lint run from inside the fixture repo.
@@ -322,7 +322,7 @@ for fx in d-bad-py-mkdtemp-no-cleanup.py.fixture d-bad-ts-mkdtemp-no-rm.ts.fixtu
   cmt="#"; [[ "$fx" == *.ts.fixture ]] && cmt="//"
   printf '\n%s touched by an unrelated edit\n' "$cmt" >> "$REPO/src/${fx%.fixture}"
   g commit -q -am "touch"
-  g diff --name-only main...HEAD | grep -qxF -- "src/${fx%.fixture}" || no "touch control: $fx is not in the diff"
+  g diff --name-only main...HEAD | grep -cxF >/dev/null -- "src/${fx%.fixture}" || no "touch control: $fx is not in the diff"
   lint_in_repo
   if [[ "$LRC" == "0" ]]; then
     ok "touched-not-added control: an unrelated edit to $fx does not make its old allocation an entrant"
