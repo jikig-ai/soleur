@@ -21,7 +21,7 @@ Plan: `knowledge-base/project/plans/2026-10-11-feat-test-all-local-weight-drift-
 ## Phase 2: Runner wiring
 
 - [x] 2.1 Source the lib opportunistically in `scripts/test-all.sh` beside the scratch-root include (~:496), `|| true` + `declare -F` guard
-- [x] 2.2 Add the `TEST_TIMING_LOG` default arm after `_durable_log_dir` (~:4275): `-z TEST_TIMING_LOG && -z CI && (TEST_GROUP==affected || _AFFECTED==1)` → `mkdir -p` + `[[ -w ]]` probe → `TEST_TIMING_LOG="$_durable_log_dir/suite-timings.tsv"`
+- [x] 2.2 Add the `TEST_TIMING_LOG` default arm after `_durable_log_dir` (~:4275): `-z TEST_TIMING_LOG && -z CI && enumerate/print decline && (TEST_GROUP==affected || (all && _AFFECTED==1))` → `mkdir -p` + `[[ -w && -O ]]` probe → in-shell (never export) `TEST_TIMING_LOG="$_durable_log_dir/suite-timings.tsv"` + truncate + armed `[note]`
 - [x] 2.3 Add the epilogue emit after the `=== N/N suites passed ===` marker (post-marker NOTE region): `-z CI && -n TEST_TIMING_LOG && -f file && declare -F weight_drift_report` → call `|| true` over `"$_scriptdir"/suite-durations*.tsv` (glob, not two literals; `$_scriptdir` via `dirname "${BASH_SOURCE[0]}"`)
 - [x] 2.4 Register `run_suite "scripts/test-all-weight-drift" bash scripts/test-all-weight-drift.test.sh` beside the fast-tier-budget registration (~:5184)
 
@@ -41,6 +41,6 @@ Plan: `knowledge-base/project/plans/2026-10-11-feat-test-all-local-weight-drift-
 - [ ] 5.1 `bash scripts/test-all-weight-drift.test.sh` green
 - [ ] 5.2 `bash scripts/test-all-fast-tier-budget.test.sh` green (allowlist still 2 members)
 - [ ] 5.3 `bash scripts/lint-orphan-test-suites.sh` census green
-- [ ] 5.4 Manifest-readers sweep (QG-5): `git grep -lE 'regenerate-shard-manifest|suite-shard-legs|suite-durations' -- plugins/soleur/test scripts tests` — run every hit's suite
+- [x] 5.4 Manifest-readers sweep (QG-5): `git grep -lE 'regenerate-shard-manifest|suite-shard-legs|suite-durations' -- plugins/soleur/test scripts tests` — run every hit's suite
 - [ ] 5.5 Local `bash scripts/test-all.sh --affected > /tmp/run.log 2>&1; rc=$?` (redirect+`$?`, never `| tail`) — emits WEIGHT_DRIFT lines or nothing when in tolerance; `=== N/N suites passed ===` remains the last `===`-shaped line; exit code unchanged
 - [ ] 5.6 Commit and push

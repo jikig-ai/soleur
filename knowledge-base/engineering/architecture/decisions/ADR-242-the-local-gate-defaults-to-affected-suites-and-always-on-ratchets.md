@@ -634,13 +634,18 @@ a gate. `scripts/test-all.sh` defaults `TEST_TIMING_LOG` to
 (`CI` unset, `TEST_TIMING_LOG` unset, `TEST_GROUP=affected` or
 `_AFFECTED==1` on the all-group default — the two selectors stay disjoint by
 design, and enumerate/print paths decline before paying a `mkdir`), guarded
-by a `mkdir -p` + `[[ -w ]]` probe so an unwritable target degrades to "no
-timing log" instead of a `>>`-under-`set -e` mid-run abort. The assignment is
-IN-SHELL, never `export`: every consumer (`run_suite`'s `>>`,
-`_emit_bytes_probe`, the epilogue emit) reads it in the runner's own process,
-and an exported var would leak this run's log path into every nested copy of
-the runner that runner-SUT suites spawn — phantom `committed=unmeasured`
-lines on exactly the runner-touching diffs this feature is for. The epilogue then calls
+by a `mkdir -p` + `[[ -w && -O ]]` probe — `-w` degrades an unwritable target
+to "no timing log" instead of a `>>`-under-`set -e` mid-run abort, and `-O`
+declines a co-tenant-owned pre-created leaf (the `basename-$$-EPOCHSECONDS`
+name is predictable), followed by `: >` truncation so a bash-3.2 PID-reused
+dir never serves stale rows, and an armed `[note]` naming the log path.
+The assignment is IN-SHELL, never `export`: every consumer (`run_suite`'s
+`>>`, `_emit_bytes_probe`, the epilogue emit) reads it in the runner's own
+process, and an exported var would leak this run's log path into every
+nested copy of the runner that runner-SUT suites spawn — phantom
+`committed=unmeasured` lines on exactly the runner-touching diffs this
+feature is for. (Corollary: every runner-SUT sandbox inherits the arm —
+sibling fixtures opt out with `TEST_TIMING_LOG=/dev/null`.) The epilogue then calls
 `weight_drift_report` (`scripts/lib/test-weight-drift.sh`, one `LC_ALL=C awk`
 pass, bash-3.2-safe, always returns 0) over `"$_scriptdir"/suite-durations*.tsv`
 — the glob, not two literals, so a future manifest joins the comparison

@@ -463,7 +463,7 @@ else
 fi
 
 # --- A3: clean run is byte-identical to main ------------------------------------------------
-run_arm clean none || true
+run_arm clean none /dev/null || true
 A3_OUT="$ARM_OUT"; A3_RC="$ARM_RC"
 if [[ "$A3_RC" == "0" ]]; then
   pass "a clean run still exits 0"
@@ -489,7 +489,7 @@ if git -C "$REPO_ROOT" show origin/main:scripts/test-all.sh > "$MAIN_TARGET" 2>/
   pass "origin/main:scripts/test-all.sh resolved for the byte-shape baseline"
   sb_main="$TMP/runner-clean-mainbaseline.sh"
   if TARGET="$MAIN_TARGET" build_sandbox "$sb_main" clean none >/dev/null; then
-    MAIN_OUT=$(cd "$REPO_ROOT" && TEST_GROUP=all timeout 120 bash "$sb_main" 2>&1) || true
+    MAIN_OUT=$(cd "$REPO_ROOT" && TEST_TIMING_LOG=/dev/null TEST_GROUP=all timeout 120 bash "$sb_main" 2>&1) || true
     tail_of() { sed -n '/^=== [0-9]*\/[0-9]* suites passed ===$/,$p' <<<"$1"; }
     main_tail=$(tail_of "$MAIN_OUT")
     new_tail=$(tail_of "$A3_OUT")

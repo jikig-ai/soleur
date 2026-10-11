@@ -213,7 +213,7 @@ run_arm() {
   # that file's contents to every elapsed reading, and a *_bump arm's first
   # fixture writes 120 into it. Per-arm path, so arms cannot share a bump.
   rc=0
-  ( cd "$REPO_ROOT" && env -u CI TC_RUNTIME_CEILING_S="$ceiling" TEST_GROUP=all \
+  ( cd "$REPO_ROOT" && env -u CI TC_RUNTIME_CEILING_S="$ceiling" TEST_TIMING_LOG=/dev/null TEST_GROUP=all \
       SOLEUR_TC_BUMP_FILE="$dir/bump.txt" \
       SOLEUR_ALLOW_FULL_GATE=1 SOLEUR_DISABLE_SESSION_STATE=1 \
       bash "$dir/scripts/test-all.sh" ) > "$log" 2>&1 || rc=$?

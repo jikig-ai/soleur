@@ -99,7 +99,7 @@ Three wired-together pieces, all inside `scripts/`:
    registration: when `TEST_TIMING_LOG` is unset AND `CI` is unset AND the run
    is affected-shaped (`TEST_GROUP == affected` OR `_AFFECTED == 1` — the two
    selectors are deliberately disjoint, `test-all.sh:420`), `mkdir -p` +
-   writability-probe `$_durable_log_dir`, then export
+   writability-probe `$_durable_log_dir`, then set in-shell (never export —
    `TEST_TIMING_LOG="$_durable_log_dir/suite-timings.tsv"`. The probe is
    load-bearing: `run_suite` appends with `>>` under `set -e`, so an
    unwritable target aborts the run mid-suite — the arm must degrade to
@@ -498,7 +498,7 @@ the slowest local runs this feature exists to warn about.
 
 | Risk | Likelihood | Mitigation |
 |---|---|---|
-| Default arm sets an unwritable `TEST_TIMING_LOG`; `run_suite`'s `>>` aborts the run under `set -e` | Medium | `mkdir -p` + writability probe (`[[ -w ]]`) before exporting; probe failure → variable stays unset; suite arm pins the read-only-dir case |
+| Default arm sets an unwritable `TEST_TIMING_LOG`; `run_suite`'s `>>` aborts the run under `set -e` | Medium | `mkdir -p` + `[[ -w && -O ]]` probe before assigning; probe failure → variable stays unset; suite arm pins the read-only-dir case. MID-RUN RESIDUAL (review): the probe validates at arm time only — a dir deleted/ENOSPC mid-run still aborts the run at the next `>>` (same class as the caller-set exposure; bounded by the 14-day reap window and per-run leaf, documented not retrofitted because `|| true` on appends would silently drop audit rows) |
 | Comparator error mid-epilogue corrupts the summary path | Low | Called `|| true` after the `=== N/N passed ===` marker, inside `declare -F` + `-f` guards; pure file reads, no writes |
 | Contended host floods the block with WEIGHT_DRIFT lines | Expected | Warn-only by design; the 2x AND >10s conjunction; issue's own data says direction holds under inflation |
 | Manifest regenerated dropping a label → stale `unmeasured` | Low | `unmeasured` is informational, exactly the visible-not-silent posture the issue asks for |
@@ -507,6 +507,9 @@ the slowest local runs this feature exists to warn about.
 | New always-on label without a weight row → `test-all-fast-tier-budget` RED | Certain if skipped | `--incremental --write` regen is a Phase-3 step, pinned by QG-2 |
 | Caller-set `TEST_TIMING_LOG` to an unwritable path aborts the run (`>>` under `set -e`) | Pre-existing — unchanged by this plan | The NEW default arm is the only exposure added; it is probe-guarded. Widening the probe to the caller-set case is out of scope — a caller who exports a bad path asked for it |
 | Timing log truncated mid-row (watchdog kill mid-write) | Low | `NF < 2` rows skipped in the comparator |
+| Warning fatigue: the issue-set 2x predicate sits at the bottom of the measured ~2-3x local-vs-CI divergence band | Expected | Warn-only advisory; `basis=floor` names weak anchors; operators read lines in context (Observability failure-mode 4 accepts this) |
+| The suite flags itself `basis=floor` on contended hosts until the first measured regen | Expected | Floor rows are honest placeholders; the line names its weak basis. CI measured weight expected ~3.5-6s (sibling-calibrated vs test-all-group-affected's 3200ms) — if >10s the fast-tier lint forces the ADR-262 demotion decision by design |
+| Permanent `committed=unmeasured` classes (bun/webplat/infra legs carry no row in either scripts manifest) | Certain | Visible-not-silent contract is deliberate; a `basis=unpriced-leg` annotation is the recorded follow-up if readers start ignoring the block |
 
 ## Research Insights
 
@@ -661,6 +664,14 @@ fire.
   doesn't filter field 3 floods the report with declines.
 - The `=== N/N suites passed ===` marker must remain the last `===`-shaped
   line; the emit site goes in the post-marker NOTE region, never before it.
+- The default arm survives the splice window in EVERY runner-SUT sandbox
+  copy (it sits above tc_acquire): sibling suites must scrub with
+  `TEST_TIMING_LOG=/dev/null` — the documented opt-out — or the arm creates
+  `suite-timings.tsv` inside their durable-dir assertions (this reddened
+  test-all-orphan-log-retention until scrubbed; review P1).
+- "Nested runners don't emit WEIGHT_DRIFT" holds by directory layout, not
+  contract: a fixture copying the full scripts/lib/ tree gains the emit
+  (and per-stub `committed=unmeasured` lines) — copy only named libs.
 - A diff touching `scripts/test-all.sh` self-selects the full battery
   (runner-changed): while this PR is open, local runs pay full cost — the
   plan's own development is a live exercise of the signal.

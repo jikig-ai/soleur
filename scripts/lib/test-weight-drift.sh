@@ -30,28 +30,31 @@
 WEIGHT_DRIFT_FLOOR_MS=10000
 
 weight_drift_report() {
-  local _wd_log="${1:-}"; shift || true
-  local -a _wd_manifests=()
-  local _m
-  for _m in "$@"; do
-    [[ -f "$_m" && -r "$_m" ]] && _wd_manifests+=("$_m")
+  local _wdrift_log="${1:-}"; shift || true
+  local -a _wdrift_manifests=()
+  local _wdrift_m
+  for _wdrift_m in "$@"; do
+    if [[ -f "$_wdrift_m" && -r "$_wdrift_m" ]]; then
+      _wdrift_manifests+=("$_wdrift_m")
+    fi
   done
-  if [[ ! -r "$_wd_log" ]]; then
-    printf 'weight_drift_report: timing log unreadable: %s\n' "${_wd_log:-<unset>}" >&2
+  if [[ ! -r "$_wdrift_log" ]]; then
+    printf 'weight_drift_report: timing log unreadable: %s\n' "${_wdrift_log:-<unset>}" >&2
     return 0
   fi
   # Manifests first so the label->ms/class maps are populated before log rows
   # are read; the timing log is identified by FILENAME, not position.
   LC_ALL=C awk -F'\t' \
-    -v wdr_log="$_wd_log" -v wdr_floor="$WEIGHT_DRIFT_FLOOR_MS" '
+    -v wdr_log="$_wdrift_log" -v wdr_floor="$WEIGHT_DRIFT_FLOOR_MS" '
     FILENAME != wdr_log {
       if ($1 ~ /^#/ || NF < 2) next
       if ($2 ~ /^[0-9]+$/) { w[$1] = $2; c[$1] = $3 }
       next
     }
     {
-      # Timing-log rows. NF<2 and comments are already excluded by the same
-      # guards above — this block only sees FILENAME == wdr_log.
+      # Timing-log rows (FILENAME == wdr_log only — the block above nexts out
+      # first). Defensive guards: the numeric-$2 check below already rejects
+      # comment/torn rows; keep the idiom parallel to the manifest arm.
       if ($1 ~ /^#/ || NF < 2) next
       # __run_boundary_*__ probe markers and torn rows with a non-numeric
       # elapsed field are not suite timings — not candidates, and not counted
@@ -77,13 +80,14 @@ weight_drift_report() {
     END {
       if (ran == 0 && cand > 0) {
         line = "WEIGHT_DRIFT_UNAVAILABLE rows=" cand " reason=elapsed-zero"
-        print line; print line > "/dev/stderr"
+        print line; print line > "/dev/stderr"; unavail = 1
       }
-      if (emitted > 0) {
+      if (emitted > 0 || unavail) {
         t = "WEIGHT_DRIFT_LOG " wdr_log
         print t; print t > "/dev/stderr"
       }
     }
-  ' "${_wd_manifests[@]+"${_wd_manifests[@]}"}" "$_wd_log" || true
+  # "${arr[@]+...}" — bash-3.2-safe empty-array expansion under set -u.
+  ' "${_wdrift_manifests[@]+"${_wdrift_manifests[@]}"}" "$_wdrift_log" || true
   return 0
 }

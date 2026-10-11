@@ -375,6 +375,16 @@ non-ok classes copy it under
 ${SOLEUR_SCRATCH_BASE:-/var/tmp}/soleur-test-all-logs/ and print
 log=<path> on the summary line — SOLEUR_TEST_ALL_LOG_DIR relocates it.
 
+Weight drift (#9814): local affected-shaped runs (TEST_TIMING_LOG unset, CI
+unset, TEST_GROUP=affected or the all-group default) default TEST_TIMING_LOG
+to <log-dir>/suite-timings.tsv and the epilogue compares each ran suite's
+local ms against committed scripts/suite-durations*.tsv weights — warn-only
+WEIGHT_DRIFT <label> committed=<ms|unmeasured> [basis=floor] local=<ms>
+lines when local > 2x committed AND > 10s, WEIGHT_DRIFT_UNAVAILABLE when a
+bash-3.2 host writes all-zero elapsed, WEIGHT_DRIFT_LOG <path> trailer.
+Caller-set TEST_TIMING_LOG wins; CI never defaults; enumerate/print paths
+decline. Lines emit to stdout AND stderr — dedupe when capturing merged.
+
 Enumerate modes die at a hard wall-clock deadline — SOLEUR_ENUM_DEADLINE_S
 seconds (default 900); a deleted-cwd walk exits 4, it never spins.
 USAGE
@@ -505,10 +515,10 @@ declare -F _soleur_scratch_cleanup >/dev/null 2>&1 || _soleur_scratch_cleanup() 
 # #9814: opportunistic weight-drift comparator — a missing lib degrades the
 # epilogue emit to "no WEIGHT_DRIFT block" (the declare -F gate there), never
 # blocks the gate.
-_WD_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/test-weight-drift.sh"
-if [[ -f "$_WD_LIB" ]]; then
+_WDRIFT_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/test-weight-drift.sh"
+if [[ -f "$_WDRIFT_LIB" ]]; then
   # shellcheck source=scripts/lib/test-weight-drift.sh
-  source "$_WD_LIB" || true
+  source "$_WDRIFT_LIB" || true
 fi
 # Provisional owner for the window below: the full EXIT trap (which composes this cleanup) is installed ~2900
 # lines down, and every early `exit` before it (flag modes, usage errors, a timeout kill) left a marker-only
@@ -903,7 +913,8 @@ fi
 # spanning both would report health from whichever is roomier, which is
 # indistinguishable from a healthy mount.
 #
-# Gated on TEST_TIMING_LOG, so a default local run pays nothing for it.
+# Gated on TEST_TIMING_LOG — caller-set was opt-in; #9814's default arm also
+# arms it on local affected-shaped runs, so the two df probes ride that arm.
 _emit_bytes_probe() {
   [[ -n "${TEST_TIMING_LOG:-}" ]] || return 0
   local tmpfs_bytes disk_bytes
@@ -4330,8 +4341,15 @@ if [[ -z "${TEST_TIMING_LOG:-}" ]] && [[ -z "${CI:-}" ]] \
   && (( _ENUMERATE == 0 && _PRINT_SELECTION == 0 )) \
   && { [[ "${TEST_GROUP:-}" == "affected" ]] \
        || { [[ "${TEST_GROUP:-all}" == "all" ]] && (( _AFFECTED == 1 )); }; }; then
-  if mkdir -p "$_durable_log_dir" 2>/dev/null && [[ -w "$_durable_log_dir" ]]; then
+  if mkdir -p "$_durable_log_dir" 2>/dev/null \
+    && [[ -w "$_durable_log_dir" && -O "$_durable_log_dir" ]]; then
+    # -O: the leaf name is predictable (basename-$$-EPOCHSECONDS); a co-tenant
+    # pre-creating it could plant a read-only or symlinked suite-timings.tsv —
+    # ownership required, not just writability. The truncate closes the
+    # bash-3.2 (no EPOCHSECONDS) PID-reuse stale-row read.
     TEST_TIMING_LOG="$_durable_log_dir/suite-timings.tsv"
+    : > "$TEST_TIMING_LOG"
+    printf '[note] weight-drift: timing log at %s\n' "$TEST_TIMING_LOG" >&2
   else
     printf '[note] weight-drift: timing log declined — %s not writable; WEIGHT_DRIFT lines will not emit\n' \
       "$_durable_log_dir" >&2
@@ -7042,10 +7060,14 @@ fi
 # future suite-durations-*.tsv joins the comparison instead of mis-reporting
 # unmeasured. `|| true` — the report can never set the exit code.
 if [[ -z "${CI:-}" && -n "${TEST_TIMING_LOG:-}" ]] \
-   && [[ -f "${TEST_TIMING_LOG}" ]] \
+   && [[ -r "${TEST_TIMING_LOG}" ]] \
    && declare -F weight_drift_report >/dev/null 2>&1; then
-  _wd_scriptdir="$(dirname "${BASH_SOURCE[0]}")"
-  weight_drift_report "${TEST_TIMING_LOG}" "$_wd_scriptdir"/suite-durations*.tsv || true
+  _wdrift_scriptdir="$(dirname "${BASH_SOURCE[0]}")"
+  weight_drift_report "${TEST_TIMING_LOG}" "$_wdrift_scriptdir"/suite-durations*.tsv || true
+elif [[ -z "${CI:-}" && -s "${TEST_TIMING_LOG:-/dev/null}" ]] \
+   && ! declare -F weight_drift_report >/dev/null 2>&1; then
+  printf '[note] weight-drift: comparator lib absent — timing rows at %s unreported\n' \
+    "${TEST_TIMING_LOG}" >&2
 fi
 # wd-epilogue-emit-end
 

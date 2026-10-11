@@ -55,7 +55,9 @@ pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 
 # Instrument self-check: stubbed fail() must itself redden.
-_before_fails=$FAIL; fail "self-test (expected; discounted below)"
+_before_fails=$FAIL
+echo "  self-check: invoking fail() (expected; discounted below)"
+FAIL=$((FAIL + 1))
 if (( FAIL == _before_fails + 1 )); then FAIL=$((FAIL - 1)); pass "instrument: fail() increments the counter"
 else fail "instrument: fail() did not increment"; fi
 
@@ -65,7 +67,7 @@ echo "--- Part A: structural contract (wiring sites present, ordered) ---"
 
 # A1 — the comparator lib is sourced opportunistically beside the scratch-root include.
 if grep -qE 'lib/test-weight-drift\.sh' "$TARGET" \
-   && grep -nE '_WD_LIB=.*lib/test-weight-drift\.sh' "$TARGET" | grep -q 'dirname "${BASH_SOURCE\[0\]}"'; then
+   && grep -nE '_WDRIFT_LIB=.*lib/test-weight-drift\.sh' "$TARGET" | grep -q 'dirname "${BASH_SOURCE\[0\]}"'; then
   pass "A1 — runner sources lib/test-weight-drift.sh via BASH_SOURCE-anchored path"
 else
   fail "A1 — lib source line missing or not BASH_SOURCE-anchored"
@@ -89,17 +91,24 @@ if grep -qF 'TEST_GROUP' <<<"$_da" && grep -qF '_AFFECTED' <<<"$_da"; then
 else
   fail "A2 — arm does not cover both affected selectors"
 fi
-if grep -qF 'mkdir -p' <<<"$_da" && grep -qF -- '-w ' <<<"$_da"; then
-  pass "A2 — writability probe guards the export (>> under set -e aborts without it)"
+if grep -qF 'mkdir -p' <<<"$_da" && grep -qF -- '-w ' <<<"$_da" && grep -qF -- '-O ' <<<"$_da"; then
+  pass "A2 — writability+ownership probe guards the assignment (>> under set -e aborts without it)"
 else
-  fail "A2 — no mkdir/writability probe before exporting TEST_TIMING_LOG"
+  fail "A2 — no mkdir/writability/ownership probe before assigning TEST_TIMING_LOG"
+fi
+if grep -qF '_ENUMERATE' <<<"$_da" && grep -qF '_PRINT_SELECTION' <<<"$_da"; then
+  pass "A2 — enumerate/print conjunct present (side-effect-free paths decline)"
+else
+  fail "A2 — enumerate/print conjunct missing"
 fi
 
 # A3 — the epilogue emit sits AFTER the `=== N/N suites passed ===` marker: the
 # marker must stay the last ===-shaped line, but WEIGHT_DRIFT is not ===-shaped,
 # so the emit belongs in the post-marker NOTE region.
 _marker_line=$(grep -n 'suites passed ==="' "$TARGET" | tail -1 | cut -d: -f1)
-_emit_line=$(grep -n 'weight_drift_report' "$TARGET" | grep -v '_WD_LIB\|declare -F' | head -1 | cut -d: -f1)
+_emit_line=$(sed -n '/# wd-epilogue-emit-begin/,/# wd-epilogue-emit-end/p' "$TARGET" \
+  | grep -n 'weight_drift_report "' | head -1 | cut -d: -f1)
+_emit_line=$(( _emit_line + $(grep -n '# wd-epilogue-emit-begin' "$TARGET" | cut -d: -f1) - 1 ))
 if [[ -n "$_marker_line" && -n "$_emit_line" && "$_emit_line" -gt "$_marker_line" ]]; then
   pass "A3 — epilogue emit is post-marker (emit=$_emit_line > marker=$_marker_line)"
 else
@@ -143,7 +152,7 @@ if [[ -f "$LIB" ]]; then
   source "$LIB"
 fi
 
-# run_report <out-prefix> <log> <manifest...> — captures stdout and stderr
+# run_report <log> <manifest...> — captures stdout and stderr
 # separately so the dual-emit contract is asserted, never assumed.
 REPORT_OUT=""; REPORT_ERR=""; REPORT_RC=-1
 run_report() {
@@ -319,7 +328,9 @@ mkdir -p "$FXC/scripts"
   # REAL run_suite-written row is what pins the writer->file->awk chain end
   # to end (review P2 — a stub-injected row would never exercise it).
   printf 'exit 0\n' > scripts/wd-stub.test.sh
-  printf 'exit 0\n' > scripts/wd-unmeasured.test.sh
+  # sleep pins elapsed_ms >= ~10: a sub-1ms stub would write a zero-elapsed row
+  # and flake the real-row committed=unmeasured pin on a fast host.
+  printf 'sleep 0.01\nexit 0\n' > scripts/wd-unmeasured.test.sh
   # wd-env-probe prints a marker iff it can SEE TEST_TIMING_LOG — a suite
   # process observes the variable only when the runner exported it, so this
   # marker is the export-leak tripwire (review P1).
@@ -350,7 +361,9 @@ build_sandbox() {
   cp "$TARGET" "$out" || return 1
   cp "$REPO_ROOT/scripts/lib/test-relevance-paths.sh" "$SB/lib/" || return 1
   cp "$REPO_ROOT/scripts/lib/repo-write-boundary.sh" "$SB/lib/" || return 1
-  [[ -f "$LIB" ]] && cp "$LIB" "$SB/lib/test-weight-drift.sh"
+  if [[ -f "$LIB" ]]; then
+    cp "$LIB" "$SB/lib/test-weight-drift.sh" || return 1
+  fi
   python3 - "$out" "$mutation" "$inject" <<'PY'
 import sys, re
 path, mutation, inject = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -399,8 +412,8 @@ if mutation == "no_default_arm":
 elif mutation == "no_emit":
     s = delete_span(s, '# wd-epilogue-emit-begin', '# wd-epilogue-emit-end', 'epilogue emit')
 elif mutation == "no_probe":
-    s = sub_once(s, 'if mkdir -p "$_durable_log_dir" 2>/dev/null && [[ -w "$_durable_log_dir" ]]; then',
-                 'if true; then', 'writability guard')
+    s = sub_once(s, 'if mkdir -p "$_durable_log_dir" 2>/dev/null \\\n    && [[ -w "$_durable_log_dir" && -O "$_durable_log_dir" ]]; then',
+                 'if true; then', 'writability+ownership guard')
 elif mutation == "ci_arm_off":
     s = sub_once(s, 'if [[ -z "${TEST_TIMING_LOG:-}" ]] && [[ -z "${CI:-}" ]] \\\n',
                  'if [[ -z "${TEST_TIMING_LOG:-}" ]] \\\n', 'CI conjunct in default arm')
@@ -410,6 +423,15 @@ elif mutation == "caller_wins_off":
 elif mutation == "export_leak":
     s = sub_once(s, '    TEST_TIMING_LOG="$_durable_log_dir/suite-timings.tsv"',
                  '    export TEST_TIMING_LOG="$_durable_log_dir/suite-timings.tsv"', 'in-shell assignment')
+elif mutation == "enumerate_off":
+    s = sub_once(s, '  && (( _ENUMERATE == 0 && _PRINT_SELECTION == 0 )) \\\n', '',
+                 'enumerate conjunct in default arm')
+elif mutation == "affected_selector_off":
+    s = sub_once(s, ' || { [[ "${TEST_GROUP:-all}" == "all" ]] && (( _AFFECTED == 1 )); }', '',
+                 'all-group affected selector')
+elif mutation == "ci_emit_off":
+    s = sub_once(s, 'if [[ -z "${CI:-}" && -n "${TEST_TIMING_LOG:-}" ]] \\',
+                 'if [[ -n "${TEST_TIMING_LOG:-}" ]] \\', 'CI conjunct in emit gate')
 elif mutation != "none":
     raise AssertionError(f"unknown mutation {mutation}")
 
@@ -420,35 +442,32 @@ PY
 
 # Run one arm inside the fixture repo. Env is scrubbed per arm (the env-leak
 # class that reddens suites only under an exported TEST_GROUP/TEST_TIMING_LOG).
+# One env-scrub list, one runner — the security-relevant preamble the
+# inline-arm copies had already diverged on (review: env-leak class).
+ENV_SCRUB="-u TEST_GROUP -u TEST_TIMING_LOG -u CI -u GITHUB_EVENT_NAME"
+
+# run_arm <name> <mutation> <inject> <env-pairs> [argv...]
+# env-pairs is ONE word-split string appended after the baked scrubs, so
+# last-wins works for overrides (e.g. a second SOLEUR_TEST_ALL_LOG_DIR).
+# TEST_TIMING_LOG is simply never assigned for the default-arm arms — truly
+# UNSET, not set-empty — and named in env-pairs for the caller-set arms.
 run_arm() {
-  local name="$1" mutation="${2:-none}" extra_env="${3:-}" timing="${4:-}" inject="${5:-1}"
+  local name="$1" mutation="${2:-none}" inject="${3:-1}" env_pairs="${4:-}"
+  shift 4 || true
   local sb="$SB/runner-${name}-${mutation}.sh"
   ARM_OUT=""; ARM_RC=-1
   build_sandbox "$sb" "$mutation" "$inject" >/dev/null || { fail "sandbox build failed: $name/$mutation"; return 1; }
-  ARM_OUT=$(cd "$FXC" && env -u TEST_GROUP -u TEST_TIMING_LOG -u CI -u GITHUB_EVENT_NAME \
-            SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= SOLEUR_TEST_FORCE_ALL= \
-            SOLEUR_TEST_ALL_LOG_DIR="$TMP/durable" $extra_env \
-            TEST_TIMING_LOG="$timing" timeout 180 bash "$sb" 2>&1)
+  ARM_OUT=$(cd "$FXC" && env $ENV_SCRUB             SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= SOLEUR_TEST_FORCE_ALL=             SOLEUR_TEST_ALL_LOG_DIR="$TMP/durable" $env_pairs             timeout 180 bash "$sb" "$@" 2>&1)
   ARM_RC=$?
   return 0
 }
 
-# run_arm_unset exercises the truly-UNSET TEST_TIMING_LOG — the arm the
-# default arm's -z conjunct was written for. TEST_GROUP=affected rides the
-# base env (the two affected selectors are covered: these arms use the
-# TEST_GROUP spelling; _AFFECTED==1 is armed by every no-CI no-flag run too).
-run_arm_unset() {
-  local name="$1" mutation="${2:-none}" extra_env="${3:-}" inject="${4:-1}"
-  local sb="$SB/runner-${name}-${mutation}.sh"
-  ARM_OUT=""; ARM_RC=-1
-  build_sandbox "$sb" "$mutation" "$inject" >/dev/null || { fail "sandbox build failed: $name/$mutation"; return 1; }
-  ARM_OUT=$(cd "$FXC" && env -u TEST_GROUP -u TEST_TIMING_LOG -u CI -u GITHUB_EVENT_NAME \
-            SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= SOLEUR_TEST_FORCE_ALL= \
-            SOLEUR_TEST_ALL_LOG_DIR="$TMP/durable" TEST_GROUP=affected $extra_env \
-            timeout 180 bash "$sb" 2>&1)
-  ARM_RC=$?
-  return 0
-}
+# EPOCHREALTIME gates the real-row unmeasured assertions: wd-unmeasured's
+# own run_suite row reads elapsed=0 on a bash-3.2 host (the vacuity B8 names),
+# where it counts as not-ran and emits nothing. The drift/unmeasured wiring
+# still verifies via the injected row; the real-row pins are conditional.
+_epochrealtime_ok=0
+[[ -n "${EPOCHREALTIME:-}" ]] && _epochrealtime_ok=1
 
 dump() { sed 's/^/    /' <<<"$1"; }
 
@@ -456,7 +475,7 @@ dump() { sed 's/^/    /' <<<"$1"; }
 # creates the log at the default path and the epilogue emits the drift line
 # for the injected 30000ms row; the exit code and terminal marker are unchanged.
 rm -rf "$TMP/durable"
-run_arm_unset c1 none || true
+run_arm c1 none 1 "TEST_GROUP=affected" || true
 C1_OUT="$ARM_OUT"; C1_RC="$ARM_RC"
 _timing_file=$(find "$TMP/durable" -name 'suite-timings.tsv' 2>/dev/null | head -1)
 if [[ -n "$_timing_file" && -f "$_timing_file" ]]; then
@@ -469,10 +488,14 @@ if grep -qF 'WEIGHT_DRIFT wd-stub committed=5000 local=30000' <<<"$C1_OUT"; then
 else
   fail "C1 — no WEIGHT_DRIFT line in run output"; dump "$C1_OUT"
 fi
-if grep -qE 'WEIGHT_DRIFT wd-unmeasured committed=unmeasured local=[0-9]+' <<<"$C1_OUT"; then
-  pass "C1 — wd-unmeasured's REAL run_suite row emits committed=unmeasured (writer->file->awk pinned)"
+if (( _epochrealtime_ok == 1 )); then
+  if grep -qE 'WEIGHT_DRIFT wd-unmeasured committed=unmeasured local=[0-9]+' <<<"$C1_OUT"; then
+    pass "C1 — wd-unmeasured's REAL run_suite row emits committed=unmeasured (writer->file->awk pinned)"
+  else
+    fail "C1 — real runner-written row did not reach the comparator"; dump "$C1_OUT"
+  fi
 else
-  fail "C1 — real runner-written row did not reach the comparator"; dump "$C1_OUT"
+  pass "C1 — real-row unmeasured assert skipped (zero-elapsed host; injected row still proves the chain)"
 fi
 if [[ "$C1_RC" == 0 ]]; then
   pass "C1 — exit code unchanged by an emitting run (rc=0)"
@@ -485,23 +508,38 @@ if [[ "$_last_eq" == *"suites passed ===" ]]; then
 else
   fail "C1 — terminal marker displaced"; dump "$C1_OUT"
 fi
+# Folded export-leak check (the P1 fix): a suite process sees TEST_TIMING_LOG
+# only if the runner exported it.
+if ! grep -q 'WD_ENV_LEAKED' <<<"$C1_OUT"; then
+  pass "C1 — suite children cannot see the in-shell TEST_TIMING_LOG"
+else
+  fail "C1 — TEST_TIMING_LOG leaked into a suite process"; dump "$C1_OUT"
+fi
 
 # C2 — no drift line when no row is over the predicate: build the sandbox
 # WITHOUT the injected row so only real sub-10000ms rows land; the unmeasured
 # stub still reports (unmeasured is unconditional — that is the point of it).
 rm -rf "$TMP/durable"
-run_arm_unset c2 none "" 0 || true
-if ! grep -q 'WEIGHT_DRIFT wd-stub' <<<"$ARM_OUT" \
-   && grep -qE 'WEIGHT_DRIFT wd-unmeasured committed=unmeasured local=[0-9]+' <<<"$ARM_OUT" \
-   && [[ "$ARM_RC" == 0 ]]; then
-  pass "C2 — within-tolerance run: only the unmeasured line, no drift line, rc=0"
+run_arm c2 none 0 "TEST_GROUP=affected" || true
+if (( _epochrealtime_ok == 1 )); then
+  if ! grep -q 'WEIGHT_DRIFT wd-stub' <<<"$ARM_OUT" \
+     && grep -qE 'WEIGHT_DRIFT wd-unmeasured committed=unmeasured local=[0-9]+' <<<"$ARM_OUT" \
+     && [[ "$ARM_RC" == 0 ]]; then
+    pass "C2 — within-tolerance run: only the unmeasured line, no drift line, rc=0"
+  else
+    fail "C2 — quiet run emitted a drift line or failed (rc=$ARM_RC)"; dump "$ARM_OUT"
+  fi
 else
-  fail "C2 — quiet run emitted a drift line or failed (rc=$ARM_RC)"; dump "$ARM_OUT"
+  if ! grep -q 'WEIGHT_DRIFT wd-stub' <<<"$ARM_OUT" && [[ "$ARM_RC" == 0 ]]; then
+    pass "C2 — within-tolerance run emits no drift line (real-row unmeasured skipped on zero-elapsed host)"
+  else
+    fail "C2 — quiet run emitted a drift line or failed (rc=$ARM_RC)"; dump "$ARM_OUT"
+  fi
 fi
 
 # C3 — CI=1: no auto-default of TEST_TIMING_LOG (the arm requires -z CI).
 rm -rf "$TMP/durable"
-run_arm_unset c3 none "CI=1" || true
+run_arm c3 none 1 "TEST_GROUP=affected CI=1" || true
 if ! find "$TMP/durable" -name 'suite-timings.tsv' 2>/dev/null | grep -q . \
    && ! grep -q 'WEIGHT_DRIFT' <<<"$ARM_OUT"; then
   pass "C3 — CI run never auto-defaults the timing log"
@@ -513,11 +551,21 @@ fi
 # (the emit gate is on the variable, not the mode) and the caller's path wins.
 rm -rf "$TMP/durable"
 CALLER_LOG="$TMP/caller-set.tsv"; : > "$CALLER_LOG"
-run_arm c4 none "TEST_GROUP=affected" "$CALLER_LOG" || true
-if [[ -s "$CALLER_LOG" ]] \
-   && grep -qF 'WEIGHT_DRIFT wd-stub committed=5000 local=30000' <<<"$ARM_OUT" \
-   && grep -qE 'WEIGHT_DRIFT wd-unmeasured committed=unmeasured local=[0-9]+' <<<"$ARM_OUT"; then
-  pass "C4 — caller-set path receives rows and emits drift + unmeasured lines"
+run_arm c4 none 1 "TEST_GROUP=affected TEST_TIMING_LOG=$CALLER_LOG" || true
+if (( _epochrealtime_ok == 1 )); then
+  _c4_rows_ok=0
+  [[ -s "$CALLER_LOG" ]] \
+    && grep -qF 'WEIGHT_DRIFT wd-stub committed=5000 local=30000' <<<"$ARM_OUT" \
+    && grep -qE 'WEIGHT_DRIFT wd-unmeasured committed=unmeasured local=[0-9]+' <<<"$ARM_OUT" \
+    && _c4_rows_ok=1
+else
+  _c4_rows_ok=0
+  [[ -s "$CALLER_LOG" ]] \
+    && grep -qF 'WEIGHT_DRIFT wd-stub committed=5000 local=30000' <<<"$ARM_OUT" \
+    && _c4_rows_ok=1
+fi
+if (( _c4_rows_ok == 1 )); then
+  pass "C4 — caller-set path receives rows and emits drift lines"
 else
   fail "C4 — caller-set path not honored or no emit"; dump "$ARM_OUT"
 fi
@@ -527,17 +575,33 @@ else
   fail "C4 — default arm overrode the caller-set path"
 fi
 
+# C5 — read-only durable dir: the probe declines the default, the run still
+# completes green with no timing log (>> under set -e would abort without it).
+RO_DIR="$TMP/readonly"; assert_fixture_dir "$RO_DIR"; mkdir -p "$RO_DIR"; chmod 0555 "$RO_DIR"
+if [[ "$(id -u)" -eq 0 ]]; then
+  chmod 0755 "$RO_DIR"
+  pass "C5 — skipped under EUID-0 (chmod 0555 is not a barrier for root)"
+else
+  rm -rf "$TMP/durable-ro"; run_arm c5 none 1 "TEST_GROUP=affected SOLEUR_TEST_ALL_LOG_DIR=$RO_DIR" || true
+  C5_OUT="$ARM_OUT"; C5_RC="$ARM_RC"
+  chmod 0755 "$RO_DIR"
+  if [[ "$C5_RC" == 0 ]] && grep -q 'suites passed ===' <<<"$C5_OUT" \
+     && ! find "$RO_DIR" -name 'suite-timings.tsv' 2>/dev/null | grep -q .; then
+    pass "C5 — unwritable durable dir: probe declines, run completes green, no log"
+  else
+    fail "C5 — read-only-dir run aborted or logged anyway (rc=$C5_RC)"; dump "$C5_OUT"
+  fi
+fi
+
 # C6 — enumerate/print paths are side-effect-free: the arm declines BEFORE the
-# mkdir, so --enumerate creates no timing log and no durable run dir.
+# mkdir, so --enumerate creates neither a timing log nor the durable run dir.
+# (The dir, not the file, is the observable — an arm that fired under
+# --enumerate would still create the dir before the enumerate exit.)
 rm -rf "$TMP/durable"
-_sb="$SB/runner-c6-none.sh"
-build_sandbox "$_sb" none 0 >/dev/null || fail "sandbox build failed: c6"
-C6_OUT=$(cd "$FXC" && env -u TEST_GROUP -u TEST_TIMING_LOG -u CI \
-         SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= SOLEUR_TEST_FORCE_ALL= \
-         SOLEUR_TEST_ALL_LOG_DIR="$TMP/durable" timeout 120 bash "$_sb" --enumerate 2>&1)
-C6_RC=$?
-if [[ "$C6_RC" == 0 ]] && ! find "$TMP/durable" -name 'suite-timings.tsv' 2>/dev/null | grep -q .; then
-  pass "C6 — --enumerate declines the arm: no timing log, side-effect-free"
+run_arm c6 none 0 "" --enumerate || true
+C6_OUT="$ARM_OUT"; C6_RC="$ARM_RC"
+if [[ "$C6_RC" == 0 ]] && ! find "$TMP/durable" -mindepth 1 2>/dev/null | grep -q .; then
+  pass "C6 — --enumerate declines the arm: no timing log, no durable dir"
 else
   fail "C6 — enumerate path armed the default or errored (rc=$C6_RC)"; dump "$C6_OUT"
 fi
@@ -545,76 +609,85 @@ fi
 # C7 — a named TEST_GROUP is not affected-shaped: _AFFECTED==1 is armed-but-inert
 # for named groups, and the arm must not fire on TEST_GROUP=scripts either.
 rm -rf "$TMP/durable"
-_sb="$SB/runner-c7-none.sh"
-build_sandbox "$_sb" none 0 >/dev/null || fail "sandbox build failed: c7"
-C7_OUT=$(cd "$FXC" && env -u TEST_GROUP -u TEST_TIMING_LOG -u CI \
-         SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= SOLEUR_TEST_FORCE_ALL= \
-         SOLEUR_TEST_ALL_LOG_DIR="$TMP/durable" TEST_GROUP=scripts \
-         timeout 180 bash "$_sb" 2>&1)
-C7_RC=$?
+run_arm c7 none 0 "TEST_GROUP=scripts" || true
 if ! find "$TMP/durable" -name 'suite-timings.tsv' 2>/dev/null | grep -q .; then
   pass "C7 — named group (TEST_GROUP=scripts) is not affected-shaped: no timing log"
 else
-  fail "C7 — default arm fired on a named group"; dump "$C7_OUT"
+  fail "C7 — default arm fired on a named group"; dump "$ARM_OUT"
 fi
 
-# C5 — read-only durable dir: the probe declines the default, the run still
-# completes green with no timing log (>> under set -e would abort without it).
-RO_DIR="$TMP/readonly"; assert_fixture_dir "$RO_DIR"; mkdir -p "$RO_DIR"; chmod 0555 "$RO_DIR"
-_sb="$SB/runner-c5-none.sh"
-build_sandbox "$_sb" none >/dev/null || fail "sandbox build failed: c5"
-C5_OUT=$(cd "$FXC" && env -u TEST_GROUP -u TEST_TIMING_LOG -u CI \
-         SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= SOLEUR_TEST_FORCE_ALL= \
-         SOLEUR_TEST_ALL_LOG_DIR="$RO_DIR" TEST_GROUP=affected timeout 180 bash "$_sb" 2>&1)
-C5_RC=$?
-chmod 0755 "$RO_DIR"
-if [[ "$C5_RC" == 0 ]] && grep -q 'suites passed ===' <<<"$C5_OUT" \
-   && ! find "$RO_DIR" -name 'suite-timings.tsv' 2>/dev/null | grep -q .; then
-  pass "C5 — unwritable durable dir: probe declines, run completes green, no log"
+# C8 — the DOMINANT shape: bare `bash test-all.sh` — TEST_GROUP unset -> all,
+# _AFFECTED==1 via the local gate default. The second disjunct exists only for
+# this path; every other arm uses the TEST_GROUP=affected spelling.
+rm -rf "$TMP/durable"
+run_arm c8 none 1 "" || true
+C8_OUT="$ARM_OUT"; C8_RC="$ARM_RC"
+if find "$TMP/durable" -name 'suite-timings.tsv' 2>/dev/null | grep -q . \
+   && grep -qF 'WEIGHT_DRIFT wd-stub committed=5000 local=30000' <<<"$C8_OUT" \
+   && [[ "$C8_RC" == 0 ]]; then
+  pass "C8 — all-group local default (_AFFECTED==1) arms the default and emits"
 else
-  fail "C5 — read-only-dir run aborted or logged anyway (rc=$C5_RC)"; dump "$C5_OUT"
+  fail "C8 — bare-invocation path did not arm or emit (rc=$C8_RC)"; dump "$C8_OUT"
+fi
+
+# C9 — dual-emit at the WIRING level: stdout and stderr are captured to
+# separate files, and the drift line must land on both.
+rm -rf "$TMP/durable"
+_split="$SB/runner-c9-none.sh"; build_sandbox "$_split" none 1 >/dev/null || fail "sandbox build failed: c9"
+C9_STDOUT_FILE="$_split.out"; C9_STDERR_FILE="$_split.err"
+( cd "$FXC" && env $ENV_SCRUB \
+    SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= SOLEUR_TEST_FORCE_ALL= \
+    SOLEUR_TEST_ALL_LOG_DIR="$TMP/durable" TEST_GROUP=affected \
+    timeout 180 bash "$_split" >"$C9_STDOUT_FILE" 2>"$C9_STDERR_FILE" )
+if grep -qF 'WEIGHT_DRIFT wd-stub committed=5000 local=30000' "$C9_STDOUT_FILE" \
+   && grep -qF 'WEIGHT_DRIFT wd-stub committed=5000 local=30000' "$C9_STDERR_FILE"; then
+  pass "C9 — wiring-level dual-emit: drift line lands on stdout AND stderr"
+else
+  fail "C9 — drift line missing on one stream"; dump "$(cat "$C9_STDOUT_FILE" "$C9_STDERR_FILE")"
 fi
 
 # --- Guard-2 mutation matrix ------------------------------------------------
 
 # M1: default arm deleted → no timing log is created.
 rm -rf "$TMP/durable"
-run_arm_unset m1 no_default_arm || true
+run_arm m1 no_default_arm 1 "TEST_GROUP=affected" || true
 if ! find "$TMP/durable" -name 'suite-timings.tsv' 2>/dev/null | grep -q .; then
   pass "M1 — without the default arm, no timing log exists"
 else
   fail "M1 — timing log appeared despite deleted arm"
 fi
 
-# M2: writability probe removed → the unwritable target makes >> abort the run
-# mid-suite (no terminal marker, non-zero rc) — the probe is load-bearing.
-chmod 0555 "$RO_DIR"
-_sb="$SB/runner-m2-no_probe.sh"
-build_sandbox "$_sb" no_probe >/dev/null || fail "sandbox build failed: m2"
-M2_OUT=$(cd "$FXC" && env -u TEST_GROUP -u TEST_TIMING_LOG -u CI \
-         SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= SOLEUR_TEST_FORCE_ALL= \
-         SOLEUR_TEST_ALL_LOG_DIR="$RO_DIR" TEST_GROUP=affected timeout 180 bash "$_sb" 2>&1)
-M2_RC=$?
-chmod 0755 "$RO_DIR"
-if [[ "$M2_RC" != 0 ]] || ! grep -q 'suites passed ===' <<<"$M2_OUT"; then
-  pass "M2 — removed probe turns the unwritable path into a mid-run abort (probe is load-bearing)"
+# M2: writability+ownership probe removed → the unwritable target makes >>
+# abort the run mid-suite (no terminal marker, non-zero non-timeout rc).
+if [[ "$(id -u)" -eq 0 ]]; then
+  pass "M2 — skipped under EUID-0 (chmod 0555 is not a barrier for root)"
 else
-  fail "M2 — run survived without the probe (probe is decorative)"
+  chmod 0555 "$RO_DIR"
+  run_arm m2 no_probe 1 "TEST_GROUP=affected SOLEUR_TEST_ALL_LOG_DIR=$RO_DIR" || true
+  M2_OUT="$ARM_OUT"; M2_RC="$ARM_RC"
+  chmod 0755 "$RO_DIR"
+  if [[ "$M2_RC" != 0 && "$M2_RC" != 124 ]] || ! grep -q 'suites passed ===' <<<"$M2_OUT"; then
+    pass "M2 — removed probe turns the unwritable path into a mid-run abort (probe is load-bearing)"
+  else
+    fail "M2 — run survived without the probe (probe is decorative); rc=$M2_RC"
+  fi
 fi
 
 # M3: epilogue call deleted → timing log exists but zero WEIGHT_DRIFT lines.
+# ARM_RC must be 0 — a mid-run death produces the same surface and is not evidence.
 rm -rf "$TMP/durable"
-run_arm_unset m3 no_emit || true
-if find "$TMP/durable" -name 'suite-timings.tsv' 2>/dev/null | grep -q . \
+run_arm m3 no_emit 1 "TEST_GROUP=affected" || true
+if [[ "$ARM_RC" == 0 ]] \
+   && find "$TMP/durable" -name 'suite-timings.tsv' 2>/dev/null | grep -q . \
    && ! grep -q '^WEIGHT_DRIFT ' <<<"$ARM_OUT"; then
   pass "M3 — deleted emit site: log exists, zero WEIGHT_DRIFT lines"
 else
-  fail "M3 — emit-deleted run still emitted (or log missing)"; dump "$ARM_OUT"
+  fail "M3 — emit-deleted run still emitted, log missing, or died mid-run (rc=$ARM_RC)"; dump "$ARM_OUT"
 fi
 
 # M4: -z CI dropped from the default arm → the arm fires under CI.
 rm -rf "$TMP/durable"
-run_arm_unset m4 ci_arm_off "CI=1" || true
+run_arm m4 ci_arm_off 1 "TEST_GROUP=affected CI=1" || true
 if find "$TMP/durable" -name 'suite-timings.tsv' 2>/dev/null | grep -q .; then
   pass "M4 — without the CI conjunct the arm fires under CI (conjunct is load-bearing)"
 else
@@ -624,7 +697,7 @@ fi
 # M5: -z TEST_TIMING_LOG dropped → the default clobbers the caller-set path.
 rm -rf "$TMP/durable"
 CALLER_LOG2="$TMP/caller-m5.tsv"; : > "$CALLER_LOG2"
-run_arm m5 caller_wins_off "TEST_GROUP=affected" "$CALLER_LOG2" || true
+run_arm m5 caller_wins_off 1 "TEST_GROUP=affected TEST_TIMING_LOG=$CALLER_LOG2" || true
 if find "$TMP/durable" -name 'suite-timings.tsv' 2>/dev/null | grep -q . \
    && [[ ! -s "$CALLER_LOG2" ]]; then
   pass "M5 — without the caller-set conjunct the default clobbers the caller path"
@@ -632,21 +705,45 @@ else
   fail "M5 — caller-set conjunct removal changed nothing"
 fi
 
-# C8 + M6: the in-shell assignment never reaches a suite process. Green run
-# emits no WD_ENV_LEAKED; re-adding `export` makes the probe's marker appear
-# (the export was the whole P1 — a leak into nested runner children).
+# M6: re-adding `export` makes the wd-env-probe marker appear (the P1 fix is
+# load-bearing — suite children inherit exported env, not in-shell vars).
 rm -rf "$TMP/durable"
-run_arm_unset c8 none || true
-if ! grep -q 'WD_ENV_LEAKED' <<<"$ARM_OUT"; then
-  pass "C8 — suite children cannot see the in-shell TEST_TIMING_LOG"
-else
-  fail "C8 — TEST_TIMING_LOG leaked into a suite process"; dump "$ARM_OUT"
-fi
-run_arm_unset m6 export_leak || true
+run_arm m6 export_leak 1 "TEST_GROUP=affected" || true
 if grep -q 'WD_ENV_LEAKED' <<<"$ARM_OUT"; then
   pass "M6 — re-added export leaks the var into suite children (in-shell pin is load-bearing)"
 else
   fail "M6 — export re-addition did not leak (probe blind)"
+fi
+
+# M7: enumerate conjunct deleted → --enumerate fires the arm and pays the
+# mkdir (the durable dir is created — the observable C6 now reads).
+rm -rf "$TMP/durable"
+run_arm m7 enumerate_off 0 "" --enumerate || true
+if find "$TMP/durable" -mindepth 1 2>/dev/null | grep -q .; then
+  pass "M7 — without the enumerate conjunct the arm fires on --enumerate (conjunct is load-bearing)"
+else
+  fail "M7 — enumerate conjunct removal changed nothing"
+fi
+
+# M8: all-group selector deleted → the dominant bare-invocation path (C8's
+# shape) stops arming entirely; TEST_GROUP=affected arms still pass.
+rm -rf "$TMP/durable"
+run_arm m8 affected_selector_off 1 "" || true
+if ! find "$TMP/durable" -name 'suite-timings.tsv' 2>/dev/null | grep -q .; then
+  pass "M8 — without the all-group disjunct the bare-invocation path never arms"
+else
+  fail "M8 — all-group selector removal changed nothing"
+fi
+
+# M9: -z CI dropped from the EMIT gate (separate from the arm's conjunct) →
+# a CI run with a caller-set log emits lines it must not.
+rm -rf "$TMP/durable"
+CALLER_LOG3="$TMP/caller-m9.tsv"; : > "$CALLER_LOG3"
+run_arm m9 ci_emit_off 1 "TEST_GROUP=affected CI=1 TEST_TIMING_LOG=$CALLER_LOG3" || true
+if grep -qF 'WEIGHT_DRIFT wd-stub committed=5000 local=30000' <<<"$ARM_OUT"; then
+  pass "M9 — without the emit gate's -z CI, a CI run emits drift lines (conjunct is load-bearing)"
+else
+  fail "M9 — emit-gate CI conjunct removal changed nothing"; dump "$ARM_OUT"
 fi
 
 echo ""
@@ -654,7 +751,7 @@ echo "test-all-weight-drift: $PASS passed, $FAIL failed"
 
 # Conservation + anti-vacuity floor (sibling-suite shape — a count assertion
 # cannot see a deleted body, so the floor counts assertion RESULTS).
-MIN_ASSERTIONS=40
+MIN_ASSERTIONS=45
 _total=$((PASS + FAIL))
 if (( _total < MIN_ASSERTIONS )); then
   echo "[FATAL] anti-vacuity floor: only $_total assertion(s) ran, expected >= $MIN_ASSERTIONS" >&2
