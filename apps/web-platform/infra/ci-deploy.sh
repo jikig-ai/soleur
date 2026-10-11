@@ -1407,7 +1407,8 @@ _docker_login_capture() {
 #        defensive tripwire there — a 403 must never be silently read as an authn failure.
 #     2. A BROKEN zot accessControl is NOT observable here at all: login SUCCEEDS, ZOT_ACTIVE=1,
 #        and the failure surfaces later at pull time. The login probe is the wrong layer for it;
-#        `zot-entry-gate.sh` is where zot's real 403 lives.
+#        `web-zot-consumer-probe.sh` is where it surfaces: its `tags/list` read with the pull
+#        credential gets zot's real 403 and emits `SUPPRESS ping`.
 # ghcr.io: UNMEASURED. Do NOT inherit zot's finding — GHCR can and does answer 403 (SAML/SSO
 #   enforcement, org package policy, IP allow-lists), so for GHCR `authz_denied` is a LIVE arm,
 #   not a tripwire, and consequence 2 above has no GHCR meaning. This paragraph says `unmeasured`

@@ -270,17 +270,17 @@ No cross-domain implications detected: an infrastructure cleanup that deletes an
 
 ### Pre-merge (PR)
 
-- [ ] `git ls-files | grep -c zot-entry-gate` returns 0 for paths outside `knowledge-base/`; the two files are deleted.
-- [ ] `git grep -n 'zot-entry-gate' -- . ':!knowledge-base'` returns nothing (the zero-residual check excludes this feature's own plan and tasks, which cite the old path).
-- [ ] Neither `.tsv` mentions the gate; no other row changed (`git diff --stat` on both shows one deletion each).
-- [ ] `bash .github/scripts/test/test-infra-suite-registration.sh` and `bash plugins/soleur/test/regenerate-shard-manifest.test.sh` pass.
-- [ ] `shellcheck apps/web-platform/infra/ci-deploy.sh` is clean; the `ci-deploy.sh` diff contains only comment lines (`git diff -U0 -- apps/web-platform/infra/ci-deploy.sh | grep -E '^[+-][^+-]' | grep -vE '^[+-]\s*#'` returns nothing).
-- [ ] Both edited workflow files parse as YAML and `bash plugins/soleur/test/reusable-release-idempotency.test.sh` still passes (it keys on the `Post to Slack (release)` step name and body, which this PR does not touch).
-- [ ] `grep -c 'cancelled()' .github/workflows/reusable-release.yml` is at least 1 and the `Post to Slack (release BLOCKED)` step exists, matching the sentence that replaces the false parity paragraph.
-- [ ] The `ci-workflow-authoring.md` carve-out lists exactly the steps `git grep -n -E 'name: .*Slack' -- .github/workflows` returns (or a defensible subset with the rest named as covered by the same rule).
-- [ ] `bash scripts/guard-vacuity-floor.test.sh`, `bun test plugins/soleur/test/preflight-discoverability-test.test.ts` (the G1 count stays 58: this plan declares no `credentials_required`), and the fixture-relative-assert ratchet pass with NO floor or baseline edit; if a sibling's merge forces a conflict, resolve it without raising any number.
-- [ ] `.claude/hooks/*.test.sh` all pass (with `pre-merge-rebase.test.sh` run under a timeout above 120 s).
-- [ ] `python3 scripts/lint-guard-contract.py` is not needed (no guard); `bash plugins/soleur/test/c4-count-parity.test.sh` stays green.
+- [x] `git ls-files | grep -c zot-entry-gate` returns 0 for paths outside `knowledge-base/`; the two files are deleted.
+- [x] `git grep -n 'zot-entry-gate' -- . ':!knowledge-base'` returns nothing (the zero-residual check excludes this feature's own plan and tasks, which cite the old path).
+- [x] Neither `.tsv` mentions the gate; no other row changed (`git diff --stat` on both shows one deletion each).
+- [x] `bash .github/scripts/test/test-infra-suite-registration.sh` and `bash plugins/soleur/test/regenerate-shard-manifest.test.sh` pass.
+- [x] `shellcheck apps/web-platform/infra/ci-deploy.sh` is clean; the `ci-deploy.sh` diff contains only comment lines (`git diff -U0 -- apps/web-platform/infra/ci-deploy.sh | grep -E '^[+-][^+-]' | grep -vE '^[+-]\s*#'` returns nothing).
+- [x] Both edited workflow files parse as YAML and `bash plugins/soleur/test/reusable-release-idempotency.test.sh` still passes (it keys on the `Post to Slack (release)` step name and body, which this PR does not touch).
+- [x] `grep -c 'cancelled()' .github/workflows/reusable-release.yml` is at least 1 and the `Post to Slack (release BLOCKED)` step exists, matching the sentence that replaces the false parity paragraph.
+- [x] The `ci-workflow-authoring.md` carve-out lists exactly the steps `git grep -n -E 'name: .*Slack' -- .github/workflows` returns (or a defensible subset with the rest named as covered by the same rule).
+- [x] `bash scripts/guard-vacuity-floor.test.sh`, `bun test plugins/soleur/test/preflight-discoverability-test.test.ts` (the G1 count stays 58: this plan declares no `credentials_required`), and the fixture-relative-assert ratchet pass with NO floor or baseline edit; if a sibling's merge forces a conflict, resolve it without raising any number.
+- [x] `.claude/hooks/*.test.sh` all pass (with `pre-merge-rebase.test.sh` run under a timeout above 120 s).
+- [x] `python3 scripts/lint-guard-contract.py` is not needed (no guard); `bash plugins/soleur/test/c4-count-parity.test.sh` stays green.
 - [ ] PR body: `Closes #7258`, `Refs #7079`, threshold `none` with the reason, the census, the challengeable Slack-target note, and the sequencing note.
 
 ### Post-merge (operator-free verification)

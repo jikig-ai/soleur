@@ -1216,7 +1216,7 @@ jobs:
 
           # Preserve the FULL org namespace (jikig-ai/…). The pull side
           # (ci-deploy.sh: zot_ref="${ZOT_REGISTRY_URL}/${IMAGE#ghcr.io/}") and
-          # zot-entry-gate.sh both address `jikig-ai/soleur-web-platform`. `basename` dropped
+          # web-zot-consumer-probe.sh both address `jikig-ai/soleur-web-platform`. `basename` dropped
           # the org, pushing to an orphan `soleur-web-platform` repo nothing reads → the gate
           # MISSED and every pull fell back to GHCR (#6122 namespace fix).
           #
@@ -1416,9 +1416,10 @@ jobs:
           # present-but-unsigned — DISTINCT from a copy miss: post-cutover the host would
           # pull the present zot copy (bypassing the atomic GHCR fallback) and then
           # HARD-BLOCK on signature verify (ci-deploy.sh verify_image_signature → enforce
-          # fail). Pre-cutover (soak) ZOT_ACTIVE=0 so this is latent, and the
-          # zot-entry-gate/soak-gate catch a missing/unsigned copy before the flip. The
-          # remediation MUST re-sign, not just re-copy — hence the distinct $2 detail.
+          # fail). Pre-cutover (soak) ZOT_ACTIVE=0 made this latent; the pre-flip entry gate
+          # that once caught a missing/unsigned copy was deleted (#7258), so `degraded` here is
+          # where it is caught. The remediation MUST re-sign, not just re-copy — hence the
+          # distinct $2 detail.
           # MEASURED-BY: $? from `retry cosign sign`, passed to `degraded` as its first
           # argument. "The image IS in zot at the correct digest" is measured by the copy
           # steps above; the Sigstore/Fulcio attribution is explicitly hedged ("this is the
