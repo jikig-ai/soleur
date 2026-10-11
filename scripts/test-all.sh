@@ -502,6 +502,14 @@ if declare -F soleur_scratch_session_begin >/dev/null 2>&1; then
   soleur_scratch_session_begin "$TMPDIR" || true
 fi
 declare -F _soleur_scratch_cleanup >/dev/null 2>&1 || _soleur_scratch_cleanup() { :; }
+# #9814: opportunistic weight-drift comparator — a missing lib degrades the
+# epilogue emit to "no WEIGHT_DRIFT block" (the declare -F gate there), never
+# blocks the gate.
+_WD_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/test-weight-drift.sh"
+if [[ -f "$_WD_LIB" ]]; then
+  # shellcheck source=scripts/lib/test-weight-drift.sh
+  source "$_WD_LIB" || true
+fi
 # Provisional owner for the window below: the full EXIT trap (which composes this cleanup) is installed ~2900
 # lines down, and every early `exit` before it (flag modes, usage errors, a timeout kill) left a marker-only
 # root behind -- measured: --enumerate-commands, --list and a bad flag each leaked one per invocation. The
@@ -3713,7 +3721,7 @@ _aff_runner_banner() {
 # never executes. Both exit 4 — "refused, nothing ran" — NOT 3, which #7424
 # reserved for a suite TERMINATED mid-coverage.
 # #9763: 38 heavy/stale labels withdrawn to edge-selection; the floor pins count-5.
-_MIN_ALWAYS_ON_DECLARED=107
+_MIN_ALWAYS_ON_DECLARED=108
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate
@@ -4297,6 +4305,22 @@ case "${_durable_log_dir}/" in
     printf '[note] SOLEUR_TEST_ALL_LOG_DIR inside the scratch root — relocated to %s (#8940)\n' "$_durable_log_dir" >&2
     ;;
 esac
+
+# wd-default-arm-begin
+# #9814: a local affected-shaped run pays nothing for the timing data the
+# weight-drift comparator needs — default TEST_TIMING_LOG into the per-run
+# durable dir (it rides the #9117 age-reap like the suite logs beside it). The
+# writability probe is load-bearing: run_suite appends with >> under set -e, so
+# an unwritable target aborts the run mid-suite — degrade to "no timing log",
+# never to "dead runner". TEST_GROUP=affected (#8591) and _AFFECTED==1 (the
+# local gate default, ADR-242) are disjoint selectors — cover both.
+if [[ -z "${TEST_TIMING_LOG:-}" ]] && [[ -z "${CI:-}" ]] \
+  && { [[ "${TEST_GROUP:-}" == "affected" ]] || (( _AFFECTED == 1 )); }; then
+  if mkdir -p "$_durable_log_dir" 2>/dev/null && [[ -w "$_durable_log_dir" ]]; then
+    export TEST_TIMING_LOG="$_durable_log_dir/suite-timings.tsv"
+  fi
+fi
+# wd-default-arm-end
 
 # _gc_durable_logs <namespace-dir> <days> — age-reap <label>-<pid>-<epoch> run
 # dirs from the DEDICATED durable-log namespace (#9117). The one place a
@@ -5182,6 +5206,9 @@ if want_scripts; then
   # #9763: the fast-tier budget ratchet — pins always-on committed weight to
   # <=10s per suite and <=300s total so the local tier cannot silently regrow.
   run_suite "scripts/test-all-fast-tier-budget" bash scripts/test-all-fast-tier-budget.test.sh
+  # #9814: the local weight-drift detector — warns when a suite's local actual
+  # exceeds its committed weight by >2x AND >10s (advisory lines, never a gate).
+  run_suite "scripts/test-all-weight-drift" bash scripts/test-all-weight-drift.test.sh
   # Guard 1 for the #7869 runtime ceiling. Registered here rather than left to a
   # glob: nothing auto-discovers this directory, so an unregistered suite is
   # silently never gated — locally or in CI.
@@ -6990,6 +7017,20 @@ if (( _ceiling_declined > 0 )); then
   echo "      starting suites: declined_suites=${_ceiling_declined}. Nothing above is evidence"
   echo "      for them. This run exits 3 — UNRESOLVED, not green and not a failure."
 fi
+
+# wd-epilogue-emit-begin
+# #9814: warn-only local-vs-committed weight drift — emitted in the post-marker
+# NOTE region so `=== N/N suites passed ===` stays the last ===-shaped line.
+# The glob, not two literals: absence in one manifest is not absence, and a
+# future suite-durations-*.tsv joins the comparison instead of mis-reporting
+# unmeasured. `|| true` — the report can never set the exit code.
+if [[ -z "${CI:-}" && -n "${TEST_TIMING_LOG:-}" ]] \
+   && [[ -f "${TEST_TIMING_LOG}" ]] \
+   && declare -F weight_drift_report >/dev/null 2>&1; then
+  _wd_scriptdir="$(dirname "${BASH_SOURCE[0]}")"
+  weight_drift_report "${TEST_TIMING_LOG}" "$_wd_scriptdir"/suite-durations*.tsv || true
+fi
+# wd-epilogue-emit-end
 
 if [[ "$failed" -gt 0 ]]; then
   exit 1

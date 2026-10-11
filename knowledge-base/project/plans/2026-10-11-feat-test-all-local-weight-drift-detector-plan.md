@@ -425,26 +425,26 @@ TEST_TIMING_LOG && -f file && declare -F weight_drift_report`.
 
 ### Functional Requirements
 
-- [ ] FR-1: a local `--affected` run (`CI` unset, `TEST_TIMING_LOG` unset) writes per-suite timings to a per-run file under `$_durable_log_dir` without explicit setup.
-- [ ] FR-2: when `TEST_TIMING_LOG` is set on a local run, each ran suite with `local > 2*committed AND local > 10000` emits exactly `WEIGHT_DRIFT <label> committed=<ms> local=<ms>` — on stdout and stderr.
-- [ ] FR-3: a ran suite with no row in any `scripts/suite-durations*.tsv` manifest emits `WEIGHT_DRIFT <label> committed=unmeasured local=<ms>` — never silently skipped.
-- [ ] FR-4: `skip=*`, KILLED/FAIL/TRIPWIRE handling per the grammar above (declines silent, ran-but-failed still compared).
-- [ ] FR-5: ran rows present but every elapsed_ms = 0 emits `WEIGHT_DRIFT_UNAVAILABLE rows=<n> reason=elapsed-zero` once.
+- [x] FR-1: a local `--affected` run (`CI` unset, `TEST_TIMING_LOG` unset) writes per-suite timings to a per-run file under `$_durable_log_dir` without explicit setup.
+- [x] FR-2: when `TEST_TIMING_LOG` is set on a local run, each ran suite with `local > 2*committed AND local > 10000` emits exactly `WEIGHT_DRIFT <label> committed=<ms> local=<ms>` — on stdout and stderr.
+- [x] FR-3: a ran suite with no row in any `scripts/suite-durations*.tsv` manifest emits `WEIGHT_DRIFT <label> committed=unmeasured local=<ms>` — never silently skipped.
+- [x] FR-4: `skip=*`, KILLED/FAIL/TRIPWIRE handling per the grammar above (declines silent, ran-but-failed still compared).
+- [x] FR-5: ran rows present but every elapsed_ms = 0 emits `WEIGHT_DRIFT_UNAVAILABLE rows=<n> reason=elapsed-zero` once.
 
 ### Non-Functional Requirements
 
-- [ ] NFR-1: exit code unchanged — a run emitting WEIGHT_DRIFT lines exits with the same rc as an identical run without them; the check can never set the code.
-- [ ] NFR-2: selection unchanged — affected selection, declines, the breakdown line and the `=== N/N suites passed ===` marker are byte-identical to a run without the feature.
-- [ ] NFR-3: no cost when unarmed — a run without `TEST_TIMING_LOG` (CI, `--full` local, caller-unset non-affected) pays nothing beyond one `[[ -n ]]` test.
-- [ ] NFR-4: bash-3.2 host safe — the comparator uses `awk`, no `declare -A` or bash-4 builtins; an EPOCHREALTIME-less host reports `WEIGHT_DRIFT_UNAVAILABLE`, not silence.
-- [ ] NFR-5: the default arm never arms on CI (`CI` set) and never overrides a caller-set `TEST_TIMING_LOG`.
+- [x] NFR-1: exit code unchanged — a run emitting WEIGHT_DRIFT lines exits with the same rc as an identical run without them; the check can never set the code.
+- [x] NFR-2: selection unchanged — affected selection, declines, the breakdown line and the `=== N/N suites passed ===` marker are byte-identical to a run without the feature.
+- [x] NFR-3: no cost when unarmed — a run without `TEST_TIMING_LOG` (CI, `--full` local, caller-unset non-affected) pays nothing beyond one `[[ -n ]]` test.
+- [x] NFR-4: bash-3.2 host safe — the comparator uses `awk`, no `declare -A` or bash-4 builtins; an EPOCHREALTIME-less host reports `WEIGHT_DRIFT_UNAVAILABLE`, not silence.
+- [x] NFR-5: the default arm never arms on CI (`CI` set) and never overrides a caller-set `TEST_TIMING_LOG`.
 
 ### Quality Gates
 
-- [ ] QG-1: `scripts/test-all-weight-drift` is registered and in `ALWAYS_ON_SUITES` with its `AFFECTED_*_PATHS` block; `lint-orphan-test-suites` census green.
-- [ ] QG-2: `scripts/suite-durations.tsv` carries a `floor` row for the new label via `--incremental --write`; `test-all-fast-tier-budget` green with the allowlist unchanged (still 2 members).
-- [ ] QG-3: `python3 scripts/lint-guard-contract.py` green against this plan's Guard Contract.
-- [ ] QG-4: the new suite's mutation arms drive each predicate term and each wiring site red, and the must-PASS rows stay green.
+- [x] QG-1: `scripts/test-all-weight-drift` is registered and in `ALWAYS_ON_SUITES` with its `AFFECTED_*_PATHS` block; `lint-orphan-test-suites` census green.
+- [x] QG-2: `scripts/suite-durations.tsv` carries a `floor` row for the new label via `--incremental --write`; `test-all-fast-tier-budget` green with the allowlist unchanged (still 2 members).
+- [x] QG-3: `python3 scripts/lint-guard-contract.py` green against this plan's Guard Contract.
+- [x] QG-4: the new suite's mutation arms drive each predicate term and each wiring site red, and the must-PASS rows stay green.
 - [ ] QG-5: manifest-readers sweep — `git grep -lE 'regenerate-shard-manifest|suite-shard-legs|suite-durations' -- plugins/soleur/test scripts tests` enumerated and every hit's suite run (per `2026-10-03` Session Error 9: a regen-derived value a suite computes from can break where a literal grep can't see it).
 
 ## Test Scenarios
