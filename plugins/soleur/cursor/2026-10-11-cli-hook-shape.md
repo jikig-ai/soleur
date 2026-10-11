@@ -28,7 +28,7 @@ If a later capture shows the IDE editor, or an IDE shell that is not a `cursor-a
 
 ## Registry
 
-`plugins/soleur/cursor/hooks-empty.json` stays `{ "hooks": {} }`. A later capture the same day, with the workspace set to this repository, is `2026-10-11-repo-settings-shape.md`. That note marks the SessionStart commands and the Bash matchers `already-fires`. It does not mark the other matchers `dead`. No guard command was copied. This repository has no `.cursor/hooks.json`. The plugin is not called supported.
+`plugins/soleur/cursor/hooks-empty.json` stays `{ "hooks": {} }`. A later capture the same day, with the workspace set to this repository, is `2026-10-11-repo-settings-shape.md`. That note marks the SessionStart commands and the Bash matchers `already-fires`. It does not mark the other matchers `dead`. A later edit-tool session the same day is `2026-10-11-edit-tool-shape.md`. That note marks the `Edit` matcher on `security_reminder_hook.py` `already-fires` and leaves the shared write matchers `unmeasured`. No guard command was copied. This repository has no `.cursor/hooks.json`. The plugin is not called supported.
 
 ## Support bar
 

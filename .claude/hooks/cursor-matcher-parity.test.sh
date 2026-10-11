@@ -5,8 +5,10 @@
 #   2026-10-07 exited at authentication. That note has no loaded: line.
 #   2026-10-08 ran scratch probes. The historical ledger rows below are that session.
 #   2026-10-11 measured this repository's .claude/settings.json.
-# SessionStart commands and Bash matchers are already-fires.
-# Matchers that session did not exercise stay unmeasured. They are not dead.
+#   2026-10-11 edit-tool session classified /go and refused one agent.
+# SessionStart commands, Bash matchers, and the Edit matcher on
+# security_reminder_hook.py are already-fires.
+# Matchers one exec cannot separate stay unmeasured. They are not dead.
 # hooks-empty.json stays empty.
 # detectHarness returns cursor for nonempty CURSOR_INVOKED_AS.
 # CURSOR_AGENT is not the predicate.
@@ -22,6 +24,7 @@ REPO_ROOT="$(cd "$HOOKS_DIR/../.." && pwd -P)"
 SHAPE_AUTH="$REPO_ROOT/plugins/soleur/cursor/2026-10-07-cli-hook-shape.md"
 SHAPE="$REPO_ROOT/plugins/soleur/cursor/2026-10-08-cli-hook-shape.md"
 SHAPE_REPO="$REPO_ROOT/plugins/soleur/cursor/2026-10-11-repo-settings-shape.md"
+SHAPE_EDIT="$REPO_ROOT/plugins/soleur/cursor/2026-10-11-edit-tool-shape.md"
 LEDGER="$HOOKS_DIR/cursor-dispositions.tsv"
 EMPTY="$REPO_ROOT/plugins/soleur/cursor/hooks-empty.json"
 HARNESS="$REPO_ROOT/plugins/soleur/lib/harness.ts"
@@ -92,6 +95,23 @@ else
   pass "2026-10-11 settings note does not store an email"
 fi
 
+if [ -f "$SHAPE_EDIT" ]; then pass "2026-10-11 edit-tool note exists"; else fail "2026-10-11 edit-tool note missing"; fi
+note_has "$SHAPE_EDIT" "2026-10-11 edit-tool note quotes the support bar" "The plugin is called supported only when a Cursor CLI session shows"
+note_has "$SHAPE_EDIT" "2026-10-11 edit-tool note does not call the plugin supported" "The plugin is not supported"
+note_lacks "$SHAPE_EDIT" "2026-10-11 edit-tool note has no loaded: line" "^loaded:"
+note_lacks "$SHAPE_EDIT" "2026-10-11 edit-tool note does not close #9608" "Closes #9608"
+note_has "$SHAPE_EDIT" "2026-10-11 edit-tool note keeps the hooks object empty" 'hooks-empty.json` stays `{ "hooks": {} }`'
+note_has "$SHAPE_EDIT" "2026-10-11 edit-tool note refuses a dead mark" "They are not \`dead\`."
+note_has "$SHAPE_EDIT" "2026-10-11 edit-tool note records the classification" "ROUTE brainstorm"
+note_has "$SHAPE_EDIT" "2026-10-11 edit-tool note records the refusal" "SPAWN refused"
+note_has "$SHAPE_EDIT" "2026-10-11 edit-tool note records the Edit exec" "security_reminder_hook.py"
+note_has "$SHAPE_EDIT" "2026-10-11 edit-tool note records the unseparated alternation" "alternation is not separated"
+if [ -f "$SHAPE_EDIT" ] && grep -E -q 'user_email[[:space:]]*[:=][[:space:]]*[^[:space:]]+@' "$SHAPE_EDIT"; then
+  fail "2026-10-11 edit-tool note stores an email"
+else
+  pass "2026-10-11 edit-tool note does not store an email"
+fi
+
 expected=$'enterprise\t/etc/cursor/hooks.json\t(none)\t(none)\tabsent\tfile-absent\tshape-note-2026-10-08
 team\t.cursor/managed/active-team-hooks/hooks.json\tsessionStart\t(none)\tnot-opened\tpresent-file-not-opened\tshape-note-2026-10-08
 user\t~/.cursor/hooks.json\t(none)\t(none)\tabsent\tfile-absent\tshape-note-2026-10-08
@@ -138,6 +158,19 @@ if [ -f "$LEDGER" ]; then
           fail "repo disposition is not backed: $disp $reason"
           ;;
       esac
+    elif [ "$registry" = "repo-claude-project" ] && [ "$evidence" = "shape-note-2026-10-11-edit-tool" ] && grep -F -x -q -- "$line" "$SHAPE_EDIT"; then
+      pass "ledger row $registry $event"
+      case "$disp:$reason" in
+        already-fires:edit-matcher-execd-on-edit-tool)
+          repo_af=$((repo_af + 1))
+          ;;
+        unmeasured:script-execd-matcher-unseparated)
+          repo_um=$((repo_um + 1))
+          ;;
+        *)
+          fail "edit-tool disposition is not backed: $disp $reason"
+          ;;
+      esac
     else
       fail "ledger row is not in a pinned capture: $registry $event"
     fi
@@ -157,16 +190,30 @@ else
   fail "ledger row count is $rows, want 71"
 fi
 
-if [ "$repo_af" -eq 27 ]; then
-  pass "27 repository commands are already-fires"
+if [ "$repo_af" -eq 28 ]; then
+  pass "28 repository commands are already-fires"
 else
-  fail "already-fires repository rows are $repo_af, want 27"
+  fail "already-fires repository rows are $repo_af, want 28"
 fi
 
-if [ "$repo_um" -eq 33 ]; then
-  pass "33 repository matchers stay unmeasured"
+if [ "$repo_um" -eq 32 ]; then
+  pass "32 repository matchers stay unmeasured"
 else
-  fail "unmeasured repository rows are $repo_um, want 33"
+  fail "unmeasured repository rows are $repo_um, want 32"
+fi
+
+edit_row=$'repo-claude-project\t.claude/hooks/security_reminder_hook.py\tPreToolUse\tEdit\talready-fires\tedit-matcher-execd-on-edit-tool\tshape-note-2026-10-11-edit-tool'
+if grep -F -x -q -- "$edit_row" "$LEDGER" && grep -F -x -q -- "$edit_row" "$SHAPE_EDIT"; then
+  pass "Edit matcher on security_reminder_hook.py already fires"
+else
+  fail "Edit matcher on security_reminder_hook.py is not already-fires"
+fi
+
+write_row=$'repo-claude-project\t.claude/hooks/skill-security-scan-write.sh\tPreToolUse\t^write$\tunmeasured\tscript-execd-matcher-unseparated\tshape-note-2026-10-11-edit-tool'
+if grep -F -x -q -- "$write_row" "$LEDGER" && grep -F -x -q -- "$write_row" "$SHAPE_EDIT"; then
+  pass "^write$ on skill-security-scan-write.sh stays unmeasured"
+else
+  fail "^write$ on skill-security-scan-write.sh was separated without evidence"
 fi
 
 if [ -f "$EMPTY" ] && grep -q '"hooks"[[:space:]]*:[[:space:]]*{[[:space:]]*}' "$EMPTY"; then
@@ -238,6 +285,7 @@ browser-snapshot-credential-guard.sh
 no-memory-write.sh
 kb-domain-allowlist-guard.sh
 grep-rewrite.sh
+security_reminder_hook.py
 rule-incident-marker-capture.sh
 post-dispatch-watch-gate.sh
 EOF
@@ -253,7 +301,6 @@ while IFS= read -r base; do
 done <<'EOF'
 monitor-supersede-guard.sh
 worktree-write-guard.sh
-security_reminder_hook.py
 skill-security-scan-write.sh
 iac-plan-write-guard.sh
 new-scheduled-cron-prefer-inngest.sh
@@ -271,9 +318,9 @@ EOF
 
 # Anti-vacuity floor. pass() and fail() are the assertion machinery. Neutering
 # them leaves PASS and FAIL at 0, and this bound exits 1 without calling fail().
-# 150 is the measured count after the 2026-10-11 repository settings rows.
+# 164 is the measured count after the 2026-10-11 edit-tool rows.
 ASSERTED=$((PASS + FAIL))
-if [ "$ASSERTED" -lt 150 ]; then
+if [ "$ASSERTED" -lt 164 ]; then
   printf '[FATAL] assertion floor: only %s assertion(s) ran\n' "$ASSERTED" >&2
   exit 1
 fi

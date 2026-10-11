@@ -24,6 +24,10 @@ describe("Cursor CLI plugin package", () => {
     expect(instructions).toContain("classifies the session as `cursor`");
     expect(instructions).not.toContain("does not classify");
     expect(instructions).toContain("SessionStart commands and Bash matchers already fire");
+    expect(instructions).toContain(
+      "The PreToolUse `Edit` matcher on `security_reminder_hook.py` already fires",
+    );
+    expect(instructions).toContain("This session did not meet the support bar.");
     expect(instructions).not.toContain("`.claude/settings.json` is unmeasured");
     expect(instructions).not.toContain("## Tools");
     expect(instructions).toContain("If a canonical file tells you to call those tools, stop.");
