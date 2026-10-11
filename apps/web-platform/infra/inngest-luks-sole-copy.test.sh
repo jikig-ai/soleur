@@ -148,12 +148,18 @@ assert_fixture_dir() {
   esac
 }
 
-# ONE owning trap for every scratch tree below. Scratch copies live under /var/tmp, never beside the
+# ONE owning trap for every scratch tree below. Scratch copies live under the temp root (TMPDIR), never beside the
 # real files.
 # A killed run (SIGKILL skips the EXIT trap) leaves its tree behind: sweep stale ones (older than a day)
-# so /var/tmp does not accumulate them. Real directories only (-type d never follows a symlink).
-[ -n "$NESTED" ] || find "${TMPDIR:-/var/tmp}" -maxdepth 1 -type d -name 'inngest-sole-copy-suite.*' -mmin +1440 -exec rm -rf {} + 2>/dev/null || true
-SUITE_TMP="$(mktemp -d "${TMPDIR:-/var/tmp}/inngest-sole-copy-suite.XXXXXX")" || { printf 'FATAL: mktemp -d failed\n' >&2; exit 2; }
+# so the temp root does not accumulate them. Real directories only (-type d never follows a symlink).
+[ -n "$NESTED" ] || find "${TMPDIR:-/tmp}" -maxdepth 1 -type d -name 'inngest-sole-copy-suite.*' -mmin +1440 -exec rm -rf {} + 2>/dev/null || true
+SUITE_TMP="$(mktemp -d -t inngest-sole-copy-suite.XXXXXX)" || { printf 'FATAL: mktemp -d failed\n' >&2; exit 2; }
+# Every scratch path below hangs off this root: it must be absolute (a relative TMPDIR would retarget the writes).
+case "$SUITE_TMP" in
+  ""|/|//|/.) printf 'FATAL: SUITE_TMP unusable (%s)\n' "$SUITE_TMP" >&2; exit 2 ;;
+  /*)         : ;;
+  *)          printf 'FATAL: SUITE_TMP is relative (%s)\n' "$SUITE_TMP" >&2; exit 2 ;;
+esac
 assert_fixture_dir "$SUITE_TMP"
 trap 'rm -rf "$SUITE_TMP"' EXIT
 

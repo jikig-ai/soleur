@@ -124,6 +124,7 @@ scripts/git-data-reboot-evidence-landed-8210	knowledge-base/engineering/operatio
 scripts/guard-vacuity-floor	knowledge-base
 scripts/guard-vacuity-floor	knowledge-base/engineering/architecture/diagrams/model.c4
 scripts/guard-vacuity-floor	knowledge-base/engineering/operations/runbooks/cloudflare-pages-cutover.md
+scripts/guard-vacuity-floor	knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md
 scripts/guard-vacuity-floor	knowledge-base/engineering/operations/runbooks/web-host-reboot.md
 scripts/guard-vacuity-floor	knowledge-base/project/learnings/2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md
 scripts/guard-vacuity-floor	knowledge-base/project/specs/archive
