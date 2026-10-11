@@ -2,8 +2,16 @@
 // escape-hatch markup from an assistant text block before the cc runner hands it to
 // `onText`.
 //
-// Why this exists: `plugins/soleur/hooks/unkept-promise-hook.sh` is an operator-CLI
-// guard whose block reason tells the model to write `<stop>OPERATOR-GATE: ...</stop>`
+// LEGACY VOCABULARY (2026-10-11): the hook's escape hatch is now a plain `Paused:` /
+// `Blocked:` sentence, which is meant to be read and is never stripped. This file
+// remains for (1) assistant rows persisted before the leak fix and before that change
+// (api-messages.ts reads them back), and (2) a model still emitting the old tag from
+// stale context. The hook no longer teaches the tag, so the
+// `stop-gate-markup-stripped` Sentry op should decay to zero; delete this file when it
+// has, as the closing paragraph below says.
+//
+// Why this exists: `plugins/soleur/hooks/unkept-promise-hook.sh` was an operator-CLI
+// guard whose block reason told the model to write `<stop>OPERATOR-GATE: ...</stop>`
 // (or `<stop>BLOCKED: ...</stop>`). In the web Concierge that tag replaced the model's
 // own question list (text is replaced per block, W8). The env opt-out in `agent-env.ts`
 // removes the producer; this strip is a second boundary on the cc runner's text path.
