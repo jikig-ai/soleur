@@ -212,6 +212,10 @@ OUT_OF_CLASS=(
   # inventing one would be a guess presented as a root. The vitest suites it runs are TypeScript
   # under apps/web-platform, which cannot author a git tag without going through a spawn whose
   # argv this guard already scans in its array-form spelling.
+  # Post-#9815 this entry matches ZERO registrations: the two webplat legs now exec
+  # apps/web-platform/scripts/vitest-related.sh (a tracked root — the wrapper calls npm run
+  # test:ci at runtime, below this guard's argv surface). The entry stays as the license shape
+  # for the class; removing it is also valid when the last member went away.
   'npm run test:ci'
 )
 

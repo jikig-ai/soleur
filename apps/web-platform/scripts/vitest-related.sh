@@ -57,11 +57,13 @@ narrow_or_full() {
     full_project "$_p"
     return
   fi
-  local -a _files=()
-  mapfile -t _files < <(grep -v '^$' <<<"${WEBPLAT_RELATED:-}")
+  local -a _files=() _l
+  while IFS= read -r _l; do
+    [[ -n "$_l" ]] && _files+=("$_l")
+  done <<<"${WEBPLAT_RELATED:-}"
   local _cap
   _cap="$(mktemp)"
-  "$VITEST" related "${_files[@]}" --run --project "$_p" 2>&1 | tee "$_cap"
+  "$VITEST" related "${_files[@]+"${_files[@]}"}" --run --project "$_p" 2>&1 | tee "$_cap"
   local _rc="${PIPESTATUS[0]}"
   if [[ "$_rc" != 0 ]]; then
     rm -f "$_cap"

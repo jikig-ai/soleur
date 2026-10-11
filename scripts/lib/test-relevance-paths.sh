@@ -4,6 +4,8 @@
 #   at a time and cannot see a cross-file consumer. The de-reference anchor in the linter is
 #   what actually proves each array is consumed -- see ADR-181.
 # Relevance predicates for the expensive suites the local gate declines on an irrelevant diff
+# (and — since #9815 — two pure query functions over the diff blob:
+# webplat_related_meta_hit / webplat_related_files; still zero side effects).
 # (ADR-181, extended by its 2026-08-12 addendum from the two heavy mutation batteries to four
 # suites).
 #
@@ -32,8 +34,10 @@
 # This block exists because three of the sites were otherwise discoverable only by reading an
 # archived plan, and this file is where a reader adding a gate actually lands.
 #
-# DECLARATIONS ONLY. No `set -e`, no `exit`, no side effects, nothing executed. Two very
-# different consumers source this file and both need it to be inert:
+# DECLARATIONS ONLY — plus, since #9815, two PURE query functions
+# (webplat_related_meta_hit / webplat_related_files): functions of their
+# arguments only, no I/O, no side effects, nothing executed at source time.
+# Two very different consumers source this file and both need it to be inert:
 #
 #   scripts/test-all.sh              — sources it at TOP LEVEL to guard its relevance-gated run_suite calls
 #   scripts/lint-orphan-test-suites.sh — sources it to assert every declared path still resolves

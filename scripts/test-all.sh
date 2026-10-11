@@ -6367,7 +6367,7 @@ if want_webplat; then
   else
     _relevance_declined=$((_relevance_declined + 1))
     skip_suite "apps/web-platform [unit]" "relevance" \
-      "cd apps/web-platform && npm run test:ci -- --project unit"
+      "WEBPLAT_RELATED= bash apps/web-platform/scripts/vitest-related.sh unit"
   fi
 
   # THE SHARD MATTERS, and the PATH is what keeps the surfaces disjoint.

@@ -64,6 +64,11 @@ assert_fixture_dir() {
 
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 REAL_NPM="$(command -v npm)"
+# GNU timeout is absent on stock macOS dev hosts (sibling precedent guards
+# `command -v timeout || gtimeout`); fall back to gtimeout, then to none —
+# the arms are bounded by the suite's own runtime either way.
+TIMEOUT_BIN="$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || true)"
+[[ -n "$TIMEOUT_BIN" ]] && TIMEOUT_BIN="$TIMEOUT_BIN 300" || true
 
 dump() { sed 's/^/    /' <<<"$1"; }
 
@@ -150,7 +155,7 @@ run_arm() {
   ARM_OUT=$(cd "$FIX" && env -u TEST_GROUP -u CI -u WEBPLAT_RELATED -u VITEST_SHARD \
             PATH="$FIX/bin:$PATH" FIXLOG="$FIX/binlog/$name.log" \
             WEBPLAT_RELATED="$related" "$@" \
-            timeout 300 bash "$w" "$mode" 2>&1)
+            ${TIMEOUT_BIN:+$TIMEOUT_BIN} bash "$w" "$mode" 2>&1)
   ARM_RC=$?
   return 0
 }
@@ -208,6 +213,7 @@ fi
 : > "$FIX/binlog/a4.log"
 run_arm a4 bundle $'src/c.ts\n'
 if [[ "$ARM_RC" == 0 ]] \
+   && grep -q 'outcome=full-repo-wide' <<<"$ARM_OUT" \
    && grep -q 'NPM-ARGV.*repo-wide' "$FIX/binlog/a4.log" 2>/dev/null \
    && (( $(grep -c 'Test Files' <<<"$ARM_OUT") >= 2 )); then
   pass "A4 — bundle: repo-wide runs full unconditionally"
@@ -270,6 +276,26 @@ else
 fi
 rm -f "$FIX/src/red.ts" "$FIX/test/red.unit.test.ts"
 
+# A7b — a deleted-file input (path no longer on disk) contributes zero
+# WITHOUT an error rc: vitest tolerates nonexistent related inputs — the
+# zero-resolution fallback must catch it, never propagate a red.
+: > "$FIX/binlog/a7b.log"
+run_arm a7b unit $'src/deleted.ts\n'
+if [[ "$ARM_RC" == 0 ]] && grep -q 'outcome=full-zero' <<<"$ARM_OUT"; then
+  pass "A7b — deleted-path input resolves zero → full fallback (no false red)"
+else
+  fail "A7b — deleted-path input (rc=$ARM_RC)"; dump "$ARM_OUT"
+fi
+
+# A7c — inputs=N counts non-empty list lines (the empty-token filter): a
+# blob with a blank line counts the real files only.
+run_arm a7c unit $'src/a.ts\n\nsrc/c.ts\n'
+if grep -q 'inputs=2' <<<"$ARM_OUT"; then
+  pass "A7c — inputs=N counts non-empty tokens (blank lines filtered)"
+else
+  fail "A7c — inputs count wrong on blank-line blob"; dump "$ARM_OUT"
+fi
+
 # A8 — the zero-detector anchor is the real 4.1.11 stdout phrase. Drive a
 # real `related` call over a covered-but-orphaned input and pin the phrase.
 _real_zero=$(cd "$FIX" && env -u CI "$VITEST_BIN" related src/c.ts --run --project unit 2>&1 || true)
@@ -307,6 +333,8 @@ if declare -F webplat_related_files >/dev/null 2>&1; then
   else
     fail "A9b — non-app blob produced candidates"; dump "$_rf2"
   fi
+else
+  fail "A9b — webplat_related_files not a function (lib absent or unsourced)"
 fi
 
 # A9c — webplat_related_meta_hit: a meta path in the blob is named, none→rc1.
@@ -341,6 +369,33 @@ else
   fail "A9d — WEBPLAT_RELATED_META not declared"
 fi
 
+# A9e — derivation (Guard-2 rows 1-2): re-derive the run-semantics set from
+# the live config and the tree, and require every derived member inside META.
+# A config edit adding a setup file or a second vitest config must RED here,
+# not silently narrow around an unlisted semantics file.
+_derived=()
+while IFS= read -r _sf; do
+  [[ "$_sf" == test/* || "$_sf" == ./* ]] && _derived+=("apps/web-platform/${_sf#./}")
+done < <(grep -oE '(setupFiles|globalSetup)[[:space:]]*:[[:space:]]*\[[^]]*\]' "$APP_ROOT/vitest.config.ts" \
+           | grep -oE '"[^"]+"' | tr -d '"')
+while IFS= read -r _c; do _derived+=("apps/web-platform/$_c"); done \
+  < <(cd "$APP_ROOT" && for p in vitest.config.ts test/vitest*.config.* test/repo-wide-suites.ts \
+        test/repo-wide-containment.test.ts package.json package-lock.json tsconfig.json .npmrc .nvmrc \
+        scripts/vitest-related.sh; do [[ -f "$p" ]] && printf '%s\n' "$p"; done)
+_der_missing=0
+for _d in "${_derived[@]+"${_derived[@]}"}"; do
+  _found=0
+  for _m in "${WEBPLAT_RELATED_META[@]+"${WEBPLAT_RELATED_META[@]}"}"; do
+    [[ "$_m" == "$_d" ]] && { _found=1; break; }
+  done
+  (( _found == 0 )) && { _der_missing=1; echo "  derived-but-unlisted META member: $_d" >&2; }
+done
+if (( _der_missing == 0 && ${#_derived[@]} >= 8 )); then
+  pass "A9e — every config-derived semantics file is inside META (derived ${#_derived[@]})"
+else
+  fail "A9e — META is missing config-derived members (or the derivation read nothing: ${#_derived[@]})"
+fi
+
 echo ""
 echo "--- Part B: runner wiring (structural) ---"
 
@@ -356,17 +411,27 @@ else
   fail "B1 — registration retarget missing"
 fi
 
-# B2 — the eligibility block names every conjunct.
-_b2_ok=1
-for needle in '_ENUMERATE' 'CI' 'SOLEUR_TEST_FORCE_ALL' '_diff_detect_ok' '_diff_head_ok' '_AFFECTED' '_aff_fallback' 'TEST_GROUP'; do
-  grep -q "$needle" <<<"$_webplat_block" || { _b2_ok=0; echo "  missing conjunct token: $needle" >&2; }
-done
-(( _b2_ok == 1 )) && pass "B2 — eligibility conjuncts present in the arm" || fail "B2 — missing conjuncts"
+# B2 — the eligibility conjuncts are present WITH THEIR POLARITY, scoped to
+# the if-block itself (a bare-token grep over the whole arm is vacuous:
+# `_ENUMERATE` and `CI` appear in the node_modules precondition and comments).
+_b2_if="$(sed -n '/if (( _ENUMERATE == 0 ))/,/^  fi$/p' <<<"$_webplat_block")"
+if [[ -z "$_b2_if" ]]; then
+  fail "B2 — eligibility if-block not found (arm would pass vacuously)"
+else
+  _b2_ok=1
+  for needle in '_ENUMERATE == 0' '-z "${CI:-}"' 'SOLEUR_TEST_FORCE_ALL:-}' '_diff_detect_ok" == "1' '_diff_head_ok" == "1' '_AFFECTED == 1' '-z "$_aff_fallback"' 'TEST_GROUP" == "affected"' 'webplat_related_meta_hit' 'webplat_related_files'; do
+    grep -qF -- "$needle" <<<"$_b2_if" || { _b2_ok=0; echo "  missing conjunct token: $needle" >&2; }
+  done
+  (( _b2_ok == 1 )) && pass "B2 — eligibility conjuncts present with polarity in the arm" || fail "B2 — missing conjuncts"
+fi
 
 # B3 — the computation carries NO `_diff_touches` literal (the sibling
 # suite's UNGATED extraction cuts on the first match) and no column-0 `fi`.
 _comp=$(awk '/_webplat_related=""/{f=1} f{print} f&&/webplat_related_files/{exit}' <<<"$_webplat_block")
-if ! grep -q '_diff_touches' <<<"$_comp"; then
+if [[ -z "$_comp" ]]; then
+  fail "B3 — computation slice is empty (absence would pass vacuously)"
+fi
+if [[ -n "$_comp" ]] && ! grep -q '_diff_touches' <<<"$_comp"; then
   pass "B3 — computation is _diff_touches-free (A3's UNGATED slice intact)"
 else
   fail "B3 — computation contains _diff_touches"
@@ -379,6 +444,9 @@ fi
 
 # B4 — two-line registration shape (the m2 mutator deletes reg line + next).
 _reg_lines=$(awk '/run_suite "apps\/web-platform \[repo-wide\+component\]"/{print NR}' <<<"$_webplat_block")
+if [[ -z "$_reg_lines" ]]; then
+  fail "B4 — bundle registration line not found (absence would pass vacuously)"
+fi
 if [[ -n "$_reg_lines" ]]; then
   _next=$(sed -n "$((_reg_lines + 1))p" <<<"$_webplat_block")
   _next2=$(sed -n "$((_reg_lines + 2))p" <<<"$_webplat_block")
@@ -392,44 +460,63 @@ fi
 echo ""
 echo "--- Guard-1/Guard-2 mutation matrix ---"
 
-# M1 — drop the marker grep → zero-resolution reports outcome=related on a
-# run of zero files (vacuous narrowing).
+# _run_comp <runner-file> <extra-env-line>
+# Evaluates the REAL computation block (extracted from a possibly-mutated
+# runner copy) in a subshell with stubbed runner state, and prints the
+# resulting _webplat_related. The mutants below are FILES, not fixtures —
+# each conjunct's removal must flip the outcome, proving it load-bearing.
+_run_comp() {
+  local _rf="$1" _env="$2" _comp_out
+  _comp_out=$(sed -n '/^  _webplat_related=""/,/^  fi$/p' "$_rf" | sed 's/^  //')
+  env -i PATH="$PATH" bash -u -c "
+source '$LIB'
+_ENUMERATE=0; SOLEUR_TEST_FORCE_ALL=; _diff_detect_ok=1; _diff_head_ok=1
+TEST_GROUP=all; _AFFECTED=1; _aff_fallback=; CI=
+_diff_names='apps/web-platform/src/a.ts'
+_webplat_related=''
+$_env
+$_comp_out
+printf '%s' \"\${_webplat_related}\"
+" 2>/dev/null
+}
+
+echo "--- Part M: mutation matrix ---"
+
+# M1 — the marker phrase, not the grep line: a mutant that renames the anchor
+# so the zero-resolution phrase never matches — the related call reports
+# outcome=related on a run of zero files (vacuous narrowing, the real defect).
 M1="$TMP/wrapper-m1.sh"
-sed '/No test files found/d' "$WRAPPER" > "$M1" 2>/dev/null || true
+sed 's/No test files found/NEVER_MATCH_ZZZZZZ/g' "$WRAPPER" > "$M1" 2>/dev/null || true
 if [[ -s "$M1" ]] && ! diff -q "$WRAPPER" "$M1" >/dev/null 2>&1; then
   cp "$M1" "$FIX/scripts/vitest-related.sh"
   : > "$FIX/binlog/m1.log"
   run_arm m1 unit $'src/c.ts\n'
-  if ! grep -q 'outcome=full-zero' <<<"$ARM_OUT"; then
-    pass "M1 — without the marker grep the zero resolution is not caught"
+  if grep -q 'outcome=related' <<<"$ARM_OUT" && ! grep -q 'outcome=full-zero' <<<"$ARM_OUT"; then
+    pass "M1 — renamed marker: zero-resolution reports outcome=related (mutation detected)"
   else
-    fail "M1 — marker-grep deletion still fell back (mutation inert)"
+    fail "M1 — marker-rename mutant did not change the outcome (arm vacuous)"; dump "$ARM_OUT"
   fi
   cp "$WRAPPER" "$FIX/scripts/vitest-related.sh"
 else
   fail "M1 — wrapper mutation did not land"
 fi
 
-# M2 — --run is pinned in the related invocation; deleting the flag
-# from the wrapper source must break the pin. (The behavioural watch-hang
-# the docs describe was NOT reproduced at vitest 4.1.11 — measured: a
-# related call without --run exits clean when given positional files —
-# so the pin is static, and the plan records the uncertainty.)
-M2="$TMP/wrapper-m2.sh"
-sed 's/ --run / /g' "$WRAPPER" > "$M2" 2>/dev/null || true
-if [[ -s "$M2" ]] && ! diff -q "$WRAPPER" "$M2" >/dev/null 2>&1; then
-  if grep -q 'related .* --run ' "$M2"; then
-    fail "M2 — mutant still carries --run (pin is vacuous)"
-  else
-    pass "M2 — the --run pin detects flag removal (static pin is load-bearing)"
-  fi
-else
-  fail "M2 — wrapper mutation did not land"
-fi
-if grep -q 'related .* --run ' "$WRAPPER"; then
+# M2 — --run is pinned to the EXECUTABLE related line (a comment cannot
+# satisfy it); removing the flag from the invocation must break the pin.
+# (The docs' watch-hang was measured non-reproducible at 4.1.11 — the pin is
+# static and honest about that.)
+if grep '"$VITEST" related' "$WRAPPER" | grep -q -- ' --run '; then
   pass "M2 — live related invocation carries --run (non-watch form, docs)"
 else
   fail "M2 — live related invocation lost --run"
+fi
+M2="$TMP/wrapper-m2.sh"
+sed 's/ --run / /g' "$WRAPPER" > "$M2" 2>/dev/null || true
+if [[ -s "$M2" ]] && ! diff -q "$WRAPPER" "$M2" >/dev/null 2>&1 \
+   && ! { grep '"$VITEST" related' "$M2" | grep -q -- ' --run '; }; then
+  pass "M2 — flag removal on the invocation is detected (pin is load-bearing)"
+else
+  fail "M2 — --run removal not detected (pin vacuous or mutation inert)"
 fi
 
 # M3 — a META member removed → a meta-diff narrows instead of running full.
@@ -449,30 +536,123 @@ if declare -F webplat_related_meta_hit >/dev/null 2>&1 \
   fi
 fi
 
-# M4 — bundle reordered to `&&`: a repo-wide red must NOT skip component.
-M4="$TMP/wrapper-m4.sh"
-# Synthesize: make repo-wide's invocation fail inside the fixture, then run a
-# mutant that &&-chains the halves.
-sed 's/run_full repo-wide/run_full repo-wide \&\& return 1/; s/run_full repo-wide || true/run_full repo-wide || true/' "$WRAPPER" > "$M4" 2>/dev/null || true
-# The real reorder check is textual: && between the two halves is detectable.
-if grep -q '&&' <<<"$(grep -n 'component' "$WRAPPER" | head -1)"; then
-  fail "M4 — live wrapper &&-chains the halves (component can be skipped)"
+# M4 — Guard-1 row 7 (the `&&` reorder), BEHAVIOURALLY: inject a failing
+# repo-wide test into the fixture, run bundle, and require the component
+# half to STILL run — the live wrapper never gates component on repo-wide.
+cat > "$FIX/test/rwfail.rw.test.ts" <<'EOF'
+import { it, expect } from "vitest";
+it("rwfail", () => expect(1).toBe(2));
+EOF
+run_arm m4 bundle $'src/c.ts\n'
+if [[ "$ARM_RC" != 0 ]] \
+   && grep -qE 'project=component.*outcome=(related|full-zero)' <<<"$ARM_OUT"; then
+  pass "M4 — repo-wide red does NOT skip component (rc=$ARM_RC, component ran)"
 else
-  pass "M4 — live wrapper does not &&-gate component behind repo-wide"
+  fail "M4 — component skipped or rc wrong on a red repo-wide (rc=$ARM_RC)"; dump "$ARM_OUT"
+fi
+# and the paired mutant proves the arm can detect the skip:
+M4="$TMP/wrapper-m4.sh"
+sed 's/^    narrow_or_full component$/    (( _rw_rc == 0 )) \&\& narrow_or_full component/' "$WRAPPER" > "$M4"
+if ! diff -q "$WRAPPER" "$M4" >/dev/null 2>&1; then
+  cp "$M4" "$FIX/scripts/vitest-related.sh"
+  run_arm m4m bundle $'src/c.ts\n'
+  if ! grep -qE 'project=component.*outcome=' <<<"$ARM_OUT"; then
+    pass "M4 — the &&-mutant hides component on a red repo-wide (detected)"
+  else
+    fail "M4 — &&-mutant still ran component (arm could not detect the skip)"; dump "$ARM_OUT"
+  fi
+  cp "$WRAPPER" "$FIX/scripts/vitest-related.sh"
+else
+  fail "M4 — &&-mutation did not land"
+fi
+rm -f "$FIX/test/rwfail.rw.test.ts"
+
+# M5 — eligibility-conjunct mutants, each driven through the REAL extracted
+# computation in a subshell. Every conjunct's removal must FLIP the outcome.
+_M5_RUNNER="$TMP/test-all-live.sh"; cp "$RUNNER" "$_M5_RUNNER"
+
+# M5a — invert the CI conjunct (-z → -n) → under CI=1 the mutant narrows
+# where the live block correctly declines (AC(d): CI unchanged).
+M5A="$TMP/test-all-m5a.sh"; sed 's/ -z "${CI:-}" / -n "${CI:-}" /' "$RUNNER" > "$M5A"
+if ! diff -q "$RUNNER" "$M5A" >/dev/null 2>&1; then
+  _live=$(_run_comp "$_M5_RUNNER" 'CI=1')
+  _mut=$(_run_comp "$M5A" 'CI=1')
+  if [[ -z "$_live" && -n "$_mut" ]]; then
+    pass "M5a — inverting the CI conjunct narrows a CI run (conjunct load-bearing)"
+  else
+    fail "M5a — CI-conjunct mutant did not flip (live='${_live:-<empty>}' mut='${_mut:-<empty>}')"
+  fi
+else
+  fail "M5a — CI-conjunct mutation did not land"
 fi
 
-# M5 — static: no `_diff_touches` inside the computation is already B3; the
-# paired red-direction: a computation WITH the literal truncates the
-# sibling's UNGATED slice (proven by construction — documented in plan).
+# M5b — remove the all-group disjunct → the bare-invocation path
+# (_AFFECTED==1, no fallback) computes empty where the live block narrows.
+M5B="$TMP/test-all-m5b.sh"; sed 's/ || { (( _AFFECTED == 1 )) \&\& \[\[ -z "$_aff_fallback" \]\]; }//' "$RUNNER" > "$M5B"
+if ! diff -q "$RUNNER" "$M5B" >/dev/null 2>&1; then
+  _live=$(_run_comp "$_M5_RUNNER" '')
+  _mut=$(_run_comp "$M5B" '')
+  if [[ -n "$_live" && -z "$_mut" ]]; then
+    pass "M5b — removing the all-group disjunct declines the bare path (load-bearing)"
+  else
+    fail "M5b — disjunct mutant did not flip (live='${_live:-<empty>}' mut='${_mut:-<empty>}')"
+  fi
+else
+  fail "M5b — all-group-disjunct mutation did not land"
+fi
 
-# M6 — every META member exists on disk (A9d) is the derivation pin;
-# paired red-direction: the array being empty would fail A9d.
+# M5c — remove the _aff_fallback conjunct → a degraded run narrows inside
+# itself (the degraded-full verdict must be honoured).
+M5C="$TMP/test-all-m5c.sh"; sed 's/(( _AFFECTED == 1 )) \&\& \[\[ -z "$_aff_fallback" \]\]/(( _AFFECTED == 1 ))/' "$RUNNER" > "$M5C"
+if ! diff -q "$RUNNER" "$M5C" >/dev/null 2>&1; then
+  _live=$(_run_comp "$_M5_RUNNER" '_aff_fallback="runner-changed"')
+  _mut=$(_run_comp "$M5C" '_aff_fallback="runner-changed"')
+  if [[ -z "$_live" && -n "$_mut" ]]; then
+    pass "M5c — removing the fallback conjunct narrows a degraded run (load-bearing)"
+  else
+    fail "M5c — fallback mutant did not flip (live='${_live:-<empty>}' mut='${_mut:-<empty>}')"
+  fi
+else
+  fail "M5c — fallback-conjunct mutation did not land"
+fi
+
+# M5d — remove the meta consult → a meta diff narrows (meta wins precedence
+# over the file list; the full-projects banner must fire on the live block).
+M5D="$TMP/test-all-m5d.sh"
+sed '/    if _meta=/,/    fi$/c\    _webplat_related="$(webplat_related_files "$_diff_names")"' "$RUNNER" > "$M5D"
+if [[ -s "$M5D" ]] && ! diff -q "$RUNNER" "$M5D" >/dev/null 2>&1; then
+  _live=$(_run_comp "$_M5_RUNNER" "_diff_names='apps/web-platform/vitest.config.ts'")
+  _mut=$(_run_comp "$M5D" "_diff_names='apps/web-platform/vitest.config.ts'")
+  if [[ -z "$_live" && -n "$_mut" ]]; then
+    pass "M5d — removing the meta consult narrows a meta diff (precedence proven)"
+  else
+    fail "M5d — meta-consult mutant did not flip (live='${_live:-<empty>}' mut='${_mut:-<empty>}')"
+  fi
+else
+  fail "M5d — meta-consult mutation did not land"
+fi
+
+# M5e — the meta banner: a meta diff under the live block emits the
+# `[vitest-related] meta path in diff` note on stderr (FR-2 observability).
+_banner=$(env -i PATH="$PATH" bash -u -c "
+source '$LIB'
+_ENUMERATE=0; SOLEUR_TEST_FORCE_ALL=; _diff_detect_ok=1; _diff_head_ok=1
+TEST_GROUP=all; _AFFECTED=1; _aff_fallback=; CI=
+_diff_names='apps/web-platform/vitest.config.ts'
+_webplat_related=''
+$(sed -n '/^  _webplat_related=\"\"/,/^  fi$/p' "$RUNNER" | sed 's/^  //')
+" 2>&1 >/dev/null)
+if grep -qF 'meta path in diff' <<<"$_banner"; then
+  pass "M5e — meta diff emits the full-projects banner (stderr)"
+else
+  fail "M5e — banner absent on a meta diff"; dump "$_banner"
+fi
 
 echo ""
 echo "vitest-related: $PASS passed, $FAIL failed"
 
 # Anti-vacuity floor (counts RESULTS — sibling convention).
-MIN_ASSERTIONS=22
+MIN_ASSERTIONS=32
 _total=$((PASS + FAIL))
 if (( _total < MIN_ASSERTIONS )); then
   echo "[FATAL] anti-vacuity floor: only $_total assertion(s), expected >= $MIN_ASSERTIONS" >&2
