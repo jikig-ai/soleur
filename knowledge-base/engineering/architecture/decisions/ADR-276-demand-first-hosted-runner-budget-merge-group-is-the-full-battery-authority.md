@@ -55,6 +55,7 @@ criterion passed (ADR file statuses use `active`, so the stage word differs on p
 - 2026-10-09 status flipped `proposed` to `adopting` by operator direction, CTO review-comment confirmation still owed on #9876 (see `## Amendment 2026-10-09 (status flip to adopting)` below); S2 stays `amended`, `S2 live` waits for activation
 - 2026-10-09 S1 live (#9727: post-merge census, 85.2% reduction against the 80% criterion, <https://github.com/jikig-ai/soleur/issues/9727#issuecomment-6084371417>)
 - 2026-10-09 S3 amended (#9728; see `## Amendment 2026-10-09 (S3, #9728)` below); gate 6 passed and entry gates 1, 2, 3 and 4 are answered, `S3 live` waits for activation
+- 2026-10-11 Decision 4 adopting (#9728; first condition of the CTO review comment on the status-flip PR, <https://github.com/jikig-ai/soleur/pull/9876#issuecomment-6107725381>): draft-PR light checks shipped in #9885 and `CI_DRAFT_LIGHT` has been `on` since 2026-10-11T09:43:31Z (`S3-ACTIVATED` on #9728), so Decision 4 is now the adopting shape of stage 3, no longer the proposed one; Decision 5 stays the proposed shape of stage 4. `S3 live` is NOT recorded: the soak runs until at least 2026-10-18 and the exit census is not taken. ADR-270 `accepted` is not canary evidence (that evidence is open on #9454, items 4, 5 and 6).
 
 ## Context
 
