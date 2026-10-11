@@ -312,6 +312,12 @@ did not. The shim now:
   stream — outer argv and `--args` payload transport alike (selective
   re-emit, never verbatim) — so the vendored `denyRead: ["/proc"]` →
   `--tmpfs /proc` lands as the realized mask: an empty, mountless `/proc`.
+  Dropping (not covering) is load-bearing: a covered bind remains a live
+  host-procfs mount object beneath the tmpfs, re-exposable by any inner
+  process holding `CAP_SYS_ADMIN` over the mount namespace via `umount(2)`
+  — the vendored `apply-seccomp` multicall class attempts exactly such
+  namespace work on permissive postures. Removal makes the deny
+  mount-independent, not merely order-correct.
 - **Appends** `--tmpfs /proc` at the last setup position when a rewritten
   stream carries no mask of its own (otherwise the `--ro-bind / /` root
   bind would re-expose host procfs).
@@ -358,9 +364,13 @@ empty tmpfs (optionally carrying `self/fd/` re-home mounts, which the
 **Invariance caveat.** Under the injected clone3-deny filter the vendored
 `apply-seccomp` multicall cannot reach its `/proc`-dependent steps at all
 (it dies at `unshare(CLONE_NEWUSER)` on every kernel posture measured), so
-the mask realization shape cannot change the multicall's outcome; the
-re-home is defense-in-depth keeping the exec path resolvable, not a
-behavioral dependency. The multicall-success check in the in-image verify
+the mask realization shape cannot change the multicall's outcome. The
+re-home is therefore **semantic preservation of the vendored contract** —
+the shim rewrites the vendored argv and a dangling `/proc/self/fd/N` would
+be a silent degrade, forbidden by the shim's own fail-closed doctrine — not
+a second isolation layer, and it decouples this decision from the deferred
+prod-posture question (a future posture where the multicall runs keeps the
+exec path resolvable). The multicall-success check in the in-image verify
 path is retained against posture drift.
 
 **Deferred.** Per-tenant executor topology remains **#9773** (epic #9842) —

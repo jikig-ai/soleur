@@ -794,10 +794,17 @@ describe("bwrap PATH shim (#8752)", () => {
           stdio: ["ignore", "pipe", "pipe", procFd],
         });
         expect(res.status, `${opt}: ${res.stderr}`).toBe(0);
-        const { args } = r.read();
+        const { args, fds } = r.read();
         const bi = args.indexOf("--");
         expect(args.slice(bi - 2, bi), `${opt} dest=/proc must be neutralized`).toEqual(["--tmpfs", "/proc"]);
         expect(args).not.toContain(opt);
+        // R1 (#10032 review): the dropped mount's fd has no surviving
+        // consumer — it must NOT survive the sweep either. An O_PATH procfs
+        // dirfd riding into the sandbox is an openat read channel that
+        // unmasks what the drop just masked. (Discriminate on the TARGET:
+        // the stub's own glob iteration lands a transient dirfd on whatever
+        // low fd is free, resolving to empty — presence alone false-flags.)
+        expect(fds.get("3"), `${opt}: dropped procfs fd must be swept`).not.toBe("/proc");
       } finally {
         closeSync(procFd);
         cleanup();
