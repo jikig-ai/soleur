@@ -367,7 +367,7 @@ relative to them. No new ADR ordinal, and ADR-241 is not amended: S5 names no ne
 
 ### Final state of baseline E
 
-The target is that baseline E holds only rows owned by other tracked work: the two `apps/cla-evidence` rows (the R2 SigV4 `--user` pair on the legal-evidence upload path), owned by #9756.
+The target was that baseline E holds only rows owned by other tracked work: the two `apps/cla-evidence` rows (the R2 SigV4 `--user` pair on the legal-evidence upload path), owned by #9756. See the 2026-10-11 (#9756) addendum: they left it too.
 That is the tracker's own close condition ("baseline E holds only entries owned by other tracked work"). It is reached when the registry commit of this slice is delivered; if that commit
 is carved out, the registry row stays listed and must carry its own owner (a `#N` comment line directly above it, which the battery requires) before `Closes #9597` is claimed.
 The owner of the cla-evidence rows is named in a header comment of the baseline and of the census ceiling table (the baseline writer emits it), not in a column, so the file format is
@@ -400,3 +400,11 @@ owned by tracked work, not a count.
 - **Delivery is an automatic replace.** `hcloud_server.registry` carries no `ignore_changes` on `user_data`, so merging a change to the rendered registry user_data makes
   `registry-host-replace-dispatch.yml` dispatch `-replace=hcloud_server.registry` with no reviewer gate (ADR-096, ADR-190, and the runbook `registry-host-replace-dispatch.md`). The running
   host keeps the argv form until that replace is delivered; the new host boots the converted scripts. The registry changes sit in ONE commit (the template, the suites that execute it, the battery's registry rows and this section). Declining the replace is only possible BEFORE the merge, by reverting that commit: a squash merge collapses the slice into one commit and merging dispatches the replace, so after the merge there is nothing left to revert. After the revert the registry row stays in baseline E and needs its own owner line (a `#N` comment above it, which the battery requires).
+
+## Addendum — 2026-10-11 (#9756)
+
+The two `apps/cla-evidence` rows left baseline E and the census ceiling; baseline E is empty. `r2-conditional-put.sh` and `bootstrap.sh` now send the R2 SigV4 pair as `user = "<id>:<secret>"` on curl's stdin
+config through ONE app-local helper, `apps/cla-evidence/scripts/_r2-sigv4-curl.sh` (the `_cf-admin-token.sh` precedent; the shared library stays header-only). It accepts the token alphabet above, pins the URL to a canonical
+R2 origin, allowlists the caller's curl arguments (not a deny-list), scrubs the inherited environment, and prints `SOLEUR_CREDENTIAL_REFUSED` before any request. Both scripts also gained the xtrace refusal and the
+Rule D transport confinement (`--disable --noproxy '*'`), so the one-shot bootstrap now needs direct egress to R2. `cla-evidence` is a required, self-sealing check (its workflow re-runs the base copy of the scripts), so
+the real-curl wire row of the helper suite is the pre-merge proof and the break-glass runbook is the recovery.
