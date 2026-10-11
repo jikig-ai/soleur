@@ -7,10 +7,10 @@
 #                a dedicated liveness beat every healthy run (detect + emit + alarm, NO reboot).
 #   #6548     — git-data reachability arms the EXISTING git_data_prd (git-data.tf).
 #
-# for_each = var.web_hosts: single live beat today (web-1), anti-masking preserved BY CONSTRUCTION
-# for future active-active-N (#6459) — each host gets its OWN heartbeat, so a healthy host can never
-# mask a broken sibling. No hardcoded web-2 resource (it retired 2026-07-17, #6538; a dead feeder
-# would red heartbeat-reprovision-parity.test.ts). free-tier heartbeats are unconditionally
+# for_each = var.web_hosts: one beat per host in that map (web-1 and, since 2026-07-24, web-2; see
+# variables.tf), anti-masking preserved BY CONSTRUCTION for active-active-N (#6459) — each host gets its
+# OWN heartbeat, so a healthy host can never mask a broken sibling. No hardcoded per-host resource (a dead
+# feeder would red heartbeat-reprovision-parity.test.ts). free-tier heartbeats are unconditionally
 # creatable (only betteruptime_policy/_monitor are count-gated); email-only escalation
 # (betterstack_paid_tier stays false; paid-tier escalation is #6549 item 1).
 

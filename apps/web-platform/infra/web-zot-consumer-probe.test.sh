@@ -468,10 +468,14 @@ assert "T7 server.tf hands the joined local to the cloud-init template (zot_prob
   "grep -qE '^[[:space:]]*zot_probe_repo[[:space:]]*=[[:space:]]*local\\.zot_probe_repo[[:space:]]*\$' '$SERVER_TF'"
 assert "T7 server.tf's triggers_replace hashes the joined local (a change to the list re-runs the SSH provisioner)" \
   "grep -qE '^[[:space:]]*local\\.zot_probe_repo,[[:space:]]*\$' '$SERVER_TF'"
-# shellcheck disable=SC2016  # the literal ${local.zot_probe_repo} is the HCL text under test
-LOCAL_REF="$(printf "'%s'" '${local.zot_probe_repo}')"
-ssh_writer_ok() {  # the printf line that writes ZOT_PROBE_REPO hands it the joined local (not a narrower one)
-  grep -E '^[[:space:]]*"\( umask' "$SERVER_TF" | grep -E 'ZOT_PROBE_REPO=%s' | grep -cF -- "$LOCAL_REF" >/dev/null
+# The slot order matters as much as presence: swapping the two %s arguments (or the two names) would write
+# ZOT_ENDPOINT=<list> and ZOT_PROBE_REPO=<endpoint> with every "is the local present" row still green.
+# shellcheck disable=SC2016  # the literal ${local.*} are the HCL text under test
+SSH_ARGS="$(printf "' '%s' '%s' 'WEB_ZOT_CONSUMER_URL_" '${local.registry_endpoint}' '${local.zot_probe_repo}')"
+SSH_FMT='ZOT_ENDPOINT=%s\\nZOT_PROBE_REPO=%s\\nWEB_ZOT_CONSUMER_URL_KEY=%s'  # the HCL source carries a doubled backslash
+ssh_line() { grep -E '^[[:space:]]*"\( umask' "$SERVER_TF"; }
+ssh_writer_ok() {  # the printf that writes ZOT_PROBE_REPO: names in order, joined local in the second slot
+  ssh_line | grep -cF -- "$SSH_FMT" >/dev/null && ssh_line | grep -cF -- "$SSH_ARGS" >/dev/null
 }
 assert "T7 server.tf's SSH provisioner writes ZOT_PROBE_REPO from the joined local (the only live path on web-1)" "ssh_writer_ok"
 # shellcheck disable=SC2016  # the literal ${zot_probe_repo} is the template text under test
@@ -480,17 +484,31 @@ ci_line_ok() { grep -qxF -- "$CI_LINE" "$CLOUD_INIT_WEB"; }
 assert "T7 cloud-init.yml bakes the templated list into SOLEUR_ZOT_PROBE_REPO verbatim" "ci_line_ok"
 assert "T7 web-probe-envwrite.sh passes SOLEUR_ZOT_PROBE_REPO to the ZOT_PROBE_REPO printf slot unmodified" \
   "grep -qF '\"\$SOLEUR_ZOT_ENDPOINT\" \"\$SOLEUR_ZOT_PROBE_REPO\" \"WEB_ZOT_CONSUMER_URL_' '$ENVWRITE'"
+ENV_FMT='ZOT_ENDPOINT=%s\nZOT_PROBE_REPO=%s\nWEB_ZOT_CONSUMER_URL_KEY=%s'
+env_fmt_ok() { grep -cF -- "$ENV_FMT" "$ENVWRITE" >/dev/null; }
+assert "T7 web-probe-envwrite.sh's printf names the slots in order (ZOT_ENDPOINT first, ZOT_PROBE_REPO second)" "env_fmt_ok"
 # The pull side, completely: EVERY registry-prefixed pin in the two cloud-init files, and the deploy-time
 # ALLOWED_IMAGES set, name only repositories the probe covers (a third pin or a third image is a repository
 # the probe would not see).
-all_pins() {  # <file...> -> every NAME=REF pin path, one per line, sorted unique
-  sed -n 's|^[[:space:]]*[A-Z]*REF="\$[A-Za-z_{}]*/\([^:@"]*\)[:@].*|\1|p' "$@" | sort -u
+pin_rows() {  # <file...> -> the repository path of every NAME*REF="$<var>/path[:@]..." pin or `docker pull "$<var>/path`, one per line
+  sed -n -e 's|^[[:space:]]*[A-Za-z0-9_]*REF[A-Za-z0-9_]*="[$]*[$A-Za-z0-9_{}]*/\([^:@"]*\)[:@].*|\1|p' \
+         -e 's|.*docker pull "[$]*[$A-Za-z0-9_{}]*/\([^:@"]*\)[:@"].*|\1|p' "$@"
 }
+all_pins() { pin_rows "$@" | sort -u; }
 assert "T7 every registry-prefixed pin in both cloud-init files names the one bootstrap repository (a third pin fails here)" \
   "[[ \"\$(all_pins '$CLOUD_INIT_WEB' '$CLOUD_INIT_INNGEST')\" == '$TF_BOOT' ]]"
-ALLOWED_PATHS="$(sed -n '/^declare -A ALLOWED_IMAGES=(/,/^)/p' "$SCRIPT_DIR/ci-deploy.sh" | sed -n 's|.*="ghcr\.io/\([^"]*\)".*|\1|p' | sort)"
+# The pin set is also counted: exactly the two ZIREF pins exist today (one per host class).
+assert "T7 exactly two registry-prefixed pins exist across both cloud-init files (one per host class)" \
+  "[[ \"\$(pin_rows '$CLOUD_INIT_WEB' '$CLOUD_INIT_INNGEST' | wc -l)\" -eq 2 ]]"
+ALLOWED_PATHS="$(sed -n '/^declare -A ALLOWED_IMAGES=(/,/^)/p' "$SCRIPT_DIR/ci-deploy.sh" | sed 's/^[[:space:]]*#.*//' | sed -n 's|.*="ghcr\.io/\([^"]*\)".*|\1|p' | LC_ALL=C sort)"
+# The web image's path as web-probe.tf derives it: the var.image_name default minus registry and tag.
+IMG_WEB="$(sed -n '/^variable "image_name"/,/^}/p' "$SCRIPT_DIR/variables.tf" | sed -n 's|^[[:space:]]*default[[:space:]]*=[[:space:]]*"ghcr\.io/\([^:@"]*\)[:@"].*|\1|p')"
+allowed_set_ok() {  # ALLOWED_IMAGES (comments ignored) is exactly {web image path, probed bootstrap path}
+  [[ -n "$IMG_WEB" && "$ALLOWED_PATHS" == "$(printf '%s\n%s\n' "$IMG_WEB" "$TF_BOOT" | LC_ALL=C sort)" ]]
+}
 assert "T7 ci-deploy.sh ALLOWED_IMAGES holds exactly two images (web + bootstrap) and the bootstrap one is the probed constant" \
   "[[ \"\$(wc -l <<<'$ALLOWED_PATHS')\" -eq 2 ]] && grep -qxF '$TF_BOOT' <<<'$ALLOWED_PATHS'"
+assert "T7 ci-deploy.sh ALLOWED_IMAGES is exactly {the var.image_name repo, the probed bootstrap repo}: no duplicate, no third, no lookalike" "allowed_set_ok"
 # H3 — the extraction helper is driven against a synthetic fixture whose pin names a DIFFERENT, consistent
 # repo: it must return THAT path (so the check cannot be a self-comparison with the constant).
 PIN_FIXTURE="$(mktemp "$TMP/pinfix.XXXXXX")"
@@ -539,7 +557,12 @@ marker_row() {  # <label> <@missing|@empty|content>
 }
 marker_row "missing" "@missing"
 marker_row "empty" "@empty"
-marker_row "garbage (non-numeric)" "not-a-number"
+marker_row "garbage, longer than 10 characters (length guard)" "not-a-number"
+# Short garbage reaches the non-numeric arm itself (a longer value is caught by the length guard first).
+marker_row "garbage 'abc' (non-numeric arm)" "abc"
+marker_row "garbage '12ab' (digits then letters)" "12ab"
+marker_row "garbage '1e5' (exponent form)" "1e5"
+marker_row "garbage '-5' (negative)" "-5"
 marker_row "future-dated (numeric, later than now)" "$(( $(date +%s) + 99999 ))"
 marker_row "an hour old (past the 1800 s window)" "$(( $(date +%s) - 3600 ))"
 printf '%s\n' "$(date +%s)" > "$MK"
@@ -591,10 +614,14 @@ assert "T12 a newline in ZOT_PROBE_REPO => FATAL exit 1 before any curl, ping or
 
 # T13 — an element outside the OCI repository-name alphabet changes the request path (or makes curl glob)
 # rather than naming a repository: FATAL exit 1, no ping, no marker. The control row must PING.
-for bad in 'a/b?c' 'a/b#c' 'a/../b' 'a[1-2]' 'a{b,c}' 'Upper/Case' '/abs/x' 'trail/' 'a//b' '-flag/x' '.hidden/x' 'a/b:tag' 'a/b@sha'; do
+# The dot-segment, hyphen-edged and underscore-edged rows pin the component rule: a component that starts or ends
+# with a separator is refused (`a/./b` would be normalised to `a/b` by the HTTP client, so the probe would
+# check a different repository than the list names). Every row must also hit the FATAL arm that names it.
+for bad in 'a/b?c' 'a/b#c' 'a/../b' 'a[1-2]' 'a{b,c}' 'Upper/Case' '/abs/x' 'trail/' 'a//b' '-flag/x' '.hidden/x' 'a/b:tag' 'a/b@sha' \
+           'a/./b' 'a/.' 'a/-b' 'a./b' '_a/b' 'a/_b' 'a_/b-' 'a/b.' 'a/b-'; do
   run_override_multi "$bad" 200
-  assert "T13 element '$bad' => FATAL exit 1, no ping, no marker" \
-    "[[ '$EC' -eq 1 && '$PINGED' == no && \"\$(count_markers)\" -eq 0 ]]"
+  assert "T13 element '$bad' => FATAL exit 1 (invalid-name arm), no ping, no marker" \
+    "[[ '$EC' -eq 1 && '$PINGED' == no && \"\$(count_markers)\" -eq 0 ]] && grep -qF 'not a valid repository name' '$MOUT'"
 done
 run_override_multi "a-b/c_d.e,f/g-h" 200,200
 assert "T13 control: a name using every permitted separator (. _ - /) pings" "[[ '$PINGED' == yes && '$EC' -eq 0 ]]"
@@ -619,10 +646,11 @@ assert "T14 an unreadable clock (date fails) with no marker => the markers ARE e
 
 # T15 — the two markers must not share a default path: the canary stamps first in the same run, which
 # would close the window for every repo marker for good (the telemetry meant to prove a healthy run).
-def_of() { sed -n "s|.*[$]{$1:-\([^}]*\)}.*|\1|p" "$SUT" | head -1; }
+def_of() { sed -n "s|^[[:space:]]*local m=\"[$]{$1:-\([^}]*\)}\".*|\1|p" "$SUT"; }  # the real assignment, never a comment
 DEF_CANARY="$(def_of SOLEUR_PROBE_CANARY_MARKER)"
 DEF_REPOS="$(def_of SOLEUR_PROBE_REPOS_MARKER)"
-assert "T15 both default marker paths were extracted (non-empty)" "[[ -n '$DEF_CANARY' && -n '$DEF_REPOS' ]]"
+assert "T15 both default marker paths were extracted, one assignment each (non-empty, single line)" \
+  "[[ -n '$DEF_CANARY' && -n '$DEF_REPOS' && \"\$(wc -l <<<'$DEF_CANARY')\" -eq 1 && \"\$(wc -l <<<'$DEF_REPOS')\" -eq 1 ]]"
 assert "T15 the canary and per-repo marker default paths DIFFER" "[[ '$DEF_CANARY' != '$DEF_REPOS' ]]"
 
 # T16 — instrument controls. has_marker must be able to FAIL (a stub that always returned true would
@@ -636,7 +664,7 @@ echo
 echo "=== $PASS passed, $FAIL failed ==="
 # Anti-vacuity floor (ADR-193): a disarmed assert() or a skipped block must not read as green. Raise it in
 # the SAME edit that adds rows; it is reported with printf, never through assert().
-MIN_ASSERTS=183
+MIN_ASSERTS=199
 if [[ "$((PASS + FAIL))" -lt "$MIN_ASSERTS" ]]; then
   printf 'FAIL: only %s assertions ran (floor %s) — a block was skipped or assert() was disarmed\n' "$((PASS + FAIL))" "$MIN_ASSERTS"
   exit 1

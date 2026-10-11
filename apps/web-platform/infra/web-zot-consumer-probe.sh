@@ -46,17 +46,20 @@ esac
 # Each element is classified by the table above; the heartbeat is pinged ONLY when EVERY element is
 # 200 (all-must-pass: a conjunction cannot mask a faulting repo, and one heartbeat per host is kept).
 #   - empty elements are skipped (a trailing comma is permitted); a newline anywhere in the value, an
-#     element outside the OCI repository-name alphabet (lowercase a-z 0-9 and . _ / -, no `..`, no leading
-#     or trailing separator), or a list with no non-empty element, is FATAL exit 1 before any curl, ping or
-#     marker (a newline would otherwise let `read` drop every later element and silently shrink the
-#     conjunction; a `?`, `#`, `[` or `..` would alter the request path rather than name a repository);
+#     element outside the OCI repository-name alphabet (lowercase a-z 0-9 and . _ / -, and no path
+#     component that starts or ends with a separator, which also refuses `..`, `a/./b` and `a/.`), or a list
+#     with no non-empty element, is FATAL exit 1 before any curl, ping or marker (a newline would otherwise
+#     let `read` drop every later element and silently shrink the conjunction; a `?`, `#`, `[`, `{` or a dot
+#     segment would alter the request path rather than name a repository);
 #   - a 401 on ANY element exits 3 (HARD), and the other elements are still probed, so no repo's
 #     line is lost to an early exit;
 #   - every fault line ends with repo=<path>; a rate-limited (30 min) SOLEUR_ZOT_PROBE_VERDICT marker
 #     per repo (code, verdict) proves a HEALTHY run per repo from telemetry, because a healthy probe
 #     is otherwise silent. Fault lines are NOT rate-limited (one per faulting repo per 60 s run, at most
-#     2880 rows/day on a full outage against 1440 for one repo, inside the Better Stack headroom);
-#   - worst case is 10 s per repo (curl -m 10): two repos is 20 s against the 60 s timer cadence.
+#     2880 rows/day on a full outage against 1440 for one repo; ADR-184 recorded ~19.9k of the 25k/day
+#     Better Stack budget used in June 2026, so ~5.1k/day of headroom and a full outage takes about 56%);
+#   - worst case is 10 s per repo (curl -m 10): two repos is 20 s with no ping, 40 s to a ping (two
+#     curl -m 10 attempts), both under the 60 s timer cadence.
 #
 # TEST SEAM: SOLEUR_ZOT_PROBE_STATUS_OVERRIDE injects a CODE (a comma list is positional over the
 # NON-EMPTY repo elements in order; a missing position reads 000) so the classification branches are
@@ -90,7 +93,8 @@ _canary() {
   # luks-#6604 pattern). The probes are otherwise SILENT-ON-SUCCESS, and the heartbeats + the NIC
   # guard's SOLEUR_PRIVATE_NIC line ship by DIRECT curl (independent of vector) — so a dead vector
   # agent on web-1 (the exact gap this fix repairs) would be INVISIBLE. This emits a benign tagged
-  # stderr row on EVERY run (called after the per-repo verdicts are emitted, before the exit decision), which journald ships under
+  # stderr row on EVERY run (after the fault lines and before the exit decision; also the first and only
+  # row of --canary-only), which journald ships under
   # SyslogIdentifier=web-zot-consumer-probe via Source 4 — making Source-4 liveness a STEADY-STATE
   # signal (its ABSENCE = the recurrence). It is deliberately INDEPENDENT of zot serviceability: a
   # true positive control must not vanish when the thing it monitors alongside (zot) is itself down,
@@ -171,8 +175,9 @@ if [ -z "$REPO" ]; then
   echo "[zot-probe] FATAL: ZOT_PROBE_REPO unset (source /etc/default/web-zot-consumer-probe) — cannot probe serviceability without a real repository path." >&2
   exit 1
 fi
-# Split the list. Empty elements are skipped; an element that holds whitespace cannot be put in a URL
-# and a list with nothing in it probes nothing, so both are FATAL here, before any curl, ping or marker.
+# Split the list. Empty elements are skipped. A newline in the value, an element that holds whitespace or
+# falls outside the repository-name alphabet, and a list with nothing in it are all FATAL here, before
+# any curl, ping or marker.
 R_NAME=(); R_CODE=(); R_VERDICT=()
 # `read` takes only the first line: a newline in the value would drop every later element and silently
 # shrink the all-must-pass conjunction, so refuse it before the split.
@@ -191,8 +196,9 @@ for _e in "${_RAW[@]}"; do
       exit 1
       ;;
     # OCI repository-name alphabet only (the web element derives from var.image_name, an operator value):
-    # a `?`, `#`, `[`, `{` or `..` would change the request path or make curl glob, not name a repository.
-    *[!a-z0-9._/-]*|*..*|/*|*/|.*|-*|*//*)
+    # a `?`, `#`, `[`, `{` or a dot segment would change the request path or make curl glob, not name a
+    # repository. OCI components start and end alphanumeric, so no component may start or end with . _ -.
+    *[!a-z0-9._/-]*|*..*|/*|*/|*//*|[._-]*|*[._-]|*/[._-]*|*[._-]/*)
       echo "[zot-probe] FATAL: ZOT_PROBE_REPO element is not a valid repository name (lowercase a-z 0-9 . _ / - only) — refusing to build a URL from it; probe NOT run." >&2
       exit 1
       ;;

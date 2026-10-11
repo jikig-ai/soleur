@@ -852,7 +852,7 @@ Two heartbeat families watch the image-pull path. Neither needs SSH to diagnose.
 
 | Heartbeat | Fed by | Period / grace | A missing beat means |
 |---|---|---|---|
-| `soleur-web-zot-consumer-web-1`, `-web-2` | `web-zot-consumer-probe.sh` on each web host, every 60 s | 180 / 60 | That web host could not get a servable tag list for EVERY probed repository (the web image and `jikig-ai/soleur-inngest-bootstrap`; web-2 still probes the web image only until its next replace) from zot for about 4 min |
+| `soleur-web-zot-consumer-web-1`, `-web-2` | `web-zot-consumer-probe.sh` on each web host, every 60 s | 180 / 60 | That web host could not get a servable tag list from zot for ANY probed repository (the web image or `jikig-ai/soleur-inngest-bootstrap`; web-2 still probes the web image only until its next replace) for about 4 min |
 | `soleur-registry-prd` | `zot-liveness-heartbeat.sh` on the registry host, every 60 s | 60 / 30 | zot did not answer on the host's private IP, or the beat itself did not arrive, for 90 s |
 
 **Step 1: was it a planned registry replace?** Every `soleur-registry-prd` incident since the
@@ -864,7 +864,7 @@ gh run list -R jikig-ai/soleur -w apply-web-platform-infra.yml -L 5
 ```
 
 A replace run finishing within a few minutes of the incident, plus a new `boot_id` in the query
-below, explains it. Those incidents last seconds, and each web host logs about 4 SUPPRESS rows (one per probed repo per tick).
+below, explains it. Those incidents last seconds, and web-1 logs about 4 SUPPRESS rows (one per probed repo per tick), web-2 about 2 until its next replace.
 Nothing needs doing.
 
 **Step 2: what the web hosts saw.** Consumer-probe verdicts by hour and host, last 7 days. The
@@ -891,8 +891,10 @@ SQL
 )"
 ```
 
-Every fault line ends with `repo=<path>`, so read WHICH repository faulted from it
-(`--grep 'repo=jikig-ai/soleur-inngest-bootstrap'`); the aggregate above does not split by repo. A healthy
+On a host running the new script (web-1 now, web-2 after its next replace) every fault line ends with
+`repo=<path>`, so read WHICH repository faulted from it: query the fault rows (`--grep 'SUPPRESS ping'` and
+`--grep 'HARD FAILURE'`) and read the trailing `repo=`. Do NOT grep `repo=<path>` alone: a healthy marker row
+contains that substring too. The aggregate above does not split by repo. A healthy
 run is silent, so the positive per-repo proof is the marker row, at most once per 30 min per host:
 
 ```bash
