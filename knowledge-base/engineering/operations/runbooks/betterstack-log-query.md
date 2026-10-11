@@ -926,9 +926,11 @@ gh run list -R jikig-ai/soleur -w apply-web-platform-infra.yml -L 5
 gh run view <run-id> -R jikig-ai/soleur --log | grep zot_consumer_probe_install
 ```
 
-A failed provisioner leaves `terraform_data.zot_consumer_probe_install` tainted, so re-running that apply
-(`gh run rerun <run-id> --failed`) or the next push apply under `apps/web-platform/infra/**` retries the
-delivery. The delivery is also not repeated when web-1 itself is rebuilt: cloud-init writes the bare list, so
+A failed provisioner leaves `terraform_data.zot_consumer_probe_install` tainted, so the next apply retries the
+delivery: push a fix commit under `apps/web-platform/infra/**` or dispatch the owning workflow
+(`gh workflow run apply-web-platform-infra.yml --ref main -f reason='re-deliver the web-1 probe pin'`). Never
+`gh run rerun --failed` here: it re-runs the original merge ref, so after a later pin bump it would deliver the
+older pin again. The delivery is also not repeated when web-1 itself is rebuilt: cloud-init writes the bare list, so
 after a web-1 rebuild the bootstrap row reads `pin_verdict=none` until that resource is delivered again.
 
 `auth_broken` above 0 is a credential fault (the probe exits 3), not an outage. For a web-2 page,

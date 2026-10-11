@@ -752,8 +752,8 @@ assert "P2c no early exit: the healthy second pin was still HEADed and marked" \
 
 # P4 (mock half) — every non-200, non-404, non-401 pin code suppresses the ping and is named.
 run_probe "$SUT" "known/repo,known/second@$DIG_403"
-assert "P4 pin 403 => NO ping, the line names the code, marker unexpected" \
-  "[[ '$PINGED' == no && '$EC' -eq 0 ]] && out_has 'unexpected code 403' && out_marker known/second 200 servable unexpected"
+assert "P4 pin 403 => NO ping, the line names the code AND the manifest URL it asked for, marker unexpected" \
+  "[[ '$PINGED' == no && '$EC' -eq 0 ]] && out_has 'unexpected code 403 for 127.0.0.1:$PORT/v2/known/second/manifests/$DIG_403' && out_marker known/second 200 servable unexpected"
 run_probe "$SUT" "known/repo,known/second@$DIG_503"
 assert "P4 pin 503 => NO ping, WEDGED, marker wedged" \
   "[[ '$PINGED' == no && '$EC' -eq 0 ]] && out_has 'WEDGED' && out_marker known/second 200 servable wedged"
@@ -787,8 +787,8 @@ assert "P5 tags/list 503 => NO manifest request, pin skipped" "[[ '$PINGED' == n
 : > "$REQLOG"; run_probe "$SUT" "known/repo,nonexistent/repo@$DIG_OK"
 assert "P5 mock: a pinned element whose tag list is 404 is never HEADed" "[[ '$PINGED' == no ]] && [[ \"\$(req_count manifests)\" -eq 0 ]]"
 run_override_multi "$WEB_R,$BOOT_R@$DIG_OK" 200,403
-assert "P5 seam: tags/list 403 still lands in 'unexpected code 403' (ci-deploy.sh documents this arm), pin skipped" \
-  "[[ '$PINGED' == no ]] && grep -qF 'unexpected code 403' '$FAULTS' && has_marker $BOOT_R 403 unexpected skipped && has_marker $WEB_R 200 servable none"
+assert "P5 seam: tags/list 403 still lands in 'unexpected code 403 for .../tags/list' (ci-deploy.sh documents this arm), pin skipped" \
+  "[[ '$PINGED' == no ]] && grep -qE 'unexpected code 403 for 127\\.0\\.0\\.1:1/v2/'$BOOT_R'/tags/list' '$FAULTS' && has_marker $BOOT_R 403 unexpected skipped && has_marker $WEB_R 200 servable none"
 run_override_multi "$WEB_R,$BOOT_R@$DIG_OK" 200,200
 assert "P5 seam: tags 200 on a pinned element but nothing listening => the pin HEAD is UNREACHABLE (no ping)" \
   "[[ '$PINGED' == no && '$EC' -eq 0 ]] && has_marker $BOOT_R 200 servable unreachable"
@@ -804,7 +804,7 @@ assert "P6 the single-repo env value (web-2) pings and says none" "[[ '$PINGED' 
 echo "--- #10004: ref grammar ---"
 UPPER_HEX="sha256:$(hex64 A)"; SHA512="sha512:$(printf '%0128d' 0 | tr 0 a)"
 for bad in "known/second:v1" "known/second:v1@$DIG_OK" "known/second@sha256:abc" "known/second@$UPPER_HEX" "known/second@$SHA512" \
-           "known/second@" "known/second@${DIG_OK}x" "known/second@${DIG_OK}a" "known/second@$DIG_OK@$DIG_OK" "@$DIG_OK" "known/second@sha256:"; do
+           "known/second@" "known/second@${DIG_OK}x" "known/second@${DIG_OK}a" "known/second@${DIG_OK:0:70}" "known/second@$DIG_OK@$DIG_OK" "@$DIG_OK" "known/second@sha256:"; do
   run_stub zuser synthetic-fixture-token-0001 "known/repo,$bad"
   assert "P7 element '${bad:0:48}' => FATAL exit 1 (curl never invoked, no ping, no marker)" \
     "[[ '$EC' -eq 1 && '$PINGED' == no && ! -s '$SARGV' ]] && out_has 'not a valid repository name' && ! out_has 'SOLEUR_ZOT_PROBE_VERDICT'"
@@ -835,8 +835,8 @@ assert "P9 exactly one request targets a manifest, and it is the pinned digest" 
   "[[ \"\$(grep -cF '/manifests/' '$SARGV')\" -eq 1 ]] && grep -qF -e '/v2/known/second/manifests/$DIG_OK' '$SARGV'"
 assert "P9 the manifest request is a HEAD (-I) and the tag-list requests are not" \
   "[[ \"\$(grep -F '/manifests/' '$SARGV' | grep -cF -e ' -I ')\" -eq 1 && \"\$(grep -F '/tags/list' '$SARGV' | grep -cF -e ' -I ' || true)\" -eq 0 ]]"
-assert "P9 no request carries -f (it would destroy the 404 classification) or --retry" \
-  "! grep -qE -e ' -[a-zA-Z]*f[a-zA-Z]* ' -e '--retry' '$SARGV'"
+assert "P9 no request carries -f (it would destroy the 404 classification), --retry, or -L/--location" \
+  "! grep -qE -e ' -[a-zA-Z]*[fL][a-zA-Z]* ' -e '--retry' -e '--location' '$SARGV'"
 assert "P9 the credential is on no argv; stdin holds one identical user = line per curl (3)" \
   "! grep -qF -e synthetic-fixture-token-0001 -e zuser -e ' -u ' '$SARGV' && [[ \"\$(wc -l < '$SSTDIN')\" -eq 3 && \"\$(sort -u '$SSTDIN')\" == 'user = \"zuser:synthetic-fixture-token-0001\"' ]]"
 assert "P9 the manifest request reads its config from stdin like the tag lists" "[[ \"\$(grep -cF -e '--config - ' '$SARGV')\" -eq 3 ]]"
@@ -903,16 +903,33 @@ assert "T16 out_marker is strict: a pin-missing run is not pinned, and a wrong c
 # Source-shape rows that no behavioural fixture can reach (comment-stripped, anchored on the call form).
 probe_code() { sed 's/^[[:space:]]*#.*//' "$SUT"; }
 # shellcheck disable=SC2016  # the literal $URL is the probe source text under test
-ping_sites() { local n; n=$(probe_code | grep -oE '_ping "\$URL"' | wc -l); printf '%s' "$n" | tr -d ' '; }
-curl_sites() { local n; n=$(probe_code | grep -cE '(^|[ (])curl[[:space:]]+-' || true); printf '%s' "$n"; }
-assert "P13 exactly ONE call site of _ping: the aggregation chokepoint (a second emitter would bypass the pin verdict)" "[[ \"\$(ping_sites)\" -eq 1 ]]"
-assert "P13 exactly TWO curl invocations: the heartbeat ping and the single request function" "[[ \"\$(curl_sites)\" -eq 2 ]]"
+# `_ping` appears twice in the comment-stripped probe: its definition and the single aggregation call. `curl` followed by
+# a flag, a quote, a dollar or a continuation appears three times: two in the heartbeat ping's fallback chain and one in
+# the single request function. Counting TOKENS (not lines) sees a second call on a line that already holds one.
+ping_words() { local n; n=$(probe_code | grep -oE '(^|[^[:alnum:]_])_ping([^[:alnum:]_]|$)' | wc -l); printf '%s' "$n" | tr -d ' '; }
+curl_words() { local n; n=$(probe_code | grep -oE '(^|[^[:alnum:]_/])curl[[:space:]]+[-"$'"'"'\\]' | wc -l); printf '%s' "$n" | tr -d ' '; }
+other_fetchers() { local n; n=$(probe_code | grep -cE '(/usr/bin/curl|\bwget\b|\bnc\b|/dev/tcp/)' || true); printf '%s' "$n"; }
+assert "P13 _ping is defined once and called once (a second call, in any spelling, would bypass the aggregation chokepoint)" "[[ \"\$(ping_words)\" -eq 2 ]]"
+assert "P13 curl appears exactly 3 times (two in the ping fallback chain, one in the single request function)" "[[ \"\$(curl_words)\" -eq 3 ]]"
+assert "P13 no other network client (/usr/bin/curl, wget, nc, /dev/tcp) appears in the probe" "[[ \"\$(other_fetchers)\" -eq 0 ]]"
 # Guard 2 reach: no other infra .tf reads the pinned local, and web-1's provisioner writes the env file exactly once.
-tf_readers() { grep -lF 'zot_probe_repo_pinned' "$SCRIPT_DIR"/*.tf | xargs -n1 basename | sort | tr '\n' ' '; }
-assert "P13 only web-probe.tf (definition) and server.tf (web-1's two sites) reference the pinned local across every infra .tf" \
-  "[[ \"\$(tf_readers)\" == 'server.tf web-probe.tf ' ]]"
-assert "P13 web-1's provisioner writes /etc/default/web-zot-consumer-probe exactly once (a later rewrite would drop the pin)" \
-  "[[ \"\$(grep -cF '> /etc/default/web-zot-consumer-probe' '$SERVER_TF')\" -eq 1 ]]"
+tf_files() { grep -rlF "$1" "$SCRIPT_DIR" --include='*.tf' --include='*.tf.json' --include='*.hcl' --include='*.tftest.hcl' | xargs -n1 basename | sort | tr '\n' ' '; }
+assert "P13 only web-probe.tf (definition) and server.tf (web-1's sites) reference the pinned local, in any terraform file form" \
+  "[[ \"\$(tf_files zot_probe_repo_pinned)\" == 'server.tf web-probe.tf ' ]]"
+assert "P13 the digest local is read by web-probe.tf alone" "[[ \"\$(tf_files zot_probe_digest_inngest_bootstrap)\" == 'web-probe.tf ' ]]"
+block_pinned() { awk '/^resource "terraform_data" "zot_consumer_probe_install"/,/^}/' "$SERVER_TF" | grep -cF 'local.zot_probe_repo_pinned' || true; }
+assert "P13 both server.tf uses (triggers_replace and the env-file printf) sit INSIDE terraform_data.zot_consumer_probe_install" "[[ \"\$(block_pinned)\" -eq 2 ]]"
+env_path_writers() { grep -E '/etc/default/web-zot-consumer-probe' "$SERVER_TF" | grep -cE '(^|[^a-z])(tee|install|cp|mv|sed|dd)[[:space:]]|>>|[^-]>[[:space:]]*/etc/default/web-zot-consumer-probe' || true; }
+assert "P13 web-1's provisioner has exactly ONE writer of /etc/default/web-zot-consumer-probe (no tee, cp, sed, >>, or second redirect)" "[[ \"\$(env_path_writers)\" -eq 1 ]]"
+# Guard 2 reach on the BIRTH path and the baked files: nothing there may reassign the list or carry a digest literal.
+assert "P13 web-probe-envwrite.sh only validates and prints the list: no assignment, and exactly one ZOT_PROBE_REPO printf slot" \
+  "[[ \"\$(grep -cE '^[[:space:]]*(export[[:space:]]+)?SOLEUR_ZOT_PROBE_REPO=' '$ENVWRITE')\" -eq 0 && \"\$(grep -oE 'ZOT_PROBE_REPO=%s' '$ENVWRITE' | wc -l)\" -eq 1 ]]"
+assert "P13 cloud-init.yml assigns SOLEUR_ZOT_PROBE_REPO exactly once, and the unit sets no ZOT_PROBE_REPO of its own" \
+  "[[ \"\$(grep -c 'SOLEUR_ZOT_PROBE_REPO=' '$CLOUD_INIT_WEB')\" -eq 1 ]] && ! grep -qE '^[[:space:]]*Environment=.*ZOT_PROBE_REPO' '$SCRIPT_DIR/web-zot-consumer-probe.service'"
+assert "P13 no baked script or unit carries a digest literal (a pin there would reach every born host)" \
+  "! grep -qE '@sha256:[0-9a-f]{64}' '$ENVWRITE' '$SCRIPT_DIR/web-zot-consumer-probe.service' '$SCRIPT_DIR/web-zot-consumer-probe.timer'"
+assert "P12 the ZIREF regex keeps its exact tail (a terraform-less box cannot evaluate it; this literal pins the shape)" \
+  "grep -qF 'v[0-9]+\\\\.[0-9]+\\\\.[0-9]+@(sha256:[0-9a-f]{64})' '$PROBE_TF'"
 
 # T16 additions — the new marker field is strict too.
 run_override_multi "$WEB_R,$BOOT_R@$DIG_OK" 200,404
@@ -978,7 +995,7 @@ if command -v terraform >/dev/null 2>&1; then
   assert "H5 terraform console follows the FILE: a fixture with another digest yields that digest (must-PASS, non-canonical)" \
     "[[ \"\$(tf_console_digest '$FIXDIR')\" == \"sha256:\$(printf '%064d' 0 | tr 0 c)\" && '$TF_DIG' != \"sha256:\$(printf '%064d' 0 | tr 0 c)\" ]]"
 else
-  # SOLEUR_REQUIRE_TERRAFORM=1 turns the skip into a failure where terraform is contractually present (CI).
+  # SOLEUR_REQUIRE_TERRAFORM=1 turns the skip into a failure; it is opt-in and no workflow exports it yet.
   [[ "${SOLEUR_REQUIRE_TERRAFORM:-}" != 1 ]] || assert "terraform is required here (SOLEUR_REQUIRE_TERRAFORM=1) but is not installed" "false"
   TF_SKIPPED=$((TF_SKIPPED + 3)); echo "  SKIP: 3 terraform-console rows (terraform is not installed here) — NOT counted toward MIN_ASSERTS"
 fi
@@ -988,17 +1005,17 @@ echo
 echo "=== $PASS passed, $FAIL failed ==="
 # Anti-vacuity floor (ADR-193): a disarmed assert() or a skipped block must not read as green. Raise it in
 # the SAME edit that adds rows; it is reported with printf, never through assert().
-# 295 assertions run with terraform installed; the 3 terraform-console rows are gated and a skip never counts, so
-# a box without terraform floors at the count WITHOUT them (292) and must not read as a disarmed suite. The threshold
+# 303 assertions run with terraform installed; the 3 terraform-console rows are gated and a skip never counts, so
+# a box without terraform floors at the count WITHOUT them (300) and must not read as a disarmed suite. The threshold
 # literal sits directly above the `if` (scripts/guard-vacuity-floor.test.sh builds its mutant from that adjacency);
 # the stricter full count applies in a SECOND check wherever terraform ran, so no row can be deleted behind slack.
-MIN_ASSERTS=292
+MIN_ASSERTS=300
 if [[ "$((PASS + FAIL))" -lt "$MIN_ASSERTS" ]]; then
   printf 'FAIL: only %s assertions ran (floor %s) — a block was skipped or assert() was disarmed\n' "$((PASS + FAIL))" "$MIN_ASSERTS"
   exit 1
 fi
-if [[ "$TF_SKIPPED" -eq 0 && "$((PASS + FAIL))" -lt 295 ]]; then
-  printf 'FAIL: only %s assertions ran with terraform present (floor 295) — a row was deleted\n' "$((PASS + FAIL))"
+if [[ "$TF_SKIPPED" -eq 0 && "$((PASS + FAIL))" -lt "$((MIN_ASSERTS + 3))" ]]; then
+  printf 'FAIL: only %s assertions ran with terraform present (floor %s) — a row was deleted\n' "$((PASS + FAIL))" "$((MIN_ASSERTS + 3))"
   exit 1
 fi
 [[ "$FAIL" -eq 0 ]]

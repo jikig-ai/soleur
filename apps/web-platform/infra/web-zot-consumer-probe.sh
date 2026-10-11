@@ -84,8 +84,9 @@ esac
 # born hosts keep the bare list because a pin
 # baked into an env file at birth could never be updated. The web image has no committed digest (#10044), so
 # its element stays bare and says pin_verdict=none. A manifest HEAD does not prove the blobs: the build
-# workflow's `crane validate` step is the only blob check and it is a non-blocking dark-launch that runs
-# at mirror time on the build's own tag, so nothing today gates the blobs of the pinned digest.
+# workflow's `crane validate` is the only MIRROR-time blob check and it is a non-blocking dark-launch on the
+# build's own tag, and the registry-restore engine validates blobs only at restore time, so nothing checks the
+# blobs of the pinned digest in steady state.
 #
 # TEST SEAM: SOLEUR_ZOT_PROBE_STATUS_OVERRIDE injects a tags/list CODE (a comma list is positional over the
 # NON-EMPTY repo elements in order; a missing position reads 000; pin HEADs are NOT seamed, the suite drives
@@ -284,8 +285,8 @@ auth_broke=0
 # sites as wrapper commands and judge the unpinned ${ENDPOINT} (#7873), which main's masked `$(...)` curl never
 # was. The arguments are read into locals on the line above it instead.
 _fetch() {  # <path under /v2/> [-I]  -> sets CODE
-  local _p="$1" _i="${2:-}"
-  CODE=$(curl --disable --noproxy '*' ${_i:+-I} -s -o /dev/null -w '%{http_code}' -m 10 --config - "http://${ENDPOINT}/v2/${_p}" \
+  local _p="$1" _flag="${2:-}"
+  CODE=$(curl --disable --noproxy '*' ${_flag:+-I} -s -o /dev/null -w '%{http_code}' -m 10 --config - "http://${ENDPOINT}/v2/${_p}" \
     < <(printf 'user = "%s:%s"\n' "$ZUSER" "$ZTOK") 2>/dev/null || echo 000)
   [ -n "$CODE" ] || CODE=000
   # (#7262) On a transport failure curl prints `000` via -w AND exits non-zero, so the `|| echo 000` above
