@@ -5434,7 +5434,7 @@ else row "S5 Guard 1 mutation 3: the order predicate is blind to a reordered ste
 
 # ---- baseline E and the ceiling table: SET IDENTITY with the rows still owned by tracked work (parametrized on the registry commit) ----
 S5_CEIL="scripts/fixtures/shell-trace-refusal/rule-e-census-ceiling.tsv"
-S5_REG_OFFENDS=0; python3 scripts/lint-shell-trace-credential-refusal.py "$S5_REG" 2>&1 | grep -q '^OK:' || S5_REG_OFFENDS=1
+S5_REG_OFFENDS=0; S5_REG_LINT="$(python3 scripts/lint-shell-trace-credential-refusal.py "$S5_REG" 2>&1)"; grep -q '^OK:' <<<"$S5_REG_LINT" || S5_REG_OFFENDS=1
 S5_WANT_ROWS="$(printf '%s\n' apps/cla-evidence/infra/bootstrap.sh apps/cla-evidence/scripts/r2-conditional-put.sh; (( S5_REG_OFFENDS )) && printf '%s\n' "$S5_REG"; true)"
 S5_WANT_ROWS="$(sort <<<"$S5_WANT_ROWS")"
 S5_GOT_BASE="$(grep -v '^#' "$BASE_E" | cut -f1 | sort)"; S5_GOT_CEIL="$(grep -v '^#' "$S5_CEIL" | cut -f1 | sort)"
