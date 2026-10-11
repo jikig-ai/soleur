@@ -15,6 +15,21 @@ brand_survival_threshold: aggregate pattern
 
 # feat: `arm-heartbeats.sh --status <name>` and `--arm-one <name> [--id <id>]`
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-11
+**Gates run (mechanical):** User-Brand Impact (4.6), Observability (4.7), PAT-shaped variable sweep (4.8, no hits), Guard Contract lint (4.11, 3 entries green), Scope Check (4.12, one live section); cited issue/PR states re-verified live (`gh issue view`: #9438, #9980, #8211, #8093, #9705 OPEN; #9936 MERGED); the only cited rule id (`cq-write-failing-tests-before`) exists in AGENTS.md. Not run: the open-ended per-skill/per-agent fan-out (the change is one bash script plus its suite; plan-review already ran three reviewers).
+**Plan review applied (before deepen):** DHH, Kieran and code-simplicity findings folded in: positional 4th `arm_one` parameter instead of a global override, mutation rows trimmed to M22-M33 with consistent numbering, resolver hardened (`.data` array check, delimiter and null sentinels, direct calls), transcript-diff and extra parity assertions cut.
+
+### Key improvements from deepening
+1. The vendor list shape was checked against Better Stack's published docs (WebSearch of the "List heartbeats" page): each row carries `period`, `grace`, `status`, `name`, `url`; the doc example shows `paused_at` (a timestamp) rather than a boolean `paused`, while this repo's own live reader (`heartbeat-live-reconcile.ts`) validates a boolean `paused` from the same endpoint. The resolver therefore prints `paused` as reported or `unreported` and NEVER gates on it; the only gates are `status` (via `arm_one`'s existing op/state check) and `period`/`grace` (fail closed).
+2. The resolver's jq filter and delimiter handling were exercised on a synthetic page in the scratchpad: exact match only, `null` fields survive as the literal `null`, `\x1f`-delimited `read` keeps empty/null fields aligned (tab would have collapsed them), and `jq -e '.data | type == "array"'` exits 1 for both `{}` and `{"errors":...}` bodies.
+3. Measured: existing mutation row M7 (`s|--max-time "$ARM_CURL_MAX_TIME_S" ||g`) lands on exactly 2 lines today; the resolver's own `--max-time` literal makes it 3 (deliberate, listed under Files to Edit). The phrase `rollback PATCH paused=true FAILED` occurs exactly once, so reusing it in new code would break M4's sed range.
+
+### New considerations discovered
+- `period`/`grace` have not been read live by this repo before; the owner's first `--status` is the first live read. Absent or non-integer values refuse (fail closed), so a wrong vendor-shape guess cannot arm.
+- The vendor docs do not document `per_page`; this repo already relies on `?per_page=250` (`scripts/cutover-inngest.sh`, `reconcile-live-heartbeats.ts` allows `page`/`per_page`), so it is kept, and a 20-page bound covers a vendor that ignores it.
+
 Spec lacks a `lane:` (no spec directory exists for this branch), so `lane` defaulted to `cross-domain` (fail-closed).
 
 ## Overview
@@ -178,7 +193,7 @@ arm-heartbeats.sh [--arm | --sweep | --help]        # unchanged
 ### Resolver (`hb_resolve_name <name>`)
 
 - Loop: URL = `${BS_API_BASE}/heartbeats?per_page=250`, then each `.pagination.next`. A `next` is followed ONLY when it starts with the QUOTED prefix `"${BS_API_BASE}/heartbeats?"` (an unquoted `?` is a glob); anything else is refused, and more than 20 pages is refused (exactly 20 requests are made, then rc 1). Every page must satisfy `jq -e '.data | type == "array"'`: a 200 whose body is `{}` or `{"errors":...}` is a FAILED read (rc 1), never an empty page, because a hidden duplicate on that page would otherwise read as a unique match. Each read goes through the single credentialed wrapper (`body=$(bs_api -fsS --max-time "$ARM_CURL_MAX_TIME_S" ...) || return 1`, never `local body=$(...)`, which masks the exit code); a failed/empty/non-JSON page is rc 1.
-- Per page, jq (arg-bound, never interpolated) emits one row per exact-name match with a NON-whitespace delimiter (`\x1f`) and a non-null sentinel per field (`(.x // "null" | tostring)` with CR/LF removed per field in jq via `gsub`), because tab is IFS-whitespace and `read` collapses empty fields (a `null` period would shift `grace` into `period`). The id must match `^[0-9]+$` (a match with a malformed id refuses, never skipped). Matches are COUNTED, not de-duplicated: a row repeated by an overlapping page reads as a collision and refuses (fail closed; a false refusal costs one owner look, a false unique costs a wrong arm). The resolver is called DIRECTLY (`hb_resolve_name "$n"; rc=$?`), never inside `$( )` or a `| while read` pipeline, so `RES_*` survive in the parent shell; `arm_one` likewise runs in the parent shell (its globals, and the suite's `kill -9 "$PPID"` cut model, require it).
+- Per page, jq (arg-bound, never interpolated) emits one row per exact-name match (`paused` as `(.attributes.paused // "unreported")`: informational only, never a gate) with a NON-whitespace delimiter (`\x1f`) and a non-null sentinel per field (`(.x // "null" | tostring)` with CR/LF removed per field in jq via `gsub`), because tab is IFS-whitespace and `read` collapses empty fields (a `null` period would shift `grace` into `period`). The id must match `^[0-9]+$` (a match with a malformed id refuses, never skipped). Matches are COUNTED, not de-duplicated: a row repeated by an overlapping page reads as a collision and refuses (fail closed; a false refusal costs one owner look, a false unique costs a wrong arm). The resolver is called DIRECTLY (`hb_resolve_name "$n"; rc=$?`), never inside `$( )` or a `| while read` pipeline, so `RES_*` survive in the parent shell; `arm_one` likewise runs in the parent shell (its globals, and the suite's `kill -9 "$PPID"` cut model, require it).
 - Outputs: `RES_COUNT`, and for count 1 `RES_ID`, `RES_PAUSED`, `RES_STATUS`, `RES_PERIOD`, `RES_GRACE`. For count > 1 only the ids are printed (`::error::... N heartbeats are named '<name>': ids <a> <b>; refusing`).
 
 ### `--status`
