@@ -100,6 +100,13 @@ out_rc 24h "$ROOT/m1"; check "24h, the busiest repo is spread but a smaller qual
 { rows_of 12 destroy-ask git-force-default alice/app; rows_of 2 destroy-ask-approved git-force-default alice/app member; row destroy-ask-approved git-force-default alice/app owner; } > "$ROOT/m2"
 out_rc 24h "$ROOT/m2"; has "member approvals are reported" "$OUT" "member_approvals=2"; has "implicit-force share is reported" "$OUT" "implicit_force=0"
 
+# --- enrolment wrappers fix the window and delegate (the directive cannot carry arguments)
+for w in 24h 7d; do
+  WOUT="$(STUB_ROWS="$ROOT/r1" STUB_ARGS="$ROOT/wargs-$w" DESTROY_ASK_QUERY_SCRIPT="$QUERY_STUB" BETTERSTACK_QUERY_HOST=h BETTERSTACK_QUERY_USERNAME=u BETTERSTACK_QUERY_PASSWORD=p bash "$SCRIPT_DIR/hosted-destroy-ask-window-9776-$w.sh" 2>&1)"; WRC=$?
+  case "$w:$WRC" in 24h:2|7d:5) ok "wrapper $w: exit $WRC (the same verdict as --window $w)" ;; *) bad "wrapper $w: unexpected exit $WRC" ;; esac; CHECKED=$((CHECKED + 1))
+  has "wrapper $w queries the $w window" "$(cat "$ROOT/wargs-$w")" "--since $w"
+done
+
 # --- exit vocabulary and xtrace
 for f in r1 r2 r3 s1 s3 drift empty; do
   w=24h; case "$f" in s*) w=7d ;; esac

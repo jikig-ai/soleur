@@ -7,7 +7,7 @@ pr: "set when the PR opens"
 status: SIGNED-OFF (CLO-agent-attested, Soleur-as-tenant-zero v1)
 signed_off_at: 2026-10-10
 signed_off_by: "CLO agent"
-disposition: "DISCHARGED if conditions C1-C9 hold at ship; BLOCKED if C1 or C2 fails (the banner assurance would be an overclaim)"
+disposition: "DISCHARGED (C1-C8 verified 2026-10-11 on the final tree; C9 post-merge observation pending, banner assurance ship-blocked in prod verification until recorded)"
 conditions:
   - "C1 — one unit: banner copy, toggle copy, lane and tests ship in one build and one commit/revert unit; no feature flag; copy applied byte-for-byte from the ruling."
   - "C2 — the statement is true on the live canUseTool path: the real-factory wiring test, an un-acked owner is gated, and a prior git push or terraform grant does not launder the destroy forms."
@@ -77,7 +77,7 @@ and goes stale in the user-favourable direction (risk LOW). Deleting it is a Tie
 every user to re-accept Terms one build after the previous forced re-acceptance; an AUP-only edit is rejected (it would put "pauses to ask" next
 to Terms saying the opposite). Dated deadline: the earliest of the next `TC_VERSION` bump (bundle it there), publication of #9603's hosted-coverage
 claim, the first arms-length workspace owner, or **2027-01-08**. The verbatim replacement text is in the CLO ruling (section 3.4). Tracking issue
-(C6): _filed before merge; the number is recorded here and in the PR body_.
+(C6): filed as [#9955](https://github.com/jikig-ai/soleur/issues/9955) (also in the PR body).
 
 ## Art. 30 / privacy documents
 
