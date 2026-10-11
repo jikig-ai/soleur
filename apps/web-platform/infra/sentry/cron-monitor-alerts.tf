@@ -56,11 +56,6 @@ locals {
     # monitor cannot be routed in the PR that creates it). Routing it is #9858. Until then a missed or errored
     # check-in (exit 3 = unmeasured posts error) opens a Sentry issue and emails nobody.
     image_cve_scan = "advisory scan; the unrouted monitor opens a Sentry issue on a missed or unmeasured run but emails nobody; routing is the second PR of the two-PR rule (#9858)"
-    # #9855 — the nightly integration-suites leg's dead-man monitor, added under
-    # the two-PR rule: the in-run ci/integration-suites GitHub issue is the
-    # primary channel for run-internal reds; the never-ran class (dropped
-    # schedule, pending-eviction) is the monitor's alone. Routing it is #9959.
-    scheduled_integration_suites = "route after the first measured check-in (#9959)"
   }
 }
 
@@ -103,6 +98,7 @@ resource "sentry_alert" "cron_monitor_failure" {
     sentry_cron_monitor.scheduled_heartbeat_reconcile.id,
     sentry_cron_monitor.scheduled_inngest_cron_watchdog.id,
     sentry_cron_monitor.scheduled_inngest_health.id,
+    sentry_cron_monitor.scheduled_integration_suites.id,
     sentry_cron_monitor.scheduled_legal_audit.id,
     sentry_cron_monitor.scheduled_linkedin_token_check.id,
     sentry_cron_monitor.scheduled_machinery_drain.id,
