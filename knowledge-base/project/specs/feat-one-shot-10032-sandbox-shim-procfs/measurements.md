@@ -45,6 +45,14 @@ Docker's default masked `/proc` — the H6 trigger — is identical in both.
   permitted` → rc=1 **with and without our bpf, with and without euid=0-in-userns**
   (this host denies unprivileged NEWUSER in-container). On the bare host the same
   multicall completes rc=0 (maps euid→euid, runs payload, mounts own /proc).
+- **Rung-2 dead on prod's bwrap 0.8.0:** `--bind-data`/`--ro-bind-data` →
+  "Can't write data to file: Bad file descriptor"; `--bind-fd` parses but
+  "Can't find source path /proc/self/fd/N" (fd closed before source
+  resolution); `--ro-bind /proc/self/fd/N` as source likewise cannot resolve.
+  The re-home ladder collapses to rung-1 `--ro-bind <resolved real path>` or
+  REFUSE — deleted/memfd/pipe/socket/unreadable/O_PATH refs fail closed.
+- Empty `--args` payload after filtering is legal: 0-byte fd re-emit accepted
+  (verified on 0.12; a payload that was entirely the tail bind re-emits empty).
 - **Invariance:** our injected bpf (`clone/unshare`+CLONE_NEWUSER→EPERM, clone3→ENOSYS —
   decoded from the committed .bpf) kills apply-seccomp's FIRST syscall under ANY /proc
   realization. Whether the wrapper is present in prod's real command is therefore
