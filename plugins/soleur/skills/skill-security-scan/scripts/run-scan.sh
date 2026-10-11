@@ -132,15 +132,15 @@ done
 # Doppler tokens, GitLab PAT, Slack tokens, AWS access keys.
 redact_pii() {
   sed -E '
-    s/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/<email>/g;
-    s/\b([0-9]{1,3}\.){3}[0-9]{1,3}\b/<ip>/g;
-    s/\b[A-Z]{2}[0-9]{2}[A-Z0-9]{4,}\b/<iban>/g;
     s/\bghp_[A-Za-z0-9._~+/=-]{20,}/<github-pat>/g;
     s/\bgho_[A-Za-z0-9._~+/=-]{20,}/<github-oauth>/g;
     s/\bghs_[A-Za-z0-9._~+/=-]{20,}/<github-server>/g;
     s/\bghr_[A-Za-z0-9._~+/=-]{20,}/<github-refresh>/g;
     s/\bghu_[A-Za-z0-9._~+/=-]{20,}/<github-user>/g;
     s/\bgithub_pat_[A-Za-z0-9._~+/=-]{40,}/<github-pat>/g;
+    s/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/<email>/g;
+    s/\b([0-9]{1,3}\.){3}[0-9]{1,3}\b/<ip>/g;
+    s/\b[A-Z]{2}[0-9]{2}[A-Z0-9]{4,}\b/<iban>/g;
     s/eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/<jwt>/g;
     s/sk-ant-[A-Za-z0-9_-]{8,}/<anthropic-key>/g;
     s/sk-[A-Za-z0-9]{20,}/<openai-key>/g;

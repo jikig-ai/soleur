@@ -2841,8 +2841,13 @@ fi
 # multi-line or runtime-assembled patterns, escape spellings beyond a single
 # backslash (\x5b/\u005b/octal), separator-obfuscation (`ghs[_]`), quantified
 # prefix classes (`gh[pousr]?_`), nested-paren alternations, and gitignored or
-# never-`git add`ed files, non-`_` prefix separators like `)[_-][`, and classes
-# longer than the arms' 80-byte match window (a cost bound, not a semantic one).
+# never-`git add`ed files, non-`_` prefix separators like `)[_-][`, classes
+# longer than the arms' 80-byte match window (a cost bound, not a semantic
+# one), a literal `]` class member (`[]a-z]` — invisible to the `[^]]+` arms
+# AND the judge), POSIX-class spellings (`[[:alnum:]._…]` — the judge reads
+# `[:alnum:` as the class and over-flags toward a slot; fails closed), and a
+# member class nested inside an arm-B/D alternation (`(?:ghp|xox[abpr])_` —
+# the inner `[abpr]` is judged as the value class; fails closed).
 _G3_PATHS=( '*.sh' '*.ts' '*.tsx' '*.js' '*.jsx' '*.mjs' '*.cjs' '*.md' '*.yml' '*.yaml'
             '*.py' '*.json' '*.toml' '*.tf' '*.conf' '*.txt' '*.tsv'
             ':!knowledge-base' ':!scripts/lint-shell-trace-credential-refusal.test.sh' )
@@ -2855,9 +2860,12 @@ _ghs_class_stale() {
   [[ "$_rest" =~ ^gh\[ ]] && _rest="${_rest#*]_}"
   while [[ "$_rest" =~ \[([^]]+)\] ]]; do
     _c="${BASH_REMATCH[1]}"
-    # An alnum RANGE must be present — a punctuation-only class is not a
-    # credential body alphabet.
-    [[ "$_c" =~ [A-Za-z0-9]-[A-Za-z0-9] ]] || return 0
+    # The class must carry the alnum half of the alphabet — all three range
+    # spellings — not just a punctuation superset. [0-9a-f._~+/=-] truncates a
+    # real token mid-body, the same partial-disclosure family.
+    for _b in 'A-Z' 'a-z' '0-9'; do
+      [[ "$_c" == *"$_b"* ]] || return 0
+    done
     # Strip ranges before the member checks: a `-` inside `A-Z`/`a-z`/`0-9` is
     # source text, not a class MEMBER — checking for it un-stripped is vacuous.
     _cn="${_c//[A-Za-z]-[A-Za-z]/}"; _cn="${_cn//[0-9]-[0-9]/}"
@@ -2865,7 +2873,10 @@ _ghs_class_stale() {
       [[ "$_cn" == *"$_b"* ]] || return 0
     done
     case "$_cn" in *"-"*) ;; *) return 0 ;; esac
-    _rest="${_rest#*"${BASH_REMATCH[0]}"}"
+    # Advance past the judged class's ']': [^]]+ guarantees the first ']' is
+    # its close. (Do NOT strip by ${BASH_REMATCH[0]} here — later =~ matches in
+    # this loop clobber it.)
+    _rest="${_rest#*\]}"
   done
   return 1
 }
@@ -2896,7 +2907,7 @@ _ghs_arm_a1_rc=0; _ghs_arm_a1="$(git -C "$REPO_ROOT" grep -noE 'gh[opsur]_\\?\[[
 _ghs_arm_a2_rc=0; _ghs_arm_a2="$(git -C "$REPO_ROOT" grep -noE 'github_pat_\\?\[[^]]{1,80}\](\{[0-9,]+\}_\\?\[[^]]{1,80}\])?' -- "${_G3_PATHS[@]}" 2>/dev/null)" || _ghs_arm_a2_rc=$?
 _ghs_arm_b_rc=0;  _ghs_arm_b="$(git -C "$REPO_ROOT" grep -noE '\([^)]*gh[opsur][^)]*\)_\\?\[[^]]{1,80}\]' -- "${_G3_PATHS[@]}" 2>/dev/null)" || _ghs_arm_b_rc=$?
 _ghs_arm_c_rc=0;  _ghs_arm_c="$(git -C "$REPO_ROOT" grep -noE 'gh\[[a-z]+\]_\\?\[[^]]{1,80}\]' -- "${_G3_PATHS[@]}" 2>/dev/null)" || _ghs_arm_c_rc=$?
-_ghs_arm_d_rc=0;  _ghs_arm_d="$(git -C "$REPO_ROOT" grep -noE 'gh\([^)]*\)_\\?\[[^]]{1,80}\]' -- "${_G3_PATHS[@]}" 2>/dev/null)" || _ghs_arm_d_rc=$?
+_ghs_arm_d_rc=0;  _ghs_arm_d="$(git -C "$REPO_ROOT" grep -noE 'gh\([^)]*\|[^)]*\)_\\?\[[^]]{1,80}\]' -- "${_G3_PATHS[@]}" 2>/dev/null)" || _ghs_arm_d_rc=$?
 _ghs_bad_rc=0
 for _v in "$_ghs_arm_a1_rc" "$_ghs_arm_a2_rc" "$_ghs_arm_b_rc" "$_ghs_arm_c_rc" "$_ghs_arm_d_rc"; do
   [ "$_v" -ge 2 ] && _ghs_bad_rc=1
@@ -2938,10 +2949,20 @@ else
   fail "stale-ghs census: a sweep arm exited >= 2 (invalid ERE or grep failure) -- arm results a1=$_ghs_n_a1 a2=$_ghs_n_a2 b=$_ghs_n_b c=$_ghs_n_c d=$_ghs_n_d"
 fi
 
-if [ "$_ghs_n_a1" -ge 15 ] && [ "$_ghs_n_a2" -ge 8 ] && [ "$_ghs_n_b" -ge 3 ] && [ "$_ghs_n_c" -ge 3 ] && [ "$_ghs_n_d" -ge 0 ]; then
-  pass "stale-ghs census per-arm liveness: a1=$_ghs_n_a1 a2=$_ghs_n_a2 b=$_ghs_n_b c=$_ghs_n_c d=$_ghs_n_d hits"
+if [ "$_ghs_n_a1" -ge 15 ] && [ "$_ghs_n_a2" -ge 8 ] && [ "$_ghs_n_b" -ge 3 ] && [ "$_ghs_n_c" -ge 3 ]; then
+  pass "stale-ghs census per-arm liveness: a1=$_ghs_n_a1 a2=$_ghs_n_a2 b=$_ghs_n_b c=$_ghs_n_c (d=$_ghs_n_d) hits"
 else
-  fail "stale-ghs census per-arm liveness regression: a1=$_ghs_n_a1 (floor 15) a2=$_ghs_n_a2 (floor 8) b=$_ghs_n_b (floor 3) c=$_ghs_n_c (floor 3) d=$_ghs_n_d -- an arm went dark"
+  fail "stale-ghs census per-arm liveness regression: a1=$_ghs_n_a1 (floor 15) a2=$_ghs_n_a2 (floor 8) b=$_ghs_n_b (floor 3) c=$_ghs_n_c (floor 3) -- an arm went dark"
+fi
+
+# Arm d is structurally dark today (no gh(…)_ member in the corpus), so a
+# corpus floor cannot pin it — prove the PATTERN is alive and does not
+# false-positive on the `weigh(x)_[` word-prefix collision class instead.
+if printf '%s\n' 'gh(p|o)_[A-Za-z0-9]{20,}' | grep -qE 'gh\([^)]*\|[^)]*\)_\\?\[[^]]{1,80}\]' \
+   && ! printf '%s\n' 'weigh(x)_[A-Za-z0-9]{20,}' | grep -qE 'gh\([^)]*\|[^)]*\)_\\?\[[^]]{1,80}\]'; then
+  pass "stale-ghs census arm-d liveness: factored-prefix pattern fires on a synthesized alternation and spares word-prefix collisions"
+else
+  fail "stale-ghs census arm-d liveness: the factored-prefix ERE does not discriminate its own probe"
 fi
 
 if [ "$_ghs_seen" -ge 40 ]; then
@@ -2997,6 +3018,7 @@ else
   fail "stale-ghs census allowlist: git-auth.ts slot loosened beyond the vendor citation"
 fi
 
+# This file list mirrors _ghs_census_allow's case arms — keep them coupled.
 _ghs_dead_slots=""
 for _slot in   'plugins/soleur/skills/incident/test/fixtures/legacy-bash-scanner.sh'   'plugins/soleur/skills/deepen-plan/SKILL.md'   'plugins/soleur/skills/plan/references/plan-sharp-edges.md'   'apps/web-platform/server/git-auth.ts'; do
   printf '%s' "$_ghs_allowed" | grep -qF "$_slot" || _ghs_dead_slots="${_ghs_dead_slots} ${_slot}"
@@ -3034,7 +3056,7 @@ printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 # alternate matrix, the hazard-member and YAML-arm mutant rows, on top of the 219 below). Earlier: 219 (PR #9674 review round 1: the YAML graph-walk, direct-under-.github, census-ceiling and
 # SKIP_SHELLS-parity rows, on top of the 198 below). Earlier: 198 (#9597 S1: the Rule E credential vocabulary and YAML-arm rows, the extractor, discovery, harness and
 # mutation rows added on top of the 119 recorded for the original Rule E rows).
-MIN_ASSERTIONS=648
+MIN_ASSERTIONS=649
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' \
     "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2

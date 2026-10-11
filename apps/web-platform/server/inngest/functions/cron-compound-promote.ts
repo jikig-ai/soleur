@@ -622,7 +622,11 @@ const CLUSTER_OUTPUT_SCHEMA = {
 } as const;
 
 // Byte-for-byte port of PII_REGEX in scripts/compound-promote.sh.
-// Unit-tested for parity (AC8).
+// Unit-tested for parity (AC8). The shell copy's comment block carries the
+// over-exclusion posture: the canonical credential class makes this gate
+// slightly over-excluding — a `gh[pousr]_<slug>`/`github_pat_<slug>`-shaped
+// identifier in prose drops the learning (fail-closed toward the DPA-covered
+// model call — intended).
 export const PII_REGEX = new RegExp(
   "([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,})" +
     "|([0-9]{1,3}(\\.[0-9]{1,3}){3})" +

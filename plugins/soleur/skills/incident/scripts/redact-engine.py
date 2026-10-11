@@ -79,6 +79,7 @@ CONFUSABLE_MAP = {ord(k): v for k, v in _CONFUSABLE_PAIRS.items()}
 # {[ : s p a c e ]} — a silent narrowing).
 F = re.ASCII
 PATTERNS = [
+    ("github_token", re.compile(r"\b(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9._~+/=-]{30,}|\bgithub_pat_[A-Za-z0-9._~+/=-]{20,}", F)),
     ("JWT", re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}", F)),
     # Local-part/domain quantifiers are BOUNDED (RFC 5321: local <=64, domain <=255) — an unbounded
     # `+` backtracks O(n^2) on a long email-class run with no '@', hanging the fail-closed gate on a
@@ -95,7 +96,6 @@ PATTERNS = [
     ("env_var", re.compile(
         r"\b(DOPPLER|SENTRY|STRIPE|SUPABASE|OPENAI|ANTHROPIC|GITHUB|VERCEL|CLOUDFLARE"
         r"|HETZNER|FLAGSMITH|RESEND|TAILSCALE)_[A-Z_]+=\S+", F)),
-    ("github_token", re.compile(r"\b(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9._~+/=-]{30,}|\bgithub_pat_[A-Za-z0-9._~+/=-]{20,}", F)),
     ("anthropic_key", re.compile(r"\bsk-ant-[A-Za-z0-9_-]{32,}\b", F)),
     ("openai_key", re.compile(r"\bsk-(proj-)?[A-Za-z0-9_-]{20,}\b", F)),
     ("supabase_pat", re.compile(r"\bsbp_[a-z0-9]{20,}\b|\b(sb_secret|sb_publishable)_[A-Za-z0-9]{20,}\b", F)),

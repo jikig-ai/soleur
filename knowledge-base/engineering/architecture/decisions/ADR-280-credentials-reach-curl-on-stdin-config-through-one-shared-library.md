@@ -418,6 +418,7 @@ multi-line assembly, separator obfuscation, and the prefixes outside the GitHub 
 
 Modelling each pattern on the vendor's currently issued shape (`ghs_[A-Za-z0-9_]{20,}` and kin) was rejected on measurement, not taste: what a vendor issues is mutable surface the repo cannot
 observe, so the pin's correctness is hostage to a rotation that arrives with no notice. The incident chain is the measured cost. When GitHub rotated `ghs_` installation tokens to a ~390-520-char
-shape over the b64token alphabet, a `[A-Za-z0-9_-]{30,128}` format guard warned on every valid live-minted token and the #9972 repair had to convert the bespoke guard to the canonical body; #9999 then swept the
-surviving vendor-format pins in detection, sentinel and documentation sites onto the canonical class. Per-site vendor pins cost one pipeline outage per rotation plus a repo-wide sweep; the
+shape over the b64token alphabet, two retired guards paid out the cost in sequence: a `[A-Za-z0-9_]` refusal guard in the pin-bump script died on every valid live-minted token until #9972 converted
+it to the canonical body, and a `[A-Za-z0-9_-]{30,128}` warn-not-throw format validator in `git-auth.ts` warned on every issued token until #9999 retired its length ceiling and widened its class —
+the same PR that swept the surviving vendor-format pins in detection, sentinel and documentation sites onto the canonical class. Per-site vendor pins cost one pipeline outage per rotation plus a repo-wide sweep; the
 canonical alphabet costs nothing at rotation time because it is already the maximal set the channel can carry.

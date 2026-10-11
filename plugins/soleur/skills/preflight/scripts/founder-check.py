@@ -321,7 +321,7 @@ _KW = r"(?:password|passwd|passphrase|secret|api[_-]?key|apikey|token|credential
 _SECRET_SHAPES = (
     re.compile(r"(?i)(?<![A-Za-z0-9])bearer[ \t]+[A-Za-z0-9._~+/=-]{8,}"),
     re.compile(r"(?i)(?<![A-Za-z0-9])authorization[ \t]*:"),
-    re.compile(r"(?<![A-Za-z0-9])(?:ghp|gho|ghs|ghu|github_pat|glpat|sk|pk|rk|xox[abpr])[_-][A-Za-z0-9._~+/=-]{16,}"),
+    re.compile(r"(?<![A-Za-z0-9])(?:ghp|gho|ghs|ghu|ghr|github_pat|glpat|sk|pk|rk|xox[abpr])[_-][A-Za-z0-9._~+/=-]{16,}"),
     re.compile(r"(?<![A-Za-z0-9])AKIA[0-9A-Z]{16}(?![A-Za-z0-9])"),
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
     re.compile(r"://[^/\s:@]+:[^/\s@]+@"),

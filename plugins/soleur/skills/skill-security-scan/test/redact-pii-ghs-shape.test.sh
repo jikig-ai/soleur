@@ -78,6 +78,8 @@ if [[ "$last_line" =~ ^[[:space:]]*\'[[:space:]]*$ ]]; then
   ok "extraction is bounded: the captured program ends at its lone-quote terminator"
 else
   bad "extraction overran the lone-quote terminator (last line: ${last_line:0:60}) — the driver would execute run-scan.sh tail code"
+  echo "fatal: refusing to execute an overrun capture" >&2
+  exit 1
 fi
 
 # The capture must run the FULL program: the ghs_ arm sits mid-list, so also
@@ -124,7 +126,7 @@ fi
 # Drive the SAME generate-and-run path with an empty program. If the mask can
 # appear anyway, row (a) below could green on a missing arm.
 EMPTY_DRIVER="$WORK/empty.driver.sh"
-{ printf '}\nredact_pii\n'; } > "$EMPTY_DRIVER"
+{ printf 'redact_pii() { :; }\nredact_pii\n'; } > "$EMPTY_DRIVER"
 empty_out="$(printf '%s\n' 'anything' | bash "$EMPTY_DRIVER" 2>/dev/null || true)"
 if [[ "$empty_out" != *"$MASK"* ]]; then
   ok "an empty extraction cannot emit $MASK (empty extraction => RED, never vacuous green)"
@@ -143,13 +145,19 @@ for _i in 1 2 3 4 5 6; do body+="$B62"; done      # 372
 body+="${B62:0:10}"                               # 382
 body+='._~+/=-'                                   # 389 — every canonical byte
 body+="${B62:0:6}"                                # 395
+# Inter-arm probes: AB12CDEF matches the IBAN arm and 1.2.3.4 the IPv4 arm —
+# arms that ran BEFORE the gh arms pre-ordering; `.` separators give each a
+# word boundary, and the trailing lowercase run matches NO generic arm, so a
+# regression to generic-first ordering leaves it in clear and the zero-tail
+# row goes RED.
+body+="AB12CDEF.1.2.3.4.xyzzy42"
 tok="${pfx}_${body}"
 
 blen="$(printf '%s' "$body" | wc -c)"
-if [[ "$blen" -ge 380 ]]; then
-  ok "fixture post-prefix body is ${blen} B (>= 380, new-shape length class)"
+if [[ "$blen" -ge 395 ]]; then
+  ok "fixture post-prefix body is ${blen} B (>= 395, new-shape length class incl. inter-arm probes)"
 else
-  bad "fixture post-prefix body is only ${blen} B (< 380) — too short to exercise the new-shape class"
+  bad "fixture post-prefix body is only ${blen} B (< 395) — too short to exercise the new-shape class + inter-arm probes"
 fi
 
 missing_bytes=""
