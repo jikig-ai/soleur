@@ -4345,11 +4345,18 @@ if [[ -z "${TEST_TIMING_LOG:-}" ]] && [[ -z "${CI:-}" ]] \
     && [[ -w "$_durable_log_dir" && -O "$_durable_log_dir" ]]; then
     # -O: the leaf name is predictable (basename-$$-EPOCHSECONDS); a co-tenant
     # pre-creating it could plant a read-only or symlinked suite-timings.tsv —
-    # ownership required, not just writability. The truncate closes the
-    # bash-3.2 (no EPOCHSECONDS) PID-reuse stale-row read.
+    # ownership required, not just writability. The truncate doubles as the
+    # file-level probe AND closes the bash-3.2 (no EPOCHSECONDS) PID-reuse
+    # stale-row read — a non-writable stale leaf declines the arm rather than
+    # letting the first >> abort the run mid-suite.
     TEST_TIMING_LOG="$_durable_log_dir/suite-timings.tsv"
-    : > "$TEST_TIMING_LOG"
-    printf '[note] weight-drift: timing log at %s\n' "$TEST_TIMING_LOG" >&2
+    if : > "$TEST_TIMING_LOG" 2>/dev/null; then
+      printf '[note] weight-drift: timing log at %s\n' "$TEST_TIMING_LOG" >&2
+    else
+      printf '[note] weight-drift: timing log declined — %s not writable; WEIGHT_DRIFT lines will not emit\n' \
+        "$TEST_TIMING_LOG" >&2
+      TEST_TIMING_LOG=""
+    fi
   else
     printf '[note] weight-drift: timing log declined — %s not writable; WEIGHT_DRIFT lines will not emit\n' \
       "$_durable_log_dir" >&2

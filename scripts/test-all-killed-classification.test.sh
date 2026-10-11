@@ -306,7 +306,7 @@ run_arm() {
   # the first BEFORE any registration, so an inherited value makes every arm measure a refusal
   # rather than the classifier — and a fan-out agent is exactly the environment that sets it.
   ARM_OUT=$(cd "$REPO_ROOT" && env SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= \
-            TEST_TIMING_LOG="$timing" TEST_GROUP=all timeout 120 bash "$sb" 2>&1)
+            TEST_TIMING_LOG="${timing:-/dev/null}" TEST_GROUP=all timeout 120 bash "$sb" 2>&1)
   ARM_RC=$?
   return 0
 }

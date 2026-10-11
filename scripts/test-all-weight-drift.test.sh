@@ -106,9 +106,17 @@ fi
 # marker must stay the last ===-shaped line, but WEIGHT_DRIFT is not ===-shaped,
 # so the emit belongs in the post-marker NOTE region.
 _marker_line=$(grep -n 'suites passed ==="' "$TARGET" | tail -1 | cut -d: -f1)
-_emit_line=$(sed -n '/# wd-epilogue-emit-begin/,/# wd-epilogue-emit-end/p' "$TARGET" \
+# Anchor-sliced (the alternative — a first-match grep — re-points silently at any
+# comment/log line naming the function). An empty hit collapses to 0, not to a
+# line inside the span: a deleted call with surviving anchors must FAIL, not
+# vacuously pass on begin-1 > marker.
+_emit_rel=$(sed -n '/# wd-epilogue-emit-begin/,/# wd-epilogue-emit-end/p' "$TARGET" \
   | grep -n 'weight_drift_report "' | head -1 | cut -d: -f1)
-_emit_line=$(( _emit_line + $(grep -n '# wd-epilogue-emit-begin' "$TARGET" | cut -d: -f1) - 1 ))
+if [[ -n "$_emit_rel" ]]; then
+  _emit_line=$(( _emit_rel + $(grep -n '# wd-epilogue-emit-begin' "$TARGET" | cut -d: -f1) - 1 ))
+else
+  _emit_line=0
+fi
 if [[ -n "$_marker_line" && -n "$_emit_line" && "$_emit_line" -gt "$_marker_line" ]]; then
   pass "A3 — epilogue emit is post-marker (emit=$_emit_line > marker=$_marker_line)"
 else
@@ -444,7 +452,7 @@ PY
 # class that reddens suites only under an exported TEST_GROUP/TEST_TIMING_LOG).
 # One env-scrub list, one runner — the security-relevant preamble the
 # inline-arm copies had already diverged on (review: env-leak class).
-ENV_SCRUB="-u TEST_GROUP -u TEST_TIMING_LOG -u CI -u GITHUB_EVENT_NAME"
+ENV_SCRUB="-u TEST_GROUP -u TEST_TIMING_LOG -u CI -u GITHUB_EVENT_NAME -u SOLEUR_SCRATCH_SESSION_ROOT -u SOLEUR_SCRATCH_OWNER_PID -u SOLEUR_SCRATCH_BASE"
 
 # run_arm <name> <mutation> <inject> <env-pairs> [argv...]
 # env-pairs is ONE word-split string appended after the baked scrubs, so
@@ -657,8 +665,11 @@ else
   fail "M1 — timing log appeared despite deleted arm"
 fi
 
-# M2: writability+ownership probe removed → the unwritable target makes >>
-# abort the run mid-suite (no terminal marker, non-zero non-timeout rc).
+# M2: probe+mkdir removed → no leaf dir is ever created, so the file-level
+# truncate probe declines the arm — run green, no log, decline note present.
+# The mkdir's load-bearing role is CREATION; the file-level gate is the
+# truncate. (The >>-mid-run-abort class survives only as the arm-time/append
+# TOCTOU — recorded in plan Risks, unreachable by a splice mutation.)
 if [[ "$(id -u)" -eq 0 ]]; then
   pass "M2 — skipped under EUID-0 (chmod 0555 is not a barrier for root)"
 else
@@ -666,10 +677,12 @@ else
   run_arm m2 no_probe 1 "TEST_GROUP=affected SOLEUR_TEST_ALL_LOG_DIR=$RO_DIR" || true
   M2_OUT="$ARM_OUT"; M2_RC="$ARM_RC"
   chmod 0755 "$RO_DIR"
-  if [[ "$M2_RC" != 0 && "$M2_RC" != 124 ]] || ! grep -q 'suites passed ===' <<<"$M2_OUT"; then
-    pass "M2 — removed probe turns the unwritable path into a mid-run abort (probe is load-bearing)"
+  if [[ "$M2_RC" == 0 ]] && grep -q 'suites passed ===' <<<"$M2_OUT" \
+     && ! find "$RO_DIR" -name 'suite-timings.tsv' 2>/dev/null | grep -q . \
+     && grep -q 'timing log declined' <<<"$M2_OUT"; then
+    pass "M2 — removed dir probe: truncate declines, run green, no log (file-level gate verified)"
   else
-    fail "M2 — run survived without the probe (probe is decorative); rc=$M2_RC"
+    fail "M2 — probe removal changed nothing or aborted the run (rc=$M2_RC)"; dump "$M2_OUT"
   fi
 fi
 
