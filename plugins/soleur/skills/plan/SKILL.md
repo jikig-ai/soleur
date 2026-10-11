@@ -577,7 +577,7 @@ Every plan MUST include a `## User-Brand Impact` section. This is the framing-ti
 2. Display: "CPO sign-off required at plan time before `soleur:work` begins. Invoke CPO domain leader if not already covered by Phase 2.5 carry-forward, or confirm CPO has reviewed the brainstorm."
 3. Note in the plan that `soleur:engineering:review:user-impact-reviewer` will be invoked at review-time (handled by `plugins/soleur/skills/review/SKILL.md` conditional-agent block).
 
-**Sign-off lifecycle staging:** brainstorm CPO+CLO+CTO, plan CPO only, review `user-impact-reviewer`, ship mechanical check: [plan-signoff-lifecycle.md](./references/plan-signoff-lifecycle.md).
+**Sign-off lifecycle staging:** brainstorm CPO+CLO+CTO, plan CPO only, review `soleur:engineering:review:user-impact-reviewer`, ship mechanical check: [plan-signoff-lifecycle.md](./references/plan-signoff-lifecycle.md).
 
 **AI harness:** CTO review comes before blocking launcher/egress/credential work; settings credentials are runtime inputs; CLO disposition is separate.
 

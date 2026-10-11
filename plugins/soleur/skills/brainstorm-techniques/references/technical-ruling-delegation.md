@@ -117,7 +117,7 @@ its own), the file-wide `pending - assumed` placeholder and the owner-label lint
 table is a `[WARN]` and exit 0 (legacy artifacts and in-flight branches are not blocked). **Stated residual:** the gate
 checks form, never truth, so a technical question labelled `operator (scope)` passes; operator rows render in the PR
 body and the `action-required` issue, which is where review and the operator see a mislabel. The gate's remedy is bounded: at most two CTO spawns per artifact; after that the PR stays draft and ship files one
-`domain/engineering` issue, never an operator question. Procedure: [decision-challenges-render.md](../../ship/references/decision-challenges-render.md).
+`domain/engineering` issue, never an operator question. Procedure: `decision-challenges-render.md` in the ship skill's `references/` directory.
 
 ## 7. Canonical example
 
