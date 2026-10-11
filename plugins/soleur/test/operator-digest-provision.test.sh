@@ -44,11 +44,10 @@ make_mockbin() {  # <mockdir> <doppler-output>
   mkdir -p "$dir"
   cat > "$dir/gh" <<EOF
 #!/usr/bin/env bash
-# Capture argv and (for 'secret set') stdin, so the test can prove no argv leak.
+# Capture argv and (for 'secret set') stdin, so the test can prove no argv leak. The stdin read is the FIRST statement: a stub that
+# exits unread makes the producer's printf take SIGPIPE under pipefail (#9217).
+case " \$* " in *" secret set "*) [ -t 0 ] || timeout 2 cat > "${dir}/gh.stdin" ;; esac
 printf '%s\n' "\$*" >> "${dir}/gh.argv"
-if [[ "\$1" == "secret" && "\$2" == "set" ]]; then
-  cat > "${dir}/gh.stdin"
-fi
 exit 0
 EOF
   cat > "$dir/doppler" <<EOF
