@@ -2912,7 +2912,12 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler soleur/prd_terraform) and expects a `section=kdeny` row.
   // NO SUBSTITUTE: the bundle is emitted only when a canary sandbox probe fails, and lands only in the Logs
   // warehouse, which has no unauthenticated read path. Genuine.
-  const BASELINE_DECLARED_PROBES = 59;
+  // #10032 (2026-10-11): +1 (59 -> 60) for `2026-10-11-fix-sandbox-shim-procfs-under-masked-proc-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the AC4 faithful-canary verdict is a deployed signal read from deploy-state +
+  // `doppler run -c prd -- scripts/betterstack-query.sh` — the local stand-ins verify code, not
+  // the deployed observability state. NO SUBSTITUTE: no unauthenticated path reaches either. Genuine.
+  const BASELINE_DECLARED_PROBES = 60;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

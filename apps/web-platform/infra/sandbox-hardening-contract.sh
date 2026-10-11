@@ -39,24 +39,31 @@ check() { # check <label> <count> <minimum>
   esac
 }
 
-# --- #9723: the shim re-masks /proc AFTER the vendor's tail bind ------------
+# --- #9723/#10032: the shim neutralizes procfs mounts at /proc + re-homes --
 shim="$app/infra/bwrap-shim/bwrap"
 if need_file "$shim"; then
-  check "shim tail re-mask emits --proc /proc" \
-    "$(grep -c -E -- '--proc.*/proc' "$shim" || true)" 1
+  # #10032: never a --proc splice (EPERMs under docker's masked /proc) — the
+  # realization is drop-every-procfs-mount + tmpfs mask + literal-path fd
+  # re-home. Pin the three code shapes a gutted rewrite can't fake.
+  check "shim drops procfs mounts at /proc (filter_proc_exposure)" \
+    "$(grep -c 'filter_proc_exposure' "$shim" || true)" 3
+  check "shim appends --tmpfs /proc when the stream lacks a mask" \
+    "$(grep -cF 'emit+=(--tmpfs /proc)' "$shim" || true)" 1
+  check "shim re-homes command-side /proc/self/fd refs (ro-bind rung)" \
+    "$(grep -cF '"$tgt" "/proc/self/fd/$n"' "$shim" || true)" 1
   # Code-shaped: the empty-payload refuse + the pidns refuse are the two
   # fail-closed arms a gutted fail() can't fake.
   check "shim refuses an empty --args payload (fail-closed)" \
     "$(grep -c 'empty --args payload' "$shim" || true)" 1
-  check "shim refuses a pidns-less merged argv (decorative mask)" \
+  check "shim refuses a pidns-less merged argv" \
     "$(grep -c 'unshare-pid' "$shim" || true)" 2
 fi
-# Canary probe discriminates on HOST PID visibility, never on an empty /proc
-# (the vendored apply-seccomp needs /proc/self/fd to exist).
+# Canary probe discriminates on ANY real procfs visibility (/proc/<pid>
+# entries), green only on the legitimately-empty tmpfs mask (#10032).
 canary="$app/scripts/sandbox-canary.mjs"
 if need_file "$canary"; then
-  check "proc_mask probe keys on the canary host pid" \
-    "$(grep -c 'proc_mask' "$canary" || true)" 1
+  check "proc_mask probe keys on /proc/<pid> entries" \
+    "$(grep -cF '/proc/[0-9]' "$canary" || true)" 1
 fi
 
 # --- #9725: dual-root tenant deny (WORKSPACES_ROOT + WORKTREE_ROOT) ----------

@@ -250,6 +250,14 @@ COPY --from=builder /app/scripts/sandbox-canary.mjs ./scripts/sandbox-canary.mjs
 COPY --from=builder /app/scripts/github-app-key-probe.mjs ./scripts/github-app-key-probe.mjs
 COPY --from=builder /app/infra/sandbox-canary-argv.json ./infra/sandbox-canary-argv.json
 
+# Per-dispatch egress forwarder (#9534, fix #9952): spawnEgressForwarder()
+# resolves server/egress-forwarder.ts › forwarderPath() to
+# process.cwd()/infra/egress-forwarder.mjs — cwd is /app here. The
+# /opt/soleur/host-scripts/ copy below serves cloud-init extraction only;
+# without this line an entitled session's spawn hits ENOENT and degrades to
+# zero egress (fail-closed, silent).
+COPY --from=builder /app/infra/egress-forwarder.mjs ./infra/egress-forwarder.mjs
+
 # Cross-workspace isolation canary payload (#2640). Three exact files — the
 # deterministic direct-bwrap tier of test/sandbox-isolation.test.ts runs inside
 # the canary via `docker exec … vitest run` (SOLEUR_ISOLATION_TIERS=direct keeps

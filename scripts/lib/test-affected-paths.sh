@@ -291,6 +291,10 @@ ALWAYS_ON_SUITES=(
   # inotify) is a second input. Hedged rather than declared; revisit trigger in ADR-242 decision 19.
 
   "scripts/test-all-fast-tier-budget"
+  # #9814: the local weight-drift detector — its verdict asserts properties of
+  # the runner's own wiring (default arm, epilogue emit), a runner-SUT property
+  # suite like its sibling above.
+  "scripts/test-all-weight-drift"
   # --- #9763 withdrawn-to-edge-selection (committed weight >10s): these run on CI legs,
   # merge_group, push and --full like every registered suite, and locally only when their
   # subject paths change (edge-selected like any non-always-on suite, ADR-262 shape). The
@@ -310,6 +314,11 @@ AFFECTED_CONSUMED_EDGES=(
   "plugins/soleur/test/c4-from-components.test.sh|C4_PRODUCER_PATHS"
   ".github/scripts/test/run-all.sh|GITHUB_SCRIPTS_SUITE_PATHS"
   "apps/web-platform [unit]|WEBPLAT_APP_PATHS"
+  # Same consumed edge as [unit]: the bundle's app-local half (component) is
+  # subject to the app, and repo-wide is the ungated sibling — post-#9815 its
+  # argv no longer mentions apps/web-platform directly (it execs the wrapper),
+  # so the derivation channel reads only the wrapper's own file.
+  "apps/web-platform [repo-wide+component]|WEBPLAT_APP_PATHS"
   # The infra runner maps to AFFECTED_INFRA_RUNNER_PATHS (declared just below,
   # in THIS lib — the consumed mapping mechanism does not care which file owns
   # the array). Its edges are the same two predicates _infra_in_diff checks.
@@ -566,6 +575,18 @@ AFFECTED_APPS_WEB_PLATFORM_TEST_PARSE_GITLEAKS_ALLOWLISTS_PATHS=(
   "apps/web-platform/scripts/parse-gitleaks-allowlists.mjs"
   "apps/web-platform/test/__synthesized__/parse-gitleaks-allowlists.test.sh"
   "scripts/lib/test-affected-paths.sh"
+)
+# vitest-related (#9815) — suite, wrapper, the runner arm it guards, the lib whose
+# functions+META it exercises, and the config the META derivation reads. The meta
+# set's members outside the app are listed too: a commit narrowing the predicate
+# must run the suite the predicate gates (self-inclusion convention).
+AFFECTED_APPS_WEB_PLATFORM_TEST_VITEST_RELATED_PATHS=(
+  "apps/web-platform/scripts/vitest-related.sh"
+  "apps/web-platform/test/vitest-related.test.sh"
+  "apps/web-platform/vitest.config.ts"
+  "scripts/lib/test-relevance-paths.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/test-all.sh"
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_STAGE_APPROVAL_HOOK_TEST_SH_PATHS=(
   "plugins/soleur/hooks/hooks.json"
@@ -1834,6 +1855,20 @@ AFFECTED_SCRIPTS_TEST_ALL_FAST_TIER_BUDGET_PATHS=(
   "scripts/suite-durations.tsv"
   "scripts/test-all-fast-tier-budget.test.sh"
   "scripts/test-all.sh"
+)
+
+# scripts/test-all-weight-drift (#9814) — the local weight-drift detector. Its
+# verdict reads the comparator lib, the runner wiring (default arm + epilogue
+# emit + registration), and every committed durations/shard-legs manifest. The
+# edge is `glob:scripts/*.tsv`, not `suite-durations*`: the #9813 grammar
+# requires a /-terminated literal head, so a file-prefix glob cannot be
+# declared — covering the manifest class is the honest widening.
+AFFECTED_SCRIPTS_TEST_ALL_WEIGHT_DRIFT_PATHS=(
+  "scripts/test-all-weight-drift.test.sh"
+  "scripts/lib/test-weight-drift.sh"
+  "scripts/test-all.sh"
+  "glob:scripts/*.tsv"
+  "scripts/lib/test-affected-paths.sh"
 )
 
 # --- #9763 fast-tier demotions: declared scopes for suites withdrawn from ALWAYS_ON whose

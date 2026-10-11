@@ -8,7 +8,7 @@
  * (possibly orphan) concurrency slot, and aborts the in-process session.
  *
  * AC2/AC5 requires:
- *   - `setInterval` cadence at 60 s; signal is slot-heartbeat staleness.
+ *   - `setInterval` cadence at 300 s (widened 60→300 s, 2026-06-02); signal is slot-heartbeat staleness.
  *   - Order in the loop: status flip → releaseSlot → abortSession.
  *   - Idempotent: an already-released slot row is a no-op.
  *   - The RPC error path mirrors to Sentry via `reportSilentFallback`.

@@ -375,6 +375,16 @@ non-ok classes copy it under
 ${SOLEUR_SCRATCH_BASE:-/var/tmp}/soleur-test-all-logs/ and print
 log=<path> on the summary line — SOLEUR_TEST_ALL_LOG_DIR relocates it.
 
+Weight drift (#9814): local affected-shaped runs (TEST_TIMING_LOG unset, CI
+unset, TEST_GROUP=affected or the all-group default) default TEST_TIMING_LOG
+to <log-dir>/suite-timings.tsv and the epilogue compares each ran suite's
+local ms against committed scripts/suite-durations*.tsv weights — warn-only
+WEIGHT_DRIFT <label> committed=<ms|unmeasured> [basis=floor] local=<ms>
+lines when local > 2x committed AND > 10s, WEIGHT_DRIFT_UNAVAILABLE when a
+bash-3.2 host writes all-zero elapsed, WEIGHT_DRIFT_LOG <path> trailer.
+Caller-set TEST_TIMING_LOG wins; CI never defaults; enumerate/print paths
+decline. Lines emit to stdout AND stderr — dedupe when capturing merged.
+
 Enumerate modes die at a hard wall-clock deadline — SOLEUR_ENUM_DEADLINE_S
 seconds (default 900); a deleted-cwd walk exits 4, it never spins.
 USAGE
@@ -502,6 +512,14 @@ if declare -F soleur_scratch_session_begin >/dev/null 2>&1; then
   soleur_scratch_session_begin "$TMPDIR" || true
 fi
 declare -F _soleur_scratch_cleanup >/dev/null 2>&1 || _soleur_scratch_cleanup() { :; }
+# #9814: opportunistic weight-drift comparator — a missing lib degrades the
+# epilogue emit to "no WEIGHT_DRIFT block" (the declare -F gate there), never
+# blocks the gate.
+_WDRIFT_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/test-weight-drift.sh"
+if [[ -f "$_WDRIFT_LIB" ]]; then
+  # shellcheck source=scripts/lib/test-weight-drift.sh
+  source "$_WDRIFT_LIB" || true
+fi
 # Provisional owner for the window below: the full EXIT trap (which composes this cleanup) is installed ~2900
 # lines down, and every early `exit` before it (flag modes, usage errors, a timeout kill) left a marker-only
 # root behind -- measured: --enumerate-commands, --list and a bad flag each leaked one per invocation. The
@@ -528,9 +546,14 @@ export TC_TMPDIR="${TC_TMPDIR:-/tmp}"
 # See: knowledge-base/project/learnings/2026-03-20-bun-fpe-spawn-count-sensitivity.md
 #
 # Per-suite timing: when TEST_TIMING_LOG is set to a writable path, each
-# run_suite() invocation appends "<label>\t<elapsed_ms>[\tFAIL|\tKILLED]" to that
-# path. Field 3 carries the result class for any non-passing suite; KILLED means
-# signal-shaped and UNRESOLVED, not failed (#7424).
+# run_suite()/skip_suite() invocation appends "<label>\t<elapsed_ms>[\t<class>]"
+# to that path. Field 3 is the labelled class slot: `skip=<reason>` marks a
+# counted decline, a bare class (FAIL / KILLED / TRIPWIRE) marks a ran-but-not-ok
+# suite — wall-clock is consumed either way — and `tmp_delta=`/`bytes_tmp=` are
+# instrumentation, not suite rows. Extension convention (#9814's comparator is
+# the first external consumer): new decline classes carry the `^skip=` prefix;
+# any other labelled class defaults to "ran". KILLED means signal-shaped and
+# UNRESOLVED, not failed (#7424).
 # Elapsed time uses bash 5.0+ EPOCHREALTIME (microsecond precision, no
 # coreutils dependency, portable across Linux + Homebrew bash on macOS).
 # CI runs ubuntu-latest (bash 5.x). macOS default /bin/bash is 3.2 — install
@@ -890,7 +913,8 @@ fi
 # spanning both would report health from whichever is roomier, which is
 # indistinguishable from a healthy mount.
 #
-# Gated on TEST_TIMING_LOG, so a default local run pays nothing for it.
+# Gated on TEST_TIMING_LOG — caller-set was opt-in; #9814's default arm also
+# arms it on local affected-shaped runs, so the two df probes ride that arm.
 _emit_bytes_probe() {
   [[ -n "${TEST_TIMING_LOG:-}" ]] || return 0
   local tmpfs_bytes disk_bytes
@@ -3713,7 +3737,7 @@ _aff_runner_banner() {
 # never executes. Both exit 4 — "refused, nothing ran" — NOT 3, which #7424
 # reserved for a suite TERMINATED mid-coverage.
 # #9763: 38 heavy/stale labels withdrawn to edge-selection; the floor pins count-5.
-_MIN_ALWAYS_ON_DECLARED=107
+_MIN_ALWAYS_ON_DECLARED=108
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate
@@ -4297,6 +4321,48 @@ case "${_durable_log_dir}/" in
     printf '[note] SOLEUR_TEST_ALL_LOG_DIR inside the scratch root — relocated to %s (#8940)\n' "$_durable_log_dir" >&2
     ;;
 esac
+
+# wd-default-arm-begin
+# #9814: a local affected-shaped run pays near-nothing for the timing data the
+# weight-drift comparator needs — default TEST_TIMING_LOG into the per-run
+# durable dir (it rides the #9117 age-reap like the suite logs beside it).
+# In-shell, NEVER export: suite children that spawn a nested copy of this
+# runner would otherwise append THEIR fixture rows into this run's log —
+# phantom committed=unmeasured lines on every runner-touching diff (the
+# documented hazard test-all-infra-coverage-notice.test.sh names outright;
+# every consumer here — run_suite's >>, _emit_bytes_probe, the epilogue emit —
+# reads it in this process). The writability probe is load-bearing: run_suite
+# appends with >> under set -e, so an unwritable target aborts the run
+# mid-suite — degrade to "no timing log", never to "dead runner".
+# TEST_GROUP=affected (#8591) and _AFFECTED==1 on the all-group local default
+# (ADR-242) are the two disjoint selectors; enumerate/print paths are
+# side-effect-free by contract, so they decline before paying a mkdir.
+if [[ -z "${TEST_TIMING_LOG:-}" ]] && [[ -z "${CI:-}" ]] \
+  && (( _ENUMERATE == 0 && _PRINT_SELECTION == 0 )) \
+  && { [[ "${TEST_GROUP:-}" == "affected" ]] \
+       || { [[ "${TEST_GROUP:-all}" == "all" ]] && (( _AFFECTED == 1 )); }; }; then
+  if mkdir -p "$_durable_log_dir" 2>/dev/null \
+    && [[ -w "$_durable_log_dir" && -O "$_durable_log_dir" ]]; then
+    # -O: the leaf name is predictable (basename-$$-EPOCHSECONDS); a co-tenant
+    # pre-creating it could plant a read-only or symlinked suite-timings.tsv —
+    # ownership required, not just writability. The truncate doubles as the
+    # file-level probe AND closes the bash-3.2 (no EPOCHSECONDS) PID-reuse
+    # stale-row read — a non-writable stale leaf declines the arm rather than
+    # letting the first >> abort the run mid-suite.
+    TEST_TIMING_LOG="$_durable_log_dir/suite-timings.tsv"
+    if : > "$TEST_TIMING_LOG" 2>/dev/null; then
+      printf '[note] weight-drift: timing log at %s\n' "$TEST_TIMING_LOG" >&2
+    else
+      printf '[note] weight-drift: timing log declined — %s not writable; WEIGHT_DRIFT lines will not emit\n' \
+        "$TEST_TIMING_LOG" >&2
+      TEST_TIMING_LOG=""
+    fi
+  else
+    printf '[note] weight-drift: timing log declined — %s not writable; WEIGHT_DRIFT lines will not emit\n' \
+      "$_durable_log_dir" >&2
+  fi
+fi
+# wd-default-arm-end
 
 # _gc_durable_logs <namespace-dir> <days> — age-reap <label>-<pid>-<epoch> run
 # dirs from the DEDICATED durable-log namespace (#9117). The one place a
@@ -5182,6 +5248,9 @@ if want_scripts; then
   # #9763: the fast-tier budget ratchet — pins always-on committed weight to
   # <=10s per suite and <=300s total so the local tier cannot silently regrow.
   run_suite "scripts/test-all-fast-tier-budget" bash scripts/test-all-fast-tier-budget.test.sh
+  # #9814: the local weight-drift detector — warns when a suite's local actual
+  # exceeds its committed weight by >2x AND >10s (advisory lines, never a gate).
+  run_suite "scripts/test-all-weight-drift" bash scripts/test-all-weight-drift.test.sh
   # Guard 1 for the #7869 runtime ceiling. Registered here rather than left to a
   # glob: nothing auto-discovers this directory, so an unregistered suite is
   # silently never gated — locally or in CI.
@@ -6322,6 +6391,31 @@ if want_webplat; then
     fi
   fi
 
+  # --- vitest `related` narrowing (#9815) -----------------------------------
+  # On a local affected-shaped run whose diff carries no run-semantics file
+  # (WEBPLAT_RELATED_META), the app-local projects narrow to `vitest related`
+  # over the diff's changed files — the wrapper falls back to today's full
+  # invocation on an empty list, a meta hit, or a zero-resolution. Every
+  # conjunct is load-bearing: CI legs always run full (AC: CI unchanged);
+  # FORCE_ALL means "run everything"; an undecidable diff narrows nothing;
+  # a degraded-fallback run IS the full battery and must not narrow inside
+  # itself. The computation avoids the gate-predicate literal on purpose:
+  # this block sits inside the splice window, and the sibling guard slices
+  # its UNGATED region on the first line containing that token — comments
+  # count, so name it nowhere above the gate itself.
+  _webplat_related=""
+  if (( _ENUMERATE == 0 )) && [[ -z "${CI:-}" ]] \
+     && [[ "${SOLEUR_TEST_FORCE_ALL:-}" != "1" ]] \
+     && [[ "$_diff_detect_ok" == "1" && "$_diff_head_ok" == "1" ]] \
+     && { [[ "$TEST_GROUP" == "affected" ]] \
+          || { (( _AFFECTED == 1 )) && [[ -z "$_aff_fallback" ]]; }; }; then
+    if _meta="$(webplat_related_meta_hit "$_diff_names")"; then
+      echo "[vitest-related] meta path in diff (${_meta}) — webplat vitest runs the FULL projects." >&2
+    else
+      _webplat_related="$(webplat_related_files "$_diff_names")"
+    fi
+  fi
+
   # `component` runs ALWAYS, alongside repo-wide. #7498 evaluated gating it and
   # declined on measurement: at ~80 s it is a ~39 s expected saving, "statistically
   # the same quantity this PR already declined for the union predicate", and taking
@@ -6334,15 +6428,15 @@ if want_webplat; then
   # The invariant the guard asserts (0 of 240 `.test.tsx` escape the app) is kept:
   # it is true and worth keeping true, it is simply no longer load-bearing.
   run_suite "apps/web-platform [repo-wide+component]" env VITEST_SHARD="${VITEST_SHARD:-}" \
-    bash -c 'cd apps/web-platform && npm run test:ci -- --project repo-wide --project component ${VITEST_SHARD:+--shard="$VITEST_SHARD"} 2>&1'
+    WEBPLAT_RELATED="${_webplat_related:-}" bash apps/web-platform/scripts/vitest-related.sh bundle
 
   if _diff_touches "${WEBPLAT_APP_PATHS[@]}"; then
     run_suite "apps/web-platform [unit]" env VITEST_SHARD="${VITEST_SHARD:-}" \
-      bash -c 'cd apps/web-platform && npm run test:ci -- --project unit ${VITEST_SHARD:+--shard="$VITEST_SHARD"} 2>&1'
+      WEBPLAT_RELATED="${_webplat_related:-}" bash apps/web-platform/scripts/vitest-related.sh unit
   else
     _relevance_declined=$((_relevance_declined + 1))
     skip_suite "apps/web-platform [unit]" "relevance" \
-      "cd apps/web-platform && npm run test:ci -- --project unit"
+      "bash apps/web-platform/scripts/vitest-related.sh unit"
   fi
 
   # THE SHARD MATTERS, and the PATH is what keeps the surfaces disjoint.
@@ -6376,6 +6470,11 @@ if want_webplat; then
   # SUITE_GLOBS entry, and the battery needs apps/web-platform/node_modules/.bin/vitest, which the `test-scripts`
   # shard does not install. Its own control run reds the suite when the unedited copy is not green.
   run_suite "apps/web-platform/test/destroy-ask-mutation" bash apps/web-platform/test/destroy-ask-mutation.test.sh
+
+  # #9815: the wrapper + eligibility suite for the `related` narrowing. EXPLICIT,
+  # in THIS arm for the same reason as destroy-ask-mutation — it drives the
+  # real `node_modules/.bin/vitest` inside a synthesized fixture project.
+  run_suite "apps/web-platform/test/vitest-related" bash apps/web-platform/test/vitest-related.test.sh
 fi
 
 # plugins/soleur bun-test recursion + blog-link-validation — bun shard.
@@ -6999,6 +7098,24 @@ if (( _ceiling_declined > 0 )); then
   echo "      starting suites: declined_suites=${_ceiling_declined}. Nothing above is evidence"
   echo "      for them. This run exits 3 — UNRESOLVED, not green and not a failure."
 fi
+
+# wd-epilogue-emit-begin
+# #9814: warn-only local-vs-committed weight drift — emitted in the post-marker
+# NOTE region so `=== N/N suites passed ===` stays the last ===-shaped line.
+# The glob, not two literals: absence in one manifest is not absence, and a
+# future suite-durations-*.tsv joins the comparison instead of mis-reporting
+# unmeasured. `|| true` — the report can never set the exit code.
+if [[ -z "${CI:-}" && -n "${TEST_TIMING_LOG:-}" ]] \
+   && [[ -r "${TEST_TIMING_LOG}" ]] \
+   && declare -F weight_drift_report >/dev/null 2>&1; then
+  _wdrift_scriptdir="$(dirname "${BASH_SOURCE[0]}")"
+  weight_drift_report "${TEST_TIMING_LOG}" "$_wdrift_scriptdir"/suite-durations*.tsv || true
+elif [[ -z "${CI:-}" && -s "${TEST_TIMING_LOG:-/dev/null}" ]] \
+   && ! declare -F weight_drift_report >/dev/null 2>&1; then
+  printf '[note] weight-drift: comparator lib absent — timing rows at %s unreported\n' \
+    "${TEST_TIMING_LOG}" >&2
+fi
+# wd-epilogue-emit-end
 
 if [[ "$failed" -gt 0 ]]; then
   exit 1

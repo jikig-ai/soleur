@@ -11,7 +11,7 @@
 //   (b) the setup argv handed to it carries the #9723 defect shape — a tail
 //       `--bind /proc /proc` after the denyRead `--tmpfs /proc`.
 //
-// The mask's positional rewrite and the pidns-scoped outcome are pinned by
+// The mask's positional rewrite and the empty-tmpfs + fd re-home outcome are pinned by
 // the bwrap-shim unit rows, the real-bwrap row in that file, sandbox-isolation
 // FR7b (control/treatment), and the canary proc_mask probe — all of which
 // measure the setup namespace directly. An in-sandbox outcome assertion is

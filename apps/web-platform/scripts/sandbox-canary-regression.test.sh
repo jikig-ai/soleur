@@ -260,9 +260,9 @@ for reason in userns_filter_bypass userns_filter_overbroad fd_hygiene_bypass arg
     fail "D2 mjs missing verdict reason $reason"
   fi
 done
-# The fd census is dup-test based (robust whether procfs is masked empty or
-# pidns-scoped); proc_mask pins host-pid absence + self-view presence.
-if grep -qF '(: <&$fd)' "$MJS" && grep -q 'unshare", "-U"' "$MJS" && grep -qF '/proc/self/environ' "$MJS"; then
+# The fd census is dup-test based (procfs-free by construction); proc_mask
+# asserts no /proc/<pid> entries at all (any real procfs = defeated).
+if grep -qF '(: <&$fd)' "$MJS" && grep -q 'unshare", "-U"' "$MJS" && grep -qF '/proc/[0-9]' "$MJS"; then
   pass "D3 probe payloads present (fd dup-test census + unshare -U + proc_mask)"
 else
   fail "D3 probe payloads missing from sandbox-canary.mjs"
