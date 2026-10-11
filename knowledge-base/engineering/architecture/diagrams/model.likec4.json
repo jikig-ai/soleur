@@ -1165,7 +1165,7 @@
 },
 "technology": "Self-hosted Redis — AOF on /mnt/data",
 "description": {
-"txt": "Inngest durable queue + run-state. AOF on the persistent volume survives a host re-provision — the armed-reminder durability fix (#5450). AT REST: LUKS-ENCRYPTED since the additive cutover of 2026-09-20 (#8296). The live store is hcloud_volume.inngest_redis_luks, opened as mapper inngest-redis and mounted at /mnt/data; the passphrase is minted at merge and held in Doppler (inngest-redis-luks.tf), and inngest-luks-open.service reopens the mapper on every boot. The encryption-posture ledger records that row as mechanism luks. SOLE COPY: since 2026-10-09 this volume and the Doppler key INNGEST_REDIS_LUKS_KEY are the only copy and the only opener of the store, because the retained plaintext backstop (the pre-cutover volume hcloud_volume.inngest_redis, id 106261946) was detached, zeroed with a read-back and destroyed under #8285 (Hetzner answered 404 at 2026-10-09T16:21:26Z). That erasure is logical, guest-side and self-attested, not physical; op=luks-rollback is retired (on the merge of PR #9877) because there is no plaintext volume to roll back to; protection for the sole copy is tracked in #9879. A probe row reporting /mnt/data on anything other than the encrypted volume pages via logtail_exploration_alert.inngest_luks_wrong_volume, and scripts/followthroughs/inngest-luks-property-8296.sh cross-checks the ledger claim against the device daily. A probe pipeline that goes silent reads as healthy to the alert, so #8516 added the dead-man's-switch sibling betteruptime_heartbeat.inngest_server_probe (uptime-alerts.tf — born paused; its feeder + arming are tracked on #9703). The authority for which volume holds the store is the durable pointer INNGEST_LUKS_ACTIVE_VOLUME_ID, not a signature on a device (ADR-142)."
+"txt": "Inngest durable queue + run-state. AOF on the persistent volume survives a host re-provision — the durable-backend umbrella #5450. AT REST: LUKS-ENCRYPTED since the additive cutover of 2026-09-20 (#8296). The live store is hcloud_volume.inngest_redis_luks, opened as mapper inngest-redis and mounted at /mnt/data; the passphrase is minted at merge and held in Doppler (inngest-redis-luks.tf), and inngest-luks-open.service reopens the mapper on every boot. The encryption-posture ledger records that row as mechanism luks. SOLE COPY: since 2026-10-09 this volume and the Doppler key INNGEST_REDIS_LUKS_KEY are the only copy of the store, and the key is the only opener the host reads (an independent copy of the passphrase sits in Terraform state), because the retained plaintext backstop (the pre-cutover volume hcloud_volume.inngest_redis, id 106261946) was detached, zeroed with a read-back and destroyed under #8285 (Hetzner answered 404 at 2026-10-09T16:21:26Z). That erasure is logical, guest-side and self-attested, not physical; op=luks-rollback is retired (on the merge of PR #9877) because there is no plaintext volume to roll back to. PROTECTION (#9879, ADR-282; conditional: in force only once PR #9925 is merged, its apply has landed and the read-back passes, and the ADR status flips from adopting to accepted in the follow-up commit that the post-merge read-back step triggers, owned by the PR's author): Hetzner delete protection and prevent_destroy on the volume, prevent_destroy on the passphrase pair and on the two Doppler cascade parents, the attachment deliberately unpinned so the sanctioned host replace still works, and guards over Terraform text, workflow reachability and removed/moved blocks. RESIDUALS: protection defends against mistaken deletes, not against a holder of the read/write Hetzner token or the Doppler tokens that can overwrite the key; the ciphertext and the LUKS header have no backup; no sanctioned erase path exists. A probe row reporting /mnt/data on anything other than the encrypted volume pages via logtail_exploration_alert.inngest_luks_wrong_volume, and scripts/followthroughs/inngest-luks-property-8296.sh cross-checks the ledger claim against the device daily. A probe pipeline that goes silent reads as healthy to the alert, so #8516 added the dead-man's-switch sibling betteruptime_heartbeat.inngest_server_probe (uptime-alerts.tf — born paused; its feeder + arming are tracked on #9703). The authority for which volume holds the store is the durable pointer INNGEST_LUKS_ACTIVE_VOLUME_ID, not a signature on a device (ADR-142)."
 },
 "title": "Inngest Redis",
 "kind": "container",
@@ -2622,7 +2622,7 @@
 "id": "1z97r6"
 },
 "shq6xn": {
-"title": "CONSUMER serviceability probe (#6438 §1): web-zot-consumer-probe.sh GETs /v2/<repo>/tags/list over the private net (authenticated htpasswd Basic auth) and pings the per-host web_zot_consumer heartbeat only on a 200; 404 (empty/detached store) suppresses the ping so absence alarms; 401 is a HARD auth failure, not 'alive'; 000 (no HTTP answer: the private-net path is down) suppresses it as `UNREACHABLE` (#7262; before that fix curl's doubled 000000 mislabelled every such run `unexpected code`). Distinct from the pull edge above — this proves the store SERVES, not just that the auth gate answers",
+"title": "CONSUMER serviceability probe (#6438 §1): web-zot-consumer-probe.sh GETs /v2/<repo>/tags/list over the private net (authenticated htpasswd Basic auth) for EACH platform repository (the web image and the inngest bootstrap image, #7258) and pings the per-host web_zot_consumer heartbeat only when EVERY repository answers 200; 404 (empty/detached store) suppresses the ping so absence alarms; 401 is a HARD auth failure, not 'alive'; 000 (no HTTP answer: the private-net path is down) suppresses it as `UNREACHABLE` (#7262; before that fix curl's doubled 000000 mislabelled every such run `unexpected code`). Distinct from the pull edge above — this proves the store SERVES, not just that the auth gate answers",
 "technology": "curl -u (private-net, plain-HTTP GET /v2/<repo>/tags/list)",
 "source": {
 "model": "platform.infra.hetzner"
@@ -17843,7 +17843,7 @@
 "technology": "PostgreSQL — dedicated EU project, Supavisor session pooler :5432",
 "kind": "database",
 "navigateTo": "__platform_infra_inngestPostgres",
-"x": 1435,
+"x": 1436,
 "y": 2125,
 "width": 335,
 "height": 200,
@@ -17872,21 +17872,21 @@
 "size": "md"
 },
 "description": {
-"txt": "Inngest durable queue + run-state. AOF on the persistent volume survives a host re-provision — the armed-reminder durability fix (#5450). AT REST: LUKS-ENCRYPTED since the additive cutover of 2026-09-20 (#8296). The live store is hcloud_volume.inngest_redis_luks, opened as mapper inngest-redis and mounted at /mnt/data; the passphrase is minted at merge and held in Doppler (inngest-redis-luks.tf), and inngest-luks-open.service reopens the mapper on every boot. The encryption-posture ledger records that row as mechanism luks. SOLE COPY: since 2026-10-09 this volume and the Doppler key INNGEST_REDIS_LUKS_KEY are the only copy and the only opener of the store, because the retained plaintext backstop (the pre-cutover volume hcloud_volume.inngest_redis, id 106261946) was detached, zeroed with a read-back and destroyed under #8285 (Hetzner answered 404 at 2026-10-09T16:21:26Z). That erasure is logical, guest-side and self-attested, not physical; op=luks-rollback is retired (on the merge of PR #9877) because there is no plaintext volume to roll back to; protection for the sole copy is tracked in #9879. A probe row reporting /mnt/data on anything other than the encrypted volume pages via logtail_exploration_alert.inngest_luks_wrong_volume, and scripts/followthroughs/inngest-luks-property-8296.sh cross-checks the ledger claim against the device daily. A probe pipeline that goes silent reads as healthy to the alert, so #8516 added the dead-man's-switch sibling betteruptime_heartbeat.inngest_server_probe (uptime-alerts.tf — born paused; its feeder + arming are tracked on #9703). The authority for which volume holds the store is the durable pointer INNGEST_LUKS_ACTIVE_VOLUME_ID, not a signature on a device (ADR-142)."
+"txt": "Inngest durable queue + run-state. AOF on the persistent volume survives a host re-provision — the durable-backend umbrella #5450. AT REST: LUKS-ENCRYPTED since the additive cutover of 2026-09-20 (#8296). The live store is hcloud_volume.inngest_redis_luks, opened as mapper inngest-redis and mounted at /mnt/data; the passphrase is minted at merge and held in Doppler (inngest-redis-luks.tf), and inngest-luks-open.service reopens the mapper on every boot. The encryption-posture ledger records that row as mechanism luks. SOLE COPY: since 2026-10-09 this volume and the Doppler key INNGEST_REDIS_LUKS_KEY are the only copy of the store, and the key is the only opener the host reads (an independent copy of the passphrase sits in Terraform state), because the retained plaintext backstop (the pre-cutover volume hcloud_volume.inngest_redis, id 106261946) was detached, zeroed with a read-back and destroyed under #8285 (Hetzner answered 404 at 2026-10-09T16:21:26Z). That erasure is logical, guest-side and self-attested, not physical; op=luks-rollback is retired (on the merge of PR #9877) because there is no plaintext volume to roll back to. PROTECTION (#9879, ADR-282; conditional: in force only once PR #9925 is merged, its apply has landed and the read-back passes, and the ADR status flips from adopting to accepted in the follow-up commit that the post-merge read-back step triggers, owned by the PR's author): Hetzner delete protection and prevent_destroy on the volume, prevent_destroy on the passphrase pair and on the two Doppler cascade parents, the attachment deliberately unpinned so the sanctioned host replace still works, and guards over Terraform text, workflow reachability and removed/moved blocks. RESIDUALS: protection defends against mistaken deletes, not against a holder of the read/write Hetzner token or the Doppler tokens that can overwrite the key; the ciphertext and the LUKS header have no backup; no sanctioned erase path exists. A probe row reporting /mnt/data on anything other than the encrypted volume pages via logtail_exploration_alert.inngest_luks_wrong_volume, and scripts/followthroughs/inngest-luks-property-8296.sh cross-checks the ledger claim against the device daily. A probe pipeline that goes silent reads as healthy to the alert, so #8516 added the dead-man's-switch sibling betteruptime_heartbeat.inngest_server_probe (uptime-alerts.tf — born paused; its feeder + arming are tracked on #9703). The authority for which volume holds the store is the durable pointer INNGEST_LUKS_ACTIVE_VOLUME_ID, not a signature on a device (ADR-142)."
 },
 "tags": [],
 "notation": "Container",
 "technology": "Self-hosted Redis — AOF on /mnt/data",
 "kind": "container",
 "navigateTo": "__platform_infra_inngestRedis",
-"x": 1881,
+"x": 1882,
 "y": 2135,
-"width": 366,
+"width": 362,
 "height": 180,
 "labelBBox": {
 "x": 18,
 "y": 18,
-"width": 331,
+"width": 327,
 "height": 139
 }
 },
@@ -19878,7 +19878,7 @@
 2062
 ],
 [
-1639,
+1640,
 2115
 ]
 ],
@@ -19904,7 +19904,7 @@
 "label": "Durable queue + run-state",
 "points": [
 [
-1968,
+1969,
 1885
 ],
 [
@@ -19928,7 +19928,7 @@
 2107
 ],
 [
-1995,
+1994,
 2126
 ]
 ],
@@ -45310,7 +45310,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Inngest durable queue + run-state. AOF on the persistent volume survives a host re-provision — the armed-reminder durability fix (#5450). AT REST: LUKS-ENCRYPTED since the additive cutover of 2026-09-20 (#8296). The live store is hcloud_volume.inngest_redis_luks, opened as mapper inngest-redis and mounted at /mnt/data; the passphrase is minted at merge and held in Doppler (inngest-redis-luks.tf), and inngest-luks-open.service reopens the mapper on every boot. The encryption-posture ledger records that row as mechanism luks. SOLE COPY: since 2026-10-09 this volume and the Doppler key INNGEST_REDIS_LUKS_KEY are the only copy and the only opener of the store, because the retained plaintext backstop (the pre-cutover volume hcloud_volume.inngest_redis, id 106261946) was detached, zeroed with a read-back and destroyed under #8285 (Hetzner answered 404 at 2026-10-09T16:21:26Z). That erasure is logical, guest-side and self-attested, not physical; op=luks-rollback is retired (on the merge of PR #9877) because there is no plaintext volume to roll back to; protection for the sole copy is tracked in #9879. A probe row reporting /mnt/data on anything other than the encrypted volume pages via logtail_exploration_alert.inngest_luks_wrong_volume, and scripts/followthroughs/inngest-luks-property-8296.sh cross-checks the ledger claim against the device daily. A probe pipeline that goes silent reads as healthy to the alert, so #8516 added the dead-man's-switch sibling betteruptime_heartbeat.inngest_server_probe (uptime-alerts.tf — born paused; its feeder + arming are tracked on #9703). The authority for which volume holds the store is the durable pointer INNGEST_LUKS_ACTIVE_VOLUME_ID, not a signature on a device (ADR-142)."
+"txt": "Inngest durable queue + run-state. AOF on the persistent volume survives a host re-provision — the durable-backend umbrella #5450. AT REST: LUKS-ENCRYPTED since the additive cutover of 2026-09-20 (#8296). The live store is hcloud_volume.inngest_redis_luks, opened as mapper inngest-redis and mounted at /mnt/data; the passphrase is minted at merge and held in Doppler (inngest-redis-luks.tf), and inngest-luks-open.service reopens the mapper on every boot. The encryption-posture ledger records that row as mechanism luks. SOLE COPY: since 2026-10-09 this volume and the Doppler key INNGEST_REDIS_LUKS_KEY are the only copy of the store, and the key is the only opener the host reads (an independent copy of the passphrase sits in Terraform state), because the retained plaintext backstop (the pre-cutover volume hcloud_volume.inngest_redis, id 106261946) was detached, zeroed with a read-back and destroyed under #8285 (Hetzner answered 404 at 2026-10-09T16:21:26Z). That erasure is logical, guest-side and self-attested, not physical; op=luks-rollback is retired (on the merge of PR #9877) because there is no plaintext volume to roll back to. PROTECTION (#9879, ADR-282; conditional: in force only once PR #9925 is merged, its apply has landed and the read-back passes, and the ADR status flips from adopting to accepted in the follow-up commit that the post-merge read-back step triggers, owned by the PR's author): Hetzner delete protection and prevent_destroy on the volume, prevent_destroy on the passphrase pair and on the two Doppler cascade parents, the attachment deliberately unpinned so the sanctioned host replace still works, and guards over Terraform text, workflow reachability and removed/moved blocks. RESIDUALS: protection defends against mistaken deletes, not against a holder of the read/write Hetzner token or the Doppler tokens that can overwrite the key; the ciphertext and the LUKS header have no backup; no sanctioned erase path exists. A probe row reporting /mnt/data on anything other than the encrypted volume pages via logtail_exploration_alert.inngest_luks_wrong_volume, and scripts/followthroughs/inngest-luks-property-8296.sh cross-checks the ledger claim against the device daily. A probe pipeline that goes silent reads as healthy to the alert, so #8516 added the dead-man's-switch sibling betteruptime_heartbeat.inngest_server_probe (uptime-alerts.tf — born paused; its feeder + arming are tracked on #9703). The authority for which volume holds the store is the durable pointer INNGEST_LUKS_ACTIVE_VOLUME_ID, not a signature on a device (ADR-142)."
 },
 "tags": [],
 "notation": "Container",
@@ -45319,12 +45319,12 @@
 "navigateTo": "__platform_infra_inngestRedis",
 "x": 2945,
 "y": 1723,
-"width": 366,
+"width": 362,
 "height": 180,
 "labelBBox": {
 "x": 17,
 "y": 17,
-"width": 331,
+"width": 327,
 "height": 139
 }
 },
@@ -47246,16 +47246,16 @@
 1594
 ],
 [
-3010,
+3009,
 1661
 ],
 [
-3053,
+3052,
 1714
 ]
 ],
 "labelBBox": {
-"x": 2998,
+"x": 2997,
 "y": 1575,
 "width": 167,
 "height": 39
@@ -60878,7 +60878,7 @@
 "bounds": {
 "x": 0,
 "y": 0,
-"width": 3112,
+"width": 3107,
 "height": 1021
 },
 "nodes": [
@@ -61239,7 +61239,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Inngest durable queue + run-state. AOF on the persistent volume survives a host re-provision — the armed-reminder durability fix (#5450). AT REST: LUKS-ENCRYPTED since the additive cutover of 2026-09-20 (#8296). The live store is hcloud_volume.inngest_redis_luks, opened as mapper inngest-redis and mounted at /mnt/data; the passphrase is minted at merge and held in Doppler (inngest-redis-luks.tf), and inngest-luks-open.service reopens the mapper on every boot. The encryption-posture ledger records that row as mechanism luks. SOLE COPY: since 2026-10-09 this volume and the Doppler key INNGEST_REDIS_LUKS_KEY are the only copy and the only opener of the store, because the retained plaintext backstop (the pre-cutover volume hcloud_volume.inngest_redis, id 106261946) was detached, zeroed with a read-back and destroyed under #8285 (Hetzner answered 404 at 2026-10-09T16:21:26Z). That erasure is logical, guest-side and self-attested, not physical; op=luks-rollback is retired (on the merge of PR #9877) because there is no plaintext volume to roll back to; protection for the sole copy is tracked in #9879. A probe row reporting /mnt/data on anything other than the encrypted volume pages via logtail_exploration_alert.inngest_luks_wrong_volume, and scripts/followthroughs/inngest-luks-property-8296.sh cross-checks the ledger claim against the device daily. A probe pipeline that goes silent reads as healthy to the alert, so #8516 added the dead-man's-switch sibling betteruptime_heartbeat.inngest_server_probe (uptime-alerts.tf — born paused; its feeder + arming are tracked on #9703). The authority for which volume holds the store is the durable pointer INNGEST_LUKS_ACTIVE_VOLUME_ID, not a signature on a device (ADR-142)."
+"txt": "Inngest durable queue + run-state. AOF on the persistent volume survives a host re-provision — the durable-backend umbrella #5450. AT REST: LUKS-ENCRYPTED since the additive cutover of 2026-09-20 (#8296). The live store is hcloud_volume.inngest_redis_luks, opened as mapper inngest-redis and mounted at /mnt/data; the passphrase is minted at merge and held in Doppler (inngest-redis-luks.tf), and inngest-luks-open.service reopens the mapper on every boot. The encryption-posture ledger records that row as mechanism luks. SOLE COPY: since 2026-10-09 this volume and the Doppler key INNGEST_REDIS_LUKS_KEY are the only copy of the store, and the key is the only opener the host reads (an independent copy of the passphrase sits in Terraform state), because the retained plaintext backstop (the pre-cutover volume hcloud_volume.inngest_redis, id 106261946) was detached, zeroed with a read-back and destroyed under #8285 (Hetzner answered 404 at 2026-10-09T16:21:26Z). That erasure is logical, guest-side and self-attested, not physical; op=luks-rollback is retired (on the merge of PR #9877) because there is no plaintext volume to roll back to. PROTECTION (#9879, ADR-282; conditional: in force only once PR #9925 is merged, its apply has landed and the read-back passes, and the ADR status flips from adopting to accepted in the follow-up commit that the post-merge read-back step triggers, owned by the PR's author): Hetzner delete protection and prevent_destroy on the volume, prevent_destroy on the passphrase pair and on the two Doppler cascade parents, the attachment deliberately unpinned so the sanctioned host replace still works, and guards over Terraform text, workflow reachability and removed/moved blocks. RESIDUALS: protection defends against mistaken deletes, not against a holder of the read/write Hetzner token or the Doppler tokens that can overwrite the key; the ciphertext and the LUKS header have no backup; no sanctioned erase path exists. A probe row reporting /mnt/data on anything other than the encrypted volume pages via logtail_exploration_alert.inngest_luks_wrong_volume, and scripts/followthroughs/inngest-luks-property-8296.sh cross-checks the ledger claim against the device daily. A probe pipeline that goes silent reads as healthy to the alert, so #8516 added the dead-man's-switch sibling betteruptime_heartbeat.inngest_server_probe (uptime-alerts.tf — born paused; its feeder + arming are tracked on #9703). The authority for which volume holds the store is the durable pointer INNGEST_LUKS_ACTIVE_VOLUME_ID, not a signature on a device (ADR-142)."
 },
 "tags": [],
 "notation": "Container",
@@ -61248,12 +61248,12 @@
 "navigateTo": "__platform_infra_inngestRedis",
 "x": 2745,
 "y": 831,
-"width": 366,
+"width": 362,
 "height": 180,
 "labelBBox": {
 "x": 18,
 "y": 17,
-"width": 331,
+"width": 327,
 "height": 139
 }
 }
@@ -61724,16 +61724,16 @@
 698
 ],
 [
-2784,
+2783,
 767
 ],
 [
-2840,
+2838,
 824
 ]
 ],
 "labelBBox": {
-"x": 2771,
+"x": 2770,
 "y": 684,
 "width": 167,
 "height": 39
@@ -62193,7 +62193,7 @@
 "bounds": {
 "x": 0,
 "y": 0,
-"width": 367,
+"width": 363,
 "height": 523
 },
 "nodes": [
@@ -62222,7 +62222,7 @@
 "technology": "Dedicated Hetzner host, private-net 10.0.1.40:8288/:8289",
 "kind": "container",
 "navigateTo": "__platform_infra_inngest",
-"x": 10,
+"x": 8,
 "y": 0,
 "width": 346,
 "height": 180,
@@ -62251,7 +62251,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Inngest durable queue + run-state. AOF on the persistent volume survives a host re-provision — the armed-reminder durability fix (#5450). AT REST: LUKS-ENCRYPTED since the additive cutover of 2026-09-20 (#8296). The live store is hcloud_volume.inngest_redis_luks, opened as mapper inngest-redis and mounted at /mnt/data; the passphrase is minted at merge and held in Doppler (inngest-redis-luks.tf), and inngest-luks-open.service reopens the mapper on every boot. The encryption-posture ledger records that row as mechanism luks. SOLE COPY: since 2026-10-09 this volume and the Doppler key INNGEST_REDIS_LUKS_KEY are the only copy and the only opener of the store, because the retained plaintext backstop (the pre-cutover volume hcloud_volume.inngest_redis, id 106261946) was detached, zeroed with a read-back and destroyed under #8285 (Hetzner answered 404 at 2026-10-09T16:21:26Z). That erasure is logical, guest-side and self-attested, not physical; op=luks-rollback is retired (on the merge of PR #9877) because there is no plaintext volume to roll back to; protection for the sole copy is tracked in #9879. A probe row reporting /mnt/data on anything other than the encrypted volume pages via logtail_exploration_alert.inngest_luks_wrong_volume, and scripts/followthroughs/inngest-luks-property-8296.sh cross-checks the ledger claim against the device daily. A probe pipeline that goes silent reads as healthy to the alert, so #8516 added the dead-man's-switch sibling betteruptime_heartbeat.inngest_server_probe (uptime-alerts.tf — born paused; its feeder + arming are tracked on #9703). The authority for which volume holds the store is the durable pointer INNGEST_LUKS_ACTIVE_VOLUME_ID, not a signature on a device (ADR-142)."
+"txt": "Inngest durable queue + run-state. AOF on the persistent volume survives a host re-provision — the durable-backend umbrella #5450. AT REST: LUKS-ENCRYPTED since the additive cutover of 2026-09-20 (#8296). The live store is hcloud_volume.inngest_redis_luks, opened as mapper inngest-redis and mounted at /mnt/data; the passphrase is minted at merge and held in Doppler (inngest-redis-luks.tf), and inngest-luks-open.service reopens the mapper on every boot. The encryption-posture ledger records that row as mechanism luks. SOLE COPY: since 2026-10-09 this volume and the Doppler key INNGEST_REDIS_LUKS_KEY are the only copy of the store, and the key is the only opener the host reads (an independent copy of the passphrase sits in Terraform state), because the retained plaintext backstop (the pre-cutover volume hcloud_volume.inngest_redis, id 106261946) was detached, zeroed with a read-back and destroyed under #8285 (Hetzner answered 404 at 2026-10-09T16:21:26Z). That erasure is logical, guest-side and self-attested, not physical; op=luks-rollback is retired (on the merge of PR #9877) because there is no plaintext volume to roll back to. PROTECTION (#9879, ADR-282; conditional: in force only once PR #9925 is merged, its apply has landed and the read-back passes, and the ADR status flips from adopting to accepted in the follow-up commit that the post-merge read-back step triggers, owned by the PR's author): Hetzner delete protection and prevent_destroy on the volume, prevent_destroy on the passphrase pair and on the two Doppler cascade parents, the attachment deliberately unpinned so the sanctioned host replace still works, and guards over Terraform text, workflow reachability and removed/moved blocks. RESIDUALS: protection defends against mistaken deletes, not against a holder of the read/write Hetzner token or the Doppler tokens that can overwrite the key; the ciphertext and the LUKS header have no backup; no sanctioned erase path exists. A probe row reporting /mnt/data on anything other than the encrypted volume pages via logtail_exploration_alert.inngest_luks_wrong_volume, and scripts/followthroughs/inngest-luks-property-8296.sh cross-checks the ledger claim against the device daily. A probe pipeline that goes silent reads as healthy to the alert, so #8516 added the dead-man's-switch sibling betteruptime_heartbeat.inngest_server_probe (uptime-alerts.tf — born paused; its feeder + arming are tracked on #9703). The authority for which volume holds the store is the durable pointer INNGEST_LUKS_ACTIVE_VOLUME_ID, not a signature on a device (ADR-142)."
 },
 "tags": [],
 "notation": "Container",
@@ -62259,12 +62259,12 @@
 "kind": "container",
 "x": 0,
 "y": 343,
-"width": 366,
+"width": 362,
 "height": 180,
 "labelBBox": {
 "x": 18,
 "y": 17,
-"width": 331,
+"width": 327,
 "height": 140
 }
 }
@@ -62277,24 +62277,24 @@
 "label": "Durable queue + run-state",
 "points": [
 [
-183,
+181,
 180
 ],
 [
-183,
+181,
 227
 ],
 [
-183,
+181,
 284
 ],
 [
-183,
+181,
 333
 ]
 ],
 "labelBBox": {
-"x": 184,
+"x": 182,
 "y": 240,
 "width": 167,
 "height": 39

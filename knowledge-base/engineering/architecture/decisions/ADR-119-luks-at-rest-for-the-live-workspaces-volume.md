@@ -1563,3 +1563,11 @@ run 37803274724. Evidence already in hand: rehearsal run `36769782488` (2026-09-
   hold for signup-provisioned workspaces (fact 3).
 - ADR-080 — the baked-bootstrap convention; and why it has no consumer on web-1 (§(e)).
 - #6538 (web-2 teardown), #6570 (cax11 stock), #6459 (active-active-N), #1439 (beta recruitment).
+
+## Addendum — 2026-10-10 (#9879, pointer to ADR-282)
+
+Appended; nothing above is edited. ADR-282 applies this ADR's D1 pin set (delete protection plus `prevent_destroy` on the
+volume and its passphrase pair) to the Inngest sole-copy volume `hcloud_volume.inngest_redis_luks`, with one deliberate
+difference: its attachment stays unpinned because the sanctioned `inngest-host-replace` replaces it. This ADR's D1 and
+`apps/web-platform/infra/workspaces-luks.tf` remain the source of the web-1 attachment pin. Nothing about web-1 or this
+decision changes. It takes effect on the merge of PR #9925 (adopting until that merge's apply and read-back, per ADR-282).
