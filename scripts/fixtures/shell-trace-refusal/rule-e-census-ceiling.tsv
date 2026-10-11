@@ -1,13 +1,12 @@
 # Per-file CEILING for baseline E (#9597 S1), path<TAB>sites, in the baseline's own order
-# (LC_ALL=C sort). It is currently IDENTICAL to scripts/lint-shell-trace-credential-refusal-e.baseline.txt
-# (seeded from the same census), so it is NOT an independent review of the baseline. What it
-# pins, and nothing more: a second file that must be edited in step, so growing baseline E (a new
+# (LC_ALL=C sort). It is a copy of scripts/lint-shell-trace-credential-refusal-e.baseline.txt seeded from the same
+# census and only ever edited down (a converted file's row leaves it), so it is NOT an independent review
+# of the baseline. What it pins, and nothing more: a second file that must be edited in step, so growing baseline E (a new
 # offender row, or a count raised above its row here) cannot be done by `--write-baseline-e`
 # alone -- the suite fails until this table is edited too, which a reviewer then sees in the diff.
 # It is checked in BOTH directions: every baseline row needs a row here at or above its count,
 # and every row here needs a baseline row OR a file that still offends. A converted file must
 # therefore leave this table in the same change that removes it from the baseline.
-.github/workflows/apply-web-platform-infra.yml	6
+# OWNERS (S5, #9597): the two apps/cla-evidence rows are owned by #9756; a row for any other file carries its own owner on a comment line above it.
 apps/cla-evidence/infra/bootstrap.sh	1
 apps/cla-evidence/scripts/r2-conditional-put.sh	1
-apps/web-platform/infra/cloud-init-registry.yml	4

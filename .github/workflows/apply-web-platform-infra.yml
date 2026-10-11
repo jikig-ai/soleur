@@ -123,7 +123,7 @@ on:
       # wrong-volume mis-dispatch a typo rather than an impossibility.
       #
       # PROVENANCE — read it from the Hetzner API, NOT from a drift run's log:
-      #   curl -s -H "Authorization: Bearer $HCLOUD_TOKEN" \
+      #   printf 'Authorization: Bearer %s' "$HCLOUD_TOKEN" | curl -s -H @- \
       #     'https://api.hetzner.cloud/v1/volumes?name=soleur-registry-store' | jq -r '.volumes[0].id'
       # scheduled-terraform-drift.yml captures its plan into a command substitution, so the
       # `Refreshing state... [id=...]` line NEVER reaches the step log; `gh run view` shows only
@@ -2369,11 +2369,15 @@ jobs:
         run: |
           set +e
           STATUS="unavailable (lookup failed or not yet ingested)"
+          # The API token reaches curl on its stdin config, never on its argument list (ADR-280). A library that cannot
+          # be loaded leaves the status "unavailable"; there is no argv fallback. A refused token prints the value-free
+          # refusal marker (curl's stderr is not silenced) and the step stays green.
+          source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || echo "::warning::scripts/lib/bearer-curl.sh could not be loaded from the job checkout; the heartbeat status lookup was skipped."
           TOKEN=$(doppler secrets get BETTERSTACK_API_TOKEN --plain 2>/dev/null)
-          if [[ -n "$TOKEN" ]]; then
+          if [[ -n "$TOKEN" ]] && declare -F bc_curl > /dev/null; then
             printf '::add-mask::%s\n' "$TOKEN"
-            BODY=$(curl -fsS --max-time 10 -H "Authorization: Bearer ${TOKEN}" \
-              https://uptime.betterstack.com/api/v2/heartbeats 2>/dev/null)
+            BODY=$(bc_curl apply-web-platform-infra 'Authorization:Bearer :TOKEN' -- -fsS --max-time 10 \
+              https://uptime.betterstack.com/api/v2/heartbeats)
             if [[ -n "$BODY" ]]; then
               S=$(printf '%s' "$BODY" | jq -r '.data[]? | select(.attributes.name=="soleur-registry-disk-prd") | .attributes.status' 2>/dev/null | head -1)
               [[ -n "$S" ]] && STATUS="$S"
@@ -2603,11 +2607,15 @@ jobs:
         run: |
           set +e
           STATUS="unavailable (lookup failed or not yet ingested)"
+          # The API token reaches curl on its stdin config, never on its argument list (ADR-280). A library that cannot
+          # be loaded leaves the status "unavailable"; there is no argv fallback. A refused token prints the value-free
+          # refusal marker (curl's stderr is not silenced) and the step stays green.
+          source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || echo "::warning::scripts/lib/bearer-curl.sh could not be loaded from the job checkout; the heartbeat status lookup was skipped."
           TOKEN=$(doppler secrets get BETTERSTACK_API_TOKEN --plain 2>/dev/null)
-          if [[ -n "$TOKEN" ]]; then
+          if [[ -n "$TOKEN" ]] && declare -F bc_curl > /dev/null; then
             printf '::add-mask::%s\n' "$TOKEN"
-            BODY=$(curl -fsS --max-time 10 -H "Authorization: Bearer ${TOKEN}" \
-              https://uptime.betterstack.com/api/v2/heartbeats 2>/dev/null)
+            BODY=$(bc_curl apply-web-platform-infra 'Authorization:Bearer :TOKEN' -- -fsS --max-time 10 \
+              https://uptime.betterstack.com/api/v2/heartbeats)
             if [[ -n "$BODY" ]]; then
               S=$(printf '%s' "$BODY" | jq -r '.data[]? | select(.attributes.name=="soleur-registry-disk-prd") | .attributes.status' 2>/dev/null | head -1)
               [[ -n "$S" ]] && STATUS="$S"
@@ -2710,7 +2718,7 @@ jobs:
           if [[ ! "$EXPECTED_VOLUME_ID" =~ ^[0-9]+$ ]]; then
             echo "::error::registry-luks-recut requires expected_registry_store_volume_id=<numeric Hetzner id of the zot store volume>. The gate PINS the replaced volume's before.id to this value, so a state corruption that mapped this ADDRESS onto a different physical volume cannot silently destroy it."
             echo "::error::Read it with ONE bounded command (NOT from a drift run — that log never contains the id):"
-            echo "::error::  curl -s -H \"Authorization: Bearer \$HCLOUD_TOKEN\" 'https://api.hetzner.cloud/v1/volumes?name=soleur-registry-store' | jq -r '.volumes[0].id'"
+            echo "::error::  printf 'Authorization: Bearer %s' \"\$HCLOUD_TOKEN\" | curl -s -H @- 'https://api.hetzner.cloud/v1/volumes?name=soleur-registry-store' | jq -r '.volumes[0].id'"
             exit 1
           fi
           echo "confirm + id-pin accepted (volume id ${EXPECTED_VOLUME_ID})."
@@ -2740,16 +2748,20 @@ jobs:
             exit 1
           fi
           printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
+          # The Hetzner token reaches curl on its stdin config, never on its argument list (ADR-280). Fail-closed: a library
+          # that cannot be loaded is a probe that cannot be sent, and an unsent probe is not evidence of absence. A REFUSED
+          # token (outside the token alphabet) prints the value-free marker and makes the call return 2, which the
+          # `|| PROBE_STATUS="000"` below folds into `unknown-000`: the existing class, never `absent` (that needs a 404).
+          source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::registry-luks-recut ABORT: scripts/lib/bearer-curl.sh could not be loaded from the job checkout — cannot run the live existence probe. Fail-closed: an unsent probe is not evidence of absence."; exit 1; }
 
-          PROBE_STATUS=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
-            -H "Authorization: Bearer ${HCLOUD_TOKEN}" \
-            "https://api.hetzner.cloud/v1/volumes/${EXPECTED_VOLUME_ID}" 2>/dev/null) || PROBE_STATUS="000"
+          PROBE_STATUS=$(bc_curl apply-web-platform-infra 'Authorization:Bearer :HCLOUD_TOKEN' -- -s -o /dev/null -w '%{http_code}' --max-time 15 \
+            "https://api.hetzner.cloud/v1/volumes/${EXPECTED_VOLUME_ID}") || PROBE_STATUS="000"
 
           # Name-scoped corroboration. `.volumes | length` over an exact-name query; any
           # non-numeric result (error envelope, transport failure) is treated as UNKNOWN, never
           # as zero — a failed lookup must not read as "no volume by that name".
-          NAME_COUNT=$(curl -s --max-time 15 -H "Authorization: Bearer ${HCLOUD_TOKEN}" \
-            'https://api.hetzner.cloud/v1/volumes?name=soleur-registry-store' 2>/dev/null \
+          NAME_COUNT=$(bc_curl apply-web-platform-infra 'Authorization:Bearer :HCLOUD_TOKEN' -- -s --max-time 15 \
+            'https://api.hetzner.cloud/v1/volumes?name=soleur-registry-store' \
             | jq -r 'if (.volumes | type) == "array" then (.volumes | length) else "unknown" end' 2>/dev/null) || NAME_COUNT="unknown"
           [[ "$NAME_COUNT" =~ ^[0-9]+$ ]] || NAME_COUNT="unknown"
 
@@ -2762,7 +2774,7 @@ jobs:
           # "absent" requires BOTH signals to agree. A 404 on the pinned id while a volume of
           # that name still exists means the id is wrong, not that the store is gone.
           if [[ "$PROBE_RESULT" == "absent" && "$NAME_COUNT" != "0" ]]; then
-            echo "::error::registry-luks-recut ABORT: the pinned volume id ${EXPECTED_VOLUME_ID} returned 404, but a volume named soleur-registry-store still exists (name_count=${NAME_COUNT}). That combination means the ID IS WRONG, not that the store was destroyed. Re-read it: curl -s -H \"Authorization: Bearer \$HCLOUD_TOKEN\" 'https://api.hetzner.cloud/v1/volumes?name=soleur-registry-store' | jq -r '.volumes[0].id'"
+            echo "::error::registry-luks-recut ABORT: the pinned volume id ${EXPECTED_VOLUME_ID} returned 404, but a volume named soleur-registry-store still exists (name_count=${NAME_COUNT}). That combination means the ID IS WRONG, not that the store was destroyed. Re-read it: printf 'Authorization: Bearer %s' \"\$HCLOUD_TOKEN\" | curl -s -H @- 'https://api.hetzner.cloud/v1/volumes?name=soleur-registry-store' | jq -r '.volumes[0].id'"
             exit 1
           fi
 
@@ -3114,7 +3126,7 @@ jobs:
           if [[ ! "$EXPECTED_VOLUME_ID" =~ ^[0-9]+$ ]]; then
             echo "::error::registry-luks-recut requires expected_registry_store_volume_id=<numeric Hetzner id of the zot store volume>. The gate PINS the replaced volume's before.id to this value, so a state corruption that mapped this ADDRESS onto a different physical volume cannot silently destroy it."
             echo "::error::Read it with ONE bounded command (NOT from a drift run — that log never contains the id):"
-            echo "::error::  curl -s -H \"Authorization: Bearer \$HCLOUD_TOKEN\" 'https://api.hetzner.cloud/v1/volumes?name=soleur-registry-store' | jq -r '.volumes[0].id'"
+            echo "::error::  printf 'Authorization: Bearer %s' \"\$HCLOUD_TOKEN\" | curl -s -H @- 'https://api.hetzner.cloud/v1/volumes?name=soleur-registry-store' | jq -r '.volumes[0].id'"
             exit 1
           fi
           echo "confirm + id-pin accepted (volume id ${EXPECTED_VOLUME_ID})."
@@ -3390,11 +3402,15 @@ jobs:
         run: |
           set +e
           STATUS="unavailable (lookup failed or not yet ingested)"
+          # The API token reaches curl on its stdin config, never on its argument list (ADR-280). A library that cannot
+          # be loaded leaves the status "unavailable"; there is no argv fallback. A refused token prints the value-free
+          # refusal marker (curl's stderr is not silenced) and the step stays green.
+          source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || echo "::warning::scripts/lib/bearer-curl.sh could not be loaded from the job checkout; the heartbeat status lookup was skipped."
           TOKEN=$(doppler secrets get BETTERSTACK_API_TOKEN --plain 2>/dev/null)
-          if [[ -n "$TOKEN" ]]; then
+          if [[ -n "$TOKEN" ]] && declare -F bc_curl > /dev/null; then
             printf '::add-mask::%s\n' "$TOKEN"
-            BODY=$(curl -fsS --max-time 10 -H "Authorization: Bearer ${TOKEN}" \
-              https://uptime.betterstack.com/api/v2/heartbeats 2>/dev/null)
+            BODY=$(bc_curl apply-web-platform-infra 'Authorization:Bearer :TOKEN' -- -fsS --max-time 10 \
+              https://uptime.betterstack.com/api/v2/heartbeats)
             if [[ -n "$BODY" ]]; then
               S=$(printf '%s' "$BODY" | jq -r '.data[]? | select(.attributes.name=="soleur-registry-disk-prd") | .attributes.status' 2>/dev/null | head -1)
               [[ -n "$S" ]] && STATUS="$S"
