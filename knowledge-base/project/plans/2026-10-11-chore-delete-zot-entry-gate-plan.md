@@ -47,7 +47,7 @@ Terms used below: **Step A / Step B** = the two halves of #7258. **Registration 
 | Nothing invokes the script | `git grep -n 'zot-entry-gate' origin/main -- . ':!knowledge-base'` | Held. Every non-self hit is a comment or a `.tsv` row; no workflow, script, Terraform or test calls it. |
 | `scripts/suite-*.tsv` carry no row | `grep -n zot-entry-gate scripts/suite-*.tsv` | Held: zero hits (those are the repo-level manifests; the gate rows live in `apps/web-platform/infra/suite-*.tsv`). |
 | Floors and ledgers hold no entry for the gate | grep of `scripts/guard-vacuity-floor.test.sh` (PROMOTED_FILES) and `plugins/soleur/test/fixture-relative-assert.baseline.txt` | Held: zero hits in both. No deferral-ledger or floor edit is needed, so there is nothing that can rise. |
-| #7079 lists the gate as a residual item | `gh issue view 7079` | OPEN; the post-mortem table row confirms. Noted for ship; not closed here. |
+| #7079 lists the gate as a residual item | `gh issue view 7079` | OPEN; the write-up's table row confirms. Noted for ship; not closed here. |
 | #7256 ("blocking zot-mirror failure sends no Slack") | `gh issue view 7256` | CLOSED by #9892. This is what falsifies the Slack comment in `build-inngest-bootstrap-image.yml` (Phase 4). |
 | No open PR touches the gate | brief's collision probe + re-run for the five edited files | Held for the gate itself. Two open PRs touch files this PR edits: #9938 (canary DIAG) edits `apps/web-platform/infra/ci-deploy.sh` and `ci-deploy.test.sh`, and #7390 (a WIP) edits `.github/workflows/reusable-release.yml`. Neither names the gate, but #9938 is also a deploy-pipeline-fix trigger: if it merges first, rebase (the edits are in different regions of `ci-deploy.sh`, so a clean rebase is expected) and let its apply finish before this PR is queued (Phase 7). Re-check at enqueue. |
 | ADR corpus | grep of `knowledge-base/engineering/architecture/decisions/` | ADR-096 line ~496 already says the gate was "superseded". No decision here contradicts the deletion; no ADR is needed (see Architecture Decision). |
@@ -68,7 +68,7 @@ Cut list (mechanisms considered and removed before research):
 |---|---|---|
 | A replacement probe for the "zot's real 403" the gate was named as the home of | 1/3 | Already bought: `web-zot-consumer-probe.sh` reads `/v2/<repo>/tags/list` with the pull credential and a 403 is an unexpected code, which emits `SUPPRESS ping` and alarms by absence. Step A added it. Nothing new is built. |
 | Rewriting `ci-deploy.sh` so the 403 comment is deleted outright | 2 | Kept as a re-pointed comment instead: the paragraph exists to tell the next reader which layer sees a broken `accessControl`; deleting it loses that and re-creates the confusion. |
-| Editing historical knowledge-base records (ADR-096, one post-mortem, one learning, seven plans, one spec, and the archives) | 2 | Point-in-time records; rewriting them falsifies history. Decided per hit in the census below. |
+| Editing historical knowledge-base records (ADR-096, one operations write-up, one learning, seven plans, one spec, and the archives) | 2 | Point-in-time records; rewriting them falsifies history. Decided per hit in the census below. |
 | A new test that asserts the file is absent | 1 | A deleted file needs no test; `test-infra-suite-registration.sh` already fails if a registration row names a missing file, and the Phase 7 grep census is the one-time evidence. |
 | Folding `server.tf`'s stale `web-probe.tf:22` comment cite (Step A's accepted-but-unfixed note) | 3 | Out of the brief; `server.tf` is also a trigger path, so touching it widens the apply. Left for the next PR that has a reason to edit `server.tf`. |
 
@@ -128,7 +128,7 @@ Queried the 200 open `code-review` issues for each edited path and the gate name
 | Hit | Decision | Reason |
 |---|---|---|
 | `knowledge-base/engineering/architecture/decisions/ADR-096-...zot.md` (~:496) | Leave | Historical ADR; the sentence already says "superseded". |
-| `knowledge-base/engineering/operations/post-mortems/2026-07-29-v0244-1-...-postmortem.md` (~:222, #7079 row) | Leave | Point-in-time record. |
+| the 2026-07-29 v0.244.1 write-up under `knowledge-base/engineering/operations/` (~:222, #7079 row) | Leave | Point-in-time record. |
 | `knowledge-base/project/learnings/best-practices/2026-07-09-nonblocking-copy-then-sign-...md` | Leave | Historical learning. |
 | `knowledge-base/project/plans/*.md` (7 files, 2026-07-09 through 2026-09-24) | Leave | Historical plans; one-time evidence of the decision trail. |
 | `knowledge-base/project/specs/feat-one-shot-zot-mirror-fail-closed/tasks.md` | Leave | Completed spec (`[x]` rows), not live guidance. |
@@ -173,7 +173,7 @@ Registration and manifest tests, `shellcheck` on `ci-deploy.sh`, the workflow YA
 
 ### Phase 6: Ship
 
-PR body: `Closes #7258` on its own line; `Refs #7079` (the post-mortem residual item list names the gate: post a one-line comment there that the gate item is resolved by this PR, but leave #7079 open for its other items); threshold `none` with the reason above; the sweep census; the two-Slack-statement choice flagged as challengeable; the apply-sequencing note. Do not push while the PR is queued (the merge queue handles BEHIND). A draft PR's draft-light `test` check reads red; ignore it and read the run created at ready.
+PR body: `Closes #7258` on its own line; `Refs #7079` (the write-up's residual item list names the gate: post a one-line comment there that the gate item is resolved by this PR, but leave #7079 open for its other items); threshold `none` with the reason above; the sweep census; the two-Slack-statement choice flagged as challengeable; the apply-sequencing note. Do not push while the PR is queued (the merge queue handles BEHIND). A draft PR's draft-light `test` check reads red; ignore it and read the run created at ready.
 
 ### Phase 7: Deploy sequencing (before enqueue and after merge)
 
