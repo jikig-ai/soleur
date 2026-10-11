@@ -44,7 +44,10 @@
 # A child's environment is readable only by the same uid and root, a reduction
 # from the world-readable /proc/<pid>/cmdline the URL form occupied; it is not
 # invisible to code running as the same user. The token passes a shape guard
-# ([A-Za-z0-9_], the ghs_ class) BEFORE the header is built; a refused value
+# ([A-Za-z0-9._~+/=-], the canonical credential alphabet of
+# scripts/lib/bearer-curl.sh bc_ok — NOT the legacy ~40-char ghs_ base62 class;
+# GitHub's issued installation tokens now run ~390 chars and carry '.' and '-',
+# measured live 2026-10-11, #9972) BEFORE the header is built; a refused value
 # prints SOLEUR_CREDENTIAL_REFUSED script=bump-inngest-bootstrap-pin
 # reason=<token_shape|control_char> and dies at `args`, before any git network
 # call. BUMP_PUSH_URL (the fixture seam) gets no header.
@@ -231,14 +234,17 @@ if [[ -n "${BUMP_PUSH_URL:-}" ]]; then
   PUSH_URL="$BUMP_PUSH_URL"
 else
   # Judge the credential BEFORE the header is built or any git network call.
-  # Empty/unset, or a byte outside the installation-token alphabet (the ghs_
-  # class), is refused with the value-free marker; the value is never printed.
+  # Empty/unset, or a byte outside the canonical credential alphabet
+  # ([A-Za-z0-9._~+/=-], the same class scripts/lib/bearer-curl.sh bc_ok judges —
+  # GitHub's issued installation tokens now carry '.' and '-', so the legacy
+  # ghs_ base62 class would refuse every real token, #9972), is refused with
+  # the value-free marker; the value is never printed.
   case "${GH_TOKEN:-}" in
-    ''|*[!A-Za-z0-9_]*)
+    ''|*[!A-Za-z0-9._~+/=-]*)
       _refuse_reason=token_shape
       case "${GH_TOKEN:-}" in *[[:cntrl:]]*) _refuse_reason=control_char ;; esac
       printf 'SOLEUR_CREDENTIAL_REFUSED script=bump-inngest-bootstrap-pin reason=%s\n' "$_refuse_reason" >&2
-      die args "GH_TOKEN (soleur-infra installation token) is required for the push remote and must match [A-Za-z0-9_]+ (value not shown)"
+      die args "GH_TOKEN (soleur-infra installation token) is required for the push remote and must match [A-Za-z0-9._~+/=-]+ (value not shown)"
       ;;
   esac
   PUSH_URL="https://github.com/${REPO}.git"
