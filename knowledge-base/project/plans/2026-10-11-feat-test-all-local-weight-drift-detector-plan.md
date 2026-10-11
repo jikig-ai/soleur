@@ -12,6 +12,40 @@ requires_cpo_signoff: true
 
 # test-all: local weight-drift detector — warn when a suite's local actual exceeds committed weight by >2x
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-11 (sequential-fallback — no Task/subagent spawn on
+this harness; every lane ran in-process and none claims independent review)
+**Sections enhanced:** Technical Approach (glob manifest read), Files to Edit
+(`glob:` edge kind), Implementation Phases (suite ratchet constraints),
+Quality Gates (QG-5 manifest-readers sweep), Success Metrics (verify form),
+Architecture Decision (ADR amendment shape corrected), Observability
+(discoverability probe dir-scoped), Risks (two rows added).
+
+### Key Improvements
+
+1. Manifest read widened from two literals to `suite-durations*.tsv` — a
+   future third manifest joins the comparison instead of mis-reporting
+   `unmeasured` (`2026-10-06` SE3).
+2. The `AFFECTED_*_PATHS` block uses the `glob:` edge kind from #9813 — the
+   declaration now says what the walker reads (`2026-10-10` doctrine).
+3. ADR-242 amendment corrected to the dated `## Amendment —` convention (the
+   ADR is single-Decision, not ordinal).
+4. `discoverability_test.command` dir-scoped — the file-scoped form would
+   have failed Check 10's suite-shape reject at ship.
+5. New suite carries the three always-on-ratchet constraints
+   (owning `trap`, absolute fixture root, per-arm env scrub) that only the
+   affected gate exercises (`2026-10-05`).
+
+### New Considerations Discovered
+
+- `WEIGHT_DRIFT` lines print post-marker, so a monitor that exits on the
+  `=== N/N ===` marker never sees them — accepted; the marker must stay last
+  (#6750 class) and the lines live in run output + the durable TSV.
+- QG-5 added: every suite that reads the durations/shard manifests is
+  enumerated and run (`git grep -lE` recipe), because a regen can break a
+  computed value no literal grep sees (`2026-10-03` SE9).
+
 ## Overview
 
 `scripts/test-all.sh` already records per-suite elapsed milliseconds to
@@ -75,13 +109,14 @@ Three wired-together pieces, all inside `scripts/`:
    region (after `=== N/N suites passed ===`, with the infra/ceiling
    notices): when `CI` is unset, `TEST_TIMING_LOG` names a readable file, and
    `weight_drift_report` is defined, call it `|| true` over
-   `scripts/suite-durations.tsv` and `scripts/suite-durations-heavy.tsv`
-   (both manifests, else heavy-group labels would falsely report
-   `unmeasured`; resolved via `dirname "${BASH_SOURCE[0]}"` like
-   `_aff_full_cost_min` — never cwd-relative, since the runner can be
-   invoked from any directory). A caller-set `TEST_TIMING_LOG` on any local
-   run shape also reaches the comparator — the emit gate is on the variable,
-   not the mode.
+   `"$_scriptdir"/suite-durations*.tsv` — the GLOB, not two literals
+   (deepen finding from `2026-10-06-one-self-inclusion-claim...`: absence in
+   one file is not absence; a future third manifest is picked up rather than
+   silently mis-reporting `unmeasured`). `$_scriptdir` is resolved via
+   `dirname "${BASH_SOURCE[0]}"` like `_aff_full_cost_min` — never
+   cwd-relative, since the runner can be invoked from any directory. A
+   caller-set `TEST_TIMING_LOG` on any local run shape also reaches the
+   comparator — the emit gate is on the variable, not the mode.
 
 ### Line grammar
 
@@ -95,9 +130,12 @@ WEIGHT_DRIFT_UNAVAILABLE rows=<n> reason=elapsed-zero     # ran rows exist but e
 A row "ran" iff field 3 does not start `skip=` AND elapsed > 0. FAIL, KILLED
 and TRIPWIRE rows still count as ran — they consumed wall-clock. Rows that are
 comments (`^#`) or short (`NF < 2`, a torn write from a killed run) are skipped
-— same `awk` guard idiom as `_aff_full_cost_min`. When any WEIGHT_DRIFT line
-emitted, one trailer line names the timing-log path so the warning is
-inspectable rather than a dead end.
+— same `awk` guard idiom as `_aff_full_cost_min`. Manifest args are
+`-f`-checked per file before `awk` reads them; with zero readable manifests
+every ran row reports `unmeasured` (visible, never silently skipped — the
+issue's own contract). When any WEIGHT_DRIFT line emitted, one trailer line
+names the timing-log path so the warning is inspectable rather than a dead
+end.
 
 `WEIGHT_DRIFT_FLOOR_MS=10000` is a value-pinned constant mirroring
 `LOCAL_FAST_CAP_MS` in `test-all-fast-tier-budget.test.sh` — pin the value,
@@ -119,7 +157,14 @@ surface small inside a 7000-line file.
 - **Phase 1 — lib + suite (RED first).** Write
   `scripts/test-all-weight-drift.test.sh` with fixture arms for every
   predicate term and row class (RED against a stub/absent lib), then
-  `scripts/lib/test-weight-drift.sh` to GREEN.
+  `scripts/lib/test-weight-drift.sh` to GREEN. The suite's own shell obeys
+  three repo ratchets visible only to always-on/affected suites
+  (`2026-10-05` learning): every `mktemp` operand sits under one owning
+  `trap ... EXIT` (`lint-trap-tempfile-ownership` rule c); the fixture root
+  is a provably-absolute `mktemp -d` path (`fixture-relative-assert`); and
+  sandboxed runner arms scrub the env per arm (`env -u TEST_GROUP`, never
+  inherit `TEST_TIMING_LOG`/`CI` — the env-leak class that reddens suites
+  only under an exported `TEST_GROUP=affected`).
 - **Phase 2 — runner wiring.** Source the lib opportunistically beside the
   scratch-root include (~line 496), add the default arm after
   `_durable_log_dir` (~line 4272), add the epilogue call after the
@@ -135,8 +180,10 @@ surface small inside a 7000-line file.
   (hand-editing generated tables is refused by ADR-240 convention; flags
   verified against `--help` 2026-10-11 — `--incremental` is a dry-run unless
   `--write` is passed).
-- **Phase 4 — ADR-242 amendment.** Append the decision recorded below, with
-  the rejected alternatives.
+- **Phase 4 — ADR-242 amendment.** Append a dated `## Amendment — 2026-10-11
+  (#9814)` section (the ADR's own convention — it is a single-Decision ADR
+  amended by dated sections, not an ordinal decision list), recording the
+  decision below and its rejected alternatives.
 
 ## Files to Edit
 
@@ -145,9 +192,10 @@ surface small inside a 7000-line file.
   ~:6935), one `run_suite` registration (~:5184).
 - `scripts/lib/test-affected-paths.sh` — `ALWAYS_ON_SUITES` entry +
   `AFFECTED_SCRIPTS_TEST_ALL_WEIGHT_DRIFT_PATHS` = { the suite file, the lib,
-  `scripts/test-all.sh`, `scripts/suite-durations.tsv`,
-  `scripts/suite-durations-heavy.tsv`, `scripts/lib/test-affected-paths.sh`
-  (self-inclusion convention) }.
+  `scripts/test-all.sh`, `glob:scripts/suite-durations*.tsv` (the `glob:`
+  edge kind from #9813/PR #9945 — the walker reads the glob, so the edge says
+  the glob, not today's two literals),
+  `scripts/lib/test-affected-paths.sh` (self-inclusion convention) }.
 - `scripts/suite-durations.tsv` — regenerated floor row via
   `--incremental --write` (never hand-edited).
 - `scripts/suite-shard-legs.tsv` — regenerated leg assignment via the same
@@ -223,7 +271,10 @@ logs:
   where: run stdout/stderr; the timing TSV at $_durable_log_dir/suite-timings.tsv under ${SOLEUR_SCRATCH_BASE:-/var/tmp}/soleur-test-all-logs/<run-dir>/
   retention: run log is console lifetime; the TSV rides the #9117 age-reap on the durable log dir
 discoverability_test:
-  command: rg -n WEIGHT_DRIFT scripts/lib/test-weight-drift.sh
+  # dir-scoped on purpose: the file-scoped form `scripts/lib/test-weight-drift.sh`
+  # trips Check 10's suite-shape detector (`/test-` inside a filename reads as a
+  # test suite). `rg` over the lib dir prints the marker's emit site post-landing.
+  command: rg -n WEIGHT_DRIFT scripts/lib
   expected_output: WEIGHT_DRIFT
 ```
 
@@ -243,8 +294,9 @@ in_transit: []
 ### ADR
 
 Amend `ADR-242-the-local-gate-defaults-to-affected-suites-and-always-on-ratchets.md`
-— new decision (next free ordinal at write time; verify against origin/main at
-ship, per the ADR-Ordinal Collision Gate): **"a local run reports local-vs-
+with a dated `## Amendment — 2026-10-11 (#9814)` section (the ADR's own
+convention — a single Decision followed by dated Amendments, latest
+`#9813` 2026-10-10; no ordinal to verify): **"a local run reports local-vs-
 committed weight drift as an advisory line, never a gate."** Record: the
 TEST_TIMING_LOG default arm for local affected runs, the >2x-committed AND
 >10s predicate, the `unmeasured` reporting contract, the dual-emit convention,
@@ -359,7 +411,7 @@ TEST_TIMING_LOG && -f file && declare -F weight_drift_report`.
 | `scripts/suite-durations.tsv` + `suite-shard-legs.tsv` regen | — | inferred — justification: `test-all-fast-tier-budget` reds on an always-on label with no weight row; ADR-240 mandates `--incremental --write`, never a hand-edit |
 | ADR-242 amendment | — | inferred — justification: plan Phase 2.10 makes the warn-only design decision a deliverable of this plan, not a deferred issue |
 | `WEIGHT_DRIFT_UNAVAILABLE` line | — | inferred — justification: anti-vacuity; a bash-3.2 host produces all-zero elapsed and must not read as "within tolerance" |
-| `suite-durations-heavy.tsv` read | — | inferred — justification: correctness; heavy-group labels would falsely report `unmeasured` against the light table alone |
+| `suite-durations*.tsv` glob read | — | inferred — justification: correctness; heavy-group labels would falsely report `unmeasured` against the light table alone, and absence-in-one-file is not absence (deepen: `2026-10-06` SE3) |
 | `basis=floor` annotation | — | inferred — justification: 3 `floor`-class rows exist; a floor-anchored drift line must name its weaker anchor |
 
 ### Split Assessment
@@ -375,7 +427,7 @@ TEST_TIMING_LOG && -f file && declare -F weight_drift_report`.
 
 - [ ] FR-1: a local `--affected` run (`CI` unset, `TEST_TIMING_LOG` unset) writes per-suite timings to a per-run file under `$_durable_log_dir` without explicit setup.
 - [ ] FR-2: when `TEST_TIMING_LOG` is set on a local run, each ran suite with `local > 2*committed AND local > 10000` emits exactly `WEIGHT_DRIFT <label> committed=<ms> local=<ms>` — on stdout and stderr.
-- [ ] FR-3: a ran suite with no row in `scripts/suite-durations{,-heavy}.tsv` emits `WEIGHT_DRIFT <label> committed=unmeasured local=<ms>` — never silently skipped.
+- [ ] FR-3: a ran suite with no row in any `scripts/suite-durations*.tsv` manifest emits `WEIGHT_DRIFT <label> committed=unmeasured local=<ms>` — never silently skipped.
 - [ ] FR-4: `skip=*`, KILLED/FAIL/TRIPWIRE handling per the grammar above (declines silent, ran-but-failed still compared).
 - [ ] FR-5: ran rows present but every elapsed_ms = 0 emits `WEIGHT_DRIFT_UNAVAILABLE rows=<n> reason=elapsed-zero` once.
 
@@ -393,6 +445,7 @@ TEST_TIMING_LOG && -f file && declare -F weight_drift_report`.
 - [ ] QG-2: `scripts/suite-durations.tsv` carries a `floor` row for the new label via `--incremental --write`; `test-all-fast-tier-budget` green with the allowlist unchanged (still 2 members).
 - [ ] QG-3: `python3 scripts/lint-guard-contract.py` green against this plan's Guard Contract.
 - [ ] QG-4: the new suite's mutation arms drive each predicate term and each wiring site red, and the must-PASS rows stay green.
+- [ ] QG-5: manifest-readers sweep — `git grep -lE 'regenerate-shard-manifest|suite-shard-legs|suite-durations' -- plugins/soleur/test scripts tests` enumerated and every hit's suite run (per `2026-10-03` Session Error 9: a regen-derived value a suite computes from can break where a literal grep can't see it).
 
 ## Test Scenarios
 
@@ -417,14 +470,17 @@ TEST_TIMING_LOG && -f file && declare -F weight_drift_report`.
 ### Edge Cases
 
 - bash 3.2 host (EPOCHREALTIME absent) → the unavailable arm above.
-- Heavy-group label running locally → resolves via `suite-durations-heavy.tsv`, not `unmeasured`.
+- Heavy-group label running locally → resolves via `suite-durations-heavy.tsv`, not `unmeasured` (the glob covers it; a fixture row proves the light+heavy join).
 - `tmp_delta` trailing field rows → parsed by first three fields only.
 - Duplicate label rows (defensive) → last row wins; documented in the lib.
 
 ## Success Metrics
 
 A replay of the #9763 incident shape — an always-on suite at ~20x its
-committed weight locally — emits a `WEIGHT_DRIFT` line in the run output
+committed weight locally — emits a `WEIGHT_DRIFT` line in the run output.
+Run-verification form: `bash scripts/test-all.sh --affected > /tmp/run.log
+2>&1; rc=$?` — never `... | tail`, which discards the runner's rc under a
+non-pipefail harness (`2026-05-18` tail-masking learning).
 without anyone checking timings by hand; a quiet run on an idle machine emits
 nothing.
 
@@ -522,6 +578,23 @@ against the tree; none stale. The one precision adjustment: "selected suite"
 in the ask maps to *ran* rows — `skip=` rows are written to the timing log at
 0ms and are correctly invisible; and "suite-durations.tsv row" must include
 `suite-durations-heavy.tsv` or three labels mis-report `unmeasured`.
+
+**Deepen pass (2026-10-11, sequential-fallback).** Mechanical halts 4.6/4.7/
+4.8/4.9/4.10/4.11/4.12 all pass — `lint-guard-contract.py` green (2 entries),
+Scope Check fence-count 1 with compliant rows, PAT sweep clean,
+Observability 5-field valid. One gate-adjacent fix landed: the
+discoverability probe was dir-scoped because the file-scoped form trips
+Check 10's suite-shape detector (`/test-` inside the filename). Learnings
+consumed and folded: `2026-10-06` SE3 (absence-in-one-file is not absence →
+manifest read is `suite-durations*.tsv`, and the edge declares `glob:` kind);
+`2026-10-03` SE9 (manifest-readers sweep added as QG-5); `2026-10-05` (the
+new suite obeys lint-trap-tempfile-ownership (c), fixture-relative-assert,
+and per-arm env scrub); `2026-10-10` (edge declares what the walker reads);
+`2026-05-18` (verification uses redirect+`$?`, never `| tail`). Citation
+census: all 7 referenced issues/PRs re-verified live; `cq-ac-must-not-depend-on-concurrent-sessions` confirmed migrated-active. Verify-the-negative pass:
+`TEST_TIMING_LOG` setter census confirms only `ci.yml` + harnesses; zero
+`===`-shaped lines exist after the `:6949` marker; zero suites pin the live
+registration count, so the added `run_suite` is safe.
 
 **Plan Review (inline sequential-fallback).** The 5-agent panel lenses
 (DHH/simplicity, Kieran/correctness, architecture/blast-radius, spec-flow,
