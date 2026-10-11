@@ -599,7 +599,7 @@ for u in git-data-luks-reopen git-data-nftables; do
 done
 cfg_tf=$(sed -n 's/^[[:space:]]*doppler_config_name[[:space:]]*=[[:space:]]*"\(.*\)"$/\1/p' "$GIT_DATA_TF" | head -n 1)
 cfg_res=$(awk '/^resource "doppler_config" "git_data_prd" \{/{f=1} f&&/^[[:space:]]*name[[:space:]]*=/{gsub(/.*= *"|"$/,""); print; exit}' "$DIR/git-data-luks.tf")
-cfg_sec=$(awk '/^resource "doppler_secret" "git_data_host_heartbeat_url_prd" \{/{f=1} f&&/^[[:space:]]*config[[:space:]]*=/{gsub(/.*= *"|"$/,""); print; exit}' "$GIT_DATA_TF")
+cfg_sec=$(sed -n 's/^[[:space:]]*git_data_liveness_doppler_cfg[[:space:]]*=[[:space:]]*"\(.*\)"$/\1/p' "$GIT_DATA_TF" | head -n 1)
 cfg_sh=$(sed -n 's/^readonly PRODUCTION_CONFIG=\(.*\)$/\1/p' "$SCRIPT_BODY")
 ok "$([ -n "$cfg_sh" ] && [ "$cfg_sh" = "$cfg_tf" ] && [ "$cfg_sh" = "$cfg_res" ] && [ "$cfg_sh" = "$cfg_sec" ]; echo $?)" "S14 the production config name agrees across the feeder ($cfg_sh), the host's doppler_config_name ($cfg_tf), the config resource ($cfg_res) and the heartbeat secret ($cfg_sec)"
 RH_WF="$DIR/../../../.github/workflows/git-data-rung2-rehearsal.yml"
@@ -664,7 +664,7 @@ ok "$(grep -qE 'paused[[:space:]]*=[[:space:]]*true$' <<<"$hb" && grep -qE 'igno
 ok "$(grep -qE 'push[[:space:]]*=[[:space:]]*false$' <<<"$hb"; echo $?)" "T-TF4 push is false (DC-3)"
 ok "$(grep -qE 'email[[:space:]]*=[[:space:]]*true$' <<<"$hb" && grep -qE 'call[[:space:]]*=[[:space:]]*false$' <<<"$hb" && grep -qE 'sms[[:space:]]*=[[:space:]]*false$' <<<"$hb"; echo $?)" "T-TF4 the alert channel is email (true), with call and sms off: the page reaches the owner"
 sec=$(awk '/^resource "doppler_secret" "git_data_host_heartbeat_url_prd" \{/{f=1} f{print} f&&/^}/{exit}' "$GIT_DATA_TF")
-ok "$(grep -qE 'project[[:space:]]*=[[:space:]]*"soleur"$' <<<"$sec" && grep -qE 'config[[:space:]]*=[[:space:]]*"prd_git_data"$' <<<"$sec"; echo $?)" "T-TF5 the secret's project and config are LITERALS (no doppler_config reference in the closure)"
+ok "$(grep -qE 'project[[:space:]]*=[[:space:]]*"soleur"$' <<<"$sec" && grep -qE 'config[[:space:]]*=[[:space:]]*local\.git_data_liveness_doppler_cfg$' <<<"$sec" && [ "$cfg_sec" = prd_git_data ]; echo $?)" "T-TF5 the secret's project is a literal and its config is a local holding the literal (no doppler_config reference in the closure)"
 ok "$(grep -qE 'name[[:space:]]*=[[:space:]]*"GIT_DATA_HOST_HEARTBEAT_URL"$' <<<"$sec" && grep -qE 'value[[:space:]]*=[[:space:]]*betteruptime_heartbeat\.git_data_host_prd\.url$' <<<"$sec" && grep -qE 'visibility[[:space:]]*=[[:space:]]*"masked"$' <<<"$sec"; echo $?)" "T-TF6 the secret holds the heartbeat URL, masked"
 ok "$(! grep -qE 'doppler_config\.|hcloud_server\.' <<<"$sec"; echo $?)" "T-TF7 the secret references neither doppler_config nor hcloud_server"
 ok "$(grep -qE '"\$\{DIR\}/git-data-liveness.sh"' "$LUKS_TEST"; echo $?)" "T-LK1 the feeder is in git-data-luks.test.sh's doppler config-scope census file list"

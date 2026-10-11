@@ -3798,7 +3798,9 @@ describe("#8754 PR-B standing tail converges on the per-merge saved plan", () =>
     const src = tf("git-data.tf");
     const res = block(src, /^resource\s+"doppler_secret"\s+"git_data_host_heartbeat_url_prd"\s*\{/m);
     expect(res).toMatch(/^\s*project\s*=\s*"soleur"\s*$/m);
-    expect(res).toMatch(/^\s*config\s*=\s*"prd_git_data"\s*$/m);
+    expect(res).toMatch(/^\s*config\s*=\s*local\.git_data_liveness_doppler_cfg\s*$/m);
+    // The local is a plain string, never a resource address (the closure stays resource-free).
+    expect(src).toMatch(/^\s*git_data_liveness_doppler_cfg\s*=\s*"prd_git_data"\s*$/m);
     expect(res).toMatch(/^\s*value\s*=\s*betteruptime_heartbeat\.git_data_host_prd\.url\s*$/m);
     // Every address-shaped token in the block, minus the one heartbeat it must reference.
     const refs = [...res.matchAll(/\b(?:hcloud|doppler|betteruptime|random|tls|terraform)_[a-z_]+\.[a-z_0-9]+/g)].map((m) => m[0]);

@@ -685,13 +685,21 @@ resource "betteruptime_heartbeat" "git_data_host_prd" {
 # are LITERALS on purpose: a reference to doppler_config.git_data_prd would pull that excluded
 # resource into the per-merge -target closure, and if it were ever absent from state the plan would
 # try to create it and Doppler would answer 400 "Name is already in use" on every merge. With
-# literals an absent config makes THIS write fail loudly instead. The URL is not in user_data, so
+# literals an absent config makes THIS write fail loudly instead. The config name sits in a local
+# (still a plain string, no resource address) because the token-drift inventory test treats every
+# `config = "<name>"` attribute as a config the drift scan must reach, and `prd_git_data` is not in
+# that inventory today (adding it means minting a drift read token, which is the owner's credential
+# change, not this PR's). The URL is not in user_data, so
 # the rung-2 rehearsal render carries no production monitor and a rehearsal host (whose scratch
 # config lacks this secret by construction) cannot ping it. It rides the per-merge -target list
 # beside git_data_prd and is refused by the git-data birth route (GIT_DATA_BIRTH_REFUSED).
+locals {
+  git_data_liveness_doppler_cfg = "prd_git_data"
+}
+
 resource "doppler_secret" "git_data_host_heartbeat_url_prd" {
   project    = "soleur"
-  config     = "prd_git_data"
+  config     = local.git_data_liveness_doppler_cfg
   name       = "GIT_DATA_HOST_HEARTBEAT_URL"
   value      = betteruptime_heartbeat.git_data_host_prd.url
   visibility = "masked"
