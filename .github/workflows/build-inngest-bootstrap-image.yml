@@ -926,11 +926,11 @@ jobs:
           # It asserts the manifest and blobs are in zot AND readable by the PUSH credential
           # over the CF-tunnel bridge from a GitHub runner. It does NOT prove the HOST can
           # pull: the host uses ZOT_PULL_* over the private NIC, and zot's accessControl can
-          # grant push-read without pull-read. The web-1 host probe (web-zot-consumer-probe.sh,
-          # repo list in web-probe.tf) now reads this repo's tags/list with the pull credential
-          # (web-2 only after its next replace), but it does not resolve the PINNED tag's
-          # manifest, so a green run here is NOT sufficient evidence to write an @sha256 pin
-          # into cloud-init.yml.
+          # grant push-read without pull-read. The host probe (web-zot-consumer-probe.sh, repo
+          # list in web-probe.tf) reads this repo's tags/list with the pull credential on web-1;
+          # other hosts pick the list up at their next replace. It does not resolve the PINNED
+          # tag's manifest, so a green run here is NOT sufficient evidence to write an @sha256
+          # pin into cloud-init.yml.
           #
           # Retention is the second gap: cloud-init-registry.yml keeps only the 5
           # most-recently-pushed v* tags per repo with deleteUntagged + hourly gc, and its own
@@ -940,8 +940,8 @@ jobs:
             echo ""
             echo "> **This does not license a pin.** Green here means zot serves the digest to"
             echo "> the PUSH credential over the tunnel. The host probe (\`ZOT_PULL_*\`, private NIC)"
-            echo "> only lists this repo's tags and never resolves a pinned digest, and zot retention keeps only the 5 most"
-            echo "> recent \`v*\` tags. See the #7203 review findings."
+            echo "> only lists this repo's tags and never resolves a pinned digest, and zot retention"
+            echo "> keeps only the 5 most recent \`v*\` tags. See the #7203 review findings."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Tear down cloudflared registry bridge
@@ -972,9 +972,10 @@ jobs:
         #
         # This step keeps `!cancelled() &&` for the reason stated just above. reusable-release.yml
         # now has a failure-gated sibling, `Post to Slack (release BLOCKED)`
-        # (`!cancelled() && failure()`, #7256), so a blocking mirror failure reaches Slack in
-        # both workflows; its `Post to Slack (release)` step keeps a plain-expression `if:` and
-        # does not run on a blocked release, by design.
+        # (`!cancelled() && failure()` plus a released-or-draft-exists condition, #7256), so
+        # once a draft exists a blocking mirror failure reaches Slack in both workflows; its
+        # `Post to Slack (release)` step keeps a plain-expression `if:` and does not run on a
+        # blocked release, by design.
         if: ${{ !cancelled() && steps.zot_mirror.outputs.mirror_status == 'degraded' }}
         continue-on-error: true
         env:
