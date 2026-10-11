@@ -4266,7 +4266,7 @@ diag_check "#9860 D10a: kdeny is emitted exactly once, between kernel and done, 
 run_diag_case "$DIAGD" "MOCK_KLOG_J_OUT=$D10_DENY_MOUNT"
 D10_VAL=$(d10_val "$(d10_row "$DIAGD")")
 diag_check "#9860 D10b: a realistic AppArmor mount denial in a READABLE stream reads j=ok (the line says DENIED, which must not read as unreadable), counts hits=1 mproc=1, and the fields are a closed key set: no name, comm, pid, srcname or timestamp" \
-  "$([[ "$D10_VAL" == 'src=journal j=ok d=skip total=1 hits=1 mproc=1 '* ]] && has_f "operation='mount'" "$D10_VAL" && has_f "profile='soleur-bwrap'" "$D10_VAL" && has_f "fstype='proc'" "$D10_VAL" \
+  "$([[ "$D10_VAL" == 'src=journal j=ok d''=skip total=1 hits=1 mproc=1 '* ]] && has_f "operation='mount'" "$D10_VAL" && has_f "profile='soleur-bwrap'" "$D10_VAL" && has_f "fstype='proc'" "$D10_VAL" \
       && has_f 'error=-13' "$D10_VAL" && ! has_e '(^| )(name|comm|pid|srcname|flags)=|audit\(|/newroot' "$D10_VAL" && d10_verdict_ok && echo 0 || echo 1)" "kdeny: $D10_VAL"
 
 d10c() {  # <label> <anchored-regex-for-the-row-value> [VAR=value ...]
@@ -4276,49 +4276,49 @@ d10c() {  # <label> <anchored-regex-for-the-row-value> [VAR=value ...]
   diag_check "#9860 D10c ($label): the ladder reports it and the deploy verdict is unchanged" \
     "$(has_e "$re" "$v" && d10_verdict_ok && echo 0 || echo 1)" "kdeny: $v | rc=$DC_RC reason=$DC_REASON"
 }
-d10c "readable, nothing denied" '^src=journal j=ok d=skip total=[1-9][0-9]* hits=0 mproc=0$'
-d10c "journal hint-only, dmesg answers" '^src=dmesg j=noaccess d=ok total=[1-9][0-9]* hits=0 mproc=0$' "MOCK_KLOG_J_OUT=$D10_HINT_J" MOCK_KLOG_J_ERR=1
-d10c "journal SILENT-EMPTY (rc 0, no hint, no lines: the systemd 261 shape), dmesg answers" '^src=dmesg j=empty d=ok total=[1-9][0-9]* hits=0 mproc=0$' MOCK_KLOG_J_OUT=
-d10c "both rungs hint-only, the hint text arriving on STDERR as the real tools print it" '^src=none j=noaccess d=noaccess total=0 hits=0 mproc=0$' "MOCK_KLOG_J_OUT=$D10_HINT_J" MOCK_KLOG_J_ERR=1 "MOCK_KLOG_D_OUT=$D10_HINT_D" MOCK_KLOG_D_ERR=1 MOCK_KLOG_D_RC=1
-d10c "journalctl's own '-- No entries --' banner is not a kernel line: the journal reads empty, not ok" '^src=dmesg j=empty d=ok total=[1-9][0-9]* hits=0 mproc=0$' 'MOCK_KLOG_J_OUT=-- No entries --'
+d10c "readable, nothing denied" '^src=journal j=ok d''=skip total=[1-9][0-9]* hits=0 mproc=0$'
+d10c "journal hint-only, dmesg answers" '^src=dmesg j=noaccess d''=ok total=[1-9][0-9]* hits=0 mproc=0$' "MOCK_KLOG_J_OUT=$D10_HINT_J" MOCK_KLOG_J_ERR=1
+d10c "journal SILENT-EMPTY (rc 0, no hint, no lines: the systemd 261 shape), dmesg answers" '^src=dmesg j=empty d''=ok total=[1-9][0-9]* hits=0 mproc=0$' MOCK_KLOG_J_OUT=
+d10c "both rungs hint-only, the hint text arriving on STDERR as the real tools print it" '^src=none j=noaccess d''=noaccess total=0 hits=0 mproc=0$' "MOCK_KLOG_J_OUT=$D10_HINT_J" MOCK_KLOG_J_ERR=1 "MOCK_KLOG_D_OUT=$D10_HINT_D" MOCK_KLOG_D_ERR=1 MOCK_KLOG_D_RC=1
+d10c "journalctl's own '-- No entries --' banner is not a kernel line: the journal reads empty, not ok" '^src=dmesg j=empty d''=ok total=[1-9][0-9]* hits=0 mproc=0$' 'MOCK_KLOG_J_OUT=-- No entries --'
 d10c "a mount denial for a NON-procfs filesystem is a hit but not a procfs-mount denial" \
-  "^src=journal j=ok d=skip total=1 hits=1 mproc=0 operation='mount' profile='soleur-bwrap' fstype='tmpfs' error=-13\$" \
+  "^src=journal j=ok d""=skip total=1 hits=1 mproc=0 operation='mount' profile='soleur-bwrap' fstype='tmpfs' error=-13\$" \
   'MOCK_KLOG_J_OUT=audit: type=1400 audit(1760000004.1:460): apparmor="DENIED" operation="mount" error=-13 profile="soleur-bwrap" fstype="tmpfs"'
 d10c "a seccomp audit record (type 1326) counts as a hit, with only its allowlisted syscall field" \
-  '^src=journal j=ok d=skip total=1 hits=1 mproc=0 syscall=165$' \
+  '^src=journal j=ok d''=skip total=1 hits=1 mproc=0 syscall=165$' \
   'MOCK_KLOG_J_OUT=audit: type=1326 audit(1760000002.1:458): auid=4294967295 uid=1001 pid=4244 comm="bwrap" exe="/usr/bin/bwrap" sig=0 arch=c000003e syscall=165 compat=0 ip=0x7f code=0x50000'
 d10c "a complain-mode ALLOWED record (type 1400) is not a denial: it must not count as a hit" \
-  '^src=journal j=ok d=skip total=1 hits=0 mproc=0$' \
+  '^src=journal j=ok d''=skip total=1 hits=0 mproc=0$' \
   'MOCK_KLOG_J_OUT=audit: type=1400 audit(1760000003.1:459): apparmor="ALLOWED" operation="mount" profile="soleur-bwrap" fstype="proc"'
 d10c "a flood of 12000 two-byte lines is capped at total=9999 so the counts can never grow the status head" \
-  '^src=journal j=ok d=skip total=9999 hits=0 mproc=0$' MOCK_KLOG_J_OUT=k MOCK_KLOG_J_REP=12000
+  '^src=journal j=ok d''=skip total=9999 hits=0 mproc=0$' MOCK_KLOG_J_OUT=k MOCK_KLOG_J_REP=12000
 d10c "a printk line that merely ECHOES tenant text carrying the markers is not an audit record: no hit, no fields" \
-  '^src=journal j=ok d=skip total=1 hits=0 mproc=0$' \
+  '^src=journal j=ok d''=skip total=1 hits=0 mproc=0$' \
   'MOCK_KLOG_J_OUT=bwrap[4242]: segfault at 0 ip 0 sp 0 error 4 in x apparmor="DENIED" operation="mount" info="TENANT TEXT" fstype="proc"'
 d10c "an audit-looking line that is not at the start of the record (prefixed text) is not a hit either" \
-  '^src=journal j=ok d=skip total=1 hits=0 mproc=0$' \
+  '^src=journal j=ok d''=skip total=1 hits=0 mproc=0$' \
   'MOCK_KLOG_J_OUT=kernel: audit: type=1400 audit(1760000005.1:461): apparmor="DENIED" operation="mount" fstype="proc"'
 d10c "a journal that prints error text and exits non-zero reads error (not ok), and the dmesg rung is still tried" \
-  '^src=dmesg j=error d=ok total=[1-9][0-9]* hits=0 mproc=0$' \
+  '^src=dmesg j=error d''=ok total=[1-9][0-9]* hits=0 mproc=0$' \
   'MOCK_KLOG_J_OUT=Failed to add match: Invalid argument' MOCK_KLOG_J_RC=1
 d10c "a tenant-chosen fstype that is not a short token is dropped from the fields (the rest of the record still reads)" \
-  "^src=journal j=ok d=skip total=1 hits=1 mproc=0 operation='mount' profile='soleur-bwrap' error=-13\$" \
+  "^src=journal j=ok d""=skip total=1 hits=1 mproc=0 operation='mount' profile='soleur-bwrap' error=-13\$" \
   'MOCK_KLOG_J_OUT=audit: type=1400 audit(1760000006.1:462): apparmor="DENIED" operation="mount" error=-13 profile="soleur-bwrap" fstype="/srv/tenants/acme"'
-d10c "journal silent-empty and dmesg refused" '^src=none j=empty d=noaccess total=0 hits=0 mproc=0$' MOCK_KLOG_J_OUT= "MOCK_KLOG_D_OUT=$D10_HINT_D" MOCK_KLOG_D_ERR=1 MOCK_KLOG_D_RC=1
-d10c "both binaries absent (rc 127)" '^src=none j=absent d=absent total=0 hits=0 mproc=0$' MOCK_KLOG_J_OUT= MOCK_KLOG_J_RC=127 MOCK_KLOG_D_OUT= MOCK_KLOG_D_RC=127
+d10c "journal silent-empty and dmesg refused" '^src=none j=empty d''=noaccess total=0 hits=0 mproc=0$' MOCK_KLOG_J_OUT= "MOCK_KLOG_D_OUT=$D10_HINT_D" MOCK_KLOG_D_ERR=1 MOCK_KLOG_D_RC=1
+d10c "both binaries absent (rc 127)" '^src=none j=absent d''=absent total=0 hits=0 mproc=0$' MOCK_KLOG_J_OUT= MOCK_KLOG_J_RC=127 MOCK_KLOG_D_OUT= MOCK_KLOG_D_RC=127
 d10c "an unrelated profile denial is a hit but NOT a procfs-mount denial, and the tenant file name stays out" \
-  "^src=journal j=ok d=skip total=1 hits=1 mproc=0 operation='open' profile='soleur-bwrap' requested_mask='r' denied_mask='r'\$" "MOCK_KLOG_J_OUT=$D10_DENY_OPEN"
+  "^src=journal j=ok d""=skip total=1 hits=1 mproc=0 operation='open' profile='soleur-bwrap' requested_mask='r' denied_mask='r'\$" "MOCK_KLOG_J_OUT=$D10_DENY_OPEN"
 
 d10c "a journal that fails (rc 1) with NO hint and NO lines reads error, not empty, and the dmesg rung answers" \
-  '^src=dmesg j=error d=ok total=[1-9][0-9]* hits=0 mproc=0$' MOCK_KLOG_J_OUT= MOCK_KLOG_J_RC=1
+  '^src=dmesg j=error d''=ok total=[1-9][0-9]* hits=0 mproc=0$' MOCK_KLOG_J_OUT= MOCK_KLOG_J_RC=1
 d10c "a journal that exits non-zero AFTER printing an anchored denial still reports the denial (the line is a real record)" \
-  "^src=journal j=ok d=skip total=1 hits=1 mproc=1 operation='mount' profile='soleur-bwrap' fstype='proc' error=-13 info='failed flags match'\$" \
+  "^src=journal j=ok d""=skip total=1 hits=1 mproc=1 operation='mount' profile='soleur-bwrap' fstype='proc' error=-13 info='failed flags match'\$" \
   "MOCK_KLOG_J_OUT=$D10_DENY_MOUNT" MOCK_KLOG_J_RC=1
 d10c "a mount denial whose fstype has an UNBALANCED quote is a hit but not a procfs-mount denial, and the fstype field is dropped" \
-  "^src=journal j=ok d=skip total=1 hits=1 mproc=0 operation='mount' profile='soleur-bwrap' error=-13\$" \
+  "^src=journal j=ok d""=skip total=1 hits=1 mproc=0 operation='mount' profile='soleur-bwrap' error=-13\$" \
   'MOCK_KLOG_J_OUT=audit: type=1400 audit(1760000013.1:474): apparmor="DENIED" operation="mount" error=-13 profile="soleur-bwrap" fstype="proc'
 d10c "a complain-mode ALLOWED record whose free text contains 'type=1326 audit(' is still not a hit" \
-  '^src=journal j=ok d=skip total=1 hits=0 mproc=0$' \
+  '^src=journal j=ok d''=skip total=1 hits=0 mproc=0$' \
   'MOCK_KLOG_J_OUT=audit: type=1400 audit(1760000014.1:475): apparmor="ALLOWED" operation="mount" info="x type=1326 audit(1.2:3) y" profile="soleur-bwrap"'
 # Newest-first selection: the stream is chronological (oldest first); tac makes the NEWEST line first and the fields come from it.
 D10M_OLD_MNT='audit: type=1400 audit(1760000010.1:470): apparmor="DENIED" operation="mount" error=-13 profile="old-prof" fstype="proc"'
@@ -4326,33 +4326,33 @@ D10M_NEW_MNT='audit: type=1400 audit(1760000011.1:471): apparmor="DENIED" operat
 D10M_OLD_OPN='audit: type=1400 audit(1760000012.1:472): apparmor="DENIED" operation="open" profile="old-open" requested_mask="r"'
 D10M_NEW_OPN='audit: type=1400 audit(1760000013.1:473): apparmor="DENIED" operation="open" profile="new-open" requested_mask="r"'
 d10c "two mount denials: both count, and the reported fields come from the NEWEST" \
-  "^src=journal j=ok d=skip total=2 hits=2 mproc=2 operation='mount' profile='new-prof' fstype='proc' error=-13\$" \
+  "^src=journal j=ok d""=skip total=2 hits=2 mproc=2 operation='mount' profile='new-prof' fstype='proc' error=-13\$" \
   "MOCK_KLOG_J_OUT=$D10M_OLD_MNT"$'\n'"$D10M_NEW_MNT"
 d10c "two non-mount denials: both count, mproc stays 0, and the fields come from the NEWEST" \
-  "^src=journal j=ok d=skip total=2 hits=2 mproc=0 operation='open' profile='new-open' requested_mask='r'\$" \
+  "^src=journal j=ok d""=skip total=2 hits=2 mproc=0 operation='open' profile='new-open' requested_mask='r'\$" \
   "MOCK_KLOG_J_OUT=$D10M_OLD_OPN"$'\n'"$D10M_NEW_OPN"
 d10c "an older mount denial beats a NEWER non-mount denial for the fields (the procfs-mount record is the evidence asked for)" \
-  "^src=journal j=ok d=skip total=2 hits=2 mproc=1 operation='mount' profile='old-prof' fstype='proc' error=-13\$" \
+  "^src=journal j=ok d""=skip total=2 hits=2 mproc=1 operation='mount' profile='old-prof' fstype='proc' error=-13\$" \
   "MOCK_KLOG_J_OUT=$D10M_OLD_MNT"$'\n'"$D10M_NEW_OPN"
 unset D10M_OLD_MNT D10M_NEW_MNT D10M_OLD_OPN D10M_NEW_OPN
 
 diag_inert "#9860 D10d: both kernel rungs hanging are each cut at 3 s and change nothing else (exit, reason, rollback line, teardown order, wall time)" MOCK_KLOG_J_SLEEP=60 MOCK_KLOG_D_SLEEP=60
 D10_VAL=$(d10_val "$(d10_row "$DIAGD")")
-diag_check "#9860 D10d2: the row states the hang: src=none j=timeout d=timeout" "$([[ "$D10_VAL" == 'src=none j=timeout d=timeout total=0 hits=0 mproc=0' ]] && echo 0 || echo 1)" "kdeny: $D10_VAL"
+diag_check "#9860 D10d2: the row states the hang: src=none j=timeout d""=timeout" "$([[ "$D10_VAL" == 'src=none j=timeout d''=timeout total=0 hits=0 mproc=0' ]] && echo 0 || echo 1)" "kdeny: $D10_VAL"
 
 diag_inert "#9860 D10e: a 4 MB journal stream ending in ONE denial is bounded and changes nothing else" MOCK_KLOG_J_BIG=1 "MOCK_KLOG_J_OUT=$D10_DENY_MOUNT"
 D10_VAL=$(d10_val "$(d10_row "$DIAGD")"); D10_TOTAL=$(sed -nE 's/^.* total=([0-9]+) .*$/\1/p' <<<"$D10_VAL")
 diag_check "#9860 D10e2: the final denial still counts (newest lines are kept, not the oldest) and the stream was cut to the 64 KiB cap" \
-  "$([[ "$D10_VAL" == 'src=journal j=ok d=skip total='* && "$D10_VAL" == *' hits=1 mproc=1 '* && "${D10_TOTAL:-99999}" -le 700 ]] && echo 0 || echo 1)" "kdeny: $D10_VAL"
+  "$([[ "$D10_VAL" == 'src=journal j=ok d''=skip total='* && "$D10_VAL" == *' hits=1 mproc=1 '* && "${D10_TOTAL:-99999}" -le 700 ]] && echo 0 || echo 1)" "kdeny: $D10_VAL"
 run_diag_case "$DIAGD" "MOCK_KLOG_J_OUT=$D10_HINT_J" MOCK_KLOG_D_BIG=1 "MOCK_KLOG_D_OUT=$D10_DENY_MOUNT"
 D10_VAL=$(d10_val "$(d10_row "$DIAGD")")
 diag_check "#9860 D10e3: a 4 MB dmesg stream is cut to its newest 400 lines: src=dmesg total=400 and the final denial still counts" \
-  "$([[ "$D10_VAL" == 'src=dmesg j=noaccess d=ok total=400 hits=1 mproc=1 '* ]] && d10_verdict_ok && echo 0 || echo 1)" "kdeny: $D10_VAL"
+  "$([[ "$D10_VAL" == 'src=dmesg j=noaccess d''=ok total=400 hits=1 mproc=1 '* ]] && d10_verdict_ok && echo 0 || echo 1)" "kdeny: $D10_VAL"
 
 run_diag_case "$DIAGD" "MOCK_KLOG_J_OUT=$D10_HINT_J" MOCK_KLOG_D_BIG=1 MOCK_KLOG_D_PAD=400 "MOCK_KLOG_D_OUT=$D10_DENY_MOUNT"
 D10_VAL=$(d10_val "$(d10_row "$DIAGD")"); D10_TOTAL=$(sed -nE 's/^.* total=([0-9]+) .*$/\1/p' <<<"$D10_VAL")
 diag_check "#9860 D10e4: when the newest 400 dmesg lines exceed the 64 KiB cap the cut keeps the NEWEST (the final denial still counts) rather than the oldest" \
-  "$([[ "$D10_VAL" == 'src=dmesg j=noaccess d=ok total='* && "$D10_VAL" == *' hits=1 mproc=1 '* && "${D10_TOTAL:-0}" -ge 100 && "${D10_TOTAL:-0}" -lt 400 ]] && d10_verdict_ok && echo 0 || echo 1)" "kdeny: $D10_VAL"
+  "$([[ "$D10_VAL" == 'src=dmesg j=noaccess d''=ok total='* && "$D10_VAL" == *' hits=1 mproc=1 '* && "${D10_TOTAL:-0}" -ge 100 && "${D10_TOTAL:-0}" -lt 400 ]] && d10_verdict_ok && echo 0 || echo 1)" "kdeny: $D10_VAL"
 
 D10F_DP='dp.st.''prd.Fx9aQ2mZ7vTbL4nKc8RdYw3Hs5Jp'
 D10F_SK='sk_''live_Fx9aQ2mZ7vTbL4nKc8RdYw'
@@ -4421,8 +4421,8 @@ run_diag_case "$DIAGD" "MOCK_KLOG_J_OUT=$D10H_LINE" MOCK_KLOG_J_REP=400
 D10_VAL=$(d10_val "$(d10_row "$DIAGD")")
 D10_TOTAL=$(sed -nE 's/^.* total=([0-9]+) .*$/\1/p' <<<"$D10_VAL"); D10_HITS=$(sed -nE 's/^.* hits=([0-9]+) .*$/\1/p' <<<"$D10_VAL"); D10_MPROC=$(sed -nE 's/^.* mproc=([0-9]+)( .*)?$/\1/p' <<<"$D10_VAL")
 diag_check "#9860 D10h: with 3-digit counts (every repeated denial counted: hits == total >= 100, mproc within one of it because head -c cuts the OLDEST line mid-record) and every field at its longest the row still begins src= (the 200-char tail does not eat the status head) and never exceeds 200 characters" \
-  "$([[ "$D10_VAL" == 'src=journal j=ok d=skip total='* && "${#D10_VAL}" -le 200 && "${D10_TOTAL:-0}" -ge 100 && "${D10_HITS:-x}" == "${D10_TOTAL:-y}" && "${D10_MPROC:-0}" -ge $(( ${D10_TOTAL:-1} - 1 )) ]] && echo 0 || echo 1)" "len=${#D10_VAL} kdeny: $D10_VAL"
-D10_FIELDS=$(sed -nE 's/^src=[a-z]+ j=[a-z]+ d=[a-z]+ total=[0-9]+ hits=[0-9]+ mproc=[0-9]+ (.*)$/\1/p' <<<"$D10_VAL")
+  "$([[ "$D10_VAL" == 'src=journal j=ok d''=skip total='* && "${#D10_VAL}" -le 200 && "${D10_TOTAL:-0}" -ge 100 && "${D10_HITS:-x}" == "${D10_TOTAL:-y}" && "${D10_MPROC:-0}" -ge $(( ${D10_TOTAL:-1} - 1 )) ]] && echo 0 || echo 1)" "len=${#D10_VAL} kdeny: $D10_VAL"
+D10_FIELDS=$(sed -nE 's/^src=[a-z]+ j=[a-z]+ d''=[a-z]+ total=[0-9]+ hits=[0-9]+ mproc=[0-9]+ (.*)$/\1/p' <<<"$D10_VAL")
 diag_check "#9860 D10h2: the extracted fields are cut at exactly 130 characters (the worst case 61 + 130 stays under the 200-char tail)" \
   "$([[ "${#D10_FIELDS}" -eq 130 && "$D10_FIELDS" == operation=* ]] && echo 0 || echo 1)" "fields(${#D10_FIELDS}): $D10_FIELDS"
 unset D10H_LINE D10_ROW D10_VAL D10_TOTAL D10_HITS D10_MPROC D10_FIELDS D10_DENY_MOUNT D10_DENY_OPEN D10_HINT_J D10_HINT_D
