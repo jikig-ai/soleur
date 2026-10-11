@@ -267,7 +267,14 @@ const GIT_DATA_FLOOR = 3_000;
 // (#7270, ADR-185 addendum 2026-09-28) the zot liveness feeder's per-boot counters and five
 // liveness_* fields on SOLEUR_ZOT_DISK fit without raising the constant: measured 20,932 B stored,
 // so the slack above is now 68 B. The next registry-host addition needs a structural shrink.
-const REGISTRY_GZIP_BUDGET = 21_000;
+// (#9373, 2026-10-10) 21_000 -> 21_600. Classifying the zot upload error line on the parsed `func`
+// field (one jq field, one read variable, a tri-state is_cap_exempt and its call-site restructure)
+// measures 21,012 B stored by registry-userdata-budget.sh (was 20,944 B; +68 B), which sits over the
+// old constant. 600 B of slack, the #8714 precedent; ~11.7 KB remains below HETZNER_CAP and the
+// 8,000 B headroom POLICY (24,767 B ceiling) is unchanged. This node-zlib model can differ from
+// terraform's base64gzip by a few hundred bytes, so the figure above is the authority and CI's
+// registry-userdata-budget job is the check.
+const REGISTRY_GZIP_BUDGET = 21_600;
 const REGISTRY_GZIP_FLOOR = 4_000;
 const GROK_DOGFOOD_GZIP_BUDGET = 8_000;
 const GROK_DOGFOOD_GZIP_FLOOR = 500;

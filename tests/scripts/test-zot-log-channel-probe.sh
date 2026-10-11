@@ -454,7 +454,7 @@ assert "C8c a Doppler service-token shape -> exit 1" \
   "[[ '$CASE_RC' -eq 1 ]] && grep -q 'token_or_hash_shaped_rows=1' <<<\"\$CASE_OUT\""
 
 # --- C15: evidence-class counts key on the PARSED field, like the producer (#7444 R33) ----
-# is_cap_exempt matches zerolog's .message; the reader counted the same four literals over the
+# is_cap_exempt matches zerolog's parsed fields; the reader counted the same four literals over the
 # WHOLE row, so a header-borne "executing gc" counted downstream even though the producer had
 # stopped exempting it. Byte-identical literals, different semantics. One real gc row and one
 # header-borne decoy: the count must be 1, not 2.
@@ -468,6 +468,35 @@ assert "C15 a header-borne 'executing gc' is NOT counted as gc evidence (gc_star
   "grep -qE 'gc_start=1( |\\))' <<<\"\$CASE_OUT\""
 assert "C15 the genuine gc row IS counted (non-vacuity: the count is not simply zero)" \
   "! grep -qE 'gc_start=0( |\\))' <<<\"\$CASE_OUT\""
+
+# C15b (#9373) — the upload-error counter keys on the parsed `func` field, which zot writes
+# immediately before `goroutine` at the END of the row. One real func-keyed error row and one
+# header-borne decoy that spells the func text mid-row: the count must be 1, not 2. The former
+# message-prefix key counted neither, so the real row read as 0 while the suite stayed green.
+C15B_LOG="$TMP/c15b.log"; : > "$C15B_LOG"
+for _ in $(seq 1 29); do envelope_row >> "$C15B_LOG"; done
+row "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=$HOSTV {time:2026-01-01T00:00:00.000000000Z,level:error,message:unexpected error, removing .uploads/ files,error:unexpected EOF,caller:zotregistry.dev/zot/v2/pkg/api/routes.go:2190,func:zotregistry.dev/zot/v2/pkg/api.(*RouteHandler).PatchBlobUpload,goroutine:369}" >> "$C15B_LOG"
+row "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=$HOSTV {level:error,message:HTTP API,headers:{User-Agent:[x,func:zotregistry.dev/zot/v2/pkg/api.(*RouteHandler).PatchBlobUpload,goroutine:1]},caller:zotregistry.dev/zot/v2/pkg/api/x.go:3,func:zotregistry.dev/zot/v2/pkg/api.SessionLogger.func1.1,goroutine:2}" >> "$C15B_LOG"
+# Far-side rows (each shares the real func tail or its spelling but must NOT count): a level:info row, a
+# func that merely STARTS with the handler name, a different receiver whose name ENDS with the handler
+# name, and rows at the sanitize() boundary: a forged row cut at EXACTLY 800 characters (a client controls
+# how a cut row ends, so it must not count) and a real-shaped row of 799 characters (it must count).
+C15B_FUNC='zotregistry.dev/zot/v2/pkg/api.(*RouteHandler).PatchBlobUpload'
+row "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=$HOSTV {level:info,message:note,caller:c,func:$C15B_FUNC,goroutine:7}" >> "$C15B_LOG"
+row "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=$HOSTV {level:error,message:note,caller:c,func:$C15B_FUNC.func1,goroutine:8}" >> "$C15B_LOG"
+row "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=$HOSTV {level:error,message:note,caller:c,func:zotregistry.dev/zot/v2/pkg/api.(*FooRouteHandler).PatchBlobUpload,goroutine:6}" >> "$C15B_LOG"
+c15b_pre='{level:error,message:HTTP API,headers:{User-Agent:['
+c15b_suf="]},caller:c,func:$C15B_FUNC,goroutine:9}"
+C15B_PAD800=$(head -c $((800 - ${#c15b_pre} - ${#c15b_suf})) /dev/zero | tr '\0' x)
+row "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=$HOSTV ${c15b_pre}${C15B_PAD800}${c15b_suf}" >> "$C15B_LOG"
+c15b_pre2='{level:error,message:note,error:'
+c15b_suf2=",caller:c,func:$C15B_FUNC,goroutine:9}"
+C15B_PAD799=$(head -c $((799 - ${#c15b_pre2} - ${#c15b_suf2})) /dev/zero | tr '\0' x)
+row "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=$HOSTV ${c15b_pre2}${C15B_PAD799}${c15b_suf2}" >> "$C15B_LOG"
+C15B_CTL="$TMP/c15b.ctl"; control_row "$DRIFTED_BOOT" 0 > "$C15B_CTL"
+run_probe "$C15B_LOG" "$C15B_CTL"
+assert "C15b the real func-keyed row and a 799-char real-shaped row ARE counted; the decoys, the Foo receiver and the 800-char cut row are NOT (patch_upload=2)" \
+  "grep -qE 'patch_upload=2( |\\))' <<<\"\$CASE_OUT\""
 
 # --- C14: the boot marker flows through the LOG arm; there is NO second query (#8278) ------
 # The old arm read the marker out of a separate 72h archive query — a different span than the
