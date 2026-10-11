@@ -11,6 +11,40 @@ lane: cross-domain
 
 # fix: infra-privileged-tier-census G4c diffs the moving origin/main tip — use merge-base
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-11 (soleur:deepen-plan, inline passes — no Task fan-out on this harness)
+**Sections enhanced:** Technical Considerations, Observability, Files to Edit/Create, Dependencies & Risks
+
+### Key Improvements
+
+1. Precedent-diff gate (Phase 4.4) found two load-bearing repo conventions the first
+   draft missed: the fixture leg's `git init` MUST go through the canonical
+   `plugins/soleur/test/lib/git-fixture-env.sh` chokepoint (`git_fixture_env "$T"` —
+   the #7849 tripwire that refuses an inherited `GIT_DIR`, else fixture commits
+   could land on the developer's live branch), and git calls in hook-reachable
+   code carry the `env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE` scrub
+   (`scripts/test-all.sh:2227-2254`).
+2. `scripts/test-all.sh` itself already resolves its diff base as
+   `git merge-base origin/main HEAD` (`_aff_rd_diff`, `_aff_rd_base_hash`) — the
+   repo's own attribution convention; G4c's tip-diff is the outlier, not the norm.
+3. `discoverability_test.command` moved to a committed wrapper
+   (`bash scripts/probe-tier-census-g4c-base.sh`): any command naming
+   `tests/scripts/test-*.sh` trips Check 10's over-inclusive suite-shape regex
+   (a space followed by `tests/`, or `test-`), and the wrapper is the sanctioned
+   remedy for a probe whose subject path is unspellable.
+
+### New Considerations Discovered
+
+- Sourcing `git-fixture-env.sh` exports `GIT_CEILING_DIRECTORIES`, which then
+  constrains every later git call in the suite — safe for `git -C "$REPODIR"`
+  (REPODIR is itself the repo root, no upward walk needed) but it must be
+  sourced before fixture creation and its tripwire aborts on an inherited
+  `GIT_*` environment, which is the intended loud failure.
+- `operator-9321-stages.test.sh:299` execs the full suite — the fixture legs and
+  the tripwire must keep it green under test-all's already-scrubbed env
+  (`scripts/test-all.sh:644`).
+
 ## Overview
 
 `tests/scripts/test-infra-privileged-tier-census.sh` row G4c compares the set of
@@ -72,12 +106,17 @@ that preserves today's semantics when no merge base exists:
 # (shape, not literal) — resolution helper near the current BASE_REF line
 if [ -n "${IPT_BASE_REF:-}" ]; then
   BASE_REF="$IPT_BASE_REF"
-elif BASE_REF="$(git -C "$REPODIR" merge-base HEAD origin/main 2>/dev/null)" && [ -n "$BASE_REF" ]; then
+elif BASE_REF="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE \
+    git -C "$REPODIR" merge-base HEAD origin/main 2>/dev/null)" && [ -n "$BASE_REF" ]; then
   : # resolved — the tree the diff under test actually diverged from
 else
   BASE_REF="origin/main"   # no merge base (no origin/main / shallow / non-git REPODIR): pre-#9956 semantics
 fi
 ```
+
+(The `env -u` scrub is the repo convention for git calls in hook-reachable code —
+`scripts/test-all.sh:2227-2254`; an inherited `GIT_DIR`/`GIT_INDEX_FILE` overrides
+`git -C` and would resolve the merge-base against the caller's repository.)
 
 Why merge-base is the correct base (each case enumerated):
 
@@ -127,11 +166,52 @@ deletions the diff never made.
   The compliant `.github` fixture tree (`$FIX/tree/.github`) is reused as `GHDIR`;
   only the G4c TSV row is read (`wf_row`), so unrelated fixture-row verdicts are
   out of scope by convention.
+- **Fixture git environment is the canonical chokepoint, not a hand-rolled one
+  (precedent-diff, Phase 4.4).** This suite has no `git init` fixture today;
+  the new leg introduces the first, so the suite MUST `source
+  plugins/soleur/test/lib/git-fixture-env.sh` and call `git_fixture_env "$T"`
+  before the fixture repo is created — the #7849 tripwire that aborts on an
+  inherited `GIT_DIR`/`GIT_INDEX_FILE` (an un-scrubbed `git init` would
+  initialize nothing and its commits would land on the developer's live
+  branch, #7833). Sibling precedent: `tests/scripts/
+  test-git-data-birth-readiness-gate.sh:48-58`,
+  `test-git-data-rung2-evidence-capture.sh:28-42`,
+  `test-lint-supabase-deprecated-endpoints.sh:30-38`. Consequences to encode:
+  (a) source it early (the tripwire fires at source time, before any fixture
+  exists — under test-all the env is already scrubbed at
+  `scripts/test-all.sh:644`, so no abort there; a direct hook-context call
+  aborts loudly, which is the intended failure); (b) its
+  `GIT_CEILING_DIRECTORIES` export then constrains every later git call —
+  `git -C "$REPODIR"` is unaffected because REPODIR is itself the repo root
+  (no upward `.git` walk needed), but the fixture `git init` must live under
+  `$T`; (c) the lib also supplies the synthesized identity, so no hand-rolled
+  `git config user.email` lines.
+- **The repo's own diff-attribution convention is already merge-base.**
+  `scripts/test-all.sh` resolves its affected-paths diff base as
+  `git merge-base origin/main HEAD` in `_aff_rd_diff` (`:2231`) and
+  `_aff_rd_base_hash` (`:2252`), each under the `env -u GIT_DIR -u
+  GIT_WORK_TREE -u GIT_INDEX_FILE` scrub. G4c's tip-diff is the outlier —
+  this change aligns it with the runner's own convention and with ADR-282's
+  description, not merely with the letter of the issue.
 - **Attack-surface note:** no new inputs — `IPT_BASE_REF` was already an env seam;
   `git merge-base` output is a SHA consumed by `git ls-tree`/`git show`.
 - **NFRs:** performance negligible (one `merge-base` call); no security boundary
   moved (the guard's contract — deletions must be claimed — is unchanged; only
   attribution of the diff is corrected).
+
+## Files to Edit
+
+- `tests/scripts/test-infra-privileged-tier-census.sh` — `resolve_base_ref` +
+  `materialize_base_dir` helpers (replaces the `BASE_REF` literal at `:82` and
+  the inline materialization at `:1939-1952`), `git-fixture-env` sourcing, the
+  new synthetic-repo G4c base-resolution legs, seam/G4c comment updates.
+
+## Files to Create
+
+- `scripts/probe-tier-census-g4c-base.sh` — committed wrapper for the
+  `discoverability_test` (greps the suite file for the merge-base resolution and
+  prints the literal `merge-base`; exists because no command naming
+  `tests/scripts/test-*.sh` survives Check 10's suite-shape heuristic).
 
 ### Alternative Approaches Considered
 
@@ -186,7 +266,7 @@ logs:
   where: "CI job log (test-scripts shard) / local run stdout+stderr"
   retention: "GitHub Actions run retention"
 discoverability_test:
-  command: grep -n merge-base tests/scripts/test-infra-privileged-tier-census.sh
+  command: bash scripts/probe-tier-census-g4c-base.sh
   expected_output: merge-base
 ```
 
@@ -243,11 +323,13 @@ contract now permits (additions on main do not attribute).
 | `tests/scripts/test-infra-privileged-tier-census.sh` base-ref resolution → merge-base | "row G4c fails on main" / "the guard is red for every PR whose base predates #9529" | inferred — justification: the issue's named remedy (`removed {}` claims) is infeasible because nothing was deleted; merge-base is the minimal mechanism that makes G4c attribute deletions to the diff that made them |
 | Synthetic-git fixture legs in the same suite | "row G4c fails on main" | inferred — justification: the suite's own mutation-matrix contract (this file's Guard Contract conventions) requires a discriminating leg proving the new base semantics both ways |
 | Seam/doc comment updates in the same file | "row G4c fails on main" | inferred — justification: the header's `default origin/main` text would otherwise lie about the shipped mechanism |
+| `scripts/probe-tier-census-g4c-base.sh` (Files to Create) | — | inferred — justification: the plan declares a `discoverability_test` and every command naming `tests/scripts/test-*.sh` trips preflight Check 10's suite-shape reject (a space followed by `tests/`, or `test-`), so a committed wrapper is the only spellable probe |
+| `plugins/soleur/test/lib/git-fixture-env.sh` sourcing in the suite (no edit — consumed) | — | inferred — justification: the new fixture leg is this suite's first `git init`; the #7849 chokepoint is the only sanctioned way to create a fixture repo (refuses an inherited `GIT_DIR` so fixture commits cannot land on the caller's live branch) |
 
 ### Split Assessment
 
-- Subsystems touched: 1 — `tests/`
-- Planned files: 1 | Estimated changed lines: ~120 (resolution + helper extraction + fixture legs + comments)
+- Subsystems touched: 2 — `tests/`, `scripts/`
+- Planned files: 2 | Estimated changed lines: ~135 (resolution + helper extraction + fixture legs + comments + probe script)
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
 - Recommendation: single PR
 
