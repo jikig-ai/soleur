@@ -879,6 +879,7 @@ assert "P12 exactly one ZIREF digest was extracted from each cloud-init file (no
   "[[ -n '$ZI_WEB' && -n '$ZI_INGEST' && \"\$(wc -l <<<'$ZI_WEB')\" -eq 1 && \"\$(wc -l <<<'$ZI_INGEST')\" -eq 1 ]]"
 assert "P12 both hosts pull the same digest" "[[ '$ZI_WEB' == '$ZI_INGEST' ]]"
 digest_line() { grep -E '^[[:space:]]*zot_probe_digest_inngest_bootstrap[[:space:]]*=' "$PROBE_TF"; }
+# shellcheck disable=SC2016  # the literal ${path.module} is the HCL text under test
 digest_shape_ok() {
   local l; l="$(digest_line)"
   [[ -n "$l" && "$(wc -l <<<"$l")" -eq 1 && "$l" == *'ZIREF=\"'* \
@@ -886,6 +887,7 @@ digest_shape_ok() {
 }
 assert "P12 web-probe.tf derives the digest from the ZIREF= line (anchored), of cloud-init-inngest.yml, with a trailing [0]" "digest_shape_ok"
 assert "P12 web-probe.tf carries NO sha256:<64 hex> literal (a hard-coded stale digest fails here)" "! grep -qE 'sha256:[0-9a-f]{64}' '$PROBE_TF'"
+# shellcheck disable=SC2016  # the literal ${local.*} are the HCL text under test
 PINNED_EXPECT='zot_probe_repo_pinned = join(",", [local.zot_probe_repo_web, "${local.zot_probe_repo_inngest_bootstrap}@${local.zot_probe_digest_inngest_bootstrap}"])'
 pinned_join_ok() {
   [[ "$(grep -E '^[[:space:]]*zot_probe_repo_pinned[[:space:]]*=' "$PROBE_TF" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+/ /g')" == "$PINNED_EXPECT" ]]
@@ -897,6 +899,7 @@ assert "P12 the cloud-init-bound value is still the BARE local (so no born host 
   "grep -qE '^[[:space:]]*zot_probe_repo[[:space:]]*=[[:space:]]*local\\.zot_probe_repo[[:space:]]*\$' '$SERVER_TF' && [[ \"\$(grep -E '^[[:space:]]*zot_probe_repo[[:space:]]*=[[:space:]]*join' '$PROBE_TF')\" != *@* ]]"
 # H5 — the extraction helper reads a fixture's own digest (must-PASS, non-canonical), and returns nothing when there is no pin.
 ZI_FIX="$(mktemp "$TMP/zifix.XXXXXX")"
+# shellcheck disable=SC2016  # the literal $ZOT_EP is the fixture text, not an expansion
 printf '        ZIREF="$ZOT_EP/acme/other:v9.9.9@sha256:%064d"\n' 0 > "$ZI_FIX"
 assert "H5 zi_digest reads the fixture's own digest, not the constant" "[[ \"\$(zi_digest '$ZI_FIX')\" == \"sha256:\$(printf '%064d' 0)\" ]]"
 printf '        NOT_A_PIN="x"\n' > "$ZI_FIX"
