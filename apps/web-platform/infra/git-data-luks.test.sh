@@ -435,7 +435,7 @@ p_doppler_config_scope() {
   # pins that line). Any other `$X` is NOT accepted — the variable NAME is the contract.
   for _sib in "${DIR}/git-data-cutover.sh" "${DIR}/git-data-gc-failure.service" \
            "${DIR}/git-data-gc.service" "${DIR}/git-data-luks-reopen.service" \
-           "${DIR}/git-data-luks-reopen-failure.service"; do
+           "${DIR}/git-data-luks-reopen-failure.service" "${DIR}/git-data-liveness.sh"; do
     [ -f "$_sib" ] || continue
     n_run=$(( n_run + $(grep -Ec 'doppler run --project soleur ' "$_sib" || true) ))
     n_scoped=$(( n_scoped + $(grep -Ec 'doppler run --project soleur --config prd_git_data ' "$_sib" || true) ))

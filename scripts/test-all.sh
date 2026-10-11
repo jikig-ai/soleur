@@ -5429,6 +5429,10 @@ if want_scripts; then
   # explicitly — scripts/followthroughs/*.test.sh is not in SUITE_GLOBS. A vacuous PASS would close the
   # tracker on an unmeasured window.
   run_suite "scripts/image-cve-scan-window-9826" bash scripts/followthroughs/image-cve-scan-window-9826.test.sh
+  # #9776 (epic #9601): exit-code harness for the hosted must-ask lane soak probe (CPO4-R5 revert and tune
+  # thresholds). Registered explicitly: scripts/followthroughs/*.test.sh is not in SUITE_GLOBS. A vacuous PASS
+  # would let the soak window read clean on an unmeasured stream.
+  run_suite "scripts/hosted-destroy-ask-window-9776" bash scripts/followthroughs/hosted-destroy-ask-window-9776.test.sh
   # #5863: exit-code harness for the outer-wrap soak follow-through (stub-curl
   # arms for verdict binding, freshness window, and HTTP classes). Registered
   # explicitly (orphan-suite class above) — its PASS authorizes promoting the
@@ -6367,6 +6371,11 @@ if want_webplat; then
   # it there would make the only cross-implementation check in the pair fail on a missing
   # binary rather than on a disagreement.
   run_suite "scripts/followthroughs/ccla-representative-icla-7922" bash scripts/followthroughs/ccla-representative-icla-7922.test.sh
+  # #9776 / ADR-284: the hosted must-ask lane's mutation battery (90 anchor-asserted mutants, one targeted vitest file
+  # each, on a COPY of the app tree). EXPLICIT, and in THIS shard: `apps/web-platform/test/*.test.sh` matches no
+  # SUITE_GLOBS entry, and the battery needs apps/web-platform/node_modules/.bin/vitest, which the `test-scripts`
+  # shard does not install. Its own control run reds the suite when the unedited copy is not green.
+  run_suite "apps/web-platform/test/destroy-ask-mutation" bash apps/web-platform/test/destroy-ask-mutation.test.sh
 fi
 
 # plugins/soleur bun-test recursion + blog-link-validation — bun shard.

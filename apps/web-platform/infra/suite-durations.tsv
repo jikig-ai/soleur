@@ -43,6 +43,7 @@ apps/web-platform/infra/git-data-bootstrap-store-verify.test.sh	26500	measured
 apps/web-platform/infra/git-data-cutover-access.test.sh	87500	measured
 apps/web-platform/infra/git-data-emit.test.sh	4500	measured
 apps/web-platform/infra/git-data-flag-precheck.test.sh	3000	measured
+apps/web-platform/infra/git-data-liveness.test.sh	90000	measured
 apps/web-platform/infra/git-data-luks-reopen.test.sh	8500	measured
 apps/web-platform/infra/git-data-luks.test.sh	2500	measured
 apps/web-platform/infra/git-data-nftables-syntax.test.sh	0	measured

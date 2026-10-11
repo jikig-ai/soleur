@@ -1906,3 +1906,107 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
   });
 });
 
+// ---------------------------------------------------------------------------
+// #9776 / ADR-284 — hosted must-ask lane: factory wiring (AC-14, AC-23).
+//
+// This does NOT claim runtime proof that the real SDK still calls `canUseTool`
+// under `autoAllowBashIfSandboxed` (the SDK is mocked here, as everywhere in this
+// file; that rests on the #3252 behaviour and is proven by the post-deploy dev
+// probe, CLO C9). It pins the wiring: the REAL `createCanUseTool` is the callback
+// in the SAME options object as the sandbox that carries `autoAllowBashIfSandboxed`,
+// `permissions.allow` stays empty, and the lane's inputs come from the dispatch
+// scope, never from the empty-string `ctx.repoOwner` / `ctx.repoName`.
+// ---------------------------------------------------------------------------
+describe("realSdkQueryFactory — hosted must-ask lane wiring (#9776)", () => {
+  async function realCanUseToolOptions() {
+    const actual = await vi.importActual<typeof import("@/server/permission-callback")>(
+      "@/server/permission-callback",
+    );
+    (createCanUseTool as unknown as { mockImplementationOnce(f: unknown): void }).mockImplementationOnce(
+      actual.createCanUseTool,
+    );
+    await realSdkQueryFactory(makeArgs());
+    return mockQuery.mock.calls[0][0].options;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetUserApiKey.mockResolvedValue("sk-test");
+    mockGetUserServiceTokens.mockResolvedValue({});
+    mockBuildAgentEnv.mockReturnValue({ ANTHROPIC_API_KEY: "sk-test" });
+    mockBuildAgentSandboxConfig.mockReturnValue({
+      enabled: true,
+      failIfUnavailable: true,
+      autoAllowBashIfSandboxed: true,
+      allowUnsandboxedCommands: false,
+      enableWeakerNestedSandbox: true,
+      network: { allowedDomains: [], allowManagedDomainsOnly: true },
+      filesystem: { allowWrite: [WORKSPACE_PATH], denyRead: ["/workspaces", "/proc"] },
+    });
+    mockQuery.mockReturnValue(makeFakeQuery());
+    mockResolveInstallationId.mockResolvedValue(null);
+    mockGenerateInstallationToken.mockResolvedValue("ghs_default_test_token");
+    mockResolveBashAutonomous.mockResolvedValue(true);
+    mockResolveAutonomousAck.mockResolvedValue("2026-10-10T00:00:00Z");
+    mockResolveIsWorkspaceOwner.mockResolvedValue(true);
+    mockResolveActiveWorkspace.mockImplementation(async (userId: string) => ({ ok: true, workspaceId: userId }));
+    mockGetCurrentRepoUrl.mockResolvedValue(null);
+    mockReadCurrentRepoUrlResult.mockImplementation(async (userId: string, workspaceId: string) => ({
+      url: await mockGetCurrentRepoUrl(userId, workspaceId),
+      degraded: false,
+    }));
+    mockGetCurrentRepoStatus.mockResolvedValue({ repoStatus: "ready", repoError: null });
+    mockWriteAskpassScriptTo.mockReturnValue(`${WORKSPACE_PATH}/.git/.soleur-askpass.sh`);
+  });
+
+  it("AC-14: the real canUseTool sits beside autoAllowBashIfSandboxed, permissions.allow is empty, and a destroy command still reaches the review gate in an acked autonomous workspace", async () => {
+    mockSendToClient.mockReturnValue(true);
+    // The lane flips the conversation status around the card: give the tenant client a recursive, awaitable chain
+    // (`.update().eq().eq()` and `.in()` / `.select()` variants) so that write resolves instead of throwing.
+    const chain: Record<string, unknown> = {};
+    for (const m of ["update", "eq", "in", "select", "insert"]) chain[m] = () => chain;
+    chain.then = (resolve: (v: unknown) => void) => resolve({ error: null, data: [{ id: "conv-1" }] });
+    mockSupabaseFrom.mockImplementation((table: string) =>
+      table === "conversations" ? chain : { select: () => chain, insert: () => chain, update: () => chain },
+    );
+    const opts = await realCanUseToolOptions();
+    expect(typeof opts.canUseTool).toBe("function");
+    expect(opts.sandbox?.autoAllowBashIfSandboxed).toBe(true);
+    expect(opts.settingSources).toEqual([]);
+    expect(opts.permissions?.allow ?? []).toEqual([]);
+
+    const ac = new AbortController();
+    const pending = opts.canUseTool("Bash", { command: "terraform destroy" }, { signal: ac.signal, toolUseID: "t", requestId: "r" });
+    await new Promise((r) => setTimeout(r, 25));
+    const frame = mockSendToClient.mock.calls.map((c) => c[1]).find((m: { type: string }) => m.type === "review_gate");
+    expect(frame, "the lane must send a review_gate frame, not auto-approve").toBeDefined();
+    expect(frame.options).toEqual(["Approve", "Reject"]);
+    ac.abort();
+    const res = await pending;
+    expect(res.behavior).toBe("deny");
+  });
+
+  it("AC-23: the lane's inputs come from the dispatch scope (connected repo slug and a resolver), not from ctx.repoOwner / ctx.repoName", async () => {
+    mockGetCurrentRepoUrl.mockResolvedValue("https://github.com/alice/app");
+    await realSdkQueryFactory(makeArgs());
+    const ctx = (createCanUseTool as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0] as {
+      repoOwner: string;
+      repoName: string;
+      deps: { connectedRepoSlug?: string; resolveProtectedBranches?: () => Promise<unknown> };
+    };
+    expect(ctx.repoOwner).toBe("");
+    expect(ctx.repoName).toBe("");
+    expect(ctx.deps.connectedRepoSlug).toBe("alice/app");
+    expect(typeof ctx.deps.resolveProtectedBranches).toBe("function");
+  });
+
+  it("with no connected repo the slug is empty and the resolver still exists (it resolves unauthoritatively, so every force push asks)", async () => {
+    await realSdkQueryFactory(makeArgs());
+    const ctx = (createCanUseTool as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0] as {
+      deps: { connectedRepoSlug?: string; resolveProtectedBranches?: () => Promise<{ authoritative: boolean }> };
+    };
+    expect(ctx.deps.connectedRepoSlug).toBe("");
+    const r = await ctx.deps.resolveProtectedBranches!();
+    expect(r.authoritative).toBe(false);
+  });
+});
