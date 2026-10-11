@@ -14,7 +14,7 @@
  * one for 30 s. Concurrent callers share one in-flight lookup. Nothing here runs per command.
  */
 import { constants as fsConstants } from "node:fs";
-import { lstat, open } from "node:fs/promises";
+import { open } from "node:fs/promises";
 import { join } from "node:path";
 import { reportSilentFallback, warnSilentFallback } from "./observability";
 import type { ProtectedBranches } from "./destroy-ask-classifier";
@@ -65,12 +65,12 @@ async function defaultFetchDefaultBranch(
 export async function readLocalOriginHead(workspacePath: string): Promise<string | null> {
   try {
     const path = join(workspacePath, ".git", "refs", "remotes", "origin", "HEAD");
-    const st = await lstat(path);
-    if (!st.isFile() || st.isSymbolicLink() || st.size > LOCAL_HEAD_MAX_BYTES || st.size === 0) return null;
+    // No path-based check before the open (a check-then-open pair is a file-system race): O_NOFOLLOW refuses a symlink,
+    // O_NONBLOCK keeps a FIFO from blocking the open, and every other property is read from the opened descriptor.
     const fh = await open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
     try {
       const fst = await fh.stat();
-      if (!fst.isFile() || fst.size > LOCAL_HEAD_MAX_BYTES) return null;
+      if (!fst.isFile() || fst.size > LOCAL_HEAD_MAX_BYTES || fst.size === 0) return null;
       const buf = Buffer.alloc(LOCAL_HEAD_MAX_BYTES + 1);
       const { bytesRead } = await fh.read(buf, 0, LOCAL_HEAD_MAX_BYTES + 1, 0);
       if (bytesRead > LOCAL_HEAD_MAX_BYTES) return null;

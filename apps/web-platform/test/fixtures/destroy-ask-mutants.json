@@ -913,26 +913,26 @@
   "equivalent": null
  },
  {
-  "id": "E02-symlink-layer-1",
+  "id": "R13-open-follows-symlink",
   "file": "server/resolve-protected-branches.ts",
-  "anchor": "st.isSymbolicLink() || ",
-  "replace": "",
+  "anchor": "fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK",
+  "replace": "fsConstants.O_RDONLY | fsConstants.O_NONBLOCK",
   "count": 1,
   "nth": null,
   "test": "test/resolve-protected-branches.test.ts",
-  "detect": null,
-  "equivalent": "defence in depth: lstat().isFile() is already false for a symlink, and open() uses O_NOFOLLOW"
+  "detect": "symlink",
+  "equivalent": null
  },
  {
   "id": "E03-size-layer-1",
   "file": "server/resolve-protected-branches.ts",
-  "anchor": "st.size > LOCAL_HEAD_MAX_BYTES || ",
-  "replace": "",
+  "anchor": "!fst.isFile() || fst.size > LOCAL_HEAD_MAX_BYTES || fst.size === 0",
+  "replace": "!fst.isFile() || fst.size === 0",
   "count": 1,
   "nth": null,
   "test": "test/resolve-protected-branches.test.ts",
   "detect": null,
-  "equivalent": "defence in depth: the fstat size check and the bounded read both refuse an oversize file"
+  "equivalent": "defence in depth: the bounded read below (bytesRead > LOCAL_HEAD_MAX_BYTES) refuses an oversize file on its own"
  },
  {
   "id": "G01-banner-says-always",

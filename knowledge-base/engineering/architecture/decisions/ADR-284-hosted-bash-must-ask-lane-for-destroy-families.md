@@ -83,7 +83,7 @@ the existing-workspace opt-out hold and the batched-approval cache. A match RETU
   the default branch is, and a force push with no named destination asks as `git-force-implicit` (CTO ruling: it may overwrite the
   default branch, so it asks even when the cost is an over-ask on rebase workflows).
 - **Default branch.** The protected set is the union of the GitHub API `default_branch` (installation token, authoritative), the local
-  `refs/remotes/origin/HEAD` (agent-writable, so it may add a name and never remove one; read with `lstat`, a size cap, symlinks and
+  `refs/remotes/origin/HEAD` (agent-writable, so it may add a name and never remove one; opened with `O_NOFOLLOW` and `O_NONBLOCK` and checked on the descriptor (no check-then-open pair), a size cap, symlinks and
   non-regular files refused, one accepted shape) and the constants `main` and `master`; compared case-insensitively after stripping
   `refs/heads/`. Resolved once per session record: 3 s timeout, positive result 10 minutes, negative result 30 s, one in-flight lookup.
 - **Families.** `git push` force, delete and mirror forms; `terraform|tofu destroy` and `apply -destroy`; `gh api` DELETE on a ref or
