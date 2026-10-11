@@ -581,9 +581,9 @@ cp "$WF_REAL" "$SB/control.yml"
 if structural_check "$SB/control.yml" && behav_check "$SB/control.yml" && drain_check "$SB/control.yml"; then pass "M0 positive control: unmutated sandbox copy is GREEN on all engines"; else fail "M0 positive control ($REASON)"; fi
 
 mutate "M1 threshold raised to the timeout -> RED" structural "threshold $TF_TIMEOUT >= check_response_timeout_minutes" \
-  "s.replace(\"STALL_THRESHOLD_MINUTES: '45'\", \"STALL_THRESHOLD_MINUTES: '$TF_TIMEOUT'\")"
+  "re.sub(r\"STALL_THRESHOLD_MINUTES: '[0-9]+'\", \"STALL_THRESHOLD_MINUTES: '$TF_TIMEOUT'\", s)"
 mutate "M2 threshold made non-numeric -> RED" structural 'not numeric' \
-  "s.replace(\"STALL_THRESHOLD_MINUTES: '45'\", \"STALL_THRESHOLD_MINUTES: 'soon'\")"
+  "re.sub(r\"STALL_THRESHOLD_MINUTES: '[0-9]+'\", \"STALL_THRESHOLD_MINUTES: 'soon'\", s)"
 mutate "M3 position filter removed from the run body -> RED (structural)" structural 'position filter' \
   "s.replace('            | select(.position <= \$maxpos)\n', '')"
 mutate "M3b position filter removed -> RED (behavioural: depth-3 entry now files)" behav 'position 3 older than threshold filed' \
@@ -684,7 +684,7 @@ control_fails() {
 control_fails "mutate (mutation did not land)" "mutation did not land" mutate "CTL-a" structural 'x' "s"
 control_fails "mutate (guard stayed GREEN)" "stayed GREEN" mutate "CTL-b" structural 'x' "s + '# harmless\n'"
 control_fails "mutate (RED for the wrong reason)" "wrong reason" mutate "CTL-c" structural 'will-not-match' \
-  "s.replace(\"STALL_THRESHOLD_MINUTES: '45'\", \"STALL_THRESHOLD_MINUTES: '$TF_TIMEOUT'\")"
+  "re.sub(r\"STALL_THRESHOLD_MINUTES: '[0-9]+'\", \"STALL_THRESHOLD_MINUTES: '$TF_TIMEOUT'\", s)"
 control_fails "chk (a false jq expression)" "CTL-d" chk "CTL-d" 'false'
 control_fails "chk (a missing key)" "CTL-e" chk "CTL-e" '.no_such_fact'
 

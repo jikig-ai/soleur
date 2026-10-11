@@ -45,8 +45,8 @@ name: Merge queue stall check
 # (every 10 minutes), which POSTs workflow_dispatch to this workflow; the runner
 # stays the EXECUTOR with the default GITHUB_TOKEN. The `schedule:` below is now
 # the FALLBACK clock, kept byte-identical. That function's header is the single
-# authority for the timing story: detection latency, the margin against the 60
-# minute timeout (thin, and negative at the measured p90 runner wait), and why a
+# authority for the timing story: detection latency, the margin against the 75
+# minute timeout (about zero at the measured p90 runner wait), and why a
 # dispatch whose run is delayed on the runner pool is detected ONE TICK LATE —
 # since #9513 the dispatcher reads the previous run's status/conclusion through
 # the `actions:write` token it already holds and reports a red or stuck run as
@@ -72,8 +72,8 @@ name: Merge queue stall check
 # entry that waited behind others and was promoted to position 2 or 1 can already be
 # older than the threshold with a build that has barely begun, and the threshold itself
 # (STALL_THRESHOLD_MINUTES, 45) sits BELOW the measured merge_group CI maximum (the longest
-# success was 60.5 minutes, #9454 canary item 5; plugins/soleur/skills/ship/SKILL.md Phase 7 fence). It cannot be raised past
-# that maximum without leaving no room under the 75-minute queue timeout, so the issue is
+# success was 60.5 minutes, #9454 canary item 5). It cannot be raised past
+# that maximum without leaving only about 15 minutes under the 75-minute queue timeout, so the issue is
 # worded as a SUSPECTED stall: the title says so, the body says the entry may be a healthy
 # slow build, and it lists the agent-runnable triage (live queue read, the entry's
 # merge_group runs) first so the false positive is closed in one read. The position filter
@@ -125,7 +125,7 @@ jobs:
       # stuck entry is reported before the queue ejects it silently. An entry
       # pending longer than this is a SUSPECTED stall (a required check not
       # reporting on merge_group), not a proven one: a healthy slow build can reach
-      # it too (measured merge_group CI maximum about 50 minutes), see the header.
+      # it too (longest merge_group CI success about 60 minutes), see the header.
       STALL_THRESHOLD_MINUTES: '45'
       # Mirror of max_entries_to_build in infra/github/ruleset-ci-required.tf: only
       # entries at position <= this can be building, so only they are aged (see
@@ -209,7 +209,7 @@ jobs:
           tmpl="$(cat <<'TMPL'
           SUSPECTED merge-queue stall (needs verification): PR #@PR@ was enqueued about @AGE@ minutes ago (threshold @THR@m, queue state @STATE@): @URL@
 
-          This may be a healthy slow build, not a stall. The age is counted from when the PR joined the queue, not from when its own merge_group build started, and the threshold (@THR@m) sits below the measured merge_group CI maximum (about 50 minutes). Close this issue as a false positive if step 2 shows the entry's merge_group runs are in progress.
+          This may be a healthy slow build, not a stall. The age is counted from when the PR joined the queue, not from when its own merge_group build started, and the threshold (@THR@m) sits below the measured merge_group CI maximum (about 60 minutes). Close this issue as a false positive if step 2 shows the entry's merge_group runs are in progress.
 
           Triage (every step is agent-runnable; do 1 and 2 first):
           1. Read the live queue: `gh api graphql -f query='{repository(owner:"@OWNER@",name:"@NAME@"){mergeQueue(branch:"main"){entries(first:50){nodes{position state enqueuedAt pullRequest{number}}}}}}'`

@@ -289,7 +289,7 @@ Against the 30-minute window between threshold and timeout the probe will often 
 stuck entry, so no issue is not proof of a healthy queue; it is best-effort. A filed
 issue is a SUSPECTED stall that needs verification, not a confirmed one: the age counts
 from `enqueuedAt`, so an entry promoted to position 1 or 2 after waiting behind others,
-or a healthy slow build near the roughly 50-minute `merge_group` CI maximum (n=99), can
+or a healthy slow build near the `merge_group` CI maximum (about 50 minutes at n=99; 60.5 at n=240, see "Addendum 2026-10-11"), can
 pass 45 minutes without being stalled. The position filter reduces those false positives
 and does not remove them. The title ends `(suspected, verify first)` and the body leads
 with the agent-runnable triage (live queue read, the entry's `merge_group` runs: an
@@ -664,14 +664,20 @@ text scoped the ban to a Phase 7 poll that had already emitted `queue_wait`, a m
 
 Canary item 5 measured 240 `merge_group` `ci.yml` runs since adoption (2026-10-04, 7 of the 14 days): run
 duration p50 25.0, p95 44.1, longest success 60.5 minutes (above the then-live 60), maximum 106.3 (a stalled run),
-and one `checks_timed_out` ejection of a green-path PR (2026-10-07). 37 of 240 runs failed or were cancelled
-(15.4%, against the 11% flake baseline); the slowest single check was not measured. Item 5's own rule applies: a
-real candidate exceeded the trigger, so `check_response_timeout_minutes` is raised in the same Terraform root, one
-line, to 75 (a 15-minute margin over the longest success). The stall probe threshold stays 45 minutes, so the
-window between threshold and timeout widens from 15 to 30 minutes. Cost: a hung entry can hold the queue up to 15
-minutes longer. The Parameters row, the "Stall probe" section and canary item 10 now state the new value; dated
-records above (Canary results of 2026-10-04, item 5's measurement text, the 2026-10-09 amendment quotation) are
-left as written. Raise again if a success approaches 75. The live value is verified after the apply on #9454.
+and one `checks_timed_out` ejection (PR #9687, 2026-10-07). 37 of 240 runs failed or were cancelled (15.4%, against
+the 11% flake baseline). The measurement is at run level: the slowest single required check was not measured, so
+item 5's literal trigger (a required check over 30 minutes) is read through the run-level maximum, which is an upper
+bound on any one check. Raising `check_response_timeout_minutes` in the same Terraform root is the action item 5
+prescribes; the founder directed it on 2026-10-11.
+
+The value is sized as the longest observed success plus about 15 minutes (75 against 60.5, a 14.5-minute margin), not
+by ADR-032's rule of at least 1.5 times the slowest check, which would give about 91. The departure is deliberate:
+a larger value lengthens how long a hung entry holds the queue. Cost of the choice: a hung entry now holds the queue
+up to 15 minutes longer, and the entry behind it is rebuilt after the ejection, so its total delay is the timeout plus
+a fresh build. The stall probe threshold stays 45 minutes, so the window between threshold and timeout widens from 15
+to 30 minutes. The Parameters row, the "Stall probe" section and canary item 10 state the new value; dated records
+above (Canary results of 2026-10-04, item 5's measurement text, the 2026-10-09 amendment quotation) are left as
+written. Raise again if a success approaches 75. The live value is verified after the apply on #9454.
 
 ## Cost Impacts
 

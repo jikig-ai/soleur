@@ -983,7 +983,7 @@ _mq_mutation() {
 
 
 # Mutation helper for T-mq-1.m8: put a /* ... */ commented COPY of the pristine merge_queue block ahead of
-# the real block and change a real value (the timeout, whatever it is now, -> 30) in the real block only. A parser that matches the
+# the real block and change a real value (the real timeout -> 30) in the real block only. A parser that matches the
 # commented copy first compares the stale values and goes green over the real drift.
 _mq_mut_commented_old_block() {
   awk '
@@ -1043,15 +1043,15 @@ t_mq_mutations() {
   _mq_mutation "T-mq-1.m10 merge_method SQUASH -> MERGE in tf+DR+README (parity holds) -> RED on the safety value" \
     'merge_method' tf,dr,readme \
     's/(merge_method[[:space:]]*=[[:space:]]*")SQUASH/\1MERGE/; s/("merge_method":[[:space:]]*")SQUASH/\1MERGE/; s/^(\|[[:space:]]*`merge_method`[[:space:]]*\|[[:space:]]*`)SQUASH/\1MERGE/'
-  _mq_mutation "T-mq-1.m11 check_response_timeout_minutes -> 30 in tf+DR+README (parity holds, below the stall threshold) -> RED" \
+  _mq_mutation "T-mq-1.m11 check_response_timeout_minutes -> 5 in tf+DR+README (parity holds, below the stall threshold) -> RED" \
     'must exceed STALL_THRESHOLD_MINUTES' tf,dr,readme \
-    's/(check_response_timeout_minutes[[:space:]]*=[[:space:]]*)[0-9]+/\130/; s/("check_response_timeout_minutes":[[:space:]]*)[0-9]+/\130/; s/^(\|[[:space:]]*`check_response_timeout_minutes`[[:space:]]*\|[[:space:]]*`)[0-9]+/\130/'
+    's/(check_response_timeout_minutes[[:space:]]*=[[:space:]]*)[0-9]+/\15/; s/("check_response_timeout_minutes":[[:space:]]*)[0-9]+/\15/; s/^(\|[[:space:]]*`check_response_timeout_minutes`[[:space:]]*\|[[:space:]]*`)[0-9]+/\15/'
   _mq_mutation "T-mq-1.m12 stall workflow threshold raised past the timeout -> RED" \
     'must exceed STALL_THRESHOLD_MINUTES' wf \
-    "s/(STALL_THRESHOLD_MINUTES:[[:space:]]*')45'/\1999'/"
+    "s/(STALL_THRESHOLD_MINUTES:[[:space:]]*')[0-9]+'/\1999'/"
   _mq_mutation "T-mq-1.m13 stall workflow threshold made non-numeric (underivable) -> RED" \
     'stall threshold not derivable' wf \
-    "s/(STALL_THRESHOLD_MINUTES:[[:space:]]*')45'/\1soon'/"
+    "s/(STALL_THRESHOLD_MINUTES:[[:space:]]*')[0-9]+'/\1soon'/"
 }
 
 # ---- queue-OFF (rollback) state, #9454 L5 ----

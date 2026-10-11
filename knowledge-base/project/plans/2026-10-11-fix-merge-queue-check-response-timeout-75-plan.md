@@ -7,7 +7,7 @@ issue: 9454
 type: fix
 priority: p2
 domain: engineering
-brand_survival_threshold: aggregate pattern
+brand_survival_threshold: none
 lane: single-domain
 ---
 
@@ -100,7 +100,8 @@ None. `gh issue list --label code-review --state open` (limit 200) was searched 
 **If this lands broken, the user experiences:** a merge-queue ruleset that still ejects slow-but-green PRs
 (`checks_timed_out`) so the founder re-enqueues by hand, or, if the edit is wrong (non-numeric, or at or below the
 stall threshold of 45), a failed apply that leaves the live ruleset at 60 with a red `apply-github-infra` run.
-Neither touches an end-user surface.
+Neither touches an end-user surface. The cost of the choice is that a hung entry (one that never reports) holds the
+queue up to 15 minutes longer than before, and the entry behind it is rebuilt after the ejection.
 **If this leaks, the user's data/workflow/money is exposed via:** no data path. The change is an integer in a repo
 ruleset; no credential, token or personal data is read, written or logged.
 **Brand-survival threshold:** none
