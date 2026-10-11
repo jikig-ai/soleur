@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { Glob } from "bun";
-import { readFileSync, existsSync, readdirSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   discoverAgents,
@@ -513,6 +513,82 @@ describe("Decision-principles taxonomy wiring", () => {
         `ship/SKILL.md lost the "${token}" wiring — headless decision challenges would ` +
           `no longer reach the operator (regresses ADR-084's legible surface).`,
       ).toBe(true);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Technical-ruling delegation wiring (hr-technical-fork-is-not-an-operator-question)
+// ---------------------------------------------------------------------------
+// Consumers are DERIVED (every skill whose SKILL.md names the CTO agent must link the
+// reference) plus the seven the brief names; the artifact's writers must link the
+// taxonomy doc, which carries the Decision Classes schema. `go` is wired through its
+// authority file commands/go.md (skills/go/SKILL.md is a harness shim that reads it).
+describe("Technical-ruling delegation wiring", () => {
+  const REF_REL = "skills/brainstorm-techniques/references/technical-ruling-delegation.md";
+  const LINK_RE = /\]\([^)]*technical-ruling-delegation\.md\)/;
+  const NAMED = ["one-shot", "plan", "work", "review", "ship", "brainstorm"];
+  const read = (rel: string) => readFileSync(resolve(PLUGIN_ROOT, rel), "utf-8");
+  const skillDirs = readdirSync(resolve(PLUGIN_ROOT, "skills"), { withFileTypes: true })
+    .filter((d) => d.isDirectory() && existsSync(resolve(PLUGIN_ROOT, "skills", d.name, "SKILL.md")))
+    .map((d) => d.name);
+  const derived = skillDirs.filter((n) => read(`skills/${n}/SKILL.md`).includes("soleur:engineering:cto"));
+  const consumers = Array.from(new Set([...NAMED, ...derived, "plan-review"]));
+
+  test("the reference exists", () => {
+    expect(existsSync(resolve(PLUGIN_ROOT, REF_REL)), `${REF_REL} is missing.`).toBe(true);
+  });
+
+  test("consumer set has a floor of 7 (a zero-file glob must not pass)", () => {
+    // 6 named skills + go (commands/go.md) + plan-review => at least 8 distinct links asserted.
+    expect(consumers.length).toBeGreaterThanOrEqual(7);
+    expect(skillDirs.length).toBeGreaterThanOrEqual(50);
+  });
+
+  for (const name of consumers) {
+    test(`${name} links technical-ruling-delegation.md`, () => {
+      expect(
+        LINK_RE.test(read(`skills/${name}/SKILL.md`)),
+        `${name}/SKILL.md does not link technical-ruling-delegation.md via a markdown link.`,
+      ).toBe(true);
+    });
+  }
+
+  test("go links it through commands/go.md (the authority file)", () => {
+    expect(LINK_RE.test(read("commands/go.md")), "commands/go.md lost the technical-ruling pointer.").toBe(true);
+  });
+
+  for (const name of ["plan", "plan-review", "work", "ship"]) {
+    test(`${name} (an artifact writer) links decision-principles.md`, () => {
+      expect(/\]\([^)]*decision-principles\.md\)/.test(read(`skills/${name}/SKILL.md`))).toBe(true);
+    });
+  }
+
+  test("ship carries the Technical-Ruling Gate heading, names the script and links the render reference", () => {
+    const raw = read("skills/ship/SKILL.md");
+    expect(raw.includes("### Technical-Ruling Gate (mandatory)")).toBe(true);
+    expect(raw.includes("scripts/technical-ruling-gate.sh")).toBe(true);
+    expect(/\]\([^)]*decision-challenges-render\.md\)/.test(raw)).toBe(true);
+    expect(existsSync(resolve(PLUGIN_ROOT, "skills/ship/references/decision-challenges-render.md"))).toBe(true);
+  });
+
+  test("the gate script exists and is executable", () => {
+    const f = resolve(PLUGIN_ROOT, "skills/ship/scripts/technical-ruling-gate.sh");
+    expect(existsSync(f)).toBe(true);
+    expect((statSync(f).mode & 0o111) !== 0, "technical-ruling-gate.sh is not executable").toBe(true);
+  });
+
+  test("the rule body names the CTO agent and the one-shot inline copy carries the key tokens", () => {
+    const rules = readFileSync(resolve(PLUGIN_ROOT, "../../AGENTS.rules.md"), "utf-8");
+    const line = rules.split("\n").find((l) => l.includes("[id: hr-technical-fork-is-not-an-operator-question]")) ?? "";
+    expect(line.includes("soleur:engineering:cto")).toBe(true);
+    // A Task subagent reads prompt text only, so one-shot carries the one deliberate copy.
+    const oneShot = read("skills/one-shot/SKILL.md");
+    const start = oneShot.indexOf("TECHNICAL RULINGS (inline copy");
+    expect(start, "one-shot lost its inline technical-rulings copy").toBeGreaterThan(-1);
+    const copy = oneShot.slice(start, start + 1400);
+    for (const token of ["soleur:engineering:cto", "Ruled by CTO agent", "surface it"]) {
+      expect(copy.includes(token), `one-shot inline copy lost "${token}"`).toBe(true);
     }
   });
 });

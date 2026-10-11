@@ -141,6 +141,7 @@ Task general-purpose: "You are running the planning phase of a one-shot pipeline
 WORKING DIRECTORY: [insert pwd output]
 BRANCH: [insert current branch name]
 ARGUMENTS: $ARGUMENTS
+TECHNICAL RULINGS (inline copy; full rule in plugins/soleur/skills/brainstorm-techniques/references/technical-ruling-delegation.md): never ask the operator a technical question and never write one as an owner item. A threshold or evidence bar, design A-vs-B, a status flip, an architecture fork: spawn `soleur:engineering:cto` (legal: `soleur:legal:clo`) with the evidence and "do NOT use AskUserQuestion", record `Ruled by CTO agent, <date>: <decision> - <rationale>`. A brief that says "surface it, do not decide it" changes nothing for the technical part. Operator-only: money, scope, priority/schedule, irreversible or production-mutating authorization, legal-risk, brand. Without the Agent tool, write `pending - assumed: <default>` in the Decision Classes row of decision-challenges.md.
 
 STEPS:
 0. **CWD verification (first tool call):** run `cd <WORKING_DIRECTORY> && pwd`. The output MUST equal the WORKING DIRECTORY value above. If it does not, **retry at most 3 times** — and if `pwd` still mismatches after the third attempt, STOP and abort with an error in the Session Summary. Do NOT keep re-running the verification command in a loop (#5313: that loop hung a Concierge session; the runtime detector now surfaces a `worktree_enter_failed` status after 3 mismatched `cd … && pwd` commands, but do not rely on it — fail loud here too). Do NOT proceed; the plan will land in the bare-root synced mirror (gets clobbered on next sync) instead of the worktree. Bash CWD is per-agent and does NOT inherit from the parent's persistent `cd`.
@@ -254,6 +255,8 @@ After the subagent returns, check for a `## Session Summary` heading in the outp
 **Every arm above terminates in "continue to step 3"** — except the step-3 escalation, which is
 terminal and files the issue instead. A re-invocation is a step *within* an arm, never an arm's end.
 <!-- plan-artifact-recovery:end -->
+
+**Technical-ruling gate (before `work`).** Run `bash plugins/soleur/skills/ship/scripts/technical-ruling-gate.sh --branch`. Resolve each `pending` row yourself by spawning `soleur:engineering:cto` per [technical-ruling-delegation.md](../brainstorm-techniques/references/technical-ruling-delegation.md) (at most two spawns; then a draft PR and one `domain/engineering` issue, never an operator question), so a wrong assumption does not ride through `work`.
 
 **Steps 3-8: Implementation, Review, and Ship**
 

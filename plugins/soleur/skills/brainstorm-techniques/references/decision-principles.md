@@ -59,13 +59,16 @@ compliance consequence — they are never Mechanical:
 Blast-radius / bias-to-action **never** override these four — a small, in-radius
 scope cut of operator-requested work is still a Taste/User-Challenge surface.
 
-### Precedence — engineering/architecture forks go to the CTO, not the operator
+### Precedence — technical rulings go to the CTO, not the operator
 
-Architectural-fork decisions (schema/audit substrate, data model, technology
-choice, security model, which load-bearing module to disturb) route to the
-`soleur:engineering:cto` agent per `work` Phase 1 (the CTO HARD GATE), in **both**
-modes. They are **not** User-Challenges even when user-visible. This taxonomy
-governs **product / scope / preference** decisions only — never *how* to build.
+A technical ruling (schema/audit substrate, data model, technology choice, security model, which load-bearing module to
+disturb, a threshold or evidence bar, which of two designs, whether evidence suffices, a status flip) routes to the
+`soleur:engineering:cto` agent (legal posture: `soleur:legal:clo`) in **both** modes and is recorded `Ruled by CTO agent`.
+It is not a User-Challenge even when user-visible or consequential. The four NEVER-Mechanical classes above decide
+whether the session model may **auto-decide**; they never decide **who rules**. This taxonomy governs product / scope /
+preference decisions only, never *how* to build. The closed operator-only list, the delegation step, the recording
+format and the override for a "surface it" brief live in
+[technical-ruling-delegation.md](./technical-ruling-delegation.md).
 
 ## Mode-branched resolution (keyed on execution context, not skill name)
 
@@ -97,10 +100,18 @@ paused on. The producer (`work`, or `plan` Step 4.5 in a subagent) appends to
 2. Opens **one** idempotent GitHub issue labelled `action-required` +
    `decision-challenge`, plain-language title linking the PR — because
    `operator-digest` harvests `action-required` *issues* (Section 4), never PR
-   bodies. This is the surface the non-technical operator actually sees.
+   bodies. This is the surface the non-technical operator actually sees. The
+   issue covers **operator-class rows only**; technical rows render in the PR body
+   with their `Ruled by` lines and never reach the operator.
 
 The PR-body block is the durable record; the `action-required` issue is the
-legible surface. Both are required for a headless challenge.
+legible surface for operator-class items. Both are required for a headless
+operator-class challenge.
+
+**The artifact carries a `## Decision Classes` table** (columns `Item | Class | Ruling`, one row per persisted decision,
+whatever shape the free-form body uses; `Class` is `technical` or `operator (<category>)`). The schema, the closed
+category list and a canonical example are in [technical-ruling-delegation.md](./technical-ruling-delegation.md)
+(section 6); `ship`'s Technical-Ruling Gate parses only that table.
 
 ### User-Challenge 5-line frame
 
