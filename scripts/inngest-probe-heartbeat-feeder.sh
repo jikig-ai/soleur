@@ -288,7 +288,9 @@ check_freshness() {
 
 # ── HEARTBEAT RESOLUTION (chokepoint 2) ──────────────────────────────────────────────────────
 # GET only, with the read-only token, by exact name. curl reads the bearer from stdin
-# (--config -) so it is never on argv; curl and jq stderr go to /dev/null.
+# (--config -) so it is never on argv; curl and jq stderr go to /dev/null. This is the repo-script shape
+# (token-shape guard + stdin config, like scripts/betterstack-query.sh), not scripts/lib/bearer-curl.sh:
+# ADR-280 scopes that library to workflow-side call steps that cannot reach a repo script by path.
 HB_URL=""
 HB_PAUSED=""
 resolve_heartbeat() {

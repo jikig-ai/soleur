@@ -1575,7 +1575,10 @@ Expect the forced dispatch to cost one slot of beat-budget tolerance, so read ba
 Preconditions (read-only; the snippet exits non-zero and prints `PREFLIGHT: FAIL <reason>` on any miss):
 
 ```bash
-# P0  tokens: reads use the READ-ONLY token; only the arm block below reads the write token
+# P0  tokens: reads use the READ-ONLY token; only the arm block below reads the write token.
+#     (The soak behind this procedure measured the first-sighting lag of a new hourly probe row at under
+#     2 minutes; the 4500 s bound assumes lag well under 14 minutes. Re-check it from the run logs'
+#     `newest_dt` / `age_s` before arming if the pipeline has been changed since.)
 hbr() { doppler run -p soleur -c prd_terraform --silent -- bash -c '
   [[ "$BETTERSTACK_API_TOKEN_READONLY" =~ ^[A-Za-z0-9._~+/=-]{20,}$ ]] || { echo "token shape refused" >&2; exit 78; }
   printf "header = \"Authorization: Bearer %s\"\n" "$BETTERSTACK_API_TOKEN_READONLY" | curl --disable --noproxy "*" -fsS --max-time 20 --config - "$@"' _ "$@"; }
