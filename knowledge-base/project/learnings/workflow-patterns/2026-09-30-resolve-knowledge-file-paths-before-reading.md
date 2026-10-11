@@ -228,3 +228,7 @@ diagnostic file.
 Keep independent GitHub CLI pipelines in separate commands or parallel tool
 calls; a comma in a `jq` program does not sequence shell commands and can make
 `jq` parse the next CLI invocation as an option.
+
+The session-start cleanup entry point is
+`plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh`; the similarly
+guessed `plugins/soleur/scripts/git-worktree.sh` path does not exist.
