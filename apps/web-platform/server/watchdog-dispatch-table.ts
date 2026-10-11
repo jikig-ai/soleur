@@ -40,4 +40,11 @@ export const WATCHDOG_DISPATCH_TABLE: ReadonlyArray<WatchdogDispatchEntry> = [
     eligibility:
       "Watches the zot registry the Inngest host pulls its image from at boot (#8539), so it shares Inngest's failure domain.",
   },
+  {
+    workflowFile: "scheduled-inngest-probe-heartbeat.yml",
+    monitorSlug: "scheduled-inngest-probe-heartbeat",
+    intervalMinutes: 15,
+    eligibility:
+      "Feeds the dead-probe heartbeat for the Inngest host's own probe emitter (#9703): its freshness verdict reads the probe rows the Inngest host emits, so it shares Inngest's failure domain, and the credentialed bash pipeline that holds the Better Stack tokens must stay in an ephemeral runner, not in an Inngest function on the watched fleet.",
+  },
 ];
