@@ -115,15 +115,24 @@ load_cache() {
 }
 
 write_cache() { # tag sha relation relation_for reason
-  local tmp
-  ( umask 077; mkdir -p "$CACHE_DIR" ) 2>/dev/null || return 0
-  chmod 700 "$CACHE_DIR" 2>/dev/null || true
-  tmp="$(umask 077; mktemp "$CACHE_DIR/.latest-release.XXXXXX" 2>/dev/null)" || return 0
-  {
-    printf 'tag=%s\nsha=%s\nfetched=%s\n' "$1" "$2" "$(date +%s)"
-    printf 'relation=%s\nrelation_for=%s\nreason=%s\n' "$3" "$4" "$5"
-  } > "$tmp" 2>/dev/null
-  mv -f "$tmp" "$CACHE_FILE" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  # Bound locally (not read from the globals) so the destination is provably absolute:
+  # the literal default can never be relative, and an unresolvable HOME skips the write.
+  local dir="${XDG_CACHE_HOME:-/nonexistent-soleur-cache}/soleur"
+  if [[ -z "${XDG_CACHE_HOME:-}" ]]; then
+    [[ -n "${HOME:-}" ]] || return 0
+    dir="$HOME/.cache/soleur"
+  fi
+  local tmp="$dir/.latest-release.$$"
+  ( umask 077; mkdir -p "$dir" ) 2>/dev/null || return 0
+  chmod 700 "$dir" 2>/dev/null || true
+  (
+    umask 077
+    {
+      printf 'tag=%s\nsha=%s\nfetched=%s\n' "$1" "$2" "$(date +%s)"
+      printf 'relation=%s\nrelation_for=%s\nreason=%s\n' "$3" "$4" "$5"
+    } > "$tmp"
+  ) 2>/dev/null
+  mv -f "$tmp" "$dir/latest-release" 2>/dev/null || rm -f "$tmp" 2>/dev/null
   return 0
 }
 
