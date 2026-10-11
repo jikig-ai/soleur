@@ -83,7 +83,7 @@ fingerprint match.
 - [x] 4.1 `mu1-signup-workspace-verification.md`: AC-2 evidence row names
       `soleur-ci-fixture` + the mint probe; the security-baseline section
       documents the dev/dev_scheduled credential split. DONE 2026-10-11.
-- [ ] 4.2 Branch dispatch of `Scheduled: integration suites` — expected RED
+- [x] 4.2 Branch dispatch of `Scheduled: integration suites` — expected RED
       at the probe (proves fail-fast + named error in CI context) until
       #10058 closes; assert probe output names the 401, not vitest.
 - [ ] 4.3 Post-merge main dispatch — mu1 leg stays RED at probe until
