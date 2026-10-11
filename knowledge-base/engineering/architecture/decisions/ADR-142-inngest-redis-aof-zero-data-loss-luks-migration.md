@@ -80,7 +80,7 @@ in-flight step state, retries, armed reminders) exactly — strictly more comple
 re-arm. The retained plaintext volume is the rollback backstop, mirroring the workspaces/git-data
 two-copy design.
 
-**No key escrow (git-data-lean shape).** The AOF is transient and self-healing (its contents churn
+**No key escrow (git-data-lean shape).** *[superseded in part — see the 2026-10-10 addendum / ADR-282]* The AOF is transient and self-healing (its contents churn
 as jobs complete and reminders fire), and its total-loss recovery is already built and proven
 (`inngest-wiped-volume-verify.sh`: functions re-sync from Postgres, the SDK re-registers, and the
 sole-copy reminder subset can be enumerated/re-armed). Escrow's specific job — surviving LUKS-header
@@ -425,10 +425,10 @@ phase accepts either a `wipe_run_id` (evidence) or `erasure=provider-only` with 
   the rollback to copy back from. The operator verb stays listed until PR B retires it; the runbook
   carries a banner at §5a.
 - **The live LUKS volume becomes the only copy of the store, and `INNGEST_REDIS_LUKS_KEY` in Doppler
-  `soleur-inngest/prd` its sole opener.** Losing that key is then total loss (counsel review O4,
+  `soleur-inngest/prd` its sole opener.** *[superseded in part — see the 2026-10-10 addendum / ADR-282]* Losing that key is then total loss (counsel review O4,
   `knowledge-base/legal/audits/2026-09-counsel-review-8248.md`). This sharpens the "No key escrow"
   stance above, which rests on the AOF being transient and self-healing while armed reminders can
-  carry unbounded future fire-times.
+  carry unbounded future fire-times. *[superseded in part — see the 2026-10-10 addendum / ADR-282]*
 - **AP-009 (never delete user data) tension.** The deleted object is a stale second copy, not the live
   data. The live copy is evidenced before every phase (Doppler flag `done`, the pointer naming
   106903269, that volume attached, a fresh probe row on it) and the destroy is gated on it, which is
@@ -656,7 +656,7 @@ addendum (the dispatch, its gate library and `op=luks-rollback` deleted) take ef
 - **Rollback is gone.** The addendum of 2026-09-21 that kept `op=luks-rollback` listed "until the convergence PR retires
   it" is satisfied: the verb is retired, and "Rollback ends at the `detach` phase" is now simply the state of the world.
 - **The LUKS volume is the only copy.** `hcloud_volume.inngest_redis_luks` (id 106903269) holds the only copy of the Inngest
-  queue and run state, and `INNGEST_REDIS_LUKS_KEY` in Doppler `soleur-inngest/prd` is its sole opener. Delete protection,
+  queue and run state, and `INNGEST_REDIS_LUKS_KEY` in Doppler `soleur-inngest/prd` is its sole opener. *[superseded in part — see the 2026-10-10 addendum / ADR-282]* Delete protection,
   edge pins and key-loss posture are NOT built here; they are tracked in #9879 (open).
 - **The erasure is logical, guest-side and self-attested.** Hetzner's action history corroborates that a non-live server
   held the volume; it does not corroborate the overwrite. No physical or secure erasure is claimed.
@@ -683,3 +683,29 @@ addendum (the dispatch, its gate library and `op=luks-rollback` deleted) take ef
 ### What this addendum does NOT change
 
 The decision, its encryption mechanism, the additive-cutover design, or any earlier amendment.
+
+## Addendum — 2026-10-10 (#9879, pointer to ADR-282)
+
+Appended; nothing above is edited. This addendum only marks two statements above as superseded and points to the decision
+that replaces them. Ref #9879.
+
+**Status of this addendum: adopting.** It becomes true of the live store when PR #9925 is merged, the merge's per-merge
+apply has landed the one in-place update on `hcloud_volume.inngest_redis_luks`, and the post-apply read-back returns
+`protection.delete=true` (ADR-282, Status). Until then each mark below describes the target state, not a fact.
+
+> **Superseded 2026-10-10 (#9879), in part:** the "No key escrow (git-data-lean shape)" rationale in the Decision section
+> ("The AOF is transient and self-healing ... its total-loss recovery is already built and proven ... the sole-copy reminder
+> subset can be enumerated/re-armed"). The 2026-10-08 addendum had already sharpened it; ADR-282 now carries the key-loss
+> posture and the canonical loss-mode table, and records that the "re-armable" claim is unconfirmed for armed reminders after
+> a total loss (the enumeration reads the live store, not Postgres). The decision not to create a new escrow artifact
+> stands; the premise that the store is transient does not.
+
+> **Superseded 2026-10-10 (#9879), in part, from the merge of PR #9925 and its apply:** the bullet in the 2026-10-09 addendum
+> ("PR B: the retirement landed", "Consequences now in force") that reads "Delete protection, edge pins and key-loss posture
+> are NOT built here; they are tracked in #9879 (open)". They are built there: ADR-282 records delete protection and
+> `prevent_destroy` on the volume, the passphrase pair and the two Doppler cascade parents, the guards that pin them, the
+> accepted residuals and the key-loss posture. The remaining deferred items (header backup, key-continuity probe, repair
+> dispatch, token downgrade, import rehearsal) are tracked in #9927.
+
+**What this addendum does NOT change.** The decision, its encryption mechanism, the additive-cutover design, or any earlier
+amendment or addendum.

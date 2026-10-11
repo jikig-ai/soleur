@@ -819,6 +819,19 @@ rotation HALT's `create` exemption, which the apply path of this workflow requir
 
 **Status of the claim.** The rule is not yet met by graded rows. web-2 remains *provisioned, proof pending* until the #6931 grader reports PASS. Nothing in this addendum is evidence for the encryption-posture ledger, Article 30 or any customer-facing sentence.
 
+## Addendum — 2026-10-10 (#9879, divergence note for the inngest sole copy)
+
+Appended; nothing above is edited. **A deliberate divergence from the web-1 pin set (ADR-119 D1), recorded so it is not mistaken for a
+gap.** ADR-282 gives the Inngest sole-copy volume (`hcloud_volume.inngest_redis_luks`) delete protection plus
+`prevent_destroy` on the volume, its passphrase pair and the two Doppler cascade parents, but **no `prevent_destroy` on its
+attachment**, where the web-1 pin set puts one on `hcloud_volume_attachment.workspaces_luks` (that pin is ADR-119 D1, declared in
+`apps/web-platform/infra/workspaces-luks.tf`; this ADR does not introduce it). The reason is
+structural: web-1's host-replace dispatch refuses web-1 by name, so nothing sanctioned replaces that attachment, while the
+sanctioned `inngest-host-replace` replaces the Inngest server and therefore its attachment (ForceNew on `server_id`).
+The Inngest attachment is protected by the dispatch gates and the reachability pins instead. This note changes nothing about
+web-1, web-2 or this ADR's decision. It takes effect on the merge of PR #9925 (adopting until that merge's apply and
+read-back, per ADR-282).
+
 > **Superseded 2026-10-11 (#9372), as to "not yet met by graded rows":** the #6931 grader reported PASS on 2026-10-10 (sweeper run 38083925201). See the addendum at the end of this ADR.
 
 ## Addendum — 2026-10-11 (#9372, the grade and the ledger flip)

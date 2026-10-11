@@ -407,6 +407,14 @@ create. After the swap web-1's password leaves the push-apply graph; its address
 > unharmed while its Doppler copy exists; merge with the kill-switch line and escalate to the owner, who decides the repair
 > (the state backend has no versioning, ADR-006). Whether an import plus a state-attribute fix yields a clean plan is
 > unmeasured and tracked on #9572. The text above is kept as the dated record.
+>
+> **Superseded 2026-10-10 (#9879), in part:** "the other five addresses" above is now "the other four". The HALT also counts
+> a `create` of `random_password.inngest_redis_luks` (the inngest recut route that made a first create legal is retired,
+> #8285), alone or together with its Doppler copy, so a first `create` stays legal only at `doppler_secret.inngest_redis_luks_key`,
+> `doppler_secret.workspaces_luks_web_key`, `random_password.workspaces_luks` and `doppler_secret.workspaces_luks_key`. A
+> create of the inngest Doppler copy alone still restores the same state-held value. While state has lost the passphrase
+> entry, every merge's per-merge apply halts until the owner repairs state (see ADR-282 and the runbook
+> `inngest-luks-cutover-6894.md` section 5c). The text above is kept as the dated record.
 
 ## registry_luks_recut
 
