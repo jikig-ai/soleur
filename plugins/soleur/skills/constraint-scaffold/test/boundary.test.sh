@@ -145,7 +145,7 @@ check_value_safe_drift() {  # returns 0 = value-safe, 1 = drift detected
   grep -qE 'process\.env|process[[:space:]]*\[[[:space:]]*["'\''`]env' "$f" && return 1
   # (c) hardcoded secret literal (canonical token prefixes + PEM header). Same shape
   # the repo-wide secret scanners use; a value-safe registry must hold no secret.
-  grep -qE 'BEGIN [A-Z ]*PRIVATE KEY|ghp_[A-Za-z0-9_]{20,}|ghs_[A-Za-z0-9._~+/=-]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|sk_(test|live)_[A-Za-z0-9]{20,}|sbp_[A-Za-z0-9]{20,}|xoxb-[A-Za-z0-9-]{20,}|AKIA[0-9A-Z]{16}|dp\.(pt|st|sa|ct)\.[A-Za-z0-9_-]{40,}' "$f" && return 1
+  grep -qE 'BEGIN [A-Z ]*PRIVATE KEY|ghp_[A-Za-z0-9._~+/=-]{20,}|gho_[A-Za-z0-9._~+/=-]{20,}|ghu_[A-Za-z0-9._~+/=-]{20,}|ghs_[A-Za-z0-9._~+/=-]{20,}|ghr_[A-Za-z0-9._~+/=-]{20,}|github_pat_[A-Za-z0-9._~+/=-]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|sk_(test|live)_[A-Za-z0-9]{20,}|sbp_[A-Za-z0-9]{20,}|xoxb-[A-Za-z0-9-]{20,}|AKIA[0-9A-Z]{16}|dp\.(pt|st|sa|ct)\.[A-Za-z0-9_-]{40,}' "$f" && return 1
   # (b1) a value IMPORT statement: a line beginning with `import ` (the single-line
   # form OR the opener of a multi-line import) that is NOT a whole-clause `import type`.
   # A mixed `import { type A, realX }` opener begins with `import ` (not `import type`),

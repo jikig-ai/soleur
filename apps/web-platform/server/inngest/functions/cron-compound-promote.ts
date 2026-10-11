@@ -621,7 +621,7 @@ const CLUSTER_OUTPUT_SCHEMA = {
   },
 } as const;
 
-// Byte-for-byte port of scripts/compound-promote.sh:75 PII_REGEX.
+// Byte-for-byte port of PII_REGEX in scripts/compound-promote.sh.
 // Unit-tested for parity (AC8).
 export const PII_REGEX = new RegExp(
   "([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,})" +
@@ -629,7 +629,7 @@ export const PII_REGEX = new RegExp(
     "|([A-Z]{2}[0-9]{2}[A-Z0-9]{4}[0-9]{7}([A-Z0-9]?){0,16})" +
     "|(eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+)" +
     "|(sk-ant-[A-Za-z0-9_-]{20,})" +
-    "|(gh[psr]_[A-Za-z0-9._~+/=-]{20,})" +
+    "|(gh[pousr]_[A-Za-z0-9._~+/=-]{20,})|(github_pat_[A-Za-z0-9._~+/=-]{20,})" +
     "|(AKIA[0-9A-Z]{16})" +
     "|((sk|pk)_(live|test)_[A-Za-z0-9]{20,})" +
     "|(xox[baprs]-[A-Za-z0-9-]{10,})",

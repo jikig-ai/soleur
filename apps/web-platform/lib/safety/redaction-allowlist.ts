@@ -79,7 +79,7 @@ const UUID_RE = /\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-
 //                       public sb_publishable_/anon forms are deliberately NOT
 //                       matched (project refs + anon keys are public-grade).
 const API_KEY_RE =
-  /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9._~+/=-]{20,}\b|\bgithub_pat_[A-Za-z0-9._~+/=-]{22}_[A-Za-z0-9._~+/=-]{59,}\b|\b(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{16,}\b|\bsk-ant-[A-Za-z0-9_-]{20,}\b|\bsk-[A-Za-z0-9]{32,}\b|\bAKIA[0-9A-Z]{16}\b|\bxox[abprs]-[0-9]+-[0-9]+-[A-Za-z0-9-]+\b|\bsbp_[A-Za-z0-9]{40}\b|\bsb_secret_[A-Za-z0-9_-]{20,}\b/g;
+  /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9._~+/=-]{20,}|\bgithub_pat_[A-Za-z0-9._~+/=-]{22}_[A-Za-z0-9._~+/=-]{59,}|\b(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{16,}\b|\bsk-ant-[A-Za-z0-9_-]{20,}\b|\bsk-[A-Za-z0-9]{32,}\b|\bAKIA[0-9A-Z]{16}\b|\bxox[abprs]-[0-9]+-[0-9]+-[A-Za-z0-9-]+\b|\bsbp_[A-Za-z0-9]{40}\b|\bsb_secret_[A-Za-z0-9_-]{20,}\b/g;
 
 // AWS_SECRET_ACCESS_KEY shape — the 40-char base64url is too generic to
 // match standalone (collides with arbitrary hashes). We anchor on the

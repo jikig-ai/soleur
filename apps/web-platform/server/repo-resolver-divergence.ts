@@ -250,7 +250,7 @@ export function reportRepoCloneFailed(args: {
 // `err` (it is GIT_ASKPASS env, never argv/URL/stderr), so this is defense-in-depth
 // — but a belt-and-suspenders redaction guarantees AC0b even if a future git/exec
 // shape ever surfaces a credential in a rejection message.
-const GH_TOKEN_RE = /\b(?:gh[posru]_[A-Za-z0-9._~+/=-]{20,}|github_pat_[A-Za-z0-9._~+/=-]{20,})\b/g;
+const GH_TOKEN_RE = /\b(?:gh[posru]_[A-Za-z0-9._~+/=-]{20,}|github_pat_[A-Za-z0-9._~+/=-]{20,})/g;
 
 /** Redact token shapes THEN strip absolute paths/URLs (`sanitizeGitStderr`), so the
  *  value reaching `captureException` carries neither a credential nor a raw path. */
