@@ -1308,7 +1308,7 @@ run_case_reports "WC-2 attachment indexed by a literal key -> FAIL does not atta
 
 V_FE="$(wc_variant foreach-differs)"
 sed -i '/resource "hcloud_volume_attachment" "workspaces"/,/^}/ s/for_each  = local.plaintext_workspaces_hosts/for_each  = var.web_hosts/' "$V_FE/$INFRA/server.tf"
-run_case_reports "WC-3 attachment and volume for_each differ -> FAIL identical for_each" 1 "identical for_each" \
+run_case_reports "WC-3 attachment and volume for_each differ -> FAIL identical for_each" 1 "make them the same expression" \
   --repo-sweep --repo-root "$V_FE" --ledger "$WC_LEDGER" --today "$TODAY"
 
 V="$(wc_variant decoy-foreach)"
@@ -1330,7 +1330,7 @@ resource "hcloud_volume_attachment" "workspaces" {
 }
 EOF
 run_case_reports "WC-6 a decoy attachment declared in an earlier directory -> FAIL declared more than once" 1 \
-  "declared more than once" --repo-sweep --repo-root "$V" --ledger "$WC_LEDGER" --today "$TODAY"
+  "the binding is ambiguous" --repo-sweep --repo-root "$V" --ledger "$WC_LEDGER" --today "$TODAY"
 
 V="$(wc_variant renamed-local)"
 sed -i 's/plaintext_workspaces_hosts/web2_only_hosts/g' "$V/$INFRA/server.tf"
@@ -1358,7 +1358,7 @@ run_case_reports "WC-10 one random_password claimed by two luks rows -> FAIL cla
 V="$(wc_variant chain-comment)"
 sed -i 's|^\(    workspaces_volume_id .*\)"retired-6604"$|    # canonical: \1"retired-6604"\n    workspaces_volume_id = hcloud_volume.workspaces["web-2"].id|' "$V/$INFRA/server.tf"
 run_case_reports "WC-11 the canonical consumer line only in a comment -> FAIL key_chain consumer" 1 \
-  "key_chain consumer" --repo-sweep --repo-root "$V" --ledger "$WC_LEDGER" --today "$TODAY"
+  "user_data does not carry" --repo-sweep --repo-root "$V" --ledger "$WC_LEDGER" --today "$TODAY"
 
 # Guard 2/3/4 - mandatory when indexed ---------------------------------------------
 V_NA="$(wc_variant no-apparatus)"
@@ -1614,7 +1614,7 @@ EOF
 LEDGER_DUP="$TMPDIR_TEST/wc-singleton-decoy-ledger.json"
 mk_webclass_ledger "$LEDGER_DUP" "" ""
 run_case_reports "WC-35 a singleton-shaped decoy attachment in an earlier root -> FAIL declared more than once" 1 \
-  "declared more than once" --repo-sweep --repo-root "$V_DUP" --ledger "$LEDGER_DUP" --today "$TODAY"
+  "the binding is ambiguous" --repo-sweep --repo-root "$V_DUP" --ledger "$LEDGER_DUP" --today "$TODAY"
 
 # WC-36: a fully commented-out copy of the attachment is not a declaration (positive control).
 V_GHOST="$(wc_variant ghost-decl)"
@@ -1644,7 +1644,7 @@ PY
 V_ML="$(wc_variant multiline-differs)"
 mk_multiline_foreach "$V_ML" 'if k != "web-1"' 'if k == "web-2"'
 run_case_reports "WC-37 two multi-line for_each comprehensions sharing a first line -> FAIL identical for_each" 1 \
-  "identical for_each" --repo-sweep --repo-root "$V_ML" --ledger "$WC_LEDGER" --today "$TODAY"
+  "make them the same expression" --repo-sweep --repo-root "$V_ML" --ledger "$WC_LEDGER" --today "$TODAY"
 V_MLS="$(wc_variant multiline-same)"
 mk_multiline_foreach "$V_MLS" 'if k != "web-1"' 'if k != "web-1"'
 run_case_reports "WC-38 identical multi-line for_each on both blocks -> PASS (positive control)" 0 \
@@ -1693,21 +1693,21 @@ run_case_reports "WC-43 the invocation line outside runcmd: -> FAIL not installe
 V="$(wc_variant no-token-line)"
 sed -i '/workspaces_luks_fresh_boot_token = /d' "$V/$INFRA/server.tf"
 run_case_reports "WC-44 user_data without the token line -> FAIL key_chain consumer" 1 \
-  "key_chain consumer" --repo-sweep --repo-root "$V" --ledger "$WC_LEDGER" --today "$TODAY"
+  "user_data does not carry" --repo-sweep --repo-root "$V" --ledger "$WC_LEDGER" --today "$TODAY"
 V="$(wc_variant reversed-ternary)"
 sed -i 's|? hcloud_volume.workspaces\[each.key\].id : "retired-6604"|? "retired-6604" : hcloud_volume.workspaces[each.key].id|' "$V/$INFRA/server.tf"
 run_case_reports "WC-45 the volume reference on the false branch of a ternary -> FAIL key_chain consumer" 1 \
-  "key_chain consumer" --repo-sweep --repo-root "$V" --ledger "$WC_LEDGER" --today "$TODAY"
+  "user_data does not carry" --repo-sweep --repo-root "$V" --ledger "$WC_LEDGER" --today "$TODAY"
 V="$(wc_variant string-volume)"
 sed -i 's|? hcloud_volume.workspaces\[each.key\].id : "retired-6604"|? "hcloud_volume.workspaces[each.key].id" : "retired-6604"|' "$V/$INFRA/server.tf"
 run_case_reports "WC-46 the volume reference only inside a string literal -> FAIL key_chain consumer" 1 \
-  "key_chain consumer" --repo-sweep --repo-root "$V" --ledger "$WC_LEDGER" --today "$TODAY"
+  "user_data does not carry" --repo-sweep --repo-root "$V" --ledger "$WC_LEDGER" --today "$TODAY"
 V="$(wc_variant outside-user-data)"
 sed -i '/^    workspaces_volume_id /d' "$V/$INFRA/server.tf"
 # shellcheck disable=SC2016  # literal text for the fixture, nothing to expand
 sed -i 's|^  name     = "web-${each.key}"|  name     = "web-${each.key}"\n  labels = { workspaces_volume_id = hcloud_volume.workspaces[each.key].id }|' "$V/$INFRA/server.tf"
 run_case_reports "WC-47 the volume-id line outside the user_data argument -> FAIL key_chain consumer" 1 \
-  "key_chain consumer" --repo-sweep --repo-root "$V" --ledger "$WC_LEDGER" --today "$TODAY"
+  "user_data does not carry" --repo-sweep --repo-root "$V" --ledger "$WC_LEDGER" --today "$TODAY"
 
 # WC-48..50: the pinned provisioner is read for what it does, not for its words.
 V="$(wc_variant no-luksformat)"
@@ -1731,7 +1731,7 @@ run_case_reports "WC-51 apparatus pinned outside apps/*/infra -> FAIL canonical 
   "canonical relative path" --repo-sweep --repo-root "$WC" --ledger "$LEDGER_OUT" --today "$TODAY"
 
 # WC-52/53: the singleton (web-1) arm reads comment-stripped text too: commented-out apparatus or mount
-# evidence certifies nothing (this was true of origin/main's linter as well).
+# evidence certifies nothing (a tightening: origin/main's linter read these arms as raw text).
 V="$(wc_variant comment-cutover)"
 sed -i 's/^\(printf .*cryptsetup luksOpen.*\)$/# \1/' "$V/$INFRA/workspaces-cutover.sh"
 run_case_reports "WC-52 web-1's luksOpen only in a comment -> FAIL does not resolve to any apparatus" 1 \
@@ -1774,6 +1774,50 @@ print("ok" if ok else f"bad code={code!r} skel={skel!r}")
 PY
 HV_OUT="$(python3 "$HCL_VIEWS_PY" "$SUT" 2>&1)"
 if [[ "$HV_OUT" == "ok" ]]; then pass "WC-55 hcl_views blanks block comments, heredoc bodies, string braces and # comments"; else fail "WC-55 hcl_views blanks block comments, heredoc bodies, string braces and # comments" "$HV_OUT"; fi
+
+# WC-56..61: findings of the fix-round re-probe (the first line of an attribute must not vouch for the
+# next, and a string must not stand in for a reference).
+V="$(wc_variant n1-next-attr)"
+sed -i 's|^\(    workspaces_volume_id  *= \).*$|\1"retired-6604"\n    decoy_attr = contains(keys(local.plaintext_workspaces_hosts), each.key) ? hcloud_volume.workspaces[each.key].id : "x"|' "$V/$INFRA/server.tf"
+run_case_reports "WC-56 the volume reference only on a different user_data attribute -> FAIL user_data does not carry" 1 \
+  "user_data does not carry" --repo-sweep --repo-root "$V" --ledger "$WC_LEDGER" --today "$TODAY"
+V="$(wc_variant n2-token-string)"
+sed -i 's|^\(    workspaces_luks_fresh_boot_token = \).*$|\1"none"\n    note = "workspaces_luks_fresh_boot_token = doppler_service_token.workspaces_luks_fresh_boot_web.key"|' "$V/$INFRA/server.tf"
+run_case_reports "WC-57 the token line only inside a string literal -> FAIL user_data does not carry" 1 \
+  "user_data does not carry" --repo-sweep --repo-root "$V" --ledger "$WC_LEDGER" --today "$TODAY"
+V="$(wc_variant n2-token-compare)"
+sed -i 's|^\(    workspaces_luks_fresh_boot_token = .*\.key\)$|\1 == "" ? "a" : "b"|' "$V/$INFRA/server.tf"
+run_case_reports "WC-58 the token reference inside a comparison -> FAIL user_data does not carry" 1 \
+  "user_data does not carry" --repo-sweep --repo-root "$V" --ledger "$WC_LEDGER" --today "$TODAY"
+V="$(wc_variant n3-paren-comment)"
+write_file "$V/$INFRA/workspaces-luks-provision.sh" <<'EOF'
+#!/usr/bin/env bash
+MAPPER_NAME=workspaces
+FSTAB_LINE='/dev/mapper/workspaces /mnt/data ext4 defaults,nofail 0 2'
+mkfs.ext4 -F "$DEV"
+(true)#cryptsetup luksFormat --batch-mode --type luks2 --key-file - "$DEV"
+(true)#cryptsetup luksOpen --key-file - "$DEV" "$MAPPER_NAME"
+EOF
+run_case_reports "WC-59 luksFormat/luksOpen after ')#' -> FAIL pinned apparatus does not resolve" 1 \
+  "does not resolve a cryptsetup luksFormat+luksOpen site" --repo-sweep --repo-root "$V" --ledger "$WC_LEDGER" --today "$TODAY"
+V="$(wc_variant n4-write-files)"
+printf 'runcmd:\n  - echo hi\npower_state:\n  mode: reboot\nwrite_files:\n  - /usr/local/bin/workspaces-luks-provision.sh\n' > "$V/$INFRA/cloud-init.yml"
+run_case_reports "WC-60 the invocation line after runcmd: but under another top-level key -> FAIL not installed" 1 \
+  "not installed by the consumer" --repo-sweep --repo-root "$V" --ledger "$WC_LEDGER" --today "$TODAY"
+V="$(wc_variant n6-string-volume-id)"
+python3 - "$V/$INFRA/server.tf" <<'PY'
+import re, sys
+p = sys.argv[1]
+t = open(p).read()
+t = t.replace("  volume_id = hcloud_volume.workspaces[each.key].id\n  server_id = hcloud_server.web[each.key].id\n",
+              '  volume_id = element([hcloud_volume.workspaces[each.key].id], 0)\n  server_id = hcloud_server.web[each.key].id\n  labels = { note = "volume_id = hcloud_volume.workspaces.id" }\n')
+t += '\nresource "random_password" "decoy" {\n  length = 40\n}\n\nresource "doppler_secret" "decoy" {\n  project = "soleur"\n  config  = "prd_decoy"\n  name    = "DECOY"\n  value   = random_password.decoy.result\n}\n'
+open(p, "w").write(t)
+PY
+LEDGER_N6="$TMPDIR_TEST/wc-n6-ledger.json"
+mk_webclass_ledger "$LEDGER_N6" "" ""
+run_case_reports "WC-61 a string spelling volume_id = <volume>.id beside a wrapped live one -> FAIL does not attach" 1 \
+  "does not attach" --repo-sweep --repo-root "$V" --ledger "$LEDGER_N6" --today "$TODAY"
 
 # --- mutation rows for the new guards ---------------------------------------
 # run_mutation_inverse: for a PERMISSIVE arm. Baseline must PASS (exit 0) and the mutated
@@ -1821,7 +1865,7 @@ run_mutation "MB-L11" "MB-L11" "$V_DUP" "$LEDGER_DUP"
 # ---------------------------------------------------------------------------
 # Minimum-cardinality guard (an empty/short run must not GREEN).
 # ---------------------------------------------------------------------------
-MIN_CASES=106  # measured TOTAL at #9941 (47 at #6907 + the web-class cases); raise with every added case (slack is attack budget)
+MIN_CASES=112  # measured TOTAL at #9941 (47 at #6907 + the web-class cases); raise with every added case (slack is attack budget)
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then

@@ -270,7 +270,7 @@ and relaxing the first two alone would have produced a green row that proves not
 through web-1's cutover script, which is the name-similarity join this ADR rejects. The contract therefore grows as follows
 (it also relates to ADR-263, whose fresh-boot key custody the key chain mirrors). A full `--repo-sweep` over the CURRENT
 ledger prints the same output as the previous linter; that sentence is about the current ledger, not a guarantee for a
-future row, because three of the checks below apply to every `luks` row and tighten the contract (a store that differs from
+future row, because four of the checks below apply to every `luks` row and tighten the contract (a store that differs from
 its volume, one passphrase claimed by two rows, one file pinned by two rows, an address declared twice) and the generic
 (singleton) arm now reads comment-stripped text, so a commented-out apparatus or fstab line no longer certifies a row. No
 current row trips them.

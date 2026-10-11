@@ -31,7 +31,7 @@ resolver exceeded its 40-line budget; the config-equality hops (MB-L3) stay.
   - 1.1.2 Must-PASS cases: the canonical web-class fixture, a differently named `for_each` local, a singleton row without the new keys.
 - 1.2 Schema: optional `device_binding.apparatus` and `device_binding.key_chain` (names match #8626); `multiplicity` was cut.
 - 1.3 Linter, each behind a `MUTATION-TARGET: MB-Ln` marker (whole statements, never a clause inside a compound condition):
-  - 1.3.0 Minimal comment- and string-aware code view used by every new check and both scanner arms; existing checks keep raw text.
+  - 1.3.0 Minimal comment- and string-aware code view used by every new check and both scanner arms; the singleton scanners and binding read it too (comment-stripped), a tightening noted in the ADR addendum.
   - 1.3.1 Indexed binding (exactly one `for_each =` on the code view, same expression on volume and attachment, end-anchored; each address declared once, which also decides indexed vs singleton routing; every other index form rejected; a multi-line value compared whole). The same-root rule was cut (Terraform cannot reference across roots).
   - 1.3.2 Key chain (consumer user_data args, token config equals secret config, secret value is the password result).
   - 1.3.3 Uniqueness of a password across luks rows (explicit and implicit claims) and web-1 / web-class separation.

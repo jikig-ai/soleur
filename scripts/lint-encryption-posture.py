@@ -178,17 +178,16 @@ def scan_tf_inventory(
 # --- R1: guest-side LUKS apparatus resolution --------------------------------
 
 
-def attachment_binds_volume(attach_block: str, volume_addr: str) -> bool:
-    """Structural check: does this attachment's volume_id literally reference
-    the claimed volume resource? (Not name-similarity — a literal HCL ref.)"""
+def attachment_binds_volume(attach_code: str, attach_skel: str, volume_addr: str) -> bool:
+    """Structural check: does this attachment's ONE top-level `volume_id` argument literally reference
+    the claimed volume resource? (Not name-similarity - a literal HCL ref; a string or a nested map
+    key spelling `volume_id = <volume>.id` is not an argument.)"""
     parsed = parse_address(volume_addr)
     if not parsed:
         return False
     vtype, vname = parsed
-    pattern = re.compile(
-        rf"volume_id\s*=\s*{re.escape(vtype)}\.{re.escape(vname)}\.id\b"
-    )
-    return bool(pattern.search(attach_block))
+    vid = [v for d, v in attr_sites(attach_code, attach_skel, "volume_id") if d == 1]
+    return len(vid) == 1 and bool(re.fullmatch(rf"{re.escape(vtype)}\.{re.escape(vname)}\.id", vid[0]))
 
 
 def file_has_secret_pair(text: str) -> bool:
@@ -361,7 +360,8 @@ def scan_mount_evidence(
 def check_singleton_binding(
     store_addr: str,
     db: dict,
-    attach_block: str,
+    attach_code: str,
+    attach_skel: str,
     attach_file_text: str,
     fails: list[str],
 ) -> bool:
@@ -370,7 +370,7 @@ def check_singleton_binding(
     # MUTATION-TARGET: MB-8 start (R1 volume-identity binding — the false-PASS
     # blocker. Both sub-checks below are what stops a plaintext row from
     # citing a sibling volume's LUKS apparatus.)
-    if not attachment_binds_volume(attach_block, vol_addr):
+    if not attachment_binds_volume(attach_code, attach_skel, vol_addr):
         fails.append(
             f"FAIL: {store_addr} device_binding.attachment {attach_addr} does "
             f"not attach device_binding.volume {vol_addr} -> fix device_binding "
@@ -484,13 +484,12 @@ def check_luks_row(
         )
         return
     # MUTATION-TARGET: MB-L11 end
-    attach_file, attach_code, _attach_skel = att_decls[0]
+    attach_file, attach_code, attach_skel = att_decls[0]
 
     vparsed = parse_address(vol_addr) or ("", "")
-    indexed = bool(
-        re.search(
-            rf"volume_id\s*=\s*{re.escape(vparsed[0])}\.{re.escape(vparsed[1])}\s*\[", attach_code
-        )
+    indexed = any(
+        d == 1 and re.match(rf"{re.escape(vparsed[0])}\.{re.escape(vparsed[1])}\s*\[", v)
+        for d, v in attr_sites(attach_code, attach_skel, "volume_id")
     )
     ctx: dict | None = None
     if indexed:
@@ -530,7 +529,7 @@ def check_luks_row(
         # The binding is read from the CODE view: a commented-out `volume_id = <volume>.id` must not
         # satisfy it while the live line is something else (an indexed or wrapped form).
         if not check_singleton_binding(
-            store_addr, db, attach_code, hcl_views(cache[attach_file])[0], fails
+            store_addr, db, attach_code, attach_skel, hcl_views(cache[attach_file])[0], fails
         ):
             return
 
@@ -557,9 +556,9 @@ def check_luks_row(
 # through a fresh-boot token rather than a same-file pair, and its apparatus is a file the generic
 # scan would otherwise resolve through a SIBLING volume's cutover script (the #6588 class). The checks
 # below run for a row only when its attachment is indexed, or when the row carries the optional keys
-# `device_binding.key_chain` / `device_binding.apparatus`, so no existing singleton
-# row's verdict moves. Every new structural check reads a code view (comments, and for the skeleton the
-# string contents, removed); the existing checks keep reading raw text.
+# `device_binding.key_chain` / `device_binding.apparatus`. Every structural check reads a code view
+# (comments, and for the skeleton the string contents, removed), including the singleton arm, whose
+# scanners read comment-stripped text since #9941 (a commented-out apparatus no longer certifies a row).
 
 
 def _skip_hcl_string(text: str, i: int) -> int:
@@ -651,10 +650,10 @@ def hcl_views(text: str) -> tuple[str, str]:
 
 def line_comment_view(text: str) -> str:
     """Shell / YAML code view for POSITIVE-evidence scans: a `#` at the start of a word (after
-    whitespace, `;`, `&`, `|` or `(`) comments the rest of the line. Over-stripping (a `#` after
+    whitespace, `;`, `&`, `|`, `(` or `)`) comments the rest of the line. Over-stripping (a `#` after
     whitespace inside a quoted string) can only HIDE evidence, which fails the row closed; the
     command separators are included so `true;#cryptsetup luksOpen ...` is not shown as code."""
-    return re.sub(r"(?m)(^|[\s;&|(])#.*$", r"\1", text)
+    return re.sub(r"(?m)(^|[\s;&|()])#.*$", r"\1", text)
 
 
 def decl_blocks(f: Path, cache: dict) -> list[tuple[str, str, str, str]]:
@@ -704,11 +703,11 @@ def find_declarations(
     return found
 
 
-def attr_sites(code: str, skel: str, attr: str) -> list[tuple[int, str]]:
+def attr_sites(code: str, skel: str, attr: str, collapse: bool = True) -> list[tuple[int, str]]:
     """[(brace depth, value text)] for every `attr =` assignment of a block. Depth 1 is a top-level
     argument; anything deeper sits in a nested block. The value runs to the end of its line, and on
     past it while a `(`, `[` or `{` opened in the value is still unclosed (counted on the skeleton, so
-    a bracket in a string never counts), whitespace collapsed - a multi-line `for_each = {` is read
+    a bracket in a string never counts), whitespace collapsed unless `collapse` is False - a multi-line `for_each = {` is read
     whole, so two different comprehensions never compare equal on their first line."""
     sites: list[tuple[int, str]] = []
     for m in re.finditer(rf"(?<![\w.]){attr}\s*=(?!=)", skel):
@@ -726,7 +725,8 @@ def attr_sites(code: str, skel: str, attr: str) -> list[tuple[int, str]]:
             elif ch == "\n" and open_ == 0:
                 break
             end += 1
-        sites.append((depth, " ".join(code[m.end() : end].split())))
+        value = code[m.end() : end]
+        sites.append((depth, " ".join(value.split()) if collapse else value.strip("\n")))
     return sites
 
 
@@ -797,8 +797,8 @@ def check_indexed_binding(
     return {"attach_code": acode, "attach_skel": askel}
 
 
-def _top_attr(code: str, skel: str, attr: str) -> str | None:
-    sites = [v for d, v in attr_sites(code, skel, attr) if d == 1]
+def _top_attr(code: str, skel: str, attr: str, collapse: bool = True) -> str | None:
+    sites = [v for d, v in attr_sites(code, skel, attr, collapse) if d == 1]
     return sites[0] if len(sites) == 1 else None
 
 
@@ -831,20 +831,22 @@ def check_key_chain(
     # line elsewhere in the block (another attribute, a string) is not the host's input. The volume line
     # is matched on the skeleton, so a string literal cannot stand in for the reference, and the
     # reference must be the value or the true branch of a ternary (`cond ? <ref> : "retired"`).
+    # Line structure is kept (collapse=False) so each attribute is matched on its own line; the
+    # skeleton view means a string literal can stand in for neither reference.
     ud_code = _top_attr(consumer[1], consumer[2], "user_data")
-    ud_skel = _top_attr(consumer[2], consumer[2], "user_data")
+    ud_skel = _top_attr(consumer[2], consumer[2], "user_data", collapse=False)
     vol_line = re.compile(
-        rf"\bworkspaces_volume_id\s*=\s*(?:[^\n]*?\?\s*)?{re.escape(vtype)}\.{re.escape(vname)}"
-        rf"\[each\.key\]\.id\s*(?::[^\n]*)?(?=\s+\w+\s*=|$)"
+        rf"(?m)^[ \t]*workspaces_volume_id[ \t]*=[ \t]*(?:[^\n]*?\?[ \t]*)?"
+        rf"{re.escape(vtype)}\.{re.escape(vname)}\[each\.key\]\.id[ \t]*(?::[^\n]*)?$"
     )
     tok_line = re.compile(
-        rf"\bworkspaces_luks_fresh_boot_token\s*=\s*{re.escape(kc['token'])}\.key\b"
+        rf"(?m)^[ \t]*workspaces_luks_fresh_boot_token[ \t]*=[ \t]*{re.escape(kc['token'])}\.key[ \t]*$"
     )
     if (
         ud_code is None
         or ud_skel is None
         or not vol_line.search(ud_skel)
-        or not tok_line.search(ud_code)
+        or not tok_line.search(ud_skel)
     ):
         fails.append(
             f"FAIL: {store} key_chain consumer {kc['consumer']} user_data does not carry the volume id "
@@ -1003,12 +1005,11 @@ def check_pinned_apparatus(
         if ci_path is not None and ci_path.is_file():
             init_text = line_comment_view(read_text(ci_path))
             run_at = re.search(r"(?m)^runcmd:[ \t]*$", init_text)
+            # The runcmd section ends at the next top-level key (write_files:, power_state:, ...).
+            section = init_text[run_at.end() :] if run_at else ""
+            section = re.split(r"(?m)^[A-Za-z_][\w-]*:", section, maxsplit=1)[0]
             init_ok = bool(
-                run_at
-                and re.search(
-                    rf"(?m)^[ \t]*-[ \t]*/usr/local/bin/{re.escape(base)}[ \t]*$",
-                    init_text[run_at.end() :],
-                )
+                re.search(rf"(?m)^[ \t]*-[ \t]*/usr/local/bin/{re.escape(base)}[ \t]*$", section)
             )
         if not (same_dir and list_ok and init_ok):
             fails.append(
