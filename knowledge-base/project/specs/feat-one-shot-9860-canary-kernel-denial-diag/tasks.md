@@ -14,7 +14,7 @@ explicit per-command go-ahead recorded in the plan's gate table (G1-G4). Doppler
 
 ## Phase 1: Tests first (ci-deploy.test.sh, all RED before any ci-deploy.sh edit)
 
-- 1.1 `create_mock_kernlog`: ONE mock installed as `journalctl` and `dmesg` (switch on basename), knobs MOCK_KLOG_{OUT,RC,SLEEP} per name, recorder MOCK_KLOG_LOG, `/bin/sleep` for hangs, rc 127 = absent, synthesized fixtures only.
+- 1.1 `create_mock_kernlog`: ONE mock installed as `journalctl` and `dmesg` (switch on basename), knobs MOCK_KLOG_{OUT,RC,SLEEP,BIG,REP,PAD,ERR} per name (ERR=1 writes to stderr, as the real tools do), recorder MOCK_KLOG_LOG, `/bin/sleep` for hangs, rc 127 = absent, synthesized fixtures only.
 - 1.2 Mock default diag body gains `sdk_noproc rc=0`; `D_SECTIONS` gains `sdk_noproc`.
 - 1.3 Update in place (same row count): D1c, D1i (`lines=11`), D3c2 (`-le 21`), D3c3, D4g (forged `kdeny` becomes raw), D6a, D9a/b, plus strings/comments saying "ten" or `host, hostsec, kernel, done`.
 - 1.4 New rows D10a-h: placement+shape+recorder; realistic AppArmor mount denial reads `j=ok hits=1 mproc=1` with closed-key fields and no name/comm/pid; table-driven ladder states (incl. silent-empty journal); both-rungs hang via diag_inert; 4 MB then a final denial still counted (newest-first); credential scrub on both sinks with control; census with positive control; 200-char tail boundary.
@@ -23,7 +23,7 @@ explicit per-command go-ahead recorded in the plan's gate table (G1-G4). Doppler
 
 ## Phase 2: Implementation (ci-deploy.sh)
 
-- 2.1 `_canary_kdeny_read` inside CANARY_DIAG_BEGIN..END with a SOLEUR-DEBT removal-trigger marker: journal rung (`-n 400 --since=-5min`), dmesg rung (`tail -n 400` before `head -c`), `timeout -k 1 3`, anchored hint-line classifier plus a silent-empty `j=empty` state (journalctl 261 prints nothing, rc 0), awk counts (no grep -c under pipefail), 141 = ok, closed-key fields (no name/comm) capped at 130 bytes, all locals, `return 0`.
+- 2.1 `_canary_kdeny_read` inside CANARY_DIAG_BEGIN..END with a SOLEUR-DEBT removal-trigger marker: journal rung (`-n 400 --since=-5min`), dmesg rung (`tail -n 400` before `head -c`), `timeout -k 1 3`, anchored hint-line classifier plus a silent-empty `j=empty` state (journalctl 261 prints nothing, rc 0), awk counts (no grep -c under pipefail), rc 0 (or an anchored denial) = ok, closed-key fields (no name/comm) capped at 130 bytes, all locals, `return 0`.
 - 2.2 Emit `kdeny` via `_canary_diag_emit` after `kernel`, before `done`; `kdeny` NOT in the in-container allowlist.
 - 2.3 `sdk_noproc` line in CANARY_DIAG_SCRIPT (no single quotes; closing quote stays on the last line) and the allowlist regex entry.
 - 2.4 Suite green in the sandbox; shellcheck; lint-shell-capture-exit; grep-q-pipe guard by hand.

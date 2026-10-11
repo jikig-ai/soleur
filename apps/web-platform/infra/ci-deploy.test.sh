@@ -4405,7 +4405,7 @@ diag_check "#9860 D10h: with 3-digit counts (every repeated denial counted: hits
   "$([[ "$D10_VAL" == 'src=journal j=ok d=skip total='* && "${#D10_VAL}" -le 200 && "${D10_TOTAL:-0}" -ge 100 && "${D10_HITS:-x}" == "${D10_TOTAL:-y}" && "${D10_MPROC:-0}" -ge $(( ${D10_TOTAL:-1} - 1 )) ]] && echo 0 || echo 1)" "len=${#D10_VAL} kdeny: $D10_VAL"
 D10_FIELDS=$(sed -nE 's/^src=[a-z]+ j=[a-z]+ d=[a-z]+ total=[0-9]+ hits=[0-9]+ mproc=[0-9]+ (.*)$/\1/p' <<<"$D10_VAL")
 diag_check "#9860 D10h2: the extracted fields are cut at exactly 130 characters (the worst case 61 + 130 stays under the 200-char tail)" \
-  "$([[ "${#D10_FIELDS}" -ge 129 && "${#D10_FIELDS}" -le 130 && "$D10_FIELDS" == operation=* ]] && echo 0 || echo 1)" "fields(${#D10_FIELDS}): $D10_FIELDS"
+  "$([[ "${#D10_FIELDS}" -eq 130 && "$D10_FIELDS" == operation=* ]] && echo 0 || echo 1)" "fields(${#D10_FIELDS}): $D10_FIELDS"
 unset D10H_LINE D10_ROW D10_VAL D10_TOTAL D10_HITS D10_MPROC D10_FIELDS D10_DENY_MOUNT D10_DENY_OPEN D10_HINT_J D10_HINT_D
 unset -f d10_row d10_val d10_verdict_ok d10c d10g_flags
 
@@ -4430,9 +4430,10 @@ D11_NOPROC=$(grep -vF -- '--proc' <<<"$D11_LINES" || true)
 D11_PROBE=$(grep -F -- '--proc /proc' <<<"$D11_LINES" || true)
 # It must be a CONTROL: the same argv minus exactly ` --proc /proc`, with its own real exit code printed. Any second difference
 # would confound the H6-H8 reading. The five `timeout 5` probes are what the CANARY_DIAG_TIMEOUT default (30) is sized against.
-diag_check "#9860 D11: the real script's sdk_noproc argv is sdk_probe's argv minus exactly ` --proc /proc` (so it carries --unshare-user --unshare-pid and no --proc), prints its own rc, and the script runs five timeout-5 probes" \
+diag_check "#9860 D11: the real script's sdk_noproc argv is sdk_probe's argv minus exactly the ' --proc /proc' pair (so it carries --unshare-user --unshare-pid and no --proc), prints its own rc, and the script runs five timeout-5 probes" \
   "$([[ "$(grep -c . <<<"$D11_NOPROC" || true)" == 1 && "$(grep -c . <<<"$D11_PROBE" || true)" == 1 && "${D11_PROBE// --proc \/proc/}" == "$D11_NOPROC" \
-      && "$(grep -c 'timeout 5 ' <<<"$D9_SCRIPT" || true)" == 5 ]] && has_f '--unshare-user --unshare-pid' "$D11_NOPROC" && has_f 'p sdk_noproc "rc=$r ' "$D9_SCRIPT" && echo 0 || echo 1)" \
+      && "$(grep -vE '^[[:space:]]*#' <<<"$D9_SCRIPT" | grep -cE '=\$\(timeout 5 ' || true)" == 5 ]] && has_f '--unshare-user --unshare-pid' "$D11_NOPROC" \
+      && has_f 'p sdk_noproc "rc=$r ' "$(grep -A1 -xF -- "$D11_NOPROC" <<<"$D9_SCRIPT" | tail -n 1)" && echo 0 || echo 1)" \
   "noproc: $D11_NOPROC | probe: $D11_PROBE"
 unset D11_LINES D11_NOPROC D11_PROBE
 diag_check "#9871 D9c control: a gutted script does NOT satisfy the D9 check (so D9a/D9b can fail)" \

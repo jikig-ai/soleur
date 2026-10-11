@@ -229,7 +229,7 @@ touched.
 - `knowledge-base/engineering/operations/runbooks/canary-probe-set.md` - section table gains `sdk_noproc` and
   `kdeny` rows; "fourteen rows" becomes sixteen, "ten in-container" becomes eleven, `lines=10` becomes `lines=11`,
   "`lines` > 10" becomes "> 11"; H-table gains H6-H8; the `sdk_probe` row records the measured local contrast; a
-  short "Reading `kdeny`" note (what `j=`/`d=` mean, why `mproc=0` with `j=ok` is evidence and not proof, printk
+  short "Reading `kdeny`" note (what `j=`/`d=` mean, why `mproc=0` is always neutral, printk
   ratelimiting and silent ERRNO caveats). No SSH step.
 - `plugins/soleur/test/preflight-discoverability-test.test.ts` - `BASELINE_DECLARED_PROBES` 53 to 54 with the
   PLACEMENT / TRUTH / NO SUBSTITUTE comment (this plan is the 54th declaring plan; re-measure with
@@ -577,7 +577,7 @@ sanitiser's integrity.
 - The existing census bans bare `env`, `export`, `declare`, `set` and `printenv` outside two literal names inside the region; the new function and its comments must not trip it (comments are exempt only on whole-line comments).
 - `_cred_err_tail` keeps the LAST 200 characters. The `kdeny` prefix (61 characters worst case) plus the 130-byte fields cap is sized to fit; any longer prefix silently eats the discriminating head. D10h pins it.
 - `journalctl -k` as an unprivileged user exits 0 with a hint and no lines on systemd 255 and with NOTHING at all on systemd 261 (measured); classify on the hint lines AND treat silent-empty as `empty`, never on bare words inside real kernel lines, and never use `grep -c` under `pipefail` for the counts.
-- `head -c` closing the pipe makes `PIPESTATUS[0]` 141, which is truncation, not an error.
+- (Superseded by review round 2: the reader's `PIPESTATUS[0]` is `timeout`'s status, and a non-zero rc with real lines reads `error` unless an anchored denial was read. `head -c` closing the pipe cannot make it 141.)
 - Do not "fix" H6 in this PR by touching the proc mask or the docker flags: it is the cross-tenant control from #9723, and the fix needs CTO and CLO review.
 
 ## Domain Review
