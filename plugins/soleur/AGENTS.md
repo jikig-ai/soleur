@@ -68,7 +68,7 @@ agents/
 ├── sales/                 # Sales pipeline and revenue agents
 └── support/               # Support and community agents
 
-commands/                      # Entry-point commands (go, sync, help)
+commands/                      # Entry-point commands (go, sync, help, version)
 
 skills/
 └── <skill-name>/          # All skills at root level (flat)
@@ -112,18 +112,19 @@ To add a new domain (e.g., product, growth):
 3. Add key to `domainOrder` and `DOMAIN_CSS_VARS` in the same file
 4. Add CSS variable in `docs/css/style.css`
 5. Skills stay flat at root level (the skill loader does not recurse into subdirectories)
-6. Commands stay flat under `commands/` (only entry-point commands: go, sync, help). Workflow stages are skills.
+6. Commands stay flat under `commands/` (only entry-point commands: go, sync, help, version). Workflow stages are skills.
 7. The plugin loader discovers agents recursively -- no config changes needed
 8. Landing page department cards, stats, and legal doc counts update automatically from data
 9. If the domain gets a top-level `knowledge-base/<domain>/` directory, add `<domain>` to `SANCTIONED_DIRS` in `.claude/hooks/kb-domain-allowlist-guard.sh` (the advisory guard that flags new top-level KB dirs outside the sanctioned set)
 
 ## Command and Skill Naming Convention
 
-Only 3 **commands** remain under `commands/`, using the `soleur:` prefix to avoid collisions with built-in commands:
+Only 4 **commands** remain under `commands/`, using the `soleur:` prefix to avoid collisions with built-in commands:
 
 - `/soleur:go` - Unified entry point that routes to workflow skills
 - `/soleur:sync` - Populate knowledge base from existing codebase
 - `/soleur:help` - List all available Soleur commands, agents, and skills
+- `/soleur:version` - Show the installed plugin version and whether a newer release exists
 
 The 6 workflow stages are now **skills** under `skills/`:
 

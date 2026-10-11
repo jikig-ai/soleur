@@ -58,6 +58,7 @@ Claude Code: `/soleur:go`. Grok Build: `/go`.
 | Entry | `/soleur:go` | `/go` |
 | Sync | `/soleur:sync` | `/sync` |
 | Help | `/soleur:help` | `/help` |
+| Version | `/soleur:version` | -- (Claude Code only) |
 | Next skill | Skill tool `soleur:<skill>` | Read `SKILL.md` in this process (`/<skill>`) |
 
 The 6-step workflow (invoked automatically via `/soleur:go` or Skill tool `soleur:<skill>` on Claude Code; via `/go` then Read `SKILL.md` in this process on Grok Build):
@@ -81,7 +82,7 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound  -->  ship
 | Component | Count |
 |-----------|-------|
 | Agents | 67 |
-| Commands | 3 |
+| Commands | 4 |
 | Skills | 103 |
 | MCP Servers | 5 |
 
@@ -237,6 +238,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `/soleur:go` | Unified entry point -- classifies intent and routes to the right workflow skill |
 | `/soleur:sync` | Analyze codebase and populate knowledge-base with conventions, patterns, and overview documentation |
 | `/soleur:help` | List all available Soleur commands, agents, and skills |
+| `/soleur:version` | Show the installed plugin version and whether a newer release exists |
 
 ## Skills
 
@@ -462,6 +464,32 @@ Note that scope does not change this path: installs made with `--scope project` 
 check regardless of how you installed.
 
 </details>
+
+## Version Visibility
+
+`/soleur:help` prints the installed version in its header. `/soleur:version` prints the installed
+version, the latest release, whether a newer one exists, and the update commands. An install from
+the marketplace is identified by its 12-character commit hash (the manifest carries no `version`
+key by design), so you see `Soleur commit <sha12>` rather than a semver; an install with a stamped
+manifest shows `Soleur v<X.Y.Z>`. `/soleur:version` is an explicit request and contacts github.com
+(one `git ls-remote` and, for a commit install, one unauthenticated compare API call, 8 second
+timeout) even if you did not opt in below.
+
+**Opt-in session-start check.** Off by default; the hook makes no network call unless you enable it.
+To show a one-line version banner at session start, with a once-a-day background refresh of the
+latest release, add this to your Claude Code settings (`~/.claude/settings.json` or the project
+`.claude/settings.json`):
+
+```json
+{
+  "env": { "SOLEUR_UPDATE_CHECK": "1" }
+}
+```
+
+Remove the key to turn the check off. `SOLEUR_DISABLE_VERSION_BANNER=1` suppresses the banner even
+when `SOLEUR_UPDATE_CHECK` is set (the web platform sets it for hosted sessions). The lookup is
+implemented in `plugins/soleur/scripts/plugin-version.sh`, shared by the hook, `/soleur:version`
+and `/soleur:help`.
 
 ## Compaction-Aware Session Hooks
 
