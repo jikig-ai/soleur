@@ -228,7 +228,8 @@ fi
 for spec in \
   "cron-egress-allowlist-cidr.txt /etc/soleur/cron-egress-allowlist-cidr.txt" \
   "cron-egress-resolve.sh /usr/local/bin/cron-egress-resolve.sh" \
-  "cron-egress-postapply-assert.sh /usr/local/bin/cron-egress-postapply-assert.sh"; do
+  "cron-egress-postapply-assert.sh /usr/local/bin/cron-egress-postapply-assert.sh" \
+  "cron-egress-nftables.sh /usr/local/bin/cron-egress-nftables.sh"; do
   f="${spec%% *}"
   dest="${spec##* }"
   w2_assert "web2 delivers $f (source=)" "source += +\"\\\$\\{path\\.module\\}/$f\""
@@ -249,9 +250,11 @@ done
 w2_assert "web2 creates /etc/soleur before file provisioners (scp does not mkdir)" 'mkdir -p [^"]*/etc/soleur'
 w2_assert "web2 marks cron-egress-resolve.sh executable" 'chmod 0755 [^"]*cron-egress-resolve\.sh'
 w2_assert "web2 marks cron-egress-postapply-assert.sh executable" 'chmod 0755 [^"]*cron-egress-postapply-assert\.sh'
+w2_assert "web2 marks cron-egress-nftables.sh executable" 'chmod 0755 [^"]*cron-egress-nftables\.sh'
 w2_assert "web2 lands the carved CIDR file at mode 0644" 'chmod 0644 [^"]*cron-egress-allowlist-cidr\.txt'
 w2_assert "web2 asserts root ownership of cron-egress-resolve.sh" 'chown root:root [^"]*cron-egress-resolve\.sh'
 w2_assert "web2 asserts root ownership of cron-egress-postapply-assert.sh" 'chown root:root [^"]*cron-egress-postapply-assert\.sh'
+w2_assert "web2 asserts root ownership of cron-egress-nftables.sh" 'chown root:root [^"]*cron-egress-nftables\.sh'
 w2_assert "web2 asserts root ownership of cron-egress-allowlist-cidr.txt" 'chown root:root [^"]*cron-egress-allowlist-cidr\.txt'
 # The probe is the point of the issue — a delivered-but-never-run assert script
 # leaves web-2 with the carve on disk and no proof of enforcement.
@@ -1672,6 +1675,15 @@ assert_grep "boot probe asserts the gateway container" 'soleur-egress-gw' "$SCRI
 # allow/deny verification on the real path — the deny line is the proof the
 # policy still holds mid-life).
 assert_grep "resolver carries the synthetic CONNECT pair probe" 'egress_gw_probe' "$RESOLVER"
+# Scope-marker self-heal (#9534 heal-loop fix): the six presence markers cannot
+# see a ruleset baked while the gw was absent (unscoped member drop kills every
+# upstream dial; the docker0→gw accept missing). The heal check must therefore
+# probe BOTH scope markers, conditioned on the gw running (asserting them while
+# the gw is down would heal-loop — the unscoped drop IS the correct posture then).
+assert_grep "resolver heal checks the docker0->gw accept marker" 'ENF_GWACCEPT' "$RESOLVER"
+assert_grep "resolver heal checks the scoped member-drop marker" 'ENF_GWMEMBER' "$RESOLVER"
+assert_grep "resolver scope check is gated on the gw container running" 'grep -qx soleur-egress-gw' "$RESOLVER"
+assert_grep "resolver member-scope needle is saddr !=" "saddr != " "$RESOLVER"
 
 # --- GHCR carve post-apply assertions: BEHAVIOUR (#9275 Phase 4) -----------------------------
 # The static greps above only prove the sentinels EXIST. These rows EXECUTE the delivered script
