@@ -826,19 +826,33 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
           // `autonomous_disclosure_response` ws-handler case). The selection
           // distinguishes "Got it" / "Keep autonomous on" (proceed) from
           // "Ask me each time" (decline this run).
-          const selection = await deps.abortableReviewGate(
-            ctx.session,
-            gateId,
-            options.signal,
-            undefined,
-            ["Got it"],
-            // P1 — register the HOLD under the autonomous_disclosure kind so a
-            // forged/cross `review_gate_response` cannot release it; only the
-            // owner-checked `autonomous_disclosure_response` (which writes the
-            // ack first) can.
-            "autonomous_disclosure",
-          );
-          await deps.updateConversationStatus(ctx.conversationId, "active");
+          let selection: string | null = null;
+          try {
+            selection = await deps.abortableReviewGate(
+              ctx.session,
+              gateId,
+              options.signal,
+              undefined,
+              ["Got it"],
+              // P1 — register the HOLD under the autonomous_disclosure kind so a
+              // forged/cross `review_gate_response` cannot release it; only the
+              // owner-checked `autonomous_disclosure_response` (which writes the
+              // ack first) can.
+              "autonomous_disclosure",
+            );
+          } catch {
+            // review: swallowed — rejects only on timeout/abort; fail closed (hold = deny), status restored below.
+            selection = null;
+          } finally {
+            await deps.updateConversationStatus(ctx.conversationId, "active");
+          }
+          if (selection === null) {
+            logPermissionDecision("canUseTool-bash", toolName, "deny", "autonomous-disclosure-expired");
+            return {
+              behavior: "deny" as const,
+              message: "The autonomous-mode notice was not answered; this run was held.",
+            };
+          }
 
           if (selection === "Ask me each time") {
             logPermissionDecision(
@@ -1120,15 +1134,31 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
 
       await deps.updateConversationStatus(ctx.conversationId, "waiting_for_user");
 
-      const selection = await deps.abortableReviewGate(
-        ctx.session,
-        gateId,
-        options.signal,
-        undefined,
-        gateOptions,
-      );
-
-      await deps.updateConversationStatus(ctx.conversationId, "active");
+      let selection: string | null = null;
+      try {
+        selection = await deps.abortableReviewGate(
+          ctx.session,
+          gateId,
+          options.signal,
+          undefined,
+          gateOptions,
+        );
+      } catch {
+        // review: swallowed — abortableReviewGate rejects ONLY on timeout or abort (review-gate.ts), so every rejection here
+        // is an expiry. Fail closed (deny) and restore the status below; a throw out of canUseTool would strand the
+        // conversation in `waiting_for_user` (#10054: this path was dead until the SDK began calling canUseTool for Bash).
+        selection = null;
+      } finally {
+        await deps.updateConversationStatus(ctx.conversationId, "active");
+      }
+      if (selection === null) {
+        logPermissionDecision("canUseTool-bash", toolName, "deny", "review-gate expired");
+        return {
+          behavior: "deny" as const,
+          message:
+            "The approval request for this Bash command expired without an answer. Do not retry it automatically; ask the user how they want to proceed.",
+        };
+      }
 
       // Selection can be "Approve", "Approve all `<prefix>`", or "Reject".
       const approveAllOption =

@@ -194,7 +194,8 @@ export default async function ScopeGrantsPage() {
             one, except that it pauses to ask before common forms of a
             default-branch force-push or delete, terraform destroy, or gh ref
             or repository delete (it does not recognise every spelling); with
-            it off, it asks before every command. The blocklist (curl, wget,
+            it off, it asks before every command outside a short read-only
+            allowlist. The blocklist (curl, wget,
             sudo, …) applies, but no blocklist is perfect.
           </p>
           <BashAutonomousToggle

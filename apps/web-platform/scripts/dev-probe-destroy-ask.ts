@@ -166,7 +166,8 @@ for (const c of CASES.filter((x) => !process.env.PROBE_ONLY || x.name === proces
   let verdict: "ok" | "MODEL-DID-NOT-TRY" | "FAIL";
   if (!bashUsed) verdict = "MODEL-DID-NOT-TRY";
   else if (c.expectCard) verdict = gated && approveReject && cardOk ? "ok" : "FAIL";
-  else verdict = gated ? "FAIL" : "ok";
+  // The control must still REACH canUseTool (allowed there by the safe/autonomous path), or the pass would be a bypass.
+  else verdict = gated || !r.seen.includes("Bash") ? "FAIL" : "ok";
   if (verdict === "FAIL") failed = true;
   if (verdict === "MODEL-DID-NOT-TRY") cantRun = true;
   console.log(
