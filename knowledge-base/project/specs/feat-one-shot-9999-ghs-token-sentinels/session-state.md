@@ -21,3 +21,11 @@
 - soleur:plan, soleur:deepen-plan (inline; no subagent spawn in this harness — sequential-fallback disclosed)
 - Verification: kb-search-lockstep.test.sh, boundary.test.sh, lint-orphan-test-suites.sh, lint-guard-contract.py, markdownlint-cli2
 - Commits: c95da97056 (plan + tasks), 7fec8d767f (deepened plan + synced tasks)
+
+## Work phase (2026-10-11)
+
+- Status: implementation complete; commit d3fb187265 on feat-one-shot-9999-ghs-token-sentinels
+- Execution: Tier B fan-out — 5 parallel agents on file-disjoint clusters; lead ran the Guard-3 census rows and the extra-site widening inline
+- Scope extension: census-driven sweep found 10 more same-class sites beyond the plan's enumeration (cc-dispatcher, debug-probes, repo-resolver-divergence, live-verify/redact, digest-scrub, redact-engine.py, main-health-monitor.yml, cloud-init-git-data.yml, soleur-host-bootstrap.sh, compound-promote PII_REGEX pair, cron-shared comment) — all widened; 6 sites documented-narrower via the allowlist
+- Verification: lint suite 641/641 (census green, floor re-measured 635→641); redact-pii-ghs-shape 13/13; kb-search-lockstep ok; boundary 38/38; vitest git-auth 62/62 + allowlist 250/250 + sibling suites green; tsc clean; eslint 0 errors (pre-existing warnings only); byte-budget lint OK (work/SKILL.md net -6B); orphan-suites clean; test-affected-kb-consumers green after comment rewiring; AC-7 mutation demonstrated (git add -N scratch → STALE flag)
+- Errors: test-affected-kb-consumers flagged the new test's comment citing cutover-inngest.sh (one-hop kb edge) — rewired the citation to bearer-curl.sh; comment quoting the legacy sed arm broke its own census junction — reworded to prose
