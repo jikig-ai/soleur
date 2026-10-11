@@ -840,7 +840,7 @@ def check_key_chain(
     pw_addr = kc[KEY_CHAIN_FIELDS[3]]  # a random_password resource ADDRESS, never a credential value
     consumer = _unique_decl(store, "key_chain consumer", kc["consumer"], tf_files, cache, fails)
     token = _unique_decl(store, "key_chain token", kc["token"], tf_files, cache, fails)
-    sec_decl = _unique_decl(store, "key_chain secret", kc["secret"], tf_files, cache, fails)
+    sec_decl = _unique_decl(store, "key_chain secret", kc[KEY_CHAIN_FIELDS[2]], tf_files, cache, fails)
     if not consumer or not token or not sec_decl:
         return None
     vtype, vname = parse_address(db["volume"]) or ("", "")
