@@ -9,6 +9,7 @@ minted provider-side and stored via the sanctioned Doppler CLI path. -->
 
 Plan: `knowledge-base/project/plans/2026-10-11-fix-mu1-ac2-dev-scheduled-github-app-credential-plan.md`
 Issue: #9995 · Tracker: #9993 · Draft PR: #10038 · Branch: feat-one-shot-9995-mu1-dev-scheduled-token-401
+Deferred provisioning track: #10058 (bootstrap.sh staged run — founder clicks G1–G3)
 
 Secret discipline (applies to every task): NEVER print secret values — shape
 ops only (`wc -c`, `sha256sum` fingerprints, `openssl` parse). Every
@@ -18,99 +19,82 @@ fingerprint match.
 
 ## Phase 1 — Fixture App provisioning (consent gates G1–G3 + agent automation)
 
-- [ ] 1.1 Write `apps/web-platform/infra/github-ci-fixture-app-manifest.json`
+- [x] 1.1 Write `apps/web-platform/infra/github-ci-fixture-app-manifest.json`
       (minimal manifest: name "Soleur CI Fixture"; `url`; description
       citing #9995 + O1b rationale; `public: false`;
       `default_permissions: {contents: read, metadata: read}`;
       `default_events: []`; NO `redirect_url`/`hook_attributes` — no
-      OAuth/webhook surface).
-- [ ] 1.2 Render the manifest-POST page locally and open via Playwright;
-      consent gate G1 (OAuth-consent class) submits GitHub's Create
-      GitHub App form.
-- [ ] 1.3 Playwright to the App settings page; attempt private-key
-      generation via Playwright FIRST (G2 is `automation-status:
-      UNVERIFIED` — attempt required before any operator handoff); PEM
-      downloads to tmpfs.
-- [ ] 1.4 Playwright to
-      `https://github.com/apps/soleur-ci-fixture/installations/new`;
-      consent gate G3 (org-admin) installs on `jikig-ai/mu1-fixture`
-      only.
-- [ ] 1.5 Read ids (numbers only): `gh api apps/soleur-ci-fixture --jq .id`
-      and `gh api repos/jikig-ai/mu1-fixture/installation --jq .id`.
-- [ ] 1.6 Pipe `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` (from tmpfs),
-      `MU1_FIXTURE_INSTALLATION_ID` into `soleur/dev_scheduled` via
-      `doppler secrets set --silent` with stdout redirected to
-      `/dev/null`; verify read-back fingerprint matches the download;
-      then delete the PEM.
-- [ ] 1.7 Record byte count + sha256[:8] fingerprint + app id +
-      installation id in `credential-evidence.md` (spec dir) and as a
-      #9995 comment.
+      OAuth/webhook surface). DONE 2026-10-11.
+- [ ] 1.2–1.7 (browser click G1 create → G2 keygen → G3 install → ids →
+      Doppler writes → evidence): **DEFERRED to #10058** at the
+      operator's instruction — playwright-attempt documented (playwright-mcp
+      unreachable; agent-browser reached `github.com/login` = credential-entry
+      gate). Staged via `bootstrap.sh` in this spec dir: preflight →
+      create-app → record-key → install-app → write-doppler → verify.
+      `app-manifest-post.html` (in this dir) is the manifest-POST launcher
+      the create-app stage opens.
 
 ## Phase 2 — Mint-liveness canary (RED drill → workflow step)
 
-- [ ] 2.1 Write `scripts/probe-github-app-mint.sh` (bash + openssl + curl;
-      signs JWT from `GITHUB_APP_ID`+`GITHUB_APP_PRIVATE_KEY` env, calls
-      `GET /app`, prints `GITHUB_APP_MINT status=… slug=… fp=…` or
-      `::error::` + exit 1; never prints key/JWT; portable — no
-      GNU-only flags, repo timeout→gtimeout→bare pattern if needed) and
-      `scripts/probe-github-app-mint.test.sh` covering Guard-1 matrix
-      rows 1–5. Required shapes (deepen-pass traps): curl
-      `--header @<(printf 'Authorization: Bearer %s' "$JWT")` — `gh api`
-      sends `token`, never `Bearer`; `b64url()` =
-      `openssl base64 -A | tr '+/' '-_' | tr -d '=\n'` (NOT `base64 -w
-      0` — GNU-only); `openssl rsa -check` pre-flight on the PEM;
-      PEM only to `mktemp` under `umask 077` in `$RUNNER_TEMP`.
-- [ ] 2.2 RED drill: run the probe under `doppler run -p soleur -c
-      dev_scheduled` BEFORE the credential swap — expect exit 1 with fp
-      `8246898e` (matches the CI pemFingerprint).
-- [ ] 2.3 Edit `.github/workflows/scheduled-integration-suites.yml`:
-      inside `Run MU1_INTEGRATION suites` (id `mu1`, ~line 292), invoke
-      the probe under the same `doppler run -p soleur -c dev_scheduled`
-      before the vitest call; refresh the step comment to name the
-      `soleur-ci-fixture` App.
-- [ ] 2.4 GREEN check after 1.6: probe prints `status=200
-      slug=soleur-ci-fixture` under dev_scheduled.
-- [ ] 2.5 Edit the header comment in
-      `apps/web-platform/test/mu1.integration.test.ts` to name the
-      fixture App (behavior unchanged; `dev`'s documented-expected 401
-      stays accurate).
+- [x] 2.1 `scripts/probe-github-app-mint.sh` + `scripts/probe-github-app-mint.test.sh`
+      (27 rows, Guard-1 matrix 1–5 + missing/non-numeric env + garbage PEM +
+      xtrace refusal). DONE 2026-10-11. **Plan-drift note:** the plan's inline
+      `curl --header @<(printf 'Authorization: Bearer %s' "$JWT")` was
+      superseded by ADR-280 — the probe sources `scripts/lib/bearer-curl.sh`
+      and the JWT rides curl's stdin config (`bc_curl`), never argv.
+      b64url = `openssl base64 -A | tr '+/' '-_' | tr -d '=\n'` (portable);
+      `openssl rsa -check`/`pkey -check` pre-flight; PEM only to `mktemp`
+      under `umask 077`; env-form sha256[:8] fp matches CI's pemFingerprint.
+- [x] 2.2 RED drill: `doppler run -p soleur -c dev_scheduled -- bash
+      scripts/probe-github-app-mint.sh` → `::error::GITHUB_APP_* cannot mint
+      a valid JWT for app 3261325 (status=401 curl_rc=0 fp=8246898e)`,
+      exit 1 — fingerprint matches the CI log's pemFingerprint exactly.
+      DONE 2026-10-11.
+- [x] 2.3 `.github/workflows/scheduled-integration-suites.yml` `mu1` step:
+      probe invoked under the same `doppler run -p soleur -c dev_scheduled`
+      before vitest (`../scripts/probe-github-app-mint.sh` — the step's
+      working-directory is apps/web-platform); comment names the
+      `soleur-ci-fixture` App. DONE 2026-10-11.
+- [ ] 2.4 GREEN check (`status=200 slug=soleur-ci-fixture`): DEFERRED to
+      #10058 — blocked on Phase 1 provisioning. The `verify` stage of
+      bootstrap.sh performs it.
+- [x] 2.5 `apps/web-platform/test/mu1.integration.test.ts` header comment
+      names the fixture App + probe; the `dev`-config documented-expected
+      401 text preserved. DONE 2026-10-11.
 
 ## Phase 3 — dev_scheduled credential-shape audit
 
-- [ ] 3.1 Write `scripts/audit-dev-scheduled-shapes.sh` (census via
-      `doppler secrets --only-names -p soleur -c dev_scheduled`; shape
-      classes: PEM-parse, URL-scheme, numeric-id, token class = RFC 6750
-      b64token alphabet `[A-Za-z0-9._~+/=-]` + zero CR/control bytes —
-      property guard, NOT a vendor-format prefix (the #9972 lesson);
-      per-name verdict line, never values; nonzero exit on FAIL;
-      fail-closed on empty/unreadable census) and
-      `scripts/audit-dev-scheduled-shapes.test.sh` covering Guard-2
-      matrix rows — the test MUST assemble any swept literal split so it
-      doesn't join its own sweep population.
-- [ ] 3.2 Run the audit; post the name→verdict table to #9995 (values
-      never included).
-- [ ] 3.3 File a follow-up issue per non-GITHUB_APP FAIL
-      (`--milestone "Post-MVP / Later"`, label `ci/integration-suites`);
-      record the `dev` config dead-key observation in the #9995 comment
-      (no change — plan Cut List).
+- [x] 3.1 `scripts/audit-dev-scheduled-shapes.sh` +
+      `scripts/audit-dev-scheduled-shapes.test.sh` (32 rows, Guard-2 matrix +
+      envelope/non-object/fetch-failure arms). Token class = RFC 6750
+      alphabet, property guard only. Pem class accepts PEM-parse OR
+      alphabet-clean bare key blob (VAPID keys are un-PEM'd base64url —
+      first-run false positive corrected). DONE 2026-10-11.
+- [x] 3.2 Live run: `AUDIT_SUMMARY checked=60 ok=30 fail=0 unclassified=30`
+      — posted to #9995. `GITHUB_APP_PRIVATE_KEY` verdict `ok` (valid PEM,
+      unregistered — liveness is the probe's layer). DONE 2026-10-11.
+- [x] 3.3 Zero non-GITHUB_APP FAILs → no follow-up issues filed. The `dev`
+      dead-key observation is recorded in the #9995 comment (dev's copy is
+      byte-identical, fp 8246898e; left unchanged per plan Cut List).
+      DONE 2026-10-11.
 
 ## Phase 4 — Docs + verification dispatch
 
-- [ ] 4.1 Update
-      `knowledge-base/engineering/operations/runbooks/mu1-signup-workspace-verification.md`
-      (AC-2 evidence row: fixture App + mint probe).
-- [ ] 4.2 `gh workflow run scheduled-integration-suites.yml --ref
-      feat-one-shot-9995-mu1-dev-scheduled-token-401`; arm a Monitor in
-      the same turn (hr-dispatch-async-must-arm-watch); assert `mu1`
-      step outcome `success`.
-- [ ] 4.3 Post-merge: `gh workflow run scheduled-integration-suites.yml`
-      on main — mu1 leg green (issue's AC).
-- [ ] 4.4 PR body carries `Closes #9995` (ship renders the durable
-      artifacts; do not hand-author PR-body blocks — ship is the sole
-      PR-body author).
+- [x] 4.1 `mu1-signup-workspace-verification.md`: AC-2 evidence row names
+      `soleur-ci-fixture` + the mint probe; the security-baseline section
+      documents the dev/dev_scheduled credential split. DONE 2026-10-11.
+- [ ] 4.2 Branch dispatch of `Scheduled: integration suites` — expected RED
+      at the probe (proves fail-fast + named error in CI context) until
+      #10058 closes; assert probe output names the 401, not vitest.
+- [ ] 4.3 Post-merge main dispatch — mu1 leg stays RED at probe until
+      #10058 closes (deferred); GREEN assertion belongs to #10058's
+      closure check.
+- [x] 4.4 PR body: `Refs #9995` + `Tracks #10058` — NOT `Closes #9995`
+      (the live credential is not provisioned; the issue's AC is a green
+      mu1 leg, which needs the deferred clicks). ship authors the body.
 
-## Done definition
+## Done definition (revised for the deferral)
 
-All `### Pre-merge (PR)` Acceptance Criteria in the plan ticked; the mu1
-leg is green on a branch dispatch; #9995 carries the forensic +
-credential-evidence comments.
+Probe + audit + manifest + workflow wiring merged; #10058 filed as the
+deferred-automation track with the staged bootstrap.sh; mu1's named-failure
+probe demonstrated. The issue's leg-green AC moves to #10058's closure.

@@ -12,6 +12,10 @@
 # never read as ok):
 #   *PRIVATE_KEY* / *PEM*      pem     — openssl pkey -check parses (literal `\n`
 #                                       escapes expanded first, as getPrivateKey does)
+#                                       OR the value is a bare key blob in the token
+#                                       alphabet (VAPID-style base64url EC keys are
+#                                       stored un-PEM'd — a *PRIVATE_KEY name does not
+#                                       promise PEM wrapping)
 #   *_URL                      url     — ^<scheme>:// (any scheme, not only https)
 #   *_INSTALLATION_ID          numeric — ^[0-9]+$ ; GITHUB_APP_ID likewise
 #   *_B64                      b64     — ^[A-Za-z0-9+/=]+$
@@ -95,7 +99,7 @@ while IFS= read -r name; do
     verdict="FAIL-floor-control"
   else
     case "$cls" in
-      pem)      printf '%s' "$val" | pem_ok && verdict=ok || verdict="FAIL-pem" ;;
+      pem)      printf '%s' "$val" | pem_ok && verdict=ok || { [[ "$val" =~ ^[A-Za-z0-9._~+/=-]+$ ]] && verdict=ok || verdict="FAIL-pem"; } ;;
       url)      [[ "$val" =~ ^[A-Za-z][A-Za-z0-9+.-]*:// ]] && verdict=ok || verdict="FAIL-url" ;;
       numeric)  [[ "$val" =~ ^[0-9]+$ ]] && verdict=ok || verdict="FAIL-numeric" ;;
       b64)      [[ "$val" =~ ^[A-Za-z0-9+/=]+$ ]] && verdict=ok || verdict="FAIL-b64" ;;

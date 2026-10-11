@@ -22,3 +22,37 @@
 - gh CLI — issue/PR state verification
 - doppler — shape-only probes only
 - git — commits `77a288fa6f`, `a593a8bf01`, pushed to branch
+
+## Work Phase (2026-10-11)
+- Status: implementation complete, deferred provisioning per operator decision
+
+### Done
+- `scripts/probe-github-app-mint.sh` + `.test.sh` — 27/27 rows (Guard-1 1–5
+  + missing/non-numeric env + garbage PEM + xtrace refusal). ADR-280
+  superseded the plan's inline process-substitution Bearer header: the JWT
+  rides `bc_curl`'s stdin config; the test asserts no Authorization in argv.
+- `scripts/audit-dev-scheduled-shapes.sh` + `.test.sh` — 32/32 rows; live run
+  `checked=60 ok=30 fail=0 unclassified=30`; posted to #9995. pem class
+  widened to accept alphabet-clean bare key blobs (VAPID false positive).
+- RED drill live: exit 1, `status=401 fp=8246898e` — fingerprint matches CI.
+- mu1 workflow step runs the probe before vitest; mu1 test header + runbook
+  updated to name `soleur-ci-fixture`.
+- `apps/web-platform/infra/github-ci-fixture-app-manifest.json` written.
+- Deferred provisioning track filed: #10058 (deferred-automation +
+  ci/integration-suites + type/chore, milestone Post-MVP/Later); staged
+  `bootstrap.sh` + `app-manifest-post.html` committed beside this file;
+  `plugins/soleur/test/operator-agent-runnable.test.sh` green (47/47).
+- Fixture ratchets green: fixture-relative-assert 62/62,
+  fixture-dir-operand-assert 71/71, lint-shell-capture-exit 0 new findings.
+
+### Decisions / drift from plan
+- Inline `--header @<(...)` replaced by bearer-curl.sh `bc_curl` (ADR-280,
+  merged after the plan was authored).
+- Operator deferred Phase 1 provisioning (G1–G3 clicks): PR ships wiring +
+  `Refs #9995`/`Tracks #10058` (not `Closes`); the mu1 leg fails fast at
+  the probe until #10058 closes.
+- `dev` config dead key left untouched (plan Cut List); recorded in #9995.
+
+### Next
+- push + affected-gate (test-all.sh has a registration-only edit) → review
+  → QA → ship via soleur:ship.

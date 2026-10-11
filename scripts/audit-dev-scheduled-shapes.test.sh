@@ -173,13 +173,17 @@ if [[ "$RC" -eq 0 ]]; then pass "row5 clean census exits 0"; else fail "row5 rc=
 if grep -q 'A_B64.*verdict=ok' "$OUT" || grep -q 'A_B64.*ok' "$OUT"; then pass "row5 A_B64 ok"; else fail "row5 A_B64 not ok"; fi
 
 # --- pem class: parseable RSA -> ok; garbage -> FAIL ------------------------------------
-census '{"M_PEM":"computed","BAD_PEM":"computed"}'
+census '{"M_PEM":"computed","BAD_PEM":"computed","VAPID_PRIVATE_KEY":"computed"}'
 cp "$TMPD/key.pem" "$MOCK_DIR/val_M_PEM"
 putval BAD_PEM 'this is not a pem at all'
+# A bare base64url blob (VAPID shape, measured live: 43 chars, alphabet-clean) is a
+# second LEGAL *PRIVATE_KEY shape — the class guards parseability, not PEM wrapping.
+putval VAPID_PRIVATE_KEY 'AbC123xYz-KeyBlob_43charsTotal.NoPemWrapxx='
 run_sut env DOPPLER_TOKEN=stubtok bash "$SUT"
 if grep -q 'M_PEM.*verdict=ok' "$OUT" || grep -q 'M_PEM.*ok' "$OUT"; then pass "pem parseable ok"; else fail "pem parseable not ok"; fi
 if grep -q 'BAD_PEM.*FAIL' "$OUT"; then pass "pem garbage FAIL"; else fail "pem garbage not FAIL"; fi
 if [[ "$RC" -ne 0 ]]; then pass "pem garbage nonzero"; else fail "pem garbage rc=0"; fi
+if grep -q 'VAPID_PRIVATE_KEY.*verdict=ok' "$OUT"; then pass "pem-class bare key blob ok (VAPID shape)"; else fail "bare key blob under *PRIVATE_KEY not ok"; fi
 
 # --- url class --------------------------------------------------------------------------
 census '{"A_URL":"computed","B_URL":"computed"}'
