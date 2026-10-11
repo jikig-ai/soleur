@@ -126,6 +126,7 @@ export function deriveBashCommandPrefix(command: string): string {
 const COMPOUND_BASH_RE = /[;&|`<>\n\r]|\$\(/;
 const NO_BATCH_HEADS = new Set([
   "bash", "sh", "zsh", "dash", "fish", "env", "xargs", "eval", "exec", "nohup", "timeout", "nice", "time",
+  "command", "builtin", "stdbuf", "setsid", "sudo", "doas", "busybox", "chroot", "ionice", "flock", "unbuffer",
   "python", "python3", "node", "deno", "perl", "ruby", "php", "rm", "mv", "cp", "dd", "chmod", "chown", "find",
   "terraform", "tofu", "gh", "docker", "kubectl", "helm", "ssh", "scp", "rsync", "doppler",
 ]);
@@ -141,8 +142,12 @@ export function batchGrantablePrefix(command: string): string | null {
   const trimmed = command.trim();
   if (trimmed.length === 0 || COMPOUND_BASH_RE.test(trimmed)) return null;
   const tokens = trimmed.split(/\s+/);
-  if (NO_BATCH_HEADS.has(tokens[0])) return null;
-  if (tokens[0] === "git" && (tokens.length < 2 || NO_BATCH_GIT_VERBS.has(tokens[1]))) return null;
+  // Scan EVERY token, not just the head: a wrapper (`command git push -f`, `stdbuf -oL terraform destroy`, `setsid gh repo delete`)
+  // is classified by the destroy lane yet would otherwise be grantable under the wrapper's own prefix. A destroy-capable word or a
+  // state-rewriting git verb ANYWHERE in the command keeps its own card (over-refusing `npm run rm` is the safe direction).
+  if (tokens.some((t) => NO_BATCH_HEADS.has(t))) return null;
+  if (tokens.includes("git") && tokens.some((t) => NO_BATCH_GIT_VERBS.has(t))) return null;
+  if (tokens[0] === "git" && tokens.length < 2) return null;
   const prefix = deriveBashCommandPrefix(trimmed);
   return prefix.length > 0 ? prefix : null;
 }

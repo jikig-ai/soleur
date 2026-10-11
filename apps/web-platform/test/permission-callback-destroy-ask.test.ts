@@ -140,6 +140,29 @@ describe("lane: a matched command is gated in every posture (AC-1, AC-4)", () =>
     }
   });
 
+  test("no command the classifier matches is grantable or honoured by the cache, wrapped or not (#10054)", async () => {
+    const { classifyDestroyFamily } = await import("../server/destroy-ask-classifier");
+    const { batchGrantablePrefix } = await import("../server/permission-callback-bash-batch");
+    const resolve = async () => ({ names: new Set(["main", "master"]), authoritative: true });
+    for (const cmd of [
+      FORCE_MAIN,
+      "terraform destroy",
+      "tofu destroy -auto-approve",
+      "gh repo delete x/y --yes",
+      "command git push --force origin main",
+      "stdbuf -oL git push --force origin main",
+      "setsid git push --force origin main",
+      "builtin command git push -f origin main",
+      // The classifier scans past a word it does not know, so an arbitrary wrapper word still matches the lane; only a scan of
+      // EVERY token (not the head) keeps such a command from being grantable under the wrapper's own prefix.
+      "somewrapper git push --force origin main",
+      "somewrapper terraform destroy",
+    ]) {
+      expect(await classifyDestroyFamily(cmd, resolve as never), `${cmd} must be a lane match`).not.toBeNull();
+      expect(batchGrantablePrefix(cmd), `${cmd} must not be grantable`).toBeNull();
+    }
+  });
+
   test("a forged `Approve all <prefix>` selection denies and writes no cache entry (AC-20)", async () => {
     const cache = getBashApprovalCache("user-1", "conv-1");
     const { ctx, deps } = buildContext({ bashApprovalCache: cache, bashAutonomous: false });

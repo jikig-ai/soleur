@@ -141,6 +141,11 @@ describe("batchGrantablePrefix / allow() — a grant covers one simple command (
     ["bash run.sh", "shell"],
     ["python3 -c 'x'", "interpreter"],
     ["rm -rf build", "rm"],
+    ["command git push --force origin main", "wrapper: command"],
+    ["stdbuf -oL terraform destroy", "wrapper: stdbuf"],
+    ["setsid gh repo delete x/y --yes", "wrapper: setsid"],
+    ["git -C sub push origin feat-x", "git option before the verb"],
+    ["npm run rm", "destroy-capable word as a script name (over-refused, the safe direction)"],
   ])("refuses %s (%s)", (cmd) => {
     expect(batchGrantablePrefix(cmd)).toBeNull();
     _resetBashApprovalCacheForTests();
