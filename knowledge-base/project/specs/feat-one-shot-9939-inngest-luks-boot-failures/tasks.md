@@ -28,5 +28,5 @@ Plan: `knowledge-base/project/plans/2026-10-10-chore-inngest-luks-first-boot-env
 
 - [ ] Confirm mint → build → `bump-cloud-init-pin` delivered a `vinngest-v*` tag whose carriers are byte-identical to the merged files (advisory GuardA green on main).
 - [ ] Dispatch `inngest-provision-rehearsal.yml` (`dry_run=false`); evidence artifact carries `REHEARSAL_PHASE_B_RECOVERY=PASS` + `REHEARSAL_POST_REBOOT_LATCH=PASS` with zero `Failed to start inngest-luks*` rows.
-- [ ] `doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-assert-absence.sh --host soleur-inngest-prd --absence 'Failed to start inngest-luks' --absence-require '"SYSLOG_IDENTIFIER":"systemd"' --absence-require '"host":"soleur-inngest"' --control SOLEUR_INNGEST_LUKS_CUTOVER --since 6h` → `SOLEUR_ABSENCE_ASSERT outcome=clean`.
+- [x] Scoped absence probe (both requires) → `SOLEUR_ABSENCE_ASSERT outcome=clean` (absence_rows=0, control_rows=545); positive arm proven (systemd require alone counts the 32 storm rows → present).
 - [ ] Attach evidence to #9939 and close.
