@@ -31,9 +31,10 @@ touched:
 2. Rewrite the stale comment block above the row, which currently justifies `expect_red`, to
    describe post-normalization semantics and the two re-break modes it now pins.
 3. Add a sibling `expect_red` row (`M4j`) renaming to a normalized-UNIQUE name so the battery keeps
-   pinning that normalization did not swallow detection. This row is not optional decoration:
-   `mutations_run` is only incremented inside `expect_red`, so the bare flip drops the landed-mutation
-   count to 56 and trips the `FLOOR=57` anti-vacuity floor at the bottom of the battery.
+   pinning that normalization did not swallow detection. (Rationale corrected post-review:
+   `mutations_run` is also incremented at inline sites — M33b, `_g2_json_row`, G2-C2 — so the
+   landed count is ~75 and the bare flip would NOT trip `FLOOR=57`. M4j stands on its primary
+   reason alone: the detection-preservation pin.)
 
 The unrelated `cloud-init-inngest-bootstrap` pin drift, also red in the same CI leg, is out of scope
 (tracked separately).
@@ -226,7 +227,7 @@ a rename landing on a normalized-unique name loses its `ONLY_JUSTIFIED` key and 
 | # | Mutation | Expected |
 |---|----------|----------|
 | 1 | Delete `_norm()` normalization (verbatim `name` keys in `ssh_resources`/`_all_tf_names`) | RED — control-C arm fails: `Cosign-Trusted_Root@web-2` uncovered + `cosign_trusted_root@web-2` stale |
-| 2 | Narrow either name capture `([^"]+)` to `([a-z_0-9]+)` | RED — renamed resource never swept → `cosign_trusted_root@web-2` stale-only; control-C arm fails |
+| 2 | Narrow the `hcl_blocks` name capture `([^"]+)` to `([a-z_0-9]+)` | RED — renamed resource never swept → `cosign_trusted_root@web-2` stale-only; control-C arm fails (the `_all_tf_names` capture feeds only the twin-base exemption — not this row; control-D pins it) |
 | 3 | Over-normalize `_norm` (e.g. strip a `_v\d+$` suffix) so `cosign_trusted_root_v2` collapses onto `cosign_trusted_root` | RED — M4j arm fails `guard still PASSED` — the detection-swallowed hole the sibling exists to catch |
 | 4 | Harness: misspell the M4j anchor (e.g. `cosign_trusted_root_v3`) | RED — `guard went red but NOT via '<anchor>'`; attribution cannot be faked |
 | 5 | Must-PASS: `Cosign-Trusted_Root` rename under correct `_norm` (the control-C mutation itself) | GREEN — normalization-transparency arm; also fails if the mutator does not land |

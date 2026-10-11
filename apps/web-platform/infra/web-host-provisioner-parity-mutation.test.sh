@@ -277,9 +277,14 @@ PYEOF
 
 mutations_run=0
 
-# expect_red <label> <file> <expected-anchor> <mutator>
+# expect_red <label> <file> <expected-anchor> <mutator> [<extra-needle>...]
+# Extra needles: every one must be a substring of the guard's [FAIL] output
+# (mutation_scorer_failed_on all-of semantics) — used when a mutation is expected to
+# red via MORE than one diagnostic arm (M4j pins uncovered + stale).
 expect_red() {
   local label="$1" file="$2" anchor="$3" script="$4"
+  shift 4
+  local extra_needles=("$@")
   cases=$((cases + 1))
   restore
   if ! apply_mutation "$file" "$script"; then
@@ -291,7 +296,7 @@ expect_red() {
   mutations_run=$((mutations_run + 1))
   if run_guard; then
     no "$label: guard still PASSED with the invariant broken -- it cannot detect this"
-  elif mutation_scorer_failed_on "$OUT" '\[FAIL\]' "$anchor"; then
+  elif mutation_scorer_failed_on "$OUT" '\[FAIL\]' "$anchor" ${extra_needles[@]+"${extra_needles[@]}"}; then
     ok "$label: guard went RED on '$anchor'"
   else
     no "$label: guard went red but NOT via '$anchor'. Either it failed for an unrelated reason
@@ -473,28 +478,51 @@ s = s.replace(old, """resource "terraform_data" "phantom_w3_probe" {
 """ + old, 1)
 '
 
-# Terraform identifiers legally contain uppercase and hyphens. Since `_norm()` at the
-# classification boundary (lower + hyphen->underscore), `Cosign-Trusted_Root` and
-# `cosign_trusted_root` resolve to ONE resource identity — this rename is swept AND stays
-# justified, so the correct verdict is GREEN. The row pins that transparency: deleting
-# `_norm` re-breaks it via `uncovered` + `stale`, and narrowing either `([^"]+)` name
-# capture to `[a-z_0-9]+` re-breaks it via `stale` alone (an unswept resource can never
-# be `uncovered`).
+# Terraform identifiers legally contain uppercase and hyphens. With `_norm()` normalizing
+# at the classification boundary (lower + hyphen->underscore) (#9970), `Cosign-Trusted_Root`
+# and `cosign_trusted_root` resolve to ONE resource identity — this rename is swept AND
+# stays justified, so the correct verdict is GREEN. The row pins that transparency:
+# deleting `_norm` re-breaks it via `uncovered` + `stale`, and narrowing the `hcl_blocks`
+# `([^"]+)` name capture to `[a-z_0-9]+` re-breaks it via `stale` alone (an unswept
+# resource can never be `uncovered`; the second `_all_tf_names` capture feeds only the
+# twin-base exemption — control-D below pins its `_norm` call site).
 expect_green "control-C (uppercase/hyphen rename is swept by the classification)" server.tf '
 old = "resource \"terraform_data\" \"cosign_trusted_root\" {"
 assert old in s
 s = s.replace(old, "resource \"terraform_data\" \"Cosign-Trusted_Root\" {", 1)
 '
 
-# Normalization must not swallow detection: a rename landing on a normalized-UNIQUE name
-# stays swept (the `([^"]+)` capture is case/hyphen-tolerant) but loses its `ONLY_JUSTIFIED`
-# key, so the classification must still RED it — `uncovered` for the new name plus `stale`
-# for the vacated one.
+# Normalization must not swallow detection (#9970): a rename landing on a normalized-UNIQUE
+# name still lands in `ssh_resources` but loses its `ONLY_JUSTIFIED` key, so the
+# classification must still RED it — `uncovered` for the new name plus `stale` for the
+# vacated one (both needles pinned).
 expect_red "M4j (§1: a normalized-unique rename is uncovered+stale)" server.tf \
   "uncovered=['cosign_trusted_root_v2@web-2']" '
 old = "resource \"terraform_data\" \"cosign_trusted_root\" {"
 assert old in s
 s = s.replace(old, "resource \"terraform_data\" \"cosign_trusted_root_v2\" {", 1)
+' "stale entries=['cosign_trusted_root@web-2']"
+
+# The collision abort (names collide after normalization) is the SOLE detector for the
+# add-shape shadow — two ssh resources whose spellings normalize to ONE key: the later
+# block silently shadows the earlier key (no uncovered; the vacated name reads stale
+# only by accident). Rename onto apparmor_bwrap_profile's normalized identity (#9970).
+expect_red "M4k (§1: two names normalizing to one key collide)" server.tf \
+  "collide after normalization" '
+old = "resource \"terraform_data\" \"cosign_trusted_root\" {"
+assert old in s
+s = s.replace(old, "resource \"terraform_data\" \"Apparmor-Bwrap_Profile\" {", 1)
+'
+
+# `_all_tf_names` is normalized at the same boundary (#9970): the non-SSH twin base
+# `deploy_pipeline_fix` (local-exec, never enters `ssh_resources`) supplies `_base`
+# coverage for `deploy_pipeline_fix_web2` only via the NORMALIZED name — a case/hyphen
+# rename must stay GREEN; deleting `_norm` at the `_all_tf_names` call site re-breaks
+# the web-2 twin as `uncovered`.
+expect_green "control-D (case/hyphen rename of a non-SSH twin base stays covered)" server.tf '
+old = "resource \"terraform_data\" \"deploy_pipeline_fix\" {"
+assert old in s
+s = s.replace(old, "resource \"terraform_data\" \"Deploy-Pipeline_Fix\" {", 1)
 '
 
 # ── §2: the destination sweep (the load-bearing invariant) ───────────────────────────
@@ -1448,7 +1476,7 @@ fi
 # the ADR-193 defect: a floor whose failure arm routes through the suite's own verdict helper
 # cannot witness that helper being neutered -- the assertion rows go quiet AND so does the floor
 # meant to notice the quiet. Each carries a DISTINCT message so a failure says WHICH tripped.
-FLOOR=57  # +5 #9151 mutation arms (M4a, M4b, G2-15, G2-16, G2-17; G2-C4 is a green control and does not increment) +7 review-pass arms (M2b, M4c, M4d, M4e, M4f, M4g, G2-18); ±0 #9970: control-C moved to expect_green (-1) and M4j added (+1). Re-derive from the battery log when adding rows.
+FLOOR=57  # +5 #9151 mutation arms (M4a, M4b, G2-15, G2-16, G2-17; G2-C4 is a green control and does not increment) +7 review-pass arms (M2b, M4c, M4d, M4e, M4f, M4g, G2-18); +1 net #9970: control-C moved to expect_green (-1), M4j+M4k added (+2), control-D is a green control (+0). Re-derive from the battery log when adding rows.
 if (( mutations_run < FLOOR )); then
   printf '\n[FATAL] anti-vacuity floor (mutations): only %d landed, attributed mutation(s) ran, expected >= %d.\n' \
     "$mutations_run" "$FLOOR" >&2
