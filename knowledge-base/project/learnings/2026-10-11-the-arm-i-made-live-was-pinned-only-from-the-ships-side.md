@@ -84,6 +84,27 @@ committing it, not only the mutations that undo the original change.
 11. **`ensure-semgrep.sh` accepts a semgrep binary whose interpreter lacks its module.** Found by the
     SAST seat. **Prevention:** the bootstrap should run `semgrep --version`, not `command -v`.
     Tracked as its own issue (#9957, different subsystem).
+12. **Syncing `main` into the branch with a merge commit failed `rename-guard`.** The guard reads each
+    merge commit's first-parent diff, so main's own renames read as the PR's. Recovery: rebase onto
+    `origin/main` and `--force-with-lease`. **Prevention:** a feature branch that needs main's head
+    gets a rebase, never a merge commit.
+13. **`test-bun` reddened on the `credentials_required` corpus baseline (53 to 54).** The plan's
+    `discoverability_test` is genuinely credential-gated, so the baseline moves with a ledger entry.
+    **Prevention:** when a plan declares `credentials_required`, bump the baseline in the same PR.
+14. **The merge group failed where the PR run passed: a pipe into `grep -q` in my T21 assert.** The
+    `#9217` guard landed on main after my base, so the PR run never saw it. Recovery: one awk
+    predicate, discriminating inputs checked. **Prevention:** before enqueue, run the repo's
+    `.claude/hooks/*.test.sh` guards against `origin/main`'s tree, not only the PR head.
+15. **`Closes #9373` on a `follow-through` tracker was blocked, then net-issue-flow blocked the
+    switch to `Ref`.** The tracker must stay open for its soak. **Prevention:** write `Ref` from the
+    start for a tracker whose verification is pending, and carry the `gate-override: net-issue-flow`
+    line for a filing in another subsystem.
+16. **My queue monitor read `autoMergeRequest == null` as a dequeue.** Enqueuing clears it. Recovery:
+    watch `isInMergeQueue` and `mergeQueueEntry` instead. **Prevention:** key queue state on the
+    queue's own fields.
+17. **The replace preflight ran without the warehouse credentials (P0 refusal), and its output was
+    lost to a buffered pipe during the 35-minute P3 drain.** **Prevention:** run it under
+    `doppler run -c prd_terraform` with output redirected to a file, and watch the file.
 
 ## Tags
 category: test-failures
