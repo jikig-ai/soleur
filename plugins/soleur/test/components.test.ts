@@ -583,6 +583,7 @@ describe("Technical-ruling delegation wiring", () => {
     expect(osStep.includes("${CLAUDE_PLUGIN_ROOT}/" + GATE) && osStep.includes("--branch")).toBe(true);
     for (const exit of ["**0**", "**1**", "**2**"]) expect(osStep.includes(exit), `one-shot gate step lost ${exit}`).toBe(true);
     // ship Phase 5.5 (--branch) and Phase 6 step 4.5 (--pr-body), both via the plugin root, never a repo-relative path.
+    // window-assembly: gateSection — everything from the gate heading to the end of ship/SKILL.md, of which only the first 1200 bytes (the gate paragraph) are asserted on
     const gateSection = ship.slice(ship.indexOf("### Technical-Ruling Gate (mandatory)"));
     expect(gateSection.slice(0, 1200).includes("${CLAUDE_PLUGIN_ROOT}/" + GATE) && gateSection.slice(0, 1200).includes("--branch")).toBe(true);
     const step45 = ship.slice(ship.indexOf("4.5. **Technical-ruling body check"));

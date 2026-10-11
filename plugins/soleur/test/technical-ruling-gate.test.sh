@@ -36,7 +36,7 @@ REFERENCE="$REPO_ROOT/plugins/soleur/skills/brainstorm-techniques/references/tec
 RULES="$REPO_ROOT/AGENTS.rules.md"
 RULE_ID='hr-technical-fork-is-not-an-operator-question'
 
-sed_inplace() { local f="${*: -1}"; sed "${@:1:$#-1}" "$f" > "$f.new" && mv "$f.new" "$f"; }
+sed_inplace() { local f="${*: -1}" t; t="$(mktemp)" || return 2; [[ "$f" == /* ]] || return 2; sed "${@:1:$#-1}" "$f" > "$t" && cat "$t" > "$f"; rm -f "$t"; }
 EXEC_LOG="$TMP/exec.log"
 : > "$EXEC_LOG"
 
@@ -123,24 +123,24 @@ run "$GATE" "$FIXTURES/bad-ruling-shape.md"
 assert_eq "2" "$(grep -cE '^\[FAIL\] .*: bad-ruling-shape - ' "$TMP/last.err" || true)" "row9: both malformed ruling cells flagged"
 # Row 1: the failing row is row 2 (a check that stops at the first row is the defect).
 run "$GATE" "$FIXTURES/no-class.md"
-ln="$(grep -n 'T2 second row' "$FIXTURES/no-class.md" | cut -d: -f1)"
+ln="$({ grep -n 'T2 second row' "$FIXTURES/no-class.md" || true; } | cut -d: -f1)"
 assert_eq "1" "$(grep -cE "^\[FAIL\] .*:${ln}: bad-class - " "$TMP/last.err" || true)" "row1: the failure names the second row by its file line"
 # Row 2 remedy text names the CTO spawn and the two-attempt cap.
 run "$GATE" "$FIXTURES/unruled-technical.md"
 assert_eq "1" "$(grep -cE 'soleur:engineering:cto.*two' "$TMP/last.err" || true)" "row2: remedy names the CTO and the two-attempt cap"
 # Every table is scanned: the failing row sits in the SECOND table (a first-table-only scanner passes).
 run "$GATE" "$FIXTURES/second-table.md"
-ln="$(grep -n 'B second writer technical row' "$FIXTURES/second-table.md" | cut -d: -f1)"
+ln="$({ grep -n 'B second writer technical row' "$FIXTURES/second-table.md" || true; } | cut -d: -f1)"
 assert_eq "1" "$(grep -cE "^\[FAIL\] .*:${ln}: unruled-technical - " "$TMP/last.err" || true)" "second table: the unruled row of the later table is examined, by its file line"
 
 run "$GATE" "$FIXTURES/shape-dates.md"
 assert_eq "4" "$(grep -cE '^\[FAIL\] .*: bad-ruling-shape - ' "$TMP/last.err" || true)" "each of year, month, day and an empty decision is flagged on its own row"
 # Finding line numbers are file lines (the label and the pending lints too).
 run "$GATE" "$FIXTURES/owner-label-unscoped.md"
-ln="$(grep -n 'Owner decision needed' "$FIXTURES/owner-label-unscoped.md" | head -1 | cut -d: -f1)"
+ln="$({ grep -n 'Owner decision needed' "$FIXTURES/owner-label-unscoped.md" || true; } | head -1 | cut -d: -f1)"
 assert_eq "1" "$(grep -cE "^\[FAIL\] .*:${ln}: owner-label-unscoped - " "$TMP/last.err" || true)" "a label finding names its file line"
 run "$GATE" "$FIXTURES/pending-prose.md"
-ln="$(grep -n 'pending - assumed' "$FIXTURES/pending-prose.md" | head -1 | cut -d: -f1)"
+ln="$({ grep -n 'pending - assumed' "$FIXTURES/pending-prose.md" || true; } | head -1 | cut -d: -f1)"
 assert_eq "1" "$(grep -cE "^\[FAIL\] .*:${ln}: unruled-technical - " "$TMP/last.err" || true)" "a pending finding names its file line"
 run "$GATE" "$FIXTURES/pending-bare.md"
 assert_eq "3" "$(grep -cE '^\[FAIL\] .*: bad-ruling-shape - ' "$TMP/last.err" || true)" "a bare pending and both spelling variants are each their own finding"

@@ -60,7 +60,7 @@ CTO_REMEDY='spawn soleur:engineering:cto now (at most two attempts, see technica
 
 work_dir=""
 UNCLOSED_SEEN=0
-cleanup() { [[ -n "$work_dir" ]] && rm -rf "$work_dir"; return 0; }
+cleanup() { [[ -n "$work_dir" ]] && rm -rf "${work_dir:?}"; return 0; }
 trap cleanup EXIT
 
 cat_ok() { case " $CATEGORIES " in *" $1 "*) return 0 ;; esac; return 1; } # mut:cat
@@ -161,7 +161,7 @@ check_artifact() { # <file> <display-path>
   grep -v '^@' "$work_dir/raw" > "$work_dir/rows" || true
   while IFS=$'\t' read -r ln row; do
     idx=$((idx + 1)) # mut:count
-    [[ -n "${TRG_EXEC_LOG:-}" ]] && echo "row $shown:$idx" >> "$TRG_EXEC_LOG"
+    [[ -n "${TRG_EXEC_LOG:-}" ]] && echo "row $shown:$idx" >> "${TRG_EXEC_LOG:?}"
     inner="${row#|}"; inner="${inner%|}"
     inner="${inner//\\|/$'\001'}"
     pipes="${inner//[^|]/}"
