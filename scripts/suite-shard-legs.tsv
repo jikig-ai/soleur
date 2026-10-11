@@ -1,9 +1,9 @@
 # suite-shard-legs.tsv — duration-aware shard assignment (ADR-240)
 # n=8
-# generated-from-run=38090871167
-# generated-from-runs=38090871167,38088705648,38086978176,38085840669,38055372785
+# generated-from-run=incremental
+# generated-from-runs=incremental
 # default-weight-ms=1194
-# generated-at=2026-10-10T23:17:26Z
+# generated-at=2026-10-11T10:27:01Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -291,6 +291,7 @@ scripts/assert-dependabot-drain-unit	2
 scripts/audit-suite-reads	8
 scripts/battery-ref-guard	5
 scripts/battery-tag-authorship	2
+scripts/bearer-curl-s4-first-runs-9905	6
 scripts/betterstack-assert-absence	7
 scripts/betterstack-ingest-parity	4
 scripts/board/set-board-status	1
@@ -485,6 +486,7 @@ scripts/test-all-orphan-log-retention	3
 scripts/test-all-pr-battery-gate	8
 scripts/test-all-runtime-ceiling	2
 scripts/test-all-webplat-gate	4
+scripts/test-all-weight-drift	4
 scripts/test-contention	6
 scripts/tmpfs-guard	2
 scripts/tunnel-connector-census	3

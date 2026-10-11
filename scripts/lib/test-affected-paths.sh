@@ -291,6 +291,10 @@ ALWAYS_ON_SUITES=(
   # inotify) is a second input. Hedged rather than declared; revisit trigger in ADR-242 decision 19.
 
   "scripts/test-all-fast-tier-budget"
+  # #9814: the local weight-drift detector — its verdict asserts properties of
+  # the runner's own wiring (default arm, epilogue emit), a runner-SUT property
+  # suite like its sibling above.
+  "scripts/test-all-weight-drift"
   # --- #9763 withdrawn-to-edge-selection (committed weight >10s): these run on CI legs,
   # merge_group, push and --full like every registered suite, and locally only when their
   # subject paths change (edge-selected like any non-always-on suite, ADR-262 shape). The
@@ -1851,6 +1855,20 @@ AFFECTED_SCRIPTS_TEST_ALL_FAST_TIER_BUDGET_PATHS=(
   "scripts/suite-durations.tsv"
   "scripts/test-all-fast-tier-budget.test.sh"
   "scripts/test-all.sh"
+)
+
+# scripts/test-all-weight-drift (#9814) — the local weight-drift detector. Its
+# verdict reads the comparator lib, the runner wiring (default arm + epilogue
+# emit + registration), and every committed durations/shard-legs manifest. The
+# edge is `glob:scripts/*.tsv`, not `suite-durations*`: the #9813 grammar
+# requires a /-terminated literal head, so a file-prefix glob cannot be
+# declared — covering the manifest class is the honest widening.
+AFFECTED_SCRIPTS_TEST_ALL_WEIGHT_DRIFT_PATHS=(
+  "scripts/test-all-weight-drift.test.sh"
+  "scripts/lib/test-weight-drift.sh"
+  "scripts/test-all.sh"
+  "glob:scripts/*.tsv"
+  "scripts/lib/test-affected-paths.sh"
 )
 
 # --- #9763 fast-tier demotions: declared scopes for suites withdrawn from ALWAYS_ON whose

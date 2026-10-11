@@ -187,7 +187,10 @@ non-test, non-Markdown file with an `openssl dgst ... -hmac` operand must be in 
 `git push`, so the token was on the argument lists of `git` and `git-remote-https`. The remote is now `https://github.com/<repo>.git` and the
 credential reaches those two commands only, as a per-command environment prefix: `GIT_CONFIG_COUNT=1`,
 `GIT_CONFIG_KEY_0=http.https://github.com/.extraheader`, `GIT_CONFIG_VALUE_0="Authorization: basic <base64 of x-access-token:TOKEN>"` (the form
-`actions/checkout` uses; git 2.31 or later). The token passes a shape guard (`[A-Za-z0-9_]`, the installation-token class) before the header is
+`actions/checkout` uses; git 2.31 or later). The token passes a shape guard (`[A-Za-z0-9._~+/=-]`, the canonical credential alphabet `bc_ok`
+judges — **amended 2026-10-11:** this record originally claimed `[A-Za-z0-9_]`, the legacy ~40-char `ghs_` base62 class; GitHub's issued
+installation tokens are now ~390 chars and carry `.` and `-`, so that class refused every real token — the defect repaired under #9972) before
+the header is
 built, refusing with the same marker (`script=bump-inngest-bootstrap-pin`) and dying before any git network call; the header string is a plain
 shell variable, never exported, and `BUMP_PUSH_URL` (the fixture seam) takes no header. **Residual:** the environment of a child is readable by
 the same uid and by root (the same class as the HMAC key above), and base64 is an encoding, not protection. This is a reduction from the

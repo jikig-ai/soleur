@@ -1101,6 +1101,100 @@ jobs:
           cloudflared-version: ${{ env.CLOUDFLARED_VERSION }}
           cloudflared-sha256: ${{ env.CLOUDFLARED_SHA256 }}
 
+      - name: SSH forward to web-2 through the web-1 bastion
+        if: steps.ssh_token_gate.outputs.ssh_apply_skip != 'true'
+        run: |
+          set -euo pipefail
+          command -v ssh >/dev/null || { echo "::error::ssh client not found on this runner — the web-2 forward cannot open."; exit 1; }
+          command -v iptables >/dev/null || { echo "::error::iptables not found — the web-2 NAT redirect cannot install."; exit 1; }
+
+          # `terraform output` reads STATE, and a new output is only recorded
+          # there by the first apply that contains it — the bootstrap apply this
+          # step exists to enable. Read the same attributes from state directly
+          # (hcloud_server.web["web-2"].ipv4_address is what the output renders;
+          # hcloud_server_network.web["web-2"].ip is the private side). Works
+          # identically before and after the outputs land in state, and each
+          # lookup fails closed on an empty/non-IPv4 result below.
+          WEB_2_STATE="$(terraform -chdir="$INFRA_DIR" show -json)" \
+            || { echo "::error::terraform show -json failed — cannot resolve web-2's addresses."; exit 1; }
+          WEB_2_IP="$(printf '%s' "$WEB_2_STATE" | jq -r \
+            '.values.root_module.resources[]? | select(.address == "hcloud_server.web[\"web-2\"]") | .values.ipv4_address // empty')"
+          WEB_2_PRIVATE="$(printf '%s' "$WEB_2_STATE" | jq -r \
+            '.values.root_module.resources[]? | select(.address == "hcloud_server_network.web[\"web-2\"]") | .values.ip // empty')"
+          [[ "$WEB_2_IP" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] \
+            || { echo "::error::could not resolve web-2's public IPv4 — hcloud_server.web[\"web-2\"].ipv4_address absent from state."; exit 1; }
+          [[ "$WEB_2_PRIVATE" =~ ^10\.0\.1\.[0-9]{1,3}$ ]] \
+            || { echo "::error::could not resolve web-2's private IPv4 — hcloud_server_network.web[\"web-2\"].ip absent from state."; exit 1; }
+          echo "WEB_2_IP=$WEB_2_IP" >> "$GITHUB_ENV"
+
+          # 0600 keyfile from the bridge-exported key material. `ssh -i` requires a
+          # file; the variable itself is multi-line PEM and survives the round trip.
+          WEB2_KEYFILE="$(mktemp /tmp/web2-fwd-key.XXXXXX)"
+          chmod 600 "$WEB2_KEYFILE"
+          printf '%s\n' "${TF_VAR_ci_ssh_private_key:?bridge did not export the CI key}" > "$WEB2_KEYFILE"
+          ssh-keygen -yf "$WEB2_KEYFILE" >/dev/null \
+            || { echo "::error::the CI key material did not parse as a private key."; exit 1; }
+          echo "WEB2_KEYFILE=$WEB2_KEYFILE" >> "$GITHUB_ENV"
+
+          # Pinned host keys for BOTH hops — the writer is the shape check every
+          # CI consumer applies; -F /dev/null so no runner-side config can widen it.
+          bash "$GITHUB_WORKSPACE/.github/actions/cf-tunnel-ssh-bridge/write-known-hosts.sh" \
+            web-1 "$GITHUB_WORKSPACE/apps/web-platform/infra/web-1-ssh-host-key.pub" \
+            "$RUNNER_TEMP/web-1.known_hosts"
+          bash "$GITHUB_WORKSPACE/.github/actions/cf-tunnel-ssh-bridge/write-known-hosts.sh" \
+            web-2 "$GITHUB_WORKSPACE/apps/web-platform/infra/web-2-ssh-host-key.pub" \
+            "$RUNNER_TEMP/web-2.known_hosts"
+
+          : > /tmp/web2-forward.log
+          ssh -N -F /dev/null \
+              -o ExitOnForwardFailure=yes \
+              -o StrictHostKeyChecking=yes \
+              -o HostKeyAlias=web-1 \
+              -o UserKnownHostsFile="$RUNNER_TEMP/web-1.known_hosts" \
+              -o GlobalKnownHostsFile=/dev/null \
+              -o HostKeyAlgorithms=ecdsa-sha2-nistp256 \
+              -o UpdateHostKeys=no \
+              -o BatchMode=yes \
+              -o ServerAliveInterval=30 -o ServerAliveCountMax=6 \
+              -i "$WEB2_KEYFILE" \
+              -L 127.0.0.1:2223:"${WEB_2_PRIVATE}:22" \
+              root@127.0.0.1 -p 2222 2>>/tmp/web2-forward.log &
+          WEB2_FORWARD_PID=$!
+          echo "WEB2_FORWARD_PID=$WEB2_FORWARD_PID" >> "$GITHUB_ENV"
+
+          up=0
+          for i in $(seq 1 30); do
+            if ! kill -0 "$WEB2_FORWARD_PID" 2>/dev/null; then break; fi
+            if (exec 3<>"/dev/tcp/127.0.0.1/2223") 2>/dev/null; then exec 3>&- 3<&- || true; up=1; break; fi
+            sleep 1
+          done
+          if [[ "$up" != 1 ]]; then
+            echo "::error::web-2 SSH forward did not open 127.0.0.1:2223 within 30s. Usual causes: AllowTcpForwarding=no on web-1's sshd, web-2's :22 closed on the private net, or the bastion auth failing."
+            tail -n 50 /tmp/web2-forward.log >&2 || true
+            exit 1
+          fi
+          echo "web-2 forward is up on 127.0.0.1:2223 (attempt ${i:-?})"
+
+          # End-to-end probe: authenticate to web-2 through the forward with the
+          # web-2 PINNED host key — proves the full path (tunnel + bastion +
+          # private-net forward + sshd auth + host-key pin) before Terraform plans
+          # against it. A failure here is a broken route, not a slow one.
+          timeout 30 ssh -F /dev/null -o BatchMode=yes -o ConnectTimeout=10 \
+              -o StrictHostKeyChecking=yes \
+              -o HostKeyAlias=web-2 \
+              -o UserKnownHostsFile="$RUNNER_TEMP/web-2.known_hosts" \
+              -o GlobalKnownHostsFile=/dev/null \
+              -o HostKeyAlgorithms=ecdsa-sha2-nistp256 \
+              -o UpdateHostKeys=no \
+              -i "$WEB2_KEYFILE" -p 2223 root@127.0.0.1 true \
+            || { echo "::error::end-to-end web-2 SSH probe failed — the forward is up but web-2 refused (auth, host key, or sshd config)."; tail -n 50 /tmp/web2-forward.log >&2 || true; exit 1; }
+          echo "end-to-end web-2 probe: root@web-2 ($WEB_2_PRIVATE) accepted the CI key and pinned host key"
+
+          sudo iptables -t nat -A OUTPUT -d "$WEB_2_IP" -p tcp --dport 22 \
+            -j REDIRECT --to-ports 2223
+          echo "NAT: $WEB_2_IP:22 → 127.0.0.1:2223 → $WEB_2_PRIVATE:22"
+
+
       - name: Terraform apply (SSH-provisioned resources, over the bridge)
         if: steps.ssh_token_gate.outputs.ssh_apply_skip != 'true'
         working-directory: ${{ env.INFRA_DIR }}
@@ -1328,6 +1422,14 @@ jobs:
             sudo iptables -t nat -D OUTPUT \
               -d "$SERVER_IP" -p tcp --dport 22 \
               -j REDIRECT --to-ports 2222 2>/dev/null || true
+          fi
+          if [[ -n "${WEB_2_IP:-}" ]]; then
+            sudo iptables -t nat -D OUTPUT \
+              -d "$WEB_2_IP" -p tcp --dport 22 \
+              -j REDIRECT --to-ports 2223 2>/dev/null || true
+          fi
+          if [[ -n "${WEB2_FORWARD_PID:-}" ]]; then
+            kill "$WEB2_FORWARD_PID" 2>/dev/null || true
           fi
           if [[ -n "${CLOUDFLARED_PID:-}" ]]; then
             kill "$CLOUDFLARED_PID" 2>/dev/null || true

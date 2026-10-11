@@ -172,7 +172,6 @@ apps/web-platform/infra/www-apex-canonicalizer-mutation.test.sh	4
 apps/web-platform/infra/www-apex-canonicalizer.test.sh	3
 apps/web-platform/infra/zot-config-deadlines.test.sh	1
 apps/web-platform/infra/zot-disk-heartbeat-redaction.test.sh	3
-apps/web-platform/infra/zot-entry-gate.test.sh	3
 apps/web-platform/infra/zot-image-fetch.test.sh	2
 apps/web-platform/infra/zot-image-oci-archive.test.sh	3
 apps/web-platform/infra/zot-image-staleness-mutation.test.sh	1
