@@ -1194,6 +1194,8 @@ authorization; a menu answer is not authorization.
    exists. The status read is the one used in the private-NIC readiness read above, with this
    monitor's name:
    `curl -fsS -H "Authorization: Bearer $(doppler secrets get BETTERSTACK_API_TOKEN_READONLY --plain -p soleur -c prd_terraform)" 'https://uptime.betterstack.com/api/v2/heartbeats?per_page=250' | jq '.data[] | select(.attributes.name == "soleur-git-data-host-prd") | {id, status: .attributes.status, paused: .attributes.paused}'`.
+   (This curl form puts the token in curl's argv. The `--status` command in step 7 reads the same
+   fields without that exposure and is the better read.)
    The secret check never prints the value (`--only-names` prints a bordered table, so the read asks
    for JSON and tests the key):
    `doppler secrets --only-names --json -p soleur -c prd_git_data | jq -e 'has("GIT_DATA_HOST_HEARTBEAT_URL")'`
@@ -1227,40 +1229,65 @@ authorization; a menu answer is not authorization.
    below).
 7. **Arm** (owner-authorized): unpause the monitor and require a real `up` transition; roll back to
    paused otherwise. Use `arm-heartbeats.sh --arm-one` (#9980), never a by-hand unpause: a manual
-   unpause has no rollback if no beat follows. Run both commands from the repository root. The token
-   is read by `doppler run` into the child's environment only: the single-quoted `bash -c` string
-   holds variable NAMES, never values, so nothing reaches argv, shell history or an `export`, and the
-   script puts the bearer on curl's stdin config and refuses to run under `bash -x` (rc 78). Do not
-   wrap either command in `set -x`, and do not fetch a token with `doppler secrets get --plain` into
-   a variable.
+   unpause has no rollback if no beat follows. Run every command below from the repository root, and
+   never while an apply is in flight (this monitor is not in the per-merge arm list, but nothing
+   serializes the two). The token is read by `doppler run` into the child's environment only, and
+   `--only-secrets` limits what `doppler` injects to that one secret. The inner `bash` is started with
+   its trace and startup-file variables removed (`env -u SHELLOPTS -u BASH_ENV -u BASHOPTS`) and with
+   `--noprofile --norc`, so the wrapper that first binds the token cannot be traced; the script itself
+   puts the bearer on curl's stdin config and refuses to run under `bash -x` (rc 78). Do not wrap any
+   command in `set -x`, and do not fetch a token with `doppler secrets get --plain` into a variable.
+
+   Before arming, `--status` must read `paused=true status=paused` (anything else means someone or
+   something already changed the monitor: stop and read why). Give the arm a caller timeout of at least
+   300 s (it polls for up to 150 s, 235 s worst case), and give it a books path you will still know if
+   the terminal is lost:
 
    ```bash
-   # Read-only state of the one monitor (read scope is enough):
-   doppler run -p soleur -c prd_terraform -- bash -c \
+   # 1. Read-only state of the one monitor (read scope is enough):
+   doppler run --only-secrets BETTERSTACK_API_TOKEN_READONLY -p soleur -c prd_terraform -- \
+     env -u SHELLOPTS -u BASH_ENV -u BASHOPTS bash --noprofile --norc -c \
      'BS_TOKEN="$BETTERSTACK_API_TOKEN_READONLY" exec bash apps/web-platform/infra/arm-heartbeats.sh --status soleur-git-data-host-prd'
-   # The arm (WRITE scope; --id is the id the step-4 read printed, an anchor independent of this lookup):
-   doppler run -p soleur -c prd_terraform -- bash -c \
-     'BS_TOKEN="$BETTERSTACK_API_TOKEN" exec bash apps/web-platform/infra/arm-heartbeats.sh --arm-one soleur-git-data-host-prd --id <id from step 4>'
+   # 2. The arm (WRITE scope; --id is the id the step-4 read printed, an anchor independent of this lookup):
+   doppler run --only-secrets BETTERSTACK_API_TOKEN -p soleur -c prd_terraform -- \
+     env -u SHELLOPTS -u BASH_ENV -u BASHOPTS bash --noprofile --norc -c \
+     'ARMED_UNCONFIRMED="$HOME/.arm-one-books" BS_TOKEN="$BETTERSTACK_API_TOKEN" exec bash apps/web-platform/infra/arm-heartbeats.sh --arm-one soleur-git-data-host-prd --id <id from step 4>'
    ```
 
    `--status` prints `name= id= paused= status= period= grace=` and exits 0 only when exactly one
    heartbeat carries that exact name. `--arm-one` makes the same exact-name resolution, refuses a
-   collision or an `--id` that differs from the resolved id, refuses when its fixed 150 s deadline
-   exceeds the monitor's own `period + grace - 40`, then unpauses, polls `status` for `up`, and rolls
-   back to paused if no beat lands. Before the first PATCH it prints a private books file and the exact
-   `--sweep` command that re-pauses whatever the file lists. `--help` carries the full contract.
+   collision or an `--id` that differs from the resolved id (an empty `--id` refuses too), refuses when
+   its fixed 150 s deadline exceeds the monitor's own `period + grace - 40`, refuses a books path it
+   cannot write, then unpauses, polls `status` for `up`, and rolls back to paused if no beat lands.
+   Its LAST output line is the verdict: `arm-one-result name= id= outcome= rc=`. Paste that line, and
+   the `--status` read taken AFTER it (which must say `status=up`), on #9438 for the record PR.
 
-   | exit | meaning | next step |
-   |---|---|---|
-   | 0 | armed (a real beat landed), or the monitor was already live (no-op) | paste the output on #9438 for the record PR |
-   | 1 | refused or failed (collision, pin mismatch, ceiling, unreadable list, or a FAILED rollback) | read the `::error::` line. If it says the books file still lists a monitor, run the printed `ARMED_UNCONFIRMED=<file> bash apps/web-platform/infra/arm-heartbeats.sh --sweep` before anything else |
-   | 2 | no beat within the deadline; the monitor is already back to paused | the soak is not satisfied and the flip stays blocked: read the host's `liveness` events (step 6 query) |
-   | 78 | refused to run under xtrace | rerun without `-x` |
+   | exit | outcome | meaning | next step |
+   |---|---|---|---|
+   | 0 | `armed` | a real beat landed in this run | read `--status`; it must say `status=up`; paste both on #9438 |
+   | 0 | `already-up` | the monitor was already `up`; nothing changed | valid as proof only if you did not interrupt an earlier run; paste the `--status` read |
+   | 1 | `live-not-up` | the monitor is live but `down`, `pending` or otherwise not `up`: NOT armed by this run | read `--status`; if it should be paused, run the recovery below after adding its id to the books file |
+   | 1 | `refused`, `failed` | collision, pin mismatch, ceiling, unreadable list or monitor, no token | nothing was unpaused, except after an unpause error: read `--status`, and if it is not `paused=true` run the recovery below |
+   | 1 | `rollback-failed` | the monitor may be live and unfed; its id is on the books | run the recovery below at once |
+   | 1 | `unpause-recovered` | an unpause reply was lost, the monitor went live and was rolled back to paused | read `--status` (it must say `paused=true`); investigate the API error |
+   | 2 | `rolled-back` | no beat within the deadline; the monitor is back to paused | the soak is not satisfied and the flip stays blocked: read the host's `liveness` events (step 6 query) |
+   | 78 | none | refused to run under xtrace | rerun without `-x` and without `SHELLOPTS` set |
 
-   An interrupt (Ctrl-C) during the 150 s poll leaves the monitor live, because the script has no
-   `trap`; run the printed `--sweep` command. The READONLY token reading `--status` but returning a
-   403 on `--arm-one` is the expected result of passing the wrong secret name. This is the first
-   read of `period` and `grace` from the live list endpoint; if either is absent the arm refuses.
+   Recovery (any interruption, a closed terminal, a failed rollback, or `rc 1` with the books file
+   listing an id). It needs the SAME write-scope token as the arm, and the books path is the one you
+   gave (`$HOME/.arm-one-books`), or the one printed on the `arm-one books:` line:
+
+   ```bash
+   doppler run --only-secrets BETTERSTACK_API_TOKEN -p soleur -c prd_terraform -- \
+     env -u SHELLOPTS -u BASH_ENV -u BASHOPTS bash --noprofile --norc -c \
+     'ARMED_UNCONFIRMED="$HOME/.arm-one-books" BS_TOKEN="$BETTERSTACK_API_TOKEN" exec bash apps/web-platform/infra/arm-heartbeats.sh --sweep'
+   ```
+
+   Then read `--status` (it must say `paused=true`) and delete the books file. Never run the sweep on a
+   monitor that is armed and `up`: it re-pauses every id the file lists. The READONLY token reading
+   `--status` but returning a 403 on `--arm-one` is the expected result of passing the wrong secret
+   name. This is the first read of `period` and `grace` from the live list endpoint; if either is
+   absent the arm refuses.
 8. **Record PR** removes `arming_pending` from the manifest row, ticks the precondition above with
    the run ids and times, refreshes the Better Stack ledger row, and cites one Better Stack incident
    delivered to the Slack channel since ADR-260 (read-only proof that the account route delivers;

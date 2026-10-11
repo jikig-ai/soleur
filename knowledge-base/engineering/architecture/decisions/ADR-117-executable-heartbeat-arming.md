@@ -413,13 +413,24 @@ amendment adds that "exists" must mean "on a path that runs".
 
 The arm gate has a second, operator-invoked entry: `arm-heartbeats.sh --arm-one <name> [--id <id>]`, with
 `--status <name>` as its read-only twin. It runs the same `arm_one` as the per-merge path (op/state gate,
-unpause, poll to `up`, rollback with one retry, sweep books), reaching it through a fourth positional id
-parameter so the six per-merge calls and the inngest block are unchanged. What differs: the monitor is
-resolved by EXACT name over the whole paginated list (exactly one match required; the owner's `--id`, read
-in a separate step, is the independent anchor), the deadline is a fixed 150 s that must not exceed the
-monitor's own `period + grace - 40`, and the books file is a private `mktemp` whose path and `--sweep`
-recovery command are printed before the first PATCH. The first user is the git-data host liveness heartbeat
-([ADR-283](./ADR-283-git-data-host-originated-liveness-heartbeat.md)).
+unpause, poll to `up`, rollback with one retry, sweep books), reaching it through a fourth optional
+positional id parameter, so the six `arm_one` call lines (five per-merge arms and the inngest block) are
+unchanged. The per-merge amendment of 2026-07-18 moved arming out of a hand-run procedure and into the apply
+workflow; this entry does not reverse that for any monitor in the per-merge list. It exists for the one
+monitor ADR-283 deliberately keeps OUT of that list, whose arm is a per-step owner authorization taken after
+a measured soak.
+
+What differs from the per-merge path: the monitor is resolved by EXACT name over the whole paginated list
+(exactly one match required; the owner's `--id`, read in a separate step, is the independent anchor, and an
+empty `--id` refuses); the deadline is a fixed 150 s, a deliberate departure from the per-monitor formula
+default of the 2026-08-20 amendment, bounded by the monitor's own `period + grace - 40` and refused when
+exceeded; the books file is a private `mktemp` (or a caller path checked writable BEFORE the first PATCH)
+whose path and `--sweep` recovery command are printed first; an unpause that answers an error is read back
+and rolled back, because the reply can be lost after the change applied; and rc 0 means armed or already
+`up`, never "live in some other state" (`down`, `pending` exit 1), with a machine verdict line
+`arm-one-result` last. The credential is the operator's account-wide Better Stack write token, injected by
+`doppler run` into one child process, not the CI-scoped token of the apply path. The first user is the
+git-data host liveness heartbeat ([ADR-283](./ADR-283-git-data-host-originated-liveness-heartbeat.md)).
 
 ## Consequences
 

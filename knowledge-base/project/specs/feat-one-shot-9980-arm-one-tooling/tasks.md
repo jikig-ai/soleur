@@ -13,7 +13,7 @@ Refs #9438 (never Closes). PR may `Closes #9980`. No production call, no workflo
 ## Phase 1 - Script plumbing (`apps/web-platform/infra/arm-heartbeats.sh`)
 
 - 1.1 Header CONTRACT block and `usage()`: new modes, `--id`, exit codes, private books; keep the `sed` range ending at `#   mint-unreadable`.
-- 1.2 Argument parser (`--status <name>`, `--arm-one <name> [--id <id>]`), name charset `^[A-Za-z0-9._-]{1,128}$`, id `^[0-9]+$`, refuse extras; optional 4th positional parameter on `arm_one` (no global/env).
+- 1.2 Argument parser (`--status <name>`, `--arm-one <name> [--id <id>]`), name charset `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`, id `^[0-9]+$`, refuse extras; optional 4th positional parameter on `arm_one` (no global/env).
 - 1.3 `hb_resolve_name` (paginated, quoted-prefix pin on `next`, exactly-20-request bound, `.data` must be an array on every page, delimiter `\x1f` with per-field null sentinel, count matches without dedupe, direct call not a subshell, fail closed on any bad page).
 - 1.4 Gate the tfstate/required-env/resource-count block on `MODE == arm`; add the optional 4th-parameter override inside `arm_one`. Do not touch the six `arm_one '` call lines or the inngest block.
 
@@ -34,9 +34,13 @@ Refs #9438 (never Closes). PR may `Closes #9980`. No production call, no workflo
 ## Phase 5 - Targeted verification (no full-suite run)
 
 - 5.1 `bash apps/web-platform/infra/arm-heartbeats.test.sh` (note runtime vs 21000 ms manifest value).
-- 5.2 `plugins/soleur/test/terraform-target-parity.test.ts`: change ONLY the `$(bs_api ` pin 2 -> 3 with rationale; run it with bun.
+- 5.2 `plugins/soleur/test/terraform-target-parity.test.ts`: change ONLY the the `$(bs_api` call-site token (with its trailing space) pin 2 -> 3 with rationale; run it with bun.
 - 5.3 `bash scripts/guard-vacuity-floor.test.sh`; `bash plugins/soleur/test/fixture-relative-assert.test.sh` (regenerate baseline only if it reds); `scripts/lint-shell-trace-credential-refusal.py` on both shell files; `shellcheck`; `plugins/soleur/test/c4-count-parity.test.sh`.
 - 5.4 Confirm `git diff origin/main -- apps/web-platform/infra/arm-heartbeats.sh` has no hunk on the six `arm_one '` call lines or the inngest block.
+
+## Review round (PR #10029)
+
+- R.1 Fix findings from the ten-seat panel: verdict line, `up`-only rc 0, `--id ''`, `ARM_POLL_INTERVAL_S` validation, resolver hardening (pagination type, validate-before-strip, empty id), ambiguous-unpause read-back, books preflight and own-id residue check, runbook wrapper and recovery, ADR wording. Cases ST1b-ST5n, AX2, AO6f-g, AO7b-d, AO10-AO12; mutation rows M35-M42.
 
 ## Phase 6 - Docs
 
