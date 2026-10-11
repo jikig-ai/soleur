@@ -232,3 +232,6 @@ calls; a comma in a `jq` program does not sequence shell commands and can make
 The session-start cleanup entry point is
 `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh`; the similarly
 guessed `plugins/soleur/scripts/git-worktree.sh` path does not exist.
+
+`git worktree list` can enumerate hundreds of unrelated agent worktrees. Pipe
+it through a branch/path filter when only the active task worktree matters.
