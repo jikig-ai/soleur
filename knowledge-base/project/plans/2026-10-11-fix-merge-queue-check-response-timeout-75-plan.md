@@ -298,17 +298,16 @@ logs:
   where: GitHub Actions run logs of apply-github-infra.yml and scheduled-terraform-drift.yml
   retention: GitHub default Actions log retention
 discoverability_test:
-  command: curl -s https://api.github.com/repos/jikig-ai/soleur/rulesets/14145388 | jq -r '.rules[] | select(.type=="merge_queue") | .parameters.check_response_timeout_minutes'
-  expected_output: 75
+  command: curl -fsS --max-time 10 https://api.github.com/repos/jikig-ai/soleur/rulesets/14145388
+  expected_output: check_response_timeout_minutes
 ```
 
-Probe notes (verified in the deepen pass): the first token `curl` is allowlisted and Check 10 runs the command under
-`bash -c`, so the pipeline is valid; no `ssh`, no credentials (public repository, unauthenticated read measured);
-two network calls finish well inside the 15-second cap. `expected_output` is the bare literal `75`: a token of two
-characters or fewer matches only when stdout equals it exactly, so the probe prints `60` before the apply (FAIL) and
-`75` after (PASS). The first draft used `"check_response_timeout_minutes": 75` as the literal; Check 10 splits on
-quotes, so a fragment `check_response_timeout_minutes` would have matched at 60 too (a vacuous probe) and was dropped.
-Selection is by `.type`, never `.rules[0]`.
+Probe notes: this probe verifies that the signal is **discoverable without SSH**, which is what the Observability
+section is for, not that the value is already 75. Check 10 runs it inside the ship-time sandbox against the LIVE ruleset,
+which still reads 60 until the merge applies, so a probe asserting `75` would fail every pre-merge run by construction;
+and Check 10's shell-active reject refuses a pipeline, so the earlier `curl | jq` form could not run at all. The value
+itself is verified after the apply by Phase 4.3: `curl -s https://api.github.com/repos/jikig-ai/soleur/rulesets/14145388 | jq -r '.rules[] | select(.type=="merge_queue") | .parameters.check_response_timeout_minutes'`
+must print `75` (selection by `.type`, never `.rules[0]`). Unauthenticated, no SSH, one network call inside the 15-second cap.
 
 ## Domain Review
 
