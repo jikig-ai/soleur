@@ -314,6 +314,11 @@ AFFECTED_CONSUMED_EDGES=(
   "plugins/soleur/test/c4-from-components.test.sh|C4_PRODUCER_PATHS"
   ".github/scripts/test/run-all.sh|GITHUB_SCRIPTS_SUITE_PATHS"
   "apps/web-platform [unit]|WEBPLAT_APP_PATHS"
+  # Same consumed edge as [unit]: the bundle's app-local half (component) is
+  # subject to the app, and repo-wide is the ungated sibling — post-#9815 its
+  # argv no longer mentions apps/web-platform directly (it execs the wrapper),
+  # so the derivation channel reads only the wrapper's own file.
+  "apps/web-platform [repo-wide+component]|WEBPLAT_APP_PATHS"
   # The infra runner maps to AFFECTED_INFRA_RUNNER_PATHS (declared just below,
   # in THIS lib — the consumed mapping mechanism does not care which file owns
   # the array). Its edges are the same two predicates _infra_in_diff checks.
@@ -570,6 +575,18 @@ AFFECTED_APPS_WEB_PLATFORM_TEST_PARSE_GITLEAKS_ALLOWLISTS_PATHS=(
   "apps/web-platform/scripts/parse-gitleaks-allowlists.mjs"
   "apps/web-platform/test/__synthesized__/parse-gitleaks-allowlists.test.sh"
   "scripts/lib/test-affected-paths.sh"
+)
+# vitest-related (#9815) — suite, wrapper, the runner arm it guards, the lib whose
+# functions+META it exercises, and the config the META derivation reads. The meta
+# set's members outside the app are listed too: a commit narrowing the predicate
+# must run the suite the predicate gates (self-inclusion convention).
+AFFECTED_APPS_WEB_PLATFORM_TEST_VITEST_RELATED_PATHS=(
+  "apps/web-platform/scripts/vitest-related.sh"
+  "apps/web-platform/test/vitest-related.test.sh"
+  "apps/web-platform/vitest.config.ts"
+  "scripts/lib/test-relevance-paths.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/test-all.sh"
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_STAGE_APPROVAL_HOOK_TEST_SH_PATHS=(
   "plugins/soleur/hooks/hooks.json"
