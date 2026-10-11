@@ -3500,7 +3500,9 @@ const SOLE_COPY_ADDRS = [
   "doppler_project.inngest",
   "doppler_environment.inngest_prd",
 ];
-const G2_ADDR_ALT = SOLE_COPY_ADDRS.map((a) => a.replace(/\./g, "\\.")).join("|");
+// Full regexp-metacharacter escape (backslash included) for address literals interpolated into a RegExp.
+const g2Esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const G2_ADDR_ALT = SOLE_COPY_ADDRS.map((a) => g2Esc(a)).join("|");
 const G2_WORKFLOW = "apply-web-platform-infra.yml";
 // MEASURED 2026-10-10 on the live tree with
 //   grep -nE "^[^#]*-(target|replace)[= ]+['\"]?(<the six addresses>)\b" .github/workflows/*.yml
@@ -3552,7 +3554,7 @@ function g2Jobs(text: string): Map<string, string> {
 }
 
 const g2Named = (code: string): string[] =>
-  SOLE_COPY_ADDRS.filter((a) => new RegExp(`(?<![A-Za-z0-9_])${a.replace(/\./g, "\\.")}(?![A-Za-z0-9_])`).test(code));
+  SOLE_COPY_ADDRS.filter((a) => new RegExp(`(?<![A-Za-z0-9_])${g2Esc(a)}(?![A-Za-z0-9_])`).test(code));
 
 const G2_STATE_VERBS: Array<[string, RegExp]> = [
   ["state-rm", /(?<![\w-])state\s+rm(?![\w-])/],
@@ -3767,7 +3769,7 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
     const INPUT = /^ +["']?(expected_inngest_volume_id|phase|wipe_run_id|erasure|clo_attestation_ref)["']?:[ \t]*(?:#.*)?$/m;
     // A retired address reaching terraform as -target / -replace, in either `=` or space form, in any job.
     const ADDR_FLAG = new RegExp(
-      `-(?:target|replace)(?:=|\\s+)["']?(?:${RETIRED_ADDRS.map((a) => a.replace(/\./g, "\\.")).join("|")})\\b`,
+      `-(?:target|replace)(?:=|\\s+)["']?(?:${RETIRED_ADDRS.map((a) => g2Esc(a)).join("|")})\\b`,
     );
     // Non-vacuity: each pattern recognises the form it forbids, so an empty result is not a blind scan.
     expect(JOB.test("  inngest_backstop_retire:\n")).toBe(true);
@@ -4596,7 +4598,7 @@ describe("G2e attribute pin (#9879): the sole-copy attributes on EFFECTIVE text,
     expect(extractAllTargets(extractJobBlock(wf, "apply")).has("logtail_exploration.inngest_luks_wrong_volume")).toBe(true);
     expect(alertsTf).toContain("hcloud_volume.inngest_redis_luks.id");
     const dropTarget = (addr: string): string => {
-      const out = wf.replace(new RegExp(`^[ \\t]*-target=${addr.replace(/\./g, "\\.")} \\\\\\n`, "m"), "");
+      const out = wf.replace(new RegExp(`^[ \\t]*-target=${g2Esc(addr)} \\\\\\n`, "m"), "");
       expect(out).not.toBe(wf);
       return out;
     };
