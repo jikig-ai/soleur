@@ -29,3 +29,19 @@
 - Scope extension: census-driven sweep found 10 more same-class sites beyond the plan's enumeration (cc-dispatcher, debug-probes, repo-resolver-divergence, live-verify/redact, digest-scrub, redact-engine.py, main-health-monitor.yml, cloud-init-git-data.yml, soleur-host-bootstrap.sh, compound-promote PII_REGEX pair, cron-shared comment) — all widened; 6 sites documented-narrower via the allowlist
 - Verification: lint suite 641/641 (census green, floor re-measured 635→641); redact-pii-ghs-shape 13/13; kb-search-lockstep ok; boundary 38/38; vitest git-auth 62/62 + allowlist 250/250 + sibling suites green; tsc clean; eslint 0 errors (pre-existing warnings only); byte-budget lint OK (work/SKILL.md net -6B); orphan-suites clean; test-affected-kb-consumers green after comment rewiring; AC-7 mutation demonstrated (git add -N scratch → STALE flag)
 - Errors: test-affected-kb-consumers flagged the new test's comment citing cutover-inngest.sh (one-hop kb edge) — rewired the citation to bearer-curl.sh; comment quoting the legacy sed arm broke its own census junction — reworded to prose
+
+## Review phase (closed)
+
+PANEL_SHA `6f7cc7c85b` — 12 seats, all returned substantive reports.
+Findings fixed inline across two review commits (`3fe5cb5b`, `f4e92538`)
+plus the fix-round commit `33018e0d84` answering the fix-round seats' own
+F/NF findings: inter-arm redactor ordering (generic arms can shatter a
+rotated token's run mid-body — proven live, `.xyzzy42` tail leak),
+prefix-family completeness (ghr_/ghu_ arms where the family was partial),
+classifier precision (alnum-half, `]`-index advance, `|`-gated arm-d,
+exact-literal allowlist, synthesized arm-d liveness), ADR attribution.
+Verification: lint suite 649/649 (census: 64 literals, all canonical or
+slotted), redact-pii 16/16, boundary 38/38, lockstep ok, founder-check
+245/245, compound-promote 100/0, vitest 405+28, shellcheck/tsc/eslint/
+markdownlint clean, semgrep per-file deterministic clean (wrapper IPC
+broken on host — ran semgrep-core directly).
