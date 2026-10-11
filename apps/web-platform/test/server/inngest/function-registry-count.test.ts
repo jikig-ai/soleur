@@ -159,6 +159,13 @@ const NON_INNGEST_MONITORS = new Set([
   // class, deliberately NOT an Inngest function; its final sentry-heartbeat
   // step pings the check-in. Same class as scheduled-realtime-probe.
   "scheduled-zot-restart-loop",
+  // #9703: GHA-fired (scheduled-inngest-probe-heartbeat.yml, dispatched by the web
+  // watchdog clock every 15 min) — the verifier that feeds the inngest-server probe's
+  // dead-probe Better Stack heartbeat. It must stay external to Inngest scheduling: the
+  // heartbeat is the sole paging surface, so an Inngest-fired feeder would make every
+  // Inngest/web-1 outage page as "probe dark" (ADR-248 amendment 2026-10-11);
+  // no cron-*.ts counterpart. Its final sentry-heartbeat step pings the check-in.
+  "scheduled-inngest-probe-heartbeat",
   // #6374: GHA-fired (scheduled-inngest-health.yml, on.schedule '*/15') — the
   // EXTERNAL inngest health watchdog. It MUST be external to Inngest (a
   // self-hosted inngest cron cannot detect inngest being down — the #5542 blind
