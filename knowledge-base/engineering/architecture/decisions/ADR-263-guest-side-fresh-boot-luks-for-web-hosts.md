@@ -834,7 +834,6 @@ The Inngest attachment is protected by the dispatch gates and the reachability p
 web-1, web-2 or this ADR's decision. It takes effect on the merge of PR #9925 (adopting until that merge's apply and
 read-back, per ADR-282).
 
-
 ## Addendum — 2026-10-11 (#9372, the grade and the ledger flip)
 
 **The grade.** The #6931 grader (`scripts/followthroughs/web2-luks-live-6931.sh`) reported PASS on 2026-10-10 (sweeper run 38083925201: three distinct green days of probe rows after the readiness row of the running instance, boot dd08ac9d, no non-green row) and again on 2026-10-11 (four distinct days, newest probe row about 12 hours old). By the rule of the 2026-10-08 addendum, web-2 moves from *provisioned, proof pending* to *provisioned, proof graded*. The Hetzner read on 2026-10-11 shows the volume (id 107059048, born raw 2026-10-06T18:21Z) attached to web-2 and the old plaintext volume (id 106466179) gone (404).
