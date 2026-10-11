@@ -558,7 +558,7 @@ export async function tryLedgerDivergenceRecovery(
     //      surfaces boundary-race reaps as Sentry events.
     //   2. Synchronous status flip: the lazy sweep deletes the slot but does
     //      NOT update the `conversations` row — the dashboard "Executing" state
-    //      stays stuck until the async reaper (≤300 s). This branch flips it to
+    //      stays stuck until the async reaper (one 300 s tick). This branch flips it to
     //      `failed` immediately.
     //   3. Defense-in-depth: if the RPC's lazy sweep is ever refactored away,
     //      this branch becomes the primary stale-slot reaper without any code

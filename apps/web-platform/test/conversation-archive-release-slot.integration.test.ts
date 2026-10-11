@@ -308,11 +308,10 @@ describe.skipIf(!INTEGRATION_ENABLED)(
     // layer detects `last_heartbeat_at < now() - 240s` and reaps; the
     // lazy sweep in `acquire_conversation_slot` uses the IDENTICAL predicate
     // (authored mig 029, verbatim from mig 093, raised 120→240 by mig 133).
-    // These tests verify
-    // the predicate's boundary behavior end-to-end: a slot just past 240s
-    // is reaped on next acquire (allowing a stuck row to resolve), and a
-    // slot under 240s is preserved (cap_hit fires for a genuinely-active
-    // session).
+    // These tests verify the predicate's boundary behavior end-to-end:
+    // a slot just past 240s is reaped on next acquire (allowing a stuck
+    // row to resolve), and a slot under 240s is preserved (cap_hit fires
+    // for a genuinely-active session).
     // -------------------------------------------------------------------
 
     async function backdateSlotHeartbeat(
@@ -336,10 +335,10 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       // user has a stuck conversation whose slot's heartbeat lapsed past
       // 240 s (raised 120→240 in mig 133). A new conversation must be
       // able to acquire a slot under cap=1 because the lazy sweep reaps
-      // the stale row. Pre-fix this
-      // worked through the lazy sweep alone; the application-layer
-      // reap (Phase 1) uses the identical SQL predicate so this test
-      // also pins the contract the new code depends on.
+      // the stale row. Pre-fix this worked through the lazy sweep alone;
+      // the application-layer reap (Phase 1) uses the identical SQL
+      // predicate so this test also pins the contract the new code
+      // depends on.
       const repoUrl = `https://github.com/synthetic/${randomBytes(4).toString("hex")}`;
       const stuckConv = await insertConversation(repoUrl);
 
