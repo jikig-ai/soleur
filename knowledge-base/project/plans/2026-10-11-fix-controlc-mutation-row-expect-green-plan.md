@@ -119,6 +119,10 @@ A replication of the battery's own sandbox (scratch `TF_REPO` + `git_fixture_env
 - `knowledge-base/project/learnings/2026-10-10-my-must-pass-arm-passed-wherever-its-mutation-landed-and-nothing-noticed-the-arms-could-be-deleted.md`
   — a green arm must land its mutation and be attributable; `expect_green` already asserts the
   edit landed (`cmp -s` check).
+- `knowledge-base/project/learnings/2026-10-06-narrowing-a-guard-leaves-every-sentence-about-its-old-scope.md`
+  — the stale comment block is exactly this class: the guard's matching semantics were narrowed
+  (verbatim → normalized) and every sentence about the old scope (the `expect_red` justification)
+  was left behind. The comment rewrite is the sweep, not an optional nicety.
 
 ### Research decisions
 
@@ -187,6 +191,13 @@ discoverability_test:
   command: grep -c 'expect_green "control-C' apps/web-platform/infra/web-host-provisioner-parity-mutation.test.sh
   expected_output: "1"
 ```
+
+**Suite-shape false hit, argued down (deepen-plan Phase 4.7):** the detection regex
+`[^[:space:]]*[-.]test\.` matches the path `web-host-provisioner-parity-mutation.test.sh`, but the
+command is a single `grep -c` that READS the battery file — it does not run the suite. Measured
+runtime <1 s (executed at plan time 2026-10-11: prints `0` pre-change, `1` post-change). It is the
+smallest command that prints the signal `liveness_signal.what` names; the full battery (~4 min) is
+the test, not the discovery probe.
 
 ## Guard Contract
 
@@ -357,6 +368,44 @@ qualify.
   pre-normalization failure shape recorded in #9970's body.
 - Given the suite runs end-to-end, when all rows resolve, then `mutations_run` still satisfies
   `FLOOR=57` and `pass + fail == cases` — `integration` layer, conservation identity.
+
+## Deepen-Plan Enhancements
+
+**Deepened on:** 2026-10-11 | **Halt gates:** all pass | **Mode:** in-process (no agent-spawn tool
+in this pipeline subagent context; every gate and check ran against the real files)
+
+### Gate results
+
+- Phase 4.4 precedent-diff: precedent exists in-file — `expect_red` rows `M4a`–`M4i` and
+  `expect_green` controls `control-A`/`control-B` are the canonical shapes; the prescribed edit
+  reuses them verbatim (assert + single `s.replace`, same signature order).
+- Phase 4.5 network-outage: no trigger tokens in Overview; plan drives no `terraform apply` —
+  skipped.
+- Phase 4.55 downtime: no downtime-inducing operation — skipped.
+- Phase 4.6 user-brand: PASS (`none` + non-empty scope-out on a sensitive-path diff).
+- Phase 4.7 observability: PASS with one argued-down false hit (see note under the block).
+- Phase 4.8 PAT shapes: clean. Phase 4.9 UI: no UI surface. Phase 4.10 encryption: nothing
+  introduced. Phase 4.11 guard contract: `lint-guard-contract.py` green (1 entry); adequacy read —
+  assembly names the two chokepoints (guard name pipeline, battery harness/counters), matrix is
+  design-derived. Phase 4.12 scope check: 1 unfenced section, all rows mapped, `Recommendation:`
+  present, no `status: BLOCKED`.
+- Phase 4.45 verify-the-negative (in-process): `expect_green` body confirmed to not touch
+  `mutations_run` (0 hits inside the function); the stale-only-under-sweep-narrowing claim
+  confirmed against the classifier (`_uncovered` is built only from `_dialed_hosts`, which derives
+  from `ssh_resources` — an unswept name can be stale but never uncovered).
+
+### Quality checks
+
+- `21331e94e3` verified: `git rev-parse` resolves and `git merge-base --is-ancestor 21331e94e3
+  origin/main` holds — the normalization squash is on main as claimed.
+- `#9970` OPEN (live issue); `#9860` exists (the canary issue whose session authored the original
+  incompatible `expect_green` shape — kept as provenance in the rewritten comment).
+- Literal consistency: `uncovered=['cosign_trusted_root_v2@web-2']` is spelled identically across
+  Research Insights, Guard Contract, Implementation, and AC-4; it was measured from the guard's
+  live emit, not transcribed.
+- No new ADR, no new labels, no new `SOLEUR_*` markers, no workflow paths edits, no rule-id
+  citations requiring registry checks (`hr-monitor-not-run-in-background-for-polling` in tasks.md
+  is an active index id).
 
 ## Context
 

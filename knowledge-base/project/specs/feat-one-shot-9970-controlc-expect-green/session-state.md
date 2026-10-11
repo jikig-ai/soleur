@@ -41,4 +41,14 @@
 
 ## Deepen-Plan Phase
 
-- Status: pending
+- Status: complete (in-process — no agent-spawn tool; every halt gate and quality check ran
+  against the real files)
+- Gate results: 4.6 PASS, 4.7 PASS (one argued-down suite-shape false hit on the
+  `*-mutation.test.sh` path in `discoverability_test.command` — it is a `grep` read, not a suite
+  run), 4.8 clean, 4.9/4.10/4.5/4.55 skipped (no trigger), 4.11 lint green + adequacy read,
+  4.12 compliant, 4.4 precedent-diff satisfied in-file, 4.45 verify-the-negative confirmed.
+- Quality checks: `21331e94e3` confirmed ancestor of origin/main; #9970 OPEN; #9860 exists and is
+  kept as comment provenance; M4j anchor literal consistent across all four plan sections.
+- Enhancements applied: suite-shape false-hit note under `## Observability`; the
+  `2026-10-06-narrowing-a-guard…` learning added to Research Insights; `## Deepen-Plan
+  Enhancements` section records the gate ledger.
