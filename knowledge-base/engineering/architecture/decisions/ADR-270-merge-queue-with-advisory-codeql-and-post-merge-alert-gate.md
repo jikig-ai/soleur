@@ -218,7 +218,7 @@ Adopt option A, as declarative IaC in `infra/github/ruleset-ci-required.tf`:
 | `min_entries_to_merge` | `1` | Merge a green candidate immediately. |
 | `min_entries_to_merge_wait_minutes` | `0` | The provider default (5) would add five minutes to every merge. |
 | `max_entries_to_build` | `2` | Speculation (the point of the queue) with bounded runner contention: each entry runs all 25 contexts, so three parallel builds is about 3x the jobs. Raise to 3 only after the canary shows contention is not binding. |
-| `check_response_timeout_minutes` | `60` | Must exceed the slowest required check on `merge_group` including runner start spread: PR wall-clock max 32.8 min plus ADR-032's 2026-09-14 measurement of a 28-minute (1708 s) maximum start spread on a drained group puts spread plus critical path near 43 min. The earlier value (15) was sized on an 8-minute critical path; an under-set value dequeues a green PR and re-creates the starvation. The stall probe threshold is 45 minutes, below this, so a stuck entry can be reported before the queue ejects it silently (best-effort: see "Stall probe"). |
+| `check_response_timeout_minutes` | `75` | Must exceed the slowest required check on `merge_group` including runner start spread: PR wall-clock max 32.8 min plus ADR-032's 2026-09-14 measurement of a 28-minute (1708 s) maximum start spread on a drained group puts spread plus critical path near 43 min. The earlier value (15) was sized on an 8-minute critical path; an under-set value dequeues a green PR and re-creates the starvation. Raised from 60 to 75 on 2026-10-11 after canary item 5 measured a 60.5-minute success (see "Addendum 2026-10-11"). The stall probe threshold is 45 minutes, below this, so a stuck entry can be reported before the queue ejects it silently (best-effort: see "Stall probe"). |
 
 The values equal the `.tf`, the DR skeleton and the `infra/github/README.md`
 table; the parity gate in `tests/scripts/test-audit-ruleset-bypass.sh` (successor
@@ -276,7 +276,7 @@ fire `push` workflows); queue merges are not token pushes, and canary 6 checks i
 `merge-queue-stall-check.yml` files `merge-queue stall: PR #N` (labels
 `merge-queue-stall` and `action-required`, with agent-runnable `gh api graphql` and
 `gh run list --event merge_group` commands in the body) for a queue entry pending
-past 45 minutes, below the 60-minute timeout. It ages only entries at
+past 45 minutes, below the 75-minute timeout. It ages only entries at
 `position <= max_entries_to_build` (2), because an entry deeper in a healthy drain
 waits its turn and can pass 45 minutes from `enqueuedAt` without being stalled
 (`position` being 1-based is assumed, not yet observed on a live entry; if it is
@@ -285,7 +285,7 @@ latency is the threshold plus the schedule delivery delay, and GitHub `schedule:
 delivery on this repository is degraded: the sibling `*/15` workflow
 `scheduled-inngest-health.yml` measured a median gap of about 275 min (n=59 fires,
 max about 479) and `scheduled-actions-queue-health.yml` (`*/30`) gaps of 2.7 to 6 h.
-Against the 15-minute window between threshold and timeout the probe will often miss a
+Against the 30-minute window between threshold and timeout the probe will often miss a
 stuck entry, so no issue is not proof of a healthy queue; it is best-effort. A filed
 issue is a SUSPECTED stall that needs verification, not a confirmed one: the age counts
 from `enqueuedAt`, so an entry promoted to position 1 or 2 after waiting behind others,
@@ -594,7 +594,7 @@ order.
    fence sync pushes per merged PR (before and after the queue).
 10. Measure the `schedule`-event gap of `merge-queue-stall-check.yml`
     (`gh run list --workflow merge-queue-stall-check.yml --event schedule`) against
-    the 15-minute window between the 45-minute threshold and the 60-minute timeout;
+    the 30-minute window between the 45-minute threshold and the 75-minute timeout;
     a wider median gap makes Follow-up (a) the next change (Follow-up (a) landed; the
     dispatched-run spacing and runner-start latency are measured on #9482 after merge).
 
@@ -659,6 +659,19 @@ DIRTY decisions, and its expiry fallback must keep syncing. Trigger: PR 9839 (20
 after it was armed and before it was enqueued, because a hand-written poll loop treated BEHIND as an error; the skill
 text scoped the ban to a Phase 7 poll that had already emitted `queue_wait`, a marker a hand-written loop never emits. Accepted residual: a loop that calls `--step` directly, and the `pre-merge-rebase.sh` hook, are still unguarded
 (tracked in #9869). Rationale and boundaries: `plugins/soleur/skills/ship/references/queue-mode.md`, "Standalone guard".
+
+### Addendum 2026-10-11 (#9454, canary item 5): `check_response_timeout_minutes` 60 to 75
+
+Canary item 5 measured 240 `merge_group` `ci.yml` runs since adoption (2026-10-04, 7 of the 14 days): run
+duration p50 25.0, p95 44.1, longest success 60.5 minutes (above the then-live 60), maximum 106.3 (a stalled run),
+and one `checks_timed_out` ejection of a green-path PR (2026-10-07). 37 of 240 runs failed or were cancelled
+(15.4%, against the 11% flake baseline); the slowest single check was not measured. Item 5's own rule applies: a
+real candidate exceeded the trigger, so `check_response_timeout_minutes` is raised in the same Terraform root, one
+line, to 75 (a 15-minute margin over the longest success). The stall probe threshold stays 45 minutes, so the
+window between threshold and timeout widens from 15 to 30 minutes. Cost: a hung entry can hold the queue up to 15
+minutes longer. The Parameters row, the "Stall probe" section and canary item 10 now state the new value; dated
+records above (Canary results of 2026-10-04, item 5's measurement text, the 2026-10-09 amendment quotation) are
+left as written. Raise again if a success approaches 75. The live value is verified after the apply on #9454.
 
 ## Cost Impacts
 

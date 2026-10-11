@@ -580,7 +580,7 @@ PY
 cp "$WF_REAL" "$SB/control.yml"
 if structural_check "$SB/control.yml" && behav_check "$SB/control.yml" && drain_check "$SB/control.yml"; then pass "M0 positive control: unmutated sandbox copy is GREEN on all engines"; else fail "M0 positive control ($REASON)"; fi
 
-mutate "M1 threshold raised to the timeout -> RED" structural 'threshold 60 >= check_response_timeout_minutes' \
+mutate "M1 threshold raised to the timeout -> RED" structural "threshold $TF_TIMEOUT >= check_response_timeout_minutes" \
   "s.replace(\"STALL_THRESHOLD_MINUTES: '45'\", \"STALL_THRESHOLD_MINUTES: '$TF_TIMEOUT'\")"
 mutate "M2 threshold made non-numeric -> RED" structural 'not numeric' \
   "s.replace(\"STALL_THRESHOLD_MINUTES: '45'\", \"STALL_THRESHOLD_MINUTES: 'soon'\")"
