@@ -2145,7 +2145,15 @@ resource "terraform_data" "deploy_pipeline_fix" {
 # the post-apply probe script, delivered then EXECUTED exactly as
 # terraform_data.cron_egress_firewall's terminal step does on web-1. The loader
 # (cron-egress-nftables.sh), alarm, and systemd units stay birth-frozen until the
-# #9372 rebirth — the issue's stated scope. docker_seccomp_config and
+# #9372 rebirth — the issue's stated scope — EXCEPT the loader, lifted from the
+# freeze here: #9534's resolver tick asserts six enforcement markers including the
+# egress-gateway DOCKER-USER legs, which only the post-#9529 loader installs. A
+# birth-frozen loader cannot satisfy them, so the resolver self-heals every minute
+# forever (measured: enforcement_missing on soleur-web-2 since the #9393 resolver
+# update landed — the file provisioner below exists because that loop is live).
+# The alarm and the systemd units still stay birth-frozen: the unit already runs
+# this same script path, so only the script body needed re-delivery.
+# docker_seccomp_config and
 # apparmor_bwrap_profile stay web-1-only — a seccomp-bwrap.json/apparmor profile merge
 # still leaves web-2 birth-frozen on those files until #7103's wider pass. Same for
 # the CI ssh pubkey: a DEPLOY_SSH_PRIVATE_KEY rotation reaches web-1 via ci-ssh-key.tf
@@ -2180,6 +2188,9 @@ resource "terraform_data" "deploy_pipeline_fix_web2" {
     file("${path.module}/cron-egress-allowlist-cidr.txt"),
     file("${path.module}/cron-egress-resolve.sh"),
     file("${path.module}/cron-egress-postapply-assert.sh"),
+    # #9534 — the loader too: the resolver's six-marker heal check fails forever
+    # against a pre-#9529 (birth-frozen) loader that cannot install the gw legs.
+    file("${path.module}/cron-egress-nftables.sh"),
     hcloud_server.web["web-2"].id,
     local.ghcr_deny_sh,
     local.ghcr_deny_assert_sh,
@@ -2317,6 +2328,12 @@ resource "terraform_data" "deploy_pipeline_fix_web2" {
     source      = "${path.module}/cron-egress-postapply-assert.sh"
     destination = "/usr/local/bin/cron-egress-postapply-assert.sh"
   }
+  # #9534 — the loader itself; the resolver's six-marker heal check is unsatisfiable
+  # without it (a birth-frozen loader has no Phase-4.5 egress-gateway legs).
+  provisioner "file" {
+    source      = "${path.module}/cron-egress-nftables.sh"
+    destination = "/usr/local/bin/cron-egress-nftables.sh"
+  }
 
   provisioner "remote-exec" {
     inline = [
@@ -2334,8 +2351,8 @@ resource "terraform_data" "deploy_pipeline_fix_web2" {
       "chmod 0640 /etc/webhook/hooks.json",
       # #9393 — the three cron-egress artifacts land root:root; the two scripts get
       # the same 0755 the web-1 resource gives them, the carved CIDR file 0644.
-      "chown root:root /usr/local/bin/cron-egress-resolve.sh /usr/local/bin/cron-egress-postapply-assert.sh /etc/soleur/cron-egress-allowlist-cidr.txt",
-      "chmod 0755 /usr/local/bin/cron-egress-resolve.sh /usr/local/bin/cron-egress-postapply-assert.sh",
+      "chown root:root /usr/local/bin/cron-egress-resolve.sh /usr/local/bin/cron-egress-postapply-assert.sh /usr/local/bin/cron-egress-nftables.sh /etc/soleur/cron-egress-allowlist-cidr.txt",
+      "chmod 0755 /usr/local/bin/cron-egress-resolve.sh /usr/local/bin/cron-egress-postapply-assert.sh /usr/local/bin/cron-egress-nftables.sh",
       "chmod 0644 /etc/soleur/cron-egress-allowlist-cidr.txt",
       "visudo -cf /tmp/deploy-inngest-bootstrap.sudoers.staged",
       "install -o root -g root -m 0440 /tmp/deploy-inngest-bootstrap.sudoers.staged /etc/sudoers.d/deploy-inngest-bootstrap",
@@ -2368,6 +2385,7 @@ resource "terraform_data" "deploy_pipeline_fix_web2" {
       "[ \"$(sha256sum /etc/soleur/cron-egress-allowlist-cidr.txt | cut -d' ' -f1)\" = \"${filesha256("${path.module}/cron-egress-allowlist-cidr.txt")}\" ]",
       "[ \"$(sha256sum /usr/local/bin/cron-egress-resolve.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/cron-egress-resolve.sh")}\" ]",
       "[ \"$(sha256sum /usr/local/bin/cron-egress-postapply-assert.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/cron-egress-postapply-assert.sh")}\" ]",
+      "[ \"$(sha256sum /usr/local/bin/cron-egress-nftables.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/cron-egress-nftables.sh")}\" ]",
       # The sudoers grant landed and parses — same four alias assertions as the web-1 bridge.
       "grep -q INFRA_CONFIG_INSTALL /etc/sudoers.d/deploy-inngest-bootstrap",
       "grep -q GIT_LOCK_CHARDEVICE_SWEEP /etc/sudoers.d/deploy-inngest-bootstrap",
