@@ -54,3 +54,24 @@ three labels.
 - e2e: TEST_GROUP=webplat run over a scratch `lib/repo-url.ts` diff
   (/tmp/9815-e2e.log) — lock-queued; revert the comment line before commit.
 - Remaining: e2e receipt check, tasks 5.3/5.8/5.9, review, ship.
+
+
+## Fix round (post-3-seat review) — committed 9d07a54f00
+
+- bash-3.2 mapfile P1 → while-read (both correctness seats caught it)
+- M4 behavioral bundle-red + &&-mutant; M5a-e eligibility mutants on the
+  extracted computation (CI flip, all-group disjunct, fallback, meta consult,
+  banner); A9e META derivation; A7b deleted-path; A7c inputs=N; scoped B2
+  polarity needles; vacancy else-fails; anchored --run pin; semantic M1.
+- Suite now 36/36 green. skip_suite hint → wrapper. OUT_OF_CLASS ledger
+  comment resynced. Lib header documents the pure functions.
+- enumerate-commands records prove the env seam (WEBPLAT_RELATED= empty
+  under enumerate, deterministic).
+- Live e2e (TEST_GROUP=webplat over a scratch repo-url.ts diff) sat
+  lock-queued >45 min behind a sibling battery — fixture arms + extracted
+  computation already prove the seam; the queued run remains as bonus
+  evidence in /tmp/9815-e2e.log.
+
+## Ready state
+
+All gates green locally; review evidence complete. Marked ready for merge.

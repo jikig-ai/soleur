@@ -40,10 +40,10 @@ Plan: `knowledge-base/project/plans/2026-10-11-feat-one-shot-9815-vitest-related
 
 - [x] 5.1 `bash apps/web-platform/test/vitest-related.test.sh` green (all arms + mutants kill)
 - [x] 5.2 `bash scripts/test-all-webplat-gate.test.sh` green
-- [ ] 5.3 `bash scripts/test-all-group-affected.test.sh` + `bash scripts/test-all-affected.test.sh` green
+- [x] 5.3 `bash scripts/test-all-group-affected.test.sh` + `bash scripts/test-all-affected.test.sh` green
 - [x] 5.4 `bash scripts/lint-orphan-test-suites.sh` green
 - [x] 5.5 `bash scripts/battery-tag-authorship.test.sh` + `bash scripts/lint-integration-env-gates.test.sh` green (new argv classifies; adjust the `npm run test:ci` OUT_OF_CLASS ledger entry if unmatched — re-measure, don't carry forward)
-- [ ] 5.6 QG-6 consumer sweep: `git grep -lE 'test:ci|web-platform \[unit\]|repo-wide\+component|WEBPLAT_RELATED|vitest-related' -- scripts apps/web-platform plugins/soleur/test` — run every hit's suite
+- [x] 5.6 QG-6 consumer sweep: `git grep -lE 'test:ci|web-platform \[unit\]|repo-wide\+component|WEBPLAT_RELATED|vitest-related' -- scripts apps/web-platform plugins/soleur/test` — run every hit's suite
 - [x] 5.7 `python3 scripts/lint-guard-contract.py` green against the plan's Guard Contract
-- [ ] 5.8 End-to-end on a scratch app-only diff: receipts show `outcome=related`; meta-diff shows `outcome=full-empty`+banner; zero-resolution shows `outcome=full-zero`
-- [ ] 5.9 Commit and push
+- [x] 5.8 End-to-end on a scratch app-only diff: receipts show `outcome=related`; meta-diff shows `outcome=full-empty`+banner; zero-resolution shows `outcome=full-zero`
+- [x] 5.9 Commit and push
