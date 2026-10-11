@@ -11156,7 +11156,8 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # #9860 fix round (2026-10-11): raised 600 -> 608 (measured 608/608 on the live tree) with eight rows: D10c x7 (rc 1 with no hint and
 # no lines reads error, a non-zero exit after an anchored denial still reports it, an unbalanced fstype quote, an ALLOWED record
 # containing `type=1326 audit(`, and three multi-denial newest-first selections) and D10h2 (the 130-character field cut).
-CI_DEPLOY_ASSERT_FLOOR=608
+# #9860 main sync (2026-10-11): raised 608 -> 609 (measured 609/609 live) for the one CWI-1 row merged from main (vitest --no-color pin).
+CI_DEPLOY_ASSERT_FLOOR=609
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
     "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"
