@@ -45,4 +45,6 @@ Issue: #9956
 
 - [x] 2.1 Verify ACs 1–7 against the diff (AC1/AC7 greps; AC2–AC5 by legs b1–b7).
 - [x] 2.2 `npx markdownlint-cli2` the plan file and this tasks.md before commit.
-- [ ] 2.3 Commit with `Closes #9956` in the PR body via soleur:ship (not the title).
+- [x] 2.3 Review: 11-seat panel + coverage consult + 2 fix rounds (cap-2) — all findings fixed
+  inline; suite 364/364; review trailer pending emit before ship.
+- [ ] 2.4 Commit with `Closes #9956` in the PR body via soleur:ship (not the title).

@@ -30,3 +30,20 @@ None. Harness limitation noted: this Devin harness has no Task/subagent spawn ca
 - Suite: `tests/scripts/test-infra-privileged-tier-census.sh` — 360/360 green (floor raised 351 → 360 for the nine G4c-b1..b7 leg assertions).
 - Ratchets: `fixture-scan.py --rule operand` and `--rule relative` both clean on the edited suite (assert_fixture_dir guards added to `resolve_base_ref`, `materialize_base_dir`, `g4git_row`); `lint-shell-capture-exit.py` 0 new findings.
 - Deviation from tasks.md 1.3: the `BASE_REF` assignment moved from `:82` to the materialization site (~`:2006`) — `resolve_base_ref` needs `assert_fixture_dir`, which is defined after `:82`, so the resolution is deferred to first use. Semantics unchanged.
+
+## Review Phase
+
+- Status: panel complete + fix rounds complete (pending round-2 verifier).
+- Panel: 11 seats (9 parallel + 2 design-pass) over `PANEL_SHA=31cd0fcb69`. 0 P1; convergent P2s
+  (silent tip-fallback arm, b2 checkout dependency) plus ~20 P3s — all fixed inline across
+  `e8dc5bcba2` + `2d4b5f5e00`.
+- Coverage consult: flagged the undriven per-root floor arm, unscrubbed direct resolves, and the
+  comment-only b7 ordering — closed in `a0e4b6c6ee`.
+- Fix round 1 (8 seats + coverage consult) on the fix commits found the scrub applied only inside
+  `g4git_row`, the materialize arm silent, and markers off the `KEY=value` convention — closed in
+  `a0e4b6c6ee` (cap-2 round).
+- Round-2 defect found and fixed during implementation: `env -u IPT_BASE_REF resolve_base_ref`
+  cannot exec a function (env execs binaries only) — the suite caught it red (every fixture leg
+  'base unavailable'); the correct spelling is `unset` inside the command substitution.
+- Suite: 364/364 green after round 2 (floor 360 → 363 → 364; legs b8/b8d/b9 + parity added).
+- Seat tally: seats=28, fix_rounds=1 (round 2 in flight: 8 targeted seats + 1 verifier).
