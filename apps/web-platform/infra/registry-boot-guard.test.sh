@@ -302,7 +302,8 @@ assert "ships via Better Stack Logs with the bearer on curl's stdin config (all 
   "[ \"\$(grep -cF 'header = \"Authorization: Bearer %s\"' '$CI')\" = 4 ] && [ \"\$(grep -cF -- '--config -' '$CI')\" -ge 4 ]"
 # Continuation-aware: backslash-newline joins are folded first, so a header on the second line of a two-line curl (the shipper's) is seen.
 no_argv_auth_header() { # <file>: rc 0 when no curl line carries an Authorization header (any -H / --header spelling)
-  ! awk 'BEGIN { ORS = "" } /\\$/ { sub(/\\$/, ""); print; next } { print; print "\n" }' "$1" | grep -qiE "curl.*(-H|--header)[ =]*['\"]?authorization"
+  local folded; folded="$(awk 'BEGIN { ORS = "" } /\\$/ { sub(/\\$/, ""); print; next } { print; print "\n" }' "$1")"
+  ! grep -qiE "curl.*(-H|--header)[ =]*['\"]?authorization" <<<"$folded"
 }
 assert "no curl in the template carries an Authorization header on its own argument list, on any continuation line (ADR-280, lint Rule E)" \
   "no_argv_auth_header '$CI'"

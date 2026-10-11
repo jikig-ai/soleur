@@ -5757,8 +5757,9 @@ S5_CENSUS_N="$(awk '{n += $2} END {print n + 0}' <<<"$S5_CENSUS_GOT")"
 S5_CENSUS_FLOOR=4
 if [[ "$S5_CENSUS_GOT" == "$S5_CENSUS_WANT" && "$S5_CENSUS_N" -ge "$S5_CENSUS_FLOOR" ]]; then row "S5 Guard 1 (registry): the derived posting population is exactly the four scripts, each with ONE posting curl that carries no credential header of its own and has --disable, --noproxy and --config - ($S5_CENSUS_N statements; anti-vacuity floor $S5_CENSUS_FLOOR)" ok
 else row "S5 Guard 1 (registry): the derived posting population differs from the four scripts, or a posting curl carries the credential on argv" fail "got='${S5_CENSUS_GOT//$'\n'/;}'"; fi
-if python3 scripts/lint-shell-trace-credential-refusal.py "$S5_REG" 2>&1 | grep -q '^OK:'; then row "S5 Guard 1 (registry): Rule E on the explicit path of the registry template reports no curl with a credential header of its own" ok
-else row "S5 Guard 1 (registry): the registry template still has curl commands that carry a credential header" fail "$(python3 scripts/lint-shell-trace-credential-refusal.py "$S5_REG" 2>&1 | tail -1)"; fi
+S5_REG_LINT2="$(python3 scripts/lint-shell-trace-credential-refusal.py "$S5_REG" 2>&1)"
+if grep -q '^OK:' <<<"$S5_REG_LINT2"; then row "S5 Guard 1 (registry): Rule E on the explicit path of the registry template reports no curl with a credential header of its own" ok
+else row "S5 Guard 1 (registry): the registry template still has curl commands that carry a credential header" fail "$(tail -1 <<<"$S5_REG_LINT2")"; fi
 # Mutation 2: a SECOND credentialed curl in a script (after a compliant first) is judged RED by the census (a per-script set, not "at least one clean").
 S5_REG_MUT="$S4/s5reg/mut-census.yml"
 python3 -I -c '
