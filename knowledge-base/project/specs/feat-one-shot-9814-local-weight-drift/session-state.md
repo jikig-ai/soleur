@@ -1,31 +1,40 @@
-# Session State
+# Session State — feat-one-shot-9814-local-weight-drift
 
-## Plan Phase
-- Plan file: /data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-9814-local-weight-drift/knowledge-base/project/plans/2026-10-11-feat-test-all-local-weight-drift-detector-plan.md
-- Status: complete
+## Status (as of latest commit 3dfccf8d55)
 
-### Errors
-- `gh pr view 9945 --json merged` — unsupported JSON field; corrected to `mergedAt` (verified MERGED 2026-10-11).
-- First plan write blocked by the infrastructure-pattern guard (false-positive on "operator runs" phrasing); rephrased — plan has no infra scope.
-- No Task/skill-invocation tool on this harness — `soleur:plan` and `soleur:deepen-plan` were read and executed inline with sequential-fallback disclosure recorded in the plan.
-- MD038 markdownlint violation (space inside code span); fixed before commit.
-- Deepen gates caught: file-scoped `discoverability_test.command` would trip Check 10's suite-shape detector → dir-scoped; ADR amendment initially framed as ordinal → corrected to ADR-242's dated `## Amendment` convention.
-- Transient: one learning file moved to `workflow-issues/` (re-read at correct path); two `edit` `old_string` misses (corrected).
+**Phase: ship — PR #9990 ready, CI pending, merge queued behind green `test`.**
 
-### Decisions
-- Reuse existing `TEST_TIMING_LOG` plumbing and committed weights; comparator lives in `scripts/lib/test-weight-drift.sh` (`weight_drift_report`, one `LC_ALL=C awk` pass, bash-3.2-safe, always returns 0).
-- Default arm sets `TEST_TIMING_LOG` only when `CI` unset, var unset, and the run is affected-shaped (`_AFFECTED==1` OR `TEST_GROUP==affected` — the two disjoint selectors), probe-guarded by a writability check.
-- Comparator reads `suite-durations*.tsv` (glob, not two literals — "absence in one file is not absence"); the `AFFECTED_*_PATHS` block uses the `glob:` edge kind; missing rows emit `committed=unmeasured`, never silent.
-- Warn-only posture: emit post-`=== N/N suites passed ===` marker via `|| true`, dual stdout/stderr; `WEIGHT_DRIFT_UNAVAILABLE` names the all-zero-elapsed vacuous case; predicate is strict `>2x` AND `>10000ms`.
-- Registration as `ALWAYS_ON_SUITES` + `--incremental --write` regen (ADR-240; never hand-edited); decision recorded as a dated ADR-242 `## Amendment — 2026-10-11 (#9814)`; QG-5 sweeps every manifest-reading suite.
+Done:
+- Implementation: comparator lib (`scripts/lib/test-weight-drift.sh`), default
+  arm + epilogue emit in `test-all.sh`, new always-on suite (50 assertions),
+  manifests regenerated, ALWAYS_ON floor 107→108, ADR-242 amendment.
+- Design-validity pass (2 seats): export→in-shell, boundary-row exclusion,
+  enumerate/named-group decline, ADR glob spelling — fixed in 2e5f8f156a.
+- 10-seat panel: ~25 findings, ALL fix-inline (cdcf406803). Fix-round verifier
+  clean at P1/P2; 4 P3 residuals closed in 6dad75cd1c.
+- Key fixes: sibling-sandbox `TEST_TIMING_LOG=/dev/null` opt-out (12 sites,
+  3 files — orphan-log-retention was deterministically red), `[[ -w && -O ]]`
+  probe, truncate-as-file-probe, armed `[note]`, lib-absent elif note,
+  `--help` paragraph, C6-C9 new arms, M7-M9 new mutations, EUID-0 +
+  EPOCHREALTIME portability guards.
+- Verification: suite 50/50, affected 129/129, orphan-log-retention 54/54,
+  runtime-ceiling 23/23, killed-classification 77/77, fast-tier 9/9,
+  fixture ratchets 62+71 (baseline regenerated), orphan census clean.
+- QA: skipped per rules (no executable Browser/API steps; no web-platform paths).
+- Learning captured: `2026-10-11-a-runner-arm-above-the-splice-window-*`.
+- Merged origin/main into branch (3dfccf8d55) for battery-owed dedup path.
+- Pushed; PR #9990 marked ready.
 
-### Components Invoked
-- `soleur:plan` (read + executed inline; no skill tool exists on this harness)
-- `soleur:deepen-plan` (read + executed inline against the plan path; mechanical halts 4.6–4.12 all pass, `lint-guard-contract.py` green)
-- Inline plan-review panel lenses (DHH/simplicity, Kieran/correctness, architecture-strategist, spec-flow, CTO/devex — sequential-fallback, disclosed)
-- `plugins/soleur/scripts/cloud-detect.sh` → `not-local:no-devin-env`; `scripts/lint-guard-contract.py`; `npx markdownlint-cli2`; `gh` CLI (7 issue/PR verifications); `regenerate-shard-manifest.py --help` (flag verification); git commits `902c49250a` + `d837c44891` pushed
+Pending:
+- CI `test` context green on 3dfccf8d55 (test-scripts 1-8, test-scripts-heavy
+  1-3, test-webplat 1-2, shard-totality-mutations 1-28 legs pending).
+- battery-owed.sh re-check once CI green (expect rc=42 SKIPPABLE — local
+  battery was refused by sibling-run contention, not skipped by choice).
+- `gh pr merge` + Phase 7 post-merge verification + worktree cleanup.
+- Then #9815 (vitest related-files on app diffs).
 
-## Collision Re-probe (post-planning)
-- #9814 still OPEN; no linked PRs; no open PRs citing it in body.
-- Anchor probe over planned edit set: 4 open PRs touch `scripts/test-all.sh` (#9977, #9640, #7390, #6778) — all different-scope (3 stale WIPs + a web-platform feature); merge-conflict risk only, no duplicate work.
-- Verdict: continue.
+## Resume
+
+CI legs are pending on the merge-commit head. When green:
+`bash plugins/soleur/skills/ship/scripts/battery-owed.sh` → rc 42 →
+`gh pr merge 9990 --squash` (or queue semantics per repo) → verify merged.
