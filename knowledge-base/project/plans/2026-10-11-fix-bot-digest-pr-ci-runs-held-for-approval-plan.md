@@ -344,7 +344,7 @@ All paths were checked with `git ls-files`; `tests/scripts/test-weakness-miner.s
       invocation remains; `git push` carries the header via the per-command `GIT_CONFIG_*` environment with a `base64 -w0` (or newline-stripped) header and the trace-variable unset list from the bump script. Command (nothing
       deleted from the protected blocks): `git diff -U0 origin/main -- .github/actions/bot-pr-with-synthetic-checks/action.yml | grep -E '^-[^-].*(GITLEAKS_|lint-fixture-content|lint-credential-path-literals|ALLOWED_PATHS|GITHUB_REF)'` prints nothing.
 - [x] `bash tests/scripts/test-weakness-miner.sh` is green on the branch, and each Guard Contract mutation row turns it RED (battery output in the PR).
-- [ ] The census, `required-checks-canonical-parity.test.sh`, `lint-bot-synthetic-completeness.test.sh`, `c4-model-freshness.test.sh`, `c4-count-parity.test.sh`, `c4-canonical.test.ts`, `lint-shell-trace-credential-refusal.test.sh`
+- [x] The census, `required-checks-canonical-parity.test.sh`, `lint-bot-synthetic-completeness.test.sh`, `c4-model-freshness.test.sh`, `c4-count-parity.test.sh`, `c4-canonical.test.ts`, `lint-shell-trace-credential-refusal.test.sh`
       and `test-argv-bearer-sweep.sh` are green; `bash scripts/lint-orphan-test-suites.sh` reports no orphan.
 - [x] `python3 scripts/lint-guard-contract.py knowledge-base/project/plans/2026-10-11-fix-bot-digest-pr-ci-runs-held-for-approval-plan.md` exits 0 and reports one entry.
 - [x] The new ADR exists, its wording states the evidence and the confound (not a proven rule), and it states the key-level exposure; ADR-241's amendment log carries one line; ADR-232 carries only a one-line pointer;
