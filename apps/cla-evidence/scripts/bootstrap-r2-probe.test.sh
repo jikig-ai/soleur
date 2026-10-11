@@ -291,6 +291,11 @@ t "7.1 the second pair write fails: exit 1 and the mixed-pair warning names prd_
   test "$RC" -eq 1 -a "$(grep -c 'prd_cla may now hold a MIXED pair' <<<"$OUT" || true)" -eq 1
 t "7.2 the second pair write fails: the success line is NOT printed" _not grep -qF 'pushed 4 secrets' <<<"$OUT"
 reset_log
+STUB_PROBE_CODE=200 STUB_SET_FAIL_NAME=R2_CLA_EVIDENCE_ACCESS_KEY_ID run_boot "$ID" "$SECRET"
+t "7.1b the FIRST pair write fails: exit 1, the warning is printed and the secret was never written" \
+  test "$RC" -eq 1 -a "$(grep -c 'prd_cla may now hold a MIXED pair' <<<"$OUT" || true)" -eq 1 \
+    -a "$(grep -c '^SET R2_CLA_EVIDENCE_SECRET ' "$LOGD/doppler.stdin" || true)" -eq 0
+reset_log
 STUB_PROBE_CODE=200 STUB_GET_TRUNC=1 run_boot "$ID" "$SECRET"
 t "7.3 a truncated read-back: exit 1, the lengths are reported and the mixed-pair warning follows" \
   test "$RC" -eq 1 -a "$(grep -c 'read-back from prd_cla does not match' <<<"$OUT" || true)" -eq 1 -a "$(grep -c 'MIXED pair' <<<"$OUT" || true)" -eq 1
@@ -312,7 +317,7 @@ t "3.3 bash -x: neither value reaches the trace" _not grep -qF -e "$ID" -e "$SEC
 # the floor plus its contiguous assignments, and the self-test above asserts passes == 1.
 SELFTEST_PASSES=1
 REAL_PASSES=$((passes - SELFTEST_PASSES))
-MIN_CASES=40
+MIN_CASES=41
 if [[ "$fails" -eq 0 && "$REAL_PASSES" -lt "$MIN_CASES" ]]; then
   printf 'FATAL: anti-vacuity floor — %s real assertions passed, expected at least %s\n' \
     "$REAL_PASSES" "$MIN_CASES" >&2

@@ -217,19 +217,19 @@ probe_body='{"probe":"bootstrap","ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}'
 probe_body_file=$(mktemp)
 trap 'rm -f "$probe_body_file"' EXIT
 r2_sigv4_judge "bootstrap" "$R2_ACCESS_KEY" "$R2_SECRET" R2_S3_ACCESS_KEY_ID R2_S3_SECRET_ACCESS_KEY || exit 2
-probe_rc=0
 probe_code=$(r2_sigv4_curl "bootstrap" "$R2_ACCESS_KEY" "$R2_SECRET" "$probe_endpoint" \
   -sS -o "$probe_body_file" -w "%{http_code}" --max-time 30 \
   -X PUT \
   -H "If-None-Match: *" \
   -H "Content-Type: application/json" \
-  --data-binary "$probe_body") || probe_rc=$?
+  --data-binary "$probe_body" || true)
 probe_code="${probe_code:-000}"
 if [[ "$probe_code" != "200" && "$probe_code" != "201" && "$probe_code" != "412" ]]; then
   red "R2 probe PUT failed: status=$probe_code body=$(tr '\n' ' ' < "$probe_body_file" | head -c 400)"
   red "Refusing to push known-broken creds to Doppler. Verify R2_S3_ACCESS_KEY_ID/SECRET match a freshly-minted R2 dashboard token (see header)."
-  # 64 is the helper refusing the destination or an argument (its own ::error:: line is above): not an egress problem.
-  if [[ "$probe_code" == "000" && "$probe_rc" != "64" ]]; then
+  # The helper refusing the destination or an argument (return 64) cannot happen here: assert_r2_endpoint above already
+  # exits 64 on a non-canonical host, and this call's arguments are fixed. So 000 means curl itself got no response.
+  if [[ "$probe_code" == "000" ]]; then
     red "status=000 also means curl never got a response: this probe needs direct egress to R2 with the system trust store (no proxy, no TLS-inspecting CA)."
   fi
   exit 1

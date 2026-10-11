@@ -241,23 +241,24 @@ for mode in bash-x shellopts id-only secret-only; do
           bash -x "$RC_PUT" signatures/x.json '{"x":1}' </dev/null 2>&1) && rc=0 || rc=$?
   elif [[ "$mode" == secret-only ]]; then
     # only the secret is set (the key id is unset): -x must refuse before the secret is traced.
-    out=$(env -u R2_CLA_EVIDENCE_ACCESS_KEY_ID PATH="$work:$PATH" R2_CLA_EVIDENCE_SECRET="$SECRET" \
+    # prefix assignments and a subshell unset, so no fixture value sits on any process argv
+    out=$( unset R2_CLA_EVIDENCE_ACCESS_KEY_ID; PATH="$work:$PATH" R2_CLA_EVIDENCE_SECRET="$SECRET" \
           R2_CLA_EVIDENCE_BUCKET=soleur-cla-evidence \
           R2_CLA_EVIDENCE_ENDPOINT=https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com \
           bash -x "$RC_PUT" signatures/x.json '{"x":1}' </dev/null 2>&1) && rc=0 || rc=$?
   elif [[ "$mode" == id-only ]]; then
     # only the key id is set (the secret is unset): -x must still refuse before the id is traced.
-    out=$(env -u R2_CLA_EVIDENCE_SECRET PATH="$work:$PATH" R2_CLA_EVIDENCE_ACCESS_KEY_ID="$ID" \
+    out=$( unset R2_CLA_EVIDENCE_SECRET; PATH="$work:$PATH" R2_CLA_EVIDENCE_ACCESS_KEY_ID="$ID" \
           R2_CLA_EVIDENCE_BUCKET=soleur-cla-evidence \
           R2_CLA_EVIDENCE_ENDPOINT=https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com \
           bash -x "$RC_PUT" signatures/x.json '{"x":1}' </dev/null 2>&1) && rc=0 || rc=$?
   else
     # `env`, not a prefix assignment: SHELLOPTS is a readonly variable inside the shell, so
     # `SHELLOPTS=xtrace cmd` fails to apply it; `env` puts it in the child's environment.
-    out=$(env PATH="$work:$PATH" SHELLOPTS=xtrace R2_CLA_EVIDENCE_ACCESS_KEY_ID="$ID" R2_CLA_EVIDENCE_SECRET="$SECRET" \
+    out=$(PATH="$work:$PATH" R2_CLA_EVIDENCE_ACCESS_KEY_ID="$ID" R2_CLA_EVIDENCE_SECRET="$SECRET" \
           R2_CLA_EVIDENCE_BUCKET=soleur-cla-evidence \
           R2_CLA_EVIDENCE_ENDPOINT=https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com \
-          bash "$RC_PUT" signatures/x.json '{"x":1}' </dev/null 2>&1) && rc=0 || rc=$?
+          env SHELLOPTS=xtrace bash "$RC_PUT" signatures/x.json '{"x":1}' </dev/null 2>&1) && rc=0 || rc=$?
   fi
   calls=$(grep -c '^CALL$' "$work/argv.log" || true)
   if [[ "$rc" -eq 78 && "$calls" -eq 0 ]] && ! grep -qF -e "$ID" -e "$SECRET" <<<"$out"; then
