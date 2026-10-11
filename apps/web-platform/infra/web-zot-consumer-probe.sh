@@ -139,14 +139,14 @@ _window_open() {  # <marker-file>
 }
 
 # Per-repo marker: one row per repo per window, whatever the verdict, so "both repos healthy" is a
-# positive observation rather than the absence of a fault line. Reads the R_NAME/R_CODE/R_VERDICT
+# positive observation rather than the absence of a fault line. Reads the R_NAME/R_CODE/R_VERDICT/R_PINV
 # arrays the probe loop fills, and runs BEFORE the exit decision so the 401 path emits it too.
 _repo_markers() {
   local m="${SOLEUR_PROBE_REPOS_MARKER:-/run/web-zot-consumer-probe.repos}" now i
   _window_open "$m" || return 0
   now=$(date +%s 2>/dev/null || echo 0)
   for i in "${!R_NAME[@]}"; do
-    echo "[zot-probe] SOLEUR_ZOT_PROBE_VERDICT repo=${R_NAME[$i]} code=${R_CODE[$i]} verdict=${R_VERDICT[$i]} ts=$now" >&2
+    echo "[zot-probe] SOLEUR_ZOT_PROBE_VERDICT repo=${R_NAME[$i]} code=${R_CODE[$i]} verdict=${R_VERDICT[$i]} ts=$now pin_verdict=${R_PINV[$i]}" >&2
   done
   _stamp "$m" "$now"
 }
@@ -178,7 +178,7 @@ fi
 # Split the list. Empty elements are skipped. A newline in the value, an element that holds whitespace or
 # falls outside the repository-name alphabet, and a list with nothing in it are all FATAL here, before
 # any curl, ping or marker.
-R_NAME=(); R_CODE=(); R_VERDICT=()
+R_NAME=(); R_DIG=(); R_CODE=(); R_VERDICT=(); R_PINV=()
 # `read` takes only the first line: a newline in the value would drop every later element and silently
 # shrink the all-must-pass conjunction, so refuse it before the split.
 case "$REPO" in
@@ -188,6 +188,10 @@ case "$REPO" in
     ;;
 esac
 IFS=',' read -r -a _RAW <<<"$REPO"
+# The ONE digest-ref shape (#10004): `<repo>@sha256:<64 lowercase hex>`, held in a variable so the match is
+# the regex, not a glob, and run under LC_ALL=C so [0-9a-f] is the ASCII range.
+_DIGEST_RE='^sha256:[0-9a-f]{64}$'
+_digest_ok() { local LC_ALL=C; [[ ${1:-} =~ $_DIGEST_RE ]]; }
 for _e in "${_RAW[@]}"; do
   [ -n "$_e" ] || continue
   case "$_e" in
@@ -195,15 +199,29 @@ for _e in "${_RAW[@]}"; do
       echo "[zot-probe] FATAL: ZOT_PROBE_REPO element contains whitespace — refusing to build a URL from it; probe NOT run." >&2
       exit 1
       ;;
+  esac
+  # Split a digest ref off the element. Branch on `*@*` first: `${_e#*@}` returns the WHOLE string when there is
+  # no `@`. A second `@` stays in the remainder and fails the digest match; an empty remainder (`repo@`) fails
+  # it too. A `:tag` is outside the repository alphabet below, so `repo:tag@sha256:...` is refused as a name.
+  _r="$_e"; _d=""
+  if [[ $_e == *@* ]]; then
+    _r="${_e%%@*}"; _d="${_e#*@}"
+    if ! _digest_ok "$_d"; then
+      echo "[zot-probe] FATAL: ZOT_PROBE_REPO element is not a valid repository name or digest ref (<repo> or <repo>@sha256:<64 lowercase hex> only) — refusing to build a URL from it; probe NOT run." >&2
+      exit 1
+    fi
+  fi
+  case "$_r" in
     # OCI repository-name alphabet only (the web element derives from var.image_name, an operator value):
     # a `?`, `#`, `[`, `{` or a dot segment would change the request path or make curl glob, not name a
     # repository. OCI components start and end alphanumeric, so no component may start or end with . _ -.
-    *[!a-z0-9._/-]*|*..*|/*|*/|*//*|[._-]*|*[._-]|*/[._-]*|*[._-]/*)
-      echo "[zot-probe] FATAL: ZOT_PROBE_REPO element is not a valid repository name (lowercase a-z 0-9 . _ / - only) — refusing to build a URL from it; probe NOT run." >&2
+    # The empty repository (`@sha256:...`) is refused here too.
+    ''|*[!a-z0-9._/-]*|*..*|/*|*/|*//*|[._-]*|*[._-]|*/[._-]*|*[._-]/*)
+      echo "[zot-probe] FATAL: ZOT_PROBE_REPO element is not a valid repository name or digest ref (lowercase a-z 0-9 . _ / - only, then an optional @sha256:<64 hex>) — refusing to build a URL from it; probe NOT run." >&2
       exit 1
       ;;
   esac
-  R_NAME+=("$_e")
+  R_NAME+=("$_r"); R_DIG+=("$_d")
 done
 if [ "${#R_NAME[@]}" -eq 0 ]; then
   echo "[zot-probe] FATAL: ZOT_PROBE_REPO has no non-empty element — nothing to probe; probe NOT run." >&2
@@ -230,53 +248,94 @@ _OVR=()
 
 unservable=0
 auth_broke=0
+
+# The ONE request site (#10004), used by tags/list (GET) and by the pinned-manifest HEAD (-I passed as its own
+# leading argument, never an empty-array expansion). NO -f (see header), NO --retry (a probe whose absence is
+# the alarm must not retry its way to green). `user = ...` on the stdin config presents Basic auth (the -u
+# equivalent, kept off argv); -w captures the HTTP code; -m bounds it; a transport failure (unreachable private
+# net) yields the curl default 000.
+_req() {  # <path under /v2/> [-I]
+  curl --disable --noproxy '*' ${2:+"$2"} -s -o /dev/null -w '%{http_code}' -m 10 --config - "http://${ENDPOINT}/v2/${1}" \
+    < <(printf 'user = "%s:%s"\n' "$ZUSER" "$ZTOK") 2>/dev/null || echo 000
+}
+# Sets CODE. (#7262) On a transport failure curl prints `000` via -w AND exits non-zero, so the fallback in
+# _req appends a second one and CODE is `000000`, which would miss the `000)` arm in _classify. Normalize ONLY
+# that exact value: an HTTP code followed by a curl failure (e.g. `404000` when -f is injected) must stay in
+# the catch-all, because zot did answer.
+_fetch() {  # <path under /v2/> [-I]
+  CODE=$(_req "$@")
+  [ -n "$CODE" ] || CODE=000
+  case "$CODE" in 000000) CODE=000 ;; esac
+}
+
+# One classification for both requests. Args: <code> <what: tags|pin> <repo> <ref|empty>. Sets VERDICT and the
+# SAME unservable/auth_broke accumulators for either request, so a pin fault can never be a parallel flag the
+# aggregation does not read. The tags wording is unchanged (ci-deploy.sh and the runbook cite it); a pin fault
+# line adds ref= BEFORE the trailing repo=.
+_classify() {
+  local code="$1" what="$2" r="$3" ref="$4" tail
+  if [ "$what" = pin ]; then tail="ref=${ref} repo=${r}"; else tail="repo=${r}"; fi
+  case "$code" in
+    200)
+      VERDICT=servable; [ "$what" = pin ] && VERDICT=pinned
+      [ -n "$VERBOSE" ] && echo "[zot-probe] ${VERDICT} (200): ${ENDPOINT}/v2/${r}/$([ "$what" = pin ] && echo "manifests/${ref#*@}" || echo tags/list)" >&2
+      ;;
+    404)
+      unservable=1
+      if [ "$what" = pin ]; then
+        VERDICT=pin-missing
+        echo "[zot-probe] SUPPRESS ping: 404 — pinned manifest ${ref} is MISSING from zot while tags/list still answered 200 (the pinned digest was evicted, never mirrored, or garbage-collected; a fresh host pull of it would fail). Absence-of-ping will alarm. ${tail}" >&2
+      else
+        VERDICT=empty
+        echo "[zot-probe] SUPPRESS ping: 404 — zot answered auth but the store is EMPTY/DETACHED for ${r} (the #6400-inside-the-probe case). Absence-of-ping will alarm. ${tail}" >&2
+      fi
+      ;;
+    401)
+      VERDICT=auth-broke; auth_broke=1
+      echo "[zot-probe] HARD FAILURE: 401 — the probe's Basic auth (ZOT_PULL_USER/ZOT_PULL_TOKEN) BROKE. This is NOT 'alive'; suppressing ping AND failing loud so it is not read as a down host. ${tail}" >&2
+      ;;
+    000)
+      VERDICT=unreachable; unservable=1
+      echo "[zot-probe] SUPPRESS ping: 000 — ${ENDPOINT} UNREACHABLE (private-net path to zot down — the L3 target signal). Absence-of-ping will alarm. ${tail}" >&2
+      ;;
+    5??)
+      VERDICT=wedged; unservable=1
+      echo "[zot-probe] SUPPRESS ping: ${code} — zot WEDGED. Absence-of-ping will alarm. ${tail}" >&2
+      ;;
+    *)
+      VERDICT=unexpected; unservable=1
+      echo "[zot-probe] SUPPRESS ping: unexpected code ${code} for ${ENDPOINT}/v2/${r}/$([ "$what" = pin ] && echo "manifests/${ref#*@}" || echo tags/list). Absence-of-ping will alarm. ${tail}" >&2
+      ;;
+  esac
+}
+
 for _i in "${!R_NAME[@]}"; do
   r="${R_NAME[$_i]}"
   if [ -n "${SOLEUR_ZOT_PROBE_STATUS_OVERRIDE:-}" ]; then
     CODE="${_OVR[$_i]:-000}"
     [ -n "$CODE" ] || CODE=000
   else
-    # NO -f (see header). `user = ...` on the stdin config presents Basic auth (the -u equivalent, kept off
-    # argv); -w captures the HTTP code; -m bounds it; a transport failure (unreachable private net)
-    # yields the curl default 000.
-    CODE=$(curl --disable --noproxy '*' -s -o /dev/null -w '%{http_code}' -m 10 --config - "http://${ENDPOINT}/v2/${r}/tags/list" \
-      < <(printf 'user = "%s:%s"\n' "$ZUSER" "$ZTOK") 2>/dev/null || echo 000)
-    [ -n "$CODE" ] || CODE=000
-    # (#7262) On a transport failure curl prints `000` via -w AND exits non-zero, so the fallback
-    # above appends a second one and CODE is `000000`, which misses the `000)` arm below. Normalize
-    # ONLY that exact value: an HTTP code followed by a curl failure (e.g. `404000` when -f is
-    # injected) must stay in the catch-all, because zot did answer.
-    case "$CODE" in 000000) CODE=000 ;; esac
+    _fetch "${r}/tags/list"
   fi
   R_CODE+=("$CODE")
 
   # No early exit in this loop: every repo's line is emitted, so one repo's fault never hides another's.
-  case "$CODE" in
-    200)
-      R_VERDICT+=(servable)
-      [ -n "$VERBOSE" ] && echo "[zot-probe] servable (200): ${ENDPOINT}/v2/${r}/tags/list" >&2
-      ;;
-    404)
-      R_VERDICT+=(empty); unservable=1
-      echo "[zot-probe] SUPPRESS ping: 404 — zot answered auth but the store is EMPTY/DETACHED for ${r} (the #6400-inside-the-probe case). Absence-of-ping will alarm. repo=${r}" >&2
-      ;;
-    401)
-      R_VERDICT+=(auth-broke); auth_broke=1
-      echo "[zot-probe] HARD FAILURE: 401 — the probe's Basic auth (ZOT_PULL_USER/ZOT_PULL_TOKEN) BROKE. This is NOT 'alive'; suppressing ping AND failing loud so it is not read as a down host. repo=${r}" >&2
-      ;;
-    000)
-      R_VERDICT+=(unreachable); unservable=1
-      echo "[zot-probe] SUPPRESS ping: 000 — ${ENDPOINT} UNREACHABLE (private-net path to zot down — the L3 target signal). Absence-of-ping will alarm. repo=${r}" >&2
-      ;;
-    5??)
-      R_VERDICT+=(wedged); unservable=1
-      echo "[zot-probe] SUPPRESS ping: ${CODE} — zot WEDGED. Absence-of-ping will alarm. repo=${r}" >&2
-      ;;
-    *)
-      R_VERDICT+=(unexpected); unservable=1
-      echo "[zot-probe] SUPPRESS ping: unexpected code ${CODE} for ${ENDPOINT}/v2/${r}/tags/list. Absence-of-ping will alarm. repo=${r}" >&2
-      ;;
-  esac
+  _classify "$CODE" tags "$r" ""
+  R_VERDICT+=("$VERDICT")
+
+  # The pinned-manifest HEAD (#10004): only for an element that carries a digest AND whose tag list answered
+  # 200 (during an outage a second request would only add a timeout and a duplicate fault line for the same
+  # repository). Every path appends to R_PINV so the marker emitter never reads an unset index.
+  _dig="${R_DIG[$_i]}"
+  if [ -z "$_dig" ]; then
+    R_PINV+=(none)
+  elif [ "$CODE" != 200 ]; then
+    R_PINV+=(skipped)
+  else
+    _fetch "${r}/manifests/${_dig}" -I
+    _classify "$CODE" pin "$r" "${r}@${_dig}"
+    R_PINV+=("$VERDICT")
+  fi
 done
 
 # Source-4 liveness beacon — fires on EVERY run (rate-limited), independent of the zot verdicts above,

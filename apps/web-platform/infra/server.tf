@@ -1003,7 +1003,7 @@ resource "terraform_data" "zot_consumer_probe_install" {
     file("${path.module}/web-zot-consumer-probe.service"),
     file("${path.module}/web-zot-consumer-probe.timer"),
     local.registry_endpoint,
-    local.zot_probe_repo,
+    local.zot_probe_repo_pinned,
     # Hash the read-scoped probe token so a `-replace` rotation re-fires delivery (see nic-guard).
     nonsensitive(sha256(doppler_service_token.web_probes.key)),
     local.ghcr_deny_sh,
@@ -1041,7 +1041,7 @@ resource "terraform_data" "zot_consumer_probe_install" {
       # DOPPLER_TOKEN (read-scoped web_probes) + HOME=/root on the unit are the two-fold unit-start
       # fix — see the web-private-nic-guard install above. #6438 §1.
       # umask 0137: never world/group-readable — the env file now holds a live prd read token (see nic-guard install).
-      "( umask 0137 && printf 'ZOT_ENDPOINT=%s\\nZOT_PROBE_REPO=%s\\nWEB_ZOT_CONSUMER_URL_KEY=%s\\nDOPPLER_TOKEN=%s\\nDOPPLER_ENABLE_VERSION_CHECK=false\\n' '${local.registry_endpoint}' '${local.zot_probe_repo}' 'WEB_ZOT_CONSUMER_URL_${upper(replace("web-1", "-", "_"))}' '${doppler_service_token.web_probes.key}' > /etc/default/web-zot-consumer-probe )",
+      "( umask 0137 && printf 'ZOT_ENDPOINT=%s\\nZOT_PROBE_REPO=%s\\nWEB_ZOT_CONSUMER_URL_KEY=%s\\nDOPPLER_TOKEN=%s\\nDOPPLER_ENABLE_VERSION_CHECK=false\\n' '${local.registry_endpoint}' '${local.zot_probe_repo_pinned}' 'WEB_ZOT_CONSUMER_URL_${upper(replace("web-1", "-", "_"))}' '${doppler_service_token.web_probes.key}' > /etc/default/web-zot-consumer-probe )",
       "chmod 600 /etc/default/web-zot-consumer-probe",
       "systemctl daemon-reload",
       "systemctl enable --now web-zot-consumer-probe.timer",
