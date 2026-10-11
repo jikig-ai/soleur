@@ -24,6 +24,26 @@ append-only, so no earlier row or line is edited. Docs only, no code, no CI beha
 Draft PR #10040 already exists on this branch. The PR body says `Ref #9728` and carries no close keyword (#9728 stays
 open: S3 is soaking, not exited).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-11 (proportionate pass; no agent fan-out, per the one-line docs scope of the brief)
+**Sections enhanced:** 3 (Scope Check restructured to the gate schema, AC 3 and the Test Scenarios made unambiguous)
+**Checks run:** 4.6 User-Brand Impact present, threshold `none` with scope-out (ADR path is not a sensitive path);
+4.7 skipped (pure docs); 4.8 PAT sweep clean; 4.9 to 4.11 not triggered (no UI, store or connection, guard);
+4.12 exactly one unfenced `## Scope Check` with the three subsections, no `unmapped` row, a `Recommendation:` line.
+Cited state verified live: #9728 OPEN, #9876 MERGED, #9885 MERGED (commit 3ef5aa6e12 is an ancestor of
+`origin/main`), #9454 OPEN, #10040 OPEN draft; the CTO comment URL and the `S3-ACTIVATED` comment URL resolve via
+`gh api`. No AGENTS.md rule ids are cited. The markdown lint config (`.markdownlint.json`) has MD013 off, so the long
+single-line bullet matches its neighbours.
+
+### Key Improvements
+
+1. The Scope Check now follows the schema the 4.12 gate parses (it was prose bullets and would have halted).
+2. AC 3 no longer contradicts itself: the added line necessarily contains the words `S3 live` inside its negation; the
+   AC now asserts exactly that and the test scenario gives the expected counts (1 added, 3 total).
+3. The ADR corpus check confirmed the mechanism (a dated Stage-status line) is the one the ADR prescribes; no rejected
+   alternative applies.
+
 ## Research Insights
 
 **Premise Validation.** Checked: #9728 is OPEN; PR #9876 is merged and carries the CTO comment
@@ -92,8 +112,8 @@ Wording rules, each tied to the brief:
   the plan and tasks files; no other path.
 - [ ] `git diff origin/main -- <ADR>` has no `-` content lines (append-only), and the added line sits after the
   `2026-10-09 S3 amended` line and before `## Context`.
-- [ ] The added line contains `Decision 4 adopting`, `#9728`, `2026-10-11T09:43:31Z`, `2026-10-18`, and the text
-  `S3 live` is NOT recorded.
+- [ ] The added line contains `Decision 4 adopting`, `#9728`, `2026-10-11T09:43:31Z` and `2026-10-18`, and it states
+  that `S3 live` is NOT recorded (the only occurrence of `S3 live` in the line is that negation).
 - [ ] The added line does not contain `accepted` outside the ADR-270 disclaimer, does not contain `exited`, `CI_PUSH_DEDUPE`
   or `S2`.
 - [ ] The existing `status: adopting` front-matter line is unchanged.
@@ -109,7 +129,8 @@ Docs-only; verification is by diff inspection:
 
 - `git diff origin/main -- <ADR> | grep -c '^-[^-]'` returns 0.
 - `grep -n 'Decision 4 adopting' <ADR>` returns exactly one hit, on the line after the S3 amended line.
-- `grep -c 'S3 live' <ADR>` is unchanged apart from the new line's negation (the new line is the only addition).
+- `git diff origin/main -- <ADR> | grep '^+' | grep -c 'S3 live'` returns 1, and that hit is the "NOT recorded" negation;
+  `grep -c 'S3 live' <ADR>` is 3 after the edit (2 on `origin/main` plus the negation).
 
 ## User-Brand Impact
 
@@ -132,17 +153,32 @@ No cross-domain implications detected: internal ADR bookkeeping, no UI, no data,
 
 ## Scope Check
 
-- **Ask mapping.** Ask: append a dated 2026-10-11 line to `### Stage status` recording Decision 4 as adopting (CTO
-  condition 1), docs only, `Ref #9728`, no close keywords, no stage-live claim, no ADR-270-as-evidence, no S2 edit.
-  Mapped to: Implementation (the single Edit) and the Acceptance Criteria bullets above. Every sentence of the ask maps
-  to an item; none is unmapped.
-- **Item provenance.** The line (ask); the diff and PR-body checks (ask); the markdownlint check (project convention,
-  `inferred`, justified because a broken list item in an ADR fails the docs lint); the plan and tasks files
-  (pipeline output, required by the plan skill).
-- **Split assessment.** One concern, one file; no split. CTO conditions 2, 3 and 4 (keep #9454 open, S4 gate wording,
-  webhook-filter deploy check and soak watching) are explicitly NOT in this PR; they are operator or follow-through
-  actions on #9454, #9729 and #9728 and are not tracked here as deferrals because this PR does not defer them, it
-  simply is not their vehicle.
+### Ask Mapping
+
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "append a dated line (2026-10-11) to the \"### Stage status\" list ... recording Decision 4 (draft-PR light checks, CI_DRAFT_LIGHT) as \"adopting\"" | Implementation (single Edit) | mapped |
+| 2 | "The Stage status block is append-only (dated lines under the table, never edit earlier rows)" | AC 1, AC 2 (zero removed lines) | mapped |
+| 3 | "PR body must say \"Ref #9728\" with NO close keywords" | AC 7 | mapped |
+| 4 | "do not claim the stage is exited/live, do not cite ADR-270 as accepted canary evidence, do not touch the S2 (CI_PUSH_DEDUPE) lines" | Wording rules, AC 3, AC 4 | mapped |
+| 5 | "Check the Status section (around lines 15-20) of the ADR for how Decision 4 transitions to adopting and phrase the line consistently" | Research Insights (Status-section reading), Wording rules | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| One appended Stage-status line | "append a dated line (2026-10-11)" | asked |
+| Soak-not-live wording, ADR-270 disclaimer | "do not claim the stage is exited/live, do not cite ADR-270 as accepted canary evidence" | asked |
+| Diff and PR-body acceptance checks | "Docs only, no code" and "NO close keywords" | asked |
+| Markdown lint check (AC 6) | none | inferred: an ADR bullet that breaks the list fails the docs lint in CI, so one run covers it |
+| Plan and tasks files | "Plan only: write only under knowledge-base/project/{plans,specs}/" | asked |
+
+### Split Assessment
+
+- Subsystems touched: 1 - knowledge-base/engineering/architecture/decisions
+- Planned files: 1 edited, 2 created (plan, tasks) | Estimated changed lines: 1
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR. CTO conditions 2, 3 and 4 on #9876 are not part of this ask; they are actions on #9454, #9729 and #9728, and this PR neither defers nor claims them.
 
 ## Observability
 
