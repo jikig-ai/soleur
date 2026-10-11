@@ -265,10 +265,22 @@ def hcl_blocks(hcl, kind):
             i += 1
         yield bm.group(1), hcl[bm.end():i - 1]
 
+# Terraform identifiers legally contain uppercase and hyphens; identity keys
+# are normalized (lower + hyphen->underscore) so `Cosign-Trusted_Root` and
+# `cosign_trusted_root` resolve to one resource for classification (#9970).
+# Normalizing at the boundary — not per-lookup — keeps the ONLY_JUSTIFIED
+# keys, the <base>_web<N> twin lookup and the stale check on one spelling.
+def _norm(n):
+    return n.lower().replace("-", "_")
+
 ssh_resources = {}
 for name, body in hcl_blocks(srv, "terraform_data"):
     if re.search(r'connection\s*\{[^{}]*?\btype\s*=\s*"ssh"', body, re.S):
-        ssh_resources[name] = body
+        nk = _norm(name)
+        if nk in ssh_resources:
+            no(f"1: resource names {name!r} collide after normalization — "
+               "two terraform_data resources must not resolve to one identity")
+        ssh_resources[nk] = body
 
 FLOOR_RESOURCES = 21  # +1 #9151: deploy_pipeline_fix_web2; +2 #9534: egress_gateway + egress_gateway_web2
 if len(ssh_resources) >= FLOOR_RESOURCES:
@@ -370,7 +382,7 @@ _dialed_hosts = {n: set(_DIAL_HOST_RE.findall(b)) for n, b in ssh_resources.item
 # half can ride a NON-SSH delivery channel — deploy_pipeline_fix is local-exec
 # because the webhook bridge delivers server-side, which is coverage all the
 # same (and web-1 is what local-exec deploys act on by construction).
-_all_tf_names = set(re.findall(r'resource "terraform_data" "([^"]+)"', srv))
+_all_tf_names = {_norm(n) for n in re.findall(r'resource "terraform_data" "([^"]+)"', srv)}
 _fleet_extra = {h for hs in _dialed_hosts.values() for h in hs} - FLEET_SSH_HOSTS
 ONLY_JUSTIFIED = {
     "apparmor_bwrap_profile@web-2": "birth-covered: predates web-2 birth",

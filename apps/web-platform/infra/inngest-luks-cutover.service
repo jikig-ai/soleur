@@ -2,6 +2,20 @@
 Description=Inngest Redis AOF LUKS blue-green cutover oneshot (FSM: armed->copying->copied->swapped->done / rollback; #6894)
 After=network-online.target mnt-data.mount inngest-luks-open.service
 Wants=network-online.target
+# SKIP-VS-FAIL (#9939). Both EnvironmentFile= paths below are written by runcmd stages late in
+# first boot, and the timer is not the only possible trigger — this unit's [Install]
+# WantedBy=multi-user.target arm fires if the service is ever enabled, a manual `systemctl
+# start` runs any time, and any future Wants=/Requires= consumer could pull it in before the
+# files exist. An absent file must SKIP the start — one "skipped, unmet condition check"
+# journal notice — never FAIL it into the LUKS channel (the ExecStopPost unit-exit phone-home
+# fires on every attempted-start exit, designed ~30s success ticks included, so a FAILED-start
+# storm is what must stay absent). The fail-closed EnvironmentFile= contract
+# is unchanged: once a start IS attempted, an absent file still fails the unit. Post-provision
+# these files persist, so an absent file on a later boot is a real anomaly — it still skips
+# (a NOTICE the capture needle does not see); the dispatch-side liveness refusal and the
+# no-terminal-flag confirm timeout are the compensating detectors for that case.
+ConditionPathExists=/etc/default/inngest-server
+ConditionPathExists=/etc/default/inngest-luks-volumes
 
 [Service]
 Type=oneshot
@@ -57,7 +71,7 @@ ExecStart=/usr/bin/doppler run --config ${DOPPLER_CONFIG} \
 # ERR trap. systemd's own "Failed with result 'timeout'" line is tagged SYSLOG_IDENTIFIER=systemd,
 # which no Vector source here admits — so without this line the single path that leaves the store
 # half-moved and the writers frozen is the one path with no off-box evidence at all.
-# ExecStopPost runs after a killed or failed ExecStart with $SERVICE_RESULT set.
+# ExecStopPost runs after every attempted ExecStart — killed, failed, or successful — with $SERVICE_RESULT set.
 ExecStopPost=/usr/bin/logger -t inngest-luks-cutover "{\"marker\":\"SOLEUR_INNGEST_LUKS_CUTOVER\",\"reason\":\"unit-exit\",\"service_result\":\"${SERVICE_RESULT}\",\"exit_status\":\"${EXIT_STATUS}\",\"exit_code\":0,\"flag\":\"unit-exit\",\"guard\":\"6894\"}"
 
 [Install]

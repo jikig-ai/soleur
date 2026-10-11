@@ -613,6 +613,8 @@ jobs:
               -target=doppler_secret.inngest_server_probe_heartbeat_url \
               -target=betteruptime_heartbeat.git_data_prd \
               -target=doppler_secret.git_data_heartbeat_url_prd \
+              -target=betteruptime_heartbeat.git_data_host_prd \
+              -target=doppler_secret.git_data_host_heartbeat_url_prd \
               -target=doppler_secret.zot_heartbeat_url_prd \
               -target=random_password.inngest_redis_password_prd \
               -target=doppler_secret.inngest_redis_password_prd \

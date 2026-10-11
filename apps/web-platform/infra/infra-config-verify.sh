@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# REFUSE TO RUN UNDER XTRACE (#7797). This script binds the webhook HMAC secret and the CF Access
+# client credentials; with `-x` the shell prints every expansion, so each one lands in the job log
+# in plaintext BEFORE any `::add-mask::` can take effect. First statement after `set`, because
+# anything above it is already traced.
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
+
 # #7104 PR-B — WHICH PASS IS THIS?
 #
 # The same artifact runs twice: once to sense, and once after the bounded re-push to
@@ -104,6 +112,29 @@ if [[ ! "$EXPECTED_COUNT" =~ ^[0-9]+$ || "$EXPECTED_COUNT" -eq 0 ]]; then
   exit 1
 fi
 echo "Expected delivered-file count (repo FILE_MAP): $EXPECTED_COUNT"
+
+# CREDENTIALS RIDE curl's STDIN CONFIG CHANNEL (`--config -`), never its argument list, which every
+# local user can read via /proc/<pid>/cmdline (#9597, ADR-280); the HMAC key reaches a python3 child
+# in its ENVIRONMENT (the canonical snippet, byte-identical to the other inline copies). The library
+# is not sourced: this script is pinned to a read-only command allow-list (infra-config-verify.test.sh).
+# `|| HMAC=""` sends an empty key or a missing python3 to the guard below, not to a mute abort here.
+# The body is empty (a GET), so the signature is the same on every attempt.
+HMAC=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || HMAC=""
+# PRE-GUARD, BEFORE ANY REQUEST. A refused credential makes zero requests and must NOT reach the
+# HTTP_CODE=000 arm below: that arm says "the webhook LISTENER ITSELF IS DOWN ... P1", a cause nobody
+# measured when the request was never sent. The verdict is recorded here and ACTED ON at the top of the
+# first attempt (right after that attempt's truncation of the status file, so the red-gate alert step
+# reads no frame and is told why by the `credential_refused` output); it has its own message and exit 1
+# (the same red the old argv form produced), so the refusal cannot read as a listener outage.
+# Value-free: it names only the variable.
+_REFUSED=""
+for _cred in HMAC CF_ACCESS_ID CF_ACCESS_SECRET; do
+  # The token alphabet of the library and the other inline copies, judged in the C locale (a subshell:
+  # a function here would be an unlisted command to this script's read-only-allowlist sweep).
+  if ( LC_ALL=C; case "${!_cred:-}" in ''|*[!A-Za-z0-9._~+/=-]*) exit 1 ;; esac ); then continue; fi
+  _REFUSED="$_cred"
+  break
+done
 EXIT_CODE=""
 FILES_FAILED=""
 FILES_WRITTEN=""
@@ -116,13 +147,24 @@ for attempt in 1 2 3; do
   # failure" and tell the operator app health is unaffected. The pre-apply poller has
   # done this since it was written; this is the sibling that was missed.
   : > "$STATUS_RESPONSE"
-  HMAC=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
-  HTTP_CODE=$(curl -s -o "$STATUS_RESPONSE" -w '%{http_code}' \
-    --max-time 10 \
-    -H "X-Signature-256: sha256=${HMAC}" \
-    -H "CF-Access-Client-Id: ${CF_ACCESS_ID}" \
-    -H "CF-Access-Client-Secret: ${CF_ACCESS_SECRET}" \
-    "https://deploy.${APP_DOMAIN_BASE}/hooks/infra-config-status" 2>/dev/null || echo "000")
+  if [[ -n "$_REFUSED" ]]; then
+    echo "infra-config-verify: ${_REFUSED} unusable" >&2
+    echo "SOLEUR_CREDENTIAL_REFUSED script=infra-config-verify reason=token_shape" >&2
+    echo "::error::a deploy-webhook credential (the request signature, the CF Access id or secret) failed the shape check — the status poll could NOT run and NO request was made. The credential is unusable; this says nothing about the listener, so do not read it as a listener outage and do not re-run with allow_missing_status_endpoint."
+    # The status file was just truncated, so the red-gate alert step would read an EMPTY frame and file
+    # "the listener may be down". This output is its own class there: the alert maps it to the existing
+    # `ungraded` arm (nothing was measured) ahead of the frame-derived arms.
+    echo "credential_refused=true" >> "$GITHUB_OUTPUT"
+    exit 1
+  fi
+  # `--disable` FIRST (position is load-bearing: it aborts ~/.curlrc parsing), then `--noproxy '*'`
+  # (ADR-280): without them a runner-level ~/.curlrc or ALL_PROXY redirects this request, credentials
+  # intact, to a host of the attacker's choosing. No `2>/dev/null`: the guard above already refused.
+  HTTP_CODE=$(curl --disable --noproxy '*' -s -o "$STATUS_RESPONSE" -w '%{http_code}' \
+    --max-time 10 --config - \
+    "https://deploy.${APP_DOMAIN_BASE}/hooks/infra-config-status" \
+    < <(printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' \
+          "$HMAC" "$CF_ACCESS_ID" "$CF_ACCESS_SECRET") || echo "000")
 
   if [[ "$HTTP_CODE" == "200" ]]; then
     EXIT_CODE=$(jq -r '.exit_code' "$STATUS_RESPONSE" 2>/dev/null || echo "MISSING")
@@ -430,7 +472,7 @@ elif [[ "$HTTP_CODE" == "200" ]]; then
         unreachable) PRE_DETAIL="the reading taken BEFORE the apply got no response (3 attempts over ~15s). Two readings are consistent with that and this run cannot distinguish them: a transient network blip, OR something restarted or reconfigured the listener outside this workflow — note the apply changed nothing on the host, so a listener that was down before and up after is not explained by this run" ;;
         http404)     PRE_DETAIL="the pre-apply reading returned HTTP 404 (no status endpoint) while the post-apply reading returned 200. On a run that pushed nothing the endpoint should not have appeared — treat this as a host changed outside this workflow, or a transient edge 404" ;;
         malformed)   PRE_DETAIL="the pre-apply reading returned HTTP 200 but carried no numeric start_ts" ;;
-        secret_unavailable) PRE_DETAIL="the pre-apply reading never fired because WEBHOOK_DEPLOY_SECRET could not be read from Doppler — the step DID run and DID record that. A prd credential read failing on the workflow that delivers /etc/default/soleur-doppler-token is its own incident, separate from a missing reading" ;;
+        secret_unavailable) PRE_DETAIL="the pre-apply reading never fired because a credential the probe needs could not be read from Doppler or was unusable; see the pre_frame step's warning — the step DID run and DID record that. A prd credential read failing on the workflow that delivers /etc/default/soleur-doppler-token is its own incident, separate from a missing reading" ;;
         *)           PRE_DETAIL="the pre-apply reading step did not record a result at all (the step did not run, or its result did not reach this step)" ;;
       esac
       echo "::warning::Freshness evidence is DEGRADED on this run. No config push was expected (deploy_pipeline_fix was not replaced) and the status endpoint answered 200 after the apply — but ${PRE_DETAIL}, so this run cannot show the frame was unchanged. VERIFIED: the endpoint answered, the frame parses, its start_ts is not in the future, and no frame postdating this apply was published. NOT VERIFIED: that the frame is byte-identical to the one that preceded this apply. (The per-file digest match is omitted from the VERIFIED list deliberately — on a no-push arm it is guaranteed by construction and is not independent evidence.) The delivery channel is reachable now; this run is recorded in Sentry as op=infra-config-preframe-degraded."

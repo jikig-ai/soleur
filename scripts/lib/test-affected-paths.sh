@@ -32,13 +32,25 @@
 #     coverage) and the census linter flags it RED. Never leave a suite
 #     unclassified on purpose; never classify it wrong to silence the census.
 #
-# AN ENTRY IS A PATH OR A DIRECTORY PREFIX. A trailing "/" denotes a directory
-# prefix match; anything else is a literal path. Keep entries repo-relative.
-# Matching is ANCHORED (#9307): a directory entry selects a suite only when a
-# diff path STARTS with it, a file entry only when a diff path EQUALS it, and a
-# directory written without the trailing "/" is normalised to one. So `test/`
-# does not match `apps/web-platform/test/x.ts` or `specs/feat-x-test-y/spec.md`.
-# Entries rooted at `.` or `..` keep the legacy substring match.
+# AN ENTRY IS A PATH, A DIRECTORY PREFIX, OR A `glob:` PATTERN. A trailing "/"
+# denotes a directory prefix match; anything else is a literal path — except
+# `glob:<literal-head>/<glob-tail>` (#9813), the extension-aware edge for
+# corpus walkers: a diff line under <literal-head> matching <glob-tail> under
+# bash `[[ == ]]` semantics (`*` crosses `/`, so `knowledge-base/**.sh` covers
+# `knowledge-base/x.sh` and `knowledge-base/a/b/c.sh` alike). `glob:` is
+# DECLARED-ARRAY-ONLY: the token extractors never emit it on purpose (a
+# `glob:`-spelled literal in scanned content still hits the same mint arm —
+# widen-only). The relevance arrays DO stay verbatim substring edges — a
+# `glob:` member there is a dead edge the relevance census catches.
+# Malformed entries fail toward coverage: they mint an always-match
+# `^glob:<verbatim>` edge (the malformed-shape invariant — closed charset +
+# repo-relative head — in scripts/test-all.sh _affected_add_edge), and the
+# census linter flags them statically. Keep entries repo-relative. Matching is ANCHORED (#9307): a directory entry
+# selects a suite only when a diff path STARTS with it, a file entry only
+# when a diff path EQUALS it, and a directory written without the trailing
+# "/" is normalised to one. So `test/` does not match
+# `apps/web-platform/test/x.ts` or `specs/feat-x-test-y/spec.md`. Entries
+# rooted at `.` or `..` keep the legacy substring match.
 #
 # BASH 3.2. No `declare -A`. The runner indexes selection by registration
 # ORDINAL and resolves per-label arrays by name (`eval`/indirection idiom).
@@ -105,6 +117,7 @@ ALWAYS_ON_SUITES=(
   "scripts/lint-dual-lockfile-live"
   "scripts/lint-gh-argv-arg-live"
   "scripts/lint-guard-contract-live"
+  "scripts/lint-integration-env-gates-live"
   "scripts/lint-legal-mirror-drift-baseline-live"
   "scripts/lint-legal-registers-live"
   "scripts/lint-legal-scope-block-placement-live"
@@ -926,6 +939,35 @@ AFFECTED_TESTS_SCRIPTS_ARGV_BEARER_SWEEP_PATHS=(
   ".github/workflows/scheduled-prod-version-drift.yml"
   ".github/workflows/scheduled-terraform-drift.yml"
   ".github/workflows/sentry-audit-gate.yml"
+  # S4 (ADR-280): the S4 stage executes the REAL step bodies and scripts it names (extracted from the YAML, run under a
+  # recording curl) and derives the library-user manifest from the tree, so an edit to any consumer must select it.
+  # The repo-wide HMAC census rides the full run: no edge can name "any tracked file".
+  ".github/actions/dispatch-web-redeploy/"
+  ".github/actions/mint-infra-app-token/"
+  ".github/scripts/bump-inngest-bootstrap-pin.sh"
+  ".github/workflows/apply-deploy-pipeline-fix.yml"
+  ".github/workflows/apply-github-infra.yml"
+  ".github/workflows/apply-inngest-rls.yml"
+  ".github/workflows/deploy-inngest-image.yml"
+  ".github/workflows/restart-inngest-server.yml"
+  ".github/workflows/web-platform-release.yml"
+  ".github/workflows/workspaces-luks-cutover.yml"
+  "apps/web-platform/infra/infra-config-apply.sh"
+  "apps/web-platform/infra/infra-config-gate.sh"
+  "apps/web-platform/infra/infra-config-verify.sh"
+  "apps/web-platform/infra/push-infra-config.sh"
+  "apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh"
+  "apps/web-platform/scripts/github-app-key-status.sh"
+  # The census allow-list and the parity audit pin the cutover script (two held-back argv HMAC arms, 17 converted copies); the live
+  # lint row runs the checkout lint on the real tree; the redeploy row sources the seccomp alert emitter and hashes the profile.
+  "scripts/cutover-inngest.sh"
+  "scripts/lint-workflow-local-action-checkout.py"
+  "scripts/seccomp-unenforced-alert.sh"
+  "apps/web-platform/infra/seccomp-bwrap.json"
+  "scripts/inngest-liveness-classify.sh"
+  "scripts/inngest-restart-poll-classify.sh"
+  "plugins/soleur/skills/ship/SKILL.md"
+  "plugins/soleur/skills/postmerge/references/deploy-status-debugging.md"
 )
 
 # tests/scripts/rule-id-regex-parity — derived edges could not reach its subject; declared from the
@@ -1625,10 +1667,23 @@ AFFECTED_PLUGINS_SOLEUR_TEST_TICKET_TRIAGE_CLAUSES_TEST_SH_PATHS=(
 AFFECTED_TESTS_SCRIPTS_DEV_SUITE_MUTEX_WIRING_PATHS=(
   ".github/actions/dev-migration-drift-probe/action.yml"
   ".github/workflows/scheduled-dev-migration-drift.yml"
+  ".github/workflows/scheduled-integration-suites.yml"
   ".github/workflows/tenant-integration.yml"
   "scripts/dev-suite-mutex.sh"
   "scripts/lib/test-affected-paths.sh"
   "tests/scripts/test-dev-suite-mutex-wiring.sh"
+)
+
+# tests/scripts/assert-dev-doppler-scope-wiring — the wiring gate for the
+# shared dev-Doppler boundary script (#9947): its SUT is the script plus the
+# three workflow consumers it pins.
+AFFECTED_TESTS_SCRIPTS_ASSERT_DEV_DOPPLER_SCOPE_WIRING_PATHS=(
+  ".github/workflows/dev-ledger-reconcile.yml"
+  ".github/workflows/scheduled-integration-suites.yml"
+  ".github/workflows/tenant-integration.yml"
+  "scripts/assert-dev-doppler-scope.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/test-assert-dev-doppler-scope-wiring.sh"
 )
 
 # tests/scripts/no-tofu-ssh-mutation — mutation harness for the no-tofu-ssh
@@ -1794,7 +1849,8 @@ AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_ACK_GUARD_TEST_SH_PATHS=(
   "bin/"
   ".claude/"
   ".github/"
-  "knowledge-base/"
+  "glob:knowledge-base/**.sh"
+  "knowledge-base/legal/tenant-dpa-register.md"
   "plugins/"
   "scripts/"
   "test/"
@@ -1811,7 +1867,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_SCRIPT_TEST_SH_PATHS=(
   "bin/"
   ".claude/"
   ".github/"
-  "knowledge-base/"
+  "glob:knowledge-base/**.sh"
   "plugins/"
   "scripts/"
   "test/"
@@ -1828,7 +1884,7 @@ AFFECTED_SCRIPTS_LINT_SHELL_CAPTURE_EXIT_LIVE_PATHS=(
   "bin/"
   ".claude/"
   ".github/"
-  "knowledge-base/"
+  "glob:knowledge-base/**.sh"
   "plugins/"
   "scripts/"
   "test/"
@@ -1882,6 +1938,17 @@ AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
+# scripts/lint-integration-env-gates-battery — mutation battery over the
+# env-gate sentinel + synthetic fixture repos; its verdict moves only with its
+# SUT, itself, or the canonical fixture-dir guard it copies.
+AFFECTED_SCRIPTS_LINT_INTEGRATION_ENV_GATES_BATTERY_PATHS=(
+
+  "scripts/lint-integration-env-gates.sh"
+  "scripts/lint-integration-env-gates.test.sh"
+  "plugins/soleur/test/test-helpers.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # scripts/lint-orphan-test-suites — scans the registration corpus for unregistered suites;
 # subject is every *.test.* tree plus the runner that registers them.
 AFFECTED_SCRIPTS_LINT_ORPHAN_TEST_SUITES_PATHS=(
@@ -1904,7 +1971,13 @@ AFFECTED_SCRIPTS_LINT_TRAP_TEMPFILE_OWNERSHIP_PATHS=(
   "bin/"
   ".claude/"
   ".github/"
-  "knowledge-base/"
+  "glob:knowledge-base/**.sh"
+  "glob:knowledge-base/**.bash"
+  "glob:knowledge-base/**.py"
+  "glob:knowledge-base/**.ts"
+  "glob:knowledge-base/**.mjs"
+  "glob:knowledge-base/**.js"
+  "glob:knowledge-base/*bunfig.toml"
   "plugins/"
   "scripts/"
   "test/"
@@ -1992,7 +2065,7 @@ AFFECTED_SCRIPTS_LINT_SHELL_TRACE_CREDENTIAL_REFUSAL_PATHS=(
   "bin/"
   ".claude/"
   ".github/"
-  "knowledge-base/"
+  "glob:knowledge-base/**.sh"
   "plugins/"
   "scripts/"
   "test/"
@@ -2019,6 +2092,9 @@ AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_AGENT_RUNNABLE_TEST_SH_PATHS=(
   "bin/"
   ".claude/"
   ".github/"
+  # NOT a glob: the Guard-1 corpus is content-keyed, not extension-bounded —
+  # g1_discover scans the whole tree for the generated-script marker on ANY
+  # extension (a kb .md quoting it is in scope), so **.sh would under-cover.
   "knowledge-base/"
   "plugins/"
   "scripts/"

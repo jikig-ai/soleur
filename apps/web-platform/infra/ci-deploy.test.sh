@@ -3184,7 +3184,7 @@ assert_cross_workspace_isolation() {
   # any intended argv change is a conscious edit of EXPECTED here.
   TOTAL=$((TOTAL + 1))
   local expected log_contents n_lines
-  expected="exec -w /app soleur-web-platform-canary /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp CI=true SOLEUR_ISOLATION_TEST_HOST=1 SOLEUR_ISOLATION_TIERS=direct SOLEUR_ISOLATION_IN_IMAGE=1 /usr/local/bin/vitest run --config test/vitest.canary.config.ts"
+  expected="exec -w /app soleur-web-platform-canary /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp CI=true SOLEUR_ISOLATION_TEST_HOST=1 SOLEUR_ISOLATION_TIERS=direct SOLEUR_ISOLATION_IN_IMAGE=1 /usr/local/bin/vitest run --config test/vitest.canary.config.ts --no-color"
   log_contents=$(cat "$d/cwi-argv.log" 2>/dev/null || true)
   n_lines=$(printf '%s\n' "$log_contents" | grep -c . || true)
   if [[ "$rc" -eq 0 && "$n_lines" -eq 1 && "$log_contents" == "$expected" ]]; then
@@ -3380,6 +3380,25 @@ assert_cross_workspace_isolation() {
   else
     FAIL=$((FAIL + 1)); echo "  FAIL: CWI-10 vacuous green must be RED (rc=$rc7 verdict=$v10 reason=$r10)"
     echo "        state file:"; { cat "$d7/wi-state.json" 2>/dev/null || true; } | sed 's/^/          /'
+  fi
+
+  # CWI-10b: ANSI-resilience — vitest colors its summary even under env -i +
+  # CI=true, and the escapes interleave BETWEEN "Tests" and the count
+  # (`Tests  \e[1m\e[32m13 passed`). --no-color (argv, pinned by CWI-1) is the
+  # source fix; the sed strip inside the function is the belt that must keep a
+  # colored pass green — a passing suite may never read vacuous (#9860, the
+  # first deploy carrying a loadable config reported exactly that).
+  local d7b out7b rc7b v10b r10b
+  out7b=$(run_cwi_deploy "export MOCK_CWI_PROBE_OUT=\$' Test Files  1 passed (1)\n      Tests  \e[1m\e[32m13 passed\e[39m\e[2m | \e[22m\e[33m4 skipped\e[39m\e[90m (17)\e[39m'") && rc7b=0 || rc7b=$?
+  d7b=$(printf '%s\n' "$out7b" | sed -n 's/^CWI_ARTIFACT_DIR=//p' | tail -1)
+  v10b=$(jq -r '.verdict // ""' "$d7b/wi-state.json" 2>/dev/null || echo "")
+  r10b=$(jq -r '.reason // ""' "$d7b/wi-state.json" 2>/dev/null || echo "")
+  TOTAL=$((TOTAL + 1))
+  if [[ "$rc7b" -eq 0 && "$v10b" == "pass" && "$r10b" == "ok" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: CWI-10b an ANSI-colored pass summary still reads pass, not vacuous_green"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: CWI-10b ANSI-colored pass must be pass (rc=$rc7b verdict=$v10b reason=$r10b)"
+    echo "        state file:"; { cat "$d7b/wi-state.json" 2>/dev/null || true; } | sed 's/^/          /'
   fi
 
   # CWI-11: the reason channel is load-bearing diagnostics, not a formatter —

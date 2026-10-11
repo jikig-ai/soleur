@@ -108,6 +108,24 @@ for cidr in '10.0.0.0/8' '172.16.0.0/12' '192.168.0.0/16' '100.64.0.0/10' \
   assert_grep "deny file contains $cidr" "^${cidr//./\\.}([[:space:]]|\$)" "$DENY_FILE"
 done
 
+# Format pin (2026-10-10 post-merge incident): the nftables loader strips
+# "<space>#..." but does NOT trim whitespace, so a trailing comment leaves
+# "<cidr><spaces>" → strict CIDR validation dies → cron-egress-firewall.service
+# wedges on BOTH hosts. Every non-comment non-blank line must be a BARE CIDR
+# token — no trailing whitespace, no trailing comment.
+assert_not_grep "no trailing whitespace on any deny line" \
+  '[[:space:]]+$' "$DENY_FILE"
+assert_not_grep "no trailing comments (loader leaves pre-# whitespace)" \
+  '^[[:space:]]*[^#[:space:]][^#]*[[:space:]]#' "$DENY_FILE"
+assert_not_grep "no leading whitespace" \
+  '^[[:space:]]' "$DENY_FILE"
+bad_lines=$(grep -cvE '^[[:space:]]*(#|$)|^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$|^[0-9a-fA-F:]+/[0-9]{1,3}$' "$DENY_FILE" || true)
+if [[ "$bad_lines" == "0" ]]; then
+  ok "every non-comment deny line is a bare CIDR token"
+else
+  no "non-CIDR non-comment deny lines present (loader reject-whole-file)"
+fi
+
 echo "-- auth helper: token-file model --"
 assert_grep "validates token file existence" 'session-tokens' "$AUTH_HELPER"
 assert_grep "emits OK/ERR" 'OK|ERR' "$AUTH_HELPER"

@@ -98,6 +98,11 @@ runs:
             else {repositories: $r, permissions: $p} end') || {
           echo "::error::mint-infra-app-token: 'permissions' must be a non-empty JSON object (e.g. '{\"actions\":\"write\"}') and 'repositories' a non-empty comma list; an unscoped token of this App is refused."; exit 1; }
 
+        # The App JWT reaches curl on its stdin config through the shared library, sourced from the job's
+        # own checkout (ADR-280), so it is never an argument of the transfer process. A missing library is a
+        # hard failure: there is no argv fallback.
+        source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout."; exit 1; }
+
         # The source is the validated project and config, named in argv (never
         # DOPPLER_PROJECT/DOPPLER_CONFIG): a service token is bound to one project, so a
         # token asked for another project is refused by Doppler, and the fixture suite can
@@ -143,14 +148,14 @@ runs:
         echo "::add-mask::$JWT"
 
         curl_rc=0
-        INSTALL_RESP=$(curl -sS --max-time 30 -X POST \
+        INSTALL_RESP=$(bc_curl mint-infra-app-token 'Authorization:Bearer :JWT' -- \
+          -sS --max-time 30 -X POST \
           -d "$scope_body" \
-          -H "Authorization: Bearer $JWT" \
           -H "Accept: application/vnd.github+json" \
           -H "X-GitHub-Api-Version: 2022-11-28" \
           "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens") || curl_rc=$?
         if (( curl_rc != 0 )); then
-          echo "::error::mint-infra-app-token: the installation-token exchange did not complete (curl rc=${curl_rc}: transport failure or timeout)."; exit 1
+          echo "::error::mint-infra-app-token: the installation-token exchange did not complete (curl rc=${curl_rc}: transport failure or timeout; a SOLEUR_CREDENTIAL_REFUSED line above means the JWT was refused before any request)."; exit 1
         fi
         INSTALL_TOKEN=$(jq -r '.token // empty' <<<"$INSTALL_RESP" 2>/dev/null || true)
         if [[ -z "$INSTALL_TOKEN" ]]; then
@@ -168,10 +173,10 @@ runs:
         # A refused grant still ISSUED a token; revoke it (best effort) rather than let
         # it live out its hour.
         revoke() {
-          curl -sS --max-time 10 -X DELETE \
-            -H "Authorization: Bearer $INSTALL_TOKEN" \
+          bc_curl mint-infra-app-token 'Authorization:Bearer :INSTALL_TOKEN' -- \
+            -sS --max-time 10 -X DELETE \
             -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/installation/token" >/dev/null 2>&1 || true
+            "https://api.github.com/installation/token" >/dev/null || true
         }
         # Exact-grant check (#4326): the response must grant exactly what was SENT
         # ($scope_body, the one normalized value), plus the implicit metadata:read.

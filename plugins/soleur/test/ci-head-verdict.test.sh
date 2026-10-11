@@ -285,6 +285,19 @@ row_V15() { local d f
   d=$(mkrow V15-draft-not-bool); jqf "$d" pr.json '.draft = "false"'; vrun "$d" verdict "$PR"; ok V15.draft-not-boolean rc_is 3
   d=$(mkrow V15-no-head); jqf "$d" pr.json 'del(.head)'; vrun "$d" verdict "$PR"; ok V15.no-head rc_is 3
   d=$(mkrow V15-empty-list); addtest "$d" 11 completed failure 6; vrun "$d" verdict "$PR"; ok V15.empty-run-list-is-no-run state_is no-run no-run-after-ready none; ok V15.empty-run-list.rc rc_is 0; }
+# V23: a CONFLICTING PR (mergeable_state dirty) has no pull_request run by construction: no-run reason=conflicting, never
+# stalled (an undo/ready cannot help it); a clean-merging PR in the same state still stalls; a run that exists still decides.
+row_V23() { local d; d=$(mkrow V23); addtest "$d" 11 completed failure 6; jqf "$d" pr.json '.mergeable_state = "dirty"'; setnow "$d" 7800
+  vrun "$d" verdict "$PR"; ok V23.dirty-no-run state_is no-run conflicting none; ok V23.dirty.rc rc_is 0
+  d=$(mkrow V23b); addtest "$d" 11 completed failure 6; jqf "$d" pr.json '.mergeable_state = "clean"'; setnow "$d" 7800
+  vrun "$d" verdict "$PR"; ok V23.clean-no-run-still-stalls state_is stalled undecided-after-120m none
+  d=$(mkrow V23c); addtest "$d" 11 completed failure 6; addrun "$d" 8 in_progress null 2; jqf "$d" pr.json '.mergeable_state = "dirty"'; setnow "$d" 7800
+  vrun "$d" verdict "$PR"; ok V23.dirty-but-a-run-exists-still-stalls state_is stalled undecided-after-120m 8
+  d=$(mkrow V23d); addtest "$d" 11 completed failure 6; jqf "$d" pr.json '.mergeable_state = 7'; setnow "$d" 7800
+  vrun "$d" verdict "$PR"; ok V23.non-string-mergeable-state-is-ignored state_is stalled undecided-after-120m none
+  # a dirty PR whose ready run was CANCELLED is not the "no run can ever appear" case: it still stalls
+  d=$(mkrow V23e); addtest "$d" 11 completed failure 6; addrun "$d" 8 completed cancelled 2; jqf "$d" pr.json '.mergeable_state = "dirty"'; setnow "$d" 7800
+  vrun "$d" verdict "$PR"; ok V23.dirty-with-a-cancelled-run-still-stalls state_is stalled undecided-after-120m 8; }
 # V21: only a COMPLETED + success `test` row short-circuits to green; every other status/conclusion falls through to the
 # run lookup (a cancelled/neutral/skipped/timed_out/action_required/stale/failure row is not green).
 row_V21() { local d c
@@ -578,6 +591,7 @@ run_row row_V16 "V16 an empty gh body fails every subcommand"
 run_row row_V17 "V17 the clock is the server's (Date header / injected), never local"
 run_row row_V18 "V18 one marker, last, closed state set, over every conclusion"
 run_row row_V19 "V19 usage errors exit 2 with no gh call; --repo exports GH_REPO"
+run_row row_V23 "V23 a conflicting PR with no run is no-run/conflicting, never stalled"
 run_row row_V21 "V21 only a completed+success test row short-circuits to green"
 run_row row_V22 "V22 a repo without the draft-light mechanism: n/a, wait is ok at once"
 echo "== ci-head-verdict.sh: wait-ready-run / ready-count =="
@@ -635,18 +649,21 @@ mutant M29 'WAIT_API_ERR=0
 mutant M31 "grep -qE '^jobs:' \"\$WORK/ci.yml\"" "grep -qE '.' \"\$WORK/ci.yml\"" row_V22
 mutant M32 "(#.*)?\$\" \"\$WORK/ci.yml\"" "\$\" \"\$WORK/ci.yml\"" row_V22
 mutant M33 "elif [[ \"\$CMD\" == wait-ready-run ]]; then" "elif false; then" row_W15
+mutant M34 'rs="conflicting"' 'rs="no-run-after-ready"' row_V23
+mutant M36 '"$rs" == no-run-after-ready && "$PR_MSTATE"' '"$PR_MSTATE"' row_V23
+mutant M35 '"$PR_MSTATE" == dirty ]]; then rs=' '"$PR_MSTATE" == clean ]]; then rs=' row_V23
 mutant_selftest
 
 # ── the floor: every row counted, every verdict accounted for ──────────────────────────────
 # Reported through printf + exit, never through pass()/fail() (they are what it backstops).
-MIN_ASSERTIONS=357
+MIN_ASSERTIONS=366
 if [[ "$ASSERTED" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$ASSERTED" "$MIN_ASSERTIONS" >&2; exit 1
 fi
 if [[ $((passes + fails)) -ne "$VERDICTS_EXPECTED" ]]; then
   printf '[FATAL] accounting: %s verdicts recorded for %s rows and mutants\n' "$((passes + fails))" "$VERDICTS_EXPECTED" >&2; exit 1
 fi
-MIN_MUTANTS=32
+MIN_MUTANTS=35
 if [[ "$MUT_RUN" -lt "$MIN_MUTANTS" ]]; then
   printf '[FATAL] mutation floor: only %s mutants ran, floor is %s\n' "$MUT_RUN" "$MIN_MUTANTS" >&2; exit 1
 fi

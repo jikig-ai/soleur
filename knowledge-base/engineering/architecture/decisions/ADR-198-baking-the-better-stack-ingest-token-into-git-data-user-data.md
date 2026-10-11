@@ -546,3 +546,5 @@ transient fault, and within ~1h15 of the upstream recovering
 for an outage longer than that. A dedicated timer rather than the weekly `git-data-gc.timer` is what
 makes the second number about an hour instead of up to seven days — review found the earlier
 wording true only inside the 5-attempt budget.
+
+See also ADR-283 (#9438): the host-originated liveness heartbeat URL is read at runtime from the same scoped Doppler config rather than baked.

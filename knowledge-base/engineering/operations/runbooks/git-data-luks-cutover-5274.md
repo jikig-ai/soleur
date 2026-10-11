@@ -89,6 +89,15 @@ The modes exist (PR2). The `flip` dispatch is refused unless all of these hold:
     `GIT_DATA_STORE_ENABLED` flips.
 - A fresh `git-data-host-replace` plus a `GIT_DATA_LUKS_KEY` rotation immediately before the real
   cutover, so nothing planted during the read-only period survives into it (ADR-220 D6).
+- **The host's own liveness heartbeat is armed and measured (#9438, hard).** The `flip` freezes
+  writes on this host, and the finalizer can only report what it can reach, so a host that is dark
+  between boots must page BEFORE the flip. Satisfied means all of: `soleur-git-data-host-prd` was
+  armed after a measured `up` transition on the CURRENT host (the manifest row's `arming_pending` is
+  gone), and a re-read at the flip dispatch shows it `up` with a `state=ok` event under 15 minutes
+  old and later than that host's `boot_complete`. A box ticked once goes stale at the next replace,
+  so it is RE-READ, never remembered. Procedure and reads:
+  [Liveness heartbeat](#liveness-heartbeat-9438). Until #9943 enforces it in the workflow, this item
+  and its re-read are the only control.
 - **#8101** — remaining: the hooks copy, the post-copy fence readback and the wrappers' mapper
   assertion, carried in #8211 ("Carried from #8101"). The wrapper edit is hash-bound, so it follows
   the [two-PR sequence](git-data-rung2-rehearsal.md#changing-the-payload-the-two-pr-sequence). The
@@ -1146,6 +1155,129 @@ emitter once without the Doppler-injected Better Stack token. That is a bounded 
 failure path, not a second fault. A reopen that stays broken produces THREE events per weekly gc
 tick, one root cause: the reopen's own fatal, gc's unit failure, and gc's mountpoint fatal.
 
+## Liveness heartbeat (#9438)
+
+The git-data host runs its own feeder (`git-data-liveness.timer`, every 60 s). It pings a dedicated
+Better Stack heartbeat, `soleur-git-data-host-prd`, only when its own checks pass; the page is the
+beat's ABSENCE. It says why it withheld through the existing emitter (`stage=liveness`, level
+`info`, message prefix `SOLEUR_GIT_DATA_LIVENESS`), readable without a login to the host.
+Decision record: ADR-283.
+
+**What each signal proves.** `soleur-git-data-prd` (fed by the web hosts) proves only that some web
+host can open a TCP connection to the port; it stays green while the disk is full or the store is
+closed. `soleur-git-data-host-prd` proves host and store health: sshd answers on loopback, the store
+is mounted read-write from the LUKS mapper, its root directory lists and one uncached block of the
+mapper reads, bytes and inodes are under 90 %, and the LUKS reopen and nftables units are loaded and
+have not failed. Neither proves that a
+particular git operation or an erasure call succeeds on a healthy host: the erasure path keeps its
+own `unreachable` and `erasure_outcome` reporting. The live reconcile
+(`bun plugins/soleur/scripts/reconcile-live-heartbeats.ts`) proves only that the monitor EXISTS; that
+the feeder is alive is the soak read below.
+
+**The monitor is born paused and armed only after a measured beat (ADR-117).** The merge of the
+payload PR creates the paused monitor and its Doppler secret (two production writes by the ordinary
+per-merge apply) and nothing else: no host carries the feeder until the owner's replace. Every step
+below that writes (the rehearsal dispatch, the replace, the arm) is the owner's per-step
+authorization; a menu answer is not authorization.
+
+### Order
+
+1. **Payload PR merges.** From this point until step 3, `main` carries no valid rung-2 evidence (the
+   payload PR deletes the voided attestation file), so every git-data birth and replace refuses,
+   an emergency replace included. Owner: the owner. Recommended cap: dispatch the rehearsal within
+   two working days. The only way through the gap is
+   [Break-glass for the rung-2 interlock](#the-rung-2-emergency-replace-gap).
+2. **Rehearsal dispatch on `main`** (`--ref main`, `dry_run=false`), see
+   [the rung-2 two-PR sequence](git-data-rung2-rehearsal.md#changing-the-payload-the-two-pr-sequence).
+3. **Evidence-only PR** (one file, nothing else in the commit).
+4. **Pre-replace read (read-only, owner-authorized):** the monitor reads `paused`, and the secret
+   exists. The status read is the one used in the private-NIC readiness read above, with this
+   monitor's name:
+   `curl -fsS -H "Authorization: Bearer $(doppler secrets get BETTERSTACK_API_TOKEN_READONLY --plain -p soleur -c prd_terraform)" 'https://uptime.betterstack.com/api/v2/heartbeats?per_page=250' | jq '.data[] | select(.attributes.name == "soleur-git-data-host-prd") | {id, status: .attributes.status, paused: .attributes.paused}'`.
+   The secret check never prints the value (`--only-names` prints a bordered table, so the read asks
+   for JSON and tests the key):
+   `doppler secrets --only-names --json -p soleur -c prd_git_data | jq -e 'has("GIT_DATA_HOST_HEARTBEAT_URL")'`
+   (or the payload PR's merge-time apply run read `success`). If the secret is absent the new host
+   boots into `url_unavailable` and heals on its next tick once the secret exists, with no second
+   replace.
+5. **Host replace with key rotation** (ADR-220 D6). This is the replace the cutover already
+   requires, so this change adds none. The monitor is paused, so it pages nothing.
+6. **Pre-arm soak read** (owner-authorized: it uses the Better Stack query token). The host's events
+   land in the git-data Better Stack source, NOT the default table the query script reads, so the
+   tables are pinned (the same pin the boot-poll read above uses). `$A` is the replace run's
+   boot-trail anchor epoch (`boot-trail anchor: <epoch>` in the replace run's log, as in that
+   read), which keeps rows from an earlier host out of the window; the `host_name` and `config`
+   predicates keep a rehearsal host's rows out too. Each output row starts with its timestamp, so
+   the span and the age below are read off it:
+
+   ```bash
+   A=$(gh run view <replace-run-id> --log | sed -nE 's/.*boot-trail anchor: ([0-9]+) .*/\1/p' | head -1)
+   doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
+     --table t520508_soleur_git_data_prd_logs --table-s3 t520508_soleur_git_data_prd_s3 \
+     "SELECT dt, raw FROM (SELECT dt, raw FROM remote(\$BS_TABLE) UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1) WHERE dt > fromUnixTimestamp($A) AND JSONExtractString(raw,'stage') = 'liveness' AND JSONExtractString(raw,'host_name') = 'soleur-git-data' AND JSONExtractString(raw,'config') = 'prd_git_data' ORDER BY dt FORMAT JSONEachRow" \
+     | jq -r '"\(.dt) " + (.raw | fromjson | "\(.state) \(.code) config=\(.config) root_pct=\(.root_pct)")'
+   ```
+
+   Required: at least four `<dt> ok ok config=prd_git_data` rows whose first and last `dt` are at
+   least 30 minutes apart, and no other state after the first `ok`. An `ok ok:last_good` row is a
+   healthy beat sent from the last-tried URL rather than a fresh fetch; the soak is not satisfied
+   while it appears. The 30-minute floor is the owner's to
+   lengthen, knowing that a longer soak widens the replace-to-flip interval ADR-220 D6 wants short.
+   An empty result is not a pass: it means the feeder is not armed or not ticking (see "no events"
+   below).
+7. **Arm** (owner-authorized): unpause the monitor and require a real `up` transition; roll back to
+   paused otherwise. The executable arm and its read-only status are the arming-tooling PR
+   (`--status` and `--arm-one` in `arm-heartbeats.sh`, which today accepts only `--arm`, `--sweep`
+   and `--help`). It must land BEFORE this step and is tracked on #9980, a separate issue because the
+   record PR closes #9438. Do not arm by hand: a manual unpause has no rollback if no beat follows.
+8. **Record PR** removes `arming_pending` from the manifest row, ticks the precondition above with
+   the run ids and times, refreshes the Better Stack ledger row, and cites one Better Stack incident
+   delivered to the Slack channel since ADR-260 (read-only proof that the account route delivers;
+   the incident link comes from the Uptime API incidents list, `GET /api/v2/incidents`).
+   It touches no hash-bound input, so the step-3 evidence stays valid. It carries `Closes #9438`.
+9. **Flip-time re-read** (owner-authorized). At the flip dispatch the precondition is read again:
+   the step-4 status read shows `up`, and the step-6 query (with `$A` from the CURRENT host's
+   replace run, and `AND dt > now() - INTERVAL 15 MINUTE` added to its WHERE clause so the output is
+   bounded) shows at least one `ok` row. No row means the feeder has been silent for 15 minutes.
+
+If the soak fails, a `miss` code on a healthy fresh host is a payload defect: fix forward through
+the two-PR sequence (the thresholds are hash-bound). Only the owner can accept a known-benign miss,
+by a recorded waiver comment on #9438; an agent never waives. A failed arm rolls the monitor back to
+paused and the flip stays blocked.
+
+### Reading an event
+
+Every event carries `state`, `code`, `root_pct` (report-only, never gating) and `config`. A
+`state=ok` summary lands every 10 minutes while healthy, which is also the proof the feeder is still
+ticking: a healthy feeder and a dead timer both produce no `miss` rows, but only the healthy one
+produces `ok` summaries, so a missing summary is evidence a human can read in Better Stack (the
+event is unrouted by design: nothing pages on its absence, the heartbeat does). A persistent miss
+re-emits at most every 30 minutes, and a changed code re-emits at once. A `miss` code may be a
+comma-joined list (`ssh_no_banner,disk_full`): read each element on its own.
+
+| `state` / `code` | Meaning | Action |
+|---|---|---|
+| `ok` / `ok` | every check passed and the ping was accepted | none |
+| `miss` / `ssh_no_banner` | nothing on loopback port 22 answered with an `SSH-` banner within 5 s | the host is up but sshd is not; git-data is excluded from the reboot primitive, so replace is the remedy (see the rung-2 gap section above before dispatching one) |
+| `miss` / `store_unmounted` | `/mnt/git-data` is an existing directory but not a mountpoint (`mountpoint` exits 32; the dependent store checks are skipped) | read the reopen section for `stage:luks_reopen` |
+| `miss` / `store_not_mapper` | the store is not served from `/dev/mapper/git-data` | treat as a plaintext-serving fault: stop, do not flip |
+| `miss` / `store_readonly` | the store is mounted without `rw` (a journal abort or `errors=remount-ro`) | the volume is up and refusing every push and erasure: replace is the remedy; do not flip |
+| `miss` / `store_unreadable` | the store root does not list, or one uncached block of the mapper cannot be read (the device read fails behind a present mount) | as `store_readonly` |
+| `miss` / `disk_full` | bytes used at or above 90 % | growing the volume is a Terraform change through the normal apply path; reclaim is the weekly gc timer |
+| `miss` / `inodes_full` | inodes used at or above 90 % (the binding limit, about 55 to 60 % of bytes) | as above |
+| `miss` / `unit_failed:<name>` | the LUKS reopen or the nftables unit is `failed` | a failed unit stays `failed` until its next successful run: about 17 minutes after a transient failure, and up to about 1h15 after an exhausted reopen ladder (the unit's start-limit window refuses timer ticks). The miss is real for that whole time |
+| `miss` / `unit_missing:<name>` | the unit does not exist, is masked, errored or has a bad setting (`LoadState` is anything but `loaded`) | payload drift: the host is missing a security unit; replace is the remedy |
+| `miss` / `unmeasured:<check>` | a gating measurement could not be read or hung past its 2 s cap (`mountpoint`, `mount_source`, `df_bytes`, `df_inodes`, `units`) | an unreadable instrument withholds the beat and is never read as healthy; if it persists across two `ok`-summary intervals, treat it as a host fault and replace. A process stuck in uninterruptible sleep on a dead device survives the cap, so the tick is ended by the unit timeout and emits nothing: silence plus an absent heartbeat is that case |
+| `ping_fail` / `ping_fail` | the checks passed, Better Stack rejected the ping twice | a vendor or egress fault, distinct from a host fault; the URL is kept as a last-tried fallback and the next tick re-reads the secret first |
+| `ok` / `ok:last_good` | the ping succeeded from the last-tried URL because the secret fetch returned nothing | run the step-4 secret check: if the secret exists the host cannot reach Doppler (replace if it persists); a rotated secret whose old URL the vendor still accepts feeds the OLD monitor, so delete the old heartbeat when rotating |
+| `url_unavailable` / `url_unavailable` | no valid URL in the production config: an absent secret, an empty answer, a malformed value, an unreadable config name, OR a Doppler fetch that failed or timed out with an empty cache | run the step-4 secret check first. Absent: create the secret (the next tick heals). Present: the host cannot reach Doppler, so replace if it persists. The monitor pages once armed |
+| `disarmed` / `disarmed` | a non-production config with the secret absent (a rehearsal host) | none: checks still run and report, no ping by design |
+| (no events) | no `liveness` rows since the boot-trail anchor | the soak is not satisfied and nothing is "healthy": the feeder never armed, the timer is dead or the emit path is down. Read the arm item's own event with the step-6 query, `stage` changed to `liveness_timer` (a `liveness_timer=unarmed` row), and the web-fed `soleur-git-data-prd` state; if both are fine, replace |
+| `liveness_timer=unarmed` | `systemctl enable --now git-data-liveness.timer` failed at first boot (an `info` event on stage `liveness_timer`) | the feeder never ran on this host: replace |
+
+`git-data-gc.service` is deliberately NOT a gating unit: whether a failed weekly maintenance run
+should page is a policy decision that stays on #8093.
+
 ## Sharp edges
 
 - **A pending approval holds `git-data-state`.** A cutover or root-key apply run waiting for its
@@ -1160,8 +1292,10 @@ tick, one root cause: the reopen's own fatal, gc's unit failure, and gc's mountp
   If both of `git-data-luks-reopen-failure.service`'s arms fail (Sentry and Better Stack both
   unreachable from the host), that ladder's fatal is lost; the next hourly ladder re-emits, and a
   later success lands `luks_reopen_ok restarts=<n>`. A host with the store closed AND both sinks
-  unreachable is dark until one recovers — as is every other git-data signal (gc's mountpoint fatal
-  uses the same emitter; the web-side probe checks TCP :22 only).
+  unreachable is dark until one recovers — as is every other git-data EVENT (gc's mountpoint fatal
+  uses the same emitter; the web-side probe checks TCP :22 only). The host's own liveness heartbeat
+  is the exception that does not depend on the sinks: it pages on ABSENCE
+  ([Liveness heartbeat](#liveness-heartbeat-9438)).
 
 ## Rotation
 
@@ -1244,7 +1378,11 @@ as web-1's (header lines + exactly one `ecdsa-sha2-nistp256` line), consumed ONL
   (`feature:account-delete`, `op:git-data-bare-repo-erasure`). No repository exists yet, so nothing is
   left behind. These events are expected for the window, and only for the window: one outside a replace
   window is a real finding.
-- The `soleur-git-data-prd` heartbeat reads `down` for the window.
+- The `soleur-git-data-prd` heartbeat reads `down` for the window. Once armed, the host-originated
+  `soleur-git-data-host-prd` heartbeat pages about six minutes into a planned replace (period 60 s
+  plus grace 300 s): announce the window first. Page, then auto-resolve after the new host's first
+  ticks, is the normal shape. An incident still open after the new host's boot plus two ticks is a
+  failed replace.
 
 ### The blocked-recovery window (from the #8189 merge until the fingerprint PR lands)
 

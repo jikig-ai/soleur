@@ -2080,7 +2080,9 @@ _NL=$'\n'
 
 # Anchored edge match (#9307). `_affected_add_edge` mints `^`-prefixed edges:
 # `^dir/` is a path PREFIX (a diff line that STARTS with dir/), `^file` an EXACT
-# line. The legacy substring match let the bare command word `test` in
+# line, and `^glob:<pattern>` (#9813) a bash-pattern match over the whole line
+# (`*` crosses `/`; every malformed shape matches, so the kind can only widen).
+# The legacy substring match let the bare command word `test` in
 # `bun test <file>` -- which resolves to the repo-root test/ directory -- select
 # its suite for any diff path that merely CONTAINED "test", a knowledge-base-only
 # diff included. Edges without the `^` mark (the relevance arrays, which reach
@@ -2106,6 +2108,43 @@ _diff_edge_hit() {
   fi
   local _n="$_DEH_N"
   case "$e" in
+    glob:*)
+      # Third edge kind (#9813): glob:<literal-head>/<glob-tail> minted by
+      # _affected_add_edge. A diff line under <literal-head> matching <glob-tail>
+      # (bash [[ == ]] semantics — `*` crosses `/`, so `knowledge-base/**.sh`
+      # covers `knowledge-base/x.sh` and `knowledge-base/a/b/c.sh` alike).
+      # malformed-shape invariant — ONE doctrine, FIVE sites: the mint arm in
+      # _affected_add_edge, this in-flight revalidation, the census arm in
+      # scripts/lint-orphan-test-suites.sh, and the covers() oracle in
+      # scripts/test-affected-kb-consumers.test.sh must classify a shape
+      # identically; GLOBENT (registration-only classifier) is a deliberate
+      # superset — admission can only widen, never narrow (see the mint arm).
+      # Every malformed shape returns MATCH here — a glob edge can only widen a
+      # selection, never narrow it. The deeper arms (non-repo-relative head,
+      # non-`/` head, `*`-less tail) are unreachable from minted edges (their
+      # `:` trips the charset arm first) but ARE reachable via hand-placed
+      # `^glob:` entries in relevance arrays — defense-in-depth for that channel.
+      local _g="${e#glob:}" _gh _gt _line
+      case "$_g" in
+        *[!A-Za-z0-9_./*-]*) return 0 ;;    # byte outside the grammar charset → match
+      esac
+      _gh="${_g%%[*?[]*}"
+      case "$_gh" in
+        /*|./*|../*|*"//"*|*"/./"*|*"/../"*) return 0 ;;  # not repo-relative → match
+      esac
+      # (shape checks as [[ ]] — a bare `*) return 0 ;;` here would collide the
+      # substring-unique budget anchor in test-all-killed-classification's fixture)
+      [[ "$_gh" == */ ]] || return 0        # head not /-terminated → match
+      _gt="${_g#$_gh}"
+      [[ "$_gt" == */ ]] && return 0        # tail ends / — unmatchable → match
+      [[ "$_gt" == *\** ]] || return 0      # tail without * → match
+      # Cheap head pre-check — no line under the head means no line can match.
+      [[ "$_n" == *"${_NL}${_gh}"* ]] || return 1
+      while IFS= read -r _line; do
+        [[ -n "$_line" && "$_line" == "$_gh"* && "$_line" == $_g ]] && return 0
+      done <<< "$_DEH_N"
+      return 1
+      ;;
     */) [[ "$_n" == *"${_NL}${e}"* ]] ;;
     *)  [[ "$_n" == *"${_NL}${e}${_NL}"* ]] ;;
   esac
@@ -2276,6 +2315,11 @@ _aff_classify_runner_diff() {
     BEGIN { RUNNER = "scripts/test-all.sh"; INDEX = "scripts/lib/test-affected-paths.sh"
             file = ""; inhunk = 0; seen = 0; nadd = 0; blk = 0
             root = ENVIRON["AFF_RD_ROOT"]
+            # GLOBENT (#9813): the third declared-member shape, admitted wherever the
+            # grammar reads an array-entry line — `glob:<head>/<tail>` with a
+            # metachar-free head ending in /, a tail carrying * and no ?/[.
+            # Anything outside this shape stays semantic — the closed grammar.
+            GLOBENT = "^  \"glob:[A-Za-z0-9_.\\/-]+\\/[A-Za-z0-9_.\\/*-]*\\*[A-Za-z0-9_.\\/*-]*\"( +#.*)?$"
             load(RUNNER, post); load(INDEX, post) }
     {
       line = $0
@@ -2295,17 +2339,17 @@ _aff_classify_runner_diff() {
             # label added in the same diff, and the injectivity rules, are checked by the caller.
             if (body ~ /\r/) { viol("G2-cr", file, cur) }
             else if (blk == 1) {
-              if (body ~ /^  "[A-Za-z0-9_.\/-]+\/?"( +#.*)?$/ || body ~ /^[ \t]*$/ || body ~ /^[ \t]*#/) { }
+              if (body ~ /^  "[A-Za-z0-9_.\/-]+\/?"( +#.*)?$/ || body ~ GLOBENT || body ~ /^[ \t]*$/ || body ~ /^[ \t]*#/) { }
               else if (body == ")") { blk = 0 }
               else { viol("INDEX-SHAPE", file, cur); blk = 0 }
             } else if (body ~ /^[ \t]*$/ || body ~ /^[ \t]*#/) {
               j = cur - 1
               while (j >= 1 && (post[file, j] ~ /^[ \t]*$/ || post[file, j] ~ /^[ \t]*#/)) j--
-              if (!(j >= 1 && (post[file, j] == ")" || post[file, j] ~ /^  "[A-Za-z0-9_.\/-]+\/?"( +#.*)?$/))) viol("INDEX-ANCHOR", file, cur)
+              if (!(j >= 1 && (post[file, j] == ")" || post[file, j] ~ /^  "[A-Za-z0-9_.\/-]+\/?"( +#.*)?$/ || post[file, j] ~ GLOBENT))) viol("INDEX-ANCHOR", file, cur)
             } else if (body ~ /^AFFECTED_[A-Z0-9_]+_PATHS=\($/) {
               j = cur - 1
               while (j >= 1 && (post[file, j] ~ /^[ \t]*$/ || post[file, j] ~ /^[ \t]*#/)) j--
-              if (j >= 1 && (post[file, j] == ")" || post[file, j] ~ /^  "[A-Za-z0-9_.\/-]+\/?"( +#.*)?$/)) {
+              if (j >= 1 && (post[file, j] == ")" || post[file, j] ~ /^  "[A-Za-z0-9_.\/-]+\/?"( +#.*)?$/ || post[file, j] ~ GLOBENT)) {
                 blk = 1; nm = body; sub(/=\($/, "", nm); printf "R\t%s\n", nm
               } else viol("INDEX-ANCHOR", file, cur)
             } else if (body ~ /^  "[A-Za-z0-9_.\/-]+"( +#.*)?$/) {
@@ -2703,20 +2747,75 @@ _affected_rec_read() { # <path>
 # `[[ -e ]]` is the whole test: argv words, `-c` payload tokens and resolved
 # source/import paths are all filtered through it, so garbage never lands in
 # the edge set. A surviving edge is stored ANCHORED (#9307): `^dir/` for a
-# directory (a path prefix), `^file` for a file (an exact line) -- see
-# _diff_edge_hit. Anything rooted at `.`/`..` keeps the legacy unanchored form:
+# directory (a path prefix), `^file` for a file (an exact line), `^glob:` for a
+# declared `glob:<literal-head>/<glob-tail>` entry (#9813) -- see _diff_edge_hit.
+# Anything rooted at `.`/`..` keeps the legacy unanchored form:
 # `.` names the whole tree, and an anchored `^./` could never match a diff line,
 # which would turn a select-everything edge into a select-nothing one.
 _affected_add_edge() {
-  local _p="$1" _nl=$'\n'
+  local _p="$1" _nl=$'\n' _g _gh _gt
   # A newline in a name would forge two entries in the shadow set; it cannot arise from `read` lines.
   case "$_p" in *"$_nl"*) return 0 ;; esac
-  [[ -n "$_p" ]] && _affected_probe e "$_p" || return 0
   case "$_p" in
-    .|..|./*|../*) ;;
+    glob:*)
+      # Third declared-entry kind (#9813): glob:<literal-head>/<glob-tail> — a diff
+      # line under <literal-head> matching <glob-tail>. Minted `^glob:<pattern>`;
+      # the hit arm in _diff_edge_hit owns the match. Fail-toward-match at every
+      # step: a missing head dir degrades to `^<head>/` — the dir-prefix edge the
+      # entry replaced, never narrower; a malformed entry mints `^glob:<entry
+      # verbatim>`, which the hit arm's own malformed rule matches (a bare `^`
+      # would evaluate `*\n\n*` and narrow).
+      _g="${_p#glob:}"
+      case "$_g" in
+        *[\*?[]*) : ;;                      # a metachar is present — the glob grammar applies
+        *) _affected_add_edge "$_g"; return 0 ;;   # none: a literal path entry
+      esac
+      # malformed-shape invariant — ONE doctrine, FIVE sites: this mint arm, the
+      # in-flight revalidation in _diff_edge_hit's glob:* arm, the census arm in
+      # scripts/lint-orphan-test-suites.sh, and the covers() oracle in
+      # scripts/test-affected-kb-consumers.test.sh must classify a shape
+      # identically. Site five — the GLOBENT line shape in the registration-only
+      # classifier — is a DELIBERATE SUPERSET (admits e.g. `../` heads): admission
+      # only marks a diff registration-only, a malformed member still mints
+      # always-match here, and the census REDs it — the superset can never narrow.
+      # The grammar is a CLOSED charset (any byte outside [-A-Za-z0-9_./:*]'s
+      # entry set is malformed — ? [ \ space : are all outside it) and the head
+      # must be a clean repo-relative prefix: a `..` or `/`-headed glob can pass
+      # a -d probe while matching no diff line ever — a dead edge that narrows.
+      # Note the arm also intercepts `glob:`-spelled tokens minted from file
+      # CONTENT (not only declared arrays): a metachar-bearing one mints
+      # malformed → always-match (widen-only by design); a metachar-free one
+      # takes the literal-path recursion above — a real edge if the path exists,
+      # nothing otherwise.
+      case "$_g" in
+        *[!A-Za-z0-9_./*-]*) _p="^glob:${_p}" ;;   # byte outside the grammar charset → verbatim
+        *)
+          _gh="${_g%%[*?[]*}"               # longest leading metachar-free run
+          case "$_gh" in
+            /*|./*|../*|*"//"*|*"/./"*|*"/../"*) _p="^glob:${_p}" ;;  # not repo-relative → verbatim
+            */)
+              _gt="${_g#$_gh}"
+              case "$_gt" in
+                */) _p="^glob:${_p}" ;;     # _gt ends / — no path can match it → verbatim
+                *\**)                       # _gt carries a *
+                  if _affected_probe d "$_gh"; then _p="^glob:${_g}"; else _p="^${_gh}"; fi ;;
+                *) _p="^glob:${_p}" ;;      # _gt without * → malformed → verbatim
+              esac
+              ;;
+            *) _p="^glob:${_p}" ;;          # _gh does not end in / → malformed → verbatim
+          esac
+          ;;
+      esac
+      ;;
     *)
-      if _affected_probe d "$_p"; then _p="${_p%/}/"; fi
-      _p="^$_p"
+      [[ -n "$_p" ]] && _affected_probe e "$_p" || return 0
+      case "$_p" in
+        .|..|./*|../*) ;;
+        *)
+          if _affected_probe d "$_p"; then _p="${_p%/}/"; fi
+          _p="^$_p"
+          ;;
+      esac
       ;;
   esac
   [[ "${_AC_ESET-}" == *"${_nl}${_p}${_nl}"* ]] && return 0
@@ -3614,7 +3713,7 @@ _aff_runner_banner() {
 # never executes. Both exit 4 — "refused, nothing ran" — NOT 3, which #7424
 # reserved for a suite TERMINATED mid-coverage.
 # #9763: 38 heavy/stale labels withdrawn to edge-selection; the floor pins count-5.
-_MIN_ALWAYS_ON_DECLARED=106
+_MIN_ALWAYS_ON_DECLARED=107
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate
@@ -5180,15 +5279,23 @@ if want_scripts; then
   # a DECLARED_TOTAL bump in the battery needs all four edited together, and the shard-totality suites
   # pin both halves (plugins/soleur/test/scripts-shard-totality*.sh).
   if _diff_touches --pr-gated "${LINT_ORPHAN_BATTERY_PATHS[@]}"; then
-    run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-10
-    run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 11-20
+    run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-13
+    run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 14-27
   else
     _relevance_declined=$((_relevance_declined + 2))
     skip_suite "scripts/lint-orphan-test-suites-mutations-a" "relevance" \
-      "bash scripts/lint-orphan-test-suites.test.sh --rows 1-10"
+      "bash scripts/lint-orphan-test-suites.test.sh --rows 1-13"
     skip_suite "scripts/lint-orphan-test-suites-mutations-b" "relevance" \
-      "bash scripts/lint-orphan-test-suites.test.sh --rows 11-20"
+      "bash scripts/lint-orphan-test-suites.test.sh --rows 14-27"
   fi
+  # #9855 env-gate dormancy sentinel. The LIVE line points the census at this
+  # working tree; the battery builds synthetic fixture repos and proves each
+  # mutation row reddens — same live+unit pairing as the orphan lint above.
+  # Registered unconditionally: seconds on a scratch tree, and the sentinel is
+  # the durability half of the scheduled-integration-suites leg, so a PR that
+  # adds a gated suite must meet it on every run, not only on diff-touch.
+  run_suite "scripts/lint-integration-env-gates-live" bash scripts/lint-integration-env-gates.sh
+  run_suite "scripts/lint-integration-env-gates-battery" bash scripts/lint-integration-env-gates.test.sh
   # #7387 legal-corpus write-time gates. Each gate registers its unit suite AND a LIVE run
   # against the working tree: the unit suite proves the gate detects a planted defect in a
   # sandbox, the live line is the only thing that ever points it at the real corpus. The unit
@@ -5381,6 +5488,10 @@ if want_scripts; then
   # calls). Each FAIL arm is driven by one field; the dark-channel arm (0 markers ⇒ FAIL) pins
   # "could not measure" apart from a clean zero.
   run_suite "scripts/anthropic-double-bill-8611" bash scripts/followthroughs/anthropic-double-bill-8611.test.sh
+  # #9905: first-real-runs probe for the S4 credential conversions. The false-FAIL regression arm
+  # (marker text echoed inside a step's run: source) and the per-step exercised proof are driven
+  # through a stub gh that exits 64 on any request it does not expect.
+  run_suite "scripts/bearer-curl-s4-first-runs-9905" bash scripts/followthroughs/bearer-curl-s4-first-runs-9905.test.sh
   # #8151 AC-PM1: exit-code harness for the event-ship-merge merge-base verdict probe.
   # Registered explicitly (orphan-suite class above). Same CONTAMINATION arm as #6297/#8281:
   # every live Better Stack hit for the probe's marker strings has been a `"caller":"api"`
@@ -5946,6 +6057,10 @@ if want_scripts; then
   # gate is separate: the unit suite stubs psql and cannot see YAML — only
   # this file asserts the workflow actually wires acquire/release/anchors.
   run_suite "tests/scripts/dev-suite-mutex-wiring" bash tests/scripts/test-dev-suite-mutex-wiring.sh
+  # Same wiring-gate shape for the shared dev-Doppler boundary script
+  # (#9947): three workflows consume it, and a consumer that drops the call
+  # fails silently — dev writes would run unasserted.
+  run_suite "tests/scripts/assert-dev-doppler-scope-wiring" bash tests/scripts/test-assert-dev-doppler-scope-wiring.sh
   # #8203 — the fail-closed verdict of the `vendor-pin-required` aggregator
   # (#5585 pattern instance #3). Registered HERE for the same reason: nothing
   # under tests/scripts/ is auto-discovered, and an unregistered verdict suite
