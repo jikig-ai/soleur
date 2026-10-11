@@ -717,8 +717,8 @@
  {
   "id": "L13-segment-not-shown",
   "file": "server/destroy-ask-lane.ts",
-  "anchor": "if (match.segment) lines.push(",
-  "replace": "if (false) lines.push(",
+  "anchor": "  if (match.segment) lines.push(`Matched: \\`${preview(match.segment)}\\``);\n  else if (command.length > PREVIEW_MAX) lines.push(`Around the word that triggered this: \\`${keywordWindow(command)}\\``);\n",
+  "replace": "  if (false) lines.push(`Matched: \\`${preview(match.segment)}\\``);\n  else if (false) lines.push(`Around the word that triggered this: \\`${keywordWindow(command)}\\``);\n",
   "count": 1,
   "nth": null,
   "test": "test/permission-callback-destroy-ask.test.ts",
