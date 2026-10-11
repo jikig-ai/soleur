@@ -1196,7 +1196,7 @@ PRODUCER_JOIN=(
   'scripts/followthroughs/zot-soak-6122.test.sh | curl | exempt | text-only no | curl producer: soak feeds --config - via `< <(printf ...)` process substitution (zot-soak-6122.'
   'scripts/lint-workflow-local-action-checkout.test.sh | bc_hmac_sha256_hex | exempt | not-a-command shell function sourced from scripts/lib/bearer-curl.sh, the suite only lints track.sh text'
   'scripts/marketplace-drift-check.test.sh | jq | exempt | text-only the checked step (scheduled-marketplace-drift.yml check) reads jq stdin by here-string `<<<` only, n'
-  'scripts/rotate-supabase-db-credential.test.sh | doppler | drains | 1 | *'
+  'scripts/rotate-supabase-db-credential.test.sh | doppler | drains | 1 | secrets set'
   'scripts/sweep-followthroughs.test.sh | gh | drains | 5 | --body-file -'
   'scripts/watch-registration-narrowing-9564.test.sh | gh | exempt | arm-drain the issue comment arm reads stdin in both branches before exit; keyed on the subcommand'
   'scripts/web2-rebirth-recovery-check.test.sh | cryptsetup | exempt | arm-drain the open arm reads the key (cat to cs-stdin) before any exit; keyed on the subcommand'
@@ -1347,6 +1347,7 @@ BEGIN {
   FNRE = "^[ \t]*(function[ \t]+)?" verb "[ \t]*\\(\\)[ \t]*\\{"
   PATHRE = "(cat|printf)[^|]*>[ \t]*\"?[^ \"]*/" verb "\"?([ \t;]|$)"
   HELPRE = "^[ \t]*(make_stub|write_stub|stub_cmd|mkstub|stub)[ \t]+\"?" verb "([^A-Za-z0-9_.-]|$)"
+  OPENRE = "cat[ \t]*>>?[ \t]*\"?[^ \"]*/" verb "\"?"
 }
 /^[ \t]*#/ || /^[ \t]*$/ { next }
 { code[++nc] = $0; cl[nc] = NR
@@ -1355,8 +1356,10 @@ END {
   for (i = 1; i <= no; i++) {
     ok = 0; seen = (token == "*")
     for (k = op[i]; k <= op[i] + win && k <= nc; k++) {
-      if (index(code[k], token) > 0) seen = 1
-      if (seen && code[k] ~ detect) ok = 1
+      ln = code[k]
+      if (k == op[i]) gsub(OPENRE, "", ln)   # the heredoc writer on the opener line is not a drain
+      if (index(ln, token) > 0) seen = 1
+      if (seen && ln ~ detect) ok = 1
     }
     print (ok ? "ok" : "no") " " FILENAME ":" cl[op[i]]
   }
@@ -1474,11 +1477,13 @@ PJ_DRAIN_BAD=(
   'bash|[ ! -t 0 ] || true'
 )
 # pj_hazard <interp> <ignore|default> <spelling> -> the pipeline's exit status under pipefail, on stdout
+# An sh-tagged spelling runs under dash where the host has it (where /bin/sh is bash a bash-only spelling would pass as sh), else under /bin/sh.
+PJ_SH="$(command -v dash || true)"; [[ -n "$PJ_SH" ]] || PJ_SH=/bin/sh
 pj_hazard() {
-  local interp="$1" disp="$2" body="$3" stub="$probe/pj/hz-$1.sh" rc=0
-  if [[ "$interp" == sh ]]; then printf '%s\n' '#!/bin/sh' "$body" 'exit 0' > "$stub"; else printf '%s\n' '#!/usr/bin/env bash' "$body" 'exit 0' > "$stub"; fi
+  local interp="$1" disp="$2" body="$3" stub="$probe/pj/hz-$1.sh" rc=0 runner=""
+  if [[ "$interp" == sh ]]; then printf '%s\n' '#!/bin/sh' "$body" 'exit 0' > "$stub"; runner="$PJ_SH"; else printf '%s\n' '#!/usr/bin/env bash' "$body" 'exit 0' > "$stub"; fi
   chmod +x "$stub"
-  timeout 20 bash -c 'set -o pipefail; [ "$1" = ignore ] && trap "" PIPE; head -c 1048576 /dev/zero 2>/dev/null | "$2" -K -' _ "$disp" "$stub" >/dev/null 2>&1 || rc=$?
+  timeout 20 bash -c 'set -o pipefail; [ "$1" = ignore ] && trap "" PIPE; shift; head -c 1048576 /dev/zero 2>/dev/null | "$@" -K -' _ "$disp" ${runner:+"$runner"} "$stub" >/dev/null 2>&1 || rc=$?
   printf '%s' "$rc"
 }
 pj_dyn_ctl=""; pj_dyn_ok=""; pj_dyn_bad=""; pj_dyn_n=0
