@@ -133,15 +133,20 @@
 #                                   Cut List C6, says why), so ANY interruption (Ctrl-C, a closed
 #                                   terminal) leaves the monitor live: re-run with --sweep on the
 #                                   printed path and the same WRITE-scope BS_TOKEN.
-#                                   A run takes up to about 150 s of polling (235 s worst case): give
-#                                   the caller a timeout of at least 300 s. All output goes to stdout.
-#                                   The LAST line is a machine verdict:
-#                                   `::notice::arm-one-result name= id= outcome= rc=` with outcome one of
-#                                   armed | already-up | live-not-up | rolled-back | rollback-failed |
-#                                   unpause-recovered | failed | refused.
+#                                   A run takes up to about 150 s of polling (235 s worst case) plus the
+#                                   name resolution: give the caller a timeout of at least 300 s. This
+#                                   script's own messages go to stdout. Once a run has reached the
+#                                   named-monitor stage (an argument, destination or interval refusal
+#                                   prints one `::error::` line and no verdict), the LAST line is a
+#                                   machine verdict:
+#                                   `::notice::arm-one-result name= id= outcome= rc=` (id=none unless
+#                                   exactly one monitor matched) with outcome one of armed | already-up |
+#                                   live-not-up | rolled-back | rollback-failed | unpause-recovered |
+#                                   unpause-unknown | failed | refused.
 #   Neither mode touches the per-merge arm list. <name> matches ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$,
 #   <id> matches ^[0-9]+$ (an empty --id refuses), and anything else refuses with rc 1 before a request.
-#   `--status` fields are whitelisted: period and grace print as digits, `null` (absent) or INVALID.
+#   `--status` fields are whitelisted: period and grace print as digits (at most 9), `null` (absent) or
+#   INVALID.
 #
 # EXIT CODES.
 #   --arm (default)
@@ -160,9 +165,9 @@
 #   --arm-one
 #     0 = armed (a real beat landed in THIS run) or the monitor was already `up` (nothing changed).
 #     1 = refused or failed: a collision, an id pin mismatch, a ceiling breach, an unreadable list or
-#         monitor, a monitor that is live but NOT `up` (`down`, `pending`: not armed by this run), or a
-#         FAILED rollback (the books file is kept and the recovery command repeated). Read `--status`
-#         after any rc 1.
+#         monitor, a monitor that is live but NOT `up` (`down`, `pending`: not armed by this run), a
+#         FAILED rollback, or an unpause whose outcome is unknown (the id stays on the books file and
+#         the recovery command is repeated). Read `--status` after any rc 1.
 #     2 = the gate worked and the feeder did not feed: the monitor was rolled back to paused and the
 #         soak is NOT satisfied.
 #   78 = refused to run under xtrace (every mode).
@@ -239,7 +244,7 @@ case "$BS_API_BASE" in
 esac
 # The poll interval reaches `sleep` AND, since #9980, a `$(( ))` ceiling computation in --arm-one: an
 # unvalidated value is arithmetic evaluation (command substitution) and a negative one loosens the ceiling.
-[[ "$ARM_POLL_INTERVAL_S" =~ ^[1-9][0-9]{0,2}$ ]] || { echo "::error::arm-heartbeats.sh: ARM_POLL_INTERVAL_S must be a whole number of seconds between 1 and 999 (got '${ARM_POLL_INTERVAL_S:0:20}')."; exit 1; }
+[[ "$MODE" == sweep || "$ARM_POLL_INTERVAL_S" =~ ^[1-9][0-9]{0,2}$ ]] || { echo "::error::arm-heartbeats.sh: ARM_POLL_INTERVAL_S must be a whole number of seconds between 1 and 999 (got '${ARM_POLL_INTERVAL_S:0:20}')."; exit 1; }
 
 # Token-shape guard: a newline or quote in the token would inject a curl config directive on the
 # stdin channel below. Never echoes the value. Better Stack tokens are alphanumeric.
@@ -261,11 +266,15 @@ now_s() { date +%s; }
 # --- the unconfirmed-arm state file -------------------------------------------------------
 # One id per line. `state_add` fires immediately after a successful unpause; `state_remove`
 # fires ONLY on a 2xx rollback or on reaching `up`.
-state_add() {
+state_add() {  # <id> [pre-unpause]
   # An append that fails is NOT ignorable (#7658 E4): the monitor is already LIVE at this point,
   # so a silently dropped id is a monitor off the sweep's books with nothing feeding it — the
   # exact state the file exists to make impossible.
   if ! printf '%s\n' "$1" >> "$ARMED_UNCONFIRMED"; then
+    if [[ "${2:-}" == pre-unpause ]]; then
+      echo "::error::arm-heartbeats.sh: could not record monitor $1 in ${ARMED_UNCONFIRMED} BEFORE unpausing it — nothing was changed; refusing to unpause a monitor with nowhere to record it."
+      return 1
+    fi
     echo "::error::arm-heartbeats.sh: could not record monitor $1 in ${ARMED_UNCONFIRMED} — it is UNPAUSED and OFF the re-pause sweep's books. Re-pause it by hand: Better Stack → Heartbeats → $1 → Pause."
     return 1
   fi
@@ -513,7 +522,7 @@ ARM_LAST_UPDATED_AT=""
 #   2 = the gate worked and the FEEDER did not feed, monitor rolled back to paused
 # <given-id> (the 4th, OPTIONAL positional; --arm-one only) is a Better Stack id already resolved by
 # exact name: with it, <state-address> is a display token and tfstate is not read. ARM_RESULT reports
-# which 0/1 this was: armed | noop | unpause-failed (empty on every other return).
+# which return this was: armed | noop | unpause-failed | books-failed | rollback-failed (empty otherwise).
 arm_one() {
   local addr="$1" label="$2" deadline="$3" given_id="${4:-}"
   local id started elapsed reads_ok
@@ -539,8 +548,15 @@ arm_one() {
   fi
   if [[ "$HB_STATUS" != "paused" ]]; then
     ARM_RESULT=noop
-    echo "${label}: already armed (status=${HB_STATUS}) — no-op."
+    echo "${label}: already armed (status=${HB_STATUS//[^A-Za-z0-9_.-]/?}) — no-op."
     return 0
+  fi
+  # --arm-one only: the id goes on the books BEFORE the unpause PATCH. A request that lands server-side with
+  # its reply lost (or a process killed mid-flight) must never leave a live monitor on nobody's books; a
+  # re-pause of an already-paused monitor is idempotent, so the early entry costs nothing.
+  if [[ -n "$given_id" ]] && ! state_add "$id" pre-unpause; then
+    ARM_RESULT=books-failed
+    return 1
   fi
   echo "${label}: monitor ${id} is paused; unpausing and watching for a real beat (status→up, deadline=${deadline}s)…"
   if ! hb_patch_paused "$id" false; then
@@ -550,8 +566,8 @@ arm_one() {
   fi
   # The id is on the sweep's books from the instant the monitor is live, not from the instant
   # we decide to give up: everything between those two points is exactly the window in which an
-  # externally-imposed cut leaves it unpaused-and-unfed.
-  state_add "$id"
+  # externally-imposed cut leaves it unpaused-and-unfed. (--arm-one already recorded it above.)
+  if [[ -z "$given_id" ]]; then state_add "$id"; fi
   started=$(now_s)
   elapsed=0
   reads_ok=0
@@ -600,7 +616,8 @@ arm_one() {
   # and no such assertion is available when every in-loop GET failed (#7658 E1) — that is a loss
   # of vendor visibility, i.e. the gate could not do its job, so it returns 1.
   if ! hb_rollback "$id" "$label"; then
-    echo "::error::${label}: rollback PATCH paused=true FAILED (HTTP ${HB_PATCH_CODE:-000}) after ${ARM_ROLLBACK_ATTEMPTS} attempt(s) — monitor ${id} is unpaused-and-unfed. Left on the re-pause sweep's books; investigate immediately."
+    ARM_RESULT=rollback-failed
+    echo "::error::${label}: rollback PATCH paused=true FAILED (HTTP ${HB_PATCH_CODE:-000}) after ${ARM_ROLLBACK_ATTEMPTS} attempt(s) — monitor ${id} is unpaused-and-unfed. It is on the re-pause sweep's books unless an earlier 'could not record' error says otherwise; investigate immediately."
     echo "::error::${label}: status never reached 'up' within ${elapsed}s of a ${deadline}s deadline (last status=${ARM_LAST_STATUS:-unknown})."
     return 1
   fi
@@ -661,8 +678,8 @@ hb_resolve_name() {  # <name> -> 0 when the whole list was read (RES_COUNT says 
     # fields (status, paused) are reduced to a harmless charset so nothing vendor-controlled reaches the
     # operator's terminal raw.
     if ! rows=$(printf '%s' "$body" | jq -r --arg n "$name" '
-        def idv: if type == "number" or (type == "string" and test("^[0-9]+$")) then tostring else "INVALID" end;
-        def num: if type == "number" then tostring elif type == "string" and test("^[0-9]+$") then . elif . == null then "null" else "INVALID" end;
+        def idv: if (type == "number" or (type == "string" and test("\\A[0-9]{1,18}\\z"))) then tostring else "INVALID" end;
+        def num: if . == null then "null" elif ((type == "number" or type == "string") and (tostring | test("\\A[0-9]{1,9}\\z"))) then tostring else "INVALID" end;
         def txt: if . == null or . == "" then "null" else (tostring | gsub("[^A-Za-z0-9_.-]"; "?")) end;
         .data[] | select(.attributes.name == $n)
         | [ (.id | idv), (.attributes.status | txt),
@@ -688,16 +705,23 @@ hb_resolve_name() {  # <name> -> 0 when the whole list was read (RES_COUNT says 
     # `.pagination` absent is a single page; a present one must be an object whose `next` is absent or a
     # string. Anything else is a FAILED read: treating it as "no next page" would resolve from a partial list.
     if ! next=$(printf '%s' "$body" | jq -r '
-        if (.pagination == null) or ((.pagination | type) == "object" and ((.pagination.next // "") | type) == "string")
+        if (.pagination == null) or ((.pagination | type) == "object" and ((.pagination | has("next") | not) or (.pagination.next == null) or ((.pagination.next | type) == "string")))
         then (.pagination.next // "") else error("malformed pagination") end' 2>/dev/null); then
       echo "::error::arm-heartbeats.sh: page ${pages} of the heartbeat list carries a malformed .pagination — refusing to resolve '${name}' from a partial read."
       return 1
     fi
     next="${next//$'\r'/}"; next="${next//$'\n'/}"
     # Stripping the pinned prefix leaves a bare query; anything that was not under that prefix stays a full
-    # URL, which the pin above then refuses.
+    # URL, which the pin above then refuses. A `next` that strips to NOTHING (`.../heartbeats?`) is not an
+    # end of list: it is a partial-read shape, refused rather than read as "no more pages".
     query=""
-    if [[ -n "$next" ]]; then query="${next#"${BS_API_BASE}/heartbeats?"}"; fi
+    if [[ -n "$next" ]]; then
+      query="${next#"${BS_API_BASE}/heartbeats?"}"
+      if [[ -z "$query" ]]; then
+        echo "::error::arm-heartbeats.sh: page ${pages} of the heartbeat list carries an empty pagination.next — refusing to resolve '${name}' from a partial read."
+        return 1
+      fi
+    fi
   done
   return 0
 }
@@ -706,7 +730,7 @@ hb_resolve_name() {  # <name> -> 0 when the whole list was read (RES_COUNT says 
 named_token_check() {
   if ! _bearer_ok "$BS_TOKEN"; then
     echo "::error::arm-heartbeats.sh: BS_TOKEN is unset or has an unexpected shape — refusing to make a request that could not authenticate."
-    exit 1
+    return 1
   fi
 }
 # Exactly one exact-name match, or a named refusal. Sets nothing the callers must trust except RES_*.
@@ -724,7 +748,7 @@ resolve_exactly_one() {
 }
 
 status_main() {
-  named_token_check
+  named_token_check || return 1
   resolve_exactly_one || return 1
   echo "name=${NAME} id=${RES_ID} paused=${RES_PAUSED} status=${RES_STATUS} period=${RES_PERIOD} grace=${RES_GRACE}"
   return 0
@@ -733,25 +757,40 @@ status_main() {
 # The machine verdict: ONE `::notice::` annotation an agent can parse without reading prose.
 ARM_ONE_OUTCOME=refused
 arm_one_verdict() {  # <rc>
-  echo "::notice::arm-one-result name=${NAME} id=${RES_ID:-none} outcome=${ARM_ONE_OUTCOME} rc=$1"
+  # The id is claimed only when exactly ONE monitor matched; a collision or an unread list has no single id.
+  local vid=none
+  if [[ "$RES_COUNT" -eq 1 ]]; then vid="$RES_ID"; fi
+  echo "::notice::arm-one-result name=${NAME} id=${vid} outcome=${ARM_ONE_OUTCOME} rc=$1"
 }
-# Absolute path of this script, for the printed recovery command.
-SELF_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+# Absolute path of this script, for the printed recovery command. CDPATH is cleared for the `cd`: a
+# non-empty CDPATH makes `cd` print the directory, which would put two lines in the printed command.
+self_path() {
+  local src="${BASH_SOURCE[0]:-$0}" dir
+  if dir=$(CDPATH='' cd -- "$(dirname -- "$src")" >/dev/null 2>&1 && pwd); then
+    printf '%s/%s' "$dir" "$(basename -- "$src")"
+  else
+    printf '%s' "$src"
+  fi
+}
 recovery_cmd() {
-  printf 'ARMED_UNCONFIRMED=%q bash %q --sweep   # needs the SAME WRITE-scope BS_TOKEN (runbook step 7 shows the doppler wrapper)' "$ARMED_UNCONFIRMED" "$SELF_PATH"
+  printf 'ARMED_UNCONFIRMED=%q bash %q --sweep   # needs the SAME WRITE-scope BS_TOKEN (runbook step 7 shows the doppler wrapper)' "$ARMED_UNCONFIRMED" "$(self_path)"
 }
+# Operator-supplied or vendor-supplied text is shown with every non-printable byte replaced and a length
+# cap, so it can neither forge a `::notice::` line (newline) nor drive the terminal (ESC, bidi override).
+show() { local t="${1:0:200}"; t="${t//[^[:print:]]/?}"; printf '%s' "$t"; }
 
 armone_run() {
-  local own_books=0 max rc=0 on_books=0
-  named_token_check
+  local own_books=0 max rc=0 on_books=0 left safe_status
+  named_token_check || return 1
   resolve_exactly_one || return 1
   if [[ "$HAVE_ID" -eq 1 && "$PIN_ID" != "$RES_ID" ]]; then
     echo "::error::arm-heartbeats.sh: id pin mismatch — '${NAME}' resolves to id ${RES_ID}, not the pinned ${PIN_ID}. Refusing to arm either."
     return 1
   fi
   # The ceiling: the unpause window (deadline + the loop's last round-trips) must end before THIS monitor's
-  # own first absence alert. Derived from the file's own terms; at 10/15 it is period + grace - 40.
-  if [[ ! "$RES_PERIOD" =~ ^[1-9][0-9]*$ || ! "$RES_GRACE" =~ ^[1-9][0-9]*$ ]]; then
+  # own first absence alert. Derived from the file's own terms; at 10/15 it is period + grace - 40. The
+  # digit bound keeps the arithmetic below inside the shell's integer range.
+  if [[ ! "$RES_PERIOD" =~ ^[1-9][0-9]{0,8}$ || ! "$RES_GRACE" =~ ^[1-9][0-9]{0,8}$ ]]; then
     echo "::error::arm-heartbeats.sh: period/grace of '${NAME}' are not positive integers (period=${RES_PERIOD} grace=${RES_GRACE}) — cannot bound the unpause window, refusing."
     return 1
   fi
@@ -766,12 +805,14 @@ armone_run() {
       return 1
     fi
     own_books=1
-  elif ! : >> "$ARMED_UNCONFIRMED"; then
-    # A books path that cannot be written would let the unpause land with nothing on the books.
-    echo "::error::arm-heartbeats.sh: ARMED_UNCONFIRMED=${ARMED_UNCONFIRMED:0:120} is not writable — refusing to unpause a monitor with nowhere to record it."
+  elif [[ -L "$ARMED_UNCONFIRMED" ]] || { [[ -e "$ARMED_UNCONFIRMED" ]] && { [[ ! -f "$ARMED_UNCONFIRMED" ]] || [[ ! -r "$ARMED_UNCONFIRMED" ]]; }; } \
+       || ! : >> "$ARMED_UNCONFIRMED"; then
+    # Absent, or a plain readable regular file we can append to. A symlink, a device (/dev/null swallows every
+    # write), a FIFO or a directory would let the unpause land with nothing real on the books.
+    echo "::error::arm-heartbeats.sh: ARMED_UNCONFIRMED=$(show "$ARMED_UNCONFIRMED") must be absent or a readable, writable regular file (not a symlink) — refusing to unpause a monitor with nowhere to record it."
     return 1
   fi
-  echo "::notice::arm-one books: ${ARMED_UNCONFIRMED}. Any interruption (Ctrl-C, a closed terminal) can leave the monitor live; re-pause with: $(recovery_cmd)"
+  echo "::notice::arm-one books: $(show "$ARMED_UNCONFIRMED"). Any interruption (Ctrl-C, a closed terminal) can leave the monitor live; re-pause with: $(recovery_cmd)"
   arm_one "(by name)" "$NAME" "$ARM_ONE_DEADLINE" "$RES_ID" || rc=$?
 
   if [[ "$rc" -eq 0 && "$ARM_RESULT" == noop ]]; then
@@ -779,44 +820,68 @@ armone_run() {
     # mode rc 0 is read as "the soak is satisfied", so only a monitor that is `up` may say so.
     if [[ "$HB_STATUS" == "up" ]]; then
       ARM_ONE_OUTCOME=already-up
+      # A line left by an earlier interrupted run would have the sweep re-pause a monitor that is now fed.
+      if grep -qxF -- "$RES_ID" "$ARMED_UNCONFIRMED" 2>/dev/null; then
+        state_remove "$RES_ID" && echo "::notice::arm-heartbeats.sh: removed the stale line ${RES_ID} from $(show "$ARMED_UNCONFIRMED") (the monitor is up)."
+      fi
     else
       ARM_ONE_OUTCOME=live-not-up
       rc=1
-      echo "::error::arm-heartbeats.sh: '${NAME}' (id ${RES_ID}) is live but its status is '${HB_STATUS}', not 'up' — this run did NOT arm it and no beat was measured. Read --status. If it should be paused, add ${RES_ID} to ${ARMED_UNCONFIRMED} and run: $(recovery_cmd)"
+      safe_status="${HB_STATUS//[^A-Za-z0-9_.-]/?}"
+      echo "::error::arm-heartbeats.sh: '${NAME}' (id ${RES_ID}) is live but its status is '${safe_status:0:40}', not 'up' — this run did NOT arm it and no beat was measured. Read --status again after 60-120 s; if it is still not up and should be paused, pause it in Better Stack (Heartbeats → ${RES_ID} → Pause)."
     fi
   elif [[ "$rc" -eq 0 && "$ARM_RESULT" == armed ]]; then
     ARM_ONE_OUTCOME=armed
+  elif [[ "$rc" -eq 0 ]]; then
+    # rc 0 without a recognised result is a code path this mode does not understand: never report it as armed.
+    rc=1
+    ARM_ONE_OUTCOME=failed
+    echo "::error::arm-heartbeats.sh: internal error — arm_one returned 0 with no result; refusing to report '${NAME}' as armed. Read --status."
+  elif [[ "$ARM_RESULT" == rollback-failed ]]; then
+    ARM_ONE_OUTCOME=rollback-failed
+    echo "::error::arm-heartbeats.sh: monitor ${RES_ID} is LIVE and unfed and its re-pause failed; its id is on $(show "$ARMED_UNCONFIRMED"). Run: $(recovery_cmd)"
   elif [[ "$rc" -eq 2 ]]; then
     ARM_ONE_OUTCOME=rolled-back
     echo "::warning::${NAME}: the monitor is paused again and the soak is NOT satisfied. If this is the git-data host monitor, read the host's own events (stage liveness) in Better Stack (runbook step 6)."
-  elif [[ "$rc" -ne 0 && "$ARM_RESULT" == unpause-failed ]]; then
-    # An unpause PATCH that answers 000/5xx may still have LANDED server-side with only the reply lost, which
-    # would leave the monitor live and on nobody's books. Read it back: never assume the PATCH did not apply.
-    ARM_ONE_OUTCOME=failed
+  elif [[ "$ARM_RESULT" == unpause-failed ]]; then
+    # An unpause PATCH that answers 000/5xx may still have LANDED server-side with only the reply lost. The id
+    # was recorded BEFORE the request, so whatever this read-back finds, the books already cover it.
+    ARM_ONE_OUTCOME=unpause-unknown
     if ! hb_fetch "$RES_ID"; then
-      state_add "$RES_ID"
-      echo "::error::arm-heartbeats.sh: the unpause PATCH failed AND '${NAME}' could not be read back, so it may be live and unfed. Its id was added to ${ARMED_UNCONFIRMED}; run: $(recovery_cmd)"
-    elif live_status="$HB_STATUS"; [[ "$live_status" != "paused" ]]; then
-      state_add "$RES_ID"
-      echo "::warning::${NAME}: the unpause reply was lost but the monitor IS live (status=${live_status}); rolling it back to paused."
+      echo "::error::arm-heartbeats.sh: the unpause PATCH failed AND '${NAME}' could not be read back, so it may be live and unfed. Its id is on $(show "$ARMED_UNCONFIRMED"); run: $(recovery_cmd)"
+    elif [[ "$HB_STATUS" != "paused" ]]; then
+      echo "::warning::${NAME}: the unpause reply was lost but the monitor IS live (status=${HB_STATUS//[^A-Za-z0-9_.-]/?}); rolling it back to paused."
       if hb_rollback "$RES_ID" "$NAME"; then
         state_remove "$RES_ID"
         ARM_ONE_OUTCOME=unpause-recovered
+      else
+        ARM_ONE_OUTCOME=rollback-failed
+        echo "::error::arm-heartbeats.sh: monitor ${RES_ID} is LIVE and unfed and its re-pause failed; its id is on $(show "$ARMED_UNCONFIRMED"). Run: $(recovery_cmd)"
       fi
-    fi
-  fi
-  if [[ "$rc" -ne 0 && "$ARM_ONE_OUTCOME" == refused ]]; then ARM_ONE_OUTCOME=failed; fi
-
-  if grep -qxF -- "$RES_ID" "$ARMED_UNCONFIRMED" 2>/dev/null; then
-    on_books=1
-    if [[ "$rc" -ne 0 ]]; then
-      ARM_ONE_OUTCOME=rollback-failed
-      echo "::error::arm-heartbeats.sh: monitor ${RES_ID} may be live and unfed and is listed in ${ARMED_UNCONFIRMED}. Run: $(recovery_cmd)"
+    elif [[ "$HB_PATCH_CODE" == 4* ]]; then
+      # A definite rejection: the request cannot land later.
+      state_remove "$RES_ID"
+      ARM_ONE_OUTCOME=failed
     else
-      echo "::warning::arm-heartbeats.sh: '${NAME}' is armed, but ${ARMED_UNCONFIRMED} still lists ${RES_ID}. Delete that file; do NOT run --sweep, it would re-pause this monitor."
+      echo "::warning::arm-heartbeats.sh: the unpause PATCH was ambiguous (HTTP ${HB_PATCH_CODE:-000}) and the monitor reads paused, but the request may still land late. Its id stays on $(show "$ARMED_UNCONFIRMED"); read --status after 60-120 s: if it is paused, remove that line; if it is live, run: $(recovery_cmd)"
     fi
+  else
+    # books-failed, a failed GET gate, or every poll read failing (rolled back): nothing live is left by this run.
+    ARM_ONE_OUTCOME=failed
   fi
-  if [[ "$on_books" -eq 0 && "$own_books" -eq 1 && ! -s "$ARMED_UNCONFIRMED" ]]; then
+
+  # What is left on the books after the outcome above is decided. It never changes the outcome.
+  # grep rc 1 is "not listed"; rc 2 is "could not read it", which must count as listed.
+  grep -qxF -- "$RES_ID" "$ARMED_UNCONFIRMED" 2>/dev/null
+  [[ $? -eq 1 ]] || on_books=1
+  if [[ "$on_books" -eq 1 ]]; then
+    case "$ARM_ONE_OUTCOME" in
+      armed|already-up|rolled-back|unpause-recovered|failed)
+        left=paused
+        [[ "$ARM_ONE_OUTCOME" == armed || "$ARM_ONE_OUTCOME" == already-up ]] && left=up
+        echo "::warning::arm-heartbeats.sh: the books file $(show "$ARMED_UNCONFIRMED") still lists ${RES_ID}, which this run left ${left}. Remove ONLY that line (other ids on it may be live and unfed). Do not run --sweep while '${NAME}' is ${left}-and-listed unless you mean to pause it." ;;
+    esac
+  elif [[ "$own_books" -eq 1 && ! -s "$ARMED_UNCONFIRMED" ]]; then
     rm -f "$ARMED_UNCONFIRMED"
   fi
   return "$rc"

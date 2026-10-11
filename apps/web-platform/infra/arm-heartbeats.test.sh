@@ -1309,6 +1309,7 @@ new_case st5j
 printf '{"data":[{"id":"42\\n43","attributes":{"name":"%s","status":"paused","period":60,"grace":300}}],"pagination":{"next":null}}' "$HOST_NAME" > "$FAKE_LIST_DIR/page-1.json"
 run_named --status "$HOST_NAME"
 assert_eq "ST5j an id of '42<LF>43' exits 1 (it must not become 4243)" "1" "$RC"
+assert "ST5j and names the non-numeric id" "[[ \"\$OUT\" == *'non-numeric id'* ]]"
 new_case st5k
 printf '{"data":[{"id":"","attributes":{"name":"%s","status":"paused","period":60,"grace":300}}],"pagination":{"next":null}}' "$HOST_NAME" > "$FAKE_LIST_DIR/page-1.json"
 run_named --status "$HOST_NAME"
@@ -1412,7 +1413,7 @@ new_case ao7c
 ARMONE_BOOKS="$CASE/nope/dir/books" FAKE_CURL_COST=1 run_named --arm-one "$HOST_NAME" --id "$ID_HOST"
 assert_eq "AO7c an unwritable books path exits 1" "1" "$RC"
 assert_eq "AO7c BEFORE the first PATCH" "0" "$(patch_count)"
-assert "AO7c and says so" "[[ \"\$OUT\" == *'is not writable'* ]]"
+assert "AO7c and says so" "[[ \"\$OUT\" == *'must be absent or a readable, writable regular file'* ]]"
 new_case ao7d
 echo 30 > "$FAKE_STATE/$ID_HOST.upat"
 ARMONE_BOOKS="$CASE/mine2" FAKE_CURL_COST=1 run_named --arm-one "$HOST_NAME" --id "$ID_HOST"
@@ -1434,6 +1435,158 @@ FAKE_CURL_COST=1 run_named --arm-one "$HOST_NAME" --id "$ID_HOST"
 assert_eq "AO10b exits 1" "1" "$RC"
 assert "AO10b the unreadable monitor is NOT assumed paused: it says so" "[[ \"\$OUT\" == *'could not be read back'* ]]"
 assert_eq "AO10b and its id is kept on the books for the sweep" "$ID_HOST" "$(cat "$(books_files | sed -n '1p')")"
+
+echo "--- AO10c-e an unpause that FAILED is recorded before it was sent, and read back"
+new_case ao10c
+printf '%s false\n' "$ID_HOST" > "$FAKE_PATCH_FAIL"
+FAKE_CURL_COST=1 run_named --arm-one "$HOST_NAME" --id "$ID_HOST"
+assert_eq "AO10c an unpause that answers 500 (not applied) exits 1" "1" "$RC"
+assert_eq "AO10c exactly one PATCH: a monitor that reads paused is not 'rolled back'" "1" "$(patch_count)"
+assert "AO10c the verdict is unpause-unknown (the request may still land late), not failed" \
+  "[[ \"\$(printf '%s\\n' \"\$OUT\" | tail -n 1)\" == *'outcome=unpause-unknown rc=1' ]]"
+assert_eq "AO10c its id stays on the books (an ambiguous 5xx can still apply)" "$ID_HOST" "$(cat "$(books_files | sed -n '1p')")"
+assert "AO10c and the books file is named with a status-read instruction" "[[ \"\$OUT\" == *'read --status after 60-120 s'* ]]"
+new_case ao10d
+printf '%s false 403\n' "$ID_HOST" > "$FAKE_PATCH_FAIL_ONCE"
+FAKE_CURL_COST=1 run_named --arm-one "$HOST_NAME" --id "$ID_HOST"
+assert_eq "AO10d a definite 4xx rejection exits 1" "1" "$RC"
+assert "AO10d the verdict is failed (nothing can land later)" "[[ \"\$(printf '%s\\n' \"\$OUT\" | tail -n 1)\" == *'outcome=failed rc=1' ]]"
+assert_eq "AO10d and the books are clean again (the private file was removed)" "0" "$(books_count)"
+new_case ao10e
+printf '%s false\n' "$ID_HOST" > "$FAKE_PATCH_LOST"
+printf '%s true\n' "$ID_HOST" > "$FAKE_PATCH_FAIL"
+FAKE_CURL_COST=1 run_named --arm-one "$HOST_NAME" --id "$ID_HOST"
+assert_eq "AO10e a lost unpause whose rollback also fails exits 1" "1" "$RC"
+assert "AO10e the verdict is rollback-failed" "[[ \"\$(printf '%s\\n' \"\$OUT\" | tail -n 1)\" == *'outcome=rollback-failed rc=1' ]]"
+assert_eq "AO10e the monitor is LIVE (the fixture's lost unpause applied)" "pending" "$(cat "$FAKE_STATE/$ID_HOST.status")"
+assert_eq "AO10e and its id is on the books for the sweep" "$ID_HOST" "$(cat "$(books_files | sed -n '1p')")"
+
+echo "--- AO13 the books path must be a real, readable regular file (or absent)"
+new_case ao13a
+ARMONE_BOOKS=/dev/null FAKE_CURL_COST=1 run_named --arm-one "$HOST_NAME" --id "$ID_HOST"
+assert_eq "AO13a /dev/null is refused (it would swallow every write)" "1" "$RC"
+assert_eq "AO13a with zero PATCH" "0" "$(patch_count)"
+new_case ao13b
+: > "$CASE/real"; ln -s "$CASE/real" "$CASE/link"
+ARMONE_BOOKS="$CASE/link" FAKE_CURL_COST=1 run_named --arm-one "$HOST_NAME" --id "$ID_HOST"
+assert_eq "AO13b a symlinked books path is refused" "1" "$RC"
+assert_eq "AO13b with zero PATCH" "0" "$(patch_count)"
+new_case ao13c
+mkdir "$CASE/adir"
+ARMONE_BOOKS="$CASE/adir" FAKE_CURL_COST=1 run_named --arm-one "$HOST_NAME" --id "$ID_HOST"
+assert_eq "AO13c a directory is refused" "1" "$RC"
+assert_eq "AO13c with zero PATCH" "0" "$(patch_count)"
+new_case ao13e
+ARMONE_BOOKS="$CASE/odd"$'\n'"::notice::arm-one-result name=x id=1 outcome=armed rc=0" FAKE_CURL_COST=1 run_named --arm-one "$HOST_NAME" --id "$ID_HOST"
+assert_eq "AO13e a books path with an embedded newline cannot forge a second verdict line" "1" "$(printf '%s\n' "$OUT" | grep -c '^::notice::arm-one-result')"
+
+echo "--- AO14 already up: a stale own line is stripped, other ids are kept"
+new_case ao14
+printf 'up' > "$FAKE_STATE/$ID_HOST.status"
+write_page 1 "" "$(hb_row "$ID_HOST" "$HOST_NAME" up)"
+printf '777\n%s\n' "$ID_HOST" > "$CASE/mine"
+ARMONE_BOOKS="$CASE/mine" FAKE_CURL_COST=1 run_named --arm-one "$HOST_NAME" --id "$ID_HOST"
+assert_eq "AO14 exits 0" "0" "$RC"
+assert_eq "AO14 the stale line for THIS (up) monitor is gone and the unrelated id is kept" "777" "$(cat "$CASE/mine")"
+assert "AO14 the verdict is already-up" "[[ \"\$(printf '%s\\n' \"\$OUT\" | tail -n 1)\" == *'outcome=already-up rc=0' ]]"
+
+echo "--- AO15 the list and the live read can disagree: the LIVE status decides"
+new_case ao15a
+printf 'up' > "$FAKE_STATE/$ID_HOST.status"
+FAKE_CURL_COST=1 run_named --arm-one "$HOST_NAME" --id "$ID_HOST"
+assert_eq "AO15a list says paused, live says up: nothing is unpaused" "0" "$(patch_count)"
+assert "AO15a and it is reported already-up" "[[ \"\$(printf '%s\\n' \"\$OUT\" | tail -n 1)\" == *'outcome=already-up rc=0' ]]"
+new_case ao15b
+write_page 1 "" "$(hb_row "$ID_HOST" "$HOST_NAME" up)"
+echo 30 > "$FAKE_STATE/$ID_HOST.upat"
+FAKE_CURL_COST=1 run_named --arm-one "$HOST_NAME" --id "$ID_HOST"
+assert_eq "AO15b list says up, live says paused: the live read governs and it arms" "0" "$RC"
+assert_eq "AO15b via exactly one unpause PATCH" "1" "$(patch_count)"
+
+echo "--- AO6h the reserve in the ceiling is the live ARM_POLL_INTERVAL_S, not a literal 40"
+new_case ao6h
+write_page 1 "" "$(hb_row "$ID_HOST" "$HOST_NAME" paused 60 130)"
+NEW_POLL=11 FAKE_CURL_COST=1 run_named --arm-one "$HOST_NAME" --id "$ID_HOST"
+assert_eq "AO6h poll 11 makes the ceiling 149 < 150: refused" "1" "$RC"
+assert_eq "AO6h with zero PATCH" "0" "$(patch_count)"
+assert "AO6h and the refusal quotes the computed ceiling" "[[ \"\$OUT\" == *'ceiling of 149s'* ]]"
+
+echo "--- AO16 numeric hygiene: oversized or newline-tailed digit strings are INVALID, never arithmetic"
+new_case ao16a
+printf '{"data":[{"id":"%s","attributes":{"name":"%s","status":"paused","paused":true,"period":"100000000000000000000000","grace":300}}],"pagination":{"next":null}}' "$ID_HOST" "$HOST_NAME" > "$FAKE_LIST_DIR/page-1.json"
+run_named --arm-one "$HOST_NAME" --id "$ID_HOST"
+assert_eq "AO16a a 24-digit period is refused" "1" "$RC"
+assert_eq "AO16a with zero PATCH" "0" "$(patch_count)"
+new_case ao16b
+printf '{"data":[{"id":"%s\\n","attributes":{"name":"%s","status":"paused","paused":true,"period":60,"grace":300}}],"pagination":{"next":null}}' "$ID_HOST" "$HOST_NAME" > "$FAKE_LIST_DIR/page-1.json"
+run_named --status "$HOST_NAME"
+assert_eq "AO16b an id with a trailing newline is refused (jq's \$ would have matched it)" "1" "$RC"
+assert "AO16b and names the non-numeric id" "[[ \"\$OUT\" == *'non-numeric id'* ]]"
+
+echo "--- ST6 pagination shapes that are a partial read, never the end of the list"
+new_case st6a
+write_page 1 "$LIST_BASE?" "$(hb_row "$ID_HOST" "$HOST_NAME" paused)"
+run_named --status "$HOST_NAME"
+assert_eq "ST6a a next of '.../heartbeats?' (empty query) exits 1" "1" "$RC"
+new_case st6b
+printf '{"data":[%s],"pagination":{"next":false}}' "$(hb_row "$ID_HOST" "$HOST_NAME" paused)" > "$FAKE_LIST_DIR/page-1.json"
+run_named --status "$HOST_NAME"
+assert_eq "ST6b next:false exits 1" "1" "$RC"
+new_case st6c
+write_page 1 "$LIST_BASE?page=" "$(hb_row "$ID_HOST" "$HOST_NAME" paused)"
+run_named --status "$HOST_NAME"
+assert_eq "ST6c a next of 'page=' with no number exits 1" "1" "$RC"
+assert_eq "ST6c and is never requested" "1" "$(list_count)"
+new_case st6d
+write_page 1 "/api/v2/heartbeats?page=2&per_page=250" "$(hb_row "$ID_HOST" "$HOST_NAME" paused)"
+run_named --status "$HOST_NAME"
+assert_eq "ST6d a RELATIVE next exits 1" "1" "$RC"
+assert_eq "ST6d and is never requested" "1" "$(list_count)"
+new_case st6e
+write_page 1 "$LIST_BASE?page=2&per_page=250" "$(hb_row "$ID_DECOY" "decoy-one" up)"
+printf '{"data":["not-an-object"],"pagination":{"next":null}}' > "$FAKE_LIST_DIR/page-2.json"
+run_named --status "$HOST_NAME"
+assert_eq "ST6e a rows-parse failure on page 2 exits 1" "1" "$RC"
+assert "ST6e and names page 2" "[[ \"\$OUT\" == *'could not parse page 2'* ]]"
+new_case st6f
+write_page 1 "$LIST_BASE?page=2&per_page=250" "$(hb_row "$ID_DECOY" "decoy-one" up)"
+printf '{"data":[%s],"pagination":"oops"}' "$(hb_row "$ID_DECOY" "decoy-two" up)" > "$FAKE_LIST_DIR/page-2.json"
+run_named --status "$HOST_NAME"
+assert_eq "ST6f a malformed .pagination on page 2 exits 1" "1" "$RC"
+assert "ST6f and names page 2" "[[ \"\$OUT\" == *'page 2 of the heartbeat list carries a malformed .pagination'* ]]"
+
+echo "--- AO17 the verdict claims an id only for exactly one match, and exists for a token refusal"
+new_case ao17a
+write_page 1 "" "$(hb_row "$ID_HOST" "$HOST_NAME" paused)" "$(hb_row "$ID_DUP" "$HOST_NAME" paused)"
+run_named --arm-one "$HOST_NAME"
+assert "AO17a a collision's verdict carries id=none" "[[ \"\$(printf '%s\\n' \"\$OUT\" | tail -n 1)\" == *' id=none outcome=refused rc=1' ]]"
+new_case ao17b
+NEW_TOKEN='' run_named --arm-one "$HOST_NAME" --id "$ID_HOST"
+assert "AO17b a token refusal still ends in a verdict line" "[[ \"\$(printf '%s\\n' \"\$OUT\" | tail -n 1)\" == *'id=none outcome=refused rc=1' ]]"
+assert_eq "AO17b and made no request" "0" "$(call_count)"
+
+echo "--- AO18 the printed recovery command survives an exported CDPATH"
+new_case ao18
+printf '%s true\n' "$ID_HOST" > "$FAKE_PATCH_FAIL"
+mkdir -p "$CASE/decoy/apps/web-platform/infra"
+OUT="$(cd "$SCRIPT_DIR/../../.." && PATH="$BIN:$PATH" BS_TOKEN=fake-token CDPATH="$CASE/decoy:." TMPDIR="$CASE" ARM_POLL_INTERVAL_S=10 \
+      env -u TFSTATE_JSON -u ARMED_UNCONFIRMED FAKE_CURL_COST=1 bash apps/web-platform/infra/arm-heartbeats.sh --arm-one "$HOST_NAME" --id "$ID_HOST" 2>&1)"
+RC=$?
+assert_eq "AO18 the run still reports the failed rollback" "1" "$RC"
+assert "AO18 the recovery command names the REAL script's absolute path, not a CDPATH decoy" "[[ \"\$OUT\" == *\"bash $SUT --sweep\"* ]]"
+
+echo "--- AO19 --sweep does not depend on the arm-one poll interval"
+new_case ao19
+: > "$CASE/books"
+OUT="$(PATH="$BIN:$PATH" BS_TOKEN=fake-token ARM_POLL_INTERVAL_S=0 ARMED_UNCONFIRMED="$CASE/books" bash "$SUT" --sweep 2>&1)"; RC=$?
+assert_eq "AO19 --sweep with ARM_POLL_INTERVAL_S=0 exits 0" "0" "$RC"
+assert "AO19 and reports outcome=noop" "[[ \"\$OUT\" == *'outcome=noop'* ]]"
+
+echo "--- AO20 an interval that is arithmetic never executes"
+new_case ao20
+OUT="$(PATH="$BIN:$PATH" BS_TOKEN=fake-token ARM_POLL_INTERVAL_S='RES_ID[$(touch "'"$CASE"'/pwned")]' TMPDIR="$CASE" bash "$SUT" --arm-one "$HOST_NAME" --id "$ID_HOST" 2>&1)"; RC=$?
+assert_eq "AO20 exits 1" "1" "$RC"
+assert "AO20 and nothing was executed" "[[ ! -e '$CASE/pwned' ]]"
 
 # --- Mutation battery -------------------------------------------------------------------------
 # Each row mutates a COPY of the SUT and requires a verdict this suite asserts to CHANGE. A guard
@@ -1496,7 +1649,7 @@ fi
 
 # M3 — stop recording the id at the unpause, which is what a "remove on attempt" design amounts to.
 # shellcheck disable=SC2016  # the sed program is data; expanding it here is the bug
-if mutate no-state-add 1 's|^  state_add "\$id"$|  : "state_add removed by mutation"|'; then
+if mutate no-state-add 1 's|^  if \[\[ -z "\$given_id" \]\]; then state_add "\$id"; fi$|  : "state_add removed by mutation"|'; then
   case_setup m3
   printf 'paused' > "$FAKE_STATE/$ID_INNGEST.status"
   printf '%s true\n' "$ID_INNGEST" > "$FAKE_PATCH_FAIL"
@@ -1553,7 +1706,7 @@ fi
 # M8 — narrow the op/state gate to `== "up"`, so a `down` or `pending` monitor is unpaused and
 # polled to its deadline on every apply.
 # shellcheck disable=SC2016  # the sed program is data; expanding it here is the bug
-if mutate gate-up-only 1 's|if \[\[ "\$HB_STATUS" != "paused" \]\]; then|if [[ "$HB_STATUS" == "up" ]]; then|'; then
+if mutate gate-up-only 1 's|^  if \[\[ "\$HB_STATUS" != "paused" \]\]; then|  if [[ "$HB_STATUS" == "up" ]]; then|'; then
   case_setup m8
   printf 'down' > "$FAKE_STATE/$ID_ZOT1.status"
   FAKE_CURL_COST=0 run_sut "$MUTANT"
@@ -1653,7 +1806,7 @@ fi
 # matching (a reflow of the rollback line), the count would still read 1 and this row would be
 # running M3's mutation — no `state_add` anywhere — and passing for the wrong reason. So the
 # re-insertion is asserted directly.
-if mutate late-state-add 1 '/^  state_add "\$id"$/d; s|^  if ! hb_rollback "\$id" "\$label"; then$|  state_add "$id"\n&|'; then
+if mutate late-state-add 1 '/^  if \[\[ -z "\$given_id" \]\]; then state_add "\$id"; fi$/d; s|^  if ! hb_rollback "\$id" "\$label"; then$|  state_add "$id"\n&|'; then
   assert "M18 the mutation MOVED state_add rather than deleting it (that is M3's row)" \
     "grep -q '^  state_add \"\$id\"$' '$MUTANT'"
   case_setup m18
@@ -1827,10 +1980,12 @@ fi
 
 # M36 — drop the ARM_POLL_INTERVAL_S validation: the variable reaches a $(( )) and a negative value loosens the ceiling.
 # shellcheck disable=SC2016  # the sed program is data; expanding it here is the bug
-if mutate no-poll-validation 1 's@^\[\[ "\$ARM_POLL_INTERVAL_S" =~ .*$@:@'; then
+if mutate no-poll-validation 1 's@^\[\[ "\$MODE" == sweep || "\$ARM_POLL_INTERVAL_S" =~ .*$@:@'; then
   new_case m36
   NEW_SUT="$MUTANT" NEW_POLL=abc run_named --status "$HOST_NAME"
-  assert "M36 RED: the mutant no longer names the invalid interval" "[[ \"\$OUT\" != *'ARM_POLL_INTERVAL_S must be'* ]]"
+  assert "M36 RED: the mutant no longer names the invalid interval" "[[ \"\$OUT\" != *'ARM_POLL_INTERVAL_S must be'* ]]"  new_case m36b
+  OUT="$(PATH="$BIN:$PATH" BS_TOKEN=fake-token ARM_POLL_INTERVAL_S='RES_ID[$(touch "'"$CASE"'/pwned")]' TMPDIR="$CASE" timeout 60 bash "$MUTANT" --arm-one "$HOST_NAME" --id "$ID_HOST" 2>&1)"
+  assert "M36 RED: the mutant EXECUTES the arithmetic payload (the real SUT refuses first, AO20)" "[[ -e '$CASE/pwned' ]]"
 fi
 
 # M37/M38 — a mode that is never dispatched checks nothing: delete either dispatch exit and the run falls into the
@@ -1860,12 +2015,12 @@ fi
 
 # M40 — drop the read-back after an unpause that answers an error: a monitor whose reply was lost stays live.
 # shellcheck disable=SC2016  # the sed program is data; expanding it here is the bug
-if mutate no-unpause-recovery 1 's@^  elif \[\[ "\$rc" -ne 0 && "\$ARM_RESULT" == unpause-failed \]\]; then@  elif false; then@'; then
+if mutate no-unpause-recovery 1 's@^  elif \[\[ "\$ARM_RESULT" == unpause-failed \]\]; then@  elif false; then@'; then
   new_case m40
   printf '%s false\n' "$ID_HOST" > "$FAKE_PATCH_LOST"
   NEW_SUT="$MUTANT" FAKE_CURL_COST=1 run_named --arm-one "$HOST_NAME" --id "$ID_HOST"
-  assert "M40 RED: the monitor that went live is left live and off the books" \
-    "[[ \"\$(cat '$FAKE_STATE/$ID_HOST.status')\" != paused && \$(books_count) -eq 0 ]]"
+  assert "M40 RED: the monitor that went live is left live (the real SUT rolls it back, AO10)" \
+    "[[ \"\$(cat '$FAKE_STATE/$ID_HOST.status')\" != paused ]]"
 fi
 
 # M41 — rc 0 for a live monitor that is not `up`: the runbook reads rc 0 as "the soak is satisfied".
@@ -1880,12 +2035,54 @@ fi
 
 # M42 — judge the books file by being non-empty rather than by this run's own id: an unrelated line is blamed on this run.
 # shellcheck disable=SC2016  # the sed program is data; expanding it here is the bug
-if mutate books-by-size 1 's@^  if grep -qxF -- "\$RES_ID" "\$ARMED_UNCONFIRMED" 2>/dev/null; then@  if [[ -s "$ARMED_UNCONFIRMED" ]]; then@'; then
+if mutate books-by-size 1 's@^  \[\[ \$? -eq 1 \]\] || on_books=1$@  [[ -s "$ARMED_UNCONFIRMED" ]] \&\& on_books=1@'; then
   new_case m42
   printf '%s\n' 777 > "$CASE/mine"
   echo 30 > "$FAKE_STATE/$ID_HOST.upat"
   NEW_SUT="$MUTANT" ARMONE_BOOKS="$CASE/mine" FAKE_CURL_COST=1 run_named --arm-one "$HOST_NAME" --id "$ID_HOST"
   assert "M42 RED: the mutant blames this run for the caller's unrelated line" "[[ \"\$OUT\" == *'still lists'* ]]"
+fi
+
+# M43 — record the id only AFTER the unpause (the pre-#9980 order): a lost reply whose read-back also fails leaves a live monitor off the books.
+# shellcheck disable=SC2016  # the sed program is data; expanding it here is the bug
+if mutate no-pre-record 1 's@^  if \[\[ -n "\$given_id" \]\] && ! state_add "\$id" pre-unpause; then$@  if false; then@'; then
+  new_case m43
+  printf '%s false\n' "$ID_HOST" > "$FAKE_PATCH_LOST"
+  printf '%s 1\n' "$ID_HOST" > "$FAKE_GET_FAIL_AFTER"
+  NEW_SUT="$MUTANT" FAKE_CURL_COST=1 run_named --arm-one "$HOST_NAME" --id "$ID_HOST"
+  assert_eq "M43 RED: the live, unreadable monitor is on NO books (the real SUT keeps its id, AO10b)" "0" "$(books_count)"
+fi
+
+# M44 — accept any books path that `: >>` can open: /dev/null, a symlink, a FIFO all pass and swallow the record.
+# shellcheck disable=SC2016  # the sed program is data; expanding it here is the bug
+if mutate books-any-path 1 's@^  elif \[\[ -L "\$ARMED_UNCONFIRMED" \]\].*$@  elif false \\@'; then
+  new_case m44
+  NEW_SUT="$MUTANT" ARMONE_BOOKS=/dev/null FAKE_CURL_COST=1 run_named --arm-one "$HOST_NAME" --id "$ID_HOST"
+  assert "M44 RED: /dev/null is accepted and the monitor is unpaused" "[[ \$(patch_count) -ge 1 ]]"
+fi
+
+# M45 — leave a stale line for an UP monitor on the books: a later --sweep would re-pause a fed monitor.
+# shellcheck disable=SC2016  # the sed program is data; expanding it here is the bug
+if mutate keep-stale-line 1 's@^        state_remove "\$RES_ID" && echo "::notice::arm-heartbeats.sh: removed the stale line.*$@        :@'; then
+  new_case m45
+  printf 'up' > "$FAKE_STATE/$ID_HOST.status"
+  write_page 1 "" "$(hb_row "$ID_HOST" "$HOST_NAME" up)"
+  printf '777\n%s\n' "$ID_HOST" > "$CASE/mine"
+  NEW_SUT="$MUTANT" ARMONE_BOOKS="$CASE/mine" FAKE_CURL_COST=1 run_named --arm-one "$HOST_NAME" --id "$ID_HOST"
+  assert "M45 RED: the up monitor's id is still on the books" "grep -qxF '$ID_HOST' '$CASE/mine'"
+fi
+
+# M46 — drop the CDPATH guard on the printed recovery command's `cd`.
+# shellcheck disable=SC2016  # the sed program is data; expanding it here is the bug
+if mutate cdpath-unguarded 1 "s@CDPATH='' cd --@cd --@"; then
+  new_case m46
+  printf '%s true\n' "$ID_HOST" > "$FAKE_PATCH_FAIL"
+  mkdir -p "$WORK/m46/sub/dir" "$WORK/m46-decoy/sub/dir" || { echo "FATAL: M46 mkdir failed"; exit 2; }
+  cp "$MUTANT" "$WORK/m46/sub/dir/x.sh" || { echo "FATAL: M46 copy failed"; exit 2; }
+  # shellcheck disable=SC2034  # read by the assert string below
+  m46_out="$(cd "$WORK/m46" && PATH="$BIN:$PATH" BS_TOKEN=fake-token CDPATH="$WORK/m46-decoy:." TMPDIR="$CASE" \
+        env -u TFSTATE_JSON -u ARMED_UNCONFIRMED FAKE_CURL_COST=1 bash sub/dir/x.sh --arm-one "$HOST_NAME" --id "$ID_HOST" 2>&1)"
+  assert "M46 RED: the mutant resolves the script through CDPATH to the decoy directory" "[[ \"\$m46_out\" != *\"bash $WORK/m46/sub/dir/x.sh --sweep\"* ]]"
 fi
 
 # New-mode control: an UNMUTATED copy, run through the same harness, still arms.
@@ -1923,7 +2120,7 @@ echo "arm-heartbeats: ${PASS} passed, ${FAIL} failed ($((PASS + FAIL)) assertion
 # the list endpoint's stub self-tests (H1), cases ST1-ST5/AX/AO1-AO9, mutation rows M22-M33 and the
 # new-mode control M34. Ratcheted 374 -> 454 for the review round: ST1b-ST5n, AX2, AO5 (up/down/pending),
 # AO6f-g, AO7b-d, AO10-AO12 and mutation rows M35-M42.
-ASSERT_FLOOR=454
+ASSERT_FLOOR=516
 if [[ $((PASS + FAIL)) -lt "$ASSERT_FLOOR" ]]; then
   echo "FAIL: only $((PASS + FAIL)) assertions ran against a floor of ${ASSERT_FLOOR} — the suite is narrowed or a case aborted early."
   exit 1

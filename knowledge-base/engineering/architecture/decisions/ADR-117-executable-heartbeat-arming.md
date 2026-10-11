@@ -424,12 +424,16 @@ What differs from the per-merge path: the monitor is resolved by EXACT name over
 (exactly one match required; the owner's `--id`, read in a separate step, is the independent anchor, and an
 empty `--id` refuses); the deadline is a fixed 150 s, a deliberate departure from the per-monitor formula
 default of the 2026-08-20 amendment, bounded by the monitor's own `period + grace - 40` and refused when
-exceeded; the books file is a private `mktemp` (or a caller path checked writable BEFORE the first PATCH)
-whose path and `--sweep` recovery command are printed first; an unpause that answers an error is read back
-and rolled back, because the reply can be lost after the change applied; and rc 0 means armed or already
+exceeded; the books file is a private `mktemp` (or a caller path that must be absent or a readable regular
+file, not a symlink, checked BEFORE the first PATCH) whose path and `--sweep` recovery command are printed
+first, and the monitor's id is written to it BEFORE the unpause request, so a request that applies with its
+reply lost, or a killed process, cannot leave a live monitor on nobody's books; an unpause that answers an
+error is read back and rolled back, because the reply can be lost after the change applied; and rc 0 means armed or already
 `up`, never "live in some other state" (`down`, `pending` exit 1), with a machine verdict line
-`arm-one-result` last. The credential is the operator's account-wide Better Stack write token, injected by
-`doppler run` into one child process, not the CI-scoped token of the apply path. The first user is the
+`arm-one-result` last. The credential is the same account-wide Better Stack write token
+(`BETTERSTACK_API_TOKEN`) the apply path uses, read through the operator's own Doppler login and injected by
+`doppler run` into one child process, instead of the CI-scoped `DOPPLER_TOKEN_WEB_ARM` handle that reads it in
+the apply workflow. Nothing here narrows its scope. The first user is the
 git-data host liveness heartbeat ([ADR-283](./ADR-283-git-data-host-originated-liveness-heartbeat.md)).
 
 ## Consequences
