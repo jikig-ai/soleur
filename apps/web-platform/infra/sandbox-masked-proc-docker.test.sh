@@ -51,7 +51,7 @@ fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 die() { echo "$1" >&2; echo "FAIL: $1"; exit 1; }
 
 cleanup() {
-  docker rm -f "$CTR" "$CTR-ctrl" "$CTR-pos" >/dev/null 2>&1 || true
+  docker rm -f "$CTR" "$CTR-build" "$CTR-ctrl" "$CTR-pos" >/dev/null 2>&1 || true
   docker rmi -f "$IMG" >/dev/null 2>&1 || true
   rm -rf "$WORK"
 }
@@ -99,14 +99,30 @@ fi
 # ---------------------------------------------------------------------------
 BASE="$(grep -m1 -E '^FROM node:22-slim@sha256:[0-9a-f]{64}' "$DOCKERFILE" | awk '{print $2}')"
 [[ -n "$BASE" ]] || die "IMAGE_BUILD_FAILED: could not read the node:22-slim@sha256 base from $DOCKERFILE"
-cat > "$WORK/Dockerfile" <<EOF
-FROM $BASE
-RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends bubblewrap procps jq openssh-client \\
- && rm -rf /var/lib/apt/lists/* \\
- && useradd -m -u 1001 soleur
-USER soleur
-EOF
-docker build -q -t "$IMG" "$WORK" >"$WORK/build.out" 2>&1 || die "IMAGE_BUILD_FAILED: $(tail -c 400 "$WORK/build.out")"
+# Bounded apt (#9395): the image build shares lib/apt-bounded.sh with the git-data suites (one budget of apt seconds,
+# expiry routed to FIXTURE_APT_FAILED + exit 100). Never a skip here: any non-zero rc is IMAGE_BUILD_FAILED.
+APT_LIB="${SCRIPT_DIR}/lib/apt-bounded.sh"
+APT_BUDGET_S=150
+[[ -r "$APT_LIB" ]] || die "IMAGE_BUILD_FAILED: ${APT_LIB} is missing, the apt cycle could not be bounded"
+# shellcheck source=lib/apt-bounded.sh
+. "$APT_LIB"
+gd_apt_state_arm "$WORK/aptstate" "$APT_BUDGET_S" || { echo "IMAGE_BUILD_FAILED: the shared apt budget could not be armed" >&2; exit 2; }
+# shellcheck disable=SC2016  # single-quoted on purpose: the script expands inside the container
+docker run --name "$CTR-build" -v "$GD_APT_STATE:/work/apt" "$BASE" bash -c '
+  export DEBIAN_FRONTEND=noninteractive
+  . /work/apt/apt-bounded.sh || exit 97
+  gd_apt_install_bounded --no-install-recommends bubblewrap procps jq openssh-client || exit $?
+  useradd -m -u 1001 soleur
+' >"$WORK/build.out" 2>&1
+BUILD_RC=$?
+gd_apt_state_summary
+if [[ "$BUILD_RC" -ne 0 ]]; then
+  docker rm -f "$CTR-build" >/dev/null 2>&1 || true
+  die "IMAGE_BUILD_FAILED: image-build container rc=$BUILD_RC: $(tail -c 400 "$WORK/build.out")"
+fi
+docker commit --change 'USER soleur' "$CTR-build" "$IMG" >/dev/null 2>&1 \
+  || die "IMAGE_BUILD_FAILED: docker commit of the image-build container failed"
+docker rm "$CTR-build" >/dev/null 2>&1 || true
 
 BWRAP_VER="$(docker run --rm "$IMG" bwrap --version 2>&1 | head -1)"
 case "$BWRAP_VER" in
