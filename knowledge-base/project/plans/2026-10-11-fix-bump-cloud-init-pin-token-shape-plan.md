@@ -15,6 +15,32 @@ requires_cpo_signoff: false
 
 # fix(ci): bump-cloud-init-pin fails with SOLEUR_CREDENTIAL_REFUSED reason=token_shape
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-11. **Method:** all deepen-plan mechanical halts run
+inline (4.6 user-brand, 4.7 observability, 4.8 PAT sweep, 4.9 UI, 4.10
+encryption, 4.11 `lint-guard-contract.py` rc=0, 4.12 Scope Check count=1);
+implementation-realism greps (§4.45) executed by the planner — no Task tool
+exists in this subagent context, so the per-section research/review agent
+fan-out (Phases 2–5) could not be spawned; the equivalent checks ran directly
+against the tree.
+
+- Tightened the "only narrow-class site" claim: the repo grep returned three
+  sibling `[!A-Za-z0-9_]` hits, all identifier validators by design
+  (`BS_TABLE`/`BS_TABLE_S3` ClickHouse identifiers in `betterstack-query.sh:247`
+  and `git-data-rung2-evidence-capture.sh:1435`; a numeric/counter check in
+  `hmac-sha1-b64.sh:81`) — none are credential-shape guards, so the claim holds
+  with the enumeration named.
+- Cited issue/PR numbers verified live: #9893 MERGED (guard's origin, commit
+  `3eb0238125` confirmed on `origin/main`), #9905/#9939/#9964 OPEN, #9944 MERGED.
+- Added the `2026-09-19` unpinned-wire learning: it is the direct precedent for
+  the per-token `SHIM_B64` fix — a fixture that reads a value pinned to a
+  sibling constant certifies the wrong wire.
+- discoverability probe corrected at plan-write time: `grep -Fc` (literal
+  needle), expected `1` — verified 0→1 against a scratch copy of the post-fix
+  guard; the first draft's `&& printf ok` form would have failed Check 10's
+  shell-active-token reject.
+
 ## Overview
 
 The `bump-cloud-init-pin` job fails at its args stage on every run: the
@@ -59,7 +85,7 @@ fail-closed).
 | #9972 open, diagnosis accurate | YES | `gh issue view 9972` → state OPEN, title matches |
 | Guard on the narrow class | YES | `.github/scripts/bump-inngest-bootstrap-pin.sh:237` `''\|*[!A-Za-z0-9_]*)`, die `:241`, comments `:47` and `:234` |
 | Canonical alphabet is the repo boundary | YES | `scripts/lib/bearer-curl.sh:59` `bc_ok()` uses `''\|*[!A-Za-z0-9._~+/=-]*)`; identical inline `_bearer_ok()` copies at `deploy-inngest-image.yml:59,104`, `web-platform-release.yml:1348` |
-| Guard is the ONLY narrow-class site | YES | repo grep for `!A-Za-z0-9_]` negated classes: only this guard + its test needle; other `[A-Za-z0-9_]` hits are variable-name validation, redaction regexes, and `ghs_` detection sentinels (different class of check) |
+| Guard is the ONLY narrow-class site | YES | repo grep for `!A-Za-z0-9_]` returns this guard + its test needle plus three identifier validators that are narrow BY DESIGN: `BS_TABLE`/`BS_TABLE_S3` ClickHouse identifiers (`scripts/betterstack-query.sh:247`, `scripts/followthroughs/git-data-rung2-evidence-capture.sh:1435`) and a numeric/counter check (`plugins/soleur/skills/community/scripts/lib/hmac-sha1-b64.sh:81`) — none judge a credential |
 | Mint composite checks grant, not shape | YES | `.github/actions/mint-infra-app-token/action.yml` gates on permissions/repositories JSON, never token bytes |
 | Test anchors | YES | needle `:1969`, `refuse_row dot` `:1981`, `run_shimmed` `:1240`, `SYN_TOK`/`SYN_B64` `:1171-1172` |
 | Guard provenance | YES | `git log -S 'A-Za-z0-9_]'` → commit `3eb0238125`, PR #9893, merged 2026-10-10 |
@@ -111,6 +137,12 @@ machinery is invented.
   diagnosis already did the prescribed probe (live mint + revoke). The accept
   row must therefore pin the REAL measured byte set, not the legacy fixture's
   shape.
+- `2026-09-19-my-fix-for-the-unpinned-wire-injected-the-seam-under-test.md`
+  (test-failures) — a fixture that reads a value pinned to a SIBLING constant
+  certifies the wrong wire. Direct precedent for the `SHIM_B64` fix: pinned to
+  `SYN_B64`, the `argv=b64`/`out_lacks` leak checks would judge the legacy
+  token's base64 on a row running a different token — deriving per-token keeps
+  the check honest.
 - `2026-10-10-a-log-scraping-probe-matched-the-script-it-echoed-and-the-inline-copies-dropped-the-trim-the-library-had.md` —
   inline copies of a library guard silently lose the library's pre-processing.
   `bc_ok` trims trailing whitespace before judging; this guard does not.
