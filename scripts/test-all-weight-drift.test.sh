@@ -67,7 +67,8 @@ echo "--- Part A: structural contract (wiring sites present, ordered) ---"
 
 # A1 — the comparator lib is sourced opportunistically beside the scratch-root include.
 if grep -qE 'lib/test-weight-drift\.sh' "$TARGET" \
-   && grep -nE '_WDRIFT_LIB=.*lib/test-weight-drift\.sh' "$TARGET" | grep -q 'dirname "${BASH_SOURCE\[0\]}"'; then
+   && grep -q 'dirname "${BASH_SOURCE\[0\]}"' \
+     < <(grep -nE '_WDRIFT_LIB=.*lib/test-weight-drift\.sh' "$TARGET"); then
   pass "A1 — runner sources lib/test-weight-drift.sh via BASH_SOURCE-anchored path"
 else
   fail "A1 — lib source line missing or not BASH_SOURCE-anchored"
@@ -137,8 +138,8 @@ else
   fail "A5 — ALWAYS_ON_SUITES entry missing"
 fi
 if grep -q 'AFFECTED_SCRIPTS_TEST_ALL_WEIGHT_DRIFT_PATHS=(' "$INDEX" \
-   && sed -n '/AFFECTED_SCRIPTS_TEST_ALL_WEIGHT_DRIFT_PATHS=(/,/^)/p' "$INDEX" \
-      | grep -qF 'glob:scripts/*.tsv'; then
+   && grep -qF 'glob:scripts/*.tsv' \
+      < <(sed -n '/AFFECTED_SCRIPTS_TEST_ALL_WEIGHT_DRIFT_PATHS=(/,/^)/p' "$INDEX"); then
   pass "A5 — AFFECTED block declared with glob: scripts/*.tsv edge"
 else
   fail "A5 — AFFECTED_SCRIPTS_TEST_ALL_WEIGHT_DRIFT_PATHS block missing or lacks glob: scripts/*.tsv edge"
@@ -548,7 +549,7 @@ fi
 # C3 — CI=1: no auto-default of TEST_TIMING_LOG (the arm requires -z CI).
 rm -rf "$TMP/durable"
 run_arm c3 none 1 "TEST_GROUP=affected CI=1" || true
-if ! find "$TMP/durable" -name 'suite-timings.tsv' 2>/dev/null | grep -q . \
+if ! grep -q . < <(find "$TMP/durable" -name 'suite-timings.tsv' 2>/dev/null) \
    && ! grep -q 'WEIGHT_DRIFT' <<<"$ARM_OUT"; then
   pass "C3 — CI run never auto-defaults the timing log"
 else
@@ -577,7 +578,7 @@ if (( _c4_rows_ok == 1 )); then
 else
   fail "C4 — caller-set path not honored or no emit"; dump "$ARM_OUT"
 fi
-if ! find "$TMP/durable" -name 'suite-timings.tsv' 2>/dev/null | grep -q .; then
+if ! grep -q . < <(find "$TMP/durable" -name 'suite-timings.tsv' 2>/dev/null); then
   pass "C4 — caller-set path is not clobbered by the default"
 else
   fail "C4 — default arm overrode the caller-set path"
@@ -594,7 +595,7 @@ else
   C5_OUT="$ARM_OUT"; C5_RC="$ARM_RC"
   chmod 0755 "$RO_DIR"
   if [[ "$C5_RC" == 0 ]] && grep -q 'suites passed ===' <<<"$C5_OUT" \
-     && ! find "$RO_DIR" -name 'suite-timings.tsv' 2>/dev/null | grep -q .; then
+     && ! grep -q . < <(find "$RO_DIR" -name 'suite-timings.tsv' 2>/dev/null); then
     pass "C5 — unwritable durable dir: probe declines, run completes green, no log"
   else
     fail "C5 — read-only-dir run aborted or logged anyway (rc=$C5_RC)"; dump "$C5_OUT"
@@ -608,7 +609,7 @@ fi
 rm -rf "$TMP/durable"
 run_arm c6 none 0 "" --enumerate || true
 C6_OUT="$ARM_OUT"; C6_RC="$ARM_RC"
-if [[ "$C6_RC" == 0 ]] && ! find "$TMP/durable" -mindepth 1 2>/dev/null | grep -q .; then
+if [[ "$C6_RC" == 0 ]] && ! grep -q . < <(find "$TMP/durable" -mindepth 1 2>/dev/null); then
   pass "C6 — --enumerate declines the arm: no timing log, no durable dir"
 else
   fail "C6 — enumerate path armed the default or errored (rc=$C6_RC)"; dump "$C6_OUT"
@@ -618,7 +619,7 @@ fi
 # for named groups, and the arm must not fire on TEST_GROUP=scripts either.
 rm -rf "$TMP/durable"
 run_arm c7 none 0 "TEST_GROUP=scripts" || true
-if ! find "$TMP/durable" -name 'suite-timings.tsv' 2>/dev/null | grep -q .; then
+if ! grep -q . < <(find "$TMP/durable" -name 'suite-timings.tsv' 2>/dev/null); then
   pass "C7 — named group (TEST_GROUP=scripts) is not affected-shaped: no timing log"
 else
   fail "C7 — default arm fired on a named group"; dump "$ARM_OUT"
@@ -630,7 +631,7 @@ fi
 rm -rf "$TMP/durable"
 run_arm c8 none 1 "" || true
 C8_OUT="$ARM_OUT"; C8_RC="$ARM_RC"
-if find "$TMP/durable" -name 'suite-timings.tsv' 2>/dev/null | grep -q . \
+if grep -q . < <(find "$TMP/durable" -name 'suite-timings.tsv' 2>/dev/null) \
    && grep -qF 'WEIGHT_DRIFT wd-stub committed=5000 local=30000' <<<"$C8_OUT" \
    && [[ "$C8_RC" == 0 ]]; then
   pass "C8 — all-group local default (_AFFECTED==1) arms the default and emits"
@@ -659,7 +660,7 @@ fi
 # M1: default arm deleted → no timing log is created.
 rm -rf "$TMP/durable"
 run_arm m1 no_default_arm 1 "TEST_GROUP=affected" || true
-if ! find "$TMP/durable" -name 'suite-timings.tsv' 2>/dev/null | grep -q .; then
+if ! grep -q . < <(find "$TMP/durable" -name 'suite-timings.tsv' 2>/dev/null); then
   pass "M1 — without the default arm, no timing log exists"
 else
   fail "M1 — timing log appeared despite deleted arm"
@@ -678,7 +679,7 @@ else
   M2_OUT="$ARM_OUT"; M2_RC="$ARM_RC"
   chmod 0755 "$RO_DIR"
   if [[ "$M2_RC" == 0 ]] && grep -q 'suites passed ===' <<<"$M2_OUT" \
-     && ! find "$RO_DIR" -name 'suite-timings.tsv' 2>/dev/null | grep -q . \
+     && ! grep -q . < <(find "$RO_DIR" -name 'suite-timings.tsv' 2>/dev/null) \
      && grep -q 'timing log declined' <<<"$M2_OUT"; then
     pass "M2 — removed dir probe: truncate declines, run green, no log (file-level gate verified)"
   else
@@ -691,7 +692,7 @@ fi
 rm -rf "$TMP/durable"
 run_arm m3 no_emit 1 "TEST_GROUP=affected" || true
 if [[ "$ARM_RC" == 0 ]] \
-   && find "$TMP/durable" -name 'suite-timings.tsv' 2>/dev/null | grep -q . \
+   && grep -q . < <(find "$TMP/durable" -name 'suite-timings.tsv' 2>/dev/null) \
    && ! grep -q '^WEIGHT_DRIFT ' <<<"$ARM_OUT"; then
   pass "M3 — deleted emit site: log exists, zero WEIGHT_DRIFT lines"
 else
@@ -701,7 +702,7 @@ fi
 # M4: -z CI dropped from the default arm → the arm fires under CI.
 rm -rf "$TMP/durable"
 run_arm m4 ci_arm_off 1 "TEST_GROUP=affected CI=1" || true
-if find "$TMP/durable" -name 'suite-timings.tsv' 2>/dev/null | grep -q .; then
+if grep -q . < <(find "$TMP/durable" -name 'suite-timings.tsv' 2>/dev/null); then
   pass "M4 — without the CI conjunct the arm fires under CI (conjunct is load-bearing)"
 else
   fail "M4 — CI conjunct removal changed nothing (arm already fires under CI)"
@@ -711,7 +712,7 @@ fi
 rm -rf "$TMP/durable"
 CALLER_LOG2="$TMP/caller-m5.tsv"; : > "$CALLER_LOG2"
 run_arm m5 caller_wins_off 1 "TEST_GROUP=affected TEST_TIMING_LOG=$CALLER_LOG2" || true
-if find "$TMP/durable" -name 'suite-timings.tsv' 2>/dev/null | grep -q . \
+if grep -q . < <(find "$TMP/durable" -name 'suite-timings.tsv' 2>/dev/null) \
    && [[ ! -s "$CALLER_LOG2" ]]; then
   pass "M5 — without the caller-set conjunct the default clobbers the caller path"
 else
@@ -732,7 +733,7 @@ fi
 # mkdir (the durable dir is created — the observable C6 now reads).
 rm -rf "$TMP/durable"
 run_arm m7 enumerate_off 0 "" --enumerate || true
-if find "$TMP/durable" -mindepth 1 2>/dev/null | grep -q .; then
+if grep -q . < <(find "$TMP/durable" -mindepth 1 2>/dev/null); then
   pass "M7 — without the enumerate conjunct the arm fires on --enumerate (conjunct is load-bearing)"
 else
   fail "M7 — enumerate conjunct removal changed nothing"
@@ -742,7 +743,7 @@ fi
 # shape) stops arming entirely; TEST_GROUP=affected arms still pass.
 rm -rf "$TMP/durable"
 run_arm m8 affected_selector_off 1 "" || true
-if ! find "$TMP/durable" -name 'suite-timings.tsv' 2>/dev/null | grep -q .; then
+if ! grep -q . < <(find "$TMP/durable" -name 'suite-timings.tsv' 2>/dev/null); then
   pass "M8 — without the all-group disjunct the bare-invocation path never arms"
 else
   fail "M8 — all-group selector removal changed nothing"
