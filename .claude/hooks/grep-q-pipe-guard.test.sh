@@ -1103,7 +1103,7 @@ _eqv() { # <shell> [flags added on the grep -c side only: a deliberately wrong c
   done
   printf '%s' "$out"
 }
-EQV_BASH=bash; EQV_SH=sh   # one name per pass, used by the table run and its negative control alike, so neither can be pointed elsewhere alone
+EQV_BASH="bash"; EQV_SH="sh"   # one name per pass, used by the table run and its negative control alike, so neither can be pointed elsewhere alone
 eqv_neg="$(_eqv "$EQV_BASH" v)"
 eqv_bash="$(_eqv "$EQV_BASH")"
 [[ -z "$eqv_bash" && -n "$eqv_neg" ]] \
