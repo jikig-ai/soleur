@@ -5353,8 +5353,10 @@ echo "=== stage S4: Guard 2 rows 13 to 24, shapes and replay done ==="
 # =====================================================================================
 # STAGE S5 (argv-bearer sweep S5, ADR-280): the last slice. `apply-web-platform-infra.yml` (five sites: three best-effort Better Stack
 # heartbeat-status reads and the two Hetzner existence probes of the recovery-posture step) and, in the registry commit, the four
-# Better Stack posting scripts of `cloud-init-registry.yml`, leave the process command line. Baseline E then holds only the rows owned
-# by #9756. Population and the manifests are DERIVED from the tree; the real step bodies are EXECUTED under the S4 recording curl.
+# Better Stack posting scripts of `cloud-init-registry.yml`, leave the process command line. Baseline E then held only the two cla-evidence
+# rows owned by #9756; that issue converted them and baseline E is empty, so the set rows below derive the registry row only while it
+# still offends and every row of the file needs an owner line. Population and the manifests are DERIVED from the tree; the real step bodies
+# are EXECUTED under the S4 recording curl.
 #
 #   GUARD 1  no curl of either converted file carries a credential header on its own argument list, and the baseline and the ceiling
 #            table hold exactly the rows still owned by tracked work (set identity, not a count); every library call of the apply
@@ -5435,13 +5437,16 @@ else row "S5 Guard 1 mutation 3: the order predicate is blind to a reordered ste
 # ---- baseline E and the ceiling table: SET IDENTITY with the rows still owned by tracked work (parametrized on the registry commit) ----
 S5_CEIL="scripts/fixtures/shell-trace-refusal/rule-e-census-ceiling.tsv"
 S5_REG_OFFENDS=0; S5_REG_LINT="$(python3 scripts/lint-shell-trace-credential-refusal.py "$S5_REG" 2>&1)"; grep -q '^OK:' <<<"$S5_REG_LINT" || S5_REG_OFFENDS=1
-S5_WANT_ROWS="$(printf '%s\n' apps/cla-evidence/infra/bootstrap.sh apps/cla-evidence/scripts/r2-conditional-put.sh; (( S5_REG_OFFENDS )) && printf '%s\n' "$S5_REG"; true)"
+S5_WANT_ROWS="$( (( S5_REG_OFFENDS )) && printf '%s\n' "$S5_REG"; true)"
 S5_WANT_ROWS="$(sort <<<"$S5_WANT_ROWS")"
-S5_GOT_BASE="$(grep -v '^#' "$BASE_E" | cut -f1 | sort)"; S5_GOT_CEIL="$(grep -v '^#' "$S5_CEIL" | cut -f1 | sort)"
-if [[ "$S5_GOT_BASE" == "$S5_WANT_ROWS" && "$S5_GOT_CEIL" == "$S5_WANT_ROWS" ]]; then row "S5 Guard 1: baseline E and the census ceiling each hold exactly the rows still owned by tracked work (the two #9756 files$( (( S5_REG_OFFENDS )) && echo ' and the registry file, which still carries its argv form'))" ok
+S5_GOT_BASE="$( { grep -v '^#' "$BASE_E" || true; } | cut -f1 | sort)"; S5_GOT_CEIL="$( { grep -v '^#' "$S5_CEIL" || true; } | cut -f1 | sort)"
+if [[ "$S5_GOT_BASE" == "$S5_WANT_ROWS" && "$S5_GOT_CEIL" == "$S5_WANT_ROWS" ]]; then row "S5 Guard 1: baseline E and the census ceiling each hold exactly the rows still owned by tracked work ($( (( S5_REG_OFFENDS )) && echo 'the registry file, which still carries its argv form' || echo 'none: every Rule E site is converted'))" ok
 else row "S5 Guard 1: baseline E or the ceiling table differs from the rows still owned by tracked work" fail "want='${S5_WANT_ROWS//$'\n'/,}' base='${S5_GOT_BASE//$'\n'/,}' ceil='${S5_GOT_CEIL//$'\n'/,}'"; fi
-if grep -q '#9756' < <(sed -n '1,/^[^#]/p' "$BASE_E") && grep -q '#9756' < <(sed -n '1,/^[^#]/p' "$S5_CEIL"); then row "S5 Guard 1: the header of baseline E and of the ceiling table names #9756 as the owner of the cla-evidence rows" ok
-else row "S5 Guard 1: the baseline or the ceiling table does not name its owner" fail "missing #9756 in a header"; fi
+S5_OWN_BASE='# OWNERS (S5, #9597): a row in this file must carry its own owner'
+S5_OWN_CEIL='# OWNERS (S5, #9597): a row in this table carries its own owner'
+if grep -qF -- "$S5_OWN_BASE" "$BASE_E" && grep -qF -- "$S5_OWN_CEIL" "$S5_CEIL" && grep -qF -- "${S5_OWN_BASE#\# }" scripts/lint-shell-trace-credential-refusal.py \
+   && ! grep -qF '#9756' < <(sed -n '1,/^[^#]/p' "$BASE_E"); then row "S5 Guard 1: the headers of baseline E and of the ceiling table state the owner-line rule in state-neutral words (no row is named), and the lint's writer emits the baseline's text" ok
+else row "S5 Guard 1: the baseline or the ceiling table header does not state the owner-line rule, or still names a converted row's owner" fail "owner-line header text missing or stale"; fi
 
 # ---- Guard 2: the heartbeat reads (three steps, non-gating) ----
 s5_hb_valid_ok() { # <token>: rc 0 when the valid-credential contract holds for the row just run
@@ -5578,16 +5583,17 @@ else row "S5 Guard 2 (posture): an unreadable name count is not held at unknown"
 s5_pst_run s5-pst-mut-count2 "$S4/b-s5-mut-count.sh" HCLOUD_TOKEN="$S5_HZ" SHIM_CODE=404 SHIM_BODY='not-json'
 if [[ "$S4_RC" == 0 ]] && s4_gho_has 'probe_result=absent'; then row "S5 Guard 2 mutation (posture): folding the unreadable count to zero reaches \`absent\` and is judged RED" ok
 else row "S5 Guard 2 mutation (posture): the fold of an unreadable count to zero is not caught" fail "rc=$S4_RC"; fi
-# Owners: a baseline row for any file other than the cla-evidence rows (#9756) carries an owner line (a `#N` comment) directly above it, and the header's
-# OWNERS lines are the same text the writer emits (so the committed header cannot drift from `--write-baseline-e`).
-s5_owner_bad() { # <baseline file> -> prints the paths of rows (outside apps/cla-evidence) with no `#N` owner comment directly above
+# Owners: every baseline row carries an owner line (a `#N` comment) directly above it (the two cla-evidence rows were the one exemption; they left
+# with #9756 and so did the carve-out), and the header's OWNERS lines are the same text the writer emits (so the committed header cannot drift
+# from `--write-baseline-e`).
+s5_owner_bad() { # <baseline file> -> prints the paths of rows with no `#N` owner comment directly above
   local line prev="" p bad=""
   while IFS= read -r line; do
     case "$line" in
       '#'*) prev="$line" ;;
       '') prev="" ;;
       *) p="${line%%$'\t'*}"
-         case "$p" in apps/cla-evidence/*) : ;; *) [[ "$prev" =~ \#[0-9]+ ]] || bad+=" $p" ;; esac
+         [[ "$prev" =~ \#[0-9]+ ]] || bad+=" $p"
          prev="" ;;
     esac
   done < "$1"
@@ -5595,8 +5601,11 @@ s5_owner_bad() { # <baseline file> -> prints the paths of rows (outside apps/cla
 }
 printf '# header\napps/web-platform/infra/x.yml\t1\n' > "$S4/own-bad.txt"
 printf '# header\n# #9757 owner of the row below\napps/web-platform/infra/x.yml\t1\n' > "$S4/own-ok.txt"
+printf '# header\napps/cla-evidence/scripts/x.sh\t1\n' > "$S4/own-bad-cla.txt"
+printf '# header\n# #9757 owner of the row below\napps/cla-evidence/scripts/x.sh\t1\n' > "$S4/own-ok-cla.txt"
 S5_OWNER_BAD="$(s5_owner_bad "$REPO_ROOT/$BASE_E")"
-S5_OWNER_CTL=0; [[ "$(s5_owner_bad "$S4/own-bad.txt")" == apps/web-platform/infra/x.yml && -z "$(s5_owner_bad "$S4/own-ok.txt")" ]] && S5_OWNER_CTL=1
+S5_OWNER_CTL=0; [[ "$(s5_owner_bad "$S4/own-bad.txt")" == apps/web-platform/infra/x.yml && -z "$(s5_owner_bad "$S4/own-ok.txt")" \
+  && "$(s5_owner_bad "$S4/own-bad-cla.txt")" == apps/cla-evidence/scripts/x.sh && -z "$(s5_owner_bad "$S4/own-ok-cla.txt")" ]] && S5_OWNER_CTL=1
 S5_HDR_BAD="$(python3 -I -c '
 import sys
 base = open(sys.argv[1]).read().split("\n")
@@ -5610,7 +5619,7 @@ while i < len(base) and base[i].startswith("#"):
     if txt not in src: bad.append(txt[:40])
     i += 1
 print(";".join(bad))' "$REPO_ROOT/$BASE_E" "$REPO_ROOT/scripts/lint-shell-trace-credential-refusal.py")"
-if [[ -z "$S5_OWNER_BAD" && -z "$S5_HDR_BAD" && "$S5_OWNER_CTL" == 1 ]]; then row "S5 Guard 1: every baseline E row outside apps/cla-evidence carries an owner line above it, and the header's OWNERS text is the text the lint's writer emits" ok
+if [[ -z "$S5_OWNER_BAD" && -z "$S5_HDR_BAD" && "$S5_OWNER_CTL" == 1 ]]; then row "S5 Guard 1: every baseline E row carries an owner line above it (a cla-evidence row without one is refused, with one is accepted), and the header's OWNERS text is the text the lint's writer emits" ok
 else row "S5 Guard 1: a baseline E row has no owner, or the header drifted from the writer" fail "unowned='${S5_OWNER_BAD# }' header-drift='$S5_HDR_BAD' owner-control=$S5_OWNER_CTL"; fi
 # The operator hints that used to print the argv `curl -H "Authorization: Bearer ..."` form (echo text and the comment above the id pin) stay off argv: Rule E does not read echo text.
 S5_HINT_RE="(-H|--header)[ =]*\\\\*[\"']?authorization:? *bearer"
