@@ -527,7 +527,7 @@ ancestor of it.
 
 The guard does not cover a plain `terraform apply`, secret writes, SQL, non-Bash tools, `terragrunt` or `pulumi` destroy, or indirect command forms (scripts or heredocs fed to a shell, wrappers it does not unwrap, obfuscated command names), and is not a substitute for scoped credentials.
 
-Not active in Soleur-hosted sessions: hosted Bash runs in the sandbox under the workspace's approval mode, and in the default autonomous mode (after the owner's one-time acknowledgement) commands outside a short blocklist run without a prompt; this guard does not add one.
+Not active in Soleur-hosted sessions: hosted Bash runs in the sandbox under the workspace's approval mode, and in the default autonomous mode (after the owner's one-time acknowledgement) commands outside a short blocklist run without a prompt, apart from a separate Soleur check that pauses to ask before the default-branch force-push, delete and mirror, `terraform destroy` and `gh` ref or repository delete forms it recognises (it does not recognise every spelling); this guard does not add a prompt.
 
 It is a seatbelt, not a boundary: an agent that can edit your settings can switch it off.
 
