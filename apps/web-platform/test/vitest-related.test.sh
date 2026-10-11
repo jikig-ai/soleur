@@ -506,7 +506,7 @@ fi
 # satisfy it); removing the flag from the invocation must break the pin.
 # (The docs' watch-hang was measured non-reproducible at 4.1.11 — the pin is
 # static and honest about that.)
-if grep '"$VITEST" related' "$WRAPPER" | grep -q -- ' --run '; then
+if grep -q -- ' --run ' < <(grep '"$VITEST" related' "$WRAPPER"); then
   pass "M2 — live related invocation carries --run (non-watch form, docs)"
 else
   fail "M2 — live related invocation lost --run"
@@ -514,7 +514,7 @@ fi
 M2="$TMP/wrapper-m2.sh"
 sed 's/ --run / /g' "$WRAPPER" > "$M2" 2>/dev/null || true
 if [[ -s "$M2" ]] && ! diff -q "$WRAPPER" "$M2" >/dev/null 2>&1 \
-   && ! { grep '"$VITEST" related' "$M2" | grep -q -- ' --run '; }; then
+   && ! grep -q -- ' --run ' < <(grep '"$VITEST" related' "$M2"); then
   pass "M2 — flag removal on the invocation is detected (pin is load-bearing)"
 else
   fail "M2 — --run removal not detected (pin vacuous or mutation inert)"
