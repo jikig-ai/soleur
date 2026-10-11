@@ -583,16 +583,17 @@ arm_one() {
 # DIRECTLY (never inside $( ) or a `| while read` pipeline), so they survive in this shell.
 RES_COUNT=0; RES_ID=""; RES_IDS=""; RES_PAUSED=""; RES_STATUS=""; RES_PERIOD=""; RES_GRACE=""
 hb_resolve_name() {  # <name> -> 0 when the whole list was read (RES_COUNT says how many matched); 1 otherwise
-  local name="$1" url pages=0 body rows next rest rid rstatus rpaused rperiod rgrace
+  local name="$1" query pages=0 body rows next rest rid rstatus rpaused rperiod rgrace
   RES_COUNT=0; RES_ID=""; RES_IDS=""; RES_PAUSED=""; RES_STATUS=""; RES_PERIOD=""; RES_GRACE=""
-  url="${BS_API_BASE}/heartbeats?per_page=250"
-  while [[ -n "$url" ]]; do
+  query="per_page=250"
+  while [[ -n "$query" ]]; do
     pages=$(( pages + 1 ))
     if [[ "$pages" -gt "$ARM_LIST_MAX_PAGES" ]]; then
       echo "::error::arm-heartbeats.sh: the heartbeat list did not end within ${ARM_LIST_MAX_PAGES} pages — refusing to resolve '${name}' from a partial read."
       return 1
     fi
-    if ! body=$(bs_api -fsS --max-time "$ARM_CURL_MAX_TIME_S" "$url"); then
+    # The URL is the PINNED base plus a query this function validated: it can never name another host.
+    if ! body=$(bs_api -fsS --max-time "$ARM_CURL_MAX_TIME_S" "${BS_API_BASE}/heartbeats?${query}"); then
       echo "::error::arm-heartbeats.sh: GET of the heartbeat list (page ${pages}) failed — cannot resolve '${name}'."
       return 1
     fi
@@ -625,7 +626,7 @@ hb_resolve_name() {  # <name> -> 0 when the whole list was read (RES_COUNT says 
       RES_ID="$rid"; RES_STATUS="$rstatus"; RES_PAUSED="$rpaused"; RES_PERIOD="$rperiod"; RES_GRACE="$rgrace"
     done <<< "$rows"
     next=$(printf '%s' "$body" | jq -r '.pagination.next // empty' 2>/dev/null | tr -d '\r\n')
-    url=""
+    query=""
     if [[ -n "$next" ]]; then
       # Followed only when it stays on the pinned origin and path and carries nothing but page/per_page.
       # The prefix is QUOTED: an unquoted `?` in a pattern is a glob character.
@@ -634,7 +635,7 @@ hb_resolve_name() {  # <name> -> 0 when the whole list was read (RES_COUNT says 
         echo "::error::arm-heartbeats.sh: refusing to follow a pagination.next that leaves ${BS_API_BASE}/heartbeats (page, per_page only)."
         return 1
       fi
-      url="$next"
+      query="$rest"
     fi
   done
   return 0
