@@ -10,4 +10,3 @@
 # OWNERS (S5, #9597): the two apps/cla-evidence rows are owned by #9756; a row for any other file carries its own owner on a comment line above it.
 apps/cla-evidence/infra/bootstrap.sh	1
 apps/cla-evidence/scripts/r2-conditional-put.sh	1
-apps/web-platform/infra/cloud-init-registry.yml	4

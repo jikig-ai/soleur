@@ -298,8 +298,14 @@ for v in MEM_TOTAL_KB MEM_TOTAL INSPECT ID STATE_STATUS OOM_KILLED \
   assert "new var \$$v is \$\$-escaped wherever brace-formed (single=$n_single double=$n_double)" \
     "[ '$n_single' = '$n_double' ]"
 done
-assert "ships via Better Stack Logs Authorization: Bearer token" \
-  "grep -qF 'Authorization: Bearer \$TOKEN' '$CI'"
+assert "ships via Better Stack Logs with the bearer on curl's stdin config (all four posting scripts)" \
+  "[ \"\$(grep -cF 'header = \"Authorization: Bearer %s\"' '$CI')\" = 4 ] && [ \"\$(grep -cF -- '--config -' '$CI')\" -ge 4 ]"
+# Continuation-aware: backslash-newline joins are folded first, so a header on the second line of a two-line curl (the shipper's) is seen.
+no_argv_auth_header() { # <file>: rc 0 when no curl line carries an Authorization header (any -H / --header spelling)
+  ! awk 'BEGIN { ORS = "" } /\\$/ { sub(/\\$/, ""); print; next } { print; print "\n" }' "$1" | grep -qiE "curl.*(-H|--header)[ =]*['\"]?authorization"
+}
+assert "no curl in the template carries an Authorization header on its own argument list, on any continuation line (ADR-280, lint Rule E)" \
+  "no_argv_auth_header '$CI'"
 assert "cron wraps the reporter in doppler run (isolated soleur-registry/prd)" \
   "grep -qF 'doppler run --project soleur-registry --config prd -- /usr/local/bin/zot-disk-heartbeat.sh' '$CI'"
 assert "absence-based <85% liveness ping retained" "grep -qE '\"\\\$USE\" -lt 85' '$CI'"

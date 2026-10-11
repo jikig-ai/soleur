@@ -5622,7 +5622,357 @@ S5_REFUSAL_FLOOR=6
 if [[ "$S5_CANARY_RUNS" -ge "$S5_REFUSAL_FLOOR" ]]; then row "S5 negative canary: $S5_CANARY_RUNS runs planted the canary and had every captured stream searched for it (anti-vacuity floor $S5_REFUSAL_FLOOR)" ok
 else row "S5 negative canary: the planted-canary run population is below its anti-vacuity floor" fail "runs=$S5_CANARY_RUNS floor=$S5_REFUSAL_FLOOR"; fi
 
-echo "=== stage S5: Guard 1 and Guard 2 rows for the apply workflow done ==="
+# ---- S5 registry rows (the registry commit): the four Better Stack posting scripts of `cloud-init-registry.yml` ----
+# The host has no checkout and a user_data budget, so each script carries the inline form of the library: a judge (`_bs_ok`, the
+# library's alphabet) before any request, the bearer on curl's stdin config through a PER-COMMAND redirect, and a refusal that prints
+# the value-free marker and takes the not-shipped branch. Population and verdicts are DERIVED from the template; the committed bytes of
+# each posting region are EXECUTED (rendered the way templatefile() does: TF variables substituted, `$${` and `%%{` unescaped).
+S5_REF_BASE="$S5_CANARY_RUNS"
+S5R="$S4/s5reg"; assert_fixture_dir "$S5R"; mkdir -p "$S5R/shim"
+cp "$S4/shim/curl" "$S4/shim/sleep" "$S5R/shim/"
+printf '#!%s\nprintf "soleur-registry\\n"\n' "$BASH_BIN" > "$S5R/shim/hostname"
+# `doppler run ... -- CMD...` runs CMD with the environment the harness set (the real wrapper injects the token from the isolated config).
+cat > "$S5R/shim/doppler" <<'S5DOP'
+#!/usr/bin/env bash
+while [[ $# -gt 0 && "$1" != -- ]]; do shift; done
+shift
+exec "$@"
+S5DOP
+sed -i "1s|.*|#!${BASH_BIN}|" "$S5R/shim/doppler"; chmod +x "$S5R/shim/curl" "$S5R/shim/sleep" "$S5R/shim/hostname" "$S5R/shim/doppler"
+S5_URL="https://s5-ingest.example.invalid/"
+s5_reg_py='
+import sys, re, yaml
+yml, kind, out = sys.argv[1], sys.argv[2], sys.argv[3]
+edits = sys.argv[4:]
+d = yaml.safe_load(open(yml))
+URL = "https://s5-ingest.example.invalid/"
+TOK = "TOKEN=\"$${BETTERSTACK_LOGS_TOKEN:-}\""
+def wf(path):
+    for f in d["write_files"]:
+        if f.get("path") == path: return f["content"]
+    sys.exit(3)
+def render(t):
+    t = t.replace("${betterstack_ingest_url}", URL)
+    t = re.sub(r"(?<!\$)\$\{[a-z_][a-z0-9_]*\}", "stub", t)
+    return t.replace("$${", "${").replace("%%{", "%{")
+def region(c, start_pred, end_pred):
+    L = c.split("\n")
+    i = next(k for k, l in enumerate(L) if start_pred(l))
+    j = next(k for k in range(i + 1, len(L)) if end_pred(L[k], L[i]))
+    return "\n".join(L[i:j + 1]) + "\n"
+ind = lambda l: len(l) - len(l.lstrip())
+if kind == "hb":
+    c = wf("/usr/local/bin/zot-disk-heartbeat.sh"); L = c.split("\n")
+    i = next(k for k, l in enumerate(L) if l.strip() == TOK)
+    raw = "\n".join(L[i:]) + "\n"
+elif kind == "nic":
+    raw = region(wf("/usr/local/bin/soleur-private-nic-guard.sh"), lambda l: l.strip() == TOK, lambda l, s: l.strip() == "fi" and ind(l) == ind(s))
+elif kind == "ship":
+    c = wf("/usr/local/bin/zot-log-shipper.sh")
+    # the judge block ends at the first `fi` AFTER the line that drops the token
+    L = c.split("\n"); i = next(k for k, l in enumerate(L) if l.strip() == TOK)
+    j = next(k for k in range(i, len(L)) if "TOKEN_REFUSED=1; TOKEN=" in L[k]); e = next(k for k in range(j, len(L)) if L[k].strip() == "fi")
+    a = "\n".join(L[i:e + 1]) + "\n"
+    s = next(k for k, l in enumerate(L) if l.strip() == "post_body() {"); t = next(k for k in range(s, len(L)) if "CREDENTIAL BACKSTOP" in L[k])
+    raw = a + "\n".join(L[s:t]) + "\n"
+elif kind == "boot":
+    raw = next(r for r in d["runcmd"] if isinstance(r, str) and "ZLSBOOTEOF" in r)
+else:
+    sys.exit(4)
+for k in range(0, len(edits), 2):
+    if edits[k] not in raw: sys.exit(5)
+    raw = raw.replace(edits[k], edits[k + 1])
+open(out + ".raw", "w").write(raw)
+open(out, "w").write(render(raw))
+'
+# s5_reg_body <kind> <out> [<from> <to>]...: the rendered region (an edit that does not land is FATAL: it would report the baseline)
+s5_reg_body_try() { local kind="$1" out="$2"; shift 2; assert_fixture_dir "$out"; python3 -I -c "$s5_reg_py" "$REPO_ROOT/$S5_REG" "$kind" "$out" "$@"; }
+s5_reg_body() { s5_reg_body_try "$@" || fatal "S5 could not build the registry region '$1' (it could not be extracted or an edit did not land)"; }
+# The runner for a rendered region: the harness prefix, then the region. `set -u` and the LINE a script has built by then.
+s5_reg_prefix() { # <kind> -> prints the lines that precede the region
+  case "$1" in
+    hb|nic) printf 'set -u\nLINE=%s\n' "'SOLEUR_FIXTURE_ROW x=1'" ;;
+    ship) printf 'set -u\n' ;;
+    boot) : ;;
+  esac
+}
+s5_reg_suffix() { # <kind> -> prints the lines that follow the region
+  case "$1" in
+    ship) printf 'for i in 1 2 3; do ship "row$i" && r=0 || r=$?; echo "ship$i rc=$r"; done\n' ;;
+    *) : ;;
+  esac
+}
+s5_reg_make() { # <kind> <rendered region> <out>: the runnable body
+  { s5_reg_prefix "$1"; cat "$2"; s5_reg_suffix "$1"; } > "$3"
+}
+S5R_N=0
+s5_reg_exec() { # <label> <kind> <rendered> [NAME=value ...]: run the region under the recording curl
+  local label="$1" kind="$2" rend="$3"; shift 3
+  S5R_N=$((S5R_N + 1)); local b="$S5R/run-$S5R_N.sh"; assert_fixture_dir "$b"
+  s5_reg_make "$kind" "$rend" "$b"
+  local sv="$S4_SHIM"; S4_SHIM="$S5R/shim"
+  s5_run "s5r-$label" "$b" "$S4/real" "$@"
+  S4_SHIM="$sv"
+}
+s5_reg_ok() { # the valid-credential contract for one posting script: <token> <calls>
+  [[ "$S4_RC" == 0 && "$(s4_ncalls)" == "$2" ]] && s4_calls_ok 1 && [[ "$(s4_stdin_line 1 1)" == "header = \"Authorization: Bearer $1\"" ]] \
+    && s4_nowhere_on_argv "$1" && s4_argv_has "$S5_URL" && s4_argv_has 'Content-Type: application/json' && [[ "$(s4_markers)" == 0 ]] && s5_canary_clean
+}
+s5_reg_refused_ok() { # a refused token: no request, ONE marker naming the script, the not-shipped branch and never the egress-FAILED branch
+  # <script name> <reason> <not-shipped fragment>
+  [[ "$S4_RC" == 0 && "$(s4_ncalls)" == 0 && "$(s4_markers)" == 1 ]] && grep -qxF -- "SOLEUR_CREDENTIAL_REFUSED script=$1 reason=$2" "$S4_ROW/stderr" \
+    && ! grep -q '^SOLEUR_CREDENTIAL_REFUSED' "$S4_ROW/stdout" && s4_said "$3" && ! s4_said 'egress' && ! s4_said 'FAILED' && s5_canary_clean
+}
+# ---- Guard 1: the template's posting population, derived (set identity by script), and the byte-equal judge ----
+s5_reg_census_py='
+import sys, re, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+blocks = {}; dups = []
+def add(name, c):
+    if name in blocks: dups.append(name)
+    blocks[name] = c
+for f in d.get("write_files", []):
+    c = f.get("content", "")
+    if "betterstack_ingest_url" in c: add(f["path"].rsplit("/", 1)[-1].removesuffix(".sh"), c)
+for r in d.get("runcmd", []):
+    if isinstance(r, str) and "betterstack_ingest_url" in r: add("zot-log-boot", r)
+for name in dups: print("DUPLICATE-KEY", name)
+for name in sorted(blocks):
+    text = re.sub(r"\\\n[ \t]*", " ", blocks[name])
+    n = 0; bad = []
+    for line in text.split("\n"):
+        if line.lstrip().startswith("#") or "curl " not in line or "betterstack_ingest_url" not in line: continue
+        n += 1
+        if re.search(r"-H\s+[\"\x27]?Authorization", line) or re.search(r"(^|\s)(-u|--user)\s", line): bad.append("credential-header-on-argv")
+        for need in ("--disable", "--noproxy", "--config -"):
+            if need not in line: bad.append("missing " + need)
+    live = "\n".join(l for l in text.split("\n") if not l.lstrip().startswith("#"))
+    asg = len(re.findall(r"\$+\{?BETTERSTACK_LOGS_TOKEN", live))   # every EXPANSION of the raw variable, in any spelling
+    print(name, n, ",".join(sorted(set(bad))) or "-", asg)
+'
+s5_reg_census() { python3 -I -c "$s5_reg_census_py" "$1"; } # <yml> -> "<script> <posting curls> <violations>" per script
+S5_CENSUS_WANT="$(printf '%s\n' 'soleur-private-nic-guard 1 - 1' 'zot-disk-heartbeat 1 - 1' 'zot-log-boot 1 - 1' 'zot-log-shipper 1 - 1')"
+S5_CENSUS_GOT="$(s5_reg_census "$REPO_ROOT/$S5_REG")"
+S5_CENSUS_N="$(awk '{n += $2} END {print n + 0}' <<<"$S5_CENSUS_GOT")"
+S5_CENSUS_FLOOR=4
+if [[ "$S5_CENSUS_GOT" == "$S5_CENSUS_WANT" && "$S5_CENSUS_N" -ge "$S5_CENSUS_FLOOR" ]]; then row "S5 Guard 1 (registry): the derived posting population is exactly the four scripts, each with ONE posting curl that carries no credential header of its own and has --disable, --noproxy and --config - ($S5_CENSUS_N statements; anti-vacuity floor $S5_CENSUS_FLOOR)" ok
+else row "S5 Guard 1 (registry): the derived posting population differs from the four scripts, or a posting curl carries the credential on argv" fail "got='${S5_CENSUS_GOT//$'\n'/;}'"; fi
+if python3 scripts/lint-shell-trace-credential-refusal.py "$S5_REG" 2>&1 | grep -q '^OK:'; then row "S5 Guard 1 (registry): Rule E on the explicit path of the registry template reports no curl with a credential header of its own" ok
+else row "S5 Guard 1 (registry): the registry template still has curl commands that carry a credential header" fail "$(python3 scripts/lint-shell-trace-credential-refusal.py "$S5_REG" 2>&1 | tail -1)"; fi
+# Mutation 2: a SECOND credentialed curl in a script (after a compliant first) is judged RED by the census (a per-script set, not "at least one clean").
+S5_REG_MUT="$S4/s5reg/mut-census.yml"
+python3 -I -c '
+import sys
+t = open(sys.argv[1]).read()
+needle = "        post_body \"$body\" && return 0\n"
+if needle not in t: sys.exit(3)
+t = t.replace(needle, needle + "        curl -fsS -m 10 -H \"Authorization: Bearer $TOKEN\" -H \"Content-Type: application/json\" \"${betterstack_ingest_url}\" --data-raw \"$body\"\n", 1)
+open(sys.argv[2], "w").write(t)' "$REPO_ROOT/$S5_REG" "$S5_REG_MUT" || fatal "S5 could not build the second-curl mutant"
+S5_CENSUS_MUT="$(s5_reg_census "$S5_REG_MUT")"
+if [[ "$S5_CENSUS_MUT" != "$S5_CENSUS_WANT" && "$S5_CENSUS_MUT" == *'zot-log-shipper 2 credential-header-on-argv'* ]]; then row "S5 Guard 1 mutation 2 (registry): a second, credentialed curl added to the shipper after a compliant first is judged RED by the per-script census" ok
+else row "S5 Guard 1 mutation 2 (registry): a second credentialed curl is not caught" fail "got='${S5_CENSUS_MUT//$'\n'/;}'"; fi
+# The judge is ONE text in four places: byte-equal (the parity audit), and it is the library's alphabet.
+s5_reg_parity() { # <yml> -> prints OK when the four `_bs_ok` lines are byte-equal and the three `post()` lines are byte-equal; else a reason
+  python3 -I -c '
+import sys, re
+t = open(sys.argv[1]).read().split("\n")
+ok = [l.strip() for l in t if l.strip().startswith("_bs_ok() {")]
+post = [l.strip() for l in t if l.strip().startswith("post() { curl")]
+if len(ok) != 4: print("judge-copies=%d" % len(ok)); sys.exit(0)
+if len(set(ok)) != 1: print("judge-copies-differ"); sys.exit(0)
+if len(post) != 3: print("post-copies=%d" % len(post)); sys.exit(0)
+if len(set(post)) != 1: print("post-copies-differ"); sys.exit(0)
+trim = [l.strip() for l in t if l.strip().startswith("TOKEN=\"$${TOKEN%")]
+if len(trim) != 4 or len(set(trim)) != 1: print("trim-copies-differ"); sys.exit(0)
+mk = [re.sub(r"script=[a-z-]+", "script=X", l.strip()) for l in t if l.strip().startswith("printf \x27SOLEUR_CREDENTIAL_REFUSED script=")]
+if len(mk) != 4 or len(set(mk)) != 1: print("marker-copies-differ"); sys.exit(0)
+print("OK")' "$1"
+}
+S5_PAR="$(s5_reg_parity "$REPO_ROOT/$S5_REG")"
+S5_PAR_MUT="$S4/s5reg/mut-parity.yml"
+python3 -I -c '
+import sys
+t = open(sys.argv[1]).read()
+a = "_bs_ok() { local LC_ALL=C; case"
+i = t.index(a, t.index(a) + 10)
+open(sys.argv[2], "w").write(t[:i] + "_bs_ok() { local LC_ALL=C ; case" + t[i + len(a):])' "$REPO_ROOT/$S5_REG" "$S5_PAR_MUT" || fatal "S5 could not build the parity mutant"
+if [[ "$S5_PAR" == OK && "$(s5_reg_parity "$S5_PAR_MUT")" == judge-copies-differ ]] && ! cmp -s "$REPO_ROOT/$S5_REG" "$S5_PAR_MUT"; then row "S5 Guard 1 parity (registry): the four copies of the judge and the three post() copies are byte-equal, and one changed byte in one judge copy is judged RED" ok
+else row "S5 Guard 1 parity (registry): the copies differ, or the audit is blind to one changed byte" fail "real='$S5_PAR' mutant='$(s5_reg_parity "$S5_PAR_MUT")'"; fi
+S5_JUDGE="$(grep -m1 '_bs_ok() {' "$REPO_ROOT/$S5_REG" | sed 's/^[[:space:]]*//; s/\$\$/$/g')"
+S5_CANON="$(grep -m1 '^_bearer_ok() {' apps/web-platform/infra/web-private-nic-guard.sh)"
+S5_JUDGE_BAD=""
+if [[ "${S5_JUDGE/_bs_ok/_bearer_ok}" != "$S5_CANON" || -z "$S5_CANON" ]]; then S5_JUDGE_BAD+=" not-the-canonical-body"; fi
+S5_JD="$(eval "$S5_JUDGE"; for v in 'abc.DEF-1_2~3+/=' 'x'; do _bs_ok "$v" || printf 'rejected-good:%s ' "$v"; done; for v in '' 'a b' 'a"b' $'a\nb' 'a\b' 'a;b' 'a$b' 'é' $'a\tb' 'a#b' "a'b" 'a,b' 'a`b' $'a\rb'; do _bs_ok "$v" && printf 'accepted-bad ' || true; done)"
+[[ -z "$S5_JD" ]] || S5_JUDGE_BAD+=" behaviour:$S5_JD"
+if [[ -z "$S5_JUDGE_BAD" ]]; then row "S5 Guard 1 (registry): the host judge is byte-identical to the canonical inline _bearer_ok (modulo the template escape and the name), accepts the library's token alphabet and rejects an empty value, a space, a quote, a backslash, a newline, a tab, a semicolon, a dollar sign and a non-ASCII byte" ok
+else row "S5 Guard 1 (registry): the host judge differs from the canonical body or misjudges a value" fail "$S5_JUDGE_BAD"; fi
+
+# ---- bash -n over EVERY rendered script and runcmd block (an escape error in the template cannot pass on raw text) ----
+S5_SYN="$(python3 -I -c '
+import sys, re, yaml, subprocess
+d = yaml.safe_load(open(sys.argv[1]))
+URL = "https://s5-ingest.example.invalid/"
+def render(t):
+    t = t.replace("${betterstack_ingest_url}", URL)
+    t = re.sub(r"(?<!\$)\$\{[a-z_][a-z0-9_]*\}", "stub", t)
+    return t.replace("$${", "${").replace("%%{", "%{")
+n = 0; bad = []
+for f in d.get("write_files", []):
+    c = f.get("content", "")
+    if c.startswith("#!") and "bash" in c.split("\n")[0]:
+        n += 1
+        if subprocess.run(["bash", "-n"], input=render(c).encode(), capture_output=True).returncode: bad.append(f["path"])
+for i, r in enumerate(d.get("runcmd", [])):
+    if isinstance(r, str) and "\n" in r:
+        n += 1
+        if subprocess.run(["bash", "-n"], input=render(r).encode(), capture_output=True).returncode: bad.append("runcmd[%d]" % i)
+print(n, ",".join(bad) or "-")' "$REPO_ROOT/$S5_REG")"
+S5_SYN_N="${S5_SYN%% *}"; S5_SYN_BAD="${S5_SYN#* }"; S5_SYN_FLOOR=12
+if [[ "$S5_SYN_BAD" == - && "$S5_SYN_N" -ge "$S5_SYN_FLOOR" ]]; then row "S5 registry render: every rendered bash script and multi-line runcmd block passes bash -n ($S5_SYN_N checked; anti-vacuity floor $S5_SYN_FLOOR)" ok
+else row "S5 registry render: a rendered script or runcmd block is not valid bash, or the population is below its floor" fail "n=$S5_SYN_N bad=$S5_SYN_BAD floor=$S5_SYN_FLOOR"; fi
+
+# ---- Guard 2: execute the committed posting regions ----
+S5_HOSTILE_NL="${S5_CANARY}"$'\nx'          # an interior newline (the config-injection byte) with the canary planted
+for k in hb nic; do
+  case "$k" in
+    hb)  n="zot-disk-heartbeat";        warn='WARN: BETTERSTACK_LOGS_TOKEN refused';  unset_warn="WARN: BETTERSTACK_LOGS_TOKEN unset" ;;
+    nic) n="soleur-private-nic-guard";  warn='WARN: BETTERSTACK_LOGS_TOKEN refused';  unset_warn="WARN: BETTERSTACK_LOGS_TOKEN unset" ;;
+  esac
+  s5_reg_body "$k" "$S5R/r-$k.sh"
+  s5_reg_exec "$k-hz" "$k" "$S5R/r-$k.sh" BETTERSTACK_LOGS_TOKEN="$S5_HZ"
+  if s5_reg_ok "$S5_HZ" 1; then row "S5 Guard 2 (registry $n): a 64-character alphanumeric ingest token is posted once, on curl's stdin config only, to the pinned URL, and the script exits 0" ok
+  else row "S5 Guard 2 (registry $n): a valid token is not posted on stdin only" fail "rc=$S4_RC calls=$(s4_ncalls) markers=$(s4_markers)"; fi
+  s5_reg_exec "$k-bs" "$k" "$S5R/r-$k.sh" BETTERSTACK_LOGS_TOKEN="$S5_BS"
+  if s5_reg_ok "$S5_BS" 1; then row "S5 Guard 2 (registry $n): a Better Stack-shaped token holding an underscore and hyphens is accepted" ok
+  else row "S5 Guard 2 (registry $n): a realistic token is refused or mis-sent" fail "rc=$S4_RC calls=$(s4_ncalls)"; fi
+  s5_reg_exec "$k-hostile" "$k" "$S5R/r-$k.sh" BETTERSTACK_LOGS_TOKEN="$S5_BAD"; S5_REFUSALS=$((S5_REFUSALS + 1))
+  if s5_reg_refused_ok "$n" token_shape "$warn"; then row "S5 Guard 2 (registry $n): a token holding a quote and a space makes no request, prints ONE marker naming the script, takes the not-shipped branch (never the egress-FAILED retry branch) and the script still exits 0" ok
+  else row "S5 Guard 2 (registry $n): a refused token reaches the wrong branch or changes the exit status" fail "rc=$S4_RC calls=$(s4_ncalls) markers=$(s4_markers) err='$(tr '\n' '|' < "$S4_ROW/stderr" | cut -c1-160)'"; fi
+  s5_reg_exec "$k-ctl" "$k" "$S5R/r-$k.sh" BETTERSTACK_LOGS_TOKEN="$S5_HOSTILE_NL"; S5_REFUSALS=$((S5_REFUSALS + 1))
+  if s5_reg_refused_ok "$n" control_char "$warn"; then row "S5 Guard 2 (registry $n): a token holding a newline is refused with reason=control_char (the config-injection byte) and makes no request" ok
+  else row "S5 Guard 2 (registry $n): a token with a newline is not refused as control_char" fail "rc=$S4_RC calls=$(s4_ncalls) markers=$(s4_markers)"; fi
+  s5_reg_exec "$k-unset" "$k" "$S5R/r-$k.sh"
+  if [[ "$S4_RC" == 0 && "$(s4_ncalls)" == 0 && "$(s4_markers)" == 0 ]] && s4_said "$unset_warn"; then row "S5 Guard 2 (registry $n): an unset token keeps the existing arm (the unset WARN, no request, no marker, exit 0)" ok
+  else row "S5 Guard 2 (registry $n): an unset token changed verdict" fail "rc=$S4_RC calls=$(s4_ncalls) markers=$(s4_markers)"; fi
+  # Mutation 5 (dispatch): drop the judge (always true); the hostile token then reaches curl and the no-request clause goes RED.
+  s5_reg_body "$k" "$S5R/m-$k-nojudge.sh" '_bs_ok "$TOKEN"; then' 'true; then'
+  s5_reg_exec "$k-nojudge" "$k" "$S5R/m-$k-nojudge.sh" BETTERSTACK_LOGS_TOKEN="$S5_BAD"; S5_REFUSALS=$((S5_REFUSALS + 1))
+  if ! s5_reg_refused_ok "$n" token_shape "$warn" && [[ "$(s4_ncalls)" -ge 1 ]]; then row "S5 Guard 2 mutation 5 (registry $n): with the judge dropped a hostile token reaches curl and the shape row goes RED" ok
+  else row "S5 Guard 2 mutation 5 (registry $n): a dropped judge is not caught" fail "calls=$(s4_ncalls)"; fi
+  # Mutation 2: a refusal that skips the refused branch (it falls to the unset arm: no marker, the unset WARN) is judged RED by the not-shipped-branch row. The retry branch itself is reached only with a usable token (the egress-FAILED rows below).
+  s5_reg_body "$k" "$S5R/m-$k-retry.sh" 'elif [ -n "$TOKEN" ]; then' 'elif false; then'
+  s5_reg_exec "$k-retry" "$k" "$S5R/m-$k-retry.sh" BETTERSTACK_LOGS_TOKEN="$S5_BAD"; S5_REFUSALS=$((S5_REFUSALS + 1))
+  if ! s5_reg_refused_ok "$n" token_shape "$warn"; then row "S5 Guard 2 mutation 2 (registry $n): a refusal that skips the refused branch (it falls to the unset arm: no marker, wrong WARN) is judged RED" ok
+  else row "S5 Guard 2 mutation 2 (registry $n): a refusal moved into another branch is not caught" fail "markers=$(s4_markers)"; fi
+done
+# The boot block is fed to `bash -s` on stdin, so a bare `--config -` would read the rest of the script (the per-command redirect is the fix).
+s5_reg_body boot "$S5R/r-boot.sh"
+s5_reg_exec boot-hz boot "$S5R/r-boot.sh" BETTERSTACK_LOGS_TOKEN="$S5_HZ"
+if s5_reg_ok "$S5_HZ" 1; then row "S5 Guard 2 (registry boot block): run through \`doppler run -- bash -s <<heredoc\` the block posts SOLEUR_ZOT_LOG_BOOT once, on stdin config only, and the heredoc is intact" ok
+else row "S5 Guard 2 (registry boot block): the boot post is not sent on stdin only" fail "rc=$S4_RC calls=$(s4_ncalls) stdin='$(s4_stdin_line 1 1 | cut -c1-30)'"; fi
+s5_reg_exec boot-hostile boot "$S5R/r-boot.sh" BETTERSTACK_LOGS_TOKEN="$S5_BAD"; S5_REFUSALS=$((S5_REFUSALS + 1))
+if s5_reg_refused_ok zot-log-boot token_shape 'WARN: BETTERSTACK_LOGS_TOKEN refused'; then row "S5 Guard 2 (registry boot block): a refused token prints one marker naming zot-log-boot, makes no request and takes the not-shipped branch" ok
+else row "S5 Guard 2 (registry boot block): a refused token reaches the wrong branch" fail "rc=$S4_RC calls=$(s4_ncalls) markers=$(s4_markers)"; fi
+# Mutation 7 (the heredoc row): drop the per-command redirect; `--config -` then reads the heredoc, so the recorded config holds script lines.
+s5_reg_body boot "$S5R/m-boot-noredirect.sh" ' < <(printf '"'"'header = "Authorization: Bearer %s"\n'"'"' "$TOKEN")' ''
+s5_reg_exec boot-noredirect boot "$S5R/m-boot-noredirect.sh" BETTERSTACK_LOGS_TOKEN="$S5_HZ"
+if ! s5_reg_ok "$S5_HZ" 1; then row "S5 Guard 2 mutation 7 (registry boot block): dropping the per-command stdin redirect is judged RED (curl would read the heredoc as its config)" ok
+else row "S5 Guard 2 mutation 7 (registry boot block): the dropped redirect is not caught" fail "calls=$(s4_ncalls)"; fi
+
+# The shipper: the credential is judged ONCE per run (a refusal is one marker per five-minute run, not one per row).
+s5_ship_valid_ok() { # three ship() calls: three requests, three zero statuses, no marker
+  [[ "$S4_RC" == 0 && "$(s4_ncalls)" == 3 && "$(s4_markers)" == 0 ]] && s4_calls_ok 1 && [[ "$(s4_stdin_line 1 1)" == "header = \"Authorization: Bearer $1\"" ]] \
+    && s4_nowhere_on_argv "$1" && s4_said 'ship1 rc=0' && s4_said 'ship3 rc=0' && s5_canary_clean
+}
+s5_ship_refused_ok() { # [reason] three ship() calls over a refused token: no request, ONE marker, three not-shipped returns, the refused wording
+  [[ "$S4_RC" == 0 && "$(s4_ncalls)" == 0 && "$(s4_markers)" == 1 ]] && grep -qxF -- "SOLEUR_CREDENTIAL_REFUSED script=zot-log-shipper reason=${1:-token_shape}" "$S4_ROW/stderr" \
+    && s4_said 'ship1 rc=1' && s4_said 'ship3 rc=1' && s4_said 'BETTERSTACK_LOGS_TOKEN refused' && ! s4_said 'unset; not shipped' && ! s4_said 'FAILED' && s5_canary_clean
+}
+s5_reg_body ship "$S5R/r-ship.sh"
+s5_reg_exec ship-hz ship "$S5R/r-ship.sh" BETTERSTACK_LOGS_TOKEN="$S5_HZ"
+if s5_ship_valid_ok "$S5_HZ"; then row "S5 Guard 2 (registry zot-log-shipper): three rows are posted one request each, on stdin config only, and ship() returns 0" ok
+else row "S5 Guard 2 (registry zot-log-shipper): a valid token is not posted on stdin only" fail "rc=$S4_RC calls=$(s4_ncalls) markers=$(s4_markers)"; fi
+s5_reg_exec ship-hostile ship "$S5R/r-ship.sh" BETTERSTACK_LOGS_TOKEN="$S5_BAD"; S5_REFUSALS=$((S5_REFUSALS + 1))
+if s5_ship_refused_ok; then row "S5 Guard 2 (registry zot-log-shipper): a refused token gives ONE marker for three rows (judged once per run), no request, three not-shipped returns, and the WARN says refused (not unset)" ok
+else row "S5 Guard 2 (registry zot-log-shipper): the refusal is not once-per-run or reaches the wrong branch" fail "rc=$S4_RC calls=$(s4_ncalls) markers=$(s4_markers)"; fi
+s5_reg_exec ship-unset ship "$S5R/r-ship.sh"
+if [[ "$S4_RC" == 0 && "$(s4_ncalls)" == 0 && "$(s4_markers)" == 0 ]] && s4_said 'unset; not shipped' && s4_said 'ship2 rc=1'; then row "S5 Guard 2 (registry zot-log-shipper): an unset token keeps the existing arm (the unset WARN per row, no request, no marker)" ok
+else row "S5 Guard 2 (registry zot-log-shipper): an unset token changed verdict" fail "rc=$S4_RC calls=$(s4_ncalls) markers=$(s4_markers)"; fi
+# Mutation 3 (once-per-run): move the judge into ship() so each row re-judges; three markers for three rows must be judged RED.
+s5_reg_body ship "$S5R/m-ship-perrow.sh" 'if [ -n "$TOKEN" ] && ! _bs_ok "$TOKEN"; then' 'if false; then' \
+  'local line="$1" body' 'local line="$1" body; if [ -n "$TOKEN" ] && ! _bs_ok "$TOKEN"; then printf '"'"'SOLEUR_CREDENTIAL_REFUSED script=zot-log-shipper reason=token_shape\n'"'"' >&2; TOKEN_REFUSED=1; fi'
+s5_reg_exec ship-perrow ship "$S5R/m-ship-perrow.sh" BETTERSTACK_LOGS_TOKEN="$S5_BAD"; S5_REFUSALS=$((S5_REFUSALS + 1))
+if ! s5_ship_refused_ok && [[ "$(s4_markers)" -gt 1 ]]; then row "S5 Guard 2 mutation 3 (registry zot-log-shipper): a judge moved inside ship() prints a marker per row and is judged RED by the once-per-run row" ok
+else row "S5 Guard 2 mutation 3 (registry zot-log-shipper): a per-row judge is not caught" fail "markers=$(s4_markers)"; fi
+# Mutation 4 (cron must not wedge): a refusal that changes the script's exit status.
+s5_reg_body hb "$S5R/m-hb-exit.sh" 'elif [ -n "$TOKEN" ]; then' 'elif [ -n "$TOKEN" ]; then exit 3;'
+s5_reg_exec hb-exit hb "$S5R/m-hb-exit.sh" BETTERSTACK_LOGS_TOKEN="$S5_BAD"; S5_REFUSALS=$((S5_REFUSALS + 1))
+if ! s5_reg_refused_ok zot-disk-heartbeat token_shape 'WARN: BETTERSTACK_LOGS_TOKEN refused' && [[ "$S4_RC" != 0 ]]; then row "S5 Guard 2 mutation 4 (registry zot-disk-heartbeat): a refusal that changes the exit status is judged RED (the cron job must never wedge)" ok
+else row "S5 Guard 2 mutation 4 (registry zot-disk-heartbeat): a changed exit status is not caught" fail "rc=$S4_RC"; fi
+
+# ---- review-round rows (registry side): trailing whitespace, the egress-FAILED branch, control_char for every script, the single token read ----
+# A stored value with trailing whitespace worked on the old argv form (curl sent the trimmed header), so it must still post, trimmed, from all four scripts.
+for k in hb nic boot ship; do
+  case "$k" in hb) n=zot-disk-heartbeat ;; nic) n=soleur-private-nic-guard ;; boot) n=zot-log-boot ;; ship) n=zot-log-shipper ;; esac
+  S5_WS_BAD=""
+  for ws in "$S5_HZ"$'\n' "$S5_HZ " "$S5_HZ"$'\t' "$S5_HZ"$'\r' "$S5_HZ"$'\r\n'; do
+    s5_reg_exec "$k-ws" "$k" "$S5R/r-$k.sh" BETTERSTACK_LOGS_TOKEN="$ws"
+    if [[ "$k" == ship ]]; then s5_ship_valid_ok "$S5_HZ" || S5_WS_BAD+=" ws"; else s5_reg_ok "$S5_HZ" 1 || S5_WS_BAD+=" ws"; fi
+  done
+  if [[ -z "$S5_WS_BAD" ]]; then row "S5 Guard 2 (registry $n): a token stored with a trailing newline, space or tab is trimmed and posted on stdin config (it worked on the old argv form, so it must not silently go dark)" ok
+  else row "S5 Guard 2 (registry $n): a token with trailing whitespace is not posted trimmed" fail "bad=$(wc -w <<<"$S5_WS_BAD")"; fi
+done
+s5_reg_body nic "$S5R/m-nic-notrim.sh" 'TOKEN="$${TOKEN%"$${TOKEN##*[![:space:]]}"}"' ':'
+s5_reg_exec nic-notrim nic "$S5R/m-nic-notrim.sh" BETTERSTACK_LOGS_TOKEN="$S5_HZ"$'\n'
+if ! s5_reg_ok "$S5_HZ" 1; then row "S5 Guard 2 mutation (registry soleur-private-nic-guard): dropping the trim makes a trailing-newline token go dark, judged RED by the trailing-whitespace row" ok
+else row "S5 Guard 2 mutation (registry soleur-private-nic-guard): a dropped trim is not caught" fail "calls=$(s4_ncalls)"; fi
+# The egress-FAILED branch is the existing one: a valid token and a failing curl retries once and says so (and a refusal never reaches it, asserted above).
+for k in hb nic boot; do
+  case "$k" in hb) n=zot-disk-heartbeat ;; nic) n=soleur-private-nic-guard ;; boot) n=zot-log-boot ;; esac
+  s5_reg_exec "$k-egress" "$k" "$S5R/r-$k.sh" BETTERSTACK_LOGS_TOKEN="$S5_HZ" SHIM_RC=22
+  if [[ "$S4_RC" == 0 && "$(s4_ncalls)" == 2 && "$(s4_markers)" == 0 ]] && s4_said 'FAILED'; then row "S5 Guard 2 (registry $n): a valid token and a failing curl takes the retry-once egress-FAILED branch (two requests, the FAILED line, exit status unchanged)" ok
+  else row "S5 Guard 2 (registry $n): the egress-FAILED branch changed" fail "rc=$S4_RC calls=$(s4_ncalls)"; fi
+done
+# control_char for the two scripts the loop above does not reach, with the canary planted and the exact marker line on stderr only.
+s5_reg_exec boot-ctl boot "$S5R/r-boot.sh" BETTERSTACK_LOGS_TOKEN="$S5_HOSTILE_NL"
+if s5_reg_refused_ok zot-log-boot control_char 'WARN: BETTERSTACK_LOGS_TOKEN refused'; then row "S5 Guard 2 (registry boot block): a token holding a newline is refused with reason=control_char, exact marker line on stderr, no leak" ok
+else row "S5 Guard 2 (registry boot block): a newline token is not refused as control_char" fail "rc=$S4_RC calls=$(s4_ncalls) markers=$(s4_markers)"; fi
+s5_reg_exec ship-ctl ship "$S5R/r-ship.sh" BETTERSTACK_LOGS_TOKEN="$S5_HOSTILE_NL"
+if s5_ship_refused_ok control_char; then row "S5 Guard 2 (registry zot-log-shipper): a token holding a newline gives ONE control_char marker for three rows and no request" ok
+else row "S5 Guard 2 (registry zot-log-shipper): a newline token is not refused as control_char once per run" fail "rc=$S4_RC calls=$(s4_ncalls) markers=$(s4_markers)"; fi
+# The shipper (like every posting script) reads the raw token ONCE: a second read after the judge would hand an unjudged value to the config channel.
+S5_REG_MUT2="$S4/s5reg/mut-reread.yml"
+python3 -I -c '
+import sys
+t = open(sys.argv[1]).read()
+n = "      HOST_NAME_V=\"$(hostname)\"\n"
+if t.count(n) != 1: sys.exit(3)
+open(sys.argv[2], "w").write(t.replace(n, n + "      TOKEN=\"$${BETTERSTACK_LOGS_TOKEN:-}\"\n"))' "$REPO_ROOT/$S5_REG" "$S5_REG_MUT2" || fatal "S5 could not build the token re-read mutant"
+if [[ "$(s5_reg_census "$S5_REG_MUT2")" == *'zot-log-shipper 1 - 2'* ]]; then row "S5 Guard 1 mutation (registry): a second raw read of the token after the judge in the shipper is judged RED by the single-assignment census" ok
+else row "S5 Guard 1 mutation (registry): a re-read of the raw token is not caught" fail "got='$(s5_reg_census "$S5_REG_MUT2" | tr '\n' ';')'"; fi
+S5_REG_MUT3="$S4/s5reg/mut-reread2.yml"
+python3 -I -c '
+import sys
+t = open(sys.argv[1]).read()
+n = "      HOST_NAME_V=\"$(hostname)\"\n"
+if t.count(n) != 1: sys.exit(3)
+open(sys.argv[2], "w").write(t.replace(n, n + "      TOKEN=\"$${BETTERSTACK_LOGS_TOKEN}\"\n"))' "$REPO_ROOT/$S5_REG" "$S5_REG_MUT3" || fatal "S5 could not build the token re-read mutant (no default operator)"
+if [[ "$(s5_reg_census "$S5_REG_MUT3")" == *'zot-log-shipper 1 - 2'* ]]; then row "S5 Guard 1 mutation (registry): a second raw read of the token in a DIFFERENT spelling (no :- default) is judged RED by the every-expansion census" ok
+else row "S5 Guard 1 mutation (registry): a differently spelled re-read of the raw token is not caught" fail "got='$(s5_reg_census "$S5_REG_MUT3" | tr '\n' ';')'"; fi
+# The marker text is one text in four places too: change one copy's reason computation and the parity audit goes RED.
+S5_PAR_MUT2="$S4/s5reg/mut-marker.yml"
+python3 -I -c '
+import sys
+t = open(sys.argv[1]).read()
+a = "*[[:cntrl:]]*) echo control_char ;;"
+i = t.rindex(a)
+open(sys.argv[2], "w").write(t[:i] + "*[[:cntrl:]]*) echo token_shape ;;" + t[i + len(a):])' "$REPO_ROOT/$S5_REG" "$S5_PAR_MUT2" || fatal "S5 could not build the marker parity mutant"
+if [[ "$(s5_reg_parity "$S5_PAR_MUT2")" == marker-copies-differ ]]; then row "S5 Guard 1 parity (registry): the trim and the refusal marker are byte-equal across the four scripts, and one changed reason computation is judged RED" ok
+else row "S5 Guard 1 parity (registry): a changed marker copy is not caught" fail "got='$(s5_reg_parity "$S5_PAR_MUT2")'"; fi
+S5_REG_REFUSAL_FLOOR=14
+if [[ $((S5_CANARY_RUNS - S5_REF_BASE)) -ge "$S5_REG_REFUSAL_FLOOR" ]]; then row "S5 negative canary (registry): $((S5_CANARY_RUNS - S5_REF_BASE)) runs of the registry regions planted the canary and had every captured stream searched for it (anti-vacuity floor $S5_REG_REFUSAL_FLOOR)" ok
+else row "S5 negative canary (registry): the planted-canary run population is below its anti-vacuity floor" fail "runs=$((S5_CANARY_RUNS - S5_REF_BASE)) floor=$S5_REG_REFUSAL_FLOOR"; fi
+echo "=== stage S5: Guard 1 and Guard 2 rows for the apply workflow and the registry template done ==="
 
 # =====================================================================================
 # CONTROLS FOR THE VERDICT-OWNING HELPERS. Every helper that names failed checks (bk_check, bs_refusal, bs_ok_call, hmx_refused, evaluate_hmac,
@@ -5871,7 +6221,7 @@ check_conservation "$pass" "$fail" "$CASES" || exit 1
 
 # BOTH operands are literals on the lines IMMEDIATELY above the `if`.
 SELFTEST_PASSES=0
-EXPECTED_TESTS=688
+EXPECTED_TESTS=730
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2
