@@ -1,5 +1,7 @@
 # Cursor CLI hook shape — 2026-10-08
 
+The marker conclusion below is the conclusion of this scratch-workspace capture. The 2026-10-11 note records the non-CLI measurement and the adopted predicate.
+
 CLI binary: `cursor-agent` `2026.10.01-e373342`. `cursor-agent status` printed a logged-in line. No email was stored.
 
 This note records one authenticated `--print` session. It does not replace `2026-10-07-cli-hook-shape.md`. That note remains the authentication-exit record.

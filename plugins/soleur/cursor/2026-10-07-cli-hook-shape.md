@@ -1,5 +1,7 @@
 # Cursor CLI hook shape — 2026-10-07
 
+The marker conclusion below is the conclusion of this authentication-exit capture. The 2026-10-11 note records the non-CLI measurement and the adopted predicate.
+
 CLI binary: `cursor-agent` `2026.10.01-e373342` (`cursor-agent --version`).
 `cursor-agent status` printed `Not logged in`. `cursor-agent about` printed `User Email: Not logged in`. No email was stored.
 

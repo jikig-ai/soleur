@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Slice 1 local install. Prints the next session command. Does not add a
-# marketplace, does not classify the session, and does not run hooks.
+# Local install. Prints the next session command. Does not add a
+# marketplace and does not run hooks.
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -13,4 +13,4 @@ if ! command -v agent >/dev/null 2>&1; then
 fi
 
 printf '%s\n' "agent --plugin-dir ${plugin_dir}"
-printf '%s\n' "This slice does not classify the session as cursor, does not run hooks, and does not block a commit."
+printf '%s\n' "A nonempty CURSOR_INVOKED_AS classifies the session as cursor. This does not run hooks, and this does not block a commit."

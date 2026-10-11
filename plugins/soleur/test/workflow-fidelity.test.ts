@@ -165,6 +165,8 @@ describe("workflow-fidelity contract", () => {
     expect(md).not.toContain("Stop hook");
     expect(md).not.toContain("Skill");
     expect(md).not.toContain("Task");
+    expect(md).toContain("classifies the session as cursor");
+    expect(md).not.toContain("does not classify");
     expect(workflowFidelityInstructions("grok")).toContain("Stop hook");
   });
 

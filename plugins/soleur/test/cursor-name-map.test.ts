@@ -195,7 +195,7 @@ describe("cursor name map fixture", () => {
       const stub = readFileSync(join(root, "cursor/skills/soleur-flag-delete/SKILL.md"), "utf8");
       expect(stub).toContain("disable-model-invocation: true");
       expect(stub).toContain("does not block a commit");
-      expect(stub).toContain("does not classify the session as cursor");
+      expect(stub).toContain("classifies the session as cursor");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

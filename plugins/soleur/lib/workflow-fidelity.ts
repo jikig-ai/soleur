@@ -133,8 +133,8 @@ export function mandatorySuccessors(skill: string): readonly string[] {
 
 /**
  * The operator-typed / adapter-rendered form of one skill on one harness. The cursor
- * arm is `formatSkillRef`-only until `detectHarness` returns `cursor`. `formatSkillInvocation`
- * does not share that arm in slice 1. Docs name skills as `soleur:<name>` and
+ * arm is shared by `formatSkillRef` and `formatSkillInvocation` once `detectHarness`
+ * returns `cursor`. Docs name skills as `soleur:<name>` and
  * leave THIS to the adapter (ADR-226); every fidelity string below goes through it so no
  * harness receives another harness's form (arch F3, #8299).
  */
@@ -271,7 +271,7 @@ export function workflowFidelityInstructions(harness: Harness): string {
       "**Workflow fidelity (Cursor CLI)**",
       "- Read the canonical file the stub names, relative to the plugin root, and follow that file.",
       `- \`${formatSkillRef("go", harness)}\` and \`${formatSkillRef("sync", harness)}\` stay bare. Every other name is prefixed, including \`${formatSkillRef("plan", harness)}\`, \`${formatSkillRef("help", harness)}\`, and \`${formatSkillRef("review", harness)}\`.`,
-      "- Slice 1 does not run hooks and does not classify the session as cursor.",
+      "- A nonempty CURSOR_INVOKED_AS classifies the session as cursor. Hooks are not a live registry yet.",
     ].join("\n");
   }
 

@@ -139,6 +139,28 @@ out="$(cd "$NG" && bash "$SUT" --selfcheck)"
 assert "--selfcheck works OUTSIDE a repo (probe is repo-independent)" \
   "[[ '$out' == *SOLEUR_EMIT_OK* ]]"
 
+# --- T8: Guard 4 — CURSOR_INVOKED_AS after the four arms ----------------------
+
+R3="$TMP/r3"; new_repo r3 >/dev/null
+( cd "$R3" && env -u CLAUDECODE -u GROK_HOME -u GROK_AGENT -u GROK_DEFAULT_MODEL -u GROK_SUBAGENTS -u CODEX_THREAD_ID -u DEVIN -u DEVIN_HOME -u CURSOR_AGENT CURSOR_INVOKED_AS=cursor-agent bash "$SUT" --event route_decision --label cursor-only )
+assert "CURSOR_INVOKED_AS alone records harness cursor" \
+  "grep -q '\"harness\":\"cursor\"' '$R3/.soleur/decisions.jsonl'"
+
+R4="$TMP/r4"; new_repo r4 >/dev/null
+( cd "$R4" && env -u GROK_HOME -u GROK_AGENT -u GROK_DEFAULT_MODEL -u GROK_SUBAGENTS -u CODEX_THREAD_ID -u DEVIN -u DEVIN_HOME -u CURSOR_AGENT CLAUDECODE=1 CURSOR_INVOKED_AS=cursor-agent bash "$SUT" --event route_decision --label claude-wins )
+assert "CLAUDECODE plus CURSOR_INVOKED_AS stays claude" \
+  "grep -q '\"harness\":\"claude\"' '$R4/.soleur/decisions.jsonl' && ! grep -q '\"harness\":\"cursor\"' '$R4/.soleur/decisions.jsonl'"
+
+R5="$TMP/r5"; new_repo r5 >/dev/null
+( cd "$R5" && env -u CLAUDECODE -u GROK_HOME -u GROK_AGENT -u GROK_DEFAULT_MODEL -u GROK_SUBAGENTS -u CODEX_THREAD_ID -u DEVIN -u DEVIN_HOME -u CURSOR_INVOKED_AS CURSOR_AGENT=1 bash "$SUT" --event route_decision --label agent-not-marker )
+assert "CURSOR_AGENT alone stays unknown" \
+  "grep -q '\"harness\":\"unknown\"' '$R5/.soleur/decisions.jsonl'"
+
+R6="$TMP/r6"; new_repo r6 >/dev/null
+( cd "$R6" && env -u CLAUDECODE -u GROK_HOME -u GROK_AGENT -u GROK_DEFAULT_MODEL -u GROK_SUBAGENTS -u CODEX_THREAD_ID -u DEVIN -u DEVIN_HOME -u CURSOR_AGENT CURSOR_INVOKED_AS= bash "$SUT" --event route_decision --label empty-marker )
+assert "empty CURSOR_INVOKED_AS stays unknown" \
+  "grep -q '\"harness\":\"unknown\"' '$R6/.soleur/decisions.jsonl'"
+
 printf '\n=== emit-decision: %d passed, %d failed (of %d) ===\n' "$passes" "$fails" "$CASES"
 # Anti-vacuity floor (#7408 class): a suite that ran nothing must not exit green.
-[[ "$fails" -eq 0 && "$CASES" -ge 15 ]]
+[[ "$fails" -eq 0 && "$CASES" -ge 22 ]]

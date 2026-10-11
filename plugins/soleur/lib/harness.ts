@@ -5,7 +5,7 @@
  * Grok:   slash commands (`/<skill>`, `/go`), spawn_subagent (agents).
  * Codex:  $soleur:<skill> skill mentions, spawn_agent (agents).
  * Devin:  Skill tool (`soleur:<skill>`), run_subagent (agents), `/soleur:<command>` slash commands.
- * Cursor: `/go` and `/sync` stay bare; every other skill and agent is `/soleur-<name>`. Slice 1 does not detect this harness.
+ * Cursor: `/go` and `/sync` stay bare; every other skill and agent is `/soleur-<name>`. A nonempty `CURSOR_INVOKED_AS` detects this harness. Hooks are not a live registry yet.
  *
  * Skills and go.md must call these helpers (or follow routingInstructions) — never improvise workflows.
  */
@@ -47,7 +47,7 @@ export interface SkillInvocation {
 
 export interface AgentSpawn {
   harness: Harness;
-  tool: "Task" | "spawn_subagent" | "spawn_agent" | "run_subagent";
+  tool: "Task" | "spawn_subagent" | "spawn_agent" | "run_subagent" | "slash_command";
   agent: string;
   prompt: string;
   instruction: string;
@@ -77,7 +77,7 @@ export function normalizeAgentName(agent: string): string {
 
 /**
  * Detect the active harness from environment markers and process metadata.
- * Detection order: CLAUDECODE → GROK_* → CODEX_THREAD_ID → DEVIN_* → process title/argv heuristics.
+ * Detection order: CLAUDECODE → GROK_* → CODEX_THREAD_ID → DEVIN_* → nonempty CURSOR_INVOKED_AS → process title/argv heuristics.
  */
 export function detectHarness(env: NodeJS.ProcessEnv = process.env): Harness {
   if (env.CLAUDECODE) {
@@ -98,6 +98,12 @@ export function detectHarness(env: NodeJS.ProcessEnv = process.env): Harness {
     if (env[key]) {
       return "devin";
     }
+  }
+
+  // Nonempty on the Cursor CLI. Absent on the measured idle IDE process tree.
+  // CURSOR_AGENT is an IDE terminal variable and is not this marker.
+  if (env.CURSOR_INVOKED_AS) {
+    return "cursor";
   }
 
   // Process heuristics apply only when inspecting the live runtime env — not
@@ -135,6 +141,11 @@ export function formatSkillInvocation(skill: string, args?: string): string {
   if (harness === "devin") {
     const command = trimmedArgs ? `/soleur:${name} ${trimmedArgs}` : `/soleur:${name}`;
     return command;
+  }
+
+  if (harness === "cursor") {
+    const slash = cursorSkillSlash(name);
+    return trimmedArgs ? `${slash} ${trimmedArgs}` : slash;
   }
 
   // Claude's operator-typed form is the slash command, exactly as the codex/grok/devin arms
@@ -199,6 +210,21 @@ export function invokeSkill(skill: string, args?: string): SkillInvocation {
     };
   }
 
+  if (harness === "cursor") {
+    const slash = cursorSkillSlash(name);
+    const command = trimmedArgs ? `${slash} ${trimmedArgs}` : slash;
+    return {
+      harness,
+      tool: "slash_command",
+      command,
+      args: trimmedArgs,
+      instruction:
+        `Read the canonical file the stub names and follow that file. Type \`${command}\`. ` +
+        "Do NOT improvise workflow steps." +
+        pipelineSuffix,
+    };
+  }
+
   const command = `soleur:${name}`;
   return {
     harness: harness === "claude" ? "claude" : harness,
@@ -239,6 +265,11 @@ export function formatAgentSpawn(agent: string, prompt: string): string {
     return (
       `Use the **run_subagent** tool with agent \`${agentId}\` and this prompt:\n\n${prompt}`
     );
+  }
+
+  if (harness === "cursor") {
+    const slash = `/${agentIdToGrokSubagentType(agentId)}`;
+    return `Type \`${slash}\` (canonical id \`${agentId}\`) and give it this prompt:\n\n${prompt}`;
   }
 
   return (
@@ -304,6 +335,18 @@ export function spawnAgent(agent: string, prompt: string): AgentSpawn {
         `Spawn via **run_subagent** with agent \`${entry.id}\`. ` +
         "Inherit the session model and permissions. " +
         "Pass the prompt verbatim — do NOT substitute a manual workflow.",
+    };
+  }
+
+  if (harness === "cursor") {
+    const slashName = agentIdToGrokSubagentType(agentId);
+    return {
+      harness,
+      tool: "slash_command",
+      agent: slashName,
+      prompt,
+      instruction:
+        `Type \`/${slashName}\` and pass the prompt verbatim. Read the agent file the stub names.`,
     };
   }
 
@@ -508,7 +551,7 @@ export function routingInstructions(harness: Harness): string {
         `- Agents use the prefixed stem, for example \`${cursorAgentSlash("engineering/cto.md")}\`.`,
         "- Read the canonical file the stub names, relative to the plugin root.",
         "- Read cursor/INSTRUCTIONS.md in the installed plugin.",
-        "- Slice 1 does not classify the session as cursor, does not run hooks, and does not block a commit.",
+        "- A nonempty CURSOR_INVOKED_AS classifies the session as cursor. Hooks are not a live registry yet, and this does not block a commit.",
         "",
         fidelity,
         "",
