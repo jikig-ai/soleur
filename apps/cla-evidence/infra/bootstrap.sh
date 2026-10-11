@@ -53,6 +53,13 @@
 
 set -euo pipefail
 
+# Refuse to run under xtrace: -x prints a variable's value the moment it is bound (see #7797), and
+# this script handles a live Cloudflare admin token and the R2 SigV4 pair. There is no legitimate
+# traced run, so the refusal is unconditional and sits before anything is bound.
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
+
 GREEN='\033[32m'; RED='\033[31m'; YELLOW='\033[33m'; NC='\033[0m'
 red()    { printf '%b%s%b\n' "$RED"    "$*" "$NC" >&2; }
 green()  { printf '%b%s%b\n' "$GREEN"  "$*" "$NC"; }
@@ -67,6 +74,9 @@ step()   { printf '\n→ %s\n' "$*"; }
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)/_cf-admin-token.sh"
 # shellcheck source=../scripts/_r2-endpoint.sh disable=SC1091
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)/_r2-endpoint.sh"
+# The ONE curl that carries the R2 SigV4 pair: the key id and secret ride curl's stdin config, never argv.
+# shellcheck source=../scripts/_r2-sigv4-curl.sh disable=SC1091
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)/_r2-sigv4-curl.sh"
 
 # ─────────────────────────────────────────────────────────────────────────
 # Pre-flight: deps + auth + admin token
@@ -191,6 +201,11 @@ R2_SECRET="$R2_S3_SECRET_ACCESS_KEY"
 # cla-evidence workflow runs — the 2026-05-16 outage class. The probe key
 # is content-addressed under bootstrap-probe/ so it's idempotent across
 # re-runs and easy to identify+delete in the bucket inspector.
+# The pair is judged here, before anything else: a malformed value exits 2 with the marker and the
+# variable name the operator actually set. The request itself goes through r2_sigv4_curl, which pins
+# the destination and passes the pair on curl's stdin config instead of argv. It also confines the
+# transport (--disable --noproxy '*', no inherited CA bundle), so this one-shot needs direct egress to
+# R2 with the system trust store; a proxy or a TLS-inspecting CA reads as status 000 below.
 # Pin the canonical R2 endpoint base (guards a malformed CF_ACCOUNT_ID) BEFORE
 # this credentialed probe PUT — without it, a bad account id would send the R2
 # HMAC secret to a non-canonical host (item 1 of #3950). Reused for the Doppler
@@ -199,21 +214,26 @@ R2_ENDPOINT="https://${CF_ACCOUNT_ID}.r2.cloudflarestorage.com"
 assert_r2_endpoint "$R2_ENDPOINT"
 probe_endpoint="${R2_ENDPOINT}/${BUCKET_NAME}/bootstrap-probe/$(date -u +%Y%m%dT%H%M%SZ).json"
 probe_body='{"probe":"bootstrap","ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}'
-probe_code=$(curl -sS -o /tmp/r2-probe-body -w "%{http_code}" --max-time 30 \
+probe_body_file=$(mktemp)
+trap 'rm -f "$probe_body_file"' EXIT
+r2_sigv4_judge "bootstrap" "$R2_ACCESS_KEY" "$R2_SECRET" R2_S3_ACCESS_KEY_ID R2_S3_SECRET_ACCESS_KEY || exit 2
+probe_code=$(r2_sigv4_curl "bootstrap" "$R2_ACCESS_KEY" "$R2_SECRET" "$probe_endpoint" \
+  -sS -o "$probe_body_file" -w "%{http_code}" --max-time 30 \
   -X PUT \
   -H "If-None-Match: *" \
   -H "Content-Type: application/json" \
-  --aws-sigv4 "aws:amz:auto:s3" \
-  --user "${R2_ACCESS_KEY}:${R2_SECRET}" \
-  --data-binary "$probe_body" \
-  "$probe_endpoint" 2>/dev/null || echo "000")
+  --data-binary "$probe_body" || true)
+probe_code="${probe_code:-000}"
 if [[ "$probe_code" != "200" && "$probe_code" != "201" && "$probe_code" != "412" ]]; then
-  red "R2 probe PUT failed: status=$probe_code body=$(tr '\n' ' ' < /tmp/r2-probe-body | head -c 400)"
+  red "R2 probe PUT failed: status=$probe_code body=$(tr '\n' ' ' < "$probe_body_file" | head -c 400)"
   red "Refusing to push known-broken creds to Doppler. Verify R2_S3_ACCESS_KEY_ID/SECRET match a freshly-minted R2 dashboard token (see header)."
-  rm -f /tmp/r2-probe-body
+  # The helper refusing the destination or an argument (return 64) cannot happen here: assert_r2_endpoint above already
+  # exits 64 on a non-canonical host, and this call's arguments are fixed. So 000 means curl itself got no response.
+  if [[ "$probe_code" == "000" ]]; then
+    red "status=000 also means curl never got a response: this probe needs direct egress to R2 with the system trust store (no proxy, no TLS-inspecting CA)."
+  fi
   exit 1
 fi
-rm -f /tmp/r2-probe-body
 green "  R2 probe PUT ok (status=$probe_code); creds verified before Doppler push"
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -231,15 +251,37 @@ fi
 # Endpoint is derivable but stored for sidecar simplicity. R2_ENDPOINT was
 # computed AND validated (assert_r2_endpoint) above, before the probe PUT.
 
+# The two non-secret values go as NAME=value arguments. The HMAC pair goes on the CLI's STDIN, one name per
+# call (printf is a builtin, so the value never reaches an exec argv): an argument would put the pair in
+# /proc/<pid>/cmdline for the life of the doppler process, which is the exposure this script's curl
+# probe no longer has. The two pair writes are NOT one atomic call. If the second fails, prd_cla holds
+# the new key id with the OLD secret, and the required cla-evidence check fails on every PR until this
+# is re-run, so that case says so loudly. Recovery needs the SAME R2_S3_* pair (the dashboard shows the
+# secret once) and a live CF_ADMIN_TOKEN_BOOTSTRAP (valid for one hour); re-running is idempotent. A
+# read-back then compares each stored length with the expected 32/64 (the values are never printed), because
+# nothing else would notice a CLI that stored an empty or trimmed value from stdin.
 doppler secrets set \
   --project soleur --config prd_cla \
   --no-interactive \
-  R2_CLA_EVIDENCE_ACCESS_KEY_ID="$R2_ACCESS_KEY" \
-  R2_CLA_EVIDENCE_SECRET="$R2_SECRET" \
   R2_CLA_EVIDENCE_ENDPOINT="$R2_ENDPOINT" \
   R2_CLA_EVIDENCE_BUCKET="$BUCKET_NAME" \
   >/dev/null
-green "  pushed 4 secrets to prd_cla (S3-compat HMAC pair + endpoint + bucket)"
+pair_write_failed() {
+  red "R2 pair write to prd_cla FAILED part-way: prd_cla may now hold a MIXED pair and the required cla-evidence check will fail until this is fixed."
+  red "Re-run with the SAME R2_S3_ACCESS_KEY_ID / R2_S3_SECRET_ACCESS_KEY and a live CF_ADMIN_TOKEN_BOOTSTRAP (or restore prd_cla in the Doppler UI)."
+  exit 1
+}
+printf '%s' "$R2_ACCESS_KEY" | doppler secrets set R2_CLA_EVIDENCE_ACCESS_KEY_ID \
+  --project soleur --config prd_cla --no-interactive >/dev/null || pair_write_failed
+printf '%s' "$R2_SECRET" | doppler secrets set R2_CLA_EVIDENCE_SECRET \
+  --project soleur --config prd_cla --no-interactive >/dev/null || pair_write_failed
+stored_id=$(doppler secrets get R2_CLA_EVIDENCE_ACCESS_KEY_ID --project soleur --config prd_cla --plain 2>/dev/null) || stored_id=""
+stored_secret=$(doppler secrets get R2_CLA_EVIDENCE_SECRET --project soleur --config prd_cla --plain 2>/dev/null) || stored_secret=""
+if [[ "${#stored_id}" -ne 32 || "${#stored_secret}" -ne 64 || "$stored_id" != "$R2_ACCESS_KEY" || "$stored_secret" != "$R2_SECRET" ]]; then
+  red "R2 pair read-back from prd_cla does not match what was written (stored lengths: id=${#stored_id}, secret=${#stored_secret}; expected 32 and 64)."
+  pair_write_failed
+fi
+green "  pushed 4 secrets to prd_cla (S3-compat HMAC pair on stdin + endpoint + bucket)"
 
 # ─────────────────────────────────────────────────────────────────────────
 # Step 3 — Doppler service token + GH repo secret

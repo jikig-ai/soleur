@@ -1162,10 +1162,10 @@ def check_rule_d(rel: str, lines: list[str], preamble_at: int | None) -> list[st
 # Census effect when the arm landed: exactly three curl sites, scripts/betterstack-query.sh
 # (converted in the same slice, never baselined) and two R2 SigV4 uploads in apps/cla-evidence
 # (`infra/bootstrap.sh`, `scripts/r2-conditional-put.sh`: `--aws-sigv4 ... --user "$ID:$SECRET"`).
-# The two cla-evidence sites are NOT converted here: that upload path is the legal-evidence
-# pipeline with its own suites and owner, outside the S2 file list, and a defect there would be a
-# legal-record regression rather than an ops one. They are baselined in the S2 diff (path and
-# count, ceiling row) and tracked in issue #9756; the +2 is census widening, not a regression.
+# The two cla-evidence sites were NOT converted in S2: that upload path is the legal-evidence
+# pipeline with its own suites and owner, outside the S2 file list. They were baselined in the S2
+# diff and tracked in issue #9756, which converted both through an app-local helper and removed
+# their rows; baseline E is empty since.
 #
 # BLIND SPOTS OF THE -u ARM (documented, NOT implemented; each is E=0 on a synthesized file):
 #   * an array that is declared in ANOTHER function than the curl call that expands it: `_inline_arrays`
@@ -1215,8 +1215,8 @@ def check_rule_d(rel: str, lines: list[str], preamble_at: int | None) -> list[st
 # S5 (#9597, the last slice; ADR-280 S5 addendum): `apply-web-platform-infra.yml` leaves baseline E through the library. The
 # registry template's four Better Stack posting scripts leave in the slice's registry commit(s), through an inline judge and a
 # stdin-config curl of their own (the host has no checkout and a user_data budget); if those commits are carved out, the
-# registry row stays listed and must carry its own owner line. The two cla-evidence rows are owned by #9756; once baseline E
-# holds only rows owned by other tracked work, the tracker's close condition is met.
+# registry row stays listed and must carry its own owner line. The two cla-evidence rows were owned by #9756 and left baseline E
+# when it converted them; a row for any other file carries its own owner line.
 #
 # KNOWN BLIND SPOTS (census-only; a reviewer, not this lint, judges them): message BODIES
 # that carry a secret (`-d` operands; the bsky password JSON moved to stdin in this sweep,
@@ -2638,9 +2638,8 @@ def main() -> int:
             "# one command and adding another in the same file keeps the count equal and passes.\n"
             "# `--changed` and explicit paths bypass it. Regenerate with `--write-baseline-e`\n"
             "# ONLY after converting sites; a diff that raises or adds a row needs a reviewer.\n"
-            "# OWNERS (S5, #9597): the two apps/cla-evidence rows (the R2 SigV4 `--user` pair on the legal-evidence upload path) are owned by\n"
-            "# #9756. A row for any other file must carry its own owner: a comment line directly above it naming the issue that tracks it\n"
-            "# (`--write-baseline-e` does not preserve such lines; re-add them after regenerating).\n"
+            "# OWNERS (S5, #9597): a row in this file must carry its own owner: a comment line directly above it naming the issue\n"
+            "# that tracks it (`--write-baseline-e` does not preserve such lines; re-add them after regenerating).\n"
             + "".join(f"{o}\t{e_counts[o]}\n" for o in sorted(e_counts)),
             encoding="utf-8",
         )

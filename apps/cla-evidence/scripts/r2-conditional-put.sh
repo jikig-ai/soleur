@@ -41,6 +41,17 @@
 
 set -euo pipefail
 
+# Refuse to trace while the R2 key id or secret is set: -x prints a variable's value the moment it is
+# bound (see #7797). Placed before anything binds the pair; the unset case (usage errors) still runs.
+case "$-" in
+  *x*)
+    if [ -n "${R2_CLA_EVIDENCE_ACCESS_KEY_ID:+x}${R2_CLA_EVIDENCE_SECRET:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 if [[ "$#" -lt 2 ]]; then
   echo "::error::usage: r2-conditional-put.sh <key> <payload-json>" >&2
   exit 64
@@ -58,6 +69,9 @@ endpoint="${R2_CLA_EVIDENCE_ENDPOINT:?R2_CLA_EVIDENCE_ENDPOINT must be set}"
 # shellcheck source=_r2-endpoint.sh disable=SC1091
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_r2-endpoint.sh"
 assert_r2_endpoint "$endpoint"
+# The ONE curl that carries the SigV4 pair (key id and secret on curl's stdin config, never argv).
+# shellcheck source=_r2-sigv4-curl.sh disable=SC1091
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_r2-sigv4-curl.sh"
 
 url="${endpoint%/}/${bucket}/${key}"
 
@@ -82,6 +96,13 @@ if [[ "${#secret}" -ne 64 ]]; then
   exit 2
 fi
 
+# Judge the pair ONCE here, before the retry loop. The chokepoint re-judges (it is the only place a
+# request starts), but a refusal inside put_once would be folded into status 000 and then into the
+# "unexpected status" arm, adding a second, misleading error line. A refusal here exits 2 before any
+# request, is never retried and is never classified as a duplicate (412 / WORM) arm. (The marker
+# itself prints either way: the helper's refusal lines sit outside curl's stderr redirect.)
+r2_sigv4_judge "r2-conditional-put" "$access_key" "$secret" || exit 2
+
 # Response-body capture: R2 returns XML error bodies (<Code>…</Code>) on 4xx/5xx.
 # We pipe them to a tempfile so the failure annotation can echo the real reason
 # (e.g., InvalidRequest vs ObjectLockedRetention vs SignatureDoesNotMatch) rather
@@ -93,16 +114,19 @@ trap 'rm -f "$body_tmp"' EXIT
 put_once() {
   # Stub-friendly: in tests, $(which curl) is the PATH-stub that emits a numeric
   # HTTP code on stdout and ignores -o (so $body_tmp stays empty, which the
-  # error-emit path tolerates). In production, curl is invoked with full SigV4
-  # via --aws-sigv4 (curl 7.75+) and emits the code via -w "%{http_code}".
-  curl -sS -o "$body_tmp" -w "%{http_code}\n" --max-time 30 \
+  # error-emit path tolerates). In production the request is signed by curl
+  # (SigV4 via curl 7.75+) inside r2_sigv4_curl, which carries the key id and
+  # secret on curl's stdin config and never on argv, and emits the code via -w
+  # "%{http_code}". A non-zero return is swallowed here and read as status 000
+  # by the caller: a curl failure has already printed 000 through -w, and a
+  # helper refusal of the destination or an argument (return 64) prints no
+  # status on stdout (its ::error:: line goes to stderr).
+  r2_sigv4_curl "r2-conditional-put" "$access_key" "$secret" "$url" \
+    -sS -o "$body_tmp" -w "%{http_code}\n" --max-time 30 \
     -X PUT \
     -H "If-None-Match: *" \
     -H "Content-Type: application/json" \
-    --aws-sigv4 "aws:amz:auto:s3" \
-    --user "${R2_CLA_EVIDENCE_ACCESS_KEY_ID}:${R2_CLA_EVIDENCE_SECRET}" \
-    --data-binary "$payload" \
-    "$url" 2>/dev/null || echo "000"
+    --data-binary "$payload" || true
 }
 
 # Single-line body excerpt for inclusion in `::error::` annotations (GH Actions
@@ -123,6 +147,7 @@ attempt=1
 
 while [[ "$attempt" -le "$attempt_max" ]]; do
   code=$(put_once)
+  code="${code:-000}"
 
   # Integer comparisons — `case` globs are ordering-coupled and fragile.
   # `5*` matches both "5" and "500"; `4*` matches "4". Using arithmetic
