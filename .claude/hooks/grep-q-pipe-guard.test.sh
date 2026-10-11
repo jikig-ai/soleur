@@ -1088,7 +1088,7 @@ tc_hidden="$(git -c core.excludesFile=/dev/null ls-files -ci --exclude-standard 
 # and an indented copy inside a dead branch or a function does not count. Statements that can still reach the exit (an inserted assignment
 # elsewhere, a trap, an `exit` placed ahead of these pins) are not pinned here: the guard cannot defend its own control flow beyond these text
 # pins, and a diff that edits it is reviewed.
-_code=$(grep -vE '^[[:space:]]*#' "${BASH_SOURCE[0]}")
+_code=$(grep -vE '^[[:space:]]*#' "${BASH_SOURCE[0]}" || true)
 wire_a=$(grep -cE '^sweep_main \. "\$SWEEP_FLOOR" \|\| sweep_rc=\$\?[[:space:]]*$' <<<"$_code" || true)
 wire_b=$(grep -cE '^sweep_fold "\$sweep_rc"[[:space:]]*$' <<<"$_code" || true)
 wire_adj=$(grep -A1 -E '^sweep_main \. "\$SWEEP_FLOOR" \|\| sweep_rc=\$\?[[:space:]]*$' <<<"$_code" | grep -cE '^sweep_fold "\$sweep_rc"[[:space:]]*$' || true)
