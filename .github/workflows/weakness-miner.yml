@@ -13,8 +13,21 @@
 #
 # Issue: #6037
 #
-# Security: No untrusted event inputs used in run: commands. Uses only
-# GITHUB_TOKEN, repo-local files, and safe GitHub context values.
+# Security: No untrusted event inputs used in run: commands.
+#
+# THREE JOBS, so no content-producing step ever shares a job (or a git directory) with the
+# credential (#9454 item 4, ADR-285):
+#   mine     no environment, no secret; runs the miner and uploads ONE file (the digest).
+#   open-pr  environment infra-privileged (main only); fresh checkout, the artifact, a minted
+#            soleur-infra App token, and the bot-PR composite. The PR is authored, pushed and
+#            armed as the App: a PR authored and armed as the workflow token (github-actions[bot])
+#            had its own runs held for approval and its merge-queue entry received no
+#            merge_group runs (2026-10-11), so it was removed from the queue after ~62 minutes.
+#            The workflow token only posts the synthetic check-runs (the rulesets match
+#            integration 15368).
+#   notify   failure email; the only job that holds the email secret.
+# A workflow_dispatch from a non-main ref skips open-pr and ends green with no PR; the
+# infra-privileged branch policy would refuse it anyway.
 
 name: "Scheduled: Weakness Miner"
 
@@ -28,9 +41,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  checks: write
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
   mine:
@@ -42,11 +53,67 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0   # first-appearance dates need full history
+          persist-credentials: false
 
       - name: Run weakness-miner
         run: bash scripts/weakness-miner.sh
 
+      # The digest is the only thing that crosses to the credential job. The composite's
+      # single-path allowlist and its gitleaks, fixture and credential-path scans vet it there.
+      - name: Upload digest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: weakness-digest
+          path: knowledge-base/project/weakness-digest.md
+          if-no-files-found: error
+          retention-days: 1
+
+  open-pr:
+    needs: mine
+    # A branch workflow_dispatch runs that branch's copy of this file; this `if:` stops the
+    # accidental case only. The boundary is the environment (ADR-241): infra-privileged admits
+    # only refs/heads/main, and its DOPPLER_TOKEN_INFRA_APP is the only Doppler secret here.
+    if: github.ref == 'refs/heads/main'
+    environment: infra-privileged
+    runs-on: ubuntu-latest
+    # Above the sum of every step's own cap (checkout 3 + download 2 + Doppler install 2 +
+    # mint 2 + composite 3), so a hung step fails as a step.
+    timeout-minutes: 12
+    permissions:
+      contents: read   # checkout
+      checks: write    # the synthetic check-runs, posted under the workflow token
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        timeout-minutes: 3
+        with:
+          ref: main
+          persist-credentials: false   # the push header is the only credential on the wire
+
+      - name: Download digest
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        timeout-minutes: 2
+        with:
+          name: weakness-digest
+          path: knowledge-base/project
+
+      - name: Install Doppler CLI
+        timeout-minutes: 2
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Mint soleur-infra App token (contents+pull_requests write on soleur)
+        id: app
+        timeout-minutes: 2
+        uses: ./.github/actions/mint-infra-app-token
+        with:
+          doppler-token: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}
+          installation-id: "166065653"
+          permissions: '{"contents":"write","pull_requests":"write"}'
+          repositories: soleur
+
       - name: Create PR with weakness digest
+        timeout-minutes: 3
         uses: ./.github/actions/bot-pr-with-synthetic-checks
         with:
           add-paths: knowledge-base/project/weakness-digest.md
@@ -57,10 +124,24 @@ jobs:
           # (#2905) blocks bodies whose cited paths are <50% matched.
           pr-body: "Automated weekly weakness digest: regenerates knowledge-base/project/weakness-digest.md by clustering recently-added learnings into recurring-failure patterns for /compound triage."
           change-summary: "Weakness digest regeneration only, no code changes"
+          pr-token: ${{ steps.app.outputs.token }}
           gh-token: ${{ github.token }}
 
+  notify:
+    needs: [mine, open-pr]
+    if: failure()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read   # checkout of the local notify action
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
       - name: Email notification (failure)
-        if: failure()
         uses: ./.github/actions/notify-ops-email
         with:
           subject: '[FAIL] Scheduled: Weakness Miner failed'

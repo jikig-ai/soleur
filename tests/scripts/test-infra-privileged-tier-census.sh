@@ -1639,7 +1639,9 @@ check("G7e: no workflow, action, reachable script, .tf, .tmpl or cloud-init file
 # fired, so a red row says which clause caught it. "Release job" is a job that calls the composite and not the
 # loader: a release job that later adds the loader escapes the broad-shape restriction; the per-suite
 # no-broad-tier-b rows pin the two named jobs.
-# The live tree has exactly three callers (a fourth is a deliberate, dated edit here); a fixture needs >= 1.
+# The live tree has exactly four callers (a fifth is a deliberate, dated edit here); a fixture needs >= 1.
+# 3 -> 4 (2026-10-11, #9454 item 4, ADR-285): weakness-miner.yml::open-pr, the fourth narrow-shape caller
+# (unlike the other three it is not a release job: it authors the weekly digest PR as the App).
 G7F_COMP_REL = "actions/mint-infra-app-token/action.yml"
 G7F_NARROW, G7F_BROAD = "soleur-infra-app", "soleur-infra-privileged"
 G7F_NARROW_TOK, G7F_BROAD_TOK = "DOPPLER_TOKEN_INFRA_APP", "DOPPLER_TOKEN_INFRA_PRIVILEGED"
@@ -1740,8 +1742,8 @@ for rel, (doc, text) in sorted(docs.items()):
         if any(True for _l, _m in cmd_sites(body, G7F_APP_READ)):
             g7f_fail("outside-read", "%s reads an App value with doppler secrets get outside the composite" % rel)
 g7f_n = len(g7f_callers)
-if CHECK_GIT and g7f_n != 3:
-    g7f_fail("caller-count", "%d callers, the live tree has exactly 3 (a fourth is a deliberate, dated edit here)" % g7f_n)
+if CHECK_GIT and g7f_n != 4:
+    g7f_fail("caller-count", "%d callers, the live tree has exactly 4 (a fifth is a deliberate, dated edit here)" % g7f_n)
 elif g7f_n < 1:
     g7f_fail("caller-count", "no caller of the composite was scanned")
 check("G7f: every mint-infra-app-token call is the narrow shape (no doppler-project, secrets.%s) or the loader-job broad "
