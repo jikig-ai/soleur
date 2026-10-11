@@ -441,7 +441,8 @@ def cmd_static(render):
 
     # ---- G3 -------------------------------------------------------------------------------------
     cond = vals(ssec, "Unit", "ConditionPathExists")
-    cpath = npath(cond[0][1:]) if len(cond) == 1 and cond[0].startswith("!") else ""
+    latch = [c for c in cond if c.startswith("!")]
+    cpath = npath(latch[0][1:]) if len(latch) == 1 else ""
     writes = []
     for i, s in L:
         for t in write_targets(s, env):

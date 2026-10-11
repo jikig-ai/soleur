@@ -298,6 +298,29 @@ rows "$TMP/r-luksfp.json" "$NOW" \
 run "phase-a PASS: the needle text inside a non-systemd (webhook) row is not a LUKS failure" 0 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-luksfp.json" -- "${BASE_ARGS[@]}" --mode phase-a
 
+# ── #9962: the needle widens to the shared `inngest` prefix — the conditioned units now
+# include the flip pair, provision, heartbeat, vector and server; their storm rows carry
+# `Failed to start inngest-<non-luks>` which the old `-luks` needle could not see. Same
+# systemd-row scoping: SYSLOG_IDENTIFIER=systemd or the anchored `"UNIT"`/`UNIT=` field
+# (anchored so the doppler row's `_SYSTEMD_UNIT` field name cannot match).
+rows "$TMP/r-flipfail.json" "$NOW" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-unit-armed detail=iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=1 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=2 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=private_nic_timeout detail=boot=deadbee1.waited_s=150 \"host\":\"${HOST}\"" \
+  "{\"SYSLOG_IDENTIFIER\":\"systemd\",\"UNIT\":\"inngest-cutover-flip.service\",\"JOB_RESULT\":\"failed\",\"message\":\"Failed to start inngest-cutover-flip.service - Inngest cutover flip oneshot (FSM: armed->flipping->done / rollback; #6178).\",\"host\":\"${HOST}\"}"
+run "phase-a FAIL: a 'Failed to start inngest-cutover-flip*' journal row is a violation (#9962 needle)" 1 \
+  "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-flipfail.json" -- "${BASE_ARGS[@]}" --mode phase-a
+
+rows "$TMP/r-serverfail.json" "$NOW" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-unit-armed detail=iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=1 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=2 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=private_nic_timeout detail=boot=deadbee1.waited_s=150 \"host\":\"${HOST}\"" \
+  "{\"JOB_RESULT\":\"failed\",\"UNIT\":\"inngest-server.service\",\"message\":\"Failed to start inngest-server.service - Inngest self-hosted server (:8288/:8289, firewall+nftables scoped).\",\"host\":\"${HOST}\"}"
+run "phase-a FAIL: a 'Failed to start inngest-server*' row flags via the UNIT arm even without SYSLOG_IDENTIFIER" 1 \
+  "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-serverfail.json" -- "${BASE_ARGS[@]}" --mode phase-a
+
 # --since IS THE SAME-RUN-ID RE-RUN GATE (the workflow passes it on every capture call): a
 # prior life's bootstrap-done inside the window would trip the no-done check, but the bound
 # excludes it — this arm proves the bound is wired, not just parsed.

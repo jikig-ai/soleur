@@ -365,6 +365,13 @@ After=network-online.target
 # heartbeat failure surfaced only as the un-shippable SYSLOG_IDENTIFIER=systemd "Failed to
 # start" journal row (the #6551 signature); now it also ships on the inngest-heartbeat channel.
 OnFailure=inngest-heartbeat-failure-log.service
+# SKIP-VS-FAIL (#9962, the #9939 pattern): /etc/default/inngest-server is a late-runcmd write and
+# the 60s timer fires from boot — an absent file must SKIP the start (one "skipped, unmet
+# condition check" notice), never FAIL it into the every-60s storm + OnFailure ERR rows. The
+# EnvironmentFile= line stays unprefixed: once a start IS attempted, an absent file still fails
+# the unit — the fail-closed contract is retained. A skipped heartbeat is a MISSING heartbeat —
+# the Better Stack missing-marker alert is the designed detector for that state.
+ConditionPathExists=/etc/default/inngest-server
 
 [Service]
 Type=oneshot
@@ -482,6 +489,9 @@ FAILLOGEOF
 cat > "$HEARTBEAT_TIMER" <<'TIMEREOF'
 [Unit]
 Description=Run Inngest heartbeat every 60s
+# SKIP-VS-FAIL (#9962): a condition on the TIMER is evaluated at activation — an abort-host
+# never arms the 60s tick against a missing /etc/default/inngest-server at all.
+ConditionPathExists=/etc/default/inngest-server
 
 [Timer]
 OnBootSec=30s
@@ -1547,6 +1557,13 @@ cat > "$UNIT_FILE" <<'UNITEOF'
 Description=Inngest self-hosted server (:8288/:8289, firewall+nftables scoped)
 After=network-online.target
 Wants=network-online.target
+# SKIP-VS-FAIL (#9962, the #9939 pattern): /etc/default/inngest-server is a late-runcmd write —
+# on an aborted first boot a missing file must SKIP the start, never FAIL it into the
+# RestartSec=5 crash-loop storm. The EnvironmentFile= line stays unprefixed: once a start IS
+# attempted, an absent file still fails the unit — the fail-closed contract is retained.
+# A skipped server is a DARK server: the heartbeat + control-plane probes are the designed
+# detection for a missing production server.
+ConditionPathExists=/etc/default/inngest-server
 
 [Service]
 Type=simple
@@ -1880,6 +1897,11 @@ else
 Description=Vector observability shipper (journald + host_metrics -> Better Stack Logs)
 After=network-online.target inngest-server.service
 Wants=network-online.target
+# SKIP-VS-FAIL (#9962, the #9939 pattern): /etc/default/inngest-server is a late-runcmd write —
+# a missing file must SKIP the shipper, never FAIL it into the RestartSec=10 crash-loop storm.
+# The EnvironmentFile= line stays unprefixed: once a start IS attempted, an absent file still
+# fails the unit — the fail-closed contract is retained.
+ConditionPathExists=/etc/default/inngest-server
 
 [Service]
 Type=simple
