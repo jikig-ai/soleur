@@ -108,6 +108,26 @@
 #                       destination shims `curl` on PATH rather than redirecting this variable.
 #   ARM_POLL_INTERVAL_S (optional) poll period, default 10; lowered only by the test harness.
 #
+# NAMED-MONITOR MODES (#9980) — the operator-invoked twins of --arm, for ONE monitor by name:
+#   --status <name>                 read-only. Resolves <name> by EXACT name over the whole paginated
+#                                   GET /heartbeats list and prints
+#                                   `name= id= paused= status= period= grace=`. Needs only BS_TOKEN
+#                                   (read scope is enough). Never issues a PATCH.
+#   --arm-one <name> [--id <id>]    resolves the id the same way, requires EXACTLY ONE exact-name match
+#                                   (and equality with --id when given: the pin is the owner's
+#                                   independent anchor, read in a separate step), refuses when its fixed
+#                                   150 s deadline exceeds the monitor's own period + grace - 40, then
+#                                   runs the SAME arm_one the per-merge path uses: op/state gate,
+#                                   unpause, poll status to `up`, rollback to paused (one retry), books.
+#                                   Needs BS_TOKEN with WRITE scope. TFSTATE_JSON is not read.
+#                                   ARMED_UNCONFIRMED is optional: unset, a private 0600 file is made
+#                                   under ${TMPDIR:-/var/tmp}, its path and the exact --sweep recovery
+#                                   command are printed BEFORE the first PATCH, and the file is removed
+#                                   only when it is empty on exit. There is no trap (see below), so an
+#                                   interrupt leaves the monitor live: run the printed --sweep command.
+#   Neither mode touches the per-merge arm list. <name> matches ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$,
+#   <id> matches ^[0-9]+$, and anything else refuses with rc 1 before a single request.
+#
 # EXIT CODES.
 #   --arm (default)
 #     0 = every arm either ARMED, was a NO-OP (already live), was ABSENT from tfstate, or — for
@@ -120,6 +140,14 @@
 #     0 = nothing was on the books, or every id on them is now confirmed re-paused.
 #     1 = at least one monitor is STILL unpaused-and-unfed (a non-2xx re-PATCH, or the token
 #         could not be minted at all).
+#   --status
+#     0 = exactly one monitor carries that exact name. 1 = zero, several, or the list could not be read.
+#   --arm-one
+#     0 = armed (a real beat landed) or already live (no-op). 1 = refused or failed: a collision, an id
+#         pin mismatch, a ceiling breach, an unreadable list or monitor, or a FAILED rollback (the books
+#         file is kept and the recovery command repeated). 2 = the gate worked and the feeder did not
+#         feed: the monitor was rolled back to paused and the soak is NOT satisfied.
+#   78 = refused to run under xtrace (every mode).
 #
 # `--sweep` OUTCOME VOCABULARY (the `outcome=` tag in its annotation and run-summary line):
 #   noop             the state file was absent or empty — nothing was ever unpaused.
@@ -143,20 +171,42 @@ ARM_POLL_INTERVAL_S="${ARM_POLL_INTERVAL_S:-10}"
 # The per-round-trip ceiling. Read by the ladder guard as well as by `curl`: it is one of the
 # two terms in the per-call-site overhead above, so it may not be spelled inline.
 ARM_CURL_MAX_TIME_S=15
+# --arm-one's fixed poll budget (#9980). The monitor's feeder beats every 60 s, so 150 s is two and a half
+# beats; the ceiling check below refuses a monitor whose own first absence alert would land sooner.
+ARM_ONE_DEADLINE=150
+# A vendor that ignores per_page still ends: the resolver makes at most this many list requests.
+ARM_LIST_MAX_PAGES=20
 
 usage() {
   sed -n '/^# CONTRACT (env in/,/^#   mint-unreadable/p' "$0" | sed 's/^# \{0,1\}//'
   echo
-  echo "usage: arm-heartbeats.sh [--arm | --sweep | --help]"
+  echo "usage: arm-heartbeats.sh [--arm | --sweep | --status <name> | --arm-one <name> [--id <id>] | --help]"
 }
 
 MODE=arm
+NAME=""
+PIN_ID=""
+argerr() { echo "::error::arm-heartbeats.sh: $1"; exit 1; }
 case "${1:-}" in
   ""|--arm) MODE=arm ;;
   --sweep)  MODE=sweep ;;
+  --status)
+    MODE=status
+    [[ $# -eq 2 ]] || argerr "--status takes exactly one <name> (usage: --status <name>)."
+    NAME="${2:-}" ;;
+  --arm-one)
+    MODE=armone
+    if [[ $# -eq 2 ]]; then NAME="${2:-}"
+    elif [[ $# -eq 4 && "${3:-}" == "--id" ]]; then NAME="${2:-}"; PIN_ID="${4:-}"
+    else argerr "--arm-one takes <name> and an optional --id <id> (usage: --arm-one <name> [--id <id>])."; fi ;;
   -h|--help) usage; exit 0 ;;
-  *) echo "::error::arm-heartbeats.sh: unknown argument '$1' (expected --arm, --sweep or --help)."; exit 1 ;;
+  *) echo "::error::arm-heartbeats.sh: unknown argument '$1' (expected --arm, --sweep, --status, --arm-one or --help)."; exit 1 ;;
 esac
+if [[ "$MODE" == status || "$MODE" == armone ]]; then
+  # The leading alphanumeric is deliberate: a forgotten name must not let `--id` be read as the name.
+  [[ "$NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || argerr "the monitor name must match ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\$ (got '${NAME:0:40}')."
+  [[ -z "$PIN_ID" || "$PIN_ID" =~ ^[0-9]+$ ]] || argerr "--id must be a numeric Better Stack heartbeat id."
+fi
 
 # Destination pin: the bearer is sent to this host, so an env override must not redirect it.
 # Placed after argument parsing so `--help` still works, and before any request in either mode.
@@ -394,28 +444,32 @@ fi
 # --arm (default)
 # =================================================================================================
 
-for _required in BS_TOKEN TFSTATE_JSON ARMED_UNCONFIRMED; do
-  if [[ -z "${!_required}" ]]; then
-    echo "::error::arm-heartbeats.sh: ${_required} is unset — refusing to run a half-configured arming pass."
+# The tfstate / required-env / resource-count preflight belongs to the per-merge arm only (#9980):
+# --status and --arm-one resolve their monitor by name through the API and read no tfstate.
+if [[ "$MODE" == arm ]]; then
+  for _required in BS_TOKEN TFSTATE_JSON ARMED_UNCONFIRMED; do
+    if [[ -z "${!_required}" ]]; then
+      echo "::error::arm-heartbeats.sh: ${_required} is unset — refusing to run a half-configured arming pass."
+      exit 1
+    fi
+  done
+  if ! _bearer_ok "$BS_TOKEN"; then
+    echo "::error::arm-heartbeats.sh: BS_TOKEN has an unexpected shape — refusing to run an arming pass that could not authenticate."
     exit 1
   fi
-done
-if ! _bearer_ok "$BS_TOKEN"; then
-  echo "::error::arm-heartbeats.sh: BS_TOKEN has an unexpected shape — refusing to run an arming pass that could not authenticate."
-  exit 1
-fi
-if [[ ! -r "$TFSTATE_JSON" ]]; then
-  echo "::error::arm-heartbeats.sh: TFSTATE_JSON=${TFSTATE_JSON} is not readable — cannot resolve any monitor id."
-  exit 1
-fi
-# READABLE IS NOT THE SAME AS POPULATED (#7658 E10). A readable `{}` — a `terraform show -json`
-# that failed soft, a truncated write, the wrong root — makes every `jq` lookup return empty, so
-# all six arms report "not present in tfstate" and the gate exits 0 having armed NOTHING, with no
-# error channel fired. A state with zero resources is never a legitimate input to this step.
-_resource_count=$(jq -r '[.values.root_module.resources[]?] | length' "$TFSTATE_JSON" 2>/dev/null)
-if [[ ! "$_resource_count" =~ ^[0-9]+$ || "$_resource_count" -eq 0 ]]; then
-  echo "::error::arm-heartbeats.sh: TFSTATE_JSON=${TFSTATE_JSON} is readable but holds no resources — a contentless state would silently 'skip' every arm and exit green. Refusing."
-  exit 1
+  if [[ ! -r "$TFSTATE_JSON" ]]; then
+    echo "::error::arm-heartbeats.sh: TFSTATE_JSON=${TFSTATE_JSON} is not readable — cannot resolve any monitor id."
+    exit 1
+  fi
+  # READABLE IS NOT THE SAME AS POPULATED (#7658 E10). A readable `{}` — a `terraform show -json`
+  # that failed soft, a truncated write, the wrong root — makes every `jq` lookup return empty, so
+  # all six arms report "not present in tfstate" and the gate exits 0 having armed NOTHING, with no
+  # error channel fired. A state with zero resources is never a legitimate input to this step.
+  _resource_count=$(jq -r '[.values.root_module.resources[]?] | length' "$TFSTATE_JSON" 2>/dev/null)
+  if [[ ! "$_resource_count" =~ ^[0-9]+$ || "$_resource_count" -eq 0 ]]; then
+    echo "::error::arm-heartbeats.sh: TFSTATE_JSON=${TFSTATE_JSON} is readable but holds no resources — a contentless state would silently 'skip' every arm and exit green. Refusing."
+    exit 1
+  fi
 fi
 
 # ARM_ELAPSED / ARM_LAST_STATUS / ARM_LAST_UPDATED_AT report the last arm's terminal facts to
@@ -429,12 +483,18 @@ ARM_LAST_UPDATED_AT=""
 #   0 = armed or no-op          1 = the gate could not do its job (incl. a FAILED rollback)
 #   2 = the gate worked and the FEEDER did not feed, monitor rolled back to paused
 arm_one() {
-  local addr="$1" label="$2" deadline="$3"
+  local addr="$1" label="$2" deadline="$3" given_id="${4:-}"
   local id started elapsed reads_ok
   ARM_ELAPSED=0
   ARM_LAST_STATUS=""
   ARM_LAST_UPDATED_AT=""
-  id=$(jq -r --arg a "$addr" '.values.root_module.resources[]? | select(.address==$a) | .values.id' "$TFSTATE_JSON")
+  # `--arm-one` hands the id it already resolved by exact name as a 4th POSITIONAL argument (#9980): a
+  # positional cannot be steered by the environment, and the six per-merge calls pass three arguments.
+  if [[ -n "$given_id" ]]; then
+    id="$given_id"
+  else
+    id=$(jq -r --arg a "$addr" '.values.root_module.resources[]? | select(.address==$a) | .values.id' "$TFSTATE_JSON")
+  fi
   if [[ -z "$id" || "$id" == "null" ]]; then
     echo "::notice::${label}: not present in tfstate (address ${addr}) — skipping (this apply path did not create it)."
     return 0
@@ -515,6 +575,141 @@ arm_one() {
   echo "::error::${label}: status never reached 'up' within ${elapsed}s of a ${deadline}s deadline (probe timer never pinged) — ROLLED BACK to paused. A green-but-inert monitor is the #6400 shape this gate exists to prevent. Investigate: is the web-1 timer installed + the private-net path healthy?"
   return 2
 }
+
+# =================================================================================================
+# --status / --arm-one (#9980) — one monitor, by exact name
+# =================================================================================================
+# RES_* are written by hb_resolve_name and read by the two mains. The resolver is always called
+# DIRECTLY (never inside $( ) or a `| while read` pipeline), so they survive in this shell.
+RES_COUNT=0; RES_ID=""; RES_IDS=""; RES_PAUSED=""; RES_STATUS=""; RES_PERIOD=""; RES_GRACE=""
+hb_resolve_name() {  # <name> -> 0 when the whole list was read (RES_COUNT says how many matched); 1 otherwise
+  local name="$1" url pages=0 body rows next rest rid rstatus rpaused rperiod rgrace
+  RES_COUNT=0; RES_ID=""; RES_IDS=""; RES_PAUSED=""; RES_STATUS=""; RES_PERIOD=""; RES_GRACE=""
+  url="${BS_API_BASE}/heartbeats?per_page=250"
+  while [[ -n "$url" ]]; do
+    pages=$(( pages + 1 ))
+    if [[ "$pages" -gt "$ARM_LIST_MAX_PAGES" ]]; then
+      echo "::error::arm-heartbeats.sh: the heartbeat list did not end within ${ARM_LIST_MAX_PAGES} pages — refusing to resolve '${name}' from a partial read."
+      return 1
+    fi
+    if ! body=$(bs_api -fsS --max-time "$ARM_CURL_MAX_TIME_S" "$url"); then
+      echo "::error::arm-heartbeats.sh: GET of the heartbeat list (page ${pages}) failed — cannot resolve '${name}'."
+      return 1
+    fi
+    # A 200 that is not a list is a FAILED read. Counted as an empty page it would hide a duplicate.
+    if ! printf '%s' "$body" | jq -e '.data | type == "array"' >/dev/null 2>&1; then
+      echo "::error::arm-heartbeats.sh: page ${pages} of the heartbeat list carries no .data array — refusing to resolve '${name}' from a partial read."
+      return 1
+    fi
+    # \x1f, not tab: tab is IFS-whitespace, so `read` would collapse an empty field and shift the rest.
+    # Every field carries a non-empty sentinel for the same reason; CR/LF/\x1f are stripped per field.
+    if ! rows=$(printf '%s' "$body" | jq -r --arg n "$name" '
+        .data[] | select(.attributes.name == $n)
+        | [ (.id // "null"), (.attributes.status // "null"),
+            (.attributes | if has("paused") and .paused != null then .paused else "unreported" end),
+            (.attributes.period // "null"), (.attributes.grace // "null") ]
+        | map(tostring | gsub("[\r\n\u001f]"; "")) | join("\u001f")' 2>/dev/null); then
+      echo "::error::arm-heartbeats.sh: could not parse page ${pages} of the heartbeat list."
+      return 1
+    fi
+    while IFS=$'\x1f' read -r rid rstatus rpaused rperiod rgrace; do
+      [[ -n "$rid" ]] || continue
+      if [[ ! "$rid" =~ ^[0-9]+$ ]]; then
+        echo "::error::arm-heartbeats.sh: a heartbeat named '${name}' carries the non-numeric id '${rid:0:40}' — refusing."
+        return 1
+      fi
+      # COUNTED, never de-duplicated: a row repeated by an overlapping page reads as a collision. A false
+      # refusal costs the owner one look; a false unique match arms the wrong monitor.
+      RES_COUNT=$(( RES_COUNT + 1 ))
+      RES_IDS="${RES_IDS}${RES_IDS:+ }${rid}"
+      RES_ID="$rid"; RES_STATUS="$rstatus"; RES_PAUSED="$rpaused"; RES_PERIOD="$rperiod"; RES_GRACE="$rgrace"
+    done <<< "$rows"
+    next=$(printf '%s' "$body" | jq -r '.pagination.next // empty' 2>/dev/null | tr -d '\r\n')
+    url=""
+    if [[ -n "$next" ]]; then
+      # Followed only when it stays on the pinned origin and path and carries nothing but page/per_page.
+      # The prefix is QUOTED: an unquoted `?` in a pattern is a glob character.
+      rest="${next#"${BS_API_BASE}/heartbeats?"}"
+      if [[ "$rest" == "$next" || ! "$rest" =~ ^(page|per_page)=[0-9]+(\&(page|per_page)=[0-9]+)?$ ]]; then
+        echo "::error::arm-heartbeats.sh: refusing to follow a pagination.next that leaves ${BS_API_BASE}/heartbeats (page, per_page only)."
+        return 1
+      fi
+      url="$next"
+    fi
+  done
+  return 0
+}
+
+# Both named modes need a usable token before any request; the destination pin already ran.
+named_token_check() {
+  if ! _bearer_ok "$BS_TOKEN"; then
+    echo "::error::arm-heartbeats.sh: BS_TOKEN is unset or has an unexpected shape — refusing to make a request that could not authenticate."
+    exit 1
+  fi
+}
+# Exactly one exact-name match, or a named refusal. Sets nothing the callers must trust except RES_*.
+resolve_exactly_one() {
+  hb_resolve_name "$NAME" || return 1
+  if [[ "$RES_COUNT" -eq 0 ]]; then
+    echo "::error::arm-heartbeats.sh: no heartbeat is named '${NAME}' (exact match over the whole list)."
+    return 1
+  fi
+  if [[ "$RES_COUNT" -gt 1 ]]; then
+    echo "::error::arm-heartbeats.sh: ${RES_COUNT} heartbeats are named '${NAME}': ids ${RES_IDS}; refusing to pick one."
+    return 1
+  fi
+  return 0
+}
+
+status_main() {
+  named_token_check
+  resolve_exactly_one || return 1
+  echo "name=${NAME} id=${RES_ID} paused=${RES_PAUSED} status=${RES_STATUS} period=${RES_PERIOD} grace=${RES_GRACE}"
+  return 0
+}
+
+armone_main() {
+  local own_books=0 max rc
+  named_token_check
+  resolve_exactly_one || return 1
+  if [[ -n "$PIN_ID" && "$PIN_ID" != "$RES_ID" ]]; then
+    echo "::error::arm-heartbeats.sh: id pin mismatch — '${NAME}' resolves to id ${RES_ID}, not the pinned ${PIN_ID}. Refusing to arm either."
+    return 1
+  fi
+  # The ceiling: the unpause window (deadline + the loop's last round-trips) must end before THIS monitor's
+  # own first absence alert. Derived from the file's own terms; at 10/15 it is period + grace - 40.
+  if [[ ! "$RES_PERIOD" =~ ^[1-9][0-9]*$ || ! "$RES_GRACE" =~ ^[1-9][0-9]*$ ]]; then
+    echo "::error::arm-heartbeats.sh: period/grace of '${NAME}' are not positive integers (period=${RES_PERIOD} grace=${RES_GRACE}) — cannot bound the unpause window, refusing."
+    return 1
+  fi
+  max=$(( RES_PERIOD + RES_GRACE - (ARM_POLL_INTERVAL_S + 2 * ARM_CURL_MAX_TIME_S) ))
+  if [[ "$ARM_ONE_DEADLINE" -gt "$max" ]]; then
+    echo "::error::arm-heartbeats.sh: the ${ARM_ONE_DEADLINE}s arm deadline exceeds this monitor's ceiling of ${max}s (period ${RES_PERIOD} + grace ${RES_GRACE} - reserve) — an arm that outlives its first absence alert would false-page. Refusing."
+    return 1
+  fi
+  if [[ -z "$ARMED_UNCONFIRMED" ]]; then
+    if ! ARMED_UNCONFIRMED=$(mktemp "${TMPDIR:-/var/tmp}/arm-one-unconfirmed.XXXXXX"); then
+      echo "::error::arm-heartbeats.sh: could not create the private books file under ${TMPDIR:-/var/tmp} — refusing to unpause a monitor with nowhere to record it."
+      return 1
+    fi
+    own_books=1
+  fi
+  echo "::notice::arm-one books: ${ARMED_UNCONFIRMED}. If this run is interrupted the monitor may be left live; re-pause with: ARMED_UNCONFIRMED=${ARMED_UNCONFIRMED} bash ${BASH_SOURCE[0]} --sweep"
+  rc=0
+  arm_one "(by name)" "$NAME" "$ARM_ONE_DEADLINE" "$RES_ID" || rc=$?
+  if [[ "$rc" -eq 2 ]]; then
+    echo "::warning::${NAME}: the generic hint above names web-1; for this monitor the feeder to read is the git-data host's own events (stage liveness) in Better Stack. The monitor is paused again and the soak is NOT satisfied."
+  fi
+  if [[ -s "$ARMED_UNCONFIRMED" ]]; then
+    echo "::error::arm-heartbeats.sh: ${ARMED_UNCONFIRMED} still lists a monitor that may be live and unfed. Run: ARMED_UNCONFIRMED=${ARMED_UNCONFIRMED} bash ${BASH_SOURCE[0]} --sweep"
+  elif [[ "$own_books" -eq 1 ]]; then
+    rm -f "$ARMED_UNCONFIRMED"
+  fi
+  return "$rc"
+}
+
+if [[ "$MODE" == status ]]; then status_main; exit $?; fi
+if [[ "$MODE" == armone ]]; then armone_main; exit $?; fi
 
 rc=0
 # deadline = period + grace − 40, where 40 = ARM_POLL_INTERVAL_S + 2 × ARM_CURL_MAX_TIME_S is the

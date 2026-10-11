@@ -169,13 +169,30 @@ if [[ "$noproxy" != "*" ]]; then
   exit 66
 fi
 id="${url##*/}"
+# THE LIST ENDPOINT (#9980): `GET <base>/heartbeats` or `GET <base>/heartbeats?<query>`. Detected BEFORE
+# `id="${url##*/}"` is trusted — that expansion would turn `.../heartbeats?per_page=250` into an id.
+is_list=0
+case "$url" in
+  */heartbeats|*/heartbeats\?*) is_list=1 ;;
+esac
 
 # Every round-trip costs wall clock. This is the term the pre-#7587 sleep-tally ignored.
 c=$(cat "$FAKE_CLOCK")
 now=$(( c + ${FAKE_CURL_COST:-15} ))
 echo "$now" > "$FAKE_CLOCK"
 
-printf '%s\t%s\t%s\t%s\n' "$now" "$method" "$id" "$data" >> "$FAKE_CALLS"
+if [[ "$is_list" -eq 1 ]]; then
+  # Logged as its own LIST row (never GET), so the id-keyed helpers below cannot count it.
+  printf '%s\tLIST\t%s\t%s\n' "$now" "$url" "$data" >> "$FAKE_CALLS"
+  # A list call to any host but the vendor's is refused AFTER logging it, so an off-origin follow
+  # of `pagination.next` is observable in the call log rather than only as an exit code.
+  case "$url" in
+    https://uptime.betterstack.com/api/v2/heartbeats*) ;;
+    *) echo "fake curl: off-origin list call $url" >&2; exit 67 ;;
+  esac
+else
+  printf '%s\t%s\t%s\t%s\n' "$now" "$method" "$id" "$data" >> "$FAKE_CALLS"
+fi
 
 emit() {  # <http-status> <body>
   local code="$1" body="$2"
@@ -198,6 +215,27 @@ emit() {  # <http-status> <body>
 
 if [[ -z "$auth" || "$auth" == "Authorization: Bearer" || "$auth" == "Authorization: Bearer " ]]; then
   emit 401 '{"errors":"unauthorized"}'
+fi
+
+if [[ "$is_list" -eq 1 ]]; then
+  [[ "$method" == "GET" ]] || { echo "fake curl: list endpoint takes GET only, got $method" >&2; exit 64; }
+  page=1
+  if [[ "$url" =~ [\?\&]page=([0-9]+) ]]; then page="${BASH_REMATCH[1]}"; fi
+  # per_page=250 is required on the FIRST page only: a vendor `next` URL may carry `page=` alone.
+  if [[ "$page" -eq 1 && "$url" != *per_page=250* ]]; then
+    echo "fake curl: first list page requested without per_page=250" >&2; exit 64
+  fi
+  # FAKE_LIST_FAIL: 500 | empty | garbage; FAKE_LIST_FAIL_PAGE restricts it to one page.
+  if [[ -n "${FAKE_LIST_FAIL:-}" && ( -z "${FAKE_LIST_FAIL_PAGE:-}" || "$FAKE_LIST_FAIL_PAGE" == "$page" ) ]]; then
+    case "$FAKE_LIST_FAIL" in
+      500)     emit 500 '{"errors":"boom"}' ;;
+      empty)   emit 200 '' ;;
+      garbage) emit 200 'this is not json' ;;
+    esac
+  fi
+  lf="${FAKE_LIST_DIR:-/nonexistent}/page-$page.json"
+  [[ -r "$lf" ]] || { echo "fake curl: no list fixture $lf" >&2; exit 64; }
+  emit 200 "$(cat "$lf")"
 fi
 
 status_for() {  # <method> -> the fixture HTTP status, default 200
@@ -261,7 +299,9 @@ FAKE_EMPTY_BODY="$WORK/emptybody-selftest"; : > "$FAKE_EMPTY_BODY"
 FAKE_BAD_JSON="$WORK/badjson-selftest"; : > "$FAKE_BAD_JSON"
 FAKE_STATE="$WORK/state-selftest"; mkdir -p "$FAKE_STATE"
 FAKE_HTTP="$WORK/http-selftest"; mkdir -p "$FAKE_HTTP"
-export FAKE_CLOCK FAKE_CALLS FAKE_GET_FAIL FAKE_GET_FAIL_AFTER FAKE_PATCH_FAIL FAKE_PATCH_FAIL_ONCE FAKE_EMPTY_BODY FAKE_BAD_JSON FAKE_STATE FAKE_HTTP
+FAKE_LIST_DIR="$WORK/list-selftest"; mkdir -p "$FAKE_LIST_DIR"
+FAKE_LIST_FAIL=""; FAKE_LIST_FAIL_PAGE=""
+export FAKE_CLOCK FAKE_CALLS FAKE_GET_FAIL FAKE_GET_FAIL_AFTER FAKE_PATCH_FAIL FAKE_PATCH_FAIL_ONCE FAKE_EMPTY_BODY FAKE_BAD_JSON FAKE_STATE FAKE_HTTP FAKE_LIST_DIR FAKE_LIST_FAIL FAKE_LIST_FAIL_PAGE
 # The SUT hands the bearer to curl as a stdin config (`--config -`), so the self-tests do too.
 ST_HDR='header = "Authorization: Bearer x"'
 ST_FLAGS="--disable --noproxy '*'"
@@ -303,6 +343,26 @@ echo 0 > "$FAKE_CLOCK"
 PATH="$BIN:$PATH" bash -c 'sleep 7'
 assert_eq "the fake sleep MOVES the clock rather than no-opping" "7" "$(cat "$FAKE_CLOCK")"
 assert_eq "the fake date reads that clock" "7" "$(PATH="$BIN:$PATH" bash -c 'date +%s')"
+# H1 (#9980): the list endpoint is a plain stub self-test, not a mutation row. A list read without
+# per_page=250 on the first page, a missing fixture and an off-origin host are all refusals, and a
+# later page is reachable without per_page (a vendor `next` URL may carry `page=` alone).
+printf '{"data":[],"pagination":{"next":null}}' > "$FAKE_LIST_DIR/page-1.json"
+printf '{"data":[],"pagination":{"next":null}}' > "$FAKE_LIST_DIR/page-2.json"
+st_curl -fsS --max-time 15 --config - 'https://uptime.betterstack.com/api/v2/heartbeats' >/dev/null 2>&1
+assert_eq "H1 the fake curl exits 64 for a first list page requested WITHOUT per_page=250" "64" "$?"
+st_curl -fsS --max-time 15 --config - 'https://uptime.betterstack.com/api/v2/heartbeats?per_page=250' >/dev/null 2>&1
+assert_eq "H1 the fake curl serves the first list page when per_page=250 is present" "0" "$?"
+st_curl -fsS --max-time 15 --config - 'https://uptime.betterstack.com/api/v2/heartbeats?page=2' >/dev/null 2>&1
+assert_eq "H1 a later list page is reachable with page= alone" "0" "$?"
+st_curl -fsS --max-time 15 --config - 'https://uptime.betterstack.com/api/v2/heartbeats?page=9' >/dev/null 2>&1
+assert_eq "H1 a list page with no fixture exits 64 rather than answering an empty page" "64" "$?"
+st_curl -fsS --max-time 15 --config - 'https://evil.example/api/v2/heartbeats?per_page=250' >/dev/null 2>&1
+assert_eq "H1 an off-origin list call is refused (rc 67)" "67" "$?"
+assert "H1 and the off-origin call is LOGGED first, as its own LIST row" \
+  "grep -q -P '^[0-9]+\tLIST\thttps://evil.example/' '$FAKE_CALLS'"
+FAKE_LIST_FAIL=500 st_curl -fsS --max-time 15 --config - 'https://uptime.betterstack.com/api/v2/heartbeats?per_page=250' >/dev/null 2>&1
+assert_eq "H1 FAKE_LIST_FAIL=500 makes the list read fail (rc 22 under -f)" "22" "$?"
+echo 0 > "$FAKE_CLOCK"
 
 # --- the declared env contract is discoverable (#7659 F3) ------------------------------------
 # shellcheck disable=SC2034  # consumed by `assert` through eval
@@ -363,6 +423,8 @@ case_setup() {  # <name> — fresh clock/calls/state for one run; every id defau
   FAKE_CUT_COUNT="$CASE/cutcount"; : > "$FAKE_CUT_COUNT"
   FAKE_STATE="$CASE/state"
   FAKE_HTTP="$CASE/http"
+  FAKE_LIST_DIR="$CASE/list"; mkdir -p "$FAKE_LIST_DIR" || { echo "FATAL: list dir failed for $1"; exit 2; }
+  FAKE_LIST_FAIL=""; FAKE_LIST_FAIL_PAGE=""
   STATEFILE="$CASE/armed-unconfirmed"
   SUMMARY="$CASE/summary"; : > "$SUMMARY"
   TFSTATE="$CASE/tfstate.json"
@@ -372,7 +434,8 @@ case_setup() {  # <name> — fresh clock/calls/state for one run; every id defau
     printf 'up' > "$FAKE_STATE/$id.status"
   done
   export FAKE_CLOCK FAKE_CALLS FAKE_GET_FAIL FAKE_GET_FAIL_AFTER FAKE_PATCH_FAIL \
-         FAKE_PATCH_FAIL_ONCE FAKE_EMPTY_BODY FAKE_BAD_JSON FAKE_STATE FAKE_HTTP FAKE_CUT_COUNT
+         FAKE_PATCH_FAIL_ONCE FAKE_EMPTY_BODY FAKE_BAD_JSON FAKE_STATE FAKE_HTTP FAKE_CUT_COUNT \
+         FAKE_LIST_DIR FAKE_LIST_FAIL FAKE_LIST_FAIL_PAGE
 }
 
 run_sut() {  # [sut-path] -> sets OUT and RC
@@ -884,6 +947,315 @@ s7_rc=$?
 assert_eq "S7 exits 1" "1" "$s7_rc"
 assert "S7 names ARMED_UNCONFIRMED" "[[ \"\$s7_out\" == *'ARMED_UNCONFIRMED is unset'* ]]"
 
+# =================================================================================================
+# --- ST / AX / AO: `--status <name>` and `--arm-one <name> [--id <id>]` (#9980) -------------------
+# =================================================================================================
+# The named-monitor arm resolves its id by EXACT name over the whole paginated list, never from tfstate,
+# so everything that can go wrong with that resolution (a near-name, a duplicate on a later page, a
+# vendor 200 with no `.data`, a `next` that leaves the vendor's origin) is a case here, and every refusal
+# asserts ZERO PATCH: a refusal that happens after the unpause is not a refusal.
+HOST_NAME="soleur-git-data-host-prd"
+ID_HOST=900201; ID_DUP=900202; ID_OTHER=900203; ID_DECOY=900204
+LIST_BASE="https://uptime.betterstack.com/api/v2/heartbeats"
+
+hb_row() {  # <id> <name> <status> [period] [grace] -> one list row
+  local paused=false
+  [[ "$3" == paused ]] && paused=true
+  printf '{"id":"%s","type":"heartbeat","attributes":{"name":%s,"status":"%s","paused":%s,"period":%s,"grace":%s}}' \
+    "$1" "$(printf '%s' "$2" | jq -Rs .)" "$3" "$paused" "${4:-60}" "${5:-300}"
+}
+write_page() {  # <n> <next-url-or-empty> <row>... -> $FAKE_LIST_DIR/page-<n>.json
+  local n="$1" next="$2" nxt=null joined
+  shift 2
+  [[ -z "$next" ]] || nxt="\"$next\""
+  joined="$(IFS=,; printf '%s' "$*")"
+  printf '{"data":[%s],"pagination":{"first":"f","last":"l","prev":null,"next":%s}}' "$joined" "$nxt" > "$FAKE_LIST_DIR/page-$n.json"
+}
+run_new() {  # <args...> -> OUT/RC. tfstate and books are UNSET unless a case sets ARMONE_BOOKS.
+  OUT="$(PATH="$BIN:$PATH" BS_TOKEN="${NEW_TOKEN-fake-token}" ARM_POLL_INTERVAL_S=10 TMPDIR="$CASE" \
+        env -u TFSTATE_JSON -u ARMED_UNCONFIRMED ${ARMONE_BOOKS:+ARMED_UNCONFIRMED="$ARMONE_BOOKS"} \
+        bash "${NEW_SUT:-$SUT}" "$@" 2>&1)"
+  RC=$?
+}
+list_count() { awk -F'\t' '$2=="LIST"' "$FAKE_CALLS" | grep -c ''; }
+call_count() { grep -c '' "$FAKE_CALLS"; }
+books_files() { ls "$CASE"/arm-one-unconfirmed.* 2>/dev/null; }
+books_count() { books_files | grep -c ''; }
+new_case() {  # <name> — a case with the monitor under test PAUSED and listed once
+  case_setup "$1"
+  printf 'paused' > "$FAKE_STATE/$ID_HOST.status"
+  write_page 1 "" "$(hb_row "$ID_HOST" "$HOST_NAME" paused)"
+}
+
+echo "--- ST1 --status: one exact match prints its fields, rc 0, zero PATCH, no tfstate needed"
+new_case st1
+run_new --status "$HOST_NAME"
+assert_eq "ST1 exits 0" "0" "$RC"
+assert "ST1 prints name, id, paused, status, period and grace" \
+  "[[ \"\$OUT\" == *'name=$HOST_NAME id=$ID_HOST paused=true status=paused period=60 grace=300'* ]]"
+assert_eq "ST1 issues no PATCH" "0" "$(patch_count)"
+assert_eq "ST1 reads the list exactly once and nothing by id" "1" "$(list_count)"
+assert_eq "ST1 makes no per-id GET" "0" "$(get_urls | grep -c '')"
+
+echo "--- ST2 --status: zero matches is rc 1"
+new_case st2
+write_page 1 "" "$(hb_row "$ID_OTHER" "some-other-monitor" up)"
+run_new --status "$HOST_NAME"
+assert_eq "ST2 exits 1" "1" "$RC"
+assert "ST2 says nothing is named that" "[[ \"\$OUT\" == *'no heartbeat is named'* ]]"
+assert_eq "ST2 issues no PATCH" "0" "$(patch_count)"
+
+echo "--- ST3 --status: two exact-name rows are a collision, rc 1, both ids named"
+new_case st3
+write_page 1 "" "$(hb_row "$ID_HOST" "$HOST_NAME" paused)" "$(hb_row "$ID_DUP" "$HOST_NAME" paused)"
+run_new --status "$HOST_NAME"
+assert_eq "ST3 exits 1" "1" "$RC"
+assert "ST3 names both ids" "[[ \"\$OUT\" == *'$ID_HOST'* && \"\$OUT\" == *'$ID_DUP'* ]]"
+
+echo "--- ST3b near-names, case variants and regex bait never match; the exact name still does"
+new_case st3b
+write_page 1 "" "$(hb_row "$ID_DECOY" "Soleur-Git-Data-Host-Prd" paused)" \
+  "$(hb_row "$ID_DECOY" "${HOST_NAME}-staging" paused)" \
+  "$(hb_row "$ID_DECOY" "x-${HOST_NAME}" paused)" \
+  "$(hb_row "$ID_DECOY" "soleur.git.data.host.prd" paused)"
+run_new --status "$HOST_NAME"
+assert_eq "ST3b decoys alone: exits 1 (zero matches)" "1" "$RC"
+write_page 1 "" "$(hb_row "$ID_DECOY" "Soleur-Git-Data-Host-Prd" paused)" \
+  "$(hb_row "$ID_DECOY" "${HOST_NAME}-staging" paused)" \
+  "$(hb_row "$ID_HOST" "$HOST_NAME" paused)" \
+  "$(hb_row "$ID_DECOY" "soleur.git.data.host.prd" paused)"
+run_new --status "$HOST_NAME"
+assert_eq "ST3b next to the exact row: exits 0" "0" "$RC"
+assert "ST3b and resolves the EXACT id, not a decoy" "[[ \"\$OUT\" == *'id=$ID_HOST '* ]]"
+write_page 1 "" "$(hb_row "$ID_HOST" "$HOST_NAME" paused)"
+run_new --status "soleur.git.data.host.prd"
+assert_eq "ST3b a name with '.' where the monitor has '-' matches nothing (no regex)" "1" "$RC"
+
+echo "--- ST4 --status: the match sits on page 2 of 3"
+new_case st4
+write_page 1 "$LIST_BASE?page=2&per_page=250" "$(hb_row "$ID_DECOY" "decoy-one" up)"
+write_page 2 "$LIST_BASE?page=3&per_page=250" "$(hb_row "$ID_HOST" "$HOST_NAME" paused)"
+write_page 3 "" "$(hb_row "$ID_DECOY" "decoy-two" up)"
+run_new --status "$HOST_NAME"
+assert_eq "ST4 exits 0" "0" "$RC"
+assert_eq "ST4 read all three pages" "3" "$(list_count)"
+assert "ST4 resolves the page-2 id" "[[ \"\$OUT\" == *'id=$ID_HOST '* ]]"
+
+echo "--- ST4b an off-origin pagination.next is refused and never requested"
+new_case st4b
+write_page 1 "https://evil.example/api/v2/heartbeats?page=2&per_page=250" "$(hb_row "$ID_DECOY" "decoy-one" up)"
+run_new --status "$HOST_NAME"
+assert_eq "ST4b exits 1" "1" "$RC"
+assert_eq "ST4b makes exactly one list request (the off-origin one is never made)" "1" "$(list_count)"
+assert "ST4b nothing was sent to the evil host" "! grep -q 'evil.example' '$FAKE_CALLS'"
+
+echo "--- ST4c an endless next chain is cut at exactly 20 requests"
+new_case st4c
+for n in $(seq 1 25); do
+  write_page "$n" "$LIST_BASE?page=$((n + 1))&per_page=250" "$(hb_row "$ID_DECOY" "decoy-$n" up)"
+done
+run_new --status "$HOST_NAME"
+assert_eq "ST4c exits 1" "1" "$RC"
+assert_eq "ST4c made exactly 20 list requests" "20" "$(list_count)"
+
+echo "--- ST4d a next URL carrying a parameter other than page/per_page is refused"
+new_case st4d
+write_page 1 "$LIST_BASE?page=2&per_page=250&name=$HOST_NAME" "$(hb_row "$ID_DECOY" "decoy-one" up)"
+run_new --status "$HOST_NAME"
+assert_eq "ST4d exits 1" "1" "$RC"
+assert_eq "ST4d the extra-parameter URL is never requested" "1" "$(list_count)"
+
+echo "--- ST5 --status: an unreadable list is a FAILED read, never zero or one match"
+new_case st5a
+FAKE_LIST_FAIL=500 run_new --status "$HOST_NAME"
+assert_eq "ST5a a 500 is rc 1" "1" "$RC"
+new_case st5b
+FAKE_LIST_FAIL=empty run_new --status "$HOST_NAME"
+assert_eq "ST5b an empty 200 is rc 1" "1" "$RC"
+new_case st5c
+FAKE_LIST_FAIL=garbage run_new --status "$HOST_NAME"
+assert_eq "ST5c a non-JSON 200 is rc 1" "1" "$RC"
+new_case st5d
+write_page 1 "$LIST_BASE?page=2&per_page=250" "$(hb_row "$ID_HOST" "$HOST_NAME" paused)"
+printf '{}' > "$FAKE_LIST_DIR/page-2.json"
+run_new --status "$HOST_NAME"
+assert_eq "ST5d a 200 with no .data on a LATER page is rc 1 (a hidden duplicate could sit there)" "1" "$RC"
+new_case st5e
+write_page 1 "" "$(hb_row "not-a-number" "$HOST_NAME" paused)"
+run_new --status "$HOST_NAME"
+assert_eq "ST5e a matching row with a malformed id is rc 1, never skipped" "1" "$RC"
+new_case st5f
+write_page 1 "" "$(hb_row "$ID_HOST" "$HOST_NAME" paused null 300)"
+run_new --status "$HOST_NAME"
+assert_eq "ST5f a null period still lets --status read the row" "0" "$RC"
+assert "ST5f and prints it as null, with grace NOT shifted into period" \
+  "[[ \"\$OUT\" == *'period=null grace=300'* ]]"
+
+echo "--- AX argument refusals make zero requests"
+new_case ax1
+run_new --status
+assert_eq "AX1 --status with no name exits 1" "1" "$RC"
+assert "AX1 and says so rather than dying on an unbound variable" \
+  "[[ \"\$OUT\" == *'::error::'* && \"\$OUT\" != *'unbound variable'* ]]"
+run_new --status -- 
+assert_eq "AX2 a leading-dash name exits 1" "1" "$RC"
+run_new --status "bad name"
+assert_eq "AX3 a name outside the charset exits 1" "1" "$RC"
+run_new --status "$HOST_NAME" --id 5
+assert_eq "AX4 --id with --status exits 1" "1" "$RC"
+run_new --arm-one "$HOST_NAME" --id abc
+assert_eq "AX5 a non-numeric --id exits 1" "1" "$RC"
+run_new --arm-one "$HOST_NAME" extra
+assert_eq "AX6 an extra argument exits 1" "1" "$RC"
+run_new --arm-one "$HOST_NAME" --id
+assert_eq "AX6b a dangling --id exits 1" "1" "$RC"
+NEW_TOKEN="" run_new --status "$HOST_NAME"
+assert_eq "AX7 an empty token exits 1" "1" "$RC"
+NEW_TOKEN='a"b' run_new --status "$HOST_NAME"
+assert_eq "AX8 a token of an unexpected shape exits 1" "1" "$RC"
+OUT="$(PATH="$BIN:$PATH" BS_TOKEN=fake-token BS_API_BASE="https://evil.example/api/v2" bash "$SUT" --status "$HOST_NAME" 2>&1)"; RC=$?
+assert_eq "AX9 an off-pin BS_API_BASE exits 1" "1" "$RC"
+OUT="$(PATH="$BIN:$PATH" BS_TOKEN=fake-token bash -x "$SUT" --status "$HOST_NAME" 2>&1)"; RC=$?
+assert_eq "AX10 --status refuses to run under xtrace (rc 78)" "78" "$RC"
+OUT="$(PATH="$BIN:$PATH" BS_TOKEN=fake-token bash -x "$SUT" --arm-one "$HOST_NAME" 2>&1)"; RC=$?
+assert_eq "AX11 --arm-one refuses to run under xtrace (rc 78)" "78" "$RC"
+assert_eq "AX makes no request at all, across every refusal above" "0" "$(call_count)"
+
+echo "--- AO1 --arm-one: a unique exact name is unpaused, reaches up, rc 0, books left empty and removed"
+new_case ao1
+echo 30 > "$FAKE_STATE/$ID_HOST.upat"
+FAKE_CURL_COST=1 run_new --arm-one "$HOST_NAME" --id "$ID_HOST"
+assert_eq "AO1 exits 0" "0" "$RC"
+assert_eq "AO1 issues exactly one PATCH" "1" "$(patch_count)"
+assert "AO1 and it is the unpause of the resolved id" \
+  "[[ \"\$(patch_bodies | sed -n '1p')\" == '$ID_HOST {\"paused\":false}' ]]"
+assert "AO1 reports a real beat" "[[ \"\$OUT\" == *'a real beat landed. ARMED.'* ]]"
+assert "AO1 printed the private books path BEFORE the first PATCH (it is in the output)" \
+  "[[ \"\$OUT\" == *'$CASE/arm-one-unconfirmed.'* ]]"
+assert_eq "AO1 the empty private books file was removed" "0" "$(books_count)"
+assert_eq "AO1 read the list and only the resolved id (never the six per-merge ids)" "$ID_HOST" "$(get_urls | sort -u | tr '\n' ' ' | sed 's/ $//')"
+assert "AO1 listed before it touched anything" "[[ \$(list_count) -ge 1 ]]"
+
+echo "--- AO2 --arm-one: never up is rolled back to paused, rc 2, exactly two PATCHes"
+new_case ao2
+FAKE_CURL_COST=1 run_new --arm-one "$HOST_NAME" --id "$ID_HOST"
+assert_eq "AO2 exits 2 (the gate worked and the feeder did not feed)" "2" "$RC"
+assert_eq "AO2 issues exactly two PATCHes" "2" "$(patch_count)"
+assert "AO2 the first is paused:false, the second paused:true" \
+  "[[ \"\$(patch_bodies | sed -n '1p')\" == '$ID_HOST {\"paused\":false}' && \"\$(patch_bodies | sed -n '2p')\" == '$ID_HOST {\"paused\":true}' ]]"
+assert_eq "AO2 the monitor is paused again" "paused" "$(cat "$FAKE_STATE/$ID_HOST.status")"
+assert_eq "AO2 the books file is empty again and removed" "0" "$(books_count)"
+ao2_rep="$(reported_elapsed 150)"
+assert "AO2 reports an elapsed within one iteration of the 150s deadline (${ao2_rep:-none}s)" \
+  "[[ -n '$ao2_rep' && '${ao2_rep:-0}' -ge 150 && '${ao2_rep:-999}' -le 175 ]]"
+assert "AO2 the OBSERVED clock stays inside deadline + 85s + list ($(observed_clock)s)" "[[ \$(observed_clock) -le 245 ]]"
+assert "AO2 on rc 2 it names the git-data-liveness events to read, not web-1" \
+  "[[ \"\$OUT\" == *'stage liveness'* ]]"
+
+echo "--- AO2b --arm-one: a failed rollback keeps the books, prints the recovery, and --sweep closes it"
+new_case ao2b
+printf '%s true\n' "$ID_HOST" > "$FAKE_PATCH_FAIL"
+FAKE_CURL_COST=1 run_new --arm-one "$HOST_NAME" --id "$ID_HOST"
+assert_eq "AO2b exits 1" "1" "$RC"
+assert_eq "AO2b the books file is KEPT" "1" "$(books_count)"
+assert "AO2b and holds the id" "[[ \"\$(cat \"\$(books_files | sed -n '1p')\")\" == '$ID_HOST' ]]"
+ao2b_path="$(printf '%s\n' "$OUT" | sed -n 's/.*ARMED_UNCONFIRMED=\([^ ]*\) bash .*--sweep.*/\1/p' | sed -n '1p')"
+assert "AO2b the printed recovery command names that very file" \
+  "[[ -n '$ao2b_path' && '$ao2b_path' == \"\$(books_files | sed -n '1p')\" ]]"
+: > "$FAKE_PATCH_FAIL"
+OUT="$(PATH="$BIN:$PATH" BS_TOKEN=fake-token ARMED_UNCONFIRMED="$ao2b_path" bash "$SUT" --sweep 2>&1)"; RC=$?
+assert_eq "AO2b the printed sweep command re-pauses the monitor (rc 0)" "0" "$RC"
+assert_eq "AO2b and the monitor is paused again" "paused" "$(cat "$FAKE_STATE/$ID_HOST.status")"
+
+echo "--- AO3 --arm-one: a name collision refuses with zero PATCH, even when the duplicate is on page 2"
+new_case ao3
+write_page 1 "$LIST_BASE?page=2&per_page=250" "$(hb_row "$ID_HOST" "$HOST_NAME" paused)"
+write_page 2 "" "$(hb_row "$ID_DUP" "$HOST_NAME" paused)"
+FAKE_CURL_COST=1 run_new --arm-one "$HOST_NAME"
+assert_eq "AO3 exits 1" "1" "$RC"
+assert_eq "AO3 issues no PATCH" "0" "$(patch_count)"
+assert_eq "AO3 reads no monitor by id" "0" "$(get_urls | grep -c '')"
+assert "AO3 names both ids" "[[ \"\$OUT\" == *'$ID_HOST'* && \"\$OUT\" == *'$ID_DUP'* ]]"
+
+echo "--- AO4 --arm-one: the --id pin must equal the resolved id"
+new_case ao4a
+run_new --arm-one "$HOST_NAME" --id "$ID_OTHER"
+assert_eq "AO4a a pin that differs from the resolved id exits 1" "1" "$RC"
+assert "AO4a and says the pin does not match" "[[ \"\$OUT\" == *'id pin mismatch'* ]]"
+assert_eq "AO4a issues no PATCH" "0" "$(patch_count)"
+new_case ao4b
+write_page 1 "" "$(hb_row "$ID_OTHER" "some-other-monitor" paused)"
+run_new --arm-one "$HOST_NAME" --id "$ID_OTHER"
+assert_eq "AO4b a pin never substitutes for the name: zero name matches exits 1" "1" "$RC"
+assert_eq "AO4b issues no PATCH" "0" "$(patch_count)"
+new_case ao4c
+echo 30 > "$FAKE_STATE/$ID_HOST.upat"
+FAKE_CURL_COST=1 run_new --arm-one "$HOST_NAME" --id "$ID_HOST"
+assert_eq "AO4c a matching pin proceeds and arms" "0" "$RC"
+new_case ao4d
+echo 30 > "$FAKE_STATE/$ID_HOST.upat"
+FAKE_CURL_COST=1 run_new --arm-one "$HOST_NAME"
+assert_eq "AO4d no pin at all also proceeds (the pin is optional)" "0" "$RC"
+
+echo "--- AO5 --arm-one: an already-live monitor is a no-op"
+for st in up down pending; do
+  new_case "ao5-$st"
+  printf '%s' "$st" > "$FAKE_STATE/$ID_HOST.status"
+  write_page 1 "" "$(hb_row "$ID_HOST" "$HOST_NAME" "$st")"
+  FAKE_CURL_COST=1 run_new --arm-one "$HOST_NAME" --id "$ID_HOST"
+  assert_eq "AO5 ($st) exits 0" "0" "$RC"
+  assert "AO5 ($st) says already armed" "[[ \"\$OUT\" == *'already armed (status=$st)'* ]]"
+  assert_eq "AO5 ($st) issues no PATCH" "0" "$(patch_count)"
+  assert_eq "AO5 ($st) leaves nothing on the books" "0" "$(books_count)"
+done
+
+echo "--- AO6 --arm-one: the ceiling is the monitor's own period + grace - 40, both sides of the boundary"
+new_case ao6a
+write_page 1 "" "$(hb_row "$ID_HOST" "$HOST_NAME" paused 60 100)"
+FAKE_CURL_COST=1 run_new --arm-one "$HOST_NAME" --id "$ID_HOST"
+assert_eq "AO6a grace 100 (ceiling 120 < 150) is refused, rc 1" "1" "$RC"
+assert_eq "AO6a with zero PATCH" "0" "$(patch_count)"
+new_case ao6b
+write_page 1 "" "$(hb_row "$ID_HOST" "$HOST_NAME" paused 60 130)"
+echo 30 > "$FAKE_STATE/$ID_HOST.upat"
+FAKE_CURL_COST=1 run_new --arm-one "$HOST_NAME" --id "$ID_HOST"
+assert_eq "AO6b grace 130 (ceiling == 150) is ALLOWED and arms" "0" "$RC"
+new_case ao6c
+write_page 1 "" "$(hb_row "$ID_HOST" "$HOST_NAME" paused 60 129)"
+FAKE_CURL_COST=1 run_new --arm-one "$HOST_NAME" --id "$ID_HOST"
+assert_eq "AO6c grace 129 (ceiling 149 < 150) is refused" "1" "$RC"
+assert_eq "AO6c with zero PATCH" "0" "$(patch_count)"
+new_case ao6d
+write_page 1 "" "$(hb_row "$ID_HOST" "$HOST_NAME" paused null 300)"
+FAKE_CURL_COST=1 run_new --arm-one "$HOST_NAME" --id "$ID_HOST"
+assert_eq "AO6d a null period fails CLOSED (rc 1)" "1" "$RC"
+assert_eq "AO6d with zero PATCH" "0" "$(patch_count)"
+new_case ao6e
+write_page 1 "" "$(hb_row "$ID_HOST" "$HOST_NAME" paused 60 null)"
+FAKE_CURL_COST=1 run_new --arm-one "$HOST_NAME" --id "$ID_HOST"
+assert_eq "AO6e a null grace fails CLOSED (rc 1)" "1" "$RC"
+assert_eq "AO6e with zero PATCH" "0" "$(patch_count)"
+
+echo "--- AO7 --arm-one with a caller-supplied ARMED_UNCONFIRMED uses it and leaves it alone when empty"
+new_case ao7
+echo 30 > "$FAKE_STATE/$ID_HOST.upat"
+ARMONE_BOOKS="$CASE/mine" FAKE_CURL_COST=1 run_new --arm-one "$HOST_NAME" --id "$ID_HOST"
+assert_eq "AO7 exits 0" "0" "$RC"
+assert_eq "AO7 creates no private mktemp file of its own" "0" "$(books_count)"
+
+echo "--- AO8 an exported ARM_ONE_ID is inert on --arm"
+case_setup ao8
+ARM_ONE_ID=1 run_sut
+assert_eq "AO8 --arm still exits 0" "0" "$RC"
+assert "AO8 and never reads id 1" "! get_urls | grep -qx 1"
+
+echo "--- AO9 --help documents the new modes"
+# shellcheck disable=SC2034  # consumed by `assert` through eval
+help2="$(PATH="$BIN:$PATH" bash "$SUT" --help 2>&1)"
+for word in '--status' '--arm-one' '--id'; do
+  assert "AO9 --help documents $word" "[[ \"\$help2\" == *'$word'* ]]"
+done
+
 # --- Mutation battery -------------------------------------------------------------------------
 # Each row mutates a COPY of the SUT and requires a verdict this suite asserts to CHANGE. A guard
 # that cannot be driven RED is vacuous; and a mutation that does not LAND reports the baseline,
@@ -990,8 +1362,10 @@ if mutate no-auth-header 1 's|header = "Authorization: Bearer %s"|header = "X-St
 fi
 
 # M7 — strip the per-round-trip ceiling. The whole ladder is priced on `--max-time`.
+# The landing count is 3 since #9980: the list resolver's read carries the same literal as the two
+# pre-existing round-trips (hb_fetch, hb_patch_paused). A deliberate edit, not a loosening.
 # shellcheck disable=SC2016  # the sed program is data; expanding it here is the bug
-if mutate no-max-time 2 's|--max-time "\$ARM_CURL_MAX_TIME_S" ||g'; then
+if mutate no-max-time 3 's|--max-time "\$ARM_CURL_MAX_TIME_S" ||g'; then
   case_setup m7
   run_sut "$MUTANT"
   assert_eq "M7 RED: an unbounded round-trip is a term the wall-clock ladder cannot price" "1" "$RC"
@@ -1136,6 +1510,136 @@ if mutate no-destination-pin 1 's|^  https://uptime.betterstack.com/api/v2) ;;$|
     "[[ \$(get_urls | grep -c '') -gt 0 ]]"
 fi
 
+# --- M22-M33 (#9980): the named-monitor modes ---------------------------------------------------
+# Each row mutates ONE guard of --status/--arm-one on a copy and requires a verdict a case above asserts
+# to CHANGE. `NEW_SUT` points run_new at the mutant. Every mutant arm is judged by a PATCH the baseline
+# must not issue (or, for M27/M29, a refusal the baseline must not make), so none can pass on the
+# baseline's own behaviour.
+
+# M22 — exact name equality becomes substring containment: a near-name arms the wrong monitor.
+# shellcheck disable=SC2016  # the sed program is data; expanding it here is the bug
+if mutate name-contains 1 's@select(\.attributes\.name == \$n)@select(.attributes.name | contains($n))@'; then
+  new_case m22
+  printf 'paused' > "$FAKE_STATE/$ID_DECOY.status"
+  write_page 1 "" "$(hb_row "$ID_DECOY" "${HOST_NAME}-old" paused)"
+  NEW_SUT="$MUTANT" FAKE_CURL_COST=1 run_new --arm-one "$HOST_NAME"
+  assert "M22 RED: the mutant unpauses a monitor whose name merely CONTAINS the requested one" \
+    "[[ \$(patch_count) -ge 1 ]]"
+fi
+
+# M23 — the collision refusal is disabled: two exact rows arm the last one read.
+# shellcheck disable=SC2016  # the sed program is data; expanding it here is the bug
+if mutate collision-allowed 1 's@^  if \[\[ "\$RES_COUNT" -gt 1 \]\]; then@  if false; then@'; then
+  new_case m23
+  printf 'paused' > "$FAKE_STATE/$ID_DUP.status"
+  write_page 1 "" "$(hb_row "$ID_HOST" "$HOST_NAME" paused)" "$(hb_row "$ID_DUP" "$HOST_NAME" paused)"
+  NEW_SUT="$MUTANT" FAKE_CURL_COST=1 run_new --arm-one "$HOST_NAME"
+  assert "M23 RED: with two monitors of that name the mutant arms one of them" "[[ \$(patch_count) -ge 1 ]]"
+fi
+
+# M24 — stop reading after page 1: a duplicate on a later page is never seen.
+# shellcheck disable=SC2016  # the sed program is data; expanding it here is the bug
+if mutate first-page-only 1 's@^    next=\$(printf .*$@    next=""@'; then
+  new_case m24
+  write_page 1 "$LIST_BASE?page=2&per_page=250" "$(hb_row "$ID_HOST" "$HOST_NAME" paused)"
+  write_page 2 "" "$(hb_row "$ID_DUP" "$HOST_NAME" paused)"
+  NEW_SUT="$MUTANT" FAKE_CURL_COST=1 run_new --arm-one "$HOST_NAME"
+  assert "M24 RED: a compliant first match plus a duplicate on page 2 is armed by the mutant" \
+    "[[ \$(patch_count) -ge 1 ]]"
+fi
+
+# M25 — drop the id-pin equality: the pin no longer anchors anything.
+# shellcheck disable=SC2016  # the sed program is data; expanding it here is the bug
+if mutate pin-ignored 1 's@^  if \[\[ -n "\$PIN_ID" && "\$PIN_ID" != "\$RES_ID" \]\]; then@  if false; then@'; then
+  new_case m25
+  NEW_SUT="$MUTANT" FAKE_CURL_COST=1 run_new --arm-one "$HOST_NAME" --id "$ID_OTHER"
+  assert "M25 RED: a pin that differs from the resolved id still arms" "[[ \$(patch_count) -ge 1 ]]"
+fi
+
+# M26 — delete the ceiling comparison: a short-window monitor is unpaused for 150 s.
+# shellcheck disable=SC2016  # the sed program is data; expanding it here is the bug
+if mutate no-ceiling 1 's@^  if \[\[ "\$ARM_ONE_DEADLINE" -gt "\$max" \]\]; then@  if false; then@'; then
+  new_case m26
+  write_page 1 "" "$(hb_row "$ID_HOST" "$HOST_NAME" paused 60 100)"
+  NEW_SUT="$MUTANT" FAKE_CURL_COST=1 run_new --arm-one "$HOST_NAME" --id "$ID_HOST"
+  assert "M26 RED: a monitor whose first alert lands inside the window is unpaused" "[[ \$(patch_count) -ge 1 ]]"
+fi
+
+# M27 — off-by-one on the ceiling: `-gt` becomes `-ge`, so a monitor the contract ALLOWS (ceiling == 150)
+# is refused. The suite pins both sides of the boundary (grace 130 allowed, 129 refused).
+# shellcheck disable=SC2016  # the sed program is data; expanding it here is the bug
+if mutate ceiling-off-by-one 1 's@^  if \[\[ "\$ARM_ONE_DEADLINE" -gt "\$max" \]\]; then@  if [[ "$ARM_ONE_DEADLINE" -ge "$max" ]]; then@'; then
+  new_case m27
+  write_page 1 "" "$(hb_row "$ID_HOST" "$HOST_NAME" paused 60 130)"
+  echo 30 > "$FAKE_STATE/$ID_HOST.upat"
+  NEW_SUT="$MUTANT" FAKE_CURL_COST=1 run_new --arm-one "$HOST_NAME" --id "$ID_HOST"
+  assert_eq "M27 RED: the monitor sitting exactly on the ceiling is now refused" "1" "$RC"
+fi
+
+# M28 — disable the id override: arm_one falls back to the tfstate lookup that --arm-one never has.
+# shellcheck disable=SC2016  # the sed program is data; expanding it here is the bug
+if mutate override-off 1 's@^  if \[\[ -n "\$given_id" \]\]; then@  if false; then@'; then
+  new_case m28
+  echo 30 > "$FAKE_STATE/$ID_HOST.upat"
+  NEW_SUT="$MUTANT" FAKE_CURL_COST=1 run_new --arm-one "$HOST_NAME" --id "$ID_HOST"
+  assert_eq "M28 RED: the resolved id never reaches arm_one, so nothing is unpaused" "0" "$(patch_count)"
+fi
+
+# M29 — hoist the --arm preflight out of its gate: --arm-one then demands a tfstate it never had.
+# shellcheck disable=SC2016  # the sed program is data; expanding it here is the bug
+if mutate preflight-ungated 1 's@^if \[\[ "\$MODE" == arm \]\]; then@if true; then@'; then
+  new_case m29
+  echo 30 > "$FAKE_STATE/$ID_HOST.upat"
+  NEW_SUT="$MUTANT" FAKE_CURL_COST=1 run_new --arm-one "$HOST_NAME" --id "$ID_HOST"
+  assert_eq "M29 RED: the named-monitor mode is refused for want of a tfstate" "1" "$RC"
+  assert "M29 and says so" "[[ \"\$OUT\" == *'TFSTATE_JSON is unset'* ]]"
+fi
+
+# M30 — drop the pagination.next confinement: the bearer follows a link off the vendor's origin.
+# shellcheck disable=SC2016  # the sed program is data; expanding it here is the bug
+if mutate next-unconfined 1 's@^      if \[\[ "\$rest" == "\$next" .*$@      if false; then@'; then
+  new_case m30
+  write_page 1 "https://evil.example/api/v2/heartbeats?page=2&per_page=250" "$(hb_row "$ID_DECOY" "decoy-one" up)"
+  NEW_SUT="$MUTANT" run_new --status "$HOST_NAME"
+  assert "M30 RED: the mutant sends a request to the off-origin host" "grep -q 'evil.example' '$FAKE_CALLS'"
+fi
+
+# M31 — drop the `.data is an array` check. A 200 whose `.data` is an OBJECT iterates its values in
+# `.data[]`, so without the check an error-shaped body can read as a unique match.
+# shellcheck disable=SC2016  # the sed program is data; expanding it here is the bug
+if mutate no-data-array-check 1 's@^    if ! printf .%s. "\$body" | jq -e .*$@    if false; then@'; then
+  new_case m31
+  printf '{"data":{"k":%s},"pagination":{"next":null}}' "$(hb_row "$ID_HOST" "$HOST_NAME" paused)" > "$FAKE_LIST_DIR/page-1.json"
+  NEW_SUT="$MUTANT" FAKE_CURL_COST=1 run_new --arm-one "$HOST_NAME" --id "$ID_HOST"
+  assert "M31 RED: a list whose .data is an object is armed from by the mutant" "[[ \$(patch_count) -ge 1 ]]"
+fi
+
+# M32 — drop the positive-integer check on period/grace. period 0 passes the arithmetic (0 + 300 - 40 >= 150),
+# so only the check stops it; a NULL period would abort in the arithmetic under set -u and prove nothing.
+# shellcheck disable=SC2016  # the sed program is data; expanding it here is the bug
+if mutate no-int-check 1 's@^  if \[\[ ! "\$RES_PERIOD" =~ .*$@  if false; then@'; then
+  new_case m32
+  write_page 1 "" "$(hb_row "$ID_HOST" "$HOST_NAME" paused 0 300)"
+  NEW_SUT="$MUTANT" FAKE_CURL_COST=1 run_new --arm-one "$HOST_NAME" --id "$ID_HOST"
+  assert "M32 RED: a monitor with period 0 is unpaused by the mutant" "[[ \$(patch_count) -ge 1 ]]"
+fi
+
+# M33 — let the override fall back to the ENVIRONMENT: an exported variable then steers --arm's ids.
+# shellcheck disable=SC2016  # the sed program is data; expanding it here is the bug
+if mutate override-from-env 1 's@given_id="\${4:-}"@given_id="${4:-${ARM_ONE_ID:-}}"@'; then
+  case_setup m33
+  ARM_ONE_ID=1 run_sut "$MUTANT"
+  assert "M33 RED: --arm reads monitor id 1 because the environment said so" "get_urls | grep -qx 1"
+fi
+
+# New-mode control: an UNMUTATED copy, run through the same harness, still arms.
+cp "$SUT" "$WORK/mutant-control-new.sh" || { echo "FATAL: control copy failed"; exit 2; }
+new_case m34
+echo 30 > "$FAKE_STATE/$ID_HOST.upat"
+NEW_SUT="$WORK/mutant-control-new.sh" FAKE_CURL_COST=1 run_new --arm-one "$HOST_NAME" --id "$ID_HOST"
+assert_eq "M34 control: the UNMUTATED --arm-one still arms (rc 0)" "0" "$RC"
+assert_eq "M34 control: with exactly one PATCH" "1" "$(patch_count)"
+
 # M15 — the anti-vacuity control. An UNMUTATED copy, run through the same harness, must still be
 # GREEN; without it a red baseline is indistinguishable from a caught mutation.
 cp "$SUT" "$WORK/mutant-control.sh" || { echo "FATAL: control copy failed"; exit 2; }
@@ -1159,8 +1663,10 @@ echo "arm-heartbeats: ${PASS} passed, ${FAIL} failed ($((PASS + FAIL)) assertion
 # purpose should cost one deliberate edit here. Ratcheted 190 → 206 for T11 (the external cut),
 # T4's self-clearing sequence, S4's annotation, and mutation row M18. Ratcheted 206 → 234 for the
 # stdin-bearer conversion (#7797): the stub's argv/--disable/--noproxy refusals and their self-tests,
-# T12 (destination pin, token shape, xtrace) and mutation rows M19-M21.
-ASSERT_FLOOR=234
+# T12 (destination pin, token shape, xtrace) and mutation rows M19-M21. Ratcheted 234 -> 374 for #9980:
+# the list endpoint's stub self-tests (H1), cases ST1-ST5/AX/AO1-AO9, mutation rows M22-M33 and the
+# new-mode control M34.
+ASSERT_FLOOR=374
 if [[ $((PASS + FAIL)) -lt "$ASSERT_FLOOR" ]]; then
   echo "FAIL: only $((PASS + FAIL)) assertions ran against a floor of ${ASSERT_FLOOR} — the suite is narrowed or a case aborted early."
   exit 1

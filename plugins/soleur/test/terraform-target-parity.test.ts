@@ -6929,8 +6929,11 @@ describe("the ARM gate's deadlines fit its job", () => {
     // Since #7797 the bearer rides curl's stdin config channel, so the transport flags, the token
     // guard and the header live in ONE wrapper (`bs_api`) holding the file's only `curl`; the two
     // call sites (the GET and the PATCH) go through it, so what is pinned is one curl + two calls.
+    // #9980 added a THIRD credentialed call site: the named-monitor resolver's paginated list read
+    // (`--status` / `--arm-one`). The count is the honest number of call sites, and the intent of the
+    // pin survives: every credentialed call goes through `bs_api`, and `curl` stays at exactly one.
     expect(stripped.match(/curl\b/g)?.length).toBe(1);
-    expect(stripped.match(/\$\(bs_api /g)?.length).toBe(2);
+    expect(stripped.match(/\$\(bs_api /g)?.length).toBe(3);
     expect(stripped).toMatch(/-w '%\{http_code\}'/);
     expect(stripped).toMatch(/\[\[ "\$HB_PATCH_CODE" =~ \^2 \]\]/);
     // The sweep's outcome vocabulary is closed and documented in the same file.
