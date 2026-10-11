@@ -1151,3 +1151,52 @@
   validation or recovery qualification. The ensuing documentation-only push
   requires its own exact-head and final-description watches. Every execution
   and promotion hold remains in force; PR #9051 stays draft and disarmed.
+
+## Continuation update — 2026-10-11 remaining acceptance work
+
+- The user requested `continue remaining ACs`, releasing the general workflow
+  holds on local suites, QA and review. Separate credential/provider/browser-auth,
+  account/shared-write, deployment and flag/cohort restrictions persist. Consumed
+  one-use build/recovery authorizations are not renewed by this continuation.
+- Before this continuation, exact pushed head `89bc908f3b3cb865bd77e6de332a97630c63f640`
+  settled with 69 passes, 11 skips and only the draft required `test` aggregate
+  red in [CI 38171662276](https://github.com/jikig-ai/soleur/actions/runs/38171662276).
+  Final description guards
+  [38172198896](https://github.com/jikig-ai/soleur/actions/runs/38172198896)
+  succeeded; superseded description run 38171662283 was cancelled.
+- Pinned main `e5ee9d577f2ea64580c17c314d0153bfe427d1de` merged cleanly at
+  `3c3ba13b29053071b690598325362b343299bc1a`. Its eight-path delta corrects
+  egress loader/deny-file delivery and live-IP enforcement probes. No infrastructure
+  workflow or host mutation was executed. Feature whitespace and the changed-file
+  credential-refusal scan passed (six files, zero findings).
+- At that merge, the selected synthetic fixture set passed: 25 unit files /
+  255 tests and five component files / 66 tests. Both process exits and JSON
+  reports passed with exact file membership and zero failures/skips/TODOs;
+  log inspection found no runtime warnings. Node v22.22.1 was reused with its
+  recorded hash, sanitized environment, isolated scratch/HOME, disabled env-file
+  loading and one worker. No installation, credential read or provider/browser
+  invocation occurred. This is fixture evidence, not production dependency parity.
+- The complete orphan/log-retention fixture suite passed **54/54**, including
+  C.9, in an allocator-owned sandbox under a verified PID namespace; process and
+  allocator-cleanup exits were zero. The printed SIGKILL notice is the deliberate
+  C.9 stimulus. No runner/test fix was made. This isolated pass does not explain
+  the earlier CI failures or verify a root-cause correction; Ref #9791 remains
+  OPEN and unverified. Raw logs remain ignored task scratch, not committed streams.
+- The [runtime audit](remaining-ac-runtime-audit-2026-10-11.md) identifies concrete
+  missing production composition, protected synthetic conversation identity,
+  request-boundary authorization and actionable approval routing. No existing
+  routine consumer qualifies; the plan requires retaining its rejection.
+- A [fresh production-image proposal](production-image-proposal-2026-10-11.md)
+  and separate source/digest-bound runner passed read-only preview. No marker was
+  consumed, source exported, image built or application/database started. Its
+  exact clean-head command requires fresh approval; historical Supabase recovery
+  is a separately reviewable startup/SQL action after candidate verification.
+- Current-source/full-production recovery, authenticated implementation screenshots,
+  a real eligible routine, permitted mode-specific Web evidence and full review /
+  promotion remain incomplete. Keep PR draft and auto-merge disarmed, Codex
+  default-off and customer traffic blocked. Project sharing, retention/inheritance
+  and configured regions remain unknown. Fresh pushed-head CI remains required.
+- The attributable [CLO continuation](../../../legal/audits/2026-10-11-codex-web-mode-continuation.md#mode-decisions-and-smallest-safe-evidence)
+  preserves API-key PENDING and existing managed hosted-auth BLOCKED. Official
+  protocol availability does not settle hosted-route permission; no new live
+  execution allowance or account/control finding was granted.

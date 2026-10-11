@@ -76,3 +76,24 @@ Session errors and prevention:
 
 These were visible failures or local execution mistakes; no new cross-cutting
 rule or runtime qualification claim follows from this maintenance.
+
+## Addendum — 2026-10-11 remaining acceptance preparation
+
+The continuation repeated oversized combined reads and guessed absent source
+filenames. Discovery with `rg --files` and bounded rereads corrected the scope;
+no missing file or truncated output was treated as implementation evidence.
+The tally was initialized after the first two read-only audit agents launched;
+their seats were recorded before the third launch. Initialize and gate before
+each spawn, including audit-only preparation.
+
+Fresh scratch-runner generation initially used JavaScript replacement-string
+metasyntax against a Python regex containing dollar/apostrophe characters. Syntax
+checks caught the malformed copy before execution. Replacement callbacks and
+direct line parsing produced the valid fresh artifact. Its first read-only
+preview then refused a legitimate systemd filename containing `@`; bounded source
+inspection corrected the admission grammar and preview passed. The old consumed
+runner and authorization marker were preserved; no build or startup followed.
+
+Local C.9 passed in the verified PID namespace without a code change. A green
+isolated result narrows the observation; it cannot establish the earlier CI
+failure's cause or close its tracker. Retain that distinction in handoffs.

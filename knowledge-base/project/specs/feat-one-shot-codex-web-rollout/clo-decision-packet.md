@@ -245,3 +245,16 @@ error, and unconfirmed project scope/region/retention. The operator reports no
 provider approval for hosted integration. This is additional factual evidence,
 not a new CLO disposition;
 the mode holds above remain in force.
+
+## Internal CLO reassessment — 2026-10-11
+
+The attributable [dated audit](../../../legal/audits/2026-10-11-codex-web-mode-continuation.md#mode-decisions-and-smallest-safe-evidence)
+retains API key **PENDING without live authorization** and existing managed
+hosted auth **BLOCKED pending provider-permitted integration**. Account/agreement
+and custody binding, exact hosted-route permission, project sharing/inheritance,
+retention, configured regions, endpoint behavior, and actual test budget/deadline
+evidence remain unresolved. Recovery, authenticated screenshots, routine
+qualification and separate Web matrices remain independent prerequisites.
+This continuation grants no credential/provider/account operation, shared write,
+deployment or flag/cohort change. Keep PR draft and auto-merge disarmed, Codex
+default-off and customer content blocked.
