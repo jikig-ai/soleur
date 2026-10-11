@@ -152,8 +152,8 @@ assert_fixture_dir() {
 # real files.
 # A killed run (SIGKILL skips the EXIT trap) leaves its tree behind: sweep stale ones (older than a day)
 # so /var/tmp does not accumulate them. Real directories only (-type d never follows a symlink).
-[ -n "$NESTED" ] || find /var/tmp -maxdepth 1 -type d -name 'inngest-sole-copy-suite.*' -mmin +1440 -exec rm -rf {} + 2>/dev/null || true
-SUITE_TMP="$(mktemp -d /var/tmp/inngest-sole-copy-suite.XXXXXX)" || { printf 'FATAL: mktemp -d failed\n' >&2; exit 2; }
+[ -n "$NESTED" ] || find "${TMPDIR:-/var/tmp}" -maxdepth 1 -type d -name 'inngest-sole-copy-suite.*' -mmin +1440 -exec rm -rf {} + 2>/dev/null || true
+SUITE_TMP="$(mktemp -d "${TMPDIR:-/var/tmp}/inngest-sole-copy-suite.XXXXXX")" || { printf 'FATAL: mktemp -d failed\n' >&2; exit 2; }
 assert_fixture_dir "$SUITE_TMP"
 trap 'rm -rf "$SUITE_TMP"' EXIT
 
