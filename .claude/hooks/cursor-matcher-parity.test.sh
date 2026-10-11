@@ -7,6 +7,7 @@
 #   2026-10-11 measured this repository's .claude/settings.json.
 #   2026-10-11 edit-tool session classified /go and refused one agent.
 #   2026-10-11 matcher rewrite separated Write from ^write$.
+#   2026-10-11 lab channel installed 2026.10.10-6b851c2. The hook rewrite slice matches.
 # SessionStart commands, Bash matchers, the Edit matcher on
 # security_reminder_hook.py, and Write / Write|Edit matchers are already-fires.
 # ^write$ does not match tool name Write and stays unmeasured. It is not dead.
@@ -27,6 +28,7 @@ SHAPE="$REPO_ROOT/plugins/soleur/cursor/2026-10-08-cli-hook-shape.md"
 SHAPE_REPO="$REPO_ROOT/plugins/soleur/cursor/2026-10-11-repo-settings-shape.md"
 SHAPE_EDIT="$REPO_ROOT/plugins/soleur/cursor/2026-10-11-edit-tool-shape.md"
 SHAPE_REWRITE="$REPO_ROOT/plugins/soleur/cursor/2026-10-11-matcher-rewrite-shape.md"
+SHAPE_LAB="$REPO_ROOT/plugins/soleur/cursor/2026-10-11-lab-channel-shape.md"
 LEDGER="$HOOKS_DIR/cursor-dispositions.tsv"
 EMPTY="$REPO_ROOT/plugins/soleur/cursor/hooks-empty.json"
 HARNESS="$REPO_ROOT/plugins/soleur/lib/harness.ts"
@@ -127,6 +129,21 @@ if [ -f "$SHAPE_REWRITE" ] && grep -E -q 'user_email[[:space:]]*[:=][[:space:]]*
   fail "2026-10-11 matcher-rewrite note stores an email"
 else
   pass "2026-10-11 matcher-rewrite note does not store an email"
+fi
+
+if [ -f "$SHAPE_LAB" ]; then pass "2026-10-11 lab-channel note exists"; else fail "2026-10-11 lab-channel note missing"; fi
+note_has "$SHAPE_LAB" "2026-10-11 lab-channel note quotes the support bar" "The plugin is called supported only when a Cursor CLI session shows"
+note_has "$SHAPE_LAB" "2026-10-11 lab-channel note does not call the plugin supported" "The plugin is not supported"
+note_lacks "$SHAPE_LAB" "2026-10-11 lab-channel note has no loaded: line" "^loaded:"
+note_lacks "$SHAPE_LAB" "2026-10-11 lab-channel note does not close #9608" "Closes #9608"
+note_has "$SHAPE_LAB" "2026-10-11 lab-channel note keeps the hooks object empty" 'hooks-empty.json` stays `{ "hooks": {} }`'
+note_has "$SHAPE_LAB" "2026-10-11 lab-channel note refuses a dead mark" "They are not \`dead\`."
+note_has "$SHAPE_LAB" "2026-10-11 lab-channel note records the lab version" "2026.10.10-6b851c2"
+note_has "$SHAPE_LAB" "2026-10-11 lab-channel note records the identical rewrite slice" "same 3749 bytes"
+if [ -f "$SHAPE_LAB" ] && grep -E -q 'user_email[[:space:]]*[:=][[:space:]]*[^[:space:]]+@' "$SHAPE_LAB"; then
+  fail "2026-10-11 lab-channel note stores an email"
+else
+  pass "2026-10-11 lab-channel note does not store an email"
 fi
 
 expected=$'enterprise\t/etc/cursor/hooks.json\t(none)\t(none)\tabsent\tfile-absent\tshape-note-2026-10-08
