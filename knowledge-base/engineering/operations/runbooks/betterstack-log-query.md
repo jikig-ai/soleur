@@ -787,7 +787,7 @@ the flood (crash-loop / pull storm) that accompanies disk growth:
 | `executing gc` | the **denominator** — gc started |
 | `gc successfully completed` | gc finished |
 | `garbage collected blobs` | gc actually reclaimed |
-| `PatchBlobUpload` | orphaned `.uploads/` evidence (i/o timeouts). The shipper's exempt arm keys on a `PatchBlobUpload*` message prefix, but the live error line's message is `unexpected error, removing .uploads/ files` (handler only in `func:`), so it is rate-capped, not exempt (measured 2026-10-01; fix tracked in the shipper follow-up for #7556). Grade upload failures on the paired `HTTP API` row (5xx on `/blobs/uploads/`), which is exempt. |
+| `PatchBlobUpload` | orphaned `.uploads/` evidence (i/o timeouts). The live error line's message is `unexpected error, removing .uploads/ files` and the handler is named only in `func:`, so the shipper classifies it on the parsed `func` field (suffix `(*RouteHandler).PatchBlobUpload`, admitted through the upload sub-quota, 8 per tick). Hosts replaced before that change (#9373) still rate-cap it (inferred from the 2026-09-28 event: no SOLEUR_ZOT_LOG error row existed for it, so the earlier message-prefix arm did not admit the line). Grade upload failures on the paired `HTTP API` row (5xx on `/blobs/uploads/`), which is exempt. |
 
 `gc` runs hourly (`"gc": true`, `gcDelay`/`gcInterval` 1h). **A stalled gc emits a start
 with no completion**, so the start/complete *ratio* is the discriminator — which is why

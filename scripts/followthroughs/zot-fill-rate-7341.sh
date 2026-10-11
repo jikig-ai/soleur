@@ -17,9 +17,9 @@
 # recut — is not discriminable from here; attribution
 # was blocked by #7440 (the registry shipped no zot logs; this heartbeat was its only instrument).
 # UNBLOCKED 2026-08-12 (#7455): the zot container-log channel is LIVE, and it counts
-# message:PatchBlobUpload as one of its four evidence classes — which is the very discriminator
-# named as missing below. Attribution is now answerable; this script has not yet been rewritten to
-# use it.
+# the func-keyed PatchBlobUpload error line (#9373) as one of its evidence classes — which is the
+# very discriminator named as missing below. Attribution is now answerable; this script has not
+# yet been rewritten to use it.
 #
 # ── EVERY PARSE STEP BELOW IS A GUARD. DO NOT REGEX THE WHOLE ROW. ───────────────────────────
 #
@@ -320,6 +320,16 @@ ENV = "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=" + os.environ["ZOT_ATTR_HOST
 # positional anchor depends on is not guaranteed to survive.
 START_LIT = "executing gc of orphaned blobs for "
 DONE_LIT  = "gc successfully completed for "
+UPLOAD_ERR = re.compile(r"level:error,.*\(\*RouteHandler\)\.PatchBlobUpload,goroutine:[0-9]+\}\s*$")
+def is_upload_err(payload):
+    # The real upload error line (#9373) is level:error with the handler named only in the parsed
+    # `func` field, which zot writes immediately before `goroutine` at the END of the row. The end
+    # anchor keeps a client header that spells the func text mid-row from counting, and the length
+    # bound keeps a row that sanitize() CUT at 800 characters from counting: a client controls how
+    # such a row ends. A real row whose error text exceeds ~550 characters loses its tail in the shipper
+    # and is not counted (a lower bound). Informational counter only; it never gates a verdict. Keep in step with the
+    # awk counter in zot-log-channel-7440.sh (T21 pins that both carry the shipper func literal).
+    return len(payload) < 800 and UPLOAD_ERR.search(payload) is not None
 def msg_field(payload):
     for f in payload.lstrip("{").rstrip("}").split(","):
         if f.startswith("message:"):
@@ -360,7 +370,7 @@ for line in sys.stdin:
     if mf is None: continue
     if mf.startswith(START_LIT): starts[mf[len(START_LIT):]] += 1; continue
     if mf.startswith(DONE_LIT):  dones[mf[len(DONE_LIT):]] += 1;  continue
-    if mf.startswith("PatchBlobUpload"): n_patch += 1
+    if is_upload_err(msg[len(ENV):]): n_patch += 1
 lagging = sorted(r for r in starts if dones[r] < starts[r])
 drop_txt = str(drop_sum) + ("+unbounded" if drop_unknown else "")
 print("  gc_start_events=%d gc_completion_events=%d over %d repo(s); patch_blob_upload=%d dropped_rows=%s (markers=%d)"
