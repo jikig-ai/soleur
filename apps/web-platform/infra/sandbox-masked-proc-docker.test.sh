@@ -181,7 +181,7 @@ else
 fi
 CTRL_OUT="$(docker exec "$CTR-ctrl" /usr/bin/bwrap --unshare-user --unshare-pid --ro-bind / / --tmpfs /proc --dev /dev \
   --bind /proc /proc --proc /proc -- true 2>&1 | head -3)"
-if printf '%s' "$CTRL_OUT" | grep -qi "mount proc"; then
+if grep -qi "mount proc" <<<"$CTRL_OUT"; then
   pass "control: the historical splice shape is refused under docker's default masks (${CTRL_OUT%%$'\n'*})"
 else
   fail "control: the historical splice shape was NOT refused — the runner has no docker masks, so this suite cannot fail (out='$CTRL_OUT')"
