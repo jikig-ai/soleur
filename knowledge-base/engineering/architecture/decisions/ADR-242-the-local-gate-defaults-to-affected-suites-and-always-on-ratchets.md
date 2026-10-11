@@ -10,6 +10,7 @@ amended_by:
   - "#9173 (2026-09-29) — the diff-source scope axis (`--affected-scope=staged`) and the scope-aware `runner-changed` arm; see ## Amendment — 2026-09-29"
   - "#9307 (2026-09-30) — anchored edge matching, the runner-subcommand skip, `--print-selection` / `--paths`, and the evidence-based always-on audit; see ## Amendment — 2026-09-30"
   - "#9400 (2026-10-01) — the affected-ratchets pre-push lane moves the cheap ratchet net earlier than the local gate (push time, merged tree); the required `test` context remains the merge gate; see ## Amendment — 2026-10-01 (#9400)"
+  - "#9813 (2026-10-10) — decision 22: the `glob:<literal-head>/<glob-tail>` declared-edge kind for corpus walkers, the five-site malformed-shape doctrine, and the per-suite dispositions; see ## Amendment — 2026-10-10 (#9813)"
 ---
 
 # ADR-242: `test-all.sh` — the local gate defaults to the affected set plus always-on ratchets (#8322)
@@ -576,3 +577,50 @@ receipt is a `RATCHET_LANE verdict=` line, not a battery verdict.
     invalidation weakening. Residual accepted and documented: a file edited mid-walk can mint a torn record
     (edges of content v1 keyed to hash v2, sticky until the next change) — hashing at read time would cost the
     per-file forks the design exists to avoid.
+
+## Amendment — 2026-10-10 (#9813)
+
+22. **The declared-edge grammar has a third kind, `glob:<literal-head>/<glob-tail>`, for corpus
+    walkers whose read set is narrower than a directory.** Six `*.sh` corpus walkers declared
+    `knowledge-base/` — honest at prefix granularity (generated operator scripts ship under
+    `knowledge-base/project/specs/`) but over-broad in practice: a `.md`-only kb diff could never
+    move their verdict yet selected all six for ~264 committed seconds (the issue's ~331 s figure
+    counted `test-affected-kb-consumers` too, which still selects on any kb path by design; the
+    five extension-bounded walkers that took the glob account for ~248 s of it). A
+    `glob:` entry mints `^glob:<pattern>`; a diff line under the literal head matching the tail
+    under bash `[[ == ]]` semantics (`*` crosses `/`, so `knowledge-base/**.sh` covers both `x.sh`
+    and `a/b/c.sh`) selects the suite. The degrade ladder always fails toward coverage: a missing
+    head dir mints `^<head>/` (the dir-prefix edge the entry replaced), a malformed entry mints
+    `^glob:<entry verbatim>` — an always-match shape, since a bare `^` would evaluate `*\n\n*` and
+    narrow — and a `glob:` with no metachar recurses as a literal path entry. `glob:` is
+    declaration-array-only by intent: the token extractors never emit it on purpose (a
+    `glob:`-spelled literal in scanned content still hits the same mint arm — widen-only), and the
+    relevance arrays stay verbatim substring edges. The malformed-shape doctrine — a closed
+    charset (`[-A-Za-z0-9_./]` plus `*` in the tail) and a repo-relative head (a `..`/`/`/`//`
+    head can pass a `-d` probe while matching no diff line ever — review B1) — is pinned
+    identical at five sites: the mint arm in `_affected_add_edge`, the in-flight revalidation in
+    `_diff_edge_hit`, the census arm in `scripts/lint-orphan-test-suites.sh` (a static RED, since
+    a bad entry widens every diff's selection), the `covers()` oracle in
+    `scripts/test-affected-kb-consumers.test.sh`, and the `GLOBENT` shape in the
+    registration-only classifier, which admits the shape as registration-only; every other added
+    line stays semantic. The real `.md` read under kb the consumer ratchet surfaced —
+    the provision-script `DPA_FILE` closure for `operator-ack-guard` — is a literal file edge:
+    the issue's `.md`-only-decline contract holds for the corpus scan, not for reads a suite
+    actually has. `lint-trap-tempfile-ownership` carries the wider seven-entry set its
+    `ALL_EXT` corpus (.sh .bash .py .ts .mjs .js + bunfig.toml) reads, so an extension the
+    issue's `*.sh` framing never named is not silently under-covered. Two suites keep
+    `knowledge-base/` because their corpora are NOT extension-bounded:
+    `scripts/test-affected-kb-consumers` (any kb file can be a consumer) and
+    `plugins/soleur/test/operator-agent-runnable` — its Guard-1 discovery is `git grep
+    --untracked` for the generated-script marker on ANY extension, a content-keyed read the
+    review surfaced (a kb `.md` quoting the marker is in its corpus; `**.sh` would
+    under-cover, ~16 committed seconds is the price of honesty).
+
+Alternatives added by this amendment:
+
+| Alternative | Why not |
+|---|---|
+| Per-suffix literal edges (one `^`-anchored file edge per corpus member) | A new `.sh` file under kb would silently under-cover until the arrays were re-edited — the exact drift class the glob tail exists to absorb. |
+| Keep `knowledge-base/` and accept the over-selection | The measured cost is ~331 committed seconds per kb-markdown diff — the entire motivation for the ticket. |
+| A regex edge kind instead of the bash-pattern glob | Bash `[[ == ]]` patterns are already the runner's grammar (`*.test.sh` glob registration, anchored edge matching); a second matcher family adds a semantics to keep consistent at the mint/hit/census sites for zero measured need. |
+| Malformed `glob:` mints a bare `^` | A bare `^` evaluates `*\n\n*` against the normalized blob — it matches only diffs containing an EMPTY line, which narrows instead of widening. `^glob:<verbatim>` is the always-match shape the hit arm recognizes by rule. |
