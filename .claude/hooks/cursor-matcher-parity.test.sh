@@ -6,9 +6,10 @@
 #   2026-10-08 ran scratch probes. The historical ledger rows below are that session.
 #   2026-10-11 measured this repository's .claude/settings.json.
 #   2026-10-11 edit-tool session classified /go and refused one agent.
-# SessionStart commands, Bash matchers, and the Edit matcher on
-# security_reminder_hook.py are already-fires.
-# Matchers one exec cannot separate stay unmeasured. They are not dead.
+#   2026-10-11 matcher rewrite separated Write from ^write$.
+# SessionStart commands, Bash matchers, the Edit matcher on
+# security_reminder_hook.py, and Write / Write|Edit matchers are already-fires.
+# ^write$ does not match tool name Write and stays unmeasured. It is not dead.
 # hooks-empty.json stays empty.
 # detectHarness returns cursor for nonempty CURSOR_INVOKED_AS.
 # CURSOR_AGENT is not the predicate.
@@ -25,6 +26,7 @@ SHAPE_AUTH="$REPO_ROOT/plugins/soleur/cursor/2026-10-07-cli-hook-shape.md"
 SHAPE="$REPO_ROOT/plugins/soleur/cursor/2026-10-08-cli-hook-shape.md"
 SHAPE_REPO="$REPO_ROOT/plugins/soleur/cursor/2026-10-11-repo-settings-shape.md"
 SHAPE_EDIT="$REPO_ROOT/plugins/soleur/cursor/2026-10-11-edit-tool-shape.md"
+SHAPE_REWRITE="$REPO_ROOT/plugins/soleur/cursor/2026-10-11-matcher-rewrite-shape.md"
 LEDGER="$HOOKS_DIR/cursor-dispositions.tsv"
 EMPTY="$REPO_ROOT/plugins/soleur/cursor/hooks-empty.json"
 HARNESS="$REPO_ROOT/plugins/soleur/lib/harness.ts"
@@ -112,6 +114,21 @@ else
   pass "2026-10-11 edit-tool note does not store an email"
 fi
 
+if [ -f "$SHAPE_REWRITE" ]; then pass "2026-10-11 matcher-rewrite note exists"; else fail "2026-10-11 matcher-rewrite note missing"; fi
+note_has "$SHAPE_REWRITE" "2026-10-11 matcher-rewrite note quotes the support bar" "The plugin is called supported only when a Cursor CLI session shows"
+note_has "$SHAPE_REWRITE" "2026-10-11 matcher-rewrite note does not call the plugin supported" "The plugin is not supported"
+note_lacks "$SHAPE_REWRITE" "2026-10-11 matcher-rewrite note has no loaded: line" "^loaded:"
+note_lacks "$SHAPE_REWRITE" "2026-10-11 matcher-rewrite note does not close #9608" "Closes #9608"
+note_has "$SHAPE_REWRITE" "2026-10-11 matcher-rewrite note keeps the hooks object empty" 'hooks-empty.json` stays `{ "hooks": {} }`'
+note_has "$SHAPE_REWRITE" "2026-10-11 matcher-rewrite note refuses a dead mark" "They are not \`dead\`."
+note_has "$SHAPE_REWRITE" "2026-10-11 matcher-rewrite note records the scratch tool name" "The scratch hook \`tool_name\` for \`editToolCall\` is \`Write\`."
+note_has "$SHAPE_REWRITE" "2026-10-11 matcher-rewrite note records the pipeline answer" "None of the four finishes every exit gate without a commit, a push, or an issue or pull-request write."
+if [ -f "$SHAPE_REWRITE" ] && grep -E -q 'user_email[[:space:]]*[:=][[:space:]]*[^[:space:]]+@' "$SHAPE_REWRITE"; then
+  fail "2026-10-11 matcher-rewrite note stores an email"
+else
+  pass "2026-10-11 matcher-rewrite note does not store an email"
+fi
+
 expected=$'enterprise\t/etc/cursor/hooks.json\t(none)\t(none)\tabsent\tfile-absent\tshape-note-2026-10-08
 team\t.cursor/managed/active-team-hooks/hooks.json\tsessionStart\t(none)\tnot-opened\tpresent-file-not-opened\tshape-note-2026-10-08
 user\t~/.cursor/hooks.json\t(none)\t(none)\tabsent\tfile-absent\tshape-note-2026-10-08
@@ -171,6 +188,19 @@ if [ -f "$LEDGER" ]; then
           fail "edit-tool disposition is not backed: $disp $reason"
           ;;
       esac
+    elif [ "$registry" = "repo-claude-project" ] && [ "$evidence" = "shape-note-2026-10-11-matcher-rewrite" ] && grep -F -x -q -- "$line" "$SHAPE_REWRITE"; then
+      pass "ledger row $registry $event"
+      case "$disp:$reason" in
+        already-fires:write-matcher-execd-tool-name-Write)
+          repo_af=$((repo_af + 1))
+          ;;
+        unmeasured:matcher-preserved-does-not-match-tool-name-Write)
+          repo_um=$((repo_um + 1))
+          ;;
+        *)
+          fail "matcher-rewrite disposition is not backed: $disp $reason"
+          ;;
+      esac
     else
       fail "ledger row is not in a pinned capture: $registry $event"
     fi
@@ -190,16 +220,16 @@ else
   fail "ledger row count is $rows, want 71"
 fi
 
-if [ "$repo_af" -eq 28 ]; then
-  pass "28 repository commands are already-fires"
+if [ "$repo_af" -eq 36 ]; then
+  pass "36 repository commands are already-fires"
 else
-  fail "already-fires repository rows are $repo_af, want 28"
+  fail "already-fires repository rows are $repo_af, want 36"
 fi
 
-if [ "$repo_um" -eq 32 ]; then
-  pass "32 repository matchers stay unmeasured"
+if [ "$repo_um" -eq 24 ]; then
+  pass "24 repository matchers stay unmeasured"
 else
-  fail "unmeasured repository rows are $repo_um, want 32"
+  fail "unmeasured repository rows are $repo_um, want 24"
 fi
 
 edit_row=$'repo-claude-project\t.claude/hooks/security_reminder_hook.py\tPreToolUse\tEdit\talready-fires\tedit-matcher-execd-on-edit-tool\tshape-note-2026-10-11-edit-tool'
@@ -209,11 +239,25 @@ else
   fail "Edit matcher on security_reminder_hook.py is not already-fires"
 fi
 
-write_row=$'repo-claude-project\t.claude/hooks/skill-security-scan-write.sh\tPreToolUse\t^write$\tunmeasured\tscript-execd-matcher-unseparated\tshape-note-2026-10-11-edit-tool'
-if grep -F -x -q -- "$write_row" "$LEDGER" && grep -F -x -q -- "$write_row" "$SHAPE_EDIT"; then
+hist_write=$'repo-claude-project\t.claude/hooks/skill-security-scan-write.sh\tPreToolUse\t^write$\tunmeasured\tscript-execd-matcher-unseparated\tshape-note-2026-10-11-edit-tool'
+if grep -F -x -q -- "$hist_write" "$SHAPE_EDIT"; then
+  pass "edit-tool note keeps the historical ^write$ row"
+else
+  fail "edit-tool note dropped the historical ^write$ row"
+fi
+
+write_row=$'repo-claude-project\t.claude/hooks/skill-security-scan-write.sh\tPreToolUse\t^write$\tunmeasured\tmatcher-preserved-does-not-match-tool-name-Write\tshape-note-2026-10-11-matcher-rewrite'
+if grep -F -x -q -- "$write_row" "$LEDGER" && grep -F -x -q -- "$write_row" "$SHAPE_REWRITE"; then
   pass "^write$ on skill-security-scan-write.sh stays unmeasured"
 else
-  fail "^write$ on skill-security-scan-write.sh was separated without evidence"
+  fail "^write$ on skill-security-scan-write.sh was marked already-fires"
+fi
+
+write_af=$'repo-claude-project\t.claude/hooks/skill-security-scan-write.sh\tPreToolUse\tWrite\talready-fires\twrite-matcher-execd-tool-name-Write\tshape-note-2026-10-11-matcher-rewrite'
+if grep -F -x -q -- "$write_af" "$LEDGER" && grep -F -x -q -- "$write_af" "$SHAPE_REWRITE"; then
+  pass "Write on skill-security-scan-write.sh already fires"
+else
+  fail "Write on skill-security-scan-write.sh is not already-fires"
 fi
 
 if [ -f "$EMPTY" ] && grep -q '"hooks"[[:space:]]*:[[:space:]]*{[[:space:]]*}' "$EMPTY"; then
@@ -288,6 +332,11 @@ grep-rewrite.sh
 security_reminder_hook.py
 rule-incident-marker-capture.sh
 post-dispatch-watch-gate.sh
+worktree-write-guard.sh
+skill-security-scan-write.sh
+iac-plan-write-guard.sh
+new-scheduled-cron-prefer-inngest.sh
+docs-cli-verification.sh
 EOF
 
 while IFS= read -r base; do
@@ -300,15 +349,10 @@ while IFS= read -r base; do
   fi
 done <<'EOF'
 monitor-supersede-guard.sh
-worktree-write-guard.sh
-skill-security-scan-write.sh
-iac-plan-write-guard.sh
-new-scheduled-cron-prefer-inngest.sh
 durable-reminder-prefer-inngest.sh
 pencil-open-guard.sh
 skill-invocation-logger.sh
 pre-ask-technical-fork-gate.sh
-docs-cli-verification.sh
 agent-token-tee.sh
 pencil-collapse-guard.sh
 phase-surface-hint.sh
@@ -318,7 +362,7 @@ EOF
 
 # Anti-vacuity floor. pass() and fail() are the assertion machinery. Neutering
 # them leaves PASS and FAIL at 0, and this bound exits 1 without calling fail().
-# 164 is the measured count after the 2026-10-11 edit-tool rows.
+# 164 is the floor after the 2026-10-11 edit-tool rows. Later notes add assertions.
 ASSERTED=$((PASS + FAIL))
 if [ "$ASSERTED" -lt 164 ]; then
   printf '[FATAL] assertion floor: only %s assertion(s) ran\n' "$ASSERTED" >&2

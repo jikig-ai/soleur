@@ -27,6 +27,12 @@ describe("Cursor CLI plugin package", () => {
     expect(instructions).toContain(
       "The PreToolUse `Edit` matcher on `security_reminder_hook.py` already fires",
     );
+    expect(instructions).toContain(
+      "`Write` and `Write|Edit` matchers rewrite to tool name `Write` and already fire",
+    );
+    expect(instructions).toContain(
+      "A preserved `^write$` matcher does not match tool name `Write`",
+    );
     expect(instructions).toContain("This session did not meet the support bar.");
     expect(instructions).not.toContain("`.claude/settings.json` is unmeasured");
     expect(instructions).not.toContain("## Tools");
