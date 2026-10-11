@@ -370,7 +370,7 @@ describe("tryLedgerDivergenceRecovery — stale-heartbeat reap (May-6)", () => {
     // Reproduction of the May-6 dead-end: dashboard's stuck-Executing
     // conversation IS visible (status='active', archived_at NULL), so the
     // orphan check returns []. The widened helper must additionally
-    // detect that the slot's heartbeat is stale (>120s) and reap it.
+    // detect that the slot's heartbeat is stale (>240s) and reap it.
     const before = Date.now();
     const capture = setupSupabaseMock({
       visibleConversations: [{ id: "conv-stuck-active" }],

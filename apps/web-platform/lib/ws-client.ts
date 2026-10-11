@@ -201,13 +201,13 @@ export const NON_TRANSIENT_CLOSE_CODES: Record<number, { target?: string; reason
   // Copy (May-6 #3354) names the dashboard remediation surface, removes
   // the misleading "*completed*" qualifier (active rows can be archived
   // too), and sets expectation about the auto-reclaim window
-  // (60 s reaper tick + 120 s threshold ≈ 3 min). The widened
+  // (60 s reaper tick + 240 s threshold ≈ 5 min). The widened
   // `tryLedgerDivergenceRecovery` (server-side) eliminates this dead-end
   // for stale-heartbeat slots; the copy still applies when the cap is
   // genuinely held by a fresh-heartbeat conversation.
   [WS_CLOSE_CODES.CONCURRENCY_CAP]: {
     reason:
-      "You've reached your concurrent-conversation limit. Archive an active or completed conversation from the dashboard to free a slot. If a conversation appears stuck Executing, the server will automatically reclaim it within ~3 minutes.",
+      "You've reached your concurrent-conversation limit. Archive an active or completed conversation from the dashboard to free a slot. If a conversation appears stuck Executing, the server will automatically reclaim it within ~5 minutes.",
   },
   // AC-FLOW2: workspace owner revoked this user's membership. Terminal screen
   // rendered by the dashboard layout via OPEN_MEMBERSHIP_REVOKED_TERMINAL_EVENT.
