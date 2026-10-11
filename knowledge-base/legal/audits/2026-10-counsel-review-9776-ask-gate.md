@@ -3,7 +3,7 @@ title: "Counsel review audit — #9776 ask-gate (hosted must-ask lane; banner an
 type: counsel-review
 date: 2026-10-10
 issue: 9776
-pr: "set when the PR opens"
+pr: 9977
 status: SIGNED-OFF (CLO-agent-attested, Soleur-as-tenant-zero v1)
 signed_off_at: 2026-10-10
 signed_off_by: "CLO agent"
