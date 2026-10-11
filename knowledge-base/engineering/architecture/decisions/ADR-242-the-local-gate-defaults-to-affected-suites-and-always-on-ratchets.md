@@ -624,3 +624,59 @@ Alternatives added by this amendment:
 | Keep `knowledge-base/` and accept the over-selection | The measured cost is ~331 committed seconds per kb-markdown diff — the entire motivation for the ticket. |
 | A regex edge kind instead of the bash-pattern glob | Bash `[[ == ]]` patterns are already the runner's grammar (`*.test.sh` glob registration, anchored edge matching); a second matcher family adds a semantics to keep consistent at the mint/hit/census sites for zero measured need. |
 | Malformed `glob:` mints a bare `^` | A bare `^` evaluates `*\n\n*` against the normalized blob — it matches only diffs containing an EMPTY line, which narrows instead of widening. `^glob:<verbatim>` is the always-match shape the hit arm recognizes by rule. |
+
+## Amendment — 2026-10-11 (#9815)
+
+Context: decision 3's affected-selection doctrine ("the diff that makes a suite relevant is the diff that
+selects it") stopped at suite granularity — the two webplat vitest legs always ran their whole projects on any
+app diff (~82 s `unit`, ~80 s `repo-wide+component`, measured in #9763). This amendment extends the doctrine one
+level down, to intra-suite narrowing, and records the mechanism and its bounds.
+
+23. **Intra-suite narrowing follows the same eligibility doctrine as suite-level selection: narrow only inside
+    a positively-armed affected-shaped local run, and every decline lands on the full shape.** When the local
+    gate is armed (`TEST_GROUP=affected`, or the default `_AFFECTED` path with no `_aff_fallback` degradation),
+    `CI` unset, `SOLEUR_TEST_FORCE_ALL != 1`, and the diff decidable (`_diff_detect_ok`/`_diff_head_ok`), the
+    runner computes the diff's app-relative changed files and hands them to the suite command as
+    `WEBPLAT_RELATED` — an `env` prefix on the registration, never exported, so a nested runner child cannot
+    inherit a parent's list. The `repo-wide` project can never be narrowed (its subject is the repository) and
+    runs full inside every shape; `unit` and `component` narrow-or-fall-back. Zero resolves are a coverage
+    verdict, never a green: the wrapper greps vitest's own `No test files found` phrase — a version-pinned
+    string, so a vitest bump that rewords it reds the suite's real-binary arm on the bump diff — and re-runs
+    the full project. A nonzero `related` rc propagates WITHOUT a fallback re-run (a red is a verdict, not a
+    coverage gap). CI legs are untouched by construction: the `CI` conjunct leaves `WEBPLAT_RELATED` empty and
+    the empty path IS today's exact `npm run test:ci` invocation, shard forward included.
+
+24. **The run-semantics set (`WEBPLAT_RELATED_META`) is a measured enumeration, not a heuristic.** Fourteen
+    entries derived from the actual tree: every file that changes *what the run means* — both vitest configs,
+    the project-membership file, the containment guard (the doctrine anchor), every `setupFiles:`/`globalSetup:`
+    entry the config names (verified invisible to `related`'s import graph — a setup diff would otherwise
+    narrow out the very tests that exercise it), the package manifest pair, `tsconfig.json`, `.npmrc`,
+    `.nvmrc`, the wrapper itself (the narrowing mechanism never narrows its own diff), and the predicate lib.
+    `test/helpers`, mocks and fixtures are deliberately NOT meta: they are ordinary import-graph members and
+    `related` resolves their importers correctly — the issue's "shared helpers" prompt is satisfied by the
+    graph, not the list. Every member must exist on disk (the suite's A9d arm pins the derivation).
+
+25. **The degraded-full verdict is the boundary below which no narrowing may hide.** `_aff_fallback` non-empty
+    (runner-changed, index-missing, undecidable-diff, force-all degradation) is the runner's own statement
+    "this affected run degraded to the full battery" — a run carrying that verdict must not run a narrower
+    shape inside itself, so the same flag gates the computation. Enumerate passes compute `""` deterministically
+    (the command record is stable across enumerate and execute).
+
+26. **The runner-side vocabulary is `vitest related <files> --run`, not `vitest run --related`** — the issue
+    text's spelling does not exist at the pinned vitest (4.1.11): `related` is a distinct subcommand that takes
+    the project flag. The wrapper keeps `--run` (the docs-prescribed non-watch form); the measured uncertainty —
+    at 4.1.11 a `related` call over positional files exits clean without it — is recorded rather than asserted:
+    the pin is static (the flag's presence is asserted, and removing it reds the pin), the behavioural necessity
+    is not claimed. Dynamic `import(var)` is invisible to `related`'s static graph (3 sites in
+    `cron-ux-audit.ts`; the meta set and the zero-resolution fail-safe bound the residual: a change that
+    exercises behaviour ONLY through a dynamic import narrows to zero tests and falls back to full).
+
+Alternatives added by this amendment:
+
+| Alternative | Why not |
+|---|---|
+| Narrow at the registration edge instead of inside the suite | The registration's `if _diff_touches` gate already answers "app diff or not"; the narrowing question is WHICH test files inside an app diff — an argv-level answer the runner can compute but only the vitest import graph can resolve. Putting resolution inside the suite keeps the runner's job to eligibility + the file list. |
+| `vitest run --related` (issue text's spelling) | Does not exist at vitest 4.1.11 — `CACError: Unknown option`. `vitest related <files> --run` is the real form. |
+| Export `WEBPLAT_RELATED` | The #9814 learning's env-scrub class: an exported var leaks into every suite child (a nested runner would inherit the parent's list). `env` per registration is the bounded channel. |
+| Meta-hit = subset of diff under the app | Two meta entries live outside the app (`scripts/lib/test-affected-paths.sh`'s sibling, `test-relevance-paths.sh`) — membership is checked against the whole diff, not only app paths. |
+| Decline the whole feature because `related` misses dynamic imports | The residual is bounded: zero-resolution falls back to full, the meta set covers run-semantics files, and a dynamic-import-only change is already the class of diff a reviewer flags. Accepting a bounded coverage gap buys the measured ~40-60 s per app diff. |
