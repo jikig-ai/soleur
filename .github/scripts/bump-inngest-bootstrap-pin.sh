@@ -44,10 +44,12 @@
 # A child's environment is readable only by the same uid and root, a reduction
 # from the world-readable /proc/<pid>/cmdline the URL form occupied; it is not
 # invisible to code running as the same user. The token passes a shape guard
-# ([A-Za-z0-9._~+/=-], the canonical credential alphabet of
-# scripts/lib/bearer-curl.sh bc_ok — NOT the legacy ~40-char ghs_ base62 class;
-# GitHub's issued installation tokens now run ~390 chars and carry '.' and '-',
-# measured live 2026-10-11, #9972) BEFORE the header is built; a refused value
+# — a canonical-body _bearer_ok copy ([A-Za-z0-9._~+/=-], the alphabet
+# scripts/lib/bearer-curl.sh bc_ok judges and the canonical-body parity row in
+# scripts/lint-shell-trace-credential-refusal.test.sh pins byte-identical across
+# every copy; NOT the legacy ~40-char ghs_ base62 class — GitHub's issued
+# installation tokens now run ~390 chars and carry '.' and '-', measured live
+# 2026-10-11, #9972) — BEFORE the header is built; a refused value
 # prints SOLEUR_CREDENTIAL_REFUSED script=bump-inngest-bootstrap-pin
 # reason=<token_shape|control_char> and dies at `args`, before any git network
 # call. BUMP_PUSH_URL (the fixture seam) gets no header.
@@ -234,19 +236,23 @@ if [[ -n "${BUMP_PUSH_URL:-}" ]]; then
   PUSH_URL="$BUMP_PUSH_URL"
 else
   # Judge the credential BEFORE the header is built or any git network call.
-  # Empty/unset, or a byte outside the canonical credential alphabet
-  # ([A-Za-z0-9._~+/=-], the same class scripts/lib/bearer-curl.sh bc_ok judges —
-  # GitHub's issued installation tokens now carry '.' and '-', so the legacy
-  # ghs_ base62 class would refuse every real token, #9972), is refused with
+  # The judge is a canonical-body _bearer_ok copy — byte-identical to every
+  # inline copy (the alphabet [A-Za-z0-9._~+/=-] is the canonical credential
+  # class scripts/lib/bearer-curl.sh bc_ok judges; GitHub's issued installation
+  # tokens now carry '.' and '-', so the legacy ghs_ base62 class would refuse
+  # every real token, #9972) — so it is pinned by the canonical-body parity row
+  # in lint-shell-trace-credential-refusal.test.sh and cannot silently re-narrow
+  # if the alphabet is amended again. The token_shape vs control_char split the
+  # marker contract carries lives HERE, at the call site — _bearer_ok itself
+  # returns bare 1. Empty/unset, or a byte outside the alphabet, is refused with
   # the value-free marker; the value is never printed.
-  case "${GH_TOKEN:-}" in
-    ''|*[!A-Za-z0-9._~+/=-]*)
+  _bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+  if ! _bearer_ok "${GH_TOKEN:-}"; then
       _refuse_reason=token_shape
       case "${GH_TOKEN:-}" in *[[:cntrl:]]*) _refuse_reason=control_char ;; esac
       printf 'SOLEUR_CREDENTIAL_REFUSED script=bump-inngest-bootstrap-pin reason=%s\n' "$_refuse_reason" >&2
       die args "GH_TOKEN (soleur-infra installation token) is required for the push remote and must match [A-Za-z0-9._~+/=-]+ (value not shown)"
-      ;;
-  esac
+  fi
   PUSH_URL="https://github.com/${REPO}.git"
   # base64 of x-access-token:TOKEN. printf is a builtin and the pipe is stdin, so
   # the token is on no process's argument list (base64's own argv is empty).
