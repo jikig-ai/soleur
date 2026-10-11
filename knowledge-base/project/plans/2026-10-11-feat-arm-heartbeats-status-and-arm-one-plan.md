@@ -269,19 +269,19 @@ Why this shape: the token is read by `doppler run` into the child's environment 
 
 ### Pre-merge (PR)
 
-- [ ] `arm-heartbeats.sh --help` documents `--status`, `--arm-one`, `--id`, the exit codes and the private-books behaviour (asserted by the suite).
-- [ ] `--status` is read-only: every ST case issues zero PATCH; rc 0 only for exactly one exact-name match; zero / many / read failure / off-pin `next` all rc 1.
-- [ ] `--arm-one`: unique exact name -> unpause -> `up` within 150 s -> rc 0 and books empty; never `up` -> exactly two PATCHes (`paused:false` then `paused:true`), rc 2, books empty; failed rollback -> rc 1, books file kept with the id, recovery command printed and `--sweep` on that file re-pauses it (end-to-end).
-- [ ] Refusals make ZERO PATCH: name collision (including a duplicate on page 2 after a compliant page-1 match), id-pin mismatch, pin with no name match, ceiling breach (and the exact boundary: allowed at `max == 150`, refused at `max == 149`), malformed period/grace, malformed name/id arguments.
-- [ ] Already-armed (`up`/`down`/`pending`) -> rc 0, `already armed (status=...)`, zero PATCH, nothing written to the books.
-- [ ] `--arm-one` and `--status` run with `TFSTATE_JSON` and `ARMED_UNCONFIRMED` unset; `--arm` still refuses without them (existing T9 unchanged and green).
-- [ ] `arm_one` called with three arguments (the six per-merge lines) behaves exactly as before; the existing T/S/M rows pass unmodified except M7's landing count (2 -> 3), which is a deliberate, commented edit.
-- [ ] The six `arm_one '` call lines and the inngest block are byte-identical to `origin/main` (`git diff origin/main -- apps/web-platform/infra/arm-heartbeats.sh` shows no hunk touching them).
-- [ ] `ASSERT_FLOOR` equals the exact new assertion total.
-- [ ] `terraform-target-parity.test.ts` green with the `$(bs_api ` pin at 3 (rationale in the comment) and `curl\b` still exactly 1.
-- [ ] Runbook step 7 carries both invocations, the two secret NAMES, the exit-code table and the no-exposure explanation; ADR-117 amended; ADR-283 pointer updated.
+- [x] `arm-heartbeats.sh --help` documents `--status`, `--arm-one`, `--id`, the exit codes and the private-books behaviour (asserted by the suite).
+- [x] `--status` is read-only: every ST case issues zero PATCH; rc 0 only for exactly one exact-name match; zero / many / read failure / off-pin `next` all rc 1.
+- [x] `--arm-one`: unique exact name -> unpause -> `up` within 150 s -> rc 0 and books empty; never `up` -> exactly two PATCHes (`paused:false` then `paused:true`), rc 2, books empty; failed rollback -> rc 1, books file kept with the id, recovery command printed and `--sweep` on that file re-pauses it (end-to-end).
+- [x] Refusals make ZERO PATCH: name collision (including a duplicate on page 2 after a compliant page-1 match), id-pin mismatch, pin with no name match, ceiling breach (and the exact boundary: allowed at `max == 150`, refused at `max == 149`), malformed period/grace, malformed name/id arguments.
+- [x] Already-armed (`up`/`down`/`pending`) -> rc 0, `already armed (status=...)`, zero PATCH, nothing written to the books.
+- [x] `--arm-one` and `--status` run with `TFSTATE_JSON` and `ARMED_UNCONFIRMED` unset; `--arm` still refuses without them (existing T9 unchanged and green).
+- [x] `arm_one` called with three arguments (the six per-merge lines) behaves exactly as before; the existing T/S/M rows pass unmodified except M7's landing count (2 -> 3), which is a deliberate, commented edit.
+- [x] The six `arm_one '` call lines and the inngest block are byte-identical to `origin/main` (`git diff origin/main -- apps/web-platform/infra/arm-heartbeats.sh` shows no hunk touching them).
+- [x] `ASSERT_FLOOR` equals the exact new assertion total.
+- [x] `terraform-target-parity.test.ts` green with the `$(bs_api ` pin at 3 (rationale in the comment) and `curl\b` still exactly 1.
+- [x] Runbook step 7 carries both invocations, the two secret NAMES, the exit-code table and the no-exposure explanation; ADR-117 amended; ADR-283 pointer updated.
 - [ ] PR body: `Closes #9980`, `Refs #9438` (never `Closes #9438`), no workflow file in the diff, `## Changelog` section, note about the wrong path in the issue.
-- [ ] No production API call was made while building this (the suite uses the stub only).
+- [x] No production API call was made while building this (the suite uses the stub only).
 
 ### Post-merge (owner, separate authorization; not part of this PR)
 

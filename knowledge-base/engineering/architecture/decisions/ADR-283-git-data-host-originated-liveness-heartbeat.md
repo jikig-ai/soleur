@@ -72,8 +72,8 @@ inode table, a closed or unmounted LUKS store, a failed security unit, or a dead
 
 ## Consequences
 
-- The arming tooling (`--status` and `--arm-one` in `arm-heartbeats.sh`) must land before the owner's arm; it is tracked on #9980,
-  a separate issue because the record PR closes #9438.
+- The arming tooling (`--status` and `--arm-one` in `arm-heartbeats.sh`) landed with #9980 (ADR-117's 2026-10-11 amendment),
+  ahead of the owner's arm. It was a separate issue because the record PR closes #9438.
 - One more recurring emitter on a host that already has two: the cost is about 4 KB of stored `user_data` (measured with
   `git-data-userdata-budget.sh`, recorded in the PR body) against the 32 KB cap.
 - A known-benign `miss` on a healthy fresh host is a payload defect fixed forward through the two-PR sequence; the thresholds are hash-bound

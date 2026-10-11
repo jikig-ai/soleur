@@ -409,6 +409,18 @@ the timer then fires. That proof is a runtime signal keyed on the host unit alon
 unchanged: no static check can prove a monitor is armed; it can only prove a feeder exists. This
 amendment adds that "exists" must mean "on a path that runs".
 
+### Amendment (2026-10-11, #9980): a named-monitor entry to the same gate
+
+The arm gate has a second, operator-invoked entry: `arm-heartbeats.sh --arm-one <name> [--id <id>]`, with
+`--status <name>` as its read-only twin. It runs the same `arm_one` as the per-merge path (op/state gate,
+unpause, poll to `up`, rollback with one retry, sweep books), reaching it through a fourth positional id
+parameter so the six per-merge calls and the inngest block are unchanged. What differs: the monitor is
+resolved by EXACT name over the whole paginated list (exactly one match required; the owner's `--id`, read
+in a separate step, is the independent anchor), the deadline is a fixed 150 s that must not exceed the
+monitor's own `period + grace - 40`, and the books file is a private `mktemp` whose path and `--sweep`
+recovery command are printed before the first PATCH. The first user is the git-data host liveness heartbeat
+([ADR-283](./ADR-283-git-data-host-originated-liveness-heartbeat.md)).
+
 ## Consequences
 
 - `registry_prd` reclassifies `web-host-cron` → `dedicated-host-boot`, so ADR-103's `replace_target`
