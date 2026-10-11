@@ -259,15 +259,13 @@ PY'
 row R12 "root/degenerate" RED "not absolute" \
   'sed -i "s|^REPO_ROOT=\"\${BATTERY_TAG_REPO_ROOT:-.*|REPO_ROOT=\"relative/path\"|" "$1"'
 
-# Axis: ACCOUNTING — empty the out-of-class ledger. The shape it covers must then surface as
-# UNCLASSIFIED rather than being silently dropped: AC6's two-places-and-no-third rule.
-row R13 "accounting/out-of-class" RED "UNCLASSIFIED" \
-  'python3 - "$1" <<'PY'
-import sys,re
-p=sys.argv[1]; s=open(p).read()
-s=re.sub(r"OUT_OF_CLASS=\(\n.*?\n\)\n","OUT_OF_CLASS=()\n",s,count=1,flags=re.S)
-open(p,"w").write(s)
-PY'
+# REMOVED row R13 [accounting/out-of-class] (#9815): its premise required a live
+# out-of-class member — a registered argv resolving no tracked root that the ledger
+# licenses. Post-9815 every registration resolves (the two `npm run test:ci` inline
+# scripts retired to the vitest-related wrapper), the ledger is legitimately empty,
+# and no guard-side mutation can produce the row's red: it measured nothing either
+# direction. The row re-arms when a registration resolves no tracked root again —
+# the census reds `unclassified` until then.
 
 # MUST-PASS: an edit that changes no property the guard asserts must NOT red it. Without this
 # row every RED above is consistent with a guard that reds on anything at all.
@@ -333,7 +331,7 @@ printf 'battery-tag-authorship-mutations: %d passed, %d failed, %d assertion(s) 
 # died at an unbound variable under `set -u` BEFORE reaching the floor, and was scored
 # CONSTRUCTION — an UNCOVERED floor, which is the opposite of what a floor is for. The subject
 # documented the rule and this file, its sibling, broke it.
-BATTERY_TAG_MUT_MIN_ASSERTIONS=21
+BATTERY_TAG_MUT_MIN_ASSERTIONS=20
 if (( asserted < BATTERY_TAG_MUT_MIN_ASSERTIONS )); then
   printf '[FATAL] assertion floor: executed %d < BATTERY_TAG_MUT_MIN_ASSERTIONS=%d\n' "$asserted" "$BATTERY_TAG_MUT_MIN_ASSERTIONS" >&2
   exit 1

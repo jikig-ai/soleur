@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
@@ -35,6 +36,7 @@ import {
   selectSandboxSetupArgv,
   substituteCanonicalArgv,
   substituteOuterRoot,
+  runHardeningProbes,
   validateFixture,
   validateOuterWrapFixture,
 } from "../scripts/sandbox-canary.mjs";
@@ -79,6 +81,19 @@ describe("classifyReplayVerdict — exit-code classification (false-rollback pre
         bwrapStderr: "bwrap-shim: seccomp artifact not readable: /app/infra/bwrap-userns-clone3-deny.bpf",
       }),
     ).toMatchObject({ verdict: "sandbox_broken", reason: "bwrap_shim_refused" });
+    // #10032 (agent-native W2): the refusal's `detail` carries the first
+    // bwrap-shim: line so deploy-state/Sentry can tell the ~10 refusal
+    // classes apart — a flat reason is a no-SSH blind spot.
+    expect(
+      classifyReplayVerdict({
+        bwrapExitCode: 65,
+        bwrapStderr:
+          "bwrap-shim: command-side /proc/self/fd/9 resolves to a deleted path — no viable re-home rung\nbwrap-shim: second line ignored",
+      }),
+    ).toMatchObject({
+      detail:
+        "bwrap-shim: command-side /proc/self/fd/9 resolves to a deleted path — no viable re-home rung",
+    });
   });
 
   it("ambiguous non-zero bwrap exit (no EPERM signature) ⇒ canary_infra_error, not sandbox_broken", () => {
@@ -1119,12 +1134,12 @@ describe("classifyFdCensusProbe — in-sandbox fd count stays within the limit",
   });
 });
 
-describe("classifyProcMaskProbe — the /proc mask is realized in-sandbox (#9723)", () => {
-  it("status 0 (canary host pid absent AND /proc/self/environ present) ⇒ null", () => {
+describe("classifyProcMaskProbe — the /proc mask is realized in-sandbox (#10032)", () => {
+  it("status 0 (no /proc/<pid> entries — the empty tmpfs shape) ⇒ null", () => {
     expect(classifyProcMaskProbe({ status: 0, stderr: "" })).toBeNull();
   });
 
-  it("clean non-zero payload exit ⇒ sandbox_broken proc_mask_defeated (host procfs visible)", () => {
+  it("clean non-zero payload exit ⇒ sandbox_broken proc_mask_defeated (any real procfs visible)", () => {
     expect(classifyProcMaskProbe({ status: 1, stderr: "" })).toMatchObject({
       verdict: "sandbox_broken",
       reason: "proc_mask_defeated",
@@ -1145,6 +1160,58 @@ describe("classifyProcMaskProbe — the /proc mask is realized in-sandbox (#9723
       verdict: "canary_infra_error",
       reason: "proc_mask_exit_1",
     });
+  });
+});
+
+// #10032 — AC3: the re-spec'd proc_mask probe must stay DRIVABLE RED. These
+// arms run REAL bwrap (PATH resolves the host binary — no shim): restoring
+// the vendored tail bind mounts host procfs and the probe reports
+// `proc_mask_defeated`; the legitimate tmpfs mask passes. If a future edit
+// makes the probe tautological (asserts nothing) both arms stay green and
+// this file fails the mutation the probe exists to catch.
+const BWRAP_OK =
+  process.platform === "linux" &&
+  spawnSync(
+    "bwrap",
+    ["--unshare-user", "--unshare-pid", "--ro-bind", "/", "/", "--", "true"],
+    { stdio: "ignore", timeout: 15_000 },
+  ).status === 0;
+
+describe.skipIf(!BWRAP_OK)("proc_mask live drive (real bwrap, no shim) — #10032", () => {
+  it("MUTATION: a restored tail `--bind /proc /proc` defeats the mask — proc_mask_defeated", () => {
+    const verdict = runHardeningProbes([
+      "--unshare-user", "--unshare-pid", "--ro-bind", "/", "/",
+      "--tmpfs", "/proc",
+      "--bind", "/proc", "/proc", // the #9723 defect shape, restored
+    ]);
+    expect(verdict).toMatchObject({
+      verdict: "sandbox_broken",
+      reason: "proc_mask_defeated",
+      probe: "proc_mask",
+    });
+  });
+
+  it("a restored `--proc /proc` fresh procfs is ALSO a defeat — any real procfs", () => {
+    const verdict = runHardeningProbes([
+      "--unshare-user", "--unshare-pid", "--ro-bind", "/", "/",
+      "--proc", "/proc",
+    ]);
+    expect(verdict).toMatchObject({
+      verdict: "sandbox_broken",
+      reason: "proc_mask_defeated",
+      probe: "proc_mask",
+    });
+  });
+
+  it("LEGITIMATE: the empty-tmpfs mask passes — the #10032 realized shape", () => {
+    // Assert at probe granularity, not null-on-the-suite: later hardening
+    // probes (userns_deny) depend on host posture this test does not control
+    // — what AC3 pins is that proc_mask does NOT fire on the legit shape.
+    const verdict = runHardeningProbes([
+      "--unshare-user", "--unshare-pid", "--ro-bind", "/", "/",
+      "--tmpfs", "/proc",
+    ]);
+    expect(verdict?.probe ?? null, `proc_mask must not fire on the tmpfs mask: ${JSON.stringify(verdict)}`).not.toBe("proc_mask");
   });
 });
 
@@ -1249,7 +1316,11 @@ describe("classifyOuterWrapReplayVerdict — three-way discrimination", () => {
         bwrapExitCode: 65,
         bwrapStderr: "bwrap-shim: refusing CLONE_NEWUSER argv",
       }),
-    ).toEqual({ verdict: "sandbox_broken", reason: "bwrap_shim_refused" });
+    ).toEqual({
+      verdict: "sandbox_broken",
+      reason: "bwrap_shim_refused",
+      detail: "bwrap-shim: refusing CLONE_NEWUSER argv",
+    });
   });
 
   it("payload FAIL markers ⇒ sandbox_broken isolation_probe_failed (a realized violation, never infra)", () => {

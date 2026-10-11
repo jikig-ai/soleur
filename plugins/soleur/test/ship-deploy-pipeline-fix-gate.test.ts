@@ -360,15 +360,19 @@ describe("Trigger array and server.tf are in sync (path-glob verification)", () 
     const allowed = new Set([
       ...TRIGGER_FILES.map((p) => p.split("/").pop()!),
       "web-2-ssh-host-key.pub",
-      // #9393 — the three cron-egress artifacts a RUNNING web-2 gets only through
+      // #9393 — the cron-egress artifacts a RUNNING web-2 gets only through
       // this resource: the carved CIDR allow list, the resolver, and the
-      // post-apply probe (delivered then executed). They are hashed by
-      // cron_egress_firewall's triggers_replace on the web-1 side, not by
-      // deploy_pipeline_fix, so they are sanctioned here the same way the
-      // host-key pin is — as a named exception, not a TRIGGER_FILES member.
+      // post-apply probe (delivered then executed). #9534 adds the loader:
+      // the resolver's scope-marker heal check is unsatisfiable against a
+      // birth-frozen (pre-#9529) loader that cannot install the gw legs.
+      // They are hashed by cron_egress_firewall's triggers_replace on the
+      // web-1 side, not by deploy_pipeline_fix, so they are sanctioned here
+      // the same way the host-key pin is — as named exceptions, not
+      // TRIGGER_FILES members.
       "cron-egress-allowlist-cidr.txt",
       "cron-egress-resolve.sh",
       "cron-egress-postapply-assert.sh",
+      "cron-egress-nftables.sh",
     ]);
     const forbidden = new Set([
       "push-infra-config.sh",

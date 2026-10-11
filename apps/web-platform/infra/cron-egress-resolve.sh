@@ -555,9 +555,26 @@ enforcement_probe() {
   fi
   ENF_GWDROP=absent
   if [[ "$out_gw" == *'comment "soleur-egress-gw: deny drop"'* ]]; then ENF_GWDROP=present; fi
+  # #9534 scope check — the two gw rules whose CONTENT decays while every presence
+  # marker stays green. The loader bakes them only when it can see the gateway at
+  # run time: a loader run during a gw-down window installs the UNSCOPED member
+  # drop (plain `ct state new ... drop`, no `saddr !=`) and omits the docker0→gw
+  # accept. Result: every upstream dial from the gateway silently dies — CONNECT
+  # is accepted by the inbound leg and then hangs until the client's own timeout
+  # (measured: egress_gw_probe allow_rc=28 on web-1, 189 consecutive fails —
+  # Sentry issue context carries reason=allow_rc=28 code=000). Checking requires
+  # the gw to be RUNNING: with it down the unscoped drop is the correct
+  # fail-closed posture and asserting on it would heal-loop the host.
+  ENF_GWACCEPT=skip; ENF_GWMEMBER=skip
+  if grep -qx soleur-egress-gw < <(docker ps --format '{{.Names}}' 2>/dev/null); then
+    ENF_GWACCEPT=absent; ENF_GWMEMBER=absent
+    if [[ "$out_chain" == *'comment "soleur-egress: egress gateway (#9534)"'* ]]; then ENF_GWACCEPT=present; fi
+    if [[ "$out_gw" == *'saddr != '* ]]; then ENF_GWMEMBER=present; fi
+  fi
   if [[ "$ENF_JUMP" == unreadable || "$ENF_DROP" == unreadable ]]; then ENF_READ_FAILED=true; fi
   if [[ "$ENF_JUMP" != present || "$ENF_DROP" != present || "$ENF_LOG" != present \
-     || "$ENF_GWJUMP" != present || "$ENF_REPLY" != present || "$ENF_GWDROP" != present ]]; then ENF_HEAL=true; fi
+     || "$ENF_GWJUMP" != present || "$ENF_REPLY" != present || "$ENF_GWDROP" != present \
+     || "$ENF_GWACCEPT" == absent || "$ENF_GWMEMBER" == absent ]]; then ENF_HEAL=true; fi
 }
 
 # The Sentry `extra` for op=enforcement_missing: which cause class fired. $1 = the loader
@@ -574,10 +591,12 @@ enforcement_extra() {
   jq -nc \
     --arg remediation "$remediation" --arg host "${host:-unknown}" \
     --arg jump "$ENF_JUMP" --arg drop "$ENF_DROP" --arg log "$ENF_LOG" \
+    --arg gwaccept "${ENF_GWACCEPT:-unknown}" --arg gwmember "${ENF_GWMEMBER:-unknown}" \
     --argjson rcj "$ENF_RC_JUMP" --argjson rcd "$ENF_RC_DROP" \
     --argjson failed "$ENF_READ_FAILED" --argjson retried "$ENF_READ_RETRIED" --argjson lrc "$loader_rc" \
     --arg dsince "${docker_since:-unknown}" --arg lsince "${loader_since:-unknown}" \
     '{remediation: $remediation, host: $host, jump_present: $jump, drop_present: $drop, log_present: $log,
+      gw_accept: $gwaccept, gw_member_scoped: $gwmember,
       rc_jump: $rcj, rc_drop: $rcd, read_failed: $failed, read_retried: $retried,
       loader_rc: $lrc, docker_since: $dsince, loader_since: $lsince}' 2>/dev/null \
     || printf '{"remediation": "%s"}\n' "$remediation"
@@ -595,7 +614,7 @@ enforcement_extra() {
 if [[ "${CRON_EGRESS_FROM_LOADER:-}" != "1" ]]; then
   enforcement_probe
   if [[ "$ENF_HEAL" == true ]]; then
-    log "WARN: enforcement rules missing — re-running loader (self-heal) jump=$ENF_JUMP drop=$ENF_DROP log=$ENF_LOG gwjump=$ENF_GWJUMP reply=$ENF_REPLY gwdrop=$ENF_GWDROP read_failed=$ENF_READ_FAILED"
+    log "WARN: enforcement rules missing — re-running loader (self-heal) jump=$ENF_JUMP drop=$ENF_DROP log=$ENF_LOG gwjump=$ENF_GWJUMP reply=$ENF_REPLY gwdrop=$ENF_GWDROP gwaccept=${ENF_GWACCEPT:-?} gwmember=${ENF_GWMEMBER:-?} read_failed=$ENF_READ_FAILED"
     loader_rc=0
     timeout -k 2 60 "$LOADER" || loader_rc=$?
     extra="$(enforcement_extra "$loader_rc")"
