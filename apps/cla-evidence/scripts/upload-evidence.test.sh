@@ -33,7 +33,7 @@ while :; do
   ID="$(rand_hex 32)"; SECRET="$(rand_hex 64)"
   [[ "${#ID}" -eq 32 && "${#SECRET}" -eq 64 ]] || continue
   [[ "$SECRET" != *"$ID"* && "$ID" != *"$SECRET"* ]] || continue
-  [[ "$ID" != "${ID:0:1}${ID:0:1}${ID:0:1}"* || "${ID//${ID:0:1}/}" != "" ]] || continue
+  [[ -n "${ID//${ID:0:1}/}" && -n "${SECRET//${SECRET:0:1}/}" ]] || continue
   break
 done
 
@@ -53,6 +53,7 @@ codes_file="$codes"
 stdin=\$(cat; printf x); stdin=\${stdin%x}
 printf '%s' "\$stdin" >> "$work/stdin.log"
 [[ "\$stdin" == *'user = "'* ]] || { echo "stub: stdin carries no user line" >&2; exit 99; }
+[[ "\${STUB_FAIL:-0}" != 1 ]] || exit 7
 read -r code < "\$codes_file"
 sed -i '1d' "\$codes_file"
 # Parse \`-o <file>\` and copy the body fixture there if present.
@@ -87,6 +88,7 @@ run_sut_creds() {
 run_sut() { run_sut_creds "$ID" "$SECRET" "$1"; }
 
 fail=0
+wire_rows=0
 
 # TS6.a: first-write 200 → exit 0
 printf "200\n" > "$work/codes.txt"
@@ -169,6 +171,7 @@ stdin_lines=$(grep -cxF "user = \"$ID:$SECRET\"" "$work/stdin.log" || true)
 if [[ "$rc" -eq 0 && "$calls" -ge 1 && "$stdin_lines" -eq "$calls" ]] \
    && ! grep -qF -e "$ID" -e "$SECRET" "$work/argv.log"; then
   green "PASS: TS6.g pair absent from every recorded argv; stdin carries the user line (calls=$calls)"
+  wire_rows=$((wire_rows + 1))
 else
   red "FAIL: TS6.g rc=$rc calls=$calls stdin_user_lines=$stdin_lines (argv must hold neither value)"
   fail=1
@@ -182,6 +185,7 @@ calls=$(grep -c '^CALL$' "$work/argv.log" || true)
 stdin_lines=$(grep -cxF "user = \"$ID:$SECRET\"" "$work/stdin.log" || true)
 if [[ "$rc" -eq 0 && "$calls" -eq 2 && "$stdin_lines" -eq 2 ]] && ! grep -qF -e "$ID" -e "$SECRET" "$work/argv.log"; then
   green "PASS: TS6.h retry sends the user line on both calls; argv clean"
+  wire_rows=$((wire_rows + 1))
 else
   red "FAIL: TS6.h rc=$rc calls=$calls stdin_user_lines=$stdin_lines"
   fail=1
@@ -196,8 +200,10 @@ out=$(run_sut_creds "$ID" "$bad_secret" '{"schema_version":"1.0","x":1}' 2>&1) &
 calls=$(grep -c '^CALL$' "$work/argv.log" || true)
 markers=$(grep -c '^SOLEUR_CREDENTIAL_REFUSED script=r2-conditional-put reason=control_char$' <<<"$out" || true)
 if [[ "$rc" -eq 2 && "$calls" -eq 0 && "$markers" -eq 1 ]] \
+   && ! grep -q 'unexpected status' <<<"$out" \
    && ! grep -qF -e "$ID" -e "$bad_secret" -e "$SECRET" <<<"$out"; then
   green "PASS: TS6.i malformed secret → exit 2, zero calls, marker once (control_char), no value printed"
+  wire_rows=$((wire_rows + 1))
 else
   red "FAIL: TS6.i rc=$rc calls=$calls markers=$markers (expected 2/0/1, no value in output)"
   fail=1
@@ -210,8 +216,10 @@ mk_curl_stub "$work/codes.txt"
 out=$(run_sut_creds "$bad_id" "$SECRET" '{"schema_version":"1.0","x":1}' 2>&1) && rc=0 || rc=$?
 calls=$(grep -c '^CALL$' "$work/argv.log" || true)
 markers=$(grep -c '^SOLEUR_CREDENTIAL_REFUSED script=r2-conditional-put reason=token_shape$' <<<"$out" || true)
-if [[ "$rc" -eq 2 && "$calls" -eq 0 && "$markers" -eq 1 ]] && ! grep -qF -e "$bad_id" -e "$SECRET" <<<"$out"; then
+if [[ "$rc" -eq 2 && "$calls" -eq 0 && "$markers" -eq 1 ]] && ! grep -q 'unexpected status' <<<"$out" \
+   && ! grep -qF -e "$bad_id" -e "$SECRET" <<<"$out"; then
   green "PASS: TS6.j malformed id → exit 2, zero calls, marker once (token_shape)"
+  wire_rows=$((wire_rows + 1))
 else
   red "FAIL: TS6.j rc=$rc calls=$calls markers=$markers"
   fail=1
@@ -220,12 +228,18 @@ fi
 # TS6.k: the script refuses to run under xtrace (exit 78) before binding the pair, so -x can never
 # print a value: both `bash -x` and an inherited SHELLOPTS=xtrace are refused, zero calls, and
 # neither value reaches the trace.
-for mode in bash-x shellopts; do
+for mode in bash-x shellopts id-only; do
   printf "200\n" > "$work/codes.txt"
   mk_curl_stub "$work/codes.txt"
   : > "$work/argv.log"; : > "$work/stdin.log"
   if [[ "$mode" == bash-x ]]; then
     out=$(PATH="$work:$PATH" R2_CLA_EVIDENCE_ACCESS_KEY_ID="$ID" R2_CLA_EVIDENCE_SECRET="$SECRET" \
+          R2_CLA_EVIDENCE_BUCKET=soleur-cla-evidence \
+          R2_CLA_EVIDENCE_ENDPOINT=https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com \
+          bash -x "$RC_PUT" signatures/x.json '{"x":1}' </dev/null 2>&1) && rc=0 || rc=$?
+  elif [[ "$mode" == id-only ]]; then
+    # only the key id is set (the secret is unset): -x must still refuse before the id is traced.
+    out=$(env -u R2_CLA_EVIDENCE_SECRET PATH="$work:$PATH" R2_CLA_EVIDENCE_ACCESS_KEY_ID="$ID" \
           R2_CLA_EVIDENCE_BUCKET=soleur-cla-evidence \
           R2_CLA_EVIDENCE_ENDPOINT=https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com \
           bash -x "$RC_PUT" signatures/x.json '{"x":1}' </dev/null 2>&1) && rc=0 || rc=$?
@@ -240,11 +254,32 @@ for mode in bash-x shellopts; do
   calls=$(grep -c '^CALL$' "$work/argv.log" || true)
   if [[ "$rc" -eq 78 && "$calls" -eq 0 ]] && ! grep -qF -e "$ID" -e "$SECRET" <<<"$out"; then
     green "PASS: TS6.k $mode → exit 78 before any request, no value in the trace"
+    wire_rows=$((wire_rows + 1))
   else
     red "FAIL: TS6.k $mode rc=$rc calls=$calls (expected 78/0, no value in the trace)"
     fail=1
   fi
 done
+
+# TS6.l: a curl that FAILS (exit 7, no output) is a failure: exit 2 with status=000 and no success line.
+printf "200\n" > "$work/codes.txt"
+mk_curl_stub "$work/codes.txt"
+out=$(STUB_FAIL=1 run_sut '{"schema_version":"1.0","x":1}' 2>&1) && rc=0 || rc=$?
+if [[ "$rc" -eq 2 && "$(grep -c 'unexpected status=000' <<<"$out" || true)" -ge 1 ]] && ! grep -q '^ok status=' <<<"$out"; then
+  green "PASS: TS6.l a failing curl → exit 2, status=000, no success line"
+  wire_rows=$((wire_rows + 1))
+else
+  red "FAIL: TS6.l rc=$rc (expected 2 with unexpected status=000 and no ok line)"
+  fail=1
+fi
+
+# Anti-vacuity floor for the wire rows above (TS6.g-l, TS6.k counts three times): deleting that block leaves
+# the rest of this suite green, so the floor counts what the block's rows passed. Literal adjacent to the if.
+MIN_WIRE_ROWS=8
+if [[ "$wire_rows" -lt "$MIN_WIRE_ROWS" ]]; then
+  printf 'FATAL: anti-vacuity floor — %s wire rows passed, expected at least %s\n' "$wire_rows" "$MIN_WIRE_ROWS" >&2
+  exit 1
+fi
 
 if [[ "$fail" -eq 0 ]]; then
   green "ALL upload-evidence.sh tests passed."

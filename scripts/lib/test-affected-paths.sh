@@ -380,6 +380,16 @@ AFFECTED_APPS_CLA_EVIDENCE_SCRIPTS__R2_SIGV4_CURL_TEST_SH_PATHS=(
   "scripts/lib/test-affected-paths.sh"                    # THIS FILE
 )
 
+# apps/cla-evidence/scripts/bootstrap-r2-probe.test.sh (#9756) — executes the real infra/bootstrap.sh (named only
+# through a script-dir-relative cd, which no derivation channel reaches) with the helper and the two scripts it sources.
+AFFECTED_APPS_CLA_EVIDENCE_SCRIPTS_BOOTSTRAP_R2_PROBE_TEST_SH_PATHS=(
+  "apps/cla-evidence/infra/bootstrap.sh"
+  "apps/cla-evidence/scripts/_r2-sigv4-curl.sh"
+  "apps/cla-evidence/scripts/_cf-admin-token.sh"
+  "apps/cla-evidence/scripts/_r2-endpoint.sh"
+  "scripts/lib/test-affected-paths.sh"                    # THIS FILE
+)
+
 # Suites the repo-wide-idiom census arm flags (their fixture code walks a tree)
 # whose real subject is a narrow SUT set, declared here rather than always-on:
 # the scan is scoped, so the edges are honest.

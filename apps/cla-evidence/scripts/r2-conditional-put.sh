@@ -41,11 +41,11 @@
 
 set -euo pipefail
 
-# Refuse to trace while the R2 secret is set: -x prints a variable's value the moment it is bound
-# (see #7797). Placed before anything binds the pair; the unset case (usage errors) still runs.
+# Refuse to trace while the R2 key id or secret is set: -x prints a variable's value the moment it is
+# bound (see #7797). Placed before anything binds the pair; the unset case (usage errors) still runs.
 case "$-" in
   *x*)
-    if [ -n "${R2_CLA_EVIDENCE_SECRET:+x}" ]; then
+    if [ -n "${R2_CLA_EVIDENCE_ACCESS_KEY_ID:+x}${R2_CLA_EVIDENCE_SECRET:+x}" ]; then
       printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
       exit 78
     fi
@@ -97,9 +97,10 @@ if [[ "${#secret}" -ne 64 ]]; then
 fi
 
 # Judge the pair ONCE here, before the retry loop. The chokepoint re-judges (it is the only place a
-# request starts), but a refusal inside put_once would be folded into the `|| echo "000"` status and
-# then into "unexpected status", with no marker and no distinct exit. A refusal here exits 2 before
-# any request, is never retried and is never classified as a duplicate (412 / WORM) arm.
+# request starts), but a refusal inside put_once would be folded into status 000 and then into the
+# "unexpected status" arm, adding a second, misleading error line. A refusal here exits 2 before any
+# request, is never retried and is never classified as a duplicate (412 / WORM) arm. (The marker
+# itself prints either way: the helper's refusal lines sit outside curl's stderr redirect.)
 r2_sigv4_judge "r2-conditional-put" "$access_key" "$secret" || exit 2
 
 # Response-body capture: R2 returns XML error bodies (<Code>…</Code>) on 4xx/5xx.
@@ -116,14 +117,15 @@ put_once() {
   # error-emit path tolerates). In production the request is signed by curl
   # (SigV4 via curl 7.75+) inside r2_sigv4_curl, which carries the key id and
   # secret on curl's stdin config and never on argv, and emits the code via -w
-  # "%{http_code}". A non-zero return (curl failure, or a helper refusal already
-  # judged above) reads as status 000.
+  # "%{http_code}". A non-zero return is swallowed here and read as status 000
+  # by the caller: a curl failure has already printed 000 through -w, and a
+  # helper refusal of the destination or an argument (return 64) prints nothing.
   r2_sigv4_curl "r2-conditional-put" "$access_key" "$secret" "$url" \
     -sS -o "$body_tmp" -w "%{http_code}\n" --max-time 30 \
     -X PUT \
     -H "If-None-Match: *" \
     -H "Content-Type: application/json" \
-    --data-binary "$payload" || echo "000"
+    --data-binary "$payload" || true
 }
 
 # Single-line body excerpt for inclusion in `::error::` annotations (GH Actions
@@ -144,6 +146,7 @@ attempt=1
 
 while [[ "$attempt" -le "$attempt_max" ]]; do
   code=$(put_once)
+  code="${code:-000}"
 
   # Integer comparisons — `case` globs are ordering-coupled and fragile.
   # `5*` matches both "5" and "500"; `4*` matches "4". Using arithmetic

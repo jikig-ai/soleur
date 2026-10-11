@@ -25,7 +25,9 @@ TMP_ROOT=$(mktemp -d -t bootprobetest.XXXXXXXX) || { echo "FATAL: cannot create 
 : "${TMP_ROOT:?}"
 [[ "$TMP_ROOT" == /* && -d "$TMP_ROOT" && ! -L "$TMP_ROOT" ]] || { echo "FATAL: bad scratch root" >&2; exit 1; }
 readonly TMP_ROOT
-trap 'rm -rf -- "$TMP_ROOT"' EXIT INT TERM
+trap 'rm -rf -- "$TMP_ROOT"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # The canonical fixture-dir assertion, byte-equal to the definition in
 # plugins/soleur/test/test-helpers.sh (comments stripped). Edit there, then re-sync here.
@@ -58,6 +60,19 @@ fails=0
 
 t() { local label="$1"; shift; if "$@"; then pass "$label"; else fail "$label"; fi; }
 _not() { ! "$@"; }
+
+# Dispatcher self-test: every real row goes through t (and many through _not); drive both once in both
+# directions so a rewritten t/_not that always passes cannot hide behind intact pass/fail counters.
+_p0=$passes; _f0=$fails
+t "dispatcher self-test (t pass path)" true
+t "dispatcher self-test (t fail path — expected, subtracted)" false
+t "dispatcher self-test (_not pass path)" _not false
+t "dispatcher self-test (_not fail path — expected, subtracted)" _not true
+if [[ "$passes" -ne $((_p0 + 2)) || "$fails" -ne $((_f0 + 2)) ]]; then
+  printf 'FATAL: the t/_not dispatchers are not dispatching (passes=%s fails=%s)\n' "$passes" "$fails" >&2
+  exit 2
+fi
+passes=$((passes - 2)); fails=$((fails - 2))
 
 echo "bootstrap-r2-probe.test.sh"
 
@@ -102,6 +117,7 @@ case "$url" in
       if [[ "$prev" == "-o" ]]; then printf '%s\n' "$a" >> "$log/probe.outpath"; printf '<Error><Code>InternalError</Code></Error>' > "$a"; fi
       prev="$a"
     done
+    [[ "${STUB_PROBE_FAIL:-0}" != 1 ]] || exit 7
     printf '%s' "${STUB_PROBE_CODE:-500}"
     exit 0 ;;
   *) echo "stub: unscripted URL" >&2; exit 99 ;;
@@ -123,12 +139,21 @@ cat > "$BIN/doppler" <<'EOF'
 #!/usr/bin/env bash
 printf 'doppler %s\n' "$*" >> "${STUB_LOG:?}/calls"
 printf 'doppler %s\n' "$*" >> "${STUB_LOG:?}/doppler.calls"
+stdin=$(cat; printf x); stdin=${stdin%x}
+if [[ "${1:-}" == secrets && "${2:-}" == set ]]; then
+  printf 'SET %s <<%s>>\n' "${3:-}" "$stdin" >> "${STUB_LOG:?}/doppler.stdin"
+fi
 if [[ "${1:-}" == secrets && "${2:-}" == get ]]; then
   case "${3:-}" in
     CF_ACCOUNT_ID) printf '%s' "${STUB_ACCT:?}" ;;
     *) printf 'stub-%s' "${3:-}" ;;
   esac
 fi
+# Step 2 lists configs (jq reads it) and Step 3 mints the service token: fail THAT call so the script
+# stops right after Step 2, before anything that would run the real live Lock Rules check.
+if [[ "${1:-}" == configs && "${2:-}" == tokens && "${3:-}" == create ]]; then exit 1; fi
+if [[ "${1:-}" == configs && "${2:-}" != create && "${2:-}" != tokens ]]; then printf '[]'; fi
+if [[ "${1:-}" == configs && "${2:-}" == tokens && "${3:-}" != create ]]; then printf '[]'; fi
 exit 0
 EOF
 for tool in gh openssl; do
@@ -142,7 +167,7 @@ chmod +x "$BIN"/*
 
 export STUB_LOG="$LOGD" STUB_ACCT="$ACCT" STUB_BUCKET="$BUCKET"
 
-reset_log() { rm -rf -- "$LOGD" "$RUNTMP"; mkdir -p "$LOGD" "$RUNTMP"; : > "$LOGD/calls"; : > "$LOGD/urls"; : > "$LOGD/curl.argv"; : > "$LOGD/curl.stdin"; : > "$LOGD/doppler.calls"; : > "$LOGD/probe.outpath"; }
+reset_log() { rm -rf -- "$LOGD" "$RUNTMP"; mkdir -p "$LOGD" "$RUNTMP"; : > "$LOGD/doppler.stdin"; : > "$LOGD/calls"; : > "$LOGD/urls"; : > "$LOGD/curl.argv"; : > "$LOGD/curl.stdin"; : > "$LOGD/doppler.calls"; : > "$LOGD/probe.outpath"; }
 
 # run_boot ID SECRET [bash flags...] — runs the real bootstrap.sh; stdout+stderr in $OUT, status in $RC.
 OUT=""; RC=0
@@ -185,14 +210,41 @@ t "1.9 the probe body file is gone afterwards (the scratch TMPDIR is empty)" tes
 reset_log
 bad_secret="${SECRET:0:10}"$'\x01'"${SECRET:11}"
 run_boot "$ID" "$bad_secret"
-t "2.1 malformed secret: the script exits non-zero" test "$RC" -ne 0
+t "2.1 malformed secret: the script exits 2 (the pre-judge, not the probe's exit 1)" test "$RC" -eq 2
 t "2.2 malformed secret: the recorded URL list is exactly [verify] (no probe request was made)" \
   test "$(normalized_urls)" = "$VERIFY_URL"
 t "2.3 malformed secret: the marker is printed exactly once with reason=control_char" \
   test "$(grep -c '^SOLEUR_CREDENTIAL_REFUSED script=bootstrap reason=control_char$' <<<"$OUT" || true)" -eq 1
+t "2.3b malformed secret: the annotation names the variable the operator set (R2_S3_SECRET_ACCESS_KEY), not a cla-evidence one" \
+  test "$(grep -c '^::error::bootstrap: R2_S3_SECRET_ACCESS_KEY unusable$' <<<"$OUT" || true)" -eq 1 -a "$(grep -c 'R2_CLA_EVIDENCE_SECRET' <<<"$OUT" || true)" -eq 0
 t "2.4 malformed secret: no value is printed" _not grep -qF -e "$ID" -e "$bad_secret" -e "$SECRET" <<<"$OUT"
 t "2.5 malformed secret: no Doppler write" _not grep -qE 'secrets set|configs|tokens' "$LOGD/doppler.calls"
 t "2.6 malformed secret: the scratch TMPDIR is empty afterwards" test -z "$(ls -A "$RUNTMP")"
+
+# ── Row 4: a transport failure (curl exits 7, prints nothing) reads as status 000, never as success ──
+reset_log
+STUB_PROBE_FAIL=1 run_boot "$ID" "$SECRET"
+t "4.1 curl failure: exit 1 and the refusal message names status=000" \
+  test "$RC" -eq 1 -a "$(grep -cF 'status=000' <<<"$OUT" || true)" -ge 1
+t "4.2 curl failure: the direct-egress hint is printed" test "$(grep -cF 'direct egress to R2' <<<"$OUT" || true)" -ge 1
+t "4.3 curl failure: no Doppler write follows" _not grep -qE 'secrets set|configs|tokens' "$LOGD/doppler.calls"
+t "4.4 curl failure: the URL list is exactly [verify, probe] (the request WAS attempted)" \
+  test "$(normalized_urls)" = "$(printf '%s\n%s' "$VERIFY_URL" "$PROBE_URL_N")"
+
+# ── Row 5: the probe passes (200), so Step 2 runs: the pair reaches Doppler on STDIN, never on argv ──
+reset_log
+STUB_PROBE_CODE=200 run_boot "$ID" "$SECRET"
+t "5.1 probe ok: the script reaches Step 2 and stops at the (stubbed) service-token mint (exit 1)" test "$RC" -eq 1
+t "5.2 Step 2 wrote the key id and the secret as single-name stdin writes (NAME on argv, no =value)" \
+  test "$(grep -cE '^doppler secrets set R2_CLA_EVIDENCE_ACCESS_KEY_ID --project' "$LOGD/doppler.calls" || true)" -eq 1 \
+    -a "$(grep -cE '^doppler secrets set R2_CLA_EVIDENCE_SECRET --project' "$LOGD/doppler.calls" || true)" -eq 1
+t "5.3 neither value appears on ANY doppler argv" _not grep -qF -e "$ID" -e "$SECRET" "$LOGD/doppler.calls"
+t "5.4 each value arrived on stdin exactly" \
+  test "$(grep -cxF "SET R2_CLA_EVIDENCE_ACCESS_KEY_ID <<$ID>>" "$LOGD/doppler.stdin" || true)" -eq 1 \
+    -a "$(grep -cxF "SET R2_CLA_EVIDENCE_SECRET <<$SECRET>>" "$LOGD/doppler.stdin" || true)" -eq 1
+t "5.5 the non-secret endpoint and bucket still go as NAME=value arguments" \
+  test "$(grep -cE 'R2_CLA_EVIDENCE_ENDPOINT=https://.*R2_CLA_EVIDENCE_BUCKET=' "$LOGD/doppler.calls" || true)" -eq 1
+t "5.6 neither value is printed to the operator terminal" _not grep -qF -e "$ID" -e "$SECRET" <<<"$OUT"
 
 # ── Row 3: xtrace is refused before any stub runs ───────────────────────────
 reset_log
@@ -206,7 +258,7 @@ t "3.3 bash -x: neither value reaches the trace" _not grep -qF -e "$ID" -e "$SEC
 # the floor plus its contiguous assignments, and the self-test above asserts passes == 1.
 SELFTEST_PASSES=1
 REAL_PASSES=$((passes - SELFTEST_PASSES))
-MIN_CASES=18
+MIN_CASES=29
 if [[ "$fails" -eq 0 && "$REAL_PASSES" -lt "$MIN_CASES" ]]; then
   printf 'FATAL: anti-vacuity floor — %s real assertions passed, expected at least %s\n' \
     "$REAL_PASSES" "$MIN_CASES" >&2

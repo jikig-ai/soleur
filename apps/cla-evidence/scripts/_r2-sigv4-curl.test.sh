@@ -29,7 +29,10 @@ TMP_ROOT=$(mktemp -d -t r2sigv4test.XXXXXXXX) || { echo "FATAL: cannot create sc
 [[ "$TMP_ROOT" == /* && -d "$TMP_ROOT" && ! -L "$TMP_ROOT" ]] || { echo "FATAL: bad scratch root" >&2; exit 1; }
 readonly TMP_ROOT
 LISTENER_PID=""
-trap '[[ -z "$LISTENER_PID" ]] || kill "$LISTENER_PID" 2>/dev/null; rm -rf -- "$TMP_ROOT"' EXIT INT TERM
+_cleanup() { [[ -z "$LISTENER_PID" ]] || kill "$LISTENER_PID" 2>/dev/null; rm -rf -- "$TMP_ROOT"; }
+trap _cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # The canonical fixture-dir assertion, byte-equal to the definition in
 # plugins/soleur/test/test-helpers.sh (comments stripped). Edit there, then re-sync here.
@@ -64,6 +67,20 @@ fails=0
 t() { local label="$1"; shift; if "$@"; then pass "$label"; else fail "$label"; fi; }
 _not() { ! "$@"; }
 
+# Dispatcher self-test: every real row goes through t (and many through _not), so a rewritten t
+# that always passes would leave the pass/fail counters intact and the suite green. Drive both once
+# in both directions; the expected FAIL lines are unwound with the counters.
+_p0=$passes; _f0=$fails
+t "dispatcher self-test (t pass path)" true
+t "dispatcher self-test (t fail path — expected, subtracted)" false
+t "dispatcher self-test (_not pass path)" _not false
+t "dispatcher self-test (_not fail path — expected, subtracted)" _not true
+if [[ "$passes" -ne $((_p0 + 2)) || "$fails" -ne $((_f0 + 2)) ]]; then
+  printf 'FATAL: the t/_not dispatchers are not dispatching (passes=%s fails=%s)\n' "$passes" "$fails" >&2
+  exit 2
+fi
+passes=$((passes - 2)); fails=$((fails - 2))
+
 echo "_r2-sigv4-curl.test.sh"
 
 if [[ ! -r "$HELPER" ]]; then
@@ -85,7 +102,7 @@ while :; do
   ID="$(rand_hex 32)"; SECRET="$(rand_hex 64)"
   [[ "${#ID}" -eq 32 && "${#SECRET}" -eq 64 ]] || continue
   [[ "$SECRET" != *"$ID"* && "$ID" != *"$SECRET"* ]] || continue
-  [[ "$ID" != "$(printf '%32s' '' | tr ' ' "${ID:0:1}")" ]] || continue
+  [[ -n "${ID//${ID:0:1}/}" && -n "${SECRET//${SECRET:0:1}/}" ]] || continue
   break
 done
 HOST32="$(rand_hex 32)"
@@ -109,7 +126,7 @@ log="${STUB_LOG:?}"
 n=$(( $(wc -l < "$log/calls" 2>/dev/null || echo 0) + 1 ))
 printf '%s\n' "$n" >> "$log/calls"
 { printf 'CALL %s\n' "$n"; printf '%s\n' "$@"; } >> "$log/argv"
-for v in SSL_CERT_FILE CURL_CA_BUNDLE LD_PRELOAD SSLKEYLOGFILE R2_CLA_EVIDENCE_ACCESS_KEY_ID R2_CLA_EVIDENCE_SECRET R2_S3_ACCESS_KEY_ID R2_S3_SECRET_ACCESS_KEY; do
+for v in ${STUB_ENV_NAMES:?}; do
   if [[ -v $v ]]; then echo "$v=set"; else echo "$v=unset"; fi
 done >> "$log/env"
 stdin=$(cat; printf x); stdin=${stdin%x}
@@ -146,12 +163,14 @@ if [[ "${STUB_MODE:-record}" == "wire" ]]; then
   fi
   exit $?
 fi
+if [[ "${STUB_MODE:-record}" == "fail" ]]; then exit "${STUB_FAIL_RC:-7}"; fi
 printf '%s\n' "${STUB_CODE:-200}"
 exit 0
 EOF
 chmod +x "$BIN/curl"
 
 export STUB_LOG="$LOGD" STUB_REAL_CURL="$REAL_CURL"
+export STUB_ENV_NAMES="SSL_CERT_FILE CURL_CA_BUNDLE LD_PRELOAD SSLKEYLOGFILE R2_CLA_EVIDENCE_ACCESS_KEY_ID R2_CLA_EVIDENCE_SECRET"
 PATH="$BIN:$PATH"
 
 reset_log() { rm -rf -- "$LOGD"; mkdir -p "$LOGD"; : > "$LOGD/calls"; : > "$LOGD/argv"; : > "$LOGD/env"; }
@@ -162,7 +181,8 @@ count_prefix() { grep -c -- "^$1" <<<"$2" || true; }
 FNAME=r2-sigv4-suite
 
 # ── (1) the functions exist (an undefined function is rc 127, which must never read as a refusal) ──
-t "1.1 helper defines _r2_cred_ok, r2_sigv4_judge and r2_sigv4_curl" declare -F _r2_cred_ok r2_sigv4_judge r2_sigv4_curl >/dev/null
+_fns_defined() { declare -F _r2_cred_ok r2_sigv4_judge r2_sigv4_curl >/dev/null; }
+t "1.1 helper defines _r2_cred_ok, r2_sigv4_judge and r2_sigv4_curl" _fns_defined
 
 # ── (2) judge: valid pair accepted; one swapped byte refused with the right reason ──
 reset_log
@@ -243,8 +263,6 @@ t "6.1 chokepoint re-judges: a refused id returns 2 and starts zero curl calls" 
 t "6.2 chokepoint refusal prints the marker once" test "$(count_prefix 'SOLEUR_CREDENTIAL_REFUSED ' "$out")" -eq 1
 t "6.3 negative canary: the refused value is in no captured stream" \
   _not grep -qF -e "$CANARY" -e "$SECRET" <<<"$out"
-t "6.4 negative canary: the refused value is in no argv, stdin or env log" \
-  _not grep -qF -e "$CANARY" "$LOGD/argv" "$LOGD/env"
 reset_log
 rc=0; out=$(r2_sigv4_curl "$FNAME" "$ID" "${SECRET:0:5}:${SECRET:6}" "$URL" -sS --max-time 30 2>&1) || rc=$?
 t "6.5 chokepoint re-judges: a refused secret returns 2 and starts zero curl calls" test "$rc" -eq 2 -a "$(calls)" -eq 0
@@ -284,6 +302,21 @@ refuse_args "a bare -" -sS -
 refuse_args "a trailing dangling -w" -sS -w
 refuse_args "a trailing dangling --max-time" -sS --max-time
 refuse_args "-w @-" -sS -w @-
+refuse_args "-x (proxy)" -sS -x http://p.example:3128
+refuse_args "--proxy" -sS --proxy http://p.example:3128
+refuse_args "-K f as separate tokens" -sS -K f
+refuse_args "--header (long spelling)" -sS --header "X: y"
+refuse_args "-d" -sS -d x
+refuse_args "--data" -sS --data x
+refuse_args "--cert" -sS --cert f
+refuse_args "--cookie" -sS --cookie f
+refuse_args "--output (long spelling)" -sS --output f
+refuse_args "--netrc-file" -sS --netrc-file f
+refuse_args "-Ss (reversed bundle)" -Ss
+refuse_args "a dangling -o" -sS -o
+refuse_args "a dangling -X" -sS -X
+refuse_args "a dangling -H" -sS -H
+refuse_args "a dangling --data-binary" -sS --data-binary
 
 # ── (8) argument allowlist: must-PASS (the two callers' real vectors; contributor text) ──
 reset_log
@@ -301,14 +334,29 @@ rc=0; out=$(r2_sigv4_curl "$FNAME" "$ID" "$SECRET" "$URL" -sS -o "$BODY" -w "%{h
 t "8.3 contributor text naming /proc/, /dev/stdin and --user in the payload is NOT refused" test "$rc" -eq 0 -a "$(calls)" -eq 1
 
 # ── (9) environment: nothing that redirects TLS trust, libraries or the pair reaches curl ──
+# The scrubbed names are DERIVED from the helper's own `env -u` block, so a name added to or dropped from
+# it moves the row; every one is exported before the call and must be unset in curl's environment.
+ENV_NAMES="$(sed -n '/^[[:space:]]*env -u/,/curl --disable/p' "$HELPER" | /usr/bin/grep -oE -- '-u [A-Z0-9_]+' | awk '{print $2}' | sort -u | tr '\n' ' ')"
+ENV_N="$(wc -w <<<"$ENV_NAMES" | tr -d ' ')"
+t "9.0 the helper's env -u block was read (at least 17 names)" test "$ENV_N" -ge 17
+export STUB_ENV_NAMES="$ENV_NAMES"
 reset_log
 rc=0
-SSL_CERT_FILE=/nonexistent CURL_CA_BUNDLE=/nonexistent LD_PRELOAD=libc.so.6 SSLKEYLOGFILE=/nonexistent \
-R2_CLA_EVIDENCE_ACCESS_KEY_ID="$ID" R2_CLA_EVIDENCE_SECRET="$SECRET" R2_S3_ACCESS_KEY_ID="$ID" R2_S3_SECRET_ACCESS_KEY="$SECRET" \
-  r2_sigv4_curl "$FNAME" "$ID" "$SECRET" "$URL" -sS -o "$BODY" -w "%{http_code}\n" --max-time 30 >/dev/null 2>&1 || rc=$?
+(
+  for _v in $ENV_NAMES; do export "$_v=/nonexistent"; done
+  export LD_PRELOAD=libc.so.6 LD_AUDIT=libc.so.6 R2_CLA_EVIDENCE_ACCESS_KEY_ID="$ID" R2_CLA_EVIDENCE_SECRET="$SECRET" R2_S3_ACCESS_KEY_ID="$ID" R2_S3_SECRET_ACCESS_KEY="$SECRET"
+  r2_sigv4_curl "$FNAME" "$ID" "$SECRET" "$URL" -sS -o "$BODY" -w "%{http_code}\n" --max-time 30 >/dev/null 2>&1
+) || rc=$?
 t "9.1 the environment row ran (one call recorded)" test "$rc" -eq 0 -a "$(calls)" -eq 1
-t "9.2 curl's own environment holds none of the eight scrubbed variables" \
-  test "$(grep -c '=set$' "$LOGD/env" || true)" -eq 0 -a "$(grep -c '=unset$' "$LOGD/env")" -eq 8
+t "9.2 curl's own environment holds none of the $ENV_N scrubbed variables" \
+  test "$(grep -c '=set$' "$LOGD/env" || true)" -eq 0 -a "$(grep -c '=unset$' "$LOGD/env")" -eq "$ENV_N"
+BC_NAMES="$(sed -n '/^[[:space:]]*env -u/,/curl --disable/p' "$REPO_ROOT/scripts/lib/bearer-curl.sh" | /usr/bin/grep -oE -- '-u [A-Z0-9_]+' | awk '{print $2}' | sort -u | tr '\n' ' ')"
+_missing=""
+for _v in $BC_NAMES; do [[ " $ENV_NAMES " == *" $_v "* ]] || _missing="$_missing $_v"; done
+t "9.3 the helper scrubs every variable scripts/lib/bearer-curl.sh scrubs (parity; read $(wc -w <<<"$BC_NAMES" | tr -d ' ') names)" \
+  test -z "$_missing" -a "$(wc -w <<<"$BC_NAMES" | tr -d ' ')" -ge 13
+t "9.4 the helper also scrubs the four pair variables" \
+  test "$(for _v in R2_CLA_EVIDENCE_ACCESS_KEY_ID R2_CLA_EVIDENCE_SECRET R2_S3_ACCESS_KEY_ID R2_S3_SECRET_ACCESS_KEY; do [[ " $ENV_NAMES " == *" $_v "* ]] && echo y; done | wc -l | tr -d ' ')" -eq 4
 
 # ── (10) destination pin: 64, a ::error:: line, zero calls, and NOT the credential marker ──
 refuse_url() { # LABEL URL
@@ -324,6 +372,11 @@ refuse_url "a jurisdiction host (.eu., intentionally refused like _r2-endpoint.s
 refuse_url "plain http" "http://${HOST32}.r2.cloudflarestorage.com/x"
 refuse_url "a short account id" "https://${HOST32:0:31}.r2.cloudflarestorage.com/x"
 refuse_url "no path after the host" "https://${HOST32}.r2.cloudflarestorage.com"
+refuse_url "a canonical origin EMBEDDED after a hostile prefix (anchor)" "https://evil.example/https://${HOST32}.r2.cloudflarestorage.com/x"
+refuse_url "a 33-hex account id" "https://${HOST32}a.r2.cloudflarestorage.com/x"
+refuse_url "a 32-char NON-hex account id" "https://$(printf 'z%.0s' $(seq 1 32)).r2.cloudflarestorage.com/x"
+refuse_url "an unescaped-dot lookalike (r2x)" "https://${HOST32}.r2xcloudflarestorage.com/x"
+refuse_url "an unescaped-dot lookalike (xcom)" "https://${HOST32}.r2.cloudflarestoragexcom/x"
 
 # ── (11) source rows (non-comment lines only) ──
 code_lines="$(grep -v '^[[:space:]]*#' "$HELPER")"
@@ -347,6 +400,35 @@ joined_curl_user_hits() {
 }
 t "11.6 no shell file under apps/cla-evidence passes the pair as -u/--user on a (joined) curl command" \
   test -z "$(cd "$REPO_ROOT" && joined_curl_user_hits)"
+
+# ── (11b) credential alphabet: a sweep of EVERY byte 0x01-0xFF, accepted set == the documented alphabet ──
+_bad_bytes=0; _swept=0
+for _i in $(seq 1 255); do
+  printf -v _oct '%03o' "$_i"; printf -v _ch '%b' "\\0$_oct"
+  _want=0; ( LC_ALL=C; case "$_ch" in [A-Za-z0-9._~+/=-]) exit 0 ;; *) exit 1 ;; esac ) && _want=1
+  _got=0; _r2_cred_ok "ab${_ch}cd" && _got=1
+  _swept=$((_swept + 1))
+  [[ "$_want" == "$_got" ]] || _bad_bytes=$((_bad_bytes + 1))
+done
+t "11b.1 the alphabet sweep covered all 255 bytes and the accepted set equals [A-Za-z0-9._~+/=-] exactly (mismatches=$_bad_bytes)" \
+  test "$_swept" -eq 255 -a "$_bad_bytes" -eq 0
+
+# ── (11c) a failing curl is a FAILURE: its status passes through, nothing turns it into success ──
+reset_log
+rc=0; out=$(STUB_MODE=fail STUB_FAIL_RC=7 r2_sigv4_curl "$FNAME" "$ID" "$SECRET" "$URL" -sS -o "$BODY" -w "%{http_code}\n" --max-time 30 2>&1) || rc=$?
+t "11c.1 curl's own non-zero status passes through the chokepoint (rc 7, one call, no output)" test "$rc" -eq 7 -a "$(calls)" -eq 1 -a -z "$out"
+
+# ── (11d) the probe and the caller prologues ──
+probe_out="$(bash "$SCRIPT_DIR/r2-sigv4-refusal-probe.sh" 2>&1)"; probe_rc=$?
+t "11d.1 the discoverability probe exits 0 and prints the refusal marker with reason=token_shape" \
+  test "$probe_rc" -eq 0 -a "$(grep -cxF 'SOLEUR_CREDENTIAL_REFUSED script=r2-sigv4-refusal-probe reason=token_shape' <<<"$probe_out")" -eq 1
+callers="$(cd "$REPO_ROOT" && /usr/bin/grep -rlE 'r2_sigv4_(curl|judge)' --include='*.sh' --exclude='*.test.sh' --exclude='_r2-sigv4-curl.sh' --exclude='r2-sigv4-refusal-probe.sh' apps/cla-evidence | sort | tr '\n' ' ')"
+_noprologue=""
+for _f in $callers; do
+  { /usr/bin/grep -qF 'case "$-" in' "$REPO_ROOT/$_f" && /usr/bin/grep -qE 'exit 78' "$REPO_ROOT/$_f"; } || _noprologue="$_noprologue $_f"
+done
+t "11d.2 every file that calls into the helper carries the xtrace refusal (callers: $callers)" \
+  test -n "$callers" -a -z "$_noprologue"
 
 # ── (12) real-curl wire row: the request the helper builds, sent by REAL curl, read at a listener ──
 LISTEN_PY="$TMP_ROOT/listener.py"
@@ -394,8 +476,8 @@ t "12.4 the stub's recorded argv holds neither value (real wire, real curl)" _no
 reset_log
 STUB_DROP_CONFIG=1 r2_sigv4_curl "$FNAME" "$ID" "$SECRET" "$URL" -sS -o "$BODY" -w "%{http_code}\n" --max-time 30 -X PUT \
   --data-binary "$PAYLOAD" >/dev/null 2>&1
-t "12.5 control: without --config - the received request carries no Credential=<id>/ (the row can discriminate)" \
-  _not grep -q "Credential=${ID}/" "$REC_FILE"
+t "12.5 control: without --config - a request ARRIVED and carries no Credential=<id>/ (the row can discriminate)" \
+  test "$(grep -c '^REQ ' "$REC_FILE" || true)" -ge 1 -a "$(grep -c "Credential=${ID}/" "$REC_FILE" || true)" -eq 0
 STUB_MODE=record
 
 kill "$LISTENER_PID" 2>/dev/null; LISTENER_PID=""
@@ -405,7 +487,7 @@ kill "$LISTENER_PID" 2>/dev/null; LISTENER_PID=""
 # above asserts passes == 1, so the literal is proven, not chosen).
 SELFTEST_PASSES=1
 REAL_PASSES=$((passes - SELFTEST_PASSES))
-MIN_CASES=142
+MIN_CASES=168
 if [[ "$fails" -eq 0 && "$REAL_PASSES" -lt "$MIN_CASES" ]]; then
   printf 'FATAL: anti-vacuity floor — %s real assertions passed, expected at least %s\n' \
     "$REAL_PASSES" "$MIN_CASES" >&2

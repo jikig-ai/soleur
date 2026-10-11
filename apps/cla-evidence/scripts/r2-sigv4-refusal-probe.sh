@@ -17,3 +17,7 @@ if out=$(r2_sigv4_judge r2-sigv4-refusal-probe "$probe_id" "$probe_secret" 2>&1)
   exit 1
 fi
 printf '%s\n' "$out"
+case "$out" in
+  *'SOLEUR_CREDENTIAL_REFUSED script='*'reason=token_shape'*) ;;
+  *) echo "probe FAILED: the refusal carried no marker"; exit 1 ;;
+esac

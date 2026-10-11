@@ -12,8 +12,11 @@
 # lines only and is deliberately untouched.
 #
 # This file is sourced, so it carries no xtrace self-refusal and no `exit` of its own (a sourced
-# exit would kill the caller); the caller's prologue is the trace defence. `printf` below is the
-# shell builtin, so a value never reaches an exec argv.
+# exit would kill the caller); the caller's prologue is the trace defence, and EVERY caller MUST
+# carry one (under `set -x` the call line itself traces the values before this body runs; the suite
+# asserts it for each file that calls into this helper). `printf` below is the shell builtin, so a
+# value never reaches an exec argv. Values are judged as given: nothing is trimmed (a value with a
+# trailing newline is refused as control_char), because both callers hold the exact 32/64 length.
 #
 # Refusal contract. A malformed value makes ZERO requests: a value-free `::error::` annotation
 # and `SOLEUR_CREDENTIAL_REFUSED script=<name> reason=<token_shape|control_char>` go to stderr and
@@ -28,6 +31,7 @@
 _r2_cred_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
 
 # _r2_refuse <script> <variable-name> <value> — print the annotation and the marker; never the value.
+# The variable name is the CALLER's (its operator reads this line), so it is a parameter of the judge.
 _r2_refuse() {
   local LC_ALL=C script="$1" name="$2" reason=token_shape
   case "$3" in *[[:cntrl:]]*) reason=control_char ;; esac
@@ -35,19 +39,21 @@ _r2_refuse() {
   echo "SOLEUR_CREDENTIAL_REFUSED script=${script} reason=${reason}" >&2
 }
 
-# r2_sigv4_judge <script> <id> <secret>
+# r2_sigv4_judge <script> <id> <secret> [<id-variable-name> <secret-variable-name>]
 #   Returns 0 when both values pass the alphabet guard, else prints the refusal and returns 2.
+#   The two names default to the cla-evidence workflow's variables; bootstrap passes its own.
 #   <script> is forced to the safe alphabet (the marker feeds log parsing): anything else prints
 #   as `unknown`, so a caller passing free text cannot inject a line or a workflow command.
 r2_sigv4_judge() {
   local LC_ALL=C script="${1:-}" id="${2:-}" secret="${3:-}"
+  local id_name="${4:-R2_CLA_EVIDENCE_ACCESS_KEY_ID}" secret_name="${5:-R2_CLA_EVIDENCE_SECRET}"
   case "$script" in ''|*[!A-Za-z0-9._-]*) script=unknown ;; esac
   if ! _r2_cred_ok "$id"; then
-    _r2_refuse "$script" R2_CLA_EVIDENCE_ACCESS_KEY_ID "$id"
+    _r2_refuse "$script" "$id_name" "$id"
     return 2
   fi
   if ! _r2_cred_ok "$secret"; then
-    _r2_refuse "$script" R2_CLA_EVIDENCE_SECRET "$secret"
+    _r2_refuse "$script" "$secret_name" "$secret"
     return 2
   fi
   return 0
@@ -90,7 +96,7 @@ r2_sigv4_curl() {
     echo "::error::r2_sigv4_curl: usage: <script> <id> <secret> <url> [curl args...]" >&2
     return 64
   fi
-  local script="$1" id="$2" secret="$3" url="$4"
+  local LC_ALL=C script="$1" id="$2" secret="$3" url="$4"
   shift 4
   # The pin is in-file and anchored, the shape the Rule D linter recognises. It matches the
   # default-jurisdiction hostname of _r2-endpoint.sh only: a .eu. or .fedramp. host is refused
@@ -105,8 +111,9 @@ r2_sigv4_curl() {
   fi
   r2_sigv4_judge "$script" "$id" "$secret" || return $?
   # `env -u` scrubs TLS-trust, key-log, library-load and resolution redirection inherited from an
-  # earlier step (the first fourteen are scripts/lib/bearer-curl.sh's list) and keeps the pair out
-  # of curl's own /proc/<pid>/environ (the last four).
+  # earlier step (the first thirteen are scripts/lib/bearer-curl.sh's list; the suite asserts that
+  # list stays a subset of this one) and keeps the pair out of curl's own /proc/<pid>/environ (the
+  # last four).
   env -u SSLKEYLOGFILE -u CURL_CA_BUNDLE -u SSL_CERT_FILE -u SSL_CERT_DIR -u CURL_HOME \
       -u OPENSSL_CONF -u OPENSSL_MODULES -u LD_PRELOAD -u LD_AUDIT -u LD_LIBRARY_PATH \
       -u HOSTALIASES -u LOCALDOMAIN -u RES_OPTIONS \

@@ -32,7 +32,7 @@ while :; do
   ID="$(rand_hex 32)"; SECRET="$(rand_hex 64)"
   [[ "${#ID}" -eq 32 && "${#SECRET}" -eq 64 ]] || continue
   [[ "$SECRET" != *"$ID"* && "$ID" != *"$SECRET"* ]] || continue
-  [[ "$ID" != "${ID:0:1}${ID:0:1}${ID:0:1}"* || "${ID//${ID:0:1}/}" != "" ]] || continue
+  [[ -n "${ID//${ID:0:1}/}" && -n "${SECRET//${SECRET:0:1}/}" ]] || continue
   break
 done
 
@@ -54,6 +54,7 @@ codes_file="$codes"
 stdin=\$(cat; printf x); stdin=\${stdin%x}
 printf '%s' "\$stdin" >> "$work/stdin.log"
 [[ "\$stdin" == *'user = "'* ]] || { echo "stub: stdin carries no user line" >&2; exit 99; }
+[[ "\${STUB_FAIL:-0}" != 1 ]] || exit 7
 read -r code < "\$codes_file"
 sed -i '1d' "\$codes_file"
 # Parse \`-o <file>\` and copy the body fixture there if present.
@@ -89,6 +90,7 @@ run_sut() {
 }
 
 fail=0
+wire_rows=0
 
 # Common code-fixture for happy-path assertions.
 prime_200() {
@@ -315,9 +317,29 @@ stdin_lines=$(grep -cxF "user = \"$ID:$SECRET\"" "$work/stdin.log" || true)
 if [[ "$rc" -eq 0 && "$calls" -ge 1 && "$stdin_lines" -eq "$calls" ]] \
    && ! grep -qF -e "$ID" -e "$SECRET" "$work/argv.log"; then
   green "PASS: Bypass.a2 pair absent from every recorded argv; stdin carries the user line (calls=$calls)"
+  wire_rows=$((wire_rows + 1))
 else
   red "FAIL: Bypass.a2 rc=$rc calls=$calls stdin_user_lines=$stdin_lines (argv must hold neither value)"
   fail=1
+fi
+
+# Bypass.a3: a curl that FAILS (exit 7, no output) is a failure: exit 2 with status=000, no success line.
+prime_200
+out=$(STUB_FAIL=1 run_sut "$payload" 2>&1) && rc=0 || rc=$?
+if [[ "$rc" -eq 2 && "$(grep -c 'unexpected status=000' <<<"$out" || true)" -ge 1 ]] && ! grep -q '^ok status=' <<<"$out"; then
+  green "PASS: Bypass.a3 a failing curl → exit 2, status=000, no success line"
+  wire_rows=$((wire_rows + 1))
+else
+  red "FAIL: Bypass.a3 rc=$rc (expected 2 with unexpected status=000 and no ok line)"
+  fail=1
+fi
+
+# Anti-vacuity floor for the wire rows above (Bypass.a2, a3): deleting them leaves the rest of this suite
+# green. Literal adjacent to the if.
+MIN_WIRE_ROWS=2
+if [[ "$wire_rows" -lt "$MIN_WIRE_ROWS" ]]; then
+  printf 'FATAL: anti-vacuity floor — %s wire rows passed, expected at least %s\n' "$wire_rows" "$MIN_WIRE_ROWS" >&2
+  exit 1
 fi
 
 if [[ "$fail" -eq 0 ]]; then

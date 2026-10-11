@@ -201,10 +201,11 @@ R2_SECRET="$R2_S3_SECRET_ACCESS_KEY"
 # cla-evidence workflow runs — the 2026-05-16 outage class. The probe key
 # is content-addressed under bootstrap-probe/ so it's idempotent across
 # re-runs and easy to identify+delete in the bucket inspector.
-# The request goes through r2_sigv4_curl, which refuses a malformed pair before any request (the
-# marker prints on stderr and the status below reads 000), pins the destination, and passes the pair
-# on curl's stdin config instead of argv. It also confines the transport (--disable --noproxy '*'),
-# so this one-shot needs direct egress to R2.
+# The pair is judged here, before anything else: a malformed value exits 2 with the marker and the
+# variable name the operator actually set. The request itself goes through r2_sigv4_curl, which pins
+# the destination and passes the pair on curl's stdin config instead of argv. It also confines the
+# transport (--disable --noproxy '*', no inherited CA bundle), so this one-shot needs direct egress to
+# R2 with the system trust store; a proxy or a TLS-inspecting CA reads as status 000 below.
 # Pin the canonical R2 endpoint base (guards a malformed CF_ACCOUNT_ID) BEFORE
 # this credentialed probe PUT — without it, a bad account id would send the R2
 # HMAC secret to a non-canonical host (item 1 of #3950). Reused for the Doppler
@@ -215,15 +216,18 @@ probe_endpoint="${R2_ENDPOINT}/${BUCKET_NAME}/bootstrap-probe/$(date -u +%Y%m%dT
 probe_body='{"probe":"bootstrap","ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}'
 probe_body_file=$(mktemp)
 trap 'rm -f "$probe_body_file"' EXIT
+r2_sigv4_judge "bootstrap" "$R2_ACCESS_KEY" "$R2_SECRET" R2_S3_ACCESS_KEY_ID R2_S3_SECRET_ACCESS_KEY || exit 2
 probe_code=$(r2_sigv4_curl "bootstrap" "$R2_ACCESS_KEY" "$R2_SECRET" "$probe_endpoint" \
   -sS -o "$probe_body_file" -w "%{http_code}" --max-time 30 \
   -X PUT \
   -H "If-None-Match: *" \
   -H "Content-Type: application/json" \
-  --data-binary "$probe_body" || echo "000")
+  --data-binary "$probe_body" || true)
+probe_code="${probe_code:-000}"
 if [[ "$probe_code" != "200" && "$probe_code" != "201" && "$probe_code" != "412" ]]; then
   red "R2 probe PUT failed: status=$probe_code body=$(tr '\n' ' ' < "$probe_body_file" | head -c 400)"
   red "Refusing to push known-broken creds to Doppler. Verify R2_S3_ACCESS_KEY_ID/SECRET match a freshly-minted R2 dashboard token (see header)."
+  [[ "$probe_code" != "000" ]] || red "status=000 also means curl never got a response: this probe needs direct egress to R2 with the system trust store (no proxy, no TLS-inspecting CA)."
   exit 1
 fi
 green "  R2 probe PUT ok (status=$probe_code); creds verified before Doppler push"
@@ -243,15 +247,22 @@ fi
 # Endpoint is derivable but stored for sidecar simplicity. R2_ENDPOINT was
 # computed AND validated (assert_r2_endpoint) above, before the probe PUT.
 
+# The two non-secret values go as NAME=value arguments. The HMAC pair goes on the CLI's STDIN, one name per
+# call (printf is a builtin, so the value never reaches an exec argv): an argument would put the pair in
+# /proc/<pid>/cmdline for the life of the doppler process, which is the exposure this script's curl
+# probe no longer has. The two writes are not one atomic call: if the second fails the script stops
+# (set -e) and a re-run, which is idempotent, rewrites both.
 doppler secrets set \
   --project soleur --config prd_cla \
   --no-interactive \
-  R2_CLA_EVIDENCE_ACCESS_KEY_ID="$R2_ACCESS_KEY" \
-  R2_CLA_EVIDENCE_SECRET="$R2_SECRET" \
   R2_CLA_EVIDENCE_ENDPOINT="$R2_ENDPOINT" \
   R2_CLA_EVIDENCE_BUCKET="$BUCKET_NAME" \
   >/dev/null
-green "  pushed 4 secrets to prd_cla (S3-compat HMAC pair + endpoint + bucket)"
+printf '%s' "$R2_ACCESS_KEY" | doppler secrets set R2_CLA_EVIDENCE_ACCESS_KEY_ID \
+  --project soleur --config prd_cla --no-interactive >/dev/null
+printf '%s' "$R2_SECRET" | doppler secrets set R2_CLA_EVIDENCE_SECRET \
+  --project soleur --config prd_cla --no-interactive >/dev/null
+green "  pushed 4 secrets to prd_cla (S3-compat HMAC pair on stdin + endpoint + bucket)"
 
 # ─────────────────────────────────────────────────────────────────────────
 # Step 3 — Doppler service token + GH repo secret
