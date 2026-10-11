@@ -8,6 +8,12 @@ type: chore
 lane: single-domain
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-11. **Method:** plan-review panel (simplicity, correctness, devex seats) applied; deepen-plan mechanical halts run (user-brand, PAT, Guard Contract lint, Scope Check schema); the all-agent fan-out was not run because each mechanism had already been checked against the real guard by three seats.
+
+- Corrected the table count (twelve rows, not eight), cut the self-referential `codemod-gone` check and the no-op `exit 1` pin, switched the test canaries to a separate listing (the `SWEEP_CANARIES` loop also runs on every fixture root), narrowed the `_ts_re` directory alternative, anchored the wiring pins so they cannot count themselves, and rewrote Scope Check to the schema.
+
 ## Overview
 
 Slice S7 of the grep -q pipe-guard series (tracker #9217; also #7376, #6601, #7797, #9482). S1 to S6 are merged, and
@@ -63,23 +69,6 @@ Value-proposition measurement (Phase 0.6c): the saving claimed is ownership cost
 | S6 NOT-fixed: guard top-level wiring unpinned | `|| sweep_rc=$?` (line 593) and `sweep_fold "$sweep_rc"` (line 594) each appear once outside comments before any pin exists | Pin each as an anchored full statement whose own pin line cannot match it (pattern assembled from two parts), so the count stays exactly 1 after the pin lands |
 | S6 item 24: a `.gitignore` entry hiding only `*.test.sh` files stays green | Measured in S6 (rows 13d to 13f): the root canary is satisfied by any other swept file | Canary paths by identity (Guard 2). `scan_sweep` prints only `SWEPT: n files` and keeps `$files` local, and its UNRESOLVED canary loop also runs on every scratch-root fixture, so test canaries must NOT join `SWEEP_CANARIES`; they are checked by a separate listing over `.` with the same `SWEEP_PATHSPEC` |
 | Plan v1: the table holds eight rows after the slice | Six exact test rows plus the six carrier rows is twelve | AC-1 and Guard 1 say twelve |
-
-## Scope Check
-
-Ask mapping: every clause of the brief's S7 line maps to a deliverable or to a recorded cut.
-
-| Ask (verbatim from the brief) | Deliverable |
-| --- | --- |
-| "S7 (producer-side join" | S7b, a separate PR (decision challenge 1) |
-| "codemod and guard cleanup: dead `test-*` clause and `_ts_re` clause" | D2 (dead alternative removed, `_ts_re` widened) |
-| "S7 exit wording" | D5 |
-| "deleting the S1 codemod selftest" (S6 plan note) | D1 |
-| "derived zero-hit assertion", "population floor ... under `apps/web-platform/`" (S6 items 6, 24) | D3 (floor by identity); the derived assertion is cut with a reason |
-| "guard top-level wiring and probe verdict-gate pins" (S6 NOT-fixed) | D4 |
-
-Item provenance: D1, D2, D3, D5 are `asked` (brief or S6 plan note). D4 is `asked` through the S6 NOT-fixed list. Nothing is `inferred`.
-
-Split assessment: files changed are about 8 (guard, codemod deleted, four test files whose pin lines are re-owned only by row, no test-file edit, plus plan and spec artifacts); one logical change (the instrument's end state); under the 37-file threshold that forced S6's challenge. No split inside S7a.
 
 ## Implementation Phases
 
@@ -207,6 +196,45 @@ Not applicable: no file under `apps/*/server/`, `apps/*/src/`, `apps/*/infra/` c
 | Count floor per root instead of canary paths | A `>=` floor survives count-preserving substitution and needs a measured number that rots |
 | Derived replacement of canary roots, plants and test-row pin | Moves `SWEEP_PROBE_CHECKS` again without a property the pins lack (Cut List) |
 | Keep the glob rows, add the canary only | Leaves the add-one-delete-one hole the header calls a KNOWN HOLE, with the decision about it deferred a second time |
+
+## Scope Check
+
+Required on every plan (plan Phase 2.4; halted at deepen-plan 4.12). Asks are quoted from the run's brief (`[brief]`) and the S6 plan it names (`[doc S6 plan]`).
+
+### Ask Mapping
+
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "the producer-side join, codemod and guard cleanup" [brief] | Phases 1 to 5 (cleanup); join to S7b | mapped |
+| 2 | "the dead `test-*` clause and the `_ts_re` clause in the codemod/guard" [brief] | Phase 1 (`_ts_re` edits) | mapped |
+| 3 | "the S7 exit wording" [brief] | Phase 5 | mapped |
+| 4 | "deleting the S1 codemod selftest as the S6 plan notes" [brief] | Phase 4 | mapped |
+| 5 | "S7 may edit scripts/grep-q-drain-codemod.py and the guard" [brief] | Files to Edit, Files to Delete | mapped |
+| 6 | "the population floor on swept `*.test.sh` files under `apps/web-platform/`" [brief] | Phase 2 (canary paths by identity) | mapped |
+| 7 | "the guard top-level wiring and probe verdict-gate pins" [brief] | Phase 3 (wiring pins) | mapped |
+| 8 | "the derived zero-hit assertion replacing the hand-written string and pin rules" [brief] | Cut List in Research Insights | descoped — justification: the file-exact rows and canary paths buy both properties it was for, and a derived assertion would move `SWEEP_PROBE_CHECKS` again with no property the pins lack |
+| 9 | "also consider the per-subtree marker count pin (Item F)" [brief] | NOT fixed list | descoped — justification: the brief lists Item F as its own later PR, and the marked-line baseline (34 repo-wide, 9 in the guard file) is recorded for it |
+| 10 | "the producer-side join" [brief] | S7b (decision-challenges item 1) | descoped — justification: about 29 production pipes in 20 files plus owner-stub edits and its own Guard Contract; separate review surface, tracked on #9217 |
+| 11 | "probe verdict-gate pins" [brief] | Overview item 4 | descoped — justification: the `exit 1` arm is a behavioural no-op (the arm sets `FAIL=1` and the file ends with the already-pinned `exit "$FAIL"`), so a pin buys no property |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| `.claude/hooks/grep-q-pipe-guard.test.sh` edits (Files to Edit) | "S7 may edit scripts/grep-q-drain-codemod.py and the guard" (ask 5) | asked |
+| `scripts/grep-q-drain-codemod.py` deletion (Files to Delete) | "deleting the S1 codemod selftest as the S6 plan notes" (asks 4, 5) | asked |
+| Six file-exact rows replacing the two glob rows | "the dead `test-*` clause and the `_ts_re` clause in the codemod/guard" (ask 2) | inferred — justification: the `_ts_re` widening is only needed once a file-exact test path exists, and the guard header names the add-one-delete-one hole as the reason the last Wave B slice revisits `_ts_re` |
+| `SWEEP_TEST_CANARIES` and its listing check | "the population floor on swept `*.test.sh` files under `apps/web-platform/`" (ask 6) | asked |
+| Wiring pin check | "the guard top-level wiring and probe verdict-gate pins" (ask 7) | asked |
+| Header and row commentary rewrite | "the S7 exit wording" (ask 3) | asked |
+| `evidence.md`, `decision-challenges.md`, `tasks.md` in the spec dir | "a plain NOT-fixed list" [brief standing constraint] | inferred — justification: the per-PR evidence comment on the tracker cites the spec dir's `evidence.md`, and the pipeline's decision-record contract needs `decision-challenges.md` |
+
+### Split Assessment
+
+- Subsystems touched: 2 — `.claude/hooks/`, `scripts/` (plus the knowledge-base spec dir)
+- Planned files: 2 code files (one edited, one deleted) plus 3 spec artifacts | Estimated changed lines: about 450 removed (selftest 342 and codemod 785 counted as deleted lines, about 1130) and about 80 added
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR — the deleted lines exceed 800 but are one whole-file and one whole-block deletion with no logic to review; the join (S7b) is the split boundary
 
 ## Acceptance Criteria
 
