@@ -707,7 +707,7 @@ def attr_sites(code: str, skel: str, attr: str, collapse: bool = True) -> list[t
     """[(brace depth, value text)] for every `attr =` assignment of a block. Depth 1 is a top-level
     argument; anything deeper sits in a nested block. The value runs to the end of its line, and on
     past it while a `(`, `[` or `{` opened in the value is still unclosed (counted on the skeleton, so
-    a bracket in a string never counts), whitespace collapsed unless `collapse` is False - a multi-line `for_each = {` is read
+    a bracket in a string never counts; a top-level comma ends it, a trailing `?` `:` `&` `|` `+` continues it), whitespace collapsed unless `collapse` is False - a multi-line `for_each = {` is read
     whole, so two different comprehensions never compare equal on their first line."""
     sites: list[tuple[int, str]] = []
     for m in re.finditer(rf"(?<![\w.]){attr}\s*=(?!=)", skel):
@@ -722,8 +722,10 @@ def attr_sites(code: str, skel: str, attr: str, collapse: bool = True) -> list[t
                 if open_ == 0:
                     break  # the enclosing block's own closing brace
                 open_ -= 1
-            elif ch == "\n" and open_ == 0:
+            elif ch == "," and open_ == 0:
                 break
+            elif ch == "\n" and open_ == 0 and skel[m.end() : end].rstrip()[-1:] not in ("?", ":", "&", "|", "+"):
+                break  # a value that ends in an operator continues on the next line
             end += 1
         value = code[m.end() : end]
         sites.append((depth, " ".join(value.split()) if collapse else value.strip("\n")))
@@ -802,6 +804,30 @@ def _top_attr(code: str, skel: str, attr: str, collapse: bool = True) -> str | N
     return sites[0] if len(sites) == 1 else None
 
 
+def _template_map(code: str | None, skel: str | None) -> tuple[str, str] | None:
+    """(code, skeleton) of the object literal passed to a `templatefile(path, { ... })` call: the text
+    between the first top-level `{` of the argument and its matching `}`."""
+    if code is None or skel is None:
+        return None
+    i = skel.find("{")
+    if i < 0:
+        return None
+    depth = 0
+    for j in range(i, len(skel)):
+        depth += (skel[j] == "{") - (skel[j] == "}")
+        if depth == 0:
+            return code[i + 1 : j], skel[i + 1 : j]
+    return None
+
+
+def _map_attr(m: tuple[str, str] | None, name: str) -> str | None:
+    """The one top-level value (skeleton text, whitespace collapsed) of `name` in a template map."""
+    if m is None:
+        return None
+    sites = [v for d, v in attr_sites(m[1], m[1], name) if d == 0]
+    return sites[0] if len(sites) == 1 else None
+
+
 def check_key_chain(
     store: str, db: dict, ctx: dict, tf_files: list[Path], cache: dict, fails: list[str]
 ) -> dict | None:
@@ -831,22 +857,23 @@ def check_key_chain(
     # line elsewhere in the block (another attribute, a string) is not the host's input. The volume line
     # is matched on the skeleton, so a string literal cannot stand in for the reference, and the
     # reference must be the value or the true branch of a ternary (`cond ? <ref> : "retired"`).
-    # Line structure is kept (collapse=False) so each attribute is matched on its own line; the
-    # skeleton view means a string literal can stand in for neither reference.
-    ud_code = _top_attr(consumer[1], consumer[2], "user_data")
+    # Each template argument is read as ONE attribute of the templatefile map (top level of the map
+    # only, value balanced across lines, a top-level comma ends it), on the skeleton so a string
+    # literal can stand in for neither reference. The volume reference must be the whole value or
+    # the true branch of a single ternary.
+    ud_code = _top_attr(consumer[1], consumer[2], "user_data", collapse=False)
     ud_skel = _top_attr(consumer[2], consumer[2], "user_data", collapse=False)
-    vol_line = re.compile(
-        rf"(?m)^[ \t]*workspaces_volume_id[ \t]*=[ \t]*(?:[^\n]*?\?[ \t]*)?"
-        rf"{re.escape(vtype)}\.{re.escape(vname)}\[each\.key\]\.id[ \t]*(?::[^\n]*)?$"
-    )
-    tok_line = re.compile(
-        rf"(?m)^[ \t]*workspaces_luks_fresh_boot_token[ \t]*=[ \t]*{re.escape(kc['token'])}\.key[ \t]*$"
-    )
+    ud_map = _template_map(ud_code, ud_skel)
+    ref = rf"{re.escape(vtype)}\.{re.escape(vname)}\[each\.key\]\.id"
+    vol_val = _map_attr(ud_map, "workspaces_volume_id")
+    tok_val = _map_attr(ud_map, "workspaces_luks_fresh_boot_token")
     if (
         ud_code is None
-        or ud_skel is None
-        or not vol_line.search(ud_skel)
-        or not tok_line.search(ud_skel)
+        or ud_map is None
+        or vol_val is None
+        or tok_val is None
+        or not re.fullmatch(rf"(?:[^?]*\?\s*)?{ref}(?:\s*:[^?]*)?", vol_val)
+        or tok_val != f"{kc['token']}.key"
     ):
         fails.append(
             f"FAIL: {store} key_chain consumer {kc['consumer']} user_data does not carry the volume id "
@@ -1005,9 +1032,9 @@ def check_pinned_apparatus(
         if ci_path is not None and ci_path.is_file():
             init_text = line_comment_view(read_text(ci_path))
             run_at = re.search(r"(?m)^runcmd:[ \t]*$", init_text)
-            # The runcmd section ends at the next top-level key (write_files:, power_state:, ...).
+            # The runcmd section ends at the next column-0 line that is not a list item (any other top-level key).
             section = init_text[run_at.end() :] if run_at else ""
-            section = re.split(r"(?m)^[A-Za-z_][\w-]*:", section, maxsplit=1)[0]
+            section = re.split(r"(?m)^[^\s\-].*$", section, maxsplit=1)[0]
             init_ok = bool(
                 re.search(rf"(?m)^[ \t]*-[ \t]*/usr/local/bin/{re.escape(base)}[ \t]*$", section)
             )

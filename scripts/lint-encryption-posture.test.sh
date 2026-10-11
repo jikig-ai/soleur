@@ -1819,6 +1819,28 @@ mk_webclass_ledger "$LEDGER_N6" "" ""
 run_case_reports "WC-61 a string spelling volume_id = <volume>.id beside a wrapped live one -> FAIL does not attach" 1 \
   "does not attach" --repo-sweep --repo-root "$V" --ledger "$LEDGER_N6" --today "$TODAY"
 
+# WC-62..66: second fix-round re-probe (same-line commas, nested objects, multi-line ternary, YAML keys).
+V="$(wc_variant n7-comma)"
+sed -i 's|^\(    workspaces_volume_id  *= \).*$|\1"retired-6604", decoy = contains(keys(local.plaintext_workspaces_hosts), each.key) ? hcloud_volume.workspaces[each.key].id : "x"|' "$V/$INFRA/server.tf"
+run_case_reports "WC-62 the volume reference on a comma-separated second attribute -> FAIL user_data does not carry" 1 \
+  "user_data does not carry" --repo-sweep --repo-root "$V" --ledger "$WC_LEDGER" --today "$TODAY"
+V="$(wc_variant n8-nested-object)"
+sed -i 's|^\(    workspaces_volume_id  *= \).*$|\1"retired-6604"\n    unused = {\n      workspaces_volume_id = hcloud_volume.workspaces[each.key].id\n    }|' "$V/$INFRA/server.tf"
+run_case_reports "WC-63 the volume line only inside a nested object -> FAIL user_data does not carry" 1 \
+  "user_data does not carry" --repo-sweep --repo-root "$V" --ledger "$WC_LEDGER" --today "$TODAY"
+V="$(wc_variant n9-multiline-ternary)"
+sed -i 's|^\(    workspaces_volume_id  *= contains(keys(local.plaintext_workspaces_hosts), each.key) ?\) \(hcloud_volume.*\)$|\1\n      \2|' "$V/$INFRA/server.tf"
+run_case_reports "WC-64 a ternary wrapped across lines (reference on the true branch) -> PASS (positive control)" 0 \
+  "encryption-posture:" --repo-sweep --repo-root "$V" --ledger "$WC_LEDGER" --today "$TODAY"
+V="$(wc_variant n10-nested-ternary)"
+sed -i 's|^\(    workspaces_volume_id  *= \).*$|\1false ? "retired-6604" : var.x ? hcloud_volume.workspaces[each.key].id : "z"|' "$V/$INFRA/server.tf"
+run_case_reports "WC-65 the reference on the false branch of a nested ternary -> FAIL user_data does not carry" 1 \
+  "user_data does not carry" --repo-sweep --repo-root "$V" --ledger "$WC_LEDGER" --today "$TODAY"
+V="$(wc_variant n11-quoted-key)"
+printf 'runcmd:\n  - echo hi\n"write_files":\n  - /usr/local/bin/workspaces-luks-provision.sh\n' > "$V/$INFRA/cloud-init.yml"
+run_case_reports "WC-66 the invocation line under a quoted top-level key after runcmd: -> FAIL not installed" 1 \
+  "not installed by the consumer" --repo-sweep --repo-root "$V" --ledger "$WC_LEDGER" --today "$TODAY"
+
 # --- mutation rows for the new guards ---------------------------------------
 # run_mutation_inverse: for a PERMISSIVE arm. Baseline must PASS (exit 0) and the mutated
 # SUT must FAIL (exit 1); a control proves the baseline really passes so the row cannot
@@ -1865,7 +1887,7 @@ run_mutation "MB-L11" "MB-L11" "$V_DUP" "$LEDGER_DUP"
 # ---------------------------------------------------------------------------
 # Minimum-cardinality guard (an empty/short run must not GREEN).
 # ---------------------------------------------------------------------------
-MIN_CASES=112  # measured TOTAL at #9941 (47 at #6907 + the web-class cases); raise with every added case (slack is attack budget)
+MIN_CASES=117  # measured TOTAL at #9941 (47 at #6907 + the web-class cases); raise with every added case (slack is attack budget)
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then
