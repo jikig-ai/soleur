@@ -475,8 +475,16 @@ s = s.replace(old, """resource "terraform_data" "phantom_w3_probe" {
 
 # Terraform identifiers legally contain uppercase and hyphens. v1 matched `[a-z_0-9]+`, so such
 # a resource was skipped by every section at once -- and because all floors are `>=`, invisibly.
-# This is a GREEN control: after the rename the resource must still be swept (count unchanged).
-expect_green "control-C (uppercase/hyphen resource name is still swept)" server.tf '
+# This arm pins the width through the fleet-classification clause (added in the
+# same commit): a rename MUST red there, because `ONLY_JUSTIFIED` is keyed on the
+# exact resource name — the old key goes stale and the new name is uncovered.
+# Expected-RED, not green: the `uncovered=['Cosign-Trusted_Root@web-2']` token
+# only appears when the widened sweep actually matched the renamed resource —
+# a `[a-z_0-9]+`-only regression would emit the stale entry but no uncovered
+# entry for it. (The original expect_green shape was authored incompatible
+# with the classification clause and went RED on main; #9860.)
+expect_red "control-C (uppercase/hyphen rename is swept by the classification)" server.tf \
+  "uncovered=['Cosign-Trusted_Root@web-2']" '
 old = "resource \"terraform_data\" \"cosign_trusted_root\" {"
 assert old in s
 s = s.replace(old, "resource \"terraform_data\" \"Cosign-Trusted_Root\" {", 1)
