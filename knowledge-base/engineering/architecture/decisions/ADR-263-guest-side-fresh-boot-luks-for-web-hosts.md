@@ -818,3 +818,17 @@ rotation HALT's `create` exemption, which the apply path of this workflow requir
 **What is unchanged.** Every other judge and grader arm, the 72 h minimum, the 26 h freshness, the window rule, deletion of the marker on RED, and the #6931 directive. The wording in `scripts/web2-rebirth.sh` and `web2-luks-rebirth.yml` that named the old boot-id proof is corrected in the same PR; the restart step inside the rebirth workflow stays until the cleanup PR retires it together with the `web-host-reboot` workflow (closing row 5 of the rebirth runbook).
 
 **Status of the claim.** The rule is not yet met by graded rows. web-2 remains *provisioned, proof pending* until the #6931 grader reports PASS. Nothing in this addendum is evidence for the encryption-posture ledger, Article 30 or any customer-facing sentence.
+
+> **Superseded 2026-10-11 (#9372), as to "not yet met by graded rows":** the #6931 grader reported PASS on 2026-10-10 (sweeper run 38083925201). See the addendum at the end of this ADR.
+
+## Addendum — 2026-10-11 (#9372, the grade and the ledger flip)
+
+**The grade.** The #6931 grader (`scripts/followthroughs/web2-luks-live-6931.sh`) reported PASS on 2026-10-10 (sweeper run 38083925201: three distinct green days of probe rows after the readiness row of the running instance, boot dd08ac9d, no non-green row) and again on 2026-10-11 (four distinct days, newest probe row about 12 hours old). By the rule of the 2026-10-08 addendum, web-2 moves from *provisioned, proof pending* to *provisioned, proof graded*. The Hetzner read on 2026-10-11 shows the volume (id 107059048, born raw 2026-10-06T18:21Z) attached to web-2 and the old plaintext volume (id 106466179) gone (404).
+
+**The flip.** The `hcloud_volume.workspaces` row of `scripts/encryption-posture-ledger.json` reads `luks` with `live_verification: available`, its exception removed, and `live_coverage_floor` 3. The linter accepts it through the indexed-binding arm (ADR-140 addendum 2026-10-10): one identical `for_each` on the volume and its attachment, a key chain tied to the host, and the apparatus pinned to `workspaces-luks-provision.sh`. The Article 30 register and the compliance posture carry dated supersession markers; the counsel record is `knowledge-base/legal/audits/2026-10-counsel-review-9372.md`.
+
+**The claim boundary.** What the grade establishes is formatted/opened plus green probes. It does not establish that the volume can be reopened after a host restart (the rule decided on 2026-10-07 is immutability, and no restart is part of the evidence), and the static chain behind `available` describes new hosts only, because `user_data` is under `ignore_changes`; the running web-2 is covered by the probe rows alone. web-2 holds no personal data and stays at serving weight 0: the anti-pooling gate is unchanged, and the marker it reads still checks shape only (#9358).
+
+**Not discharged.** Passphrase-loss recovery for a data-bearing web-class host (#9948), the `escrow=missing` re-escrow step (#9949), the state restore substrate (#7992), and the emptiness-evidence strictness decision (#9642, owner-gated, undecided here). These stay conditioned on the data-bearing period and lapse the moment web-2 receives weight or data.
+
+**Status.** Unchanged: `adopting`.

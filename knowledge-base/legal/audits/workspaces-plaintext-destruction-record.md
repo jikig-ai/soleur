@@ -149,6 +149,8 @@ doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
 | **Passphrase copies** | Doppler `prd_workspaces_luks` (proven by W4); Terraform state `random_password.workspaces_luks` (not proven by this act). |
 | **Other copies of workspace data** | The live LUKS volume `106443278` (the only copy after the wipe); web-2's plaintext volume (intended empty, serving-weight 0, contents unprobed, #6931); the plaintext `git_data` volume (#6897 — it holds no repository: the #8634 re-attestation records the store empty and `GIT_DATA_STORE_ENABLED` off); the web-1 root-disk snapshot deleted under #8734; the CLEAN_STRAY root-disk stray deleted 2026-07-19. |
 
+> **Note added 2026-10-11 (#9372):** the "Other copies of workspace data" row above states web-2's plaintext volume as it stood on 2026-10-01 and is not rewritten. That volume (Hetzner id 106466179) was deleted through the Hetzner API during the gated rebirth on 2026-10-06 (apply run 37508997529), and web-2's volume is now id 107059048, LUKS-formatted and opened by the running instance; see `knowledge-base/legal/audits/2026-10-counsel-review-9372.md` for the evidence and for what is not claimed.
+
 ### What remains after the act (added 2026-10-01, #6604 PR #9348)
 
 | Field | Value |

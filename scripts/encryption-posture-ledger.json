@@ -1,6 +1,6 @@
 {
  "schema_version": 1,
- "live_coverage_floor": 2,
+ "live_coverage_floor": 3,
  "store_classes": {
   "hcloud_volume": {
    "kind": "guest-luks-volume",
@@ -318,21 +318,22 @@
    "device_binding": {
     "volume": "hcloud_volume.workspaces",
     "attachment": "hcloud_volume_attachment.workspaces",
-    "mapper": "workspaces-plain"
+    "mapper": "workspaces",
+    "apparatus": "apps/web-platform/infra/workspaces-luks-provision.sh",
+    "key_chain": {
+     "consumer": "hcloud_server.web",
+     "token": "doppler_service_token.workspaces_luks_fresh_boot_web",
+     "secret": "doppler_secret.workspaces_luks_web_key",
+     "password": "random_password.workspaces_luks_web"
+    }
    },
    "at_rest": {
-    "mechanism": "plaintext-exception",
-    "evidence": "apps/web-platform/infra/server.tf — resource hcloud_volume.workspaces (content anchor: `ignore_changes  = [format]`; for_each = local.plaintext_workspaces_hosts: every web host except web-1, i.e. web-2 only after #6604 step 7). The live web-2 volume was created `format = \"ext4\"` and remains plaintext until replaced. As of #6931 (ADR-263) the resource declares no `format`, so a volume BORN from now on is raw and LUKS-formatted at first boot by the baked workspaces-luks-provision.sh; the live web-2 volume is converted by a single-use gated rebirth (#9372), after which web-2's volume is luks with the daily probe as its live_verification. Until then the row is truthfully a plaintext exception.",
-    "defends_against": "nothing at the volume layer; the only instance left in Terraform config is web-2's (volume 106466179), which is intended to be empty (serving-weight 0, no traffic routed; its contents are unprobed, #6931). web-1's instance (volume 105149570), superseded by hcloud_volume.workspaces_luks at the 2026-07-23 cutover (verify run 30040444418), is retired under #6604 step 7: the wipe dispatch D concluded with delete_issued=true (run 37801674740, 2026-10-08) and the forget workflow removed its two state addresses (run 37803274724, 2026-10-08), both recorded in knowledge-base/legal/audits/workspaces-plaintext-destruction-record.md, and PR #9348 merges after both",
-    "does_not_defend": "a seized or snapshot-imaged web-2 volume exposes any workspace data written to it before the gated rebirth (#9372) converts it to LUKS-at-boot (the fresh-boot guest-side path delivered by #6931 serves only volumes born raw)",
+    "mechanism": "luks",
+    "evidence": "apps/web-platform/infra/server.tf — resource hcloud_volume.workspaces and hcloud_volume_attachment.workspaces share one for_each (content anchor: `for_each = local.plaintext_workspaces_hosts`, every web host except web-1: web-2 only). The volume declares no `format`, so it is born raw and the baked apps/web-platform/infra/workspaces-luks-provision.sh formats it at first boot (`cryptsetup luksFormat`, then `luksOpen`, mapper `workspaces`); the passphrase is the web-class key pair (random_password.workspaces_luks_web written to doppler_secret.workspaces_luks_web_key, read by the instance through doppler_service_token.workspaces_luks_fresh_boot_web). Observed 2026-10-10: volume 107059048 (soleur-web-platform-data-web-2, born raw 2026-10-06T18:21Z by the gated rebirth, apply run 37508997529) is attached to web-2; the running instance's readiness row reads `luks=1 luks_arm=opened escrow=ok` (boot dd08ac9d, 2026-10-07T20:07Z); the daily luks-monitor probe rows read `device_type=crypto_LUKS mount_source=/dev/mapper/workspaces` on three distinct days, and the #6931 grader returned PASS (sweeper run 38083925201). `available` here means: the probe is host-side luks-monitor rows read from Better Stack and judged daily by the `web2_marker` job of workspaces-luks-verify.yml (the web-1 SSH probe does not cover web-2). It establishes that the volume sits on a LUKS container the instance opened; it does not establish that the volume reopens after a reboot, and web-2 holds no workspace data. The static chain describes the declared configuration of new hosts (user_data is under ignore_changes); the running web-2 is covered by the probe rows alone. The hcloud_volume.registry row makes the same distinction: the two share the word and not the strength.",
+    "defends_against": "a seized, RMA'd or snapshot-imaged Hetzner block volume of web-2",
+    "does_not_defend": "a leaked credential; any read on the host while the mapper is open; reopen after a reboot (not graded); recovery from loss of the passphrase is not verified (two copies, Doppler and unversioned Terraform state; header restore never exercised, #9948); the escrow has no re-escrow step (#9949); the volume has no Hetzner delete protection; a future web host key is covered by static evidence only until its own probe exists",
     "disclosed_as": "not-publicly-claimed",
-    "live_verification": "unavailable:no probe reads web-2's volume contents; tracked #6931",
-    "exception": {
-     "justification": "web-2's per-host workspaces volume stays plaintext until the gated rebirth (#9372) replaces it: the fresh-host guest-side LUKS path (#6931, ADR-263) serves only volumes born raw and refuses the live ext4 volume; it takes no traffic (serving-weight 0) and is intended to be empty, though no probe reads its contents. Re-scoped by PR #9348 (#6604 step 7, authored 2026-10-01): web-1's retained rollback backstop, which this exception previously covered, left this exception when the wipe dispatch D concluded with delete_issued=true on 2026-10-08 (run 37801674740; destruction record)",
-     "tracking_issue": "#6931",
-     "reevaluate_when": "the gated rebirth (#9372) converts web-2 to LUKS-at-boot or web-2 takes any serving weight",
-     "expires_on": "2026-12-29"
-    }
+    "live_verification": "available"
    }
   },
   {
