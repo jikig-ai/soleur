@@ -1086,15 +1086,18 @@ tc_hidden="$(git -c core.excludesFile=/dev/null ls-files -ci --exclude-standard 
 # the fold at the top level (adjacent, unindented, once each), the probe verdict gate below, and a single exit. Each pinned pattern is anchored to
 # the whole statement at column 0 on a non-comment line, so a mention in a comment or in a message string (this check's own) cannot satisfy it,
 # and an indented copy inside a dead branch or a function does not count. Statements that can still reach the exit (an inserted assignment
-# elsewhere, a trap) are not pinned here: the guard cannot defend its own control flow beyond these text pins, and a diff that edits it is reviewed.
+# elsewhere, a trap, an `exit` placed ahead of these pins) are not pinned here: the guard cannot defend its own control flow beyond these text
+# pins, and a diff that edits it is reviewed.
 _code=$(grep -vE '^[[:space:]]*#' "${BASH_SOURCE[0]}")
 wire_a=$(grep -cE '^sweep_main \. "\$SWEEP_FLOOR" \|\| sweep_rc=\$\?[[:space:]]*$' <<<"$_code" || true)
 wire_b=$(grep -cE '^sweep_fold "\$sweep_rc"[[:space:]]*$' <<<"$_code" || true)
 wire_adj=$(grep -A1 -E '^sweep_main \. "\$SWEEP_FLOOR" \|\| sweep_rc=\$\?[[:space:]]*$' <<<"$_code" | grep -cE '^sweep_fold "\$sweep_rc"[[:space:]]*$' || true)
+[[ "$wire_a" == 1 && "$wire_b" == 1 && "$wire_adj" == 1 ]] \
+  || sweep_probe_fail+=("return-wiring: unindented capture ${wire_a:-<err>}, fold ${wire_b:-<err>}, capture immediately followed by the fold ${wire_adj:-<err>} (want exactly 1 each). This protects the path by which the sweep verdict reaches this suite's exit status. Expected, at column 0 and once each: 'sweep_main . \"\$SWEEP_FLOOR\" || sweep_rc=\$?' directly followed by 'sweep_fold \"\$sweep_rc\"'. Fix: restore the statement; if it moved legitimately, update this pin, not the sweep")
+# The verdict gate and the final exit are pinned the same way, but they report DIRECTLY (FAIL and exit 1 below, just ahead of the gate): a failure
+# appended to sweep_probe_fail is read by that very gate, so a gate edited to always pass would silence its own pin.
 wire_gate=$(grep -cE '^if \(\( \$\{#sweep_probe_fail\[@\]\} == 0 \)\); then[[:space:]]*$' <<<"$_code" || true)
 wire_exit=$(grep -cE '^exit "\$FAIL"[[:space:]]*$' <<<"$_code" || true)
-[[ "$wire_a" == 1 && "$wire_b" == 1 && "$wire_adj" == 1 && "$wire_gate" == 1 && "$wire_exit" == 1 ]] \
-  || sweep_probe_fail+=("return-wiring: unindented capture ${wire_a:-<err>}, fold ${wire_b:-<err>}, capture immediately followed by the fold ${wire_adj:-<err>}, probe verdict gate ${wire_gate:-<err>}, final exit ${wire_exit:-<err>} (want exactly 1 each). This protects the path by which the sweep verdict reaches this suite's exit status. Expected, at column 0 and once each: 'sweep_main . \"\$SWEEP_FLOOR\" || sweep_rc=\$?' directly followed by 'sweep_fold \"\$sweep_rc\"', 'if (( \${#sweep_probe_fail[@]} == 0 )); then' and 'exit \"\$FAIL\"'. Fix: restore the statement; if it moved legitimately, update this pin, not the sweep")
 
 # Exit status of grep -q<f> versus grep -c<f> >/dev/null, one row per cluster class, under bash and under sh from PATH (when sh is bash the second pass
 # proves nothing extra and still holds). This is the one executable check that the drained form every converted site uses keeps grep -q's exit status.
@@ -1127,6 +1130,10 @@ SWEEP_PROBE_CHECKS=36
 probe_checks=$(grep -cE '(\|\||&&)[[:space:]]+sweep_probe_fail\+=\(' <<<"$_code" || true)
 [[ "$probe_checks" == "$SWEEP_PROBE_CHECKS" ]] \
   || sweep_probe_fail+=("probe-count: this probe carries ${probe_checks:-<err>} checks, pinned at $SWEEP_PROBE_CHECKS — a deleted check cannot fail, so restore it or, if you ADDED one, raise SWEEP_PROBE_CHECKS")
+if [[ "$wire_gate" != 1 || "$wire_exit" != 1 ]]; then
+  echo "FAIL: return-wiring: the probe verdict gate matched ${wire_gate:-<err>} lines and the final exit ${wire_exit:-<err>} (want exactly 1 each, at column 0). Expected 'if (( \${#sweep_probe_fail[@]} == 0 )); then' and 'exit \"\$FAIL\"'. Fix: restore the statement; if it moved legitimately, update this pin, not the sweep"
+  exit 1
+fi
 if (( ${#sweep_probe_fail[@]} == 0 )); then
   echo "PASS: grep-q-sweep-probe-pass (PATTERN_V2 fixtures, sweep wiring, deferral checks)"
 else
