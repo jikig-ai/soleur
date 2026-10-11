@@ -2784,7 +2784,7 @@ resource "terraform_data" "egress_gateway_web2" {
     script_path = "/root/tf-egress-gateway-web2-%RAND%.sh"
     # web-2's SSH route is slow (~70s per dial — 4 file uploads alone burn ~4m40s
     # before remote-exec + docker pull start; the 2026-10-11 apply died at 5m03s).
-    timeout     = "15m"
+    timeout = "15m"
   }
 
   provisioner "remote-exec" {
