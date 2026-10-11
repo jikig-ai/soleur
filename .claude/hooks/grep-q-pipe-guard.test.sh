@@ -1136,7 +1136,9 @@ eqv_sh="$(_eqv "$EQV_SH")"
 # STATED LIMITS (each is a follow-on slice of #9217, the derivation-recall slice): a pipe split over lines by a trailing backslash or
 # pipe (about 24 more pairs), a verb behind a wrapper (timeout, env, command), a producer other than printf/echo/cat, a pipe in a
 # library with no pipefail token of its own, a stub built through a helper that takes an argument or a loop over verb names, a stub
-# sourced two or more hops away, a verb named through a variable, and a producer in a file type outside .sh .bash .yml .yaml.
+# sourced two or more hops away, a verb named through a variable, a pipe written inside an annotation echo (the text after ::error:: and its kin is
+#      not scanned), and a producer in a file type outside .sh .bash .yml .yaml. A bare exit or return line ahead of the drain disarms it even in an
+#      earlier case arm (use an arm-drain row for such a stub).
 # Only tracked files are read, so a new untracked file is invisible until it is staged. An `exempt` row is an attestation: only its
 # first word is checked, and the reach column of the evidence file (not this table) says which pairs ran at all. This bash
 # derivation is AUTHORITATIVE; j0-derive.py in the spec directory is a point-in-time measurement of the base commit.
@@ -1260,9 +1262,10 @@ FNR == 1 {
 {
   if ($0 ~ /^[ \t]*#/) next
   l = $0
+  sub(/::(error|warning|notice)::.*$/, "", l)   # an annotation echo shows the operator a command: its text is not a pipe, a pipe BEFORE it on the line still is
   if (index(l, "pipefail")) pf = 1
   if (isy && l ~ /shell:[ \t]*bash/) pf = 1
-  if (isnt && index(l, "|") && (index(l, "printf") || index(l, "echo") || index(l, "cat")) && l !~ /::(error|warning|notice)::/) {   # an annotation echo that shows the operator a command is text, not a pipe
+  if (isnt && index(l, "|") && (index(l, "printf") || index(l, "echo") || index(l, "cat"))) {
     o = (l !~ UNOBS); s = l
     while (match(s, PIPE)) {
       m = substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH)
@@ -1367,7 +1370,7 @@ END {
 PJ_DETECT='(^|[^[:alnum:]_./-])(cat([[:space:]]*([)]|>|;|[}]|[|][|]|$))|dd[[:space:]]+of=)'
 # ...minus the shapes that look like a drain and are not one: cat as the right side of a pipe, behind a constant short-circuit, behind a
 # non-negated tty test (it reads only on a terminal), backgrounded, or with a heredoc (cat <<EOF reads the heredoc, not the pipe).
-PJ_NODRAIN='[^|][|][[:space:]]*cat|(true|false|:)[[:space:]]*(&&|[|][|])[[:space:]]*cat|[[][[:space:]]+-t[[:space:]]+0[[:space:]]+[]][[:space:]]*&&|[^&]&[[:space:]]*$|cat[^|;]*<<'
+PJ_NODRAIN='[^|][|][[:space:]]*cat|(true|false|:)[[:space:]]*(&&|[|][|])[[:space:]]*cat|[[][[]?[[:space:]]+-t[[:space:]]+0[[:space:]]+[]][]]?[[:space:]]*&&|[^&]&[[:space:]]*$|cat[^|;]*<<'
 pj_defs() { awk -v verb="$2" -v token="$3" -v win="$PJ_DRAIN_WINDOW" -v detect="$PJ_DETECT" -v nodrain="$PJ_NODRAIN" "$PJ_DEFS_AWK" "$1"; }
 pj_detects() { awk -v detect="$PJ_DETECT" -v nodrain="$PJ_NODRAIN" 'BEGIN { exit !(ARGV[1] ~ detect && ARGV[1] !~ nodrain) }' "$1"; }
 PJ_FAIL=0
@@ -1523,6 +1526,7 @@ PJ_DRAIN_BAD=(
   'bash|[ ! -t 0 ] || true'
   'sh|cat < /dev/null'
   'bash|[ -t 0 ] && cat >/dev/null'
+  'bash|[[ -t 0 ]] && cat >/dev/null'
   'sh|printf x | cat >/dev/null'
   'sh|true || cat >/dev/null'
   'sh|cat >/dev/null &'
@@ -1537,7 +1541,11 @@ pj_hazard() {
   timeout 20 bash -c 'set -o pipefail; [ "$1" = ignore ] && trap "" PIPE; shift; head -c 1048576 /dev/zero 2>/dev/null | "$@" -K -' _ "$disp" ${runner:+"$runner"} "$stub" >/dev/null 2>&1 || rc=$?
   printf '%s' "$rc"
 }
+# pj_unread <rc>: only EPIPE (1) and SIGPIPE (141) mean "the pipeline failed because the stub never read"; a syntax error, exit 3, a timeout or a missing shell is an instrument fault.
+pj_unread() { case "$1" in 1|141) return 0 ;; *) return 1 ;; esac; }
 pj_dyn_ctl=""; pj_dyn_ok=""; pj_dyn_bad=""; pj_dyn_n=0
+pj_unread 141 && pj_unread 1 && ! pj_unread 0 && ! pj_unread 3 && ! pj_unread 124 && ! pj_unread 127 || pj_dyn_ctl+="[pj_unread grades a status it must not]"
+[[ "$(pj_hazard bash default 'exit 3')" == 3 ]] || pj_dyn_ctl+="[an exit 3 stub did not surface rc 3]"
 for _d in ignore default; do
   for _i in sh bash; do [[ "$(pj_hazard "$_i" "$_d" ':')" != 0 ]] || pj_dyn_ctl+="[$_i/$_d control stub exited unread and the pipeline still succeeded]"; done
   for _e in ${PJ_DRAIN_OK[@]+"${PJ_DRAIN_OK[@]}"}; do
@@ -1546,7 +1554,7 @@ for _d in ignore default; do
   done
   for _e in ${PJ_DRAIN_BAD[@]+"${PJ_DRAIN_BAD[@]}"}; do
     pj_dyn_n=$((pj_dyn_n + 1))
-    case "$(pj_hazard "${_e%%|*}" "$_d" "${_e#*|}")" in 1|141) ;; *) pj_dyn_bad+="[${_e%%|*}/$_d ${_e#*|}]" ;; esac   # only EPIPE (1) and SIGPIPE (141) mean "failed because unread": a syntax error, exit 3 or a missing shell is an instrument fault
+    pj_unread "$(pj_hazard "${_e%%|*}" "$_d" "${_e#*|}")" || pj_dyn_bad+="[${_e%%|*}/$_d ${_e#*|}]"
   done
 done
 pj_det_bad=""
