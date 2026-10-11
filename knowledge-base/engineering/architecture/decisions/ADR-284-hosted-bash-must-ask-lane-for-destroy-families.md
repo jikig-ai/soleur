@@ -117,8 +117,19 @@ the existing-workspace opt-out hold and the batched-approval cache. A match RETU
 
 The factory-wiring test proves the real `createCanUseTool` sits in the same SDK options object as the sandbox that carries
 `autoAllowBashIfSandboxed`, that `permissions.allow` stays empty and that a destroy command reaches the review gate in an acked
-autonomous workspace. **It does not prove that the real SDK still calls `canUseTool` under `autoAllowBashIfSandboxed`:** the SDK is
-mocked, and that rests on the #3252 behaviour. The runtime proof is the post-deploy dev probe below (CLO C9).
+autonomous workspace. **It does not prove that the real SDK calls `canUseTool` for sandboxed Bash:** the SDK is
+mocked. The runtime proof is the real-SDK probe `apps/web-platform/scripts/dev-probe-destroy-ask.ts` (CLO C9).
+
+**C9 result (2026-10-11, #10054).** Against the production pin (SDK 0.3.284, Claude Code 2.1.293) and the production option builder
+the probe **failed** at #9977: `canUseTool` was never called for sandboxed Bash, so this lane, the safe-Bash allowlist, the autonomous
+toggle gate and the batch cache were all inert (and had been since the SDK upgrade in #9236). Two independent causes, either enough:
+`autoAllowBashIfSandboxed: true`, and the PreToolUse sandbox hook returning an explicit `allow` for every Bash command (a hook allow
+resolves the permission before `canUseTool`). The forward fix sets `autoAllowBashIfSandboxed: false` (the sandbox stays on) and makes
+the hook return no decision for Bash (`{ continue: true }`; the sensitive-env deny stays). After the fix the same probe passes: the
+force-push to the default branch, `terraform destroy` and a `bash -lc` variant each reach the Approve/Reject card and, answered
+Reject, leave the remote's default branch unchanged; a plain push to a feature branch is not asked. Consequence: every hosted Bash
+call now reaches `createCanUseTool`, so a non-autonomous workspace shows an Approve card for each command outside the safe allowlist,
+as that callback was always written to do. Re-run the probe after any SDK, CLI or sandbox-option bump.
 
 ### Residuals (not recognised; named so the copy and the control page never imply otherwise)
 

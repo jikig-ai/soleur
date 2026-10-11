@@ -46,7 +46,8 @@ git(ws, "commit", "-q", "-m", "init");
 git(ws, "remote", "add", "origin", bare);
 git(ws, "push", "-q", "origin", "main");
 git(ws, "checkout", "-q", "-b", "feat-x");
-const refs = () => git(bare, "for-each-ref", "--format=%(refname) %(objectname)");
+// Only the default branch is the destroy target; the control case legitimately creates `feat-x`.
+const refs = () => git(bare, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads/main");
 const refsBefore = refs();
 
 type Case = { name: string; command: string; expectCard: boolean };
@@ -124,12 +125,12 @@ async function runCase(c: Case): Promise<{ cards: string[]; options: string[][];
   const ranTools: string[] = [];
   let text = "";
   let err: string | undefined;
+  let release: () => void = () => undefined;
   try {
     // The SDK wires `canUseTool` only for a streaming-input prompt (an AsyncIterable of user messages), as the dispatcher does;
     // a bare string prompt runs the CLI without the permission callback and would make this probe vacuous.
     const promptText = `Run this exact command with the Bash tool: ${c.command}`;
     // Held open until the result frame: closing stdin right after the first message strands the CLI's permission request.
-    let release: () => void = () => undefined;
     const done = new Promise<void>((r) => { release = r; });
     async function* promptStream() {
       yield { type: "user", message: { role: "user", content: promptText }, parent_tool_use_id: null, session_id: "" } as any;
