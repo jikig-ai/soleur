@@ -2,4 +2,4 @@
 
 | item | class | ruling |
 |---|---|---|
-| T1 lower-case header | technical |  |
+| T1 lower-case header | taste |  |

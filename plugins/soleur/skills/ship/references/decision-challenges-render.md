@@ -14,6 +14,8 @@ Phase 6 **full-replaces** the body, so fold the artifact into the generated body
 
 - **`technical` rows** go in a `### Ruled by CTO agent` sub-block of that same heading, each with its `Ruled by` line
   (and `Dissent:`). They file **no issue**: a technical ruling never reaches the operator.
+- **`taste` rows** render in the same `## Model Dissents (informational)` block as plain informational lines (the model's choice and its
+  recommendation); they file no issue.
 - **`operator (<category>)` rows** render in the existing form, and ONLY these open one idempotent issue. Check
   `gh issue list --search "decision-challenge <branch>" --state open -L 200` first, then
   `gh issue create --label action-required --label decision-challenge --milestone "Post-MVP / Later"` with a plain-language
@@ -33,9 +35,10 @@ Phase 6 **full-replaces** the body, so fold the artifact into the generated body
    here, in the main context, so a wrong assumption does not ride through `work` and `review`.
 2. **ship Phase 5.5:** `--branch` (the artifact check; it also looks under `specs/archive/` for this branch).
 3. **ship Phase 6, right after the `gh pr edit` that writes the final body and before `gh pr ready`:**
-   `b=$(mktemp -t pr-body.XXXXXXXX) && gh pr view PR_NUMBER --json body --jq .body > "$b" && bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/technical-ruling-gate.sh" --pr-body "$b"; rc=$?; rm -f "$b"`
-   (read `rc` on its own line). Exit 0: go on to `gh pr ready`. Exit 1: remedy item 4 below, then `gh pr edit` and re-run. Exit 2
-   (the fetch failed, the body is empty, or the file is unreadable): fix the fetch and re-run; never `gh pr ready` past it.
+   `b=$(mktemp -t pr-body.XXXXXXXX); if gh pr view PR_NUMBER --json body --jq .body > "$b"; then bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/technical-ruling-gate.sh" --pr-body "$b"; rc=$?; else rc=2; fi; rm -f "$b"; echo "gate-rc=$rc"`
+   Read the printed `gate-rc=`; no `gate-rc=0` line means do not proceed. Exit 0: go on to `gh pr ready`. Exit 1: remedy item 4 below, then
+   `gh pr edit` and re-run. Exit 2 (the fetch failed, the body is empty or whitespace-only, an unclosed fence, or an unreadable file):
+   fix the fetch and re-run (at most three tries, then stop with the PR draft); never `gh pr ready` past it.
    Phase 6 full-replaces the body, so the body must be checked after it is written.
 
 The plugin root is `${CLAUDE_PLUGIN_ROOT}` (cloud shells do not export it: resolve it as the Cloud Mode paragraph of ship/SKILL.md does).
@@ -47,9 +50,10 @@ table: a later writer adds its own `| Item | Class | Ruling |` header and separa
 
 ## Remedy procedure (a `[FAIL]` is never a bare stop)
 
-1. For each `unruled-technical` row (blank ruling or a `pending - assumed` placeholder): spawn `soleur:engineering:cto` (`soleur:legal:clo` for
-   legal) per the delegation step, write the `Ruled by` cell, commit, re-run the gate.
-2. **At most two spawns per artifact.** A spawn that fails, times out, or returns without Decision and Rationale counts as
+1. ONE batched spawn of `soleur:engineering:cto` (`soleur:legal:clo` for legal) carries ALL `unruled-technical` rows (a blank ruling or a
+   `pending - assumed` placeholder), per the delegation step; write each `Ruled by` cell, commit, re-run the gate. If a ruling differs
+   from what was built on the assumption, re-enter `work` for that item and amend the plan and tasks.
+2. **At most two spawns per pipeline run** (a spawn from `one-shot` counts toward `ship`'s). A spawn that fails, times out, or returns without Decision and Rationale counts as
    an attempt. A ruling that says the item is actually operator-class rewrites the row as `operator (<category>)` with the
    CTO's reason, once.
 3. After the cap the terminal state is **not** an operator question: the PR stays draft and ship files ONE

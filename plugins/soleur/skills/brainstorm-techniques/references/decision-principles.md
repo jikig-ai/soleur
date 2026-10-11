@@ -111,7 +111,7 @@ operator-class challenge.
 **The artifact carries a `## Decision Classes` table** (columns `Item | Class | Ruling`, one row per persisted decision,
 whatever shape the free-form body uses; `Class` is `technical`, `taste` or `operator (<category>)`). The schema, the closed
 category list and a canonical example are in [technical-ruling-delegation.md](./technical-ruling-delegation.md)
-(section 6); `ship`'s Technical-Ruling Gate parses only that table.
+(section 6); `ship`'s Technical-Ruling Gate scans every such table (plus a file-wide placeholder and label lint).
 
 ### User-Challenge 5-line frame
 

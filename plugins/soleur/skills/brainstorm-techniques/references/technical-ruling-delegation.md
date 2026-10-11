@@ -52,13 +52,14 @@ When a phase reaches a technical ruling, spawn the owner of the domain and conti
 Copy this brief, filling the angle brackets (a CTO that is not told the shape returns an options menu, which is not a ruling):
 
 ```text
-Rule on this technical question. Do NOT use AskUserQuestion. Choose ONE option; do not return a menu.
+Rule on this technical question. Do NOT use AskUserQuestion. Your Decision is BINDING and will be implemented exactly as you return it; nobody can answer a follow-up (this run is headless). Choose ONE option; do not return a menu. You may read the repository to check the evidence. If the evidence is thin, choose the STRICTER option and say what evidence would flip the ruling.
 Question: <the question>
 Evidence (file:line, command output): <evidence>
 Options and trade-offs: <options>
 Brand-survival threshold: <the plan's value>
 Facts that would DISQUALIFY the option not preferred: <facts>
 Reply with exactly these four headings: Decision: / Rationale: / Rejected alternatives: / Dissent:
+(For several pending rows in one spawn, give one such block per row, headed `Item <id>:`.)
 ```
 
 For legal posture add the governing records (determination, Art. 30 / 30(2) registers, LIA, any instrument) and the binding
@@ -67,7 +68,7 @@ different cost: it goes through the threshold catalog, never as an inline questi
 approval gate, so it fires in pipeline mode too. **Weight is not a routing signal**: a decision feeling consequential
 is the reason to route it to its owner, never past it. A headless Task subagent that has the `Agent` tool spawns the
 leader itself; one that does not returns the row as `pending - assumed: <default>` and its parent obtains the ruling
-(one-shot right after the plan phase, otherwise `ship` Phase 5.5). **One batched spawn carries ALL pending rows**; the two-spawn cap counts spawns, not rows, and each spawn is added to the pipeline tally (`incr agent_rounds`).
+(one-shot right after the plan phase, otherwise `ship` Phase 5.5). **One batched spawn carries ALL pending rows**; the two-spawn cap counts spawns, not rows, and covers the whole pipeline run (one-shot's spawns count toward `ship`'s), each added to the pipeline tally (`incr agent_rounds`).
 
 Reserve external escalation (qualified counsel, a vendor, a regulator) for what cannot be decided in-house, through
 the threshold catalog in `knowledge-base/legal/recommended-tools.md` plus a tracked issue, never as an inline operator
@@ -101,7 +102,8 @@ per persisted decision, whatever shape the free-form body uses. Columns: `Item |
 
 - **Class:** `technical`, `taste`, or `operator (<category>)` with a category from section 1; a bare `operator` is
   invalid. `taste` is the user-legible Taste class of [decision-principles.md](./decision-principles.md): auto-decided
-  with a recommendation and rendered under Model Dissents; it needs no ruling cell and files no issue. A user-visible
+  with a recommendation and rendered under Model Dissents in the PR body; it needs no ruling cell and files no issue (accepted
+  residual: a preference the model auto-decided is recorded where the operator reads the PR, not filed as an issue). A user-visible
   *preference* is `taste`, never an operator category. A technical row that overrides a direction the operator STATED also
   gets an `operator (scope)` row naming that override, so the operator sees it.
 - **Ruling, technical row:** `Ruled by CTO agent, <date>: <decision> - <rationale>` (`CLO` for legal; and `Dissent: <line>` when

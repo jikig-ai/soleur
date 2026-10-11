@@ -587,7 +587,13 @@ describe("Technical-ruling delegation wiring", () => {
     expect(gateSection.slice(0, 1200).includes("${CLAUDE_PLUGIN_ROOT}/" + GATE) && gateSection.slice(0, 1200).includes("--branch")).toBe(true);
     const step45 = ship.slice(ship.indexOf("4.5. **Technical-ruling body check"));
     expect(step45.slice(0, 700).includes("${CLAUDE_PLUGIN_ROOT}/" + GATE) && step45.slice(0, 700).includes("--pr-body")).toBe(true);
-    for (const f of [oneShot, ship, read("skills/ship/references/decision-challenges-render.md")]) {
+    // Exit handling is part of the contract, not just the invocation.
+    expect(osStep.includes("**2** the gate could not measure"), "one-shot lost its exit-2 handling").toBe(true);
+    expect(gateSection.slice(0, 1200).includes("2 unmeasured: fix, never continue"), "ship 5.5 lost its exit-2 handling").toBe(true);
+    expect(step45.slice(0, 700).includes("gate-rc=") && step45.slice(0, 700).includes("never ready past it"), "ship step 4.5 lost its exit handling").toBe(true);
+    const renderDoc = read("skills/ship/references/decision-challenges-render.md");
+    expect(renderDoc.includes('echo "gate-rc=$rc"') && renderDoc.includes("else rc=2; fi"), "the --pr-body recipe lost its fetch-failure exit 2 or its rc print").toBe(true);
+    for (const f of [oneShot, ship, renderDoc]) {
       expect(/bash\s+"?plugins\/soleur\/skills\/ship\/scripts\/technical-ruling-gate\.sh/.test(f), "a repo-relative gate path breaks end-user installs").toBe(false);
     }
   });

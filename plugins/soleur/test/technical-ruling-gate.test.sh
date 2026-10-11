@@ -36,6 +36,7 @@ REFERENCE="$REPO_ROOT/plugins/soleur/skills/brainstorm-techniques/references/tec
 RULES="$REPO_ROOT/AGENTS.rules.md"
 RULE_ID='hr-technical-fork-is-not-an-operator-question'
 
+sed_inplace() { local f="${*: -1}"; sed "${@:1:$#-1}" "$f" > "$f.new" && mv "$f.new" "$f"; }
 EXEC_LOG="$TMP/exec.log"
 : > "$EXEC_LOG"
 
@@ -108,6 +109,7 @@ label with an invented category|label-vibes.md|1|owner-label-unscoped
 label plural spelling|label-plural.md|1|owner-label-unscoped
 label alternative spelling|label-alt.md|1|owner-label-unscoped
 fence closed by a different char must not hide a row|fence-mixed.md|1|unruled-technical
+bom first line is examined|bom-unruled.md|1|unruled-technical
 row5 owner label unscoped in the artifact|owner-label-unscoped.md|1|owner-label-unscoped
 row9 ruling shape|bad-ruling-shape.md|1|bad-ruling-shape
 pending prose|pending-prose.md|1|unruled-technical
@@ -131,6 +133,15 @@ run "$GATE" "$FIXTURES/second-table.md"
 ln="$(grep -n 'B second writer technical row' "$FIXTURES/second-table.md" | cut -d: -f1)"
 assert_eq "1" "$(grep -cE "^\[FAIL\] .*:${ln}: unruled-technical - " "$TMP/last.err" || true)" "second table: the unruled row of the later table is examined, by its file line"
 
+run "$GATE" "$FIXTURES/shape-dates.md"
+assert_eq "4" "$(grep -cE '^\[FAIL\] .*: bad-ruling-shape - ' "$TMP/last.err" || true)" "each of year, month, day and an empty decision is flagged on its own row"
+# Finding line numbers are file lines (the label and the pending lints too).
+run "$GATE" "$FIXTURES/owner-label-unscoped.md"
+ln="$(grep -n 'Owner decision needed' "$FIXTURES/owner-label-unscoped.md" | head -1 | cut -d: -f1)"
+assert_eq "1" "$(grep -cE "^\[FAIL\] .*:${ln}: owner-label-unscoped - " "$TMP/last.err" || true)" "a label finding names its file line"
+run "$GATE" "$FIXTURES/pending-prose.md"
+ln="$(grep -n 'pending - assumed' "$FIXTURES/pending-prose.md" | head -1 | cut -d: -f1)"
+assert_eq "1" "$(grep -cE "^\[FAIL\] .*:${ln}: unruled-technical - " "$TMP/last.err" || true)" "a pending finding names its file line"
 run "$GATE" "$FIXTURES/pending-bare.md"
 assert_eq "3" "$(grep -cE '^\[FAIL\] .*: bad-ruling-shape - ' "$TMP/last.err" || true)" "a bare pending and both spelling variants are each their own finding"
 run "$GATE" "$FIXTURES/shape-variants.md"
@@ -153,11 +164,11 @@ assert_eq "2" "$(last_rc)" "a directory is exit 2"
 run "$GATE"
 assert_eq "2" "$(last_rc)" "no arguments is exit 2"
 
-for f in header-drift header-lower fence-unclosed empty-first; do
+for f in header-drift header-lower fence-unclosed empty-first empty ws-only stray-blank stray-nolead; do
   run "$GATE" "$FIXTURES/$f.md"
   assert_eq "2" "$(last_rc)" "$f is exit 2 (could not measure), never a quiet WARN"
 done
-for f in fence-tilde fence-indent crlf ws-row escaped-pipe case-mixed later-unrelated-table; do
+for f in fence-tilde fence-indent crlf ws-row escaped-pipe case-mixed later-unrelated-table bom unrelated-data-row fence-short-close fence-info-close table-in-tilde table-in-indent; do
   run "$GATE" "$FIXTURES/$f.md"
   assert_eq "0" "$(last_rc)" "$f exits 0"
   assert_verdict_line "$f"
@@ -183,6 +194,17 @@ run "$GATE" --pr-body "$TMP/empty-body.md"
 assert_eq "2" "$(last_rc)" "--pr-body on an EMPTY body (a failed fetch) is exit 2, never a PASS"
 run "$GATE" --pr-body "$FIXTURES/pr-body-pending.md"
 assert_eq "1" "$(last_rc)" "--pr-body fails a surviving pending - assumed placeholder"
+printf ' \n\n  \n' > "$TMP/ws-body.md"
+run "$GATE" --pr-body "$TMP/ws-body.md"
+assert_eq "2" "$(last_rc)" "--pr-body on a whitespace-only body (the newline gh writes for an empty body) is exit 2"
+run "$GATE" --pr-body "$FIXTURES/pr-body-unclosed.md"
+assert_eq "2" "$(last_rc)" "--pr-body with an unclosed fence is exit 2, never a PASS"
+run "$GATE" --pr-body "$FIXTURES/pr-body-inline-code.md"
+assert_eq "0" "$(last_rc)" "--pr-body may quote the label and the placeholder inside inline code"
+run "$GATE" --pr-body "$FIXTURES/pr-body-label-spellings.md"
+assert_eq "3" "$(grep -cE '^\[FAIL\] .*: owner-label-unscoped - ' "$TMP/last.err" || true)" "spacing, verb and word-order variants of the label are each caught"
+run "$GATE" --pr-body "$FIXTURES/pr-body-pending-spaced.md"
+assert_eq "1" "$(last_rc)" "a spaced or en-dash pending placeholder in a PR body is exit 1"
 awk 'BEGIN { for (i = 0; i < 256; i++) print "Owner decision needed: x" }' > "$TMP/wrap.md"
 run "$GATE" --pr-body "$TMP/wrap.md"
 assert_eq "1" "$(last_rc)" "exactly 256 unscoped labels is still exit 1 (the count does not wrap)"
@@ -217,6 +239,17 @@ assert_eq "2" "$(last_rc)" "two archive directories for one branch is exit 2 (am
 mkdir -p "$TMP/nogit"
 set +e; (cd "$TMP/nogit" && env -u TRG_BRANCH -u TRG_SPECS_ROOT GIT_CEILING_DIRECTORIES="$TMP" bash "$GATE" --branch) >"$TMP/last.out" 2>"$TMP/last.err"; echo "$?" > "$TMP/last.rc"; set -e
 assert_eq "2" "$(last_rc)" "--branch outside a git repository is exit 2, never a PASS"
+mkdir -p "$SPECS/archive/2026-01-01-redis-cache" "$SPECS/archive/20260101-000000-feat-technical-ruling-gate"
+cp "$FIXTURES/no-class.md" "$SPECS/archive/2026-01-01-redis-cache/decision-challenges.md"
+cp "$FIXTURES/no-class.md" "$SPECS/archive/20260101-000000-feat-technical-ruling-gate/decision-challenges.md"
+TRG_BRANCH=feat-cache run "$GATE" --branch
+assert_eq "0" "$(last_rc)" "a short slug never suffix-matches another feature's longer archive name (feat-cache vs redis-cache)"
+TRG_BRANCH=fix-gate run "$GATE" --branch
+assert_eq "0" "$(last_rc)" "a timestamped archive for another branch is not matched by a short slug"
+TRG_BRANCH=HEAD run "$GATE" --branch
+assert_eq "2" "$(last_rc)" "a detached HEAD is exit 2"
+TRG_BRANCH="head" run "$GATE" --branch
+assert_eq "0" "$(last_rc)" "a real branch named head (any case) is a branch, not a detached HEAD"
 TRG_BRANCH=feat-nothing run "$GATE" --branch
 assert_eq "0" "$(last_rc)" "--branch with no artifact anywhere is exit 0"
 assert_eq "1" "$(grep -cF '[PASS] no decision-challenges artifact' "$TMP/last.out" || true)" "--branch absent artifact prints the PASS line"
@@ -255,20 +288,20 @@ if parity_ok "$GATE" "$REFERENCE" "$RULES"; then
 else
   echo "  FAIL: row7: category parity broken"; FAIL=$((FAIL + 1))
 fi
-cp "$REFERENCE" "$TMP/ref-mut.md"; sed -i 's/ | brand`/`/;s/`money | scope | priority | schedule | irreversible | production-mutating | legal-risk | brand`/`money | scope | priority | schedule | irreversible | production-mutating | legal-risk`/' "$TMP/ref-mut.md"
+cp "$REFERENCE" "$TMP/ref-mut.md"; sed_inplace 's/ | brand`/`/;s/`money | scope | priority | schedule | irreversible | production-mutating | legal-risk | brand`/`money | scope | priority | schedule | irreversible | production-mutating | legal-risk`/' "$TMP/ref-mut.md"
 if parity_ok "$GATE" "$TMP/ref-mut.md" "$RULES"; then
   echo "  FAIL: row7: a category removed from the reference alone was not caught"; FAIL=$((FAIL + 1))
 else
   echo "  PASS: row7: a category removed from the reference alone reddens parity"; PASS=$((PASS + 1))
 fi
-cp "$RULES" "$TMP/rules-mut.md"; sed -i "/\[id: $RULE_ID\]/s/brand/colour/Ig" "$TMP/rules-mut.md"
+cp "$RULES" "$TMP/rules-mut.md"; sed "/\[id: $RULE_ID\]/s/brand/colour/Ig" "$TMP/rules-mut.md" > "$TMP/rules-mut.md.new" && mv "$TMP/rules-mut.md.new" "$TMP/rules-mut.md"
 if parity_ok "$GATE" "$REFERENCE" "$TMP/rules-mut.md"; then
   echo "  FAIL: row7: the word brand dropped from the rule body was not caught"; FAIL=$((FAIL + 1))
 else
   echo "  PASS: row7: dropping brand from the rule body reddens parity"; PASS=$((PASS + 1))
 fi
 
-cp "$RULES" "$TMP/rules-mut2.md"; sed -i "/\[id: $RULE_ID\]/s/legal-risk/legal/Ig" "$TMP/rules-mut2.md"
+cp "$RULES" "$TMP/rules-mut2.md"; sed_inplace "/\[id: $RULE_ID\]/s/legal-risk/legal/Ig" "$TMP/rules-mut2.md"
 if parity_ok "$GATE" "$REFERENCE" "$TMP/rules-mut2.md"; then
   echo "  FAIL: row7: legal-risk dropped from the rule body was not caught"; FAIL=$((FAIL + 1))
 else
@@ -286,20 +319,34 @@ mutate() { # <name> <sed-script>: write $MUT/gate.<name>.sh and prove the mutati
   fi
   echo "  PASS: mutation $name landed"; PASS=$((PASS + 1))
 }
-killed() { # <name> <script> <want-rc> <fixture-args...>: the mutant's verdict must DIFFER from the pinned one
+mutant_crashed() { [[ "$(last_rc)" == 127 ]] || grep -qE 'unbound variable|syntax error|command not found' "$TMP/last.err"; }
+killed() { # <name> <script> <pinned-rc> <args...>: the pristine script must give the pinned rc, and the mutant must give another WITHOUT crashing
   local name="$1" script="$2" pinned_rc="$3"; shift 3
-  run "$script" "$@"
+  run "$pristine" "$@"
   if [[ "$(last_rc)" != "$pinned_rc" ]]; then
+    echo "  FAIL: $name: the pristine script gives rc $(last_rc), not the pinned $pinned_rc"; FAIL=$((FAIL + 1)); return
+  fi
+  run "$script" "$@"
+  if mutant_crashed; then
+    echo "  FAIL: mutant $name CRASHED (rc $(last_rc)); a crash is not a kill"; FAIL=$((FAIL + 1))
+  elif [[ "$(last_rc)" != "$pinned_rc" ]]; then
     echo "  PASS: mutant $name killed (rc $(last_rc), pinned $pinned_rc)"; PASS=$((PASS + 1))
   else
     echo "  FAIL: mutant $name SURVIVED (rc still $pinned_rc)"; FAIL=$((FAIL + 1))
   fi
 }
-killed_count() { # <name> <script> <reason> <want-count> <fixture>: the mutant must change how many findings carry the reason
+killed_count() { # <name> <script> <reason> <want-count> <fixture>: pristine must show the count, the mutant must change it without crashing
   local name="$1" script="$2" reason="$3" want="$4" fixture="$5" got
-  run "$script" "$fixture"
+  run "$pristine" "$fixture"
   got="$(grep -cE "^\[FAIL\] .*: ${reason} - " "$TMP/last.err" || true)"
   if [[ "$got" != "$want" ]]; then
+    echo "  FAIL: $name: the pristine script shows $got $reason findings, not the pinned $want"; FAIL=$((FAIL + 1)); return
+  fi
+  run "$script" "$fixture"
+  got="$(grep -cE "^\[FAIL\] .*: ${reason} - " "$TMP/last.err" || true)"
+  if mutant_crashed; then
+    echo "  FAIL: mutant $name CRASHED; a crash is not a kill"; FAIL=$((FAIL + 1))
+  elif [[ "$got" != "$want" ]]; then
     echo "  PASS: mutant $name killed ($got $reason findings, pinned $want)"; PASS=$((PASS + 1))
   else
     echo "  FAIL: mutant $name SURVIVED ($got $reason findings, same as pinned)"; FAIL=$((FAIL + 1))
@@ -321,9 +368,6 @@ mutate stop-first 's/^(.*idx=.*) # mut:count$/\1; break # mut:count/' && \
 # row2: the unruled-technical branch disabled.
 mutate no-unruled 's/^is_unruled\(\).*# mut:unruled$/is_unruled() { return 1; } # mut:unruled/' && \
   killed_count no-unruled "$MUT/gate.no-unruled.sh" unruled-technical 1 "$FIXTURES/unruled-technical.md"
-# row3: the row scanner finds nothing.
-mutate zero-rows 's/^  # mut:scan$/  : > "$rows_file" # mut:scan/' && \
-  killed zero-rows "$MUT/gate.zero-rows.sh" 0 "$FIXTURES/pass-mixed.md"
 # row4: accept any operator category.
 mutate any-category 's/^cat_ok\(\).*# mut:cat$/cat_ok() { return 0; } # mut:cat/' && \
   killed_count any-category "$MUT/gate.any-category.sh" bad-category 2 "$FIXTURES/bad-category.md"
@@ -354,43 +398,79 @@ mutate pending-glob 's/== "pending - assumed"\*/== pending*/' && \
   killed_count pending-glob "$MUT/gate.pending-glob.sh" bad-ruling-shape 3 "$FIXTURES/pending-bare.md"
 mutate label-cat 's/\\\(operator:\\ \(\$CATS_RE\)\\\)/operator/' && \
   killed label-cat "$MUT/gate.label-cat.sh" 1 "$FIXTURES/label-vibes.md"
-mutate label-plural 's/\(decision\|ruling\)s\? needed/(decision|ruling) needed/' && \
+mutate label-plural 's/\(decision\|ruling\)s\?\[ /(decision|ruling)[ /' && \
   killed label-plural "$MUT/gate.label-plural.sh" 1 "$FIXTURES/label-plural.md"
-mutate label-alt 's/\|decision needed from the owner//' && \
+mutate label-alt 's/\|decision\[ \\t\]\+needed\[ \\t\]\+from\[ \\t\]\+the\[ \\t\]\+owner//' && \
   killed label-alt "$MUT/gate.label-alt.sh" 1 "$FIXTURES/label-alt.md"
-mutate no-tilde 's/\(`\+\|~\+\)/(`+)/g' && \
+mutate no-tilde '/# mut:fence$/ s/\|~~~\+//' && \
   killed no-tilde "$MUT/gate.no-tilde.sh" 0 "$FIXTURES/fence-tilde.md"
-mutate fence-indent '/# mut:fence/ s/\/\^ \{0,3\}\(/\/^(/' && \
+mutate fence-indent '/# mut:fence$/ s/\^ \? \? \?/^/' && \
   killed fence-indent "$MUT/gate.fence-indent.sh" 0 "$FIXTURES/fence-indent.md"
 mutate fence-any-char 's/c == fc && n >= fn && //' && \
   killed fence-any-char "$MUT/gate.fence-any-char.sh" 1 "$FIXTURES/fence-mixed.md"
 mutate no-state-reset 's/^    \{ end_table\(\) \}$/    { }/' && \
   killed no-state-reset "$MUT/gate.no-state-reset.sh" 0 "$FIXTURES/later-unrelated-table.md"
-mutate no-crlf 's/^    \{ sub\(\/\\r\$\/, ""\) \}$/    { }/' && \
+mutate no-crlf 's/^    \{ sub\(\/\\r\$\/, \"\"\); if .*$/    { }/' && \
   killed no-crlf "$MUT/gate.no-crlf.sh" 0 "$FIXTURES/crlf.md"
 mutate no-rtrim 's/ sub\(\/\[ \\t\]\+\$\/, "", line\);//' && \
   killed no-rtrim "$MUT/gate.no-rtrim.sh" 0 "$FIXTURES/ws-row.md"
 mutate no-unclosed 's/if \(f\) print "@UNCLOSED"//' && \
   killed no-unclosed "$MUT/gate.no-unclosed.sh" 2 "$FIXTURES/fence-unclosed.md"
-mutate no-badheader 's/print "@BADHEADER"; next/next/' && \
+mutate no-badheader 's/print "@BADHEADER";//' && \
   killed no-badheader "$MUT/gate.no-badheader.sh" 2 "$FIXTURES/header-drift.md"
+mutate badheader-eager 's/\{ hdr_pending = 1; next \}/{ print "@BADHEADER"; next }/' && \
+  killed badheader-eager "$MUT/gate.badheader-eager.sh" 0 "$FIXTURES/unrelated-data-row.md"
 mutate no-empty 's/print "@EMPTY"//' && \
   killed no-empty "$MUT/gate.no-empty.sh" 2 "$FIXTURES/empty-first.md"
 mutate branch-slash 's|safe="\$\{branch//\\//-\}"|safe="$branch"|' && \
   { TRG_BRANCH=feat/foo-bar TRG_SPECS_ROOT="$SPECS" killed branch-slash "$MUT/gate.branch-slash.sh" 1 --branch; }
-mutate pr-body-empty 's/^    \[\[ -s "\$f" \]\] .*$/    :/' && \
+mutate pr-body-empty 's/^    if ! \{ \[\[ -s "\$f" \]\] && .*; \}; then$/    if false; then/' && \
   killed pr-body-empty "$MUT/gate.pr-body-empty.sh" 2 --pr-body "$TMP/empty-body.md"
 mutate no-cap 's/^  \(\( n > 255 \)\) && n=255$/  :/' && \
   killed no-cap "$MUT/gate.no-cap.sh" 1 --pr-body "$TMP/wrap.md"
 mutate no-ambig 's/^    \(\( \$\{#matches\[@\]\} == 1 \)\) .*$/    :/' && \
   { TRG_BRANCH=feat-baz-qux TRG_SPECS_ROOT="$SPECS" killed no-ambig "$MUT/gate.no-ambig.sh" 2 --branch; }
 
+# Pass-2 mutants: each pins a gap the second review round found.
+mutate stray 's/print "@STRAY"/x = 1/' && \
+  killed stray "$MUT/gate.stray.sh" 2 "$FIXTURES/stray-blank.md"
+mutate empty-artifact "s/^  grep -q '\[\^\[:space:\]\]' \"\\\$file\" .*\$/  :/" && \
+  killed empty-artifact "$MUT/gate.empty-artifact.sh" 2 "$FIXTURES/empty.md"
+mutate branch-head 's/ && \[ "\$branch" != HEAD \]//' && \
+  { TRG_BRANCH=HEAD TRG_SPECS_ROOT="$SPECS" killed branch-head "$MUT/gate.branch-head.sh" 2 --branch; }
+mutate archive-suffix 's/archive\/\$pre-"\$nm"/archive\/*-"$nm"/' && \
+  { TRG_BRANCH=feat-cache TRG_SPECS_ROOT="$SPECS" killed archive-suffix "$MUT/gate.archive-suffix.sh" 0 --branch; }
+mutate pr-unclosed 's/^    \(\( UNCLOSED_SEEN \)\) .*$/    :/' && \
+  killed pr-unclosed "$MUT/gate.pr-unclosed.sh" 2 --pr-body "$FIXTURES/pr-body-unclosed.md"
+mutate ws-body 's/ && grep -q .\[\^\[:space:\]\]. "\$f"; \}; then/; }; then/' && \
+  killed ws-body "$MUT/gate.ws-body.sh" 2 --pr-body "$TMP/ws-body.md"
+mutate no-inline-code 's/gsub\(\/`\[\^`\]\*`\/, "", line\);//' && \
+  killed no-inline-code "$MUT/gate.no-inline-code.sh" 0 --pr-body "$FIXTURES/pr-body-inline-code.md"
+mutate no-bom 's/; if \(NR == 1\) sub\(\/\^\\357\\273\\277\/, ""\)//g' && \
+  killed no-bom "$MUT/gate.no-bom.sh" 1 "$FIXTURES/bom-unruled.md"
+mutate date-year 's/\[0-9\]\{4\}-\[0-9\]\{2\}-\[0-9\]\{2\}: /[0-9]+-[0-9]{2}-[0-9]{2}: /' && \
+  killed_count date-year "$MUT/gate.date-year.sh" bad-ruling-shape 4 "$FIXTURES/shape-dates.md"
+mutate date-month 's/\[0-9\]\{4\}-\[0-9\]\{2\}-\[0-9\]\{2\}: /[0-9]{4}-[0-9]+-[0-9]{2}: /' && \
+  killed_count date-month "$MUT/gate.date-month.sh" bad-ruling-shape 4 "$FIXTURES/shape-dates.md"
+mutate date-day 's/\[0-9\]\{4\}-\[0-9\]\{2\}-\[0-9\]\{2\}: /[0-9]{4}-[0-9]{2}-[0-9]+: /' && \
+  killed_count date-day "$MUT/gate.date-day.sh" bad-ruling-shape 4 "$FIXTURES/shape-dates.md"
+mutate empty-decision "s/\]\{2\}: \.\+'\$/]{2}:.*'/" && \
+  killed_count empty-decision "$MUT/gate.empty-decision.sh" bad-ruling-shape 4 "$FIXTURES/shape-dates.md"
+mutate fence-short 's/ && n >= fn//g' && \
+  killed fence-short "$MUT/gate.fence-short.sh" 0 "$FIXTURES/fence-short-close.md"
+mutate fence-info 's/ && tok ~ \/\^\(`\+\|~\+\)\[ \\t\]\*\$\///g' && \
+  killed fence-info "$MUT/gate.fence-info.sh" 0 "$FIXTURES/fence-info-close.md"
+mutate tilde-table '/# mut:fence-table$/ s/\|~~~\+//' && \
+  killed tilde-table "$MUT/gate.tilde-table.sh" 0 "$FIXTURES/table-in-tilde.md"
+mutate indent-table '/# mut:fence-table$/ s/\^ \? \? \?/^/' && \
+  killed indent-table "$MUT/gate.indent-table.sh" 0 "$FIXTURES/table-in-indent.md"
+
 echo "=== Floor: the SUT wrote an execution marker per examined row ==="
 n_rows="$(wc -l < "$EXEC_LOG" | tr -d ' ')"
-if (( n_rows >= 40 )); then
-  echo "  PASS: SUT execution markers $n_rows >= 40"; PASS=$((PASS + 1))
+if (( n_rows >= 200 )); then
+  echo "  PASS: SUT execution markers $n_rows >= 200"; PASS=$((PASS + 1))
 else
-  echo "  FAIL: SUT execution markers $n_rows < 40 -- the cases above did not drive the script"; FAIL=$((FAIL + 1))
+  echo "  FAIL: SUT execution markers $n_rows < 200 -- the cases above did not drive the script"; FAIL=$((FAIL + 1))
 fi
 
-print_results 176
+print_results 239
