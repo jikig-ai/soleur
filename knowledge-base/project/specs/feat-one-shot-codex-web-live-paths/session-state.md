@@ -1007,3 +1007,35 @@
   `draft: full battery owed at ready`. No local suite or C.9 recurrence ran
   on this head. Keep the PR draft under the existing user hold; #9791 remains
   open pending focused verification and a verified correction/workaround.
+
+## Continuation update — 2026-10-11 sole-copy infrastructure main sync
+
+- PR #9051 was verified OPEN, draft and with auto-merge disarmed at supplied
+  head `ca42d3aa0852822f92ba74781abc0908c5861a2c`. The continuation retains
+  main-sync/CI maintenance scope; no held gate was released. Session-start
+  cleanup completed after the sandbox lock-denial retry; its temporary sweep
+  reported lock contention. The root's tracked `.mcp.json` was preserved.
+- Pinned main `67cb281e4f866f51398422ec41dba591edc58081` merged cleanly at
+  `5fe84bd3510dd87b2546050e5df572584f918b19`. Five incoming commits cover
+  rung-2 boot evidence, the Inngest bootstrap Zot probe, encryption-ledger
+  routing, web-2 egress connection timeout and Inngest sole-copy protection.
+  Application server/components/libraries and migration bodies are unchanged
+  by this sync. The two internal legal records merged automatically, carrying
+  upstream protection disclosures; this is not a new attributable CLO
+  disposition or live protection verification. Workflow actionlint with
+  ShellCheck disabled and feature-range whitespace checks passed. Hooks remain
+  disabled; no local suite, C.9 fixture, infrastructure dispatch or recovery
+  rebuild/retry ran. Fresh exact-head CI must cover the ensuing push.
+- Encryption-posture static scan passed: 22 stores, 10 connections, zero
+  unledgered/failing checks. Six inherited exception-expiry warnings name
+  2026-10-22; their ledger references were checked (#6897 OPEN, #7772 CLOSED).
+  This scan does not verify live encryption or renew an exception.
+- Ref #9791 was verified OPEN; its cause and correction/workaround remain
+  unverified. Draft test-leg skips cannot establish C.9 coverage. The remaining
+  acceptance chain is current-source/full-production recovery, authenticated
+  screenshots, eligible routine consumer, permitted Web matrices and
+  attributable mode-specific CLO, then full review/promotion. All execution
+  and promotion holds persist, including credential/provider/browser-auth,
+  shared-write, deployment and flag/cohort restrictions. Keep draft/default-off
+  and customer content blocked. Project sharing, retention/inheritance and
+  configured regions remain unknown; challenge retries remain stopped.

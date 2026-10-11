@@ -611,3 +611,16 @@ is not a completed lint check of those files.
   mountpoint to the image before making the root filesystem immutable. Both
   failures occurred without external services, and task-owned containers were
   cleaned up; do not retry beyond the authorized attempt.
+
+## Maintenance probe continuation — 2026-10-11
+
+- A referenced `/tmp` gate script had been removed. Regenerate task-owned
+  session gates from the installed `commands/go.md` fences rather than
+  depending on earlier temporary artifacts. Combined dense skill/diff reads
+  exceeded output budgets; split by content size and inspect omitted sections
+  before relying on their instructions or source coverage.
+- Session-start state locks were read-only in the sandbox; the approved
+  retry completed cleanup, while the independent temporary sweep reported
+  contention. A sandbox GitHub description read also failed connectivity and
+  succeeded on its specific approved retry. Preserve failed-probe logs and
+  distinguish these transport/lock failures from repository or CI findings.
