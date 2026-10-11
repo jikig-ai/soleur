@@ -109,16 +109,16 @@ Wording rules, each tied to the brief:
 
 ## Acceptance Criteria
 
-- [ ] `git diff origin/main --stat` shows exactly one ADR file changed with one added line and zero removed lines, plus
+- [x] `git diff origin/main --stat` shows exactly one ADR file changed with one added line and zero removed lines, plus
   the plan, tasks and session-state files; no other path.
-- [ ] `git diff origin/main -- <ADR>` has no `-` content lines (append-only), and the added line sits after the
+- [x] `git diff origin/main -- <ADR>` has no `-` content lines (append-only), and the added line sits after the
   `2026-10-09 S3 amended` line and before `## Context`.
-- [ ] The added line contains `Decision 4 adopting`, `#9728`, `2026-10-11T09:43:31Z` and `2026-10-18`, and it states
+- [x] The added line contains `Decision 4 adopting`, `#9728`, `2026-10-11T09:43:31Z` and `2026-10-18`, and it states
   that `S3 live` is NOT recorded (the only occurrence of `S3 live` in the line is that negation).
-- [ ] The added line does not contain `accepted` outside the ADR-270 disclaimer, does not contain `exited`, `CI_PUSH_DEDUPE`
+- [x] The added line does not contain `accepted` outside the ADR-270 disclaimer, does not contain `exited`, `CI_PUSH_DEDUPE`
   or `S2`.
-- [ ] The existing `status: adopting` front-matter line is unchanged.
-- [ ] `npx markdownlint-cli2` (or the repo's markdown lint used in CI for `knowledge-base/**`) passes on the ADR; the
+- [x] The existing `status: adopting` front-matter line is unchanged.
+- [x] `npx markdownlint-cli2` (or the repo's markdown lint used in CI for `knowledge-base/**`) passes on the ADR; the
   bullet must not break the list.
 - [ ] PR #10040 body says `Ref #9728` and contains none of `Closes`, `Fixes`, `Resolves` (any case/tense) as a close
   keyword; #9728 remains open after merge.
