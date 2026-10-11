@@ -542,7 +542,7 @@ export async function tryLedgerDivergenceRecovery(
     // helper's processing — e.g.
     // a tab supersession that clears the old WS's `pingInterval` so no
     // refresh fires while the helper runs. Catching it here (vs waiting
-    // up to 60 s for the agent-runner reaper) flips the conv row to
+    // up to 300 s for the agent-runner reaper) flips the conv row to
     // `failed` synchronously so the dashboard "Active conversations" rail
     // truths up, and surfaces the divergence to Sentry.
     //
@@ -558,7 +558,7 @@ export async function tryLedgerDivergenceRecovery(
     //      surfaces boundary-race reaps as Sentry events.
     //   2. Synchronous status flip: the lazy sweep deletes the slot but does
     //      NOT update the `conversations` row — the dashboard "Executing" state
-    //      stays stuck until the async reaper (≤60 s). This branch flips it to
+    //      stays stuck until the async reaper (one 300 s tick). This branch flips it to
     //      `failed` immediately.
     //   3. Defense-in-depth: if the RPC's lazy sweep is ever refactored away,
     //      this branch becomes the primary stale-slot reaper without any code
