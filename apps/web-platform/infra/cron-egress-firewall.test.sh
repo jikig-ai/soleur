@@ -252,6 +252,28 @@ w2_assert "web2 marks cron-egress-resolve.sh executable" 'chmod 0755 [^"]*cron-e
 w2_assert "web2 marks cron-egress-postapply-assert.sh executable" 'chmod 0755 [^"]*cron-egress-postapply-assert\.sh'
 w2_assert "web2 marks cron-egress-nftables.sh executable" 'chmod 0755 [^"]*cron-egress-nftables\.sh'
 w2_assert "web2 lands the carved CIDR file at mode 0644" 'chmod 0644 [^"]*cron-egress-allowlist-cidr\.txt'
+# #9534 — the loader's hard deny-file precondition (dies at :151 without it) is
+# co-delivered on this channel so an apply ordering where this resource runs
+# first cannot strand the loader in a die-loop. Its web-1 home is the
+# egress_gateway resource, not cron_egress_firewall — hence standalone rows
+# rather than the parity loop above; the destination is pinned against the
+# loader's own DENY_CIDR_FILE default instead.
+w2_assert "web2 delivers egress-deny-cidrs.txt (source=)" 'source += +"\$\{path\.module\}/egress-deny-cidrs\.txt"'
+w2_assert "web2 delivers egress-deny-cidrs.txt to /etc/soleur (destination=)" 'destination += +"/etc/soleur/egress-deny-cidrs\.txt"'
+w2_assert "web2 trigger folds egress-deny-cidrs.txt hash" 'file\("\$\{path\.module\}/egress-deny-cidrs\.txt"\)'
+w2_assert "web2 remote-exec byte-asserts egress-deny-cidrs.txt" 'filesha256\("\$\{path\.module\}/egress-deny-cidrs\.txt"\)'
+w2_assert "web2 lands the gw deny file at mode 0644" 'chmod 0644 [^"]*egress-deny-cidrs\.txt'
+w2_assert "web2 asserts root ownership of egress-deny-cidrs.txt" 'chown root:root [^"]*egress-deny-cidrs\.txt'
+# Destination parity pins to the loader's own DENY_CIDR_FILE default — a
+# destination typo delivers the file where nothing reads it, and the loader's
+# die then fails the apply loud.
+W2_DENY_DEST="$(grep -A1 'source *= *"\${path.module}/egress-deny-cidrs\.txt"' <<<"$WEB2_BLOCK" | grep -oE 'destination *= *"[^"]+"' | sed 's/.*"\([^"]*\)".*/\1/' | head -1)"
+LOADER_DENY_DEFAULT="$(grep -oE '\$\{DENY_CIDR_FILE:-[^}]+\}' "$LOADER" | head -1 | sed 's/.*:-//;s/}$//')"
+if [[ -n "$W2_DENY_DEST" && -n "$LOADER_DENY_DEFAULT" && "$W2_DENY_DEST" == "$LOADER_DENY_DEFAULT" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: web2 deny-file destination == loader DENY_CIDR_FILE default ($W2_DENY_DEST)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: web2 deny-file destination '$W2_DENY_DEST' != loader default '$LOADER_DENY_DEFAULT' (both must extract non-empty)"
+fi
 w2_assert "web2 asserts root ownership of cron-egress-resolve.sh" 'chown root:root [^"]*cron-egress-resolve\.sh'
 w2_assert "web2 asserts root ownership of cron-egress-postapply-assert.sh" 'chown root:root [^"]*cron-egress-postapply-assert\.sh'
 w2_assert "web2 asserts root ownership of cron-egress-nftables.sh" 'chown root:root [^"]*cron-egress-nftables\.sh'
