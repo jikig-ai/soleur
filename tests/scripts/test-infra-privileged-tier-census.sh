@@ -100,8 +100,10 @@ resolve_base_ref() {
     printf '%s' "$IPT_BASE_REF"
     return 0
   fi
+  # `head -1`: criss-cross histories can print several best common ancestors; any one is sound
+  # base evidence, whereas the multi-line string would fail the materialization's ls-tree.
   _mb="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE \
-    git -C "$1" merge-base HEAD origin/main 2>/dev/null)" || _mb=""
+    git -C "$1" merge-base HEAD origin/main 2>/dev/null | head -1)" || _mb=""
   if [ -n "$_mb" ]; then
     printf '%s' "$_mb"
   else
@@ -3471,22 +3473,11 @@ else
   fail "G4c-b6: the override arm did not reproduce tip semantics" "$(g4c_detail "$T/g4b6-override.tsv")"
 fi
 
-# b7 — fail-closed preserved: a repo with no origin/main and IPT_BASE_REF unset resolves the
-# fallback literal, the materialization cannot list it, and the row reports "base unavailable".
-G4GIT2="$T/g4git-nobase"; assert_fixture_dir "$G4GIT2"
-mkdir -p "$G4GIT2/repo/apps/web-platform/infra" "$G4GIT2/repo/.github" \
-  || { printf 'FAIL SETUP: g4git-nobase mkdir\n' >&2; exit 1; }
-cp -r "$FIX/tree/.github/." "$G4GIT2/repo/.github/" || { printf 'FAIL SETUP: g4git-nobase .github\n' >&2; exit 1; }
-cat > "$G4GIT2/repo/apps/web-platform/infra/main.tf" <<'EOF'
-resource "terraform_data" "base_a" {}
-EOF
-env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "$G4GIT2/repo" init -q -b main \
-  && env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "$G4GIT2/repo" add -A \
-  && env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "$G4GIT2/repo" commit -qm "sole commit, no origin/main" \
-  || { printf 'FAIL SETUP: g4git-nobase init\n' >&2; exit 1; }
-_nb_dest="$T/g4base/nobase"; assert_fixture_dir "$_nb_dest"
-materialize_base_dir "$G4GIT2/repo" "$(resolve_base_ref "$G4GIT2/repo")" "$_nb_dest" || _nb_dest=""
-python3 "$T/ipt.py" "$G4GIT2/repo/.github" "$G4GIT2/repo" "" "$_nb_dest" > "$T/g4b7-nobase.tsv" 2> "$T/g4b7-nobase.tsv.err"
+# b7 — fail-closed preserved: with origin/main deleted (this leg runs last, so mutating the
+# shared fixture repo is safe) and IPT_BASE_REF unset, resolution returns the fallback literal,
+# the materialization cannot list it, and the row reports "base unavailable".
+_g4git update-ref -d refs/remotes/origin/main || { printf 'FAIL SETUP: g4git delete origin/main\n' >&2; exit 1; }
+g4git_row "$T/g4b7-nobase.tsv"
 _d="$(g4c_detail "$T/g4b7-nobase.tsv")"
 if g4c_red "$T/g4b7-nobase.tsv" && [ "$_d" = "base unavailable" ]; then
   pass "G4c-b7: no origin/main and no IPT_BASE_REF fails closed as 'base unavailable'"
