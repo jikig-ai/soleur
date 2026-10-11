@@ -160,24 +160,6 @@ def parse_address(addr: str) -> tuple[str, str] | None:
     return type_, name
 
 
-def find_resource_declaration(
-    tf_files: list[Path], addr: str, cache: dict[Path, str]
-) -> tuple[Path, str] | None:
-    parsed = parse_address(addr)
-    if not parsed:
-        return None
-    type_, name = parsed
-    for f in tf_files:
-        text = cache.get(f)
-        if text is None:
-            text = read_text(f)
-            cache[f] = text
-        for t2, n2, block in extract_resource_blocks(text):
-            if t2 == type_ and n2 == name:
-                return f, block
-    return None
-
-
 def scan_tf_inventory(
     tf_files: list[Path], cache: dict[Path, str]
 ) -> dict[str, list[str]]:
@@ -310,64 +292,70 @@ def apparatus_mappers(text: str, resolve) -> set[str]:
 
 
 def scan_apparatus(
-    infra_files: list[Path], cache: dict[Path, str]
+    infra_files: list[Path], cache: dict
 ) -> dict[str, list[Path]]:
     """resolved_mapper -> [files] having BOTH a `cryptsetup luksFormat` AND a
-    `cryptsetup luksOpen ... <device> <mapper>` site, keyed by the resolved mapper."""
+    `cryptsetup luksOpen ... <device> <mapper>` site, keyed by the resolved mapper. Reads the
+    comment-stripped text, so a commented-out apparatus certifies nothing."""
     result: dict[str, list[Path]] = {}
     for f in infra_files:
-        text = cache.get(f)
-        if text is None:
-            text = read_text(f)
-            cache[f] = text
-        for mapper in apparatus_mappers(text, resolve_mapper_operand):
+        for mapper in apparatus_mappers(_infra_view(f, cache), resolve_mapper_operand):
             result.setdefault(mapper, []).append(f)
     return result
 
 
-def mount_evidence_names(text: str, fstab_shaped: bool = False) -> set[str]:
-    """Mapper names with mount evidence in `text`: an fstab-context `/dev/mapper/<name>` line, OR a
+_MAPPER_PATH_RE = re.compile(r"/dev/mapper/([\w-]+)")
+_MOUNT_LINE_RE = re.compile(r"[ \t]*MOUNT=")
+_MAPPER_LINE_RE = re.compile(r"[ \t]*MAPPER=/dev/mapper/")
+
+
+def mount_evidence(text: str, fstab_shaped: bool = False) -> list[tuple[str, str]]:
+    """[(mapper name, 'fstab'|'gate')]: an fstab-context `/dev/mapper/<name>` line, OR a
     `MAPPER=/dev/mapper/<name>` line paired with a `MOUNT=` line in the same text. `fstab_shaped` adds
     the arm only a PINNED file is read with: an fstab-shaped line held in a variable assignment."""
-    names: set[str] = set()
+    found: list[tuple[str, str]] = []
     lines = text.splitlines()
-    has_mount_line = any(re.match(r"\s*MOUNT=", ln) for ln in lines)
+    has_mount_line = any(_MOUNT_LINE_RE.match(ln) for ln in lines)
     for ln in lines:
-        for m in re.finditer(r"/dev/mapper/([\w-]+)", ln):
-            if "fstab" in ln:
-                names.add(m.group(1))
-            elif re.match(r"\s*MAPPER=/dev/mapper/", ln) and has_mount_line:
-                names.add(m.group(1))
+        fstab_ctx = "fstab" in ln
+        for m in _MAPPER_PATH_RE.finditer(ln):
+            if fstab_ctx:
+                found.append((m.group(1), "fstab"))
+            elif has_mount_line and _MAPPER_LINE_RE.match(ln):
+                found.append((m.group(1), "gate"))
         # MUTATION-TARGET: MB-L2 start (fstab-shaped mount evidence in a variable assignment)
         if fstab_shaped:
             fm = _FSTAB_SHAPED.match(ln)
             if fm:
-                names.add(fm.group(2))
+                found.append((fm.group(2), "fstab"))
         # MUTATION-TARGET: MB-L2 end
-    return names
+    return found
 
 
-def scan_mount_evidence(
-    infra_files: list[Path], cache: dict[Path, str]
-) -> dict[str, list[tuple[Path, str]]]:
-    """mapper_name -> [(file, 'fstab'|'gate')]: the same two arms as mount_evidence_names, with the
-    kind kept for the report."""
-    result: dict[str, list[tuple[Path, str]]] = {}
-    for f in infra_files:
+def _infra_view(f: Path, cache: dict) -> str:
+    """The comment-stripped (shell/YAML) text of one infra file, read once."""
+    key = (f, "view")
+    if key not in cache:
         text = cache.get(f)
         if text is None:
             text = read_text(f)
             cache[f] = text
-        lines = text.splitlines()
-        has_mount_line = any(re.match(r"\s*MOUNT=", ln) for ln in lines)
-        for ln in lines:
-            for m in re.finditer(r"/dev/mapper/([\w-]+)", ln):
-                name = m.group(1)
-                if "fstab" in ln:
-                    result.setdefault(name, []).append((f, "fstab"))
-                elif re.match(r"\s*MAPPER=/dev/mapper/", ln) and has_mount_line:
-                    result.setdefault(name, []).append((f, "gate"))
-    return result
+        cache[key] = line_comment_view(text)
+    return cache[key]
+
+
+def scan_mount_evidence(
+    infra_files: list[Path], cache: dict
+) -> dict[str, list[tuple[Path, str]]]:
+    """mapper_name -> [(file, 'fstab'|'gate')] over the comment-stripped infra files."""
+    key = ("mount-evidence", tuple(infra_files))
+    if key not in cache:
+        result: dict[str, list[tuple[Path, str]]] = {}
+        for f in infra_files:
+            for name, kind in mount_evidence(_infra_view(f, cache)):
+                result.setdefault(name, []).append((f, kind))
+        cache[key] = result
+    return cache[key]
 
 
 def check_singleton_binding(
@@ -375,7 +363,6 @@ def check_singleton_binding(
     db: dict,
     attach_block: str,
     attach_file_text: str,
-    cache: dict,
     fails: list[str],
 ) -> bool:
     vol_addr = db["volume"]
@@ -451,7 +438,7 @@ def check_luks_row(
     infra_files: list[Path],
     cache: dict[Path, str],
     fails: list[str],
-    repo_root: Path | None = None,
+    repo_root: Path,
 ) -> None:
     store_addr = row["store"]
     db = row.get("device_binding")
@@ -476,22 +463,33 @@ def check_luks_row(
         )
         return
 
-    attach_found = find_resource_declaration(tf_files, attach_addr, cache)
-    vol_found = find_resource_declaration(tf_files, vol_addr, cache)
-    if not attach_found or not vol_found:
+    # Both addresses must resolve to ONE declaration on the comment-free code view: routing between the
+    # indexed and singleton arms reads that declaration, so a decoy (a singleton-shaped copy in an
+    # earlier-sorted root, a ghost block) must not be able to choose the arm.
+    vol_decls = find_declarations(tf_files, vol_addr, cache)
+    att_decls = find_declarations(tf_files, attach_addr, cache)
+    if not vol_decls or not att_decls:
         fails.append(
             f"FAIL: {store_addr} device_binding volume/attachment "
             f"({vol_addr}/{attach_addr}) does not resolve to a real Terraform "
             "resource -> fix device_binding to reference real resources"
         )
         return
-    attach_file, attach_block = attach_found
+    # MUTATION-TARGET: MB-L11 start (routing reads ONE declaration; a decoy cannot choose the arm)
+    if len(vol_decls) != 1 or len(att_decls) != 1:
+        fails.append(
+            f"FAIL: {store_addr} device_binding volume {vol_addr} ({len(vol_decls)} declaration(s)) "
+            f"or attachment {attach_addr} ({len(att_decls)}) is declared more than once across the "
+            "scan scope -> an address must resolve exactly once, or the binding is ambiguous"
+        )
+        return
+    # MUTATION-TARGET: MB-L11 end
+    attach_file, attach_code, _attach_skel = att_decls[0]
 
     vparsed = parse_address(vol_addr) or ("", "")
     indexed = bool(
         re.search(
-            rf"volume_id\s*=\s*{re.escape(vparsed[0])}\.{re.escape(vparsed[1])}\s*\[",
-            hcl_views(attach_block)[0],
+            rf"volume_id\s*=\s*{re.escape(vparsed[0])}\.{re.escape(vparsed[1])}\s*\[", attach_code
         )
     )
     ctx: dict | None = None
@@ -503,16 +501,18 @@ def check_luks_row(
         # MUTATION-TARGET: MB-L8a start (an indexed row names the apparatus it relies on)
         if not db.get("apparatus"):
             fails.append(
-                f"FAIL: {store_addr} indexed binding requires apparatus -> pin the file that "
-                "holds this volume's cryptsetup luksFormat and luksOpen"
+                f"FAIL: {store_addr} indexed binding (the attachment's volume_id is "
+                f"{vol_addr}[...]) requires apparatus -> pin the file that holds this volume's "
+                "cryptsetup luksFormat and luksOpen"
             )
             missing = True
         # MUTATION-TARGET: MB-L8a end
         # MUTATION-TARGET: MB-L8b start (an indexed row names its passphrase custody)
         if not db.get("key_chain"):
             fails.append(
-                f"FAIL: {store_addr} indexed binding requires key_chain -> name the consumer, "
-                "token, secret and password the host reads the key through"
+                f"FAIL: {store_addr} indexed binding (the attachment's volume_id is "
+                f"{vol_addr}[...]) requires key_chain -> name the consumer, token, secret and "
+                "password the host reads the key through"
             )
             missing = True
         # MUTATION-TARGET: MB-L8b end
@@ -522,13 +522,15 @@ def check_luks_row(
         if db.get("apparatus") or db.get("key_chain"):
             fails.append(
                 f"FAIL: {store_addr} device_binding.apparatus and key_chain apply to an indexed "
-                "(for_each) binding only -> remove them from a singleton row"
+                f"binding only, and the attachment's volume_id is not {vol_addr}[...] (read from "
+                f"the one declaration of {attach_addr}) -> remove them from a singleton row, or "
+                "fix the attachment"
             )
             return
         # The binding is read from the CODE view: a commented-out `volume_id = <volume>.id` must not
         # satisfy it while the live line is something else (an indexed or wrapped form).
         if not check_singleton_binding(
-            store_addr, db, hcl_views(attach_block)[0], cache[attach_file], cache, fails
+            store_addr, db, attach_code, hcl_views(cache[attach_file])[0], fails
         ):
             return
 
@@ -541,7 +543,7 @@ def check_luks_row(
             return
     if db.get("apparatus"):
         if not check_pinned_apparatus(
-            store_addr, db, kc_ctx, infra_files, repo_root or Path("."), cache, fails
+            store_addr, db, kc_ctx, infra_files, repo_root, cache, fails
         ):
             return
     elif not check_global_apparatus(store_addr, mapper, infra_files, cache, fails):
@@ -648,10 +650,11 @@ def hcl_views(text: str) -> tuple[str, str]:
 
 
 def line_comment_view(text: str) -> str:
-    """Shell / YAML code view for POSITIVE-evidence scans: a `#` that starts a word comments the rest
-    of the line. Over-stripping (a `#` after whitespace inside a quoted string) can only HIDE evidence,
-    which fails the row closed; it can never show a commented-out `luksFormat` as code."""
-    return re.sub(r"(?m)(^|\s)#.*$", r"\1", text)
+    """Shell / YAML code view for POSITIVE-evidence scans: a `#` at the start of a word (after
+    whitespace, `;`, `&`, `|` or `(`) comments the rest of the line. Over-stripping (a `#` after
+    whitespace inside a quoted string) can only HIDE evidence, which fails the row closed; the
+    command separators are included so `true;#cryptsetup luksOpen ...` is not shown as code."""
+    return re.sub(r"(?m)(^|[\s;&|(])#.*$", r"\1", text)
 
 
 def decl_blocks(f: Path, cache: dict) -> list[tuple[str, str, str, str]]:
@@ -687,8 +690,8 @@ def decl_blocks(f: Path, cache: dict) -> list[tuple[str, str, str, str]]:
 def find_declarations(
     tf_files: list[Path], addr: str, cache: dict
 ) -> list[tuple[Path, str, str]]:
-    """EVERY declaration of an address across the scan scope (find_resource_declaration returns the
-    first one in sorted order, so a decoy in an earlier directory would win)."""
+    """EVERY declaration of an address across the scan scope, on the comment-free code view (a
+    first-match lookup would let a decoy in an earlier directory, or a commented-out block, win)."""
     parsed = parse_address(addr)
     if not parsed:
         return []
@@ -702,14 +705,28 @@ def find_declarations(
 
 
 def attr_sites(code: str, skel: str, attr: str) -> list[tuple[int, str]]:
-    """[(brace depth, value text to end of line)] for every `attr =` assignment of a block. Depth 1
-    is a top-level argument; anything deeper sits in a nested block."""
+    """[(brace depth, value text)] for every `attr =` assignment of a block. Depth 1 is a top-level
+    argument; anything deeper sits in a nested block. The value runs to the end of its line, and on
+    past it while a `(`, `[` or `{` opened in the value is still unclosed (counted on the skeleton, so
+    a bracket in a string never counts), whitespace collapsed - a multi-line `for_each = {` is read
+    whole, so two different comprehensions never compare equal on their first line."""
     sites: list[tuple[int, str]] = []
     for m in re.finditer(rf"(?<![\w.]){attr}\s*=(?!=)", skel):
         depth = skel.count("{", 0, m.start()) - skel.count("}", 0, m.start())
-        eol = code.find("\n", m.end())
-        eol = len(code) if eol < 0 else eol
-        sites.append((depth, code[m.end() : eol].strip()))
+        end = m.end()
+        open_ = 0
+        while end < len(skel):
+            ch = skel[end]
+            if ch in "([{":
+                open_ += 1
+            elif ch in ")]}":
+                if open_ == 0:
+                    break  # the enclosing block's own closing brace
+                open_ -= 1
+            elif ch == "\n" and open_ == 0:
+                break
+            end += 1
+        sites.append((depth, " ".join(code[m.end() : end].split())))
     return sites
 
 
@@ -810,19 +827,31 @@ def check_key_chain(
         )
         return None
     # MUTATION-TARGET: MB-L10 end
+    # The volume id and the token reach the host through the consumer's `user_data` argument only; a
+    # line elsewhere in the block (another attribute, a string) is not the host's input. The volume line
+    # is matched on the skeleton, so a string literal cannot stand in for the reference, and the
+    # reference must be the value or the true branch of a ternary (`cond ? <ref> : "retired"`).
+    ud_code = _top_attr(consumer[1], consumer[2], "user_data")
+    ud_skel = _top_attr(consumer[2], consumer[2], "user_data")
     vol_line = re.compile(
-        rf"^\s*workspaces_volume_id\s*=.*\b{re.escape(vtype)}\.{re.escape(vname)}\[each\.key\]\.id\b",
-        re.M,
+        rf"\bworkspaces_volume_id\s*=\s*(?:[^\n]*?\?\s*)?{re.escape(vtype)}\.{re.escape(vname)}"
+        rf"\[each\.key\]\.id\s*(?::[^\n]*)?(?=\s+\w+\s*=|$)"
     )
     tok_line = re.compile(
-        rf"^\s*workspaces_luks_fresh_boot_token\s*=\s*{re.escape(kc['token'])}\.key\s*$", re.M
+        rf"\bworkspaces_luks_fresh_boot_token\s*=\s*{re.escape(kc['token'])}\.key\b"
     )
-    if not vol_line.search(consumer[1]) or not tok_line.search(consumer[1]):
+    if (
+        ud_code is None
+        or ud_skel is None
+        or not vol_line.search(ud_skel)
+        or not tok_line.search(ud_code)
+    ):
         fails.append(
             f"FAIL: {store} key_chain consumer {kc['consumer']} user_data does not carry the volume id "
             f"line (workspaces_volume_id referencing {db['volume']}[each.key].id) and the token line "
             f"(workspaces_luks_fresh_boot_token = {kc['token']}.key) the row names -> the host that "
-            "reads the key does not get this volume's id and token"
+            "reads the key does not get this volume's id and token (both must sit inside the "
+            "consumer's user_data argument)"
         )
         return None
     # MUTATION-TARGET: MB-L3 start (the token reads the config the secret is written to)
@@ -843,7 +872,7 @@ def check_key_chain(
         )
         return None
     # MUTATION-TARGET: MB-L4 end
-    return {"consumer_file": consumer[0], "consumer_code": consumer[1]}
+    return {"consumer_file": consumer[0], "user_data": ud_code}
 
 
 def check_password_claims(
@@ -895,7 +924,7 @@ def check_apparatus_pins(ledger: dict, fails: list[str]) -> None:
             )
 
 
-_UNQUOTED_ASSIGN = r"^\s*(?:export\s+)?{var}=([A-Za-z0-9_.-]+)\s*$"
+_UNQUOTED_ASSIGN = r"^[ \t]*(?:export[ \t]+)?{var}=([A-Za-z0-9_.-]+)[ \t]*$"
 _FSTAB_SHAPED = re.compile(
     r"^\s*[A-Za-z_][A-Za-z0-9_]*=(['\"])/dev/mapper/([\w-]+)\s+/\S+\s+\S+\s+\S+(?:\s+\d+\s+\d+)?\1\s*$"
 )
@@ -922,7 +951,7 @@ def scan_pinned_apparatus(view: str) -> set[str]:
 
 
 def scan_pinned_mount_evidence(view: str) -> set[str]:
-    return mount_evidence_names(view, fstab_shaped=True)
+    return {name for name, _kind in mount_evidence(view, fstab_shaped=True)}
 
 
 def check_pinned_apparatus(
@@ -957,38 +986,50 @@ def check_pinned_apparatus(
     # The install hop needs the consumer that only key_chain names; an indexed row always has it.
     if kc_ctx is not None:
         consumer_file: Path = kc_ctx["consumer_file"]
-        ci = re.search(r'templatefile\(\s*"\$\{path\.module\}/([^"]+)"', kc_ctx["consumer_code"])
+        # The pin must be the module-root script the host installs: the host-script list and the
+        # cloud-init line name a BASENAME resolved against the consumer's own directory, so the same
+        # basename in another directory is a different file the host never reads.
+        same_dir = target.parent == consumer_file.parent
+        ci = re.search(r'templatefile\(\s*"\$\{path\.module\}/([^"]+)"', kc_ctx["user_data"])
         list_ok = bool(
             re.search(
-                rf'^\s*"{re.escape(base)}",?\s*$',
+                rf'^[ \t]*"{re.escape(base)}",?[ \t]*$',
                 hcl_views(cache.get(consumer_file) or read_text(consumer_file))[0],
                 re.M,
             )
         )
         init_ok = False
-        if ci:
-            ci_path = consumer_file.parent / ci.group(1)
-            if ci_path.is_file():
-                init_ok = bool(
-                    re.search(
-                        rf"^\s*-\s*/usr/local/bin/{re.escape(base)}\s*$",
-                        line_comment_view(read_text(ci_path)),
-                        re.M,
-                    )
+        ci_path = consumer_file.parent / ci.group(1) if ci else None
+        if ci_path is not None and ci_path.is_file():
+            init_text = line_comment_view(read_text(ci_path))
+            run_at = re.search(r"(?m)^runcmd:[ \t]*$", init_text)
+            init_ok = bool(
+                run_at
+                and re.search(
+                    rf"(?m)^[ \t]*-[ \t]*/usr/local/bin/{re.escape(base)}[ \t]*$",
+                    init_text[run_at.end() :],
                 )
-        if not (list_ok and init_ok):
+            )
+        if not (same_dir and list_ok and init_ok):
             fails.append(
                 f"FAIL: {store} apparatus {path} is not installed by the consumer "
-                f"{db['key_chain']['consumer']} (host-script list entry: {list_ok}, cloud-init "
-                f"invocation: {init_ok}) -> a file no host installs proves nothing about the volume"
+                f"{db['key_chain']['consumer']} -> a file no host installs proves nothing about the "
+                f"volume. Checked: pinned file in the consumer's directory "
+                f"({consumer_file.parent.relative_to(repo_root).as_posix()}/): {same_dir}; "
+                f'host-script list entry `"{base}",` in {consumer_file.name}: {list_ok}; '
+                f"`- /usr/local/bin/{base}` under runcmd: in "
+                f"{ci_path.name if ci_path else '(no templatefile in user_data)'}: {init_ok}"
             )
             return False
-    view = line_comment_view(cache.get(target) or read_text(target))
-    if mapper not in scan_pinned_apparatus(view):
+    view = _infra_view(target, cache)
+    opened = scan_pinned_apparatus(view)
+    if mapper not in opened:
         fails.append(
             f"FAIL: {store} pinned apparatus {path} does not resolve a cryptsetup "
-            f"luksFormat+luksOpen site for mapper '{mapper}' -> the mapper must be opened by the "
-            "file the row pins"
+            f"luksFormat+luksOpen site for mapper '{mapper}' (mappers found: {sorted(opened) or 'none'}) "
+            "-> the file the row pins must hold a `cryptsetup luksFormat` and a `cryptsetup luksOpen "
+            "[flags] <device> <mapper>` whose mapper is a literal, a `$VAR` assigned once as `VAR=literal` "
+            'or `VAR="${X:-literal}"`; comments and text after a command separator `#` do not count'
         )
         return False
     if mapper not in scan_pinned_mount_evidence(view):
@@ -1377,6 +1418,15 @@ def _validate_store(s: dict, i: int) -> list[str]:
             for f in ("volume", "attachment", "mapper"):
                 if f not in db:
                     errs.append(f"{prefix}.device_binding missing '{f}'")
+                elif not (isinstance(db[f], str) and db[f]):
+                    errs.append(f"{prefix}.device_binding.{f} must be a non-empty string")
+            for f in sorted(set(db) - {"volume", "attachment", "mapper", "apparatus", "key_chain"}):
+                errs.append(f"{prefix}.device_binding has unexpected key '{f}'")
+            mech = (s.get("at_rest") or {}).get("mechanism") if isinstance(s.get("at_rest"), dict) else None
+            if mech != "luks" and ("apparatus" in db or "key_chain" in db):
+                errs.append(
+                    f"{prefix}.device_binding.apparatus and key_chain apply to a mechanism:luks row only"
+                )
             if "apparatus" in db and not (
                 isinstance(db["apparatus"], str) and db["apparatus"].strip()
             ):

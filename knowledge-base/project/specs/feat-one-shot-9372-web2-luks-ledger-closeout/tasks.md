@@ -4,7 +4,7 @@ Plan: `knowledge-base/project/plans/2026-10-10-feat-web2-luks-ledger-flip-and-ar
 
 Branch `feat-one-shot-9372-web2-luks-ledger-closeout`, draft PR #9941.
 
-**Split taken (plan trigger fired at Phase 1.0, 2026-10-10):** the linter diff measured about 575 code lines after the slim form,
+**Split taken (plan trigger fired at Phase 1.0, 2026-10-10):** the linter diff measured over 350 code lines even after the slim form,
 over the 350-line trigger, so #9941 ships Phases 0 and 1 (linter, schema, tests, ADR-140 addendum) as the prerequisite PR and
 Phases 2 to 5 (ledger flip, legal markers, ADR-263 addendum, runbook line, C4 sentence) become PR 1b on a branch cut after it
 merges. PR 2 (retire the rebirth and reboot workflows) is a separate branch. #9941 carries `Ref #9372`, never a closing keyword.
@@ -29,17 +29,17 @@ resolver exceeded its 40-line budget; the config-equality hops (MB-L3) stay.
   on one Doppler config, provisioner with unquoted `MAPPER_NAME`, a `variables.tf` host map).
   - 1.1.1 Must-RED cases first, run against the unmodified linter and watched failing.
   - 1.1.2 Must-PASS cases: the canonical web-class fixture, a differently named `for_each` local, a singleton row without the new keys.
-- 1.2 Schema: optional `device_binding.apparatus`, `device_binding.key_chain`, row-level `multiplicity` (names match #8626).
+- 1.2 Schema: optional `device_binding.apparatus` and `device_binding.key_chain` (names match #8626); `multiplicity` was cut.
 - 1.3 Linter, each behind a `MUTATION-TARGET: MB-Ln` marker (whole statements, never a clause inside a compound condition):
   - 1.3.0 Minimal comment- and string-aware code view used by every new check and both scanner arms; existing checks keep raw text.
-  - 1.3.1 Indexed binding (exactly one `for_each =` on the code view, same expression on volume and attachment, end-anchored; each address declared once and all in one Terraform root; every other index form rejected).
+  - 1.3.1 Indexed binding (exactly one `for_each =` on the code view, same expression on volume and attachment, end-anchored; each address declared once, which also decides indexed vs singleton routing; every other index form rejected; a multi-line value compared whole). The same-root rule was cut (Terraform cannot reference across roots).
   - 1.3.2 Key chain (consumer user_data args, token config equals secret config, secret value is the password result).
   - 1.3.3 Uniqueness of a password across luks rows (explicit and implicit claims) and web-1 / web-class separation.
   - 1.3.4 Apparatus pin: path validation (relative, under `apps/*/infra/`, no `..`, not a symlink), one row per pinned file, the install hop (basename in the consumer's host-script list and the cloud-init invocation), unquoted-assignment resolver, fstab-shaped mount evidence, all on the code view.
-  - 1.3.5 Multiplicity (one supported `for_each` shape, fail closed otherwise; key set equals the variable's keys).
-  - 1.3.6 An indexed row missing `apparatus`, `key_chain` or `multiplicity` FAILs.
+  - 1.3.5 (cut) Multiplicity: replaced by suite cases WC-27 to WC-29.
+  - 1.3.6 An indexed row missing `apparatus` or `key_chain` FAILs.
   - 1.3.7 Fail closed on `for_each` or `volume_id` inside a nested block the extractor cannot parse.
-- 1.4 Mutation battery MB-L1..MB-L8c (prefix avoids #8626's MB-14..MB-25); L2 and L6 (permissive arms) use an inverse helper with an instrument control, L8 has one marker and one otherwise-valid fixture per key; TS-15 and MB-8 untouched.
+- 1.4 Mutation battery MB-L1..MB-L11 (no L7, L9 or L8c: those guards were cut; prefix avoids #8626's MB-14..MB-25); L2 and L6 (permissive arms) use an inverse helper with an instrument control, L8 has one marker and one otherwise-valid fixture per key; TS-15 and MB-8 untouched.
 - 1.5 Green: new cases, TS-15, real ledger unchanged and passing.
 
 ## Phase 2: Ledger commit
@@ -63,7 +63,7 @@ resolver exceeded its 40-line budget; the config-equality hops (MB-L3) stay.
 
 - 4.1 ADR-140 dated addendum (Layer A contract changes).
 - 4.2 ADR-263 dated addendum, appended after #9925's addendum if it merged; status stays `adopting`.
-- 4.3 Runbook `web2-luks-rebirth-9372.md` closing row 2: dated "done by PR #9941" line.
+- 4.3 Runbook `web2-luks-rebirth-9372.md` closing row 2: dated "done by PR 1b" line (the flip PR cut after #9941 merges; #9941 is the linter prerequisite only).
 - 4.4 Correct the `model.c4` data-store encryption sentence, `bash scripts/regenerate-c4-model.sh`, then `bash plugins/soleur/test/c4-count-parity.test.sh` green. Workflow-retirement edge prose is PR 2's.
 
 ## Phase 5: Tracking and owner surfacing

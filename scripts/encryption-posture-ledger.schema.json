@@ -60,9 +60,9 @@
           "required": ["volume", "attachment", "mapper"],
           "additionalProperties": false,
           "properties": {
-            "volume": { "type": "string" },
-            "attachment": { "type": "string" },
-            "mapper": { "type": "string", "description": "The resolved /dev/mapper/<name> name; must match the luksOpen operand (after one level of ${VAR:-default} resolution) AND the mount/gate." },
+            "volume": { "type": "string", "minLength": 1 },
+            "attachment": { "type": "string", "minLength": 1 },
+            "mapper": { "type": "string", "minLength": 1, "description": "The resolved /dev/mapper/<name> name; must match the luksOpen operand (after one level of ${VAR:-default} resolution) AND the mount/gate." },
             "apparatus": {
               "description": "#9372/#9572: the repo-relative file under apps/*/infra/ that holds THIS volume's cryptsetup luksFormat and luksOpen. Only for an indexed ([each.key]) binding, where it is REQUIRED (resolving the mapper by name would reach a sibling volume's apparatus); a singleton row may not carry it. At most one row may pin a given file.",
               "type": "string",
@@ -74,10 +74,10 @@
               "required": ["consumer", "token", "secret", "password"],
               "additionalProperties": false,
               "properties": {
-                "consumer": { "type": "string", "description": "The hcloud_server whose user_data carries the volume id and the token." },
-                "token": { "type": "string", "description": "The doppler_service_token the host reads the key with; its config must equal the secret's." },
-                "secret": { "type": "string", "description": "The doppler_secret holding the passphrase; its value must be <password>.result." },
-                "password": { "type": "string", "description": "The random_password this row claims; no password may be claimed by two luks rows." }
+                "consumer": { "type": "string", "minLength": 1, "description": "The hcloud_server whose user_data carries the volume id and the token." },
+                "token": { "type": "string", "minLength": 1, "description": "The doppler_service_token the host reads the key with; its config must equal the secret's." },
+                "secret": { "type": "string", "minLength": 1, "description": "The doppler_secret holding the passphrase; its value must be <password>.result." },
+                "password": { "type": "string", "minLength": 1, "pattern": "^random_password\\.", "description": "The random_password this row claims; no password may be claimed by two luks rows." }
               }
             }
           }

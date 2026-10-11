@@ -40,7 +40,8 @@ which auto-closed #6931). What is left is the record: the encryption-posture led
 still reads `plaintext-exception`, and the Article 30 register and compliance-posture record still carry sentences that
 are conditioned on this event.
 
-This plan is **PR 1** (this branch, draft PR #9941): the ledger flip, the linter changes the flip needs, the legal
+This plan is **PR 1** (this branch, draft PR #9941, which after the Phase 1.0 split ships the linter prerequisite only; the flip and
+legal records ship as PR 1b): the ledger flip, the linter changes the flip needs, the legal
 supersession markers, and the tracking of the open acceptance items. **PR 2** (retire the two single-use workflows) is
 described under "Follow-up: PR 2" and is not part of this PR's tasks. `Closes #9372` goes on PR 2 (the final PR), not
 here and not in any title.
@@ -247,7 +248,7 @@ they stay byte-equal after bold removal:
 
 Marker text (CLO drafts the final wording; this is the shape the guardrails allow). The four other placements (TS-1, T-1, the PA-1 "Once converted" clause, the destruction-record pointer) carry the same evidence sentence with a cell-specific one-line lead-in naming the superseded sentence by its anchor; "the recovery sentences below" is worded "the recovery sentences in this cell" so the referent is stable:
 
-> **Superseded 2026-10-NN (#9372; fires on the merge of PR #9941):** web-2's `/workspaces` volume (Hetzner id 107059048,
+> **Superseded 2026-10-NN (#9372; fires on the merge of PR 1b (the flip PR, cut after #9941 merges)):** web-2's `/workspaces` volume (Hetzner id 107059048,
 > born raw 2026-10-06) is LUKS-formatted and was opened by the running instance (readiness row `luks=1 luks_arm=opened
 > escrow=ok`, boot dd08ac9d, 2026-10-07T20:07Z), and the daily luks-monitor probe rows read `crypto_LUKS` on
 > `/dev/mapper/workspaces` on three distinct days (the #6931 grader returned PASS on 2026-10-10). That is
@@ -285,7 +286,7 @@ unwarranted (the web-1 record exists because that volume held every user's works
 - `ADR-263` dated addendum (append at the tail **after** #9925's addendum; take both on conflict): the grade, the flip, the
   claim boundary, that web-2 stays "provisioned, proof graded" at weight 0, and the pointers to #9948 / #9949.
   Status stays `adopting`.
-- Runbook `web2-luks-rebirth-9372.md` closing row 2: append a dated "done by PR #9941" line (do not rewrite the row).
+- Runbook `web2-luks-rebirth-9372.md` closing row 2: append a dated "done by PR 1b" line (do not rewrite the row).
 
 ## Implementation Phases
 
@@ -393,6 +394,7 @@ ADR-140, ADR-263, the runbook, the destruction record): zero matches.
 
 - **If this lands broken, the user experiences:** nothing directly: web-2 serves no traffic and holds no workspace data. The failure is a record that over-claims (a ledger or Article 30 sentence saying a volume is encrypted or recoverable when the evidence is formatted/opened plus probes), which weakens Art. 5(2) accountability and any later decision that leans on it.
 - **If this leaks, the user's data is exposed via:** no new exposure vector (documentation and a lint). The indirect path is a later weight flip on web-2 that treats the green ledger as a recovery or reopen guarantee; that path needs a second failure (the anti-pooling gate, `lb-weight-gate.sh`, and ADR-263 "Known limits" hold web-2 at weight 0 until #9948 and #7992 are done).
+- **Artifacts that carry the over-claim risk (named for review):** the `hcloud_volume.workspaces` row in `scripts/encryption-posture-ledger.json`; the supersession markers in `knowledge-base/legal/article-30-register.md`, `knowledge-base/legal/compliance-posture.md`, `knowledge-base/legal/audits/workspaces-plaintext-destruction-record.md` and `knowledge-base/engineering/architecture/nfr-register.md`; the ADR-263 addendum. A passing `luks` row grades configured wiring only (ADR-140 addendum 2026-10-10), never recovery, reopen after reboot or weight-flip clearance.
 - **Brand-survival threshold:** `aggregate pattern`
 - **Threshold decision (challengeable):** not `single-user incident` because no user's data can reach web-2 through this change and the independent gate holds it at weight 0; ADR-263 itself carries `single-user incident` for the mechanism, and a reviewer who reads the flip as the green light for web-2 data should challenge this tier (recorded in `decision-challenges.md`).
 
