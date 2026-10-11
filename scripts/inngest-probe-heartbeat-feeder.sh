@@ -107,16 +107,13 @@ HOST="soleur-inngest"
 HOST_NAME="soleur-inngest-prd"
 # Must equal betteruptime_heartbeat.inngest_server_probe's name in apps/web-platform/infra/uptime-alerts.tf.
 HEARTBEAT_NAME="soleur-inngest-server-probe-prd"
-# One page of 250 is enough today; more than 250 heartbeats fails safe as beat_failed (resolution
-# finds zero or an ambiguous match). Follow pagination.next here if the account ever grows.
+# One page of 250 is enough today (12 heartbeats, pagination.next null). When the API reports a further
+# page the feeder fails safe as beat_failed (paged=1) rather than trust a page-1 answer. Follow
+# pagination.next here if the account ever grows.
 API_URL="https://uptime.betterstack.com/api/v2/heartbeats?per_page=250"
 URL_RE='^https://uptime\.betterstack\.com/api/v1/heartbeat/[A-Za-z0-9]+$'
 TOKEN_RE='^[A-Za-z0-9._~+/=-]{20,}$'
 
-# The ONE definition of a probe row (#8846): emitter AND anchored marker. Resolved from this file's
-# repo root so a sandboxed copy reads its own tree; INNGEST_PROBE_ROW_LIB overrides it. The load
-# contract (scripts/lib/inngest-probe-row.sh header): unset first so an inherited def never survives
-# a source that failed or defined nothing; the selftest proves the loaded def; stderr stays visible.
 # TLS/DNS environment that can substitute the trust store or the resolver for this file's own credentialed
 # curls (parity with scripts/betterstack-query.sh, #7873): --disable and --noproxy do not cover it.
 unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME HOSTALIASES LOCALDOMAIN RES_OPTIONS
@@ -130,6 +127,10 @@ if [[ "${GITHUB_ACTIONS:-}" == "true" ]] && { [[ -n "${INNGEST_FEEDER_NOW+x}" ]]
   echo "CANNOT BEAT: a test seam (INNGEST_FEEDER_NOW or INNGEST_PROBE_ROW_LIB) is set inside GitHub Actions. It would let a frozen clock or a substitute predicate authorize a beat; nothing was decided."
   exit 3
 fi
+# The ONE definition of a probe row (#8846): emitter AND anchored marker. Resolved from this file's
+# repo root so a sandboxed copy reads its own tree; INNGEST_PROBE_ROW_LIB overrides it. The load
+# contract (scripts/lib/inngest-probe-row.sh header): unset first so an inherited def never survives
+# a source that failed or defined nothing; the selftest proves the loaded def; stderr stays visible.
 unset INNGEST_PROBE_ROW_JQ INNGEST_PROBE_EMITTER INNGEST_PROBE_MARKER
 _ipr_lib="${INNGEST_PROBE_ROW_LIB:-$REPO_ROOT/scripts/lib/inngest-probe-row.sh}"
 # shellcheck source=scripts/lib/inngest-probe-row.sh

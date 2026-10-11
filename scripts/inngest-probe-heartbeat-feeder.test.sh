@@ -112,7 +112,7 @@ api_paused()      { hb_json "$NAME" true "$HB_URL"; }
 reset_case() {
   C_ROWS="/dev/null"; C_STUB="ok"; C_API=""; C_APIMODE="ok"; C_BEATMODE="200"; C_NOW="$NOW"
   C_TOKEN="$TOKEN"; C_UNSET=""; C_LIB="$LIB_SRC"; C_LIBENV=""; C_XTRACE=0; C_ARGS=""
-  C_PROBE="$PROBE_SRC"; C_BEATS=0; C_APIS=0; C_EXPECT_URL="$HB_URL"; C_TLSENV=0; C_GHA=0
+  C_PROBE="$PROBE_SRC"; C_BEATS=0; C_APIS=0; C_EXPECT_URL="$HB_URL"; C_TLSENV=0; C_GHA=0; C_LOCALE=""
 }
 reset_case
 
@@ -224,6 +224,7 @@ STUB
     for _tn in $TLS_NAMES; do envv+=("$_tn=/dev/null"); done
   fi
   [[ "$C_GHA" != 1 ]] || envv+=("GITHUB_ACTIONS=true")
+  [[ -z "$C_LOCALE" ]] || envv+=("LC_ALL=$C_LOCALE")
   local -a sh=("$BASH_BIN")
   [[ "$C_XTRACE" == "1" ]] && sh=("$BASH_BIN" -x)
   # shellcheck disable=SC2086
@@ -513,7 +514,13 @@ expect "no INNGEST_FEEDER_NOW: the verifier uses the real wall clock" 0 beat
 reset_case; C_NOW="__unset__"; C_ROWS="$(row "$(date -u -d "@$(( $(date -u +%s) - 4400 ))" '+%Y-%m-%d %H:%M:%S.000000')" "$(msg dedicated)" | fx realclock2)"; C_BEATS=1; C_APIS=1
 expect "no INNGEST_FEEDER_NOW: a 4400 s old row still beats (a fast fallback clock would withhold it)" 0 beat
 reset_case; C_GHA=1; C_ROWS="$(ded 60 | fx gha)"
-expect "a test seam set inside GitHub Actions is refused" 3 query_failed "reason=test_seam_in_ci"
+expect "a frozen-clock seam set inside GitHub Actions is refused" 3 query_failed "reason=test_seam_in_ci"
+reset_case; C_GHA=1; C_NOW="__unset__"; C_LIBENV="$LIB_SRC"; C_ROWS="$(ded 60 | fx gha2)"
+expect "a predicate-library seam set inside GitHub Actions is refused" 3 query_failed "reason=test_seam_in_ci"
+reset_case; C_GHA=1; C_NOW="__unset__"; C_ROWS="$(row "$(date -u -d "@$(( $(date -u +%s) - 60 ))" '+%Y-%m-%d %H:%M:%S.000000')" "$(msg dedicated)" | fx gha3)"; C_BEATS=1; C_APIS=1
+expect "inside GitHub Actions with no seam set the verifier runs normally" 0 beat
+reset_case; C_LOCALE="en_US.utf8"; C_ROWS="$(row "$(dt_ago 60 | sed 's/^2026/\xd9\xa2\xd9\xa0\xd9\xa2\xd9\xa6/')" "$(msg dedicated)" | fx arabic)"
+expect "a dt written with non-ASCII digits is rejected under a UTF-8 locale (LC_ALL=C is pinned)" 3 row_unusable "dt_rejected=1"
 reset_case; C_TLSENV=1; C_ROWS="$(ded 60 | fx tlsenv)"; C_BEATS=1; C_APIS=1
 expect "TLS/CA environment is scrubbed before the credentialed curls" 0 beat
 
@@ -675,6 +682,8 @@ wf_check "workflow step, beat" "only the marker line is echoed (the explanatory 
 wf_run 'printf "::set-output name=x::y\n"; printf "inngest-probe-feeder: verdict=producer_silent age_s=9999\n"; exit 3'
 wf_check "workflow step, withheld" "step exits 0, writes exit_code=3 verdict=producer_silent, and a ::error:: annotation" "$([[ "$WF_RC" == 0 ]] && grep -qx 'exit_code=3' "$WORK/wf/out.txt" && grep -qx 'verdict=producer_silent' "$WORK/wf/out.txt" && grep -q '^::error::' "$WORK/wf/log.txt"; echo $?)"
 wf_check "workflow step, withheld" "a verifier line that starts with :: never reaches the log as a command" "$(! grep -q '^::set-output' "$WORK/wf/log.txt"; echo $?)"
+wf_run 'printf "inngest-probe-feeder: verdict=weird\n"; exit 0'
+wf_check "workflow step, exit 0 without a deciding verdict" "an ::error:: annotation, not a notice" "$(grep -q '^::error::inngest probe heartbeat feeder exited 0 without a deciding verdict' "$WORK/wf/log.txt" && ! grep -q '^::notice::' "$WORK/wf/log.txt"; echo $?)"
 wf_run __missing__
 wf_check "workflow step, verifier missing" "step exits 0, exit_code=127, verdict=no_marker, and the cause is named in the log" "$([[ "$WF_RC" == 0 ]] && grep -qx 'exit_code=127' "$WORK/wf/out.txt" && grep -qx 'verdict=no_marker' "$WORK/wf/out.txt" && grep -q 'verdict=no_marker rc=127' "$WORK/wf/log.txt"; echo $?)"
 wf_run 'printf "inngest-probe-feeder: verdict=beat now=%s lib=%s\n" "${INNGEST_FEEDER_NOW-unset}" "${INNGEST_PROBE_ROW_LIB-unset}"; exit 0' INNGEST_FEEDER_NOW=2026-01-01T00:00:00Z INNGEST_PROBE_ROW_LIB=/tmp/evil.sh
@@ -819,8 +828,8 @@ if (( passes + fails != cases )); then
   exit 1
 fi
 # A HARD-CODED floor: a runtime-derived one falls when a case is deleted.
-MIN_PASSES=147
-MIN_BEAT_ASSERTS=79
+MIN_PASSES=151
+MIN_BEAT_ASSERTS=82
 if (( passes < MIN_PASSES )); then
   printf 'FATAL: only %s passes, below the floor of %s -- the suite was truncated, so a 0-failure tally proves nothing.\n' "$passes" "$MIN_PASSES" >&2
   exit 1
