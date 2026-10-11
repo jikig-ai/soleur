@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
@@ -35,6 +36,7 @@ import {
   selectSandboxSetupArgv,
   substituteCanonicalArgv,
   substituteOuterRoot,
+  runHardeningProbes,
   validateFixture,
   validateOuterWrapFixture,
 } from "../scripts/sandbox-canary.mjs";
@@ -1145,6 +1147,58 @@ describe("classifyProcMaskProbe — the /proc mask is realized in-sandbox (#1003
       verdict: "canary_infra_error",
       reason: "proc_mask_exit_1",
     });
+  });
+});
+
+// #10032 — AC3: the re-spec'd proc_mask probe must stay DRIVABLE RED. These
+// arms run REAL bwrap (PATH resolves the host binary — no shim): restoring
+// the vendored tail bind mounts host procfs and the probe reports
+// `proc_mask_defeated`; the legitimate tmpfs mask passes. If a future edit
+// makes the probe tautological (asserts nothing) both arms stay green and
+// this file fails the mutation the probe exists to catch.
+const BWRAP_OK =
+  process.platform === "linux" &&
+  spawnSync(
+    "bwrap",
+    ["--unshare-user", "--unshare-pid", "--ro-bind", "/", "/", "--", "true"],
+    { stdio: "ignore", timeout: 15_000 },
+  ).status === 0;
+
+describe.skipIf(!BWRAP_OK)("proc_mask live drive (real bwrap, no shim) — #10032", () => {
+  it("MUTATION: a restored tail `--bind /proc /proc` defeats the mask — proc_mask_defeated", () => {
+    const verdict = runHardeningProbes([
+      "--unshare-user", "--unshare-pid", "--ro-bind", "/", "/",
+      "--tmpfs", "/proc",
+      "--bind", "/proc", "/proc", // the #9723 defect shape, restored
+    ]);
+    expect(verdict).toMatchObject({
+      verdict: "sandbox_broken",
+      reason: "proc_mask_defeated",
+      probe: "proc_mask",
+    });
+  });
+
+  it("a restored `--proc /proc` fresh procfs is ALSO a defeat — any real procfs", () => {
+    const verdict = runHardeningProbes([
+      "--unshare-user", "--unshare-pid", "--ro-bind", "/", "/",
+      "--proc", "/proc",
+    ]);
+    expect(verdict).toMatchObject({
+      verdict: "sandbox_broken",
+      reason: "proc_mask_defeated",
+      probe: "proc_mask",
+    });
+  });
+
+  it("LEGITIMATE: the empty-tmpfs mask passes — the #10032 realized shape", () => {
+    // Assert at probe granularity, not null-on-the-suite: later hardening
+    // probes (userns_deny) depend on host posture this test does not control
+    // — what AC3 pins is that proc_mask does NOT fire on the legit shape.
+    const verdict = runHardeningProbes([
+      "--unshare-user", "--unshare-pid", "--ro-bind", "/", "/",
+      "--tmpfs", "/proc",
+    ]);
+    expect(verdict?.probe ?? null, `proc_mask must not fire on the tmpfs mask: ${JSON.stringify(verdict)}`).not.toBe("proc_mask");
   });
 });
 
