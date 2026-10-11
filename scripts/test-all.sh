@@ -2792,13 +2792,13 @@ _affected_add_edge() {
             */)
               _gt="${_g#$_gh}"
               case "$_gt" in
-                */) _p="^glob:${_p}" ;;     # tail ends / — no path can match it → verbatim
-                *\**)                       # tail carries a *
+                */) _p="^glob:${_p}" ;;     # _gt ends / — no path can match it → verbatim
+                *\**)                       # _gt carries a *
                   if _affected_probe d "$_gh"; then _p="^glob:${_g}"; else _p="^${_gh}"; fi ;;
-                *) _p="^glob:${_p}" ;;      # tail without * → malformed → verbatim
+                *) _p="^glob:${_p}" ;;      # _gt without * → malformed → verbatim
               esac
               ;;
-            *) _p="^glob:${_p}" ;;          # head does not end in / → malformed → verbatim
+            *) _p="^glob:${_p}" ;;          # _gh does not end in / → malformed → verbatim
           esac
           ;;
       esac
