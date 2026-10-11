@@ -230,7 +230,8 @@ case "${1:-}" in
 esac
 if [[ "$MODE" == status || "$MODE" == armone ]]; then
   # The leading alphanumeric is deliberate: a forgotten name must not let `--id` be read as the name.
-  _shown="${NAME:0:40}"; _shown="${_shown//[^[:print:]]/?}"
+  # C locale: in a UTF-8 locale U+202E and U+200B count as printable (same reason as show(), defined further down).
+  _shown="$(LC_ALL=C; _t="${NAME:0:40}"; printf '%s' "${_t//[^[:print:]]/?}")"
   [[ "$NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || argerr "the monitor name must match ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\$ (got '${_shown}')."
   # HAVE_ID, not -n: `--id ""` (an empty shell variable) must refuse rather than silently drop the pin.
   [[ "$HAVE_ID" -eq 0 || "$PIN_ID" =~ ^[0-9]+$ ]] || argerr "--id must be a numeric Better Stack heartbeat id."
