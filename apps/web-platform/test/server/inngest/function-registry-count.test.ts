@@ -220,6 +220,13 @@ const NON_INNGEST_MONITORS = new Set([
   // no SENTRY_MONITOR_SLUG; the workflow's terminal sentry-heartbeat step posts
   // the check-in. Same class as scheduled-terraform-drift / main-health-monitor.
   "scheduled-supabase-watchdog",
+  // #9855: GHA-fired (scheduled-integration-suites.yml, on.schedule
+  // '30 4 * * *') — the nightly env-gated integration-suites leg's dead-man
+  // monitor. Its work is git/repo-scoped test execution on an ephemeral
+  // runner, so it has no cron-*.ts counterpart and declares no
+  // SENTRY_MONITOR_SLUG; its terminal sentry-heartbeat step posts the
+  // check-in. Same class as scheduled-realtime-probe.
+  "scheduled-integration-suites",
 ]);
 
 describe("Inngest function registry — drift guards", () => {

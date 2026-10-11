@@ -113,6 +113,36 @@ builtins / prod `dependencies` / in-payload relatives, since a devDep import
 there fails the same way in-image. All pinned at PR time in
 `apps/web-platform/test/dockerfile-vitest-version-pin.test.ts`.
 
+**Writable-temp constraint (#9860):** zero specifiers is necessary but not
+sufficient. `/app/package.json` is `"type": "module"`, so vitest's
+`configLoader: bundle` (the default) takes the ESM load path: bundle in
+memory, then write `<nearest node_modules>/.vite-temp/<name>.timestamp-*.mjs`
+before `import()`ing it — falling back to the config's own directory when the
+`.vite-temp` mkdir hits EACCES. The canary exec runs as USER soleur with
+`/app`, `/app/test`, and `/app/node_modules` all root-owned, so BOTH targets
+EACCES and the probe reports `reason=vitest_rc_1: … failed to load config
+from /app/test/vitest.canary.config.ts` (the v0.335.5 prod verdict — the
+error line under the banner is truncated in the deploy-status state). The
+Dockerfile bakes `RUN install -d -o 1001 -g 1001 -m 0755
+/app/node_modules/.vite-temp` after `npm ci --omit=dev` (npm ci recreates
+node_modules/ wholesale, so order matters); the pin test asserts the bake
+exists exactly once, carries `-o 1001` and an owner-writable mode, uses the
+absolute path, and is followed by no node_modules-recreating step.
+Note for repro work: an out-of-image sim must carry `package.json
+{"type":"module"}` AND read-only payload/node_modules dirs — without the
+former the loader takes the in-memory CJS path and the EACCES never fires.
+
+**Plain-output constraint (#9860):** with a loadable config the third
+failure surfaced — vitest emits ANSI escapes even under `env -i` + `CI=true`,
+so stdout carries `Tests  \e[1m\e[32m13 passed` with escapes BETWEEN the
+tokens the vacuous-green `=~` greps. A 13-pass run then records
+`vacuous_green_no_tests_passed`. The argv carries `--no-color` (pinned by
+CWI-1) and the function additionally strips residual escapes from captured
+stdout before any marker grep — the summary counters and the `FAIL`/
+`AssertionError` reason-fold are all colored in the same shape. CWI-10b pins
+the resilience arm: an ANSI-colored pass summary must still read
+`verdict=pass`.
+
 ## Gate vs report — report-only (chosen)
 
 The probe ships **report-only**: it is invoked `|| true` inside the

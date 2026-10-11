@@ -405,6 +405,7 @@
 1	scripts/lint-encryption-posture.test.sh
 33	scripts/lint-followthrough-varq-ban.test.sh
 1	scripts/lint-guard-contract.test.sh
+4	scripts/lint-integration-env-gates.test.sh
 1	scripts/lint-legal-mirror-drift-baseline.sh
 19	scripts/lint-legal-mirror-drift-baseline.test.sh
 9	scripts/lint-legal-registers.test.sh

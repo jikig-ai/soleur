@@ -506,6 +506,7 @@ assert "#8077 the probe body names its /tmp/health-body scratch (>=2 uses, got $
 sed -i "s#/tmp/health-body#$PROBE_WS/health-body#g" "$PROBE_BODY"
 mkdir -p "$PROBE_WS/scripts" "$PROBE_WS/bin"
 cp "$REPO_ROOT/scripts/inngest-liveness-classify.sh" "$PROBE_WS/scripts/"
+mkdir -p "$PROBE_WS/scripts/lib" && cp "$REPO_ROOT/scripts/lib/bearer-curl.sh" "$PROBE_WS/scripts/lib/"  # the probe step sources it from $GITHUB_WORKSPACE (ADR-280)
 cat > "$PROBE_WS/bin/curl" <<'STUB'
 #!/usr/bin/env bash
 # Serve the Nth scripted response (or the last one) — $SEQ_DIR/<n>.code + <n>.body.
@@ -633,7 +634,7 @@ fi
 FAIL=$((FAIL - 1))
 echo "  (nolive harness canary OK — deliberate FAIL above is expected and subtracted)"
 assert "#8077 the no-live-scheduler issue step keys on steps.nolive.outputs.alarm == 'true' and labels action-required" \
-  "awk '/^      - name: File or comment no-live-scheduler issue/{f=1} f&&/^      - name: /&&!/no-live-scheduler issue/{exit} f' '$WF_NC' | grep -qF \"if: always() && steps.nolive.outputs.alarm == 'true'\" && grep -qF '[ci/inngest-no-live-scheduler]' '$WF_NC'"
+  "awk '/^      - name: File or comment no-live-scheduler issue/{f=1} f&&/^      - name: /&&!/no-live-scheduler issue/{exit} f' '$WF_NC' | grep -cF >/dev/null \"if: always() && steps.nolive.outputs.alarm == 'true'\" && grep -qF '[ci/inngest-no-live-scheduler]' '$WF_NC'"
 assert "#8077 a close step closes [ci/inngest-no-live-scheduler] on alarm == 'false'" \
   "grep -qF \"steps.nolive.outputs.alarm == 'false'\" '$WF_NC'"
 

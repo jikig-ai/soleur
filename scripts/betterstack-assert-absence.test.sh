@@ -237,12 +237,40 @@ else
   ok "no clean verdict is emitted for a partial response"
 fi
 
+# --- --absence-require: AND-scope onto every absence term (#9939) ------------------------------
+# Simulates the measured false-positive class: a row that matches the needle but NOT the
+# require (the webhook-payload case — issue text inside an unrelated log body). The stub
+# returns 1 when the predicate lacks the AND'd require — i.e. it plays the row the needle
+# alone would have counted — and 0 when the require is properly ANDed.
+echo "--- --absence-require scopes the absence predicate (AND, not OR, not dropped) ---"
+cat > "$TMP/stub-require.sh" <<'STUB'
+#!/usr/bin/env bash
+sql="$1"
+if [[ "$sql" == *SOLEUR_PROBE_CANARY* ]]; then
+  printf '{"n":"5"}\n'; exit 0
+fi
+if [[ "$sql" == *NEEDLE_TEXT*AND*REQUIRE_TAG* ]]; then
+  printf '{"n":"0"}\n'
+else
+  printf '{"n":"1"}\n'
+fi
+STUB
+chmod +x "$TMP/stub-require.sh"
+rc=0
+out=$(BETTERSTACK_QUERY_SCRIPT="$TMP/stub-require.sh" bash "$SUT" --host soleur-web-1 \
+        --absence NEEDLE_TEXT --absence-require REQUIRE_TAG --since 6h 2>&1) || rc=$?
+if [[ "$rc" == 0 ]] && grep -q 'outcome=clean' <<<"$out"; then
+  ok "--absence-require is AND'd onto the absence term — a needle-only match is excluded"
+else
+  bad "--absence-require did not scope the absence read (rc=$rc): $out"
+fi
+
 # --- Anti-vacuity floor -----------------------------------------------------------------------
 # This suite imposes assertion floors on other people's guards and had none of its own. Neuter
 # ok()/bad()/eq() and it reported "0 passed, 0 failed / OK / exit 0" — indistinguishable from a
 # clean run. A FLOOR, not equality: the count is developer-incremented, so -eq turns every new
 # assertion into a spurious red.
-MIN_ASSERTIONS=35
+MIN_ASSERTIONS=36
 if [[ "$((pass + fail))" -lt "$MIN_ASSERTIONS" ]]; then
   echo "FATAL: only $((pass + fail)) assertions ran, expected >= $MIN_ASSERTIONS — the suite was stranded, not clean." >&2
   exit 1

@@ -165,3 +165,23 @@ describe("ConversationNamesSettingsContent", () => {
     });
   });
 });
+
+// Demoted from e2e/team-membership.e2e.ts (#9855) — the e2e asserted
+// GET /dashboard/settings/conversation-names is not 404 (route reachability
+// after the Phase 5.1 rename). At this layer the equivalent is the route's
+// page module existing and rendering its real tree.
+import ConversationNamesSettingsPage from "@/app/(dashboard)/dashboard/settings/conversation-names/page";
+
+describe("ConversationNamesSettingsPage (route reachability, demoted from e2e)", () => {
+  it("the /dashboard/settings/conversation-names page module renders", async () => {
+    render(
+      <SwrTestProvider>
+        <ConversationNamesSettingsPage />
+      </SwrTestProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByRole("textbox").length).toBeGreaterThan(0);
+    });
+  });
+});

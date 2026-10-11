@@ -442,6 +442,14 @@ jobs:
         run: python3 scripts/lint-shell-trace-credential-refusal.py --changed --base origin/main
       - name: Lint orphan test suites (every tracked *.test.sh must be registered)
         run: bash scripts/lint-orphan-test-suites.sh
+      # Same advisory level as the job: absent from required-checks.txt + the
+      # ruleset. A red still reds the run conclusion and lands in the
+      # main-health-monitor sweep via its test-all.sh registration — born-
+      # advisory, same promotion path as the lints above. The sentinel is
+      # deterministic (git grep + grep over the tracked tree, no network).
+      - name: Lint integration env gates (every process.env gate must be wired + collected)
+        if: ${{ !cancelled() }}
+        run: bash scripts/lint-integration-env-gates.sh
       # THE THIRD DISPATCH of the no-list guard (#8289). lefthook's pre-commit and pre-push
       # entries see only the staged / pushed set; `git commit --no-verify` and a
       # merge-resolution commit reach the repository through neither. So CI walks the WHOLE

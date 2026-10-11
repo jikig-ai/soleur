@@ -2875,13 +2875,19 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler soleur/prd_terraform). NO SUBSTITUTE: the bundle is
   // emitted only when a canary sandbox probe fails, and lands only in the Logs warehouse, which has no
   // unauthenticated read path; the deploy-status hook carries the verdict but not the cause. Genuine.
-  // #9776 (2026-10-11): +1 (53 -> 54) for `2026-10-10-feat-hosted-autonomous-ask-before-destroy-plan.md`.
+  // #9939 (2026-10-10): +1 (53 -> 54) for `2026-10-10-chore-inngest-luks-first-boot-envfile-ordering-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`scripts/betterstack-assert-absence.sh --host soleur-inngest-prd …`) reads
+  // BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler soleur/prd_terraform). NO SUBSTITUTE: the journal
+  // channel rows it asserts absent live only in the Logs warehouse, which has no unauthenticated read
+  // path — the host itself is no-SSH. Genuine.
+  // #9776 (2026-10-11): +1 (54 -> 55) for `2026-10-10-feat-hosted-autonomous-ask-before-destroy-plan.md`.
   // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
   // TRUTH: the per-ask lines (`decision:"destroy-ask"`) are read by `scripts/betterstack-query.sh` through the soak probe, which
   // needs BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler soleur/prd_terraform). NO SUBSTITUTE: the per-rule ask counts live
   // only in the private Better Stack sink (the Sentry events are capped per context and carry no per-rule totals), so no
   // unauthenticated read verifies the runtime stream; the static `git grep` in the same block proves only that the emitter exists. Genuine.
-  const BASELINE_DECLARED_PROBES = 54;
+  const BASELINE_DECLARED_PROBES = 55;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

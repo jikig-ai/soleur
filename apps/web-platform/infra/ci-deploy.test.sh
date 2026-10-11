@@ -537,14 +537,14 @@ if [[ -n "${MOCK_GAK_LOG:-}" && "${1:-}" == "run" ]]; then
   done
   if [[ -n "$_gn" ]]; then
     _gtok=0
-    if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -qF -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _gtok=1; fi
+    if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -cF >/dev/null -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _gtok=1; fi
     printf 'run:%s env_token=%s\n' "$_gn" "$_gtok" >> "$MOCK_GAK_LOG"
     if [[ -n "$_gef" && -f "$_gef" ]]; then cp "$_gef" "$(dirname "$MOCK_GAK_LOG")/envfile.$_gn"; fi
   fi
 fi
 if [[ "${1:-}" == "exec" && "$*" == *github-app-key-probe.mjs* ]]; then
   _gtok=0; _gkey=0; _giso=0
-  if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -qF -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _gtok=1; fi
+  if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -cF >/dev/null -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _gtok=1; fi
   if [[ -n "${MOCK_GAK_KEY_MARK:-}" && "$*" == *"$MOCK_GAK_KEY_MARK"* ]]; then _gkey=1; fi
   # shellcheck disable=SC2016
   if [[ "${3:-}" == /bin/sh && "${4:-}" == -c && "${5:-}" == *'exec /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin GITHUB_APP_ID="$GITHUB_APP_ID" GITHUB_APP_PRIVATE_KEY="$GITHUB_APP_PRIVATE_KEY" /usr/local/bin/node "$1"' ]]; then _giso=1; fi
@@ -3184,7 +3184,7 @@ assert_cross_workspace_isolation() {
   # any intended argv change is a conscious edit of EXPECTED here.
   TOTAL=$((TOTAL + 1))
   local expected log_contents n_lines
-  expected="exec -w /app soleur-web-platform-canary /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp CI=true SOLEUR_ISOLATION_TEST_HOST=1 SOLEUR_ISOLATION_TIERS=direct SOLEUR_ISOLATION_IN_IMAGE=1 /usr/local/bin/vitest run --config test/vitest.canary.config.ts"
+  expected="exec -w /app soleur-web-platform-canary /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp CI=true SOLEUR_ISOLATION_TEST_HOST=1 SOLEUR_ISOLATION_TIERS=direct SOLEUR_ISOLATION_IN_IMAGE=1 /usr/local/bin/vitest run --config test/vitest.canary.config.ts --no-color"
   log_contents=$(cat "$d/cwi-argv.log" 2>/dev/null || true)
   n_lines=$(printf '%s\n' "$log_contents" | grep -c . || true)
   if [[ "$rc" -eq 0 && "$n_lines" -eq 1 && "$log_contents" == "$expected" ]]; then
@@ -3380,6 +3380,25 @@ assert_cross_workspace_isolation() {
   else
     FAIL=$((FAIL + 1)); echo "  FAIL: CWI-10 vacuous green must be RED (rc=$rc7 verdict=$v10 reason=$r10)"
     echo "        state file:"; { cat "$d7/wi-state.json" 2>/dev/null || true; } | sed 's/^/          /'
+  fi
+
+  # CWI-10b: ANSI-resilience — vitest colors its summary even under env -i +
+  # CI=true, and the escapes interleave BETWEEN "Tests" and the count
+  # (`Tests  \e[1m\e[32m13 passed`). --no-color (argv, pinned by CWI-1) is the
+  # source fix; the sed strip inside the function is the belt that must keep a
+  # colored pass green — a passing suite may never read vacuous (#9860, the
+  # first deploy carrying a loadable config reported exactly that).
+  local d7b out7b rc7b v10b r10b
+  out7b=$(run_cwi_deploy "export MOCK_CWI_PROBE_OUT=\$' Test Files  1 passed (1)\n      Tests  \e[1m\e[32m13 passed\e[39m\e[2m | \e[22m\e[33m4 skipped\e[39m\e[90m (17)\e[39m'") && rc7b=0 || rc7b=$?
+  d7b=$(printf '%s\n' "$out7b" | sed -n 's/^CWI_ARTIFACT_DIR=//p' | tail -1)
+  v10b=$(jq -r '.verdict // ""' "$d7b/wi-state.json" 2>/dev/null || echo "")
+  r10b=$(jq -r '.reason // ""' "$d7b/wi-state.json" 2>/dev/null || echo "")
+  TOTAL=$((TOTAL + 1))
+  if [[ "$rc7b" -eq 0 && "$v10b" == "pass" && "$r10b" == "ok" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: CWI-10b an ANSI-colored pass summary still reads pass, not vacuous_green"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: CWI-10b ANSI-colored pass must be pass (rc=$rc7b verdict=$v10b reason=$r10b)"
+    echo "        state file:"; { cat "$d7b/wi-state.json" 2>/dev/null || true; } | sed 's/^/          /'
   fi
 
   # CWI-11: the reason channel is load-bearing diagnostics, not a formatter —
@@ -4181,7 +4200,7 @@ diag_check "#9871 D9a: the real container script, run under sh, prints exactly t
   "$([[ -n "$D9_SCRIPT" && "$D9_SH" == "$D_SECTIONS" ]] && echo 0 || echo 1)" "got: $D9_SH"
 diag_check "#9871 D9b: the real container script, run under bash, prints exactly the ten pinned sections" \
   "$([[ -n "$D9_SCRIPT" && "$D9_BASH" == "$D_SECTIONS" ]] && echo 0 || echo 1)" "got: $D9_BASH"
-D9_PROC=$(sh -c "$D9_SCRIPT" soleur-canary-diag 2>/dev/null | grep -m1 '^proc ' || true)
+D9_PROC=$(grep -m1 '^proc ' < <(sh -c "$D9_SCRIPT" soleur-canary-diag 2>/dev/null) || true)
 diag_check "#9871 D9d: the real script's sdk_probe carries the SDK flags and its proc row reports NoNewPrivs and Seccomp" \
   "$(has_f '--unshare-pid --proc /proc' "$(grep '^v=.*--unshare-user' <<<"$D9_SCRIPT" || true)" && has_f 'NoNewPrivs=' "$D9_PROC" && has_f 'Seccomp=' "$D9_PROC" && echo 0 || echo 1)" "proc: $D9_PROC"
 diag_check "#9871 D9c control: a gutted script does NOT satisfy the D9 check (so D9a/D9b can fail)" \
@@ -8246,7 +8265,7 @@ if (( ${#T3_PAY} > 200 )); then
   T3_BAD="${T3_BAD}\n    err payload is ${#T3_PAY} bytes, bound is 200"
 fi
 # NEGATIVE 2 — no control characters anywhere in the payload (TAB and BEL were both injected).
-if printf '%s' "$T3_PAY" | LC_ALL=C grep -q '[[:cntrl:]]'; then
+if printf '%s' "$T3_PAY" | LC_ALL=C grep -c >/dev/null '[[:cntrl:]]'; then
   T3_BAD="${T3_BAD}\n    err payload still carries control characters"
 fi
 # NEGATIVE 3 — the dp.st. secret is redacted, checked against the WHOLE sink and not just the
@@ -9792,7 +9811,7 @@ gak_run_boot() {
 if [[ "${1:-}" == "inspect" ]]; then echo "${MOCK_BOOT_RUNNING:-true}"; exit 0; fi
 if [[ "${1:-}" == "exec" && "$*" == *github-app-key-probe.mjs* ]]; then
   _gtok=0; _gkey=0; _giso=0
-  if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -qF -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _gtok=1; fi
+  if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -cF >/dev/null -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _gtok=1; fi
   if [[ -n "${MOCK_GAK_KEY_MARK:-}" && "$*" == *"$MOCK_GAK_KEY_MARK"* ]]; then _gkey=1; fi
   # shellcheck disable=SC2016
   if [[ "${3:-}" == /bin/sh && "${4:-}" == -c && "${5:-}" == *'exec /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin GITHUB_APP_ID="$GITHUB_APP_ID" GITHUB_APP_PRIVATE_KEY="$GITHUB_APP_PRIVATE_KEY" /usr/local/bin/node "$1"' ]]; then _giso=1; fi
@@ -9806,14 +9825,14 @@ MOCK
   cat > "$d/bin/soleur-boot-emit" <<'MOCK'
 #!/bin/bash
 _t=0
-if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -qF -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _t=1; fi
+if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -cF >/dev/null -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _t=1; fi
 printf 'emit:%s env_token=%s\n' "$1" "$_t" >> "$MOCK_GAK_LOG"
 printf '%s %s %s\n' "$1" "$2" "$(cat "$SOLEUR_STAGE_DETAIL_DIR/$1" 2>/dev/null)" >> "$MOCK_BOOT_EMITS"
 MOCK
   cat > "$d/bin/systemd-run" <<'MOCK'
 #!/bin/bash
 _t=0
-if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -qF -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _t=1; fi
+if [[ -n "${MOCK_GAK_TOKEN:-}" ]] && { env | grep -v '^MOCK_' | grep -cF >/dev/null -- "$MOCK_GAK_TOKEN" || [[ "$*" == *"$MOCK_GAK_TOKEN"* ]]; }; then _t=1; fi
 if [[ "${MOCK_SYSTEMD_RUN_FAIL:-}" == "1" ]]; then printf 'systemd-run-failed env_token=%s %s\n' "$_t" "$*" >> "$MOCK_GAK_LOG"; exit 1; fi
 printf 'systemd-run env_token=%s %s\n' "$_t" "$*" >> "$MOCK_GAK_LOG"
 exit 0
@@ -10302,7 +10321,7 @@ _gak_static() {  # <ci-file> <boot-file>
   # The emitter must be CALLED from code, not merely named in a comment (test-design F14): comment
   # lines are stripped and the call shape (a classification and a level) is required.
   if ! grep -qx 'overlay_github_app_key() {' "$b1" || ! grep -qx 'github_app_key_present() {' "$b1" \
-     || ! grep -v '^[[:space:]]*#' "$b1" | grep -qE '^[[:space:]]+github_app_key_emit [a-z_]+ (info|warning|error)'; then
+     || ! grep -v '^[[:space:]]*#' "$b1" | grep -cE >/dev/null '^[[:space:]]+github_app_key_emit [a-z_]+ (info|warning|error)'; then
     GAK_WHY="the ci-deploy block does not define the overlay/presence functions or never calls the emitter"; rm -f "$b1" "$b2"; return 1
   fi
   if ! cmp -s "$b1" "$b2"; then GAK_WHY="the two blocks differ ($(cmp "$b1" "$b2" 2>&1 | head -1))"; rm -f "$b1" "$b2"; return 1; fi

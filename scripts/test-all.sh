@@ -3614,7 +3614,7 @@ _aff_runner_banner() {
 # never executes. Both exit 4 — "refused, nothing ran" — NOT 3, which #7424
 # reserved for a suite TERMINATED mid-coverage.
 # #9763: 38 heavy/stale labels withdrawn to edge-selection; the floor pins count-5.
-_MIN_ALWAYS_ON_DECLARED=106
+_MIN_ALWAYS_ON_DECLARED=107
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate
@@ -5189,6 +5189,14 @@ if want_scripts; then
     skip_suite "scripts/lint-orphan-test-suites-mutations-b" "relevance" \
       "bash scripts/lint-orphan-test-suites.test.sh --rows 11-20"
   fi
+  # #9855 env-gate dormancy sentinel. The LIVE line points the census at this
+  # working tree; the battery builds synthetic fixture repos and proves each
+  # mutation row reddens — same live+unit pairing as the orphan lint above.
+  # Registered unconditionally: seconds on a scratch tree, and the sentinel is
+  # the durability half of the scheduled-integration-suites leg, so a PR that
+  # adds a gated suite must meet it on every run, not only on diff-touch.
+  run_suite "scripts/lint-integration-env-gates-live" bash scripts/lint-integration-env-gates.sh
+  run_suite "scripts/lint-integration-env-gates-battery" bash scripts/lint-integration-env-gates.test.sh
   # #7387 legal-corpus write-time gates. Each gate registers its unit suite AND a LIVE run
   # against the working tree: the unit suite proves the gate detects a planted defect in a
   # sandbox, the live line is the only thing that ever points it at the real corpus. The unit
@@ -5385,6 +5393,10 @@ if want_scripts; then
   # calls). Each FAIL arm is driven by one field; the dark-channel arm (0 markers ⇒ FAIL) pins
   # "could not measure" apart from a clean zero.
   run_suite "scripts/anthropic-double-bill-8611" bash scripts/followthroughs/anthropic-double-bill-8611.test.sh
+  # #9905: first-real-runs probe for the S4 credential conversions. The false-FAIL regression arm
+  # (marker text echoed inside a step's run: source) and the per-step exercised proof are driven
+  # through a stub gh that exits 64 on any request it does not expect.
+  run_suite "scripts/bearer-curl-s4-first-runs-9905" bash scripts/followthroughs/bearer-curl-s4-first-runs-9905.test.sh
   # #8151 AC-PM1: exit-code harness for the event-ship-merge merge-base verdict probe.
   # Registered explicitly (orphan-suite class above). Same CONTAMINATION arm as #6297/#8281:
   # every live Better Stack hit for the probe's marker strings has been a `"caller":"api"`
@@ -5950,6 +5962,10 @@ if want_scripts; then
   # gate is separate: the unit suite stubs psql and cannot see YAML — only
   # this file asserts the workflow actually wires acquire/release/anchors.
   run_suite "tests/scripts/dev-suite-mutex-wiring" bash tests/scripts/test-dev-suite-mutex-wiring.sh
+  # Same wiring-gate shape for the shared dev-Doppler boundary script
+  # (#9947): three workflows consume it, and a consumer that drops the call
+  # fails silently — dev writes would run unasserted.
+  run_suite "tests/scripts/assert-dev-doppler-scope-wiring" bash tests/scripts/test-assert-dev-doppler-scope-wiring.sh
   # #8203 — the fail-closed verdict of the `vendor-pin-required` aggregator
   # (#5585 pattern instance #3). Registered HERE for the same reason: nothing
   # under tests/scripts/ is auto-discovered, and an unregistered verdict suite
