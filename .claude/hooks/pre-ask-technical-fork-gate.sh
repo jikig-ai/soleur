@@ -37,8 +37,11 @@
 # authorizations to the permitting side. Test D4 pins the ordering behaviourally.
 #
 # THE SECOND CARVE-OUT: the TECHNICAL-RULING arm below (after the expert arm, ahead of the authority
-# short-circuit) inverts the same polarity a second time. It denies on a ruling CUE (how strict an
-# evidence bar must be, which of two designs, whether a status flips, which threshold) without requiring
+# short-circuit) inverts the same polarity a second time. It is a BACKSTOP for AskUserQuestion only: the
+# observed 2026-10-11 carrier was an artifact pipeline (ship's Technical-Ruling Gate covers that), and the
+# hook is repo-local. It denies on the cues its regex names ("how strict", an evidence bar/threshold, a
+# status flip, approach/variant A-vs-B; NOT a bare "threshold", which also names money and priority
+# questions) without requiring
 # an investigative signal, and it is reachable ahead of AUTHORITY_RE for the same reason the expert arm
 # is: a ruling question carries "dispatched", "deleted" or a money word in the same breath. Its
 # exemption is a PERMISSION shape ("may I", "approve", "ack-destroy"), evaluated PER QUESTION over that
@@ -283,7 +286,7 @@ fi
 # whole question (R6 pins it): wrongly blocking an authorization is the failure this header calls
 # worse, so the arm judges the question, not the sentence. The ship gate and the skill text are the
 # primary defence; this arm is the backstop at the moment of asking.
-RULING_CUE_RE='(\bhow (strict|stringent|rigorous)|\b(strictness|stricter|stringen)|\b(evidence|proof|emptiness) (bar|threshold|ceiling|floor|standard)|\bthresholds?\b|\b(is|are) (the )?(evidence|proof) (enough|sufficient)|\badopting\b.*\baccepted\b|\bstatus (flip|move|change)|\b(approach|variant) [ab]\b|\b[ab] (or|vs\.?) [ab]\b)'
+RULING_CUE_RE='(\bhow (strict|stringent|rigorous)|\b(strictness|stricter|stringen)|\b(evidence|proof|emptiness) (bar|threshold|ceiling|floor|standard)|\b(is|are) (the )?(evidence|proof) (enough|sufficient)|\badopting\b.*\baccepted\b|\bstatus (flip|move|change)|\b(approach|variant) [ab]\b|\b[ab] (or|vs\.?) [ab]\b)'
 RULING_PERM_RE='(\bmay i\b|\bmay we\b|\bcan i\b|\bcan we\b|\bis it (ok|okay|fine) to\b|\bok(ay)? to\b|\bgo-ahead\b|\bapprove|\bauthori[sz]e|\back-destroy)'
 # One tab-separated row per question: its text, then its text plus its own options. A non-zero jq
 # status means the shape is unreadable: skip the arm (permit), never judge a partial question.

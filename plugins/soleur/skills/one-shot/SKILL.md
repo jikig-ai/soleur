@@ -256,7 +256,7 @@ After the subagent returns, check for a `## Session Summary` heading in the outp
 terminal and files the issue instead. A re-invocation is a step *within* an arm, never an arm's end.
 <!-- plan-artifact-recovery:end -->
 
-**Technical-ruling gate (before `work`).** Run `bash plugins/soleur/skills/ship/scripts/technical-ruling-gate.sh --branch`. Resolve each `pending` row yourself by spawning `soleur:engineering:cto` per [technical-ruling-delegation.md](../brainstorm-techniques/references/technical-ruling-delegation.md) (at most two spawns; then a draft PR and one `domain/engineering` issue, never an operator question), so a wrong assumption does not ride through `work`.
+**Technical-ruling gate (before `work`).** Run `bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/technical-ruling-gate.sh" --branch` and act on every exit, never past one: **0** continue (log any `[WARN]`); **1** fix each finding in this main context, spawning `soleur:engineering:cto` per [technical-ruling-delegation.md](../brainstorm-techniques/references/technical-ruling-delegation.md) for every `unruled-technical` row (a `pending - assumed` placeholder or a blank ruling), rewriting a bad class or category (a technical item gets a CTO spawn, never an operator label), then re-run; **2** the gate could not measure, so fix the file or the invocation and re-run. At most two CTO spawns in all; after two failures the merged-PR contract yields to the same non-operator terminal state as the step-3 escalation: a draft PR and one `domain/engineering` issue, never an operator question. This resolves `pending` rows before `work`, so a wrong assumption does not ride through `work` and `review`.
 
 **Steps 3-8: Implementation, Review, and Ship**
 

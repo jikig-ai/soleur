@@ -30,6 +30,12 @@ the CTO's to make. The four NEVER-Mechanical classes in
 - An **ADR status flip whose criterion the ADR itself states** is mechanical: run the grader, cite its output, flip.
   No ruling is needed.
 - **Fail-safe default** when user data is at stake: the CTO rules for the stricter option.
+- **De minimis bound.** A choice that is reversible within the diff and sets no durable contract (an abstraction, a
+  query shape, a test helper) stays **Mechanical**: auto-decide, write no row. Spawn the CTO when the model would
+  otherwise ask someone, persist the item to `decision-challenges.md`, or record a dissent; and for a threshold or
+  evidence bar, a design with a durable consequence (schema, contract, security model, substrate, status flip), or
+  anything an ADR reader would need the rationale for. Rule of thumb: if you would write the item down or ask, it goes
+  to the CTO; if you would just write the code, it does not.
 
 ## 3. The delegation step
 
@@ -80,16 +86,21 @@ Soleur users (`decision-challenges.md` of that branch: "Surfaced, not decided, a
 `knowledge-base/project/specs/<branch>/decision-challenges.md` carries one `## Decision Classes` pipe table with one row
 per persisted decision, whatever shape the free-form body uses. Columns: `Item | Class | Ruling`.
 
-- **Class:** `technical`, or `operator (<category>)` with a category from section 1. A bare `operator` is invalid.
-- **Ruling, technical row:** `Ruled by CTO agent, <date>: <decision> - <rationale>; conforms: yes|no|n/a (<note>)`
-  (and `Dissent: <line>` when present). `conforms: no` means the ruling differs from what a headless subagent assumed
-  and built: re-enter `work` for the item, or record `conforms: n/a (nothing built on the assumption)`.
+- **Class:** `technical`, `taste`, or `operator (<category>)` with a category from section 1; a bare `operator` is
+  invalid. `taste` is the user-legible Taste class of [decision-principles.md](./decision-principles.md): auto-decided
+  with a recommendation and rendered under Model Dissents; it needs no ruling cell and files no issue. A user-visible
+  *preference* is `taste`, never an operator category.
+- **Ruling, technical row:** `Ruled by CTO agent, <date>: <decision> - <rationale>` (and `Dissent: <line>` when
+  present). If the ruling differs from what a headless subagent assumed and built, re-enter `work` for the item.
 - **Ruling, operator row:** the ACTION being authorised, citing the sibling technical row's item id when split.
 - `pending - assumed: <default>` is the placeholder a subagent without the `Agent` tool writes; the main context
   replaces it before `work` (one-shot) or the gate fails it as `unruled-technical`.
 
-`ship/scripts/technical-ruling-gate.sh` parses only this table (fenced tables never count) and the PR body. The gate's
-remedy is bounded: at most two CTO spawns per artifact; after that the PR stays draft and ship files one
+`ship/scripts/technical-ruling-gate.sh` scans EVERY unfenced `| Item | Class | Ruling |` table (a later writer may add
+its own), the file-wide `pending - assumed` placeholder and the owner-label lint, plus the PR body. An artifact with no
+table is a `[WARN]` and exit 0 (legacy artifacts and in-flight branches are not blocked). **Stated residual:** the gate
+checks form, never truth, so a technical question labelled `operator (scope)` passes; operator rows render in the PR
+body and the `action-required` issue, which is where review and the operator see a mislabel. The gate's remedy is bounded: at most two CTO spawns per artifact; after that the PR stays draft and ship files one
 `domain/engineering` issue, never an operator question. Procedure: [decision-challenges-render.md](../../ship/references/decision-challenges-render.md).
 
 ## 7. Canonical example
@@ -102,7 +113,8 @@ fails CI.
 
 | Item | Class | Ruling |
 |---|---|---|
-| T1 evidence bar before the cleanup deletes the guard constants | technical | Ruled by CTO agent, 2026-10-11: keep the thresholds, the gate is single-use and deleted - tightening protects nothing; conforms: n/a (nothing built on the assumption) |
+| T1 evidence bar before the cleanup deletes the guard constants | technical | Ruled by CTO agent, 2026-10-11: keep the thresholds, the gate is single-use and deleted - tightening protects nothing |
 | T1a authorization to run the cleanup | operator (production-mutating) | Authorise merging the cleanup PR that deletes the guard (split from T1) |
 | T2 wire seven skills or only the choke points | operator (scope) | Keep the seven skills the brief names |
+| T3 which of two log wordings reads better | taste |  |
 ```

@@ -2,11 +2,12 @@
 # The /ship Phase 5.5 Technical-Ruling Gate (hard rule hr-technical-fork-is-not-an-operator-question).
 #
 # Property: no PR reaches ready with a decision-challenges.md or PR-body line that asks the operator a
-# TECHNICAL question. Every persisted decision has a valid row in the artifact's `## Decision Classes`
-# table; every `technical` row carries a well-formed `Ruled by` cell that does not contradict what was
-# built; the "Owner decision needed" / "Owner ruling needed" label appears only with
-# `(operator: <category>)`. The gate checks FORM, never truth: a model that mislabels a decision can
-# still write a plausible `operator (scope)` row. See technical-ruling-delegation.md (section 6).
+# TECHNICAL question. Every row of the artifact's `| Item | Class | Ruling |` tables has a valid class;
+# every `technical` row carries a `Ruled by CTO|CLO agent, <date>:` cell; no `pending - assumed`
+# placeholder survives; and the "Owner decision needed" / "Owner ruling needed" label appears only with
+# `(operator: <category>)`. The gate checks FORM, never truth: a model that mislabels a technical
+# question as `operator (scope)` still passes (a stated residual, technical-ruling-delegation.md
+# section 6); the check on that is review and the operator-visible rendering of operator rows.
 #
 # Usage:
 #   technical-ruling-gate.sh <path>             check one decision-challenges.md
@@ -17,13 +18,14 @@
 #   technical-ruling-gate.sh --pr-body <file>   check a PR body for an unscoped owner-decision label
 #
 # Exit codes:
-#   0  every examined row passes (a `[PASS]` line on stdout)
+#   0  every examined row passes (`[PASS]` on stdout). An artifact with NO table is `[WARN]` + exit 0
+#      (legacy artifacts and in-flight branches are not blocked); the label and `pending` lints still run.
 #   1  at least one failure (`[FAIL] <path>:<row>: <reason> - <remedy>` on stderr, one per finding)
-#   2  usage error, unreadable path, no `## Decision Classes` table, or a table with 0 rows. Never a
-#      silent pass: "could not measure" is not "measured clean".
+#   2  usage error, unreadable path, or a table header with 0 data rows. Never a silent pass on a
+#      table that exists but was not examined.
 #
 # Reasons (the suite asserts each): bad-class, bad-category, unruled-technical, bad-ruling-shape,
-# ruling-contradicts-assumed, owner-label-unscoped.
+# owner-label-unscoped.
 #
 # Test seams: TRG_EXEC_LOG (append one line per examined row), TRG_SPECS_ROOT and TRG_BRANCH (the
 # `--branch` lookup, so a suite needs no git repository). Lines carrying `# mut:<name>` are the
@@ -37,39 +39,40 @@ export LC_ALL=C
 CATEGORIES="money scope priority schedule irreversible production-mutating legal-risk brand"
 CATS_RE="${CATEGORIES// /|}"
 LABEL_RE='(owner (decision|ruling)s? needed|decision needed from the owner)'
-RULING_RE='^Ruled by (CTO|CLO) agent, [0-9]{4}-[0-9]{2}-[0-9]{2}: .+ - .+; conforms: (yes|no|n/a)( .*)?$'
+RULING_RE='^Ruled by (CTO|CLO) agent, [0-9]{4}-[0-9]{2}-[0-9]{2}: .+'
+PENDING_RE='pending - assumed'
 CTO_REMEDY='spawn soleur:engineering:cto now (at most two attempts, see technical-ruling-delegation.md), write the Ruled by cell, re-run; after two failed attempts leave the PR draft and file one domain/engineering issue, never an operator question'
 
-cat_ok() { case " $CATEGORIES " in *" $1 "*) return 0 ;; esac; return 1; } # mut:cat
-is_unruled() { [[ -z "$1" || "$1" == pending* ]]; } # mut:unruled
-shape_ok() { [[ "$1" =~ $RULING_RE ]]; } # mut:shape
-conforms_no() { [[ "$1" =~ conforms:\ no($|\ ) ]]; } # mut:conforms
+rows_file=""
+cleanup() { [[ -n "$rows_file" ]] && rm -f "$rows_file"; return 0; }
+trap cleanup EXIT
 
-die2() { printf '[ERROR] %s\n' "$*" >&2; exit 2; }
+cat_ok() { case " $CATEGORIES " in *" $1 "*) return 0 ;; esac; return 1; } # mut:cat
+is_unruled() { [[ -z "$1" ]]; } # mut:unruled
+shape_ok() { [[ "$1" =~ $RULING_RE ]]; } # mut:shape
+
+die2() { printf '[ERROR] %s\n' "$*" >&2; cleanup; exit 2; }
 
 trim() { local s="$1"; s="${s#"${s%%[![:space:]]*}"}"; s="${s%"${s##*[![:space:]]}"}"; printf '%s' "$s"; }
 
-# label_lines <file>: `<line>\t<text>` for every unfenced line that carries an owner-decision label.
-label_lines() {
-  awk -v re="$LABEL_RE" '
+# unfenced_match <file> <regex>: `<line>\t<text>` for every unfenced line whose lowercase form matches.
+unfenced_match() {
+  awk -v re="$2" '
     /^ {0,3}(```|~~~)/ { f = !f; next } # mut:fence
     f { next }
     tolower($0) ~ re { printf "%d\t%s\n", NR, $0 }
   ' "$1"
 }
 
-# table_rows <file>: `@HEADING` once if the (unfenced) heading exists, then `<line>\t<row>` per data row.
+# table_rows <file>: `@TABLE` per unfenced `| Item | Class | Ruling |` header, then `<line>\t<row>` per data row.
 table_rows() {
   awk '
     /^ {0,3}(```|~~~)/ { f = !f; next } # mut:fence-table
     f { next }
-    $0 == "## Decision Classes" { if (!seen) { print "@HEADING"; seen = 1; state = 1 } next }
-    state == 1 && /^[[:space:]]*$/ { next }
-    state == 1 && /^\|/ { state = 2; next }
+    /^\|[[:space:]]*Item[[:space:]]*\|[[:space:]]*Class[[:space:]]*\|[[:space:]]*Ruling[[:space:]]*\|[[:space:]]*$/ { print "@TABLE"; state = 2; next }
     state == 2 && /^\|[ :|-]+$/ { state = 3; next }
     state == 3 && /^\|/ { printf "%d\t%s\n", NR, $0; next }
-    state == 3 { state = 4 }
-    state == 1 || state == 2 { state = 4 }
+    state != 0 { state = 0 }
   ' "$1"
 }
 
@@ -82,21 +85,32 @@ check_labels() { # <file> <display-path>; prints [FAIL] lines, returns the count
       printf '[FAIL] %s:%s: owner-label-unscoped - the owner-decision label may only carry an operator-class item; append (operator: <category>) with a category from the closed list (%s), or route the question to the CTO (technical-ruling-delegation.md)\n' "$shown" "$ln" "$CATEGORIES" >&2
       n=$((n + 1))
     fi
-  done < <(label_lines "$file")
+  done < <(unfenced_match "$file" "$LABEL_RE")
+  return "$n"
+}
+
+check_pending() { # <file> <display-path>; an unresolved placeholder anywhere in the artifact, returns the count
+  local file="$1" shown="$2" n=0 ln text
+  while IFS=$'\t' read -r ln text; do
+    [[ -n "$ln" ]] || continue
+    printf '[FAIL] %s:%s: unruled-technical - a "pending - assumed" placeholder survives: %s\n' "$shown" "$ln" "$CTO_REMEDY" >&2
+    n=$((n + 1))
+  done < <(unfenced_match "$file" "$PENDING_RE") # mut:pending
   return "$n"
 }
 
 check_artifact() { # <file> <display-path>
-  local file="$1" shown="$2" rows_file idx=0 rows_examined=0 fails=0 ln row inner c1 c2 c3 extra
+  local file="$1" shown="$2" idx=0 rows_examined=0 fails=0 tables=0 ln row inner c1 c2 c3 extra
   [[ -e "$file" ]] || die2 "$shown: no such file"
   [[ -f "$file" && -r "$file" ]] || die2 "$shown: not a readable regular file"
   rows_file="$(mktemp -t trg-rows.XXXXXXXX)" || die2 "mktemp failed"
-  trap 'rm -f "$rows_file"' RETURN
   table_rows "$file" > "$rows_file"
-  grep -qxF '@HEADING' "$rows_file" || die2 "$shown: no '## Decision Classes' table outside a fenced block"
-  sed -i '/^@HEADING$/d' "$rows_file"
+  tables="$(grep -cxF '@TABLE' "$rows_file" || true)"
+  sed -i '/^@TABLE$/d' "$rows_file"
   # mut:scan
-  [[ -s "$rows_file" ]] || die2 "$shown: Decision Classes table has 0 rows examined"
+  if (( tables > 0 )) && [[ ! -s "$rows_file" ]]; then
+    die2 "$shown: Decision Classes table has 0 rows examined"
+  fi
   while IFS=$'\t' read -r ln row; do
     idx=$((idx + 1))
     rows_examined=$((rows_examined + 1)) # mut:count
@@ -109,16 +123,17 @@ check_artifact() { # <file> <display-path>
     IFS='|' read -r c1 c2 c3 extra <<<"$inner"
     c2="$(trim "$c2")"; c3="$(trim "$c3")"
     if [[ "$c2" == technical ]]; then
-      if is_unruled "$c3"; then
+      if [[ "$c3" == pending* ]]; then
+        : # reported once, with its line, by the file-wide pending lint below
+      elif is_unruled "$c3"; then
         printf '[FAIL] %s:%s: unruled-technical - row %s (line %s) is technical with no ruling: %s\n' "$shown" "$idx" "$idx" "$ln" "$CTO_REMEDY" >&2
         fails=$((fails + 1))
       elif ! shape_ok "$c3"; then
-        printf '[FAIL] %s:%s: bad-ruling-shape - row %s (line %s) ruling must read: Ruled by CTO agent, <date>: <decision> - <rationale>; conforms: yes|no|n/a (<note>)\n' "$shown" "$idx" "$idx" "$ln" >&2
-        fails=$((fails + 1))
-      elif conforms_no "$c3"; then
-        printf '[FAIL] %s:%s: ruling-contradicts-assumed - row %s (line %s): the ruling differs from what was built on the assumption; re-enter work for this item, or record conforms: n/a (nothing built on the assumption)\n' "$shown" "$idx" "$idx" "$ln" >&2
+        printf '[FAIL] %s:%s: bad-ruling-shape - row %s (line %s) ruling must start: Ruled by CTO agent, <date>: <decision> - <rationale>\n' "$shown" "$idx" "$idx" "$ln" >&2
         fails=$((fails + 1))
       fi
+    elif [[ "$c2" == taste ]]; then
+      : # user-legible Taste: auto-decided with a recommendation, rendered under Model Dissents, no ruling cell
     elif [[ "$c2" =~ ^operator\ \(([a-z-]+)\)$ ]]; then
       if ! cat_ok "${BASH_REMATCH[1]}"; then
         printf '[FAIL] %s:%s: bad-category - row %s (line %s) category "%s" is not in the closed list (%s)\n' "$shown" "$idx" "$idx" "$ln" "${BASH_REMATCH[1]}" "$CATEGORIES" >&2
@@ -131,12 +146,17 @@ check_artifact() { # <file> <display-path>
       printf '[FAIL] %s:%s: bad-category - row %s (line %s) a bare "operator" is invalid; write operator (<category>) with a category from the closed list (%s)\n' "$shown" "$idx" "$idx" "$ln" "$CATEGORIES" >&2
       fails=$((fails + 1))
     else
-      printf '[FAIL] %s:%s: bad-class - row %s (line %s) Class must be "technical" or "operator (<category>)", got "%s"\n' "$shown" "$idx" "$idx" "$ln" "$c2" >&2
+      printf '[FAIL] %s:%s: bad-class - row %s (line %s) Class must be "technical", "taste" or "operator (<category>)", got "%s"\n' "$shown" "$idx" "$idx" "$ln" "$c2" >&2
       fails=$((fails + 1))
     fi
   done < "$rows_file"
+  check_pending "$file" "$shown"; fails=$((fails + $?))
   check_labels "$file" "$shown"; fails=$((fails + $?))
   if (( fails > 0 )); then return 1; fi
+  if (( tables == 0 )); then
+    printf '[WARN] %s: no "| Item | Class | Ruling |" table outside a fenced block; label and pending lints ran, rows were not examined (add the table: technical-ruling-delegation.md section 6)\n' "$shown"
+    return 0
+  fi
   printf '[PASS] %s: %s rows examined\n' "$shown" "$rows_examined"
   return 0
 }

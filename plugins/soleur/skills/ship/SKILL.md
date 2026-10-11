@@ -1618,7 +1618,7 @@ done
 
 ### Technical-Ruling Gate (mandatory)
 
-Enforces `hr-technical-fork-is-not-an-operator-question`: run `echo 'SOLEUR_RULE_APPLIED rule=hr-technical-fork-is-not-an-operator-question'`, then `bash plugins/soleur/skills/ship/scripts/technical-ruling-gate.sh --branch` (0 pass, 1 unruled or mislabelled, 2 no table). On 1, spawn the CTO per [technical-ruling-delegation.md](../brainstorm-techniques/references/technical-ruling-delegation.md); remedy and the Phase 6 body check: [decision-challenges-render.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/decision-challenges-render.md).
+Run `echo 'SOLEUR_RULE_APPLIED rule=hr-technical-fork-is-not-an-operator-question'`, then `bash ${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/technical-ruling-gate.sh --branch` (0 pass or WARN, 1 fail, 2 unmeasured). On 1, spawn the CTO per [technical-ruling-delegation.md](../brainstorm-techniques/references/technical-ruling-delegation.md); remedy and the Phase 6 body check: [decision-challenges-render.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/decision-challenges-render.md).
 
 ### Merge-Base-Relative Lints (mandatory)
 

@@ -7,7 +7,7 @@
 #                    the exit code AND the reason token on stderr.
 #   2. shapes     -- must-PASS inputs that are not the canonical fixture: the four free-form item
 #                    shapes real artifacts use, an operator row with category legal-risk, a CLO
-#                    ruling, an n/a conforms ruling, an artifact absent entirely.
+#                    ruling, a taste row, an artifact absent entirely.
 #   3. contract   -- producer/consumer: the canonical example table in
 #                    technical-ruling-delegation.md is fed to the gate, and a spelling drift in the
 #                    reference alone reddens it. Category parity: script == reference == rule body.
@@ -99,32 +99,35 @@ row2b pending ruling|pending-technical.md|1|unruled-technical
 row4 bare operator and invented category|bad-category.md|1|bad-category
 row5 owner label unscoped in the artifact|owner-label-unscoped.md|1|owner-label-unscoped
 row9 ruling shape|bad-ruling-shape.md|1|bad-ruling-shape
-row10 conforms no|conforms-no.md|1|ruling-contradicts-assumed
+pending prose|pending-prose.md|1|unruled-technical
+second table|second-table.md|1|unruled-technical
 EOF
 
 # Row 4 names BOTH spellings, row 9 BOTH shapes: count the FAIL lines.
 run "$GATE" "$FIXTURES/bad-category.md"
 assert_eq "2" "$(grep -cE '^\[FAIL\] .*: bad-category - ' "$TMP/last.err" || true)" "row4: both bare operator and operator (vibes) flagged"
 run "$GATE" "$FIXTURES/bad-ruling-shape.md"
-assert_eq "2" "$(grep -cE '^\[FAIL\] .*: bad-ruling-shape - ' "$TMP/last.err" || true)" "row9: both missing-rationale and missing-conforms flagged"
+assert_eq "2" "$(grep -cE '^\[FAIL\] .*: bad-ruling-shape - ' "$TMP/last.err" || true)" "row9: both malformed ruling cells flagged"
 # Row 1: the failing row is row 2 (a check that stops at the first row is the defect).
 run "$GATE" "$FIXTURES/no-class.md"
 assert_eq "1" "$(grep -cE '^\[FAIL\] .*:2: bad-class - ' "$TMP/last.err" || true)" "row1: the failure names row 2"
 # Row 2 remedy text names the CTO spawn and the two-attempt cap.
 run "$GATE" "$FIXTURES/unruled-technical.md"
 assert_eq "1" "$(grep -cE 'soleur:engineering:cto.*two' "$TMP/last.err" || true)" "row2: remedy names the CTO and the two-attempt cap"
-# Row 10 remedy names work re-entry.
-run "$GATE" "$FIXTURES/conforms-no.md"
-assert_eq "1" "$(grep -cE 're-enter .work.|re-enter work' "$TMP/last.err" || true)" "row10: remedy names work re-entry"
+# Every table is scanned: the failing row sits in the SECOND table (a first-table-only scanner passes).
+run "$GATE" "$FIXTURES/second-table.md"
+assert_eq "1" "$(grep -cE '^\[FAIL\] .*:2: unruled-technical - ' "$TMP/last.err" || true)" "second table: the unruled row of the later table is examined (row 2 overall)"
 
-echo "=== Rows 3 and 11: exit 2, never exit 0 ==="
+echo "=== Rows 3 and 11: a table that exists but was not examined is exit 2; no table is a warning ==="
 run "$GATE" "$FIXTURES/empty-table.md"
 assert_eq "2" "$(last_rc)" "row3: a table with no data rows is exit 2"
 assert_eq "1" "$(grep -cF '0 rows examined' "$TMP/last.err" || true)" "row3: the message says 0 rows examined"
 run "$GATE" "$FIXTURES/fenced-table-only.md"
-assert_eq "2" "$(last_rc)" "row11: a table only inside a fence is exit 2"
+assert_eq "0" "$(last_rc)" "row11: a table only inside a fence never counts (its bad row is ignored)"
+assert_eq "1" "$(grep -cF '[WARN]' "$TMP/last.out" || true)" "row11: a fence-only artifact is a WARN, not a PASS"
 run "$GATE" "$FIXTURES/no-table.md"
-assert_eq "2" "$(last_rc)" "an artifact with no Decision Classes heading is exit 2"
+assert_eq "0" "$(last_rc)" "an artifact with no table is exit 0"
+assert_eq "1" "$(grep -cF '[WARN]' "$TMP/last.out" || true)" "an artifact with no table prints [WARN]"
 run "$GATE" "$TMP/does-not-exist.md"
 assert_eq "2" "$(last_rc)" "an explicit path that does not exist is exit 2"
 run "$GATE" "$FIXTURES"
@@ -147,7 +150,7 @@ run "$GATE" --pr-body "$TMP/no-such-body.md"
 assert_eq "2" "$(last_rc)" "--pr-body on a missing file is exit 2"
 
 echo "=== Arm 2: must-PASS shapes ==="
-for f in operator-legal shape-numbered shape-dc shape-challenge shape-sections; do
+for f in operator-legal shape-numbered taste; do
   run "$GATE" "$FIXTURES/$f.md"
   assert_eq "0" "$(last_rc)" "$f exits 0"
   assert_verdict_line "$f"
@@ -270,12 +273,12 @@ mutate drop-category 's/^CATEGORIES="([^"]*) brand"/CATEGORIES="\1"/' && \
 # row9: stop checking the ruling shape.
 mutate no-shape 's/^shape_ok\(\).*# mut:shape$/shape_ok() { return 0; } # mut:shape/' && \
   killed no-shape "$MUT/gate.no-shape.sh" 1 "$FIXTURES/bad-ruling-shape.md"
-# row10: stop failing conforms: no.
-mutate no-conforms 's/^conforms_no\(\).*# mut:conforms$/conforms_no() { return 1; } # mut:conforms/' && \
-  killed no-conforms "$MUT/gate.no-conforms.sh" 1 "$FIXTURES/conforms-no.md"
+# pending placeholder lint disabled.
+mutate no-pending 's/^(  done < )<\(unfenced_match "\$file" "\$PENDING_RE"\) # mut:pending$/\1\/dev\/null # mut:pending/' && \
+  killed_count no-pending "$MUT/gate.no-pending.sh" unruled-technical 1 "$FIXTURES/pending-technical.md"
 # row11: honour fenced tables.
 mutate fenced-ok 's/^.*# mut:fence-table$/    { f = 0 } # mut:fence-table/' && \
-  killed fenced-ok "$MUT/gate.fenced-ok.sh" 2 "$FIXTURES/fenced-table-only.md"
+  killed fenced-ok "$MUT/gate.fenced-ok.sh" 0 "$FIXTURES/fenced-table-only.md"
 
 echo "=== Floor: the SUT wrote an execution marker per examined row ==="
 n_rows="$(wc -l < "$EXEC_LOG" | tr -d ' ')"
@@ -285,4 +288,4 @@ else
   echo "  FAIL: SUT execution markers $n_rows < 40 -- the cases above did not drive the script"; FAIL=$((FAIL + 1))
 fi
 
-print_results 83
+print_results 84

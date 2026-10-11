@@ -27,7 +27,7 @@ Phase 6 **full-replaces** the body, so fold the artifact into the generated body
 
 ## The gate: three call sites, one parser
 
-`bash plugins/soleur/skills/ship/scripts/technical-ruling-gate.sh <mode>` (exit 0 pass, 1 fail, 2 could not measure):
+`bash ${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/technical-ruling-gate.sh <mode>` (exit 0 pass or `[WARN]`, 1 fail, 2 could not measure):
 
 1. **one-shot, after the plan phase and before `work`:** `--branch`. A `pending - assumed: <default>` row is resolved
    here, in the main context, so a wrong assumption does not ride through `work` and `review`.
@@ -36,12 +36,13 @@ Phase 6 **full-replaces** the body, so fold the artifact into the generated body
    `b=$(mktemp -t pr-body.XXXXXXXX); gh pr view PR_NUMBER --json body --jq .body > "$b"; bash <gate> --pr-body "$b"; rc=$?`
    (read `rc` on its own line). Phase 6 full-replaces the body, so the body must be checked after it is written.
 
-An absent artifact is `[PASS] no decision-challenges artifact`. An artifact with no table, or a table with 0 rows, is exit 2:
-add the `## Decision Classes` table (a few rows; an in-flight branch that rebases onto this gate adds it at ship time).
+An absent artifact is `[PASS] no decision-challenges artifact`. An artifact with no `| Item | Class | Ruling |` table is a `[WARN]` and exit 0
+(the label and `pending` lints still ran; add the table when the artifact lists decisions). A table with 0 rows, or an unreadable
+file, is exit 2: fix the file or the invocation, never continue past it.
 
 ## Remedy procedure (a `[FAIL]` is never a bare stop)
 
-1. For each `unruled-technical` or `ruling-contradicts-assumed` row: spawn `soleur:engineering:cto` (`soleur:legal:clo` for
+1. For each `unruled-technical` row (blank ruling or a `pending - assumed` placeholder): spawn `soleur:engineering:cto` (`soleur:legal:clo` for
    legal) per the delegation step, write the `Ruled by` cell, commit, re-run the gate.
 2. **At most two spawns per artifact.** A spawn that fails, times out, or returns without Decision and Rationale counts as
    an attempt. A ruling that says the item is actually operator-class rewrites the row as `operator (<category>)` with the

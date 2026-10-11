@@ -514,13 +514,15 @@ run_ruling "R10 the 2026-08-19 investigation fixture keeps the investigation rea
      "Ask whoever owns the cutover section" "The plan deferred the cutover window to numbered steps I have not read." | mq_payload)"
 
 run_ruling "Z1 a permission ask that DOES carry a ruling cue (witnesses the exemption)" allow none \
-  "$(qobj "May I raise the ceiling threshold to 5%?" | mq_payload)"
+  "$(qobj "May I tighten the evidence threshold to 64 MiB?" | mq_payload)"
 run_ruling "Z2 approach A or approach B (should is not an exemption)" deny ruling \
   "$(qobj "Should I use approach A or approach B for the retry design?" "Approach A" "queue it" "Approach B" "retry inline" | mq_payload)"
 run_ruling "Z3 evidence sufficiency" deny ruling \
   "$(qobj "Is the evidence sufficient to retire the guard?" "Sufficient" "retire it" "Not yet" "keep it" | mq_payload)"
 run_ruling "Z4 an Approve ask over a threshold" allow none \
-  "$(qobj "Approve raising the alert threshold to 5%?" | mq_payload)"
+  "$(qobj "Approve the stricter evidence bar?" | mq_payload)"
+run_ruling "R11 a money threshold question is not a ruling" allow none \
+  "$(qobj "What revenue threshold should trigger the second paid host?" | mq_payload)"
 
 # V4 — the ruling arm's EXEMPTION must stay a permission-shape vocabulary. Structural, like V3: extract
 # the regex from the hook source, require a non-vacuous member count, and refuse any bare action verb. A
@@ -568,8 +570,8 @@ else
 fi
 
 TOTAL=$((TOTAL+1))
-if [[ "$TOTAL" -eq 36 ]]; then echo "  PASS: V1 full inventory ran (36 cases)"; PASS=$((PASS+1))
-else echo "  FAIL: V1 expected 36 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
+if [[ "$TOTAL" -eq 37 ]]; then echo "  PASS: V1 full inventory ran (37 cases)"; PASS=$((PASS+1))
+else echo "  FAIL: V1 expected 37 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
 
 # --- V2: INSTRUMENT SELF-TEST — the helper's two branches must go to DIFFERENT buckets ------------
 #
@@ -618,7 +620,7 @@ fi
 # The floor is the inventory literal V1 already pins, so there is ONE number to change when a case is
 # added and V1 names it in its own message. A suite that ran no cases, or whose verdict helper stopped
 # paying anything, cannot satisfy it.
-MIN_CASES=36
+MIN_CASES=37
 if (( TOTAL < MIN_CASES )); then
   printf '\nFATAL: anti-vacuity: %d case(s) ran, floor is %d. The suite shrank rather than the hook improving.\n' \
     "$TOTAL" "$MIN_CASES" >&2

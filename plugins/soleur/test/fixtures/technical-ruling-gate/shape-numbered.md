@@ -7,5 +7,5 @@
 
 | Item | Class | Ruling |
 |---|---|---|
-| 1 cut the check | technical | Ruled by CTO agent, 2026-10-11: not applied - the check is cheap; conforms: yes |
-| 2 pinned tool | technical | Ruled by CTO agent, 2026-10-11: not applied - the builder is simpler; conforms: yes |
+| 1 cut the check | technical | Ruled by CTO agent, 2026-10-11: not applied - the check is cheap |
+| 2 pinned tool | technical | Ruled by CTO agent, 2026-10-11: not applied - the builder is simpler |

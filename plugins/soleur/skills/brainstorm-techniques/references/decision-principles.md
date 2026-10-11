@@ -109,7 +109,7 @@ legible surface for operator-class items. Both are required for a headless
 operator-class challenge.
 
 **The artifact carries a `## Decision Classes` table** (columns `Item | Class | Ruling`, one row per persisted decision,
-whatever shape the free-form body uses; `Class` is `technical` or `operator (<category>)`). The schema, the closed
+whatever shape the free-form body uses; `Class` is `technical`, `taste` or `operator (<category>)`). The schema, the closed
 category list and a canonical example are in [technical-ruling-delegation.md](./technical-ruling-delegation.md)
 (section 6); `ship`'s Technical-Ruling Gate parses only that table.
 
