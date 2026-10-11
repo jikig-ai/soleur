@@ -915,3 +915,46 @@
   No image rebuild, application startup, recovery, provider/browser operation,
   shared production write, deployment or flag/cohort promotion occurred.
   All existing qualification, review and promotion holds persist.
+
+## Continuation update — 2026-10-11 current-head CI C.9 recurrence
+
+- CI `38093374040` at `eec87fb0378e4655933549548c78d791848d2c14` failed one
+  shell shard and its required aggregate. The failed test scripts shard ran
+  66/67 scripts; the failed suite was `scripts/test-all-orphan-log-retention`,
+  C.9. The remaining check rows passed or skipped, with seven declared skips. All
+  other required checks passed; RLS `38093374091`, tenant
+  `tenant-integration-required`, final guards, Dockerfile builder and CLI-tools
+  build succeeded. Main `38093191550` passed the same scripts shard.
+- C.9 failed both bounded observations: no “runner died untrappably” notice
+  appeared within 20 seconds after killing its synthetic runner, and its
+  fixture child remained after the reap deadline. Its captured trace shows
+  three parent/runner `kill -0` liveness-read warnings and then the
+  “parent process gone” path while later trace observations still listed the
+  parent and runner PIDs as sleeping processes. Source inspection explains
+  the path: C.9 starts `test-all.sh` in the wrapper's foreground and follows
+  it with a bare `wait`; once SIGKILL ends that foreground command, the bare
+  `wait` has no background job to retain the wrapper. The wrapper therefore
+  exits while the test expects its parent to stay alive, steering the watchdog
+  into parent-death handling before the runner-death branch can use its saved
+  child snapshot. This is the best-supported explanation for this recurrence,
+  but no correction or workaround has been verified. The complete shard log
+  is retained under ignored `.soleur/test-scripts-5-of-8-38093374040.log`.
+- Ref #9791 was verified OPEN. Its acceptance still requires explaining the
+  underlying failure and verifying a correction/workaround; a green retry
+  does not close it. No local broader-suite rerun or recovery qualification
+  was authorized or performed. User-held local-suite, credential, recovery,
+  browser, routine consumer, Web/CLO, review and promotion gates persist.
+
+## Continuation update — 2026-10-11 main sync after C.9 failure
+
+- Main advanced through `31ada28352b05733d409aebc24276647462f4904` and merged
+  cleanly at `21f5214c3ac0b5d5332c8962fa7d37a5b6724ef6`. The C.9 test source
+  remains byte-identical to main; the watchdog implementation is unchanged.
+  Main's shell-test registration moves C.9 to a different shard, which is not
+  a correction. The merge is local and requires an evidence commit/push before
+  a fresh-head CI verdict can be observed.
+- The incoming main range contains unrelated committed whitespace findings in
+  `knowledge-base/project/plans/2026-10-10-feat-dormant-integration-ci-plan.md`
+  and `knowledge-base/project/specs/feat-one-shot-grep-q-wave-b-s7-codemod-guard-cleanup/evidence.md`;
+  the feature-range whitespace check passes. These findings were preserved as
+  upstream main content.

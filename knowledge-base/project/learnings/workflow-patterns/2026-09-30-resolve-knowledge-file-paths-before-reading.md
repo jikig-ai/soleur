@@ -206,3 +206,15 @@ out of the main transcript, and delegate multi-file inspection before
 collecting full diffs. GitHub's log output also represents some ANSI markers
 as literal `^[[` sequences; normalize both actual escapes and that rendered
 form before displaying the final migration/test summary.
+
+An unanchored failure search in a shell-suite transcript matched hundreds of
+expected negative-test assertions and truncated the useful result. Anchor on
+the suite runner's literal status marker after its timestamp, then inspect its
+durable failure log and the bounded fixture diagnostics; expected text such as
+`[FAIL]` inside a test assertion is not a suite failure.
+
+When reading or probing from an explicit worktree, pass its absolute path as
+the command's working directory. An `rg` call without that context was refused
+before process creation. `git diff --check` on a large incoming main range can
+also fail on unrelated committed whitespace; bound and report the exact
+offending path and hunk before resolving the feature merge.
