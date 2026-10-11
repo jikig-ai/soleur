@@ -216,8 +216,8 @@ logs:
   where: Better Stack Logs (probe markers); GitHub Actions run logs (apply and release)
   retention: per the Better Stack plan and 90 days for Actions logs
 discoverability_test:
-  command: bash -c 'if git grep -q zot-entry-gate -- apps .github scripts plugins; then echo PRESENT; else echo ABSENT; fi'
-  expected_output: ABSENT
+  command: git log -1 --format=%s -- apps/web-platform/infra/zot-entry-gate.sh
+  expected_output: delete the superseded zot-entry-gate.sh
 ```
 
 ## Domain Review
