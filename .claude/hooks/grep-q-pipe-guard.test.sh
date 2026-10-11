@@ -78,11 +78,10 @@
 #   POSIX sh, Terraform inline, runcmd, or a value that may be empty  ->  producer | grep -cE P >/dev/null   (same exit status as -q, reads all input)
 #   an output-bearing  | grep -m1 P | ...  in bash, on a value that is never empty  ->  grep -m1 P <<<"$V" | ...
 #   a line that must show the shape  ->  append  # sigpipe-demo: intentional
-# Wave B (#9217) converts the test-harness rows with scripts/grep-q-drain-codemod.py: `apply` is a dry run unless --write, `verify --base REF
-# --hand-edits FILE` proves a diff is only that rewrite plus listed hand edits. It refuses, into a printed hand queue, a -m/--max-count (still an
-# early exit), an operand-q cluster (-eq), an unbounded producer, a redirected stdout, a match inside a quoted string or heredoc (data), and any
-# file naming sigpipe/EPIPE/false-FAIL/broken pipe unless a human has read it (a demonstration may be what the line is). The tool and its selftest
-# below are deleted with the last glob row.
+# Wave B (#9217) converted the test-harness rows with a codemod (scripts/grep-q-drain-codemod.py), which S7a deleted together with its selftest once no
+# glob row was left to convert; it is recoverable from commit 6a86eae0ec. A NEW hit is converted by hand with the Rewrite table above, and a line that
+# must show the shape carries the marker. The producer side of the pipe (S7b) is still open and tracked on #9217.
+# To recompute SWEEP_PROBE_CHECKS after editing the probe: grep -vE '^[[:space:]]*#' .claude/hooks/grep-q-pipe-guard.test.sh | grep -c 'sweep_probe_fail+='
 # A gate whose MISS skips a check must route a grep that could not run (rc above 1) to the gate, not to "clean". Note that a
 # failed here-string or process substitution returns rc 1 (a miss), not above 1, so this routing covers a bad pattern or an
 # unreadable file, not a redirect failure.
@@ -435,16 +434,15 @@ SWEEP_CANARY_COUNT=9   # pinned beside SWEEP_CANARIES: the probe compares agains
 # A row whose subtree reaches zero is STALE and fails: the wave that converts a subtree deletes its row in the same PR.
 # Every row names its tracker. These are the only places a new instance can hide, so the diff of this table is the
 # review surface: raising a number is a visible, one-line, reviewable act and every run prints each row.
-# KNOWN HOLE (named, not covered): a glob row at slack 0 (either mode) pins the COUNT per row, not the sites, so moving one hit between two files under
-# the same glob (add one, delete one) stays green. File-exact `=` rows would close it, but `_ts_re` below classifies a file-exact test path as
-# a PRODUCTION row (GATED_PROD_ROWS counts it), so that needs a `_ts_re` widening reviewed on its own; the last Wave B slice revisits it.
+# A glob row at slack 0 pins the COUNT per row, not the sites, so moving one hit between two files under the same glob (add one, delete one) would stay
+# green; S7a closed that for the last two glob rows by making every row file-exact (`_ts_re` below classifies a glob-free test path as test-shaped).
 # S6 took apps/web-platform/ (all but the six file-exact carrier rows below) to zero; its marked lines are demonstrations, mutation recipes and their landing checks, needles for carrier bytes, and two message or payload strings, and the
 # apps/web-platform/infra/ root canary is witnessed today by those six rows going stale (not ablation-proved), so it matters once they convert.
 # S3 (scripts/) and S4 (tests/) took their subtrees to zero and deleted their rows; S5 did the same for the plugins/soleur/ test files outside
 # plugins/soleur/test/ (its five counted pins stay). The test-shaped row globs are pinned (GATED_TEST_ROWS), so a new or widened one, however it is
 # spelled, is a visible two-place edit. The drained form
 # `grep -c ... >/dev/null` those slices wrote is deliberate (same exit status for stdin operands, and the producer is read to EOF): do not rewrite it to a here-string.
-# The codemod only acts on rows still listed here, so a NEW hit in a zero subtree is converted by hand with the Rewrite table below.
+# A NEW hit in a zero subtree is converted by hand with the Rewrite table above.
 SWEEP_DEFERRALS=(
   # Ten counted data pins in six test files remain, each a pipe inside a string, a mutation payload or .md-fence text (marker-exempt demos are not
   # counted). They are file-exact and tight (`=`), so moving a hit from one file to another turns the guard red where a glob row at the same
@@ -938,8 +936,8 @@ real_plug_row="$( SWEEP_DEFERRALS=('plugins/soleur/*.test.sh | <= | 99 | #1'); _
 real_nonplug="$(printf '%s\n' "${real_paths[@]}" | { grep -v '^plugins/soleur/.*\.test\.sh$' || true; } | LC_ALL=C sort)"
 [[ "$real_none" == "$REAL_PLANTED" && "$real_all" == 0 && "$real_tests_row" == "$real_nontests" && "$real_plug_row" == "$real_nonplug" ]] \
   || sweep_probe_fail+=("real-table-control: with no rows ${real_none:-<err>} planted paths were undeferred (want $REAL_PLANTED), with a catch-all row ${real_all:-<err>} (want 0), with a tests/ row [${real_tests_row//$'\n'/ }] (want exactly the non-tests/ canaries), with a plugins/soleur/*.test.sh row [${real_plug_row//$'\n'/ }] (want exactly the canaries that are not plugins/soleur/**/*.test.sh) — the helper above does not read the table it is given")
-# A loose (<=) row's slack is where a NEW instance hides, so every loose row must be test-shaped: *.test.sh, a test/ or tests/ directory,
-# or a test-* basename. A production-shaped loose glob would turn this header's own invariant into a convention.
+# A loose (<=) row's slack is where a NEW instance hides, so every loose row must be test-shaped: *.test.sh or a test/ or tests/ directory (as a glob),
+# or a glob-free *.test.sh path or a path under plugins/soleur/test/. A production-shaped loose glob would turn this header's own invariant into a convention.
 _ts_re='(^|/)(tests?/\*|\*\.test\.sh)$|^[^*?[:space:]]*\.test\.sh$|^plugins/soleur/test/[^*?[:space:]]+$'
 _loose_not_test_shaped() { # <rows...> -> the glob of each `<=` row that is not test-shaped
   local row g m
