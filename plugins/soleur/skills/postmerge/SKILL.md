@@ -485,7 +485,7 @@ reports; it never dispatches a production apply on its own.
    (runbook break-glass step 1, deliberate unprotect step 1) expects `not-protected` and is NOT a failure. Report a
    mismatch only.
 2. **Find the merge-SHA run and wait for it:**
-   `gh run list --workflow apply-web-platform-infra.yml --commit <merge-sha> --json databaseId,status,conclusion`. An empty
+   `gh run list --workflow apply-web-platform-infra.yml --commit <merge-sha> --limit 5 --json databaseId,status,conclusion`. An empty
    list right after the merge is retried (every 30 s, up to 10 min), not read as "no run". Watch the id under Monitor
    (`gh run watch <id>`; never `run_in_background` polling), bounded to about 50 min (the job runs up to 41 min plus queueing
    on the shared concurrency group). `success` is read back. `cancelled`, `timed_out`, `startup_failure`, `skipped`,
@@ -522,7 +522,7 @@ gh issue create --label type/chore --milestone "Post-MVP / Later" \
    `success` is read back; `cancelled`, `timed_out`, `startup_failure`, `skipped` or no run within the bound mean not
    delivered or superseded: read back anyway, and if it is still `not-protected` recommend the dispatch again (go-ahead).
 6. **On a `protected` read-back that matches the expected word, and only while ADR-282's status is still `adopting`, file ONE tracking issue** so the status flip does not depend
-   on memory (skip if one is already open: `gh issue list --state open --search "flip ADR-282" --json number`):
+   on memory (skip if one is already open: `gh issue list --state open --limit 20 --search "flip ADR-282" --json number`):
 
 ```bash
 gh issue create --label type/chore --milestone "Post-MVP / Later" \
