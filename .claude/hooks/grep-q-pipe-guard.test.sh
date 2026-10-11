@@ -432,7 +432,8 @@ SWEEP_CANARY_COUNT=9   # pinned beside SWEEP_CANARIES: the probe compares agains
 # Globs are matched with bash `[[ == ]]`, so `*` CROSSES `/`. Keep every loose (`<=`) row TEST-SHAPED (`*.test.sh` or a test/ or tests/
 # directory as a glob, a glob-free `*.test.sh` path, or a path under plugins/soleur/test/) so production code can never fall into slack: a
 # production hit then lands in "outside the deferral table" whatever any row's slack. A row that owns production-class files must be
-# tight (`=`). Today every row is tight and file-exact, and the probe pins that (a loosened ceiling is an edit of that pin, not slack).
+# tight (`=`). Today every row is tight and file-exact, and the probe pins that no row uses mode `<=` (a ceiling number on an `=` row can
+# only equal the hit count, so raising it is a visible one-line edit, never slack).
 # A row whose subtree reaches zero is STALE and fails: the wave that converts a subtree deletes its row in the same PR.
 # Every row names its tracker. These are the only places a new instance can hide, so the diff of this table is the
 # review surface: raising a number is a visible, one-line, reviewable act and every run prints each row.
@@ -957,7 +958,11 @@ _loose_not_test_shaped() { # <rows...> -> the glob of each `<=` row that is not 
   done
 }
 loose_bad="$(_loose_not_test_shaped "${SWEEP_DEFERRALS[@]}")"
-loose_n=$(printf '%s\n' "${SWEEP_DEFERRALS[@]}" | grep -c '|[[:space:]]*<=[[:space:]]*|' || true)
+loose_n=0
+for _row in "${SWEEP_DEFERRALS[@]}"; do
+  IFS='|' read -r _ _m _ <<<"$_row"; _m="${_m//[[:space:]]/}"   # the mode as sweep_verdict reads it: every blank removed
+  [[ "$_m" == "<=" ]] && loose_n=$((loose_n + 1))
+done
 # tests/ went to zero in S4 and every canary under it is owned by NO row; a resurrected row there (even a test-shaped one such as
 # `tests/commands/*.test.sh`) would own hits the canaries do not cover, so no row may start with `tests/`.
 tests_rows="$(printf '%s\n' "${SWEEP_DEFERRALS[@]}" | grep -c '^[[:space:]]*tests/' || true)"
@@ -1062,7 +1067,8 @@ fp_hits=$(grep -cE -- "$PATTERN_V2" "$probe/fp-v2.sh" || true)
 
 # Test-shaped canaries. The root canaries (SWEEP_CANARIES) are satisfied by ANY swept file under a root, so an ignore glob or a pathspec
 # exclusion that hides only the test files (`*.test.sh`) leaves a root canary green while the sweep stops reading exactly the files this
-# guard exists for. One stable test file per test-bearing location is named here and must appear in the sweep's own population (the same
+# guard exists for. One stable test file per representative test-bearing location (nine, not all of them: the listing of tracked-but-ignored
+# files below covers every ignore rule, and these cover a pathspec exclusion) is named here and must appear in the sweep's own population (the same
 # listing scan_sweep derives, through the same sweep_git_grep, over the real tree). Pick long-lived suites of load-bearing components; if one is
 # renamed, edit this list, never the sweep. They are NOT added to SWEEP_CANARIES: that loop also runs on every scratch-root fixture above.
 SWEEP_TEST_CANARIES=('.claude/hooks/guardrails.test.sh' 'plugins/soleur/test/deploy-arm.test.sh' 'plugins/soleur/scripts/emit-decision.test.sh' 'plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh' 'apps/web-platform/infra/ci-deploy.test.sh' 'apps/web-platform/scripts/anthropic-key-distinctness.test.sh' 'apps/web-platform/test/infra/ghcr-blocked-alert.test.sh' 'apps/cla-evidence/scripts/inspect.test.sh' 'scripts/actions-queue-health.test.sh')
@@ -1082,25 +1088,8 @@ tc_hidden="$(git -c core.excludesFile=/dev/null ls-files -ci --exclude-standard 
 [[ -z "$tc_missing" && -z "$tc_hidden" && "${#SWEEP_TEST_CANARIES[@]}" == "$SWEEP_TEST_CANARY_COUNT" ]] \
   || sweep_probe_fail+=("test-canaries: the sweep no longer reads [${tc_missing:-none}], tracked swept files hidden by an ignore rule: [${tc_hidden//$'\n'/ }], or SWEEP_TEST_CANARIES holds ${#SWEEP_TEST_CANARIES[@]} entries, pinned at $SWEEP_TEST_CANARY_COUNT. This protects the sweep's reach over test files: an ignore entry or a pathspec exclusion would otherwise pass every root canary. Fix: if a canary file moved or was renamed, update SWEEP_TEST_CANARIES and SWEEP_TEST_CANARY_COUNT together (not the sweep); if a file is hidden or missing from the population, remove the .gitignore entry or SWEEP_PATHSPEC exclusion that hides it")
 
-# Return wiring. The sweep's return code reaches this suite's exit status through statements the probe rows above do not exercise: the capture and
-# the fold at the top level (adjacent, unindented, once each), the probe verdict gate below, and a single exit. Each pinned pattern is anchored to
-# the whole statement at column 0 on a non-comment line, so a mention in a comment or in a message string (this check's own) cannot satisfy it,
-# and an indented copy inside a dead branch or a function does not count. Statements that can still reach the exit (an inserted assignment
-# elsewhere, a trap, an `exit` placed ahead of these pins) are not pinned here: the guard cannot defend its own control flow beyond these text
-# pins, and a diff that edits it is reviewed.
-_code=$(grep -vE '^[[:space:]]*#' "${BASH_SOURCE[0]}" || true)
-wire_a=$(grep -cE '^sweep_main \. "\$SWEEP_FLOOR" \|\| sweep_rc=\$\?[[:space:]]*$' <<<"$_code" || true)
-wire_b=$(grep -cE '^sweep_fold "\$sweep_rc"[[:space:]]*$' <<<"$_code" || true)
-wire_adj=$(grep -A1 -E '^sweep_main \. "\$SWEEP_FLOOR" \|\| sweep_rc=\$\?[[:space:]]*$' <<<"$_code" | grep -cE '^sweep_fold "\$sweep_rc"[[:space:]]*$' || true)
-[[ "$wire_a" == 1 && "$wire_b" == 1 && "$wire_adj" == 1 ]] \
-  || sweep_probe_fail+=("return-wiring: unindented capture ${wire_a:-<err>}, fold ${wire_b:-<err>}, capture immediately followed by the fold ${wire_adj:-<err>} (want exactly 1 each). This protects the path by which the sweep verdict reaches this suite's exit status. Expected, at column 0 and once each: 'sweep_main . \"\$SWEEP_FLOOR\" || sweep_rc=\$?' directly followed by 'sweep_fold \"\$sweep_rc\"'. Fix: restore the statement; if it moved legitimately, update this pin, not the sweep")
-# The verdict gate and the final exit are pinned the same way, but they report DIRECTLY (FAIL and exit 1 below, just ahead of the gate): a failure
-# appended to sweep_probe_fail is read by that very gate, so a gate edited to always pass would silence its own pin.
-wire_gate=$(grep -cE '^if \(\( \$\{#sweep_probe_fail\[@\]\} == 0 \)\); then[[:space:]]*$' <<<"$_code" || true)
-wire_exit=$(grep -cE '^exit "\$FAIL"[[:space:]]*$' <<<"$_code" || true)
-
 # Exit status of grep -q<f> versus grep -c<f> >/dev/null, one row per cluster class, under bash and under sh from PATH (when sh is bash the second pass
-# proves nothing extra and still holds). This is the one executable check that the drained form every converted site uses keeps grep -q's exit status.
+# proves nothing extra and still holds). This is an executable check that the drained form the converted sites use keeps grep -q's exit status.
 EQV_ROWS=('||a' '|a|a' '|ab\ncd|cd' '|a\n|^$' 'v||a' 'v|a\n\nb|a' 'x|ab|a' 'x|a\nb|a' 'F|a.b|a.b' 'i|ABC|abc' 'w|a-b|a' 'vE|\n|^$' 'Fx|ab\n|ab')
 _eqv() { # <shell> [flags added on the grep -c side only: a deliberately wrong converted form] -> each row whose two exit statuses differ
   local shl="$1" bad="${2:-}" row fl in pat a b out=""
@@ -1118,20 +1107,42 @@ eqv_neg="$(_eqv bash v)"
 eqv_bash="$(_eqv bash)"
 [[ -z "$eqv_bash" && -n "$eqv_neg" ]] \
   || sweep_probe_fail+=("equivalence-bash: rows whose exit status differs between grep -q and grep -c >/dev/null: ${eqv_bash:-none}; the same table with a deliberately wrong converted form (an added -v) reported ${eqv_neg:-NOTHING} (want a difference, so the harness can see one)")
+eqv_neg_sh="$(_eqv sh v)"
 eqv_sh="$(_eqv sh)"
-[[ -z "$eqv_sh" ]] || sweep_probe_fail+=("equivalence-sh: rows whose exit status differs under sh: $eqv_sh")
+[[ -z "$eqv_sh" && -n "$eqv_neg_sh" ]] \
+  || sweep_probe_fail+=("equivalence-sh: rows whose exit status differs under sh: ${eqv_sh:-none}; the same table with the wrong converted form reported ${eqv_neg_sh:-NOTHING} (want a difference, so the sh pass can see one)")
+
+# Return wiring. The sweep's return code reaches this suite's exit status through statements the probe rows above do not exercise: the capture and
+# the fold at the top level (adjacent, unindented, once each), the probe verdict gate below, and a single exit. Each pinned pattern is anchored to
+# the whole statement at column 0 on a non-comment line, so a mention in a comment or in a message string (this check's own) cannot satisfy it,
+# and an indented copy inside a dead branch or a function does not count. A sweep that never ran by any route (an unindented dead branch
+# included) is caught separately: SWEEP_N, set only by sweep_main, must hold a swept-file count. Statements that can still reach the exit (an
+# inserted assignment or `exit` or a trap between these pins and the gate, a deleted direct block, an `exit` ahead of the pins) are not pinned
+# here: the guard cannot defend its own control flow beyond these text pins, and a diff that edits it is reviewed.
+_code=$(grep -vE '^[[:space:]]*#' "${BASH_SOURCE[0]}" || true)
+wire_a=$(grep -cE '^sweep_main \. "\$SWEEP_FLOOR" \|\| sweep_rc=\$\?[[:space:]]*$' <<<"$_code" || true)
+wire_b=$(grep -cE '^sweep_fold "\$sweep_rc"[[:space:]]*$' <<<"$_code" || true)
+wire_adj=$(grep -A1 -E '^sweep_main \. "\$SWEEP_FLOOR" \|\| sweep_rc=\$\?[[:space:]]*$' <<<"$_code" | grep -cE '^sweep_fold "\$sweep_rc"[[:space:]]*$' || true)
+[[ "$wire_a" == 1 && "$wire_b" == 1 && "$wire_adj" == 1 ]] \
+  || sweep_probe_fail+=("return-wiring: unindented capture ${wire_a:-<err>}, fold ${wire_b:-<err>}, capture immediately followed by the fold ${wire_adj:-<err>} (want exactly 1 each). This protects the path by which the sweep verdict reaches this suite's exit status. Expected, at column 0 and once each: 'sweep_main . \"\$SWEEP_FLOOR\" || sweep_rc=\$?' directly followed by 'sweep_fold \"\$sweep_rc\"'. Fix: restore the statement; if it moved legitimately, update this pin, not the sweep")
+# The verdict gate and the final exit are pinned the same way, but they report DIRECTLY (FAIL and exit 1 below, just ahead of the gate): a failure
+# appended to sweep_probe_fail is read by that very gate, so a gate edited to always pass would silence its own pin.
+wire_gate=$(grep -cE '^if \(\( \$\{#sweep_probe_fail\[@\]\} == 0 \)\); then[[:space:]]*$' <<<"$_code" || true)
+wire_exit=$(grep -cE '^exit "\$FAIL"[[:space:]]*$' <<<"$_code" || true)
+wire_else=$(grep -B1 -E '[e]cho "FAIL: the derived sweep.s own probe is broken' <<<"$_code" | grep -cE '^  FAIL=1[[:space:]]*$' || true)
+wire_exit1=$(grep -A2 -E '[e]cho "FAIL: the derived sweep.s own probe is broken' <<<"$_code" | grep -cE '^  exit 1[[:space:]]' || true)
 
 # A probe check that is DELETED cannot fail, so the number of checks is pinned: every check above ends in
 # `|| sweep_probe_fail+=(...)` (or `&& ...` for a negative control), so the count of NON-COMMENT lines carrying that tail is the count
 # of checks (the pin's own line included); comment lines are excluded, so rewording a comment can neither hide a deletion nor trip the pin,
-# and the append is counted only where an `||` or `&&` operator immediately precedes it, so a tail moved into a trailing comment cannot
-# stand in for a deleted check.
+# and the append is counted only where an `||` or `&&` operator immediately precedes it, so a bare tail with no operator cannot stand in for
+# a deleted check (a decoy that fabricates a whole `|| sweep_probe_fail+=(` line is an edit of the probe itself, which review reads).
 SWEEP_PROBE_CHECKS=36
 probe_checks=$(grep -cE '(\|\||&&)[[:space:]]+sweep_probe_fail\+=\(' <<<"$_code" || true)
 [[ "$probe_checks" == "$SWEEP_PROBE_CHECKS" ]] \
   || sweep_probe_fail+=("probe-count: this probe carries ${probe_checks:-<err>} checks, pinned at $SWEEP_PROBE_CHECKS — a deleted check cannot fail, so restore it or, if you ADDED one, raise SWEEP_PROBE_CHECKS")
-if [[ "$wire_gate" != 1 || "$wire_exit" != 1 ]]; then
-  echo "FAIL: return-wiring: the probe verdict gate matched ${wire_gate:-<err>} lines and the final exit ${wire_exit:-<err>} (want exactly 1 each, at column 0). Expected 'if (( \${#sweep_probe_fail[@]} == 0 )); then' and 'exit \"\$FAIL\"'. Fix: restore the statement; if it moved legitimately, update this pin, not the sweep"
+if [[ "$wire_gate" != 1 || "$wire_exit" != 1 || "$wire_else" != 1 || "$wire_exit1" != 1 || ! "${SWEEP_N:-}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "FAIL: return-wiring: the probe verdict gate matched ${wire_gate:-<err>} lines, the final exit ${wire_exit:-<err>}, the gate's FAIL=1 ${wire_else:-<err>} and its exit 1 ${wire_exit1:-<err>} (want exactly 1 each, at column 0), and the sweep recorded SWEEP_N='${SWEEP_N:-}' (want a swept-file count: a sweep that never ran leaves it empty). Expected 'if (( \${#sweep_probe_fail[@]} == 0 )); then' and 'exit \"\$FAIL\"'. Fix: restore the statement; if it moved legitimately, update this pin, not the sweep"
   exit 1
 fi
 if (( ${#sweep_probe_fail[@]} == 0 )); then
