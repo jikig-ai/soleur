@@ -1572,7 +1572,7 @@ assert "AO31 the verdict after a page-2 failure says id=none" "[[ \"\$(last_verd
 new_case ao32
 BIDI="$(printf '\xe2\x80\xae')"
 UTF8_OK=0
-if LC_ALL=C.UTF-8 grep -q x <<<x 2>/dev/null && [[ "$(LC_ALL=C.UTF-8 bash -c 'printf "%s" "$LC_ALL"' 2>/dev/null)" == C.UTF-8 ]]; then UTF8_OK=1; fi
+if LC_ALL=C.UTF-8 grep -q x < <(printf x) 2>/dev/null && [[ "$(LC_ALL=C.UTF-8 bash -c 'printf "%s" "$LC_ALL"' 2>/dev/null)" == C.UTF-8 ]]; then UTF8_OK=1; fi
 LC_ALL=C.UTF-8 FAKE_CURL_COST=1 ARMONE_BOOKS="$CASE/x${BIDI}Y/books" run_named --arm-one "$HOST_NAME" --id "$ID_HOST"
 assert "AO32 the refusal for that path is printed" "[[ \"\$OUT\" == *'must be absent or a readable, writable regular file'* ]]"
 if [[ "$UTF8_OK" -eq 1 ]]; then
