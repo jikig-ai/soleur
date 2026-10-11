@@ -25,6 +25,14 @@ on dev only.
 - [ ] 2.3 `await backdateSlotHeartbeat(stuckConv, 200);` → `await backdateSlotHeartbeat(stuckConv, 300);` (or a `STALE_SLOT_AGE_S = 300` constant mirroring Phase 1).
 - [ ] 2.4 Negative-gate comments ONLY: :365 `under the 240 s threshold`, :378 `well within the 240 s threshold` — keep `backdateSlotHeartbeat(liveConv, 60)` literal UNCHANGED.
 
+## Phase 2.5 — Folded-in same-class carriers (discovered by the deepen sweep)
+
+- [ ] 2.5.1 `apps/web-platform/lib/ws-client.ts`: comment :204 `(60 s reaper tick + 120 s threshold ≈ 3 min)` → `240 s threshold ≈ 5 min`; `CONCURRENCY_CAP` reason :210 `~3 minutes` → `~5 minutes`.
+- [ ] 2.5.2 `apps/web-platform/test/ws-protocol.test.ts`: comment :486 `~3 min = 60 s tick + 120 s threshold` → `~5 min = 60 s tick + 240 s threshold`; assertion :492 `toContain("3 minutes")` → `toContain("5 minutes")`.
+- [ ] 2.5.3 `apps/web-platform/server/host-identity.ts`: comments :5/:26 `120s lockout` / `up to 120s` → `240s`; thrown error string :38 `up to 120s.` → `up to 240s.`
+- [ ] 2.5.4 `apps/web-platform/test/ws-handler-cap-hit-self-heal.test.ts`: comment :373 `stale (>120s)` → `stale (>240s)`.
+- [ ] 2.5.5 Unit-verify the coupled assertion (AC8): `cd apps/web-platform && npm run test:ci -- test/ws-protocol.test.ts --project unit` → green (runs in the per-PR shard — no dev DB needed).
+
 ## Phase 3 — Sweep + live verification
 
 - [ ] 3.1 Census re-run (AC6): `grep -rn "ageHeartbeat\|backdate" apps/web-platform/test/ | grep -v "worktree-write-lease\|conversation-archive-release-slot"` — expect zero heartbeat-aging carriers elsewhere.

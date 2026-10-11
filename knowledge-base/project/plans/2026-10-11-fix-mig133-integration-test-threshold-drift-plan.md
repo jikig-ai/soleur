@@ -11,6 +11,42 @@ brand_survival_threshold: none
 
 # fix: Realign dormant env-gated integration tests to migration 133's 240 s liveness contract
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-11
+**Sections enhanced:** Overview (scope update), Proposed Solution (discovered-carrier edit table), Technical Considerations, Files to Edit, User-Brand Impact (scope-out), Scope Check (inferred rows), Acceptance Criteria (AC4/AC8/AC9), Domain Review, Test Scenarios, Alternative Approaches, Research Insights (census/reconciliation/gate dispositions)
+**Research agents used:** none — subagent spawning unavailable in this pipeline context; all deepen-plan halt gates and quality checks were executed inline.
+
+### Key Improvements (deepen-plan)
+
+1. **Widened the sweep beyond the brief's population** — found the same mig-133
+   120→240 drift in `lib/ws-client.ts` (user-facing `~3 minutes` → `~5
+   minutes`), `server/host-identity.ts` (operator-facing `up to 120s` → 240 s),
+   `test/ws-protocol.test.ts` (coupled assertion), and
+   `test/ws-handler-cap-hit-self-heal.test.ts` (stale comment). Folded in.
+2. **Copy math re-derived against ADR-124** — the cap-hit reap is
+   threshold-independent, but the background reaper's worst case remains 60 s
+   tick + 240 s ≈ 5 min; `~5 minutes` is the conservative correct figure.
+3. **Sensitive-path re-check post fold-in** — `server/host-identity.ts` puts the
+   diff inside the sensitive-path regex; scope-out reason updated, GDPR gate
+   fired and assessed inline.
+
+### Gates Run (deepen-plan, inline)
+
+- 4.4 precedent-diff: PASS (synthetic-user lifecycle + RPC helpers mirror
+  `concurrency-acquire-slot-workspace-id.integration.test.ts`; no novel pattern)
+- 4.45 round-1 realism: negative claims verified (census ran; SQL predicate is
+  strict `<`; synthetic-only dev users); no dropped symbols to re-grep
+- 4.5 network-outage: 0 trigger hits in Overview/Problem — skipped
+- 4.55 downtime & cutover: no infra/DDL/deploy surface — skipped
+- 4.6 User-Brand Impact: PASS (section present, `none`, scope-out line carried)
+- 4.7 Observability: PASS (5 fields, `grep` verb allowlisted, `expected_output: "3"` literal, <15 s, no ssh)
+- 4.8 PAT shapes: none
+- 4.9 UI-wireframe: N/A (no UI-surface file)
+- 4.10 Encryption Posture: skipped (no store-class file match or prose store/connection)
+- 4.11 Guard Contract: deliverable is not a guard (prose mentions of "guard"/"drift-guard" are rejected-alternative and existing-mechanism references only) — skipped
+- 4.12 Scope Check: PASS (1 unfenced section, 3 subsections, Recommendation: single PR; inferred rows carry justifications)
+
 ## Overview
 
 Migration 133 (`apps/web-platform/supabase/migrations/133_heartbeat_threshold_backoff.sql`)
@@ -22,6 +58,15 @@ never updated and still assert the pre-133 120 s contract, so the
 `.github/workflows/scheduled-integration-suites.yml` (wired by #9855 PR 2,
 plan `2026-10-10-feat-dormant-integration-ci-plan.md`) fail deterministically on
 every nightly run and keep re-commenting on tracker #9993.
+
+**Scope update (deepen-plan sweep, 2026-10-11):** the mandated "no other file
+carries the same stale-threshold assumption" census found the same mig-133
+120→240 drift in four files outside the brief's integration-test population —
+two of them in user/operator-facing strings (`lib/ws-client.ts`'s
+`CONCURRENCY_CAP` copy "~3 minutes" → ~5 min under 60 s tick + 240 s threshold;
+`server/host-identity.ts`'s thrown error "up to 120s" → 240 s). They are folded
+into this plan as `inferred` items: identical defect class, all comment/string
+literals, and deferring ~15 one-token edits to a second PR is disproportionate.
 
 *Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).*
 
@@ -86,6 +131,18 @@ the same partial-update drift this PR removes).
 Comments may retain the token `120` only inside an explicit historical citation
 (e.g. "raised 120→240 in mig 133") — never as the live contract.
 
+### Exact edits — discovered same-class carriers (folded in by the sweep)
+
+| File | Site | Before | After |
+|---|---|---|---|
+| `apps/web-platform/lib/ws-client.ts` | comment :204 | `(60 s reaper tick + 120 s threshold ≈ 3 min)` | `(60 s reaper tick + 240 s threshold ≈ 5 min)` |
+| `apps/web-platform/lib/ws-client.ts` | `CONCURRENCY_CAP` reason :210 | `…reclaim it within ~3 minutes.` | `…reclaim it within ~5 minutes.` |
+| `apps/web-platform/test/ws-protocol.test.ts` | comment :486 | `~3 min = 60 s tick + 120 s threshold` | `~5 min = 60 s tick + 240 s threshold` |
+| `apps/web-platform/test/ws-protocol.test.ts` | assertion :492 | `.toContain("3 minutes")` | `.toContain("5 minutes")` |
+| `apps/web-platform/server/host-identity.ts` | comments :5, :26 | `120s lockout` / `for up to 120s` | `240s lockout` / `for up to 240s` |
+| `apps/web-platform/server/host-identity.ts` | thrown error string :38 | `each recreate-deploy out of its own worktree for up to 120s.` | `each recreate-deploy out of its own worktree for up to 240s.` |
+| `apps/web-platform/test/ws-handler-cap-hit-self-heal.test.ts` | comment :373 | `stale (>120s)` | `stale (>240s)` |
+
 ## Technical Considerations
 
 - **Why 300 and not 241/250:** `ageHeartbeat`/`backdateSlotHeartbeat` write a
@@ -108,11 +165,38 @@ Comments may retain the token `120` only inside an explicit historical citation
   `deleteUser` 500s recur during verification (#9994, out of scope), the slot
   file's hook failure must be read as non-blocking per the brief — per-test
   results are the verdict. Do NOT soften the throw in this PR.
+- **`~5 minutes` is the correct figure, not a paraphrase:** ADR-124 added a
+  threshold-INDEPENDENT immediate reap on `start_session` cap-hit, but the
+  background `find_stuck_active_conversations` reaper (60 s tick over the
+  240 s threshold) remains the worst-case path for a genuinely-stuck row —
+  60 + 240 = 300 s ≈ 5 min. The `ws-protocol.test.ts` assertion pins the
+  string (`"3 minutes"`), so copy and assertion must move together in one diff.
+- **`lib/ws-client.ts` stays a literal:** it is client-side (`react`,
+  `@/lib/supabase/client`) — importing `server/concurrency.ts` would cross the
+  client/server import boundary, so the threshold-derived copy cannot be
+  derived; the literal + adjacent derivation comment is the available shape.
+- **`host-identity.ts` is the same constant:** the "120s lockout" it names is
+  `LEASE_LIVENESS_WINDOW_MS` (240_000 post-133) — the self-lockout window a
+  per-container-id host would wait out. `host-identity.test.ts` asserts only
+  `/SOLEUR_HOST_ID is unset in production/` — the `120s` in the thrown string
+  is unpinned and safe to update.
+- **Excluded lookalikes (verified NOT this threshold):**
+  `git-data-replication.ts`'s `GIT_DATA_QUEUE_TIMEOUT_MS` default 120_000 (a
+  queue-grant window), `c4-staleness.ts`'s 120 s render budget, the
+  `cc-dispatcher`/`cc-reprovision` 120 s clone timeouts,
+  `sandbox-credential-deny-argv.test.ts`'s 120 s module default,
+  `dsar-author-redaction`/`api-checkout-idempotency`'s `120_000` vitest/marker
+  ages, and `STUCK_TIMEOUT_MS = 45_000` in `lib/ws-constants.ts` — none derive
+  from mig-133's liveness contract and all stay.
 
 ## Files to Edit
 
 - `apps/web-platform/test/worktree-write-lease.integration.test.ts` — 3 call sites + 3 comment sites + named constant (table above)
 - `apps/web-platform/test/conversation-archive-release-slot.integration.test.ts` — 1 call site + test title + comment block/sites (table above)
+- `apps/web-platform/lib/ws-client.ts` — derivation comment + `CONCURRENCY_CAP` reason string (folded-in carrier)
+- `apps/web-platform/test/ws-protocol.test.ts` — explanatory comment + `"3 minutes"` assertion (coupled to the ws-client copy)
+- `apps/web-platform/server/host-identity.ts` — 2 comments + thrown error string (folded-in carrier)
+- `apps/web-platform/test/ws-handler-cap-hit-self-heal.test.ts` — 1 stale comment (folded-in carrier)
 
 ## Files to Create
 
@@ -120,12 +204,12 @@ Comments may retain the token `120` only inside an explicit historical citation
 
 ## User-Brand Impact
 
-- **If this lands broken, the user experiences:** no direct user-facing artifact — the change edits env-gated test files only. The *indirect* surface is operator trust in the `worktree-lease`/`slot-trigger` legs: a mis-set constant leaves a leg red (noise, noticed nightly) or falsely green (only if a literal were *under* the threshold while asserting staleness — AC4's live green run and the unchanged 60 s negative gate rule that out).
+- **If this lands broken, the user experiences:** the only user-visible artifact in the diff is the `CONCURRENCY_CAP` close-frame copy — a wrong number there would misstate the reclaim window but is pinned by `ws-protocol.test.ts`; the rest is env-gated test files and comments. The *indirect* surface is operator trust in the `worktree-lease`/`slot-trigger` legs: a mis-set constant leaves a leg red (noise, noticed nightly) or falsely green (only if a literal were *under* the threshold while asserting staleness — AC4's live green run and the unchanged 60 s negative gate rule that out).
 - **If this leaks, the user's [data / workflow / money] is exposed via:** no exposure vector — synthetic `*@soleur.test` users on dev only (`hr-destructive-prod-tests-allowlist`).
 - **Brand-survival threshold:** `none`
-- **Threshold decision (challengeable):** the diff is two test files with no production-path changes; the suites exist to protect the user-facing slot/lease contract, but this diff does not alter what users experience — it restores the test's fidelity to the contract already live on dev.
+- **Threshold decision (challengeable):** the diff is literal constants, comments, and two stale-number strings — no production logic, schema, auth-flow, or migration changes; it restores test and copy fidelity to the contract already live on dev.
 
-*Scope-out override:* `threshold: none, reason: env-gated integration-test constants and comments only — no production, schema, auth-flow, or migration code changes.`
+*Scope-out override:* `threshold: none, reason: literal/comment/string accuracy updates — host-identity.ts matches the apps/web-platform/server/ sensitive path but the edit is three stale numbers in comments and one thrown error string; no production logic changes.`
 
 ## Observability
 
@@ -168,8 +252,8 @@ discoverability_test:
 |---|---|---|---|
 | 1 | "`ageHeartbeat(121)` → a value >240 with clock-skew margin (suggest 250 or 300 — DB now() vs runner Date.now() can skew; do NOT use 241). Update comments citing the 120s expiry (~lines 9, 18, 236) to the 240s contract from migration 133." | Files-to-Edit lease file (edit table) | mapped |
 | 2 | "`backdateSlotHeartbeat(stuckConv, 200)` → >240 with margin; update the test title ('200 s old', '120-180 s dead-end window') and comments describing the 120s threshold to 240s semantics. Keep the 60s negative test as-is." | Files-to-Edit slot file (edit table) | mapped |
-| 3 | "Sweep both files for any other 120s-derived constants; re-verify no other integration test file carries the same stale-threshold assumption." | AC5 + Research Insights census | mapped |
-| 4 | "Verification: these legs are env-gated integration tests runnable against dev with the same command CI uses" | AC4 + Test Scenarios verification commands | mapped |
+| 3 | "Sweep both files for any other 120s-derived constants; re-verify no other integration test file carries the same stale-threshold assumption." | AC6 + Research Insights census + discovered-carrier edit table (folded-in files) | mapped |
+| 4 | "Verification: these legs are env-gated integration tests runnable against dev with the same command CI uses" | AC5 + Test Scenarios verification commands | mapped |
 | 5 | "Out of scope: the other failing legs (supabase-dev/byok deleteUser 500s; mu1 JWT 401) have their own open trackers — do not touch." | — | descoped — justification: tracked by #9994 (deleteUser 500s) and #9995 (MU1 401); touching them would collide with their own fixes |
 
 ### Plan-Item Provenance
@@ -178,14 +262,18 @@ discoverability_test:
 |---|---|---|
 | lease-file edits | ask 1 (quoted above) | asked |
 | slot-file edits | ask 2 (quoted above) | asked |
-| sweep census + AC5 | ask 3 (quoted above) | asked |
-| live-dev verification AC4 | ask 4 (quoted above) | asked |
+| sweep census + AC6 | ask 3 (quoted above) | asked |
+| live-dev verification AC5 | ask 4 (quoted above) | asked |
 | named constant `STALE_*_AGE_S = 300` | — | inferred — justification: three identical `ageHeartbeat(121)` literals were the partial-update-drift vector; a single named constant concentrates the margin rationale in one comment and one edit site |
+| `lib/ws-client.ts` comment + `~3 minutes` copy edits | — | inferred — justification: found by the ask-3 sweep outside the stated integration-test population; same mig-133 drift class reaching user-facing copy that over-promises the reclaim window (~3 min vs ~5 min actual); a second PR for one word + one comment is disproportionate |
+| `test/ws-protocol.test.ts` comment + assertion edits | — | inferred — justification: mechanically coupled to the ws-client copy change — the assertion pins `"3 minutes"` and must move in the same diff or CI reds |
+| `server/host-identity.ts` comment + error-string edits | — | inferred — justification: same ask-3 sweep find; "up to 120s" names `LEASE_LIVENESS_WINDOW_MS` (now 240 s) in an operator-facing thrown error; identical defect class |
+| `test/ws-handler-cap-hit-self-heal.test.ts` comment edit | — | inferred — justification: same ask-3 sweep find; `>120s` comment beside mocks already at 240 — one-token documentation fix |
 
 ### Split Assessment
 
 - Subsystems touched: 1 — apps/web-platform
-- Planned files: 2 | Estimated changed lines: ~25
+- Planned files: 6 | Estimated changed lines: ~40
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
 - Recommendation: single PR
 
@@ -194,23 +282,27 @@ discoverability_test:
 - [ ] AC1: `apps/web-platform/test/worktree-write-lease.integration.test.ts` contains zero remaining `ageHeartbeat(121)` call sites; all three stale-arm calls (AC2 c/e/f) use `STALE_LEASE_AGE_S = 300` (or a literal ≥ 250 with equivalent margin comment)
 - [ ] AC2: `apps/web-platform/test/conversation-archive-release-slot.integration.test.ts` backdates the stale slot ≥ 250 s (300); the test title no longer reads "200 s old" / "120-180 s dead-end window"
 - [ ] AC3: the fresh-heartbeat negative gates remain `60` and remain passing — `backdateSlotHeartbeat(liveConv, 60)` and `ageHeartbeat` are untouched below the threshold
-- [ ] AC4: no comment or title in either file presents 120 s as the live contract; any surviving `120` token appears only inside an explicit historical citation (e.g. "raised 120→240 in mig 133")
+- [ ] AC4: no comment, title, string, or assertion in any edited file presents 120 s as the live contract; any surviving `120` token appears only inside an explicit historical citation (e.g. "raised 120→240 in mig 133")
 - [ ] AC5: both legs pass green against dev with the exact CI commands —
   `doppler run -p soleur -c dev_scheduled -- env WORKTREE_LEASE_INTEGRATION_TEST=1 npm run test:ci -- test/worktree-write-lease.integration.test.ts --project unit` → 8/8 pass, and
   `doppler run -p soleur -c dev_scheduled -- env SLOT_TRIGGER_INTEGRATION_TEST=1 npm run test:ci -- test/conversation-archive-release-slot.integration.test.ts --project unit` → 6/6 pass
-  (afterAll `deleteUser` 500 noise is non-blocking per brief; per-test results are the verdict)
+  (the non-zero pass counts themselves prove the env gates fired — a skipped suite reports 0 tests; afterAll `deleteUser` 500 noise is non-blocking per brief; per-test results are the verdict)
 - [ ] AC6: grep census confirms no other `*.test.ts` carries a heartbeat-aging literal or a 120 s-derived staleness assumption (evidence recorded in Research Insights)
 - [ ] AC7: PR body does NOT use `Closes #9993` — sibling legs (#9994, #9995) keep the tracker open; reference `issue #9993` only
+- [ ] AC8: `lib/ws-client.ts` `CONCURRENCY_CAP` reason reads `~5 minutes` and its derivation comment reads `240 s threshold ≈ 5 min`; `npm run test:ci -- test/ws-protocol.test.ts --project unit` passes (the pinned assertion moves to `"5 minutes"` in the same diff)
+- [ ] AC9: `server/host-identity.ts` and `test/ws-handler-cap-hit-self-heal.test.ts` contain no `120` token presented as the live lockout/staleness figure (each → `240s`)
 
 ## Domain Review
 
 **Domains relevant:** none
 
-No cross-domain implications detected — test-machinery change only. Mechanical
-UI-surface scan: `## Files to Edit` contains no path matching the
-`ui-surface-terms.md` glob superset → Product/UX gate NONE. Engineering
-assessment question ("significant architectural decisions / beyond normal
-implementation") not met — literal constant updates against an already-applied
+No cross-domain implications detected — test-machinery + comment/copy-accuracy
+change only. Mechanical UI-surface scan: `## Files to Edit` contains no path
+matching the `ui-surface-terms.md` glob superset → Product/UX gate NONE. The
+`lib/ws-client.ts` reason-string edit is a one-word number correction inside an
+existing close-frame string, not a new surface — no copy review lane fires.
+Engineering assessment question ("significant architectural decisions / beyond
+normal implementation") not met — literal updates against an already-applied
 migration.
 
 ## Test Scenarios
@@ -218,7 +310,8 @@ migration.
 - **AC2(c/e/f) re-acquire boundary (integration):** Given a held lease whose heartbeat is aged 300 s (past the 240 s mig-133 expiry), when a different host calls `acquire_worktree_lease`, then it takes over with gen+1.
 - **Stale-slot lazy sweep (integration):** Given a slot heartbeat backdated 300 s under cap=1, when a new conversation acquires, then the lazy sweep reaps the stale row and status is `ok`.
 - **Fresh-slot negative gate (integration):** Given a slot heartbeat backdated 60 s (inside 240 s), when a new conversation acquires under cap=1, then `cap_hit` fires — the boundary's lower bound.
-- **Verification commands (deterministic):** the two `doppler run -p soleur -c dev_scheduled` invocations quoted in AC5.
+- **Copy-assertion parity (unit):** Given `CONCURRENCY_CAP` copy updated to `~5 minutes`, when `ws-protocol.test.ts` runs, then the `toContain("5 minutes")` assertion passes — copy and pin move atomically.
+- **Verification commands (deterministic):** the two `doppler run -p soleur -c dev_scheduled` invocations quoted in AC5, plus `npm run test:ci -- test/ws-protocol.test.ts --project unit` for AC8.
 
 ## Success Metrics
 
@@ -243,6 +336,7 @@ migration.
 | Minimal bump (241) | Brief explicitly rules out — DB `now()` vs runner `Date.now()` skew can exceed 1 s. |
 | Sleeping real elapsed time | Already rejected by the suite's design — `ageHeartbeat`/`backdateSlotHeartbeat` exist precisely to avoid multi-minute sleeps. |
 | Soften the slot file's `afterAll` throw → `console.warn` (match lease file) | Touches the #9994 defect surface — out of scope per brief; the throw is that file's deliberate strictness. |
+| Defer the four discovered carriers (`ws-client`, `host-identity`, `ws-protocol`, `cap-hit-self-heal`) to a follow-up issue | Rejected at deepen-plan: identical mig-133 drift class surfaced by the mandated sweep, ~15 literal edits total, and one of them is user-facing copy that over-promises the reclaim window — a separate PR+issue cycle costs more than the fix and would ship a plan documenting its own unfixed finding. |
 
 ## Sharp Edges
 
@@ -289,14 +383,23 @@ All cited artifacts verified against the worktree AND live against dev:
 Alternatives); drift-guard regex extension (no stable literal family to grep —
 see Alternatives); #9994/#9995 fixes (explicitly descoped by the brief).
 
-### Census — no other stale-threshold carriers
+### Census — stale-threshold carriers (deepen-plan widened sweep)
 
-`grep` over `apps/web-platform/test/**` for `ageHeartbeat`, `backdate`,
-`heartbeat_at` writes, `interval '1..`, `12x`/`200` staleness literals: only the
-two target files. `agent-runner-stuck-active-reaper.test.ts:131` already mocks
-`SLOT_STALENESS_THRESHOLD_SECONDS: 240`. `120_000` hits elsewhere are vitest
-timeouts/marker ages, not liveness thresholds. `test/supabase-migrations/*`
-sentinels pin historical migration bodies — correct to leave.
+Sweep over `apps/web-platform/{test,lib,server}` for `ageHeartbeat`, `backdate`,
+`heartbeat_at` writes, `120 s`/`120s`/`12x`/`200` staleness literals:
+
+- **Carriers (folded in):** the two brief files plus `lib/ws-client.ts` (comment
+  `120 s threshold ≈ 3 min` + `~3 minutes` copy), `test/ws-protocol.test.ts`
+  (derivation comment + `"3 minutes"` assertion — coupled to the copy),
+  `server/host-identity.ts` (`120s lockout` comments + thrown error string),
+  `test/ws-handler-cap-hit-self-heal.test.ts` (`>120s` comment beside 240 mocks).
+- **Already correct:** `agent-runner-stuck-active-reaper.test.ts:131` and
+  `ws-handler-cap-hit-self-heal.test.ts:109` mock `…: 240`; all
+  heartbeat-cadence comments in `concurrency.ts`/`worktree-write-lease.ts`
+  already read `25s→50s` / `30 s→60 s` / `4.8 missed 50 s beats`.
+- **Excluded lookalikes:** see Technical Considerations — queue/render/clone/
+  retry/vitest 120 s constants unrelated to mig-133; `test/supabase-migrations/*`
+  sentinels pin historical bodies by design.
 
 ### Applicable learnings
 
@@ -313,19 +416,20 @@ sentinels pin historical migration bodies — correct to leave.
 | `backdateSlotHeartbeat(stuckConv, 200)` under-reaps under 240 s | :345 confirmed; live run `cap_hit` | → 300 |
 | 60 s negative gate stays valid | passed live under 240 s | unchanged |
 | cleanup deleteUser 500s are noise | lease file warns; slot file throws — read per-test results | documented in Risks; not softened |
+| sweep scope = "no other integration test file" | same drift class found in 4 more files (app copy + error string + unit-test comment/assertion) — falsifiable-premise catch | folded in as inferred items with justification (Scope Check) |
 
 ### Gate dispositions
 
 - **Phase 1.4 network-outage:** no trigger pattern in the brief (the "500s" cited is HTTP 500 plural on a descoped leg, not a connectivity symptom). Skipped.
 - **Phase 1.5/1.5b community/functional overlap:** test-constant fix; no community artifact class applies; no uncovered stack. Skipped.
 - **Phase 1.6 external research:** strong local context + verified live diagnosis → skipped.
-- **Phase 2.7 GDPR:** Files-to-Edit are `test/*.ts` — outside the regulated-surface path set; synthetic users only; triggers (a)-(d) none. Skipped.
+- **Phase 2.7 GDPR:** `server/host-identity.ts` matches the regulated-surface path regex, so the gate fires — assessed inline (no `soleur:gdpr-gate` spawn available): the diff is three stale numbers in comments + one thrown error string; no schema, no processing activity, no PII/auth-flow/API change; synthetic users only on dev. Compliant; triggers (a)-(d) none.
 - **Phase 2.8 IaC:** no new infrastructure. Skipped.
-- **Phase 2.9 Observability:** `test/` is outside the detection path set; section included anyway because restoring the legs IS the liveness signal.
+- **Phase 2.9 Observability:** required post-fold-in (`server/host-identity.ts` matches `apps/*/server/`); section present regardless since restoring the legs IS the liveness signal.
 - **Phase 2.10 ADR/C4:** no architectural decision — test alignment to an already-recorded contract (mig 133's own header + `concurrency-heartbeat-backoff.test.ts` are the record). Skipped.
 - **Phase 2.11 Encryption Posture:** no persistent store, no new connection. Skipped.
 - **Phase 2.12 Guard Contract:** deliverable contains no guard/gate/lint. Skipped.
-- **Phase 4.5 advisor consult:** trivially mechanical (two files, constant updates, no architecture choice) — skipped per the carve-out.
+- **Plan Step 4.5 advisor consult:** trivially mechanical (literal updates, no architecture choice) — skipped per the carve-out.
 - **Plan review:** the multi-agent panel (`plan-review` skill) cannot be spawned in this pipeline context (no Task tool). Standing checks run inline instead: every edit-table anchor verified against the live files at write time; every AC is deterministic over file state or the two pinned live test runs; nothing is taste-class pending operator decision.
 
 ## References & Research
