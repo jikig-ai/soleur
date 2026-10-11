@@ -65,3 +65,9 @@
 - Deferred-scope-out filed: #9969 (under-cover siblings — whole-tree corpus suites the glob kind now makes expressible + review advisories).
 - Archive-kb deferred to ship Phase 6 (ship reads the spec dir — its Phase 6 step 5.5 archives after the last live read, same PR).
 - Post-rebase note: origin/main advanced +6 (#9893 argv-bearer merged — additive, zero conflicts, ARGV_BEARER_SWEEP literal .md edges only; suite count 600→601, q4's >=100 pin holds).
+
+## CI Fallout Round (first CI run on the pushed branch)
+- `shard-totality-mutations` legs 15-28/29-42 FAILED — anchors pinned the old `--rows 1-10`/`11-20` tiling; M21-27's re-split to `1-13`/`14-27` missed them all (ANCHOR MISSING). Fixed by re-tiling every anchor/mutant; both legs verified 15/15 locally.
+- `test-scripts (4/8)` FAILED — T10 derive-span read-census flagged my trailing comments spelling `tail X`/`head X` (the awk parses comment words as the commands' operand form). Reworded to `_gt`/`_gh`; derive-cache 19/19 green.
+- `test-scripts (5/8)` FAILED — `test-all-killed-classification` T14 budget fixture (`elapsed '' want >=40`; unrelated suite, looks CI-load flake — retried on rerun).
+- `test` aggregator failed as consequence. Lesson recorded: --rows tiling anchors live in a SECOND battery (shard-totality-mutations) — a DECLARED_TOTAL bump must grep for the range literals repo-wide, not just the two registrations.
