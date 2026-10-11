@@ -90,7 +90,7 @@ anti-vacuity floor `MIN_ASSERTIONS=8` sits on the line above its `if`.
 
 ## User-Brand Impact
 
-Threshold: single-user incident. The sandbox's `/proc` mask is the only cross-tenant barrier (tenants share uid 1001
+- **Brand-survival threshold:** `single-user incident` — the sandbox's `/proc` mask is the only cross-tenant barrier (tenants share uid 1001
 in one container). This diff changes no docker flag and not the shim; it adds a guard and a signal. Failure modes:
 
 | Artifact | Exposure vector | Mitigation in this diff |
@@ -108,6 +108,13 @@ in one container). This diff changes no docker flag and not the shim; it adds a 
   `sandboxErrorCode` and the scrubbed `sandboxStderr`. The container-side canary rows remain
   `SANDBOX_CANARY_FAIL` / `SOLEUR_CANARY_SANDBOX_DIAG` (Better Stack, `scripts/betterstack-query.sh`).
 - **Detection, not alerting:** no rule pages on this op until #10052 (blocked on #7985).
+
+```yaml
+discoverability_test:
+  credentials_required: "Sentry API read token (SENTRY_AUTH_TOKEN, Doppler prd); the event store has no anonymous query form, so no unauthenticated probe verifies that the op:bash-tool-result event is tagged and user-scoped. The tag and user shape is pinned offline by cc-dispatcher-bash-sandbox-sentry-path.test.ts."
+  command: "Sentry issue search: feature:agent-sandbox op:bash-tool-result"
+  expected_output: "one event per affected user per 5 minutes with sandboxErrorCode and scrubbed sandboxStderr"
+```
 
 ## Files
 
