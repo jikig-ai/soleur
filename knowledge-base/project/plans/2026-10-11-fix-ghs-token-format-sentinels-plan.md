@@ -15,6 +15,26 @@ requires_cpo_signoff: true
 
 Spec lacks valid `lane:` — defaulted to `cross-domain` (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-11 (soleur:deepen-plan, inline sequential fallback — no subagent spawn in this harness; gates 4.6–4.12 all run and pass)
+**Sections enhanced:** Scope Check/site table, Research Insights, Per-site edits, Guard Contract, Observability, Architecture Decision, Acceptance Criteria, Test Scenarios, Risks
+
+### Key Improvements
+
+1. **Phase 4.7 reject fixed**: `discoverability_test.command` was suite-shaped (`*.test.sh` — Check 10's 15-second-cap proxy rejects it); replaced with the instant allowlisted-verb probe `grep -c 'ghs_\[A-Za-z0-9._~+/=-\]' run-scan.sh` → `1`.
+2. **Site 7 re-grounded**: the regex at `redaction-allowlist.ts:71` is `API_KEY_RE` (plan originally paraphrased `TOKEN_RE`), and it is the mask behind `redactCommandForDisplay` — verified live to feed FOUR render sinks (`permission-callback.ts:1094` review_gate card + notifyOfflineUser, `run-log.ts:55,64`, `destroy-ask-lane.ts:198`, `debug-event.ts`). A truncated mask there displays a live token tail in the user-facing approval card — raises site 7 to the plan's most user-adjacent surface, per the render-sink learning.
+3. **`work/SKILL.md` byte ceiling measured**: 362000/362000 — zero headroom; the +7-byte class widening requires a compensating prose trim in the same commit (tasks.md 2.3).
+4. **Test-runner correction**: `apps/web-platform` is vitest (`bunfig.toml` blocks bun discovery); prescribed invocations updated to `vitest run`. New `.test.sh` auto-registers via `test-all.sh`'s `plugins/soleur/skills/*/test/*.test.sh` glob; orphan-census assertion added.
+5. **Census coverage widened**: Guard 3 gains a family-alternation arm (`(?:ghp|…)_<class>` forms) and `github_pat_`/`gh[opsur]_` literal coverage — a bare `ghs_\[` grep would miss the `API_KEY_RE` shape entirely; `knowledge-base/` pathspec exclusion added (the corpus legitimately quotes legacy shapes).
+
+### New Considerations Discovered
+
+- `API_KEY_RE` carries non-GitHub arms (`sk-*`, `AKIA`, `xox*`, `sbp_`, `sb_secret_`) that stay documented-narrower — the widen is scoped to the two GitHub arms only.
+- `redactCommandForDisplay`'s composition is cap-AFTER-redact (`preview` slices the redacted string) — consistent with the fixture's zero-tail assertion.
+- ADR amendment precedent confirmed (ADR-067/070/071/126/222 carry `## Amendment`/`## Addendum`).
+- `lint-guard-contract.py` green (3 guards); all cited rule IDs resolve; all cited issue/PR numbers verified live; all prescribed verification commands executed once against the pre-change tree (lockstep ok, boundary 37/37, orphan census 666/0).
+
 ## Overview
 
 GitHub rotated the issued shape of `ghs_` installation access tokens: the
@@ -68,7 +88,7 @@ site role:
 | 4 | `plugins/soleur/skills/work/SKILL.md:864` (fixture-audit canonical scan) | detection | `ghs_[A-Za-z0-9_]{20,}` |
 | 5 | `apps/web-platform/server/git-auth.ts:45` (`TOKEN_FORMAT_RE`, consumed at `:274`) | validation, warn-not-throw | `^ghs_[A-Za-z0-9_-]{30,128}$` |
 | 6 | `plugins/soleur/skills/constraint-scaffold/test/boundary.test.sh:148` (`check_value_safe_drift`) | detection (secret-literal drift pin) | `ghs_[A-Za-z0-9_]{20,}` |
-| 7 | `apps/web-platform/lib/safety/redaction-allowlist.ts:71` (`TOKEN_RE` family alternation) | redaction → `[redacted-key]` | `(?:ghp\|gho\|ghu\|ghs\|ghr)_[A-Za-z0-9_-]{20,}` — **not in the issue's list; found by the write-boundary census** |
+| 7 | `apps/web-platform/lib/safety/redaction-allowlist.ts:71` (`API_KEY_RE` — the mask behind `redactCommandForDisplay`) | redaction → `[redacted-key]` | `(?:ghp\|gho\|ghu\|ghs\|ghr)_[A-Za-z0-9_-]{20,}` first alternation — **not in the issue's list; found by the write-boundary census**. The same regex also carries a `github_pat_[A-Za-z0-9]{22}_[A-Za-z0-9]{59,}` arm (widened consistently) and non-GitHub arms (`sk-*`, `AKIA`, `xox*`, `sbp_`, `sb_secret_`) that stay documented-narrower |
 
 ### Verified non-targets (checked, no change needed)
 
@@ -86,6 +106,8 @@ site role:
 ### Institutional learnings
 
 - `knowledge-base/project/learnings/test-failures/2026-10-11-a-credential-guard-modeled-on-the-vendor-format-refused-the-vendors-next-format.md` — the direct precedent. Three load-bearing lessons applied throughout: (a) guard a property of the secret, not the vendor's current format; (b) a line-based census sweeps ANY `*.sh` line containing the contiguous literal `_bearer_ok() {` — code, comment, or test pattern — so shell text naming it MUST be assembled split (`'_bearer_''ok() {'`); (c) synthesized fixtures must carry every newly-admitted byte in one value and split-assemble the `ghs_` prefix so the staged-index scanner and GitHub push protection do not flag them.
+- `knowledge-base/project/learnings/security-issues/2026-06-04-redaction-fix-must-sweep-all-render-sinks-not-just-new-path.md` — deepened relevance for site 7: a `ghs_` installation token previously leaked through the Concierge `review_gate` approval card via `permission-callback.ts` `preview = command.slice(0,200)`; the fix routed the preview through `redactCommandForDisplay` — **the same `redaction-allowlist.ts` module whose `API_KEY_RE` this plan widens** (verified live: `permission-callback.ts:1094` calls it before `slice(0,200)`). That makes site 7 the most user-adjacent surface in scope: the stale class truncates inside user-facing render paths, and the learning's composition rule (cap AFTER redact — `preview` slices the already-redacted string) is exactly what the new-shape fixture asserts. A punctuation-bearing tail surviving `API_KEY_RE` shows in the card.
+- `knowledge-base/project/learnings/2026-03-05-awk-scoping-yaml-frontmatter-shell.md` — `sed` range expressions match EVERY occurrence of a start/stop pair; the `redact_pii` extraction must use flag-based `awk` (as prescribed), never a `sed /start/,/stop/` range, or a repeated delimiter silently widens the extracted program.
 
 ### External documentation
 
@@ -137,10 +159,10 @@ shape site, with per-site bounds/anchors preserved:
 |---|---|
 | `run-scan.sh:141–144` | `s/\b(ghp\|gho\|ghs\|ghr)_[A-Za-z0-9._~+/=-]{20,}/<github-…>/g` — the whole GitHub family widens: a mask that truncates on ANY rotated family member leaks the same way. Siblings flagged as folded scope (see Scope Check). |
 | `learning-retrieval-bench.sh:611` + `kb-search/SKILL.md:162` | `ghp_[a-zA-Z0-9._~+/=-]{36}`, `gho_[a-zA-Z0-9._~+/=-]{36}`, `ghs_[a-zA-Z0-9._~+/=-]{36}`, `github_pat_[a-zA-Z0-9._~+/=-]{40,}` — the refusal guard under-matching is also a paste-through leak; canonical for the GitHub alternation, byte-identical in both files (lockstep). |
-| `work/SKILL.md:864` | `ghs_[A-Za-z0-9._~+/=-]{20,}` inside the fixture-audit canonical scan. **Byte-ceiling constraint (measured):** `work` is at `362000/362000` bytes against `plugins/soleur/test/skill-body-budget.json` — zero headroom, and the class widening is +7 bytes (`[A-Za-z0-9_]`→`[A-Za-z0-9._~+/=-]`). The same edit MUST trim ≥7 bytes of prose inside `work/SKILL.md` so the file's net delta is ≤ 0 against the merge base — pick a redundant word in the touched bullet, never a condition (the #8647 lesson: compression under a failing hook drops conditions). |
+| `work/SKILL.md:864` | `ghs_[A-Za-z0-9._~+/=-]{20,}` inside the fixture-audit canonical scan. **Byte-ceiling constraint (measured):** `work` is at `362000/362000` bytes against `plugins/soleur/test/skill-body-budget.json` — zero headroom, and the class widening is +7 bytes (`[A-Za-z0-9_]`→`[A-Za-z0-9._~+/=-]`). The same edit MUST trim ≥7 bytes of prose inside `work/SKILL.md` so the file's net delta is ≤ 0 against the merge base — pick a redundant word in the touched bullet, never a condition (per `knowledge-base/project/learnings/2026-09-23-compressing-prose-to-fit-a-byte-ceiling-dropped-the-conditions-that-made-it-correct.md`: compression under a failing hook drops conditions). |
 | `git-auth.ts:45` | `/^ghs_[A-Za-z0-9._~+/=-]{36,}$/` — canonical class, vendor floor `{36,}`, **no ceiling** (vendor documents variable length; the `{,128}` bound is the actual defect). Comment extended: warn-not-throw rationale + vendor rec `ghs_[A-Za-z0-9.\-_]{36,}` citation + canonical-superset note + the warn doubles as a rotation tripwire. |
 | `boundary.test.sh:148` | `ghs_[A-Za-z0-9._~+/=-]{20,}` in the `check_value_safe_drift` alternation; add a `bad-ghs-literal.ts` drift fixture (split-assembled new-shape token) exercising the pin. |
-| `redaction-allowlist.ts:71` | `(?:ghp\|gho\|ghu\|ghs\|ghr)_[A-Za-z0-9._~+/=-]{20,}` — one family regex, one widen. |
+| `redaction-allowlist.ts:71` (`API_KEY_RE`) | Widen BOTH GitHub arms inside the regex: `(?:ghp\|gho\|ghu\|ghs\|ghr)_[A-Za-z0-9._~+/=-]{20,}` and `github_pat_[A-Za-z0-9._~+/=-]{22}_[A-Za-z0-9._~+/=-]{59,}` (canonical class per segment, structural `_` separator kept). Non-GitHub arms (`sk-*`, `AKIA`, `xox*`, `sbp_`, `sb_secret_`) stay documented-narrower — unmeasured vendor shapes. This is `redactCommandForDisplay`'s mask — the scrub on FOUR verified render sinks: `permission-callback.ts:1094` (`review_gate` card + `notifyOfflineUser`, the render-sink learning's fix site), `run-log.ts:55,64` (error-summary slices), `destroy-ask-lane.ts:198`, `debug-event.ts` — a truncated mask displays a live token tail in every one, not just log artifacts. |
 | `git-data-birth-readiness-gate.sh:1055` | comment refresh only: "alphanumeric plus `_`" → cites canonical b64token alphabet + new issued shape. |
 
 Per-site length floors keep their existing values (`{20,}`/`{36}`/`{40,}`) —
@@ -149,10 +171,11 @@ bounds gate detection/recall, the alphabet is what rotated.
 ### New durable guard
 
 `scripts/lint-shell-trace-credential-refusal.test.sh` gains a **stale-`ghs_`-class
-census**: `git grep` over tracked non-doc files flags (arm A) any `ghs_<char-class>`
-literal and (arm B) any `gh*(…)_<char-class>` family-alternation literal — the
-`redaction-allowlist.ts:71` site is `(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_-]`, which a
-`ghs_\[` grep misses — whose class does not carry the canonical `._~+/=` bytes.
+census**: `git grep` over tracked non-doc files flags (arm A) any `gh[opsur]_<char-class>`
+or `github_pat_<char-class>` literal and (arm B) any `(...)_<char-class>` alternation
+literal containing a `gh`-family member — the `redaction-allowlist.ts:71` site is
+`(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_-]`, which a `ghs_\[` grep misses — whose class
+does not carry the canonical `._~+/=` bytes.
 Sweep pathspec excludes `knowledge-base/` (the corpus legitimately quotes legacy
 shapes, this plan included); an explicit allowlist covers synthesized fixtures and
 documentation that names the legacy shape in prose. Reintroducing a legacy-shape
@@ -165,7 +188,7 @@ Every code path that can carry a `ghs_` value into a judged position:
 
 - **Token mint → git exec**: `generateInstallationToken` → `gitWithInstallationAuth` → askpass env (checked by `TOKEN_FORMAT_RE` — warn path only, never gates).
 - **Token in scan findings**: category output → `jq '{verdict,findings}'` → `redact_pii` → `findings_summary` (the leak path this plan closes).
-- **Token in displayed command lines / event text**: `redactGithubSourcedText` (`redaction-allowlist.ts`) — display-surface redaction (closed by site 7).
+- **Token in displayed command lines / event text**: `redactCommandForDisplay` → `API_KEY_RE` (`redaction-allowlist.ts`) — display-surface redaction feeding FOUR verified sinks: `permission-callback.ts:1094` (`review_gate` approval-card preview + `notifyOfflineUser`), `run-log.ts:55,64` (error-summary slices), `destroy-ask-lane.ts:198`, `debug-event.ts` (closed by site 7).
 - **Credential-shaped text in kb-search queries**: `query_is_sensitive` refusal (`SENSITIVE_QUERY_REGEX` pair) — under-match lets a pasted credential reach the paraphraser (closed by sites 2–3).
 - **Secret literals committed into "value-safe" modules**: `check_value_safe_drift` in `boundary.test.sh` (closed by site 6).
 - **Real tokens into curl header channel**: `bc_ok`/`_bearer_ok` — already canonical; NOT a stale site (verified).
@@ -255,8 +278,9 @@ logs:
   where: createChildLogger application log stream (platform)
   retention: platform default
 discoverability_test:
-  command: bash plugins/soleur/skills/skill-security-scan/test/redact-pii-ghs-shape.test.sh
-  expected_output: "redact-pii-ghs-shape: ok"
+  command: grep -c 'ghs_\[A-Za-z0-9._~+/=-\]' plugins/soleur/skills/skill-security-scan/scripts/run-scan.sh
+  expected_output: "1"
+  why: Smallest probe printing the liveness property — the canonical credential class present in redact_pii's sed program. A suite-shaped command (`*.test.sh`) would be rejected by Check 10's 15-second-cap proxy; the grep is instant, allowlisted-verb, shell-metachar-free.
 ```
 
 ## Domain Review
@@ -281,7 +305,7 @@ Fired: `apps/web-platform/server/git-auth.ts` sits inside an auth-adjacent serve
 
 ### ADR
 
-**Amend ADR-280** (`knowledge-base/engineering/architecture/decisions/ADR-280-credentials-reach-curl-on-stdin-config-through-one-shared-library.md`, status `adopting`): add a scope-clarification to `## Decision` — the canonical credential alphabet `[A-Za-z0-9._~+/=-]` it adopted for the curl channel is the SAME class every credential-shape sentinel/detection/redaction/validation pattern in the repo must use (or document why narrower); add the rejected alternative "per-site vendor-format pins" naming this incident (#9972 → #9999) as the measured cost. One section amendment, no new ordinal.
+**Amend ADR-280** (`knowledge-base/engineering/architecture/decisions/ADR-280-credentials-reach-curl-on-stdin-config-through-one-shared-library.md`, status `adopting`): add a scope-clarification to `## Decision` — the canonical credential alphabet `[A-Za-z0-9._~+/=-]` it adopted for the curl channel is the SAME class every credential-shape sentinel/detection/redaction/validation pattern in the repo must use (or document why narrower); add the rejected alternative "per-site vendor-format pins" naming this incident (#9972 → #9999) as the measured cost. One section amendment, no new ordinal. Precedent for the amendment shape exists: ADR-067/ADR-070/ADR-071/ADR-126/ADR-222 all carry `## Amendment`/`## Addendum` sections — follow that form rather than inventing a new one.
 
 ### C4 views
 
@@ -335,14 +359,16 @@ the new no-warn spy assertion in git-auth.test.ts. One regex, one consumer.
 
 ### Guard 3 — stale-`ghs_`-class census (new rows in `lint-shell-trace-credential-refusal.test.sh`)
 
-**Property.** No tracked file carries a `ghs_<char-class>` pattern narrower
-than the canonical credential alphabet.
+**Property.** No tracked file carries a GitHub-prefix-shaped char-class
+pattern (`gh[opsur]_`, `github_pat_` — literal or inside an alternation)
+narrower than the canonical credential alphabet.
 
 **Assembly.** `git grep`/`git ls-files` over the tracked tree (`*.sh`, `*.ts`,
 `*.md`, `*.cjs`, `*.yml`, `*.yaml` — every text file where a pattern literal
-can live), two sweep arms — `ghs_<char-class>` literals AND
-`gh*(…)_<char-class>` family-alternation literals (the
-`redaction-allowlist.ts:71` form a bare `ghs_\[` grep misses) — minus an
+can live), two sweep arms — (A) `gh[opsur]_<char-class>` and
+`github_pat_<char-class>` literals AND (B) `(...)_<char-class>` alternation
+literals containing a `gh`-family member (the `redaction-allowlist.ts:71`
+`(?:ghp|gho|ghu|ghs|ghr)_…` form a bare `ghs_\[` grep misses) — minus an
 explicit allowlist (synthesized fixtures like `ghs_faketoken`, the census's
 own sweep pattern, the `:!knowledge-base/` pathspec exclusion for the doc
 corpus that legitimately quotes legacy shapes). Members drift; the chokepoint
@@ -391,7 +417,7 @@ regex is pinned in the suite the same way `_CANON_BODY` already is.
 
 ## Acceptance Criteria
 
-- [ ] AC-1: The stale-class census (Guard 3, both arms — `ghs_<class>` literals AND `gh*(…)_<class>` family-alternation literals) reports zero non-allowlisted hits over tracked files excluding `knowledge-base/`: every `ghs_`-shaped char-class literal in swept files carries the canonical `[A-Za-z0-9._~+/=-]` alphabet, or the site documents why narrower (the allowlisted non-targets enumerated in Research Insights). `knowledge-base/` is excluded by pathspec because plan/spec/learning docs legitimately quote the legacy shape — this plan file included (an unsatisfiable-by-construction AC is its own defect class).
+- [ ] AC-1: The stale-class census (Guard 3, both arms — `gh[opsur]_`/`github_pat_` `<class>` literals AND `gh`-family alternation literals) reports zero non-allowlisted hits over tracked files excluding `knowledge-base/`: every GitHub-prefix-shaped char-class literal in swept files carries the canonical `[A-Za-z0-9._~+/=-]` alphabet, or the site documents why narrower (the allowlisted non-targets enumerated in Research Insights, e.g. `API_KEY_RE`'s non-GitHub arms). `knowledge-base/` is excluded by pathspec because plan/spec/learning docs legitimately quote the legacy shape — this plan file included (an unsatisfiable-by-construction AC is its own defect class).
 - [ ] AC-2: `bash plugins/soleur/skills/skill-security-scan/test/redact-pii-ghs-shape.test.sh` prints `redact-pii-ghs-shape: ok` — a synthesized ~390-char `ghs_` token containing `.`, `-`, `_`, `~`, `+`, `/`, `=` is masked whole by `redact_pii` (zero tail bytes in output), AND the same assertion holds for a legacy 40-char token.
 - [ ] AC-3: `TOKEN_FORMAT_RE` accepts `ghs_` + 36..520+ canonical-alphabet chars with NO format warn emitted (spy on the child logger), and `not-a-ghs-token` still produces the warn. The `{30,128}` ceiling is gone; the rationale comment cites the vendor-recommended `ghs_[A-Za-z0-9.\-_]{36,}` and the canonical-superset choice.
 - [ ] AC-4: `plugins/soleur/test/kb-search-lockstep.test.sh` exits 0 — the bench and SKILL.md `SENSITIVE_QUERY_REGEX` literals remain byte-identical after the alternation edit.

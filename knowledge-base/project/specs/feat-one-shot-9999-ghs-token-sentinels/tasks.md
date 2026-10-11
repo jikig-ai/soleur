@@ -24,7 +24,7 @@ Issue: #9999 — Update legacy `ghs_` token-format sentinels for GitHub's rotate
 - [ ] 2.2 `scripts/learning-retrieval-bench.sh` + `plugins/soleur/skills/kb-search/SKILL.md` — GitHub alternation (`ghp_`/`gho_`/`ghs_` `{36}`, `github_pat_` `{40,}`) → canonical class, byte-identical literals in both files, same commit
 - [ ] 2.3 `plugins/soleur/skills/work/SKILL.md` — `ghs_[A-Za-z0-9_]{20,}` → `ghs_[A-Za-z0-9._~+/=-]{20,}`; SAME edit trims ≥7 bytes of prose (file is at its 362000-byte ceiling — net delta must be ≤ 0 vs merge base; trim a redundant word, never a condition)
 - [ ] 2.4 `apps/web-platform/server/git-auth.ts` — `TOKEN_FORMAT_RE` → `/^ghs_[A-Za-z0-9._~+/=-]{36,}$/` + extended comment (vendor rec `ghs_[A-Za-z0-9.\-_]{36,}`, canonical superset, warn-not-throw rationale, rotation tripwire)
-- [ ] 2.5 `apps/web-platform/lib/safety/redaction-allowlist.ts` — family alternation → `(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9._~+/=-]{20,}`
+- [ ] 2.5 `apps/web-platform/lib/safety/redaction-allowlist.ts` (`API_KEY_RE`) — widen BOTH GitHub arms: `(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9._~+/=-]{20,}` and `github_pat_[A-Za-z0-9._~+/=-]{22}_[A-Za-z0-9._~+/=-]{59,}`; non-GitHub arms (`sk-*`, `AKIA`, `xox*`, `sbp_`, `sb_secret_`) stay documented-narrower
 - [ ] 2.6 `plugins/soleur/skills/constraint-scaffold/test/boundary.test.sh` — `check_value_safe_drift` pin → `ghs_[A-Za-z0-9._~+/=-]{20,}`
 - [ ] 2.7 `tests/scripts/lib/git-data-birth-readiness-gate.sh` — comment refresh only ("alphanumeric plus `_`" → canonical b64token alphabet)
 - [ ] 2.8 ADR-280 amendment — `## Decision` scope clarification (canonical alphabet governs ALL credential-shape sites) + rejected alternative "per-site vendor-format pins" citing #9972 → #9999
