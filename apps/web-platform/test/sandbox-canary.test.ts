@@ -1119,12 +1119,12 @@ describe("classifyFdCensusProbe — in-sandbox fd count stays within the limit",
   });
 });
 
-describe("classifyProcMaskProbe — the /proc mask is realized in-sandbox (#9723)", () => {
-  it("status 0 (canary host pid absent AND /proc/self/environ present) ⇒ null", () => {
+describe("classifyProcMaskProbe — the /proc mask is realized in-sandbox (#10032)", () => {
+  it("status 0 (no /proc/<pid> entries — the empty tmpfs shape) ⇒ null", () => {
     expect(classifyProcMaskProbe({ status: 0, stderr: "" })).toBeNull();
   });
 
-  it("clean non-zero payload exit ⇒ sandbox_broken proc_mask_defeated (host procfs visible)", () => {
+  it("clean non-zero payload exit ⇒ sandbox_broken proc_mask_defeated (any real procfs visible)", () => {
     expect(classifyProcMaskProbe({ status: 1, stderr: "" })).toMatchObject({
       verdict: "sandbox_broken",
       reason: "proc_mask_defeated",

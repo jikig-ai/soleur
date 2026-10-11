@@ -266,7 +266,7 @@ describe.runIf(!directProbe.skip)("sandbox-isolation: direct bwrap (tier 4)", ()
     expect(result.stdout + result.stderr).toMatch(FS_DENY_RE);
   });
 
-  test.skipIf(ISOLATION_IN_IMAGE)("FR7b (#9723): the vendored tail --bind /proc /proc is re-masked by the PATH shim", async () => {
+  test.skipIf(ISOLATION_IN_IMAGE)("FR7b (#9723/#10032): the vendored tail --bind /proc /proc is neutralized by the PATH shim", async () => {
     // The harness argv (buildBwrapArgs) never emits the vendor tail bind, so
     // FR7 measures a cleaner-than-production shape. This row appends the real
     // tail — `--bind /proc /proc` (the enableWeakerNestedSandbox defect) — and
@@ -313,13 +313,13 @@ describe.runIf(!directProbe.skip)("sandbox-isolation: direct bwrap (tier 4)", ()
     // (yama ptrace_scope / userns credentials deny it on some hosts even when
     // procfs is exposed), so the discriminator is host-pid VISIBILITY: the
     // sandboxB host pid is a /proc dir only when real procfs is mounted.
-    // (`/proc/1` exists in BOTH arms — under the pidns-scoped `--proc` mask it
-    // is the sandbox's own init — so it is not the discriminator.)
     const probe = [
       `test -d /proc/${hostPid} && echo __SANDBOXB_SEEN__`,
       `cat /proc/${hostPid}/environ 2>/dev/null || true`,
-      // Self-view intactness: the vendor's `apply-seccomp /proc/self/fd/N`
-      // inner command needs procfs for SELF — the mask must not break it.
+      // #10032: ANY /proc/<pid> entry means real procfs leaked — under the
+      // new realization /proc is an empty tmpfs (the vendored multicall's
+      // fd path is re-homed as a mount, not a procfs self-view).
+      `for d in /proc/[0-9]*; do [ -d "$d" ] && echo __PIDDIRS_SEEN__; done`,
       `test -e /proc/self/environ && echo __SELFPROC_OK__`,
     ].join("; ");
 
@@ -334,10 +334,12 @@ describe.runIf(!directProbe.skip)("sandbox-isolation: direct bwrap (tier 4)", ()
     expect(control.setupFailed, `control bwrap setup failed: ${control.stderr}`).toBe(false);
     expect(control.stdout, "control must expose host procfs (the tail-bind defect is real)").toContain("__SANDBOXB_SEEN__");
 
-    // TREATMENT — the identical argv through the deployed shim: it lands a
-    // fresh `--proc /proc` (pidns-scoped procfs) after the tail bind, so
-    // in-sandbox /proc carries only the sandbox's own pids — nothing for the
-    // host-side sentinel to ride.
+    // TREATMENT — the identical argv through the deployed shim (#10032): it
+    // DROPS the tail bind (never a fresh `--proc` — that EPERMs under
+    // docker's masked /proc) and lands a `--tmpfs /proc` mask, so in-sandbox
+    // /proc is EMPTY — nothing for the host-side sentinel to ride, and no
+    // procfs self-view (BY DESIGN — the vendored multicall's fd path is
+    // re-homed as a literal mount, not resolved through procfs).
     const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), "iso-shim-"));
     fs.symlinkSync(BWRAP_SHIM_PATH, path.join(shimDir, "bwrap"));
     try {
@@ -356,8 +358,10 @@ describe.runIf(!directProbe.skip)("sandbox-isolation: direct bwrap (tier 4)", ()
       expect(masked.setupFailed, `masked bwrap setup failed: ${masked.stderr}`).toBe(false);
       expect(masked.stdout).not.toContain(sentinel);
       expect(masked.stdout).not.toContain("__SANDBOXB_SEEN__");
-      // The pidns-scoped procfs keeps the SELF view — not an empty mount.
-      expect(masked.stdout).toContain("__SELFPROC_OK__");
+      expect(masked.stdout).not.toContain("__PIDDIRS_SEEN__");
+      // The empty tmpfs has no self-view either — the environ assertion from
+      // the #9723-era probe inverts under the new mask.
+      expect(masked.stdout).not.toContain("__SELFPROC_OK__");
     } finally {
       fs.rmSync(shimDir, { recursive: true, force: true });
     }

@@ -229,12 +229,17 @@ export function buildBwrapInvocation(fixture) {
 //     CLONE_NEWNS needs a CAP_SYS_ADMIN it does not hold: EPERM on every
 //     kernel, measured 2026-10-06 / bwrap 0.12. A real fork is the
 //     blanket-clone-deny tripwire.)
-//   proc_mask — /proc inside MUST be pidns-scoped, not the host's (the
-//     shim's tail `--proc /proc`, #9723). Asserts the CANARY'S OWN host pid
-//     is absent in-sandbox AND /proc/self/environ exists (the self-view the
-//     vendor's apply-seccomp helper needs). Host procfs re-exposed by the
-//     vendor tail `--bind /proc /proc` lands as `proc_mask_defeated`
-//     (sandbox_broken), not infra.
+//   proc_mask — /proc inside MUST contain no procfs at all (#10032: the
+//     shim drops every procfs mount at /proc — including the vendor tail
+//     `--bind /proc /proc` — so the denyRead `--tmpfs /proc` is the realized
+//     mask: an empty, mountless /proc carrying only the apply-seccomp
+//     re-home mounts under self/fd/). Asserts NO `/proc/<pid>` directory
+//     entries exist — a bound host procfs, a pidns-scoped fresh procfs, or
+//     any real procfs all land as `proc_mask_defeated` (sandbox_broken),
+//     not infra. The self-view half from the #9723-era probe
+//     (`/proc/self/environ`) is gone BY DESIGN under tmpfs — do not re-add
+//     it; the multicall fd path is re-homed as a mount, not resolved
+//     through procfs.
 //   fd_census — procfs-free fd enumeration (dup-test every fd 3..255; the
 //     realized mask takes /proc/self/fd away) MUST stay within
 //     `3 + #(fd-valued argv options)` — stdio 0-2, plus any fd the SETUP argv
@@ -402,10 +407,11 @@ export function classifyProcMaskProbe({ status, stderr = "", errorCode } = {}) {
     };
   }
   if (status !== 0) {
-    // Either of the probe's halves failed: host-pid visible (mask defeated)
-    // OR /proc/self gone (procfs missing entirely — e.g. an empty tmpfs).
-    // The reason name keys on the defect class this probe exists to catch;
-    // stderr carries the probe's detail if the mechanism was different.
+    // The probe failed: a /proc/<pid> directory entry was visible — the mask
+    // is defeated by ANY real procfs (host-bound tail bind, a fresh --proc,
+    // or a leaked root bind). The reason name keys on the defect class this
+    // probe exists to catch; stderr carries the probe's detail if the
+    // mechanism was different.
     return { verdict: "sandbox_broken", reason: "proc_mask_defeated", probe: "proc_mask" };
   }
   return null;
@@ -431,13 +437,15 @@ const FD_ENUM_SCRIPT =
 /** The probes, in order; `classify` returns a verdict or null (ok). */
 const HARDENING_PROBES = [
   {
-    // #9723 — mask check FIRST: the cheapest tripwire on the vendor tail bind.
-    // process.pid is the canary's own host-side pid: present under a bound
-    // host procfs, absent under the pidns-scoped `--proc` the shim installs.
-    // The `self/environ` half pins that the procfs is real (not missing) —
-    // the sandbox's own apply-seccomp path needs /proc/self/fd to exist.
+    // #10032 — mask check FIRST: the cheapest tripwire on the vendor tail
+    // bind. ANY `/proc/<pid>` directory entry means real procfs is visible —
+    // a bound host procfs (the tail bind), a pidns-scoped fresh procfs, or a
+    // leaked root bind — all the same defect class. The legitimate shape is
+    // an empty tmpfs `/proc` (optionally carrying apply-seccomp re-home
+    // mounts under self/fd/, which no `/proc/[0-9]*` glob can match).
+    // Glob+test only, no external binaries — safe under the masked /proc.
     argv: ["/bin/sh", "-c",
-      `test ! -d /proc/${process.pid} && test -e /proc/self/environ`],
+      `for d in /proc/[0-9]*; do [ -d "$d" ] && exit 1; done; exit 0`],
     classify: classifyProcMaskProbe,
   },
   {
