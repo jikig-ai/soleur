@@ -1,0 +1,120 @@
+# <!-- gate-override: new-scheduled-cron-prefer-inngest -->
+# Override justification (ADR-033 carve-out for a credentialed bash pipeline, as the zot and
+# inngest-health watchers; the dispatch-table row records the same argument):
+#   (i) This feeder is a bash pipeline (scripts/inngest-probe-heartbeat-feeder.sh): a Logs-warehouse
+#       read through scripts/betterstack-query.sh plus two curl calls to Better Stack, using
+#       warehouse credentials and a read-only uptime-API token. ADR-033 says GitHub Actions is
+#       correct for a credential-heavy infra cron that must stay in an ephemeral runner. Folding it
+#       into Inngest would put warehouse credentials into the web app runtime.
+#   (ii) HONEST ELIGIBILITY (ADR-248). This does NOT watch the Inngest scheduler's execution: a dead
+#       probe emitter, a Vector journald-allowlist regression or a sink outage all leave Inngest able
+#       to fire a cron. It watches something the substrate depends on: the probe attests the LUKS
+#       volume that holds Inngest's store. That is a SHARED FAILURE DOMAIN, the same weak class as
+#       the zot row, not an independence claim. The load-bearing reason is (i).
+#
+# WHAT THIS DOES (#9703). betteruptime_heartbeat.inngest_server_probe is the dead-man's-switch for
+# logtail_exploration_alert.inngest_luks_wrong_volume, which reads a silent probe pipeline as
+# healthy. This workflow beats that heartbeat only while a fresh host_role=dedicated
+# SOLEUR_INNGEST_SERVER_PROBE row is confirmed in the warehouse. While the heartbeat is paused the
+# verifier reports fresh_heartbeat_paused and sends nothing: this feeder is FED but the heartbeat is
+# not ARMED until the separately authorized arming step in
+# knowledge-base/engineering/operations/runbooks/inngest-server.md has run.
+#
+# TRIGGERS (ADR-248). PRIMARY: the web server's watchdog dispatch clock
+# (apps/web-platform/server/watchdog-dispatch-clock.ts) sends workflow_dispatch every 15-minute
+# slot from both web hosts, since GitHub's `schedule:` delivered one run every 2-7 h on this repo.
+# FALLBACK: the `schedule:` cron below. Keep `workflow_dispatch`, the concurrency group
+# (cancel-in-progress: false) and no other trigger: sentry-monitor-iac-parity.test.ts pins all three.
+#
+# A Sentry `error` check-in means "withheld or failed", not "feeder broken": every withheld verdict
+# (no fresh row, warehouse unreadable, beat not delivered) exits non-zero by design.
+
+name: "Scheduled: Inngest Probe Heartbeat Feeder"
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch: {}
+
+concurrency:
+  group: scheduled-inngest-probe-heartbeat
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  feeder:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Verify freshness and beat
+        id: feeder
+        env:
+          BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
+          BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
+          BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
+          # Read-only uptime-API token: GET only, so a leak cannot pause, edit or delete anything.
+          BETTERSTACK_API_TOKEN_READONLY: ${{ secrets.BETTERSTACK_API_TOKEN_READONLY }}
+        run: |
+          set -uo pipefail
+          # shellcheck disable=SC2020  # tr char-set strip is intentional (verbatim from scheduled-inngest-health.yml)
+          strip_log_injection() {
+            printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177' \
+              | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g; s/\xc2\x85//g'
+          }
+
+          # The verifier's exit status is DATA, not a job failure. `|| rc=$?` IS THE CAPTURE: this
+          # step has no `shell:` key, so Actions runs it under `bash --noprofile --norc -eo pipefail`
+          # and `set -uo pipefail` above does NOT clear -e; a bare `out="$(...)"; rc=$?` would abort
+          # the step at the assignment, before the outputs below are written.
+          rc=0
+          out="$(bash scripts/inngest-probe-heartbeat-feeder.sh 2>&1)" || rc=$?
+
+          # Keep ONLY the verifier's own marker lines. The raw blob is never echoed: a line that
+          # begins with two colons would run as a workflow command, and a blob-wide strip would fuse
+          # lines. Every surviving line is stripped of control characters before it is printed.
+          verdict=""
+          while IFS= read -r line; do
+            case "$line" in
+              "inngest-probe-feeder: "*|"CANNOT BEAT: "*)
+                safe="$(strip_log_injection "$line")"
+                printf '%s\n' "$safe"
+                case "$safe" in
+                  "inngest-probe-feeder: verdict="*)
+                    v="${safe#inngest-probe-feeder: verdict=}"
+                    verdict="${v%% *}" ;;
+                esac ;;
+            esac
+          done <<<"$out"
+          verdict="$(printf '%s' "$verdict" | tr -c 'a-z_' '?' | head -c 40)"
+
+          {
+            echo "exit_code=${rc}"
+            echo "verdict=${verdict}"
+          } >> "$GITHUB_OUTPUT"
+
+          case "$rc" in
+            0) echo "::notice::inngest probe heartbeat feeder: ${verdict}" ;;
+            3) echo "::error::inngest probe heartbeat WITHHELD (${verdict}): no fresh dedicated probe row or the warehouse is unreadable. See the verdict line above." ;;
+            4) echo "::error::inngest probe heartbeat beat FAILED (${verdict}): a fresh row existed but the heartbeat could not be resolved or delivered." ;;
+            *) echo "::warning::inngest probe heartbeat feeder returned unexpected status ${rc} (${verdict})" ;;
+          esac
+
+      - name: Sentry check-in (final)
+        if: always()
+        continue-on-error: true
+        uses: ./.github/actions/sentry-heartbeat
+        with:
+          monitor-slug: scheduled-inngest-probe-heartbeat
+          # ok ONLY when the verifier exited 0 AND named a deciding verdict (#7242): exit_code alone
+          # cannot tell "the verifier decided this" from "the verifier aborted and left this behind".
+          # Anything else, including a step that wrote no outputs, checks in `error`.
+          status: ${{ (steps.feeder.outputs.exit_code == '0' && (steps.feeder.outputs.verdict == 'beat' || steps.feeder.outputs.verdict == 'fresh_heartbeat_paused')) && 'ok' || 'error' }}
+          sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
+          sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
+          sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}
