@@ -99,7 +99,13 @@ _canary() {
   _window_open "$m" || return 0
   now=$(date +%s 2>/dev/null || echo 0)
   echo "[zot-probe] SOLEUR_PROBE_CANARY web-zot-consumer-probe source4_live=1 ts=$now — vector Source 4 reachable (positive control; independent of zot serviceability)." >&2
-  printf '%s\n' "$now" > "$m" 2>/dev/null || true
+  _stamp "$m" "$now"
+}
+
+# The ONE write of a rate-limit marker (canary and per-repo markers share it). Best-effort: a /run that
+# cannot be written must never fail the probe, and the unwritten marker only makes the next run emit again.
+_stamp() {  # <marker-file> <epoch>
+  printf '%s\n' "$2" > "$1" 2>/dev/null || true
 }
 
 # One rate-limit window shared by the canary and the per-repo markers (#7258): true (return 0) when a
@@ -129,7 +135,7 @@ _repo_markers() {
     echo "[zot-probe] SOLEUR_ZOT_PROBE_REPO repo=${R_NAME[$i]} code=${R_CODE[$i]} verdict=${R_VERDICT[$i]} ts=$now" >&2
     i=$((i + 1))
   done
-  printf '%s\n' "$now" > "$m" 2>/dev/null || true
+  _stamp "$m" "$now"
 }
 
 # --- #7103 R3 4.3: the canary must not depend on the credential it certifies ---------------
