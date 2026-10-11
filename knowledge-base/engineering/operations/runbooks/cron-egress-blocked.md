@@ -918,8 +918,8 @@ probe function errored — the gateway's live allow/deny verification is dark.
    dead-timer detector) — if that also went dark, the timer is dead, not just
    the probe.
 2. Sentry `op=egress_gw_probe_fail` events — if the probe was emitting
-   `result=fail`, the gateway is up but denying its own synthetic allow leg
-   (ACL or auth-helper drift) and silence followed = resolver stopped.
+   `result=fail` before going dark, the silence is the resolver, not the
+   gateway; decode the fail itself in the `result=fail` stream ladder below.
 3. If neither, query Better Stack for `SYSLOG_IDENTIFIER:cron-egress-resolve`
    and `SYSLOG_IDENTIFIER:egress-gw-probe` — the former is not shipped at all
    (deliberate; volume), so its absence proves nothing; only `egress-gw-probe`
@@ -931,3 +931,41 @@ provisioner run — the repair path is the same as any dead resolver tick (see
 the `enforcement_missing` decode table above). A gateway container that is down
 is re-created by `egress-gateway-bootstrap.sh`, re-delivered by the
 `terraform_data.egress_gateway` provisioner on the next infra apply.
+
+#### `egress_gw_probe` `result=fail` stream
+
+**Decode ladder for `allow_rc=28`** (the allow-leg CONNECT times out):
+
+1. **Docker >= 28 direct-routing protection (measured live 2026-10-11, web-1).**
+   Docker installs a raw-PREROUTING drop for packets addressed to the gw's
+   bridge subnet arriving via any interface other than the bridge — so the
+   app container's SYN to `<gw>:8443` dies BEFORE conntrack and `DOCKER-USER`.
+   Signature (all remote-readable): every `enforcement_missing` marker green
+   (or no events at all), Squid's access log silent — the CONNECT never
+   arrives (`--grep soleur-egress-gw` on the Better Stack `prd` source shows
+   nothing but periodic `netdb.state` writes). Host-side confirms:
+   `nft list ruleset | grep -B2 -A2 daddr` in docker's `raw`/PREROUTING rules
+   shows `ip daddr <gw-ip>` (or `<subnet>` on daemons with moby #52224's
+   per-subnet form) `iifname != "soleur-egress0" ... drop` with a climbing
+   counter, and host→gw `curl` succeeds while container→gw times out.
+   Fix: the bridge must carry
+   `com.docker.network.bridge.gateway_mode_ipv4=nat-unprotected` (masquerade
+   kept, protection dropped — `SOLEUR-EGRESS`/`SOLEUR-EGRESS-GW` plus the
+   loader's oifname-scoped drop are the boundary).
+   `egress-gateway-bootstrap.sh` inspects the mode and rebuilds a wrong-mode
+   bridge; the `terraform_data.egress_gateway` (web-1) / `egress_gateway_web2`
+   (web-2) applies re-fire it via `config_hash`.
+2. **Scope-poisoned ruleset** (ruleset baked while the gw was down): the
+   member drop reads `ct state new ... counter drop` with NO `saddr !=`
+   scoping and the docker0→gw accept is absent — readable host-side via
+   `nft list chain ip filter SOLEUR-EGRESS-GW` / `SOLEUR-EGRESS`, or
+   remote-side once #10060 lands (its `gw_accept`/`gw_member_scoped`
+   `enforcement_missing` markers name it exactly). Repair: any loader run
+   with the gw up rebakes scoped — `systemctl restart
+   cron-egress-firewall.service`, or the same provisioner tail the
+   `egress_gateway` apply already runs.
+3. **Squid/upstream leg** — Squid's access log shows the CONNECT arriving
+   but no upstream completes (AND no `gw_member_scoped=absent` marker — the
+   scope-poisoned shape shows the same symptom from the inside): the hang is
+   Squid-side — auth helper, `dst` ACL, or the gw's own egress via the
+   host's NAT.
