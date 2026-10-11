@@ -62,4 +62,4 @@ table: a later writer adds its own `| Item | Class | Ruling |` header and separa
    `domain/engineering` issue (never `action-required`) carrying the question and the evidence.
 4. `owner-label-unscoped` in the PR body: rewrite the line as a technical ruling (spawn the CTO) or append
    `(operator: <category>)` when it is a genuine operator-class item, then `gh pr edit` and re-run the body check.
-5. Emit `SOLEUR_RULE_APPLIED rule=hr-technical-fork-is-not-an-operator-question` when the gate runs (telemetry).
+5. Emit `SOLEUR_RULE_APPLIED rule=hr-technical-fork-is-not-an-operator-question note=gate` when the gate runs (telemetry).
