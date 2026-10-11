@@ -5668,6 +5668,10 @@ if want_scripts; then
   # #8296 ledger-vs-device property probe, enrolled on #8285. NOTIFY-ONLY: the suite pins that no
   # path exits 0 or 1, because a 0 would let the sweeper close the backstop-retirement tracker.
   run_suite "scripts/inngest-luks-property-8296" bash scripts/followthroughs/inngest-luks-property-8296.test.sh
+  # #9703 feeder for the inngest probe heartbeat. Pins the one property that matters: a beat reaches
+  # Better Stack only on a fresh host_role=dedicated probe row with an unpaused heartbeat, and exit 0
+  # means exactly {beat, fresh_heartbeat_paused}. M1-M7 mutation rows run inside the suite.
+  run_suite "scripts/inngest-probe-heartbeat-feeder" bash scripts/inngest-probe-heartbeat-feeder.test.sh
   # #7761 cutover-flip rollout probe. Registered because lint-orphan-test-suites.sh caught it
   # unregistered: every assertion in it gated nothing, which for a probe that authorizes
   # closing a P1 security issue after a production host replace is the permanent silent no-op

@@ -199,7 +199,7 @@ check_freshness() {
   sel="$(printf '%s\n' "$raw" | jq -R -r --arg h "$HOST" --arg hn "$HOST_NAME" "$INNGEST_PROBE_ROW_JQ"'
       fromjson? | select(type == "object") | . as $o
       | ((.raw // "") | fromjson?) | select(type == "object")
-      | [ (if inngest_probe_row then 1 else 0 end),
+      | [ (if ([select(inngest_probe_row)] | length) > 0 then 1 else 0 end),
           (if (.host == $h and .host_name == $hn) then 1 else 0 end),
           (if ((((.message // "") | tostring) | (capture("(?:^| )host_role=(?<r>[^ ]*)")? // {r: ""})).r) == "dedicated" then 1 else 0 end),
           ((($o.dt // "") | tostring | sub("T"; " ")) | if . == "" then "-" else . end)

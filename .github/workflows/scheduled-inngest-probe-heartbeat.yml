@@ -15,7 +15,7 @@
 # WHAT THIS DOES (#9703). betteruptime_heartbeat.inngest_server_probe is the dead-man's-switch for
 # logtail_exploration_alert.inngest_luks_wrong_volume, which reads a silent probe pipeline as
 # healthy. This workflow beats that heartbeat only while a fresh host_role=dedicated
-# SOLEUR_INNGEST_SERVER_PROBE row is confirmed in the warehouse. While the heartbeat is paused the
+# probe row is confirmed in the warehouse. While the heartbeat is paused the
 # verifier reports fresh_heartbeat_paused and sends nothing: this feeder is FED but the heartbeat is
 # not ARMED until the separately authorized arming step in
 # knowledge-base/engineering/operations/runbooks/inngest-server.md has run.

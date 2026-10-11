@@ -1007,14 +1007,15 @@ here (it worsens `EMAXCONNSESSION`); this step is log inspection only, not remed
 
 ## How the external watchdogs are triggered (#8495, ADR-248)
 
-`scheduled-inngest-health.yml` (every 15 min) and `scheduled-zot-restart-loop.yml` (hourly)
-are started by `workflow_dispatch` from the **watchdog dispatch clock** inside the web-platform
+`scheduled-inngest-health.yml` (every 15 min), `scheduled-zot-restart-loop.yml` (hourly) and
+`scheduled-inngest-probe-heartbeat.yml` (every 15 min, #9703; see
+[§ Arming the probe heartbeat](#arming-the-probe-heartbeat-9703)) are started by `workflow_dispatch` from the **watchdog dispatch clock** inside the web-platform
 server (`apps/web-platform/server/watchdog-dispatch-clock.ts`), on every deployed web host. Their
 `schedule:` crons are only the fallback: GitHub delivered them once every 2–7 h. The clock is
 not an Inngest function because it watches Inngest. The run is created within seconds of the
 dispatch, but its job then waits in the org runner queue (median ~30 s, p90 ~20 min), so the
-Sentry monitors (`scheduled-inngest-health` margin 50, `scheduled-zot-restart-loop` margin 60)
-are sized for that queue. A real outage still pages as soon as a run executes.
+Sentry monitors (`scheduled-inngest-health` margin 50, `scheduled-zot-restart-loop` margin 60,
+`scheduled-inngest-probe-heartbeat` margin 60) are sized for that queue. A real outage still pages as soon as a run executes.
 
 1. **Is it running?** Each web host logs one `armed` row at boot and about five tick rows an
    hour. Vector adds the host name (`soleur-web-platform` = web-1, `soleur-web-2`) outside the
@@ -1523,6 +1524,113 @@ flow — the image build does NOT auto-deploy**. None of these steps use SSH
 4. Restart the web platform so it re-reads — re-run `web-platform-release.yml`. The container
    swap IS the restart; `ci-deploy.sh` deliberately rejects `restart web-platform` because a
    web-platform restart is docker-level, not systemd-level. No host login is involved.
+
+## Arming the probe heartbeat (#9703)
+
+`betteruptime_heartbeat.inngest_server_probe` (`soleur-inngest-server-probe-prd`, period 3600, grace
+1800) is the dead-man's-switch for `logtail_exploration_alert.inngest_luks_wrong_volume`, which reads a
+silent probe pipeline as healthy. It ships born paused. Its feeder is
+`.github/workflows/scheduled-inngest-probe-heartbeat.yml`, started every 15 minutes by the watchdog
+dispatch clock (ADR-248), which runs `scripts/inngest-probe-heartbeat-feeder.sh`: it queries the Logs
+warehouse for the newest `host_role=dedicated` `SOLEUR_INNGEST_SERVER_PROBE` row and beats the heartbeat
+only when that row is at most 4500 s old and the heartbeat is **unpaused**. While the heartbeat is
+paused the verifier reports `verdict=fresh_heartbeat_paused` and sends nothing, so the feeder is **fed
+but not armed** until the arming command below has run. Nothing in the repo may say "armed" before
+that command's read-back exists.
+
+**Reading the feeder (no SSH).** Each run prints one `inngest-probe-feeder: verdict=<v> ...` line
+carrying `rows_total rows_probe rows_host rows_dedicated newest_dt` (and `age_s`): an empty warehouse,
+a host or role filter dropping rows and a stale-but-present row are told apart from that one line.
+Exit 0 means exactly `beat` or `fresh_heartbeat_paused`. Verdicts: `no_rows` / `producer_silent` /
+`row_unusable` (no fresh dedicated probe row; the probe pipeline is dark, which is what this heartbeat
+exists to report), `query_failed` (warehouse unreadable; says nothing about the store), `beat_failed`
+(a fresh row existed but the heartbeat could not be resolved or delivered). The Sentry monitor
+`scheduled-inngest-probe-heartbeat` checks in `ok` only for the two exit-0 verdicts; `error` means
+"withheld or failed", not "feeder broken". `bash scripts/inngest-probe-heartbeat-feeder.sh --selftest`
+prints `selftest=ok` with no network or credentials.
+
+**Arming is a production write to Better Stack.** Run the command below only after the operator has
+authorized THIS command as a unit; a menu answer or an earlier approval does not authorize it. It is
+one compound command so that the unpause and its rollback live in one shell under a `trap`: an
+interrupted session still rolls back. No dashboard step and no SSH step. The write token is read
+inside `doppler run` and sent through `curl --config -`; nothing below prints it or the heartbeat URL.
+Run it through the Monitor tool, never as a foreground call: it can run for up to 75 minutes.
+Expect the forced dispatch to cost one slot of beat-budget tolerance, so read back a second
+`verdict=beat` before treating the heartbeat as armed.
+
+<!-- lint-infra-ignore start -->
+
+Preconditions (read-only; stop on any miss):
+
+```bash
+# P1  the feeder is on main and the clock has been dispatching the workflow
+git fetch -q origin main && git log origin/main --oneline -1 -- scripts/inngest-probe-heartbeat-feeder.sh
+gh run list --workflow=scheduled-inngest-probe-heartbeat.yml --status completed --limit 4 --json databaseId,event,createdAt \
+  --jq '.[] | [.databaseId, .event, .createdAt] | @tsv'
+# expect: four rows, event=workflow_dispatch, createdAt about 15 minutes apart, spanning at least 45 minutes
+
+# P2  every one of those runs reports freshness and the paused state, and Sentry received the check-in
+for RID in $(gh run list --workflow=scheduled-inngest-probe-heartbeat.yml --status completed --limit 4 --json databaseId --jq '.[].databaseId'); do
+  log="$(mktemp)"; gh run view "$RID" --log > "$log"
+  grep 'inngest-probe-feeder: verdict=' "$log" | tail -1
+  grep 'sentry-heartbeat:' "$log" | tail -1
+  rm -f "$log"
+done
+# expect: verdict=fresh_heartbeat_paused on all four, and a 2xx status on every sentry-heartbeat line
+# (a step that never exits non-zero concludes 'success' even when it withheld, so conclusion alone proves nothing)
+
+# P3  live heartbeat state (the URL attribute is deliberately not selected)
+hb() { doppler run -p soleur -c prd_terraform --silent -- bash -c '
+  [[ "$BETTERSTACK_API_TOKEN" =~ ^[A-Za-z0-9._~+/=-]{20,}$ ]] || { echo "token shape refused" >&2; exit 78; }
+  printf "header = \"Authorization: Bearer %s\"\n" "$BETTERSTACK_API_TOKEN" | curl --disable --noproxy "*" -fsS --max-time 20 --config - "$@"' _ "$@"; }
+hb "https://uptime.betterstack.com/api/v2/heartbeats?per_page=250" \
+  | jq -r '.data[] | select(.attributes.name=="soleur-inngest-server-probe-prd") | [.id, .attributes.status, (.attributes.paused|tostring), (.attributes.period|tostring), (.attributes.grace|tostring)] | @tsv'
+# expect: 504655  paused  true  3600  1800
+```
+
+Arm (WRITE; poll deadline 4500 s of wall clock, leaving a 15-minute rollback margin inside
+`period + grace`):
+
+```bash
+set -uo pipefail
+EXPECT_ID=504655; NAME=soleur-inngest-server-probe-prd; BASE=https://uptime.betterstack.com/api/v2/heartbeats
+hb() { doppler run -p soleur -c prd_terraform --silent -- bash -c '
+  [[ "$BETTERSTACK_API_TOKEN" =~ ^[A-Za-z0-9._~+/=-]{20,}$ ]] || { echo "token shape refused" >&2; exit 78; }
+  printf "header = \"Authorization: Bearer %s\"\n" "$BETTERSTACK_API_TOKEN" | curl --disable --noproxy "*" -fsS --max-time 20 --config - "$@"' _ "$@"; }
+patch() { hb -X PATCH -H 'Content-Type: application/json' --data-binary "{\"paused\":$1}" "$BASE/$HB" | jq -e ".data.attributes.paused == $1" >/dev/null; }
+rollback() {  # runs on EXIT, INT, TERM, HUP; three attempts, each confirmed by read-back
+  trap - EXIT INT TERM HUP
+  for t in 1 2 3; do patch true && { echo "ROLLED BACK (paused=true read back)"; exit 1; }; sleep 5; done
+  echo "ROLLBACK FAILED - pause heartbeat $HB now; Better Stack pages within 5400 s of the unpause"; exit 2
+}
+HB=$(hb "$BASE?per_page=250" | jq -r --arg n "$NAME" '[.data[] | select(.attributes.name==$n)] | if length==1 then .[0].id else empty end')
+[ "$HB" = "$EXPECT_ID" ] || { echo "heartbeat id '$HB' is not the expected $EXPECT_ID (or not unique): refusing"; exit 3; }
+[ "$(hb "$BASE/$HB" | jq -r '.data.attributes.status')" = "paused" ] || { echo "heartbeat is not paused: refusing a second arm"; exit 3; }
+trap rollback EXIT INT TERM HUP
+patch false || { echo "unpause not confirmed by read-back"; exit 1; }     # exit fires the rollback trap
+gh workflow run scheduled-inngest-probe-heartbeat.yml --ref main          # force one real beat now
+SECONDS=0
+while [ "$SECONDS" -lt 4500 ]; do
+  s=$(hb "$BASE/$HB" | jq -r '.data.attributes.status')
+  echo "$(date -u +%H:%M:%S) elapsed=${SECONDS}s status=$s"
+  if [ "$s" = "up" ]; then trap - EXIT INT TERM HUP; echo "ARMED: status=up after ${SECONDS}s"; exit 0; fi
+  sleep 30
+done
+echo "arm failed: status never reached up in ${SECONDS}s"; exit 1       # exit fires the rollback trap
+```
+
+<!-- lint-infra-ignore end -->
+
+Read-back (READ): repeat P3 and expect `504655  up  false  3600  1800`; re-run the P2 loop on the next
+completed runs and expect `verdict=beat http=2xx`, then a second `verdict=beat` one slot later. The next
+nightly `heartbeat-live-reconcile` markers (`SOLEUR_HEARTBEAT_RECONCILE_*`) must stay clean. Only then
+drop `arming_pending` from the manifest row in a record PR; that re-arms the reconcile's
+`fed-but-paused` class, which is the net if anything re-pauses the heartbeat (a paused heartbeat makes
+the feeder report `fresh_heartbeat_paused` with exit 0, so the feeder itself would not alert). If the
+command rolled back, read the newest completed run's `verdict=` line: `fresh_heartbeat_paused` after the
+unpause means that run predates it, `beat_failed` means the feeder cannot deliver, and any withheld
+verdict means the probe pipeline itself is dark (the finding this heartbeat exists for). To retry after
+a rollback, re-run the command (the heartbeat is paused again).
 
 ## Unpause heartbeat
 

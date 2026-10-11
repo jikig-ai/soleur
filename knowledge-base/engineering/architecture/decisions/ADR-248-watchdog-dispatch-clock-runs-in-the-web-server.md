@@ -136,6 +136,25 @@ covered by the other host, and the new container's first poll re-reads the curre
   workflows to GitHub's 2–7 h cadence and both monitors page as missed; restore the pre-#8495
   margins (inngest 15, zot 120) with it.
 
+## Amendment (2026-10-11, #9703): a third row, `scheduled-inngest-probe-heartbeat.yml`
+
+The context above names two workflows; the table now has three. `scheduled-inngest-probe-heartbeat.yml`
+(15-minute slot) feeds `betteruptime_heartbeat.inngest_server_probe` (ADR-117 amendment of the same
+date). The two "two workflows" sentences above stay as history; this amendment supersedes them.
+
+**Eligibility, stated honestly.** This feeder does not watch the Inngest scheduler's execution: a dead
+probe emitter, a Vector journald-allowlist regression or a sink outage all leave Inngest able to fire a
+cron. It watches something the substrate depends on, because the probe attests the LUKS volume that
+holds Inngest's store. That is the "something that substrate depends on" clause, and the same
+shared-failure-domain class as the zot row, which is a weak anti-circularity argument. The load-bearing
+reason is the ADR-033 carve-out for a credentialed bash pipeline that must stay in an ephemeral runner,
+plus the fact that this is the substrate's own durability tripwire. The row's `eligibility` string and
+the workflow header say exactly that.
+
+**Run count.** +96 runs a day (15-minute slots, plus late fallback ticks and collision duplicates)
+against the org's job budget. The queue figures used to size the Sentry margin (60) were measured before
+this load, so re-measure after merge with the command in `cron-monitors.tf`.
+
 ## Reversal triggers
 
 Re-derive this decision if any of these happens:

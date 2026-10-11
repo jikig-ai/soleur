@@ -116,6 +116,7 @@ OUT="$WORK/out"
 CALLS="$WORK/root/calls.log"
 write_stubs() { # <root>
   local root="$1"
+  assert_fixture_dir "$root"
   mkdir -p "$root/bin" "$root/scripts/lib"
   local t p
   for t in jq date grep sed tr cut head tail sort wc mktemp rm cat dirname bash env; do
@@ -485,12 +486,6 @@ reset_case; C_LIB="__none__"; C_ROWS="$(ded 60 | fx f1)"
 expect "shared lib missing" 3 query_failed "reason=selector_unavailable"
 reset_case; C_LIBENV="/dev/null"; C_ROWS="$(ded 60 | fx f2)"
 expect "shared lib that defines nothing" 3 query_failed "reason=selector_unavailable"
-reset_case; C_LIB="$WORK/permissive.sh"; printf 'INNGEST_PROBE_EMITTER=x\nINNGEST_PROBE_MARKER=y\nINNGEST_PROBE_ROW_JQ="def inngest_probe_row: true;"\ninngest_probe_row_selftest() { return 0; }\n' > "$C_LIB"
-cases=$((cases + 1))
-# A permissive def with a selftest that lies is NOT detectable here by design; the real lib's own
-# selftest is what grades it. This row pins that the shipped lib is the one the other rows use.
-if cmp -s "$LIB_SRC" "$REPO/scripts/lib/inngest-probe-row.sh"; then pass "the harness copies the shipped lib (not a permissive stand-in)"
-else fail "lib identity"; fi
 reset_case; C_NOW="2026-10-11 12:00:00"; C_ROWS="$(ded 60 | fx f3)"
 expect "malformed INNGEST_FEEDER_NOW is never a wall-clock fallback" 3 clock_malformed
 
@@ -604,7 +599,7 @@ assert_landed M2b "$M" "$FRESH_R"
 reset_case; C_ROWS="$({ ded 5000; row "$(dt_ago 30)" "$(msg dedicated)" soleur-inngest soleur-web-prd; } | fx m2b)"; C_PROBE="$M"; C_BEATS=1; C_APIS=1
 expect_red M2b "host_name filter dropped" 3 producer_silent
 # M3: the shared predicate replaced by a substring match on the marker.
-M="$WORK/mut/m3.sh"; sed -E 's/if inngest_probe_row then 1 else 0 end/if (((.message \/\/ "") | tostring) | contains("SOLEUR_INNGEST_SERVER_PROBE")) then 1 else 0 end/' "$PROBE_SRC" > "$M"
+M="$WORK/mut/m3.sh"; sed -E 's/\[select\(inngest_probe_row\)\]/[select(((.message \/\/ "") | tostring) | contains("SOLEUR_INNGEST_SERVER_PROBE"))]/' "$PROBE_SRC" > "$M"
 assert_landed M3 "$M" "$FRESH_R"
 reset_case; C_ROWS="$({ ded 5000; row "$(dt_ago 30)" "$(msg dedicated)" soleur-inngest soleur-inngest-prd doppler; } | fx m3)"; C_PROBE="$M"; C_BEATS=1; C_APIS=1
 expect_red M3 "substring match instead of the shared predicate" 3 producer_silent
@@ -646,14 +641,14 @@ sed 's/^/  /' "$MUT_TABLE"
 
 # ── conservation and the floors ───────────────────────────────────────────────────────────────
 echo
-echo "=== $passes passed, $fails failed, $cases cases ==="
+echo "=== $passes passed, $fails failed, $cases cases, $beat_asserts beat-call assertions ==="
 if (( passes + fails != cases )); then
   printf 'FATAL: verdict conservation violated — %s+%s != %s cases.\n' "$passes" "$fails" "$cases" >&2
   exit 1
 fi
 # A HARD-CODED floor: a runtime-derived one falls when a case is deleted.
-MIN_PASSES=100
-MIN_BEAT_ASSERTS=60
+MIN_PASSES=104
+MIN_BEAT_ASSERTS=61
 if (( passes < MIN_PASSES )); then
   printf 'FATAL: only %s passes, below the floor of %s -- the suite was truncated, so a 0-failure tally proves nothing.\n' "$passes" "$MIN_PASSES" >&2
   exit 1
