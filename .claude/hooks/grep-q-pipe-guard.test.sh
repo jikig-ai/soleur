@@ -78,11 +78,11 @@
 #   POSIX sh, Terraform inline, runcmd, or a value that may be empty  ->  producer | grep -cE P >/dev/null   (same exit status as -q, reads all input)
 #   an output-bearing  | grep -m1 P | ...  in bash, on a value that is never empty  ->  grep -m1 P <<<"$V" | ...
 #   a line that must show the shape  ->  append  # sigpipe-demo: intentional
-# Wave B (#9217) converts the test-harness rows with scripts/grep-q-drain-codemod.py: `apply` is a dry run unless --write, `verify --base REF
-# --hand-edits FILE` proves a diff is only that rewrite plus listed hand edits. It refuses, into a printed hand queue, a -m/--max-count (still an
-# early exit), an operand-q cluster (-eq), an unbounded producer, a redirected stdout, a match inside a quoted string or heredoc (data), and any
-# file naming sigpipe/EPIPE/false-FAIL/broken pipe unless a human has read it (a demonstration may be what the line is). The tool and its selftest
-# below are deleted with the last glob row.
+# Wave B (#9217) converted the test-harness rows with a codemod (scripts/grep-q-drain-codemod.py), which S7a deleted together with its selftest once no
+# glob row was left to convert; it is recoverable from commit 6a86eae0ec. A NEW hit is converted by hand with the forms table above, and a line
+# that must show the shape carries the marker. The producer side of the pipe (S7b) is still open and tracked on #9217.
+# To recompute SWEEP_PROBE_CHECKS after editing the probe (the same pipeline the pin below runs):
+#   grep -vE '^[[:space:]]*#' .claude/hooks/grep-q-pipe-guard.test.sh | grep -cE '(\|\||&&)[[:space:]]+sweep_probe_fail\+=\('
 # A gate whose MISS skips a check must route a grep that could not run (rc above 1) to the gate, not to "clean". Note that a
 # failed here-string or process substitution returns rc 1 (a miss), not above 1, so this routing covers a bad pattern or an
 # unreadable file, not a redirect failure.
@@ -429,27 +429,33 @@ SWEEP_CANARY_COUNT=9   # pinned beside SWEEP_CANARIES: the probe compares agains
 #   mode `=`   the subtree is small and slow-moving: hits must equal the ceiling (lower it when you convert one)
 #   mode `<=`  the wave that converts it owns tightening: hits must stay at or below the ceiling; slack is printed. Shrink-only is
 #              a CONVENTION here, not enforced: slack frees headroom for a new instance until the wave PR lowers the number.
-# Globs are matched with bash `[[ == ]]`, so `*` CROSSES `/`. Keep every loose (`<=`) row TEST-SHAPED (`*.test.sh`, a test/ or
-# tests/ directory, a `test-*` basename under scripts/) so production code can never fall into slack: a production hit then
-# lands in "outside the deferral table" whatever any row's slack. A row that owns production-class files must be tight (`=`).
+# Globs are matched with bash `[[ == ]]`, so `*` CROSSES `/`. Keep every loose (`<=`) row TEST-SHAPED (`*.test.sh` or a test/ or tests/
+# directory as a glob, a glob-free `*.test.sh` path, or a path under plugins/soleur/test/) so production code can never fall into slack: a
+# production hit then lands in "outside the deferral table" whatever any row's slack. A row that owns production-class files must be
+# tight (`=`). Today every row is tight and file-exact, and the probe pins that no row uses mode `<=` (a ceiling number on an `=` row can
+# only equal the hit count, so raising it is a visible one-line edit, never slack).
 # A row whose subtree reaches zero is STALE and fails: the wave that converts a subtree deletes its row in the same PR.
 # Every row names its tracker. These are the only places a new instance can hide, so the diff of this table is the
 # review surface: raising a number is a visible, one-line, reviewable act and every run prints each row.
-# KNOWN HOLE (named, not covered): a glob row at slack 0 (either mode) pins the COUNT per row, not the sites, so moving one hit between two files under
-# the same glob (add one, delete one) stays green. File-exact `=` rows would close it, but `_ts_re` below classifies a file-exact test path as
-# a PRODUCTION row (GATED_PROD_ROWS counts it), so that needs a `_ts_re` widening reviewed on its own; the last Wave B slice revisits it.
+# A glob row at slack 0 pins the COUNT per row, not the sites, so moving one hit between two files under the same glob (add one, delete one) would stay
+# green; S7a closed that for the last two glob rows by making every row file-exact (`_ts_re` below classifies a glob-free test path as test-shaped).
 # S6 took apps/web-platform/ (all but the six file-exact carrier rows below) to zero; its marked lines are demonstrations, mutation recipes and their landing checks, needles for carrier bytes, and two message or payload strings, and the
 # apps/web-platform/infra/ root canary is witnessed today by those six rows going stale (not ablation-proved), so it matters once they convert.
 # S3 (scripts/) and S4 (tests/) took their subtrees to zero and deleted their rows; S5 did the same for the plugins/soleur/ test files outside
 # plugins/soleur/test/ (its five counted pins stay). The test-shaped row globs are pinned (GATED_TEST_ROWS), so a new or widened one, however it is
 # spelled, is a visible two-place edit. The drained form
 # `grep -c ... >/dev/null` those slices wrote is deliberate (same exit status for stdin operands, and the producer is read to EOF): do not rewrite it to a here-string.
-# The codemod only acts on rows still listed here, so a NEW hit in a zero subtree is converted by hand with the Rewrite table below.
 SWEEP_DEFERRALS=(
-  '.claude/*.test.sh | <= | 5 | #9217'
-  # Slice S2 converted this subtree; five counted data pins remain (pipes inside strings or .md-fence text; marker-exempt demos are not counted).
-  # Tight (`=`) so a forgotten ceiling fails; to convert one, flip the row to `<=`, convert, flip back lowered (the codemod refuses `--write` on `=` rows).
-  'plugins/soleur/test/* | = | 5 | #9217'
+  # The counted data pins in six test files, each a pipe inside a string, a mutation payload or .md-fence text (marker-exempt demos are not
+  # counted). They are file-exact and tight (`=`), so moving a hit from one file to another turns the guard red where a glob row at the same
+  # count stayed green. Two limits stay: the count is per FILE, so converting one hit and adding another inside the same file is not seen; and
+  # renaming or splitting one of these six files needs a row edit in the same PR (a stale row names the file, and its message says how).
+  '.claude/hooks/background-poll-prefer-monitor.test.sh | = | 1 | #9217'
+  '.claude/hooks/pkill-self-match-guard.test.sh | = | 4 | #9217'
+  'plugins/soleur/test/deploy-arm-mutations.sh | = | 1 | #9217'
+  'plugins/soleur/test/deploy-arm.test.sh | = | 1 | #9217'
+  'plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh | = | 1 | #9217'
+  'plugins/soleur/test/worktree-manager-porcelain-sigpipe.test.sh | = | 2 | #9217'
   # Wave A2 (this table's last production rows) converted .github/, lefthook.yml, the drain workflow prompt and every other
   # apps/web-platform/infra file. These four stay, file-exact and tight (`=`), because their bytes feed `user_data` of
   # `hcloud_server.{registry,inngest,git_data}`, which carry NO `ignore_changes = [user_data]` (ADR-100, ADR-169): any edit is a
@@ -474,9 +480,15 @@ SWEEP_DEFERRALS=(
 # (path:line:text, comment lines and marked lines dropped). `git grep` exits 1 for "no hits" and above 1 on a
 # fatal error: only the first is zero hits. The caller turns UNRESOLVED into a top-level exit 3 (this runs inside
 # $( ), where an exit would only leave the subshell).
+# The one place the sweep's flags and pathspec live: scan_sweep's listing, scan_sweep's scan and the test-canary check below all call it, so an
+# exclusion or an ignore handling edit moves all three together and cannot hide a file from the scan while the canary still sees it.
+sweep_git_grep() { # <root> <git grep options...>
+  local root="$1"; shift
+  git -c core.excludesFile=/dev/null -C "$root" grep --no-index --exclude-standard "$@" -- "${SWEEP_PATHSPEC[@]}"
+}
 scan_sweep() {
   local root="$1" out rc=0 files nfiles c
-  files="$(git -c core.excludesFile=/dev/null -C "$root" grep --no-index --exclude-standard -al -e '' -- "${SWEEP_PATHSPEC[@]}")" || rc=$?
+  files="$(sweep_git_grep "$root" -al -e '')" || rc=$?
   if (( rc > 1 )); then
     echo "SWEPT: 0 files"
     echo "UNRESOLVED: scan_sweep could not list its population in $root (git grep rc=$rc) — nothing was scanned"
@@ -488,7 +500,7 @@ scan_sweep() {
     grep -q -- "^$c" <<<"$files" || echo "UNRESOLVED: no swept file under $c in $root — the population is not the repository's"
   done
   rc=0
-  out="$(git -c core.excludesFile=/dev/null -C "$root" grep --no-index --exclude-standard -anE -e "$PATTERN_V2" -- "${SWEEP_PATHSPEC[@]}")" || rc=$?
+  out="$(sweep_git_grep "$root" -anE -e "$PATTERN_V2")" || rc=$?
   if (( rc > 1 )); then
     echo "UNRESOLVED: scan_sweep could not read its input in $root (git grep rc=$rc) — nothing was scanned"
     return 0
@@ -528,7 +540,7 @@ sweep_verdict() {
     n="${r_n[i]}"; ceil="${r_ceil[i]}"; mode="${r_mode[i]}"; slack=$(( ceil - n ))
     echo "DEFERRED: ${r_glob[i]} ($n hits, ceiling $ceil, mode $mode, slack $slack, ${r_tracker[i]})"
     if (( n == 0 )); then
-      SWEEP_FAIL=1; echo "FAIL: stale deferral: ${r_glob[i]} has no hits left — delete its row from SWEEP_DEFERRALS in the PR that converted it"
+      SWEEP_FAIL=1; echo "FAIL: stale deferral: ${r_glob[i]} has no hits left — delete its row from SWEEP_DEFERRALS (and its GATED_TEST_ROWS or GATED_PROD_GLOBS line) in the PR that converted it; if the file was renamed or split, rename the row and that line instead"
     elif (( n > ceil )); then
       SWEEP_FAIL=1; echo "FAIL: deferral ceiling exceeded: ${r_glob[i]} has $n hits, ceiling $ceil — a new early-exit pipe landed in a deferred subtree; use the forms in this file's header (some file-exact apps/web-platform/infra rows feed a host user_data or a pinned artifact: read the comment above SWEEP_DEFERRALS before converting one)"
     elif [[ "$mode" == "=" ]] && (( n < ceil )); then
@@ -590,6 +602,7 @@ sweep_fold() {
   fi
 }
 sweep_rc=0
+unset SWEEP_N   # an ambient value must not satisfy the evidence that the sweep ran (sweep_fold and the return-wiring block read it)
 sweep_main . "$SWEEP_FLOOR" || sweep_rc=$?
 sweep_fold "$sweep_rc"
 
@@ -933,9 +946,9 @@ real_plug_row="$( SWEEP_DEFERRALS=('plugins/soleur/*.test.sh | <= | 99 | #1'); _
 real_nonplug="$(printf '%s\n' "${real_paths[@]}" | { grep -v '^plugins/soleur/.*\.test\.sh$' || true; } | LC_ALL=C sort)"
 [[ "$real_none" == "$REAL_PLANTED" && "$real_all" == 0 && "$real_tests_row" == "$real_nontests" && "$real_plug_row" == "$real_nonplug" ]] \
   || sweep_probe_fail+=("real-table-control: with no rows ${real_none:-<err>} planted paths were undeferred (want $REAL_PLANTED), with a catch-all row ${real_all:-<err>} (want 0), with a tests/ row [${real_tests_row//$'\n'/ }] (want exactly the non-tests/ canaries), with a plugins/soleur/*.test.sh row [${real_plug_row//$'\n'/ }] (want exactly the canaries that are not plugins/soleur/**/*.test.sh) — the helper above does not read the table it is given")
-# A loose (<=) row's slack is where a NEW instance hides, so every loose row must be test-shaped: *.test.sh, a test/ or tests/ directory,
-# or a test-* basename. A production-shaped loose glob would turn this header's own invariant into a convention.
-_ts_re='(^|/)(tests?/\*|\*\.test\.sh)$|^scripts/(lib/)?test-\*$'
+# A loose (<=) row's slack is where a NEW instance hides, so every loose row must be test-shaped: *.test.sh or a test/ or tests/ directory (as a glob),
+# or a glob-free *.test.sh path or a path under plugins/soleur/test/. A production-shaped loose glob would turn this header's own invariant into a convention.
+_ts_re='(^|/)(tests?/\*|\*\.test\.sh)$|^[^*?[:space:]]*\.test\.sh$|^plugins/soleur/test/[^*?[:space:]]+$'
 _loose_not_test_shaped() { # <rows...> -> the glob of each `<=` row that is not test-shaped
   local row g m
   for row in "$@"; do
@@ -946,6 +959,11 @@ _loose_not_test_shaped() { # <rows...> -> the glob of each `<=` row that is not 
   done
 }
 loose_bad="$(_loose_not_test_shaped "${SWEEP_DEFERRALS[@]}")"
+loose_n=0
+for _row in "${SWEEP_DEFERRALS[@]}"; do
+  IFS='|' read -r _ _m _ <<<"$_row"; _m="${_m//[[:space:]]/}"   # the mode as sweep_verdict reads it: every blank removed
+  [[ "$_m" == "<=" ]] && loose_n=$((loose_n + 1))
+done
 # tests/ went to zero in S4 and every canary under it is owned by NO row; a resurrected row there (even a test-shaped one such as
 # `tests/commands/*.test.sh`) would own hits the canaries do not cover, so no row may start with `tests/`.
 tests_rows="$(printf '%s\n' "${SWEEP_DEFERRALS[@]}" | grep -c '^[[:space:]]*tests/' || true)"
@@ -958,9 +976,9 @@ for _row in "${SWEEP_DEFERRALS[@]}"; do
   if [[ "$_g" =~ $_ts_re ]]; then test_globs+="$_g"$'\n'; fi
 done
 # The trailing newline of this literal is deliberate: the loop above appends each glob followed by a newline, so the two must stay in step.
-GATED_TEST_ROWS=$'.claude/*.test.sh\nplugins/soleur/test/*\n'
-[[ -z "$loose_bad" && "$tests_rows" == 0 && "$test_globs" == "$GATED_TEST_ROWS" ]] \
-  || sweep_probe_fail+=("real-table-test-shaped: loose (<=) rows whose glob is not test-shaped: ${loose_bad//$'\n'/ } (${tests_rows:-<err>} rows start with tests/, want 0: tests/ is at zero hits, a row there is a resurrected deferral; the test-shaped row globs are [${test_globs//$'\n'/ }], want exactly the pinned GATED_TEST_ROWS set: a new, widened, deleted or renamed test-shaped row is a deferral change). To CONVERT hits, delete the row AND its GATED_TEST_ROWS line, then rewrite the hits by hand (the Rewrite: block the verdict prints); do not add a row for a subtree at zero. To KEEP a deferral, edit the row AND GATED_TEST_ROWS together. If the loose-rows list above is non-empty, make that row tight (=) or its glob test-shaped")
+GATED_TEST_ROWS=$'.claude/hooks/background-poll-prefer-monitor.test.sh\n.claude/hooks/pkill-self-match-guard.test.sh\nplugins/soleur/test/deploy-arm-mutations.sh\nplugins/soleur/test/deploy-arm.test.sh\nplugins/soleur/test/ship-phase-7-poll-fixtures.test.sh\nplugins/soleur/test/worktree-manager-porcelain-sigpipe.test.sh\n'
+[[ -z "$loose_bad" && "$loose_n" == 0 && "$tests_rows" == 0 && "$test_globs" == "$GATED_TEST_ROWS" ]] \
+  || sweep_probe_fail+=("real-table-test-shaped: ${loose_n:-<err>} rows use mode <= (want 0: every row is file-exact and tight, so loosening a ceiling is a visible edit of this pin, not slack); loose (<=) rows whose glob is not test-shaped: ${loose_bad//$'\n'/ } (${tests_rows:-<err>} rows start with tests/, want 0: tests/ is at zero hits, a row there is a resurrected deferral; the test-shaped row globs are [${test_globs//$'\n'/ }], want exactly the pinned GATED_TEST_ROWS set: a new, widened, deleted or renamed test-shaped row is a deferral change). To CONVERT hits, delete the row AND its GATED_TEST_ROWS line, then rewrite the hits by hand (the Rewrite: block the verdict prints); do not add a row for a subtree at zero. To KEEP a deferral, edit the row AND GATED_TEST_ROWS together. If the loose-rows list above is non-empty, make that row tight (=) or its glob test-shaped")
 loose_ctl="$(_loose_not_test_shaped 'apps/web-platform/infra/* | <= | 99 | #9217' '.github/workflows/test-* | <= | 9 | #9217' 'scripts/x.test.sh | = | 1 | #9217')"
 [[ "$loose_ctl" == $'apps/web-platform/infra/*\n.github/workflows/test-*' ]] \
   || sweep_probe_fail+=("real-table-test-shaped-control: injected production-shaped loose rows were reported as [${loose_ctl//$'\n'/ }] (want exactly the two injected rows, and not the tight one)")
@@ -1048,217 +1066,31 @@ res_hits=$(grep -cE -- "$PATTERN_V2" "$probe/residual-v2.sh" || true)
 fp_hits=$(grep -cE -- "$PATTERN_V2" "$probe/fp-v2.sh" || true)
 [[ "$res_hits" == 0 && "$fp_hits" == 1 ]] || sweep_probe_fail+=("residual-v2: documented residuals matched ${res_hits:-<err>} (want 0), the documented false positive matched ${fp_hits:-<err>} (want 1)")
 
-# ---------------------------------------------------------------------------------------------------
-# Selftest for scripts/grep-q-drain-codemod.py (#9217 Wave B; the tool and this block are deleted together in the last slice).
-# The tool rewrites `| grep -q<f>` to `| grep -c<f> >/dev/null` and `verify` proves a slice's diff is only that rewrite. Fixtures are
-# synthesized strings. Every RED fixture runs after a pristine control that exits 0, asserts its specific rc AND message (rc 2, 126 and
-# 127 are an instrument failure, not evidence), and has a must-PASS twin that differs only in the property under test, so a tool that
-# refuses everything, converts everything or crashes cannot satisfy the set. No counter and no `-lt` floor lives here: each check is
-# pinned by SWEEP_PROBE_CHECKS below, and the equivalence rows are collected into a string asserted empty.
-command -v python3 >/dev/null 2>&1 || { echo "UNRESOLVED: python3 missing — the codemod selftest asserted nothing; install python3"; exit 3; }
-CM=scripts/grep-q-drain-codemod.py
-[[ -f "$CM" ]] || { echo "UNRESOLVED: $CM is missing — the codemod selftest asserted nothing; restore it or delete this block with its SWEEP_PROBE_CHECKS share"; exit 3; }
-_cm() { local m="$1"; shift; python3 -I "$CM" "$m" --guard "${BASH_SOURCE[0]}" "$@"; }
-# git with every GIT_* variable stripped by PREFIX (a hook runs this suite with GIT_DIR/GIT_INDEX_FILE set, and `git init` here would
-# otherwise act on the caller's repository) and no hooks.
-_cleangit() { ( while IFS= read -r _gv; do unset "$_gv"; done < <(compgen -e | grep '^GIT_' || true); git -c core.hooksPath=/dev/null -c commit.gpgsign=false -c user.name=t -c user.email=t@t "$@" ); }
-# Canonical assert_fixture_dir — byte-identical copy (fixture-scan.py requires the verbatim body; see plugins/soleur/test/test-helpers.sh).
-# _mkguard and _vrepo write (and _vrepo removes) under their argument, so a relative or `..`-bearing root would aim the writes somewhere other than $probe.
-assert_fixture_dir() {
-  case "${1-}" in
-    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
-    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
-    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
-    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
-    /*) : ;;
-    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
-  esac
-}
-# Each fixture root carries its OWN guard: the SWEEP_* pattern strings and pathspec copied from this file, and one synthetic catch-all row. The
-# tool reads the guard from the root it is given, so the checks below stay green whichever live deferral rows a later slice deletes (a fixture
-# rooted at the live table failed twelve checks the moment `scripts/*.test.sh` left it).
-_mkguard() { # <root>
-  assert_fixture_dir "$1"
-  mkdir -p "$1/.claude/hooks"
-  { grep -E '^(SWEEP_(LEAD|WRAP|BIN|ARG|EARLY)|PATTERN_V2|ALLOW_MARKER)=' "${BASH_SOURCE[0]}"
-    awk '/^SWEEP_PATHSPEC=\(/,/^\)/' "${BASH_SOURCE[0]}"
-    printf '%s\n' 'SWEEP_DEFERRALS=(' "  '* | <= | 9999 | #1'" ')'; } > "$1/.claude/hooks/grep-q-pipe-guard.test.sh"
-}
-cmr="$probe/cm"; mkdir -p "$cmr/scripts"; _mkguard "$cmr"
-cat > "$cmr/scripts/c.test.sh" <<'CM_C'
-#!/usr/bin/env bash
-set -o pipefail
-echo "$x" | grep -qE 'a|b'
-echo "$x" | grep -iEq 'a'
-echo "$x" | grep --quiet p
-echo "$x" | grep -F -x -q -- "$m"
-echo "$x" | grep -qe 'p'
-echo "$x" | LC_ALL=C grep -qv 'p' 2>/dev/null
-if printf '%s\n' "$x" | grep -q p; then :; fi
-CM_C
-chmod 755 "$cmr/scripts/c.test.sh"
-cat > "$probe/c.want" <<'CM_CW'
-#!/usr/bin/env bash
-set -o pipefail
-echo "$x" | grep -cE >/dev/null 'a|b'
-echo "$x" | grep -iEc >/dev/null 'a'
-echo "$x" | grep -c >/dev/null p
-echo "$x" | grep -F -x -c >/dev/null -- "$m"
-echo "$x" | grep -ce >/dev/null 'p'
-echo "$x" | LC_ALL=C grep -cv >/dev/null 'p' 2>/dev/null
-if printf '%s\n' "$x" | grep -c >/dev/null p; then :; fi
-CM_CW
-cat > "$cmr/scripts/r.test.sh" <<'CM_R'
-echo "$x" | grep -eq y
-echo "$x" | grep -m1 P
-echo "$x" | grep -qm1 P
-yes | grep -q y
-echo "$x" | grep -q p > "$f"
-run_case "T1" 'while ps | grep -q zz; do :; done' deny
-while true; do
-  echo a
-done | grep -q a
-tail -n 5 -f /tmp/log | grep -q ready
-/usr/bin/yes | grep -q y
-yes \
-  | tr a b | grep -q a
-echo "$x" | grep -qq p
-echo "$x" | grep --quiet --silent p
-{
-  echo a
-  echo b
-} | grep -q a
-(
-  echo a
-) | grep -q a
-if true; then
-  echo a
-fi | grep -q a
-tail --follow /tmp/log | grep -q ready
-docker logs -f web | grep -q ready
-watch -n1 date | grep -q 1
-ping -c9 host | grep -q ttl
-dmesg -w | grep -q err
-until false; do echo a; done | grep -q a
-for ((;;)); do echo a; done | grep -q a
-{ yes; } | grep -q y
-echo "$x" | grep -q p 1> out
-echo "$x" | grep -q p &> out
-echo "$x" | grep -ql p
-echo "$x" | grep -q$opt p
-cat <<EOF4
-EOF4X
-echo "$x" | grep -q after-near-miss-delimiter
-EOF4
-cat <<'EOF'
-printf x
+# Test-shaped canaries. The root canaries (SWEEP_CANARIES) are satisfied by ANY swept file under a root, so an ignore glob or a pathspec
+# exclusion that hides only the test files (`*.test.sh`) leaves a root canary green while the sweep stops reading exactly the files this
+# guard exists for. One stable test file per representative test-bearing location (nine, not all of them: the listing of tracked-but-ignored
+# files below covers every ignore rule, and these cover a pathspec exclusion) is named here and must appear in the sweep's own population (the same
+# listing scan_sweep derives, through the same sweep_git_grep, over the real tree). Pick long-lived suites of load-bearing components; if one is
+# renamed, edit this list, never the sweep. They are NOT added to SWEEP_CANARIES: that loop also runs on every scratch-root fixture above.
+SWEEP_TEST_CANARIES=('.claude/hooks/guardrails.test.sh' 'plugins/soleur/test/deploy-arm.test.sh' 'plugins/soleur/scripts/emit-decision.test.sh' 'plugins/soleur/skills/community/test/community-argv.test.sh' 'apps/web-platform/infra/ci-deploy.test.sh' 'apps/web-platform/scripts/anthropic-key-distinctness.test.sh' 'apps/web-platform/test/infra/betterstack-send-failed-alert.test.sh' 'apps/cla-evidence/scripts/inspect.test.sh' 'scripts/actions-queue-health.test.sh')
+SWEEP_TEST_CANARY_COUNT=9   # pinned beside the array: a canary deleted from the array alone must not pass
+tc_rc=0
+tc_files="$(sweep_git_grep . -al -e '')" || tc_rc=$?
+if (( tc_rc > 1 )); then
+  echo "UNRESOLVED: the test-canary check could not list the sweep's population (git grep rc=$tc_rc) — it asserted nothing; fix the listing before trusting this run"
+  exit 3
+fi
+tc_missing=""
+for _c in "${SWEEP_TEST_CANARIES[@]}"; do
+  grep -qxF -- "$_c" <<<"$tc_files" || tc_missing+="$_c "
+done
+# A TRACKED file the ignore rules hide is a file the sweep (`--no-index --exclude-standard`) never reads, whichever file it is: list them directly.
+tc_hidden="$(git -c core.excludesFile=/dev/null ls-files -ci --exclude-standard -- "${SWEEP_PATHSPEC[@]}")" || tc_hidden="<ls-files failed>"
+[[ -z "$tc_missing" && -z "$tc_hidden" && "${#SWEEP_TEST_CANARIES[@]}" == "$SWEEP_TEST_CANARY_COUNT" ]] \
+  || sweep_probe_fail+=("test-canaries: the sweep no longer reads [${tc_missing:-none}], tracked swept files hidden by an ignore rule: [${tc_hidden//$'\n'/ }], or SWEEP_TEST_CANARIES holds ${#SWEEP_TEST_CANARIES[@]} entries, pinned at $SWEEP_TEST_CANARY_COUNT. This protects the sweep's reach over test files: an ignore entry or a pathspec exclusion would otherwise pass every root canary. Fix: if a canary file moved or was renamed, update SWEEP_TEST_CANARIES and SWEEP_TEST_CANARY_COUNT together (not the sweep); if a file is hidden or missing from the population, remove the .gitignore entry or SWEEP_PATHSPEC exclusion that hides it")
 
-echo "$x" | grep -q inside-quoted-heredoc
-EOF
-cat <<EOF2
-x
-
-echo "$x" | grep -q inside-bare-heredoc
-EOF2
-cat <<-EOF3
-	y
-
-	echo "$x" | grep -q inside-tabbed-heredoc
-	EOF3
-CM_R
-cp "$cmr/scripts/r.test.sh" "$probe/r.want"
-cat > "$cmr/scripts/t.test.sh" <<'CM_T'
-echo "$x" | grep -q p 2>/dev/null
-grep -q p <<<"$x"
-echo "$y" | grep -q after-herestring
-x=$(( 1 << 3 )); echo "$x" | grep -q p
-echo "$x" | grep -q 'a>b'
-printf '%s\n' "$x" \
-  | grep -q cont
-true && echo "$x" | grep -q chain && echo yes
-r="$(echo "$x" | grep -q dq && echo y)"
-echo "$a" | grep -q one && echo "$b" | grep -q two
-{ echo a; echo b; } | grep -q a
-printf '%s' "Å" | grep -q nel
-CM_T
-cat > "$probe/t.want" <<'CM_TW'
-echo "$x" | grep -c >/dev/null p 2>/dev/null
-grep -q p <<<"$x"
-echo "$y" | grep -c >/dev/null after-herestring
-x=$(( 1 << 3 )); echo "$x" | grep -c >/dev/null p
-echo "$x" | grep -c >/dev/null 'a>b'
-printf '%s\n' "$x" \
-  | grep -c >/dev/null cont
-true && echo "$x" | grep -c >/dev/null chain && echo yes
-r="$(echo "$x" | grep -c >/dev/null dq && echo y)"
-echo "$a" | grep -c >/dev/null one && echo "$b" | grep -c >/dev/null two
-{ echo a; echo b; } | grep -c >/dev/null a
-printf '%s' "Å" | grep -c >/dev/null nel
-CM_TW
-printf '%s\n' '# a comment that names SIGPIPE' 'echo "$x" | grep -q p' > "$cmr/scripts/s.test.sh"
-printf '%s\n' '# a comment that names EPIPE' 'echo "$x" | grep -q p' > "$cmr/scripts/s2.test.sh"
-printf '%s\n' '# a comment that names a broken pipe' 'echo "$x" | grep -q p' > "$cmr/scripts/s3.test.sh"
-printf '%s\n' '# a comment that names a false-FAIL' 'echo "$x" | grep -q p' > "$cmr/scripts/s4.test.sh"
-printf '%s\n' 'echo "unterminated' 'echo "$x" | grep -q p' > "$cmr/scripts/u.test.sh"
-cp "$cmr/scripts/s.test.sh" "$probe/s.want"
-cp -r "$cmr/scripts" "$probe/cm0"
-cm_dry="$(_cm apply --root "$cmr" 2>&1)" && cm_dry_rc=0 || cm_dry_rc=$?
-cm_untouched=0; diff -r "$probe/cm0" "$cmr/scripts" >/dev/null 2>&1 && cm_untouched=1
-cm_nowrite_rc=0; cm_nowrite_out="$(_cm apply --root "$cmr" --write 2>&1)" || cm_nowrite_rc=$?
-cm_nowrite_same=0; diff -r "$probe/cm0" "$cmr/scripts" >/dev/null 2>&1 && cm_nowrite_same=1
-cm_write="$(_cm apply --root "$cmr" --write --row '*' --reviewed-suspect scripts/s.test.sh 2>&1)" && cm_write_rc=0 || cm_write_rc=$?
-cm_again="$(_cm apply --root "$cmr" --write --row '*' --reviewed-suspect scripts/s.test.sh 2>&1)" && cm_again_rc=0 || cm_again_rc=$?
-printf '%s\n' '# a comment that names SIGPIPE' 'echo "$x" | grep -c >/dev/null p' > "$probe/s.conv"
-[[ "$cm_dry_rc" == 0 && "$cm_dry" == *"WOULD-CHANGE: "* && "$cm_untouched" == 1 ]] \
-  || sweep_probe_fail+=("codemod-dry-run: the default dry run exited ${cm_dry_rc:-<err>} or modified a fixture (it must print WOULD-CHANGE and write nothing)")
-[[ "$cm_write_rc" == 0 ]] && cmp -s "$cmr/scripts/c.test.sh" "$probe/c.want" \
-  || sweep_probe_fail+=("codemod-clusters: --write did not turn the control fixture (-qE, -iEq, --quiet, -F -x -q --, -qe, a -qv cluster behind an env prefix, an if-condition) into its expected -c >/dev/null form, or exited ${cm_write_rc:-<err>}: ${cm_write:0:300}")
-[[ "$cm_nowrite_rc" == 2 && "$cm_nowrite_same" == 1 && "$cm_nowrite_out" == *"--write needs at least one --row"* ]] \
-  || sweep_probe_fail+=("codemod-write-needs-row: --write without --row exited ${cm_nowrite_rc:-<err>} and left the tree ${cm_nowrite_same:-<err>} (want rc 2, an UNCHANGED tree, 1, and the message '--write needs at least one --row'): ${cm_nowrite_out:0:200}")
-[[ "$cm_write_rc" == 0 && -x "$cmr/scripts/c.test.sh" && ! -x "$cmr/scripts/t.test.sh" ]] \
-  || sweep_probe_fail+=("codemod-mode: a converted 755 file lost its executable bit, or a converted 644 file gained one (the temp-file replace must copy the mode)")
-cmp -s "$cmr/scripts/t.test.sh" "$probe/t.want" \
-  || sweep_probe_fail+=("codemod-twins: the must-PASS twins (2>/dev/null is not stdout, a here-string is not a heredoc, << in arithmetic, > inside a quoted pattern, a leading-pipe continuation, a && chain, \$(...) inside double quotes, two hits on one line) did not all convert")
-cm_queue="$({ grep '^QUEUE scripts/r.test.sh:' <<<"$cm_dry" || true; } | cut -d: -f3,4 | LC_ALL=C sort | tr '\n' ' ')"
-[[ "$cm_queue" == "H-m:-m H-m:-m X:letter-l X:loop-or-group-producer X:loop-or-group-producer X:loop-or-group-producer X:loop-or-group-producer X:operand-q X:repeated-q X:repeated-quiet X:span-mismatch X:stdout-redirected X:stdout-redirected X:stdout-redirected X:unbounded-producer X:unbounded-producer X:unbounded-producer X:unbounded-producer X:unbounded-producer X:unbounded-producer X:unbounded-producer X:unbounded-producer X:unbounded-producer X:unbounded-producer X:unbounded-producer X:unbounded-producer data:heredoc data:heredoc data:heredoc data:heredoc data:quoted " ]] && cmp -s "$cmr/scripts/r.test.sh" "$probe/r.want" \
-  || sweep_probe_fail+=("codemod-refusals: the refusal fixture queued [${cm_queue:-<none>}] (want -eq, -m, -qm1, -qq, --quiet --silent, -ql, a glued -q\$opt, twelve unbounded producers (yes, tail -f and --follow, logs -f, watch, ping, dmesg -w, until, for ((, a multi-line one, a braced { yes; } group), four loop/group-headed pipes (done, }, ), fi), three redirected stdouts, a quoted hook input and four heredoc bodies incl. a near-miss delimiter; all unchanged)")
-cm_susp="$({ grep -E '^QUEUE scripts/s[0-9]*\.test\.sh:' <<<"$cm_dry" || true; } | cut -d: -f1,3,4 | LC_ALL=C sort | tr '\n' ' ')"
-cm_uns="$({ grep '^QUEUE scripts/u.test.sh:' <<<"$cm_dry" || true; } | cut -d: -f3,4)"
-[[ "$cm_susp" == "QUEUE scripts/s.test.sh:suspect:file-names-sigpipe QUEUE scripts/s2.test.sh:suspect:file-names-sigpipe QUEUE scripts/s3.test.sh:suspect:file-names-sigpipe QUEUE scripts/s4.test.sh:suspect:file-names-sigpipe " ]] \
-  && cmp -s "$cmr/scripts/s.test.sh" "$probe/s.conv" && cmp -s "$cmr/scripts/s2.test.sh" "$probe/cm0/s2.test.sh" && [[ "$cm_uns" == "unsure:tokenizer-unbalanced" ]] \
-  || sweep_probe_fail+=("codemod-suspect: files naming SIGPIPE, EPIPE, a broken pipe and a false-FAIL queued [${cm_susp:-<none>}] (want all four as suspect), the reviewed one must convert and the others stay unchanged, and an unbalanced file must queue unsure (got [${cm_uns:-<none>}])")
-[[ "$cm_again_rc" == 0 && "$cm_again" == *"CHANGED: 0 lines"* ]] \
-  || sweep_probe_fail+=("codemod-idempotent: a second --write run exited ${cm_again_rc:-<err>} and reported [$(grep -o 'CHANGED: [0-9]* lines' <<<"$cm_again" || true)] (want CHANGED: 0 lines)")
-# apply on a root whose guard has no row for the path queues it as unowned, and an empty population is UNRESOLVED (rc 3), never a clean zero
-cmu="$probe/cmu"; mkdir -p "$cmu/scripts"; _mkguard "$cmu"
-sed -i "s/^  '\* | <= | 9999 | #1'/  'tests\/* | <= | 9 | #1'/" "$cmu/.claude/hooks/grep-q-pipe-guard.test.sh"
-echo 'echo "$x" | grep -q p' > "$cmu/scripts/o.test.sh"
-cm_own="$(_cm apply --root "$cmu" 2>&1 || true)"
-cmz="$probe/cmz"; mkdir -p "$cmz/scripts"; _mkguard "$cmz"; echo true > "$cmz/scripts/e.test.sh"
-cm_empty_rc=0; cm_empty_out="$(_cm apply --root "$cmz" 2>&1)" || cm_empty_rc=$?
-[[ "$cm_own" == *"QUEUE scripts/o.test.sh:1:unowned:no-deferral-row"* && "$cm_empty_rc" == 3 && "$cm_empty_out" == *"found no site"* ]] \
-  || sweep_probe_fail+=("codemod-unowned-empty: a path under no row queued [$(grep -o 'QUEUE scripts/o.test.sh[^ ]*' <<<"$cm_own" || true)] (want unowned) and an empty population exited ${cm_empty_rc:-<err>} (want 3 with 'found no site'): ${cm_empty_out:0:200}")
-# a file-exact (=) row is a production carrier: --write refuses it (rc 2, tree unchanged); the same file under a <= row converts
-cme="$probe/cme"; mkdir -p "$cme/scripts"; _mkguard "$cme"
-sed -i "s/^  '\* | <= | 9999 | #1'/  'scripts\/e.test.sh | = | 1 | #1'/" "$cme/.claude/hooks/grep-q-pipe-guard.test.sh"
-echo 'echo "$x" | grep -q p' > "$cme/scripts/e.test.sh"
-cp -r "$cme/scripts" "$probe/cme0"
-cm_exact_rc=0; cm_exact_out="$(_cm apply --root "$cme" --write --row 'scripts/e.test.sh' 2>&1)" || cm_exact_rc=$?
-cm_exact_same=0; diff -r "$probe/cme0" "$cme/scripts" >/dev/null 2>&1 && cm_exact_same=1
-cml="$probe/cml"; mkdir -p "$cml/scripts"; _mkguard "$cml"
-sed -i "s/^  '\* | <= | 9999 | #1'/  'scripts\/e.test.sh | <= | 1 | #1'/" "$cml/.claude/hooks/grep-q-pipe-guard.test.sh"
-echo 'echo "$x" | grep -q p' > "$cml/scripts/e.test.sh"
-cm_loose_rc=0; _cm apply --root "$cml" --write --row 'scripts/e.test.sh' >/dev/null 2>&1 || cm_loose_rc=$?
-[[ "$cm_exact_rc" == 2 && "$cm_exact_same" == 1 && "$cm_exact_out" == *"file-exact"* && "$cm_loose_rc" == 0 ]] \
-  && cmp -s "$cml/scripts/e.test.sh" <(echo 'echo "$x" | grep -c >/dev/null p') \
-  || sweep_probe_fail+=("codemod-exact-row: --write on an '=' (file-exact) row exited ${cm_exact_rc:-<err>} with the tree unchanged ${cm_exact_same:-<err>} (want rc 2, 1, 'file-exact'), and the same file under a '<=' row exited ${cm_loose_rc:-<err>} (want 0 and a converted file): ${cm_exact_out:0:200}")
-# The tool's population equals this file's own scan on the same scratch root (the real-repo parity, 827 = 827, is read once in the PR body).
-cm_pop="$({ _cm apply --root "$sr" 2>&1 || true; } | sed -n 's/^POPULATION: \([0-9]*\) lines.*/\1/p')"
-[[ "$cm_pop" == "$sw_hits" ]] \
-  || sweep_probe_fail+=("codemod-population: the tool counted ${cm_pop:-<none>} sites on the sweep fixture root where scan_sweep counted $sw_hits — the tool and the guard disagree about what a site is")
-# Exit status of grep -q<f> versus grep -c<f> >/dev/null, one row per cluster class, under bash and under sh from PATH (when sh is bash
-# the second pass proves nothing extra and still holds). The differences are collected into a string; the full 1,080-row table is run once
-# and pasted in the PR body.
+# Exit status of grep -q<f> versus grep -c<f> >/dev/null, one row per cluster class, under bash and under sh from PATH (when sh is bash the second pass
+# proves nothing extra and still holds). This is an executable check that the drained form the converted sites use keeps grep -q's exit status.
 EQV_ROWS=('||a' '|a|a' '|ab\ncd|cd' '|a\n|^$' 'v||a' 'v|a\n\nb|a' 'x|ab|a' 'x|a\nb|a' 'F|a.b|a.b' 'i|ABC|abc' 'w|a-b|a' 'vE|\n|^$' 'Fx|ab\n|ab')
 _eqv() { # <shell> [flags added on the grep -c side only: a deliberately wrong converted form] -> each row whose two exit statuses differ
   local shl="$1" bad="${2:-}" row fl in pat a b out=""
@@ -1272,132 +1104,50 @@ _eqv() { # <shell> [flags added on the grep -c side only: a deliberately wrong c
   done
   printf '%s' "$out"
 }
-eqv_neg="$(_eqv bash v)"
-eqv_bash="$(_eqv bash)"
+EQV_BASH="bash"; EQV_SH="sh"   # one name per pass, used by the table run and its negative control alike, so neither can be pointed elsewhere alone
+eqv_neg="$(_eqv "$EQV_BASH" v)"
+eqv_bash="$(_eqv "$EQV_BASH")"
 [[ -z "$eqv_bash" && -n "$eqv_neg" ]] \
-  || sweep_probe_fail+=("codemod-equivalence-bash: rows whose exit status differs between grep -q and grep -c >/dev/null: ${eqv_bash:-none}; the same table with a deliberately wrong converted form (an added -v) reported ${eqv_neg:-NOTHING} (want a difference, so the harness can see one)")
-eqv_sh="$(_eqv sh)"
-[[ -z "$eqv_sh" ]] || sweep_probe_fail+=("codemod-equivalence-sh: rows whose exit status differs under sh: $eqv_sh")
+  || sweep_probe_fail+=("equivalence-bash: rows whose exit status differs between grep -q and grep -c >/dev/null: ${eqv_bash:-none}; the same table with a deliberately wrong converted form (an added -v) reported ${eqv_neg:-NOTHING} (want a difference, so the harness can see one)")
+eqv_neg_sh="$(_eqv "$EQV_SH" v)"
+eqv_sh="$(_eqv "$EQV_SH")"
+[[ -z "$eqv_sh" && -n "$eqv_neg_sh" ]] \
+  || sweep_probe_fail+=("equivalence-sh: rows whose exit status differs under sh: ${eqv_sh:-none}; the same table with the wrong converted form reported ${eqv_neg_sh:-NOTHING} (want a difference, so the sh pass can see one)")
 
-# verify: a git repo whose HEAD holds the base, the tool converts it, and each RED fixture breaks exactly one property.
-_vrepo() { # <dir>
-  local d="$1"
-  assert_fixture_dir "$d"
-  rm -rf "$d"; mkdir -p "$d/scripts"
-  cat > "$d/scripts/v.test.sh" <<'CM_V'
-echo "$a" | grep -q 'FALLBACK'
-echo "$b" | grep -qx 'KEEP'
-echo "$c" | grep -qF -- "$e"
-echo "$d" | grep -Eq 'x'
-echo "$d" | grep --quiet p
-echo "$d" | grep -q p 2>/dev/null
-true
-CM_V
-  cp "$d/scripts/v.test.sh" "$d/scripts/w.test.sh"
-  _mkguard "$d"
-  _cleangit init -q "$d" && _cleangit -C "$d" add -A && _cleangit -C "$d" commit -qm base
-}
-_vsetup() { # <dir>: build the fixture repo and convert it; a failure here is reported, never a silent suite exit under set -e
-  _vrepo "$1" && _cm apply --root "$1" --write --row '*' >/dev/null 2>&1 \
-    || sweep_probe_fail+=("verify-setup: could not build or convert the fixture repo $1 (the tool or git failed before any verify check ran)")
-}
-_vmut() { "$@" || sweep_probe_fail+=("verify-fixture-edit: \`$*\` failed, so the fixture it was meant to mutate is not what the checks after it assume"); }   # a failed edit is reported, never a silent suite exit
-_vrun() { # <dir> [verify args...] -> vr_rc, vr_out
-  local d="$1"; shift
-  vr_rc=0; vr_out="$(_cm verify --root "$d" --base HEAD "$@" 2>&1)" || vr_rc=$?
-}
-vr="$probe/vr"; mkdir -p "$vr"
-_vsetup "$vr/ok"
-_vrun "$vr/ok"
-vr_ctl_rc="$vr_rc"; vr_ctl_out="$vr_out"
-[[ "$vr_ctl_rc" == 0 && "$vr_ctl_out" == *"unexplained: 0"* && "$vr_ctl_out" == *"verified: 12"* ]] \
-  || sweep_probe_fail+=("verify-control: the pristine converted tree exited ${vr_ctl_rc:-<err>} (want 0 with 'unexplained: 0' and 'verified: 12'): ${vr_ctl_out//$'\n'/ }")
-_vred() { # <label> <sed expression> <file> <rc> <message> : mutate a converted fixture, expect the specific verdict
-  local d="$vr/$1"
-  _vsetup "$d"; cp "$d/scripts/$3" "$d/pre.snap"
-  sed -i "$2" "$d/scripts/$3"
-  cmp -s "$d/pre.snap" "$d/scripts/$3" && return 1   # the mutation did not land: a row that mutated nothing reports the baseline
-  _vrun "$d"
-  [[ "$vr_ctl_rc" == 0 && "$vr_rc" == "$4" && "$vr_out" == *"$5"* ]]
-}
-_vred pat   "s/'FALLBACK'/'FALLBACX'/" v.test.sh 1 'not the transform' || sweep_probe_fail+=("verify-pattern: a changed pattern was not rejected with rc 1 and 'not the transform' (got rc ${vr_rc:-<err>}): ${vr_out//$'\n'/ }")
-_vred redir "1s/ >\/dev\/null//" v.test.sh 1 'not the transform' || sweep_probe_fail+=("verify-redirect: a converted line missing its >/dev/null was not rejected (got rc ${vr_rc:-<err>}): ${vr_out//$'\n'/ }")
-_vred flag  "s/grep -cx >\/dev\/null/grep -c >\/dev\/null/" v.test.sh 1 'not the transform' || sweep_probe_fail+=("verify-flag: a dropped -x was not rejected (got rc ${vr_rc:-<err>}): ${vr_out//$'\n'/ }")
-_vred count '2a\
-echo extra' v.test.sh 1 'changes the line count' || sweep_probe_fail+=("verify-linecount: an added line inside a converted hunk was not rejected (got rc ${vr_rc:-<err>}): ${vr_out//$'\n'/ }")
-# an empty diff, and a base that does not resolve, are UNRESOLVED (rc 3), never green
-_vrepo "$vr/empty" || true; _vrun "$vr/empty"   # a setup failure shows up as the wrong rc in the check below, it does not abort the suite
-vr_empty_rc="$vr_rc"
-vr_bad_rc=0; _cm verify --root "$vr/empty" --base does-not-exist >/dev/null 2>&1 || vr_bad_rc=$?
-[[ "$vr_ctl_rc" == 0 && "$vr_empty_rc" == 3 && "$vr_bad_rc" == 3 ]] \
-  || sweep_probe_fail+=("verify-empty: an empty diff exited ${vr_empty_rc:-<err>} and an unknown base exited ${vr_bad_rc:-<err>} (want 3 and 3, never 0)")
-# every member is checked, not the first: v.test.sh converted cleanly, w.test.sh hand-edited and unlisted; the twin lists the hand edit exactly
-_vsetup "$vr/two"; _vmut sed -i "s/echo \"\$a\" | grep -c >\/dev\/null 'FALLBACK'/echo HAND/" "$vr/two/scripts/w.test.sh"
-_vrun "$vr/two"; vr_two_rc="$vr_rc"; vr_two_out="$vr_out"
-printf '%s\n' 'scripts/w.test.sh:1:rewritten by hand' > "$vr/two.list"
-_vrun "$vr/two" --hand-edits "$vr/two.list"; vr_twin_rc="$vr_rc"; vr_twin_out="$vr_out"
-[[ "$vr_ctl_rc" == 0 && "$vr_two_rc" == 1 && "$vr_two_out" == *"scripts/w.test.sh:1"* && "$vr_twin_rc" == 0 && "$vr_twin_out" == *"hand-edited: 1"* ]] \
-  || sweep_probe_fail+=("verify-hand-edits: an unlisted hand edit in the SECOND file exited ${vr_two_rc:-<err>} (want 1 naming scripts/w.test.sh:1) and the same edit listed exactly exited ${vr_twin_rc:-<err>} (want 0 with 'hand-edited: 1')")
-# a listed hand edit that is absent from the diff, and an entry wider than its hunk, are both stale (the range must EQUAL the hunk's removed range)
-printf '%s\n' 'scripts/w.test.sh:1:not in the diff' > "$vr/stale.list"
-_vrun "$vr/ok" --hand-edits "$vr/stale.list"; vr_stale_rc="$vr_rc"; vr_stale_out="$vr_out"
-printf '%s\n' 'scripts/w.test.sh:1-2:wider than the hunk' > "$vr/wide.list"
-_vrun "$vr/two" --hand-edits "$vr/wide.list"; vr_wide_rc="$vr_rc"; vr_wide_out="$vr_out"
-# an entry that runs past the changed lines into UNCHANGED ones is caught only by the final range check (no per-line visit reaches it)
-_vsetup "$vr/edge"; _vmut sed -i "6s/.*/echo HAND/" "$vr/edge/scripts/w.test.sh"
-printf '%s\n' 'scripts/w.test.sh:6-7:runs into the unchanged last line' > "$vr/edge.list"
-_vrun "$vr/edge" --hand-edits "$vr/edge.list"; vr_edge_rc="$vr_rc"; vr_edge_out="$vr_out"
-[[ "$vr_ctl_rc" == 0 && "$vr_stale_rc" == 1 && "$vr_stale_out" == *"stale hand-edit entry"* && "$vr_wide_rc" == 1 && "$vr_wide_out" == *"covers a line that is a plain transform"* \
-   && "$vr_edge_rc" == 1 && "$vr_edge_out" == *"covers lines that are not hand edits"* ]] \
-  || sweep_probe_fail+=("verify-stale: a listed edit absent from the diff exited ${vr_stale_rc:-<err>}, an over-wide entry ${vr_wide_rc:-<err>} and an entry running into unchanged lines ${vr_edge_rc:-<err>} (want 1, 1 and 1: 'stale hand-edit entry', 'covers a line that is a plain transform', 'covers lines that are not hand edits')")
-# what the base-tree swept set, the merge-base, the -z paths and the count-changing/insertion hunks each buy (every one was a silent pass before)
-_vsetup "$vr/del"; _vmut _cleangit -C "$vr/del" rm -q --cached scripts/w.test.sh; rm -f "$vr/del/scripts/w.test.sh"
-_vrun "$vr/del"; vr_del_rc="$vr_rc"; vr_del_out="$vr_out"
-_vsetup "$vr/mode"; _vmut chmod +x "$vr/mode/scripts/w.test.sh"
-_vrun "$vr/mode"; vr_mode_rc="$vr_rc"; vr_mode_out="$vr_out"
-[[ "$vr_ctl_rc" == 0 && "$vr_del_rc" == 1 && "$vr_del_out" == *"scripts/w.test.sh: status D"* && "$vr_mode_rc" == 1 && "$vr_mode_out" == *"file mode changed"* ]] \
-  || sweep_probe_fail+=("verify-silent-passes: a DELETED swept file exited ${vr_del_rc:-<err>} (want 1, 'status D') and a MODE change on a converted file exited ${vr_mode_rc:-<err>} (want 1, 'file mode changed'): ${vr_del_out//$'\n'/ } / ${vr_mode_out//$'\n'/ }")
-_vsetup "$vr/cnt"; _vmut sed -i '7c\
-echo one\
-echo two' "$vr/cnt/scripts/w.test.sh"
-printf '%s\n' 'scripts/w.test.sh:7:one line became two' > "$vr/cnt.list"
-_vrun "$vr/cnt" --hand-edits "$vr/cnt.list"; vr_cnt_rc="$vr_rc"; vr_cnt_out="$vr_out"
-_vsetup "$vr/ins"; _vmut bash -c 'printf "inserted\n" >> "$1"' _ "$vr/ins/scripts/w.test.sh"
-printf '%s\n' 'scripts/w.test.sh:7+:one line appended' > "$vr/ins.list"
-_vrun "$vr/ins" --hand-edits "$vr/ins.list"; vr_ins_rc="$vr_rc"; vr_ins_out="$vr_out"
-[[ "$vr_ctl_rc" == 0 && "$vr_cnt_rc" == 0 && "$vr_cnt_out" == *"hand-edited: 2"* && "$vr_ins_rc" == 0 && "$vr_ins_out" == *"hand-edited: 1"* ]] \
-  || sweep_probe_fail+=("verify-listed-hunks: a listed count-changing hunk exited ${vr_cnt_rc:-<err>} (want 0, 'hand-edited: 2') and a listed pure insertion exited ${vr_ins_rc:-<err>} (want 0, 'hand-edited: 1'): ${vr_cnt_out//$'\n'/ } / ${vr_ins_out//$'\n'/ }")
-# a swept file that git treats as binary (a NUL in its first 8000 bytes) leaves no text hunk, so a listed insertion that would pass as text must fail
-_vsetup "$vr/nul"; _vmut bash -c 'printf "x\0y\n" >> "$1"' _ "$vr/nul/scripts/w.test.sh"
-_vrun "$vr/nul" --hand-edits "$vr/ins.list"; vr_nul_rc="$vr_rc"; vr_nul_out="$vr_out"
-[[ "$vr_ins_rc" == 0 && "$vr_nul_rc" == 1 && "$vr_nul_out" == *"no text hunk"* ]] \
-  || sweep_probe_fail+=("verify-binary: a NUL-bearing appended line, listed exactly like the passing text insertion, exited ${vr_nul_rc:-<err>} (want 1, 'no text hunk'): ${vr_nul_out//$'\n'/ }")
-# the diff is taken against the merge-base, so a sibling commit that landed on the base branch after this slice forked is not this slice's edit; a non-ASCII swept path is judged
-_mbsetup() { # <dir>: base commit, a non-ASCII swept file on a branch, then a sibling commit on the base branch
-  local d="$1"
-  assert_fixture_dir "$d"
-  _vrepo "$d" || return 1
-  mb_main="$(_cleangit -C "$d" branch --show-current)" || return 1
-  printf '%s\n' 'echo "$z" | grep -q uni' > "$d/scripts/"$'caf\303\251'".test.sh" || return 1
-  _cleangit -C "$d" add -A && _cleangit -C "$d" commit -qm uni || return 1
-  _cleangit -C "$d" checkout -q -b slice && _cleangit -C "$d" checkout -q "$mb_main" || return 1
-  printf 'echo sibling\n' >> "$d/scripts/v.test.sh" && _cleangit -C "$d" commit -qam sibling && _cleangit -C "$d" checkout -q slice
-}
-mb_main=""
-_mbsetup "$vr/mb" || sweep_probe_fail+=("verify-merge-base-setup: could not build the merge-base fixture repo (git or the tool failed before the check ran)")
-mb_apply="$(_cm apply --root "$vr/mb" --write --row '*' 2>&1)" || sweep_probe_fail+=("verify-merge-base-setup: apply failed on the merge-base fixture: ${mb_apply//$'\n'/ }")
-vr_mb_out="$(_cm verify --root "$vr/mb" --base "$mb_main" 2>&1)" && vr_mb_rc=0 || vr_mb_rc=$?
-[[ "$vr_mb_rc" == 0 && "$vr_mb_out" == *"unexplained: 0"* && "$vr_mb_out" == *"verified: 13"* ]] \
-  || sweep_probe_fail+=("verify-merge-base: with a sibling commit on the base branch and a non-ASCII swept file, verify exited ${vr_mb_rc:-<err>} (want 0 with 'verified: 13'; a tip-based diff reports the sibling's line, a quoted path is skipped): ${vr_mb_out//$'\n'/ }")
+# Return wiring. The sweep's return code reaches this suite's exit status through statements the probe rows above do not exercise: the capture and
+# the fold at the top level (adjacent, unindented, once each), the probe verdict gate below, and a single exit. Each pinned pattern is anchored to
+# the whole statement at column 0 on a non-comment line, so a mention in a comment or in a message string (this check's own) cannot satisfy it,
+# and an indented copy inside a dead branch or a function does not count. A sweep that never ran by any route (an unindented dead branch
+# included) is caught separately: SWEEP_N, set only by sweep_main, must hold a swept-file count. Statements that can still reach the exit (an
+# inserted assignment or `exit` or a trap between these pins and the gate, a deleted direct block, an `exit` ahead of the pins) are not pinned
+# here: the guard cannot defend its own control flow beyond these text pins, and a diff that edits it is reviewed.
+_self="$(cd -P "$REPO_ROOT/.claude/hooks" && pwd -P)/grep-q-pipe-guard.test.sh"   # absolute: the script has cd'd to the repo root, a relative ${BASH_SOURCE[0]} would not resolve
+_code=$(grep -vE '^[[:space:]]*#' "$_self" || true)
+wire_a=$(grep -cE '^sweep_main \. "\$SWEEP_FLOOR" \|\| sweep_rc=\$\?[[:space:]]*$' <<<"$_code" || true)
+wire_b=$(grep -cE '^sweep_fold "\$sweep_rc"[[:space:]]*$' <<<"$_code" || true)
+wire_adj=$(grep -A1 -E '^sweep_main \. "\$SWEEP_FLOOR" \|\| sweep_rc=\$\?[[:space:]]*$' <<<"$_code" | grep -cE '^sweep_fold "\$sweep_rc"[[:space:]]*$' || true)
+[[ "$wire_a" == 1 && "$wire_b" == 1 && "$wire_adj" == 1 ]] \
+  || sweep_probe_fail+=("return-wiring: unindented capture ${wire_a:-<err>}, fold ${wire_b:-<err>}, capture immediately followed by the fold ${wire_adj:-<err>} (want exactly 1 each). This protects the path by which the sweep verdict reaches this suite's exit status. Expected, at column 0 and once each: 'sweep_main . \"\$SWEEP_FLOOR\" || sweep_rc=\$?' directly followed by 'sweep_fold \"\$sweep_rc\"'. Fix: restore the statement; if it moved legitimately, update this pin, not the sweep")
+# The verdict gate and the final exit are pinned the same way, but they report DIRECTLY (FAIL and exit 1 below, just ahead of the gate): a failure
+# appended to sweep_probe_fail is read by that very gate, so a gate edited to always pass would silence its own pin.
+wire_gate=$(grep -cE '^if \(\( \$\{#sweep_probe_fail\[@\]\} == 0 \)\); then[[:space:]]*$' <<<"$_code" || true)
+wire_exit=$(grep -cE '^exit "\$FAIL"[[:space:]]*$' <<<"$_code" || true)
+wire_else=$(grep -B1 -E '[e]cho "FAIL: the derived sweep.s own probe is broken' <<<"$_code" | grep -cE '^  FAIL=1[[:space:]]*$' || true)
+wire_exit1=$(grep -A2 -E '[e]cho "FAIL: the derived sweep.s own probe is broken' <<<"$_code" | grep -cE '^  exit 1([[:space:]]|$)' || true)
 
 # A probe check that is DELETED cannot fail, so the number of checks is pinned: every check above ends in
 # `|| sweep_probe_fail+=(...)` (or `&& ...` for a negative control), so the count of NON-COMMENT lines carrying that tail is the count
-# of checks (the pin's own line and its counting line included); comment lines are excluded, so rewording a comment can neither hide a
-# deletion nor trip the pin, and a `#` inside a check's own string does not hide it from the count.
-SWEEP_PROBE_CHECKS=62
-probe_checks=$(grep -vE '^[[:space:]]*#' "${BASH_SOURCE[0]}" | grep -c 'sweep_probe_fail+=(' || true)
+# of checks (the pin's own line included); comment lines are excluded, so rewording a comment can neither hide a deletion nor trip the pin,
+# and the append is counted only where an `||` or `&&` operator immediately precedes it, so a bare tail with no operator cannot stand in for
+# a deleted check (a decoy that fabricates a whole `|| sweep_probe_fail+=(` line is an edit of the probe itself, which review reads).
+SWEEP_PROBE_CHECKS=36
+probe_checks=$(grep -cE '(\|\||&&)[[:space:]]+sweep_probe_fail\+=\(' <<<"$_code" || true)
 [[ "$probe_checks" == "$SWEEP_PROBE_CHECKS" ]] \
   || sweep_probe_fail+=("probe-count: this probe carries ${probe_checks:-<err>} checks, pinned at $SWEEP_PROBE_CHECKS — a deleted check cannot fail, so restore it or, if you ADDED one, raise SWEEP_PROBE_CHECKS")
+if [[ "$wire_gate" != 1 || "$wire_exit" != 1 || "$wire_else" != 1 || "$wire_exit1" != 1 || ! "${SWEEP_N:-}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "FAIL: return-wiring: the probe verdict gate matched ${wire_gate:-<err>} lines, the final exit ${wire_exit:-<err>}, the gate's FAIL=1 ${wire_else:-<err>} and its exit 1 ${wire_exit1:-<err>} (want exactly 1 each, at column 0; the gate's else body keeps the bare lines \'  FAIL=1\' and \'  exit 1\' directly around its echo and printf), and the sweep recorded SWEEP_N='${SWEEP_N:-}' (want a swept-file count: a sweep that never ran leaves it empty). Expected 'if (( \${#sweep_probe_fail[@]} == 0 )); then' and 'exit \"\$FAIL\"'. Fix: restore the statement; if it moved legitimately, update this pin, not the sweep"
+  exit 1
+fi
 if (( ${#sweep_probe_fail[@]} == 0 )); then
   echo "PASS: grep-q-sweep-probe-pass (PATTERN_V2 fixtures, sweep wiring, deferral checks)"
 else
