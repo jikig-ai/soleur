@@ -303,7 +303,7 @@ describe.skipIf(!canRunDatabaseTest)("migration 145 Codex mode SQL on disposable
     const database = `codex_backfill_test_${process.pid}_${Math.floor(Math.random() * 1_000_000)}`;
     const create = docker(["exec", container, "createdb", "-U", dbUser, database]);
     expect(create.status, create.stderr).toBe(0);
-    if (process.env.CODEX_TEST_REPORT_DATABASES === "1") process.stderr.write(`disposable test database: ${database}\n`);
+    if (process.env.CODEX_TEST_REPORT_DATABASES) process.stderr.write(`disposable test database: ${database}\n`);
 
     try {
       const migrationSql = readFileSync(migration, "utf8");
@@ -356,7 +356,7 @@ describe.skipIf(!canRunDatabaseTest)("migration 145 Codex mode SQL on disposable
     const database = `codex_rebind_rpc_test_${process.pid}_${Math.floor(Math.random() * 1_000_000)}`;
     const create = docker(["exec", container, "createdb", "-U", dbUser, database]);
     expect(create.status, create.stderr).toBe(0);
-    if (process.env.CODEX_TEST_REPORT_DATABASES === "1") process.stderr.write(`disposable test database: ${database}\n`);
+    if (process.env.CODEX_TEST_REPORT_DATABASES) process.stderr.write(`disposable test database: ${database}\n`);
 
     try {
       const migrationSql = readFileSync(migration, "utf8");

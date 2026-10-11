@@ -951,10 +951,31 @@
   cleanly at `21f5214c3ac0b5d5332c8962fa7d37a5b6724ef6`. The C.9 test source
   remains byte-identical to main; the watchdog implementation is unchanged.
   Main's shell-test registration moves C.9 to a different shard, which is not
-  a correction. The merge is local and requires an evidence commit/push before
-  a fresh-head CI verdict can be observed.
+  a correction. The merge and evidence were pushed at
+  `c233db7b4e4e56fff192c0a1d751708e007fd51d`; fresh-head CI was then observed.
 - The incoming main range contains unrelated committed whitespace findings in
   `knowledge-base/project/plans/2026-10-10-feat-dormant-integration-ci-plan.md`
   and `knowledge-base/project/specs/feat-one-shot-grep-q-wave-b-s7-codemod-guard-cleanup/evidence.md`;
   the feature-range whitespace check passes. These findings were preserved as
   upstream main content.
+
+## Continuation update — 2026-10-11 integration-gate CI finding
+
+- Exact-head CI run `38130936736` for `c233db7b4e4e56fff192c0a1d751708e007fd51d`
+  failed `lint-bot-statuses` and the required `test` aggregate. The lint failure
+  was attributable to this PR: `CODEX_TEST_REPORT_DATABASES === "1"` only
+  enabled optional logging of synthetic disposable-database names, but the new
+  integration-gate lint interprets that syntax as a CI suite gate and flagged
+  the root-level fixture as not collected. Both reads now use a truthy-presence
+  check, preserving opt-in logging without creating a suite gate. This change
+  is uncommitted at this update and awaits pushed-head CI verification.
+- The `test` aggregate failed because the PR is draft: its run showed the
+  scripts and Web-platform test legs skipped and emitted `draft: full battery
+  owed at ready`. This is the workflow's deliberate draft guard, not a test
+  assertion or a new C.9 recurrence; no additional test suite ran. Tenant
+  integration was still pending in the monitor at the time of this note.
+- The `gh run view` step query used an unsupported top-level `steps` JSON field;
+  the supported shape is `jobs[].steps[]`. The job-log API response also
+  required `--allow-escape-sequences` before redirecting. No credentials were
+  printed or inspected. Broader local suites and all recovery/qualification
+  holds remain unchanged.

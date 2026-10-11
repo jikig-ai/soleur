@@ -218,3 +218,13 @@ the command's working directory. An `rg` call without that context was refused
 before process creation. `git diff --check` on a large incoming main range can
 also fail on unrelated committed whitespace; bound and report the exact
 offending path and hunk before resolving the feature merge.
+
+`gh run view --json` exposes `jobs`, with each job carrying its `steps`; asking
+for a top-level `steps` field is rejected. The GitHub Actions job-logs endpoint
+returns log text containing terminal escapes, so `gh api` requires
+`--allow-escape-sequences` when redirecting that response to an ignored
+diagnostic file.
+
+Keep independent GitHub CLI pipelines in separate commands or parallel tool
+calls; a comma in a `jq` program does not sequence shell commands and can make
+`jq` parse the next CLI invocation as an option.
