@@ -1711,7 +1711,9 @@ _canary_diag_emit() {
 # This is the sanctioned exception to git-data-bootstrap.sh's "never raw kernel lines" rule: values of a fixed key
 # set, not lines. Both reads take the NEWEST lines first (tac), so the 64 KiB cap drops the oldest, never the
 # denial that happened seconds ago. No sudo, no /var/log, no follow flag: every read is `timeout -k 1 3`.
-# SOLEUR-DEBT: one-incident diagnostic row for the #9860 sandbox failure; remove or demote it once the issue closes with the cause named
+# SOLEUR-DEBT: diagnostic row added for the #9860 sandbox failure (cause named H6; the shim-side fix is
+# #10032). Keep it while src=none: a least-privilege kernel-stream read grant for the deploy user is the
+# open follow-up (#10045); demote or remove once that lands or #9860's closure makes the row moot.
 _canary_kdeny_read() {
   local rung raw rc state src=none j=none d=skip total=0 hits=0 mproc=0 fields="" counts first line t h m hint
   for rung in journal dmesg; do
@@ -2847,7 +2849,7 @@ verify_image_signature() {
 # Each arm's soak lives in its own state file.
 run_canary_replay() {
   local mode_flag="$1" state_file="$2" sentry_op="$3" label="$4"
-  local verdict reason sdk_version exec_rc out err_file docker_err
+  local verdict reason sdk_version exec_rc out err_file docker_err detail
   # Capture docker's OWN stderr so a persistent infra_error (rc 126/127: "no such
   # container", "exec format error") carries its CAUSE onto the no-SSH surfaces —
   # the numeric rc alone would otherwise be the only signal (obs review P2).
@@ -2880,6 +2882,13 @@ run_canary_replay() {
     # re-blank it. Missing key ⇒ "" (the soak surface's sdk_version was empty
     # before this — the key never matched).
     sdk_version="$(printf '%s' "$out" | jq -r '.sdkVersion // .sdk_version // ""' 2>/dev/null || echo '')"
+    # #10032: the 65-refusal verdict carries the first `bwrap-shim:` line as
+    # `.detail` — ~10 distinct refusal classes share `bwrap_shim_refused`, and
+    # docker exec's stderr is already consumed by classification (agent-native
+    # review W2: a flat reason gives the no-SSH operator nothing to triage).
+    # Fold it into the reason the same way docker_exec_rc folds its stderr.
+    detail="$(printf '%s' "$out" | jq -r '.detail // ""' 2>/dev/null | tr -dc '[:print:]' | cut -c1-200 || echo '')"
+    [[ -n "$detail" ]] && reason="$reason: $detail"
   fi
   if [[ "$err_file" != "/dev/null" ]]; then rm -f "$err_file" 2>/dev/null || true; fi
   write_sandbox_canary_state "$verdict" "$reason" "$sdk_version" "$state_file" \
