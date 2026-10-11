@@ -255,7 +255,7 @@ suite-shape tokens.
    siblings — `terraform fmt -check` must stay green).
 
 3. `apps/web-platform/infra/sentry/alert-reference.json`: inside the `cron-monitor-failure` entry,
-   change the `detectorIds` tail `"2359391"` → `"2359391",` and append `      "2403709"` (8-space
+   change the `detectorIds` tail `"2359391"` → `"2359391",` and append `      "2403709"` (6-space
    element indent). The id was read live at plan time: detector `2403709`,
    `type: monitor_check_in_failure`, `workflowIds: []` — the detector this route binds. Verify:
 
