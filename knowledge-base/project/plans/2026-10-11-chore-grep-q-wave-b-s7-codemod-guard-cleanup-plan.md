@@ -24,7 +24,7 @@ decision challenge (user-challenge: the brief names both under S7; the split fol
 
 This PR (S7a) delivers five things, each owned by one Guard Contract entry or one deletion:
 
-1. Delete `scripts/grep-q-drain-codemod.py` and the guard's codemod selftest block (29 probe checks), and move `SWEEP_PROBE_CHECKS` by the measured number.
+1. Delete `scripts/grep-q-drain-codemod.py` and the guard's codemod selftest block (29 probe checks; review restored the two exit-status equivalence checks it held), and move `SWEEP_PROBE_CHECKS` by the measured number.
 2. Replace the two glob rows with six file-exact `=` rows (one per file, ten hits), widen `_ts_re` so a glob-free test path classifies as test-shaped, and drop the dead `^scripts/(lib/)?test-\*$` alternative. This closes the add-one-delete-one hole the guard header names. The table then holds twelve rows (six exact test rows, six carrier rows).
 3. Add test-shaped canary paths (a population floor by identity, derived by a separate listing with the sweep's own pathspec) so a `.gitignore` entry or pathspec exclusion hiding only `*.test.sh` files under a swept root turns the guard red (decision-challenges item 24 of S6).
 4. Pin the guard's own top-level wiring (`|| sweep_rc=$?` and `sweep_fold "$sweep_rc"`), unpinned today (named in S6's NOT-fixed list). The probe verdict gate's `exit 1` is not pinned: the arm sets `FAIL=1` and the file ends with the already-pinned `exit "$FAIL"`, so removing it changes no exit status (review finding; cut).
@@ -37,7 +37,7 @@ Premise validation (Phase 0.6). Checked against `origin/main` at `3eb0238125`:
 - `#9217`, `#7376`, `#6601`, `#7797`, `#9482` are open; no open PR touches the guard or the codemod (`gh pr list` file probe returned none); no open code-review issue names a planned file (the only hit for the touched test files is `#8659`, a different concern, acknowledged).
 - The deferral table has exactly the eight rows above (`bash .claude/hooks/grep-q-pipe-guard.test.sh` prints eight `DEFERRED:` lines; ceiling total 10).
 - Hit locations under the two data-pin rows (code lines, comments and marked lines dropped, `git grep -nE` with `PATTERN_V2` over the two globs): `.claude/hooks/background-poll-prefer-monitor.test.sh:84`, `.claude/hooks/pkill-self-match-guard.test.sh:223,224,225,280` (5 hits, 2 files); `plugins/soleur/test/deploy-arm-mutations.sh:73`, `deploy-arm.test.sh:676`, `ship-phase-7-poll-fixtures.test.sh:215`, `worktree-manager-porcelain-sigpipe.test.sh:229,236` (5 hits, 4 files; `ship-learning-probe.test.ts:214` is a `.ts` file the sweep does not cover).
-- The codemod has no caller: `git grep -l grep-q-drain-codemod -- . ':!knowledge-base' ':!.claude/hooks/grep-q-pipe-guard.test.sh'` returns only the tool itself. The selftest is guard lines 1051 to 1392 (29 `sweep_probe_fail+=(` checks, the `codemod-*` and `verify-*` families) out of 62 pinned.
+- The codemod has no caller: `git grep -l grep-q-drain-codemod -- . ':!knowledge-base' ':!.claude/hooks/grep-q-pipe-guard.test.sh'` returns nothing outside the guard's own selftest. The selftest is base guard lines 1051 to 1391 (29 `sweep_probe_fail+=(` checks, the `codemod-*` and `verify-*` families) out of 62 pinned.
 - The producer-side join is real work: 40 candidate `(printf|echo|cat) ... | <verb>` lines over production roots, about 29 after dropping fixtures, `.py` and `.ts` files (J0 below), spread over 20 files and their owner suites. That is a separate PR.
 
 Property List (Phase 0.6b):
@@ -57,7 +57,7 @@ Cut List (Phase 0.6b), each cut names the property it would have bought and what
 - A wall-time measurement as an acceptance criterion: cut (depends on machine load); the number may appear in the evidence file as context only.
 - Removing the six carrier rows: gated on a host replace (ADR-100, ADR-169); stays.
 
-Value-proposition measurement (Phase 0.6c): the saving claimed is ownership cost (a 785-line tool plus a 342-line selftest, 29 of 62 probe checks, that no row can exercise). Measured by `wc -l scripts/grep-q-drain-codemod.py` (785) and the guard line range above; the guard's run time with the selftest is about 7 s of which the selftest share is measured at work and recorded, not asserted here.
+Value-proposition measurement (Phase 0.6c): the saving claimed is ownership cost (a 785-line tool plus a 341-line selftest, 29 of 62 probe checks, that no row can exercise). Measured by `wc -l scripts/grep-q-drain-codemod.py` (785) and the guard line range above; the guard's run time with the selftest is about 7 s of which the selftest share is measured at work and recorded, not asserted here.
 
 ## Research Reconciliation: Spec vs. Codebase
 
@@ -80,7 +80,7 @@ Phase 2 (D3, canaries by identity). Add `SWEEP_TEST_CANARIES` (four paths, one p
 
 Phase 3 (D4, wiring pins). Add one probe check that counts, over non-comment lines, the anchored full statements `sweep_main . "$SWEEP_FLOOR" || sweep_rc=$?` and `sweep_fold "$sweep_rc"` (each expected exactly once). The pin's own line assembles each pattern from two quoted parts so it cannot match itself. The failure message names what the pin protects (the sweep verdict reaching the exit code), what it expects (the two statements at the top level, once each) and the fix (restore the statement; if it moved legitimately, update the pin, not the sweep).
 
-Phase 4 (D1). `git rm scripts/grep-q-drain-codemod.py`; delete guard lines 1051 to 1392 (the selftest header, `_cm`, fixtures and the 29 checks; nothing after 1392 uses `_cm`, `_cleangit`, `assert_fixture_dir`, `_mkguard`, `_vrepo`, `CM` or `vr`, and `sweeproot`, `okroot`, `_vp`, `sw_roots` are defined above 1051). Recompute `SWEEP_PROBE_CHECKS` from the file (`grep -vE '^[[:space:]]*#' | grep -c 'sweep_probe_fail+='`), never by subtraction alone: expected 33 plus the checks added in Phases 2 and 3. Record the deletion commit SHA in the PR body so the tool can be recovered from history.
+Phase 4 (D1). `git rm scripts/grep-q-drain-codemod.py`; delete base guard lines 1051 to 1391 (the selftest header, `_cm`, fixtures and the 29 checks; nothing after 1391 uses `_cm`, `_cleangit`, `assert_fixture_dir`, `_mkguard`, `_vrepo`, `CM` or `vr`, and `sweeproot`, `okroot`, `_vp`, `sw_roots` are defined above 1051). Recompute `SWEEP_PROBE_CHECKS` from the file (`grep -vE '^[[:space:]]*#' | grep -c 'sweep_probe_fail+='`), never by subtraction alone: expected 33 plus the checks added in Phases 2 and 3. Record the deletion commit SHA in the PR body so the tool can be recovered from history.
 
 Phase 5 (D5, wording). Rewrite the header paragraphs naming the codemod and the KNOWN HOLE, the S6 and S5 row commentary, and the `SWEEP_DEFERRALS` block comment to the S7a state: the codemod is gone, hand conversion with the Rewrite table is the path (S7b is hand conversion), the producer side is still open and tracked on #9217 as S7b. Add one comment line with the command that recomputes `SWEEP_PROBE_CHECKS`. Do not write that the series is finished.
 
@@ -242,7 +242,7 @@ Required on every plan (plan Phase 2.4; halted at deepen-plan 4.12). Asks are qu
 
 - [x] AC-1 `bash .claude/hooks/grep-q-pipe-guard.test.sh`, run from inside the repo in a checkout with an empty `git status --porcelain` under `ulimit -v 6000000`, exits 0 and prints exactly twelve `DEFERRED:` lines (`... | grep -c '^DEFERRED:'` prints 12), none naming a glob (`.claude/*.test.sh` and `plugins/soleur/test/*` absent).
 - [x] AC-2 `test -e scripts/grep-q-drain-codemod.py` fails, and `git grep -n grep-q-drain-codemod -- . ':!knowledge-base'` prints nothing for non-comment lines (run once; no permanent check).
-- [x] AC-3 `SWEEP_PROBE_CHECKS` equals `grep -vE '^[[:space:]]*#' .claude/hooks/grep-q-pipe-guard.test.sh | grep -c 'sweep_probe_fail+='`, and the number moved by 29 removed plus the checks added in Phases 2 and 3; arithmetic recorded in `evidence.md`.
+- [x] AC-3 `SWEEP_PROBE_CHECKS` equals `grep -vE '^[[:space:]]*#' .claude/hooks/grep-q-pipe-guard.test.sh | grep -c 'sweep_probe_fail+='`, and the count uses the operator-anchored recipe in the guard header, and the arithmetic (62 pinned under the old substring recipe, 61 by the anchored one, 29 removed, 4 added) is recorded in `evidence.md`.
 - [x] AC-4 The red-first run (Phase 0) is recorded in `evidence.md`: each new row read FAIL for the named reason before its edit landed.
 - [x] AC-5 Mutation rows M1 to M14 and harness rows H1 to H6 are each graded against the committed guard, one at a time under `ulimit -v 6000000`, results in `evidence.md`; a row that cannot be run is listed UNVERIFIED with the reason, never counted as passed.
 - [x] AC-6 M1 (moving a hit between two `.claude` test files) reads RED where the base guard read GREEN, both runs recorded.
@@ -277,3 +277,14 @@ Required on every plan (plan Phase 2.4; halted at deepen-plan 4.12). Asks are qu
 - The sweep reads the working tree (`--no-index`): a stray untracked `.sh` or `.yml` changes the hit set, so run the guard and the matrix from a clean checkout and leave no scratch clone behind (`/var/tmp` has been near full).
 - M4 and the loose-row control are separate: a `.*` widening also reddens `real-table-test-shaped`, which is why M4 uses the realistic form.
 
+## Review Round 1 (appended; the sections above are the pre-review plan)
+
+An 8-seat panel reviewed `5754128d32` (history, pattern, architecture, security, code-quality, test-design, structural enumeration, simplicity) and found no merge blocker. The PR-introduced P2s were fixed inline in the guard, each proven by a sandbox mutation (evidence.md, "Review round 1"):
+
+- The wiring pin now anchors at column 0, pins capture-then-fold adjacency, and pins the probe verdict gate and the single final `exit "$FAIL"`; the last two report directly (not through the gate they protect). It was renamed `return-wiring`.
+- The test canaries now use the sweep's own listing through one shared `sweep_git_grep` helper, cover nine test-bearing locations, and the same check lists tracked files the ignore rules hide.
+- `SWEEP_PROBE_CHECKS` is counted only where `||` or `&&` precedes the append, so a decoy tail inside a comment cannot replace a deleted check (36).
+- The two exit-status equivalence checks (`grep -q` versus `grep -c >/dev/null`) the deleted block held were restored; they never depended on the codemod.
+- A pin on loosened modes (`<=`), stale comment and message wording, and the stale-row message now names the rename case.
+
+Recorded as NOT fixed (reasons in evidence.md): an `exit` or assignment placed ahead of the pins, a count swap inside one file, the `<=` mode machinery now unused, floor slack, a colon in a swept filename, and unswept extensions.

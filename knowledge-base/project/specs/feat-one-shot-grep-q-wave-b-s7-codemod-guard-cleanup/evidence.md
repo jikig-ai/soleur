@@ -6,8 +6,8 @@ Base `3eb0238125` (origin/main at branch creation); head is the S7a branch. Ever
 
 | | lines | glob rows | file-exact rows | counted hits |
 |---|---|---|---|---|
-| before | 8 | 2 (`.claude/*.test.sh` 5, `plugins/soleur/test/*` 5) | 6 carrier rows | 10 test hits + 22 carrier hits |
-| after | 12 | 0 | 12 (six test files at 1, 4, 1, 1, 1, 2, then the six carrier rows) | same 10 + 22 |
+| before | 8 | 2 (`.claude/*.test.sh` 5, `plugins/soleur/test/*` 5) | 6 carrier rows | 10 test hits + 23 carrier hits |
+| after | 12 | 0 | 12 (six test files at 1, 4, 1, 1, 1, 2, then the six carrier rows) | same 10 + 23 |
 
 `bash .claude/hooks/grep-q-pipe-guard.test.sh | grep -c '^DEFERRED:'` prints 12 and the guard exits 0.
 
@@ -17,7 +17,7 @@ With only `GATED_TEST_ROWS` changed to the six exact paths, the guard read `FAIL
 
 ## Probe-check arithmetic (AC-3)
 
-62 pinned before. The selftest block (guard lines 1056 to 1397, 342 lines) held 29 `sweep_probe_fail+=(` checks, so 33 remained; two checks were added (`test-canaries`, `wiring`), giving 35. `grep -vE '^[[:space:]]*#' .claude/hooks/grep-q-pipe-guard.test.sh | grep -c 'sweep_probe_fail+='` prints 35 and `SWEEP_PROBE_CHECKS=35`. The guard went from 1410 to 1101 lines; its wall time from inside the repo fell from about 7.4 s to about 3 s (context, not an acceptance claim).
+62 was pinned under the old recipe (any non-comment line holding `sweep_probe_fail+=(`, which also counted the pin's own counting line); the operator-anchored recipe the guard now uses (`||` or `&&` immediately before the append) counts 61 on the same base. The selftest block (base lines 1051 to 1391, 341 lines) held 29 checks, so 32 remained; four were added (`test-canaries`, `return-wiring`, and the two exit-status equivalence checks restored in review), giving 36. `grep -vE '^[[:space:]]*#' .claude/hooks/grep-q-pipe-guard.test.sh | grep -cE '(\|\||&&)[[:space:]]+sweep_probe_fail\+=\('` prints 36 and `SWEEP_PROBE_CHECKS=36`. The guard went from 1410 to 1146 lines; its wall time from inside the repo fell from roughly 8.6 to 11 s to roughly 2.4 to 3.6 s in sandbox copies (context, not an acceptance claim).
 
 ## Codemod deletion (AC-2)
 
@@ -64,3 +64,35 @@ On the same tree as M1 (hit added in `guardrails.test.sh`, one `pkill-self-match
 ## Marked-line baseline for series Item F
 
 `git grep -h 'sigpipe-demo: intentional' -- . ':!knowledge-base' | wc -l` prints 34 repo-wide at this head.
+
+## Review round 1 (8 seats at `5754128d32`; fixes in `6e481dddff` and the commit after it)
+
+Seat verdicts: no P1 blocking merge. PR-introduced P2s, all fixed inline and each proven RED by a sandbox mutation (one at a time, restored from HEAD, control rc 0; the `wiring` check named in the first matrix above is now `return-wiring`):
+
+| Row | Mutation | Result |
+|---|---|---|
+| W1 | capture and fold wrapped in an indented dead branch | RED `return-wiring ... unindented capture 0, fold 0` |
+| W2 | `sweep_rc=0` inserted between capture and fold | RED `capture immediately followed by the fold 0` |
+| W3 | verdict gate `== 0` changed to `>= 0` | RED `return-wiring: the probe verdict gate matched 0` (direct report, rc 1) |
+| W4 | a second `exit "$FAIL"` between the pin and the gate | RED, same direct report |
+| W5 | an `exit "$FAIL"` inserted ahead of every pin | rc 0, NOT caught: a text pin cannot guard code placed before itself (documented limit) |
+| T1 | pathspec exclusion of a canary file | RED `test-canaries ... ci-deploy.test.sh` (the shared listing sees it) |
+| T2 | `.gitignore` entry hiding `plugins/soleur/skills/*/test/` | RED, names the hidden tracked files |
+| T3 | `.gitignore` entry for one tracked non-canary file | RED, names it (the class a per-file ignore used to hide) |
+| T4 | one canary deleted from the array only | RED `holds 8 entries, pinned at 9` |
+| P1 | a check's append moved into a trailing comment (decoy) | RED `probe-count: 35 checks, pinned at 36` |
+| M1 | a row loosened to `<= 99` | RED `1 rows use mode <=` |
+| E1 | equivalence harness made blind | RED `equivalence-bash ... reported NOTHING` |
+| E2 | converted form made to diverge | RED `equivalence-bash` (rows named) |
+| C1 | comment-only edit (must-PASS) | rc 0 |
+
+Before the fix the base guard (`3eb0238125`) stayed GREEN on the add-one-delete-one tree and the S7a guard went RED (AC-6, first matrix above); that result is unchanged.
+
+Recorded as NOT fixed, with reasons:
+
+- An `exit`, an assignment or a `trap` placed ahead of or between the pinned statements (W5, `FAIL=0` reset, `trap ... exit 0`): a text guard cannot defend code that runs before it, and a diff that edits the guard's control flow is reviewed; pinning each shape would churn `SWEEP_PROBE_CHECKS` without closing the class.
+- A count swap inside one file (convert one hit, add another): the count is per file by design; now stated in the row comment.
+- The `<=` mode machinery (`_loose_not_test_shaped`, `loose_ctl`, `tests_rows`) now guards a mode with no users; removing it moves the pin again, so it belongs with series Item F.
+- `SWEEP_FLOOR=1400` slack (about 400 files), a colon in a swept filename dropping its hits from comment stripping, and unswept extensions (`.ts` 1 hit, `.md`, extensionless): pre-existing, already stated limits of the sweep.
+- `grep` on `${BASH_SOURCE[0]}` without `--` (a script path starting with `-`): unreachable, the runner passes a `.claude/...` or absolute path.
+- The `-x` anchor of the canary loop has no decoy row (a decoy `vendor/.claude/hooks/guardrails.test.sh` with the real one hidden would pass if `-x` were dropped): accepted, the identity pin and the hidden-file listing cover the realistic cases.
