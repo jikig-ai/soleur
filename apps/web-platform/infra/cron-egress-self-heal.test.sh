@@ -180,12 +180,23 @@ cat > "$SHIM/sleep" <<'SHIM_EOF'
 echo "$*" >> "$SC/sleep.calls"
 [[ "${1:-}" =~ ^[0-9]+$ ]] || { echo "sleep: invalid time interval" >&2; exit 1; }
 SHIM_EOF
+cat > "$SHIM/docker" <<'SHIM_EOF'
+#!/usr/bin/env bash
+# The scope gate calls `docker ps --format '{{.Names}}'`; $SC/docker.names is the
+# container list. An absent file reads identically to a stopped container or a
+# daemon refusal — empty stdout under the caller's 2>/dev/null, so grep -qx
+# fails and the markers stay `skip` (the gw-down posture).
+case "$*" in
+  "ps --format {{.Names}}") cat "$SC/docker.names" 2>/dev/null || true ;;
+  *) echo "docker shim: unhandled: $*" >&2; exit 99 ;;
+esac
+SHIM_EOF
 cat > "$WORK/loader-stub.sh" <<'SHIM_EOF'
 #!/bin/bash
 echo "LOADER" >> "$CALLS"
 exit "${LOADER_RC:-0}"
 SHIM_EOF
-chmod +x "$SHIM/nft" "$SHIM/systemctl" "$SHIM/timeout" "$SHIM/sleep" "$WORK/loader-stub.sh"
+chmod +x "$SHIM/nft" "$SHIM/systemctl" "$SHIM/timeout" "$SHIM/sleep" "$SHIM/docker" "$WORK/loader-stub.sh"
 
 JUMP_PRESENT='table ip filter {
 	chain DOCKER-USER {
@@ -239,9 +250,37 @@ GW_FULL='table ip filter {
 		ct state new ip daddr @soleur_egress_gw_deny counter drop comment "soleur-egress-gw: deny drop"
 	}
 }'
+# #9534 scope fixtures — the member-drop forms the loader bakes. GW_UNSCOPED is
+# the gw-down bake (plain `ct state new ... drop`, no `saddr !=`: every upstream
+# dial dies, silently); GW_SCOPED is the gw-up bake (the member drop exempts the
+# gateway's own address). CHAIN_GW_OK is CHAIN_FULL plus the docker0→gw accept
+# the loader interpolates only when it can see the gateway (cron-egress-nftables.sh
+# › GW_ACCEPT_LINE / GW_MEMBER_LINE).
+GW_UNSCOPED='table ip filter {
+	chain SOLEUR-EGRESS-GW {
+		ct state new ip daddr @soleur_egress_gw_deny limit rate 10/minute burst 50 packets log prefix "egress-gw-deny: " level notice comment "soleur-egress-gw: deny log"
+		ct state new ip daddr @soleur_egress_gw_deny counter drop comment "soleur-egress-gw: deny drop"
+		ct state new counter drop comment "soleur-egress-gw: non-gateway member drop"
+	}
+}'
+GW_SCOPED='table ip filter {
+	chain SOLEUR-EGRESS-GW {
+		ct state new ip daddr @soleur_egress_gw_deny limit rate 10/minute burst 50 packets log prefix "egress-gw-deny: " level notice comment "soleur-egress-gw: deny log"
+		ct state new ip daddr @soleur_egress_gw_deny counter drop comment "soleur-egress-gw: deny drop"
+		ct state new ip saddr != 172.31.100.2 counter drop comment "soleur-egress-gw: non-gateway member drop"
+	}
+}'
+CHAIN_GW_OK='table ip filter {
+	chain SOLEUR-EGRESS {
+		ip daddr @soleur_egress_allow accept comment "soleur-egress: allowlist"
+		ip daddr 172.31.100.2 tcp dport 8443 accept comment "soleur-egress: egress gateway (#9534)"
+		limit rate 10/minute burst 50 packets log prefix "egress-blocked: " level notice comment "soleur-egress: default drop log"
+		counter packets 3 bytes 180 drop comment "soleur-egress: default drop"
+	}
+}'
 CHAIN_NOISY="$(printf 'table ip filter {\n\tchain SOLEUR-EGRESS {\n'; for i in $(seq 1 400); do printf '\t\tip daddr 10.%d.%d.1 tcp dport 443 accept comment "soleur-egress: noise"\n' "$((i / 250))" "$((i % 250))"; done; printf '\t\tlimit rate 10/minute burst 50 packets log prefix "egress-blocked: " level notice comment "soleur-egress: default drop log"\n\t\tcounter packets 3 bytes 180 drop comment "soleur-egress: default drop"\n\t}\n}')"
 
-# scenario <name> <jump-out> <chain-out> <failfirst-jump> <failfirst-chain> <rc-jump> <rc-chain> [flags: sigpipe-jump enoent-jump enoent-chain enoent1-jump enoent2-jump ruleerr-jump lib127-jump enoent2-chain ruleerr-chain lib127-chain]
+# scenario <name> <jump-out> <chain-out> <failfirst-jump> <failfirst-chain> <rc-jump> <rc-chain> [flags: sigpipe-jump enoent-jump enoent-chain enoent1-jump enoent2-jump ruleerr-jump lib127-jump enoent2-chain ruleerr-chain lib127-chain gw-enoent gw-unscoped gw-scoped gw-running]
 scenario() {
   local d="$WORK/sc.$1"
   assert_fixture_dir "$WORK"
@@ -265,16 +304,22 @@ scenario() {
   # `gw-enoent` models the chain flushed (probe reads it absent -> heal).
   printf '%s\n' "${GW_OUT:-$GW_FULL}" > "$d/gw.out"
   [[ " ${8:-} " == *" gw-enoent "* ]] && : > "$d/gw.enoent"
+  # Scope check (#9534): gw-unscoped/gw-scoped select the member-drop form;
+  # `gw-running` writes docker.names so the docker shim reports the gateway —
+  # the scope markers are only probed while it runs.
+  [[ " ${8:-} " == *" gw-unscoped "* ]] && printf '%s\n' "$GW_UNSCOPED" > "$d/gw.out"
+  [[ " ${8:-} " == *" gw-scoped "* ]] && printf '%s\n' "$GW_SCOPED" > "$d/gw.out"
+  [[ " ${8:-} " == *" gw-running "* ]] && printf 'soleur-egress-gw\n' > "$d/docker.names"
   echo "$d"
 }
-# probe_out <lib> <scenario-dir>  -> "J|D|L|rcj|rcd|read_failed|read_retried|heal"
+# probe_out <lib> <scenario-dir>  -> "J|D|L|rcj|rcd|read_failed|read_retried|heal|gwaccept|gwmember"
 # PROBE_SIGPIPE_IGNORED=1 runs the probe with SIGPIPE ignored on entry (the shim's shim.sigign proves it).
 probe_out() {
   ${PROBE_SIGPIPE_IGNORED:+with_sigpipe_ignored} env -i PATH="$SHIM:/usr/bin:/bin" SC="$2" NFT_RETRY_SLEEP="${NFT_RETRY_SLEEP:-0}" LIB="$1" bash -c '
     set -euo pipefail
     source "$LIB"
     enforcement_probe
-    printf "%s|%s|%s|%s|%s|%s|%s|%s\n" "$ENF_JUMP" "$ENF_DROP" "$ENF_LOG" "$ENF_RC_JUMP" "$ENF_RC_DROP" "$ENF_READ_FAILED" "$ENF_READ_RETRIED" "$ENF_HEAL"
+    printf "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n" "$ENF_JUMP" "$ENF_DROP" "$ENF_LOG" "$ENF_RC_JUMP" "$ENF_RC_DROP" "$ENF_READ_FAILED" "$ENF_READ_RETRIED" "$ENF_HEAL" "$ENF_GWACCEPT" "$ENF_GWMEMBER"
   ' 2>"$WORK/probe.err" || true
 }
 
@@ -287,49 +332,60 @@ row() { # row "label" want jump chain ffj ffc rcj rcc [flags]
   check "$1" "$2" "$(probe_out "$LIB" "$d")"
 }
 #   label                                                   want J|D|L|rcj|rcd|failed|retried|heal            jump           chain          ffj ffc rcj rcc
-row "both rules present: no heal"                           "present|present|present|0|0|false|false|false" "$JUMP_PRESENT" "$CHAIN_FULL"   0 0 0 0
-row "jump absent: heal"                                     "absent|present|present|0|0|false|false|true"   "$JUMP_ABSENT"  "$CHAIN_FULL"   0 0 0 0
+row "both rules present: no heal"                           "present|present|present|0|0|false|false|false|skip|skip" "$JUMP_PRESENT" "$CHAIN_FULL"   0 0 0 0
+row "jump absent: heal"                                     "absent|present|present|0|0|false|false|true|skip|skip"   "$JUMP_ABSENT"  "$CHAIN_FULL"   0 0 0 0
 row "drop absent, LOG rule still there: heal (old check read this as healthy)" \
-                                                            "present|absent|present|0|0|false|false|true"   "$JUMP_PRESENT" "$CHAIN_NODROP"  0 0 0 0
-row "default-drop LOG rule absent, drop present: heal"      "present|present|absent|0|0|false|false|true"   "$JUMP_PRESENT" "$CHAIN_NOLOG"   0 0 0 0
-row "both absent, every status 0 (a real external flush)"   "absent|absent|absent|0|0|false|false|true"    "$JUMP_ABSENT"  "$CHAIN_EMPTY"   0 0 0 0
-row "noisy 400-rule chain around the needle: present"       "present|present|present|0|0|false|false|false" "$JUMP_PRESENT" "$CHAIN_NOISY"   0 0 0 0
-row "SOLEUR-EGRESS-GW chain flushed: heal (#9534 gw leg)"   "present|present|present|0|0|false|false|true"  "$JUMP_PRESENT" "$CHAIN_FULL"   0 0 0 0 "gw-enoent"
+                                                            "present|absent|present|0|0|false|false|true|skip|skip"   "$JUMP_PRESENT" "$CHAIN_NODROP"  0 0 0 0
+row "default-drop LOG rule absent, drop present: heal"      "present|present|absent|0|0|false|false|true|skip|skip"   "$JUMP_PRESENT" "$CHAIN_NOLOG"   0 0 0 0
+row "both absent, every status 0 (a real external flush)"   "absent|absent|absent|0|0|false|false|true|skip|skip"    "$JUMP_ABSENT"  "$CHAIN_EMPTY"   0 0 0 0
+row "noisy 400-rule chain around the needle: present"       "present|present|present|0|0|false|false|false|skip|skip" "$JUMP_PRESENT" "$CHAIN_NOISY"   0 0 0 0
+row "SOLEUR-EGRESS-GW chain flushed: heal (#9534 gw leg)"   "present|present|present|0|0|false|false|true|skip|skip"  "$JUMP_PRESENT" "$CHAIN_FULL"   0 0 0 0 "gw-enoent"
+# --- #9534 scope rows: the markers are only probed while the gw runs (docker.names) ---
+row "gw running, unscoped member drop + missing docker0->gw accept (the #9534 defect): heal" \
+                                                            "present|present|present|0|0|false|false|true|absent|absent" "$JUMP_PRESENT" "$CHAIN_FULL"   0 0 0 0 "gw-running gw-unscoped"
+row "gw running, scoped member drop + gw accept present: no heal" \
+                                                            "present|present|present|0|0|false|false|false|present|present" "$JUMP_PRESENT" "$CHAIN_GW_OK" 0 0 0 0 "gw-running gw-scoped"
+row "gw running, member scoped but the gw accept is missing: heal" \
+                                                            "present|present|present|0|0|false|false|true|absent|present" "$JUMP_PRESENT" "$CHAIN_FULL"   0 0 0 0 "gw-running gw-scoped"
+row "gw running, gw accept present but the member drop unscoped: heal" \
+                                                            "present|present|present|0|0|false|false|true|present|absent" "$JUMP_PRESENT" "$CHAIN_GW_OK" 0 0 0 0 "gw-running gw-unscoped"
+row "gw down with the SAME unscoped drop: the correct fail-closed posture, never a heal" \
+                                                            "present|present|present|0|0|false|false|false|skip|skip" "$JUMP_PRESENT" "$CHAIN_FULL"   0 0 0 0 "gw-unscoped"
 row "a jump to SOLEUR-EGRESS-OLD (and a comment naming SOLEUR-EGRESS) is not our jump" \
-                                                            "absent|present|present|0|0|false|false|true"   "$JUMP_NEAR"    "$CHAIN_FULL"   0 0 0 0
+                                                            "absent|present|present|0|0|false|false|true|skip|skip"   "$JUMP_NEAR"    "$CHAIN_FULL"   0 0 0 0
 row "nft fails persistently (rc 1, netlink busy): unreadable, never absent" \
-                                                            "unreadable|unreadable|unreadable|1|1|true|true|true" "" ""                       9 9 1 1
+                                                            "unreadable|unreadable|unreadable|1|1|true|true|true|skip|skip" "" ""                       9 9 1 1
 row "ONLY the chain read fails persistently: jump present, drop and log unreadable" \
-                                                            "present|unreadable|unreadable|0|1|true|true|true" "$JUMP_PRESENT" ""            0 9 0 1
-row "jump read fails once then succeeds: retried, no heal"  "present|present|present|0|0|false|true|false"  "$JUMP_PRESENT" "$CHAIN_FULL"   1 0 0 0
-row "chain read fails once then succeeds: retried, no heal" "present|present|present|0|0|false|true|false"  "$JUMP_PRESENT" "$CHAIN_FULL"   0 1 0 0
-row "read fails once then succeeds and the rule IS absent"  "absent|present|present|0|0|false|true|true"    "$JUMP_ABSENT"  "$CHAIN_FULL"   1 0 0 0
+                                                            "present|unreadable|unreadable|0|1|true|true|true|skip|skip" "$JUMP_PRESENT" ""            0 9 0 1
+row "jump read fails once then succeeds: retried, no heal"  "present|present|present|0|0|false|true|false|skip|skip"  "$JUMP_PRESENT" "$CHAIN_FULL"   1 0 0 0
+row "chain read fails once then succeeds: retried, no heal" "present|present|present|0|0|false|true|false|skip|skip"  "$JUMP_PRESENT" "$CHAIN_FULL"   0 1 0 0
+row "read fails once then succeeds and the rule IS absent"  "absent|present|present|0|0|false|true|true|skip|skip"    "$JUMP_ABSENT"  "$CHAIN_FULL"   1 0 0 0
 row "a read that fails TWICE is unreadable: the retry is bounded at one" \
-                                                            "unreadable|present|present|1|0|true|true|true" "$JUMP_PRESENT" "$CHAIN_FULL"   2 0 0 0
+                                                            "unreadable|present|present|1|0|true|true|true|skip|skip" "$JUMP_PRESENT" "$CHAIN_FULL"   2 0 0 0
 row "nonzero status with a matching partial listing is still unreadable" \
-                                                            "unreadable|present|present|1|0|true|true|true" "$JUMP_PRESENT" "$CHAIN_FULL"   0 0 1 0
+                                                            "unreadable|present|present|1|0|true|true|true|skip|skip" "$JUMP_PRESENT" "$CHAIN_FULL"   0 0 1 0
 row "ENOENT on both objects (a deleted table): absent, NOT contention, not retried" \
-                                                            "absent|absent|absent|1|1|false|false|true"     "" ""                           0 0 0 0 "enoent-jump enoent-chain"
+                                                            "absent|absent|absent|1|1|false|false|true|skip|skip"     "" ""                           0 0 0 0 "enoent-jump enoent-chain"
 row "ENOENT on the SOLEUR-EGRESS chain only (chain deleted, jump present)" \
-                                                            "present|absent|absent|0|1|false|false|true"    "$JUMP_PRESENT" ""              0 0 0 0 "enoent-chain"
+                                                            "present|absent|absent|0|1|false|false|true|skip|skip"    "$JUMP_PRESENT" ""              0 0 0 0 "enoent-chain"
 row "a default-drop LOG rule lost while the link-local probe LOG rule (same egress-blocked prefix) remains: heal" \
-                                                            "present|present|absent|0|0|false|false|true"   "$JUMP_PRESENT" "$CHAIN_LLLOG"   0 0 0 0
+                                                            "present|present|absent|0|0|false|false|true|skip|skip"   "$JUMP_PRESENT" "$CHAIN_LLLOG"   0 0 0 0
 row "a missing nft binary (rc 127, '... No such file or directory'): unreadable, not ENOENT" \
-                                                            "unreadable|present|present|127|0|true|true|true" "" "$CHAIN_FULL"             0 0 0 0 "lib127-jump"
+                                                            "unreadable|present|present|127|0|true|true|true|skip|skip" "" "$CHAIN_FULL"             0 0 0 0 "lib127-jump"
 row "ENOENT text with a different status (rc 2): unreadable, the status anchor matters" \
-                                                            "unreadable|present|present|2|0|true|true|true" "" "$CHAIN_FULL"                0 0 0 0 "enoent2-jump"
+                                                            "unreadable|present|present|2|0|true|true|true|skip|skip" "" "$CHAIN_FULL"                0 0 0 0 "enoent2-jump"
 row "another error that merely ends in the same words (Could not process rule: ...): unreadable" \
-                                                            "unreadable|present|present|1|0|true|true|true" "" "$CHAIN_FULL"                0 0 0 0 "ruleerr-jump"
+                                                            "unreadable|present|present|1|0|true|true|true|skip|skip" "" "$CHAIN_FULL"                0 0 0 0 "ruleerr-jump"
 row "CHAIN read: a missing nft binary (rc 127) is unreadable, not ENOENT" \
-                                                            "present|unreadable|unreadable|0|127|true|true|true" "$JUMP_PRESENT" ""         0 0 0 0 "lib127-chain"
+                                                            "present|unreadable|unreadable|0|127|true|true|true|skip|skip" "$JUMP_PRESENT" ""         0 0 0 0 "lib127-chain"
 row "CHAIN read: ENOENT text with a different status (rc 2) is unreadable" \
-                                                            "present|unreadable|unreadable|0|2|true|true|true" "$JUMP_PRESENT" ""           0 0 0 0 "enoent2-chain"
+                                                            "present|unreadable|unreadable|0|2|true|true|true|skip|skip" "$JUMP_PRESENT" ""           0 0 0 0 "enoent2-chain"
 row "CHAIN read: another error that merely ends in the same words is unreadable" \
-                                                            "present|unreadable|unreadable|0|1|true|true|true" "$JUMP_PRESENT" ""           0 0 0 0 "ruleerr-chain"
+                                                            "present|unreadable|unreadable|0|1|true|true|true|skip|skip" "$JUMP_PRESENT" ""           0 0 0 0 "ruleerr-chain"
 row "ENOENT on the first read then a busy read: the per-attempt reset keeps it unreadable (not a stale absent)" \
-                                                            "unreadable|present|present|1|0|true|true|true" "$JUMP_PRESENT" "$CHAIN_FULL"   2 1 0 0 "enoent1-jump"
+                                                            "unreadable|present|present|1|0|true|true|true|skip|skip" "$JUMP_PRESENT" "$CHAIN_FULL"   2 1 0 0 "enoent1-jump"
 row "SIGPIPE reproducer on the jump listing: new form reads present" \
-                                                            "present|present|present|0|0|false|false|false" "$JUMP_PRESENT" "$CHAIN_FULL"   0 0 0 0 "sigpipe-jump"
+                                                            "present|present|present|0|0|false|false|false|skip|skip" "$JUMP_PRESENT" "$CHAIN_FULL"   0 0 0 0 "sigpipe-jump"
 if [[ "$TABLE_ROWS" -lt 25 ]]; then printf '[FATAL] probe table ran %d rows, expected >= 25.\n' "$TABLE_ROWS" >&2; exit 1; fi
 
 # Precondition of the control below: SIGPIPE is not ignored (SigIgn bit 13 of this process; the re-exec at the top
@@ -355,7 +411,7 @@ check "control, SIGPIPE ignored (forced): the OLD nft-piped-into-grep-q form on 
 check "routing: the forced-ignored control ran the shim with SIGPIPE ignored" "ignored" "$(cat "$d/shim.sigign" 2>/dev/null || echo missing)"
 cap="$(scenario capture-ign "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0 "sigpipe-jump")"
 check "SIGPIPE ignored: the capture form on the reproducer shim still reads all three rules present" \
-  "present|present|present|0|0|false|false|false" "$(PROBE_SIGPIPE_IGNORED=1 probe_out "$LIB" "$cap")"
+  "present|present|present|0|0|false|false|false|skip|skip" "$(PROBE_SIGPIPE_IGNORED=1 probe_out "$LIB" "$cap")"
 check "routing: probe_out with the knob runs the shim with SIGPIPE ignored" "ignored" "$(cat "$cap/shim.sigign" 2>/dev/null || echo missing)"
 d="$(scenario recorder-def "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0 "sigpipe-jump")"
 env -i PATH="$SHIM:/usr/bin:/bin" SC="$d" nft list chain ip filter DOCKER-USER > /dev/null 2>&1
@@ -367,10 +423,10 @@ NFT_RETRY_SLEEP=3 probe_out "$LIB" "$d" > /dev/null
 check "one failed read sleeps exactly once, with the configured seconds" "3" "$(tr '\n' ' ' < "$d/sleep.calls" 2>/dev/null | sed 's/ $//')"
 d="$(scenario sleep2 "$JUMP_PRESENT" "$CHAIN_FULL" 1 0 0 0)"
 check "a non-numeric NFT_RETRY_SLEEP degrades to 1 s and never aborts the probe" \
-  "present|present|present|0|0|false|true|false 1" "$(NFT_RETRY_SLEEP=abc probe_out "$LIB" "$d") $(tr '\n' ' ' < "$d/sleep.calls" 2>/dev/null | sed 's/ $//')"
+  "present|present|present|0|0|false|true|false|skip|skip 1" "$(NFT_RETRY_SLEEP=abc probe_out "$LIB" "$d") $(tr '\n' ' ' < "$d/sleep.calls" 2>/dev/null | sed 's/ $//')"
 d="$(scenario sleep4 "$JUMP_PRESENT" "$CHAIN_FULL" 1 0 0 0)"
 check "an oversized NFT_RETRY_SLEEP (two digits) degrades to 1 s too" \
-  "present|present|present|0|0|false|true|false 1" "$(NFT_RETRY_SLEEP=99 probe_out "$LIB" "$d") $(tr '\n' ' ' < "$d/sleep.calls" 2>/dev/null | sed 's/ $//')"
+  "present|present|present|0|0|false|true|false|skip|skip 1" "$(NFT_RETRY_SLEEP=99 probe_out "$LIB" "$d") $(tr '\n' ' ' < "$d/sleep.calls" 2>/dev/null | sed 's/ $//')"
 d="$(scenario sleep5 "" "" 9 9 1 1)"
 probe_out "$LIB" "$d" > /dev/null
 check "a persistently failing read sleeps exactly ONCE (never after the final attempt)" "1" "$(wc -l < "$d/sleep.calls" | tr -d ' ')"
@@ -401,10 +457,11 @@ jq_field() { python3 -c 'import json,sys; d=json.load(sys.stdin); print(d[sys.ar
 d="$(scenario extra "$JUMP_PRESENT" "$CHAIN_NOLOG" 9 0 1 0)"
 j="$(extra_json "$d")"
 keys="$(printf '%s' "$j" | python3 -c 'import json,sys; print(",".join(sorted(json.load(sys.stdin))))' 2>/dev/null || echo INVALID)"
-check "extra: exact key set" "docker_since,drop_present,host,jump_present,loader_rc,loader_since,log_present,rc_drop,rc_jump,read_failed,read_retried,remediation" "$keys"
+check "extra: exact key set" "docker_since,drop_present,gw_accept,gw_member_scoped,host,jump_present,loader_rc,loader_since,log_present,rc_drop,rc_jump,read_failed,read_retried,remediation" "$keys"
 check "extra: jump_present flows from the probe (jump read failing persistently)" "unreadable" "$(printf '%s' "$j" | jq_field jump_present)"
 check "extra: drop_present flows from the probe" "present" "$(printf '%s' "$j" | jq_field drop_present)"
 check "extra: log_present flows from the probe (the log rule is absent in this scenario)" "absent" "$(printf '%s' "$j" | jq_field log_present)"
+check "extra: gw scope markers stay skip while the gw is down (no docker.names)" "skip/skip" "$(printf '%s' "$j" | jq_field gw_accept)/$(printf '%s' "$j" | jq_field gw_member_scoped)"
 check "extra: rc_jump carries the jump read's status" "1" "$(printf '%s' "$j" | jq_field rc_jump)"
 check "extra: rc_drop carries the chain read's status (and is not the jump's)" "0" "$(printf '%s' "$j" | jq_field rc_drop)"
 check "extra: read_failed is a true boolean when a read stayed unreadable" "True" "$(printf '%s' "$j" | jq_field read_failed)"
@@ -423,6 +480,9 @@ j="$(extra_json "$d" systemctl-fail)"
 check "extra: a failing systemctl read degrades to unknown, never aborts" "unknown unknown" "$(printf '%s' "$j" | jq_field docker_since) $(printf '%s' "$j" | jq_field loader_since)"
 j="$(extra_json "$d" jq-fail)"
 check "extra: a jq failure falls back to the minimal remediation object (valid JSON)" "['remediation']" "$(printf '%s' "$j" | python3 -c 'import json,sys; print(sorted(json.load(sys.stdin)))' 2>/dev/null || echo INVALID)"
+d4="$(scenario extra4 "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0 "gw-running gw-unscoped")"
+j4="$(extra_json "$d4")"
+check "extra: the scope markers flow from the probe when the gw is running" "absent/absent" "$(printf '%s' "$j4" | jq_field gw_accept)/$(printf '%s' "$j4" | jq_field gw_member_scoped)"
 
 # --- the self-heal block, EXECUTED -------------------------------------------------------------
 echo "-- self-heal block (executed with a stub loader, sentry_event and log) --"
@@ -470,9 +530,10 @@ check "block: the loader re-run comes BEFORE the event post (egress is open unti
 check "block: the event message is byte-identical (same Sentry group)" "SENTRY|$MSG" "$(grep '^SENTRY' "$d/calls" | cut -d'|' -f1,2)"
 check "block: the event op is enforcement_missing" "enforcement_missing" "$(grep '^SENTRY' "$d/calls" | cut -d'|' -f3)"
 payload="$(grep '^SENTRY' "$d/calls" | cut -d'|' -f4-)"
-check "block: the event carries the NEW payload (all 12 keys), fed from enforcement_extra" "12" "$(printf '%s' "$payload" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))' 2>/dev/null || echo INVALID)"
+check "block: the event carries the NEW payload (all 14 keys), fed from enforcement_extra" "14" "$(printf '%s' "$payload" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))' 2>/dev/null || echo INVALID)"
 check "block: the payload carries the probe's rule states (jump absent) and the loader status (0)" "absent/0" "$(printf '%s' "$payload" | jq_field jump_present)/$(printf '%s' "$payload" | jq_field loader_rc)"
-check "block: the heal WARN names the rule states, logged once" "1/1" "$(cnt "$d" '^LOG|WARN: enforcement rules missing')/$(cnt "$d" 'LOG|WARN.*jump=absent drop=present log=present gwjump=absent reply=absent gwdrop=present read_failed=false')"
+check "block: the payload carries the gw scope states (skipped: gw not running)" "skip/skip" "$(payload_field "$d" gw_accept)/$(payload_field "$d" gw_member_scoped)"
+check "block: the heal WARN names the rule states, logged once" "1/1" "$(cnt "$d" '^LOG|WARN: enforcement rules missing')/$(cnt "$d" 'LOG|WARN.*jump=absent drop=present log=present gwjump=absent reply=absent gwdrop=present gwaccept=skip gwmember=skip read_failed=false')"
 
 d="$(scenario blk-fail "$JUMP_ABSENT" "$CHAIN_FULL" 0 0 0 0)"
 run_block "$d" "" 1
@@ -493,7 +554,18 @@ check "block: CRON_EGRESS_FROM_LOADER=1 skips the probe entirely (no loader -> r
 d="$(scenario blk-unread "" "" 9 9 1 1)"
 run_block "$d" "" 0
 check "block: persistently unreadable chains still heal (idempotent loader), and the event says read_failed" "1/True" "$(cnt "$d" '^LOADER')/$(grep '^SENTRY' "$d/calls" | cut -d'|' -f4- | jq_field read_failed)"
-check "block: the unreadable heal WARN names the unreadable states" "1" "$(cnt "$d" 'LOG|WARN.*jump=unreadable drop=unreadable log=unreadable gwjump=unreadable reply=unreadable gwdrop=present read_failed=true')"
+check "block: the unreadable heal WARN names the unreadable states" "1" "$(cnt "$d" 'LOG|WARN.*jump=unreadable drop=unreadable log=unreadable gwjump=unreadable reply=unreadable gwdrop=present gwaccept=skip gwmember=skip read_failed=true')"
+
+# --- #9534 scope heal, end-to-end through the EXECUTED block ---
+d="$(scenario blk-scope "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0 "gw-running gw-unscoped")"
+run_block "$d" "" 0
+check "block: the scope-poisoned ruleset (gw up, unscoped member drop, no gw accept) heals — the #9534 defect" "1/1" "$(cnt "$d" '^LOADER')/$(cnt "$d" '^SENTRY')"
+check "block: the scope-poisoned heal WARN names the gw marker states" "1" "$(cnt "$d" 'LOG|WARN.*gwaccept=absent gwmember=absent')"
+check "block: the scope-poisoned payload carries gw_accept=absent gw_member_scoped=absent" "absent/absent" "$(payload_field "$d" gw_accept)/$(payload_field "$d" gw_member_scoped)"
+
+d="$(scenario blk-gwdown "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0 "gw-unscoped")"
+run_block "$d" "" 0
+check "block: the SAME unscoped ruleset does NOT heal while the gw is down (no heal-loop)" "0/0/0" "$(cnt "$d" '^LOADER')/$(cnt "$d" '^SENTRY')/$(cnt "$d" '^LOG')"
 
 d="$(scenario blk-nolog "$JUMP_PRESENT" "$CHAIN_NOLOG" 0 0 0 0)"
 run_block "$d" "" 0
@@ -537,38 +609,38 @@ dd="$(scenario mharmless "$JUMP_ABSENT" "$CHAIN_FULL" 0 0 0 0)"
 check "harmless mutant: a whitespace respelling grades exactly like pristine" "$(probe_out "$LIB" "$dd")" "$(probe_out "$WORK/mut.harmless.sh" "$dd")"
 mut_probe "drop matched on the log prefix instead of the drop rule" \
   "comment \"soleur-egress: default drop\"'*" "egress-blocked'*" \
-  "present|absent|present|0|0|false|false|true" "$JUMP_PRESENT" "$CHAIN_NODROP" 0 0 0 0
+  "present|absent|present|0|0|false|false|true|skip|skip" "$JUMP_PRESENT" "$CHAIN_NODROP" 0 0 0 0
 mut_probe "the retry is removed (a one-off read failure is no longer absorbed)" \
   "for attempt in 1 2; do" "for attempt in 1; do" \
-  "present|present|present|0|0|false|true|false" "$JUMP_PRESENT" "$CHAIN_FULL" 1 0 0 0
+  "present|present|present|0|0|false|true|false|skip|skip" "$JUMP_PRESENT" "$CHAIN_FULL" 1 0 0 0
 mut_probe "the retry runs a third attempt (the bound is gone)" \
   "for attempt in 1 2; do" "for attempt in 1 2 3; do" \
-  "unreadable|present|present|1|0|true|true|true" "$JUMP_PRESENT" "$CHAIN_FULL" 2 0 0 0
+  "unreadable|present|present|1|0|true|true|true|skip|skip" "$JUMP_PRESENT" "$CHAIN_FULL" 2 0 0 0
 MUT_EARLY_PIPE='ip filter DOCKER-USER 2>&1 | grep -m1 "jump SOLEUR-EGRESS")"'  # sigpipe-demo: intentional (the early-exiting capture the mutants below re-introduce)
 mut_probe "the capture is re-introduced as an early-exiting pipeline (SIGPIPE row changes)" \
   'ip filter DOCKER-USER 2>&1)"' "$MUT_EARLY_PIPE" \
-  "present|present|present|0|0|false|false|false" "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0 "sigpipe-jump"
+  "present|present|present|0|0|false|false|false|skip|skip" "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0 "sigpipe-jump"
 MUT_SIGPIPE_IGNORED=1 mut_probe "SIGPIPE ignored: the capture is re-introduced as an early-exiting pipeline (SIGPIPE row changes)" \
   'ip filter DOCKER-USER 2>&1)"' "$MUT_EARLY_PIPE" \
-  "present|present|present|0|0|false|false|false" "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0 "sigpipe-jump"
+  "present|present|present|0|0|false|false|false|skip|skip" "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0 "sigpipe-jump"
 mut_probe "ENOENT is no longer an absent object (a deleted table reads as contention)" \
   'if (( ENF_RC_JUMP == 1 )) && [[ "$out_jump" == "Error: No such file or directory"* ]]; then jump_gone=true; fi' ':' \
-  "absent|absent|absent|1|1|false|false|true" "" "" 0 0 0 0 "enoent-jump enoent-chain"
+  "absent|absent|absent|1|1|false|false|true|skip|skip" "" "" 0 0 0 0 "enoent-jump enoent-chain"
 mut_probe "the ENOENT status anchor is removed (rc 2 with the same text reads absent)" \
   '(( ENF_RC_JUMP == 1 )) && [[ "$out_jump" ==' '[[ "$out_jump" ==' \
-  "unreadable|present|present|2|0|true|true|true" "" "$CHAIN_FULL" 0 0 0 0 "enoent2-jump"
+  "unreadable|present|present|2|0|true|true|true|skip|skip" "" "$CHAIN_FULL" 0 0 0 0 "enoent2-jump"
 mut_probe "the ENOENT text anchor is loosened to a suffix (another error ending in the same words reads absent)" \
   '[[ "$out_jump" == "Error: No such file or directory"* ]]' '[[ "$out_jump" == *"No such file or directory"* ]]' \
-  "unreadable|present|present|1|0|true|true|true" "" "$CHAIN_FULL" 0 0 0 0 "ruleerr-jump"
+  "unreadable|present|present|1|0|true|true|true|skip|skip" "" "$CHAIN_FULL" 0 0 0 0 "ruleerr-jump"
 mut_probe "the per-attempt jump_gone reset is removed (a stale ENOENT from attempt 1 survives a busy attempt 2)" \
   '    jump_gone=false; drop_gone=false' '    :' \
-  "unreadable|present|present|1|0|true|true|true" "$JUMP_PRESENT" "$CHAIN_FULL" 2 1 0 0 "enoent1-jump"
+  "unreadable|present|present|1|0|true|true|true|skip|skip" "$JUMP_PRESENT" "$CHAIN_FULL" 2 1 0 0 "enoent1-jump"
 mut_probe "the CHAIN-read ENOENT status anchor is removed (rc 2 with the same text reads absent)" \
   '(( ENF_RC_DROP == 1 )) && [[ "$out_chain" ==' '[[ "$out_chain" ==' \
-  "present|unreadable|unreadable|0|2|true|true|true" "$JUMP_PRESENT" "" 0 0 0 0 "enoent2-chain"
+  "present|unreadable|unreadable|0|2|true|true|true|skip|skip" "$JUMP_PRESENT" "" 0 0 0 0 "enoent2-chain"
 mut_probe "the CHAIN-read ENOENT text anchor is loosened to a suffix (another error ending in the same words reads absent)" \
   '[[ "$out_chain" == "Error: No such file or directory"* ]]' '[[ "$out_chain" == *"No such file or directory"* ]]' \
-  "present|unreadable|unreadable|0|1|true|true|true" "$JUMP_PRESENT" "" 0 0 0 0 "ruleerr-chain"
+  "present|unreadable|unreadable|0|1|true|true|true|skip|skip" "$JUMP_PRESENT" "" 0 0 0 0 "ruleerr-chain"
 mut_extra() { # mut_extra "label" <old> <new> <pristine type name>
   local mlib="$WORK/mut.$((MUT_ROWS + 1)).sh" dd got
   mut_copy "$LIB" "$mlib" "$2" "$3" "$1"
@@ -579,13 +651,29 @@ mut_extra() { # mut_extra "label" <old> <new> <pristine type name>
 mut_extra "loader_rc is emitted as a string (--arg instead of --argjson)" '--argjson lrc "$loader_rc"' '--arg lrc "$loader_rc"' "int"
 mut_probe "the jump needle is a bare prefix (SOLEUR-EGRESS-OLD counts as ours)" \
   "jump_re='jump[[:space:]]+SOLEUR-EGRESS([[:space:]]|\$)'" "jump_re='jump[[:space:]]+SOLEUR-EGRESS'" \
-  "absent|present|present|0|0|false|false|true" "$JUMP_NEAR" "$CHAIN_FULL" 0 0 0 0
+  "absent|present|present|0|0|false|false|true|skip|skip" "$JUMP_NEAR" "$CHAIN_FULL" 0 0 0 0
 mut_probe "a lost default-drop LOG rule no longer heals" \
   ' || "$ENF_LOG" != present' '' \
-  "present|present|absent|0|0|false|false|true" "$JUMP_PRESENT" "$CHAIN_NOLOG" 0 0 0 0
+  "present|present|absent|0|0|false|false|true|skip|skip" "$JUMP_PRESENT" "$CHAIN_NOLOG" 0 0 0 0
+# #9534 scope-check mutants: the gate, the needle, and each marker's heal edge.
+mut_probe "the scope check is no longer gated on the gw running (a gw-down host heal-loops)" \
+  '  if grep -qx soleur-egress-gw < <(docker ps' '  if true || grep -qx soleur-egress-gw < <(docker ps' \
+  "present|present|present|0|0|false|false|false|skip|skip" "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0 "gw-unscoped"
+mut_probe "the scope markers default to absent instead of skip (a gw-down host heal-loops)" \
+  'ENF_GWACCEPT=skip; ENF_GWMEMBER=skip' 'ENF_GWACCEPT=absent; ENF_GWMEMBER=absent' \
+  "present|present|present|0|0|false|false|false|skip|skip" "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0 "gw-unscoped"
+mut_probe "the member-scope needle always matches (an unscoped member drop reads healthy)" \
+  "== *'saddr != '*" "== *" \
+  "present|present|present|0|0|false|false|true|present|absent" "$JUMP_PRESENT" "$CHAIN_GW_OK" 0 0 0 0 "gw-running gw-unscoped"
+mut_probe "the gw-accept marker is dropped from the heal condition (a missing accept never heals)" \
+  ' || "$ENF_GWACCEPT" == absent' '' \
+  "present|present|present|0|0|false|false|true|absent|present" "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0 "gw-running gw-scoped"
+mut_probe "the member-scope marker is dropped from the heal condition (an unscoped drop never heals)" \
+  ' || "$ENF_GWMEMBER" == absent' '' \
+  "present|present|present|0|0|false|false|true|present|absent" "$JUMP_PRESENT" "$CHAIN_GW_OK" 0 0 0 0 "gw-running gw-unscoped"
 MUT_SLEEP=abc MUT_ALLOW_EMPTY=1 mut_probe "the retry-sleep clamp is removed (a bad value aborts the probe)" \
   '[[ "$sleep_s" =~ ^[0-9]$ ]] || sleep_s=1' ':' \
-  "present|present|present|0|0|false|true|false" "$JUMP_PRESENT" "$CHAIN_FULL" 1 0 0 0
+  "present|present|present|0|0|false|true|false|skip|skip" "$JUMP_PRESENT" "$CHAIN_FULL" 1 0 0 0
 # block mutants, driven through the EXECUTED block rows (graded against a PRISTINE control first)
 mut_block() { # mut_block "label" <old> <new> <FROM_LOADER> <loader-rc> <want "LOADER/SENTRY/rc/order/payload-keys">
   local mblk="$WORK/mutblk.$((MUT_ROWS + 1)).sh" dd got
@@ -598,21 +686,21 @@ mut_block() { # mut_block "label" <old> <new> <FROM_LOADER> <loader-rc> <want "L
 # pristine control: the grading string of the UNMUTATED block must equal the wanted value, so a broken payload_keys/order helper cannot make every mutant look caught
 dd="$(scenario mb-control "$JUMP_ABSENT" "$CHAIN_FULL" 0 0 0 0)"
 run_block "$dd" "" 0
-check "mutation control: the unmutated block grades as LOADER/SENTRY/rc/order/keys/loader_rc = 1/1/0/before/12/0" "1/1/0/before/12/0" "$(cnt "$dd" '^LOADER')/$(cnt "$dd" '^SENTRY')/$BLOCK_RC/$(order "$dd")/$(payload_keys "$dd")/$(payload_field "$dd" loader_rc)"
+check "mutation control: the unmutated block grades as LOADER/SENTRY/rc/order/keys/loader_rc = 1/1/0/before/14/0" "1/1/0/before/14/0" "$(cnt "$dd" '^LOADER')/$(cnt "$dd" '^SENTRY')/$BLOCK_RC/$(order "$dd")/$(payload_keys "$dd")/$(payload_field "$dd" loader_rc)"
 mut_block "the heal condition keys on jump+drop both absent (a single lost rule no longer heals)" \
-  'if [[ "$ENF_HEAL" == true ]]; then' 'if [[ "$ENF_JUMP" == absent && "$ENF_DROP" == absent ]]; then' "" 0 "1/1/0/before/12/0"
+  'if [[ "$ENF_HEAL" == true ]]; then' 'if [[ "$ENF_JUMP" == absent && "$ENF_DROP" == absent ]]; then' "" 0 "1/1/0/before/14/0"
 mut_block "the FROM_LOADER guard is inverted (the probe runs only under the loader)" \
-  'if [[ "${CRON_EGRESS_FROM_LOADER:-}" != "1" ]]; then' 'if [[ "${CRON_EGRESS_FROM_LOADER:-}" == "1" ]]; then' "" 0 "1/1/0/before/12/0"
+  'if [[ "${CRON_EGRESS_FROM_LOADER:-}" != "1" ]]; then' 'if [[ "${CRON_EGRESS_FROM_LOADER:-}" == "1" ]]; then' "" 0 "1/1/0/before/14/0"
 mut_block "the loader re-run is dropped from the heal path" \
-  '    timeout -k 2 60 "$LOADER" || loader_rc=$?' '    :' "" 0 "1/1/0/before/12/0"
+  '    timeout -k 2 60 "$LOADER" || loader_rc=$?' '    :' "" 0 "1/1/0/before/14/0"
 BLOCK_TIMEOUT_RC=124 mut_block "the loader timeout wrapper is removed (a wedged loader would take the event with it)" \
-  'timeout -k 2 60 "$LOADER" || loader_rc=$?' '"$LOADER" || loader_rc=$?' "" 0 "0/1/1/n/a/12/124"
+  'timeout -k 2 60 "$LOADER" || loader_rc=$?' '"$LOADER" || loader_rc=$?' "" 0 "0/1/1/n/a/14/124"
 mut_block "the loader status is dropped from the payload (loader_rc always 0)" \
-  'extra="$(enforcement_extra "$loader_rc")"' 'extra="$(enforcement_extra 0)"' "" 1 "1/1/1/before/12/1"
+  'extra="$(enforcement_extra "$loader_rc")"' 'extra="$(enforcement_extra 0)"' "" 1 "1/1/1/before/14/1"
 mut_block "the captured payload is replaced by the old one-key literal" \
-  'extra="$(enforcement_extra "$loader_rc")"' 'extra="{\"remediation\":\"x\"}"' "" 0 "1/1/0/before/12/0"
+  'extra="$(enforcement_extra "$loader_rc")"' 'extra="{\"remediation\":\"x\"}"' "" 0 "1/1/0/before/14/0"
 mut_block "a failed loader re-run is swallowed (no fail)" \
-  '(( loader_rc == 0 )) || fail "self-heal loader re-run failed (rc=$loader_rc)"' ':' "" 1 "1/1/1/before/12/1"
+  '(( loader_rc == 0 )) || fail "self-heal loader re-run failed (rc=$loader_rc)"' ':' "" 1 "1/1/1/before/14/1"
 # ordering mutant: the loader runs AFTER the event (two literal edits on one copy)
 mblk1="$WORK/mutblk.order1.sh"; mblk2="$WORK/mutblk.order2.sh"
 mut_copy "$BLOCK" "$mblk1" '    timeout -k 2 60 "$LOADER" || loader_rc=$?
@@ -632,19 +720,20 @@ heal_lines="$(printf '%s\n' "$HEAL_BLOCK" | wc -l)"
 check "no 'nft ... | grep' pipeline is left in the self-heal region" "0" "$(printf '%s\n' "$HEAL_BLOCK" | grep -cE 'nft .*\|[[:space:]]*grep')"
 grep -qE '^[[:space:]]+"cron-egress-firewall: enforcement rules were MISSING at tick \(jump/drop absent\) — loader re-run triggered" \\$' "$RESOLVER"; okc "the event message literal is byte-identical (same Sentry group)" $?
 grep -qE '^[[:space:]]+"enforcement_missing" \\$' "$RESOLVER"; okc "the op literal stays top-level (the op-contract parser reads it)" $?
-for lit in 'comment "soleur-egress: default drop"' 'comment "soleur-egress: default drop log"'; do
+for lit in 'comment "soleur-egress: default drop"' 'comment "soleur-egress: default drop log"' 'soleur-egress: egress gateway (#9534)'; do
   grep -qF "$lit" "$RESOLVER" && grep -qF "$lit" "$LOADER_SRC"; okc "resolver and loader agree on the rule comment: $lit" $?
 done
+grep -qF 'saddr != ' "$RESOLVER" && grep -qF 'saddr != ' "$LOADER_SRC"; okc "resolver and loader agree on the member-scope needle: saddr !=" $?
 check "resolver and loader use the same jump_re literal" "$(grep -o "jump_re='[^']*'" "$LOADER_SRC" | head -1)" "$(grep -o "jump_re='[^']*'" "$RESOLVER" | head -1)"
 RUNBOOK_KEYS=0
 if [[ -f "$RUNBOOK" ]]; then
   TABLE="$(grep -E '^  \| ' "$RUNBOOK")"
-  for k in jump_present drop_present log_present rc_jump rc_drop read_failed read_retried docker_since loader_since loader_rc host; do
+  for k in jump_present drop_present log_present rc_jump rc_drop read_failed read_retried docker_since loader_since loader_rc host gw_accept gw_member_scoped; do
     RUNBOOK_KEYS=$((RUNBOOK_KEYS + 1))
     printf '%s\n' "$TABLE" | grep -cF >/dev/null "\`$k"; okc "the runbook decode TABLE names the extra field $k" $?
   done
 fi
-if [[ "$RUNBOOK_KEYS" -ne 11 ]]; then printf '[FATAL] runbook parity ran %d rows, expected 11 (is the runbook missing?).\n' "$RUNBOOK_KEYS" >&2; exit 1; fi
+if [[ "$RUNBOOK_KEYS" -ne 13 ]]; then printf '[FATAL] runbook parity ran %d rows, expected 13 (is the runbook missing?).\n' "$RUNBOOK_KEYS" >&2; exit 1; fi
 
 echo
 echo "self-heal suite: $PASS passed, $FAIL failed ($CASES cases)"
