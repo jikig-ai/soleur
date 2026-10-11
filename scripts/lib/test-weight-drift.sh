@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # test-weight-drift.sh — #9814 local-vs-committed weight-drift comparator.
 #
 # weight_drift_report <timing-log> <durations-manifest...>
@@ -52,6 +53,10 @@ weight_drift_report() {
       # Timing-log rows. NF<2 and comments are already excluded by the same
       # guards above — this block only sees FILENAME == wdr_log.
       if ($1 ~ /^#/ || NF < 2) next
+      # __run_boundary_*__ probe markers and torn rows with a non-numeric
+      # elapsed field are not suite timings — not candidates, and not counted
+      # into WEIGHT_DRIFT_UNAVAILABLE rows=.
+      if ($1 ~ /^__run_boundary_/ || $2 !~ /^[0-9]+$/) next
       if ($3 ~ /^skip=/) next
       cand++
       if (($2 + 0) > 0) {
@@ -79,6 +84,6 @@ weight_drift_report() {
         print t; print t > "/dev/stderr"
       }
     }
-  ' "${_wd_manifests[@]}" "$_wd_log" || true
+  ' "${_wd_manifests[@]+"${_wd_manifests[@]}"}" "$_wd_log" || true
   return 0
 }

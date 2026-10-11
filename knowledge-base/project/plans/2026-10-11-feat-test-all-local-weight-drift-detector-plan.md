@@ -125,6 +125,7 @@ WEIGHT_DRIFT <label> committed=<ms> local=<ms>            # local > 2*committed 
 WEIGHT_DRIFT <label> committed=<ms> basis=floor local=<ms>  # same, anchor row class != measured
 WEIGHT_DRIFT <label> committed=unmeasured local=<ms>      # no row in either durations manifest
 WEIGHT_DRIFT_UNAVAILABLE rows=<n> reason=elapsed-zero     # ran rows exist but every elapsed_ms is 0
+WEIGHT_DRIFT_LOG <path>                                   # trailer, emitted when >=1 WEIGHT_DRIFT line fired
 ```
 
 A row "ran" iff field 3 does not start `skip=` AND elapsed > 0. FAIL, KILLED
@@ -192,7 +193,7 @@ surface small inside a 7000-line file.
   ~:6935), one `run_suite` registration (~:5184).
 - `scripts/lib/test-affected-paths.sh` — `ALWAYS_ON_SUITES` entry +
   `AFFECTED_SCRIPTS_TEST_ALL_WEIGHT_DRIFT_PATHS` = { the suite file, the lib,
-  `scripts/test-all.sh`, `glob:scripts/suite-durations*.tsv` (the `glob:`
+  `scripts/test-all.sh`, `glob:scripts/*.tsv` (the `glob:`
   edge kind from #9813/PR #9945 — the walker reads the glob, so the edge says
   the glob, not today's two literals),
   `scripts/lib/test-affected-paths.sh` (self-inclusion convention) }.

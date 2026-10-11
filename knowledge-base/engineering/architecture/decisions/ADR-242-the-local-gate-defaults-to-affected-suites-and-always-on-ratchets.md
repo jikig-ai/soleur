@@ -11,6 +11,7 @@ amended_by:
   - "#9307 (2026-09-30) — anchored edge matching, the runner-subcommand skip, `--print-selection` / `--paths`, and the evidence-based always-on audit; see ## Amendment — 2026-09-30"
   - "#9400 (2026-10-01) — the affected-ratchets pre-push lane moves the cheap ratchet net earlier than the local gate (push time, merged tree); the required `test` context remains the merge gate; see ## Amendment — 2026-10-01 (#9400)"
   - "#9813 (2026-10-10) — decision 22: the `glob:<literal-head>/<glob-tail>` declared-edge kind for corpus walkers, the five-site malformed-shape doctrine, and the per-suite dispositions; see ## Amendment — 2026-10-10 (#9813)"
+  - "#9814 (2026-10-11) — the local weight-drift detector: TEST_TIMING_LOG defaults on affected-shaped local runs and the epilogue emits advisory WEIGHT_DRIFT lines against committed weights; see ## Amendment — 2026-10-11 (#9814)"
 ---
 
 # ADR-242: `test-all.sh` — the local gate defaults to the affected set plus always-on ratchets (#8322)
@@ -630,10 +631,16 @@ Alternatives added by this amendment:
 A local run reports local-vs-committed weight drift as an advisory line, never
 a gate. `scripts/test-all.sh` defaults `TEST_TIMING_LOG` to
 `$_durable_log_dir/suite-timings.tsv` on local affected-shaped runs
-(`CI` unset, `TEST_TIMING_LOG` unset, `TEST_GROUP=affected` or `_AFFECTED==1` —
-the two selectors stay disjoint by design), guarded by a `mkdir -p` +
-`[[ -w ]]` probe so an unwritable target degrades to "no timing log" instead
-of a `>>`-under-`set -e` mid-run abort. The epilogue then calls
+(`CI` unset, `TEST_TIMING_LOG` unset, `TEST_GROUP=affected` or
+`_AFFECTED==1` on the all-group default — the two selectors stay disjoint by
+design, and enumerate/print paths decline before paying a `mkdir`), guarded
+by a `mkdir -p` + `[[ -w ]]` probe so an unwritable target degrades to "no
+timing log" instead of a `>>`-under-`set -e` mid-run abort. The assignment is
+IN-SHELL, never `export`: every consumer (`run_suite`'s `>>`,
+`_emit_bytes_probe`, the epilogue emit) reads it in the runner's own process,
+and an exported var would leak this run's log path into every nested copy of
+the runner that runner-SUT suites spawn — phantom `committed=unmeasured`
+lines on exactly the runner-touching diffs this feature is for. The epilogue then calls
 `weight_drift_report` (`scripts/lib/test-weight-drift.sh`, one `LC_ALL=C awk`
 pass, bash-3.2-safe, always returns 0) over `"$_scriptdir"/suite-durations*.tsv`
 — the glob, not two literals, so a future manifest joins the comparison
@@ -648,8 +655,11 @@ anchors add `basis=floor`, and a log whose ran rows all show `elapsed_ms=0`
 emits `WEIGHT_DRIFT_UNAVAILABLE` once — the bash-3.2 vacuity is named, not
 read as clean. Lines dual-emit to stdout and stderr: a line that only reaches
 stderr is invisible to the invoking agent's stdout capture. The new suite
-registers as `ALWAYS_ON_SUITES` + an `AFFECTED_*_PATHS` block whose durations
-edge is `glob:scripts/suite-durations*.tsv`, and its committed weight row is
+registers as `ALWAYS_ON_SUITES` + an `AFFECTED_*_PATHS` block whose manifest
+edge is `glob:scripts/*.tsv` — not `suite-durations*`: the #9813 grammar
+requires a /-terminated literal head, so a file-prefix glob cannot be declared
+and covering the manifest class is the honest widening — and its committed
+weight row is
 written only by `regenerate-shard-manifest.py --incremental --write`
 (ADR-240: generated, never hand-edited).
 

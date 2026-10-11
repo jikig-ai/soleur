@@ -536,9 +536,14 @@ export TC_TMPDIR="${TC_TMPDIR:-/tmp}"
 # See: knowledge-base/project/learnings/2026-03-20-bun-fpe-spawn-count-sensitivity.md
 #
 # Per-suite timing: when TEST_TIMING_LOG is set to a writable path, each
-# run_suite() invocation appends "<label>\t<elapsed_ms>[\tFAIL|\tKILLED]" to that
-# path. Field 3 carries the result class for any non-passing suite; KILLED means
-# signal-shaped and UNRESOLVED, not failed (#7424).
+# run_suite()/skip_suite() invocation appends "<label>\t<elapsed_ms>[\t<class>]"
+# to that path. Field 3 is the labelled class slot: `skip=<reason>` marks a
+# counted decline, a bare class (FAIL / KILLED / TRIPWIRE) marks a ran-but-not-ok
+# suite — wall-clock is consumed either way — and `tmp_delta=`/`bytes_tmp=` are
+# instrumentation, not suite rows. Extension convention (#9814's comparator is
+# the first external consumer): new decline classes carry the `^skip=` prefix;
+# any other labelled class defaults to "ran". KILLED means signal-shaped and
+# UNRESOLVED, not failed (#7424).
 # Elapsed time uses bash 5.0+ EPOCHREALTIME (microsecond precision, no
 # coreutils dependency, portable across Linux + Homebrew bash on macOS).
 # CI runs ubuntu-latest (bash 5.x). macOS default /bin/bash is 3.2 — install
@@ -4307,17 +4312,29 @@ case "${_durable_log_dir}/" in
 esac
 
 # wd-default-arm-begin
-# #9814: a local affected-shaped run pays nothing for the timing data the
+# #9814: a local affected-shaped run pays near-nothing for the timing data the
 # weight-drift comparator needs — default TEST_TIMING_LOG into the per-run
-# durable dir (it rides the #9117 age-reap like the suite logs beside it). The
-# writability probe is load-bearing: run_suite appends with >> under set -e, so
-# an unwritable target aborts the run mid-suite — degrade to "no timing log",
-# never to "dead runner". TEST_GROUP=affected (#8591) and _AFFECTED==1 (the
-# local gate default, ADR-242) are disjoint selectors — cover both.
+# durable dir (it rides the #9117 age-reap like the suite logs beside it).
+# In-shell, NEVER export: suite children that spawn a nested copy of this
+# runner would otherwise append THEIR fixture rows into this run's log —
+# phantom committed=unmeasured lines on every runner-touching diff (the
+# documented hazard test-all-infra-coverage-notice.test.sh names outright;
+# every consumer here — run_suite's >>, _emit_bytes_probe, the epilogue emit —
+# reads it in this process). The writability probe is load-bearing: run_suite
+# appends with >> under set -e, so an unwritable target aborts the run
+# mid-suite — degrade to "no timing log", never to "dead runner".
+# TEST_GROUP=affected (#8591) and _AFFECTED==1 on the all-group local default
+# (ADR-242) are the two disjoint selectors; enumerate/print paths are
+# side-effect-free by contract, so they decline before paying a mkdir.
 if [[ -z "${TEST_TIMING_LOG:-}" ]] && [[ -z "${CI:-}" ]] \
-  && { [[ "${TEST_GROUP:-}" == "affected" ]] || (( _AFFECTED == 1 )); }; then
+  && (( _ENUMERATE == 0 && _PRINT_SELECTION == 0 )) \
+  && { [[ "${TEST_GROUP:-}" == "affected" ]] \
+       || { [[ "${TEST_GROUP:-all}" == "all" ]] && (( _AFFECTED == 1 )); }; }; then
   if mkdir -p "$_durable_log_dir" 2>/dev/null && [[ -w "$_durable_log_dir" ]]; then
-    export TEST_TIMING_LOG="$_durable_log_dir/suite-timings.tsv"
+    TEST_TIMING_LOG="$_durable_log_dir/suite-timings.tsv"
+  else
+    printf '[note] weight-drift: timing log declined — %s not writable; WEIGHT_DRIFT lines will not emit\n' \
+      "$_durable_log_dir" >&2
   fi
 fi
 # wd-default-arm-end

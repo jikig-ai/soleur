@@ -28,7 +28,7 @@ Plan: `knowledge-base/project/plans/2026-10-11-feat-test-all-local-weight-drift-
 ## Phase 3: Classification + generated-table regen
 
 - [x] 3.1 Add `"scripts/test-all-weight-drift"` to `ALWAYS_ON_SUITES` in `scripts/lib/test-affected-paths.sh`
-- [x] 3.2 Add `AFFECTED_SCRIPTS_TEST_ALL_WEIGHT_DRIFT_PATHS` block (suite file, lib, test-all.sh, `glob:scripts/suite-durations*.tsv`, test-affected-paths.sh self-inclusion)
+- [x] 3.2 Add `AFFECTED_SCRIPTS_TEST_ALL_WEIGHT_DRIFT_PATHS` block (suite file, lib, test-all.sh, `glob:scripts/*.tsv`, test-affected-paths.sh self-inclusion)
 - [x] 3.3 Run `python3 scripts/regenerate-shard-manifest.py --incremental --write` (adds floor row to `scripts/suite-durations.tsv` + leg row to `scripts/suite-shard-legs.tsv`)
 - [x] 3.4 Wiring arms in the suite: sandboxed affected run asserts the timing log exists + WEIGHT_DRIFT emitted + rc unchanged; CI=1 arm asserts no auto-default; read-only-dir arm asserts green completion with no log
 
