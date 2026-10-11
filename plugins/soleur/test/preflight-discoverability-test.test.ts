@@ -2881,7 +2881,7 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler soleur/prd_terraform). NO SUBSTITUTE: the journal
   // channel rows it asserts absent live only in the Logs warehouse, which has no unauthenticated read
   // path — the host itself is no-SSH. Genuine.
-l -> 55) for `2026-10-10-fix-zot-shipper-cap-exempt-patchblobupload-func-plan.md`
+  // #9373 (2026-10-11): +1 (54 -> 55) for `2026-10-10-fix-zot-shipper-cap-exempt-patchblobupload-func-plan.md`
   // (archived under plans/archive/ at ship). PLACEMENT: a correctly-indented child of its
   // `discoverability_test:` sub-block, value on one line. TRUTH: the command
   // (`scripts/betterstack-query.sh --grep SOLEUR_ZOT_DISK`) reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}
