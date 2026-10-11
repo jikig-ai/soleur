@@ -1,3 +1,19 @@
+---
+title: "Hosted Bash approval prompts did not appear (SDK auto-allow pre-empted canUseTool)"
+date: 2026-10-11
+incident_pr: 10072
+incident_window: "unmeasured start between 2026-05-05 and 2026-09-29; ended when this fix deploys"
+recovery_at: "when the fix in PR 10072 deploys"
+suspected_change: "autoAllowBashIfSandboxed true plus the PreToolUse sandbox hook returning allow for Bash, under the SDK 0.3.x line"
+brand_survival_threshold: single-user incident
+status: resolved-pending-deploy
+triggers:
+  - real-SDK probe (CLO C9) failed against the shipped must-ask lane
+art_33_triggered: false
+art_34_triggered: false
+art_33_deadline: "n/a - no personal-data compromise indicated; availability of an approval control, not exposure of data"
+---
+
 # Hosted Bash approval prompts did not appear (SDK auto-allow pre-empted `canUseTool`) — 2026-10-11
 
 Tracking: #10054 (P0). Detected by the real-SDK C9 probe of ADR-284 after #9977 shipped. Fixed on `feat-9776-c9-dev-probe`.
@@ -42,9 +58,15 @@ Hosted `autonomous-bypass` lines are INFO and are not shipped to a queryable sin
 > them, review your repository's push and branch-deletion history (GitHub: repository Activity, or `git reflog` on any clone) and
 > your infrastructure state for that period, and tell us if anything unexpected happened.
 
-## Follow-ups
+## Action Items & Follow-ups
 
-- Operator: publish or decline the notice above; add a breach-register row recording the decision (CLO). No Art. 33 clock is indicated (no personal-data compromise known).
-- Re-run the probe after any SDK, CLI or sandbox-option bump.
-- The legacy runner (`agent-runner.ts`, domain leaders) has no autonomous toggle or batch cache by design: every non-safe Bash there now asks, where before it ran unprompted. Wiring those deps into the legacy runner is the follow-up if that proves too noisy.
-- The scheduled `soleur-eval` crons and the sandbox canary are not affected (they use their own permission setup).
+Every row cites #10054, which stays open as the tracker for them and closes when the last is done.
+
+| Issue | Action | Status |
+|---|---|---|
+| #10054 | Operator: publish or decline the notice above (fill the bracketed dates) and add a breach-register row recording the decision (CLO). No Art. 33 clock is indicated. | open |
+| #10054 | Bisect the SDK 0.3.x versions with the probe to bound when the gate went inert, then fill the notice's start date. | open |
+| #10054 | Re-run `apps/web-platform/scripts/dev-probe-destroy-ask.ts` against the deployed build and after any SDK, CLI or sandbox-option bump; record the dev-hosted observation (telemetry, non-owner member, batch grant) before ADR-284 is accepted. | open |
+| #10054 | Legacy runner (`agent-runner.ts`, domain leaders): every non-safe Bash now asks and has no autonomous toggle or batch cache; wire those deps if that proves too noisy. | open |
+
+The scheduled `soleur-eval` crons and the sandbox canary are not affected (they use their own permission setup).
