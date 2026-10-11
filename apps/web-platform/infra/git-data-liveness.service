@@ -1,0 +1,36 @@
+[Unit]
+# (#9438) The git-data HOST's own recurring liveness feeder, fired every 60 s by
+# git-data-liveness.timer. It pings a dedicated Better Stack heartbeat only when the host's own
+# checks pass (git-data-liveness.sh has the contract); the page is the beat's absence.
+#
+# ORDERING ONLY. Wants=/After=network-online.target and nothing in the Requires=, RequiresMountsFor= or
+# BindsTo= family: the feeder must OBSERVE an unmounted or closed store and report it, and a
+# Requires-strength directive would mount the store it is meant to watch (or skip the run).
+Description=git-data host liveness feeder (#9438)
+Documentation=https://github.com/jikig-ai/soleur/issues/9438
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+# HOME is REQUIRED for the Doppler CLI under a root unit (it dies "$HOME is not defined"), and
+# without it every host would sit at url_unavailable.
+Environment=HOME=/root
+# The script keeps all of its own state under /run (tmpfs) and the heartbeat URL is a credential, so
+# a temp file, if one is ever added, must land on tmpfs too. (PrivateTmp below still makes systemd
+# create and remove a private directory under the root disk's /tmp each run: a few bytes, no secret.)
+Environment=TMPDIR=/dev/shm
+# EnvironmentFile=-, not a dot-source: carries the read-only service token scoped to this host's
+# own config and the templated config name the script reads at runtime.
+EnvironmentFile=-/etc/default/git-data-doppler
+UMask=0077
+PrivateTmp=yes
+LimitCORE=0
+# Healthy-path worst case inside the script is 56 s (5 s banner, 10 s fetch, two 10 s pings and a 1 s
+# pause, 20 s emit); a hung instrument is a miss and skips the fetch and the ping, so that path is
+# shorter. 58 s keeps a hung step from overlapping the next 60 s tick; the suite derives the sums
+# from the script's own constants.
+TimeoutStartSec=58
+# The git-data-gc.service shape: /bin/sh keeps `systemd-analyze verify` green on a runner that does
+# not carry the delivered script, and the inner path is absolute.
+ExecStart=/bin/sh -c 'exec /usr/local/bin/git-data-liveness.sh'

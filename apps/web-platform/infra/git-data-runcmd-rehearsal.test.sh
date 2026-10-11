@@ -603,6 +603,9 @@ EXPECTED_PATHS = {
     "git_data_luks_reopen_service":     "/etc/systemd/system/git-data-luks-reopen.service",
     "git_data_luks_reopen_failure_service": "/etc/systemd/system/git-data-luks-reopen-failure.service",
     "git_data_luks_reopen_timer":       "/etc/systemd/system/git-data-luks-reopen.timer",
+    "git_data_liveness":                "/usr/local/bin/git-data-liveness.sh",
+    "git_data_liveness_service":        "/etc/systemd/system/git-data-liveness.service",
+    "git_data_liveness_timer":          "/etc/systemd/system/git-data-liveness.timer",
     "git_data_pre_receive_placeholder": "/tmp/git-data-pre-receive.sh",
 }
 
