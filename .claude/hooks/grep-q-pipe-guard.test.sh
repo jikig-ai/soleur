@@ -1502,8 +1502,8 @@ for _e in ${PJ_DRAIN_BAD[@]+"${PJ_DRAIN_BAD[@]}"}; do ! pj_detects "${_e#*|}" ||
   || sweep_probe_fail+=("producer-drain-accepted: accepted drain spellings that did not make the pipeline succeed: $pj_dyn_ok")
 [[ -z "$pj_dyn_bad" && -z "$pj_det_bad" ]] \
   || sweep_probe_fail+=("producer-drain-nonreading: non-reading spellings that made the pipeline succeed: ${pj_dyn_bad:-none}; detector disagreements: ${pj_det_bad:-none}")
-(( pj_dyn_n == 2 * (${#PJ_DRAIN_OK[@]} + ${#PJ_DRAIN_BAD[@]}) && pj_dyn_n > 0 )) \
-  || sweep_probe_fail+=("producer-drain-zero: ${pj_dyn_n:-<err>} spelling runs for ${#PJ_DRAIN_OK[@]} accepted and ${#PJ_DRAIN_BAD[@]} non-reading spellings (want two dispositions each, and not zero)")
+(( pj_dyn_n == 2 * (${#PJ_DRAIN_OK[@]} + ${#PJ_DRAIN_BAD[@]}) && ${#PJ_DRAIN_OK[@]} > 0 && ${#PJ_DRAIN_BAD[@]} > 0 )) \
+  || sweep_probe_fail+=("producer-drain-zero: ${pj_dyn_n:-<err>} spelling runs for ${#PJ_DRAIN_OK[@]} accepted and ${#PJ_DRAIN_BAD[@]} non-reading spellings (want two dispositions each, and neither list empty — zero spellings ran is never a pass)")
 
 # Return wiring. The sweep's return code reaches this suite's exit status through statements the probe rows above do not exercise: the capture and
 # the fold at the top level (adjacent, unindented, once each), the probe verdict gate below, and a single exit. Each pinned pattern is anchored to
