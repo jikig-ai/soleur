@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=38090871167,38088705648,38086978176,38085840669,38055372785
 # default-weight-ms=1194
-# generated-at=2026-10-10T23:17:26Z
+# generated-at=2026-10-11T10:27:01Z
 # generator=regenerate-shard-manifest.py v3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
 .claude/hooks/background-poll-prefer-monitor.test.sh	777	measured
@@ -288,6 +288,7 @@ scripts/assert-dependabot-drain-unit	1352	measured
 scripts/audit-suite-reads	83151	measured
 scripts/battery-ref-guard	150	measured
 scripts/battery-tag-authorship	26224	measured
+scripts/bearer-curl-s4-first-runs-9905	1194	floor
 scripts/betterstack-assert-absence	295	measured
 scripts/betterstack-ingest-parity	175	measured
 scripts/board/set-board-status	731	measured
@@ -482,6 +483,7 @@ scripts/test-all-orphan-log-retention	48506	measured
 scripts/test-all-pr-battery-gate	29196	measured
 scripts/test-all-runtime-ceiling	16582	measured
 scripts/test-all-webplat-gate	65	measured
+scripts/test-all-weight-drift	1194	floor
 scripts/test-contention	135416	measured
 scripts/tmpfs-guard	6511	measured
 scripts/tunnel-connector-census	132	measured

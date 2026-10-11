@@ -10,6 +10,7 @@
 import {
   mkdtempSync,
   mkdirSync,
+  readFileSync,
   rmSync,
   existsSync,
   writeFileSync,
@@ -331,4 +332,39 @@ describe("egress-forwarder lifecycle (#9534)", () => {
     const { readdirSync } = await import("fs");
     expect(readdirSync(tokenDir)).toEqual([]);
   }, 15000);
+});
+
+// Runner-image packaging (#9952) — server/egress-forwarder.ts › forwarderPath()
+// defaults to process.cwd()/infra/egress-forwarder.mjs and cwd is /app in the
+// runner image. The host-scripts COPY block lands egress-forwarder.mjs under
+// /opt/soleur/host-scripts/ for cloud-init extraction only, so the runtime
+// default path was EMPTY: an entitled session's spawn hit ENOENT and degraded
+// to zero egress (fail-closed — silent by design). The lifecycle suite above
+// overrides EGRESS_FORWARDER_PATH to the repo fixture and cannot attest image
+// admission; this guard pins the runner COPY that lands the file at its
+// runtime path.
+describe("runner-image forwarder packaging (#9952)", () => {
+  const dockerfile = readFileSync(join(__dirname, "..", "Dockerfile"), "utf8");
+  const RUNTIME_COPY =
+    "COPY --from=builder /app/infra/egress-forwarder.mjs ./infra/egress-forwarder.mjs";
+
+  // The runner stage with full-line comments removed — a commented-out COPY
+  // must not satisfy the guard (cq-assert-anchor-not-bare-token).
+  function runnerNoComments(src: string): string {
+    const start = src.search(/^FROM\s+\S+\s+AS\s+runner\s*$/m);
+    if (start === -1) throw new Error("Dockerfile has no `FROM … AS runner` stage");
+    const rest = src.slice(start + 1);
+    const next = rest.search(/^FROM\s/m);
+    const stage = next === -1 ? rest : rest.slice(0, next);
+    return stage.replace(/^[ \t]*#.*$/gm, "");
+  }
+
+  it("the runner stage bakes egress-forwarder.mjs at its runtime default path", () => {
+    expect(runnerNoComments(dockerfile)).toContain(RUNTIME_COPY);
+  });
+
+  it("a commented-out COPY line does not satisfy the guard", () => {
+    const fake = `FROM x AS runner\n# ${RUNTIME_COPY}\n`;
+    expect(runnerNoComments(fake)).not.toContain(RUNTIME_COPY);
+  });
 });

@@ -65,7 +65,7 @@ git_fixture_env "$TMP" || { echo "FATAL: git_fixture_env refused fixture root $T
 
 PASS=0
 FAIL=0
-MIN_ASSERTIONS=697   # anti-vacuity floor = the green run's exact count (590 on 2026-10-04, +2 for the lowercase Tier-A row, 692 with the S4 argv-bearer rows #9597, 697 with the AUTH_HDR child-environment rows); raise when adding rows, never lower it silently
+MIN_ASSERTIONS=699   # anti-vacuity floor = the green run's exact count (590 on 2026-10-04, +2 for the lowercase Tier-A row, 692 with the S4 argv-bearer rows #9597, 697 with the AUTH_HDR child-environment rows, 699 with the #9972 newshape accept row + bc_ok-parity row net of the removed refuse-dot row — the newshape fixture self-check emits fail-only, zero counted assertions); raise when adding rows, never lower it silently
 
 pass() { echo "PASS [$1]"; PASS=$((PASS+1)); }
 fail() { echo "FAIL [$1]: $2"; FAIL=$((FAIL+1)); }
@@ -1170,6 +1170,13 @@ fi
 # ---------------------------------------------------------------------------
 SYN_TOK="gh""s_$(printf 'k3Zq%.0s' $(seq 1 9))"
 SYN_B64=$(printf '%s' "x-access-token:${SYN_TOK}" | base64 | tr -d '\n')
+# SYN_TOK_V2 models the format GitHub actually issues today (#9972): an
+# installation token in the several-hundred-char range (measured ~390 chars
+# 2026-10-11) whose alphabet is [A-Za-z0-9._~+/=-] — the canonical credential
+# class of scripts/lib/bearer-curl.sh bc_ok — carrying each byte the legacy
+# [A-Za-z0-9_] class lacked ('.' '-' '~' '+' '/' '='). Only the "gh""s_" prefix
+# is split: the staged-index scan keys on the prefix, not the punctuation.
+SYN_TOK_V2="gh""s_$(printf 'k3Zq%.0s' $(seq 1 30)).$(printf 'A9x%.0s' $(seq 1 30))-$(printf 'B7w%.0s' $(seq 1 30))~$(printf 'C4v%.0s' $(seq 1 20))+$(printf 'D2u%.0s' $(seq 1 10))/$(printf 'E5t%.0s' $(seq 1 10))="
 SHIM_DIR="$TMP/gitshim"; mkdir -p "$SHIM_DIR"
 SHIM_REAL_GIT=$(command -v git)   # absolute path, resolved BEFORE any PATH prefix
 [[ "$SHIM_REAL_GIT" == /* ]] || { echo "FATAL: git is not an absolute path ($SHIM_REAL_GIT)" >&2; exit 2; }
@@ -1201,7 +1208,12 @@ env=none
 if [[ -n "${GIT_CONFIG_VALUE_0+x}" && "${GIT_CONFIG_KEY_0:-}" != commit.gpgsign ]]; then
   dec=$(printf '%s' "${GIT_CONFIG_VALUE_0#Authorization: basic }" | base64 -d 2>/dev/null || true)
   if [[ "${GIT_CONFIG_COUNT:-}" == 1 && "${GIT_CONFIG_KEY_0:-}" == "http.https://github.com/.extraheader" \
-        && "$GIT_CONFIG_VALUE_0" == "Authorization: basic "* && "$dec" == "x-access-token:${SHIM_TOKEN:-}" ]]; then
+        && "$GIT_CONFIG_VALUE_0" == "Authorization: basic "* && "$dec" == "x-access-token:${SHIM_TOKEN:-}" \
+        && "$GIT_CONFIG_VALUE_0" == "Authorization: basic ${SHIM_B64:-}" ]]; then
+    # The SHIM_B64 conjunct pins the run_shimmed derivation: a SHIM_B64 reverted
+    # to a sibling token's encoding reds every accept row carrying a DIFFERENT
+    # token instead of silently vacuous on argv=b64 alone (the unpinned-wire
+    # class, #9972 review).
     env=header-ok
   else
     env=header-bad
@@ -1242,7 +1254,11 @@ run_shimmed() {
   SHIM_LOG_F="$TMP/shim.$name.log"; : > "$SHIM_LOG_F"
   (
     export PATH="$SHIM_DIR:$PATH"
-    export SHIM_REAL_GIT SHIM_LOG="$SHIM_LOG_F" SHIM_TOKEN="$tok" SHIM_B64="$SYN_B64"
+    export SHIM_REAL_GIT SHIM_LOG="$SHIM_LOG_F" SHIM_TOKEN="$tok"
+    # SHIM_B64 derives from THIS row's token, not the SYN_TOK constant: a fixture
+    # pinned to a sibling value certifies the wrong wire when the row carries a
+    # different credential (the 2026-09-19 unpinned-wire class).
+    export SHIM_B64; SHIM_B64="$(printf '%s' "x-access-token:${tok}" | base64 | tr -d '\n')"
     [[ "$mode" == local ]] && export SHIM_LOCAL_REMOTE="$F_ORIGIN"
     [[ "$mode" == wire ]] && export SHIM_WIRE_BASE="$WIRE_BASE"
     RB_PUSH_URL="" RB_GH_TOKEN="$tok" run_bump "$name" "$@"
@@ -1258,33 +1274,47 @@ out_lacks() { # name needle-var-value — the needle is compared, never printed
 }
 
 # --- local rows: real-remote path, remote redirected to the fixture bare repo ---
-new_fixture_repo argv
-write_fixture_cloud_inits "$F_REPO" v1.1.37 "$DIG_OLD" v1.1.37 "$DIG_OLD"
-fixture_commit "pins at v1.1.37"
-seed_tag vinngest-v1.1.38
-printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
-git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
-run_shimmed argv local "$SYN_TOK" -- --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
-assert_rc     'g1.argv:exit' 0
-assert_result 'g1.argv:result' opened
-assert_origin_branch 'g1.argv:branch' 'soleur/inngest-pin-v1.1.38' present
-[[ "$(shim_count 'net=1')" == 2 ]] && pass 'g1.argv:two-remote-calls' \
-  || fail 'g1.argv:two-remote-calls' "expected exactly ls-remote + push, shim saw $(shim_count 'net=1') remote call(s)"
-[[ "$(shim_count 'sub=ls-remote net=1')" == 1 && "$(shim_count 'sub=push net=1')" == 1 ]] && pass 'g1.argv:calls-are-ls-remote-and-push' \
-  || fail 'g1.argv:calls-are-ls-remote-and-push' "remote calls: $(grep 'net=1' "$SHIM_LOG_F" | awk '{print $1}' | tr '\n' ' ')"
-[[ "$(shim_count 'argv=token')" == 0 ]] && pass 'g1.argv:no-token-in-argv' \
-  || fail 'g1.argv:no-token-in-argv' "the token is on a git argument list"
-[[ "$(shim_count 'argv=b64')" == 0 ]] && pass 'g1.argv:no-b64-in-argv' \
-  || fail 'g1.argv:no-b64-in-argv' "the base64 of the credential is on a git argument list"
-[[ "$(shim_count 'net=1 argv=clean url=ok')" == 2 ]] && pass 'g1.argv:remote-url-has-no-userinfo' \
-  || fail 'g1.argv:remote-url-has-no-userinfo' "a remote call did not carry the bare https://github.com/ URL: $(grep 'net=1' "$SHIM_LOG_F" | tr '\n' '|')"
-[[ "$(shim_count 'net=1 .*env=header-ok')" == 2 ]] && pass 'g1.argv:header-in-env-of-remote-calls' \
-  || fail 'g1.argv:header-in-env-of-remote-calls' "the remote calls did not both carry the decoded-equal header in their environment: $(grep 'net=1' "$SHIM_LOG_F" | tr '\n' '|')"
-[[ "$(shim_count 'net=0 .*env=header')" == 0 ]] && pass 'g1.argv:header-only-on-remote-calls' \
-  || fail 'g1.argv:header-only-on-remote-calls' "a non-remote git call carried the header"
-out_lacks 'g1.argv:no-token-in-output' "$SYN_TOK"
-out_lacks 'g1.argv:no-b64-in-output'   "$SYN_B64"
-# AUTH_HDR is a shell variable, never exported: not in any git child's environment...
+# accept_row <name> <tok> — fresh fixture + the full env-header assertion set
+# for a credential the guard MUST admit. (Named accept_row, not *_wire_*: this
+# file reserves "wire" for run_shimmed's loopback-HTTP mode.) The b64 needle
+# derives from the row's own token so the no-b64-in-output check judges the
+# right encoding (run_shimmed does the same for the shim's decode comparison).
+accept_row() {
+  local name="$1" tok="$2" tok_b64
+  tok_b64="$(printf '%s' "x-access-token:${tok}" | base64 | tr -d '\n')"
+  new_fixture_repo "$name"
+  write_fixture_cloud_inits "$F_REPO" v1.1.37 "$DIG_OLD" v1.1.37 "$DIG_OLD"
+  fixture_commit "pins at v1.1.37"
+  seed_tag vinngest-v1.1.38
+  printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
+  git -C "$F_REPO" push -q "$F_ORIGIN" HEAD:refs/heads/main
+  run_shimmed "$name" local "$tok" -- --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
+  assert_rc     "g1.$name:exit" 0
+  assert_result "g1.$name:result" opened
+  assert_origin_branch "g1.$name:branch" 'soleur/inngest-pin-v1.1.38' present
+  [[ "$(shim_count 'net=1')" == 2 ]] && pass "g1.$name:two-remote-calls" \
+    || fail "g1.$name:two-remote-calls" "expected exactly ls-remote + push, shim saw $(shim_count 'net=1') remote call(s)"
+  [[ "$(shim_count 'sub=ls-remote net=1')" == 1 && "$(shim_count 'sub=push net=1')" == 1 ]] && pass "g1.$name:calls-are-ls-remote-and-push" \
+    || fail "g1.$name:calls-are-ls-remote-and-push" "remote calls: $(grep 'net=1' "$SHIM_LOG_F" | awk '{print $1}' | tr '\n' ' ')"
+  [[ "$(shim_count 'argv=token')" == 0 ]] && pass "g1.$name:no-token-in-argv" \
+    || fail "g1.$name:no-token-in-argv" "the token is on a git argument list"
+  [[ "$(shim_count 'argv=b64')" == 0 ]] && pass "g1.$name:no-b64-in-argv" \
+    || fail "g1.$name:no-b64-in-argv" "the base64 of the credential is on a git argument list"
+  [[ "$(shim_count 'net=1 argv=clean url=ok')" == 2 ]] && pass "g1.$name:remote-url-has-no-userinfo" \
+    || fail "g1.$name:remote-url-has-no-userinfo" "a remote call did not carry the bare https://github.com/ URL: $(grep 'net=1' "$SHIM_LOG_F" | tr '\n' '|')"
+  [[ "$(shim_count 'net=1 .*env=header-ok')" == 2 ]] && pass "g1.$name:header-in-env-of-remote-calls" \
+    || fail "g1.$name:header-in-env-of-remote-calls" "the remote calls did not both carry the decoded-equal header in their environment: $(grep 'net=1' "$SHIM_LOG_F" | tr '\n' '|')"
+  [[ "$(shim_count 'net=0 .*env=header')" == 0 ]] && pass "g1.$name:header-only-on-remote-calls" \
+    || fail "g1.$name:header-only-on-remote-calls" "a non-remote git call carried the header"
+  out_lacks "g1.$name:no-token-in-output" "$tok"
+  out_lacks "g1.$name:no-b64-in-output"   "$tok_b64"
+}
+
+accept_row argv "$SYN_TOK"
+# AUTH_HDR is a shell variable, never exported: not in any git child's environment.
+# argv-row only by design: the property is token-independent (whether the
+# variable carries the export attribute), so pinning it once is the whole
+# property — newshape re-verifies the same mechanism via env=header-ok.
 [[ "$(wc -l < "$SHIM_LOG_F.ah")" -ge 2 && "$(grep -c '^set$' "$SHIM_LOG_F.ah")" == 0 ]] && pass 'g1.argv:AUTH_HDR-not-in-child-env' \
   || fail 'g1.argv:AUTH_HDR-not-in-child-env' "git children saw AUTH_HDR=$(sort "$SHIM_LOG_F.ah" | uniq -c | tr '\n' ' ')"
 # ...even when the CALLER's environment already exports a variable of that name: `AUTH_HDR=""` alone would keep the
@@ -1958,15 +1988,19 @@ assert_out_has 'g1b.B24:remedy' 'republish vinngest-v1.1.37 (workflow_dispatch)'
 # base_fixture and assert_refused (defined in Guard 1b); the shim, run_shimmed
 # and out_lacks come from the S4 block in Guard 1.
 # --- refused credentials: marker, non-zero, and ZERO git network calls ---------
-# Each value is a shape the guard must refuse BEFORE the header is built: a
-# blank, an embedded space, a quote (a config/URL injection), a dot, a colon, a
-# newline and a tab (control bytes, reason=control_char), and an empty token.
+# Each value is a shape the guard must refuse BEFORE the header is built: an
+# embedded space, a quote (a config/URL injection), a colon, a newline and a
+# tab (control bytes, reason=control_char), and an empty token.
+# '.' and '-' are IN-CLASS now — the guard's alphabet is the canonical
+# [A-Za-z0-9._~+/=-] of scripts/lib/bearer-curl.sh bc_ok, and GitHub's issued
+# installation tokens carry both (measured 2026-10-11, #9972). The newshape
+# accept row below pins the admission.
 refuse_row() { # <label> <token> <reason>
   local lbl="$1" tok="$2" reason="$3"
   base_fixture "refuse-$lbl"
   printf 'v1.1.38\t%s\n' "$DIG_NEW" >> "$MOCK_CRANE_MAP"
   run_shimmed "refuse-$lbl" local "$tok" -- --signed-tag v1.1.38 --signed-digest "$DIG_NEW" --mirror-status ok
-  assert_refused "g1.refuse-$lbl" 'must match [A-Za-z0-9_]+' args
+  assert_refused "g1.refuse-$lbl" 'must match [A-Za-z0-9._~+/=-]+' args
   assert_out_has "g1.refuse-$lbl:marker" "SOLEUR_CREDENTIAL_REFUSED script=bump-inngest-bootstrap-pin reason=$reason"
   [[ "$(shim_count 'net=1')" == 0 ]] && pass "g1.refuse-$lbl:no-git-network-call" \
     || fail "g1.refuse-$lbl:no-git-network-call" "git touched the remote after the credential was refused"
@@ -1978,11 +2012,35 @@ refuse_row() { # <label> <token> <reason>
 }
 refuse_row space   "${SYN_TOK:0:12} ${SYN_TOK:12}" token_shape
 refuse_row quote   "${SYN_TOK:0:12}\"${SYN_TOK:12}" token_shape
-refuse_row dot     "${SYN_TOK:0:12}.${SYN_TOK:12}" token_shape
 refuse_row colon   "${SYN_TOK:0:12}:${SYN_TOK:12}" token_shape
 refuse_row newline "${SYN_TOK}"$'\n' control_char
 refuse_row tab     "${SYN_TOK:0:12}"$'\t'"${SYN_TOK:12}" control_char
 refuse_row empty   "" token_shape
+
+# The ACCEPT counterpart to the refuse rows (#9972): a token in the format
+# GitHub actually issues — several hundred chars on the [A-Za-z0-9._~+/=-]
+# alphabet — must pass the guard and drive the same env-header wire the argv
+# row pins. The self-check first pins that the fixture itself is out-of-class
+# for the LEGACY alphabet: a regeneration losing the punctuation would
+# otherwise degenerate newshape into a duplicate of argv with no red row.
+case "$SYN_TOK_V2" in *[!A-Za-z0-9_]*) : ;; *) fail 'fixture:newshape-carries-widened-bytes' "SYN_TOK_V2 carries no byte outside the legacy [A-Za-z0-9_] class" ;; esac
+accept_row newshape "$SYN_TOK_V2"
+
+# bc_ok parity (review r1, user-impact seat): the lint parity row pins every
+# _bearer_ok copy to _CANON_BODY — copy-vs-copy only. If bc_ok's judged class
+# is ever amended, every inline copy silently stays narrow (the #9972 shape
+# again). Compare the case-class span on each file's definition line as text;
+# bc_ok's line also carries *[![:space:]] trims, so take the LAST match. The
+# bump-side pattern is SPLIT — this file is inside the census's pathspec, and
+# a literal `_bearer_ok`+`() {` in its text would itself be swept up as an
+# off-canonical copy (verified: 74/1 red), so nothing here may spell the
+# contiguous form — comment included.
+_bc_src=$(sed -n '/^bc_ok()/p' "$REPO_ROOT/scripts/lib/bearer-curl.sh" | grep -oE '\*\[![^]]+\]' | tail -1)
+_bc_bump_pat='_bearer_''ok() {'
+_bc_bump=$(sed -n "/^${_bc_bump_pat}/p" "$SCRIPT" | grep -oE '\*\[![^]]+\]' | tail -1)
+[[ -n "$_bc_src" && "$_bc_src" == "$_bc_bump" ]] \
+  && pass 'g1.bc-parity:alphabet-match' \
+  || fail 'g1.bc-parity:alphabet-match' "bump guard class '$_bc_bump' diverged from bc_ok's '$_bc_src'"
 
 # xtrace with a live credential is refused first (#7797): exit 78 before any
 # expansion is traced, and nothing git-shaped runs.
