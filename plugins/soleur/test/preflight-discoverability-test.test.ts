@@ -2900,13 +2900,19 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // needs BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler soleur/prd_terraform). NO SUBSTITUTE: the per-rule ask counts live
   // only in the private Better Stack sink (the Sentry events are capped per context and carry no per-rule totals), so no
   // unauthenticated read verifies the runtime stream; the static `git grep` in the same block proves only that the emitter exists. Genuine.
-  // #9860 (2026-10-10): +1 (57 -> 58) for `2026-10-10-fix-canary-diag-kernel-denial-and-proc-mask-rows-plan.md`.
+  // #7258 Step A (2026-10-11): +1 (57 -> 58) for `2026-10-11-chore-zot-consumer-probe-covers-inngest-bootstrap-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`scripts/betterstack-query.sh --since 1h --grep SOLEUR_ZOT_PROBE_VERDICT`) reads
+  // BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler soleur/prd_terraform). NO SUBSTITUTE: the property is
+  // the per-repository marker rows web-1's probe emits (journald -> vector Source 4 -> the Logs warehouse),
+  // which have no unauthenticated read path; the host itself is no-SSH. Genuine.
+  // #9860 (2026-10-10): +1 (58 -> 59) for `2026-10-10-fix-canary-diag-kernel-denial-and-proc-mask-rows-plan.md`.
   // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
   // TRUTH: the command (`scripts/betterstack-query.sh --grep SOLEUR_CANARY_SANDBOX_DIAG`) reads
   // BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler soleur/prd_terraform) and expects a `section=kdeny` row.
   // NO SUBSTITUTE: the bundle is emitted only when a canary sandbox probe fails, and lands only in the Logs
   // warehouse, which has no unauthenticated read path. Genuine.
-  const BASELINE_DECLARED_PROBES = 58;
+  const BASELINE_DECLARED_PROBES = 59;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
