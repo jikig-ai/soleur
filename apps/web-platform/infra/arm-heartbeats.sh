@@ -298,6 +298,7 @@ state_add() {  # <id> [pre-unpause]
 state_remove() {
   [[ -f "$ARMED_UNCONFIRMED" ]] || return 0
   local keep grc
+  # lint-trap-ownership: ok no EXIT trap by design (Cut List C6): a trap would delete the books file on the very interruption it must survive; the scratch file is renamed over the books or removed on every path below
   if ! keep=$(mktemp "${ARMED_UNCONFIRMED}.keep.XXXXXX"); then
     echo "::error::arm-heartbeats.sh: could not create a scratch file beside $(show "$ARMED_UNCONFIRMED"); leaving it INTACT. The re-pause sweep will re-PATCH ${1}, which is idempotent."
     return 1
@@ -818,6 +819,7 @@ armone_run() {
     return 1
   fi
   if [[ -z "$ARMED_UNCONFIRMED" ]]; then
+    # lint-trap-ownership: ok the private books file must outlive the process on interruption (the printed --sweep command reads it); removed on a clean finish
     if ! ARMED_UNCONFIRMED=$(mktemp "${TMPDIR:-/var/tmp}/arm-one-unconfirmed.XXXXXX"); then
       echo "::error::arm-heartbeats.sh: could not create the private books file under ${TMPDIR:-/var/tmp} — refusing to unpause a monitor with nowhere to record it."
       return 1
