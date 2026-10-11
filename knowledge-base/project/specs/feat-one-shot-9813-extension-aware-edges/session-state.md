@@ -57,3 +57,11 @@
 - **Verdicts:** arch SHIP-WITH-FIXES, simplicity SHIP-WITH-FIXES, performance SHIP-WITH-FIXES, security SHIP, data-integrity SHIP-WITH-FIXES, agent-native SHIP-WITH-FIXES, git-history SHIP, code-quality SHIP-WITH-FIXES, pattern SHIP-WITH-FIXES.
 - **Deferred advisories (not in scope):** pre-existing under-cover siblings repo-write-boundary/guard-vacuity-floor/lint-orphan (kb-less whole-tree corpus — glob kind now makes the fix expressible; follow-up issue candidate); `_affected_glob_split` extraction (deferred to next grammar touch); `|` in verbatim mints (cosmetic); `*bunfig.toml` overmatch (widen-only).
 - Verification pending: final clean battery + orphan + kb-consumers runs.
+
+## Compound Phase
+- Learning: knowledge-base/project/learnings/workflow-issues/2026-10-10-a-declared-edge-must-say-what-the-walker-reads-and-a-malformed-one-must-fail-wide.md (10-item session-error inventory, preventions, test patterns, related docs).
+- Rule budget: [OK] B_ALWAYS=43166 (98 rules, longest 596B, constitution 317) — no promotions proposed (all insights domain-scoped → learning + ADR only).
+- Deviation analyst: no hard-rule deviations; rule-metrics aggregate ran (81 unused-8w, informational).
+- Deferred-scope-out filed: #9969 (under-cover siblings — whole-tree corpus suites the glob kind now makes expressible + review advisories).
+- Archive-kb deferred to ship Phase 6 (ship reads the spec dir — its Phase 6 step 5.5 archives after the last live read, same PR).
+- Post-rebase note: origin/main advanced +6 (#9893 argv-bearer merged — additive, zero conflicts, ARGV_BEARER_SWEEP literal .md edges only; suite count 600→601, q4's >=100 pin holds).
