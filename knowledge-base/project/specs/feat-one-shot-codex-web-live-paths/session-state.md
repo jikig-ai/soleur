@@ -1072,3 +1072,28 @@
   Preserve credential/provider/browser-auth, account/shared-write, deployment
   and flag/cohort restrictions; keep draft/default-off/customer-content blocked.
   Project sharing, retention/inheritance and configured regions remain unknown.
+
+## Continuation update — 2026-10-11 first watch and final pinned sync
+
+- Exact pushed head `3d7641a56eedb609f41fb2344066129503e61b0f` settled with
+  69 passes, 11 skips, zero pending/cancelled and one failed required `test`
+  aggregate in [CI 38152359028](https://github.com/jikig-ai/soleur/actions/runs/38152359028).
+  The aggregate log confirms `draft: full battery owed at ready`, with Web
+  and both scripts legs skipped. Build, RLS, tenant and final guards passed.
+  This establishes neither C.9 coverage nor current-source recovery.
+- Main then advanced by two commits to
+  `f801bbb943bde861864f009a3f692f1d3cf462bb`, merged cleanly at
+  `0ac74424ad91285a8c8d7dff92a88159cb24296b`. This imports the registry/apply
+  workflow credential-channel hardening and ADR-276's adopting status.
+  Workflow actionlint (ShellCheck disabled) and feature-range whitespace
+  checks passed again. A final pushed-head and description watch remains
+  required; the preceding settled verdict does not apply to this new head.
+- Ref #9952 was verified CLOSED after main's forwarder packaging fix; it no
+  longer represents an open source-level blocker. That fix is not runtime
+  recovery evidence for this draft. GitHub's push-time dependency advisory
+  was checked against 24 existing open main alerts (one critical, ten high,
+  ten medium, three low); no dependency change was introduced here.
+- The Markdown invoker excluded both evidence paths, so it ran no Markdown
+  lint. No local suite, image/recovery retry, browser/provider operation,
+  shared-production write, deployment, review or promotion gate ran. All
+  previously recorded holds remain in force; the PR stays draft and disarmed.

@@ -640,3 +640,9 @@ is not a completed lint check of those files.
   path, not an executed legal-hash check; file discovery found the real hash
   module/test. Incoming changes touched only internal legal records, with no
   canonical legal-hash-module change. No hash regeneration was performed.
+- After the evidence commit, `HEAD` was no longer the merge commit, so
+  `HEAD^2` was invalid. Compare using the measured merge SHA and its second
+  parent, not an assumed current-HEAD shape. The corrected host-identity
+  comparison against the pinned merge parent passed. A watch started near
+  push registration can read historical check rows: independently verify
+  the exact run's `headSha` and jobs before attributing its verdict.
