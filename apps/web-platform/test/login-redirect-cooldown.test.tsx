@@ -222,3 +222,13 @@ describe("LoginForm — resend cooldown (AC4, AC6)", () => {
     expect(signInWithOtpMock).toHaveBeenCalledTimes(2); // different email → allowed
   });
 });
+
+// Demoted from e2e/oauth.e2e.ts (#9855) — the e2e asserted the "or" divider is
+// visible on the rendered /login page; the divider is static markup in
+// LoginForm, so a component render is the lowest layer that covers it.
+describe("LoginForm — OAuth section chrome (demoted from e2e/oauth.e2e.ts)", () => {
+  it("renders the 'or' divider above the OAuth buttons", () => {
+    render(<LoginForm />);
+    expect(screen.getByText("or")).toBeInTheDocument();
+  });
+});

@@ -1581,7 +1581,7 @@ echo "=== Composite (mint-infra-app-token) ==="
 CDIR="$TMP/composite"; CBIN="$CDIR/bin"; mkdir -p "$CBIN"
 extract_comp() { awk '/^      run: \|[[:space:]]*$/ {on=1; next} on' "$1" | sed 's/^        //'; }
 extract_comp "$COMPOSITE" > "$CDIR/run.sh"
-if grep -qF 'INSTALL_RESP=$(curl -sS --max-time 30 -X POST \' "$CDIR/run.sh"; then pass 'comp:extracted'
+if grep -qF 'INSTALL_RESP=$(bc_curl mint-infra-app-token '"'"'Authorization:Bearer :JWT'"'"' -- \' "$CDIR/run.sh"; then pass 'comp:extracted'
 else fail 'comp:extracted' "could not extract the composite run block from $COMPOSITE"; fi
 openssl genrsa 2048 > "$CDIR/key.pem" 2>/dev/null
 # doppler: logs its argv, and refuses (exit 1) unless the argv carries exactly
@@ -1622,7 +1622,7 @@ run_comp() {
   env -u SCOPE_PERMISSIONS -u SCOPE_REPOSITORIES -u CURL_RESP -u DOPPLER_PROJECT -u DOPPLER_CONFIG ${CURL_FAIL:+CURL_FAIL="$CURL_FAIL"} \
     ${4:+CURL_RESP="$4"} PATH="$CBIN:$PATH" CURL_LOG="$CLOG" DOPPLER_LOG="$DLOG" \
     DOPPLER_TOKEN="${5-fixture}" INSTALLATION_ID="${6-166065653}" DOPPLER_SOURCE="${COMP_SOURCE-$COMP_DEFAULT}" \
-    SCOPE_PERMISSIONS="$2" SCOPE_REPOSITORIES="$3" RUNNER_TEMP="$CDIR" GITHUB_OUTPUT="$COUT" \
+    SCOPE_PERMISSIONS="$2" SCOPE_REPOSITORIES="$3" RUNNER_TEMP="$CDIR" GITHUB_OUTPUT="$COUT" GITHUB_WORKSPACE="$REPO_ROOT" \
     bash --noprofile --norc -eo pipefail "${7:-$CDIR/run.sh}" > "$CDIR/$1.stdout" 2>&1 || CRC=$?
 }
 calls() { grep -c -- '^--call--$' "$CLOG" || true; }

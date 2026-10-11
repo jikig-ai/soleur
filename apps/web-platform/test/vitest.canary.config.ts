@@ -32,6 +32,14 @@
 // `cacheDir`: the canary exec runs as USER soleur and /app/node_modules is
 // root-owned, so vitest's default cache location is unwritable — /tmp is the
 // canary's tmpfs mount.
+//
+// This file is `.ts`, so vitest's `configLoader: bundle` loads it through
+// the ESM path: bundle in memory, write `<nearest node_modules>/.vite-temp/
+// <name>.timestamp-*.mjs`, then `import()` it (fallback target is this file's
+// own dir — root-owned in the image). /app/package.json is type:module, so
+// the in-memory CJS path never applies. The Dockerfile bakes
+// `node_modules/.vite-temp` owned by uid 1001 for exactly this write — drop
+// it and the probe fails at "failed to load config" (v0.335.5 verdict).
 export default {
   cacheDir: "/tmp/vitest-cache",
   test: {

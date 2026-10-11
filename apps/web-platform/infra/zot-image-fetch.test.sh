@@ -60,7 +60,7 @@ echo "--- F: zot-image-fetch.sh ---"
 RAW="$TMP/fetch.raw.sh"
 extract_block /usr/local/bin/zot-image-fetch.sh "$RAW"
 check "F0 the fetch script is extracted from the template (non-empty, shebang first)" \
-  "[[ -s '$RAW' ]] && head -1 '$RAW' | grep -q '^#!/usr/bin/env bash$'"
+  "[[ -s '$RAW' ]] && head -1 '$RAW' | grep -c >/dev/null '^#!/usr/bin/env bash$'"
 # BRACE-FREE: the body is a terraform templatefile; a dollar-brace or percent-brace would be
 # consumed (or fail the render). Asserted on the RAW template body, comments included.
 check "F0 the fetch body carries no dollar-brace (templatefile interpolation)" "! grep -qF '\${' '$RAW'"
@@ -290,7 +290,7 @@ PY
   check "R2 (M5) order: deny < docker enabled < fetch < zot docker run" \
     "[[ -n '$DOCKERI' && '$SINK' -lt '$DOCKERI' && '$DOCKERI' -lt '$FETCHI' && '$FETCHI' -lt '$RUNI' ]]"
   check "R3 (M7) the fetch entry is not inside any doppler run" \
-    "! grep -E \"^$FETCHI$(printf '\t')\" '$TMP/runcmd.txt' | grep -q doppler"
+    "! grep -E \"^$FETCHI$(printf '\t')\" '$TMP/runcmd.txt' | grep -c >/dev/null doppler"
   check "R3b the fetch invocation appears in exactly ONE runcmd entry (not also inside ZOTEOF)" \
     "[[ \$(grep -c 'zot-image-fetch\.sh' '$TMP/runcmd.txt') -eq 1 ]]"
   check "R4 exactly one docker run names zot in the whole render" \
@@ -365,11 +365,11 @@ PY
   guard() { printf '%s\n%s\necho REACHED\n' "${G_READ//\/run\/soleur/$TMP/grun}" "$G_TEST" | bash 2>/dev/null; }
   rm -rf "$TMP/grun"; mkdir -p "$TMP/grun"
   check "R11 the launch guard lines are extracted (one each)" "[[ \$(grep -c . <<<\"\$G_READ\") -eq 1 && \$(grep -c . <<<\"\$G_TEST\") -eq 1 ]]"
-  check "R11 no ID file: the launch refuses (never reaches docker run)" "! guard | grep -q REACHED"
+  check "R11 no ID file: the launch refuses (never reaches docker run)" "! guard | grep -c >/dev/null REACHED"
   printf 'ghcr.io/project-zot/zot-linux-amd64:v2.1.22\n' > "$TMP/grun/zot-image-id"
-  check "R11 a registry ref in the ID file: the launch refuses" "! guard | grep -q REACHED"
+  check "R11 a registry ref in the ID file: the launch refuses" "! guard | grep -c >/dev/null REACHED"
   printf 'sha256:%s\n' "$C_OK" > "$TMP/grun/zot-image-id"
-  check "R11 a well-formed verified ID: the launch proceeds" "guard | grep -q REACHED"
+  check "R11 a well-formed verified ID: the launch proceeds" "guard | grep -c >/dev/null REACHED"
   # shellcheck disable=SC2016  # literal \$ZOT_IMAGE_ID in the rendered line
   GL="$(grep -nE '^[[:space:]]+\[\[ "\$ZOT_IMAGE_ID" =~' "$RENDERED" | cut -d: -f1)"
   RL="$(grep -nE '^[[:space:]]+docker rm -f zot ' "$RENDERED" | cut -d: -f1)"

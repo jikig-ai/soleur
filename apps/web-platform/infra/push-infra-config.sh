@@ -19,6 +19,14 @@
 #                      UNRENDERED template, so it cannot be read from INFRA_DIR. #7095.
 set -euo pipefail
 
+# REFUSE TO RUN UNDER XTRACE (#7797). This script binds the webhook HMAC secret and the CF
+# Access client credentials; with `-x` the shell prints every expansion, so each one lands in
+# the provisioner log in plaintext. First statement after `set`, because anything above it is
+# already traced.
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
+
 # REDEPLOY NONCE (#6178, 2026-07-10). deploy_pipeline_fix.triggers_replace hashes
 # THIS file's content (server.tf), so bumping the nonce forces terraform to recreate
 # the terraform_data and re-run this push — re-delivering EVERY webhook-managed file.
@@ -55,6 +63,14 @@ for var in WEBHOOK_SECRET CF_ACCESS_ID CF_ACCESS_SECRET APP_DOMAIN_BASE INFRA_DI
     exit 1
   fi
 done
+
+# The credentials reach curl on its stdin config channel and the HMAC key reaches a python3 child in
+# its environment, never an argument list (/proc/<pid>/cmdline is readable by every local user;
+# tracker #9597, ADR-280). The library is found from THIS file's own location: the provisioner's
+# working directory is not the repo root.
+# shellcheck source=/dev/null
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../../scripts/lib/bearer-curl.sh" \
+  || { echo "ERROR: scripts/lib/bearer-curl.sh could not be loaded from this checkout" >&2; exit 1; }
 
 PAYLOAD_FILE=$(mktemp /tmp/infra-config-payload.XXXXXX)
 trap 'rm -f "$PAYLOAD_FILE"' EXIT
@@ -98,19 +114,24 @@ cat > "$PAYLOAD_FILE" <<PAYLOAD
 }
 PAYLOAD
 
-# Compute HMAC-SHA256 over the raw payload file (same pattern as web-platform-release.yml).
-HMAC=$(openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" < "$PAYLOAD_FILE" | sed 's/.*= //')
+# Compute HMAC-SHA256 over the raw payload file (same pattern as web-platform-release.yml). The
+# key is read from WEBHOOK_SECRET by the library (python3 child, environment only). `|| HMAC=""`
+# sends a failure (empty key, python3 missing) to bc_curl's shape check below, which refuses with
+# the marker and makes no request, instead of aborting mute at the assignment under `set -e`.
+# shellcheck disable=SC2034  # read by NAME inside bc_curl
+HMAC=$(bc_hmac_sha256_hex WEBHOOK_SECRET < "$PAYLOAD_FILE") || HMAC=""
 
 # --data-binary preserves the exact payload bytes (including newlines from
 # the heredoc). curl's -d strips newlines, creating an HMAC mismatch between
-# what openssl hashed and what the server receives.
-HTTP_CODE=$(curl -s -o /tmp/infra-config-response.txt -w '%{http_code}' \
+# what was signed and what the server receives.
+HTTP_CODE=$(bc_curl push-infra-config \
+  'X-Signature-256:sha256=:HMAC' \
+  'CF-Access-Client-Id::CF_ACCESS_ID' \
+  'CF-Access-Client-Secret::CF_ACCESS_SECRET' -- \
+  -s -o /tmp/infra-config-response.txt -w '%{http_code}' \
   --max-time 30 \
   -X POST \
   -H "Content-Type: application/json" \
-  -H "X-Signature-256: sha256=${HMAC}" \
-  -H "CF-Access-Client-Id: ${CF_ACCESS_ID}" \
-  -H "CF-Access-Client-Secret: ${CF_ACCESS_SECRET}" \
   --data-binary @"$PAYLOAD_FILE" \
   "https://deploy.${APP_DOMAIN_BASE}/hooks/infra-config")
 

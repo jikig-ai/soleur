@@ -2,6 +2,11 @@
 // One view per C4 level. `view <id> of <element>` gives LikeC4 automatic
 // clickable drill-down: in the context view the `platform` box drills into
 // `containers`; in `containers` the `plugin` box drills into `components`.
+// GAP (2026-10-11 audit): platform.webapp.egressForwarder, platform.infra.egressGw and
+// publicInternet (#9534, ADR-278) exist in model.c4 but are included in NO view, so the
+// egress path does not render. Adding them changes the layout, so it needs a
+// regenerate-c4-model.sh run in the same change (c4-model-freshness gate).
+// last-verified: 2026-10-11
 views {
 
   // ---- C4 L1: System Context --------------------------------------------

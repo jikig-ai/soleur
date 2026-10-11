@@ -71,20 +71,31 @@ ABSENCE=()
 usage() {
   cat >&2 <<'EOF'
 usage: betterstack-assert-absence.sh --host <host_name> --absence <substring> [--absence <substring>...]
-                                     [--control <substring>] [--since <Nh|Nd>]
+                                     [--absence-require <substring>] [--control <substring>] [--since <Nh|Nd>]
 
   --host     REQUIRED. Exact host_name to scope BOTH the absence and control reads to.
   --absence  REQUIRED, repeatable. A row matching ANY of these makes the outcome `present`.
+  --absence-require  Optional, repeatable. A substring a matching row must ALSO carry to
+             count as `present` — AND'd onto every --absence term. Use it when the needle
+             can appear inside unrelated log bodies: 'Failed to start inngest-luks' is
+             issue text too (measured: webhook-payload rows under ident=doppler attributed
+             to host_name=soleur-inngest-prd, and rehearsal hosts ship under the prod
+             host_name) — so that needle needs both a systemd-row require (e.g.
+             '"SYSLOG_IDENTIFIER":"systemd"') and a machine-field require (e.g.
+             '"host":"soleur-inngest"') to discriminate the systemd journal path on the
+             right machine.
   --control  Positive-control marker (default SOLEUR_PROBE_CANARY).
   --since    Window, minimum 1h (see the rate-limit note below). Default 6h.
 EOF
   exit 64
 }
 
+ABSENCE_REQUIRE=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --host)    HOST="${2:-}"; shift 2 ;;
     --absence) ABSENCE+=("${2:-}"); shift 2 ;;
+    --absence-require) ABSENCE_REQUIRE+=("${2:-}"); shift 2 ;;
     --control) CONTROL_MARKER="${2:-}"; shift 2 ;;
     --since)   SINCE="${2:-}"; shift 2 ;;
     -h|--help) usage ;;
@@ -143,8 +154,12 @@ HOST_LIT="$(sql_lit "$HOST")"
 # explicit AND against a dedicated column instead of another substring term.
 absence_or=""
 for pat in "${ABSENCE[@]}"; do
+  term="raw LIKE '%$(sql_lit "$pat")%'"
+  for req in "${ABSENCE_REQUIRE[@]+"${ABSENCE_REQUIRE[@]}"}"; do
+    term="(${term} AND raw LIKE '%$(sql_lit "$req")%')"
+  done
   [[ -n "$absence_or" ]] && absence_or+=" OR "
-  absence_or+="raw LIKE '%$(sql_lit "$pat")%'"
+  absence_or+="$term"
 done
 
 # --- The read, in raw SQL (#7103 R3 4.2) ---
