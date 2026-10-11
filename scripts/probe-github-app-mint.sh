@@ -45,18 +45,26 @@ fail() { printf '::error::%s\n' "$1" >&2; exit 1; }
 
 command -v openssl >/dev/null 2>&1 || fail "openssl is required (JWT RS256 sign)"
 
-# fp of the ENV-FORM value — the same field the mint code logs as pemFingerprint on
+# Expand the PEM first: `\n` is the Doppler escape variant the runtime's
+# getPrivateKey() also expands. EXP is what the mint code signs with, and CI's
+# pemFingerprint = sha256[:8] of THIS form — hashing the env form instead would
+# silently diverge the moment a config stores the escaped variant. The $()
+# capture drops the awk trailing newline, so EXP is byte-identical to
+# getPrivateKey()'s return value.
+EXP="$(printf '%s' "$GITHUB_APP_PRIVATE_KEY" | awk '{gsub(/\\n/, "\n"); printf "%s\n", $0}')"
+
+# fp of the EXPANDED value — the same field the mint code logs as pemFingerprint on
 # failure (apps/web-platform/server/github-app.ts generateInstallationToken), so a CI
 # 401 can be matched to a config entry without ever printing it.
-FP="$(printf '%s' "$GITHUB_APP_PRIVATE_KEY" | openssl dgst -sha256 | awk '{print $NF}' | cut -c1-8)"
+FP="$(printf '%s' "$EXP" | openssl dgst -sha256 | awk '{print $NF}' | cut -c1-8)"
 
-# PEM to a private tmp file for openssl. `\n` is the Doppler escape variant the
-# runtime's getPrivateKey() also expands.
-PEM_DIR="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
+# PEM to a private tmp file for openssl — tmpfs first (a killed step leaves the
+# 0600 file on self-hosted runners' disk; XDG_RUNTIME_DIR is tmpfs; macOS has no
+# tmpfs so umask-077 + the EXIT-trap rm is the residual control there).
+PEM_DIR="${XDG_RUNTIME_DIR:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}}"
 PEMF="$(mktemp "$PEM_DIR/ghapp-mint-pem.XXXXXXXX")" || fail "mktemp failed"
 trap 'rm -f "${PEMF:-}"' EXIT
-printf '%s' "$GITHUB_APP_PRIVATE_KEY" \
-  | awk '{gsub(/\\n/, "\n"); printf "%s\n", $0}' > "$PEMF"
+printf '%s\n' "$EXP" > "$PEMF"
 
 # Pre-flight the PEM before signing (#4384 mint chain): a corrupted value fails with a
 # named error here instead of an opaque downstream 401.
@@ -69,7 +77,10 @@ b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '=\n'; }
 
 NOW="$(date +%s)"
 HDR="$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | b64url)"
-PLD="$(printf '{"iat":%d,"exp":%d,"iss":%s}' "$((NOW - 60))" "$((NOW + 600))" "$GITHUB_APP_ID" | b64url)"
+# exp=+540, not +600: GitHub rejects exp > now+600 as 401, and createAppJwt
+# (github-app.ts) uses +540 for the same reason — a runner clock 1s ahead of
+# GitHub's must not make the canary red a healthy credential.
+PLD="$(printf '{"iat":%d,"exp":%d,"iss":%s}' "$((NOW - 60))" "$((NOW + 540))" "$GITHUB_APP_ID" | b64url)"
 SIG="$(printf '%s' "$HDR.$PLD" | openssl dgst -sha256 -sign "$PEMF" 2>/dev/null | b64url)"
 [[ -n "$SIG" ]] || fail "openssl could not sign with GITHUB_APP_PRIVATE_KEY (fp=$FP)"
 JWT="$HDR.$PLD.$SIG"
@@ -81,7 +92,7 @@ source "$LIB" || fail "could not load scripts/lib/bearer-curl.sh from this check
 
 RESP="$(bc_curl probe-github-app-mint \
   'Authorization:Bearer :JWT' -- \
-  -s --max-time 15 -w '\n%{http_code}' \
+  -sS --max-time 15 -w '\n%{http_code}' \
   -H 'Accept: application/vnd.github+json' \
   -H 'X-GitHub-Api-Version: 2022-11-28' \
   -H 'User-Agent: soleur-mint-probe' \

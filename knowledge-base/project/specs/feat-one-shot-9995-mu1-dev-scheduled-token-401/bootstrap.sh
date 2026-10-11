@@ -395,8 +395,8 @@ read_preflight() {
 # visible instead of silently double-creating on re-run.
 # =============================================================================
 plan_create_app() {
-  if [[ -n "$(installed_app)" || -n "$(env_get FIXTURE_APP_CREATED)" ]]; then
-    return 0  # installed, or created-and-key-recorded: nothing to do
+  if [[ -n "$(installed_app)" ]]; then
+    return 0  # installed: nothing to do
   fi
   if [[ -n "$(env_get APP_CREATE_ATTEMPTED)" ]]; then
     soleur_op_precondition_failed create-app record-key \
@@ -430,6 +430,12 @@ read_record_key() {
   local pem_path=""
   soleur_op_value SOLEUR_BOOTSTRAP_PEM_PATH "  Path of the downloaded .pem (move it under \$XDG_RUNTIME_DIR first): " pem_path
   [[ -f "$pem_path" ]] || { soleur_op_red "  no file at ${pem_path}"; return 1; }
+  # `stat -f -c %T` is GNU-only; refuse non-Linux by name rather than misreading
+  # a stat error as "not tmpfs".
+  if [[ "$(uname -s 2>/dev/null)" != "Linux" ]]; then
+    soleur_op_red "  record-key requires a tmpfs dir; this host is not Linux — run on a Linux host (macOS has no tmpfs)."
+    return 1
+  fi
   if [[ "$(stat -f -c %T "$(dirname "$pem_path")" 2>/dev/null)" != "tmpfs" ]]; then
     soleur_op_red "  ${pem_path} is not on tmpfs — move it under \$XDG_RUNTIME_DIR and re-run (a key must not sit in a disk-backed dir)."
     return 1
@@ -503,7 +509,14 @@ plan_write_doppler() {
 apply_write_doppler() {
   local pem_path pem_fp inst iid aid set_rc=0
   pem_path="$(env_get FIXTURE_PEM_PATH)"; pem_fp="$(env_get FIXTURE_PEM_FP)"
-  inst="$(installed_app)"; iid="${inst%% *}"; aid="${inst##* }"
+  # Re-prove everything in THIS process — the plan ran in a previous one, and a
+  # hand-edited .env or a removed install must never write empty strings.
+  [[ -n "$pem_fp" && -f "$pem_path" ]] \
+    || { soleur_op_red "  no verified .pem recorded — run record-key first"; return 1; }
+  inst="$(installed_app)"
+  [[ -n "$inst" ]] \
+    || { soleur_op_red "  ${APP_SLUG} installation not visible — aborting before any write (re-run install-app)"; return 1; }
+  iid="${inst%% *}"; aid="${inst##* }"
   mark_changed "dev_scheduled GITHUB_APP_* and MU1_FIXTURE_INSTALLATION_ID may have been rewritten"
   printf '%s' "$aid" | doppler secrets set GITHUB_APP_ID -p "$DOPPLER_PROJECT" -c "$DOPPLER_CONFIG" --silent >/dev/null || set_rc=$?
   doppler secrets set GITHUB_APP_PRIVATE_KEY -p "$DOPPLER_PROJECT" -c "$DOPPLER_CONFIG" --silent <"$pem_path" >/dev/null || set_rc=$?

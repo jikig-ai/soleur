@@ -98,7 +98,7 @@ run_sut() {
 # call's stdin config; prints the iss string or nothing.
 jwt_iss() {
   local last
-  last=$(ls "$CALLS_DIR"/*.stdin 2>/dev/null | sort -V | tail -1)
+  last=$(ls "$CALLS_DIR"/*.stdin 2>/dev/null | sort -n | tail -1)
   [[ -n "$last" ]] || { echo ""; return 0; }
   local tok
   tok=$(sed -n 's/^header = "Authorization: Bearer \([^"]*\)"$/\1/p' "$last" | head -1)
@@ -168,10 +168,11 @@ if grep -q 'GITHUB_APP_MINT status=200 slug=soleur-ci-fixture' "$OUT"; then
 else
   fail "row5 MINT line wrong (out: $(head -c 200 "$OUT"))"
 fi
-# fp is of the ENV-FORM value — for row5 that is the escaped variant's fingerprint.
+# fp is of the EXPANDED value — the form github-app.ts's pemFingerprint hashes —
+# so row5's fp equals EXPECTED_FP even though the env carried the escaped variant.
+if grep -q "fp=$EXPECTED_FP" "$OUT"; then pass "row5 fp=$EXPECTED_FP pins the expanded form"; else fail "row5 fp missing/wrong"; fi
 ESC_FP="$(printf '%s' "$PEM_ESC" | openssl dgst -sha256 | awk '{print $NF}' | cut -c1-8)"
-if grep -q "fp=$ESC_FP" "$OUT"; then pass "row5 fp=$ESC_FP pins the env-form value"; else fail "row5 fp missing/wrong"; fi
-if [[ "$ESC_FP" != "$EXPECTED_FP" ]]; then pass "row5 fixture sound: escaped fp differs ($ESC_FP) — the probe's fp pins the env form"; else fail "row5 fixture vacuous: escaped and plain PEM share fp"; fi
+if [[ "$ESC_FP" != "$EXPECTED_FP" ]]; then pass "row5 fixture sound: env-form fp differs ($ESC_FP) — hashing the env form would silently diverge"; else fail "row5 fixture vacuous: escaped and plain PEM share fp"; fi
 
 # --- Missing GITHUB_APP_ID ------------------------------------------------------------
 run_sut env GITHUB_APP_PRIVATE_KEY="$PEM_NL" SHIM_CODE=200 SHIM_BODY='{}' bash "$SUT"

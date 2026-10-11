@@ -309,7 +309,7 @@ jobs:
           # revoked key reds here with a named error instead of an opaque
           # 401 inside vitest (the original #9995 failure shape).
           doppler run -p soleur -c dev_scheduled -- \
-            bash ../scripts/probe-github-app-mint.sh
+            bash "$GITHUB_WORKSPACE/scripts/probe-github-app-mint.sh"
           doppler run -p soleur -c dev_scheduled -- \
             env MU1_INTEGRATION=1 \
             npm run test:ci -- \

@@ -56,3 +56,15 @@
 ### Next
 - push + affected-gate (test-all.sh has a registration-only edit) → review
   → QA → ship via soleur:ship.
+
+### Review round (2026-10-11)
+- P1 fixed: apply_write_doppler re-proves `installed_app` + PEM in-process —
+  an empty gh read could have written empty secrets and deleted the PEM.
+- P2s fixed: probe fp now hashes the EXPANDED pem (== CI pemFingerprint,
+  verified against github-app.ts getPrivateKey/createHash); exp now +540
+  (matches createAppJwt; +600 boundary would 401 under 1s skew); PEM tmpfs
+  ordering (XDG_RUNTIME_DIR first); record-key stat is GNU-only so a
+  non-Linux refusal names the platform.
+- P3s: GITHUB_WORKSPACE path in workflow, audit PEMD tmpfs + newline
+  normalization comment, sort -V → sort -n, -sS, dead FIXTURE_APP_CREATED
+  clause removed, declared affected-paths edges for both new suites.

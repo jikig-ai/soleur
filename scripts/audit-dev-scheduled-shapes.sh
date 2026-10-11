@@ -73,7 +73,8 @@ class_of() {
   esac
 }
 
-PEMD="$(mktemp -d "${TMPDIR:-/var/tmp}/audit-pem.XXXXXXXX")" || die "mktemp failed" 3
+# tmpfs first (XDG_RUNTIME_DIR) — a killed audit must not leave a PEM on disk.
+PEMD="$(mktemp -d "${XDG_RUNTIME_DIR:-${TMPDIR:-/var/tmp}}/audit-pem.XXXXXXXX")" || die "mktemp failed" 3
 trap 'rm -rf "${PEMD:-}"' EXIT
 
 pem_ok() {  # value on stdin; expands literal \n then openssl -check. No output.
@@ -88,6 +89,9 @@ while IFS= read -r name; do
   [[ -n "$name" ]] || continue
   checked=$((checked + 1))
   cls="$(class_of "$name")"
+  # $() strips trailing newlines from the value — acceptable normalization: the
+  # floor's job is catching transport corruption (CR/control bytes), and a stored
+  # trailing newline is the commonest harmless storage accident bc_ok trims anyway.
   val="$(doppler secrets get "$name" --plain -p "$PROJ" -c "$CFG" 2>/dev/null)"
   grc=$?
   verdict=""
