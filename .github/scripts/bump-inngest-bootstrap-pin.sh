@@ -176,6 +176,15 @@ die() { # die <stage> <msg...>
   exit 1
 }
 
+# Canonical-body _bearer_ok copy — byte-identical to every inline copy (the
+# alphabet [A-Za-z0-9._~+/=-] is the credential class scripts/lib/bearer-curl.sh
+# bc_ok judges), so the canonical-body parity row in
+# scripts/lint-shell-trace-credential-refusal.test.sh pins it and a future
+# alphabet amendment cannot silently re-narrow this guard (#9972). Top-level
+# definition, same as all sibling copies. Bare rc 1: the token_shape vs
+# control_char split lives at the call site.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+
 # --- args -------------------------------------------------------------------
 SIGNED_TAG="" SIGNED_DIGEST="" SIGNED_COMMIT="" MIRROR_STATUS="" RUN_URL="" MIRROR_ONLY=""
 SEEN_FLAGS=""
@@ -236,22 +245,17 @@ if [[ -n "${BUMP_PUSH_URL:-}" ]]; then
   PUSH_URL="$BUMP_PUSH_URL"
 else
   # Judge the credential BEFORE the header is built or any git network call.
-  # The judge is a canonical-body _bearer_ok copy — byte-identical to every
-  # inline copy (the alphabet [A-Za-z0-9._~+/=-] is the canonical credential
-  # class scripts/lib/bearer-curl.sh bc_ok judges; GitHub's issued installation
-  # tokens now carry '.' and '-', so the legacy ghs_ base62 class would refuse
-  # every real token, #9972) — so it is pinned by the canonical-body parity row
-  # in lint-shell-trace-credential-refusal.test.sh and cannot silently re-narrow
-  # if the alphabet is amended again. The token_shape vs control_char split the
-  # marker contract carries lives HERE, at the call site — _bearer_ok itself
-  # returns bare 1. Empty/unset, or a byte outside the alphabet, is refused with
-  # the value-free marker; the value is never printed.
-  _bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+  # GitHub's issued installation tokens now carry '.' and '-' — the legacy ghs_
+  # base62 class refused every real token (#9972); the canonical-body
+  # _bearer_ok above admits the canonical alphabet. Empty/unset, or a byte
+  # outside the alphabet, is refused with the value-free marker; the value is
+  # never printed. token_shape vs control_char split lives here, not in
+  # _bearer_ok (which returns bare 1).
   if ! _bearer_ok "${GH_TOKEN:-}"; then
-      _refuse_reason=token_shape
-      case "${GH_TOKEN:-}" in *[[:cntrl:]]*) _refuse_reason=control_char ;; esac
-      printf 'SOLEUR_CREDENTIAL_REFUSED script=bump-inngest-bootstrap-pin reason=%s\n' "$_refuse_reason" >&2
-      die args "GH_TOKEN (soleur-infra installation token) is required for the push remote and must match [A-Za-z0-9._~+/=-]+ (value not shown)"
+    _refuse_reason=token_shape
+    case "${GH_TOKEN:-}" in *[[:cntrl:]]*) _refuse_reason=control_char ;; esac
+    printf 'SOLEUR_CREDENTIAL_REFUSED script=bump-inngest-bootstrap-pin reason=%s\n' "$_refuse_reason" >&2
+    die args "GH_TOKEN (soleur-infra installation token) is required for the push remote and must match [A-Za-z0-9._~+/=-]+ (value not shown)"
   fi
   PUSH_URL="https://github.com/${REPO}.git"
   # base64 of x-access-token:TOKEN. printf is a builtin and the pipe is stdin, so

@@ -65,7 +65,7 @@ git_fixture_env "$TMP" || { echo "FATAL: git_fixture_env refused fixture root $T
 
 PASS=0
 FAIL=0
-MIN_ASSERTIONS=697   # anti-vacuity floor = the green run's exact count (590 on 2026-10-04, +2 for the lowercase Tier-A row, 692 with the S4 argv-bearer rows #9597, 697 with the AUTH_HDR child-environment rows); raise when adding rows, never lower it silently
+MIN_ASSERTIONS=699   # anti-vacuity floor = the green run's exact count (590 on 2026-10-04, +2 for the lowercase Tier-A row, 692 with the S4 argv-bearer rows #9597, 697 with the AUTH_HDR child-environment rows, 699 with the #9972 newshape accept row + fixture self-check + bc_ok-parity row net of the removed refuse-dot row); raise when adding rows, never lower it silently
 
 pass() { echo "PASS [$1]"; PASS=$((PASS+1)); }
 fail() { echo "FAIL [$1]: $2"; FAIL=$((FAIL+1)); }
@@ -1208,7 +1208,11 @@ env=none
 if [[ -n "${GIT_CONFIG_VALUE_0+x}" && "${GIT_CONFIG_KEY_0:-}" != commit.gpgsign ]]; then
   dec=$(printf '%s' "${GIT_CONFIG_VALUE_0#Authorization: basic }" | base64 -d 2>/dev/null || true)
   if [[ "${GIT_CONFIG_COUNT:-}" == 1 && "${GIT_CONFIG_KEY_0:-}" == "http.https://github.com/.extraheader" \
-        && "$GIT_CONFIG_VALUE_0" == "Authorization: basic "* && "$dec" == "x-access-token:${SHIM_TOKEN:-}" ]]; then
+        && "$GIT_CONFIG_VALUE_0" == "Authorization: basic "* && "$dec" == "x-access-token:${SHIM_TOKEN:-}" \
+        && "$GIT_CONFIG_VALUE_0" == "Authorization: basic ${SHIM_B64:-}" ]]; then
+    # The SHIM_B64 conjunct pins the run_shimmed derivation: a SHIM_B64 reverted
+    # to a sibling token's encoding reds every accept row instead of silently
+    # vacuous on argv=b64 alone (the unpinned-wire class, #9972 review).
     env=header-ok
   else
     env=header-bad
@@ -1269,11 +1273,12 @@ out_lacks() { # name needle-var-value — the needle is compared, never printed
 }
 
 # --- local rows: real-remote path, remote redirected to the fixture bare repo ---
-# accept_wire_row <name> <tok> — fresh fixture + the full env-header wire
-# assertion set for a credential the guard MUST admit. The b64 needle derives
-# from the row's own token so the no-b64-in-output check judges the right
-# encoding (run_shimmed does the same for the shim's decode comparison).
-accept_wire_row() {
+# accept_row <name> <tok> — fresh fixture + the full env-header assertion set
+# for a credential the guard MUST admit. (Named accept_row, not *_wire_*: this
+# file reserves "wire" for run_shimmed's loopback-HTTP mode.) The b64 needle
+# derives from the row's own token so the no-b64-in-output check judges the
+# right encoding (run_shimmed does the same for the shim's decode comparison).
+accept_row() {
   local name="$1" tok="$2" tok_b64
   tok_b64="$(printf '%s' "x-access-token:${tok}" | base64 | tr -d '\n')"
   new_fixture_repo "$name"
@@ -1304,8 +1309,11 @@ accept_wire_row() {
   out_lacks "g1.$name:no-b64-in-output"   "$tok_b64"
 }
 
-accept_wire_row argv "$SYN_TOK"
-# AUTH_HDR is a shell variable, never exported: not in any git child's environment...
+accept_row argv "$SYN_TOK"
+# AUTH_HDR is a shell variable, never exported: not in any git child's environment.
+# argv-row only by design: the property is token-independent (whether the
+# variable carries the export attribute), so pinning it once is the whole
+# property — newshape re-verifies the same mechanism via env=header-ok.
 [[ "$(wc -l < "$SHIM_LOG_F.ah")" -ge 2 && "$(grep -c '^set$' "$SHIM_LOG_F.ah")" == 0 ]] && pass 'g1.argv:AUTH_HDR-not-in-child-env' \
   || fail 'g1.argv:AUTH_HDR-not-in-child-env' "git children saw AUTH_HDR=$(sort "$SHIM_LOG_F.ah" | uniq -c | tr '\n' ' ')"
 # ...even when the CALLER's environment already exports a variable of that name: `AUTH_HDR=""` alone would keep the
@@ -1979,9 +1987,9 @@ assert_out_has 'g1b.B24:remedy' 'republish vinngest-v1.1.37 (workflow_dispatch)'
 # base_fixture and assert_refused (defined in Guard 1b); the shim, run_shimmed
 # and out_lacks come from the S4 block in Guard 1.
 # --- refused credentials: marker, non-zero, and ZERO git network calls ---------
-# Each value is a shape the guard must refuse BEFORE the header is built: a
-# blank, an embedded space, a quote (a config/URL injection), a colon, a
-# newline and a tab (control bytes, reason=control_char), and an empty token.
+# Each value is a shape the guard must refuse BEFORE the header is built: an
+# embedded space, a quote (a config/URL injection), a colon, a newline and a
+# tab (control bytes, reason=control_char), and an empty token.
 # '.' and '-' are IN-CLASS now — the guard's alphabet is the canonical
 # [A-Za-z0-9._~+/=-] of scripts/lib/bearer-curl.sh bc_ok, and GitHub's issued
 # installation tokens carry both (measured 2026-10-11, #9972). The newshape
@@ -2011,8 +2019,22 @@ refuse_row empty   "" token_shape
 # The ACCEPT counterpart to the refuse rows (#9972): a token in the format
 # GitHub actually issues — several hundred chars on the [A-Za-z0-9._~+/=-]
 # alphabet — must pass the guard and drive the same env-header wire the argv
-# row pins.
-accept_wire_row newshape "$SYN_TOK_V2"
+# row pins. The self-check first pins that the fixture itself is out-of-class
+# for the LEGACY alphabet: a regeneration losing the punctuation would
+# otherwise degenerate newshape into a duplicate of argv with no red row.
+case "$SYN_TOK_V2" in *[!A-Za-z0-9_]*) : ;; *) fail 'fixture:newshape-carries-widened-bytes' "SYN_TOK_V2 carries no byte outside the legacy [A-Za-z0-9_] class" ;; esac
+accept_row newshape "$SYN_TOK_V2"
+
+# bc_ok parity (review r1, user-impact seat): the lint parity row pins every
+# _bearer_ok copy to _CANON_BODY — copy-vs-copy only. If bc_ok's judged class
+# is ever amended, every inline copy silently stays narrow (the #9972 shape
+# again). Compare the case-class span on each file's definition line as text;
+# bc_ok's line also carries *[![:space:]] trims, so take the LAST match.
+_bc_src=$(sed -n '/^bc_ok()/p' "$REPO_ROOT/scripts/lib/bearer-curl.sh" | grep -oE '\*\[![^]]+\]' | tail -1)
+_bc_bump=$(sed -n '/_bearer_ok() {/p' "$SCRIPT" | grep -oE '\*\[![^]]+\]' | tail -1)
+[[ -n "$_bc_src" && "$_bc_src" == "$_bc_bump" ]] \
+  && pass 'g1.bc-parity:alphabet-match' \
+  || fail 'g1.bc-parity:alphabet-match' "bump guard class '$_bc_bump' diverged from bc_ok's '$_bc_src'"
 
 # xtrace with a live credential is refused first (#7797): exit 78 before any
 # expansion is traced, and nothing git-shaped runs.
