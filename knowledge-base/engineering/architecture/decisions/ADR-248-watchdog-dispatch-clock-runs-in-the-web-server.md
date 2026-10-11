@@ -69,6 +69,10 @@ required, non-empty `eligibility` string that states this argument, and
 `sentry-monitor-iac-parity.test.ts` fails on an empty one. A scheduled job without that argument
 uses the Inngest dispatch pattern (`cron-main-health-monitor`) instead.
 
+A second clause (see the 2026-10-11 amendment) admits a workflow that feeds an absence-alerted
+dead-man's-switch heartbeat when that heartbeat is the paging surface and a substrate-dependent
+trigger would make a missing beat unattributable.
+
 ### Failure domains
 
 | Subject goes fully down | Can a clock still fire? | What alerts |
@@ -142,14 +146,25 @@ The context above names two workflows; the table now has three. `scheduled-innge
 (15-minute slot) feeds `betteruptime_heartbeat.inngest_server_probe` (ADR-117 amendment of the same
 date). The two "two workflows" sentences above stay as history; this amendment supersedes them.
 
-**Eligibility, stated honestly.** This feeder does not watch the Inngest scheduler's execution: a dead
-probe emitter, a Vector journald-allowlist regression or a sink outage all leave Inngest able to fire a
-cron. It watches something the substrate depends on, because the probe attests the LUKS volume that
-holds Inngest's store. That is the "something that substrate depends on" clause, and the same
-shared-failure-domain class as the zot row, which is a weak anti-circularity argument. The load-bearing
-reason is the ADR-033 carve-out for a credentialed bash pipeline that must stay in an ephemeral runner,
-plus the fact that this is the substrate's own durability tripwire. The row's `eligibility` string and
-the workflow header say exactly that.
+**Eligibility (a second clause, added by this amendment).** This feeder does not watch the Inngest
+scheduler's execution, and the zot-style "shares a failure domain" argument is not claimed. The
+eligibility rule above is amended: a workflow may also be a row when it FEEDS an absence-alerted
+dead-man's-switch heartbeat for a check on the substrate, and that heartbeat is the paging surface.
+Such a trigger must not depend on the substrate, or a missing beat becomes unattributable. With an
+Inngest dispatch cron, any scheduler or web-1 execution outage stops the beats and pages "the
+wrong-volume alert is blind" while the probe pipeline is healthy, and that page's runbook action
+(inspect the probe, Vector, the warehouse) would be wrong. With the clock, an Inngest outage alone keeps
+the beat flowing (`scheduled-inngest-health` pages the real fault), and a dead probe still withholds it.
+Credential placement is not the reason: an Inngest dispatcher would hold only the GitHub App token, and
+the Better Stack credentials stay in the runner either way, so the ADR-033 Option C scope note does not
+apply on the trigger axis. Guard 3 in `execution-placement.test.ts` therefore forbids Inngest-executed
+modules from naming this workflow, which is intended. Removing the row is a two-file change if the
+premise lapses.
+
+**Rejected alternative.** *Inngest dispatch cron (ADR-033 Option C): rejected. The runner keeps the
+credentials either way. It would stop the beats during any scheduler or web-1 outage, making a missing
+beat unattributable and false-paging "probe dark"; it also runs on web-1 only, where the clock runs on
+both web hosts.*
 
 **Run count.** +96 runs a day (15-minute slots, plus late fallback ticks and collision duplicates)
 against the org's job budget. The queue figures used to size the Sentry margin (60) were measured before
@@ -162,6 +177,8 @@ Re-derive this decision if any of these happens:
 - Inngest function execution is decoupled from web-1 (#9137). `[corrected 2026-09-28, #7230: pointed at #7230, which closed with the placement rule]`
 - A Workers substrate and a narrow single-repo `actions: write` GitHub App appear, which removes
   the Worker's key-custody objection.
+- The probe heartbeat stops being the paging surface (for example the Sentry check-in pages and separates
+  "feeder dark" from "probe dark"), or another substrate feeds it (amendment 2026-10-11, #9703).
 - `var.web_hosts` drops to a single host. The one remaining clock would then sit inside the
   Inngest execution container, and the Cloudflare Worker becomes the default.
 

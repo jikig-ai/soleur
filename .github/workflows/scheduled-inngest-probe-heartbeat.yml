@@ -1,33 +1,13 @@
 # <!-- gate-override: new-scheduled-cron-prefer-inngest -->
-# Override justification (ADR-033 carve-out for a credentialed bash pipeline, as the zot and
-# inngest-health watchers; the dispatch-table row records the same argument):
-#   (i) This feeder is a bash pipeline (scripts/inngest-probe-heartbeat-feeder.sh): a Logs-warehouse
-#       read through scripts/betterstack-query.sh plus two curl calls to Better Stack, using
-#       warehouse credentials and a read-only uptime-API token. ADR-033 says GitHub Actions is
-#       correct for a credential-heavy infra cron that must stay in an ephemeral runner. Folding it
-#       into Inngest would put warehouse credentials into the web app runtime.
-#   (ii) HONEST ELIGIBILITY (ADR-248). This does NOT watch the Inngest scheduler's execution: a dead
-#       probe emitter, a Vector journald-allowlist regression or a sink outage all leave Inngest able
-#       to fire a cron. It watches something the substrate depends on: the probe attests the LUKS
-#       volume that holds Inngest's store. That is a SHARED FAILURE DOMAIN, the same weak class as
-#       the zot row, not an independence claim. The load-bearing reason is (i).
-#
-# WHAT THIS DOES (#9703). betteruptime_heartbeat.inngest_server_probe is the dead-man's-switch for
-# logtail_exploration_alert.inngest_luks_wrong_volume, which reads a silent probe pipeline as
-# healthy. This workflow beats that heartbeat only while a fresh host_role=dedicated
-# probe row is confirmed in the warehouse. While the heartbeat is paused the
-# verifier reports fresh_heartbeat_paused and sends nothing: this feeder is FED but the heartbeat is
-# not ARMED until the separately authorized arming step in
-# knowledge-base/engineering/operations/runbooks/inngest-server.md has run.
-#
-# TRIGGERS (ADR-248). PRIMARY: the web server's watchdog dispatch clock
-# (apps/web-platform/server/watchdog-dispatch-clock.ts) sends workflow_dispatch every 15-minute
-# slot from both web hosts, since GitHub's `schedule:` delivered one run every 2-7 h on this repo.
-# FALLBACK: the `schedule:` cron below. Keep `workflow_dispatch`, the concurrency group
-# (cancel-in-progress: false) and no other trigger: sentry-monitor-iac-parity.test.ts pins all three.
-#
-# A Sentry `error` check-in means "withheld or failed", not "feeder broken": every withheld verdict
-# (no fresh row, warehouse unreadable, beat not delivered) exits non-zero by design.
+# Override (ADR-248 amendment 2026-10-11, eligibility clause 2): this feeder beats the dead-man's-switch
+# heartbeat betteruptime_heartbeat.inngest_server_probe only while a fresh host_role=dedicated probe row
+# is in the warehouse. It must NOT be scheduled by Inngest: the heartbeat is the sole paging surface, so
+# an Inngest-fired feeder would turn every Inngest/web-1 outage into a false "probe dark" page. It does
+# NOT watch the Inngest scheduler, and credential placement is not the reason.
+# Triggers: the web watchdog clock is primary, `schedule:` is the fallback; keep workflow_dispatch and
+# the concurrency group (cancel-in-progress: false) and no other trigger (sentry-monitor-iac-parity.test.ts).
+# FED but not ARMED until the runbook arming step (knowledge-base/engineering/operations/runbooks/inngest-server.md).
+# A Sentry `error` check-in means withheld or failed, not "feeder broken".
 
 name: "Scheduled: Inngest Probe Heartbeat Feeder"
 
@@ -58,7 +38,8 @@ jobs:
           BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
           BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
           BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
-          # Read-only uptime-API token: GET only, so a leak cannot pause, edit or delete anything.
+          # Read-only uptime-API token: GET only, so a leak cannot pause, edit or delete anything. It can
+          # still read the heartbeat's ping URL (a beat capability), so it bounds the blast radius only.
           BETTERSTACK_API_TOKEN_READONLY: ${{ secrets.BETTERSTACK_API_TOKEN_READONLY }}
         run: |
           set -uo pipefail
@@ -69,9 +50,13 @@ jobs:
           }
 
           # The verifier's exit status is DATA, not a job failure. `|| rc=$?` IS THE CAPTURE: this
-          # step has no `shell:` key, so Actions runs it under `bash --noprofile --norc -eo pipefail`
-          # and `set -uo pipefail` above does NOT clear -e; a bare `out="$(...)"; rc=$?` would abort
-          # the step at the assignment, before the outputs below are written.
+          # step has no `shell:` key, so Actions runs it under `bash -e {0}`, and `set -uo pipefail`
+          # above does NOT clear -e; a bare `out="$(...)"; rc=$?` would abort the step at the
+          # assignment, before the outputs below are written.
+          #
+          # The verifier's test seams (a frozen clock, a substitute predicate library) would authorize a
+          # beat on a dead probe if they reached it from the job environment, so seal them here.
+          unset INNGEST_FEEDER_NOW INNGEST_PROBE_ROW_LIB
           rc=0
           out="$(bash scripts/inngest-probe-heartbeat-feeder.sh 2>&1)" || rc=$?
 
@@ -91,6 +76,12 @@ jobs:
                 esac ;;
             esac
           done <<<"$out"
+          # A run that died before it could print a marker (script missing, parse error) would otherwise
+          # leave no cause anywhere: name that state, with a class and a length, never raw bytes.
+          if [ -z "$verdict" ]; then
+            verdict="no_marker"
+            printf 'inngest-probe-feeder: verdict=no_marker rc=%s out_bytes=%s\n' "$rc" "${#out}"
+          fi
           verdict="$(printf '%s' "$verdict" | tr -c 'a-z_' '?' | head -c 40)"
 
           {
@@ -100,7 +91,7 @@ jobs:
 
           case "$rc" in
             0) echo "::notice::inngest probe heartbeat feeder: ${verdict}" ;;
-            3) echo "::error::inngest probe heartbeat WITHHELD (${verdict}): no fresh dedicated probe row or the warehouse is unreadable. See the verdict line above." ;;
+            3) echo "::error::inngest probe heartbeat WITHHELD (${verdict}). See the verdict line above for the cause and the funnel counts." ;;
             4) echo "::error::inngest probe heartbeat beat FAILED (${verdict}): a fresh row existed but the heartbeat could not be resolved or delivered." ;;
             *) echo "::warning::inngest probe heartbeat feeder returned unexpected status ${rc} (${verdict})" ;;
           esac

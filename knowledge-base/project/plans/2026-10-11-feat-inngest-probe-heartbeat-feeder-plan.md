@@ -19,6 +19,7 @@ brand_survival_threshold: none
 **Research and review agents used:** repo-research-analyst, learnings-researcher, DHH / Kieran / code-simplicity plan review, CTO (devex), observability-coverage-reviewer, security-sentinel, architecture-strategist, spec-flow-analyzer, test-design-reviewer, git-history-analyzer; live read-only probes of Better Stack (heartbeat state, token scopes) and the Logs warehouse (48 h probe cadence).
 
 ### Key improvements folded in
+
 1. The feeder uses the **read-only** Better Stack token (`BETTERSTACK_API_TOKEN_READONLY`, verified to return the heartbeat `url` attribute), so GET-only is enforced by capability, not by a static scan. Writes live only in the separately authorized arming command, which reads the write token from Doppler locally.
 2. The arming command is now a **self-rolling-back compound command**: id resolved by name and asserted, state-gated on `paused`, unpause confirmed by read-back, a `trap` rollback with three verified retries, a 4500 s wall-clock deadline (a 15-minute rollback margin), and a token-shape guard.
 3. **Stage 3 is split**: 3a (one-line record PR dropping `arming_pending`, right after read-back, re-arming the reconcile's `fed-but-paused` alarm) and 3b (deletions, gated mechanically on the read-back). This closes the "re-paused after arming reads as success" window.
@@ -28,6 +29,7 @@ brand_survival_threshold: none
 7. Measured, read-only: 48 dedicated probe rows in 48 h, consecutive gaps 3599–3650 s, no gaps at the hot/archive seam in that series.
 
 ### New considerations discovered
+
 - Repo write access already confers access to every repo secret (a branch workflow can read them), so "runs only from main" was not a control; the real mitigation is the read-only token.
 - A Sentry `error` check-in means "withheld", not "feeder broken"; pre-arm it reaches an unrouted monitor only.
 - `fresh_heartbeat_paused` exits 0 by design, so a re-pause after arming is invisible to the feeder; the nightly reconcile is the net once `arming_pending` is gone.
@@ -269,7 +271,7 @@ Slack is thin on purpose and stated plainly: 40.6 min is an observed maximum ove
 
 Detection latency for a dead probe: the last good row is at `D`; the verifier keeps beating while the newest row is at most 4500 s old, so the last beat lands in `[D, D + 75 min + one slot]` and the heartbeat pages 90 min after it: between about 1.5 h and about 3 h after the probe's last emission. This is accepted as a latency trade; the wrong-volume alert itself is unchanged and still pages on a wrong-volume row at its own cadence.
 
-Why 4500 s: the probe emits hourly (`OnUnitActiveSec=1h`, `AccuracySec=1min`, `inngest-bootstrap.sh`); measured consecutive gaps are 3599–3650 s, so a healthy row's age at check time ranges 0 to about 3650 s plus ingest lag (observed 1275 s and 3244 s on 2026-10-10). 4500 s leaves about 14 min of slack and still means one skipped emission starts the clock. It is a named constant with a boundary test at 4500/4501. Clock skew between the host-stamped `dt` and the runner clock eats the same slack; the harness carries a ±120 s skew fixture.
+Why 4500 s: the probe emits hourly (`OnUnitActiveSec=1h`, `AccuracySec=1min`, `inngest-bootstrap.sh`); measured consecutive gaps are 3599–3650 s, so a healthy row's age at check time ranges 0 to about 3650 s plus ingest lag (the 1275 s and 3244 s figures recorded on 2026-10-10 were AGES at check time, not lag; the soak measured the first-sighting lag of a new hourly row at under 2 minutes). 4500 s leaves about 14 min of slack and still means one skipped emission starts the clock. It is a named constant with a boundary test at 4500/4501. Clock skew between the host-stamped `dt` and the runner clock eats the same slack; the harness carries a ±120 s skew fixture.
 
 ## Implementation Phases
 
@@ -302,7 +304,7 @@ Provision the repo secret from the existing Doppler value without printing it: `
 - Header carries `<!-- gate-override: new-scheduled-cron-prefer-inngest -->` plus the honest eligibility argument (depends-on / shared failure domain like zot; the credentialed bash pipeline that stays in an ephemeral runner is the load-bearing reason).
 - `on:` exactly `schedule` (`cron: '*/15 * * * *'`, the fallback) and `workflow_dispatch: {}`; top-level `concurrency: { group: scheduled-inngest-probe-heartbeat, cancel-in-progress: false }`; `permissions: contents: read`.
 - One job, `runs-on: ubuntu-24.04`, `timeout-minutes: 6`, pinned `actions/checkout` SHA, `persist-credentials: false`.
-- Step "Verify freshness and beat": env from repo secrets (`BETTERSTACK_QUERY_*`, `BETTERSTACK_API_TOKEN_READONLY`); `rc=0; out="$(bash scripts/inngest-probe-heartbeat-feeder.sh 2>&1)" || rc=$?` (the verifier's exit is DATA — the `|| rc=$?` capture is mandatory because Actions runs `bash -e`). Keep ONLY lines matching `^inngest-probe-feeder: ` or `^CANNOT BEAT: ` from `$out`, run `strip_log_injection` on each surviving line, and print those; drop everything else (unlike the zot template, the raw blob is never echoed: a line beginning `::` would run as a workflow command, and `strip_log_injection` on the whole blob fuses lines). Map `rc` to `::notice::` / `::error::` annotations built from the surviving verdict token; write `exit_code` to `$GITHUB_OUTPUT`. The step never exits non-zero.
+- Step "Verify freshness and beat": env from repo secrets (`BETTERSTACK_QUERY_*`, `BETTERSTACK_API_TOKEN_READONLY`); `rc=0; out="$(bash scripts/inngest-probe-heartbeat-feeder.sh 2>&1)" || rc=$?` (the verifier's exit is DATA — the `|| rc=$?` capture is mandatory because Actions runs `bash -e`). Keep ONLY lines matching `^inngest-probe-feeder:` or `^CANNOT BEAT:` from `$out`, run `strip_log_injection` on each surviving line, and print those; drop everything else (unlike the zot template, the raw blob is never echoed: a line beginning `::` would run as a workflow command, and `strip_log_injection` on the whole blob fuses lines). Map `rc` to `::notice::` / `::error::` annotations built from the surviving verdict token; write `exit_code` to `$GITHUB_OUTPUT`. The step never exits non-zero.
 - Final step `uses: ./.github/actions/sentry-heartbeat` with `monitor-slug: scheduled-inngest-probe-heartbeat`, `status: ${{ steps.feeder.outputs.exit_code == '0' && 'ok' || 'error' }}`, `if: always()`, `continue-on-error: true`. A Sentry `error` means "withheld or failed", not "feeder broken".
 
 ### Phase 3 — Dispatch table row and Sentry monitor
@@ -344,65 +346,13 @@ Provision the repo secret from the existing Doppler value without printing it: `
 
 This is a production write to Better Stack. The command below is shown in full and authorized as a unit before it runs; a menu answer or an earlier approval does not authorize it (`hr-menu-option-ack-not-prod-write-auth`). It is one compound command on purpose: the unpause and its rollback live in the same shell under a `trap`, so an interrupted session still rolls back. No dashboard step and no SSH step. The write token is read inside `doppler run` and sent through `curl --config -`; nothing below prints it or the heartbeat URL. Run it through the Monitor tool (an until-loop), never as a foreground call: it can legitimately run for up to 75 minutes. Expect the forced dispatch to cost one slot of beat-budget tolerance (read back a second `verdict=beat` before Stage 3a).
 
-**Preconditions (read-only; stop on any miss):**
-
-```bash
-# P1  Stage 1 is on main, the monitor exists, and the clock has been dispatching the workflow
-git fetch -q origin main && git log origin/main --oneline -1 -- scripts/inngest-probe-heartbeat-feeder.sh
-gh run list --workflow=scheduled-inngest-probe-heartbeat.yml --status completed --limit 4 --json databaseId,event,createdAt \
-  --jq '.[] | [.databaseId, .event, .createdAt] | @tsv'
-# expect: four rows, event=workflow_dispatch, createdAt spacing about 15 minutes, spanning at least 45 minutes
-
-# P2  EVERY one of those four runs reports freshness and the paused state, and the Sentry check-in was delivered
-for RID in $(gh run list --workflow=scheduled-inngest-probe-heartbeat.yml --status completed --limit 4 --json databaseId --jq '.[].databaseId'); do
-  gh run view "$RID" --log > /tmp/run-$RID.log
-  grep 'inngest-probe-feeder: verdict=' /tmp/run-$RID.log | tail -1
-  grep 'sentry-heartbeat:' /tmp/run-$RID.log | tail -1
-  rm -f /tmp/run-$RID.log
-done
-# expect: verdict=fresh_heartbeat_paused on all four, and a 2xx status on every sentry-heartbeat line
-# (a step that never exits non-zero concludes 'success' even when it withheld, so conclusion alone proves nothing)
-
-# P3  live heartbeat state (the URL attribute is deliberately not selected)
-hb() { doppler run -p soleur -c prd_terraform --silent -- bash -c '
-  [[ "$BETTERSTACK_API_TOKEN" =~ ^[A-Za-z0-9._~+/=-]{20,}$ ]] || { echo "token shape refused" >&2; exit 78; }
-  printf "header = \"Authorization: Bearer %s\"\n" "$BETTERSTACK_API_TOKEN" | curl --disable --noproxy "*" -fsS --max-time 20 --config - "$@"' _ "$@"; }
-hb "https://uptime.betterstack.com/api/v2/heartbeats?per_page=250" \
-  | jq -r '.data[] | select(.attributes.name=="soleur-inngest-server-probe-prd") | [.id, .attributes.status, (.attributes.paused|tostring), (.attributes.period|tostring), (.attributes.grace|tostring)] | @tsv'
-# expect: 504655  paused  true  3600  1800
-```
-
-**Arm — ONE compound command (WRITE; poll deadline 4500 s wall clock, leaving a 15-minute rollback margin inside `period + grace`):**
-
-```bash
-set -uo pipefail
-EXPECT_ID=504655; NAME=soleur-inngest-server-probe-prd; BASE=https://uptime.betterstack.com/api/v2/heartbeats
-hb() { doppler run -p soleur -c prd_terraform --silent -- bash -c '
-  [[ "$BETTERSTACK_API_TOKEN" =~ ^[A-Za-z0-9._~+/=-]{20,}$ ]] || { echo "token shape refused" >&2; exit 78; }
-  printf "header = \"Authorization: Bearer %s\"\n" "$BETTERSTACK_API_TOKEN" | curl --disable --noproxy "*" -fsS --max-time 20 --config - "$@"' _ "$@"; }
-patch() { hb -X PATCH -H 'Content-Type: application/json' --data-binary "{\"paused\":$1}" "$BASE/$HB" | jq -e ".data.attributes.paused == $1" >/dev/null; }
-rollback() {  # runs on EXIT, INT, TERM, HUP; three attempts, each confirmed by read-back
-  trap - EXIT INT TERM HUP
-  for t in 1 2 3; do patch true && { echo "ROLLED BACK (paused=true read back)"; exit 1; }; sleep 5; done
-  echo "ROLLBACK FAILED - pause heartbeat $HB now; Better Stack pages within 5400 s of the unpause"; exit 2
-}
-HB=$(hb "$BASE?per_page=250" | jq -r --arg n "$NAME" '[.data[] | select(.attributes.name==$n)] | if length==1 then .[0].id else empty end')
-[ "$HB" = "$EXPECT_ID" ] || { echo "heartbeat id '$HB' is not the expected $EXPECT_ID (or not unique): refusing"; exit 3; }
-[ "$(hb "$BASE/$HB" | jq -r '.data.attributes.status')" = "paused" ] || { echo "heartbeat is not paused: refusing a second arm"; exit 3; }
-trap rollback EXIT INT TERM HUP
-patch false || { echo "unpause not confirmed by read-back"; exit 1; }     # exit fires the rollback trap
-gh workflow run scheduled-inngest-probe-heartbeat.yml --ref main          # force one real beat now
-SECONDS=0
-while [ "$SECONDS" -lt 4500 ]; do
-  s=$(hb "$BASE/$HB" | jq -r '.data.attributes.status')
-  echo "$(date -u +%H:%M:%S) elapsed=${SECONDS}s status=$s"
-  if [ "$s" = "up" ]; then trap - EXIT INT TERM HUP; echo "ARMED: status=up after ${SECONDS}s"; exit 0; fi
-  sleep 30
-done
-echo "arm failed: status never reached up in ${SECONDS}s"; exit 1       # exit fires the rollback trap
-```
-
-**Read-back (READ):** repeat P3 and expect `504655  up  false  3600  1800`; re-run the P2 loop on the next completed runs and expect `verdict=beat http=2xx`, then a second `verdict=beat` one slot later. The next nightly `heartbeat-live-reconcile` markers (`SOLEUR_HEARTBEAT_RECONCILE_*`) must stay clean. Only then start Stage 3a. If the command rolled back, read the newest completed run's `verdict=` line: `fresh_heartbeat_paused` after the unpause means that run predates it, `beat_failed` means the feeder cannot deliver, and any withheld verdict means the probe pipeline itself is dark (the finding this heartbeat exists for). Arming a second time is refused by the state gate; to retry after a rollback, simply re-run (the heartbeat is paused again).
+The preconditions (P0-P3, run as one `preflight` that exits non-zero), the arm command, its exit codes, the
+Re-pause block and the read-back live in ONE place: `knowledge-base/engineering/operations/runbooks/inngest-server.md`
+§ "Arming the probe heartbeat (#9703)". That copy is the executable one (it was corrected during review; this plan
+no longer carries a second copy that could drift). Properties it must keep: id and uniqueness asserted before any
+write, a state gate on `paused`, the unpause confirmed by read-back, a `trap` rollback with three read-back-verified
+retries, a 4500 s wall-clock poll deadline (a 15-minute rollback margin), a token-shape guard, and the write token
+read only inside `doppler run`.
 
 ## Observability
 

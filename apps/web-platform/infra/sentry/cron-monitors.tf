@@ -1063,9 +1063,9 @@ resource "sentry_cron_monitor" "zot_restart_loop_alarm" {
 # inngest-server-probe row is in the warehouse. A MISSED check-in here means the feeder went dark
 # (clock + fallback both dead, workflow disabled); a `status=error` check-in means the run WITHHELD
 # or FAILED a beat (stale or absent probe row, API/credential fault) — it says nothing about the
-# store itself, and the heartbeat is the paging surface. GHA-fired, NOT Inngest: the credentialed
-# bash pipeline stays in an ephemeral runner and the verdict reads rows the Inngest host emits, so
-# an Inngest cron on the watched fleet would go dark with it (see the workflow's gate-override header).
+# store itself, and the heartbeat (once armed) is the paging surface. GHA-fired by the web watchdog clock, NOT
+# Inngest: the heartbeat is the sole paging surface, so an Inngest-fired feeder would turn an Inngest
+# or web-1 outage into a false "probe dark" page (ADR-248 amendment 2026-10-11).
 #
 # checkin_margin_minutes = 60 is the parity ceiling (MAX_MARGIN_MINUTES in
 # sentry-monitor-iac-parity.test.ts) and covers the measured tail, so a slow runner queue does not
@@ -1073,7 +1073,8 @@ resource "sentry_cron_monitor" "zot_restart_loop_alarm" {
 # measured runner-queue max (2438 s over 40 runs of the zot watchdog, 2026-09-24 — the parity
 # test's QUEUE_ALLOWANCE_MINUTES of 30 is the asserted floor, this uses the observed max) + 6 min
 # runtime (max_runtime_minutes = 6; the job's `timeout-minutes: 6`) = 58.6 min <= 60. A dead trigger
-# pages within interval + margin = 15 + 60 = 75 min. Re-measure the queue tail on this workflow once
+# opens a Sentry issue within interval + margin = 15 + 60 = 75 min (unrouted: it emails nobody until the
+# routing stage on #9703). Re-measure the queue tail on this workflow once
 # it has history, before changing the margin (same command as scheduled_inngest_health):
 #   for id in $(gh run list --workflow scheduled-inngest-probe-heartbeat.yml --limit 40 --json databaseId --jq '.[].databaseId'); do
 #     gh api repos/jikig-ai/soleur/actions/runs/$id/jobs --jq '[.jobs[] | select(.started_at != null) | ((.started_at|fromdate) - (.created_at|fromdate))] | max'; done | sort -n

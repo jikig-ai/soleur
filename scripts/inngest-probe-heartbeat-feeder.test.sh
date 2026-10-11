@@ -21,7 +21,9 @@
 #
 # MUTATIONS ARE COMMITTED, NOT HAND-RUN. M1-M7 are applied to scratch copies, asserted to have LANDED
 # inside the target region, and expected to red; a known-positive and a known-negative run prove the
-# red-detector first. M8-M11 are covered by their fixtures.
+# red-detector first, and each mutant must go red FOR THE PREDICTED REASON (rc and verdict), never a crash.
+# T1 (TLS scrub removed) and D1 (dt shape filter removed) were added by review. The plan's rows M8-M11
+# (heartbeat selection, URL shape, secret output, helper argv) are covered by fixtures, not mutants.
 
 set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
@@ -72,6 +74,9 @@ FAKE_CRED="dp.ct.NOT_A_REAL_TOKEN_9703_synthetic"
 Q_PASS="pw-SYNTH-9f2c1d7a"
 Q_USER="user-SYNTH-77aa"
 NAME="soleur-inngest-server-probe-prd"
+# Values the refusal paths must never echo (a malformed token, a malformed ping URL).
+BAD_TOKEN_SENT="SYNTHbadTOKENqq9"
+BAD_URL_SENT="SYNTHbadURLid9"
 
 # ── fixture builders ──────────────────────────────────────────────────────────────────────────
 dt_ago() { date -u -d "@$((NOW_EPOCH - $1))" '+%Y-%m-%d %H:%M:%S.000000'; }
@@ -91,7 +96,6 @@ hb_json() { # <name> <paused-literal|__absent__> <url> -> one-heartbeat API body
       attributes: ({name: $n, url: $u, period: 3600, grace: 1800, status: "paused"}
         + (if $p == "__absent__" then {} else {paused: ($p | fromjson)} end))}], pagination: {}}'
 }
-api_ok_paused()   { hb_json "$NAME" false "$HB_URL"; }
 api_ok_unpaused() { hb_json "$NAME" false "$HB_URL"; }
 api_paused()      { hb_json "$NAME" true "$HB_URL"; }
 
@@ -107,7 +111,7 @@ api_paused()      { hb_json "$NAME" true "$HB_URL"; }
 reset_case() {
   C_ROWS="/dev/null"; C_STUB="ok"; C_API=""; C_APIMODE="ok"; C_BEATMODE="200"; C_NOW="$NOW"
   C_TOKEN="$TOKEN"; C_UNSET=""; C_LIB="$LIB_SRC"; C_LIBENV=""; C_XTRACE=0; C_ARGS=""
-  C_PROBE="$PROBE_SRC"; C_BEATS=0; C_APIS=0; C_REQUIRE=""; C_EXPECT_URL="$HB_URL"
+  C_PROBE="$PROBE_SRC"; C_BEATS=0; C_APIS=0; C_EXPECT_URL="$HB_URL"; C_TLSENV=0
 }
 reset_case
 
@@ -130,6 +134,7 @@ LOG="\$R/calls.log"
 argv="\$*"
 stdin="\$(cat)"
 tok="\$(cat "\$R/token.txt")"
+if [ -n "\${SSLKEYLOGFILE:-}\${CURL_CA_BUNDLE:-}" ]; then echo "refused env" >> "\$LOG"; exit 64; fi
 A_ARGV='--disable --noproxy * -fsS --max-time 20 --config - https://uptime.betterstack.com/api/v2/heartbeats?per_page=250'
 B_ARGV='--disable --noproxy * -fsS --max-time 15 -o /dev/null -w %{http_code} --config -'
 if [[ "\$argv" == "\$A_ARGV" ]]; then
@@ -213,6 +218,7 @@ STUB
     *) envv+=("INNGEST_FEEDER_NOW=$C_NOW") ;;
   esac
   [[ -z "$C_LIBENV" ]] || envv+=("INNGEST_PROBE_ROW_LIB=$C_LIBENV")
+  [[ "$C_TLSENV" != 1 ]] || envv+=("SSLKEYLOGFILE=/dev/null" "CURL_CA_BUNDLE=/dev/null")
   local -a sh=("$BASH_BIN")
   [[ "$C_XTRACE" == "1" ]] && sh=("$BASH_BIN" -x)
   # shellcheck disable=SC2086
@@ -258,11 +264,14 @@ expect() { # <name> <rc> <verdict> [reason-or-extra-token]
   if [[ "$refused" != 0 ]]; then ok=0; printf '        | the stub curl REFUSED %s call(s): %s\n' "$refused" "$(grep '^refused' "$CALLS" | paste -sd, -)" >&2; fi
   # No secret, bearer, URL or helper error text anywhere: stdout, stderr and every argv log.
   local s
-  for s in "$TOKEN" "$HB_ID_SENTINEL" "$FAKE_CRED" "$Q_PASS" "$Q_USER"; do
+  for s in "$TOKEN" "$HB_ID_SENTINEL" "$FAKE_CRED" "$Q_PASS" "$Q_USER" "$BAD_TOKEN_SENT" "$BAD_URL_SENT"; do
     if grep -qF -- "$s" <<<"$all" || grep -qF -- "$s" "$CALLS" || { [[ -f "$WORK/root/helper.log" ]] && grep -qF -- "$s" "$WORK/root/helper.log"; }; then
       ok=0; printf '        | a secret-shaped sentinel leaked into output or an argv log\n' >&2
     fi
   done
+  if [[ "$C_XTRACE" != "1" && "$(grep -c 'verdict=' "$OUT" || true)" != 1 ]]; then
+    ok=0; printf '        | expected exactly one verdict= line, saw %s\n' "$(grep -c 'verdict=' "$OUT" || true)" >&2
+  fi
   if [[ "$C_XTRACE" != "1" ]] && grep -qiE '\bexit' <<<"$all"; then
     ok=0; printf '        | human-readable output contains the word "exit"\n' >&2
   fi
@@ -293,6 +302,19 @@ else fail "canary: curl resolves OUTSIDE the private PATH"; fi
 cases=$((cases + 1))
 if ! PATH="$WORK/root/bin" type -P nc >/dev/null 2>&1 && ! PATH="$WORK/root/bin" type -P wget >/dev/null 2>&1; then pass "canary: no other network client on the private PATH"
 else fail "canary: nc or wget is reachable from the private PATH"; fi
+
+echo "== verdict-owning helper control =="
+# expect() decides the verdict of every case below; the counter self-test above cannot see it going
+# soft. Drive it once with an expectation that MUST fail (it wants rc 3, the case yields rc 0 + beat),
+# require exactly one failure and no pass, then unwind the counters so the floors stay exact.
+_p0=$passes; _f0=$fails; _c0=$cases; _b0=$beat_asserts
+reset_case; C_ROWS="$(ded 60 | fx ctl)"; C_BEATS=1; C_APIS=1
+expect "CONTROL (must fail): wrong rc and verdict wanted" 3 query_failed >/dev/null 2>&1
+_ctl_f=$((fails - _f0)); _ctl_p=$((passes - _p0))
+passes=$_p0; fails=$_f0; cases=$_c0; beat_asserts=$_b0
+cases=$((cases + 1))
+if [[ "$_ctl_f" == 1 && "$_ctl_p" == 0 ]]; then pass "expect() control: a wrong expectation records exactly one failure and no pass"
+else fail "expect() control: expected 1 failure / 0 passes, saw $_ctl_f / $_ctl_p — expect() cannot fail"; fi
 
 echo "== static: exit contract =="
 allowlist_violations() { # <file> -> "line:token" for every exit token not followed by 0|3|4|64|78
@@ -330,6 +352,12 @@ cases=$((cases + 1))
 if grep -qF 'REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"' "$PROBE_SRC" && ! grep -q 'rev-parse' "$PROBE_SRC"; then pass "verifier resolves REPO_ROOT from its own location"
 else fail "verifier must derive REPO_ROOT from BASH_SOURCE, not git"; fi
 
+cases=$((cases + 1))
+if [[ "$(grep -cE '^DECIDED=0$' <<<"$STRIPPED" || true)" == 1 && "$(grep -cE '^[[:space:]]*DECIDED=1$' <<<"$STRIPPED" || true)" == 3 ]] \
+   && [[ "$(awk '/^[[:space:]]*DECIDED=1$/{getline n; if (n ~ /^[[:space:]]*exit 0$/) c++} END{print c+0}' <<<"$STRIPPED")" == 3 ]]; then
+  pass "DECIDED starts 0, and is set to 1 at exactly three sites, each directly before exit 0"
+else fail "DECIDED=0 / DECIDED=1 sites changed (initial value, count, or the exit 0 that must follow each)"; fi
+
 echo "== static: one beat call site =="
 cases=$((cases + 1))
 if [[ "$(grep -cE "%\{http_code\}" <<<"$STRIPPED" || true)" == 1 ]]; then pass "exactly one curl carries the beat write-out"
@@ -359,7 +387,14 @@ _tfgrace="$(awk '/^resource "betteruptime_heartbeat" "inngest_server_probe"/{on=
 _slot="$(awk '/workflowFile: "scheduled-inngest-probe-heartbeat.yml"/{on=1} on && /intervalMinutes:/{gsub(/[^0-9]/,""); print; exit}' "$TABLE")"
 # Clock and queue constants are named here; their source is sentry-monitor-iac-parity.test.ts
 # (CLOCK_DELAY_MINUTES = 12) and the measured runner queue maximum recorded in cron-monitors.tf.
-CLOCK_DELAY_MIN=12; QUEUE_MAX_MIN=41; RUNTIME_MIN=2
+CLOCK_DELAY_MIN=12; QUEUE_MAX_MIN=41
+# The runtime term is the job's own ceiling, read from the workflow and cross-checked against the Sentry
+# monitor's max_runtime_minutes (cron-monitors.tf), so raising either alone turns this RED.
+RUNTIME_MIN="$(sed -n 's/^    timeout-minutes: \([0-9][0-9]*\)$/\1/p' "$WORKFLOW" | head -1)"
+_tfmaxrt="$(awk '/resource "sentry_cron_monitor" "scheduled_inngest_probe_heartbeat"/{on=1} on && /max_runtime_minutes/{gsub(/[^0-9]/,""); print; exit}' "$REPO/apps/web-platform/infra/sentry/cron-monitors.tf")"
+cases=$((cases + 1))
+if [[ "$RUNTIME_MIN" =~ ^[0-9]+$ && "$RUNTIME_MIN" == "$_tfmaxrt" ]]; then pass "job timeout-minutes ($RUNTIME_MIN) equals the Sentry monitor's max_runtime_minutes"
+else fail "job timeout-minutes='$RUNTIME_MIN' vs max_runtime_minutes='$_tfmaxrt'"; fi
 cases=$((cases + 1))
 if [[ "$_tfperiod" =~ ^[0-9]+$ && "$_tfgrace" =~ ^[0-9]+$ && "$_slot" =~ ^[0-9]+$ ]] \
    && (( 2 * _slot + CLOCK_DELAY_MIN + QUEUE_MAX_MIN + RUNTIME_MIN < (_tfperiod + _tfgrace) / 60 )); then
@@ -367,28 +402,41 @@ if [[ "$_tfperiod" =~ ^[0-9]+$ && "$_tfgrace" =~ ^[0-9]+$ && "$_slot" =~ ^[0-9]+
 else fail "budget inequality failed or unreadable: period='$_tfperiod' grace='$_tfgrace' slot='$_slot'"; fi
 cases=$((cases + 1))
 _bound="$(sed -n 's/^FRESH_MAX_SECS=\([0-9]*\)$/\1/p' "$PROBE_SRC")"
-if [[ "$_bound" == 4500 && "$_tfperiod" =~ ^[0-9]+$ ]] && (( _bound + 3600 > 3600 && _bound < _tfperiod + _tfgrace )); then
-  pass "freshness bound 4500 s is above the hourly cadence and below period + grace"
+if [[ "$_bound" == 4500 && "$_tfperiod" =~ ^[0-9]+$ ]] && (( _bound > 3650 && _bound < _tfperiod + _tfgrace )); then
+  pass "freshness bound 4500 s is above the measured 3650 s max probe gap and below period + grace"
 else fail "freshness bound is '$_bound'"; fi
 
 cases=$((cases + 1))
-if python3 - "$WORKFLOW" <<'PY' 2>/dev/null
+if python3 - "$WORKFLOW" <<'PY'
 import sys, yaml, re
 wf = yaml.safe_load(open(sys.argv[1]))
 on = wf.get(True) or wf.get("on")
-assert "workflow_dispatch" in on and "schedule" in on, "triggers"
+assert set(on) == {"schedule", "workflow_dispatch"}, "triggers must be exactly schedule + workflow_dispatch: %r" % set(on)
+assert on["workflow_dispatch"] in ({}, None), "workflow_dispatch takes no inputs"
+assert [c["cron"] for c in on["schedule"]] == ["*/15 * * * *"], "fallback cron"
 assert wf["concurrency"]["group"] == "scheduled-inngest-probe-heartbeat" and wf["concurrency"]["cancel-in-progress"] is False
 assert wf["permissions"] == {"contents": "read"}
+assert "env" not in wf and "env" not in wf["jobs"]["feeder"], "no workflow- or job-level env (it would reach the verifier)"
+assert wf["jobs"]["feeder"]["timeout-minutes"] == 6
 steps = wf["jobs"]["feeder"]["steps"]
 feeder = [s for s in steps if s.get("id") == "feeder"][0]
+assert "continue-on-error" not in feeder and "if" not in feeder, "the feeder step must not be skippable or tolerated"
+assert feeder["env"] == {
+    "BETTERSTACK_QUERY_HOST": "${{ secrets.BETTERSTACK_QUERY_HOST }}",
+    "BETTERSTACK_QUERY_USERNAME": "${{ secrets.BETTERSTACK_QUERY_USERNAME }}",
+    "BETTERSTACK_QUERY_PASSWORD": "${{ secrets.BETTERSTACK_QUERY_PASSWORD }}",
+    "BETTERSTACK_API_TOKEN_READONLY": "${{ secrets.BETTERSTACK_API_TOKEN_READONLY }}",
+}, "the feeder step env must be exactly the four secrets, each mapped to its own name"
 run = feeder["run"]
 assert "bash scripts/inngest-probe-heartbeat-feeder.sh" in run, "pattern on a run line"
 assert re.search(r'out="\$\(bash scripts/inngest-probe-heartbeat-feeder\.sh 2>&1\)" \|\| rc=\$\?', run), "|| rc=$? capture"
-assert "exit_code=${rc}" in run
+assert "exit_code=${rc}" in run and 'verdict=${verdict}' in run, "both step outputs are written"
+assert re.search(r"^\s*unset INNGEST_FEEDER_NOW INNGEST_PROBE_ROW_LIB\b", run, re.M), "the test seams are unset before the verifier runs"
+assert "INNGEST_FEEDER_NOW=" not in run.replace("unset INNGEST_FEEDER_NOW", ""), "no assignment of the clock seam"
 sent = steps[-1]
 assert sent["uses"] == "./.github/actions/sentry-heartbeat" and sent["with"]["monitor-slug"] == "scheduled-inngest-probe-heartbeat"
-st = sent["with"]["status"]
-assert "steps.feeder.outputs.exit_code == '0'" in st and "'ok' || 'error'" in st
+want = "${{ (steps.feeder.outputs.exit_code == '0' && (steps.feeder.outputs.verdict == 'beat' || steps.feeder.outputs.verdict == 'fresh_heartbeat_paused')) && 'ok' || 'error' }}"
+assert sent["with"]["status"] == want, "the Sentry status expression must equal the pinned one: %r" % sent["with"]["status"]
 assert sent.get("if") == "always()" and sent.get("continue-on-error") is True
 PY
 then pass "workflow wiring: triggers, concurrency, run line, || rc=\$? capture, Sentry status expression"
@@ -424,6 +472,10 @@ reset_case; C_ROWS="$(ded 4501 | fx b4501)"
 expect "boundary: age 4501 s is producer_silent" 3 producer_silent "limit_s=4500"
 reset_case; C_ROWS="$(ded 3 | fx young)"; C_BEATS=1; C_APIS=1
 expect "a 3 s old row beats" 0 beat
+reset_case; C_NOW="__unset__"; C_ROWS="$(row "$(date -u -d "@$(( $(date -u +%s) - 60 ))" '+%Y-%m-%d %H:%M:%S.000000')" "$(msg dedicated)" | fx realclock)"; C_BEATS=1; C_APIS=1
+expect "no INNGEST_FEEDER_NOW: the verifier uses the real wall clock" 0 beat
+reset_case; C_TLSENV=1; C_ROWS="$(ded 60 | fx tlsenv)"; C_BEATS=1; C_APIS=1
+expect "TLS/CA environment is scrubbed before the credentialed curls" 0 beat
 
 echo "== row selection =="
 reset_case; C_ROWS="$(printf '' | fx empty)"
@@ -432,6 +484,10 @@ reset_case; C_ROWS="$(row "$(dt_ago 60)" "$(msg dedicated)" soleur-web-1 | fx ot
 expect "only another host (host differs)" 3 no_rows "rows_probe=1 rows_host=0 rows_dedicated=0"
 reset_case; C_ROWS="$(row "$(dt_ago 60)" "$(msg dedicated)" soleur-inngest soleur-web-prd | fx otherhn)"
 expect "only another host_name (host matches)" 3 no_rows "rows_host=0"
+reset_case; C_ROWS="$(row "$(dt_ago 60)" "$(msg dedicated)" soleur-inngest-stg | fx stghost)"
+expect "host that merely starts with the dedicated host name (soleur-inngest-stg)" 3 no_rows "rows_host=0"
+reset_case; C_ROWS="$(row "$(dt_ago 60)" "$(msg dedicated)" soleur-inngest soleur-inngest-prd-2 | fx prd2)"
+expect "host_name that merely starts with the dedicated one (soleur-inngest-prd-2)" 3 no_rows "rows_host=0"
 reset_case; C_ROWS="$(row "$(dt_ago 60)" "$(msg web)" | fx webrole)"
 expect "only host_role=web rows" 3 no_rows "rows_host=1 rows_dedicated=0"
 reset_case; C_ROWS="$(row "$(dt_ago 60)" "$(msg web host_role=dedicated)" | fx firstweb)"
@@ -472,6 +528,14 @@ reset_case; C_ROWS="$(jq -cn --arg m "$(msg dedicated)" '{raw: ({host:"soleur-in
 expect "a row with no dt at all" 3 row_unusable "field=dt"
 reset_case; C_ROWS="$(row "$(dt_ago 60)" "$(msg dedicated "extra_unknown=1 other=2")" | fx extra)"; C_BEATS=1; C_APIS=1
 expect "extra unknown fields do not matter" 0 beat
+reset_case; C_ROWS="$(row "$(date -u -d "@$((NOW_EPOCH - 60))" '+%Y-%m-%d %H:%M:%S')" "$(msg dedicated)" | fx nofrac)"; C_BEATS=1; C_APIS=1
+expect "dt without a fractional part" 0 beat
+reset_case; C_ROWS="$(row "$(dt_ago 60)Z" "$(msg dedicated)" | fx zsuffix)"; C_BEATS=1; C_APIS=1
+expect "dt with a trailing Z" 0 beat
+reset_case; C_ROWS="$(row "$(date -u -d "@$((NOW_EPOCH - 60))" '+%Y-%m-%d %H:%M:%S')+02:00" "$(msg dedicated)" | fx offset)"
+expect "dt with a zone offset is rejected, never read as UTC" 3 row_unusable "dt_rejected=1"
+reset_case; C_ROWS="$({ ded 60; row "zzz-not-a-date" "$(msg dedicated)"; } | fx garbagevalid)"; C_BEATS=1; C_APIS=1
+expect "an unparseable dedicated dt does not block a fresh valid row" 0 beat "dt_rejected=1"
 
 echo "== warehouse failures =="
 reset_case; C_UNSET="BETTERSTACK_QUERY_PASSWORD"
@@ -486,6 +550,8 @@ reset_case; C_LIB="__none__"; C_ROWS="$(ded 60 | fx f1)"
 expect "shared lib missing" 3 query_failed "reason=selector_unavailable"
 reset_case; C_LIBENV="/dev/null"; C_ROWS="$(ded 60 | fx f2)"
 expect "shared lib that defines nothing" 3 query_failed "reason=selector_unavailable"
+reset_case; C_ROWS="$(ded 60 | fx f4)"; C_LIB="$(printf 'INNGEST_PROBE_EMITTER=inngest-server-probe\nINNGEST_PROBE_MARKER=SOLEUR_INNGEST_SERVER_PROBE\nINNGEST_PROBE_ROW_JQ="def inngest_probe_row: error(\\"boom\\");"\ninngest_probe_row_selftest() { return 0; }\n' | fx badlib)"
+expect "a predicate that errors on data is selector_failed, never an empty window" 3 query_failed "reason=selector_failed"
 reset_case; C_NOW="2026-10-11 12:00:00"; C_ROWS="$(ded 60 | fx f3)"
 expect "malformed INNGEST_FEEDER_NOW is never a wall-clock fallback" 3 clock_malformed
 
@@ -502,12 +568,17 @@ reset_case; C_ROWS="$(ded 60 | fx fp5)"; C_API="$(hb_json "soleur-other-heartbea
 expect "heartbeat name absent" 4 beat_failed "reason=heartbeat_not_unique matches=0"
 reset_case; C_ROWS="$(ded 60 | fx fp6)"; C_API="$(hb_json "${NAME}-old" false "$HB_URL" | fx apiPrefix)"; C_APIS=1
 expect "prefix decoy (name plus a suffix) is not a match" 4 beat_failed "reason=heartbeat_not_unique matches=0"
+reset_case; C_ROWS="$(ded 60 | fx fp6b)"; C_API="$(hb_json "old-${NAME}" false "$HB_URL" | fx apiPrefix2)"; C_APIS=1
+expect "name with a leading decoy (old-NAME) is not a match" 4 beat_failed "reason=heartbeat_not_unique matches=0 paged=0"
+reset_case; C_ROWS="$(ded 60 | fx fp6c)"; C_API="$(jq -cn '{data: [], pagination: {next: "https://x.example/page2"}}' | fx apiPaged)"; C_APIS=1
+expect "heartbeat beyond page 1 is reported as paged, never as missing" 4 beat_failed "paged=1"
 reset_case; C_ROWS="$(ded 60 | fx fp7)"; C_API="$(jq -cn --argjson a "$(hb_json "$NAME" false "$HB_URL")" '{data: ($a.data + $a.data)}' | fx apiTwo)"; C_APIS=1
 expect "two heartbeats with the name (second member after a compliant first)" 4 beat_failed "reason=heartbeat_not_unique matches=2"
-for _u in "https://evil.example/api/v1/heartbeat/abc123" "http://uptime.betterstack.com/api/v1/heartbeat/abc123" \
-          "https://uptime.betterstack.com/api/v1/heartbeat/abc123/extra" "https://uptime.betterstack.com/api/v1/heartbeat/abc123?x=1" \
-          "https://uptime.betterstack.com.evil.example/api/v1/heartbeat/abc123" 'https://uptime.betterstack.com/api/v1/heartbeat/abc"123' \
-          $'https://uptime.betterstack.com/api/v1/heartbeat/abc\n123' "" ; do
+for _u in "https://evil.example/api/v1/heartbeat/$BAD_URL_SENT" "http://uptime.betterstack.com/api/v1/heartbeat/$BAD_URL_SENT" \
+          "https://uptime.betterstack.com/api/v1/heartbeat/$BAD_URL_SENT/extra" "https://uptime.betterstack.com/api/v1/heartbeat/$BAD_URL_SENT?x=1" \
+          "https://uptime.betterstack.com.evil.example/api/v1/heartbeat/$BAD_URL_SENT" "https://uptime.betterstack.com/api/v1/heartbeat/$BAD_URL_SENT\"x" \
+          "https://uptime.betterstack.com/api/v1/heartbeat/" " https://uptime.betterstack.com/api/v1/heartbeat/$BAD_URL_SENT" \
+          $'https://uptime.betterstack.com/api/v1/heartbeat/'"$BAD_URL_SENT"$'\nx' "" ; do
   reset_case; C_ROWS="$(ded 60 | fx fpu)"; C_API="$(hb_json "$NAME" false "$_u" | fx apiurl)"; C_APIS=1; C_EXPECT_URL="$_u"
   expect "URL shape refused: $(printf '%s' "${_u:-<empty>}" | tr '\n' '~' | head -c 60)" 4 beat_failed "reason=url_shape"
 done
@@ -517,8 +588,12 @@ reset_case; C_ROWS="$(ded 60 | fx fp9)"; printf '<html>not json</html>' > "$WORK
 expect "uptime API answers something that is not a heartbeat list" 4 beat_failed "reason=api_malformed"
 reset_case; C_ROWS="$(ded 60 | fx fp10)"; C_TOKEN="__unset__"
 expect "read-only token unset" 4 beat_failed "reason=api_token_unset"
-reset_case; C_ROWS="$(ded 60 | fx fp11)"; C_TOKEN='short"token'
-expect "read-only token malformed (quote, too short)" 4 beat_failed "reason=api_token_malformed"
+reset_case; C_ROWS="$(ded 60 | fx fp11)"; C_TOKEN="${BAD_TOKEN_SENT}\"x"
+expect "read-only token malformed (quote and too short)" 4 beat_failed "reason=api_token_malformed"
+reset_case; C_ROWS="$(ded 60 | fx fp11b)"; C_TOKEN="${BAD_TOKEN_SENT}abcdefg\""
+expect "read-only token malformed (a quote alone, long enough)" 4 beat_failed "reason=api_token_malformed"
+reset_case; C_ROWS="$(ded 60 | fx fp11c)"; C_TOKEN="${BAD_TOKEN_SENT}"
+expect "read-only token malformed (too short alone)" 4 beat_failed "reason=api_token_malformed"
 reset_case; C_ROWS="$(ded 4501 | fx fp12)"; C_TOKEN="__unset__"
 expect "a stale row withholds before the credential is even read (no API call)" 3 producer_silent
 
@@ -529,6 +604,48 @@ reset_case; C_ROWS="$(ded 60 | fx bd2)"; C_BEATMODE="302"; C_BEATS=1; C_APIS=1
 expect "beat answered 302 (passes curl -f; only 2xx counts)" 4 beat_failed "http=302"
 reset_case; C_ROWS="$(ded 60 | fx bd3)"; C_BEATMODE="curlfail"; C_BEATS=1; C_APIS=1
 expect "beat curl fails outright" 4 beat_failed "reason=http_status"
+
+echo "== workflow step behaviour (the real run: block against a stubbed verifier) =="
+WF_RUN="$WORK/wf.run.sh"
+python3 - "$WORKFLOW" "$WF_RUN" <<'PY'
+import sys, yaml
+wf = yaml.safe_load(open(sys.argv[1]))
+step = [s for s in wf["jobs"]["feeder"]["steps"] if s.get("id") == "feeder"][0]
+open(sys.argv[2], "w").write(step["run"])
+PY
+wf_run() { # <stub body | __missing__> [VAR=val ...] -> WF_RC; $d/out.txt and $d/log.txt hold the outputs and the log
+  local d="$WORK/wf" body="$1"; shift
+  assert_fixture_dir "$d"
+  case "$d" in "$WORK"/wf) rm -rf -- "$d" ;; *) echo "FATAL: wf dir" >&2; exit 2 ;; esac
+  mkdir -p "$d/scripts"
+  if [[ "$body" != "__missing__" ]]; then printf '%s\n' "$body" > "$d/scripts/inngest-probe-heartbeat-feeder.sh"; fi
+  : > "$d/out.txt"
+  WF_RC=0
+  ( cd "$d" && env -i PATH="$PATH" HOME="$HOME" GITHUB_OUTPUT="$d/out.txt" "$@" "$BASH_BIN" --noprofile --norc -eo pipefail "${WF_RUN_OVERRIDE:-$WF_RUN}" > "$d/log.txt" 2>&1 ) || WF_RC=$?
+}
+wf_check() { # <name> <cond-description> <exit-status-of-condition>
+  cases=$((cases + 1))
+  if [[ "$3" == 0 ]]; then pass "$1: $2"; else fail "$1: $2"; sed 's/^/        | /' "$WORK/wf/log.txt" >&2; fi
+}
+wf_run 'printf "inngest-probe-feeder: verdict=beat http=200 age_s=60\n"; echo "fed: noise line"; exit 0'
+wf_check "workflow step, beat" "step exits 0 and writes exit_code=0 verdict=beat" "$([[ "$WF_RC" == 0 ]] && grep -qx 'exit_code=0' "$WORK/wf/out.txt" && grep -qx 'verdict=beat' "$WORK/wf/out.txt"; echo $?)"
+wf_check "workflow step, beat" "only the marker line is echoed (the explanatory line is dropped)" "$(grep -q 'verdict=beat http=200' "$WORK/wf/log.txt" && ! grep -q 'fed: noise' "$WORK/wf/log.txt"; echo $?)"
+wf_run 'printf "::set-output name=x::y\n"; printf "inngest-probe-feeder: verdict=producer_silent age_s=9999\n"; exit 3'
+wf_check "workflow step, withheld" "step exits 0, writes exit_code=3 verdict=producer_silent, and a ::error:: annotation" "$([[ "$WF_RC" == 0 ]] && grep -qx 'exit_code=3' "$WORK/wf/out.txt" && grep -qx 'verdict=producer_silent' "$WORK/wf/out.txt" && grep -q '^::error::' "$WORK/wf/log.txt"; echo $?)"
+wf_check "workflow step, withheld" "a verifier line that starts with :: never reaches the log as a command" "$(! grep -q '^::set-output' "$WORK/wf/log.txt"; echo $?)"
+wf_run __missing__
+wf_check "workflow step, verifier missing" "step exits 0, exit_code=127, verdict=no_marker, and the cause is named in the log" "$([[ "$WF_RC" == 0 ]] && grep -qx 'exit_code=127' "$WORK/wf/out.txt" && grep -qx 'verdict=no_marker' "$WORK/wf/out.txt" && grep -q 'verdict=no_marker rc=127' "$WORK/wf/log.txt"; echo $?)"
+wf_run 'printf "inngest-probe-feeder: verdict=beat now=%s lib=%s\n" "${INNGEST_FEEDER_NOW-unset}" "${INNGEST_PROBE_ROW_LIB-unset}"; exit 0' INNGEST_FEEDER_NOW=2026-01-01T00:00:00Z INNGEST_PROBE_ROW_LIB=/tmp/evil.sh
+wf_check "workflow step, test seams" "INNGEST_FEEDER_NOW and INNGEST_PROBE_ROW_LIB never reach the verifier" "$(grep -q 'now=unset lib=unset' "$WORK/wf/log.txt"; echo $?)"
+wf_run 'printf "inngest-probe-feeder: verdict=beat \033[31mred\033[0m\n"; exit 0'
+wf_check "workflow step, control characters" "an escape sequence in a verifier line is stripped before it is printed" "$(! LC_ALL=C grep -q $'\033' "$WORK/wf/log.txt"; echo $?)"
+# Mutant: the seam unset removed from the run block must turn the seams case red.
+sed -E '/^ *unset INNGEST_FEEDER_NOW INNGEST_PROBE_ROW_LIB/d' "$WF_RUN" > "$WORK/wf.mut.sh"
+cases=$((cases + 1))
+_n="$(grep -c 'unset INNGEST_FEEDER_NOW' "$WORK/wf.mut.sh" || true)"
+WF_RUN_OVERRIDE="$WORK/wf.mut.sh" wf_run 'printf "inngest-probe-feeder: verdict=beat now=%s\n" "${INNGEST_FEEDER_NOW-unset}"; exit 0' INNGEST_FEEDER_NOW=2026-01-01T00:00:00Z
+if [[ "$_n" == 0 ]] && grep -q 'now=2026-01-01' "$WORK/wf/log.txt"; then pass "mutation W-unset: without the unset line the frozen clock reaches the verifier (the seams case is load-bearing)"
+else fail "mutation W-unset: the unset line was not the thing keeping the seam out (n=$_n)"; fi
 
 echo "== mutation runner self-test =="
 verdict_holds() { [[ "$1" == "$LAST_RC" ]] && grep -qE "verdict=$2( |\$)" "$OUT"; }
@@ -549,13 +666,16 @@ landed_within() { # <orig> <mutant> "<lo>-<hi> ..."
 fn_range() { awk -v f="$2" '$0 == f "() {" { s = NR } s && !e && NR > s && $0 == "}" { e = NR } END { if (s && e) print s "-" e }' "$1"; }
 line_of() { grep -nxF -- "$2" "$1" | cut -d: -f1; }
 MUT_TABLE="$WORK/mutations.tsv"; : > "$MUT_TABLE"
-expect_red() { # <row> <name> <orig-rc> <orig-verdict>
+expect_red() { # <row> <name> <orig-rc> <orig-verdict> <mutant-rc> <mutant-verdict>
   cases=$((cases + 1))
   run_case
   local seen; seen="$(markers_of)"
   printf '%s\t%s\t%s\t%s\n' "$1" "$2" "${seen:-none}" "$LAST_RC" >> "$MUT_TABLE"
   if verdict_holds "$3" "$4"; then fail "mutation row $1 ($2) SURVIVED: still status $3 + verdict=$4"
-  else pass "mutation row $1 ($2) is RED: status $LAST_RC, verdicts [$seen]"; fi
+  elif ! verdict_holds "$5" "$6"; then
+    # RED for the WRONG reason (a crash, a trap remap, an unrelated verdict) is an instrument fault.
+    fail "mutation row $1 ($2) went red for another reason: status $LAST_RC verdicts [$seen], expected $5 + verdict=$6"
+  else pass "mutation row $1 ($2) is RED as predicted: status $LAST_RC, verdicts [$seen]"; fi
 }
 assert_landed() { # <row> <mutant> <ranges>
   cases=$((cases + 1))
@@ -588,37 +708,37 @@ echo "== committed mutation rows =="
 M="$WORK/mut/m1.sh"; sed -E 's/^FRESH_MAX_SECS=4500$/FRESH_MAX_SECS=4501/' "$PROBE_SRC" > "$M"
 assert_landed M1 "$M" "$CONST_LINE-$CONST_LINE"
 reset_case; C_ROWS="$(ded 4501 | fx m1)"; C_PROBE="$M"; C_BEATS=1; C_APIS=1
-expect_red M1 "bound raised by one second" 3 producer_silent
+expect_red M1 "bound raised by one second" 3 producer_silent 0 beat
 # M2a/M2b: drop the host filter, or the host_name filter.
 M="$WORK/mut/m2a.sh"; sed -E 's/\(\.host == \$h and \.host_name == \$hn\)/(.host_name == $hn)/' "$PROBE_SRC" > "$M"
 assert_landed M2a "$M" "$FRESH_R"
 reset_case; C_ROWS="$({ ded 5000; row "$(dt_ago 30)" "$(msg dedicated)" soleur-web-1; } | fx m2a)"; C_PROBE="$M"; C_BEATS=1; C_APIS=1
-expect_red M2a "host filter dropped" 3 producer_silent
+expect_red M2a "host filter dropped" 3 producer_silent 0 beat
 M="$WORK/mut/m2b.sh"; sed -E 's/\(\.host == \$h and \.host_name == \$hn\)/(.host == $h)/' "$PROBE_SRC" > "$M"
 assert_landed M2b "$M" "$FRESH_R"
 reset_case; C_ROWS="$({ ded 5000; row "$(dt_ago 30)" "$(msg dedicated)" soleur-inngest soleur-web-prd; } | fx m2b)"; C_PROBE="$M"; C_BEATS=1; C_APIS=1
-expect_red M2b "host_name filter dropped" 3 producer_silent
+expect_red M2b "host_name filter dropped" 3 producer_silent 0 beat
 # M3: the shared predicate replaced by a substring match on the marker.
 M="$WORK/mut/m3.sh"; sed -E 's/\[select\(inngest_probe_row\)\]/[select(((.message \/\/ "") | tostring) | contains("SOLEUR_INNGEST_SERVER_PROBE"))]/' "$PROBE_SRC" > "$M"
 assert_landed M3 "$M" "$FRESH_R"
 reset_case; C_ROWS="$({ ded 5000; row "$(dt_ago 30)" "$(msg dedicated)" soleur-inngest soleur-inngest-prd doppler; } | fx m3)"; C_PROBE="$M"; C_BEATS=1; C_APIS=1
-expect_red M3 "substring match instead of the shared predicate" 3 producer_silent
+expect_red M3 "substring match instead of the shared predicate" 3 producer_silent 0 beat
 # M4: drop the dedicated role rule.
 M="$WORK/mut/m4.sh"; sed -E 's/\.r\) == "dedicated" then 1/.r) != "__never__" then 1/' "$PROBE_SRC" > "$M"
 assert_landed M4 "$M" "$FRESH_R"
 reset_case; C_ROWS="$({ ded 5000; row "$(dt_ago 30)" "$(msg web)"; } | fx m4)"; C_PROBE="$M"; C_BEATS=1; C_APIS=1
-expect_red M4 "role filter dropped" 3 producer_silent
+expect_red M4 "role filter dropped" 3 producer_silent 0 beat
 # M5: take the oldest row instead of the newest by dt.
 M="$WORK/mut/m5.sh"; sed -E 's/LC_ALL=C sort -s \| tail -1/LC_ALL=C sort -s | head -1/' "$PROBE_SRC" > "$M"
 assert_landed M5 "$M" "$FRESH_R"
 reset_case; C_ROWS="$({ ded 5000; ded 60; } | fx m5)"; C_PROBE="$M"; C_BEATS=1; C_APIS=1
-expect_red M5 "oldest row selected instead of newest by dt" 0 beat
+expect_red M5 "oldest row selected instead of newest by dt" 0 beat 3 producer_silent
 # M6: call the beat BEFORE the freshness verdict (reorder, not delete).
 M="$WORK/mut/m6.sh"
 awk '$0 == "check_freshness" { print "beat_once" } { print }' "$PROBE_SRC" > "$M"
 assert_landed M6 "$M" "$MAIN_R"
 reset_case; C_ROWS="$(ded 4501 | fx m6)"; C_PROBE="$M"; C_BEATS=1
-expect_red M6 "beat called before the freshness verdict" 3 producer_silent
+expect_red M6 "beat called before the freshness verdict" 3 producer_silent 4 beat_failed
 cases=$((cases + 1))
 if [[ "$(( $(count_calls '^beat$') ))" -ge 1 ]]; then pass "mutation row M6: the stub observed the beat call during the run"
 else fail "mutation row M6: no beat call observed — the reorder did not reach the beat"; fi
@@ -626,7 +746,17 @@ else fail "mutation row M6: no beat call observed — the reorder did not reach 
 M="$WORK/mut/m7.sh"; sed -E 's/^if \[\[ "\$HB_PAUSED" == "true" \]\]; then$/if false; then/' "$PROBE_SRC" > "$M"
 assert_landed M7 "$M" "$MAIN_R"
 reset_case; C_ROWS="$(ded 60 | fx m7)"; C_API="$(api_paused | fx m7api)"; C_PROBE="$M"; C_BEATS=1; C_APIS=1
-expect_red M7 "paused ignored" 0 fresh_heartbeat_paused
+expect_red M7 "paused ignored" 0 fresh_heartbeat_paused 0 beat
+# T1: the TLS/CA environment scrub removed (the stub curl refuses a call that still sees it).
+M="$WORK/mut/t1.sh"; sed -E 's/^unset SSLKEYLOGFILE CURL_CA_BUNDLE .*$/:/' "$PROBE_SRC" > "$M"
+assert_landed T1 "$M" "$(line_of "$PROBE_SRC" 'unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME HOSTALIASES LOCALDOMAIN RES_OPTIONS')-$(line_of "$PROBE_SRC" 'unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME HOSTALIASES LOCALDOMAIN RES_OPTIONS')"
+reset_case; C_TLSENV=1; C_ROWS="$(ded 60 | fx t1)"; C_PROBE="$M"; C_BEATS=1; C_APIS=1
+expect_red T1 "TLS/CA environment scrub removed" 0 beat 4 beat_failed
+# D1: the dt shape filter removed (a zone-offset dt is then read as UTC and a stale row looks fresh).
+M="$WORK/mut/d1.sh"; sed -E 's/if \[\[ "\$d" =~ \$dt_re \]\]; then/if true; then/' "$PROBE_SRC" > "$M"
+assert_landed D1 "$M" "$FRESH_R"
+reset_case; C_ROWS="$(row "$(date -u -d "@$((NOW_EPOCH - 60))" '+%Y-%m-%d %H:%M:%S')+02:00" "$(msg dedicated)" | fx d1)"; C_PROBE="$M"; C_BEATS=1; C_APIS=1
+expect_red D1 "dt shape filter removed" 3 row_unusable 0 beat
 # A detached trap: a fall-off that exits 0 without a verdict is remapped to 3, never 0.
 M="$WORK/mut/falloff.sh"; awk '$0 == "beat_once" { print "DECIDED=0; exit 0"; next } { print }' "$PROBE_SRC" > "$M"
 assert_landed falloff "$M" "$MAIN_R"
@@ -647,8 +777,8 @@ if (( passes + fails != cases )); then
   exit 1
 fi
 # A HARD-CODED floor: a runtime-derived one falls when a case is deleted.
-MIN_PASSES=104
-MIN_BEAT_ASSERTS=61
+MIN_PASSES=134
+MIN_BEAT_ASSERTS=76
 if (( passes < MIN_PASSES )); then
   printf 'FATAL: only %s passes, below the floor of %s -- the suite was truncated, so a 0-failure tally proves nothing.\n' "$passes" "$MIN_PASSES" >&2
   exit 1

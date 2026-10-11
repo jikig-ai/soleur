@@ -24,6 +24,10 @@ export type Arming =
  * the arming line is deleted, i.e. prose alone would satisfy the guard built to kill prose.
  * Matching runs against a COMMENT-STRIPPED view for the same reason.
  *
+ * A `cron` row may instead name a WORKFLOW (`.github/workflows/<x>.yml`) and the `bash scripts/<x>.sh`
+ * line that runs the verifier (ADR-117 amendment 2026-10-11): `checkFeeders` then also requires a
+ * `schedule:` trigger or a `WATCHDOG_DISPATCH_TABLE` row, and that the script exists.
+ *
  * `none` is the honest declaration that nothing pings this heartbeat yet. It is not a loophole: it
  * costs a `tracking_issue`, and the guard asserts the heartbeat has no feeder by EITHER delivery
  * route this repo uses (see `feederDeliveryProbes`).

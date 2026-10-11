@@ -237,10 +237,37 @@ function checkFeeders(
       }
       // Fixed-string containment (grep -F semantics) over code only: the pattern is a literal
       // arming construct, so regex interpretation would only invent metacharacter bugs.
-      if (!stripCommentLines(readFile(f.evidence.file)).includes(f.evidence.pattern)) {
+      const evidenceCode = stripCommentLines(readFile(f.evidence.file));
+      if (!evidenceCode.includes(f.evidence.pattern)) {
         violations.push(
           `heartbeat "${e.name}": "${f.evidence.file}" exists but its CODE does NOT contain the arming construct "${f.evidence.pattern}" — the ${f.kind} was renamed, removed, or survives only in a comment, so nothing feeds this heartbeat.`,
         );
+        continue;
+      }
+      // A WORKFLOW feeder (ADR-117 amendment 2026-10-11, #9703) is only "running" if something starts it
+      // and the script it names exists: a workflow with neither a schedule trigger nor a
+      // WATCHDOG_DISPATCH_TABLE row (ADR-248), or one naming a script that is gone, is evidence in code
+      // that never ran.
+      if (f.evidence.file.startsWith(".github/workflows/")) {
+        const base = f.evidence.file.slice(".github/workflows/".length);
+        const hasSchedule = /^\s*schedule:/m.test(evidenceCode);
+        let inTable = false;
+        try {
+          inTable = readFile("apps/web-platform/server/watchdog-dispatch-table.ts").includes(`workflowFile: "${base}"`);
+        } catch {
+          inTable = false;
+        }
+        if (!hasSchedule && !inTable) {
+          violations.push(
+            `heartbeat "${e.name}": workflow feeder "${f.evidence.file}" has no \`schedule:\` trigger and no WATCHDOG_DISPATCH_TABLE row — nothing starts it, so the heartbeat is declared fed by a workflow that never runs.`,
+          );
+        }
+        const script = f.evidence.pattern.replace(/^bash /, "");
+        if (!fileExists(script)) {
+          violations.push(
+            `heartbeat "${e.name}": workflow feeder runs "${script}" but that file does not exist.`,
+          );
+        }
       }
       continue;
     }
@@ -591,21 +618,46 @@ describe("feeder guard is load-bearing (non-vacuity, #6537)", () => {
       },
     };
     const wfExists = () => true;
+    const scheduled = (run: string) => `on:\n  schedule:\n    - cron: '*/15 * * * *'\njobs:\n  a:\n    steps:\n${run}`;
     // Absent entirely: the "survives only in a comment / absent" violation must fire.
-    const absent = checkFeeders([wfBase], wfExists, () => "jobs:\n  a:\n    steps:\n      - run: echo hi\n", noFeeder);
+    const absent = checkFeeders([wfBase], wfExists, () => scheduled("      - run: echo hi\n"), noFeeder);
     expect(absent.some((x) => x.includes("does NOT contain"))).toBe(true);
     // Only in a comment line: stripCommentLines must hide it.
-    const commented = checkFeeders([wfBase], wfExists, () => "      # bash scripts/x.sh\n      - run: echo hi\n", noFeeder);
+    const commented = checkFeeders([wfBase], wfExists, () => scheduled("      # bash scripts/x.sh\n      - run: echo hi\n"), noFeeder);
     expect(commented.some((x) => x.includes("does NOT contain"))).toBe(true);
     // Present on a run line: passes (a regex-relaxed-to-match-everything check could not tell these apart).
-    const present = checkFeeders([wfBase], wfExists, () => "      - run: bash scripts/x.sh\n", noFeeder);
+    const present = checkFeeders([wfBase], wfExists, () => scheduled("      - run: bash scripts/x.sh\n"), noFeeder);
     expect(present).toEqual([]);
+    // Nothing starts it: workflow_dispatch only, and no dispatch-table row => FAIL (the ADR-117 rule).
+    const dispatchOnly = checkFeeders(
+      [wfBase],
+      wfExists,
+      (rel) => (rel.endsWith("watchdog-dispatch-table.ts") ? "export const T = [];" : "on:\n  workflow_dispatch: {}\njobs:\n  a:\n    steps:\n      - run: bash scripts/x.sh\n"),
+      noFeeder,
+    );
+    expect(dispatchOnly.some((x) => x.includes("nothing starts it"))).toBe(true);
+    // The same workflow with a dispatch-table row is clocked, so it passes.
+    const clocked = checkFeeders(
+      [wfBase],
+      wfExists,
+      (rel) => (rel.endsWith("watchdog-dispatch-table.ts") ? 'workflowFile: "scheduled-x.yml",' : "on:\n  workflow_dispatch: {}\njobs:\n  a:\n    steps:\n      - run: bash scripts/x.sh\n"),
+      noFeeder,
+    );
+    expect(clocked).toEqual([]);
+    // The script it names is gone => FAIL.
+    const noScript = checkFeeders(
+      [wfBase],
+      (rel) => rel !== "scripts/x.sh",
+      () => scheduled("      - run: bash scripts/x.sh\n"),
+      noFeeder,
+    );
+    expect(noScript.some((x) => x.includes("does not exist"))).toBe(true);
     // A DIFFERENT workflow filename and script name of the allowed shapes also passes end to end.
     const other: ManifestEntry = {
       ...wfBase,
       feeder: { kind: "cron", evidence: { file: ".github/workflows/scheduled-y.yml", pattern: "bash scripts/y-feeder.sh" } },
     };
-    expect(checkFeeders([other], wfExists, () => "      - run: bash scripts/y-feeder.sh\n", noFeeder)).toEqual([]);
+    expect(checkFeeders([other], wfExists, () => scheduled("      - run: bash scripts/y-feeder.sh\n"), noFeeder)).toEqual([]);
   });
 });
 

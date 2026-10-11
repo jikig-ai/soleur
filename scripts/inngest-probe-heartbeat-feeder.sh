@@ -17,23 +17,34 @@
 # There is exactly ONE call site that can reach the heartbeat URL (beat_once), and every path to it
 # passes the verdict logic above.
 #
-# EXIT CONTRACT. Exit 0 means exactly {beat, fresh_heartbeat_paused}. Every other outcome withholds
+# EXIT CONTRACT. Exit 0 means exactly {beat, fresh_heartbeat_paused} for every run that can reach the
+# heartbeat. The one other zero is `--selftest` (an argument no workflow passes; it prints no verdict).
+# Every other outcome withholds
 # the beat and exits non-zero: 3 cannot establish, 4 the beat could not be delivered, 64 usage, 78
 # tracing refused. The EXIT trap rewrites any status outside that set to 3, and rewrites a 0 that
 # did not come from a decided verdict to 3 as well: a fall-off that exited 0 would post a Sentry
 # `ok` for a run that decided nothing.
 #
 # BEAT BUDGET. The heartbeat pages when no beat arrives for period + grace = 5400 s. The workflow
-# runs this every 15 minutes (apps/web-platform/server/watchdog-dispatch-table.ts), and the 4500 s
-# freshness bound leaves 15 minutes of slack above the probe's hourly cadence (measured gaps
-# 3599-3650 s). The harness cross-checks the bound against the values this file does not own.
+# runs this every 15 minutes WHEN the web watchdog clock delivers it (apps/web-platform/server/
+# watchdog-dispatch-table.ts); the `schedule:` fallback alone (one run every 2-7 h) cannot hold the
+# budget. The 4500 s freshness bound leaves about 14 minutes above the probe's hourly cadence (measured
+# gaps 3599-3650 s) for ingest lag and clock skew; the first-sighting lag measured during the soak was
+# under 2 minutes. The harness cross-checks the bound against the values this file does not own.
 #
 # CLOCK. "Now" is INNGEST_FEEDER_NOW (ISO-8601 UTC) when set, date -u otherwise. A set-but-malformed
 # value is exit 3, never a wall-clock fallback.
 #
+# TEST SEAMS. INNGEST_FEEDER_NOW and INNGEST_PROBE_ROW_LIB exist for the harness only. A frozen clock or a
+# permissive predicate library would authorize a beat on a dead probe, so the workflow unsets both before
+# running this file and the harness pins that (a seam that is honoured in production must be sealed by
+# its invoker).
+#
 # Secrets (repo secrets, read only): BETTERSTACK_QUERY_HOST, BETTERSTACK_QUERY_USERNAME,
 # BETTERSTACK_QUERY_PASSWORD (the Logs warehouse) and BETTERSTACK_API_TOKEN_READONLY (the uptime API,
-# GET only: a leak of it cannot pause, edit or delete anything).
+# GET only: a leak of it cannot pause, edit or delete anything, but it CAN read the heartbeat's ping URL,
+# which is a beat capability (alarm suppression); the read-only scope bounds the blast radius, it does not
+# remove it).
 #
 # Only argument: --selftest (no network, no credentials; loads the shared predicate and grades it).
 #
@@ -87,7 +98,7 @@ QUERY="$REPO_ROOT/scripts/betterstack-query.sh"
 # (the helper orders its inner query by dt descending); this file sorts by dt itself.
 WINDOW="2h"
 LIMIT=500
-# 4500 s = hourly probe (gaps 3599-3650 s measured) + ~14 min of slack for ingest lag and skew.
+# 4500 s = hourly probe (gaps 3599-3650 s measured) + about 14 min of slack for ingest lag and skew.
 FRESH_MAX_SECS=4500
 FUTURE_SLACK_SECS=300
 # The dedicated Inngest host, as vector stamps it. Every host writes into one Logs source, so a row
@@ -106,6 +117,9 @@ TOKEN_RE='^[A-Za-z0-9._~+/=-]{20,}$'
 # repo root so a sandboxed copy reads its own tree; INNGEST_PROBE_ROW_LIB overrides it. The load
 # contract (scripts/lib/inngest-probe-row.sh header): unset first so an inherited def never survives
 # a source that failed or defined nothing; the selftest proves the loaded def; stderr stays visible.
+# TLS/DNS environment that can substitute the trust store or the resolver for this file's own credentialed
+# curls (parity with scripts/betterstack-query.sh, #7873): --disable and --noproxy do not cover it.
+unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME HOSTALIASES LOCALDOMAIN RES_OPTIONS
 unset INNGEST_PROBE_ROW_JQ INNGEST_PROBE_EMITTER INNGEST_PROBE_MARKER
 _ipr_lib="${INNGEST_PROBE_ROW_LIB:-$REPO_ROOT/scripts/lib/inngest-probe-row.sh}"
 # shellcheck source=scripts/lib/inngest-probe-row.sh
@@ -184,7 +198,7 @@ check_freshness() {
   local nonempty
   nonempty="$(printf '%s\n' "$raw" | grep -c '[^[:space:]]' || true)"
   if [[ "$nonempty" -eq 0 ]]; then
-    FUNNEL="rows_total=0 rows_probe=0 rows_host=0 rows_dedicated=0 newest_dt=none"
+    FUNNEL="rows_total=0 rows_probe=0 rows_host=0 rows_dedicated=0 newest_dt=none lines=0"
     fmarker "no_rows" "window=$WINDOW"
     echo "CANNOT BEAT: zero $INNGEST_PROBE_MARKER rows in $WINDOW. The probe emitter, the journald allowlist, the sink or the warehouse is dark. That is what this heartbeat exists to report; it says nothing else about the store."
     exit 3
@@ -216,7 +230,11 @@ check_freshness() {
     exit 3
   fi
 
-  local total=0 probe=0 host=0 ded=0 p h r d dts=""
+  # A dt is a candidate only in the warehouse's own shape (UTC, no zone offset, optional fraction, optional
+  # trailing Z). Anything else (a zone offset would be read as UTC and could make a stale row look fresh)
+  # is counted in dt_rejected and never decides.
+  local dt_re='^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z?$'
+  local total=0 probe=0 host=0 ded=0 baddt=0 p h r d dts=""
   while IFS=$'\t' read -r p h r d; do
     total=$((total + 1))
     if [[ "$p" == 1 ]]; then
@@ -225,17 +243,21 @@ check_freshness() {
         host=$((host + 1))
         if [[ "$r" == 1 ]]; then
           ded=$((ded + 1))
-          dts+="$d"$'\n'
+          if [[ "$d" =~ $dt_re ]]; then
+            dts+="$d"$'\n'
+          else
+            baddt=$((baddt + 1))
+          fi
         fi
       fi
     fi
   done <<<"$sel"
 
   local newest="none"
-  if [[ "$ded" -gt 0 ]]; then
+  if [[ -n "$dts" ]]; then
     newest="$(printf '%s' "$dts" | LC_ALL=C sort -s | tail -1)"
   fi
-  FUNNEL="rows_total=$total rows_probe=$probe rows_host=$host rows_dedicated=$ded newest_dt=$(printf '%s' "$newest" | tr -c 'A-Za-z0-9:. -' '?' | tr ' ' '_' | head -c 40)"
+  FUNNEL="rows_total=$total rows_probe=$probe rows_host=$host rows_dedicated=$ded newest_dt=$(printf '%s' "$newest" | tr -c 'A-Za-z0-9:. -' '?' | tr ' ' '_' | head -c 40) lines=$nonempty dt_rejected=$baddt"
   if [[ "$ded" -eq 0 ]]; then
     fmarker "no_rows" "window=$WINDOW role=dedicated"
     echo "CANNOT BEAT: no host_role=dedicated $INNGEST_PROBE_MARKER row from $HOST in $WINDOW (rows from other roles, hosts, emitters or quoting content were set aside). The probe pipeline for the dedicated host is dark; that is what this heartbeat exists to report."
@@ -243,7 +265,7 @@ check_freshness() {
   fi
 
   local dt_epoch=""
-  if [[ "$newest" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2} ]]; then
+  if [[ -n "$dts" && "$newest" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2} ]]; then
     dt_epoch="$(date -u -d "${newest:0:19}" +%s 2>/dev/null)" || dt_epoch=""
   fi
   if [[ -z "$dt_epoch" ]]; then
@@ -294,7 +316,7 @@ resolve_heartbeat() {
   local sel srx
   sel="$(printf '%s' "$body" | jq -r --arg n "$HEARTBEAT_NAME" '
       [.data[]? | select(.attributes.name == $n)] as $m
-      | if ($m | length) != 1 then "count\t" + (($m | length) | tostring)
+      | if ($m | length) != 1 then "count\t" + (($m | length) | tostring) + "\t" + (if ((.pagination.next // null) != null) then "1" else "0" end)
         else ($m[0].attributes) as $a
           | if ($a.paused | type) != "boolean" then "paused_shape\t-"
             else "ok\t" + ($a.paused | tostring) + "\t" + (($a.url // "") | tostring) end
@@ -307,7 +329,8 @@ resolve_heartbeat() {
   fi
   case "$sel" in
     count$'\t'*)
-      fmarker "beat_failed" "reason=heartbeat_not_unique matches=${sel#count$'\t'}"
+      local cnt_rest="${sel#count$'\t'}"
+      fmarker "beat_failed" "reason=heartbeat_not_unique matches=${cnt_rest%%$'\t'*} paged=${cnt_rest#*$'\t'}"
       echo "CANNOT BEAT: exactly one heartbeat named $HEARTBEAT_NAME is required."
       exit 4 ;;
     paused_shape$'\t'*)

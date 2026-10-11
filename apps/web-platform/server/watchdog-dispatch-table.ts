@@ -6,6 +6,10 @@
 // scheduling substrate or something that substrate depends on, so it cannot be
 // scheduled by that substrate (ADR-033 anti-circularity). Any other scheduled
 // job uses the Inngest dispatch pattern (cron-main-health-monitor) instead.
+// A second clause (ADR-248 amendment 2026-10-11, #9703) admits a workflow that FEEDS an
+// absence-alerted dead-man's-switch heartbeat for a check on the substrate, when that
+// heartbeat is the paging surface and a substrate-dependent trigger would make a missing
+// beat unattributable.
 //
 // Adding a row: the workflow keeps `schedule:` (fallback) + `workflow_dispatch:`
 // as its ONLY triggers and a `concurrency` group with `cancel-in-progress: false`;
@@ -45,6 +49,6 @@ export const WATCHDOG_DISPATCH_TABLE: ReadonlyArray<WatchdogDispatchEntry> = [
     monitorSlug: "scheduled-inngest-probe-heartbeat",
     intervalMinutes: 15,
     eligibility:
-      "Feeds the dead-probe heartbeat for the Inngest host's own probe emitter (#9703): its freshness verdict reads the probe rows the Inngest host emits, so it shares Inngest's failure domain, and the credentialed bash pipeline that holds the Better Stack tokens must stay in an ephemeral runner, not in an Inngest function on the watched fleet.",
+      "Feeds the dead-man's-switch heartbeat for the Inngest host's probe (#9703), so it must be triggered outside Inngest scheduling and web-1 execution: an Inngest-fired feeder would turn every Inngest outage into a false \"probe dark\" page (ADR-248 amendment 2026-10-11).",
   },
 ];

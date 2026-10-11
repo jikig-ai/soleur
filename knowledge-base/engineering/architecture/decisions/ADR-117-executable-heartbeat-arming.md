@@ -421,7 +421,9 @@ A heartbeat's feeder may therefore be a **clock-dispatched workflow**: `kind: "c
 `evidence.file` a workflow under `.github/workflows/` and `evidence.pattern` the `bash scripts/<x>.sh`
 run line. This is a third evidence class, not a relaxed regex: the evidence-shape assertion in
 `heartbeat-reprovision-parity.test.ts` is a two-arm alternation, each arm bound on both file and
-pattern, and the new arm admits only a workflow path and a `bash scripts/<name>.sh` pattern. The
+pattern, and the new arm admits only a workflow path and a `bash scripts/<name>.sh` pattern. `checkFeeders` also requires, for the workflow arm, that the workflow carry a `schedule:` trigger or a
+`WATCHDOG_DISPATCH_TABLE` row and that the script it names exist, so a workflow that nothing starts cannot
+be declared a feeder. The
 verifier's harness binds the claim to the heartbeat (the verifier's heartbeat name equals the `.tf`
 `name`, the pattern sits on a parsed `run:` line, the Sentry status expression reads the verifier's exit
 code), and the workflow must be a `WATCHDOG_DISPATCH_TABLE` row (ADR-248) or carry a `schedule:`
