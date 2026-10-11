@@ -987,10 +987,23 @@
   adding the hosted autonomous-mode destroy confirmation lane and its tests
   across 45 files. The PR was stale against this main; the only merge conflict
   was an appended test block in `cc-dispatcher-real-factory.test.ts`. Kept the
-  upstream block intact and preserved the feature-side body. Main sync was
-  committed locally at `6ef029ee45d8d8eeb8a1fde17f4de7b25a08c482` and awaits
-  push; fresh-head CI will follow that push.
+  upstream block intact and preserved the feature-side body. Main sync commit
+  `6ef029ee45d8d8eeb8a1fde17f4de7b25a08c482` and evidence commit
+  `8165e9b6e9b626a6b4895f4d265af4fce6bd4e5c` are pushed.
 - This delta includes a new confirmation UI and backend lane through main.
   The PR remains a draft; promotion/default-on changes and all user-held local
   suites, recovery, authenticated QA, routine consumer, Web/CLO, review and
   promotion gates remain held. No local test was run for this sync.
+
+## Continuation update — 2026-10-11 synced-head CI settled
+
+- Exact pushed head `8165e9b6e9b626a6b4895f4d265af4fce6bd4e5c`, including main
+  `ee87693972eee78260a99de95bcf04c061752bf8`, settled at 69 passes, 11
+  declared skips, zero cancellations/pending, and one failure: required
+  aggregate `test` in [CI 38132125664](https://github.com/jikig-ai/soleur/actions/runs/38132125664).
+  The E2E, tenant integration, web build and integration-gate lint passed.
+- The aggregate log confirms the intentional draft guard: `test-webplat`,
+  `test-scripts` and `test-scripts-heavy` were skipped and it emitted
+  `draft: full battery owed at ready`. No local suite or C.9 recurrence ran
+  on this head. Keep the PR draft under the existing user hold; #9791 remains
+  open pending focused verification and a verified correction/workaround.
