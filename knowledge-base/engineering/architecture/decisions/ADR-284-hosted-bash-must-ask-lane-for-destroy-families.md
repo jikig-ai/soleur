@@ -24,12 +24,14 @@ commands, the spellings it does not recognise, and the conditions under which it
 
 ## Context
 
+<!-- lint-infra-ignore start: ADR context prose describes the hazard (what an unattended session could destroy), not a procedure anyone runs -->
 A hosted session whose workspace has `bash_autonomous = true` (the default for new workspaces, migration 099) auto-approves every
 Bash command that survives `BLOCKED_BASH_PATTERNS`, after a one-time owner acknowledgement. That blocklist does not match
 `terraform destroy`, `git push -f` or `rm -rf`. The plugin hook that would ask (ADR-277) is switched off in hosted sessions (ADR-277
 D8, `AGENT_ENV_OVERRIDES`), and ADR-277's CPO third pass rated the resulting exposure a single-user incident: a founder's
 autonomous session can erase the default branch's history on GitHub or tear down their infrastructure with no card shown, while the
 product says their work is backed up.
+<!-- lint-infra-ignore end -->
 
 Three further facts shaped the design (all verified against `origin/main` at base):
 
