@@ -53,6 +53,13 @@
 
 set -euo pipefail
 
+# Refuse to run under xtrace: -x prints a variable's value the moment it is bound (see #7797), and
+# this script handles a live Cloudflare admin token and the R2 SigV4 pair. There is no legitimate
+# traced run, so the refusal is unconditional and sits before anything is bound.
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
+
 GREEN='\033[32m'; RED='\033[31m'; YELLOW='\033[33m'; NC='\033[0m'
 red()    { printf '%b%s%b\n' "$RED"    "$*" "$NC" >&2; }
 green()  { printf '%b%s%b\n' "$GREEN"  "$*" "$NC"; }
@@ -67,6 +74,9 @@ step()   { printf '\n→ %s\n' "$*"; }
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)/_cf-admin-token.sh"
 # shellcheck source=../scripts/_r2-endpoint.sh disable=SC1091
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)/_r2-endpoint.sh"
+# The ONE curl that carries the R2 SigV4 pair: the key id and secret ride curl's stdin config, never argv.
+# shellcheck source=../scripts/_r2-sigv4-curl.sh disable=SC1091
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)/_r2-sigv4-curl.sh"
 
 # ─────────────────────────────────────────────────────────────────────────
 # Pre-flight: deps + auth + admin token
@@ -191,6 +201,10 @@ R2_SECRET="$R2_S3_SECRET_ACCESS_KEY"
 # cla-evidence workflow runs — the 2026-05-16 outage class. The probe key
 # is content-addressed under bootstrap-probe/ so it's idempotent across
 # re-runs and easy to identify+delete in the bucket inspector.
+# The request goes through r2_sigv4_curl, which refuses a malformed pair before any request (the
+# marker prints on stderr and the status below reads 000), pins the destination, and passes the pair
+# on curl's stdin config instead of argv. It also confines the transport (--disable --noproxy '*'),
+# so this one-shot needs direct egress to R2.
 # Pin the canonical R2 endpoint base (guards a malformed CF_ACCOUNT_ID) BEFORE
 # this credentialed probe PUT — without it, a bad account id would send the R2
 # HMAC secret to a non-canonical host (item 1 of #3950). Reused for the Doppler
@@ -199,21 +213,19 @@ R2_ENDPOINT="https://${CF_ACCOUNT_ID}.r2.cloudflarestorage.com"
 assert_r2_endpoint "$R2_ENDPOINT"
 probe_endpoint="${R2_ENDPOINT}/${BUCKET_NAME}/bootstrap-probe/$(date -u +%Y%m%dT%H%M%SZ).json"
 probe_body='{"probe":"bootstrap","ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}'
-probe_code=$(curl -sS -o /tmp/r2-probe-body -w "%{http_code}" --max-time 30 \
+probe_body_file=$(mktemp)
+trap 'rm -f "$probe_body_file"' EXIT
+probe_code=$(r2_sigv4_curl "bootstrap" "$R2_ACCESS_KEY" "$R2_SECRET" "$probe_endpoint" \
+  -sS -o "$probe_body_file" -w "%{http_code}" --max-time 30 \
   -X PUT \
   -H "If-None-Match: *" \
   -H "Content-Type: application/json" \
-  --aws-sigv4 "aws:amz:auto:s3" \
-  --user "${R2_ACCESS_KEY}:${R2_SECRET}" \
-  --data-binary "$probe_body" \
-  "$probe_endpoint" 2>/dev/null || echo "000")
+  --data-binary "$probe_body" || echo "000")
 if [[ "$probe_code" != "200" && "$probe_code" != "201" && "$probe_code" != "412" ]]; then
-  red "R2 probe PUT failed: status=$probe_code body=$(tr '\n' ' ' < /tmp/r2-probe-body | head -c 400)"
+  red "R2 probe PUT failed: status=$probe_code body=$(tr '\n' ' ' < "$probe_body_file" | head -c 400)"
   red "Refusing to push known-broken creds to Doppler. Verify R2_S3_ACCESS_KEY_ID/SECRET match a freshly-minted R2 dashboard token (see header)."
-  rm -f /tmp/r2-probe-body
   exit 1
 fi
-rm -f /tmp/r2-probe-body
 green "  R2 probe PUT ok (status=$probe_code); creds verified before Doppler push"
 
 # ─────────────────────────────────────────────────────────────────────────
