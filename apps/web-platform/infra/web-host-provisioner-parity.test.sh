@@ -388,7 +388,7 @@ ONLY_JUSTIFIED = {
     "apparmor_bwrap_profile@web-2": "birth-covered: predates web-2 birth",
     "container_restart_monitor_install@web-2": "birth-covered: predates web-2 birth (#5417)",
     "cosign_trusted_root@web-2": "birth-covered: predates web-2 birth",
-    "cron_egress_firewall@web-2": "birth-covered (loader/units/allowlist) + partial twin: the three cron-egress files hot-deliver via deploy_pipeline_fix_web2 (#9393)",
+    "cron_egress_firewall@web-2": "birth-covered (units/allowlist) + partial twin: the five cron-egress files (resolver, allowlist-cidr, post-apply assert, loader, gw deny-CIDRs) hot-deliver via deploy_pipeline_fix_web2 (#9393, #9534)",
     "disk_monitor_install@web-2": "birth-covered: predates web-2 birth",
     "docker_seccomp_config@web-2": "birth-covered: predates web-2 birth",
     "fail2ban_tuning@web-2": "birth-covered: predates web-2 birth",

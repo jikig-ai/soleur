@@ -6395,6 +6395,31 @@ if want_webplat; then
     fi
   fi
 
+  # --- vitest `related` narrowing (#9815) -----------------------------------
+  # On a local affected-shaped run whose diff carries no run-semantics file
+  # (WEBPLAT_RELATED_META), the app-local projects narrow to `vitest related`
+  # over the diff's changed files — the wrapper falls back to today's full
+  # invocation on an empty list, a meta hit, or a zero-resolution. Every
+  # conjunct is load-bearing: CI legs always run full (AC: CI unchanged);
+  # FORCE_ALL means "run everything"; an undecidable diff narrows nothing;
+  # a degraded-fallback run IS the full battery and must not narrow inside
+  # itself. The computation avoids the gate-predicate literal on purpose:
+  # this block sits inside the splice window, and the sibling guard slices
+  # its UNGATED region on the first line containing that token — comments
+  # count, so name it nowhere above the gate itself.
+  _webplat_related=""
+  if (( _ENUMERATE == 0 )) && [[ -z "${CI:-}" ]] \
+     && [[ "${SOLEUR_TEST_FORCE_ALL:-}" != "1" ]] \
+     && [[ "$_diff_detect_ok" == "1" && "$_diff_head_ok" == "1" ]] \
+     && { [[ "$TEST_GROUP" == "affected" ]] \
+          || { (( _AFFECTED == 1 )) && [[ -z "$_aff_fallback" ]]; }; }; then
+    if _meta="$(webplat_related_meta_hit "$_diff_names")"; then
+      echo "[vitest-related] meta path in diff (${_meta}) — webplat vitest runs the FULL projects." >&2
+    else
+      _webplat_related="$(webplat_related_files "$_diff_names")"
+    fi
+  fi
+
   # `component` runs ALWAYS, alongside repo-wide. #7498 evaluated gating it and
   # declined on measurement: at ~80 s it is a ~39 s expected saving, "statistically
   # the same quantity this PR already declined for the union predicate", and taking
@@ -6407,15 +6432,15 @@ if want_webplat; then
   # The invariant the guard asserts (0 of 240 `.test.tsx` escape the app) is kept:
   # it is true and worth keeping true, it is simply no longer load-bearing.
   run_suite "apps/web-platform [repo-wide+component]" env VITEST_SHARD="${VITEST_SHARD:-}" \
-    bash -c 'cd apps/web-platform && npm run test:ci -- --project repo-wide --project component ${VITEST_SHARD:+--shard="$VITEST_SHARD"} 2>&1'
+    WEBPLAT_RELATED="${_webplat_related:-}" bash apps/web-platform/scripts/vitest-related.sh bundle
 
   if _diff_touches "${WEBPLAT_APP_PATHS[@]}"; then
     run_suite "apps/web-platform [unit]" env VITEST_SHARD="${VITEST_SHARD:-}" \
-      bash -c 'cd apps/web-platform && npm run test:ci -- --project unit ${VITEST_SHARD:+--shard="$VITEST_SHARD"} 2>&1'
+      WEBPLAT_RELATED="${_webplat_related:-}" bash apps/web-platform/scripts/vitest-related.sh unit
   else
     _relevance_declined=$((_relevance_declined + 1))
     skip_suite "apps/web-platform [unit]" "relevance" \
-      "cd apps/web-platform && npm run test:ci -- --project unit"
+      "bash apps/web-platform/scripts/vitest-related.sh unit"
   fi
 
   # THE SHARD MATTERS, and the PATH is what keeps the surfaces disjoint.
@@ -6449,6 +6474,11 @@ if want_webplat; then
   # SUITE_GLOBS entry, and the battery needs apps/web-platform/node_modules/.bin/vitest, which the `test-scripts`
   # shard does not install. Its own control run reds the suite when the unedited copy is not green.
   run_suite "apps/web-platform/test/destroy-ask-mutation" bash apps/web-platform/test/destroy-ask-mutation.test.sh
+
+  # #9815: the wrapper + eligibility suite for the `related` narrowing. EXPLICIT,
+  # in THIS arm for the same reason as destroy-ask-mutation — it drives the
+  # real `node_modules/.bin/vitest` inside a synthesized fixture project.
+  run_suite "apps/web-platform/test/vitest-related" bash apps/web-platform/test/vitest-related.test.sh
 fi
 
 # plugins/soleur bun-test recursion + blog-link-validation — bun shard.
