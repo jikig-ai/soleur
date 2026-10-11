@@ -14,6 +14,36 @@ lane: single-domain
 
 # chore(infra): host-side zot consumer probe covers the inngest-bootstrap repo (Step A of #7258)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-11
+**Mode:** mechanical gates plus targeted live verification (read-only); the research fan-out was already spent during planning (learnings researcher, terraform-architect, CTO) and plan review (three reviewers), so no further agent fan-out was added.
+
+### Gate results
+
+- 4.4 precedent-diff: the rate-limit marker is pattern-bound. Precedent is `_canary` in the same file (`case "$last" in ''|*[!0-9]*) last=0`, `[ $((now - last)) -ge 1800 ]`); this plan REUSES it through one extracted helper rather than copying it, and the diff against the precedent is exactly one added arm: a future-dated marker emits (the precedent silences on it). The aggregation loop has no sibling precedent in the repo (the held-branch commit `f6279068df` is the only prior art and is not on `main`): pattern is novel, scrutinize it.
+- 4.5 network-outage: Hypotheses carries verified L3 artifacts (Hetzner firewall rule set, bridge REDIRECT scope); no gap.
+- 4.55 downtime and cutover: not triggered (no host replace, no lock-taking DDL, no container swap; the probe oneshot runs the new file on the next tick).
+- 4.6 user-brand impact: present, threshold `none` with the sensitive-path scope-out bullet (`apps/web-platform/infra/`).
+- 4.7 observability: all five fields present; `discoverability_test.command` starts with `bash`, has no `ssh `, is a single bounded query; `expected_output` is a literal; `credentials_required` is a non-placeholder declaration (so row-4 `SKIP-DECLARED` and the baseline bump apply).
+- 4.8 PAT scan: no PAT-shaped variable or literal.
+- 4.9 UI wireframe: not triggered (no UI surface). 4.10 encryption posture: `.tf` matched, no store or new connection (see `## Encryption Posture`). 4.11 guard contract: `lint-guard-contract.py` green (2 entries). 4.12 scope check: present once, mapped.
+
+### Live verification of cited facts
+
+- Rule IDs cited in the plan all exist as active rules in `AGENTS.md` (`cq-test-fixtures-synthesized-only`, `cq-write-failing-tests-before`, `hr-no-ssh-fallback-in-runbooks`, `hr-ssh-diagnosis-verify-firewall`, `wg-when-deferring-a-capability-create-a`).
+- Issue/PR states: #9942 MERGED, #9529 MERGED, #7158 CLOSED unmerged, #7242 CLOSED, #7144 CLOSED (a drift issue), #9920 OPEN, #9956 OPEN, #9597 OPEN, #7577 OPEN, #9217 OPEN, #9979 OPEN draft.
+- `_ping` occurs exactly twice in the probe (one definition, one call), as Guard 1's assembly states.
+- No GitHub label is prescribed by this plan.
+
+### Key improvements over the first draft (from plan review and deepening)
+
+1. The committed Step B gate script, its suite, a sweeper tracker and Guard 3 were cut (two reviewers); the gate is criteria plus a fixed recipe whose output is recorded on #7258.
+2. One shared rate-limit helper instead of a second copy; future-dated markers emit.
+3. Positional-only override seam; whitespace and empty-element gates; per-run temp marker paths in every test helper; fault-line assertions filtered so marker lines cannot satisfy them.
+4. Delivery-concurrency claim now rests on a historical red run (run 38097457915), not on graph reasoning.
+5. The recipe anchors on the apply log timestamp T0 and `floor(ts/1800)` buckets, keeps credentials off argv, and treats a missing canary as not-gradable.
+
 ## Overview
 
 The web-host zot consumer probe (`apps/web-platform/infra/web-zot-consumer-probe.sh`) checks, from the web host and with the
@@ -52,8 +82,8 @@ comment on #7258 (see `## Step B follow-up`).
 **Premise Validation.** #7258 is OPEN (priority/p3-low, type/chore); no merged PR closes it. #7242 (the zot bridge outage the
 held branch waited on) is CLOSED. #7144 resolves to an unrelated drift issue (CLOSED). The cited artifacts exist on `origin/main`:
 `web-zot-consumer-probe.sh`, `web-probe.tf` (`zot_probe_repo`), `web-probe-envwrite.sh`, `zot-entry-gate.sh`. The mechanism
-(extend the consumer probe) is not in any ADR's rejected-alternatives table: ADR-096 line 496 already records the
-`zot-entry-gate`/soak-gate as **superseded**; ADR-117 governs heartbeat arming (no new heartbeat is added, so it is untouched).
+(extend the consumer probe) is not in any ADR's rejected-alternatives table: ADR-096's sentence listing the
+"pre-flip zot-entry-gate/soak-gate" already records it as **superseded**; ADR-117 governs heartbeat arming (no new heartbeat is added, so it is untouched).
 The previous attempt on this branch family (plan `2026-10-10-fix-registry-template-render-fixture-hold-zot-entry-gate-delete`,
 archived) recorded the unblock criteria this plan implements: (1) probe extension, (2) observed green on a real run, (3) then a
 pure-delete PR.
@@ -285,9 +315,13 @@ No new Better Stack resource: free-tier heartbeat limits are not approached. Log
 
 Encryption posture: not applicable — no persistent store and no new cross-component connection (same endpoint, same credential, same plain-HTTP private-NIC leg as today).
 
+## Encryption Posture
+
+No persistent data store and no new cross-component or network connection is introduced. The probe's existing leg (web host to the registry over the private NIC, plain HTTP, Basic auth read from curl's stdin config) is unchanged: same endpoint, same credential, one additional request path on it. It is therefore not re-declared here; the registry store and transport postures remain governed by ADR-096, ADR-140 and the encryption-posture ledger.
+
 ## Architecture Decision (ADR/C4)
 
-No new ADR: this extends an existing probe inside the existing substrate and ADR-096/ADR-117 decisions (no new trust boundary, no new store, no new heartbeat, no reversal). ADR-096 line 496 already records `zot-entry-gate` as superseded.
+No new ADR: this extends an existing probe inside the existing substrate and ADR-096/ADR-117 decisions (no new trust boundary, no new store, no new heartbeat, no reversal). ADR-096's "pre-flip zot-entry-gate/soak-gate ... (**superseded:**" sentence already records `zot-entry-gate` as superseded.
 
 ### C4 views
 
@@ -354,7 +388,7 @@ Extend `apps/web-platform/infra/web-zot-consumer-probe.test.sh` (no new suite fi
 - Parse `REPO` with `IFS=',' read -r -a`; skip empty elements; an element containing whitespace is FATAL exit 1; count `probed`; FATAL exit 1 when it is zero (before any curl, ping or marker). Keep the existing unset-`REPO` FATAL.
 - Per repo, keep the curl line byte-identical to today except `${r}` for `${REPO}` (the suite's sed mutants (b) and (c) key on its text), and keep the `000000` normalization inside the loop.
 - Keep per-repo fault lines with their existing prefixes, appending `repo=<path>` where the text did not already name it. No early exit inside the loop: a 401 sets `auth_broke`, other faults set `unservable`, so every repo's line is emitted.
-- Extract the window check from `_canary` into one helper `_window_open <marker-file>` (true when the file is missing, empty, non-numeric, in the future, or older than 1800 s) and call it from both `_canary` (existing marker, unchanged behaviour) and the new `_repo_markers` (`SOLEUR_PROBE_REPOS_MARKER`, default `/run/web-zot-consumer-probe.repos`). The canary rows (existing suite) must pass unchanged.
+- Extract the window check from `_canary` into one helper `_window_open <marker-file>` (true when the file is missing, empty, non-numeric, in the future, or older than 1800 s) and call it from both `_canary` (existing marker, unchanged behaviour) and the new `_repo_markers` (`SOLEUR_PROBE_REPOS_MARKER`, default `/run/web-zot-consumer-probe.repos`). The canary rows (existing suite) must pass unchanged. One deliberate behaviour change: the current `_canary` treats a numeric FUTURE-dated marker as fresh (`now - last` is negative, so it never emits), a latent silent-canary defect; the shared helper emits in that case, which fixes the canary as well and is asserted once in T9.
 - After the loop: emit the markers (`SOLEUR_ZOT_PROBE_REPO repo= code= verdict= ts=`, one per repo, any verdict), then aggregate: any 401 -> exit 3; else any fault -> exit 0 without ping; else `_ping` and the VERBOSE line, exit 0.
 - Seam: `SOLEUR_ZOT_PROBE_STATUS_OVERRIDE` is a positional comma list over the NON-EMPTY elements in order (a single code is the one-repo case; missing positions read `000`).
 - `--canary-only` mode and the refuse-to-trace guard are untouched; update the header comment to describe the list contract and the 20 s worst case.
