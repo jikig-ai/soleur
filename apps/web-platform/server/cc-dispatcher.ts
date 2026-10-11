@@ -349,22 +349,27 @@ export function shouldMirrorUnregisteredPlatformToolUse(
  * #10032 follow-up — mirror a Bash `tool_result` that carries a sandbox denial to Sentry.
  * Exported for unit testability. Per-user debounced; the event carries ONLY the scrubbed, capped matched
  * line (never the tool output, the command, or workspace paths) and the Error message is the classifier's
- * code, never the output. Returns whether an event was offered to the debouncer.
+ * code, never the output. Detection only: no alert pages on this op until #10052 (blocked on #7985).
  */
 export function mirrorBashSandboxFailure(
   output: string,
   userId: string,
   conversationId: string,
-): boolean {
+): void {
   const failure = classifyBashSandboxFailure(output);
-  if (!failure) return false;
+  if (!failure) return;
+  // null first arg, never a real Error — the pino mirror captures a passed Error first as
+  // `feature=pino-mirror` with no user and Sentry drops the tagged second capture (#8629). The code lives in
+  // `message` and `extra`. Sibling emitters of this failure: the deploy canary's `SANDBOX_CANARY_FAIL` /
+  // `SOLEUR_CANARY_SANDBOX_DIAG` rows (ci-deploy.sh) cover the container, this covers a live tenant session.
   mirrorWithDebounce(
-    new Error(`bash sandbox denial: ${failure.errorCode}`),
+    null,
     {
       feature: "agent-sandbox",
       op: "bash-tool-result",
+      message: `bash sandbox denial: ${failure.errorCode}`,
       tags: {
-        sandboxKind: "seccomp_or_userns_denial",
+        sandboxKind: "seccomp_or_userns_denial", // same enum value as the sdk-startup emitter; `sandboxErrorCode` refines it
         sdkVersion: failure.sdkVersion ?? "unknown",
       },
       extra: {
@@ -377,7 +382,6 @@ export function mirrorBashSandboxFailure(
     userId,
     "agent-sandbox-bash-tool-result",
   );
-  return true;
 }
 
 /**

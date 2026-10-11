@@ -88,6 +88,27 @@ anti-vacuity floor `MIN_ASSERTIONS=8` sits on the line above its `if`.
 3. `sandbox-masked-proc-docker.test.sh` + the `infra-validation.yml` sudo step + `PRIVILEGED_WHY` entry.
 4. Comment fix in `agent-runner-sandbox-config.ts`.
 
+## User-Brand Impact
+
+Threshold: single-user incident. The sandbox's `/proc` mask is the only cross-tenant barrier (tenants share uid 1001
+in one container). This diff changes no docker flag and not the shim; it adds a guard and a signal. Failure modes:
+
+| Artifact | Exposure vector | Mitigation in this diff |
+|---|---|---|
+| Shared Node event loop (`onToolResult`) | A tenant prints a long slash-heavy line carrying `bwrap` + `EPERM`; a quadratic scrub stalls every tenant (measured 17 s at 100k chars) | Lines capped at 2000 chars before any regex; scrub regexes linear; hostile-line timing test |
+| Sentry `extra.sandboxStderr` / pino stdout | Tenant file content on a line that also names bwrap | Match requires `bwrap`/`bubblewrap` + denial on one line; all absolute paths, uuids, opaque tokens and control chars scrubbed; 300-char cap; residual free text stated, not denied |
+| Sentry event identity | A real `Error` first argument is captured untagged and user-less by the pino mirror (#8629) | `null` error plus `message`; test through the real `reportSilentFallback` |
+| Cross-tenant `/proc` isolation | A drifted prod tuple or an image that no longer installs the shim leaves the suite green | Suite pins the Dockerfile COPY and runs the shim under docker's default masks; it does NOT parse the real `docker run` tuples (stated limit, tracked in #10065) |
+
+## Observability
+
+- Failure mode: a Bash `tool_result` carrying a bwrap denial (fleet-wide sandbox outage). Layer 2 (pino to Sentry).
+- Discoverability (no SSH): Sentry query `feature:agent-sandbox op:bash-tool-result` (read via the Sentry API with
+  `SENTRY_AUTH_TOKEN`, Doppler `prd`); expected output: one event per affected user per 5 minutes with
+  `sandboxErrorCode` and the scrubbed `sandboxStderr`. The container-side canary rows remain
+  `SANDBOX_CANARY_FAIL` / `SOLEUR_CANARY_SANDBOX_DIAG` (Better Stack, `scripts/betterstack-query.sh`).
+- **Detection, not alerting:** no rule pages on this op until #10052 (blocked on #7985).
+
 ## Files
 
 Edit: `apps/web-platform/server/sandbox-startup-classifier.ts`, `apps/web-platform/server/cc-dispatcher.ts`,

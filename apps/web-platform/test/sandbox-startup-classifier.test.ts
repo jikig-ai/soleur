@@ -152,6 +152,25 @@ describe("classifyBashSandboxFailure — Bash tool_result sandbox denial (#10032
     expect(JSON.stringify(f)).not.toContain("sk-ant-api03");
   });
 
+  it("scrubs every absolute path root, opaque tokens and control characters, keeping bwrap's /newroot targets", () => {
+    const line = "bwrap: \u0007Can't mount proc on /newroot/proc: Operation not permitted /home/soleur/.ssh/id_rsa /var/lib/soleur/x " +
+      "sk-ant-api03-notarealkeynotarealkeynotarealkey";
+    const f = classifyBashSandboxFailure(line, null);
+    expect(f?.matchedLine).toContain("/newroot/proc");
+    for (const leaked of ["/home/", "/var/lib/", "sk-ant-api03", "id_rsa", "\u0007"]) {
+      expect(f?.matchedLine).not.toContain(leaked);
+    }
+  });
+
+  it("is linear on a hostile 100k-char slash-heavy line (shared event loop; measured 17s on a quadratic scrub)", () => {
+    for (const hostile of ["/a".repeat(50_000), "/".repeat(100_000), "/a/a/a/a/".repeat(12_000)]) {
+      const t0 = performance.now();
+      const f = classifyBashSandboxFailure(`bwrap EPERM ${hostile}`, null);
+      expect(performance.now() - t0).toBeLessThan(250);
+      expect(f?.matchedLine.length).toBeLessThanOrEqual(300);
+    }
+  });
+
   it("scrubs workspace paths and uuids out of the matched line", () => {
     const uuid = "754ee124-706a-4f21-a4f4-e828257b0380";
     const line = `bwrap: Can't bind mount /workspaces/${uuid}/repo on /newroot/workspaces/${uuid}/repo: Operation not permitted`;
@@ -163,7 +182,7 @@ describe("classifyBashSandboxFailure — Bash tool_result sandbox denial (#10032
   });
 
   it("caps the matched line (no unbounded tool output reaches Sentry)", () => {
-    const f = classifyBashSandboxFailure(`bwrap: ${"x".repeat(5000)}: Operation not permitted`, null);
+    const f = classifyBashSandboxFailure(`bwrap: Operation not permitted ${"x y ".repeat(2000)}`, null);
     expect(f).not.toBeNull();
     expect(f!.matchedLine.length).toBeLessThanOrEqual(300);
   });
@@ -178,12 +197,26 @@ describe("classifyBashSandboxFailure — Bash tool_result sandbox denial (#10032
     expect(classifyBashSandboxFailure("rm: cannot remove 'x': Operation not permitted", null)).toBeNull();
   });
 
+  it("near-miss negatives: an agent's own unshare/seccomp EPERM, and a denial on a DIFFERENT line than the token", () => {
+    expect(classifyBashSandboxFailure("unshare: unshare failed: Operation not permitted", null)).toBeNull();
+    expect(classifyBashSandboxFailure("seccomp: EPERM", null)).toBeNull();
+    expect(classifyBashSandboxFailure("bwrap: starting\nrm: x: Operation not permitted", null)).toBeNull();
+  });
+
+  it("scrubs a bare uuid and caps at exactly 300", () => {
+    const uuid = "754ee124-706a-4f21-a4f4-e828257b0380";
+    const f = classifyBashSandboxFailure(`bwrap: Operation not permitted for ${uuid} ${"w ".repeat(400)}`, null);
+    expect(f?.matchedLine).toContain("<uuid>");
+    expect(f?.matchedLine).not.toContain(uuid);
+    expect(f?.matchedLine.length).toBe(300);
+  });
+
   it("returns null when the output merely MENTIONS bwrap without a denial on the same line", () => {
     expect(classifyBashSandboxFailure("$ which bwrap\n/usr/local/bin/bwrap\n", null)).toBeNull();
     expect(classifyBashSandboxFailure("bubblewrap 0.8.0", null)).toBeNull();
   });
 
-  it("returns null for empty and non-string-ish input", () => {
+  it("returns null for empty input", () => {
     expect(classifyBashSandboxFailure("", null)).toBeNull();
   });
 });

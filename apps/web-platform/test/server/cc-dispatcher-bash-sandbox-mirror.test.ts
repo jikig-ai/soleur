@@ -4,6 +4,8 @@
  * sandbox-startup-classifier.test.ts; this file pins the dispatcher side: the event shape, the debounce key, and
  * that the tool output / command / workspace path never reach the event.
  */
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const mirrorSpy = vi.hoisted(() => vi.fn());
@@ -23,11 +25,12 @@ describe("mirrorBashSandboxFailure (#10032)", () => {
   beforeEach(() => mirrorSpy.mockClear());
 
   it("mirrors a sandbox denial once, tagged agent-sandbox / bash-tool-result, keyed per user", () => {
-    expect(mirrorBashSandboxFailure(PROC_EPERM, USER, CONV)).toBe(true);
+    mirrorBashSandboxFailure(PROC_EPERM, USER, CONV);
     expect(mirrorSpy).toHaveBeenCalledTimes(1);
     const [err, ctx, userId, errorClass] = mirrorSpy.mock.calls[0];
-    expect(err).toBeInstanceOf(Error);
-    expect((err as Error).message).toBe("bash sandbox denial: proc_mount_eperm");
+    // null, never a real Error: the pino mirror would capture an Error first, untagged and user-less (#8629).
+    expect(err).toBeNull();
+    expect(ctx.message).toBe("bash sandbox denial: proc_mount_eperm");
     expect(ctx.feature).toBe("agent-sandbox");
     expect(ctx.op).toBe("bash-tool-result");
     expect(ctx.tags.sandboxKind).toBe("seccomp_or_userns_denial");
@@ -40,7 +43,7 @@ describe("mirrorBashSandboxFailure (#10032)", () => {
   it("data minimisation: neither the surrounding output nor a workspace path reaches the event", () => {
     const secret = "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
     const pathLine = `bwrap: Can't bind mount /workspaces/${USER}/repo on /newroot/x: Operation not permitted`;
-    expect(mirrorBashSandboxFailure(`${secret}\n${pathLine}\ncat: notes.txt: top secret plan`, USER, CONV)).toBe(true);
+    mirrorBashSandboxFailure(`${secret}\n${pathLine}\ncat: notes.txt: top secret plan`, USER, CONV);
     const serialized = JSON.stringify(mirrorSpy.mock.calls[0]);
     expect(serialized).not.toContain("wJalrXUtnFEMI");
     expect(serialized).not.toContain("top secret plan");
@@ -51,8 +54,22 @@ describe("mirrorBashSandboxFailure (#10032)", () => {
   });
 
   it("does not mirror an ordinary permission error or empty output", () => {
-    expect(mirrorBashSandboxFailure("cat: /etc/shadow: Permission denied", USER, CONV)).toBe(false);
-    expect(mirrorBashSandboxFailure("", USER, CONV)).toBe(false);
+    mirrorBashSandboxFailure("cat: /etc/shadow: Permission denied", USER, CONV);
+    mirrorBashSandboxFailure("", USER, CONV);
     expect(mirrorSpy).not.toHaveBeenCalled();
+  });
+});
+
+// The wire between the helper and its only caller: a helper test cannot see a deleted or misplaced call.
+describe("onToolResult calls the mirror (call-site pin)", () => {
+  const src = readFileSync(resolve(__dirname, "../../server/cc-dispatcher.ts"), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
+
+  it("calls mirrorBashSandboxFailure(block.output, …) exactly once, before the autonomous-posture gate", () => {
+    const calls = [...src.matchAll(/\bmirrorBashSandboxFailure\(block\.output,/g)];
+    expect(calls).toHaveLength(1);
+    const gate = src.indexOf("if (!bashAutonomousPosture) return;", calls[0].index);
+    expect(gate).toBeGreaterThan(calls[0].index!);
   });
 });

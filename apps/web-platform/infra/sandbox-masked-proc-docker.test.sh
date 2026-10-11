@@ -51,7 +51,7 @@ fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 die() { echo "$1" >&2; echo "FAIL: $1"; exit 1; }
 
 cleanup() {
-  docker rm -f "$CTR" "$CTR-ctrl" >/dev/null 2>&1 || true
+  docker rm -f "$CTR" "$CTR-ctrl" "$CTR-pos" >/dev/null 2>&1 || true
   docker rmi -f "$IMG" >/dev/null 2>&1 || true
   rm -rf "$WORK"
 }
@@ -114,6 +114,14 @@ case "$BWRAP_VER" in
   *) die "IMAGE_DRIFT: image bubblewrap is '$BWRAP_VER', production pins 0.8.x via the node:22-slim base" ;;
 esac
 
+# The suite mounts the repo shim; production installs it through ONE Dockerfile line. Pin that wire so retargeting
+# or deleting the COPY (real bwrap with the vendor tail in prod, suite green) goes red.
+if grep -qE '^COPY --from=builder( --chmod=[0-9]+)? /app/infra/bwrap-shim/bwrap /usr/local/bin/bwrap$' "$DOCKERFILE"; then
+  pass "the production Dockerfile installs the repo shim at /usr/local/bin/bwrap"
+else
+  fail "the production Dockerfile no longer COPYs infra/bwrap-shim/bwrap to /usr/local/bin/bwrap — the suite would test a shim prod does not run"
+fi
+
 # ---------------------------------------------------------------------------
 # The shim the container sees at /usr/local/bin/bwrap. MUTATE=shim-splice swaps in the pre-#10039 behaviour
 # (a fresh `--proc /proc` spliced before the command boundary); the treatment arm must then go RED.
@@ -159,6 +167,17 @@ else
   fail "control: the historical splice shape was NOT refused — the runner has no docker masks, so this suite cannot fail (out='$CTRL_OUT')"
 fi
 docker rm -f "$CTR-ctrl" >/dev/null 2>&1 || true
+# Positive control: the SAME argv must succeed once docker's masks are lifted. Without it the refusal above is
+# attributable to any EPERM (AppArmor, seccomp) and not to the mask this suite is about.
+start_container "$CTR-pos" --security-opt systempaths=unconfined
+POS_OUT="$(docker exec "$CTR-pos" /usr/bin/bwrap --unshare-user --unshare-pid --ro-bind / / --tmpfs /proc --dev /dev \
+  --bind /proc /proc --proc /proc -- true 2>&1 | head -3)"
+if [[ -z "$POS_OUT" ]]; then
+  pass "control: the same argv succeeds with docker's masks lifted, so the refusal is the mask and not AppArmor/seccomp"
+else
+  fail "control: the same argv also fails with the masks lifted (out='$POS_OUT') — the refusal is not attributable to the docker masks"
+fi
+docker rm -f "$CTR-pos" >/dev/null 2>&1 || true
 
 # ---------------------------------------------------------------------------
 # treatment + isolation — the SHIPPED shim, default masks, no override.
@@ -226,7 +245,7 @@ PIDDIRS="$(iso_probe "$SHIM_BIN" "$NPID")"
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 # Anti-vacuity floor: a literal adjacent to its use (guard-vacuity-floor shape).
-MIN_ASSERTIONS=8
+MIN_ASSERTIONS=10
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
   echo "FAIL: only $((PASS + FAIL)) assertions ran (floor $MIN_ASSERTIONS) — the suite did not exercise its arms"
   exit 1

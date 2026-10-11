@@ -175,9 +175,21 @@ export interface BashSandboxFailure {
 
 /** Longest matched line forwarded to Sentry. */
 const BASH_MATCHED_LINE_CAP = 300;
+/**
+ * Lines are bounded BEFORE any regex runs: a naive path-scrub regex is quadratic on a long slash-heavy line (measured
+ * 17 s at 100k chars), and this runs on the event loop shared by every tenant. A real bwrap denial is one short line.
+ */
+const BASH_LINE_SCAN_CAP = 2000;
+const BASH_BWRAP_TOKEN = /\b(?:bwrap|bubblewrap)\b/i;
 const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
-// Any path token under a workspace/worktree root. A solo workspace's id IS the user id, so the path is PII-adjacent.
-const WORKSPACE_PATH_RE = /\/[^\s:'"]*\/(?:workspaces|worktrees)\/[^\s:'"]*|\/(?:workspaces|worktrees)\/[^\s:'"]*/g;
+// EVERY absolute path token (a solo workspace's id IS the user id, and /home, /var/lib, /tmp paths are tenant-adjacent
+// too) except bwrap's own `/newroot/{proc,dev,sys,tmp}` targets, which carry the diagnostic. Linear: it only starts at
+// a `/` and consumes a maximal run, so a long slash-heavy line cannot backtrack.
+const ABS_PATH_RE = /(?<![\w./-])\/(?!newroot\/(?:proc|dev|sys|tmp)\b)[^\s:'"]+/g;
+// Opaque long tokens (API keys, hashes, base64) that share the line with the denial.
+const OPAQUE_TOKEN_RE = /[A-Za-z0-9_+=-]{32,}/g;
+// Control characters and line/paragraph separators, so a forwarded line cannot forge log rows.
+const CONTROL_RE = /[\p{Cc}\u2028\u2029]/gu;
 
 /**
  * Classify a Bash `tool_result` output as a sandbox denial.
@@ -188,8 +200,8 @@ const WORKSPACE_PATH_RE = /\/[^\s:'"]*\/(?:workspaces|worktrees)\/[^\s:'"]*|\/(?
  * tenant impact unobservable).
  *
  * Data minimisation (Art. 5(1)(c)): a tool_result is ARBITRARY command output, which can carry tenant file
- * contents next to the bwrap line. The result carries ONLY the single matched line — scrubbed of workspace
- * paths and uuids, capped at 300 chars — never the surrounding output and never the command.
+ * contents next to the bwrap line. The result carries ONLY the single matched line — scrubbed of paths, uuids,
+ * opaque tokens and control characters, capped at 300 chars — never the surrounding output and never the command.
  *
  * A line matches only when ONE line carries both a sandbox namespace token and a denial (`Operation not
  * permitted` / `EPERM`): a command that merely prints "bwrap", or an unrelated EPERM, never matches.
@@ -198,13 +210,18 @@ export function classifyBashSandboxFailure(
   output: string,
   sdkVersion: string | null = resolveSdkVersion(),
 ): BashSandboxFailure | null {
-  if (typeof output !== "string" || output.length === 0) return null;
-  for (const raw of output.split(/\r?\n/)) {
-    if (!SANDBOX_NAMESPACE_SIGNATURES.some((re) => re.test(raw))) continue;
+  if (output.length === 0) return null;
+  for (const full of output.split(/\r?\n/)) {
+    const raw = full.slice(0, BASH_LINE_SCAN_CAP);
+    // `bwrap`/`bubblewrap` only: a bare `unshare` or `seccomp` line is what an agent's OWN `unshare -U` under the
+    // sandbox prints (the canary expects that EPERM), not a sandbox failure.
+    if (!BASH_BWRAP_TOKEN.test(raw)) continue;
     if (!OPERATION_NOT_PERMITTED.test(raw)) continue;
     const matchedLine = raw
+      .replace(CONTROL_RE, " ")
       .replace(UUID_RE, "<uuid>")
-      .replace(WORKSPACE_PATH_RE, "<workspace-path>")
+      .replace(ABS_PATH_RE, "<path>")
+      .replace(OPAQUE_TOKEN_RE, "<token>")
       .trim()
       .slice(0, BASH_MATCHED_LINE_CAP);
     return {
