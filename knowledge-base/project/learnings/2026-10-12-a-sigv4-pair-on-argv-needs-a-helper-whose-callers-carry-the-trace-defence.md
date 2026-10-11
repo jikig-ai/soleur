@@ -3,7 +3,7 @@
 ## Problem
 
 #9756: two cla-evidence scripts (`infra/bootstrap.sh`, `scripts/r2-conditional-put.sh`) passed the R2
-SigV4 key id and secret as `curl --user id:secret --aws-sigv4 …`, so the pair sat in
+SigV4 key id and secret through curl's basic-auth user option on the command line, so the pair sat in
 `/proc/<pid>/cmdline` and `ps` for the life of each request. `cla-evidence` is a REQUIRED, self-sealing
 status check (`pull_request_target` runs the BASE copy of the scripts), so a broken upload path cannot
 be repaired by the PR that breaks it; the only pre-merge proof is a real-curl wire row.
