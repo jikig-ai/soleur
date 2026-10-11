@@ -8,6 +8,15 @@ type: chore
 lane: single-domain
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-11. **Method:** a four-seat plan-review panel (simplicity, correctness, DHH-style, devex), then the deepen-plan mechanical halts (user-brand, observability, PAT, Guard Contract lint, Scope Check schema) and live verification of every cited commit, PR, label and rule id; the all-agent fan-out was not run because each mechanism had already been read against the real guard and suites by two seats.
+
+- Reproduced the brief's "about 29 sites in 20 files" with a committed derivation (`j0-derive.py`), and showed the verb-free population is 60 pairs in 48 test files.
+- The review measured that the first derivation could not see the cases that motivated the guard (a stub in a sourced harness, a variable-named `ssh` stand-in); the plan now has a one-hop sourced arm and named recall rows.
+- Replaced the region extractor with a positional first-statement pin, replaced the wall-clock delay with a sentinel hand-off, fixed a snippet that redirected to `/dev/null.stdin`, made shell portability explicit, and moved wall-clock and load conditions out of the acceptance criteria.
+- Dropped the pre-registered cut gate; the open design questions are recorded as decision-challenges items 1 to 8 (user-challenge items 1 and 5).
+
 ## Overview
 
 Slice S7b of the grep -q pipe-guard series (tracker #9217; also #7376, #6601, #7797, #9482). S1 to S6 and S7a are merged and deployed (S7a merge `abd08840a2`, deployed via `21331e94e3`), so every consumer-side pipe the guard can see is converted or owned by a file-exact row. What is left is the PRODUCER side: a test stub that never reads the stdin a non-test `printf ... | verb` feeds it, so the writer takes SIGPIPE (or EPIPE where SIGPIPE is ignored, as on CI) and `pipefail` folds that into a false failure. The guard header says so in one sentence: it is "invisible to any line search: it needs a join from each production pipe to the owning suite's stub".
@@ -52,11 +61,13 @@ The registry (`gh curl doppler docker terraform nft ssh sudo systemctl logger cr
 
 A crude textual look at the 69 stub definitions behind an earlier, looser join of the registry verbs (41 groups) finds about 30 with no stdin reader, 31 with one, and 8 defined through a helper the pattern cannot read. That is an upper bound on edits, not a count: the reader detector also matches `cat >> "$CALLS"` style lines that are not stdin readers, and a TEXT-only owner needs no edit at all. The real number is a Phase 0 output.
 
+**Precedent diff (deepen-plan 4.4), the drain idiom.** Three precedents exist and the plan's form is a superset of each: #9261's `luks-monitor.test.sh` stub drains with `{ [ ! -t 0 ] && cat >"$CALLS.escrow-stdin"; }` keyed on the `--key-file -` argv; the luks-verify suite's `ssh` stub drains with `cat > "${PROBE_STDIN:-/dev/null}"` after creating a sentinel, behind a `FIXTURE_NO_DRAIN` control knob; `ci-deploy.test.sh`'s one-line `curl() { ...; timeout 2 cat >> "$FO_STDIN" || true; ... }` bounds the read. The plan's snippet adds what each lacks: the flag key (the third has none), the bounded read (the first two have none), and an unset-capture fallback. The novel part is the join itself; no precedent guard joins non-test pipes to owner stubs (a grep of the guard for the word `join` finds only the header sentence that names the missing join, and no hook suite carries `PRODUCER_JOIN`), so the Guard Contract is the only precedent the guard has.
+
 **Property List (Phase 0.6b).**
 
 - P1. A new non-test pipe from a text producer into a command a test suite stubs cannot appear without a recorded decision (a table row), whatever the command is called.
 - P2. In every suite that RUNS such a pipe with the command stubbed, the stub reads stdin before it can exit, when argv carries the consuming flag.
-- P3. A stub's drain cannot be removed, commented out or moved below the stub's first `exit` or `return` without the guard going red.
+- P3. A stub's drain cannot be removed, commented out, unkeyed from its flag or moved below another statement of the stub (so after an `exit` arm could run) without the guard going red.
 - P4. The failure the property prevents is reproduced in the guard's own run, and the checker can tell a stub that reads from a stub that does not.
 
 **Cut List (Phase 0.6b),** each cut names the property it would have bought and what covers it:
@@ -263,7 +274,7 @@ discoverability_test:
   expected_output: grep-q-sweep-probe-pass
 ```
 
-Detection note for preflight Check 10: one deterministic file set, no build or network. The guard took about 2.4 to 3.6 s in sandbox copies after S7a (evidence.md of S7a); the join adds one `git grep` pass, one awk pass and about a second of control rows. AC-10 re-measures after the edit, plain and in a Check 10-shaped read-only `bwrap`, with `uptime` beside each figure, because the margin to the 15 s cap is what a contended host erodes.
+Detection note for preflight Check 10: one deterministic file set, no build or network. The guard took about 2.4 to 3.6 s in sandbox copies after S7a (evidence.md of S7a); the join adds one `git ls-files` listing, one token pass per test file (the Python J0 doing the same reads and token sets takes about 1.4 s wall at plan time) and the control rows, whose sentinel hand-off adds no fixed delay. AC-10 records after the edit, plain and in a Check 10-shaped read-only `bwrap`, with `uptime` beside each figure, because the margin to the 15 s cap is what a contended host erodes.
 
 ## Alternative Approaches Considered
 
@@ -357,7 +368,7 @@ Required on every plan (plan Phase 2.4; halted at deepen-plan 4.12). Asks are qu
 ## Test Scenarios
 
 - Given the guard after Phase 3, when a new suite stubs `gh` and names a non-test script that pipes into `gh`, then the guard fails naming the suite and `gh` as an unlisted pair.
-- Given a running stub whose drain sits above its first `exit`, when the drain is moved below that `exit`, then the guard fails on the order check even though the text still contains a drain.
+- Given a running stub whose drain is its first statement, when the drain is moved below the stub's `exit` arm, then the guard fails on the positional pin even though the text still contains a drain.
 - Given the control, when its non-reading stub is replaced by a draining one, then the guard fails because the hazard no longer reproduces.
 - Given a suite that names a listed non-test file only in a comment, then no pair derives and the guard stays green.
 - Given the repository after Phase 2, when the owner suites run, then each edited suite's result equals its result at its base commit.
