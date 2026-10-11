@@ -34,8 +34,8 @@ Issues: #10032 (closes; AC4 satisfies #9860's close condition), #10045 (deferred
 
 ## Phase 4: verification
 
-- [ ] 4.1 `npx vitest run test/bwrap-shim.test.ts test/sandbox-canary.test.ts test/sandbox-proc-mask-runtime.test.ts test/sandbox-isolation.test.ts test/agent-runner-sandbox-config.test.ts` — green; `bash apps/web-platform/scripts/sandbox-canary-regression.test.sh` green.
-- [ ] 4.2 Run each literal AC command once: `git grep -nE 'security-opt[= ]+systempaths' apps/web-platform/` (expect zero under chosen arm); in-image verify harness output captured.
-- [ ] 4.3 `npx markdownlint-cli2` on new/edited markdown — green.
+- [x] 4.1 `npx vitest run test/bwrap-shim.test.ts test/sandbox-canary.test.ts test/sandbox-proc-mask-runtime.test.ts test/sandbox-isolation.test.ts test/agent-runner-sandbox-config.test.ts` — green; `bash apps/web-platform/scripts/sandbox-canary-regression.test.sh` green.
+- [x] 4.2 Run each literal AC command once: `git grep -nE 'security-opt[= ]+systempaths' apps/web-platform/` (expect zero under chosen arm); in-image verify harness output captured.
+- [x] 4.3 `npx markdownlint-cli2` on new/edited markdown — green.
 - [ ] 4.4 Final AC sweep (AC1-AC9 pre-merge); PR body: `Closes #10032` on its own line, CPO-signoff attestation line, CTO+CLO review record pointers, note "post-merge AC4 verified via deploy-state + `doppler run -c prd -- scripts/betterstack-query.sh`".
 - [ ] 4.5 Post-merge: first prod deploy — faithful canary verdict `pass` read from deploy-state (`/mnt/data/ci-deploy-sandbox-canary.json` via the existing no-SSH read channel); zero `SOLEUR_CANARY_SANDBOX_DIAG` rows; comment on #9860 that its close condition is met.
