@@ -167,11 +167,7 @@ describe("plugin Stop hooks are classified for the web runtime", () => {
     expect(reason).toMatch(/Paused:/);
     expect(reason).toMatch(/Blocked:/);
     expect(reason).not.toMatch(/<\/?stop/i);
+    expect(reason).not.toMatch(/<[a-z!]/i);
     expect(stripStopGateMarkup(reason).hadMarkup).toBe(false);
-  });
-
-  it("the plain label is shown as written: the legacy strip leaves it alone", () => {
-    const label = "Paused: waiting on CI run 123 to finish.";
-    expect(stripStopGateMarkup(label)).toEqual({ text: label, hadMarkup: false, markupOnly: false });
   });
 });

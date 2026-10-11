@@ -48,29 +48,20 @@
 # want it different." to any of the three real instances made the hook ALLOW
 # them. A guard that stops working when the turn is polite is inert in practice.
 #
-# VOCABULARY -- a sentence-initial `Paused:` / `Blocked:` label (2026-10-11)
-# -------------------------------------------------------------------------
-# The escape hatch used to be a literal `<stop>OPERATOR-GATE: ...</stop>` tag.
-# Users see the model's text verbatim, so they read raw angle-bracket markup as a
-# defect -- and the markup carried nothing the reader needed beyond the reason
-# inside it. The marker is now the plain label a person would write anyway:
-#   Paused: <what you are waiting on>.      (was <stop>OPERATOR-GATE: ...</stop>)
-#   Blocked: <what is blocking>.            (was <stop>BLOCKED: ...</stop>)
-# It is readable where it is shown, so there is nothing to strip or hide. Chosen
-# over an HTML comment because comment visibility differs by surface (a terminal
-# renderer can print it raw), and a marker invisible to the user is also invisible
-# to anyone auditing what the model said.
+# VOCABULARY -- a sentence-initial `Paused:` / `Blocked:` label
+# -------------------------------------------------------------
+#   Paused: <what you are waiting on>.
+#   Blocked: <what is blocking>.
+# Plain prose, readable wherever it is shown, so nothing needs stripping. It
+# replaced a literal `<stop>OPERATOR-GATE: ...</stop>` tag that users read as raw
+# markup; the legacy tag is not honoured (a model still emitting it is blocked
+# once, then released by `stop_hook_active`).
 #
-# Matching is ANCHORED to the start of a sentence (after bullet/bold markers are
-# dropped) and needs the colon, so prose that merely contains the word -- "the
-# deploy was blocked by CI", "Blocked PRs are listed below" -- buys nothing. The
-# old tag was unanchored inside the sentence. The legacy `<stop>` tag is NOT
-# honoured: one vocabulary, and a model still emitting it is blocked once and then
-# released by `stop_hook_active`.
-#
-# The label is scanned as ONE sentence, so the reason must not contain a sentence
-# break (". ", "? ", "! ") -- the block reason says so. A pause sentence followed by
-# a promise sentence is a promise.
+# Matching is anchored to the start of the FINAL sentence and needs the colon, so
+# "the deploy was blocked by CI" or "Blocked PRs are listed below" buy nothing.
+# A label with no content ("Blocked: none.") is a status line, not a declaration,
+# and does not count (STOP_NOOP_RE). The reason must be ONE sentence: a pause
+# sentence followed by a promise sentence is a promise.
 #
 # Deliberately NOT the marker one-shot owns:
 # ONE_SHOT_DONE_MARKER (lib/workflow-fidelity.ts) is bound to "PR merged,
@@ -95,7 +86,7 @@
 #        * off-vocabulary parking escapes -- `the merge is yours`, `awaiting
 #          approval`, `merge when you have a moment`, `the ball is in your court`;
 #        * `PARKED_AUTH_RE` is polarity-blind, so "Nothing destructive here" in the
-#          tag's own sentence buys an exit;
+#          label's own sentence buys an exit;
 #        * five or more sentences after the label evict it from CLOSING, as does a
 #          fenced block, an unterminated fence, and a >8 kB message whose tail
 #          starts inside a fence (the awk toggle then reads the CLOSING fence as an
@@ -126,16 +117,14 @@
 #      blocking a genuine question -- pushes the model past information it
 #      needs, which is the worse failure.
 #   6. SELF-DISARM. A turn whose FINAL sentence starts `Paused:` or `Blocked:`
-#      satisfies the escape hatch whether or not it is a real declaration --
-#      quoting the syntax while explaining it, or ordinary prose that happens to
-#      end on such a label. Accepted: the alternative is a sentinel nobody can
-#      document, and a label a person would write unprompted is the price of not
-#      showing them markup.
+#      satisfies the escape hatch whether or not it is a real declaration, because
+#      a label a person writes unprompted is the price of not showing them markup.
+#      Empty labels (`Blocked: none.`) are excluded; a populated one still counts.
 #   7. WEB SESSIONS OPT OUT. This hook is operator-CLI vocabulary: its block reason
 #      instructs the model in words a chat user must never see, and the web runtime
 #      loads it anyway (see WEB RUNTIME OPT-OUT below). Accepted trade-off: the
 #      header above says the guard matters more for non-technical users, but in the
-#      web Concierge the former tag vocabulary leaked `<stop>OPERATOR-GATE` over the
+#      web Concierge the old tag vocabulary leaked `<stop>OPERATOR-GATE` over the
 #      user's question list (a block turn still replaces the reply there).
 #      The unkept-promise duty is therefore currently UNOWNED in web: no Concierge
 #      prompt carries an end-of-turn follow-through rule. That gap is tracked in
@@ -167,7 +156,7 @@ set -uo pipefail
 
 # WEB RUNTIME OPT-OUT. The web Concierge loads this plugin's hooks.json through the
 # SDK plugin binding, so this operator-CLI guard ran against end users: its block
-# reason (then) told the model to write `<stop>OPERATOR-GATE: ...</stop>`, which replaced
+# reason told the model to write `<stop>OPERATOR-GATE: ...</stop>`, which replaced
 # a CRM question list in the chat bubble. The platform sets this variable in
 # `buildAgentEnv` (apps/web-platform/server/agent-env.ts); it also works as an
 # operator kill switch, mirroring SOLEUR_DISABLE_COMPACTION_HOOKS. Its position is
@@ -228,7 +217,7 @@ CLOSING=$(printf '%s' "$SENTENCES" | tail -n 4)
 # to MERGED in-session; 'awaiting review'/'needs a human' as an end state defers to
 # an operator who cannot clear it."
 #
-# WHY THE TAG ALONE WAS NOT ENOUGH. The stop-label arm below exits 0 on the PRESENCE
+# WHY THE LABEL ALONE WAS NOT ENOUGH. The stop-label arm below exits 0 on the PRESENCE
 # of a label, with nothing constraining what is being waited ON, so the one end state
 # the corpus forbids bought an exit. Parking READS as diligence, which is why prose
 # could not close it: the class was recorded 2026-08-04 and recurred 2026-09-17 with
@@ -246,15 +235,17 @@ CLOSING=$(printf '%s' "$SENTENCES" | tail -n 4)
 # reviewed work is not.
 #
 # PLACEMENT, both measured against the real turn rather than reasoned:
-#   * scoped to the whole closing, not `tail -n 1` -- the tag OPENED in one sentence
-#     and CLOSED in the next, so a last-sentence test saw only the trailing clause;
+#   * scoped to the whole closing, not `tail -n 1` -- the declaration began in one sentence
+#     and its reason ran into the next, so a last-sentence test saw only the trailing clause;
 #   * runs INDEPENDENTLY of promise detection -- a parked turn makes no promise, so
 #     an arm nested in the promise path could never fire.
-# The declaration marker: a sentence that STARTS with `Paused:` or `Blocked:` (bullet and
-# leading bold are mostly stripped from each sentence, but the bullet strip eats ONE `*` of
-# a leading `**`, so leading emphasis characters are tolerated here: `**Paused**:` and
-# `**Paused:**` both count). See VOCABULARY above.
-STOP_MARK_RE='^[*_]*(paused|blocked)([[:space:]]*\*\*)?[[:space:]]*:'
+# The declaration marker: a sentence that STARTS with `Paused:` or `Blocked:`. The
+# sentence prep's bullet strip eats one `*` of a leading `**`, hence `[*]*`; both
+# `**Paused**:` and `**Paused:**` match. See VOCABULARY above.
+STOP_MARK_RE='^[*]*(paused|blocked)[*[:space:]]*:'
+# A label whose content is empty or a negative status ("Blocked: none.").
+STOP_NOOP_RE='^[^:]*:[*[:space:]]*((no|none|nothing|n/?a)[[:punct:][:space:]]*)?$'
+is_stop_mark() { grep -qiE "$STOP_MARK_RE" <<<"$1" && ! grep -qiE "$STOP_NOOP_RE" <<<"$1"; }
 
 PARKED_RE='(awaiting|waiting[[:space:]]+(on|for)|pending|needs?|requires?)[^.]{0,60}(your|operator|the[[:space:]]+operator|human|a[[:space:]]+human)[^.]{0,60}(merge|review|ship)|awaiting[[:space:]]+(review|merge)([[:space:]]|[.,;:]|$)|needs?[[:space:]]+a[[:space:]]+human([[:space:]]|[.,;:]|$)|ready[[:space:]]+(for[[:space:]]+(you|your)|to[[:space:]]+merge[[:space:]]+when[[:space:]]+you)|(yours|over[[:space:]]+to[[:space:]]+you|handing[[:space:]]+(it[[:space:]]+)?off[[:space:]]+to[[:space:]]+you)[^.]{0,40}(merge|review|ship)'
 
@@ -284,7 +275,7 @@ PARKED_AUTH_RE='(irreversible|destroy|destructive|wipe|revoke|cutover|host[[:spa
 # A turn ending in a genuine QUESTION is excused here, mirroring the message-level
 # arm further down. Residual #5 records the deliberate judgement that "forcing a
 # real question through is the worse failure"; because this arm runs above that
-# escape, it would otherwise reverse that judgement for tagged turns without
+# escape, it would otherwise reverse that judgement for labelled turns without
 # amending the residual.
 PARKED_SENTENCE=$(printf '%s\n' "$CLOSING" | grep -iE "$STOP_MARK_RE" | tail -n 1)
 if [ -n "$PARKED_SENTENCE" ] &&
@@ -334,7 +325,7 @@ fi
 # sentinel merely mentioned earlier -- documenting it, reviewing this hook,
 # quoting a paste -- no longer disarms the guard. CLOSING alone was not enough:
 # in a two-sentence message both the mention and the promise sit inside it.
-if grep -qiE "$STOP_MARK_RE" < <(printf '%s' "$CLOSING" | tail -n 1); then
+if is_stop_mark "$(printf '%s' "$CLOSING" | tail -n 1)"; then
   exit 0
 fi
 
@@ -380,8 +371,8 @@ Do it now, in THIS turn. Writing the next action down is not doing it.
 
 If the stop is legitimate, end the message with ONE plain sentence that starts with
 the label and says why (no markup, no sentence break inside it):
-  Paused: <what you are waiting on>.
-  Blocked: <what is blocking>.
+  Paused: the one thing you are waiting on.
+  Blocked: the one thing that is blocking you.
 
 Stopping is allowed. Stopping silently is not -- an operator who cannot see the
 pipeline has no way to tell a finished task from an abandoned one."

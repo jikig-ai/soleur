@@ -148,6 +148,22 @@ expect ALLOW "bullet label as the final line" \
 - Paused: waiting on the review agents"
 expect ALLOW "label is case-insensitive" \
   "Implementing now. PAUSED: waiting on the aggregate test gate"
+expect BLOCK "colon is required: a final 'Blocked ...' sentence is prose, not a label" \
+  "I will merge it next. Blocked PRs are listed below."
+expect BLOCK "vocabulary is closed: a different 'Word:' label buys no exit (Next:)" \
+  "I will merge it next. Next: ship it"
+expect BLOCK "vocabulary is closed: a different 'Word:' label buys no exit (Note:)" \
+  "I will merge it next. Note: I'll run it"
+expect BLOCK "an empty label is a status line, not a declaration (Blocked: none.)" \
+  "I'll run the suite next.
+
+Blocked: none."
+expect BLOCK "an empty label is a status line, not a declaration (Paused: n/a)" \
+  "I will now implement the fix. Paused: n/a"
+expect ALLOW "a populated label with 'none' inside still counts" \
+  "Implementing now. Blocked: none of the three reviewers has answered yet"
+expect ALLOW "an UNLABELLED parked sentence is outside the parked arm (residual 0), not over-blocked" \
+  "Done. The PR is green and awaiting your merge."
 expect BLOCK "legacy <stop> tag is no longer honoured (one vocabulary)" \
   "Implementing the register entry now. <stop>OPERATOR-GATE: waiting on CI</stop>"
 expect BLOCK "prose containing 'blocked' mid-sentence is not a declaration" \
@@ -204,7 +220,7 @@ printf '%s' "$body" | jq -e '.reason | test("Paused:") and test("Blocked:")' >/d
   && pass "reason names the escape hatch" || fail "reason does not name the escape hatch"
 # The whole point of the 2026-10-11 vocabulary change: the model is never told to write
 # raw markup, so users never see it. Pinned on the REAL payload, not on the source text.
-printf '%s' "$body" | jq -e '.reason | test("<stop|</stop|OPERATOR-GATE") | not' >/dev/null 2>&1 \
+printf '%s' "$body" | jq -e '.reason | (test("<[a-z!/]|OPERATOR-GATE") | not) and test("no sentence break")' >/dev/null 2>&1 \
   && pass "reason teaches no angle-bracket markup" || fail "reason still teaches the <stop> tag"
 printf '%s' "$body" | jq -e '.reason | test("in THIS turn")' >/dev/null 2>&1 \
   && pass "reason states the required action" || fail "reason does not state the action"
@@ -285,7 +301,7 @@ expect ALLOW "word boundary: a human-READABLE message is not 'needs a human'" \
 expect ALLOW "an unrelated sibling review does not veto a CI gate" \
   "The sibling PR is still awaiting review by the other team. Paused: waiting on CI run 123 for this one."
 # The mirror: an unrelated sentence must not DISARM the arm either. The escape is
-# scoped to the tag's sentence, which is this file's own documented lesson --
+# scoped to the label's sentence, which is this file's own documented lesson --
 # "a courtesy closer anywhere in the window vetoed a promise anywhere else in it".
 expect BLOCK "an unrelated 'revoked' sentence does not disarm the arm" \
   "I revoked the old token as part of cleanup. Paused: PR #8244 is green and awaiting your merge."
@@ -327,17 +343,16 @@ expect ALLOW "escape: per-command ack, alone" \
 expect ALLOW "escape: destroy, alone (covers the ack-destroy literal too)" \
   "Plan graded. Paused: awaiting your review of the ack-destroy line."
 
-# ── the tag alternation, and WHICH tag is selected ─────────────────────────────
-# A `BLOCKED:` parked fixture existed at HEAD and I rewrote it to OPERATOR-GATE
-# while adding rows, so every parked BLOCK row used one alternative and the other
-# went dark: narrowing the tag pattern to (OPERATOR-GATE) then survived.
-expect BLOCK "the BLOCKED: tag alternative parks work too" \
+# ── both labels park work, and the LAST label is the one selected ─────────────
+# `tail -n 1` selects the last label sentence; with `head -n 1` a turn that names a
+# harmless label first and parks second would escape.
+expect BLOCK "the Blocked: label parks work too" \
   "Finished. Blocked: this is awaiting your merge."
 # `tail -n 1` selects the LAST tag. With `head -n 1` a turn that DOCUMENTS the
 # sentinel first and parks second escapes — the self-disarm-by-documenting class
 # this hook's history is built around. The promise arm has a fixture for it; the
 # parked arm had none, because no parked fixture carried two tags.
-expect BLOCK "a documented sentinel first, real parking last" \
+expect BLOCK "a harmless label first, real parking last" \
   "Blocked: what is blocking, as documented. Paused: PR #8244 is green and awaiting your merge."
 
 # ── `ship` is in the arm's stated object set and had no fixture ────────────────
@@ -389,6 +404,9 @@ printf '%s' "$PARKED_BODY" | jq -e '.systemMessage | test("parked on the operato
 # Protocol: this hook blocks by JSON on stdout at rc 0. Appending `exit 2` to the
 # block path (a DIFFERENT Claude Code protocol -- stderr as the reason) survived.
 EXPECT_ROWS=$((EXPECT_ROWS + 1))
+printf '%s' "$PARKED_BODY" | jq -e '.reason | test("<[a-z!/]|OPERATOR-GATE") | not' >/dev/null 2>&1 \
+  && pass "parked reason teaches no markup" || fail "parked reason teaches markup"
+EXPECT_ROWS=$((EXPECT_ROWS + 1))
 [ "$PARKED_RC" -eq 0 ] \
   && pass "a parked block exits 0 and speaks via stdout JSON, not rc 2" || fail "a parked block exits 0 (got rc=$PARKED_RC)"
 
@@ -415,10 +433,10 @@ SUT_RUNS=$(wc -l < "$SOLEUR_HOOK_TRACE" 2>/dev/null | tr -d ' ')
 SUT_RUNS=${SUT_RUNS:-0}
 INVOCATIONS=$(wc -l < "$INVOCATION_LOG" 2>/dev/null | tr -d ' ')
 INVOCATIONS=${INVOCATIONS:-0}
-MIN_INVOCATIONS=67
+MIN_INVOCATIONS=74
 # THE SUT-WRITTEN FLOOR, checked FIRST. This is the one a neutered harness cannot
 # satisfy, because only the hook appends to it.
-MIN_SUT_RUNS=67
+MIN_SUT_RUNS=74
 if [ "$SUT_RUNS" -lt "$MIN_SUT_RUNS" ]; then
   printf '[FATAL] coverage: the hook itself ran %s time(s), floor is %s -- the harness is certifying rows it never spawned the SUT for\n' \
     "$SUT_RUNS" "$MIN_SUT_RUNS" >&2
@@ -443,7 +461,7 @@ if [ "$INVOCATIONS" -lt "$MIN_INVOCATIONS" ]; then
     "$INVOCATIONS" "$MIN_INVOCATIONS" >&2
   exit 1
 fi
-MIN_EXPECT_ROWS=67
+MIN_EXPECT_ROWS=75
 if [ "$EXPECT_ROWS" -lt "$MIN_EXPECT_ROWS" ]; then
   printf '[FATAL] coverage: %s expect rows, floor is %s -- rows were removed\n' \
     "$EXPECT_ROWS" "$MIN_EXPECT_ROWS" >&2
@@ -452,7 +470,7 @@ fi
 echo ""
 echo "=== $PASS passed, $FAIL failed ($INVOCATIONS SUT invocations, $EXPECT_ROWS expect rows) ==="
 [ "${#FAILURES[@]}" -gt 0 ] && printf 'FAILED: %s\n' "${FAILURES[@]}" >&2
-MIN_ASSERTIONS=79
+MIN_ASSERTIONS=87
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] assertion floor: ran %s, expected >= %s\n' "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
   exit 1
