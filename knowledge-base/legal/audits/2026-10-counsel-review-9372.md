@@ -3,7 +3,7 @@ title: "Counsel review audit — #9372 (web-2 LUKS rebirth closeout: dated super
 type: counsel-review
 date: 2026-10-11
 issue: 9372
-pr: PENDING
+pr: 10014
 status: ATTESTED (CLO-agent v1 internal attestation, Soleur-as-tenant-zero; the owner retains a veto, not yet exercised) — conditional on this change merging
 signed_off_at: 2026-10-11
 signed_off_by: "CLO agent (attestation authority for the Soleur-as-tenant-zero v1 posture; the owner retains an optional veto)"
