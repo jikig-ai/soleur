@@ -58,11 +58,33 @@ esac
 #     is otherwise silent. Fault lines are NOT rate-limited (one per faulting repo per 60 s run, at most
 #     2880 rows/day on a full outage against 1440 for one repo; ADR-184 recorded ~19.9k of the 25k/day
 #     Better Stack budget used in June 2026, so ~5.1k/day of headroom and a full outage takes about 56%);
-#   - worst case is 10 s per repo (curl -m 10): two repos is 20 s with no ping, 40 s to a ping (two
-#     curl -m 10 attempts), both under the 60 s timer cadence.
+#   - worst case is 10 s per request (curl -m 10): two bare repos is 20 s with no ping, 40 s to a ping (two
+#     curl -m 10 attempts), both under the 60 s timer cadence (OnUnitActiveSec=60s in the timer unit).
+#     See the pin paragraph for web-1's list.
 #
-# TEST SEAM: SOLEUR_ZOT_PROBE_STATUS_OVERRIDE injects a CODE (a comma list is positional over the
-# NON-EMPTY repo elements in order; a missing position reads 000) so the classification branches are
+# A PIN (#10004). An element may also be `<repo>@sha256:<64 lowercase hex>` (nothing else: no :tag, no other
+# hash). tags/list answering 200 proves the repository is LISTABLE, not that the digest a fresh host pulls (the
+# ZIREF pin in cloud-init) still resolves: zot retention keeps only the 5 most recent v.* tags with
+# deleteUntagged, and measured against the pinned zot image (2026-10-11) an evicted tag leaves tags/list at 200
+# while HEAD of its digest, and of the tag, is 404. So for an element that carries a digest AND whose tags/list
+# answered 200, the probe sends ONE authenticated `HEAD /v2/<repo>/manifests/<digest>` (no Accept header
+# needed: an OCI index digest answered 200 with none) and classifies it like tags/list: 200 pinned, 404
+# pin-missing (SUPPRESS, the fault line says the pinned manifest is MISSING), 401 HARD (exit 3), 000 / 5xx /
+# anything else suppress and name the code. A pin fault sets the SAME accumulators as a tags/list fault, so it
+# is never cleared by a healthy neighbour. When tags/list was not 200 the pin is not HEADed (pin_verdict=skipped):
+# that saves a second timeout and a duplicate fault line during an outage. The marker row ends with
+# pin_verdict=<none|skipped|pinned|pin-missing|auth-broke|unreachable|wedged|unexpected> (none = a bare element).
+# Worst case for web-1's list (the web repo bare, the bootstrap repo pinned): a 200 tag list then a hanging HEAD
+# is 20 s for the pinned repo plus 10 s for the bare one = 30 s with no ping, 50 s to a ping (two curl -m 10
+# ping attempts); every other host's bare list stays at 10 s per repo. Only web-1 carries a pin (web-probe.tf:
+# local.zot_probe_repo_pinned feeds server.tf's two web-1 sites); born hosts keep the bare list because a pin
+# baked into an env file at birth could never be updated. The web image has no committed digest (#10044), so
+# its element stays bare and says pin_verdict=none. A manifest HEAD does not prove the blobs: the build
+# workflow's crane validate remains the blob-level gate.
+#
+# TEST SEAM: SOLEUR_ZOT_PROBE_STATUS_OVERRIDE injects a tags/list CODE (a comma list is positional over the
+# NON-EMPTY repo elements in order; a missing position reads 000; pin HEADs are NOT seamed, the suite drives
+# them through a mock registry and a stub curl) so the classification branches are
 # unit-testable without a live registry; SOLEUR_ZOT_PROBE_PING_LOG re-routes the heartbeat ping to
 # a file so a test can assert ping/no-ping. Neither is ever set in production. The auth/-f behavioral
 # properties are covered by a separate mock-HTTP-server test (web-zot-consumer-probe.test.sh).
