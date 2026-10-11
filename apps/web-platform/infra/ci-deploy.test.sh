@@ -108,7 +108,9 @@ MOCK
 #                        shape measured on systemd 261: rc 0, no hint, no lines)
 #   MOCK_KLOG_<J|D>_RC   exit code (127 models "binary absent"); _SLEEP seconds via /bin/sleep (the PATH sleep is a
 #                        no-op); _BIG=1 prepends 40000 benign lines (~4 MB) BEFORE the OUT text; _PAD=<n> sets the
-#                        benign line length (default ~100 bytes); _REP=<n> repeats OUT n times
+#                        benign line length (default ~100 bytes); _REP=<n> repeats OUT n times; _ERR=1 writes OUT to
+#                        STDERR instead (real journalctl/dmesg print their hint and error text there, so a read that
+#                        drops its `2>&1` must fail the hint rows)
 # PROVENANCE: the hint and silent-empty bodies are modelled on systemd 255's documented hint block and on journalctl
 # 261's measured silent-empty output (a dev host, kernel 7.2.5), NOT on the production host (6.8.0-90); the first real
 # `kdeny` row is what grounds them. An awk-dialect check ran the function under mawk (prod) and gawk (dev): identical.
@@ -125,7 +127,7 @@ if [[ "$name" == journalctl ]]; then
 else
   p=D
 fi
-sleep_v="MOCK_KLOG_${p}_SLEEP"; out_v="MOCK_KLOG_${p}_OUT"; rc_v="MOCK_KLOG_${p}_RC"; big_v="MOCK_KLOG_${p}_BIG"; rep_v="MOCK_KLOG_${p}_REP"; pad_v="MOCK_KLOG_${p}_PAD"
+sleep_v="MOCK_KLOG_${p}_SLEEP"; out_v="MOCK_KLOG_${p}_OUT"; rc_v="MOCK_KLOG_${p}_RC"; big_v="MOCK_KLOG_${p}_BIG"; rep_v="MOCK_KLOG_${p}_REP"; pad_v="MOCK_KLOG_${p}_PAD"; err_v="MOCK_KLOG_${p}_ERR"
 if [[ -n "${!sleep_v:-}" ]]; then /bin/sleep "${!sleep_v}"; fi
 if [[ "${!big_v:-}" == "1" ]]; then
   if [[ -n "${!pad_v:-}" ]]; then
@@ -137,7 +139,9 @@ if [[ "${!big_v:-}" == "1" ]]; then
 fi
 if [[ -n "${!out_v+x}" ]]; then
   reps="${!rep_v:-1}"
-  for ((i = 0; i < reps; i++)); do printf '%s\n' "${!out_v}"; done
+  for ((i = 0; i < reps; i++)); do
+    if [[ "${!err_v:-}" == "1" ]]; then printf '%s\n' "${!out_v}" >&2; else printf '%s\n' "${!out_v}"; fi
+  done
 else
   printf '%s\n' 'kernel: docker0: port 1(veth0) entered forwarding state' 'kernel: eth0: link up' 'kernel: EXT4-fs (sda1): mounted filesystem'
 fi
@@ -4254,9 +4258,9 @@ d10c() {  # <label> <anchored-regex-for-the-row-value> [VAR=value ...]
     "$(has_e "$re" "$v" && d10_verdict_ok && echo 0 || echo 1)" "kdeny: $v | rc=$DC_RC reason=$DC_REASON"
 }
 d10c "readable, nothing denied" '^src=journal j=ok d=skip total=[1-9][0-9]* hits=0 mproc=0$'
-d10c "journal hint-only, dmesg answers" '^src=dmesg j=noaccess d=ok total=[1-9][0-9]* hits=0 mproc=0$' "MOCK_KLOG_J_OUT=$D10_HINT_J"
+d10c "journal hint-only, dmesg answers" '^src=dmesg j=noaccess d=ok total=[1-9][0-9]* hits=0 mproc=0$' "MOCK_KLOG_J_OUT=$D10_HINT_J" MOCK_KLOG_J_ERR=1
 d10c "journal SILENT-EMPTY (rc 0, no hint, no lines: the systemd 261 shape), dmesg answers" '^src=dmesg j=empty d=ok total=[1-9][0-9]* hits=0 mproc=0$' MOCK_KLOG_J_OUT=
-d10c "both rungs hint-only" '^src=none j=noaccess d=noaccess total=0 hits=0 mproc=0$' "MOCK_KLOG_J_OUT=$D10_HINT_J" "MOCK_KLOG_D_OUT=$D10_HINT_D" MOCK_KLOG_D_RC=1
+d10c "both rungs hint-only, the hint text arriving on STDERR as the real tools print it" '^src=none j=noaccess d=noaccess total=0 hits=0 mproc=0$' "MOCK_KLOG_J_OUT=$D10_HINT_J" MOCK_KLOG_J_ERR=1 "MOCK_KLOG_D_OUT=$D10_HINT_D" MOCK_KLOG_D_ERR=1 MOCK_KLOG_D_RC=1
 d10c "journalctl's own '-- No entries --' banner is not a kernel line: the journal reads empty, not ok" '^src=dmesg j=empty d=ok total=[1-9][0-9]* hits=0 mproc=0$' 'MOCK_KLOG_J_OUT=-- No entries --'
 d10c "a mount denial for a NON-procfs filesystem is a hit but not a procfs-mount denial" \
   "^src=journal j=ok d=skip total=1 hits=1 mproc=0 operation='mount' profile='soleur-bwrap' fstype='tmpfs' error=-13\$" \
@@ -4281,10 +4285,37 @@ d10c "a journal that prints error text and exits non-zero reads error (not ok), 
 d10c "a tenant-chosen fstype that is not a short token is dropped from the fields (the rest of the record still reads)" \
   "^src=journal j=ok d=skip total=1 hits=1 mproc=0 operation='mount' profile='soleur-bwrap' error=-13\$" \
   'MOCK_KLOG_J_OUT=audit: type=1400 audit(1760000006.1:462): apparmor="DENIED" operation="mount" error=-13 profile="soleur-bwrap" fstype="/srv/tenants/acme"'
-d10c "journal silent-empty and dmesg refused" '^src=none j=empty d=noaccess total=0 hits=0 mproc=0$' MOCK_KLOG_J_OUT= "MOCK_KLOG_D_OUT=$D10_HINT_D" MOCK_KLOG_D_RC=1
+d10c "journal silent-empty and dmesg refused" '^src=none j=empty d=noaccess total=0 hits=0 mproc=0$' MOCK_KLOG_J_OUT= "MOCK_KLOG_D_OUT=$D10_HINT_D" MOCK_KLOG_D_ERR=1 MOCK_KLOG_D_RC=1
 d10c "both binaries absent (rc 127)" '^src=none j=absent d=absent total=0 hits=0 mproc=0$' MOCK_KLOG_J_OUT= MOCK_KLOG_J_RC=127 MOCK_KLOG_D_OUT= MOCK_KLOG_D_RC=127
 d10c "an unrelated profile denial is a hit but NOT a procfs-mount denial, and the tenant file name stays out" \
   "^src=journal j=ok d=skip total=1 hits=1 mproc=0 operation='open' profile='soleur-bwrap' requested_mask='r' denied_mask='r'\$" "MOCK_KLOG_J_OUT=$D10_DENY_OPEN"
+
+d10c "a journal that fails (rc 1) with NO hint and NO lines reads error, not empty, and the dmesg rung answers" \
+  '^src=dmesg j=error d=ok total=[1-9][0-9]* hits=0 mproc=0$' MOCK_KLOG_J_OUT= MOCK_KLOG_J_RC=1
+d10c "a journal that exits non-zero AFTER printing an anchored denial still reports the denial (the line is a real record)" \
+  "^src=journal j=ok d=skip total=1 hits=1 mproc=1 operation='mount' profile='soleur-bwrap' fstype='proc' error=-13 info='failed flags match'\$" \
+  "MOCK_KLOG_J_OUT=$D10_DENY_MOUNT" MOCK_KLOG_J_RC=1
+d10c "a mount denial whose fstype has an UNBALANCED quote is a hit but not a procfs-mount denial, and the fstype field is dropped" \
+  "^src=journal j=ok d=skip total=1 hits=1 mproc=0 operation='mount' profile='soleur-bwrap' error=-13\$" \
+  'MOCK_KLOG_J_OUT=audit: type=1400 audit(1760000013.1:474): apparmor="DENIED" operation="mount" error=-13 profile="soleur-bwrap" fstype="proc'
+d10c "a complain-mode ALLOWED record whose free text contains 'type=1326 audit(' is still not a hit" \
+  '^src=journal j=ok d=skip total=1 hits=0 mproc=0$' \
+  'MOCK_KLOG_J_OUT=audit: type=1400 audit(1760000014.1:475): apparmor="ALLOWED" operation="mount" info="x type=1326 audit(1.2:3) y" profile="soleur-bwrap"'
+# Newest-first selection: the stream is chronological (oldest first); tac makes the NEWEST line first and the fields come from it.
+D10M_OLD_MNT='audit: type=1400 audit(1760000010.1:470): apparmor="DENIED" operation="mount" error=-13 profile="old-prof" fstype="proc"'
+D10M_NEW_MNT='audit: type=1400 audit(1760000011.1:471): apparmor="DENIED" operation="mount" error=-13 profile="new-prof" fstype="proc"'
+D10M_OLD_OPN='audit: type=1400 audit(1760000012.1:472): apparmor="DENIED" operation="open" profile="old-open" requested_mask="r"'
+D10M_NEW_OPN='audit: type=1400 audit(1760000013.1:473): apparmor="DENIED" operation="open" profile="new-open" requested_mask="r"'
+d10c "two mount denials: both count, and the reported fields come from the NEWEST" \
+  "^src=journal j=ok d=skip total=2 hits=2 mproc=2 operation='mount' profile='new-prof' fstype='proc' error=-13\$" \
+  "MOCK_KLOG_J_OUT=$D10M_OLD_MNT"$'\n'"$D10M_NEW_MNT"
+d10c "two non-mount denials: both count, mproc stays 0, and the fields come from the NEWEST" \
+  "^src=journal j=ok d=skip total=2 hits=2 mproc=0 operation='open' profile='new-open' requested_mask='r'\$" \
+  "MOCK_KLOG_J_OUT=$D10M_OLD_OPN"$'\n'"$D10M_NEW_OPN"
+d10c "an older mount denial beats a NEWER non-mount denial for the fields (the procfs-mount record is the evidence asked for)" \
+  "^src=journal j=ok d=skip total=2 hits=2 mproc=1 operation='mount' profile='old-prof' fstype='proc' error=-13\$" \
+  "MOCK_KLOG_J_OUT=$D10M_OLD_MNT"$'\n'"$D10M_NEW_OPN"
+unset D10M_OLD_MNT D10M_NEW_MNT D10M_OLD_OPN D10M_NEW_OPN
 
 diag_inert "#9860 D10d: both kernel rungs hanging are each cut at 3 s and change nothing else (exit, reason, rollback line, teardown order, wall time)" MOCK_KLOG_J_SLEEP=60 MOCK_KLOG_D_SLEEP=60
 D10_VAL=$(d10_val "$(d10_row "$DIAGD")")
@@ -4348,7 +4379,7 @@ D10G_SRC=$(sed -n '/^# CANARY_DIAG_BEGIN/,/^# CANARY_DIAG_END/p' "$DEPLOY_SCRIPT
 D10G_CODE=$(printf '%s\n' "$D10G_SRC" | grep -vE '^[[:space:]]*#') || true
 D10G_JLINE=$(grep -E 'timeout -k 1 3 journalctl' <<<"$D10G_CODE" || true)
 D10G_DLINE=$(grep -E 'timeout -k 1 3 dmesg' <<<"$D10G_CODE" || true)
-diag_check "#9860 D10g: the region has exactly two kernel reads, each bounded by timeout -k 1 3; journal carries -n 400 and is read newest-first; dmesg takes tail -n 400 BEFORE head -c 65536; no sudo, /var/log, audit log, -f/-w/--follow" \
+diag_check "#9860 D10g: the region has exactly two kernel reads, each bounded by timeout -k 1 3; journal carries -n 400 --since=-5min --no-pager -o cat and is read newest-first; dmesg takes tail -n 400 BEFORE head -c 65536; no sudo, /var/log, audit log, -f/-w/--follow" \
   "$([[ -z "$(d10g_flags "$D10G_SRC")" && "$(grep -c . <<<"$D10G_JLINE" || true)" == 1 && "$(grep -c . <<<"$D10G_DLINE" || true)" == 1 \
       && "$D10G_JLINE" == *'journalctl -k -n 400 --since=-5min --no-pager -o cat '* && "$D10G_JLINE" == *'head -c 65536'* \
       && "$(awk '{ a = index($0, "tail -n 400"); b = index($0, "head -c 65536"); print (a > 0 && b > a) ? 1 : 0 }' <<<"$D10G_DLINE")" == 1 ]] && echo 0 || echo 1)" \
@@ -4369,9 +4400,13 @@ unset D10G_CLEAN D10G_SRC D10G_CODE D10G_JLINE D10G_DLINE D10G_KEYS D10G_RB
 D10H_LINE='audit: type=1400 audit(1760000009.1:465): apparmor="DENIED" operation="mount" info="'"$(printf 'i%.0s' $(seq 1 100))"'" error=-13 profile="'"$(printf 'p%.0s' $(seq 1 60))"'" fstype="proc" requested_mask="rw" denied_mask="rw" syscall=165'
 run_diag_case "$DIAGD" "MOCK_KLOG_J_OUT=$D10H_LINE" MOCK_KLOG_J_REP=400
 D10_VAL=$(d10_val "$(d10_row "$DIAGD")")
-diag_check "#9860 D10h: with 3-digit counts and every field at its longest the row still begins src= (the 200-char tail does not eat the status head) and never exceeds 200 characters" \
-  "$([[ "$D10_VAL" == 'src=journal j=ok d=skip total='* && "${#D10_VAL}" -le 200 ]] && echo 0 || echo 1)" "len=${#D10_VAL} kdeny: $D10_VAL"
-unset D10H_LINE D10_ROW D10_VAL D10_TOTAL D10_DENY_MOUNT D10_DENY_OPEN D10_HINT_J D10_HINT_D
+D10_TOTAL=$(sed -nE 's/^.* total=([0-9]+) .*$/\1/p' <<<"$D10_VAL"); D10_HITS=$(sed -nE 's/^.* hits=([0-9]+) .*$/\1/p' <<<"$D10_VAL"); D10_MPROC=$(sed -nE 's/^.* mproc=([0-9]+)( .*)?$/\1/p' <<<"$D10_VAL")
+diag_check "#9860 D10h: with 3-digit counts (every repeated denial counted: hits == total >= 100, mproc within one of it because head -c cuts the OLDEST line mid-record) and every field at its longest the row still begins src= (the 200-char tail does not eat the status head) and never exceeds 200 characters" \
+  "$([[ "$D10_VAL" == 'src=journal j=ok d=skip total='* && "${#D10_VAL}" -le 200 && "${D10_TOTAL:-0}" -ge 100 && "${D10_HITS:-x}" == "${D10_TOTAL:-y}" && "${D10_MPROC:-0}" -ge $(( ${D10_TOTAL:-1} - 1 )) ]] && echo 0 || echo 1)" "len=${#D10_VAL} kdeny: $D10_VAL"
+D10_FIELDS=$(sed -nE 's/^src=[a-z]+ j=[a-z]+ d=[a-z]+ total=[0-9]+ hits=[0-9]+ mproc=[0-9]+ (.*)$/\1/p' <<<"$D10_VAL")
+diag_check "#9860 D10h2: the extracted fields are cut at exactly 130 characters (the worst case 61 + 130 stays under the 200-char tail)" \
+  "$([[ "${#D10_FIELDS}" -ge 129 && "${#D10_FIELDS}" -le 130 && "$D10_FIELDS" == operation=* ]] && echo 0 || echo 1)" "fields(${#D10_FIELDS}): $D10_FIELDS"
+unset D10H_LINE D10_ROW D10_VAL D10_TOTAL D10_HITS D10_MPROC D10_FIELDS D10_DENY_MOUNT D10_DENY_OPEN D10_HINT_J D10_HINT_D
 unset -f d10_row d10_val d10_verdict_ok d10c d10g_flags
 
 # D9 -- the REAL in-container script, EXECUTED (the mock never runs it): under sh and under bash it must print
@@ -4393,8 +4428,11 @@ diag_check "#9871 D9d: the real script's sdk_probe carries the SDK flags and its
 D11_LINES=$(grep -E '^v=.*--unshare-user' <<<"$D9_SCRIPT" || true)
 D11_NOPROC=$(grep -vF -- '--proc' <<<"$D11_LINES" || true)
 D11_PROBE=$(grep -F -- '--proc /proc' <<<"$D11_LINES" || true)
-diag_check "#9860 D11: the real script's sdk_noproc argv carries --unshare-user --unshare-pid and NO --proc, while sdk_probe still carries --proc /proc" \
-  "$([[ "$(grep -c . <<<"$D11_NOPROC" || true)" == 1 && "$(grep -c . <<<"$D11_PROBE" || true)" == 1 ]] && has_f '--unshare-user --unshare-pid' "$D11_NOPROC" && has_f 'p sdk_noproc' "$D9_SCRIPT" && echo 0 || echo 1)" \
+# It must be a CONTROL: the same argv minus exactly ` --proc /proc`, with its own real exit code printed. Any second difference
+# would confound the H6-H8 reading. The five `timeout 5` probes are what the CANARY_DIAG_TIMEOUT default (30) is sized against.
+diag_check "#9860 D11: the real script's sdk_noproc argv is sdk_probe's argv minus exactly ` --proc /proc` (so it carries --unshare-user --unshare-pid and no --proc), prints its own rc, and the script runs five timeout-5 probes" \
+  "$([[ "$(grep -c . <<<"$D11_NOPROC" || true)" == 1 && "$(grep -c . <<<"$D11_PROBE" || true)" == 1 && "${D11_PROBE// --proc \/proc/}" == "$D11_NOPROC" \
+      && "$(grep -c 'timeout 5 ' <<<"$D9_SCRIPT" || true)" == 5 ]] && has_f '--unshare-user --unshare-pid' "$D11_NOPROC" && has_f 'p sdk_noproc "rc=$r ' "$D9_SCRIPT" && echo 0 || echo 1)" \
   "noproc: $D11_NOPROC | probe: $D11_PROBE"
 unset D11_LINES D11_NOPROC D11_PROBE
 diag_check "#9871 D9c control: a gutted script does NOT satisfy the D9 check (so D9a/D9b can fail)" \
@@ -11095,7 +11133,10 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # #9860 review (2026-10-11): raised 595 -> 600 with the five review-round rows: D10c x4 (printk echo is not an audit record, an
 # unanchored audit-looking prefix, a non-zero rc with lines reads error, a path-shaped fstype is dropped) and D10g3 (the field-key
 # allowlist spelled identically in code and runbook).
-CI_DEPLOY_ASSERT_FLOOR=600
+# #9860 fix round (2026-10-11): raised 600 -> 608 (measured 608/608 on the live tree) with eight rows: D10c x7 (rc 1 with no hint and
+# no lines reads error, a non-zero exit after an anchored denial still reports it, an unbalanced fstype quote, an ALLOWED record
+# containing `type=1326 audit(`, and three multi-denial newest-first selections) and D10h2 (the 130-character field cut).
+CI_DEPLOY_ASSERT_FLOOR=608
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
     "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"

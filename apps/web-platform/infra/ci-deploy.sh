@@ -1634,8 +1634,9 @@ _cred_err_tail() {
 # Contract: it can never change the deploy's verdict. Callers invoke it only as `... || true`; it touches
 # no global, never BWRAP_RC/BWRAP_ERR/CANARY_HEALTHY or the state file; the exec is bounded by
 # CANARY_DIAG_TIMEOUT (+3 s kill-after) and its output by `head -c`, every host-side docker call by
-# `timeout 3` and each host kernel-log read by `timeout -k 1 3` (_canary_kdeny_read; census D10g); and every value passes through _cred_err_tail (shape + env-value redaction, 200-char
-# tail) before it reaches a sink. It prints derived facts only -- no environment dump: the only
+# `timeout 3` and each host kernel-log read by `timeout -k 1 3` (_canary_kdeny_read; census D10g);
+# and every value passes through _cred_err_tail (shape + env-value redaction, 200-char tail) before
+# it reaches a sink. It prints derived facts only -- no environment dump: the only
 # printenv calls name BUILD_SHA / BUILD_VERSION. Run as the image USER, the same uid and caps the
 # failing probe had. The two call sites are mutually exclusive in one run (a legacy failure exits
 # before the faithful canary runs), so there is no once-per-deploy latch. Rows are short on purpose:
@@ -1688,10 +1689,11 @@ _canary_diag_emit() {
 # Operation not permitted") and ruled out the image, file caps, exec and the legacy probe. What is left is
 # a kernel-side refusal, and the only host-side witness would be an AppArmor/audit line. "Could not read the
 # stream" and "read it, nothing there" are DIFFERENT facts and only the second is evidence, so each rung
-# reports its own state: ok (rc 0 AND at least one real line: readable text, NOT proof that audit records
+# reports its own state: ok (at least one real line and rc 0, or an anchored denial: readable text, NOT proof that audit records
 # reach this stream) | empty (rc 0, no hint, no lines: what journalctl prints on systemd 261 for a user outside
 # adm/systemd-journal) | noaccess (journalctl's or dmesg's own hint line and no real lines) | absent (127) |
-# timeout (124/137) | error (any other rc, including a rc with lines: error text is not a kernel line).
+# timeout (124/137) | error (any other rc, unless an anchored denial was read before the non-zero exit: that
+# line is a real record, error text cannot match the anchor).
 # The ladder is journal, then dmesg only when the journal is not ok.
 # deploy runs unprivileged (no sudo grant covers the kernel log; kernel.dmesg_restrict=1 is the host
 # baseline), so `noaccess`/`empty` is the EXPECTED outcome and the row says so rather than hiding it.
@@ -1721,7 +1723,7 @@ _canary_kdeny_read() {
       /^[[:space:]]+(Users in groups .* can see all messages\.|Pass -q to turn off this notice\.)$/ { next }
       /^-- / || /^[[:space:]]*$/ { next }
       { total++
-        if ($0 ~ /^(\[[ 0-9.]+\] )?audit: type=(1400|1326) audit\([0-9.]+:[0-9]+\): / && ($0 ~ /apparmor="DENIED"/ || $0 ~ /type=1326 audit\(/)) {
+        if ($0 ~ /^(\[[ 0-9.]+\] )?audit: type=(1400|1326) audit\([0-9.]+:[0-9]+\): / && ($0 ~ /apparmor="DENIED"/ || $0 ~ /^(\[[ 0-9.]+\] )?audit: type=1326 audit\(/)) {
           hits++
           if ($0 ~ /operation="mount"/ && $0 ~ /fstype="proc"/) { mproc++; if (mline == "") mline = $0 }
           else if (hline == "") hline = $0
@@ -1746,7 +1748,7 @@ _canary_kdeny_read() {
       elif (( rc == 0 )); then state=empty
       else state=error
       fi
-    elif (( rc != 0 )); then state=error
+    elif (( rc != 0 && h == 0 )); then state=error
     fi
     if [[ "$rung" == journal ]]; then j="$state"; else d="$state"; fi
     if [[ "$state" == ok ]]; then
@@ -1759,7 +1761,7 @@ _canary_kdeny_read() {
               k = K[i]
               if (match($0, "(^| )" k "=" q "[^" q "]*" q) || match($0, "(^| )" k "=[^ ]+")) {
                 v = substr($0, RSTART, RLENGTH); sub(/^ /, "", v)
-                if (k == "fstype" && v !~ /^fstype="?[A-Za-z0-9_.-]+"?$/) continue
+                if (k == "fstype" && v !~ /^fstype=([A-Za-z0-9_.-]+|"[A-Za-z0-9_.-]+")$/) continue
                 out = out v " "
               } } }
           END { printf "%s", out }')" || fields=""

@@ -170,16 +170,17 @@ in `wheel` but not `adm`/`systemd-journal`: `journalctl -k` prints NOTHING, rc 0
 indistinguishable from "quiet window" and from "unreadable" and must not be reported as `ok`/healthy; Ubuntu 24.04's
 systemd 255 prints the Hint line, which is why both shapes are classified). A rung is never overridden by the words `denied`/`permission` appearing inside real kernel lines (an AppArmor
 line carries `apparmor="DENIED"` and `denied_mask=`, and a broad regex would class the readable stream that holds
-the very denial as `noaccess`). Status by exit code: 127 -> `absent`; 124/137 -> `timeout`; 141 (SIGPIPE from
-`head -c` closing the pipe) -> `ok`; other non-zero with no real lines and no hint -> `error`; else `ok`.
+the very denial as `noaccess`). Status by exit code (as shipped; review round 2 superseded the original 141 -> `ok` mapping): 127 -> `absent`;
+124/137 -> `timeout`; no real lines -> `noaccess` with a hint, `empty` at rc 0, else `error`; real lines with a non-zero rc -> `error`
+unless an anchored denial was already read; otherwise `ok`.
 
 Counts are produced with `awk ... END{print n+0}`, never `grep -c` under `pipefail` (a zero count exits 1, which is
-exactly the readable-nothing-there state). `total`, `hits` and `mproc` are capped at 9999. `hits` counts real lines
-matching `apparmor="DENIED"|type=1400|type=1326`. `mproc` counts hits that also carry `operation="mount"` and
+exactly the readable-nothing-there state). `total`, `hits` and `mproc` are capped at 9999. `hits` counts anchored audit records (a line starting `audit: type=1400|1326 audit(<ts>:<n>): `, after dmesg's optional
+`[ts] `) that carry `apparmor="DENIED"` or are type 1326. `mproc` counts hits that also carry `operation="mount"` and
 `fstype="proc"`. The bare profile name `soleur-bwrap` and `comm="bwrap"` are NOT hit tests: the production container
 shares the profile and its tenant sandboxes generate unrelated denials.
 
-`fields` is built from the LAST mount-class hit if any, else the last hit, through a closed key allowlist in
+`fields` is built from the NEWEST mount-class hit if any, else the newest hit (both reads are newest-first), through a closed key allowlist in
 diagnostic-value order: `operation profile fstype error info requested_mask denied_mask syscall`, values rendered
 quote-folded by the scrubber, capped at 130 bytes. There is no `name` key and no `comm` key, so no file path and no
 tenant-settable string can reach the row by construction. Worst-case prefix
@@ -309,8 +310,8 @@ In `ci-deploy.test.sh`, all RED before any `ci-deploy.sh` edit:
      kernel read is `timeout -k 1 3 journalctl|dmesg`, the journal rung carries `-n 400`, the dmesg rung has
      `tail -n` before `head -c`, there is no `sudo`, `/var/log`, `audit.log`, `-f`, `--follow`, `-w`, `-W`, and
      `kdeny` is emitted from exactly one `_canary_diag_emit` call. Extends the existing region-census idiom.
-   - D10h boundary: `total=9999 hits=9999 mproc=9999`, `j=timeout d=timeout` and a 130-byte field string together
-     still show the full `src=` head after `_cred_err_tail`.
+   - D10h boundary (as built): 400 repeated denials (the 64 KiB cap bites first, so hits == mproc == total >= 100) with every
+     field at its longest still show the full `src=` head after `_cred_err_tail`; D10h2 pins the 130-character field cut.
    - D11 the REAL container script's `sdk_noproc` line carries `--unshare-user --unshare-pid` and no `--proc`
      (extends D9d's extraction), while `sdk_probe` still carries `--proc /proc`.
 5. Raise `CI_DEPLOY_ASSERT_FLOOR` to the measured count with a dated changelog line (a floor left below the count
@@ -367,6 +368,7 @@ expiry or restart it from the resume prompt: a Monitor does not survive the sess
 2. Arm a watch with the Monitor tool (never `sleep` in the foreground; `hr-monitor-not-run-in-background-for-polling`):
    an until-loop over
    `doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 2h --limit 200 --grep SOLEUR_CANARY_SANDBOX_DIAG | jq -r '.raw | fromjson? | select(.SYSLOG_IDENTIFIER=="ci-deploy") | .message'`
+   (the shipped runbook query also prints `dt` and `host_name`, which this rule needs to match host and trigger)
    that exits when a `section=done` row appears for the same host, image and trigger as a `section=kdeny` row (Vector lag can
    surface `kdeny` before `sdk_probe`, `sdk_noproc` and `hostsec`, so exiting on `kdeny` alone can decide on a partial bundle),
    and treats exit 3 from the query script (credentials not injected) as an error, not as 'no bundle yet'.
@@ -374,8 +376,8 @@ expiry or restart it from the resume prompt: a Monitor does not survive the sess
 
 | Evidence in the one event | Conclusion | Action |
 |---|---|---|
-| `kdeny mproc>=1` (`operation='mount'`, `fstype='proc'`) | H7: the AppArmor profile denies the mount | fix `apparmor-soleur-bwrap.profile` (same host-infra subsystem as this PR): new plan, host-file delivery, gate G1 again |
-| `sdk_noproc rc=0`, `sdk_probe rc=1`, no `systempaths=` in `hostsec`, `kdeny` `mproc=0` or unreadable | H6 PROBABLE: the shim's required fresh procfs cannot mount under docker's default masked `/proc`. H7 is not excluded while `kdeny` is unreadable or `src=dmesg` (an AppArmor denial is EACCES, `error=-13`; bwrap reported EPERM, which favours H6) | DIFFERENT subsystem (agent sandbox shim, ADR-075/272, container posture): open a separate issue with the local repro commands and this bundle; threshold from the Phase 0 user-impact read |
+| `kdeny mproc>=1` (`operation='mount'`, `fstype='proc'`) in the SAME bundle as a failing `sdk_probe` | H7: the AppArmor profile denies the mount. Strongest with `src=journal` (5-minute window); `src=dmesg` is not time-bound, so it is suggestive only. H6 and H7 can coexist: read `sdk_noproc` too | fix `apparmor-soleur-bwrap.profile` (same host-infra subsystem as this PR): new plan, host-file delivery, gate G1 again |
+| `sdk_noproc rc=0`, `sdk_probe rc=1`, no `systempaths=` in `hostsec`, `kdeny` unreadable or reading `hits=0` (`mproc=0` is always neutral: no field reports whether audit routing is active) | H6 PROBABLE: the shim's required fresh procfs cannot mount under docker's default masked `/proc`. H7 is not excluded while `kdeny` is unreadable or `src=dmesg` (an AppArmor denial is EACCES, `error=-13`; bwrap reported EPERM, which favours H6) | DIFFERENT subsystem (agent sandbox shim, ADR-075/272, container posture): open a separate issue with the local repro commands and this bundle; threshold from the Phase 0 user-impact read |
 | none of the above (`sdk_noproc` also fails, or H8 signs) | an unmodelled cause | keep #9860 open, widen the bundle in a new plan |
 
 4. Guardrails for the H6 issue, so the fix is not made here by reflex: the `/proc` mask is the cross-tenant control
@@ -402,7 +404,7 @@ error_reporting:
   fail_loud: "the kdeny row states its own failure (j=/d= noaccess|absent|timeout|error), so an unreadable kernel stream is a visible row, never a missing one; the closing done row still reports exec_rc/lines/capped/bytes"
 failure_modes:
   - mode: "masked /proc refuses a fresh procfs in the user namespace (H6)"
-    detection: "section=sdk_noproc rc=0 with section=sdk_probe Can't mount proc and section=hostsec without systempaths= (all in the same event); section=kdeny mproc=0"
+    detection: "section=sdk_noproc rc=0 with section=sdk_probe Can't mount proc and section=hostsec without systempaths= (all in the same event); section=kdeny mproc=0 is neutral"
     alert_route: "layer 3 (Vector journald to Better Stack); read with betterstack-query.sh"
   - mode: "AppArmor profile denies the mount (H7)"
     detection: "section=kdeny mproc>=1 with operation='mount' and fstype='proc'"
