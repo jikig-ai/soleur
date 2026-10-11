@@ -137,8 +137,19 @@ assert_grep "strips/injects Proxy-Authorization" 'Proxy-Authorization' "$FORWARD
 assert_grep "gateway upstream" '8443|soleur-egress-gw' "$FORWARDER"
 
 echo "-- bootstrap: bring-up shape --"
-assert_grep "named bridge" 'com\.docker\.network\.bridge\.name=soleur-egress0' "$BOOTSTRAP"
+assert_grep "named bridge" 'BRIDGE_IF="soleur-egress0"' "$BOOTSTRAP"
+assert_grep "bridge name pinned into create option" 'com\.docker\.network\.bridge\.name="\$BRIDGE_IF"' "$BOOTSTRAP"
 assert_grep "subnet probe (collision-safe)" 'docker network (inspect|ls)' "$BOOTSTRAP"
+# Docker >= 28 drops cross-bridge dials to container IPs at raw-PREROUTING
+# (moby #52224), killing docker0->gw:8443 before DOCKER-USER can accept it
+# (measured: 1611 dropped SYNs, allow_rc=28 on web-1). nat-unprotected keeps
+# masquerade but omits that drop; our SOLEUR-EGRESS* chains are the boundary.
+assert_grep "bridge created nat-unprotected (docker >=28 direct-routing escape)" 'gateway_mode_ipv4=nat-unprotected' "$BOOTSTRAP"
+assert_grep "old-daemon fallback: create retried without the option" 'docker network create --subnet="\$SUBNET"' "$BOOTSTRAP"
+assert_grep "existing bridge mode is inspected (immutable opts need rebuild)" 'index \.Options "com\.docker\.network\.bridge\.gateway_mode_ipv4"' "$BOOTSTRAP"
+assert_grep "rebuild gated on daemon >= 28 (<28 cannot set the mode — unconditional check would tear down every run)" 'docker version.*Server\.Version.*-ge 28|-ge 28' "$BOOTSTRAP"
+assert_grep "wrong-mode bridge is rebuilt (gw rm + network rm)" 'docker network rm "\$NET_NAME"' "$BOOTSTRAP"
+assert_not_grep "gateway_mode is never 'routed' (drops masquerade — gw could not dial upstream)" 'gateway_mode_ipv4=routed' "$BOOTSTRAP"
 assert_grep "token dir" 'egress-tokens' "$BOOTSTRAP"
 assert_grep "digest-pinned image" '@sha256:' "$BOOTSTRAP"
 assert_grep "journald log driver" 'log-driver.*journald|--log-driver' "$BOOTSTRAP"

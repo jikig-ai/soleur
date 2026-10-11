@@ -50,11 +50,42 @@ GW_IP="${SUBNET%.*}.2"
 log "subnet=$SUBNET gw_ip=$GW_IP"
 
 # --- bridge --------------------------------------------------------------------
-if ! docker network inspect "$NET_NAME" >/dev/null 2>&1; then
+# Docker >= 28 installs a per-endpoint raw-PREROUTING drop for packets addressed
+# to a container IP arriving via any interface other than the bridge itself
+# (moby #52224 — the direct-routing protection). It fires BEFORE conntrack and
+# DOCKER-USER, so the loader's `iifname docker0` -> gw:8443 accept can never
+# un-block it — measured on web-1: the app container's CONNECT SYNs died at raw
+# (1611 packets, egress_gw_probe allow_rc=28) while host->gw and every FORWARD
+# marker stayed healthy. `gateway_mode_ipv4=nat-unprotected` keeps masquerading
+# (the gw's own upstream dials) but omits the direct-routing drop — the designed
+# boundary lives in SOLEUR-EGRESS / SOLEUR-EGRESS-GW, not docker's defaults.
+# Older daemons lack both the option and the protection: retry without it.
+# Network options are immutable post-create, so a bridge in the wrong mode is
+# torn down and rebuilt (the gw is pinned to $GW_IP; the nft legs rebake
+# identically on the next loader run).
+create_bridge() {
   docker network create --subnet="$SUBNET" \
-    -o com.docker.network.bridge.name=soleur-egress0 \
+    -o com.docker.network.bridge.name="$BRIDGE_IF" \
+    -o com.docker.network.bridge.gateway_mode_ipv4=nat-unprotected \
+    "$NET_NAME" >/dev/null 2>&1 || \
+  docker network create --subnet="$SUBNET" \
+    -o com.docker.network.bridge.name="$BRIDGE_IF" \
     "$NET_NAME" >/dev/null
-  log "created bridge $NET_NAME ($BRIDGE_IF)"
+}
+
+if ! docker network inspect "$NET_NAME" >/dev/null 2>&1; then
+  create_bridge
+  log "created bridge $NET_NAME ($BRIDGE_IF, gw_mode=nat-unprotected)"
+elif [[ "$(docker version -f '{{.Server.Version}}' 2>/dev/null | cut -d. -f1)" -ge 28 ]] \
+  && [[ "$(docker network inspect "$NET_NAME" \
+    -f '{{index .Options "com.docker.network.bridge.gateway_mode_ipv4"}}' 2>/dev/null)" != "nat-unprotected" ]]; then
+  # The mode gate is version-guarded too: on <28 the option cannot be set, so
+  # an unconditional != check would tear the bridge down on every provisioner
+  # run. <28 has no direct-routing protection to escape anyway.
+  docker rm -f "$GW_NAME" >/dev/null 2>&1 || true
+  docker network rm "$NET_NAME" >/dev/null
+  create_bridge
+  log "rebuilt bridge $NET_NAME ($BRIDGE_IF, gw_mode=nat-unprotected; the previous mode blocked cross-bridge dials to the gw)"
 fi
 
 # --- token dir ------------------------------------------------------------------
