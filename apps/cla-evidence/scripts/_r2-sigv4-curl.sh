@@ -32,8 +32,11 @@ _r2_cred_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) retur
 
 # _r2_refuse <script> <variable-name> <value> — print the annotation and the marker; never the value.
 # The variable name is the CALLER's (its operator reads this line), so it is a parameter of the judge.
+# It is clamped to a shell identifier (anything else prints as `unknown`) so a name can never inject a
+# line or a workflow command into the annotation.
 _r2_refuse() {
   local LC_ALL=C script="$1" name="$2" reason=token_shape
+  case "$name" in ''|[!A-Za-z_]*|*[!A-Za-z0-9_]*) name=unknown ;; esac
   case "$3" in *[[:cntrl:]]*) reason=control_char ;; esac
   echo "::error::${script}: ${name} unusable" >&2
   echo "SOLEUR_CREDENTIAL_REFUSED script=${script} reason=${reason}" >&2
@@ -41,12 +44,15 @@ _r2_refuse() {
 
 # r2_sigv4_judge <script> <id> <secret> [<id-variable-name> <secret-variable-name>]
 #   Returns 0 when both values pass the alphabet guard, else prints the refusal and returns 2.
-#   The two names default to the cla-evidence workflow's variables; bootstrap passes its own.
+#   The two names default to the cla-evidence workflow's variables when EITHER is empty or absent (a lone
+#   name is ignored: a pair of names always describes one caller). r2_sigv4_curl's own internal judge
+#   always uses the defaults, so a caller whose operator-facing names differ MUST pre-judge with its own.
 #   <script> is forced to the safe alphabet (the marker feeds log parsing): anything else prints
 #   as `unknown`, so a caller passing free text cannot inject a line or a workflow command.
 r2_sigv4_judge() {
   local LC_ALL=C script="${1:-}" id="${2:-}" secret="${3:-}"
-  local id_name="${4:-R2_CLA_EVIDENCE_ACCESS_KEY_ID}" secret_name="${5:-R2_CLA_EVIDENCE_SECRET}"
+  local id_name="${4:-}" secret_name="${5:-}"
+  if [[ -z "$id_name" || -z "$secret_name" ]]; then id_name=R2_CLA_EVIDENCE_ACCESS_KEY_ID; secret_name=R2_CLA_EVIDENCE_SECRET; fi
   case "$script" in ''|*[!A-Za-z0-9._-]*) script=unknown ;; esac
   if ! _r2_cred_ok "$id"; then
     _r2_refuse "$script" "$id_name" "$id"
@@ -89,7 +95,10 @@ _r2_args_ok() {
 #   Runs `curl --disable --noproxy '*' <args> --aws-sigv4 aws:amz:auto:s3 --globoff
 #   --proto =https --config - <url>` with `user = "<id>:<secret>"` on stdin. The URL stays the
 #   LAST curl argument. Returns 64 (usage, destination, argument) or 2 (credential) before any
-#   request; otherwise curl's own status. The request's stderr is dropped (it was before this
+#   request; otherwise curl's own status. (A curl that exits non-zero AFTER printing a 2xx through -w, for
+#   example a timeout while closing, therefore reads as that 2xx at the callers: the PUT had already been
+#   accepted, so for these conditional writes that is the right reading.) Exit codes of the callers:
+#   2 refusal or an unclassifiable status, 64 usage, 78 xtrace refused, 1 bootstrap probe failure. The request's stderr is dropped (it was before this
 #   change); the refusal lines above are printed outside that redirect, so they stay visible.
 r2_sigv4_curl() {
   if [[ $# -lt 4 ]]; then

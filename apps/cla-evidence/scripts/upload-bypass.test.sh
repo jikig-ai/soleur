@@ -22,6 +22,8 @@ command -v jq >/dev/null || { red "FAIL: jq not on PATH"; exit 1; }
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # Fixture credentials are synthesized at run time (never a contiguous literal): a 32-char id and a
 # 64-char secret that are DISTINCT, neither containing the other, neither one repeated character
@@ -54,7 +56,7 @@ codes_file="$codes"
 stdin=\$(cat; printf x); stdin=\${stdin%x}
 printf '%s' "\$stdin" >> "$work/stdin.log"
 [[ "\$stdin" == *'user = "'* ]] || { echo "stub: stdin carries no user line" >&2; exit 99; }
-[[ "\${STUB_FAIL:-0}" != 1 ]] || exit 7
+[[ "\${STUB_FAIL:-0}" != 1 ]] || { printf '000\\n'; exit 7; }
 read -r code < "\$codes_file"
 sed -i '1d' "\$codes_file"
 # Parse \`-o <file>\` and copy the body fixture there if present.

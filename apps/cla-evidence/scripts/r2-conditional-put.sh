@@ -119,7 +119,8 @@ put_once() {
   # secret on curl's stdin config and never on argv, and emits the code via -w
   # "%{http_code}". A non-zero return is swallowed here and read as status 000
   # by the caller: a curl failure has already printed 000 through -w, and a
-  # helper refusal of the destination or an argument (return 64) prints nothing.
+  # helper refusal of the destination or an argument (return 64) prints no
+  # status on stdout (its ::error:: line goes to stderr).
   r2_sigv4_curl "r2-conditional-put" "$access_key" "$secret" "$url" \
     -sS -o "$body_tmp" -w "%{http_code}\n" --max-time 30 \
     -X PUT \

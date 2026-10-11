@@ -30,7 +30,9 @@
 # ADDED; the fix was to make the whole file owned rather than annotate the new lines.
 # A third new entrant, plugins/soleur/test/ship-followthrough-directive.test.sh, got its
 # trap in the same commit and never joined the count.
-# 70 -> 69 (2026-10-11, #9756): `lint-trap-tempfile-ownership.py --census` measured 69 on the merged tree. This PR gave the cla-evidence probe a mktemp WITH an owning trap and added no unowned mktemp; the file that left the population is a sibling PR's, not identified here.
+# 70 -> 69 (2026-10-11, #9756): `lint-trap-tempfile-ownership.py --census` measured 69 on the merged tree.
+# The cause is not identified here: this PR's only mktemp (the bootstrap probe body) carries an owning
+# trap and bootstrap.sh had no mktemp on main, so it cannot be the file that left the population.
 # Derive with: python3 scripts/lint-trap-tempfile-ownership.py --census
 # CI asserts the live count never EXCEEDS this. Lower it freely when the population
 # shrinks; raising it is a deliberate act that needs a reason in the PR body.

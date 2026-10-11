@@ -70,16 +70,24 @@ _not() { ! "$@"; }
 # Dispatcher self-test: every real row goes through t (and many through _not), so a rewritten t
 # that always passes would leave the pass/fail counters intact and the suite green. Drive both once
 # in both directions; the expected FAIL lines are unwound with the counters.
-_p0=$passes; _f0=$fails
+_p0=$passes; _f0=$fails; _dd_bad=0
 t "dispatcher self-test (t pass path)" true
+[[ "$passes" -eq $((_p0 + 1)) && "$fails" -eq "$_f0" ]] || _dd_bad=1
 t "dispatcher self-test (t fail path — expected, subtracted)" false
+[[ "$passes" -eq $((_p0 + 1)) && "$fails" -eq $((_f0 + 1)) ]] || _dd_bad=1
 t "dispatcher self-test (_not pass path)" _not false
+[[ "$passes" -eq $((_p0 + 2)) && "$fails" -eq $((_f0 + 1)) ]] || _dd_bad=1
 t "dispatcher self-test (_not fail path — expected, subtracted)" _not true
-if [[ "$passes" -ne $((_p0 + 2)) || "$fails" -ne $((_f0 + 2)) ]]; then
-  printf 'FATAL: the t/_not dispatchers are not dispatching (passes=%s fails=%s)\n' "$passes" "$fails" >&2
+[[ "$passes" -eq $((_p0 + 2)) && "$fails" -eq $((_f0 + 2)) ]] || _dd_bad=1
+if [[ "$_dd_bad" -ne 0 ]]; then
+  printf 'FATAL: the t/_not dispatchers are not dispatching, or invert (passes=%s fails=%s)\n' "$passes" "$fails" >&2
   exit 2
 fi
 passes=$((passes - 2)); fails=$((fails - 2))
+if [[ "$passes" -ne "$_p0" || "$fails" -ne "$_f0" ]]; then
+  printf 'FATAL: the dispatcher self-test did not unwind its counters (passes=%s fails=%s)\n' "$passes" "$fails" >&2
+  exit 2
+fi
 
 echo "_r2-sigv4-curl.test.sh"
 
@@ -163,7 +171,10 @@ if [[ "${STUB_MODE:-record}" == "wire" ]]; then
   fi
   exit $?
 fi
-if [[ "${STUB_MODE:-record}" == "fail" ]]; then exit "${STUB_FAIL_RC:-7}"; fi
+# real curl prints 000 through -w and then exits non-zero, so the fail mode does too
+if [[ "${STUB_MODE:-record}" == "fail" ]]; then printf '000\n'; exit "${STUB_FAIL_RC:-7}"; fi
+# a real curl -sS writes its errors to stderr: the helper must drop that stream (row 5.1 reads 2>&1)
+echo "STUB-STDERR-CANARY" >&2
 printf '%s\n' "${STUB_CODE:-200}"
 exit 0
 EOF
@@ -196,7 +207,7 @@ refuse_row() { # NAME KIND VALUE REASON
   rc=0; out=$(r2_sigv4_judge "$FNAME" "$id" "$secret" 2>&1) || rc=$?
   t "2.$tag judge($which): returns exactly 2" test "$rc" -eq 2
   t "2.$tag judge($which): one ::error:: annotation naming $varname, no value" \
-    test "$(count_prefix '::error::' "$out")" -eq 1 -a "$(grep -cF -- "$varname unusable" <<<"$out")" -eq 1
+    test "$(count_prefix '::error::' "$out")" -eq 1 -a "$(grep -cxF -- "::error::$FNAME: $varname unusable" <<<"$out")" -eq 1
   t "2.$tag judge($which): one marker with reason=$reason" \
     test "$(count_prefix 'SOLEUR_CREDENTIAL_REFUSED ' "$out")" -eq 1 -a "$(grep -cxF -- "SOLEUR_CREDENTIAL_REFUSED script=$FNAME reason=$reason" <<<"$out")" -eq 1
   local pats=(-e "$ID" -e "$SECRET")
@@ -216,6 +227,18 @@ for spec in 'dq|"|token_shape' 'bs|\|token_shape' 'colon|:|token_shape' 'space| 
 done
 refuse_row id "" token_shape "9i"
 refuse_row secret "" token_shape "9s"
+
+# ── (2c) the judge's variable-name parameters: custom names print, hostile or lone names never inject ──
+rc=0; out=$(r2_sigv4_judge "$FNAME" "${ID:0:5}\"${ID:6}" "$SECRET" MY_ID_VAR MY_SECRET_VAR 2>&1) || rc=$?
+t "2c.1 custom variable names are printed in the annotation (id refusal)" test "$rc" -eq 2 -a "$(grep -cxF -- "::error::$FNAME: MY_ID_VAR unusable" <<<"$out")" -eq 1
+rc=0; out=$(r2_sigv4_judge "$FNAME" "$ID" "${SECRET:0:5}\"${SECRET:6}" MY_ID_VAR MY_SECRET_VAR 2>&1) || rc=$?
+t "2c.2 custom variable names are printed in the annotation (secret refusal)" test "$rc" -eq 2 -a "$(grep -cxF -- "::error::$FNAME: MY_SECRET_VAR unusable" <<<"$out")" -eq 1
+rc=0; out=$(r2_sigv4_judge "$FNAME" "$ID" "${SECRET:0:5}\"${SECRET:6}" MY_ID_VAR $'EVIL\nSOLEUR_FAKE_LINE' 2>&1) || rc=$?
+t "2c.3 a hostile variable name prints as unknown and injects no line" \
+  test "$rc" -eq 2 -a "$(grep -cxF -- "::error::$FNAME: unknown unusable" <<<"$out")" -eq 1 -a "$(grep -c '^SOLEUR_FAKE_LINE' <<<"$out" || true)" -eq 0
+rc=0; out=$(r2_sigv4_judge "$FNAME" "$ID" "${SECRET:0:5}\"${SECRET:6}" ONLY_ONE_NAME 2>&1) || rc=$?
+t "2c.4 a lone name is ignored: both names fall back to the cla-evidence defaults" \
+  test "$rc" -eq 2 -a "$(grep -cxF -- "::error::$FNAME: R2_CLA_EVIDENCE_SECRET unusable" <<<"$out")" -eq 1
 
 # ── (3) must-PASS non-canonical values (a guard that refuses everything is caught only here) ──
 UP_ID="$(tr 'a-f' 'A-F' <<<"$ID")"; UP_SECRET="$(tr 'a-f' 'A-F' <<<"$SECRET")"
@@ -416,19 +439,39 @@ t "11b.1 the alphabet sweep covered all 255 bytes and the accepted set equals [A
 # ── (11c) a failing curl is a FAILURE: its status passes through, nothing turns it into success ──
 reset_log
 rc=0; out=$(STUB_MODE=fail STUB_FAIL_RC=7 r2_sigv4_curl "$FNAME" "$ID" "$SECRET" "$URL" -sS -o "$BODY" -w "%{http_code}\n" --max-time 30 2>&1) || rc=$?
-t "11c.1 curl's own non-zero status passes through the chokepoint (rc 7, one call, no output)" test "$rc" -eq 7 -a "$(calls)" -eq 1 -a -z "$out"
+t "11c.1 curl's own non-zero status passes through the chokepoint (rc 7, one call, only the 000 curl printed)" test "$rc" -eq 7 -a "$(calls)" -eq 1 -a "$out" = "000"
 
 # ── (11d) the probe and the caller prologues ──
 probe_out="$(bash "$SCRIPT_DIR/r2-sigv4-refusal-probe.sh" 2>&1)"; probe_rc=$?
 t "11d.1 the discoverability probe exits 0 and prints the refusal marker with reason=token_shape" \
   test "$probe_rc" -eq 0 -a "$(grep -cxF 'SOLEUR_CREDENTIAL_REFUSED script=r2-sigv4-refusal-probe reason=token_shape' <<<"$probe_out")" -eq 1
+# The prologue must be CODE (comments do not count) and must come BEFORE the line that sources the helper. The probe
+# is excluded by name: it judges synthetic malformed values and starts no curl. Behavioural proof of -x is in the
+# caller suites (TS6.k, bootstrap row 3).
+_prologue_ok() {
+  awk '/^[[:space:]]*#/ { next }
+       /case "\$-" in/ && !c { c = NR }
+       /exit 78/ && !e { e = NR }
+       /source .*_r2-sigv4-curl\.sh/ && !s { s = NR }
+       END { exit !(c && e && s && c < s && e < s) }' "$1"
+}
 callers="$(cd "$REPO_ROOT" && /usr/bin/grep -rlE 'r2_sigv4_(curl|judge)' --include='*.sh' --exclude='*.test.sh' --exclude='_r2-sigv4-curl.sh' --exclude='r2-sigv4-refusal-probe.sh' apps/cla-evidence | sort | tr '\n' ' ')"
 _noprologue=""
-for _f in $callers; do
-  { /usr/bin/grep -qF 'case "$-" in' "$REPO_ROOT/$_f" && /usr/bin/grep -qE 'exit 78' "$REPO_ROOT/$_f"; } || _noprologue="$_noprologue $_f"
-done
-t "11d.2 every file that calls into the helper carries the xtrace refusal (callers: $callers)" \
+for _f in $callers; do _prologue_ok "$REPO_ROOT/$_f" || _noprologue="$_noprologue $_f"; done
+t "11d.2 every file that calls into the helper has a CODE xtrace refusal (case + exit 78) before it sources the helper (callers: $callers)" \
   test -n "$callers" -a -z "$_noprologue"
+_pro_bad="$TMP_ROOT/pro-comment-only.sh"
+# shellcheck disable=SC2016  # literal fixture text, not an expansion
+printf '%s\n' '# case "$-" in *x*) exit 78 ;; esac' 'source "$d/_r2-sigv4-curl.sh"' > "$_pro_bad"
+_pro_late="$TMP_ROOT/pro-late.sh"
+# shellcheck disable=SC2016  # literal fixture text, not an expansion
+printf '%s\n' 'source "$d/_r2-sigv4-curl.sh"' 'case "$-" in *x*) exit 78 ;; esac' > "$_pro_late"
+_pro_ok="$TMP_ROOT/pro-ok.sh"
+# shellcheck disable=SC2016  # literal fixture text, not an expansion
+printf '%s\n' 'case "$-" in *x*) exit 78 ;; esac' 'source "$d/_r2-sigv4-curl.sh"' > "$_pro_ok"
+t "11d.3a the predicate refuses a comment-only prologue" _not _prologue_ok "$_pro_bad"
+t "11d.3b the predicate refuses a prologue that comes after the source line" _not _prologue_ok "$_pro_late"
+t "11d.3c the predicate accepts a real prologue" _prologue_ok "$_pro_ok"
 
 # ── (12) real-curl wire row: the request the helper builds, sent by REAL curl, read at a listener ──
 LISTEN_PY="$TMP_ROOT/listener.py"
@@ -487,7 +530,7 @@ kill "$LISTENER_PID" 2>/dev/null; LISTENER_PID=""
 # above asserts passes == 1, so the literal is proven, not chosen).
 SELFTEST_PASSES=1
 REAL_PASSES=$((passes - SELFTEST_PASSES))
-MIN_CASES=168
+MIN_CASES=175
 if [[ "$fails" -eq 0 && "$REAL_PASSES" -lt "$MIN_CASES" ]]; then
   printf 'FATAL: anti-vacuity floor — %s real assertions passed, expected at least %s\n' \
     "$REAL_PASSES" "$MIN_CASES" >&2

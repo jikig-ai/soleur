@@ -63,16 +63,24 @@ _not() { ! "$@"; }
 
 # Dispatcher self-test: every real row goes through t (and many through _not); drive both once in both
 # directions so a rewritten t/_not that always passes cannot hide behind intact pass/fail counters.
-_p0=$passes; _f0=$fails
+_p0=$passes; _f0=$fails; _dd_bad=0
 t "dispatcher self-test (t pass path)" true
+[[ "$passes" -eq $((_p0 + 1)) && "$fails" -eq "$_f0" ]] || _dd_bad=1
 t "dispatcher self-test (t fail path — expected, subtracted)" false
+[[ "$passes" -eq $((_p0 + 1)) && "$fails" -eq $((_f0 + 1)) ]] || _dd_bad=1
 t "dispatcher self-test (_not pass path)" _not false
+[[ "$passes" -eq $((_p0 + 2)) && "$fails" -eq $((_f0 + 1)) ]] || _dd_bad=1
 t "dispatcher self-test (_not fail path — expected, subtracted)" _not true
-if [[ "$passes" -ne $((_p0 + 2)) || "$fails" -ne $((_f0 + 2)) ]]; then
-  printf 'FATAL: the t/_not dispatchers are not dispatching (passes=%s fails=%s)\n' "$passes" "$fails" >&2
+[[ "$passes" -eq $((_p0 + 2)) && "$fails" -eq $((_f0 + 2)) ]] || _dd_bad=1
+if [[ "$_dd_bad" -ne 0 ]]; then
+  printf 'FATAL: the t/_not dispatchers are not dispatching, or invert (passes=%s fails=%s)\n' "$passes" "$fails" >&2
   exit 2
 fi
 passes=$((passes - 2)); fails=$((fails - 2))
+if [[ "$passes" -ne "$_p0" || "$fails" -ne "$_f0" ]]; then
+  printf 'FATAL: the dispatcher self-test did not unwind its counters (passes=%s fails=%s)\n' "$passes" "$fails" >&2
+  exit 2
+fi
 
 echo "bootstrap-r2-probe.test.sh"
 
@@ -87,6 +95,7 @@ while :; do
   ID="$(rand_hex 32)"; SECRET="$(rand_hex 64)"
   [[ "${#ID}" -eq 32 && "${#SECRET}" -eq 64 ]] || continue
   [[ "$SECRET" != *"$ID"* && "$ID" != *"$SECRET"* ]] || continue
+  [[ -n "${ID//${ID:0:1}/}" && -n "${SECRET//${SECRET:0:1}/}" ]] || continue
   break
 done
 ACCT="$(rand_hex 32)"
@@ -117,7 +126,8 @@ case "$url" in
       if [[ "$prev" == "-o" ]]; then printf '%s\n' "$a" >> "$log/probe.outpath"; printf '<Error><Code>InternalError</Code></Error>' > "$a"; fi
       prev="$a"
     done
-    [[ "${STUB_PROBE_FAIL:-0}" != 1 ]] || exit 7
+    # real curl prints 000 through -w and then exits 7; a stub that printed nothing could not tell the old `|| echo 000` from the new default
+    [[ "${STUB_PROBE_FAIL:-0}" != 1 ]] || { printf '000'; exit 7; }
     printf '%s' "${STUB_PROBE_CODE:-500}"
     exit 0 ;;
   *) echo "stub: unscripted URL" >&2; exit 99 ;;
@@ -142,12 +152,20 @@ printf 'doppler %s\n' "$*" >> "${STUB_LOG:?}/doppler.calls"
 stdin=$(cat; printf x); stdin=${stdin%x}
 if [[ "${1:-}" == secrets && "${2:-}" == set ]]; then
   printf 'SET %s <<%s>>\n' "${3:-}" "$stdin" >> "${STUB_LOG:?}/doppler.stdin"
+  [[ "${STUB_SET_FAIL_NAME:-}" != "${3:-}" ]] || exit 1
+  printf '%s' "$stdin" > "${STUB_LOG:?}/val.${3:-}"
 fi
 if [[ "${1:-}" == secrets && "${2:-}" == get ]]; then
-  case "${3:-}" in
-    CF_ACCOUNT_ID) printf '%s' "${STUB_ACCT:?}" ;;
-    *) printf 'stub-%s' "${3:-}" ;;
-  esac
+  if [[ -f "${STUB_LOG:?}/val.${3:-}" ]]; then
+    v=$(cat "${STUB_LOG:?}/val.${3:-}")
+    [[ "${STUB_GET_TRUNC:-0}" != 1 ]] || v=${v:0:5}
+    printf '%s' "$v"
+  else
+    case "${3:-}" in
+      CF_ACCOUNT_ID) printf '%s' "${STUB_ACCT:?}" ;;
+      *) printf 'stub-%s' "${3:-}" ;;
+    esac
+  fi
 fi
 # Step 2 lists configs (jq reads it) and Step 3 mints the service token: fail THAT call so the script
 # stops right after Step 2, before anything that would run the real live Lock Rules check.
@@ -204,6 +222,7 @@ t "1.7 valid pair: no Doppler write follows the 500 (the reads before the probe 
 outpath="$(head -n 1 "$LOGD/probe.outpath")"
 t "1.8 the probe body file is a mktemp file under TMPDIR, not the fixed /tmp/r2-probe-body" \
   test -n "$outpath" -a "$outpath" != /tmp/r2-probe-body -a "${outpath#"$RUNTMP"/}" != "$outpath"
+t "1.8b status=500: the direct-egress hint is NOT printed (it is for 000 only)" _not grep -qF 'direct egress' <<<"$OUT"
 t "1.9 the probe body file is gone afterwards (the scratch TMPDIR is empty)" test -z "$(ls -A "$RUNTMP")"
 
 # ── Row 2: a malformed pair (a control byte in the secret, length still 64) ──
@@ -221,6 +240,16 @@ t "2.4 malformed secret: no value is printed" _not grep -qF -e "$ID" -e "$bad_se
 t "2.5 malformed secret: no Doppler write" _not grep -qE 'secrets set|configs|tokens' "$LOGD/doppler.calls"
 t "2.6 malformed secret: the scratch TMPDIR is empty afterwards" test -z "$(ls -A "$RUNTMP")"
 
+# ── Row 2b: a malformed KEY ID (a control byte, length still 32) is pre-judged too, with the id's own variable name ──
+reset_log
+bad_id="${ID:0:7}"$'\x02'"${ID:8}"
+run_boot "$bad_id" "$SECRET"
+t "2b.1 malformed id: exit 2 with the marker once (reason=control_char) and the URL list exactly [verify]" \
+  test "$RC" -eq 2 -a "$(grep -c '^SOLEUR_CREDENTIAL_REFUSED script=bootstrap reason=control_char$' <<<"$OUT" || true)" -eq 1 -a "$(normalized_urls)" = "$VERIFY_URL"
+t "2b.2 malformed id: the annotation names R2_S3_ACCESS_KEY_ID, never a cla-evidence variable" \
+  test "$(grep -c '^::error::bootstrap: R2_S3_ACCESS_KEY_ID unusable$' <<<"$OUT" || true)" -eq 1 -a "$(grep -c 'R2_CLA_EVIDENCE' <<<"$OUT" || true)" -eq 0
+t "2b.3 malformed id: no value is printed" _not grep -qF -e "$bad_id" -e "$SECRET" <<<"$OUT"
+
 # ── Row 4: a transport failure (curl exits 7, prints nothing) reads as status 000, never as success ──
 reset_log
 STUB_PROBE_FAIL=1 run_boot "$ID" "$SECRET"
@@ -234,7 +263,8 @@ t "4.4 curl failure: the URL list is exactly [verify, probe] (the request WAS at
 # ── Row 5: the probe passes (200), so Step 2 runs: the pair reaches Doppler on STDIN, never on argv ──
 reset_log
 STUB_PROBE_CODE=200 run_boot "$ID" "$SECRET"
-t "5.1 probe ok: the script reaches Step 2 and stops at the (stubbed) service-token mint (exit 1)" test "$RC" -eq 1
+t "5.1 probe ok: the script reaches Step 2 and stops AT the (stubbed) service-token mint: exit 1, a tokens-create call recorded, no gh call" \
+  test "$RC" -eq 1 -a "$(grep -c 'configs tokens create' "$LOGD/doppler.calls" || true)" -ge 1 -a "$(grep -c '^gh ' "$LOGD/calls" || true)" -eq 1
 t "5.2 Step 2 wrote the key id and the secret as single-name stdin writes (NAME on argv, no =value)" \
   test "$(grep -cE '^doppler secrets set R2_CLA_EVIDENCE_ACCESS_KEY_ID --project' "$LOGD/doppler.calls" || true)" -eq 1 \
     -a "$(grep -cE '^doppler secrets set R2_CLA_EVIDENCE_SECRET --project' "$LOGD/doppler.calls" || true)" -eq 1
@@ -245,6 +275,30 @@ t "5.4 each value arrived on stdin exactly" \
 t "5.5 the non-secret endpoint and bucket still go as NAME=value arguments" \
   test "$(grep -cE 'R2_CLA_EVIDENCE_ENDPOINT=https://.*R2_CLA_EVIDENCE_BUCKET=' "$LOGD/doppler.calls" || true)" -eq 1
 t "5.6 neither value is printed to the operator terminal" _not grep -qF -e "$ID" -e "$SECRET" <<<"$OUT"
+
+# ── Row 6: 201 and 412 are accepted probe statuses too (only 200 was exercised) ──
+for _code in 201 412; do
+  reset_log
+  STUB_PROBE_CODE=$_code run_boot "$ID" "$SECRET"
+  t "6.$_code probe status $_code is accepted: Step 2 runs (the secret write is recorded)" \
+    test "$(grep -c '^doppler secrets set R2_CLA_EVIDENCE_SECRET ' "$LOGD/doppler.calls" || true)" -eq 1
+done
+
+# ── Row 7: a failing pair write and a mismatched read-back are LOUD, never "pushed" ──
+reset_log
+STUB_PROBE_CODE=200 STUB_SET_FAIL_NAME=R2_CLA_EVIDENCE_SECRET run_boot "$ID" "$SECRET"
+t "7.1 the second pair write fails: exit 1 and the mixed-pair warning names prd_cla" \
+  test "$RC" -eq 1 -a "$(grep -c 'prd_cla may now hold a MIXED pair' <<<"$OUT" || true)" -eq 1
+t "7.2 the second pair write fails: the success line is NOT printed" _not grep -qF 'pushed 4 secrets' <<<"$OUT"
+reset_log
+STUB_PROBE_CODE=200 STUB_GET_TRUNC=1 run_boot "$ID" "$SECRET"
+t "7.3 a truncated read-back: exit 1, the lengths are reported and the mixed-pair warning follows" \
+  test "$RC" -eq 1 -a "$(grep -c 'read-back from prd_cla does not match' <<<"$OUT" || true)" -eq 1 -a "$(grep -c 'MIXED pair' <<<"$OUT" || true)" -eq 1
+t "7.4 a truncated read-back: no value is printed" _not grep -qF -e "$ID" -e "$SECRET" <<<"$OUT"
+reset_log
+STUB_PROBE_CODE=200 run_boot "$ID" "$SECRET"
+t "7.5 a clean write passes the read-back and reaches the token mint" \
+  test "$RC" -eq 1 -a "$(grep -c 'pushed 4 secrets' <<<"$OUT" || true)" -eq 1 -a "$(grep -c 'configs tokens create' "$LOGD/doppler.calls" || true)" -ge 1
 
 # ── Row 3: xtrace is refused before any stub runs ───────────────────────────
 reset_log
@@ -258,7 +312,7 @@ t "3.3 bash -x: neither value reaches the trace" _not grep -qF -e "$ID" -e "$SEC
 # the floor plus its contiguous assignments, and the self-test above asserts passes == 1.
 SELFTEST_PASSES=1
 REAL_PASSES=$((passes - SELFTEST_PASSES))
-MIN_CASES=29
+MIN_CASES=40
 if [[ "$fails" -eq 0 && "$REAL_PASSES" -lt "$MIN_CASES" ]]; then
   printf 'FATAL: anti-vacuity floor — %s real assertions passed, expected at least %s\n' \
     "$REAL_PASSES" "$MIN_CASES" >&2

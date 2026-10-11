@@ -217,17 +217,21 @@ probe_body='{"probe":"bootstrap","ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}'
 probe_body_file=$(mktemp)
 trap 'rm -f "$probe_body_file"' EXIT
 r2_sigv4_judge "bootstrap" "$R2_ACCESS_KEY" "$R2_SECRET" R2_S3_ACCESS_KEY_ID R2_S3_SECRET_ACCESS_KEY || exit 2
+probe_rc=0
 probe_code=$(r2_sigv4_curl "bootstrap" "$R2_ACCESS_KEY" "$R2_SECRET" "$probe_endpoint" \
   -sS -o "$probe_body_file" -w "%{http_code}" --max-time 30 \
   -X PUT \
   -H "If-None-Match: *" \
   -H "Content-Type: application/json" \
-  --data-binary "$probe_body" || true)
+  --data-binary "$probe_body") || probe_rc=$?
 probe_code="${probe_code:-000}"
 if [[ "$probe_code" != "200" && "$probe_code" != "201" && "$probe_code" != "412" ]]; then
   red "R2 probe PUT failed: status=$probe_code body=$(tr '\n' ' ' < "$probe_body_file" | head -c 400)"
   red "Refusing to push known-broken creds to Doppler. Verify R2_S3_ACCESS_KEY_ID/SECRET match a freshly-minted R2 dashboard token (see header)."
-  [[ "$probe_code" != "000" ]] || red "status=000 also means curl never got a response: this probe needs direct egress to R2 with the system trust store (no proxy, no TLS-inspecting CA)."
+  # 64 is the helper refusing the destination or an argument (its own ::error:: line is above): not an egress problem.
+  if [[ "$probe_code" == "000" && "$probe_rc" != "64" ]]; then
+    red "status=000 also means curl never got a response: this probe needs direct egress to R2 with the system trust store (no proxy, no TLS-inspecting CA)."
+  fi
   exit 1
 fi
 green "  R2 probe PUT ok (status=$probe_code); creds verified before Doppler push"
@@ -250,18 +254,33 @@ fi
 # The two non-secret values go as NAME=value arguments. The HMAC pair goes on the CLI's STDIN, one name per
 # call (printf is a builtin, so the value never reaches an exec argv): an argument would put the pair in
 # /proc/<pid>/cmdline for the life of the doppler process, which is the exposure this script's curl
-# probe no longer has. The two writes are not one atomic call: if the second fails the script stops
-# (set -e) and a re-run, which is idempotent, rewrites both.
+# probe no longer has. The two pair writes are NOT one atomic call. If the second fails, prd_cla holds
+# the new key id with the OLD secret, and the required cla-evidence check fails on every PR until this
+# is re-run, so that case says so loudly. Recovery needs the SAME R2_S3_* pair (the dashboard shows the
+# secret once) and a live CF_ADMIN_TOKEN_BOOTSTRAP (valid for one hour); re-running is idempotent. A
+# read-back then compares each stored length with the expected 32/64 (the values are never printed), because
+# nothing else would notice a CLI that stored an empty or trimmed value from stdin.
 doppler secrets set \
   --project soleur --config prd_cla \
   --no-interactive \
   R2_CLA_EVIDENCE_ENDPOINT="$R2_ENDPOINT" \
   R2_CLA_EVIDENCE_BUCKET="$BUCKET_NAME" \
   >/dev/null
+pair_write_failed() {
+  red "R2 pair write to prd_cla FAILED part-way: prd_cla may now hold a MIXED pair and the required cla-evidence check will fail until this is fixed."
+  red "Re-run with the SAME R2_S3_ACCESS_KEY_ID / R2_S3_SECRET_ACCESS_KEY and a live CF_ADMIN_TOKEN_BOOTSTRAP (or restore prd_cla in the Doppler UI)."
+  exit 1
+}
 printf '%s' "$R2_ACCESS_KEY" | doppler secrets set R2_CLA_EVIDENCE_ACCESS_KEY_ID \
-  --project soleur --config prd_cla --no-interactive >/dev/null
+  --project soleur --config prd_cla --no-interactive >/dev/null || pair_write_failed
 printf '%s' "$R2_SECRET" | doppler secrets set R2_CLA_EVIDENCE_SECRET \
-  --project soleur --config prd_cla --no-interactive >/dev/null
+  --project soleur --config prd_cla --no-interactive >/dev/null || pair_write_failed
+stored_id=$(doppler secrets get R2_CLA_EVIDENCE_ACCESS_KEY_ID --project soleur --config prd_cla --plain 2>/dev/null) || stored_id=""
+stored_secret=$(doppler secrets get R2_CLA_EVIDENCE_SECRET --project soleur --config prd_cla --plain 2>/dev/null) || stored_secret=""
+if [[ "${#stored_id}" -ne 32 || "${#stored_secret}" -ne 64 || "$stored_id" != "$R2_ACCESS_KEY" || "$stored_secret" != "$R2_SECRET" ]]; then
+  red "R2 pair read-back from prd_cla does not match what was written (stored lengths: id=${#stored_id}, secret=${#stored_secret}; expected 32 and 64)."
+  pair_write_failed
+fi
 green "  pushed 4 secrets to prd_cla (S3-compat HMAC pair on stdin + endpoint + bucket)"
 
 # ─────────────────────────────────────────────────────────────────────────

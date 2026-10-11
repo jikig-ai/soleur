@@ -23,6 +23,8 @@ fi
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # Fixture credentials are synthesized at run time (never a contiguous literal): a 32-char id and a
 # 64-char secret that are DISTINCT, neither containing the other, neither one repeated character
@@ -53,7 +55,7 @@ codes_file="$codes"
 stdin=\$(cat; printf x); stdin=\${stdin%x}
 printf '%s' "\$stdin" >> "$work/stdin.log"
 [[ "\$stdin" == *'user = "'* ]] || { echo "stub: stdin carries no user line" >&2; exit 99; }
-[[ "\${STUB_FAIL:-0}" != 1 ]] || exit 7
+[[ "\${STUB_FAIL:-0}" != 1 ]] || { printf '000\\n'; exit 7; }
 read -r code < "\$codes_file"
 sed -i '1d' "\$codes_file"
 # Parse \`-o <file>\` and copy the body fixture there if present.
@@ -228,12 +230,18 @@ fi
 # TS6.k: the script refuses to run under xtrace (exit 78) before binding the pair, so -x can never
 # print a value: both `bash -x` and an inherited SHELLOPTS=xtrace are refused, zero calls, and
 # neither value reaches the trace.
-for mode in bash-x shellopts id-only; do
+for mode in bash-x shellopts id-only secret-only; do
   printf "200\n" > "$work/codes.txt"
   mk_curl_stub "$work/codes.txt"
   : > "$work/argv.log"; : > "$work/stdin.log"
   if [[ "$mode" == bash-x ]]; then
     out=$(PATH="$work:$PATH" R2_CLA_EVIDENCE_ACCESS_KEY_ID="$ID" R2_CLA_EVIDENCE_SECRET="$SECRET" \
+          R2_CLA_EVIDENCE_BUCKET=soleur-cla-evidence \
+          R2_CLA_EVIDENCE_ENDPOINT=https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com \
+          bash -x "$RC_PUT" signatures/x.json '{"x":1}' </dev/null 2>&1) && rc=0 || rc=$?
+  elif [[ "$mode" == secret-only ]]; then
+    # only the secret is set (the key id is unset): -x must refuse before the secret is traced.
+    out=$(env -u R2_CLA_EVIDENCE_ACCESS_KEY_ID PATH="$work:$PATH" R2_CLA_EVIDENCE_SECRET="$SECRET" \
           R2_CLA_EVIDENCE_BUCKET=soleur-cla-evidence \
           R2_CLA_EVIDENCE_ENDPOINT=https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com \
           bash -x "$RC_PUT" signatures/x.json '{"x":1}' </dev/null 2>&1) && rc=0 || rc=$?
@@ -273,9 +281,9 @@ else
   fail=1
 fi
 
-# Anti-vacuity floor for the wire rows above (TS6.g-l, TS6.k counts three times): deleting that block leaves
+# Anti-vacuity floor for the wire rows above (TS6.g-l, TS6.k counts four times): deleting that block leaves
 # the rest of this suite green, so the floor counts what the block's rows passed. Literal adjacent to the if.
-MIN_WIRE_ROWS=8
+MIN_WIRE_ROWS=9
 if [[ "$wire_rows" -lt "$MIN_WIRE_ROWS" ]]; then
   printf 'FATAL: anti-vacuity floor — %s wire rows passed, expected at least %s\n' "$wire_rows" "$MIN_WIRE_ROWS" >&2
   exit 1
