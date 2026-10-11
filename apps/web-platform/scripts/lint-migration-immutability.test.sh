@@ -93,7 +93,7 @@ reset_feat
 printf 'ALTER TABLE public.fixture_b ADD COLUMN extra int;\n' >> "$FIX/apps/web-platform/supabase/migrations/002_b.sql"
 git -C "$FIX" commit -qam 'mutate 002'
 run_guard
-if [[ "$rc" == "1" ]] && printf '%s' "$out" | grep -q '002_b.sql' && printf '%s' "$out" | grep -q 'mutated'; then
+if [[ "$rc" == "1" ]] && printf '%s' "$out" | grep -c >/dev/null '002_b.sql' && printf '%s' "$out" | grep -c >/dev/null 'mutated'; then
   pass "rc=1 names the mutated file (mutation verdict pinned)"
 else
   fail "expected rc=1 naming 002_b.sql with mutation verdict; got rc=$rc out=$out"
@@ -107,7 +107,7 @@ reset_feat
 git -C "$FIX" rm -q apps/web-platform/supabase/migrations/001_a.sql
 git -C "$FIX" commit -qm 'delete 001'
 run_guard
-if [[ "$rc" == "1" ]] && printf '%s' "$out" | grep -q '001_a.sql' && printf '%s' "$out" | grep -q 'deleted or renamed away'; then
+if [[ "$rc" == "1" ]] && printf '%s' "$out" | grep -c >/dev/null '001_a.sql' && printf '%s' "$out" | grep -c >/dev/null 'deleted or renamed away'; then
   pass "rc=1 names the deleted file (delete verdict pinned)"
 else
   fail "expected rc=1 naming 001_a.sql with delete verdict; got rc=$rc out=$out"
@@ -124,11 +124,11 @@ git -C "$FIX" commit -qm 'rename 001 -> 010'
 # detection the source path is not even emitted — if a host disables
 # rename detection the pin fails loudly instead of silently weakening.
 default_enum=$(git -C "$FIX" diff --name-only main...feat -- 'apps/web-platform/supabase/migrations/*.sql')
-if printf '%s' "$default_enum" | grep -q '001_a\.sql'; then
+if printf '%s' "$default_enum" | grep -c >/dev/null '001_a\.sql'; then
   fail "precondition broken: default rename detection still emits the source — T3 cannot distinguish --no-renames"
 else
   run_guard
-  if [[ "$rc" == "1" ]] && printf '%s' "$out" | grep -q '001_a.sql'; then
+  if [[ "$rc" == "1" ]] && printf '%s' "$out" | grep -c >/dev/null '001_a.sql'; then
     pass "rc=1 names the rename SOURCE (--no-renames is load-bearing)"
   else
     fail "expected rc=1 naming 001_a.sql; got rc=$rc out=$out"
@@ -158,11 +158,11 @@ git -C "$FIX" add -A && git -C "$FIX" commit -qm 'feat adds colliding 009_late'
 # otherwise this degenerated to a plain-modify arm and the ls-tree-at-tip
 # vs ls-tree-at-merge-base distinction is no longer exercised.
 if [[ "$(git -C "$FIX" merge-base main feat)" != "$pre_div" ]] \
-  || ! git -C "$FIX" diff --name-status main...feat -- 'apps/web-platform/supabase/migrations/*.sql' | grep -q $'^A\t.*009_late'; then
+  || ! git -C "$FIX" diff --name-status main...feat -- 'apps/web-platform/supabase/migrations/*.sql' | grep -c >/dev/null $'^A\t.*009_late'; then
   fail "T4 topology broken: expected A-status add-collides off the pre-divergence base"
 else
   run_guard
-  if [[ "$rc" == "1" ]] && printf '%s' "$out" | grep -q '009_late.sql'; then
+  if [[ "$rc" == "1" ]] && printf '%s' "$out" | grep -c >/dev/null '009_late.sql'; then
     pass "rc=1 names the colliding path (ls-tree identity, not diff status)"
   else
     fail "expected rc=1 naming 009_late.sql; got rc=$rc out=$out"
@@ -179,7 +179,7 @@ reset_feat
 printf 'SELECT 1;\n' >> "$FIX/apps/web-platform/supabase/migrations/002_b.sql"
 git -C "$FIX" commit -qam 'touch 002 again'
 run_guard
-if printf '%s' "$out" | grep -qE 'touched=[1-9]' && printf '%s' "$out" | grep -qE 'on-main-checked=[1-9]'; then
+if printf '%s' "$out" | grep -cE >/dev/null 'touched=[1-9]' && printf '%s' "$out" | grep -cE >/dev/null 'on-main-checked=[1-9]'; then
   pass "summary exposes touched>=1 and on-main-checked>=1 (no silent zero-row enumeration)"
 else
   fail "expected counted summary with touched/on-main-checked >=1; got out=$out"
@@ -214,7 +214,7 @@ set +e
 out=$(cd "$FIX" && PATH="$STUB:$PATH" bash "$GUARD" --repo "$FIX" --base main --head feat 2>&1)
 rc=$?
 set -e
-if [[ "$rc" == "1" ]] && printf '%s' "$out" | grep -q '002_b.sql' && ! printf '%s' "$out" | grep -q 'migration-immutability: clean'; then
+if [[ "$rc" == "1" ]] && printf '%s' "$out" | grep -c >/dev/null '002_b.sql' && ! printf '%s' "$out" | grep -c >/dev/null 'migration-immutability: clean'; then
   pass "stubbed oracle goes RED — a broken oracle cannot produce a clean-looking pass"
 else
   fail "expected rc=1 (not a clean pass) under stubbed ls-tree; got rc=$rc out=$out"
@@ -230,9 +230,9 @@ CREATE TABLE public.new_beyond_max (id uuid PRIMARY KEY);
 SQL
 git -C "$FIX" add -A && git -C "$FIX" commit -qm 'add 140_new'
 run_guard
-if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -q 'migration-immutability: clean' \
-  && printf '%s' "$out" | grep -q 'on-main-checked=0' \
-  && printf '%s' "$out" | grep -q '::notice::lint-migration-immutability: 0 on-main migration files checked'; then
+if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -c >/dev/null 'migration-immutability: clean' \
+  && printf '%s' "$out" | grep -c >/dev/null 'on-main-checked=0' \
+  && printf '%s' "$out" | grep -c >/dev/null '::notice::lint-migration-immutability: 0 on-main migration files checked'; then
   pass "rc=0 — free iteration; the legitimate checked=0 shape carries the audible notice"
 else
   fail "expected rc=0 clean + checked=0 notice; got rc=$rc out=$out"
@@ -246,7 +246,7 @@ reset_feat
 printf 'DROP TABLE public.fixture_b;\n' >> "$FIX/apps/web-platform/supabase/migrations/003_b.down.sql"
 git -C "$FIX" commit -qam 'edit down file'
 run_guard
-if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -q 'down-exempt=1'; then
+if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -c >/dev/null 'down-exempt=1'; then
   pass "rc=0 — down file enumerated AND exempted (not silently unseen)"
 else
   fail "expected rc=0 + down-exempt=1 for down.sql edit; got rc=$rc out=$out"
@@ -260,7 +260,7 @@ set +e
 out=$(bash "$GUARD" --repo "$FIX" --base bogus-ref-does-not-exist --head feat 2>&1)
 rc=$?
 set -e
-if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -q 'cannot resolve base ref'; then
+if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -c >/dev/null 'cannot resolve base ref'; then
   pass "rc=2 on unresolvable base ref (error names the failure)"
 else
   fail "expected rc=2 + 'cannot resolve base ref'; got rc=$rc out=$out"
@@ -306,7 +306,7 @@ reset_feat
 printf 'noise\n' > "$FIX/README.md"
 git -C "$FIX" add -A && git -C "$FIX" commit -qm 'non-migration change'
 run_guard
-if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -q 'touched=0' && ! printf '%s' "$out" | grep -q '::notice::'; then
+if [[ "$rc" == "0" ]] && printf '%s' "$out" | grep -c >/dev/null 'touched=0' && ! printf '%s' "$out" | grep -c >/dev/null '::notice::'; then
   pass "rc=0, touched=0, no notice — the dominant no-op shape"
 else
   fail "expected rc=0 + touched=0 + no notice; got rc=$rc out=$out"
@@ -353,7 +353,7 @@ set +e
 out=$(cd "$FIX" && PATH="$STUB2:$PATH" bash "$GUARD" --repo "$FIX" --base main --head feat 2>&1)
 rc=$?
 set -e
-if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -q 'ls-tree failed'; then
+if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -c >/dev/null 'ls-tree failed'; then
   pass "rc=2 + 'ls-tree failed' — oracle error fails closed"
 else
   fail "expected rc=2 + ls-tree failure message; got rc=$rc out=$out"
@@ -378,7 +378,7 @@ set +e
 out=$(cd "$FIX" && BASE_REF='' bash "$GUARD" --from-pr-diff --repo "$FIX" 2>&1)
 rc=$?
 set -e
-if [[ "$rc" == "1" ]] && printf '%s' "$out" | grep -q '002_b.sql'; then
+if [[ "$rc" == "1" ]] && printf '%s' "$out" | grep -c >/dev/null '002_b.sql'; then
   pass "--from-pr-diff resolves origin/main, fetches, and names the mutation"
 else
   fail "expected rc=1 naming 002_b.sql via --from-pr-diff; got rc=$rc out=$out"
@@ -395,7 +395,7 @@ set +e
 out=$(bash "$GUARD" --repo "$NOROOT" --base main --head feat 2>&1)
 rc=$?
 set -e
-if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -q 'does not'; then
+if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -c >/dev/null 'does not'; then
   pass "rc=2 — wrong repo root refuses before any diff"
 else
   fail "expected rc=2 on non-root --repo; got rc=$rc out=$out"
@@ -409,7 +409,7 @@ set +e
 out=$(timeout 10 bash "$GUARD" --repo "$FIX" --base 2>&1)
 rc=$?
 set -e
-if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -q 'requires a value'; then
+if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -c >/dev/null 'requires a value'; then
   pass "rc=2 + diagnostic — a dangling flag errors instead of spinning"
 else
   fail "expected rc=2 within 10s; got rc=$rc out=$out"
@@ -423,7 +423,7 @@ reset_feat
 chmod +x "$FIX/apps/web-platform/supabase/migrations/002_b.sql"
 git -C "$FIX" add -A && git -C "$FIX" commit -qm 'chmod 002'
 run_guard
-if [[ "$rc" == "1" ]] && printf '%s' "$out" | grep -q '002_b.sql'; then
+if [[ "$rc" == "1" ]] && printf '%s' "$out" | grep -c >/dev/null '002_b.sql'; then
   pass "rc=1 — mode is part of the identity tuple"
 else
   fail "expected rc=1 for mode-only change; got rc=$rc out=$out"
@@ -440,7 +440,7 @@ printf 'SELECT 1;\n' > "$FIX/target.sql"
 ln -s ../../../../target.sql "$FIX/apps/web-platform/supabase/migrations/150_link.sql"
 git -C "$FIX" add -A && git -C "$FIX" commit -qm 'add symlinked migration'
 run_guard
-if [[ "$rc" == "1" ]] && printf '%s' "$out" | grep -q '150_link.sql'; then
+if [[ "$rc" == "1" ]] && printf '%s' "$out" | grep -c >/dev/null '150_link.sql'; then
   pass "rc=1 — symlink/gitlink admission refused"
 else
   fail "expected rc=1 naming 150_link.sql; got rc=$rc out=$out"
@@ -454,7 +454,7 @@ set +e
 out=$(bash "$GUARD" --repo "$FIX" --from-pr-diff --base main 2>&1)
 rc=$?
 set -e
-if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -q 'cannot be combined'; then
+if [[ "$rc" == "2" ]] && printf '%s' "$out" | grep -c >/dev/null 'cannot be combined'; then
   pass "rc=2 — mode conflict rejected, not silently overridden"
 else
   fail "expected rc=2 on --from-pr-diff + --base; got rc=$rc out=$out"

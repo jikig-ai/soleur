@@ -131,6 +131,15 @@ write_files:
       DefaultDependencies=no
       After=cryptsetup-pre.target systemd-udev-settle.service
       Before=inngest-redis.service local-fs.target
+      # SKIP-VS-FAIL (#9939). Both EnvironmentFile= paths are runcmd writes late in first boot:
+      # /etc/default/inngest-doppler before the LUKS stage and /etc/default/inngest-luks inside
+      # it. A stage abort — or any pull-in before those writes — must SKIP this unit (one
+      # "skipped, unmet condition check" notice) rather than FAIL it into the journal channel:
+      # the runcmd `enable --now` arm runs even when the stage aborted, and the observed storm
+      # was exactly that shape. The EnvironmentFile= lines stay unprefixed: once a start IS
+      # attempted, an absent file still fails the unit — the fail-closed contract is the point.
+      ConditionPathExists=/etc/default/inngest-doppler
+      ConditionPathExists=/etc/default/inngest-luks
       [Service]
       Type=oneshot
       RemainAfterExit=yes
@@ -1028,7 +1037,7 @@ write_files:
       # guard reads the tag from it. Deleting it would break the bump bot and disarm the guard;
       # pulling it would be the retired GHCR leg. On a zot hit IREF is re-pointed at the zot ref,
       # and every consumer below follows IREF.
-      IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.48@sha256:5db902c68b7088ee3f38f3d7d8396524ae2ad38e067a1581f357307ea500588f
+      IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.49@sha256:0071cc5d881920c4acd8fffd2fd774d971dcc471011e43ba337d1fd2fad2afe4
       # --- #7462 (ADR-096): resolve the effective ref ONCE, from zot ----------------------------
       # THE DEFECT THIS CLOSED. Every other pull site in the fleet was flipped to prefer the
       # self-hosted zot registry in the ADR-096 Phase-3 dark launch; this one was missed. ADR-096
@@ -1078,7 +1087,7 @@ write_files:
       # mirror_only=true` is picked up by the NEXT attempt on the same host, without a replace.
       set +e
       if [ -n "$ZOT_EP" ]; then
-        ZIREF="$ZOT_EP/jikig-ai/soleur-inngest-bootstrap:v1.1.48@sha256:5db902c68b7088ee3f38f3d7d8396524ae2ad38e067a1581f357307ea500588f"
+        ZIREF="$ZOT_EP/jikig-ai/soleur-inngest-bootstrap:v1.1.49@sha256:0071cc5d881920c4acd8fffd2fd774d971dcc471011e43ba337d1fd2fad2afe4"
         last_stage=pre-zot-pull
         /usr/local/bin/inngest-boot-phone-home.sh pre-zot-pull "$ZIREF"
         install -m 600 /dev/null /var/log/inngest-zot-pull.log

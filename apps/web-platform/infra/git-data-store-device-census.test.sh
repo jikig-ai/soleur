@@ -163,8 +163,12 @@ if [ -n "$_nonscript" ]; then pass "A3: non-script payloads exempted by extensio
 else fail "A3: no non-script payload was found — the extension exemption is reading nothing"; fi
 _nonacting="$(printf '%s\n' "$PAYLOADS" | grep '\.sh$' | grep -vxF -e git-data-bootstrap.sh -e git-data-pre-receive.sh | while read -r b; do
   [ -f "${DIR}/${b}" ] && ! grep -q 'GIT_DATA_REPO_ROOT' <<< "$(_code "${DIR}/${b}")" && printf '%s\n' "$b"; done | tr '\n' ' ')"
-if [ "${_nonacting% }" = "git-data-luks-reopen.sh" ]; then pass "A4: the only script payload excluded as not store-acting is git-data-luks-reopen.sh (it mounts the store)"
-else fail "A4: the not-store-acting exclusion covers '${_nonacting% }', expected exactly git-data-luks-reopen.sh"; fi
+# (#9438) git-data-liveness.sh joins the reopen script here: it only OBSERVES the store (a mountpoint,
+# a mount-source and a df read) and never reads, writes or erases a bare repo, so it neither reads the
+# GIT_DATA_REPO_ROOT seam nor needs the C1 marker assertion. Pinned as the exact pair so a THIRD
+# non-acting script still has to be named here on purpose.
+if [ "${_nonacting% }" = "git-data-liveness.sh git-data-luks-reopen.sh" ]; then pass "A4: the only script payloads excluded as not store-acting are git-data-liveness.sh (observes mount state only) and git-data-luks-reopen.sh (it mounts the store)"
+else fail "A4: the not-store-acting exclusion covers '${_nonacting% }', expected exactly git-data-liveness.sh git-data-luks-reopen.sh"; fi
 
 EXPECTED_SET="$(printf '%s\n' git-data-gc.sh git-data-provision.sh git-data-remove.sh git-data-transport-wrapper.sh | sort)"
 STORE_SET="$(derive_store_set "$MAIN_TF" "$DIR")"

@@ -179,9 +179,88 @@ on any matching row from any deploy host), with the release-failure email, the w
 whose `logger` call failed (that line then reaches Better Stack only as an unmatched `SYSLOG_IDENTIFIER=webhook`
 row) or a stopped `ci-deploy` shipper, so silence from it is not proof of no rollback: cross-check the release
 run's `::error::` annotation (`reason=canary_sandbox_failed`) and the `SANDBOX_PROBE_OK` query. Remediation for a recurrence is GitHub's "Re-run failed
-jobs" on the release run, never `apply-deploy-pipeline-fix.yml` (it redeploys the already-running
+jobs" on the release run, never `apply-deploy-pipeline-fix.yml` for the canary failure itself (it redeploys the already-running
 tag and cannot ship past the gate; see the comment in `reusable-release.yml`) and never a host
-command.
+command. (Delivering a CHANGED host `ci-deploy.sh` is the one thing that workflow is for: see "Reading absence" in the DIAG bundle section.)
+
+## Canary sandbox DIAG bundle — why a sandbox canary failed (#9871, #9860)
+
+`DEPLOY_ROLLBACK: bwrap sandbox non-functional ...` says THAT the blocking probe failed and keeps 200
+characters of stderr. When the probe fails, or the faithful canary (`op=sandbox-canary`) reports
+`sandbox_broken`, `ci-deploy.sh` also runs ONE bounded, read-only bundle inside the still-running canary
+and emits it under the same `ci-deploy` journald tag, so it reaches Better Stack with no SSH. The two
+triggers are mutually exclusive in one run (a legacy failure exits before the faithful canary runs), so a
+deploy carries at most one bundle:
+
+```text
+SOLEUR_CANARY_SANDBOX_DIAG: image=<image>:<tag> trigger=<legacy|faithful> section=<name> val="<text|<empty>>"
+```
+
+`val` is last and quote-bounded; cut each line at the FIRST `section=` and read the rest as free text. It is
+credential-scrubbed (`_cred_err_tail`, which keeps the LAST 200 characters, so every row is short on
+purpose) and cannot change the deploy's exit code, state reason or teardown. Query:
+
+```bash
+doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 2h --grep SOLEUR_CANARY_SANDBOX_DIAG \
+  | jq -r '.raw | fromjson? | select(.SYSLOG_IDENTIFIER=="ci-deploy") | .message'
+```
+
+A complete bundle is fourteen rows: ten in-container sections, then `host`, `hostsec`, `kernel` and `done`.
+
+| section | what it shows | reads as |
+|---|---|---|
+| `id` | uid/gid of the exec user | expect `uid=1001 gid=1001` |
+| `proc` | `CapInh/Prm/Eff/Bnd/Amb`, `NoNewPrivs`, `Seccomp` of the container shell | non-zero `CapPrm`/`CapEff` for a non-root uid means caps reached the exec user, which bubblewrap 0.8.0 refuses; `Seccomp=2` means a filter is installed (always true here: it does not separate AppArmor from seccomp) |
+| `lsm` | AppArmor profile and mode | `unconfined` or a missing profile points at the host profile, not the image |
+| `files` | mode/owner/size of `/usr/bin/bwrap` and the shim, `command -v bwrap`, `readlink -f` | a setuid bit or wrong owner is an image defect |
+| `caps` | `getcap` for `/usr/bin/bwrap` and the shim | `bwrap=none` is clean. Only a `cap_` token means file caps; getcap error text (`No such file or directory`) is not a cap. Since #9874 the Dockerfile build aborts on any file cap, so a `cap_` token now means a stale image (check `prov`) or a bypassed build guard. `getcap=absent` means the tool is missing from the image |
+| `prov` | `BUILD_SHA` / `BUILD_VERSION` baked into the image | differs from the tag's commit = a stale image behind a newer tag (#9886) |
+| `direct_version` | `/usr/bin/bwrap --version` with the shim bypassed | `rc=126` = execve refused (file caps vs. bounding set, LSM, seccomp); a version line = exec is fine |
+| `direct_probe` | the blocking (legacy) probe argv run against `/usr/bin/bwrap` directly | passes while the shimmed probe fails = the shim; fails the same = kernel/LSM posture. Under `trigger=faithful` it always passes (the legacy probe already did): read `sdk_probe` instead |
+| `sdk_probe` | the SDK's split-unshare argv (`--unshare-user --unshare-pid --proc /proc`) against `/usr/bin/bwrap` directly | corroborating evidence only. Its healthy-canary baseline is UNMEASURED (a healthy deploy emits no bundle, and the #4932 note in `ci-deploy.sh` records that adding these flags to the BLOCKING probe rolled back deploys), so a `Can't mount proc on /newroot/proc: Operation not permitted` line here may be an artifact of running the SDK argv under `docker exec`. Read it as H3 only together with `direct_version rc=0`, a `kernel_ns` userns restriction (`restrict=1` or `max=0`) and the faithful canary's own `reason`. The first bundle that carries a pass on a healthy canary should be recorded here as the baseline |
+| `kernel_ns` | userns sysctls as the container sees them | `restrict=1` or `max=0` = host userns policy |
+| `host` | the canary's `HostConfig`: `capadd`, `capdrop`, `priv`, `aa` (AppArmor profile) | a `SYS_ADMIN` cap-add or `priv=true` is a host-script defect |
+| `hostsec` | the `SecurityOpt` entries, each cut to 40 characters | expect `apparmor=soleur-bwrap` and a `seccomp={...` entry. docker inlines the whole seccomp profile here, so it is cut; a missing `seccomp=` entry means the profile was not applied |
+| `kernel` | host kernel and docker server version | version drift context |
+| `done` | `exec_rc=<n> lines=<n> capped=<0\|1> bytes=<n>` | emitted even when the exec failed. `exec_rc=0 lines=10 capped=0` = the bundle completed (`lines` > 10 with `exec_rc=0` = a multi-line value spilled into `raw` rows; still complete). `124` = the exec timed out and the LAST sections (the probes) are missing; `137` = it ignored the TERM and the 3 s kill-after fired; `127` = `docker` or `timeout` missing; `141` (or `1`) with `bytes` near 8192 = OUR 8 KiB read cap, not an exec failure (`capped=1` alone is the separate 16-row cap and says nothing about `exec_rc`); any other non-zero = `docker exec` itself failed |
+
+### Which hypothesis holds (H1-H5, from the plan)
+
+| H | Hypothesis | Rows that decide it |
+|---|---|---|
+| H1 | The image still has `cap_sys_admin+ep` on `/usr/bin/bwrap` (stale or mis-built), and the bounding set lacks SYS_ADMIN, so execve is EPERM | `caps` has a `cap_` token; `prov` BUILD_SHA is the pre-fix commit (48d5144cf4), not the tag's; `direct_version rc=126` |
+| H2 | Exec is denied by LSM (AppArmor) or seccomp, independent of file caps | `caps` = `bwrap=none` AND `direct_version rc=126`, with `proc` `Seccomp=2` and `lsm` naming the profile |
+| H3 | Exec works; namespace/mount creation is denied (the `Can't mount proc` shape, #9860) | `direct_version rc=0` AND `sdk_probe` (or `direct_probe` under `trigger=legacy`) failing with a namespace/mount error, AND `kernel_ns` shows a restrictive userns policy or the faithful canary's `reason` names the mount (`sdk_probe` alone cannot decide it: see its row) |
+| H4 | The shim, not bwrap, is the culprit | `direct_probe rc=0` while the shimmed probe failed (`trigger=legacy` only) |
+| H5 | Container posture drift | `host` (`capadd`/`capdrop`/`priv`/`aa`) and `hostsec` differ from the `docker run` in `ci-deploy.sh` |
+
+H1 is excluded only when `caps` is `bwrap=none`; `done` must read `exec_rc=0` first, or the rows that decide H2-H4 may be missing.
+
+**Reading absence.** The anchor for "a bundle should exist" is `trigger=legacy`: a `DEPLOY_ROLLBACK: bwrap sandbox
+non-functional` row; `trigger=faithful` has no rollback row, its anchor is the `sandbox-canary` Sentry event or the
+`Faithful sandbox canary (non-blocking): verdict=sandbox_broken` line. Then query the three row kinds together
+(`--grep` is repeatable and OR-combined):
+
+```bash
+doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 2h --limit 200 \
+  --grep DEPLOY_ROLLBACK --grep SOLEUR_CANARY_SANDBOX_DIAG --grep DEPLOY_SCRIPT_SHA \
+  | jq -r '.raw | fromjson? | select(.SYSLOG_IDENTIFIER=="ci-deploy") | [.host_name, .message[0:150]] | @tsv'
+```
+
+| Rows seen | Meaning |
+|---|---|
+| a `done` row with `exec_rc` != 0 and `lines=0` | the bundle ran and the exec failed (read `exec_rc` above) |
+| a `done` row with `exec_rc=0` and `lines=0` | the exec ran and printed nothing: not an exec failure, a broken container shell or image (check `prov` on an earlier deploy's bundle, then the image) |
+| no `done` and no DIAG rows, and the newest `DEPLOY_SCRIPT_SHA` for that host differs from the repo's | the host still runs the previous `ci-deploy.sh` (it is delivered by `apply-deploy-pipeline-fix`, whose run can be evicted by a pending `apply-web-platform-infra` run in the shared concurrency group, #8167): the bundle never ran |
+| no `done` and no DIAG rows, and the SHA equals the repo's | the shipping path or the `--since` window, not the bundle (`done` is emitted even when the exec fails): check Vector lag and the archive window |
+
+Parity check: `bash scripts/check-deploy-script-parity.sh --bs-only` needs no web-1 credentials (it self-wraps in
+Doppler). The default runs both arms; the status arm (`--status-only` is web-1 only and is an alternative to
+`--bs-only`, not an addition) needs `WEBHOOK_DEPLOY_SECRET`, `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` exported
+from Doppler `soleur` / `prd_terraform`, the recipe in the `Verify deploy-script parity` step of
+`.github/workflows/apply-deploy-pipeline-fix.yml`. On drift the remedy is `gh workflow run apply-deploy-pipeline-fix.yml`,
+a production-delivery dispatch that needs explicit per-command authorization from the operator (it is an agent action,
+not a manual step).
 
 ## Faithful sandbox canary — #8752 hardening verdicts
 

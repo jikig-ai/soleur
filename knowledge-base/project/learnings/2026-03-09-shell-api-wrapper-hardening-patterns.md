@@ -115,3 +115,10 @@ The float arithmetic trap (layer 5) is the most insidious because it only trigge
 category: security
 module: community
 symptoms: token-leakage, arithmetic-crash, malformed-response, input-validation
+
+> **Superseded 2026-10-10 (#9597 S4):** "Fix 2: curl stderr suppression" (and the Transport row of the table above) no longer applies to a call made through
+> `scripts/lib/bearer-curl.sh` (`bc_curl`) or its inline wrappers: the argument guard refuses `--verbose` and `--trace*`, so curl has no mode that prints
+> the `Authorization` header, and the refusal marker is printed to stderr inside the command substitution, so `2>/dev/null` would swallow it. Keep checking
+> curl's exit code. See the "Curl's stderr is intentionally NOT silenced" section of the 2026-10-10 addendum to
+> `knowledge-base/engineering/architecture/decisions/ADR-280-credentials-reach-curl-on-stdin-config-through-one-shared-library.md`. The `jq ... 2>/dev/null || echo`
+> fallback of Fix 1 is unaffected.

@@ -1034,9 +1034,11 @@ jobs:
             apps/web-platform/infra/git-data-gc.timer \
             apps/web-platform/infra/git-data-luks-reopen.service \
             apps/web-platform/infra/git-data-luks-reopen-failure.service \
-            apps/web-platform/infra/git-data-luks-reopen.timer 2>&1 || true)
+            apps/web-platform/infra/git-data-luks-reopen.timer \
+            apps/web-platform/infra/git-data-liveness.service \
+            apps/web-platform/infra/git-data-liveness.timer 2>&1 || true)
           echo "$out"
-          if printf '%s' "$out" | grep -E 'git-data-(gc|luks-reopen)[^:]*\.(service|timer):' ; then
+          if printf '%s' "$out" | grep -E 'git-data-(gc|luks-reopen|liveness)[^:]*\.(service|timer):' ; then
             echo "::error::systemd-analyze verify reported problems in the git-data unit set"
             exit 1
           fi

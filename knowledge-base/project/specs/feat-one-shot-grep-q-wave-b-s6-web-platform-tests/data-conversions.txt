@@ -1,0 +1,43 @@
+# S6: the 38 base-side lines the codemod routes to its data queue that are converted by the same one-token transform (data_convert.py), read in context in the plan.
+# Base-side (planning base: origin/main df1891cbbb, merged into the branch once at planning; #9884 moved the ci-deploy lines by +95, +381 at the end) path:line:kind (spans converted on the line).
+# verify counts these as verified (plain transform); it cannot tell code from data, so this list plus the plan's table is the classification evidence.
+# eval-string: an argument run by the suite's own eval helper (assert / check / all in expect), in a shell with pipefail on: executed code, not inert text.
+# stub-heredoc: a line of a stub the suite writes from a quoted heredoc and runs as a child (a bash stub; the line is inert today if the stub sets no pipefail).
+apps/web-platform/infra/ci-deploy.test.sh:540:stub-heredoc (mock docker, #!/bin/bash)
+apps/web-platform/infra/ci-deploy.test.sh:547:stub-heredoc
+apps/web-platform/infra/ci-deploy.test.sh:9795:stub-heredoc
+apps/web-platform/infra/ci-deploy.test.sh:9809:stub-heredoc
+apps/web-platform/infra/ci-deploy.test.sh:9816:stub-heredoc
+apps/web-platform/infra/cron-egress-nftables.test.sh:196:eval-string (expect ... all)
+apps/web-platform/infra/cron-egress-nftables.test.sh:289:eval-string (two spans)
+apps/web-platform/infra/cron-egress-nftables.test.sh:291:eval-string (negated)
+apps/web-platform/infra/cron-egress-nftables.test.sh:295:eval-string
+apps/web-platform/infra/cron-egress-nftables.test.sh:307:eval-string (two spans)
+apps/web-platform/infra/cron-egress-nftables.test.sh:309:eval-string
+apps/web-platform/infra/cron-egress-nftables.test.sh:311:eval-string (negated)
+apps/web-platform/infra/cron-egress-nftables.test.sh:313:eval-string
+apps/web-platform/infra/cron-egress-nftables.test.sh:315:eval-string
+apps/web-platform/infra/cron-egress-nftables.test.sh:317:eval-string
+apps/web-platform/infra/cron-egress-nftables.test.sh:319:eval-string (two spans)
+apps/web-platform/infra/cutover-inngest-workflow.test.sh:4365:eval-string (negated; assert)
+apps/web-platform/infra/cutover-inngest-workflow.test.sh:4373:eval-string (six spans; assert; one negated)
+apps/web-platform/infra/infra-config-handler-bootstrap.test.sh:262:eval-string (assert)
+apps/web-platform/infra/infra-config-handler-bootstrap.test.sh:264:eval-string
+apps/web-platform/infra/infra-config-handler-bootstrap.test.sh:266:eval-string (negated)
+apps/web-platform/infra/inngest-dedicated-host-classify.test.sh:636:eval-string (assert; the second grep -qF on the line names a file operand and is not a site)
+apps/web-platform/infra/inngest.test.sh:1813:eval-string (two spans; assert; the second is the negation by && exit 1)
+apps/web-platform/infra/inngest.test.sh:1849:eval-string
+apps/web-platform/infra/registry-insecure-config.test.sh:102:eval-string (assert; the first grep is already -cF >/dev/null)
+apps/web-platform/infra/workspaces-luks-provision.test.sh:329:stub-heredoc (curl stub, #!/bin/bash via mkstub)
+apps/web-platform/infra/workspaces-luks-provision.test.sh:849:eval-string (expect ... all)
+apps/web-platform/infra/workspaces-luks-provision.test.sh:851:eval-string
+apps/web-platform/infra/workspaces-luks-provision.test.sh:885:eval-string
+apps/web-platform/infra/workspaces-luks-provision.test.sh:899:eval-string
+apps/web-platform/infra/workspaces-luks-provision.test.sh:903:eval-string
+apps/web-platform/infra/workspaces-luks-provision.test.sh:906:eval-string
+apps/web-platform/infra/workspaces-luks-provision.test.sh:942:eval-string
+apps/web-platform/infra/zot-image-fetch.test.sh:63:eval-string (check)
+apps/web-platform/infra/zot-image-fetch.test.sh:293:eval-string (negated)
+apps/web-platform/infra/zot-image-fetch.test.sh:368:eval-string (negated; guard is a function that pipes to bash)
+apps/web-platform/infra/zot-image-fetch.test.sh:370:eval-string (negated)
+apps/web-platform/infra/zot-image-fetch.test.sh:372:eval-string

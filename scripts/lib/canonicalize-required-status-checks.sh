@@ -5,6 +5,7 @@
 #   - scripts/audit-ruleset-bypass.sh (when extended for required_status_checks audit)
 #   - scripts/update-ci-required-ruleset.sh (post-PUT verification fast-path)
 #   - scripts/create-ci-required-ruleset.sh (canonical source for first apply)
+#   - scripts/verify-ruleset-required-checks.sh (the pre-apply by-value gate, #9362; both canonicals)
 #
 # Why a projection BEFORE sort_by:
 #   - `map({context, integration_id})` materializes only the two contractual

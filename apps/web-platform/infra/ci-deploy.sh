@@ -1622,6 +1622,85 @@ _cred_err_tail() {
   printf '%s' "$_e"
 }
 
+# CANARY_DIAG_BEGIN
+# Canary sandbox self-diagnosis (#9871 / #9860). Two production deploy failures (a file-capped bwrap
+# refusing with "Unexpected capabilities", then execve EPERM once the bounding grant was removed) were
+# diagnosed from a 200-character stderr tail and cost hours, because nothing recorded the container's
+# capability sets, the binary's file caps, its provenance or the posture it ran under. When the blocking
+# probe fails -- or the faithful canary reports sandbox_broken -- this runs ONE bounded read-only bundle
+# inside the still-running canary and emits it as SOLEUR_CANARY_SANDBOX_DIAG journald lines, which ship
+# to Better Stack with the rest of the ci-deploy tag.
+#
+# Contract: it can never change the deploy's verdict. Callers invoke it only as `... || true`; it touches
+# no global, never BWRAP_RC/BWRAP_ERR/CANARY_HEALTHY or the state file; the exec is bounded by
+# CANARY_DIAG_TIMEOUT (+3 s kill-after) and its output by `head -c`, every host-side docker call by
+# `timeout 3`; and every value passes through _cred_err_tail (shape + env-value redaction, 200-char
+# tail) before it reaches a sink. It prints derived facts only -- no environment dump: the only
+# printenv calls name BUILD_SHA / BUILD_VERSION. Run as the image USER, the same uid and caps the
+# failing probe had. The two call sites are mutually exclusive in one run (a legacy failure exits
+# before the faithful canary runs), so there is no once-per-deploy latch. Rows are short on purpose:
+# _cred_err_tail keeps the LAST 200 characters, so a long value loses its identifying head. The
+# host-side posture is therefore split (`host` = caps + AppArmor, `hostsec` = SecurityOpt entries
+# cut to 40 chars -- docker inlines the whole ~12 KB seccomp profile there) and the bundle ends with
+# a `done` row carrying the exec's own exit status, so "ran and found nothing" is distinguishable
+# from "timed out" (124) or "never ran". Section meanings: runbook canary-probe-set.md, "Canary
+# sandbox DIAG bundle".
+CANARY_DIAG_TIMEOUT="${CANARY_DIAG_TIMEOUT:-25}"
+[[ "$CANARY_DIAG_TIMEOUT" =~ ^[1-9][0-9]?$ ]] && (( CANARY_DIAG_TIMEOUT <= 60 )) || CANARY_DIAG_TIMEOUT=25
+CANARY_DIAG_SCRIPT='p() { printf "%s %s\n" "$1" "$2"; }
+k() { cat "$1" 2>/dev/null || echo n/a; }
+p id "uid=$(id -u) gid=$(id -g)"
+p proc "$(sed -n "s/^\(Cap[A-Za-z]*\|NoNewPrivs\|Seccomp\):[[:space:]]*/\1=/p" /proc/$$/status | tr "\n" " ")"
+p lsm "$(cat /proc/self/attr/current 2>&1 | cut -c1-100)"
+p files "bwrap=$(stat -c "%a/%U/%s" /usr/bin/bwrap 2>&1) shim=$(stat -c "%a/%U/%s" /usr/local/bin/bwrap 2>&1) which=$(command -v bwrap) real=$(readlink -f /usr/bin/bwrap)"
+if command -v getcap >/dev/null 2>&1; then
+  c=$(timeout 5 getcap /usr/bin/bwrap /usr/local/bin/bwrap 2>&1 | tr "\n" " ")
+  p caps "bwrap=${c:-none}"
+else
+  p caps "getcap=absent"
+fi
+p prov "sha=$(printenv BUILD_SHA) ver=$(printenv BUILD_VERSION)"
+v=$(timeout 5 /usr/bin/bwrap --version 2>&1); r=$?
+p direct_version "rc=$r $(printf %s "$v" | head -n 1 | cut -c1-100)"
+v=$(timeout 5 /usr/bin/bwrap --new-session --dev /dev --unshare-pid --bind / / -- true 2>&1); r=$?
+p direct_probe "rc=$r $(printf %s "$v" | head -n 1 | cut -c1-120)"
+v=$(timeout 5 /usr/bin/bwrap --unshare-user --unshare-pid --proc /proc --dev /dev --bind / / -- true 2>&1); r=$?
+p sdk_probe "rc=$r $(printf %s "$v" | head -n 1 | cut -c1-120)"
+p kernel_ns "restrict=$(k /proc/sys/kernel/apparmor_restrict_unprivileged_userns) clone=$(k /proc/sys/kernel/unprivileged_userns_clone) max=$(k /proc/sys/user/max_user_namespaces)"'
+
+# _canary_diag_emit <trigger> <section> <raw>: the ONLY emitter. Scrubs first, then writes one line with
+# the free text LAST and quote-bounded (ADR-115 trusted region: consumers anchor on val="[^"]*"$). The
+# `||` printf keeps the record on the webhook leg if journald is unavailable.
+_canary_diag_emit() {
+  local val
+  val="$(_cred_err_tail "${3:-}")" || val="<sanitize_failed>"
+  logger -t "$LOG_TAG" "SOLEUR_CANARY_SANDBOX_DIAG: image=$IMAGE:$TAG trigger=$1 section=$2 val=\"${val:-<empty>}\"" \
+    || printf '%s\n' "SOLEUR_CANARY_SANDBOX_DIAG: image=$IMAGE:$TAG trigger=$1 section=$2 val=\"${val:-<empty>}\""
+  return 0
+}
+
+# emit_canary_sandbox_diag <legacy|faithful>: always returns 0. In-container section names are an
+# allowlist -- anything else the exec prints (a daemon error, a forged first word) is `raw`, so only
+# this function can mint host/hostsec/kernel/done.
+emit_canary_sandbox_diag() {
+  local trigger="${1:-legacy}" out line sec rest n=0 capped=0 exec_rc=0
+  out="$(timeout -k 3 "$CANARY_DIAG_TIMEOUT" docker exec soleur-web-platform-canary /bin/sh -c "$CANARY_DIAG_SCRIPT" soleur-canary-diag 2>&1 | head -c 8192; exit "${PIPESTATUS[0]}")" || exec_rc=$?
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    if (( n >= 16 )); then capped=1; break; fi
+    n=$(( n + 1 ))
+    sec="${line%% *}"; rest="${line#* }"
+    if ! [[ "$sec" =~ ^(id|proc|lsm|files|caps|prov|direct_version|direct_probe|sdk_probe|kernel_ns)$ && "$line" == *" "* ]]; then sec="raw"; rest="$line"; fi
+    _canary_diag_emit "$trigger" "$sec" "$rest"
+  done <<< "$out"
+  _canary_diag_emit "$trigger" host "$(timeout 3 docker inspect -f 'capadd={{.HostConfig.CapAdd}} capdrop={{.HostConfig.CapDrop}} priv={{.HostConfig.Privileged}} aa={{.AppArmorProfile}}' soleur-web-platform-canary 2>&1 | head -c 400)"
+  _canary_diag_emit "$trigger" hostsec "$(timeout 3 docker inspect -f '{{range .HostConfig.SecurityOpt}}{{printf "%.40s" .}} {{end}}' soleur-web-platform-canary 2>&1 | head -c 400)"
+  _canary_diag_emit "$trigger" kernel "kernel=$(uname -r 2>&1) docker=$(timeout 3 docker version --format '{{.Server.Version}}' 2>&1 | head -c 60)"
+  _canary_diag_emit "$trigger" "done" "exec_rc=$exec_rc lines=$n capped=$capped bytes=${#out}"
+  return 0
+}
+# CANARY_DIAG_END
+
 # _now_ms: milliseconds since the epoch, from bash's own EPOCHREALTIME.
 #
 # NOT `date +%s%3N`. The %3N precision suffix is a GNU coreutils extension, and this repo's
@@ -2710,7 +2789,14 @@ run_canary_replay() {
   # Page only on a sandbox_broken verdict — canary_infra_error is expected
   # during dark-launch (fixture not yet captured) and must not page.
   if [[ "$verdict" == "sandbox_broken" ]]; then
+    # #9860: this verdict has been recorded since 2026-10-09 with no cause beyond
+    # bwrap_operation_not_permitted. Only the inner faithful canary (sentry_op sandbox-canary) is
+    # diagnosed: the outer-wrap arm's sandbox_broken is the expected report-only state.
     sandbox_canary_sentry_event "$verdict" "$reason" "$sdk_version" "$sentry_op" || true
+    # After the page, so a slow bundle never delays it.
+    if [[ "$sentry_op" == "sandbox-canary" ]]; then
+      emit_canary_sandbox_diag faithful || true
+    fi
   fi
   return 0
 }
@@ -2790,16 +2876,28 @@ run_workspace_isolation_probe() {
   # Side effect: CANARY_NODE_OPTIONS (the heap cap) is scrubbed too — vitest
   # runs at default heap inside the container's --memory cap; a runaway run
   # OOMs loud (rc 137 → workspace_isolation_failed), never silently wrong.
+  # --no-color is load-bearing, not cosmetic: vitest 4.x emits ANSI escapes
+  # even under env -i + CI=true (`Tests  \e[1m\e[32m13 passed`), and the
+  # escapes interleave between the summary tokens the vacuous-green =~ below
+  # greps — a passing suite then reports `vacuous_green_no_tests_passed`
+  # (observed on the first deploy carrying a loadable config, #9860). The
+  # flag is pinned by CWI-1.
   if out="$(timeout "$WORKSPACE_ISOLATION_TIMEOUT" docker exec -w /app \
       soleur-web-platform-canary /usr/bin/env -i \
       PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp \
       CI=true SOLEUR_ISOLATION_TEST_HOST=1 SOLEUR_ISOLATION_TIERS=direct SOLEUR_ISOLATION_IN_IMAGE=1 \
       /usr/local/bin/vitest run \
-      --config test/vitest.canary.config.ts 2>"$err_file")"; then
+      --config test/vitest.canary.config.ts --no-color 2>"$err_file")"; then
     exec_rc=0
   else
     exec_rc=$?
   fi
+  # Strip any ANSI residue so the marker greps below read plain text — vitest
+  # wraps both the summary counters AND the FAIL/`AssertionError` detail in
+  # escapes. --no-color already prevents them, but if the flag is ever lost
+  # (CWI-1 pins the argv) a colored `Tests  \e[1m\e[32m13 passed` still
+  # matches and a colored FAIL line still reaches `reason`.
+  out="$(printf '%s' "$out" | sed -E 's/\x1b\[[0-9;]*m//g')"
   if [[ "$exec_rc" -eq 0 ]]; then
     # rc-0 alone is not proof the suite RAN: a future skip-knob regression (or a
     # tier-filter bug) can green a zero-test run — vitest exits 0 when every
@@ -4283,6 +4381,9 @@ case "$COMPONENT" in
         # webhook leg rather than losing it.
         BWRAP_LINE="DEPLOY_ROLLBACK: bwrap sandbox non-functional in $IMAGE:$TAG rc=$BWRAP_RC ms=$BWRAP_MS cstate=$BWRAP_CSTATE err_chars=${#BWRAP_ERR} bwrap_err=\"${BWRAP_ERR_SAN:-<empty>}\""
         logger -t "$LOG_TAG" "$BWRAP_LINE" || printf '%s\n' "$BWRAP_LINE"
+        # #9871: record WHY, while the failing container is still up. Bounded, read-only, `|| true`
+        # (see CANARY_DIAG_BEGIN); it cannot alter the rollback below.
+        emit_canary_sandbox_diag legacy || true
         { docker stop soleur-web-platform-canary 2>/dev/null || true; }
         { docker rm soleur-web-platform-canary 2>/dev/null || true; }
         # ENV_FILE trap still runs to clean up the secrets file.

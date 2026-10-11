@@ -261,6 +261,17 @@ COPY --from=builder /app/test/sandbox-isolation.test.ts ./test/sandbox-isolation
 COPY --from=builder /app/test/helpers/sandbox-isolation-fixtures.ts ./test/helpers/sandbox-isolation-fixtures.ts
 COPY --from=builder /app/test/vitest.canary.config.ts ./test/vitest.canary.config.ts
 
+# The vitest config bundler (`configLoader: bundle`, the default) writes its
+# intermediate .mjs to the nearest node_modules/.vite-temp before importing it
+# (fallback: the config's own dir — /app/test, root-owned, EACCES). The
+# deploy-time probe `docker exec`s vitest as USER soleur with /app and
+# /app/test root-owned, and /app/package.json is type:module so the ESM
+# temp-write path is taken — without a baked soleur-writable .vite-temp the
+# probe dies at "failed to load config" before collecting a single test
+# (v0.335.5 prod verdict, #9860). Must come after `npm ci --omit=dev`, which
+# recreates node_modules/ wholesale.
+RUN install -d -o 1001 -g 1001 -m 0755 /app/node_modules/.vite-temp
+
 # #5863 outer-wrap canary arm: the self-authored outer mount-table fixture
 # (pinned to buildOuterWrapArgv output by the Guard-2 test) plus the shared
 # isolation payload --replay-outer pipes into `bash -s` inside the wrap.
@@ -323,6 +334,11 @@ COPY --from=builder \
   /app/infra/cron-egress-resolve.timer \
   /app/infra/cron-egress-alarm@.service \
   /app/infra/cron-egress-postapply-assert.sh \
+  /app/infra/egress-gateway-squid.conf \
+  /app/infra/egress-auth-helper.sh \
+  /app/infra/egress-deny-cidrs.txt \
+  /app/infra/egress-gateway-bootstrap.sh \
+  /app/infra/egress-forwarder.mjs \
   /app/infra/cron-egress-enforce-probe.sh \
   /app/infra/hooks.json.tmpl \
   /app/infra/journald-soleur.conf \

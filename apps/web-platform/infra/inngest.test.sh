@@ -1810,7 +1810,7 @@ assert "#7695 never-zero invariant covered 6 logs x 7 fields" \
 assert "#7695 presence list minus never-zero list == the four fields whose 0 is a MEASUREMENT" \
   "[[ \$(( \$(printf '%s\n' \$PROBE_7695_FIELDS | wc -l) - \$(printf '%s\n' \$PROBE_7695_NEVER_ZERO | wc -l) )) -eq 4 ]]"
 assert "#7695 those four are exactly redis_keys, redis_expires, redis_key_patterns, registry_fns" \
-  "for f in redis_keys redis_expires redis_key_patterns registry_fns; do printf '%s\n' \$PROBE_7695_FIELDS | grep -qx \"\$f\" || exit 1; printf '%s\n' \$PROBE_7695_NEVER_ZERO | grep -qx \"\$f\" && exit 1; done; true"
+  "for f in redis_keys redis_expires redis_key_patterns registry_fns; do printf '%s\n' \$PROBE_7695_FIELDS | grep -cx >/dev/null \"\$f\" || exit 1; printf '%s\n' \$PROBE_7695_NEVER_ZERO | grep -cx >/dev/null \"\$f\" && exit 1; done; true"
 
 # redis_key_patterns must never render as the empty string: the emit is unconditional, so an
 # unbound variable would drop the field entirely and G14 downstream would read the row as
@@ -1846,7 +1846,7 @@ assert "#7695 both emit sites carry a BYTE-IDENTICAL payload (names AND bindings
 assert "#7695 the emitted payload carries EXACTLY the presence list's field count (a new field must be classified)" \
   "[[ \$(printf '%s' '$PROBE_PAYLOAD_LOGGER' | grep -oE '[a-z_]+=\\\$' | wc -l) -eq \$(printf '%s\\n' \$PROBE_7695_FIELDS | wc -l) ]] || [[ \$(printf '%s' '$PROBE_PAYLOAD_LOGGER' | grep -oE '[a-z_]+=\\\$[a-z_]+' | wc -l) -ge \$(printf '%s\\n' \$PROBE_7695_FIELDS | wc -l) ]]"
 assert "#7695 every field in the presence list appears in the shared payload" \
-  "for f in \$PROBE_7695_FIELDS; do printf '%s' '$PROBE_PAYLOAD_LOGGER' | grep -q \"\$f=\\\$\$f\" || exit 1; done"
+  "for f in \$PROBE_7695_FIELDS; do printf '%s' '$PROBE_PAYLOAD_LOGGER' | grep -c >/dev/null \"\$f=\\\$\$f\" || exit 1; done"
 # Every field present and non-empty. An empty field silently reads as "no data" in Better
 # Stack, which is the same ambiguity a missing row creates.
 # #7228 adds instance_id, cli_version and cutover_flag. The three answer questions the existing
@@ -2564,6 +2564,53 @@ assert "ack list members are exactly the two dedicated-host units" \
   "[[ \"\${DROPIN_ACK_UNITS[*]}\" == 'inngest-cutover-flip.service inngest-luks-cutover.service' ]]"
 
 echo ""
+echo "--- #9939: ConditionPathExists skip-vs-fail on the LUKS cutover trio ---"
+#
+# Every EnvironmentFile= a unit declares is written by a runcmd stage late in first boot, so a
+# start attempted before the writer completes (an aborted LUKS stage, the bootstrap-armed timer
+# against never-written files) must SKIP — one "skipped, unmet condition check" notice — never
+# FAIL into the LUKS journal channel. The service carries the condition for its non-timer
+# start jobs (its [Install] WantedBy=multi-user.target arm if ever enabled, manual starts,
+# future Wants=/Requires= consumers); the timer carries the same pair because a
+# condition on it is evaluated at ACTIVATION, so an abort-host never arms the ~30s tick storm.
+# The EnvironmentFile= lines themselves stay unprefixed — the fail-closed contract is retained.
+LUKS_CUTOVER_SVC="$SCRIPT_DIR/inngest-luks-cutover.service"
+LUKS_CUTOVER_TMR="$SCRIPT_DIR/inngest-luks-cutover.timer"
+# Placement is part of the property: a ConditionPathExists= under [Service]/[Install] is an
+# inert unknown lvalue — the unit starts unconditionally and the storm returns while a
+# whole-file presence grep stays green — so every condition assert counts lines inside the
+# [Unit] section only, and the counter names the literal paths with exact equality.
+# <file> <section> — print the section's lines; <file> <section> <directive> — sorted value set.
+# Both EnvironmentFile= and ConditionPathExists= are section-scoped directives ([Service] and
+# [Unit] respectively); each assert scopes to its directive's own section so a misplaced line
+# reads as absent.
+_luks_sec()      { awk -v sec="$2" '$0=="["sec"]"{u=1;next} /^\[/{u=0} u' "$1"; }
+_luks_sec_vals() { _luks_sec "$1" "$2" | sed -n "s/^[[:space:]]*$3=//p" | tr ' \t' '\n' | sed '/^$/d' | sort -u; }
+assert "inngest-luks-cutover.service skips in [Unit] when /etc/default/inngest-server is absent" \
+  "[[ \$(_luks_sec '$LUKS_CUTOVER_SVC' Unit | grep -cxF 'ConditionPathExists=/etc/default/inngest-server') -eq 1 ]]"
+assert "inngest-luks-cutover.service skips in [Unit] when /etc/default/inngest-luks-volumes is absent" \
+  "[[ \$(_luks_sec '$LUKS_CUTOVER_SVC' Unit | grep -cxF 'ConditionPathExists=/etc/default/inngest-luks-volumes') -eq 1 ]]"
+assert "inngest-luks-cutover.service keeps BOTH EnvironmentFile= lines unprefixed in [Service] (fail-closed)" \
+  "_luks_sec '$LUKS_CUTOVER_SVC' Service | grep -cxF 'EnvironmentFile=/etc/default/inngest-server' >/dev/null && _luks_sec '$LUKS_CUTOVER_SVC' Service | grep -cxF 'EnvironmentFile=/etc/default/inngest-luks-volumes' >/dev/null && ! _luks_sec '$LUKS_CUTOVER_SVC' Service | grep -cE '^[[:space:]]*EnvironmentFile=-' >/dev/null"
+# Bare `Directive=` resets the list wholesale in systemd (EnvironmentFile= empties the env
+# set, ConditionPathExists= erases every condition) — invisible to the literal pins and to the
+# set extractors, which drop empty tokens. Checked file-wide: a reset line is never legitimate
+# here, in any section, at any indent.
+assert "no bare EnvironmentFile=/ConditionPathExists= reset lines in the cutover units" \
+  "! grep -cE '^[[:space:]]*(EnvironmentFile|ConditionPathExists)=[[:space:]]*$' '$LUKS_CUTOVER_SVC' '$LUKS_CUTOVER_TMR' >/dev/null"
+# SET IDENTITY, not cardinality: the sorted path set of [Unit] conditions must equal the
+# sorted path set of [Service] EnvironmentFile= values — a coordinated mismatched pair or a
+# non-/etc/default/ path fails where a count comparison would pass.
+assert "inngest-luks-cutover.service's [Unit] condition path-set equals its [Service] EnvironmentFile path-set" \
+  "[[ -n \"\$(_luks_sec_vals '$LUKS_CUTOVER_SVC' Service EnvironmentFile)\" && \"\$(_luks_sec_vals '$LUKS_CUTOVER_SVC' Unit ConditionPathExists)\" == \"\$(_luks_sec_vals '$LUKS_CUTOVER_SVC' Service EnvironmentFile)\" ]]"
+assert "inngest-luks-cutover.timer carries the inngest-server condition in [Unit] (evaluated at activation, not per-elapse)" \
+  "[[ \$(_luks_sec '$LUKS_CUTOVER_TMR' Unit | grep -cxF 'ConditionPathExists=/etc/default/inngest-server') -eq 1 ]]"
+assert "inngest-luks-cutover.timer carries the inngest-luks-volumes condition in [Unit] (evaluated at activation, not per-elapse)" \
+  "[[ \$(_luks_sec '$LUKS_CUTOVER_TMR' Unit | grep -cxF 'ConditionPathExists=/etc/default/inngest-luks-volumes') -eq 1 ]]"
+assert "inngest-luks-cutover.timer's [Unit] condition path-set equals the service's [Service] EnvironmentFile path-set" \
+  "[[ -n \"\$(_luks_sec_vals '$LUKS_CUTOVER_TMR' Unit ConditionPathExists)\" && \"\$(_luks_sec_vals '$LUKS_CUTOVER_TMR' Unit ConditionPathExists)\" == \"\$(_luks_sec_vals '$LUKS_CUTOVER_SVC' Service EnvironmentFile)\" ]]"
+
+echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 
 # ASSERTION-COUNT FLOOR. A mutation audit deleted the entire #7695 block from this file and the
@@ -2577,7 +2624,7 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # check) reported 303/303, exit 0. Keyed on PASS rather than TOTAL: TOTAL counts failures, so a
 # TOTAL floor cannot back up the verdict -- dropping `if [[ "$FAIL" -gt 0 ]]` left a 303/305 run
 # reporting exit 0. 7761's floor already had this shape.
-INNGEST_MIN_ASSERTIONS=416
+INNGEST_MIN_ASSERTIONS=427
 if [[ "$PASS" -lt "$INNGEST_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s assertions ran, expected >= %s — a block was skipped or emptied.\n' \
     "$PASS" "$INNGEST_MIN_ASSERTIONS" >&2

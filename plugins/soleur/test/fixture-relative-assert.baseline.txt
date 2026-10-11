@@ -146,12 +146,14 @@
 1	apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh
 7	apps/web-platform/infra/container-restart-monitor.sh
 11	apps/web-platform/infra/container-restart-monitor.test.sh
+1	apps/web-platform/infra/cron-egress-enforce-probe.sh
 8	apps/web-platform/infra/cron-egress-firewall.test.sh
 1	apps/web-platform/infra/cron-egress-nftables.test.sh
-6	apps/web-platform/infra/cron-egress-resolve.sh
+8	apps/web-platform/infra/cron-egress-resolve.sh
 1	apps/web-platform/infra/cutover-verify.sh
 1	apps/web-platform/infra/disk-monitor.sh
 10	apps/web-platform/infra/disk-monitor.test.sh
+1	apps/web-platform/infra/egress-gateway-bootstrap.sh
 4	apps/web-platform/infra/generate-apex-rollback-pr.sh
 2	apps/web-platform/infra/git-data-bootstrap.sh
 2	apps/web-platform/infra/git-data-bootstrap-store-verify.test.sh
@@ -314,6 +316,7 @@
 3	plugins/soleur/skills/skill-security-scan/scripts/run-scan.sh
 1	plugins/soleur/skills/skill-security-scan/scripts/run-self-test.sh
 1	plugins/soleur/test/c4-from-components.test.sh
+15	plugins/soleur/test/ci-head-verdict.test.sh
 1	plugins/soleur/test/claude-code-action-auth.test.sh
 6	plugins/soleur/test/fanout-suite-scope.test.sh
 1	plugins/soleur/test/fixture-dir-operand-assert.test.sh
@@ -334,7 +337,7 @@
 13	plugins/soleur/test/scripts-shard-totality-mutations.sh
 1	plugins/soleur/test/scripts-shard-totality.test.sh
 1	plugins/soleur/test/session-state.test.sh
-10	plugins/soleur/test/ship-battery-owed.test.sh
+11	plugins/soleur/test/ship-battery-owed.test.sh
 3	plugins/soleur/test/test-helpers.sh
 1	plugins/soleur/test/vendor-pin-integrity.test.sh
 3	plugins/soleur/test/worktree-manager-atomic-config.test.sh
@@ -350,6 +353,8 @@
 1	scripts/check-cloudflare-token-drift.sh
 1	scripts/check-cloudflare-token-drift.test.sh
 1	scripts/check-pa-22.test.sh
+8	scripts/ci-draft-push-census.sh
+5	scripts/ci-draft-push-census.test.sh
 2	scripts/close-superseded-dependabot-prs.sh
 3	scripts/compound-promote.test.sh
 1	scripts/content-publisher.sh
@@ -363,6 +368,7 @@
 1	scripts/follow-through-closure-guard.test.sh
 25	scripts/followthroughs/anthropic-admin-key-6297.test.sh
 5	scripts/followthroughs/ccla-representative-icla-7922.test.sh
+20	scripts/followthroughs/ci-draft-light-soak-9728.test.sh
 2	scripts/followthroughs/ci-leg-balance-9232.test.sh
 2	scripts/followthroughs/concierge-strand-754ee124-5733.test.sh
 1	scripts/followthroughs/cwv-field-rum-9178.sh
@@ -370,6 +376,7 @@
 1	scripts/followthroughs/inngest-cutover-flip-rollout-7761.test.sh
 1	scripts/followthroughs/inngest-luks-cutover-6894.sh
 2	scripts/followthroughs/inngest-provision-rehearsal-capture.test.sh
+3	scripts/followthroughs/pr-battery-gate-saving-9323.test.sh
 1	scripts/followthroughs/run-report-exit-first-contact-8076.test.sh
 1	scripts/followthroughs/t5-skip-persistence-bound-7510.sh
 1	scripts/followthroughs/t5-skip-persistence-bound-7510.test.sh
@@ -398,6 +405,7 @@
 1	scripts/lint-encryption-posture.test.sh
 33	scripts/lint-followthrough-varq-ban.test.sh
 1	scripts/lint-guard-contract.test.sh
+4	scripts/lint-integration-env-gates.test.sh
 1	scripts/lint-legal-mirror-drift-baseline.sh
 19	scripts/lint-legal-mirror-drift-baseline.test.sh
 9	scripts/lint-legal-registers.test.sh
