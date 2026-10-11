@@ -15,6 +15,38 @@ requires_cpo_signoff: true
 
 # fix: agent sandbox shim — fresh procfs mount fails under docker's masked /proc (H6)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-11 (soleur:deepen-plan, second pass)
+**Sections enhanced:** Proposed Solution (fallback scope), Phase 0.1
+(fd-enumeration semantics), References (live-verified citations)
+
+### Key Improvements
+
+1. Fallback arm now enumerates BOTH lists `systempaths=unconfined`
+   clears — masked AND readonly — from moby `daemon/pkg/oci/defaults.go`
+   (verified); `/proc/sys` becoming writable is named the sharper edge.
+2. `--bind-fd` version claim corrected: upstream 0.10.0, backported to
+   0.9.0 — still absent from prod's 0.8.0 (conclusion unchanged).
+3. Phase 0.1 pinned to the existing `add_cmd_fd_refs` substring
+   semantics (verified at shim L229-231) — the rewrite must keep
+   matching `/proc/self/fd/N` inside `-c` strings.
+4. bwrap's auto-created parent dirs for mount destinations verified
+   against the bookworm manpage — the literal `/proc/self/fd/<N>`
+   re-home dest is legal under a tmpfs `/proc`.
+5. `## Downtime & Cutover` added (deepen-plan 4.55 gate): standard
+   deploy path only; the surface is already 100% fail-closed.
+
+### New Considerations Discovered
+
+- The `systempaths` fallback is wider than the issue body describes:
+  it also drops the readonly list, granting `/proc/sys` writes to the
+  whole shared container — strengthens the case for the argv rewrite
+  as primary.
+- `add_cmd_fd_refs` is already a substring scan (`=~` over `$joined`),
+  so embedded refs inside command strings are already enumerated —
+  preserve, don't re-invent.
+
 ## Overview
 
 The production faithful sandbox canary has reported `sandbox_broken` /
@@ -76,8 +108,9 @@ When the merged setup stream's only `/proc` exposure is the vendored tail
      (e.g. the vendored CLI binary on disk);
    - `--perms 0755 --bind-data <N> /proc/self/fd/<N>` when the fd is a
      readable regular file or memfd (both options exist in prod's
-     bubblewrap 0.8.0 — verified against bwrap NEWS/man; `--bind-fd`,
-     the cleaner O_PATH bind, is ≥0.10.0 and is NOT available);
+     bubblewrap 0.8.0 — verified against the bookworm bwrap(1) man;
+     `--bind-fd`, the cleaner O_PATH bind, landed upstream in 0.10.0 and
+     was backported to 0.9.0 — it is NOT in 0.8.0);
    - otherwise **refuse** (exit 65, `bwrap-shim:` marker) — never a
      silently-broken multicall.
 4. **Keep fail-closed.** A proc-exposing argv that cannot be neutralized
@@ -88,14 +121,20 @@ When the merged setup stream's only `/proc` exposure is the vendored tail
 if the Phase-0 spike measures that the rewrite cannot preserve P2+P3
 (multicall fd unbindable AND unreadable, or a measured in-sandbox /proc
 dependency the ladder cannot satisfy), the contingency is
-`--security-opt systempaths=unconfined` at the two `docker run` call
-sites in `apps/web-platform/infra/ci-deploy.sh` (~L4250 canary,
-~L4595 prod). It unmasks a fixed list (`/proc/{kcore,keys,sched_debug,
-latency_stats,timer_list,timer_stats,asound,acpi,scsi}`,
-`/sys/{firmware,devices/virtual/powercap}`) for the WHOLE shared
-container — the widening ADR-075's addendum already names "a widening,
-not a fix" — so it ships only with the widening scope enumerated in the
-ADR-075 addendum and recorded in the CTO+CLO review this issue mandates.
+`--security-opt systempaths=unconfined` at the two `docker run -d`
+call sites in `apps/web-platform/infra/ci-deploy.sh` (L4250 canary,
+L4595 prod — verified). It clears BOTH of docker's default path lists
+for the WHOLE shared container — the masked set
+(`/proc/{acpi,asound,interrupts,kcore,keys,latency_stats,sched_debug,
+scsi,timer_list,timer_stats}`, `/sys/{devices/virtual/powercap,
+firmware}`) AND the read-only set (`/proc/{bus,fs,irq,sys,
+sysrq-trigger}`), per moby `daemon/pkg/oci/defaults.go`
+`defaultLinuxMaskedPaths`/`ReadonlyPaths` (verified 2026-10-11). The
+second half is the sharper edge: `/proc/sys` becomes writable, so
+every process in the shared container can write kernel tunables — the
+widening ADR-075's addendum already names "a widening, not a fix" —
+so it ships only with this scope enumerated in the ADR-075 addendum
+and recorded in the CTO+CLO review this issue mandates.
 
 **Not the strategy:** the per-tenant executor topology (#9773, epic
 #9842, operator-approved) subsumes this whole surface; this fix is the
@@ -121,9 +160,12 @@ Deliverable: a measurement record committed to
   (capture harness or a one-off in-image probe) and enumerate EVERY
   `/proc/self/fd/<N>` occurrence by SUBSTRING scan over the whole
   serialized argv — a ref embedded inside a `bash -c '…'` string counts
-  as much as a standalone token — recording each fd's type (real path
-  vs `memfd:` vs O_PATH) via `readlink /proc/self/fd/<N>` +
-  `/proc/self/fdinfo/<N>` at shim time. This selects the re-home rung.
+  as much as a standalone token; the existing `add_cmd_fd_refs`
+  (shim L229-231) already scans the joined argv via
+  `=~ /proc/self/fd/([0-9]+)` and the rewrite must KEEP that substring
+  semantics — recording each fd's type (real path vs `memfd:` vs
+  O_PATH) via `readlink /proc/self/fd/<N>` + `/proc/self/fdinfo/<N>` at
+  shim time. This selects the re-home rung.
 - [ ] 0.2 Build the rewritten argv through the REAL shim
   (`SOLEUR_BWRAP_REAL=<recorder stub>`) over the committed fixture argv
   AND an `--args`-payload-shaped input; record the realized merged stream.
@@ -616,6 +658,24 @@ not a specialist agent).
   deploy user (`kdeny src=none`) — separate host-IaC plan per the
   issue; tracked in the issue filed at plan time.
 
+## Downtime & Cutover
+
+- **Offline-inducing operation:** none introduced by this diff. The
+  change rides the standard web-platform release path (image rebuild +
+  sole-container restart) — the same swap every `apps/web-platform`
+  merge already performs; no special cutover, drain, or state
+  migration is new.
+- **Zero-downtime evaluation:** the single-container restart is the
+  standing deployment mechanism, not a change-induced outage, and the
+  surface this fix touches (agent Bash sandbox) is already 100%
+  fail-closed in production — the change cannot degrade availability
+  below the current state. A blue-green variant of the deploy pipeline
+  is out of scope and unrelated to this fix.
+- **Residual risk acceptance:** standard deploy-window restart
+  (seconds, in-flight request drop — standing behavior), no bounded
+  maintenance window needed; rollback is the previous image tag via
+  the standard pipeline path.
+
 ## Context
 
 Refs: #10032 (this fix), #9860 (parent incident — closes on green
@@ -633,9 +693,22 @@ outer-wrap arm).
 ## References
 
 - Issue: [#10032](https://github.com/jikig-ai/soleur/issues/10032)
-- bubblewrap#284 — masked `/proc` vs fresh procfs mount
-- bubblewrap NEWS (0.10.0 `--[ro-]bind-fd`; ≤0.8.x `--bind-data`,
-  `--file`, `--perms`)
+- Issue states verified live 2026-10-11: #10032 OPEN, #9860 OPEN,
+  #9723 CLOSED, #9773/#9842 OPEN, #10045 OPEN; PR #9768/#9803/#9938 MERGED
+- bubblewrap#284 — masked `/proc` vs fresh procfs mount; upstream names
+  the same mechanism (masked/readonly paths in the container's `/proc`
+  make the new procfs "too revealing" for a user namespace)
+- Kernel mechanism: `mount_too_revealing` → `mnt_already_visible`
+  (fs/proc — the fresh-procfs EPERM path under masked parents)
+- bwrap(1) bookworm manpage (the 0.8.0 generation): "Any missing parent
+  directories that are required to create a specified destination are
+  automatically created" — the `/proc/self/fd/<N>` re-home dest under
+  the tmpfs `/proc` is legal; `--bind-data`/`--ro-bind-data`/`--file`/
+  `--perms` present
+- bubblewrap releases: `--[ro-]bind-fd` landed in 0.10.0 (2024-08-14,
+  CVE-2024-42472) and was backported to 0.9.0 — absent from 0.8.0
+- moby `daemon/pkg/oci/defaults.go` — exact masked + readonly path
+  lists `systempaths=unconfined` clears (verified 2026-10-11)
 - anthropic-experimental/sandbox-runtime#214 — same EPERM signature
   under stock docker/k8s; `enableWeakerNestedSandbox` is the upstream
   posture arm
