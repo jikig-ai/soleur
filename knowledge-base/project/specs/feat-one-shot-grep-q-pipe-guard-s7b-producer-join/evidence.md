@@ -313,3 +313,52 @@ The pre-push ratchet lane runs the guard on the branch merged with current main,
 ### Ratchet lane on the merged tip
 
 `bash scripts/pre-push-ratchet-lane.sh` on the branch merged with main: 21 of 22 members PASS, including the guard, the kb-consumer ratchet and every edited suite that is a member. The one non-pass is `ci-deploy.test` with verdict TIMEOUT at the lane's 300 s cap (no failing assertion in its log). The same suite run directly on the merged tip, alone: `609/609 passed, 0 failed`, rc 0, 248 s. At base it took 233 to 269 s in the pair runs, so the suite sits near the lane's cap on a host carrying other sessions' load (load average 11 to 20 during these runs); the edit adds one `case` line to a stub and no measurable time.
+
+
+## Review round 1 (appended; Ref #9217)
+
+Nine report-only seats reviewed PR #9985 at `d8b85f8fe7` (git history, pattern, architecture, security, code quality, performance, test design with mutation, structural enumeration, simplicity). Risk tier none (plan scope-out), class code, no design-risk pass. No P1; the P2 findings were fixed inline, the rest is recorded below and in `decision-challenges.md` items 15 and 16.
+
+Corrections to the record above (a dated record is corrected by appending): the vocabulary gained three words, not two (`pass-through`, `deliberate-fault`, `arm-drain`); nine suites are edited, not eight; the J0 counts of 18 `drains` and 43 `exempt` rows at `:36` are the plan-time classification, and the guard that merged carries 13 and 49 after the annotation change below; the reproduction scripts `j0-stubs.py`, `j0-sites.py` and `j0-instrument.py` named at `:22` are removed (recoverable from commit `6e320b391e`; `j0-derive.py` and its output stay); `#7797` and `#9482` in the plan are issues named in the brief, not trackers of this series (`#7797` is an unrelated credential-printing issue, `#9482` a merge-queue decision record); `cloud-init-inngest-bootstrap.test.sh` is exempt as `blocked-#9956` on the strength of the #9217 comment `issuecomment-6103531873` (2026-10-10), which lists it among the main reds tracked by #9956; #9956's own body names only the privileged-tier census row.
+
+### What the review found that the author battery had not
+
+- The drain detector accepted `cat < FILE`, a cat on the right of a pipe, a cat behind `true ||`, a non-negated tty test and a backgrounded cat; none was in the non-reading list. It now excludes them, and the five spellings are in the list the dynamic control runs.
+- The pin window crossed into the next definition, ignored a bare `exit` ahead of the drain, and matched the flag token inside a trailing comment. It is now bounded at the next definition of the verb, disarmed by a bare exit or return, and reads the code part of the line.
+- The operator-ack-guard doppler stub called `timeout`, which the suite's sandbox `PATH` does not carry: the drain never ran there. Fixed (plain `cat` fallback).
+- The table verdicts and the verdict sink had no negative control: neutering a `PJ_FAIL=1` assignment printed FAIL and exited 0. The verdicts moved into `pj_judge` (driven with one-row fixtures), and the sink (`pj_fail`, the judge merge, the column-0 fold) is pinned by text.
+- A new producer of an already-listed pair needed no row. `PJ_TRIPLES` now pins the (test file, verb, producer file) count (113).
+- Annotation echoes (`::error::` and friends) were read as pipes: ten `text-only` rows existed only for that. The scan skips them (pairs 71 to 61, rows 72 to 62); one row's reason named the wrong producer and is corrected; seventeen reasons that had been cut mid-word are restored.
+
+### Rows added to the battery (all at the fixed guard, `e949471417`)
+
+| Row | Mutation | rc | Grade |
+|---|---|---|---|
+| N1 | the detector accepts cat < FILE again | rc 1 | RED-AS-EXPECTED |
+| N2 | NODRAIN loses its pipe and background alternatives | rc 1 | RED-AS-EXPECTED |
+| N3 | the window is no longer bounded at the next definition | rc 1 | RED-AS-EXPECTED |
+| N4 | a bare exit ahead of the drain no longer disarms it | rc 1 | RED-AS-EXPECTED |
+| N5 | NODRAIN loses its heredoc alternative: the opener-line heredoc writer counts as a drain again | rc 1 | RED-AS-EXPECTED |
+| N6 | a trailing comment counts as code again | rc 1 | RED-AS-EXPECTED |
+| N7 | pj_fail prints FAIL and no longer sets the flag | rc 1 | RED-AS-EXPECTED |
+| N8 | the judge merge prints its FAIL lines and no longer sets the flag, with a real unlisted pair present | rc 1 | RED-AS-EXPECTED |
+| N9 | the column-0 fold into FAIL is neutered, with a real unlisted pair present | rc 1 | RED-AS-EXPECTED |
+| N10 | the unlisted-pair verdict is neutered | rc 1 | RED-AS-EXPECTED |
+| N11 | the vocabulary verdict is neutered | rc 1 | RED-AS-EXPECTED |
+| N12 | the producer-triple pin is off by one | rc 1 | RED-AS-EXPECTED |
+| N13 | a new producer of an already-listed exempt pair (ci-deploy | curl) | rc 1 | RED-AS-EXPECTED |
+| N14 | a variable-named-verb row whose suite no longer exists | rc 1 | RED-AS-EXPECTED |
+| N15 | a bare exit ahead of a real stub drain (A1) | rc 1 | RED-AS-EXPECTED |
+| N16 | the flag token only in a trailing comment of a real stub (A2) | rc 1 | RED-AS-EXPECTED |
+| N17 | a real stub reads only on a terminal (A3) | rc 1 | RED-AS-EXPECTED |
+| N18 | a real stub redirects its drain from /dev/null (A4) | rc 1 | RED-AS-EXPECTED |
+| N19 | a real stub loses its drain and the next stub writer falls into its window (A6) | rc 1 | RED-AS-EXPECTED |
+
+The whole battery was re-run at that commit: 49 rows, 45 RED as expected, 4 PASS as expected (M1 to M21 and M17b, H1, H3, H5, H6 and N1 to N19 red; H2a, H2b, H2c, H4 green). Four earlier rows changed meaning and were re-aimed rather than left to pass for a new reason: M16 (an opener renamed so the pair no longer derives is now reported as a stale row, which is the correct reading), N3 (the first bounded-window fixture was masked by the exit rule), N5 (the opener-line strip proved redundant once the non-drain pattern excludes heredoc writers, so the strip is deleted and the row mutates that pattern) and N15 (the mutation was not the shape the finding described).
+
+### Not fixed in this PR
+
+- Derivation recall: a pipe split over lines by a trailing backslash or pipe (the reviewers measured about 24 further pairs, 15 of whose stubs have no drain within 60 lines), a verb behind `timeout`/`env`/`command`, a producer other than printf/echo/cat, a library pipe with no pipefail token of its own (16 pairs when forced on), helper-with-argument and loop-built stubs (five suites seen by no pair), and producers in `.tf` or extensionless files. Each pair needs a reach classification before it can be a row, which is a slice of its own; the limits are listed in the guard header and the slice is named on the tracker.
+- `arm-drain`, `pass-through`, `text-only` and `blocked-#N` reasons remain attestations checked for their first word.
+- Guard wall time: the derivation still reads about 42 MB. A grep prefilter (about 1.3 to 2 s) and a background start overlapping the sweep (about 2.4 to 4 s) were measured by the performance seat to be byte-identical in output, and are not applied: the first couples a bash regex to the awk predicates, the second adds a background job to a guard that pins its own control flow by text. The single-awk `pj_sourced` and the `read`-based row split (about 600 fewer forks) are applied. This host carries other sessions' load (load average 35 to 65 during the re-measurement), so an end-to-end figure is not resolvable here.
+- No ADR for the guard architecture yet; awk operands shaped like `name=...` and symlinked tracked files need commit rights and exist nowhere in the tree.
