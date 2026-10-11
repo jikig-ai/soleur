@@ -131,6 +131,15 @@ write_files:
       DefaultDependencies=no
       After=cryptsetup-pre.target systemd-udev-settle.service
       Before=inngest-redis.service local-fs.target
+      # SKIP-VS-FAIL (#9939). Both EnvironmentFile= paths are runcmd writes late in first boot:
+      # /etc/default/inngest-doppler before the LUKS stage and /etc/default/inngest-luks inside
+      # it. A stage abort — or any pull-in before those writes — must SKIP this unit (one
+      # "skipped, unmet condition check" notice) rather than FAIL it into the journal channel:
+      # the runcmd `enable --now` arm runs even when the stage aborted, and the observed storm
+      # was exactly that shape. The EnvironmentFile= lines stay unprefixed: once a start IS
+      # attempted, an absent file still fails the unit — the fail-closed contract is the point.
+      ConditionPathExists=/etc/default/inngest-doppler
+      ConditionPathExists=/etc/default/inngest-luks
       [Service]
       Type=oneshot
       RemainAfterExit=yes

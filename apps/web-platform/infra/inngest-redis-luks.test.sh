@@ -452,6 +452,45 @@ if printf '%s\n' "$_RES" | grep -cF '*[!0-9]*)' >/dev/null && printf '%s\n' "$_R
 if grep -qF '_reopen_state="$(systemctl is-active inngest-luks-open.service 2>/dev/null || true)"' "$CLOUD_INIT" \
    && grep -qF 'if [ "$_reopen_state" = "active" ]; then' "$CLOUD_INIT"; then ok "G4.f inngest-luks-reopen-armed is emitted only when the unit reads active"; else no "G4.f the reopen arming marker trusts enable --now again — it reported success on 2026-09-17 on a boot where the unit failed"; fi
 
+# T1.15 SKIP-VS-FAIL CONDITIONS on the boot-reopen unit (#9939). Both EnvironmentFile= paths
+# are runcmd writes late in first boot, so an aborted LUKS stage or a pre-write pull-in must
+# SKIP the unit — one "skipped, unmet condition check" journal notice — never FAIL it into
+# the LUKS observability channel the way the observed storm did. The EnvironmentFile= lines
+# stay unprefixed: once a start IS attempted, an absent file still fails the unit — the
+# fail-closed contract is the point of the unit.
+_LUKS_OPEN_UNIT="$(awk 'f&&/^  - path:/{exit} /^  - path: \/etc\/systemd\/system\/inngest-luks-open\.service$/{f=1} f' "$CLOUD_INIT")"
+# Both directive kinds are section-scoped — ConditionPathExists= is valid in [Unit] only and
+# EnvironmentFile= in [Service] only; anywhere else systemd logs an unknown lvalue and the
+# property silently dies — so every needle below scopes to its directive's own section.
+_LUKS_OPEN_UNITSEC="$(printf '%s\n' "$_LUKS_OPEN_UNIT" | awk '/^      \[Unit\]/{u=1;next} /^      \[/{u=0} u')"
+# EnvironmentFile= is valid in [Service] only — in [Unit] it is the same inert lvalue the
+# conditions would be elsewhere, so the EF needles scope to the [Service] region the same way.
+_LUKS_OPEN_SVCSEC="$(printf '%s\n' "$_LUKS_OPEN_UNIT" | awk '/^      \[Service\]/{s=1;next} /^      \[/{s=0} s')"
+if [ -n "$_LUKS_OPEN_UNIT" ] && [ -n "$_LUKS_OPEN_UNITSEC" ] && [ -n "$_LUKS_OPEN_SVCSEC" ]; then ok "T1.15a the inngest-luks-open.service write_files block and its [Unit]/[Service] sections extract"; else no "T1.15a could not extract the inngest-luks-open.service [Unit]/[Service] sections — T1.15b..f are vacuous"; fi
+_T115_NEEDLE_DOPPLER='      ConditionPathExists=/etc/default/inngest-doppler'
+_T115_NEEDLE_LUKS='      ConditionPathExists=/etc/default/inngest-luks'
+if printf '%s\n' "$_LUKS_OPEN_UNITSEC" | grep -cxF "$_T115_NEEDLE_DOPPLER" >/dev/null; then ok "T1.15b the reopen unit condition-skips in [Unit] when /etc/default/inngest-doppler is absent"; else no "T1.15b no [Unit]-section ConditionPathExists=/etc/default/inngest-doppler — a pre-write start fails the unit into the journal channel"; fi
+if printf '%s\n' "$_LUKS_OPEN_UNITSEC" | grep -cxF "$_T115_NEEDLE_LUKS" >/dev/null; then ok "T1.15c the reopen unit condition-skips in [Unit] when /etc/default/inngest-luks is absent"; else no "T1.15c no [Unit]-section ConditionPathExists=/etc/default/inngest-luks — a partial stage still fails the unit"; fi
+if printf '%s\n' "$_LUKS_OPEN_SVCSEC" | grep -cxF '      EnvironmentFile=/etc/default/inngest-doppler' >/dev/null \
+   && printf '%s\n' "$_LUKS_OPEN_SVCSEC" | grep -cxF '      EnvironmentFile=/etc/default/inngest-luks' >/dev/null \
+   && ! printf '%s\n' "$_LUKS_OPEN_SVCSEC" | grep -cE '^[[:space:]]*EnvironmentFile=-' >/dev/null; then ok "T1.15d both EnvironmentFile= lines stay unprefixed in [Service] (fail-closed on a real start)"; else no "T1.15d an EnvironmentFile= line is missing, misplaced, or gained the '-' tolerant prefix — the fail-closed contract is gone"; fi
+# T1.15e MUTATION CONTROL: dropping one condition line must fail T1.15c's own needle —
+# the mutated block is driven through the SAME literal and the SAME count-predicate, so a
+# drifted needle or a laxer predicate breaks this arm too.
+_T115_MUT="$(printf '%s\n' "$_LUKS_OPEN_UNITSEC" | grep -vxF "$_T115_NEEDLE_LUKS")"
+if printf '%s\n' "$_T115_MUT" | grep -cxF "$_T115_NEEDLE_LUKS" >/dev/null; then no "T1.15e mutation control failed — the T1.15c predicate cannot see a dropped condition"; else ok "T1.15e mutation: a unit missing ConditionPathExists=/etc/default/inngest-luks fails the T1.15c predicate"; fi
+# T1.15f SET IDENTITY, not cardinality: the sorted path set of [Unit] conditions must equal
+# the sorted path set of [Service] EnvironmentFile= values — a coordinated mismatched pair
+# or a directive on any path outside /etc/default/ fails where a count comparison would pass.
+_T115_EF_SET="$(printf '%s\n' "$_LUKS_OPEN_SVCSEC" | sed -n 's/^[[:space:]]*EnvironmentFile=//p' | tr ' \t' '\n' | sed '/^$/d' | sort -u)"
+_T115_CX_SET="$(printf '%s\n' "$_LUKS_OPEN_UNITSEC" | sed -n 's/^[[:space:]]*ConditionPathExists=//p' | tr ' \t' '\n' | sed '/^$/d' | sort -u)"
+if [ -n "$_T115_EF_SET" ] && [ "$_T115_EF_SET" = "$_T115_CX_SET" ]; then ok "T1.15f the [Unit] condition path-set equals the [Service] EnvironmentFile path-set"; else no "T1.15f EF set={${_T115_EF_SET}} vs condition set={${_T115_CX_SET}} — an unconditioned env file can fail a start"; fi
+# T1.15g RESET LINES: a bare `Directive=` empties the list wholesale (EnvironmentFile= clears
+# the env set, ConditionPathExists= erases every condition) — the set extractors drop the
+# empty token and the literal pins keep matching the surviving lines, so the check is
+# file-wide against the write_files block, not section-scoped.
+if ! printf '%s\n' "$_LUKS_OPEN_UNIT" | grep -cE '^[[:space:]]*(EnvironmentFile|ConditionPathExists)=[[:space:]]*$' >/dev/null; then ok "T1.15g no bare EnvironmentFile=/ConditionPathExists= reset lines in the reopen unit"; else no "T1.15g a bare reset line empties the env set or erases every condition — systemd reset semantics make it invisible to the other arms"; fi
+
 # ═══ FLOOR ══════════════════════════════════════════════════════════════════════
 # Raised 26 -> 51 by #6894, which added T1.8a2/c/d/e, T1.13, T1.14, G1.a-g and G4.a-f; 51 -> 56
 # when the cutover FSM became the pointer's writer and the dispatch its second reader (G4.g1-g3/h/i). Derived from
@@ -459,13 +498,14 @@ if grep -qF '_reopen_state="$(systemctl is-active inngest-luks-open.service 2>/d
 # #8285 PR B: G4.b2 (the retire dispatch's pointer reader) was deleted with that dispatch, taking the measured count 58 -> 57;
 # the floor stays 57 and is now exact (no slack). Its mutation (a second pointer reader appearing) is still killed by G4.b
 # (an unclassified site REDS) and G4.g2 (any dispatch-side pointer write fails).
+# #9939: T1.15a-e (reopen-unit ConditionPathExists= skip-vs-fail + mutation control) raised it 57 -> 62; review rounds added T1.15f set-parity (62 -> 63) then T1.15g reset-line coverage and set-identity (63 -> 64).
 # Self-contained: bash builtins and this suite's own counters only. A floor that lives in a helper
 # is silenced by the same move that silences the arms it guards.
-if [ "$executed" -lt 57 ]; then
+if [ "$executed" -lt 64 ]; then
   fail=$((fail + 1))
-  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 57. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
+  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 64. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
 else
-  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 57)\n' "$executed"
+  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 64)\n' "$executed"
 fi
 
 echo ""
