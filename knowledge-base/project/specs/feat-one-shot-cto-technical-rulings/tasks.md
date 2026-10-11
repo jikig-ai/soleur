@@ -10,34 +10,35 @@ Branch: `feat-one-shot-cto-technical-rulings`. Draft PR: 10049.
 - 0.2 Record baselines: `python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.rules.md` (B_ALWAYS 43166 at plan time), `bun test plugins/soleur/test/components.test.ts`, `bash .claude/hooks/pre-ask-technical-fork-gate.test.sh`.
 - 0.3 Create the tracking GitHub issue for this work (the PR body gets `Closes #<N>`, never the title).
 - 0.4 File the two tracked deferral issues: plugin port of the technical-ruling pre-ask gate, and the chat-prose Stop-hook arm (each with a re-evaluation trigger and a roadmap milestone).
-- 0.5 Grep `plugins/soleur/test`, `scripts` and `.claude/hooks` for anchors in the `work` CTO/CLO bullets and `review` step 4 text that Phase 4 will move; confirm no test pins them.
+- 0.5 Measure with `wc -c` the exact blocks Phase 4 moves (work CTO and CLO bullets, review step 1 item 4, ship step 2.5, plan section 2.6 lifecycle-staging paragraph) and replace the plan's byte estimates with the measured numbers.
+- 0.6 Grep `plugins/soleur/test`, `scripts` and `.claude/hooks` for anchors in the `work` CTO/CLO bullets and `review` step 4 text that Phase 4 will move; confirm no test pins them.
 
 ## Phase 1: RED tests (write first, watch fail)
 
-- 1.1 Hook cases R1-R10 in `.claude/hooks/pre-ask-technical-fork-gate.test.sh`, including reason assertions (`soleur:engineering:cto`, `technical-ruling-delegation.md`) and a V4 structural row.
-- 1.2 `plugins/soleur/test/technical-ruling-gate.test.sh` plus `plugins/soleur/test/fixtures/technical-ruling-gate/*.md` covering Guard 1 mutation rows 1-9, harness rows, and the absent-file and unreadable-file cases.
+- 1.1 Hook cases R1-R10 and Z1-Z4, a per-question multi-question payload builder, raised V1 inventory and `MIN_CASES`, in `.claude/hooks/pre-ask-technical-fork-gate.test.sh`, including reason assertions (`soleur:engineering:cto`, `technical-ruling-delegation.md`) and a V4 structural row.
+- 1.2 `plugins/soleur/test/technical-ruling-gate.test.sh` plus `plugins/soleur/test/fixtures/technical-ruling-gate/*.md` covering Guard 1 mutation rows 1-12 (table-driven, one fixture per row, including the producer/consumer example case and the four real free-form item shapes copied from tracked artifacts), harness rows, and the absent-file and unreadable-file cases.
 - 1.3 New "Technical-ruling delegation wiring" describe block in `plugins/soleur/test/components.test.ts` (Guard 3).
 - 1.4 Rule-line byte check via `lint-agents-rule-budget.py`.
 
 ## Phase 2: Reference and taxonomy
 
-- 2.1 Create `plugins/soleur/skills/brainstorm-techniques/references/technical-ruling-delegation.md` (nine sections in the plan).
-- 2.2 Rewrite `decision-principles.md` section Precedence; add the `Class:` item schema; link the new reference.
+- 2.1 Create `plugins/soleur/skills/brainstorm-techniques/references/technical-ruling-delegation.md` (seven sections in the plan, ending in one canonical example item).
+- 2.2 Rewrite `decision-principles.md` section Precedence; add the Decision Classes table schema; link the new reference. Add the table row to the `plan-scope-check.md` BLOCKED-rows append.
 
 ## Phase 3: Ship gate
 
-- 3.1 Implement `plugins/soleur/skills/ship/scripts/technical-ruling-gate.sh` (modes: path, `--branch`, `--pr-body <file>`; exits 0, 1, 2).
-- 3.2 Create `plugins/soleur/skills/ship/references/decision-challenges-render.md` (moved step 2.5 body plus the gate remedy procedure); rewrite step 2.5 to render by `Class:`.
-- 3.3 Add `### Technical-Ruling Gate (mandatory)` to ship Phase 5.5.
+- 3.1 Implement `plugins/soleur/skills/ship/scripts/technical-ruling-gate.sh` (modes: path, `--branch`, `--pr-body <file>`; exits 0, 1, 2; parses only the `## Decision Classes` table; looks under `specs/archive/` too; Ruling shape `Ruled by CTO agent, <date>: <decision> - <rationale>; conforms: yes|no|n/a`).
+- 3.2 Create `plugins/soleur/skills/ship/references/decision-challenges-render.md` (moved step 2.5 body plus the gate remedy procedure); rewrite step 2.5 to render by `Class:` (both classes under the existing `## Model Dissents (informational)` heading; technical items in a `### Ruled by CTO agent` sub-block, no new top-level heading).
+- 3.3 Add `### Technical-Ruling Gate (mandatory)` to ship Phase 5.5 (after the Soak-Gated Follow-Through Enrollment Gate); add the PR-body call (`--pr-body`) in Phase 6 right after the `gh pr edit` that writes the body, before `gh pr ready`.
 
 ## Phase 4: Skill pointers (net bytes per file at or below zero)
 
 - 4.1 work: replace the CTO and CLO HARD GATE bullets with one pointer; move their text into the reference.
 - 4.2 review: step 1 item 4 becomes a pointer.
 - 4.3 plan: pointer in Plan Review step 2 and Step 4.5; replace stale line-number pointers with content anchors.
-- 4.4 brainstorm, go: one-sentence pointers.
-- 4.5 one-shot: inline three-line rule and the override in the plan and work subagent prompts.
-- 4.6 Re-run `python3 scripts/lint-skill-body-budget.py --base "$(git merge-base origin/main HEAD)"`; lower ceilings to the new sizes.
+- 4.4 brainstorm, go: one-sentence pointers; plan-review: one link to the reference (no ceiling).
+- 4.5 one-shot: inline three-line rule and the override in the plan and work subagent prompts; call the gate (`--branch`) after the plan phase and before work, resolving `pending` rows with the CTO (at most two spawns; terminal state is a `domain/engineering` issue and a draft PR, never an operator question).
+- 4.6 Re-run `python3 scripts/lint-skill-body-budget.py --base "$(git merge-base origin/main HEAD)"`; lower the work, review and ship ceilings to the new sizes (none raised).
 
 ## Phase 5: Hook arm
 
@@ -47,7 +48,7 @@ Branch: `feat-one-shot-cto-technical-rulings`. Draft PR: 10049.
 
 - 6.1 Amend the rule body in `AGENTS.rules.md` (at or under 590 bytes); run `python3 scripts/lint-rule-bodies.py --write`; append the ack line to `.claude/rule-weakening-acks.txt`.
 - 6.2 Run `lint-rule-ids.py`, `lint-agents-enforcement-tags.py`, `lint-rule-bodies.py --check`.
-- 6.3 Amend ADR-084 (Decision, Consequences, Alternatives considered); run `scripts/check-adr-ordinals.sh` and `plugins/soleur/test/c4-count-parity.test.sh`.
+- 6.3 Amend ADR-084 (Decisions 1, 2, 3, 5 and 6, Consequences including the drift-guard line, Alternatives considered); run `scripts/check-adr-ordinals.sh` and `plugins/soleur/test/c4-count-parity.test.sh`.
 
 ## Phase 7: Verify, compound, ship
 

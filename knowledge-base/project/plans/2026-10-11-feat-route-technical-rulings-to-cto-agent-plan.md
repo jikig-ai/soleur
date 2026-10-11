@@ -13,7 +13,7 @@ cleanup retires constants that guard a destructive step, and whether an ADR's st
 `adopting` to `accepted`). The existing rule `hr-technical-fork-is-not-an-operator-question` was in
 force and did not catch either. This plan finds the real routing path that carried them, then closes it
 in the rule corpus, one shared delegation reference, the skills that reach such forks, the pre-ask hook,
-a closing-message arm, and the ship gate.
+and a script-backed ship gate (a closing-message arm was considered and cut).
 
 ## Research Insights
 
@@ -163,10 +163,10 @@ One definition, one delegation step, and the three places a ruling can leak.
    plan, spec, ADR or PR body. A brief that says "surface it" changes nothing for the technical part.
 3. **Taxonomy fix** (`decision-principles.md` §Precedence): a technical ruling goes to the CTO in both modes and is
    never persisted to `decision-challenges.md` as an owner item; the four NEVER-Mechanical classes decide whether the
-   session model may auto-decide, not who rules. `decision-challenges.md` items gain a mandatory `Class:` line.
-4. **Ship gate** (`technical-ruling-gate.sh` + suite): reads the artifact and the PR body; blocks an item with no
-   `Class:`, a `Class: technical` item with no `Ruled by` line, and any "Owner decision needed" label not carried by
-   `Class: operator (<category>)`. Remedy text: spawn the CTO now, write the Ruled-by line, re-run. Step 2.5 files the
+   session model may auto-decide, not who rules. `decision-challenges.md` gains a mandatory `## Decision Classes` table (one row per persisted decision: item, class, ruling).
+4. **Ship gate** (`technical-ruling-gate.sh` + suite): reads the artifact's Decision Classes table and the PR body; blocks a
+   row with no valid class, a `technical` row with no well-formed `Ruled by` cell, and any "Owner decision needed" label not
+   carried by `(operator: <category>)`. Remedy text: spawn the CTO now (at most twice), write the Ruled-by cell, re-run. Step 2.5 files the
    `action-required` issue for operator-class items only.
 5. **Hook** (secondary): a narrow ruling arm in the pre-ask hook, ahead of the authority short-circuit, exempting only
    permission-seeking shapes on the question text; deny reason names `soleur:engineering:cto` and the reference.
@@ -206,6 +206,10 @@ AskUserQuestion". Abridged substance of the ruling (R1-R6 are the CTO's numberin
 
 **Adopted:** R1, R2, R3 (arm cut, deferral filed), R4, R5, R6 (burden-of-proof rule, one-shot inline; the `ruling-pending` spelling is folded into `unruled-technical`, which has the
 same check and the same remedy, per plan review).
+**Schema note (deepen, 2026-10-11):** the CTO's `Class:` line is realised as a row in one `## Decision Classes` table, because the
+artifact has no single item shape (see Guard 1); the ruling's substance (closed categories, bare `operator` invalid, Ruled-by required)
+is unchanged.
+
 **Not adopted as ruled:** the cut of the skill citations. The brief names go, one-shot, plan, work, review, ship and
 brainstorm as the places to wire; that is stated scope, and dropping it is a NEVER-Mechanical class (operator-requested
 scope). Default taken: honour the brief with byte-neutral pointers; the CTO's choke-point-only form is the fallback
@@ -230,7 +234,7 @@ The index line in `AGENTS.md` is unchanged (ids are immutable). Growth is about 
 1. **Operator-only list (closed):** "the operator" is whoever runs the skill (the founder here, a Soleur end user
    elsewhere; same rule for both). money (spend, price, recurring cost, new paid dependency), scope, priority and
    schedule, authorization of an irreversible or production-mutating act, legal/regulatory risk acceptance, brand.
-   Categories used verbatim by the `Class:` line: `money | scope | priority | schedule | irreversible |
+   Categories used verbatim by the Class cell: `money | scope | priority | schedule | irreversible |
    production-mutating | legal-risk | brand`.
 2. **Everything else is a technical ruling,** including: a threshold or evidence bar (even when it guards a
    destructive step), which of two designs, whether evidence suffices, a status flip. Mixed items split into one
@@ -245,10 +249,14 @@ The index line in `AGENTS.md` is unchanged (ids are immutable). Growth is about 
    plan, spec, ADR or PR body. Fail-safe default when user data is at stake: the stricter option.
 5. **Override clause:** a brief or an operator message that says "surface it / do not decide it" about a technical
    item is routed to the CTO anyway; ask the operator only the authorization part, naming the action.
-6. **`decision-challenges.md` item schema:** `Class: technical` (must carry the Ruled-by line; a headless subagent that
-   cannot spawn the CTO writes it without the line and ship's gate spawns the CTO) or `Class: operator (<category>)`.
-   A bare `Class: operator` is invalid. The section ends with one canonical example item that the suite feeds to the
-   gate (producer/consumer contract).
+6. **`decision-challenges.md` classification table.** One `## Decision Classes` pipe table (columns Item, Class, Ruling)
+   holds one row per persisted decision, whatever shape the free-form body uses. Class cell: `technical` or
+   `operator (<category>)` (a bare `operator` is invalid). Ruling cell of a technical row: `Ruled by CTO agent, <date>:
+   <decision> - <rationale>; conforms: yes|no|n/a (<note>)`, plus `Dissent: <line>` when present; a headless subagent that
+   cannot spawn the CTO writes `pending - assumed: <default>` and the main context (one-shot after the plan phase, or ship's
+   gate) obtains the ruling. Ruling cell of an operator row: the ACTION being authorised, citing the sibling technical row's
+   item id when the item was split. A ruling or dissent that names user-data loss, an irreversible act, money or legal exposure
+   adds an operator row. The section ends with one canonical example table that the suite feeds to the gate.
 7. **The moved text:** the `work` CTO and CLO HARD GATE bullets and `review` step 4 are moved here (their `Why`
    lines and learning links preserved), generalised from "architecture fork" to "technical ruling".
 
@@ -257,10 +265,12 @@ The index line in `AGENTS.md` is unchanged (ids are immutable). Growth is about 
 - `AGENTS.rules.md` (rule body, tag), `.claude/rule-body-hashes.txt` (`python3 scripts/lint-rule-bodies.py --write`),
   `.claude/rule-weakening-acks.txt` (append one ack, reason "NOT a weakening - strictly additive ...")
 - `.claude/hooks/pre-ask-technical-fork-gate.sh` and `.claude/hooks/pre-ask-technical-fork-gate.test.sh`
-- `plugins/soleur/skills/brainstorm-techniques/references/decision-principles.md` (§Precedence rewrite, `Class:` schema)
+- `plugins/soleur/skills/brainstorm-techniques/references/decision-principles.md` (§Precedence rewrite, Decision Classes table schema)
+- `plugins/soleur/skills/plan/references/plan-scope-check.md` (its BLOCKED-rows append gains the Decision Classes row, `operator (scope)`)
 - `plugins/soleur/skills/go/SKILL.md`, `one-shot/SKILL.md`, `plan/SKILL.md`, `work/SKILL.md`, `review/SKILL.md`,
   `ship/SKILL.md`, `brainstorm/SKILL.md` (pointers; see byte-funding table)
-- `plugins/soleur/test/components.test.ts` (new wiring block, modelled on "Decision-principles taxonomy wiring")
+- `plugins/soleur/skills/plan-review/SKILL.md` (one link to the reference; no byte ceiling applies)
+- `plugins/soleur/test/components.test.ts` (new wiring block, modelled on "Decision-principles taxonomy wiring"; and the existing test "ship renders the challenge record + files the action-required issue", which pins the tokens `decision-challenges.md`, `action-required` and `decision-challenge` in `ship/SKILL.md`: the step 2.5 pointer keeps all three, or the test is repointed to `decision-challenges-render.md` in the same commit)
 - `plugins/soleur/test/skill-body-budget.json` (ceilings for work, review, ship lowered to the new sizes; none raised)
 - `knowledge-base/engineering/architecture/decisions/ADR-084-decision-classification-taxonomy-for-autonomous-question-surfacing.md` (amend)
 - `knowledge-base/project/learnings/2026-10-11-<slug>.md` (compound learning; slug chosen at compound time)
@@ -270,6 +280,7 @@ The index line in `AGENTS.md` is unchanged (ids are immutable). Growth is about 
 - `plugins/soleur/skills/brainstorm-techniques/references/technical-ruling-delegation.md`
 - `plugins/soleur/skills/ship/references/decision-challenges-render.md` (moved step 2.5 body + the gate's remedy procedure)
 - `plugins/soleur/skills/ship/scripts/technical-ruling-gate.sh`
+- one new file under `plugins/soleur/skills/plan/references/` receiving plan section 2.6's lifecycle-staging paragraph (byte funding)
 - `plugins/soleur/test/technical-ruling-gate.test.sh` and `plugins/soleur/test/fixtures/technical-ruling-gate/*.md`
   (auto-registered by the `plugins/soleur/test/*.test.sh` glob in `scripts/test-all.sh`; `lint-orphan-test-suites.sh` confirms)
 - `knowledge-base/project/specs/feat-one-shot-cto-technical-rulings/tasks.md`, `.../decision-challenges.md`
@@ -305,19 +316,21 @@ plugins/soleur/test/components.test.ts` (baseline green), `bash .claude/hooks/pr
 and file the two tracked deferrals (Deferral Tracking below). Measure with `wc -c` the exact blocks Phase 4 moves (the `work` CTO and CLO bullets, `review` step 1 item 4, `ship` step
 2.5, and `plan`'s section 2.6 lifecycle-staging paragraph) and replace the estimates in the byte-funding table with those
 numbers before RED. Grep `plugins/soleur/test` and `scripts` for anchors in
-the `work`/`review`/`ship` text about to move (no test pins were found at plan time for the CTO/CLO bullet text;
-confirm).
+the `work`/`review`/`ship` text about to move (no test pins were found at plan time for the work/review CTO and CLO
+bullet text; ONE pin exists for ship step 2.5, see Files to Edit; confirm both).
 
-**Phase 1 - RED.** Write, and watch fail, in this order: (a) hook cases R1-R9 (Test Scenarios) incl. the reason
-assertions; (b) `technical-ruling-gate.test.sh` + fixtures against a script that does not exist yet; (c) the
+**Phase 1 - RED.** Write, and watch fail, in this order: (a) hook cases R1-R10 and Z1-Z4 (Test Scenarios) incl. the reason
+assertions, the per-question payload builder, and the V1 inventory count and `MIN_CASES` raised by the number of new cases; (b) `technical-ruling-gate.test.sh` + fixtures against a script that does not exist yet; (c) the
 components.test.ts wiring block; (d) a byte test for the rule line (`lint-agents-rule-budget.py` run).
 
 **Phase 2 - Reference and taxonomy.** Create `technical-ruling-delegation.md`; rewrite `decision-principles.md`
 §Precedence (technical rulings route to the CTO in both modes; NEVER-Mechanical classes decide auto-decide eligibility,
-not who rules; add the `Class:` schema; link the new reference, which also satisfies the reachability test).
+not who rules; add the Decision Classes table schema; link the new reference, which also satisfies the reachability test).
 
 **Phase 3 - Ship gate.** Implement `technical-ruling-gate.sh` (modes: `<path>`, `--branch`, `--pr-body <file>`; exit
-0 pass, 1 fail with `[FAIL] <path>:<item>: <reason> - <remedy>`, 2 usage/IO/unparseable, missing artifact = pass). Move
+0 pass, 1 fail with `[FAIL] <path>:<row>: <reason> - <remedy>`, 2 usage/IO/unparseable/no table, missing artifact = pass; the
+artifact is also looked up under `specs/archive/`). Phase 3's ship edits and Phase 4's ship funding (moving step 2.5 out)
+land in ONE commit, because ship has no byte headroom and a Phase 3-only commit would red the budget lint. Move
 step 2.5 into `decision-challenges-render.md`, rewrite it (both classes render under the existing `## Model Dissents (informational)` heading, technical items in a
 `### Ruled by CTO agent` sub-block with their Ruled-by lines and no issue, operator-class items in the existing form with the
 `action-required` issue; split items yield both; no new top-level PR-body heading, which keeps the diff and the
@@ -330,7 +343,7 @@ that writes the final body (the step numbered "3. Update the PR") and before `gh
 body`. Phase 6 step 2.5 (render) precedes both; the "Phase 6 step 5.5" KB-archival step is a different step and is not
 touched.
 
-**Phase 4 - Skill pointers.** Apply the byte-funding table; `go`/`one-shot` get the inline three-line rule;
+**Phase 4 - Skill pointers.** Apply the byte-funding table; `go`/`one-shot` get the inline three-line rule, and one-shot calls the gate (`--branch`) once after the plan phase and before `work`, resolving `pending` technical rows with the CTO in its main context;
 `work`/`review` have their bullets replaced by pointers. Re-run `python3 scripts/lint-skill-body-budget.py --base
 $(git merge-base origin/main HEAD)` and lower the work, review and ship ceilings.
 
@@ -340,8 +353,11 @@ authorization"; escape hatch and carve-outs unchanged. Update the header contrac
 polarity, stated where the first one is).
 
 **Phase 6 - Rule and ADR.** Amend the rule body; `--write`; append the ack; run the three rule lints. Amend ADR-084
-(Decision 1: the precedence carve-out generalises to technical rulings; Decision 5: ship renders by `Class:`; Decision 6:
-"one-shot inherits, not edited" is superseded for the subagent-prompt rule only; Consequences; Alternatives: "route everything consequential to the operator" rejected, "a Stop-hook label matcher"
+(Decision 1: the precedence carve-out generalises to technical rulings; Decision 2: the four NEVER-Mechanical classes decide
+auto-decide eligibility, not who rules; Decision 3: a subagent that has the Agent tool spawns the CTO itself, otherwise it
+returns the row as `pending` to its parent; Decision 5: ship renders by class; Decision 6:
+"one-shot inherits, not edited" is superseded for the subagent-prompt rule only; Consequences, including the drift-guard line
+about `ship` emitting the issue, which step 2.5's move changes; Alternatives: "route everything consequential to the operator" rejected, "a Stop-hook label matcher"
 rejected with the 13-of-15 evidence).
 
 **Phase 7 - Verify and compound.** Full verification list in Acceptance Criteria; `soleur:compound` for the learning;
@@ -392,12 +408,12 @@ legal posture change (CLO not needed: the plan moves no data and changes no noti
 
 **Amend ADR-084** (`ADR-084-decision-classification-taxonomy-for-autonomous-question-surfacing.md`, Accepted), not a
 new ADR: the decision extends its Decision 1 ("CTO-fork precedence carve-out") and Decision 5 (headless record to `ship`),
-and narrowly supersedes Decision 6 ("one-shot inherits, not edited"): this plan adds one short inline rule to one-shot's
+also reinterprets Decisions 2 and 3, and narrowly supersedes Decision 6 ("one-shot inherits, not edited"): this plan adds one short inline rule to one-shot's
 subagent prompts because a Task subagent reads prompt text only, so a link alone is not read. New text: a decision whose
 substance is technical judgment is a *technical ruling*, routed to the CTO agent (CLO for legal) in both modes and
 recorded `Ruled by CTO agent`; it is never persisted to `decision-challenges.md` as an owner item. The
 NEVER-Mechanical classes govern whether the session model may auto-decide, not who rules. `decision-challenges.md`
-items carry a mandatory `Class:` line; `ship` renders and files by class. Alternatives Considered gains: "route every
+carries a mandatory `## Decision Classes` table; `ship` renders and files by class. Alternatives Considered gains: "route every
 consequence-heavy decision to the operator" (the status quo; it produced issue 9642) and "a Stop-hook label matcher"
 (rejected on the 13-of-15 over-block record in `unkept-promise-hook.sh`). This is a deliverable of this plan, not a
 follow-up issue (`wg-architecture-decision-is-a-plan-deliverable`).
@@ -431,8 +447,11 @@ which it already does, so the gate adds no new surface.
 Scoped to the one new executable shipped to customer CLIs (`technical-ruling-gate.sh`, observability layer 7: it runs
 on the user's machine, so the signal is the process's own exit and stderr, read by the `ship` skill).
 
-The `discoverability_test` runs from a repository checkout (preflight Check 10 at ship), so the fixture path under
-`plugins/soleur/test/fixtures/` is available; it is a development-time probe, not a customer-install one.
+The `discoverability_test` runs from a repository checkout (preflight Check 10 at ship, before the Phase 6 step that archives
+the spec directory), and it points at this branch's own `decision-challenges.md`, which carries a valid Decision Classes table, so the
+command exists in THIS PR's tree and prints a real verdict. It deliberately avoids a path under `plugins/soleur/test/`:
+deepen-plan Phase 4.7's suite-shaped-command check flags any `/test/` segment (measured on the first draft of this block).
+It is a development-time probe, not a customer-install one.
 
 ```yaml
 liveness_signal:
@@ -442,10 +461,10 @@ liveness_signal:
   configured_in: "plugins/soleur/skills/ship/SKILL.md (Technical-Ruling Gate) and plugins/soleur/skills/ship/scripts/technical-ruling-gate.sh"
 error_reporting:
   destination: "stderr of the gate script, surfaced in the ship transcript; exit 1 blocks PR-ready"
-  fail_loud: "yes: exit 1 on an unruled technical item, exit 2 on an unparseable artifact (never a silent pass); a missing artifact is the only exit-0 no-op and prints [PASS] no decision-challenges artifact"
+  fail_loud: "yes: exit 1 on an unruled technical item, exit 2 on an artifact with no parseable Decision Classes table (never a silent pass); a missing artifact is the only exit-0 no-op and prints [PASS] no decision-challenges artifact"
 failure_modes:
   - mode: "a technical item is labelled operator to evade the gate"
-    detection: "the script rejects a bare Class: operator and any category outside the closed list; the suite pins both"
+    detection: "the script rejects a bare operator class and any category outside the closed list, a technical row without a well-formed Ruled-by cell, and a conforms: no ruling; the suite pins each"
     alert_route: "[FAIL] line in the ship transcript"
   - mode: "the gate is skipped because the SKILL.md section is deleted or unlinked"
     detection: "components.test.ts wiring block asserts the ship section heading, the script path and the reference link"
@@ -454,7 +473,7 @@ logs:
   where: "ship transcript; SOLEUR_RULE_APPLIED line"
   retention: "session transcript plus the weekly rule-metrics aggregate"
 discoverability_test:
-  command: "bash plugins/soleur/skills/ship/scripts/technical-ruling-gate.sh plugins/soleur/test/fixtures/technical-ruling-gate/pass-mixed.md"
+  command: "bash plugins/soleur/skills/ship/scripts/technical-ruling-gate.sh knowledge-base/project/specs/feat-one-shot-cto-technical-rulings/decision-challenges.md"
   expected_output: "[PASS]"
 ```
 
@@ -465,87 +484,140 @@ derived from the design, written before the guards (Phase 1 builds them first).
 
 ### Guard 1 — Technical-ruling ship gate (`technical-ruling-gate.sh`)
 
-**Property.** No PR reaches ready with a `decision-challenges.md` item or PR-body line that asks the operator a
-technical question: every item has a valid `Class:`, every `Class: technical` item carries a `Ruled by` line, and the
-"Owner decision needed" / "Owner ruling needed" label appears only on `Class: operator (<category>)` items.
+**Property.** No PR reaches ready with a `decision-challenges.md` or PR-body line that asks the operator a technical
+question: every persisted decision has a valid row in the artifact's `## Decision Classes` table, every `technical` row
+carries a well-formed `Ruled by` cell that does not contradict what was built, and the "Owner decision needed" / "Owner
+ruling needed" label appears only with `(operator: <category>)`.
 
-**Assembly.** Two surfaces and one producer: (1) every item in the branch's `decision-challenges.md`, whichever `##`
-heading it sits under (items are numbered-list entries opening with a number and a period; headings that carry the owner label bind every item beneath);
-(2) every label occurrence in the PR body after fenced blocks are stripped (spellings: Owner decision(s) needed, Owner
-ruling(s) needed, Decision needed from the owner, case-insensitive); (3) the producer, ship step 2.5, which must route
-by `Class:` and file the issue for operator-class only. The chokepoint is the script, called at Phase 5.5 (artifact) and after
-the Phase 6 `gh pr edit` (PR body, the body ship actually wrote); both call sites are named in
-`decision-challenges-render.md` and pinned by the wiring test, and a suite case asserts the body arm reads a rendered body,
-not a template.
-The closed category list lives in the script and in the reference; a suite case reads both and compares the sets.
-Scope is deliberately the BRANCH's own artifact (`--branch`) and a PR-body file; there is no `--corpus` mode: a plan-time
-count found 172 tracked non-archived `decision-challenges.md` files, none carrying `Class:` lines, so a corpus sweep would
-red on history. An in-flight branch that rebases onto this gate adds `Class:` lines to its own artifact at ship time (cheap,
-and the remedy text says so).
+**Assembly.** Two surfaces, one producer set, one parser. (1) The artifact: its `## Decision Classes` table is the contract,
+because real artifacts use at least four free-form item shapes (numbered entries, `DC-n` / `UC-n` headings, `Challenge n`,
+`Taste` / `User-Challenge` sections) and a body scanner would either reject most of them or miss items; one pipe table is
+shape-independent and is the only thing parsed. (2) The PR body, read AFTER the Phase 6 `gh pr edit` that writes it, fences
+stripped; label spellings: Owner decision(s) needed, Owner ruling(s) needed, Decision needed from the owner, case-insensitive,
+over the whole artifact and the whole body. (3) The producers that append to the artifact, all of which write a row: plan Step 4.5
+and Plan Review (headless persist), `plan-review`, `work` emergent decisions, and the `plan-scope-check.md` BLOCKED-rows path
+(each is an operator `scope` row). Chokepoints: the script's parser (one function, both call sites) and the three call sites
+(one-shot after the plan phase and before work, ship Phase 5.5, ship Phase 6 after the body write), each named in
+`decision-challenges-render.md` and pinned by the wiring test. The artifact is looked up at `specs/<branch>/` and, when
+absent there, under `specs/archive/` for the same branch (`archive-kb` and compound Step E can move it early), so an
+early archive cannot turn the gate into a silent pass. The closed category list lives in the script, the reference and (in prose
+roots) the rule body; the parity case reads all three.
+
+Scope is the BRANCH's artifact and a PR-body file; there is no corpus mode: a plan-time count found 172 tracked non-archived
+`decision-challenges.md` files and none carries a `## Decision Classes` table, so a corpus sweep would red on history. An
+in-flight branch that rebases onto this gate adds the table at ship time (the remedy text says so; it is a few rows).
+
+**Termination and failure handling (spec-flow findings).** The gate's remedy is bounded: at most two CTO spawns per
+artifact; a spawn that fails, times out, or returns without Decision and Rationale counts as a failed attempt; a ruling that
+says the item is actually operator-class rewrites the row as `operator (<category>)` with the CTO's reason, once; after the
+cap the terminal state is NOT an operator question: the PR stays draft and ship files one `domain/engineering` issue (never
+`action-required`) carrying the question and the evidence. A `Ruled by` cell whose `conforms:` token is `no` (the ruling differs
+from what a headless subagent assumed and built) fails ship with the remedy "re-enter `work` for the item, or record
+`conforms: n/a (nothing built on the assumption)`"; a row left as `pending - assumed: <default>` fails as
+`unruled-technical`, and one-shot's main context resolves those right after the plan phase (before `work`), so a wrong
+assumption does not ride through work and review. A ruling or dissent that names user-data loss, an irreversible act, money or
+legal exposure adds an operator row (`operator (irreversible)` etc.) that names the ACTION and cites the technical row's item
+id, never restating the threshold (an `irreversible` row is where the observed question hid its technical half).
 
 **Mutation matrix:**
 
+Table-driven: one fixture per row.
+
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | Remove the `Class:` line from item 2 of a fixture whose item 1 is compliant (a check that stops at the first item is the defect) | RED, reason `no-class`, names item 2 |
-| 2 | Strip the `Ruled by CTO agent` line from a `Class: technical` item | RED, reason `unruled-technical`, remedy text names the CTO spawn |
-| 3 | Replace the item scanner with one that finds zero items (dispatch vacuity) against a fixture of five items | RED: the script reports "0 items examined" as exit 2, never exit 0 |
-| 4 | Write `Class: operator` with no category, then with `(vibes)` | RED, reason `bad-category`, both spellings |
-| 5 | Put the label `## Owner decision needed` over a heading holding a `Class: technical` item | RED, reason `technical-labelled-owner` |
-| 6 | PR body line `Owner ruling needed: ...` without `(operator: <category>)`; same line inside a fenced block | RED for the first, PASS for the fenced one |
-| 7 | Remove one category from the script's list while the reference keeps it, and separately drop the word `brand` from the rule body | RED in the parity case (script vs reference by token; rule body by the root words money, scope, priorit, schedul, irreversible, production, legal, brand) |
-| 8 | Feed the reference's canonical example item to the gate, then break its `Class:` spelling in the reference only | RED: producer/consumer contract |
+| 1 | Blank the Class cell of row 2 in a table whose row 1 is compliant (a check that stops at the first row is the defect) | RED, reason `bad-class`, names row 2 |
+| 2 | Blank the Ruling cell of a `technical` row, and separately set it to `pending - assumed: x` | RED, reason `unruled-technical`, remedy text names the CTO spawn and the two-attempt cap |
+| 3 | Replace the row scanner with one that finds zero rows (dispatch vacuity) over a five-row table | RED: exit 2 with "0 rows examined", never exit 0 |
+| 4 | `operator` with no category, then `operator (vibes)` | RED, reason `bad-category`, both spellings |
+| 5 | The label `Owner decision needed` in the artifact body without `(operator: <category>)` on the line | RED, reason `owner-label-unscoped` |
+| 6 | PR body line `Owner ruling needed: ...` without `(operator: <category>)`; the same line inside a fenced block | RED for the first, PASS for the fenced one |
+| 7 | Remove one category from the script's list while the reference keeps it; separately drop the word `brand` from the rule body | RED in the parity case (script vs reference by token; rule body by the root words money, scope, priorit, schedul, irreversible, production, legal, brand) |
+| 8 | Feed the reference's canonical example table to the gate, then break its `Class` spelling in the reference only | RED: producer/consumer contract |
+| 9 | A Ruling cell `Ruled by CTO agent, 2026-10-11: x` with no dash-separated rationale part, and another with no `conforms:` token | RED, reason `bad-ruling-shape` |
+| 10 | A Ruling cell ending `conforms: no` | RED, reason `ruling-contradicts-assumed`, remedy names `work` re-entry |
+| 11 | A compliant table that sits only inside a fenced block | RED: exit 2 (no table), a fenced table never counts |
+| 12 | Move the artifact to `specs/archive/` before the gate runs | still examined (RED when its table is bad), never a silent pass |
 
-**Harness rows.** Edit the suite's `run_case` to swallow the SUT's exit code -> the suite must red on its own floor
-(a SUT-written execution marker count, as `unkept-promise-hook.test.sh` does). Must-PASS inputs that are not the
-canonical fixture: an operator item with category `legal-risk`; an item whose `Class:` line is indented and bulleted
-(a bulleted, indented `Class: operator (money)` line); a `Class: technical` item whose Ruled-by line is on the following line; an artifact
-absent entirely.
+Rows 1, 2, 4, 5, 6 can be driven RED from the design before the script exists; rows 3, 7, 8 need the script, so they are authored
+as the script's first green-then-red rows and the suite's own floor (a SUT-written execution marker count, as
+`unkept-promise-hook.test.sh` does) is checked first.
 
-**Anchor.** The stored value is the category list; what must also move for a weakening to pass is the reference file
-(parity case) and a component-wiring assertion that names the script; a one-diff edit to the script alone reddens the
-parity case, and an edit to both is visible in review as a change to the closed operator list, which is the thing the
-CTO ruled must stay closed.
+**Harness rows.** Edit the suite's `run_case` to swallow the SUT's exit code -> the suite must red on its own floor. Must-PASS
+inputs that are not the canonical fixture: an operator row with category `legal-risk`; a table whose Ruling cell spells `CLO`;
+a `technical` row ruled with `conforms: n/a (nothing built on the assumption)`; a table preceded by free-form items in the four
+real shapes (numbered, `DC-n`, `Challenge n`, `Taste` sections), copied from tracked artifacts at the time the suite is written;
+an artifact absent entirely.
+
+**Anchor.** The stored value is the category list; what must also move for a weakening to pass is the reference file and the
+rule body (the parity case), so a one-diff edit to the script alone reddens it, and an edit to all three is visible in review as
+a change to the closed operator list, which is the thing the CTO ruled must stay closed. The table itself is written by the
+same model that wrote the rows it classifies; the gate checks form, not truth (see Risks).
 
 ### Guard 2 — Technical-ruling arm in the pre-ask hook
 
 **Property.** A technical-ruling AskUserQuestion is denied with a reason naming `soleur:engineering:cto`, and an
 authorization question is never denied by this arm.
 
-**Assembly.** The arm quantifies over the whole flattened corpus (every question and every option label and
-description, all questions in the array) for the cue, and over the QUESTION text only for the exemption; it sits after
-the expert arm and ahead of `AUTHORITY_RE`, so it must be evaluated on every input that reaches that point. Other arms
-that can pre-empt it: the self-invocation allow and the expert arm (unchanged). The fail-open paths (jq missing, corpus
-rc != 0) are unchanged and remain permit.
+**Assembly.** The arm evaluates EACH question separately (its question text plus its own option labels and descriptions): the
+cue over that question's flattened text, the exemption over that question's TEXT only, never over the concatenation of all
+questions and never over option labels (a flattened corpus lets question 1's "Approve" exempt question 2's ruling, and a button
+labelled "Approve" would be a one-word bypass). It sits after the expert arm and ahead of `AUTHORITY_RE`, so it is evaluated on
+every input that reaches that point. It requires a new per-question jq extraction and a multi-question payload builder in the
+suite (the existing `payload()` emits one question). Other arms that can pre-empt it: the self-invocation allow and the expert arm
+(unchanged). The fail-open paths (jq missing, corpus rc != 0) are unchanged and remain permit.
+
+Sketches to be tuned against the fixtures in Phase 1 (verified in this deepen pass with `grep -E` against R1-R10 and A1-A5):
+
+```text
+CUE   : how (strict|stringent|rigorous) | (stricter|strictness|stringen) | (evidence|proof|emptiness) (bar|threshold|ceiling|floor|standard)
+        | (threshold|ceiling)s? | (is|are) (the )?(evidence|proof) (enough|sufficient) | adopting ... accepted | status (flip|move|change)
+        | (approach|option|design|variant) [ab] | [ab] (or|vs) [ab]
+PERM  : (may|can) (i|we) | is it (ok|okay|fine) to | ok to | go-ahead | approve | authori[sz]e | ack-destroy
+```
+
+`should I|we` is deliberately NOT in PERM (it would exempt "Should I use approach A or approach B", the exact ruling shape).
+Verified: R1, R2, R3, R7 match CUE and not PERM (deny); R5, R6, R8, R9 allow; D1-D3 do not match CUE, so R10 falls through to the
+investigation reason; A1-A5 match neither, so they are protected by cue absence and do not witness the exemption.
+
+**Residual, stated where the contract is stated.** Appending a sentence such as "Approve the stricter threshold?" to a ruling
+question exempts the whole question (R6 pins this on purpose): wrongly blocking an authorization is the worse failure the
+header already names, so the arm evaluates the question, not the sentence. The ship gate and the skill text, not this arm, are the
+primary defence.
 
 **Mutation matrix:**
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | Move the arm below the `AUTHORITY_RE` short-circuit | RED: the observed-question fixture (carries "dispatched" and "deleted") flips deny to allow |
-| 2 | Empty the cue regex (dispatch vacuity) | RED: every deny row reads allow; the suite has a floor of >= 4 deny rows that must hit this arm's reason |
+| 1 | Move the arm below the `AUTHORITY_RE` short-circuit | RED: R1 (carries "dispatched" and "deleted") flips deny to allow |
+| 2 | Empty the cue regex (dispatch vacuity) | RED: the deny rows with DIFFERENT vocabulary (R1, R2, Z2, Z3) all read allow; the suite carries a floor of >= 4 deny rows that must hit this arm's reason |
 | 3 | Put the cue in question 2 of a two-question payload whose question 1 is a compliant authorization | RED if the arm reads only the first question |
-| 4 | Widen the exemption to the full corpus (a button labelled "Approve") | RED: the relabel-bypass fixture flips deny to allow |
-| 5 | Add bare `delete|dispatch|deploy|merge` to the exemption | RED: the observed question flips to allow (the CTO's R2 flaw, pinned) |
-| 6 | Make the exemption empty | RED: "May I dispatch the rebirth now?" and "Approve the stricter threshold?" flip allow to deny |
+| 4 | Compute the exemption over the concatenation of all questions | RED: R4 (question 1 "Approve ...", question 2 a ruling) flips deny to allow |
+| 5 | Widen the exemption to the full corpus (a button labelled "Approve") | RED: R7 flips deny to allow |
+| 6 | Add bare `dispatch` to the exemption; separately bare `delete` | RED each: R1 flips via "dispatched"; a fixture carrying only "deleted" flips for `delete` (one fixture per verb, as D9(b) does) |
+| 7 | Make the exemption empty | RED: Z1 ("May I raise the ceiling threshold to 5%?", cue AND permission shape) flips allow to deny; R5/R8 cannot witness this row because they carry no cue |
+| 8 | Add `should (i\|we)` to the exemption | RED: Z2 ("Should I use approach A or approach B for the retry design?") flips deny to allow |
 
-**Harness rows.** The existing A1-A5 authorization fixtures must stay green unmodified (they are the must-PASS set not
-written for this arm); add two new must-PASS rows with different wording from any A-row ("Is it ok to go ahead and
-flip the flag?", "What is the budget for the second host?"). Suite edit that must red: flip one new deny row's
-expectation and require the suite to fail.
+**Harness rows.** The existing A1-A5 authorization fixtures must stay green unmodified; they are protected by cue absence, so the
+new must-PASS rows that actually witness the exemption are Z1 and "Approve raising the alert threshold to 5%?" (Z4), plus R5 and
+R8 for cue-free authorizations. Deny rows must not share one vocabulary: R1 (strict/threshold), R2 (adopting/accepted), Z2
+(approach A/B), Z3 ("Is the evidence sufficient to retire the guard?"). Suite edit that must red: flip one deny row's expectation.
+The suite's inventory count (V1) and `MIN_CASES` rise by the number of new cases; Phase 1 updates both.
 
-**Anchor.** Not applicable: the arm compares no stored value to a protected thing; its only stored data is a regex
-literal, and the V3 subset assertion between `AUTHZ_VERB_RE` and `AUTHORITY_RE` is untouched. A new structural row (V4)
-asserts the ruling arm's exemption regex shares no token with the bare-verb set the CTO ruled out.
+**Anchor.** Not applicable: the arm compares no stored value to a protected thing. V4 is a structural row defined like V3:
+extract the exemption regex from the hook source, require >= 6 members (a non-vacuity floor), and assert none of the members is a
+bare `delete`, `dispatch`, `deploy`, `merge`, `rotate`, `revoke`, `replace` or `destroy` alternative.
 
 ### Guard 3 — Wiring test (`components.test.ts`, "Technical-ruling delegation wiring")
 
 **Property.** Every skill that can reach a technical fork or persists `decision-challenges.md` links the shared
 reference, and the shipped pieces it names exist.
 
-**Assembly.** Consumers are derived, not listed: every `skills/*/SKILL.md` whose text contains `decision-challenges.md`
-or `soleur:engineering:cto` must link the reference, plus the explicit seven the brief names (go, one-shot, plan, work,
-review, ship, brainstorm). Also asserted: the reference exists; `ship/SKILL.md` has the `Technical-Ruling Gate`
+**Assembly.** Consumers are derived, not listed: every `skills/*/SKILL.md` whose text contains `soleur:engineering:cto`
+must link the reference directly (at plan time that is plan, work, review and plan-review, so plan-review gains one
+link; it has no byte ceiling), plus the explicit seven the brief names (go, one-shot, plan, work, review, ship, brainstorm).
+The artifact's writers are a separate, explicit set: skills that append to `decision-challenges.md` (plan, plan-review, work,
+ship) must link `decision-principles.md` (which carries the table schema and links the reference); a derived arm keyed on the bare
+string `decision-challenges.md` was rejected because review, compound and archive-kb only mention it and have no reason to link. Also asserted: the reference exists; `ship/SKILL.md` has the `Technical-Ruling Gate`
 heading and names the script; the script exists and is executable; `AGENTS.rules.md` rule body names
 `soleur:engineering:cto`; and the one-shot inline rule (the one place the text is copied, because a Task subagent reads
 prompt text only) contains `soleur:engineering:cto`, `Ruled by CTO agent` and the "surface it" override clause, so the copy
@@ -574,7 +646,7 @@ must red on the floor of >= 7 consumers.
 |---|---------------------|-----------|--------|
 | 1 | "A definition of \"technical ruling vs operator decision\" in one canonical place (extend the existing rule body in AGENTS.rules.md and its index/tier entries" | Phase 6 rule amendment; reference §2-3; `decision-principles.md` | mapped |
 | 2 | "A reusable delegation step in the shipped skills (one shared reference file, cited by the skills, not copy-pasted into each)" | Phase 2 `technical-ruling-delegation.md`; Phase 4 pointers | mapped |
-| 3 | "Wire it into the skills where such forks arise (at least: go, one-shot, plan, work, review, ship, brainstorm, and the decision-challenge handling in one-shot/plan)" | Phase 4 byte-funding table; Phase 3 step 2.5 | mapped |
+| 3 | "Wire it into the skills where such forks arise (at least: go, one-shot, plan, work, review, ship, brainstorm, and the decision-challenge handling in one-shot/plan)" | Phase 4 byte-funding table (go, one-shot, plan Plan Review and Step 4.5, work, review, ship, brainstorm; one-shot also calls the gate); Phase 3 step 2.5; `plan-scope-check.md` row | mapped |
 | 4 | "Make sure Soleur end users running these skills are never the ones asked the technical question" | reference §1 and §6; one-shot inline rule; ship gate | mapped |
 | 5 | "Extend `.claude/hooks/pre-ask-technical-fork-gate.sh` (and its test file, test-first per cq-write-failing-tests-before)" | Phase 1(a), Phase 5, Guard 2 | mapped |
 | 6 | "Decide, with evidence, whether prose-only surfacing can be caught mechanically" | Research H1/H5 + Cut List: artifact and PR-body form is deterministic (Guard 1); chat prose is not (R3) | mapped |
@@ -598,7 +670,7 @@ must red on the floor of >= 7 consumers.
 | compound learning | "and a compound learning" | asked |
 | `ship/references/decision-challenges-render.md` | — | inferred — justification: ship/SKILL.md has a 0-byte headroom ceiling anchored to the merge base, so the step 2.5 body must move out for any addition to fit |
 | `skill-body-budget.json` ceilings lowered | — | inferred — justification: the ratchet is one-sided; leaving a ceiling above the new size forfeits the guard's value, and lowering never reds |
-| `Class:` item schema | — | inferred — justification: CTO ruling R4/R6; without a parseable field the gate cannot distinguish a technical item from an operator one |
+| `## Decision Classes` table schema | — | inferred — justification: CTO ruling R4/R6; without a parseable field the gate cannot distinguish a technical decision from an operator one, and a table is the one shape every existing artifact format can carry |
 | ADR-084 amendment | — | inferred — justification: `wg-architecture-decision-is-a-plan-deliverable`; the plan changes an existing ADR's routing contract |
 | tracking issue and two deferral issues | — | inferred — justification: `wg-when-deferring-a-capability-create-a` and the brief's `Closes` instruction for an issue created for this work |
 | `go` / `one-shot` inline three-line rule | — | inferred — justification: CTO ruling R6; Task subagents read prompt text only, so a link is not read |
@@ -617,12 +689,12 @@ must red on the floor of >= 7 consumers.
 - [ ] AC1. `hr-technical-fork-is-not-an-operator-question` body names `soleur:engineering:cto`, the closed operator list and the "surface it" override; `python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.rules.md` exits 0 with the rule line <= 590 bytes and B_ALWAYS < 44000.
 - [ ] AC2. `python3 scripts/lint-rule-bodies.py --check --base "$(git merge-base origin/main HEAD)"` exits 0 with one new ack line whose hash equals the new body and whose reason says "NOT a weakening - strictly additive"; the PR body names this ack as the single item needing the owner's CODEOWNERS review.
 - [ ] AC3. `python3 scripts/lint-agents-enforcement-tags.py` and `python3 scripts/lint-rule-ids.py` exit 0 (the `[skill-enforced: ship Technical-Ruling Gate]` unit resolves).
-- [ ] AC4. `technical-ruling-delegation.md` exists, is linked (markdown link, not backticks) from every consumer, contains the closed list, the delegation step, the recording format, the override clause and the `Class:` schema; the moved `work`/`review` text keeps its `Why` lines.
-- [ ] AC5. `bash plugins/soleur/test/technical-ruling-gate.test.sh` passes, including all eight Guard 1 mutation rows driven RED against a mutated copy of the script and a floor on SUT executions; `bash scripts/lint-orphan-test-suites.sh` reports the new suite as run (the `plugins/soleur/test/*.test.sh` glob is the registration; verify it, do not assume it); the suite places any owning EXIT trap before it sources `test-helpers.sh`.
-- [ ] AC6. `bash .claude/hooks/pre-ask-technical-fork-gate.test.sh` passes with the new cases; the observed-question fixture (R1) is denied with a reason containing `soleur:engineering:cto` and `technical-ruling-delegation.md`; A1-A5 and every pre-existing case are unchanged and green.
+- [ ] AC4. `technical-ruling-delegation.md` exists, is linked (markdown link, not backticks) from every consumer, contains the closed list, the delegation step, the recording format, the override clause and the Decision Classes table schema; the moved `work`/`review` text keeps its `Why` lines.
+- [ ] AC5. `bash plugins/soleur/test/technical-ruling-gate.test.sh` passes, including all twelve Guard 1 mutation rows driven RED against a mutated copy of the script and a floor on SUT executions; `bash scripts/lint-orphan-test-suites.sh` reports the new suite as run (the `plugins/soleur/test/*.test.sh` glob is the registration; verify it, do not assume it); the suite places any owning EXIT trap before it sources `test-helpers.sh`.
+- [ ] AC6. (Moves to the follow-up PR if the Scope Check split triggers.) `bash .claude/hooks/pre-ask-technical-fork-gate.test.sh` passes with the new cases; the observed-question fixture (R1) is denied with a reason containing `soleur:engineering:cto` and `technical-ruling-delegation.md`; A1-A5 and every pre-existing case are unchanged and green.
 - [ ] AC7. `bun test plugins/soleur/test/components.test.ts` is green, including the new wiring block and the unchanged "Skill description budget" test (`SKILL_DESCRIPTION_WORD_BUDGET` untouched).
 - [ ] AC8. `python3 scripts/lint-skill-body-budget.py --base "$(git merge-base origin/main HEAD)"` exits 0 and no ceiling in `skill-body-budget.json` increased (`git diff` of the file shows only decreases).
-- [ ] AC9. `ship/SKILL.md` Phase 6 step 2.5 files the `action-required` issue only for `Class: operator` items; technical items render in a `### Ruled by CTO agent` sub-block of the existing `## Model Dissents (informational)` with the Ruled-by lines; no section name in the rendered body contains `Operator`, `Post-merge` or `Follow-up`.
+- [ ] AC9. `ship/SKILL.md` Phase 6 step 2.5 files the `action-required` issue only for `operator` rows of the Decision Classes table; technical items render in a `### Ruled by CTO agent` sub-block of the existing `## Model Dissents (informational)` with the Ruled-by lines; no section name in the rendered body contains `Operator`, `Post-merge` or `Follow-up`.
 - [ ] AC10. ADR-084 amended (Decision, Consequences, Alternatives); `bash scripts/check-adr-ordinals.sh` exits 0; `plugins/soleur/test/c4-count-parity.test.sh` is green.
 - [ ] AC11. A compound learning exists under `knowledge-base/project/learnings/` naming the carrier-versus-hook finding (H5), the byte-ceiling constraint, and the self-classification risk.
 
@@ -644,31 +716,36 @@ must red on the floor of >= 7 consumers.
 | R1 | "How strict must the emptiness evidence be before the volume rebirth is dispatched and the plaintext volume deleted?" with options "Tighten the ceiling", "Keep the thresholds" | deny; reason names the CTO and the reference |
 | R2 | "Should the ADR status move from adopting to accepted now that the grader passes?" | deny; the reason says a flip whose criterion the ADR states is mechanical (run the grader, cite it, flip) and otherwise the CTO rules |
 | R3 | R1 plus a money word in an option description ("costs one more run") | deny (arm is ahead of the authority short-circuit) |
-| R4 | Two questions: first "Approve the merge of PR 9628?", second R1's text | deny on the second; and the same payload with only the first question allows |
+| R4 | Two questions: first "Approve the merge of PR 9628?", second R1's text | deny (each question is evaluated alone; the first question's "Approve" must not exempt the second); and the same payload with only the first question allows |
 | R5 | "May I dispatch the rebirth now?" | allow |
-| R6 | "How strict should the evidence bar be? Approve the stricter threshold?" | allow (permission-shaped, exempt) |
+| R6 | "How strict should the evidence bar be? Approve the stricter threshold?" | allow (the question carries a permission shape; this pins the stated residual that appending "Approve ...?" exempts the question) |
 | R7 | R1 with an option labelled "Approve" and no permission shape in the question | deny (button label never exempts) |
 | R8 | "Is it ok to go ahead and flip the flag?" and "What is the budget for the second host?" | allow, allow |
 | R9 | "Which of the two logo designs should the landing page use?" (brand) | allow (a brand choice; the cue set names technical nouns only, so "design" alone never matches) |
 | R10 | The 2026-08-19 investigation fixture D1 | deny, with the investigation reason (not the ruling reason) |
+| Z1 | "May I raise the ceiling threshold to 5%?" (cue AND permission shape) | allow (witnesses the exemption; R5 and R8 carry no cue and cannot) |
+| Z2 | "Should I use approach A or approach B for the retry design?" | deny (different vocabulary from R1; `should` is not an exemption) |
+| Z3 | "Is the evidence sufficient to retire the guard?" | deny |
+| Z4 | "Approve raising the alert threshold to 5%?" | allow |
 
 ### Ship gate script (suite cases)
 
 Fixtures: `pass-mixed.md` (one technical item with Ruled-by and one operator item with a category), `no-class.md`,
-`unruled-technical.md`, `bad-category.md`, `owner-label-over-technical.md`, `empty-items.md`,
-`pr-body-label-bare.md`, `pr-body-label-fenced.md`; plus an absent-file case (`--branch` on a spec dir with no
+`unruled-technical.md`, `pending-technical.md`, `bad-category.md`, `bad-ruling-shape.md`, `conforms-no.md`, `fenced-table-only.md`,
+`owner-label-unscoped.md`, `empty-table.md`, `pr-body-label-bare.md`, `pr-body-label-fenced.md`, plus the four real free-form item shapes
+copied from tracked artifacts; plus an absent-file case (`--branch` on a spec dir with no
 artifact -> `[PASS] no decision-challenges artifact`, exit 0) and an unreadable-file case (exit 2).
 
 ### Integration verification (for `soleur:qa`)
 
-Run `soleur:ship` Phase 5.5 against this branch's own `decision-challenges.md` (which carries `Class:` lines): the
+Run `soleur:ship` Phase 5.5 against this branch's own `decision-challenges.md` (which carries a Decision Classes table): the
 gate prints `[PASS]`, and the rendered PR body has a `### Ruled by CTO agent` sub-block with the plan-time rulings and no
-`Owner decision needed` label outside an operator-class item.
+`Owner decision needed` label outside an operator row.
 
 ## Risks and Sharp Edges
 
-- **Self-classification at the writer** (CTO R6). The model that mislabels an item can also write `Class: operator
-  (scope)`. Mitigations: closed category list, bare `operator` invalid, the burden-of-proof sentence at the choke point,
+- **Self-classification at the writer** (CTO R6). The model that mislabels a decision can also write an `operator (scope)`
+  row. Mitigations: closed category list, bare `operator` invalid, the burden-of-proof sentence at the choke point,
   and review reading the artifact. Residual: a determined mislabel with a plausible category passes. Accepted; the
   alternative (a classifier) was rejected as reward-hackable.
 - **Byte ceilings** are the schedule risk: five files sit within 125 bytes of an un-raisable ceiling. Phase 0 measures
@@ -713,3 +790,47 @@ advisory. Dispositions:
 - **User-Challenges, persisted not decided** (`decision-challenges.md` items 4 and 5): wiring in seven skills versus
   choke-point-only citation (three seats lean to the narrower form); making the hook arm its own PR by default (two seats).
   The owner's stated direction is the default; the split trigger in the Scope Check stays the fallback.
+
+## Enhancement Summary (deepen-plan, 2026-10-11)
+
+**Deepened on:** 2026-10-11. **Sections enhanced:** Guard Contract (1 and 2 rewritten), Technical Approach, Implementation Phases,
+Files lists, Observability, Acceptance Criteria, Test Scenarios, Architecture Decision, Risks.
+**Agents used:** `soleur:engineering:review:architecture-strategist`, `soleur:product:spec-flow-analyzer`,
+`soleur:engineering:review:test-design-reviewer`, plus the halts below and a live-verification pass run by the planner.
+
+**Halt gates (all pass after the edits recorded here):** 4.6 User-Brand Impact present, threshold `aggregate pattern`; 4.7
+Observability present with five fields (the first draft's `discoverability_test.command` named a path under `plugins/soleur/test/`
+and tripped the suite-shaped-command detector; repointed to this branch's own artifact, `probe-verb-gate.sh` exits 0); 4.8 no PAT
+shapes; 4.9 no UI surface; 4.10 no new persistent store or connection (skipped); 4.11 `scripts/lint-guard-contract.py` green, three
+guards, assemblies structural; 4.12 exactly one unfenced `## Scope Check`, no BLOCKED marker; 4.55 no downtime-inducing operation.
+
+**Verified live in this pass:** rule ids cited are active or migrated (`wg-architecture-decision-is-a-plan-deliverable` is migrated,
+active); issues 9628 MERGED, 9642 OPEN, 7462 CLOSED, 4133 and 8593 OPEN; every `knowledge-base/` path cited exists; B_ALWAYS 43166,
+skill-body ceilings and `lint-skill-body-budget.py --base` green at plan time.
+
+### Key improvements
+
+1. **The gate parses one table, not free-form items.** Architecture review found four real item shapes in tracked artifacts
+   (numbered entries, `DC-n` and `UC-n` headings, `Challenge n`, `Taste` sections) and one existing `**Class:**` field with a
+   different vocabulary; a body scanner would have blocked most real artifacts at ship (mutation row 3 would fire on them). The
+   contract is now a `## Decision Classes` table, shape-independent, with archive lookup so `archive-kb` cannot turn the gate into
+   a silent pass.
+2. **The remedy is bounded and the late-ruling hole is closed.** Spec-flow found an unbounded spawn loop, a ruling that could
+   contradict code already built on an assumption, and a ruling arriving only at ship after work and review. Now: two spawns
+   at most, a defined non-operator terminal state, a `conforms:` token, and one-shot resolves `pending` rows right after the plan
+   phase.
+3. **The hook arm evaluates per question** and its exemption no longer includes `should I|we`; deny fixtures use four distinct
+   vocabularies; the exemption is witnessed by a cue-plus-permission row (the A1-A5 fixtures are protected by cue absence and
+   cannot witness it).
+4. **Funding and pin facts corrected:** an existing `components.test.ts` test pins three tokens in `ship/SKILL.md` (kept in the
+   step 2.5 pointer); ship's edits land as one commit with the funding move; a new `plan/references/` file receives plan section
+   2.6; `plan-scope-check.md` is a named writer.
+
+### New considerations discovered
+
+- Issue 9642 stays parked; its CTO ruling is being obtained separately (out of scope here). The SLA and digest consumers of the
+  `decision-challenge` label (`action-required-sla-policy.ts`, `sla-issue-process.ts`, `operator-digest`) need no change: they key
+  on the label, and operator rows keep it.
+- A ruling or dissent that names data loss now produces an operator sibling row naming the ACTION; an operator-retained opt-in
+  ("let me decide this one myself") is persisted as a User-Challenge for the owner (`decision-challenges.md` item 6), not built.
+- The residual that "append `Approve ...?`" exempts a ruling question in the hook is stated where the hook's contract is stated.
