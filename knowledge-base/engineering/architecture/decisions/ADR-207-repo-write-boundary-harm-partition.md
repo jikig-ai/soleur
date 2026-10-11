@@ -250,8 +250,9 @@ UNDER-approximations — they fail toward a false GREEN — and they are what bo
 
 - **Reach.** A suite executed through a runtime glob rather than a path literal never enters the
   root set; `.github/scripts/test/run-all.sh` collects its 11 siblings that way, and 9 of them are
-  outside the closure today. The `npm run test:ci` out-of-class entry waves through the vitest
-  suites under `apps/web-platform`, of which only a handful are closure members.
+  outside the closure today. (Post-#9815 the ledger's last member — the `npm run test:ci`
+  inline scripts that waved through the vitest suites under `apps/web-platform` — retired with
+  the registrations; the class is empty and re-arms fail-loud on the next unresolvable argv.)
 - **Spelling of the callee.** The closure regex recognises four variable prefixes and five
   extensions; `"$ROOT/x.sh"`, `node scripts/x.js`, and `find … -exec bash {} \;` are invisible.
 - **Spelling of the command.** `VERB_RE` requires a literal lowercase `git` followed by one of three
