@@ -1098,6 +1098,77 @@ else
   fail "A5 bench (h): not refused:$_u_bad"
 fi
 
+# ---- Rg rows (Guard 1, #9813): the `glob:` mint ---------------------------------------------------------
+# A third declared-entry kind `glob:<literal-head>/<glob-tail>` mints `^glob:<pattern>` —
+# fail-toward-match at every step: a missing head dir degrades to `^<head>/` (the
+# dir-prefix edge the entry replaced, never narrower); a metachar-bearing malformed
+# entry mints `^glob:<entry verbatim>` (the hit arm's own malformed rule matches it —
+# a bare `^` would evaluate `*\n\n*` and NARROW); a `glob:` with no metachar at all is
+# a literal path entry and recurses.
+#
+# The kb path is COMPOSED (`${_KB}`), never spelled out: test-affected-kb-consumers'
+# oracle scans this file for `knowledge-base/<path>` tokens and would charge the
+# fixture strings as real reads.
+_KB='knowledge-base'
+FXG="$TESTROOT/fx-glob"
+mkdir -p "$FXG/${_KB}/project" "$FXG/a"
+: > "$FXG/a/b"
+assert_fixture_dir "$FXG"
+
+cases=$((cases + 1))
+_rg1="$(derive_run "$FXG" '_affected_reset_edges; _affected_add_edge "glob:'"${_KB}"'/**.sh"; printf "%s" "${_AC_EDGES[*]-}"' 2>&1)"
+if [[ "$_rg1" == "^glob:${_KB}/**.sh" ]]; then
+  pass "Rg1: a glob: over a live head dir mints the ^glob: edge verbatim"
+else
+  fail "Rg1: got '${_rg1:0:200}'"
+fi
+
+# FX carries no knowledge-base/ — the degrade ladder lands on the dir-prefix edge.
+cases=$((cases + 1))
+_rg2="$(derive_run "$FX" '_affected_reset_edges; _affected_add_edge "glob:'"${_KB}"'/**.sh"; printf "%s" "${_AC_EDGES[*]-}"' 2>&1)"
+if [[ "$_rg2" == "^${_KB}/" ]]; then
+  pass "Rg2: a missing head dir degrades to the dir-prefix edge the entry replaced"
+else
+  fail "Rg2: got '${_rg2:0:200}'"
+fi
+
+# Malformed, metachar-bearing: no `*/` head (`a*/b`), an empty head (`*.sh`), `?`,
+# `[`, a byte outside the grammar charset (`\`, space, `:`), and a head that is not
+# a clean repo-relative prefix (`../`, `/`, `//`, `/./`, `/../`) — each mints
+# ^glob:<entry verbatim>. `glob:x` is NOT here: with no metachar it is a literal,
+# which Rg4 drives.
+cases=$((cases + 1))
+_rg3="$(derive_run "$FXG" '_affected_reset_edges
+  for _e in "glob:a*/b" "glob:*.sh" "glob:'"${_KB}"'/?a" "glob:'"${_KB}"'/[a]" \
+            "glob:../x/*.sh" "glob:/x/*.sh" "glob:a//b/*.sh" "glob:a/./b/*.sh" "glob:a/../b/*.sh" \
+            "glob:a\\b/*.sh" "glob:a b/*.sh" "glob:x:y/*.sh" "glob:a/b/*/"; do _affected_add_edge "$_e"; done
+  printf "%s" "${_AC_EDGES[*]-}"' 2>&1)"
+if [[ "$_rg3" == "^glob:glob:a*/b ^glob:glob:*.sh ^glob:glob:${_KB}/?a ^glob:glob:${_KB}/[a] ^glob:glob:../x/*.sh ^glob:glob:/x/*.sh ^glob:glob:a//b/*.sh ^glob:glob:a/./b/*.sh ^glob:glob:a/../b/*.sh ^glob:glob:a\\b/*.sh ^glob:glob:a b/*.sh ^glob:glob:x:y/*.sh ^glob:glob:a/b/*/" ]]; then
+  pass "Rg3: every metachar-bearing malformed shape mints ^glob:<entry verbatim> (charset + repo-relative head)"
+else
+  fail "Rg3: got '${_rg3:0:600}'"
+fi
+
+# No metachar at all: a literal path entry — file mints ^file, dir mints ^dir/,
+# nonexistent mints nothing (same drop as a literal entry today).
+cases=$((cases + 1))
+_rg4="$(derive_run "$FXG" '_affected_reset_edges
+  _affected_add_edge "glob:a/b"; _affected_add_edge "glob:a"; _affected_add_edge "glob:'"${_KB}"'/"; _affected_add_edge "glob:nonexistent"
+  printf "%s" "${_AC_EDGES[*]-}"' 2>&1)"
+if [[ "$_rg4" == "^a/b ^a/ ^${_KB}/" ]]; then
+  pass "Rg4: a glob: with no metachar recurses literal — file, dir, empty-tail dir; nonexistent mints nothing"
+else
+  fail "Rg4: got '${_rg4:0:200}'"
+fi
+
+cases=$((cases + 1))
+_rg5="$(derive_run "$FXG" '_affected_reset_edges; _affected_add_edge "glob:'"${_KB}"'/**.sh"; _affected_add_edge "glob:'"${_KB}"'/**.sh"; printf "%s|%s" "${#_AC_EDGES[@]}" "${_AC_EDGES[0]-}"' 2>&1)"
+if [[ "$_rg5" == "1|^glob:${_KB}/**.sh" ]]; then
+  pass "Rg5: the same glob edge offered twice mints once (membership dedup)"
+else
+  fail "Rg5: got '${_rg5:0:200}'"
+fi
+
 # ---- verdict accounting -----------------------------------------------------------------------------
 echo ""
 if (( PASS + FAIL != cases )); then

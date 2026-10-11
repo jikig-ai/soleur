@@ -139,7 +139,7 @@ mkdir -p "$SHIM"
 cat > "$SHIM/nft" <<'SHIM_EOF'
 #!/usr/bin/env bash
 chain="${*: -1}"
-case "$chain" in DOCKER-USER) k=jump ;; SOLEUR-EGRESS) k=chain ;; *) echo "nft shim: unhandled: $*" >&2; exit 99 ;; esac
+case "$chain" in DOCKER-USER) k=jump ;; SOLEUR-EGRESS) k=chain ;; SOLEUR-EGRESS-GW) k=gw ;; *) echo "nft shim: unhandled: $*" >&2; exit 99 ;; esac
 n=$(( $(cat "$SC/$k.n" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$SC/$k.n"
 ff="$(cat "$SC/$k.failfirst" 2>/dev/null || echo 0)"
 if [[ -f "$SC/$k.enoent1" ]] && (( n == 1 )); then printf 'Error: No such file or directory\nlist chain ip filter %s\n' "$chain" >&2; exit 1; fi
@@ -190,6 +190,8 @@ chmod +x "$SHIM/nft" "$SHIM/systemctl" "$SHIM/timeout" "$SHIM/sleep" "$WORK/load
 JUMP_PRESENT='table ip filter {
 	chain DOCKER-USER {
 		iifname "docker0" counter packets 1 bytes 60 jump SOLEUR-EGRESS comment "soleur-egress: jump"
+		iifname "soleur-egress0" oifname "docker0" ct state established,related accept comment "soleur-egress: gw reply traffic (#9534)"
+		iifname "soleur-egress0" counter jump SOLEUR-EGRESS-GW comment "soleur-egress: egress0 jump"
 	}
 }'
 JUMP_ABSENT='table ip filter {
@@ -231,6 +233,12 @@ CHAIN_EMPTY='table ip filter {
 	chain SOLEUR-EGRESS {
 	}
 }'
+GW_FULL='table ip filter {
+	chain SOLEUR-EGRESS-GW {
+		ct state new ip daddr @soleur_egress_gw_deny limit rate 10/minute burst 50 packets log prefix "egress-gw-deny: " level notice comment "soleur-egress-gw: deny log"
+		ct state new ip daddr @soleur_egress_gw_deny counter drop comment "soleur-egress-gw: deny drop"
+	}
+}'
 CHAIN_NOISY="$(printf 'table ip filter {\n\tchain SOLEUR-EGRESS {\n'; for i in $(seq 1 400); do printf '\t\tip daddr 10.%d.%d.1 tcp dport 443 accept comment "soleur-egress: noise"\n' "$((i / 250))" "$((i % 250))"; done; printf '\t\tlimit rate 10/minute burst 50 packets log prefix "egress-blocked: " level notice comment "soleur-egress: default drop log"\n\t\tcounter packets 3 bytes 180 drop comment "soleur-egress: default drop"\n\t}\n}')"
 
 # scenario <name> <jump-out> <chain-out> <failfirst-jump> <failfirst-chain> <rc-jump> <rc-chain> [flags: sigpipe-jump enoent-jump enoent-chain enoent1-jump enoent2-jump ruleerr-jump lib127-jump enoent2-chain ruleerr-chain lib127-chain]
@@ -252,6 +260,11 @@ scenario() {
   [[ " ${8:-} " == *" enoent2-chain "* ]] && : > "$d/chain.enoent2"
   [[ " ${8:-} " == *" ruleerr-chain "* ]] && : > "$d/chain.ruleerr"
   [[ " ${8:-} " == *" lib127-chain "* ]] && : > "$d/chain.lib127"
+  # GW legs (#9534): DOCKER-USER carries the egress0 jump + gw reply accept;
+  # SOLEUR-EGRESS-GW carries the deny drop. Default all three present;
+  # `gw-enoent` models the chain flushed (probe reads it absent -> heal).
+  printf '%s\n' "${GW_OUT:-$GW_FULL}" > "$d/gw.out"
+  [[ " ${8:-} " == *" gw-enoent "* ]] && : > "$d/gw.enoent"
   echo "$d"
 }
 # probe_out <lib> <scenario-dir>  -> "J|D|L|rcj|rcd|read_failed|read_retried|heal"
@@ -281,6 +294,7 @@ row "drop absent, LOG rule still there: heal (old check read this as healthy)" \
 row "default-drop LOG rule absent, drop present: heal"      "present|present|absent|0|0|false|false|true"   "$JUMP_PRESENT" "$CHAIN_NOLOG"   0 0 0 0
 row "both absent, every status 0 (a real external flush)"   "absent|absent|absent|0|0|false|false|true"    "$JUMP_ABSENT"  "$CHAIN_EMPTY"   0 0 0 0
 row "noisy 400-rule chain around the needle: present"       "present|present|present|0|0|false|false|false" "$JUMP_PRESENT" "$CHAIN_NOISY"   0 0 0 0
+row "SOLEUR-EGRESS-GW chain flushed: heal (#9534 gw leg)"   "present|present|present|0|0|false|false|true"  "$JUMP_PRESENT" "$CHAIN_FULL"   0 0 0 0 "gw-enoent"
 row "a jump to SOLEUR-EGRESS-OLD (and a comment naming SOLEUR-EGRESS) is not our jump" \
                                                             "absent|present|present|0|0|false|false|true"   "$JUMP_NEAR"    "$CHAIN_FULL"   0 0 0 0
 row "nft fails persistently (rc 1, netlink busy): unreadable, never absent" \
@@ -326,8 +340,8 @@ check "the suite runs with the default SIGPIPE disposition (the reproducer's pre
 # Control: the reproducer really reproduces. The OLD form on the SAME shim reads rc 141 under pipefail.
 d="$(scenario control "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0 "sigpipe-jump")"
 old_rc=0
-env -i PATH="$SHIM:/usr/bin:/bin" SC="$d" bash -c 'set -o pipefail; nft list chain ip filter DOCKER-USER | grep -q "jump SOLEUR-EGRESS"' || old_rc=$?
-check "control: the OLD 'nft | grep -q' form on the reproducer shim returns 141 (SIGPIPE read as missing)" "141" "$old_rc"
+env -i PATH="$SHIM:/usr/bin:/bin" SC="$d" bash -c 'set -o pipefail; nft list chain ip filter DOCKER-USER | grep -q "jump SOLEUR-EGRESS"' || old_rc=$?  # sigpipe-demo: intentional (the OLD pipeline form the SIGPIPE control must reproduce)
+check "control: the OLD nft-piped-into-grep-q form on the reproducer shim returns 141 (SIGPIPE read as missing)" "141" "$old_rc"
 
 # SIGPIPE disposition forced on entry, not left to the ambient: the CI runner's (ignored) AND a developer
 # shell's (default) are both reproduced on any machine, and each forcing is proven (canary, recorder, routing).
@@ -336,8 +350,8 @@ check "harness canary: with_sigpipe_ignored really runs with SIGPIPE ignored" "i
 check "harness canary negative control: ignoring only SIGINT does not read as SIGPIPE ignored" "default" "$(bash -c "trap '' INT; $SIGPIPE_PROBE")"
 d="$(scenario control-ign "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0 "sigpipe-jump")"
 old_rc=0
-with_sigpipe_ignored env -i PATH="$SHIM:/usr/bin:/bin" SC="$d" bash -c 'set -o pipefail; nft list chain ip filter DOCKER-USER | grep -q "jump SOLEUR-EGRESS"' || old_rc=$?
-check "control, SIGPIPE ignored (forced): the OLD 'nft | grep -q' form on the reproducer shim returns 141 (the shim's EPIPE failure, read as missing)" "141" "$old_rc"
+with_sigpipe_ignored env -i PATH="$SHIM:/usr/bin:/bin" SC="$d" bash -c 'set -o pipefail; nft list chain ip filter DOCKER-USER | grep -q "jump SOLEUR-EGRESS"' || old_rc=$?  # sigpipe-demo: intentional (the same control with SIGPIPE forced ignored)
+check "control, SIGPIPE ignored (forced): the OLD nft-piped-into-grep-q form on the reproducer shim returns 141 (the shim's EPIPE failure, read as missing)" "141" "$old_rc"
 check "routing: the forced-ignored control ran the shim with SIGPIPE ignored" "ignored" "$(cat "$d/shim.sigign" 2>/dev/null || echo missing)"
 cap="$(scenario capture-ign "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0 "sigpipe-jump")"
 check "SIGPIPE ignored: the capture form on the reproducer shim still reads all three rules present" \
@@ -458,7 +472,7 @@ check "block: the event op is enforcement_missing" "enforcement_missing" "$(grep
 payload="$(grep '^SENTRY' "$d/calls" | cut -d'|' -f4-)"
 check "block: the event carries the NEW payload (all 12 keys), fed from enforcement_extra" "12" "$(printf '%s' "$payload" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))' 2>/dev/null || echo INVALID)"
 check "block: the payload carries the probe's rule states (jump absent) and the loader status (0)" "absent/0" "$(printf '%s' "$payload" | jq_field jump_present)/$(printf '%s' "$payload" | jq_field loader_rc)"
-check "block: the heal WARN names the rule states, logged once" "1/1" "$(cnt "$d" '^LOG|WARN: enforcement rules missing')/$(cnt "$d" 'LOG|WARN.*jump=absent drop=present log=present read_failed=false')"
+check "block: the heal WARN names the rule states, logged once" "1/1" "$(cnt "$d" '^LOG|WARN: enforcement rules missing')/$(cnt "$d" 'LOG|WARN.*jump=absent drop=present log=present gwjump=absent reply=absent gwdrop=present read_failed=false')"
 
 d="$(scenario blk-fail "$JUMP_ABSENT" "$CHAIN_FULL" 0 0 0 0)"
 run_block "$d" "" 1
@@ -479,7 +493,7 @@ check "block: CRON_EGRESS_FROM_LOADER=1 skips the probe entirely (no loader -> r
 d="$(scenario blk-unread "" "" 9 9 1 1)"
 run_block "$d" "" 0
 check "block: persistently unreadable chains still heal (idempotent loader), and the event says read_failed" "1/True" "$(cnt "$d" '^LOADER')/$(grep '^SENTRY' "$d/calls" | cut -d'|' -f4- | jq_field read_failed)"
-check "block: the unreadable heal WARN names the unreadable states" "1" "$(cnt "$d" 'LOG|WARN.*jump=unreadable drop=unreadable log=unreadable read_failed=true')"
+check "block: the unreadable heal WARN names the unreadable states" "1" "$(cnt "$d" 'LOG|WARN.*jump=unreadable drop=unreadable log=unreadable gwjump=unreadable reply=unreadable gwdrop=present read_failed=true')"
 
 d="$(scenario blk-nolog "$JUMP_PRESENT" "$CHAIN_NOLOG" 0 0 0 0)"
 run_block "$d" "" 0
@@ -518,7 +532,7 @@ mut_probe() { # mut_probe "label" <old> <new> <want-pristine> <jump> <chain> <ff
   okc "mutant caught: $1" "$verdict"
 }
 # harmless mutant: a whitespace respelling must grade EXACTLY like pristine (the row that proves a respelling is not mis-scored as a kill)
-mut_copy "$LIB" "$WORK/mut.harmless.sh" 'local out_jump="" out_chain="" attempt' 'local out_jump=""  out_chain=""  attempt' "harmless whitespace respelling"
+mut_copy "$LIB" "$WORK/mut.harmless.sh" 'local out_jump="" out_chain="" out_gw' 'local out_jump=""  out_chain=""  out_gw' "harmless whitespace respelling"
 dd="$(scenario mharmless "$JUMP_ABSENT" "$CHAIN_FULL" 0 0 0 0)"
 check "harmless mutant: a whitespace respelling grades exactly like pristine" "$(probe_out "$LIB" "$dd")" "$(probe_out "$WORK/mut.harmless.sh" "$dd")"
 mut_probe "drop matched on the log prefix instead of the drop rule" \
@@ -530,11 +544,12 @@ mut_probe "the retry is removed (a one-off read failure is no longer absorbed)" 
 mut_probe "the retry runs a third attempt (the bound is gone)" \
   "for attempt in 1 2; do" "for attempt in 1 2 3; do" \
   "unreadable|present|present|1|0|true|true|true" "$JUMP_PRESENT" "$CHAIN_FULL" 2 0 0 0
+MUT_EARLY_PIPE='ip filter DOCKER-USER 2>&1 | grep -m1 "jump SOLEUR-EGRESS")"'  # sigpipe-demo: intentional (the early-exiting capture the mutants below re-introduce)
 mut_probe "the capture is re-introduced as an early-exiting pipeline (SIGPIPE row changes)" \
-  'ip filter DOCKER-USER 2>&1)"' 'ip filter DOCKER-USER 2>&1 | grep -m1 "jump SOLEUR-EGRESS")"' \
+  'ip filter DOCKER-USER 2>&1)"' "$MUT_EARLY_PIPE" \
   "present|present|present|0|0|false|false|false" "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0 "sigpipe-jump"
 MUT_SIGPIPE_IGNORED=1 mut_probe "SIGPIPE ignored: the capture is re-introduced as an early-exiting pipeline (SIGPIPE row changes)" \
-  'ip filter DOCKER-USER 2>&1)"' 'ip filter DOCKER-USER 2>&1 | grep -m1 "jump SOLEUR-EGRESS")"' \
+  'ip filter DOCKER-USER 2>&1)"' "$MUT_EARLY_PIPE" \
   "present|present|present|0|0|false|false|false" "$JUMP_PRESENT" "$CHAIN_FULL" 0 0 0 0 "sigpipe-jump"
 mut_probe "ENOENT is no longer an absent object (a deleted table reads as contention)" \
   'if (( ENF_RC_JUMP == 1 )) && [[ "$out_jump" == "Error: No such file or directory"* ]]; then jump_gone=true; fi' ':' \
@@ -626,7 +641,7 @@ if [[ -f "$RUNBOOK" ]]; then
   TABLE="$(grep -E '^  \| ' "$RUNBOOK")"
   for k in jump_present drop_present log_present rc_jump rc_drop read_failed read_retried docker_since loader_since loader_rc host; do
     RUNBOOK_KEYS=$((RUNBOOK_KEYS + 1))
-    printf '%s\n' "$TABLE" | grep -qF "\`$k"; okc "the runbook decode TABLE names the extra field $k" $?
+    printf '%s\n' "$TABLE" | grep -cF >/dev/null "\`$k"; okc "the runbook decode TABLE names the extra field $k" $?
   done
 fi
 if [[ "$RUNBOOK_KEYS" -ne 11 ]]; then printf '[FATAL] runbook parity ran %d rows, expected 11 (is the runbook missing?).\n' "$RUNBOOK_KEYS" >&2; exit 1; fi

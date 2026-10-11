@@ -217,10 +217,13 @@ const INSTALLATION_ID_RE = /^[1-9][0-9]{0,9}$/;
 // the Doppler `dev`/`dev_scheduled` configs, so without this gate a routine
 // `doppler run -c dev -- <full suite>` run fired AC-2 and hard-failed with
 // `GitHub installation token request failed: 401` (the local env's App creds
-// can't mint a token for the fixture installation). CI never sets MU1_FIXTURE_*
-// so AC-2 already skips there; the partial-set canary above still guards the
+// can't mint a token for the fixture installation). The nightly
+// scheduled-integration-suites.yml leg DOES set MU1_INTEGRATION=1 under
+// dev_scheduled (which carries MU1_FIXTURE_* + GITHUB_APP_*), so AC-2 runs
+// there by design; per-PR CI does not set the gate and skips. The
+// partial-set canary above still guards the
 // one-var-set misconfig. See #4663. Run the live check with:
-//   MU1_INTEGRATION=1 doppler run -p soleur -c dev -- env TENANT_INTEGRATION_TEST=1 \
+//   MU1_INTEGRATION=1 doppler run -p soleur -c dev -- \
 //     npm run test:ci -- test/mu1.integration.test.ts --project unit
 const AC2_OPTED_IN = process.env.MU1_INTEGRATION === "1";
 

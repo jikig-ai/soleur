@@ -237,9 +237,9 @@ install_missing() {
   local f="$1" sw uw n out=""
   sw="$(install_words "$f" "$SCRIPT_LOOP_BODY")"; uw="$(install_words "$f" "$UNIT_LOOP_BODY")"
   for n in workspaces-luks-provision.sh workspaces-luks-reopen.sh workspaces-luks-emit.sh; do
-    printf '%s\n' "$sw" | grep -qxF -- "$n" || out="$out $n"
+    printf '%s\n' "$sw" | grep -cxF >/dev/null -- "$n" || out="$out $n"
   done
-  for n in $LUKS_UNITS; do printf '%s\n' "$uw" | grep -qxF -- "$n" || out="$out $n"; done
+  for n in $LUKS_UNITS; do printf '%s\n' "$uw" | grep -cxF >/dev/null -- "$n" || out="$out $n"; done
   printf '%s' "$out"
 }
 miss="$(install_missing "$BOOT")"
@@ -278,7 +278,7 @@ else
   no "16a: provisioner/gate/mkdir order wrong (prov=$ln_prov gate=$ln_gate mkdir=$ln_mk)"
 fi
 if [[ -n "$ln_gate" && -n "$ln_seed" && "$ln_gate" -lt "$ln_seed" ]]; then ok "16b: the hard gate precedes the plugin-seed block that also writes under /mnt/data"; else no "16b: the gate must precede the plugin-seed docker cp (gate=$ln_gate seed=$ln_seed)"; fi
-if grep -qE 'poweroff -f' <<<"$CIC" && grep -E 'workspaces_luks_not_mounted' <<<"$CIC" | grep -q 'poweroff -f'; then ok "16c: a failed gate powers the host off (fail closed), it does not fall through"; else no "16c: the workspaces_luks_not_mounted gate must poweroff -f"; fi
+if grep -qE 'poweroff -f' <<<"$CIC" && grep -E 'workspaces_luks_not_mounted' <<<"$CIC" | grep -c >/dev/null 'poweroff -f'; then ok "16c: a failed gate powers the host off (fail closed), it does not fall through"; else no "16c: the workspaces_luks_not_mounted gate must poweroff -f"; fi
 # #9377: the web-class boot env file names the WEB-CLASS config. The pin is END-ANCHORED on the name (a bare prefix
 # `prd_workspaces_luks` would also match `prd_workspaces_luks_web` and so could not tell the two apart) and 17d keeps
 # pinning web-1's SSH installer to the un-suffixed name.

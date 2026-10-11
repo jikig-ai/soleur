@@ -2876,16 +2876,28 @@ run_workspace_isolation_probe() {
   # Side effect: CANARY_NODE_OPTIONS (the heap cap) is scrubbed too — vitest
   # runs at default heap inside the container's --memory cap; a runaway run
   # OOMs loud (rc 137 → workspace_isolation_failed), never silently wrong.
+  # --no-color is load-bearing, not cosmetic: vitest 4.x emits ANSI escapes
+  # even under env -i + CI=true (`Tests  \e[1m\e[32m13 passed`), and the
+  # escapes interleave between the summary tokens the vacuous-green =~ below
+  # greps — a passing suite then reports `vacuous_green_no_tests_passed`
+  # (observed on the first deploy carrying a loadable config, #9860). The
+  # flag is pinned by CWI-1.
   if out="$(timeout "$WORKSPACE_ISOLATION_TIMEOUT" docker exec -w /app \
       soleur-web-platform-canary /usr/bin/env -i \
       PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp \
       CI=true SOLEUR_ISOLATION_TEST_HOST=1 SOLEUR_ISOLATION_TIERS=direct SOLEUR_ISOLATION_IN_IMAGE=1 \
       /usr/local/bin/vitest run \
-      --config test/vitest.canary.config.ts 2>"$err_file")"; then
+      --config test/vitest.canary.config.ts --no-color 2>"$err_file")"; then
     exec_rc=0
   else
     exec_rc=$?
   fi
+  # Strip any ANSI residue so the marker greps below read plain text — vitest
+  # wraps both the summary counters AND the FAIL/`AssertionError` detail in
+  # escapes. --no-color already prevents them, but if the flag is ever lost
+  # (CWI-1 pins the argv) a colored `Tests  \e[1m\e[32m13 passed` still
+  # matches and a colored FAIL line still reaches `reason`.
+  out="$(printf '%s' "$out" | sed -E 's/\x1b\[[0-9;]*m//g')"
   if [[ "$exec_rc" -eq 0 ]]; then
     # rc-0 alone is not proof the suite RAN: a future skip-knob regression (or a
     # tier-filter bug) can green a zero-test run — vitest exits 0 when every
