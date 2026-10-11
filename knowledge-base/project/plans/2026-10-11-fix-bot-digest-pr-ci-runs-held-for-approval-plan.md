@@ -19,6 +19,7 @@ Encryption posture (4.10, not triggered: no store or connection), Guard Contract
 **Agents used:** learnings-researcher, dhh-rails-reviewer, kieran-rails-reviewer, code-simplicity-reviewer, cto (devex), security-sentinel, architecture-strategist.
 
 ### Key improvements
+
 1. The branch push now runs as the App too (Control A's exact configuration), using the env-only extra-header pattern, so the one unmeasured variable of the split-credential design is gone.
 2. `weakness-miner.yml` is split into `mine` (no secrets), `open-pr` (credential, fresh checkout, one artifact in) and `notify`, closing the workspace-poisoning path a same-job miner left open.
 3. The composite is fail-closed: tokens are copied to unexported variables and unset, there is no step-level `GH_TOKEN`, and a bare `gh` call fails instead of silently authoring as the workflow token.
@@ -26,6 +27,7 @@ Encryption posture (4.10, not triggered: no store or connection), Guard Contract
 5. The guard moved into the existing registered suite with a 12-row mutation matrix; the standalone suite, the separate presence-check step, the ADR-032 pointer and a third deferral issue were cut.
 
 ### New considerations discovered
+
 - The C4 gate that goes red is `c4-model-freshness`, not `c4-count-parity`; the tracked JSON is regenerated with `plugins/soleur/scripts/render-c4-model.sh`.
 - `lint-shell-trace-credential-refusal` Rules A to D are `*.sh`-only and Rule E is curl-only, so none scores the composite's git header; the prologue and the shape check are required by convention, not by that lint.
 - The `cla-check` synthetic text names `github-actions[bot]` and is now false; it becomes author-neutral.

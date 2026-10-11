@@ -90,8 +90,8 @@ read token, on a weekly schedule. The three-job split exists to keep content-pro
 
 - One real `pull_request` CI run per week on the digest PR, mostly short-circuited by the docs path. The synthetic checks
   remain and are redundant; how the ruleset evaluates a real failure beside a synthetic success is unmeasured.
-- `scripts/audit-bot-codeql-coverage.sh` filters `--author app/github-actions` and stops sampling new digest PRs (advisory,
-  does not fail; tracked).
+- `scripts/audit-bot-codeql-coverage.sh` filtered `--author app/github-actions` and would have stopped sampling new digest
+  PRs; it now samples both `app/github-actions` and the `ci/` branches of `app/soleur-infra`, with a test row.
 - Revisit trigger: if a lower-grant App for digest-class PRs is created, this caller moves to it.
 
 ## Verification

@@ -189,8 +189,17 @@ else
   # GitHub GraphQL cost: requesting `commits[]` for N PRs blows the
   # 500k-node cap. Fetch number+headRefName first (cheap), pick the sample,
   # then resolve head SHA per-PR via `gh pr view`.
-  bot_prs=$(gh pr list --state all --limit 100 --author "app/github-actions" \
-    --json number,headRefName 2>/dev/null || echo '[]')
+  # Two authors, since #9454 (ADR-285): the weakness-digest PR is authored by the soleur-infra
+  # App, the rest still by github-actions. soleur-infra also authors inngest pin-bump PRs
+  # (`soleur/inngest-pin-*`), which are not workflow bot PRs, so only its `ci/` branches count.
+  # A failed call degrades to an empty list; the zero-PR guard below still aborts when both fail.
+  bot_prs=$({
+    gh pr list --state all --limit 100 --author "app/github-actions" \
+      --json number,headRefName 2>/dev/null || echo '[]'
+    gh pr list --state all --limit 100 --author "app/soleur-infra" \
+      --json number,headRefName 2>/dev/null \
+      | jq -c 'map(select(.headRefName | startswith("ci/")))' 2>/dev/null || echo '[]'
+  } | jq -sc 'add | sort_by(-.number)' 2>/dev/null || echo '[]')
   # Hard-fail when gh returns an empty array AND no AUDIT_FIXED_WORKFLOWS
   # override — silent-success (total=0, exit 0) would mask a real API
   # outage as "all bot PRs covered."

@@ -233,6 +233,30 @@ GHSTUB
   rm -rf "$tmp"
 }
 
+# T13 (#9454): the bot-PR sample is drawn from BOTH authors, since the weakness-digest PR is
+# authored by the soleur-infra App and the other bot PRs by github-actions. The stub records
+# every `gh pr list` argument line; an audit that asks for one author only is RED.
+t_both_authors_sampled() {
+  local tmp; tmp=$(mktemp -d)
+  cat > "$tmp/gh" <<'GHSTUB'
+#!/usr/bin/env bash
+if [[ "$1" == "pr" && "$2" == "list" ]]; then
+  printf '%s\n' "$*" >> "${GH_CALLS:?}"
+  echo '[]'
+fi
+GHSTUB
+  chmod +x "$tmp/gh"
+  : > "$tmp/calls"
+  GH_CALLS="$tmp/calls" PATH="$tmp:$PATH" AUDIT_TELEMETRY_DIR="$tmp/state" \
+    bash "$SCRIPT" >"$tmp/stdout" 2>"$tmp/stderr" || true
+  if grep -qF -- '--author app/github-actions' "$tmp/calls" && grep -qF -- '--author app/soleur-infra' "$tmp/calls"; then
+    _report "T13 bot-PR sample asks for both app/github-actions and app/soleur-infra" ok
+  else
+    _report "T13 bot-PR sample asks for both app/github-actions and app/soleur-infra" fail "calls=$(tr '\n' '|' < "$tmp/calls")"
+  fi
+  rm -rf "$tmp"
+}
+
 # T12: shared strip-log-injection lib is sourced (not redeclared inline)
 t_shared_lib_used() {
   local audit_file="$REPO_ROOT/scripts/audit-bot-codeql-coverage.sh"
@@ -269,6 +293,7 @@ t_telemetry_written
 t_integration_id_invariant
 t_say_sanitizes_log_injection
 t_silent_success_guard
+t_both_authors_sampled
 t_shared_lib_used
 
 echo "=== $pass passed, $fail failed ==="
