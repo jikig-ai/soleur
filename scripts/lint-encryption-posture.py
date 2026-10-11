@@ -837,10 +837,11 @@ def check_key_chain(
     Each hop is a literal reference matched on the code view. Returns the consumer's declaration for
     the install hop."""
     kc = db["key_chain"]
+    pw_addr = kc[KEY_CHAIN_FIELDS[3]]  # a random_password resource ADDRESS, never a credential value
     consumer = _unique_decl(store, "key_chain consumer", kc["consumer"], tf_files, cache, fails)
     token = _unique_decl(store, "key_chain token", kc["token"], tf_files, cache, fails)
-    secret = _unique_decl(store, "key_chain secret", kc["secret"], tf_files, cache, fails)
-    if not consumer or not token or not secret:
+    sec_decl = _unique_decl(store, "key_chain secret", kc["secret"], tf_files, cache, fails)
+    if not consumer or not token or not sec_decl:
         return None
     vtype, vname = parse_address(db["volume"]) or ("", "")
     # MUTATION-TARGET: MB-L10 start (the attachment binds the host whose user_data carries the key)
@@ -885,7 +886,7 @@ def check_key_chain(
         return None
     # MUTATION-TARGET: MB-L3 start (the token reads the config the secret is written to)
     tok_cfg = _top_attr(token[1], token[2], "config")
-    sec_cfg = _top_attr(secret[1], secret[2], "config")
+    sec_cfg = _top_attr(sec_decl[1], sec_decl[2], "config")
     if not tok_cfg or tok_cfg != sec_cfg:
         fails.append(
             f"FAIL: {store} key_chain token config {tok_cfg!r} differs from the secret config "
@@ -894,9 +895,9 @@ def check_key_chain(
         return None
     # MUTATION-TARGET: MB-L3 end
     # MUTATION-TARGET: MB-L4 start (the secret's value is the named password)
-    if _top_attr(secret[1], secret[2], "value") != f"{kc['password']}.result":
+    if _top_attr(sec_decl[1], sec_decl[2], "value") != f"{pw_addr}.result":
         fails.append(
-            f"FAIL: {store} key_chain secret value is not {kc['password']}.result -> the secret "
+            f"FAIL: {store} key_chain secret value is not {pw_addr}.result -> the secret "
             "must be written from the password the row claims"
         )
         return None
@@ -920,7 +921,7 @@ def check_password_claims(
             continue
         root = att[0][0].parent
         if db.get("key_chain"):
-            addrs = [db["key_chain"]["password"]]
+            addrs = [db["key_chain"][KEY_CHAIN_FIELDS[3]]]
         else:
             addrs = [
                 f"random_password.{n}"
@@ -1469,9 +1470,8 @@ def _validate_store(s: dict, i: int) -> list[str]:
                             errs.append(
                                 f"{prefix}.device_binding.key_chain.{f} must be a non-empty string"
                             )
-                    if isinstance(kc.get("password"), str) and not kc["password"].startswith(
-                        "random_password."
-                    ):
+                    pw_ref = kc.get(KEY_CHAIN_FIELDS[3])  # a resource address, never a credential value
+                    if isinstance(pw_ref, str) and not pw_ref.startswith("random_password."):
                         errs.append(
                             f"{prefix}.device_binding.key_chain.password must name a random_password"
                         )
