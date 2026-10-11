@@ -3360,7 +3360,8 @@ _g4git update-ref refs/remotes/origin/main "$G4_M1" || { printf 'FAIL SETUP: g4g
 # production helper, run the census on the repo's working tree. IPT_BASE_REF scoped by env prefix
 # at the call site flows into the resolution.
 g4git_row() {
-  local out="$1" dest="$T/g4base/$(basename "$1" .tsv)" ref
+  local out="$1" dest ref
+  dest="$T/g4base/$(basename "$out" .tsv)"
   assert_fixture_dir "$out"
   ref="$(resolve_base_ref "$G4GIT/repo")"
   assert_fixture_dir "$dest"
