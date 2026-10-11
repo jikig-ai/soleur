@@ -31,13 +31,11 @@
 # could not be read or was empty/unrecognised — "0 checked" never exits 0.
 set -uo pipefail
 
+# UNCONDITIONAL refusal: this script ACQUIRES every secret it touches at runtime
+# (`doppler secrets get` per census name), so no "is a credential bound yet?" check
+# can cover it — a traced `get` prints values after any conditional guard opens.
 case "$-" in
-  *x*)
-    if [ -n "${DOPPLER_TOKEN:+x}" ]; then
-      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
-      exit 78
-    fi
-    ;;
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles live credentials and -x would print them (see #7797)\n' >&2; exit 78 ;;
 esac
 
 umask 077

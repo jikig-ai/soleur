@@ -234,6 +234,14 @@ run_sut env DOPPLER_TOKEN=stubtok bash "$SUT"
 if grep -q 'E_TOKEN.*FAIL' "$OUT"; then pass "empty value FAIL"; else fail "empty value not FAIL"; fi
 if [[ "$RC" -ne 0 ]]; then pass "empty value nonzero"; else fail "empty value rc=0"; fi
 
+# --- xtrace refusal is UNCONDITIONAL (the script acquires values mid-run via get) -------------------
+OUTX="$TMPD/outx.txt"; ERRX="$TMPD/errx.txt"
+env DOPPLER_TOKEN=stubtok bash -x "$SUT" >"$OUTX" 2>"$ERRX"; RCX=$?
+if [[ "$RCX" -eq 78 ]]; then pass "xtrace refusal rc=78"; else fail "xtrace rc=$RCX expected 78"; fi
+# and with NO credentials bound it still refuses — the guard must not key on env
+env -u DOPPLER_TOKEN bash -x "$SUT" >"$OUTX" 2>"$ERRX"; RCX=$?
+if [[ "$RCX" -eq 78 ]]; then pass "xtrace refusal holds with empty env"; else fail "xtrace w/o env rc=$RCX expected 78"; fi
+
 # ====================================================================================
 TOTAL=$((PASS + FAIL))
 printf '== %d/%d rows passed ==\n' "$PASS" "$TOTAL"
