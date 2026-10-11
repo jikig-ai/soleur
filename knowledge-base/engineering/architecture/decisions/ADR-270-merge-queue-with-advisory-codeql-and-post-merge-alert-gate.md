@@ -665,13 +665,17 @@ text scoped the ban to a Phase 7 poll that had already emitted `queue_wait`, a m
 Canary item 5 measured 240 `merge_group` `ci.yml` runs since adoption (2026-10-04, 7 of the 14 days): run
 duration p50 25.0, p95 44.1, longest success 60.5 minutes (above the then-live 60), maximum 106.3 (a stalled run),
 and one `checks_timed_out` ejection (PR #9687, 2026-10-07). 37 of 240 runs failed or were cancelled (15.4%, against
-the 11% flake baseline). The measurement is at run level: the slowest single required check was not measured, so
-item 5's literal trigger (a required check over 30 minutes) is read through the run-level maximum, which is an upper
-bound on any one check. Raising `check_response_timeout_minutes` in the same Terraform root is the action item 5
-prescribes; the founder directed it on 2026-10-11.
+the 11% flake baseline). The measurement is at run level and the slowest single required check was not measured, so
+item 5's literal trigger (a required check over 30 minutes) is NOT demonstrated: a 60.5-minute run does not show any
+one check exceeded 30. The change rests on the run-level evidence instead, because the ejection clock may count from
+the time the entry joined the queue, so the whole entry duration is what the timeout is compared against. Whether the
+ejected candidate (PR #9687) was otherwise green is not established. Raising `check_response_timeout_minutes` in the
+same Terraform root is the action item 5 prescribes; the operator approved it in session on 2026-10-11.
 
 The value is sized as the longest observed success plus about 15 minutes (75 against 60.5, a 14.5-minute margin), not
-by ADR-032's rule of at least 1.5 times the slowest check, which would give about 91. The departure is deliberate:
+by ADR-032's rule of at least 1.5 times the slowest check, which would give about 91, and it supersedes the 43-minute
+model in the Parameters row and ADR-032's 2026-09-14 derivation, which the 60.5-minute success falsifies. The
+departure is deliberate:
 a larger value lengthens how long a hung entry holds the queue. Cost of the choice: a hung entry now holds the queue
 up to 15 minutes longer, and the entry behind it is rebuilt after the ejection, so its total delay is the timeout plus
 a fresh build. The stall probe threshold stays 45 minutes, so the window between threshold and timeout widens from 15

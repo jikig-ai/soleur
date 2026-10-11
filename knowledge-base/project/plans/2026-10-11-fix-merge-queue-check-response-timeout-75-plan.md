@@ -25,7 +25,7 @@ lane: single-domain
 
 ### New considerations discovered
 - Live read verified unauthenticated on 2026-10-11: the ruleset API prints `"check_response_timeout_minutes": 60` (so a post-apply probe is a real before/after discriminator), and the rulesets endpoint needs no credentials on this public repository.
-- PR #9687 (the ejected green-path PR) is MERGED, consistent with canary 6 (ejected, re-enqueued, merged); #9454 is OPEN; the cited learning file and `c4-count-parity.test.sh` exist; the rule ids cited (`hr-menu-option-ack-not-prod-write-auth`, `cq-write-failing-tests-before`, `hr-gdpr-gate-on-regulated-data-surfaces`) are active in `AGENTS.md`.
+- PR #9687 (the ejected PR; whether it was otherwise green is not established) is MERGED, consistent with canary 6 (ejected, re-enqueued, merged); #9454 is OPEN; the cited learning file and `c4-count-parity.test.sh` exist; the rule ids cited (`hr-menu-option-ack-not-prod-write-auth`, `cq-write-failing-tests-before`, `hr-gdpr-gate-on-regulated-data-surfaces`) are active in `AGENTS.md`.
 - Apply workflow facts confirmed from source: push trigger paths, `environment: infra-privileged` with no required reviewers, kill switch `[skip-github-apply]`, destroy guard, by-value binding gate, and a post-apply verify that counts required checks only. The PR-time plan comment is sticky (`marocchino/sticky-pull-request-comment`) and posted by `infra-validation.yml`, not by the apply workflow.
 
 ## Overview
@@ -33,7 +33,7 @@ lane: single-domain
 The merge queue on `main` (re-adopted under #9454, ADR-270) ejects a candidate whose required checks have not all
 reported within `check_response_timeout_minutes`, currently 60. Canary item 5 on #9454 measured 240 `merge_group` CI
 runs since adoption on 2026-10-04: p50 25.0 min, p95 44.1, longest success 60.5 (above the live 60), max 106.3 (a
-stalled run), and one `checks_timed_out` ejection of a green-path PR (#9687, 2026-10-07). ADR-270's own canary item 5
+stalled run), and one `checks_timed_out` ejection (#9687, 2026-10-07). ADR-270's own canary item 5
 says: if a real candidate exceeds the trigger, "raise `check_response_timeout_minutes` in the same Terraform root
 (one line)". Approval for 75 was given in session ("yes we can").
 
@@ -173,7 +173,7 @@ gate sees the drift). Then continue.
 2.1 `.tf`, DR skeleton, README row: 75 (one commit so parity holds).
 2.2 `tests/scripts/test-audit-ruleset-bypass.sh`:
    - m8 awk: `sub(/=[[:space:]]*[0-9]+/, "= 30", l)` (change a real value in the real block only; any current value).
-   - m11 sed: the three substitutions match `[0-9]+` instead of `60`, target `30` (still below the stall threshold,
+   - m11 sed: the three substitutions match `[0-9]+` instead of `60`, target `5` (below any plausible stall threshold,
      parity holds in tf+DR+README). Relabel without naming the old value.
    - m12: stall workflow threshold raised to a value above any plausible timeout (`'999'`) instead of `60`; relabel
      "raised past the timeout". The reason regex `must exceed STALL_THRESHOLD_MINUTES` is unchanged.
@@ -250,7 +250,7 @@ is a second reader of the same timeout (derived from the `.tf` through its own h
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | m11: timeout rewritten to 30 in `.tf`, DR skeleton and README together by a value-independent `[0-9]+` match (parity holds, below the threshold) | RED: `must exceed STALL_THRESHOLD_MINUTES` |
+| 1 | m11: timeout rewritten to 5 in `.tf`, DR skeleton and README together by a value-independent `[0-9]+` match (parity holds, below the threshold) | RED: `must exceed STALL_THRESHOLD_MINUTES` |
 | 2 | m12: stall workflow threshold raised to 999 (above any timeout) with the three sources untouched | RED: `must exceed STALL_THRESHOLD_MINUTES` |
 | 3 | m8: a `/* */` commented copy of the pristine block ahead of a real block whose timeout is rewritten by a value-independent awk match | RED: `DR skeleton params != tf` |
 | 4 | m1 and m5 (existing, unchanged): DR skeleton timeout drift; block key renamed in every source (guard-dispatch floor, `0 params compared`) | RED |
@@ -371,7 +371,7 @@ edit is documentation, not a new decision). C4: `model.c4` carries no queue time
 
 1. Unchanged tree: both suites green (the rewrites are value-independent).
 2. `.tf` only at 75: Guard 2 RED on `DR skeleton params != tf` (the parity gate sees drift).
-3. All three at 75: green; m11 (to 30 in all three sources) RED on `must exceed STALL_THRESHOLD_MINUTES`; m12 (threshold 999) RED on the same reason; m8 (commented stale block ahead of a drifted real block) RED on parity.
+3. All three at 75: green; m11 (to 5 in all three sources) RED on `must exceed STALL_THRESHOLD_MINUTES`; m12 (threshold 999) RED on the same reason; m8 (commented stale block ahead of a drifted real block) RED on parity.
 4. Stall M1 (threshold set to the `.tf` value) RED with reason `threshold 75 >= check_response_timeout_minutes 75`.
 
 ## Risks and Sharp Edges
