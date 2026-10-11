@@ -422,9 +422,154 @@ else
   fi
 fi
 
+# --- TECHNICAL-RULING ARM (R1-R10, Z1-Z4, V4, V5) ----------------------------------------------------
+# A technical RULING (how strict the evidence bar is, which of two designs, whether a status flips, which
+# threshold) is the CTO agent's call, not the operator's. The arm denies it with a reason naming
+# soleur:engineering:cto and the shared reference, and it is evaluated AHEAD of the authority
+# short-circuit (R1/R3 carry "dispatched", "deleted" and a money word, so they only deny if the order holds).
+# The arm judges EACH question separately; the exemption reads that question's TEXT only.
+#
+# The existing payload() emits ONE question. These builders emit several.
+qobj() { # <question> [label1 desc1 label2 desc2] -> one question object
+  jq -nc --arg q "$1" --arg l1 "${2:-Yes}" --arg d1 "${3:-go ahead as described}" --arg l2 "${4:-No}" --arg d2 "${5:-leave it as it stands}" \
+    '{question:$q, options:[{label:$l1,description:$d1},{label:$l2,description:$d2}]}'
+}
+mq_payload() { # question objects on stdin, one per line -> one AskUserQuestion payload
+  jq -sc '{tool_name:"AskUserQuestion", cwd:".", session_id:"t", tool_input:{questions:.}}'
+}
+RULING_HIT_NAMES=""
+# ruling_check <label> <expect allow|deny> <mode ruling|invest|none> <payload-json>; 0 = satisfied.
+ruling_check() {
+  local label="$1" expect="$2" mode="$3" json="$4" out dec reason
+  out=$(printf '%s' "$json" | "$HOOK" 2>/dev/null)
+  dec=$(jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"${out:-{\}}" 2>/dev/null || echo allow)
+  reason=$(jq -r '.hookSpecificOutput.permissionDecisionReason // ""' <<<"${out:-{\}}" 2>/dev/null || echo "")
+  if [[ "$dec" != "$expect" ]]; then
+    printf '  FAIL: %s — got %s want %s\n' "$label" "$dec" "$expect" >&2; return 1
+  fi
+  if [[ "$expect" == "deny" && "$mode" == "ruling" ]]; then
+    if ! grep -qF 'soleur:engineering:cto' <<<"$reason" \
+       || ! grep -qF 'technical-ruling-delegation.md' <<<"$reason" \
+       || ! grep -qF 'split the item; ask the operator only the authorization' <<<"$reason" \
+       || ! grep -qF 'SOLEUR_ACK_TECHNICAL_FORK=1' <<<"$reason"; then
+      printf '  FAIL: %s — denied, but the reason does not name soleur:engineering:cto, technical-ruling-delegation.md, the split instruction and the escape hatch\n' "$label" >&2; return 1
+    fi
+    RULING_HIT_NAMES="$RULING_HIT_NAMES $label"
+  elif [[ "$expect" == "deny" && "$mode" == "invest" ]]; then
+    if ! grep -qF 'TECHNICAL INVESTIGATION' <<<"$reason" || grep -qF 'soleur:engineering:cto' <<<"$reason"; then
+      printf '  FAIL: %s — denied, but not with the investigation reason (the ruling arm must not claim a non-ruling question)\n' "$label" >&2; return 1
+    fi
+  fi
+  return 0
+}
+run_ruling() { # <name> <expect> <mode> <payload-json>
+  TOTAL=$((TOTAL+1))
+  if ruling_check "${1%% *}" "$2" "$3" "$4"; then printf '  PASS: %s (%s)\n' "$1" "$2"; PASS=$((PASS+1)); else FAIL=$((FAIL+1)); fi
+}
+
+R1_Q="How strict must the emptiness evidence be before the volume rebirth is dispatched and the plaintext volume deleted?"
+run_ruling "R1 evidence-strictness ruling (carries dispatched + deleted)" deny ruling \
+  "$(qobj "$R1_Q" "Tighten the ceiling" "require two independent proofs" "Keep the thresholds" "retain the current bar" | mq_payload)"
+run_ruling "R2 ADR status flip from adopting to accepted" deny ruling \
+  "$(qobj "Should the ADR status move from adopting to accepted now that the grader passes?" "Move it" "record the new status" "Hold" "keep the current status" | mq_payload)"
+# R2 reason: a flip whose criterion the ADR states is mechanical, otherwise the CTO rules.
 TOTAL=$((TOTAL+1))
-if [[ "$TOTAL" -eq 19 ]]; then echo "  PASS: V1 full inventory ran (19 cases)"; PASS=$((PASS+1))
-else echo "  FAIL: V1 expected 19 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
+r2_reason=$(qobj "Should the ADR status move from adopting to accepted now that the grader passes?" | mq_payload | "$HOOK" 2>/dev/null | jq -r '.hookSpecificOutput.permissionDecisionReason // ""' 2>/dev/null)
+if grep -qF 'run the grader, cite it, flip' <<<"$r2_reason" && grep -qF 'the CTO rules' <<<"$r2_reason"; then
+  echo "  PASS: R2b the reason says a stated-criterion flip is mechanical and otherwise the CTO rules"; PASS=$((PASS+1))
+else echo "  FAIL: R2b the ruling reason lacks the mechanical-flip / CTO-rules guidance" >&2; FAIL=$((FAIL+1)); fi
+run_ruling "R3 R1 plus a money word in an option description (arm is ahead of the authority short-circuit)" deny ruling \
+  "$(qobj "$R1_Q" "Tighten the ceiling" "costs one more run" "Keep the thresholds" "retain the current bar" | mq_payload)"
+
+# R4 — per-question evaluation. Question 1 is a compliant authorization; question 2 is R1's ruling.
+TOTAL=$((TOTAL+1))
+r4_fail=0
+r4_auth="$(qobj "Approve the merge of PR 9628?")"
+r4_rule="$(qobj "$R1_Q" "Tighten the ceiling" "require two independent proofs" "Keep the thresholds" "retain the current bar")"
+ruling_check "R4a" deny ruling "$(printf '%s\n%s\n' "$r4_auth" "$r4_rule" | mq_payload)" || r4_fail=$((r4_fail+1))
+ruling_check "R4b" allow none "$(printf '%s\n' "$r4_auth" | mq_payload)" || r4_fail=$((r4_fail+1))
+ruling_check "R4c" deny ruling "$(printf '%s\n%s\n' "$r4_rule" "$r4_auth" | mq_payload)" || r4_fail=$((r4_fail+1))
+if [[ "$r4_fail" -eq 0 ]]; then
+  echo "  PASS: R4 each question is judged alone: an Approve in question 1 does not exempt a ruling in question 2 (and the lone authorization allows)"; PASS=$((PASS+1))
+else FAIL=$((FAIL+1)); fi
+
+run_ruling "R5 a permission ask naming dispatch, no ruling cue" allow none \
+  "$(qobj "May I dispatch the rebirth now?" | mq_payload)"
+run_ruling "R6 stated residual: appending an Approve ask exempts the question" allow none \
+  "$(qobj "How strict should the evidence bar be? Approve the stricter threshold?" | mq_payload)"
+run_ruling "R7 a button labelled Approve never exempts" deny ruling \
+  "$(qobj "$R1_Q" "Approve" "require two independent proofs" "Keep the thresholds" "retain the current bar" | mq_payload)"
+
+TOTAL=$((TOTAL+1))
+r8_fail=0
+ruling_check "R8a" allow none "$(qobj "Is it ok to go ahead and flip the flag?" | mq_payload)" || r8_fail=$((r8_fail+1))
+ruling_check "R8b" allow none "$(qobj "What is the budget for the second host?" | mq_payload)" || r8_fail=$((r8_fail+1))
+if [[ "$r8_fail" -eq 0 ]]; then echo "  PASS: R8 cue-free permission and budget asks allow"; PASS=$((PASS+1)); else FAIL=$((FAIL+1)); fi
+
+run_ruling "R9 a brand choice is not a technical ruling" allow none \
+  "$(qobj "Which of the two logo designs should the landing page use?" "The rounded one" "friendlier" "The sharp one" "more technical" | mq_payload)"
+run_ruling "R10 the 2026-08-19 investigation fixture keeps the investigation reason" deny invest \
+  "$(qobj "How should I resolve the cutover path?" \
+     "Read the runbook properly first" "Find the documented order for a cold host rather than reasoning it out from guard comments." \
+     "Ask whoever owns the cutover section" "The plan deferred the cutover window to numbered steps I have not read." | mq_payload)"
+
+run_ruling "Z1 a permission ask that DOES carry a ruling cue (witnesses the exemption)" allow none \
+  "$(qobj "May I raise the ceiling threshold to 5%?" | mq_payload)"
+run_ruling "Z2 approach A or approach B (should is not an exemption)" deny ruling \
+  "$(qobj "Should I use approach A or approach B for the retry design?" "Approach A" "queue it" "Approach B" "retry inline" | mq_payload)"
+run_ruling "Z3 evidence sufficiency" deny ruling \
+  "$(qobj "Is the evidence sufficient to retire the guard?" "Sufficient" "retire it" "Not yet" "keep it" | mq_payload)"
+run_ruling "Z4 an Approve ask over a threshold" allow none \
+  "$(qobj "Approve raising the alert threshold to 5%?" | mq_payload)"
+
+# V4 — the ruling arm's EXEMPTION must stay a permission-shape vocabulary. Structural, like V3: extract
+# the regex from the hook source, require a non-vacuous member count, and refuse any bare action verb. A
+# bare verb here would exempt every ruling that merely MENTIONS the action ("...before the rebirth is
+# dispatched and the volume deleted") and turn the arm off for the sentences it exists to catch.
+TOTAL=$((TOTAL+1))
+v4_re="$(sed -n "s/^RULING_PERM_RE='(\(.*\))'$/\1/p" "$HOOK")"
+if [[ -z "$v4_re" ]]; then
+  printf '  FAIL: V4 could not extract RULING_PERM_RE from the hook — the member checks below would pass over an empty set\n' >&2
+  FAIL=$((FAIL+1))
+else
+  v4_n=0; v4_bad=""
+  while IFS= read -r v4_m; do
+    [[ -n "$v4_m" ]] || continue
+    v4_n=$((v4_n+1))
+    v4_bare="${v4_m//\\b/}"
+    case "$v4_bare" in
+      delete|dispatch|deploy|merge|rotate|revoke|replace|destroy) v4_bad="$v4_bad $v4_m" ;;
+    esac
+  done <<< "$(printf '%s\n' "$v4_re" | tr '|' '\n')"
+  if [[ "$v4_n" -lt 6 ]]; then
+    printf '  FAIL: V4 the exemption split yielded only %s member(s) (floor 6) — a near-empty set proves nothing\n' "$v4_n" >&2
+    FAIL=$((FAIL+1))
+  elif [[ -n "$v4_bad" ]]; then
+    printf '  FAIL: V4 RULING_PERM_RE carries a bare action verb:%s — it would exempt any ruling that merely mentions the action\n' "$v4_bad" >&2
+    FAIL=$((FAIL+1))
+  else
+    printf '  PASS: V4 the ruling exemption has %s permission-shape members and no bare action verb\n' "$v4_n"; PASS=$((PASS+1))
+  fi
+fi
+
+# V5 — dispatch non-vacuity. At least four deny rows with DIFFERENT vocabulary (strictness, adoption/status,
+# approach A/B, evidence sufficiency) must have been denied with THIS arm's reason. An emptied or
+# mis-ordered cue makes every row read allow or fall to another arm, and a suite that only checks the
+# decision would not say the arm never ran.
+TOTAL=$((TOTAL+1))
+v5_n=0; v5_missing=""
+for v5_r in R1 R2 Z2 Z3; do
+  if [[ " $RULING_HIT_NAMES " == *" $v5_r "* ]]; then v5_n=$((v5_n+1)); else v5_missing="$v5_missing $v5_r"; fi
+done
+if [[ "$v5_n" -ge 4 ]]; then
+  echo "  PASS: V5 four distinct-vocabulary deny rows (R1 R2 Z2 Z3) reached the ruling arm's reason"; PASS=$((PASS+1))
+else
+  printf '  FAIL: V5 only %s of 4 distinct-vocabulary rows reached the ruling reason; missing:%s\n' "$v5_n" "$v5_missing" >&2; FAIL=$((FAIL+1))
+fi
+
+TOTAL=$((TOTAL+1))
+if [[ "$TOTAL" -eq 36 ]]; then echo "  PASS: V1 full inventory ran (36 cases)"; PASS=$((PASS+1))
+else echo "  FAIL: V1 expected 36 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
 
 # --- V2: INSTRUMENT SELF-TEST — the helper's two branches must go to DIFFERENT buckets ------------
 #
@@ -473,7 +618,7 @@ fi
 # The floor is the inventory literal V1 already pins, so there is ONE number to change when a case is
 # added and V1 names it in its own message. A suite that ran no cases, or whose verdict helper stopped
 # paying anything, cannot satisfy it.
-MIN_CASES=19
+MIN_CASES=36
 if (( TOTAL < MIN_CASES )); then
   printf '\nFATAL: anti-vacuity: %d case(s) ran, floor is %d. The suite shrank rather than the hook improving.\n' \
     "$TOTAL" "$MIN_CASES" >&2

@@ -36,6 +36,16 @@
 # authority arm it is unreachable), its residual, and the `AUTHZ_VERB_RE` conjunct that returns real
 # authorizations to the permitting side. Test D4 pins the ordering behaviourally.
 #
+# THE SECOND CARVE-OUT: the TECHNICAL-RULING arm below (after the expert arm, ahead of the authority
+# short-circuit) inverts the same polarity a second time. It denies on a ruling CUE (how strict an
+# evidence bar must be, which of two designs, whether a status flips, which threshold) without requiring
+# an investigative signal, and it is reachable ahead of AUTHORITY_RE for the same reason the expert arm
+# is: a ruling question carries "dispatched", "deleted" or a money word in the same breath. Its
+# exemption is a PERMISSION shape ("may I", "approve", "ack-destroy"), evaluated PER QUESTION over that
+# question's TEXT only, never over the concatenation of questions and never over option labels. The
+# residual is stated at the arm (appending "Approve ...?" exempts a question). Tests R1-R10, Z1-Z4, V4
+# and V5 pin the ordering, the per-question scope and the exemption vocabulary.
+#
 # Escape hatch: SOLEUR_ACK_TECHNICAL_FORK=1 — announced, never silent.
 #
 # Fail-open: any infrastructure error exits 0 (allow), reporting itself via systemMessage and an
@@ -246,6 +256,72 @@ See hr-technical-fork-is-not-an-operator-question."
 
   jq -n --arg r "$EXPERT_REASON" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
   exit 0
+fi
+
+# TECHNICAL-RULING signal — a question whose answer is a TECHNICAL RULING: how strict an evidence bar
+# must be, whether evidence suffices, which of two designs or approaches, whether a status moves, which
+# threshold. The operator is non-technical by design and cannot rule on it; the CTO agent can. The
+# deny names soleur:engineering:cto and the shared reference, and tells the asker to SPLIT the item and
+# put the operator only the authorization that remains.
+#
+# THIS ARM IS EVALUATED AHEAD OF `AUTHORITY_RE` FOR THE SAME REASON THE EXPERT ARM IS. A ruling question
+# arrives carrying "dispatched", "deleted" or a money word ("one more run costs ..."), and
+# `AUTHORITY_RE` matches those and wins outright; behind it this arm is unreachable (suite row R1/R3).
+#
+# EVERY QUESTION IS JUDGED ALONE. The cue reads one question's text plus its own option labels and
+# descriptions; the exemption reads that question's TEXT only. Over a concatenation of questions,
+# question 1's "Approve ..." would exempt question 2's ruling (R4); over option labels, a button
+# labelled "Approve" would be a one-word bypass (R7).
+#
+# THE EXEMPTION IS A PERMISSION SHAPE, NOT AN ACTION VERB. "May I ...", "approve", "ack-destroy" ask
+# for consent; a bare `dispatch`/`delete`/`deploy` would exempt every ruling that merely MENTIONS the
+# action it gates (R1), so V4 refuses any such member. `should I|we` is deliberately absent: "Should I
+# use approach A or approach B" is the exact ruling shape. `ceiling` is not a bare cue token either
+# ("raise the spend ceiling" is a money authorization); it counts only as an evidence bound.
+#
+# THE RESIDUAL, STATED. Appending "Approve the stricter threshold?" to a ruling question exempts the
+# whole question (R6 pins it): wrongly blocking an authorization is the failure this header calls
+# worse, so the arm judges the question, not the sentence. The ship gate and the skill text are the
+# primary defence; this arm is the backstop at the moment of asking.
+RULING_CUE_RE='(\bhow (strict|stringent|rigorous)|\b(strictness|stricter|stringen)|\b(evidence|proof|emptiness) (bar|threshold|ceiling|floor|standard)|\bthresholds?\b|\b(is|are) (the )?(evidence|proof) (enough|sufficient)|\badopting\b.*\baccepted\b|\bstatus (flip|move|change)|\b(approach|variant) [ab]\b|\b[ab] (or|vs\.?) [ab]\b)'
+RULING_PERM_RE='(\bmay i\b|\bmay we\b|\bcan i\b|\bcan we\b|\bis it (ok|okay|fine) to\b|\bok(ay)? to\b|\bgo-ahead\b|\bapprove|\bauthori[sz]e|\back-destroy)'
+# One tab-separated row per question: its text, then its text plus its own options. A non-zero jq
+# status means the shape is unreadable: skip the arm (permit), never judge a partial question.
+__RQS_RC=0
+RULING_ROWS="$(printf '%s' "$__HI_RAW" | jq -r '
+  ( .tool_input.questions // [] )[]
+  | (.question // "") as $q
+  | [ $q,
+      ( [ $q, ( (.options // [])[]
+                | if type == "string" then . else (.label // ""), (.description // "") end ) ]
+        | join(" ") ) ]
+  | map(ascii_downcase | gsub("\\s+"; " ")) | @tsv
+' 2>/dev/null)" || __RQS_RC=$?
+if [[ "$__RQS_RC" -eq 0 && -n "$RULING_ROWS" ]]; then
+  while IFS=$'\t' read -r __rq __rf; do
+    [[ -n "$__rf" ]] || continue
+    grep -qE "$RULING_CUE_RE" <<<"$__rf" || continue
+    grep -qE "$RULING_PERM_RE" <<<"$__rq" && continue
+    RULING_REASON="BLOCKED: this AskUserQuestion puts a TECHNICAL RULING to the operator.
+
+How strict an evidence bar must be, whether the evidence is sufficient, which of two designs or approaches, whether a status moves, which threshold — these are engineering calls. The operator is non-technical and cannot rule on them; asking stalls the pipeline until someone guesses.
+
+Delegate it: spawn soleur:engineering:cto with the question and the facts, and act on its ruling. The procedure and the closed list of rulings that do NOT go to the CTO are in technical-ruling-delegation.md (plugins/soleur/skills/brainstorm-techniques/references/technical-ruling-delegation.md).
+
+If the criterion is already stated in the ADR or plan, the flip is mechanical: run the grader, cite it, flip. Otherwise the CTO rules.
+
+Then split the item; ask the operator only the authorization — the irreversible or production-mutating action, money, scope, priority, or schedule that is left once the ruling is made.
+
+If this question genuinely carries an authorization and the wording tripped the classifier, re-word it to name the action being authorized (\"May I ...\", \"Approve ...\") — or re-run with SOLEUR_ACK_TECHNICAL_FORK=1.
+
+See hr-technical-fork-is-not-an-operator-question."
+
+    declare -f emit_incident >/dev/null 2>&1 && \
+      emit_incident pre-ask-technical-fork-gate deny "technical ruling put to a non-technical operator" "$__rf" 2>/dev/null || true
+
+    jq -n --arg r "$RULING_REASON" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
+    exit 0
+  done <<<"$RULING_ROWS"
 fi
 
 # AUTHORITY signal — a real operator decision. Checked FIRST among the remaining arms and wins
