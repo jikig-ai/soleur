@@ -59,7 +59,8 @@ Per-suite dispositions were verified against each suite's discovery code, not it
 7. **Real-runner arms failed empty under sibling-gate contention** (f2b/tg2 rc=1/empty stream; #8163-class). **Prevention:** re-run to isolate before diagnosing; the runner's contention banner is the tell.
 8. **tmp-reaper deleted a mid-run TESTROOT** (rc=143 arm kills ×2). **Prevention:** external host flake; retry.
 9. **Two-dot `git diff origin/main` showed upstream workflow drift as if it were the branch's change** — resolved via three-dot diff + `git log origin/main..HEAD -- path`. **Prevention:** NFR checks always use the three-dot merge-base form.
-10. **Forwarded (planning):** label-vs-file confusion on `test-affected-kb-consumers` (a suite label, not a script path); malformed-mint redesign pre-CPO; 4 MD038 violations fixed.
+10. **Substring-unique fixture anchors collide with ANY deeper-indented `*) return 0 ;;`** — `test-all-killed-classification`'s budget splice counts `    *) return 0 ;;` as a *substring*, so a bare arm at ≥4-space indent is a silent second occurrence (T14 broke on CI, nothing local did). **Prevention:** prefer `[[ == ]]` tests over a bare `*) return 0 ;;` arm inside `case` blocks in test-all.sh; the file is grep'd for structural literals by at least two downstream batteries (the `--rows` tiling anchors in `scripts-shard-totality-mutations` are the sibling trap — a `DECLARED_TOTAL` bump must grep the range literals repo-wide).
+11. **Forwarded (planning):** label-vs-file confusion on `test-affected-kb-consumers` (a suite label, not a script path); malformed-mint redesign pre-CPO; 4 MD038 violations fixed.
 
 ## Test-case patterns worth copying
 

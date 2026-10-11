@@ -71,3 +71,4 @@
 - `test-scripts (4/8)` FAILED — T10 derive-span read-census flagged my trailing comments spelling `tail X`/`head X` (the awk parses comment words as the commands' operand form). Reworded to `_gt`/`_gh`; derive-cache 19/19 green.
 - `test-scripts (5/8)` FAILED — `test-all-killed-classification` T14 budget fixture (`elapsed '' want >=40`; unrelated suite, looks CI-load flake — retried on rerun).
 - `test` aggregator failed as consequence. Lesson recorded: --rows tiling anchors live in a SECOND battery (shard-totality-mutations) — a DECLARED_TOTAL bump must grep for the range literals repo-wide, not just the two registrations.
+- Hit-arm restructure: the `*)` head/tail checks are now `[[ == ]]` tests — the budget splice counts `    *) return 0 ;;` as a SUBSTRING and a bare arm at ≥4 indent collides (T14 CI failure root cause). Anchors re-verified unique.
