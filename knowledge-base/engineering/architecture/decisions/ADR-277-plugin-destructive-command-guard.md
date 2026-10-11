@@ -457,7 +457,7 @@ is spent.
 
 ## Addendum: hosted ask (2026-10-10, #9776, [ADR-284](./ADR-284-hosted-bash-must-ask-lane-for-destroy-families.md))
 
-Binding rulings: `knowledge-base/project/specs/feat-9776-hosted-autonomous-ask/` (`cto-ruling.md`, `cpo-signoff.md`, `clo-ruling.md`).
+Binding rulings: `knowledge-base/project/specs/archive/20261011-050138-feat-9776-hosted-autonomous-ask/` (`cto-ruling.md`, `cpo-signoff.md`, `clo-ruling.md`).
 
 - **What changed.** Hosted autonomous mode asks before a default-branch force-push or delete (and `--mirror`), `terraform|tofu destroy`
   and `apply -destroy`, and a `gh` ref or repository delete, through one must-ask lane in `canUseTool` placed above the autonomous

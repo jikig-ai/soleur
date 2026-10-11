@@ -26,7 +26,7 @@ re_evaluation_triggers: "First arms-length Workspace Owner; first EEA-out operat
 
 Load-bearing evidence for the ship-time Counsel-Review CLO-Attestation Gate on the PR that ships the hosted must-ask lane. It supersedes in
 part `2026-10-counsel-review-9776.md`, for the single row "Until a stricter check ships" in that audit's drift table, and only on the merge
-of this PR. The binding ruling is `knowledge-base/project/specs/feat-9776-hosted-autonomous-ask/clo-ruling.md`; the design is ADR-284.
+of this PR. The binding ruling is `knowledge-base/project/specs/archive/20261011-050138-feat-9776-hosted-autonomous-ask/clo-ruling.md`; the design is ADR-284.
 
 Under the Soleur-as-tenant-zero v1 posture the CLO agent performs this review; the operator retains an optional veto. Draft material, not
 legal advice; external counsel is reserved for the re-evaluation triggers above and routes through `knowledge-base/legal/recommended-tools.md`.
