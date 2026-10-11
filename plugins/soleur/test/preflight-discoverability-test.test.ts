@@ -2888,13 +2888,19 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // (Doppler soleur/prd_terraform). NO SUBSTITUTE: the property is the post-replace registry host's own
   // heartbeat rows (new boot_id, zot_restarts, log_shipper_post_fail), which land only in the Logs
   // warehouse, which has no unauthenticated read path. Genuine.
-  // #9776 (2026-10-11): +1 (55 -> 56) for `2026-10-10-feat-hosted-autonomous-ask-before-destroy-plan.md`.
+  // #9438 (2026-10-10): +1 (55 -> 56) for `2026-10-10-feat-git-data-host-recurring-liveness-signal-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`bun plugins/soleur/scripts/reconcile-live-heartbeats.ts`) reads the Better Stack uptime API with
+  // BETTERSTACK_API_TOKEN, to confirm the new `soleur-git-data-host-prd` monitor exists live. NO SUBSTITUTE: a live monitor's
+  // existence has no unauthenticated read path; the offline wiring is covered by heartbeat-reprovision-parity and
+  // terraform-target-parity. Genuine.
+  // #9776 (2026-10-11): +1 (56 -> 57) for `2026-10-10-feat-hosted-autonomous-ask-before-destroy-plan.md`.
   // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
   // TRUTH: the per-ask lines (`decision:"destroy-ask"`) are read by `scripts/betterstack-query.sh` through the soak probe, which
   // needs BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler soleur/prd_terraform). NO SUBSTITUTE: the per-rule ask counts live
   // only in the private Better Stack sink (the Sentry events are capped per context and carry no per-rule totals), so no
   // unauthenticated read verifies the runtime stream; the static `git grep` in the same block proves only that the emitter exists. Genuine.
-  const BASELINE_DECLARED_PROBES = 56;
+  const BASELINE_DECLARED_PROBES = 57;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

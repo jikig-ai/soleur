@@ -1,0 +1,18 @@
+[Unit]
+# (#9438) Every 60 s, armed by the git-data cloud-init AFTER the maintenance timer, which is itself
+# after the bootstrap stage and boot_complete, so no tick overlaps the store mount at birth.
+Description=Run the git-data host liveness feeder every 60 s (#9438)
+Documentation=https://github.com/jikig-ai/soleur/issues/9438
+
+[Timer]
+# OnBootSec: a reboot gets a first tick after the store has had time to reopen; a store still
+# closed then is reported as exactly that.
+OnBootSec=3min
+OnUnitActiveSec=60s
+# The default AccuracySec of one minute can stretch a 60 s tick toward 120 s, which would eat the
+# grace period; five seconds keeps the cadence honest.
+AccuracySec=5s
+# NO Persistent=: it only has an effect on OnCalendar= timers, and this is not one.
+
+[Install]
+WantedBy=timers.target
