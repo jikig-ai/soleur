@@ -37,8 +37,8 @@ esac
 # into an empty CODE and destroying the classification. The `-w '%{http_code}'` capture is the whole
 # point. The stdin `user =` config presents Basic auth; -m 10 bounds the probe; -o /dev/null discards the body.
 #
-# CONFIG IS ENV (delivered both by the SSH provisioner to web-1 AND baked verbatim into cloud-init
-# for future hosts): ZOT_ENDPOINT + ZOT_PROBE_REPO from /etc/default/web-zot-consumer-probe;
+# CONFIG IS ENV (delivered both by the SSH provisioner to web-1 AND baked into cloud-init for future
+# hosts; web-1 gets the PINNED list, a host born later gets the BARE list, see the pin paragraph): ZOT_ENDPOINT + ZOT_PROBE_REPO from /etc/default/web-zot-consumer-probe;
 # ZUSER/ZTOK/WEB_ZOT_CONSUMER_URL from the doppler-run env.
 #
 # ZOT_PROBE_REPO IS A COMMA-SEPARATED LIST (#7258). A host pulls MORE than one platform repository
@@ -54,7 +54,7 @@ esac
 #   - a 401 on ANY element exits 3 (HARD), and the other elements are still probed, so no repo's
 #     line is lost to an early exit;
 #   - every fault line ends with repo=<path>; a rate-limited (30 min) SOLEUR_ZOT_PROBE_VERDICT marker
-#     per repo (code, verdict) proves a HEALTHY run per repo from telemetry, because a healthy probe
+#     per repo (code, verdict, pin_verdict) proves a HEALTHY run per repo from telemetry, because a healthy probe
 #     is otherwise silent. Fault lines are NOT rate-limited (one per faulting repo per 60 s run, at most
 #     2880 rows/day on a full outage against 1440 for one repo; ADR-184 recorded ~19.9k of the 25k/day
 #     Better Stack budget used in June 2026, so ~5.1k/day of headroom and a full outage takes about 56%);
@@ -76,11 +76,16 @@ esac
 # pin_verdict=<none|skipped|pinned|pin-missing|auth-broke|unreachable|wedged|unexpected> (none = a bare element).
 # Worst case for web-1's list (the web repo bare, the bootstrap repo pinned): a 200 tag list then a hanging HEAD
 # is 20 s for the pinned repo plus 10 s for the bare one = 30 s with no ping, 50 s to a ping (two curl -m 10
-# ping attempts); every other host's bare list stays at 10 s per repo. Only web-1 carries a pin (web-probe.tf:
-# local.zot_probe_repo_pinned feeds server.tf's two web-1 sites); born hosts keep the bare list because a pin
+# ping attempts); every other host's bare list stays at 10 s per repo. Budget rule: each pinned repo costs up to
+# 20 s and each bare repo 10 s, against 60 s minus the 20 s ping, so a third pinned element on one host would
+# exceed the cadence. A pin fault REPLACES that repo's tags/list fault (the HEAD runs only when tags/list was
+# 200), so the 2880 rows/day full-outage ceiling is unchanged and a chronic pin-missing state alone is 1440.
+# Only web-1 carries a pin (web-probe.tf: local.zot_probe_repo_pinned feeds server.tf's two web-1 sites);
+# born hosts keep the bare list because a pin
 # baked into an env file at birth could never be updated. The web image has no committed digest (#10044), so
 # its element stays bare and says pin_verdict=none. A manifest HEAD does not prove the blobs: the build
-# workflow's crane validate remains the blob-level gate.
+# workflow's `crane validate` step is the only blob check and it is a non-blocking dark-launch that runs
+# at mirror time on the build's own tag, so nothing today gates the blobs of the pinned digest.
 #
 # TEST SEAM: SOLEUR_ZOT_PROBE_STATUS_OVERRIDE injects a tags/list CODE (a comma list is positional over the
 # NON-EMPTY repo elements in order; a missing position reads 000; pin HEADs are NOT seamed, the suite drives
@@ -271,14 +276,16 @@ _OVR=()
 unservable=0
 auth_broke=0
 
-# The ONE request site (#10004), used by tags/list (GET, via _get) and by the pinned-manifest HEAD (-I, via _head).
+# The ONE request site (#10004), used by tags/list (GET) and by the pinned-manifest HEAD (-I).
 # NO -f (see header), NO --retry (a probe whose absence is the alarm must not retry its way to green).
 # `user = ...` on the stdin config presents Basic auth (the -u equivalent, kept off argv); -w captures the HTTP
 # code; -m bounds it; a transport failure (unreachable private net) yields the curl default 000.
-# The request reads its two inputs from globals (_RP = path under /v2/, _RI = `-I` for a HEAD, empty for a GET),
-# set by _get / _head, so the curl line forwards no positional argument.
-_fetch() {  # reads _RP and _RI -> sets CODE
-  CODE=$(curl --disable --noproxy '*' ${_RI:+-I} -s -o /dev/null -w '%{http_code}' -m 10 --config - "http://${ENDPOINT}/v2/${_RP}" \
+# Do NOT forward $@ / $1 inside the curl line: the credential-trace lint (Rule D) would then splice the call
+# sites as wrapper commands and judge the unpinned ${ENDPOINT} (#7873), which main's masked `$(...)` curl never
+# was. The arguments are read into locals on the line above it instead.
+_fetch() {  # <path under /v2/> [-I]  -> sets CODE
+  local _p="$1" _i="${2:-}"
+  CODE=$(curl --disable --noproxy '*' ${_i:+-I} -s -o /dev/null -w '%{http_code}' -m 10 --config - "http://${ENDPOINT}/v2/${_p}" \
     < <(printf 'user = "%s:%s"\n' "$ZUSER" "$ZTOK") 2>/dev/null || echo 000)
   [ -n "$CODE" ] || CODE=000
   # (#7262) On a transport failure curl prints `000` via -w AND exits non-zero, so the `|| echo 000` above
@@ -287,20 +294,18 @@ _fetch() {  # reads _RP and _RI -> sets CODE
   # in the catch-all, because zot did answer.
   case "$CODE" in 000000) CODE=000 ;; esac
 }
-_get()  { _RP="$1"; _RI="";   _fetch; }
-_head() { _RP="$1"; _RI="-I"; _fetch; }
 
 # One classification for both requests. Args: <code> <what: tags|pin> <repo> <ref|empty>. Sets VERDICT and the
 # SAME unservable/auth_broke accumulators for either request, so a pin fault can never be a parallel flag the
 # aggregation does not read. The tags wording is unchanged (ci-deploy.sh and the runbook cite it); a pin fault
 # line adds ref= BEFORE the trailing repo=.
 _classify() {
-  local code="$1" what="$2" r="$3" ref="$4" tail
-  if [ "$what" = pin ]; then tail="ref=${ref} repo=${r}"; else tail="repo=${r}"; fi
+  local code="$1" what="$2" r="$3" ref="$4" tail path
+  if [ "$what" = pin ]; then tail="ref=${ref} repo=${r}"; path="manifests/${ref#*@}"; else tail="repo=${r}"; path="tags/list"; fi
   case "$code" in
     200)
       VERDICT=servable; [ "$what" = pin ] && VERDICT=pinned
-      [ -n "$VERBOSE" ] && echo "[zot-probe] ${VERDICT} (200): ${ENDPOINT}/v2/${r}/$([ "$what" = pin ] && echo "manifests/${ref#*@}" || echo tags/list)" >&2
+      [ -n "$VERBOSE" ] && echo "[zot-probe] ${VERDICT} (200): ${ENDPOINT}/v2/${r}/${path}" >&2
       ;;
     404)
       unservable=1
@@ -326,7 +331,7 @@ _classify() {
       ;;
     *)
       VERDICT=unexpected; unservable=1
-      echo "[zot-probe] SUPPRESS ping: unexpected code ${code} for ${ENDPOINT}/v2/${r}/$([ "$what" = pin ] && echo "manifests/${ref#*@}" || echo tags/list). Absence-of-ping will alarm. ${tail}" >&2
+      echo "[zot-probe] SUPPRESS ping: unexpected code ${code} for ${ENDPOINT}/v2/${r}/${path}. Absence-of-ping will alarm. ${tail}" >&2
       ;;
   esac
 }
@@ -337,7 +342,7 @@ for _i in "${!R_NAME[@]}"; do
     CODE="${_OVR[$_i]:-000}"
     [ -n "$CODE" ] || CODE=000
   else
-    _get "${r}/tags/list"
+    _fetch "${r}/tags/list"
   fi
   R_CODE+=("$CODE")
 
@@ -354,7 +359,7 @@ for _i in "${!R_NAME[@]}"; do
   elif [ "$CODE" != 200 ]; then
     R_PINV+=(skipped)
   else
-    _head "${r}/manifests/${_dig}"
+    _fetch "${r}/manifests/${_dig}" -I
     _classify "$CODE" pin "$r" "${r}@${_dig}"
     R_PINV+=("$VERDICT")
   fi
