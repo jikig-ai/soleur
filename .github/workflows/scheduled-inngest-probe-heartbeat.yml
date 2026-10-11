@@ -90,7 +90,10 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
           case "$rc" in
-            0) echo "::notice::inngest probe heartbeat feeder: ${verdict}" ;;
+            0) case "$verdict" in
+                 beat|fresh_heartbeat_paused) echo "::notice::inngest probe heartbeat feeder: ${verdict}" ;;
+                 *) echo "::error::inngest probe heartbeat feeder exited 0 without a deciding verdict (${verdict}); Sentry will check in error." ;;
+               esac ;;
             3) echo "::error::inngest probe heartbeat WITHHELD (${verdict}). See the verdict line above for the cause and the funnel counts." ;;
             4) echo "::error::inngest probe heartbeat beat FAILED (${verdict}): a fresh row existed but the heartbeat could not be resolved or delivered." ;;
             *) echo "::warning::inngest probe heartbeat feeder returned unexpected status ${rc} (${verdict})" ;;

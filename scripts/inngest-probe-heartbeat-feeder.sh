@@ -120,6 +120,16 @@ TOKEN_RE='^[A-Za-z0-9._~+/=-]{20,}$'
 # TLS/DNS environment that can substitute the trust store or the resolver for this file's own credentialed
 # curls (parity with scripts/betterstack-query.sh, #7873): --disable and --noproxy do not cover it.
 unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME HOSTALIASES LOCALDOMAIN RES_OPTIONS
+# A fixed collation and character class: [0-9] and sort order must not depend on the caller's locale.
+export LC_ALL=C
+# The two test seams (a frozen clock, a substitute predicate library) would authorize a beat on a dead
+# probe. The workflow unsets them; this refuses them inside Actions as well, so a stale export cannot
+# reach a run there even if the workflow's unset were ever edited away.
+if [[ "${GITHUB_ACTIONS:-}" == "true" ]] && { [[ -n "${INNGEST_FEEDER_NOW+x}" ]] || [[ -n "${INNGEST_PROBE_ROW_LIB+x}" ]]; }; then
+  marker "query_failed" "reason=test_seam_in_ci"
+  echo "CANNOT BEAT: a test seam (INNGEST_FEEDER_NOW or INNGEST_PROBE_ROW_LIB) is set inside GitHub Actions. It would let a frozen clock or a substitute predicate authorize a beat; nothing was decided."
+  exit 3
+fi
 unset INNGEST_PROBE_ROW_JQ INNGEST_PROBE_EMITTER INNGEST_PROBE_MARKER
 _ipr_lib="${INNGEST_PROBE_ROW_LIB:-$REPO_ROOT/scripts/lib/inngest-probe-row.sh}"
 # shellcheck source=scripts/lib/inngest-probe-row.sh
@@ -318,7 +328,7 @@ resolve_heartbeat() {
   local sel srx
   sel="$(printf '%s' "$body" | jq -r --arg n "$HEARTBEAT_NAME" '
       [.data[]? | select(.attributes.name == $n)] as $m
-      | if ($m | length) != 1 then "count\t" + (($m | length) | tostring) + "\t" + (if ((.pagination.next // null) != null) then "1" else "0" end)
+      | if ($m | length) != 1 or ((.pagination.next // null) != null) then "count\t" + (($m | length) | tostring) + "\t" + (if ((.pagination.next // null) != null) then "1" else "0" end)
         else ($m[0].attributes) as $a
           | if ($a.paused | type) != "boolean" then "paused_shape\t-"
             else "ok\t" + ($a.paused | tostring) + "\t" + (($a.url // "") | tostring) end

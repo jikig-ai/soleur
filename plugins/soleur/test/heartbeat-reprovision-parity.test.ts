@@ -253,7 +253,12 @@ function checkFeeders(
         const hasSchedule = /^\s*schedule:/m.test(evidenceCode);
         let inTable = false;
         try {
-          inTable = readFile("apps/web-platform/server/watchdog-dispatch-table.ts").includes(`workflowFile: "${base}"`);
+          // The table is TypeScript: strip whole-line `//` comments (stripCommentLines handles `#` only).
+          const tableCode = readFile("apps/web-platform/server/watchdog-dispatch-table.ts")
+            .split("\n")
+            .filter((l) => !/^\s*\/\//.test(l))
+            .join("\n");
+          inTable = tableCode.includes(`workflowFile: "${base}"`);
         } catch {
           inTable = false;
         }
@@ -636,6 +641,14 @@ describe("feeder guard is load-bearing (non-vacuity, #6537)", () => {
       noFeeder,
     );
     expect(dispatchOnly.some((x) => x.includes("nothing starts it"))).toBe(true);
+    // A row that exists only in a COMMENT is not a row.
+    const commentedRow = checkFeeders(
+      [wfBase],
+      wfExists,
+      (rel) => (rel.endsWith("watchdog-dispatch-table.ts") ? '// workflowFile: "scheduled-x.yml",' : "on:\n  workflow_dispatch: {}\njobs:\n  a:\n    steps:\n      - run: bash scripts/x.sh\n"),
+      noFeeder,
+    );
+    expect(commentedRow.some((x) => x.includes("nothing starts it"))).toBe(true);
     // The same workflow with a dispatch-table row is clocked, so it passes.
     const clocked = checkFeeders(
       [wfBase],

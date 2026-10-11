@@ -75,6 +75,7 @@ Q_PASS="pw-SYNTH-9f2c1d7a"
 Q_USER="user-SYNTH-77aa"
 NAME="soleur-inngest-server-probe-prd"
 # Values the refusal paths must never echo (a malformed token, a malformed ping URL).
+TLS_NAMES="SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME HOSTALIASES LOCALDOMAIN RES_OPTIONS"
 BAD_TOKEN_SENT="SYNTHbadTOKENqq9"
 BAD_URL_SENT="SYNTHbadURLid9"
 
@@ -111,7 +112,7 @@ api_paused()      { hb_json "$NAME" true "$HB_URL"; }
 reset_case() {
   C_ROWS="/dev/null"; C_STUB="ok"; C_API=""; C_APIMODE="ok"; C_BEATMODE="200"; C_NOW="$NOW"
   C_TOKEN="$TOKEN"; C_UNSET=""; C_LIB="$LIB_SRC"; C_LIBENV=""; C_XTRACE=0; C_ARGS=""
-  C_PROBE="$PROBE_SRC"; C_BEATS=0; C_APIS=0; C_EXPECT_URL="$HB_URL"; C_TLSENV=0
+  C_PROBE="$PROBE_SRC"; C_BEATS=0; C_APIS=0; C_EXPECT_URL="$HB_URL"; C_TLSENV=0; C_GHA=0
 }
 reset_case
 
@@ -134,7 +135,7 @@ LOG="\$R/calls.log"
 argv="\$*"
 stdin="\$(cat)"
 tok="\$(cat "\$R/token.txt")"
-if [ -n "\${SSLKEYLOGFILE:-}\${CURL_CA_BUNDLE:-}" ]; then echo "refused env" >> "\$LOG"; exit 64; fi
+for n in $TLS_NAMES; do if [ -n "\${!n:-}" ]; then echo "refused env \$n" >> "\$LOG"; exit 64; fi; done
 A_ARGV='--disable --noproxy * -fsS --max-time 20 --config - https://uptime.betterstack.com/api/v2/heartbeats?per_page=250'
 B_ARGV='--disable --noproxy * -fsS --max-time 15 -o /dev/null -w %{http_code} --config -'
 if [[ "\$argv" == "\$A_ARGV" ]]; then
@@ -218,7 +219,11 @@ STUB
     *) envv+=("INNGEST_FEEDER_NOW=$C_NOW") ;;
   esac
   [[ -z "$C_LIBENV" ]] || envv+=("INNGEST_PROBE_ROW_LIB=$C_LIBENV")
-  [[ "$C_TLSENV" != 1 ]] || envv+=("SSLKEYLOGFILE=/dev/null" "CURL_CA_BUNDLE=/dev/null")
+  if [[ "$C_TLSENV" == 1 ]]; then
+    local _tn
+    for _tn in $TLS_NAMES; do envv+=("$_tn=/dev/null"); done
+  fi
+  [[ "$C_GHA" != 1 ]] || envv+=("GITHUB_ACTIONS=true")
   local -a sh=("$BASH_BIN")
   [[ "$C_XTRACE" == "1" ]] && sh=("$BASH_BIN" -x)
   # shellcheck disable=SC2086
@@ -303,18 +308,49 @@ cases=$((cases + 1))
 if ! PATH="$WORK/root/bin" type -P nc >/dev/null 2>&1 && ! PATH="$WORK/root/bin" type -P wget >/dev/null 2>&1; then pass "canary: no other network client on the private PATH"
 else fail "canary: nc or wget is reachable from the private PATH"; fi
 
-echo "== verdict-owning helper control =="
-# expect() decides the verdict of every case below; the counter self-test above cannot see it going
-# soft. Drive it once with an expectation that MUST fail (it wants rc 3, the case yields rc 0 + beat),
-# require exactly one failure and no pass, then unwind the counters so the floors stay exact.
-_p0=$passes; _f0=$fails; _c0=$cases; _b0=$beat_asserts
-reset_case; C_ROWS="$(ded 60 | fx ctl)"; C_BEATS=1; C_APIS=1
-expect "CONTROL (must fail): wrong rc and verdict wanted" 3 query_failed >/dev/null 2>&1
-_ctl_f=$((fails - _f0)); _ctl_p=$((passes - _p0))
-passes=$_p0; fails=$_f0; cases=$_c0; beat_asserts=$_b0
-cases=$((cases + 1))
-if [[ "$_ctl_f" == 1 && "$_ctl_p" == 0 ]]; then pass "expect() control: a wrong expectation records exactly one failure and no pass"
-else fail "expect() control: expected 1 failure / 0 passes, saw $_ctl_f / $_ctl_p — expect() cannot fail"; fi
+echo "== verdict-owning helper controls =="
+# expect() decides the verdict of every case below. Each control drives it with ONE deliberate wrong
+# expectation chosen to pass the invariant check and trip a single later check, runs it in a subshell, and
+# requires BOTH exactly one failure AND that check's own diagnostic. A control that failed early (in the
+# invariant helper) would prove nothing about the checks after it, which is how the first version of this
+# block went vacuous.
+ctl() { # <label> <needle> <expect args...>
+  local label="$1" needle="$2" out nf np
+  shift 2
+  out="$(expect "$@" 2>&1)"
+  nf="$(grep -c '^  FAIL:' <<<"$out" || true)"; np="$(grep -c '^  PASS:' <<<"$out" || true)"
+  cases=$((cases + 1))
+  if [[ "$nf" == 1 && "$np" == 0 ]] && grep -qF -- "$needle" <<<"$out"; then pass "expect() control: $label"
+  else fail "expect() control: $label — expected 1 failure ($needle), saw $nf failures / $np passes"; sed 's/^/        | /' <<<"$out" >&2; fi
+}
+reset_case; C_ROWS="$(ded 60 | fx ctlrc)"; C_BEATS=1; C_APIS=1
+ctl "a wrong expected status is a failure" "expected status 3 + verdict=beat, got status 0" "x" 3 beat
+reset_case; C_ROWS="$(ded 60 | fx ctlv)"; C_BEATS=1; C_APIS=1
+ctl "a wrong expected verdict is a failure" "expected status 0 + verdict=fresh_heartbeat_paused, got status 0 [beat]" "x" 0 fresh_heartbeat_paused
+reset_case; C_ROWS="$(ded 60 | fx ctlx)"; C_BEATS=1; C_APIS=1
+ctl "a missing required extra token is a failure" "missing required token: NO_SUCH_TOKEN" "x" 0 beat "NO_SUCH_TOKEN"
+reset_case; C_ROWS="$(ded 60 | fx ctlb)"; C_BEATS=0; C_APIS=1
+ctl "a wrong expected beat-call count is a failure" "beat calls: expected 0, saw 1" "x" 0 beat
+reset_case; C_ROWS="$(ded 60 | fx ctla)"; C_BEATS=1; C_APIS=0
+ctl "a wrong expected API-call count is a failure" "API calls: expected 0, saw 1" "x" 0 beat
+# Three checks that need a verifier that misbehaves: scratch-copy mutants of the real script. Each mutant is
+# asserted to have LANDED (it differs from the pristine verifier) before it is trusted.
+ctl_mutant() { # <name> <text inserted at the top of marker()> -> sets CTL_M to the mutant path
+  local m="$WORK/mut/$1.sh"
+  sed -E "s/^marker\\(\\) \\{/marker() { $2;/" "$PROBE_SRC" > "$m"
+  cases=$((cases + 1))
+  if ! cmp -s "$PROBE_SRC" "$m"; then pass "control mutant $1 landed"; else fail "control mutant $1 did NOT land — its control would be vacuous"; fi
+  CTL_M="$m"
+}
+ctl_mutant ctl-leak 'printf "%s\\n" "$BETTERSTACK_API_TOKEN_READONLY"'; M="$CTL_M"
+reset_case; C_PROBE="$M"; C_ROWS="$(ded 60 | fx ctll)"; C_BEATS=1; C_APIS=1
+ctl "a verifier that prints the token is a failure" "a secret-shaped sentinel leaked" "x" 0 beat
+ctl_mutant ctl-dup 'printf "inngest-probe-feeder: verdict=dup\\n"'; M="$CTL_M"
+reset_case; C_PROBE="$M"; C_ROWS="$(ded 60 | fx ctld)"; C_BEATS=1; C_APIS=1
+ctl "a verifier that prints two verdict lines is a failure" "expected exactly one verdict= line" "x" 0 beat
+ctl_mutant ctl-exit 'echo "will exit now"'; M="$CTL_M"
+reset_case; C_PROBE="$M"; C_ROWS="$(ded 60 | fx ctle)"; C_BEATS=1; C_APIS=1
+ctl "a verifier that prints the word exit is a failure" 'contains the word "exit"' "x" 0 beat
 
 echo "== static: exit contract =="
 allowlist_violations() { # <file> -> "line:token" for every exit token not followed by 0|3|4|64|78
@@ -474,6 +510,10 @@ reset_case; C_ROWS="$(ded 3 | fx young)"; C_BEATS=1; C_APIS=1
 expect "a 3 s old row beats" 0 beat
 reset_case; C_NOW="__unset__"; C_ROWS="$(row "$(date -u -d "@$(( $(date -u +%s) - 60 ))" '+%Y-%m-%d %H:%M:%S.000000')" "$(msg dedicated)" | fx realclock)"; C_BEATS=1; C_APIS=1
 expect "no INNGEST_FEEDER_NOW: the verifier uses the real wall clock" 0 beat
+reset_case; C_NOW="__unset__"; C_ROWS="$(row "$(date -u -d "@$(( $(date -u +%s) - 4400 ))" '+%Y-%m-%d %H:%M:%S.000000')" "$(msg dedicated)" | fx realclock2)"; C_BEATS=1; C_APIS=1
+expect "no INNGEST_FEEDER_NOW: a 4400 s old row still beats (a fast fallback clock would withhold it)" 0 beat
+reset_case; C_GHA=1; C_ROWS="$(ded 60 | fx gha)"
+expect "a test seam set inside GitHub Actions is refused" 3 query_failed "reason=test_seam_in_ci"
 reset_case; C_TLSENV=1; C_ROWS="$(ded 60 | fx tlsenv)"; C_BEATS=1; C_APIS=1
 expect "TLS/CA environment is scrubbed before the credentialed curls" 0 beat
 
@@ -533,9 +573,9 @@ expect "dt without a fractional part" 0 beat
 reset_case; C_ROWS="$(row "$(dt_ago 60)Z" "$(msg dedicated)" | fx zsuffix)"; C_BEATS=1; C_APIS=1
 expect "dt with a trailing Z" 0 beat
 reset_case; C_ROWS="$(row "$(date -u -d "@$((NOW_EPOCH - 60))" '+%Y-%m-%d %H:%M:%S')+02:00" "$(msg dedicated)" | fx offset)"
-expect "dt with a zone offset is rejected, never read as UTC" 3 row_unusable "dt_rejected=1"
+expect "dt with a zone offset is rejected, never read as UTC" 3 row_unusable "newest_dt=none lines=1 dt_rejected=1"
 reset_case; C_ROWS="$({ ded 60; row "zzz-not-a-date" "$(msg dedicated)"; } | fx garbagevalid)"; C_BEATS=1; C_APIS=1
-expect "an unparseable dedicated dt does not block a fresh valid row" 0 beat "dt_rejected=1"
+expect "an unparseable dedicated dt does not block a fresh valid row" 0 beat "lines=2 dt_rejected=1"
 
 echo "== warehouse failures =="
 reset_case; C_UNSET="BETTERSTACK_QUERY_PASSWORD"
@@ -570,6 +610,8 @@ reset_case; C_ROWS="$(ded 60 | fx fp6)"; C_API="$(hb_json "${NAME}-old" false "$
 expect "prefix decoy (name plus a suffix) is not a match" 4 beat_failed "reason=heartbeat_not_unique matches=0"
 reset_case; C_ROWS="$(ded 60 | fx fp6b)"; C_API="$(hb_json "old-${NAME}" false "$HB_URL" | fx apiPrefix2)"; C_APIS=1
 expect "name with a leading decoy (old-NAME) is not a match" 4 beat_failed "reason=heartbeat_not_unique matches=0 paged=0"
+reset_case; C_ROWS="$(ded 60 | fx fp6d)"; C_API="$(hb_json "$NAME" false "$HB_URL" | jq -c '. + {pagination: {next: "https://x.example/page2"}}' | fx apiUniquePaged)"; C_APIS=1
+expect "a unique match on page 1 is not trusted while a later page exists" 4 beat_failed "matches=1 paged=1"
 reset_case; C_ROWS="$(ded 60 | fx fp6c)"; C_API="$(jq -cn '{data: [], pagination: {next: "https://x.example/page2"}}' | fx apiPaged)"; C_APIS=1
 expect "heartbeat beyond page 1 is reported as paged, never as missing" 4 beat_failed "paged=1"
 reset_case; C_ROWS="$(ded 60 | fx fp7)"; C_API="$(jq -cn --argjson a "$(hb_json "$NAME" false "$HB_URL")" '{data: ($a.data + $a.data)}' | fx apiTwo)"; C_APIS=1
@@ -777,8 +819,8 @@ if (( passes + fails != cases )); then
   exit 1
 fi
 # A HARD-CODED floor: a runtime-derived one falls when a case is deleted.
-MIN_PASSES=134
-MIN_BEAT_ASSERTS=76
+MIN_PASSES=147
+MIN_BEAT_ASSERTS=79
 if (( passes < MIN_PASSES )); then
   printf 'FATAL: only %s passes, below the floor of %s -- the suite was truncated, so a 0-failure tally proves nothing.\n' "$passes" "$MIN_PASSES" >&2
   exit 1

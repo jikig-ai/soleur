@@ -13,6 +13,13 @@ brand_survival_threshold: none
 
 # observability(infra): wire the feeder for `betteruptime_heartbeat.inngest_server_probe` (Ref #9703)
 
+> **Superseded 2026-10-11 (review round 1, CTO ruling):** the eligibility reasoning in this plan ("shared failure
+> domain, like zot", "the credentialed bash pipeline is the load-bearing reason") is superseded by the second
+> eligibility clause in the ADR-248 amendment: the feeder is clock-fired for ATTRIBUTION (the heartbeat is the
+> paging surface, so an Inngest-fired feeder would false-page "probe dark" on every Inngest/web-1 outage).
+> The "ingest lag 1275 s / 3244 s" figures were ages at check time, not lag. The arming procedure lives in the
+> runbook, not here. Read those two records, not the superseded sentences below.
+
 ## Enhancement Summary
 
 **Deepened on:** 2026-10-11
@@ -475,7 +482,7 @@ Every non-beat verdict fixture asserts both the exit status AND the exact `verdi
 | Extend `inngest-luks-property-8296.sh` to push | Rejected | The issue's instruction; it never exits 0/1 by design and dies with its tracker |
 | Daily follow-through sweeper + widen `period` (e.g. 86400/7200) | Rejected | Sweeper schedule delivers one run per 2–7 h; exit 0 closes a tracker; widening turns "one skipped emission" into a day of blindness and writes to Better Stack at merge |
 | Host-side push inside `inngest-server-probe.sh` | Rejected | Cannot see Vector-allowlist or sink failures; needs an OCI re-bake and `inngest-host-replace` (#6780) |
-| Inngest cron function | Rejected | Would put warehouse-read credentials into the web app runtime, and the sanctioned exception is the dispatch table with its honest eligibility string |
+| Inngest cron function / Inngest dispatch cron (ADR-033 Option C) | Rejected | For attribution (ADR-248 amendment 2026-10-11): an Inngest-fired feeder stops beating during any Inngest or web-1 outage and false-pages "probe dark". The earlier reason (warehouse credentials in the web app runtime) was wrong: the runner holds the credentials either way |
 | `schedule:`-only workflow, or 60-minute dispatch slots | Rejected | `schedule:` delivers one run per 2–7 h (ADR-248); 60-minute slots give a ~115 min worst gap against 90 |
 | URL as a repo secret set at arm time (no uptime API in the feeder) | Rejected | Arming becomes two writes in two systems with an ordering hazard (beating a paused heartbeat, the undocumented response), the pre-arm run can no longer prove the URL resolves, and the URL lives in a second store that drifts if the heartbeat is recreated |
 | Feeder with the write token `BETTERSTACK_API_TOKEN` (what the sweeper holds) | Rejected | The feeder needs GET only; the read-only token is verified to return the heartbeat `url`, so capability replaces a static scan |

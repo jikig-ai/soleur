@@ -1543,21 +1543,28 @@ that command's read-back exists.
 the warehouse has answered it carries `rows_total rows_probe rows_host rows_dedicated newest_dt lines
 dt_rejected` (and `age_s`), so an empty warehouse, a host or role filter dropping rows, rows that arrived
 in an unreadable shape (`lines` above `rows_total`) and a stale-but-present row are told apart from that
-one line; `query_failed`, `clock_malformed`, `usage` and `trap_remapped` carry no funnel. A run that died
-before printing any marker (the script missing, a parse error) prints `verdict=no_marker rc=<n>`.
+one line. `dt_rejected` counts dedicated rows excluded because their timestamp is not in the warehouse's own
+shape (for example it carries a zone offset); `newest_dt` ignores them, so `producer_silent` or
+`row_unusable` with `dt_rejected` above 0 is a timestamp-format fault to check first, not a dark pipeline.
+`query_failed`, `clock_malformed`, `usage`, `trap_remapped`, `xtrace_refused` and the empty-window
+`no_rows` form carry no complete funnel. `heartbeat_not_unique` carries `paged=1` when the API reports a
+further page (the feeder then refuses to trust a page-1 answer). A run that died before printing any marker
+(the script missing, a parse error) prints `verdict=no_marker rc=<n>`.
 Exit 0 means exactly `beat` or `fresh_heartbeat_paused` (`--selftest` is the one other zero and is never
 run by the workflow). Verdicts: `no_rows` / `producer_silent` (no fresh dedicated probe row; the probe
-pipeline is dark, which is what this heartbeat exists to report), `row_unusable` (the newest row has no
-readable or a future-dated timestamp; a data fault, not proof the pipeline is dark), `query_failed`
-(warehouse unreadable; says nothing about the store), `beat_failed` (a fresh row existed but the
-heartbeat could not be resolved or delivered). The Sentry monitor `scheduled-inngest-probe-heartbeat`
-checks in `ok` only for the two exit-0 verdicts; `error` means "withheld or failed", not "feeder broken".
-`bash scripts/inngest-probe-heartbeat-feeder.sh --selftest` prints `selftest=ok` with no network or
-credentials. A read-only local run (the heartbeat is paused, so it sends nothing; it needs the four
-secrets `BETTERSTACK_QUERY_HOST`, `BETTERSTACK_QUERY_USERNAME`, `BETTERSTACK_QUERY_PASSWORD` and
-`BETTERSTACK_API_TOKEN_READONLY`, all in Doppler `prd_terraform`) is
-`doppler run -p soleur -c prd_terraform -- bash scripts/inngest-probe-heartbeat-feeder.sh`; exit codes
-are 0 beat or paused, 3 withheld, 4 beat could not be delivered, 64 usage, 78 tracing refused.
+pipeline is dark, which is what this heartbeat exists to report), `row_unusable` (no readable timestamp
+among the dedicated rows, or the newest is future-dated; a data fault, not proof the pipeline is dark),
+`query_failed` (warehouse unreadable; says nothing about the store), `beat_failed` (a fresh row existed
+but the heartbeat could not be resolved or delivered). The Sentry monitor
+`scheduled-inngest-probe-heartbeat` checks in `ok` only for the two exit-0 verdicts; `error` means
+"withheld or failed", not "feeder broken". `bash scripts/inngest-probe-heartbeat-feeder.sh --selftest`
+prints `selftest=ok` with no network or credentials. A local run sends nothing ONLY while the heartbeat
+is paused; once armed, the same command beats the heartbeat, which is a production write. It needs the
+four secrets `BETTERSTACK_QUERY_HOST`, `BETTERSTACK_QUERY_USERNAME`, `BETTERSTACK_QUERY_PASSWORD` and
+`BETTERSTACK_API_TOKEN_READONLY` (all in Doppler `prd_terraform`):
+`doppler run -p soleur -c prd_terraform -- env -u INNGEST_FEEDER_NOW -u INNGEST_PROBE_ROW_LIB bash scripts/inngest-probe-heartbeat-feeder.sh`
+(the two `env -u` seals keep a stale exported test seam from deciding the verdict). Exit codes are 0 beat
+or paused, 3 withheld, 4 beat could not be delivered, 64 usage, 78 tracing refused.
 
 **Arming is a production write to Better Stack.** Run the command below only after the operator has
 authorized THIS command as a unit; a menu answer or an earlier approval does not authorize it. It is
@@ -1602,8 +1609,8 @@ preflight() {
     case "$sent" in *http_code=2[0-9][0-9]) : ;; *) fail="$fail run $rid sentry check-in not 2xx;" ;; esac
   done < <(gh run list --workflow=scheduled-inngest-probe-heartbeat.yml --status completed --limit 4 --json databaseId,event,createdAt --jq '.[] | [.databaseId, .event, .createdAt] | @tsv')
   [ "$n" = 4 ] || fail="$fail saw $n runs, expected 4;"
-  [ "$(( $(date -u -d "$first" +%s) - $(date -u -d "$last" +%s) ))" -ge 2700 ] 2>/dev/null \
-    && : || fail="$fail the four runs span less than 45 minutes;"   # newest first, so first - last is the span
+  [ "$(( $(date -u -d "$first" +%s) - $(date -u -d "$last" +%s) ))" -ge 2400 ] 2>/dev/null \
+    && : || fail="$fail the four runs span less than 40 minutes;"   # newest first, so first - last is the span; 3 slots = 45 min nominal, minus per-slot clock jitter
   # P3  live heartbeat state (the URL attribute is deliberately not selected)
   local live
   live="$(hbr "https://uptime.betterstack.com/api/v2/heartbeats?per_page=250" \
