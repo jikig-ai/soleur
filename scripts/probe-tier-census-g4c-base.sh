@@ -5,8 +5,9 @@
 # this committed wrapper is the spellable form.
 #
 # The grep anchors on the resolution's call form (`git -C "$1" merge-base HEAD
-# refs/remotes/origin/main`), and comments are stripped first so a commented-out call cannot
-# satisfy it.
+# refs/remotes/origin/main`), and line-leading comments are stripped first so a commented-out
+# call cannot satisfy it (a trailing comment or string payload could — observability probe,
+# not a gate).
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUITE="$DIR/../tests/scripts/test-infra-privileged-tier-census.sh"

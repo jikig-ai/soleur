@@ -91,9 +91,10 @@ STATE_LIST="${IPT_STATE_LIST:-}"
 # branch). The `env -u` scrub is the repo convention for git calls in hook-reachable code
 # (scripts/test-all.sh › _aff_rd_diff) — an inherited GIT_DIR/GIT_INDEX_FILE overrides `git -C`
 # and would resolve the merge-base against the caller's repository.
-# resolve_base_ref <repodir> — prints the base ref on stdout and names which arm engaged on
-# stderr via IPT_G4C_BASE_ARM=<arm> (the suite's KEY=value diagnostic convention; the
-# silent-fallback arm silently restored the #9956 false-red class — it must be observable).
+# The resolution contract: `IPT_BASE_REF` verbatim; else `git merge-base HEAD
+# refs/remotes/origin/main`; else the refs/remotes/origin/main tip. Prints the chosen ref on
+# stdout and names the arm on stderr via IPT_G4C_BASE_ARM=<override|merge-base|fallback> — the
+# silent-fallback arm silently restored the #9956 false-red class, so it must be observable.
 # `assert_fixture_dir` is defined below and resolved at call time.
 resolve_base_ref() {
   local _mb="" _rs
@@ -101,10 +102,11 @@ resolve_base_ref() {
   # merge-base against the wrong repo and materialize a plausible-looking base from it.
   assert_fixture_dir "${1-}"
   if [ -n "${IPT_BASE_REF:-}" ]; then
-    # The ref string is scrubbed of C0/DELETE bytes before hitting a log line — it is
-    # operator-controlled and could otherwise splice a forged `FAIL <row>` into the merged
-    # suite stream a sibling suite greps.
-    _rs="${IPT_BASE_REF//[$'\x00-\x1f\x7f']/?}"
+    # The ref string is scrubbed before hitting a log line — it is operator-controlled and
+    # could otherwise splice a forged `FAIL <row>` into the merged suite stream a sibling
+    # suite greps. [[:cntrl:]] is load-bearing: $'\x00' cannot embed a NUL in a bash word, so
+    # a $'\x00-\x1f\x7f' class expands empty and scrubs nothing (measured).
+    _rs="${IPT_BASE_REF//[[:cntrl:]$'\u2028\u2029']/?}"
     printf 'IPT_G4C_BASE_ARM=override ref=%s\n' "$_rs" >&2
     printf '%s' "$IPT_BASE_REF"
     return 0
@@ -2001,33 +2003,37 @@ wf_clause() {
 # <destdir>. Extracted so the G4c base legs below drive the PRODUCTION path (a fixture that
 # re-implements the materialization proves the fixture, not the guard).
 materialize_base_dir() {
-  local _rd="$1" _ref="$2" _dest="$3" _rc=0 _lst _f _r _n _why=""
+  local _rd="$1" _ref="$2" _dest="$3" _rc=0 _lst _f _r="" _n _why=""
   assert_fixture_dir "$_rd"
   assert_fixture_dir "$_dest"
-  mkdir -p "$_dest/apps/web-platform/infra/git-data-root-key" || return 1
-  for _r in apps/web-platform/infra apps/web-platform/infra/git-data-root-key; do
-    [ "$_rc" -eq 0 ] || break
-    _lst="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE \
-      git -C "$_rd" ls-tree -r --name-only "$_ref" -- "$_r" 2>/dev/null)" || { _why="ls-tree"; _rc=1; break; }
-    [ -n "$_lst" ] || { _why="empty-listing"; _rc=1; break; }
-    _n=0
-    while IFS= read -r _f; do
-      case "$_f" in *.tf) ;; *) continue ;; esac
-      [ "${_f%/*}" = "$_r" ] || continue
-      env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE \
-        git -C "$_rd" show "$_ref:$_f" > "$_dest/$_f" 2>/dev/null || { _rc=1; _why="show"; }
-      _n=$((_n + 1))
-    done <<< "$_lst"
-    # Per-root floor: a root whose listing holds only non-.tf or nested files contributes zero
-    # materialized files — without this its base_declared reads {} and that root's deletions
-    # blind-green (the file floor in ipt.py is global across both roots). Fail-closed by
-    # direction: a branch forked before a root's first .tf reds 'base unavailable', which the
-    # IPT_BASE_REF seam covers — the blind-green alternative is worse.
-    [ "$_n" -ge 1 ] || { _rc=1; _why="floor"; }
-  done
+  mkdir -p "$_dest/apps/web-platform/infra/git-data-root-key" || { _rc=1; _why="mkdir"; }
+  if [ "$_rc" -eq 0 ]; then
+    for _r in apps/web-platform/infra apps/web-platform/infra/git-data-root-key; do
+      _lst="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE \
+        git -C "$_rd" ls-tree -r --name-only "$_ref" -- "$_r" 2>/dev/null)" || { _why="ls-tree"; _rc=1; break; }
+      [ -n "$_lst" ] || { _why="empty-listing"; _rc=1; break; }
+      _n=0
+      while IFS= read -r _f; do
+        case "$_f" in *.tf) ;; *) continue ;; esac
+        [ "${_f%/*}" = "$_r" ] || continue
+        env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE \
+          git -C "$_rd" show "$_ref:$_f" > "$_dest/$_f" 2>/dev/null || { _rc=1; _why="show"; }
+        _n=$((_n + 1))
+      done <<< "$_lst"
+      # Per-root floor: a root whose listing holds only non-.tf or nested files contributes
+      # zero materialized files — without this its base_declared reads {} and that root's
+      # deletions blind-green (the file floor in ipt.py is global across both roots).
+      # Fail-closed by direction: a branch forked before a root's first .tf reds 'base
+      # unavailable', which the IPT_BASE_REF seam covers — the blind-green alternative is worse.
+      [ "$_n" -ge 1 ] || { _rc=1; _why="floor"; }
+      # `show`/`floor` do not break inside the while — break HERE, while `_r` still names the
+      # failing root, so the root= field cannot mis-attribute a root-1 failure to root 2.
+      [ "$_rc" -eq 0 ] || break
+    done
+  fi
   if [ "$_rc" -ne 0 ]; then
     printf 'IPT_G4C_BASE_MATERIALIZE=fail step=%s root=%s ref=%s\n' \
-      "${_why:-unknown}" "$_r" "${_ref//[$'\x00-\x1f\x7f']/?}" >&2
+      "${_why:-unknown}" "${_r:-pre-roots}" "${_ref//[[:cntrl:]$'\u2028\u2029']/?}" >&2
   fi
   [ "$_rc" -eq 0 ]
 }
@@ -3408,19 +3414,22 @@ g4git_row() {
   if [ "${2+set}" = set ]; then
     ref="$2"
   else
-    ref="$(unset IPT_BASE_REF; resolve_base_ref "$G4GIT/repo")"
+    # Helper markers are appended to the leg's .err so the per-leg artifact carries the
+    # resolution+materialization story (and the deliberate failures in b7/b8d/b9 don't print
+    # untagged `=fail` lines to the suite's merged stderr).
+    ref="$(unset IPT_BASE_REF; resolve_base_ref "$G4GIT/repo" 2>>"$out.err")"
   fi
   assert_fixture_dir "$dest"
-  materialize_base_dir "$G4GIT/repo" "$ref" "$dest" || dest=""
-  python3 "$T/ipt.py" "$G4GIT/repo/.github" "$G4GIT/repo" "" "$dest" > "$out" 2> "$out.err"
+  materialize_base_dir "$G4GIT/repo" "$ref" "$dest" 2>>"$out.err" || dest=""
+  python3 "$T/ipt.py" "$G4GIT/repo/.github" "$G4GIT/repo" "" "$dest" > "$out" 2>>"$out.err"
 }
 # g4c_detail <tsv> — the G4c row's detail field (orphans list / "base unavailable").
 g4c_detail() { awk -F'\t' 'index($2, "G4c:") == 1 { print $3; exit }' "$1"; }
 
 # b1 — resolution sanity: with HEAD at M0 the resolved base IS M0, not the M1 tip — and the
 # merge-base arm announces itself on stderr. Both direct resolves are `unset`-scrubbed like
-# g4git_row: an ambient IPT_BASE_REF equal to M0 would otherwise pass this leg while exercising
-# the OVERRIDE arm — the exact silent mis-attribution class.
+# g4git_row: without it an ambient IPT_BASE_REF reroutes the leg to the override arm (red via
+# the marker clause — and a value-only assertion would have passed it silently).
 _g4git checkout -q -B feat "$G4_M0" || { printf 'FAIL SETUP: g4git feat checkout\n' >&2; exit 1; }
 _r1="$(unset IPT_BASE_REF; resolve_base_ref "$G4GIT/repo" 2>"$T/g4b1-resolve.err")"
 if [ "$_r1" = "$G4_M0" ] && grep -q '^IPT_G4C_BASE_ARM=merge-base' "$T/g4b1-resolve.err"; then
@@ -3513,8 +3522,8 @@ fi
 # command substitution's own subshell, so the override cannot leak into the later legs — and
 # g4git_row's `unset` scrub is bypassed by passing the resolved ref explicitly.
 _g4git checkout -q -B feat "$G4_M0" || { printf 'FAIL SETUP: g4git feat reset\n' >&2; exit 1; }
-_r6="$(IPT_BASE_REF="$G4_M1" resolve_base_ref "$G4GIT/repo" 2>/dev/null)"
-if [ "$_r6" = "$G4_M1" ]; then
+_r6="$(IPT_BASE_REF="$G4_M1" resolve_base_ref "$G4GIT/repo" 2>"$T/g4b6-resolve.err")"
+if [ "$_r6" = "$G4_M1" ] && grep -q '^IPT_G4C_BASE_ARM=override' "$T/g4b6-resolve.err"; then
   g4git_row "$T/g4b6-override.tsv" "$_r6"
   _d="$(g4c_detail "$T/g4b6-override.tsv")"
   if wf_red "$T/g4b6-override.tsv" "G4c:" && [[ "$_d" == *"terraform_data.main_c'"* ]]; then
@@ -3546,10 +3555,10 @@ else
   fail "G4c-b8d: the fallback arm did not reproduce tip semantics" "$(g4c_detail "$T/g4b8-fallback.tsv")"
 fi
 
-# b7 — fail-closed preserved: with origin/main deleted (this leg runs last among the g4git
-# consumers, so mutating the shared fixture repo is safe) and IPT_BASE_REF unset, resolution
+# b7 — fail-closed preserved: with origin/main deleted and IPT_BASE_REF unset, resolution
 # returns the fallback literal, the materialization cannot list it, and the row reports
-# "base unavailable".
+# "base unavailable". The update-ref -d is safe because the ref is restored immediately after
+# this leg — the restore, not leg order, is what keeps later legs on the full fixture.
 _g4git update-ref -d refs/remotes/origin/main || { printf 'FAIL SETUP: g4git delete origin/main\n' >&2; exit 1; }
 g4git_row "$T/g4b7-nobase.tsv"
 _d="$(g4c_detail "$T/g4b7-nobase.tsv")"
@@ -3562,8 +3571,8 @@ fi
 _g4git update-ref refs/remotes/origin/main "$G4_M1" || { printf 'FAIL SETUP: g4git restore origin/main\n' >&2; exit 1; }
 
 # b9 — the per-root floor arm: a base ref whose root-key dir lists only non-.tf content fails
-# materialization (the root would read base_declared={}, blind-greening its deletions) and the
-# materialize step names itself on stderr. RED is 'base unavailable', never vacuous green.
+# materialization (the root would read base_declared={}, blind-greening its deletions), the
+# materialize step names itself on stderr, and the census row reports 'base unavailable'.
 _d9="$T/g4base/b9mat"; assert_fixture_dir "$_d9"
 materialize_base_dir "$G4GIT/repo" "$G4_M2" "$_d9" 2>"$T/g4b9-mat.err" || _d9=""
 if [ -z "$_d9" ] && grep -q '^IPT_G4C_BASE_MATERIALIZE=fail step=floor root=apps/web-platform/infra/git-data-root-key' "$T/g4b9-mat.err"; then
@@ -3571,13 +3580,22 @@ if [ -z "$_d9" ] && grep -q '^IPT_G4C_BASE_MATERIALIZE=fail step=floor root=apps
 else
   fail "G4c-b9: the per-root floor arm did not fire or did not announce" "err=$(head -2 "$T/g4b9-mat.err")"
 fi
+g4git_row "$T/g4b9-floor.tsv" "$G4_M2"
+_d="$(g4c_detail "$T/g4b9-floor.tsv")"
+if wf_red "$T/g4b9-floor.tsv" "G4c:" && [ "$_d" = "base unavailable" ]; then
+  pass "G4c-b9d: the floor arm reaches the census row as 'base unavailable', never vacuous green"
+else
+  fail "G4c-b9d: the floor arm did not fail closed at the row" "$(g4c_detail "$T/g4b9-floor.tsv")"
+fi
 
 # parity — the bash materialization root list and ipt.py's GUARD4_ROOTS must enumerate the same
 # set: a root added to ONE side alone leaves that root censused at HEAD with no materialized
 # base (or materialized but never scanned), and its deletions slip silently. Extract both lists
 # by their literal anchors and compare as sets. The py side takes the LAST assignment (python
 # binds last); the sh side anchors on the code shape (an indented `for _r in apps/`, which a
-# comment line or a differently-rooted loop cannot satisfy).
+# comment line or a differently-rooted loop cannot satisfy). Residual: a column-0
+# `GUARD4_ROOTS +=`/`append` or an indented rebind escapes the py anchor, and a second
+# `for _r in apps/` above the function would shadow the sh side — accepted grep-parity limits.
 _g4_py_roots="$(grep -E '^GUARD4_ROOTS *=' "$T/ipt.py" | tail -1 | grep -oE '"apps/[^"]+"' | tr -d '"' | sort)"
 _g4_sh_roots="$(grep -m1 '^[[:space:]]*for _r in apps/' "${BASH_SOURCE[0]}" | grep -oE 'apps/[a-z0-9_/-]+' | sort)"
 if [ -n "$_g4_py_roots" ] && [ "$_g4_py_roots" = "$_g4_sh_roots" ]; then
@@ -4243,7 +4261,9 @@ _ran=$((passes + fails))
 #   falls back AND announces), G4c-parity bash↔python GUARD4_ROOTS set check. Measured: 363 ran.
 # 363 -> 364 (#9956 review round 2): G4c-b9 per-root floor arm driver (M2's root-key holds no .tf).
 #   Measured: 364 ran.
-FLOOR=364
+# 364 -> 365 (#9956 review round 2 fixes): G4c-b9d — the floor arm reaches the row as
+#   'base unavailable' end-to-end. Measured: 365 ran.
+FLOOR=365
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s — cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1
