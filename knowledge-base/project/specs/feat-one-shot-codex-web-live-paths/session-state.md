@@ -979,3 +979,16 @@
   required `--allow-escape-sequences` before redirecting. No credentials were
   printed or inspected. Broader local suites and all recovery/qualification
   holds remain unchanged.
+
+## Continuation update — 2026-10-11 hosted-destroy main sync
+
+- Main advanced through `ee87693972eee78260a99de95bcf04c061752bf8` (#9977),
+  adding the hosted autonomous-mode destroy confirmation lane and its tests
+  across 45 files. The PR was stale against this main; the only merge conflict
+  was an appended test block in `cc-dispatcher-real-factory.test.ts`. Kept the
+  upstream block intact and preserved the feature-side body. Main sync merge
+  is in progress, and its pushed-head CI remains pending after the next commit.
+- This delta includes a new confirmation UI and backend lane through main.
+  The PR remains a draft; promotion/default-on changes and all user-held local
+  suites, recovery, authenticated QA, routine consumer, Web/CLO, review and
+  promotion gates remain held. No local test was run for this sync.

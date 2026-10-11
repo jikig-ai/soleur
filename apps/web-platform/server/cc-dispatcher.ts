@@ -197,6 +197,7 @@ import {
   resolveC4FlagEnabled,
 } from "./resolve-c4-eligible";
 import { parseConnectedRepo } from "./github-repo-parse";
+import { createProtectedBranchResolver } from "./resolve-protected-branches";
 import { emitDebugEvent } from "./debug-event";
 // feat-bash-autonomous-default-on — first-run consent soft-gate inputs:
 // the ack timestamp (fail-closed null = HOLD) + workspace-ownership (fail-closed
@@ -2800,6 +2801,18 @@ export const realSdkQueryFactory: QueryFactory = async (
     // ws-handler on a successful ack) so command #2 after an ack is friction-free
     // instead of re-holding on the frozen cold-start snapshot.
     resolveAckPosture: () => autonomousAckPosture,
+    // #9776 / ADR-284 — hosted must-ask lane inputs. The resolver reads the connected repo's default
+    // branch with the SELF-HEALED installation id (`effectiveInstallationId`), the repo owner/name that
+    // `parseConnectedRepo` validated from the server-resolved repoUrl, and the user's workspace path (never
+    // `ctx.repoOwner`/`ctx.repoName`, which this dispatcher passes as empty strings). One resolver per session
+    // record: memoised inside, awaited only after a force, delete or mirror push is found.
+    resolveProtectedBranches: createProtectedBranchResolver({
+      owner: connectedOwner,
+      repo: connectedRepo,
+      installationId: effectiveInstallationId,
+      workspacePath,
+    }),
+    connectedRepoSlug: connectedOwner && connectedRepo ? `${connectedOwner}/${connectedRepo}` : "",
     // P1 defense-in-depth — re-read the persisted ack after a disclosure-hold
     // releases, BEFORE allowing the held command. A release that did not
     // actually write the ack (cross-frame attempt, transient ack-write fault)

@@ -19,15 +19,20 @@ import { Button } from "@/components/ui/button";
  * Copy is the LOCKED verbatim disclosure paragraph — do NOT paraphrase.
  */
 
-// LOCKED COPY (re-locked 2026-10-08, #9776) — verbatim, do not edit.
+// LOCKED COPY (re-locked 2026-10-10, #9776 ask-gate; CLO ruling section 1) — verbatim, do not edit.
+// Ships and reverts as ONE unit with the hosted must-ask lane (ADR-284, CLO C1): a revert restores the
+// 2026-10-08 text together with removing the lane. The test asserts the bytes and the vocabulary guard.
 export const AUTONOMOUS_DISCLOSURE_COPY =
   "Soleur runs commands automatically. It blocks a short list of risky " +
-  "commands (curl, wget, sudo, …), but no blocklist is perfect. Until a " +
-  "stricter check ships, it can force-push over your repository's default " +
-  "branch (erasing its history on GitHub) or run infrastructure teardown " +
-  "(terraform destroy) without asking. Other commands that look safe could " +
-  "still change or delete files in this workspace. You can watch each step " +
-  "in the chat. Only connect repos and accounts you trust.";
+  "commands (curl, wget, sudo, …), but no blocklist is perfect. It also " +
+  "pauses to ask before common forms of a force-push over, or deletion of, " +
+  "your repository's default branch (which can erase its history on " +
+  "GitHub), and before terraform destroy. It does not recognise every way " +
+  "of writing those commands, or every other way to delete a repository or " +
+  "tear down infrastructure, so such a command can still run without " +
+  "asking. Other commands that look safe could still change or delete " +
+  "files in this workspace. You can watch each step in the chat. Only " +
+  "connect repos and accounts you trust.";
 
 export function AutonomousDisclosureBanner({
   gateId,
