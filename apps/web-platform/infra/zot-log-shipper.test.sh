@@ -1237,7 +1237,7 @@ run_shipper "$J_S3" ZOT_LOG_SHIPPER_CAP_PER_INTERVAL=5
 assert "T21 S3 exactly the sub-quota (8) of func-keyed rows shipped from 40 offered" \
   "[[ \$(grep -c 'PatchBlobUpload,goroutine' '$STUB_POSTS') -eq 8 ]]"
 assert "T21 S3 the overflow is ACCOUNTED, never silent (reason=exempt_cap, n=32)" \
-  "grep 'SOLEUR_ZOT_LOG_DROPPED' '$STUB_POSTS' | grep -F 'reason=exempt_cap' | grep -qE 'n=32( |\$)'"
+  "awk '/SOLEUR_ZOT_LOG_DROPPED/ && /reason=exempt_cap/ && /n=32( |\$)/ {f=1} END {exit !f}' '$STUB_POSTS'"
 assert "T21 S3 a non-matching handler's error row (GetBlob) is capped, not exempt" \
   "! grep -qF 'goroutine:4242' '$STUB_POSTS'"
 
