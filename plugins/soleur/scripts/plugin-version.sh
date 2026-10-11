@@ -56,7 +56,9 @@ read_manifest_version() {
   if command -v jq >/dev/null 2>&1; then
     v="$(jq -r '.version // empty' "$f" 2>/dev/null)" || v=""
   else
-    v="$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$f" 2>/dev/null | head -1)"
+    # No jq: first "version" key anywhere (single-line or pretty-printed). A nested key could
+    # win here, but the caller only accepts a strict X.Y.Z, so the worst case is a miss.
+    v="$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' "$f" 2>/dev/null | head -1 | sed 's/.*"\([^"]*\)"$/\1/')"
   fi
   printf '%s' "$v"
 }
