@@ -15,6 +15,20 @@ requires_cpo_signoff: false
 
 # chore(infra): delete the superseded zot-entry-gate.sh and every live reference to it (#7258 Step B)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-11 (proportionate pass for a pure-delete plan: mechanical halt gates plus live citation checks; no broad agent fan-out, since nothing in the diff is novel code).
+**Gates run:** 4.6 user-brand (present, threshold `none`, sensitive-path scope-out line present), 4.7 observability (5 fields present, probe verb `bash`, no `ssh`, unauthenticated, well inside the 15 s cap; run locally it prints `PRESENT` now and will print `ABSENT` once the file is deleted), 4.8 PAT sweep (no hits), 4.9 UI (not triggered: no UI-surface path), 4.10 encryption (not triggered: no store or connection), 4.11 guard contract (not triggered: no guard in the deliverable), 4.12 scope check (one unfenced section, no `unmapped` row, no `BLOCKED` marker, `Recommendation:` line present), rule-ID sweep (the plan cites no AGENTS rule IDs).
+**Citations verified live:** #7256 CLOSED (by #9892, MERGED), #9979 MERGED, #7258 OPEN, #7079 OPEN, #8881 OPEN, #10003 OPEN, #9938 OPEN (edits `ci-deploy.sh`), #7390 OPEN WIP (edits `reusable-release.yml`), draft PR #10016 OPEN. `plugins/soleur/test/preflight-discoverability-test.test.ts` G1 re-run with this plan on disk: pass (count still 58).
+
+### Key improvements
+1. Verified the one factual claim the `ci-deploy.sh` replacement comment rests on: in `web-zot-consumer-probe.sh` a `403` reaches the `*)` arm (`unexpected code ... SUPPRESS ping`), so a broken zot `accessControl` is observable at that layer through absence-of-ping, which is exactly what the gate was named as the home of.
+2. Verified the production blast radius of the `ci-deploy.sh` comment edit: it changes `host_scripts_content_hash` (a `user_data` input), and the web host pins `ignore_changes = [user_data, ...]` (`server.tf`), so no replace is planned; the last six `apply-deploy-pipeline-fix.yml` runs were green.
+3. Found two open PRs touching files this PR edits (#9938 on `ci-deploy.sh`, #7390 on `reusable-release.yml`) and wired them into Phase 0 and Phase 7.
+
+### New considerations
+- The plan file itself mentions the optional probe-credentials key twice in prose (Research Insights and an Acceptance Criterion). `parseCredentialsRequired` reads only the `## Observability` block, so the count stays 58 (G1 re-run above); a future edit must not move that key into the YAML block.
+
 ## Overview
 
 Step B of #7258: a pure delete. `apps/web-platform/infra/zot-entry-gate.sh` is a pre-flip go/no-go script that nothing invokes (its own header says SUPERSEDED/UNWIRED since 2026-07-30), and its only test, `zot-entry-gate.test.sh`, proves a file that gates nothing. Step A (PR #9979, merge `10f33882ad`) replaced its one unique job (does zot serve the platform repos to the HOST's pull credential) with the web-1 consumer probe covering both `jikig-ai/soleur-web-platform` and `jikig-ai/soleur-inngest-bootstrap`; the Step B go/no-go recipe was observed green and posted on #7258 (comment 6108887287, 2026-10-11).
