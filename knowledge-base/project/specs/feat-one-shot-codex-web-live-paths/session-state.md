@@ -968,12 +968,13 @@
   integration-gate lint interprets that syntax as a CI suite gate and flagged
   the root-level fixture as not collected. Both reads now use a truthy-presence
   check, preserving opt-in logging without creating a suite gate. This change
-  is uncommitted at this update and awaits pushed-head CI verification.
+  is in pushed head `a608dc62e8e5`; its CI verification was still running when
+  the next main advance required another sync.
 - The `test` aggregate failed because the PR is draft: its run showed the
   scripts and Web-platform test legs skipped and emitted `draft: full battery
   owed at ready`. This is the workflow's deliberate draft guard, not a test
-  assertion or a new C.9 recurrence; no additional test suite ran. Tenant
-  integration was still pending in the monitor at the time of this note.
+  assertion or a new C.9 recurrence; no additional test suite ran. The monitor
+  had not yet settled all required checks at the time of this note.
 - The `gh run view` step query used an unsupported top-level `steps` JSON field;
   the supported shape is `jobs[].steps[]`. The job-log API response also
   required `--allow-escape-sequences` before redirecting. No credentials were
@@ -986,8 +987,9 @@
   adding the hosted autonomous-mode destroy confirmation lane and its tests
   across 45 files. The PR was stale against this main; the only merge conflict
   was an appended test block in `cc-dispatcher-real-factory.test.ts`. Kept the
-  upstream block intact and preserved the feature-side body. Main sync merge
-  is in progress, and its pushed-head CI remains pending after the next commit.
+  upstream block intact and preserved the feature-side body. Main sync was
+  committed locally at `6ef029ee45d8d8eeb8a1fde17f4de7b25a08c482` and awaits
+  push; fresh-head CI will follow that push.
 - This delta includes a new confirmation UI and backend lane through main.
   The PR remains a draft; promotion/default-on changes and all user-held local
   suites, recovery, authenticated QA, routine consumer, Web/CLO, review and
