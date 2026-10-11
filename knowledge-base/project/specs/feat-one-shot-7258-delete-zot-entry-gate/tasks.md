@@ -41,7 +41,7 @@ Branch: feat-one-shot-7258-delete-zot-entry-gate | Draft PR: #10016 | Closes #72
 - [x] 5.1 Zero-residual census (excluding knowledge-base)
 - [x] 5.2 `bash scripts/guard-vacuity-floor.test.sh`; `bun test plugins/soleur/test/preflight-discoverability-test.test.ts` (count stays 58); relative-assert ratchet; no floor or baseline edit
 - [x] 5.3 `.claude/hooks/*.test.sh` (timeout above 120 s for `pre-merge-rebase.test.sh`)
-- [ ] 5.4 Optional full battery: skip if the capacity probe shows contention
+- [x] 5.4 Optional full battery: skipped, the capacity probe showed 4 sibling full-gate runs; CI owns the full battery
 
 ## Phase 6: Ship
 
