@@ -114,7 +114,7 @@ put_once() {
   # Stub-friendly: in tests, $(which curl) is the PATH-stub that emits a numeric
   # HTTP code on stdout and ignores -o (so $body_tmp stays empty, which the
   # error-emit path tolerates). In production the request is signed by curl
-  # (--aws-sigv4, curl 7.75+) inside r2_sigv4_curl, which carries the key id and
+  # (SigV4 via curl 7.75+) inside r2_sigv4_curl, which carries the key id and
   # secret on curl's stdin config and never on argv, and emits the code via -w
   # "%{http_code}". A non-zero return (curl failure, or a helper refusal already
   # judged above) reads as status 000.

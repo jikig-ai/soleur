@@ -372,6 +372,14 @@ AFFECTED_TESTS_SCRIPTS_APPLY_GITHUB_INFRA_MINT_SHAPE_PATHS=(
   "scripts/lib/test-affected-paths.sh"                    # THIS FILE
 )
 
+# apps/cla-evidence/scripts/_r2-sigv4-curl.test.sh (#9756) — a corpus walker: its set-identity rows read every
+# shell file under apps/cla-evidence for a curl that carries `--aws-sigv4` or `-u`/`--user`, so any shell edit
+# there is its subject (the glob edge), not only the helper it is named for.
+AFFECTED_APPS_CLA_EVIDENCE_SCRIPTS__R2_SIGV4_CURL_TEST_SH_PATHS=(
+  "glob:apps/cla-evidence/**.sh"
+  "scripts/lib/test-affected-paths.sh"                    # THIS FILE
+)
+
 # Suites the repo-wide-idiom census arm flags (their fixture code walks a tree)
 # whose real subject is a narrow SUT set, declared here rather than always-on:
 # the scan is scoped, so the edges are honest.

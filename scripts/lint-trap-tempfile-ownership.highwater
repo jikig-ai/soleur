@@ -1,4 +1,4 @@
-70  # class-b accept (ADR-129): tracked *.sh calling mktemp with ZERO trap...EXIT.
+69  # class-b accept (ADR-129): tracked *.sh calling mktemp with ZERO trap...EXIT.
 # 70th entrant (2026-10-06, #9510 / PR #9634): tests/scripts/lib/stock-preflight-gate.sh —
 # stock_recovery_report allocates a `terraform show -json` dump file under RUNNER_TEMP.
 # The library is SOURCED into the workflow step's shell, so a `trap ... EXIT` here would
@@ -30,6 +30,7 @@
 # ADDED; the fix was to make the whole file owned rather than annotate the new lines.
 # A third new entrant, plugins/soleur/test/ship-followthrough-directive.test.sh, got its
 # trap in the same commit and never joined the count.
+# 70 -> 69 (2026-10-11, #9756): apps/cla-evidence/infra/bootstrap.sh left the population by gaining an owning trap on its probe body file.
 # Derive with: python3 scripts/lint-trap-tempfile-ownership.py --census
 # CI asserts the live count never EXCEEDS this. Lower it freely when the population
 # shrinks; raising it is a deliberate act that needs a reason in the PR body.
