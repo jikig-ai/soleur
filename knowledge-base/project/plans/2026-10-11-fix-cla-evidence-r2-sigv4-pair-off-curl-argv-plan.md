@@ -14,6 +14,25 @@ requires_cpo_signoff: false
 
 # fix(cla-evidence): move the R2 SigV4 key id and secret off curl argv onto the stdin config
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-11
+**Sections enhanced:** Research Insights, Decisions (D4), Observability, User-Brand Impact, Implementation Phases 0-1, Guard Contract, Acceptance Criteria, Dependencies & Risks, Sharp Edges
+**Research agents used:** security-sentinel, test-design-reviewer, observability-coverage-reviewer (plus plan-review: DHH, Kieran, code-simplicity; CTO, CLO and an advisor consult earlier); gates run: User-Brand Impact (4.6), Observability (4.7), PAT-shaped variables (4.8, none), Guard Contract (4.11, lint green), Scope Check (4.12, one unfenced section); 4.9 and 4.10 do not apply (no UI surface, no store or new connection).
+
+### Key improvements
+
+1. `cla-evidence` is a REQUIRED, self-sealing check (the plan had said a red step blocks nothing): a false refusal freezes every PR and the workflow cannot prove the new path before merge, so the real-curl wire row on CI's curl 8.5 is a pre-merge hard gate and the break-glass runbook is the named recovery.
+2. The helper's caller-argument deny-list was bypassable (`--user=x:y`, `-Kf`, `--url`, a second URL, `--connect-to`); it is now a position-aware allowlist, with `--globoff --proto '=https'` and an `env -u` scrub matching `bearer-curl.sh`.
+3. The destination pin is an in-file anchored `=~` (Rule D does not recognise a call to `assert_r2_endpoint`); a draft helper was linted clean and a real-curl signed PUT against a loopback listener showed the id in `Credential=` and neither value on argv.
+4. The discoverability probe is a committed offline script, not the suite; suites record unconditionally and fail on a missing `user = "` line; the listener row serves forever with a port-file readiness signal.
+
+### New considerations discovered
+
+- Emptying baseline E breaks the lint suite's anti-vacuity floor and every mutation row that reads "the first real row"; the rows are repointed to a synthesized pair.
+- `cla-evidence` re-runs the base copy of the scripts on `pull_request_target`, so the first live exercise is the first PR after merge; a read-only post-merge check is specified.
+- Jurisdiction hosts (`.eu.`, `.fedramp.`) are refused by both pins; documented, loud.
+
 ## Overview
 
 Two scripts on the CLA legal-evidence path hand curl the R2 S3 access key id and secret as
@@ -100,8 +119,13 @@ classification, retries, WORM arm) is byte-for-byte unchanged.
 - The A/B/C baseline (`scripts/lint-shell-trace-credential-refusal.baseline.txt`) and the D baseline
   (`scripts/lint-shell-trace-credential-refusal-d.baseline.txt`) each list both files.
 - `.github/workflows/cla-evidence.yml` runs `upload-evidence.sh` / `upload-bypass.sh` with plain `run:` steps and
-  `set -euo pipefail`; a non-zero exit turns the step red. The merge gate for CLA is a different check
-  (`license/cla`), so a red evidence step blocks nothing and is the only signal (unchanged by this plan).
+  `set -euo pipefail`; a non-zero exit turns the step red. The `cla-evidence` check is itself a REQUIRED status check of
+  the "CLA Required" ruleset (`scripts/ci-cla-required-ruleset-canonical-required-status-checks.json`, listed in
+  `knowledge-base/engineering/operations/runbooks/self-sealing-required-check-break-glass.md` row for `cla-evidence`).
+  So a false refusal red-blocks every PR, and it is self-sealing: `pull_request_target` runs the base copy of the
+  scripts, so the helper is exercised in the real workflow for the first time on the first PR after merge, and the
+  runbook's break-glass path (the #7597 precedent) is the only recovery. The pre-merge proof is therefore the helper
+  suite's real-curl wire row on CI's curl 8.5 (AC 12), not the workflow.
 - `upload-evidence.test.sh` and `upload-bypass.test.sh` stub `curl` on PATH. The bypass stub reads the **last
   positional argument as the URL**, and neither stub reads stdin. The helper therefore keeps the URL last and the
   suites gain recording stubs.
@@ -141,7 +165,10 @@ classification, retries, WORM arm) is byte-for-byte unchanged.
   the form Rule D's `_pin_re` accepts (an anchored `=~` with a literal after the anchor, as `_cf_admin_curl` uses a
   `case` arm); a call to `assert_r2_endpoint` is NOT a recognised pin (the plan's first draft used it; plan review
   linted a draft helper and Rule D reported the URL as unpinned) and `assert_r2_endpoint` takes only an origin. The
-  callers keep their existing top-level `assert_r2_endpoint` check; the helper does not source `_r2-endpoint.sh`.
+  callers keep their existing top-level `assert_r2_endpoint` check; the helper does not source `_r2-endpoint.sh`. The
+  pin matches `_r2-endpoint.sh`'s default-jurisdiction hostname only (`<32hex>.eu.` and `.fedramp.` jurisdiction hosts are
+  refused by both); the rc-64 refusal prints a `::error::` line so a future jurisdiction move is loud, and a suite row
+  documents the choice.
 - **D5. URL stays the last curl argument; `--data-binary "$payload"` stays on argv.** The payload is evidence JSON,
   not a credential. Existing PATH stubs that read the last positional argument keep working. `--disable` is the
   first argument, `--noproxy '*'` is present, `--aws-sigv4` stays on argv (a non-secret scope string).
@@ -188,7 +215,8 @@ its suite, the battery, both baselines, ADR-280); no body names any of them.
 | Create `apps/cla-evidence/scripts/bootstrap-r2-probe.test.sh` | "Owning suites must assert the key id/secret pair is absent from every recorded argv" | asked (bootstrap has no owning suite today) |
 | Edit `upload-evidence.test.sh`, `upload-bypass.test.sh` | "Owning suites must assert the key id/secret pair is absent from every recorded argv" | asked |
 | Edit baseline E and the ceiling table | "Remove both rows from scripts/lint-shell-trace-credential-refusal-e.baseline.txt and scripts/fixtures/shell-trace-refusal/rule-e-census-ceiling.tsv" | asked |
-| Helper refuses caller-supplied `--user`/`-u`/`--config`/`-K`/`--next`/`--disable` (Phase 1) | — | inferred — justification: P1 must hold for every future caller of the only SigV4 curl; without it a later caller can put the pair back on argv through the helper while every suite stays green (advisor consult) |
+| Helper argument allowlist, `--globoff --proto '=https'`, and the `env -u` scrub (Phase 1) | — | inferred — justification: P1 must hold for every future caller of the only SigV4 curl, and a redirecting or multiplying option (`--url`, `--connect-to`, a second URL, a trust or library-load variable) sends the signed request or the stdin config elsewhere while every suite stays green (advisor consult; security review P1-1, P2-1, P2-2) |
+| Create `r2-sigv4-refusal-probe.sh` | — | inferred — justification: the Observability block's `discoverability_test` must be a fast offline probe that preflight Check 10 can execute; a whole suite is the wrong shape and cannot be assumed to run in its sandbox |
 | Edit the A/B/C baseline and the D baseline (delete two rows each) | — | inferred — justification: CI runs `--changed`, whose drawdown rule requires both files to leave those baselines once remediated; a stale row is a false statement in the tree |
 | Add the xtrace refusal (Rule A) to both scripts | — | inferred — justification: the `--changed` lint fails an edited, listed script that binds a live credential without it |
 | Edit `scripts/lint-shell-trace-credential-refusal.py` (writer header text and the comment blocks that name the two rows) | — | inferred — justification: the header is emitted by the writer and pinned against the committed files; a stale "owned by #9756" sentence fails the battery's header-identity row |
@@ -200,7 +228,7 @@ its suite, the battery, both baselines, ADR-280); no body names any of them.
 ### Split Assessment
 
 - Subsystems touched: 4 — `apps/cla-evidence`, `scripts` (lint, writer, baselines, fixtures), `tests/scripts`, `knowledge-base/engineering` (ADR-280 addendum)
-- Planned files: 16 | Estimated changed lines: ~450
+- Planned files: 17 | Estimated changed lines: ~550
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
 - Recommendation: single PR — the four roots are one coupling that cannot be split without a red tree: removing the baseline rows without the conversion fails the equality check; converting without removing them fails "listed but no longer offends"; either one without the suite rewrites fails the lint suite and the battery. The ADR addendum is under 15 lines.
 
@@ -210,36 +238,41 @@ its suite, the battery, both baselines, ADR-280); no body names any of them.
 liveness_signal:
   what: the exit status and the `ok status=<2xx> key=... attempt=N` / `duplicate status=412` line of the "Build and write evidence record" and "Record allowlist-bypass" steps of the cla-evidence workflow (the helper adds no new success line)
   cadence: per CLA signing comment, per allowlist-bypass pull_request_target event
-  alert_target: the red step on the PR's `cla-evidence` check (no paging; unchanged by this change; the receipt comment step stays soft-fail)
+  alert_target: the red required `cla-evidence` check on the PR (no paging and no failure-issue filer exists for this workflow today; unchanged by this change; recovery runbook `knowledge-base/engineering/operations/runbooks/self-sealing-required-check-break-glass.md`)
   configured_in: .github/workflows/cla-evidence.yml
 error_reporting:
-  destination: GitHub Actions step log, a `::error::<label>: ...` annotation plus the `SOLEUR_CREDENTIAL_REFUSED script=<name> reason=<token_shape|control_char>` marker on stderr (value-free; names only the variable)
+  destination: the GitHub Actions workflow run log: a `::error::<script>: <VARIABLE> unusable` annotation (value-free, names only the variable) plus the `SOLEUR_CREDENTIAL_REFUSED script=<name> reason=<token_shape|control_char>` marker, both emitted by the helper to stderr; the helper's rc-64 refusals (disallowed curl argument, non-R2 URL) print a `::error::` line too
   fail_loud: exit 2 from the step before any PUT, so the step goes red; never swallowed by `|| echo 000`, never retried, never matched by the 412 or WORM arms
 failure_modes:
   - mode: a malformed R2 key id or secret (control byte, quote, backslash, colon, empty) reaches the script
-    detection: judge in `_r2-sigv4-curl.sh`, run before the retry loop; marker and annotation in the step log
+    detection: judge in `_r2-sigv4-curl.sh`, run before the retry loop; the `::error::` annotation and the marker in the workflow run log
     alert_route: red `cla-evidence` step; the evidence record for that event is not written, so the event is re-run or backfilled (existing path)
   - mode: the guard false-refuses a valid pair, stopping all evidence capture while reading as a clean failure
     detection: must-PASS rows in `_r2-sigv4-curl.test.sh` (32 lowercase-hex id, 64 lowercase-hex secret, uppercase/mixed, and the `._~+/=-` bytes); a refusal in production reads as the marker with `reason=token_shape`
-    alert_route: same red step; bounded because the 32/64 preflight and the alphabet both accept every real R2 pair
+    alert_route: the red required `cla-evidence` check on every PR (a merge freeze), recovered through the break-glass runbook; bounded because the 32/64 preflight and the alphabet both accept every real R2 pair, and gated pre-merge by the CI curl-8.5 wire row
   - mode: the helper file is missing or unsourceable in the job
     detection: `source` fails under `set -e` before any request (the checkout lacks `apps/cla-evidence/scripts/`)
     alert_route: red step; there is no argv fallback (a fallback would defeat P1)
   - mode: the signed request is rejected because the config-channel `user` was not applied
-    detection: R2 returns a 4xx `SignatureDoesNotMatch` body, surfaced by the existing `body_excerpt` in the fatal-4xx annotation; pre-merge, the real-curl wire row of `_r2-sigv4-curl.test.sh` fails
-    alert_route: red step
+    detection: R2 returns a 4xx `SignatureDoesNotMatch` body, surfaced by the existing `body_excerpt` in the fatal-4xx `::error::` annotation of the workflow run log (that echo of the R2 error body is pre-existing and unchanged); pre-merge, the real-curl wire row of `_r2-sigv4-curl.test.sh` fails
+    alert_route: red required check, break-glass runbook
+  - mode: the one-shot bootstrap runs behind a proxy or without direct egress to R2 (the helper now confines the transport with `--disable --noproxy '*'`)
+    detection: the probe status reads `000` and the bootstrap prints "R2 probe PUT failed ... status=000" on the operator terminal (a local run; no remote surface is involved)
+    alert_route: the script exits 1 before any Doppler write; the ADR addendum states the direct-egress requirement
 logs:
   where: GitHub Actions run log (job `cla-evidence`)
   retention: the repository's Actions log retention (GitHub default, 90 days)
 discoverability_test:
-  command: bash apps/cla-evidence/scripts/_r2-sigv4-curl.test.sh
-  expected_output: ALL _r2-sigv4-curl.sh tests passed.
+  command: bash apps/cla-evidence/scripts/r2-sigv4-refusal-probe.sh
+  expected_output: reason=token_shape
 ```
 
 Layer citation (`hr-observability-layer-citation`): the surface is CI step logs (layer: the GitHub Actions run), not
-Sentry or Better Stack; this is stated in the Cut List. The suite is sized to finish well inside preflight Check 10's
-15-second cap (about 20 rows, each a sub-second bash process, one loopback listener); AC 13 measures it and the work
-phase trims rows if it does not.
+Sentry or Better Stack; this is stated in the Cut List. The declared command is a committed, offline,
+credential-free probe (`r2-sigv4-refusal-probe.sh`: sources the helper, judges a synthesized malformed value, prints the
+helper's stderr on stdout via `2>&1`), not the suite: a suite is the right command to test the property and the wrong
+one to discover its signal (a whole suite with a loopback listener also cannot be assumed to run inside Check 10's
+sandbox under its 15-second cap). The probe contains no `|;&<>$` or backtick in the command line itself.
 
 ## Domain Review
 
@@ -262,8 +295,9 @@ hex-only guard was suggested; the plan keeps the ADR-280 alphabet plus the exist
 do not add one). The only compliance-relevant change is the new refusal arm: it can lose the off-site evidence record
 for a signed CLA (the public signature branch stays canonical), so a refusal must be loud, distinct from the retry and
 duplicate classifications, and tested for zero requests after refusal and for no false refusal of a valid pair (all
-taken: D2, D3, D8, Guard 1). A red step does not block the merge gate, so a documented re-run or backfill path is the
-recovery; that path already exists and is unchanged.
+taken: D2, D3, D8, Guard 1). The `cla-evidence` check is a required check, so a false refusal blocks every PR and the
+recovery is the break-glass runbook (precedent #7597, with its own CLO ruling); a refusal of a genuinely malformed
+credential is loud on the same red check and recovers by a re-run or backfill (existing path).
 
 ## User-Brand Impact
 
@@ -276,7 +310,9 @@ recovery; that path already exists and is unchanged.
 - **Brand-survival threshold:** `aggregate pattern`
 - **Threshold decision (challengeable):** one signing's evidence is recoverable from the public signature record and
   a re-run, and the pair cannot rewrite sealed objects, so a single failure is not a brand-ending event; a systematic
-  false refusal would be an aggregate pattern across every contributor, which is why the must-PASS rows are a hard gate.
+  false refusal would red-block the required `cla-evidence` check on every PR (an aggregate pattern across every
+  contributor, recoverable only by the break-glass runbook), which is why the must-PASS rows and the CI curl-8.5 wire
+  row are hard pre-merge gates.
 
 ## Technical Considerations
 
@@ -309,29 +345,53 @@ suites use all-zero literals (the 64-zero secret contains the 32-zero id), which
 fail by accident, so those fixtures are replaced, keeping their separate length-error fixture.
 
 1. `apps/cla-evidence/scripts/_r2-sigv4-curl.test.sh` (new). Rows (a distinct canary for the refused-value rows):
-   - judge: valid pair returns 0; empty id, empty secret; id or secret with `"`, backslash, `:`, space, newline, tab,
-     DEL, a high byte; each refused with the marker once, `reason` correct (`control_char` vs `token_shape`), one
-     value-free line naming only the variable, return 2, zero curl calls.
+   - judge: valid pair returns 0; each refused input is the valid 32-char id or 64-char secret with exactly ONE byte
+     swapped (empty, `"`, backslash, `:`, space, newline, tab, DEL, a high byte), so a refusal cannot come from
+     length, and each is paired in the same row with the unswapped baseline accepted; each refusal returns exactly 2,
+     prints the `::error::<script>: <NAME> unusable` annotation once and the marker once with the correct `reason`
+     (`control_char` vs `token_shape`), no value, zero curl calls. A `declare -F` row proves the functions are
+     defined, so an undefined function (rc 127) cannot read as a refusal. The `script=` field is forced to the safe
+     alphabet (a newline-bearing script name prints `script=unknown` and no extra line).
    - must-PASS non-canonical: a 32-char lowercase-hex id with a 64-char lowercase-hex secret, uppercase and mixed hex,
      and a value containing `._~+/=-` (the guard must not be a vendor-format guard; a guard that refuses everything
      is caught only by these rows).
-   - chokepoint wire (recording stub that drains stdin and records argv and stdin separately): exactly one curl call;
+   - chokepoint wire (recording stub that drains stdin UNCONDITIONALLY, records argv, stdin and its own environment
+     separately, and exits 99 when stdin carries no `user = "` line or when it receives an argument or URL it was not
+     scripted for, so a missing credential channel or an unmodelled argv cannot be served a 200): exactly one curl call;
      argv begins `--disable`, contains `--noproxy` `*` and `--aws-sigv4`, ends with the URL, and contains neither value
      (substring of the whole recorded argv, not per element); recorded stdin is exactly `user = "<id>:<secret>"` plus
-     a newline. A source row asserts the helper's curl is fed by `< <(printf` and the helper has no `| curl`.
-   - helper contract: a caller-supplied `--user`, `-u`, `--config`, `-K`, `--next` or `--disable` in the curl arguments
-     returns 64 with zero calls (a future caller cannot put the pair back on argv, or consume the config channel,
-     through the helper).
-   - destination pin: a non-R2 URL and an R2-lookalike host (`...r2.cloudflarestorage.com.evil.test`) return 64,
-     zero calls, no credential marker.
-   - real-curl wire row: a PATH stub rewrites only the URL to a loopback HTTP listener (PID captured at start, stopped
-     by that PID in a trap) and execs the real curl with every other argument and its stdin untouched; the listener
-     records the `Authorization` header; assert `Credential=<id>/` is present (the pair reached curl through the
-     config) while the stub's recorded argv has neither value. Requires `python3` and `curl`; a missing tool is a hard
-     FAIL, not a skip (CI has both). Prints `curl --version | head -1` so the runner version is in the log.
+     a newline. A source row, restricted to non-comment lines, asserts the helper's curl is fed by `< <(printf` and
+     that no `| curl` or `|curl` exists (a behavioural pipe-versus-substitution row would need a payload above the
+     64 KiB pipe capacity to be reliable, which the callers' real values never reach, so the source row is the
+     accepted proxy).
+   - argument allowlist (must-REFUSE, each returns 64 with a `::error::` line and zero calls): `--user x:y`,
+     `--user=x:y`, `-u x`, `-sSu x`, `--config f`, `--config=f`, `-Kf`, `-sSK f`, `--next`, `--disable`, `--url http://x/`,
+     a second positional URL, `--connect-to`, `--resolve`, `--unix-socket`, `-k`, `--cacert`, `-L`, `-H @-`,
+     `--data-binary @-`, `-T -`, a bare `-`, and a trailing dangling `-w`; one must-PASS row built from the two callers'
+     real argument vectors (so an over-tight allowlist is red) and one that carries an evidence-shaped payload containing
+     the text `/proc/` and `/dev/stdin` (must PASS: contributor text must not cause a refusal).
+   - environment: with `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `LD_PRELOAD`, `SSLKEYLOGFILE` and both R2 variables exported,
+     the recording stub's recorded environment holds none of them (booleans only, never the values).
+   - destination pin: a non-R2 URL, an R2-lookalike host (`...r2.cloudflarestorage.com.evil.test`) and a jurisdiction
+     host (`<32hex>.eu.r2.cloudflarestorage.com`, documented as intentionally refused) return 64 with a `::error::`
+     line, zero calls, no credential marker. The wire row's URL rewrite happens in the PATH stub, AFTER the helper's
+     pin, so the helper still sees the canonical R2 URL.
+   - real-curl wire row: a serve-forever loopback listener (`http.server` subclass appending one record per request
+     to a file; bind port 0 and write the chosen port to a file, readiness is "port file non-empty", NO connect probe,
+     which would consume a single-shot handler and send the real request to a dead socket; PID captured at start, a
+     `trap` kills that PID, the python process runs under `timeout -k`). A PATH stub rewrites only the URL to the
+     listener and execs the real curl with every other argument and its stdin untouched. Assert: the record count
+     equals the number of curl invocations (an unreached listener cannot pass); the `Authorization` header carries
+     `Credential=<id>/` and the scope `/auto/s3/aws4_request`; the secret appears nowhere in the received request;
+     the stub's recorded argv has neither value; a control run without `--config -` shows no `Credential=<id>/` (the
+     assertion can discriminate). Requires `python3` and `curl`; a missing tool is a hard
+     FAIL, not a skip (CI has both). Prints the curl version line so the runner version is in the log. The suite
+     header says `python3` serves this one row only, and every row runs under a per-row timeout.
    - negative canary: the refused-value canary appears in no captured stream (stdout, stderr, argv log, stdin log).
-2. Extend the stubs in `upload-evidence.test.sh` and `upload-bypass.test.sh`: record every argv and drain and record
-   stdin to files; keep the existing behaviour (code stack, `-o` body copy, last-argument URL). In BOTH suites: after
+2. Extend the stubs in `upload-evidence.test.sh` and `upload-bypass.test.sh`: record every argv and drain UNCONDITIONALLY
+   and record stdin to files (the stub exits 99 when stdin has no `user = "` line, so a run that drops the credential
+   channel cannot be served a scripted 200, and a row feeds the stub `--config -` with stdin from `/dev/null` to prove
+   that path reds); keep the existing behaviour (code stack, `-o` body copy, last-argument URL). In BOTH suites: after
    a 200 run, the recorded argv contains neither value, the recorded stdin is the `user =` line, and at least one call
    was recorded (an empty log is RED, so a stub that records nothing cannot pass). In `upload-evidence.test.sh` only
    (the bypass script execs the same primitive): a malformed-credential run (control byte in the secret, length still
@@ -340,32 +400,53 @@ fail by accident, so those fixtures are replaced, keeping their separate length-
 3. `apps/cla-evidence/scripts/bootstrap-r2-probe.test.sh` (new, two behavioural rows plus the xtrace row). Runs the real
    `apps/cla-evidence/infra/bootstrap.sh` under PATH stubs for `terraform`, `doppler`, `gh`, `openssl` (presence only)
    and a recording `curl` that answers the Cloudflare token-verify call and the R2 probe call by URL, with `jq` real;
-   the probe answers 500 so the script stops at "Refusing to push known-broken creds" before any Doppler write. Rows:
-   the probe call's recorded argv has neither value and recorded stdin carries the `user =` line; a malformed pair
-   (control byte, correct length) exits non-zero with the marker printed once and zero R2 probe calls (the Cloudflare
-   verify call precedes it and is excluded by URL); `bash -x` exits 78 before any stub is called. The probe body temp
+   the probe answers 500 so the script stops at "Refusing to push known-broken creds" before any Doppler write. The
+   `curl` stub exits 99 on any URL it was not scripted for, and every `terraform`, `doppler` and `gh` call is recorded.
+   Rows: with a valid pair the recorded URL list is exactly `[verify, probe]` (this is the positive control for the
+   next row), the probe call's recorded argv has neither value and recorded stdin carries the `user =` line, and no
+   `doppler` write is recorded after the 500; a malformed pair (control byte, correct length) exits non-zero with the
+   marker printed once and the recorded URL list exactly `[verify]`; `bash -x` exits 78 before any stub is called. The probe body temp
    file is gone after both outcomes (D7).
 
 Run them: every new row is RED (helper absent; scripts still pass `--user`).
 
 ### Phase 1 — the helper
 
-Create `apps/cla-evidence/scripts/_r2-sigv4-curl.sh` (`# shellcheck shell=bash`, no shebang, no `exit`). Run
+Create `apps/cla-evidence/scripts/_r2-sigv4-curl.sh` (`# shellcheck shell=bash`, no shebang, no `exit`) and
+`apps/cla-evidence/scripts/r2-sigv4-refusal-probe.sh` (sources the helper, judges a synthesized malformed value, prints
+the helper's stderr on stdout; offline, credential-free, well under a second). Run
 `python3 scripts/lint-shell-trace-credential-refusal.py apps/cla-evidence/scripts/_r2-sigv4-curl.sh` FIRST, before
 building the callers on it, to confirm Rule D accepts the pin form (D4).
 
 - `_r2_cred_ok VALUE` — the D3 predicate (name chosen so it never matches the byte-identical `_bearer_ok() {`
   census).
 - `r2_sigv4_judge SCRIPT ID SECRET` — values are passed as arguments, as `_cf_admin_curl` does (the callers hold them
-  in variables already; the xtrace refusal in each caller prologue is the trace defence). Returns 0, or 2 with a
-  value-free line (`<NAME> unusable`, naming `R2_CLA_EVIDENCE_ACCESS_KEY_ID` or `R2_CLA_EVIDENCE_SECRET`) and the
-  marker. `SCRIPT` is a literal passed by the two callers and is not re-validated. A comment at the `return 2` says
-  the marker, not the status, is the discriminator (curl exits 2 too).
-- `r2_sigv4_curl SCRIPT ID SECRET URL [curl args...]` — `${4:?}` for the URL, refuses the caller arguments listed in
-  Phase 0 (64), pins the URL (D4, 64), judges (2), then runs
-  `curl --disable --noproxy '*' "$@" --aws-sigv4 'aws:amz:auto:s3' --config - "$url" 2>/dev/null < <(printf 'user = "%s:%s"\n' "$id" "$secret" 2>/dev/null)`.
+  in variables already; the xtrace refusal in each caller prologue is the trace defence). Returns 0, or 2 after printing
+  a value-free `::error::<script>: <NAME> unusable` annotation (`<NAME>` is `R2_CLA_EVIDENCE_ACCESS_KEY_ID` or
+  `R2_CLA_EVIDENCE_SECRET`) and the marker. `SCRIPT` is forced to `^[A-Za-z0-9._-]+$`, else printed as `unknown`
+  (the marker feeds log parsing and telemetry; a future caller passing `$0` or free text must not inject a line or a
+  workflow command). A comment at the `return 2` says the marker, not the status, is the discriminator (curl exits 2 too).
+- `r2_sigv4_curl SCRIPT ID SECRET URL [curl args...]` — in order: `[[ $# -ge 4 ]] || return 64` (not `${4:?}`, which
+  would exit the sourcing shell); the URL pin (D4, 64, with a `::error::` line); the **argument allowlist** (64, with a
+  `::error::` line); the judge (2); then runs the curl under `env -u SSLKEYLOGFILE -u CURL_CA_BUNDLE -u SSL_CERT_FILE
+  -u SSL_CERT_DIR -u CURL_HOME -u OPENSSL_CONF -u OPENSSL_MODULES -u LD_PRELOAD -u LD_AUDIT -u LD_LIBRARY_PATH
+  -u HOSTALIASES -u LOCALDOMAIN -u RES_OPTIONS -u R2_CLA_EVIDENCE_ACCESS_KEY_ID -u R2_CLA_EVIDENCE_SECRET -u R2_S3_ACCESS_KEY_ID
+  -u R2_S3_SECRET_ACCESS_KEY` (the first 14 are `scripts/lib/bearer-curl.sh`'s list: a credentialed request must not
+  inherit TLS-trust, key-log, library-load or resolution redirection from an earlier step; the last four keep the pair
+  out of curl's own `/proc/<pid>/environ`; `printf` stays outside the `env`):
+  `env -u ... curl --disable --noproxy '*' "$@" --aws-sigv4 'aws:amz:auto:s3' --globoff --proto '=https' --config - "$url" 2>/dev/null < <(printf 'user = "%s:%s"\n' "$id" "$secret" 2>/dev/null)`.
   `2>/dev/null` is scoped to the curl itself, so the helper's own refusal lines stay visible to the caller (callers
   drop their trailing `2>/dev/null`).
+- **Argument allowlist (replaces the first draft's exact-match deny-list; security review P1).** An exact-match list
+  misses `--user=x:y`, `--config=f`, `-Kf`, `-sSK f`, `-sSu x`, long-option prefixes (curl 8.5 accepts them), and
+  everything that redirects or multiplies the credentialed request: `--url`, a second positional URL, `--connect-to`,
+  `--resolve`, `--unix-socket`, `-k`, `--cacert`, `-L`. The helper therefore accepts exactly what the two callers use and
+  returns 64 for anything else: flags `-s`, `-S`, `-sS`; value options `-o V`, `-w V`, `--max-time V`, `-X V`, `-H V`,
+  `--data-binary V`, where `-H` and `--data-binary` values must not start with `@` and a dangling value option at the
+  end (it would swallow `--aws-sigv4`) is refused. The check is a position-aware loop, not a scan for refused spellings.
+  It does not reuse `_bc_tail_ok`: its `/proc/` and `/dev/stdin` body test would refuse an evidence payload that merely
+  contains that text (contributor-controlled strings), turning a contributor comment into a false-refusal DoS of a
+  required check.
 
 Run the helper suite: GREEN.
 
@@ -442,7 +523,8 @@ is marked ready.
 1. `apps/cla-evidence/scripts/_r2-sigv4-curl.sh`
 2. `apps/cla-evidence/scripts/_r2-sigv4-curl.test.sh`
 3. `apps/cla-evidence/scripts/bootstrap-r2-probe.test.sh`
-4. `knowledge-base/project/specs/feat-one-shot-9756-cla-evidence-sigv4-argv/tasks.md`
+4. `apps/cla-evidence/scripts/r2-sigv4-refusal-probe.sh`
+5. `knowledge-base/project/specs/feat-one-shot-9756-cla-evidence-sigv4-argv/tasks.md`
 
 (Path globs verified: `apps/cla-evidence/scripts/*.test.sh` is the `scripts/test-all.sh` `SUITE_GLOBS` entry and
 matches 8 existing suites; `apps/cla-evidence/infra/` is not a suite glob and only `main.test.sh` runs there.)
@@ -469,8 +551,9 @@ and the URL is a canonical R2 origin, and the pair is on no argument list of any
 (today the two scripts; after the change only `_r2-sigv4-curl.sh`, plus comments). Chokepoint: `r2_sigv4_curl` is the
 only place the `curl` token occurs with the pair; two entry paths flow through it (the CI primitive `put_once` and
 the bootstrap probe), and two judge call sites exist (the pre-loop judge in `r2-conditional-put.sh`, needed only because of its retry loop,
-and the chokepoint's own judge, which bootstrap relies on alone). The owning suites quantify over every recorded call
-(argv log and stdin log), not the first.
+and the chokepoint's own judge, which bootstrap relies on alone). The helper's argument allowlist is part of the
+assembly: every curl option a caller can pass to the chokepoint either is on the allowlist or returns 64. The owning
+suites quantify over every recorded call (argv log, stdin log, environment log), not the first.
 
 **Mutation matrix:**
 
@@ -484,9 +567,12 @@ and the chokepoint's own judge, which bootstrap relies on alone). The owning sui
 | 6 | Reorder: move the pre-loop judge below the retry loop (or below the first `put_once`) | RED (a malformed-credential run in `upload-evidence.test.sh` must record zero calls and print the marker once) |
 | 7 | Swallow the refusal: wrap the judge as `... || true` or let the `put_once` `|| echo "000"` fallback absorb it | RED (the run must exit 2, not 0 and not "unexpected status=000") |
 | 8 | Replace the process substitution with a pipe (`printf ... \| curl`) | RED (the helper-suite source row asserts the `< <(printf` form and no `\| curl`) |
+| 9 | Weaken the argument allowlist to the first draft's exact-match deny-list, or drop its dangling-value-option check | RED (must-REFUSE rows: `--user=x:y`, `-Kf`, `-sSK f`, `--url`, a second URL, `--connect-to`, trailing `-w`) |
+| 10 | Drop `--aws-sigv4`, or move `--config -` after the URL (the URL is no longer last) | RED (the wire row sees no `Credential=<id>/`; the argv-shape row requires `--aws-sigv4` and the URL last) |
+| 11 | Remove the `env -u` prefix | RED (the environment row finds the exported TLS/library/R2 variables in the stub's environment) |
 
-**Harness rows.** (H1) edit the suite's recording stub so it stops capturing stdin: the "recorded stdin is the `user =`
-line" row must go RED. (H2) edit it so it records an empty argv log: the "argv log non-empty and holds `--aws-sigv4`
+**Harness rows.** (H1) edit the suite's recording stub so it stops capturing stdin, or stops exiting 99 on a missing
+`user = "` line: the "recorded stdin is the `user =` line" row must go RED. (H2) edit it so it records an empty argv log: the "argv log non-empty and holds `--aws-sigv4`
 and the URL" row must go RED. (H3) make the judge refuse everything: the must-PASS rows (32 and 64 lowercase hex,
 uppercase and mixed, the `._~+/=-` bytes) must go RED; RED rows alone cannot detect a guard that rejects all.
 Must-PASS inputs that are NOT the canonical fixture: mixed-case hex and a value containing `._~+/=-`.
@@ -518,6 +604,9 @@ at work time, not by the list above.
 | 4 | Dispatch: point the census-ceiling rows back at the live empty pair (no synthesized seed) | RED (floor `CC_LISTED >= 2` on the synthesized pair) |
 | 5 | Add a baseline row for a non-cla-evidence file with no owner comment above it | RED (owner-line row; its carve-out is gone) |
 | 6 | Edit the writer header text without editing the committed headers (or the reverse) | RED (battery header-identity row) |
+| 7 | Mutate the synthesized seed (swap a count) | RED (at least one M-row reads RED, proving the rows read the synthesized pair and not the live one) |
+| 8 | Remove a still-offending file's baseline row (the opposite of row 1) | RED (repo-wide run reports the unlisted offender) |
+| 9 | A cla-evidence row with no owner line, then the same row with one | RED, then GREEN (owner-line row and its control) |
 
 **Harness rows.** (H1) edit `census_ceiling_check` to ignore the ceiling column: the M-raise row must go RED.
 (H2) the synthesized pair read clean (dup=0 bad=0 stale=0) as a must-PASS that is not the live pair, and the live empty
@@ -543,6 +632,9 @@ consult; the CTO and CLO assessments above served as the named-panel lenses.
 | Helper must refuse caller-supplied `--user`/`--config`/`-K`/`--next` (advisor) | mechanical | Applied (Phase 1, Phase 0 contract row). |
 | Cut `bootstrap-r2-probe.test.sh` and D7 (DHH P1, simplicity F1) | user-challenge | Kept, shrunk to two rows plus the xtrace row; recorded in `decision-challenges.md`. |
 | Split the lint-harness refactor into a preparatory PR (advisor) | user-challenge | Kept as one PR per "ONE slice, ONE PR"; recorded in `decision-challenges.md`. |
+| Deepen-plan pass: security-sentinel P1 (caller-argument deny-list bypassable; only `$4` pinned), P2 (env scrub parity, pair in curl's environ, `script=` validation, jurisdiction hosts) | mechanical | Applied: argument allowlist, `--globoff --proto '=https'`, `env -u` prefix, `script=` forced to the safe alphabet, jurisdiction choice documented. This reverses the earlier cut of `SCRIPT` validation (simplicity F6): the marker feeds log parsing and the helper is the chokepoint. |
+| Deepen-plan pass: test-design P0/P1 (stub circularity, listener readiness, single-byte-swap baselines, bootstrap URL list and positive control, carrier derivation) | mechanical | Applied in Phase 0 and Guard 1/2 rows. |
+| Deepen-plan pass: observability P1 (`cla-evidence` is a REQUIRED, self-sealing check; discoverability_test is a whole suite), P2 (`::error::` prefix, failure modes, wording) | mechanical | Applied: facts corrected in four places, break-glass runbook named, AC 12 made a pre-merge hard gate, a committed offline probe replaces the suite as the declared command, `::error::` lines added, two failure modes added. |
 | Drop the Guard Contract matrix rows and the Docker AC (DHH P1) | taste | Matrix rows 3 and 4 are required by the gate; row 8 cut. Docker run softened to "when docker is available, else the first CI run". |
 
 ## Acceptance Criteria
@@ -558,8 +650,8 @@ consult; the CTO and CLO assessments above served as the named-panel lenses.
 9. `shellcheck` is clean on the helper, both edited scripts and the three suites (repo flags: whatever `scripts/test-all.sh` or the lefthook config uses; read it, do not assume), and the CI lint steps that read shell pass: `python3 scripts/lint-trap-tempfile-ownership.py` and `python3 scripts/lint-trap-tempfile-ownership.py --check-highwater` (the new `mktemp` and `trap` in `bootstrap.sh` and the suites join its population), `bash scripts/lint-orphan-test-suites.sh` (both new suites registered by the `apps/cla-evidence/scripts/*.test.sh` glob), `python3 scripts/lint-shell-capture-exit.py`, `python3 scripts/lint-window-closure-assertion.py`, and `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main`.
 10. `rg -n 'SOLEUR_CREDENTIAL_REFUSED' apps/cla-evidence --glob '!*.test.sh'` shows the marker in the helper only (callers never print their own copy), and no test or script prints a fixture credential value: the suites' captured streams are searched for the canary and for both fixture values (zero hits). Telemetry registration needs no edit: `SOLEUR_CREDENTIAL_REFUSED` is already an arm of `MARKER_RE` in `apps/web-platform/server/git-lock-marker-telemetry.ts` (annotated MIRRORED-NOT-PAGED), and its drift test walks `skills/*/scripts/*.sh` only, so a marker emitted from `apps/cla-evidence` is a CI-log surface by construction; the work phase runs `apps/web-platform/test/git-lock-marker-telemetry.test.ts` once to confirm it stays green.
 11. Both scripts refuse `bash -x` (exit 78) before binding the pair.
-12. The real-curl wire row of the helper suite passes on the runner's curl 8.5: run it in `ubuntu:24.04` when docker is available (`docker run --rm -v "$PWD":/w:ro -w /w ubuntu:24.04 bash -c 'apt-get update -qq && apt-get install -y -qq curl jq python3 >/dev/null && bash apps/cla-evidence/scripts/_r2-sigv4-curl.test.sh'`), otherwise the first CI run of the suite is the proof; either way the suite's `curl --version` line goes in the PR body.
-13. The `discoverability_test.command` finishes inside 15 seconds (`time bash apps/cla-evidence/scripts/_r2-sigv4-curl.test.sh`); if not, rows are trimmed until it does.
+12. PRE-MERGE HARD GATE: the real-curl wire row of the helper suite passes on the runner's curl 8.5. The suite is auto-registered, so the PR's own `test-all.sh` CI run on the hosted runner is the proof and must be green before merge (the workflow path cannot prove it: `pull_request_target` runs the base copy of the scripts, so the helper is first exercised by the workflow on the first PR after merge). Locally, run it in `ubuntu:24.04` when docker is available (`docker run --rm -v "$PWD":/w:ro -w /w ubuntu:24.04 bash -c 'apt-get update -qq && apt-get install -y -qq curl jq python3 >/dev/null && bash apps/cla-evidence/scripts/_r2-sigv4-curl.test.sh'`), ; either way the suite's curl version line goes in the PR body.
+13. The declared `discoverability_test.command` (`bash apps/cla-evidence/scripts/r2-sigv4-refusal-probe.sh`) runs in under 15 seconds, prints the single-word literal in `expected_output` (a token with no whitespace, which the `expected_output` prose detector would otherwise reject; it is a substring of the marker line the probe prints), contains none of `|;&<>$` or a backtick, and does not match preflight's suite-shape detector; run it once and paste the output.
 14. `git diff --name-only origin/main...HEAD` contains no path under `apps/web-platform/infra/` and none under `infra/github/`, so neither production-apply workflow triggers on merge; no workflow is dispatched by the work.
 15. The PR body says `Closes #9756` (and `Ref #9597`), carries a `## Changelog` section, and the deferral issue for the Doppler-write argv exists and is cited.
 
@@ -578,16 +670,22 @@ consult; the CTO and CLO assessments above served as the named-panel lenses.
 
 ## Dependencies & Risks
 
-- **Runner curl 8.5 versus local 8.22.** Mitigated by the container row (AC 12). `--aws-sigv4` landed in 7.75 and the
-  config `user` is resolved before signing; the loopback wire row proves it on the runner's curl.
-- **False refusal stops evidence capture.** Mitigated by the alphabet (a superset of every real R2 pair), the
-  existing 32/64 preflight, and the must-PASS rows being a hard gate.
+- **Runner curl 8.5 versus local 8.22.** Mitigated by AC 12 (a pre-merge hard gate: the suite's real-curl wire row on
+  the hosted runner). `--aws-sigv4` landed in 7.75 and the config `user` is resolved before signing (verified on 8.22
+  with a synthesized pair against a loopback listener during planning; the wire row proves it on the runner's curl).
+- **False refusal red-blocks every PR.** `cla-evidence` is a required check and is self-sealing (see Research Insights,
+  repo facts). Mitigated by the alphabet (a superset of every real R2 pair), the existing 32/64 preflight, the must-PASS
+  rows and the CI curl-8.5 wire row being hard pre-merge gates, and the break-glass runbook as the recovery.
 - **Lint-suite rewrites are the largest part of the diff.** The synthesized-pair rows keep every mutation row
   meaningful; the alternative of leaving the live pair non-empty is not available (the brief removes both rows).
 - **Same-uid `environ` reader and helper tampering remain** (ADR-280 context); stated in the addendum.
-- **The first production signing after merge is the only live proof beyond the wire row.** There is no scheduled
-  probe; the next CLA signing event exercises it. Not a soak-gated close criterion (no days-based condition), so no
-  follow-through script is required (`soleur:ship` Phase 5.5 enrollment gate does not apply).
+- **The first workflow run after merge is the only live proof beyond the wire row.** The merge PR's own
+  `cla-evidence` run uses the base copy of the scripts, so the converted path first runs on the next PR event after
+  merge. Not a soak-gated close criterion (no days-based condition), so no follow-through script is required
+  (`soleur:ship` Phase 5.5 enrollment gate does not apply). Post-merge verification (read-only, automatable, no SSH):
+  `gh run list --workflow cla-evidence.yml --limit 5 --json conclusion,event,createdAt,headSha` (measured during
+  planning: the command returns rows with these keys), and the first row created after the merge commit must read
+  `success`; a `failure` there is the false-refusal case and routes to the break-glass runbook.
 
 ## Sharp Edges
 
@@ -604,6 +702,11 @@ consult; the CTO and CLO assessments above served as the named-panel lenses.
   shrinks to zero rows vacates every row that reads "the first real row", which is exactly the state this change creates.
   Rule E dispatch vacuity is covered by the existing explicit-path `e_row` fixture row, not by `--census FILE`, which
   reports `offenders_e=0` for the same fixture (measured).
+- A loopback-listener readiness probe must never consume a single-shot handler: serve forever, bind port 0, signal
+  readiness by a non-empty port file, stop by the captured PID in a trap (the plan-time probe of this very row hung
+  once on exactly that mistake).
+- Never write `${4:?}` or any `${var:?}` inside the sourced helper: in a non-interactive shell it exits the sourcing
+  shell, which both violates the helper's no-`exit` rule and cannot be unit-tested.
 - Poll anything long with Monitor, never a background run loop; never `git stash` (use a WIP commit); no pattern-matching
   process kill (the loopback listener is stopped by PID captured at start, with a trap).
 - A refusal exits 2, which collides with curl's own exit 2 (init failure): no caller may branch on `rc == 2`; the
