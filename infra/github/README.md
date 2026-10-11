@@ -111,7 +111,7 @@ ADR-032 2026-07-01 and 2026-09-14 rulings.
 | `min_entries_to_merge` | `1` | Merge as soon as a candidate is green. |
 | `min_entries_to_merge_wait_minutes` | `0` | The provider default (5) would add five minutes to every merge. |
 | `max_entries_to_build` | `2` | Speculation with bounded runner contention; raise to 3 only after the canary shows contention is not binding. |
-| `check_response_timeout_minutes` | `60` | **Must exceed the slowest required check on `merge_group` including runner start spread** (PR CI max 32.8 min; ADR-032 2026-09-14 measured a 28-minute max start spread). Under-setting it *dequeues a green PR*. The stall probe fires at 45 minutes, below it. If a real candidate's slowest check exceeds 30 minutes, raise it (one line). |
+| `check_response_timeout_minutes` | `75` | **Must exceed the slowest required check on `merge_group` including runner start spread.** Canary item 5 (#9454, 2026-10-11) measured 240 `merge_group` CI runs: p50 25.0 min, p95 44.1, longest success 60.5 (above the previous 60), one `checks_timed_out` ejection. Under-setting it *dequeues a green PR*. The stall probe fires at 45 minutes, below it. Raised 60 to 75 on 2026-10-11; the cost is that a hung entry can hold the queue up to 15 minutes longer. Raise again if a success approaches the timeout. |
 
 ### Sequencing (what landed together)
 
