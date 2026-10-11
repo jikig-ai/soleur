@@ -17,6 +17,34 @@ lane: cross-domain
 
 Spec lacks a valid `lane:` (no spec.md exists for this branch) — defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-11
+**Mode:** mechanical gates plus live verification (read-only); the research fan-out was already spent during planning (repo-research, learnings, functional-overlap, CTO, a scoped advisor consult) and plan review (DHH, Kieran, code-simplicity seats), so no further agent fan-out was added.
+
+### Gate results
+
+- 4.4 precedent-diff: the single-request-site refactor follows the probe's own existing curl text (the suite's mutants (b), (c), (h) key on it); the aggregation extends the T1-T16 all-must-pass loop; the TF `regex(...)[0]` over `file()` has no sibling precedent in `web-probe.tf` (pattern is novel; scrutinize) and was evaluated with `terraform console` against both cloud-init files.
+- 4.5 network-outage: `## Hypotheses` carries the L3-to-L7 table; delivery evidence is the three green apply runs of 2026-10-11 (38151764939, 38150427433, 38151596067); no service-layer hypothesis is entertained.
+- 4.55 downtime and cutover: not triggered (no host replace, no lock-taking DDL, no container swap; the probe oneshot runs the new file on the next tick).
+- 4.6 user-brand impact: present, threshold `none` with the sensitive-path scope-out bullet (`apps/web-platform/infra/`).
+- 4.7 observability: all five fields present; the `discoverability_test.command` starts with `bash`, has no `ssh `, is one bounded query, and `expected_output` is the literal `pin_verdict=pinned`; `credentials_required` is a non-placeholder declaration, so `BASELINE_DECLARED_PROBES` is bumped (AC15).
+- 4.8 PAT scan: no PAT-shaped variable or literal. 4.9 UI wireframe: not triggered. 4.10 encryption posture: `.tf` matched, no store or new connection (see `## Encryption Posture`). 4.11 guard contract: `lint-guard-contract.py` green (2 entries); assemblies are structural (two flows, each with a named chokepoint). 4.12 scope check: present once, no `unmapped` row, one `descoped` row with a justification.
+
+### Live verification of cited facts
+
+- Issue and PR states: #10004 OPEN, #10041 draft PR OPEN, #10044 OPEN (created at plan time), #10027 MERGED (2026-10-11T15:33Z), #10016 MERGED (15:14Z), #7258 CLOSED, #9172 OPEN.
+- Rule IDs cited all exist as active rules in `AGENTS.md` (`cq-write-failing-tests-before`, `hr-no-ssh-fallback-in-runbooks`, `hr-ssh-diagnosis-verify-firewall`).
+- The zot image digest used for the measurements equals `zot_image_amd64` in `zot-registry.tf` (one match for the full 64-hex digest). The labels used on #10044 exist (`type/chore`, `domain/engineering`, `priority/p3-low`, `meta/machinery`).
+- The two `ZIREF` regex evaluations (both files) return the same digest `sha256:25935628a6a3...` as a string with `[0]` and as a one-element list without it.
+
+### Key improvements over the first draft (from the CTO, plan review and deepening)
+
+1. Cattle pin-rot closed: the pin reaches only web-1 (a second local, a two-line `server.tf` edit); born hosts keep the bare list. This also means the merge fires `apply-deploy-pipeline-fix.yml` as well, serialized by the shared concurrency group.
+2. One ref shape (`repo@sha256:<64 hex>`), no tag HEAD, no pin-override seam, no `pin_code` field, no `pin-forbidden` verdict; mutation matrices trimmed (Guard 1: 9 rows, Guard 2: 5).
+3. False statements removed: the "timer re-arms after the unit finishes" claim, the "skip rule bounds the worst case" claim, the "T1-T16 unchanged" claim (the suite's `has_marker` must learn the new field), and static rows that could not fail (a bash suite cannot evaluate Terraform `regex()`; shape rows plus a gated `terraform console` row replace them).
+4. Decision challenges recorded (DC-1 web scope, DC-2 timeout, DC-3 report-only window, DC-4 no `pin-forbidden`, DC-5 CI-layer alternative).
+
 ## Overview
 
 The web-host zot consumer probe (`apps/web-platform/infra/web-zot-consumer-probe.sh`) classifies each repository in `ZOT_PROBE_REPO` by the HTTP code of `/v2/<repo>/tags/list`, and pings the per-host heartbeat only when every repository answers 200. That proves the repository is listable to the pull credential. It does not prove that the tag and digest a fresh host actually pulls (the `ZIREF` pin in `cloud-init.yml` and `cloud-init-inngest.yml`) still resolve to a manifest.
