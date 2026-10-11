@@ -19,6 +19,8 @@ One row is added that Funnel A cannot derive: `workspaces-luks-verify-workflow.t
 
 Method. The reach probe put one marker (`[ -p /dev/stdin ]` then a log write) at the top of each stub definition in a scratch copy under a sandbox from `scripts/soleur-sandbox.sh new`, ran each owner suite once under `timeout 300` and `ulimit -v 6000000` through `run-isolated`, and read the hit log. A hit means a call reached the stub with a pipe or a process substitution on stdin; the probe cannot tell the two apart, so each EXEC row was then read by hand against its producer site. Base-red suites were re-run at the base commit and listed UNVERIFIED (never edited). The markers lived only in the scratch copy and were never committed. Four read-only passes then read every stub definition and its producer site and wrote the table below.
 
+Reproduction tooling, committed beside this file: `j0-stubs.py` (where each verb is stubbed), `j0-sites.py` (the producer pipe sites per pair) and `j0-instrument.py` (the marker insertion, sandbox copy only).
+
 Classes: EXEC (a piped call reaches the stub), TEXT (the suite names the producer but no piped call reaches the stub), UNVERIFIED (suite red or timed out in the isolated run, or a helper-built stub), BLOCKED (red at main, #9956), NOTCMD (the verb is a shell function or a variable, not a stdin-reading command), VARNAMED (verb named through a variable).
 
 | class | pairs |
