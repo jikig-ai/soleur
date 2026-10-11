@@ -1698,8 +1698,12 @@ _canary_diag_emit() {
 # timeout (124/137) | error (any other rc, unless an anchored denial was read before the non-zero exit: that
 # line is a real record, error text cannot match the anchor).
 # The ladder is journal, then dmesg only when the journal is not ok.
-# deploy runs unprivileged (no sudo grant covers the kernel log; kernel.dmesg_restrict=1 is the host
-# baseline), so `noaccess`/`empty` is the EXPECTED outcome and the row says so rather than hiding it.
+# The journal rung tries the #10045 fixed-argv grant first (KDENY_KERNEL_STREAM: `sudo -n
+# /usr/bin/journalctl` with the argv pinned below — kernel scope, bounded window, every granted
+# read journal-audited via sudo's COMMAND= record). A grant-less host (rollout window, stale
+# birth) is detected by sudo's OWN denial signature — non-zero rc with every non-blank captured
+# line `sudo:`-prefixed — and falls back to the unprivileged read, so `noaccess`/`empty` stays
+# the EXPECTED outcome there (kernel.dmesg_restrict=1 is the host baseline), never a new class.
 # Counts: a hit is an AUDIT RECORD (the line starts, after dmesg's optional `[ts] `, with `audit: type=1400|1326
 # audit(<ts>:<n>): `) that carries apparmor="DENIED" or is the seccomp type 1326. Anchoring matters: printk
 # lines that merely echo tenant-chosen text (a segfault line naming a mapped file) must not be able to carry the
@@ -1710,16 +1714,26 @@ _canary_diag_emit() {
 # from anchored records only, with `fstype` limited to a short token (mount(2) lets a tenant pick that string).
 # This is the sanctioned exception to git-data-bootstrap.sh's "never raw kernel lines" rule: values of a fixed key
 # set, not lines. Both reads take the NEWEST lines first (tac), so the 64 KiB cap drops the oldest, never the
-# denial that happened seconds ago. No sudo, no /var/log, no follow flag: every read is `timeout -k 1 3`.
+# denial that happened seconds ago. No /var/log, no follow flag: every read is `timeout -k 1 3`; the only
+# sudo use is the pinned KDENY_KERNEL_STREAM argv above (`timeout` stays outside sudo).
 # SOLEUR-DEBT: diagnostic row added for the #9860 sandbox failure (cause named H6; the shim-side fix is
-# #10032). Keep it while src=none: a least-privilege kernel-stream read grant for the deploy user is the
-# open follow-up (#10045); demote or remove once that lands or #9860's closure makes the row moot.
+# #10032). The least-privilege kernel-stream read grant (#10045) has LANDED, so the disposition fork
+# resolves to keep: the row is functional evidence while #9860 soaks; demote or remove once #9860's
+# closure makes the row moot.
 _canary_kdeny_read() {
   local rung raw rc state src=none j=none d=skip total=0 hits=0 mproc=0 fields="" counts first line t h m hint
   for rung in journal dmesg; do
     rc=0
     if [[ "$rung" == journal ]]; then
-      raw="$(timeout -k 1 3 journalctl -k -n 400 --since=-5min --no-pager -o cat 2>&1 | tac | head -c 65536; exit "${PIPESTATUS[0]}")" || rc=$?
+      raw="$(timeout -k 1 3 sudo -n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat 2>&1 | tac | head -c 65536; exit "${PIPESTATUS[0]}")" || rc=$?
+      # Sudo's OWN denial signature — the #10045 grant has not landed on this host: non-zero
+      # rc, at least one `sudo:`-prefixed line, and NO non-blank line outside that class. Only
+      # that exact shape falls back to the pre-grant unprivileged read; a run sudo ACCEPTED
+      # classifies through the machine below (journalctl-under-root failure is a real error).
+      if (( rc != 0 )) && grep -q '^sudo:' <<<"$raw" && ! grep -qvE '^(sudo:|[[:space:]]*$)' <<<"$raw"; then
+        rc=0
+        raw="$(timeout -k 1 3 journalctl -k -n 400 --since=-5min --no-pager -o cat 2>&1 | tac | head -c 65536; exit "${PIPESTATUS[0]}")" || rc=$?
+      fi
     else
       raw="$(timeout -k 1 3 dmesg 2>&1 | tail -n 400 | tac | head -c 65536; exit "${PIPESTATUS[0]}")" || rc=$?
     fi

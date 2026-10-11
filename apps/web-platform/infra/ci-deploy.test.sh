@@ -151,10 +151,35 @@ MOCK
   cp "$1/journalctl" "$1/dmesg"
 }
 
+# #10045: sudo models the KDENY_KERNEL_STREAM fixed-argv grant. sudo matches the resolved
+# command PLUS its argument list literally, so the mock does too — a journalctl invocation
+# must be exactly `-n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat`, and any
+# drift IS a denial on a real host. The refusal is rc 64 mock-named (never `sudo:`-shaped, so
+# a drifted argv cannot pass as a grant-absent host). Other argv resolve through the generic
+# flag-strip/PATH-exec path below (the fleet's other NOPASSWD grants are unaffected).
+#   MOCK_SUDO_LOG     one line per invocation (the full raw argv) — the evidence channel for
+#                     "the privileged arm ran". klog alone cannot discriminate: a journalctl
+#                     line lands there whether it was exec'd through sudo or read unprivileged.
+#   MOCK_SUDO_DENY=1  the grant is absent: a journalctl invocation is refused with sudo's own
+#                     `sudo:`-prefixed denial on STDERR (rc 1) and never exec'd; a `DENY` marker
+#                     line lands in MOCK_SUDO_LOG so a fixture can count accepted vs refused
+#                     attempts and prove "zero unprivileged journalctl runs" arithmetically.
 create_mock_sudo() {
   cat > "$1/sudo" << 'MOCK'
 #!/bin/bash
-# Skip sudo flags (--preserve-env=..., -E, etc.)
+if [[ -n "${MOCK_SUDO_LOG:-}" ]]; then printf '%s\n' "$*" >> "$MOCK_SUDO_LOG"; fi
+if [[ " $* " == *" journalctl "* || " $* " == *"/journalctl "* || " $* " == *" journalctl" || " $* " == *"/journalctl" ]]; then
+  if [[ "${MOCK_SUDO_DENY:-}" == "1" ]]; then
+    if [[ -n "${MOCK_SUDO_LOG:-}" ]]; then printf 'DENY\n' >> "$MOCK_SUDO_LOG"; fi
+    echo 'sudo: a password is required' >&2
+    exit 1
+  fi
+  if [[ "$*" != "-n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat" ]]; then
+    echo "sudo mock: refusing a journalctl argv that is not the pinned KDENY_KERNEL_STREAM grant: $*" >&2
+    exit 64
+  fi
+fi
+# Skip sudo flags (-n, --preserve-env=..., -E, etc.)
 while [[ "${1:-}" == -* ]]; do shift; done
 cmd="$1"; shift
 # Resolve absolute paths via PATH so mocks shadow system binaries.
@@ -3994,14 +4019,15 @@ DIAG_DEPLOY_CMD="deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0
 DIAG_LINE_RE='^-t ci-deploy SOLEUR_CANARY_SANDBOX_DIAG: image=[^ ]+ trigger=(legacy|faithful) section=[a-z_0-9]+ val="[^"]*"$'
 
 # run_diag_case <dir> [VAR=value ...]: one deploy in bwrap-fail mode. Sets DC_OUT DC_RC DC_REASON DC_EXIT and
-# leaves $dir/{logger,seq,diaglog,klog,ci-deploy.state}. Exports live in the subshell only.
+# leaves $dir/{logger,seq,diaglog,klog,sudolog,ci-deploy.state}. Exports live in the subshell only.
 run_diag_case() {
   local dc_dir="$1"; shift
   assert_fixture_dir "$dc_dir"
-  : > "$dc_dir/logger"; : > "$dc_dir/seq"; : > "$dc_dir/diaglog"; : > "$dc_dir/klog"; rm -f "$dc_dir/ci-deploy.state"
+  : > "$dc_dir/logger"; : > "$dc_dir/seq"; : > "$dc_dir/diaglog"; : > "$dc_dir/klog"; : > "$dc_dir/sudolog"; rm -f "$dc_dir/ci-deploy.state"
   DC_OUT=$(
     export CI_DEPLOY_STATE="$dc_dir/ci-deploy.state" MOCK_DOCKER_MODE=bwrap-fail MOCK_LOGGER_CAPTURE_FILE="$dc_dir/logger" \
-           MOCK_CANARY_SEQ_LOG="$dc_dir/seq" MOCK_CANARY_DIAG_LOG="$dc_dir/diaglog" MOCK_KLOG_LOG="$dc_dir/klog"
+           MOCK_CANARY_SEQ_LOG="$dc_dir/seq" MOCK_CANARY_DIAG_LOG="$dc_dir/diaglog" MOCK_KLOG_LOG="$dc_dir/klog" \
+           MOCK_SUDO_LOG="$dc_dir/sudolog"
     # shellcheck disable=SC2163  # each argument is a NAME=value pair; export "NAME=value" is valid
     for _kv in "$@"; do export "$_kv"; done
     run_deploy "$DIAG_DEPLOY_CMD" 2>&1
@@ -4373,37 +4399,57 @@ diag_check "#9860 D10f control: the same line with a benign info value arrives v
   "$(has_f "info='plain words here'" "$D10_VAL" && echo 0 || echo 1)" "kdeny: $D10_VAL"
 unset D10F_DP D10F_SK D10F_JWT D10F_LINE D10F_LEAK _f
 
-# D10g -- source census over the kernel reads. Positive controls first: the predicate must flag a sudo'd read and an
-# unbounded -w read, and must NOT flag the compliant shape, or a clean verdict on the real region proves nothing.
+# D10g -- source census over the kernel reads. Positive controls first: the predicate must flag every sudo shape OTHER
+# THAN the one pinned grant, an unbounded -w read, a /var/log read and an unbounded dmesg, and must NOT flag either
+# compliant shape — the unprivileged rung or the single pinned privileged read — or a clean verdict on the real
+# region proves nothing. #10045 changed the compliant shape: the journal rung FIRST tries the KDENY_KERNEL_STREAM
+# grant (`timeout -k 1 3 sudo -n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat`, timeout OUTSIDE sudo)
+# and falls back to the unprivileged read only on sudo's own `sudo:`-prefixed denial signature.
+D10G_PRIV='timeout -k 1 3 sudo -n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat'
 d10g_flags() {  # <region-text>: prints every violation, nothing when clean
   local code kern out=""
   code=$(printf '%s\n' "$1" | grep -vE '^[[:space:]]*#') || true
   kern=$(grep -E '(^|[^A-Za-z0-9_/.:-])(journalctl|dmesg)([[:space:]]|$)' <<<"$code" || true)
-  out+=$(grep -vE 'timeout -k 1 3 (journalctl|dmesg)([[:space:]]|$)' <<<"$kern" | grep -v '^$' || true)
+  # every kernel read is timeout -k 1 3-bounded: the unprivileged rungs or the ONE pinned privileged read
+  out+=$(grep -vE 'timeout -k 1 3 (journalctl|dmesg)([[:space:]]|$)' <<<"$kern" | grep -vF "$D10G_PRIV" | grep -v '^$' || true)
   out+=$(grep -E '(^|[[:space:]])-[fwW]([[:space:]]|$)|--follow' <<<"$kern" || true)
-  out+=$(grep -E 'sudo|/var/log|audit\.log|ausearch' <<<"$code" || true)
+  # the privileged read is path-qualified (/usr/bin/journalctl) and so invisible to `kern` — a follow flag inside
+  # the granted argv needs the same ban applied to ANY journalctl-bearing line
+  out+=$(grep -F 'journalctl' <<<"$code" | grep -E '(^|[[:space:]])-[fwW]([[:space:]]|$)|--follow' || true)
+  # every sudo in the region must be exactly the pinned argv: strip each compliant occurrence, then flag any
+  # invocation-shaped `sudo ` that remains (`sudo timeout`, `sudo dmesg`, a drifted argv). `sudo:`-prefixed text is
+  # the denial signature the fallback discriminator reads, not an invocation.
+  out+=$(sed "s|$D10G_PRIV||g" <<<"$code" | grep -E 'sudo[[:space:]]|/var/log|audit\.log|ausearch' || true)
   printf '%s' "$out"
 }
 D10G_CLEAN='  r="$(timeout -k 1 3 journalctl -k -n 400 --since=-5min --no-pager -o cat 2>&1 | tac | head -c 65536; exit "${PIPESTATUS[0]}")"'
+D10G_CLEAN_PRIV='  r="$(timeout -k 1 3 sudo -n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat 2>&1 | tac | head -c 65536; exit "${PIPESTATUS[0]}")"'
 # Each fixture is compliant on EVERY rule except the one it exists to prove, so deleting any single ban leaves exactly
-# one fixture unflagged: a fixture that trips two rules would let the ban under test be removed unnoticed.
+# one fixture unflagged: a fixture that trips two rules would let the ban under test be removed unnoticed. The two
+# multi-rule fixtures below prove the pinned-argv gate itself discriminates: a sudo'd dmesg or a drifted grant argv
+# is caught BOTH as an unrecognized kernel read AND as an unpinned sudo.
 D10G_NOSUDO='  x=$(sudo timeout -k 1 3 journalctl -k -n 400 --since=-5min)'
+D10G_SUDODRIFT='  x=$(timeout -k 1 3 sudo -n /usr/bin/journalctl -k -n 400 --since=-10min --no-pager -o cat)'
+D10G_SUDODMESG='  x=$(timeout -k 1 3 sudo -n /usr/bin/dmesg | tail -n 400)'
+D10G_PRIVFOLLOW='  x=$(timeout -k 1 3 sudo -n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat -f | head -c 9)'
 D10G_NOFOLLOW='  x=$(timeout -k 1 3 dmesg -w | head -c 9)'
 D10G_NOVARLOG='  x=$(timeout -k 1 3 cat /var/log/audit/audit.log | head -c 9)'
 D10G_NOTIMEOUT='  x=$(dmesg | tail -n 400)'
-diag_check "#9860 D10g control: the census predicate flags a sudo'd read, a -w read, a /var/log read and an unbounded dmesg EACH BY ITS OWN RULE, and passes the compliant shape" \
-  "$([[ -n "$(d10g_flags "$D10G_NOSUDO")" && -n "$(d10g_flags "$D10G_NOFOLLOW")" && -n "$(d10g_flags "$D10G_NOVARLOG")" && -n "$(d10g_flags "$D10G_NOTIMEOUT")" \
-      && -z "$(d10g_flags "$D10G_CLEAN")" ]] && echo 0 || echo 1)"
-unset D10G_NOSUDO D10G_NOFOLLOW D10G_NOVARLOG D10G_NOTIMEOUT
+diag_check "#9860 D10g control: the census predicate flags a sudo'd read OUTSIDE the pinned grant, a drifted grant argv, a sudo'd dmesg, a follow flag inside the granted argv, a -w read, a /var/log read and an unbounded dmesg, and passes BOTH compliant shapes" \
+  "$([[ -n "$(d10g_flags "$D10G_NOSUDO")" && -n "$(d10g_flags "$D10G_SUDODRIFT")" && -n "$(d10g_flags "$D10G_SUDODMESG")" && -n "$(d10g_flags "$D10G_PRIVFOLLOW")" && -n "$(d10g_flags "$D10G_NOFOLLOW")" && -n "$(d10g_flags "$D10G_NOVARLOG")" && -n "$(d10g_flags "$D10G_NOTIMEOUT")" \
+      && -z "$(d10g_flags "$D10G_CLEAN")" && -z "$(d10g_flags "$D10G_CLEAN_PRIV")" ]] && echo 0 || echo 1)"
+unset D10G_NOSUDO D10G_SUDODRIFT D10G_SUDODMESG D10G_PRIVFOLLOW D10G_NOFOLLOW D10G_NOVARLOG D10G_NOTIMEOUT
 D10G_SRC=$(sed -n '/^# CANARY_DIAG_BEGIN/,/^# CANARY_DIAG_END/p' "$DEPLOY_SCRIPT")
 D10G_CODE=$(printf '%s\n' "$D10G_SRC" | grep -vE '^[[:space:]]*#') || true
 D10G_JLINE=$(grep -E 'timeout -k 1 3 journalctl' <<<"$D10G_CODE" || true)
+D10G_PLINE=$(grep -F "$D10G_PRIV" <<<"$D10G_CODE" || true)
 D10G_DLINE=$(grep -E 'timeout -k 1 3 dmesg' <<<"$D10G_CODE" || true)
-diag_check "#9860 D10g: the region has exactly two kernel reads, each bounded by timeout -k 1 3; journal carries -n 400 --since=-5min --no-pager -o cat and is read newest-first; dmesg takes tail -n 400 BEFORE head -c 65536; no sudo, /var/log, audit log, -f/-w/--follow" \
-  "$([[ -z "$(d10g_flags "$D10G_SRC")" && "$(grep -c . <<<"$D10G_JLINE" || true)" == 1 && "$(grep -c . <<<"$D10G_DLINE" || true)" == 1 \
+diag_check "#9860 D10g: the region has exactly three kernel reads, each bounded by timeout -k 1 3 — the pinned privileged journal attempt (#10045), the unprivileged journal fallback and dmesg; the privileged argv is the KDENY_KERNEL_STREAM grant verbatim with 2>&1 capture and newest-first bounds; the unprivileged journal carries -n 400 --since=-5min --no-pager -o cat newest-first; dmesg takes tail -n 400 BEFORE head -c 65536; no sudo beyond the pinned argv, /var/log, audit log, -f/-w/--follow" \
+  "$([[ -z "$(d10g_flags "$D10G_SRC")" && "$(grep -c . <<<"$D10G_JLINE" || true)" == 1 && "$(grep -c . <<<"$D10G_PLINE" || true)" == 1 && "$(grep -c . <<<"$D10G_DLINE" || true)" == 1 \
       && "$D10G_JLINE" == *'journalctl -k -n 400 --since=-5min --no-pager -o cat '* && "$D10G_JLINE" == *'head -c 65536'* \
+      && "$D10G_PLINE" == *'2>&1'* && "$D10G_PLINE" == *'head -c 65536'* \
       && "$(awk '{ a = index($0, "tail -n 400"); b = index($0, "head -c 65536"); print (a > 0 && b > a) ? 1 : 0 }' <<<"$D10G_DLINE")" == 1 ]] && echo 0 || echo 1)" \
-  "violations: $(d10g_flags "$D10G_SRC") | journal: $D10G_JLINE | dmesg: $D10G_DLINE"
+  "violations: $(d10g_flags "$D10G_SRC") | journal: $D10G_JLINE | priv: $D10G_PLINE | dmesg: $D10G_DLINE"
 diag_check "#9860 D10g2: kdeny is emitted from exactly one _canary_diag_emit call, through the single scrubbing emitter, and kdeny is not in the in-container allowlist" \
   "$([[ "$(grep -cF '_canary_diag_emit "$trigger" kdeny "$(_canary_kdeny_read)"' <<<"$D10G_CODE" || true)" == 1 && "$(grep -cE '_canary_diag_emit "\$trigger" kdeny' <<<"$D10G_CODE" || true)" == 1 ]] \
       && ! has_e '\^\(id\|[^)]*kdeny' "$D10G_CODE" && echo 0 || echo 1)"
@@ -4413,7 +4459,7 @@ D10G_KEYS=$(sed -nE 's/.*split\("([a-z_ ]+)", K, " "\).*/\1/p' <<<"$D10G_CODE")
 D10G_RB="$SCRIPT_DIR/../../../knowledge-base/engineering/operations/runbooks/canary-probe-set.md"
 diag_check "#9860 D10g3: the kdeny field-key allowlist is exactly the documented closed set, spelled identically in the runbook" \
   "$([[ "$D10G_KEYS" == 'operation profile fstype error info requested_mask denied_mask syscall' && -f "$D10G_RB" ]] && has_f "(\`$D10G_KEYS\`)" "$(cat "$D10G_RB")" && echo 0 || echo 1)" "code keys: $D10G_KEYS"
-unset D10G_CLEAN D10G_SRC D10G_CODE D10G_JLINE D10G_DLINE D10G_KEYS D10G_RB
+unset D10G_CLEAN D10G_CLEAN_PRIV D10G_PRIV D10G_SRC D10G_CODE D10G_JLINE D10G_PLINE D10G_DLINE D10G_KEYS D10G_RB
 
 # D10h -- boundary: the status head must survive _cred_err_tail's 200-character tail even when the counts are
 # multi-digit and every allowlisted field is at its longest.
@@ -4426,6 +4472,62 @@ diag_check "#9860 D10h: with 3-digit counts (every repeated denial counted: hits
 D10_FIELDS=$(sed -nE 's/^src=[a-z]+ j=[a-z]+ d''=[a-z]+ total=[0-9]+ hits=[0-9]+ mproc=[0-9]+ (.*)$/\1/p' <<<"$D10_VAL")
 diag_check "#9860 D10h2: the extracted fields are cut at exactly 130 characters (the worst case 61 + 130 stays under the 200-char tail)" \
   "$([[ "${#D10_FIELDS}" -eq 130 && "$D10_FIELDS" == operation=* ]] && echo 0 || echo 1)" "fields(${#D10_FIELDS}): $D10_FIELDS"
+# D10k -- #10045: the privileged journal read (KDENY_KERNEL_STREAM) and the denial fallback. The journal rung FIRST
+# attempts `timeout -k 1 3 sudo -n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat`; on a sudo-denial
+# signature (non-zero rc + a `^sudo:`-prefixed capture) it falls back to the pre-grant unprivileged read, so a
+# grant-less host keeps today's verdicts instead of a new failure class. The sudolog/klog pair discriminates the
+# arms arithmetically: a `journalctl` line in klog can come from EITHER path (both resolve to the same mock with the
+# same argv), so  accepted privileged runs = (journalctl lines in sudolog) - (DENY markers)  and  unprivileged
+# runs = (journalctl lines in klog) - accepted.
+d10k_counts() {  # sets SJ (sudo journalctl attempts) SD (sudo denials) KJ (all journalctl runs) KD (dmesg runs)
+  SJ=$(grep -c 'journalctl' "$DIAGD/sudolog" || true)
+  SD=$(grep -c '^DENY$' "$DIAGD/sudolog" || true)
+  KJ=$(grep -c '^journalctl ' "$DIAGD/klog" || true)
+  KD=$(grep -c '^dmesg' "$DIAGD/klog" || true)
+}
+
+# grant present + a readable stream: the privileged arm answers, the unprivileged read never runs, dmesg stays skipped.
+run_diag_case "$DIAGD" "MOCK_KLOG_J_OUT=$D10_DENY_MOUNT"; d10k_counts
+D10_VAL=$(d10_val "$(d10_row "$DIAGD")")
+diag_check "#10045 D10k1: the grant is exercised FIRST — exactly one sudo journalctl attempt, none denied, the only journalctl run is the privileged exec (zero unprivileged reads), dmesg stays skipped — and the stream reads src=journal j=ok" \
+  "$([[ "$D10_VAL" == 'src=journal j=ok d''=skip total=1 hits=1 mproc=1 '* && "$SJ" == 1 && "$SD" == 0 && "$KJ" == 1 && "$KD" == 0 ]] && d10_verdict_ok && echo 0 || echo 1)" \
+  "kdeny: $D10_VAL | sudo-j:$SJ deny:$SD klog-j:$KJ klog-d:$KD"
+
+# grant present + the systemd-261 silent-empty shape: the privileged run classifies rc-0-no-lines as empty (not ok)
+# and the dmesg rung proceeds — UNPRIVILEGED, it is never wrapped in sudo.
+run_diag_case "$DIAGD" MOCK_KLOG_J_OUT=; d10k_counts
+D10_VAL=$(d10_val "$(d10_row "$DIAGD")")
+diag_check "#10045 D10k2: grant present + journal silent-empty reads j=empty (not ok), the dmesg rung proceeds and is never elevated (zero dmesg in the sudo log)" \
+  "$(has_e '^src=dmesg j=empty d''=ok total=[1-9][0-9]* hits=0 mproc=0$' "$D10_VAL" && [[ "$SJ" == 1 && "$SD" == 0 && "$KJ" == 1 && "$KD" -ge 1 && -z "$(grep 'dmesg' "$DIAGD/sudolog" || true)" ]] && d10_verdict_ok && echo 0 || echo 1)" \
+  "kdeny: $D10_VAL | sudo-j:$SJ deny:$SD klog-j:$KJ klog-d:$KD"
+
+# grant absent: sudo's own `sudo:`-prefixed denial on STDERR (rc 1, journalctl never exec'd) triggers the fallback,
+# and permission-denied unprivileged rungs then read the PRE-GRANT contract — src=none j=noaccess d=noaccess — not a
+# new error class. The sole journalctl run is the unprivileged fallback (SJ denied 1, klog 1, accepted 0).
+run_diag_case "$DIAGD" MOCK_SUDO_DENY=1 "MOCK_KLOG_J_OUT=$D10_HINT_J" MOCK_KLOG_J_ERR=1 "MOCK_KLOG_D_OUT=$D10_HINT_D" MOCK_KLOG_D_ERR=1 MOCK_KLOG_D_RC=1; d10k_counts
+D10_VAL=$(d10_val "$(d10_row "$DIAGD")")
+diag_check "#10045 D10k3: grant absent (sudo: denial on stderr, rc 1, journalctl never exec'd) + permission-denied unprivileged rungs reads the pre-grant src=none j=noaccess d=noaccess — the sole journalctl run was the unprivileged fallback" \
+  "$([[ "$D10_VAL" == 'src=none j=noaccess d''=noaccess total=0 hits=0 mproc=0' && "$SJ" == 1 && "$SD" == 1 && "$KJ" == 1 && "$KD" -ge 1 ]] && d10_verdict_ok && echo 0 || echo 1)" \
+  "kdeny: $D10_VAL | sudo-j:$SJ deny:$SD klog-j:$KJ klog-d:$KD"
+
+# grant absent but the unprivileged journal is READABLE (e.g. a host without dmesg_restrict): the denial falls back
+# and the fallback reaches a working read — src=journal j=ok through the SAME stream the pre-grant reader used.
+run_diag_case "$DIAGD" MOCK_SUDO_DENY=1 "MOCK_KLOG_J_OUT=$D10_DENY_MOUNT"; d10k_counts
+D10_VAL=$(d10_val "$(d10_row "$DIAGD")")
+diag_check "#10045 D10k4: grant denied but the unprivileged journal is readable: the fallback still reaches src=journal j=ok — the denial is an arm selector, not a verdict" \
+  "$([[ "$D10_VAL" == 'src=journal j=ok d''=skip total=1 hits=1 mproc=1 '* && "$SJ" == 1 && "$SD" == 1 && "$KJ" == 1 && "$KD" == 0 ]] && d10_verdict_ok && echo 0 || echo 1)" \
+  "kdeny: $D10_VAL | sudo-j:$SJ deny:$SD klog-j:$KJ klog-d:$KD"
+
+# sudo ACCEPTED the pinned argv but journalctl-under-root failed (rc 1, no lines, no hint): a denial is the ONLY
+# fallback trigger, so this classifies j=error through the normal ladder with ZERO unprivileged journalctl runs
+# (KJ - accepted-sudo-journalctl = 1 - (1 - 0) = 0) — never a re-read.
+run_diag_case "$DIAGD" MOCK_KLOG_J_OUT= MOCK_KLOG_J_RC=1; d10k_counts
+D10_VAL=$(d10_val "$(d10_row "$DIAGD")")
+diag_check "#10045 D10k5: sudo accepted the argv but journalctl-under-root exits rc 1 with no lines and no hint — j=error and NO unprivileged re-run (denial-vs-tool-failure discrimination)" \
+  "$(has_e '^src=dmesg j=error d''=ok total=[1-9][0-9]* hits=0 mproc=0$' "$D10_VAL" && [[ "$SJ" == 1 && "$SD" == 0 && "$KJ" == 1 && "$KD" -ge 1 && $(( KJ - SJ + SD )) -eq 0 ]] && d10_verdict_ok && echo 0 || echo 1)" \
+  "kdeny: $D10_VAL | sudo-j:$SJ deny:$SD klog-j:$KJ klog-d:$KD"
+unset -f d10k_counts; unset SJ SD KJ KD
+
 unset D10H_LINE D10_ROW D10_VAL D10_TOTAL D10_HITS D10_MPROC D10_FIELDS D10_DENY_MOUNT D10_DENY_OPEN D10_HINT_J D10_HINT_D
 unset -f d10_row d10_val d10_verdict_ok d10c d10g_flags
 

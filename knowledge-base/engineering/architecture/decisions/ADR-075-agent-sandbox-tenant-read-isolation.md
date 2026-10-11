@@ -375,8 +375,10 @@ path is retained against posture drift.
 
 **Deferred.** Per-tenant executor topology remains **#9773** (epic #9842) —
 this is an interim realization change, not the architecture. The
-least-privilege kernel-stream read for `kdeny` (`src=none`) is **#10045**,
-explicitly not folded into this change.
+least-privilege kernel-stream read for `kdeny` (`src=none`) was **#10045** —
+resolved 2026-10-11: the `KDENY_KERNEL_STREAM` fixed-argv sudoers grant plus a
+`sudo:`-signature denial fallback in `_canary_kdeny_read` give the row the host
+kernel stream it needed.
 
 **Basis.** `knowledge-base/project/specs/feat-one-shot-10032-sandbox-shim-procfs/measurements.md`
 (in-image repro + rewritten-argv spawn, rung-2 EBADF measurement,

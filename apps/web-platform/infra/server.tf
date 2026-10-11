@@ -1828,6 +1828,9 @@ resource "terraform_data" "infra_config_handler_bootstrap" {
       # #7220 — the daemon-reload grant landed. Without it the handler writes all 19 files and
       # then dies at activation, which is the incident this whole PR exists to close.
       "grep -q SYSTEMCTL_DAEMON_RELOAD /etc/sudoers.d/deploy-inngest-bootstrap",
+      # #10045 — the kdeny kernel-stream grant landed; without it the DIAG row
+      # falls back to src=none on every emitted bundle.
+      "grep -q KDENY_KERNEL_STREAM /etc/sudoers.d/deploy-inngest-bootstrap",
       # #7220 AC4 — POLICY PROBE, not another text grep. Every assertion above proves the BYTES
       # landed; none proves sudo actually grants the command. A file that parses but whose
       # User_Spec is missing, or whose alias never reaches `deploy`, passes every grep here and
@@ -1847,6 +1850,9 @@ resource "terraform_data" "infra_config_handler_bootstrap" {
       # performs the reload the DropInPaths assertions below depend on, which nothing else in
       # this provisioner does.
       "runuser -u deploy -- sudo -n /usr/bin/systemctl daemon-reload || { echo 'FATAL: deploy cannot run systemctl daemon-reload — SYSTEMCTL_DAEMON_RELOAD landed as text but does not resolve. This is #7220 unrepaired.' >&2; exit 1; }",
+      # #10045 — same effective-not-present assertion class for the kdeny grant: an
+      # idempotent read-only execute probe of the exact pinned argv.
+      "runuser -u deploy -- sudo -n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat >/dev/null || { echo 'FATAL: deploy cannot run the kdeny kernel-stream journalctl argv — KDENY_KERNEL_STREAM landed as text but does not resolve (#10045).' >&2; exit 1; }",
       # systemd-run cannot be safely executed here (it would schedule a real webhook restart
       # mid-provisioner), so this one stays list-mode, behind the availability probe above.
       "sudo -n -l -U deploy /usr/bin/systemd-run --collect --on-active=3s --unit=webhook-self-restart /usr/bin/systemctl restart webhook >/dev/null || { echo 'FATAL: sudo policy DENIES the --collect self-restart argv to deploy — the grant and the handler call site have drifted.' >&2; exit 1; }",
@@ -2201,7 +2207,7 @@ resource "terraform_data" "deploy_pipeline_fix_web2" {
     local.ghcr_deny_sh,
     local.ghcr_deny_assert_sh,
     file("${path.module}/web-2-ssh-host-key.pub"),
-    "dpf-web2-remote-exec-v2",
+    "dpf-web2-remote-exec-v3",
   ]))
 
   connection {
@@ -2399,14 +2405,18 @@ resource "terraform_data" "deploy_pipeline_fix_web2" {
       "[ \"$(sha256sum /usr/local/bin/cron-egress-postapply-assert.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/cron-egress-postapply-assert.sh")}\" ]",
       "[ \"$(sha256sum /usr/local/bin/cron-egress-nftables.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/cron-egress-nftables.sh")}\" ]",
       "[ \"$(sha256sum /etc/soleur/egress-deny-cidrs.txt | cut -d' ' -f1)\" = \"${filesha256("${path.module}/egress-deny-cidrs.txt")}\" ]",
-      # The sudoers grant landed and parses — same four alias assertions as the web-1 bridge.
+      # The sudoers grant landed and parses — same five alias assertions as the web-1 bridge.
       "grep -q INFRA_CONFIG_INSTALL /etc/sudoers.d/deploy-inngest-bootstrap",
       "grep -q GIT_LOCK_CHARDEVICE_SWEEP /etc/sudoers.d/deploy-inngest-bootstrap",
       "grep -q DROPIN_TRY_RESTART /etc/sudoers.d/deploy-inngest-bootstrap",
       "grep -q SYSTEMCTL_DAEMON_RELOAD /etc/sudoers.d/deploy-inngest-bootstrap",
+      # #10045 — the kdeny kernel-stream grant landed (same content-assert class).
+      "grep -q KDENY_KERNEL_STREAM /etc/sudoers.d/deploy-inngest-bootstrap",
       # #7220 AC4 shape — resolve the REAL policy for deploy, not just the text.
       "sudo -n -l -U deploy >/dev/null 2>&1 || { echo 'FATAL: sudo -l -U list mode is unavailable on this host (sudo-rs?) — the policy probe cannot run. This is NOT a denial; the grant may be fine.' >&2; exit 1; }",
       "runuser -u deploy -- sudo -n /usr/bin/systemctl daemon-reload || { echo 'FATAL: deploy cannot run systemctl daemon-reload — SYSTEMCTL_DAEMON_RELOAD landed as text but does not resolve. This is #7220 unrepaired.' >&2; exit 1; }",
+      # #10045 — effective-not-present execute probe of the exact pinned argv (read-only, idempotent).
+      "runuser -u deploy -- sudo -n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat >/dev/null || { echo 'FATAL: deploy cannot run the kdeny kernel-stream journalctl argv — KDENY_KERNEL_STREAM landed as text but does not resolve (#10045).' >&2; exit 1; }",
       "sudo -n -l -U deploy /usr/bin/systemd-run --collect --on-active=3s --unit=webhook-self-restart /usr/bin/systemctl restart webhook >/dev/null || { echo 'FATAL: sudo policy DENIES the --collect self-restart argv to deploy — the grant and the handler call site have drifted.' >&2; exit 1; }",
       # Drop-in adoption: LoadState-guarded, one explicit line per unit.
       "if [ \"$(systemctl show -p LoadState --value vector.service)\" = loaded ]; then systemctl show -p DropInPaths vector.service | grep -c 'doppler-token.conf' >/dev/null || { echo 'FATAL: vector.service is loaded but its Doppler drop-in is not active after daemon-reload' >&2; exit 1; }; fi",

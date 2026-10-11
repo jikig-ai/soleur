@@ -232,6 +232,47 @@ assert "deploy-inngest-bootstrap.sudoers exists"         "[[ -s '$SUDOERS_SRC' ]
 assert "cloud-init inline block is non-empty"            "[[ -n \"\$CLOUD_INIT_SUDOERS\" ]]"
 assert "sudoers source and cloud-init inline match"      "[[ \"\$SUDOERS_CONTENT_ONLY\" == \"\$CLOUD_INIT_SUDOERS\" ]]"
 assert "ci-deploy.sh invokes the sudoers-pinned path"    "grep -qE '/usr/bin/bash /tmp/inngest-extract/inngest-bootstrap.sh' '$SCRIPT_DIR/ci-deploy.sh'"
+
+# --- #10045: KDENY_KERNEL_STREAM argv lockstep (plan Guard 1) -------------------------------
+# sudo matches the resolved command PLUS argv literally, so four text surfaces must name the
+# SAME byte string or the grant denies (fails closed — never widens): the Cmnd_Alias body in
+# (a) the .sudoers source and (b) its comment-stripped cloud-init mirror, (c) the argv
+# _canary_kdeny_read passes after `sudo -n` in ci-deploy.sh, and (d) the `runuser -u deploy --
+# sudo -n …` execute probes in BOTH server.tf terraform_data bridges. The granted argv is
+# pinned below, byte-exact, per the interface contract — pinning the literal (not just surface
+# equality) also fails the all-surfaces-drift-together shape.
+echo ""
+echo "--- #10045: KDENY_KERNEL_STREAM argv lockstep ---"
+CIDEPLOY="$SCRIPT_DIR/ci-deploy.sh"
+SERVER_TF="$SCRIPT_DIR/server.tf"
+KDENY_ARGV='/usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat'
+# Alias body extraction: split the Cmnd_Alias line on its FIRST `=` only — the argv itself
+# carries `=` inside `--since=-5min`, so `cut -d= -f2` would truncate mid-flag.
+KDENY_ALIAS_SRC=$(sed -nE 's/^Cmnd_Alias KDENY_KERNEL_STREAM[[:space:]]*=[[:space:]]*//p' "$SUDOERS_SRC")
+KDENY_ALIAS_CI=$(sed -nE 's/^Cmnd_Alias KDENY_KERNEL_STREAM[[:space:]]*=[[:space:]]*//p' <<<"$CLOUD_INIT_SUDOERS")
+# Call-site extraction: everything after `sudo -n /usr/bin/journalctl ` up to a shell metachar,
+# with the ` 2>&1` capture tail cut — the runuser probes are extracted the same way, from each
+# `runuser -u deploy -- sudo -n …` line (one per terraform_data bridge).
+KDENY_CALL_ARGV=$(grep -oE 'sudo -n /usr/bin/journalctl [^|")]*' "$CIDEPLOY" | sed -E 's/^sudo -n //; s/ *2>&1 *$//; s/ +$//' | sort -u || true)
+KDENY_PROBE_ARGV=$(grep -oE 'runuser -u deploy -- sudo -n /usr/bin/journalctl [^"]*' "$SERVER_TF" | sed -E 's/^.*sudo -n //; s/ *>.*//; s/ +$//' | sort -u || true)
+assert "KDENY_KERNEL_STREAM alias defined in the sudoers source" \
+  "grep -qE '^Cmnd_Alias KDENY_KERNEL_STREAM = ' '$SUDOERS_SRC'"
+assert "KDENY grant line activates the alias for deploy (source)" \
+  "grep -qF 'deploy ALL=(root) NOPASSWD: KDENY_KERNEL_STREAM' '$SUDOERS_SRC'"
+assert "the alias argv (first-= split) is identical across the sudoers source and the cloud-init inline copy, and is the pinned grant argv" \
+  "[[ \"\$KDENY_ALIAS_SRC\" == \"\$KDENY_ARGV\" && \"\$KDENY_ALIAS_CI\" == \"\$KDENY_ARGV\" ]]"
+assert "the cloud-init inline copy activates the grant for deploy" \
+  "grep -qF 'deploy ALL=(root) NOPASSWD: KDENY_KERNEL_STREAM' <<<\"\$CLOUD_INIT_SUDOERS\""
+assert "exactly ONE Cmnd_Alias body in the sudoers source names journalctl (no second journalctl grant can hide a wider argv)" \
+  "(( \$(grep -cE '^Cmnd_Alias [A-Z_]+ = [^#]*journalctl' '$SUDOERS_SRC' || true) == 1 ))"
+assert "ci-deploy.sh attempts the privileged journal read exactly once, timeout-bounded outside sudo" \
+  "(( \$(grep -cF 'timeout -k 1 3 sudo -n /usr/bin/journalctl' '$CIDEPLOY' || true) == 1 ))"
+assert "the ci-deploy.sh call-site argv equals the pinned grant argv (alias<->caller lockstep)" \
+  "[[ \"\$KDENY_CALL_ARGV\" == \"\$KDENY_ARGV\" ]]"
+assert "both terraform_data bridges carry the runuser execute probe for the granted read" \
+  "(( \$(grep -cF 'runuser -u deploy -- sudo -n /usr/bin/journalctl ' '$SERVER_TF' || true) == 2 ))"
+assert "the execute-probe argv in server.tf is one identical string equal to the pinned grant argv" \
+  "[[ \"\$KDENY_PROBE_ARGV\" == \"\$KDENY_ARGV\" ]]"
 _COND_BEFORE=$TOTAL
 if command -v visudo >/dev/null 2>&1; then
   assert "sudoers source parses via visudo -cf"          "visudo -cf '$SUDOERS_SRC' >/dev/null"
@@ -2206,8 +2247,9 @@ COND_ASSERTIONS=$(( COND_ASSERTIONS + TOTAL - _COND_BEFORE ))
 # #8036 1d: 144 -> 153, re-measured from a green run (Guard 1 grew 50 -> 59; the executed Guard 4
 # rows are terraform-gated and counted in COND_ASSERTIONS, like the rendered NIC-G1 rows).
 # #9082: 153 -> 163, re-measured from a green run (Guard A2 added 10 unconditional rows).
+# #10045: 163 -> 172 (the KDENY_KERNEL_STREAM argv-lockstep block added 9 unconditional rows in AC5).
 UNCONDITIONAL_ASSERTIONS=$(( TOTAL - COND_ASSERTIONS ))
-BOOTSTRAP_MIN_ASSERTIONS=163
+BOOTSTRAP_MIN_ASSERTIONS=172
 if [[ "$UNCONDITIONAL_ASSERTIONS" -lt "$BOOTSTRAP_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s unconditional assertions ran (%s total, %s from tool-gated blocks), expected >= %s — a block was skipped or emptied.\n' \
     "$UNCONDITIONAL_ASSERTIONS" "$TOTAL" "$COND_ASSERTIONS" "$BOOTSTRAP_MIN_ASSERTIONS" >&2

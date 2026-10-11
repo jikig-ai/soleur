@@ -681,15 +681,15 @@ No other open code-review issue bodies name a planned file.
 
 ### Pre-merge (PR)
 
-- [ ] `deploy-inngest-bootstrap.sudoers` carries `Cmnd_Alias KDENY_KERNEL_STREAM = /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat` and `deploy ALL=(root) NOPASSWD: KDENY_KERNEL_STREAM`, parses under `visudo -cf`, and cites #10045.
-- [ ] `cloud-init.yml`'s `/etc/sudoers.d/deploy-inngest-bootstrap` inline block, comment-stripped, equals the `.sudoers` source comment-stripped (AC5 stays green).
-- [ ] Both `terraform_data` bridges' remote-exec contain the alias `grep -q` and the `runuser -u deploy -- sudo -n` execute probe for the exact argv; `deploy_pipeline_fix_web2`'s sentinel is bumped.
-- [ ] `_canary_kdeny_read` attempts `sudo -n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat` first; on a sudo-denial signature it falls back to the unprivileged read; `dmesg` rung and the `src=/j=/d=` vocabulary are unchanged; no new failure class is introduced for a grant-less host.
-- [ ] `ci-deploy.test.sh` covers: grant-present readable journal (`src=journal j=ok`), grant-present silent-empty, sudo-denied fallback to `noaccess`, and journalctl-under-root error classification — with the sudo mock emitting its denial on stderr (rc 1).
-- [ ] The argv-lockstep assert exists in `cloud-init-inngest-bootstrap.test.sh` (or the kdeny test section) and fails on any single-surface drift per Guard 1's matrix.
-- [ ] `canary-probe-set.md` §kdeny documents the privileged path, the fallback contract, and the sudo audit record; the `SOLEUR-DEBT` comment in `ci-deploy.sh` is re-scoped to reflect the landed grant.
-- [ ] ADR-075's Deferred paragraph records #10045 as resolved.
-- [ ] #9860 is untouched by the diff and remains open.
+- [x] `deploy-inngest-bootstrap.sudoers` carries `Cmnd_Alias KDENY_KERNEL_STREAM = /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat` and `deploy ALL=(root) NOPASSWD: KDENY_KERNEL_STREAM`, parses under `visudo -cf`, and cites #10045.
+- [x] `cloud-init.yml`'s `/etc/sudoers.d/deploy-inngest-bootstrap` inline block, comment-stripped, equals the `.sudoers` source comment-stripped (AC5 stays green).
+- [x] Both `terraform_data` bridges' remote-exec contain the alias `grep -q` and the `runuser -u deploy -- sudo -n` execute probe for the exact argv; `deploy_pipeline_fix_web2`'s sentinel is bumped.
+- [x] `_canary_kdeny_read` attempts `sudo -n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat` first; on a sudo-denial signature it falls back to the unprivileged read; `dmesg` rung and the `src=/j=/d=` vocabulary are unchanged; no new failure class is introduced for a grant-less host.
+- [x] `ci-deploy.test.sh` covers: grant-present readable journal (`src=journal j=ok`), grant-present silent-empty, sudo-denied fallback to `noaccess`, and journalctl-under-root error classification — with the sudo mock emitting its denial on stderr (rc 1).
+- [x] The argv-lockstep assert exists in `cloud-init-inngest-bootstrap.test.sh` (or the kdeny test section) and fails on any single-surface drift per Guard 1's matrix.
+- [x] `canary-probe-set.md` §kdeny documents the privileged path, the fallback contract, and the sudo audit record; the `SOLEUR-DEBT` comment in `ci-deploy.sh` is re-scoped to reflect the landed grant.
+- [x] ADR-075's Deferred paragraph records #10045 as resolved.
+- [x] #9860 is untouched by the diff and remains open.
 
 ### Post-merge (operator/CI apply)
 
