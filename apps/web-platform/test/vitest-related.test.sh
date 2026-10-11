@@ -50,16 +50,14 @@ else fail "instrument: fail() did not increment"; fi
 # plugins/soleur/test/test-helpers.sh:343 (the fixture-relative-assert ratchet
 # tracks this shape; do not "improve" it).
 assert_fixture_dir() {
-  local dir="$1" rel
-  case "$dir" in
-    /*) ;;
-    *) echo "ASSERT-FAIL: fixture dir must be absolute: $dir" >&2; return 1 ;;
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
   esac
-  rel="${dir#"$TMP"}"
-  if [[ "$rel" == "$dir" ]]; then
-    echo "ASSERT-FAIL: fixture dir escapes fixture root: $dir" >&2; return 1
-  fi
-  return 0
 }
 
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
