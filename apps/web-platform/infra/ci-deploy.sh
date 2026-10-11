@@ -1711,7 +1711,9 @@ _canary_diag_emit() {
 # This is the sanctioned exception to git-data-bootstrap.sh's "never raw kernel lines" rule: values of a fixed key
 # set, not lines. Both reads take the NEWEST lines first (tac), so the 64 KiB cap drops the oldest, never the
 # denial that happened seconds ago. No sudo, no /var/log, no follow flag: every read is `timeout -k 1 3`.
-# SOLEUR-DEBT: one-incident diagnostic row for the #9860 sandbox failure; remove or demote it once the issue closes with the cause named
+# SOLEUR-DEBT: diagnostic row added for the #9860 sandbox failure (cause named H6; the shim-side fix is
+# #10032). Keep it while src=none: a least-privilege kernel-stream read grant for the deploy user is the
+# open follow-up (#10045); demote or remove once that lands or #9860's closure makes the row moot.
 _canary_kdeny_read() {
   local rung raw rc state src=none j=none d=skip total=0 hits=0 mproc=0 fields="" counts first line t h m hint
   for rung in journal dmesg; do

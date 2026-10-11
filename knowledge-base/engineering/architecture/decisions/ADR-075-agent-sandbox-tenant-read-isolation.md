@@ -290,3 +290,85 @@ the write side) — exits only with **#9773 Stage 1**. **Revisit trigger:** if S
 (~8 weeks) or a realized sibling-filesystem incident lands, the interim arm is
 re-opened as a bespoke minimal setuid launcher (fixed-argv
 mount+bind+drop-uid+exec), never setuid bwrap.
+
+## Addendum — 2026-10-11 (#10032): the /proc mask realization changes from fresh procfs to neutralize + fd re-home
+
+**Context.** The #9723 fix made the bwrap PATH shim splice a pidns-scoped
+`--proc /proc` after the vendored builder's `enableWeakerNestedSandbox` tail
+bind (`--bind /proc /proc`), re-masking the real procfs that tail re-exposed.
+Post-#9768 the shim required that splice on every SDK argv — and under
+production's Docker default masked `/proc`, `mount("proc", ...)` inside the
+user namespace fails EPERM (`mount_too_revealing` class; bwrap 0.8.0 prints
+`Can't mount proc on /newroot/proc: Operation not permitted`). Every
+sandboxed spawn failed closed from 2026-10-09T04:52Z (canary #9860, root
+cause class H6 — reproduced in-image during Phase 0: same image digest,
+same bwrap 0.8.0, `sdk_probe` EPERMs while the procfs-free `sdk_noproc`
+passes).
+
+**Decision.** The mask realization changed shape; the isolation guarantee
+did not. The shim now:
+
+- **Drops** every procfs-mount-at-`/proc` token from the merged setup
+  stream — outer argv and `--args` payload transport alike (selective
+  re-emit, never verbatim) — so the vendored `denyRead: ["/proc"]` →
+  `--tmpfs /proc` lands as the realized mask: an empty, mountless `/proc`.
+- **Appends** `--tmpfs /proc` at the last setup position when a rewritten
+  stream carries no mask of its own (otherwise the `--ro-bind / /` root
+  bind would re-expose host procfs).
+- **Re-homes** every unique command-side `/proc/self/fd/N` reference with a
+  literal-path `--ro-bind <resolved-source> /proc/self/fd/N` mount at the
+  outer setup tail — token-preserving, so the vendored `apply-seccomp`
+  multicall exec path stays resolvable without any procfs.
+- **Refuses** (exit 65, `bwrap-shim:`) when a referenced fd cannot be
+  re-homed — not open, unreadable, deleted, or a pipe/socket/anon inode —
+  and keeps the existing pidns/userns gates and `--opt=` limitation.
+
+**Why not `systempaths=unconfined`.** Measured during Phase 0, it lets
+`--proc /proc` mount — but it widens `/proc` and `/sys` for every process
+in the shared container, not just the sandbox, as an interim for a defect
+the shim can fix without widening anything. Rejected on least-privilege.
+
+**Why the single-rung re-home.** The plan's rung-2 (`--bind-data` /
+`--ro-bind-data` / `--bind-fd` content binds for deleted or memfd sources)
+is dead on production's bwrap 0.8.0: `--bind-data` EBADFs at write,
+`--bind-fd` parses but cannot resolve its fd source, and binding
+`/proc/self/fd/N` itself fails because real bwrap never holds that fd.
+Rung-1 `--ro-bind` covers the real surface — the vendored multicall fd is
+an `/proc/self/exe` handle on the CLI binary, a live readable path —
+verified end-to-end in-image (the re-homed binary executes through
+`/proc/self/fd/5`). Anything else refuses rather than shipping a silently
+broken multicall.
+
+**Isolation effect.** Preserved and, strictly, strengthened: the realized
+mask is now no-procfs-at-all (previously a pidns-scoped procfs that still
+exposed the sandbox's own `/proc/<pid>` surface). `/proc/<pid>/environ`
+cross-tenant reads are unreachable because no procfs is mounted; the
+fd-re-home mounts land only under `/proc/self/fd/` at the literal paths the
+command names. A real `--proc` or procfs bind anywhere in the merged stream
+is dropped, not shadowed — mount ordering can no longer defeat the deny.
+
+**Probe re-spec.** The canary `proc_mask` probe asserted the pidns-procfs
+shape (host pid absent AND `/proc/self/environ` present). Under tmpfs that
+second half inverts into a false defeat, so the probe now asserts **no
+`/proc/<pid>` directory entries** — a bound host procfs, a fresh `--proc`,
+or a leaked root bind all land as `proc_mask_defeated`; the legitimate
+empty tmpfs (optionally carrying `self/fd/` re-home mounts, which the
+`/proc/[0-9]*` glob cannot match) passes.
+
+**Invariance caveat.** Under the injected clone3-deny filter the vendored
+`apply-seccomp` multicall cannot reach its `/proc`-dependent steps at all
+(it dies at `unshare(CLONE_NEWUSER)` on every kernel posture measured), so
+the mask realization shape cannot change the multicall's outcome; the
+re-home is defense-in-depth keeping the exec path resolvable, not a
+behavioral dependency. The multicall-success check in the in-image verify
+path is retained against posture drift.
+
+**Deferred.** Per-tenant executor topology remains **#9773** (epic #9842) —
+this is an interim realization change, not the architecture. The
+least-privilege kernel-stream read for `kdeny` (`src=none`) is **#10045**,
+explicitly not folded into this change.
+
+**Basis.** `knowledge-base/project/specs/feat-one-shot-10032-sandbox-shim-procfs/measurements.md`
+(in-image repro + rewritten-argv spawn, rung-2 EBADF measurement,
+`systempaths=unconfined` contrast); `infra/bwrap-shim/bwrap`;
+`test/bwrap-shim.test.ts`; `scripts/sandbox-canary.mjs`.
