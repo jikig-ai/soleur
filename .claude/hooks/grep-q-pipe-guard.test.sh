@@ -1257,7 +1257,7 @@ FNR == 1 {
   l = $0
   if (index(l, "pipefail")) pf = 1
   if (isy && l ~ /shell:[ \t]*bash/) pf = 1
-  if (isnt && index(l, "|")) {
+  if (isnt && index(l, "|") && (index(l, "printf") || index(l, "echo") || index(l, "cat"))) {
     o = (l !~ UNOBS); s = l
     while (match(s, PIPE)) {
       m = substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH)
@@ -1277,7 +1277,7 @@ FNR == 1 {
     }
   }
   if (ist) {
-    if (index(l, ".")) {
+    if (index(l, ".sh") || index(l, ".bash") || index(l, ".yml") || index(l, ".yaml")) {
       s = l
       while (match(s, TOKRE)) {
         m = substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH)
