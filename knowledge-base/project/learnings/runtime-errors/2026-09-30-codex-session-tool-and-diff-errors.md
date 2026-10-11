@@ -624,3 +624,19 @@ is not a completed lint check of those files.
   contention. A sandbox GitHub description read also failed connectivity and
   succeeded on its specific approved retry. Preserve failed-probe logs and
   distinguish these transport/lock failures from repository or CI findings.
+
+## Runner-maintenance continuation probes — 2026-10-11
+
+- Prior `/tmp` helper paths were absent; generated the three canonical go
+  fences from the installed command. Sandbox state-lock, fetch/merge-tree
+  writes and GitHub reads were denied. Specific approved retries completed
+  the session gates, fetch and description read; the attempted merge-tree
+  preview returned 128 and established no conflict verdict. The real merge
+  identified one C.9 fixture conflict, resolved by retaining both changes.
+- Dense combined reads again exceeded output budgets. Bound each read by
+  bytes as well as line count, and inspect explicit command exit codes:
+  a trailing successful command concealed an earlier failed fetch/read in
+  two composite probes. Missing `scripts/check-legal-doc-shas.sh` was a guessed
+  path, not an executed legal-hash check; file discovery found the real hash
+  module/test. Incoming changes touched only internal legal records, with no
+  canonical legal-hash-module change. No hash regeneration was performed.

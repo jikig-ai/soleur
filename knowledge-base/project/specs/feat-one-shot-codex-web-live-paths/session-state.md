@@ -1039,3 +1039,36 @@
   shared-write, deployment and flag/cohort restrictions. Keep draft/default-off
   and customer content blocked. Project sharing, retention/inheritance and
   configured regions remain unknown; challenge retries remain stopped.
+
+## Continuation update — 2026-10-11 runner-maintenance main sync
+
+- Resumed supplied head `a64c665574da6b2b08c06803e6f28935a4ff1e7a` with
+  PR #9051 OPEN, draft and auto-merge disarmed. No held gate was released.
+  Prior-head checks settled at 69 passes, 11 skips, zero pending/cancelled,
+  and the draft-only required `test` failure; these are historical evidence.
+- Pinned main `47c38a19da2e12262f7fb9d861cd7aac6e05f3c2` adds 12 commits
+  through Inngest bootstrap v1.1.50. Merge commit
+  `ae3d5b2f3f4e6646d94a1f15ed718debab00668c` incorporates 99 changed paths,
+  including infrastructure/forwarder fixes, web-2 encryption records,
+  liveness-threshold copy/test alignment and the local weight-drift detector.
+  The only conflict was C.9's runner invocation. Its resolution retains
+  feature-side watchdog tracing and main's `TEST_TIMING_LOG=/dev/null`.
+  The foreground-runner/bare-wait structure remains; this is not a verified
+  correction for Ref #9791, which was verified OPEN. No C.9 execution occurred.
+- Workflow actionlint (ShellCheck disabled), runner/C.9 shell syntax and
+  feature-range whitespace checks passed. Migration bodies are unchanged by
+  this sync; `scripts/test-all.sh` matches the pinned main body. The encryption
+  static scan passed: 22 stores, 10 connections, zero unledgered/failing
+  checks. Its six inherited 2026-10-22 expiry warnings retain existing
+  references (#6897 OPEN, #7772 CLOSED); no exception was renewed and no live
+  encryption verification is claimed. Hooks remain disabled and no local
+  suite, image build/retry, recovery or infrastructure dispatch ran.
+- Incoming application source, client copy, Dockerfile and test-runner changes
+  mean earlier selected30/image evidence cannot qualify the current source.
+  Fresh pushed-head CI and description checks must be observed separately.
+  Current-source/full-production recovery, authenticated screenshots, eligible
+  routine consumer, permitted Web matrices, attributable mode-specific CLO
+  and full review/promotion remain pending under the existing user holds.
+  Preserve credential/provider/browser-auth, account/shared-write, deployment
+  and flag/cohort restrictions; keep draft/default-off/customer-content blocked.
+  Project sharing, retention/inheritance and configured regions remain unknown.
