@@ -2783,8 +2783,10 @@ _affected_add_edge() {
       # must be a clean repo-relative prefix: a `..` or `/`-headed glob can pass
       # a -d probe while matching no diff line ever — a dead edge that narrows.
       # Note the arm also intercepts `glob:`-spelled tokens minted from file
-      # CONTENT (not only declared arrays): those mint malformed → always-match,
-      # which is widen-only by design.
+      # CONTENT (not only declared arrays): a metachar-bearing one mints
+      # malformed → always-match (widen-only by design); a metachar-free one
+      # takes the literal-path recursion above — a real edge if the path exists,
+      # nothing otherwise.
       case "$_g" in
         *[!A-Za-z0-9_./*-]*) _p="^glob:${_p}" ;;   # byte outside the grammar charset → verbatim
         *)
