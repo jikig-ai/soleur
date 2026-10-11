@@ -819,6 +819,8 @@ rotation HALT's `create` exemption, which the apply path of this workflow requir
 
 **Status of the claim.** The rule is not yet met by graded rows. web-2 remains *provisioned, proof pending* until the #6931 grader reports PASS. Nothing in this addendum is evidence for the encryption-posture ledger, Article 30 or any customer-facing sentence.
 
+> **Superseded 2026-10-11 (#9372), as to "not yet met by graded rows":** the #6931 grader reported PASS on 2026-10-10 (sweeper run 38083925201). See the addendum at the end of this ADR.
+
 ## Addendum — 2026-10-10 (#9879, divergence note for the inngest sole copy)
 
 Appended; nothing above is edited. **A deliberate divergence from the web-1 pin set (ADR-119 D1), recorded so it is not mistaken for a
@@ -832,7 +834,6 @@ The Inngest attachment is protected by the dispatch gates and the reachability p
 web-1, web-2 or this ADR's decision. It takes effect on the merge of PR #9925 (adopting until that merge's apply and
 read-back, per ADR-282).
 
-> **Superseded 2026-10-11 (#9372), as to "not yet met by graded rows":** the #6931 grader reported PASS on 2026-10-10 (sweeper run 38083925201). See the addendum at the end of this ADR.
 
 ## Addendum — 2026-10-11 (#9372, the grade and the ledger flip)
 
@@ -840,8 +841,10 @@ read-back, per ADR-282).
 
 **The flip.** The `hcloud_volume.workspaces` row of `scripts/encryption-posture-ledger.json` reads `luks` with `live_verification: available`, its exception removed, and `live_coverage_floor` 3. The linter accepts it through the indexed-binding arm (ADR-140 addendum 2026-10-10): one identical `for_each` on the volume and its attachment, a key chain tied to the host, and the apparatus pinned to `workspaces-luks-provision.sh`. The Article 30 register and the compliance posture carry dated supersession markers; the counsel record is `knowledge-base/legal/audits/2026-10-counsel-review-9372.md`.
 
-**The claim boundary.** What the grade establishes is formatted/opened plus green probes. It does not establish that the volume can be reopened after a host restart (the rule decided on 2026-10-07 is immutability, and no restart is part of the evidence), and the static chain behind `available` describes new hosts only, because `user_data` is under `ignore_changes`; the running web-2 is covered by the probe rows alone. web-2 holds no personal data and stays at serving weight 0: the anti-pooling gate is unchanged, and the marker it reads still checks shape only (#9358).
+**The claim boundary.** What the grade establishes is formatted/opened plus green probes. It does not establish that the volume can be reopened after a host restart (the rule decided on 2026-10-07 is immutability, and no restart is graded), and the static chain behind `available` describes new hosts only, because `user_data` is under `ignore_changes`; the running web-2 is covered by the probe rows alone. web-2 is not routed personal data (serving weight 0, no DNS or load-balancer route; its volume contents are not probed): the anti-pooling gate is unchanged, and the marker it reads still checks shape only (#9358).
 
 **Not discharged.** Passphrase-loss recovery for a data-bearing web-class host (#9948), the `escrow=missing` re-escrow step (#9949), the state restore substrate (#7992), and the emptiness-evidence strictness decision (#9642, owner-gated, undecided here). These stay conditioned on the data-bearing period and lapse the moment web-2 receives weight or data.
 
-**Status.** Unchanged: `adopting`.
+**Hosts, restarts and readiness rows.** The volume was formatted by the instance on server 169085156 (readiness row `luks_arm=formatted`, boot 77985247, 2026-10-06T18:24Z); a reboot of that server was requested at the end of the rebirth run 37508997529 (2026-10-06T18:26Z); a later server 169095540 (created 2026-10-06T19:32Z) was the target of a graded-reboot dispatch, run 37671563967 (2026-10-07T19:04Z), whose observer reported NOT YET and whose run concluded failure; and as of 2026-10-11 the volume is attached to server 169271252. Readiness rows with `luks_arm=opened` exist for boots 479cd3f3 (2026-10-06T19:36Z) and dd08ac9d (2026-10-07T20:07Z). None of this is graded as a reopen test: the rule is immutability (2026-10-08 addendum), the rows are self-reported, and instance identity is a weak anchor.
+
+**Status.** Unchanged by this change: `adopting`. The Status section above ties `accepted` to the grader's PASS, and that condition is now met; the frontmatter flip is left to the ADR owner (who also holds #9642) rather than made as a side effect of a records change.
