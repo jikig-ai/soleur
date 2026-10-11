@@ -2131,11 +2131,13 @@ _diff_edge_hit() {
       _gh="${_g%%[*?[]*}"
       case "$_gh" in
         /*|./*|../*|*"//"*|*"/./"*|*"/../"*) return 0 ;;  # not repo-relative → match
-        */) ;;
-        *) return 0 ;;
       esac
+      # (shape checks as [[ ]] — a bare `*) return 0 ;;` here would collide the
+      # substring-unique budget anchor in test-all-killed-classification's fixture)
+      [[ "$_gh" == */ ]] || return 0        # head not /-terminated → match
       _gt="${_g#$_gh}"
-      case "$_gt" in */) return 0 ;; *\**) ;; *) return 0 ;; esac
+      [[ "$_gt" == */ ]] && return 0        # tail ends / — unmatchable → match
+      [[ "$_gt" == *\** ]] || return 0      # tail without * → match
       # Cheap head pre-check — no line under the head means no line can match.
       [[ "$_n" == *"${_NL}${_gh}"* ]] || return 1
       while IFS= read -r _line; do
