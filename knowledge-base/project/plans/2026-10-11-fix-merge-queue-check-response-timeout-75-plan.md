@@ -11,6 +11,23 @@ brand_survival_threshold: aggregate pattern
 lane: single-domain
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-11
+**Passes run:** deepen-plan halt gates 4.6 to 4.12 evaluated mechanically against this plan, plus live verification of every cited fact. The per-section agent fan-out (40-agent review sweep) was deliberately not run: the change is one integer and its restatements, every claim was checkable by grep or one API read, and the repo's own gates are the better reviewers (the parity gate and the two suites).
+
+**Gate results.** 4.6 User-Brand Impact: present, threshold `none`, and because the Files list includes `apps/web-platform/server/...` (sensitive-path regex) the `threshold: none, reason:` scope-out bullet is present. 4.7 Observability: present, five fields; probe starts with allowlisted `curl`, no `ssh`, inside the 15 s cap, `expected_output` is the literal `75` (fixed, see below). 4.8 PAT-shaped variables: none (grep clean). 4.9 UI wireframe: no UI surface, skipped. 4.10 Encryption Posture: a `.tf` is edited so the section was added with empty `at_rest`/`in_transit` (no store, no connection). 4.11 Guard Contract: added (`lint-guard-contract.py`: 1 entry, green); assembly names the two chokepoints (`_mq_guard2`, `_mq_mutation`). 4.12 Scope Check: rewritten to the canonical schema (Ask Mapping with verbatim quotes, Provenance, Split Assessment), no `unmapped`. 4.4/4.45/4.5/4.55: no precedent-bound SQL or lock pattern, no network-outage trigger (the `timeout` keyword matches the parameter name, not an outage), no downtime-inducing operation (in-place ruleset update).
+
+### Key improvements
+1. **The observability probe was vacuous as first drafted.** `expected_output: "check_response_timeout_minutes": 75` tokenizes on quotes, and the fragment `check_response_timeout_minutes` is a substring of the response at 60 as well, so the probe would have passed before the apply. Replaced with a `curl | jq` that prints the bare value and the literal `75` (two characters, so it matches only on exact stdout).
+2. **Harness failure modes named precisely.** With 75 live, T-mq-1.m8 and m11 fail with `mutation did not land` (the harness refuses a no-op) and m12 fails with `guard stayed GREEN`; the Reconciliation table and Guard Contract now say so.
+3. **Guard Contract added** for the rewritten mutation rows, with value-independent matching so the next bump of this parameter does not repeat the work, plus harness rows and an anchor statement (the live API and the workflow-side threshold sit outside the one diff).
+
+### New considerations discovered
+- Live read verified unauthenticated on 2026-10-11: the ruleset API prints `"check_response_timeout_minutes": 60` (so a post-apply probe is a real before/after discriminator), and the rulesets endpoint needs no credentials on this public repository.
+- PR #9687 (the ejected green-path PR) is MERGED, consistent with canary 6 (ejected, re-enqueued, merged); #9454 is OPEN; the cited learning file and `c4-count-parity.test.sh` exist; the rule ids cited (`hr-menu-option-ack-not-prod-write-auth`, `cq-write-failing-tests-before`, `hr-gdpr-gate-on-regulated-data-surfaces`) are active in `AGENTS.md`.
+- Apply workflow facts confirmed from source: push trigger paths, `environment: infra-privileged` with no required reviewers, kill switch `[skip-github-apply]`, destroy guard, by-value binding gate, and a post-apply verify that counts required checks only. The PR-time plan comment is sticky (`marocchino/sticky-pull-request-comment`) and posted by `infra-validation.yml`, not by the apply workflow.
+
 ## Overview
 
 The merge queue on `main` (re-adopted under #9454, ADR-270) ejects a candidate whose required checks have not all
@@ -37,7 +54,7 @@ files changed.
 | Brief / spec claim | Reality (grep of `check_response_timeout`, `60-minute`, `(60` on this branch) | Plan response |
 | --- | --- | --- |
 | Edit `ruleset-ci-required.tf` and `infra/github/README.md` | `tests/scripts/test-audit-ruleset-bypass.sh` Guard 2 (T-mq-1) holds the `.tf`, the DR skeleton in `scripts/create-ci-required-ruleset.sh` and the README table equal for all seven params. Changing two of three reddens it. | Also edit `scripts/create-ci-required-ruleset.sh:121` (same value, required by the gate). |
-| Nothing else asserts the value | Three mutation rows hard-code the OLD value: T-mq-1.m8 (awk `sub(/=[[:space:]]*60/...)`), m11 (three `sed` substitutions on `60`), m12 (stall threshold set to `60`, which is below 75 so the guard would stay GREEN). With 75 live, m8/m11 no-op ("guard stayed GREEN under the mutation") and m12 stays green. | Rewrite the three rows to be value-independent (Phase 2). |
+| Nothing else asserts the value | Three mutation rows hard-code the OLD value: T-mq-1.m8 (awk `sub(/=[[:space:]]*60/...)`), m11 (three `sed` substitutions on `60`), m12 (stall threshold set to `60`, which is below 75 so the guard would stay GREEN). With 75 live, m8 and m11 no-op (the `_mq_mutation` harness then reports `mutation did not land`, a FAIL) and m12 stays green (`guard stayed GREEN under the mutation`, a FAIL). | Rewrite the three rows to be value-independent (Phase 2). |
 | Nothing else asserts the value (2) | `plugins/soleur/test/merge-queue-stall-check.test.sh` M1 greps the reason for the literal `threshold 60 >= check_response_timeout_minutes`; M1 sets the threshold to the timeout read from the `.tf`, so the reason becomes `threshold 75 >= ...` and the literal no longer matches. | Make the expected reason use `$TF_TIMEOUT`. |
 | README row is the rationale to update | ADR-270 `### Parameters` row, the `### Stall probe` section ("past 45 minutes, below the 60-minute timeout") and canary item 10 ("15-minute window between the 45-minute threshold and the 60-minute timeout") restate it; four workflow/source comments restate it too. | Update all current-state statements; leave dated historical records (canary results 2026-10-04 "timeout 60", item 5's "headroom under the 60-minute timeout" measurement text, ADR-032, archived plans) and add a dated addendum instead. |
 | Test fixtures mention 60 | `sync-pr-behind.test.sh:196`, `admin-merge-ready.test.sh:400` and the T-mq-1 fixtures at `test-audit-ruleset-bypass.sh` ~1100-1193 are synthetic, self-contained rule payloads (the sync fixture even carries `max_entries_to_build: 5`, so it is not a mirror of the `.tf`). | Leave unchanged; they assert nothing about the live value. |
@@ -197,6 +214,64 @@ Existing, no new mechanism: `.github/workflows/apply-github-infra.yml`.
 ### Vendor-tier reality check
 The GitHub REST API accepts `check_response_timeout_minutes` in a bounded range that includes 75 (verify against the provider schema or API docs when implementing; the current 60 is accepted). The merge queue is already live on this plan tier, so no tier gate applies.
 
+## Encryption Posture
+
+The plan edits a `.tf` file (Phase 2.11 trigger) but introduces no persistent store and no new cross-component or
+network connection: it changes one integer on an existing GitHub ruleset resource. No at-rest or in-transit surface
+is added or altered.
+
+```yaml
+at_rest: []
+in_transit: []
+```
+
+## Guard Contract
+
+The deliverable rewrites the mutation rows of an existing guard (Guard 2 / T-mq-1 in
+`tests/scripts/test-audit-ruleset-bypass.sh`) and one reason literal in the stall-probe suite, so the contract is
+stated for the rewritten guard, derived from the property rather than from the new numbers.
+
+### Guard 1 — merge_queue timeout parity and probe-below-timeout, independent of the numeric value
+
+**Property.** For whatever integer `check_response_timeout_minutes` holds, the `.tf`, the DR skeleton and the README
+table carry the same value, and that value is strictly greater than the stall workflow's `STALL_THRESHOLD_MINUTES`.
+
+**Assembly.** The property quantifies over every source that states the value and every mutation that exercises it,
+not over today's literals. Sources flow through one chokepoint: `_mq_guard2` parses the comment-stripped `.tf`
+(`_mq_strip_hcl`), the DR skeleton and the README table into the seven-param maps, compares all three, then applies the
+safety assertions (`_mq_val` on the timeout, `_mq_stall_threshold` on the workflow). Mutations flow through one
+chokepoint too: `_mq_mutation` applies a `sed`/`jq`/function edit to a sandbox copy of each named source, fails the
+row when the copy is identical to pristine (`mutation did not land`), fails it when the guard stays green, and fails
+it when the RED reason does not match the row's expected reason. The stall suite (`merge-queue-stall-check.test.sh`)
+is a second reader of the same timeout (derived from the `.tf` through its own helper) and must stay consistent.
+
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|---|---|
+| 1 | m11: timeout rewritten to 30 in `.tf`, DR skeleton and README together by a value-independent `[0-9]+` match (parity holds, below the threshold) | RED: `must exceed STALL_THRESHOLD_MINUTES` |
+| 2 | m12: stall workflow threshold raised to 999 (above any timeout) with the three sources untouched | RED: `must exceed STALL_THRESHOLD_MINUTES` |
+| 3 | m8: a `/* */` commented copy of the pristine block ahead of a real block whose timeout is rewritten by a value-independent awk match | RED: `DR skeleton params != tf` |
+| 4 | m1 and m5 (existing, unchanged): DR skeleton timeout drift; block key renamed in every source (guard-dispatch floor, `0 params compared`) | RED |
+| 5 | Second source after a compliant first: README timeout row changed alone after `.tf` and DR agree | RED: `README params != tf` |
+| 6 | Stall M1: workflow threshold set to the `.tf` value read by the suite | RED: reason `threshold <TF_TIMEOUT> >= check_response_timeout_minutes <TF_TIMEOUT>` |
+
+Row 5 is an addition only if no existing row already drives the README timeout alone; the existing m7 drives
+`max_entries_to_build` in the README, so `work` should confirm whether a timeout-specific README row is needed or m7
+already covers the per-source comparison, and record which.
+
+**Harness rows.** (a) Revert only m11's `sed` to the hard-coded old literal while the tree carries 75: the suite must
+FAIL with `mutation did not land` (proves the harness refuses a no-op mutation, and is exactly what would have
+happened had the rows not been rewritten). (b) Must-PASS inputs that differ from the live canonical: the synthetic
+queue-block fixtures (`60` with threshold 45, `test-audit-ruleset-bypass.sh` ~1100-1193) stay green, proving the
+guard does not hard-code 75.
+
+**Anchor.** The stored values (DR skeleton, README) and the thing they protect (the `.tf`) can all be edited in one
+diff, so the guard proves consistency, not integrity. What must also move for a weakening to pass is OUTSIDE the
+commit: the live ruleset (read by the Phase 4.3 API probe and by `scheduled-terraform-drift.yml`) and the
+`STALL_THRESHOLD_MINUTES` in a different file (the safety inequality ties them), plus CODEOWNERS review of
+`/infra/github/`.
+
 ## Observability
 
 ```yaml
@@ -222,15 +297,17 @@ logs:
   where: GitHub Actions run logs of apply-github-infra.yml and scheduled-terraform-drift.yml
   retention: GitHub default Actions log retention
 discoverability_test:
-  command: curl -s https://api.github.com/repos/jikig-ai/soleur/rulesets/14145388
-  expected_output: "check_response_timeout_minutes": 75
+  command: curl -s https://api.github.com/repos/jikig-ai/soleur/rulesets/14145388 | jq -r '.rules[] | select(.type=="merge_queue") | .parameters.check_response_timeout_minutes'
+  expected_output: 75
 ```
 
-Notes for deepen-plan: the probe uses the allowlisted `curl` verb directly (no `ssh`, no credentials: the repository is
-public and the unauthenticated read was measured above). Confirm the API pretty-prints `"check_response_timeout_minutes": 75`
-with a space after the colon before committing the literal; if it does not, wrap the `curl | jq` read in a committed
-repo-relative script (a pipeline is not a single allowlisted command). Before the apply this probe prints 60, so it is
-a post-apply check.
+Probe notes (verified in the deepen pass): the first token `curl` is allowlisted and Check 10 runs the command under
+`bash -c`, so the pipeline is valid; no `ssh`, no credentials (public repository, unauthenticated read measured);
+two network calls finish well inside the 15-second cap. `expected_output` is the bare literal `75`: a token of two
+characters or fewer matches only when stdout equals it exactly, so the probe prints `60` before the apply (FAIL) and
+`75` after (PASS). The first draft used `"check_response_timeout_minutes": 75` as the literal; Check 10 splits on
+quotes, so a fragment `check_response_timeout_minutes` would have matched at 60 too (a vacuous probe) and was dropped.
+Selection is by `.type`, never `.rules[0]`.
 
 ## Domain Review
 
@@ -244,20 +321,37 @@ edit is documentation, not a new decision). C4: `model.c4` carries no queue time
 
 ## Scope Check
 
-| Ask (from the brief) | Plan item | Provenance |
-| --- | --- | --- |
-| Raise `check_response_timeout_minutes` 60 to 75 in `infra/github/ruleset-ci-required.tf` | Phase 2.1 | ask |
-| Update the README row and rationale | Phase 2.1 / 3.1 | ask |
-| No other ruleset or queue parameter changes | Files Explicitly Left Alone | ask |
-| Apply via the repo's infra/github path; verify live reads 75 via the rulesets API | Phase 4.2-4.3 | ask |
-| Comment the value on #9454 as canary item 5 follow-up; do not close #9454 | Phase 4.1, 4.4 | ask |
-| Check every other place that restates 60 (README, ADR-270, runbooks, tests, probe relationship, drift detection) | Research Reconciliation, Phases 1-3 | ask |
-| DR skeleton `create-ci-required-ruleset.sh` value | Phase 2.1 | derived-required (Guard 2 parity gate reddens otherwise) |
-| Rewrite T-mq-1.m8/m11/m12 and stall M1 | Phase 2.2-2.3 | derived-required (they hard-code the old value and would fail or go vacuous) |
-| Comment refresh in two workflows and the dispatch `.ts` header | Phase 3.1 | ask (documentation that restates the value); the `.ts` is comment-only |
-| ADR-270 row, stall-probe text, item 10 and dated addendum | Phase 3.1 | ask (ADR-270 is the documented source of the value) |
+### Ask Mapping
 
-No `inferred` items; no unmapped ask. One section, one PR. No runbook under `knowledge-base/engineering/operations/runbooks/` restates the value (grep found none).
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "Raise the merge queue's check_response_timeout_minutes from 60 to 75 in infra/github/ruleset-ci-required.tf" [brief] | Files to Edit (core), Phase 2.1 | mapped |
+| 2 | "update the matching row and rationale in infra/github/README.md" [brief] | Files to Edit (core), Phase 2.1, 3.1 | mapped |
+| 3 | "Scope strictly this one value plus its documentation; no other ruleset or queue parameter changes." [brief] | Files Explicitly Left Alone; AC "no file outside Files to Edit", other params unchanged | mapped |
+| 4 | "follow the repo's infra/github apply path and verify the live ruleset reads 75 afterwards via the rulesets API (merge_queue rule parameters)" [brief] | Infrastructure (IaC) Apply path, Phase 4.2-4.3 | mapped |
+| 5 | "note the value in a comment on #9454 as canary item 5 follow-up. Do not close #9454." [brief] | Phase 4.1, 4.4 | mapped |
+| 6 | "every other place that restates the value 60 for check_response_timeout_minutes (README table, ADR-270, runbooks, tests that assert it, the stall probe's 45-minute relationship, drift-detection that compares live vs .tf)" [brief] | Research Reconciliation table; Files to Edit (gates, documentation); Phases 1-3 | mapped |
+| 7 | "how the infra/github terraform apply is triggered on merge (workflow, who approves, whether the plan comment is sticky)" [brief] | Infrastructure (IaC) Apply path | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| `.tf` value and comment | "Raise the merge queue's check_response_timeout_minutes from 60 to 75" | asked |
+| README row | "update the matching row and rationale in infra/github/README.md" | asked |
+| ADR-270 row, stall-probe text, item 10, addendum | "ADR-270" (ask 6) | asked |
+| stall workflow comments, CLA synthetics comment, dispatch `.ts` header comment | "every other place that restates the value 60" (ask 6) | asked |
+| `scripts/create-ci-required-ruleset.sh:121` | — | inferred — justification: Guard 2 compares `.tf`, DR skeleton and README, and goes RED if the skeleton keeps 60 |
+| T-mq-1.m8/m11/m12 rewrite and stall M1 reason | "tests that assert it" (ask 6) | asked |
+| Guard Contract, Observability and Encryption Posture sections | — | inferred — justification: plan Phases 2.9, 2.11 and 2.12 require them for a plan that edits a `.tf`, `apps/web-platform/server` and guard tests |
+| Phase 4 verification and the #9454 comment | "verify the live ruleset reads 75 afterwards" and "note the value in a comment on #9454" | asked |
+
+### Split Assessment
+
+- Subsystems touched: 7 — `infra`, `scripts`, `tests`, `plugins/soleur`, `.github`, `apps/web-platform` (comment-only), `knowledge-base`
+- Planned files: 13 (edit) + 1 (tasks.md) | Estimated changed lines: about 120
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR — the subsystem-root count exceeds the threshold only because one integer and its restatements live in many places; the diff is about 120 mostly comment and test-literal lines and splitting would leave the parity gate red between PRs. The one detachable piece is the comment-only `apps/web-platform` edit (see Risks).
 
 ## Acceptance Criteria
 

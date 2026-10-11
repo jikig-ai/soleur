@@ -11,6 +11,8 @@ Issue: #9454 (Ref only, do not close)
 - 2.1 infra/github/ruleset-ci-required.tf (value + comment), scripts/create-ci-required-ruleset.sh:121, infra/github/README.md row: all 75
 - 2.2 m8 awk `[0-9]+` to 30; m11 sed `[0-9]+` to 30; m12 threshold `'999'`; fix labels and comments
 - 2.3 stall M1 expected reason uses `$TF_TIMEOUT`
+- 2.3b Confirm whether a timeout-specific README-only mutation row is needed (existing m7 drives `max_entries_to_build`); record the answer (Guard Contract row 5)
+- 2.3c Harness row: temporarily restore the hard-coded `60` in m11 and confirm the suite fails with `mutation did not land`, then revert
 - 2.4 Re-run both suites green; terraform fmt -check and validate on infra/github
 
 ## Phase 3: Documentation sweep
@@ -20,5 +22,5 @@ Issue: #9454 (Ref only, do not close)
 ## Phase 4: Ship and verify (post-merge)
 - 4.1 PR body `Ref #9454`
 - 4.2 apply-github-infra.yml run for the merge commit is success
-- 4.3 Live read: curl rulesets/14145388 | jq merge_queue by type prints [75]; other six params unchanged; optional drift workflow dispatch
+- 4.3 Live read: `curl -s https://api.github.com/repos/jikig-ai/soleur/rulesets/14145388 | jq -r '.rules[] | select(.type=="merge_queue") | .parameters.check_response_timeout_minutes'` prints 75; other six params unchanged; optional drift workflow dispatch
 - 4.4 Comment on #9454 (canary item 5 follow-up): value, PR, run URL, reading, evidence, cost; leave #9454 open
