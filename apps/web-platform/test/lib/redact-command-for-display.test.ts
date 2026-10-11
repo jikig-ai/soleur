@@ -152,4 +152,23 @@ describe("connection-string userinfo redaction (Finding 3 — non-sentinel secre
       "git remote add o ssh://git@localhost/r",
     );
   });
+
+  // #10054: the approval card now carries every non-safe Bash command, so the flag shapes a lowercase key or a
+  // space-separated value hide from the env-assignment rule are redacted (value only; the name stays readable).
+  test.each([
+    ["terraform destroy -var 'db_password=hunter2xyz'", "hunter2xyz", "-var 'db_password=[redacted-key]"],
+    ["terraform apply -var api_key=abc123def", "abc123def", "-var api_key=[redacted-key]"],
+    ["mytool --token s3cr3tvalue run", "s3cr3tvalue", "--token [redacted-key]"],
+    ["mytool --password=s3cr3tvalue run", "s3cr3tvalue", "--password=[redacted-key]"],
+    ["PGPASSWORD=s3cr3tvalue psql -h db", "s3cr3tvalue", "PGPASSWORD=[redacted-key]"],
+  ])("credential flag shape %s drops the value and keeps the name", (cmd, secret, kept) => {
+    const out = redactCommandForDisplay(cmd);
+    expect(out).not.toContain(secret);
+    expect(out).toContain(kept);
+  });
+
+  test("a benign `-var region=eu-west-1` and `--tokens-per-minute 60` are unchanged (retention control)", () => {
+    expect(redactCommandForDisplay("terraform plan -var region=eu-west-1")).toBe("terraform plan -var region=eu-west-1");
+    expect(redactCommandForDisplay("bench --tokens-per-minute 60")).toBe("bench --tokens-per-minute 60");
+  });
 });

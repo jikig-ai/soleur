@@ -60,6 +60,8 @@ export function getBashApprovalCache(
         _bashApprovalCache.delete(key);
         return false;
       }
+      // #10054: this cache is live for hosted Bash now. A grant covers ONE simple command, never a chain.
+      if (batchGrantablePrefix(command) === null) return false;
       const cmdPrefix = deriveBashCommandPrefix(command);
       // Word-boundary equality on derived prefix — `git status` grants
       // `git status -s` but NOT `git statuses`. The derive helper takes
@@ -115,6 +117,34 @@ export function deriveBashCommandPrefix(command: string): string {
   }
 
   return head;
+}
+
+// A grant is derived from the first one or two tokens, so it must never cover (a) a compound command, whose tail the
+// prefix says nothing about (`git add . && <anything>`), or (b) a head whose very purpose is to run, delete or reach
+// something else (interpreters and shells, `rm`, infra CLIs) or a git verb that destroys or rewrites state. Those keep
+// their per-command card. Operators and expansions: ; & | newline ` < > $( — any of them makes the command compound.
+const COMPOUND_BASH_RE = /[;&|`<>\n\r]|\$\(/;
+const NO_BATCH_HEADS = new Set([
+  "bash", "sh", "zsh", "dash", "fish", "env", "xargs", "eval", "exec", "nohup", "timeout", "nice", "time",
+  "python", "python3", "node", "deno", "perl", "ruby", "php", "rm", "mv", "cp", "dd", "chmod", "chown", "find",
+  "terraform", "tofu", "gh", "docker", "kubectl", "helm", "ssh", "scp", "rsync", "doppler",
+]);
+const NO_BATCH_GIT_VERBS = new Set([
+  "push", "reset", "clean", "rebase", "branch", "remote", "config", "checkout", "restore", "stash", "filter-branch",
+  "update-ref", "gc", "prune", "reflog",
+]);
+
+/**
+ * The prefix a user may grant for `command`, or null when this command must keep its own card (see the rules above).
+ */
+export function batchGrantablePrefix(command: string): string | null {
+  const trimmed = command.trim();
+  if (trimmed.length === 0 || COMPOUND_BASH_RE.test(trimmed)) return null;
+  const tokens = trimmed.split(/\s+/);
+  if (NO_BATCH_HEADS.has(tokens[0])) return null;
+  if (tokens[0] === "git" && (tokens.length < 2 || NO_BATCH_GIT_VERBS.has(tokens[1]))) return null;
+  const prefix = deriveBashCommandPrefix(trimmed);
+  return prefix.length > 0 ? prefix : null;
 }
 
 /** Test-only: drain the global cache. Do NOT call from production code. */

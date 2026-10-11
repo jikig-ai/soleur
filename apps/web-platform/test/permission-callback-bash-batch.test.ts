@@ -12,6 +12,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 import {
+  batchGrantablePrefix,
   getBashApprovalCache,
   deriveBashCommandPrefix,
   _resetBashApprovalCacheForTests,
@@ -121,5 +122,43 @@ describe("deriveBashCommandPrefix", () => {
   it("empty / whitespace returns empty string", () => {
     expect(deriveBashCommandPrefix("")).toBe("");
     expect(deriveBashCommandPrefix("   ")).toBe("");
+  });
+});
+
+describe("batchGrantablePrefix / allow() — a grant covers one simple command (#10054)", () => {
+  it.each([
+    ["git add . && rm -rf build", "compound &&"],
+    ["git status; rm x", "compound ;"],
+    ["git diff | sh", "pipe"],
+    ["git log $(whoami)", "command substitution"],
+    ["git status `id`", "backtick"],
+    ["git status > ~/.bashrc", "redirect"],
+    ["git status\nrm x", "newline"],
+    ["git push origin feat-x", "git push"],
+    ["git reset --hard", "git reset"],
+    ["terraform plan", "terraform"],
+    ["gh pr merge 1", "gh"],
+    ["bash run.sh", "shell"],
+    ["python3 -c 'x'", "interpreter"],
+    ["rm -rf build", "rm"],
+  ])("refuses %s (%s)", (cmd) => {
+    expect(batchGrantablePrefix(cmd)).toBeNull();
+    _resetBashApprovalCacheForTests();
+    const cache = getBashApprovalCache("u-grant", "c-grant");
+    cache.grant(deriveBashCommandPrefix(cmd));
+    expect(cache.allow(cmd)).toBe(false);
+  });
+
+  it.each([
+    ["git status -s", "git status"],
+    ["git add src/a.ts", "git add"],
+    ["npm run lint", "npm run lint"],
+    ["bun test --bail", "bun test"],
+  ])("grants %s as %s and honours it", (cmd, prefix) => {
+    expect(batchGrantablePrefix(cmd)).toBe(prefix);
+    _resetBashApprovalCacheForTests();
+    const cache = getBashApprovalCache("u-grant", "c-grant");
+    cache.grant(prefix);
+    expect(cache.allow(cmd)).toBe(true);
   });
 });

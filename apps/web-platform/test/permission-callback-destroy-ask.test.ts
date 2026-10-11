@@ -131,8 +131,8 @@ describe("lane: a matched command is gated in every posture (AC-1, AC-4)", () =>
     for (const [granted, cmd] of [["git push", FORCE_MAIN], ["terraform", "terraform destroy"]] as const) {
       _resetBashApprovalCacheForTests();
       const cache = getBashApprovalCache("user-1", "conv-1");
-      cache.grant(granted);
-      expect(cache.allow("git push origin feat-x") || cache.allow("terraform plan")).toBe(true); // the grant is live
+      cache.grant(granted); // a stale/forged grant: even then the cache must not honour a destroy-capable head (#10054)
+      expect(cache.allow("git push origin feat-x") || cache.allow("terraform plan")).toBe(false);
       const { ctx, deps } = buildContext({ bashAutonomous: false, bashApprovalCache: cache });
       await run(ctx, cmd);
       expect(deps.abortableReviewGate, cmd).toHaveBeenCalledTimes(1);
@@ -224,8 +224,17 @@ describe("lane: placement (AC-5, AC-21)", () => {
   test("non-autonomous precision: an ordinary non-safe command keeps the generic gate with `Approve all` offered", async () => {
     const cache = getBashApprovalCache("user-1", "conv-1");
     const { ctx, deps } = buildContext({ bashAutonomous: false, bashApprovalCache: cache });
-    await run(ctx, "git push origin feat-x");
-    expect(deps.abortableReviewGate.mock.calls[0][4]).toEqual(["Approve", "Approve all `git push`", "Reject"]);
+    await run(ctx, "bun test --bail");
+    expect(deps.abortableReviewGate.mock.calls[0][4]).toEqual(["Approve", "Approve all `bun test`", "Reject"]);
+  });
+
+  test("destroy-capable heads and compound commands never offer `Approve all` (#10054: a grant would turn a lane miss into a silent run)", async () => {
+    for (const cmd of ["git push origin feat-x", "terraform plan", "gh pr merge 1", "git add . && rm -rf build", "npm run lint && make deploy"]) {
+      const cache = getBashApprovalCache("user-1", "conv-1");
+      const { ctx, deps } = buildContext({ bashAutonomous: false, bashApprovalCache: cache });
+      await run(ctx, cmd);
+      expect(deps.abortableReviewGate.mock.calls[0][4], cmd).toEqual(["Approve", "Reject"]);
+    }
   });
 
   test("the resolver is called only for a force, delete or mirror push with a named destination", async () => {

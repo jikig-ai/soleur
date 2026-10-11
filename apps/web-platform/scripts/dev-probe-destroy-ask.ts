@@ -1,8 +1,8 @@
 /**
  * #9776 / ADR-284 — CLO C9 runtime probe for the hosted must-ask lane, against the REAL Claude Agent SDK.
  *
- * Unit tests mock the SDK, so none of them can say whether the SDK still calls `canUseTool` for Bash under
- * `autoAllowBashIfSandboxed` (the #3252 behaviour the lane rests on). This script drives the production option
+ * Unit tests mock the SDK, so none of them can say whether the SDK calls `canUseTool` for sandboxed Bash at all: both
+ * `autoAllowBashIfSandboxed: true` and a PreToolUse hook `allow` pre-empt it (#10054, found by this probe). This script drives the production option
  * builder (`buildAgentQueryOptions`) and the production permission callback (`createCanUseTool`, lane included)
  * through `sdkQuery` with a real model, in a throwaway workspace whose `origin` is a local bare repo. Every
  * destroy-family command is answered Reject at the gate, so nothing destructive ever runs; the script then checks
@@ -11,10 +11,14 @@
  * Run (key never printed; the agent env is allowlisted by buildAgentEnv):
  *   NODE_ENV=test doppler run -p soleur -c ci -- bun run apps/web-platform/scripts/dev-probe-destroy-ask.ts
  *
- * Output: one `PROBE <case> ...` line per case and a final `RESULT: PASS|FAIL`. No command text is read from the model
+ * Diagnostic env (NOT the production shape; any of them makes the run print `RESULT: DIAGNOSTIC`, never PASS): PROBE_ONLY=<case>,
+ * PROBE_SANDBOX=noauto|off, PROBE_NOHOOK=1 (drops the PreToolUse hook, including its sensitive-env deny), PROBE_TRACE=1.
+ * PROBE_NOHOOK and PROBE_SANDBOX=off need PROBE_UNSAFE=1: they run with autonomy on and no sandbox/deny layer (blast radius: the tmp dir).
+ *
+ * Output: one `PROBE <case> ...` line per case and a final `RESULT: PASS|FAIL|CANT-RUN|DIAGNOSTIC`. No command text is read from the model
  * stream beyond the gate card, which is the thing being verified.
  */
-import { mkdtempSync, mkdirSync, writeFileSync, realpathSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, realpathSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -29,8 +33,21 @@ if (!apiKey) {
   process.exit(3);
 }
 
-const git = (cwd: string, ...args: string[]) =>
-  execFileSync("git", args, { cwd, encoding: "utf8", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } }).trim();
+// Minimal env: this runs under `doppler run`, whose full environment (the CI secrets) must not reach git or its hooks.
+const GIT_ENV = {
+  PATH: process.env.PATH ?? "",
+  HOME: process.env.HOME ?? "",
+  GIT_TERMINAL_PROMPT: "0",
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_SYSTEM: "/dev/null",
+} as unknown as NodeJS.ProcessEnv;
+const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8", env: GIT_ENV }).trim();
+
+const diagnostic = Boolean(process.env.PROBE_ONLY || process.env.PROBE_SANDBOX || process.env.PROBE_NOHOOK);
+if ((process.env.PROBE_NOHOOK || process.env.PROBE_SANDBOX === "off") && !process.env.PROBE_UNSAFE) {
+  console.log("RESULT: CANT-RUN:diagnostic-needs-PROBE_UNSAFE=1");
+  process.exit(3);
+}
 
 const base = realpathSync(mkdtempSync(join(tmpdir(), "probe-9776-")));
 const ws = join(base, "ws");
@@ -45,6 +62,9 @@ git(ws, "add", "README.md");
 git(ws, "commit", "-q", "-m", "init");
 git(ws, "remote", "add", "origin", bare);
 git(ws, "push", "-q", "origin", "main");
+// Make local `main` DIVERGE from the remote's (amend after the push): a `--force` push of it would rewrite the remote's `main`, so
+// "remote refs unchanged" is a real check and not trivially true of two identical branches.
+git(ws, "commit", "-q", "--amend", "-m", "init (local, diverged)");
 git(ws, "checkout", "-q", "-b", "feat-x");
 // Only the default branch is the destroy target; the control case legitimately creates `feat-x`.
 const refs = () => git(bare, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads/main");
@@ -126,6 +146,7 @@ async function runCase(c: Case): Promise<{ cards: string[]; options: string[][];
   let text = "";
   let err: string | undefined;
   let release: () => void = () => undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     // The SDK wires `canUseTool` only for a streaming-input prompt (an AsyncIterable of user messages), as the dispatcher does;
     // a bare string prompt runs the CLI without the permission callback and would make this probe vacuous.
@@ -136,7 +157,8 @@ async function runCase(c: Case): Promise<{ cards: string[]; options: string[][];
       yield { type: "user", message: { role: "user", content: promptText }, parent_tool_use_id: null, session_id: "" } as any;
       await done;
     }
-    const q = sdkQuery({ prompt: promptStream(), options: opts });
+    timer = setTimeout(() => abort.abort(), 180_000); // a stranded permission request must not hang the run
+    const q = sdkQuery({ prompt: promptStream(), options: { ...opts, abortController: abort } });
     for await (const m of q as AsyncIterable<any>) {
       if (m.type === "result") release();
       if (process.env.PROBE_TRACE && m.type === "user") for (const b of m.message?.content ?? []) if (b.type === "tool_result") console.log("TRACE tool_result", JSON.stringify(b.content).slice(0, 200));
@@ -150,6 +172,8 @@ async function runCase(c: Case): Promise<{ cards: string[]; options: string[][];
   } catch (e) {
     release();
     err = e instanceof Error ? `${e.name}:${e.message.replace(/sk-[A-Za-z0-9_-]+/g, "<key>").slice(0, 300)}` : "unknown";
+  } finally {
+    clearTimeout(timer);
   }
   return { cards, options, ranTools, text, err, seen };
 }
@@ -164,7 +188,7 @@ for (const c of CASES.filter((x) => !process.env.PROBE_ONLY || x.name === proces
   const cardText = r.cards.join("");
   const cardOk = !c.expectCard || /paused for your approval/.test(cardText);
   let verdict: "ok" | "MODEL-DID-NOT-TRY" | "FAIL";
-  if (!bashUsed) verdict = "MODEL-DID-NOT-TRY";
+  if (!bashUsed) verdict = "MODEL-DID-NOT-TRY"; // also what an SDK/auth error looks like: the `err=` field says which
   else if (c.expectCard) verdict = gated && approveReject && cardOk ? "ok" : "FAIL";
   // The control must still REACH canUseTool (allowed there by the safe/autonomous path), or the pass would be a bypass.
   else verdict = gated || !r.seen.includes("Bash") ? "FAIL" : "ok";
@@ -179,6 +203,13 @@ const refsAfter = refs();
 const refsUnchanged = refsBefore === refsAfter;
 console.log(`PROBE remote-refs-unchanged=${refsUnchanged}`);
 if (!refsUnchanged) failed = true;
-// A case where the model never attempted Bash proves nothing: that is could-not-measure, never a pass.
-console.log(failed ? "RESULT: FAIL" : cantRun ? "RESULT: CANT-RUN:model-did-not-attempt-bash" : "RESULT: PASS");
-process.exit(failed ? 1 : cantRun ? 3 : 0);
+try {
+  rmSync(base, { recursive: true, force: true });
+} catch {
+  /* best effort: a tmp dir left behind is harmless */
+}
+// A case where the model never attempted Bash proves nothing: that is could-not-measure, never a pass. A diagnostic run
+// (a subset of cases, or a weakened option set) is never the production verdict, so it never prints PASS.
+const outcome = failed ? "FAIL" : cantRun ? "CANT-RUN:model-did-not-attempt-bash" : diagnostic ? "DIAGNOSTIC" : "PASS";
+console.log(`RESULT: ${outcome}`);
+process.exit(failed ? 1 : cantRun ? 3 : diagnostic ? 4 : 0);

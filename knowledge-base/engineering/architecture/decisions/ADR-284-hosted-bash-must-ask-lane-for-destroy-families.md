@@ -109,7 +109,7 @@ the existing-workspace opt-out hold and the batched-approval cache. A match RETU
 | Conversation type | Lane applies | How it is asserted |
 |---|---|---|
 | cc-routed Concierge (`cc-dispatcher.ts`) | Yes | `permission-callback-destroy-ask.test.ts`; the factory-wiring test in `cc-dispatcher-real-factory.test.ts` |
-| Legacy domain-leader runner (`agent-runner.ts`) | Every non-safe Bash command already reaches the generic gate (no `bashAutonomous`, no batch cache, no resolver); a destroy form gets the destroy card with the resolver unresolved | `permission-callback-destroy-ask-error.test.ts` pins the call site |
+| Legacy domain-leader runner (`agent-runner.ts`) | By design every non-safe Bash command reaches the generic gate (no `bashAutonomous`, no batch cache, no resolver); a destroy form gets the destroy card with the resolver unresolved. In production this took effect only with #10054: before it the SDK never called `canUseTool` for sandboxed Bash, so domain leaders ran Bash unprompted | `permission-callback-destroy-ask-error.test.ts` pins the call site |
 | Support persona | Denied (with escalation) before the lane; no gate emitted | the lane suite's support row |
 | Scheduled and Inngest agents | Outside `canUseTool`; the plugin hook is active there (ADR-277, "Server-side scheduled agents") | not asserted here |
 
@@ -120,16 +120,35 @@ The factory-wiring test proves the real `createCanUseTool` sits in the same SDK 
 autonomous workspace. **It does not prove that the real SDK calls `canUseTool` for sandboxed Bash:** the SDK is
 mocked. The runtime proof is the real-SDK probe `apps/web-platform/scripts/dev-probe-destroy-ask.ts` (CLO C9).
 
-**C9 result (2026-10-11, #10054).** Against the production pin (SDK 0.3.284, Claude Code 2.1.293) and the production option builder
-the probe **failed** at #9977: `canUseTool` was never called for sandboxed Bash, so this lane, the safe-Bash allowlist, the autonomous
-toggle gate and the batch cache were all inert (and had been since the SDK upgrade in #9236). Two independent causes, either enough:
-`autoAllowBashIfSandboxed: true`, and the PreToolUse sandbox hook returning an explicit `allow` for every Bash command (a hook allow
-resolves the permission before `canUseTool`). The forward fix sets `autoAllowBashIfSandboxed: false` (the sandbox stays on) and makes
-the hook return no decision for Bash (`{ continue: true }`; the sensitive-env deny stays). After the fix the same probe passes: the
-force-push to the default branch, `terraform destroy` and a `bash -lc` variant each reach the Approve/Reject card and, answered
-Reject, leave the remote's default branch unchanged; a plain push to a feature branch is not asked. Consequence: every hosted Bash
-call now reaches `createCanUseTool`, so a non-autonomous workspace shows an Approve card for each command outside the safe allowlist,
-as that callback was always written to do. Re-run the probe after any SDK, CLI or sandbox-option bump.
+**C9 result (2026-10-11, #10054).** Against the hosted path's real stack (SDK 0.3.284 and the Claude Code 2.1.284 binary bundled
+in `@anthropic-ai/claude-agent-sdk-linux-x64`; the hosted path sets no `pathToClaudeCodeExecutable`, so the 2.1.293 copy the crons spawn
+is not what it runs) and the production option builder, the probe **failed** at #9977: `canUseTool` was never called for sandboxed
+Bash, so this lane, the safe-Bash allowlist, the autonomous toggle gate and the batch cache were all inert. When that began is
+**not measured**: #3252 (closed 2026-05-05) shows Command Center Bash prompting on SDK 0.2.85 with both causes below already in the
+code, so the start lies between 2026-05-05 and the SDK 0.3.284 bump (#9236, merged 2026-09-29); the 0.3.x line arrived with #5849 on
+2026-07-01, an untested candidate. Two independent causes, either enough: `autoAllowBashIfSandboxed: true`, and the PreToolUse sandbox
+hook returning an explicit `allow` for every Bash command (a hook allow resolves the permission before `canUseTool`). The forward fix
+sets `autoAllowBashIfSandboxed: false` (the sandbox stays on) and makes the hook return no decision for Bash (`{ continue: true }`;
+the sensitive-env deny stays). After the fix the same probe passes: the force-push to the default branch, `terraform destroy` and a
+`bash -lc` variant each reach the Approve/Reject card and, answered Reject, leave the remote's default branch unchanged (the probe's
+local `main` is made to diverge from the remote's, so a force-push that ran would move it); a plain push to a feature branch is not asked.
+
+Consequences of Bash reaching `createCanUseTool` again, all of them the callback working as written:
+
+- A non-autonomous workspace shows an Approve card for every command outside the safe allowlist; an unanswered card expires after
+  5 minutes into a deny whose text tells the agent the command did not run and not to retry or respell it.
+- `BLOCKED_BASH_PATTERNS` (curl, wget, nc, `sh -c`, sudo, eval) is live again for hosted Bash, including autonomous workspaces, so a
+  plugin skill that relied on `curl` is denied.
+- "Approve all `<prefix>`" now grants one simple command only: it is not offered for, and not honoured against, a compound command
+  or a destroy-capable head (shells and interpreters, `rm`, infra CLIs, `git push` and the other state-rewriting git verbs), because
+  a grant would turn any spelling the lane does not recognise into a silent run.
+- Stacked cards (parallel Bash calls) keep the conversation `waiting_for_user` until the last one resolves.
+- The hook still returns `allow` for the file tools, so their `canUseTool` branch is not reached; that is unchanged here and is a
+  residual (the file-path deny lives in the hook and `disallowedTools`).
+- A headless session with no connected client waits out the 5-minute gate and then denies; there is no strand.
+
+Re-run the probe (`apps/web-platform/scripts/dev-probe-destroy-ask.ts`) after any SDK, CLI or sandbox-option bump: it is the only
+check that exercises hook-then-`canUseTool` precedence against the real binary; nothing in CI does.
 
 ### Residuals (not recognised; named so the copy and the control page never imply otherwise)
 
