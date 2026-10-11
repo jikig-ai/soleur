@@ -25,6 +25,39 @@ TF-managed. -->
 Spec lacks valid `lane:` (no spec.md — pipeline entry without brainstorm)
 — defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-11
+**Sections enhanced:** Proposed Solution (probe + audit specs), Phase 1
+manifest shape, Research Insights (verify-the-negative census),
+References & Research (learnings).
+**Research agents used:** none — no Task/agent spawn tool in this
+harness; deepen gates and learnings applied inline
+(Reviewed-Coverage: sequential-fallback). Gates executed: 4.4
+precedent-diff, 4.45 verify-the-negative, 4.5–4.12 all conditional
+triggers + mechanical lints.
+
+### Key Improvements
+
+1. Probe spec hardened with all three documented workflow-JWT-mint traps
+   (Bearer scheme via process-substitution header, `b64url` trailing-`\n`
+   strip with portable `openssl base64 -A`, no `continue-on-error`
+   masking) + `openssl rsa -check` pre-flight from the #4384 mint chain.
+2. Audit token class corrected from vendor-format prefix to RFC 6750
+   property guard — the literal #9972 root-cause lesson — plus the
+   split-literal rule so the audit's own `.test.sh` can't join its sweep.
+3. "No other suite consumes `GITHUB_APP_*`" upgraded from inference to
+   verified census (grep intersection over the workflow's 12-file suite
+   set).
+
+### New Considerations Discovered
+
+- `gh api` cannot carry an App-JWT (sends `token`, never `Bearer`) — the
+  probe must use curl; this eliminates `gh api`-based implementations.
+- Manifest precedent-diff: fixture App needs a *minimal* manifest — the
+  `${app_domain}` placeholders in sibling manifests are OAuth/webhook
+  fields this App has no surface for; omitted.
+
 ## Overview
 
 The `MU1_INTEGRATION` nightly leg of `scheduled-integration-suites.yml` —
@@ -118,6 +151,13 @@ installation — `apps/web-platform/infra/main.tf` `:102` comment).
   documents that `dev`'s App creds "can't mint a token for the fixture
   installation" (true — dead key).
 
+**Verify-the-negative (deepen-pass §4.45).** Claim "no other dev_scheduled
+suite consumes `GITHUB_APP_*`" — verified by census, not inference:
+`grep -rln GITHUB_APP apps/web-platform/test/` returns 11 files, and the
+12 test files the scheduled workflow enumerates intersect that set at
+exactly `mu1.integration.test.ts`. Swapping dev_scheduled's `GITHUB_APP_*`
+to the fixture App is therefore invisible to every other leg.
+
 **Premise Validation (Phase 0.6).** Cited issues verified live: #9855
 CLOSED, #9947 MERGED (the PR that shipped this leg), #9993 OPEN (the
 nightly tracker the filer updates), #9972 CLOSED via #9991, draft PR
@@ -195,14 +235,35 @@ premises left unvalidated.
    `GITHUB_APP_MINT status=200 slug=<slug> fp=<sha256(pem)[:8]>` (never
    the key or the JWT) or `::error::` + exit 1. Invoked inside the
    workflow's mu1 step before vitest under the same `doppler run` env —
-   reads exactly what the test reads.
+   reads exactly what the test reads. Deepen-pass encodes the three
+   documented workflow-JWT-mint traps (`workflow-jwt-mint-silent-failure-traps.md`
+   / #3187): (a) `gh api` sends `Authorization: token`, never `Bearer` —
+   the probe MUST call `GET /app` with curl via a process-substitution
+   header (`--header @<(printf 'Authorization: Bearer %s' "$JWT")`) so
+   the JWT hits neither argv nor disk; (b) `b64url()` uses
+   `openssl base64 -A | tr '+/' '-_' | tr -d '=\n'` — `base64 -w 0` is
+   GNU-only and fails the portability constraint, while `openssl -A`
+   still emits a trailing newline on some builds (hence the `\n` in the
+   strip set); (c) the probe invocation MUST NOT carry
+   `continue-on-error` — a masked failure leaves `if: failure()`
+   cascades dead and greens a broken leg. Plus the #4384 mint-chain's
+   `openssl rsa -check` pre-flight: validate the PEM first so a corrupted
+   value fails with a named error before signing, and write the PEM only
+   to `mktemp` under `umask 077` in `$RUNNER_TEMP`.
 4. **Shape audit** — `scripts/audit-dev-scheduled-shapes.sh` iterates
    `doppler secrets --only-names -p soleur -c dev_scheduled`, checks every
-   value against its declared shape class (PEM parse, URL scheme, numeric
-   id, token prefix, no-CR/control-byte floor — the #9972 `token_shape`
-   class), prints a name→verdict table (never values), exits nonzero on
-   any FAIL. Findings table posted to #9995; non-GITHUB_APP failures get
-   their own issues.
+   value against its declared shape class, prints a name→verdict table
+   (never values), exits nonzero on any FAIL. Findings table posted to
+   #9995; non-GITHUB_APP failures get their own issues. Deepen-pass
+   correction to the token class (#9972's own lesson,
+   `test-failures/2026-10-11-a-credential-guard-modeled-on-the-vendor-format…`):
+   the class guards the *property* — RFC 6750 b64token alphabet
+   `[A-Za-z0-9._~+/=-]` plus zero CR/control bytes — NOT a vendor-format
+   prefix (`ghp_`, `ghs_`, `github_pat_`), because guarding GitHub's
+   current token shape is what refused GitHub's next shape in #9972.
+   Second lesson applied: the audit's `.test.sh` must assemble any swept
+   literal split (`'_bearer''_ok'`-style) so the test's own text does not
+   join the sweep's population and turn the battery red on itself.
 5. **Verify** — `gh workflow run scheduled-integration-suites.yml` on the
    branch shows the mu1 leg green; re-check on main post-merge.
 
@@ -269,9 +330,14 @@ infrastructure, not a user-affecting runtime surface.`
 ### Phase 1: Fixture App provisioning (consent-gated clicks + agent automation)
 
 1.1. Commit `apps/web-platform/infra/github-ci-fixture-app-manifest.json`
-(name "Soleur CI Fixture", `contents:read` + `metadata:read`,
-`public:false`, `hook_attributes.active:false`, description citing #9995
-and the least-privilege rationale).
+— a minimal manifest (precedent-diffed against
+`github-board-app-manifest.json` + `github-infra-app-manifest.json`):
+`name: "Soleur CI Fixture"`, `url: https://soleur.ai`, description citing
+#9995 + the O1b least-privilege rationale, `public: false`,
+`default_permissions: {contents: read, metadata: read}`,
+`default_events: []`, and **no** `redirect_url`/`hook_attributes` — the
+fixture App has no OAuth callback and no webhook surface, so the
+`${app_domain}` placeholders the sibling manifests carry are omitted.
 1.2. Render the manifest-POST page locally (hidden `<input
 name="manifest">` form targeting
 `https://github.com/organizations/jikig-ai/settings/apps/new`), open via
@@ -617,8 +683,22 @@ spawn unavailable in this harness.
   dormant-integration plan `2026-10-10-feat-dormant-integration-ci-plan.md`,
   fixture plan `archive/20260419-122400-2026-04-19-ops-mu1-fixture-repo-and-ac2-test-plan.md`.
 - Runbooks: `github-app-provisioning.md`, `infra-credential-tiers-8209.md`
-  (§Runtime App key, R0–R9), `github-app-drift.md`,
-  `mu1-signup-workspace-verification.md`.
+  (§Runtime App key, R0–R9; O1/O1b soleur-infra/soleur-board manifest +
+  install + "stdin PEM, then `shred -u`" precedent this plan mirrors),
+  `github-app-drift.md`, `mu1-signup-workspace-verification.md`.
+- Learnings applied by the deepen pass:
+  `best-practices/2026-05-05-workflow-jwt-mint-silent-failure-traps.md`
+  (Bearer-not-token scheme, `b64url` newline strip, no
+  `continue-on-error` masking), `2026-05-25-app-jwt-inline-mint-for-
+  workflow-gh-api-administration-read.md` (`openssl rsa -check`
+  pre-flight, `umask 077`+`$RUNNER_TEMP` PEM),
+  `test-failures/2026-10-11-a-credential-guard-modeled-on-the-vendor-format-refused-the-vendors-next-format.md`
+  (#9972: guard the RFC 6750 property, not the vendor's current format;
+  split-assembled literals so a sweep test doesn't join its own
+  population),
+  `2026-05-28-github-app-installation-org-level-sibling-lookup.md`
+  (installations are org-level — the repo-scoped install on mu1-fixture
+  is the deliberate narrowing, not a lookup shape to reuse).
 - ADR-241 (`terraform-credentials-are-tiered…`), #8609/PR-B isolation,
   `github_app_key_isolated=false` in `apps/web-platform/infra/server.tf`.
 - Code: `apps/web-platform/server/github-app.ts`

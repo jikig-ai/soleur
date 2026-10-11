@@ -19,9 +19,11 @@ fingerprint match.
 ## Phase 1 — Fixture App provisioning (consent gates G1–G3 + agent automation)
 
 - [ ] 1.1 Write `apps/web-platform/infra/github-ci-fixture-app-manifest.json`
-      (name "Soleur CI Fixture"; `default_permissions: {contents: read,
-      metadata: read}`; `public: false`; `hook_attributes.active: false`;
-      description cites #9995 + least-privilege rationale).
+      (minimal manifest: name "Soleur CI Fixture"; `url`; description
+      citing #9995 + O1b rationale; `public: false`;
+      `default_permissions: {contents: read, metadata: read}`;
+      `default_events: []`; NO `redirect_url`/`hook_attributes` — no
+      OAuth/webhook surface).
 - [ ] 1.2 Render the manifest-POST page locally and open via Playwright;
       consent gate G1 (OAuth-consent class) submits GitHub's Create
       GitHub App form.
@@ -52,7 +54,12 @@ fingerprint match.
       `::error::` + exit 1; never prints key/JWT; portable — no
       GNU-only flags, repo timeout→gtimeout→bare pattern if needed) and
       `scripts/probe-github-app-mint.test.sh` covering Guard-1 matrix
-      rows 1–5.
+      rows 1–5. Required shapes (deepen-pass traps): curl
+      `--header @<(printf 'Authorization: Bearer %s' "$JWT")` — `gh api`
+      sends `token`, never `Bearer`; `b64url()` =
+      `openssl base64 -A | tr '+/' '-_' | tr -d '=\n'` (NOT `base64 -w
+      0` — GNU-only); `openssl rsa -check` pre-flight on the PEM;
+      PEM only to `mktemp` under `umask 077` in `$RUNNER_TEMP`.
 - [ ] 2.2 RED drill: run the probe under `doppler run -p soleur -c
       dev_scheduled` BEFORE the credential swap — expect exit 1 with fp
       `8246898e` (matches the CI pemFingerprint).
@@ -72,11 +79,14 @@ fingerprint match.
 
 - [ ] 3.1 Write `scripts/audit-dev-scheduled-shapes.sh` (census via
       `doppler secrets --only-names -p soleur -c dev_scheduled`; shape
-      classes: PEM-parse, URL-scheme, numeric-id, token-prefix, no
-      CR/control bytes; per-name verdict line, never values; nonzero
-      exit on FAIL; fail-closed on empty/unreadable census) and
+      classes: PEM-parse, URL-scheme, numeric-id, token class = RFC 6750
+      b64token alphabet `[A-Za-z0-9._~+/=-]` + zero CR/control bytes —
+      property guard, NOT a vendor-format prefix (the #9972 lesson);
+      per-name verdict line, never values; nonzero exit on FAIL;
+      fail-closed on empty/unreadable census) and
       `scripts/audit-dev-scheduled-shapes.test.sh` covering Guard-2
-      matrix rows.
+      matrix rows — the test MUST assemble any swept literal split so it
+      doesn't join its own sweep population.
 - [ ] 3.2 Run the audit; post the name→verdict table to #9995 (values
       never included).
 - [ ] 3.3 File a follow-up issue per non-GITHUB_APP FAIL
