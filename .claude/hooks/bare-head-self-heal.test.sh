@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Tests for .claude/hooks/bare-head-self-heal.sh (helper cases H1-H10) and its wiring in
-# .claude/hooks/session-rules-loader.sh (loader cases L1-L3).
+# Tests for .claude/hooks/bare-head-self-heal.sh (helper cases H1-H23) and its wiring in
+# .claude/hooks/session-rules-loader.sh (loader cases L1-L5).
 #
 # Synthesized fixtures only: throwaway repos under one mktemp root, built with git plumbing
 # (hash-object / commit-tree / update-ref) so no fixture needs a commit identity of its own.

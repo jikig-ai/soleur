@@ -569,7 +569,7 @@ there, the `[session-context] branch:` line reads `HEAD`, and `worktree-manager.
 (`git read-tree HEAD`) cannot refresh the root's on-disk copies.
 
 `session-rules-loader.sh` repairs it by calling `bare-head-self-heal.sh` as a time-boxed child
-process (5 s) just before it reads the branch, so the branch line already reflects the repaired
+process (5 s, where `timeout` exists; stock macOS has none and runs it untimed) just before it reads the branch, so the branch line already reflects the repaired
 HEAD. The helper header lists the exact conditions. In short: `<dir>/.git` is a real directory whose
 config FILE says `core.bare=true` (read from the file, not from `--is-bare-repository`, which
 ADR-173 records as lying under a masked config), HEAD names a branch that does not EXIST, and
@@ -593,7 +593,9 @@ tokens and always exits 0.
 - **Scope of the trigger:** the heal runs when the session's cwd IS the bare root. A session
   started inside a linked worktree never reaches the root's HEAD, so nothing is repaired until a
   session starts at the root. The same loader is bound for Devin (`devin-dispositions.tsv`), so it
-  heals there too; Codex, Grok and Cursor sessions do not run this loader and get no heal.
+  heals there too. Codex binds the loader from `.codex/config.toml` through
+  `git rev-parse --show-toplevel`, which fails at a bare root, so it never reaches the heal there;
+  Grok and Cursor sessions do not run this loader and get no heal.
 - **Fail-open:** the loader takes only the helper's first line and only if it starts with the
   marker prefix, so a missing, failing, noisy or hung helper cannot inject anything or fail the
   hook.
