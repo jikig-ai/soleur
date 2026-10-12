@@ -132,9 +132,17 @@ names, `BS_TABLE`, `BS_TABLE_S3`, and whatever else the build PR proves each scr
 values are passed by name from inside the `bash -c` shell that `doppler run` starts, because `doppler run` injects its
 secrets into the process it launches and a bare `env -i` placed after it would drop them. It carries no `TF_VAR_*`,
 `AWS_*`, `TUNNEL_*`, `CI_SSH_*`, `WEB_HOST_SSH`, `SHELLOPTS`, `BASH_ENV` or `BASHOPTS` by construction.
-`design-wipe-body-pr.md` made the same move for its post-W8 steps (its section 2.2), so the two documents agree on the
-form; the flip report's row 1.1 form (the six-flag `env -u` deny-list) and the runbook's step-7 paste (three other flags)
-are deny-lists too, so the build PR re-points both to this form. Census row (build PR,
+**One rule per context, stated once and cross-referenced.** After the bridge or the loader the rule is the `env -i`
+allow-list: this document's three reads (H, B, E) ALL run after the bridge (`liveness_precheck` sits after `host_proof`,
+so the `CF Tunnel SSH bridge` step has already written its six names to `$GITHUB_ENV`), and `design-wipe-body-pr.md`
+section 2.2 applies the same allow-list to its steps after W6 and W8 (W9 to W13). Before the bridge a deny-list is
+defensible, but ONLY because no bridge or loader name is in the environment yet: that is the wipe's own rule for its
+W4 and W5 reads (they run before W6 and W8), stated in its section 2.2 as context (2), and no read of THIS document
+falls under it. The two documents therefore agree on the after-bridge form and differ on purpose for the pre-bridge
+reads; neither cites the other for a deny-list string. The flip report's row 1.1 (the six-flag `env -u` deny-list) is a
+deliberate owner-terminal form (an owner's shell has no bridge environment) and is not edited by this design; the
+runbook's step-7 paste (three other flags) is likewise a deny-list, and whether the runbook text moves is the build
+PR's runbook decision. Neither is to be copied into a workflow step. Census row (build PR,
 `git-data-cutover-access.test.sh`): the `GITHUB_ENV` writers that precede `liveness_precheck` are pinned to exactly
 the bridge action's six names above, and any other step before `liveness_precheck` that appends to `$GITHUB_ENV` goes
 RED until it is judged (none does today: a grep of `git-data-cutover.yml` finds no such append; the bridge action is

@@ -10,11 +10,11 @@ reviewer-gated environment; typed volume-id confirm; same-session fresh `boot_co
 emptiness reads; ID-pinned Hetzner delete; 404 read-back as the end event; a terraform plan/apply split cannot
 guarantee same-session re-assertion). F3 (fail closed on empty or unknown input) is applied to every read below.
 
-Reading of F5 recorded here (technical fork, `hr-technical-fork-is-not-an-operator-question`): the ruling's
-"single job" is read as "the assertion and the delete share ONE job", not "the existing `cutover` job"; section 2.2
-resolves it into a separate `wipe` job in the same file. `decision-challenges.md` still quotes F5 verbatim as
-"single job" and MUST record this reinterpretation (that file is updated by another agent; this document only states
-the reading). "Same-session fresh ... emptiness reads" is only partly achievable: sections 3.2 and 3.3 state what
+Reading of F5 (plan-default reading, recorded in `decision-challenges.md` as a taste row, not a technical ruling):
+the ruling's "single job" is read as "the assertion and the delete share ONE job", not "the existing `cutover`
+job"; section 2.2 resolves it into a separate `wipe` job in the same file. `decision-challenges.md` quotes F5
+verbatim as "single job" in its ruling row and records the reinterpretation in its own row (class taste: a reading of
+the F5 wording, not a technical fork). "Same-session fresh ... emptiness reads" is only partly achievable: sections 3.2 and 3.3 state what
 is asserted in the destructive session and what remains inferred from boot time.
 
 Governing text: ADR-239, "Consequences" bullet "The wipe branch needs a rehearsal of its own" and
@@ -84,8 +84,9 @@ gh workflow run git-data-cutover.yml --ref main -f mode=wipe -f confirm=WIPE-GIT
 
 - `mode` gains `wipe` in the choice list. The `confirm` token follows the existing pattern
   (`<VERB>-GIT-DATA`); step `confirm` already rejects a mismatch and already refuses `lineage` outside
-  `mode=unfreeze`; it gains the symmetric refusal: `volume_id` is valid ONLY with `mode=wipe` and must match
-  `^[0-9]{1,12}$` (a mistaken input must not pretend it applied), and `mode=wipe` with an empty `volume_id` refuses.
+  `mode=unfreeze`; it gains the symmetric refusal: `volume_id` is valid ONLY with `mode=wipe` and
+  `mode=wipe_finish` (section 5 gives the re-entry mode the same input) and must match `^[0-9]{1,12}$` (a mistaken
+  input must not pretend it applied), and either wipe mode with an empty `volume_id` refuses.
 - The typed id is the human anchor, not the authority: it must EQUAL the id the Hetzner API returns for the name
   `soleur-git-data-store` (section 3, R2). Two independent sources (the owner's typing and the API) must agree.
 - The environment reviewer is the second human gate. A menu answer or a "go ahead" is not authorization
@@ -102,12 +103,33 @@ gh workflow run git-data-cutover.yml --ref main -f mode=wipe -f confirm=WIPE-GIT
   `gh run list --json ...`; the cutover workflow already says so for the d6 reader ("displayTitle is the workflow
   name on dispatch runs, the target is only visible in the job/step list", comment in step `flip_preconditions`).
   Every design item below that reads an earlier run (W3's rollback-recency read, section 5's `wipe_finish`
-  freshness read) therefore needs a discriminator the API does expose. Specified: a workflow-level `run-name:` of the
-  form `git-data <mode> <volume_id>` (`inputs.mode`, which is a closed choice, and `inputs.volume_id`), read with
-  `gh run list --workflow git-data-cutover.yml --json databaseId,displayTitle,createdAt,conclusion,headBranch,event`
-  and matched in full against the closed pattern `^git-data (wipe|wipe_finish) [0-9]{1,12}$` (anything else, including
-  a title carrying a free-text `volume_id` that is not digits, does not match and is never interpreted); the same
-  read requires `headBranch == main` and `event == workflow_dispatch`. What a prior run DID is read from step
+  freshness read) therefore needs a discriminator the API does expose. Specified: a workflow-level `run-name:` built
+  from `inputs.mode` (a closed choice) and, for the wipe modes only, `inputs.volume_id`, read with
+  `gh run list --workflow git-data-cutover.yml --limit <N> --json databaseId,displayTitle,createdAt,conclusion,headBranch,event`
+  and matched in full against closed patterns, one per title family (anything else, including a title carrying a
+  free-text `volume_id` that is not digits, matches none and is never interpreted as a new-format title):
+  - wipe modes: `^git-data (wipe|wipe_finish) [0-9]{1,12}$`;
+  - every other mode, rollback included (W3 uses this discriminator to find the last `mode=rollback` run, so it needs
+    its own title): `^git-data (proof|flip|rollback|unfreeze|redeploy)$`. The `run-name` expression emits no trailing
+    space and no id for these modes (W1's `volume_id` refusal means a rollback dispatch cannot carry one), and the
+    exact-string census row pins the expression;
+  - **legacy titles are classified, not refused.** `run-name:` does not exist today: every run created before PR-W
+    lands carries the workflow name `git-data cutover (#5274 / ADR-220 / ADR-239)` (read:
+    `gh run list --workflow git-data-cutover.yml --limit 20 --json displayTitle` returns that single title for all
+    20 rows, and `grep -n "run-name" .github/workflows/git-data-cutover.yml` finds nothing). A title that matches
+    exactly `^git-data cutover \(#5274 / ADR-220 / ADR-239\)$` is a LEGACY row and its mode is read from step
+    conclusions (`gh run view <id> --json jobs`: job `cutover`, which mode-specific steps concluded and which were
+    skipped; the build PR names the exact step names after reading the job's step list), the surface the d6 reader
+    already uses. Until PR-W lands, and for every run that predates it afterwards, the interim stamp guard of W3
+    therefore reads legacy titles through step conclusions; refusing them would make W3 refuse forever, and skipping
+    them would blind the guard to the rehearsal rollbacks it exists to catch. A legacy row whose step conclusions
+    cannot be read or do not identify a mode is a refusal (never a skip). A title that is neither a pattern above
+    nor the legacy title is a refusal.
+
+  The same read requires `headBranch == main` and `event == workflow_dispatch`, and carries an explicit `--limit`
+  (working value 100, the build PR fixes it); a list that does not reach back past the stamp's own time (the oldest
+  returned row is newer than the stamp and the list is full) is a refusal, so a rollback run newer than the stamp can
+  never fall outside the window and read as "none". What a prior run DID is read from step
   conclusions (`gh run view <id> --json jobs`: job `wipe`, the named steps of W9 and W11), which is the surface the
   d6 reader already uses, never from a "recorded phase". Adding `run-name:` moves the `WF-inputs-refs` pin once more
   (it gains the `inputs.mode` and `inputs.volume_id` references in `run-name`) and needs its own exact-string census
@@ -119,7 +141,8 @@ gh workflow run git-data-cutover.yml --ref main -f mode=wipe -f confirm=WIPE-GIT
 
 ### 2.2 Job shape: a separate `wipe` job in the same file, not a sixth arm of `cutover`
 
-Resolved fork (technical, `hr-technical-fork-is-not-an-operator-question`). CTO F5 says "single job"; that is about
+Resolved by the plan-default reading recorded in `decision-challenges.md` (taste row; both readings keep the
+assertion and the delete in one session). CTO F5 says "single job"; that is about
 the assertion and the delete living in ONE job so they share one session. It does not require the existing
 `cutover` job. Reasons for a second job inside `git-data-cutover.yml`:
 
@@ -150,15 +173,25 @@ the assertion and the delete living in ONE job so they share one session. It doe
      declare a post-job hook (both are `using: composite`, and the bridge's header says a composite action cannot
      register one), so the requirement is that no later change adds one, pinned by a census row on the two actions'
      `runs.using`.
-   - **One scrub set, stated.** Every Doppler-sourced read in this job that runs BEFORE the loader (W4's Hetzner
-     identity read and W5's Better Stack read) runs its child under exactly the six-flag deny-list of
-     `design-9943-liveness-precheck.md` ("One scrub set for every read"), so it is the same string the 9943 reads
-     carry: `env -u DOPPLER_TOKEN -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u SHELLOPTS -u BASH_ENV -u BASHOPTS`.
-     W5 never uses the narrower `env -u DOPPLER_TOKEN` alone. The `env -i` allow-list above is not a second scrub set
-     for those reads: it is the containment of the steps that run AFTER the loader (W9 to W13), where a deny-list
-     cannot work because the loader has exported an open-ended key set. The live poll library
-     (`scripts/lib/git-data-boot-signal-poll.sh`) strips only the first three of the six; the build PR aligns it to the
-     six, and `flip-preconditions-report.md` section 1.1 is to carry the same string.
+   - **Scrub rule, one per context (stated here for the wipe; `design-9943-liveness-precheck.md` section 4 states the
+     other context and the two cross-reference each other).**
+     (1) **After the bridge or the loader: the `env -i` allow-list**, the rule of the bullet above for W9 to W13 and of
+     `design-9943-liveness-precheck.md` for its three reads, which all run after the bridge. A deny-list cannot work
+     there: the bridge (W6) appends `TUNNEL_SERVICE_TOKEN_ID`, `TUNNEL_SERVICE_TOKEN_SECRET`, `SERVER_IP`,
+     `CLOUDFLARED_PID`, `CI_SSH_KEYFILE` and `WEB_HOST_SSH` to `$GITHUB_ENV`, and the loader (W8) exports an
+     open-ended key set.
+     (2) **Before the bridge: a deny-list, the wipe's own rule and not a citation of 9943.** W4 (Hetzner identity read)
+     and W5 (Better Stack read) are the only Doppler-sourced reads that run BEFORE W6 and W8, so no bridge or loader
+     name is in their environment yet. They therefore run their child under the six-flag deny-list
+     `env -u DOPPLER_TOKEN -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u SHELLOPTS -u BASH_ENV -u BASHOPTS`,
+     never the narrower `env -u DOPPLER_TOKEN` alone, and ONLY while that ordering holds: a census row pins that no
+     step before W5 appends to `$GITHUB_ENV` (the same writer census as the 9943 design) and that W4 and W5 precede
+     W6; if either stops being true the two reads move to the `env -i` allow-list of context (1). The live poll
+     library (`scripts/lib/git-data-boot-signal-poll.sh`) strips only the first three of the six, so W5 does not
+     reuse its `env -u` form unmodified.
+     `flip-preconditions-report.md` section 1.1 uses a six-flag deny-list as a deliberate owner-terminal form (an
+     owner's shell has no bridge or loader environment); it is a different context, not a third copy of this rule, and
+     is not edited by this design.
    - **Masking is defence in depth, not containment.** The loader masks each literal value per line; that does not
      cover derived forms (base64, URL-encoded, JSON-escaped, one line of a multi-line value split off). It is relied on
      and pinned (a census row that the loader still masks), and a second census row pins that no step prints the
@@ -230,15 +263,15 @@ requirements:
 |---|---|---|---|
 | W1 | confirm | none | mode/token/`volume_id` shape (above); refuses `GITHUB_RUN_ATTEMPT != 1` (section 2.1) |
 | W2 | checkout, Doppler CLI | none | as `cutover` |
-| W3 | flag/stamp/pin precheck | `DOPPLER_TOKEN_PRD` only. It is the only step of its JOB naming that secret. The existing census row (`AC9: DOPPLER_TOKEN_PRD is named only by the flag precheck step`, scanning every job) is amended deliberately to name exactly two sites, `cutover.flag_precheck` and `wipe.flag_precheck`, with the same pinned env shape; it is not loosened to "any step". | `git-data-flag-precheck.sh` gains `FLAG_MODE=wipe`: flag must read exactly `true`; `GIT_DATA_LUKS_CUTOVER_AT` must be present, parseable and at least 7 days old (the runbook's soak follow-through floor; the lb-weight-gate's 3 days is a different gate); the pin is read and written as today. Anything else: `verdict=wipe_precondition_flag_not_true`, `wipe_precondition_stamp_absent` or `wipe_precondition_soak_not_elapsed`, exit 5. The stamp is only trustworthy once the rollback arm clears it (`design-rollback-rehearsal.md` F-D: today the rollback does not clear `GIT_DATA_LUKS_CUTOVER_AT`, so a rehearsal's stamp can satisfy the 7 days); until that fix has merged, W3 also requires the stamp to be NEWER than the last `mode=rollback` run. That read uses the run discriminator of section 2.1 (`run-name` matched against a closed pattern, `createdAt` for recency, `headBranch == main`), NOT dispatch inputs or job outputs, which `gh run list` does not expose; the rollback run counts whatever its conclusion (a failed rollback may still have changed the flag), and an unreadable list, an unparseable title or an off-pattern row is a refusal, never a skip. The flag is read AGAIN immediately before W9 (a second, read-only call of the same precheck; a flag that is no longer `true` refuses with `wipe_precondition_flag_not_true`). |
-| W4 | Hetzner identity read (read-only) | `DOPPLER_TOKEN` -> `HCLOUD_TOKEN_READONLY` | section 3, R1-R6, under the six-flag scrub set of section 2.2. The token is read from `prd_terraform` into a masked shell variable and consumed inside this same step; it is NEVER written to `$RUNNER_TEMP`, `$GITHUB_ENV`, `$GITHUB_OUTPUT` or the verdict record. Writes a verdict record under `$RUNNER_TEMP` (server id, both volume ids, `created`, an epoch, and the run binding of section 3.4: `GITHUB_RUN_ID`, `GITHUB_RUN_ATTEMPT` and a per-run random value generated in this step). The W4 epoch is the OUTER bound only; the bound that matters is the W7 epoch (section 3.4). Absent token: refuse; NEVER fall back to the read/write token (the inngest runbook's wording: "absent from prd_terraform: stop, never fall back to HCLOUD_TOKEN"). |
-| W5 | fresh `boot_complete` read | `DOPPLER_TOKEN` (query creds only), the six-flag scrub set of section 2.2 (not `env -u DOPPLER_TOKEN` alone) | section 3, R7. Same pinned git-data tables as `git_data_served_empty_read` in `scripts/lib/git-data-boot-signal-poll.sh`. What this step proves and does not prove is section 3.2: it is boot-time evidence, at least the 7-day soak old, not a statement about now. |
+| W3 | flag/stamp/pin precheck | `DOPPLER_TOKEN_PRD` only. It is the only step of its JOB naming that secret. The existing census row (`AC9: DOPPLER_TOKEN_PRD is named only by the flag precheck step`, scanning every job) is amended deliberately to name exactly two sites, `cutover.flag_precheck` and `wipe.flag_precheck`, with the same pinned env shape; it is not loosened to "any step". | `git-data-flag-precheck.sh` gains `FLAG_MODE=wipe`: flag must read exactly `true`; `GIT_DATA_LUKS_CUTOVER_AT` must be present, parseable and at least 7 days old (the runbook's soak follow-through floor; the lb-weight-gate's 3 days is a different gate); the pin is read and written as today. Anything else: `verdict=wipe_precondition_flag_not_true`, `wipe_precondition_stamp_absent` or `wipe_precondition_soak_not_elapsed`, exit 5. The stamp is only trustworthy once the rollback arm clears it (`design-rollback-rehearsal.md` F-D: today the rollback does not clear `GIT_DATA_LUKS_CUTOVER_AT`, so a rehearsal's stamp can satisfy the 7 days); until that fix has merged, W3 also requires the stamp to be NEWER than the last `mode=rollback` run. That read uses the run discriminator of section 2.1 (the closed `rollback` title pattern, with LEGACY `git-data cutover (#5274 / ADR-220 / ADR-239)` titles classified by step conclusions, `createdAt` for recency, `headBranch == main`, an explicit `--limit` that must reach back past the stamp), NOT dispatch inputs or job outputs, which `gh run list` does not expose; the rollback run counts whatever its conclusion (a failed rollback may still have changed the flag), and an unreadable list, an unclassifiable legacy row, an unparseable title or an off-pattern row is a refusal, never a skip. Until PR-W adds `run-name`, every existing run is a legacy row, so this interim guard rests on step conclusions alone. The flag is read AGAIN immediately before W9 (a second, read-only call of the same precheck; a flag that is no longer `true` refuses with `wipe_precondition_flag_not_true`). |
+| W4 | Hetzner identity read (read-only) | `DOPPLER_TOKEN` -> `HCLOUD_TOKEN_READONLY` | section 3, R1-R6, under the pre-bridge scrub rule of section 2.2. The token is read from `prd_terraform` into a masked shell variable and consumed inside this same step; it is NEVER written to `$RUNNER_TEMP`, `$GITHUB_ENV`, `$GITHUB_OUTPUT` or the verdict record. Writes a verdict record under `$RUNNER_TEMP` (server id, both volume ids, `created`, an epoch, and the run binding of section 3.4: `GITHUB_RUN_ID`, `GITHUB_RUN_ATTEMPT` and a per-run random value generated in this step). The W4 epoch is the OUTER bound only; the bound that matters is the W7 epoch (section 3.4). Absent token: refuse; NEVER fall back to the read/write token (the inngest runbook's wording: "absent from prd_terraform: stop, never fall back to HCLOUD_TOKEN"). |
+| W5 | fresh `boot_complete` read | `DOPPLER_TOKEN` (query creds only), the pre-bridge scrub rule of section 2.2 (not `env -u DOPPLER_TOKEN` alone) | section 3.2. Same pinned git-data tables as `git_data_served_empty_read` in `scripts/lib/git-data-boot-signal-poll.sh`. What this step proves and does not prove is section 3.2: it is boot-time evidence, at least the 7-day soak old, not a statement about now. |
 | W6 | bridge, key fetch, ssh_config | as `cutover` | existing steps, unchanged |
 | W7 | host assertion | none (root key via ssh_config) | ONE ssh session, section 3, H1-H10, new read-only verb in `git-data-cutover.sh`. On success it stamps the W7 epoch that bounds W9 (section 3.4). |
 | W8 | load Tier-B Hetzner token, then guard | `DOPPLER_TOKEN_INFRA_PRIVILEGED` | W8 is the loader (`.github/actions/infra-credentials`), the LAST step before any write, and W8b is the guard, which MUST be the first step immediately after it (no other step, including the SSH bridge or a summary, sits between them). W8b REFUSES unless the loader's `outputs.source` equals `tier_b` (`wipe_token_source_legacy` or `wipe_token_source_unknown`): the legacy arm exports a `HCLOUD_TOKEN` read from `prd_terraform`, which a branch can plant until O11, and a destroy must never run on it. The refusal path has ALREADY lost the race against the loader's export, so before it exits non-zero W8b appends `HCLOUD_TOKEN=` (empty) to `$GITHUB_ENV`; every later `if: always()` step (W11b, W13) then carries no write token under the plain name, and runs under the allow-list rule of section 2.2 for the rest. A census row pins the `source == 'tier_b'` guard, that W8b is the first step after the loader, that the refusal path blanks the token, and that no step between W8b and W9 can bypass it (a mutation row removes the blanking and expects RED). No later step but W9 and W11 may name the write token (W10, W10b and W12 name only the read-only one; teardown names none). Everything after W8 runs under the containment rules of section 2.2 (an `env -i` allow-list, not `env -u HCLOUD_TOKEN`; no third-party `uses:` action). |
 | W9a, W9 | detach | `HCLOUD_TOKEN` | W9a is a tiny step that writes the marker `wipe_progress=detach_attempted` (job output `phase=detach_attempted`) and a `$GITHUB_STEP_SUMMARY` line BEFORE W9 starts, so a runner lost mid-detach does not read as "nothing happened". W9 first refuses (`wipe_assertion_stale`) if more than ~120 s have passed since the W7 epoch (W8 installs the Doppler CLI and downloads the whole privileged project, a variable tens of seconds, so the bound is W7 to W9, not W4 to W9) and re-reads the flag (W3). Then `POST /volumes/<id>/actions/detach` and polls the returned action at a 2 s interval for at most 30 attempts (60 s). Any end state other than `success` (`error`, still `running` after the 30th attempt, an unreadable body) refuses with `wipe_detach_not_confirmed`, whose body says the volume may be attached, detaching or detached and routes to S2. The poll counts toward the W7-to-W11 bound of section 3.4 (it is inside the window, not exempt from it). On `success`, writes `wipe_progress=detached` to `$GITHUB_OUTPUT` (the job output `phase=detached`) and a line to `$GITHUB_STEP_SUMMARY` IMMEDIATELY, because W13 runs only on success and a failed run would otherwise carry no marker. |
 | W10 | post-detach host read | none | same bridge: the by-id link is gone AND the LUKS store still serves (uncached `dd iflag=direct` block read of `/dev/mapper/git-data` plus a root listing, the `git-data-liveness.sh` checks) AND the one-session `store-verified` facts still hold. Detaching the wrong volume would show here, before the irreversible step. Runs under an `env -i` allow-list that carries no Hetzner token, and under an explicit `timeout`. |
-| W10b | Hetzner re-read of the target (read-only) | `HCLOUD_TOKEN_READONLY`, re-fetched in this step | `GET /volumes/<id>`, immediately before the delete: `.name == soleur-git-data-store`, `.server == null`, `.protection.delete == false`, and `GET /volumes?name=soleur-git-data-luks-store` still lists exactly one attached volume. Nothing else re-reads Hetzner state between R1-R6 and the `DELETE`, and the W10 host read proves the mapper still serves, not the identity of the volume about to be deleted. Refuses with `wipe_target_changed` (state S3, detached). **Where the read-only token comes from after the loader (one route, census-pinned):** the step itself holds `DOPPLER_TOKEN: secrets.DOPPLER_TOKEN` (the loader deliberately does not export it) and fetches `HCLOUD_TOKEN_READONLY` from `prd_terraform` into a masked shell variable consumed inside the same step, then runs the curl child under the `env -i` allow-list carrying that one name and no `DOPPLER_*` name; it is never stashed in `$RUNNER_TEMP` or `$GITHUB_ENV`. The census lists exactly four `secrets.DOPPLER_TOKEN` sites in `wipe` (W4, W5, W10b, W12) and the allow-list of every CHILD carries no `DOPPLER_*`, `TF_VAR_*`, `AWS_*` or `TF_STATE_AWS_*` name. |
+| W10b | Hetzner re-read of the target (read-only) | `HCLOUD_TOKEN_READONLY`, re-fetched in this step | `GET /volumes/<id>`, immediately before the delete: `.name == soleur-git-data-store`, `.server == null`, `.protection.delete == false`, and `GET /volumes?name=soleur-git-data-luks-store` still lists exactly one attached volume. Nothing else re-reads Hetzner state between R1-R6 and the `DELETE`, and the W10 host read proves the mapper still serves, not the identity of the volume about to be deleted. Refuses with `wipe_target_changed` (state S3, detached). **Where the read-only token comes from after the loader (one route, census-pinned):** the step itself holds `DOPPLER_TOKEN: secrets.DOPPLER_TOKEN` (the loader deliberately does not export it) and fetches `HCLOUD_TOKEN_READONLY` from `prd_terraform` into a masked shell variable consumed inside the same step, then runs the curl child under the `env -i` allow-list carrying that one name and no `DOPPLER_*` name; it is never stashed in `$RUNNER_TEMP` or `$GITHUB_ENV`. **The single exemption:** the fetch itself (`doppler secrets get HCLOUD_TOKEN_READONLY ...`) is an executing child that needs `DOPPLER_TOKEN`, and it runs after the loader, so it too runs under `env -i`, with an allow-list carrying only that one credential name (`DOPPLER_TOKEN`) plus the non-secret `PATH` (and a `HOME` or config directory if the CLI needs one; the build PR names and pins them). It is the ONLY child in `wipe` whose allow-list carries a `DOPPLER_*` name, and the census row pins that exact shape (a mutation that adds any other name, or a `DOPPLER_*` name to any other child, goes RED); every other CHILD carries no `DOPPLER_*`, `TF_VAR_*`, `AWS_*` or `TF_STATE_AWS_*` name. The `secrets.DOPPLER_TOKEN` site count is section 6's row (five sites in `wipe`: W4, W5, W6's bridge input, W10b, W12). |
 | W11a, W11 | delete | `HCLOUD_TOKEN` | W11a writes the marker `wipe_progress=delete_attempted` (job output `phase=delete_attempted`) and a summary line BEFORE W11 starts. W11 refuses (`wipe_assertion_stale`) if more than the build's bound (working value ~300 s: the W9 bound plus the detach poll and the W10 host read) has passed since the W7 epoch. `DELETE /volumes/<id>`, expect 204; on 2xx writes `wipe_progress=delete_sent` (job output `phase=delete_sent`) and a summary line immediately. |
 | W11b | blank the write token | none | `if: always()`, ordered immediately after W11 so it runs whether W11 succeeded, failed, timed out or was skipped. It appends `HCLOUD_TOKEN=` (empty) to `$GITHUB_ENV`, so the plain name no longer carries the write token in W12 and teardown. It does NOT blank `TF_VAR_hcloud_token`, `TF_STATE_AWS_*`/`AWS_*`, `DOPPLER_TOKEN_TF` or the other loader keys, which stay visible to any step outside the allow-list: that is why every later step, including the always-run teardown W13, runs under the `env -i` allow-list of section 2.2 and not on this blanking alone. |
 | W12 | read-back (the end event) | `HCLOUD_TOKEN_READONLY`, re-fetched in this step by the route of W10b, child under the `env -i` allow-list | `GET /volumes/<id>` must be 404 AND `GET /volumes?name=soleur-git-data-store` must list zero volumes; the LUKS volume must still list exactly one and still be attached. On success writes `wipe_progress=deleted` (job output `phase=deleted`). A 404 with the name still listed means the id was wrong (the registry precedent in `apply-web-platform-infra.yml`, "returned 404, but a volume named ... still exists"), which is its own red verdict. |
@@ -287,7 +320,7 @@ the host currently does with it. Neither is trusted alone: a compromised web-1 o
 
 The latest `stage=boot_complete` row for `host_name=soleur-git-data` from the PINNED git-data tables
 (`BS_GIT_DATA_TABLE` hot UNION `BS_GIT_DATA_TABLE_S3` archive, `ORDER BY dt DESC LIMIT 1`, as
-`git_data_served_empty_sql`), via `--only-secrets BETTERSTACK_QUERY_*` with `env -u DOPPLER_TOKEN`. The shared
+`git_data_served_empty_sql`), via `--only-secrets BETTERSTACK_QUERY_*` under the pre-bridge scrub rule of section 2.2 (not `env -u DOPPLER_TOKEN` alone). The shared
 default table answers zero rows for this host (runbook, "The D6 rotate"), so a read that does not pin the table is
 a refusal by construction. Required: the row exists; its `dt` is at or after the R1 server's `created` (it belongs
 to the CURRENT instance: a destroyed predecessor's row predates it); `luks_mounted=yes`, `fence_on_mapper=yes`,
@@ -407,7 +440,8 @@ each grounded:
    `hcloud_volume_attachment.git_data` (and the LUKS one) with a `create` and `hcloud_volume.git_data` with no
    `delete|forget` (both volumes in `replace` mode, the plaintext volume in `rotate` mode). All of these change when
    the volume leaves Terraform. State as read: #10155 is MERGED (2026-10-12) and the function is present on
-   `origin/main` (read in this worktree via `git show origin/main:...`, not on this branch); its suite header names
+   `origin/main` AND on this branch (merge commit `d7878f4e93` is an ancestor of this branch's HEAD; read in
+   `tests/scripts/lib/git-data-host-replace-gate.sh`); its suite header names
    rows PA1-PA8 (the review brief said PA1-PA7; PA8 is the output-discipline row), so the row set is RE-READ at
    build time and none of the retired names (`git_data_post_apply_gate`, the old PA1/PA8/PA10) is used.
 
@@ -493,7 +527,12 @@ word and a bounded read:
 1. the volume reads DETACHED (`GET /volumes/<id>`: `.server == null`, a FRESH read in this session), its `.name` is
    `soleur-git-data-store`, `.protection.delete == false`, and the typed id equals the id of the name lookup (R2);
 2. R1, R2, R3, R5 and R6 re-read (R4 is replaced by the detached read above and by the LUKS volume still attached to
-   the R1 server);
+   the R1 server). **The arm must create its own verdict record:** these re-reads are the `wipe_finish` counterpart
+   of W4 and write the verdict record of section 3.4 under this run's `$RUNNER_TEMP` (server id, both volume ids,
+   `created`, an epoch and the run binding triple `GITHUB_RUN_ID`, `GITHUB_RUN_ATTEMPT` and a per-run random value),
+   because W10b and W11 re-read that record and refuse on a missing or mismatched binding; an arm that only re-read
+   Hetzner state without writing the record would refuse at W10b every time. A record is never carried over from the
+   earlier `mode=wipe` run;
 3. the LUKS store healthy: one ssh session over the bridge, the W10 checks (uncached `dd iflag=direct` block read of
    `/dev/mapper/git-data` plus a root listing, the one-session store-verified facts);
 4. no emptiness evidence of unbounded age: the arm does NOT consume W5's `boot_complete` row (a volume left detached
@@ -577,10 +616,24 @@ the house shape of `git-data-cutover-access.test.sh` and `workspaces-luks-cutove
   between them, or moves the guard, and expects RED), its refusal path blanks `HCLOUD_TOKEN` in `$GITHUB_ENV` before
   it exits (a mutation row removes the blanking and expects RED, because the legacy arm has already exported its token
   by the time the guard refuses and every later `if: always()` step would carry it), and no step between it and W9
-  can bypass it; `HCLOUD_TOKEN` is referenced only by W9 and W11, and `HCLOUD_TOKEN_READONLY` only by W4, W10b and W12,
+  can bypass it; `HCLOUD_TOKEN` is referenced as a VALUE SOURCE (a request's bearer) only by W9 and W11; the only other
+  occurrences of the literal are the two BLANKING writes `HCLOUD_TOKEN=` (empty) to `$GITHUB_ENV` in W8b's refusal
+  path and in W11b, and the row distinguishes the two (a value-source reference anywhere else, or a blanking write
+  that assigns a non-empty value, goes RED; without the distinction the row is RED by construction).
+  `HCLOUD_TOKEN_READONLY` is referenced only by W4, W10b and W12,
   each of which re-fetches it by the one route of W10b (`secrets.DOPPLER_TOKEN` in the step's own env, consumed in the
-  same step, never written to `$RUNNER_TEMP`, `$GITHUB_ENV` or `$GITHUB_OUTPUT`), so `secrets.DOPPLER_TOKEN` appears
-  in `wipe` at exactly W4, W5, W10b and W12; every step after W8 that executes anything (repo code, ssh, curl, and the
+  same step, never written to `$RUNNER_TEMP`, `$GITHUB_ENV` or `$GITHUB_OUTPUT`; the fetch child is the single
+  `DOPPLER_TOKEN`-carrying `env -i` exemption of W10b). **`secrets.DOPPLER_TOKEN` site census (recounted from
+  `git-data-cutover.yml`):** the `cutover` job has FIVE sites today (step `secrets_check`'s
+  `DOPPLER_TOKEN_PRESENT: ${{ secrets.DOPPLER_TOKEN != '' }}`, the `CF Tunnel SSH bridge` step's
+  `doppler-token: ${{ secrets.DOPPLER_TOKEN }}`, and the step envs of the web-fleet redeploy, the per-host
+  `git_data_store=` assertion and the `finalizer`; the header comment line naming the secret is not a site). `wipe`
+  adds FIVE more, so the workflow total moves from 5 to 10: W4, W5, W6 (the bridge step, which W6 repeats as in
+  `cutover`, so W6 passes `doppler-token: ${{ secrets.DOPPLER_TOKEN }}`), W10b and W12. The census row pins the per-job
+  count and the per-step list (a count alone would hide a moved site), and the `WF9` referenced-secret SET is
+  unchanged. The `liveness_precheck` step of `design-9943-liveness-precheck.md` adds one more `cutover` site if it lands
+  first, so the numbers are re-read at build time, never copied. If W8 also passed the loader's `doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}` input the `wipe`
+  count would be six and the total eleven (see the open item on omitting that input); every step after W8 that executes anything (repo code, ssh, curl, and the
   always-run W11b and W13 included) runs under an `env -i` allow-list that carries NO `TF_VAR_*`, `AWS_*`,
   `TF_STATE_AWS_*` or `DOPPLER_*` name (`env -u HCLOUD_TOKEN` alone fails the row, because the loader exported the
   token under two names and the state key and a Doppler token besides, and there is no redundant `env -u HCLOUD_TOKEN`
@@ -656,6 +709,14 @@ Preconditions (all must hold; the machine enforces what it can):
    `flip_preconditions` step, but it matches only the unconditional "rotate confirm token" step of a successful
    `git_data_host_replace` job, so a plain replace satisfies it and a newer failed or `plan_only=true` rotate is skipped
    by its `continue`; the open decision is #10166 (OPEN), which this precondition requires settled, not assumed.
+   **d6's own failure message pushes the owner toward the rotate hazard.** After a rehearsal or after the flip, the
+   `fail d6_replace_stale` text ("... dispatch apply_target=git-data-host-rotate (confirm=ROTATE-GIT-DATA) from main
+   first.") steers the owner to dispatch exactly the rotate that #10175 says can destroy the only populated copy; the
+   reader also scans only the 40 newest `apply-web-platform-infra.yml` dispatches with no time window, so the message
+   can appear after enough unrelated dispatches. The build PR and the runbook MUST override that message in any state
+   after the flip or after a rehearsal that populated the store (the runbook's D6 rotate section carries "never
+   rotate after the flip", and the d6 failure text is amended or the runbook line takes precedence by name), and the
+   interaction is recorded on #10166 and #10175; nothing in this design pushes the owner to rotate.
    **Rotate hazard (never rotate after the flip).** The rotate precondition reads only the latest `boot_complete` row
    (`served_repos=0` stays true until a reboot), and the plan-time gate accepts the exact delete+create of the LUKS
    volume, so a rotate dispatched after the flip (or after a rehearsal that populated the store) destroys the only
@@ -718,3 +779,35 @@ ADR-239 amendment, the runbook, Art. 30 hand-off to the CLO.
 
 ADR: this design applies ADR-239 as written. PR-C amends ADR-239 (retention end reached; the empty-id branch is
 rehearsed) per the plan's note; no new ADR is needed unless the build changes the destroy sequencing described here.
+
+## 10. Open items for the build PR
+
+Findings of the second verification pass that are NOT redesigned here. Each is a requirement or a decision the build
+PR (PR-W) takes explicitly; none changes a ruling of this document.
+
+- **V-4 (W13 is one step with two conditions).** W13 is written as "summary, teardown" with `if: always()` for the
+  teardown part, while W9's text says "W13 runs only on success" for the summary. A step has one `if:`. Split it into
+  a success-only summary step (the success evidence) and an `if: always()` teardown step under the `env -i`
+  allow-list; the census `order` pin and the "markers are written at W9, W11, W12, never at W13" rule follow.
+- **V-8 (a clean refusal reads as "may have detached").** W9a writes `detach_attempted` and W9 then performs the
+  `wipe_assertion_stale` and flag re-read refusals, so the most probable failure (a slow loader past ~120 s) emails
+  `DETACH_ATTEMPTED_UNCONFIRMED` although nothing was sent; a W1 typo refusal emails `WIPE_STATE_UNKNOWN`
+  ("NOTHING is known to be unchanged"). Conservative, not wrong, but noisy. Either do the stale-epoch and flag
+  re-read checks in W9a BEFORE the marker is written, or add a distinct notify word for "refused before the call".
+- **V-9 (phase vocabulary leftovers and gaps).** (a) `pre_detach` survives in the S1 heading and in "if any step ever
+  writes it" although nothing writes it: drop it or name the writer. (b) `VOLUME_DELETED_TEARDOWN_FAILED` (phase
+  `deleted` with a later failure) has no S-table row and no test row in section 6. (c) Section 5 item 4 says
+  "multiple-matching refuses" and also "for the newest such run": pick one rule.
+- **V-13 and N-19 (archive retention horizon, one measurement).** W5 reads a `boot_complete` row at least 7 days old
+  from the hot-plus-archive union (`BS_GIT_DATA_TABLE_S3`). If the archive retains less than the soak plus the
+  wipe's own lead time, `wipe_boot_unreadable` is guaranteed. Measure the Better Stack archive retention horizon
+  (read-only, no code) and record it on #6897 BEFORE PR-W is built; if it is shorter than the soak, the wipe's
+  evidence source needs a decision first.
+- **V-14 (simplification: omit the loader's legacy input).** The loader's legacy arm exists only when
+  `doppler-token-legacy` is passed; with both token inputs empty it refuses with `no_credential_source` before
+  exporting anything. If `wipe` passes only the Tier-B token and omits `doppler-token-legacy` (unlike
+  `apply-git-data-root-key.yml`), the legacy arm cannot run, and W8b's "the refusal path has ALREADY lost the race"
+  window, its blanking row and the sixth `secrets.DOPPLER_TOKEN` site (section 6 counts five without it) go away. Keep W8b as defence in depth either way.
+- **ADR-241 amendment note (when PR-W lands).** A second Tier-B loader consumer inside a mixed-tier workflow, with an
+  `env -i` allow-list convention for every step after the loader, merits an ADR-241 amendment note (create it with
+  `soleur:architecture`); no new ADR is needed, and this does not change section 9's statement for ADR-239.

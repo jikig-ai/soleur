@@ -5,8 +5,8 @@ slug: git-data-rotate-post-apply-gate-and-cutover-resume
 branch: feat-one-shot-git-data-luks-cutover-8211
 issue: 10137
 # SUPERSEDED 2026-10-12: Phase 2 and closes: moved to PR #10155 (see ## Review reconciliation); this PR must not close #10137/#10067
-closes: "#10137, #10067"
-refs: "#8211, #8209, #8609, #8573, #9943, #10138, #6897, #8551, #10136, #9438"
+closes: ""
+refs: "#10137, #10067, #10155, #10166, #10175, #8211, #8209, #8609, #8573, #9943, #10138, #6897, #8551, #10136, #9438"
 lane: cross-domain
 type: fix
 brand_survival_threshold: aggregate pattern
@@ -163,6 +163,8 @@ Output: `knowledge-base/project/specs/feat-one-shot-git-data-luks-cutover-8211/f
 Notes: all four reads are owner-authorized read-only reads by the standing brief; if a credential is unavailable in the session, record `NOT VERIFIED: credential unavailable` and stop that row (do not substitute). Each Better Stack query is bounded (`--since`, LIMIT) per `hr-never-run-commands-with-unbounded-output`. The report also lists, as "remaining", the owner-gated items (below).
 
 ### Phase 2 - Fix #10137 (closes #10067)
+
+> SUPERSEDED 2026-10-12: the Phase 2 code change was reverted (fa58f3388e; kept at d2a1d0e766) in favour of PR #10155, which owns #10137 and has merged. Do not implement it here, and do not add `Closes #10137`/`Closes #10067` to this PR (see `## Review reconciliation`).
 
 **Files to Edit**
 
@@ -397,7 +399,7 @@ This section is appended after review. The text above is left as written; where 
 ### Phase 2 is SUPERSEDED by PR #10155
 
 - Phase 2 (the post-apply gate) and `closes: "#10137, #10067"` no longer apply to this PR. The code change was reverted from this branch (commit `fa58f3388e`); the implementation is preserved at `d2a1d0e766`.
-- Open sibling PR #10155 (`feat-one-shot-10137-rotate-arm-volume-assert`, same author, reviewed, at ship) carries the same fix with the same three required rows. The posture-assert rows and pins were hardened there instead. This PR is now documents and designs only and must NOT say `Closes #10137` or `Closes #10067`. #10155 closes only #10137 (`gh pr view 10155 --json closingIssuesReferences` returns #10137 alone); #10067 ("fix: git-data-host-rotate asserts both volumes on the rotate path", same defect) is NOT closed by it. To-do for the ship step: when #10155 merges, close #10067 by hand with a comment linking #10155. AC8 above (PR body carries `Closes #10137`) is withdrawn.
+- Sibling PR #10155 (`feat-one-shot-10137-rotate-arm-volume-assert`, same author; MERGED 2026-10-12, after this reconciliation was first written) carries the same fix with the same three required rows. The posture-assert rows and pins were hardened there instead. This PR is now documents and designs only and must NOT say `Closes #10137` or `Closes #10067`. #10155 closes only #10137 (`gh pr view 10155 --json closingIssuesReferences` returns #10137 alone); #10067 ("fix: git-data-host-rotate asserts both volumes on the rotate path", same defect) is NOT closed by it. To-do for the ship step: when #10155 merges, close #10067 by hand with a comment linking #10155. AC8 above (PR body carries `Closes #10137`) is withdrawn.
 
 ### Stale statements corrected
 

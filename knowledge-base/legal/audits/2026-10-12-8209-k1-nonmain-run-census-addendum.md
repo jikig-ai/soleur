@@ -240,7 +240,8 @@ match the statement in the #8209 and #8609 records that run records older than 9
 stay byte-unchanged and the discrepancy goes to the 2026-10-24 re-ruling (tracked on #9066; #10136 is not this item, section 10 ruling 8).
 
 > **Superseded 2026-10-13 (section 10, ruling 10): the sentence above first named #8551 as the re-ruling's tracker. #8551's body carries no 2026-10-24 or section 10.3 reference; #9066's does. The cell now reads #9066.**
- What, if anything,
+
+What, if anything,
 else expires at 90 days (logs, artifacts) is not established by this census, which reads neither. The
 disposition window stays at 90 days because that is the coverage the earlier CLO ruling permits to be claimed.
 The L1(a) subset alone is 19,782, so the earlier 51,876 was not an L1(a)-only count unless run records were

@@ -2,7 +2,7 @@
 
 Plan: knowledge-base/project/plans/2026-10-12-fix-git-data-rotate-post-apply-gate-and-cutover-resume-plan.md
 
-Rows F1 and F2 rule on the extracted post-apply gate. That code change was reverted from this PR (fa58f3388e); the rulings apply to PR #10155's implementation, not to this PR.
+Rows F1 and F2 rule on the extracted post-apply gate. That code change was reverted from this PR (fa58f3388e); the rulings were NOT carried over as written: PR #10155 (merged 2026-10-12) adopted a different shape (its function is `git_data_host_post_apply_assert <plan-json-file> <replace|rotate>`, and under rotate it asserts nothing positive about the LUKS volume, relying on the plan-time gate, its row PA2b). F1 is therefore not adopted there (the gap is noted on #10166's scope) and F2 is adopted in part; the rows below are history of this PR's reverted implementation.
 
 | Item | Class | Ruling |
 |---|---|---|
@@ -16,5 +16,5 @@ Rows F1 and F2 rule on the extracted post-apply gate. That code change was rever
 | One PR vs split (code fix first) | taste | Plan default, not a technical fork (no ruling needed): one PR is acceptable because documents touch only new files; the work phase may ship the code fix first if review prefers. |
 | Rollback rehearsal erasure evidence level | technical | Ruled by CLO agent, 2026-10-12: Level 2 required (synthetic Soleur-owned prod account, mode=proof before and after); Level 1 alone leaves the Art. 17 condition open - see design-rollback-rehearsal.md addendum |
 | K1 addendum sufficiency (metadata-only read) | technical | Ruled by CLO agent, 2026-10-12: metadata-only evidence accepted for SIGNED-OFF PROVISIONAL as an attribution result; no job-level read of the 481 soleur-ai[bot] runs required; conditioned on the carrying PR merging |
-| Duplicate #10137 fix (PR #10153 vs sibling #10155) | taste | Plan default, not a technical fork (no ruling needed): both implementations satisfy the same property; #10155 is reviewed and at ship, so this PR drops its copy (revert fa58f3388e) rather than shipping a conflicting duplicate; reversible, implementation kept at d2a1d0e766. |
+| Duplicate #10137 fix (PR #10153 vs sibling #10155) | taste | Plan default, not a technical fork (no ruling needed): both implementations satisfy the same property; #10155 was reviewed and at ship (it has since merged, 2026-10-12), so this PR drops its copy (revert fa58f3388e) rather than shipping a conflicting duplicate; reversible, implementation kept at d2a1d0e766. |
 | F5 single job vs separate wipe job | taste | Plan-default reading, no technical ruling needed because both readings keep assertion and delete in one session: CTO F5 "single job" is read as assertion and delete sharing one job (the wipe is a separate job from cutover because the Tier-B loader exports HCLOUD_TOKEN to every later step). Class stays taste (a reading of the F5 wording, not a technical fork); recorded here so the reinterpretation is not silent. |
