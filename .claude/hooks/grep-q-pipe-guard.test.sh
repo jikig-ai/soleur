@@ -1215,6 +1215,7 @@ PRODUCER_JOIN=(
   'tests/scripts/test-argv-bearer-sweep.sh | jq | exempt | pass-through shim records argv then execs the real jq on every path'
   'tests/scripts/test-git-data-birth-readiness-gate.sh | grep | exempt | pass-through shim execs the real grep; its exit-2 fault arm is reached only through a here-string since #9210, so no pipe reaches it'
 )
+# PJ-DERIVE-BEGIN
 # One awk program: the five definitions of the derivation. mawk-safe (no \b, no gensub, no intervals).
 #   non-test file  tracked .sh .bash .yml .yaml, not test-shaped, not under knowledge-base/ or fixtures/
 #   test file      tracked .sh, test-shaped
@@ -1321,17 +1322,26 @@ END {
     }
   }
 }'
+# The ONE extension list. The listing pathspec (pj_join_pairs and the fixture runner), the non-test test and the owner-token pattern all
+# read it, so no arm can widen one of the three and not the others. The awk gets it as `-v exts=a|b|c` (pj_exts_re).
+PJ_EXTS='sh bash yml yaml'
+pj_exts_re() { local e out=""; for e in $PJ_EXTS; do out+="${out:+|}$e"; done; printf '%s' "$out"; }
+# pj_derive <listing file> <files...> -> "<test file>\t<verb>\t<non-test file>" per derived pair x producer, unsorted. The ONE call of the derivation:
+# the real run and every derivation fixture go through it, so a fixture exercises the same program the tree does.
+pj_derive() { local listing="$1"; shift; LC_ALL=C awk -v exts="$(pj_exts_re)" "$PJ_AWK" "$listing" "$@"; }
 # pj_join_pairs -> "<test file>\t<verb>\t<non-test file>" per derived pair x producer, unsorted. Tracked files only, so an untracked
 # scratch file cannot move the set. rc 0 whatever it derives; the caller treats an empty result as UNRESOLVED. One awk run over one
 # `git ls-files` listing, one token set per test file; the cheap `index` tests in front of each regex keep it to a few seconds (it reads about 42 MB;
 # measured 1.5 s CPU on an idle host, 5 s under load). LC_ALL=C: no locale-dependent classes, and one tracked fixture holds invalid UTF-8.
 pj_join_pairs() {
-  local -a pj_files=()
-  local f
-  while IFS= read -r -d '' f; do pj_files+=("$f"); done < <(git ls-files -z -- '*.sh' '*.bash' '*.yml' '*.yaml' ':(exclude)knowledge-base')
+  local -a pj_files=() pj_spec=()
+  local f e
+  for e in $PJ_EXTS; do pj_spec+=("*.$e"); done
+  while IFS= read -r -d '' f; do pj_files+=("$f"); done < <(git ls-files -z -- "${pj_spec[@]}" ':(exclude)knowledge-base')
   (( ${#pj_files[@]} > 0 )) || return 0
-  LC_ALL=C awk "$PJ_AWK" <(printf '%s\n' "$PJ_ALL") "${pj_files[@]}"
+  pj_derive <(printf '%s\n' "$PJ_ALL") "${pj_files[@]}"
 }
+# PJ-DERIVE-END
 # pj_pair_set: stdin is pj_join_pairs output; prints the derived (test file, verb) pairs, one `<test file>|<verb>` per line, sorted and unique.
 pj_pair_set() { LC_ALL=C awk -F'\t' '{ print $1 "|" $2 }' | LC_ALL=C sort -u; }
 # pj_trim <variable name>: strip leading and trailing blanks from the named variable.
@@ -1480,6 +1490,119 @@ pj_jc 'stale join row' '' 'ghost.test.sh | v | exempt | variable-named-verb x'
 pj_empty_n=$(pj_judge "$pj_pairs" </dev/null | grep -c 'unlisted pair' || true)
 [[ -z "$pj_jfail" && "$pj_empty_n" == "$pj_n" ]] \
   || sweep_probe_fail+=("producer-join-judge: the table verdicts misread their fixtures ${pj_jfail:-none}; with an empty table ${pj_empty_n:-<err>} of $pj_n derived pairs read as unlisted (want all)")
+mkdir -p "$probe/pj"
+# GUARD 1, the derivation fixture suite. One case table and one loop, run through pj_derive (the call the real run makes) and the shared extension list.
+# A case is `name @@ expectations @@ file=text @@ file=text`: each expectation is `y:VERB` (the pair fxa.test.sh|VERB must derive) or `n:VERB` (it must
+# not); a file spec writes `text` to `name/file` flat in the case's own directory. The text is a bash $'...' string, so a case line never starts at
+# column 0 or with a stub opener, and the placeholders {GT} (a redirect) and {H} (a stub helper) keep this file from reading as a stub itself.
+# Every arm of the derivation has a case that must derive and a case that must not; a new case is one table line and moves no pin.
+PJ_CASES=(
+  $'base-printf @@ y:curl @@ fxprod.sh=set -o pipefail\nprintf x | curl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'base-comment @@ n:curl @@ fxprod.sh=set -o pipefail\n# printf x | curl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'base-status-dropped @@ n:curl @@ fxprod.sh=set -o pipefail\nprintf x | curl -K - || true\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'base-no-pipefail @@ n:curl @@ fxprod.sh=printf x | curl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'base-owner-comment @@ n:curl @@ fxprod.sh=set -o pipefail\nprintf x | curl -K -\n @@ fxa.test.sh=curl() { :; }\n# bash fxprod.sh\n'
+  $'owner-whole-token @@ n:curl @@ fxprod.sh=set -o pipefail\nprintf x | curl -K -\n @@ fxa.test.sh=curl() { :; }\nbash xfxprod.sh\n'
+  $'second-site @@ y:curl y:jq @@ fxprod.sh=set -o pipefail\nprintf x | curl -K -\nprintf y | jq .\n @@ fxa.test.sh=curl() { :; }\njq() { :; }\nbash fxprod.sh\n'
+  $'crlf @@ y:curl @@ fxprod.sh=set -o pipefail\r\nprintf x | curl -K -\r\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'stub-semicolon @@ y:jq @@ fxprod.sh=set -o pipefail\nprintf x | jq .\n @@ fxa.test.sh=printf \'#!/bin/sh\\n\' {GT} "$d/jq"; chmod +x "$d/jq"\nbash fxprod.sh\n'
+  $'stub-unquoted-semicolon @@ y:jq @@ fxprod.sh=set -o pipefail\nprintf x | jq .\n @@ fxa.test.sh=printf x {GT} $d/jq; chmod +x $d/jq\nbash fxprod.sh\n'
+  $'stub-space-semicolon @@ y:jq @@ fxprod.sh=set -o pipefail\nprintf x | jq .\n @@ fxa.test.sh=printf x {GT} "$d/jq" ; chmod +x "$d/jq"\nbash fxprod.sh\n'
+  $'stub-other-verb @@ n:jq @@ fxprod.sh=set -o pipefail\nprintf x | jq .\n @@ fxa.test.sh=printf x {GT} "$d/awk"; chmod +x "$d/awk"\nbash fxprod.sh\n'
+  $'pipe-split @@ y:curl @@ fxprod.sh=set -o pipefail\nprintf x |\n  curl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'pipe-split-tab @@ y:curl @@ fxprod.sh=set -o pipefail\nprintf x |\n\tcurl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'backslash-split @@ y:curl @@ fxprod.sh=set -o pipefail\nprintf \'%s\\n\' \\\n  "$a" | curl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'quoted-trailing-bar @@ n:curl @@ fxprod.sh=set -o pipefail\necho \'a |\ncurl b\'\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'yaml-block-scalar @@ n:curl @@ fxprod.yml=steps:\n  - shell: bash\n    run: echo ab: |\n      curl a\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.yml\n'
+  $'continuation-or-true @@ n:curl @@ fxprod.sh=set -o pipefail\nprintf x \\\n  | curl -K - || true\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'wrapper-timeout @@ y:curl @@ fxprod.sh=set -o pipefail\nprintf x | timeout 5 curl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'wrapper-timeout-k @@ y:curl @@ fxprod.sh=set -o pipefail\nprintf x | timeout -k 2 5 curl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'wrapper-env @@ y:curl @@ fxprod.sh=set -o pipefail\nprintf x | env -i VAR=1 curl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'wrapper-assign @@ y:curl @@ fxprod.sh=set -o pipefail\nprintf x | VAR=1 curl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'wrapper-nice @@ y:curl @@ fxprod.sh=set -o pipefail\nprintf x | nice -n 5 curl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'wrapper-stdbuf @@ y:curl @@ fxprod.sh=set -o pipefail\nprintf x | stdbuf -o L curl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'wrapper-command-p @@ y:curl @@ fxprod.sh=set -o pipefail\nprintf x | command -p curl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'command-v @@ n:curl @@ fxprod.sh=set -o pipefail\nprintf x | command -v curl\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'wrapper-bare @@ n:curl @@ fxprod.sh=set -o pipefail\nprintf x | timeout 5\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'annot-pipe-before @@ y:curl @@ fxprod.sh=set -o pipefail\nprintf x | curl -s "$U" || echo "::error::fail"\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'annot-pipe-after @@ y:jq @@ fxprod.sh=set -o pipefail\necho "::error::fail $X"; printf x | jq .\n @@ fxa.test.sh=jq() { :; }\nbash fxprod.sh\n'
+  $'annot-pipe-inside @@ n:curl @@ fxprod.sh=set -o pipefail\necho "::error::run printf x | curl y"\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'annot-escaped-quote @@ n:curl @@ fxprod.sh=set -o pipefail\necho "::error::say \\"hi\\" printf x | curl y"\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'annot-cmdsub @@ y:tr @@ fxprod.sh=set -o pipefail\necho "::error::fail $(cat f | head -1)"; printf x | tr a b\n @@ fxa.test.sh=tr() { :; }\nbash fxprod.sh\n'
+  $'library-sourced @@ y:curl @@ fxmain.sh=set -o pipefail\n. ./fxlib.sh\n @@ fxlib.sh=printf x | curl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxlib.sh\n'
+  $'library-unsourced-no-pipefail @@ n:curl @@ fxlib.sh=printf x | curl -K -\n @@ fxa.test.sh=set -o pipefail\ncurl() { :; }\nbash fxlib.sh\n'
+  $'library-sourcer-no-pipefail @@ n:curl @@ fxmain.sh=. ./fxlib.sh\n @@ fxlib.sh=printf x | curl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxlib.sh\n'
+  $'helper-arg1 @@ y:curl @@ fxprod.sh=set -o pipefail\nprintf x | curl -K -\n @@ fxa.test.sh={H} curl\nbash fxprod.sh\n'
+  $'helper-arg2 @@ y:curl @@ fxprod.sh=set -o pipefail\nprintf x | curl -K -\n @@ fxa.test.sh={H} "$d" curl\nbash fxprod.sh\n'
+  $'loop-built @@ y:curl y:jq @@ fxprod.sh=set -o pipefail\nprintf x | curl -K -\nprintf y | jq .\n @@ fxa.test.sh=for b in curl jq; do\n  printf x {GT} "$d/$b"\ndone\nbash fxprod.sh\n'
+  $'loop-nonverb @@ n:curl n:jq @@ fxprod.sh=set -o pipefail\nprintf x | curl -K -\nprintf y | jq .\n @@ fxa.test.sh=for b in curl jq; do\n  printf x {GT} "$d/log"\ndone\nbash fxprod.sh\n'
+  $'tf-producer @@ y:curl @@ fxprod.tf=resource "x" "y" {\n  command = <<-EOT\n    set -o pipefail\n    printf x | curl -K -\n  EOT\n}\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.tf\n'
+  $'tf-no-pipefail @@ n:curl @@ fxprod.tf=resource "x" "y" {\n  command = <<-EOT\n    printf x | curl -K -\n  EOT\n}\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.tf\n'
+)
+# pj_split <string>: split on ` @@ ` into the array _pj_f
+pj_split() { local s="$1"; _pj_f=(); while [[ "$s" == *' @@ '* ]]; do _pj_f+=("${s%% @@ *}"); s="${s#* @@ }"; done; _pj_f+=("$s"); }
+# pj_derive_dir <dir> -> the triples of the files flat in <dir>: the files whose extension is on PJ_EXTS are the file set (the real run's listing pathspec),
+# every file is the listing (the basename index).
+pj_derive_dir() {
+  local d="$1" f e
+  local -a sel=()
+  for f in "$d"/*; do
+    f="${f##*/}"
+    for e in $PJ_EXTS; do
+      if [[ "$f" == *."$e" ]]; then sel+=("$f"); break; fi
+    done
+  done
+  (( ${#sel[@]} > 0 )) || return 0
+  ( cd "$d" && pj_derive <(printf '%s\n' *) "${sel[@]}" )
+}
+pj_dfail=""; pj_dy=0
+mkdir -p "$probe/pjd"
+for _c in "${PJ_CASES[@]}"; do
+  pj_split "$_c"
+  _cn="${_pj_f[0]}"; _cd="$probe/pjd/$_cn"; mkdir -p "$_cd"
+  for ((_i = 2; _i < ${#_pj_f[@]}; _i++)); do
+    _tx="${_pj_f[_i]#*=}"; _tx="${_tx//\{GT\}/>}"; _tx="${_tx//\{H\}/mkstub}"
+    printf '%s' "$_tx" > "$_cd/${_pj_f[_i]%%=*}"
+  done
+  _out=$'\n'"$(pj_derive_dir "$_cd")"$'\n'
+  for _x in ${_pj_f[1]}; do
+    _hit=n; [[ "$_out" == *$'\n'"fxa.test.sh"$'\t'"${_x#*:}"$'\t'* ]] && _hit=y
+    if [[ "${_x%%:*}" == y ]]; then
+      if [[ "$_hit" == y ]]; then pj_dy=$((pj_dy + 1)); else pj_dfail+="[$_cn must derive ${_x#*:}]"; fi
+    else
+      [[ "$_hit" == n ]] || pj_dfail+="[$_cn must NOT derive ${_x#*:}]"
+    fi
+  done
+done
+(( pj_dy > 0 )) || pj_dfail+="[the fixture run derived nothing]"
+[[ -z "$pj_dfail" ]] \
+  || sweep_probe_fail+=("derivation-fixtures: ${#PJ_CASES[@]} cases through pj_derive; failed: $pj_dfail")
+# GUARD 3, the row checks and the triple pin driven with fixtures that must make each verdict print (a verdict neutered to a no-op, or a loop
+# that stopped at its first row, must turn this red). pj_check_rows and pj_check_triples are the verdict functions the real run calls.
+printf '%s\n' 'curl() {' '  [ -t 0 ] || cat >/dev/null' '}' > "$probe/pj/rc-ok.sh"
+printf '%s\n' 'curl() {' '  exit 0' '}' > "$probe/pj/rc-bad.sh"
+printf '%s\n' ':' > "$probe/pj/rc-none.sh"
+pj_rcpairs="$probe/pj/rc-ok.sh|curl"$'\n'"$probe/pj/rc-bad.sh|curl"$'\n'"$probe/pj/rc-none.sh|curl"
+pj_rcfail=""
+pj_rcc() { local want="$1" out; shift
+  out="$(printf '%s\n' "$@" | pj_check_rows "$pj_rcpairs" 2>&1)" || true
+  if [[ -z "$want" ]]; then [[ -z "$out" ]] || pj_rcfail+="[clean rows printed: ${out:0:60}]"; else [[ "$out" == *"$want"* ]] || pj_rcfail+="[no '$want' for a fixture that must print it: ${out:0:60}]"; fi; }
+pj_tcc() { local want="$1" out; out="$(pj_check_triples "$2" "$3" 2>&1)" || true
+  if [[ -z "$want" ]]; then [[ -z "$out" ]] || pj_rcfail+="[clean triples printed: ${out:0:60}]"; else [[ "$out" == *"$want"* ]] || pj_rcfail+="[no '$want' for a triple count that must print it: ${out:0:60}]"; fi; }
+_rok="$probe/pj/rc-ok.sh | curl | drains | 1 | *"
+_rbad="$probe/pj/rc-bad.sh | curl | drains | 1 | *"
+_rmal="$probe/pj/rc-ok.sh | curl | drains | x | *"
+pj_rcc '' "$_rok"
+pj_rcc "stubs 'curl' in 1 definitions, the row pins 2" "$probe/pj/rc-ok.sh | curl | drains | 2 | *"
+pj_rcc "defines the 'curl' stub with no stdin drain" "$_rbad"
+pj_rcc 'malformed drains row' "$_rmal"
+pj_rcc 'malformed drains row' "$_rmal" "$_rbad"
+pj_rcc 'with no stdin drain' "$_rmal" "$_rbad"
+pj_rcc 'found 0 stub definitions' "$probe/pj/rc-none.sh | curl | drains | 1 | *"
+pj_tcc '' 5 5
+pj_tcc 'triples and PJ_TRIPLES pins 6' 5 6
+[[ -z "$pj_rcfail" ]] \
+  || sweep_probe_fail+=("producer-join-verdicts: a verdict did not print for the fixture that must make it print: $pj_rcfail")
 # The stub finder, driven over fixtures built with printf (so no fixture line is a statement of this file).
 mkdir -p "$probe/pj"
 printf '%s\n' 'curl() {' '  case " $* " in *" -K - "*) [ -t 0 ] || timeout 2 cat >/dev/null ;; esac' '  exit 0' '}' > "$probe/pj/ok.sh"
@@ -1510,6 +1633,19 @@ pj_e_bad="$(for _n in opener exitfirst trailing; do _tok='-K -'; [[ "$_n" == ope
 pj_e_two="$(pj_defs "$probe/pj/bounded.sh" curl '*' | cut -d' ' -f1 | tr '\n' ' ')"
 [[ "$pj_e_ok" == "ok " && "$pj_e_bad" == "no |no |no |" && "$pj_e_two" == "no ok " ]] \
   || sweep_probe_fail+=("producer-join-finder-edges: heredoc-writer opener with a drain [${pj_e_ok:-none}] (want ok); heredoc opener / exit first / token only in a trailing comment [${pj_e_bad:-none}] (want no |no |no |); a window past the next definition [${pj_e_two:-none}] (want no ok)")
+# GUARD 2, the extent of a stub is its own. Each fixture is one bound alone: another verb's opener (crossverb: the first body is never closed), the closing brace
+# of the function (crossbrace), the heredoc terminator (crossheredoc); two must-pass fixtures hold the other side (a logging write before the drain is not a
+# bound; a one-line stub is its own extent). All five read through pj_defs, the finder the rows use.
+_lw="  printf x $_gt$_gt \"\$d/args\""   # split so that no line of this file reads as a file written to .../args
+printf '%s\n' 'curl() {' '  :' 'gh() {' '  cat >/dev/null' '}' > "$probe/pj/crossverb.sh"
+printf '%s\n' 'curl() {' '  :' '}' 'cat >/dev/null' > "$probe/pj/crossbrace.sh"
+printf '%s\n' "${_cw}curl\" <<'EOF'" ':' 'EOF' 'cat >/dev/null' > "$probe/pj/crossheredoc.sh"
+printf '%s\n' 'curl() {' "$_lw" '  cat >/dev/null' '}' > "$probe/pj/logwrite.sh"
+printf '%s\n' 'curl() { cat >/dev/null; }' > "$probe/pj/oneline.sh"
+pj_w_bad="$(for _n in crossverb crossbrace crossheredoc; do pj_defs "$probe/pj/$_n.sh" curl '*' | cut -d' ' -f1 | tr '\n' ' '; echo -n '|'; done)"
+pj_w_ok="$(for _n in logwrite oneline; do pj_defs "$probe/pj/$_n.sh" curl '*' | cut -d' ' -f1 | tr '\n' ' '; echo -n '|'; done)"
+[[ "$pj_w_bad" == "no |no |no |" && "$pj_w_ok" == "ok |ok |" ]] \
+  || sweep_probe_fail+=("producer-join-window: another verb's opener / the closing brace / the heredoc terminator must end a stub's extent [${pj_w_bad:-none}] (want crossverb, crossbrace, crossheredoc: no |no |no |); a logging write before the drain and a one-line stub must still read as drains [${pj_w_ok:-none}] (want logwrite, oneline: ok |ok |)")
 # THE DYNAMIC CONTROL. A pin reads text; this runs the hazard. The producer writes more than a pipe buffer holds (1 MiB), so a stub
 # that exits unread fails the pipeline under pipefail whatever the timing, with SIGPIPE ignored (CI: EPIPE, rc 1) and with the default
 # disposition (rc 141); a stub that drains it succeeds. Each spelling runs under the interpreter it is tagged for. Both arrays feed the
@@ -1522,6 +1658,8 @@ PJ_DRAIN_OK=(
   'bash|[ ! -t 0 ] && cat >/dev/null'
   'bash|{ [ ! -t 0 ] && cat >/dev/null; } 2>/dev/null || true'
   'bash|dd of=/dev/null 2>/dev/null'
+  'sh|x=$(cat 2>/dev/null)'
+  'sh|cat -'
 )
 PJ_DRAIN_BAD=(
   'sh|cat /dev/null'
@@ -1535,6 +1673,9 @@ PJ_DRAIN_BAD=(
   'sh|printf x | cat >/dev/null'
   'sh|true || cat >/dev/null'
   'sh|cat >/dev/null &'
+  'bash|test -t 0 && cat >/dev/null'
+  'sh|if [ -t 0 ]; then cat >/dev/null; fi'
+  'sh|cat >/dev/null </dev/null'
 )
 # pj_hazard <interp> <ignore|default> <spelling> -> the pipeline's exit status under pipefail, on stdout
 # An sh-tagged spelling runs under dash where the host has it (where /bin/sh is bash a bash-only spelling would pass as sh), else under /bin/sh.
@@ -1595,8 +1736,9 @@ wire_adj=$(grep -A1 -E '^sweep_main \. "\$SWEEP_FLOOR" \|\| sweep_rc=\$\?[[:spac
 wire_pjf=$(grep -cE '^pj_fail\(\) \{ PJ_FAIL=1; printf ' <<<"$_code" || true)
 wire_pjn=$(grep -cE '^\[\[ -z "\$pj_j" \]\] \|\| \{ PJ_FAIL=1; ' <<<"$_code" || true)
 wire_pjg=$(grep -cE '^\(\( PJ_FAIL == 0 \)\) \|\| FAIL=1[[:space:]]*$' <<<"$_code" || true)
-[[ "$wire_pjf" == 1 && "$wire_pjn" == 1 && "$wire_pjg" == 1 ]] \
-  || sweep_probe_fail+=("producer-join-wiring: pj_fail definition ${wire_pjf:-<err>} (want 1), the pj_judge merge ${wire_pjn:-<err>} (want 1), column-0 fold into FAIL ${wire_pjg:-<err>} (want 1)")
+wire_pjj=$(grep -cE '^pj_j="\$\(printf .%s\\n. .*[|] pj_judge "\$pj_pairs"\)"[[:space:]]*$' <<<"$_code" || true)
+[[ "$wire_pjf" == 1 && "$wire_pjn" == 1 && "$wire_pjg" == 1 && "$wire_pjj" == 1 ]] \
+  || sweep_probe_fail+=("producer-join-wiring: pj_fail definition ${wire_pjf:-<err>} (want 1), the pj_judge merge ${wire_pjn:-<err>} (want 1), column-0 fold into FAIL ${wire_pjg:-<err>} (want 1), the pj_j assignment ${wire_pjj:-<err>} (want 1)")
 wire_gate=$(grep -cE '^if \(\( \$\{#sweep_probe_fail\[@\]\} == 0 \)\); then[[:space:]]*$' <<<"$_code" || true)
 wire_exit=$(grep -cE '^exit "\$FAIL"[[:space:]]*$' <<<"$_code" || true)
 wire_else=$(grep -B1 -E '[e]cho "FAIL: the derived sweep.s own probe is broken' <<<"$_code" | grep -cE '^  FAIL=1[[:space:]]*$' || true)
@@ -1607,7 +1749,7 @@ wire_exit1=$(grep -A2 -E '[e]cho "FAIL: the derived sweep.s own probe is broken'
 # of checks (the pin's own line included); comment lines are excluded, so rewording a comment can neither hide a deletion nor trip the pin,
 # and the append is counted only where an `||` or `&&` operator immediately precedes it, so a bare tail with no operator cannot stand in for
 # a deleted check (a decoy that fabricates a whole `|| sweep_probe_fail+=(` line is an edit of the probe itself, which review reads).
-SWEEP_PROBE_CHECKS=47
+SWEEP_PROBE_CHECKS=50
 probe_checks=$(grep -cE '(\|\||&&)[[:space:]]+sweep_probe_fail\+=\(' <<<"$_code" || true)
 [[ "$probe_checks" == "$SWEEP_PROBE_CHECKS" ]] \
   || sweep_probe_fail+=("probe-count: this probe carries ${probe_checks:-<err>} checks, pinned at $SWEEP_PROBE_CHECKS — a deleted check cannot fail, so restore it or, if you ADDED one, raise SWEEP_PROBE_CHECKS")
