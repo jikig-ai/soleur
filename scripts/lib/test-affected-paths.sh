@@ -2157,3 +2157,22 @@ AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_AGENT_RUNNABLE_TEST_SH_PATHS=(
   "plugins/soleur/test/lib/operator-stub-world.sh"
   "scripts/lib/test-affected-paths.sh"
 )
+
+# scripts/probe-github-app-mint (#9995) — the JWT reaches curl only through
+# scripts/lib/bearer-curl.sh's stdin-config channel, and the mu1 step of
+# scheduled-integration-suites.yml invokes it; an edit to either must select it.
+AFFECTED_SCRIPTS_PROBE_GITHUB_APP_MINT_PATHS=(
+  "scripts/probe-github-app-mint.sh"
+  "scripts/probe-github-app-mint.test.sh"
+  "scripts/lib/bearer-curl.sh"
+  ".github/workflows/scheduled-integration-suites.yml"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/audit-dev-scheduled-shapes (#9995) — census + per-name shape audit;
+# declared edges pin its SUT and its own battery.
+AFFECTED_SCRIPTS_AUDIT_DEV_SCHEDULED_SHAPES_PATHS=(
+  "scripts/audit-dev-scheduled-shapes.sh"
+  "scripts/audit-dev-scheduled-shapes.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)

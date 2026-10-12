@@ -1163,7 +1163,7 @@ eqv_sh="$(_eqv "$EQV_SH")"
 # S7c spec directory is a port that reproduces it for measurement, and an unexplained difference between the two is the port drifting.
 PJ_DRAIN_WINDOW=4
 PJ_ALL="$(git ls-files)"
-PJ_TRIPLES=261   # recomputed from a green run: the number of distinct (test file, verb, producer file) triples
+PJ_TRIPLES=262   # recomputed from a green run: the number of distinct (test file, verb, producer file) triples
 PJ_VOCAB=' not-a-command text-only unverified helper-built-stub variable-named-verb pass-through deliberate-fault arm-drain '
 PRODUCER_JOIN=(
   '.claude/hooks/browser-snapshot-credential-guard.test.sh | jq | exempt | deliberate-fault never: def 156 `exit 127` first statement (jq absent shim; the row asserts the degraded deny) (reach T1; t1:rc1/0s red:rc0/1s; hits 1)'

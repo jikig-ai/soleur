@@ -36,7 +36,7 @@ cases=0
 # them and so guard-vacuity-floor's backward slice-widening finds them bound under `set -u`.
 #
 # TOOLCHAIN_FREE_MIN_ASSERTIONS guards the toolchain-SKIP exit. Derived as a genuine lower
-# bound, not a snapshot: 11 fixed assertions (1 AC4 + 7 drift-trip + 1 drift-no-false-positive
+# bound, not a snapshot: 12 fixed assertions (1 AC4 + 8 drift-trip + 1 drift-no-false-positive
 # + 1 P2 anchoring + 1 AC5b direct-baseline) plus at least 1 VALUE_SAFE_PATH module — the
 # module count is product content that #5850 plans to shrink by relocating modules out of
 # server/**, so pinning it at today's 4 would set a landmine; the `vs_checked -lt 1` floor
@@ -45,17 +45,17 @@ cases=0
 # 3 directive-form + 7 transitive 4.x + AC3 couldNotResolve + AC6 + AC6b empty-from-set +
 # AC5 empty-input + AC5 broken-cjs + AC10 + 4.8 + 4.10 + 4.11).
 #
-# These two are the CONSERVATIVE BASE (11 + 1 module, and + 22), used only when the
+# These two are the CONSERVATIVE BASE (12 + 1 module, and + 22), used only when the
 # VALUE_SAFE_PATH extraction fails. On the normal path they are RATCHETED below to
-# `11 + <module count read from $CFG> (+ 22)` the moment that list is known. The bases alone
+# `12 + <module count read from $CFG> (+ 22)` the moment that list is known. The bases alone
 # left slack equal to `module_count - 1` — today 3 fungible slots on the very gate this suite
 # exists to pin (the L1 client -> server-secret import boundary), so three assertions could be
 # deleted with the floor still green. Deriving from the config keeps the shrink-safety the
 # fixed `1` was chosen for (#5850 relocates modules out of server/**, and the floor now
 # follows that down automatically) while removing the slack, and it stays non-tautological
 # because the operand comes from $CFG, not from the loop the floor is watching.
-TOOLCHAIN_FREE_MIN_ASSERTIONS=12
-MIN_ASSERTIONS=34
+TOOLCHAIN_FREE_MIN_ASSERTIONS=13
+MIN_ASSERTIONS=35
 ok()   { printf 'ok   - %s\n' "$1"; pass=$((pass + 1)); }
 bad()  { printf 'FAIL - %s\n' "$1"; fail=$((fail + 1)); }
 
@@ -145,7 +145,7 @@ check_value_safe_drift() {  # returns 0 = value-safe, 1 = drift detected
   grep -qE 'process\.env|process[[:space:]]*\[[[:space:]]*["'\''`]env' "$f" && return 1
   # (c) hardcoded secret literal (canonical token prefixes + PEM header). Same shape
   # the repo-wide secret scanners use; a value-safe registry must hold no secret.
-  grep -qE 'BEGIN [A-Z ]*PRIVATE KEY|ghp_[A-Za-z0-9_]{20,}|ghs_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|sk_(test|live)_[A-Za-z0-9]{20,}|sbp_[A-Za-z0-9]{20,}|xoxb-[A-Za-z0-9-]{20,}|AKIA[0-9A-Z]{16}|dp\.(pt|st|sa|ct)\.[A-Za-z0-9_-]{40,}' "$f" && return 1
+  grep -qE 'BEGIN [A-Z ]*PRIVATE KEY|ghp_[A-Za-z0-9._~+/=-]{20,}|gho_[A-Za-z0-9._~+/=-]{20,}|ghu_[A-Za-z0-9._~+/=-]{20,}|ghs_[A-Za-z0-9._~+/=-]{20,}|ghr_[A-Za-z0-9._~+/=-]{20,}|github_pat_[A-Za-z0-9._~+/=-]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|sk_(test|live)_[A-Za-z0-9]{20,}|sbp_[A-Za-z0-9]{20,}|xoxb-[A-Za-z0-9-]{20,}|AKIA[0-9A-Z]{16}|dp\.(pt|st|sa|ct)\.[A-Za-z0-9_-]{40,}' "$f" && return 1
   # (b1) a value IMPORT statement: a line beginning with `import ` (the single-line
   # form OR the opener of a multi-line import) that is NOT a whole-clause `import type`.
   # A mixed `import { type A, realX }` opener begins with `import ` (not `import type`),
@@ -177,12 +177,21 @@ trap 'rm -rf -- "${DRIFT_TMP:-}"' EXIT INT TERM
 printf 'export const X = process.env.SECRET_KEY;\n' > "$DRIFT_TMP/bad-env-dot.ts"
 printf 'export const X = process["env"]["SECRET_KEY"];\n' > "$DRIFT_TMP/bad-env-bracket.ts"
 SK="sk_""live_"; printf 'export const K = "%s%s";\n' "$SK" "0123456789abcdefABCDEF0123456789" > "$DRIFT_TMP/bad-literal.ts"
+# New-shape GitHub installation token (ghs_<APPID>_<JWT>, ~390-520 chars over the
+# canonical credential alphabet). Prefix split-assembled for the same reason as SK
+# above; the 64-char tail (x6 = 384 + 4 = 388 total) carries every newly-admitted
+# byte, with `.` at tail offset 13 so the legacy [A-Za-z0-9_]{20,} run dies below
+# its floor — a reverted class CANNOT trip on this fixture, so the widened arm is
+# what the drift row below actually proves.
+GHS="ghs""_"
+GHS_SEG='kJ8xQ2mW9pL4.vR7tN3bS_5y~cH0gF+uA6wE9zX2M7/K4dP8qT1jG6vB0nC=hZ-i'
+printf 'export const K = "%s%s";\n' "$GHS" "$GHS_SEG$GHS_SEG$GHS_SEG$GHS_SEG$GHS_SEG$GHS_SEG" > "$DRIFT_TMP/bad-ghs-literal.ts"
 printf 'import {\n  SECRET_TOKEN,\n} from "@/server/secret";\nexport const g = () => SECRET_TOKEN;\n' > "$DRIFT_TMP/bad-multiline.ts"
 printf 'import { X } from "@/server/secret";\nexport const g = () => X;\n' > "$DRIFT_TMP/bad-import.ts"
 printf 'export { SECRET_TOKEN } from "@/server/secret";\n' > "$DRIFT_TMP/bad-reexport.ts"
 printf 'export const load = () => import("@/server/secret");\n' > "$DRIFT_TMP/bad-dynamic.ts"
 printf 'import type { T } from "@/lib/types";\nexport const LEADERS = ["a"] as const;\nexport function isX(s: string): s is T { return true; }\n' > "$DRIFT_TMP/good.ts"
-for bad in bad-env-dot bad-env-bracket bad-literal bad-multiline bad-import bad-reexport bad-dynamic; do
+for bad in bad-env-dot bad-env-bracket bad-literal bad-ghs-literal bad-multiline bad-import bad-reexport bad-dynamic; do
   cases=$((cases + 1))
   if ! check_value_safe_drift "$DRIFT_TMP/$bad.ts"; then
     ok "AC5(D4): drift guard TRIPS on $bad (non-vacuous)"
@@ -232,7 +241,7 @@ else
   read -ra _vs_declared <<< "$VS_MODULES"
   vs_expected=${#_vs_declared[@]}
   if [[ "$vs_expected" -gt 1 ]]; then
-    TOOLCHAIN_FREE_MIN_ASSERTIONS=$((11 + vs_expected))
+    TOOLCHAIN_FREE_MIN_ASSERTIONS=$((12 + vs_expected))
     MIN_ASSERTIONS=$((TOOLCHAIN_FREE_MIN_ASSERTIONS + 22))
     printf 'note - anti-vacuity floors derived from %d declared VALUE_SAFE_PATH module(s): toolchain-free >= %d, full >= %d\n' \
       "$vs_expected" "$TOOLCHAIN_FREE_MIN_ASSERTIONS" "$MIN_ASSERTIONS"
