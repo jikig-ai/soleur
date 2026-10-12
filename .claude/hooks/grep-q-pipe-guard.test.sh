@@ -1304,9 +1304,16 @@ function feed(raw,   t, s, q, nd, ns) {
 }
 function flush() { if (hold) { hold = 0; site(cur) } }
 function addfp(f, w) { if (!((f, w) in fps)) { fps[f, w] = 1; nfp[f]++; fpw[f, nfp[f]] = w } }
+# R4: the pipefail option reaches a pipe from the process that runs it, so a library without the token has it when a file that sources the library has it
+# (one hop; the sourcing file may be a test file). A subprocess does not inherit the option, so the owning test file is not a source of it.
+function libpf(b,   i) {
+  for (i = 1; i <= nsb[b]; i++) if (fpf[sb[b, i]]) return 1
+  return 0
+}
 function fin(   i, k) {
   if (file == "") return
-  if (isnt && pf) for (i = 1; i <= nc; i++) if (cobs[i]) {
+  fpf[file] = pf
+  if (isnt) for (i = 1; i <= nc; i++) if (cobs[i]) {
     k = file SUBSEP cw[i]
     if (!(k in sit)) { sit[k] = 1; nsw[file]++; sw[file, nsw[file]] = cw[i] }
   }
@@ -1362,16 +1369,18 @@ FNR == 1 {
         sub(/^(make_stub|write_stub|stub_cmd|mkstub|stub)[ \t]+"?/, "", m); hs[file, m] = 1
       }
     }
-    if (l ~ /^[ \t]*(\.|source)[ \t]/ && match(l, SRCRE)) {
-      m = substr(l, RSTART, RLENGTH); sub(/^[ \t]*(\.|source)[ \t]+"?/, "", m); sub(/"$/, "", m)
-      nref[file]++; ref[file, nref[file]] = base(m)
-    }
+  }
+  if (l ~ /^[ \t]*(\.|source)[ \t]/ && match(l, SRCRE)) {
+    m = substr(l, RSTART, RLENGTH); sub(/^[ \t]*(\.|source)[ \t]+"?/, "", m); sub(/"$/, "", m); m = base(m)
+    nsb[m]++; sb[m, nsb[m]] = file
+    if (ist) { nref[file]++; ref[file, nref[file]] = m }
   }
 }
 END {
   flush(); fin()
   for (ni = 1; ni <= nn; ni++) {
     f = nlist[ni]; b = base(f)
+    if (!fpf[f] && !libpf(b)) continue
     for (ti = 1; ti <= nt; ti++) {
       t = tl[ti]
       if (!((t, b) in tok)) continue
