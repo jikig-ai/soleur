@@ -1536,6 +1536,7 @@ while (( i < ${#a[@]} )); do
     -o) out="${a[i+1]}"; i=$((i + 1)) ;;
     -w) wfmt="${a[i+1]}"; i=$((i + 1)) ;;
     --config) [[ "${a[i+1]}" == "-" ]] && cfg=1; i=$((i + 1)) ;;
+    -H) [[ "${a[i+1]}" == "@-" ]] && cfg=1; i=$((i + 1)) ;;
     http*) url="${a[i]}" ;;
   esac
   i=$((i + 1))
@@ -1548,6 +1549,7 @@ esac
 [[ "$st" == 000 ]] && { printf 'curl: (7) Failed to connect\n' >&2; exit 7; }
 [[ -n "$out" && -n "$bodyf" ]] && cp "$bodyf" "$out"
 [[ "$wfmt" == '%{http_code}' ]] && printf '%s' "$st"
+[[ "$wfmt" == '\n%{http_code}' ]] && printf '\n%s' "$st"
 exit 0
 BK_CURL_EOF
 chmod +x "$BKBIN/doppler" "$BKBIN/curl"
@@ -1710,11 +1712,12 @@ echo "=== stage S2-A part 1: backup arm (#8767) done ==="
 
 # =====================================================================================
 # STAGE S2-A part 2: the HMAC key of the deploy webhook off `openssl`'s argument list (D1/D3).
-# 17 of the 19 `openssl dgst -sha256 -hmac "$WEBHOOK_SECRET"` sites become the CANONICAL SNIPPET: the key rides
+# All 19 `openssl dgst -sha256 -hmac "$WEBHOOK_SECRET"` sites are the CANONICAL SNIPPET: the key rides
 # the python3 child's ENVIRONMENT only (per-command prefix). The two sites in the `registry-probe)` and
-# `doublefire-probe)` arms are HELD BACK (plan decision D1: the infra suite's tool census counts a python3 token
-# in those arms; the suite edit is tracked with S4/S5). The committed oracle is the OTHER implementation,
-# `openssl dgst -hmac`, only ever run here with a synthetic key.
+# `doublefire-probe)` arms were the last holdouts (the infra suite's tool census counted a python3 token in those arms); #9757 converted
+# them and moved the allowance into the census's single code view (`_probe_arms_code_of` in
+# apps/web-platform/infra/cutover-inngest-workflow.test.sh: exactly the two canonical line forms, fixed-string whole-line). The committed
+# oracle is the OTHER implementation, `openssl dgst -hmac`, only ever run here with a synthetic key.
 # =====================================================================================
 HM_CANON="$(cat <<'HM_EOF'
 HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())'
@@ -1785,7 +1788,7 @@ if [[ -e "$ROWS/hm-argv/tools/python3-1.argv" && -e "$ROWS/hm-argv/tools/python3
   row "canonical snippet: the key is in python3's environment (HMAC_KEY present) and in no recorded argument of python3" ok
 else row "canonical snippet: the key is in python3's environment (HMAC_KEY present) and in no recorded argument of python3" fail "argv/env evidence missing or key in argv"; fi
 
-# --- parity: every converted copy equals the canonical string; the -hmac operand lives only at the two held-back arms ---
+# --- parity: every converted copy equals the canonical string; no -hmac operand is left in the script ---
 hm_arm_count() { # <from-arm-regex> <to-arm-regex> <ere> <file> -> count of lines matching <ere> inside the arm range [from, to)
   awk -v from="$1" -v to="$2" -v re="$3" '$0 ~ from {f=1; next} $0 ~ to {f=0} f && $0 ~ re {n++} END {print n+0}' "$4"
 }
@@ -1796,7 +1799,8 @@ hm_arm_count() { # <from-arm-regex> <to-arm-regex> <ere> <file> -> count of line
 #   HM_BAD    space-separated copy indices that differ from the canonical snippet, lost the SIG=$(printf <body> | ...) shape, lost the
 #             `|| VAR=""` fallback, or sign a body other than the one their own request carries (derived per site, see below)
 #   HM_NCOPY  converted copies; HM_NOLD lines carrying the -hmac operand; HM_RP / HM_DP of those inside the registry-probe) /
-#   doublefire-probe) arms; HM_PYARMS python3 tokens inside the registry-probe) .. rearm) range
+#   doublefire-probe) arms; HM_PYARMS python3 tokens inside the registry-probe) .. rearm) range (the two canonical lines, the ONLY ones the
+#   infra suite's census allowance lets through)
 HM_RE_EMPTY='^[[:space:]]*[A-Z][A-Za-z0-9_]*=\$\(printf '"''"' \| HMAC_KEY='
 HM_RE_PAYLOAD='^[[:space:]]*[A-Z][A-Za-z0-9_]*=\$\(printf '"'%s'"' "\$PAYLOAD" \| HMAC_KEY='
 hm_audit() {
@@ -1839,25 +1843,18 @@ hm_audit() {
   HM_DP="$(hm_arm_count '^[[:space:]]+doublefire-probe[)]$' '^[[:space:]]+rearm[)]$' 'openssl dgst -sha256 -hmac "[$]WEBHOOK_SECRET"' "$f")"
   HM_PYARMS="$(hm_arm_count '^[[:space:]]+registry-probe[)]$' '^[[:space:]]+rearm[)]$' 'python3' "$f")"
 }
-# hm_audit_ok: the whole parity contract at once (17 identical copies, -hmac only at the two held-back arm anchors).
-hm_audit_ok() { [[ -z "$HM_BAD" && "$HM_NCOPY" == 17 && "$HM_NOLD" == 2 && "$HM_RP" == 1 && "$HM_DP" == 1 && "$HM_PYARMS" == 0 ]]; }
+# hm_audit_ok: the whole parity contract at once (19 identical copies, no -hmac operand anywhere, exactly the two canonical python3 lines in the probe-arm range).
+hm_audit_ok() { [[ -z "$HM_BAD" && "$HM_NCOPY" == 19 && "$HM_NOLD" == 0 && "$HM_RP" == 0 && "$HM_DP" == 0 && "$HM_PYARMS" == 2 ]]; }
 hm_audit "$CUT"
-for hm_i in $(seq 1 17); do
+for hm_i in $(seq 1 19); do
   if [[ " $HM_BAD " != *" $hm_i "* && "$hm_i" -le "$HM_NCOPY" ]]; then row "cutover HMAC copy $hm_i equals the canonical snippet, keeps the SIG=\$(printf <body> | ...) || SIG=\"\" shape and signs the body its own request carries" ok
   else row "cutover HMAC copy $hm_i equals the canonical snippet, keeps the SIG=\$(printf <body> | ...) || SIG=\"\" shape and signs the body its own request carries" fail "copy missing or differs from the canonical string, lost its fallback, or signs the wrong body (bad:$HM_BAD copies=$HM_NCOPY)"; fi
 done
-if [[ "$HM_NCOPY" == 17 && -z "$HM_BAD" ]]; then row "cutover HMAC: exactly 17 converted copies (19 sites minus the 2 held back by plan decision D1), no extra or divergent copy" ok
-else row "cutover HMAC: exactly 17 converted copies (19 sites minus the 2 held back by plan decision D1), no extra or divergent copy" fail "copies=$HM_NCOPY bad:$HM_BAD"; fi
-if [[ "$HM_NOLD" == 2 && "$HM_RP" == 1 && "$HM_DP" == 1 && "$HM_PYARMS" == 0 ]]; then
-  row "cutover HMAC: the -hmac operand appears exactly twice, once in the registry-probe) arm and once in the doublefire-probe) arm, and no python3 token is in those arms" ok
-else row "cutover HMAC: the -hmac operand appears exactly twice, once in the registry-probe) arm and once in the doublefire-probe) arm, and no python3 token is in those arms" fail "file=$HM_NOLD registry-probe=$HM_RP doublefire-probe=$HM_DP python3-in-arms=$HM_PYARMS"; fi
-hm_cm=0
-while IFS= read -r ln; do
-  n="${ln%%:*}"; prev="$(sed -n "$((n - 1))p" "$CUT" | sed 's/^[[:space:]]*//')"
-  [[ "$prev" == '#'* && "$prev" == *D1* && "$prev" == *S4/S5* && "$prev" == *'#9757'* ]] && hm_cm=$((hm_cm + 1))
-done < <(grep -n -F -e '-hmac' "$CUT")
-if [[ "$hm_cm" == 2 ]]; then row "cutover HMAC: each held-back site carries a one-line comment naming plan decision D1, the S4/S5 suite edit and its tracker #9757" ok
-else row "cutover HMAC: each held-back site carries a one-line comment naming plan decision D1, the S4/S5 suite edit and its tracker #9757" fail "commented=$hm_cm"; fi
+if [[ "$HM_NCOPY" == 19 && -z "$HM_BAD" ]]; then row "cutover HMAC: exactly 19 converted copies (every one of the 19 sites), no extra or divergent copy" ok
+else row "cutover HMAC: exactly 19 converted copies (every one of the 19 sites), no extra or divergent copy" fail "copies=$HM_NCOPY bad:$HM_BAD"; fi
+if [[ "$HM_NOLD" == 0 && "$HM_RP" == 0 && "$HM_DP" == 0 && "$HM_PYARMS" == 2 ]]; then
+  row "cutover HMAC: zero -hmac operands remain in the script (registry-probe) and doublefire-probe) are converted) and the probe-arm range holds exactly the two canonical python3 lines" ok
+else row "cutover HMAC: zero -hmac operands remain in the script (registry-probe) and doublefire-probe) are converted) and the probe-arm range holds exactly the two canonical python3 lines" fail "file=$HM_NOLD registry-probe=$HM_RP doublefire-probe=$HM_DP python3-in-arms=$HM_PYARMS"; fi
 
 # MUTATIONS of the parity contract: one mutant per copy index and per kind, each judged by the SAME hm_audit. A suite that
 # only ever audits the first copy, or counts instead of comparing bytes, leaves one of these green.
@@ -1879,7 +1876,7 @@ HM_PFX='HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c'
 # exactly the line it claims to, so a mutation that landed somewhere else cannot satisfy its row.
 hm_touched() { diff "$1" "$2" | grep -E '^[0-9,]+c[0-9,]+$' | paste -sd' ' -; }
 hm_nth_line() { grep -n -F -e "$3" "$2" | sed -n "${1}p" | cut -d: -f1; } # <n> <file> <literal> -> line number of the n-th match
-for idx in $(seq 1 17); do
+for idx in $(seq 1 19); do
   nth_replace "$CUT" "$BKDIR/hm-mut-$idx.sh" "$HM_PFX" 'HMAC_KEY="$WEBHOOK_SECRET" python3 -c' "$idx" || fatal "parity mutation $idx did not land"
   hm_audit "$BKDIR/hm-mut-$idx.sh"; hm_ln="$(hm_nth_line "$idx" "$CUT" 'HMAC_KEY="$WEBHOOK_SECRET" python3')"
   if [[ "$HM_BAD" == " $idx" && "$(hm_touched "$CUT" "$BKDIR/hm-mut-$idx.sh")" == "${hm_ln}c${hm_ln}" ]] && ! hm_audit_ok; then row "mutation: dropping -I from copy $idx alone (line $hm_ln only) is caught as exactly copy $idx (parity is per copy, not first copy)" ok
@@ -1891,20 +1888,21 @@ if [[ "$HM_BAD" == " 7" && "$(hm_touched "$CUT" "$BKDIR/hm-mut-emptykey.sh")" ==
 else row "mutation: dropping the empty-key exit from copy 7 alone (line $hm_ln only) is caught as exactly copy 7" fail "bad:$HM_BAD touched:$(hm_touched "$CUT" "$BKDIR/hm-mut-emptykey.sh")"; fi
 nth_replace "$CUT" "$BKDIR/hm-mut-argvback.sh" "$HM_CANON" "openssl dgst -sha256 -hmac \"\$WEBHOOK_SECRET\" | sed 's/.*= //'" 5 || fatal "parity mutation argvback did not land"
 hm_audit "$BKDIR/hm-mut-argvback.sh"
-if [[ "$HM_NCOPY" == 16 && "$HM_NOLD" == 3 ]] && ! hm_audit_ok; then row "mutation: the key put back on openssl's argv in copy 5 is caught (16 copies, a third -hmac operand outside the held-back arms)" ok
-else row "mutation: the key put back on openssl's argv in copy 5 is caught (16 copies, a third -hmac operand outside the held-back arms)" fail "copies=$HM_NCOPY -hmac=$HM_NOLD"; fi
+if [[ "$HM_NCOPY" == 18 && "$HM_NOLD" == 1 ]] && ! hm_audit_ok; then row "mutation: the key put back on openssl's argv in copy 5 is caught (18 copies, a -hmac operand where the script has none)" ok
+else row "mutation: the key put back on openssl's argv in copy 5 is caught (18 copies, a -hmac operand where the script has none)" fail "copies=$HM_NCOPY -hmac=$HM_NOLD"; fi
 { cat "$CUT"; printf '%s\n' "    SIGX=\$(printf '' | ${HM_CANON/sha256/sha1})"; } > "$BKDIR/hm-mut-extra.sh"
 hm_audit "$BKDIR/hm-mut-extra.sh"
-if [[ "$HM_NCOPY" == 18 && " $HM_BAD " == *" 18 "* ]] && ! hm_audit_ok; then row "mutation: an 18th inline copy that differs by one byte is caught (copy count and byte comparison)" ok
-else row "mutation: an 18th inline copy that differs by one byte is caught (copy count and byte comparison)" fail "copies=$HM_NCOPY bad:$HM_BAD"; fi
-nth_replace "$CUT" "$BKDIR/hm-mut-heldpy.sh" 'openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed '"'"'s/.*= //'"'"')' "$HM_CANON)" 1 || fatal "parity mutation heldpy did not land"
-hm_audit "$BKDIR/hm-mut-heldpy.sh"
-if [[ "$HM_NOLD" == 1 && "$HM_RP" == 0 && "$HM_DP" == 1 && "$HM_PYARMS" -ge 1 ]] && ! hm_audit_ok; then row "mutation: converting the held-back registry-probe) site (python3 inside the census range) is caught, pinned by its arm anchor (registry-probe) count 0, doublefire-probe) count 1)" ok
-else row "mutation: converting the held-back registry-probe) site (python3 inside the census range) is caught, pinned by its arm anchor (registry-probe) count 0, doublefire-probe) count 1)" fail "-hmac=$HM_NOLD registry-probe=$HM_RP doublefire-probe=$HM_DP python3-in-arms=$HM_PYARMS"; fi
-nth_replace "$CUT" "$BKDIR/hm-mut-heldpy2.sh" 'openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed '"'"'s/.*= //'"'"')' "$HM_CANON)" 2 || fatal "parity mutation heldpy2 did not land"
-hm_audit "$BKDIR/hm-mut-heldpy2.sh"
-if [[ "$HM_NOLD" == 1 && "$HM_RP" == 1 && "$HM_DP" == 0 && "$HM_PYARMS" -ge 1 ]] && ! hm_audit_ok; then row "mutation: converting the held-back doublefire-probe) site is caught, pinned by its arm anchor (registry-probe) count 1, doublefire-probe) count 0)" ok
-else row "mutation: converting the held-back doublefire-probe) site is caught, pinned by its arm anchor (registry-probe) count 1, doublefire-probe) count 0)" fail "-hmac=$HM_NOLD registry-probe=$HM_RP doublefire-probe=$HM_DP python3-in-arms=$HM_PYARMS"; fi
+if [[ "$HM_NCOPY" == 20 && " $HM_BAD " == *" 20 "* ]] && ! hm_audit_ok; then row "mutation: a 20th inline copy that differs by one byte is caught (copy count and byte comparison)" ok
+else row "mutation: a 20th inline copy that differs by one byte is caught (copy count and byte comparison)" fail "copies=$HM_NCOPY bad:$HM_BAD"; fi
+# The two probe arms (copies 2 and 3, in file order) put back on the argv form: each revert is caught by the parity contract AND by the S4 HMAC census
+# (the allow-list is empty), pinned to its own arm anchor. The two mutants live on in $BKDIR for the census rows in stage S4.
+for hm_rv in "revert1:2:1:0:registry-probe)" "revert2:3:0:1:doublefire-probe)"; do
+  IFS=: read -r hm_rvn hm_rvi hm_rvrp hm_rvdp hm_rvarm <<< "$hm_rv"
+  nth_replace "$CUT" "$BKDIR/hm-mut-$hm_rvn.sh" "$HM_CANON" "openssl dgst -sha256 -hmac \"\$WEBHOOK_SECRET\" | sed 's/.*= //'" "$hm_rvi" || fatal "parity mutation $hm_rvn did not land"
+  hm_audit "$BKDIR/hm-mut-$hm_rvn.sh"; hm_ln="$(hm_nth_line "$hm_rvi" "$CUT" 'HMAC_KEY="$WEBHOOK_SECRET" python3')"
+  if [[ "$HM_NCOPY" == 18 && "$HM_NOLD" == 1 && "$HM_RP" == "$hm_rvrp" && "$HM_DP" == "$hm_rvdp" && "$HM_PYARMS" == 1 && "$(hm_touched "$CUT" "$BKDIR/hm-mut-$hm_rvn.sh")" == "${hm_ln}c${hm_ln}" ]] && ! hm_audit_ok; then row "mutation: reverting the $hm_rvarm site to openssl dgst -hmac (line $hm_ln only) is caught, pinned by its arm anchor (registry-probe) count $hm_rvrp, doublefire-probe) count $hm_rvdp)" ok
+  else row "mutation: reverting the $hm_rvarm site to openssl dgst -hmac (line $hm_ln only) is caught, pinned by its arm anchor (registry-probe) count $hm_rvrp, doublefire-probe) count $hm_rvdp)" fail "copies=$HM_NCOPY -hmac=$HM_NOLD registry-probe=$HM_RP doublefire-probe=$HM_DP python3-in-arms=$HM_PYARMS touched:$(hm_touched "$CUT" "$BKDIR/hm-mut-$hm_rvn.sh") want:${hm_ln}c${hm_ln}"; fi
+done
 
 # Mutants of the two per-site facets hm_audit now owns (the fail-safe fallback and the body each site signs). hm_site_mut rewrites ONLY
 # the idx-th converted site line (sets HM_MUT_LN to its line number); every row asserts the mutant touched exactly that line, that the
@@ -1936,7 +1934,7 @@ hm_first_idx() { # <file> <literal> -> the index, among the converted copies, of
 }
 hm_audit "$CUT"; hm_last="$HM_NCOPY"
 hm_idx_payload="$(hm_first_idx "$CUT" "printf '%s' \"\$PAYLOAD\" |")"; hm_idx_empty="$(hm_first_idx "$CUT" "printf '' |")"
-[[ -n "$hm_idx_payload" && -n "$hm_idx_empty" && "$hm_last" == 17 && -z "$HM_BAD" ]] || fatal "parity mutations: could not derive a payload-body copy and an empty-body copy from the real script"
+[[ -n "$hm_idx_payload" && -n "$hm_idx_empty" && "$hm_last" == 19 && -z "$HM_BAD" ]] || fatal "parity mutations: could not derive a payload-body copy and an empty-body copy from the real script"
 for hm_k in "nofallback:$hm_last:dropping the || SIG=\"\" fallback from the last copy" "nofallback:1:dropping the || SIG=\"\" fallback from the first copy" \
             "wrongvar:$hm_idx_payload:SHAPE PIN only (behaviourally equivalent to the real fallback, since the assignment has already left its variable empty; not a behaviour catch): a fallback that blanks a different variable (copy $hm_idx_payload)" \
             "body-empty:$hm_idx_payload:signing the empty body in copy $hm_idx_payload, whose request carries -d \"\$PAYLOAD\" (a POST signed over nothing is a 401)" \
@@ -2136,6 +2134,7 @@ hfa_drv() { # <idx> <out> -> prints the HTTP status the arm expects on success; 
     {
       printf 'set -euo pipefail\nBASE=https://deploy.example.test/hooks\n'
       grep -m1 '^_bearer_ok() {' "$CUT"
+      grep -m1 '^_body_head() {' "$CUT"   # the re-arm arm prints the first line of the host response through it (#9757 lead (g))
       awk '/^_sig_curl\(\) \{$/,/^}$/' "$CUT"
       printf '%s\n' "$blk" | sed 's|/tmp/|${BK_TMP}/|g'
       printf 'echo DRV-DONE\n'
@@ -2461,6 +2460,333 @@ HB_MUTANTS
 [[ "$hb_n" == 18 ]] || hb_bad+=" [ran $hb_n of 18 mutants]"
 if [[ -z "$hb_bad" ]]; then row "cutover rollback heartbeat mutants: the marker commented out or sent to stdout, the shape warning no-op'd or sent to stderr, the mask moved back before the shape check, the shape arm removed or inverted, the mask dropped, the unreadable warning no-op'd, an arm that exits, a lookup that is dropped or puts the token in argv, an empty or unusable token that reaches the request, and a shape arm that says 'unreadable' are each caught, and only by the clauses that name them" ok
 else row "cutover rollback heartbeat mutants: the marker commented out or sent to stdout, the shape warning no-op'd or sent to stderr, the mask moved back before the shape check, the shape arm removed or inverted, the mask dropped, the unreadable warning no-op'd, an arm that exits, a lookup that is dropped or puts the token in argv, an empty or unusable token that reaches the request, and a shape arm that says 'unreadable' are each caught, and only by the clauses that name them" fail "$hb_bad"; fi
+# =====================================================================================
+# #9757 review leads (a), (b) and (g) of scripts/cutover-inngest.sh, each driven through a recording curl / doppler and the script's own text:
+#   (a1) _inngest_server_created_epoch judges its token with _bearer_ok BEFORE it masks it or feeds it to `-H @-`: a refusal takes the empty-token arm's verdict
+#        class (one ::warning::, `__UNREADABLE__`, rc 0), prints the marker on stderr, and makes zero requests;
+#   (a2) the op=verify zero-run discovery call judges $SIG and both Cloudflare Access values before its own `--config -`;
+#   (b)  the six `::add-mask::` sites of op=arm / _inngest_server_created_epoch shape-check first (no control character: a newline would end the directive and
+#        start a forged one) and mask second, and keep `-n` (an empty read never prints a bare directive);
+#   (g)  the four response-body echoes print a bounded (160), scrubbed (printable ASCII) FIRST line, mid-line in the arm's own ::error:: text, never the raw body.
+# The text under test is EXTRACTED from the real script; mutants doctor exactly one clause (text_mut refuses a replacement that changes more than one line).
+# =====================================================================================
+LD_REAL="$TMPD/ldreal"; LD_BIN="$TMPD/ldbin"
+for d in "$LD_REAL" "$LD_BIN"; do assert_fixture_dir "$d"; mkdir -p "$d"; done
+for t in bash cat grep sed tr awk head cut sha256sum jq mktemp rm mkdir env wc sort true false printf; do
+  p="$(type -P "$t" || true)"; [[ -n "$p" ]] && ln -s "$p" "$LD_REAL/$t"
+done
+# doppler stub for the op=arm reads: `doppler secrets get NAME ...` prints $BK_A_NAME (the read-through app config) or $BK_H_NAME when the call names
+# the soleur-inngest project (the host config); an unset variable prints an empty line, like an empty secret.
+printf '#!%s\nname="$3"; scope=A\nfor a in "$@"; do [[ "$a" == soleur-inngest ]] && scope=H; done\nv="BK_${scope}_${name}"\nprintf "%%s\\n" "${!v:-}"\n' "$BASH_BIN" > "$LD_BIN/doppler"
+chmod +x "$LD_BIN/doppler"
+LD_MARK='SOLEUR_CREDENTIAL_REFUSED script=cutover-inngest reason=token_shape'
+LD_RC=0; LD_BAD=""
+ld_caught() { # <bad clauses string> <must-name clause> -> rc 0 when the mutant was caught AND the named clause is among the failures
+  [[ -n "$1" && " $1 " == *" $2"* ]]
+}
+
+# ---- (a1) _inngest_server_created_epoch ------------------------------------------------------------------------
+ie_fn="$(awk '/^_inngest_server_created_epoch\(\) \{$/,/^\}$/' "$CUT")"
+[[ "$ie_fn" == *'if ! _bearer_ok "$tok"; then'* && "$ie_fn" == *'-H @-'* && "$ie_fn" == *"add-mask"* ]] || fatal "lead (a1): the token read of _inngest_server_created_epoch was not extracted from $CUT"
+ie_run() { # <row> <function text> <token>: combined stdout+stderr in $ROWS/<row>/out (stderr keeps its order against the recording curl's SHIMCALL line)
+  local row="$ROWS/$1"
+  assert_fixture_dir "$row"; mkdir -p "$row/shim"
+  { printf 'set -euo pipefail\n'; grep -m1 '^_bearer_ok() {' "$CUT"; awk '/^_hcloud_created_epoch\(\) \{$/,/^\}$/' "$CUT"; printf '%s\n' "$2"
+    printf 'INNGEST_HOST=soleur-inngest\nDRV_OUT="$(_inngest_server_created_epoch)"\necho "DRV-OUT=$DRV_OUT"\necho DRV-AFTER\n'; } > "$row/drv.sh"
+  ( cd "$row" && env -i PATH="$BKBIN:$REALBIN" BK_SHIM="$row/shim" BK_TOKEN="$3" "$BASH_BIN" "$row/drv.sh" < /dev/null > "$row/out" 2>&1 )
+  LD_RC=$?
+}
+ie_check() { # <row> <mode: ok|bad|empty> <token>
+  local row="$ROWS/$1" mode="$2" tok="$3" f m c
+  LD_BAD=""; local o="$row/out"
+  [[ "$LD_RC" -eq 0 ]] || LD_BAD+=" rc=$LD_RC"
+  [[ "$(bk_count "$o" DRV-AFTER)" == 1 ]] || LD_BAD+=" did-not-finish"
+  case "$mode" in
+    ok)
+      [[ "$(grep -cxF -- "::add-mask::$tok" "$o" || true)" == 1 ]] || LD_BAD+=" mask-line"
+      [[ "$(head -n1 "$o")" == "::add-mask::$tok" ]] || LD_BAD+=" mask-not-first"   # the curl's own stderr is discarded by the function, so the order against the request is the code order: the mask is the FIRST output line
+      [[ "$(bk_calls "$row")" == 1 ]] || LD_BAD+=" calls=$(bk_calls "$row")"
+      [[ "$(grep -cxF -- "Authorization: Bearer $tok" "$row/shim/calls/1.stdin" 2>/dev/null || true)" == 1 ]] || LD_BAD+=" token-not-on-stdin"
+      for f in "$row"/shim/calls/*.argv; do [[ -e "$f" ]] && grep -aqF -- "$tok" "$f" && LD_BAD+=" token-in-argv"; done
+      [[ "$(bk_count "$o" "$tok")" == 1 ]] || LD_BAD+=" token-printed-beyond-the-mask"
+      [[ "$(bk_count "$o" "$LD_MARK")" == 0 ]] || LD_BAD+=" marker-on-success" ;;
+    bad)
+      [[ "$(bk_count "$o" '::add-mask::')" == 0 ]] || LD_BAD+=" mask-line"
+      [[ "$(bk_calls "$row")" == 0 ]] || LD_BAD+=" calls=$(bk_calls "$row")"
+      [[ "$(bk_count "$o" "$LD_MARK")" == 1 ]] || LD_BAD+=" marker-count=$(bk_count "$o" "$LD_MARK")"
+      [[ "$(bk_count "$o" '::warning::G3 generation anchor: the HCLOUD_TOKEN_READONLY read from prd_terraform has an unusable shape')" == 1 ]] || LD_BAD+=" shape-warning"
+      [[ "$(grep -cxF 'DRV-OUT=__UNREADABLE__' "$o" || true)" == 1 ]] || LD_BAD+=" verdict-class"
+      [[ "$(bk_count "$o" SYNTHMARK0001)$(bk_count "$o" SYNTHMARK0002)" == 00 ]] || LD_BAD+=" value-in-output" ;;
+    empty)
+      [[ "$(bk_count "$o" '::add-mask::')" == 0 ]] || LD_BAD+=" mask-line"
+      [[ "$(bk_calls "$row")" == 0 ]] || LD_BAD+=" calls=$(bk_calls "$row")"
+      [[ "$(bk_count "$o" "$LD_MARK")" == 0 ]] || LD_BAD+=" marker-on-empty"
+      [[ "$(bk_count "$o" 'doppler returned nothing for HCLOUD_TOKEN_READONLY or HCLOUD_TOKEN')" == 1 ]] || LD_BAD+=" empty-warning"
+      [[ "$(grep -cxF 'DRV-OUT=__UNREADABLE__' "$o" || true)" == 1 ]] || LD_BAD+=" verdict-class" ;;
+  esac
+}
+LD_TOK="hztoken-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+ie_run ie-ok "$ie_fn" "$LD_TOK"; ie_check ie-ok ok "$LD_TOK"
+if [[ -z "$LD_BAD" ]]; then row "lead (a1) _inngest_server_created_epoch driven with a well-formed token (control): masked once as the first output line, one request, the bearer on the -H @- stdin only, no marker" ok
+else row "lead (a1) _inngest_server_created_epoch driven with a well-formed token (control): masked once as the first output line, one request, the bearer on the -H @- stdin only, no marker" fail "$LD_BAD"; fi
+ie_run ie-empty "$ie_fn" ""; ie_check ie-empty empty ""
+if [[ -z "$LD_BAD" ]]; then row "lead (a1) _inngest_server_created_epoch driven with an empty token: the existing 'doppler returned nothing' warning, no mask, no marker, zero requests, __UNREADABLE__" ok
+else row "lead (a1) _inngest_server_created_epoch driven with an empty token: the existing 'doppler returned nothing' warning, no mask, no marker, zero requests, __UNREADABLE__" fail "$LD_BAD"; fi
+ld_bad=""; ld_n=0
+for ld_cls in $TOK_CLASSES; do
+  ie_run "ie-bad-$ld_cls" "$ie_fn" "$(tok_for "$ld_cls")"; ie_check "ie-bad-$ld_cls" bad ""; ld_n=$((ld_n + 1))
+  [[ -z "$LD_BAD" ]] || ld_bad+=" [$ld_cls:$LD_BAD]"
+done
+[[ "$ld_n" -ge 8 ]] || ld_bad+=" [ran $ld_n classes]"
+if [[ -z "$ld_bad" ]]; then row "lead (a1) _inngest_server_created_epoch driven with an unusable token of every hostile class: the marker once on stderr, one value-free 'unusable shape' warning, __UNREADABLE__ with rc 0 (the empty-token verdict class), no mask line, ZERO requests" ok
+else row "lead (a1) _inngest_server_created_epoch driven with an unusable token of every hostile class: the marker once on stderr, one value-free 'unusable shape' warning, __UNREADABLE__ with rc 0 (the empty-token verdict class), no mask line, ZERO requests" fail "$ld_bad"; fi
+ld_bad=""; ld_n=0
+while IFS='|' read -r ld_name ld_mode ld_cls ld_from ld_to ld_must; do
+  [[ -n "$ld_name" ]] || continue
+  text_mut "$ie_fn" "$ld_from" "$ld_to"
+  if [[ "$ld_mode" == ok ]]; then ld_tok="$LD_TOK"; else ld_tok="$(tok_for "$ld_cls")"; fi
+  ie_run "ie-mut-$ld_name" "$TM_OUT" "$ld_tok"; if [[ "$ld_mode" == ok ]]; then ie_check "ie-mut-$ld_name" ok "$ld_tok"; else ie_check "ie-mut-$ld_name" bad ""; fi
+  ld_n=$((ld_n + 1)); ld_caught "$LD_BAD" "$ld_must" || ld_bad+=" [$ld_name: got '${LD_BAD:-<none>}' wanted a failure naming '$ld_must']"
+done <<'IE_MUTANTS'
+check-removed|bad|quote-newline-url|  if ! _bearer_ok "$tok"; then|  if false; then|mask-line
+marker-dropped|bad|quote|    echo "SOLEUR_CREDENTIAL_REFUSED script=cutover-inngest reason=token_shape" >&2|    : "SOLEUR_CREDENTIAL_REFUSED script=cutover-inngest reason=token_shape" >&2|marker-count
+warning-dropped|bad|quote|    echo "::warning::G3 generation anchor: the $tokvar read|    : "::warning::G3 generation anchor: the $tokvar read|shape-warning
+check-inverted|ok||  if ! _bearer_ok "$tok"; then|  if _bearer_ok "$tok"; then|calls=0
+mask-dropped|ok||  printf '::add-mask::%s\n' "$tok" >&2|  : '::add-mask::%s\n' "$tok" >&2|mask-line
+IE_MUTANTS
+[[ "$ld_n" == 5 ]] || ld_bad+=" [ran $ld_n of 5 mutants]"
+if [[ -z "$ld_bad" ]]; then row "lead (a1) mutants: the shape check removed or inverted, the marker or the warning dropped, the mask dropped are each caught by the clause that names them" ok
+else row "lead (a1) mutants: the shape check removed or inverted, the marker or the warning dropped, the mask dropped are each caught by the clause that names them" fail "$ld_bad"; fi
+
+# ---- (a2) the op=verify zero-run discovery call -----------------------------------------------------------------
+dc_txt="$(awk '/^            # All three values are judged BEFORE the config is built/{f=1} f{print} f&&/^            DISC_BODY=/{exit}' "$CUT" | sed 's|/tmp/verify-zero-run|${BK_TMP}/verify-zero-run|g')"
+[[ "$dc_txt" == *'if _bearer_ok "$SIG" && _bearer_ok "$CF_ACCESS_CLIENT_ID" && _bearer_ok "$CF_ACCESS_CLIENT_SECRET"; then'* && "$dc_txt" == *'--config -'* ]] || fatal "lead (a2): the discovery call was not extracted from $CUT"
+dc_run() { # <row> <block text> <SIG> <CF id> <CF secret>
+  local row="$ROWS/$1"
+  assert_fixture_dir "$row"; mkdir -p "$row/shim" "$row/tmp"
+  { printf 'set -euo pipefail\n'; grep -m1 '^_bearer_ok() {' "$CUT"
+    printf 'DISC_URL="https://deploy.example.test/hooks/inngest-doublefire-probe?from=x"\n'; printf '%s\n' "$2"; printf 'echo "DRV-CODE=$DISC_CODE"\n'; } > "$row/drv.sh"
+  ( cd "$row" && env -i PATH="$BKBIN:$REALBIN" BK_SHIM="$row/shim" BK_TMP="$row/tmp" SIG="$3" CF_ACCESS_CLIENT_ID="$4" CF_ACCESS_CLIENT_SECRET="$5" "$BASH_BIN" "$row/drv.sh" < /dev/null > "$row/stdout" 2> "$row/stderr" )
+  LD_RC=$?
+}
+dc_check() { # <row> <mode: ok|bad> <SIG> <CF id> <CF secret>
+  local row="$ROWS/$1" mode="$2" v f; LD_BAD=""
+  [[ "$LD_RC" -eq 0 ]] || LD_BAD+=" rc=$LD_RC"
+  if [[ "$mode" == ok ]]; then
+    [[ "$(bk_calls "$row")" == 1 ]] || LD_BAD+=" calls=$(bk_calls "$row")"
+    [[ "$(grep -cxF -- "header = \"X-Signature-256: sha256=$3\"" "$row/shim/calls/1.stdin" 2>/dev/null || true)" == 1 && "$(grep -cxF -- "header = \"CF-Access-Client-Id: $4\"" "$row/shim/calls/1.stdin" 2>/dev/null || true)" == 1 \
+      && "$(grep -cxF -- "header = \"CF-Access-Client-Secret: $5\"" "$row/shim/calls/1.stdin" 2>/dev/null || true)" == 1 && "$(wc -l < "$row/shim/calls/1.stdin" 2>/dev/null | tr -d ' ')" == 3 ]] || LD_BAD+=" headers-not-on-stdin"
+    for f in "$row"/shim/calls/*.argv; do [[ -e "$f" ]] && for v in "$3" "$4" "$5"; do grep -aqF -- "$v" "$f" && LD_BAD+=" credential-in-argv"; done; done
+    [[ "$(grep -cxF 'DRV-CODE=200' "$row/stdout" || true)" == 1 ]] || LD_BAD+=" code"
+    [[ "$(bk_count "$row/stderr" "$LD_MARK")" == 0 ]] || LD_BAD+=" marker-on-success"
+  else
+    [[ "$(bk_calls "$row")" == 0 ]] || LD_BAD+=" calls=$(bk_calls "$row")"
+    [[ "$(bk_count "$row/stderr" "$LD_MARK")" == 1 ]] || LD_BAD+=" marker-count=$(bk_count "$row/stderr" "$LD_MARK")"
+    [[ "$(grep -cxF 'DRV-CODE=000' "$row/stdout" || true)" == 1 ]] || LD_BAD+=" verdict-class"
+    [[ "$(bk_count "$row/stdout" SYNTHMARK0001)$(bk_count "$row/stderr" SYNTHMARK0001)$(bk_count "$row/stdout" SYNTHMARK0002)$(bk_count "$row/stderr" SYNTHMARK0002)" == 0000 ]] || LD_BAD+=" value-in-output"
+  fi
+}
+dc_run dc-ok "$dc_txt" "$HM_WH" "$HM_CFID" "$HM_CFSEC"; dc_check dc-ok ok "$HM_WH" "$HM_CFID" "$HM_CFSEC"
+if [[ -z "$LD_BAD" ]]; then row "lead (a2) op=verify zero-run discovery driven with well-formed values (control): one request, the signature and both Cloudflare Access headers on the --config - stdin only, HTTP 200, no marker" ok
+else row "lead (a2) op=verify zero-run discovery driven with well-formed values (control): one request, the signature and both Cloudflare Access headers on the --config - stdin only, HTTP 200, no marker" fail "$LD_BAD"; fi
+ld_bad=""; ld_n=0
+for ld_slot in sig id secret; do
+  for ld_cls in $TOK_CLASSES; do
+    ld_h="$(tok_for "$ld_cls")"; ld_s="$HM_WH"; ld_i="$HM_CFID"; ld_x="$HM_CFSEC"
+    case "$ld_slot" in sig) ld_s="$ld_h" ;; id) ld_i="$ld_h" ;; secret) ld_x="$ld_h" ;; esac
+    dc_run "dc-bad-$ld_slot-$ld_cls" "$dc_txt" "$ld_s" "$ld_i" "$ld_x"; dc_check "dc-bad-$ld_slot-$ld_cls" bad "$ld_s" "$ld_i" "$ld_x"; ld_n=$((ld_n + 1))
+    [[ -z "$LD_BAD" ]] || ld_bad+=" [$ld_slot/$ld_cls:$LD_BAD]"
+  done
+done
+[[ "$ld_n" -ge 24 ]] || ld_bad+=" [ran $ld_n cases]"
+if [[ -z "$ld_bad" ]]; then row "lead (a2) op=verify zero-run discovery driven with an unusable signature, Cloudflare Access id or secret of every hostile class: zero requests, the marker once on stderr, the advisory failure class (HTTP 000), nothing of the value in any stream" ok
+else row "lead (a2) op=verify zero-run discovery driven with an unusable signature, Cloudflare Access id or secret of every hostile class: zero requests, the marker once on stderr, the advisory failure class (HTTP 000), nothing of the value in any stream" fail "$ld_bad"; fi
+ld_bad=""; ld_n=0
+while IFS='|' read -r ld_name ld_slot ld_cls ld_from ld_to ld_must; do
+  [[ -n "$ld_name" ]] || continue
+  text_mut "$dc_txt" "$ld_from" "$ld_to"
+  ld_s="$HM_WH"; ld_i="$HM_CFID"; ld_x="$HM_CFSEC"; ld_h="$(tok_for "$ld_cls")"
+  case "$ld_slot" in sig) ld_s="$ld_h" ;; id) ld_i="$ld_h" ;; secret) ld_x="$ld_h" ;; esac
+  dc_run "dc-mut-$ld_name" "$TM_OUT" "$ld_s" "$ld_i" "$ld_x"; dc_check "dc-mut-$ld_name" bad "" "" ""; ld_n=$((ld_n + 1))
+  ld_caught "$LD_BAD" "$ld_must" || ld_bad+=" [$ld_name: got '${LD_BAD:-<none>}' wanted a failure naming '$ld_must']"
+done <<'DC_MUTANTS'
+guard-removed|sig|quote-newline-url|            if _bearer_ok "$SIG" && _bearer_ok "$CF_ACCESS_CLIENT_ID" && _bearer_ok "$CF_ACCESS_CLIENT_SECRET"; then|            if true; then|calls=
+secret-unjudged|secret|tab|_bearer_ok "$SIG" && _bearer_ok "$CF_ACCESS_CLIENT_ID" && _bearer_ok "$CF_ACCESS_CLIENT_SECRET"; then|_bearer_ok "$SIG" && _bearer_ok "$CF_ACCESS_CLIENT_ID"; then|calls=
+id-unjudged|id|cr|_bearer_ok "$SIG" && _bearer_ok "$CF_ACCESS_CLIENT_ID" && _bearer_ok "$CF_ACCESS_CLIENT_SECRET"; then|_bearer_ok "$SIG" && _bearer_ok "$CF_ACCESS_CLIENT_SECRET"; then|calls=
+marker-dropped|sig|quote|              echo "SOLEUR_CREDENTIAL_REFUSED script=cutover-inngest reason=token_shape" >&2|              : "SOLEUR_CREDENTIAL_REFUSED script=cutover-inngest reason=token_shape" >&2|marker-count
+code-dropped|sig|quote|              DISC_CODE="000"|              DISC_CODE="200"|verdict-class
+DC_MUTANTS
+[[ "$ld_n" == 5 ]] || ld_bad+=" [ran $ld_n of 5 mutants]"
+if [[ -z "$ld_bad" ]]; then row "lead (a2) mutants: the guard removed, either Cloudflare Access value left unjudged, the marker dropped and a refusal that reads as success are each caught" ok
+else row "lead (a2) mutants: the guard removed, either Cloudflare Access value left unjudged, the marker dropped and a refusal that reads as success are each caught" fail "$ld_bad"; fi
+
+# ---- (b) the five op=arm `::add-mask::` sites -------------------------------------------------------------------
+# G2 (PG, HB) and the G3 dark read (PG_DARK) as one extracted chunk, and the G3.5 channel-key loop (APP_CK, HOST_CK) as another. Every value is a synthesized
+# stand-in; the control values carry `:`, `@`, `?` and `&` (a DSN and a URL), which a bearer-shape check would have refused and left UNMASKED.
+ar_g2="$(awk '/^    PG=\$\(doppler secrets get INNGEST_POSTGRES_URI/{f=1} f{print} f&&/^    \[\[ -n "\$PG_DARK" \]\]/{exit}' "$CUT")"
+ar_g35="$(awk '/^    PARITY_FAIL=0$/{f=1} f{print} f&&/^    echo "::notice::op=arm: G3.5 channel-key parity gate PASSED/{exit}' "$CUT")"
+[[ "$ar_g2" == *'_mask_ok "$PG"'* && "$ar_g2" == *'_mask_ok "$HB"'* && "$ar_g2" == *'_mask_ok "$PG_DARK"'* && "$ar_g35" == *'_mask_ok "$APP_CK"'* && "$ar_g35" == *'_mask_ok "$HOST_CK"'* ]] || fatal "lead (b): the op=arm mask sites were not extracted from $CUT"
+ar_run() { # <row> <chunk text> <NAME=value>...: the chunk under the script's own _mask_ok, DOPPLER_TOKEN_INNGEST_ARM set, doppler stubbed by NAME and scope
+  local row="$ROWS/$1" txt="$2"; shift 2
+  assert_fixture_dir "$row"; mkdir -p "$row/shim"
+  { printf 'set -euo pipefail\nDOPPLER_TOKEN_INNGEST_ARM=armtoken\n'; grep -m1 '^_mask_ok() {' "$CUT"; printf '%s\n' "$txt"; printf 'echo DRV-AFTER\n'; } > "$row/drv.sh"
+  ( cd "$row" && env -i PATH="$LD_BIN:$LD_REAL" "$@" "$BASH_BIN" "$row/drv.sh" < /dev/null > "$row/stdout" 2> "$row/stderr" )
+  LD_RC=$?
+}
+AR_SCHEME=postgresql; AR_PW1=synth-pass; AR_DSN="${AR_SCHEME}://synth_user:${AR_PW1}@aws-0.pooler.example.test:5432/postgres?sslmode=require&x=1"
+AR_URL='https://uptime.example.test/api/v1/heartbeat/synthetic-heartbeat-path'
+AR_PW2=dark-pass; AR_DARK="${AR_SCHEME}://dark_user:${AR_PW2}@dark.example.test:5432/postgres"
+AR_KEY="evt-synthetic-$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
+AR_FORGED="SYNTHMARK0001"$'\n'"::error::forged-by-the-value"
+# ar_env <chunk g2|g35> <mode>: sets AR_ENV (the NAME=value assignments the doppler stub serves) and AR_WANT_MASKS (the values that must be masked, in read order).
+#   modes: ok | hostile-<which> (that ONE read is AR_FORGED: a value holding a newline and a forged ::error:: line) | empty (g2: the DSN; g35: every key)
+ar_env() {
+  local pg="$AR_DSN" hb="$AR_URL" dk="$AR_DARK" ea="$AR_KEY" sa="$AR_KEY" eh="$AR_KEY" sh="$AR_KEY"
+  case "$1:$2" in
+    g2:hostile-pg) pg="$AR_FORGED" ;; g2:hostile-hb) hb="$AR_FORGED" ;; g2:hostile-dark) dk="$AR_FORGED" ;; g2:empty) pg="" ;;
+    g35:hostile-app) ea="$AR_FORGED" ;; g35:hostile-host) eh="$AR_FORGED" ;; g35:empty) ea=""; sa=""; eh=""; sh="" ;;
+  esac
+  AR_ENV=(BK_A_INNGEST_POSTGRES_URI="$pg" BK_A_INNGEST_HEARTBEAT_URL="$hb" BK_H_INNGEST_POSTGRES_URI="$dk"
+          BK_A_INNGEST_EVENT_KEY="$ea" BK_A_INNGEST_SIGNING_KEY="$sa" BK_H_INNGEST_EVENT_KEY="$eh" BK_H_INNGEST_SIGNING_KEY="$sh")
+  AR_WANT_MASKS=()
+  if [[ "$1" == g2 ]]; then
+    [[ "$pg" == "$AR_FORGED" || -z "$pg" ]] || AR_WANT_MASKS+=("$pg"); [[ "$hb" == "$AR_FORGED" ]] || AR_WANT_MASKS+=("$hb"); [[ "$dk" == "$AR_FORGED" ]] || AR_WANT_MASKS+=("$dk")
+    [[ "$2" == empty ]] && AR_WANT_MASKS=("$hb")
+  else
+    [[ "$ea" == "$AR_FORGED" || -z "$ea" ]] || AR_WANT_MASKS+=("$ea"); [[ "$eh" == "$AR_FORGED" || -z "$eh" ]] || AR_WANT_MASKS+=("$eh")
+    AR_WANT_MASKS+=("$sa" "$sh"); [[ "$2" == empty ]] && AR_WANT_MASKS=()
+  fi
+}
+ar_check() { # <row> <chunk> <mode> -> LD_BAD: the mask lines are EXACTLY the wanted values, one line each, in read order; a hostile value is printed nowhere
+  local o="$ROWS/$1/stdout" chunk="$2" mode="$3" want="" v; LD_BAD=""
+  for v in ${AR_WANT_MASKS[@]+"${AR_WANT_MASKS[@]}"}; do want+="::add-mask::$v"$'\n'; done
+  [[ "$(grep '^::add-mask::' "$o" || true)"$'\n' == "$want" || ( -z "$want" && -z "$(grep '^::add-mask::' "$o" || true)" ) ]] || LD_BAD+=" mask-lines"
+  [[ "$(grep -c '^::add-mask::$' "$o" || true)" == 0 ]] || LD_BAD+=" bare-directive"
+  case "$mode" in
+    ok) [[ "$LD_RC" -eq 0 && "$(bk_count "$o" DRV-AFTER)" == 1 ]] || LD_BAD+=" rc=$LD_RC" ;;
+    hostile-*)
+      [[ "$(grep -c '^::error::forged-by-the-value' "$o" || true)" == 0 ]] || LD_BAD+=" forged-directive"
+      [[ "$(bk_count "$o" SYNTHMARK0001)" == 0 ]] || LD_BAD+=" value-in-output" ;;
+    empty) [[ "$LD_RC" -eq 1 && "$(bk_count "$o" DRV-AFTER)" == 0 ]] || LD_BAD+=" rc=$LD_RC"
+      [[ "$chunk" != g2 || "$(bk_count "$o" '::error::op=arm: a source value')" == 1 ]] || LD_BAD+=" existing-refusal" ;;
+  esac
+}
+ar_drive() { # <row> <chunk g2|g35> <mode> [chunk text override]
+  local txt="$ar_g2"; [[ "$2" == g35 ]] && txt="$ar_g35"; [[ -n "${4:-}" ]] && txt="$4"
+  ar_env "$2" "$3"; ar_run "$1" "$txt" "${AR_ENV[@]}"; ar_check "$1" "$2" "$3"
+}
+ar_drive ar-g2-ok g2 ok
+if [[ -z "$LD_BAD" ]]; then row "lead (b) op=arm G2/G3 driven with a DSN, a heartbeat URL and a dark DSN (control, values carrying : @ ? &): each is masked exactly once, in read order, by its own '::add-mask::<value>' line" ok
+else row "lead (b) op=arm G2/G3 driven with a DSN, a heartbeat URL and a dark DSN (control, values carrying : @ ? &): each is masked exactly once, in read order, by its own '::add-mask::<value>' line" fail "$LD_BAD"; fi
+ld_bad=""
+for ld_m in hostile-pg hostile-hb hostile-dark; do ar_drive "ar-g2-$ld_m" g2 "$ld_m"; [[ -z "$LD_BAD" ]] || ld_bad+=" [$ld_m:$LD_BAD]"; done
+if [[ -z "$ld_bad" ]]; then row "lead (b) op=arm G2/G3 driven with each of the DSN, the heartbeat URL and the dark DSN holding a newline and a forged ::error:: directive: that value is never printed (no mask line, no forged line at a line start) and the other two are still masked" ok
+else row "lead (b) op=arm G2/G3 driven with each of the DSN, the heartbeat URL and the dark DSN holding a newline and a forged ::error:: directive: that value is never printed (no mask line, no forged line at a line start) and the other two are still masked" fail "$ld_bad"; fi
+ar_drive ar-g2-empty g2 empty
+if [[ -z "$LD_BAD" ]]; then row "lead (b) op=arm G2 driven with an EMPTY DSN: no bare '::add-mask::' directive is printed (-n kept) and the arm's existing 'source value is empty' refusal still ends the run" ok
+else row "lead (b) op=arm G2 driven with an EMPTY DSN: no bare '::add-mask::' directive is printed (-n kept) and the arm's existing 'source value is empty' refusal still ends the run" fail "$LD_BAD"; fi
+ar_drive ar-g35-ok g35 ok
+if [[ -z "$LD_BAD" ]]; then row "lead (b) op=arm G3.5 channel-key loop driven with matching keys (control): the app and host reads of both keys are each masked once by their own line" ok
+else row "lead (b) op=arm G3.5 channel-key loop driven with matching keys (control): the app and host reads of both keys are each masked once by their own line" fail "$LD_BAD"; fi
+ld_bad=""
+for ld_m in hostile-app hostile-host; do ar_drive "ar-g35-$ld_m" g35 "$ld_m"; [[ "$LD_RC" -eq 1 ]] || LD_BAD+=" rc=$LD_RC"; [[ -z "$LD_BAD" ]] || ld_bad+=" [$ld_m:$LD_BAD]"; done
+if [[ -z "$ld_bad" ]]; then row "lead (b) op=arm G3.5 driven with the app key, then the host key, holding a newline and a forged ::error:: directive: it is never printed (no forged line, no value), the other three reads are still masked, and the parity gate refuses" ok
+else row "lead (b) op=arm G3.5 driven with the app key, then the host key, holding a newline and a forged ::error:: directive: it is never printed (no forged line, no value), the other three reads are still masked, and the parity gate refuses" fail "$ld_bad"; fi
+ar_drive ar-g35-empty g35 empty
+if [[ -z "$LD_BAD" ]]; then row "lead (b) op=arm G3.5 driven with every key EMPTY: no bare '::add-mask::' directive is printed (-n kept) and the parity gate refuses" ok
+else row "lead (b) op=arm G3.5 driven with every key EMPTY: no bare '::add-mask::' directive is printed (-n kept) and the parity gate refuses" fail "$LD_BAD"; fi
+ld_bad=""; ld_n=0
+while IFS='|' read -r ld_name ld_chunk ld_mode ld_from ld_to ld_must; do
+  [[ -n "$ld_name" ]] || continue
+  if [[ "$ld_chunk" == g2 ]]; then ld_txt="$ar_g2"; else ld_txt="$ar_g35"; fi
+  text_mut "$ld_txt" "$ld_from" "$ld_to"
+  ar_drive "ar-mut-$ld_name" "$ld_chunk" "$ld_mode" "$TM_OUT"
+  ld_n=$((ld_n + 1)); ld_caught "$LD_BAD" "$ld_must" || ld_bad+=" [$ld_name: got '${LD_BAD:-<none>}' wanted a failure naming '$ld_must']"
+done <<'AR_MUTANTS'
+pg-unchecked|g2|hostile-pg|    [[ -n "$PG" ]] && _mask_ok "$PG" && printf|    [[ -n "$PG" ]] && printf|forged-directive
+hb-unchecked|g2|hostile-hb|    [[ -n "$HB" ]] && _mask_ok "$HB" && printf|    [[ -n "$HB" ]] && printf|forged-directive
+pgdark-unchecked|g2|hostile-dark|    [[ -n "$PG_DARK" ]] && _mask_ok "$PG_DARK" && printf|    [[ -n "$PG_DARK" ]] && printf|forged-directive
+pg-bare-on-empty|g2|empty|    [[ -n "$PG" ]] && _mask_ok "$PG" && printf|    printf|bare-directive
+pg-bearer-shaped|g2|ok|    [[ -n "$PG" ]] && _mask_ok "$PG" && printf|    [[ -n "$PG" ]] && _bearer_ok "$PG" && printf|mask-lines
+app-unchecked|g35|hostile-app|      [[ -n "$APP_CK" ]] && _mask_ok "$APP_CK" && printf|      [[ -n "$APP_CK" ]] && printf|forged-directive
+host-unchecked|g35|hostile-host|      [[ -n "$HOST_CK" ]] && _mask_ok "$HOST_CK" && printf|      [[ -n "$HOST_CK" ]] && printf|forged-directive
+host-bare-on-empty|g35|empty|      [[ -n "$HOST_CK" ]] && _mask_ok "$HOST_CK" && printf|      printf|bare-directive
+AR_MUTANTS
+[[ "$ld_n" == 8 ]] || ld_bad+=" [ran $ld_n of 8 mutants]"
+if [[ -z "$ld_bad" ]]; then row "lead (b) mutants: each of the five mask lines with its shape check removed is caught on a hostile value, a mask line with no -n guard on an empty read is caught, and a bearer-shaped check (which would leave a DSN unmasked) is caught" ok
+else row "lead (b) mutants: each of the five mask lines with its shape check removed is caught on a hostile value, a mask line with no -n guard on an empty read is caught, and a bearer-shaped check (which would leave a DSN unmasked) is caught" fail "$ld_bad"; fi
+
+# ---- (g) the four response-body echoes ------------------------------------------------------------------------
+# Each statement is taken verbatim from the script and run with a BODY whose first line is hostile (an ESC sequence, a CR, a forged `::error::` start, 300
+# characters) and whose second line is a canary: the output is ONE line that starts with the arm's own text, holds the bounded scrubbed first line and not the canary.
+gb_canary="BODYCANARY-$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
+gb_first="::error::forged-first-line"$'\e[31m'$'\r'"$(printf 'x%.0s' $(seq 1 300))"
+gb_body="$gb_first"$'\n'"$gb_canary"
+gb_stmt() { # <grep anchor> -> the single script line
+  grep -m1 -F -- "$1" "$CUT" | sed -E 's/^[[:space:]]+//'
+}
+gb_fn="$(grep -m1 '^_body_head() {' "$CUT")"
+[[ -n "$gb_fn" ]] || fatal "lead (g): _body_head is missing from $CUT"
+gb_run() { # <row> <statement> <body> [function text, default the script's own _body_head] -> $ROWS/<row>/out
+  local row="$ROWS/$1"; assert_fixture_dir "$row"; mkdir -p "$row/tmp"
+  { printf 'set -euo pipefail\n'; printf '%s\n' "${4:-$gb_fn}"; printf '%s\n' "$2" | sed 's|/tmp/rearm-body|${BK_TMP}/rearm-body|g'; } > "$row/drv.sh"
+  printf '%s' "$3" > "$row/tmp/rearm-body"
+  ( cd "$row" && env -i PATH="$LD_REAL" BK_TMP="$row/tmp" BODY="$3" "$BASH_BIN" "$row/drv.sh" < /dev/null > "$row/out" 2>&1 )
+  LD_RC=$?
+}
+gb_want="$(printf '%s' "$gb_first" | LC_ALL=C tr -c ' -~' '?' | cut -c1-160)"
+gb_check() { # <row> <text the one output line must start with> -> LD_BAD
+  local o="$ROWS/$1/out" want="$2" first; LD_BAD=""
+  first="$(head -n1 "$o")"
+  [[ "$(wc -l < "$o" | tr -d ' ')" == 1 ]] || LD_BAD+=" not-one-line"
+  [[ "$first" == "$want"* ]] || LD_BAD+=" arm-text"
+  [[ "$(bk_count "$o" "$gb_canary")" == 0 ]] || LD_BAD+=" second-line-leaked"
+  [[ -z "$(LC_ALL=C tr -d '\n -~' < "$o")" ]] || LD_BAD+=" non-printable"
+  [[ "$first" == *"$gb_want" || "$first" == *"$gb_want)" ]] || LD_BAD+=" head-not-bounded-and-scrubbed"
+  [[ "$first" != *"${gb_want}x"* ]] || LD_BAD+=" head-longer-than-160"
+}
+gb_bad=""; gb_n=0
+while IFS='~' read -r gb_name gb_anchor gb_text; do
+  [[ -n "$gb_name" ]] || continue
+  gb_line="$(gb_stmt "$gb_anchor")"; [[ -n "$gb_line" ]] || { gb_bad+=" [$gb_name: statement not found]"; continue; }
+  [[ "$gb_line" == *'_body_head'* ]] || gb_bad+=" [$gb_name: no _body_head]"
+  gb_run "gb-$gb_name" "$gb_line" "$gb_body"; gb_check "gb-$gb_name" "$gb_text"; gb_n=$((gb_n + 1))
+  [[ -z "$LD_BAD" ]] || gb_bad+=" [$gb_name:$LD_BAD]"
+done <<'GB_SITES'
+enumerate~echo "::error::enumerate did not return a JSON array~::error::enumerate did not return a JSON array (first line of the response, bounded and scrubbed: 
+registry-probe~echo "::error::registry-probe did not return a {registry_empty,function_count,function_ids} object~::error::registry-probe did not return a {registry_empty,function_count,function_ids} object (first line of the response, bounded and scrubbed: 
+doublefire-probe~echo "::error::doublefire-probe did not return a {runs:[...]} object~::error::doublefire-probe did not return a {runs:[...]} object (first line of the response, bounded and scrubbed: 
+rearm~echo "re-arm response (first line, bounded and scrubbed)~re-arm response (first line, bounded and scrubbed): 
+GB_SITES
+[[ "$gb_n" == 4 ]] || gb_bad+=" [ran $gb_n of 4 sites]"
+if [[ -z "$gb_bad" ]]; then row "lead (g) the enumerate, registry-probe, doublefire-probe and re-arm body echoes, driven with a body whose first line holds an ESC sequence, a CR, a forged ::error:: start and 300 characters, print ONE line: the arm's own text, then the first line cut at 160 characters with every non-printable byte replaced, and never the second line" ok
+else row "lead (g) the enumerate, registry-probe, doublefire-probe and re-arm body echoes, driven with a body whose first line holds an ESC sequence, a CR, a forged ::error:: start and 300 characters, print ONE line: the arm's own text, then the first line cut at 160 characters with every non-printable byte replaced, and never the second line" fail "$gb_bad"; fi
+gb_line="$(gb_stmt 'echo "::error::enumerate did not return a JSON array')"
+gb_run gb-ctl "$gb_line" 'HTTP 502 Bad Gateway'$'\n'"$gb_canary"
+if [[ "$(head -n1 "$ROWS/gb-ctl/out")" == '::error::enumerate did not return a JSON array (first line of the response, bounded and scrubbed: HTTP 502 Bad Gateway)' && "$(wc -l < "$ROWS/gb-ctl/out" | tr -d ' ')" == 1 ]]; then row "lead (g) control: a short plain first line is printed intact (the scrub does not eat a readable cause)" ok
+else row "lead (g) control: a short plain first line is printed intact (the scrub does not eat a readable cause)" fail "$(head -c 200 "$ROWS/gb-ctl/out")"; fi
+gb_bad=""; gb_n=0
+while IFS='|' read -r gb_name gb_kind gb_from gb_to gb_must; do
+  [[ -n "$gb_name" ]] || continue
+  case "$gb_kind" in
+    fn)      text_mut "$gb_fn" "$gb_from" "$gb_to"; gb_run "gb-mut-$gb_name" "$gb_line" "$gb_body" "$TM_OUT" ;;
+    fnshort) text_mut "$gb_fn" "$gb_from" "$gb_to"; gb_run "gb-mut-$gb_name" "$gb_line" 'HTTP 502 Bad Gateway'$'\n'"$gb_canary" "$TM_OUT" ;;
+    *)       text_mut "$gb_line" "$gb_from" "$gb_to"; gb_run "gb-mut-$gb_name" "$TM_OUT" "$gb_body" ;;
+  esac
+  if [[ "$gb_kind" == fnshort ]]; then   # a SHORT first line (the cut at 160 cannot hide a kept second line): only the canary clause applies
+    LD_BAD=""; [[ "$(bk_count "$ROWS/gb-mut-$gb_name/out" "$gb_canary")" == 0 ]] || LD_BAD+=" second-line-leaked"
+  else gb_check "gb-mut-$gb_name" '::error::enumerate did not return a JSON array (first line of the response, bounded and scrubbed: '; fi
+  gb_n=$((gb_n + 1))
+  ld_caught "$LD_BAD" "$gb_must" || gb_bad+=" [$gb_name: got '${LD_BAD:-<none>}' wanted a failure naming '$gb_must']"
+done <<'GB_MUTANTS'
+raw-body|line|$(_body_head "$BODY")|$BODY|second-line-leaked
+unbounded|fn|${_h:0:160}|${_h:0:400}|head-not-bounded-and-scrubbed
+unscrubbed|fn|_h="${_h//[^ -~]/?}"; ||non-printable
+whole-body|fnshort|_h="${1%%$'\n'*}"|_h="$1"|second-line-leaked
+GB_MUTANTS
+[[ "$gb_n" == 4 ]] || gb_bad+=" [ran $gb_n of 4 mutants]"
+if [[ -z "$gb_bad" ]]; then row "lead (g) mutants: the raw body printed, a head that is not cut at 160, a head that is not scrubbed and a head that keeps every line are each caught" ok
+else row "lead (g) mutants: the raw body printed, a head that is not cut at 160, a head that is not scrubbed and a head that keeps every line are each caught" fail "$gb_bad"; fi
 echo "=== stage S2-A part 2: cutover HMAC copies, refusal marker, canary sweep done ==="
 
 # =====================================================================================
@@ -3702,7 +4028,7 @@ else row "S3 held-back: the inngest-health probe step carries an argv HMAC again
 #
 #   GUARD 1  no production file puts an HMAC key or a credential header on an argument list: the HMAC census (set identity
 #            against an explicit allow-list), the library-user manifest judged structurally, and the inline-wrapper copies
-#            judged by the S2 parity audit (hm_audit, now over every copy: cutover 17 plus the S4 workflow and script copies).
+#            judged by the S2 parity audit (hm_audit, now over every copy: cutover 19 plus the S4 workflow and script copies).
 #   GUARD 2  a refused credential reaches the SAME verdict class as the old failure (red step, soft verdict, warning or degraded
 #            proceed) or the honest existing class of the sink table: never `down`, never `inngest_down`, never `unreachable`.
 #            The real step body is extracted from the YAML and run under a recording curl that READS `--config -`, with each
@@ -3992,7 +4318,8 @@ echo "=== stage S4: instrument controls done ==="
 
 # =====================================================================================
 # GUARD 1 (a): the HMAC census. Every tracked non-test, non-documentation file that signs with `openssl dgst ... -hmac <key>` puts
-# the KEY on openssl's argv; after S4 only the two held-back arms of the cutover script do. The census is DERIVED: every tracked file
+# the KEY on openssl's argv; since #9757 converted the last two (the registry-probe and doublefire-probe arms of the cutover script) NO
+# production file does, and the allow-list is EMPTY. The census is DERIVED: every tracked file
 # naming `-hmac` or `-macopt` is read STATEMENT by statement (backslash continuation lines joined first), and a statement that runs
 # `openssl` with `-hmac` or `-macopt` is a hit WHATEVER the subcommand (`dgst`, `sha256`, `mac`, ...) or the line layout. The hits, minus
 # Markdown, *.test.sh, tests/, fixtures, knowledge-base/, comment-only statements and the lint's own docstring, are compared to the
@@ -4000,8 +4327,8 @@ echo "=== stage S4: instrument controls done ==="
 # allow-list row while the file still signs is an unclassified member too). The derivation is itself fed a must-FAIL fixture for each
 # spelling it claims to see (`openssl sha256 -hmac`, a continued `dgst`, `-macopt`, `openssl mac`) and must-PASS controls beside them.
 # =====================================================================================
-S4_HMAC_ALLOW="scripts/cutover-inngest.sh:2"
-S4_HMAC_MD_ALLOW="$(printf '%s\n' plugins/soleur/skills/postmerge/references/deploy-status-debugging.md plugins/soleur/skills/ship/SKILL.md)"
+S4_HMAC_ALLOW=""
+S4_HMAC_MD_ALLOW=""
 s4_hmac_filter() { # stdin: grep -n lines (path:line:text) -> "path:count" per file after the exclusions
   awk -F: '{
     p = $1; t = substr($0, length($1) + length($2) + 3)
@@ -4040,19 +4367,22 @@ S4_HMAC_RAW="$(cd "$REPO_ROOT" && git grep -lIE -e '-hmac' -e '-macopt' | s4_hma
 S4_HMAC_CENSUS="$(printf '%s\n' "$S4_HMAC_RAW" | s4_hmac_filter)"
 S4_HMAC_RAW_N="$(printf '%s\n' "$S4_HMAC_RAW" | grep -c . || true)"
 S4_CEN_OUT="$(s4_census_verdict "$S4_HMAC_CENSUS" "$S4_HMAC_ALLOW")"; S4_CEN_RC=$?
-if [[ "$S4_CEN_RC" == 0 && -n "$S4_HMAC_CENSUS" ]]; then
-  row "S4 HMAC census: the derived set of production files with an argv openssl -hmac equals the allow-list exactly (scripts/cutover-inngest.sh x2: the registry-probe and doublefire-probe arms)" ok
-else row "S4 HMAC census: the derived set differs from the allow-list" fail "$S4_CEN_OUT"; fi
-# The documentation exceptions, asserted separately: the two agent-executed Markdown files that still teach the argv form, no third.
+if [[ "$S4_CEN_RC" == 0 && -z "$S4_HMAC_CENSUS" && -z "$S4_HMAC_ALLOW" ]]; then
+  row "S4 HMAC census: the derived set of production files with an argv openssl -hmac equals the (empty) allow-list exactly: no tracked production file puts the HMAC key on openssl's argv" ok
+else row "S4 HMAC census: the derived set differs from the allow-list" fail "$S4_CEN_OUT census='${S4_HMAC_CENSUS//$'\n'/,}'"; fi
+# The documentation set, asserted separately: no agent-executed Markdown file teaches the argv form any more (an empty set).
 S4_MD_SET="$(cd "$REPO_ROOT" && git grep -lIE -e '-hmac' -e '-macopt' -- '*.md' ':!knowledge-base' | s4_hmac_scan "$REPO_ROOT" | cut -d: -f1 | sort -u)"
-if [[ "$S4_MD_SET" == "$S4_HMAC_MD_ALLOW" ]]; then row "S4 HMAC census: the Markdown exceptions are exactly ship/SKILL.md and postmerge/references/deploy-status-debugging.md (documentation, tracked on #9757, not S4)" ok
-else row "S4 HMAC census: the Markdown exception set drifted" fail "set='${S4_MD_SET//$'\n'/,}'"; fi
-# Anti-vacuity floor: the derivation itself must find the two held-back arms. A population that quietly emptied (a renamed pattern, a
-# missing git) would otherwise "equal" an allow-list nobody exercises. BOTH operands are literals on the lines IMMEDIATELY above the `if`.
+if [[ "$S4_MD_SET" == "$S4_HMAC_MD_ALLOW" && -z "$S4_HMAC_MD_ALLOW" ]]; then row "S4 HMAC census: no Markdown file teaches the argv form (the documentation exception set is empty)" ok
+else row "S4 HMAC census: a Markdown file teaches the argv openssl -hmac form again" fail "set='${S4_MD_SET//$'\n'/,}'"; fi
+# Anti-vacuity floor: with the allow-list empty the production census is EMPTY by design, so "empty equals empty" proves nothing by itself. The
+# derivation must still SEE what it excludes: the test-owned oracle statements (`openssl dgst -hmac` run with synthetic keys in *.test.sh and
+# tests/) are scanned, counted and filtered out. A population that quietly emptied (a renamed pattern, a missing git) reads 0 here and reds.
+# BOTH operands are literals on the lines IMMEDIATELY above the `if`.
 S4_CENSUS_HITS="$(printf '%s\n' "$S4_HMAC_CENSUS" | awk -F: 'NF > 1 {n += $NF} END {print n + 0}')"
-S4_CENSUS_HIT_FLOOR=2
-if [[ "$S4_CENSUS_HITS" -ge "$S4_CENSUS_HIT_FLOOR" && "$S4_HMAC_RAW_N" -gt "$S4_CENSUS_HITS" ]]; then row "S4 HMAC census: the derivation is not vacuous ($S4_CENSUS_HITS production lines found among $S4_HMAC_RAW_N tracked matches; anti-vacuity floor $S4_CENSUS_HIT_FLOOR)" ok
-else row "S4 HMAC census: the derived population is empty (anti-vacuity floor)" fail "hits=$S4_CENSUS_HITS raw=$S4_HMAC_RAW_N floor=$S4_CENSUS_HIT_FLOOR"; fi
+S4_CENSUS_SEEN="$(printf '%s\n' "$S4_HMAC_RAW" | awk -F: '$1 ~ /\.test\.(sh|ts)$/ || $1 ~ /^tests\// {n++} END {print n + 0}')"
+S4_CENSUS_SEEN_FLOOR=10
+if [[ "$S4_CENSUS_HITS" == 0 && "$S4_CENSUS_SEEN" -ge "$S4_CENSUS_SEEN_FLOOR" && "$S4_HMAC_RAW_N" -gt "$S4_CENSUS_SEEN" ]]; then row "S4 HMAC census: the derivation is not vacuous (0 production lines; it still sees $S4_CENSUS_SEEN test-owned oracle statements among $S4_HMAC_RAW_N tracked matches and excludes them; anti-vacuity floor $S4_CENSUS_SEEN_FLOOR)" ok
+else row "S4 HMAC census: the derived population is empty (anti-vacuity floor)" fail "hits=$S4_CENSUS_HITS seen=$S4_CENSUS_SEEN raw=$S4_HMAC_RAW_N floor=$S4_CENSUS_SEEN_FLOOR"; fi
 # The structural D4 predicate: none of the 15 S4 files carries `openssl dgst -hmac` in non-comment text (the census says so for the set;
 # this names each file so a restored site is reported at its file).
 S4_FILES=".github/actions/dispatch-web-redeploy/track.sh .github/actions/mint-infra-app-token/action.yml .github/scripts/bump-inngest-bootstrap-pin.sh
@@ -4070,20 +4400,22 @@ for f in $S4_FILES; do
 done
 [[ -z "$S4_D4_BAD" && "$S4_NFILES" == 15 ]] && row "S4 structure: none of the 15 S4 files carries openssl dgst -hmac in non-comment text (the key is never on openssl's argv)" ok || row "S4 structure: an S4 file signs with the key on openssl's argv" fail "$S4_D4_BAD n=$S4_NFILES"
 # CONTROL for the wrapper itself (a verdict helper that is a pipe of python3 and awk answers "clean" when python3 crashes, the root is wrong or the awk slice is off by one, so every
-# file above would pass for the wrong reason): it must see the known POSITIVE (the cutover script, whose two held-back arms put the key on openssl's argv), a synthesized
-# continued `-hmac` spelling and a comment-only mention must NOT count, and a converted file must be clean.
+# file above would pass for the wrong reason): it must see a SYNTHESIZED positive (no production file is a known positive any more: the cutover script was the last one),
+# a synthesized continued `-hmac` spelling and a comment-only mention must NOT count, and converted files (the cutover script included) must be clean.
 S4_HF="$S4/hmacfile"; assert_fixture_dir "$S4_HF"; mkdir -p "$S4_HF"
 printf '%s\n' 'S=$(printf "" | openssl dgst -sha256 \' '    -hmac "$K")' > "$S4_HF/continued.sh"
 printf '%s\n' '# S=$(printf "" | openssl dgst -sha256 -hmac "$K")' > "$S4_HF/comment.sh"
+printf '%s\n' 'S=$(printf "" | openssl dgst -sha256 -hmac "$K" | sed s/x/y/)' > "$S4_HF/positive.sh"
 S4_HF_BAD=""
-s4_file_has_argv_hmac scripts/cutover-inngest.sh || S4_HF_BAD+=" cutover-not-seen"
+s4_file_has_argv_hmac scripts/cutover-inngest.sh && S4_HF_BAD+=" converted-cutover-seen"
 s4_file_has_argv_hmac apps/web-platform/infra/push-infra-config.sh && S4_HF_BAD+=" converted-file-seen"
 S4_HF_ROOT_SAVE="$REPO_ROOT"; REPO_ROOT="$S4_HF"
+s4_file_has_argv_hmac positive.sh || S4_HF_BAD+=" positive-not-seen"
 s4_file_has_argv_hmac continued.sh || S4_HF_BAD+=" continued-not-seen"
 s4_file_has_argv_hmac comment.sh && S4_HF_BAD+=" comment-seen"
 s4_file_has_argv_hmac no-such-file.sh && S4_HF_BAD+=" missing-file-seen"
 REPO_ROOT="$S4_HF_ROOT_SAVE"
-[[ -z "$S4_HF_BAD" ]] && row "S4 structure control: the per-file argv-HMAC helper sees the known positive (scripts/cutover-inngest.sh) and a synthesized backslash-continued -hmac, and does not see a comment-only mention, a missing file or a converted file" ok || row "S4 structure control: the per-file argv-HMAC helper is blind or over-matches" fail "$S4_HF_BAD"
+[[ -z "$S4_HF_BAD" ]] && row "S4 structure control: the per-file argv-HMAC helper sees a synthesized positive and a synthesized backslash-continued -hmac, and does not see a comment-only mention, a missing file or a converted file (the cutover script included)" ok || row "S4 structure control: the per-file argv-HMAC helper is blind or over-matches" fail "$S4_HF_BAD"
 
 # Harness rows for the census: a synthesized tree whose only HMAC is allowed MUST PASS; every other tree MUST FAIL. Both go through
 # the SAME s4_hmac_filter / s4_census_verdict the live census uses (a pattern nothing ever fed a known positive and a known negative
@@ -4091,7 +4423,7 @@ REPO_ROOT="$S4_HF_ROOT_SAVE"
 S4_CEN="$S4/cen"; assert_fixture_dir "$S4_CEN"; mkdir -p "$S4_CEN"
 s4_cen_tree() { # <name> <variant>
   local t="$S4_CEN/$1"; assert_fixture_dir "$t"; mkdir -p "$t/scripts" "$t/docs" "$t/tests" "$t/knowledge-base" "$t/x"
-  printf '%s\n' 'SIG=$(printf "" | openssl dgst -sha256 -hmac "$K" | sed s/x/y/)' '    SIG=$(printf "" | openssl dgst -sha256 -hmac "$K" | sed s/x/y/)' > "$t/scripts/cutover-inngest.sh"
+  printf '%s\n' 'SIG=$(printf "" | openssl dgst -sha256 -hmac "$K" | sed s/x/y/)' '    SIG=$(printf "" | openssl dgst -sha256 -hmac "$K" | sed s/x/y/)' > "$t/scripts/synthetic-signer.sh"
   printf '%s\n' '# SIG=$(printf "" | openssl dgst -sha256 -hmac "$K")' > "$t/x/commented.sh"
   printf '%s\n' 'openssl dgst -sha256 -hmac "$K"' > "$t/docs/teaches.md"
   printf '%s\n' 'openssl dgst -sha256 -hmac "$K"' > "$t/x/a.test.sh"
@@ -4102,7 +4434,7 @@ s4_cen_tree() { # <name> <variant>
   case "$2" in
     allowed) ;;
     extra) printf '%s\n' 'S=$(openssl dgst -sha256 -hmac "$K")' > "$t/x/new-production.sh" ;;
-    second) printf '%s\n' 'S=$(openssl dgst -sha256 -hmac "$K")' >> "$t/scripts/cutover-inngest.sh" ;;
+    second) printf '%s\n' 'S=$(openssl dgst -sha256 -hmac "$K")' >> "$t/scripts/synthetic-signer.sh" ;;
     sha256) printf '%s\n' 'S=$(printf "" | openssl sha256 -hmac "$K")' > "$t/x/new-sha256.sh" ;;
     multiline) printf '%s\n' 'S=$(printf "" | openssl dgst -sha256 \' '    -hmac "$K")' > "$t/x/new-multiline.sh" ;;
     macopt) printf '%s\n' 'S=$(printf "" | openssl dgst -sha256 -mac HMAC -macopt "key:$K")' > "$t/x/new-macopt.sh" ;;
@@ -4111,26 +4443,46 @@ s4_cen_tree() { # <name> <variant>
   esac
   (cd "$t" && grep -rlIE -e '-hmac' -e '-macopt' . | sed 's|^\./||' | s4_hmac_scan "$t" | s4_hmac_filter)
 }
-S4_CT_OK="$(s4_cen_tree ok allowed)"; s4_census_verdict "$S4_CT_OK" "$S4_HMAC_ALLOW" > /dev/null; S4_CT_OK_RC=$?
-S4_CT_EX="$(s4_cen_tree extra extra)"; s4_census_verdict "$S4_CT_EX" "$S4_HMAC_ALLOW" > /dev/null; S4_CT_EX_RC=$?
-S4_CT_2="$(s4_cen_tree second second)"; s4_census_verdict "$S4_CT_2" "$S4_HMAC_ALLOW" > /dev/null; S4_CT_2_RC=$?
+# The synthesized tree carries its OWN allow-list (the live one is empty since #9757): the harness exercises the allow-list MECHANISM, not the repo.
+S4_CT_ALLOW="scripts/synthetic-signer.sh:2"
+S4_CT_OK="$(s4_cen_tree ok allowed)"; s4_census_verdict "$S4_CT_OK" "$S4_CT_ALLOW" > /dev/null; S4_CT_OK_RC=$?
+S4_CT_EX="$(s4_cen_tree extra extra)"; s4_census_verdict "$S4_CT_EX" "$S4_CT_ALLOW" > /dev/null; S4_CT_EX_RC=$?
+S4_CT_2="$(s4_cen_tree second second)"; s4_census_verdict "$S4_CT_2" "$S4_CT_ALLOW" > /dev/null; S4_CT_2_RC=$?
 S4_CT_SHAPE_BAD=""
 for cv in sha256 multiline macopt mac abspath; do
   S4_CT_V="$(s4_cen_tree "v-$cv" "$cv")"
-  if s4_census_verdict "$S4_CT_V" "$S4_HMAC_ALLOW" > /dev/null; then S4_CT_SHAPE_BAD+=" $cv"; fi
+  if s4_census_verdict "$S4_CT_V" "$S4_CT_ALLOW" > /dev/null; then S4_CT_SHAPE_BAD+=" $cv"; fi
   [[ "$S4_CT_V" == *"x/new-$cv.sh:1"* ]] || S4_CT_SHAPE_BAD+=" $cv(unnamed:$S4_CT_V)"
 done
 s4_census_verdict "$S4_CT_OK" "" > /dev/null; S4_CT_DEL_RC=$?
-[[ "$S4_CT_OK_RC" == 0 && "$S4_CT_OK" == "scripts/cutover-inngest.sh:2" ]] && row "S4 HMAC census control: a synthesized tree whose only HMAC is allowed (plus a comment-only line, Markdown, test, tests/ and knowledge-base/ copies, an openssl -sign statement and the word -hmac in a message) is GREEN" ok || row "S4 HMAC census control: the allowed tree is not green" fail "got='$S4_CT_OK' rc=$S4_CT_OK_RC"
+[[ "$S4_CT_OK_RC" == 0 && "$S4_CT_OK" == "scripts/synthetic-signer.sh:2" ]] && row "S4 HMAC census control: a synthesized tree whose only HMAC is allowed (plus a comment-only line, Markdown, test, tests/ and knowledge-base/ copies, an openssl -sign statement and the word -hmac in a message) is GREEN" ok || row "S4 HMAC census control: the allowed tree is not green" fail "got='$S4_CT_OK' rc=$S4_CT_OK_RC"
 [[ "$S4_CT_EX_RC" != 0 ]] && row "S4 HMAC census control: an extra unlisted production file with an argv HMAC is RED (unclassified member)" ok || row "S4 HMAC census control: an extra member is accepted" fail "got='$S4_CT_EX'"
 [[ -z "$S4_CT_SHAPE_BAD" ]] && row "S4 HMAC census control: each spelling the derivation claims to see is RED when an unlisted production file uses it (openssl sha256 -hmac, a dgst whose -hmac is on a backslash-continuation line, -mac HMAC -macopt, openssl mac -macopt, an absolute-path openssl) and is named at its file" ok || row "S4 HMAC census control: a key-on-argv spelling is accepted by the census" fail "$S4_CT_SHAPE_BAD"
 [[ "$S4_CT_2_RC" != 0 ]] && row "S4 HMAC census control: a SECOND argv HMAC after a compliant first, in an allowed file, is RED (the census compares per-file counts, not 'at least one clean')" ok || row "S4 HMAC census control: a second member in an allowed file is accepted" fail "got='$S4_CT_2'"
-[[ "$S4_CT_DEL_RC" != 0 ]] && row "S4 HMAC census control: deleting the allow-list row while the file still signs is RED (the held-back set cannot shrink silently)" ok || row "S4 HMAC census control: a deleted allow-list row is accepted" fail ""
+[[ "$S4_CT_DEL_RC" != 0 ]] && row "S4 HMAC census control: deleting the allow-list row while the file still signs is RED (the allow-list cannot shrink silently)" ok || row "S4 HMAC census control: a deleted allow-list row is accepted" fail ""
+# The live census, fed the cutover script with ONE probe arm put back on `openssl dgst -hmac` (the mutants of stage S2-A part 2): each is RED against the
+# empty allow-list and is named at its file with exactly one hit. The scan root is the mutant directory, so the same s4_hmac_scan / filter / verdict the live
+# census uses judge it.
+S4_RV_BAD=""
+for rv in revert1 revert2; do
+  S4_RV_CEN="$(printf '%s\n' "hm-mut-$rv.sh" | s4_hmac_scan "$BKDIR" | s4_hmac_filter)"
+  s4_census_verdict "$S4_RV_CEN" "$S4_HMAC_ALLOW" > /dev/null && S4_RV_BAD+=" $rv(accepted)"
+  [[ "$S4_RV_CEN" == "hm-mut-$rv.sh:1" ]] || S4_RV_BAD+=" $rv(census='$S4_RV_CEN')"
+done
+[[ -z "$S4_RV_BAD" ]] && row "S4 HMAC census mutation: either probe arm of the cutover script reverted to openssl dgst -hmac is RED against the empty allow-list, with exactly one hit named" ok || row "S4 HMAC census mutation: a reverted probe arm is accepted by the census" fail "$S4_RV_BAD"
 # The inline copies of the canonical snippet are a DERIVED population too: every tracked non-test file holding it is in this explicit set.
 S4_INLINE_FILES="$(printf '%s\n' .github/workflows/deploy-inngest-image.yml .github/workflows/web-platform-release.yml apps/web-platform/infra/infra-config-verify.sh apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh scripts/cutover-inngest.sh | sort)"
-S4_INLINE_DERIVED="$(cd "$REPO_ROOT" && git grep -lF 'HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c' -- . ':!tests' ':!knowledge-base' ':!*.test.sh' | sort)"
-if [[ "$S4_INLINE_DERIVED" == "$S4_INLINE_FILES" ]]; then row "S4 parity population: the files holding the canonical inline HMAC snippet are exactly the cutover script and the four S4 inline files (derived by git grep, never counted)" ok
+S4_INLINE_DERIVED="$(cd "$REPO_ROOT" && git grep -lF 'HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c' -- . ':!tests' ':!knowledge-base' ':!*.test.sh' ':!*.md' | sort)"
+if [[ "$S4_INLINE_DERIVED" == "$S4_INLINE_FILES" ]]; then row "S4 parity population: the files holding the canonical inline HMAC snippet are exactly the cutover script and the four S4 inline files (derived by git grep, never counted; Markdown is judged by the next row)" ok
 else row "S4 parity population: a file holds the canonical inline HMAC snippet that no audit judges" fail "derived='${S4_INLINE_DERIVED//$'\n'/,}'"; fi
+# The agent-executed Markdown teaches the SAME snippet (the argv `openssl -hmac` form it used to teach is gone, see the census above): the set of Markdown files that
+# carry it is exactly these two, and each carries the canonical snippet BYTE FOR BYTE (a doc that drifted would teach an operator a divergent signer).
+S4_MD_CANON_FILES="$(printf '%s\n' plugins/soleur/skills/postmerge/references/deploy-status-debugging.md plugins/soleur/skills/ship/SKILL.md)"
+S4_MD_CANON_DERIVED="$(cd "$REPO_ROOT" && git grep -lF 'HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c' -- '*.md' ':!knowledge-base' | sort)"
+S4_MD_CANON_BAD=""
+for f in $S4_MD_CANON_DERIVED; do [[ "$(grep -cF -- "$HM_CANON" "$REPO_ROOT/$f" || true)" -ge 1 ]] || S4_MD_CANON_BAD+=" $f"; done
+if [[ "$S4_MD_CANON_DERIVED" == "$S4_MD_CANON_FILES" && -z "$S4_MD_CANON_BAD" ]]; then row "S4 parity population: the Markdown files that teach the canonical inline HMAC snippet are exactly ship/SKILL.md and postmerge/references/deploy-status-debugging.md, and each carries it byte for byte" ok
+else row "S4 parity population: a Markdown file teaches a divergent or unlisted HMAC snippet" fail "derived='${S4_MD_CANON_DERIVED//$'\n'/,}' divergent:$S4_MD_CANON_BAD"; fi
 
 # =====================================================================================
 # GUARD 1 (c): the library-user manifest. S3 derives the YAML population (S3_POP: steps and composites that source the library);
@@ -4208,10 +4560,10 @@ echo "=== stage S4: Guard 1 census, populations and structure done ==="
 
 # =====================================================================================
 # GUARD 1 (d): the inline-wrapper copies, judged by the S2 PARITY AUDIT (hm_audit above, which reads any indentation). S4 adds seven
-# copies of the canonical python3 HMAC snippet to the 17 of the cutover script: web-platform-release.yml 3 and deploy-inngest-image.yml
+# copies of the canonical python3 HMAC snippet to the 19 of the cutover script: web-platform-release.yml 3 and deploy-inngest-image.yml
 # 2 (workflow steps, 10-space YAML indentation, signing through the inline `_sig_curl`), infra-config-verify.sh 1 and
 # verify-tunnel-ingress-origin.sh 1 (scripts at column 0 that print their own header directives; both sign a status GET).
-# The two held-back arms of the cutover script are unchanged at 2. The inline wrappers are the exception ADR-280 allows only where a
+# The cutover script holds all 19 copies (no -hmac operand is left). The inline wrappers are the exception ADR-280 allows only where a
 # pinned property of the job or its suite rules out sourcing a repo file; this audit is the mechanical bound on that exception.
 # =====================================================================================
 S4_HM_SPEC=".github/workflows/web-platform-release.yml:3: .github/workflows/deploy-inngest-image.yml:2: apps/web-platform/infra/infra-config-verify.sh:1:empty apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh:1:empty"
@@ -4227,11 +4579,11 @@ for spec in $S4_HM_SPEC; do
   done
 done
 hm_audit "$CUT"; S4_HM_CUT="$HM_NCOPY"; S4_HM_HELD="$HM_NOLD"
-# BOTH operands are literals on the lines IMMEDIATELY above the `if`: 17 cutover copies + 7 S4 copies, and the 2 held-back arms.
-S4_HM_COPIES_WANT=24
-if [[ $((S4_HM_CUT + S4_HM_TOTAL)) -eq "$S4_HM_COPIES_WANT" && -z "$S4_HM_ALLBAD" && "$S4_HM_HELD" == 2 ]]; then
-  row "S4 parity audit: $S4_HM_COPIES_WANT converted copies in all (17 cutover + 7 inline: release 3, deploy-inngest-image 2, infra-config-verify 1, verify-tunnel 1), held-back unchanged at 2" ok
-else row "S4 parity audit: the converted-copy count or the held-back set moved" fail "cutover=$S4_HM_CUT inline=$S4_HM_TOTAL want=$S4_HM_COPIES_WANT held=$S4_HM_HELD bad:$S4_HM_ALLBAD"; fi
+# BOTH operands are literals on the lines IMMEDIATELY above the `if`: 19 cutover copies + 7 S4 copies, and no -hmac operand left in the cutover script.
+S4_HM_COPIES_WANT=26
+if [[ $((S4_HM_CUT + S4_HM_TOTAL)) -eq "$S4_HM_COPIES_WANT" && -z "$S4_HM_ALLBAD" && "$S4_HM_HELD" == 0 ]]; then
+  row "S4 parity audit: $S4_HM_COPIES_WANT converted copies in all (19 cutover + 7 inline: release 3, deploy-inngest-image 2, infra-config-verify 1, verify-tunnel 1), no -hmac operand left in the cutover script" ok
+else row "S4 parity audit: the converted-copy count moved or a -hmac operand is back" fail "cutover=$S4_HM_CUT inline=$S4_HM_TOTAL want=$S4_HM_COPIES_WANT hmac=$S4_HM_HELD bad:$S4_HM_ALLBAD"; fi
 # Mutants of the parity audit on the S4 copies: ONE byte (-I dropped) in ONE inline copy is caught as exactly that copy, touching exactly that line.
 for spec in $S4_HM_SPEC; do
   IFS=: read -r hf hn hd <<< "$spec"
@@ -6231,7 +6583,9 @@ check_conservation "$pass" "$fail" "$CASES" || exit 1
 
 # BOTH operands are literals on the lines IMMEDIATELY above the `if`.
 SELFTEST_PASSES=0
-EXPECTED_TESTS=730
+# 730 -> 752 at #9757 (held-back HMAC arms, census allowance, leads (a)(b)(g)): the MEASURED green total (752 passed, 0 failed; the self-test rows are
+# retracted, so SELFTEST_PASSES stays 0). Derived from the run, never estimated.
+EXPECTED_TESTS=752
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2
