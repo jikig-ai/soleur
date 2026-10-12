@@ -403,24 +403,34 @@ if [ "$(grep -cE '^[[:space:]]*ext4\)|mount[[:space:]]+"\$DEV"|"\$DEV /mnt/data'
 # destructive arm). It is the STAGE=blkid_probe site, so it is located by its stage marker.
 if [ "$(printf '%s\n' "$_G1_STAGE" | grep -A3 -E '^[[:space:]]*STAGE=blkid_probe$' | grep -cF 'blkid -p -o value -s TYPE "$DEV"')" -eq 1 ]; then ok "T1.16f the unpointed blkid_probe uses blkid -p (no cached type decides a destructive arm)"; else no "T1.16f the unpointed blkid_probe is not a blkid -p probe"; fi
 # D6: the unpointed arm may not FORMAT on a production-config host. EVERY luksFormat site in the stage
-# must be preceded, in the same case arm, by the one-line refusal on the rendered Doppler config.
+# must be preceded, in the same case arm, by the one-line refusal on the rendered Doppler config. The guard
+# is matched as a WHOLE STATEMENT (it starts the line and ends in `exit 1; }`): a guard commented out,
+# inverted, or turned into a no-op still contains its own tokens, so a token match would call it present.
+_D6_HEAD="[ '\${inngest_doppler_config}' != prd ] || { echo \"FATAL: unpointed_raw_refused"
+_D6_TAIL='exit 1; }'
 _d6_scan() {  # _d6_scan <text> — prints "<luksFormat sites> <unguarded sites>"
-  awk '
+  awk -v head="$_D6_HEAD" -v tail="$_D6_TAIL" '
     /;;[[:space:]]*$/ || /^[[:space:]]*case / { g = 0 }
-    /unpointed_raw_refused/ && /inngest_doppler_config/ && /!= prd/ { g = 1 }
+    { l = $0; sub(/^[[:space:]]+/, "", l) }
+    index(l, head) == 1 && substr(l, length(l) - length(tail) + 1) == tail { g = 1 }
     /^[[:space:]]*[^#[:space:]].*cryptsetup luksFormat/ { n++; if (!g) bad++ }
     END { print n + 0, bad + 0 }' <<<"$1"
 }
 read -r _d6_n _d6_bad <<<"$(_d6_scan "$_G1_STAGE")"
 if [ "$_d6_n" -eq 1 ] && [ "$_d6_bad" -eq 0 ]; then ok "T1.16g the one luksFormat site is preceded by the prd refusal in its own arm (sites ${_d6_n}, unguarded ${_d6_bad})"; else no "T1.16g luksFormat sites=${_d6_n}, unguarded=${_d6_bad} — a format arm reachable on a prd-config host (D6)"; fi
-read -r _d6c_n _d6c_bad <<<"$(_d6_scan '        "")
-          [ '"'"'${inngest_doppler_config}'"'"' != prd ] || { echo "FATAL: unpointed_raw_refused" ; exit 1; }
-          printf x | cryptsetup luksFormat --key-file - "$DEV"
+_D6_GUARD="        $_D6_HEAD\" ; exit 1; }"
+read -r _d6c_n _d6c_bad <<<"$(_d6_scan "        \"\")
+${_D6_GUARD}
+          printf x | cryptsetup luksFormat --key-file - \"\$DEV\"
           ;;
         other)
-          printf x | cryptsetup luksFormat --key-file - "$DEV"
-          ;;')"
-if [ "$_d6c_n" -eq 2 ] && [ "$_d6c_bad" -eq 1 ]; then ok "T1.16h control: a SECOND, unguarded luksFormat after a guarded one is flagged (sites ${_d6c_n}, unguarded ${_d6c_bad})"; else no "T1.16h CONTROL: the per-site D6 scan missed an unguarded luksFormat (sites=${_d6c_n}, unguarded=${_d6c_bad}) — T1.16g is vacuous"; fi
+          printf x | cryptsetup luksFormat --key-file - \"\$DEV\"
+          ;;")"
+read -r _d6d_n _d6d_bad <<<"$(_d6_scan "        \"\")
+        : # ${_D6_GUARD#        }
+          printf x | cryptsetup luksFormat --key-file - \"\$DEV\"
+          ;;")"
+if [ "$_d6c_n" -eq 2 ] && [ "$_d6c_bad" -eq 1 ] && [ "$_d6d_n" -eq 1 ] && [ "$_d6d_bad" -eq 1 ]; then ok "T1.16h control: a SECOND unguarded luksFormat, and a guard commented out in place, are both flagged (${_d6c_n}/${_d6c_bad}, ${_d6d_n}/${_d6d_bad})"; else no "T1.16h CONTROL: the per-site D6 scan missed an unguarded luksFormat (second site ${_d6c_n}/${_d6c_bad}, commented guard ${_d6d_n}/${_d6d_bad}) — T1.16g is vacuous"; fi
 
 # ═══ TIER 3 — Guard 4: the pointer decides, never the signature (#6894) ════════════════════
 # THE POPULATION IS DERIVED. Every line in a DELIVERED artifact that names the pointer is found by
