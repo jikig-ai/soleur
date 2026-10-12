@@ -28,6 +28,7 @@ Run everything in an allocated sandbox (`scripts/soleur-sandbox.sh new|run-isola
 - [ ] 2.1 `infra/lib/docker-run-tuple.py` `check` and `posture` (closed-world grammar, census, `UNCLASSIFIED_DOCKER_RUN`, count floor 3)
 - [ ] 2.2 Battery green against mutated copies in `$WORK`; helper-copy allow-all row proves the battery is not vacuous
 - [ ] 2.3 `test/docker-run-tuple-posture.test.ts` required-lane wrapper green
+- [ ] 2.4 Census and grammar hardening from D3 (create/container verbs, per-option `$VAR` allowlist, DUPLICATE_OPTION, attached short forms, placement assertions on rows)
 
 ## Phase 3 Suite derivation (P2, P6)
 
@@ -40,7 +41,9 @@ Run everything in an allocated sandbox (`scripts/soleur-sandbox.sh new|run-isola
 
 - [ ] 4.1 `ISO_ARGV` from the canary fixture (`FIXTURE_TAIL` before any docker call)
 - [ ] 4.2 Recorder arm (`DROP_FAILED`) and `MUTATE=shim-cover` seam
-- [ ] 4.3 Behavioral arm per M3 outcome; header sentence on what the arms do and do not discriminate
+- [ ] 4.3 Umount-refused-under-vendor-caps arm with a caps-retained positive control (D1); recorder instrument control and path-normalization rows
+- [ ] 4.4 Correct the shim header comment (comment lines only) and ADR-075 (Decision clarification and Alternatives row); AC15 comment-only check
+- [ ] 4.5 `docker inspect` arm on the running suite container (CapAdd, PidMode, User, MaskedPaths, apparmor and seccomp entries)
 
 ## Phase 5 Spawn paths (P4; replays per M1/M2)
 
@@ -50,7 +53,7 @@ Run everything in an allocated sandbox (`scripts/soleur-sandbox.sh new|run-isola
 
 ## Phase 6 Vendored builder tail (P3)
 
-- [ ] 6.1 `test/helpers/vendored-bwrap-tail.ts` extractor (bounded window, chunked scan) and per-binary procfs-site counts
+- [ ] 6.1 `test/helpers/vendored-bwrap-tail.ts` extractor (bounded window, chunked scan), per-binary procfs-site counts and `CAP_BARRIER` literal pins (D2, D1)
 - [ ] 6.2 `test/sandbox-vendored-argv-tail.test.ts` real-binary rows, synthetic mutation rows, `BINARY_MISSING` under `CI`
 - [ ] 6.3 Live-tail row in `test/sandbox-proc-mask-runtime.test.ts` with cap-segment normalization
 

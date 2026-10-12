@@ -36,7 +36,7 @@ missing (the five bullets of #10065):
    (`/usr/local/bin` before `/usr/bin`) is asserted statically and in the running container.
 
 No production behavior changes: the diff adds tests, one fixture, one helper, and registrations. Nothing here touches a docker
-flag, the shim, the Dockerfile, or a deploy path.
+flag, shim logic, the Dockerfile, or a deploy path (two prose corrections: the shim header comment and ADR-075).
 
 ## Research Reconciliation — Spec vs. Codebase
 
@@ -202,10 +202,14 @@ file lists). No legal or compliance surface (no personal data, no schema, no aut
 
 ## Architecture Decision (ADR/C4)
 
-No architectural decision is made by the guards themselves: a test-only parity guard on an existing boundary. One conditional exception:
-if Phase 0 measurement M3 shows that dropping the tail bind and covering it are behaviorally identical (the recursive root bind carries a
-procfs either way), ADR-075 and the shim header's "removes the mount object entirely" rationale are factually wrong and this PR corrects
-ADR-075 (see M3); the statement here is then superseded. ADR-122 (boot-time delivery of the seccomp and AppArmor profiles) is the record
+The guards themselves decide nothing: a test-only parity guard on an existing boundary. One correction is EXPECTED to be in scope
+(Deepen-Plan Findings D1, from the security review): the shim header (L53-56) and ADR-075 (L196, L332) say dropping the tail bind
+"removes the mount object entirely" and that a cover leaves a live procfs object; with the recursive `--ro-bind / /` in the vendor argv the
+container's procfs sits beneath the tmpfs after a drop as well, so the rationale is wrong for the main vendor argv (it holds for the
+hook-sandbox builder, which has no root bind). This PR therefore corrects ADR-075 (a `## Decision` clarification plus an Alternatives
+Considered row recording that cover and drop differ only for a process holding CAP_SYS_ADMIN, which production never grants) and the shim
+header comment (comment lines only, see AC15), and Phase 0 M3 confirms the mount stack with `mountinfo`. If M3 contradicts D1, only the
+corrections change, not the guards. ADR-122 (boot-time delivery of the seccomp and AppArmor profiles) is the record
 for the host paths the tuples reference. C4 completeness check (all three of
 `model.c4`, `views.c4`, `spec.c4` considered): external actors (tenant agent processes, the Agent SDK vendor binary), external
 systems (none added), containers (the web-platform container already modeled; no new store or edge), access relationships (unchanged);
@@ -262,8 +266,10 @@ unit battery pins as a literal (so a posture change is a visible two-line diff i
 
 ### Guard 2 — isolation arm discriminates drop from cover, on the vendor's actual tail
 
-**Property.** The argv the real bwrap receives from the shim carries no procfs mount at /proc (dropped, not covered) for the vendor's
-actual setup tail, and that tail is what the suite replays.
+**Property.** The argv the real bwrap receives from the shim carries no argv-requested procfs mount at /proc (dropped, not covered) and
+its last /proc mount is the vendor `--tmpfs /proc`, for the vendor's actual setup tail, and that tail is what the suite replays. (Not
+"no procfs mount object exists": the recursive `--ro-bind / /` carries the container's procfs beneath the tmpfs either way, see
+Deepen-Plan Findings D1. The operative barrier against reaching it is the vendor's `--cap-drop ALL`, pinned by Guard 2 row 11.)
 
 **Assembly.** Three tail sources that must agree, chained by equality: (1) the builder literal pushes in BOTH vendored binaries
 (`@anthropic-ai/claude-agent-sdk-linux-x64`, `@anthropic-ai/claude-code-linux-x64`; the agent runner and the cron CLI path), (2) the
@@ -284,14 +290,15 @@ recorder (`SOLEUR_BWRAP_REAL` stand-in inside the container, the argv the real b
 | 6 | fixture lacks `--bind /proc /proc` or `--tmpfs /proc` (the suite's own derivation dispatch) | RED `FIXTURE_TAIL` before any docker call |
 | 7 | `MUTATE=shim-bypass` (existing) | RED discrimination |
 | 8 | recorder arm deleted from the suite (arm-deletion row: the ledger floor catches it) | RED floor |
+| 11 | the cap segment loses `--cap-drop ALL` (literal count per binary drops to 0) or gains a `--cap-add` other than `CAP_SETFCAP` (synthetic buffer, and a live-spawn tail with an added `--cap-add CAP_SYS_ADMIN`) | RED `CAP_BARRIER` |
 | 9 | `CI=1` and the vendored platform binary path resolves to nothing (the conditional-skip arm: a skipped test exits 0, so the CI-side assertion that the rows RAN is part of the guard) | RED `BINARY_MISSING`, never a skip |
 | 10 | a synthetic buffer carrying a second `"--proc","/proc"` site (a new builder or a refactor) on a binary pinned at 1 site | RED `PROC_SITE_COUNT want 1 got 2`, naming the inspect-and-update steps |
 
 **Harness rows.** Must-PASS non-canonical: a shim run whose vendor argv carries unrelated extra mount tokens
 (`--ro-bind /etc/hostname /etc/hostname`) before the tail, and a vendor stream with no `--tmpfs /proc` of its own (the shim appends
 one): both must pass the recorder arm. The recorder refuses argv it does not model (unknown option arity aborts the arm) so a
-selector-ignoring fake cannot make rows 1 and 7 pass. The property is order-free by construction (no procfs mount remains, so no
-ordering can re-expose it); row 1 is the cover-after case and the matrix therefore carries no reorder row.
+selector-ignoring fake cannot make rows 1 and 7 pass. The property is order-free by construction (no argv-requested procfs mount remains, so no ordering of the argv can add one);
+row 1 is the cover-after case and the matrix therefore carries no reorder row.
 
 **Anchor.** The vendored binary pinned by `package-lock.json` integrity: a fixture or test edit cannot change what the binary pushes,
 so rows 2-5 are independent of the PR diff and of the ack trailer. The recorder compares against the shim's own contract, which a
@@ -345,6 +352,81 @@ or `ENV` that touches PATH, the shim `COPY`, `USER`; the live container PATH for
 names in different case or with `AS` lowercase pass. Anchor: `c4-likec4-version-pin.test.ts` pins the same graph from the vitest side
 (an independent reader of the same file), so the suite's derivation and the pin test must both be edited to weaken it.
 
+## Deepen-Plan Findings (2026-10-12)
+
+Enhancement summary. Sources: the plan-review panel (DHH, Kieran, code-simplicity, architecture-strategist, spec-flow, CTO devex, CPO),
+then security-sentinel and test-design-reviewer, plus inline measurements (a `shlex` prototype of the Phase 2 grammar over the real
+tuples; bounded `python3 -I` mmap reads of both vendored binaries; `gh` checks). Cited issues were resolved live: #10043, #10039, #9938
+merged; #9860 and #9723 closed; #10110 is the open draft PR; the AGENTS rule id `cq-write-failing-tests-before` is active; labels
+`priority/p3-low`, `type/chore`, `domain/engineering`, `meta/machinery` exist. A local docker daemon is present (Server 29.7.2), so Phase 0
+is runnable. Scale: the plan-review panel already fanned out 7 specialist agents on this exact plan one step earlier, so this pass
+added two targeted specialists plus measurements instead of re-running the whole roster.
+
+**D1 [security, P1] drop and cover are not behaviorally distinct for the main vendor argv.** The vendor argv begins `--ro-bind / /` (one push
+per binary), bwrap binds recursively, so the container's procfs is beneath the vendor `--tmpfs /proc` after a drop and after a cover
+alike (the shim's own comments at L110-114 and L629-631 already say a root bind re-exposes procfs). A process without CAP_SYS_ADMIN cannot
+reach it (`umount` is EPERM; nested-userns copies are locked mounts; `/proc` is an empty tmpfs, so there is no `/proc/self/*` to use; the
+shim sweeps inherited fds). The barrier is `--cap-drop ALL`, which the plan now pins (`CAP_BARRIER`). The recorder arm remains the only
+guaranteed discriminator and it measures "no argv-requested procfs mount", which is the shim's contract, not a kernel-level absence.
+Consequences applied: Guard 2 property reworded; ADR-075 and the shim header comment corrected in this PR (expected, not conditional);
+Phase 4.4 becomes the "umount refused under the vendor caps" arm (a positive control with caps retained must succeed, otherwise the
+refusal is not attributable to the cap drop).
+
+**D2 [security, P2] the CLI's second builder is the hook sandbox.** Closed by evidence (Phase 6.1). Not reachable from tenant input on
+the agent runner; fails closed under the masks; counts pinned 2/1/2.
+
+**D3 [Kieran and security, P1] census and grammar gaps.**
+
+- The `docker run` census also covers `docker create`, `docker container run`, global-option forms (`docker -H x run`), `"$DOCKER" run`,
+  `sudo` and absolute-path spellings, and any docker verb naming the app image ref or `--name soleur-web-platform*`. Existing
+  `docker create` sites at `cloud-init.yml` L538/681/724 and `ci-deploy.sh` L4170/4783 are named exemptions only if they do not start the
+  app. Scope stays the web host's two files plus a repo-wide `git grep` for the app name and image ref; other hosts' containers
+  (`egress-gateway-bootstrap.sh`, the zot registry) are out of the closed set by name.
+- Value expressions are allowlisted per option and exact (`--memory "$CANARY_MEMORY_CAP"`, `-e SOLEUR_HOST_ID="$HOST_ID"`,
+  `-e NODE_OPTIONS="$..._NODE_OPTIONS"`, `--env-file "$ENV_FILE"` or `"$TMPENV"`, the two image expressions). Any other `$`, backtick or
+  `${` in a tuple line (a `templatefile` interpolation included) is `UNPARSEABLE_OPTION`. The `NODE_OPTIONS` assignment lines
+  (`ci-deploy.sh` L4249-4250) are pinned to the `--max-old-space-size=` form.
+- Attached or combined short spellings (`-ePATH=x`, `-v/h:/c`, `-u0`, `-dit`) match no whole-token arity entry and are
+  `UNKNOWN_OPTION`; a valueless `-e NAME` is refused; a second `--security-opt apparmor=` or `seccomp=` is `DUPLICATE_OPTION` (docker
+  keeps the last, so a set-valued projection hides it).
+- The prototype run on 2026-10-12 confirmed zero violations on the three real tuples, identical security-opt and tmpfs projections, and
+  the image forms `$VERIFIED_REF` (after stripping `; then`) and `$(cat /run/soleur-image-ref)`.
+
+**D4 [spec-flow, P0] the guard was advisory.** Fixed by the required-lane wrapper (`test/docker-run-tuple-posture.test.ts`) and the
+extra `paths:` entries (Phase 7.5-7.6). Residual, stated: `--env-file` content (Doppler prd) can still carry a key the shim reads
+(`SOLEUR_BWRAP_REAL`, `SOLEUR_BWRAP_SECCOMP_BPF`) or PATH; the `overlay_github_app_key` hijack list refuses PATH, LD_* and similar when
+the overlay runs, but whether it covers `SOLEUR_BWRAP_*` was not confirmed. `measurements.md` records the answer from `ci-deploy.sh`
+L3160-3190 at work time, and the Guard 4 live PATH arm proves the suite container only.
+
+**D5 [test-design, P0 and P1] matrix hardening.** Applied as work-phase requirements for the rows and arms they name:
+
+- Guard 4 gains a static row on the Dockerfile `COPY` destination (shim to `/usr/bin/bwrap` is RED) and a `MUTATE=shim-path` seam for the
+  live arm; the existing wire pin (suite L139) is the base.
+- Guard 1's "posture equals what the suite starts" is a tautology once the suite derives from the tuple. Add a `docker inspect` arm on the
+  running suite container asserting `HostConfig.CapAdd` empty, `PidMode` empty, `User`, the apparmor and seccomp entries and a non-empty
+  `MaskedPaths` (never assert systempaths through `SecurityOpt`: docker consumes it client-side).
+- Placement assertions on every Guard 1 row that edits one of near-identical tuples: the FAIL line must name the intended file and tuple,
+  and the diff of the mutated copy must be confined to that tuple's line range (a first-match `sed` would otherwise edit the canary block
+  and grade a row about the wrong tuple).
+- The M1 fallback needs a positive token (`"arm":"outer-wrap"` plus a verdict) and an unconditional instrument control (the same harness
+  fed `--proc /proc` must produce the refusal), or it passes on any unrelated failure.
+- H1 gets matching stubs for the census (a fixed `tuples=3` must leave rows 5, 6 and 11 NOT KILLED) and for posture-value checks. Add
+  rows for `apparmor=unconfined` and `seccomp=unconfined` as value rewrites and for `TRAILING_ARGS`, and pin row 6 to one token.
+- The recorder arm gets an instrument control (a recorder that records nothing, or is bypassed, must go red: the argv must be non-empty
+  and contain the fixture `--dev` tail) and path-normalization rows (`/proc/`, `//proc`, `--bind-try`, `--dev-bind`, `--ro-bind /proc /proc`).
+- Arm-deletion rows for every new docker arm (PATH live, BASE_LINEAGE, outer replay, FIXTURE_TAIL), and one row proving `MIN_ASSERTIONS`
+  is exact (delete one assertion, expect red). FIXTURE_TAIL, BASE_LINEAGE and the tuple check run before any docker call; a `docker`
+  stub on PATH with an empty call log proves it.
+- Guard 3 consistency: the literal census names three files (outer-wrap, c4-render, `sandbox-canary.mjs`), not two. The C4 fixture pin
+  is a change detector, so add a direct assertion that the built argv has no procfs-mount token, and replace "empty stderr" in the
+  replay with exit 0 plus an output sentinel (bwrap warnings make stderr flaky).
+- Guard 4 `ENV PATH` rows: the legacy `ENV PATH /usr/bin:...` form, a multi-variable `ENV A=1 PATH=...` and a mutant
+  `ENV PATH=/usr/bin:$PATH` must go RED; the compliant spelling must pass; add a `USER` and uid derivation row.
+
+**D6 [plan-review, applied].** Cuts accepted: the cross-artifact checks, the line cap, the ADR addendum as an unconditional item (it is now
+a correction, D1), M6 and M7, the self-grep of the suite. Dissent recorded without being applied (operator scope is the default):
+`knowledge-base/project/specs/feat-one-shot-10065-sandbox-proc-suite-parity/decision-challenges.md`.
+
 ## Implementation Phases
 
 ### Phase 0 — Measurements (before any assertion shape is fixed)
@@ -361,7 +443,7 @@ Phase 5, whose static pins ship either way.
 |---|---|---|
 | M1 | First reconcile what bwrap prod ships (the Dockerfile reverts the file-cap arm and audits zero file-cap binaries, `agent-outer-wrap.ts` L655 says prod bwrap "elevates", ADR-075 mentions a file-cap bwrap): the suite image uses plain Debian bubblewrap and never builds the `runner` stage, so say in the record what the replays do and do not prove. Then `node /app/scripts/sandbox-canary.mjs --replay-outer`: verdict and reason | Phase 5a: assert `"verdict":"pass"` plus `"arm":"outer-wrap"`, or, if the plain Debian bwrap cannot take the outer table unprivileged (the prod posture elevates), assert only "no `mount proc`/procfs refusal and not `sandbox_broken` with `bwrap_operation_not_permitted`" and record why |
 | M2 | `buildLikeC4SandboxArgv` output (a stage dir under `$WORK`, fd 9 on the committed `.bpf`, fd 3 to `/dev/null`) through `/usr/bin/bwrap -- /usr/bin/true` | Phase 5b: whether the replay is a plain pass assertion, and what `--seccomp 9`/`--json-status-fd 3` need from the harness |
-| M3 | First `command -v umount` in the image (Debian splits `mount` out of util-linux; if absent, the behavioral arm uses `python3`-free alternatives or is dropped and recorded). With the shim and with the cover mutant, vendor tail argv WITH caps retained and WITH the vendor's `--cap-drop ALL --cap-add CAP_SETFCAP`: after `umount /proc` inside the sandbox, is the sibling visible, and does `umount` succeed at all? The recursive `--ro-bind / /` may already carry a procfs beneath the vendor tmpfs, in which case drop and cover are behaviorally identical and the cap drop is the operative barrier | Phase 4: add a behavioral cover-vs-drop arm only if it separates the two; otherwise add the "uncover refused under the vendor caps" arm (umount must fail EPERM) and keep the recorder as the cover discriminator. Record the finding either way. If drop and cover are behaviorally identical, stop Phase 4 at the recorder arm and the "uncover refused under the vendor caps" arm, open a security issue (ADR-075 and the shim header rest on "dropping removes the mount object entirely", which the recursive root bind would falsify), amend ADR-075 in this PR, and rewrite Guard 2's property to name the cap drop as the operative barrier; the "no ADR decision" statement above then no longer holds. Time-box M3 to one run |
+| M3 | First `command -v umount` in the image (Debian splits `mount` out of util-linux; if absent, the behavioral arm uses `python3`-free alternatives or is dropped and recorded). With the shim and with the cover mutant, vendor tail argv WITH caps retained and WITH the vendor's `--cap-drop ALL --cap-add CAP_SETFCAP`: after `umount /proc` inside the sandbox, is the sibling visible, and does `umount` succeed at all? Cheap first proof: `bwrap --ro-bind / / --unshare-user --unshare-pid -- cat /proc/self/mountinfo` should list a procfs with no `--proc` and no tail bind. The recursive `--ro-bind / /` carries a procfs beneath the vendor tmpfs (the security review's expected outcome, D1), in which case drop and cover are behaviorally identical for any process without CAP_SYS_ADMIN and the cap drop is the operative barrier | Phase 4: add a behavioral cover-vs-drop arm only if it separates the two; otherwise add the "uncover refused under the vendor caps" arm (umount must fail EPERM) and keep the recorder as the cover discriminator. Record the finding either way. If drop and cover are behaviorally identical, stop Phase 4 at the recorder arm and the "uncover refused under the vendor caps" arm, open a security issue (ADR-075 and the shim header rest on "dropping removes the mount object entirely", which the recursive root bind would falsify), amend ADR-075 in this PR, and rewrite Guard 2's property to name the cap drop as the operative barrier; the "no ADR decision" statement above then no longer holds. Time-box M3 to one run |
 | M4 | The real shim with `SOLEUR_BWRAP_REAL` pointing at a mounted recorder script, inside the container, with the fixture-derived argv | Phase 4: the recorder works under the shim's fd sweep and `--args` handling |
 | M5 | `docker exec -u 1001 <ctr> sh -c 'echo "$PATH"; command -v bwrap; type -a bwrap'` in the suite image | Phase 3: the literal PATH the live arm compares |
 
@@ -382,7 +464,7 @@ that does not exist yet; confirm every row fails for the right reason (missing h
 
 2.1 `apps/web-platform/infra/lib/docker-run-tuple.py` (stdlib only, run as `python3 -I`):
 
-- `check [--root DIR]` prints `docker-run-tuple: ok tuples=3 posture=<12 hex of sha256(posture projection)>` or one
+- `check [--root DIR]` prints `docker-run-tuple:ok tuples=3 posture=<12 hex of sha256(posture projection)>` or one
   `FAIL <TOKEN>: <detail>` line per violation (exit 1). `--root` defaults to the helper's own `../..` so the Check 10 probe runs from
   anywhere; the battery points it at mutated copies.
 - `posture --tuple canary|prod|first-boot [--root DIR]` prints the docker options the suite should start its container with, one per
@@ -432,16 +514,19 @@ the suite's container, built from the base image, cannot) and live arm after `st
 
 4.1 Derive `ISO_ARGV` from `sandbox-canary-argv.json` with `jq`: the prefix is the fixture's own `--ro-bind / /` and `--tmpfs /proc`
 pairs (the fixture's `--unshare-net` is deliberately not carried: the arm measures /proc visibility, and a netns changes nothing about
-it; say so in the suite header), the tail is every token from the LAST `--dev` to the end, which adds
-`--cap-drop ALL --cap-add CAP_SETFCAP` for uid 1001 (a behavior change against today's argv, covered by M3). Fail `FIXTURE_TAIL` (before any docker call) when the fixture lacks the
+it; say so in the suite header), the tail is every token from the LAST `--dev` to the end, then the
+`--cap-add CAP_SETFCAP` pair is removed for the uid-1001 replay (the builder adds it only for euid 0 with setfcap; the fixture was
+captured as root), leaving `--cap-drop ALL` alone (a behavior change against today's argv, covered by M3). Fail `FIXTURE_TAIL` (before any docker call) when the fixture lacks the
 `--dev`, the tail `--bind /proc /proc` or the `--tmpfs /proc` pair.
 4.2 Recorder: a script under `$WORK` mounted read-only, set as `SOLEUR_BWRAP_REAL` for one `docker exec`, writing NUL-separated argv to
 the container tmpfs and then `exec /usr/bin/bwrap "$@"`. The arm asserts the recorded
 argv has no `--proc`, no bind-family token whose source or destination normalizes to `/proc`, and exactly one `--tmpfs /proc`.
 4.3 `MUTATE=shim-cover` seam (battery only): a wrapper that appends `--tmpfs /proc` and keeps the vendor bind, then execs the real
 shim. Header seam list updated.
-4.4 Per M3: either the behavioral cover-vs-drop arm, or the "umount of the mask is refused under the vendor caps" arm; either way a
-sentence in the suite header naming what the behavioral arms do and do not discriminate.
+4.4 Per M3 (expected outcome, D1: cover and drop do not differ behaviorally): the "umount of the mask is refused under the vendor
+caps" arm, with a positive control (caps retained, `umount` succeeds, so the refusal is attributable to the cap drop); a behavioral
+cover-vs-drop arm only if M3 unexpectedly separates them. Either way a sentence in the suite header naming what the behavioral arms do
+and do not discriminate, and the shim header comment and ADR-075 corrections (comment and prose only).
 
 ### Phase 5 — Spawn paths under the masks (P4)
 
@@ -471,9 +556,13 @@ takes a window of at most 4 KiB, and collects, in order, the consecutive string-
 `...caps(...)` spread is opaque and covered by the live-spawn row). Per-binary census of procfs-mount sites: counts of
 `"--proc","/proc"`, `"--bind","/proc","/proc"` and `"--unshare-pid"` are pinned per binary (measured 2026-10-12: SDK 0.3.284 = 1/1/1;
 CLI 2.1.293 = 2/1/2). The CLI's second site is a different builder (the hook sandbox, `/run/claude-hook/apply-seccomp`, an array-literal
-form with a fresh `--proc /proc`); it is not a tail-shaped site, so it is pinned by count only and recorded as reaching the PATH shim,
-which drops `--proc` regardless of destination; whether that hook sandbox is reachable in production is unmeasured and goes in
-`measurements.md`. A new procfs-mount site in any bump reds the count, with a message naming the inspect-and-update steps. The Dockerfile's
+form with a fresh `--proc /proc`); it is not a tail-shaped site, so it is pinned by count only. Resolved by the security review (D2): it exists only in the CLI binary
+(`/run/claude-hook` appears twice there and never in the SDK binary), has no `--ro-bind / /`, so its `--proc` is a pidns-scoped procfs and
+no cross-tenant exposure; the shim drops its `--proc` for any destination and appends the tmpfs mask, so under docker's masks a hook
+sandbox fails closed (availability only, no exposure); the agent runner spawns the SDK binary with `settingSources: []`, and no remote
+or `--cloud` spawn exists in `server/` or `scripts/`. Two extra anchors pin that: the second `--proc` site sits inside the
+`/run/claude-hook` function, and `"--ro-bind","/","/"` stays at one push per binary. The `"--cap-drop","ALL"` literal is pinned at one
+per binary and the only `--cap-add` literal is `CAP_SETFCAP` (`CAP_BARRIER`). A new procfs-mount site in any bump reds the count, with a message naming the inspect-and-update steps. The Dockerfile's
 global `@anthropic-ai/claude-code@2.1.293` is the same pin as `package.json` (`claude-cli-pin-knows-models.test.ts` enforces it), so the
 node_modules binary stands for it. A file reader scans the platform binary in chunks with a
 64 KiB overlap (no `readFileSync` of 243 MB); the platform package is resolved as `@anthropic-ai/<pkg>-linux-x64`.
@@ -484,7 +573,8 @@ never reads the ack trailer or any git state.
 6.3 `test/sandbox-proc-mask-runtime.test.ts`: add the live-tail row: for the recorded setup spawn, the tokens from the last `--dev` to
 the `--` boundary equal the fixture tail with the cap segment normalized (the SDK's `BV()` returns `--cap-drop ALL` only when the process is not root with
 setfcap, and adds `--cap-add CAP_SETFCAP` otherwise; the fixture was captured as root, so a non-root CI run records a shorter tail:
-compare the literal tokens plus an `--cap-drop ALL` prefix check). The existing row only checks the relative order of `--tmpfs /proc` and
+compare the literal tokens, require `--cap-drop ALL`, and require every `--cap-add` to be `CAP_SETFCAP`; a normalization that
+ignored the segment would let an added `--cap-add CAP_SYS_ADMIN` through). The existing row only checks the relative order of `--tmpfs /proc` and
 `--bind /proc /proc`. On `TAIL_DRIFT` the message names the creds-gated `--capture` as the only fixture regenerator (no creds-free
 path exists, by design) and says to inspect the new builder first.
 Runs where bwrap and socat exist (`C4_BWRAP_REQUIRED=1` in CI makes absence a failure).
@@ -506,7 +596,7 @@ spawn-constant edit otherwise never runs the docker replays), and keep the docke
 needs more (the job-level bound is 15; raise the step only with a measured CI wall time, no local figure). The unit suite needs no workflow edit (globbed onto the
 matrix legs); confirm with `bash scripts/test-all.sh --print-selection`.
 7.6 `apps/web-platform/test/docker-run-tuple-posture.test.ts` (new): a vitest wrapper that runs `python3 -I docker-run-tuple.py check` on the
-real tree and requires exit 0 plus the `docker-run-tuple: ok tuples=3` line. The infra-validation jobs are ADVISORY (not in the required
+real tree and requires exit 0 plus the `docker-run-tuple:ok tuples=3` line. The infra-validation jobs are ADVISORY (not in the required
 check set; `infra-validate-required` carries a do-not-make-required note and the workflow has no `merge_group` trigger), so on their own
 they would not stop an appended `--cap-add` from merging; the webplat vitest shards run under the required `test` aggregator.
 7.7 `sandbox-canary-soak.test.sh` L126-130 stay (narrower, harmless); no edit.
@@ -550,7 +640,8 @@ sleep. This diff performs no production write: no deploy workflow dispatch, no r
 - `.claude/hooks/grep-q-pipe-guard.test.sh`: `FILES_8855` entry and `PIN_8855`.
 - `apps/web-platform/infra/apt-bounded.test.sh`: `SPECS` count or `EXEMPT` line only if its census demands it.
 - `.github/workflows/infra-validation.yml`: step comment and three `pull_request` `paths:` entries.
-- `knowledge-base/engineering/architecture/decisions/ADR-075-agent-sandbox-tenant-read-isolation.md`: only if M3 shows drop and cover are behaviorally identical (then a correction, not an addendum line).
+- `knowledge-base/engineering/architecture/decisions/ADR-075-agent-sandbox-tenant-read-isolation.md`: a `## Decision` clarification and an Alternatives Considered row (drop versus cover differ only for a process holding CAP_SYS_ADMIN; D1).
+- `apps/web-platform/infra/bwrap-shim/bwrap`: header comment lines only (L53-56 rationale, D1); no code line changes (AC15).
 
 Verified path globs: `apps/web-platform/infra/*.test.sh` matches 100+ tracked files (`git ls-files`), so the unit suite is globbed;
 `apps/web-platform/test/*.test.ts` is the vitest root (`sandbox-proc-mask-runtime.test.ts` lives there). The vendored binaries resolve
@@ -589,7 +680,7 @@ logs:
 
 discoverability_test:
   command: python3 apps/web-platform/infra/lib/docker-run-tuple.py check
-  expected_output: docker-run-tuple: ok
+  expected_output: docker-run-tuple:ok
 ```
 
 ## Acceptance Criteria
@@ -627,8 +718,10 @@ discoverability_test:
   beside its use.
 - [ ] AC14. The first CI run of the docker step finishes inside its `timeout-minutes` (read from the run, not from a local figure).
 - [ ] AC15. The diff changes no production behavior: `git diff --quiet origin/main...HEAD -- apps/web-platform/Dockerfile
-  apps/web-platform/infra/bwrap-shim apps/web-platform/infra/ci-deploy.sh apps/web-platform/infra/cloud-init.yml
-  apps/web-platform/server` exits 0 (three-dot, merge-base form; a sibling merge touching these paths must not flip it).
+  apps/web-platform/infra/ci-deploy.sh apps/web-platform/infra/cloud-init.yml apps/web-platform/server` exits 0 (three-dot,
+  merge-base form; a sibling merge touching these paths must not flip it), and the shim is changed at most in comment lines:
+  `git diff -U0 origin/main...HEAD -- apps/web-platform/infra/bwrap-shim/bwrap` has no added or removed line that is not a `#` comment
+  (the header correction below is the only expected edit).
 - [ ] AC16. `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` is clean with the new TypeScript files, and the new vitest files
   match the runner's include glob (`test/**/*.test.ts`, `vitest.config.ts`); the helper under `test/helpers/` is imported, not collected.
 - [ ] AC17. PR body says `Closes #10065`, states that the AppArmor-profile half is proven only by the CI run, and does not claim it earlier.
@@ -640,7 +733,7 @@ discoverability_test:
 - Given only the first-boot tuple mutated (canary and prod compliant), when the checker runs, then the failure names `cloud-init.yml`
   (unit, second-member row).
 - Given a tuple using `--cap-add=SYS_ADMIN` spelling, when the checker runs, then it fails the same way (unit).
-- Given the three real files, when the checker runs, then it prints `docker-run-tuple: ok tuples=3` (unit, must-PASS).
+- Given the three real files, when the checker runs, then it prints `docker-run-tuple:ok tuples=3` (unit, must-PASS).
 - Given reordered options and `--restart=unless-stopped`, when the checker runs, then it passes (unit, must-PASS non-canonical).
 - Given the docker suite with `MUTATE=shim-cover`, when it runs locally with the AppArmor override, then the recorder arm fails with
   `DROP_FAILED` and the behavioral arms report as before (integration).
@@ -667,9 +760,9 @@ discoverability_test:
   `grep-q-pipe-guard` into pre-commit: out of scope per the brief.
 - The observed first-boot versus ci-deploy differences (no `--init`, no `--memory`, the egress-reaper env and token volume exist only on
   first boot): classified as benign runtime options in the grammar, not asserted equal and not changed here.
-- Any docker flag, shim, Dockerfile or deploy-path change. If M3 shows drop and cover are behaviorally identical under the recursive
-  root bind (so the cap drop is the operative barrier), that is reported in the PR for security review; changing the shim is a separate
-  decision the security review owns.
+- Any docker flag, shim logic, Dockerfile or deploy-path change. The only non-test edits are prose corrections (the shim header comment
+  and ADR-075, D1). If M3 or review shows the drop-versus-cover choice should be revisited as a design question (for example a rule that
+  the vendor root bind must not be recursive), that is a separate decision the security review owns.
 
 ## Risks and Sharp Edges
 
