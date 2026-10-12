@@ -48,3 +48,11 @@ warning-masquerade edge, stale `MOCK_SUDO_DENY=1` doc strings).
 terraform validate OK, visudo -cf OK, shellcheck clean.
 
 Remaining: round-2 suite re-verify → review summary/trailer → qa → compound → ship.
+
+## QA (2026-10-12)
+
+Test Scenarios are integration-level Given/When/Then prose (no executable Browser:/API verify:/
+Cleanup: steps) — covered by unit test suite + manual Phase 6 cross-check. Skipping automated QA.
+The (e2e, apply-time) scenario runs inside apply-deploy-pipeline-fix.yml post-merge (it IS the
+apply gate). Trailers: Reviewed-Coverage `full 8/8` (8288b6b5e7), Reviewed-Fix-Round
+(50aa95c0ea over 9005da4048..). Review summary posted to PR #10063.
