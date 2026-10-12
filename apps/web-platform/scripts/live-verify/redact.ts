@@ -23,6 +23,11 @@ const PLACEHOLDER = "[REDACTED]";
 // surrounding structure), then the generic JWT/email sweeps catch anything that
 // escaped a location rule.
 const RULES: Array<[RegExp, string]> = [
+  // GitHub tokens (#5487): the trigger-gate step runs `gh api` with GH_TOKEN.
+  // These arms run FIRST: a generic-shape arm matching mid-body on a rotated
+  // token's punctuation would shatter the gh*_ run and leak the tail.
+  [/gh[pousr]_[A-Za-z0-9._~+/=-]{20,}/g, "[REDACTED_GH_TOKEN]"],
+  [/github_pat_[A-Za-z0-9._~+/=-]{20,}/g, "[REDACTED_GH_TOKEN]"],
   // URL query secrets (incl. the Realtime WS connect URL: ?apikey=&access_token=)
   [
     /([?&](?:access_token|refresh_token|provider_token|apikey|token)=)[^&\s"'#]+/gi,
@@ -58,9 +63,6 @@ const RULES: Array<[RegExp, string]> = [
   // shape match is the only option; the `dp.<class>.` prefix is stable across
   // service/personal/service-account/CLI/scim/audit token classes.
   [/dp\.(?:st|pt|sa|ct|scim|audit)\.[A-Za-z0-9._-]{10,}/g, "[REDACTED_DOPPLER]"],
-  // GitHub tokens (#5487): the trigger-gate step runs `gh api` with GH_TOKEN.
-  [/gh[pousr]_[A-Za-z0-9]{20,}/g, "[REDACTED_GH_TOKEN]"],
-  [/github_pat_[A-Za-z0-9_]{20,}/g, "[REDACTED_GH_TOKEN]"],
   // JSON token keys: "access_token":"...", "refresh_token":"...", etc.
   [
     /(["'](?:access_token|refresh_token|provider_token)["']\s*:\s*")[^"]+/gi,
