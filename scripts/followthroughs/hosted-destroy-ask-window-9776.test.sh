@@ -41,7 +41,10 @@ cat > "$QUERY_STUB" <<'STUB'
 printf '%s\n' "$*" >> "$STUB_ARGS"
 case "$1" in
   SELECT*)
-    if [ -n "${STUB_LIVE_RC:-}" ] && [ "$STUB_LIVE_RC" != 0 ]; then echo "auth failure for user secret-user at host secret-host" >&2; exit "$STUB_LIVE_RC"; fi
+    if [ -n "${STUB_LIVE_RC:-}" ] && [ "$STUB_LIVE_RC" != 0 ]; then
+      printf '{"n":999,"recent":50,"days":8}\n'   # a plausible payload that must NOT be read when the exit is non-zero
+      echo "auth failure for user secret-user at host secret-host" >&2; exit "$STUB_LIVE_RC"
+    fi
     # Real ClickHouse JSONEachRow quotes 64-bit counts when output_format_json_quote_64bit_integers is on, so a STUB_LIVE that
     # carries its own quotes (STUB_LIVE='"123"') drives that shape. days defaults to a value that satisfies the window asked.
     case "$*" in *"7 DAY"*) dflt_days=8 ;; *) dflt_days=2 ;; esac
@@ -192,7 +195,12 @@ out_rc 24h "$ROOT/empty" STUB_LIVE=1; check "liveness count of exactly 1 is live
 out_rc 24h "$ROOT/empty" STUB_LIVE='"123"'; check "a QUOTED count (\"123\", ClickHouse quote_64bit_integers) is live: exit 2" 2 "$RC"
 out_rc 24h "$ROOT/empty" STUB_LIVE='"0"'; check "a quoted zero count is dark: exit 3" 3 "$RC"
 out_rc 24h "$ROOT/empty" STUB_LIVE=1.5; check "a fractional count is unparseable: exit 3" 3 "$RC"
-out_rc 24h "$ROOT/empty" STUB_LIVE_RC=22 STUB_LIVE=999; check "a non-zero query exit with a plausible count on stdout never reads live: exit 3" 3 "$RC"
+out_rc 7d "$ROOT/empty" STUB_LIVE_RECENT='"7"' STUB_LIVE_DAYS='"8"'; check "7d with QUOTED recent and days (ClickHouse quotes every UInt64) is live: exit 5" 5 "$RC"
+out_rc 7d "$ROOT/empty" STUB_LIVE_DAYS='"5"'; check "7d with a quoted days below the floor: exit 3" 3 "$RC"
+out_rc 24h "$ROOT/empty" STUB_LIVE_DAYS=0; check "24h with zero distinct days: exit 3" 3 "$RC"
+out_rc 24h "$ROOT/empty" STUB_LIVE_RECENT=garbage; check "a non-numeric recent field: exit 3" 3 "$RC"
+out_rc 24h "$ROOT/empty" STUB_LIVE='"007"' STUB_LIVE_RECENT='"08"' STUB_LIVE_DAYS='"02"'; check "leading-zero counts are read as base 10 (08 is not an octal error): exit 2" 2 "$RC"
+out_rc 24h "$ROOT/empty" STUB_LIVE_RC=22; check "a non-zero query exit with a plausible count on stdout never reads live: exit 3" 3 "$RC"; has "...and says why" "$OUT" "exited 22"
 # an app-container row whose raw is truncated or not JSON cannot be classified, so it must NOT be silently excluded (user-impact P1)
 printf '%s\n' '{"dt":"2026-10-12 09:00:00","raw":"{\"message\":{\"decision\":\"destroy-ask\",\"leve"}' > "$ROOT/trunc-raw"
 out_rc 24h "$ROOT/trunc-raw"; check "M10: an undecodable row mentioning the marker is SHAPE_DRIFT, not isolated away: exit 3" 3 "$RC"; has "...named SHAPE_DRIFT" "$OUT" "SHAPE_DRIFT"
@@ -201,6 +209,18 @@ out_rc 24h "$ROOT/trunc-raw"; check "M10: an undecodable row mentioning the mark
 out_rc 24h "$ROOT/lv30"; check "level 30 rows are not asks, and an app row mentioning the marker with no WARN lane row is SHAPE_DRIFT (fail closed): exit 3" 3 "$RC"; has "...named SHAPE_DRIFT" "$OUT" "SHAPE_DRIFT"
 { ROW_LEVEL=none rows_of 3 destroy-ask git-force-default lvl/none; } > "$ROOT/lvnone"
 out_rc 24h "$ROOT/lvnone"; has "rows with no level key count (documented default 40)" "$OUT" "window 24h: asks=3 "
+{ ROW_LEVEL=50 rows_of 2 destroy-ask git-force-default lvl/err; } > "$ROOT/lv50"
+out_rc 24h "$ROOT/lv50"; has "level 50 rows are asks (>= 40, not == 40)" "$OUT" "window 24h: asks=2 "
+# M10b: a `raw` that decodes to a JSON STRING or an ARRAY quoting the marker is unclassifiable, never foreign
+printf '%s\n' '{"dt":"2026-10-12 09:00:00","raw":"\"a string quoting destroy-ask\""}' > "$ROOT/raw-string"
+out_rc 24h "$ROOT/raw-string"; check "M10b: a raw that decodes to a JSON string quoting the marker is SHAPE_DRIFT: exit 3" 3 "$RC"
+printf '%s\n' '{"dt":"2026-10-12 09:00:00","raw":"[\"destroy-ask\"]"}' > "$ROOT/raw-array"
+out_rc 24h "$ROOT/raw-array"; check "M10b: a raw that decodes to a JSON array quoting the marker is SHAPE_DRIFT: exit 3" 3 "$RC"
+# M11: an app-shaped row (source_kind app_container) whose container key is missing or renamed is NOT the journald shape: counted, not excluded
+printf '%s\n' '{"dt":"2026-10-12 09:00:00","raw":"{\"message\":{\"decision\":\"destroy-ask\",\"level\":40},\"container_name\":\"soleur-web-platform\",\"source_kind\":\"app_container\"}"}' > "$ROOT/renamed-key"
+out_rc 24h "$ROOT/renamed-key"; check "M11: a renamed container key on an app_container row is SHAPE_DRIFT, not silently excluded: exit 3" 3 "$RC"
+# H0 control: the measured journald contamination shape (no container key, source_kind journald) is still excluded
+out_rc 24h "$ROOT/h0"; check "H0 control: journald-shaped rows are still excluded after M11: exit 2" 2 "$RC"
 
 
 # --- instrument self-test: check/has/hasnt must REJECT. The floor and the conservation check count calls, not verdicts, so a
@@ -213,6 +233,7 @@ if [ "$FAIL" -ne $((st_f + 3)) ] || [ "$PASS" -ne "$st_p" ]; then
   exit 1
 fi
 PASS=$st_p; FAIL=$st_f; CHECKED=$st_c
+ST_RAN=1
 
 # --- exit vocabulary and xtrace
 for f in r1 r2 r3 s1 s3 drift empty; do
@@ -223,8 +244,13 @@ done
 OUT="$(STUB_ROWS="$ROOT/r1" STUB_ARGS="$ROOT/args" DESTROY_ASK_QUERY_SCRIPT="$QUERY_STUB" BETTERSTACK_QUERY_HOST=h BETTERSTACK_QUERY_USERNAME=u BETTERSTACK_QUERY_PASSWORD=p bash -x "$SUT" --window 24h 2>&1)"; RC=$?
 check "xtrace with a live credential: refuses (78)" 78 "$RC"
 
+# The instrument self-test unwinds its own counters, so neither the floor nor the conservation check can see it vanish: assert it ran.
+if [ "${ST_RAN:-0}" != 1 ]; then
+  printf '[FATAL] the instrument self-test block did not run (check/has/hasnt were never driven in the failing direction)\n' >&2
+  exit 1
+fi
 # Anti-vacuity floor: a literal directly above its `if`, reported by printf + exit, never through the helpers.
-MIN_CHECKS=108
+MIN_CHECKS=119
 if [ "$CHECKED" -lt "$MIN_CHECKS" ]; then
   printf '[FATAL] assertion floor: only %s assertions ran, floor %s\n' "$CHECKED" "$MIN_CHECKS" >&2
   exit 1

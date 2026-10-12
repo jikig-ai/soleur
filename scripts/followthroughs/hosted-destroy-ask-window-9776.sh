@@ -21,8 +21,9 @@
 # `raw` has CONTAINER_NAME == soleur-web-platform): a bare `--grep destroy-ask` also returns the Inngest host's journald
 # copies of GitHub webhook payloads that QUOTE the marker (36 rows in 24h and 57 in 7d, measured 2026-10-12), which used
 # to trip SHAPE_DRIFT on every sweep. A row is excluded only when it is POSITIVELY another service's: its `raw` decodes to
-# an object whose CONTAINER_NAME is not the app container. A marker-mentioning row whose `raw` does not decode (truncated,
-# non-JSON) cannot be classified, so it still counts toward SHAPE_DRIFT. The stored-row check (DECODABLE) is deliberately
+# an object with a CONTAINER_NAME that is not the app container, or with no CONTAINER_NAME and source_kind "journald" (the
+# measured Inngest shape). Any other marker-mentioning row cannot be classified as foreign (truncated or non-JSON `raw`, a
+# non-object, an object carrying neither key, e.g. a renamed key) and still counts toward SHAPE_DRIFT. The stored-row check (DECODABLE) is deliberately
 # NOT isolated: it asks whether the body is stored rows at all, and a result holding only another service's rows is still
 # stored rows. The raw-line truncation check stays on the RAW count, because contaminating rows fill the row limit
 # before isolation and would otherwise let truncation evict real lane rows unnoticed. (2) A window with zero asks is only
@@ -57,12 +58,14 @@
 # BETTERSTACK_QUERY_PASSWORD (wired in scheduled-followthrough-sweeper.yml).
 #
 # STORED SHAPE: measured 2026-10-10 on live app-container rows (a pino WARN line is stored as `raw` = a JSON string
-# whose `.message` is the pino object, with `.level` 40 and `.msg`); NOT measured on a `destroy-ask` row, which cannot
-# exist before the lane ships. A decode that finds marker-mentioning rows and none that decode is reported as
-# SHAPE_DRIFT, never as "not yet".
+# whose `.message` is the pino object, with `.level` 40 and `.msg`); NOT measured on a `destroy-ask` row: none was
+# stored at the time of writing (the lane has been live since 2026-10-12T08:38Z, 0 natural asks in the first hour). A decode that
+# finds marker-mentioning rows and none that decode is reported as SHAPE_DRIFT, never as "not yet".
 #
-# RETIREMENT (the flip PR deletes these together; ADR-284 "Flip checklist"): this file, its .test.sh, its run_suite row in scripts/test-all.sh,
-# and the two tracker directives.
+# RETIREMENT (the flip PR deletes these together; the full list is ADR-284 "Flip checklist"): this file, the -24h.sh and -7d.sh
+# wrappers, its .test.sh, its run_suite row in scripts/test-all.sh, its rows in scripts/suite-shard-legs.tsv and
+# scripts/suite-durations.tsv, the two tracker directives, and the PROBE_DECODE_ONLY mode of
+# apps/web-platform/scripts/dev-probe-destroy-ask.ts (it execs this script).
 set -uo pipefail
 
 case "$-" in
@@ -145,12 +148,13 @@ fi
 
 TOTAL="$(printf '%s' "$ROWS" | grep -c . || true)"
 # Stored rows that mention the marker and are NOT positively another service's (see the header): the app container's own
-# rows and rows whose `raw` does not decode. Another service's rows quoting the marker are not a shape drift.
+# rows and every row that cannot be classified as foreign. Another service's rows quoting the marker are not a shape drift.
 MENTIONS="$(printf '%s\n' "$OUT" \
   | jq -R -r --arg m "$MARKER" --arg c "$APP_CONTAINER" '
       fromjson? | select(type == "object" and has("raw")) | select((.raw | tostring) | contains($m))
       | (try (.raw | fromjson) catch null) as $o
-      | select(($o | type) != "object" or $o.CONTAINER_NAME == $c) | 1' 2>/dev/null \
+      | select(($o | type) != "object"
+               or (if $o | has("CONTAINER_NAME") then $o.CONTAINER_NAME == $c else (($o.source_kind // "") != "journald") end)) | 1' 2>/dev/null \
   | grep -c . || true)"
 if (( TOTAL == 0 && MENTIONS > 0 )); then
   echo "CANNOT ESTABLISH: SHAPE_DRIFT — ${MENTIONS} row(s) mention $MARKER but none decodes as a lane row; the stored shape may have changed (re-measure it against a live row)."
@@ -171,7 +175,7 @@ if (( TOTAL == 0 )); then
   fi
   # Three non-negative integers or nothing: any other shape (garbage, a missing key, a float) leaves LIVE_FIELDS empty.
   LIVE_FIELDS="$(printf '%s\n' "$LIVE_OUT" \
-    | jq -R -r 'fromjson? | select(type == "object") | [.n, .recent, .days] | map(tostring) | select(all(.[]; test("^[0-9]+$"))) | @tsv' 2>/dev/null \
+    | jq -R -r 'fromjson? | select(type == "object") | [.n, .recent, .days] | map(tostring) | select(all(.[]; test("\\A[0-9]+\\z"))) | @tsv' 2>/dev/null \
     | head -1)"
   LIVE=""; LIVE_RECENT=""; LIVE_DAYS=""
   IFS=$'\t' read -r LIVE LIVE_RECENT LIVE_DAYS <<<"$LIVE_FIELDS"
@@ -179,6 +183,8 @@ if (( TOTAL == 0 )); then
     echo "CANNOT ESTABLISH: the channel liveness query returned no parseable counts (output withheld); zero asks cannot be read as a quiet window."
     exit 3
   fi
+  # Force base 10: a leading zero would otherwise read as octal, and a value that is not valid octal makes `(( ))` error and fall through.
+  LIVE=$((10#$LIVE)); LIVE_RECENT=$((10#$LIVE_RECENT)); LIVE_DAYS=$((10#$LIVE_DAYS))
   MIN_DAYS=1; [[ "$WINDOW" == "7d" ]] && MIN_DAYS="$LIVE_MIN_DAYS_7D"
   if (( LIVE == 0 )); then
     echo "CANNOT ESTABLISH: zero ask rows AND zero app-container pino WARN rows in the same ${WINDOW} window: the liveness check failed, so the channel is dark or the allowlist moved. An empty read here is not a quiet window."
@@ -197,7 +203,7 @@ if (( TOTAL == 0 )); then
     echo "ACTION REQUIRED: the trailing 7d read shows 0 natural asks on a live channel; the soak did not exercise the lane. This trailing read is an alarm, not the measurement: confirm with an explicit [T0, T0+7d] read, then open the flip PR per ADR-284 'Flip checklist' (criterion 4, production arrival, needs the operator's decision). This n=0 statement is not a clean-lane claim; this probe does not close the tracker."
     exit 5
   fi
-  echo "NOT YET: no 24h revert threshold tripped. 0 natural asks in the window (expected at low volume; the lane's liveness is the dev probe, CLO C9)."
+  echo "NOT YET: no 24h revert threshold tripped. 0 natural asks in the window, so the soak did not exercise the lane (expected at low volume; the lane's liveness is the dev probe, CLO C9, a manual run tracked by #10111)."
   exit 2
 fi
 

@@ -195,7 +195,11 @@ is hand-built: it proves the decoder reads the real pino object, not that Vector
 Probe self-checks (exact outcomes): the pre-fix tree on SDK 0.3.284 FAILS with `canUseToolCalls=[]` and `bashAttempted=true` (the harness
 can go red, and it reproduces #10054); a grant that is not live aborts `CANT-RUN:grant-not-live` (exit 3, no SDK call); a dispatch that
 selects nothing prints no `PROBE` line and exits 3; a model that does not use Bash exits 3; a member case wired with `isOwner:true` FAILS
-(exit 1); a second case with a widened card fails while the first stays ok (exit 1); a different grantable command passes with no card.
+(exit 1); a second case with a widened card fails while the first stays ok (exit 1); a different grantable command passes with no card;
+`PROBE_ONLY` with a typo or with `sandbox-engaged-control` and no `PROBE_PREFLIGHT` exits 3 (`unknown-or-unavailable-case`, `no-case-selected`)
+before any model call; a case table that disagrees with the name list is `case-table-drift` and a default matrix of fewer than 8 cases is
+`case-count-below-floor`, both exit 3 and never PASS. These offline guards were exercised by hand in the review round and have no committed
+suite row (see #10111).
 
 **Telemetry readout (self-pulled 2026-10-12, counts only), window T0 2026-10-12T08:40Z to about 09:47Z (about 1 h 7 min).** Better Stack
 source 2457081: `logs_retention` 90 days; the shipper's `app_container_warn_filter` keeps pino level 40 and above (the lane's lines are
@@ -212,7 +216,9 @@ measured zero, but at founder-only volume it says nothing about the lane itself.
 hosted" below cannot be run (there is no dev account and no deployed dev hosted instance). It is proposed to be replaced by two limbs:
 (a) card behaviour, the real-SDK probe above on the deployed SDK, bundled CLI and option builder, run on the DEV HOST (host bwrap), not in
 the hosted container, so the container sandbox (the variable behind #10054) is not exercised and a PASS is not a sandbox witness;
-(b) production arrival, which is NOT OBSERVED and stays open until one production arrival is recorded, pulled by API. Limb (a) may be closed by ratified decision, which does not make it a dev-hosted
+(b) production arrival, which is NOT OBSERVED and stays open until one production arrival is recorded, pulled by API, or the OPERATOR
+records an explicit acceptance of in-process emission plus channel liveness as the substitute (Flip checklist criteria 4 and 6); an agent
+never records that acceptance. Limb (a) may be closed by ratified decision, which does not make it a dev-hosted
 observation. The claim "the ask gate is verified in production" must not appear anywhere: the strongest true sentence is "the real-SDK
 probe passes against the deployed SDK, CLI and option builder on the dev host; production telemetry arrival is not yet observed."
 
@@ -264,9 +270,9 @@ of the repository through the installation token and is not itself audited.
   > sweep); an unclassifiable (undecodable) marker-mentioning row still counts toward SHAPE_DRIFT; (2) on zero asks requires a liveness
   > read over the same window and both Better Stack arms (one UNION count: any app-container WARN row, one in the last 3 hours, and for
   > 7d rows on at least 6 calendar days), else exit 3; (3) exits 5 on a trailing 7d read with zero asks on a live channel, pointing at
-  > this ADR's Flip checklist. The sentences above that the probe "does not check the lane's liveness" and that a `destroy-ask` row
-  > "does not exist before the lane ships" are superseded: it checks the CHANNEL's liveness (not the lane's), and the lane has been live
-  > since 2026-10-12T08:38Z with no stored row yet (0 natural asks in the first hour; see the telemetry readout).
+  > this ADR's Flip checklist. The sentence above that the probe "does not check the lane's liveness" is REFINED, not
+  > superseded (it checks the CHANNEL's liveness, still not the lane's), and "does not exist before the lane ships" is superseded: the lane
+  > has been live since 2026-10-12T08:38Z with no stored row yet (0 natural asks in the first hour; see the telemetry readout).
 - **Widening trigger for a versioned acknowledgement (CPO4-R8).** Any change that widens what hosted autonomous mode may do without
   asking (relaxing the lane, adding a flag that bypasses it, enabling the hook's weaker modes) first requires the versioned
   acknowledgement. Smallest design, recorded so it is not re-litigated: one nullable `autonomous_disclosure_ack_version smallint` on
@@ -302,15 +308,16 @@ of the repository through the installation token and is not itself audited.
 4. The channel is proven live over the same windows (allowlist, retention, archive arm, positive control rows). If zero natural asks
    persist, arrival of the pino line and the Sentry event in the production sinks is recorded as NOT OBSERVED, and the OPERATOR decides
    whether in-process emission plus channel liveness is accepted as the substitute or a production write (a synthetic ask) is authorised.
-   Without that recorded decision, limb (b) of the proposed equivalence stays open and the audit stays NOT DISCHARGED: `accepted` is
-   then not reachable.
+   Without a recorded arrival or that recorded acceptance, limb (b) of the proposed equivalence stays open and the audit stays NOT
+   DISCHARGED: `accepted` is then not reachable.
 5. No SDK, bundled-CLI, sandbox-option, hook or option-builder change landed between the fix deploy and the flip (check `git log
    dfb9e2dba5..origin/main` over `apps/web-platform/package*.json`, `server/agent-runner-sandbox-config.ts`, `server/sandbox-hook.ts`,
    `server/agent-runner-query-options.ts`, `server/permission-callback.ts` and `server/destroy-ask-*.ts`); otherwise re-run the probe on
    that build and re-time both directives from that deploy. sdk-bump-sandbox-gate.sh does NOT enforce this (it demands a commit
    attestation on a lockfile SDK change and cannot see the other files), so this check is a human step.
-6. The OPERATOR ratifies limb (a) of the proposed equivalence in the flip PR, and the counsel-review audit disposition is updated by the
-   CLO agent in the same PR (limb (b) per criterion 4).
+6. The OPERATOR ratifies limb (a) of the proposed equivalence in the flip PR (and, per criterion 4, records the acceptance of the
+   substitute for limb (b) unless a production arrival has been recorded), and the counsel-review audit disposition is updated by the
+   CLO agent in the same PR to record both decisions.
 
 **An agent running this checklist stops at criteria 4 and 6.** They are the operator's decisions: leave the flip PR in DRAFT, state which
 criterion is open, and ask; never treat "in-process emission plus channel liveness" as accepted on the operator's behalf.
@@ -327,7 +334,8 @@ The flip PR's own work: record the final counts in the ADR-277 addendum; set `st
 sweep `knowledge-base/INDEX.md`, the ADR-277 addendum, the counsel-review audit, the post-mortem and `knowledge-base/legal/` for
 future-tense sentences about the lane; retire the soak probe family together as its header says (`hosted-destroy-ask-window-9776.sh`,
 `-24h.sh`, `-7d.sh`, the `.test.sh`, the `run_suite` row in `scripts/test-all.sh`, the matching rows in `scripts/suite-shard-legs.tsv` and
-`scripts/suite-durations.tsv`, both tracker directives); then `git grep -n 'hosted-destroy-ask-window-9776'` must return nothing outside
+`scripts/suite-durations.tsv`, both tracker directives, and the `PROBE_DECODE_ONLY` mode of `dev-probe-destroy-ask.ts`, which execs the soak
+script: remove the mode or repoint it); then `git grep -n 'hosted-destroy-ask-window-9776'` must return nothing outside
 `knowledge-base/` history; close #9776 and #9976 by hand (`gh issue close 9776 9976`) and REMOVE their `follow-through` label
 (`gh issue edit <n> --remove-label follow-through`) so the closed-set sweep stops re-running the probe. Retiring the soak probe leaves
 nothing that detects a lane re-inerted by a later change: the follow-up that does is #10111 (a scheduled real-SDK probe on SDK bump and a
