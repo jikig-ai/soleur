@@ -2,6 +2,10 @@
 # Sourced destroy-guard gate for the git-data-host-replace scoped -replace
 # (apply_target=git-data-host-replace in .github/workflows/apply-web-platform-infra.yml, #6242).
 #
+# Two functions live here: git_data_host_replace_gate (the PRE-apply destroy-guard, #6242) and
+# git_data_host_post_apply_assert (the post-apply backstop over the same saved plan, #10137; see the
+# comment block above it near the end of this file).
+#
 # EXTRACTED + SOURCED (mirrors registry-host-replace-gate.sh / inngest-host-replace-gate.sh):
 # both the workflow's git_data_host_replace plan step AND
 # tests/scripts/test-git-data-host-replace-gate.sh source this file and call
@@ -333,46 +337,56 @@ git_data_host_replace_gate() {
 # compared `!= "0"` / `== "0"` so an empty string (jq failed) refuses rather than satisfies.
 # Callers must use `if ! git_data_host_post_apply_assert ...; then exit 1; fi` — a bare call under
 # `set +e` fails open.
+# WHAT THIS READS: the SAVED plan, written before `terraform apply` ran. It reads no state and calls
+# no API, so it is the pre-apply gate's own bytes graded again after the apply has COMPLETED. A
+# refusal is therefore detective: the infrastructure has already changed. Wording below says "saved
+# plan shows" for that reason, never "the volume is preserved" as an observed outcome.
+# VOLUME ADDRESSES are matched by shape (root, indexed or module-prefixed), so a later `count`,
+# `for_each` or module move of a data volume cannot make the check count zero and pass.
 # OUTPUT DISCIPLINE: addresses and counts only, never a .change.before/.change.after value.
 git_data_host_post_apply_assert() {
   local plan_json="$1" mode="${2:-}"
-  local vols=() vol vol_deletes nic_creates att att_creates
+  local vols=() vol vol_re vol_deletes nic_creates att att_creates safe_mode
   case "$mode" in
-    replace) vols=(hcloud_volume.git_data hcloud_volume.git_data_luks) ;;
-    rotate)  vols=(hcloud_volume.git_data) ;;
-    *) echo "git_data_host_post_apply_assert: unknown mode '${mode}' - wiring fault, refusing"; return 1 ;;
+    replace) vols=(git_data git_data_luks) ;;
+    rotate)  vols=(git_data) ;;
+    *)
+      safe_mode="${mode//[^A-Za-z_-]/?}"
+      echo "git_data_host_post_apply_assert: unknown mode '${safe_mode:0:16}' — wiring fault, refusing"
+      return 1 ;;
   esac
   plan_gate_assert_readable     "git_data_host_post_apply_assert" "$plan_json" || return 1
   plan_gate_assert_classifiable "git_data_host_post_apply_assert" "$plan_json" || return 1
   for vol in "${vols[@]}"; do
-    vol_deletes=$(jq --arg v "$vol" '[.resource_changes[]?
-      | select(.address == $v)
+    vol_re='^(module\.[^.]+(\[[^\]]*\])?\.)*hcloud_volume\.'"${vol}"'(\[[^\]]*\])?$'
+    vol_deletes=$(jq --arg re "$vol_re" '[.resource_changes[]?
+      | select((.address // "") | test($re))
       | select(.change.actions? | any(. == "delete" or . == "forget"))] | length' "$plan_json" 2>/dev/null) || vol_deletes=""
     if [[ "$vol_deletes" != "0" ]]; then
-      echo "::error::${vol} shows ${vol_deletes:-<unreadable>} delete/forget action(s) in the applied plan — the data store must be preserved. This should have been caught by the guard; failing hard."
+      echo "::error::hcloud_volume.${vol} shows ${vol_deletes:-<unreadable>} delete/forget action(s) in the saved plan that was applied — the data store must be preserved, and the apply has already completed. This should have been caught by the guard; failing hard."
       return 1
     fi
   done
   nic_creates=$(jq '[.resource_changes[]?
     | select(.address == "hcloud_server_network.git_data")
     | select(.change.actions? | index("create"))] | length' "$plan_json" 2>/dev/null) || nic_creates=""
-  if [[ -z "$nic_creates" || "$nic_creates" == "0" ]]; then
-    echo "::error::hcloud_server_network.git_data shows no create action in the applied plan — the new host would have no private NIC. This should have been caught by the guard; failing hard."
+  if [[ ! "$nic_creates" =~ ^[1-9][0-9]*$ ]]; then
+    echo "::error::hcloud_server_network.git_data shows no create action in the saved plan that was applied — the new host would have no private NIC. This should have been caught by the guard; failing hard."
     return 1
   fi
   for att in hcloud_volume_attachment.git_data hcloud_volume_attachment.git_data_luks; do
     att_creates=$(jq --arg a "$att" '[.resource_changes[]?
       | select(.address == $a)
       | select(.change.actions? | index("create"))] | length' "$plan_json" 2>/dev/null) || att_creates=""
-    if [[ -z "$att_creates" || "$att_creates" == "0" ]]; then
-      echo "::error::${att} shows no create action in the applied plan — the new host would boot with that store UNMOUNTED. This should have been caught by the guard; failing hard."
+    if [[ ! "$att_creates" =~ ^[1-9][0-9]*$ ]]; then
+      echo "::error::${att} shows no create action in the saved plan that was applied — the new host would boot with that store UNMOUNTED. This should have been caught by the guard; failing hard."
       return 1
     fi
   done
   if [[ "$mode" = rotate ]]; then
-    echo "plaintext volume preserved (0 delete/forget); LUKS volume replaced as intended by the rotate arm; private NIC + both store attachments re-attached (create present) in the applied plan."
+    echo "plaintext volume preserved (saved plan shows 0 delete/forget); LUKS volume replaced as intended by the rotate arm; private NIC + both store attachments re-attached (create present) in the saved plan."
   else
-    echo "both data volumes preserved (0 delete/forget), private NIC + both store attachments re-attached (create present) in the applied plan."
+    echo "both data volumes preserved (saved plan shows 0 delete/forget), private NIC + both store attachments re-attached (create present) in the saved plan."
   fi
   return 0
 }
