@@ -2,8 +2,8 @@
 # n=8
 # generated-from-run=incremental
 # generated-from-runs=incremental
-# default-weight-ms=1180
-# generated-at=2026-10-12T14:56:58Z
+# default-weight-ms=1194
+# generated-at=2026-10-12T08:32:10Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -137,7 +137,6 @@ plugins/soleur/skills/review/test/emit-review-trailer.test.sh	5
 plugins/soleur/skills/review/test/fix-round-seats.test.sh	2
 plugins/soleur/skills/skill-security-scan/test/argv-ceiling.test.sh	1
 plugins/soleur/skills/skill-security-scan/test/meta-dir-reap.test.sh	2
-plugins/soleur/skills/skill-security-scan/test/redact-pii-ghs-shape.test.sh	1
 plugins/soleur/test/_base-notice-frontmatter.test.sh	8
 plugins/soleur/test/admin-merge-ready-wiring.test.sh	4
 plugins/soleur/test/audit-flag-flip.test.sh	5
@@ -294,7 +293,6 @@ scripts/anthropic-admin-key-6297	5
 scripts/anthropic-double-bill-8611	6
 scripts/assert-dependabot-drain-live	3
 scripts/assert-dependabot-drain-unit	2
-scripts/audit-dev-scheduled-shapes	1
 scripts/audit-suite-reads	8
 scripts/battery-ref-guard	5
 scripts/battery-tag-authorship	2
@@ -456,7 +454,6 @@ scripts/orphan-process-reaper-mutations	5
 scripts/plugin-delivery-canary	7
 scripts/plugin-legacy-resolver-probe	3
 scripts/pre-push-ratchet-lane	4
-scripts/probe-github-app-mint	1
 scripts/probe-legal-corpus-truth-live	1
 scripts/prod-version-drift-check	5
 scripts/raise-tmp-tmpfs-ceiling	6
