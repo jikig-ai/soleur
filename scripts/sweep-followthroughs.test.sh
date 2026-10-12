@@ -98,6 +98,7 @@ setup_tmpdir() {
   mkdir -p "$root/scripts/followthroughs" "$root/bin"
   cat > "$root/bin/gh" <<'EOF'
 #!/usr/bin/env bash
+case " $* " in *" --body-file - "*) [ -t 0 ] || timeout 2 cat >/dev/null ;; esac
 echo "TEST BUG: real gh invoked with: $*" >&2
 exit 99
 EOF
@@ -433,12 +434,13 @@ make_gh_stub() {
   printf '%s' "$comments_json" > "$root/comments.json"
   cat > "$root/bin/gh" <<EOF
 #!/usr/bin/env bash
+case " \$* " in *" --body-file - "*) [ -t 0 ] || timeout 2 cat > "$root/comment-\$3" ;; esac
 printf '%s\n' "gh \$*" >> "$root/gh-calls.log"
 case "\$*" in
   *"--state closed"*)        cat "$root/closed.json" ;;
   *"issue list"*)            cat "$root/open.json" ;;
   *"--json comments"*)       cat "$root/comments.json" ;;
-  *"issue comment"*)         cat > "$root/comment-\$3" ;;
+  *"issue comment"*)         : ;;
   *"issue reopen"*)          : ;;
   *"issue close"*)           : ;;
   *) printf 'UNSTUBBED gh: %s\n' "\$*" >&2; exit 99 ;;
@@ -703,9 +705,10 @@ t14_failed_reopen_emits_error_annotation() {
   # Re-stub gh so `issue reopen` fails — the only failure surface for this path.
   cat > "$root/bin/gh" <<EOF
 #!/usr/bin/env bash
+case " \$* " in *" --body-file - "*) [ -t 0 ] || timeout 2 cat >/dev/null ;; esac
 case "\$*" in
   *"--json comments"*) printf '%s' '{"comments":[]}' ;;
-  *"issue comment"*)   cat >/dev/null ;;
+  *"issue comment"*)   : ;;
   *"issue reopen"*)    exit 1 ;;
   *) exit 0 ;;
 esac
@@ -815,8 +818,9 @@ EOF
   # Capture the comment body instead of discarding it.
   cat > "$root/bin/gh" <<EOF
 #!/usr/bin/env bash
+case " \$* " in *" --body-file - "*) [ -t 0 ] || timeout 2 cat > "$root/comment-body" ;; esac
 case "\$*" in
-  *"issue comment"*) cat > "$root/comment-body" ;;
+  *"issue comment"*) : ;;
   *) : ;;
 esac
 EOF
@@ -1805,11 +1809,12 @@ t_g4_15_comment_post_failure() {
   local root; root=$(g3_root "$(g4_open_json 9101 "$G4_FENCED_BODY")")
   cat > "$root/bin/gh" <<EOF
 #!/usr/bin/env bash
+case " \$* " in *" --body-file - "*) [ -t 0 ] || timeout 2 cat >/dev/null ;; esac
 case "\$*" in
   *"--state closed"*) cat "$root/closed.json" ;;
   *"issue list"*)     cat "$root/open.json" ;;
   *"--json comments"*) cat "$root/comments.json" ;;
-  *"issue comment"*)  cat > /dev/null; exit 1 ;;
+  *"issue comment"*)  exit 1 ;;
   *) exit 99 ;;
 esac
 EOF

@@ -577,16 +577,7 @@ Every plan MUST include a `## User-Brand Impact` section. This is the framing-ti
 2. Display: "CPO sign-off required at plan time before `soleur:work` begins. Invoke CPO domain leader if not already covered by Phase 2.5 carry-forward, or confirm CPO has reviewed the brainstorm."
 3. Note in the plan that `soleur:engineering:review:user-impact-reviewer` will be invoked at review-time (handled by `plugins/soleur/skills/review/SKILL.md` conditional-agent block).
 
-**Sign-off lifecycle staging — who participates at which phase:**
-
-The set of mandatory leaders changes by lifecycle phase, and that is by design — different leaders weigh in at different decision points:
-
-- **Brainstorm phase (framing time):** CPO + CLO + CTO are spawned in parallel when `USER_BRAND_CRITICAL=true`. Rationale: the approach has not been chosen yet, so all three lenses (product blast-radius framing, legal/compliance, architectural blast-radius) need to land before the plan exists. See `plugins/soleur/skills/brainstorm/references/brainstorm-domain-config.md` `## User-Brand-Critical Tag Processing`.
-- **Plan phase (this gate):** CPO sign-off only. Rationale: the plan implements the approach already framed by all three brainstorm leaders; the plan-time sign-off is the single product-owner ack on the technical approach. CLO and CTO concerns from brainstorm should be reflected in the plan body (Risks section, Sharp Edges, Domain Review carry-forward) — they do not re-sign here.
-- **Review phase (PR time):** CPO is not re-invoked; instead the `soleur:engineering:review:user-impact-reviewer` agent enumerates failure modes against the diff. Rationale: review-time concerns are diff-shaped, not approach-shaped.
-- **Ship phase (preflight Check 6):** No human sign-off; mechanical gate that the section exists and the threshold is valid.
-
-This tiered model is intentional — re-asking CPO/CLO/CTO at every phase would dilute the framing into ceremony. The framing question is asked once (brainstorm), the answer is locked in (plan), the diff is checked against the answer (review), the gate verifies the answer was given (ship).
+**Sign-off lifecycle staging:** brainstorm CPO+CLO+CTO, plan CPO only, review `soleur:engineering:review:user-impact-reviewer`, ship mechanical check: [plan-signoff-lifecycle.md](./references/plan-signoff-lifecycle.md).
 
 **AI harness:** CTO review comes before blocking launcher/egress/credential work; settings credentials are runtime inputs; CLO disposition is separate.
 
@@ -839,7 +830,7 @@ Spawn a **Task** subagent via `resolveAdvisorTier()` (semantic tier `advisor`; i
 
 Apply the returned guidance before Step 5. Advisory only — do not block, loop, or re-consult. Skip silently in a resource-constrained run only if the plan is trivially mechanical (single-file, no architecture choice). Rationale + the `resolveAdvisorTier()` / semantic tier `advisor` upgrade-pin justification: ADR-083 (`knowledge-base/engineering/architecture/decisions/ADR-083-scoped-strong-model-consult-at-decision-gates.md`). Harness SKUs: ADR-110 (`plugins/soleur/lib/harness-model-map.ts`).
 
-**When the consult and the session model agree the operator's *stated direction* should change** (drop/merge/split/add scope the operator specified), that is a **User-Challenge** per [decision-principles.md](../brainstorm-techniques/references/decision-principles.md) (ADR-084), not guidance to silently apply — the operator's direction is the default. Operator-attached: surface it at the post-`plan-review` confirmation gate with the 5-line frame. Headless (this Step runs inside a Task subagent under one-shot): do NOT ask — persist it to `knowledge-base/project/specs/<branch>/decision-challenges.md` for `ship` to render + file as an `action-required` issue.
+**When the consult and the session model agree the operator's *stated direction* should change** (drop/merge/split/add scope the operator specified), that is a **User-Challenge** per [decision-principles.md](../brainstorm-techniques/references/decision-principles.md) (ADR-084); a technical fork the consult surfaces goes to the CTO ([technical-ruling-delegation.md](../brainstorm-techniques/references/technical-ruling-delegation.md)), not guidance to silently apply — the operator's direction is the default. Operator-attached: surface it at the post-`plan-review` confirmation gate with the 5-line frame. Headless (this Step runs inside a Task subagent under one-shot): do NOT ask — persist it to `knowledge-base/project/specs/<branch>/decision-challenges.md` (one Decision Classes row) for `ship` to render + file as an `action-required` issue.
 
 ### 5. Issue Creation & Formatting
 
@@ -957,7 +948,7 @@ After writing the plan file, automatically run `/plan_review <plan_file_path>` t
 1. **Mechanical** findings → auto-apply to the plan file (both modes). **Fail-closed default:** auto-apply *only* a decision **explicitly tagged `mechanical`**. Treat any decision that is **unclassified, ambiguous, or sourced from a named-panel (product/market/design/devex) finding** as **Taste** — surface it, never silently auto-apply. (The producer defaults named findings to Taste, but the consumer must not depend on producer-side tagging fidelity: an untagged decision on the prose path routes to surfacing, not to auto-apply.)
 2. **Taste / User-Challenge** findings →
    - *Operator-attached* (real TTY): present at the "Apply these changes?" gate below (Yes / Partially / Skip); a **User-Challenge** uses the 5-line frame (the operator's stated direction is the default).
-   - *Headless* (reuse the mode predicate at [`plan/SKILL.md` §Product/UX Gate step 4b, ":330"] — `HEADLESS_MODE`, no-TTY, `soleur:one-shot`, `--headless`, OR a plan-file-path arg): **do NOT pause.** Persist each Taste / User-Challenge to `knowledge-base/project/specs/<branch>/decision-challenges.md` (append), which `ship` Phase 6 renders into the PR body + files as an `action-required` issue. This converges with the Step 4.5 `decision-challenges.md` wiring (`:574`) onto one artifact.
+   - *Headless* (reuse the mode predicate at §Product/UX Gate step 4b — `HEADLESS_MODE`, no-TTY, `soleur:one-shot`, `--headless`, OR a plan-file-path arg): **do NOT pause.** Persist each Taste / User-Challenge (a technical ruling goes to the CTO instead, never here: [technical-ruling-delegation.md](../brainstorm-techniques/references/technical-ruling-delegation.md)) to `knowledge-base/project/specs/<branch>/decision-challenges.md` (append, one `## Decision Classes` row each), which `ship` Phase 6 renders into the PR body + files as an `action-required` issue. This converges with the Step 4.5 `decision-challenges.md` wiring (`:574`) onto one artifact.
 
 **Operator-attached apply gate** (Mechanical already applied above):
 

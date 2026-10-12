@@ -1,0 +1,72 @@
+J0 funnel A: verb-free (the property); test files that gain stubs from a sourced file: 176
+  non-test files read: 762 | test files read: 816
+  text-pipe lines: 2881 in 483 files
+  pairs (test file, verb) under pipefail with observed status: 60 | distinct non-test files behind them: 58 | distinct test files: 48
+  by verb: {'jq': 10, 'cryptsetup': 10, 'curl': 9, 'doppler': 7, 'docker': 4, 'nft': 4, 'timeout': 3, 'gh': 3, 'grep': 2, 'rc': 2, 'bc_hmac_sha256_hex': 1, 'tr': 1, 'sha256sum': 1, 'hmac_sha1_b64': 1, 'openssl': 1, 'parse_directive': 1}
+J0 funnel B: hand-written registry (the series earlier recipe)
+  F0 lines: 61 in 35 files
+  F1 pipefail in file scope: 59 in 33 files
+  F2 status observed: 59 in 33 files
+  F3 an owner stubs the verb: 39 in 22 files
+  registry pairs (test file, verb): 38 | distinct test files: 34
+PAIRS (test file<TAB>verb<TAB>non-test files)
+.claude/hooks/grep-rewrite.test.sh	jq	.claude/hooks/grep-rewrite.sh
+apps/web-platform/infra/ci-deploy.test.sh	curl	apps/web-platform/infra/cloud-init-inngest.yml
+apps/web-platform/infra/ci-deploy.test.sh	docker	apps/web-platform/infra/ci-deploy.sh
+apps/web-platform/infra/ci-deploy.test.sh	openssl	scripts/cutover-inngest.sh
+apps/web-platform/infra/ci-deploy.test.sh	rc	apps/web-platform/infra/workspaces-cutover.sh
+apps/web-platform/infra/ci-deploy.test.sh	tr	.github/workflows/reusable-release.yml,.github/workflows/web-platform-release.yml,apps/web-platform/infra/canary-bundle-claim-check.sh,apps/web-platform/infra/cloud-init-inngest.yml,apps/web-platform/infra/inngest-bootstrap.sh,apps/web-platform/infra/inngest-cutover-flip.sh,apps/web-platform/infra/inngest-luks-cutover.sh,apps/web-platform/infra/workspaces-cutover.sh,scripts/cutover-inngest.sh
+apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh	docker	apps/web-platform/infra/ci-deploy.sh
+apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh	timeout	apps/web-platform/infra/cloud-init-inngest.yml,apps/web-platform/infra/cloud-init-registry.yml
+apps/web-platform/infra/cloud-init-web-zot-seed.test.sh	curl	apps/web-platform/infra/cloud-init-inngest.yml
+apps/web-platform/infra/cloud-init-web-zot-seed.test.sh	timeout	apps/web-platform/infra/cloud-init-inngest.yml
+apps/web-platform/infra/cron-egress-firewall.test.sh	docker	.github/workflows/apply-web-platform-infra.yml
+apps/web-platform/infra/cron-egress-firewall.test.sh	nft	apps/web-platform/infra/cron-egress-resolve.sh
+apps/web-platform/infra/cron-egress-ghcr-probe.test.sh	nft	apps/web-platform/infra/cron-egress-resolve.sh
+apps/web-platform/infra/cron-egress-nftables.test.sh	nft	apps/web-platform/infra/cron-egress-resolve.sh
+apps/web-platform/infra/cron-egress-self-heal.test.sh	nft	apps/web-platform/infra/cron-egress-resolve.sh
+apps/web-platform/infra/cutover-inngest-workflow.test.sh	curl	apps/web-platform/infra/cloud-init-inngest.yml
+apps/web-platform/infra/fresh-boot-ready.test.sh	curl	apps/web-platform/infra/workspaces-luks-provision.sh
+apps/web-platform/infra/git-data-bootstrap-store-verify.test.sh	cryptsetup	apps/web-platform/infra/cloud-init-git-data.yml,apps/web-platform/infra/git-data-bootstrap.sh
+apps/web-platform/infra/git-data-luks-reopen.test.sh	cryptsetup	apps/web-platform/infra/cloud-init-git-data.yml,apps/web-platform/infra/git-data-bootstrap.sh,apps/web-platform/infra/git-data-luks-reopen.sh
+apps/web-platform/infra/git-data-root-key.test.sh	curl	.github/workflows/apply-git-data-root-key.yml
+apps/web-platform/infra/infra-config-apply.test.sh	sha256sum	apps/web-platform/infra/cat-deploy-state.sh,apps/web-platform/infra/ci-deploy.sh,apps/web-platform/infra/inngest-inventory.sh
+apps/web-platform/infra/inngest-boot-emitter.test.sh	curl	apps/web-platform/infra/cloud-init-inngest.yml
+apps/web-platform/infra/inngest-dedicated-host-classify.test.sh	jq	.github/workflows/scheduled-inngest-health.yml
+apps/web-platform/infra/inngest.test.sh	curl	apps/web-platform/infra/cloud-init-inngest.yml
+apps/web-platform/infra/luks-monitor.test.sh	cryptsetup	apps/web-platform/infra/luks-monitor.sh,apps/web-platform/infra/workspaces-cutover.sh,apps/web-platform/infra/workspaces-luks-provision.sh
+apps/web-platform/infra/luks-monitor.test.sh	curl	apps/web-platform/infra/workspaces-luks-provision.sh
+apps/web-platform/infra/registry-luks-escrow.test.sh	cryptsetup	apps/web-platform/infra/cloud-init-registry.yml
+apps/web-platform/infra/resend-inbound-bootstrap.test.sh	doppler	apps/web-platform/infra/resend-inbound-bootstrap.sh
+apps/web-platform/infra/scripts/sigpipe-triage-feasibility.test.sh	grep	apps/web-platform/infra/scripts/sigpipe-triage-feasibility.sh
+apps/web-platform/infra/web-ghcr-deny.test.sh	docker	apps/web-platform/infra/ci-deploy.sh
+apps/web-platform/infra/web-ghcr-deny.test.sh	timeout	apps/web-platform/infra/cloud-init-registry.yml
+apps/web-platform/infra/workspaces-boot-unlock.test.sh	cryptsetup	apps/web-platform/infra/workspaces-luks-reopen.sh
+apps/web-platform/infra/workspaces-luks-freeze.test.sh	cryptsetup	apps/web-platform/infra/workspaces-cutover.sh
+apps/web-platform/infra/workspaces-luks-rollback-refusal.test.sh	cryptsetup	apps/web-platform/infra/workspaces-cutover.sh
+apps/web-platform/infra/workspaces-luks-rollback-refusal.test.sh	rc	apps/web-platform/infra/workspaces-cutover.sh
+apps/web-platform/infra/workspaces-luks-staging.test.sh	cryptsetup	apps/web-platform/infra/workspaces-cutover.sh
+apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh	jq	.github/actions/infra-credentials/action.yml
+apps/web-platform/infra/zot-disk-heartbeat-redaction.test.sh	cryptsetup	apps/web-platform/infra/cloud-init-registry.yml
+plugins/soleur/skills/community/test/community-argv.test.sh	hmac_sha1_b64	plugins/soleur/skills/community/scripts/x-community.sh,plugins/soleur/skills/community/scripts/x-setup.sh
+plugins/soleur/skills/community/test/community-argv.test.sh	jq	plugins/soleur/skills/community/scripts/bsky-community.sh,plugins/soleur/skills/community/scripts/bsky-setup.sh,plugins/soleur/skills/community/scripts/discord-community.sh,plugins/soleur/skills/community/scripts/discord-setup.sh,plugins/soleur/skills/community/scripts/linkedin-setup.sh,plugins/soleur/skills/community/scripts/x-community.sh,plugins/soleur/skills/community/scripts/x-setup.sh
+plugins/soleur/test/flag-detach-shared.test.sh	doppler	plugins/soleur/skills/flag-set-role/scripts/flip.sh
+plugins/soleur/test/flag-org-scoping-pr2.test.sh	doppler	plugins/soleur/skills/flag-create/scripts/create.sh,plugins/soleur/skills/flag-set-role/scripts/flip.sh
+plugins/soleur/test/operator-9321-stages.test.sh	jq	plugins/soleur/hooks/operator-stage-approval.sh
+plugins/soleur/test/operator-ack-guard.test.sh	doppler	plugins/soleur/skills/flag-create/scripts/create.sh,plugins/soleur/skills/flag-set-role/scripts/flip.sh
+plugins/soleur/test/operator-digest-provision.test.sh	gh	plugins/soleur/skills/operator-digest/scripts/provision-operator-digest-repo.sh
+plugins/soleur/test/operator-script.test.sh	doppler	plugins/soleur/skills/flag-create/scripts/create.sh,plugins/soleur/skills/flag-set-role/scripts/flip.sh
+plugins/soleur/test/operator-stage-approval-hook.test.sh	doppler	plugins/soleur/skills/flag-set-role/scripts/flip.sh
+plugins/soleur/test/operator-stage-approval-hook.test.sh	jq	plugins/soleur/hooks/operator-stage-approval.sh
+plugins/soleur/test/ship-followthrough-directive.test.sh	parse_directive	scripts/sweep-followthroughs.sh
+scripts/ci-demand-census.test.sh	jq	.github/workflows/ci.yml
+scripts/followthroughs/workspaces-plaintext-hold-9348.test.sh	jq	scripts/followthroughs/workspaces-plaintext-hold-9348.sh
+scripts/followthroughs/zot-soak-6122.test.sh	curl	apps/web-platform/infra/cloud-init-inngest.yml
+scripts/lint-workflow-local-action-checkout.test.sh	bc_hmac_sha256_hex	.github/actions/dispatch-web-redeploy/track.sh
+scripts/marketplace-drift-check.test.sh	jq	.github/actions/infra-credentials/action.yml,.github/workflows/apply-github-infra.yml
+scripts/rotate-supabase-db-credential.test.sh	doppler	scripts/rotate-supabase-db-credential.sh
+scripts/sweep-followthroughs.test.sh	gh	scripts/sweep-followthroughs.sh
+scripts/watch-registration-narrowing-9564.test.sh	gh	scripts/watch-registration-narrowing-9564.sh
+scripts/web2-rebirth-recovery-check.test.sh	cryptsetup	scripts/web2-rebirth-recovery-check.sh
+tests/scripts/test-argv-bearer-sweep.sh	jq	.github/actions/infra-credentials/action.yml,.github/workflows/apply-deploy-pipeline-fix.yml,.github/workflows/apply-github-infra.yml,.github/workflows/apply-inngest-rls.yml,.github/workflows/canary-status.yml,.github/workflows/deploy-inngest-image.yml,.github/workflows/git-data-rung2-rehearsal.yml,.github/workflows/restart-inngest-server.yml,.github/workflows/scheduled-inngest-health.yml,.github/workflows/scheduled-terraform-drift.yml,.github/workflows/web-platform-release.yml,apps/web-platform/infra/ci-deploy.sh,apps/web-platform/scripts/github-app-key-status.sh,plugins/soleur/skills/community/scripts/bsky-community.sh,plugins/soleur/skills/community/scripts/bsky-setup.sh,plugins/soleur/skills/community/scripts/discord-community.sh,plugins/soleur/skills/community/scripts/discord-setup.sh,scripts/check-deploy-script-parity.sh,scripts/cutover-inngest.sh,scripts/followthroughs/canary-promotion-5875.sh,scripts/followthroughs/infra-config-activation-7220.sh,scripts/followthroughs/infra-config-fatal-channel-7220.sh
+tests/scripts/test-git-data-birth-readiness-gate.sh	grep	.github/workflows/apply-web-platform-infra.yml,.github/workflows/ci.yml,.github/workflows/git-data-rung2-rehearsal.yml,apps/web-platform/infra/cloud-init-git-data.yml

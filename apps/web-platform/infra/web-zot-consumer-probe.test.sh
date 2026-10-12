@@ -23,6 +23,12 @@
 # an OCI-name alphabet), and Guard 2: the probed list equals the repos the hosts pull AND the value
 # reaches the probe through every writer unchanged (server.tf, cloud-init.yml, web-probe-envwrite.sh).
 #
+# #10004: a ZOT_PROBE_REPO element may be `repo@sha256:<64 hex>`; the P-rows below cover the pinned-manifest HEAD
+# (aggregation across positions, the skip rule, the request shape, the digest grammar) against the same mock registry
+# (its HEAD digest table: a=200 b=404 c=403 d=503) and a stub curl (STUB_TAGS_CODE / STUB_MANIFEST_CODE / _ONLY),
+# and the H-rows prove the instruments can fail. Guard 2 below holds for web-1 only: web-1's two server.tf writers
+# carry the PINNED local, while the cloud-init template var keeps the BARE one so no born host bakes a pin.
+#
 # ENV-DRIVEN plain bash: we EXECUTE the real .sh directly. Pure bash + python3 + a loopback
 # HTTP server — no docker, network egress, or root.
 #
@@ -53,7 +59,8 @@ SRV_PID=""
 # Every helper gets its OWN repos-marker path (a root CI runner would otherwise share /run state
 # between rows and a second row would silently inherit the first one's rate-limit window).
 MARKER_N=0
-cleanup() { rm -rf "$TMP"; [[ -n "$SRV_PID" ]] && kill "$SRV_PID" 2>/dev/null; }
+H1_PID=""
+cleanup() { rm -rf "$TMP"; [[ -n "$SRV_PID" ]] && kill "$SRV_PID" 2>/dev/null; [[ -n "$H1_PID" ]] && kill "$H1_PID" 2>/dev/null; return 0; }
 trap cleanup EXIT
 
 echo "=== web-host zot consumer-probe (#6438 §1, AC1) tests ==="
@@ -107,8 +114,24 @@ import base64, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 EXPECT = "Basic " + base64.b64encode(b"zuser:ztok").decode()
 SERVED = {"/v2/known/repo/tags/list", "/v2/known/second/tags/list"}
+# #10004: manifest HEAD table. The digest decides the code (a=served, b=evicted, c=403, d=503); every
+# request (method + path) is appended to the log file argv[2], so a row can assert WHICH request the probe sent.
+DIG = {"a": 200, "b": 404, "c": 403, "d": 503}
+LOG = sys.argv[2]
 class H(BaseHTTPRequestHandler):
+    def do_HEAD(self):
+        with open(LOG, "a") as f:
+            f.write("HEAD " + self.path + "\n")
+        if self.headers.get("Authorization", "") != EXPECT:
+            self.send_response(401); self.end_headers(); return
+        parts = self.path.split("/")
+        if len(parts) == 6 and parts[1] == "v2" and parts[2] == "known" and parts[4] == "manifests" \
+           and parts[3] in ("repo", "second") and parts[5].startswith("sha256:") and len(parts[5]) == 71:
+            self.send_response(DIG.get(parts[5][7], 404)); self.end_headers(); return
+        self.send_response(404); self.end_headers()
     def do_GET(self):
+        with open(LOG, "a") as f:
+            f.write("GET " + self.path + "\n")
         # zot defaultPolicy:[] — auth is enforced BEFORE the repo lookup, so an anonymous
         # request gets 401 on EVERY path (including a nonexistent repo).
         if self.headers.get("Authorization", "") != EXPECT:
@@ -126,7 +149,8 @@ srv.serve_forever()
 PY
 
 PORT_FILE="$TMP/zot_port"
-python3 "$SRV_PY" "$PORT_FILE" >/dev/null 2>&1 &
+REQLOG="$TMP/mock_requests.log"; : > "$REQLOG"
+python3 "$SRV_PY" "$PORT_FILE" "$REQLOG" >/dev/null 2>&1 &
 SRV_PID=$!
 for _ in $(seq 1 100); do [[ -s "$PORT_FILE" ]] && break; sleep 0.1; done
 assert "mock registry published its port" "[[ -s '$PORT_FILE' ]]"
@@ -190,13 +214,22 @@ assert "(b) auth channel stripped => reports the auth-broke hard failure" "grep 
 FORCE_F="$TMP/probe-force-f.sh"
 sed 's| -s -o /dev/null -w| -sf -o /dev/null -w|' "$SUT" > "$FORCE_F"
 assert "(c) the -f injection actually added -f to the probe curl" \
-  "grep -qF -e \"'*' -sf -o /dev/null -w\" '$FORCE_F'"
+  "grep -qF -e \" -sf -o /dev/null -w\" '$FORCE_F'"
 run_probe "$FORCE_F" nonexistent/repo
 assert "(c) -f injected => the 404 classification is DESTROYED (no EMPTY/DETACHED verdict)" \
   "! grep -q 'EMPTY/DETACHED' <<<\"\$OUT\""
 assert "(c) -f injected => the corrupted code lands in the unexpected-code branch" \
   "grep -q 'unexpected code' <<<\"\$OUT\""
 assert "(c) -f injected => still no ping (never green over a corrupted verdict)" "[[ '$PINGED' == no ]]"
+
+# #10004: ONE request function serves tags/list and the pinned-manifest HEAD, so the three mutants above land on
+# BOTH requests with a single edit: prove there is exactly one site carrying each matched text, then prove the
+# -f injection destroys the HEAD classification too (a 404 pin must not read as MISSING under -f).
+assert "(i) the probe has exactly ONE curl request site (each mutant text occurs once, so (b)/(c)/(h) land on tags/list AND the HEAD)" \
+  "[[ \"\$(grep -cF -e ' -s -o /dev/null -w' '$SUT')\" -eq 1 && \"\$(grep -cF -e ' -m 10 --config - \"http' '$SUT')\" -eq 1 ]]"
+run_probe "$FORCE_F" "known/repo,known/second@sha256:$(printf '%064d' 0 | tr 0 b)"
+assert "(c) -f injected => the HEAD of an evicted pin is NOT classified as MISSING (the 404 is corrupted to 404000)" \
+  "! grep -qF 'is MISSING' <<<\"\$OUT\" && grep -qF 'unexpected code 404000' <<<\"\$OUT\" && [[ '$PINGED' == no ]]"
 
 # --- credential channel: stdin config, never argv (argv is readable by every local user) -------
 # A stub `curl` on PATH records its argv and drains its stdin, then answers 200. The real-registry rows
@@ -209,7 +242,25 @@ cat > "$TMP/stubbin/curl" <<'STUBCURL'
 printf '%s\n' "$*" >> "$STUB_ARGV"
 cfg=0; for a in "$@"; do [[ "$a" == "--config" ]] && cfg=1; done
 [[ "$cfg" == 1 ]] && cat >> "$STUB_STDIN"
-printf '200'
+# #10004: the code is per request kind (STUB_TAGS_CODE for tags/list, STUB_MANIFEST_CODE for a manifest URL),
+# and the stub honours what real curl does: -f (a short cluster containing f) turns a 4xx/5xx into NO output
+# and exit 22, and a transport failure prints 000 AND exits non-zero (the `000000` shape the probe normalizes).
+code=200; force=0
+for a in "$@"; do
+  case "$a" in
+    --*) ;;
+    -*f*) force=1 ;;
+    */manifests/*)
+      code="${STUB_MANIFEST_CODE:-200}"
+      # STUB_MANIFEST_ONLY=<repo> confines STUB_MANIFEST_CODE to that repository's manifest URL (others answer 200).
+      [[ -z "${STUB_MANIFEST_ONLY:-}" || "$a" == *"/v2/${STUB_MANIFEST_ONLY}/"* ]] || code=200 ;;
+    */tags/list) code="${STUB_TAGS_CODE:-200}" ;;
+  esac
+done
+if [[ "$force" == 1 && "$((10#$code))" -ge 400 ]]; then exit 22; fi
+printf '%s' "$code"
+[[ "$code" == 000 ]] && exit 7
+exit 0
 STUBCURL
 chmod +x "$TMP/stubbin/curl"
 run_stub() {  # <ZUSER> <ZTOK> [repo list] -> EC / PINGED / OUT / SARGV / SSTDIN (files)
@@ -361,8 +412,8 @@ run_override_multi() {  # <repo list> <positional codes> [marker file] -> EC / P
 }
 # Marker lines name BOTH repos on every run, so fault-line assertions read FAULTS (SUPPRESS / HARD
 # FAILURE lines only), never MOUT; marker assertions read MOUT.
-has_marker() {  # <repo> <code> <verdict>
-  grep -qE "SOLEUR_ZOT_PROBE_VERDICT repo=$1 code=$2 verdict=$3 ts=[0-9]+\$" "$MOUT"
+has_marker() {  # <repo> <code> <verdict> [pin_verdict, default none]
+  grep -qE "SOLEUR_ZOT_PROBE_VERDICT repo=$1 code=$2 verdict=$3 ts=[0-9]+ pin_verdict=${4:-none}\$" "$MOUT"
 }
 count_markers() { local n; n=$(grep -c 'SOLEUR_ZOT_PROBE_VERDICT ' "$MOUT" || true); printf '%s' "$n"; }
 faults_name() { grep -qF "repo=$1" "$FAULTS"; }
@@ -466,18 +517,18 @@ SERVER_TF="$SCRIPT_DIR/server.tf"
 ENVWRITE="$SCRIPT_DIR/web-probe-envwrite.sh"
 assert "T7 server.tf hands the joined local to the cloud-init template (zot_probe_repo = local.zot_probe_repo)" \
   "grep -qE '^[[:space:]]*zot_probe_repo[[:space:]]*=[[:space:]]*local\\.zot_probe_repo[[:space:]]*\$' '$SERVER_TF'"
-assert "T7 server.tf's triggers_replace hashes the joined local (a change to the list re-runs the SSH provisioner)" \
-  "grep -qE '^[[:space:]]*local\\.zot_probe_repo,[[:space:]]*\$' '$SERVER_TF'"
+assert "T7 server.tf's triggers_replace hashes the PINNED local (a pin bump re-runs the SSH provisioner on web-1)" \
+  "grep -qE '^[[:space:]]*local\\.zot_probe_repo_pinned,[[:space:]]*\$' '$SERVER_TF' && ! grep -qE '^[[:space:]]*local\\.zot_probe_repo,[[:space:]]*\$' '$SERVER_TF'"
 # The slot order matters as much as presence: swapping the two %s arguments (or the two names) would write
 # ZOT_ENDPOINT=<list> and ZOT_PROBE_REPO=<endpoint> with every "is the local present" row still green.
 # shellcheck disable=SC2016  # the literal ${local.*} are the HCL text under test
-SSH_ARGS="$(printf "' '%s' '%s' 'WEB_ZOT_CONSUMER_URL_" '${local.registry_endpoint}' '${local.zot_probe_repo}')"
+SSH_ARGS="$(printf "' '%s' '%s' 'WEB_ZOT_CONSUMER_URL_" '${local.registry_endpoint}' '${local.zot_probe_repo_pinned}')"
 SSH_FMT='ZOT_ENDPOINT=%s\\nZOT_PROBE_REPO=%s\\nWEB_ZOT_CONSUMER_URL_KEY=%s'  # the HCL source carries a doubled backslash
 ssh_line() { grep -E '^[[:space:]]*"\( umask' "$SERVER_TF"; }
 ssh_writer_ok() {  # the printf that writes ZOT_PROBE_REPO: names in order, joined local in the second slot
   ssh_line | grep -cF -- "$SSH_FMT" >/dev/null && ssh_line | grep -cF -- "$SSH_ARGS" >/dev/null
 }
-assert "T7 server.tf's SSH provisioner writes ZOT_PROBE_REPO from the joined local (the only live path on web-1)" "ssh_writer_ok"
+assert "T7 server.tf's SSH provisioner writes ZOT_PROBE_REPO from the PINNED local (the only live path on web-1)" "ssh_writer_ok"
 # shellcheck disable=SC2016  # the literal ${zot_probe_repo} is the template text under test
 CI_LINE="$(printf "    SOLEUR_ZOT_PROBE_REPO='%s'" '${zot_probe_repo}')"
 ci_line_ok() { grep -qxF -- "$CI_LINE" "$CLOUD_INIT_WEB"; }
@@ -660,13 +711,311 @@ assert "T16 has_marker is strict: the wrong code is not a match"    "! has_marke
 assert "T16 has_marker is strict: the wrong verdict is not a match" "! has_marker $BOOT_R 404 servable && ! has_marker $BOOT_R 200 empty"
 assert "T16 has_marker is strict: an unlisted repo is not a match"  "! has_marker nobody/here 200 servable"
 
+# ===== #10004: the probe HEADs the pinned manifest ============================================
+# A ZOT_PROBE_REPO element is `<repo>` or `<repo>@sha256:<64 lowercase hex>`. For an element that carries a
+# digest whose tags/list answered 200 the probe sends ONE authenticated manifest HEAD; the heartbeat is pinged
+# only when every tags/list AND every pin HEAD is 200. Pin codes are driven through the mock registry (digest
+# letter table: a=200 b=404 c=403 d=503) and through the stub curl (STUB_MANIFEST_CODE / STUB_TAGS_CODE).
+echo "--- #10004: pinned-manifest HEAD ---"
+hex64() { printf '%064d' 0 | tr 0 "$1"; }
+DIG_OK="sha256:$(hex64 a)"; DIG_GONE="sha256:$(hex64 b)"; DIG_403="sha256:$(hex64 c)"; DIG_503="sha256:$(hex64 d)"
+out_has() { grep -qF -- "$1" <<<"$OUT"; }
+out_marker() {  # <repo> <code> <verdict> <pin_verdict> -- against the combined output of the last run_probe / run_stub
+  grep -qE "SOLEUR_ZOT_PROBE_VERDICT repo=$1 code=$2 verdict=$3 ts=[0-9]+ pin_verdict=$4\$" <<<"$OUT"
+}
+req_count() { local n; n=$(grep -c -- "$1" "$REQLOG" || true); printf '%s' "$n"; }
+
+# P1 — both healthy, the bootstrap element pinned: ping, exactly one manifest HEAD, the right markers.
+: > "$REQLOG"; run_probe "$SUT" "known/repo,known/second@$DIG_OK"
+assert "P1 pinned element served => ping, exit 0" "[[ '$PINGED' == yes && '$EC' -eq 0 ]]"
+assert "P1 exactly one manifest request, and it is a HEAD of the pinned digest" \
+  "[[ \"\$(req_count manifests)\" -eq 1 ]] && grep -qxF 'HEAD /v2/known/second/manifests/$DIG_OK' '$REQLOG'"
+assert "P1 no GET of any manifest path (HEAD only)" "! grep -qE '^GET .*manifests' '$REQLOG'"
+assert "P1 markers: the bare element says none, the pinned one says pinned" \
+  "out_marker known/repo 200 servable none && out_marker known/second 200 servable pinned"
+
+# P2 — an evicted pin suppresses the ping while tags/list still answers 200 (the defect this change closes).
+: > "$REQLOG"; run_probe "$SUT" "known/repo,known/second@$DIG_GONE"
+assert "P2 pin 404, tags 200 => NO ping, exit 0 (absence alarms)" "[[ '$PINGED' == no && '$EC' -eq 0 ]]"
+assert "P2 the fault line says the pinned manifest is MISSING, names ref= and ends with repo=" \
+  "out_has 'pinned manifest known/second@$DIG_GONE is MISSING' && grep -qE 'ref=known/second@$DIG_GONE repo=known/second\$' <<<\"\$OUT\""
+assert "P2 marker: tags servable, pin_verdict=pin-missing" "out_marker known/second 200 servable pin-missing"
+# P2b / P2c — a pin fault on ANY element, first or second, is never cleared by a healthy neighbour.
+: > "$REQLOG"; run_probe "$SUT" "known/repo@$DIG_OK,known/second@$DIG_GONE"
+assert "P2b two pinned elements, the SECOND evicted => NO ping, fault names the second repo" \
+  "[[ '$PINGED' == no && '$EC' -eq 0 ]] && grep -qE 'repo=known/second\$' <<<\"\$OUT\" && out_marker known/repo 200 servable pinned && out_marker known/second 200 servable pin-missing"
+: > "$REQLOG"; run_probe "$SUT" "known/repo@$DIG_GONE,known/second@$DIG_OK"
+assert "P2c two pinned elements, the FIRST evicted => NO ping, fault names the first repo" \
+  "[[ '$PINGED' == no && '$EC' -eq 0 ]] && grep -qE 'repo=known/repo\$' <<<\"\$OUT\" && out_marker known/repo 200 servable pin-missing"
+assert "P2c no early exit: the healthy second pin was still HEADed and marked" \
+  "grep -qxF 'HEAD /v2/known/second/manifests/$DIG_OK' '$REQLOG' && out_marker known/second 200 servable pinned"
+
+# P4 (mock half) — every non-200, non-404, non-401 pin code suppresses the ping and is named.
+run_probe "$SUT" "known/repo,known/second@$DIG_403"
+assert "P4 pin 403 => NO ping, the line names the code AND the manifest URL it asked for, marker unexpected" \
+  "[[ '$PINGED' == no && '$EC' -eq 0 ]] && out_has 'unexpected code 403 for 127.0.0.1:$PORT/v2/known/second/manifests/$DIG_403' && out_marker known/second 200 servable unexpected"
+run_probe "$SUT" "known/repo,known/second@$DIG_503"
+assert "P4 pin 503 => NO ping, WEDGED, marker wedged" \
+  "[[ '$PINGED' == no && '$EC' -eq 0 ]] && out_has 'WEDGED' && out_marker known/second 200 servable wedged"
+
+# P3 / P4 (stub half) — a 401 or a transport failure on the manifest request, tags/list answering 200.
+STUB_MANIFEST_CODE=401 run_stub zuser synthetic-fixture-token-0001 "known/repo,known/second@$DIG_OK"
+assert "P3 pin 401 (second element) => exit 3, NO ping" "[[ '$EC' -eq 3 && '$PINGED' == no ]]"
+assert "P3 pin 401 => HARD FAILURE naming the pinned repo, and the other element's marker is still emitted" \
+  "out_has 'HARD FAILURE: 401' && grep -qE 'repo=known/second\$' <<<\"\$OUT\" && out_marker known/second 200 servable auth-broke && out_marker known/repo 200 servable none"
+STUB_MANIFEST_CODE=401 run_stub zuser synthetic-fixture-token-0001 "known/repo@$DIG_OK,known/second"
+assert "P3 pin 401 (first element) => exit 3, NO ping, the second element still marked" \
+  "[[ '$EC' -eq 3 && '$PINGED' == no ]] && out_marker known/repo 200 servable auth-broke && out_marker known/second 200 servable none"
+STUB_MANIFEST_CODE=000 run_stub zuser synthetic-fixture-token-0001 "known/repo,known/second@$DIG_OK"
+assert "P4 pin 000 (transport failure) => NO ping, exit 0, the UNREACHABLE wording, marker unreachable" \
+  "[[ '$PINGED' == no && '$EC' -eq 0 ]] && out_has 'UNREACHABLE' && out_marker known/second 200 servable unreachable"
+assert "P4 pin 000 => the 000000 double-write is normalized (not the unexpected-code catch-all)" "! out_has 'unexpected code'"
+# H2 — the stub can discriminate: with the default stub (200 everywhere) the same list pings and exits 0.
+run_stub zuser synthetic-fixture-token-0001 "known/repo,known/second@$DIG_OK"
+assert "H2 control: the default stub answers 200 to the manifest too => ping, exit 0 (so the P3/P4 stub rows can fail)" \
+  "[[ '$PINGED' == yes && '$EC' -eq 0 ]] && out_marker known/second 200 servable pinned"
+
+# P5 — the skip rule: a pin is not HEADed when its tags/list was not 200 (no second timeout, no duplicate fault).
+STUB_TAGS_CODE=404 run_stub zuser synthetic-fixture-token-0001 "known/repo,known/second@$DIG_OK"
+assert "P5 tags/list 404 => NO ping, and NO manifest request reached curl" "[[ '$PINGED' == no ]] && ! grep -qF '/manifests/' '$SARGV'"
+assert "P5 tags/list 404 => the pinned element reports pin_verdict=skipped, the bare one none" \
+  "out_marker known/second 404 empty skipped && out_marker known/repo 404 empty none"
+STUB_TAGS_CODE=000 run_stub zuser synthetic-fixture-token-0001 "known/repo,known/second@$DIG_OK"
+assert "P5 tags/list 000 => NO manifest request, pin skipped" "[[ '$PINGED' == no ]] && ! grep -qF '/manifests/' '$SARGV' && out_marker known/second 000 unreachable skipped"
+STUB_TAGS_CODE=503 run_stub zuser synthetic-fixture-token-0001 "known/repo,known/second@$DIG_OK"
+assert "P5 tags/list 503 => NO manifest request, pin skipped" "[[ '$PINGED' == no ]] && ! grep -qF '/manifests/' '$SARGV' && out_marker known/second 503 wedged skipped"
+: > "$REQLOG"; run_probe "$SUT" "known/repo,nonexistent/repo@$DIG_OK"
+assert "P5 mock: a pinned element whose tag list is 404 is never HEADed" "[[ '$PINGED' == no ]] && [[ \"\$(req_count manifests)\" -eq 0 ]]"
+run_override_multi "$WEB_R,$BOOT_R@$DIG_OK" 200,403
+assert "P5 seam: tags/list 403 still lands in 'unexpected code 403 for .../tags/list' (ci-deploy.sh documents this arm), pin skipped" \
+  "[[ '$PINGED' == no ]] && grep -qE 'unexpected code 403 for 127\\.0\\.0\\.1:1/v2/'$BOOT_R'/tags/list' '$FAULTS' && has_marker $BOOT_R 403 unexpected skipped && has_marker $WEB_R 200 servable none"
+run_override_multi "$WEB_R,$BOOT_R@$DIG_OK" 200,200
+assert "P5 seam: tags 200 on a pinned element but nothing listening => the pin HEAD is UNREACHABLE (no ping)" \
+  "[[ '$PINGED' == no && '$EC' -eq 0 ]] && has_marker $BOOT_R 200 servable unreachable"
+
+# P6 — bare elements only: no manifest request at all; the single-repo env of web-2 behaves exactly as before.
+: > "$REQLOG"; run_probe "$SUT" "known/repo,known/second"
+assert "P6 bare elements => ping, and not one manifest request" "[[ '$PINGED' == yes && '$EC' -eq 0 && \"\$(req_count manifests)\" -eq 0 ]]"
+assert "P6 bare elements => both markers say pin_verdict=none" "out_marker known/repo 200 servable none && out_marker known/second 200 servable none"
+: > "$REQLOG"; run_probe "$SUT" "known/repo"
+assert "P6 the single-repo env value (web-2) pings and says none" "[[ '$PINGED' == yes ]] && out_marker known/repo 200 servable none && [[ \"\$(req_count manifests)\" -eq 0 ]]"
+
+# P7 — the element grammar: `repo` or `repo@sha256:<64 lowercase hex>` and nothing else.
+echo "--- #10004: ref grammar ---"
+UPPER_HEX="sha256:$(hex64 A)"; SHA512="sha512:$(printf '%0128d' 0 | tr 0 a)"
+for bad in "known/second:v1" "known/second:v1@$DIG_OK" "known/second@sha256:abc" "known/second@$UPPER_HEX" "known/second@$SHA512" \
+           "known/second@" "known/second@${DIG_OK}x" "known/second@${DIG_OK}a" "known/second@${DIG_OK:0:70}" "known/second@$DIG_OK@$DIG_OK" "@$DIG_OK" "known/second@sha256:"; do
+  run_stub zuser synthetic-fixture-token-0001 "known/repo,$bad"
+  assert "P7 element '${bad:0:48}' => FATAL exit 1 (curl never invoked, no ping, no marker)" \
+    "[[ '$EC' -eq 1 && '$PINGED' == no && ! -s '$SARGV' ]] && out_has 'not a valid repository name' && ! out_has 'SOLEUR_ZOT_PROBE_VERDICT'"
+done
+run_probe "$SUT" "known/repo@$DIG_OK,known/second@$DIG_OK"
+assert "H3 must-PASS: two valid pinned elements ping (a parser that rejects everything cannot pass the rows above)" "[[ '$PINGED' == yes && '$EC' -eq 0 ]]"
+run_probe "$SUT" "known/repo,known/second@$DIG_OK,"
+assert "H3 must-PASS: a trailing comma after a pinned element still pings" "[[ '$PINGED' == yes && '$EC' -eq 0 ]]"
+
+# H1 — the mock can discriminate: a copy whose HEAD answers 200 for EVERY digest must turn P2 green-on-evicted.
+H1_PY="$TMP/mock_zot_h1.py"
+sed 's/DIG.get(parts\[5\]\[7\], 404)/200/' "$SRV_PY" > "$H1_PY"
+assert "H1 the all-200 mock mutation landed" "! cmp -s '$SRV_PY' '$H1_PY' && grep -qF 'self.send_response(200); self.end_headers(); return' '$H1_PY'"
+H1_PORT_FILE="$TMP/zot_port_h1"; : > "$H1_PORT_FILE"
+python3 "$H1_PY" "$H1_PORT_FILE" "$TMP/mock_h1_requests.log" >/dev/null 2>&1 &
+H1_PID=$!
+for _ in $(seq 1 100); do [[ -s "$H1_PORT_FILE" ]] && break; sleep 0.1; done
+PORT_REAL="$PORT"; PORT="$(cat "$H1_PORT_FILE" 2>/dev/null || true)"
+run_probe "$SUT" "known/repo,known/second@$DIG_GONE"
+PORT="$PORT_REAL"; kill "$H1_PID" 2>/dev/null || true
+assert "H1 against the all-200 mock the EVICTED pin pings: the P2 row discriminates (the real mock answers 404)" "[[ '$PINGED' == yes ]]"
+
+# P9 — the request shape, against the stub curl.
+echo "--- #10004: request shape ---"
+run_stub zuser synthetic-fixture-token-0001 "known/repo,known/second@$DIG_OK"
+assert "P9 curl is invoked once per bare element and twice for a pinned one (3 in all)" "[[ \"\$(wc -l < '$SARGV')\" -eq 3 ]]"
+assert "P9 exactly one request targets a manifest, and it is the pinned digest" \
+  "[[ \"\$(grep -cF '/manifests/' '$SARGV')\" -eq 1 ]] && grep -qF -e '/v2/known/second/manifests/$DIG_OK' '$SARGV'"
+assert "P9 the manifest request is a HEAD (-I) and the tag-list requests are not" \
+  "[[ \"\$(grep -F '/manifests/' '$SARGV' | grep -cF -e ' -I ')\" -eq 1 && \"\$(grep -F '/tags/list' '$SARGV' | grep -cF -e ' -I ' || true)\" -eq 0 ]]"
+assert "P9 no request carries -f (it would destroy the 404 classification), --retry, or -L/--location" \
+  "! grep -qE -e ' -[a-zA-Z]*[fL][a-zA-Z]* ' -e '--retry' -e '--location' '$SARGV'"
+assert "P9 the credential is on no argv; stdin holds one identical user = line per curl (3)" \
+  "! grep -qF -e synthetic-fixture-token-0001 -e zuser -e ' -u ' '$SARGV' && [[ \"\$(wc -l < '$SSTDIN')\" -eq 3 && \"\$(sort -u '$SSTDIN')\" == 'user = \"zuser:synthetic-fixture-token-0001\"' ]]"
+assert "P9 the manifest request reads its config from stdin like the tag lists" "[[ \"\$(grep -cF -e '--config - ' '$SARGV')\" -eq 3 ]]"
+
+# P11 — control characters in the credential and in a list element. Each row is paired with a mutated copy of
+# the probe that drops exactly the guard arm the row exists for; the row's condition must then FAIL.
+echo "--- #10004: control-character rows, each proven able to fail ---"
+unsafe_row "user with a newline (directive injection)" $'zuser\nevilsuffix' synthetic-fixture-token-0001 'evilsuffix'
+unsafe_row "user with a backslash"  'zu\ser' synthetic-fixture-token-0001 'zu\ser'
+unsafe_row "user with a tab"        $'zu\tser' synthetic-fixture-token-0001 $'zu\tser'
+unsafe_row "token with a tab"       zuser $'synthetic\tfixture' $'synthetic\tfixture'
+run_stub zuser synthetic-fixture-token-0001 $'known/repo,known/sec\tond'
+assert "P11 a tab inside a list element => FATAL exit 1 naming whitespace, curl never invoked" \
+  "[[ '$EC' -eq 1 && '$PINGED' == no && ! -s '$SARGV' ]] && out_has 'contains whitespace'"
+MUT_NOCNTRL="$TMP/probe-no-cntrl.sh"; MUT_NOBSL="$TMP/probe-no-bsl.sh"; MUT_NOWS="$TMP/probe-no-ws.sh"
+sed 's/|\*\[\[:cntrl:\]\]\*)/)/' "$SUT" > "$MUT_NOCNTRL"
+sed 's/|\*\\\\\*|/|/' "$SUT" > "$MUT_NOBSL"
+sed 's/\*\[\[:space:\]\]\*)/*__never_matches__*)/' "$SUT" > "$MUT_NOWS"
+assert "P11 each guard-arm mutant landed (cmp -s) and the targeted text is gone" \
+  "! cmp -s '$SUT' '$MUT_NOCNTRL' && ! grep -qF '[[:cntrl:]]' '$MUT_NOCNTRL' && ! cmp -s '$SUT' '$MUT_NOBSL' && ! grep -qF '|*\\\\*|' '$MUT_NOBSL' && ! cmp -s '$SUT' '$MUT_NOWS' && grep -qF '__never_matches__' '$MUT_NOWS'"
+unsafe_holds() { [[ "$EC" -eq 1 && ! -s "$SARGV" && ! -s "$SSTDIN" ]]; }  # the refusal contract of an unsafe credential
+SUT_REAL="$SUT"
+SUT="$MUT_NOCNTRL"; run_stub zuser $'synthetic\tfixture'; TOKTAB_HOLDS=no; unsafe_holds && TOKTAB_HOLDS=yes
+run_stub $'zu\tser' synthetic-fixture-token-0001;        USRTAB_HOLDS=no; unsafe_holds && USRTAB_HOLDS=yes
+run_stub $'zuser\nevilsuffix' synthetic-fixture-token-0001; USRNL_HOLDS=no; unsafe_holds && USRNL_HOLDS=yes
+SUT="$MUT_NOBSL"; run_stub 'zu\ser' synthetic-fixture-token-0001; USRBS_HOLDS=no; unsafe_holds && USRBS_HOLDS=yes
+SUT="$MUT_NOWS"; run_stub zuser synthetic-fixture-token-0001 $'known/repo,known/sec\tond'; WS_TEXT=no; grep -qF 'contains whitespace' <<<"$OUT" && WS_TEXT=yes
+SUT="$SUT_REAL"
+assert "P11 mutant (cntrl arm dropped): the tab-in-token row FAILS (the refusal no longer holds)" "[[ '$TOKTAB_HOLDS' == no ]]"
+assert "P11 mutant (cntrl arm dropped): the tab-in-user row FAILS" "[[ '$USRTAB_HOLDS' == no ]]"
+assert "P11 mutant (cntrl arm dropped): the newline-in-user row FAILS" "[[ '$USRNL_HOLDS' == no ]]"
+assert "P11 mutant (backslash arm dropped): the backslash-in-user row FAILS" "[[ '$USRBS_HOLDS' == no ]]"
+assert "P11 mutant (whitespace arm dropped): the tab-in-element row FAILS (the whitespace FATAL text is gone)" "[[ '$WS_TEXT' == no ]]"
+
+# P13 — member shapes the rows above sampled once (each is a fixture the aggregation must treat the same way).
+echo "--- #10004: positions, codes and kinds the aggregation must not special-case ---"
+: > "$REQLOG"; run_probe "$SUT" "known/repo,,known/second@$DIG_GONE"
+assert "P13 an INTERIOR empty element before a pinned one does not shift the pin: it is HEADed and its eviction suppresses the ping" \
+  "[[ '$PINGED' == no && '$EC' -eq 0 ]] && grep -qxF 'HEAD /v2/known/second/manifests/$DIG_GONE' '$REQLOG' && out_marker known/second 200 servable pin-missing"
+run_probe "$SUT" "known/second@$DIG_GONE,known/repo"
+assert "P13 a pin fault followed by a BARE healthy element is not cleared by it" \
+  "[[ '$PINGED' == no && '$EC' -eq 0 ]] && out_marker known/repo 200 servable none"
+: > "$REQLOG"; run_probe "$SUT" "known/repo@$DIG_OK,known/second@$DIG_OK,known/repo@$DIG_GONE"
+assert "P13 a THIRD pinned element is HEADed and its eviction suppresses the ping (no two-element cap)" \
+  "[[ '$PINGED' == no && '$EC' -eq 0 ]] && [[ \"\$(req_count manifests)\" -eq 3 ]] && out_has 'ref=known/repo@$DIG_GONE repo=known/repo'"
+STUB_MANIFEST_CODE=204 run_stub zuser synthetic-fixture-token-0001 "known/repo,known/second@$DIG_OK"
+assert "P13 a 2xx other than 200 on the pin (204) is NOT healthy: no ping, named code, marker unexpected" \
+  "[[ '$PINGED' == no && '$EC' -eq 0 ]] && out_has 'unexpected code 204' && out_marker known/second 200 servable unexpected"
+STUB_MANIFEST_CODE=401 STUB_MANIFEST_ONLY=known/repo run_stub zuser synthetic-fixture-token-0001 "known/repo@$DIG_OK,known/second@$DIG_OK"
+assert "P13 a 401 on the FIRST pin is not cleared by a healthy SECOND pin: exit 3, no ping" \
+  "[[ '$EC' -eq 3 && '$PINGED' == no ]] && out_marker known/repo 200 servable auth-broke && out_marker known/second 200 servable pinned"
+tags_skip_row() {  # <tags code> <expected tags verdict> <expected exit code>
+  STUB_TAGS_CODE="$1" run_stub zuser synthetic-fixture-token-0001 "known/repo,known/second@$DIG_OK"
+  assert "P13 tags/list $1 on a pinned element => verdict $2, the pin is NOT HEADed (skipped), exit $3, no ping" \
+    "[[ '$PINGED' == no && '$EC' -eq $3 ]] && ! grep -qF '/manifests/' '$SARGV' && out_marker known/second $1 $2 skipped"
+}
+tags_skip_row 204 unexpected 0
+tags_skip_row 302 unexpected 0
+tags_skip_row 401 auth-broke 3
+# the negative controls out_marker needs (has_marker has T16): it must be able to say NO.
+run_probe "$SUT" "known/repo,known/second@$DIG_GONE"
+assert "T16 out_marker is strict: a pin-missing run is not pinned, and a wrong code is not a match" \
+  "! out_marker known/second 200 servable pinned && ! out_marker known/second 404 servable pin-missing && out_marker known/second 200 servable pin-missing"
+# Source-shape rows that no behavioural fixture can reach (comment-stripped, anchored on the call form).
+probe_code() { sed 's/^[[:space:]]*#.*//' "$SUT"; }
+# shellcheck disable=SC2016  # the literal $URL is the probe source text under test
+# `_ping` appears twice in the comment-stripped probe: its definition and the single aggregation call. `curl` followed by
+# a flag, a quote, a dollar or a continuation appears three times: two in the heartbeat ping's fallback chain and one in
+# the single request function. Counting TOKENS (not lines) sees a second call on a line that already holds one.
+ping_words() { local n; n=$(probe_code | grep -oE '(^|[^[:alnum:]_])_ping([^[:alnum:]_]|$)' | wc -l); printf '%s' "$n" | tr -d ' '; }
+curl_words() { local n; n=$(probe_code | grep -oE '(^|[^[:alnum:]_/])curl[[:space:]]+[-"$'"'"'\\]' | wc -l); printf '%s' "$n" | tr -d ' '; }
+other_fetchers() { local n; n=$(probe_code | grep -cE '(/usr/bin/curl|\bwget\b|\bnc\b|/dev/tcp/)' || true); printf '%s' "$n"; }
+assert "P13 _ping is defined once and called once (a second call, in any spelling, would bypass the aggregation chokepoint)" "[[ \"\$(ping_words)\" -eq 2 ]]"
+assert "P13 curl appears exactly 3 times (two in the ping fallback chain, one in the single request function)" "[[ \"\$(curl_words)\" -eq 3 ]]"
+assert "P13 no other network client (/usr/bin/curl, wget, nc, /dev/tcp) appears in the probe" "[[ \"\$(other_fetchers)\" -eq 0 ]]"
+# Guard 2 reach: no other infra .tf reads the pinned local, and web-1's provisioner writes the env file exactly once.
+tf_files() { grep -rlF "$1" "$SCRIPT_DIR" --include='*.tf' --include='*.tf.json' --include='*.hcl' --include='*.tftest.hcl' | xargs -n1 basename | sort | tr '\n' ' '; }
+assert "P13 only web-probe.tf (definition) and server.tf (web-1's sites) reference the pinned local, in any terraform file form" \
+  "[[ \"\$(tf_files zot_probe_repo_pinned)\" == 'server.tf web-probe.tf ' ]]"
+assert "P13 the digest local is read by web-probe.tf alone" "[[ \"\$(tf_files zot_probe_digest_inngest_bootstrap)\" == 'web-probe.tf ' ]]"
+block_pinned() { awk '/^resource "terraform_data" "zot_consumer_probe_install"/,/^}/' "$SERVER_TF" | grep -cF 'local.zot_probe_repo_pinned' || true; }
+assert "P13 both server.tf uses (triggers_replace and the env-file printf) sit INSIDE terraform_data.zot_consumer_probe_install" "[[ \"\$(block_pinned)\" -eq 2 ]]"
+env_path_writers() { grep -E '/etc/default/web-zot-consumer-probe' "$SERVER_TF" | grep -cE '(^|[^a-z])(tee|install|cp|mv|sed|dd)[[:space:]]|>>|[^-]>[[:space:]]*/etc/default/web-zot-consumer-probe' || true; }
+assert "P13 web-1's provisioner has exactly ONE writer of /etc/default/web-zot-consumer-probe (no tee, cp, sed, >>, or second redirect)" "[[ \"\$(env_path_writers)\" -eq 1 ]]"
+# Guard 2 reach on the BIRTH path and the baked files: nothing there may reassign the list or carry a digest literal.
+assert "P13 web-probe-envwrite.sh only validates and prints the list: no assignment, and exactly one ZOT_PROBE_REPO printf slot" \
+  "[[ \"\$(grep -cE '^[[:space:]]*(export[[:space:]]+)?SOLEUR_ZOT_PROBE_REPO=' '$ENVWRITE')\" -eq 0 && \"\$(grep -oE 'ZOT_PROBE_REPO=%s' '$ENVWRITE' | wc -l)\" -eq 1 ]]"
+assert "P13 cloud-init.yml assigns SOLEUR_ZOT_PROBE_REPO exactly once, and the unit sets no ZOT_PROBE_REPO of its own" \
+  "[[ \"\$(grep -c 'SOLEUR_ZOT_PROBE_REPO=' '$CLOUD_INIT_WEB')\" -eq 1 ]] && ! grep -qE '^[[:space:]]*Environment=.*ZOT_PROBE_REPO' '$SCRIPT_DIR/web-zot-consumer-probe.service'"
+assert "P13 no baked script or unit carries a digest literal (a pin there would reach every born host)" \
+  "! grep -qE '@sha256:[0-9a-f]{64}' '$ENVWRITE' '$SCRIPT_DIR/web-zot-consumer-probe.service' '$SCRIPT_DIR/web-zot-consumer-probe.timer'"
+assert "P12 the ZIREF regex keeps its exact tail (a terraform-less box cannot evaluate it; this literal pins the shape)" \
+  "grep -qF 'v[0-9]+\\\\.[0-9]+\\\\.[0-9]+@(sha256:[0-9a-f]{64})' '$PROBE_TF'"
+
+# T16 additions — the new marker field is strict too.
+run_override_multi "$WEB_R,$BOOT_R@$DIG_OK" 200,404
+assert "T16 has_marker is strict about pin_verdict: a skipped pin is not none, and not pinned" \
+  "has_marker $BOOT_R 404 empty skipped && ! has_marker $BOOT_R 404 empty none && ! has_marker $BOOT_R 404 empty pinned"
+
+# P12 — static wiring (Guard 2). The bash suite cannot evaluate Terraform regex(), so these rows pin SHAPE (an
+# anchored ZIREF regex, the right file, a trailing [0], no digest literal) and a gated `terraform console` row
+# evaluates the real expression against both cloud-init files. The pin reaches web-1 only: the bare local keeps
+# feeding cloud-init, so no born host bakes a pin that nothing re-delivers (cattle pin-rot).
+echo "--- #10004: static wiring — the digest the probe HEADs is the digest the hosts pull ---"
+zi_digest() {  # <file> -> the sha256 digest of every ZIREF pin line in it (one per line)
+  sed -n 's|^[[:space:]]*ZIREF="[^"]*@\(sha256:[0-9a-f]\{64\}\)"[[:space:]]*$|\1|p' "$1"
+}
+ZI_WEB="$(zi_digest "$CLOUD_INIT_WEB")"; ZI_INGEST="$(zi_digest "$CLOUD_INIT_INNGEST")"
+assert "P12 exactly one ZIREF digest was extracted from each cloud-init file (non-empty, single line)" \
+  "[[ -n '$ZI_WEB' && -n '$ZI_INGEST' && \"\$(wc -l <<<'$ZI_WEB')\" -eq 1 && \"\$(wc -l <<<'$ZI_INGEST')\" -eq 1 ]]"
+assert "P12 both hosts pull the same digest" "[[ '$ZI_WEB' == '$ZI_INGEST' ]]"
+digest_line() { grep -E '^[[:space:]]*zot_probe_digest_inngest_bootstrap[[:space:]]*=' "$PROBE_TF"; }
+# shellcheck disable=SC2016  # the literal ${path.module} is the HCL text under test
+digest_shape_ok() {
+  local l; l="$(digest_line)"
+  [[ -n "$l" && "$(wc -l <<<"$l")" -eq 1 && "$l" == *'ZIREF=\"'* \
+     && "$l" == *'file("${path.module}/cloud-init-inngest.yml")'* && "$l" =~ \)\[0\][[:space:]]*$ ]]
+}
+assert "P12 web-probe.tf derives the digest from the ZIREF= line (anchored), of cloud-init-inngest.yml, with a trailing [0]" "digest_shape_ok"
+assert "P12 web-probe.tf carries NO sha256:<64 hex> literal (a hard-coded stale digest fails here)" "! grep -qE 'sha256:[0-9a-f]{64}' '$PROBE_TF'"
+# shellcheck disable=SC2016  # the literal ${local.*} are the HCL text under test
+PINNED_EXPECT='zot_probe_repo_pinned = join(",", [local.zot_probe_repo_web, "${local.zot_probe_repo_inngest_bootstrap}@${local.zot_probe_digest_inngest_bootstrap}"])'
+pinned_join_ok() {
+  [[ "$(grep -E '^[[:space:]]*zot_probe_repo_pinned[[:space:]]*=' "$PROBE_TF" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+/ /g')" == "$PINNED_EXPECT" ]]
+}
+assert "P12 local.zot_probe_repo_pinned is EXACTLY {the bare web repo, the bootstrap repo@digest}: two elements, the web one bare" "pinned_join_ok"
+assert "P12 server.tf names the pinned local at exactly two sites (the triggers_replace entry and the env-file printf), nowhere else" \
+  "[[ \"\$(grep -cF 'local.zot_probe_repo_pinned' '$SERVER_TF')\" -eq 2 ]]"
+assert "P12 the cloud-init-bound value is still the BARE local (so no born host receives a pin) and holds no @" \
+  "grep -qE '^[[:space:]]*zot_probe_repo[[:space:]]*=[[:space:]]*local\\.zot_probe_repo[[:space:]]*\$' '$SERVER_TF' && [[ \"\$(grep -E '^[[:space:]]*zot_probe_repo[[:space:]]*=[[:space:]]*join' '$PROBE_TF')\" != *@* ]]"
+# H5 — the extraction helper reads a fixture's own digest (must-PASS, non-canonical), and returns nothing when there is no pin.
+ZI_FIX="$(mktemp "$TMP/zifix.XXXXXX")"
+# shellcheck disable=SC2016  # the literal $ZOT_EP is the fixture text, not an expansion
+printf '        ZIREF="$ZOT_EP/acme/other:v9.9.9@sha256:%064d"\n' 0 > "$ZI_FIX"
+assert "H5 zi_digest reads the fixture's own digest, not the constant" "[[ \"\$(zi_digest '$ZI_FIX')\" == \"sha256:\$(printf '%064d' 0)\" ]]"
+printf '        NOT_A_PIN="x"\n' > "$ZI_FIX"
+assert "H5 a file with no ZIREF line yields an EMPTY extraction (the non-empty guard has something to catch)" "[[ -z \"\$(zi_digest '$ZI_FIX')\" ]]"
+
+# The console row evaluates the REAL expression from web-probe.tf. Gated on terraform being installed; a skip is
+# printed and counted separately and never counts toward MIN_ASSERTS.
+TF_SKIPPED=0
+tf_console_digest() {  # <dir holding cloud-init-inngest.yml> -> the digest web-probe.tf's expression returns for it
+  local dir="$1" scr expr
+  scr="$(mktemp -d "$TMP/tfconsole.XXXXXX")"
+  expr="$(digest_line | sed -E 's/^[[:space:]]*zot_probe_digest_inngest_bootstrap[[:space:]]*=[[:space:]]*//')"
+  expr="${expr//\$\{path.module\}/$dir}"
+  printf 'locals {\n  zot_probe_repo_inngest_bootstrap = "%s"\n  zot_probe_digest_inngest_bootstrap = %s\n}\n' "$TF_BOOT" "$expr" > "$scr/main.tf"
+  printf 'local.zot_probe_digest_inngest_bootstrap\n' | timeout 60 terraform -chdir="$scr" console 2>/dev/null | tr -d '"\r '
+}
+if command -v terraform >/dev/null 2>&1; then
+  TF_DIG="$(tf_console_digest "$SCRIPT_DIR")"
+  assert "P12 terraform console: the expression returns a sha256 digest (a string, so [0] is in place)" "[[ '$TF_DIG' =~ ^sha256:[0-9a-f]{64}\$ ]]"
+  assert "P12 terraform console: the derived digest equals the ZIREF digest of BOTH cloud-init files" "[[ '$TF_DIG' == '$ZI_WEB' && '$TF_DIG' == '$ZI_INGEST' ]]"
+  FIXDIR="$(mktemp -d "$TMP/zidir.XXXXXX")"
+  sed "s|@sha256:[0-9a-f]\{64\}\"|@sha256:$(printf '%064d' 0 | tr 0 c)\"|" "$CLOUD_INIT_INNGEST" > "$FIXDIR/cloud-init-inngest.yml"
+  assert "H5 terraform console follows the FILE: a fixture with another digest yields that digest (must-PASS, non-canonical)" \
+    "[[ \"\$(tf_console_digest '$FIXDIR')\" == \"sha256:\$(printf '%064d' 0 | tr 0 c)\" && '$TF_DIG' != \"sha256:\$(printf '%064d' 0 | tr 0 c)\" ]]"
+else
+  # SOLEUR_REQUIRE_TERRAFORM=1 turns the skip into a failure; it is opt-in and no workflow exports it yet.
+  [[ "${SOLEUR_REQUIRE_TERRAFORM:-}" != 1 ]] || assert "terraform is required here (SOLEUR_REQUIRE_TERRAFORM=1) but is not installed" "false"
+  TF_SKIPPED=$((TF_SKIPPED + 3)); echo "  SKIP: 3 terraform-console rows (terraform is not installed here) — NOT counted toward MIN_ASSERTS"
+fi
+
+[[ "$TF_SKIPPED" -eq 0 ]] || echo "=== $TF_SKIPPED terraform-console rows skipped (not counted) ==="
 echo
 echo "=== $PASS passed, $FAIL failed ==="
 # Anti-vacuity floor (ADR-193): a disarmed assert() or a skipped block must not read as green. Raise it in
 # the SAME edit that adds rows; it is reported with printf, never through assert().
-MIN_ASSERTS=199
+# 303 assertions run with terraform installed; the 3 terraform-console rows are gated and a skip never counts, so
+# a box without terraform floors at the count WITHOUT them (300) and must not read as a disarmed suite. The threshold
+# literal sits directly above the `if` (scripts/guard-vacuity-floor.test.sh builds its mutant from that adjacency);
+# the stricter full count applies in a SECOND check wherever terraform ran, so no row can be deleted behind slack.
+MIN_ASSERTS=300
 if [[ "$((PASS + FAIL))" -lt "$MIN_ASSERTS" ]]; then
   printf 'FAIL: only %s assertions ran (floor %s) — a block was skipped or assert() was disarmed\n' "$((PASS + FAIL))" "$MIN_ASSERTS"
+  exit 1
+fi
+if [[ "$TF_SKIPPED" -eq 0 && "$((PASS + FAIL))" -lt "$((MIN_ASSERTS + 3))" ]]; then
+  printf 'FAIL: only %s assertions ran with terraform present (floor %s) — a row was deleted\n' "$((PASS + FAIL))" "$((MIN_ASSERTS + 3))"
   exit 1
 fi
 [[ "$FAIL" -eq 0 ]]

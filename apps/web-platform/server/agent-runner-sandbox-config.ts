@@ -34,7 +34,9 @@ const log = createChildLogger("agent-sandbox");
 //     — see `cc-dispatcher.ts realSdkQueryFactory` body).
 //   - `enableWeakerNestedSandbox: true` — Docker containers cannot mount
 //     /proc inside user namespaces; this skips `--proc /proc` in bwrap
-//     (#1557). `denyRead` is NOT what keeps the CLI parent's environment out
+//     (#1557) — the vendor emits a tail `--bind /proc /proc` instead, which
+//     the bwrap shim neutralizes (#9723/#10032). `denyRead` is NOT what keeps
+//     the CLI parent's environment out
 //     of reach. Measured (ADR-272): no process environment readable from
 //     inside the sandbox carries the key. Which bubblewrap flag does that work
 //     is not established, so a change to the sandbox flags needs re-measuring
@@ -496,10 +498,14 @@ export function buildAgentSandboxConfig(
   // if the vendor emits it after the ws restore — do not rely on that order.
   //
   // #9723: the vendored builder's `enableWeakerNestedSandbox` tail re-binds
-  // the real `--bind /proc /proc` AFTER every denyRead entry — the `/proc`
-  // tmpfs here is intent only; the REALIZED mask is the bwrap shim's tail
-  // `--proc /proc` splice (a pidns-scoped procfs mounted over the tail bind —
-  // see infra/bwrap-shim/bwrap + test/bwrap-shim.test.ts). `/sys` (#1285)
+  // the real `--bind /proc /proc` AFTER every denyRead entry — so under a
+  // verbatim argv the `/proc` tmpfs here is intent only. #10032: the shim
+  // now DROPS that tail bind (and every procfs mount at /proc) instead of
+  // re-masking with `--proc` — the fresh-procfs splice EPERMs under docker's
+  // masked /proc — so this `--tmpfs /proc` lands as the REALIZED mask (an
+  // empty, mountless /proc), with the vendored multicall's `/proc/self/fd/N`
+  // exec path re-homed as a literal `--ro-bind` mount (see
+  // infra/bwrap-shim/bwrap + test/bwrap-shim.test.ts). `/sys` (#1285)
   // has no such re-bind — nothing restores it after the tmpfs, so the
   // `--tmpfs /sys` landing is a real mask. It also masks `/sys/fs/cgroup`,
   // which changes heap sizing for sandboxed subprocesses (no visible cgroup
@@ -567,9 +573,12 @@ export function buildAgentSandboxConfig(
     failIfUnavailable: true,
     autoAllowBashIfSandboxed: true,
     allowUnsandboxedCommands: false,
-    // Docker containers cannot mount proc inside user namespaces (kernel
-    // restriction). enableWeakerNestedSandbox skips --proc /proc in bwrap
-    // (#1557). `denyRead` is not what protects the CLI parent's environment;
+    // A fresh procfs mount inside a nested user namespace is refused (EPERM) under
+    // docker's default masked /proc, so enableWeakerNestedSandbox makes the vendored
+    // builder emit a tail `--bind /proc /proc` instead of `--proc /proc` (#1557). The
+    // bwrap shim then DROPS that tail bind (#10039), so the vendored `--tmpfs /proc`
+    // is the realized mask: no procfs at all inside the sandbox. `denyRead` alone is
+    // not what protects the CLI parent's environment;
     // the outcome (no readable environ carries the key) is measured in ADR-272
     // and pinned by sandbox-credential-deny-runtime.test.ts, the mechanism is not.
     enableWeakerNestedSandbox: true,

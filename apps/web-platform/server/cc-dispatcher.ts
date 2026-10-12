@@ -96,7 +96,10 @@ import {
   hashUserId,
   __resetMirrorDebounceForTests,
 } from "./observability";
-import { classifySandboxStartupError } from "./sandbox-startup-classifier";
+import {
+  classifySandboxStartupError,
+  classifyBashSandboxFailure,
+} from "./sandbox-startup-classifier";
 import { redactCommandForDisplay } from "../lib/safety/redaction-allowlist";
 import { CC_ROUTER_TIER3_DENYLIST } from "./tool-tiers";
 import { formatAssistantText } from "@/lib/format-assistant-text";
@@ -340,6 +343,45 @@ export function shouldMirrorUnregisteredPlatformToolUse(
 ): boolean {
   if (!toolName.startsWith("mcp__soleur_platform__")) return false;
   return !registeredPlatformToolNames.includes(toolName);
+}
+
+/**
+ * #10032 follow-up — mirror a Bash `tool_result` that carries a sandbox denial to Sentry.
+ * Exported for unit testability. Per-user debounced; the event carries ONLY the scrubbed, capped matched
+ * line (never the tool output, the command, or workspace paths) and the Error message is the classifier's
+ * code, never the output. Detection only: no alert pages on this op until #10052 (blocked on #7985).
+ */
+export function mirrorBashSandboxFailure(
+  output: string,
+  userId: string,
+  conversationId: string,
+): void {
+  const failure = classifyBashSandboxFailure(output);
+  if (!failure) return;
+  // null first arg, never a real Error — the pino mirror captures a passed Error first as
+  // `feature=pino-mirror` with no user and Sentry drops the tagged second capture (#8629). The code lives in
+  // `message` and `extra`. Sibling emitters of this failure: the deploy canary's `SANDBOX_CANARY_FAIL` /
+  // `SOLEUR_CANARY_SANDBOX_DIAG` rows (ci-deploy.sh) cover the container, this covers a live tenant session.
+  mirrorWithDebounce(
+    null,
+    {
+      feature: "agent-sandbox",
+      op: "bash-tool-result",
+      message: `bash sandbox denial: ${failure.errorCode}`,
+      tags: {
+        sandboxKind: "seccomp_or_userns_denial", // same enum value as the sdk-startup emitter; `sandboxErrorCode` refines it
+        sdkVersion: failure.sdkVersion ?? "unknown",
+      },
+      extra: {
+        userId,
+        conversationId,
+        sandboxErrorCode: failure.errorCode,
+        sandboxStderr: failure.matchedLine,
+      },
+    },
+    userId,
+    "agent-sandbox-bash-tool-result",
+  );
 }
 
 /**
@@ -4516,6 +4558,26 @@ export async function dispatchSoleurGo(
           {
             feature: "cc-dispatcher",
             op: "agent-readiness-backstop",
+            extra: { userId, conversationId },
+          },
+        );
+      }
+
+      // #10032 follow-up — a sandbox spawn the SDK returns to the model as a tool_result (a bwrap refusal
+      // mid-session) is not a thrown error, so the session-level `classifySandboxStartupError` never saw it
+      // and a fleet-wide sandbox outage reached Sentry as nothing. Posture-independent (before the
+      // autonomous-posture gate), per-user debounced. Data minimisation (Art. 5(1)(c)): the event carries
+      // ONLY the scrubbed, capped matched line — never the tool output, the command, or workspace paths;
+      // the Error message is the classifier's code, never the output. Scope limit: the legacy agent-runner
+      // loop has no tool-result observer; its session-level catch still classifies thrown startup exits.
+      try {
+        mirrorBashSandboxFailure(block.output, userId, conversationId);
+      } catch (err) {
+        reportSilentFallback(
+          err instanceof Error ? err.name : "bash-sandbox-mirror-error",
+          {
+            feature: "cc-dispatcher",
+            op: "bash-sandbox-mirror",
             extra: { userId, conversationId },
           },
         );

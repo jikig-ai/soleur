@@ -2912,7 +2912,23 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler soleur/prd_terraform) and expects a `section=kdeny` row.
   // NO SUBSTITUTE: the bundle is emitted only when a canary sandbox probe fails, and lands only in the Logs
   // warehouse, which has no unauthenticated read path. Genuine.
-  const BASELINE_DECLARED_PROBES = 59;
+  // #10032 (2026-10-11): +1 (59 -> 60) for `2026-10-11-fix-sandbox-shim-procfs-under-masked-proc-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the AC4 faithful-canary verdict is a deployed signal read from deploy-state +
+  // `doppler run -c prd -- scripts/betterstack-query.sh` — the local stand-ins verify code, not
+  // the deployed observability state. NO SUBSTITUTE: no unauthenticated path reaches either. Genuine.
+  // #10004 (2026-10-11): +1 (60 -> 61) for `2026-10-11-chore-zot-consumer-probe-head-pinned-manifest-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`scripts/betterstack-query.sh --since 1h --grep pin_verdict=pinned`) reads
+  // BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler soleur/prd_terraform). NO SUBSTITUTE: the property is
+  // the per-repository marker row web-1's probe emits with the pin verdict (journald -> vector Source 4 -> the
+  // Logs warehouse), which has no unauthenticated read path; the host itself is no-SSH. Genuine.
+  // #9860 (2026-10-11): +1 (61 -> 62) for `2026-10-11-fix-agent-sandbox-proc-mask-systempaths-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the event is read with a Sentry API token (Doppler prd); the event store has no anonymous query
+  // form. NO SUBSTITUTE: the tag and user shape is pinned offline by cc-dispatcher-bash-sandbox-sentry-path.test.ts,
+  // but that verifies code, not the deployed event stream. Genuine.
+  const BASELINE_DECLARED_PROBES = 62;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
