@@ -938,7 +938,11 @@ run_egress_gw_probe() {
   fi
 
   tok="probe-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
-  : > "$EGRESS_GW_TOKEN_DIR/$tok" || { log "egress_gw_probe result=skipped reason=token_dir_unwritable"; return 0; }
+  # The auth helper binds the presented username to the FILE CONTENT
+  # ("$user" == "$(<tokenfile)") — the file must contain "probe", an empty
+  # mint reads as a forged username and every CONNECT is denied (measured:
+  # TCP_DENIED ERR_CACHE_ACCESS_DENIED on the allow leg, allow_rc=56).
+  printf 'probe' > "$EGRESS_GW_TOKEN_DIR/$tok" || { log "egress_gw_probe result=skipped reason=token_dir_unwritable"; return 0; }
 
   result=ok; reason=""
   rc=0

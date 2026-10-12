@@ -55,6 +55,16 @@ CI without the env flag runs the suite with `it.skipIf(...)` short-circuiting th
 
 Both integration tests use a per-suite synthetic email pattern (e.g. `conv-rail-cross-tenant-[a-f0-9]{16}@soleur.test`). Hard rule `hr-destructive-prod-tests-allowlist` forbids these tests from touching any non-synthetic account.
 
+### Teardown contract (required for new suites)
+
+Every suite that creates synthetic auth users MUST tear them down through `tearDownTenantUser` (`test/helpers/tenant-isolation-teardown.ts`) — never a raw `service.auth.admin.deleteUser`. The trigger-created `workspace_members` rows are `ON DELETE RESTRICT`, so a raw call 500s deterministically (#9994) or leaks the user if the `{error}` result is ignored. Contract for a new suite:
+
+1. Emit emails as `<prefix>-<16 lowercase hex>@soleur.test` (`randomBytes(8).toString("hex")`).
+2. Register the prefix in `SYNTHETIC_PREFIXES` in the helper — it is fail-closed and refuses anything outside the allowlist.
+3. Call `tearDownTenantUser(service, { id, email })` in `afterAll` — it runs the parity-guarded 22-RPC anonymise cascade, verifies the id↔email binding against `auth.users`, then deletes.
+
+`test/server/teardown-deleteuser-sentinel.test.ts` censuses every `.ts` file under `test/` for deleteUser call shapes: any carrier outside the canonical helper, the reviewed `MANUAL_TEARDOWN_ALLOWLIST`, or the #10096 legacy drain set fails the always-on shard — and the per-file call counts are pinned, so adding a raw call inside an allowlisted file fails too.
+
 ## Engine-floor guard (pdfjs-dist)
 
 Three suites — `pdf-text-extract.test.ts`, `pdf-text-extract.bundled-server.test.ts`, and `kb-preview-metadata.bundled-server.test.ts` — use the shared helper `helpers/engines-floor.ts` to short-circuit on Node <22.3 (the pdfjs-dist@5 floor enforced by `process.getBuiltinModule`). Dev path: `describe.skipIf(BELOW_PDFJS_ENGINES_FLOOR)` + a single stderr diagnostic per file (yellow skip, never silent). CI path: the helper throws at module init when `process.env.CI` is set, so a misconfigured runner cannot ship a vacuous green. The lazy_import_failed test sits OUTSIDE the skipIf block — `vi.doMock` short-circuits the real pdfjs import so it runs on all Node versions.

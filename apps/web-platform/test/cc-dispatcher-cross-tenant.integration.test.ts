@@ -67,6 +67,7 @@ import {
 } from "@supabase/supabase-js";
 import { randomBytes, randomUUID } from "crypto";
 import { __resetMirrorP0DedupForTests } from "@/server/observability";
+import { tearDownTenantUser } from "./helpers/tenant-isolation-teardown";
 
 const INTEGRATION_ENABLED =
   process.env.SUPABASE_DEV_INTEGRATION === "1";
@@ -106,6 +107,11 @@ function requireEnv(name: string): string {
 // is the **row shape** the service-role writes, not the helper's call graph.
 function assistantRowFor(args: {
   conversationId: string;
+  // Invariant: workspaceId MUST equal the parent conversation's
+  // workspace_id (production's buildRow derives it from the conversation
+  // row, not from the caller — passing a mismatched pair here would write
+  // a cross-workspace message the service-role accepts silently).
+  workspaceId: string;
   content: string;
   usage?: { cost_usd: number } | null;
   status?: "complete" | "aborted";
@@ -113,6 +119,13 @@ function assistantRowFor(args: {
   return {
     id: randomUUID(),
     conversation_id: args.conversationId,
+    // mig 059: workspace_id NOT NULL + member-keyed INSERT RLS — production's
+    // buildRow derives it from the parent conversation; here the owning
+    // user's id IS the solo workspace id (handle_new_user, ADR-038 N2).
+    workspace_id: args.workspaceId,
+    // mig 053: template_id NOT NULL (no default) — 'default_legacy' is the
+    // sentinel production's buildRow writes for non-template messages.
+    template_id: "default_legacy",
     role: "assistant",
     content: args.content,
     tool_calls: null,
@@ -193,7 +206,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       const seedConv = async (uid: string): Promise<string> => {
         const { data, error } = await service
           .from("conversations")
-          .insert({ user_id: uid, domain_leader: "cco" })
+          .insert({ user_id: uid, workspace_id: uid, domain_leader: "cco" })
           .select("id")
           .single();
         expect(error, `seed conversation for ${uid}`).toBeNull();
@@ -233,20 +246,20 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         if (!user.id) continue;
         assertSynthetic(user.email);
         const { data: check } = await service.auth.admin.getUserById(user.id);
-        if (check?.user?.email && check.user.email !== user.email) {
+        // Fail closed: a missing user or a NULL/empty email field must not
+        // skip the binding (NULL email is legal on auth.users rows).
+        if (!check?.user || check.user.email !== user.email) {
           throw new Error(
-            `afterAll: auth.users.email for ${user.id} (${check.user.email}) ` +
-              `does not match synthetic email ${user.email}`,
+            `afterAll: auth.users lookup for ${user.id} ` +
+              `(${check?.user?.email ?? "not found"}) does not match ` +
+              `synthetic email ${user.email}`,
           );
         }
-        const { error } = await service.auth.admin.deleteUser(user.id);
-        if (error && !/not found/i.test(error.message)) {
-          throw new Error(
-            `afterAll: deleteUser(${user.email}) failed: ${error.message}`,
-          );
-        }
+        // FK-reverse helper: trigger-created workspace_members rows are
+        // ON DELETE RESTRICT, so a raw deleteUser 500s (#9994).
+        await tearDownTenantUser(service, user);
       }
-    }, 30_000);
+    }, 60_000);
 
     test("T-W1-matrix: 4 concurrent assistant INSERTs land in the right conversation; no content cross-contamination", async () => {
       // Mirror the dispatch matrix: each conversation gets its own
@@ -255,17 +268,17 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       // under concurrency; a sequential await chain would not exercise
       // the concurrent-write surface that Art. 32 evidence requires.
       const payloads = [
-        { conv: conversationA1, content: "A1-content" },
-        { conv: conversationA2, content: "A2-content" },
-        { conv: conversationB1, content: "B1-content" },
-        { conv: conversationB2, content: "B2-content" },
+        { conv: conversationA1, ws: userA.id, content: "A1-content" },
+        { conv: conversationA2, ws: userA.id, content: "A2-content" },
+        { conv: conversationB1, ws: userB.id, content: "B1-content" },
+        { conv: conversationB2, ws: userB.id, content: "B2-content" },
       ];
 
       const results = await Promise.all(
         payloads.map((p) =>
           service
             .from("messages")
-            .insert(assistantRowFor({ conversationId: p.conv, content: p.content }))
+            .insert(assistantRowFor({ conversationId: p.conv, workspaceId: p.ws, content: p.content }))
             .select("id, conversation_id, content"),
         ),
       );
@@ -306,7 +319,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       // Seed: one assistant row in B1.
       const { error: seedErr } = await service
         .from("messages")
-        .insert(assistantRowFor({ conversationId: conversationB1, content: "B1-secret" }));
+        .insert(assistantRowFor({ conversationId: conversationB1, workspaceId: userB.id, content: "B1-secret" }));
       expect(seedErr).toBeNull();
 
       // Auth client signed in as userA.
@@ -342,7 +355,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       const { error: a1SeedErr } = await service
         .from("messages")
         .insert(
-          assistantRowFor({ conversationId: conversationA1, content: "A1-mine" }),
+          assistantRowFor({ conversationId: conversationA1, workspaceId: userA.id, content: "A1-mine" }),
         );
       expect(a1SeedErr).toBeNull();
       const { data: allowedRows, error: allowedErr } = await authClient
@@ -359,7 +372,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       const { error: seedErr } = await service
         .from("messages")
         .insert(
-          assistantRowFor({ conversationId: conversationB2, content: "B2-forgery-target" }),
+          assistantRowFor({ conversationId: conversationB2, workspaceId: userB.id, content: "B2-forgery-target" }),
         );
       expect(seedErr).toBeNull();
 
@@ -434,7 +447,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       // Sibling conversation A2 has content; A1 is empty.
       const { error: seedErr } = await service
         .from("messages")
-        .insert(assistantRowFor({ conversationId: conversationA2, content: "A2-only" }));
+        .insert(assistantRowFor({ conversationId: conversationA2, workspaceId: userA.id, content: "A2-only" }));
       expect(seedErr).toBeNull();
 
       const { data: a1Rows, error: a1Err } = await authClient
@@ -455,6 +468,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       const { error: seedErr } = await service.from("messages").insert({
         id: rowId,
         conversation_id: conversationA1,
+        workspace_id: userA.id,
         role: "assistant",
         content: "A1-with-usage",
         tool_calls: null,
@@ -493,7 +507,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       // doesn't choke on a missing parent (test isolation hygiene).
       const { data: reseed, error: reseedErr } = await service
         .from("conversations")
-        .insert({ user_id: userA.id, domain_leader: "cco" })
+        .insert({ user_id: userA.id, workspace_id: userA.id, domain_leader: "cco" })
         .select("id")
         .single();
       expect(reseedErr).toBeNull();

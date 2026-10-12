@@ -29,6 +29,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { randomBytes } from "crypto";
+import { tearDownTenantUser } from "./helpers/tenant-isolation-teardown";
 
 const INTEGRATION_ENABLED = process.env.SUPABASE_DEV_INTEGRATION === "1";
 
@@ -98,13 +99,11 @@ describe.skipIf(!INTEGRATION_ENABLED)("beta-CRM behavioral (dev)", () => {
     for (const u of [userA, userB]) {
       if (!u.id) continue;
       assertSynthetic(u.email);
-      try {
-        await service.auth.admin.deleteUser(u.id);
-      } catch {
-        /* best-effort; bounded by the synthetic-email guard */
-      }
+      // FK-reverse helper: trigger-created workspace_members rows are
+      // ON DELETE RESTRICT, so a raw deleteUser 500s (#9994).
+      await tearDownTenantUser(service, u);
     }
-  }, 30_000);
+  }, 60_000);
 
   test("AC7 — write→read round-trip incl. crm_note_list lens filter", async () => {
     const { data: id, error } = await tenantA.rpc("crm_contact_upsert", {
@@ -252,12 +251,15 @@ describe.skipIf(!INTEGRATION_ENABLED)("beta-CRM behavioral (dev)", () => {
       expect(data, `${t} should be empty after erase`).toHaveLength(0);
     }
 
-    // owner erasure: seed a fresh contact, then delete the account → CASCADE
+    // owner erasure: seed a fresh contact, then delete the account → CASCADE.
+    // The helper runs the anonymise-first FK-reverse (its RPCs do not touch
+    // the beta tables — they are ON DELETE CASCADE off public.users, so the
+    // auth-delete step still empties them; AC10's assertion is preserved).
     const { data: freshId } = await tenantA.rpc("crm_contact_upsert", { p_name: "Bob" });
     expect(freshId).toBeTruthy();
-    await service.auth.admin.deleteUser(userA.id);
+    await tearDownTenantUser(service, userA);
     const gone = await service.from("beta_contacts").select("id").eq("user_id", userA.id);
     expect(gone.data).toHaveLength(0);
     userA.id = ""; // prevent afterAll double-delete
-  });
+  }, 60_000); // tearDownTenantUser runs ~22 RPCs + deleteUser mid-test
 });
