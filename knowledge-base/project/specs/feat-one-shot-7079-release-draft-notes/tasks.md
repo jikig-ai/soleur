@@ -7,7 +7,7 @@ Rulings: knowledge-base/project/specs/feat-one-shot-7079-release-draft-notes/dec
 ## Phase 1: Tests first (RED) - plugins/soleur/test/reusable-release-idempotency.test.sh
 
 - [ ] 1.1 Extend the `gh` stub's `edit` branch to also write one argument per line to `$GH_ARGV` (keep `$GH_TRACE` as is)
-- [ ] 1.2 Add T8 behavioral section: read the Finalise run block via `wf_step_field ... run`; run under the stub in `bash -eo pipefail`; four rows a, b, c (parametrized: whitespace-only, zero bytes, missing), d; argv and stdout asserted in ONE comparison per row; assert the block is non-empty and contains `gh release edit`
+- [ ] 1.2 Add T8 behavioral section: read the Finalise run block via `wf_step_field ... run`; run under the stub in `bash -eo pipefail`; four rows a, b, c (parametrized: whitespace-only, zero bytes, missing), d; argv and stdout asserted in ONE comparison per row (row a pins "notes_regenerated=true", rows b and c pin "EXISTING notes"); assert the block is non-empty and contains `gh release edit`
 - [ ] 1.3 Add T8b wiring section after T7b: three wiring literals plus the full `wf_ref_check` string `refs=check_changed,create_release,idempotency,pr,tmpfiles,version;unresolved=`
 - [ ] 1.4 Raise `MIN_ASSERTIONS` from 77 to 77 plus the measured number of added assertions (compute from a real run)
 - [ ] 1.5 Run the suite against the UNMODIFIED workflow; T8 rows a, b, c and the T8b wiring rows RED; row d and all pre-existing assertions GREEN
@@ -15,7 +15,7 @@ Rulings: knowledge-base/project/specs/feat-one-shot-7079-release-draft-notes/dec
 ## Phase 2: Workflow edits - .github/workflows/reusable-release.yml
 
 - [ ] 2.1 Finalise step env: add `RELEASE_NOTES_FILE`, `DRAFT_EXISTS`, `PR_NUMBER` (`${{ steps.pr.outputs.number }}`)
-- [ ] 2.2 Finalise run block: single `gh release edit "$TAG" --notes-file "$RELEASE_NOTES_FILE" --draft=false` when `DRAFT_EXISTS=true`, `PR_NUMBER` non-empty and notes file non-blank; otherwise plain `--draft=false` (with `::warning::` when DRAFT_EXISTS=true); never fail on blank notes
+- [ ] 2.2 Finalise run block (success log carries the single token `notes_regenerated=true`; the Observability probe greps `notes_regenerated`): single `gh release edit "$TAG" --notes-file "$RELEASE_NOTES_FILE" --draft=false` when `DRAFT_EXISTS=true`, `PR_NUMBER` non-empty and notes file non-blank; otherwise plain `--draft=false` (with `::warning::` when DRAFT_EXISTS=true); never fail on blank notes
 - [ ] 2.3 Rewrite the self-heal comment block above the step
 - [ ] 2.4 Add one line to the idempotency-step comment (notes overwritten at publish from the current run's PR)
 - [ ] 2.5 Append "(a retry with a different bump orphans the prior draft)" to the `bump_type` description; `git grep -nF "Override bump type"` for pinned copies

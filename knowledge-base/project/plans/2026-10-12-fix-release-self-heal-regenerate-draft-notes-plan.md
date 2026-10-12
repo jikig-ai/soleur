@@ -18,6 +18,43 @@ requires_cpo_signoff: false
 PR body contract: `Ref #7079` (never `Closes` - the issue stays open until its owner closes it),
 a `## Changelog` section, and the already-done / not-fixed-alone rationale below.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-12
+**Sections enhanced:** 4 (Research Insights, Observability, Phase 2.2 literals, Risks)
+**Research agents used:** none spawned beyond the plan-phase learnings researcher, the CTO rulings and the four plan-review agents; deepen-plan ran its halt gates and live verifications inline, because every remaining claim was checkable with one command against this repo or one upstream file.
+
+### Halt gates (all passed)
+
+| Gate | Result |
+|---|---|
+| 4.6 User-Brand Impact | present; threshold `none`; sensitive-path scope-out bullet present (the file matches via the `release` token) |
+| 4.7 Observability | five fields present, none placeholder; `command` starts with `grep`, has no shell-active character and no ssh; finishes in milliseconds; block is NEW so the `expected_output` literal rule binds: changed to the single token `notes_regenerated` (see below) |
+| 4.8 PAT-shaped variable | no match |
+| 4.9 UI wireframe | not a UI surface; skipped |
+| 4.10 Encryption posture | no store, no new connection, no matching file; skipped |
+| 4.11 Guard Contract | `scripts/lint-guard-contract.py` green; assembly names the single chokepoint and the three input axes, not today's members |
+| 4.12 Scope Check | exactly one unfenced section; three sub-sections; no `unmapped`; no `status: BLOCKED`; Split Assessment carries `Recommendation:` |
+| 4.4 / 4.55 | no SQL, no scheduled job, no downtime-class operation |
+
+### Live verifications
+
+- **One-call claim (the plan's one gh-wire assumption).** Fetched `https://raw.githubusercontent.com/cli/cli/trunk/pkg/cmd/release/edit/edit.go` on 2026-10-12: `getParams(opts)` builds ONE map (`params["body"] = opts.Body`, `params["draft"] = *opts.Draft`), the `--notes-file` content is read in `RunE` via `cmdutil.ReadFile` into `opts.Body`, and `editRelease(httpClient, baseRepo, release.DatabaseID, params)` is called once. `editRelease`'s own body was not in the fetched text, so "that call is one PATCH" rests on the name and on the CTO ruling; the unit rows pin the single gh INVOCATION, which is the part this repo controls. `gh release edit --help` (gh 2.102.0) lists `-F, --notes-file` and `--draft` on the one subcommand.
+- **Citations.** #7079 OPEN; #7071 MERGED; #10016 MERGED (`76da243c20` is a commit and an ancestor of `origin/main`); #7258, #4902, #7256 CLOSED; #9892 MERGED; #10157 OPEN draft. Rule id `cq-write-failing-tests-before` is active in `AGENTS.md`. Every `knowledge-base/` path in this plan resolves (checked with the sharp-edge grep).
+- **Exit-code claim.** The planned block was run mentally and by the correctness reviewer under `bash -e` and `bash -eo pipefail`: `grep -q` inside an `if` condition cannot trip errexit on a non-match, an empty file or a missing file.
+- **Probe dry run (sharp edge: run every prescribed command).** `gh release view <tag> --json body,isDraft` returned a body for the newest tag; a draft `web-v0.340.3` was visible in `gh release list` at planning time, confirming orphan drafts do occur here. `grep -oF notes_regenerated .github/workflows/reusable-release.yml` is intentionally empty until Phase 2 lands (it names a string introduced by this PR).
+
+### Key improvements
+
+1. The discoverability literal changed from a multi-word phrase to the single token `notes_regenerated`, so it passes both Check 10's substring match and the deepen-plan prose-detector; the log line now reads `notes_regenerated=true`.
+2. The gh single-call claim moved from "assumed" to "verified against upstream source, with the one residual caveat named".
+3. All halt gates and citation checks are recorded here so the work phase does not repeat them.
+
+### New considerations discovered
+
+- A currently orphaned draft (`web-v0.340.3`) exists on the repo; the self-heal and this notes fix would apply to it only if a same-tag run recomputes it. This PR does not touch it and must not (no release mutation in a planning or CI-workflow PR).
+- Rows b and c of T8 can only go RED through the warning literal (the old block already issues a plain `--draft=false`), which Phase 1.4 states.
+
 ## Overview
 
 #7079 consolidates three deferred items from #7071 (zot mirror fail-closed). Only item 3 is still
@@ -172,7 +209,7 @@ Required because `reusable-release.yml` matches the canonical sensitive-path reg
 
 ```yaml
 liveness_signal:
-  what: the Finalise step's stdout line "Published release <tag> (notes regenerated from this run's PR #<n>)" on every orphaned-draft self-heal publish, and "Published release <tag>" otherwise
+  what: the Finalise step's stdout line "Published release <tag> (notes_regenerated=true, from this run's PR #<n>)" on every orphaned-draft self-heal publish, and "Published release <tag>" otherwise
   cadence: per release run (every merge to main that triggers a release lane)
   alert_target: GitHub Actions run log for the release job; a failed Finalise step pages through the existing "Post to Slack (release BLOCKED)" and "Email notification (release FAILED)" steps
   configured_in: .github/workflows/reusable-release.yml (Finalise release (publish draft) step; BLOCKED notifier gate pinned by plugins/soleur/test/reusable-release-idempotency.test.sh T6b)
@@ -197,9 +234,15 @@ logs:
   retention: GitHub default Actions log retention for this repository
 
 discoverability_test:
-  command: grep -oF "notes regenerated from this run" .github/workflows/reusable-release.yml
-  expected_output: notes regenerated from this run
+  command: grep -oF notes_regenerated .github/workflows/reusable-release.yml
+  expected_output: notes_regenerated
 ```
+
+Why the probe literal is one token: Check 10 substring-matches `expected_output` tokens against stdout,
+and the deepen-plan 4.7 detector rejects an `expected_output` whose every token contains whitespace
+(a multi-word phrase reads as prose). `notes_regenerated` is a single token the Finalise log line and
+the test both carry; the command prints one line per occurrence and finishes in milliseconds, with no
+shell-active characters and no ssh. It names a string that exists in THIS PR's tree after Phase 2.
 
 ## Implementation Phases
 
@@ -230,7 +273,7 @@ of the same assertion):
 
 | # | DRAFT_EXISTS | PR_NUMBER | Notes file | Expected argv | Expected stdout |
 |---|---|---|---|---|---|
-| a | true | 123 | real changelog (multi-line, directory name contains a space) | one `edit`: `<tag> --notes-file <exact path> --draft=false` | contains "notes regenerated from this run"; no `::warning::` |
+| a | true | 123 | real changelog (multi-line, directory name contains a space) | one `edit`: `<tag> --notes-file <exact path> --draft=false` | contains "notes_regenerated=true"; no `::warning::` |
 | b | true | (empty) | real changelog | one `edit`: `<tag> --draft=false` | `::warning::` containing "EXISTING notes" |
 | c | true | 123 | each of: whitespace-only, zero bytes, missing (one parametrized loop, one assertion block) | one `edit`: `<tag> --draft=false` | `::warning::` containing "EXISTING notes"; rc 0 |
 | d | false | 123 | real changelog | one `edit`: `<tag> --draft=false` | no `::warning::`, no "regenerated" (new-draft and normal path unchanged; `PR_NUMBER` cannot matter when `DRAFT_EXISTS=false`, so no separate empty-PR row) |
@@ -265,7 +308,7 @@ RED (b and c through the warning literal); row d and every pre-existing assertio
 `PR_NUMBER: ${{ steps.pr.outputs.number }}`.
 
 2.2 Finalise `run:` becomes (shape; implementer finalises wording, keeping the two literals the tests
-pin - "notes regenerated from this run" and "EXISTING notes"):
+pin - "notes_regenerated=true" and "EXISTING notes"):
 
 ```bash
 # One call: the regenerated notes and the publish are atomic. Only on the self-heal path,
@@ -274,7 +317,7 @@ pin - "notes regenerated from this run" and "EXISTING notes"):
 # file (its `- $PR_TITLE` fallback); the blank test is defence in depth against that changing.
 if [ "$DRAFT_EXISTS" = "true" ] && [ -n "$PR_NUMBER" ] && grep -q '[^[:space:]]' "$RELEASE_NOTES_FILE"; then
   gh release edit "$TAG" --notes-file "$RELEASE_NOTES_FILE" --draft=false
-  echo "Published release $TAG (notes regenerated from this run's PR #$PR_NUMBER)"
+  echo "Published release $TAG (notes_regenerated=true, from this run's PR #$PR_NUMBER)"
 else
   if [ "$DRAFT_EXISTS" = "true" ]; then
     echo "::warning::Orphaned draft $TAG published with its EXISTING notes: this run resolved no PR (workflow_dispatch / give_up) or produced a blank changelog."
@@ -290,7 +333,7 @@ file are branches, not errexit (a missing file also prints grep's own stderr lin
 visible); the blank branch never fails the step (publishing matters more than the notes - a hard
 failure would re-orphan the draft). `$RELEASE_NOTES_FILE` is always double-quoted (row a's
 space-containing path and the per-line argv file pin this). The two literals the tests pin
-("notes regenerated from this run", "EXISTING notes") are owned by the tests: an implementer who
+("notes_regenerated=true", "EXISTING notes") are owned by the tests: an implementer who
 rewords them edits the tests and the discoverability probe in the same commit.
 
 2.3 Update the self-heal comment block above the step (the one starting `Self-heal gate (#4902)`),
@@ -435,7 +478,7 @@ All `unit` layer (bash, `gh` stubbed; no live GitHub call, no e2e).
 - Given the workflow's Finalise step, when env wiring is parsed, then every referenced `steps.<id>` is defined and the key set is exactly the five wired keys.
 
 Post-merge verification (not a pre-merge gate; no operator step): the next release run that
-self-heals an orphaned draft logs "notes regenerated from this run" and
+self-heals an orphaned draft logs "notes_regenerated=true" and
 `gh release view <tag> --json body` shows this run's changelog (learning
 `2026-09-18-the-release-run-was-green-and-production-was-still-serving-the-previous-build.md`:
 verify the outcome, not the run's conclusion). Orphan drafts are rare, so this is observed
