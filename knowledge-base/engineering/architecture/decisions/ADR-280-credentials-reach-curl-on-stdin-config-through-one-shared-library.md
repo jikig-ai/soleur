@@ -410,3 +410,25 @@ The two `apps/cla-evidence` rows left baseline E and the census ceiling; baselin
 - **Exit codes.** A refused credential exits 2 with the marker as the discriminator (Decision 3: curl also exits 2); a bad call, destination or argument returns 64 from the helper and reads as status `000` at the callers; xtrace exits 78; a failed bootstrap probe exits 1. The judge's two variable-name parameters let a caller name the variables its operator set; a caller whose names differ must pre-judge, because the chokepoint's own judge uses the cla-evidence defaults.
 - **Transport.** `--disable --noproxy '*'` and the scrub mean every caller, the one-shot bootstrap and the backfill included, needs direct egress to R2 with the system trust store; a proxy or a TLS-inspecting CA reads as status `000`. `cla-evidence` is a required, self-sealing check, so the helper suite's real-curl wire row is the pre-merge proof and the break-glass runbook the recovery.
 - **The same pair, one step later.** `bootstrap.sh` Step 2 used to pass the pair as `NAME=value` arguments to the `doppler` CLI (not curl, so outside Rule E's vocabulary). It now writes each secret on the CLI's stdin, one name per call, and keeps `NAME=value` only for the non-secret endpoint and bucket. The two secret writes are NOT atomic: a failure between them leaves `prd_cla` with the new key id and the old secret, which fails the required check on every PR, so that case prints a mixed-pair warning and exits 1, and a read-back compares each stored length with 32 and 64 (values never printed). Recovery needs the same pair and a live admin token (one hour); re-running is idempotent. The bootstrap suite asserts neither value appears on any doppler argv.
+
+## Amendment 2026-10-11 (#9999) — the canonical alphabet governs every credential-shape pin
+
+Scope clarification; the decisions and addenda above are unchanged and dated. The `[A-Za-z0-9._~+/=-]` class `bc_ok` enforces was adopted here as the alphabet a credential may occupy on curl's stdin
+config channel — RFC 6750's b64token grammar, the maximal alphabet a bearer value may carry. This amendment extends the same contract to **every credential-shape pattern in the repo**: any
+sentinel, detection, redaction, filter or validation expression that judges the *value* of a credential uses the canonical alphabet for that value's character run, or documents at the site why a
+narrower class is correct. Anchoring elements are not narrowed by this clause — a `ghs_`/`github_pat_` prefix, an `sk-ant-` infix or a `{36}`-style length bound may stay; what may not stay is a
+body alphabet narrower than `[A-Za-z0-9._~+/=-]` justified only by "the vendor issues base62 today".
+
+Enforcement: the Guard-3 census in `scripts/lint-shell-trace-credential-refusal.test.sh` sweeps the tracked corpus for GitHub-prefix char-class literals (`gh[opsur]`/`github_pat_` forms — literal,
+bracketed, alternation, factored-prefix, and single-backslash-escaped spellings) and fails on any non-canonical class. A documented-narrower disposition is discharged by a slot in
+`_ghs_census_allow()` (keyed on file + exact literal) in that suite, not merely by a comment at the site; the census's own header enumerates the sweep's residual blind spots (extensionless files,
+multi-line assembly, separator obfuscation, and the prefixes outside the GitHub family — `sbp_`/`xox`/`sk-ant`/`AKIA` siblings keep their vendor shapes until a rotation teaches otherwise).
+
+### Rejected alternative: per-site vendor-format pins
+
+Modelling each pattern on the vendor's currently issued shape (`ghs_[A-Za-z0-9_]{20,}` and kin) was rejected on measurement, not taste: what a vendor issues is mutable surface the repo cannot
+observe, so the pin's correctness is hostage to a rotation that arrives with no notice. The incident chain is the measured cost. When GitHub rotated `ghs_` installation tokens to a ~390-520-char
+shape over the b64token alphabet, two retired guards paid out the cost in sequence: a `[A-Za-z0-9_]` refusal guard in the pin-bump script died on every valid live-minted token until #9972 converted
+it to the canonical body, and a `[A-Za-z0-9_-]{30,128}` warn-not-throw format validator in `git-auth.ts` warned on every issued token until #9999 retired its length ceiling and widened its class —
+the same PR that swept the surviving vendor-format pins in detection, sentinel and documentation sites onto the canonical class. Per-site vendor pins cost one pipeline outage per rotation plus a repo-wide sweep; the
+canonical alphabet costs nothing at rotation time because it is already the maximal set the channel can carry.

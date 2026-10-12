@@ -113,11 +113,17 @@ printf '::compound-promote-week-cap::%d\n' "$REMAINING"
 # Heuristic PII / credential regex (fails OPEN — any match excludes the file):
 #   - email | IPv4 | IBAN (canonical PII shapes)
 #   - JWT / Anthropic / GitHub / AWS / Stripe / Slack token shapes
+# Known posture: the canonical credential class [A-Za-z0-9._~+/=-] makes the
+# gate slightly over-excluding — a `ghp_/sbp_/…` prefix-enumeration slug or a
+# `ghs_feature-name` identifier in prose scores as a match and drops the file
+# (observable via ::compound-promote-pii-excluded::). Fail-closed toward the
+# DPA-covered model call is the intended direction; do not narrow to prose-
+# shaped tokens without a documented rationale.
 # Cheap, deterministic. Human reviewer at PR time + Anthropic processor DPA
 # are the second and third lines of defense. The runbook acknowledges that
 # novel shapes (phone numbers, customer slugs, prod IDs without prefix) still
 # slip through.
-PII_REGEX='([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})|([0-9]{1,3}(\.[0-9]{1,3}){3})|([A-Z]{2}[0-9]{2}[A-Z0-9]{4}[0-9]{7}([A-Z0-9]?){0,16})|(eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)|(sk-ant-[A-Za-z0-9_-]{20,})|(gh[psr]_[A-Za-z0-9]{20,})|(AKIA[0-9A-Z]{16})|((sk|pk)_(live|test)_[A-Za-z0-9]{20,})|(xox[baprs]-[A-Za-z0-9-]{10,})'
+PII_REGEX='([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})|([0-9]{1,3}(\.[0-9]{1,3}){3})|([A-Z]{2}[0-9]{2}[A-Z0-9]{4}[0-9]{7}([A-Z0-9]?){0,16})|(eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)|(sk-ant-[A-Za-z0-9_-]{20,})|(gh[pousr]_[A-Za-z0-9._~+/=-]{20,})|(github_pat_[A-Za-z0-9._~+/=-]{20,})|(AKIA[0-9A-Z]{16})|((sk|pk)_(live|test)_[A-Za-z0-9]{20,})|(xox[baprs]-[A-Za-z0-9-]{10,})'
 SAFE_FILES=()
 if [[ -d "$LEARNINGS_DIR" ]]; then
   while IFS= read -r -d '' file; do
