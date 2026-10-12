@@ -198,14 +198,45 @@ printf '%s:%s\n' "$GW_IP" "$GW_PORT" > "$TOKEN_DIR/.gw-target"
 # rebuilt (or existing) bridge — "apply green" should mean the path works,
 # not merely that the files copied. /dev/tcp is a bash builtin (no curl dep);
 # it does not exercise the CONNECT path, which the 5-min probe covers.
-# Squid's init outlives docker-run returning (measured: both applies died here
-# <1s after `docker run` with the container still starting) — retry a few
-# opens over ~18s rather than checking once.
-_tcp_up=0
-for _tcp_try in 1 2 3 4 5 6; do
-  if timeout 3 bash -c "exec 3<>/dev/tcp/$GW_IP/$GW_PORT" 2>/dev/null; then _tcp_up=1; break; fi
-  sleep 3
-done
-(( _tcp_up == 1 )) || die "gw $GW_IP:$GW_PORT did not answer a TCP open post-bring-up"
+#
+# `docker run -d` and `docker restart` return before Squid binds :8443, so a single
+# probe at t~0 is refused on a healthy host (measured: refused 1-3 ms after the
+# "started" line in apply run 38228632851, and after the "restarted" line in run
+# 38229123048). The check therefore polls. A refused connect returns at once, so the
+# per-attempt `timeout` only bounds a filtered attempt; the SECONDS deadline bounds
+# the whole wait. SECONDS is an integer counter, so the wait can end up to 1 s early.
+GW_WAIT_S="${EGRESS_GW_WAIT_S:-30}"   # tests override; same pattern as EGRESS_GW_IMAGE above
+
+# Container state + the last log lines, for the timeout message. Every command is
+# `|| true`: a diagnostics failure must not mask the real die. StartedAt/RestartCount
+# tell a `docker restart` incarnation from the previous one's log lines.
+gw_diag() {
+  log "gw container state: $(docker inspect -f '{{.State.Status}} running={{.State.Running}} restarting={{.State.Restarting}} restarts={{.RestartCount}} exit={{.State.ExitCode}} started={{.State.StartedAt}}' "$GW_NAME" 2>&1 || true)"
+  log "gw container logs (last 20 lines):"
+  timeout 10 docker logs --tail 20 "$GW_NAME" 2>&1 | sed 's/^/[egress-gw-bootstrap]   /' || true
+}
+
+# Poll until the gw accepts a TCP open or GW_WAIT_S elapses. `return 0` is reachable
+# only from a successful connect; loop exhaustion falls through to the die. The last
+# probe error is kept: "Connection refused" (nothing listening) vs a timeout (packets
+# dropped) separates a Squid that is not up from a filtered path.
+wait_for_gw_tcp() {
+  local deadline=$(( SECONDS + GW_WAIT_S )) attempts=0 err=""
+  while :; do
+    attempts=$(( attempts + 1 ))
+    # shellcheck disable=SC2016 # single quotes on purpose: $1/$2 are bash -c positionals, not this shell's
+    if err="$(timeout 2 bash -c 'exec 3<>"/dev/tcp/$1/$2"' gw-probe "$GW_IP" "$GW_PORT" 2>&1)"; then
+      log "gw $GW_IP:$GW_PORT answered a TCP open (attempt $attempts)"
+      return 0
+    fi
+    if (( SECONDS >= deadline )); then break; fi
+    sleep 1
+  done
+  log "last probe error: ${err:-<none>}"
+  gw_diag
+  die "gw $GW_IP:$GW_PORT did not answer a TCP open post-bring-up"
+}
+
+wait_for_gw_tcp
 
 log "OK: gateway up (bridge=$BRIDGE_IF subnet=$SUBNET gw=$GW_IP)"
