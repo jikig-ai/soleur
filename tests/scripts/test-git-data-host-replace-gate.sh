@@ -630,6 +630,11 @@ write_plan "${ROT_PASS_SET},$(rc_obj 'hcloud_volume.git_data' '"create","delete"
 gate_check "PA3c rotate + plaintext volume create-before-destroy -> ABORT" git_data_host_post_apply_assert 1 "hcloud_volume.git_data shows 1 delete/forget" "$TMP/plan.json" rotate
 write_plan "${PASS_SET},$(rc_obj 'hcloud_volume.git_data_luks[1]' '"delete"')"
 gate_check "PA3c replace + indexed LUKS volume delete -> ABORT" git_data_host_post_apply_assert 1 "hcloud_volume.git_data_luks shows 1 delete/forget" "$TMP/plan.json" replace
+# The native name boundary: an entry whose plan-native .name is git_data_luks must not be read as the
+# plaintext volume under rotate (it is the volume rotate replaces on purpose), but must be refused
+# under replace.
+write_plan "${PASS_SET},$(_pa_native 'module.store.hcloud_volume.git_data_luks' git_data_luks)"
+gate_check "PA3c rotate + native LUKS volume delete does not trip the plaintext arm" git_data_host_post_apply_assert 0 "LUKS volume replaced as intended" "$TMP/plan.json" rotate
 # The name boundary: a LUKS-volume delete must not be read as the plaintext volume (anchored match).
 write_plan "${ROT_PASS_SET}"
 gate_check "PA3c rotate + LUKS volume delete+create does not trip the plaintext arm" git_data_host_post_apply_assert 0 "LUKS volume replaced as intended" "$TMP/plan.json" rotate
@@ -713,11 +718,11 @@ gate_mutate_layered "PM7 readable call in the post-apply assert (hands off to th
 # A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
 # suite on every legitimately-added assertion and train people to bump it unread.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 100 ]]; then
+if [[ "$_ran" -lt 101 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 100 (HK13 skips without terraform). Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 101 (HK13 skips without terraform). Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 100)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 101)\n' "$_ran"
 fi
 
 echo ""

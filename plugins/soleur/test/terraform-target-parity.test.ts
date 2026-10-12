@@ -2212,7 +2212,8 @@ describe("git-data-host-replace dispatch -target/-replace set (scoped; plaintext
     const applyAt = step.indexOf("terraform apply -no-color -input=false tfplan");
     expect(applyAt).toBeGreaterThan(-1);
     expect(applyAt).toBeLessThan(call!.index!);
-    expect(step.slice(applyAt, call!.index!)).not.toMatch(/\bGATE_MODE\+?=|-v GATE_MODE|\bread\b[^\n]*\bGATE_MODE\b|GATE_MODE:=|\bexit 0\b/);
+    // (scanned from the START of the step: a reassignment before the apply line is the same failure)
+    expect(step.slice(0, call!.index!)).not.toMatch(/\bGATE_MODE\+?=|-v GATE_MODE|\bread\b[^\n]*\bGATE_MODE\b|GATE_MODE:=|\bexit 0\b/);
     // The inline loop is gone, and the old display name (false under rotate) with it.
     expect(step).not.toMatch(/for VOL in hcloud_volume\.git_data/);
     expect(gitDataJobBlock).not.toContain("both-volumes-preserved assert");
