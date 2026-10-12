@@ -2,7 +2,7 @@
 # group=infra
 # generated-from-runs=36327508617,36323335413,36249105039,36194570054,36186259058
 # default-weight-ms=1000
-# generated-at=2026-10-12T08:32:10Z
+# generated-at=2026-10-12T08:43:17Z
 # generator=regenerate-shard-manifest.py v3
 apps/web-platform/infra/apex-single-node-replace-mutation.test.sh	12000	measured
 apps/web-platform/infra/apex-single-node-replace.test.sh	500	measured
@@ -146,12 +146,10 @@ apps/web-platform/infra/web-ghcr-deny.test.sh	1000	floor
 apps/web-platform/infra/web-git-data-probe.test.sh	0	measured
 apps/web-platform/infra/web-host-provisioner-parity-mutation.test.sh	101500	measured
 apps/web-platform/infra/web-host-provisioner-parity.test.sh	2000	measured
-apps/web-platform/infra/web-host-reboot-workflow.test.sh	1000	floor
 apps/web-platform/infra/web-hosts-fanout-parity.test.sh	0	measured
 apps/web-platform/infra/web-private-nic-guard.test.sh	500	measured
 apps/web-platform/infra/web-probes-token-rotation.test.sh	12000	measured
 apps/web-platform/infra/web-zot-consumer-probe.test.sh	0	measured
-apps/web-platform/infra/web2-luks-rebirth-workflow.test.sh	60000	measured
 apps/web-platform/infra/webhook-doppler-token-reread.test.sh	2000	measured
 apps/web-platform/infra/workspaces-boot-unlock.test.sh	1000	floor
 apps/web-platform/infra/workspaces-luks-cutover-workflow.test.sh	0	measured

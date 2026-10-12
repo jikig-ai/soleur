@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1000
-# generated-at=2026-10-12T08:32:10Z
+# generated-at=2026-10-12T08:43:17Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --group infra --incremental --write   # suite added/removed; --group infra --runs 5 --write rebalances
 # runner: apps/web-platform/infra/run-registered-suites.sh manifest/hashing assignment (untabled labels hash-fallback)
@@ -149,12 +149,10 @@ apps/web-platform/infra/web-ghcr-deny.test.sh	2
 apps/web-platform/infra/web-git-data-probe.test.sh	3
 apps/web-platform/infra/web-host-provisioner-parity-mutation.test.sh	4
 apps/web-platform/infra/web-host-provisioner-parity.test.sh	3
-apps/web-platform/infra/web-host-reboot-workflow.test.sh	4
 apps/web-platform/infra/web-hosts-fanout-parity.test.sh	3
 apps/web-platform/infra/web-private-nic-guard.test.sh	3
 apps/web-platform/infra/web-probes-token-rotation.test.sh	1
 apps/web-platform/infra/web-zot-consumer-probe.test.sh	4
-apps/web-platform/infra/web2-luks-rebirth-workflow.test.sh	3
 apps/web-platform/infra/webhook-doppler-token-reread.test.sh	4
 apps/web-platform/infra/workspaces-boot-unlock.test.sh	4
 apps/web-platform/infra/workspaces-luks-cutover-workflow.test.sh	1
