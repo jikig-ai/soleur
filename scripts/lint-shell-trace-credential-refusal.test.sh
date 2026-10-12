@@ -2958,8 +2958,8 @@ fi
 # Arm d is structurally dark today (no gh(…)_ member in the corpus), so a
 # corpus floor cannot pin it — prove the PATTERN is alive and does not
 # false-positive on the `weigh(x)_[` word-prefix collision class instead.
-if printf '%s\n' 'gh(p|o)_[A-Za-z0-9]{20,}' | grep -qE 'gh\([^)]*\|[^)]*\)_\\?\[[^]]{1,80}\]' \
-   && ! printf '%s\n' 'weigh(x)_[A-Za-z0-9]{20,}' | grep -qE 'gh\([^)]*\|[^)]*\)_\\?\[[^]]{1,80}\]'; then
+if grep -qE 'gh\([^)]*\|[^)]*\)_\\?\[[^]]{1,80}\]' <<< 'gh(p|o)_[A-Za-z0-9]{20,}' \
+   && ! grep -qE 'gh\([^)]*\|[^)]*\)_\\?\[[^]]{1,80}\]' <<< 'weigh(x)_[A-Za-z0-9]{20,}'; then
   pass "stale-ghs census arm-d liveness: factored-prefix pattern fires on a synthesized alternation and spares word-prefix collisions"
 else
   fail "stale-ghs census arm-d liveness: the factored-prefix ERE does not discriminate its own probe"
@@ -3021,7 +3021,7 @@ fi
 # This file list mirrors _ghs_census_allow's case arms — keep them coupled.
 _ghs_dead_slots=""
 for _slot in   'plugins/soleur/skills/incident/test/fixtures/legacy-bash-scanner.sh'   'plugins/soleur/skills/deepen-plan/SKILL.md'   'plugins/soleur/skills/plan/references/plan-sharp-edges.md'   'apps/web-platform/server/git-auth.ts'; do
-  printf '%s' "$_ghs_allowed" | grep -qF "$_slot" || _ghs_dead_slots="${_ghs_dead_slots} ${_slot}"
+  grep -qF -- "$_slot" <<< "$_ghs_allowed" || _ghs_dead_slots="${_ghs_dead_slots} ${_slot}"
 done
 if [ -z "$_ghs_dead_slots" ]; then
   pass "stale-ghs census: every allowlist slot discharged at least one hit (no dead dispositions)"

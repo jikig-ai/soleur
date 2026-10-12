@@ -234,11 +234,14 @@ fi
 
 # Anti-gutting floor: a neutered suite (deleted behavioural rows) greens
 # silently without a counted-assertions ratchet (ADR-193's failure shape).
-if [[ $((PASS + FAIL)) -ge 15 ]]; then
-  ok "assertion floor: $((PASS + FAIL)) rows executed (floor 15)"
-else
-  bad "only $((PASS + FAIL)) assertions ran — rows were silently dropped (floor 15)"
+# Reported DIRECTLY with printf + exit, never through ok()/bad() — a floor
+# dispatched through the helpers it backstops dies with the same edit that
+# disarms them (this is the shape guard-vacuity-floor mutation-tests).
+if [[ $((PASS + FAIL)) -lt 15 ]]; then
+  printf 'FAIL: assertion floor: only %s assertion(s) ran, expected >= 15 — rows were silently dropped.\n' "$((PASS + FAIL))" >&2
+  exit 1
 fi
+ok "assertion floor: $((PASS + FAIL)) rows executed (floor 15)"
 
 echo "=== redact-pii-ghs-shape: $PASS passed, $FAIL failed ==="
 if [[ "$FAIL" -eq 0 ]]; then
