@@ -87,7 +87,7 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 // 271 -> 277 (#9879 review fixes, +6): G2 destroy spellings + sub-root normalisation, G2 scanner linearity, and the G2e attribute pin
 // (live, mutation matrix, comment-stripper robustness, per-merge edge to the volume).
 // 277 -> 278 (#9879 review round 2, +1): G2e lexer/scanner linearity.
-// 278 -> 276 (#9372 retirement, -3): the web2-luks-rebirth.yml five-target describe (three tests) retired with the workflow; the G2 test was rewritten in place (+0).
+// 278 -> 276 (#9372 retirement, -3): the single-use rebirth workflow's five-target describe (three tests) retired with the workflow; the G2 test was rewritten in place (+0).
 // Exact again: grep -cE '^\s*test\(' = 276.
 const TEST_FLOOR = 276;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
@@ -4128,7 +4128,7 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
     expect(naming.length).toBeGreaterThan(0);
     const hits = scripts.flatMap((rel) => g2ScriptHits(rel, readFileSync(resolve(REPO_ROOT, rel), "utf8")));
     expect(hits).toEqual([]);
-    // Scratch control (the real-content control, scripts/web2-rebirth.sh, retired with the rebirth workflow): a verb IS present
+    // Scratch control (the real-content control, a script retired with the rebirth workflow): a verb IS present
     // and no sole-copy address is named, so the line is legal by content, not by exemption. It flows through the same two
     // functions the population scan uses (g2Code/G2_STATE_VERBS and g2Named), embedded in a longer line with a leading `cd x &&`
     // and a trailing comment, so a verb-less scanner (empty G2_STATE_VERBS) or a blind matcher cannot pass it.
