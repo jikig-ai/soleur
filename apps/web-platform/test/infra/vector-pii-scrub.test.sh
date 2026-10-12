@@ -507,7 +507,7 @@ EXPECTED_TAGS=$(
   # from a file whose logger calls are heredoc-hidden. This extraction reads the call itself,
   # so the literal IS the derivation. `-oP` on the call shape (not a bare token) keeps a prose
   # mention of the tag from feeding the set.
-  grep -rhoP '^[[:space:]]*logger -t \K[a-z0-9-]+' "$INFRA_DIR"/cloud-init*.yml 2>/dev/null
+  grep -rhoP '^[[:space:]]*/?([[:alnum:]_.-]+/)*logger -t \K[a-z0-9-]+' "$INFRA_DIR"/cloud-init*.yml 2>/dev/null
 )
 # #6178: some legitimate SYSLOG_IDENTIFIER entries come from a systemd UNIT's binary
 # writing to stdout — NOT from a `logger -t` call in infra/*.sh — so they are not
@@ -550,9 +550,11 @@ DERIVED_TAGS="$EXPECTED_TAGS"
 for exempt_tag in "${!PRIORITY_ARM_EXEMPTIONS[@]}"; do
   EXPECTED_TAGS=$(printf '%s\n' "$EXPECTED_TAGS" | grep -vxF "$exempt_tag" || true)
 done
-# Array entries are quoted strings on their own lines inside the include_matches
-# block; pull the bare tag from each.
-ACTUAL_TAGS=$(echo "$HOST_SCRIPTS_BLOCK" | grep -oP '^\s*"\K[a-z0-9-]+(?="\s*,?\s*$)' | sort -u)
+# Array entries are quoted string MEMBERS of the include_matches.SYSLOG_IDENTIFIER
+# array; tokenize only the array body (matcher line through `]`), comment-stripped,
+# so layout variants (inline members, trailing comments, odd quoting) all derive —
+# quoted TOML keys/values elsewhere in the block must not enter the set (#9963).
+ACTUAL_TAGS=$(printf '%s\n' "$HOST_SCRIPTS_BLOCK" | awk '/include_matches\.SYSLOG_IDENTIFIER/{f=1} f{print} f&&/\]/{exit}' | sed 's/#.*$//' | grep -oE '"[a-z0-9._-]+"' | tr -d '"' | sort -u)
 CASES=$((CASES + 1))
 if [[ -n "$EXPECTED_TAGS" && "$EXPECTED_TAGS" == "$ACTUAL_TAGS" ]]; then
   pass "SYSLOG_IDENTIFIER tag set matches the infra emitters ($(echo "$EXPECTED_TAGS" | grep -c .) tags)"
@@ -755,8 +757,8 @@ elif ! printf '%s\n' "$SRC1_BLOCK" | grep -cE '^include_matches\.PRIORITY = \["0
   fail "Source 1 drift (#9963): include_matches.PRIORITY is no longer exactly [\"0\", \"1\", \"2\", \"3\", \"4\"] — the PRIORITY-3 systemd control row (and real 'Failed to start' rows) leaves the admission arm and silently stops shipping"
 elif ! printf '%s\n' "$SRC1_BLOCK" | grep -cE '^include_units = \["inngest-server\.service"\]$' >/dev/null; then
   fail "Source 1 drift (#9963): include_units changed — the unit's own rows at every priority stop shipping"
-elif ! grep -qE '^inputs = \[.*"inngest_journald".*\]' "$VECTOR_TOML"; then
-  fail "Source 1 drift (#9963): inngest_journald is no longer an input of the pii_scrub chain"
+elif ! awk '/^\[transforms\.pii_scrub/{f=1} f && /^inputs = /{print; exit}' "$VECTOR_TOML" | grep -q '"inngest_journald"'; then
+  fail "Source 1 drift (#9963): inngest_journald is no longer an input of the pii_scrub chain (checked against the pii_scrub* transform block's own inputs line, not any inputs line)"
 else
   pass "Source 1 (inngest_journald) admits inngest-server.service OR PRIORITY 0-4 from any unit and feeds the scrub chain — the #9963 control-row arm holds"
 fi

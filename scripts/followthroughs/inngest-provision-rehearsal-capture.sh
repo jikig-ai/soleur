@@ -222,6 +222,23 @@ HOST_ROWS="$(bs_query "$HOST_SQL")" || {
   exit 2
 }
 
+# CONTROL ROWS are read on the RUN window, never the mode's --since bound. The hourly
+# probe's only guaranteed emit is the OnBootSec fire, which lands inside phase-a's
+# window — a phase-b-bounded read (the workflow passes --since=<phase-b-since>, taken
+# after cap_a passes) would demand the next +1h tick inside a 15-minute gate and could
+# never satisfy (review P1). The property the control attests is "the systemd-tagged
+# channel proved live during this run", not "a fresh row landed inside this mode's
+# boundary". A same-run-id re-run can re-see a previous attempt's emit inside the
+# window — bounded to the same host lineage, and the honest reading either way is
+# "channel recently proven". Post-reboot keeps its own boundary: the reboot re-fires
+# OnBootSec inside POST_ROWS, so the post-boundary arm still proves the channel
+# across the reboot.
+CONTROL_SQL="SELECT dt, raw FROM ${BS_SRC} WHERE dt > now() - INTERVAL ${WINDOW} AND position(raw, '\"host\":\"${HOST_NAME}\"') > 0 ORDER BY dt LIMIT 2000 FORMAT JSONEachRow"
+CONTROL_ROWS="$(bs_query "$CONTROL_SQL")" || {
+  echo "TRANSIENT: the control-row query failed after a live anchor — transport fault." >&2
+  exit 2
+}
+
 # Needles match the `stage=<name>` FIELD SHAPE, not the bare marker: an exit row's
 # `why=$last_stage` echoes the previous stage verbatim, and a substring grep would count an
 # early death's `why=provision-attempt-start` as a start. Every marker this script counts is
@@ -288,8 +305,9 @@ want() { note "WAIT: $1"; missing="${missing}$1; "; }
 # Journald rows carry no iid=, so the count is host+window scoped by design: the workflow's
 # always-on --since bound is what excludes a prior life's storm rows on a re-capture. This is
 # DETECTION, not prevention — the unit conditions are the preventive layer; the observed
-# storm's rows demonstrably shipped to this source (run 38031062344), though the systemd-tagged
-# delivery path is documented unexplained (vector.toml) — a liveness caveat, tracked separately.
+# storm's rows demonstrably shipped to this source (run 38031062344) — the delivery path
+# is now pinned and documented (#9963, ADR-286): Source 1's PRIORITY<=4 OR-arm admits the
+# SYSLOG_IDENTIFIER=systemd rows, and systemd_path_check below attests it stays live.
 # SYSTEMD-ROW SCOPED, not needle-text alone: the phrase also rides inside unrelated log
 # bodies — the inngest-server control API ships GitHub webhook payloads, and issue #9939's
 # own title IS the needle text (measured 2026-10-10: 10 false matches attributed to
@@ -389,7 +407,7 @@ case "$MODE" in
     (( n_nic_fail >= 1 ))        && ok "NIC-absent failure observed (private_nic_timeout/provision-nic-ABSENT n=${n_nic_fail})" || want "NIC-absent failure observed (private_nic_timeout/provision-nic-ABSENT n=${n_nic_fail})"
     # The control arm evaluates BEFORE the failed-count arm prints ok — a want/TRANSIENT on
     # a dark systemd path must dominate the zero-failed-rows note (#9963).
-    systemd_path_check "$HOST_ROWS"
+    systemd_path_check "$CONTROL_ROWS"
     inngest_failed_check "$HOST_ROWS"
     KEY=REHEARSAL_PHASE_A_OBSERVED
     ;;
@@ -409,7 +427,7 @@ case "$MODE" in
     n_exit="$(count_iid provision-attempt-exit-)"
     (( n_done >= 1 )) && ok "bootstrap-done emitted for this host (implies nic_present + zot + isolation + bootstrap all ran)" || want "bootstrap-done emitted for this host (n=${n_done})"
     note "info: ${n_exit} provision-attempt-exit-* row(s) in window (retries before convergence are expected); private_nic_ok n=${n_ok} (informational — emitted only when the wait actually ran)"
-    systemd_path_check "$HOST_ROWS"
+    systemd_path_check "$CONTROL_ROWS"
     inngest_failed_check "$HOST_ROWS"
     KEY=REHEARSAL_PHASE_B_RECOVERY
     ;;

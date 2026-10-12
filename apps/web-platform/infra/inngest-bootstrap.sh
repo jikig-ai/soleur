@@ -364,8 +364,10 @@ Description=Inngest server heartbeat ping to Better Stack
 After=network-online.target
 # #6556 Part 2: on failure, fire a push-less oneshot that emits an ERR-priority
 # `inngest-heartbeat` line so a unit failure is READABLE off-box (no SSH). Before this, a
-# heartbeat failure surfaced only as the un-shippable SYSLOG_IDENTIFIER=systemd "Failed to
-# start" journal row (the #6551 signature); now it also ships on the inngest-heartbeat channel.
+# heartbeat failure surfaced only as the SYSLOG_IDENTIFIER=systemd "Failed to
+# start" journal row (the #6551 signature — since explained and positively controlled by
+# #9963: Source 1's PRIORITY<=4 OR-arm carries it); now it also ships on the
+# inngest-heartbeat channel.
 OnFailure=inngest-heartbeat-failure-log.service
 # SKIP-VS-FAIL (#9962, the #9939 pattern): /etc/default/inngest-server is a late-runcmd write and
 # the 60s timer fires from boot — an absent file must SKIP the start (one "skipped, unmet

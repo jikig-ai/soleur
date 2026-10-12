@@ -191,6 +191,10 @@ done
 # marker and the field fragment). --control-require-field is the closed form:
 # JSONExtractString reads the row's own field, so a doppler row is 'doppler'
 # regardless of what its message quotes (#9963, ADR-192 I-2 + ADR-286).
+# Residual (structural review): JSONExtractString returns the FIRST key
+# occurrence at ANY depth — a row whose earliest "name" key is nested inside a
+# payload object extracts that nested value. Real rows are flat journald
+# records, so the own-field reading holds; the assumption is named here.
 control_term="raw LIKE '%$(sql_lit "$CONTROL_MARKER")%'"
 for req in "${CONTROL_REQUIRE[@]+"${CONTROL_REQUIRE[@]}"}"; do
   control_term="(${control_term} AND raw LIKE '%$(sql_lit "$req")%')"

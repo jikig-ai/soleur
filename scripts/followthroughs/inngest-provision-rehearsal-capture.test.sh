@@ -375,7 +375,10 @@ run "phase-a PASS: a BOOT_STAGE row embedding journalctl 'Failed to start' text 
 # prior life's bootstrap-done inside the window would trip the no-done check, but the bound
 # excludes it — this arm proves the bound is wired, not just parsed.
 SINCE_BOUND="2026-06-01T00:00:00"
-rows "$TMP/r-since.json" "2026-05-31T00:00:00" \
+# rows() truncates its output file each call, so the prior-life batch lands in a
+# sibling file and is cat'd into the fixture — the pre-boundary rows are the
+# entire point of this arm.
+rows "$TMP/r-since-old.json" "2026-05-31T00:00:00" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=provision-unit-armed detail=iid=zzz999 \"host\":\"${HOST}\"" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=bootstrap-done detail=attempt=9 iid=zzz999 \"host\":\"${HOST}\""
 rows "$TMP/r-since.json" "$NOW" \
@@ -384,8 +387,10 @@ rows "$TMP/r-since.json" "$NOW" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=2 iid=abc123 \"host\":\"${HOST}\"" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=private_nic_timeout detail=boot=deadbee1.waited_s=150 \"host\":\"${HOST}\"" \
   "$CTRL_ROW"
+cat "$TMP/r-since-old.json" >> "$TMP/r-since.json"
 run "phase-a PASS under --since: a prior life's rows are excluded by the bound" 0 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-since.json" -- "${BASE_ARGS[@]}" --mode phase-a --since "$SINCE_BOUND" --out "$TMP/ev-since.env"
+
 
 # ── #9963 systemd-path positive-control arms ──────────────────────────────────
 # The zero-'Failed to start' count is only as good as the channel that would carry such a
@@ -414,15 +419,16 @@ rows "$TMP/r-noctrl.json" "$NOW" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=provision-unit-armed detail=iid=abc123 \"host\":\"${HOST}\"" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=1 iid=abc123 \"host\":\"${HOST}\"" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=2 iid=abc123 \"host\":\"${HOST}\"" \
-  "SOLEUR_INNGEST_BOOT_STAGE stage=private_nic_timeout detail=boot=deadbee1.waited_s=150 \"host\":\"${HOST}\""
+  "SOLEUR_INNGEST_BOOT_STAGE stage=private_nic_timeout detail=boot=deadbee1.waited_s=150 \"host\":\"${HOST}\"" \
+  "{\"SYSLOG_IDENTIFIER\":\"systemd\",\"PRIORITY\":\"3\",\"message\":\"unrelated systemd noise with NO control marker\",\"host\":\"${HOST}\"}"
 run "phase-a TRANSIENT: control absent -> want (a zero failed-count on an unproven path is not a pass)" 2 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-noctrl.json" -- "${BASE_ARGS[@]}" --mode phase-a
 grep -qF 'systemd-path control row absent' < <(printf '%s' "$LAST_OUT") && \
   pass "control-absent arm names the missing control in its want" || \
   fail "control-absent arm names the missing control in its want" "$LAST_OUT"
 
-# (c) CONTAMINATED, three measured forgery classes riding one row set — each must NOT
-# satisfy the field-anchored check; the arm stays TRANSIENT and never reports the
+# (c) CONTAMINATED — the measured forgery classes riding one row set; each must NOT
+# satisfy the own-field check; the arm stays TRANSIENT and never reports the
 # control observed:
 #   i. doppler-tagged marker row (webhook payloads quote repo text verbatim),
 #  ii. marker + `SYSLOG_IDENTIFIER=systemd` PROSE on the same doppler row — the
@@ -434,7 +440,7 @@ grep -qF 'systemd-path control row absent' < <(printf '%s' "$LAST_OUT") && \
 #  iv. a doppler row quoting the exact escaped field fragment verbatim — the
 #      residual the text-level anchor could not close (security-review P2);
 #      jq's own-field extraction makes the quoted text irrelevant,
-#  iv. the marker + field text embedded inside a BOOT_STAGE row's journal payload
+#   v. the marker + field text embedded inside a BOOT_STAGE row's journal payload
 #      (post-boot-health embeds `journalctl` output verbatim in jl= — the same
 #      exclusion count_inngest_failed carries).
 rows "$TMP/r-ctrlforge.json" "$NOW" \
@@ -445,13 +451,21 @@ rows "$TMP/r-ctrlforge.json" "$NOW" \
   "{\"SYSLOG_IDENTIFIER\":\"doppler\",\"_COMM\":\"inngest\",\"_SYSTEMD_UNIT\":\"inngest-server.service\",\"message\":\"SOLEUR_SYSTEMD_JOURNALD_CONTROL ts=1760222400 quoted inside a webhook payload\",\"host\":\"${HOST}\"}" \
   "{\"SYSLOG_IDENTIFIER\":\"doppler\",\"_COMM\":\"inngest\",\"message\":\"SOLEUR_SYSTEMD_JOURNALD_CONTROL ts=1760222400 and SYSLOG_IDENTIFIER=systemd prose quoted from the repo\",\"host\":\"${HOST}\"}" \
   "{\"SYSLOG_IDENTIFIER\":\"systemd-journald\",\"_COMM\":\"systemd-journald\",\"message\":\"SOLEUR_SYSTEMD_JOURNALD_CONTROL ts=1760222400 prefix-ident noise\",\"host\":\"${HOST}\"}" \
-  "{\"SYSLOG_IDENTIFIER\":\"doppler\",\"_COMM\":\"inngest\",\"message\":\"SOLEUR_SYSTEMD_JOURNALD_CONTROL plus the verbatim fragment \\\"SYSLOG_IDENTIFIER\\\":\\\"systemd\\\" quoted from the repo\",\"host\":\"${HOST}\"}" \
+  "{\"SYSLOG_IDENTIFIER\":\"doppler\",\"_COMM\":\"inngest\",\"message\":\"SOLEUR_SYSTEMD_JOURNALD_CONTROL plus the verbatim fragment \"SYSLOG_IDENTIFIER\":\"systemd\" quoted from the repo\",\"host\":\"${HOST}\"}" \
   "{\"SYSLOG_IDENTIFIER_X\":\"systemd\",\"message\":\"SOLEUR_SYSTEMD_JOURNALD_CONTROL suffix field-name noise\",\"host\":\"${HOST}\"}"
 # The BOOT_STAGE-embedded forgery is appended pre-escaped (rows()'s blanket "->\" pass
 # would mis-escape the \" inside jl= and poison the JSON — a transport-fault TRANSIENT
 # would pass this arm vacuously). printf \" -> \" and \\\" -> \\" so the raw lands as
 # jl="journalctl excerpt: \"SYSLOG_IDENTIFIER\":\"systemd\" ...embedded".
-printf '{"dt":"%s","raw":"SOLEUR_INNGEST_BOOT_STAGE stage=post-boot-health jl=\\"journalctl excerpt: \\\\\"SYSLOG_IDENTIFIER\\\\\":\\\\\"systemd\\\\\" SOLEUR_SYSTEMD_JOURNALD_CONTROL embedded\\" \\"host\\":\\"%s\\""}\n' "$NOW" "$HOST" >> "$TMP/r-ctrlforge.json"
+printf '{"dt":"%s","raw":"SOLEUR_INNGEST_BOOT_STAGE stage=post-boot-health jl=\\"journalctl excerpt: \\\\\\\"SYSLOG_IDENTIFIER\\\\\\\":\\\\\\\"systemd\\\\\\\" SOLEUR_SYSTEMD_JOURNALD_CONTROL embedded\\" \\"host\\":\\"%s\\""}\n' "$NOW" "$HOST" >> "$TMP/r-ctrlforge.json"
+# Guard the guard: the JSON must parse through the stub or the arm dies on a transport
+# fault and any TRANSIENT verdict satisfies it vacuously. python round-trip, no greps.
+python3 - "$TMP/r-ctrlforge.json" <<'PYEOF'
+import json, sys
+for i, line in enumerate(open(sys.argv[1]), 1):
+    line = line.strip()
+    if line: json.loads(line)
+PYEOF
 run "phase-a TRANSIENT: contaminated rows (doppler marker, =-prose field, prefix-ident, BOOT_STAGE embed) do NOT satisfy the control" 2 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-ctrlforge.json" -- "${BASE_ARGS[@]}" --mode phase-a
 if grep -qF 'systemd-path control row observed' < <(printf '%s' "$LAST_OUT"); then
@@ -459,13 +473,48 @@ if grep -qF 'systemd-path control row observed' < <(printf '%s' "$LAST_OUT"); th
 else
   pass "contaminated arm never reports the control row observed"
 fi
+# The TRANSIENT must come from the evaluation, not a dead transport: a stub crash
+# also exits 2 but never prints the want line — pin it positively (arm b's shape).
+grep -qF 'systemd-path control row absent' < <(printf '%s' "$LAST_OUT") && \
+  pass "contaminated arm's TRANSIENT is the want, not a transport fault" || \
+  fail "contaminated arm's TRANSIENT is the want, not a transport fault" "$LAST_OUT"
+
+# (d) PHASE-B RUN-WINDOW (review P1): the control's guaranteed emit is the OnBootSec
+# fire, which lands inside phase-A's window — a phase-b --since bound postdates it
+# and the next +1h tick cannot fit a 15-minute gate. The control therefore binds
+# the RUN window: a control row older than --since but inside --window still
+# proves the channel. The stub applies each query's own bound (host rows honor
+# --since; the control read honors --window), so a pre-since control row exercises
+# exactly the plumbing the finding named.
+SINCE_B="$(date -u -d '10 minutes ago' +%Y-%m-%dT%H:%M:%S)"
+CTRL_DT="$(date -u -d '20 minutes ago' +%Y-%m-%dT%H:%M:%S)"
+rows "$TMP/r-phaseb-ctrl.json" "$NOW" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=3 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-exit-1 detail=attempt=3 why=pull-timeout iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=4 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=bootstrap-done detail=attempt=4 iid=abc123 \"host\":\"${HOST}\""
+rows "$TMP/r-phaseb-ctrl-old.json" "$CTRL_DT" "$CTRL_ROW"
+cat "$TMP/r-phaseb-ctrl-old.json" >> "$TMP/r-phaseb-ctrl.json"
+run "phase-b PASS: a control row older than --since but inside --window still proves the channel (the OnBootSec emit is phase-a-bound)" 0 \
+  "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-phaseb-ctrl.json" -- "${BASE_ARGS[@]}" --mode phase-b --since "$SINCE_B"
+grep -qF 'systemd-path control row observed' < <(printf '%s' "$LAST_OUT") && \
+  pass "phase-b arm reports the control row observed over the run window" || \
+  fail "phase-b arm reports the control row observed over the run window" "$LAST_OUT"
+
+rows "$TMP/r-phaseb-noctrl.json" "$NOW" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=bootstrap-done detail=attempt=4 iid=abc123 \"host\":\"${HOST}\""
+run "phase-b TRANSIENT: no control row in the run window -> want (still not a pass)" 2 \
+  "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-phaseb-noctrl.json" -- "${BASE_ARGS[@]}" --mode phase-b --since "$SINCE_B"
+grep -qF 'systemd-path control row absent' < <(printf '%s' "$LAST_OUT") && \
+  pass "phase-b absent arm names the missing control" || \
+  fail "phase-b absent arm names the missing control" "$LAST_OUT"
 
 # ── floors (ADR-193): the ledger, never a bare counter ────────────────────────
 # `fails` is a scalar counter for exactly this floor: the vacuity guard's mutant slice
 # initializes counters (`X=$((X+1))` increments) but not the FAILURES array — a floor on
 # `${#FAILURES[@]}` dies unbound under set -u and scores CONSTRUCTION, not FIRES. And MIN
 # must sit ADJACENT to the `if` — the mutant builder's walk-back stops at any comment.
-MIN=42
+MIN=47
 if (( passes + fails < MIN )); then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$((passes + fails))" "$MIN" >&2
   exit 1

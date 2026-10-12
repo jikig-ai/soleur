@@ -572,44 +572,79 @@ assert "9963a: PROBESCRIPTEOF heredoc body extracted (the control's only emissio
 # the capture returns non-zero, and the suite would die mid-run rather than reporting the
 # FAIL rows (the CI_DEPLOY_TAG :471-477 lesson). The emptiness asserts are the real check.
 CONTROL_EMIT="$(printf '%s\n' "$PROBE_BODY" | grep -nE '^[[:space:]]*/usr/bin/logger .*SOLEUR_SYSTEMD_JOURNALD_CONTROL' | sed -n '1p' || true)"
-PROBE_EMIT_LN="$(printf '%s\n' "$PROBE_BODY" | grep -nE 'logger -t "\$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE' | sed -n '1p' | cut -d: -f1 || true)"
+PROBE_EMIT_LN="$(printf '%s\n' "$PROBE_BODY" | grep -nE '^[[:space:]]*logger -t "\$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE' | sed -n '1p' | cut -d: -f1 || true)"
 CONTROL_LN="${CONTROL_EMIT%%:*}"
 
 assert "9963b: the probe script EMITS SOLEUR_SYSTEMD_JOURNALD_CONTROL via /usr/bin/logger (emission-anchored, not a bare token)" \
   "[[ -n \"\$CONTROL_EMIT\" ]]"
-assert "9963c: the control emit carries -t systemd (the discriminator field consumers field-scope on)" \
-  "printf '%s\n' \"\$CONTROL_EMIT\" | grep -cF -- '-t systemd' >/dev/null"
-assert "9963d: the control emit carries -p err (PRIORITY 3 — inside Source 1's {0..4} admission arm)" \
-  "printf '%s\n' \"\$CONTROL_EMIT\" | grep -cF -- '-p err' >/dev/null"
+assert "9963c: the control emit carries -t systemd (the discriminator field consumers field-scope on — boundary-anchored: -t systemd-journald or a message-embedded -t systemd must not satisfy it)" \
+  "printf '%s\n' \"\$CONTROL_EMIT\" | grep -cE -- '-t[[:space:]]+systemd([^a-zA-Z0-9-]|$)' >/dev/null"
+assert "9963d: the control emit orders '-t systemd -p err' as its flags (PRIORITY 3 — inside Source 1's {0..4} admission arm; a message-embedded -p err with no flag, a reordered pair, or -p errx must not satisfy it; equivalent spellings like -p user.err are deliberately flagged — the contract is exactly -t systemd -p err)" \
+  "printf '%s\n' \"\$CONTROL_EMIT\" | grep -cE -- '-t[[:space:]]+systemd[[:space:]]+-p[[:space:]]+err([[:space:]]|$)' >/dev/null"
 
-# UNCONDITIONALITY, same ADR-117 invariant as the emit it follows: the control must sit
-# AFTER the unconditional SOLEUR_INNGEST_SERVER_PROBE emit and BEFORE any conditional
-# gate — an `if`/`case`/`for`/`while`/`until`/`elif` between them is a credential- or
-# state-gated emit, and a gated control reads as a dark path under exactly the failure it
-# exists to disprove. Anchored on the two emission lines, not on a comment position.
+# UNCONDITIONALITY, same ADR-117 invariant as the emit it follows. Three pins, because a
+# keyword ban-list is a window always narrower than the property (review: `exit`,
+# `return`, a `fi`/`esac`/`done` closing a gate opened BEFORE the probe emit, and a
+# conditional wrapping BOTH emits each slipped the keyword set):
+#   (1) WHITELIST — between the probe emit and the control emit every non-blank line
+#       must be a COMMENT. `exit`, `return`, `exec`, `fi`, a mid-line `; if`, and every
+#       gate shape all violate it; documentation lines are fine.
+#   (2) TOP-LEVEL DEPTH ZERO — counting only COLUMN-0 conditional openers/closers
+#       (indented code can't wrap the emit without an enclosing col-0 opener), the
+#       control emit must sit at depth 0: a conditional opened before the probe emit
+#       and closed after the control wraps both while staying invisible to (1). The
+#       probe body embeds an awk program — a naive keyword scan counts its `if`/`for`
+#       tokens, so only col-0 lines count.
+#   (3) BEFORE THE TAIL GATE — the post-emit `if [ "$vector_active" ...]` phone-home
+#       gate (ADR-117's sanctioned post-emit branch) must come AFTER the control.
 BETWEEN_EMITS=""
+EMIT_DEPTH=-1
+TAIL_LN=""
 if [[ -n "$PROBE_EMIT_LN" && -n "$CONTROL_LN" && "$CONTROL_LN" =~ ^[0-9]+$ && "$PROBE_EMIT_LN" =~ ^[0-9]+$ && "$CONTROL_LN" -gt "$PROBE_EMIT_LN" ]]; then
   BETWEEN_EMITS="$(printf '%s\n' "$PROBE_BODY" | awk -v a="$PROBE_EMIT_LN" -v b="$CONTROL_LN" 'NR>a && NR<b')"
+  EMIT_DEPTH="$(printf '%s\n' "$PROBE_BODY" | awk -v b="$CONTROL_LN" 'NR<b && $0 ~ /^[^[:space:]#]/ { if ($0 ~ /^(if|for|while|until|select|case)([[:space:]]|$|\()/ ) d++; n = gsub(/(^|[[:space:];(])(fi|esac|done)([[:space:];)]|$)/, " ", $0); d -= n } END{print d+0}')"
+  TAIL_LN="$(printf '%s\n' "$PROBE_BODY" | grep -nE 'if \[ "\$vector_active"' | sed -n '1p' | cut -d: -f1 || true)"
 fi
-assert "9963e: the control emit is UNCONDITIONAL — after the probe emit, before any if/case/loop gate" \
-  "[[ \"\$CONTROL_LN\" =~ ^[0-9]+\$ && \"\$PROBE_EMIT_LN\" =~ ^[0-9]+\$ && \"\$CONTROL_LN\" -gt \"\$PROBE_EMIT_LN\" ]] && ! printf '%s\n' \"\$BETWEEN_EMITS\" | grep -cE '^[[:space:]]*(if|elif|else|fi|case|esac|for|while|until|done)([[:space:]]|\$)' >/dev/null"
+assert "9963e: the control emit is UNCONDITIONAL — comment/blank-only between emits, top-level conditional depth zero, before the post-emit tail gate" \
+  "[[ \"$CONTROL_LN\" =~ ^[0-9]+\$ && \"$PROBE_EMIT_LN\" =~ ^[0-9]+\$ && \"$CONTROL_LN\" -gt \"$PROBE_EMIT_LN\" && \"$EMIT_DEPTH\" -eq 0 && \"$TAIL_LN\" =~ ^[0-9]+\$ && \"$CONTROL_LN\" -lt \"$TAIL_LN\" ]] && ! printf '%s\n' \"$BETWEEN_EMITS\" | grep -cvE '^[[:space:]]*(#|$)' | grep -c . >/dev/null"
+
 
 # Single emission chokepoint: the PROBESCRIPTEOF heredoc is the only place this marker may
-# be emitted — a second emit site (e.g. a sibling unit or a doppler-wrapped script) would
-# multiply the row cost and fork the chokepoint these pins watch.
-# grep -c prints "0" and exits non-zero on no match — bound to a var first so a missing
-# emit is an ordinary FAIL row, not a set -e death (same shape as CONTROL_EMIT above).
-CONTROL_EMIT_COUNT="$(grep -cE '^[[:space:]]*/?([[:alnum:]_.-]+/)*logger .*SOLEUR_SYSTEMD_JOURNALD_CONTROL' "$INNGEST_BOOTSTRAP" || true)"
-assert "9963f: exactly ONE logger emission of SOLEUR_SYSTEMD_JOURNALD_CONTROL exists in inngest-bootstrap.sh" \
-  "[[ \"\$CONTROL_EMIT_COUNT\" -eq 1 ]]"
+# be emitted. A second emit site — a sibling unit, a prefixed `env logger`, a `systemd-cat`
+# line, an ExecStartPost=, a marker-bearing `sed -i` injector, an ssh step in a workflow, or
+# a write_files script body in cloud-init-inngest.yml (all verified escape shapes) — would
+# multiply the row cost, fork the chokepoint these pins watch, or forge the path.
+# The sweep counts NON-COMMENT code lines carrying the marker across the host-emission
+# surface — line-shape anchors cannot see the non-`logger` channels, so the marker itself
+# is the discriminator. Comment lines may quote the marker freely (docs carry it).
+CONTROL_EMIT_COUNT="$(grep -rnF 'SOLEUR_SYSTEMD_JOURNALD_CONTROL' --include='*.sh' --include='*.yml' --exclude='*.test.sh' \
+    apps/web-platform/infra/ .github/workflows/ | grep -cvE '^[^:]+:[0-9]+:[[:space:]]*#' || true)"
+assert "9963f: exactly ONE non-comment code line carries SOLEUR_SYSTEMD_JOURNALD_CONTROL across the host-emission surface (infra scripts + cloud-init write_files + workflow ssh steps)" \
+  "[[ \"$CONTROL_EMIT_COUNT\" -eq 1 ]]"
 
-# NEVER-ADD pin (AC3): 'systemd' must never join the Source 4 exact-tag allowlist. The
-# control proves the PRIORITY-arm path, which already ships its rows; an allowlist entry
-# would ship every PID-1 line (all PRIORITY-6 unit chatter) — the quota trap. Anchored on
-# the quoted-array-element shape so the rationale comments mentioning the tag cannot
-# false-fire either way.
+
 assert "9963g: 'systemd' is ABSENT from the Source 4 include_matches.SYSLOG_IDENTIFIER allowlist (never-add pin)" \
   "! printf '%s\n' \"\$HSJ\" | grep -cE '^[[:space:]]*\"systemd\",?\$' >/dev/null"
+
+
+# Tokenized never-add, over EVERY include_matches.SYSLOG_IDENTIFIER array in the file —
+# the property is "no exact-tag membership widens the systemd class", and a whole-line
+# element pin misses layout variants (`["sshd", "systemd"]` inline, `'systemd'` quoted,
+# `"""systemd"""`, trailing-comment members) and the same membership added under the
+# other journald sources (review: five include_matchers can carry it; 9963g covers
+# only Source 4's). Extract every array body through its `]`, strip comments,
+# tokenize quoted members, compare exactly.
+SYSLOG_ID_MEMBERS="$(awk '/include_matches\.SYSLOG_IDENTIFIER/{f=1} f{print} f&&/\]/{f=0}' "$SCRIPT_DIR/vector.toml" | sed 's/#.*$//' | grep -oE '"[a-zA-Z0-9._-]+"|'"'"'[a-zA-Z0-9._-]+'"'"'' | tr -d '"'"'"'"'"'" | sort -u || true)"
+assert "9963h: NO include_matches.SYSLOG_IDENTIFIER array in vector.toml carries a 'systemd' member (tokenized, all sources, all layout variants)" \
+  "! printf '%s\n' \"$SYSLOG_ID_MEMBERS\" | grep -cx 'systemd' >/dev/null"
+
+# Anti-vacuity floor (ADR-193): a stranded run must never report clean. Floor, not
+# equality — developer-incremented. Reports directly, never through assert/pass/fail.
+MIN_TOTAL=96
+if (( TOTAL < MIN_TOTAL )); then
+  printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$TOTAL" "$MIN_TOTAL" >&2
+  exit 1
+fi
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed ==="

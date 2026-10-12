@@ -101,7 +101,8 @@ fi
 rc=0
 out="$(bash "$ASSERT" --host "$HOST" \
         --absence 'Doppler Error: Invalid Auth token' \
-        --since "$WINDOW" 2>&1)" || rc=$?
+        --since "$WINDOW" \
+        --control-require-field 'SYSLOG_IDENTIFIER=web-zot-consumer-probe' 2>&1)" || rc=$?
 printf '%s\n' "$out"
 case "$rc" in
   0) echo "PASS: zero 'Doppler Error: Invalid Auth token' events for $HOST across ${deploy_rows} ci-deploy invocation(s) in $WINDOW, with the Source-4 positive control confirmed live at the sink. AC12 re-verified."

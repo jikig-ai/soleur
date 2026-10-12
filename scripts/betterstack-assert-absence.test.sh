@@ -487,12 +487,51 @@ out=$(BETTERSTACK_QUERY_SCRIPT="$TMP/stub-ctl-field.sh" bash "$SUT" --host soleu
   --control-require-field 'SYSLOG_IDENTIFIER=' --since 6h 2>&1) || rc=$?
 eq "--control-require-field with an EMPTY value is refused (exit 64 — '= ""' matches absent-field rows)" "64" "$rc"
 
+# (g) MIXED COMPOSITION — one substring require AND one field require on the same
+# control: the closed-form and the substring form must compose together (the recipe
+# may bind the field AND an unfielded fragment).
+cat > "$TMP/stub-ctl-mixed.sh" <<'STUB'
+#!/usr/bin/env bash
+sql="$1"
+case "$sql" in
+  SELECT*|*$'\n'*SELECT*) : ;;
+  *) echo "stub: expected raw SQL as \$1" >&2; exit 64 ;;
+esac
+case "$sql" in
+  *"JSONExtractString(raw,'host_name') = 'soleur-web-1'"*) : ;;
+  *) echo "stub: read was not host-scoped" >&2; exit 65 ;;
+esac
+if [[ "$sql" == *SOLEUR_SYSTEMD_JOURNALD_CONTROL* ]]; then
+  if [[ "$sql" == *"LIKE '%CTL_MIX_SUB%"* && "$sql" == *"JSONExtractString(raw,'SYSLOG_IDENTIFIER') = 'systemd'"* ]]; then
+    echo '{"n":"3"}'
+  else
+    echo '{"n":"0"}'
+  fi
+else
+  echo '{"n":"0"}'
+fi
+exit 0
+STUB
+chmod +x "$TMP/stub-ctl-mixed.sh"
+rc=0
+out=$(BETTERSTACK_QUERY_SCRIPT="$TMP/stub-ctl-mixed.sh" bash "$SUT" --host soleur-web-1 \
+  --absence 'IMAGE_PULL_FAIL' \
+  --control 'SOLEUR_SYSTEMD_JOURNALD_CONTROL' \
+  --control-require 'CTL_MIX_SUB' --control-require-field 'SYSLOG_IDENTIFIER=systemd' \
+  --since 6h 2>&1) || rc=$?
+eq "a mixed --control-require + --control-require-field pair composes on one control (exit 0)" "0" "$rc"
+if [[ "$out" == *'control_rows=3'* ]]; then
+  ok "mixed require+field pair reached the control predicate AND'd — stub-verified"
+else
+  bad "mixed require+field pair did not compose — stub saw an incomplete predicate: $out"
+fi
+
 # --- Anti-vacuity floor -----------------------------------------------------------------------
 # This suite imposes assertion floors on other people's guards and had none of its own. Neuter
 # ok()/bad()/eq() and it reported "0 passed, 0 failed / OK / exit 0" — indistinguishable from a
 # clean run. A FLOOR, not equality: the count is developer-incremented, so -eq turns every new
 # assertion into a spurious red.
-MIN_ASSERTIONS=64
+MIN_ASSERTIONS=66
 if [[ "$((pass + fail))" -lt "$MIN_ASSERTIONS" ]]; then
   echo "FATAL: only $((pass + fail)) assertions ran, expected >= $MIN_ASSERTIONS — the suite was stranded, not clean." >&2
   exit 1
