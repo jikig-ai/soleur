@@ -315,13 +315,24 @@ ran="$SANDBOX/h17-hook-ran"
 mkdir -p "$d/.git/hooks"
 printf '#!/bin/sh\ntouch "%s"\n' "$ran" > "$d/.git/hooks/reference-transaction"
 chmod +x "$d/.git/hooks/reference-transaction"
-git -C "$d" update-ref refs/heads/control "$(git -C "$d" rev-parse main)"
-if [[ -e "$ran" ]]; then ok "control: this fixture's reference-transaction hook fires on a normal ref write"; else bad "control: the hook did not fire, so the assertion below proves nothing"; fi
 dangle "$d"
+if [[ -e "$ran" ]]; then ok "control: the hook fires on a symbolic-ref HEAD write (the fixture's own dangle)"; else bad "control: the hook did not fire on symbolic-ref, so the assertion below proves nothing"; fi
 rm -f "$ran"
 run_helper "$d"
 eq "heal still happens" "$MARKER_GONE" "$OUT"
 if [[ -e "$ran" ]]; then bad "a repository-controlled reference-transaction hook ran"; else ok "no repository hook ran during the repair"; fi
+d="$SANDBOX/h17b"; mk_bare_root "$d" || bad "fixture"
+ran="$SANDBOX/h17b-hook-ran"
+mkdir -p "$d/hp"
+printf '#!/bin/sh\ntouch "%s"\n' "$ran" > "$d/hp/reference-transaction"
+chmod +x "$d/hp/reference-transaction"
+git -C "$d" config core.hooksPath "$d/hp"
+dangle "$d"
+if [[ -e "$ran" ]]; then ok "control: a repo-config core.hooksPath hook fires on the fixture's own write"; else bad "control: the core.hooksPath hook did not fire, so the assertion below proves nothing"; fi
+rm -f "$ran"
+run_helper "$d"
+eq "heal still happens with a repo-config hooksPath" "$MARKER_GONE" "$OUT"
+if [[ -e "$ran" ]]; then bad "a core.hooksPath hook ran during the repair"; else ok "no core.hooksPath hook ran during the repair"; fi
 
 begin H18
 d="$SANDBOX/h18"; mk_bare_root "$d" || bad "fixture"
@@ -338,6 +349,35 @@ eq "nonexistent dir: silent (a failed cd must not fall through to the caller's o
 eq "nonexistent dir: exit status is 0" "0" "$RC"
 eq "the repo the caller stood in is untouched" "refs/heads/gone" "$(head_of "$b")"
 
+begin H20
+p="$SANDBOX/h20"; mk_bare_root "$p" || bad "fixture"
+dangle "$p"
+mkdir -p "$p/sub/.git"
+printf '[core]\n\tbare = true\n' > "$p/sub/.git/config"
+run_helper "$p/sub"
+eq "a skeleton .git (config only) nested under a dangling bare root: silent" "" "$OUT"
+eq "the parent root HEAD is untouched" "refs/heads/gone" "$(head_of "$p")"
+
+begin H21
+r="$SANDBOX/h21-real"; mk_bare_root "$r" || bad "fixture"
+dangle "$r"
+sdir="$SANDBOX/h21-sym"; mkdir -p "$sdir"
+ln -s "$r/.git" "$sdir/.git"
+run_helper "$sdir"
+eq "a .git SYMLINK to another root's .git: silent" "" "$OUT"
+eq "the symlink target's HEAD is untouched" "refs/heads/gone" "$(head_of "$r")"
+
+begin H22
+d="$SANDBOX/h22"; mk_bare_root "$d" || bad "fixture"
+git -C "$d" symbolic-ref HEAD "refs/heads/Feat_1.x-y"
+run_helper "$d"
+eq "every allowlisted character class survives into the marker" "SOLEUR_BARE_HEAD_HEALED from=refs/heads/Feat_1.x-y to=refs/heads/main" "$OUT"
+d="$SANDBOX/h22b"; mk_bare_root "$d" || bad "fixture"
+long="refs/heads/$(printf 'a%.0s' $(seq 1 100))/$(printf 'b%.0s' $(seq 1 100))/$(printf 'c%.0s' $(seq 1 100))"
+git -C "$d" symbolic-ref HEAD "$long"
+run_helper "$d"
+eq "an over-long old ref name is capped at 80 characters" "SOLEUR_BARE_HEAD_HEALED from=${long:0:80} to=refs/heads/main" "$OUT"
+
 # --- loader cases ---------------------------------------------------------------------------
 # Pin the ambient state the loader reads, so the "marker is the trailing line" assertion does not
 # depend on whether the host happens to carry a tmpfs-guard alarm: a populated alarm file makes the
@@ -347,7 +387,6 @@ HEARTBEAT_FILE="$SANDBOX/tmpfs-heartbeat"
 printf '2026-01-01T00:00:00Z fixture alarm\n' > "$ALARM_FILE"
 : > "$HEARTBEAT_FILE"
 export TMPFS_GUARD_ALARM_FILE="$ALARM_FILE" TMPFS_GUARD_HEARTBEAT_FILE="$HEARTBEAT_FILE"
-export SOLEUR_BARE_HEAL_TIMEOUT_S=2
 
 # A rule-corpus fixture committed BEFORE `core.bare true` (git add refuses once it is set), so the
 # root carries the on-disk files a synced bare root carries.
@@ -379,6 +418,14 @@ invoke_loader() {
   LRC=0
   LOUT=$(printf '%s' "$payload" | "$loader" 2>/dev/null) || LRC=$?
   CTX=$(jq -r '.hookSpecificOutput.additionalContext // empty' <<<"$LOUT" 2>/dev/null) || CTX=""
+}
+
+# no_fallback <ctx>: line 1 must be the normal stamp, never the ERR-trap FALLBACK envelope.
+no_fallback() {
+  case "$(sed -n 1p <<<"$1")" in
+    *FALLBACK*) bad "the loader degraded to its FALLBACK envelope" ;;
+    *) ok "the loader did not degrade to its FALLBACK envelope" ;;
+  esac
 }
 
 count_marker() {
@@ -480,6 +527,7 @@ cp "$LOADER" "$copy/session-rules-loader.sh"
 chmod +x "$copy/session-rules-loader.sh"
 invoke_loader "$copy/session-rules-loader.sh" "$d"
 eq "no helper beside the loader (a stale bare-root copy): loader exits 0" "0" "$LRC"
+no_fallback "$CTX"
 case "$CTX" in
   *"hr-test-core"*) ok "rule bodies still load without the helper" ;;
   *) bad "rule bodies missing without the helper" ;;
@@ -493,13 +541,14 @@ if command -v timeout >/dev/null 2>&1; then
   assert_fixture_dir "$copy"
   mkdir -p "$copy"
   cp "$LOADER" "$copy/session-rules-loader.sh"
-  printf '#!/usr/bin/env bash\nexec sleep 60\n' > "$copy/bare-head-self-heal.sh"
+  printf '#!/usr/bin/env bash\nsleep 60\n' > "$copy/bare-head-self-heal.sh"
   chmod +x "$copy/session-rules-loader.sh" "$copy/bare-head-self-heal.sh"
   t0=$SECONDS
-  invoke_loader "$copy/session-rules-loader.sh" "$d"
+  SOLEUR_BARE_HEAL_TIMEOUT_S=2 invoke_loader "$copy/session-rules-loader.sh" "$d"
   elapsed=$((SECONDS - t0))
   eq "a hung helper: loader still exits 0" "0" "$LRC"
-  if (( elapsed < 30 )); then ok "a hung helper is cut off by the timeout (took ${elapsed}s, not 60s)"; else bad "a hung helper stalled the loader for ${elapsed}s"; fi
+  no_fallback "$CTX"
+  if (( elapsed < 20 )); then ok "a hung helper is cut off by the timeout (took ${elapsed}s, not 60s)"; else bad "a hung helper stalled the loader for ${elapsed}s"; fi
   case "$CTX" in
     *"hr-test-core"*) ok "rule bodies still load after a hung helper" ;;
     *) bad "rule bodies missing after a hung helper" ;;
@@ -510,7 +559,7 @@ fi
 
 # --- completion floors ------------------------------------------------------------------------
 close_case
-DECLARED=(H1 H2 H3 H4 H5 H6 H7 H8 H9 H10 H11 H12 H13 H14 H15 H16 H17 H18 H19 L1 L2 L3 L4 L5)
+DECLARED=(H1 H2 H3 H4 H5 H6 H7 H8 H9 H10 H11 H12 H13 H14 H15 H16 H17 H18 H19 H20 H21 H22 L1 L2 L3 L4 L5)
 if [[ "${EXECUTED[*]}" != "${DECLARED[*]}" ]]; then
   printf 'FATAL: declared cases differ from executed cases\n  declared: %s\n  executed: %s\n' \
     "${DECLARED[*]}" "${EXECUTED[*]}" >&2

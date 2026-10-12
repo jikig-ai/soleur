@@ -313,7 +313,7 @@ STAMP="[rules-loader] loaded: ${RULE_COUNT} of ${TOTAL_RULES} rules${FAIL_SAFE_N
 # call is time-boxed (`timeout`, when available): a hung git at the repo root must cost a few
 # seconds, not the whole rules corpus. SOLEUR_BARE_HEAL_TIMEOUT_S exists for the test.
 BARE_HEAL_TO=()
-if command -v timeout >/dev/null 2>&1; then BARE_HEAL_TO=(timeout "${SOLEUR_BARE_HEAL_TIMEOUT_S:-5}"); fi
+if command -v timeout >/dev/null 2>&1; then BARE_HEAL_TO=(timeout -k 1 "${SOLEUR_BARE_HEAL_TIMEOUT_S:-5}"); fi
 BARE_HEAL_OUT=$("${BARE_HEAL_TO[@]+"${BARE_HEAL_TO[@]}"}" bash "$(dirname "${BASH_SOURCE[0]}")/bare-head-self-heal.sh" "$REPO_ROOT" 2>/dev/null || true)
 BARE_HEAL_MARKER="${BARE_HEAL_OUT%%$'\n'*}"
 [[ "$BARE_HEAL_MARKER" == "SOLEUR_BARE_HEAD_HEALED "* ]] || BARE_HEAL_MARKER=""

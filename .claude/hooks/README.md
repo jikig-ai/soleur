@@ -587,6 +587,9 @@ tokens and always exits 0.
   repo is not this layout), a detached HEAD, a repo with no `refs/heads/main`. A failed write
   (`HEAD.lock` held, read-only filesystem) prints no marker, because a marker claims a repair that
   happened.
+- **Unborn branches:** HEAD naming a branch that does not exist yet (for example `master`, about to
+  be pushed) is repointed to `main` when `main` exists. In this layout the root already holds
+  commits, and the marker discloses it.
 - **Scope of the trigger:** the heal runs when the session's cwd IS the bare root. A session
   started inside a linked worktree never reaches the root's HEAD, so nothing is repaired until a
   session starts at the root. The same loader is bound for Devin (`devin-dispositions.tsv`), so it
