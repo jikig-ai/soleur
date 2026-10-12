@@ -1679,8 +1679,8 @@ Read-back (READ), after `ARMED`: with `ARM_AT` as the instant the arm command pr
 since (`gh run list --workflow=scheduled-inngest-probe-heartbeat.yml --created ">=$ARM_AT" --json databaseId,createdAt`)
 and read each run's `verdict=` line as in P2. Expect `verdict=beat http=2xx` on the forced run, then a second
 `verdict=beat` on a LATER run (one slot later), and the P3 state `504655 up false 3600 1800`. Only then drop
-`arming_pending` from the manifest row in a record PR. That was done on 2026-10-12 (Stage 3a record PR, #10134);
-it re-armed the nightly reconcile's `fed-but-paused`
+`arming_pending` from the manifest row in a record PR. The Stage 3a record PR (#10134, 2026-10-12) does this;
+from its merge it re-arms the nightly reconcile's `fed-but-paused`
 class (`SOLEUR_HEARTBEAT_RECONCILE_*`), which is the net if anything re-pauses the heartbeat (a paused heartbeat
 makes the feeder report `fresh_heartbeat_paused` with exit 0, so the feeder itself would not alert), and the
 reconcile is only meaningful after that record PR. If the command rolled back, read the newest completed run's

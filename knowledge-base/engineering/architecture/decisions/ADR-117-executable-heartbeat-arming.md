@@ -465,9 +465,9 @@ nothing in this record stated that the heartbeat was armed; see the 2026-10-12 r
 `arming_pending` after the arm's read-back re-arms the nightly
 reconcile's `fed-but-paused` class, which is the net for a re-pause (the feeder itself exits 0 on a
 paused heartbeat and would not alert). 2026-10-12 record (#9703): the heartbeat was armed through the
-runbook block (read-back `status=up paused=false`; feeder runs 38264380002, 38265381453 and 38267189184 each
-`verdict=beat`) and `arming_pending` was dropped from the manifest row, so the reconcile's `fed-but-paused`
-class now covers it. The live state is read from Better Stack, not from this record.
+runbook block (read-back `status=up paused=false`; the feeder reported `verdict=beat` on three runs, ids in the
+runbook section "Arming the probe heartbeat (#9703)") and `arming_pending` is dropped from the manifest row by the
+Stage 3a record PR, so from its merge the reconcile's `fed-but-paused` class covers it. The live state is read from Better Stack, not from this record.
 
 ## Consequences
 

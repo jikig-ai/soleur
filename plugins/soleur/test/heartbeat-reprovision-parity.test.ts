@@ -399,6 +399,17 @@ describe("heartbeat reprovision-parity guard — current state (#6242, ADR-103)"
     expect(MANIFEST.length).toBe(collectHeartbeats().length);
   });
 
+  test("inngest_server_probe carries no arming_pending at runtime (armed 2026-10-12, #9703)", () => {
+    // The runtime twin of apps/web-platform/infra/inngest-server-probe-heartbeat.test.sh section (h):
+    // that one greps source text, which a spread, a computed key or a post-assignment evades, and its
+    // CI path filter does not cover an edit to heartbeat-manifest.ts alone. heartbeat-live-reconcile.ts
+    // reads `row.arming_pending` off this same array, so re-adding it here hides a re-pause of the
+    // heartbeat from the nightly reconcile. Exactly one row, so a duplicate row cannot mask the check.
+    const rows = MANIFEST.filter((e) => e.name === "inngest_server_probe");
+    expect(rows.length).toBe(1);
+    expect(rows[0].arming_pending).toBeUndefined();
+  });
+
   test("registry_disk_prd is the only dedicated-host-boot heartbeat that is SOURCE-unpaused", () => {
     // Named for what it measures. `paused` here is parsed from .tf SOURCE, and this module's own
     // premise is that source != live: inngest_prd is source-paused and LIVE unpaused. Calling this

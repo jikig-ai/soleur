@@ -542,7 +542,7 @@ resource "betteruptime_heartbeat" "inngest_server_probe" {
   paused    = true
 
   lifecycle {
-    # Arming happens out-of-band after an observed beat (the tracked follow-up); a later
+    # Armed out-of-band on 2026-10-12 after an observed beat (#9703); a later
     # apply MUST NOT revert the unpause (mirrors every sibling heartbeat).
     ignore_changes = [paused]
   }
