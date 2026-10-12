@@ -264,11 +264,11 @@ logs:
   retention: "GitHub Actions default run-log retention; Better Stack source retention as configured, unchanged"
 
 discoverability_test:
-  command: python3 scripts/lint-encryption-posture.py --repo-sweep
-  expected_output: PASS
+  command: grep -c '"live_verification": "available"' scripts/encryption-posture-ledger.json
+  expected_output: "3"
 ```
 
-The probe is deliberately credential-free (a declared credential would move the repo-global `BASELINE_DECLARED_PROBES` ratchet for no benefit to a deletion PR) and it reads the ledger row of the store this change must not disturb; it runs in about 3 seconds. The live check is the #6931 grader, run as evidence in Phase 0 and Phase 7 (it needs Doppler read credentials) and never as an acceptance gate.
+The probe is deliberately credential-free (a declared credential would move the repo-global `BASELINE_DECLARED_PROBES` ratchet for no benefit to a deletion PR) and it reads the ledger the store this change must not disturb is recorded in; it runs in well under a second. Correction at ship (2026-10-12): the first draft used `python3 scripts/lint-encryption-posture.py --repo-sweep`, stated as "about 3 seconds"; measured 39.5 s here, which exceeds Check 10's 15 s sandbox cap (timeout, rc=124), so it was replaced. The full sweep stays as evidence (preflight Check 12, PASS, 0 failing checks), not as the probe. The live check is the #6931 grader, run as evidence in Phase 0 and Phase 7 (it needs Doppler read credentials) and never as an acceptance gate.
 
 ## Encryption Posture
 
