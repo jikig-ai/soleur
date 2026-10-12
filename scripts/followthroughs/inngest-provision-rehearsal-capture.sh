@@ -144,11 +144,11 @@ fi
 _win_n="${WINDOW%%[[:space:]]*}"
 _win_unit="${WINDOW##*[[:space:]]}"
 case "$_win_unit" in
-  MINUTE) _win_min="$_win_n" ;;
-  HOUR)   _win_min=$(( _win_n * 60 )) ;;
-  DAY)    _win_min=$(( _win_n * 1440 )) ;;
-  WEEK)   _win_min=$(( _win_n * 10080 )) ;;
-  MONTH)  _win_min=$(( _win_n * 43200 )) ;;
+  MINUTE) _win_min=$(( 10#${_win_n} )) ;;
+  HOUR)   _win_min=$(( 10#${_win_n} * 60 )) ;;
+  DAY)    _win_min=$(( 10#${_win_n} * 1440 )) ;;
+  WEEK)   _win_min=$(( 10#${_win_n} * 10080 )) ;;
+  MONTH)  _win_min=$(( 10#${_win_n} * 43200 )) ;;
 esac
 if (( _win_min < 60 )); then
   echo "refusing: --window '${WINDOW}' is under the control row's hourly emit period — a run-window control read cannot be satisfied below 60 minutes." >&2
@@ -233,7 +233,7 @@ fi
 echo "  anchor: source is answering (${ANCHOR_N} rows in window)"
 
 # ── Host rows ────────────────────────────────────────────────────────────────
-HOST_SQL="SELECT dt, raw FROM ${BS_SRC} WHERE $(host_where) position(raw, '\"host\":\"${HOST_NAME}\"') > 0 ORDER BY dt LIMIT 2000 FORMAT JSONEachRow"
+HOST_SQL="SELECT dt, raw FROM ${BS_SRC} WHERE $(host_where) position(raw, '\"host\":\"${HOST_NAME}\"') > 0 ORDER BY dt DESC LIMIT 2000 FORMAT JSONEachRow"
 HOST_ROWS="$(bs_query "$HOST_SQL")" || {
   echo "TRANSIENT: the host-row query failed after a live anchor — transport fault." >&2
   exit 2
@@ -253,7 +253,7 @@ HOST_ROWS="$(bs_query "$HOST_SQL")" || {
 # arm reads POST_ROWS instead, a dark-host early exit never reaches the check, and
 # an invocation without --since has already fetched exactly this row set into
 # HOST_ROWS, so the alias skips the second query entirely (perf-review note).
-CONTROL_SQL="SELECT dt, raw FROM ${BS_SRC} WHERE dt > now() - INTERVAL ${WINDOW} AND position(raw, '\"host\":\"${HOST_NAME}\"') > 0 ORDER BY dt LIMIT 2000 FORMAT JSONEachRow"
+CONTROL_SQL="SELECT dt, raw FROM ${BS_SRC} WHERE dt > now() - INTERVAL ${WINDOW} AND position(raw, '\"host\":\"${HOST_NAME}\"') > 0 ORDER BY dt DESC LIMIT 2000 FORMAT JSONEachRow"
 CONTROL_ROWS=""
 fetch_control_rows() {
   [[ -n "$CONTROL_ROWS" ]] && return 0
@@ -476,7 +476,7 @@ case "$MODE" in
     # property this leg exists to prove. The boundary timestamp is recorded BEFORE the API
     # call and `dt` is ingest-time, so a delayed pre-boundary row can read post-boundary —
     # that direction errs conservative (false FAIL, never false PASS).
-    POST_ROWS="$(bs_query "SELECT dt, raw FROM ${BS_SRC} WHERE dt > parseDateTime64BestEffort('${REBOOT_SINCE}', 3, 'UTC') AND position(raw, '\"host\":\"${HOST_NAME}\"') > 0 ORDER BY dt LIMIT 2000 FORMAT JSONEachRow")" \
+    POST_ROWS="$(bs_query "SELECT dt, raw FROM ${BS_SRC} WHERE dt > parseDateTime64BestEffort('${REBOOT_SINCE}', 3, 'UTC') AND position(raw, '\"host\":\"${HOST_NAME}\"') > 0 ORDER BY dt DESC LIMIT 2000 FORMAT JSONEachRow")" \
       || { echo "TRANSIENT: the post-reboot query failed after a live anchor." >&2; exit 2; }
     n_restage="$(printf '%s\n' "$POST_ROWS" | grep -cE 'stage=bs-token-restaged' 2>/dev/null || true)"
     n_provision="$(printf '%s\n' "$POST_ROWS" | grep -cE 'provision-attempt-start|provision-attempt-exit|bootstrap-done|provision-unit-armed' 2>/dev/null || true)"

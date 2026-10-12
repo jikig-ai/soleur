@@ -481,7 +481,7 @@ Description=Log an ERR-priority marker when inngest-heartbeat.service fails (#65
 Type=oneshot
 # Reuse the existing Source 4 tag (vector.toml) — no new allowlist entry, no fresh quota decision.
 SyslogIdentifier=inngest-heartbeat
-# Bare `logger`, NO `doppler run` wrapper: this unit emits only a fixed marker and needs no
+# Unwrapped `logger` (absolute /usr/bin form), NO `doppler run` wrapper: this unit emits only a fixed marker and needs no
 # secrets. A `doppler run --project …` wrapper would hardcode a project (WRONG on the
 # soleur-inngest host) and re-introduce the exact project-resolution surface #6555 removes.
 ExecStart=/usr/bin/logger -t inngest-heartbeat -p err "inngest-heartbeat.service entered failed state (OnFailure) — the 60s ping failed; see the preceding inngest-heartbeat lines for the underlying ping error (#6556)"

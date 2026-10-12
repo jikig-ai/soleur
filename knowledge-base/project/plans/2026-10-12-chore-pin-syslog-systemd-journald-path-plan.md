@@ -143,7 +143,7 @@ Derived consequences (each cited to a source block):
 - `apps/web-platform/infra/vector.toml` — the documentation target; Sources 1/2
   comments currently assert AND semantics that do not exist.
 - `apps/web-platform/infra/inngest-bootstrap.sh` — `inngest-server-probe.sh`
-  heredoc (`PROBESCRIPTEOF`, emit at :1211; unit block :1238-1286) is the
+  heredoc (`PROBESCRIPTEOF`, emit at :1216; unit block :1238-1286) is the
   control emit site; `logger -t` usage precedent at :299, :482, :1462.
 - `scripts/betterstack-assert-absence.sh` — `--absence-require` shape at :78-86,
   :155-163 to mirror for `--control-require`; control read at :224-231.
@@ -232,7 +232,7 @@ explain the storm rows.
 2. **Emit `SOLEUR_SYSTEMD_JOURNALD_CONTROL`** once per
    `inngest-server-probe.timer` fire (hourly) inside the probe script heredoc
    in `inngest-bootstrap.sh`, placed **immediately after** the unconditional
-   `SOLEUR_INNGEST_SERVER_PROBE` emit (:1211, "NO `if` may precede this line"
+   `SOLEUR_INNGEST_SERVER_PROBE` emit (:1216, "NO `if` may precede this line"
    — the control emit must be equally unconditional):
    `/usr/bin/logger -t systemd -p err "SOLEUR_SYSTEMD_JOURNALD_CONTROL ts=$(date -u +%s) — rides the inngest_journald PRIORITY≤4 admission arm (#9963)"`.
    Journald stamps `host` itself; the marker + ts suffice. The spoofed tag is
@@ -272,7 +272,7 @@ explain the storm rows.
 - `apps/web-platform/infra/vector.toml` — Source 1/2 header comment rewrite
   (OR semantics, admission arms, duplicates, never-Source-4 trap, refs).
 - `apps/web-platform/infra/inngest-bootstrap.sh` — control emit inside the
-  `PROBESCRIPTEOF` heredoc (~:1211) + comment naming the arm and #9963.
+  `PROBESCRIPTEOF` heredoc (~:1216) + comment naming the arm and #9963.
 - `apps/web-platform/infra/journald-config.test.sh` — new arms pinning the
   control emit/tag/priority/placement and `systemd`-not-in-Source-4.
 - `apps/web-platform/test/infra/vector-pii-scrub.test.sh` — PRIORITY-arm
@@ -685,7 +685,7 @@ this file if the pipeline wants a panel pass.
 | Negative claim in plan | Verification | Result |
 |---|---|---|
 | `systemd` is not in the Source-4 allowlist | read of `vector.toml:188-350` | confirms |
-| probe emit is not credential-gated | `PROBEUNITEOF` — `ExecStart=/usr/local/bin/inngest-server-probe.sh`, `-`-prefixed EnvironmentFiles, no `doppler run` wrapper; emit at :1211 is behind bounded calls and commented "unconditional" | confirms |
+| probe emit is not credential-gated | `PROBEUNITEOF` — `ExecStart=/usr/local/bin/inngest-server-probe.sh`, `-`-prefixed EnvironmentFiles, no `doppler run` wrapper; emit at :1216 is behind bounded calls and commented "unconditional" | confirms |
 | no Better Stack alert can be paged by the control row | `grep SYSLOG_IDENTIFIER` in `betterstack-logs-alerts.tf` — only `luks-monitor`/`ci-deploy`/`egress-gw-probe` selects; the one PRIORITY predicate is `='2'`; control is PRIORITY 3 with no `Failed to start` text | confirms |
 | marker-contaminating rows exist today (the forgery class the `--control-require` defeats) | capture.sh:296-297 documents 10 measured false matches on #9939's title under `ident=doppler` | confirms — the require is load-bearing |
 | journald itself cannot rate-drop the control | `journald-soleur.conf` sets only storage caps (no `RateLimit*` keys); defaults are ~1000 msg/30s per service — one extra line/hour is unreachable | confirms |
@@ -693,7 +693,7 @@ this file if the pipeline wants a panel pass.
 
 **Precedent diff (4.4):** the emit shape `/usr/bin/logger -t <tag> -p err "…"`
 is the established idiom — `inngest-heartbeat-failure-log.service`'s
-`ExecStart` (inngest-bootstrap.sh:482) and the probe's own emit (:1211) use it
+`ExecStart` (inngest-bootstrap.sh:482) and the probe's own emit (:1216) use it
 byte-for-byte. The only novel element is the `systemd` tag value (deliberate,
 documented); no new pattern is introduced. Scheduled-work check: no new
 recurring job — the control rides the existing `inngest-server-probe.timer`.

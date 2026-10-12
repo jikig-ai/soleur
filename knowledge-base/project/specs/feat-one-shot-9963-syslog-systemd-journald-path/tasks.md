@@ -12,7 +12,7 @@ Plan: `knowledge-base/project/plans/2026-10-12-chore-pin-syslog-systemd-journald
 
 ## Phase 2 — control emission (AC2)
 
-- [x] 2.1 `apps/web-platform/infra/inngest-bootstrap.sh` — inside the `PROBESCRIPTEOF` heredoc, placed immediately AFTER the unconditional `SOLEUR_INNGEST_SERVER_PROBE` emit (:1211) and itself unconditional (no `if` may precede it): add `/usr/bin/logger -t systemd -p err "SOLEUR_SYSTEMD_JOURNALD_CONTROL ts=$(date -u +%s) — rides the inngest_journald PRIORITY≤4 admission arm (#9963)"`. `/usr/bin/logger` absolute path per the :482 precedent; journald stamps `host` itself (no host= field needed); outside any credential-gated block (probe ExecStart is a plain script, not doppler-wrapped — preserves the R3-4.5d invariant).
+- [x] 2.1 `apps/web-platform/infra/inngest-bootstrap.sh` — inside the `PROBESCRIPTEOF` heredoc, placed immediately AFTER the unconditional `SOLEUR_INNGEST_SERVER_PROBE` emit (:1216) and itself unconditional (no `if` may precede it): add `/usr/bin/logger -t systemd -p err "SOLEUR_SYSTEMD_JOURNALD_CONTROL ts=$(date -u +%s) — rides the inngest_journald PRIORITY≤4 admission arm (#9963)"`. `/usr/bin/logger` absolute path per the :482 precedent; journald stamps `host` itself (no host= field needed); outside any credential-gated block (probe ExecStart is a plain script, not doppler-wrapped — preserves the R3-4.5d invariant).
 
 ## Phase 3 — consumer wiring (AC4, AC5)
 

@@ -142,6 +142,10 @@ run "a non-Actions evidence URL is refused" 64 "${BASE_ENV[@]}" -- \
   --host-name "$HOST" --evidence-url "https://example.com/x" --mode phase-a --out "$TMP/e.env"
 run "a malformed --window is refused (it reaches the SQL)" 64 "${BASE_ENV[@]}" -- \
   --host-name "$HOST" --evidence-url "$URL" --mode phase-a --window "0 DAY OR 1=1" --out "$TMP/e.env"
+run "refuse --window under the hourly control emit period (unsatisfiable run-window read)" 64 "${BASE_ENV[@]}" -- \
+  --host-name "$HOST" --evidence-url "$URL" --mode phase-a --window "59 MINUTE" --out "$TMP/e.env"
+run "refuse --window with a leading-zero count (octal arithmetic must not fire)" 64 "${BASE_ENV[@]}" -- \
+  --host-name "$HOST" --evidence-url "$URL" --mode phase-a --window "030 MINUTE" --out "$TMP/e.env"
 run "post-reboot without --reboot-since is refused (the boundary is the whole claim)" 64 "${BASE_ENV[@]}" -- \
   --host-name "$HOST" --evidence-url "$URL" --mode post-reboot --out "$TMP/e.env"
 run "a malformed --reboot-since is refused" 64 "${BASE_ENV[@]}" -- \
@@ -374,13 +378,20 @@ run "phase-a PASS: a BOOT_STAGE row embedding journalctl 'Failed to start' text 
 # --since IS THE SAME-RUN-ID RE-RUN GATE (the workflow passes it on every capture call): a
 # prior life's bootstrap-done inside the window would trip the no-done check, but the bound
 # excludes it — this arm proves the bound is wired, not just parsed.
-SINCE_BOUND="2026-06-01T00:00:00"
+SINCE_BOUND="$(date -u -d '30 minutes ago' +%Y-%m-%dT%H:%M:%S)"
+PRIOR_DT="$(date -u -d '60 minutes ago' +%Y-%m-%dT%H:%M:%S)"
 # rows() truncates its output file each call, so the prior-life batch lands in a
 # sibling file and is cat'd into the fixture — the pre-boundary rows are the
-# entire point of this arm.
-rows "$TMP/r-since-old.json" "2026-05-31T00:00:00" \
+# entire point of this arm. The prior rows are dated INSIDE the 2h fallback
+# window but BEFORE SINCE_BOUND, and one carries a shape the iid join cannot
+# rescue: a systemd 'Failed to start' journal row is host+window scoped by
+# design (no iid=). A dropped --since flips this arm — the prior failure row
+# re-enters HOST_ROWS and the zero-failed check viols — that is what makes the
+# arm discriminate rather than merely pass.
+rows "$TMP/r-since-old.json" "$PRIOR_DT" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=provision-unit-armed detail=iid=zzz999 \"host\":\"${HOST}\"" \
-  "SOLEUR_INNGEST_BOOT_STAGE stage=bootstrap-done detail=attempt=9 iid=zzz999 \"host\":\"${HOST}\""
+  "SOLEUR_INNGEST_BOOT_STAGE stage=bootstrap-done detail=attempt=9 iid=zzz999 \"host\":\"${HOST}\"" \
+  "{\"SYSLOG_IDENTIFIER\":\"systemd\",\"PRIORITY\":\"3\",\"message\":\"Failed to start inngest-server.service\",\"host\":\"${HOST}\"}"
 rows "$TMP/r-since.json" "$NOW" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=provision-unit-armed detail=iid=abc123 \"host\":\"${HOST}\"" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=1 iid=abc123 \"host\":\"${HOST}\"" \
@@ -390,6 +401,8 @@ rows "$TMP/r-since.json" "$NOW" \
 cat "$TMP/r-since-old.json" >> "$TMP/r-since.json"
 run "phase-a PASS under --since: a prior life's rows are excluded by the bound" 0 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-since.json" -- "${BASE_ARGS[@]}" --mode phase-a --since "$SINCE_BOUND" --out "$TMP/ev-since.env"
+run "phase-a FAIL without --since: the same fixture's prior-life systemd failure row re-enters the window and flags (the arm's discrimination witness)" 1 \
+  "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-since.json" -- "${BASE_ARGS[@]}" --mode phase-a --out "$TMP/ev-nosince.env"
 
 
 # ── #9963 systemd-path positive-control arms ──────────────────────────────────
@@ -467,9 +480,20 @@ printf '{"dt":"%s","raw":"SOLEUR_INNGEST_BOOT_STAGE stage=post-boot-health jl=\\
 # fault and any TRANSIENT verdict satisfies it vacuously. python round-trip, no greps.
 python3 - "$TMP/r-ctrlforge.json" <<'PYEOF'
 import json, sys
+# Not just outer-parse: row (iv) must decode to a VALID inner object whose own
+# SYSLOG_IDENTIFIER is doppler while its message carries the literal
+# "SYSLOG_IDENTIFIER":"systemd" pair — the arm exercises own-field rejection,
+# not parse-death (fix-round N1 residual).
+found_iv = False
 for i, line in enumerate(open(sys.argv[1]), 1):
     line = line.strip()
-    if line: json.loads(line)
+    if not line: continue
+    o = json.loads(line)
+    inner = json.loads(o["raw"])
+    if inner.get("SYSLOG_IDENTIFIER") == "doppler" and "verbatim fragment" in inner.get("message", ""):
+        found_iv = True
+        assert '"SYSLOG_IDENTIFIER":"systemd"' in inner["message"],             "row (iv) must carry the verbatim field pair inside its message"
+assert found_iv, "escaped-fragment row (iv) must decode to a valid inner object"
 PYEOF
 run "phase-a TRANSIENT: contaminated rows (doppler marker, =-prose field, prefix-ident, BOOT_STAGE embed) do NOT satisfy the control" 2 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-ctrlforge.json" -- "${BASE_ARGS[@]}" --mode phase-a
@@ -519,7 +543,7 @@ grep -qF 'systemd-path control row absent' < <(printf '%s' "$LAST_OUT") && \
 # initializes counters (`X=$((X+1))` increments) but not the FAILURES array — a floor on
 # `${#FAILURES[@]}` dies unbound under set -u and scores CONSTRUCTION, not FIRES. And MIN
 # must sit ADJACENT to the `if` — the mutant builder's walk-back stops at any comment.
-MIN=47
+MIN=50
 if (( passes + fails < MIN )); then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$((passes + fails))" "$MIN" >&2
   exit 1

@@ -168,7 +168,7 @@ journal_directory = "/var/log/journal"
 batch_size = 16
 
 # ---------------- Source 4: host-script journald (logger -t tags) (#5499, #6178) ----------------
-# Thirteen bash scripts under apps/web-platform/infra/ log operational events to
+# The infra bash scripts under apps/web-platform/infra/ log operational events to
 # the journal via `logger -t <LOG_TAG>`. They run under webhook.service / cron on
 # the web hosts, or (the #6178 cutover trio: inngest-cutover-flip +
 # inngest-server-flip-guard) as systemd oneshot/ExecStartPre on the dedicated
@@ -190,13 +190,13 @@ batch_size = 16
 #
 # NO `include_matches.PRIORITY` filter (deliberate — differs from Sources 1/2):
 # these lines are PRIORITY 4-6 (the #6536 inngest-heartbeat channel is PRIORITY 5-6),
-# which Source 2 drops; the SYSLOG_IDENTIFIER scoping to 14 known tags is already
-# the narrowing. We do NOT widen
+# which Source 2 drops; the SYSLOG_IDENTIFIER scoping to the derived tag set is
+# already the narrowing. We do NOT widen
 # system_journald's PRIORITY filter — that would ship every host NOTICE+ line
 # (sshd, cron, systemd units, fail2ban) and blow the Better Stack logs quota
 # (per the 2026-06-10 quota-diagnosis learning + #5110 verdict).
 #
-# Quota (#5110 reality check): 13 of the 14 are event-driven (deploy/webhook/cron-fire/
+# Quota (#5110 reality check): the tags are event-driven (deploy/webhook/cron-fire/
 # cutover-flip), not continuous request-per-line firehoses — projected
 # tens-to-low-hundreds of rows/day, well within the ~20% headroom under 25k/day.
 #
@@ -382,7 +382,7 @@ include_matches.SYSLOG_IDENTIFIER = [
   # Source 2's PRIORITY filter would ship "every host NOTICE+ line (sshd, cron, systemd
   # units, fail2ban)" and blow quota — that reasoning is sound and NOT contradicted here:
   # this is an exact-value SYSLOG_IDENTIFIER match on ONE identifier, not a priority widen,
-  # and ~53 rows/day sits inside the same headroom the other 14 tags occupy.
+  # and ~53 rows/day sits inside the same headroom the sibling tags occupy.
   #
   # Identifier is native, not declared: sshd(8) sets SYSLOG_IDENTIFIER=sshd itself, so
   # unlike the tags above there is no SyslogIdentifier= line in infra/*.sh to mirror.
