@@ -1,6 +1,6 @@
 // Prompt-injection defense for the Command Center `/soleur:go` runner.
 //
-// Plan: knowledge-base/project/plans/2026-04-23-feat-cc-route-via-soleur-go-plan.md
+// Plan: knowledge-base/project/plans/archive/20261013-003106-2026-04-23-feat-cc-route-via-soleur-go-plan.md
 // Stage 2 §"Files to create" (inline sketch) + Stage 2.7/2.16 (tests +
 // extraction). Untrusted-user threat model: the runner must NEVER pass a
 // bare user message as `prompt` to the Agent SDK's `query()`. Wrapping in

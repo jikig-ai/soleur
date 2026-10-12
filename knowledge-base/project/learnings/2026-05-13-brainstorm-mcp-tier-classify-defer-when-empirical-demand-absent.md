@@ -53,7 +53,7 @@ Specifically:
 
 ## Cross-references
 
-- Source plan: `knowledge-base/project/plans/2026-04-23-feat-cc-route-via-soleur-go-plan.md` §Stage 2.17
+- Source plan: `knowledge-base/project/plans/archive/20261013-003106-2026-04-23-feat-cc-route-via-soleur-go-plan.md` §Stage 2.17
 - DPA precedent: #3594 (Anthropic DPA gap as ship-blocking prerequisite, not follow-up)
 - Stage 6 dependency: #2939
 - Phase 2 tracking: #3722

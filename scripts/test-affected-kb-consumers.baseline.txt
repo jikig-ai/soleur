@@ -82,7 +82,7 @@ plugins/soleur/test/go-session-gates.test.sh	knowledge-base/project/specs/feat-o
 plugins/soleur/test/go-session-gates.test.sh	knowledge-base/project/specs/feat-one-shot-7450-git-root-anchor-untrusted/arm4-probe/commands/zzzprobe.md
 plugins/soleur/test/infra-validation-detect.test.sh	knowledge-base/project/plans
 plugins/soleur/test/kb-search-support-path.test.sh	knowledge-base/project/learnings
-plugins/soleur/test/lane-frontmatter.test.sh	knowledge-base/project/specs/feat-claude-skills-audit/spec.md
+plugins/soleur/test/lane-frontmatter.test.sh	knowledge-base/project/specs/archive/20261013-003106-feat-claude-skills-audit/spec.md
 plugins/soleur/test/lint-questionnaire-identity.test.sh	knowledge-base/project/questionnaires/2026-09-20-accountant-prepaid-hosting-contract.md
 plugins/soleur/test/lint-questionnaire-identity.test.sh	knowledge-base/project/questionnaires/README.md
 plugins/soleur/test/notice-frontmatter.test.sh	knowledge-base/engineering/policies/content-vendoring.md

@@ -6,7 +6,7 @@
 --
 -- Backfill is intentionally skipped: pre-migration KB threads remain
 -- un-badged in the conversation inbox. Decision recorded in the parent
--- plan `knowledge-base/project/plans/2026-04-15-feat-kb-chat-sidebar-plan.md`
+-- plan `knowledge-base/project/plans/archive/20261013-003106-2026-04-15-feat-kb-chat-sidebar-plan.md`
 -- section 2.1 — a best-effort content_path derivation from the first user
 -- message would have produced fragile results for a small historical
 -- window, so the cost outweighs the display benefit (see AC18 of the
