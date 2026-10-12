@@ -282,7 +282,7 @@ for name, body in hcl_blocks(srv, "terraform_data"):
                "two terraform_data resources must not resolve to one identity")
         ssh_resources[nk] = body
 
-FLOOR_RESOURCES = 21  # +1 #9151: deploy_pipeline_fix_web2; +2 #9534: egress_gateway + egress_gateway_web2
+FLOOR_RESOURCES = 22  # +1 #9151: deploy_pipeline_fix_web2; +2 #9534: egress_gateway + egress_gateway_web2; +1 journald_persistent_web2
 if len(ssh_resources) >= FLOOR_RESOURCES:
     ok(f"1: swept {len(ssh_resources)} SSH-connected terraform_data resources (floor {FLOOR_RESOURCES})")
 else:
@@ -317,10 +317,13 @@ else:
        "CI genuinely gained another route, the forward, the firewall and the -target lists "
        "must change FIRST, and this check with them.")
 
-# The web-2 sibling class (#9151 / #7103-B4). The vetted web-2 dialer set is exactly two
-# resources today: deploy_pipeline_fix_web2 and (#9534) egress_gateway_web2 — the latter
+# The web-2 sibling class (#9151 / #7103-B4). The vetted web-2 dialer set is exactly three
+# resources today: deploy_pipeline_fix_web2, (#9534) egress_gateway_web2 — the latter
 # delivers the squid gateway to the RUNNING web-2 (replace-only delivery would leave an
-# entitled session on web-2 fail-closed until its next -replace). A web-2 dialer MUST pin
+# entitled session on web-2 fail-closed until its next -replace) — and
+# journald_persistent_web2, which re-delivers vector.toml so a Source-4 tag added after
+# web-2's birth is not dark there forever (measured: egress-gw-probe dropped at web-2's
+# stale allowlist for days while the probe ran). A web-2 dialer MUST pin
 # local.web_2_ssh_host_key (Guard 2's per-host rule asserts the twin from the connection
 # side; this side pins it from the resource census, so deleting EITHER local reference reds
 # here). It must NEVER carry the credential material web-1 receives: the full-prd Doppler
@@ -328,7 +331,7 @@ else:
 # carries all three — the failure that puts the prd credential on a host the issue
 # explicitly scopes out of this change.
 W2_DIALERS = [n for n, b in ssh_resources.items() if re.search(DIAL_W2, b)]
-W2_ALLOWED = {"deploy_pipeline_fix_web2", "egress_gateway_web2"}
+W2_ALLOWED = {"deploy_pipeline_fix_web2", "egress_gateway_web2", "journald_persistent_web2"}
 w2_bad_key = [n for n in W2_DIALERS
               if not re.search(r'host_key\s*=\s*local\.web_2_ssh_host_key', ssh_resources[n])]
 # Credential-boundary token set, widened at review: a bare `doppler_token` covers
@@ -395,7 +398,6 @@ ONLY_JUSTIFIED = {
     "git_data_probe_install@web-2": "birth-covered: predates web-2 birth",
     "infra_config_handler_bootstrap@web-2": "role-only: webhook receiver plumbing lives on web-1",
     "inngest_consumer_probe_install@web-2": "birth-covered: predates web-2 birth",
-    "journald_persistent@web-2": "birth-covered: predates web-2 birth",
     "orphan_reaper_install@web-2": "birth-covered: predates web-2 birth",
     "private_nic_guard_install@web-2": "birth-covered: predates web-2 birth",
     "registry_insecure_config@web-2": "birth-covered: predates web-2 birth",

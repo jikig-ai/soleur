@@ -1493,6 +1493,102 @@ resource "terraform_data" "journald_persistent" {
   }
 }
 
+# Same delivery to the RUNNING web-2 (fleet-parity fix for the #9534 review gap).
+# web-2's /etc/vector/vector.toml is otherwise frozen at whatever its last
+# birth/one-off delivery rendered: journald_persistent dials web-1 only, the
+# infra-config push targets web-1's deploy endpoint only, and web-2's cloud-init
+# never re-runs. Measured 2026-10-12: web-2's copy dated Oct-07 predated the
+# `egress-gw-probe` Source-4 tag, so its resolver emitted `egress_gw_probe
+# result=ok` to the journal every 5 min while Better Stack saw nothing — a live
+# host whose gateway probe reported to no one. Any Source-4 tag added later is
+# dark on web-2 by the same mechanism, so the twin is the whole-class fix, not a
+# one-tag patch. web-host-provisioner-parity.test.sh's W2_ALLOWED admits it.
+resource "terraform_data" "journald_persistent_web2" {
+  # Same trigger set as the web-1 twin: a journald-soleur.conf or vector.toml
+  # edit re-delivers + reloads Vector on web-2 the same merge it lands on web-1.
+  triggers_replace = sha256(join(",", [
+    file("${path.module}/journald-soleur.conf"),
+    file("${path.module}/vector.toml"),
+  ]))
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-2"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key         # null in operator-local context
+    agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+    host_key    = local.web_2_ssh_host_key
+    # #8706 rule: %RAND% in script_path — a collision with an earlier provisioner run's
+    # copied script body would replay STALE commands under a fresh hash.
+    script_path = "/root/tf-journald-persistent-web2-%RAND%.sh"
+    timeout     = "5m"
+  }
+
+  # The drop-in dir does NOT exist by default on Ubuntu — see the web-1 twin for
+  # why this mkdir is load-bearing (file provisioner creates no parents).
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "mkdir -p /etc/systemd/journald.conf.d",
+    ]
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/journald-soleur.conf"
+    destination = "/etc/systemd/journald.conf.d/00-soleur.conf"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/vector.toml"
+    destination = "/tmp/soleur-vector.toml.staged"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "chown root:root /etc/systemd/journald.conf.d/00-soleur.conf",
+      "chmod 0644 /etc/systemd/journald.conf.d/00-soleur.conf",
+      "mkdir -p /var/log/journal",
+      "systemd-tmpfiles --create --prefix /var/log/journal",
+      "systemctl restart systemd-journald",
+      "journalctl --flush",
+      "systemd-analyze cat-config systemd/journald.conf | grep -E '^(Storage|SystemMaxUse|SystemKeepFree|RuntimeMaxUse)=' || true",
+      "test -d /var/log/journal",
+      "journalctl --header | grep -c '/var/log/journal' >/dev/null",
+      "test \"$(systemctl is-active systemd-journald)\" = 'active'",
+      # Render @@HOST_NAME@@ to web-2's server name (`soleur-web-2` — the value
+      # its running Vector already reports as `host_name`, verified in Better
+      # Stack 2026-10-12). Same render contract as the web-1 twin.
+      "install -d -m 0755 /etc/vector /opt/soleur",
+      "sed 's|@@HOST_NAME@@|${hcloud_server.web["web-2"].name}|g' /tmp/soleur-vector.toml.staged > /opt/soleur/vector.toml",
+      "test -s /opt/soleur/vector.toml",
+      "! grep -q '@@HOST_NAME@@' /opt/soleur/vector.toml",
+      "grep -q '\\[sinks.betterstack\\]' /opt/soleur/vector.toml",
+      "grep -q 'web-zot-consumer-probe' /opt/soleur/vector.toml",
+      "if [ ! -x /usr/local/bin/vector ]; then echo 'FATAL: /usr/local/bin/vector absent; cannot validate the rendered config' >&2; exit 1; fi",
+      "VECTOR_STRICT_ENV_VARS=false BETTERSTACK_LOGS_TOKEN=dummy SENTRY_USERID_PEPPER=dummy /usr/local/bin/vector validate --no-environment --config-toml /opt/soleur/vector.toml",
+      "if systemctl is-active --quiet vector.service && [ -f /etc/vector/vector.toml ]; then cp -a /etc/vector/vector.toml /etc/vector/vector.toml.prev; else rm -f /etc/vector/vector.toml.prev; fi",
+      "PREV_N=$(systemctl show -p NRestarts --value vector.service 2>/dev/null || echo 0)",
+      "install -m 0644 /opt/soleur/vector.toml /etc/vector/vector.toml",
+      "rm -f /tmp/soleur-vector.toml.staged",
+      "systemctl restart vector.service || true",
+      "sleep 20",
+      "grep -q 'web-zot-consumer-probe' /etc/vector/vector.toml",
+      "grep -q 'web-git-data-probe' /etc/vector/vector.toml",
+      "grep -q 'web-nic-guard' /etc/vector/vector.toml",
+      "grep -q 'inngest-consumer-probe' /etc/vector/vector.toml",
+      # This twin's reason to exist (#9534): the egress-gw-probe Source-4 tag must
+      # land in the file the agent reads, or web-2's probe rows keep dying at the
+      # allowlist — delivery proven, not assumed.
+      "grep -q 'egress-gw-probe' /etc/vector/vector.toml",
+      "NOW_N=$(systemctl show -p NRestarts --value vector.service 2>/dev/null || echo 0)",
+      "if ! systemctl is-active --quiet vector.service || [ \"$NOW_N\" != \"$PREV_N\" ]; then if [ -f /etc/vector/vector.toml.prev ]; then install -m 0644 /etc/vector/vector.toml.prev /etc/vector/vector.toml; systemctl restart vector.service || true; sleep 10; if systemctl is-active --quiet vector.service; then echo 'FATAL: vector rejected the new config. The previous config was restored and vector IS RUNNING.' >&2; else echo 'FATAL: vector rejected the new config AND the restore also failed. VECTOR IS DOWN on web-2 — all host observability is dark.' >&2; fi; else echo 'FATAL: vector rejected the new config and NO known-good backup existed. VECTOR IS DOWN on web-2 — all host observability is dark.' >&2; fi; exit 1; fi",
+      "test \"$(systemctl is-active vector.service)\" = 'active'",
+      "rm -f /etc/vector/vector.toml.prev",
+    ]
+  }
+}
+
 # #6005: deliver the pinned cosign trusted root to the RUNNING host byte-for-byte
 # (the fresh-host copy comes from the baked host_script_files set + soleur-host-
 # bootstrap.sh). ci-deploy.sh mounts /etc/soleur/cosign-trusted-root.json :ro into
@@ -2788,6 +2884,10 @@ resource "terraform_data" "egress_gateway" {
 #     assert, loader, gw deny-CIDRs) (#9151, #9393, #9534)
 #   terraform_data.egress_gateway_web2    — four gateway artifacts
 #     (squid.conf, auth helper, deny CIDRs, bootstrap) (#9534)
+#   terraform_data.journald_persistent_web2 — journald-soleur.conf + vector.toml
+#     (the Source-4 tag allowlist; without it a running web-2 ships only the
+#     tags its birth config knew — measured 2026-10-12: egress-gw-probe emitted
+#     to the journal every 5 min and dropped at the Vector filter for days)
 # Everything else reaches a running web-2 only via -replace (birth set) or
 # not at all by role. web-host-provisioner-parity.test.sh forces every new
 # web-1 SSH provisioner through this classification — add the twin here or

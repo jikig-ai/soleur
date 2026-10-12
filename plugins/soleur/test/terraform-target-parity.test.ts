@@ -120,7 +120,8 @@ const EXCLUSION_ALLOWLIST = new Set<string>(["root_authorized_keys"]);
 // Still `>=`, so adding an SSH-provisioned resource does not need an edit here.
 // #8706: raised 17 -> 18 for terraform_data.luks_monitor_install (workspaces-luks.tf).
 // #9151: raised 18 -> 19 for terraform_data.deploy_pipeline_fix_web2 (server.tf).
-const MIN_SSH_PROVISIONED = 19;
+// #9534-review: raised 19 -> 20 for terraform_data.journald_persistent_web2 (server.tf).
+const MIN_SSH_PROVISIONED = 20;
 
 /** Strip `#` and `//` line comments, quote-aware, leaving string contents intact. */
 function stripLineComment(line: string): string {
