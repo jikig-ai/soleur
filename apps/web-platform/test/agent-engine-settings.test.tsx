@@ -50,6 +50,7 @@ describe("AgentEngineSettings", () => {
     fetchMock.mockResolvedValueOnce({ ok: true, json: async () => availableSettings });
     fetchMock.mockResolvedValueOnce({ ok: true });
     fetchMock.mockRejectedValueOnce(new Error("network unavailable"));
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ ...availableSettings, defaultAuthMode: "api-key" }) });
     const view = render(<AgentEngineSettings isOwner />);
     const mode = await view.findByLabelText("Authentication mode");
     fireEvent.change(mode, { target: { value: "api-key" } });
@@ -290,6 +291,42 @@ describe("AgentEngineSettings", () => {
         }),
       }),
     ));
+  });
+
+  it("rereads committed Codex settings after the save response is lost", async () => {
+    const initial = {
+      ...availableSettings, codexAuthMode: "managed",
+      engines: availableSettings.engines.map((engine) => engine.id === "codex"
+        ? { ...engine, authModes: ["managed", "api-key"], enabledForNewRuns: false, settingsSelectable: true }
+        : engine),
+    };
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => initial });
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ affectedConversationCount: 2 }) });
+    fetchMock.mockRejectedValueOnce(new Error("Synthetic committed response loss"));
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ ...initial, codexAuthMode: "api-key" }) });
+    const view = render(<AgentEngineSettings isOwner />);
+    fireEvent.change(await view.findByLabelText("Agent engine"), { target: { value: "codex" } });
+    fireEvent.change(view.getByLabelText("Authentication mode"), { target: { value: "api-key" } });
+    fireEvent.click(await view.findByRole("button", { name: "Apply to existing Codex conversations" }));
+    const alert = await view.findByRole("alert");
+    expect(alert).toHaveTextContent("Current settings have been refreshed");
+    expect(alert).not.toHaveTextContent("previous selection is still active");
+    expect(view.getByLabelText("Agent engine")).toHaveValue("codex");
+    expect(view.getByLabelText("Authentication mode")).toHaveValue("api-key");
+    expect(view.getByTestId("workspace-default-engine")).toHaveTextContent("Claude Code");
+    expect(fetchMock.mock.calls.filter(([, options]) => options?.method === "PUT")).toHaveLength(1);
+  });
+
+  it("blocks further changes when neither the save nor authoritative reread can be confirmed", async () => {
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => availableSettings });
+    fetchMock.mockRejectedValueOnce(new Error("Synthetic lost save response"));
+    fetchMock.mockRejectedValueOnce(new Error("Synthetic unavailable authoritative reread"));
+    const view = render(<AgentEngineSettings isOwner />);
+    fireEvent.change(await view.findByLabelText("Authentication mode"), { target: { value: "api-key" } });
+    expect(await view.findByRole("alert")).toHaveTextContent("Reload settings before making another change");
+    expect(view.getByLabelText("Agent engine")).toBeDisabled();
+    expect(view.getByLabelText("Authentication mode")).toBeDisabled();
+    expect(fetchMock.mock.calls.filter(([, options]) => options?.method === "PUT")).toHaveLength(1);
   });
 });
 

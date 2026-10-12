@@ -399,7 +399,8 @@ export function pushActivity(
  * boundary — so no new exposure; label is bounded to one line / 160 chars.
  * SNAPSHOT assumption: every live emitter sends cumulative-per-block content
  * (cc `onText` block.replace, agent-runner lastBlock.text). Codex Web also
- * accumulates native fragments per item before emitting snapshots; see
+ * emits complete answer snapshots across native items; those replacements
+ * must not be presented as reasoning steps. See
  * codex-ws-events.ts › createCodexWebEventMapper().
  */
 function foldReplacedText(
@@ -407,8 +408,9 @@ function foldReplacedText(
   nextContent: string,
   activity: ActivityEntry[] | undefined,
   contentStartedAt: number | undefined,
+  answerSnapshot?: true,
 ): ActivityEntry[] | undefined {
-  if (!prevContent || nextContent.startsWith(prevContent)) return activity;
+  if (answerSnapshot || !prevContent || nextContent.startsWith(prevContent)) return activity;
   const firstLine = prevContent
     .split("\n")
     .map((l) => l.trim())
@@ -1243,6 +1245,7 @@ export function applyStreamEvent(
             event.content,
             target.activity,
             target.contentStartedAt,
+            event.answerSnapshot,
           );
           const folded = foldCurrentStep(
             { ...target, activity: withText },
@@ -1278,6 +1281,7 @@ export function applyStreamEvent(
           event.content,
           current.activity,
           current.contentStartedAt,
+          event.answerSnapshot,
         );
         const folded = foldCurrentStep(
           { ...current, activity: withText },
@@ -1324,6 +1328,7 @@ export function applyStreamEvent(
                 prunedChips,
               ),
               working[errIdx].contentStartedAt,
+              event.answerSnapshot,
             ),
           },
         );

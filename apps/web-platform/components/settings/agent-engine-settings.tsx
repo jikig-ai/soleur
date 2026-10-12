@@ -38,7 +38,7 @@ export function AgentEngineSettings({ isOwner }: { isOwner: boolean }) {
   const [authMode, setAuthMode] = useState<string>("managed");
   const [claudeAuthMode, setClaudeAuthMode] = useState<string>("managed");
   const [codexAuthMode, setCodexAuthMode] = useState<string>("managed");
-  const [status, setStatus] = useState<"loading" | "ready" | "saving" | "error">("loading");
+  const [status, setStatus] = useState<"loading" | "ready" | "saving" | "error" | "unverified">("loading");
   const [pendingAuthChange, setPendingAuthChange] = useState<PendingAuthChange | null>(null);
   const [statusMessage, setStatusMessage] = useState("");
   const settingsRevision = useRef(0);
@@ -117,8 +117,29 @@ export function AgentEngineSettings({ isOwner }: { isOwner: boolean }) {
       setSelected(rollback.engineId);
       setAuthMode(rollback.authMode);
       setPendingAuthChange(null);
-      setStatus("error");
-      setStatusMessage("Engine settings were not saved. Your previous selection is still active.");
+      // A failed response does not prove the transaction rolled back. Reread
+      // authoritative settings without replaying the confirmed mutation.
+      try {
+        const response = await fetch("/api/dashboard/settings/agent-engine", { cache: "no-store" });
+        if (!response.ok) throw new Error("settings unavailable");
+        const payload = await response.json() as { engines: Engine[]; defaultEngineId: string; defaultAuthMode?: string; codexAuthMode?: string };
+        if (settingsRevision.current !== revision) return;
+        if (!Array.isArray(payload.engines) || !payload.engines.some((engine) => engine.id === payload.defaultEngineId)) {
+          throw new Error("settings unavailable");
+        }
+        setEngines(payload.engines);
+        setWorkspaceDefaultEngineId(payload.defaultEngineId);
+        setClaudeAuthMode(payload.defaultAuthMode ?? "managed");
+        setCodexAuthMode(payload.codexAuthMode ?? "managed");
+        setSelected(applyToExistingCodexConversations ? engineId : payload.defaultEngineId);
+        setAuthMode(applyToExistingCodexConversations ? payload.codexAuthMode ?? "managed" : payload.defaultAuthMode ?? "managed");
+        setStatus("error");
+        setStatusMessage("The save could not be confirmed. Current settings have been refreshed; review them before trying again.");
+      } catch {
+        if (settingsRevision.current !== revision) return;
+        setStatus("unverified");
+        setStatusMessage("The save outcome could not be verified. Reload settings before making another change.");
+      }
     }
   }
 
@@ -177,15 +198,15 @@ export function AgentEngineSettings({ isOwner }: { isOwner: boolean }) {
           Choose the default engine for new conversations and routine runs in this workspace.
           Codex is available only for qualified synthetic testing until rollout approval.
         </p>
-        {status === "error" && <p role="alert" className="mb-3 text-sm text-red-400">{statusMessage || "Engine settings are unavailable."}</p>}
-        {statusMessage && status !== "error" && <p role="status" aria-live="polite" className="mb-3 text-sm text-soleur-text-secondary">{statusMessage}</p>}
+        {(status === "error" || status === "unverified") && <p role="alert" className="mb-3 text-sm text-red-400">{statusMessage || "Engine settings are unavailable."}</p>}
+        {statusMessage && status !== "error" && status !== "unverified" && <p role="status" aria-live="polite" className="mb-3 text-sm text-soleur-text-secondary">{statusMessage}</p>}
         <label htmlFor="agent-engine-select" className="block text-sm text-soleur-text-primary">
           <span className="mb-2 block font-medium">Agent engine</span>
           <select
             id="agent-engine-select"
             aria-describedby="agent-engine-help"
             value={selected}
-            disabled={!isOwner || status === "loading" || status === "saving"}
+            disabled={!isOwner || status === "loading" || status === "saving" || status === "unverified"}
             onChange={(event) => chooseEngine(event.target.value)}
             className="w-full rounded-md border border-soleur-border-default bg-soleur-bg-surface-1 px-3 py-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
           >
@@ -213,7 +234,7 @@ export function AgentEngineSettings({ isOwner }: { isOwner: boolean }) {
             <select
               aria-label="Authentication mode"
               value={authMode}
-              disabled={!isOwner || status === "loading" || status === "saving" || !isEngineSelectable(selectedEngine)}
+              disabled={!isOwner || status === "loading" || status === "saving" || status === "unverified" || !isEngineSelectable(selectedEngine)}
               onChange={(event) => chooseAuthMode(event.target.value)}
               className="rounded-md border border-soleur-border-default bg-soleur-bg-surface-1 px-3 py-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
             >

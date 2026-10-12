@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createEngineRegistry } from "@/server/agent-engine-registry";
 import { dispatchCodexConversationToWebSocket } from "@/server/codex-conversation-dispatch";
 import type { EngineEventPayload } from "@/server/agent-engine-contract";
+import { createCodexCodeAdapter } from "@/server/codex-code-adapter";
 
 function turnFixture(payloads: EngineEventPayload[]) {
   const binding = {
@@ -55,8 +56,8 @@ describe("Codex conversation dispatch bridge", () => {
     });
     await dispatchCodexConversationToWebSocket(options);
     expect(send.mock.calls.map(([frame]) => frame)).toEqual([
-      { type: "stream", content: "Hello ", partial: true, leaderId: "cc_router", conversationId: "synthetic-conversation" },
-      { type: "stream", content: "Hello world", partial: true, leaderId: "cc_router", conversationId: "synthetic-conversation" },
+      { type: "stream", content: "Hello ", partial: true, answerSnapshot: true, leaderId: "cc_router", conversationId: "synthetic-conversation" },
+      { type: "stream", content: "Hello world", partial: true, answerSnapshot: true, leaderId: "cc_router", conversationId: "synthetic-conversation" },
       { type: "stream_end", leaderId: "cc_router", conversationId: "synthetic-conversation" },
     ]);
   });
@@ -158,7 +159,7 @@ describe("Codex conversation dispatch bridge", () => {
       payload: { type: "status", status: "completed" },
     }]);
     expect(sent).toEqual([
-      { type: "stream", content: "hello", partial: true, leaderId: "cc_router", conversationId: "conv-1" },
+      { type: "stream", content: "hello", partial: true, answerSnapshot: true, leaderId: "cc_router", conversationId: "conv-1" },
       { type: "stream_end", leaderId: "cc_router", conversationId: "conv-1" },
     ]);
   });
@@ -267,5 +268,34 @@ describe("Codex conversation dispatch bridge", () => {
     expect(repository.transitionAttempt.mock.calls).toEqual([
       ["synthetic-attempt", "running"], ["synthetic-attempt", "failed"],
     ]);
+  });
+
+  it("blocks automatic auth retry after a persisted generation change", async () => {
+    const { options, repository } = turnFixture([]);
+    let generation = 2;
+    repository.assertAttemptGeneration.mockImplementation(async () => {
+      if (generation !== 2) throw Object.assign(new Error("synthetic stale generation"), { code: "codex_binding_stale" });
+      return generation;
+    });
+    const provider = {
+      mode: "api-key" as const,
+      acquire: vi.fn(async () => ({ accessToken: "synthetic-noncredential", expiresAt: Date.now() + 60_000 })),
+      refresh: vi.fn(async () => {
+        generation = 3;
+        return { accessToken: "synthetic-noncredential", expiresAt: Date.now() + 60_000 };
+      }),
+      logout: vi.fn(),
+    };
+    const start = vi.fn(async function* () {
+      if (start.mock.calls.length === 1) throw Object.assign(new Error("synthetic expired lease"), { code: "codex_credential_expired" });
+      yield { runId: "synthetic-run", eventId: "synthetic-terminal", sequence: 1, payload: { type: "status", status: "completed" } as const };
+    });
+    options.runtime.apiKeyProvider = provider;
+    options.runtime.transport = { start, dispose: vi.fn(async () => undefined) } as never;
+    options.runtime.createCodex = createCodexCodeAdapter;
+    const outcome = await dispatchCodexConversationToWebSocket(options).then(() => null, (error) => error);
+    expect(provider.refresh).toHaveBeenCalledOnce();
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(outcome).toMatchObject({ code: "codex_binding_stale" });
   });
 });

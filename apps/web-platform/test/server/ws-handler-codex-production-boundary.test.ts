@@ -298,4 +298,110 @@ describe("Codex real production handler boundary", () => {
     expect(fixture.rpc).not.toHaveBeenCalledWith("start_agent_engine_attempt", expect.anything());
     expect(fixture.spawn).not.toHaveBeenCalled();
   });
+
+  it.each(["B-active", "B-completed", "A-throws"])("withholds superseded turn output when %s", async (variant) => {
+    fixture.rpc.mockImplementation(async (name: string, args?: { p_attempt_key?: string }) => name === "start_agent_engine_attempt"
+      ? { data: { id: args?.p_attempt_key ?? "synthetic-attempt" }, error: null }
+      : { data: null, error: null });
+    let releaseA!: () => void;
+    let releaseB!: () => void;
+    const gateA = new Promise<void>((resolve) => { releaseA = resolve; });
+    const gateB = new Promise<void>((resolve) => { releaseB = resolve; });
+    let signalA: AbortSignal | undefined;
+    const started = vi.fn();
+    const adapter = {
+      start: vi.fn(async function* (context: { signal: AbortSignal; idempotencyKey: string }) {
+        started(context.idempotencyKey);
+        if (context.idempotencyKey === "synthetic-turn-A") {
+          signalA = context.signal;
+          await gateA;
+          if (variant === "A-throws") throw new Error("Synthetic old provider failure");
+          yield { runId: "synthetic-codex-run", eventId: "synthetic-A-text", sequence: 1, payload: { type: "text", text: "Delayed A output" } as const };
+          yield { runId: "synthetic-codex-run", eventId: "synthetic-A-terminal", sequence: 2, payload: { type: "status", status: "cancelled" } as const };
+        } else {
+          yield { runId: "synthetic-codex-run", eventId: "synthetic-B-text", sequence: 1, payload: { type: "text", text: "Current B output" } as const };
+          await gateB;
+          yield { runId: "synthetic-codex-run", eventId: "synthetic-B-terminal", sequence: 2, payload: { type: "status", status: "completed" } as const };
+        }
+      }),
+      dispose: vi.fn(async () => undefined),
+    };
+    const registry = createEngineRegistry([{
+      id: "codex", version: "codex-v1", transport: "remote", enabledForNewRuns: false, enabledForExistingRuns: true,
+      authModes: ["api-key"], qualifications: [{ authMode: "api-key", adapterVersion: "codex-v1", workflow: "conversation", dataClass: "synthetic", expiresAt: Date.now() + 60_000, evidenceRef: "synthetic-handler-test", capabilities: { streaming: "verified" } }],
+    }]);
+    vi.spyOn(codexRuntimeModule, "codexConversationRuntime").mockReturnValue({
+      runtime: { userId: fixture.userId, transport: {} as never,
+        apiKeyProvider: { mode: "api-key", acquire: vi.fn(), refresh: vi.fn(), logout: vi.fn() },
+        createCodex: () => adapter as never },
+      registry, dataClass: "synthetic",
+      evidence: { endpoint: "https://api.openai.com/v1", allowedHosts: ["api.openai.com"], acceptedDataClasses: ["synthetic"], vendorDpaStatus: "verified", transferGeography: "scc", deletionSupport: "verified", approvalRequired: false },
+    });
+    const send = vi.fn();
+    sessions.set(fixture.userId, {
+      ws: { readyState: 1, send, close: vi.fn() }, conversationId: fixture.conversationId,
+      lastActivity: Date.now(), tcVersionAtHandshake: TC_VERSION, tcRecheckCacheUntil: Date.now() + 1_000_000,
+    } as unknown as ClientSession);
+    const turnA = handleMessage(fixture.userId, JSON.stringify({ type: "chat", content: "Synthetic A", clientTurnId: "synthetic-turn-A" }));
+    let turnB: Promise<void> | undefined;
+    try {
+      await vi.waitFor(() => expect(started).toHaveBeenCalledWith("synthetic-turn-A"));
+      turnB = handleMessage(fixture.userId, JSON.stringify({ type: "chat", content: "Synthetic B", clientTurnId: "synthetic-turn-B" }));
+      await vi.waitFor(() => expect(send.mock.calls.map(([value]) => JSON.parse(value as string))).toContainEqual(expect.objectContaining({ type: "stream", content: "Current B output" })));
+      expect(signalA?.aborted).toBe(true);
+      expect(signalA?.reason).toBe("superseded");
+      if (variant === "B-completed") {
+        releaseB();
+        await turnB;
+      }
+      send.mockClear();
+      releaseA();
+      await turnA;
+      const afterReplacement = send.mock.calls.map(([value]) => JSON.parse(value as string));
+      expect(afterReplacement).toEqual([]);
+    } finally {
+      releaseA(); releaseB();
+      await turnA;
+      if (turnB) await turnB;
+    }
+    expect(fixture.spawn).not.toHaveBeenCalled();
+  });
+
+  it("preserves the active cancelled terminal after explicit Stop", async () => {
+    fixture.rpc.mockImplementation(async (name: string) => name === "start_agent_engine_attempt"
+      ? { data: { id: "synthetic-stop-attempt" }, error: null }
+      : { data: null, error: null });
+    const started = vi.fn();
+    const adapter = {
+      start: vi.fn(async function* (context: { signal: AbortSignal }) {
+        started();
+        await new Promise<void>((resolve) => context.signal.addEventListener("abort", () => resolve(), { once: true }));
+        yield { runId: "synthetic-codex-run", eventId: "synthetic-stop-terminal", sequence: 1, payload: { type: "status", status: "cancelled" } as const };
+      }),
+      dispose: vi.fn(async () => undefined),
+    };
+    const registry = createEngineRegistry([{
+      id: "codex", version: "codex-v1", transport: "remote", enabledForNewRuns: false, enabledForExistingRuns: true,
+      authModes: ["api-key"], qualifications: [{ authMode: "api-key", adapterVersion: "codex-v1", workflow: "conversation", dataClass: "synthetic", expiresAt: Date.now() + 60_000, evidenceRef: "synthetic-stop-test", capabilities: { streaming: "verified" } }],
+    }]);
+    vi.spyOn(codexRuntimeModule, "codexConversationRuntime").mockReturnValue({
+      runtime: { userId: fixture.userId, transport: {} as never,
+        apiKeyProvider: { mode: "api-key", acquire: vi.fn(), refresh: vi.fn(), logout: vi.fn() },
+        createCodex: () => adapter as never },
+      registry, dataClass: "synthetic",
+      evidence: { endpoint: "https://api.openai.com/v1", allowedHosts: ["api.openai.com"], acceptedDataClasses: ["synthetic"], vendorDpaStatus: "verified", transferGeography: "scc", deletionSupport: "verified", approvalRequired: false },
+    });
+    const send = vi.fn();
+    sessions.set(fixture.userId, {
+      ws: { readyState: 1, send, close: vi.fn() }, conversationId: fixture.conversationId,
+      lastActivity: Date.now(), tcVersionAtHandshake: TC_VERSION, tcRecheckCacheUntil: Date.now() + 1_000_000,
+    } as unknown as ClientSession);
+    const turn = handleMessage(fixture.userId, JSON.stringify({ type: "chat", content: "Synthetic Stop", clientTurnId: "synthetic-turn-stop" }));
+    await vi.waitFor(() => expect(started).toHaveBeenCalledOnce());
+    await handleMessage(fixture.userId, JSON.stringify({ type: "abort_turn", conversationId: fixture.conversationId }));
+    await turn;
+    expect(send.mock.calls.map(([value]) => JSON.parse(value as string))).toContainEqual(expect.objectContaining({ type: "stream_end", conversationId: fixture.conversationId }));
+    expect(fixture.spawn).not.toHaveBeenCalled();
+  });
+
 });

@@ -2,7 +2,7 @@
 title: Fresh current-source production image proposal
 date: 2026-10-11
 pr: 9051
-status: prepared-not-authorized-not-executed
+status: candidate-prepared-startup-recovery-unqualified
 ---
 
 ## Reviewed source and fresh runner
@@ -34,8 +34,8 @@ fresh inspection and approval. The reviewable command form is:
 python3 .soleur/production-image-proposal-20261011/prepare.py --source-sha <FINAL_CLEAN_40_CHARACTER_HEAD> --runner-sha256 f73a3ada3cf8dcd64610187e99c4bd30c663b98158b5e7c40b55ab6a5d5d9c03 --authorize-one-production-image-build
 ```
 
-This command has not been authorized or executed. The final literal SHA must be
-shown with the approval request. Attempt `oct11-cd8473e1` has a fresh exclusive
+At proposal commit this command had not been authorized or executed. The final
+literal SHA was shown with the approval request. Attempt `oct11-cd8473e1` has an exclusive
 marker, source-bound image tag and exact owned resource names; pre-existing
 resources, dirty tracked input or changed HEAD cause refusal.
 
@@ -116,3 +116,33 @@ Authenticated screenshots, eligible routine consumer, separate API-key/managed
 Web matrices, attributable CLO disposition, and full review/promotion remain
 acceptance work after recovery. Unknown project sharing, retention/inheritance
 and configured regions are not inferred from build or local recovery results.
+
+## Approved execution and terminal result — 2026-10-11
+
+The user approved the exact one-use command bound to clean source
+`2b826822c086d4348ada891e15fde2aa7b62eac3` and the runner digest above.
+Execution completed successfully, including the complete controlled production
+Dockerfile build, filesystem inventory, default UID 1001 probe and owned cleanup.
+The marker is consumed; no repeat, repin or rebuild is authorized.
+
+The retained local image ID is
+`sha256:0914d1f1a6ec00fe79129531eac7d6e7aeb9507548e8f6207649d5915fa25420`,
+size 2,477,592,039 bytes. All 1,352 admitted plugin files and 63 host-script
+payloads matched their source hashes. Claude Code 2.1.293, LikeC4 1.50.0,
+Vitest 4.1.11 and Chromium payload presence were admitted. BuildKit image ID was
+`sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea`.
+The compiler/tripwire steps used network none; production compilation generated
+93 pages. The two named probes, dedicated builder and its cache volume were
+removed; no global prune or publication occurred.
+
+Ignored terminal record: `.soleur/production-image-proposal-20261011/`
+`candidate-2b826822c086-oct11-cd8473e1/build-record.json`, SHA-256
+`13a928cd6854d9e13e747c0e2e48456b6c224bc0caa2b8647abbe12270422a96`.
+Its explicit result is candidate prepared / startup-recovery parity unqualified.
+No application/database startup, SQL, provider or browser authentication ran.
+
+The frontend URL/key were build-only synthetic values; the key is not a genuine
+Supabase JWT. This artifact cannot support authenticated production screenshots.
+It contains no Codex executable or approved live launcher. Application fixes
+prepared on 2026-10-12 are absent from this image. Do not use it to qualify
+current application source or request a source-stale recovery retry.

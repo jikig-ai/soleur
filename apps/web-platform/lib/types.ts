@@ -316,6 +316,8 @@ export type WSMessage =
        * snapshot. Do not branch on this field on the client.
        */
       partial: boolean;
+      /** Complete answer across native items; replacements are not reasoning steps. */
+      answerSnapshot?: true;
       leaderId: DomainLeaderId;
       /** Conversation scoping prevents a late provider frame reaching a replacement session. */
       conversationId?: string;

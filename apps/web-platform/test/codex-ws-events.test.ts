@@ -10,6 +10,51 @@ describe("Codex Web cumulative text", () => {
     runId: "synthetic-run", eventId, sequence: 1, payload: { type: "text", text: value },
   });
 
+  function render(chunks: Array<[string, string]>) {
+    const map = createCodexWebEventMapper(options);
+    let result = applyStreamEvent([], new Map(), { type: "stream_start", leaderId: "cc_router" });
+    for (const [eventId, value] of chunks) {
+      const frame = map(text(eventId, value));
+      if (frame.type !== "stream") throw new Error("unexpected synthetic text frame");
+      result = applyStreamEvent(result.messages, result.activeStreams, frame);
+    }
+    return result.messages.at(-1);
+  }
+
+  it("renders complete interleaved answers without inventing reasoning steps", () => {
+    const answer = render([
+      ["codex:item:synthetic:a:delta:1", "One "],
+      ["codex:item:synthetic:b:delta:2", "Two "],
+      ["codex:item:synthetic:a:delta:3", "answer"],
+    ]);
+    expect(answer?.content).toBe("One answer\n\nTwo ");
+    expect(answer?.activity ?? []).toEqual([]);
+  });
+
+  it("retains a long second answer when an earlier item continues", () => {
+    const second = "Synthetic detail ".repeat(24) + "\nRetained second paragraph.";
+    const answer = render([
+      ["codex:item:synthetic:a:delta:1", "First "],
+      ["codex:item:synthetic:b:delta:2", second],
+      ["codex:item:synthetic:a:delta:3", "answer"],
+    ]);
+    expect(answer?.content).toBe("First answer\n\n" + second);
+    expect(answer?.activity ?? []).toEqual([]);
+  });
+
+  it("replays each answer item without losing its neighbors or creating narration", () => {
+    const answer = render([
+      ["codex:item:synthetic:a:delta:1", "Old first"],
+      ["codex:item:synthetic:b:delta:2", "Old second"],
+      ["codex:item:synthetic:a:message", "Complete first"],
+      ["codex:item:synthetic:b:message", "Complete second"],
+      ["codex:item:synthetic:a:message", "Complete first"],
+      ["codex:item:synthetic:a:delta:3", "!"],
+    ]);
+    expect(answer?.content).toBe("Complete first!\n\nComplete second");
+    expect(answer?.activity ?? []).toEqual([]);
+  });
+
   it("converts translated deltas to snapshots without false reasoning steps", async () => {
     const map = createCodexWebEventMapper(options);
     const native = (async function* () {
@@ -30,8 +75,8 @@ describe("Codex Web cumulative text", () => {
   it("keeps interleaved items separate, including identities containing colons", () => {
     const map = createCodexWebEventMapper(options);
     map(text("codex:item:synthetic:a:delta:1", "One "));
-    expect(map(text("codex:item:synthetic:b:delta:2", "Two "))).toMatchObject({ content: "Two " });
-    expect(map(text("codex:item:synthetic:a:delta:3", "answer"))).toMatchObject({ content: "One answer" });
+    expect(map(text("codex:item:synthetic:b:delta:2", "Two "))).toMatchObject({ content: "One \n\nTwo " });
+    expect(map(text("codex:item:synthetic:a:delta:3", "answer"))).toMatchObject({ content: "One answer\n\nTwo " });
   });
 
   it("replaces replay snapshots and seeds subsequent fragments without duplication", async () => {
@@ -66,14 +111,14 @@ describe("Codex Web cumulative text", () => {
     expect(map(text("codex:item:synthetic-item:message", "é".repeat(128 * 1024)))).toMatchObject({ content: "é".repeat(128 * 1024) });
     expect(() => map(text("codex:item:synthetic-other:delta:2", "a"))).toThrow("codex_web_text_limit");
     map(text("codex:item:synthetic-item:message", "short"));
-    expect(map(text("codex:item:synthetic-other:delta:3", "a"))).toMatchObject({ content: "a" });
+    expect(map(text("codex:item:synthetic-other:delta:3", "a"))).toMatchObject({ content: "short\n\na" });
   });
 
   it("bounds item count without evicting earlier answer fragments", () => {
     const map = createCodexWebEventMapper(options);
     for (let i = 0; i < 32; i++) map(text(`codex:item:synthetic-${i}:delta:${i + 1}`, "a"));
     expect(() => map(text("codex:item:synthetic-overflow:delta:33", "b"))).toThrow("codex_web_text_limit");
-    expect(map(text("codex:item:synthetic-0:delta:34", "b"))).toMatchObject({ content: "ab" });
+    expect(map(text("codex:item:synthetic-0:delta:34", "b"))).toMatchObject({ content: ["ab", ...Array<string>(31).fill("a")].join("\n\n") });
   });
 });
 
@@ -81,7 +126,7 @@ describe("Codex websocket event mapping", () => {
   it("maps lifecycle and text events without exposing provider data", () => {
     const options = { leaderId: "cc_router" as const, conversationId: "conv-1" };
     expect(mapCodexEngineEventToWsMessage({ runId: "run-1", eventId: "e-1", sequence: 1, payload: { type: "status", status: "running" } }, options)).toEqual({ type: "stream_start", leaderId: "cc_router", conversationId: "conv-1" });
-    expect(mapCodexEngineEventToWsMessage({ runId: "run-1", eventId: "e-2", sequence: 2, payload: { type: "text", text: "hello" } }, options)).toEqual({ type: "stream", content: "hello", partial: true, leaderId: "cc_router", conversationId: "conv-1" });
+    expect(mapCodexEngineEventToWsMessage({ runId: "run-1", eventId: "e-2", sequence: 2, payload: { type: "text", text: "hello" } }, options)).toEqual({ type: "stream", content: "hello", partial: true, answerSnapshot: true, leaderId: "cc_router", conversationId: "conv-1" });
     expect(mapCodexEngineEventToWsMessage({ runId: "run-1", eventId: "e-3", sequence: 3, payload: { type: "status", status: "completed" } }, options)).toEqual({ type: "stream_end", leaderId: "cc_router", conversationId: "conv-1" });
   });
 

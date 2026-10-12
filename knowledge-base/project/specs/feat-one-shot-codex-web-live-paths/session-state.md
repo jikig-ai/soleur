@@ -1200,3 +1200,42 @@
   preserves API-key PENDING and existing managed hosted-auth BLOCKED. Official
   protocol availability does not settle hosted-route permission; no new live
   execution allowance or account/control finding was granted.
+
+## Continuation update — 2026-10-12 fixes and remaining blockers
+
+- The approved one-use production build at `2b826822c086d4348ada891e15fde2aa7b62eac3`
+  completed with filesystem/default-UID/owned-cleanup admission. Image
+  `sha256:0914d1f1a6ec00fe79129531eac7d6e7aeb9507548e8f6207649d5915fa25420`
+  is retained; the build marker is consumed. No startup, recovery SQL, provider
+  or browser authentication was admitted. Its build-only frontend key and lack
+  of Codex payload cannot qualify authenticated/live execution.
+- Exact-head [CI 38173783103](https://github.com/jikig-ai/soleur/actions/runs/38173783103)
+  settled at 69 passes, 11 skips, zero pending/cancelled, only required `test`
+  red. Its executed aggregate confirms draft-skipped Web/scripts legs. Final
+  description guards [38174335334](https://github.com/jikig-ai/soleur/actions/runs/38174335334)
+  succeeded. These verdicts precede the source fixes and next push.
+- Design validity retained the required attempt/generation/acceptance/acknowledgment
+  state. Two P1 control-flow defects and the text/settings defects were corrected;
+  [validation](acceptance-fix-validation-2026-10-12.md) records 275 unit plus
+  17 component passes, independent fix verification and a private lock-matched
+  all-source TypeScript pass. Earlier cached dependencies were not replaced.
+- Required SAST scanned zero files and crashed; Ref #10082 was freshly verified
+  OPEN. Full applicable review remains incomplete, with no ship handoff. The old
+  candidate excludes these fixes. The CTO ruling declines an old-candidate
+  rehearsal as the next acceptance step and requires fresh source/auth-browser
+  configuration before a new current-source build/rehearsal proposal.
+- The full-187-migration recovery harness was prepared and tested offline, but
+  remains unexecuted. Technical review identified reserved-name ownership and
+  exec-payload admission defects; repair must precede any runtime approval.
+  No image pull, shared-stack action, SQL, storage write or renderer startup ran.
+- The user's provider-restriction question was answered from current primary
+  sources. The [new CLO supplement](../../../legal/audits/2026-10-12-codex-web-hosted-auth-restriction.md)
+  blocks the proposed hosted App Server authentication route for both modes.
+  A concretely specified different API-funded route remains PENDING; owner
+  approval does not override provider restrictions. No exception was supplied.
+- Keep draft, auto-merge disarmed, Codex default-off and customer content blocked.
+  Credential/provider/browser-auth, account/shared-write, deployment and flag/cohort
+  restrictions persist; consumed build/recovery permissions are not renewed by
+  `continue`. Current-source recovery → authenticated screenshots → eligible
+  routine → permitted Web/CLO matrices → full review/promotion remains incomplete.
+  Project sharing, retention/inheritance and configured regions remain unknown.

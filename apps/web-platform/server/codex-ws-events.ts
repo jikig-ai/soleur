@@ -3,7 +3,7 @@ import type { DomainLeaderId } from "./domain-leaders";
 import type { EngineEvent } from "./agent-engine-contract";
 
 /** One mapper per admitted Web turn. The neutral adapter keeps native text
- * semantics for routine consumers; the Web reducer requires snapshots.
+ * semantics for routine consumers; the Web reducer requires complete answers.
  * codex-code-message-translator.ts › translateCodexAppServerStream() assigns
  * item delta identities and distinct persisted-message identities. Retain
  * those distinctions here without exposing item identities on the wire.
@@ -30,7 +30,7 @@ export function createCodexWebEventMapper(
         }
         items.set(itemId, content);
         retainedBytes = nextBytes;
-        return mapCodexEngineEventToWsMessage({ ...event, payload: { type: "text", text: content } }, options);
+        return mapCodexEngineEventToWsMessage({ ...event, payload: { type: "text", text: [...items.values()].join("\n\n") } }, options);
       }
     }
     if (event.payload.type === "error" || (event.payload.type === "status"
@@ -56,7 +56,7 @@ export function mapCodexEngineEventToWsMessage(
       }
       return { type: "stream_start", leaderId, ...conversation };
     case "text":
-      return { type: "stream", content: event.payload.text, partial: true, leaderId, ...conversation };
+      return { type: "stream", content: event.payload.text, partial: true, answerSnapshot: true, leaderId, ...conversation };
     case "progress":
       return { type: "reasoning_narration", message: event.payload.message.slice(0, 256), ...conversation };
     case "approval":

@@ -91,7 +91,17 @@ export async function dispatchCodexConversationToWebSocket(options: CodexConvers
     await options.repository.transitionAttempt(attemptId, "running");
     assertTurnActive(options.context.signal);
     options.onAccepted?.();
-    const factories = createCodexWebEngineFactoriesForBinding({ ...options.runtime, binding: { engineId: "codex", authMode: binding.authMode } });
+    const factories = createCodexWebEngineFactoriesForBinding({
+      ...options.runtime,
+      binding: { engineId: "codex", authMode: binding.authMode },
+      authorizeRequest: async (context) => {
+        assertTurnActive(context.signal);
+        await options.runtime.authorizeRequest?.(context);
+        assertTurnActive(context.signal);
+        await options.repository.assertAttemptGeneration(attemptId);
+        assertTurnActive(context.signal);
+      },
+    });
     if (!factories.codex) {
       throw Object.assign(new Error("Codex adapter factory is unavailable"), { code: "codex_adapter_unavailable" });
     }

@@ -276,6 +276,7 @@ const streamSchema = z.strictObject({
   type: z.literal("stream"),
   content: z.string(),
   partial: z.boolean(),
+  answerSnapshot: z.literal(true).optional(),
   leaderId: domainLeaderIdSchema,
   conversationId: conversationIdSchema.optional(),
   seq: replaySeqSchema,

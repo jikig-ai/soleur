@@ -414,7 +414,8 @@ function abortSession(
   const codexTurn = codexTurnAbortControllers.get(key);
   if (codexTurn) {
     codexTurn.abort(reason);
-    codexTurnAbortControllers.delete(key);
+    // Keep its delivery identity until dispatch finishes, so Stop's terminal
+    // frame is admitted while a replacement turn can supersede it.
     aborted += 1;
   }
   codexTurnClientTurnIds.delete(key);
@@ -1328,6 +1329,7 @@ async function dispatchCodexChatTurn(
   const runtime = codexConversationRuntime(userId);
   const serviceRepository = new AgentEnginePersistenceRepository(createServiceClient() as unknown as PersistenceClient);
   assertCurrent();
+  let accepted = false;
   try {
     await dispatchCodexConversationToWebSocket({
       repository: serviceRepository,
@@ -1346,6 +1348,7 @@ async function dispatchCodexChatTurn(
       workspaceId: owned.workspace_id,
       send: (message) => {
         if (sessions.get(userId) !== sourceSession || sourceSession.conversationId !== conversationId) return;
+        if (codexTurnAbortControllers.get(key) !== controller) return;
         if ("conversationId" in message && message.conversationId && message.conversationId !== conversationId) return;
         sendToClient(userId, message);
       },
@@ -1355,8 +1358,20 @@ async function dispatchCodexChatTurn(
         codexTurnAbortControllers.get(key)?.abort("superseded");
         codexTurnAbortControllers.set(key, controller);
         codexTurnClientTurnIds.set(key, clientTurnId);
+        accepted = true;
       },
     });
+  } catch (error) {
+    if (sessions.get(userId) !== sourceSession || sourceSession.conversationId !== conversationId
+      || (accepted && codexTurnAbortControllers.get(key) !== controller)) {
+      // Both chat paths have generic outer catches. Keep an obsolete provider
+      // failure observable without sending its error into the replacement turn.
+      reportSilentFallback(error, {
+        feature: "codex_conversation", op: "obsolete_turn_error", extra: { runId, conversationId },
+      });
+      return;
+    }
+    throw error;
   } finally {
     removePendingCodexTurn(key, controller);
     if (codexTurnAbortControllers.get(key) === controller) codexTurnAbortControllers.delete(key);

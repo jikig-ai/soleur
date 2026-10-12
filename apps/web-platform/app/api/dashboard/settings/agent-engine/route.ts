@@ -112,9 +112,7 @@ export async function PUT(request: Request) {
       return NextResponse.json({ error: "engine_execution_disabled" }, { status: 409 });
     }
     const targetEngineId = definition.settingsSelectable && !definition.enabledForNewRuns
-      ? applyToExistingCodexConversations
-        ? DEFAULT_AGENT_ENGINE_ID
-        : await repository.getDefaultEngine(resolved.workspaceId) ?? DEFAULT_AGENT_ENGINE_ID
+      ? DEFAULT_AGENT_ENGINE_ID
       : definition.id;
     const result = authMode === undefined
       ? await repository.setDefaultEngine(resolved.workspaceId, targetEngineId)
