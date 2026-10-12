@@ -8,11 +8,16 @@ Run from inside the repository, in a tree with an empty `git status --porcelain`
 Read-only: it lists tracked files and reads them; it writes nothing and runs no suite.
 
 The BASE rules are a port of the guard's own derivation (`PJ_AWK` in `.claude/hooks/grep-q-pipe-guard.test.sh`, the
-S7b state). At 0aae3f8680, the S7b state, the base run prints the guard's own numbers (66 pairs, 120 producer triples);
-at any later head the base moves with the tree (at the S7c head it prints 67 pairs and 126 triples, because the branch's
-own `sha256sum` stub edit makes one more S7b pair visible, evidence AC-4), so "BASE equals the guard" is only checked
-against the guard run on the SAME tree, never against these two figures. This file is a one-time cross-check recorded in
-evidence.md and run by nothing in CI: the awk is authoritative, and a difference between the two is the port drifting.
+S7b state). At 0aae3f8680, the S7b state, the base run printed the guard's own numbers (66 pairs, 120 producer triples).
+At a later head the base moves with the tree: at e737ea0814 it printed 67 pairs and 126 triples (two causes, evidence.md
+"Fix round B": the branch's own `sha256sum` stub edit adds one pair and five triples, and main's `fc2c938d86` one triple),
+and after the merge of main at 8b43c9df5d, which retired the web-host-reboot and web2-rebirth suites, it printed 66 pairs and
+125 triples (so "66 and 120" is the S7b figure and no later head's). The guard prints NO base figure, so "BASE equals the
+guard" cannot be checked on any tree; what can be checked, and what evidence.md records, is the U2 row (the shipped arms)
+against the awk's sorted triples on the SAME tree (equal at e737ea0814, 263 triples; equal at 8b43c9df5d and at the fix-round-C
+head, 258). This file is a one-time cross-check recorded in evidence.md and run by nothing in CI: the awk is authoritative,
+and a difference between the two is the port drifting. The port reads no length caps (the guard's JOINBYTES, UNWRAPCAP and
+loop-list bounds): they change no triple of the tree, so the two agree on it.
 Each recall ARM relaxes exactly one rule of the base, so its increment over the base is attributable to that arm alone; the
 union row (U2) turns the shipped arms on and is the one that must equal the awk's sorted triples at the head.
 
@@ -25,7 +30,10 @@ union row (U2) turns the shipped arms on and is the one that must equal the awk'
               same line after `; do`)
   R6 files    producers in .tf/.tftpl/.tmpl/.template/.service files (ARM_EXT, with the base .sh/.bash/.yml/.yaml: the guard's PJ_EXTS); `.tpl` and
               the extensionless files with a shebang were measured and cut
-  R8 annot    an annotation echo is stripped from its token to the closing unescaped quote of its string, not to the end of the line, so a pipe after it (or inside a command substitution in it) is read
+  R8 annot    an annotation echo is stripped from its token to the FIRST double quote after it (the guard's ANNOT, `ANNOT_STR` here), not to the end of the line, so a pipe after that quote is read. A pipe inside
+              a `$( )` in the string is HIDDEN when the substitution holds no double quote (`$(cat f | head -1)`) and READ, as residue, when it holds one (`$(printf '%s' "$p" | grep -c .)` leaves
+              `echo "$p" | grep -c .) ...`): the one tree instance, `.github/workflows/git-data-rung2-rehearsal.yml` lines 478 and 784, is read by that accident, not by design (fixtures annot-cmdsub-hidden and
+              annot-cmdsub-quoted in the guard pin both ways)
   R7 stubname the guard's stub-file arm records `jq";` (quote and semicolon kept) for a stub written `> "$d/jq"; chmod`: found by this J0, not in the brief
 """
 import collections
