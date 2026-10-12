@@ -23,3 +23,14 @@
 - cto_spawns=1 (batched, 5 rows — all confirmed assumed defaults; 3 caveats already captured in plan §Proposed Solution/Guard Contract)
 - Gate verdict: PASS (6 rows)
 - Operator decision: continue past open-PR file overlap (sibling PR editing journald-config.test.sh on disjoint egress scope; parked PR on rehearsal-capture files) — collision risk accepted, conflicts resolve via merge of origin/main
+
+## Work Phase (complete)
+- Tier B subagent fan-out (3 disjoint file-groups), lead-verified independently.
+- Mutation matrix exercised: all 7 mutants verified RED.
+- Focused suites green; commit c7756141b9; --affected gate queued/drained — only known operator-gated GuardA carrier identity failure (vinngest-v1.1.51 re-bake pending).
+
+## Review Phase
+- Class panel at PANEL_SHA=3c4ef84129: design pass + 6 seats (git-history, pattern-recognition, security-sentinel, code-quality, test-design, structural-enumeration replacing path-triggered performance-oracle). Structural-cause roll-up: guard windows were narrower than the properties they named.
+- Fix commits: ca08ceaa41 (jq own-field count + empty-value refusal), c2fc290d9e (run-window CONTROL_ROWS, guard hardening, tokenized never-add, fixture validity, floor), f14ecab16e (comment refresh).
+- Fix-round 1: 7 targeted seats spawned at HEAD bf4665b+f14ecab16e against diff 3c4ef84129..HEAD + local shellcheck conditional (info/style only).
+- Tally: seats=16, fix_rounds=1 (cap 2).
