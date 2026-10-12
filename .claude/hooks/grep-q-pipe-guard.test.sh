@@ -1697,10 +1697,14 @@ pj_judge() {
 # pj_check_rows <pairs>: the PRODUCER_JOIN rows on stdin. Prints one FAIL line per way a `drains` row disagrees with its stubs (malformed row, definition count, a
 # definition with no drain keyed on the row's flag), and UNRESOLVED with rc 3 when a row finds no definition at all. It prints and sets nothing else, so
 # the probe drives it with fixture rows and the caller merges its output (a verdict neutered to a no-op turns the control red).
+# When $2 names a file it gets `<rows read> <drains rows whose stubs were looked up>` on one line: the real run compares both against the table's own
+# size (pj_check_counts), so a checker that was fed junk or a slice of the table cannot pass on the strength of a separate loop's count.
 pj_check_rows() {
-  local pairs="$1" row s v k r d t res f found hint l
+  local pairs="$1" cnt="${2-}" row s v k r d t res f found hint l nrow=0 ndr=0
+  [[ -z "$cnt" ]] || : > "$cnt"
   while IFS= read -r row; do
     [[ -z "$row" ]] && continue
+    nrow=$((nrow + 1)); [[ -z "$cnt" ]] || printf '%s %s\n' "$nrow" "$ndr" > "$cnt"
     IFS='|' read -r s v k r <<<"$row"; pj_trim s; pj_trim v; pj_trim k; pj_trim r
     [[ "$k" == drains ]] || continue
     IFS='|' read -r d t <<<"$r"
@@ -1711,6 +1715,7 @@ pj_check_rows() {
     for f in "$s" $(pj_sourced "$s"); do res+="$(pj_defs "$f" "$v" "$t")"$'\n'; done
     found=$(grep -c . <<<"$res" || true)
     if (( found == 0 )); then echo "UNRESOLVED: the drains row for $s $v found 0 stub definitions — a definition finder that sees nothing asserts nothing"; return 3; fi
+    ndr=$((ndr + 1)); [[ -z "$cnt" ]] || printf '%s %s\n' "$nrow" "$ndr" > "$cnt"
     (( found == d )) || echo "FAIL: $s stubs '$v' in $found definitions, the row pins $d — a definition was added or removed; edit the row and give every definition the drain"
     hint='[ -t 0 ] || timeout 2 cat >/dev/null'; [[ "$t" == "*" ]] || hint="case \" \$* \" in *\" $t \"*) $hint ;; esac"
     while IFS= read -r l; do
@@ -1718,6 +1723,12 @@ pj_check_rows() {
       echo "FAIL: ${l#no } defines the '$v' stub with no stdin drain keyed on '$t' in its opener line or the next $PJ_DRAIN_WINDOW code lines of the same definition, or a bare exit comes first — a stub that exits unread makes the producer's printf take SIGPIPE/EPIPE under pipefail; start the stub with: $hint"
     done <<<"$res"
   done
+}
+# pj_check_counts <rows checked> <rows in the table> <drains checked> <drains rows verified>: the checker must have looked at every row and every drains row it
+# is credited with. Prints its FAIL line when either differs.
+pj_check_counts() {
+  { [[ "$1" =~ ^[0-9]+$ && "$3" =~ ^[0-9]+$ ]] && (( $1 == $2 && $3 == $4 )); } \
+    || echo "FAIL: the definition checker looked at $1 of the table's $2 rows and $3 of its $4 drains rows — it was fed a slice or something that is not the table, so the drains verdict below would be vacuous"
 }
 # pj_check_triples <found> <pin>: the producer-triple pin. Prints its FAIL line when the two differ.
 pj_check_triples() {
@@ -1751,14 +1762,17 @@ for _row in ${PRODUCER_JOIN[@]+"${PRODUCER_JOIN[@]}"}; do
 done
 pj_j="$(printf '%s\n' ${PRODUCER_JOIN[@]+"${PRODUCER_JOIN[@]}"} | pj_judge "$pj_pairs")"
 [[ -z "$pj_j" ]] || { PJ_FAIL=1; printf '%s\n' "$pj_j"; }
-pj_rc_rc=0
-pj_rc="$(printf '%s\n' ${PRODUCER_JOIN[@]+"${PRODUCER_JOIN[@]}"} | pj_check_rows "$pj_pairs")" || pj_rc_rc=$?
+pj_rc_rc=0; pj_cnt="$probe/pj-cnt"
+pj_rc="$(printf '%s\n' ${PRODUCER_JOIN[@]+"${PRODUCER_JOIN[@]}"} | pj_check_rows "$pj_pairs" "$pj_cnt")" || pj_rc_rc=$?
 if (( pj_rc_rc == 3 )); then printf '%s\n' "$pj_rc"; exit 3; fi
 [[ -z "$pj_rc" ]] || { PJ_FAIL=1; printf '%s\n' "$pj_rc"; }
+read -r pj_chk_rows pj_chk_drains < "$pj_cnt" || true; rm -f "$pj_cnt"
+pj_cc="$(pj_check_counts "${pj_chk_rows-}" "${#PRODUCER_JOIN[@]}" "${pj_chk_drains-}" "$pj_drain_n")"
+[[ -z "$pj_cc" ]] || { PJ_FAIL=1; printf '%s\n' "$pj_cc"; }
 pj_tc="$(pj_check_triples "$pj_tri_n" "$PJ_TRIPLES")"
 [[ -z "$pj_tc" ]] || { PJ_FAIL=1; printf '%s\n' "$pj_tc"; }
 printf '%s' "${pj_joined-}"
-if (( PJ_FAIL == 0 )); then echo "PASS: grep-q-producer-join ($pj_n derived pairs, $pj_tri_n producer triples; $pj_drain_n drains rows verified, $pj_exempt_n exempt rows with a vocabulary reason)"; fi
+if (( PJ_FAIL == 0 )); then echo "PASS: grep-q-producer-join ($pj_n derived pairs, $pj_tri_n producer triples; $pj_chk_drains of $pj_drain_n drains rows verified by the checker, $pj_exempt_n exempt rows with a vocabulary reason, $pj_chk_rows of ${#PRODUCER_JOIN[@]} rows read)"; fi
 (( PJ_FAIL == 0 )) || FAIL=1
 
 # ---- controls over the join's own instruments (each one fails the probe, not the repo) ----
@@ -1911,6 +1925,17 @@ pj_rcc 'with no stdin drain' "$_rmal" "$_rbad"
 pj_rcc 'found 0 stub definitions' "$probe/pj/rc-none.sh | curl | drains | 1 | *"
 pj_tcc '' 5 5
 pj_tcc 'triples and PJ_TRIPLES pins 6' 5 6
+# the row count the checker reports (P1-3): a table read in full reports every row and every drains row; junk or a slice reports fewer
+pj_ccc() { local want="$1" out; out="$(pj_check_counts "$2" "$3" "$4" "$5" 2>&1)" || true
+  if [[ -z "$want" ]]; then [[ -z "$out" ]] || pj_rcfail+="[clean counts printed: ${out:0:60}]"; else [[ "$out" == *"$want"* ]] || pj_rcfail+="[no '$want' for counts that must print it: ${out:0:60}]"; fi; }
+pj_ccc '' 153 153 21 21
+pj_ccc 'looked at 1 of the table' 1 153 21 21
+pj_ccc 'looked at 153 of the table' 153 153 0 21
+pj_ccc 'looked at  of the table' '' 153 '' 21
+printf '%s\n' "$_rok" "$_rbad" "$_rmal" | pj_check_rows "$pj_rcpairs" "$probe/pj/cnt-fx" >/dev/null 2>&1 || true
+[[ "$(<"$probe/pj/cnt-fx")" == "3 2" ]] || pj_rcfail+=("[pj_check_rows reported '$(<"$probe/pj/cnt-fx")' for three rows of which two are well-formed drains rows (want '3 2')]")
+printf '%s\n' junk | pj_check_rows "$pj_rcpairs" "$probe/pj/cnt-fx" >/dev/null 2>&1 || true
+[[ "$(<"$probe/pj/cnt-fx")" == "1 0" ]] || pj_rcfail+=("[pj_check_rows reported '$(<"$probe/pj/cnt-fx")' for one junk row (want '1 0')]")
 [[ -z "$pj_rcfail" ]] \
   || sweep_probe_fail+=("producer-join-verdicts: a verdict did not print for the fixture that must make it print: $pj_rcfail")
 # The stub finder, driven over fixtures built with printf (so no fixture line is a statement of this file).
@@ -2048,12 +2073,14 @@ wire_adj=$(grep -A1 -E '^sweep_main \. "\$SWEEP_FLOOR" \|\| sweep_rc=\$\?[[:spac
 wire_pjn=$(grep -cE '^\[\[ -z "\$pj_j" \]\] \|\| \{ PJ_FAIL=1; ' <<<"$_code" || true)
 wire_pjj=$(grep -cE '^pj_j="\$\(printf .%s\\n. .*[|] pj_judge "\$pj_pairs"\)"[[:space:]]*$' <<<"$_code" || true)
 wire_pjr=$(grep -cE '^\[\[ -z "\$pj_rc" \]\] \|\| \{ PJ_FAIL=1; ' <<<"$_code" || true)
-wire_pjrr=$(grep -cE '^pj_rc="\$\(printf .%s\\n. .*[|] pj_check_rows "\$pj_pairs"\)" \|\| pj_rc_rc=\$\?[[:space:]]*$' <<<"$_code" || true)
+wire_pjrr=$(grep -cE '^pj_rc="\$\(printf .%s\\n. \$\{PRODUCER_JOIN\[@\]\+"\$\{PRODUCER_JOIN\[@\]\}"\} \| pj_check_rows "\$pj_pairs" "\$pj_cnt"\)" \|\| pj_rc_rc=\$\?[[:space:]]*$' <<<"$_code" || true)
+wire_pjc=$(grep -cE '^\[\[ -z "\$pj_cc" \]\] \|\| \{ PJ_FAIL=1; ' <<<"$_code" || true)
+wire_pjcc=$(grep -cE '^pj_cc="\$\(pj_check_counts "\$\{pj_chk_rows-\}" "\$\{#PRODUCER_JOIN\[@\]\}" "\$\{pj_chk_drains-\}" "\$pj_drain_n"\)"[[:space:]]*$' <<<"$_code" || true)
 wire_pjt=$(grep -cE '^\[\[ -z "\$pj_tc" \]\] \|\| \{ PJ_FAIL=1; ' <<<"$_code" || true)
 wire_pjtt=$(grep -cE '^pj_tc="\$\(pj_check_triples "\$pj_tri_n" "\$PJ_TRIPLES"\)"[[:space:]]*$' <<<"$_code" || true)
 wire_pjg=$(grep -cE '^\(\( PJ_FAIL == 0 \)\) \|\| FAIL=1[[:space:]]*$' <<<"$_code" || true)
-[[ "$wire_pjn" == 1 && "$wire_pjj" == 1 && "$wire_pjr" == 1 && "$wire_pjrr" == 1 && "$wire_pjt" == 1 && "$wire_pjtt" == 1 && "$wire_pjg" == 1 ]] \
-  || sweep_probe_fail+=("producer-join-wiring: the pj_judge merge ${wire_pjn:-<err>} and its assignment ${wire_pjj:-<err>}, the row-check merge ${wire_pjr:-<err>} and its assignment ${wire_pjrr:-<err>}, the triple-pin merge ${wire_pjt:-<err>} and its assignment ${wire_pjtt:-<err>}, the column-0 fold into FAIL ${wire_pjg:-<err>} (want 1 each, at column 0)")
+[[ "$wire_pjn" == 1 && "$wire_pjj" == 1 && "$wire_pjr" == 1 && "$wire_pjrr" == 1 && "$wire_pjc" == 1 && "$wire_pjcc" == 1 && "$wire_pjt" == 1 && "$wire_pjtt" == 1 && "$wire_pjg" == 1 ]] \
+  || sweep_probe_fail+=("producer-join-wiring: the pj_judge merge ${wire_pjn:-<err>} and its assignment ${wire_pjj:-<err>}, the row-check merge ${wire_pjr:-<err>} and its assignment, which must feed the whole table and the count file ${wire_pjrr:-<err>}, the row-count merge ${wire_pjc:-<err>} and its assignment ${wire_pjcc:-<err>}, the triple-pin merge ${wire_pjt:-<err>} and its assignment ${wire_pjtt:-<err>}, the column-0 fold into FAIL ${wire_pjg:-<err>} (want 1 each, at column 0)")
 wire_gate=$(grep -cE '^if \(\( \$\{#sweep_probe_fail\[@\]\} == 0 \)\); then[[:space:]]*$' <<<"$_code" || true)
 wire_exit=$(grep -cE '^exit "\$FAIL"[[:space:]]*$' <<<"$_code" || true)
 wire_else=$(grep -B1 -E '[e]cho "FAIL: the derived sweep.s own probe is broken' <<<"$_code" | grep -cE '^  FAIL=1[[:space:]]*$' || true)
