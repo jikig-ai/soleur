@@ -1499,7 +1499,7 @@ pj_f_two="$(pj_defs "$probe/pj/two.sh" curl '-K -' | cut -d' ' -f1 | tr '\n' ' '
   || sweep_probe_fail+=("producer-join-finder-negative: no-drain / drain below the window / drain in a comment / unkeyed drain / cat of a file read as [$pj_f_bad] (want five no)")
 # Edges of the pin, each a fixture that must NOT read as a drain unless stated: a heredoc writer on the opener line of a wildcard-keyed
 # stub (cat > f <<EOF reads the heredoc, which the non-drain pattern excludes), a bare exit ahead of the drain, a token that sits only in a trailing comment, and a window that would reach the next definition.
-_cw='cat > "$d/'   # split so that no line of this file reads as a stub written to .../curl
+_gt='>'; _cw="cat $_gt \"\$d/"   # split so that no line of this file reads as a stub written to .../curl (and no redirect operand appears in text)
 printf '%s\n' "${_cw}curl\" <<'EOF'" 'exit 0' 'EOF' > "$probe/pj/opener.sh"
 printf '%s\n' "${_cw}curl\" <<'EOF'" '[ -t 0 ] || cat >/dev/null' 'EOF' > "$probe/pj/opener-ok.sh"
 printf '%s\n' 'curl() {' '  exit 0' '  case " $* " in *" -K - "*) timeout 2 cat >/dev/null ;; esac' '}' > "$probe/pj/exitfirst.sh"
