@@ -105,7 +105,7 @@ tc_is_protected() {
     soleur-quarantine|soleur-quarantine.*|*.quarantine-meta) return 0 ;;
     tmp|tmp.*) return 0 ;;              # bare mktemp — unattributable, tmpfiles' job
     plan-*|shared-*|vbcr*) return 0 ;;
-    skill-security-scan-*) return 0 ;;  # #6760 deliberate retention
+    skill-security-scan-*) return 0 ;;  # #6760 bounded by the scanner's own startup reap; generic sweepers must not out-race the evidence window
     systemd-private-*) return 0 ;;
     playwright*|node-compile-cache|claude-*) return 0 ;;
     .|..) return 0 ;;
