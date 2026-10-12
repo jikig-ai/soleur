@@ -48,7 +48,7 @@ fail_stub() { printf '#!/bin/sh\necho "%s" >>"%s/called"\nexit 1\n' "$2" "$1" >"
 # --- arm A: live semgrep on PATH → rc 0, no installer invoked --------------
 D="$(mkarm)"; live_semgrep "$D"; fail_stub "$D" brew; fail_stub "$D" pipx
 OUT="$(run_sut "$D" 2>/dev/null)"; RC=$?
-assert "live semgrep: exit 0 and its path printed" "[ $RC -eq 0 ] && printf '%s' \"$OUT\" | grep -q '/semgrep$'"
+assert "live semgrep: exit 0 and its path printed" "[ $RC -eq 0 ] && [[ \"$OUT\" == */semgrep ]]"
 assert "live semgrep: NO installer invoked" "[ ! -f '$D/called' ]"
 
 # --- arm B: dead shim + working brew → installs, re-probes, rc 0 -----------
@@ -61,8 +61,8 @@ assert "dead shim + brew: the post-install re-probe ran --version" "grep -q -- '
 D3="$(mkarm)"; dead_semgrep "$D3"
 ERR="$(run_sut "$D3" 2>&1 >/dev/null)"; RC=$?
 assert "dead shim + no installer: exit 2 (shim reads as absent)" "[ $RC -eq 2 ]"
-assert "dead shim + no installer: diagnostic names the dead shim" "printf '%s' \"$ERR\" | grep -q 'resolves at'"
-assert "dead shim + no installer: points at shim removal, not a missing installer" "printf '%s' \"$ERR\" | grep -qi 'shim'"
+assert "dead shim + no installer: diagnostic names the dead shim" "[[ \"$ERR\" == *'resolves at'* ]]"
+assert "dead shim + no installer: points at shim removal, not a missing installer" "[[ \"$ERR\" == *[Ss]'him'* ]]"
 
 # --- arm D: installer produces a still-dead binary → falls through, rc 1 ---
 D4="$(mkarm)"; dead_semgrep "$D4"
@@ -70,7 +70,7 @@ printf '#!/bin/sh\necho "brew" >>"%s/called"\nexit 0\n' "$D4" >"$D4/brew"; chmod
 fail_stub "$D4" pipx; fail_stub "$D4" python3
 ERR="$(run_sut "$D4" 2>&1 >/dev/null)"; RC=$?
 assert "install-success-but-still-dead: exit 1 (attempted, still dead)" "[ $RC -eq 1 ]"
-assert "install-success-but-still-dead: diagnostic names the dead path" "printf '%s' \"$ERR\" | grep -q 'still does not run'"
+assert "install-success-but-still-dead: diagnostic names the dead path" "[[ \"$ERR\" == *'still does not run'* ]]"
 
 # --- arm E: absent semgrep + working brew → rc 0 (regression) --------------
 D5="$(mkarm)"; install_brew "$D5"
@@ -104,7 +104,7 @@ assert "arm H: re-probe ran the pip-installed binary" "grep -q -- '--version' '$
 D9="$(mkarm)"; dead_semgrep "$D9"; fail_stub "$D9" brew
 ERR="$(run_sut "$D9" 2>&1 >/dev/null)"; RC=$?
 assert "dead shim + brew fails + nothing else: exit 1 (attempted)" "[ $RC -eq 1 ]"
-assert "arm I: rc 1 not rc 2 — an installer WAS attempted" "printf '%s' "$ERR" | grep -q 'still does not run'"
+assert "arm I: rc 1 not rc 2 — an installer WAS attempted" "[[ \"$ERR\" == *'still does not run'* ]]"
 
 echo
 echo "=== ensure-semgrep.test.sh: $PASS passed, $FAIL failed ($TOTAL assertions) ==="
