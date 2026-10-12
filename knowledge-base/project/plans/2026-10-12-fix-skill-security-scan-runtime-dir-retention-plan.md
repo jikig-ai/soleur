@@ -69,8 +69,8 @@ Issue #6760 reported `run-scan.sh` leaking one `skill-security-scan-<pid>` dir
 per invocation on the `XDG_RUNTIME_DIR` tmpfs (7,603 observed) and asked for a
 retention policy rather than a trap. The policy the issue's option (a) names —
 a startup age-reap of older siblings — already shipped on `main` via PR #6828
-(issue #6789, commit `0c9ef2290a`): `run-scan.sh:215-224` reaps
-`skill-security-scan-*` dirs older than `SKILL_SCAN_META_REAP_MIN` (default
+(issue #6789, commit `0c9ef2290a`): the `meta_base` startup reap in
+`run-scan.sh` removes `skill-security-scan-*` dirs older than `SKILL_SCAN_META_REAP_MIN` (default
 10080 min = 7 days, `-user`-scoped, name-filtered) before creating its own
 `meta_dir`, guarded by the registered suite
 `plugins/soleur/skills/skill-security-scan/test/meta-dir-reap.test.sh`
@@ -233,7 +233,7 @@ Three small edits at existing seams, no new machinery:
 - Allocation inventory (verified by `git grep`):
   - `run-scan.sh:30` `mktemp -t skill-scan-input-XXXXXX` — file, `${TMPDIR:-/tmp}`
   - `run-scan.sh:103` `mktemp -dt skill-scan-results-XXXXXX` — dir, same root
-  - `run-scan.sh:226` `mkdir "$meta_base/skill-security-scan-$$"` — dir,
+  - `run-scan.sh:289` `mkdir "$meta_base/skill-security-scan-$$"` — dir,
     `${SKILL_SCAN_META_BASE:-${XDG_RUNTIME_DIR:-/tmp}}` — already reaped
   - `lib.sh:148` `mktemp -t skill-scan-XXXXXX` — file, same scratch root;
     callers append `.code/.fm/.body/.req/.resp` siblings — all match
@@ -297,23 +297,22 @@ Three small edits at existing seams, no new machinery:
 
 ## Technical Considerations
 
-- **`find` predicate grouping.** Two `-name` alternatives require the
-  grouped form `\( -name A -o -name B \)` — `X -o Y -exec` binds the
-  `-exec` to `Y` only, which would run the delete on just one arm. The
-  `! -path` exclusions sit outside the group; `rm -rf` handles both files
-  and dirs so no `-type` split is needed.
+- **`find` predicate grouping.** Three `-name` alternatives require the
+  grouped form `\( -name A -o -name B -o -name C \)` — `X -o Y -exec` binds
+  the `-exec` to `Y` only, which would run the delete on just one arm. The
+  `! -samefile` exclusions sit outside the group (via the `_excl` array);
+  `rm -rf` handles both files and dirs so no `-type` split is needed.
 - **Own-scratch predates the reap — the asymmetry the shipped block does
   not have.** The shipped meta reap is safe-by-construction because
   `meta_dir` is created *after* it runs; `INPUT` (line ~30) and
-  `results_dir` (line ~103) are created *before*. Under the shipped floor
-  (10080 min) a fresh own-scratch entry is never a candidate, but under a
-  pathological low `SKILL_SCAN_META_REAP_MIN` (the test seam uses `0`) a
-  scan whose five category checks take ≥ 1 min (e.g. slow OSV calls in
-  `check-supply-chain.sh`) would reap its own live scratch mid-run. The
-  `! -samefile` exclusions close exactly that window (inode compare —
-  `-path` string equality is defeated by relative/glob spellings);
-  a concurrent sibling's scratch carries the same accepted
-  exposure the shipped reap already has for meta dirs.
+  `results_dir` (line ~103) are created *before*. A positional INPUT can
+  carry an mtime far older than any floor (a stale file is a legitimate
+  scan target), so own-scratch is otherwise a reap candidate the meta
+  block never faced. The `! -samefile` exclusions close exactly that
+  window (inode compare — `-path` string equality is defeated by
+  relative/glob spellings); a concurrent sibling's scratch carries the
+  same accepted exposure the shipped reap already has for meta dirs, now
+  bounded by the shared 60-minute floor clamp.
 - **Two roots, not one.** Meta dirs live in
   `${SKILL_SCAN_META_BASE:-${XDG_RUNTIME_DIR:-/tmp}}`; scratch lives in
   `${TMPDIR:-/tmp}`. The sweeps run over both roots independently; when they
@@ -332,7 +331,7 @@ Three small edits at existing seams, no new machinery:
   and the same shape as `scripts/tmpfs-guard.sh`'s reaper candidate scan
   (`find … -mindepth 1 -maxdepth 1 -user "$uid" -mmin "+${age_min}"`). The
   only novel elements are the grouped `-o` name pair (precedent shape:
-  `\( A -o B \)` is the canonical `find` grouping) and the `! -path`
+  `\( A -o B \)` is the canonical `find` grouping) and the `! -samefile`
   exclusions (no precedent needed — inode-exclusion of own-scratch is new
   because the scratch family is the first whose allocations predate the
   reap).
@@ -499,7 +498,7 @@ the predicate enumerates.
 | 3 | Invert the age gate (`-mmin "+X"` → `-mmin "-X"`) — fresh fixtures get reaped | RED |
 | 4 | Drop `-user "$(id -u)"` — the source-anchor arm fails | RED |
 | 5 | Remove `-name` filter entirely — the unrelated-dir fixture gets reaped | RED |
-| 6 | Drop the `! -path` exclusions — the source-anchor arm fails (the floor=0 own-scratch window reopens) | RED |
+| 6 | Drop the `! -samefile` exclusions — the source-anchor arm fails and the backdated-positional-INPUT arm reaps the victim | RED |
 | 7 | Suite-side: delete the positive-control arm — a dead regex must not green vacuously | RED |
 | 8 | A recent `skill-scan-results-*` dir is present (must-PASS input, not the canonical old-dir shape) | PASS |
 
@@ -545,13 +544,13 @@ glob superset (all paths are `.sh`/`.md` under `plugins/soleur/`).
 
 - [ ] `run-scan.sh` reaps `skill-scan-*` entries (files and dirs) older than
   `_reap_min` under `${TMPDIR:-/tmp}` at startup, uid-scoped
-  (`-user "$(id -u)"`), with the same `2>/dev/null || true` tolerance as the
-  existing sweep
+  (`-user "$(id -u)"`), with `2>/dev/null` tolerance of rm races and a
+  stderr warn on failure (matching the existing sweep's shape)
 - [ ] The same sweep's `-o` arm reaps `skill-security-scan-*` dirs under
   `${TMPDIR:-/tmp}` (XDG-toggle crossover) at the same floor, while the
   shipped meta-base sweep is unchanged
 - [ ] The sweep excludes the current run's own `$INPUT` and `$results_dir`
-  (`! -path` exclusions present in the live code)
+  (`! -samefile` exclusions present in the live code)
 - [ ] Entries matching the swept patterns but younger than the floor are not
   reaped; entries matching neither `skill-scan-*` nor
   `skill-security-scan-*` are never reaped

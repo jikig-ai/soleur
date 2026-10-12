@@ -89,7 +89,8 @@ next invocation, and the same knob bounds a sibling sweep under
 `skill-security-scan-*` crossover dirs, and `sss-write.*.err` hook captures
 (#6789, #6760). One knob, two scopes: shrinking it shrinks BOTH the Art. 32
 evidence window and the scratch floor — and both sweeps clamp to a 60-minute
-minimum because a lower floor can reap a concurrent scan's live scratch.
+minimum because a lower floor can reap a concurrent scan's live scratch or
+live meta dir.
 The dir is deliberately NOT EXIT-trap-cleaned: the override flow reads the
 path after the scan exits.
 

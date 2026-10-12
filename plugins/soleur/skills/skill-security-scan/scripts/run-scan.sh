@@ -213,11 +213,12 @@ meta_base="${SKILL_SCAN_META_BASE:-${XDG_RUNTIME_DIR:-/tmp}}"
 # ($XDG_RUNTIME_DIR is cleared on logout regardless), out of scope here.
 # SKILL_SCAN_META_REAP_MIN overrides the floor (minutes). Non-numeric values
 # fall back to the default rather than silently disabling BOTH reaps below;
-# `10#` normalizes leading zeros — unnormalized they crash bash arithmetic
-# (octal: `08` -> "value too great for base") and diverge from find's
-# decimal `-mmin` parse.
+# `10#` normalizes leading zeros — unnormalized, the expansion error on
+# `08`/`09` silently strands the literal string (the `||` fallback and the
+# clamp both skip on arithmetic error), so find reads an octal-legal floor
+# BELOW the 60-minute minimum.
 _reap_min="${SKILL_SCAN_META_REAP_MIN:-10080}"
-[[ "$_reap_min" =~ ^[0-9]+$ ]] && _reap_min=$((10#${_reap_min})) || _reap_min=10080
+[[ "$_reap_min" =~ ^[0-9]{1,9}$ ]] && _reap_min=$((10#${_reap_min})) || _reap_min=10080
 # Both sweeps clamp to >=60 minutes: `-mmin "+0"` matches ANY past mtime,
 # so a pathological or test-seam floor below an hour reaps a CONCURRENT
 # scan's live scratch and meta dir — the exclusions below cover only this
@@ -256,20 +257,26 @@ fi
 # reap: INPUT and results_dir are created BEFORE this reap (meta_dir is
 # created after), so this run's own live scratch is otherwise a candidate —
 # a positional INPUT can carry an mtime far older than any floor (a stale
-# file is a legitimate scan target) and a >60-min scan ages results_dir past
-# the clamp. `-samefile` (inode compare), never `-path` (literal/fnmatch
-# string compare): a relative or glob-shaped INPUT spelling defeats string
-# equality and could rm -rf the very file the operator asked to scan. The
-# `[ -e ]` gates skip an exclusion whose referent died mid-scan — a dead
-# -samefile operand would error the whole find into a silent no-op.
+# file is a legitimate scan target); results_dir's mtime is refreshed by
+# aggregation writes right before this reap, so its exclusion covers only
+# stalls/suspension between creation and this point — belt-and-suspenders
+# for the same self-reap class. `-samefile` (inode compare), never `-path`
+# (literal/fnmatch string compare): a relative or glob-shaped INPUT spelling
+# defeats string equality and could rm -rf the very file the operator asked
+# to scan. The `[ -e ]` gates skip an exclusion whose referent died or
+# became unstatable mid-scan — a dead -samefile operand would error the
+# whole find (now a warn, not a silent no-op).
 #
 # Residual surfaces, accepted: a PEER's live input named like a family
 # member under TMPDIR is indistinguishable from an orphan by age (do not
 # name scan targets skill-scan-*/sss-write.* inside TMPDIR); a same-uid
 # bind/FUSE mount inside a family-named dir is descended by rm -rf (same-uid
 # blast radius — find's -mount is a no-op at maxdepth 1 and cannot reach
-# rm's own recursion); BusyBox find lacking -samefile/-mmin warns and skips
-# rather than sweeping.
+# rm's own recursion); a family-named symlink entry loses the link, never
+# its target; a find build without -samefile/-mmin (a stripped BusyBox
+# config — both are default-on features upstream — or heirloom) warns and
+# skips rather than sweeping; an unreachable base canonicalizes to empty
+# and skips silently (nothing reapable there anyway).
 _excl=()
 [ -e "$INPUT" ] && _excl+=("!" -samefile "$INPUT")
 [ -e "$results_dir" ] && _excl+=("!" -samefile "$results_dir")

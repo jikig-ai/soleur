@@ -92,8 +92,9 @@ else
 fi
 
 # --- Arm 4: the reap NEVER removes the current run's own dir ----------------
-# Even with an aggressively low floor (0 minutes → everything is "old"), the
-# run's own dir is created AFTER the reap, so its artifact must survive.
+# Even with an aggressively low floor (0 minutes — still clamped to 60, but
+# the own-dir guarantee is independent of the floor), the run's own dir is
+# created AFTER the reap, so its artifact must survive.
 out="$(run_scan 0)"
 meta_path="$(sed -n 's/^\.scan-meta\.json written to: //p' <<<"$out" | head -1)"
 if [[ -n "$meta_path" && -f "$meta_path" ]]; then
@@ -293,8 +294,14 @@ fi
 
 # --- Arm 18: a non-numeric or octal floor never crashes the scan -------------
 # The knob falls back on garbage and `10#`-normalizes leading zeros — either
-# bug aborts the script under set -e BEFORE the meta line is emitted (a gate
-# deny for every scanned write, on a benign env typo).
+# bug abandons the scan or silently bypasses the 60-min clamp BEFORE the meta
+# line is emitted (a gate deny for every scanned write, on a benign env typo).
+# The `08` fixture is discriminating, not just no-crash: a 30-min entry sits
+# between the octal-legal floor (8) and the clamp (60) — under an unnormalized
+# `08` the expansion error strands _reap_min as the literal "08" (find reads
+# floor 8 → fixture reaped); normalized it clamps to 60 → fixture spared.
+knob_fixture="$SCRATCH/skill-scan-input-999109"
+echo x > "$knob_fixture"; touch -d "-30 minutes" "$knob_fixture"
 for knob in abc 08; do
   out="$(run_scan_tmp "$knob")"
   if sed -n 's/^\.scan-meta\.json written to: //p' <<<"$out" | grep -q .; then
@@ -303,6 +310,23 @@ for knob in abc 08; do
     bad "SKILL_SCAN_META_REAP_MIN=$knob crashed the scan before meta write"
   fi
 done
+if [[ -e "$knob_fixture" ]]; then
+  ok "an octal-legal knob is normalised before the clamp (08 -> 8 -> floor 60)"
+else
+  bad "knob 08 bypassed the 60-min clamp — 10# normalization missing"
+fi
+
+# --- Arm 18b: the meta sweep's clamp is pinned too ----------------------------
+# A fresh meta sibling under floor-0 survives only because _reap_min clamps
+# before BOTH finds — a scratch-only clamp mutant reaps it.
+fresh_meta="$META_BASE/skill-security-scan-999110"
+mkdir -p "$fresh_meta"; echo '{}' > "$fresh_meta/.scan-meta.json"
+run_scan 0 >/dev/null
+if [[ -d "$fresh_meta" ]]; then
+  ok "the 60-minute clamp also covers the meta_dir reap (fresh sibling spared)"
+else
+  bad "the meta reap ran unclamped — a peer's live meta_dir is wipeable"
+fi
 
 # --- Arm 19: source anchors for the scratch sweep ---------------------------
 # Pin the load-bearing predicates on the live code (cq-assert-anchor-not-bare-
@@ -327,12 +351,26 @@ for anchor in '-mindepth 1 -maxdepth 1' '-mmin' '-user "$(id -u)"'; do
     bad "the TMPDIR sweep is missing predicate: $anchor"
   fi
 done
-for anchor in 'pwd -P' '10#' '-e "$INPUT"' '-e "$results_dir"' \
+# The `10#` token is pinned in its code spelling — a bare `10#` grep would
+# match its own mention in the reap comments (anchor laundering; the same
+# trap arm 5's comment-strip guards against).
+for anchor in 'pwd -P' '10#${_reap_min}' '-e "$INPUT"' '-e "$results_dir"' \
               '-samefile "$INPUT"' '-samefile "$results_dir"'; do
   if grep -qF -- "$anchor" "$SCRIPT_DIR/../scripts/run-scan.sh"; then
     ok "the reap block pins: $anchor"
   else
     bad "the reap block is missing: $anchor"
+  fi
+done
+# Meta-side predicates get the same anchor treatment (an `-amin` mutation is
+# behaviorally invisible under touch -d's atime≈mtime).
+meta_find="$(grep -vE '^[[:space:]]*#' "$SCRIPT_DIR/../scripts/run-scan.sh" \
+  | grep -A6 'meta_root=')"
+for anchor in '-mmin' '-type d' '-user "$(id -u)"'; do
+  if grep -qF -- "$anchor" <<<"$meta_find"; then
+    ok "the meta reap pins: $anchor"
+  else
+    bad "the meta reap is missing predicate: $anchor"
   fi
 done
 # Producer-prefix pin: every `mktemp -t`/`-dt` template under the skill's
@@ -351,7 +389,7 @@ fi
 # construction in the write-hook, outside scripts/ — a rename there orphans
 # the family while every arm above stays green.
 hook_producer="$(git rev-parse --show-toplevel)/.claude/hooks/skill-security-scan-write.sh"
-if grep -qE 'TMPDIR:-/tmp[^/]*/sss-write\.' "$hook_producer"; then
+if grep -qE 'TMPDIR:-/tmp[^/]*/sss-write\.[^"]*\.err' "$hook_producer"; then
   ok "the write-hook's sss-write.* capture stays inside the sweep window"
 else
   bad "the sss-write producer moved or renamed — sweep coverage silently lost"
