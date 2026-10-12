@@ -23,7 +23,7 @@ Issue: #10045 · Lane: cross-domain (fail-closed default — no spec.md existed)
 ## Phase 2 — Reader change (ci-deploy.sh)
 
 - [x] 2.1 `_canary_kdeny_read` journal rung: `timeout -k 1 3 sudo -n /usr/bin/journalctl -k -n 400
-      --since=-5min --no-pager -o cat` first; on sudo denial (rc≠0 + `sudo:`-prefixed line in
+      --since=-5min --no-pager -o cat` first; on sudo denial (rc≠0 + denial phrase + every non-blank line `sudo:`/`Sorry,`-prefixed in
       captured output + zero kernel lines) fall back to the existing unprivileged read. Verify the
       sudo-rs denial text on a web host before pinning fixture strings (plan Phase-2 note).
 - [x] 2.2 Update the function header comment (grant + fallback contract); re-scope the
@@ -32,7 +32,7 @@ Issue: #10045 · Lane: cross-domain (fail-closed default — no spec.md existed)
 ## Phase 3 — Tests
 
 - [x] 3.1 `ci-deploy.test.sh`: `sudo` PATH-mock asserting argv `-n /usr/bin/journalctl -k -n 400
-      --since=-5min --no-pager -o cat` then exec'ing the journalctl mock; `MOCK_SUDO_DENY=1` emits
+      --since=-5min --no-pager -o cat` then exec'ing the journalctl mock; `MOCK_SUDO_DENY=rs|gnu` emits
       the denial on **stderr** rc 1. Fixtures: grant+journal answers; grant+silent-empty;
       denied→`noaccess` fallback; accepted-sudo+root-journalctl-failure → `error` (no re-fallback);
       dmesg rung unchanged.

@@ -1727,21 +1727,27 @@ _canary_kdeny_read() {
     if [[ "$rung" == journal ]]; then
       raw="$(timeout -k 1 3 sudo -n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat 2>&1 | tac | head -c 65536; exit "${PIPESTATUS[0]}")" || rc=$?
       # Sudo's OWN denial signature — the #10045 grant has not landed on this host: non-zero
-      # rc, at least one denial-class line, and NO non-blank line outside that class. The
-      # class is BOTH fleet shapes: sudo-rs' `sudo:`-prefixed denial (the recorded
-      # `sudo: deploy : command not allowed`) and GNU sudo's `Sorry, user deploy is not
-      # allowed to execute …` (unprefixed — the shape infra-config-apply.sh:742's matcher
-      # already enumerates). Only that exact shape falls back to the pre-grant unprivileged
-      # read; a run sudo ACCEPTED classifies through the machine below (journalctl-under-root
-      # failure is a real error, never a grant-absence).
-      if (( rc != 0 )) && grep -qE '^(sudo:|Sorry,)' <<<"$raw" && ! grep -qvE '^(sudo:|Sorry,|[[:space:]]*$)' <<<"$raw"; then
+      # rc, at least one RECOGNIZED denial phrase (so a bare `sudo:` warning like
+      # `sudo: unable to resolve host` on an accepted-but-failed run cannot masquerade as a
+      # denial), and NO non-blank line outside the denial class. The class is BOTH fleet
+      # shapes: sudo-rs' `sudo:`-prefixed denial (the recorded `sudo: deploy : command not
+      # allowed`) and GNU sudo's `Sorry, user deploy is not allowed to execute …` (unprefixed —
+      # the shape infra-config-apply.sh:742's matcher already enumerates). Only that exact
+      # shape falls back to the pre-grant unprivileged read; a run sudo ACCEPTED classifies
+      # through the machine below (journalctl-under-root failure is a real error, never a
+      # grant-absence).
+      if (( rc != 0 )) \
+        && grep -qE '^(sudo:|Sorry,)' <<<"$raw" \
+        && grep -qE 'Sorry,|command not allowed|password is required|not allowed to execute|may not run|is not in the sudoers file' <<<"$raw" \
+        && ! grep -qvE '^(sudo:|Sorry,|[[:space:]]*$)' <<<"$raw"; then
         rc=0
         raw="$(timeout -k 1 3 journalctl -k -n 400 --since=-5min --no-pager -o cat 2>&1 | tac | head -c 65536; exit "${PIPESTATUS[0]}")" || rc=$?
       fi
       # sudo's own diagnostics (`sudo: unable to resolve host`, `sudo:`-prefixed warnings on
       # an ACCEPTED run) merged into `raw` via 2>&1: strip them before classification so a
-      # warning line cannot count as a journal line (`empty` misread as `ok`) or satisfy the
-      # denial shape on a real tool failure. A kernel line cannot carry the `sudo:` prefix.
+      # warning line cannot count as a journal line (`empty` misread as `ok`). A kernel line
+      # cannot carry the `sudo:` prefix. (Denials are not affected — this strip runs after
+      # the signature check, and the denial arm reassigns raw wholesale anyway.)
       raw="$(printf '%s\n' "$raw" | grep -v '^sudo:' || true)"
     else
       raw="$(timeout -k 1 3 dmesg 2>&1 | tail -n 400 | tac | head -c 65536; exit "${PIPESTATUS[0]}")" || rc=$?

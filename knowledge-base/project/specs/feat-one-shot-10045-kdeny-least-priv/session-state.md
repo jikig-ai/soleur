@@ -17,3 +17,34 @@
 ### Components Invoked
 - `soleur:plan` — SKILL.md read and run inline to completion: cloud-detect, premise validation, minimality/value gates, skeleton checkpoint, sequential research, gates (user-brand/GDPR/IaC/observability/ADR/encryption/guard-contract), SpecFlow, sharp-edges read, inline plan-review (`Reviewed-Coverage: sequential-fallback`), tasks.md + decision-challenges.md saved, commit + push (`8d96eef506`).
 - `soleur:deepen-plan` — SKILL.md read and run inline: all halt gates (4.6–4.12, 4.45 verify-the-negative, 4.55), Phase 4.5 network deep-dive + telemetry; committed and pushed (`3094f935a5`).
+
+---
+
+## Review record (2026-10-11, resumed 2026-10-12)
+
+**Panel (9 spawned, 8 agent + shellcheck deterministic):** classified `code`, tier `none` (plan's
+sensitive-path scope-out honored), design-risk no. PANEL_SHA `9005da4048` (post-rebase onto
+`cddc15da8d`; conflict in `server.tf` resolved keeping both sides, force-pushed).
+
+Dedup ledger (~20 raw → 16 unique + 4 skips):
+
+| defect | seats | severity | disposition |
+|---|---|---|---|
+| `^sudo:`-only denial signature misses GNU `Sorry,` shape (dead fallback → j=error) | test-design, code-quality (P1); git-history, pattern (P2) | P1 | FIXED: `^(sudo:\|Sorry,)` class + phrase requirement + mock pins both recorded bodies (rs/gnu) |
+| Guard-1 census covers only `Cmnd_Alias` form | struct-enum (P1); security, test-design (P3) | P1 | FIXED: journalctl-mention totality==1 + anchored grant lines + no-include assert |
+| accepted-run `sudo:` stderr pollutes counted stream | security (P3) | P3 | FIXED: post-check `^sudo:` strip + MOCK_SUDO_WARN fixtures (k6/k7) |
+| d10g same-line smuggle / suffix-drift / kern boundary blind spots | struct-enum (P2/P3), architecture (P3) | P2 | FIXED: strip-first + widened boundary + suffix residual rule + SMUGGLE/SUFFIX/HELPERF fixtures |
+| mock pins wrong denial subclass | pattern, test-design, code-quality | P2 | FIXED: rs=recorded fleet emission, gnu=sibling fixture shape; unknown value fails loud |
+| test tightness (SJ anchor, KD==1, dead disjuncts, comment-strip, spacing) | test-design, code-quality | P3 | FIXED |
+| plan/doc precision (paths: claim, eleven aliases, dmesg_restrict, FILE_MAP comment, "has LANDED", runbook wording) | git-history, pattern, architecture, struct-enum | P3 | FIXED |
+
+**Fix round 1** (fix-range review over `9005da4048..1366a35ecf`, 8 seats resumed): all prior findings
+CLOSED; two new P2s — un-ratcheted `CI_DEPLOY_ASSERT_FLOOR` (609 → 618 measured) and the `^sudo:`
+strip shipping without fixtures (added MOCK_SUDO_WARN + D10k6/k7); plus micro-hardening
+(include-whitespace, suffix boundary, rule-2b-only fixture, phrase requirement against the
+warning-masquerade edge, stale `MOCK_SUDO_DENY=1` doc strings).
+
+**Verified:** ci-deploy.test.sh 616/616 (round 1), cloud-init 250/250 (floor 173), handler 59/59,
+terraform validate OK, visudo -cf OK, shellcheck clean.
+
+Remaining: round-2 suite re-verify → review summary/trailer → qa → compound → ship.

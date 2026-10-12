@@ -259,10 +259,10 @@ assert "KDENY_KERNEL_STREAM alias defined in the sudoers source" \
   "grep -qE '^Cmnd_Alias KDENY_KERNEL_STREAM = ' '$SUDOERS_SRC'"
 assert "KDENY grant line is the ANCHORED whole line for deploy (no appended commands hide in the substring)" \
   "grep -qxF 'deploy ALL=(root) NOPASSWD: KDENY_KERNEL_STREAM' '$SUDOERS_SRC'"
-assert "exactly ONE non-comment line in the sudoers source names journalctl at all — a direct grant, a space-less alias, or an appended command cannot hide a wider argv" \
+assert "exactly ONE non-comment line in the sudoers source names journalctl at all — a direct grant, a space-less alias, an appended command, or an include directive cannot hide a wider argv" \
   "(( \$(grep -vE '^[[:space:]]*#|^[[:space:]]*$' '$SUDOERS_SRC' | grep -cF journalctl) == 1 ))"
 assert "the sudoers source carries no include directive that could pull a grant from outside the file" \
-  "! grep -qE '^[@#]include' '$SUDOERS_SRC'"
+  "! grep -qE '^[[:space:]]*[@#]include' '$SUDOERS_SRC'"
 assert "the alias argv (first-= split) is identical across the sudoers source and the cloud-init inline copy, and is the pinned grant argv" \
   "[[ \"\$KDENY_ALIAS_SRC\" == \"\$KDENY_ARGV\" && \"\$KDENY_ALIAS_CI\" == \"\$KDENY_ARGV\" ]]"
 assert "the cloud-init inline copy carries the ANCHORED grant line for deploy" \

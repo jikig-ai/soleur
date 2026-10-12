@@ -199,7 +199,7 @@ invocation emits a `sudo: deploy : … COMMAND=` record into the same journal �
 `_canary_kdeny_read` changes minimally: the journal rung first attempts
 `timeout -k 1 3 sudo -n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat` (`timeout`
 stays outside sudo — the escalated argv is journalctl alone); when sudo itself denies (its own
-`sudo:`-prefixed stderr class — "a password is required" / "not allowed to execute"), the rung
+`sudo:`/`Sorry,`-prefixed stderr class — `sudo: deploy : command not allowed` (sudo-rs, recorded) / `Sorry, user … not allowed to execute` (GNU)), the rung
 falls back to today's unprivileged `journalctl` read, preserving the current `noaccess`/`empty`
 semantics during the delivery window or on a host that predates the grant. A journalctl-under-root
 failure (rc≠0 after sudo accepted the argv) classifies through the existing state machine — under
@@ -331,11 +331,11 @@ deliver this file on every sudoers edit).
 
 5. `_canary_kdeny_read` journal rung: attempt the `sudo -n` form first; on a sudo-denial
    signature run the existing unprivileged `journalctl` read unchanged. The denial discriminator
-   is **sudo's own error channel**: non-zero rc AND captured output carrying a `sudo:`-prefixed
-   line (the class covering "a password is required" / "not allowed to execute" / "a terminal is
+   is **sudo's own error channel**: non-zero rc AND a recognized denial phrase AND captured output carrying only `sudo:`/`Sorry,`-prefixed
+   lines (the class covering `command not allowed` / "not allowed to execute" / "a terminal is
    required") AND zero kernel lines — never journalctl's own output shape. Implementation note:
    verify the exact denial text sudo-rs emits on a web host (sudo-rs phrasing differs from GNU
-   sudo; confirm the denial lands as a `sudo:`-prefixed line) and pin the observed forms in the
+   sudo; the recorded fleet emission `sudo: deploy : command not allowed` (sudo-rs) plus the GNU `Sorry,` shape were pinned in the
    fixture — match by the tool's own prefix, not a hardcoded sentence. Keep `2>&1` semantics, the
    `tac` / `head -c 65536` newest-first bounds, and all counters identical for either path. A
    journalctl run that sudo *accepted* (no `sudo:` denial line) classifies through the existing
@@ -348,7 +348,7 @@ deliver this file on every sudoers edit).
 
 7. `ci-deploy.test.sh`: extend the kdeny mock harness — a `sudo` mock that validates argv is
    exactly `-n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat` then execs the
-   journalctl mock; a `MOCK_SUDO_DENY=1` knob emitting the denial to **stderr** with rc 1 (the
+   journalctl mock; a `MOCK_SUDO_DENY=rs|gnu` knob emitting the denial to **stderr** with rc 1 (the
    stderr-channel lesson). New fixtures: grant present+journal answers (`src=journal j=ok`),
    grant present+journal silent-empty (`j=empty`, then dmesg), grant denied (`sudo:` stderr)
    → fallback produces today's `noaccess`/`empty` shapes, denial-vs-journalctl-error
@@ -701,7 +701,7 @@ No other open code-review issue bodies name a planned file.
 - **(unit)** Given a `sudo` mock granting the pinned argv and a journalctl mock printing an
   anchored AppArmor mount-denial, when `_canary_kdeny_read` runs, then `src=journal j=ok` with
   `hits`/`mproc` counted and `d=skip`.
-- **(unit)** Given `MOCK_SUDO_DENY=1` (stderr `sudo: a password is required`, rc 1) and a
+- **(unit)** Given `MOCK_SUDO_DENY=rs|gnu` (stderr denial body, rc 1) and a
   permission-denied unprivileged journalctl, when the read runs, then `j=noaccess` — the
   pre-grant contract, not `error`.
 - **(unit)** Given sudo accepts but journalctl-under-root exits rc 1 with no kernel lines and no

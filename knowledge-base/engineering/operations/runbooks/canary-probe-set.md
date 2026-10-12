@@ -245,7 +245,7 @@ H1 is excluded only when `caps` is `bwrap=none`; `done` must read `exec_rc=0` fi
 
 ### Reading `kdeny`
 
-The journal rung reads through a fixed-argv sudoers grant (#10045, `KDENY_KERNEL_STREAM`: `sudo -n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat`, `timeout` outside sudo), so on a grant-bearing host the expected reading is `src=journal j=ok` — every granted read writes a `sudo: deploy : ... COMMAND=` audit record into the same journal. On a host without the grant (rollout window, stale birth) sudo's own `sudo:`-prefixed denial signature falls back to the pre-grant unprivileged read — `noaccess`/`empty` there is the old degraded contract, not a new failure class. "Could not read" is a different fact from "read it, nothing there". The row names which, per rung (`j=` journal, `d=` dmesg; `d=skip` when the journal answered):
+The journal rung reads through a fixed-argv sudoers grant (#10045, `KDENY_KERNEL_STREAM`: `sudo -n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat`, `timeout` outside sudo), so on a grant-bearing host the expected reading is `src=journal j=ok` — every granted read writes a `sudo: deploy : ... COMMAND=` audit record into the same journal. On a host without the grant (rollout window, stale birth) sudo's own denial signature — `sudo:`-prefixed (sudo-rs) or `Sorry,`-prefixed (GNU) — falls back to the pre-grant unprivileged read — `noaccess`/`empty` there is the old degraded contract, not a new failure class. "Could not read" is a different fact from "read it, nothing there". The row names which, per rung (`j=` journal, `d=` dmesg; `d=skip` when the journal answered):
 
 | state | meaning |
 |---|---|

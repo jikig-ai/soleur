@@ -170,24 +170,34 @@ MOCK
 #                     `Sorry, user deploy is not allowed to execute ...`, the same body
 #                     infra-config-apply.test.sh:842 models and infra-config-apply.sh:742's
 #                     matcher enumerates.
+#   MOCK_SUDO_WARN=1  an ACCEPTED run also emits a `sudo:`-prefixed WARNING on stderr (the
+#                     `sudo: unable to resolve host` class, real on minimal cloud images) —
+#                     merged into the reader's 2>&1 capture to exercise the post-check strip:
+#                     a warning must never count as a journal line (`empty` misread as `ok`),
+#                     and must never masquerade as a denial (it carries no denial PHRASE).
 create_mock_sudo() {
   cat > "$1/sudo" << 'MOCK'
 #!/bin/bash
 if [[ -n "${MOCK_SUDO_LOG:-}" ]]; then printf '%s\n' "$*" >> "$MOCK_SUDO_LOG"; fi
 if [[ " $* " == *" journalctl "* || " $* " == *"/journalctl "* ]]; then
-  if [[ "${MOCK_SUDO_DENY:-}" == "rs" ]]; then
+  if [[ -n "${MOCK_SUDO_DENY:-}" ]]; then
     if [[ -n "${MOCK_SUDO_LOG:-}" ]]; then printf 'DENY\n' >> "$MOCK_SUDO_LOG"; fi
-    echo 'sudo: deploy : command not allowed' >&2
-    exit 1
-  fi
-  if [[ "${MOCK_SUDO_DENY:-}" == "gnu" ]]; then
-    if [[ -n "${MOCK_SUDO_LOG:-}" ]]; then printf 'DENY\n' >> "$MOCK_SUDO_LOG"; fi
-    echo "Sorry, user deploy is not allowed to execute '/usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat' as root on soleur-web-platform." >&2
+    case "$MOCK_SUDO_DENY" in
+      rs)  echo 'sudo: deploy : command not allowed' >&2 ;;
+      gnu) echo "Sorry, user deploy is not allowed to execute '/usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat' as root on soleur-web-platform." >&2 ;;
+      *)   echo "sudo mock: unrecognized MOCK_SUDO_DENY value '$MOCK_SUDO_DENY' — the knob set is {rs, gnu}; an unrecognized value must be LOUD, not silently grant-present" >&2; exit 70 ;;
+    esac
     exit 1
   fi
   if [[ "$*" != "-n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat" ]]; then
     echo "sudo mock: refusing a journalctl argv that is not the pinned KDENY_KERNEL_STREAM grant: $*" >&2
     exit 64
+  fi
+  # Accepted run: MOCK_SUDO_WARN emits sudo's own warning on stderr — real warnx class, no
+  # denial phrase (it must never satisfy the fallback signature, and the post-check strip
+  # must keep it out of the counted stream).
+  if [[ "${MOCK_SUDO_WARN:-}" == "1" ]]; then
+    echo 'sudo: unable to resolve host soleur-web-platform: Temporary failure in name resolution' >&2
   fi
 fi
 # Skip sudo flags (-n, --preserve-env=..., -E, etc.)
@@ -4447,7 +4457,7 @@ d10g_flags() {  # <region-text>: prints every violation, nothing when clean
   # the pinned literal must terminate the granted argv: whatever follows it on its own line is
   # the ` 2>&1` capture and nothing else — an appended flag (`-u sshd`, `-f`) or a second
   # command smuggled behind it leaves a non-conforming residual.
-  out+=$(grep -F "$D10G_PRIV" <<<"$code" | sed "s|.*$D10G_PRIV_RE||" | grep -vE '^ 2>&1' || true)
+  out+=$(grep -F "$D10G_PRIV" <<<"$code" | sed "s|.*$D10G_PRIV_RE||" | grep -vE '^ 2>&1([[:space:]]|$)' || true)
   printf '%s' "$out"
 }
 D10G_CLEAN='  r="$(timeout -k 1 3 journalctl -k -n 400 --since=-5min --no-pager -o cat 2>&1 | tac | head -c 65536; exit "${PIPESTATUS[0]}")"'
@@ -4463,13 +4473,18 @@ D10G_SUDODMESG='  x=$(timeout -k 1 3 sudo -n /usr/bin/dmesg | tail -n 400)'
 D10G_PRIVFOLLOW='  x=$(timeout -k 1 3 sudo -n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat -f | head -c 9)'
 D10G_SMUGGLE='  x=$(timeout -k 1 3 sudo -n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat 2>&1); y=$(dmesg)'
 D10G_SUFFIX='  x=$(timeout -k 1 3 sudo -n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat -u sshd 2>&1 | head -c 9)'
+# journalctl-helper is a substring collision: `-` is not a kern trailing boundary, so the name
+# is invisible to rules 1/2 and invisible to the sudo and suffix rules — it is the lone fixture
+# proving the follow-flag-on-any-journalctl-line ban on its own (PRIVFOLLOW trips two rules).
+D10G_HELPERF='  x=$(journalctl-helper -f | head -c 9)'
 D10G_NOFOLLOW='  x=$(timeout -k 1 3 dmesg -w | head -c 9)'
 D10G_NOVARLOG='  x=$(timeout -k 1 3 cat /var/log/audit/audit.log | head -c 9)'
 D10G_NOTIMEOUT='  x=$(dmesg | tail -n 400)'
 diag_check "#9860 D10g control: the census predicate flags a sudo'd read OUTSIDE the pinned grant, a drifted grant argv, a sudo'd dmesg, a follow flag inside the granted argv, a second read smuggled onto the pinned line, a trailing argv drift, a -w read, a /var/log read and an unbounded dmesg, and passes BOTH compliant shapes" \
   "$([[ -n "$(d10g_flags "$D10G_NOSUDO")" && -n "$(d10g_flags "$D10G_SUDODRIFT")" && -n "$(d10g_flags "$D10G_SUDODMESG")" && -n "$(d10g_flags "$D10G_PRIVFOLLOW")" && -n "$(d10g_flags "$D10G_SMUGGLE")" && -n "$(d10g_flags "$D10G_SUFFIX")" && -n "$(d10g_flags "$D10G_NOFOLLOW")" && -n "$(d10g_flags "$D10G_NOVARLOG")" && -n "$(d10g_flags "$D10G_NOTIMEOUT")" \
+      && -n "$(d10g_flags "$D10G_HELPERF")" \
       && -z "$(d10g_flags "$D10G_CLEAN")" && -z "$(d10g_flags "$D10G_CLEAN_PRIV")" ]] && echo 0 || echo 1)"
-unset D10G_NOSUDO D10G_SUDODRIFT D10G_SUDODMESG D10G_PRIVFOLLOW D10G_SMUGGLE D10G_SUFFIX D10G_NOFOLLOW D10G_NOVARLOG D10G_NOTIMEOUT
+unset D10G_NOSUDO D10G_SUDODRIFT D10G_SUDODMESG D10G_PRIVFOLLOW D10G_SMUGGLE D10G_SUFFIX D10G_HELPERF D10G_NOFOLLOW D10G_NOVARLOG D10G_NOTIMEOUT
 D10G_SRC=$(sed -n '/^# CANARY_DIAG_BEGIN/,/^# CANARY_DIAG_END/p' "$DEPLOY_SCRIPT")
 D10G_CODE=$(printf '%s\n' "$D10G_SRC" | grep -vE '^[[:space:]]*#') || true
 D10G_JLINE=$(grep -E 'timeout -k 1 3 journalctl' <<<"$D10G_CODE" || true)
@@ -4562,6 +4577,24 @@ unset DENY_SHAPE
 run_diag_case "$DIAGD" MOCK_KLOG_J_OUT= MOCK_KLOG_J_RC=1; d10k_counts
 D10_VAL=$(d10_val "$(d10_row "$DIAGD")")
 diag_check "#10045 D10k5: sudo accepted the argv but journalctl-under-root exits rc 1 with no lines and no hint — j=error and NO unprivileged re-run (denial-vs-tool-failure discrimination)" \
+  "$(has_e '^src=dmesg j=error d''=ok total=[1-9][0-9]* hits=0 mproc=0$' "$D10_VAL" && [[ "$SJ" == 1 && "$SD" == 0 && "$KJ" == 1 && "$KD" == 1 && $(( KJ - SJ + SD )) -eq 0 ]] && d10_verdict_ok && echo 0 || echo 1)" \
+  "kdeny: $D10_VAL | sudo-j:$SJ deny:$SD klog-j:$KJ klog-d:$KD"
+
+# grant present + a `sudo:`-prefixed WARNING on the accepted run (stderr, merged by 2>&1):
+# the warning is stripped before classification — it must NOT count as a journal line, so
+# the silent-empty stream still reads j=empty (never phantom-ok) and dmesg proceeds.
+run_diag_case "$DIAGD" MOCK_SUDO_WARN=1 MOCK_KLOG_J_OUT=; d10k_counts
+D10_VAL=$(d10_val "$(d10_row "$DIAGD")")
+diag_check "#10045 D10k6: an accepted run's `sudo:` warning is stripped before counting — silent-empty still reads j=empty (the warning is not a journal line), dmesg proceeds unprivileged" \
+  "$(has_e '^src=dmesg j=empty d''=ok total=[1-9][0-9]* hits=0 mproc=0$' "$D10_VAL" && [[ "$SJ" == 1 && "$SD" == 0 && "$KJ" == 1 && "$KD" == 1 ]] && d10_verdict_ok && echo 0 || echo 1)" \
+  "kdeny: $D10_VAL | sudo-j:$SJ deny:$SD klog-j:$KJ klog-d:$KD"
+
+# grant present + warning + journalctl-under-root fails silently (rc 1, no lines): the warning
+# alone is NOT a denial (no recognized denial phrase), so there is NO spurious fallback —
+# the run classifies j=error through the normal ladder.
+run_diag_case "$DIAGD" MOCK_SUDO_WARN=1 MOCK_KLOG_J_OUT= MOCK_KLOG_J_RC=1; d10k_counts
+D10_VAL=$(d10_val "$(d10_row "$DIAGD")")
+diag_check "#10045 D10k7: a `sudo:` warning plus a silent journalctl-under-root failure does NOT masquerade as a denial — j=error and zero unprivileged re-runs (the phrase requirement kills the warning-only fallback edge)" \
   "$(has_e '^src=dmesg j=error d''=ok total=[1-9][0-9]* hits=0 mproc=0$' "$D10_VAL" && [[ "$SJ" == 1 && "$SD" == 0 && "$KJ" == 1 && "$KD" == 1 && $(( KJ - SJ + SD )) -eq 0 ]] && d10_verdict_ok && echo 0 || echo 1)" \
   "kdeny: $D10_VAL | sudo-j:$SJ deny:$SD klog-j:$KJ klog-d:$KD"
 unset -f d10k_counts; unset SJ SD KJ KD
@@ -11299,7 +11332,12 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # no lines reads error, a non-zero exit after an anchored denial still reports it, an unbalanced fstype quote, an ALLOWED record
 # containing `type=1326 audit(`, and three multi-denial newest-first selections) and D10h2 (the 130-character field cut).
 # #9860 main sync (2026-10-11): raised 608 -> 609 (measured 609/609 live) for the one CWI-1 row merged from main (vitest --no-color pin).
-CI_DEPLOY_ASSERT_FLOOR=609
+# #10045 (2026-10-11): raised 609 -> 618 (measured on the live tree) with the nine kdeny-grant rows: D10k1 (privileged arm
+# answers first, zero unprivileged reads), D10k2 (silent-empty under the grant reads j=empty), D10k3/rs+gnu (grant-absent
+# fallback under BOTH recorded denial bodies), D10k4/rs+gnu (denied + readable unprivileged still reaches j=ok), D10k5
+# (accepted-but-failed reads j=error, no re-run), D10k6 (accepted-run sudo: warning stripped, empty stays empty),
+# D10k7 (warning + silent failure is no masquerading denial).
+CI_DEPLOY_ASSERT_FLOOR=618
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
     "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"
