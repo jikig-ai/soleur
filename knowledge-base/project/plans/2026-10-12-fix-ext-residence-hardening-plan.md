@@ -13,6 +13,47 @@ domain: engineering
 
 # fix(infra): EXT_RESIDENCE per-member content bound + unclassifiable-dial arm — deferred #9998 hardening
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-12
+**Sections enhanced:** Hypotheses (Network-Outage Deep-Dive), Proposed
+Solution (probe-row pin naming, `.tf.json` absent-`host` edge), Guard Contract
+(lint-label conformance), Sharp Edges (lint field-label trap), Risks &
+Mitigations (precedent-diff already present).
+**Research agents used:** none — this session has no Agent/Task tool; the
+deepen-plan fan-out (skill sub-agents, learnings agents, per-section research,
+review panel) was performed inline by the planning agent and the substitution
+is recorded in
+`specs/feat-one-shot-10147-10148-ext-residence-hardening/decision-challenges.md`.
+
+### Key Improvements
+
+1. `## Guard Contract` passes `scripts/lint-guard-contract.py` (2 entries, both
+   matrices ≥3 rows) — the `**Mutation matrix (probe-driven):**` label the
+   first draft used parses to a zero-row span (the lint keys on the exact
+   `**Mutation matrix:**` field name); renamed, lint green.
+2. All rule IDs, ADRs, issue/PR numbers, and `knowledge-base/` paths cited in
+   the plan verified live (rule `hr-ssh-diagnosis-verify-firewall` active;
+   ADR-237/114/193 exist; #10147/#10148 OPEN, #9998/PR #10130 closed/merged;
+   zero broken KB paths).
+3. X7 green probe row now names its pin file
+   (`apps/web-platform/infra/luks-monitor-install.test.sh`) — the pin must
+   resolve inside the battery sandbox, so a green probe can only use a copied
+   pin path.
+4. `.tf.json` blocks with no `host` key flag identically (empty `dialed` —
+   fail-closed), matching the `.tf` absent-host rule; stated in Part 1.
+
+### New Considerations Discovered
+
+- The battery's reader-shape pin (`"ls-files"`==1, `read_text(`==1,
+  `open(`==0, `glob(`==0) constrains the pin check to `is_file()` — a stat —
+  and requires the three seed pin files to be sandbox-copied; name-binding
+  inside the pin file is deferred because it costs a second `read_text(` and
+  a deliberate reader-pin amendment.
+- `is_file()` resolves under `SOLEUR_TF_REPO` in the sandbox — a new
+  `EXT_RESIDENCE` entry whose pin is not yet in `G2_PIN_INPUTS` fails loudly on
+  the battery's baseline row (fail-loud drift surface, not a silent one).
+
 ## Overview
 
 Two sibling hardening arms for Guard 2's residence machinery in
@@ -214,6 +255,22 @@ session exists anywhere in the code path under change.
 | L7 TLS / proxy | not applicable — no HTTPS path | same |
 | L7 application | not applicable — no service under diagnosis | defect class is a text-sweep classification gap, reproduced statically |
 
+### Network-Outage Deep-Dive
+
+Deepen-plan Phase 4.5 enforcement layer fired on the `SSH` token (telemetry
+re-emitted). Layer-by-layer verification status against the checklist:
+
+| Layer | Status | Artifact |
+|---|---|---|
+| L3 firewall allow-list | not applicable — no live dial | Guard 2 reads files only via one `git ls-files` + one `read_text()` (reader-shape pin at `web-host-provisioner-parity-mutation.test.sh:187-194`); no egress exists to allowlist |
+| L3 DNS / routing | not applicable — no live dial | same artifact |
+| L7 TLS / proxy | not applicable — no HTTPS path under change | same artifact |
+| L7 application | not applicable — no service under diagnosis | the defect is a text-sweep classification gap (literal-match coverage + table hygiene), reproduced statically by battery rows G2-38/39/40 and probe rows X1-X7 |
+
+No open hypothesis requires a service-layer probe before the fix; the
+firewall-first ordering rule is satisfied vacuously because nothing in the
+change path touches a network.
+
 ## Proposed Solution
 
 Two parts, one atomic PR — the guard arms without their battery rows are
@@ -247,7 +304,10 @@ is green now precisely because the arm does not exist).
    `"G2: unclassifiable connection dial(s) outside server.tf — the host
    expression is not a literal hcloud_server.web[\"web-N\"] reference the guard
    can classify: …"`. A block with no `host` at all is unclassifiable by
-   construction (empty dialed — fail-closed).
+   construction (empty dialed — fail-closed); a `.tf.json` connection object
+   with no `host` key flags identically (dict bodies flow through the same
+   `dialed_hosts` normalization via `json.dumps`), and an unattributed
+   `.tf.json` block (`addr` unresolvable) flags rather than exempts.
 3. **Hygiene arm extension** (the existing `stale_ext` loop, :1550-1586): per
    entry additionally require — `pin` present, non-empty string, no leading `/`
    or `..` segment, `*.test.sh`/`*.test.ts` suffix, `(REPO / pin).is_file()`
@@ -286,7 +346,7 @@ is green now precisely because the arm does not exist).
 | X4 (probe red) | `pin` not `*.test.*`-shaped (e.g. `apps/web-platform/infra/server.tf`) | `pin` | P3 — the pin must be a test artifact |
 | X5 (probe red) | `unclassifiable: true` entry for a fake resource in a real member file | `stale EXT_RESIDENCE` | the ≥1-swept-block requirement reaches flagged entries |
 | X6 (probe red, negative control) | mutator adds the G2-38 phantom AND a probe entry covers `(tunnel.tf, terraform_data.g2_indirect)` with `unclassifiable: true` | `unclassifiable` | probe can never exempt — the P4 analog |
-| X7 (probe green) | well-formed entry naming a real member (`ci-ssh-key.tf` / `root_authorized_keys`) with hosts `[web-1]` + real pin | — | the probe discriminates; well-formed entries pass |
+| X7 (probe green) | well-formed entry naming a real member (`ci-ssh-key.tf` / `root_authorized_keys`) with hosts `[web-1]` + pin `apps/web-platform/infra/luks-monitor-install.test.sh` (a copied pin, so it resolves in the sandbox) | — | the probe discriminates; well-formed entries pass |
 
 **Pin-file sandbox copies.** The seeds' `pin` existence check resolves under
 `REPO` (= `SOLEUR_TF_REPO` in the sandbox), so the three pin files are added to
@@ -452,7 +512,7 @@ table-internal and unreachable from `.tf` mutation, so the probe injects
 entries through the SAME checks (`SOLEUR_PARITY_EXT_RESIDENCE_PROBE`,
 additive-only, never consulted by the exemption arms).
 
-**Mutation matrix (probe-driven):**
+**Mutation matrix:**
 
 | # | Mutation | Expected |
 |---|---|---|
@@ -736,6 +796,10 @@ guard-derived values, FATAL on drift).
   meant to kill is preserved, re-scored).
 - Table-internal invariants cannot be `.tf`-mutated — they get probe rows
   (X1-X7), matching the §5 mechanism rather than asserting-by-review alone.
+- `lint-guard-contract.py` keys on the EXACT `**Mutation matrix:**` field
+  label — a decorated label like `**Mutation matrix (probe-driven):**` parses
+  to a zero-row span and fails the >=3-row check; keep field labels verbatim
+  (caught by running the lint during deepen, not by inspection).
 - This planning session ran without an Agent/Task tool: the research fan-out,
   spec-flow analyzer, scoped advisor, plan-review panel, and CTO
   technical-ruling spawns were performed inline by the planning agent;
