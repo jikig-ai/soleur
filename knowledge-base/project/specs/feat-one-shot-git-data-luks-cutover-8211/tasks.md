@@ -14,6 +14,8 @@ Plan: knowledge-base/project/plans/2026-10-12-fix-git-data-rotate-post-apply-gat
 - 2.2 Add `git_data_post_apply_gate` to tests/scripts/lib/git-data-host-replace-gate.sh
 - 2.3 Replace the post-apply blocks in apply-web-platform-infra.yml with the sourced call; add APPLY_TARGET env; keep step name
 - 2.4 Raise the anti-vacuity floor; run the shell suite, tier census suite, terraform-target-parity test, shellcheck
+- 2.4b Read the d6 reader (git-data-cutover.yml) and the post-assert replace steps for rotate-specific assumptions; record findings on #10137 only
+- 2.4c Reuse the plan-time gate's rotate LUKS jq predicate (action-set match, not order) in the new function
 - 2.5 Merge origin/main before push; do not touch PRs 10133/10086/7390; PR body Closes #10137, Closes #10067; no dispatch
 
 ## Phase 3 - K1 census addendum

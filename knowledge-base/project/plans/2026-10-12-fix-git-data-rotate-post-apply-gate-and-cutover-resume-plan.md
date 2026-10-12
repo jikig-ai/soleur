@@ -13,6 +13,33 @@ brand_survival_threshold: aggregate pattern
 
 # fix: git-data rotate post-apply gate and resume the LUKS cutover
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-12
+**Sections enhanced:** Scope Check (rebuilt to the 4.12 schema), Observability (5-field schema), Risks (new), halt-gate results
+**Method:** mechanical halt gates 4.6-4.12 run against this plan, plus targeted code reads (no broad agent fan-out: the plan is a CI assert plus documents, and the CTO and CLO were already consulted at plan time)
+
+### Halt-gate results
+
+| Gate | Result |
+|---|---|
+| 4.6 User-Brand Impact | PASS (aggregate pattern, concrete artifact and vector) |
+| 4.7 Observability | was prose-only; now carries the 5-field schema; probe is `grep -c` (allowlisted verb, well under 15 s, literal expected output `1`) |
+| 4.8 PAT-shaped variable | PASS (no hits) |
+| 4.9 UI wireframe | not triggered (no UI-surface file) |
+| 4.10 Encryption posture | not triggered (no `.tf`/migration/cloud-init in the file lists; no new store or connection) |
+| 4.11 Guard Contract | `python3 scripts/lint-guard-contract.py` PASS (1 entry, 9 rows); assembly names the chokepoint and both entering dispatch targets, rows are design-derived |
+| 4.12 Scope Check | was missing the three required subsections; rebuilt, 10 asks all mapped, 3 inferred rows each justified |
+
+### New considerations discovered
+
+- **The fix is necessary, not sufficient, for the flip gate.** `.github/workflows/git-data-cutover.yml` (d6 reader, near line 272) requires the `git_data_host_replace` JOB to conclude `success` AND the "rotate confirm token" step to conclude `success`. Run 38140050880 failed at the assert, so the steps after it (boot poll, pin_load redeploy, summary) have never run to completion on the rotate path. The re-dispatch after this merge will exercise them for the first time; the work phase must read those steps for rotate-specific assumptions (they were written against the plain replace) and record any finding on #10137 rather than widening this PR.
+- **Step name stays byte-identical** (`Terraform apply (git-data-host -replace) — both-volumes-preserved assert`). The cutover reader keys on the job name and the rotate-confirm step name, not this one, but a rename buys nothing and widens the hunk.
+- **No precedent for a mode-aware post-apply assert.** The registry, inngest and web jobs carry unconditional `VOL_DELETES` loops (different resources, no rotate arm). The pattern is novel; reviewers should scrutinize PA1-PA10 rather than assume a sibling.
+- `tests/scripts/test-infra-privileged-tier-census.sh` mentions a step named `Terraform apply (git-data-host -replace)` at a different job position (web-platform workflow census); AC3 re-runs it, since the call edit changes that step's body but not its name.
+- The `plan_gate_assert_numeric` call in the new function must be given every counter it reads, or a jq failure reads as 0 (the same hole the plan-time gate closes at its end).
+- #9943: the check cannot live in `git-data-flag-precheck.sh` (credential census, prd-token isolation); CTO F6 revised accordingly. The liveness precheck needs the git-data Better Stack table pin; the design must say which exact query it runs so the probe cannot read the shared default table (the runbook records that the default table returns zero rows for this host).
+
 ## Overview
 
 Resume the git-data LUKS cutover (#8211; runbook `knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md`; ADR-239) as far as it can go without a production write. Four ordered deliverables:
@@ -76,16 +103,43 @@ Checked by `gh` and `git grep` against `origin/main` state in this worktree:
 
 ## Scope Check
 
-| Ask | Maps to | Provenance |
-|---|---|---|
-| 1 flip preconditions | Phase 1 (task) | brief |
-| 2 fix #10137 | Phase 2 | brief |
-| 3 K1 census | Phase 3 | brief |
-| 4 designs | Phase 4 | brief |
-| Mode-matrix row for NIC/attachment missing | Phase 2 tests | CTO ruling F2 (direct consequence of the wider extraction) |
-| Unknown APPLY_TARGET refusal | Phase 2 | CTO ruling F3 |
+### Ask Mapping
 
-No item is `inferred` without a ruling. Split assessment: the four deliverables are independent artifacts. Deliverable 2 is the only code change and the only one that must merge before an owner-gated action (the rotate re-dispatch); deliverables 1, 3 and 4 are documents. One PR is acceptable because 1, 3 and 4 touch only new files under `knowledge-base/`, so they cannot conflict with the code change or with PRs 10133/10086/7390. If review prefers, deliverable 2 ships first as its own PR (it is small) and the documents follow; the work phase decides without asking.
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "Re-verify flip preconditions against LIVE state (not runbook text)" [brief] | Phase 1 / flip-preconditions-report.md | mapped |
+| 2 | "Fix #10137 (close #10067 as the same defect)" [brief] | Phase 2 / workflow + lib + test edits | mapped |
+| 3 | "Extract the loop into tests/scripts/lib/git-data-host-replace-gate.sh, pass APPLY_TARGET in" [brief] | Phase 2 function contract (CTO F2 widened the extraction to the whole post-apply block) | mapped |
+| 4 | "add three rows to tests/scripts/test-git-data-host-replace-gate.sh (plaintext deleted under rotate; LUKS deleted under plain replace; empty resource_changes must not pass)" [brief] | Phase 2 rows PA1-PA3 | mapped |
+| 5 | "Keep plugins/soleur/test/terraform-target-parity.test.ts green. No workflow dispatch in this PR." [brief] | Phase 2 AC3, AC8 | mapped |
+| 6 | "plan for rebase conflicts, do not touch their branches" [brief] | Phase 2 rebase-conflict plan | mapped |
+| 7 | "K1 non-main run census for #8209 ... re-derive read-only, counts and run ids only" [brief] | Phase 3 | mapped |
+| 8 | "Edit no existing legal document before the CLO ruling ... the addendum goes in a new file" [brief] | Phase 3 steps 6-9, AC6 | mapped |
+| 9 | "Design only (documents, no execution): the wipe-body PR ..., the rollback rehearsal, and #9943" [brief] | Phase 4.1-4.3 | mapped |
+| 10 | "Owner-gated, NOT in scope (list as remaining only)" [brief] | section Owner-gated and remaining | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| `.github/workflows/apply-web-platform-infra.yml` edit | "Fix #10137 (close #10067 as the same defect)" | asked |
+| `tests/scripts/lib/git-data-host-replace-gate.sh` function | "Extract the loop into tests/scripts/lib/git-data-host-replace-gate.sh" | asked |
+| `tests/scripts/test-git-data-host-replace-gate.sh` rows PA1-PA3 | "add three rows to tests/scripts/test-git-data-host-replace-gate.sh" | asked |
+| rows PA4-PA12 (must-PASS, duplicate-entry, dispatch pin, output sentinel) | asks 3-4 only name three rows | inferred - justification: the Guard Contract (plan Phase 2.12) requires must-PASS rows and a dispatch-pin row or the guard is satisfiable by a stub |
+| Positive LUKS-replaced assertion under rotate (instead of a bare skip) | "In rotate mode skip git_data_luks in the post-apply delete/forget loop" | inferred - justification: CTO F1; a bare skip would pass a rotate that never replaced the volume |
+| Extraction widened to NIC and attachment asserts | "Extract the loop" | inferred - justification: CTO F2; the block is one contiguous hunk, cheaper to rebase and puts those asserts under test |
+| `plugins/soleur/test/terraform-target-parity.test.ts` (only if extraction breaks) | "Keep plugins/soleur/test/terraform-target-parity.test.ts green" | asked |
+| `flip-preconditions-report.md` | "Report each verified or not; never infer." | asked |
+| K1 addendum under knowledge-base/legal/audits/ | "a new file under the knowledge-base legal-audit area" | asked |
+| `design-wipe-body-pr.md`, `design-rollback-rehearsal.md`, `design-9943-liveness-precheck.md` | "Design only (documents, no execution)" | asked |
+| `decision-challenges.md` and `tasks.md` | "record `Ruled by CTO agent, <date>: <decision> - <rationale>` in a `| Item | Class | Ruling |` table" | asked |
+
+### Split Assessment
+
+- Subsystems touched: 4 - `.github`, `tests`, `plugins` (conditional), `knowledge-base`
+- Planned files: 12 (3 edits + 1 conditional edit + 8 new documents/evidence files) | Estimated changed lines: ~700 (code ~250, documents ~450)
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR - the `plugins` root is touched only if the parity extraction breaks; documents live in new files and cannot conflict with the code hunk. If review prefers, the seam is "Phase 2 first, documents after" with no rework.
 
 ## Open Code-Review Overlap
 
@@ -244,13 +298,50 @@ No Product/UX surface: no UI files in the lists (mechanical UI override: none ma
 
 ## Observability
 
-Plan touches `.github/workflows/`, `tests/scripts/` and `knowledge-base/` only (no `apps/*/server|src|infra`, no `plugins/*/scripts`), so the 5-field schema gate does not fire for the code change. The assert already emits `::error::` annotations that name the address and action count. The one new operational signal is the existing replace/rotate job verdict plus the Dispatch summary step; no SSH is required to verify (`gh run view <id> --json conclusion,jobs`).
+The change touches `.github/workflows/` and `tests/scripts/` (CI assert only; no application server code). The signal is the existing job verdict plus `::error::` annotations that name the address and action count.
+
+```yaml
+liveness_signal:
+  what: the git_data_host_replace job's post-apply step reports the assert result (annotation names address + action count) and the Dispatch summary step turns a missing verdict red
+  cadence: per dispatch of apply_target git-data-host-replace or git-data-host-rotate (owner-gated, rare)
+  alert_target: GitHub Actions run conclusion read by git-data-cutover.yml d6_replace_stale and the failed-run notification path
+  configured_in: .github/workflows/apply-web-platform-infra.yml (git_data_host_replace job) and tests/scripts/lib/git-data-host-replace-gate.sh
+error_reporting:
+  destination: GitHub Actions ::error:: annotations on the run, no values printed
+  fail_loud: the function returns 1 and the step runs exit 1; an unknown apply_target or empty plan refuses rather than passing
+failure_modes:
+  - mode: rotate that did not replace the LUKS volume, or any delete of the plaintext volume
+    detection: git_data_post_apply_gate counters read from the saved tfplan.json
+    alert_route: step failure, run conclusion failure, annotation
+  - mode: empty or unreadable plan document
+    detection: plan_gate_assert_readable plus the explicit length check
+    alert_route: step failure with the explicit empty message
+  - mode: call removed from the workflow step (guard silently dropped)
+    detection: dispatch pin row PA12 in the shell suite run by CI
+    alert_route: CI failure on the PR that removes it
+logs:
+  where: GitHub Actions run log (public repo; counters and addresses only)
+  retention: 90 days (repository Actions retention)
+discoverability_test:
+  command: grep -c 'git_data_post_apply_gate tfplan.json' .github/workflows/apply-web-platform-infra.yml
+  expected_output: 1
+```
 
 ## Encryption Posture, ADR, C4, IaC
 
 - Encryption posture: no new store or connection (docs and a CI assert). Skipped.
 - ADR/C4: no architectural decision is made; the designs apply ADR-239/ADR-220 as written. The wipe-build PR amends ADR-239 (noted in 4.1). The `c4-count-parity` test is unaffected (no model file is touched); `bash plugins/soleur/test/c4-count-parity.test.sh` is run once at work time to confirm.
 - IaC: no new infrastructure; the workflow edit is the existing apply path. No `terraform apply` or dispatch here.
+
+## Risks and Mitigations
+
+| Risk | Mitigation |
+|---|---|
+| A rebase onto a moved main drops or duplicates the call hunk | Merge origin/main before push; reread the step from main; re-run the three test commands (Phase 2) |
+| New rows raise the anti-vacuity floor wrongly | Floor is a count floor, set to 55 + new assertions; deleting a row reds it (harness row a) |
+| The post-apply gate rejects a legitimate rotate because terraform reports the LUKS volume with an action order or extra action (for example `["create","delete"]` for create-before-destroy) | Match on the set of actions (index of both `delete` and `create`), mirroring the plan-time gate's own `lvr` predicate; read that predicate before writing the function and reuse its jq |
+| Census output is large and slow | Write TSV to `$K1_DIR`, print aggregates only, run in background with Monitor |
+| Census finds a non-clean row | CLO Q4 branch: fresh Art. 33(1) clock, immediate owner notice, no wait for 2026-10-24 |
 
 ## Owner-gated and remaining (NOT in scope; listed only)
 
