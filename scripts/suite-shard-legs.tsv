@@ -43,6 +43,7 @@
 .claude/hooks/pkill-self-match-guard.test.sh	5
 .claude/hooks/post-dispatch-watch-gate.test.sh	3
 .claude/hooks/pre-ask-technical-fork-gate.test.sh	4
+.claude/hooks/pre-closing-technical-fork-gate.test.sh	5
 .claude/hooks/pre-merge-auto-close-scan.test.sh	6
 .claude/hooks/pre-merge-rebase-headless.test.sh	4
 .claude/hooks/pre-merge-rebase-parity.test.sh	5

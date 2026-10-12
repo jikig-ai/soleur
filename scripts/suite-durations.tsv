@@ -40,6 +40,7 @@
 .claude/hooks/pkill-self-match-guard.test.sh	5072	measured
 .claude/hooks/post-dispatch-watch-gate.test.sh	962	measured
 .claude/hooks/pre-ask-technical-fork-gate.test.sh	1297	measured
+.claude/hooks/pre-closing-technical-fork-gate.test.sh	1194	floor
 .claude/hooks/pre-merge-auto-close-scan.test.sh	8927	measured
 .claude/hooks/pre-merge-rebase-headless.test.sh	267	measured
 .claude/hooks/pre-merge-rebase-parity.test.sh	5551	measured
