@@ -1084,10 +1084,8 @@ The PR's diff will produce drift on `terraform_data.deploy_pipeline_fix` — by 
 ```bash
 if [[ -z "${CI:-}" && -z "${GITHUB_ACTIONS:-}" ]] && ssh-add -l >/dev/null 2>&1; then
   cd apps/web-platform/infra
-  # Only the bridge target here (NOT deploy_pipeline_fix): the in-session fallback
-  # exists to land a handler/helper/sudoers change immediately; the webhook push
-  # (deploy_pipeline_fix) is independently covered by the CI auto-apply and does not
-  # need the operator's SSH path. Do NOT widen this to a 2-target apply.
+  # Bridge target only (NOT deploy_pipeline_fix): this fallback lands a handler/helper/
+  # sudoers change now; the webhook push is covered by the CI auto-apply. Never widen it.
   doppler run -p soleur -c prd_terraform -- \
     terraform apply -target=terraform_data.infra_config_handler_bootstrap -input=true
   # The Terraform "yes" prompt is the load-bearing authorization
@@ -1095,7 +1093,7 @@ if [[ -z "${CI:-}" && -z "${GITHUB_ACTIONS:-}" ]] && ssh-add -l >/dev/null 2>&1;
 fi
 ```
 
-Verify with the no-host-login status hook (per `hr-no-ssh-fallback-in-runbooks` — `files_written == files_total` via `/hooks/infra-config-status`, NOT an SSH hash compare):
+Verify via the no-host-login status hook (`hr-no-ssh-fallback-in-runbooks`; `files_written == files_total` at `/hooks/infra-config-status`, never an SSH hash compare):
 
 ```bash
 WEBHOOK_SECRET=$(doppler secrets get WEBHOOK_DEPLOY_SECRET -p soleur -c prd_terraform --plain)
