@@ -15,7 +15,7 @@ Scope guard: this PR does NOT touch the existing backlog or any `*/archive/` pat
   `_strip_repo_flags`, `MERGE_TARGET_WHY` ladder, in-command-cd scan,
   `timeout`→`gtimeout`→bare wrapper, `^[0-9a-f]{40}$` oid check) with a
   provenance comment naming the source line range.
-- [ ] 1.3 Trigger regex `(^|&&|\|\||\||;|\(|\s--\s)\s*([A-Za-z_][A-Za-z0-9_]*=\S+\s+)*gh\s+pr\s+merge(\s|$)`
+- [ ] 1.3 Trigger regex `(^|&&|\|\||\||;|\(|\s--\s)\s*((<assignment>|if|while|until|then|do|elif|else|!|time|env|command|builtin|exec|nohup|sudo)\s+)*gh\s+pr\s+merge(\s|$)`
   on `$SCAN`; `SOLEUR_SKIP_KB_ARCHIVE_GATE=1` pass-through.
 - [ ] 1.4 Head resolution: `--match-head-commit <40-hex>` > bare number N
   (`git fetch --no-tags origin refs/pull/<N>/head` → FETCH_HEAD) > HEAD
@@ -41,7 +41,8 @@ Scope guard: this PR does NOT touch the existing backlog or any `*/archive/` pat
   `test-incident-sandbox` isolation, byte-equal `assert_fixture_dir` copy).
 - [ ] 2.2 Deny fixtures: live spec dir; topic-named plan; live brainstorm;
   `M` row on base-live spec file; `with_lock ... --` wrapped form;
-  `FOO=1` env prefix; `x |` pipe form; `$(…)` substitution; `gh pr merge <N>`
+  `FOO=1` env prefix; `time`/`if`/`sudo` keyword prefixes; `x |` pipe
+  form; `$(…)` substitution; `gh pr merge <N>`
   against `refs/pull/<N>/head` on the fixture origin; `--match-head-commit`;
   `-R` same-repo proven; unprovable repo pointer; foreign `cd`; raw/scan
   disagreement; fetch failure; multi-leak after compliant first.

@@ -10,6 +10,40 @@ lane: cross-domain
 
 # feat: gate PR merge on unarchived KB artifacts (kb-archive-gate)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-12
+**Sections enhanced:** Proposed Solution (a)/(d), Guard Contract, Acceptance Criteria, Dependencies & Risks, Research Insights
+**Research agents used:** sequential-fallback (no Task tool in this session — deepen research ran as inline greps/reads; `Reviewed-Coverage: sequential-fallback`)
+**Gates cleared (§4.x):** 4.6 User-Brand Impact present+valid; 4.7 Observability present+valid; 4.8 PAT scan clean; 4.9 UI-wireframe skipped (no UI surface); 4.10 Encryption Posture skipped (no store/connection); 4.55 Downtime skipped; 4.5 Network-Outage trigger 0 hits in Overview/Problem; 4.11 `lint-guard-contract.py` green (1 guard); 4.12 Scope Check 1 unfenced section, mechanically compliant; 4.4 precedent-diff satisfied (pre-merge-rebase.sh cited); 4.45 realism passes run inline
+
+### Key Improvements
+
+1. **Resolver adopted verbatim** — `pre-merge-rebase.sh`'s #8778/#9401
+   PR-head resolver (same-repo pointer proof, scan/cmd agreement, `cd`
+   scan, `refs/pull/N/head` fetch, `--help` pass-through) imported
+   byte-for-byte and parity-pinned instead of the v1 hand-rolled
+   HEAD-only check — kills the drain-prs false-deny/false-pass pair.
+2. **Trigger boundary widened** — `\s--\s`, `\(`, bare `|`, and an
+   invocation-prefix clause (env assignments + `if`/`time`/`sudo`/…)
+   added; the sibling's chain-only boundary misses ship's own
+   `with_lock merge-main 600 -- gh pr merge` arming form.
+3. **Fail-open scope refined** — `main`/detached/`bare` exempt only the
+   HEAD path; numbered/`--match-head-commit` merges gate on every
+   checkout state (coverage for `soleur:schedule`/drain sessions).
+4. **#7383 resolved by measurement** — `archive-kb.sh --dry-run` on a
+   live `feat-one-shot-*` worktree lists the topic-named plan; remaining
+   gap is discovery of *untracked* artifacts, fixed in Phase 4.
+
+### New Considerations Discovered
+
+- Sibling hooks `ship-unpushed-commits-gate.sh`/`cla-signed-author-gate.sh`
+  share the pre-`--` boundary gap — deferred to a tracking issue at ship.
+- `archive-kb.sh` already `git add`s before `git mv` (:244-246), so the
+  untracked fix is discovery-only.
+- Multi-PR commands (`gh pr merge 42 && gh pr merge 43`) stay in the
+  conservative L-deny posture per the sibling's "one PR per command".
+
 ## Overview
 
 KB session artifacts — `knowledge-base/project/specs/<dir>/`, `plans/*.md`,
@@ -76,17 +110,21 @@ telemetry via `emit_incident`. Two corrections over the sibling, both
 precedented in-tree:
 
 - **Trigger boundary** — `(^|&&|\|\||\||;|\(|\s--\s)` plus an optional
-  env-assignment prefix `([A-Za-z_][A-Za-z0-9_]*=\S+\s+)*`. The bare
+  invocation prefix `(<assignment>|if|while|until|then|do|elif|else|!|time|env|command|builtin|exec|nohup|sudo)\s+`
+  (repeated; `prod-write-defer-gate.sh:179`'s assignment clause extended
+  with the keyword set — `time gh pr merge`, `if gh pr merge`, `! gh pr
+  merge` are the same bypass class). The bare
   `(^|&&|\|\||;)` shape (the sibling's, and `cla-signed-author-gate`'s)
   misses ship's own sanctioned arming form
   `bash "$SS_LIB" with_lock merge-main 600 -- gh pr merge` (the `\s--\s`
-  member, `pre-merge-rebase.sh:121`), a `FOO=x gh pr merge` env prefix
-  (`prod-write-defer-gate.sh:179`), and the `$(…)`/pipe substitution
-  forms. A gate that cannot see the wrapped arm never fires on the main
-  path (#3689 class). Residual, shared with every sibling and documented:
-  merge text inside a quoted `bash -c '…'` / `sh -c` argument is stripped
-  by `strip_command_bodies` and does not fire — postmerge Phase 5.8 is
-  the net for every non-regex path (`gh api …/merge`, UI merges).
+  member, `pre-merge-rebase.sh:121`), a `FOO=x gh pr merge` env prefix,
+  and the `$(…)`/pipe substitution forms. A gate that cannot see the
+  wrapped arm never fires on the main path (#3689 class). Documented
+  residuals, shared with every sibling and named so the postmerge
+  backstop owns them: quoted `bash -c '…'` / `sh -c` payloads (stripped
+  by `strip_command_bodies`), `eval "…"` indirection, variable/alias
+  invocation (`$GH pr merge`), `gh api …/merge`, and UI merges — none
+  fire the regex; Phase 5.8 reports the landed result regardless.
 - **PR-head resolution** — import `pre-merge-rebase.sh`'s #8778/#9401
   resolver VERBATIM (byte-copied helpers with a provenance comment, parity-
   pinned by a suite row that diffs each function body against
@@ -120,9 +158,11 @@ Logic:
    (verified fetchable on real origin: `refs/pull/10064/head` →
    `88a8375`; creatable in fixture bare repos via `git push origin
    HEAD:refs/pull/N/head` — no `gh` dependency). L-state (mixed numbers,
-   non-bare target, foreign cd) → **deny** carrying `MERGE_TARGET_WHY`
-   — for this gate a HEAD fallback on a wrong target is both a false-
-   pass and a false-deny.
+   non-bare target, foreign cd, >1 PR in one command) → **deny** carrying
+   `MERGE_TARGET_WHY` — for this gate a HEAD fallback on a wrong target
+   is both a false-pass and a false-deny; the multi-PR posture mirrors
+   the sibling's "merge one PR per command" and stays conservative —
+   looping per-invocation is a defensible v2, not v1.
 5. **Fail-open scope (refined ruling — decision-challenges).** The brief's
    `main`/`detached`/`bare` fail-opens apply to the HEAD-based path,
    where the branch is the measured object and HEAD is meaningless in
@@ -227,13 +267,15 @@ harnesses).
 
 Verified: the #9803 `discover_branch_diff` covers `feat-one-shot-*` spec
 dirs (A-row collapse) and topic-named plans (commit provenance) — measured
-dry-run above. Remaining gaps fixed in this PR: extend discovery to
+dry-run above. Remaining gap fixed in this PR: extend discovery to
 **untracked** artifact paths (`git status --porcelain --
 knowledge-base/project/{specs,plans,brainstorms}`, same `*/archive/*`
 exclusion and spec-dir collapse), closing the last silent-miss for
 uncommitted topic-named plans / non-`feat-*` spec dirs — the residual of
 #7383 and adjacent to #9172's staged-but-unpersisted class (noted, not
-fixed here).
+fixed here). Discovery is the only gap: the move path already runs
+`git add "$artifact"` before `git mv` (`archive-kb.sh:244-246`), so an
+untracked file moves cleanly once listed.
 
 ## Technical Considerations
 
@@ -331,8 +373,8 @@ logs:
   where: ".claude/.rule-incidents.jsonl + hook stderr"
   retention: "repo-local jsonl (incident rotation per lib/incidents.sh)"
 discoverability_test:
-  command: "grep -l ship-kb-archive-gate.sh .claude/settings.json .devin/config.json"
-  expected_output: ".claude/settings.json .devin/config.json"
+  command: "grep -o ship-kb-archive-gate.sh .claude/settings.json"
+  expected_output: "ship-kb-archive-gate.sh"
 ```
 
 (Section included defensively: Phase 2.9's path detection —
@@ -441,8 +483,9 @@ population it is measured against.
   `gh pr merge`, `gh pr merge --help`, `bash -c` quoted payloads (the
   documented strip residual), and `gh pr ready`.
 - [ ] AC10: trigger coverage fixtures — `with_lock merge-main 600 --
-  gh pr merge`, `FOO=1 gh pr merge`, `x | gh pr merge`, `$(gh pr merge)`
-  all fire; each with a deny on a leaky fixture branch.
+  gh pr merge`, `FOO=1 gh pr merge`, `x | gh pr merge`, `$(gh pr merge)`,
+  `time gh pr merge`, `if gh pr merge; then …` all fire; each with a deny
+  on a leaky fixture branch.
 - [ ] AC11: head-resolution fixtures — `gh pr merge --squash --auto`
   (flag-first → HEAD); `gh pr merge <N>` → `refs/pull/<N>/head` fetched
   from the fixture bare origin and gated on the REMOTE head;
