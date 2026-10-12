@@ -74,10 +74,12 @@ Sources 1+4.
    predicate as `JSONExtractString(raw,'<name>') = '<value>'` (the systemd
    recipe is `--control-require-field 'SYSLOG_IDENTIFIER=systemd'` — a doppler
    row is `doppler` no matter what its payload quotes), and the rehearsal
-   capture's `systemd_path_check` anchors marker + colon-quoted `"systemd"`
-   field shape jointly (the strongest binding text rows admit; the residual —
-   a payload quoting the exact escaped fragment — is documented at the count
-   site). This is the read-side convention ADR-192 established, applied one
+   capture's `count_systemd_path_control` binds the same own-field property
+   locally: `jq` `fromjson` extracts each candidate row's own
+   `SYSLOG_IDENTIFIER` and `grep -cxF` requires the exact value — a marker
+   grep and BOOT_STAGE exclusion precede it, but the field is decisive, so
+   the escaped-fragment residual the interim text anchor could not close is
+   gone. This is the read-side convention ADR-192 established, applied one
    level down at the source-of-truth field.
 
 3. **The `systemd` tag never joins the Source-4 allowlist.** Adding it to

@@ -232,11 +232,21 @@ HOST_ROWS="$(bs_query "$HOST_SQL")" || {
 # window — bounded to the same host lineage, and the honest reading either way is
 # "channel recently proven". Post-reboot keeps its own boundary: the reboot re-fires
 # OnBootSec inside POST_ROWS, so the post-boundary arm still proves the channel
-# across the reboot.
+# across the reboot. Fetched LAZILY inside the arms that use it — the post-reboot
+# arm reads POST_ROWS instead, a dark-host early exit never reaches the check, and
+# an invocation without --since has already fetched exactly this row set into
+# HOST_ROWS, so the alias skips the second query entirely (perf-review note).
 CONTROL_SQL="SELECT dt, raw FROM ${BS_SRC} WHERE dt > now() - INTERVAL ${WINDOW} AND position(raw, '\"host\":\"${HOST_NAME}\"') > 0 ORDER BY dt LIMIT 2000 FORMAT JSONEachRow"
-CONTROL_ROWS="$(bs_query "$CONTROL_SQL")" || {
-  echo "TRANSIENT: the control-row query failed after a live anchor — transport fault." >&2
-  exit 2
+CONTROL_ROWS=""
+fetch_control_rows() {
+  [[ -n "$CONTROL_ROWS" ]] && return 0
+  if [[ -z "$SINCE" ]]; then
+    CONTROL_ROWS="$HOST_ROWS"; return 0
+  fi
+  CONTROL_ROWS="$(bs_query "$CONTROL_SQL")" || {
+    echo "TRANSIENT: the control-row query failed after a live anchor — transport fault." >&2
+    exit 2
+  }
 }
 
 # Needles match the `stage=<name>` FIELD SHAPE, not the bare marker: an exit row's
@@ -353,8 +363,8 @@ inngest_failed_check() { # <row-set> — viol on any `Failed to start <tracked-u
 # capture. The control row is emitted hourly by the inngest-server-probe unit as
 # `logger -t systemd -p err "SOLEUR_SYSTEMD_JOURNALD_CONTROL ..."` and rides the SAME
 # inngest_journald PRIORITY<=4 admission arm a real failure row does, so its presence in
-# the window proves the discriminated path is live. The stage order mirrors
-# count_inngest_failed — marker grep first, BOOT_STAGE exclusion second — but the
+# the window proves the discriminated path is live. The stage set mirrors
+# count_inngest_failed's exclusions — marker grep + BOOT_STAGE filter — but the
 # decisive stage is own-field extraction, not a text fragment: a doppler/inngest row
 # quoting the marker text, the field pair, or this recipe verbatim cannot satisfy it
 # because jq reads the row's OWN SYSLOG_IDENTIFIER (the measured contamination class:
@@ -410,6 +420,7 @@ case "$MODE" in
     (( n_nic_fail >= 1 ))        && ok "NIC-absent failure observed (private_nic_timeout/provision-nic-ABSENT n=${n_nic_fail})" || want "NIC-absent failure observed (private_nic_timeout/provision-nic-ABSENT n=${n_nic_fail})"
     # The control arm evaluates BEFORE the failed-count arm prints ok — a want/TRANSIENT on
     # a dark systemd path must dominate the zero-failed-rows note (#9963).
+    fetch_control_rows
     systemd_path_check "$CONTROL_ROWS"
     inngest_failed_check "$HOST_ROWS"
     KEY=REHEARSAL_PHASE_A_OBSERVED
@@ -430,6 +441,7 @@ case "$MODE" in
     n_exit="$(count_iid provision-attempt-exit-)"
     (( n_done >= 1 )) && ok "bootstrap-done emitted for this host (implies nic_present + zot + isolation + bootstrap all ran)" || want "bootstrap-done emitted for this host (n=${n_done})"
     note "info: ${n_exit} provision-attempt-exit-* row(s) in window (retries before convergence are expected); private_nic_ok n=${n_ok} (informational — emitted only when the wait actually ran)"
+    fetch_control_rows
     systemd_path_check "$CONTROL_ROWS"
     inngest_failed_check "$HOST_ROWS"
     KEY=REHEARSAL_PHASE_B_RECOVERY

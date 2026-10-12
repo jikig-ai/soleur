@@ -17,7 +17,7 @@ Plan: `knowledge-base/project/plans/2026-10-12-chore-pin-syslog-systemd-journald
 ## Phase 3 — consumer wiring (AC4, AC5)
 
 - [x] 3.1 `scripts/betterstack-assert-absence.sh` — add repeatable `--control-require <substring>` AND'd onto the control predicate inside `run_count` call for the control read (mirror `--absence-require` composition + SQL escaping); extend the usage text with the systemd-path recipe (`--control 'SOLEUR_SYSTEMD_JOURNALD_CONTROL' --control-require-field 'SYSLOG_IDENTIFIER=systemd'`); review hardening added `--control-require-field <name>=<value>` (`JSONExtractString` binding) as the shipped form.
-- [x] 3.2 `scripts/followthroughs/inngest-provision-rehearsal-capture.sh` — add `count_systemd_path_control` (two-stage grep: marker `SOLEUR_SYSTEMD_JOURNALD_CONTROL` AND `SYSLOG_IDENTIFIER.{0,8}systemd`, mirroring `count_inngest_failed`'s shape) + a `systemd_path_check` arm beside `inngest_failed_check`: zero → `want` (TRANSIENT), ≥1 → proceed.
+- [x] 3.2 `scripts/followthroughs/inngest-provision-rehearsal-capture.sh` — add `count_systemd_path_control` + a `systemd_path_check` arm beside `inngest_failed_check`: zero → `want` (TRANSIENT), ≥1 → proceed. *(Post-implementation hardening — shipped form: marker `grep -F` + BOOT_STAGE exclusion + `jq fromjson` own-`SYSLOG_IDENTIFIER` extraction + `grep -cxF 'systemd'`, after review showed the interim text-fragment binding forgeable; row set is `CONTROL_ROWS`/`POST_ROWS`, never the `--since`-bound `HOST_ROWS`.)*
 
 ## Phase 4 — pins and suites (AC3, AC6, AC8)
 

@@ -248,10 +248,14 @@ explain the storm rows.
    --control-require-field 'SYSLOG_IDENTIFIER=systemd'`: a doppler-tagged webhook
    row quoting the marker text (the measured contamination class) cannot
    satisfy it, and neither can a future transform that drops the field.
-4. **Rehearsal-capture control arm** — count `HOST_ROWS` rows carrying the
-   marker AND `SYSLOG_IDENTIFIER.{0,8}systemd` (same two-stage grep shape as
-   `count_inngest_failed`); zero → `want` (TRANSIENT, keep polling) instead of
-   a `ok "zero 'Failed to start' journal rows"` on an unproven channel.
+4. **Rehearsal-capture control arm** — count rows carrying the marker AND an
+   own-field `SYSLOG_IDENTIFIER=systemd`; zero → `want` (TRANSIENT, keep
+   polling) instead of a `ok "zero 'Failed to start' journal rows"` on an
+   unproven channel. *(Post-implementation hardening: shipped form binds
+   CONTROL_ROWS/POST_ROWS via jq `fromjson` own-field extraction — marker
+   grep → BOOT_STAGE exclusion → exact field match — after review showed the
+   text-fragment plan form forgeable and the `--since`-bounded window
+   unreachable in phase-b.)*
 5. **Pins** — `journald-config.test.sh` emission-anchored arms (emit exists,
    `-t systemd`, `-p err`, inside PROBESCRIPTEOF, never-doppler-gated);
    `vector-pii-scrub.test.sh` documented PRIORITY-arm exemption registry entry
@@ -623,7 +627,7 @@ globs → Product/UX Gate not triggered.
 - Given `control_rows=0` under a stubbed transport, when
   betterstack-assert-absence runs, then outcome is `unshipping`, exit 2.
   *(unit — existing arm kept green)*
-- Given HOST_ROWS with control absent vs present, when the capture runs
+- Given control rows (CONTROL_ROWS/POST_ROWS — shipped form) absent vs present, when the capture runs
   `inngest_failed_check` mode, then absent → `want`/TRANSIENT, present → the
   failed-count verdict applies normally. *(unit)*
 - Given a `logger -t newtag` added to the probe script with no allowlist or

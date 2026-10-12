@@ -78,7 +78,8 @@ fi
 # absence assertion non-vacuous: without deploys there are no ci-deploy-correlated events to be
 # absent, and "zero" would mean "nothing happened", not "nothing broke".
 deploy_rows_rc=0
-deploy_out="$(bash "$ASSERT" --host "$HOST" --absence 'SOLEUR_DEPLOY_INVOCATION' --since "$WINDOW" 2>&1)" || deploy_rows_rc=$?
+deploy_out="$(bash "$ASSERT" --host "$HOST" --absence 'SOLEUR_DEPLOY_INVOCATION' --since "$WINDOW" \
+        --control-require-field 'SYSLOG_IDENTIFIER=web-zot-consumer-probe' 2>&1)" || deploy_rows_rc=$?
 case "$deploy_rows_rc" in
   1) : ;;  # `present` — deploys DID run, which is what we want here
   2) echo "FAIL: the telemetry channel for $HOST is not shipping (unshipping). An absence assertion cannot be graded through a dark channel."
