@@ -4015,10 +4015,13 @@ jobs:
         working-directory: ${{ env.INFRA_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        # Apply the saved, guarded plan. Post-apply jq backstops from the SAVED plan (the exact
-        # plan we applied): BOTH data volumes carry 0 delete/forget actions (preserved), the
-        # private NIC + BOTH store attachments show a create (re-attached) — belt-and-suspenders
-        # to the guard.
+          APPLY_TARGET: ${{ inputs.apply_target }}
+        # Apply the saved, guarded plan. The post-apply backstop is git_data_post_apply_gate
+        # (tests/scripts/lib/git-data-host-replace-gate.sh), run against the SAVED plan (the exact
+        # plan we applied) with the dispatch target: the plaintext volume carries 0 delete/forget
+        # in BOTH modes; the LUKS volume carries 0 delete/forget under git-data-host-replace but
+        # is REPLACED (delete + create) under git-data-host-rotate; the private NIC + BOTH store
+        # attachments show a create (re-attached) — belt-and-suspenders to the guard.
         run: |
           set -euo pipefail
           # A mid-replace apply failure (old host destroyed, new create fails — quota/image/boot)
@@ -4032,35 +4035,12 @@ jobs:
             # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
             source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
             stock_recovery_report git-data-host-replace tfplan.json --probe-state
-            echo "::error::terraform apply (git-data-host-replace) failed mid-replace — git-data may be DOWN (single-writer, no serving fallback); pushes/pulls fail (not corrupt); BOTH volumes are preserved — re-dispatch git-data-host-replace to recover from them"
+            echo "::error::terraform apply (git-data-host-replace) failed mid-replace — git-data may be DOWN (single-writer, no serving fallback); pushes/pulls fail (not corrupt); the plaintext volume is preserved in both modes (and the LUKS volume under git-data-host-replace; git-data-host-rotate replaces it) — re-dispatch the same apply_target to recover"
             exit 1
           fi
-          for VOL in hcloud_volume.git_data hcloud_volume.git_data_luks; do
-            VOL_DELETES=$(jq --arg v "$VOL" '[.resource_changes[]?
-              | select(.address == $v)
-              | select(.change.actions? | any(. == "delete" or . == "forget"))] | length' tfplan.json)
-            if [[ "$VOL_DELETES" != "0" ]]; then
-              echo "::error::${VOL} shows ${VOL_DELETES} delete/forget action(s) in the applied plan — the data store must be preserved. This should have been caught by the guard; failing hard."
-              exit 1
-            fi
-          done
-          NIC_CREATES=$(jq '[.resource_changes[]?
-            | select(.address == "hcloud_server_network.git_data")
-            | select(.change.actions? | index("create"))] | length' tfplan.json)
-          if [[ "$NIC_CREATES" == "0" ]]; then
-            echo "::error::hcloud_server_network.git_data shows no create action in the applied plan — the new host would have no private NIC. This should have been caught by the guard; failing hard."
-            exit 1
-          fi
-          for ATT in hcloud_volume_attachment.git_data hcloud_volume_attachment.git_data_luks; do
-            ATT_CREATES=$(jq --arg a "$ATT" '[.resource_changes[]?
-              | select(.address == $a)
-              | select(.change.actions? | index("create"))] | length' tfplan.json)
-            if [[ "$ATT_CREATES" == "0" ]]; then
-              echo "::error::${ATT} shows no create action in the applied plan — the new host would boot with that store UNMOUNTED. This should have been caught by the guard; failing hard."
-              exit 1
-            fi
-          done
-          echo "both data volumes preserved (0 delete/forget), private NIC + both store attachments re-attached (create present) in the applied plan."
+          # shellcheck source=tests/scripts/lib/git-data-host-replace-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/git-data-host-replace-gate.sh"
+          git_data_post_apply_gate tfplan.json "${APPLY_TARGET}" || exit 1
           # (#7226) The rotated pin fingerprint — the evidence the boot poll + the pin_load step's redeploy prove.
           fp=$(doppler run --preserve-env -p soleur -c prd_terraform -- terraform output -raw git_data_ssh_host_key_fingerprint 2>/dev/null) || fp=""
           if [[ "$fp" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]]; then echo "git-data host key fingerprint: $fp" >> "$GITHUB_STEP_SUMMARY"; echo "::notice title=git-data-pin::git-data host key fingerprint: $fp"; else echo "::warning::git-data host key fingerprint unreadable or malformed; not printed"; fi
