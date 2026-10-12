@@ -1235,8 +1235,74 @@ BEGIN {
   HELPRE = "(make_stub|write_stub|stub_cmd|mkstub|stub)[ \t]+\"?[A-Za-z][A-Za-z0-9_.-]*"
   SRCRE = "^[ \t]*(\\.|source)[ \t]+\"?[^\" \t;]+"
   TOKRE = "[A-Za-z0-9_.-]+[.](sh|bash|yml|yaml)([^A-Za-z0-9_.-]|$)"
+  sq = sprintf("%c", 39)
+  STRIPL = "^[\"" sq "(){};]+"; STRIPR = "[\"" sq "(){};]+$"
+  ANNOT = "::(error|warning|notice)::([^\"\\\\]|\\\\.)*(\"|$)"   # R8: the annotation string, to its closing unescaped quote
+  YBLOCK = "(:|(^|[ \t])-)[ \t]*[|>][-+]?[ \t]*$"   # a YAML block-scalar indicator (key: | or - |) ends a line with a bar that is not a pipe
+  nw = split("timeout env command nice stdbuf exec builtin", wl, " "); for (i = 1; i <= nw; i++) WRAP[wl[i]] = 1
+  JOINCAP = 50
 }
 function base(p) { sub(/^.*\//, "", p); return p }
+function addsite(v) { nc++; cw[nc] = v; cobs[nc] = o }
+# R2: the verbs behind wrappers. str is the word after a bar and the text up to the next bar; each verb is added as a site. A wrapper has its own
+# flag arity (timeout -k DUR / -s SIG, nice -n N, env -u NAME, stdbuf -i/-o/-e MODE, exec -a NAME); `command -v` and `-V` are queries and name no verb.
+function unwrap(str,   n, tk, i, t, w, u) {
+  n = split(str, tk, /[ \t]+/)
+  i = 1
+  while (i <= n) {
+    t = tk[i]; sub(STRIPL, "", t); sub(STRIPR, "", t)
+    if (t == "sudo") { i++; while (i <= n && tk[i] ~ /^-/) i++; continue }
+    if (t ~ /^[A-Za-z_][A-Za-z0-9_]*=/) { i++; continue }
+    if (t !~ /^[A-Za-z_][A-Za-z0-9_.-]*$/) return
+    addsite(t)
+    if (!(t in WRAP)) return
+    w = t; i++
+    while (i <= n) {
+      u = tk[i]
+      if (u ~ /^-/) {
+        i++
+        if (w == "command" && (u == "-v" || u == "-V")) return
+        if ((w == "timeout" && (u == "-k" || u == "-s" || u == "--kill-after" || u == "--signal")) || (w == "nice" && u == "-n") || (w == "env" && (u == "-u" || u == "--unset")) || (w == "stdbuf" && (u == "-i" || u == "-o" || u == "-e")) || (w == "exec" && u == "-a")) i++
+        continue
+      }
+      if (u ~ /^[A-Za-z_][A-Za-z0-9_]*=/) { i++; continue }
+      if (w == "timeout" && u ~ /^[0-9]+([.][0-9]+)?[smhd]?$/) { i++; continue }
+      break
+    }
+  }
+}
+# The site scan of ONE logical line of a non-test file: the annotation strip (R8), the pipefail token, and every text pipe on it.
+function site(l,   s, m, w, tl) {
+  if (l ~ /^[ \t]*#/) return
+  if (index(l, "::")) gsub(ANNOT, "", l)   # an annotation echo shows the operator a command: its text is not a pipe, a pipe BEFORE it or AFTER its string still is
+  if (index(l, "pipefail")) pf = 1
+  if (isy && l ~ /shell:[ \t]*bash/) pf = 1
+  if (index(l, "|") && (index(l, "printf") || index(l, "echo") || index(l, "cat"))) {
+    o = (l !~ UNOBS); s = l
+    while (match(s, PIPE)) {
+      m = substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH)
+      sub(/^.*\|[ \t]*/, "", m)
+      if (m ~ /^sudo[ \t]+(-[A-Za-z0-9_]+[ \t]+)*[A-Za-z_]/) sub(/^sudo[ \t]+(-[A-Za-z0-9_]+[ \t]+)*/, "", m)
+      addsite(m)
+      if ((m in WRAP) || substr(s, 1, 1) == "=") { tl = s; sub(/\|.*$/, "", tl); unwrap(m tl) }
+    }
+  }
+}
+# R1: a code line that ends in a backslash, or in a single bar outside quotes that is not a YAML block-scalar indicator, absorbs the next line.
+function feed(raw,   t, s, q, nd, ns) {
+  if (hold) { t = raw; sub(/^[ \t]+/, "", t); cur = cur " " t; hn++ } else { cur = raw; hn = 0 }
+  hold = 0
+  if (hn < JOINCAP && (index(cur, "\\") || index(cur, "|")) && cur !~ /^[ \t]*#/) {
+    s = cur; sub(/[ \t\r]+$/, "", s)
+    if (s ~ /\\$/ && s !~ /\\\\$/) { cur = substr(s, 1, length(s) - 1); hold = 1 }
+    else if (s ~ /\|$/ && s !~ /\|\|$/ && s !~ YBLOCK) {
+      q = substr(s, 1, length(s) - 1); gsub(/\\./, "", q); nd = gsub(/"/, "", q); ns = gsub(sq, "", q)
+      if (nd % 2 == 0 && ns % 2 == 0) { cur = s; hold = 1 }
+    }
+  }
+  if (!hold) site(cur)
+}
+function flush() { if (hold) { hold = 0; site(cur) } }
 function addfp(f, w) { if (!((f, w) in fps)) { fps[f, w] = 1; nfp[f]++; fpw[f, nfp[f]] = w } }
 function fin(   i, k) {
   if (file == "") return
@@ -1257,7 +1323,7 @@ function stubbed(t, w,   r, b, c) {
 }
 NR == FNR { b = base($0); bc[b]++; bp[b] = $0; next }
 FNR == 1 {
-  fin(); file = FILENAME
+  flush(); fin(); file = FILENAME
   isnt = (file ~ /\.(sh|bash|yml|yaml)$/ && file !~ TESTISH)
   iss = (file ~ /\.sh$/)
   ist = (iss && file ~ TESTSHAPE && file !~ /^knowledge-base\// && file !~ /\/fixtures\//)
@@ -1266,20 +1332,11 @@ FNR == 1 {
   if (ist) tl[++nt] = file
 }
 {
+  if (isnt) feed($0)
   if ($0 ~ /^[ \t]*#/) next
   l = $0
-  sub(/::(error|warning|notice)::.*$/, "", l)   # an annotation echo shows the operator a command: its text is not a pipe, a pipe BEFORE it on the line still is
-  if (index(l, "pipefail")) pf = 1
-  if (isy && l ~ /shell:[ \t]*bash/) pf = 1
-  if (isnt && index(l, "|") && (index(l, "printf") || index(l, "echo") || index(l, "cat"))) {
-    o = (l !~ UNOBS); s = l
-    while (match(s, PIPE)) {
-      m = substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH)
-      sub(/^.*\|[ \t]*/, "", m)
-      if (m ~ /^sudo[ \t]+(-[A-Za-z0-9_]+[ \t]+)*[A-Za-z_]/) sub(/^sudo[ \t]+(-[A-Za-z0-9_]+[ \t]+)*/, "", m)
-      nc++; cw[nc] = m; cobs[nc] = o
-    }
-  }
+  sub(/::(error|warning|notice)::.*$/, "", l)   # physical lines: the pipefail token of a test file (the sourcer of a library may be one), and the stubs below
+  if (!isnt && index(l, "pipefail")) pf = 1
   if (iss && index(l, "()")) {
     if (l ~ FNRE) { m = l; sub(/^[ \t]*(function[ \t]+)?/, "", m); sub(/[ \t]*\(\).*$/, "", m); addfp(file, m) }
   }
@@ -1312,7 +1369,7 @@ FNR == 1 {
   }
 }
 END {
-  fin()
+  flush(); fin()
   for (ni = 1; ni <= nn; ni++) {
     f = nlist[ni]; b = base(f)
     for (ti = 1; ti <= nt; ti++) {

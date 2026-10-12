@@ -105,11 +105,15 @@ def logical_lines(raw, join):
     return out
 
 
-WRAP_SIMPLE = {'command', 'builtin', 'exec', 'env', 'nice', 'nohup', 'stdbuf', 'timeout', 'time', 'ionice', 'setsid', 'chroot'}
+WRAP_SIMPLE = {'command', 'builtin', 'exec', 'env', 'nice', 'stdbuf', 'timeout'}
+# per-wrapper flags that take the next token as an operand (the guard's awk carries the same table)
+WRAP_ARG = {'timeout': {'-k', '-s', '--kill-after', '--signal'}, 'nice': {'-n'}, 'env': {'-u', '--unset'},
+            'stdbuf': {'-i', '-o', '-e'}, 'exec': {'-a'}, 'command': set(), 'builtin': set()}
 
 
 def unwrap(after):
-    """tokens after a pipe -> list of verb words: the first word, and the word behind wrappers (R2)."""
+    """text after a pipe -> list of verb words: the first word, and the word behind wrappers and VAR=x assignments (R2).
+    Mirrors the guard's awk: `command -v` and `-V` are queries and name no verb; a wrapper has its own flag arity."""
     toks = after.split()
     verbs = []
     i = 0
@@ -123,30 +127,29 @@ def unwrap(after):
         if re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', t):
             i += 1
             continue
-        if WORD.fullmatch(t):
-            verbs.append(t)
-            if t in WRAP_SIMPLE:
-                i += 1
-                # skip the wrapper's own flags and operands
-                while i < len(toks):
-                    u = toks[i]
-                    if u.startswith('-'):
-                        i += 1
-                        if t in ('timeout',) and u in ('-k', '-s', '--kill-after', '--signal') and i < len(toks):
-                            i += 1
-                        elif t == 'nice' and u == '-n' and i < len(toks):
-                            i += 1
-                        continue
-                    if re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', u):
-                        i += 1
-                        continue
-                    if t == 'timeout' and re.fullmatch(r'[0-9]+(\.[0-9]+)?[smhd]?', u):
-                        i += 1
-                        continue
-                    break
-                continue
+        if not WORD.fullmatch(t):
             return verbs
-        return verbs
+        verbs.append(t)
+        if t not in WRAP_SIMPLE:
+            return verbs
+        w = t
+        i += 1
+        while i < len(toks):
+            u = toks[i]
+            if u.startswith('-'):
+                i += 1
+                if w == 'command' and u in ('-v', '-V'):
+                    return verbs
+                if u in WRAP_ARG[w] and i < len(toks):
+                    i += 1
+                continue
+            if re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', u):
+                i += 1
+                continue
+            if w == 'timeout' and re.fullmatch(r'[0-9]+(\.[0-9]+)?[smhd]?', u):
+                i += 1
+                continue
+            break
     return verbs
 
 
@@ -186,8 +189,8 @@ def sites_in(path, text, arms, forced_pf):
                 s = tail
                 word = m.group(6)
                 vs = [word]
-                if 'R2' in arms and word in WRAP_SIMPLE:
-                    vs = unwrap(word + ' ' + tail.split('|')[0])
+                if 'R2' in arms and (word in WRAP_SIMPLE or tail.startswith('=')):
+                    vs = [word] + unwrap(word + ('' if tail.startswith('=') else ' ') + tail.split('|')[0])   # the word itself stays a site, as in the base
                 for v in vs:
                     out.append((v, obs))
     return out, pf
