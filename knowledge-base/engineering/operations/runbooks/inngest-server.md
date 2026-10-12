@@ -610,7 +610,7 @@ network fault, where a login flow would fix nothing; `ready` → wrap the call i
 WS=$(doppler secrets get WEBHOOK_DEPLOY_SECRET -p soleur -c prd_terraform --plain)
 CID=$(doppler secrets get CF_ACCESS_CLIENT_ID -p soleur -c prd_terraform --plain)
 CSEC=$(doppler secrets get CF_ACCESS_CLIENT_SECRET -p soleur -c prd_terraform --plain)
-HMAC=$(printf '' | openssl dgst -sha256 -hmac "$WS" | sed 's/.*= //')
+HMAC=$(printf '' | HMAC_KEY="$WS" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')
 curl -fsS -H "X-Signature-256: sha256=${HMAC}" \
   -H "CF-Access-Client-Id: ${CID}" -H "CF-Access-Client-Secret: ${CSEC}" \
   "https://deploy.soleur.ai/hooks/deploy-status" > /tmp/ds.json
@@ -1493,7 +1493,7 @@ flow — the image build does NOT auto-deploy**. None of these steps use SSH
    WS=$(doppler secrets get WEBHOOK_DEPLOY_SECRET -p soleur -c prd_terraform --plain)
    CID=$(doppler secrets get CF_ACCESS_CLIENT_ID -p soleur -c prd_terraform --plain)
    CSEC=$(doppler secrets get CF_ACCESS_CLIENT_SECRET -p soleur -c prd_terraform --plain)
-   HMAC=$(printf '' | openssl dgst -sha256 -hmac "$WS" | sed 's/.*= //')
+   HMAC=$(printf '' | HMAC_KEY="$WS" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')
    curl -fsS -H "X-Signature-256: sha256=${HMAC}" \
      -H "CF-Access-Client-Id: ${CID}" -H "CF-Access-Client-Secret: ${CSEC}" \
      "https://deploy.soleur.ai/hooks/deploy-status" | jq '{component, tag, reason, exit_code}'
@@ -3052,8 +3052,7 @@ STRIPE_PAYLOAD=$(jq -nc --arg fid "<founder-uuid>" '{
 TS=$(date +%s)
 PAYLOAD_TO_SIGN="${TS}.${STRIPE_PAYLOAD}"
 SIG_HEX=$(printf '%s' "$PAYLOAD_TO_SIGN" \
-  | openssl dgst -sha256 -hmac "$STRIPE_WEBHOOK_SECRET" -hex \
-  | awk '{print $2}')
+  | HMAC_KEY="$STRIPE_WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')
 SIG_HEADER="t=${TS},v1=${SIG_HEX}"
 
 # 4. POST to the preview webhook endpoint.

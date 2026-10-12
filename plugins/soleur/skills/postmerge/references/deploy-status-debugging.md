@@ -15,7 +15,7 @@ When the release workflow's deploy step fails or times out, query `/hooks/deploy
 2. Sign and GET (read-only endpoint; HMAC is computed over the empty body):
 
    ```bash
-   SIGNATURE=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+   SIGNATURE=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')
    curl -sf -X GET \
      -H "X-Signature-256: sha256=$SIGNATURE" \
      -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
