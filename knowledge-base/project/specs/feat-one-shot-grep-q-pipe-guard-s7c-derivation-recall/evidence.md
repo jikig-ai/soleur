@@ -521,3 +521,144 @@ A row's reason must not name a file the derivation reads as a producer: the firs
 ### Phase 5 header
 
 The comment block above `PJ_DRAIN_WINDOW`, the guard's opening paragraph about the producer side and the comment above `PJ_AWK` were rewritten to the S7c state: what each arm sees, the STATED LIMITS (extensionless producers, a bar inside `"$( )"`, a verb behind a group beyond its first word, a stub two or more hops away, a variable-named verb, user-named loop helpers, the tab-as-one-character brace bound, a helper defined inside a heredoc stub, the rare drain spellings that fail closed) and a STILL OPEN paragraph (Items D, E, F, G, I and H, the wave A3 carriers, the #9639 and #9638 triage; listed, not planned; no claim that the series is finished). Comments only: the guard's code and its pins are unchanged by that commit.
+
+## Phase 6 evidence: the guard on the merged tree, the mutation and harness rows, the lints (2026-10-12)
+
+Host: 16 cores shared with other sessions; load average is stated beside every figure. Scratch clones under `/var/tmp/s7c/p6/` (`branch`, `merged`, `mut`, `h7`), never this worktree; every guard run is `ulimit -v 6000000` (shell only; no gate, bun or vitest run carries it).
+
+### AC-3, AC-4, AC-10: the guard from a clean checkout
+
+| tree | exit | `DEFERRED:` | `JOINED:` (rows) | `PASS: grep-q-producer-join` | wall, load before |
+| --- | --- | --- | --- | --- | --- |
+| the branch at `28e0b0ed53` (before main moved) | 0 | 12 | 153 (153 rows) | 152 derived pairs, 262 producer triples; 21 drains rows, 132 exempt rows | 31.3 s at load 41.9 (the first run of the session, host saturated) |
+| the branch merged with `origin/main` `f5a1495387` (merge commit `23d0b0a680`, its own commit; main moved one commit, `#10109`, which touches `cron-egress-resolve.sh`, `cron-egress-firewall.test.sh`, the egress gateway bootstrap and one `.env`; no pair or triple moved) | 0 | 12 | 153 | same line | 18.5 s at load 34.9 |
+| final head `0e3a0d0a84` (merge plus the fixture commit of this section) | 0 | 12 | 153 | same line | 9.9, 9.0, 10.8 s at load 6.4 to 8.3 (three runs) |
+
+Merge commit `23d0b0a680` is a plain merge of `origin/main` into the branch (a separate commit, no edit); the merged tree's guard output was identical to the branch's before it was committed.
+
+**AC-4, derivation parity.** `bash drv.sh` (the guard's own `PJ-DERIVE-BEGIN`..`END` block, `git ls-files` listing, `LC_ALL=C sort -u`) against `j0-derive.py` imported with the final arm set `{R1, R2, R3, R4b, R5a, R5b, R6, R7, R8}`: 262 triples each, `diff` empty on triples and on the 152 pairs, on the branch tree (`28e0b0ed53`), on the merged tree and at the final head (after the port received the comment rule). No delta to enumerate. The plain command `python3 -I .../j0-derive.py` on the merged tree now prints BASE 67 pairs and 126 triples (not the plan's 66 and 120) and U2 `+85 pairs, +136 triples`: 67 + 85 = 152 and 126 + 136 = 262. The BASE moved because this branch's own `sha256sum` stub edit (the verb leaves a four-name `for` loop and gets a heredoc stub) makes the pair `reusable-release-zot-mirror-retry.test.sh | sha256sum` visible to the S7b rules; the S7b guard text run on this tree reads the same 126 triples and one unlisted pair (that one). Not a port drift.
+
+**AC-10.** `SWEEP_PROBE_CHECKS=50`; `grep -vE '^[[:space:]]*#' .claude/hooks/grep-q-pipe-guard.test.sh | grep -cE '(\|\||&&)[[:space:]]+sweep_probe_fail\+=\('` returns 50 (S7b: 47; three checks added, `derivation-fixtures`, `producer-join-window`, `producer-join-verdicts`). `PJ_TRIPLES=262`. The literal grep of AC-10, `grep -c 'awk "\$PJ_AWK"'`, no longer matches the source (the call is `awk -v exts=... "$PJ_AWK"` in `pj_derive`); the equivalent `grep -vE '^[[:space:]]*#' ... | grep -c '"\$PJ_AWK"'` returns 1, and `pj_derive` has one call outside the fixture runner (`pj_join_pairs`, once, at the real run). No per-pair scan or per-file process was added. Static check H3: column-0 `FAIL=0` 1, `exit "$FAIL"` 1, `sweep_main .` 1, `sweep_fold` 2 (the definition and the one call), none inside a fixture or message.
+
+**Wall time, plain and under a Check 10-shaped read-only bwrap** (`BWRAP_ARGS` of preflight Check 10 with `--tmpfs /home /root /run /tmp /var/tmp`, the repo bound read-only after them, `env -i`, `timeout 15s`, command `bash .claude/hooks/grep-q-pipe-guard.test.sh`; no `ulimit` inside it, as Check 10 has none). The load is high and shared; none of these is a quiet-host reading.
+
+| run | wall | load average at the end of the run |
+| --- | --- | --- |
+| S7b guard (`0aae3f8680`), plain, interleaved | 10.8, 10.9, 14.3 s; later 10.4, 10.9 s | 9.3 to 10.3 |
+| S7c head, plain, interleaved with the above | 10.2, 10.7, 14.1 s; later 9.7, 10.4 s | 9.1 to 9.6 |
+| S7c head, plain, quieter window | 9.9, 9.0, 10.8 s | 6.6, 6.4, 8.3 |
+| S7c head, bwrap with the 15 s cap | 8.3, 7.6, 7.7 s (first three, load 8.4 to 9.5); 7.8, 7.8, 9.9 s (load 6.6 to 10.1); every run exit 0 | as listed |
+
+The head is within noise of the S7b guard at the same load, and under the Check 10 cap in all six capped runs. The plan's 12 s quiet-host trigger (decision-challenges item 10) is not reached (the largest plain figure at load under 10 is 10.9 s); the quiet-host figure itself still cannot be taken on this host.
+
+### AC-7: mutation rows (M1 to M46, harness rows H1 to H7)
+
+Method: `mutate.py` (scratch, not committed) drives each row in the clone `mut` under `ulimit -v 6000000`, one row at a time: `git reset --hard HEAD; git clean`, the UNMUTATED control run (must exit 0), the edits (each `sub` must land exactly the declared number of times, each `del` on exactly the declared number of lines, the tree must differ from `HEAD`), the guard run, graded RED only when the exit status is non-zero (or the named status, 3 for the two UNRESOLVED rows) AND every named substring is printed AND no forbidden substring is. A row that exits non-zero without its substring is WRONG-REASON and is not counted. No row executes an owner suite (every row is a read-only edit of the guard or of a file the guard reads), so none went through `run-isolated`.
+
+**Final run, head `0e3a0d0a84`: 55 rows run, control exit 0 and mutation landed on every one; 54 RED, 1 survivor (M6 as written, an equivalent mutant, below), 0 wrong-reason, 0 unverified.** M4, M26, M41 and M43 read RED.
+
+First run, head `23d0b0a680` (before the fixture commit, 54 rows; every control exit 0, every mutation landed): M6, M6b and M30 SURVIVED, M3 and M35 WRONG-REASON, the other 49 RED. What each was and what changed:
+
+| row | first reading | cause | action |
+| --- | --- | --- | --- |
+| M3 | exit 1, but the named fixture `backslash-split` did not fire; red only through real-tree `unlisted pair` lines | the fixture's bar sits on the continuation line after a quoted word, which the any-producer arm (R3) reads without the backslash join, so the fixture does not pin R1's join | fixture `backslash-split-bar-first` added (`printf x \| \` then `curl -K -`: the bar ends line one, only the join sees the verb); M3 now reads `[backslash-split-bar-first must derive curl]` |
+| M6 | survived | dropping `-k` from the timeout arity is an equivalent mutant: the numeric duration skip that follows reads `-k`'s operand anyway, so `timeout -k 2 5 curl` derives with or without the arity | recorded as equivalent, not counted passed; the real arity is pinned by M6b below |
+| M6b (re-aimed M6: no timeout arity at all) | survived | no fixture used `-s SIG` | fixture `wrapper-timeout-s` added; M6b reads `[wrapper-timeout-s must derive curl]` |
+| M30 | survived | the one-line stub fixture `curl() { cat >/dev/null; }` is a one-line file, so the extent is the file whatever the bound does | must-end fixture `crossoneline` added to `producer-join-window` (`curl() { :; }` then a top-level `cat >/dev/null`, want `no`); M30 reads `extent [no |no |no |ok |]` |
+| M19 | red only by the luks-monitor recall row | the matrix names a `stub-in-sourced` fixture that did not exist | fixture added (a suite sources a file that defines the stub); M19 reads both |
+| M35 | exit 1 not 3, no `UNRESOLVED` | the real rows partly find stubs through the other openers, so the exit is the definition-count FAIL plus the finder controls | re-aimed to the finder control it actually trips: `producer-join-finder-positive: a keyed first-statement drain read as [none]` |
+| H2 (comment line between two joined lines) | the pair did not derive | `feed()` appended the comment text and ended the join; valid shell allows a comment between the stages of a pipe | `feed()` skips a comment line while the hold came from a trailing bar (a backslash hold is unchanged); a tree scan finds no such site, so no pair moved (AC-4 diff still empty); fixture `comment-between-stages` and new row M46 |
+
+Table (final run, `res-final2.tsv`):
+
+| row | mutation | control rc | landed | guard rc | grade | named substring read |
+| --- | --- | --- | --- | --- | --- | --- |
+| M1a | own dispatch: the real run derives from an empty file set | 0 | yes | 3 | RED | `UNRESOLVED: the producer-side join derived zero pairs` |
+| M1b | own dispatch: the fixture runner derives from an empty file set | 0 | yes | 1 | RED | `[the fixture run derived nothing]` |
+| M2 | drop the logical-line join over a trailing pipe | 0 | yes | 1 | RED | `[pipe-split must derive curl]` |
+| M3 | drop the logical-line join over a trailing backslash | 0 | yes | 1 | RED | `[backslash-split-bar-first must derive curl]` |
+| M4 | second member: the site scan stops after the first site of a file | 0 | yes | 1 | RED | `[second-site must derive jq]` |
+| M5 | drop the wrapper table | 0 | yes | 1 | RED | `[wrapper-timeout must derive curl]` |
+| M6 | per-wrapper arity: timeout -k read without its argument (the plan row as written) | 0 | yes | 0 | SURVIVED (equivalent mutant) | `[wrapper-timeout-k must derive curl]` |
+| M6b | per-wrapper arity: timeout flags read with no arity at all (re-aimed M6) | 0 | yes | 1 | RED | `[wrapper-timeout-s must derive curl]` |
+| M7 | treat command -v as a wrapper of the verb | 0 | yes | 1 | RED | `[command-v must NOT derive curl]` |
+| M8 | drop the any-bar scan | 0 | yes | 1 | RED | `[other-producer must derive curl]` |
+| M9 | quote parity removed from the any-bar scan | 0 | yes | 1 | RED | `[quoted-bar-single must NOT derive curl]` |
+| M10 | join a trailing bar that sits inside a quote | 0 | yes | 1 | RED | `[quoted-trailing-bar must NOT derive curl]` |
+| M11 | join over a YAML block-scalar indicator | 0 | yes | 1 | RED | `[yaml-block-scalar must NOT derive curl]` |
+| M12 | drop the case-alternation exclusion | 0 | yes | 1 | RED | `[case-alternation must NOT derive curl]` |
+| M13 | drop the sourcer rule (reverse source map) | 0 | yes | 1 | RED | `[library-sourced must derive curl]` |
+| M14 | pipefail taken from the owning test file | 0 | yes | 1 | RED | `[library-unsourced-no-pipefail must NOT derive curl]` |
+| M15 | helper stub: read only the first argument | 0 | yes | 1 | RED | `[helper-arg2 must derive curl]` |
+| M16 | drop the loop arm | 0 | yes | 1 | RED | `[loop-built must derive curl]` |
+| M17 | drop .tf from the shared extension list | 0 | yes | 1 | RED | `[tf-producer must derive curl]` |
+| M18 | restore the stub-name strip | 0 | yes | 1 | RED | `[stub-unquoted-semicolon must derive jq]` |
+| M19 | drop the one-hop sourced-stub arm | 0 | yes | 1 | RED | `[stub-in-sourced must derive curl]` |
+| M20 | annotation strip reverts to end of line | 0 | yes | 1 | RED | `[annot-pipe-after must derive jq]` |
+| M21 | annotation strip stops at the first quote and ignores the backslash | 0 | yes | 1 | RED | `[annot-escaped-quote must NOT derive curl]` |
+| M22 | no annotation strip | 0 | yes | 1 | RED | `[annot-pipe-inside must NOT derive curl]` |
+| M23 | the observed rule reads only the first physical line of a logical line | 0 | yes | 1 | RED | `[continuation-or-true must NOT derive curl]` |
+| M24 | a new producer of an already-listed pair (a file added and named by the suite) | 0 | yes | 1 | RED | `FAIL: the derivation found 263 (test file, verb, producer file) triples and PJ_TRIPLES pins 262` |
+| M25a | delete one row and keep its pair | 0 | yes | 1 | RED | `FAIL: unlisted pair: .claude/hooks/grep-rewrite.test.sh stubs 'jq'` |
+| M25b | keep a row whose pair no longer derives | 0 | yes | 1 | RED | `FAIL: stale join row: ghost.test.sh \| curl` |
+| M26 | REORDER (window): no bound at another verb's opener | 0 | yes | 1 | RED | `extent [ok \|no \|no \|no \|] (want` |
+| M27 | remove the heredoc-terminator bound | 0 | yes | 1 | RED | `extent [no \|no \|ok \|no \|] (want` |
+| M28 | remove the closing-brace bound | 0 | yes | 1 | RED | `extent [no \|ok \|no \|no \|] (want` |
+| M29 | widen the bound to every file write | 0 | yes | 1 | RED | `must still read as drains [no \|ok \|] (want` |
+| M30 | the closing-brace bound ignores a one-line stub (the plan row as written) | 0 | yes | 1 | RED | `extent [no \|no \|no \|ok \|] (want` |
+| M31 | second member: a second definition of the verb with no drain after a compliant first | 0 | yes | 1 | RED | `with no stdin drain` |
+| M32 | drop the test -t 0 alternative from the non-drain pattern | 0 | yes | 1 | RED | `non-reading spelling detected as a drain: test -t 0 && cat >/dev/null` |
+| M33 | drop the if ...; then alternative | 0 | yes | 1 | RED | `non-reading spelling detected as a drain: if [ -t 0 ]; then cat >/dev/null; fi` |
+| M34 | drop the input-redirect alternative | 0 | yes | 1 | RED | `non-reading spelling detected as a drain: cat >/dev/null </dev/null` |
+| M35 | own dispatch: the stub opener is renamed so the finder sees zero | 0 | yes | 1 | RED | `producer-join-finder-positive: a keyed first-statement drain read as [none]` |
+| M36 | remove the cat 2> and cat - alternatives | 0 | yes | 1 | RED | `accepted spelling not detected: cat -` |
+| M37 | the definition-count verdict is neutered | 0 | yes | 1 | RED | `no 'stubs 'curl' in 1 definitions, the row pins 2'` |
+| M38 | the no-drain verdict is neutered | 0 | yes | 1 | RED | `no 'defines the 'curl' stub with no stdin drain'` |
+| M39 | the malformed-row verdict is neutered | 0 | yes | 1 | RED | `no 'malformed drains row'` |
+| M40 | the triple-pin verdict is neutered | 0 | yes | 1 | RED | `no 'triples and PJ_TRIPLES pins 6'` |
+| M41 | the pj_j merge assignment is blanked, with a real row deleted | 0 | yes | 1 | RED | `the pj_judge merge 1 and its assignment 0` |
+| M42 | the no-line loop of the row check is made a no-op | 0 | yes | 1 | RED | `no 'defines the 'curl' stub with no stdin drain'` |
+| M43 | second member: the row check stops after its first row | 0 | yes | 1 | RED | `no 'with no stdin drain'` |
+| M44 | own dispatch: the row-check driver is handed zero rows | 0 | yes | 1 | RED | `no 'stubs 'curl' in 1 definitions, the row pins 2'` |
+| M45 | pj_unread widened to accept rc 3 | 0 | yes | 1 | RED | `[pj_unread grades a status it must not]` |
+| M45b | the row-check merge is neutered | 0 | yes | 1 | RED | `the row-check merge 0` |
+| M45c | the triple-pin assignment is blanked | 0 | yes | 1 | RED | `the triple-pin merge 1 and its assignment 0` |
+| M46 | a comment line between the stages of a pipe: the skip removed | 0 | yes | 1 | RED | `[comment-between-stages must derive curl]` |
+| H1 | delete the derivation-fixture runner tail | 0 | yes | 1 | RED | `probe-count: this probe carries 49 checks, pinned at 50` |
+| H4 | the extent logic accepts only a function opener | 0 | yes | 3 | RED | `UNRESOLVED: the drains row for` |
+| H6 | delete the verdict-control tail | 0 | yes | 1 | RED | `probe-count: this probe carries 49 checks, pinned at 50` |
+| H7c | the fold: a deliberately wrong row turns the suite red and prints no PASS line | 0 | yes | 1 | RED | `stubs 'docker' in 2 definitions, the row pins 3` |
+
+Plan rows whose expectation text differs from what the guard prints: M44's plan text says `row checks derived nothing`; the guard has no such line (the zero-row driver reads RED through the verdict control, `producer-join-verdicts`), so the row is graded on that substring. M1's two halves (real run and fixture runner) are M1a and M1b. M25 is two rows (M25a a deleted row, M25b a ghost row). M45b and M45c are the two merge pins S7c added (decision-challenges item 29). M46 is the new row for the comment rule.
+
+**Harness rows.**
+
+| row | what | result |
+| --- | --- | --- |
+| H1 | delete the fixture runner's `|| sweep_probe_fail+=` tail | RED: `probe-count: this probe carries 49 checks, pinned at 50` |
+| H2 | must-PASS fixtures that are not the canonical, through the guard's own `pj_derive` (`h2.sh`): a tab-indented continuation after a backslash and after a pipe; `env -i VAR=1 curl`; a comment line between joined lines (both forms); a suite naming `fprod.sh` is not an owner of `prod.sh` while one naming `prod.sh` is; a CRLF producer and a CRLF continuation | first run 8 of 9 pass, the comment case failed (above); final run 9 of 9 pass |
+| H3 | the remediation's own text: no column-0 `FAIL=0`, `exit "$FAIL"`, `sweep_fold` or `|| sweep_probe_fail+=(` text inside a fixture or message; header recipe re-run | counts above (1, 1, 1 call plus the definition); the recipe returns 50 = `SWEEP_PROBE_CHECKS` |
+| H4 | the extent logic accepts only a function opener | RED, exit 3: `UNRESOLVED: the drains row for .claude/hooks/grep-rewrite.test.sh jq found 0 stub definitions` |
+| H5 | each accepted spelling through the dynamic control, both dispositions, both interpreters (AC-8 below) | 82 graded runs, 0 disagreements |
+| H6 | delete the verdict control's tail | RED: `probe-count: ... 49 checks, pinned at 50` |
+| H7 | must-PASS: (a) a clean fixture table and clean fixtures print nothing from each verdict function; (b) extra blanks around the separators and a tab-separated `drains` row are accepted by `pj_judge` and `pj_check_rows`, and a wrong count still prints (a copy of the guard with a probe block ahead of the real run, scratch clone `h7`: `H7-RESULT: clean`); (c) the fold: a deliberately wrong real row (`ci-deploy.test.sh | docker | drains | 3`) | (a) and (b) clean; (c) RED, exit 1, `stubs 'docker' in 2 definitions, the row pins 3`, and no `PASS: grep-q-producer-join` line |
+
+### AC-8: the dynamic control (`ac8.sh`, independent of the guard's own run; the spelling arrays and the detector are the guard's)
+
+A `#!/bin/sh` stub that reads nothing, run by dash and by bash, and a bash stub: SIGPIPE ignored rc 1, default disposition rc 141, in every case (the two measured reachable; CI reads 1 for both where SIGPIPE is inherited ignored). Every accepted spelling, including `x=$(cat 2>/dev/null)` and `cat -`, `[ ! -t 0 ] && cat` and `[ -t 0 ] || cat`, exits 0 under both dispositions and every interpreter its tag allows (sh-tagged under dash and bash, bash-tagged under bash) and is detected as a drain. Every non-reading spelling, including `test -t 0 && cat`, `if [ -t 0 ]; then cat; fi`, `cat >/dev/null </dev/null`, `[ -t 0 ] && cat`, `[[ -t 0 ]] && cat`, `true || cat`, a backgrounded `cat` and a pipe-fed `cat`, fails with rc 1 or 141 under both dispositions and is not detected as a drain. 82 graded runs, 0 disagreements between the run and the detector (output `ac8-final.out`).
+
+### AC-9: lints
+
+| lint | command | result |
+| --- | --- | --- |
+| shell capture exit | `python3 scripts/lint-shell-capture-exit.py --baseline scripts/lint-shell-capture-exit.baseline.txt` | rc 0, `1571 script(s) scanned, 0 new findings, 224 baselined` |
+| vacuity floor | `bash scripts/guard-vacuity-floor.test.sh` | rc 0, 23 passed, 0 failed |
+| orphan suites | `bash scripts/lint-orphan-test-suites.sh` | rc 0, `675 covered, 0 orphaned` |
+| shellcheck `-S warning` findings, `origin/main` against head | the guard 0 to 0; `reusable-release-zot-mirror-retry.test.sh` 0 to 0; `test-supabase-advisor-scan.sh` 0 to 0; `test-zot-log-channel-probe.sh` 1 to 1; `ci-deploy.test.sh` 19 to 19; `git-data-flag-precheck.test.sh` 0 to 0; `git-data-cutover-access.test.sh` 0 to 0 | unchanged on all seven |
+| guard contract | `python3 scripts/lint-guard-contract.py knowledge-base/project/plans/2026-10-12-chore-grep-q-wave-b-s7c-derivation-recall-plan.md` | rc 0, 1 plan, 3 guard entries |
+| no human steps | `python3 scripts/lint-infra-no-human-steps.py <the plan>`; also `--changed` | rc 0 both (1 and 5 files scanned) |
+| fixture relative assert | `bash plugins/soleur/test/fixture-relative-assert.test.sh` | first lane run RED (see below); rc 0 after the one-comment reword, 62 passed |
+| kb consumers | `bash scripts/test-affected-kb-consumers.test.sh`, once, nothing written to the repo while it ran | rc 0, 23 passed of 23, 154 s at load about 10; the gate named no new reference, so the baseline file was not touched in this section |
+| pre-push ratchet lane | `bash scripts/pre-push-ratchet-lane.sh` on the merged tree (head `0e3a0d0a84`) | rc 0, `RATCHET_LANE verdict=PASS members=19 red=0 seconds=949 merge=ok base=f5a1495387` (its kb-consumers member ran too, 351 s at load about 10, PASS) |
+
+**A real find from the lane.** The first lane run (head `23d0b0a680`) was RED on `fixture-relative-assert`: the guard's S7c edit carried the text `> "$d/jq"; chmod` in an awk comment (the R7 note), which the scanner reads as a redirect to a relative operand (`root=never-bound`), one new site over the baseline of 2067. Fixed by rewording the comment (commit `0e3a0d0a84`) rather than baselining one more row; the lane member and the standalone suite are green. The lane's other RED in that run was `ci-deploy.test` hitting the lane's own 300 s member cap (the suite takes about 8 minutes on this host, evidence Phase 3 and the AC-6 pair run); it printed PASS lines up to the cap and no FAIL. In the second lane run (head `0e3a0d0a84`, lower load) the same member passed in 295 s, five seconds under the cap: the member is flaky against its own cap at this host's load, not red. Not changed here (the lane script is outside this slice).

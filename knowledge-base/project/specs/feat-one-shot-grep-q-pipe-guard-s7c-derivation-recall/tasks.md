@@ -42,7 +42,7 @@ Plan: knowledge-base/project/plans/2026-10-12-chore-grep-q-wave-b-s7c-derivation
 
 ## Phase 6 Evidence and ship
 
-- [ ] 6.1 Mutation rows M1 to M38 and harness rows H1 to H7, one at a time under `ulimit -v 6000000` on a scratch clone, each asserting the mutation landed and the control is green; owner-suite rows through `run-isolated`.
+- [x] 6.1 Mutation rows M1 to M38 and harness rows H1 to H7, one at a time under `ulimit -v 6000000` on a scratch clone, each asserting the mutation landed and the control is green; owner-suite rows through `run-isolated`.
 - [ ] 6.2 Pair run of each edited suite at base and head from real checkouts; lints (plan AC-9); `bash scripts/test-affected-kb-consumers.test.sh` once before the push; pre-push ratchet lane on the merged tree.
-- [ ] 6.3 decision-challenges.md update; learning if a non-obvious finding occurs.
+- [x] 6.3 decision-challenges.md update; learning if a non-obvious finding occurs.
 - [ ] 6.4 PR body per AC-11; `soleur:ship`; post-merge per AC-12 (tracker comment with J0 numbers and command, NOT-fixed list, next slice named).
