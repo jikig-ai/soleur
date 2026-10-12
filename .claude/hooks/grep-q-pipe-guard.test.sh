@@ -139,9 +139,10 @@ PATTERN_PIPED_SCORER='(^|[^|])\|&?[[:space:]]*grep([[:space:]]+-[A-Za-z]+)*[[:sp
 # THE PRODUCER SIDE of the pipe (a stub that never reads the stdin a `printf |` feeds it, so the writer takes the signal) is
 # invisible to any line search: it needs a join from each production pipe to the owning suite's stub. S7b (#9217) adds that join
 # (the block headed THE PRODUCER SIDE near the end of this file): it derives every (test file, verb) pair, requires a PRODUCER_JOIN row
-# for each, pins the stdin drain of every `drains` row within a four-line text window, and runs the hazard for real. What it does NOT
-# cover is listed under STATED LIMITS in that block (pipes split over lines, wrapped verbs, helper-built stubs, variable verbs, process
-# substitutions, and a pair whose suite never reaches the stub: an exempt text-only row says so). Follow-on slices of #9217 remain open (affected-edge selection for a changed producer, and the other wave A3 carriers);
+# for each, pins the stdin drain of every `drains` row inside the extent of its own stub, and runs the hazard for real. S7c widened what it
+# derives (split lines, wrapped verbs, any producer before a bar, libraries, helper-built and loop-built stubs, more file types). What it
+# still does NOT see is listed under STATED LIMITS in that block; a pair whose suite never reaches the stub is an exempt text-only row, and a
+# process substitution is not a pipe. The series stays open: the follow-on slices of #9217 are listed in that block, not planned here, and
 # this header does not claim the series is finished.
 
 # PATTERN_V2 is the widened reader pattern the DERIVED SWEEP (scan_sweep, below) uses. The four named
@@ -1120,28 +1121,46 @@ eqv_sh="$(_eqv "$EQV_SH")"
   || sweep_probe_fail+=("equivalence-sh: rows whose exit status differs under sh: ${eqv_sh:-none}; the same table with the wrong converted form reported ${eqv_neg_sh:-NOTHING} (want a difference, so the sh pass can see one)")
 
 # ---------------------------------------------------------------------------------------------------------------------
-# THE PRODUCER SIDE (S7b, #9217 Arm P). The consumer side above bans `| grep -q`; this half covers the OTHER end of the same
+# THE PRODUCER SIDE (S7b, #9217 Arm P; widened by S7c). The consumer side above bans `| grep -q`; this half covers the OTHER end of the same
 # pipe: a non-test script feeds text into a verb, and a test STUB for that verb exits without reading stdin, so the writer dies
 # (SIGPIPE 141, or EPIPE where CI ignores SIGPIPE). Three guards share one table, PRODUCER_JOIN, whose evidence is
-# knowledge-base/project/specs/archive/20261012-033826-feat-one-shot-grep-q-pipe-guard-s7b-producer-join/evidence.md.
-#   1. SET IDENTITY over what the derivation can see. pj_join_pairs derives every (test file, verb) pair where the test file names
-#      a non-test file that pipes printf/echo/cat into the verb ON ONE LINE, in a file that mentions pipefail, with its status
-#      observed, and the test file (or one sourced file) stubs that verb. Every derived pair has exactly one row and every row still
-#      derives. PJ_TRIPLES pins the (test file, verb, producer file) count, so a new producer of an already-listed pair is a
-#      deliberate edit and not a silent pass.
-#   2. A `drains` row's stub reads stdin early: in each of its N stub definitions a drain keyed on the flag token sits in the
-#      opener line or the next PJ_DRAIN_WINDOW code lines of the SAME definition, with no bare exit or return before it. This is a
-#      four-line TEXT window; it does not prove that the arm the producer reaches reads.
-#   3. The hazard is real and the checker can see a vacuous stub (the dynamic control below).
-# STATED LIMITS (each is a follow-on slice of #9217, the derivation-recall slice): a pipe split over lines by a trailing backslash or
-# pipe (about 24 more pairs), a verb behind a wrapper (timeout, env, command), a producer other than printf/echo/cat, a pipe in a
-# library with no pipefail token of its own, a stub built through a helper that takes an argument or a loop over verb names, a stub
-# sourced two or more hops away, a verb named through a variable, a pipe written inside an annotation echo (the text after ::error:: and its kin is
-#      not scanned), and a producer in a file type outside .sh .bash .yml .yaml. A bare exit or return line ahead of the drain disarms it even in an
-#      earlier case arm (use an arm-drain row for such a stub).
-# Only tracked files are read, so a new untracked file is invisible until it is staged. An `exempt` row is an attestation: only its
-# first word is checked, and the reach column of the evidence file (not this table) says which pairs ran at all. This bash
-# derivation is AUTHORITATIVE; j0-derive.py in the spec directory is a point-in-time measurement of the base commit.
+# knowledge-base/project/specs/archive/20261012-033826-feat-one-shot-grep-q-pipe-guard-s7b-producer-join/evidence.md (S7b) and
+# knowledge-base/project/specs/feat-one-shot-grep-q-pipe-guard-s7c-derivation-recall/evidence.md (S7c: the per-pair reach table and the arm increments).
+#   1. SET IDENTITY over what the derivation can see. pj_join_pairs derives every (test file, verb) pair where the test file names a non-test
+#      file (.sh .bash .yml .yaml .tf .tftpl .template .service .tmpl, one list) that pipes into the verb under pipefail with its status observed,
+#      and the test file (or one sourced file) stubs that verb. Pipefail is the file's own token, `shell: bash` in a workflow, or, for a library,
+#      the token of a file that sources it (a subprocess does not inherit the option, so the owning test file's token is not read). A site is read
+#      on a LOGICAL line (a trailing backslash or a trailing single bar outside quotes joins the next code line, a YAML block-scalar indicator
+#      does not) and is either the old printf/echo/cat producer or ANY stage before a single bar outside quotes (a case-pattern alternation is not
+#      a pipe); the verb may sit behind timeout, env, command (not -v or -V), nice, stdbuf, exec, builtin or VAR=x; a pipe before or after an
+#      annotation echo's string is read, the text inside it is not. A stub is a function, a file written to .../VERB (also `> "$d/jq"; chmod`),
+#      a stub-helper call naming the verb as any argument, or a file written inside a `for` loop over the verb names, in the test file or in one
+#      sourced file. Every derived pair has exactly one row and every row still derives. PJ_TRIPLES pins the (test file, verb, producer file)
+#      count, so a new producer of an already-listed pair is a deliberate edit and not a silent pass; an unlisted pair names its producer file(s).
+#   2. A `drains` row's stub reads stdin early: in each of its N stub definitions a drain keyed on the flag token sits in the opener line or the
+#      next PJ_DRAIN_WINDOW code lines of the SAME definition, with no bare exit or return before it. The extent of a stub ends at the next stub
+#      opener of ANY verb (function, helper call or heredoc writer), its heredoc terminator or its closing brace; a one-line logging write does not
+#      end it. This is a four-line TEXT window; it does not prove that the arm the producer reaches reads. A drain behind a tty test that reads only
+#      on a terminal, behind a constant short-circuit, backgrounded, or reading a file, is not a drain.
+#   3. The hazard is real and the checker can see a vacuous stub (the dynamic control below), and every verdict this block prints is driven by a
+#      fixture that must make it print (a verdict neutered to a no-op turns the probe red).
+# STATED LIMITS (S7c state; counts rot, re-measure before quoting). Not seen: a producer in an extensionless file (4 tracked files carry a shell
+# shebang, none held a text pipe when measured); a bar inside "$( )" or after an apostrophe inside double quotes (the quote-parity test reads it as
+# quoted); a verb behind a group opener beyond its first word (`printf x | ( umask 077; curl ... )`); a stub two or more hops away; a verb named
+# through a variable (an exempt variable-named-verb row says so); a stub built through a user-named helper or loop helper the finder cannot read
+# (`wstub`), or a stub whose body sits in a helper function defined inside a heredoc stub; the brace bound compares leading whitespace by
+# character count, so a tab counts as one character; a pipe whose annotation string spans lines is stripped to the end of its first line; and the rare
+# drain spellings that fail closed with a hint naming the accepted form (`[ -t 0 ] && true || cat`, a drain followed by a backgrounded `sleep`, a
+# here-string in a command substitution, a `#` inside a string ahead of the drain, `if [ -t 0 ]; then ...; else cat; fi`, a multi-line if/then/cat).
+# A bare exit or return line ahead of the drain disarms it even in an earlier case arm (use an arm-drain row for such a stub). An `exempt` row is an
+# attestation, not a measurement: only its first word is checked, and the reach table in the S7c evidence file (not this table) says which pairs ran
+# at all. A count pin survives an add-one-delete-one swap for one pair.
+# STILL OPEN (listed, not planned here): the series of #9217 continues with Items D, E, F, G, I and H of its brief (F is a per-subtree count pin for
+# the `# sigpipe-demo: intentional` marker; the declared affected-edge list for this guard, in scripts/lib/test-affected-paths.sh, does not select it
+# when only an owner suite changes), the wave A3 carriers (six carrier rows and 23 later-wave sites, gated on a host replace), and the #9639 and #9638
+# triage. This block does not claim the series is finished.
+# Only tracked files are read, so a new untracked file is invisible until it is staged. This bash derivation is AUTHORITATIVE; j0-derive.py in the
+# S7c spec directory is a port that reproduces it for measurement, and an unexplained difference between the two is the port drifting.
 PJ_DRAIN_WINDOW=4
 PJ_ALL="$(git ls-files)"
 PJ_TRIPLES=261   # recomputed from a green run: the number of distinct (test file, verb, producer file) triples
@@ -1303,12 +1322,13 @@ PRODUCER_JOIN=(
 )
 # PJ-DERIVE-BEGIN
 # One awk program: the five definitions of the derivation. mawk-safe (no \b, no gensub, no intervals).
-#   non-test file  tracked .sh .bash .yml .yaml, not test-shaped, not under knowledge-base/ or fixtures/
+#   non-test file  tracked file of a PJ_EXTS extension, not test-shaped, not under knowledge-base/ or fixtures/
 #   test file      tracked .sh, test-shaped
-#   text pipe      a non-comment line holding  (printf|echo|cat) ... | [sudo [-flags]] WORD,  kept when the file has pipefail
-#                  in scope (or `shell: bash` in a workflow) and the line does not end `|| true` or `|| :`
-#   stub of WORD   in a test file or in a file it sources (one hop, unique basename): `WORD() {`, a file written to .../WORD by
-#                  cat or printf, or (test file only) a stub-helper call naming WORD
+#   text pipe      on a logical line (joined over a trailing backslash or bar): (printf|echo|cat) ... | WORD, or any stage before a single bar
+#                  outside quotes | WORD, WORD behind sudo, a wrapper or VAR=x; kept when the file has pipefail in scope (its own token, `shell: bash`,
+#                  or a sourcing file's token for a library) and the line does not end `|| true` or `|| :`; an annotation echo's string is dropped
+#   stub of WORD   in a test file or in a file it sources (one hop, unique basename): `WORD() {`, a file written to .../WORD by cat or
+#                  printf, a stub-helper call naming WORD as any argument, or (test file only) a `for` loop over names whose body writes .../$VAR
 #   owner          a test file whose non-comment lines hold the non-test file's basename as a whole token
 PJ_AWK='
 BEGIN {
