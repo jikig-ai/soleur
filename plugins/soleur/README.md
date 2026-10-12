@@ -491,7 +491,8 @@ Remove the key to turn the check off. Do not enable it in CI or ephemeral contai
 uses unauthenticated GitHub requests, which GitHub limits to 60 per hour per IP address. A lookup
 runs `git ls-remote --tags` against github.com/jikig-ai/soleur and, for a commit-hash install only,
 one unauthenticated GitHub compare API request whose URL includes the installed commit hash. It runs
-with git configuration isolated (no user git config, no ssh, no credentials, https only) and each
+with git configuration isolated (no user git config, no ssh, no credentials of its own, https only; a
+proxy configured in your environment is still used) and each
 request is time-limited (8 seconds by default, `SOLEUR_FETCH_TIMEOUT` to change). While lookups keep
 failing, the check retries at most once every 10 minutes.
 

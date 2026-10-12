@@ -759,7 +759,7 @@ new_xdg; old=$((NOW - 3 * DAY)); put_cache "$ID_M" v9.9.9 "$old" older; reset_ca
 mkdir -p "$SANDBOX/tmpdir"
 run_hook "CLAUDE_PLUGIN_ROOT=$R_MANIFEST" "SOLEUR_UPDATE_CHECK=1" "MY_API_SECRET=hunter2" "GITHUB_TOKEN=ghp_testtoken" \
   "ANTHROPIC_API_KEY=sk-test" "SOLEUR_FETCH_TIMEOUT=3" "TMPDIR=$SANDBOX/tmpdir" "https_proxy=http://127.0.0.1:9" \
-  "NO_PROXY=localhost" "ALL_PROXY="
+  "NO_PROXY=localhost" "ALL_PROXY=" "SSL_CERT_FILE=/etc/ssl/test-ca.pem" "CURL_CA_BUNDLE=/etc/ssl/test-bundle.pem"
 wait_children 1
 assert "11.a the refresh ran (so the env witness below is not vacuous)" '[[ -e "$SENT_GIT" && "$(n_refresh)" == 1 ]]' "git=$(n_git) refresh=$(n_refresh)"
 assert "11.b MY_API_SECRET and its value are NOT visible to the refresh child" '! grep -q "hunter2" "$RENV" && ! grep -q "^MY_API_SECRET=" "$RENV"'
@@ -768,11 +768,19 @@ assert "11.d the allowlisted vars ARE visible with their values" \
   'grep -q "^PATH=" "$RENV" && grep -qx "HOME=$HOME_RW" "$RENV" && grep -qx "XDG_CACHE_HOME=$XDG" "$RENV" && grep -qx "CLAUDE_PLUGIN_ROOT=$R_MANIFEST" "$RENV" && grep -qx "TMPDIR=$SANDBOX/tmpdir" "$RENV" && grep -qx "SOLEUR_FETCH_TIMEOUT=3" "$RENV" && grep -qx "https_proxy=http://127.0.0.1:9" "$RENV" && grep -qx "NO_PROXY=localhost" "$RENV"' "env: $(tr '\n' ' ' < "$RENV")"
 assert "11.e an EMPTY allowlisted var (ALL_PROXY=) is not forwarded" '! grep -q "^ALL_PROXY=" "$RENV"'
 assert "11.f the child sees nothing outside the allowlist (SOLEUR_UPDATE_CHECK included)" \
-  '! sed -n "s/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p" "$RENV" | grep -qvxE "PATH|HOME|XDG_CACHE_HOME|CLAUDE_PLUGIN_ROOT|TMPDIR|SOLEUR_FETCH_TIMEOUT|http_proxy|https_proxy|all_proxy|no_proxy|HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY|_|PWD|SHLVL|OLDPWD"' "env: $(tr '\n' ' ' < "$RENV")"
+  '! sed -n "s/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p" "$RENV" | grep -qvxE "PATH|HOME|XDG_CACHE_HOME|CLAUDE_PLUGIN_ROOT|TMPDIR|SOLEUR_FETCH_TIMEOUT|SSL_CERT_FILE|SSL_CERT_DIR|CURL_CA_BUNDLE|GIT_SSL_CAINFO|http_proxy|https_proxy|all_proxy|no_proxy|HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY|_|PWD|SHLVL|OLDPWD"' "env: $(tr '\n' ' ' < "$RENV")"
 assert "11.g SOLEUR_FETCH_TIMEOUT reaches the fetch: the git argv carries lowSpeedTime=3 (exact argv, else the stub exits 64)" \
   '[[ -e "$SENT_GIT" ]] && grep -q "http.lowSpeedTime=3 ls-remote" "$CALLS"' "calls: $(cat "$CALLS")"
 assert "11.h stdin, stdout and stderr of the detached child are all /dev/null" '[[ "$(cat "$RFDS")" == "fds: 0=null 1=null 2=null" ]]' "fds: $(cat "$RFDS")"
 assert "11.i one JSON value on stdout" 'one_json' "out: $OUT"
+assert "11.j the CA trust variables are forwarded to the child (a TLS-intercepting proxy must not silently break the daily refresh)" \
+  'grep -qx "SSL_CERT_FILE=/etc/ssl/test-ca.pem" "$RENV" && grep -qx "CURL_CA_BUNDLE=/etc/ssl/test-bundle.pem" "$RENV"' "env: $(tr '\n' ' ' < "$RENV")"
+# A symlinked cache dir is refused: the lock must not be created through it.
+new_xdg; rm -rf "$XDG/soleur"; SYMT="$XDG/real-target"; mkdir -p "$SYMT"; ln -s "$SYMT" "$XDG/soleur"; reset_calls
+run_hook "CLAUDE_PLUGIN_ROOT=$R_MANIFEST" "SOLEUR_UPDATE_CHECK=1"
+settle 3
+assert "11.k symlinked cache dir: still a plain banner (fail open)" '[[ "$(msg)" == "$M120" ]] && (( RC == 0 ))' "out=$OUT rc=$RC"
+assert "11.l symlinked cache dir: no lock created through the link and no refresh spawned" '[[ ! -e "$SYMT/refresh.lock" ]] && (( $(n_refresh) == 0 ))' "refresh=$(n_refresh)"
 
 # A refresh child that SLEEPS must not delay the hook, hold its pipes, or die with it.
 new_xdg; old=$((NOW - 3 * DAY)); put_cache "$ID_M" v9.9.9 "$old" older; reset_calls
@@ -911,7 +919,7 @@ default_cwd
 # --- verdict ------------------------------------------------------------
 # Floors are the EXACT counts of a full run (no slack: a vanished section must turn the suite red).
 # The root-only skips never run the subject, so they lower the run/banner floors by what they skipped.
-MIN_CASES=207
+MIN_CASES=210
 if (( CASES < MIN_CASES )); then
   printf 'FATAL: assertion floor breached -- ran %d cases, floor is %d. Cases were deleted, or the suite aborted early.\n' \
     "$CASES" "$MIN_CASES" >&2
@@ -923,7 +931,7 @@ if (( passes + fails + SKIPS != CASES )); then
 fi
 # The subject must actually have run and printed: a harness that asserts on empty output
 # for every row would still satisfy the "prints nothing" rows.
-MIN_RUNS=92; MIN_BANNERS=78
+MIN_RUNS=93; MIN_BANNERS=79
 # A root-only skip never runs the subject, so the observed side is credited with what it skipped.
 if (( RUNS + SKIP_RUN_DEFICIT < MIN_RUNS || BANNERS + SKIP_RUN_DEFICIT < MIN_BANNERS )); then
   printf 'FATAL: subject ran %d times (floor %d) and printed %d banners (floor %d). The harness asserted without driving the hook.\n' \

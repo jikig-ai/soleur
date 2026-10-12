@@ -42,6 +42,8 @@ spawn_refresh() { # <resolver> <cache_dir>
   [[ "$cache_dir" == /* ]] || return 0
   lock="$cache_dir/refresh.lock"
   ( umask 077; mkdir -p "$cache_dir" ) 2>/dev/null || return 0
+  # Same trust rule as the resolver: only lock inside a directory we own that is not a symlink.
+  [[ -d "$cache_dir" && -O "$cache_dir" && ! -L "$cache_dir" ]] || return 0
   if [[ -d "$lock" ]]; then
     now="$(date +%s)"
     mtime="$(stat -c %Y "$lock" 2>/dev/null || stat -f %m "$lock" 2>/dev/null || echo "$now")"
@@ -56,6 +58,7 @@ spawn_refresh() { # <resolver> <cache_dir>
   # session waits on it.
   local -a childenv=(env -i "PATH=${PATH:-/usr/bin:/bin}" "HOME=${HOME:-}")
   for v in XDG_CACHE_HOME CLAUDE_PLUGIN_ROOT TMPDIR SOLEUR_FETCH_TIMEOUT \
+           SSL_CERT_FILE SSL_CERT_DIR CURL_CA_BUNDLE GIT_SSL_CAINFO \
            http_proxy https_proxy all_proxy no_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY; do
     [[ -n "${!v:-}" ]] && childenv+=("$v=${!v}")
   done

@@ -612,7 +612,7 @@ The Soleur Plugin and Docs Site are not directed at children under the age of 16
 
 ## 10. International Data Transfers
 
-The Plugin operates locally and does not transfer data internationally.
+The Plugin operates locally and does not transfer data internationally, except for the version check described in Section 4.1, which sends your IP address to GitHub when you start it.
 
 **What this covers.** The paragraph above describes the Plugin running on **your** own machine, under **your** own API key, for **your** own purposes — which is how it works unless you have asked us for an operator-assisted session. It does not describe operator-assisted sessions, where a Jikigai machine or a Jikigai-held credential is used. Those are described in the Data Protection Disclosure, Section 2.1c. Nor does it describe a provider-operated session — the Plugin running on a third party's machine, for example a Devin Cloud session on a Cognition-managed VM, under your own credentials for your own purposes — which the Data Protection Disclosure, Section 2.1c names separately; in that configuration no limb is Jikigai's.
 

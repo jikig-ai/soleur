@@ -9,7 +9,7 @@ disable-model-invocation: true
 
 Report which Soleur plugin version is installed, what the latest release is, and how to update. Run the shared resolver; never guess or infer a version yourself. This command is Claude Code only and is started by the user; it is not run automatically.
 
-This explicit run contacts github.com regardless of `SOLEUR_UPDATE_CHECK`, because you asked: one `git ls-remote --tags` against the public repo and, for a commit-hash install only, one unauthenticated GitHub compare API request whose URL includes the installed commit hash. It uses no tokens, no user git config and no credentials, and each request is time-limited.
+This explicit run contacts github.com regardless of `SOLEUR_UPDATE_CHECK`, because you asked: one `git ls-remote --tags` against the public repo and, for a commit-hash install only, one unauthenticated GitHub compare API request whose URL includes the installed commit hash. It uses no tokens, no user git config and no credentials of its own (any proxy you configured in your environment is still used), and each request is time-limited.
 
 ## Step 1: Run the resolver
 
@@ -65,7 +65,7 @@ Read `relation` and `reason`:
 
 - `relation=older`: "A newer release exists."
 - `relation=current`: "No release newer than yours (latest tag vX.Y.Z)", with the `latest` value. This means only that no release tag newer than the installed commit or version was found. Never say "up to date" or "you are on the latest release".
-- `relation=unknown`: "Cannot compare" plus the reason: `installed-unknown` (the installed version could not be read), `diverged` (the installed commit is not on the release line), `compare-failed` or `compare-unparseable` (the GitHub compare call failed), `no-curl` (curl is missing), `stale-cache` (the answer came from a cached or failed lookup, so it is not trusted; run this command again when online).
+- `relation=unknown`: "Cannot compare" plus the reason: `installed-unknown` (the installed version could not be read), `diverged` (the installed commit is not on the release line), `compare-failed` or `compare-unparseable` (the GitHub compare call failed), `no-curl` (curl is missing), `stale-cache` (the answer came from a cached or failed lookup, so it is not trusted; run this command again when online), `cache-invalid` (the cached answer was unusable; run this command again).
 - `relation` absent (no latest release is known): "Cannot compare: the latest release is not known", followed by the `latest_status` reason from the Latest line rules.
 
 Never say "up to date" when the relation is unknown or absent, and never infer a relation by comparing strings yourself.

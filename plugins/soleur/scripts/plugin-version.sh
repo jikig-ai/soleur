@@ -62,10 +62,22 @@ TIMEOUT_CMD=""
 if command -v timeout >/dev/null 2>&1; then TIMEOUT_CMD="timeout"
 elif command -v gtimeout >/dev/null 2>&1; then TIMEOUT_CMD="gtimeout"; fi
 
-# Without timeout/gtimeout (stock macOS) the git call still bounds itself through
-# http.lowSpeedLimit/Time (see fetch_latest) and curl through -m.
+# With timeout/gtimeout the command is bounded by it. Without them (stock macOS) a bash
+# watchdog kills it after FETCH_TIMEOUT: http.lowSpeedLimit alone does not bound a stalled
+# connect or TLS handshake. A killed command is reported as rc 124 (timeout).
 run_bounded() {
-  if [[ -n "$TIMEOUT_CMD" ]]; then "$TIMEOUT_CMD" "$FETCH_TIMEOUT" "$@"; else "$@"; fi
+  if [[ -n "$TIMEOUT_CMD" ]]; then "$TIMEOUT_CMD" "$FETCH_TIMEOUT" "$@"; return; fi
+  local pid wd rc
+  "$@" &
+  pid=$!
+  ( sleep "$FETCH_TIMEOUT"; pkill -P "$pid" 2>/dev/null; kill "$pid" 2>/dev/null ) </dev/null >/dev/null 2>&1 &
+  wd=$!
+  wait "$pid" 2>/dev/null
+  rc=$?
+  kill "$wd" 2>/dev/null
+  wait "$wd" 2>/dev/null
+  (( rc >= 128 )) && rc=124
+  return "$rc"
 }
 
 # ---- semver ------------------------------------------------------------------
@@ -88,8 +100,11 @@ CACHE_DIR=""
 resolve_cache_dir() {
   local base="${XDG_CACHE_HOME:-}"
   case "$base" in /*) ;; *) base="" ;; esac # relative values must be ignored (XDG spec)
+  [[ "$base" == *[[:cntrl:]]* ]] && base="" # a newline would inject key=value lines downstream
   if [[ -z "$base" ]]; then
-    case "${HOME:-}" in /*) base="$HOME/.cache" ;; *) return 0 ;; esac
+    case "${HOME:-}" in /*) ;; *) return 0 ;; esac
+    [[ "$HOME" == *[[:cntrl:]]* ]] && return 0
+    base="$HOME/.cache"
   fi
   CACHE_DIR="$base/soleur"
 }
@@ -185,6 +200,8 @@ reset_cache_vars() { C_TAG="" C_SHA="" C_FETCHED="" C_REL="" C_REASON="" CACHE_S
 load_cache() {
   reset_cache_vars
   [[ -n "$CACHE_FILE" && -f "$CACHE_FILE" ]] || return 0
+  # Same trust rule as write_cache: never read a cache from a directory we do not own.
+  [[ -O "$CACHE_DIR" && ! -L "$CACHE_DIR" ]] || return 0
   local line key val rel_for="" complete="" now age mtime
   while IFS= read -r line; do
     key="${line%%=*}" val="${line#*=}"

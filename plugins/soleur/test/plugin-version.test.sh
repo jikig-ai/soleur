@@ -101,7 +101,7 @@ chmod +x "$STUBS/git" "$STUBS/curl"
 
 # Restricted PATH directories: the tools the resolver needs, and only the named extras.
 # "stub:git" links the recording stub; a bare name links the system tool.
-BASE_TOOLS="bash sh sed grep awk sort date stat mktemp mv rm chmod mkdir basename tail head tr cat dirname cut sleep touch ln env"
+BASE_TOOLS="bash sh sed grep awk sort date stat mktemp mv rm chmod mkdir basename tail head tr cat dirname cut sleep touch ln env pkill kill"
 mkbin() { # name tool... -> printed directory
   local d="$SANDBOX/bin.$1" t p; shift
   assert_fixture_dir "$d"
@@ -864,20 +864,39 @@ nj escaped-quotes-in-string '{"description":"has } and { and \" version\": \"9.9
 nj version-as-value '{"name":"version","other":"1.2.3"}' commit/
 nj number-version '{"version":123}' commit/
 
+# ---- watchdog fallback, hostile cache base, symlinked read, command flag --------------------
+# Without timeout/gtimeout a stalled git is killed by the bash watchdog (lowSpeed alone does not
+# bound a stalled connect/TLS handshake).
+new_env wd; ENVS=(SOLEUR_FETCH_TIMEOUT=1); _t0=$SECONDS
+STUB_GIT_SLEEP=30 X_PATH="$P_NOTIMEOUT" run "$R_KEYLESS" "$XDG" --latest --refresh; _el=$((SECONDS - _t0))
+check wd-no-timeout-binary-times-out timeout "$(val latest_status)"
+check wd-no-timeout-binary-bounded-under-6s 1 "$(( _el < 6 ? 1 : 0 ))"
+# A control character in XDG_CACHE_HOME must not inject key=value lines into the output.
+new_env ctl; ENVS=("XDG_CACHE_HOME=/abs/x"$'\n'"relation=older"$'\n'"latest=v9.9.9"); run "$R_KEYLESS" "$XDG" --cached-latest
+check ctl-xdg-no-injected-latest "" "$(printf '%s\n' "$OUT" | sed -n '/^latest=v9.9.9$/p')"
+check ctl-xdg-falls-back-to-home-cache 1 "$(printf '%s\n' "$OUT" | grep -c '^cache_dir=.*/home/.cache/soleur$')"
+# A symlinked cache dir is not READ either (a planted cache in a shared XDG dir).
+new_env symread; put_cache b78d30e919ff v3.335.10 "$SHA3" "$(date +%s)" older ""
+SYMR="$(mkd symread.target)"; assert_fixture_dir "$SYMR"; assert_fixture_dir "$XDG"; rmdir "$SYMR"; mv "$XDG/soleur" "$SYMR"; ln -s "$SYMR" "$XDG/soleur"
+run "$R_KEYLESS" "$XDG" --cached-latest
+check symread-refused missing "$(val cache)"
+# The command is user-started: the legal text says so, so the flag must stay in the frontmatter.
+check version-md-disable-model-invocation 1 "$(head -8 "$REPO_ROOT/plugins/soleur/commands/version.md" | grep -c '^disable-model-invocation: true$')"
+
 # ---- accounting and verdict -----------------------------------------------------------
 if (( passes + fails != CASES )) || (( fails != ${#FAILURES[@]} )); then
   printf 'FATAL: verdict accounting broken -- passes(%d) + fails(%d) != CASES(%d), or fails != ledger(%d)\n' \
     "$passes" "$fails" "$CASES" "${#FAILURES[@]}" >&2
   exit 1
 fi
-MIN_CASES=408
+MIN_CASES=414
 if (( CASES != MIN_CASES )); then
   printf 'FATAL: %d cases ran, expected exactly %d -- cases were added or deleted, or the suite aborted early\n' "$CASES" "$MIN_CASES" >&2
   exit 1
 fi
 # The subject must actually have run: a harness that asserts on empty output for every row
 # would still satisfy every "prints nothing" row.
-MIN_RUNS=215
+MIN_RUNS=218
 if (( RUNS != MIN_RUNS )); then
   printf 'FATAL: subject ran %d times, expected exactly %d -- the harness asserted without driving the resolver\n' "$RUNS" "$MIN_RUNS" >&2
   exit 1
