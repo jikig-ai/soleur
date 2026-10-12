@@ -9,7 +9,7 @@ brand_survival_threshold: single-user incident
 related:
   - knowledge-base/project/brainstorms/2026-04-10-product-analytics-instrumentation-brainstorm.md
   - knowledge-base/project/brainstorms/2026-04-17-analytics-track-path-pii-brainstorm.md
-  - knowledge-base/project/brainstorms/archive/20261012-213508-2026-03-23-analytics-comparison-brainstorm.md
+  - knowledge-base/project/brainstorms/2026-03-23-analytics-comparison-brainstorm.md
   - knowledge-base/product/business-validation.md
 ---
 

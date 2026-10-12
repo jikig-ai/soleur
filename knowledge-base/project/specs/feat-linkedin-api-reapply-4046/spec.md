@@ -95,7 +95,7 @@ Re-application requires creating a verified **Jikigai** Company Page (LinkedIn's
 ## References
 
 - Brainstorm: `knowledge-base/project/brainstorms/2026-05-19-linkedin-community-api-reapply-jikigai-brainstorm.md`
-- Original scoping brainstorm: `knowledge-base/project/brainstorms/archive/20261012-213508-2026-03-13-linkedin-api-scripts-brainstorm.md`
+- Original scoping brainstorm: `knowledge-base/project/brainstorms/2026-03-13-linkedin-api-scripts-brainstorm.md`
 - Scope-calibration learning: `knowledge-base/project/learnings/2026-03-13-platform-integration-scope-calibration.md`
 - Silent-fallback learning: `knowledge-base/project/learnings/2026-04-26-linkedin-org-token-fallback-silent-400.md`
 - Dual-token learning: `knowledge-base/project/learnings/2026-04-09-linkedin-org-access-token-for-company-page-posts.md`

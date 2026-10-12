@@ -514,7 +514,7 @@ Before implementing any remediation, enumerate ALL code paths that touch the sec
 
 - Infrastructure files: `apps/web-platform/infra/dns.tf`, `tunnel.tf`, `firewall.tf`, `main.tf`, `variables.tf`
 - Agent: `plugins/soleur/agents/engineering/infra/infra-security.md`
-- Brainstorm: `knowledge-base/project/brainstorms/archive/20261012-213508-2026-03-20-cloudflare-tunnel-deploy-brainstorm.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-03-20-cloudflare-tunnel-deploy-brainstorm.md`
 - Learnings:
   - `2026-03-21-cloudflare-service-token-expiry-monitoring.md` -- Service token expiry monitoring pattern
   - `2026-04-03-cloudflare-dns-at-symbol-causes-terraform-drift.md` -- DNS `@` perpetual drift fix

@@ -199,4 +199,4 @@ DB-resident: the partial unique index on `dsar_export_jobs` IS the rate-limit (1
 - Adjacent Art. 17 code: `apps/web-platform/server/account-delete.ts`
 - WORM-audit reference: `apps/web-platform/supabase/migrations/037_audit_byok_use.sql`
 - Existing signed-URL pattern: `apps/web-platform/app/api/attachments/url/route.ts:31`
-- DPD-rights plan precedent: `knowledge-base/project/plans/archive/20261012-213508-2026-03-20-legal-dpd-web-platform-data-subject-rights-plan.md`
+- DPD-rights plan precedent: `knowledge-base/project/plans/2026-03-20-legal-dpd-web-platform-data-subject-rights-plan.md`

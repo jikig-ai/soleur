@@ -233,7 +233,7 @@ Brainstorm validated the idea, not the page design. Wireframes and copywriter re
 
 - Brainstorm: `knowledge-base/project/brainstorms/2026-04-07-start-fresh-onboarding-brainstorm.md`
 - Spec: `knowledge-base/project/specs/feat-start-fresh-onboarding/spec.md`
-- Onboarding audit: `knowledge-base/project/specs/archive/20261012-213508-feat-product-strategy/onboarding-audit.md`
+- Onboarding audit: `knowledge-base/project/specs/feat-product-strategy/onboarding-audit.md`
 - Dashboard page: `apps/web-platform/app/(dashboard)/dashboard/page.tsx`
 - ChatInput: `apps/web-platform/components/chat/chat-input.tsx` (insertRef pattern)
 - useOnboarding: `apps/web-platform/hooks/use-onboarding.ts`

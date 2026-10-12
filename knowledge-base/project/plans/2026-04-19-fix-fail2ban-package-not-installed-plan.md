@@ -322,7 +322,7 @@ This is an infrastructure-only change with no unit-test harness for Terraform co
 
 - PR #2655 — introduced `terraform_data.fail2ban_tuning` with the positive assertion that exposed this gap.
 - Issue #2654 — the original SSH lockout that motivated fail2ban tuning (and was, per issue #2680, actually caused by admin-IP rotation, not fail2ban).
-- Plan: `knowledge-base/project/plans/archive/20261012-213508-2026-03-19-security-add-fail2ban-ssh-protection-plan.md` — original fail2ban plan, predates this gap.
+- Plan: `knowledge-base/project/plans/2026-03-19-security-add-fail2ban-ssh-protection-plan.md` — original fail2ban plan, predates this gap.
 
 ## Domain Review
 

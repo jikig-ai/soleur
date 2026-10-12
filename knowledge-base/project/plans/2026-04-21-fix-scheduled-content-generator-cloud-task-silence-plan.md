@@ -231,7 +231,7 @@ Content-generator's threshold is aggressive (4 days covers exactly one missed fi
 **Local repo signals (from `repo-research-analyst` equivalent sweep):**
 
 - `.github/workflows/scheduled-content-generator.yml:13–16` — schedule disabled, MIGRATED TO CLOUD comment.
-- `knowledge-base/project/plans/archive/20261012-213508-2026-03-24-feat-scheduled-tasks-cloud-migration-plan.md` — full migration plan including the exact adapted prompt.
+- `knowledge-base/project/plans/2026-03-24-feat-scheduled-tasks-cloud-migration-plan.md` — full migration plan including the exact adapted prompt.
 - `knowledge-base/project/specs/archive/20260325-003628-feat-scheduled-tasks-migration/spec.md` — acceptance criteria (TR5 requires "original GHA YAML preserved (disabled) for rollback"). This rollback path is still available if Track A diagnosis shows the Cloud task is structurally unrecoverable.
 - `knowledge-base/project/learnings/2026-04-03-content-cadence-gap-cloud-task-migration.md` — exact precedent: Cloud task prompt missed an instruction during migration, producing silent drafts. Prescribes line-by-line diff of GHA vs. Cloud prompts as a permanent checklist item.
 - `knowledge-base/project/learnings/2026-03-29-doppler-service-token-config-scope-mismatch.md` — H3 root cause class (per-config tokens silently drop on rotation).
@@ -476,7 +476,7 @@ T10. **Counter loop scope.** Change one of the TASKS rows to an invalid format (
 
 - Issue: #2714
 - Prior migration PR: #1095
-- Prior migration plan: `knowledge-base/project/plans/archive/20261012-213508-2026-03-24-feat-scheduled-tasks-cloud-migration-plan.md`
+- Prior migration plan: `knowledge-base/project/plans/2026-03-24-feat-scheduled-tasks-cloud-migration-plan.md`
 - Prior migration spec: `knowledge-base/project/specs/archive/20260325-003628-feat-scheduled-tasks-migration/`
 - Foundational learning: `knowledge-base/project/learnings/2026-04-03-content-cadence-gap-cloud-task-migration.md`
 - Doppler per-config token learning: `knowledge-base/project/learnings/2026-03-29-doppler-service-token-config-scope-mismatch.md`

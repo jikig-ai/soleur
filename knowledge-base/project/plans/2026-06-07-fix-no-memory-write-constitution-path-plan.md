@@ -49,8 +49,8 @@ The middle bullet currently reads:
 
 The constitution does **not** live at `overview/`. It was relocated to
 `knowledge-base/project/constitution.md` (migration recorded in
-`knowledge-base/project/plans/archive/20261012-213508-2026-03-13-refactor-rename-kb-overview-to-project-plan.md`
-and `knowledge-base/project/specs/archive/20261012-213508-feat-rename-kb-overview/`). The `overview/` directory
+`knowledge-base/project/plans/2026-03-13-refactor-rename-kb-overview-to-project-plan.md`
+and `knowledge-base/project/specs/feat-rename-kb-overview/`). The `overview/` directory
 no longer exists in the repo. Every other **live, operative** reference already uses the
 correct `project/` path (`knowledge-base/INDEX.md`, `plugins/soleur/commands/sync.md`,
 `scripts/rule-audit.sh`, `knowledge-base/project/components/knowledge-base.md`, and the
@@ -238,8 +238,8 @@ vendor, or persistent runtime process; pure string edit to an existing hook.
   `knowledge-base/project/learnings`, not the constitution bullet)
 - Correct destination: `knowledge-base/project/constitution.md`
 - Migration provenance (out of scope, cite-only):
-  `knowledge-base/project/plans/archive/20261012-213508-2026-03-13-refactor-rename-kb-overview-to-project-plan.md`,
-  `knowledge-base/project/specs/archive/20261012-213508-feat-rename-kb-overview/`
+  `knowledge-base/project/plans/2026-03-13-refactor-rename-kb-overview-to-project-plan.md`,
+  `knowledge-base/project/specs/feat-rename-kb-overview/`
 - Already-correct operative references (no change): `knowledge-base/INDEX.md`,
   `plugins/soleur/commands/sync.md`, `scripts/rule-audit.sh`,
   `knowledge-base/project/components/knowledge-base.md`

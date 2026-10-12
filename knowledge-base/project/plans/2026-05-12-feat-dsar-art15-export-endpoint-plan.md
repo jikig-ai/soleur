@@ -563,7 +563,7 @@ Phases ordered by dependency direction (per Kieran's P0 fix). Tests land WITH th
 - Sentry mirror-with-debounce primitive (NOT widened per C3): `apps/web-platform/server/observability.ts:183-208`
 - Storage path-prefix RLS pattern: `apps/web-platform/supabase/migrations/019_chat_attachments.sql:14`
 - Resend transactional surface: `apps/web-platform/server/notifications.ts:9-58`, `:183-209`
-- DPD-rights plan precedent: `knowledge-base/project/plans/archive/20261012-213508-2026-03-20-legal-dpd-web-platform-data-subject-rights-plan.md`
+- DPD-rights plan precedent: `knowledge-base/project/plans/2026-03-20-legal-dpd-web-platform-data-subject-rights-plan.md`
 - Constitution principles applied: `cq-pg-security-definer-search-path-pin-pg-temp`; `cq-test-fixtures-synthesized-only`; `cq-abort-signal-timeout-vs-fake-timers`; line 88 (RLS restrictive policies for auth-relevant columns); line 227 ("design for v2, implement for v1")
 - AGENTS.md hard rules applied: `hr-weigh-every-decision-against-target-user-impact`, `hr-gdpr-gate-on-regulated-data-surfaces`, `hr-dev-prd-distinct-supabase-projects`, `hr-menu-option-ack-not-prod-write-auth`
 - Acknowledged code-review issue (NOT folded — per C3): #3638

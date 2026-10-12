@@ -6,7 +6,7 @@
 **Trigger:** PR #3196 verification surfaced gaps in CLA evidence quality. User asked: "do we record CLA signatures somewhere — for legal reasons, we need to record them."
 **Tracking issue:** #3209 (main); #3210 (deferred: PII + CCLA mechanism); #3211 (deferred: contributor lookup page).
 **Branch:** `feat-cla-legal-rigor` · **Draft PR:** #3201
-**Predecessor:** `knowledge-base/project/brainstorms/archive/20261012-213508-2026-02-26-cla-contributor-agreements-brainstorm.md` (decided to use contributor-assistant action with same-repo storage); `knowledge-base/project/learnings/2026-02-26-cla-system-implementation-and-gdpr-compliance.md` (implementation gotchas).
+**Predecessor:** `knowledge-base/project/brainstorms/2026-02-26-cla-contributor-agreements-brainstorm.md` (decided to use contributor-assistant action with same-repo storage); `knowledge-base/project/learnings/2026-02-26-cla-system-implementation-and-gdpr-compliance.md` (implementation gotchas).
 
 ## User-Brand Impact
 

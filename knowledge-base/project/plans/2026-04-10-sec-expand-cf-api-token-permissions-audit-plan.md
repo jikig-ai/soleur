@@ -409,7 +409,7 @@ are needed. Annual manual review of the token's permissions is sufficient.
 - Doppler stderr contamination: `knowledge-base/project/learnings/integration-issues/2026-04-06-doppler-stderr-contaminates-docker-env-file.md`
 - Token expiry check workflow: `.github/workflows/scheduled-cf-token-expiry-check.yml`
 - Terraform CF provider config: `apps/web-platform/infra/main.tf`
-- CF token monitor spec: `knowledge-base/project/specs/archive/20261012-213508-feat-cf-token-monitor/session-state.md`
+- CF token monitor spec: `knowledge-base/project/specs/feat-cf-token-monitor/session-state.md`
 
 ### External References
 

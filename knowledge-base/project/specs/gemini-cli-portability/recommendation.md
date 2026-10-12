@@ -163,5 +163,5 @@ If proceeding to build:
 - Portability inventory: `knowledge-base/project/specs/gemini-cli-portability/inventory.md`
 - Critical unknowns verification: `knowledge-base/project/specs/gemini-cli-portability/critical-unknowns.md`
 - PoC results: `knowledge-base/project/specs/gemini-cli-portability/poc-results.md`
-- Codex portability inventory: `knowledge-base/project/specs/archive/20261012-213508-feat-codex-portability-inventory/inventory.md`
+- Codex portability inventory: `knowledge-base/project/specs/feat-codex-portability-inventory/inventory.md`
 - Platform risk learning: `knowledge-base/project/learnings/2026-02-25-platform-risk-cowork-plugins.md`

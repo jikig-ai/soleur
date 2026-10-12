@@ -186,16 +186,16 @@ follow-up number in the PR body.
 
 The 12 offending docs (Phase 2) + the two planning artifacts:
 
-1. `knowledge-base/project/plans/archive/20261012-213508-2026-03-20-feat-adopt-doppler-secrets-manager-plan.md`
+1. `knowledge-base/project/plans/2026-03-20-feat-adopt-doppler-secrets-manager-plan.md`
 2. `knowledge-base/project/plans/2026-05-20-fix-ci-host-ssh-auth-deploy-pipeline-fix-plan.md`
 3. `knowledge-base/project/plans/2026-07-17-fix-web-platform-docker-login-erofs-cred-path-plan.md`
 4. `knowledge-base/project/plans/2026-04-03-fix-web-platform-infra-drift-doppler-install-plan.md`
-5. `knowledge-base/project/plans/archive/20261012-213508-2026-03-21-infra-scheduled-terraform-drift-detection-plan.md`
+5. `knowledge-base/project/plans/2026-03-21-infra-scheduled-terraform-drift-detection-plan.md`
 6. `knowledge-base/project/plans/2026-07-21-fix-preflight-check-10-folded-scalar-parser-plan.md`
 7. `knowledge-base/project/plans/2026-07-04-fix-cosign-verify-private-ghcr-auth-offline-plan.md`
 8. `knowledge-base/project/plans/2026-06-08-fix-cron-sandbox-dontask-allowlist-tiered-plan.md`
 9. `knowledge-base/project/learnings/2026-04-03-terraform-data-remote-exec-drift-encrypted-ssh-key.md`
-10. `knowledge-base/project/specs/archive/20261012-213508-feat-secrets-manager/tasks.md`
+10. `knowledge-base/project/specs/feat-secrets-manager/tasks.md`
 11. `knowledge-base/project/plans/2026-04-14-fix-one-shot-verify-deploy-and-apply-tf-plan.md`
 12. `knowledge-base/project/learnings/integration-issues/2026-07-05-plan-live-confirmed-anonymous-registry-pull-is-a-cached-creds-false-confirm.md`
 

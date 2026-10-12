@@ -185,7 +185,7 @@ None. Verified via `gh issue list --label code-review --state open --json number
 ### Post-merge (operator)
 
 - [ ] Notify the #2720 PR author (or post on PR #3559) that AC23/AC26 is unblocked.
-- [ ] If the operator captured an executed Anthropic DPA PDF during Phase 1, file it in the same private store used for the Hetzner / Supabase signed PDFs (see `knowledge-base/project/specs/archive/20261012-213508-feat-vendor-ops-legal/dpa-verification-memo.md` — operator-private, not committed to repo).
+- [ ] If the operator captured an executed Anthropic DPA PDF during Phase 1, file it in the same private store used for the Hetzner / Supabase signed PDFs (see `knowledge-base/project/specs/feat-vendor-ops-legal/dpa-verification-memo.md` — operator-private, not committed to repo).
 - [ ] If the Anthropic DPA exposes any new sub-processor categories that materially differ from the existing `docs/legal/gdpr-policy.md` Section 6 disclosure, file a follow-up `compliance/improvement` issue. Do NOT widen this PR's scope; the row addition is the contained closure.
 
 ## Domain Review

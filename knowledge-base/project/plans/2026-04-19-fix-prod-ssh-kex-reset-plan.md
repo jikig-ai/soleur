@@ -91,7 +91,7 @@ Diagnosis on host via Hetzner Console distinguishes these before we write the fi
 | "Firewall rule 10708450 allows SSH from `82.67.29.121/32` only (operator IP). TCP reaches port 22" | Confirmed — `firewall.tf` uses `var.admin_ips` for port 22. Not `0.0.0.0/0`. | Do NOT widen the firewall. Keep operator-only. |
 | "Terraform sshd hardening … fail2ban installed (no custom `bantime`/`findtime`, so Debian defaults apply)" | Confirmed — `cloud-init.yml:5` lists `fail2ban` in packages; no `jail.local`, no `jail.d/*.conf` entries in `write_files`. | Safe to add a `write_files` jail.local drop-in without conflicting with existing config. |
 | "Triggered by: first `ssh deploy@` attempt (deploy has `lock_passwd: true` + no key)" | Confirmed — `cloud-init.yml:11-18`: `deploy` user has `lock_passwd: true` and no `ssh_authorized_keys`. `AllowUsers root` would reject `deploy` pre-auth anyway. | Root-cause note stands. Consider adding `deploy` to `DenyUsers` in sshd config so fail2ban sees an explicit reject (cleaner log signal). **Deferred** — adds config surface without solving the core issue. |
-| Existing prior art: `knowledge-base/project/plans/archive/20261012-213508-2026-03-19-security-add-fail2ban-ssh-protection-plan.md` | Shipped — fail2ban with defaults. **This plan is the sequel**: tune `bantime.increment` semantics after a real incident. | Link back; do not regress the `nftables`/`systemd` defaults from that plan. |
+| Existing prior art: `knowledge-base/project/plans/2026-03-19-security-add-fail2ban-ssh-protection-plan.md` | Shipped — fail2ban with defaults. **This plan is the sequel**: tune `bantime.increment` semantics after a real incident. | Link back; do not regress the `nftables`/`systemd` defaults from that plan. |
 | "Hypothesis 1: `bantime = -1`" | Not set anywhere in the Terraform tree (grep `/home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-2654-prod-ssh-kex-reset/apps/web-platform/infra`). | Default-only behavior. Root cause is almost certainly `bantime.increment` recidivism, not `bantime = -1`. |
 
 ## Files to Edit
@@ -406,7 +406,7 @@ Operator MUST run `fail2ban-client --help` and `fail2ban-client --version` on-ho
 
 ## Related
 
-- Prior plan: `knowledge-base/project/plans/archive/20261012-213508-2026-03-19-security-add-fail2ban-ssh-protection-plan.md` (added fail2ban with stock defaults).
+- Prior plan: `knowledge-base/project/plans/2026-03-19-security-add-fail2ban-ssh-protection-plan.md` (added fail2ban with stock defaults).
 - Prior learnings:
   - `2026-03-19-ci-ssh-deploy-firewall-hidden-dependency.md` — context on why SSH was briefly opened to `0.0.0.0/0`; no longer applies.
   - `2026-03-20-ssh-forced-command-cloud-init-parity-gaps.md` — pattern for keeping cloud-init and `terraform_data` provisioners in sync.

@@ -763,7 +763,7 @@ No other open code-review issue bodies name a planned file.
   `deploy-inngest-bootstrap.sudoers`; #4144/#4827/#5934/#7220 precedents for grant shape,
   delivery bridge, and policy-probe gating.
 - Privilege-boundary decision record:
-  `knowledge-base/project/plans/archive/20261012-213508-2026-03-20-security-deploy-ssh-user-privilege-boundary-plan.md`.
+  `knowledge-base/project/plans/2026-03-20-security-deploy-ssh-user-privilege-boundary-plan.md`.
 - Learnings: `2026-06-02-deploy-user-sudo-helper-hardening.md`,
   `2026-05-26-ssh-to-webhook-provisioner-migration-mount-namespace-traps.md`,
   `2026-05-20-…-sudo-rs-no-wildcards.md`,
