@@ -259,6 +259,19 @@ rather than intuition (learning `2026-05-18`).
 
 ### Phase 2 — Session-scoped trap sweep
 
+**Amendment (work-phase, 2026-10-12):** the issue's enumerated scope
+(`plugins/soleur/**`) includes SKILL.md/references prose that INSTRUCTS
+the agent to run `mktemp` — the incident's own evidence (28–34KB
+resync-script copies, drafted commit messages) is prose-instructed
+allocation, not tracked scripts. `--census-files` cannot see `.md` call
+sites, so the ledger carries a second section enumerating them by grep;
+each gets `add-cleanup-instruction` (post-consumption `rm` / paired
+`trap … EXIT` where the artifact is same-call) or `bounded-persistence`
+(cross-call artifacts whose consumption point is recorded). Five seed
+`.claude/hooks/*.sh` files the plan listed as "untrapped" already carry
+owning `trap … EXIT` — the census is authoritative, they are
+already-clean and need no edit.
+
 For every census row dispositioned `trap-*`:
 
 - Top-level script: single owning `trap 'rm -rf "$tmp"' EXIT` (or `rm -f`
@@ -322,6 +335,18 @@ an `e` rule cleans the matched directory's *contents* by age — the
 route cannot even express the count-shaped fix; the purge timer is the
 correct belt. Recorded as a pending technical ruling in
 `decision-challenges.md`.
+
+### Phase 2b — Prose-instructed allocation sweep (amendment)
+
+For every `mktemp`-instructing line in `plugins/soleur/**/*.md` and
+`.claude/hooks/*.md` (enumerated in the ledger's prose section): where the
+artifact is consumed within the workflow, amend the instruction so the
+consuming step also removes it (`rm -f "$f"` after `--body-file`/`cp`/read),
+or pair the allocation with a `trap … EXIT` where same-shell semantics are
+documented; where the artifact must persist past its producing call
+(detached-run logs, cross-call body files), record `bounded-persistence`
+with the consumption point. Never weaken a fenced example's own trap
+guidance.
 
 ### Phase 5 — Ratchet + verification
 

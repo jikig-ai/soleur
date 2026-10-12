@@ -39,6 +39,15 @@ Issue: #10017 (carries `Closes #9341` per decision-challenges ruling).
 - [ ] 2.4 Register runnable fixed producers as leaves in
   `tests/scripts/test-scratch-residue.sh` where the harness supports it.
 
+## Phase 2b — Prose-instructed allocation sweep (plan amendment)
+
+- [ ] 2b.1 Enumerate `mktemp`-instructing lines in `plugins/soleur/**/*.md`
+  and `.claude/hooks/*.md` into the ledger's prose section with a
+  disposition each (`add-cleanup-instruction` / `bounded-persistence`).
+- [ ] 2b.2 Apply the `add-cleanup-instruction` amendments (post-consumption
+  `rm`, or paired `trap … EXIT` where the artifact is same-call); keep every
+  fenced example's existing trap guidance intact.
+
 ## Phase 3 — `rung2-archive.*` producer fix
 
 - [ ] 3.1 Probe: verify a `RETURN` trap set inside a function fires when
