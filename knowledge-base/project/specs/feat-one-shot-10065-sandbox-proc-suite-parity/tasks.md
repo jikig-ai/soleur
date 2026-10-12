@@ -1,0 +1,72 @@
+---
+plan: knowledge-base/project/plans/2026-10-12-test-sandbox-masked-proc-suite-parity-plan.md
+issue: 10065
+branch: feat-one-shot-10065-sandbox-proc-suite-parity
+lane: cross-domain
+---
+
+# Tasks: sandbox masked-/proc suite parity (#10065)
+
+Ref the plan for rationale. Production writes (merge, deploy dispatch, Doppler) need the operator's go-ahead; this diff performs none.
+Run everything in an allocated sandbox (`scripts/soleur-sandbox.sh new|run-isolated|rm`); no full local battery.
+
+## Phase 0 Measurements (gate Phases 4-5 only)
+
+- [ ] 0.1 M1 reconcile bwrap prod posture; run `--replay-outer` in the suite image under default masks
+- [ ] 0.2 M2 run the `buildLikeC4SandboxArgv` argv through `/usr/bin/bwrap` under masks (fd 9 filter, fd 3 status)
+- [ ] 0.3 M3 (time-boxed, one run) `umount` availability, cover versus drop under retained caps and under the vendor caps
+- [ ] 0.4 M4 recorder as `SOLEUR_BWRAP_REAL` under the shim; M5 container PATH and `command -v bwrap`
+- [ ] 0.5 Write `measurements.md` (digest, bwrap version, outcomes, hook-sandbox reachability note); on an M3 identical-behavior result open a security issue and plan the ADR-075 correction
+
+## Phase 1 RED first
+
+- [ ] 1.1 `infra/docker-run-tuple.test.sh` battery rows (Guard 1 matrix, H1/H2, must-PASS P1-P3 incl. `if docker run ...; then`) fail on the missing helper
+- [ ] 1.2 Skeletons: `test/docker-run-tuple-posture.test.ts`, `test/sandbox-vendored-argv-tail.test.ts`, `test/c4-render-argv-fixture.test.ts`
+
+## Phase 2 Tuple helper (P1)
+
+- [ ] 2.1 `infra/lib/docker-run-tuple.py` `check` and `posture` (closed-world grammar, census, `UNCLASSIFIED_DOCKER_RUN`, count floor 3)
+- [ ] 2.2 Battery green against mutated copies in `$WORK`; helper-copy allow-all row proves the battery is not vacuous
+- [ ] 2.3 `test/docker-run-tuple-posture.test.ts` required-lane wrapper green
+
+## Phase 3 Suite derivation (P2, P6)
+
+- [ ] 3.1 Static `check` before the docker environment checks; `SANDBOX_MASKED_PROC_SRC_ROOT` seam refused under `CI`
+- [ ] 3.2 `start_container` from `posture --tuple prod`; `-u` from Dockerfile `useradd --uid`
+- [ ] 3.3 BASE via `runner FROM` one hop (`BASE_LINEAGE`); static and live PATH arms
+- [ ] 3.4 Raise `MIN_ASSERTIONS` literal
+
+## Phase 4 Isolation arm (P3, P5; after M3)
+
+- [ ] 4.1 `ISO_ARGV` from the canary fixture (`FIXTURE_TAIL` before any docker call)
+- [ ] 4.2 Recorder arm (`DROP_FAILED`) and `MUTATE=shim-cover` seam
+- [ ] 4.3 Behavioral arm per M3 outcome; header sentence on what the arms do and do not discriminate
+
+## Phase 5 Spawn paths (P4; replays per M1/M2)
+
+- [ ] 5.1 Outer-wrap `--replay-outer` arm
+- [ ] 5.2 `infra/c4-render-sandbox-argv.json` + pin test + literal census of bwrap spawn constants and literals
+- [ ] 5.3 C4 argv docker replay (or measured refusal recorded plus a tracking issue)
+
+## Phase 6 Vendored builder tail (P3)
+
+- [ ] 6.1 `test/helpers/vendored-bwrap-tail.ts` extractor (bounded window, chunked scan) and per-binary procfs-site counts
+- [ ] 6.2 `test/sandbox-vendored-argv-tail.test.ts` real-binary rows, synthetic mutation rows, `BINARY_MISSING` under `CI`
+- [ ] 6.3 Live-tail row in `test/sandbox-proc-mask-runtime.test.ts` with cap-segment normalization
+
+## Phase 7 Registrations and CI wiring
+
+- [ ] 7.1 `git add` new files, then orphan, guard-vacuity, fixture-relative ratchets
+- [ ] 7.2 `PROMOTED_FILES`, `FILES_8855` and `PIN_8855`, `apt-bounded` SPECS or EXEMPT only if its census demands
+- [ ] 7.3 `infra-validation.yml` comment and three `paths:` entries; `test-all.sh --print-selection` check
+
+## Phase 8 Verification (targeted)
+
+- [ ] 8.1 Unit battery, `tsc --noEmit`, vitest files by path, docker suite baseline plus every mutation seam red
+- [ ] 8.2 `guard-vacuity-floor`, `lint-orphan-test-suites`, `fixture-relative-assert`, `apt-bounded`, `grep-q-pipe-guard`, `c4-count-parity`, `lint-guard-contract.py`
+- [ ] 8.3 Guard Contract row-to-test map recorded here once the tests exist
+
+## Phase 9 Ship
+
+- [ ] 9.1 PR body `Closes #10065`; AppArmor-profile result claimed only after CI shows it
+- [ ] 9.2 Operator go-ahead, then `gh pr merge 10110 --auto` (no `--squash`); one re-arm on a dequeue, then stop and report
