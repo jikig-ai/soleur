@@ -198,7 +198,7 @@ anchor_in_e2e "base-ref classifier judged, not the PR's" 'git show "origin/${GIT
 anchor_in_e2e "full-history checkout for PR diff"       "github.event_name == 'pull_request' && '0' || '1'"
 anchor_absent "no falsy-zero checkout ternary (&& 0 ||)" "&& 0 || 1 }}"
 # git's stderr is kept so a fallback names its cause; a line that sends it to /dev/null re-opens the invisible-cause hole.
-if printf '%s\n' "$e2e_section" | grep -E 'git (diff|show)' | grep -qE '2> *(/dev/null|&-)|&>'; then
+if grep -qE '2> *(/dev/null|&-)|&>' < <(grep -E 'git (diff|show)' <<<"$e2e_section"); then
   FAIL=$((FAIL + 1)); echo "FAIL a git diff/show in the e2e classify step discards stderr"
 else
   PASS=$((PASS + 1)); echo "ok   no git diff/show line in the e2e classify step discards stderr"

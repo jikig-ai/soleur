@@ -115,7 +115,7 @@ in_section "verdict emitted to GITHUB_OUTPUT"            'applicable=$APPLICABLE
 in_section "enum-failure fallback is a literal true"     'APPLICABLE=true'
 in_section "git stderr is captured, not discarded"       'GIT_ERR'
 
-if printf '%s\n' "$section" | grep -E 'git (diff|show)' | grep -qE '2> *(/dev/null|&-)|&>'; then
+if grep -qE '2> *(/dev/null|&-)|&>' < <(grep -E 'git (diff|show)' <<<"$section"); then
   fail "a git diff/show in the classify step discards stderr (the e2e enum-failed cause was invisible for that reason)"
 else
   pass "no git diff/show line discards stderr"
@@ -129,13 +129,13 @@ else
 fi
 
 battery_step="$(printf '%s\n' "$section" | awk '/^      - name: Guard 1 — shard-totality mutation battery/{f=1; print; next} f && /^      - /{exit} f{print}')"
-if printf '%s\n' "$battery_step" | grep -qxE "        if: steps\.detect\.outputs\.applicable != 'false'"; then
+if grep -qxE "        if: steps\.detect\.outputs\.applicable != 'false'" <<<"$battery_step"; then
   pass "the battery step itself carries the fail-closed gate (!= 'false')"
 else
   fail "the battery step lacks its own 'if: steps.detect.outputs.applicable != false' line"
 fi
 skip_step="$(printf '%s\n' "$section" | awk '/^      - name: Record shard-totality skip verdict/{f=1; print; next} f && /^      - /{exit} f{print}')"
-if printf '%s\n' "$skip_step" | grep -qxE "        if: steps\.detect\.outputs\.applicable == 'false'"; then
+if grep -qxE "        if: steps\.detect\.outputs\.applicable == 'false'" <<<"$skip_step"; then
   pass "the skip-verdict step is gated on == 'false'"
 else
   fail "the skip-verdict step lacks its == 'false' gate"
@@ -166,7 +166,7 @@ else
   fail "falsy-middle ternary found (always evaluates to the right operand): $falsy_hits"
 fi
 e2e_section="$(awk '/^  e2e:/{f=1} f && !/^  e2e:/ && /^  [a-zA-Z0-9_-]+:/{exit} f{print}' "$CI_YML")"
-if printf '%s\n' "$e2e_section" | grep -qF "fetch-depth: \${{ github.event_name == 'pull_request' && '0' || '1' }}"; then
+if grep -qF "fetch-depth: \${{ github.event_name == 'pull_request' && '0' || '1' }}" <<<"$e2e_section"; then
   pass "e2e checkout depth ternary yields the truthy string '0' on pull_request"
 else
   fail "e2e fetch-depth ternary is not the quoted-'0' form"
