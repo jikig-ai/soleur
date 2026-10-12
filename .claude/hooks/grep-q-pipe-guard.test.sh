@@ -1682,7 +1682,7 @@ pj_judge() {
   stale="$(LC_ALL=C comm -13 <(printf '%s\n' "$pairs") <(printf '%s\n' "$sorted") | { grep -vxF -f <(printf '%s' "$vnv") || true; })"
   dupes="$(uniq -d <<<"$sorted")"
   if [[ -n "$unl" ]]; then   # one awk over the triples, not one per pair: the producer files of each (suite|verb), unique and sorted
-    while IFS=$'\t' read -r k r; do pj_pr["$k"]="$r"; done < <(LC_ALL=C sort -u <<<"${pj_raw-}" | LC_ALL=C awk -F'\t' 'NF >= 3 { k = $1 "|" $2; m[k] = (k in m ? m[k] ", " : "") $3 } END { for (k in m) print k "\t" m[k] }')
+    while IFS=$'\t' read -r k r; do pj_pr["$k"]="$r"; done < <(LC_ALL=C sort -u <<<"${pj_raw-}" | LC_ALL=C awk -F'\t' 'NF >= 3 { k = $1 "|" $2; if (k in m) m[k] = m[k] ", " $3; else m[k] = $3 } END { for (k in m) print k "\t" m[k] }')
   fi
   while IFS= read -r p; do
     [[ -z "$p" ]] && continue
