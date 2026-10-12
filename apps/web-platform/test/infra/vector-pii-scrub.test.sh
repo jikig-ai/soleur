@@ -554,7 +554,7 @@ done
 # array; tokenize only the array body (matcher line through `]`), comment-stripped,
 # so layout variants (inline members, trailing comments, odd quoting) all derive —
 # quoted TOML keys/values elsewhere in the block must not enter the set (#9963).
-ACTUAL_TAGS=$(printf '%s\n' "$HOST_SCRIPTS_BLOCK" | awk '/include_matches\.SYSLOG_IDENTIFIER/{f=1} f{print} f&&/\]/{exit}' | sed 's/#.*$//' | grep -oE '"[a-zA-Z0-9._-]+"|'"'"'[a-zA-Z0-9._-]+'"'"'' | tr -d '"'"'"'"'"'" | sort -u)
+ACTUAL_TAGS=$(printf '%s\n' "$HOST_SCRIPTS_BLOCK" | awk '/include_matches\.SYSLOG_IDENTIFIER/{f=1} f{print} f&&/\]/{exit}' | sed 's/#.*$//' | grep -oE '"[a-zA-Z0-9._-]+"|'"'"'[a-zA-Z0-9._-]+'"'"'' | tr -d '"'"'"'"'"'" | sort -u || true)
 CASES=$((CASES + 1))
 if [[ -n "$EXPECTED_TAGS" && "$EXPECTED_TAGS" == "$ACTUAL_TAGS" ]]; then
   pass "SYSLOG_IDENTIFIER tag set matches the infra emitters ($(echo "$EXPECTED_TAGS" | grep -c .) tags)"
