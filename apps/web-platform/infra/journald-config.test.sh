@@ -592,7 +592,7 @@ if [[ -n "$PROBE_EMIT_LN" && -n "$CONTROL_LN" && "$CONTROL_LN" =~ ^[0-9]+$ && "$
   BETWEEN_EMITS="$(printf '%s\n' "$PROBE_BODY" | awk -v a="$PROBE_EMIT_LN" -v b="$CONTROL_LN" 'NR>a && NR<b')"
 fi
 assert "9963e: the control emit is UNCONDITIONAL — after the probe emit, before any if/case/loop gate" \
-  "[[ \"\$CONTROL_LN\" =~ ^[0-9]+\$ && \"\$PROBE_EMIT_LN\" =~ ^[0-9]+\$ && \"\$CONTROL_LN\" -gt \"\$PROBE_EMIT_LN\" ]] && ! printf '%s\n' \"\$BETWEEN_EMITS\" | grep -cE '^[[:space:]]*(if|elif|else|case|for|while|until)([[:space:]]|\$)' >/dev/null"
+  "[[ \"\$CONTROL_LN\" =~ ^[0-9]+\$ && \"\$PROBE_EMIT_LN\" =~ ^[0-9]+\$ && \"\$CONTROL_LN\" -gt \"\$PROBE_EMIT_LN\" ]] && ! printf '%s\n' \"\$BETWEEN_EMITS\" | grep -cE '^[[:space:]]*(if|elif|else|fi|case|esac|for|while|until|done)([[:space:]]|\$)' >/dev/null"
 
 # Single emission chokepoint: the PROBESCRIPTEOF heredoc is the only place this marker may
 # be emitted — a second emit site (e.g. a sibling unit or a doppler-wrapped script) would

@@ -536,6 +536,10 @@ EXPECTED_TAGS=$(printf '%s\n%s\n' "$EXPECTED_TAGS" "$SYSTEMD_UNIT_IDENTIFIERS" |
 # reason discipline as SYSLOG_TAG_EXCLUSIONS below — the census is the chokepoint, so a
 # derived tag must either sit in the Source 4 allowlist OR carry a registered exemption;
 # a tag with NEITHER disposition is exactly the drift AC3's tag-set equality catches.
+# PREMISE DISCIPLINE: an exemption asserts the emit rides the PRIORITY<=4 arm — so every
+# entry's emitter must carry a `-p <0..4>` (or SyslogIdentifier+priority) pin elsewhere
+# (today: journald-config.test.sh's `-p err` arm for the systemd control). Exempting a
+# default-priority (notice=6) emitter would register a tag that ships nowhere.
 declare -A PRIORITY_ARM_EXEMPTIONS=(
   [systemd]="SOLEUR_SYSTEMD_JOURNALD_CONTROL (#9963): the positive control proving the SYSLOG_IDENTIFIER=systemd delivery path. It MUST ride Source 1's PRIORITY<=4 admission arm — the arm real PID-1 'Failed to start' rows take — which is why it is emitted at -p err (PRIORITY 3) and why adding 'systemd' to Source 4 is the named trap: an exact-tag entry would also ship every PID-1 PRIORITY-6 Started/Stopped line, the quota blow the vector.toml Source 4 header documents."
 )

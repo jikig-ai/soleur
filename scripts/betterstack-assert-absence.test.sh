@@ -265,12 +265,14 @@ else
   bad "--absence-require did not scope the absence read (rc=$rc): $out"
 fi
 
-# --- --control-require: field-scope the control predicate (#9963) --------------
+# --- --control-require-field: field-bind the control predicate (#9963) -------
 # A marker-substring control read is forgeable: webhook-payload rows under
 # ident=doppler quote repo text verbatim — issue #9939's own title produced 10
-# false matches (inngest-provision-rehearsal-capture.sh:296). --control-require
-# binds the control to the discriminator FIELD, so only a row carrying marker
-# AND "SYSLOG_IDENTIFIER":"systemd" proves the systemd journald path ships.
+# false matches (inngest-provision-rehearsal-capture.sh:296), and a substring
+# require can itself be quoted (this diff's docs co-locate marker + field
+# fragment). --control-require-field binds the row's OWN journald field via
+# JSONExtractString — a doppler row's SYSLOG_IDENTIFIER is 'doppler' no matter
+# what its payload quotes.
 #
 # The stub below emulates the warehouse rather than parroting the query: it
 # holds BOTH-count rows carrying marker + systemd identifier and
@@ -296,7 +298,7 @@ case "\$sql" in
   *) echo "stub: read was not host-scoped" >&2; exit 65 ;;
 esac
 if [[ "\$sql" == *SOLEUR_SYSTEMD_JOURNALD_CONTROL* ]]; then
-  if [[ "\$sql" == *'"SYSLOG_IDENTIFIER":"systemd"'* ]]; then
+  if [[ "\$sql" == *"JSONExtractString(raw,'SYSLOG_IDENTIFIER') = 'systemd'"* ]]; then
     echo "{\"n\":\"$both\"}"
   else
     echo "{\"n\":\"$total\"}"
@@ -316,13 +318,13 @@ make_control_stub 3 2 0
 rc=0
 out=$(BETTERSTACK_QUERY_SCRIPT="$TMP/stub-ctl.sh" bash "$SUT" --host soleur-web-1 \
   --absence 'IMAGE_PULL_FAIL' \
-  --control 'SOLEUR_SYSTEMD_JOURNALD_CONTROL' --control-require '"SYSLOG_IDENTIFIER":"systemd"' \
+  --control 'SOLEUR_SYSTEMD_JOURNALD_CONTROL' --control-require-field 'SYSLOG_IDENTIFIER=systemd' \
   --since 6h 2>&1) || rc=$?
-eq "rows carrying marker+systemd satisfy --control-require (exit 0, live path)" "0" "$rc"
+eq "rows carrying marker+systemd satisfy --control-require-field (exit 0, live path)" "0" "$rc"
 if [[ "$out" == *'outcome=clean'* ]]; then
   ok "verdict line reports clean — the field-scoped control is live"
 else
-  bad "no clean verdict for a satisfied --control-require: $out"
+  bad "no clean verdict for a satisfied --control-require-field: $out"
 fi
 if [[ "$out" == *'control_rows=3'* ]]; then
   ok "control_rows counts field-scoped rows only — the 2 marker-only rows are excluded"
@@ -338,9 +340,9 @@ make_control_stub 0 5 0
 rc=0
 out=$(BETTERSTACK_QUERY_SCRIPT="$TMP/stub-ctl.sh" bash "$SUT" --host soleur-web-1 \
   --absence 'IMAGE_PULL_FAIL' \
-  --control 'SOLEUR_SYSTEMD_JOURNALD_CONTROL' --control-require '"SYSLOG_IDENTIFIER":"systemd"' \
+  --control 'SOLEUR_SYSTEMD_JOURNALD_CONTROL' --control-require-field 'SYSLOG_IDENTIFIER=systemd' \
   --since 6h 2>&1) || rc=$?
-eq "marker-only rows CANNOT satisfy --control-require (exit 2, unshipping)" "2" "$rc"
+eq "marker-only rows CANNOT satisfy --control-require-field (exit 2, unshipping)" "2" "$rc"
 if [[ "$out" == *'outcome=unshipping'* ]]; then
   ok "verdict line reports unshipping — contamination cannot forge the control"
 else
@@ -412,12 +414,80 @@ else
   bad "control count drifted: $out"
 fi
 
+# (e) FIELD-FORM SQL SHAPE + composition. The control must bind the row's OWN
+# field via JSONExtractString — never a `raw LIKE '%<field-fragment>%'`, which
+# any payload row quoting the recipe verbatim satisfies (the measured doppler
+# class; this PR's own docs co-locate marker + field text). The stub records
+# the SQL it receives so the shape is asserted on the wire, and answers n=2 for
+# the control arm, n=0 for the absence arm.
+cat > "$TMP/stub-ctl-field.sh" <<'STUB'
+#!/usr/bin/env bash
+sql="$1"
+printf '%s\n===READ===\n' "$sql" >> "$STUB_SQL_FILE"
+case "$sql" in
+  SELECT*|*$'\n'*SELECT*) : ;;
+  *) echo "stub: expected raw SQL as \$1" >&2; exit 64 ;;
+esac
+case "$sql" in
+  *"JSONExtractString(raw,'host_name') = 'soleur-web-1'"*) : ;;
+  *) echo "stub: read was not host-scoped" >&2; exit 65 ;;
+esac
+if [[ "$sql" == *SOLEUR_SYSTEMD_JOURNALD_CONTROL* ]]; then echo '{"n":"2"}'; else echo '{"n":"0"}'; fi
+exit 0
+STUB
+chmod +x "$TMP/stub-ctl-field.sh"
+STUB_SQL_FILE="$TMP/field-sql.txt"
+rc=0
+out=$(STUB_SQL_FILE="$STUB_SQL_FILE" BETTERSTACK_QUERY_SCRIPT="$TMP/stub-ctl-field.sh" bash "$SUT" --host soleur-web-1 \
+  --absence 'IMAGE_PULL_FAIL' \
+  --control 'SOLEUR_SYSTEMD_JOURNALD_CONTROL' \
+  --control-require-field 'SYSLOG_IDENTIFIER=systemd' --control-require-field 'PRIORITY=3' \
+  --since 6h 2>&1) || rc=$?
+eq "--control-require-field composes (exit 0)" "0" "$rc"
+# The stub records EVERY read (control then absence) — the field terms belong to the
+# control read, which is the one carrying the marker.
+field_sql="$(printf '%s' "$(cat "$STUB_SQL_FILE")" | awk '/===READ===/{exit} 1')"
+if [[ "$field_sql" == *"JSONExtractString(raw,'SYSLOG_IDENTIFIER') = 'systemd'"* ]]; then
+  ok "control predicate binds SYSLOG_IDENTIFIER via JSONExtractString — the row's own field"
+else
+  bad "field require did not reach the SQL as JSONExtractString: $field_sql"
+fi
+if [[ "$field_sql" == *"JSONExtractString(raw,'PRIORITY') = '3'"* ]]; then
+  ok "repeated --control-require-field composes a second JSONExtractString term"
+else
+  bad "second field require missing from SQL: $field_sql"
+fi
+if [[ "$field_sql" == *"AND JSONExtractString(raw,'SYSLOG_IDENTIFIER')"* || "$field_sql" == *"AND (JSONExtractString(raw,'SYSLOG_IDENTIFIER')"* ]]; then
+  ok "field terms are AND-composed onto the marker"
+else
+  bad "field term not AND'd onto the marker predicate: $field_sql"
+fi
+if [[ "$field_sql" == *"LIKE '%SYSLOG_IDENTIFIER"* ]]; then
+  bad "control predicate still substring-matches the field fragment — payload-quoting forgery class open: $field_sql"
+else
+  ok "no raw LIKE over the field fragment — the measured quote-verbatim class cannot satisfy it"
+fi
+
+# (f) NAME VALIDATION. --control-require-field takes <name>=<value>; a missing
+# '=' or a name that is not a JSON-path identifier is a usage error (exit 64),
+# never a silent substring fallback.
+rc=0
+out=$(BETTERSTACK_QUERY_SCRIPT="$TMP/stub-ctl-field.sh" bash "$SUT" --host soleur-web-1 \
+  --absence 'IMAGE_PULL_FAIL' --control 'SOLEUR_SYSTEMD_JOURNALD_CONTROL' \
+  --control-require-field 'no-equals-sign' --since 6h 2>&1) || rc=$?
+eq "--control-require-field without '=' is a usage refusal (exit 64)" "64" "$rc"
+rc=0
+out=$(BETTERSTACK_QUERY_SCRIPT="$TMP/stub-ctl-field.sh" bash "$SUT" --host soleur-web-1 \
+  --absence 'IMAGE_PULL_FAIL' --control 'SOLEUR_SYSTEMD_JOURNALD_CONTROL' \
+  --control-require-field 'bad name=systemd' --since 6h 2>&1) || rc=$?
+eq "--control-require-field with a non-identifier name is refused (exit 64)" "64" "$rc"
+
 # --- Anti-vacuity floor -----------------------------------------------------------------------
 # This suite imposes assertion floors on other people's guards and had none of its own. Neuter
 # ok()/bad()/eq() and it reported "0 passed, 0 failed / OK / exit 0" — indistinguishable from a
 # clean run. A FLOOR, not equality: the count is developer-incremented, so -eq turns every new
 # assertion into a spurious red.
-MIN_ASSERTIONS=47
+MIN_ASSERTIONS=63
 if [[ "$((pass + fail))" -lt "$MIN_ASSERTIONS" ]]; then
   echo "FATAL: only $((pass + fail)) assertions ran, expected >= $MIN_ASSERTIONS — the suite was stranded, not clean." >&2
   exit 1

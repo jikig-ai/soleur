@@ -245,7 +245,7 @@ explain the storm rows.
 3. **`--control-require` on `betterstack-assert-absence.sh`** — repeatable,
    AND'd onto the control predicate, byte-mirroring `--absence-require`. The
    systemd-path recipe becomes `--control 'SOLEUR_SYSTEMD_JOURNALD_CONTROL'
-   --control-require '"SYSLOG_IDENTIFIER":"systemd"'`: a doppler-tagged webhook
+   --control-require-field 'SYSLOG_IDENTIFIER=systemd'`: a doppler-tagged webhook
    row quoting the marker text (the measured contamination class) cannot
    satisfy it, and neither can a future transform that drops the field.
 4. **Rehearsal-capture control arm** — count `HOST_ROWS` rows carrying the
@@ -458,7 +458,7 @@ never-add chokepoint is the Source-4 `include_matches.SYSLOG_IDENTIFIER` list.
 |---|---|---|
 | 1 | Delete the `logger -t systemd -p err` emit line from the heredoc | RED — the emission-anchored pin (emit exists, not bare token) fails; live windows go `unshipping` |
 | 2 | Change `-p err` to `-p notice` (PRIORITY 3→5) | RED — the priority pin fails AND the row leaves the admission arm (PRIORITY 5 ∉ {0..4}) → live `unshipping` |
-| 3 | Change `-t systemd` to `-t soleur-sys-path` | RED — the tag pin fails AND `--control-require '"SYSLOG_IDENTIFIER":"systemd"'` can never be satisfied → `unshipping` |
+| 3 | Change `-t systemd` to `-t soleur-sys-path` | RED — the tag pin fails AND `--control-require-field 'SYSLOG_IDENTIFIER=systemd'` can never be satisfied → `unshipping` |
 | 4 | Add `"systemd"` to the Source-4 `include_matches.SYSLOG_IDENTIFIER` allowlist | RED — the explicit never-add pin + the exemption-registry disjointness arm both fire |
 | 5 | Narrow Source 1 `include_matches.PRIORITY` to `["0","1","2"]` | RED — the Source-1 arm drift pin fails; the PRIORITY-3 control leaves the arm → live `unshipping` |
 | 6 | Add a SECOND literal `logger -t newtag` inside the probe script without an allowlist or exemption entry | RED — AC3's derivation census finds a tag with no disposition (second member after a compliant first) |
@@ -579,7 +579,7 @@ globs → Product/UX Gate not triggered.
 - [x] **AC4** `betterstack-assert-absence.sh` accepts repeatable
   `--control-require <substring>` AND'd onto the control predicate; its usage
   text documents the systemd-path recipe
-  (`--control 'SOLEUR_SYSTEMD_JOURNALD_CONTROL' --control-require '"SYSLOG_IDENTIFIER":"systemd"'`).
+  (`--control 'SOLEUR_SYSTEMD_JOURNALD_CONTROL' --control-require-field 'SYSLOG_IDENTIFIER=systemd'`).
 - [x] **AC5** The rehearsal capture's `inngest_failed_check` neighbour arm
   reports `want`/TRANSIENT (never `ok`) when the row set lacks a marker +
   `SYSLOG_IDENTIFIER=systemd` control row, and a doppler-tagged row quoting the
@@ -630,7 +630,7 @@ globs → Product/UX Gate not triggered.
   exemption entry, when the AC3 census runs, then the tag-set mismatch fails.
   *(unit — second-member row)*
 - Integration (live, post-replace): on `soleur-inngest-prd`,
-  `betterstack-assert-absence.sh --host soleur-inngest-prd --absence 'Failed to start inngest-luks' --absence-require '"SYSLOG_IDENTIFIER":"systemd"' --absence-require '"host":"soleur-inngest"' --control 'SOLEUR_SYSTEMD_JOURNALD_CONTROL' --control-require '"SYSLOG_IDENTIFIER":"systemd"' --since 6h`
+  `betterstack-assert-absence.sh --host soleur-inngest-prd --absence 'Failed to start inngest-luks' --absence-require '"SYSLOG_IDENTIFIER":"systemd"' --absence-require '"host":"soleur-inngest"' --control 'SOLEUR_SYSTEMD_JOURNALD_CONTROL' --control-require-field 'SYSLOG_IDENTIFIER=systemd' --since 6h`
   exits 0 (`clean`) with `control_rows>=1`. *(integration — requires the
   inngest-host-replace staging; interim verdict is `unshipping`)*
 

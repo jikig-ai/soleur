@@ -421,17 +421,32 @@ grep -qF 'systemd-path control row absent' < <(printf '%s' "$LAST_OUT") && \
   pass "control-absent arm names the missing control in its want" || \
   fail "control-absent arm names the missing control in its want" "$LAST_OUT"
 
-# (c) CONTAMINATED: the marker text riding a NON-systemd row — the measured forgery class
-# (doppler-tagged webhook/issue-body payloads quoting repo text verbatim) — must NOT
-# satisfy the field-scoped check; the arm stays TRANSIENT and never reports the control
-# observed.
+# (c) CONTAMINATED, three measured forgery classes riding one row set — each must NOT
+# satisfy the field-anchored check; the arm stays TRANSIENT and never reports the
+# control observed:
+#   i. doppler-tagged marker row (webhook payloads quote repo text verbatim),
+#  ii. marker + `SYSLOG_IDENTIFIER=systemd` PROSE on the same doppler row — the
+#      commit-message/issue-body shape (an `=`-form substring the loose check
+#      would have counted),
+# iii. a PREFIX-IDENT row — `"SYSLOG_IDENTIFIER":"systemd-journald"` — rejected by
+#      the quoted-value terminator anchor,
+#  iv. the marker + field text embedded inside a BOOT_STAGE row's journal payload
+#      (post-boot-health embeds `journalctl` output verbatim in jl= — the same
+#      exclusion count_inngest_failed carries).
 rows "$TMP/r-ctrlforge.json" "$NOW" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=provision-unit-armed detail=iid=abc123 \"host\":\"${HOST}\"" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=1 iid=abc123 \"host\":\"${HOST}\"" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=2 iid=abc123 \"host\":\"${HOST}\"" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=private_nic_timeout detail=boot=deadbee1.waited_s=150 \"host\":\"${HOST}\"" \
-  "{\"SYSLOG_IDENTIFIER\":\"doppler\",\"_COMM\":\"inngest\",\"_SYSTEMD_UNIT\":\"inngest-server.service\",\"message\":\"SOLEUR_SYSTEMD_JOURNALD_CONTROL ts=1760222400 quoted inside a webhook payload\",\"host\":\"${HOST}\"}"
-run "phase-a TRANSIENT: the marker on a doppler-tagged row does NOT satisfy the control (measured contamination class)" 2 \
+  "{\"SYSLOG_IDENTIFIER\":\"doppler\",\"_COMM\":\"inngest\",\"_SYSTEMD_UNIT\":\"inngest-server.service\",\"message\":\"SOLEUR_SYSTEMD_JOURNALD_CONTROL ts=1760222400 quoted inside a webhook payload\",\"host\":\"${HOST}\"}" \
+  "{\"SYSLOG_IDENTIFIER\":\"doppler\",\"_COMM\":\"inngest\",\"message\":\"SOLEUR_SYSTEMD_JOURNALD_CONTROL ts=1760222400 and SYSLOG_IDENTIFIER=systemd prose quoted from the repo\",\"host\":\"${HOST}\"}" \
+  "{\"SYSLOG_IDENTIFIER\":\"systemd-journald\",\"_COMM\":\"systemd-journald\",\"message\":\"SOLEUR_SYSTEMD_JOURNALD_CONTROL ts=1760222400 prefix-ident noise\",\"host\":\"${HOST}\"}"
+# The BOOT_STAGE-embedded forgery is appended pre-escaped (rows()'s blanket "->\" pass
+# would mis-escape the \" inside jl= and poison the JSON — a transport-fault TRANSIENT
+# would pass this arm vacuously). printf \" -> \" and \\\" -> \\" so the raw lands as
+# jl="journalctl excerpt: \"SYSLOG_IDENTIFIER\":\"systemd\" ...embedded".
+printf '{"dt":"%s","raw":"SOLEUR_INNGEST_BOOT_STAGE stage=post-boot-health jl=\\"journalctl excerpt: \\\\\"SYSLOG_IDENTIFIER\\\\\":\\\\\"systemd\\\\\" SOLEUR_SYSTEMD_JOURNALD_CONTROL embedded\\" \\"host\\":\\"%s\\""}\n' "$NOW" "$HOST" >> "$TMP/r-ctrlforge.json"
+run "phase-a TRANSIENT: contaminated rows (doppler marker, =-prose field, prefix-ident, BOOT_STAGE embed) do NOT satisfy the control" 2 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-ctrlforge.json" -- "${BASE_ARGS[@]}" --mode phase-a
 if grep -qF 'systemd-path control row observed' < <(printf '%s' "$LAST_OUT"); then
   fail "contaminated arm never reports the control row observed" "$LAST_OUT"

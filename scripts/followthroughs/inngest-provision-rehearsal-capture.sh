@@ -340,9 +340,24 @@ inngest_failed_check() { # <row-set> — viol on any `Failed to start <tracked-u
 # contamination class: control-API webhook payloads ship issue titles verbatim). Field-
 # scoped, not payload-scoped: the message text may differ; only marker + tag bind.
 count_systemd_path_control() { # <row-set> — control rows carried on the systemd tag
+  # Three anchors, mirroring count_inngest_failed's discipline:
+  #   1. BOOT_STAGE exclusion — post-boot-health embeds `journalctl` output verbatim in
+  #      jl=, which can carry marker + field-shaped text from a PRIOR life inside a
+  #      current-life row; a real control row never carries the BOOT_STAGE marker.
+  #   2. marker — the control text itself.
+  #   3. the field ANCHORED on the serialized JSON pair shape — a `:` (never `=`),
+  #      then a quoted `"systemd"` value whose terminator is `\` (escaped wire),
+  #      `"`, `,` or `}`. This rejects `SYSLOG_IDENTIFIER=systemd` prose (the
+  #      measured quote-verbatim class: issue/commit text ships in doppler webhook
+  #      payloads — including this repo's own commit messages), and prefix-idents
+  #      like `"systemd-journald"` whose value continues past the name. Residual,
+  #      documented: a payload row quoting the exact escaped `\"SYSLOG_IDENTIFIER\":
+  #      \"systemd\"` fragment still satisfies the text-level check — the field-true
+  #      layer is the SQL side's --control-require-field JSONExtractString binding.
   printf '%s\n' "$1" |
+    grep -v 'SOLEUR_INNGEST_BOOT_STAGE' |
     grep -F 'SOLEUR_SYSTEMD_JOURNALD_CONTROL' |
-    grep -cE 'SYSLOG_IDENTIFIER.{0,8}systemd' 2>/dev/null || true
+    grep -cE 'SYSLOG_IDENTIFIER.{0,4}:[^a-zA-Z0-9]{0,3}"systemd["\\},]' 2>/dev/null || true
 }
 systemd_path_check() { # <row-set> — want while the systemd path is unproven in this window
   local n_control

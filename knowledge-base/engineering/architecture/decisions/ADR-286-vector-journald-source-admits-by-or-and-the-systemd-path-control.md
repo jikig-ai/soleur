@@ -18,7 +18,7 @@ brand_survival_threshold: none
 `SOLEUR_SYSTEMD_JOURNALD_CONTROL` row is observed end-to-end on
 `soleur-inngest-prd` (emitted on the dedicated inngest host after the next
 `apply_target=inngest-host-replace` dispatch, read back through
-`betterstack-assert-absence.sh --control-require` and the rehearsal capture's
+`betterstack-assert-absence.sh --control-require-field` and the rehearsal capture's
 `systemd_path_check`). Until then the emit half is unexercised in prod; the
 mechanism half is verified against Vector 0.43.1 source and the live row record.
 The ordinal is provisional: 286 was free on `origin/main` and no open PR claimed
@@ -65,13 +65,20 @@ Sources 1+4.
    under test is that THAT field shape transits the PRIORITY arm, not that the
    marker string survives a search. Marker-substring controls are forgeable by
    the measured contamination class (webhook/issue-body replays carrying the
-   marker under a different ident). Reads therefore bind the field, not the
-   string: `betterstack-assert-absence.sh` gains a repeatable
-   `--control-require <substring>` AND'd into the control predicate (the
-   systemd recipe requires `"SYSLOG_IDENTIFIER":"systemd"`), and the rehearsal
-   capture's `systemd_path_check` counts marker+field jointly. This is the
-   read-side convention ADR-192 established, applied one level down at the
-   source-of-truth field.
+   marker under a different ident) — and a *substring* require shares that
+   weakness: the require text is itself repo text a payload row can quote,
+   including this ADR's own recipe (design-review P2, concurring
+   code-simplicity + architecture seats). The closed form therefore binds the
+   row's OWN field, not its text: `betterstack-assert-absence.sh` gains a
+   repeatable `--control-require-field <name>=<value>` AND'd into the control
+   predicate as `JSONExtractString(raw,'<name>') = '<value>'` (the systemd
+   recipe is `--control-require-field 'SYSLOG_IDENTIFIER=systemd'` — a doppler
+   row is `doppler` no matter what its payload quotes), and the rehearsal
+   capture's `systemd_path_check` anchors marker + colon-quoted `"systemd"`
+   field shape jointly (the strongest binding text rows admit; the residual —
+   a payload quoting the exact escaped fragment — is documented at the count
+   site). This is the read-side convention ADR-192 established, applied one
+   level down at the source-of-truth field.
 
 3. **The `systemd` tag never joins the Source-4 allowlist.** Adding it to
    `include_matches.SYSLOG_IDENTIFIER` would ship all PID-1 chatter — the quota
