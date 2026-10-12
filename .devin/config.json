@@ -115,6 +115,11 @@
             "type": "command",
             "command": "bash \"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel)}}/.claude/hooks/ship-unpushed-commits-gate.sh\"",
             "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-${DEVIN_PROJECT_DIR:-$(git rev-parse --show-toplevel)}}/.claude/hooks/ship-kb-archive-gate.sh\"",
+            "timeout": 30
           }
         ]
       },

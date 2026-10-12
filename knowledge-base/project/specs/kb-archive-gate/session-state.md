@@ -23,3 +23,13 @@
 
 ### Technical-Ruling Gate
 - cto_spawns=1 (one batched spawn, 13 rows — all confirmed with binding amendments: M-on-specs deny names manual git mv path; merge-base fail-open warns via headless_or_stderr; sibling `\s--\s` deferral conditional on wg-defer-only-after-inline-triage)
+
+## Work Phase
+- Status: implementation complete (Tier B fan-out: docs+ship/postmerge agent, archive-kb agent, hook+suite as lead)
+- `ship-kb-archive-gate.sh` + `.test.sh` (40 cases / 50 assertions): all green; registered in settings.json (after ship-unpushed-commits-gate), .devin/config.json ^exec$ twin, devin-dispositions.tsv bind row, suite-shard-legs.tsv (leg 1), PROMOTED_FILES (per-file seam — MAX_DEFERRED is shrink-only)
+- Ship restructure: `## Phase 6.45: KB Artifact Archival` inserted between gh pr create block and Semver section; ready+arm consolidated into Phase 6.5 CI Status Check; Final Checklist row added
+- postmerge `## Phase 5.8: KB archival read-back (REPORT-ONLY)` added
+- archive-kb.sh: third discovery axis (untracked `??` rows, --untracked-files=all)
+- Deliverable (d) verified live: `--dry-run` on this worktree lists the plan + spec dir, no learnings
+- Ratchets green: guard-vacuity-floor 23/23, test-affected-kb-consumers 23/23, fixture-relative-assert 63/63, lint-trap-tempfile-ownership 120/120, test-plan-gate-preamble 41/41, devin-matcher-parity 9/9, hook-suite-dep-unresolved, hookeventname-coverage, hook-input-contract, incident-sandbox-coverage 46/46, settings-hook-exec-bit, incidents 9/9, pre-merge-rebase-parity 12/12, lint-agents-rule-budget (no error), lint-orphan-test-suites (0 orphaned), markdown-lint, shellcheck clean
+- Open for ship: task 6.2 (sibling `\s--\s` deferral triple test), AC21 self-application (Phase 6.45 archives this spec dir + plan at ship)

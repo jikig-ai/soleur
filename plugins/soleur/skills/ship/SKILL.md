@@ -536,6 +536,7 @@ Ship Checklist for [branch name]:
 - [ ] Code review completed (Phase 5.5 gate)
 - [ ] Undeferred operator-step gate passed (Phase 5.5 gate)
 - [ ] Recurring-vendor-expense gate passed (Phase 5.5 gate)
+- [ ] KB artifacts archived (Phase 6.45 gate)
 - [ ] Push to remote
 - [ ] Create PR with semver label
 - [ ] PR is mergeable (no conflicts)
@@ -1631,7 +1632,7 @@ Run `echo 'SOLEUR_RULE_APPLIED rule=hr-technical-fork-is-not-an-operator-questio
 
 [skill-enforced: ship Phase 6.4 + hook ship-unpushed-commits-gate.sh]
 
-Before queueing `gh pr merge --squash --auto` (Phase 6 below), verify every local commit is on `origin/<branch>`. GitHub's auto-merge consumes the PR head ref on origin — local-only commits are silently dropped from the squash. This was the failure mode in PR #3624 → #3627 → #3630: the orchestrator went `preflight → gh pr edit → gh pr ready → gh pr merge --squash --auto` without re-pushing, and 2 of 5 commits (the actual fix + the review fix) never landed on `main`.
+Before queueing `gh pr merge --squash --auto` (Phase 6.5's CI Status Check below), verify every local commit is on `origin/<branch>`. GitHub's auto-merge consumes the PR head ref on origin — local-only commits are silently dropped from the squash. This was the failure mode in PR #3624 → #3627 → #3630: the orchestrator went `preflight → gh pr edit → gh pr ready → gh pr merge --squash --auto` without re-pushing, and 2 of 5 commits (the actual fix + the review fix) never landed on `main`.
 
 The PreToolUse hook [`.claude/hooks/ship-unpushed-commits-gate.sh`](../../../../.claude/hooks/ship-unpushed-commits-gate.sh) enforces this gate mechanically — it intercepts every `gh pr merge` (including chained forms like `gh pr ready && gh pr merge`) and denies the tool call when `git rev-list origin/<branch>..HEAD --count` returns > 0. The deny message lists the unpushed SHAs so the operator can `git push` and re-issue.
 
@@ -1958,40 +1959,9 @@ Replace `BRANCH_NAME` with the actual branch name.
 
    On non-zero exit, set the real conventional-commit title (`gh pr edit PR_NUMBER --title "feat(scope): …"`) and re-run the guard before proceeding. Do NOT mark ready or queue auto-merge while the title starts with `WIP:`. **Why:** PR #5373 (#5371) merged with the squash subject `WIP: feat-one-shot-5371-cc-durability (#5373)` because Phase 6 updated `--body-file` but omitted `--title`; the blemish is immutable on `main`. This guard makes the omission fail loudly instead of silently shipping a `WIP:` commit.
 
-4.5. **Technical-ruling body check:** `${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/technical-ruling-gate.sh --pr-body <live body>` via the recipe in [decision-challenges-render.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/decision-challenges-render.md) (it prints `gate-rc=`): 0 go on to `gh pr ready`; 1 remedy; 2 never ready past it.
+4.5. **Technical-ruling body check:** `${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/technical-ruling-gate.sh --pr-body <live body>` via the recipe in [decision-challenges-render.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/decision-challenges-render.md) (it prints `gate-rc=`): 0 — proceed to Phase 6.45; 1 remedy; 2 never ready past it.
 
-5. **A recorded operator HOLD is a condition, not an outcome — evaluate it here, at the draft exit.** If the operator asked to hold ("wait for #N", "after the soak", "once the migration applies"), that is a condition with a discharge test. **Record it in the plan file under `## Operator Holds` the moment it is given, and read it from there here — not from conversation.** A hold that lives only in context is gone after compaction and was never present when `soleur:ship` is invoked standalone (the "no PR" fallback below explicitly supports entry via `soleur:plan` or `soleur:work`), and "no hold in context" is then indistinguishable from "no hold was given" — the reports-clean-because-it-could-not-look shape this gate exists to end. If the plan file is unreachable, say so and stop; do not read its absence as an all-clear. Evaluate each condition NOW: a sibling PR is `MERGED` **and** `git merge-base --is-ancestor <its-sha> HEAD`; a named verification is green **on the current tree** (re-run it — an inherited "it was green" describes a tree that may no longer exist); a state change (migration applied, flag flipped) is confirmed by probing the state, not by assuming the step ran. **If you cannot evaluate a condition — for any reason, including a failed probe — the hold STANDS.** Scope that rule precisely: if `## Operator Holds` is absent or empty, **no hold was recorded and this step is a no-op — proceed**. It is only once a hold IS recorded that an empty or unevaluated condition set must never be treated as discharged. A hold recorded with no stated test is not dischargeable here either — route it to the Undeferred Operator-Step Gate rather than improvising a condition to name. Record each condition's verdict and the command that produced it in the PR body, so a discharge is auditable and "four conditions probed green" is distinguishable from "no conditions found". All conditions discharged ⇒ continue to `gh pr ready` and the merge below, which remain gated by review having run (`rf-never-skip-qa-review-before-merging`) and by the required checks — those are the merge authority, not the hold. Any condition unmet ⇒ stop and name **that condition**; "the PR is a draft" is not a reason, "#7441 has not merged" is. A condition only a human can settle (a subjective call, an external party) is a genuine operator gate — file it per the Undeferred Operator-Step Gate, because a PR body is not an operator-visible surface. **Why:** PR #7470 — a hold transcribed as "the PR stays a draft" outlived its cleared conditions.
-
-5.5. **KB artifact archival — the LAST step that may touch `knowledge-base/project/specs|plans|brainstorms` (closes the stranded-archive class measured on #7240 and #9768).** Every earlier live read is behind us: step 2.5 folded `decision-challenges.md` into the PR body and step 5 evaluated `## Operator Holds` in the plan file. Nothing downstream reads the live paths — Phase 7's only spec-dir write is the budget-cap marker, which `mkdir -p`s the path and appends (it is a local resume hint; an already-archived dir just yields an uncommitted file the worktree cleanup reaps). Run it now so the `git mv` lands in THIS PR and merge is terminal:
-
-   ```bash
-   bash "${CLAUDE_PLUGIN_ROOT}/skills/archive-kb/scripts/archive-kb.sh"
-   ```
-
-   If it archives anything (`Archived N artifact(s)`), commit and push the move so it rides this PR — never a follow-up PR, never a post-merge orphan:
-
-   ```bash
-   git add -A knowledge-base && git commit -m "chore(kb): archive <branch> artifacts at ship" && git push      && bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr ci_cycles
-   ```
-
-   — but check `git status` first: `git add -A knowledge-base` sweeps any dirty KB file into the archival commit; stage the moves deliberately if the tree carries unrelated edits.
-
-   Then sweep for stale references — archival without it strands every consumer in the same stroke: `grep -rn "specs/<branch>" --include='*.md' knowledge-base/ plugins/ apps/ | grep -v archive/` — repoint live-path hits or document them as intentionally live. One known residue: an `operator-bootstrap` `bootstrap.sh` is named by a follow-through issue's `auto_command:` at its LIVE path — post-archive that command 404s; record the archive path in the issue.
-
-   A `WARNING: found a ... but NO ...` partial-discovery line means the union of both axes (slug match + branch diff) found one class but nothing of the other — surface it verbatim and confirm there is genuinely no artifact of the missing class before continuing. `No artifacts found` is clean — proceed. **Do not archive earlier than this step** (steps 2.5 and 5 read the live paths) and do not skip it because compound was deferred — the deferral decision exists precisely because these reads are upstream of it; once they have run, the deferral's reason is discharged and in-PR archival is strictly better than stranding. A `soleur:ship` re-entry after this step must resolve the spec/plan from the `archive/` path — Phase 1's live-path globs no longer match, so read the archived files directly rather than treating them as absent.
-
-6. If the PR is a draft, mark it ready with a user token (`GITHUB_TOKEN` cannot ready a PR) and wait for the ready run before arming. One Bash call, `timeout: 420000`:
-
-   ```bash
-   K=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" ready-count PR_NUMBER) && gh pr ready PR_NUMBER \
-     && bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" wait-ready-run PR_NUMBER --before-count "$K"
-   ```
-
-   Arm (`gh pr merge --squash --auto`) ONLY on exit 0; else report "readied but unarmed" with the last stdout line and follow [ready-run-wait.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/ready-run-wait.md) (a failed `ready-count` or `api-error` needs no undo).
-
-   If `git diff --no-renames --name-only origin/main...HEAD | grep -E '^\.github/(workflows|actions)/'` prints anything, tell the operator in chat now: auto-merge is queued and polled as usual, but this PR has no agent `--admin` fallback (`UNTRUSTED-CI`), so if a BEHIND livelock sets in they will be asked to merge it. See [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md). **Why:** #8611.
-
-7. Present the PR URL to the user.
+5. **A recorded operator HOLD is a condition, not an outcome — evaluate it here, at the draft exit.** If the operator asked to hold ("wait for #N", "after the soak", "once the migration applies"), that is a condition with a discharge test. **Record it in the plan file under `## Operator Holds` the moment it is given, and read it from there here — not from conversation.** A hold that lives only in context is gone after compaction and was never present when `soleur:ship` is invoked standalone (the "no PR" fallback below explicitly supports entry via `soleur:plan` or `soleur:work`), and "no hold in context" is then indistinguishable from "no hold was given" — the reports-clean-because-it-could-not-look shape this gate exists to end. If the plan file is unreachable, say so and stop; do not read its absence as an all-clear. Evaluate each condition NOW: a sibling PR is `MERGED` **and** `git merge-base --is-ancestor <its-sha> HEAD`; a named verification is green **on the current tree** (re-run it — an inherited "it was green" describes a tree that may no longer exist); a state change (migration applied, flag flipped) is confirmed by probing the state, not by assuming the step ran. **If you cannot evaluate a condition — for any reason, including a failed probe — the hold STANDS.** Scope that rule precisely: if `## Operator Holds` is absent or empty, **no hold was recorded and this step is a no-op — proceed**. It is only once a hold IS recorded that an empty or unevaluated condition set must never be treated as discharged. A hold recorded with no stated test is not dischargeable here either — route it to the Undeferred Operator-Step Gate rather than improvising a condition to name. Record each condition's verdict and the command that produced it in the PR body, so a discharge is auditable and "four conditions probed green" is distinguishable from "no conditions found". All conditions discharged ⇒ continue to Phase 6.45 (KB artifact archival) and the arming in Phase 6.5's CI Status Check — the merge remains gated by review having run (`rf-never-skip-qa-review-before-merging`) and by the required checks; those are the merge authority, not the hold. Any condition unmet ⇒ stop and name **that condition**; "the PR is a draft" is not a reason, "#7441 has not merged" is. A condition only a human can settle (a subjective call, an external party) is a genuine operator gate — file it per the Undeferred Operator-Step Gate, because a PR body is not an operator-visible surface. **Why:** PR #7470 — a hold transcribed as "the PR stays a draft" outlived its cleared conditions.
 
 **If no open PR exists:**
 
@@ -2028,6 +1998,36 @@ template above — including its placement ABOVE `## Changelog` and the four gat
 Do not quote flag names -- write `--title` not `"--title"`.
 
 Present the PR URL to the user.
+
+## Phase 6.45: KB Artifact Archival
+
+[skill-enforced: ship Phase 6.45 + hook ship-kb-archive-gate.sh]
+
+Both PR arms converge here BEFORE any `gh pr ready` / `gh pr merge` site: the exists-arm falls out of step 5 (Operator Holds); the create-arm lands here after `gh pr create`. The PreToolUse hook [`.claude/hooks/ship-kb-archive-gate.sh`](../../../../.claude/hooks/ship-kb-archive-gate.sh) backs the phase mechanically — it denies `gh pr merge` while the merge would land live (non-`archive/`) additions under `knowledge-base/project/{specs,plans,brainstorms}`. Canonical contract: rule `wg-kb-artifacts-archived-in-pr` in `AGENTS.rules.md`.
+
+Emit rule-application telemetry (records that the archival gate ran):
+
+```bash
+echo 'SOLEUR_RULE_APPLIED rule=wg-kb-artifacts-archived-in-pr note=`soleur:ship` Phase 6.45 archives KB artifacts into the PR before any merge site'
+```
+
+**KB artifact archival — the LAST step that may touch `knowledge-base/project/specs|plans|brainstorms` (closes the stranded-archive class measured on #7240 and #9768).** Every earlier live read is behind us: step 2.5 folded `decision-challenges.md` into the PR body and step 5 evaluated `## Operator Holds` in the plan file. Nothing downstream reads the live paths — Phase 7's only spec-dir write is the budget-cap marker, which `mkdir -p`s the path and appends (it is a local resume hint; an already-archived dir just yields an uncommitted file the worktree cleanup reaps). Run it now so the `git mv` lands in THIS PR and merge is terminal:
+
+```bash
+bash "${CLAUDE_PLUGIN_ROOT}/skills/archive-kb/scripts/archive-kb.sh"
+```
+
+If it archives anything (`Archived N artifact(s)`), commit and push the move so it rides this PR — never a follow-up PR, never a post-merge orphan:
+
+```bash
+git add -A knowledge-base && git commit -m "chore(kb): archive <branch> artifacts at ship" && git push      && bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr ci_cycles
+```
+
+— but check `git status` first: `git add -A knowledge-base` sweeps any dirty KB file into the archival commit; stage the moves deliberately if the tree carries unrelated edits.
+
+Then sweep for stale references — archival without it strands every consumer in the same stroke: `grep -rn "specs/<branch>" --include='*.md' knowledge-base/ plugins/ apps/ | grep -v archive/` — repoint live-path hits or document them as intentionally live. One known residue: an `operator-bootstrap` `bootstrap.sh` is named by a follow-through issue's `auto_command:` at its LIVE path — post-archive that command 404s; record the archive path in the issue.
+
+A `WARNING: found a ... but NO ...` partial-discovery line means the union of both axes (slug match + branch diff) found one class but nothing of the other — surface it verbatim and confirm there is genuinely no artifact of the missing class before continuing. `No artifacts found` is clean — proceed. **Do not archive earlier than this step** (steps 2.5 and 5 read the live paths) and do not skip it because compound was deferred — the deferral decision exists precisely because these reads are upstream of it; once they have run, the deferral's reason is discharged and in-PR archival is strictly better than stranding. A `soleur:ship` re-entry after this step must resolve the spec/plan from the `archive/` path — Phase 1's live-path globs no longer match, so read the archived files directly rather than treating them as absent.
 
 ### Semver Label and Changelog
 
@@ -2170,7 +2170,20 @@ retired both the driver and AC17.)
 
 ### CI Status Check
 
-After confirming mergeability (and a passing `wait-ready-run`), queue auto-merge and let GitHub handle waiting for CI. Wrap the call in the merge-main lock so parallel sessions don't queue auto-merges in the same window:
+After confirming mergeability — and, for a draft, a passing `wait-ready-run` below — queue auto-merge and let GitHub handle waiting for CI.
+
+If the PR is a draft, mark it ready with a user token (`GITHUB_TOKEN` cannot ready a PR) and wait for the ready run before arming. One Bash call, `timeout: 420000`:
+
+```bash
+K=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" ready-count PR_NUMBER) && gh pr ready PR_NUMBER \
+  && bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" wait-ready-run PR_NUMBER --before-count "$K"
+```
+
+Arm (`gh pr merge --squash --auto`) ONLY on exit 0; else report "readied but unarmed" with the last stdout line and follow [ready-run-wait.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/ready-run-wait.md) (a failed `ready-count` or `api-error` needs no undo). A non-draft PR goes straight to the arm.
+
+If `git diff --no-renames --name-only origin/main...HEAD | grep -E '^\.github/(workflows|actions)/'` prints anything, tell the operator in chat now: auto-merge is queued and polled as usual, but this PR has no agent `--admin` fallback (`UNTRUSTED-CI`), so if a BEHIND livelock sets in they will be asked to merge it. See [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md). **Why:** #8611.
+
+Wrap the `gh pr merge` call in the merge-main lock so parallel sessions don't queue auto-merges in the same window:
 
 ```bash
 SS_LIB="${CLAUDE_PLUGIN_ROOT}/scripts/lib/session-state.sh"
@@ -2202,6 +2215,8 @@ The `with_lock <name> <timeout_s> -- <cmd> [args...]` wrapper acquires the lock,
 Do NOT use `gh pr checks --watch` -- it exits immediately with "no checks reported" when CI hasn't registered yet, causing premature merge attempts.
 
 **If auto-merge fails to queue:** Check `gh api repos/{owner}/{repo} --jq '.allow_auto_merge'` -- it must be `true`.
+
+Present the PR URL to the user.
 
 ## Phase 7: Poll for Merge and Cleanup
 
@@ -2984,7 +2999,7 @@ This detects `[gone]` branches (where the remote was deleted after merge), remov
 
 The archives that actually exist under `specs/archive/` were committed by **compound's** automatic consolidation (`git mv` + commit on the feature branch), which is the only mechanism that persists.
 
-The practical consequence: **ship's Phase 6 step 5.5 is now the in-PR archival point.** Compound's Step E archives eagerly when no live-path reader remains, but a deferred archival — the legitimate choice when `specs/<branch>/decision-challenges.md` must stay live for Phase 6 step 2.5's Model Dissents render or the plan file's `## Operator Holds` for step 5 — no longer strands the artifacts: step 5.5 runs `archive-kb.sh` AFTER those last reads and the `git mv` rides the same PR. A follow-up PR is never required for archival. **Why the ordering is load-bearing:** PR #7240 deferred compound's archival so Phase 6 step 2.5 could read `decision-challenges.md`, on the strength of `cleanup-merged` archiving post-merge — it did not, and the spec dir shipped unarchived; #9768 shipped unarchived the same way in 2026-10.
+The practical consequence: **ship's Phase 6.45 (KB Artifact Archival) is now the in-PR archival point** — the named phase both PR arms run before any `gh pr ready` / `gh pr merge` site, backed by the `ship-kb-archive-gate.sh` PreToolUse hook. Compound's Step E archives eagerly when no live-path reader remains, but a deferred archival — the legitimate choice when `specs/<branch>/decision-challenges.md` must stay live for Phase 6 step 2.5's Model Dissents render or the plan file's `## Operator Holds` for step 5 — no longer strands the artifacts: Phase 6.45 runs `archive-kb.sh` AFTER those last reads and the `git mv` rides the same PR. A follow-up PR is never required for archival. **Why the ordering is load-bearing:** PR #7240 deferred compound's archival so Phase 6 step 2.5 could read `decision-challenges.md`, on the strength of `cleanup-merged` archiving post-merge — it did not, and the spec dir shipped unarchived; #9768 shipped unarchived the same way in 2026-10.
 
 **If working from a worktree:** Navigate to the main repo root first, then run cleanup.
 

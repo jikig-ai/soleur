@@ -533,6 +533,29 @@ gh issue create --label type/chore --milestone "Post-MVP / Later" \
 A failed or unrun read-back is a **red post-merge status**: report it verbatim as `Sole-copy read-back: <word>` in the Phase 6
 comment and the Phase 7 summary. It does not itself block "done" (report-only, like Phases 5.5 and 5.6).
 
+## Phase 5.8: KB archival read-back (REPORT-ONLY)
+
+The ship-side archival gate (`ship` Phase 6.45 + the `ship-kb-archive-gate.sh` PreToolUse hook) only sees merges that pass through
+the agent's own `gh pr merge` — UI merges, `gh api` merges, and queue merges from other harnesses bypass it. This phase is the
+catch-net: read the merged squash commit's diff and report any KB artifact the merge landed at a LIVE path.
+
+For the merge commit recorded in Phase 1, diff it against its parent over the three KB roots — the single-parent diff works for
+the squash shape and for a first-parent merge commit. `git fetch origin main` first, so the worktree actually holds the merge
+object:
+
+```bash
+git fetch origin main
+git diff --name-status --diff-filter=AM "<merge-sha>^" "<merge-sha>" -- \
+  knowledge-base/project/specs knowledge-base/project/plans knowledge-base/project/brainstorms
+```
+
+Rows under `*/archive/` are compliant — drop them. Every remaining `A`/`M` row is an artifact the merge landed live (an
+unarchived spec dir, plan, or brainstorm). Report the surviving rows **verbatim** as a **red post-merge status** — `KB archival
+read-back: <verbatim rows, or "clean">` — in the Phase 6 issue comment AND the Phase 7 summary, naming the one-line fix:
+`bash plugins/soleur/skills/archive-kb/scripts/archive-kb.sh` on a NEW branch + PR — archival cannot ride a PR that already
+merged. Like Phases 5.5/5.6/5.7 it is REPORT-ONLY: it never blocks the "done" verdict; the signal is for immediate operator
+attention, not rollback.
+
 ## Phase 6: Update Issue and Compound
 
 If the PR body contained `Closes #N`, update the linked issue with verification results:
@@ -548,6 +571,7 @@ gh issue comment <issue-number> --body "Post-merge verification complete for PR 
 - Browser verification: <PASSED/SKIPPED/DELEGATED-TO-LIVE-VERIFY>
 - Live verification: <PASS/FAIL/CANT-RUN:reason/SKIPPED> (report-only, #5463)
 - Sole-copy read-back: <protected/not-protected/volume-gone/read-failed/missing-token/no word/SKIPPED> (report-only, #9879)
+- KB archival read-back: <clean/verbatim rows> (report-only)
 "
 ```
 
@@ -574,6 +598,7 @@ File freshness: <N files verified>
 Browser verification: <PASSED/SKIPPED/DELEGATED-TO-LIVE-VERIFY>
 Live verification: <PASS/FAIL/CANT-RUN:reason/SKIPPED> (report-only, #5463)
 Sole-copy read-back: <protected/not-protected/volume-gone/read-failed/missing-token/no word/SKIPPED> (report-only, #9879)
+KB archival read-back: <clean/verbatim rows> (report-only)
 Feature-tweet draft: <path + "flip publish_date + status: scheduled to publish" / CATCH-UP: run soleur:feature-tweet #N / NONE — ineligible>
 ```
 
