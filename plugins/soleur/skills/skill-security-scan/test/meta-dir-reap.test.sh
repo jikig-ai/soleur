@@ -304,7 +304,7 @@ knob_fixture="$SCRATCH/skill-scan-input-999109"
 echo x > "$knob_fixture"; touch -d "-30 minutes" "$knob_fixture"
 for knob in abc 08; do
   out="$(run_scan_tmp "$knob")"
-  if sed -n 's/^\.scan-meta\.json written to: //p' <<<"$out" | grep -q .; then
+  if grep -q . < <(sed -n 's/^\.scan-meta\.json written to: //p' <<<"$out"); then
     ok "SKILL_SCAN_META_REAP_MIN=$knob still emits .scan-meta.json (floor normalised)"
   else
     bad "SKILL_SCAN_META_REAP_MIN=$knob crashed the scan before meta write"
@@ -388,7 +388,7 @@ fi
 # Hook-side producer pin: the sss-write.*.err shape is literal-path
 # construction in the write-hook, outside scripts/ — a rename there orphans
 # the family while every arm above stays green.
-hook_producer="$(git rev-parse --show-toplevel)/.claude/hooks/skill-security-scan-write.sh"
+hook_producer="$(cd "$SCRIPT_DIR/../../../../.." && pwd -P)/.claude/hooks/skill-security-scan-write.sh"
 if grep -qE 'TMPDIR:-/tmp[^/]*/sss-write\.[^"]*\.err' "$hook_producer"; then
   ok "the write-hook's sss-write.* capture stays inside the sweep window"
 else
