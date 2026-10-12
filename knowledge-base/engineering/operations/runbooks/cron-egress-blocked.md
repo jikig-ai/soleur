@@ -723,7 +723,7 @@ list", and the closing instruction to re-evaluate on 2026-10-17 and ask for the 
 (the approval was granted and used). Still true, and only while the workflow reads
 `disabled_manually`: the conditional statements that a merge triggers no apply and that a
 registry-render-input merge leaves a pending replace that nothing re-fires. Web-2 is unchanged
-and waits for the #9372 rebirth (#9393 stays open, no plain `web-host-replace`). In the "Hosts-file
+and waits for the #9372 rebirth (#9393 stays open, no plain `web-host-replace`). **[Superseded 2026-10-12 (#9372): the rebirth ran on 2026-10-06 and is retired, and #9393 is CLOSED.]** In the "Hosts-file
 deny lost" section above, the clause "until the #9275 carve is delivered, #9393" is satisfied on
 web-1, outstanding on web-2, and not applicable to the registry host.
 

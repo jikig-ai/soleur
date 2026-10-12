@@ -1009,7 +1009,8 @@ jobs:
   # CUSTODY. The write token (DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER, workspaces-luks-fresh-boot.tf) is
   # scoped to the one marker config and is held by this job alone (the follow-through grades from probe rows and holds
   # no Doppler credential; the token census in workspaces-luks-verify-workflow.test.sh, Guard 3, pins that no other
-  # workflow binds it). The token is read/write until #9358. The job runs on the default branch alone: a `schedule:` event is
+  # workflow or action file names it, which is naming and not reachability: `secrets: inherit` into a reusable workflow
+  # and `toJSON(secrets)` are not modelled). The token is read/write until #9358. The job runs on the default branch alone: a `schedule:` event is
   # always the default branch, and a dispatch is refused from any other ref, so a branch copy of this file
   # or of the helper never runs with the token. A present marker is KEPT while GREEN and removed on a non-GREEN
   # run, so its VALUE is advisory / shape-only downstream (lb-weight-gate.sh checks the shape; sourcing the

@@ -13,7 +13,7 @@ branch: feat-one-shot-9372-web2-luks-cleanup-pr2
 ## Problem
 
 The single-use web-2 rebirth workflow (#9372, run 2026-10-06 as runs 37508997529 and 37516716515) deleted a
-Hetzner volume on the strength of an "emptiness" check. It worked: web-2 holds no user data, nothing was lost, and
+Hetzner volume on the strength of an "emptiness" check. It worked: no loss was observed, web-2 was an unpooled standby at serving weight 0 with no routed data, and
 the volume was re-born raw and formatted LUKS at first boot (graded by the #6931 PASS of 2026-10-10). But the
 evidence step measured a coarse bound and called it emptiness, and two properties around it were missing. The
 workflow is now deleted (ADR-263 addendum 2026-10-12), so the question #9642 asked (how strict the evidence must be)
@@ -38,7 +38,7 @@ list for any future workflow that deletes a volume on evidence.
    step gated on a fresh approval) performs the delete only after a person has read them.
 3. **Check credential parity before the first real dispatch.** The read-only control that confirmed the Better
    Stack row paths ran under Doppler read credentials, while the workflow read the repository
-   `BETTERSTACK_QUERY_*` secrets (recorded in the 2026-10-12 plan). A control that passes under one credential
+   `BETTERSTACK_QUERY_*` secrets (recorded in the #9642 issue body). A control that passes under one credential
    set says nothing about a run under another. The first live plan-only run shows what an unexercised evidence
    step looks like: it read paths that no stored row carried and went RED `used_bytes_absent_or_host_dark` (run
    37463995633), and only a separate read-only control found the real row shape. Before a destructive workflow's
@@ -57,5 +57,6 @@ list for any future workflow that deletes a volume on evidence.
 
 ## Session Errors
 
-None. The retirement change is subtractive (24 files deleted, registrations moved, comments and records
-corrected); every ratchet it touched was re-measured rather than copied from the plan.
+None in the diff. One measured deviation from the plan: the incremental shard-manifest regeneration also added
+floor rows for seven suites that main registers but its manifests lacked, and the infra runner derives its set from
+committed files only, so the infra regeneration had to run after the first local commit.
