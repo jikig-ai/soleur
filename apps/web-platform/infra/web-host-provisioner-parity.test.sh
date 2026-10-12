@@ -1055,7 +1055,7 @@ main_rc=$?
 # block, and the EXT_RESIDENCE table is the single exemption surface ((file, type.name)- and
 # host-scoped, reason-mandatory, with a stale-entry arm).
 #
-# Floors: at least 23 blocks (measured 25 = 21 in server.tf incl. web_1_host_key_probe,
+# Floors: at least 25 blocks (21 in server.tf incl. web_1_host_key_probe,
 # 1 in ci-ssh-key.tf, 3 in workspaces-luks.tf) and at least 70 scanned files. The local
 # must be defined exactly once, from
 # the committed pin. SOLEUR_TF_REPO overrides the repository root for the mutation battery, which
@@ -1141,6 +1141,7 @@ def json_blocks(node, path):
 blocks = []   # (file:line, body-or-dict, enclosing "type.name" or None)
 local_defs = []   # web_1_ssh_host_key definitions
 local_defs_2 = [] # web_2_ssh_host_key definitions (#9151)
+dropped_hdrs = [] # resource headers dropped for nesting inside another span
 for f in files:
     raw = f.read_text()
     rel = f.relative_to(REPO)
@@ -1172,22 +1173,41 @@ for f in files:
     # connection block, not the resource type). Span-containment, not
     # nearest-header: a connection {} inside a `data`/`output`/`locals`/top-level
     # construct following a resource must NOT attribute to that resource, so the
-    # span is computed via the same block_body() the walker uses. Two spoof checks
-    # ride on the no-nesting invariant: (i) a header start inside an existing span
-    # is definitively a heredoc/string literal, not a real resource, and its span
-    # is DROPPED; (ii) outermost-first resolution -- a fake span nested inside a
-    # real one can never outrank the real container. Named residual: a fake
-    # `resource "t" "name"` literal inside a NON-resource construct's heredoc (a
-    # data block's string) has no real span to outrank it -- same textual-walk
-    # exposure class the connection sweep itself carries. A block in no resource
-    # span is unattributable -> None, which matches no EXT_RESIDENCE entry
-    # (fail-closed).
-    res_spans = []
+    # span is computed via the same block_body() the walker uses, then CAPPED at
+    # the next top-level construct header -- top-level constructs cannot live
+    # inside a resource, so a heredoc carrying unbalanced braces can never extend
+    # a member's span past the resource's real end and absorb a later block (the
+    # cap direction fails CLOSED: a falsely-capped span only costs attribution,
+    # never grants it). Two spoof checks ride on the no-nesting invariant: (i) a
+    # header start inside an existing span is definitively a heredoc/string
+    # literal, not a real resource, and its span is DROPPED; (ii) outermost-first
+    # resolution -- a fake span nested inside a real one can never outrank the
+    # real container. Named residual: a fake `resource "t" "name"` literal inside
+    # a NON-resource construct's heredoc (a data block's string) has no real span
+    # to outrank it -- same textual-walk exposure class the connection sweep
+    # itself carries. A block in no resource span is unattributable -> None,
+    # which matches no EXT_RESIDENCE entry (fail-closed).
+    TOPLEVEL_RE = re.compile(
+        r'(?m)^[ \t]*(?:resource|data|module|locals|variable|output|terraform|'
+        r'provider|check|import|moved|removed)\s')
+    toplevel_starts = [m.start() for m in TOPLEVEL_RE.finditer(src)]
+    res_spans = []    # (start, capped_end, addr) — drives attribution
+    uncapped = []     # (start, uncapped_end) — drives the nested-header drop: a
+                      # header start inside a REAL body is string content even
+                      # when the real span was capped short of it (boundary case:
+                      # the cap is exactly where a heredoc-embedded fake lands)
     for m in re.finditer(r'resource\s+"([^"\s]+)"\s+"([^"\s]+)"\s*\{', src):
-        if any(s_ < m.start() < e_ for s_, e_, _ in res_spans):
+        line = src.count('\n', 0, m.start()) + 1
+        if any(s_ < m.start() < e_ for s_, e_ in uncapped):
+            dropped_hdrs.append(f"{rel}:{line} ({m.group(1)}.{m.group(2)})")
             continue
-        res_spans.append((m.start(), m.end() + len(block_body(src, m.end())) + 1,
-                          f"{m.group(1)}.{m.group(2)}"))
+        uend = m.end() + len(block_body(src, m.end())) + 1
+        uncapped.append((m.start(), uend))
+        end = uend
+        nxt = next((t for t in toplevel_starts if t > m.start()), None)
+        if nxt is not None:
+            end = min(end, nxt)
+        res_spans.append((m.start(), end, f"{m.group(1)}.{m.group(2)}"))
     for m in re.finditer(r'(?<![\w.])connection\s*\{', src):
         line = src.count('\n', 0, m.start()) + 1
         addr = next((a for s_, e_, a in res_spans
@@ -1208,10 +1228,23 @@ for f in files:
 def is_winrm(b):
     if isinstance(b, dict):
         return b.get("type") == "winrm"
-    return bool(re.search(r'(?m)^\s*type\s*=\s*"winrm"', b))
+    return isinstance(b, str) and bool(re.search(r'(?m)^\s*type\s*=\s*"winrm"', b))
+
+# Every dropped header is a finding: valid HCL cannot nest resources, so a
+# `resource ".." ".."` match inside another resource's span is heredoc/string
+# content at best and a spoofed member-name literal at worst (the span-capture
+# laundering path: fake span opens inside a NON-resource construct, swallows the
+# next real header, and launders a violating block into that member's exemption).
+if not dropped_hdrs:
+    ok("G2: no resource header hides inside another resource's span "
+       "(heredoc/string content or a spoofed member-name literal)")
+else:
+    no("G2: resource header inside another resource's span — not valid HCL; "
+       "string content needing review or a spoofed EXT_RESIDENCE member name: "
+       + ", ".join(dropped_hdrs))
 
 ssh_blocks = [(loc, b, a) for loc, b, a in blocks if not is_winrm(b)]
-FLOOR_BLOCKS = 23  # floor is a minimum, not the census: measured 25 = 21 server.tf + 1 ci-ssh-key.tf + 3 workspaces-luks.tf (#8632/#8706/#9123/#9151)
+FLOOR_BLOCKS = 25  # floor = census: 21 server.tf + 1 ci-ssh-key.tf + 3 workspaces-luks.tf (#8632/#8706/#9123/#9151/#9529); slack below census lets blocks vanish unflagged
 if len(ssh_blocks) >= FLOOR_BLOCKS:
     ok(f"G2: swept {len(ssh_blocks)} SSH connection blocks (floor {FLOOR_BLOCKS})")
 else:
@@ -1244,7 +1277,13 @@ def dials_web_2(b):
 # Fleet-wide dialer set: the same normalization as dials_web_1/dials_web_2 but the
 # host is ANY `web-N`, not just the two declared FLEET_SSH_HOSTS -- a future web-3
 # dialer outside server.tf is exactly the fail-closed case (the roster is declared,
-# not discovered; mirrors §1's _DIAL_HOST_RE / _fleet_extra shape).
+# not discovered; mirrors §1's _DIAL_HOST_RE / _fleet_extra shape). Two
+# load-bearing conventions, both declared residuals: host names must match
+# web-\d+ (a web-canary/web-1a matches nothing), and the dial must be LITERAL --
+# host = local.x/var.y/each.value/self or a raw IP engages no arm (an existing
+# member cannot switch to indirection -- the stale arm fires on hosts ⊆ ∅ --
+# but a NEW indirect dialer skips residence from birth; battery control G2-C6
+# pins the gap so closing it later is a deliberate act).
 def dials_fleet(b):
     text = json.dumps(b) if isinstance(b, dict) else b
     return set(re.findall(r'hcloud_server\.web\["(web-\d+)"\]',
@@ -1294,7 +1333,12 @@ else:
 # member (a provisioner-scoped override) stays in declared scope, while ANY dial
 # to an undeclared host still fails. `reason` is mandatory -- an empty one fails
 # the stale arm below, exactly as §5's check_allowlist enforces reason.strip()
-# non-empty.
+# non-empty. One standing waiver to keep in review: an entry exempts the whole
+# RESOURCE's provisioner bodies from §1/§2 for the life of the entry -- future
+# credential-bearing edits inside a member need no table diff, so a NEW entry
+# should carry a dedicated collateral pin (the four seeds are covered by
+# workspaces-luks/ci-ssh-key sibling pins; a per-member content bound is the
+# deferred hardening).
 # (#9998 -- the w2_elsewhere arm was web-2-only and left web-1 and future web-N
 # dialers outside server.tf unclassified.)
 EXT_RESIDENCE = {
@@ -1337,8 +1381,10 @@ for loc, b, addr in ssh_blocks:
     dialed = dials_fleet(b)
     if not dialed or fpath == "apps/web-platform/infra/server.tf":
         continue
-    entry = EXT_RESIDENCE.get(fpath, {}).get(addr)
-    if isinstance(entry, dict) and dialed <= entry.get("hosts", frozenset()):
+    members = EXT_RESIDENCE.get(fpath)
+    entry = members.get(addr) if isinstance(members, dict) else None
+    if isinstance(entry, dict) and isinstance(entry.get("hosts"), (set, frozenset)) \
+            and dialed <= entry["hosts"]:
         continue
     fleet_elsewhere.append(f"{loc} ({addr or 'unattributed'} dials {sorted(dialed)})")
 if not fleet_elsewhere:
@@ -1357,7 +1403,13 @@ else:
 # reason-mandatory half is verified by review like ALLOWLIST/ONLY_JUSTIFIED.
 stale_ext = []
 for fpath, members in EXT_RESIDENCE.items():
+    if not isinstance(members, dict):
+        stale_ext.append(f"{fpath} (malformed EXT_RESIDENCE member map)")
+        continue
     for rname, entry in members.items():
+        if not isinstance(entry, dict):
+            stale_ext.append(f"{fpath}:{rname} (malformed entry)")
+            continue
         hosts = entry.get("hosts")
         reason = entry.get("reason", "")
         if not isinstance(hosts, (set, frozenset)) or not isinstance(reason, str) \

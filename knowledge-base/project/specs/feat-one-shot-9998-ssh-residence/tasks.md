@@ -39,9 +39,12 @@ Plan: `knowledge-base/project/plans/2026-10-12-fix-provisioner-parity-ssh-reside
 - [x] 2.2 `expect_red "G2-20 (a second phantom web-1 dialer in an allowlisted file)" workspaces-luks.tf "outside server.tf"` — proves resource-granularity.
 - [x] 2.3 `expect_red "G2-21 (a web-2 dialer in an allowlisted file)" workspaces-luks.tf "outside server.tf"` — proves host-scoping.
 - [x] 2.4 `expect_red "G2-22 (residence allowance entry gone stale)" ci-ssh-key.tf "stale EXT_RESIDENCE"` — mutator removes the `connection {}` block.
-- [x] 2.5 Bump `FLOOR` (`mutations_run` floor) 58 → 62 (+4 landed `expect_red`
-  rows) and update the comment (:1481): `+4 #9998 residence rows (G2-19..22)`.
-  `PROBE_FLOOR`/`PROBE_RED_FLOOR`/`FLOOR_BLOCKS`/`FLOOR_RESOURCES` unchanged.
+- [x] 2.5 Bump `FLOOR` (`mutations_run` floor) 58 → 65 (+7 landed `expect_red`
+  rows — G2-19..22 as planned plus G2-23/24/25 from the review design pass) and
+  update the comment: `+7 #9998 residence rows (G2-19..25)`. `FLOOR_BLOCKS`
+  raised 23 → 25 to equal the measured census (was lagging by 2 — slack lets
+  blocks vanish unflagged). `PROBE_FLOOR`/`PROBE_RED_FLOOR`/`FLOOR_RESOURCES`
+  unchanged.
 
 ## Phase 3 — Verification
 
