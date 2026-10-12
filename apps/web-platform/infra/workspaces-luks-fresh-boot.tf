@@ -148,9 +148,9 @@ resource "doppler_service_token" "workspaces_luks_marker_write" {
 # NOT re-validated each run. NO lifecycle.ignore_changes: a -replace of the token propagates here in the
 # same apply.
 #
-# CONSUMERS (keep current): .github/workflows/workspaces-luks-verify.yml (the web-2 leg, writer) and
-# .github/workflows/scheduled-followthrough-sweeper.yml (READ only, for scripts/followthroughs/
-# web2-luks-live-6931.sh, which reads the marker's age through the Doppler API).
+# CONSUMERS (keep current): .github/workflows/workspaces-luks-verify.yml (the web-2 leg) is the only workflow
+# that binds this secret. The follow-through sweeper binds no Doppler credential: scripts/followthroughs/
+# web2-luks-live-6931.sh grades from Better Stack probe rows and never reads the marker.
 resource "github_actions_secret" "doppler_token_workspaces_luks_marker" {
   repository      = "soleur"
   secret_name     = "DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER"

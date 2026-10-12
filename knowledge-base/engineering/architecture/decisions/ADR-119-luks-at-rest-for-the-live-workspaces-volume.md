@@ -1458,6 +1458,8 @@ as written.
 - §(d) is reversed by ADR-263 (a fresh host MUST get the reopen unit). The claim that web-2's volume is LUKS
   at boot becomes true only after the volume rebirth (#9372); until then it is the empty Hetzner-formatted
   ext4 volume, kept un-pooled by `lb-weight-gate.sh`.
+  > **Superseded 2026-10-12 (#9372), in part:** the rebirth ran on 2026-10-06 and was graded on 2026-10-10 (formatted/opened
+  > plus green probes only; ADR-263 addendum 2026-10-11 for the claim boundary); its workflow is retired.
 
 ## Addendum (2026-10-08): the plaintext backstop is retired (#6604 step 7, PR B)
 

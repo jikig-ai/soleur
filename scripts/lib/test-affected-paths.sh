@@ -563,26 +563,6 @@ AFFECTED_SCRIPTS_WEB2_LUKS_LIVE_6931_PATHS=(
   "scripts/betterstack-query.sh"
   "scripts/lib/test-affected-paths.sh"
 )
-# #9372: the rebirth recovery-check suite drives shims against the script and asserts no secret file is left in its own temp
-# directory; its verdict is scoped to the script, not to corpus drift.
-AFFECTED_SCRIPTS_WEB2_REBIRTH_RECOVERY_CHECK_PATHS=(
-  "scripts/web2-rebirth-recovery-check.sh"
-  "scripts/web2-rebirth-recovery-check.test.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
-# #9372: the web-host reboot suite walks the tracked tree under scripts/, .github/ and apps/ (its census of reboot-request call sites, so a
-# third such site anywhere in those roots is RED) and reads the workflow, the infra census suite and the rebirth scripts it pins
-# helper bodies against; its verdict is scoped to those three roots plus the three runbooks it reads (copies them into its sandbox and
-# pins the dispatch commands, the Better Stack query and the LUKS cutover cross-reference), not to the rest of the corpus (plugins/).
-AFFECTED_SCRIPTS_WEB_HOST_REBOOT_PATHS=(
-  "scripts/"
-  ".github/"
-  "apps/"
-  "knowledge-base/engineering/operations/runbooks/betterstack-log-query.md"
-  "knowledge-base/engineering/operations/runbooks/web-host-reboot.md"
-  "knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md"
-  "scripts/lib/test-affected-paths.sh"
-)
 AFFECTED_SCRIPTS_TUNNEL_CONNECTOR_CENSUS_PATHS=(
   "scripts/tunnel-connector-census.sh"
   "scripts/tunnel-connector-census.test.sh"
