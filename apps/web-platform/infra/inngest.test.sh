@@ -2610,6 +2610,75 @@ assert "inngest-luks-cutover.timer carries the inngest-luks-volumes condition in
 assert "inngest-luks-cutover.timer's [Unit] condition path-set equals the service's [Service] EnvironmentFile path-set" \
   "[[ -n \"\$(_luks_sec_vals '$LUKS_CUTOVER_TMR' Unit ConditionPathExists)\" && \"\$(_luks_sec_vals '$LUKS_CUTOVER_TMR' Unit ConditionPathExists)\" == \"\$(_luks_sec_vals '$LUKS_CUTOVER_SVC' Service EnvironmentFile)\" ]]"
 
+echo "--- #9962: the same skip-vs-fail class on the non-LUKS siblings ---"
+#
+# #9962 extends the #9939 calibration to every unit whose unprefixed EnvironmentFile= is a
+# late-runcmd write and whose activation path can fire before it — flip pair (30s), provision
+# (boot re-entry), heartbeat (60s), vector + server (Restart crash-loops). inngest-redis stays
+# deliberately loud (RequiresMountsFor is already its designed signal). The bootstrap-generated
+# units live inside inngest-bootstrap.sh heredocs — each block is extracted by its delimiter
+# and the [Unit]/[Service] sections are judged inside it, so a condition dropped into [Service]
+# reads as absent the same way the LUKS pins do.
+FLIP_SVC="$SCRIPT_DIR/inngest-cutover-flip.service"
+FLIP_TMR="$SCRIPT_DIR/inngest-cutover-flip.timer"
+REDIS_SVC="$SCRIPT_DIR/inngest-redis.service"
+# <heredoc-delimiter> — print the generated unit body from inngest-bootstrap.sh.
+# Opener anchored end-of-line with an optional single-quote each side of the delimiter: the old
+# `.?`-slack form would alias a future `<<XUNITEOF`/`<<UNITEOF2` into this extraction, and a
+# condition line in the aliased body could satisfy a -eq 1 pin vacuously (review P3).
+_boot_unit() { awk -v q="'" -v d="$1" '$0~("cat > .*<<" q "?" d q "?[[:space:]]*$"){u=1;next} $0==d{u=0} u' "$BOOTSTRAP_SH"; }
+# <text-via-stdin> <section> — same section semantics as _luks_sec but for heredoc bodies.
+# Indent-tolerant: the cloud-init yaml embeds units under write_files `content: |`, where the
+# [Unit] header itself is indented — the exact-match form would never enter the section there.
+_sec_body() { awk -v sec="$1" '{ h=$0; sub(/^[[:space:]]+/,"",h); if (h=="["sec"]") {u=1;next} if (h ~ /^\[/) u=0 } u'; }
+# <section> <directive> — sorted value set of a directive inside a named section, from stdin.
+_sec_body_vals() { _sec_body "$1" | sed -n "s/^[[:space:]]*$2=//p" | tr ' \t' '\n' | sed '/^$/d' | sort -u; }
+
+assert "inngest-cutover-flip.service skips in [Unit] when /etc/default/inngest-server is absent" \
+  "[[ \$(_luks_sec '$FLIP_SVC' Unit | grep -cxF 'ConditionPathExists=/etc/default/inngest-server') -eq 1 ]]"
+assert "inngest-cutover-flip.service keeps its EnvironmentFile= unprefixed (fail-closed)" \
+  "_luks_sec '$FLIP_SVC' Service | grep -cxF 'EnvironmentFile=/etc/default/inngest-server' >/dev/null && ! _luks_sec '$FLIP_SVC' Service | grep -cE '^[[:space:]]*EnvironmentFile=-' >/dev/null"
+assert "inngest-cutover-flip.service's [Unit] condition path-set equals its [Service] EnvironmentFile path-set" \
+  "[[ -n \"\$(_luks_sec_vals '$FLIP_SVC' Service EnvironmentFile)\" && \"\$(_luks_sec_vals '$FLIP_SVC' Unit ConditionPathExists)\" == \"\$(_luks_sec_vals '$FLIP_SVC' Service EnvironmentFile)\" ]]"
+assert "inngest-cutover-flip.timer carries the condition in [Unit] (evaluated at activation, not per-elapse)" \
+  "[[ \$(_luks_sec '$FLIP_TMR' Unit | grep -cxF 'ConditionPathExists=/etc/default/inngest-server') -eq 1 ]]"
+assert "no bare EnvironmentFile=/ConditionPathExists= reset lines in the flip pair" \
+  "! grep -cE '^[[:space:]]*(EnvironmentFile|ConditionPathExists)=[[:space:]]*$' '$FLIP_SVC' '$FLIP_TMR' >/dev/null"
+
+assert "inngest-heartbeat.service (heredoc) skips when /etc/default/inngest-server is absent" \
+  "[[ \$(printf '%s\n' \"\$(_boot_unit HEARTBEATEOF)\" | _sec_body Unit | grep -cxF 'ConditionPathExists=/etc/default/inngest-server') -eq 1 ]]"
+assert "inngest-heartbeat.timer (heredoc) carries the condition in [Unit]" \
+  "[[ \$(printf '%s\n' \"\$(_boot_unit TIMEREOF)\" | _sec_body Unit | grep -cxF 'ConditionPathExists=/etc/default/inngest-server') -eq 1 ]]"
+assert "inngest-server.service (heredoc) skips when /etc/default/inngest-server is absent" \
+  "[[ \$(printf '%s\n' \"\$(_boot_unit UNITEOF)\" | _sec_body Unit | grep -cxF 'ConditionPathExists=/etc/default/inngest-server') -eq 1 ]]"
+assert "vector.service (heredoc) skips when /etc/default/inngest-server is absent" \
+  "[[ \$(printf '%s\n' \"\$(_boot_unit VECTOREOF)\" | _sec_body Unit | grep -cxF 'ConditionPathExists=/etc/default/inngest-server') -eq 1 ]]"
+
+# Precedent-shape set-identity + fail-closed pins for the heredoc units (AC-1, review P2):
+# presence pins alone let a stray wrong-path condition or a `-` prefixed envfile ride green.
+for _hb in HEARTBEATEOF UNITEOF VECTOREOF; do
+  assert "heredoc unit ${_hb} [Unit] condition path-set equals its [Service] EnvironmentFile path-set" \
+    "[[ \$(printf '%s\n' \"\$(_boot_unit ${_hb})\" | _sec_body_vals Service EnvironmentFile) == /etc/default/inngest-server && \$(printf '%s\n' \"\$(_boot_unit ${_hb})\" | _sec_body_vals Unit ConditionPathExists) == /etc/default/inngest-server ]]"
+  assert "heredoc unit ${_hb} keeps its EnvironmentFile= unprefixed (fail-closed)" \
+    "printf '%s\n' \"\$(_boot_unit ${_hb})\" | _sec_body Service | grep -cxF 'EnvironmentFile=/etc/default/inngest-server' >/dev/null && ! printf '%s\n' \"\$(_boot_unit ${_hb})\" | _sec_body Service | grep -cE '^[[:space:]]*EnvironmentFile=-' >/dev/null"
+  assert "heredoc unit ${_hb} carries no bare EnvironmentFile=/ConditionPathExists= reset line" \
+    "! printf '%s\n' \"\$(_boot_unit ${_hb})\" | grep -cE '^[[:space:]]*(EnvironmentFile|ConditionPathExists)=[[:space:]]*\$' >/dev/null"
+done
+assert "inngest-heartbeat.timer's [Unit] condition path-set equals heartbeat.service's envfile path-set" \
+  "[[ \$(printf '%s\n' \"\$(_boot_unit TIMEREOF)\" | _sec_body_vals Unit ConditionPathExists) == \$(printf '%s\n' \"\$(_boot_unit HEARTBEATEOF)\" | _sec_body_vals Service EnvironmentFile) ]]"
+assert "inngest-cutover-flip.timer's [Unit] condition path-set equals the flip service's envfile path-set" \
+  "[[ \$(_luks_sec_vals '$FLIP_TMR' Unit ConditionPathExists) == \$(_luks_sec_vals '$FLIP_SVC' Service EnvironmentFile) ]]"
+
+assert "soleur-inngest-provision.service (cloud-init) skips when /etc/default/inngest-doppler is absent" \
+  "[[ \$(awk '/path: \\/etc\\/systemd\\/system\\/soleur-inngest-provision.service/,/owner: root:root/' '$SCRIPT_DIR/cloud-init-inngest.yml' | _sec_body Unit | grep -cxF '      ConditionPathExists=/etc/default/inngest-doppler') -eq 1 ]]"
+assert "soleur-inngest-provision.service keeps the !-latch condition beside the new one" \
+  "[[ \$(awk '/path: \\/etc\\/systemd\\/system\\/soleur-inngest-provision.service/,/owner: root:root/' '$SCRIPT_DIR/cloud-init-inngest.yml' | _sec_body Unit | grep -cxF '      ConditionPathExists=!/var/lib/soleur-inngest-provision/done') -eq 1 ]]"
+assert "soleur-inngest-provision.service: every [Service] EnvironmentFile path has a non-! [Unit] condition (subset — the !-latch sits in the condition set too)" \
+  "_prov_ef() { awk '/path: \\/etc\\/systemd\\/system\\/soleur-inngest-provision.service/,/owner: root:root/' '$SCRIPT_DIR/cloud-init-inngest.yml' | _sec_body Service | sed -n 's/^[[:space:]]*EnvironmentFile=//p' | sort -u; }; _prov_cd() { awk '/path: \\/etc\\/systemd\\/system\\/soleur-inngest-provision.service/,/owner: root:root/' '$SCRIPT_DIR/cloud-init-inngest.yml' | _sec_body Unit | sed -n 's/^[[:space:]]*ConditionPathExists=//p' | grep -v '^!' | sort -u; }; [[ -n \"\$(_prov_ef)\" && -z \"\$(comm -23 <(_prov_ef) <(_prov_cd))\" ]]"
+
+assert "inngest-redis.service stays deliberately unconditioned on the env file (designed-loud, #9962)" \
+  "! _luks_sec '$REDIS_SVC' Unit | grep -cE '^[[:space:]]*ConditionPathExists=' >/dev/null"
+
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 
@@ -2624,7 +2693,7 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # check) reported 303/303, exit 0. Keyed on PASS rather than TOTAL: TOTAL counts failures, so a
 # TOTAL floor cannot back up the verdict -- dropping `if [[ "$FAIL" -gt 0 ]]` left a 303/305 run
 # reporting exit 0. 7761's floor already had this shape.
-INNGEST_MIN_ASSERTIONS=427
+INNGEST_MIN_ASSERTIONS=451
 if [[ "$PASS" -lt "$INNGEST_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s assertions ran, expected >= %s — a block was skipped or emptied.\n' \
     "$PASS" "$INNGEST_MIN_ASSERTIONS" >&2

@@ -35,6 +35,7 @@ import {
 } from "@supabase/supabase-js";
 import { randomBytes } from "crypto";
 import { ensureNodeWebSocketPolyfill } from "./helpers/node-websocket-polyfill";
+import { tearDownTenantUser } from "./helpers/tenant-isolation-teardown";
 
 const INTEGRATION_ENABLED =
   process.env.SUPABASE_DEV_INTEGRATION === "1";
@@ -186,20 +187,20 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         if (!user.id) continue;
         assertSynthetic(user.email);
         const { data: check } = await service.auth.admin.getUserById(user.id);
-        if (check?.user?.email && check.user.email !== user.email) {
+        // Fail closed: a missing user or a NULL/empty email field must not
+        // skip the binding (NULL email is legal on auth.users rows).
+        if (!check?.user || check.user.email !== user.email) {
           throw new Error(
-            `afterAll: auth.users.email for ${user.id} (${check.user.email}) ` +
-              `does not match synthetic email ${user.email}`,
+            `afterAll: auth.users lookup for ${user.id} ` +
+              `(${check?.user?.email ?? "not found"}) does not match ` +
+              `synthetic email ${user.email}`,
           );
         }
-        const { error } = await service.auth.admin.deleteUser(user.id);
-        if (error && !/not found/i.test(error.message)) {
-          throw new Error(
-            `afterAll: deleteUser(${user.email}) failed: ${error.message}`,
-          );
-        }
+        // FK-reverse helper: trigger-created workspace_members rows are
+        // ON DELETE RESTRICT, so a raw deleteUser 500s (#9994).
+        await tearDownTenantUser(service, user);
       }
-    }, 30_000);
+    }, 60_000);
 
     test("user A receives ZERO payloads from user B's INSERT", async () => {
       receivedPayloads.length = 0;
@@ -208,6 +209,9 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         .from("conversations")
         .insert({
           user_id: userB.id,
+          // mig 059: workspace_id NOT NULL — the owner's id is the
+          // trigger-created solo workspace id (ADR-038 N2).
+          workspace_id: userB.id,
           repo_url: SHARED_REPO_URL,
           status: "active",
         })
@@ -268,6 +272,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         .from("conversations")
         .insert({
           user_id: userB.id,
+          workspace_id: userB.id,
           repo_url: SHARED_REPO_URL,
           status: "active",
         })
