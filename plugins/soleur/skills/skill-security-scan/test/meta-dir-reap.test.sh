@@ -34,8 +34,7 @@ META_BASE="$TESTROOT/meta"
 mkdir -p "$META_BASE"
 
 # The scratch sweep (#6760) runs over ${TMPDIR:-/tmp} — seal it in EVERY
-# scan invocation below so no arm sweeps the host's real TMPDIR (at floor 0
-# that would wipe live scratch of a concurrent scan).
+# scan invocation below so no arm ever sweeps the host's real TMPDIR.
 SCRATCH_META="$TESTROOT/tmp-meta"
 SCRATCH="$TESTROOT/tmp"
 mkdir -p "$SCRATCH_META" "$SCRATCH"
@@ -263,27 +262,57 @@ fi
 # Behavioral pin for the own-scratch exclusion: the file is a reap candidate
 # by name AND age (backdated past every floor), and survives only because
 # `! -samefile "$INPUT"` excludes it. A glob metachar in the name proves the
-# exclusion is inode-based, not a -path string/fnmatch compare.
+# exclusion is inode-based, not a -path string/fnmatch compare. The sibling
+# control is reaped in the SAME invocation — proving the sweep ran, not that
+# it no-oped.
 victim="$SCRATCH/skill-scan-input-[victim]"
 printf '# scanned body\n' > "$victim"
 touch -d "-3000 minutes" "$victim"
+control="$SCRATCH/skill-scan-input-999107"
+echo x > "$control"; touch -d "-3000 minutes" "$control"
 out="$(run_scan_tmp 0 "$victim")"
 meta_path="$(sed -n 's/^\.scan-meta\.json written to: //p' <<<"$out" | head -1)"
-if [[ -e "$victim" && -n "$meta_path" ]]; then
+if [[ -e "$victim" && ! -e "$control" && -n "$meta_path" ]]; then
   ok "a backdated skill-scan-* positional INPUT survives (own-scratch exclusion is behavioral, not anchor-only)"
 else
-  bad "the sweep reaped the scan's own input file (exclusion defeated); exists=$(test -e "$victim" && echo yes) meta='$meta_path'"
+  bad "own-scratch exclusion wrong; exists=$(test -e "$victim" && echo yes) control=$(test -e "$control" && echo present || echo reaped) meta='$meta_path'"
 fi
 
-# --- Arm 17: source anchors for the scratch sweep ---------------------------
+# --- Arm 17: the 60-minute floor clamp is behavioral -------------------------
+# Mutant `_reap_min` verbatim (no clamp) reaps this <1-min entry under the
+# test-seam floor 0 — `-mmin "+0"` matches ANY past mtime — so a fresh entry
+# surviving a floor-0 scan is the clamp's only discriminating pin.
+fresh_clamp="$SCRATCH/skill-scan-input-999108"
+echo x > "$fresh_clamp"
+run_scan_tmp 0 >/dev/null
+if [[ -e "$fresh_clamp" ]]; then
+  ok "the 60-minute floor clamp spares fresh entries under a floor-0 invocation"
+else
+  bad "the 60-minute clamp is missing — floor 0 reaped a fresh entry"
+fi
+
+# --- Arm 18: a non-numeric or octal floor never crashes the scan -------------
+# The knob falls back on garbage and `10#`-normalizes leading zeros — either
+# bug aborts the script under set -e BEFORE the meta line is emitted (a gate
+# deny for every scanned write, on a benign env typo).
+for knob in abc 08; do
+  out="$(run_scan_tmp "$knob")"
+  if sed -n 's/^\.scan-meta\.json written to: //p' <<<"$out" | grep -q .; then
+    ok "SKILL_SCAN_META_REAP_MIN=$knob still emits .scan-meta.json (floor normalised)"
+  else
+    bad "SKILL_SCAN_META_REAP_MIN=$knob crashed the scan before meta write"
+  fi
+done
+
+# --- Arm 19: source anchors for the scratch sweep ---------------------------
 # Pin the load-bearing predicates on the live code (cq-assert-anchor-not-bare-
-# token): the grouped -name arms, uid/age/depth predicates, -xdev, and the
+# token): the grouped -name arms, uid/age/depth predicates, and the
 # ! -samefile own-scratch exclusions (INPUT/results_dir predate the reap,
 # unlike meta_dir — the asymmetry that makes the exclusions load-bearing).
 # The grouped predicate is written `\( -name … \)` in the source, so the ERE
 # pins the literal backslashes via a char class (ERE `\(` is a literal paren,
 # not `\` + `(` — an unescaped-backslash reading is how this anchor vacuated).
-NAME_RE="[\\\\]\\( -name 'skill-security-scan-\\*' -o -name 'skill-scan-\\*' -o -name 'sss-write\\.\\*' [\\\\]\\)"
+NAME_RE="[\\\\]\\( -name 'skill-security-scan-\\*' -o -name 'skill-scan-\\*' -o -name 'sss-write\\.\\*\\.err' [\\\\]\\)"
 scratch_find="$(grep -vE '^[[:space:]]*#' "$SCRIPT_DIR/../scripts/run-scan.sh" \
   | grep -A10 'tmp_root=')"
 if grep -qE "$NAME_RE" <<<"$scratch_find"; then
@@ -291,17 +320,26 @@ if grep -qE "$NAME_RE" <<<"$scratch_find"; then
 else
   bad "the TMPDIR sweep is missing the grouped -name arms"
 fi
-for anchor in '-mindepth 1 -maxdepth 1' '-mount' '-mmin' '-user "$(id -u)"' \
-              '-samefile "$INPUT"' '-samefile "$results_dir"'; do
+for anchor in '-mindepth 1 -maxdepth 1' '-mmin' '-user "$(id -u)"'; do
   if grep -qF -- "$anchor" <<<"$scratch_find"; then
     ok "the TMPDIR sweep pins: $anchor"
   else
     bad "the TMPDIR sweep is missing predicate: $anchor"
   fi
 done
+for anchor in 'pwd -P' '10#' '-e "$INPUT"' '-e "$results_dir"' \
+              '-samefile "$INPUT"' '-samefile "$results_dir"'; do
+  if grep -qF -- "$anchor" "$SCRIPT_DIR/../scripts/run-scan.sh"; then
+    ok "the reap block pins: $anchor"
+  else
+    bad "the reap block is missing: $anchor"
+  fi
+done
 # Producer-prefix pin: every `mktemp -t`/`-dt` template under the skill's
 # scripts/ must emit inside the sweep's name window — a new producer writing
-# `mktemp -t some-other-name` orphans forever with no coverage.
+# `mktemp -t some-other-name` orphans forever with no coverage. Flagless
+# `mktemp` emits `tmp.*`, which tmp-classify.sh assigns to systemd-tmpfiles —
+# outside the pin's scope by design.
 drift="$(grep -rhoE 'mktemp -[dt]+ "?[A-Za-z0-9_.*-]+' "$SCRIPT_DIR/../scripts/" \
   | awk '{print $NF}' | tr -d '"' | grep -v '^skill-scan-' || true)"
 if [[ -z "$drift" ]]; then
@@ -309,9 +347,18 @@ if [[ -z "$drift" ]]; then
 else
   bad "producer outside the sweep window: $drift"
 fi
+# Hook-side producer pin: the sss-write.*.err shape is literal-path
+# construction in the write-hook, outside scripts/ — a rename there orphans
+# the family while every arm above stays green.
+hook_producer="$(git rev-parse --show-toplevel)/.claude/hooks/skill-security-scan-write.sh"
+if grep -qE 'TMPDIR:-/tmp[^/]*/sss-write\.' "$hook_producer"; then
+  ok "the write-hook's sss-write.* capture stays inside the sweep window"
+else
+  bad "the sss-write producer moved or renamed — sweep coverage silently lost"
+fi
 # POSITIVE CONTROLS: each anchor must MATCH a synthetic live-shaped line, or a
 # typo'd pattern reads "clean forever" and every arm above is vacuous.
-if grep -qE "$NAME_RE" <<<"find \"\$tmp_root\" \( -name 'skill-security-scan-*' -o -name 'skill-scan-*' -o -name 'sss-write.*' \)"; then
+if grep -qE "$NAME_RE" <<<"find \"\$tmp_root\" \( -name 'skill-security-scan-*' -o -name 'skill-scan-*' -o -name 'sss-write.*.err' \)"; then
   ok "the grouped -name regex is live (matches the predicate shape)"
 else
   bad "the grouped -name regex matches nothing — the anchor arm is vacuous"

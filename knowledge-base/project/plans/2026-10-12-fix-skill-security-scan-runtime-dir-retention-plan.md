@@ -32,11 +32,17 @@ triggered.
 ### Key Improvements from Deepening
 
 1. The scratch sweep's design hardened during the inline spec-flow pass:
-   `! -path "$INPUT" ! -path "$results_dir"` exclusions were added because
-   own-scratch — unlike `meta_dir` — is created *before* the reap site, so a
-   pathological low `SKILL_SCAN_META_REAP_MIN` plus ≥1-min category checks
-   would reap live own-scratch mid-run (the asymmetry the shipped comment
-   does not cover).
+   own-scratch exclusions were added because own-scratch — unlike
+   `meta_dir` — is created *before* the reap site, so a stale positional
+   INPUT or a long scan would otherwise be a reap candidate (the asymmetry
+   the shipped comment does not cover). Review hardened the sketch further:
+   the exclusions are `! -samefile` (inode compare — a relative or
+   glob-shaped INPUT defeats `-path` string equality), the TMPDIR root is
+   `cd -P`-canonicalized (find `-P` does not descend a symlinked
+   startpoint), both sweeps clamp to a ≥60-min floor (`-mmin "+0"` matches
+   any past mtime → a low floor reaps a concurrent peer's live scratch),
+   `10#` normalizes octal-legal leading zeros, and the name window gained
+   `sss-write.*.err` (the write-hook's err capture).
 2. The sweep's `-o` arm covers `skill-security-scan-*` under `${TMPDIR:-/tmp}`
    (the XDG-toggle crossover), discovered while enumerating allocation roots.
 3. Verified mechanically: `mktemp -t` honors `TMPDIR` on this host
@@ -96,15 +102,17 @@ evidence via the PR body.
   siblings from `lib.sh`'s `stdin_to_tempfile`) are EXIT-trap-owned but have no
   reaper. Under SIGKILL — which tmpfs pressure produces — they leak with no
   recovery path, the same harm class the issue describes. Measured leak: 45
-  input + 4 results artifacts in one incident date.
+  input + 4 results artifacts dated 2026-07-20.
 - `plugins/soleur/scripts/lib/tmp-classify.sh:108` protects
   `skill-security-scan-*` from generic sweepers with the comment
   `# #6760 deliberate retention`. The protection is correct (a generic reaper
   must not out-race the evidence window the scanner's own policy grants), but
   the justification is stale: retention is now *bounded by policy*, not
   "deliberate". (The sibling lineage's open task 8.8 flags a different
-  `#6760` comment — the harm-reduction claim in the #6734 spec; this row's
-  comment was added later by PR #8738 and is stale on its own.)
+  `#6760` comment — the harm-reduction claim that lineage posted on the
+  issue itself, recorded in the 2026-07-27 plan's Action item and its R8
+  retraction; this row's comment was added later by PR #8738 and is stale
+  on its own.)
 
 ## Proposed Solution
 
@@ -115,21 +123,26 @@ Three small edits at existing seams, no new machinery:
    retention site:
 
    ```bash
-   # Scratch orphans (`skill-scan-*`) — plus any meta_dir orphans a previous
-   # run left under TMPDIR when XDG_RUNTIME_DIR was unset. SIGKILL leaks
-   # these; measured 45 `skill-scan-input-*` + 4 `skill-scan-results-*`
-   # dated 2026-07-20 (#6760). Unlike `meta_dir`, own-scratch is created
-   # BEFORE this point, so exclude the live paths explicitly — under a
-   # pathological low `SKILL_SCAN_META_REAP_MIN` the age gate alone does not
-   # protect a slow scan's own scratch.
-   _scratch_base="${TMPDIR:-/tmp}"
-   if [ -d "$_scratch_base" ]; then
-     find "$_scratch_base" -mindepth 1 -maxdepth 1 -user "$(id -u)" \
+   # Scratch orphans (`skill-scan-*`), meta_dir orphans a previous run left
+   # under TMPDIR when XDG_RUNTIME_DIR was unset, and the write-hook's
+   # `sss-write.*.err` captures. SIGKILL leaks these; measured 45
+   # `skill-scan-input-*` + 4 `skill-scan-results-*` dated 2026-07-20
+   # (#6760). Unlike `meta_dir`, own-scratch is created BEFORE this point,
+   # so exclude the live paths by inode — under a pathological low
+   # `SKILL_SCAN_META_REAP_MIN` the age gate alone does not protect a stale
+   # positional input (both sweeps clamp to a >=60-min floor).
+   tmp_root="$(cd -P "${TMPDIR:-/tmp}" && pwd -P || true)"
+   if [ -n "$tmp_root" ]; then
+     find "$tmp_root" -mindepth 1 -maxdepth 1 -user "$(id -u)" \
        -mmin "+${_reap_min}" \
-       \( -name 'skill-security-scan-*' -o -name 'skill-scan-*' \) \
-       ! -path "$INPUT" ! -path "$results_dir" \
-       -exec rm -rf {} + 2>/dev/null || true
+       \( -name 'skill-security-scan-*' -o -name 'skill-scan-*' \
+           -o -name 'sss-write.*.err' \) \
+       ${_excl[@]+"${_excl[@]}"} \
+       -exec rm -rf {} + 2>/dev/null || echo "..." >&2
    fi
+   # (as built: `_excl` holds `! -samefile` for each of INPUT/results_dir
+   # that still exists — `-path` string equality is defeated by relative
+   # and glob-shaped INPUT spellings)
    ```
 
    The `skill-security-scan-*` arm under `TMPDIR` covers the XDG-toggle
@@ -258,7 +271,8 @@ Three small edits at existing seams, no new machinery:
 
 - #6760 (this work, OPEN) · #6789 / PR #6828 (shipped the meta reap,
   2026-07-22) · 2026-07-20 (date of the measured leaked entries — the
-  earlier plans' "`#6726`" label resolves to an unrelated merged PR) ·
+  earlier plans' "`#6726`" label resolves to a merged PR, not an incident
+  tracker) ·
   #6734 (trap-ownership class — the issue explicitly distinguishes itself) ·
   #10017 / PR #10129 (mktemp census — drew the "#6760 out of scope"
   boundary) · ADR-129 (accepted class-b population, unchanged).
@@ -275,7 +289,7 @@ Three small edits at existing seams, no new machinery:
 
 | Spec claim (issue #6760) | Codebase reality | Plan response |
 |---|---|---|
-| "creates one directory per invocation that nothing ever removes" | `run-scan.sh:215-224` age-reaps `skill-security-scan-*` siblings older than `SKILL_SCAN_META_REAP_MIN` at startup (shipped 2026-07-22, #6828) | Stale for the meta family. Plan re-scopes to close-out + residual families; records the ruling in `decision-challenges.md`. |
+| "creates one directory per invocation that nothing ever removes" | the `meta_base` startup reap in `run-scan.sh` age-reaps `skill-security-scan-*` siblings older than `SKILL_SCAN_META_REAP_MIN` (shipped 2026-07-22, #6828) | Stale for the meta family. Plan re-scopes to close-out + residual families; records the ruling in `decision-challenges.md`. |
 | "It needs a retention policy" | Policy exists in code but is undocumented anywhere a consumer reads | Phase 2 doc edits (SKILL.md, override-mechanism.md). |
 | Options: prune-at-startup / caller-owns / stable-path | Option (a) already chosen and shipped | No second decision needed; floor value recorded as a decision-challenges row. |
 | (implicit) only meta dirs leak | Measured 45 `skill-scan-input-*` + 4 `skill-scan-results-*` leaks dated 2026-07-20 (2026-07-22 + 2026-07-27 plans) | Extend the same reap to the `skill-scan-*` scratch family. |
@@ -296,8 +310,9 @@ Three small edits at existing seams, no new machinery:
   pathological low `SKILL_SCAN_META_REAP_MIN` (the test seam uses `0`) a
   scan whose five category checks take ≥ 1 min (e.g. slow OSV calls in
   `check-supply-chain.sh`) would reap its own live scratch mid-run. The
-  `! -path "$INPUT" ! -path "$results_dir"` exclusions close exactly that
-  window; a concurrent sibling's scratch carries the same accepted
+  `! -samefile` exclusions close exactly that window (inode compare —
+  `-path` string equality is defeated by relative/glob spellings);
+  a concurrent sibling's scratch carries the same accepted
   exposure the shipped reap already has for meta dirs.
 - **Two roots, not one.** Meta dirs live in
   `${SKILL_SCAN_META_BASE:-${XDG_RUNTIME_DIR:-/tmp}}`; scratch lives in
@@ -318,8 +333,9 @@ Three small edits at existing seams, no new machinery:
   (`find … -mindepth 1 -maxdepth 1 -user "$uid" -mmin "+${age_min}"`). The
   only novel elements are the grouped `-o` name pair (precedent shape:
   `\( A -o B \)` is the canonical `find` grouping) and the `! -path`
-  exclusions (no precedent needed — own-path exclusion is new because the
-  scratch family is the first whose allocations predate the reap).
+  exclusions (no precedent needed — inode-exclusion of own-scratch is new
+  because the scratch family is the first whose allocations predate the
+  reap).
 - **`skill-scan-*` prefix ownership.** The producer set is fully enumerated
   in Research Insights; no other repo tool writes that prefix to `${TMPDIR}`
   (verified by `git grep`). The scratch glob does NOT collide with the
@@ -502,7 +518,7 @@ glob superset (all paths are `.sh`/`.md` under `plugins/soleur/`).
 
 | # | User ask (verbatim) | Plan item | Status |
 |---|---------------------|-----------|--------|
-| 1 | "It needs a retention policy" [issue #6760] | Already shipped (run-scan.sh:215-224, #6828); documented by Phase 2 doc edits; issue closed by Phase 3 PR body | mapped |
+| 1 | "It needs a retention policy" [issue #6760] | Already shipped (`meta_base` reap in run-scan.sh, #6828); documented by Phase 2 doc edits; issue closed by Phase 3 PR body | mapped |
 | 2 | "prune `skill-security-scan-*` older than N hours at scan startup (simplest, self-healing, no consumer contract change)" [issue #6760] | Shipped mechanism retained unchanged; Phase 1 keeps the same site/floor for the sibling family | mapped |
 | 3 | "have callers own the lifetime and delete after reading (correct but changes the contract for every consumer)" [issue #6760] | — | descoped — justification: alternative already rejected by the shipped design (option (a) was chosen and merged); re-litigating reopens a closed decision |
 | 4 | "write to a single stable path and overwrite, if concurrent scans need not coexist" [issue #6760] | — | descoped — justification: same as ask 3; also concurrent scans DO coexist (parallel category children + concurrent invocations) |
@@ -511,7 +527,7 @@ glob superset (all paths are `.sh`/`.md` under `plugins/soleur/`).
 
 | Plan item | User words cited (verbatim quote) | Verdict |
 |-----------|-----------------------------------|---------|
-| `run-scan.sh` scratch-orphan reap | — | inferred — justification: ask 1's property is bounded scanner footprint on the RAM-backed tmpfs the issue names as the harm ("`XDG_RUNTIME_DIR` is a tmpfs — it consumes RAM"); the `skill-scan-*` families are the same producer's same-class allocations, the leak is measured (45 input + 4 results artifacts on the incident date), and the fix is the same already-shipped mechanism at the same site |
+| `run-scan.sh` scratch-orphan reap | — | inferred — justification: ask 1's property is bounded scanner footprint on the RAM-backed tmpfs the issue names as the harm ("`XDG_RUNTIME_DIR` is a tmpfs — it consumes RAM"); the `skill-scan-*` families are the same producer's same-class allocations, the leak is measured (45 input + 4 results artifacts dated 2026-07-20), and the fix is the same already-shipped mechanism at the same site |
 | `meta-dir-reap.test.sh` new arms | — | inferred — justification: the guard contract for the reap extension; the suite is the existing assertion site for this property (arms 1–7 already pin the meta family) |
 | `SKILL.md` retention docs | "It needs a retention policy" | asked |
 | `override-mechanism.md` TTL guidance | "It needs a retention policy" | asked — the path-form `findings_json` guidance is where the policy's consumer-visible TTL must live |
@@ -573,9 +589,8 @@ glob superset (all paths are `.sh`/`.md` under `plugins/soleur/`).
   it survives (existing arm, unchanged) — `unit`
 - Given the source of `run-scan.sh`, when comments are stripped and the code
   greps for the scratch sweep, then `-name 'skill-scan-*'`,
-  `-user "$(id -u)"`, and the `! -path "$INPUT" ! -path "$results_dir"`
-  own-scratch exclusions are present (positive control: same regexes match
-  the live code) — `unit`
+  `-user "$(id -u)"`, and the `! -samefile` own-scratch exclusions are
+  present (positive control: same regexes match the live code) — `unit`
 - Regression: existing arms 1–7 (old meta dir reaped, recent spared, AC8
   artifact survives, floor=0 own-dir safe, no meta-dir EXIT trap + regex
   positive control, name filter, uid scope) stay green — `unit`
@@ -660,7 +675,7 @@ contain `plugins/soleur/skills/skill-security-scan` or
 ## References & Research
 
 - `plugins/soleur/skills/skill-security-scan/scripts/run-scan.sh` (reap block
-  ~`run-scan.sh:190-224`, allocations at `:30`, `:103`, `:226`)
+  ~`:187-287`, allocations at `:30`, `:103`, meta dir at `:290`)
 - `plugins/soleur/skills/skill-security-scan/scripts/lib.sh` (`stdin_to_tempfile`)
 - `plugins/soleur/skills/skill-security-scan/test/meta-dir-reap.test.sh`
 - `plugins/soleur/scripts/lib/tmp-classify.sh` (`tc_is_protected`)

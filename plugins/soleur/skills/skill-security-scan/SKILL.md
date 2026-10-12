@@ -86,12 +86,12 @@ startup age-reap: `skill-security-scan-*` dirs older than
 `SKILL_SCAN_META_REAP_MIN` minutes (default 10080 = 7 days) are reaped at the
 next invocation, and the same knob bounds a sibling sweep under
 `${TMPDIR:-/tmp}` covering `skill-scan-*` scratch orphans, stranded
-`skill-security-scan-*` crossover dirs, and `sss-write.*` hook captures
+`skill-security-scan-*` crossover dirs, and `sss-write.*.err` hook captures
 (#6789, #6760). One knob, two scopes: shrinking it shrinks BOTH the Art. 32
-evidence window and the scratch floor — and the scratch sweep clamps to a
-60-minute minimum because a lower floor can reap a concurrent scan's live
-scratch. The dir is deliberately NOT EXIT-trap-cleaned: the override flow
-reads the path after the scan exits.
+evidence window and the scratch floor — and both sweeps clamp to a 60-minute
+minimum because a lower floor can reap a concurrent scan's live scratch.
+The dir is deliberately NOT EXIT-trap-cleaned: the override flow reads the
+path after the scan exits.
 
 ## Override mechanism
 

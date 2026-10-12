@@ -84,7 +84,7 @@ timestamp: <ISO-8601>
    hook on Write run `parse-override.sh` to validate. Valid artifact → install
    accepted.
 
-### PII safety — path-form mandate
+### PII safety — findings provenance
 
 The `findings_json` field MUST carry **redacted bytes from the persisted
 `.scan-meta.json`** — never an inline copy typed from scanner stdout. Reason:
@@ -108,8 +108,8 @@ the **redacted `.scan-meta.json`**, never from scanner stdout (the mandate
 above is about where the bytes come from, not the YAML shape). Two mechanics
 matter: the value must be an inline object on the `findings_json:` line itself
 (`parse-override.sh`'s presence check requires a non-empty same-line value — a
-block mapping on the next line reads as missing), and the source bytes must
-still be the redacted file.
+block mapping on the next line reads as missing; the gate-vs-schema mismatch
+is tracked in #10167), and the source bytes must still be the redacted file.
 
 ## Multiple overrides per PR
 
