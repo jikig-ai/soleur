@@ -1701,6 +1701,15 @@ assert_grep "boot probe asserts the gateway container" 'soleur-egress-gw' "$SCRI
 # allow/deny verification on the real path — the deny line is the proof the
 # policy still holds mid-life).
 assert_grep "resolver carries the synthetic CONNECT pair probe" 'egress_gw_probe' "$RESOLVER"
+# The auth helper binds the CONNECT username to the token FILE CONTENT
+# ($user == $(<tokenfile)): the probe's mint must write "probe", an empty
+# file reads as a forged username and every allow-leg CONNECT is denied
+# (measured on web-1 2026-10-12: TCP_DENIED ERR_CACHE_ACCESS_DENIED,
+# allow_rc=56).
+assert_grep "probe token file carries 'probe' as its content (helper binds user==content)" \
+  "printf 'probe' >" "$RESOLVER"
+assert_not_grep "probe token is never minted empty (empty content always fails the helper)" \
+  ': > "\$EGRESS_GW_TOKEN_DIR/\$tok"' "$RESOLVER"
 # Scope-marker self-heal (#9534 heal-loop fix): the six presence markers cannot
 # see a ruleset baked while the gw was absent (unscoped member drop kills every
 # upstream dial; the docker0→gw accept missing). The heal check must therefore
