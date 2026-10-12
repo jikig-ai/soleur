@@ -83,8 +83,7 @@
   "supabase.inngest",
   "doppler.secrets",
   "betterstack.logs",
-  "r2.terraform_state_backend",
-  "redis.session_store"
+  "r2.terraform_state_backend"
  ],
  "stores": [
   {
@@ -168,15 +167,15 @@
    "at_rest": {
     "mechanism": "plaintext-exception",
     "evidence": "apps/web-platform/infra/git-data.tf:264 (format = \"ext4\", no LUKS apparatus)",
-    "defends_against": "nothing at the volume layer; the pre-cutover rollback backstop pending the DL-2 wipe",
-    "does_not_defend": "a seized/snapshot disk exposes any git data still resident on this volume",
+    "defends_against": "nothing at the volume layer; the volume is never writable (ADR-239 D2), so it takes no new data; it is the pre-cutover rollback backstop pending the DL-2 wipe",
+    "does_not_defend": "a seized or snapshot disk exposes any git data and any id-bearing lock residue still resident on this volume",
     "disclosed_as": "not-publicly-claimed",
-    "live_verification": "unavailable:host attachment state not pulled in the code-sourced audit; tracked #6897",
+    "live_verification": "unavailable:Hetzner API read 2026-10-12: volume 106867358 is attached to server 169724272 alongside LUKS volume 107102614; point-in-time API read only, no on-host probe; contents and mount state unverified",
     "exception": {
-     "justification": "plaintext rollback backstop for the git-data LUKS cutover, pending the DL-2 destructive wipe",
+     "justification": "the plaintext rollback copy is still attached because the DL-2 wipe cannot run yet: the wipe body was deleted in #8189 and does not exist on main, a replacement needs its own hash-bound PR and rehearsal, and the wipe sits behind the flip chain (#8209, #8609, #8573) with git_data_store still disabled. The volume is never writable (ADR-239 D2), so there is no new collection and no growth. Renewed on a short horizon, not rolled quietly: see ADR-239 Amendment 2026-10-12.",
      "tracking_issue": "#6897",
-     "reevaluate_when": "the git-data-host-rotate apply (the #8211 PR2 rotate arm — the ONLY route permitted to touch the LUKS store; the plaintext volume is still preserved by omission) and the flag flip are confirmed, then the DL-2 wipe of the plaintext volume runs",
-     "expires_on": "2026-10-22"
+     "reevaluate_when": "the flip chain is unblocked and the DL-2 wipe PR is ruled executable, or 2026-11-12, whichever is first; a further slip re-opens ADR-239 and goes back to the CLO, not a silent roll",
+     "expires_on": "2026-11-12"
     }
    }
   },
@@ -382,24 +381,6 @@
    }
   },
   {
-   "store": "redis.session_store",
-   "kind": "provider-db",
-   "at_rest": {
-    "mechanism": "plaintext-exception",
-    "evidence": "model.c4:218 models sessionStore as 'TLS, requirepass, EU (Phase 4a)'; at-rest posture unstated in code",
-    "defends_against": "nothing asserted at the at-rest layer pending confirmation",
-    "does_not_defend": "a seized/snapshot disk may expose session state until the at-rest posture is confirmed or LUKS is applied",
-    "disclosed_as": "not-publicly-claimed",
-    "live_verification": "unavailable:session-store host posture not pulled in the code-sourced audit; tracked #6897",
-    "exception": {
-     "justification": "at-rest posture unconfirmed from code alone; recorded as an exception rather than asserted, pending a live pull",
-     "tracking_issue": "#6897",
-     "reevaluate_when": "the session-store host at-rest posture is measured (or LUKS applied)",
-     "expires_on": "2026-10-22"
-    }
-   }
-  },
-  {
    "store": "supabase.inngest",
    "kind": "provider-db",
    "at_rest": {
@@ -452,12 +433,12 @@
     "defends_against": "a file-read-only primitive held by the non-root `git` account (a path traversal in the transport wrapper, say), for the two 0600 files. Also closes the /proc/<pid>/cmdline channel for both credentials: every POST passes its header via `curl -K -` on stdin, and both redactors read their sed script from a 0600 file rather than an -e operand, so no external process carries a secret in argv (cmdline is mode 444; environ is 400). ALSO, since #7772: CODE EXECUTION as a NON-ROOT account can no longer read user_data from the Hetzner metadata endpoint. A host-local nftables rule (write_files /usr/local/bin/git-data-nftables.sh + git-data-nftables.service, armed by a runcmd `systemctl enable --now`) drops 169.254.169.254 for `meta skuid != 0`. Measured on this host's image (Ubuntu 24.04 / nftables v1.0.9): root still reaches the endpoint, non-root is dropped, and an un-ruled control address still reaches. Root is exempt so cloud-init's own datasource is unaffected.",
     "does_not_defend": "CODE EXECUTION AS ROOT, which reads user_data from the metadata endpoint exactly as before — the #7772 nftables drop is scoped to non-root UIDs by design (ADR-198's own wording), so it narrows this from 'any account' to 'root only'. Also does not defend the 0755 sentry_dsn copy, which the `git` account can read today, nor a FILE-READ primitive against /etc/default/git-data-doppler by anything that can read root-owned 0600 files. Rotation of the baked ingest token still requires a host replace (user_data is ForceNew, ADR-149/ADR-152). Tracked: #7772",
     "disclosed_as": "not-publicly-claimed",
-    "live_verification": "unavailable:the git-data host was born 2026-09-14 (run 34836141887, re-birthed by run 34861860722); no posture probe runs on it yet — tracked #6897",
+    "live_verification": "unavailable:the git-data host was reborn 2026-10-11 (Hetzner API read 2026-10-12: server 169724272, created 2026-10-11T12:50:15Z, rotate run 38140050880; earlier births 2026-09-14 runs 34836141887 and 34861860722); no on-host posture probe exists; related #6167",
     "exception": {
      "justification": "credentials baked into user_data are plaintext by construction - user_data is retrievable from the Hetzner metadata endpoint BY ROOT, so no on-host file mode can make them encrypted-at-rest. The two 0600 files bound a file-read-only primitive; the 0755 sentry_dsn copy predates #7460 and is bounded by nothing. Accepted on the ADR-198 capability test: every credential here has a write-only ingest ceiling. GIT_DATA_LUKS_KEY fails that test and is deliberately NOT baked. #7772 closed legs (2) and (3) of that test for the ingest token specifically - per-source isolation and the non-root metadata drop - so what remains accepted here is narrower than when this row was written.",
-     "tracking_issue": "#7772",
-     "reevaluate_when": "BEFORE the git-data host is born - user_data is ForceNew (ADR-149/ADR-152). The per-source ingest token and the metadata-endpoint egress rule LANDED in #7772 while that window was open. What remains for the next window: the baked doppler_token derivation path to GIT_DATA_LUKS_KEY, which is the residual leg (2) failure and is NOT addressed by the nftables rule.",
-     "expires_on": "2026-10-22"
+     "tracking_issue": "#8620",
+     "reevaluate_when": "the next git-data host rebuild window, or #8620 closes, whichever is first. The 2026-10-11 rebirth (rotate run 38140050880) did not close the residual leg: the baked doppler_token can still derive GIT_DATA_LUKS_KEY, and the #7772 nftables rule does not address it.",
+     "expires_on": "2026-12-31"
     }
    }
   }
@@ -482,10 +463,10 @@
     "does_not_defend": "a passive on-net attacker could read pulled image bytes AND the zot pull credential (HTTP Basic on every login/pull; read-only per cloud-init-registry.yml accessControl actions [read]; the same random_password.zot_pull the inngest host bakes, and since #8651 also baked into every fresh web host's user_data); integrity (not confidentiality) comes from the @sha256 digest pin (docker verifies content against it) on every pull, plus the cosign signature check on the deploy path only; a fresh web boot runs no signature check, which is why it sends ONLY @sha256-pinned refs to zot",
     "disclosed_as": "not-publicly-claimed",
     "exception": {
-     "justification": "private-network-only registry link; integrity comes from @sha256 digest pinning (plus cosign verification on the deploy path), not TLS; the image bytes are NOT public (the GHCR package is private), so confidentiality on this link rests on the private network alone",
-     "tracking_issue": "#6897",
-     "reevaluate_when": "the registry is exposed beyond the private network, or TLS is added to the link",
-     "expires_on": "2026-10-22"
+     "justification": "private-network-only registry link; integrity comes from @sha256 digest pinning (plus cosign verification on the deploy path), not TLS; the image bytes are NOT public (the GHCR package is private), so confidentiality on this link rests on the private network alone. Compensating control: the link stays on the Hetzner private network and is not exposed beyond it; the registry host was reborn 2026-10-11 (Hetzner API). Renewed 2026-10-12 on the CLO horizon; the nftables peer restrictions on the registry were not re-read for this renewal.",
+     "tracking_issue": "#10136",
+     "reevaluate_when": "the registry is exposed beyond the private network, a new tenant joins 10.0.1.0/24, or TLS is added to the link",
+     "expires_on": "2026-11-12"
     }
    }
   },
@@ -518,10 +499,10 @@
     "does_not_defend": "a passive on-net attacker on 10.0.1.0/24 could read image bytes on the final leg; integrity comes from cosign digest-pinning, not TLS. Also does not defend a leaked CF Access service token or a leaked zot pull credential.",
     "disclosed_as": "not-publicly-claimed",
     "exception": {
-     "justification": "the same private-network-only exception already recorded for 'web hosts -> zot registry' - the final leg is plain HTTP inside the Hetzner private network; image bytes are our own OCI layers and integrity is cosign-digest-pinned. Folded in here rather than deferred because #7278 adds the fifth CI caller to this leg.",
-     "tracking_issue": "#6897",
-     "reevaluate_when": "the registry link gains TLS, or the store is exposed beyond the private network",
-     "expires_on": "2026-10-22"
+     "justification": "the same private-network-only exception already recorded for 'web hosts -> zot registry' - the final leg is plain HTTP inside the Hetzner private network; image bytes are our own OCI layers and integrity is cosign-digest-pinned. Folded in here rather than deferred because #7278 adds the fifth CI caller to this leg.. Compensating control: only the runner-to-edge and edge-to-connector legs leave the private network, both over TLS 1.2+; the final leg stays on the private network. Renewed 2026-10-12 on the CLO horizon; the nftables peer restrictions were not re-read for this renewal.",
+     "tracking_issue": "#10136",
+     "reevaluate_when": "the registry link gains TLS, a new tenant joins 10.0.1.0/24, or the store is exposed beyond the private network",
+     "expires_on": "2026-11-12"
     }
    }
   },
@@ -534,10 +515,10 @@
     "does_not_defend": "a passive on-net attacker on 10.0.1.0/24 could read INNGEST_EVENT_KEY (in the /e/<key> send path), the hashed signing key (Bearer signkey-prod-<sha256>), event payloads and step outputs; replaying a sniffed key additionally requires sending from a web host's private IP (the inngest host's nftables allows :8288 only from 10.0.1.10/10.0.1.11). The raw signing key never crosses the wire (Inngest->app requests carry only an HMAC).",
     "disclosed_as": "not-publicly-claimed",
     "exception": {
-     "justification": "the same private-network-only plaintext exception recorded for the zot registry link: the app<->scheduler channel stays inside the Hetzner private network, both ends are nftables-restricted to the web hosts' private IPs, and the peers on 10.0.1.0/24 are our own hosts (git-data .20, registry .30). Transport confidentiality on this link is accepted, not provided; recorded when the #6178 2.4 app-repoint (#8191) moved the channel off the host loopback.",
-     "tracking_issue": "#6897",
-     "reevaluate_when": "the channel gains TLS, a non-Jikigai peer joins 10.0.1.0/24, or the inngest host is reachable beyond the private network",
-     "expires_on": "2026-10-22"
+     "justification": "the same private-network-only plaintext exception recorded for the zot registry link: the app<->scheduler channel stays inside the Hetzner private network, both ends are nftables-restricted to the web hosts' private IPs, and the peers on 10.0.1.0/24 are our own hosts (git-data .20, registry .30). Transport confidentiality on this link is accepted, not provided; recorded when the #6178 2.4 app-repoint (#8191) moved the channel off the host loopback. Renewed 2026-10-12 on the CLO horizon: this hop carries user prompts and agent output, so it is the priority link to close; the inngest host was reborn 2026-10-08 (Hetzner API).",
+     "tracking_issue": "#10136",
+     "reevaluate_when": "the channel gains TLS, a non-Jikigai peer joins 10.0.1.0/24, a new tenant joins 10.0.1.0/24, or the inngest host is reachable beyond the private network",
+     "expires_on": "2026-11-12"
     }
    }
   },

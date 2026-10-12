@@ -523,6 +523,8 @@ fixes for every per-step plan:
    GA-blocking path. The residual shared-git-data-host SPOF at the Phase-3 GA line is
    accepted with honest reconnect; #5723 (Garage) closes it post-GA (OQ1).
 
+   > **Ledger at birth (2026-10-12).** The session-Redis PR must add an `encryption-posture-ledger.json` row for the new store in the same change. A ledger row for it existed before the store did and was removed as describing nothing; see `encryption-posture-audit-2026-07-23.md` §Post-audit corrections.
+
 **Staged delivery (each phase is its own `/soleur:plan` + spec + PR):** Phase 0
 (this ADR + C4) → Phase 1 (host-local correctness, no new infra, still `replicas=1`)
 → Phase 2 (split git-data/worktrees + lease + fencing) → **Phase 3 (2nd host +
