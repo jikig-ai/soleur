@@ -19,8 +19,8 @@ share one. Each decision's own status is in the **Statuses** table. This follows
 convention: `architecture list` shows the frontmatter's single status, which is the least-advanced
 one, and D2's is `proposed`.
 
-- **D1 and D3–D8 are `adopting`.** They are implemented by the PR that carries this ADR
-  (references #8209; it does not close it). They flip to `accepted` when the runbook's post-operator
+- **D1, D3 and D5–D8 are `adopting`; D4 is `accepted` (2026-10-12, see the Amendment log).** The adopting decisions are implemented by the PR that carries this ADR
+  (references #8209; it does not close it). The others flip to `accepted` when the runbook's post-operator
   verification passes — AC12 through AC16 of the plan.
 - **D2 stays `proposed` until residual R1 closes.** This is explicit, and it is the CPO sign-off
   condition. Until R1 closes, D2 stops a branch workflow from *naming* a Tier-B secret; it does not
@@ -615,9 +615,9 @@ instead.
 | Decision | Status | Flips when |
 |---|---|---|
 | D1 tiers | `adopting` | AC12–AC16 pass: the three names are absent from `prd_terraform`, the App key there hashes equal to the sentinel, and the per-credential invalidation probes return `401`/verify-failure. |
-| D2 boundary | `proposed` | **R1 (#8609) closes** (and R7 closes at O5b). Until then the boundary is nominal against a `prd` repo-secret holder. This is the CPO sign-off condition. |
+| D2 boundary | `proposed` | **R1 (#8609) closes** (and R7 closes at O5b, which was met on 2026-09-29: see the 2026-10-12 amendment, so R1 is the only open limb). Until then the boundary is nominal against a `prd` repo-secret holder. This is the CPO sign-off condition. |
 | D3 carrier | `adopting` | The Tier-B project is populated and its read token is seeded on all four environments, and the canary reads `source=tier_b`. |
-| D4 Tier-A substitutes | `adopting` | The read-only Hetzner token returns `token_readonly` on a write, and the Tier-A state pair returns `403` on a put and `200` on a get. |
+| D4 Tier-A substitutes | `accepted` | **Met 2026-09-29 (O5, O5b; accepted 2026-10-12).** The read-only Hetzner token is refused on a write (`forbidden`; the plan's `token_readonly` is the older Hetzner wording), and the Tier-A state pair returns `403` on a put and `200` on a get. |
 | D5 GitHub identity | `adopting` | The infra App's write scopes are exercised by a green no-op apply-on-merge from `main`, and board sync runs with no legacy warning. **Amended 2026-09-30 (#9262):** and O4c's evidence (#9262 plan AC15): one `main`-dispatched build whose `bump-cloud-init-pin` job is green under `infra-privileged` with the `app-token` notice naming `app=soleur-infra`. D5 cannot reach `accepted` until the new scopes have been exercised. **Amended 2026-10-01 (#9360):** and the marketplace bypass-actor follow-up (#9361) has landed, with a manifest write exercised as soleur-infra. |
 | D6 integrity | `adopting` | The loader's sentinel row and Guard 2 are green on the PR, and a planted same-named `prd_terraform` value is measured to have no effect. |
 | D7 state custody | `adopting` | The privileged bucket's object matches the source by sha256, lineage and serial; a Tier-A key gets `403` on it; the two custody forgets have applied. |
@@ -1032,6 +1032,37 @@ This supersedes the 2026-10-01 bullet "Pre-existing, unchanged here" for the app
 
 One dated line, no status change: the weekly digest PR is authored, pushed and armed as the `soleur-infra` App from the new `open-pr` job (narrow source `soleur-infra-app`, `DOPPLER_TOKEN_INFRA_APP`, scoped to `contents:write` + `pull_requests:write` on `soleur`; ADR-285). Read D11's "release jobs" as "unattended App-token jobs" from here (D11's text is not rewritten); census row G7f counts four callers. Inventory row: `infra-credential-tiers-8209.md` (Group 4).
 
+### 2026-10-12 (#8209): D4 `accepted`; where D1 and D2 stand, measured
+
+D4 flips to `accepted`. Its condition was met on 2026-09-29 and is recorded on #8209: the read-only Hetzner token's write
+attempt was refused with `forbidden` (the plan's `token_readonly` is the older Hetzner wording; a differential probe with the
+read/write token, which got `not_found` for the same nonexistent id, shows the permission is checked before the lookup), and the
+Tier-A state pair returned `403` on a put and `200` on a get (O5b; the drift canary, run 36574141712, was green on the read-only pair).
+The table's condition for D4 is those two probes, and both are recorded. D4's body also describes the removals, the App-key sentinel and the PR
+plan: the removals and the sentinel are checked under D1's AC12 below, and the PR plan was not re-measured today. D4's own evidence is
+thirteen days old and was not re-run today either.
+
+Nothing else flips. Measured read-only on 2026-10-12 (names and access levels only; no value was read):
+
+- **D1 stays `adopting`.** AC12's name limb holds: `DOPPLER_TOKEN_TF`, `HCLOUD_TOKEN`, `CF_API_TOKEN_R2` and `DOPPLER_TOKEN_GIT_DATA_ROOT` are absent
+  from `soleur/prd_terraform`; `GITHUB_APP_PRIVATE_KEY` is there as the `EVICTED_SEE_ADR_241` sentinel (O10 recorded its sha256 as equal; it
+  was not re-hashed today, because that reads the value), so AC12's name limb holds today and its hash limb is as O10 recorded it. AC16 is
+  **not shown**. An old-value invalidation probe is recorded for `DOPPLER_TOKEN_TF` only (old token `401`, O13, 2026-10-01). For the App key
+  the deletion of the old key row is recorded (2026-10-03) but the runbook's old-key probe (`GET /app` returning `401`) is not. The Hetzner
+  read/write token and the R2 token were **moved, not rotated**: hash-equal copies went into Tier B (O2, O10), and the Tier-A substitutes are
+  new read-only tokens. The Tier-A `403` probes in O5b and O8 test isolation, not invalidation, so nothing in the record shows the old Hetzner
+  or R2 value dead. The runbook's Rotation step 4 (the read/write R2 state key, `TF_STATE_AWS_*`) is likewise unrecorded. R5 therefore stays
+  OPEN.
+- **D2 stays `proposed`.** G1 ([#9294](https://github.com/jikig-ai/soleur/issues/9294)) and G2 ([#9295](https://github.com/jikig-ai/soleur/issues/9295))
+  are open. The G2 census (a comment on #9295) found no write-capable service token on `soleur/prd` itself (its four tokens are all `read`); across all 16 `soleur` configs there are exactly
+  two write tokens, `gha-prd-terraform-write` on `prd_terraform` (the O6 mint) and `workspaces-luks-marker-write` on `prd_workspaces_luks_marker`.
+  The unresolved parts are the personal-token proxy (not listed by that command) and `workspaces-luks-marker-write`, a write token a branch
+  workflow can name through `DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER`, on `prd_workspaces_luks_marker` rather than `prd`. G1 has not started: the
+  three deploy-channel credentials are still in `soleur/prd_terraform` and at repo level, and the consumer set (34 files; a comment on
+  #9294) is larger than that issue lists, including the `dispatch-web-redeploy` composite action.
+- **D3 and D5–D8 were not re-measured today.** Their evidence is the dated O-steps on #8209 and the PR-time suites; they flip on the
+  table's own conditions.
+
 ## References
 
 - Plan: `knowledge-base/project/plans/2026-09-22-feat-evict-privileged-terraform-credentials-plan.md`
@@ -1057,3 +1088,4 @@ One dated line, no status change: the weekly digest PR is authored, pushed and a
 - D2 note (2026-10-04): #9377, #9461
 - `op=backup` tier note (2026-10-08): #8767, #9755
 - Apply-path injection removed and by-value gate (2026-10-10): #9362, #9914
+- D4 `accepted`; D1/D2 measured state (2026-10-12): #8209, #9294, #9295
