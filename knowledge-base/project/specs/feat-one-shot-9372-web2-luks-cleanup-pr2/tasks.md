@@ -26,7 +26,7 @@ Branch `feat-one-shot-9372-web2-luks-cleanup-pr2`, draft PR #10083. Brand-surviv
 ## Phase 3: Registrations and ratchets
 
 - 3.1 `terraform-target-parity.test.ts`: `MAIN_ROOT_TF_WORKFLOWS`, rebirth describe block, derived census count, G2 rewrite with scratch control (Guard Contract).
-- 3.2 `nic-wait-gate.test.sh` rebirth rows; `workspaces-luks-verify-workflow.test.sh` READERS; `.claude/hooks/grep-q-pipe-guard.test.sh` row.
+- 3.2 `nic-wait-gate.test.sh` rebirth rows (record the extractor floor before/after); `workspaces-luks-verify-workflow.test.sh` READERS plus ONE new Guard 3 row (marker token has exactly one holder, Guard 2 of the plan's Guard Contract); `.claude/hooks/grep-q-pipe-guard.test.sh` row.
 - 3.3 `scripts/test-all.sh`, `scripts/lib/test-affected-paths.sh`, `scripts/guard-vacuity-floor.test.sh`, `run-registered-suites.sh` bound.
 - 3.4 `regenerate-shard-manifest.py --group light|infra --incremental --write`; fixture-relative baseline; kb-consumers baseline (`--write-baseline` only if stale).
 - 3.5 `infra-validation.yml` comment block and three path entries.
@@ -35,13 +35,13 @@ Branch `feat-one-shot-9372-web2-luks-cleanup-pr2`, draft PR #10083. Brand-surviv
 ## Phase 4: Stale wording (comments only)
 
 - 4.1 `workspaces-luks.tf` (two sites), `server.tf` (four sites), `lb-weight-gate.sh` (two sites), `workspaces-luks-header-web.tf` (after reading the jq filter), `workspaces-luks-verify.yml` CUSTODY comment, `inngest-provision-rehearsal.yml` comment.
-- 4.2 Proof: comment-stripped byte-equality against `origin/main` for each `.tf`; `terraform fmt -check`; `terraform validate`; the infra suites named in the plan; `lint-encryption-posture` suite and `--repo-sweep`.
+- 4.2 Proof: heredoc-aware comment-stripped byte-equality against the MERGE BASE for each `.tf` (raw heredoc/templatefile bodies compared unstripped; the script self-tests RED/GREEN); `terraform fmt -check`; `terraform validate`; the infra suites named in the plan; `lint-encryption-posture` suite and `--repo-sweep`.
 
 ## Phase 5: Records
 
 - 5.1 ADR-263: frontmatter `accepted`, one dated Status note, one 2026-10-12 retirement addendum (which also supersedes the 2026-10-11 "Status. Unchanged" paragraph).
 - 5.2 ADR-241 dated line; `infra-credential-tiers-8209.md` rows marked retired.
-- 5.3 Runbook `web2-luks-rebirth-9372.md` rows 4 and 5 done lines, status correction; `web-host-reboot.md` RETIRED banner; dated marks in `betterstack-log-query.md`, `web-host-birth.md`, `web-host-replace.md`.
+- 5.3 Runbook `web2-luks-rebirth-9372.md` rows 3 (per Phase 0.4), 4 and 5 done lines plus a RETIRED banner; `web-host-reboot.md` RETIRED banner; conditional dated marks in `betterstack-log-query.md`, `web-host-birth.md`, `web-host-replace.md` (all pending-rebirth lines), `cron-egress-blocked.md`, `apply-web-platform-infra-job-rationale.md`; ADR-263 supersession blockquotes under the Status paragraph and "Live conversion".
 - 5.4 `model.c4` three edge sentences; `bash scripts/regenerate-c4-model.sh`; c4-count-parity, c4-code-syntax, c4-render.
 - 5.5 Learning with the three requirements (content-level emptiness evidence, a second gate after the evidence step, a credential-parity check).
 
@@ -55,7 +55,7 @@ Branch `feat-one-shot-9372-web2-luks-cleanup-pr2`, draft PR #10083. Brand-surviv
 
 ## Phase 7: After merge
 
-- 7.1 Postmerge: required checks, push-apply log discriminator, workflows no longer active, grader and `--repo-sweep` PASS.
+- 7.1 Postmerge: required checks; BOTH push-apply runs judged per the plan's GO/NO-GO (corrected discriminator; poll up to 10 minutes; full 40-character SHA only once the PR state is MERGED); workflow files absent (contents API 404 with positive control); grader and `--repo-sweep` re-run once as evidence; the drift workflow is advisory (no dispatch without the owner's go-ahead).
 - 7.2 Final comment on #9372 (graded rows only; reopen, recovery and emptiness not claimed); close if the keyword did not.
-- 7.3 Close #9642 by hand with run IDs 37508997529, 37516716515, sweeper run 38083925201, the ruling, this PR and the learning path.
+- 7.3 Close #9642 by hand (`--reason "not planned"`) with run IDs 37508997529, 37516716515, sweeper run 38083925201, the ruling, this PR and the learning path; add one comment each on #9948 and #9949 noting that a volume re-birth, recovery or re-escrow now needs a new workflow in a new reviewed PR (no new issue).
 - 7.4 File no new issue; leave #9572, #9984, #9948, #9949, #10003 open.
