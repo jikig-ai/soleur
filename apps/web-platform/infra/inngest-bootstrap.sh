@@ -307,7 +307,39 @@ fi
 # position N:` followed by the URL) — measured, curl 8.18 — which FR4's SyslogIdentifier
 # now ships straight to Better Stack. -g disables globbing (we never glob) and the echo
 # with it. Belt to cat-deploy-state.sh's braces: neither alone is sufficient.
-exec /usr/bin/curl -gfsS --max-time 10 "$INNGEST_HEARTBEAT_URL" >/dev/null
+#
+# #9757: the URL's PATH is the credential, so it must not be a curl ARGUMENT either (argv is readable by
+# every local user in /proc/<pid>/cmdline for the life of the child; ADR-280). It reaches curl on the stdin
+# config (`--config -`) through a PIPE: this body is POSIX sh (dash), so no process substitution and no
+# [[ ]], and the repo's Rule E lint refuses a heredoc feeding the config (it may be a temp file on an older
+# shell). `printf` is a builtin, so the URL is never an argument of any process; there is no pipefail here,
+# so the pipeline status is curl's, as `exec curl` gave. `--disable` (first, so no ~/.curlrc is read) and
+# `--noproxy '*'` confine the transport (lint Rule D). The host has no checkout, so this is the inline form
+# of the library. The value is judged BEFORE any request, with no trimming: https:// then a non-empty rest of
+# [A-Za-z0-9._~:/?&=%+-] only. The class is NEGATED (a positive pattern constrains only the first
+# character, because `*` matches quotes and newlines), and the scheme is its own test (the class alone
+# admits `http://x`). A quote, backslash or newline would otherwise add directives to the config grammar.
+# A refusal makes zero requests, exits 2 (what curl's own blank-URL rejection gave, so the unit stays loud)
+# and logs ONE value-free marker through the hourly limiter on its own stamp (this unit fires every 60 s:
+# the EXIT stays nonzero every tick, only the log line is limited). The marker is assigned to a variable
+# first so no logger line names the URL variable (inngest.test.sh bans exactly that shape).
+_hb_ok=
+case $INNGEST_HEARTBEAT_URL in
+  https://*)
+    case ${INNGEST_HEARTBEAT_URL#https://} in
+      ''|*[!A-Za-z0-9._~:/?\&=%+-]*) ;;
+      *) _hb_ok=1 ;;
+    esac ;;
+esac
+if [ -z "$_hb_ok" ]; then
+  case $INNGEST_HEARTBEAT_URL in *[[:cntrl:]]*) _hb_reason=control_char ;; *) _hb_reason=token_shape ;; esac
+  _hb_marker="SOLEUR_CREDENTIAL_REFUSED script=inngest-heartbeat reason=$_hb_reason var=INNGEST_HEARTBEAT_URL"
+  if INNGEST_HEARTBEAT_DARK_STAMP="${INNGEST_HEARTBEAT_REFUSAL_STAMP:-/run/inngest-heartbeat/refusal.stamp}" dark_arm_emit_due; then
+  logger -t "$LOG_TAG" "$_hb_marker"
+  fi
+  exit 2
+fi
+printf 'url = "%s"\n' "$INNGEST_HEARTBEAT_URL" | exec /usr/bin/curl --disable --noproxy '*' -gfsS --max-time 10 --config - >/dev/null
 HEARTBEATSCRIPTEOF
 chmod 0755 "$HEARTBEAT_SCRIPT"
 

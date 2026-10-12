@@ -6629,15 +6629,14 @@ echo "=== stage S6: Guard 3 rows (htpasswd password off argv: workflow site, res
 # CONVERTED SCRIPTS (S6H_CONVERTED): exactly one stdin config line (`url = "..."`) each, and exactly one copy of the shape-guard class, on a line BEFORE it.
 # =====================================================================================
 S6H_DIR="apps/web-platform/infra"
-S6H_CONVERTED=(luks-monitor.sh web-git-data-probe.sh)
+S6H_CONVERTED=(luks-monitor.sh web-git-data-probe.sh inngest-bootstrap.sh)
 S6H_FILE_FLOOR=7
-S6H_ALLOW_CEIL=4
+S6H_ALLOW_CEIL=3
 S6H_CLASS='[!A-Za-z0-9._~:/?\&=%+-]'
 S6H_ALLOW=(
 "$S6H_DIR/web-zot-consumer-probe.sh	curl -fsS -m 10 -o /dev/null \"\$URL\" 2>/dev/null	2"
 "$S6H_DIR/inngest-consumer-probe.sh	curl -fsS -m 10 -o /dev/null \"\$URL\" 2>/dev/null	2"
 "$S6H_DIR/web-private-nic-guard.sh	beat() { curl --disable --noproxy '*' -fsS -m 10 -o /dev/null \"\$URL\" 2>/dev/null	1"
-"$S6H_DIR/inngest-bootstrap.sh	exec /usr/bin/curl -gfsS --max-time 10 \"\$INNGEST_HEARTBEAT_URL\" >/dev/null	1"
 )
 # One TSV record per finding. V: a violating segment (file, segment). C: a stdin config line (file, line number). G: a guard class literal (file, line
 # number). P: a heartbeat-population file (file).
@@ -6737,6 +6736,13 @@ if s6_edit "$S6H_M1/$S6H_DIR/web-git-data-probe.sh" '--config - 2>/dev/null < <(
   if [[ "$S6H_J_REASONS" == *"argv:$S6H_DIR/web-git-data-probe.sh"* && "$S6H_J_REASONS" == *"cfg:$S6H_DIR/web-git-data-probe.sh"* ]]; then row "S6-HB mutation 1: the URL back on curl argv in a converted script is RED (an argv violation, and the script's stdin config line is gone)" ok
   else row "S6-HB mutation 1: an argv heartbeat URL in a converted script is not caught" fail "reasons='$S6H_J_REASONS'"; fi
 else row "S6-HB mutation 1: the argv edit did not land (re-anchor with web-git-data-probe.sh)" fail "no transport line once in the scratch copy"; fi
+# M1b (Guard 2 row 1, the POSIX heredoc script): the URL back on argv in the heredoc-body curl.
+S6H_M1B="$(s6h_fresh m1b)"
+if s6_edit "$S6H_M1B/$S6H_DIR/inngest-bootstrap.sh" 'printf '"'"'url = "%s"\n'"'"' "$INNGEST_HEARTBEAT_URL" | exec /usr/bin/curl --disable --noproxy '"'"'*'"'"' -gfsS --max-time 10 --config - >/dev/null' 'exec /usr/bin/curl --disable --noproxy '"'"'*'"'"' -gfsS --max-time 10 "$INNGEST_HEARTBEAT_URL" >/dev/null'; then
+  s6h_judge "$S6H_M1B"
+  if [[ "$S6H_J_REASONS" == *"argv:$S6H_DIR/inngest-bootstrap.sh"* && "$S6H_J_REASONS" == *"cfg:$S6H_DIR/inngest-bootstrap.sh"* ]]; then row "S6-HB mutation 1 (POSIX sh script): the URL back on curl argv in the inngest heartbeat body is RED (an argv violation, and its stdin config line is gone)" ok
+  else row "S6-HB mutation 1 (POSIX sh script): an argv heartbeat URL in the inngest heartbeat body is not caught" fail "reasons='$S6H_J_REASONS'"; fi
+else row "S6-HB mutation 1 (POSIX sh script): the argv edit did not land (re-anchor with the printf-piped curl line in inngest-bootstrap.sh)" fail "no printf-piped curl transport line once in the scratch copy"; fi
 # M3 (Guard 2 row 3): a second heartbeat curl outside the guarded line after a compliant first. Both spellings: URL on argv, and an unguarded second stdin config line.
 S6H_M3="$(s6h_fresh m3)"; assert_fixture_dir "$S6H_M3"; printf '%s\n' '[ -n "$hb_url" ] && curl -fsS "$hb_url" >/dev/null 2>&1' >> "$S6H_M3/$S6H_DIR/luks-monitor.sh"
 s6h_judge "$S6H_M3"; S6H_M3A="$S6H_J_REASONS"
@@ -7029,8 +7035,8 @@ SELFTEST_PASSES=0
 # 730 -> 752 at #9757 (held-back HMAC arms, census allowance, leads (a)(b)(g)): the MEASURED green total (752 passed, 0 failed; the self-test rows are
 # retracted, so SELFTEST_PASSES stays 0). Derived from the run, never estimated.
 # 752 -> 770 at #9757 (stage S6, Guard 3: htpasswd password off argv): the 18 S6 rows, measured (770 passed, 0 failed).
-# 770 -> 781 at #9757 (stage S6-HB, Guard 2: heartbeat URL off curl argv, derived population): the 11 S6-HB rows, measured (781 passed, 0 failed).
-EXPECTED_TESTS=781
+# 770 -> 783 at #9757 (stage S6-HB, Guard 2: heartbeat URL off curl argv, derived population): the 13 S6-HB rows, measured (783 passed, 0 failed).
+EXPECTED_TESTS=783
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2

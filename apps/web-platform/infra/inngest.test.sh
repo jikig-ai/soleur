@@ -574,10 +574,14 @@ WEB_ABSENT_OUT=$(run_ping "$WEB_PING" "" "$WEB_LOG") && WEB_ABSENT_RC=0 || WEB_A
 #   - `^curl:` proves curl RAN and rejected the URL. Without it a missing binary would exit 127
 #     (`sh: exec: /usr/bin/curl: not found` — sh's message, not curl's) and satisfy a bare
 #     `-ne 0`, passing this assertion for the one reason that would mean the test proved nothing.
-assert "AC5b/3 web render + URL absent -> non-zero AND curl is what rejected it (loud; absent URL on the live pusher is a fault)" \
-  "[[ '$WEB_ABSENT_RC' -ne 0 && '$WEB_ABSENT_RC' -ne 127 ]] && printf '%s' \"\$WEB_ABSENT_OUT\" | grep -c '^curl:' >/dev/null"
+# #9757: the URL no longer reaches curl as an argument, and an EMPTY value fails the shape guard before any
+# request, so curl never runs here: the loud, attributable signal is the guard's own refusal (exit 2, the same
+# code curl's blank-URL rejection gave) plus its one marker. A missing binary would still be exit 127 and has
+# no marker, so the second half keeps the row from passing for the one reason that would prove nothing.
+assert "AC5b/3 web render + URL absent -> non-zero AND the shape guard is what rejected it (loud; absent URL on the live pusher is a fault)" \
+  "[[ '$WEB_ABSENT_RC' -ne 0 && '$WEB_ABSENT_RC' -ne 127 ]] && grep -q 'SOLEUR_CREDENTIAL_REFUSED script=inngest-heartbeat' '$WEB_LOG'"
 assert "AC5b/3 web render + URL absent -> emitted no dark-arm row" \
-  "[[ ! -s '$WEB_LOG' ]]"
+  "! grep -q 'url_present=no' '$WEB_LOG'"
 
 # AC5b case 2 + AC3 (leak gate) -- dedicated render, URL PRESENT: the happy path is
 # unchanged (exec curl runs), AND the canary value never appears in stdout+stderr+logger.
@@ -585,7 +589,7 @@ assert "AC5b/3 web render + URL absent -> emitted no dark-arm row" \
 # form ${INNGEST_HEARTBEAT_URL} -- this repo's own house style -- and printf '%s'), and is
 # blind to set -x / curl -v / --write-out '%{url}'. Asserting the VALUE's absence in the
 # real output cannot be defeated by any of those shapes.
-CANARY_URL="http://127.0.0.1:1/api/v1/heartbeat/CANARY_SENTINEL"
+CANARY_URL="https://127.0.0.1:1/api/v1/heartbeat/CANARY_SENTINEL"
 DED_PRESENT_LOG="$PING_TMP/logger-dedicated-present.txt"
 DED_PRESENT_OUT=$(run_ping "$DEDICATED_PING" "$CANARY_URL" "$DED_PRESENT_LOG") \
   && DED_PRESENT_RC=0 || DED_PRESENT_RC=$?
@@ -605,7 +609,241 @@ assert "AC3 non-vacuity: the harness observes a leaked canary when one IS emitte
 # Cheap secondary (AC3): no logger/echo/printf line may reference the URL value. Asserted on
 # the RENDERED scripts (not the heredoc body) so it also covers the sed replacement's text.
 assert "AC3 secondary: no logger/echo/printf line references the URL value (both renders)" \
-  "! grep -qE '^[[:space:]]*(logger|echo|printf)[[:space:]].*INNGEST_HEARTBEAT_URL' '$DEDICATED_PING' '$WEB_PING'"
+  "[[ \$(cat '$DEDICATED_PING' '$WEB_PING' | grep -E '^[[:space:]]*(logger|echo|printf)[[:space:]].*INNGEST_HEARTBEAT_URL' | grep -vcE '\\| exec /usr/bin/curl ') -eq 0 ]]"
+
+# --- #9757: the heartbeat URL is a PATH SECRET and must never be a curl ARGUMENT --------------
+# `curl "$INNGEST_HEARTBEAT_URL"` put the bearer capability in /proc/<pid>/cmdline, readable by every
+# local user for the life of the child (ADR-280). The beat now reaches curl on its stdin config
+# (`--config -`, fed by a pipe from the printf builtin: this body is POSIX sh, so no process substitution and no [[ ]]), after a
+# shape guard: https:// then a non-empty rest of [A-Za-z0-9._~:/?&=%+-] only, no trimming. A value that
+# fails it makes ZERO requests, exits 2 (as curl's own blank-URL exit did, so the unit stays loud) and
+# logs ONE value-free SOLEUR_CREDENTIAL_REFUSED line through the hourly limiter (this unit fires every
+# 60 s, so an unlimited marker would be ~1,440 rows/day; the EXIT stays nonzero every tick, only the
+# log line is limited). The script execs the ABSOLUTE /usr/bin/curl, so the recording stub is wired in
+# by rewriting that path in a COPY of the rendered script (the health probe, which has no --config -,
+# is passed through to the real curl by the stub).
+echo ""
+echo "--- #9757: heartbeat URL on curl's stdin config, never argv (shape guard, hourly marker, POSIX sh) ---"
+HB_CALLS="$PING_TMP/hb-calls.txt"
+HB_STUB="$PING_TMP/hb-stub-curl"
+cat > "$HB_STUB" <<'HBSTUBEOF'
+#!/bin/bash
+case " $* " in
+  *" --config - "*)
+    printf 'argv %s\n' "$*" >> "$HB_CALLS"
+    line=""
+    while IFS= read -r l || [ -n "$l" ]; do case "$l" in 'url = "'*) line="$l"; break ;; esac; done
+    if [ -z "$line" ]; then printf 'cfg-MISSING\n' >> "$HB_CALLS"; exit 97; fi
+    printf 'cfg %s\n' "$line" >> "$HB_CALLS"
+    exit "${HB_STUB_RC:-0}" ;;
+  *) exec /usr/bin/curl "$@" ;;
+esac
+HBSTUBEOF
+chmod +x "$HB_STUB"
+HB_WEB="$PING_TMP/ping-web-stub.sh"; HB_DED="$PING_TMP/ping-ded-stub.sh"
+sed "s|/usr/bin/curl|$HB_STUB|g" "$WEB_PING" > "$HB_WEB"
+sed "s|/usr/bin/curl|$HB_STUB|g" "$DEDICATED_PING" > "$HB_DED"
+assert "the stub-wired copies differ from the rendered scripts only in the curl path (the exec line and the health probe)" \
+  "[[ \$(diff '$WEB_PING' '$HB_WEB' | grep -c '^>') -eq 2 && \$(diff '$DEDICATED_PING' '$HB_DED' | grep -c '^>') -eq 2 ]]"
+
+hb_run() {  # <script> <url> <logger sink> [VAR=val ...]   (sets HB_RC, HB_OUT; recorded calls in $HB_CALLS)
+  local script="$1" url="$2" sink="$3"; shift 3
+  : > "$HB_CALLS"; : > "$sink"
+  HB_OUT="$(env PATH="$PING_TMP/bin:$PATH" LOGGER_OUT="$sink" HB_CALLS="$HB_CALLS" \
+    INNGEST_HEARTBEAT_URL="$url" INNGEST_HEARTBEAT_HEALTH_URL="$HEALTH_OK_URL" \
+    INNGEST_HEARTBEAT_REFUSAL_STAMP="$PING_TMP/hb-refusal-$RANDOM.stamp" "$@" sh "$script" 2>&1)" && HB_RC=0 || HB_RC=$?
+  HB_N_ARGV="$(grep -c '^argv ' "$HB_CALLS" || true)"
+  HB_N_CFG="$(grep -c '^cfg url = "' "$HB_CALLS" || true)"
+  HB_N_MISSING="$(grep -c '^cfg-MISSING' "$HB_CALLS" || true)"
+  HB_N_MARK="$(grep -c 'SOLEUR_CREDENTIAL_REFUSED' "$sink" || true)"
+}
+HB_GOOD="https://uptime.betterstack.test/api/v1/heartbeat/CANARY_SENTINEL"
+HB_LOG="$PING_TMP/logger-hb.txt"
+
+for _render in web ded; do
+  if [[ "$_render" == web ]]; then _scr="$HB_WEB"; else _scr="$HB_DED"; fi
+  hb_run "$_scr" "$HB_GOOD" "$HB_LOG"
+  assert "#9757 $_render render, healthy URL: exactly one heartbeat curl, exit 0, no marker" \
+    "[[ '$HB_N_ARGV' -eq 1 && '$HB_RC' -eq 0 && '$HB_N_MARK' -eq 0 && '$HB_N_MISSING' -eq 0 ]]"
+  assert "#9757 $_render render: curl argv is exactly --disable --noproxy * -gfsS --max-time 10 --config - (no URL word)" \
+    "grep -qxF 'argv --disable --noproxy * -gfsS --max-time 10 --config -' '$HB_CALLS'"
+  assert "#9757 $_render render: the URL is the recorded stdin url line, and only there" \
+    "grep -qxF 'cfg url = \"$HB_GOOD\"' '$HB_CALLS' && ! grep -q '^argv .*CANARY_SENTINEL' '$HB_CALLS'"
+  assert "#9757 $_render render: the URL is absent from stdout, stderr and logger output" \
+    "[[ \$(printf '%s' \"\$HB_OUT\" | grep -c CANARY_SENTINEL) -eq 0 && \$(grep -c CANARY_SENTINEL '$HB_LOG') -eq 0 ]]"
+done
+hb_run "$HB_WEB" "$HB_GOOD" "$HB_LOG" HB_STUB_RC=7
+assert "#9757 a failing beat keeps its exit code (exec curl: rc=7 propagates to the unit)" "[[ '$HB_RC' -eq 7 && '$HB_N_ARGV' -eq 1 ]]"
+# must-PASS: a different well-formed token carrying every allowed punctuation class
+hb_run "$HB_WEB" 'https://uptime.betterstack.test/api/v1/heartbeat/A.b_c~d:9?x=1&y=%2B+z-Q' "$HB_LOG"
+assert "#9757 a well-formed URL with a different token (every allowed punctuation class) beats once, on stdin only" \
+  "[[ '$HB_N_ARGV' -eq 1 && '$HB_N_MARK' -eq 0 && '$HB_RC' -eq 0 ]] && grep -qxF 'cfg url = \"https://uptime.betterstack.test/api/v1/heartbeat/A.b_c~d:9?x=1&y=%2B+z-Q\"' '$HB_CALLS'"
+
+# HOSTILE and malformed values on the LIVE (web) render: zero requests, exit 2, exactly one value-free marker.
+# A POSITIVE-pattern guard (`https://[...]*`, which only constrains the first character) passes every row that
+# carries its bad byte mid-value, and a guard that checked only the class passes the non-https rows: both
+# halves of the guard are discriminated here.
+hb_refuse() {  # <label> <value> <reason>
+  hb_run "$HB_WEB" "$2" "$HB_LOG"
+  assert "#9757 guard refuses $1: zero curl calls, exit 2, exactly one marker (reason=$3)" \
+    "[[ '$HB_N_ARGV' -eq 0 && '$HB_RC' -eq 2 && '$HB_N_MARK' -eq 1 ]] && grep -qF ' SOLEUR_CREDENTIAL_REFUSED script=inngest-heartbeat reason=$3 var=INNGEST_HEARTBEAT_URL' '$HB_LOG'"
+  assert "#9757 guard refuses $1: the value is not echoed to the output or the log" \
+    "[[ \$(printf '%s' \"\$HB_OUT\" | grep -c 'betterstack') -eq 0 && \$(grep -c 'betterstack' '$HB_LOG') -eq 0 ]]"
+}
+hb_refuse 'an embedded double quote' "${HB_GOOD}\"" token_shape
+hb_refuse 'a quote then an injected directive (newline)' "${HB_GOOD}
+proxy = \"http://203.0.113.1:3128\"" control_char
+hb_refuse 'a mid-value newline' "${HB_GOOD}
+x" control_char
+hb_refuse 'a trailing newline' "${HB_GOOD}
+" control_char
+hb_refuse 'a backslash' "${HB_GOOD}\\x" token_shape
+hb_refuse 'an embedded space' "${HB_GOOD} x" token_shape
+hb_refuse 'a tab' "${HB_GOOD}	x" control_char
+hb_refuse 'a hash' "${HB_GOOD}#x" token_shape
+hb_refuse 'userinfo (@)' "https://u@uptime.betterstack.test/x" token_shape
+hb_refuse 'a scheme other than https' "http://uptime.betterstack.test/x" token_shape
+hb_refuse 'no scheme' "uptime.betterstack.test/x" token_shape
+hb_refuse 'a bare scheme (empty rest)' "https://" token_shape
+# An ABSENT URL on the live pusher stays loud (it was curl's own rc=2): non-zero, zero requests, one marker.
+hb_run "$HB_WEB" "" "$HB_LOG"
+assert "#9757 web render + URL absent: still loud (exit 2), zero curl calls, one marker (an empty value is not of the shape)" \
+  "[[ '$HB_RC' -eq 2 && '$HB_N_ARGV' -eq 0 && '$HB_N_MARK' -eq 1 ]]"
+# ...and the dedicated render's dark arm still exits 0 BEFORE the guard (url_present=no, never a credential refusal)
+hb_run "$HB_DED" "" "$HB_LOG"
+assert "#9757 dedicated render + URL absent: the dark arm still wins (exit 0, url_present=no, no refusal marker)" \
+  "[[ '$HB_RC' -eq 0 && '$HB_N_ARGV' -eq 0 && '$HB_N_MARK' -eq 0 ]] && grep -q 'url_present=no' '$HB_LOG'"
+# ORDER: the listener gate precedes the guard, so a non-serving host with a malformed URL stays SUPPRESSED (exit 0)
+hb_run "$HB_WEB" "${HB_GOOD}\"" "$HB_LOG" INNGEST_HEARTBEAT_HEALTH_URL="$HEALTH_404_URL"
+assert "#9757 ordering: the listener gate precedes the guard (a non-serving host stays suppressed, exit 0, no refusal marker)" \
+  "[[ '$HB_RC' -eq 0 && '$HB_N_ARGV' -eq 0 && '$HB_N_MARK' -eq 0 ]] && grep -q 'listener=no' '$HB_LOG'"
+
+# The hourly limiter on the refusal marker: the DECISION (exit 2, zero requests) is never limited, only the row.
+HB_RL_STAMP="$PING_TMP/hb-rl/refusal.stamp"; mkdir -p "$(dirname "$HB_RL_STAMP")"; rm -f "$HB_RL_STAMP"
+HB_RL_LOG="$PING_TMP/logger-hb-rl.txt"; : > "$HB_RL_LOG"; : > "$HB_CALLS"
+hb_rl_fire() {
+  PATH="$PING_TMP/bin:$PATH" LOGGER_OUT="$HB_RL_LOG" HB_CALLS="$HB_CALLS" INNGEST_HEARTBEAT_URL="${HB_GOOD}\"" \
+    INNGEST_HEARTBEAT_HEALTH_URL="$HEALTH_OK_URL" INNGEST_HEARTBEAT_REFUSAL_STAMP="$HB_RL_STAMP" \
+    sh "$HB_WEB" >/dev/null 2>&1
+}
+HB_RL_RCS=""
+for _ in 1 2 3 4; do hb_rl_fire && HB_RL_RC=0 || HB_RL_RC=$?; HB_RL_RCS+="$HB_RL_RC"; done
+assert "#9757 four refused fires inside one window log exactly ONE marker (was one per 60 s tick), every tick exits 2, none sends a request" \
+  "[[ \$(grep -c SOLEUR_CREDENTIAL_REFUSED '$HB_RL_LOG') -eq 1 && '$HB_RL_RCS' == 2222 && ! -s '$HB_CALLS' ]]"
+printf '%s' "$(( $(date +%s) - 7200 ))" > "$HB_RL_STAMP"
+hb_rl_fire || true
+assert "#9757 an aged stamp RE-EMITS the marker (rate-limited, not eliminated)" \
+  "[[ \$(grep -c SOLEUR_CREDENTIAL_REFUSED '$HB_RL_LOG') -eq 2 ]]"
+assert "#9757 the refusal limiter has its OWN stamp (not the dark arm's or the listener gate's)" \
+  "grep -qE 'INNGEST_HEARTBEAT_DARK_STAMP=\"\\\$\\{INNGEST_HEARTBEAT_REFUSAL_STAMP:-/run/inngest-heartbeat/refusal\\.stamp\\}\" dark_arm_emit_due' '$PING_BODY'"
+
+# STATIC: the body is POSIX sh. No process substitution and no [[ ]] in its CODE lines (comments excluded);
+# the heredoc config is the only stdin feed; the guard is the NEGATED class (never a positive pattern).
+PING_CODE="$PING_TMP/ping-body-code.sh"; grep -vE '^[[:space:]]*#' "$PING_BODY" > "$PING_CODE"
+assert "#9757 the POSIX heartbeat body has no process substitution and no [[ ]] in its code lines" \
+  "! grep -qE '<\\(|\\[\\[[[:space:]]' '$PING_CODE'"
+# The config is fed by ONE pipeline (`printf` builtin | exec curl): never a heredoc (lint Rule E refuses a heredoc feeding the
+# config) and never a process substitution (not POSIX). Exactly one such transport line, with the exact flags, and the URL variable
+# appears on no OTHER printf/echo/logger line.
+assert "#9757 the heartbeat body has exactly one transport line: printf url-config piped to exec curl with the exact flags, and no heredoc" \
+  "[[ \$(grep -cxF 'printf '\\''url = \"%s\"\\n'\\'' \"\$INNGEST_HEARTBEAT_URL\" | exec /usr/bin/curl --disable --noproxy '\\''*'\\'' -gfsS --max-time 10 --config - >/dev/null' '$PING_BODY') -eq 1 && \$(grep -cE '<<' '$PING_CODE') -eq 0 ]]"
+assert "#9757 no logger/echo/printf line names the URL variable except the one transport line that pipes it into curl" \
+  "[[ \$(grep -E '^[[:space:]]*(logger|echo|printf)[[:space:]].*INNGEST_HEARTBEAT_URL' '$PING_BODY' | grep -vcE '\\| exec /usr/bin/curl ') -eq 0 ]]"
+assert "#9757 the shape guard is the NEGATED class case (a positive pattern would only constrain the first character)" \
+  "[[ \$(grep -cF '*[!A-Za-z0-9._~:/?\\&=%+-]*)' '$PING_CODE') -eq 1 ]]"
+assert "#9757 the HBCFG heredoc did not disturb the LOG_TAG derivation or the closing delimiter of the outer heredoc" \
+  "[[ \$(grep -cE '^LOG_TAG=\"inngest-heartbeat\"\$' '$PING_BODY') -eq 1 && \$(grep -cxF 'HEARTBEATSCRIPTEOF' '$BOOTSTRAP_SH') -eq 1 ]]"
+
+# --- the DASH row ----------------------------------------------------------------------------
+# A local /bin/sh may be bash, so a green local run proves nothing about the shell the unit actually runs
+# (Ubuntu /bin/sh is dash). The rendered body is therefore syntax-checked AND run for real inside the
+# pinned ubuntu image (named by digest, read from the one copy the rehearsal suite owns), whose /bin/sh is
+# dash; the driver asserts that itself. Fail closed under CI (a missing docker or image is a FAILURE: the
+# infra-validation legs provide docker); locally a missing docker SKIPS LOUDLY and the declared rows still
+# count toward the floor (never a quiet green).
+DASH_ROWS=8
+DASH_SKIPPED=0
+_in_ci_dash() { [[ -n "${GITHUB_ACTIONS:-}" || "${CI:-}" == "1" || "${CI:-}" == "true" ]]; }
+DASH_UBUNTU="$(sed -nE "s/^UBUNTU_BASE='(ubuntu:24\\.04@sha256:[0-9a-f]{64})'\$/\\1/p" "$SCRIPT_DIR/git-data-runcmd-rehearsal.test.sh" 2>/dev/null | sed -n '1p')"
+assert "#9757 dash row: the ubuntu image is named by tag@sha256:<64-hex> (read from git-data-runcmd-rehearsal.test.sh)" \
+  "[[ '$DASH_UBUNTU' =~ ^ubuntu:24\\.04@sha256:[0-9a-f]{64}\$ ]]"
+DASH_OK=1; DASH_WHY=""
+if ! command -v docker >/dev/null 2>&1; then DASH_OK=0; DASH_WHY="docker is absent"
+elif ! docker info >/dev/null 2>&1; then DASH_OK=0; DASH_WHY="the docker daemon is unreachable"
+elif ! { docker image inspect "$DASH_UBUNTU" >/dev/null 2>&1 || docker pull -q "$DASH_UBUNTU" >/dev/null 2>&1; }; then DASH_OK=0; DASH_WHY="the pinned ubuntu image is not local and could not be pulled"; fi
+if [[ "$DASH_OK" -eq 0 ]]; then
+  if _in_ci_dash; then
+    assert "#9757 dash row: $DASH_WHY — and this is CI, so it is a FAILURE (the runner must provide docker and the pinned image)" "false"
+  else
+    DASH_SKIPPED=$DASH_ROWS
+    echo "  SKIP: $DASH_ROWS dash row(s) NOT RUN locally: $DASH_WHY (CI fails closed on this)"
+  fi
+else
+  DASH_DIR="$PING_TMP/dash"; DASH_OUT="$DASH_DIR/out"; mkdir -p "$DASH_DIR/bin" "$DASH_OUT"
+  cp "$WEB_PING" "$DASH_DIR/ping.sh"
+  cat > "$DASH_DIR/curl" <<'DSTUBEOF'
+#!/bin/sh
+# The stub /usr/bin/curl inside the container (POSIX sh). A health probe (has -w) answers 200; a --config - call
+# records its argv and its stdin url line; anything else fails.
+case " $* " in
+  *" -w "*) printf 200; exit 0 ;;
+  *" --config - "*)
+    printf 'argv %s\n' "$*" >> "$CALLS"
+    line=""
+    while IFS= read -r l || [ -n "$l" ]; do case "$l" in 'url = "'*) line="$l"; break ;; esac; done
+    if [ -z "$line" ]; then printf 'cfg-MISSING\n' >> "$CALLS"; exit 97; fi
+    printf 'cfg %s\n' "$line" >> "$CALLS"
+    exit 0 ;;
+esac
+exit 64
+DSTUBEOF
+  cat > "$DASH_DIR/bin/logger" <<'DLOGEOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$LOGGER_OUT"
+DLOGEOF
+  cat > "$DASH_DIR/drive.sh" <<'DDRIVEEOF'
+#!/bin/bash
+# Runs INSIDE the pinned ubuntu image. Every case is executed with `sh` (dash there), never bash.
+cd /out || exit 3
+readlink -f /bin/sh > sh-impl
+sh -n /work/ping.sh > syntax.out 2>&1; echo $? > syntax.rc
+run() {  # <case> <url>
+  : > "/out/$1.calls"; : > "/out/$1.log"
+  CALLS="/out/$1.calls" LOGGER_OUT="/out/$1.log" PATH="/work/bin:$PATH" INNGEST_HEARTBEAT_URL="$2" \
+    INNGEST_HEARTBEAT_REFUSAL_STAMP="/out/$1.stamp" sh /work/ping.sh > "/out/$1.out" 2>&1
+  echo $? > "/out/$1.rc"
+}
+run good 'https://uptime.betterstack.test/api/v1/heartbeat/DASH_SENTINEL'
+run other 'https://uptime.betterstack.test/api/v1/heartbeat/A.b_c~d:9?x=1&y=%2B+z-Q'
+run quote 'https://uptime.betterstack.test/x"y'
+run newline 'https://uptime.betterstack.test/x
+proxy = "http://203.0.113.1:3128"'
+run http 'http://uptime.betterstack.test/x'
+run empty ''
+echo done > /out/DONE
+DDRIVEEOF
+  chmod +x "$DASH_DIR/curl" "$DASH_DIR/bin/logger" "$DASH_DIR/drive.sh"
+  timeout 240 docker run --rm -v "$DASH_DIR/ping.sh:/work/ping.sh:ro" -v "$DASH_DIR/bin:/work/bin:ro" \
+    -v "$DASH_DIR/curl:/usr/bin/curl:ro" -v "$DASH_DIR/drive.sh:/work/drive.sh:ro" -v "$DASH_OUT:/out" \
+    "$DASH_UBUNTU" bash /work/drive.sh > "$DASH_DIR/stdout" 2>&1 || true
+  dr() { cat "$DASH_OUT/$1" 2>/dev/null || echo MISSING; }
+  assert "#9757 dash row: the driver ran to its last case inside the container (else every row below is vacuous)" \
+    "[[ -e '$DASH_OUT/DONE' ]]"
+  assert "#9757 dash row: /bin/sh in the pinned image is dash, and the rendered body passes sh -n under it" \
+    "[[ \"\$(dr sh-impl)\" == */dash && \"\$(dr syntax.rc)\" == 0 ]]"
+  assert "#9757 dash row: a well-formed URL beats once under dash, exit 0, the URL only in the stdin url line" \
+    "[[ \"\$(dr good.rc)\" == 0 && \$(grep -c '^argv ' '$DASH_OUT/good.calls') -eq 1 ]] && grep -qxF 'argv --disable --noproxy * -gfsS --max-time 10 --config -' '$DASH_OUT/good.calls' && grep -qxF 'cfg url = \"https://uptime.betterstack.test/api/v1/heartbeat/DASH_SENTINEL\"' '$DASH_OUT/good.calls' && ! grep -q DASH_SENTINEL '$DASH_OUT/good.out' '$DASH_OUT/good.log'"
+  assert "#9757 dash row: a different well-formed token (every allowed punctuation class) beats under dash (the negated class passes it)" \
+    "[[ \"\$(dr other.rc)\" == 0 && \$(grep -c '^cfg url = ' '$DASH_OUT/other.calls') -eq 1 ]]"
+  assert "#9757 dash row: a quote is refused under dash (zero requests, exit 2, one marker)" \
+    "[[ \"\$(dr quote.rc)\" == 2 && ! -s '$DASH_OUT/quote.calls' && \$(grep -c SOLEUR_CREDENTIAL_REFUSED '$DASH_OUT/quote.log') -eq 1 ]]"
+  assert "#9757 dash row: a newline-injected directive is refused under dash (zero requests, reason=control_char)" \
+    "[[ \"\$(dr newline.rc)\" == 2 && ! -s '$DASH_OUT/newline.calls' ]] && grep -qF ' SOLEUR_CREDENTIAL_REFUSED script=inngest-heartbeat reason=control_char var=INNGEST_HEARTBEAT_URL' '$DASH_OUT/newline.log'"
+  assert "#9757 dash row: a non-https scheme is refused under dash (zero requests, exit 2)" \
+    "[[ \"\$(dr http.rc)\" == 2 && ! -s '$DASH_OUT/http.calls' && \$(grep -c SOLEUR_CREDENTIAL_REFUSED '$DASH_OUT/http.log') -eq 1 ]]"
+  assert "#9757 dash row: an empty value is refused under dash (exit 2, zero requests, one marker)" \
+    "[[ \"\$(dr empty.rc)\" == 2 && ! -s '$DASH_OUT/empty.calls' && \$(grep -c SOLEUR_CREDENTIAL_REFUSED '$DASH_OUT/empty.log') -eq 1 ]]"
+fi
 
 # --- #7228 AC4: the LISTENER GATE ------------------------------------------------------------
 # THE DEFECT. This pusher is `curl "$INNGEST_HEARTBEAT_URL"` fired by a systemd timer. It proves
@@ -2391,11 +2629,13 @@ echo "--- #9175: Doppler --config census on the inngest dedicated-host boot path
 # A site carrying ANY other form — including a reverted literal `--config prd` — is an
 # unclassified site: RED, and the site must be enumerated here (the count is exact, so a NEW
 # site cannot slip in unlisted either).
+# The heartbeat's curl `--config - >/dev/null` (#9757) is curl's stdin config, not a Doppler config name: excluded by its exact shape.
 DOPPLER_CFG_SITES="$(for _f in "$CLOUD_INIT_INNGEST" "$BOOTSTRAP_SH" \
     "$SCRIPT_DIR/inngest-cutover-flip.sh" "$SCRIPT_DIR/inngest-luks-cutover.sh" \
     "$SCRIPT_DIR/inngest-redis.service" "$CUTOVER_FLIP_SERVICE" \
     "$SCRIPT_DIR/inngest-luks-cutover.service"; do
-    grep -nE -- '--config [^ ]+' "$_f" | grep -vE '^[0-9]+:[[:space:]]*#'
+    grep -nE -- '--config [^ ]+' "$_f" | grep -vE '^[0-9]+:[[:space:]]*#' \
+      | grep -vE -- '/usr/bin/curl .* --config - >/dev/null$'
   done)"
 DCFG_N="$(printf '%s\n' "$DOPPLER_CFG_SITES" | grep -c . || true)"
 DCFG_BAD="$(printf '%s\n' "$DOPPLER_CFG_SITES" | grep -vE -- '--config (\$\{inngest_doppler_config\}|@@DOPPLER_CONFIG@@|"?\$?\{?DOPPLER_CONFIG[^ ]*"?)' || true)"
@@ -2693,8 +2933,10 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # check) reported 303/303, exit 0. Keyed on PASS rather than TOTAL: TOTAL counts failures, so a
 # TOTAL floor cannot back up the verdict -- dropping `if [[ "$FAIL" -gt 0 ]]` left a 303/305 run
 # reporting exit 0. 7761's floor already had this shape.
-INNGEST_MIN_ASSERTIONS=451
-if [[ "$PASS" -lt "$INNGEST_MIN_ASSERTIONS" ]]; then
+# #9757: 451 -> 506 (the heartbeat stdin-config, shape-guard, hourly-marker and dash rows; the dash rows count toward the
+# floor when docker is absent locally, via DASH_SKIPPED, and are a FAILURE under CI).
+INNGEST_MIN_ASSERTIONS=506
+if [[ "$((PASS + DASH_SKIPPED))" -lt "$INNGEST_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s assertions ran, expected >= %s — a block was skipped or emptied.\n' \
     "$PASS" "$INNGEST_MIN_ASSERTIONS" >&2
   exit 1
