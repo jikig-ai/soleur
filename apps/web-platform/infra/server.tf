@@ -1774,10 +1774,10 @@ resource "terraform_data" "infra_config_handler_bootstrap" {
 
   # #4827 — the sudoers grant (with the new INFRA_CONFIG_INSTALL alias). Staged to
   # a temp path then visudo-validated + installed below; writing it directly would
-  # risk a half-written file in /etc/sudoers.d. The handler ALSO carries this file
-  # in its FILE_MAP, but the webhook self-heal of the sudoers is circular on the
-  # first apply (escalating its write needs the alias this file adds), so root SSH
-  # bootstraps it.
+  # risk a half-written file in /etc/sudoers.d. This file is deliberately NOT in
+  # the handler's FILE_MAP (#4827: a deploy-writable path to a sudoers file is an
+  # unbounded privilege escalation — visudo validates syntax, not policy), so
+  # root SSH is its only running-host channel.
   provisioner "file" {
     source      = "${path.module}/deploy-inngest-bootstrap.sudoers"
     destination = "/tmp/deploy-inngest-bootstrap.sudoers.staged"

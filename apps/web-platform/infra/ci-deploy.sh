@@ -1717,9 +1717,9 @@ _canary_diag_emit() {
 # denial that happened seconds ago. No /var/log, no follow flag: every read is `timeout -k 1 3`; the only
 # sudo use is the pinned KDENY_KERNEL_STREAM argv above (`timeout` stays outside sudo).
 # SOLEUR-DEBT: diagnostic row added for the #9860 sandbox failure (cause named H6; the shim-side fix is
-# #10032). The least-privilege kernel-stream read grant (#10045) has LANDED, so the disposition fork
-# resolves to keep: the row is functional evidence while #9860 soaks; demote or remove once #9860's
-# closure makes the row moot.
+# #10032). The least-privilege kernel-stream read grant (#10045) ships with this change and lands
+# on-host via the delivery bridges' next apply, so the disposition fork resolves to keep: the row is
+# functional evidence while #9860 soaks; demote or remove once #9860's closure makes the row moot.
 _canary_kdeny_read() {
   local rung raw rc state src=none j=none d=skip total=0 hits=0 mproc=0 fields="" counts first line t h m hint
   for rung in journal dmesg; do
@@ -1727,13 +1727,22 @@ _canary_kdeny_read() {
     if [[ "$rung" == journal ]]; then
       raw="$(timeout -k 1 3 sudo -n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat 2>&1 | tac | head -c 65536; exit "${PIPESTATUS[0]}")" || rc=$?
       # Sudo's OWN denial signature — the #10045 grant has not landed on this host: non-zero
-      # rc, at least one `sudo:`-prefixed line, and NO non-blank line outside that class. Only
-      # that exact shape falls back to the pre-grant unprivileged read; a run sudo ACCEPTED
-      # classifies through the machine below (journalctl-under-root failure is a real error).
-      if (( rc != 0 )) && grep -q '^sudo:' <<<"$raw" && ! grep -qvE '^(sudo:|[[:space:]]*$)' <<<"$raw"; then
+      # rc, at least one denial-class line, and NO non-blank line outside that class. The
+      # class is BOTH fleet shapes: sudo-rs' `sudo:`-prefixed denial (the recorded
+      # `sudo: deploy : command not allowed`) and GNU sudo's `Sorry, user deploy is not
+      # allowed to execute …` (unprefixed — the shape infra-config-apply.sh:742's matcher
+      # already enumerates). Only that exact shape falls back to the pre-grant unprivileged
+      # read; a run sudo ACCEPTED classifies through the machine below (journalctl-under-root
+      # failure is a real error, never a grant-absence).
+      if (( rc != 0 )) && grep -qE '^(sudo:|Sorry,)' <<<"$raw" && ! grep -qvE '^(sudo:|Sorry,|[[:space:]]*$)' <<<"$raw"; then
         rc=0
         raw="$(timeout -k 1 3 journalctl -k -n 400 --since=-5min --no-pager -o cat 2>&1 | tac | head -c 65536; exit "${PIPESTATUS[0]}")" || rc=$?
       fi
+      # sudo's own diagnostics (`sudo: unable to resolve host`, `sudo:`-prefixed warnings on
+      # an ACCEPTED run) merged into `raw` via 2>&1: strip them before classification so a
+      # warning line cannot count as a journal line (`empty` misread as `ok`) or satisfy the
+      # denial shape on a real tool failure. A kernel line cannot carry the `sudo:` prefix.
+      raw="$(printf '%s\n' "$raw" | grep -v '^sudo:' || true)"
     else
       raw="$(timeout -k 1 3 dmesg 2>&1 | tail -n 400 | tac | head -c 65536; exit "${PIPESTATUS[0]}")" || rc=$?
     fi

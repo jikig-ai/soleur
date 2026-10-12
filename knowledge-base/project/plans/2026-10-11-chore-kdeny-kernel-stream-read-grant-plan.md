@@ -34,7 +34,7 @@ brand_survival_threshold: none
 
 The canary DIAG `kdeny` row (PR #9938, tracking #9860) reads `src=none j=noaccess d=noaccess` on
 every emission because the unprivileged `deploy` user cannot read the host kernel stream under
-`kernel.dmesg_restrict=1` (set deliberately at `cloud-init-git-data.yml` — defense in depth, not a
+`kernel.dmesg_restrict=1` (the Ubuntu 24.04 default on the web hosts — defense in depth, not a
 defect). Issue #10045 was carved out of #10032 (the sandbox-shim procfs fix, squash-merged
 2026-10-11) as "a separate host-IaC plan with its own apply+gate", and names two candidate shapes:
 
@@ -71,7 +71,7 @@ already own this file; no new provisioner, no ad-hoc SSH, no operator step.
   open follow-up.
 - ADR-corpus check for the proposed mechanism (`sudoers`/`journalctl`/`dmesg`/`systemd-journal`
   greps over `knowledge-base/engineering/architecture/decisions/`): no ADR rejects a fixed-argv
-  sudoers grant; the idiom is established by six existing `Cmnd_Alias` grants in
+  sudoers grant; the idiom is established by eleven existing `Cmnd_Alias` grants in
   `deploy-inngest-bootstrap.sudoers` (`INNGEST_BOOTSTRAP`, `WEBHOOK_SELF_RESTART`,
   `INNGEST_RESTART`/`STOP`/`START`/`QUIESCE`/`ENABLE`, `INFRA_CONFIG_INSTALL`,
   `GIT_LOCK_CHARDEVICE_SWEEP`, `DROPIN_TRY_RESTART`, `SYSTEMCTL_DAEMON_RELOAD`). The plan's chosen
@@ -123,7 +123,7 @@ Restated asks as properties:
 | `apps/web-platform/infra/git-lock-chardevice-sweep.test.sh` | argv-lockstep precedent (~L196-209): asserts sudoers alias argv == the argv ci-deploy.sh invokes |
 | `apps/web-platform/infra/infra-config-handler-bootstrap.test.sh` | asserts the web-1 bridge's verify greps (~L155-180) — extend for the new alias |
 | `apps/web-platform/infra/web-host-provisioner-parity.test.sh` | `FLEET_SSH_HOSTS = {web-1, web-2}`; classifies every SSH `terraform_data` — no new dialer, but the fan-out classification must be recorded |
-| `.github/workflows/apply-deploy-pipeline-fix.yml` | auto-applies on merge for the `paths:` set (includes `deploy-inngest-bootstrap.sudoers`, `ci-deploy.sh`, `server.tf`, `cloud-init.yml`); `-target` list covers both delivery bridges |
+| `.github/workflows/apply-deploy-pipeline-fix.yml` | auto-applies on merge for the `paths:` set (includes `deploy-inngest-bootstrap.sudoers`, `ci-deploy.sh`, `server.tf`; `cloud-init.yml` is birth-only by `ignore_changes=[user_data]` so it is deliberately absent); `-target` list covers both delivery bridges |
 | `knowledge-base/engineering/operations/runbooks/canary-probe-set.md` | §kdeny row semantics + "Reading `kdeny`" — needs updating for the privileged path |
 | `knowledge-base/engineering/architecture/decisions/ADR-075-agent-sandbox-tenant-read-isolation.md` | its "Deferred" paragraph names #10045 — amend to resolved |
 | `scripts/betterstack-query.sh` | Better Stack Logs SQL query entrypoint (env `BETTERSTACK_API_TOKEN` via `doppler run -p soleur -c prd_terraform`) — the kdeny-row query path for post-apply observation |
@@ -460,7 +460,7 @@ discoverability_test:
 **(a-variant, terraform_data channel):** no server `-replace` needed — the sudoers file already
 rides running-host delivery via the two SSH bridges, and this plan changes its *content*, not the
 host's image or cloud-init surface. Merge to `main` auto-fires `apply-deploy-pipeline-fix.yml`
-(the `paths:` filter already includes every touched file), which `-target`s
+(the `paths:` filter covers every delivery-bearing touched file), which `-target`s
 `deploy_pipeline_fix`, `infra_config_handler_bootstrap`, `deploy_pipeline_fix_web2` (+
 `docker_seccomp_config`, `apparmor_bwrap_profile`). Expected downtime: none — the change is a file
 install plus read-only probes; the webhook restart on the bridge is sub-second and existing.

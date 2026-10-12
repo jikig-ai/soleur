@@ -253,18 +253,20 @@ KDENY_ALIAS_CI=$(sed -nE 's/^Cmnd_Alias KDENY_KERNEL_STREAM[[:space:]]*=[[:space
 # Call-site extraction: everything after `sudo -n /usr/bin/journalctl ` up to a shell metachar,
 # with the ` 2>&1` capture tail cut — the runuser probes are extracted the same way, from each
 # `runuser -u deploy -- sudo -n …` line (one per terraform_data bridge).
-KDENY_CALL_ARGV=$(grep -oE 'sudo -n /usr/bin/journalctl [^|")]*' "$CIDEPLOY" | sed -E 's/^sudo -n //; s/ *2>&1 *$//; s/ +$//' | sort -u || true)
-KDENY_PROBE_ARGV=$(grep -oE 'runuser -u deploy -- sudo -n /usr/bin/journalctl [^"]*' "$SERVER_TF" | sed -E 's/^.*sudo -n //; s/ *>.*//; s/ +$//' | sort -u || true)
+KDENY_CALL_ARGV=$(grep -vE '^[[:space:]]*#' "$CIDEPLOY" | grep -oE 'sudo -n /usr/bin/journalctl [^|")]*' | sed -E 's/^sudo -n //; s/ *2>&1 *$//; s/ +$//' | sort -u || true)
+KDENY_PROBE_ARGV=$(grep -vE '^[[:space:]]*#' "$SERVER_TF" | grep -oE 'runuser -u deploy -- sudo -n /usr/bin/journalctl [^"]*' | sed -E 's/^.*sudo -n //; s/ *>.*//; s/ +$//' | sort -u || true)
 assert "KDENY_KERNEL_STREAM alias defined in the sudoers source" \
   "grep -qE '^Cmnd_Alias KDENY_KERNEL_STREAM = ' '$SUDOERS_SRC'"
-assert "KDENY grant line activates the alias for deploy (source)" \
-  "grep -qF 'deploy ALL=(root) NOPASSWD: KDENY_KERNEL_STREAM' '$SUDOERS_SRC'"
+assert "KDENY grant line is the ANCHORED whole line for deploy (no appended commands hide in the substring)" \
+  "grep -qxF 'deploy ALL=(root) NOPASSWD: KDENY_KERNEL_STREAM' '$SUDOERS_SRC'"
+assert "exactly ONE non-comment line in the sudoers source names journalctl at all — a direct grant, a space-less alias, or an appended command cannot hide a wider argv" \
+  "(( \$(grep -vE '^[[:space:]]*#|^[[:space:]]*$' '$SUDOERS_SRC' | grep -cF journalctl) == 1 ))"
+assert "the sudoers source carries no include directive that could pull a grant from outside the file" \
+  "! grep -qE '^[@#]include' '$SUDOERS_SRC'"
 assert "the alias argv (first-= split) is identical across the sudoers source and the cloud-init inline copy, and is the pinned grant argv" \
   "[[ \"\$KDENY_ALIAS_SRC\" == \"\$KDENY_ARGV\" && \"\$KDENY_ALIAS_CI\" == \"\$KDENY_ARGV\" ]]"
-assert "the cloud-init inline copy activates the grant for deploy" \
-  "grep -qF 'deploy ALL=(root) NOPASSWD: KDENY_KERNEL_STREAM' <<<\"\$CLOUD_INIT_SUDOERS\""
-assert "exactly ONE Cmnd_Alias body in the sudoers source names journalctl (no second journalctl grant can hide a wider argv)" \
-  "(( \$(grep -cE '^Cmnd_Alias [A-Z_]+ = [^#]*journalctl' '$SUDOERS_SRC' || true) == 1 ))"
+assert "the cloud-init inline copy carries the ANCHORED grant line for deploy" \
+  "grep -qxF 'deploy ALL=(root) NOPASSWD: KDENY_KERNEL_STREAM' <<<\"\$CLOUD_INIT_SUDOERS\""
 assert "ci-deploy.sh attempts the privileged journal read exactly once, timeout-bounded outside sudo" \
   "(( \$(grep -cF 'timeout -k 1 3 sudo -n /usr/bin/journalctl' '$CIDEPLOY' || true) == 1 ))"
 assert "the ci-deploy.sh call-site argv equals the pinned grant argv (alias<->caller lockstep)" \
@@ -2247,9 +2249,9 @@ COND_ASSERTIONS=$(( COND_ASSERTIONS + TOTAL - _COND_BEFORE ))
 # #8036 1d: 144 -> 153, re-measured from a green run (Guard 1 grew 50 -> 59; the executed Guard 4
 # rows are terraform-gated and counted in COND_ASSERTIONS, like the rendered NIC-G1 rows).
 # #9082: 153 -> 163, re-measured from a green run (Guard A2 added 10 unconditional rows).
-# #10045: 163 -> 172 (the KDENY_KERNEL_STREAM argv-lockstep block added 9 unconditional rows in AC5).
+# #10045: 163 -> 173 (the KDENY_KERNEL_STREAM argv-lockstep block added 10 unconditional rows in AC5).
 UNCONDITIONAL_ASSERTIONS=$(( TOTAL - COND_ASSERTIONS ))
-BOOTSTRAP_MIN_ASSERTIONS=172
+BOOTSTRAP_MIN_ASSERTIONS=173
 if [[ "$UNCONDITIONAL_ASSERTIONS" -lt "$BOOTSTRAP_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s unconditional assertions ran (%s total, %s from tool-gated blocks), expected >= %s — a block was skipped or emptied.\n' \
     "$UNCONDITIONAL_ASSERTIONS" "$TOTAL" "$COND_ASSERTIONS" "$BOOTSTRAP_MIN_ASSERTIONS" >&2
