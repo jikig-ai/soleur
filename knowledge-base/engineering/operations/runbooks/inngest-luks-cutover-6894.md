@@ -239,26 +239,14 @@ drained tick double-fires the cron. That procedure's `routine_runs` check tells 
    cutover). #8296 is closed explicitly (`gh issue close 8296`) once PR-2 has merged and its
    post-merge steps are read back, never by a sweeper. The one open step is now #8285: destroy
    `hcloud_volume.inngest_redis` by 2026-10-22.
-   - #8285 is enrolled, as a post-merge step of #8296 PR-2, with the `follow-through` label and the
-     directive for `scripts/followthroughs/inngest-luks-property-8296.sh`. The probe is NOTIFY-ONLY:
-     it never exits 0 or 1, so the sweeper never closes that tracker. It comments on #8285 every
-     day. The heading reads "NOT YET" when the ledger claim and the device agree (the body says
-     "healthy: nothing to do"), and "ACTION REQUIRED" when they do not. **Do not close #8285 before
-     the backstop is destroyed**: on a closed issue the sweeper does nothing with 2, 3 or 5, so
-     closing it turns the probe off.
-   - **Retiring the probe** happens only AFTER the destroy apply has run and the Hetzner API shows
-     the volume gone, never in the PR that merely removes it from Terraform. That PR's body carries
-     no closing keyword next to #8285; #8285 is closed explicitly after the check. The probe
-     header's RETIREMENT line lists what to delete.
-   - A silent probe pipeline reads as healthy to the wrong-volume alert (`treat_as_zero`). The
-     property probe reports that as "CANNOT ESTABLISH". The dead-probe heartbeat resource landed in
-     cde96fb5e2 (#8516, closed); its feeder is wired and the heartbeat was armed on 2026-10-12 (#9703, open
-     for the cleanup stage), so a silent probe now pages. Do not retire the property probe before that
-     cleanup stage (§5b, "Records the convergence PR must carry").
+   - **Retired 2026-10-12 (#9703 Stage 3b); the backstop was destroyed 2026-10-09 (#8285 PR B, §5b) and `op=luks-rollback` no longer exists:** the #8285 follow-through probe for
+     the ledger-vs-device claim (the `inngest-luks-property-8296` script, its test and every registration) is
+     deleted, and its directive left #9703. A silent probe pipeline reads as healthy to the wrong-volume alert
+     (`treat_as_zero`); `betteruptime_heartbeat.inngest_server_probe` (armed 2026-10-12, #9703, arm record in
+     `inngest-server.md` section "Arming the probe heartbeat (#9703)") now carries that case, with the nightly
+     `heartbeat-live-reconcile` `fed-but-paused` check as the net. The retired probe never verified the LUKS
+     cipher either (the ledger's `live_verification` stays `unavailable:`), so no verification was lost.
    - **After a sanctioned `op=luks-rollback`**, see §5a.
-   - **Superseded 2026-10-09 (#8285 PR B), appended rather than edited:** the backstop was destroyed (§5b), so the
-     bullets above about #8285 describe the state before that. The probe stays until the dead-probe feeder (#9703)
-     is armed; its daily comment moves to #9703 when #8285 is closed, and `op=luks-rollback` no longer exists.
 
 ---
 
@@ -345,10 +333,6 @@ Expect `404`. The same token form reads `GET /v1/servers/169426216` (`.server.vo
   `soleur-inngest/prd` is the only opener the host reads; an independent copy of the passphrase exists in Terraform state
   (ADR-142 addendum 2026-10-08; protection is described in §5c and ADR-282 and takes
   effect on the merge of PR #9925 and its apply).
-- **Do not delete `scripts/followthroughs/inngest-luks-property-8296.sh` until #9703's cleanup stage.** The dead-probe
-  heartbeat feeder is wired and armed (2026-10-12); until that stage, this script is the reporter that says "CANNOT ESTABLISH" for a silent probe pipeline. Its deletion sites are the probe, its test, the
-  `run_suite` line in `scripts/test-all.sh`, two `*.tsv` rows, the `test-affected-kb-consumers.baseline.txt` rows and the
-  5a pointer; the list is posted on #9703 when #8285 is closed.
 - The dead on-host `rollback)` arm in `inngest-luks-cutover.sh`, its FSM comments and fixtures, and the dead
   plaintext-resolver arm in `cloud-init-inngest.yml` leave at the next planned Inngest host replace (#9786).
 

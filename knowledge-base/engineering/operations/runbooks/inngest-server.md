@@ -1687,8 +1687,8 @@ reconcile is only meaningful after that record PR. If the command rolled back, r
 `verdict=` line: `fresh_heartbeat_paused` after the unpause means that run predates it, `beat_failed` means
 the feeder cannot deliver, and any withheld verdict means the probe pipeline itself is dark (the finding this
 heartbeat exists for). To retry after a rollback, re-run the command (the heartbeat is paused again). The
-later stages (the cleanup gate and the order in which the superseded 8296 probe and its follow-through
-directive are removed) are tracked on #9703.
+cleanup stage (#9703 Stage 3b, 2026-10-12) retired the superseded 8296 follow-through probe and its
+directive; the armed heartbeat and the nightly `fed-but-paused` reconcile now cover a silent probe pipeline.
 
 ## Unpause heartbeat
 
