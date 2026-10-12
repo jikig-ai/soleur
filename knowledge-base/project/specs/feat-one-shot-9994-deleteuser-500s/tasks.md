@@ -83,7 +83,7 @@ The dsar-export leg surfaced two defects invisible at plan time:
   suites were dormant until #9855.
   Fix: migration `160_dsar_export_audit_pii_cascade_null_carveout.sql` +
   `.down.sql` — `CREATE OR REPLACE FUNCTION` adding the `user_id` NOT-NULL→NULL
-  carve-out mirroring `audit_byok_use_no_mutate`'s `founder_id` gate (mig 087);
+  carve-out mirroring `audit_byok_use_no_mutate`'s `founder_id` gate (mig 066, `app.worm_bypass` from mig 087);
   DELETE still universally blocked; `app.worm_bypass` exemption preserved;
   SECURITY DEFINER + `SET search_path = public, pg_temp`. Applied to dev (no
   ledger row — the runner owns ledger writes on merge; CREATE OR REPLACE is

@@ -50,8 +50,15 @@
 #
 # THE CONVENTION THIS ENFORCES: WORM tables that reference users must use
 # ON DELETE RESTRICT and be pre-anonymised in account-delete.ts before
-# auth-delete (the audit_byok_use / workspace_member_actions pattern), never
-# SET NULL / CASCADE.
+# auth-delete (the workspace_member_actions pattern), never SET NULL /
+# CASCADE — OR the second sanctioned pattern: ON DELETE SET NULL plus a
+# row-level `col NOT NULL -> NULL` carve-out inside the WORM trigger
+# (the audit_byok_use founder_id shape, mig 066; dsar_export_audit_pii
+# user_id, mig 160 — each also binds the transition to a deleted parent
+# via NOT EXISTS). This gate's `prosrc ILIKE '%RAISE EXCEPTION%'`
+# heuristic cannot distinguish the carved-out form, so it emits a
+# permanent ::warning:: for the carve-out tables — expected residue, not
+# evidence of a live contradiction.
 #
 # Run via:  doppler run -p soleur -c dev_scheduled -- bash apps/web-platform/scripts/preflight-worm-cascade-contradiction.sh
 # Requires: DATABASE_URL_POOLER (Doppler-injected). Runs after migrations are

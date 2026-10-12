@@ -187,10 +187,13 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         if (!user.id) continue;
         assertSynthetic(user.email);
         const { data: check } = await service.auth.admin.getUserById(user.id);
-        if (check?.user?.email && check.user.email !== user.email) {
+        // Fail closed: a missing user or a NULL/empty email field must not
+        // skip the binding (NULL email is legal on auth.users rows).
+        if (!check?.user || check.user.email !== user.email) {
           throw new Error(
-            `afterAll: auth.users.email for ${user.id} (${check.user.email}) ` +
-              `does not match synthetic email ${user.email}`,
+            `afterAll: auth.users lookup for ${user.id} ` +
+              `(${check?.user?.email ?? "not found"}) does not match ` +
+              `synthetic email ${user.email}`,
           );
         }
         // FK-reverse helper: trigger-created workspace_members rows are

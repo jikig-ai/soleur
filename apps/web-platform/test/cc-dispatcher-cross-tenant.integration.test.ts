@@ -107,6 +107,10 @@ function requireEnv(name: string): string {
 // is the **row shape** the service-role writes, not the helper's call graph.
 function assistantRowFor(args: {
   conversationId: string;
+  // Invariant: workspaceId MUST equal the parent conversation's
+  // workspace_id (production's buildRow derives it from the conversation
+  // row, not from the caller — passing a mismatched pair here would write
+  // a cross-workspace message the service-role accepts silently).
   workspaceId: string;
   content: string;
   usage?: { cost_usd: number } | null;
@@ -242,10 +246,13 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         if (!user.id) continue;
         assertSynthetic(user.email);
         const { data: check } = await service.auth.admin.getUserById(user.id);
-        if (check?.user?.email && check.user.email !== user.email) {
+        // Fail closed: a missing user or a NULL/empty email field must not
+        // skip the binding (NULL email is legal on auth.users rows).
+        if (!check?.user || check.user.email !== user.email) {
           throw new Error(
-            `afterAll: auth.users.email for ${user.id} (${check.user.email}) ` +
-              `does not match synthetic email ${user.email}`,
+            `afterAll: auth.users lookup for ${user.id} ` +
+              `(${check?.user?.email ?? "not found"}) does not match ` +
+              `synthetic email ${user.email}`,
           );
         }
         // FK-reverse helper: trigger-created workspace_members rows are

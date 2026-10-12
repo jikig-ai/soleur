@@ -261,5 +261,5 @@ describe.skipIf(!INTEGRATION_ENABLED)("beta-CRM behavioral (dev)", () => {
     const gone = await service.from("beta_contacts").select("id").eq("user_id", userA.id);
     expect(gone.data).toHaveLength(0);
     userA.id = ""; // prevent afterAll double-delete
-  });
+  }, 60_000); // tearDownTenantUser runs ~22 RPCs + deleteUser mid-test
 });

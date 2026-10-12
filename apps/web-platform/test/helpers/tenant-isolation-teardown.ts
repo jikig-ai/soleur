@@ -25,11 +25,24 @@ export const SYNTHETIC_PREFIXES = [
   "cc-cross-tenant-",
   "conv-rail-cross-tenant-",
   "dsar-cross-tenant-",
+  "workspace-fixture-",
 ] as const;
 
+const escapeRegExp = (s: string): string =>
+  s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 const SYNTHETIC_EMAIL_PATTERN = new RegExp(
-  `^(?:${SYNTHETIC_PREFIXES.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})[a-f0-9]{16}@soleur\\.test$`,
+  `^(?:${SYNTHETIC_PREFIXES.map(escapeRegExp).join("|")})[a-f0-9]{16}@soleur\\.test$`,
 );
+
+/**
+ * Reusable surface for consumers validating against the pinned shape —
+ * export the PREDICATE, never the pattern, so a caller cannot drop the
+ * `[a-f0-9]{16}` suffix pin by reconstructing the regex.
+ */
+export function isSyntheticTestEmail(email: string): boolean {
+  return SYNTHETIC_EMAIL_PATTERN.test(email);
+}
 
 /**
  * FK-reverse cleanup for synthetic integration-suite users.
@@ -52,7 +65,7 @@ const SYNTHETIC_EMAIL_PATTERN = new RegExp(
  * scrubs those natively, so their anonymise RPCs are non-fatal here.
  *
  * Pattern source: `tearDownSharedWorkspace` (apps/web-platform/test/
- * helpers/workspace-members-fixtures.ts:142). That helper targets a
+ * helpers/workspace-members-fixtures.ts). That helper targets a
  * multi-member fixture; this one covers the solo-user teardown for every
  * suite whose synthetic prefix is enumerated in `SYNTHETIC_PREFIXES`
  * (adopted beyond tenant-isolation for #9994).
@@ -93,6 +106,11 @@ type FatalityClass = "restrict" | "set-null" | "graceful";
 const ANONYMISE_SEQUENCE: ReadonlyArray<
   readonly [rpc: string, argName: string, klass: FatalityClass]
 > = [
+  // Entry stays "restrict" deliberately though the FK is ON DELETE SET
+  // NULL (mig 041): its fatality isn't for the FK — it's for the PII the
+  // cascade leaves intact (requester_ip/user_agent must be scrubbed
+  // before erasure; the SET NULL only clears user_id). Downgrading this
+  // label would silently retain PII post-delete.
   ["anonymise_dsar_export_audit_pii", "p_user_id", "restrict"],
   ["anonymise_action_sends", "p_user_id", "restrict"],
   ["anonymise_template_authorizations", "p_user_id", "restrict"],
@@ -137,7 +155,24 @@ export async function tearDownTenantUser(
   // is the canonical guard.
   if (!SYNTHETIC_EMAIL_PATTERN.test(user.email)) {
     throw new Error(
-      `tearDownTenantUser: refusing non-synthetic email ${user.email}`,
+      `tearDownTenantUser: refusing non-synthetic email ${user.email} — ` +
+        `not in SYNTHETIC_PREFIXES (<prefix>-[a-f0-9]{16}@soleur.test). ` +
+        `New synthetic suite? Register its prefix in SYNTHETIC_PREFIXES ` +
+        `(test/helpers/tenant-isolation-teardown.ts).`,
+    );
+  }
+
+  // id<->email binding: the sentinel gates on email but every destructive
+  // op below acts on user.id — verify the pair resolves to the same auth
+  // user before touching anything (a mismatched pair would scrub+delete a
+  // real user under a synthetic-looking email). A missing auth row is
+  // tolerated: deleteUser's not-found path below is the idempotent exit.
+  const { data: existing } = await service.auth.admin.getUserById(user.id);
+  if (existing?.user && existing.user.email !== user.email) {
+    throw new Error(
+      `tearDownTenantUser: id/email mismatch — ${user.id} resolves to ` +
+        `"${existing.user.email}", refusing teardown declared as ` +
+        `"${user.email}"`,
     );
   }
 
