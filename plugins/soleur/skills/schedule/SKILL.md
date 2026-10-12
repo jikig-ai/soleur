@@ -480,7 +480,9 @@ jobs:
                  runner, so the lock would serialise nothing (#7453):
                  `MERGE_ERR="$(mktemp -t merge.XXXXXXXX.err)"; gh pr merge --squash --auto "$PR_URL" 2>"$MERGE_ERR"`.
                  `MERGE_ERR` is a named file so the check below can read
-                 the stderr of the merge attempt.
+                 the stderr of the merge attempt; once read, remove it
+                 (`rm -f "$MERGE_ERR"` — the scratch file is consumed by the
+                 check, and strays are the count-shaped `/tmp` leak, #10017).
                  If `$MERGE_ERR` contains `auto-merge is not allowed`, the user
                  repo has `allow_auto_merge: false` — the PR is open and
                  waiting on a human reviewer; that is still a successful

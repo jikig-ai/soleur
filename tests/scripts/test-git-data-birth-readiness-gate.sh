@@ -570,6 +570,45 @@ r2check() {
   fi
 }
 
+# ── (#10017) RUNG-2 ARCHIVE RESIDUE ─────────────────────────────────────────────
+#
+# `_git_data_rung2_hash_at_sha` extracts `git archive` into
+# `mktemp -d -t rung2-archive.XXXXXXXX`, consumed entirely inside the function
+# and reaped by a self-disarming RETURN trap. The measured base is a PRIVATE
+# TMPDIR — a `rung2-archive.*` entry surviving either arm is the leak. The calls
+# run under `$( )` because that is the production call shape (step D above), and
+# a RETURN trap that did not fire in the substitution subshell would leak on
+# every single gate run — the exact shape the incident measured at scale.
+_r2res_base="$(mktemp -d -p "$TMP")"
+_r2res_report="$(
+  export TMPDIR="$_r2res_base"
+  o1="$(_git_data_rung2_hash_at_sha "$R2" "" ci.yml "$_R2_C1")"; r1=$?
+  o2="$(_git_data_rung2_hash_at_sha "$R2" "absent-dir" ci.yml "$_R2_C1")"; r2=$?
+  printf 'rc1=%s tok1=%s rc2=%s tok2=%s traps=[%s]\n' \
+    "$r1" "${o1%%|*}" "$r2" "${o2%%|*}" "$(trap -p RETURN)"
+)"
+_r2res_n="$(find "$_r2res_base" -mindepth 1 -maxdepth 1 -name 'rung2-archive.*' | wc -l | tr -d ' ')"
+if [[ "$_r2res_report" == *"rc1=0 tok1=OK"* ]]; then
+  pass "rung2 residue: extract+hash at c1 returns OK (success arm)"
+else
+  fail "rung2 residue: success arm" "$_r2res_report"
+fi
+if [[ "$_r2res_report" == *"rc2=1 tok2=RUN_HASH_UNCOMPUTABLE"* ]]; then
+  pass "rung2 residue: absent-dir extract failure returns RUN_HASH_UNCOMPUTABLE (error arm)"
+else
+  fail "rung2 residue: error arm" "$_r2res_report"
+fi
+if [[ "$_r2res_n" == "0" ]]; then
+  pass "rung2 residue: zero rung2-archive.* entries in the private TMPDIR after success+error calls"
+else
+  fail "rung2 residue: rung2-archive.* entries survived" "$_r2res_n" "$_r2res_report"
+fi
+if [[ "$_r2res_report" == *"traps=[]"* ]]; then
+  pass "rung2 residue: RETURN trap self-disarmed (trap -p RETURN empty after the calls)"
+else
+  fail "rung2 residue: RETURN trap still armed after return" "$_r2res_report"
+fi
+
 # A URL that SATISFIES the R8 Actions-run shape, so every arm below tests the refusal it
 # names rather than tripping on the URL check first. Hoisted to one place: it is a
 # precondition of nine fixtures, not a property of any of them.
@@ -3238,7 +3277,12 @@ mutate_suite "M0c: an evidence writer that ignores the Sentry verdict argument r
 #     1  N3       the REAL transport (PATH-shimmed curl): bearer on stdin, absent from argv, --disable first
 #     1  N3b      no bearer in play: anonymous read, empty stdin config
 #     1  N3c      an injection-shaped token makes zero requests, exits 8, is never echoed
-_FLOOR=259
+# RAISED 259 -> 263 (#10017 rung2-archive RETURN-trap residue), ITEMISED:
+#     1  RES-ok   extract+hash at c1 returns OK under the `$( )` call shape
+#     1  RES-err  absent-dir extract failure returns RUN_HASH_UNCOMPUTABLE
+#     1  RES-zero  zero rung2-archive.* entries in the private TMPDIR after both calls
+#     1  RES-disarm  RETURN trap self-disarms (trap -p RETURN empty after the calls)
+_FLOOR=263
 _ran=$((passes + fails))
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
   fails=$((fails + 1))

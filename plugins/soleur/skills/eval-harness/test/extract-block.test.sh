@@ -6,6 +6,9 @@
 #   extractBlock throws loudly when a marker is missing (fail-closed).
 #   extractBlock returns the trimmed text strictly between the markers.
 set -euo pipefail
+SUITE_TMP=$(mktemp -d)
+[[ "$SUITE_TMP" == /* ]] || { echo "FATAL: SUITE_TMP is not absolute: $SUITE_TMP" >&2; exit 2; }
+trap 'rm -rf "$SUITE_TMP"' EXIT
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd "$HERE/.." && pwd)"
@@ -64,7 +67,7 @@ else
 fi
 
 # --- CLI exits non-zero with stderr when a marker is missing ---
-tmp="$(mktemp)"
+tmp="$(mktemp -p "$SUITE_TMP")"
 printf 'this file has no sentinels\n' > "$tmp"
 if node "$EXTRACT" "$tmp" go-routing 2>/tmp/eval-gate-cli.err; then
   fail "extract-block CLI missing-marker exit" "CLI exited 0 on a file without markers"

@@ -396,7 +396,8 @@ After the plan draft has enumerated its `## Files to Edit` and `## Files to Crea
 
     A later Bash call does not inherit `ISSUES_JSON`, so carry the echoed path forward (or
     re-derive it in the same call). Do not substitute a fixed name: a concurrent `soleur:plan`
-    would overwrite the file between the write and this read.
+    would overwrite the file between the write and this read. When the last `jq` read is done,
+    `rm -f "$ISSUES_JSON"` — it is a snapshot, not an artifact (#10017).
 
 4. If any matches are returned, write a `## Open Code-Review Overlap` section to the plan file with a one-line bullet per match and an explicit disposition for each:
 

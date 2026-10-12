@@ -233,6 +233,12 @@ wc -l plugins/soleur/CHANGELOG.md
 
 The line count should be roughly the sum of unique lines from both sides. If the result is suspiciously short (less than 80% of the larger input file), something was truncated -- stop and report.
 
+Then remove both scratch files — they are consumed by the reconstruction and the wc check, and unremoved `mktemp` files are the count-shaped `/tmp` leak (#10017):
+
+```bash
+rm -f "$ours" "$theirs"
+```
+
 ```bash
 git add plugins/soleur/CHANGELOG.md
 

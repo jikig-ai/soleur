@@ -144,11 +144,10 @@ restore_all() {
 # `erow` may not have removed before an abort — the next run's census would report a
 # leftover as an unregistered declarer, so the trap sweeps them (a leak is loud, never
 # silent, and the trap is what keeps it absent).
-trap 'restore_all
-      for _f in "${EPHEMERAL_FILES[@]:-}"; do
-        [[ -n "$_f" ]] && rm -f "$_f" && rmdir "$(dirname "$_f")" 2>/dev/null
-      done
-      rm -rf "$WORK"' EXIT
+# Single-line form is load-bearing: the trap-ownership census predicate is
+# LINE-scoped (TRAP_EXIT), so a multi-line `trap '…' EXIT` reads as UNTRAPPED
+# and the file stays a class-b member despite owning its allocations (#10017).
+trap 'restore_all; for _f in "${EPHEMERAL_FILES[@]:-}"; do [[ -n "$_f" ]] && rm -f "$_f" && rmdir "$(dirname "$_f")" 2>/dev/null; done; rm -rf "$WORK"' EXIT
 
 # REFUSE TO RUN ON A DIRTY TARGET (#7902 review). This battery mutates tracked files in place and
 # restores them from a pristine copy taken at ITS start — so a concurrent edit to any target is

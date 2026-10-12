@@ -139,6 +139,7 @@ if [[ "$YOLO" -eq 1 ]]; then
 fi
 
 raw="$(mktemp)"
+trap 'rm -f "$raw"' EXIT
 stamp_start_ms=$(($(date +%s%N) / 1000000))
 
 set +e

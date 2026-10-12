@@ -478,6 +478,11 @@ cmd_write_env() {
   if [[ -f "$env_file" ]]; then
     local tmp
     tmp=$(mktemp) || { echo "Error: Failed to create temp file." >&2; exit 1; }
+    # Owning trap (ADR-129): mv consumes $tmp on success, so the rm is a no-op
+    # on that path — it covers every early return between alloc and mv. The
+    # handler self-disarms first: a RETURN trap is not function-scoped, so a
+    # live copy would re-fire on every later function return in this shell.
+    trap 'trap - RETURN; rm -f "$tmp"' RETURN
     grep -v '^LINKEDIN_' "$env_file" > "$tmp" || true
     mv "$tmp" "$env_file"
   fi

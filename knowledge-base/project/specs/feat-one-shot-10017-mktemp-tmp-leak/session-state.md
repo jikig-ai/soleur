@@ -24,3 +24,23 @@
 
 ## Technical-Ruling Gate
 - cto_spawns=1 — one batched `soleur:engineering:cto` spawn ruled all four rows (Phase-4 purge timer, rung2 RETURN-trap, `--census-files` lint extension, advisor-consult discharge); all match the plan's assumed defaults. Gate: PASS (5 rows examined).
+
+## Work Phase
+- `--census-files` implemented via shared `census_all` members pass; suite 120/120.
+- Census sweep: 70 -> 36 class-b members. 34 left the population (23 suite-root
+  traps, 4 RETURN traps, 4 EXIT traps, rung2 RETURN fix, shard-totality trap
+  flatten, check_setup single-quote). Ledger: `mktemp-census.md`.
+- Prose sweep (plan amendment Phase 2b): ship/qa/merge-pr/plan/schedule/
+  model-launch-review/likec4 gained cleanup instructions; incident/
+  legal-generate/questionnaire/preflight/content-writer/admin-ip-refresh/
+  hooks-README/rclone/reproduce-bug verified already-clean or bounded.
+- rung2-archive: self-disarming RETURN trap at birth-readiness-gate:1445;
+  4 residue arms added (263/263 suite green).
+- Residue canary caught ONE real miss — test-content-publisher.sh's sourced
+  SUT re-installs its own EXIT trap, replacing the suite's; combined handler
+  re-armed post-source. 38 leaves registered, rerun delta-clean.
+- Phase 4: soleur-tmp-purge.{service,timer} (daily, --apply then --drain),
+  tmp-leak-census-probe.sh (`ratchet-ok` iff census<=highwater +
+  list==count cross-check), runbook section incl. tmpfiles-rejection.
+- Highwater 70 -> 36 with itemised ledger comment; --check-highwater green;
+  landmine diffs empty.

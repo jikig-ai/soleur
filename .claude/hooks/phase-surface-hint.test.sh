@@ -11,6 +11,9 @@
 #
 # Auto-discovered by scripts/test-all.sh (.claude/hooks/*.test.sh glob).
 set -uo pipefail
+SUITE_TMP=$(mktemp -d)
+[[ "$SUITE_TMP" == /* ]] || { echo "FATAL: SUITE_TMP is not absolute: $SUITE_TMP" >&2; exit 2; }
+trap 'rm -rf "$SUITE_TMP"' EXIT
 
 # Redirect incident telemetry into a per-suite sandbox BEFORE any case runs.
 # Applied to EVERY hook suite, not just ones whose hook is a sibling .sh:
@@ -64,7 +67,7 @@ out="$(printf '{"tool_name":"Skill","tool_input":{}}' | run_hook)"; rc=$?
 # --- BEHAVIOR: missing/corrupt map -> empty, exit 0 ---
 out="$(printf '{"tool_input":{"skill":"soleur:work"}}' | run_hook "$REPO_ROOT/.claude/does-not-exist.json")"; rc=$?
 [[ -z "$out" && "$rc" -eq 0 ]] && pass "missing map -> empty, exit 0" || fail "missing map not fail-open (out=$out rc=$rc)"
-bad="$(mktemp)"; printf 'not json {{{' > "$bad"
+bad="$(mktemp -p "$SUITE_TMP")"; printf 'not json {{{' > "$bad"
 out="$(printf '{"tool_input":{"skill":"soleur:work"}}' | run_hook "$bad")"; rc=$?
 [[ -z "$out" && "$rc" -eq 0 ]] && pass "corrupt map -> empty, exit 0" || fail "corrupt map not fail-open (out=$out rc=$rc)"
 rm -f "$bad"
@@ -118,7 +121,7 @@ for phase in brainstorm plan work review ship; do
 done
 
 # --- NEGATIVE: verify the verifier — inject a dangling phase value, assert detection ---
-neg="$(mktemp)"
+neg="$(mktemp -p "$SUITE_TMP")"
 jq '.skill_to_phase["soleur:__probe__"] = "nonexistent_phase"' "$MAP" > "$neg"
 dangling_neg="$(jq -r '
   (.phase_to_surface | keys) as $phases

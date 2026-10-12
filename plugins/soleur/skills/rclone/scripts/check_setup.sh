@@ -16,7 +16,10 @@ else
     echo
     echo "Install with:"
     echo "  macOS:  brew install rclone"
-    echo "  Linux:  d=\$(mktemp -d -t rclone-install.XXXXXXXX) && mkdir -p ~/.local/bin && curl -sfL https://downloads.rclone.org/rclone-current-linux-amd64.zip -o \"\$d/rclone.zip\" && unzip -q \"\$d/rclone.zip\" -d \"\$d\" && cp \"\$d\"/rclone-*/rclone ~/.local/bin/ && chmod +x ~/.local/bin/rclone && rm -rf \"\$d\""
+    # Single-quoted ON PURPOSE: under double quotes the lexer sees `\$(mktemp`
+    # as a live `$(…)` span and the trap-ownership census counts this DATA
+    # mention as an untrapped allocation (#10017). Single quotes keep it inert.
+    echo '  Linux:  d=$(mktemp -d -t rclone-install.XXXXXXXX) && mkdir -p ~/.local/bin && curl -sfL https://downloads.rclone.org/rclone-current-linux-amd64.zip -o "$d/rclone.zip" && unzip -q "$d/rclone.zip" -d "$d" && cp "$d"/rclone-*/rclone ~/.local/bin/ && chmod +x ~/.local/bin/rclone && rm -rf "$d"'
     echo "          (for arm64: replace amd64 with arm64 in the URL)"
     exit 1
 fi
