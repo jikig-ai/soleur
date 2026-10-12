@@ -21,8 +21,8 @@ hasnt() { CHECKED=$((CHECKED + 1)); case "$2" in *"$3"*) bad "$1" "unexpected [$
 row() {
   local rule="-"
   [ "$2" != "-" ] && rule="hosted-destroy-ask:$2"
-  jq -nc --arg d "$1" --arg r "$rule" --arg repo "$3" --arg role "${4:-owner}" --arg c "${ROW_CONTAINER:-soleur-web-platform}" \
-    '{dt:"2026-10-11 10:00:00.000000", raw:({message:({level:40,msg:"x",sec:true,decision:$d,ruleId:$r,repo:$repo,approverRole:$role}),CONTAINER_NAME:$c,source_kind:"app_container"}|tojson)}'
+  jq -nc --arg d "$1" --arg r "$rule" --arg repo "$3" --arg role "${4:-owner}" --arg c "${ROW_CONTAINER:-soleur-web-platform}" --arg lv "${ROW_LEVEL:-40}" \
+    '{dt:"2026-10-11 10:00:00.000000", raw:({message:({level:(try ($lv|tonumber) catch null),msg:"x",sec:true,decision:$d,ruleId:$r,repo:$repo,approverRole:$role} | if $lv == "none" then del(.level) else . end),CONTAINER_NAME:$c,source_kind:"app_container"}|tojson)}'
 }
 rows_of() { local n="$1"; shift; local i; for ((i = 0; i < n; i++)); do row "$@"; done; }
 # inngest_rows <n>: the measured 2026-10-12 contamination shape, synthesized (no real payload text): the Inngest host's
@@ -42,9 +42,12 @@ printf '%s\n' "$*" >> "$STUB_ARGS"
 case "$1" in
   SELECT*)
     if [ -n "${STUB_LIVE_RC:-}" ] && [ "$STUB_LIVE_RC" != 0 ]; then echo "auth failure for user secret-user at host secret-host" >&2; exit "$STUB_LIVE_RC"; fi
+    # Real ClickHouse JSONEachRow quotes 64-bit counts when output_format_json_quote_64bit_integers is on, so a STUB_LIVE that
+    # carries its own quotes (STUB_LIVE='"123"') drives that shape. days defaults to a value that satisfies the window asked.
+    case "$*" in *"7 DAY"*) dflt_days=8 ;; *) dflt_days=2 ;; esac
     case "${STUB_LIVE-1000}" in
       garbage) echo "<html>not a count</html>" ;;
-      *) printf '{"n":%s}\n' "${STUB_LIVE-1000}" ;;
+      *) printf '{"n":%s,"recent":%s,"days":%s}\n' "${STUB_LIVE-1000}" "${STUB_LIVE_RECENT-50}" "${STUB_LIVE_DAYS-$dflt_days}" ;;
     esac
     exit 0 ;;
 esac
@@ -96,7 +99,7 @@ hasnt "output never names a repo" "$OUT" "a/a"
 
 # --- 7d window
 { rows_of 10 destroy-ask git-force-default alice/app; rows_of 4 destroy-ask-approved git-force-default alice/app; row destroy-ask-rejected git-force-default alice/app; row destroy-ask-expired git-force-default alice/app; } > "$ROOT/s1"
-out_rc 7d "$ROOT/s1"; check "7d clean: ACTION REQUIRED (record the numbers)" 5 "$RC"; has "...says record" "$OUT" "Record these numbers"; hasnt "...and trips nothing" "$OUT" "TRIPPED:"
+out_rc 7d "$ROOT/s1"; check "7d clean: ACTION REQUIRED (record the numbers)" 5 "$RC"; has "...says record" "$OUT" "record the numbers"; hasnt "...and trips nothing" "$OUT" "TRIPPED:"
 has "outcome counts" "$OUT" "approved=4 rejected=1 expired=1"
 { rows_of 9 destroy-ask git-force-default alice/app; row destroy-ask git-push-unknown-default alice/app; } > "$ROOT/s2"
 out_rc 7d "$ROOT/s2"; check "7d, unknown-default exactly 10 percent: not above the line" 5 "$RC"; hasnt "...so no TUNE" "$OUT" "TUNE:"
@@ -127,6 +130,7 @@ for w in 24h 7d; do
   WOUT="$(STUB_ROWS="$ROOT/r1" STUB_ARGS="$ROOT/wargs-$w" DESTROY_ASK_QUERY_SCRIPT="$QUERY_STUB" BETTERSTACK_QUERY_HOST=h BETTERSTACK_QUERY_USERNAME=u BETTERSTACK_QUERY_PASSWORD=p bash "$SCRIPT_DIR/hosted-destroy-ask-window-9776-$w.sh" 2>&1)"; WRC=$?
   case "$w:$WRC" in 24h:2|7d:5) ok "wrapper $w: exit $WRC (the same verdict as --window $w)" ;; *) bad "wrapper $w: unexpected exit $WRC" ;; esac; CHECKED=$((CHECKED + 1))
   has "wrapper $w queries the $w window" "$(cat "$ROOT/wargs-$w")" "--since $w"
+  has "wrapper $w output names its own window" "$WOUT" "window $w"
 done
 
 # --- Guard 2: isolation (the measured 2026-10-12 contamination) and liveness (a quiet window must be proven quiet, not dark)
@@ -157,6 +161,7 @@ out_rc 24h "$ROOT/mix"; has "contamination beside real lane rows: only the lane 
 hasnt "...and the contamination does not trip anything" "$OUT" "SHAPE_DRIFT"
 # the liveness read: raw SQL through the same query script, both Better Stack arms, same window, app container, pino level >= 40
 out_rc 24h "$ROOT/empty"; LARGS="$(cat "$ROOT/args")"
+# shellcheck disable=SC2016  # literal SQL tokens ($BS_TABLE*) are intentionally unexpanded
 has "liveness read is the raw-SQL call" "$LARGS" "SELECT"; has "liveness read includes the hot arm" "$LARGS" 'remote($BS_TABLE)'
 has "liveness read includes the ARCHIVE arm" "$LARGS" 's3Cluster(primary, $BS_TABLE_S3)'; has "liveness read uses the same 24h window" "$LARGS" "INTERVAL 24 HOUR"
 has "liveness read is scoped to the app container" "$LARGS" "soleur-web-platform"; has "liveness read requires pino level 40 or above" "$LARGS" ">= 40"
@@ -166,6 +171,48 @@ out_rc 24h "$ROOT/empty" STUB_LIVE_RC=7; check "liveness query failure: exit 3" 
 out_rc 24h "$ROOT/empty" STUB_LIVE=garbage; check "liveness result that is not a count: exit 3" 3 "$RC"
 # liveness is not consulted when asks exist (the channel is evidently live) and never changes a trip
 out_rc 24h "$ROOT/r2" STUB_LIVE=0; check "asks present: a classifier-error ask still trips with a zero liveness stub" 5 "$RC"
+
+# --- review round (#10101): the golden liveness SQL per window, so no predicate can be loosened silently. Every term is pinned
+# at once (the container match is EXACT and quoted, the level floor, both arms each carrying their OWN window, the archive row type).
+GOLD_PRED="JSONExtractString(raw, 'CONTAINER_NAME') = 'soleur-web-platform' AND JSONExtractInt(raw, 'message', 'level') >= 40"
+for pair in "24h:24 HOUR" "7d:7 DAY"; do
+  gw="${pair%%:*}"; giv="${pair#*:}"
+  want="SELECT count() AS n, countIf(dt >= now() - INTERVAL 3 HOUR) AS recent, uniqExact(toDate(dt)) AS days FROM (SELECT dt, raw FROM remote(\$BS_TABLE) WHERE dt >= now() - INTERVAL ${giv} AND ${GOLD_PRED} UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1 AND dt >= now() - INTERVAL ${giv} AND ${GOLD_PRED}) FORMAT JSONEachRow"
+  out_rc "$gw" "$ROOT/empty"
+  check "golden liveness SQL ($gw): the exact query string reaches the query script" "$want" "$(grep '^SELECT' "$ROOT/args")"
+done
+# recency and day coverage: one old row is not a live channel
+out_rc 24h "$ROOT/empty" STUB_LIVE_RECENT=0; check "no app WARN row in the last hours (24h): exit 3" 3 "$RC"; has "...says the channel may have gone dark" "$OUT" "last 3 hours"
+out_rc 7d "$ROOT/empty" STUB_LIVE_RECENT=0; check "no app WARN row in the last hours (7d): exit 3" 3 "$RC"
+out_rc 7d "$ROOT/empty" STUB_LIVE_DAYS=5; check "7d rows on only 5 calendar days: exit 3" 3 "$RC"; has "...names the day shortfall" "$OUT" "5 calendar day(s)"
+out_rc 7d "$ROOT/empty" STUB_LIVE_DAYS=6; check "7d rows on exactly 6 calendar days (the floor): exit 5" 5 "$RC"
+out_rc 24h "$ROOT/empty" STUB_LIVE_DAYS=1; check "24h needs one calendar day: exit 2" 2 "$RC"
+out_rc 24h "$ROOT/empty" STUB_LIVE=1; check "liveness count of exactly 1 is live (boundary): exit 2" 2 "$RC"
+# the ClickHouse 64-bit quoting shapes, and a failing exit that still prints a plausible payload
+out_rc 24h "$ROOT/empty" STUB_LIVE='"123"'; check "a QUOTED count (\"123\", ClickHouse quote_64bit_integers) is live: exit 2" 2 "$RC"
+out_rc 24h "$ROOT/empty" STUB_LIVE='"0"'; check "a quoted zero count is dark: exit 3" 3 "$RC"
+out_rc 24h "$ROOT/empty" STUB_LIVE=1.5; check "a fractional count is unparseable: exit 3" 3 "$RC"
+out_rc 24h "$ROOT/empty" STUB_LIVE_RC=22 STUB_LIVE=999; check "a non-zero query exit with a plausible count on stdout never reads live: exit 3" 3 "$RC"
+# an app-container row whose raw is truncated or not JSON cannot be classified, so it must NOT be silently excluded (user-impact P1)
+printf '%s\n' '{"dt":"2026-10-12 09:00:00","raw":"{\"message\":{\"decision\":\"destroy-ask\",\"leve"}' > "$ROOT/trunc-raw"
+out_rc 24h "$ROOT/trunc-raw"; check "M10: an undecodable row mentioning the marker is SHAPE_DRIFT, not isolated away: exit 3" 3 "$RC"; has "...named SHAPE_DRIFT" "$OUT" "SHAPE_DRIFT"
+# the level floor: a lane row below WARN is not an ask, a row with no level key is (the lane is WARN-only; documented default)
+{ ROW_LEVEL=30 rows_of 3 destroy-ask git-force-default lvl/low; } > "$ROOT/lv30"
+out_rc 24h "$ROOT/lv30"; check "level 30 rows are not asks, and an app row mentioning the marker with no WARN lane row is SHAPE_DRIFT (fail closed): exit 3" 3 "$RC"; has "...named SHAPE_DRIFT" "$OUT" "SHAPE_DRIFT"
+{ ROW_LEVEL=none rows_of 3 destroy-ask git-force-default lvl/none; } > "$ROOT/lvnone"
+out_rc 24h "$ROOT/lvnone"; has "rows with no level key count (documented default 40)" "$OUT" "window 24h: asks=3 "
+
+
+# --- instrument self-test: check/has/hasnt must REJECT. The floor and the conservation check count calls, not verdicts, so a
+# helper edited to always say ok would otherwise leave this suite green. Each helper is driven once with an input that must
+# fail; its failure counter must move, its pass counter must not; then every counter is unwound so the floor stays exact.
+st_p=$PASS; st_f=$FAIL; st_c=$CHECKED
+check "selftest" 1 2 >/dev/null; has "selftest" "abc" "zzz" >/dev/null; hasnt "selftest" "abc" "a" >/dev/null
+if [ "$FAIL" -ne $((st_f + 3)) ] || [ "$PASS" -ne "$st_p" ]; then
+  printf '[FATAL] instrument self-test: check/has/hasnt did not reject a failing input (FAIL %s->%s, PASS %s->%s)\n' "$st_f" "$FAIL" "$st_p" "$PASS" >&2
+  exit 1
+fi
+PASS=$st_p; FAIL=$st_f; CHECKED=$st_c
 
 # --- exit vocabulary and xtrace
 for f in r1 r2 r3 s1 s3 drift empty; do
@@ -177,7 +224,7 @@ OUT="$(STUB_ROWS="$ROOT/r1" STUB_ARGS="$ROOT/args" DESTROY_ASK_QUERY_SCRIPT="$QU
 check "xtrace with a live credential: refuses (78)" 78 "$RC"
 
 # Anti-vacuity floor: a literal directly above its `if`, reported by printf + exit, never through the helpers.
-MIN_CHECKS=87
+MIN_CHECKS=108
 if [ "$CHECKED" -lt "$MIN_CHECKS" ]; then
   printf '[FATAL] assertion floor: only %s assertions ran, floor %s\n' "$CHECKED" "$MIN_CHECKS" >&2
   exit 1

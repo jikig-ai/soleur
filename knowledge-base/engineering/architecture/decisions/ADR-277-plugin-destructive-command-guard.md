@@ -164,6 +164,9 @@ reference for the rule table; this section records the decisions and why.
   > Bash is not gated for these commands in the default mode" is no longer true for the recognised forms once #10054 landed (the ask did not fire in the first version of #9776; see ADR-284's C9 result): hosted `canUseTool` now asks,
   > through a must-ask lane, before a default-branch force-push or delete, `terraform|tofu destroy` and a `gh` ref or repository
   > delete. D8 itself stands (the plugin hook stays off in hosted sessions). The hosted `ask` path of THIS hook is still unmeasured.
+  >
+  > **Dated correction 2026-10-12 (#10054):** the marker above carries the authoring date of #9776. The lane merged on 2026-10-11 (#9977) and
+  > was inert until the fix (#10072) deployed on 2026-10-12 (deploy job finished 08:38:33Z), so "now asks" became true then, not on 2026-10-10.
 - **D9 — Harness scope.** Registered only in `plugins/soleur/hooks/hooks.json`; one `soleur-plugin` ledger row with disposition `skip`
   (Devin's `ask` is unmeasured and its envelopes carry no `.cwd`), no `.claude/settings.json` entry (the parity dry run showed none is
   demanded, and a second registration would double-prompt contributors). This repository's contributor sessions that load the plugin
@@ -466,7 +469,7 @@ Binding rulings: `knowledge-base/project/specs/archive/20261011-050138-feat-9776
 - **D8 stands.** The plugin hook stays off in hosted sessions (`AGENT_ENV_OVERRIDES` is unchanged). Enabling it is a later
   consolidation, conditional on a measured hosted `ask`.
 - **CPO3-R1 (P1): still OPEN** until the post-merge verification in ADR-284 has passed on dev and the 24 h and 7 d numbers are recorded
-  below (CPO4-R7). **Measured numbers: pending, soak open since 2026-10-12.** The first shipment of the lane (#9977) was inert (#10054), so
+  below (CPO4-R7) [superseded 2026-10-12 (#10054): the dev-hosted verification cannot be run; the closing conditions are ADR-284's Flip checklist]. **Measured numbers: pending, soak open since 2026-10-12.** The first shipment of the lane (#9977) was inert (#10054), so
   both windows were re-timed from the deploy of the fix (Web Platform Release run 38223902738, T0 2026-10-12T08:40Z): the 24 h window closes
   2026-10-13T08:40Z and the 7 d window 2026-10-19T08:40Z. The final counts are recorded once, by the flip PR (ADR-284 "Flip checklist");
   nothing is measured yet, and the readouts so far live in ADR-284's C9 block.

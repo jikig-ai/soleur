@@ -19,20 +19,35 @@
 #
 # ISOLATION AND LIVENESS (#10054, measured 2026-10-12). (1) Every count below reads APP-CONTAINER rows only (decoded
 # `raw` has CONTAINER_NAME == soleur-web-platform): a bare `--grep destroy-ask` also returns the Inngest host's journald
-# copies of GitHub webhook payloads that QUOTE the marker (34 rows in one day), which used to trip SHAPE_DRIFT on every
-# sweep. The raw-line truncation check stays on the RAW count, because contaminating rows fill the row limit before
-# isolation and would otherwise let truncation evict real lane rows unnoticed. (2) A window with zero asks is only
-# reported as quiet when a second read, over the SAME window and both Better Stack arms, shows the app container is
-# shipping pino WARN lines at all; otherwise it is CANNOT ESTABLISH (a dark channel reads like a quiet one). That proves
-# the CHANNEL, not the LANE: a lane re-inerted by an SDK bump still reads quiet here, and the dev probe (CLO C9) is the
-# lane's liveness check (sdk-bump-sandbox-gate.sh forces its re-run).
+# copies of GitHub webhook payloads that QUOTE the marker (36 rows in 24h and 57 in 7d, measured 2026-10-12), which used
+# to trip SHAPE_DRIFT on every sweep. A row is excluded only when it is POSITIVELY another service's: its `raw` decodes to
+# an object whose CONTAINER_NAME is not the app container. A marker-mentioning row whose `raw` does not decode (truncated,
+# non-JSON) cannot be classified, so it still counts toward SHAPE_DRIFT. The stored-row check (DECODABLE) is deliberately
+# NOT isolated: it asks whether the body is stored rows at all, and a result holding only another service's rows is still
+# stored rows. The raw-line truncation check stays on the RAW count, because contaminating rows fill the row limit
+# before isolation and would otherwise let truncation evict real lane rows unnoticed. (2) A window with zero asks is only
+# reported as quiet when a second read, over the SAME window and both Better Stack arms (one UNION count, not a per-arm
+# proof), shows the app container shipping pino WARN lines: at least one in the window, at least one in the last
+# LIVE_RECENT_HOURS hours (an ingest that went dark days ago has old rows only), and, for the 7d window, rows on at least
+# LIVE_MIN_DAYS_7D distinct calendar days; otherwise it is CANNOT ESTABLISH (a dark channel reads like a quiet one). The
+# liveness read is skipped when asks exist (the asks are themselves app-container WARN rows). That proves the CHANNEL,
+# not the LANE: a lane re-inerted by a later change still reads quiet here. The dev probe (CLO C9) is the lane's
+# liveness check and re-running it is a HUMAN step: sdk-bump-sandbox-gate.sh only demands a `sdk-bump-verified:` commit
+# attestation on a lockfile SDK change, it does not run the probe and cannot see sandbox-option or hook changes (the
+# causes of #10054); #10111 tracks automating it.
+#
+# THE WINDOW IS TRAILING (from the moment the sweeper runs), not anchored at the lane deploy T0: the sweeper's daily
+# read starts at 18:00Z and omits the first hours after T0, and an early manual run includes the inert era. So a 7d
+# verdict here is an ALARM, never the measurement; the measurement is an explicit [T0, T0+7d] read (ADR-284 Flip checklist).
+# Known limit (pre-existing, #9977): the printed counts are exact integers in a PUBLIC comment; the CLO under-5 rule
+# applies to what is RECORDED in the ADRs and the post-mortem.
 #
 # NOTIFY-ONLY probe: nothing here exits 0 or 1 (the sweeper's TRANSIENT sub-vocabulary, followthrough-convention.md):
 #   2 = NOT YET           no threshold tripped (or no ask rows with a live channel: a quiet window is expected at low volume)
 #   3 = CANNOT ESTABLISH  bad argument, missing credential, failed query, an unparseable or truncated result, outcome
 #                         lines with no matching ask lines, a stored-shape drift, or zero asks with no proof the channel is live
 #   5 = ACTION REQUIRED   a revert or tune threshold tripped, the clean 7d measurement is ready to record, or the 7d window
-#                         elapsed with zero natural asks on a live channel (record the n=0 statement and open the flip PR)
+#                         read with zero natural asks on a live channel (confirm with an explicit [T0, T0+7d] read, then flip)
 #  78 = xtrace refusal while a credential is set (#7797)
 #
 # THE SWEEPER POSTS THIS STDOUT AS A PUBLIC COMMENT: counts and rule ids only, never a repo name, a command or the
@@ -65,6 +80,8 @@ readonly UNKNOWN_DEFAULT_PCT=10
 readonly KEYWORD_RAW_PCT=25
 readonly MARKER="destroy-ask"
 readonly ROW_LIMIT=5000
+readonly LIVE_RECENT_HOURS=3
+readonly LIVE_MIN_DAYS_7D=6
 # The app container serves users; the canary container (soleur-web-platform-canary) does not, and the match is exact.
 readonly APP_CONTAINER="soleur-web-platform"
 
@@ -103,7 +120,8 @@ fi
 
 # One jq pass: decode `raw`, keep app-container rows only, require the pino object under `.message` with a `decision` that
 # starts with the marker. Output: decision <TAB> ruleId <TAB> repo <TAB> approverRole (sentinels, never empty: tab is IFS
-# whitespace). The isolation predicate (decoded `raw` is an object whose CONTAINER_NAME is exactly $c) is shared with MENTIONS.
+# whitespace). Isolation here is POSITIVE (decoded `raw` is an object whose CONTAINER_NAME is exactly $c); MENTIONS uses the
+# complement (positively foreign rows are excluded, unclassifiable ones are kept), so the two predicates are a pair, not one.
 ROWS="$(printf '%s\n' "$OUT" \
   | jq -R -r --arg m "$MARKER" --arg c "$APP_CONTAINER" '
       fromjson? | (.raw // empty | fromjson? | select(type == "object" and .CONTAINER_NAME == $c) | .message | select(type == "object")) as $p
@@ -126,11 +144,13 @@ if (( OUT_LINES >= ROW_LIMIT )); then
 fi
 
 TOTAL="$(printf '%s' "$ROWS" | grep -c . || true)"
-# Stored rows from the APP CONTAINER whose raw text mentions the marker (another service's rows quoting it are not a shape drift).
+# Stored rows that mention the marker and are NOT positively another service's (see the header): the app container's own
+# rows and rows whose `raw` does not decode. Another service's rows quoting the marker are not a shape drift.
 MENTIONS="$(printf '%s\n' "$OUT" \
   | jq -R -r --arg m "$MARKER" --arg c "$APP_CONTAINER" '
       fromjson? | select(type == "object" and has("raw")) | select((.raw | tostring) | contains($m))
-      | (.raw | fromjson? | select(type == "object" and .CONTAINER_NAME == $c)) | 1' 2>/dev/null \
+      | (try (.raw | fromjson) catch null) as $o
+      | select(($o | type) != "object" or $o.CONTAINER_NAME == $c) | 1' 2>/dev/null \
   | grep -c . || true)"
 if (( TOTAL == 0 && MENTIONS > 0 )); then
   echo "CANNOT ESTABLISH: SHAPE_DRIFT — ${MENTIONS} row(s) mention $MARKER but none decodes as a lane row; the stored shape may have changed (re-measure it against a live row)."
@@ -142,25 +162,39 @@ if (( TOTAL == 0 )); then
   # one raw-SQL call through the same query script ($BS_TABLE and $BS_TABLE_S3 are substituted by it).
   case "$WINDOW" in 24h) IVL="24 HOUR" ;; *) IVL="7 DAY" ;; esac
   LIVE_PRED="JSONExtractString(raw, 'CONTAINER_NAME') = '${APP_CONTAINER}' AND JSONExtractInt(raw, 'message', 'level') >= 40"
-  LIVE_SQL="SELECT count() AS n FROM (SELECT dt, raw FROM remote(\$BS_TABLE) WHERE dt >= now() - INTERVAL ${IVL} AND ${LIVE_PRED} UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1 AND dt >= now() - INTERVAL ${IVL} AND ${LIVE_PRED}) FORMAT JSONEachRow"
+  LIVE_SQL="SELECT count() AS n, countIf(dt >= now() - INTERVAL ${LIVE_RECENT_HOURS} HOUR) AS recent, uniqExact(toDate(dt)) AS days FROM (SELECT dt, raw FROM remote(\$BS_TABLE) WHERE dt >= now() - INTERVAL ${IVL} AND ${LIVE_PRED} UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1 AND dt >= now() - INTERVAL ${IVL} AND ${LIVE_PRED}) FORMAT JSONEachRow"
   LIVE_OUT="$(bash "$QUERY" "$LIVE_SQL" 2>&1)"
   LIVE_RC=$?
   if (( LIVE_RC != 0 )); then
     echo "CANNOT ESTABLISH: the channel liveness query exited ${LIVE_RC} (output withheld — may contain credentials); zero asks cannot be read as a quiet window."
     exit 3
   fi
-  LIVE="$(printf '%s\n' "$LIVE_OUT" | jq -R -r 'fromjson? | select(type == "object") | .n | tonumber? ' 2>/dev/null | head -1)"
-  if ! [[ "$LIVE" =~ ^[0-9]+$ ]]; then
-    echo "CANNOT ESTABLISH: the channel liveness query returned no parseable count (output withheld); zero asks cannot be read as a quiet window."
+  # Three non-negative integers or nothing: any other shape (garbage, a missing key, a float) leaves LIVE_FIELDS empty.
+  LIVE_FIELDS="$(printf '%s\n' "$LIVE_OUT" \
+    | jq -R -r 'fromjson? | select(type == "object") | [.n, .recent, .days] | map(tostring) | select(all(.[]; test("^[0-9]+$"))) | @tsv' 2>/dev/null \
+    | head -1)"
+  LIVE=""; LIVE_RECENT=""; LIVE_DAYS=""
+  IFS=$'\t' read -r LIVE LIVE_RECENT LIVE_DAYS <<<"$LIVE_FIELDS"
+  if ! [[ "$LIVE" =~ ^[0-9]+$ && "$LIVE_RECENT" =~ ^[0-9]+$ && "$LIVE_DAYS" =~ ^[0-9]+$ ]]; then
+    echo "CANNOT ESTABLISH: the channel liveness query returned no parseable counts (output withheld); zero asks cannot be read as a quiet window."
     exit 3
   fi
+  MIN_DAYS=1; [[ "$WINDOW" == "7d" ]] && MIN_DAYS="$LIVE_MIN_DAYS_7D"
   if (( LIVE == 0 )); then
     echo "CANNOT ESTABLISH: zero ask rows AND zero app-container pino WARN rows in the same ${WINDOW} window: the liveness check failed, so the channel is dark or the allowlist moved. An empty read here is not a quiet window."
     exit 3
   fi
+  if (( LIVE_RECENT == 0 )); then
+    echo "CANNOT ESTABLISH: zero ask rows and no app-container pino WARN row in the last ${LIVE_RECENT_HOURS} hours of the ${WINDOW} window: the channel may have gone dark. An empty read here is not a quiet window."
+    exit 3
+  fi
+  if (( LIVE_DAYS < MIN_DAYS )); then
+    echo "CANNOT ESTABLISH: zero ask rows and app-container pino WARN rows on only ${LIVE_DAYS} calendar day(s) of the ${WINDOW} window (need ${MIN_DAYS}): the channel was dark for part of it. An empty read here is not a quiet window."
+    exit 3
+  fi
   echo "hosted destroy-ask window ${WINDOW}: asks=0 outcomes=0 channel=live"
   if [[ "$WINDOW" == "7d" ]]; then
-    echo "ACTION REQUIRED: the 7d window elapsed with 0 natural asks on a live channel; the soak did not exercise the lane. Open the flip PR per ADR-284 'Flip checklist' and record this n=0 statement (it is not a clean-lane claim); this probe does not close the tracker."
+    echo "ACTION REQUIRED: the trailing 7d read shows 0 natural asks on a live channel; the soak did not exercise the lane. This trailing read is an alarm, not the measurement: confirm with an explicit [T0, T0+7d] read, then open the flip PR per ADR-284 'Flip checklist' (criterion 4, production arrival, needs the operator's decision). This n=0 statement is not a clean-lane claim; this probe does not close the tracker."
     exit 5
   fi
   echo "NOT YET: no 24h revert threshold tripped. 0 natural asks in the window (expected at low volume; the lane's liveness is the dev probe, CLO C9)."
@@ -212,7 +246,7 @@ if [[ -n "$TRIPPED" ]]; then
   exit 5
 fi
 if [[ "$WINDOW" == "7d" ]]; then
-  echo "ACTION REQUIRED: the 7d window is clean. Record these numbers in the ADR-277 addendum (CPO3-R1 and #9603 wait on them); this probe does not close the tracker."
+  echo "ACTION REQUIRED: the trailing 7d read is clean. Confirm with an explicit [T0, T0+7d] read, then record the numbers in the ADR-277 addendum per the ADR-284 'Flip checklist' (CPO3-R1 and #9603 wait on them); this probe does not close the tracker."
   exit 5
 fi
 echo "NOT YET: no 24h revert threshold tripped."
