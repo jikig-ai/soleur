@@ -951,7 +951,7 @@ assert_eq "Find-merged-PR env.PR_BODY_FILE wiring (producer and consumer share O
 TMPFILES_BLOCK="$TMP/tmpfiles-step.sh"
 wf_step_field "Create secure temp files" run > "$TMPFILES_BLOCK" || : > "$TMPFILES_BLOCK"
 : > "$TMP/tmpfiles-out"
-( cd "$REPO_ROOT" && GITHUB_OUTPUT="$TMP/tmpfiles-out" bash -eo pipefail "$TMPFILES_BLOCK" >/dev/null 2>&1 ); rc_t=$?
+( cd "$REPO_ROOT" && TMPDIR="$TMP" GITHUB_OUTPUT="$TMP/tmpfiles-out" bash -eo pipefail "$TMPFILES_BLOCK" >/dev/null 2>&1 ); rc_t=$?
 assert_eq "tmpfiles step emits exactly the keys pr_body, release_notes and gh_err" \
   "$rc_t $(sed -n 's/^\([a-z_]*\)=.*/\1/p' "$TMP/tmpfiles-out" | sort | tr '\n' ',')" "0 gh_err,pr_body,release_notes,"
 
@@ -980,7 +980,7 @@ case "$1" in
       echo "pr: $*" >> "$PR_STUB_REFUSED"; exit 64
     fi
     if [[ "${MOCK_PR_VIEW_FAIL:-0}" == 1 ]]; then exit 1; fi
-    printf '{"number":%s,"title":"Fix the thing","labels":[{"name":"semver:patch"}],"body":%s}\n' "$3" "${MOCK_PR_BODY_JSON:-\"intro\\n\\n## Changelog\\n\\n- real changelog line\\n\\n## Other\\n\"}" ;;
+    printf '{"number":%s,"title":"Fix the thing","labels":[{"name":"semver:patch"}],"body":%s}\n' "$3" '"intro\n\n## Changelog\n\n- real changelog line\n\n## Other\n"' ;;
   *) echo "other: $*" >> "$PR_STUB_REFUSED"; exit 64 ;;
 esac
 STUB
