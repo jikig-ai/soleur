@@ -12,6 +12,19 @@ lane: single-domain
 brand_survival_threshold: aggregate pattern
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-12 (proportionate pass: this is a four-file CI-assertion fix, so the fan-out of every available agent was not run; the gates, live checks and the CTO ruling below are what was applied).
+**Sections enhanced:** Research Insights, Observability, Phase 3, Sharp Edges.
+
+### Key Improvements
+1. The `discoverability_test` command was changed from the whole gate suite to a one-line wiring probe: a suite-shaped command in a new block is a Phase 4.7 reject (Check 10 runs under a 15 s cap). Measured 2026-10-12: the suite takes 5.7 s wall, so it would fit the cap, but the detection regex is over-inclusive and the probe is the smaller honest signal.
+2. Phase 3 now records why the helper-based mode derivation is safe under `set -euo pipefail` in the apply step.
+3. Live-checked every cited issue (below).
+
+### New Considerations Discovered
+- The apply step runs in a different shell step from the plan step, so `GATE_MODE` is not in scope there; the helper plus `APPLY_TARGET` env is the single-mapping answer (CTO ruling), not `$GITHUB_ENV`.
+
 ## Overview
 
 The post-apply backstop in the git-data replace job treats the LUKS store volume as always preserved, so the rotate dispatch, which replaces that volume on purpose, fails its own job after a successful apply. This plan makes the backstop mode-aware and moves it out of inline workflow bash into the shared, unit-tested gate library `tests/scripts/lib/git-data-host-replace-gate.sh`.
@@ -32,6 +45,12 @@ PR body must carry `Closes #10137` and `Ref #6897` (also `Ref #8211` as the issu
 5. An unknown or empty mode fails closed.
 
 **Cut List.** (a) A positive post-apply assertion that the LUKS volume shows delete+create under rotate: buys property 1's inverse, but the pre-apply gate already requires `luks_volume_rotated == 1` on the same saved plan; cut (CTO ruling, `decision-challenges.md`). (b) A second inline target-to-mode map inside the library: buys nothing the plan step's `GATE_MODE` does not already buy; cut in favour of one helper. (c) A bare "at least one resource_changes entry" count: weaker than the positive NIC/attachment creates; cut.
+
+**Live citation check (2026-10-12, `gh issue view`).** #8211 OPEN (git-data cutover rebuild), #6897 OPEN (encryption-posture lower-severity items), #8209 OPEN, #8609 OPEN, #8573 OPEN (the flip chain named in the issue), #8571 OPEN (copy mode; the wipe-related ticket the issue's text points at), #8189 CLOSED (root-key arm already in the gate), #7226 CLOSED (host-key pin arm already in the gate). Each state matches how the plan uses it.
+
+**Deepen-pass gate results.** 4.6 User-Brand Impact present with a valid threshold. 4.7 Observability: all five fields present; the block is NEW in this plan, so the #8412 conditions apply and were satisfied (verb `grep` on the allowlist; probe finishes in milliseconds; `expected_output` is the literal `1`). 4.8 PAT-shaped variables: none. 4.9 UI wireframe: no UI surface. 4.10 Encryption Posture: skipped, no `.tf`, migration, cloud-init or compose file is edited and no store or connection is introduced; `python3 scripts/lint-encryption-posture.py --repo-sweep` still run as an AC. 4.11 Guard Contract: `python3 scripts/lint-guard-contract.py` on this plan scanned 1 file, 1 guard entry, no failures. 4.12 Scope Check present with mapped asks. Downtime gate 4.55: no serving surface is touched; the change grades a saved plan after an already-authorized apply.
+
+**Implementation realism.** The apply step runs `set -euo pipefail`: `GATE_MODE=$(git_data_gate_mode "$APPLY_TARGET") || { echo ...; exit 1; }` is safe under errexit, and inside `if ! git_data_host_post_apply_assert ...; then` errexit is suspended for the function body, which is why every internal `jq` result keeps the explicit `!= "0"` fail-closed comparison and `|| return 1` on the preamble calls. The lib already sources `plan-gate-preamble.sh` (guarded by `declare -F`) and `git-data-root-key-arm-gate.sh`, so the apply step needs only one `source` line. `tfplan.json` is written by the plan step in the same `INFRA_DIR` working directory the apply step uses, so the relative path is unchanged.
 
 **Institutional notes.** `plan-gate-preamble.sh` header: `plan_gate_assert_readable` and `plan_gate_assert_classifiable` pass `{"resource_changes":[]}`, and `null | length` is 0 in jq, so presence must come from positive assertions; a gate's return code must be checked by the caller (`if ! fn; then exit 1`), because a bare call under `set +e` fails open. Gate suites use `gate_mutate_and_check` / `gate_mutate_layered` from `tests/scripts/lib/gate-suite-harness.sh` for non-vacuity.
 
@@ -142,8 +161,8 @@ logs:
   where: GitHub Actions run log (public repo; the gate prints no before/after values)
   retention: GitHub default (90 days)
 discoverability_test:
-  command: bash tests/scripts/test-git-data-host-replace-gate.sh
-  expected_output: passed
+  command: grep -c "git_data_host_post_apply_assert tfplan.json" .github/workflows/apply-web-platform-infra.yml
+  expected_output: "1"
 ```
 
 ## Guard Contract
@@ -233,4 +252,5 @@ No cross-domain implications detected: CI-assertion fix on existing infrastructu
 - Under `set -e`, a bare `git_data_host_post_apply_assert ...` inside the step is fail-open when errexit is suspended; always `if ! ...; then exit 1; fi`.
 - A `jq` failure yields an empty string; keep the `!= "0"` comparison form so empty fails closed, and keep counters validated with `plan_gate_assert_numeric` where arithmetic is used.
 - The flip gate keys on the step name matching "rotate confirm token"; do not rename it.
+- The Observability probe greps the call text `git_data_host_post_apply_assert tfplan.json`; keep exactly one such call line in the workflow (comments must name the function without the `tfplan.json` suffix) or the expected count of `1` drifts.
 - Do not claim that this PR fixes the flip: it removes the false failure only. The flip gate still needs a successful rotate run, which is operator-named.
