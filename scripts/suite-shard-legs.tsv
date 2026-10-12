@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1194
-# generated-at=2026-10-11T18:08:59Z
+# generated-at=2026-10-12T08:32:10Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -65,6 +65,8 @@
 .claude/hooks/stub-argv-fidelity.test.sh	1
 apps/cla-evidence/scripts/_cf-admin-token.test.sh	8
 apps/cla-evidence/scripts/_r2-endpoint.test.sh	8
+apps/cla-evidence/scripts/_r2-sigv4-curl.test.sh	1
+apps/cla-evidence/scripts/bootstrap-r2-probe.test.sh	1
 apps/cla-evidence/scripts/gdpr-override.test.sh	2
 apps/cla-evidence/scripts/inspect.test.sh	6
 apps/cla-evidence/scripts/sentinel-pr.test.sh	5
@@ -254,6 +256,7 @@ plugins/soleur/test/ship-followthrough-directive.test.sh	7
 plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh	6
 plugins/soleur/test/ship-pir-action-items-gate.test.sh	8
 plugins/soleur/test/sync-pr-behind.test.sh	3
+plugins/soleur/test/technical-ruling-gate.test.sh	1
 plugins/soleur/test/terraform-drift-sentry-leg.test.sh	7
 plugins/soleur/test/terraform-drift-step-order.test.sh	6
 plugins/soleur/test/test-pyramid-fixtures.test.sh	3
@@ -502,12 +505,7 @@ scripts/watchdog-arm-soak-9237	5
 scripts/watchdog-debounce-soak-9686	3
 scripts/web-fresh-boot-zot-8651	7
 scripts/web-host-escrow-preflight	3
-scripts/web-host-reboot	1
 scripts/web2-luks-live-6931	4
-scripts/web2-rebirth	4
-scripts/web2-rebirth-emptiness	4
-scripts/web2-rebirth-never-pooled	4
-scripts/web2-rebirth-recovery-check	6
 scripts/workspaces-plaintext-hold-9348	2
 scripts/zot-fill-rate-7341	6
 scripts/zot-last-err-redact-7500	7
@@ -600,9 +598,7 @@ tests/scripts/vector-redeliver-wiring	3
 tests/scripts/vendor-pin-gate-verdict	4
 tests/scripts/weakness-miner	2
 tests/scripts/web-host-birth-gate	6
-tests/scripts/web-host-rebirth-gate	6
 tests/scripts/web-host-replace-gate	2
-tests/scripts/web2-rebirth-classify	7
 tests/scripts/workspaces-luks-cutover-gate	7
 tests/scripts/workspaces-luks-recut-gate	5
 tests/scripts/write-known-hosts	3

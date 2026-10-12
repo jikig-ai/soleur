@@ -198,7 +198,14 @@ printf '%s:%s\n' "$GW_IP" "$GW_PORT" > "$TOKEN_DIR/.gw-target"
 # rebuilt (or existing) bridge — "apply green" should mean the path works,
 # not merely that the files copied. /dev/tcp is a bash builtin (no curl dep);
 # it does not exercise the CONNECT path, which the 5-min probe covers.
-timeout 5 bash -c "exec 3<>/dev/tcp/$GW_IP/$GW_PORT" \
-  || die "gw $GW_IP:$GW_PORT did not answer a TCP open post-bring-up"
+# Squid's init outlives docker-run returning (measured: both applies died here
+# <1s after `docker run` with the container still starting) — retry a few
+# opens over ~18s rather than checking once.
+_tcp_up=0
+for _tcp_try in 1 2 3 4 5 6; do
+  if timeout 3 bash -c "exec 3<>/dev/tcp/$GW_IP/$GW_PORT" 2>/dev/null; then _tcp_up=1; break; fi
+  sleep 3
+done
+(( _tcp_up == 1 )) || die "gw $GW_IP:$GW_PORT did not answer a TCP open post-bring-up"
 
 log "OK: gateway up (bridge=$BRIDGE_IF subnet=$SUBNET gw=$GW_IP)"
