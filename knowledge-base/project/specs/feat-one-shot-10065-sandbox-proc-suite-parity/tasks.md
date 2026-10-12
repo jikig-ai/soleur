@@ -12,56 +12,56 @@ Run everything in an allocated sandbox (`scripts/soleur-sandbox.sh new|run-isola
 
 ## Phase 0 Measurements (gate Phases 4-5 only)
 
-- [ ] 0.1 M1 reconcile bwrap prod posture; run `--replay-outer` in the suite image under default masks
-- [ ] 0.2 M2 run the `buildLikeC4SandboxArgv` argv through `/usr/bin/bwrap` under masks (fd 9 filter, fd 3 status)
-- [ ] 0.3 M3 (time-boxed, one run) `umount` availability, cover versus drop under retained caps and under the vendor caps
-- [ ] 0.4 M4 recorder as `SOLEUR_BWRAP_REAL` under the shim; M5 container PATH and `command -v bwrap`
-- [ ] 0.5 Write `measurements.md` (digest, bwrap version, outcomes, hook-sandbox reachability note); on an M3 identical-behavior result open a security issue and plan the ADR-075 correction
+- [x] 0.1 M1 reconcile bwrap prod posture; run `--replay-outer` in the suite image under default masks
+- [x] 0.2 M2 run the `buildLikeC4SandboxArgv` argv through `/usr/bin/bwrap` under masks (fd 9 filter, fd 3 status)
+- [x] 0.3 M3 (time-boxed, one run) `umount` availability, cover versus drop under retained caps and under the vendor caps
+- [x] 0.4 M4 recorder as `SOLEUR_BWRAP_REAL` under the shim; M5 container PATH and `command -v bwrap`
+- [x] 0.5 Write `measurements.md` (digest, bwrap version, outcomes, hook-sandbox reachability note); on an M3 identical-behavior result open a security issue and plan the ADR-075 correction
 
 ## Phase 1 RED first
 
-- [ ] 1.1 `infra/docker-run-tuple.test.sh` battery rows (Guard 1 matrix, H1/H2, must-PASS P1-P3 incl. `if docker run ...; then`) fail on the missing helper
-- [ ] 1.2 Skeletons: `test/docker-run-tuple-posture.test.ts`, `test/sandbox-vendored-argv-tail.test.ts`, `test/c4-render-argv-fixture.test.ts`
+- [x] 1.1 `infra/docker-run-tuple.test.sh` battery rows (Guard 1 matrix, H1/H2, must-PASS P1-P3 incl. `if docker run ...; then`) fail on the missing helper
+- [x] 1.2 Skeletons: `test/docker-run-tuple-posture.test.ts`, `test/sandbox-vendored-argv-tail.test.ts`, `test/c4-render-argv-fixture.test.ts`
 
 ## Phase 2 Tuple helper (P1)
 
-- [ ] 2.1 `infra/lib/docker-run-tuple.py` `check` and `posture` (closed-world grammar, census, `UNCLASSIFIED_DOCKER_RUN`, count floor 3)
-- [ ] 2.2 Battery green against mutated copies in `$WORK`; helper-copy allow-all row proves the battery is not vacuous
-- [ ] 2.3 `test/docker-run-tuple-posture.test.ts` required-lane wrapper green
-- [ ] 2.4 Census and grammar hardening from D3 (create/container verbs, per-option `$VAR` allowlist, DUPLICATE_OPTION, attached short forms, placement assertions on rows)
+- [x] 2.1 `infra/lib/docker-run-tuple.py` `check` and `posture` (closed-world grammar, census, `UNCLASSIFIED_DOCKER_RUN`, count floor 3)
+- [x] 2.2 Battery green against mutated copies in `$WORK`; helper-copy allow-all row proves the battery is not vacuous
+- [x] 2.3 `test/docker-run-tuple-posture.test.ts` required-lane wrapper green
+- [x] 2.4 Census and grammar hardening from D3 (create/container verbs, per-option `$VAR` allowlist, DUPLICATE_OPTION, attached short forms, placement assertions on rows)
 
 ## Phase 3 Suite derivation (P2, P6)
 
-- [ ] 3.1 Static `check` before the docker environment checks; `SANDBOX_MASKED_PROC_SRC_ROOT` seam refused under `CI`
-- [ ] 3.2 `start_container` from `posture --tuple prod`; `-u` from Dockerfile `useradd --uid`
-- [ ] 3.3 BASE via `runner FROM` one hop (`BASE_LINEAGE`); static and live PATH arms
-- [ ] 3.4 Raise `MIN_ASSERTIONS` literal
+- [x] 3.1 Static `check` before the docker environment checks; `SANDBOX_MASKED_PROC_SRC_ROOT` seam refused under `CI`
+- [x] 3.2 `start_container` from `posture --tuple prod`; `-u` from Dockerfile `useradd --uid`
+- [x] 3.3 BASE via `runner FROM` one hop (`BASE_LINEAGE`); static and live PATH arms
+- [x] 3.4 Raise `MIN_ASSERTIONS` literal (34, exact)
 
 ## Phase 4 Isolation arm (P3, P5; after M3)
 
-- [ ] 4.1 `ISO_ARGV` from the canary fixture (`FIXTURE_TAIL` before any docker call)
-- [ ] 4.2 Recorder arm (`DROP_FAILED`) and `MUTATE=shim-cover` seam
-- [ ] 4.3 Umount-refused-under-vendor-caps arm with a caps-retained positive control (D1); recorder instrument control and path-normalization rows
-- [ ] 4.4 Correct the shim header comment (comment lines only) and ADR-075 (Decision clarification and Alternatives row); AC15 comment-only check
-- [ ] 4.5 `docker inspect` arm on the running suite container (CapAdd, PidMode, User, MaskedPaths, apparmor and seccomp entries)
+- [x] 4.1 `ISO_ARGV` from the canary fixture (`FIXTURE_TAIL` before any docker call)
+- [x] 4.2 Recorder arm (`DROP_FAILED`) and `MUTATE=shim-cover` seam
+- [x] 4.3 Umount-refused-under-vendor-caps arm with a caps-retained positive control (D1); recorder instrument control and path-normalization rows
+- [x] 4.4 Correct the shim header comment (comment lines only) and ADR-075 (Decision clarification and Alternatives row); AC15 comment-only check
+- [x] 4.5 `docker inspect` arm on the running suite container (CapAdd, PidMode, User, MaskedPaths, apparmor and seccomp entries)
 
 ## Phase 5 Spawn paths (P4; replays per M1/M2)
 
-- [ ] 5.1 Outer-wrap `--replay-outer` arm
-- [ ] 5.2 `infra/c4-render-sandbox-argv.json` + pin test + literal census of bwrap spawn constants and literals
-- [ ] 5.3 C4 argv docker replay (or measured refusal recorded plus a tracking issue)
+- [x] 5.1 Outer-wrap `--replay-outer` arm
+- [x] 5.2 `infra/c4-render-sandbox-argv.json` + pin test + literal census of bwrap spawn constants and literals
+- [x] 5.3 C4 argv docker replay (or measured refusal recorded plus a tracking issue)
 
 ## Phase 6 Vendored builder tail (P3)
 
-- [ ] 6.1 `test/helpers/vendored-bwrap-tail.ts` extractor (bounded window, chunked scan), per-binary procfs-site counts and `CAP_BARRIER` literal pins (D2, D1)
-- [ ] 6.2 `test/sandbox-vendored-argv-tail.test.ts` real-binary rows, synthetic mutation rows, `BINARY_MISSING` under `CI`
-- [ ] 6.3 Live-tail row in `test/sandbox-proc-mask-runtime.test.ts` with cap-segment normalization
+- [x] 6.1 `test/helpers/vendored-bwrap-tail.ts` extractor (bounded window, chunked scan), per-binary procfs-site counts and `CAP_BARRIER` literal pins (D2, D1)
+- [x] 6.2 `test/sandbox-vendored-argv-tail.test.ts` real-binary rows, synthetic mutation rows, `BINARY_MISSING` under `CI`
+- [x] 6.3 Live-tail row in `test/sandbox-proc-mask-runtime.test.ts` with cap-segment normalization
 
 ## Phase 7 Registrations and CI wiring
 
-- [ ] 7.1 `git add` new files, then orphan, guard-vacuity, fixture-relative ratchets
-- [ ] 7.2 `PROMOTED_FILES`, `FILES_8855` and `PIN_8855`, `apt-bounded` SPECS or EXEMPT only if its census demands
-- [ ] 7.3 `infra-validation.yml` comment and three `paths:` entries; `test-all.sh --print-selection` check
+- [x] 7.1 `git add` new files, then orphan, guard-vacuity, fixture-relative ratchets
+- [x] 7.2 `PROMOTED_FILES`, `FILES_8855` and `PIN_8855`, `apt-bounded` SPECS or EXEMPT only if its census demands
+- [x] 7.3 `infra-validation.yml` comment and three `paths:` entries; `test-all.sh --print-selection` check
 
 ## Phase 8 Verification (targeted)
 
@@ -73,3 +73,14 @@ Run everything in an allocated sandbox (`scripts/soleur-sandbox.sh new|run-isola
 
 - [ ] 9.1 PR body `Closes #10065`; AppArmor-profile result claimed only after CI shows it
 - [ ] 9.2 Operator go-ahead, then `gh pr merge 10110 --auto` (no `--squash`); one re-arm on a dequeue, then stop and report
+
+## Outcomes and Guard Contract row-to-test map (AC11)
+
+- 4.3 narrowed by M3: no behavioral cover-vs-drop or umount arm (every umount2 is EPERM, no positive control exists in the unprivileged image); the recorder arm is the discriminator. 4.4 shipped as the ADR-075 addendum and the shim header comment correction.
+- 5.1 = branch (b): outer-wrap replay cannot run (`wrong_elevation_userns`, M1); tracked in #10115. 5.2/5.3 = branch (a): static pins plus the C4 replay run under the masks.
+- 7.4 apt-bounded: no SPECS edit needed (the derived container reuses `start_container`; the guard now sits before the apt budget lines). 7.6 (required-lane wrapper) = `test/docker-run-tuple-posture.test.ts`.
+- Guard 1 rows 1-11, H1/H2, P1-P10: `apps/web-platform/infra/docker-run-tuple.test.sh` (123 rows) and the suite's static call; row 5-6-11 count floor of exactly 3 in `docker-run-tuple.py`.
+- Guard 2 rows 1 (`MUTATE=shim-cover`, red via DROP_FAILED only), 6 (fixture rows, static battery), 7 (`shim-bypass`), recorder instrument control and analyzer path-normalization rows (in the suite, 13 analyzer rows); rows 2-5, 9-11 (tail drift, anchors, binary missing, procfs site counts, cap barrier): `test/sandbox-vendored-argv-tail.test.ts` and `test/sandbox-proc-mask-runtime.test.ts`. Row 8 (arm deletion) is carried by the exact `MIN_ASSERTIONS=34` literal.
+- Guard 3: `test/c4-render-argv-fixture.test.ts` (fixture pin, constants, literal census, no-procfs assertion) plus the suite's C4 replay arm.
+- Guard 4 rows 1-5 and the PATH forms (legacy, multi-var, `/usr/bin` first, compliant, stage-name case, last USER): suite static arms, verified by the 16-row static battery; live PATH arm and `MUTATE=shim-path`.
+- Local verification (2026-10-12, `SOLEUR_SANDBOX_DOCKER_APPARMOR=unconfined`): suite 34 passed 0 failed; seams `shim-splice`, `shim-bypass`, `shim-cover`, `shim-path`, `control-unmasked`, `sleeper-after`, `no-replay` each red on their own diagnostic; static battery 16/16 (red rows made zero docker calls). The AppArmor-profile half is proven only by CI.
