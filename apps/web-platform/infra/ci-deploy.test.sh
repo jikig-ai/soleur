@@ -68,6 +68,12 @@ trap 'rm -f "$MOCK_SLEEP_CAP_MARKER"' EXIT
 create_mock_logger() {
   cat > "$1/logger" << 'MOCK'
 #!/bin/bash
+# #9217: real logger reads its stdin when no message operand follows the options, and ci-deploy.sh pipes a command's output into it
+# (`... | logger -t TAG [-p PRIO]`). A mock that exits unread lets that writer take SIGPIPE, so it reads FIRST, only in that form
+# and only when stdin is not a terminal. MOCK_LOGGER_STDIN_FILE (optional) keeps the bytes for a wire assert.
+_lg_msg=0; _lg_prev=""
+for _a in "$@"; do case "$_lg_prev" in -t|-p) _lg_prev=""; continue ;; esac; case "$_a" in -t|-p) _lg_prev="$_a" ;; -*) ;; *) _lg_msg=1 ;; esac; done
+[[ "$_lg_msg" == 0 ]] && { [ -t 0 ] || timeout 2 cat >> "${MOCK_LOGGER_STDIN_FILE:-/dev/null}"; }
 if [[ -n "${MOCK_LOGGER_CAPTURE_FILE:-}" ]]; then
   printf '%s\n' "$*" >> "$MOCK_LOGGER_CAPTURE_FILE"
 fi
@@ -1909,6 +1915,28 @@ assert_canary_layered_rollback \
 assert_canary_layered_rollback \
   "layered canary: Layer 3 JWT-claims check fails → rollback" \
   "MOCK_LAYER3_FAIL"
+
+# Wire assert (#9217): the Layer 3 failure output reaches the logger mock on stdin (`$CANARY_LAYER_3_SCRIPT ... 2>&1 | logger -t TAG -p
+# user.warning`), so the mock's first-statement drain really ran. ${KNOB:-default}: an exported-empty knob must not compare "" with "".
+assert_layer3_logger_stdin() {
+  TOTAL=$((TOTAL + 1))
+  local d got want="${MOCK_LAYER3_LINE:-canary-bundle-claim-check: simulated bad JWT}"
+  d=$(mktemp -d)
+  ( export MOCK_LAYER3_FAIL=1 MOCK_LOGGER_STDIN_FILE="$d/logger.stdin"
+    run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" >/dev/null 2>&1 ) || true
+  got="$(cat "$d/logger.stdin" 2>/dev/null || true)"
+  if [[ "$got" == *"$want"* ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: layered canary: the logger mock received the Layer 3 failure output on stdin (drained first)"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: layered canary: the logger mock received the Layer 3 failure output on stdin (drained first)"
+    echo "        want to contain: $want"
+    echo "        got:             $got"
+  fi
+  rm -rf "$d"
+}
+assert_layer3_logger_stdin
 
 # Docker pull failure: no canary started
 assert_pull_failure() {
