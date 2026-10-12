@@ -759,48 +759,48 @@ hash. The merge-base diff in this PR's review is the outside check.
 
 ### Pre-merge (PR)
 
-- [ ] `AC1` Phase 0 done and verified: for each of #9976 and #9776 the re-read body's directive, parsed by the sweeper's own awk
+- [x] `AC1` Phase 0 done and verified: for each of #9976 and #9776 the re-read body's directive, parsed by the sweeper's own awk
   (column-0 `<!-- soleur:followthrough`, first `earliest=` wins), prints `earliest=2026-10-13T08:40:00Z` and `earliest=2026-10-19T08:40:00Z`
   respectively; a comment on each names T0 and run 38223902738 (T0 re-derived from the run's `release-outcome.completedAt`, not copied from
   this plan). **Ordering:** this PR must be merged before 2026-10-13T18:00Z (the sweeper cron is `0 18 * * *`); until it is, the
   24 h sweep runs the old probe, exits 3 SHAPE_DRIFT, and that comment is noise, not evidence (said in the PR body).
-- [ ] `AC2` The extended probe, run exactly as `NODE_ENV=test doppler run -p soleur -c ci -- bun run
+- [x] `AC2` The extended probe, run exactly as `NODE_ENV=test doppler run -p soleur -c ci -- bun run
   apps/web-platform/scripts/dev-probe-destroy-ask.ts`, exits 0, and its output (pasted verbatim into ADR-284 with SDK version, CLI
   version, the DEPLOYED `build_sha` from `/health`, the probe's own commit, UTC time; paths redacted) shows `verdict=ok` for the four
   existing cases, `member-force-push-default`, `grant-live-control`, `grant-force-push-default`, `gh-repo-delete`,
   `remote-refs-unchanged=true` and `RESULT: PASS`; and `PROBE_DECODE_ONLY=1` prints the decode-compat success line.
-- [ ] `AC3` Guard 1 rows measured with exact outcomes (not "non-zero"): M1 on the pre-fix tree shows `verdict=FAIL` and
+- [x] `AC3` Guard 1 rows measured with exact outcomes (not "non-zero"): M1 on the pre-fix tree shows `verdict=FAIL` and
   `canUseToolCalls=[]`; M2 exits 3; M3 prints zero `PROBE` lines and exits 3; M5 exits 1. Raw exit codes and `PROBE` lines recorded.
-- [ ] `AC4` In-process capture asserted by the probe and recorded: Sentry event tags `feature=cc-permissions`, `op=hosted-destroy-ask`,
+- [x] `AC4` In-process capture asserted by the probe and recorded: Sentry event tags `feature=cc-permissions`, `op=hosted-destroy-ask`,
   `extra.ruleId` prefix and `extra.isOwner` per variant, envelope with no command text. The decode-compat row passes through the soak
   probe (its summary counts the line; `level` is 40).
-- [ ] `AC5` Guard 2: `bash scripts/followthroughs/hosted-destroy-ask-window-9776.test.sh` exits 0 with the new rows (M1-M9, H0-H2) and
+- [x] `AC5` Guard 2: `bash scripts/followthroughs/hosted-destroy-ask-window-9776.test.sh` exits 0 with the new rows (M1-M9, H0-H2) and
   its anti-vacuity floor prints a literal count; the live run `doppler run -p soleur -c prd_terraform -- bash
   scripts/followthroughs/hosted-destroy-ask-window-9776-24h.sh` no longer exits 3 SHAPE_DRIFT on the 2026-10-12 contamination (first line
   begins `hosted destroy-ask window 24h`, exit 2 or 5); `scripts/test-all.sh`'s row still runs the suite.
-- [ ] `AC6` Telemetry reads recorded (counts only, "under 5" rule) per Phase 2, each with its positive control: Better Stack (allowlist
+- [x] `AC6` Telemetry reads recorded (counts only, "under 5" rule) per Phase 2, each with its positive control: Better Stack (allowlist
   quote, retention figure, archive-arm control, decoded lane counts) and Sentry (four ops, release control, 30 d retention control);
   the interpretation rule applied literally ("arrival NOT OBSERVED" if zero). The explicit windows [T0, now] are recorded with their
   bounds; the sweeper's trailing windows are not substituted for them.
-- [ ] `AC7` Bisect recorded: controls, the pins x 2 runs with `claudeCodeVersion` and per-pin code-side confirmation, any Tier 2
+- [x] `AC7` Bisect recorded: controls, the pins x 2 runs with `claudeCodeVersion` and per-pin code-side confirmation, any Tier 2
   versions, and the production-deploy dates derived per Phase 3 item 6 (or the Phase 3 item 5 fallback bounds, composed by the CLO
   agent). In the FEATURE worktree: `git status --porcelain` shows no change under `apps/web-platform/` from the phase, `git diff --quiet
   origin/main...HEAD -- apps/web-platform/package.json apps/web-platform/package-lock.json` exits 0, the installed SDK still reads
   `0.3.284`; the scratch worktree is removed and pruned.
-- [ ] `AC8` Post-mortem updated per Phase 5 (measured window table, bisect commands, notice dates limited to the CLO-cleared edit,
+- [x] `AC8` Post-mortem updated per Phase 5 (measured window table, bisect commands, notice dates limited to the CLO-cleared edit,
   statuses); no sentence "no user affected" or "no destroy command ran"; `art_33_triggered` unchanged; `status` not set to resolved.
-- [ ] `AC9` ADR-284 still has `status: adopting` (frontmatter and `## Status`), the Status sentence carries "NOT OBSERVED / never
+- [x] `AC9` ADR-284 still has `status: adopting` (frontmatter and `## Status`), the Status sentence carries "NOT OBSERVED / never
   observed / revisit triggers" next to the status, the `## Flip checklist` exists, the equivalence is worded "proposed ... pending
   operator ratification"; ADR-277 addendum no longer contains `Measured numbers: not yet recorded` and carries the dated soak-open
   pointer with no counts and no "verified"; the counsel-review audit has the one-line C9 pointer.
-- [ ] `AC10` Deferral issue created (milestone Phase 4: Validate + Scale; labels `domain/engineering`, `type/chore`,
+- [x] `AC10` Deferral issue created (milestone Phase 4: Validate + Scale; labels `domain/engineering`, `type/chore`,
   `priority/p2-medium`) and linked from ADR-284.
 - [ ] `AC11` PR body for #10101 uses `Ref #10054, #9776, #9976, #9601` only: no `Closes`/`Fixes`/`Resolves` before any of them; the PR is
   NOT merged without the operator's explicit "go ahead".
-- [ ] `AC12` `bash plugins/soleur/test/c4-count-parity.test.sh` green; `bun test plugins/soleur/test/preflight-discoverability-test.test.ts`
+- [x] `AC12` `bash plugins/soleur/test/c4-count-parity.test.sh` green; `bun test plugins/soleur/test/preflight-discoverability-test.test.ts`
   green with the bumped baseline; `python3 scripts/lint-guard-contract.py <this plan>` and `python3 scripts/lint-infra-no-human-steps.py
   --changed --base origin/main` pass; `npx markdownlint-cli2` clean on this plan and `tasks.md`.
-- [ ] `AC13` Diff scope: `git diff --name-only origin/main...HEAD` is a subset of the Files to Edit and Files to Create lists plus the
+- [x] `AC13` Diff scope: `git diff --name-only origin/main...HEAD` is a subset of the Files to Edit and Files to Create lists plus the
   files the pipeline itself writes (`knowledge-base/INDEX.md` if regenerated; under
   `knowledge-base/project/specs/feat-one-shot-accept-must-ask-lane-10054/`: `tasks.md`, `session-state.md`, `decision-challenges.md`); no
   file under `apps/web-platform/server/`, `apps/web-platform/package*.json` or `.github/` appears.
