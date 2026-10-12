@@ -159,10 +159,11 @@ fi
 # that does not reintroduce a suppression path.
 while IFS= read -r wiring; do
   grep -qF -- "$wiring" "$GUARD" || {
-    echo "FATAL: the guard no longer contains the production ALLOWLIST wiring:" >&2
+    echo "FATAL: the guard no longer contains a pinned production wiring:" >&2
     echo "  $wiring" >&2
-    echo "  §5's hygiene checks and §2's allowlist consult are unobservable while ALLOWLIST is" >&2
-    echo "  empty, so this presence check is the only thing standing between them and deletion." >&2
+    echo "  The §5 hygiene checks / §2 allowlist consult and the EXT_RESIDENCE" >&2
+    echo "  unclassifiable consult are unobservable from .tf mutation, so this" >&2
+    echo "  presence check is the only thing standing between them and deletion." >&2
     exit 2
   }
 done <<'WIRINGS'
@@ -186,19 +187,29 @@ if [[ "$n_reads" -lt "${#INPUTS[@]}" ]]; then
 fi
 
 # Guard 2 reads files ONLY through one `git ls-files` enumeration and one read_text() on its
-# results. A second reader (an open(), a literal path, an rglob) could take a file the scratch
-# repository below does not carry, so each shape is pinned and nothing else may open a file.
-# Stat-family calls are bounded the same way (#10147 pin check): exactly one is_file() + one
-# is_symlink() inside ext_residence_hygiene, and no exists()/stat() at all -- a second stat on
-# an unsandboxed path would widen what the pin check can reach without touching this list.
-if [[ "$(grep -c '"ls-files"' "$G2_PROG")" != 1 || "$(grep -c 'read_text(' "$G2_PROG")" != 1 \
-      || "$(grep -c 'open(' "$G2_PROG")" != 0 || "$(grep -c 'glob(' "$G2_PROG")" != 0 \
-      || "$(grep -c 'is_file(' "$G2_PROG")" != 1 || "$(grep -c 'is_symlink(' "$G2_PROG")" != 1 \
-      || "$(grep -c '\.exists(' "$G2_PROG")" != 0 || "$(grep -cF '.stat(' "$G2_PROG")" != 0 ]]; then
+# results, and stats them ONLY through the pin check's is_file()/is_symlink()/resolve() trio.
+# A second reader (an open(), a literal path, an rglob) or an alternative stat SPELLING
+# (os.path.*, lstat, scandir, is_dir, readlink...) could take a file the scratch repository
+# below does not carry, so the family is pinned by spelling, not intent: the allowed call
+# sites are counted exactly (grep -o, occurrences -- the bound is one-call-site-exact) and
+# every other file-touching spelling is pinned at zero.
+_g2_count() { grep -oF "$1" "$G2_PROG" | wc -l; }
+if [[ "$(_g2_count '"ls-files"')" != 1 || "$(_g2_count 'read_text(')" != 1 \
+      || "$(_g2_count 'open(')" != 0 || "$(_g2_count 'glob(')" != 0 \
+      || "$(_g2_count 'is_file(')" != 1 || "$(_g2_count 'is_symlink(')" != 1 \
+      || "$(_g2_count '.resolve(')" != 3 \
+      || "$(_g2_count 'stat(')" != 0 || "$(_g2_count 'exists(')" != 0 \
+      || "$(_g2_count 'scandir(')" != 0 || "$(_g2_count 'listdir(')" != 0 \
+      || "$(_g2_count 'readlink(')" != 0 || "$(_g2_count 'is_dir(')" != 0 \
+      || "$(_g2_count 'is_socket(')" != 0 || "$(_g2_count 'is_fifo(')" != 0 \
+      || "$(_g2_count 'is_mount(')" != 0 || "$(_g2_count 'is_block_device(')" != 0 \
+      || "$(_g2_count 'is_char_device(')" != 0 || "$(_g2_count 'samefile(')" != 0 \
+      || "$(_g2_count 'os.path.')" != 0 ]]; then
   echo "FATAL: Guard 2 must read files only via one git ls-files enumeration and one read_text()," >&2
-  echo "  and stat files only via the pin check's is_file()/is_symlink() pair." >&2
+  echo "  and touch paths only via the pin check's is_file()/is_symlink()/resolve() trio." >&2
   exit 2
 fi
+unset -f _g2_count
 # Every tracked (or new, unignored) .tf / .tf.json in the repo, as a path RELATIVE TO THE INFRA
 # DIR: web-platform infra files keep their short name (server.tf), the rest are reached through
 # ../../../ so the same SANDBOX/PRISTINE-relative copy and restore loops carry them.
@@ -215,10 +226,10 @@ for f in "${TF_FILES[@]}"; do
 done
 
 # ── EXT_RESIDENCE pin files (#10147) ─────────────────────────────────────────
-# Every EXT_RESIDENCE entry's `pin` is a repo-relative `*.test.*` path verified
-# by `(REPO / pin).is_file()` at guard runtime, so the scratch repository must
-# carry each pin file at its repo path -- an unsandboxed pin fails loudly on the
-# baseline row. The list is DERIVED from the guard's own `"pin"` values and
+# Every EXT_RESIDENCE entry's `pin` is a repo-relative `*.test.sh`/`*.test.ts`
+# path verified at guard runtime (suffix, resolve()-inside-REPO, not a symlink,
+# extant), so the scratch repository must carry each pin file at its repo path
+# -- an unsandboxed pin fails loudly on the baseline row. The list is DERIVED from the guard's own `"pin"` values and
 # reconciled against the hardcoded G2_PIN_INPUTS -- the EXPECTED_INPUTS/
 # DERIVED_INPUTS pattern: a new EXT_RESIDENCE entry is a deliberate two-file
 # edit whose omission is loud, not a silent widening of what the sandbox covers.
@@ -2047,12 +2058,12 @@ expect_ext_probe_red "X3 (EXT probe: a pin naming a dangling path)" \
   "EXT_RESIDENCE probe pin" \
   '{"apps/web-platform/infra/ci-ssh-key.tf":{"terraform_data.root_authorized_keys":{"hosts":["web-1"],"reason":"probe","pin":"apps/web-platform/infra/nope.test.sh"}}}'
 
-expect_ext_probe_red "X4 (EXT probe: a pin that is not a *.test.* file)" \
+expect_ext_probe_red "X4 (EXT probe: a pin lacking the *.test.sh/*.test.ts suffix)" \
   "EXT_RESIDENCE probe pin" \
   '{"apps/web-platform/infra/ci-ssh-key.tf":{"terraform_data.root_authorized_keys":{"hosts":["web-1"],"reason":"probe","pin":"apps/web-platform/infra/server.tf"}}}'
 
 expect_ext_probe_red "X5 (EXT probe: an unclassifiable-flagged entry over no swept block)" \
-  "stale EXT_RESIDENCE" \
+  "stale EXT_RESIDENCE probe" \
   '{"apps/web-platform/infra/workspaces-luks.tf":{"terraform_data.g2_probe_phantom":{"hosts":[],"reason":"probe","pin":"apps/web-platform/infra/luks-monitor-install.test.sh","unclassifiable":true}}}'
 
 # X6 is the P4 analog: break the real invariant (the G2-38 phantom), then hand
@@ -2090,7 +2101,7 @@ expect_ext_probe_red "X8 (EXT probe: a non-object probe is named, not a tracebac
 # The ghost member's own name is the discriminating anchor: it appears in the
 # finding only if iteration reached the second entry (the well-formed first
 # member resolves clean, so only the ghost can red).
-expect_ext_probe_red "X9 (EXT probe: hygiene iterates EVERY entry -- a malformed second member)" \
+expect_ext_probe_red "X9 (EXT probe: hygiene iterates EVERY entry -- a second member sweeping nothing)" \
   "terraform_data.ghost" '
 {
   "apps/web-platform/infra/ci-ssh-key.tf": {
@@ -2127,20 +2138,29 @@ expect_ext_probe_red "X15 (EXT probe: an empty reason is malformed)" \
 # `hosts ⊆ dialed` with swept >= 1: G2-22 fires `not swept` simultaneously, so
 # only a probe row over the real member isolates the over-declared-hosts clause.
 expect_ext_probe_red "X16 (EXT probe: an over-declared hosts set pre-authorizes a future dial)" \
-  "stale EXT_RESIDENCE" \
+  "stale EXT_RESIDENCE probe" \
   '{"apps/web-platform/infra/ci-ssh-key.tf": {"terraform_data.root_authorized_keys": {"hosts": ["web-1", "web-9"], "reason": "probe", "pin": "apps/web-platform/infra/luks-monitor-install.test.sh"}}}'
 
+# The absolute pin must name an EXISTING file so only the startswith("/")
+# conjunct can reject it -- a dangling one would red via is_file() regardless.
 expect_ext_probe_red "X17 (EXT probe: an absolute pin path escapes the repo-relative bound)" \
   "EXT_RESIDENCE probe pin" \
-  '{"apps/web-platform/infra/ci-ssh-key.tf": {"terraform_data.root_authorized_keys": {"hosts": ["web-1"], "reason": "probe", "pin": "/tmp/x.test.sh"}}}'
+  "{\"apps/web-platform/infra/ci-ssh-key.tf\": {\"terraform_data.root_authorized_keys\": {\"hosts\": [\"web-1\"], \"reason\": \"probe\", \"pin\": \"$TF_REPO/apps/web-platform/infra/luks-monitor-install.test.sh\"}}}"
 
+# The traversal resolves onto an EXISTING in-tree .test.ts pin -- only the
+# ".."-in-parts conjunct can reject it (is_file() would pass post-resolution).
 expect_ext_probe_red "X18 (EXT probe: a parent-traversal pin path escapes the repo-relative bound)" \
   "EXT_RESIDENCE probe pin" \
-  '{"apps/web-platform/infra/ci-ssh-key.tf": {"terraform_data.root_authorized_keys": {"hosts": ["web-1"], "reason": "probe", "pin": "apps/../x.test.sh"}}}'
+  '{"apps/web-platform/infra/ci-ssh-key.tf": {"terraform_data.root_authorized_keys": {"hosts": ["web-1"], "reason": "probe", "pin": "apps/../plugins/soleur/test/terraform-target-parity.test.ts"}}}'
 
+# The wrong-extension file is created in the scratch repo first -- only the
+# *.test.sh/*.test.ts endswith conjunct can reject it (is_file() would pass).
+X19_FILE="$TF_REPO/apps/web-platform/infra/x19-notes.test.txt"
+touch "$X19_FILE" || { echo "FATAL: X19 setup could not create $X19_FILE" >&2; exit 2; }
 expect_ext_probe_red "X19 (EXT probe: a pin with a non-test extension is rejected)" \
   "EXT_RESIDENCE probe pin" \
-  '{"apps/web-platform/infra/ci-ssh-key.tf": {"terraform_data.root_authorized_keys": {"hosts": ["web-1"], "reason": "probe", "pin": "apps/web-platform/infra/notes.test.txt"}}}'
+  '{"apps/web-platform/infra/ci-ssh-key.tf": {"terraform_data.root_authorized_keys": {"hosts": ["web-1"], "reason": "probe", "pin": "apps/web-platform/infra/x19-notes.test.txt"}}}'
+rm -f "$X19_FILE"
 
 # X20 exercises the is_symlink() clause: a committed-symlink pin would satisfy
 # the existence stat while naming nothing in-tree. The link is created in the
@@ -2149,7 +2169,8 @@ cases=$((cases + 1))
 restore
 ext_probes_run=$((ext_probes_run + 1))
 ext_probe_reds=$((ext_probe_reds + 1))
-ln -s luks-monitor-install.test.sh "$TF_REPO/apps/web-platform/infra/x20-pin-link.test.sh"
+ln -s luks-monitor-install.test.sh "$TF_REPO/apps/web-platform/infra/x20-pin-link.test.sh"   || { echo "FATAL: X20 setup could not create the symlink" >&2; exit 2; }
+[[ -L "$TF_REPO/apps/web-platform/infra/x20-pin-link.test.sh" ]]   || { echo "FATAL: X20 setup produced no symlink (fs rejects links?)" >&2; exit 2; }
 if SOLEUR_INFRA_DIR="$SANDBOX" SOLEUR_TF_REPO="$TF_REPO" \
    SOLEUR_PARITY_EXT_RESIDENCE_PROBE='{"apps/web-platform/infra/ci-ssh-key.tf": {"terraform_data.root_authorized_keys": {"hosts": ["web-1"], "reason": "probe", "pin": "apps/web-platform/infra/x20-pin-link.test.sh"}}}' \
    bash "$GUARD" >"$OUT" 2>&1; then
@@ -2162,8 +2183,60 @@ fi
 rm -f "$TF_REPO/apps/web-platform/infra/x20-pin-link.test.sh"
 restore
 
+# X21: `reason` non-str conjunct. Deleting `not isinstance(reason, str)` leaves
+# `5.strip()` → AttributeError traceback → red without the anchor → row fails.
+expect_ext_probe_red "X21 (EXT probe: a non-string reason is malformed)" \
+  "(malformed entry," \
+  '{"apps/web-platform/infra/ci-ssh-key.tf": {"terraform_data.root_authorized_keys": {"hosts": ["web-1"], "reason": 5, "pin": "apps/web-platform/infra/luks-monitor-install.test.sh"}}}'
+
+# X22: an unhashable hosts member stays a list through normalization so the
+# malformed arm names it -- deleting the `except TypeError: pass` leaves an
+# uncaught TypeError → red without the anchor.
+expect_ext_probe_red "X22 (EXT probe: an unhashable hosts member is malformed, not a traceback)" \
+  "(malformed entry," \
+  '{"apps/web-platform/infra/ci-ssh-key.tf": {"terraform_data.root_authorized_keys": {"hosts": [["web-1"]], "reason": "probe", "pin": "apps/web-platform/infra/luks-monitor-install.test.sh"}}}'
+
+# X23: outer-loop iteration -- a phantom member in a SECOND file key only reds
+# if hygiene iterates every fpath, not just the first.
+expect_ext_probe_red "X23 (EXT probe: hygiene iterates EVERY file entry -- a phantom in file two)" \
+  "workspaces-luks.tf:terraform_data.ghost" '
+{
+  "apps/web-platform/infra/ci-ssh-key.tf": {
+    "terraform_data.root_authorized_keys": {"hosts": ["web-1"], "reason": "probe", "pin": "apps/web-platform/infra/luks-monitor-install.test.sh"}
+  },
+  "apps/web-platform/infra/workspaces-luks.tf": {
+    "terraform_data.ghost": {"hosts": [], "reason": "probe", "pin": "apps/web-platform/infra/luks-monitor-install.test.sh", "unclassifiable": true}
+  }
+}
+'
+
+# X24 exercises the resolve()-containment clause: the pin leaf is a REAL file
+# reached through a symlinked DIRECTORY component escaping REPO -- leaf
+# is_symlink() and is_file() both pass, only the resolve() bound rejects it.
+cases=$((cases + 1))
+restore
+ext_probes_run=$((ext_probes_run + 1))
+ext_probe_reds=$((ext_probe_reds + 1))
+X24_TARGET="$(dirname "$TF_REPO")/x24-target.test.sh"
+touch "$X24_TARGET" || { echo "FATAL: X24 setup could not create $X24_TARGET" >&2; exit 2; }
+ln -s "$(dirname "$TF_REPO")" "$TF_REPO/apps/web-platform/infra/x24-out" \
+  || { echo "FATAL: X24 setup could not create the dir symlink" >&2; exit 2; }
+[[ -L "$TF_REPO/apps/web-platform/infra/x24-out" && -f "$X24_TARGET" ]] \
+  || { echo "FATAL: X24 setup did not land" >&2; exit 2; }
+if SOLEUR_INFRA_DIR="$SANDBOX" SOLEUR_TF_REPO="$TF_REPO" \
+   SOLEUR_PARITY_EXT_RESIDENCE_PROBE='{"apps/web-platform/infra/ci-ssh-key.tf": {"terraform_data.root_authorized_keys": {"hosts": ["web-1"], "reason": "probe", "pin": "apps/web-platform/infra/x24-out/x24-target.test.sh"}}}' \
+   bash "$GUARD" >"$OUT" 2>&1; then
+  no "X24 (EXT probe: a pin resolving through an out-of-repo dir symlink is rejected): guard still PASSED"
+elif mutation_scorer_failed_on "$OUT" '\[FAIL\]' "EXT_RESIDENCE probe pin"; then
+  ok "X24 (EXT probe: a pin resolving through an out-of-repo dir symlink is rejected): guard went RED on 'EXT_RESIDENCE probe pin'"
+else
+  no "X24 (EXT probe: a pin resolving through an out-of-repo dir symlink is rejected): guard went red but NOT via the pin arm. Output: $(<"$OUT")"
+fi
+rm -f "$TF_REPO/apps/web-platform/infra/x24-out" "$X24_TARGET"
+restore
+
 # ── Accounting conservation (ADR-193 #3) ────────────────────────────────────────────────
-# Ordered BEFORE the three floors (ADR-193 #4). A neutered `ok` deflates `pass` while `cases`
+# Ordered BEFORE the five floor checks (ADR-193 #4): mutations + the two per-family probe pairs. A neutered `ok` deflates `pass` while `cases`
 # keeps moving, so the floors would ALSO trip and would report "anchors drifted" -- a diagnosis
 # that sends the reader to the guard's failure text when the fault is in this battery's own
 # accounting. This says "a verdict was discarded" instead.
@@ -2190,7 +2263,7 @@ fi
 # the ADR-193 defect: a floor whose failure arm routes through the suite's own verdict helper
 # cannot witness that helper being neutered -- the assertion rows go quiet AND so does the floor
 # meant to notice the quiet. Each carries a DISTINCT message so a failure says WHICH tripped.
-FLOOR=98  # floor = census (test-design review): 93 expect_red + M33b + 3 _g2_json_row + G2-C2 = 98 mutations_run. Slack lets rows vanish unflagged; G2-C5/G2-C7 (expect_green) do not increment, G2-C2/C3 DO. Prior derivation: +5 #9151 (M4a,M4b,G2-15..17) +7 review-pass (M2b,M4c..g,G2-18) +1 net #9970 (control-C -> green -1, M4j+M4k +2) +15 #9998 (G2-19..33) +3 #10148 (G2-C6->G2-38 red conversion + G2-39/G2-40; G2-C3 red conversion already counted). Re-derive from the battery log when adding rows.
+FLOOR=98  # floor = census (test-design review): 93 expect_red + M33b + 3 _g2_json_row + G2-C2 = 98 mutations_run. Slack lets rows vanish unflagged; G2-C5/G2-C7/G2-C8 (expect_green) do not increment, G2-C2/C3 DO. Prior derivation: +5 #9151 (M4a,M4b,G2-15..17) +7 review-pass (M2b,M4c..g,G2-18) +1 net #9970 (control-C -> green -1, M4j+M4k +2) +15 #9998 (G2-19..33) +3 #10148 (G2-C6->G2-38 red conversion + G2-39/G2-40; G2-C3 red conversion already counted). Re-derive from the battery log when adding rows.
 if (( mutations_run < FLOOR )); then
   printf '\n[FATAL] anti-vacuity floor (mutations): only %d landed, attributed mutation(s) ran, expected >= %d.\n' \
     "$mutations_run" "$FLOOR" >&2
@@ -2214,8 +2287,8 @@ fi
 # probe family carries its own run/red pair.
 PROBE_FLOOR=7   # P1-P7 (§5 ALLOWLIST family) = 7 probes_run
 PROBE_RED_FLOOR=6  # 6 §5 reds; the GREEN control cannot satisfy it
-EXT_PROBE_FLOOR=20   # X1-X20 (EXT_RESIDENCE family) = 20 ext_probes_run
-EXT_PROBE_RED_FLOOR=19  # 19 EXT reds; X7's GREEN control cannot satisfy it
+EXT_PROBE_FLOOR=24   # X1-X24 (EXT_RESIDENCE family) = 24 ext_probes_run
+EXT_PROBE_RED_FLOOR=23  # 23 EXT reds; X7's GREEN control cannot satisfy it
 if (( probes_run < PROBE_FLOOR )); then
   printf '\n[FATAL] anti-vacuity floor (probes): only %d §5-hygiene probe(s) ran, expected >= %d.\n' \
     "$probes_run" "$PROBE_FLOOR" >&2

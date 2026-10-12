@@ -1605,15 +1605,16 @@ else:
 
 # Allowance hygiene, folded into one arm (the §5 check_allowlist precedent): an
 # EXT_RESIDENCE entry that no longer sweeps a matching block, whose reason is
-# empty, or whose `pin` does not name an extant repo-relative `*.test.*` file is
-# a finding. The mutation battery mutates .tf inputs only and cannot reach this
+# empty, or whose `pin` does not name an extant repo-relative `*.test.sh`/
+# `*.test.ts` file resolving inside REPO is a finding. The mutation battery mutates .tf inputs only and cannot reach this
 # table, so the invariant fails loudly HERE at guard runtime; the
 # reason-adequacy half is verified by review like ALLOWLIST/ONLY_JUSTIFIED --
 # and so is pin-adequacy (the bound forces the DECLARATION, not the coverage).
 # The pin check is an existence stat under REPO -- deliberately not a second
 # reader: the battery pins Guard 2 to exactly one file enumeration, one
-# file-read call site, and one stat-family pair, so file CONTENT verification
-# would be a deliberate reader-pin amendment, not a silent extension.
+# file-read call site, and the stat-family call sites below, so file CONTENT
+# verification would be a deliberate reader-pin amendment, not a silent
+# extension.
 def ext_residence_hygiene(table, label):
     pin_bad = []
     stale = []
@@ -1637,16 +1638,19 @@ def ext_residence_hygiene(table, label):
                              "empty hosts without unclassifiable: true)")
                 continue
             # `pin` is mandatory and bounded: a repo-relative `*.test.sh`/
-            # `*.test.ts` path that exists under REPO and is not a symlink (a
-            # committed link escaping REPO would satisfy the existence stat while the
-            # bound names nothing in-tree). A typo'd or dangling pin is the
-            # silent-drift class this table exists to catch, so existence is
-            # mechanical.
+            # `*.test.ts` path that exists under REPO, resolving inside it (a
+            # committed symlink -- leaf OR intermediate component -- escaping
+            # REPO would satisfy the existence stat while the bound names
+            # nothing in-tree). A typo'd or dangling pin is the silent-drift
+            # class this table exists to catch, so existence is mechanical.
+            # REPO is already canonicalized (above), so the containment check
+            # compares real paths.
             pin = entry.get("pin")
             if not isinstance(pin, str) or not pin.strip() \
                     or pin.startswith("/") \
                     or ".." in pathlib.PurePosixPath(pin).parts \
                     or not pin.endswith((".test.sh", ".test.ts")) \
+                    or not (REPO / pin).resolve().is_relative_to(REPO) \
                     or (REPO / pin).is_symlink() \
                     or not (REPO / pin).is_file():
                 pin_bad.append(f"{fpath}:{rname} (pin {pin!r})")
@@ -1703,9 +1707,11 @@ else:
 ext_probe_raw = os.environ.get("SOLEUR_PARITY_EXT_RESIDENCE_PROBE", "")
 if ext_probe_raw:
     # RecursionError is not a ValueError, and deeply-nested JSON raises it -- a
-    # traceback rather than the named failure this branch exists to produce. The
-    # parse-failure path stops here: falling through to the shape check on {}
-    # would print a spurious ok() right after the FAIL.
+    # traceback rather than the named failure this branch exists to produce.
+    # (It is unreachable on Linux today: MAX_ARG_STRLEN caps the env var under
+    # the nesting depth CPython needs to recurse -- kept as portability armor.)
+    # The parse-failure path stops here: falling through to the shape check on
+    # {} would print a spurious ok() right after the FAIL.
     probe_parsed = False
     try:
         ext_probe = json.loads(ext_probe_raw)

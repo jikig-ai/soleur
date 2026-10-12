@@ -27,5 +27,5 @@
 - Guard: EXT_RESIDENCE `pin`/`unclassifiable` fields, unclassifiable-dial arm, ext_residence_hygiene() (pin shape/existence, >=1 swept block, hosts-empty-only-under-flag), SOLEUR_PARITY_EXT_RESIDENCE_PROBE.
 - Battery: G2-C6->G2-38 (red), G2-39/40, G2-C3->red, G2-C7 green, probe pair + X1-X7, G2_PIN_INPUTS sandbox copies.
 - Result: guard 14/14 GREEN on real tree; battery 125/125 cases, RC=0.
-- Floors re-derived from the battery log: FLOOR=98, PROBE_FLOOR=14, PROBE_RED_FLOOR=12 (plan estimated 13; measured is 14 — 7 existing + 7 EXT probes share probes_run).
+- Floors re-derived from the battery log: FLOOR=98; probe floors split per-family in the review fix round — PROBE_FLOOR/PROBE_RED_FLOOR stay 7/6 (§5), EXT_PROBE_FLOOR/EXT_PROBE_RED_FLOOR land at 24/23 (X1-X24).
 - Deviations: none. First battery run caught a battery-side bug (G2-40 needles landed in the mutator slot — the exact arg-order trap apply_mutation warns about); fixed by moving needles after the mutator.

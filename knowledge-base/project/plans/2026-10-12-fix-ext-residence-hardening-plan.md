@@ -358,9 +358,9 @@ sandboxed fails loudly on the baseline row.
 
 **Accounting.** `mutations_run`: G2-C6 was `expect_green` (uncounted); G2-38/39/40
 add 3 → `FLOOR` 95 → **98** (G2-C3's `_g2_json_row` stays counted, direction
-changes only). Probes grew under review to X1-X20 (+13 red +1 green) and
+changes only). Probes grew under review to X1-X24 (+17 rows, all red) and
 the floors were split per-family: `PROBE_FLOOR`/`PROBE_RED_FLOOR` stay 7/6
-(§5), `EXT_PROBE_FLOOR`/`EXT_PROBE_RED_FLOOR` land at **20**/**19**. All
+(§5), `EXT_PROBE_FLOOR`/`EXT_PROBE_RED_FLOOR` land at **24**/**23**. All
 comments re-derived from the battery log per file convention.
 
 ## Technical Considerations
