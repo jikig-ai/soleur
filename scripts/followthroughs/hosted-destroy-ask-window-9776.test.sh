@@ -16,19 +16,38 @@ check() { CHECKED=$((CHECKED + 1)); if [ "$2" = "$3" ]; then ok "$1"; else bad "
 has()   { CHECKED=$((CHECKED + 1)); case "$2" in *"$3"*) ok "$1" ;; *) bad "$1" "missing [$3]" ;; esac; }
 hasnt() { CHECKED=$((CHECKED + 1)); case "$2" in *"$3"*) bad "$1" "unexpected [$3] present" ;; *) ok "$1" ;; esac; }
 
-# row <decision> <ruleSuffix|-> <repo> -> one stub row in the stored shape
+# row <decision> <ruleSuffix|-> <repo> [role] -> one stub row in the stored shape. CONTAINER_NAME is a TOP-LEVEL field of the
+# decoded `raw` (measured on live app-container rows 2026-10-12); ROW_CONTAINER overrides it for the rows that must be excluded.
 row() {
   local rule="-"
   [ "$2" != "-" ] && rule="hosted-destroy-ask:$2"
-  jq -nc --arg d "$1" --arg r "$rule" --arg repo "$3" --arg role "${4:-owner}" \
-    '{dt:"2026-10-11 10:00:00.000000", raw:({message:({level:40,msg:"x",sec:true,decision:$d,ruleId:$r,repo:$repo,approverRole:$role}),source_kind:"app_container"}|tojson)}'
+  jq -nc --arg d "$1" --arg r "$rule" --arg repo "$3" --arg role "${4:-owner}" --arg c "${ROW_CONTAINER:-soleur-web-platform}" \
+    '{dt:"2026-10-11 10:00:00.000000", raw:({message:({level:40,msg:"x",sec:true,decision:$d,ruleId:$r,repo:$repo,approverRole:$role}),CONTAINER_NAME:$c,source_kind:"app_container"}|tojson)}'
 }
 rows_of() { local n="$1"; shift; local i; for ((i = 0; i < n; i++)); do row "$@"; done; }
+# inngest_rows <n>: the measured 2026-10-12 contamination shape, synthesized (no real payload text): the Inngest host's
+# journald copies of webhook payloads that QUOTE the marker. No CONTAINER_NAME; `message` is a string, not a pino object.
+inngest_rows() {
+  local i; for ((i = 0; i < $1; i++)); do
+    jq -nc '{dt:"2026-10-12 09:00:00.000000", raw:({SYSLOG_IDENTIFIER:"doppler",host_name:"soleur-inngest-prd",source_kind:"journald",message:"synthetic webhook event payload quoting destroy-ask"}|tojson)}'
+  done
+}
 
 QUERY_STUB="$ROOT/query.sh"
 cat > "$QUERY_STUB" <<'STUB'
 #!/usr/bin/env bash
-printf '%s\n' "$*" > "$STUB_ARGS"
+# Dispatches on the FIRST argument, like the real script: `SELECT ...` is the raw-SQL liveness read, anything else the
+# convenience-flag ask read. Every call appends its argv to STUB_ARGS (truncated by run()).
+printf '%s\n' "$*" >> "$STUB_ARGS"
+case "$1" in
+  SELECT*)
+    if [ -n "${STUB_LIVE_RC:-}" ] && [ "$STUB_LIVE_RC" != 0 ]; then echo "auth failure for user secret-user at host secret-host" >&2; exit "$STUB_LIVE_RC"; fi
+    case "${STUB_LIVE-1000}" in
+      garbage) echo "<html>not a count</html>" ;;
+      *) printf '{"n":%s}\n' "${STUB_LIVE-1000}" ;;
+    esac
+    exit 0 ;;
+esac
 if [ -n "${STUB_RC:-}" ] && [ "$STUB_RC" != 0 ]; then echo "auth failure for user secret-user at host secret-host" >&2; exit "$STUB_RC"; fi
 cat "$STUB_ROWS"
 STUB
@@ -36,6 +55,7 @@ chmod +x "$QUERY_STUB"
 
 run() { # run <window> <rowsfile> [extra env assignments...]
   local win="$1" rows="$2"; shift 2
+  : > "$ROOT/args"
   env STUB_ROWS="$rows" STUB_ARGS="$ROOT/args" DESTROY_ASK_QUERY_SCRIPT="$QUERY_STUB" \
     BETTERSTACK_QUERY_HOST=h BETTERSTACK_QUERY_USERNAME=u BETTERSTACK_QUERY_PASSWORD=p "$@" \
     bash "$SUT" ${win:+--window "$win"} 2>&1
@@ -52,12 +72,14 @@ check "missing credential: exit 3" 3 "$RC"; has "missing credential names the va
 out_rc 24h "$ROOT/empty" STUB_RC=7
 check "query failure: exit 3" 3 "$RC"; hasnt "query failure never echoes the stub's credential text" "$OUT" "secret-user"; hasnt "nor its host" "$OUT" "secret-host"
 out_rc 24h "$ROOT/empty"
-check "zero rows: NOT YET (exit 2)" 2 "$RC"; has "zero rows says it is expected at low volume" "$OUT" "low volume"
+check "zero rows, channel live: NOT YET (exit 2)" 2 "$RC"; has "zero rows says it is expected at low volume" "$OUT" "low volume"
+has "24h zero asks prints the string the tail checks (T1)" "$OUT" "NOT YET: no 24h revert threshold tripped."
+has "zero asks states it plainly" "$OUT" "0 natural asks"
 has "the window and the marker reach the query script" "$(cat "$ROOT/args")" "--since 24h --grep destroy-ask"
 
 # --- stored-shape drift: rows mention the marker, none decodes
-printf '%s\n' '{"dt":"2026-10-11 10:00:00","raw":"{\"message\":\"some issue body quoting destroy-ask\"}"}' > "$ROOT/drift"
-out_rc 24h "$ROOT/drift"; check "mentions but no decode: exit 3" 3 "$RC"; has "...named SHAPE_DRIFT" "$OUT" "SHAPE_DRIFT"
+printf '%s\n' '{"dt":"2026-10-11 10:00:00","raw":"{\"message\":\"synthetic text quoting destroy-ask\",\"CONTAINER_NAME\":\"soleur-web-platform\"}"}' > "$ROOT/drift"
+out_rc 24h "$ROOT/drift"; check "an APP-CONTAINER row mentions the marker, none decodes: exit 3 (M7: isolation did not blind the arm it protects)" 3 "$RC"; has "...named SHAPE_DRIFT" "$OUT" "SHAPE_DRIFT"
 
 # --- 24h window
 { rows_of 3 destroy-ask git-force-default alice/app; } > "$ROOT/r1"
@@ -107,6 +129,44 @@ for w in 24h 7d; do
   has "wrapper $w queries the $w window" "$(cat "$ROOT/wargs-$w")" "--since $w"
 done
 
+# --- Guard 2: isolation (the measured 2026-10-12 contamination) and liveness (a quiet window must be proven quiet, not dark)
+# H0 (first measured shape): 34 Inngest-host rows quote the marker, no app-container row does, no lane row exists.
+inngest_rows 34 > "$ROOT/h0"
+out_rc 24h "$ROOT/h0"; check "H0: 34 non-app rows quoting the marker are NOT a shape drift (24h: exit 2)" 2 "$RC"; has "H0: the first line names the window" "$OUT" "hosted destroy-ask window 24h"
+hasnt "H0: never reports SHAPE_DRIFT on another service's rows" "$OUT" "SHAPE_DRIFT"
+out_rc 7d "$ROOT/h0"; check "M6: the same contamination at 7d: ACTION REQUIRED (exit 5), not CANNOT ESTABLISH" 5 "$RC"
+# M1/M2: dark channel (zero app-container pino rows in the same window) with zero asks is CANNOT ESTABLISH in both windows
+out_rc 24h "$ROOT/empty" STUB_LIVE=0; check "M1: zero asks + dark channel (24h): exit 3, not 2" 3 "$RC"; has "M1: says why" "$OUT" "liveness"
+out_rc 7d "$ROOT/empty" STUB_LIVE=0; check "M2: zero asks + dark channel (7d): exit 3, not 5" 3 "$RC"
+# M3/M4: live channel, zero asks
+out_rc 7d "$ROOT/empty"; check "M3: live channel, zero asks, 7d: exit 5" 5 "$RC"
+has "M3: the n=0 statement" "$OUT" "0 natural asks"; has "M3: says the soak did not exercise the lane" "$OUT" "did not exercise the lane"
+has "M3: points at the flip checklist" "$OUT" "Flip checklist"; has "M3: still the probe's first-line shape" "$OUT" "hosted destroy-ask window 7d"
+out_rc 24h "$ROOT/empty"; check "M4: live channel, zero asks, 24h: exit 2" 2 "$RC"
+# M8: truncation is judged on the RAW line count, so contamination cannot hide it
+{ inngest_rows 4995; rows_of 5 destroy-ask git-force-default alice/app; } > "$ROOT/m8"
+out_rc 24h "$ROOT/m8"; check "M8: 5000 raw rows (almost all non-app): truncated, exit 3" 3 "$RC"; has "M8: says truncated" "$OUT" "truncated"
+# M9 / H2: only the app container counts, and the match is exact
+{ ROW_CONTAINER=soleur-web-platform-canary rows_of 3 destroy-ask git-force-default alice/app; } > "$ROOT/m9"
+out_rc 24h "$ROOT/m9"; check "M9: canary-container ask rows are not asks (exit 2, zero asks)" 2 "$RC"; has "M9: asks=0 (anchored: top_repo_asks=0 would also contain asks=0)" "$OUT" "window 24h: asks=0 "
+{ ROW_CONTAINER=Soleur-Web-Platform rows_of 2 destroy-ask git-force-default zed/zed; rows_of 2 destroy-ask git-force-default carol/other; } > "$ROOT/h2"
+out_rc 24h "$ROOT/h2"; check "H2: a repo the canonical fixture never uses, and a different-case container name" 2 "$RC"
+has "H2: only the exact-case app container counts (2 asks, not 4)" "$OUT" "window 24h: asks=2 "
+{ inngest_rows 34; rows_of 3 destroy-ask git-force-default alice/app; } > "$ROOT/mix"
+out_rc 24h "$ROOT/mix"; has "contamination beside real lane rows: only the lane rows count" "$OUT" "window 24h: asks=3 "
+hasnt "...and the contamination does not trip anything" "$OUT" "SHAPE_DRIFT"
+# the liveness read: raw SQL through the same query script, both Better Stack arms, same window, app container, pino level >= 40
+out_rc 24h "$ROOT/empty"; LARGS="$(cat "$ROOT/args")"
+has "liveness read is the raw-SQL call" "$LARGS" "SELECT"; has "liveness read includes the hot arm" "$LARGS" 'remote($BS_TABLE)'
+has "liveness read includes the ARCHIVE arm" "$LARGS" 's3Cluster(primary, $BS_TABLE_S3)'; has "liveness read uses the same 24h window" "$LARGS" "INTERVAL 24 HOUR"
+has "liveness read is scoped to the app container" "$LARGS" "soleur-web-platform"; has "liveness read requires pino level 40 or above" "$LARGS" ">= 40"
+out_rc 7d "$ROOT/empty"; has "7d liveness read uses the 7d window" "$(cat "$ROOT/args")" "INTERVAL 7 DAY"
+# a liveness read that fails or cannot be parsed never reads as a quiet window
+out_rc 24h "$ROOT/empty" STUB_LIVE_RC=7; check "liveness query failure: exit 3" 3 "$RC"; hasnt "...never echoes the stub's credential text" "$OUT" "secret-user"
+out_rc 24h "$ROOT/empty" STUB_LIVE=garbage; check "liveness result that is not a count: exit 3" 3 "$RC"
+# liveness is not consulted when asks exist (the channel is evidently live) and never changes a trip
+out_rc 24h "$ROOT/r2" STUB_LIVE=0; check "asks present: a classifier-error ask still trips with a zero liveness stub" 5 "$RC"
+
 # --- exit vocabulary and xtrace
 for f in r1 r2 r3 s1 s3 drift empty; do
   w=24h; case "$f" in s*) w=7d ;; esac
@@ -117,7 +177,7 @@ OUT="$(STUB_ROWS="$ROOT/r1" STUB_ARGS="$ROOT/args" DESTROY_ASK_QUERY_SCRIPT="$QU
 check "xtrace with a live credential: refuses (78)" 78 "$RC"
 
 # Anti-vacuity floor: a literal directly above its `if`, reported by printf + exit, never through the helpers.
-MIN_CHECKS=49
+MIN_CHECKS=87
 if [ "$CHECKED" -lt "$MIN_CHECKS" ]; then
   printf '[FATAL] assertion floor: only %s assertions ran, floor %s\n' "$CHECKED" "$MIN_CHECKS" >&2
   exit 1
