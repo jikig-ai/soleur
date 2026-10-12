@@ -1646,13 +1646,21 @@ def ext_residence_hygiene(table, label):
             # REPO is already canonicalized (above), so the containment check
             # compares real paths.
             pin = entry.get("pin")
+            # The stat trio is wrapped so a hostile path (embedded NUL --
+            # ValueError on lstat; a symlink loop -- RuntimeError on old
+            # Pythons) yields a named pin finding, not a traceback.
+            try:
+                stat_ok = isinstance(pin, str) \
+                    and (REPO / pin).resolve().is_relative_to(REPO) \
+                    and not (REPO / pin).is_symlink() \
+                    and (REPO / pin).is_file()
+            except (OSError, ValueError, RuntimeError):
+                stat_ok = False
             if not isinstance(pin, str) or not pin.strip() \
                     or pin.startswith("/") \
                     or ".." in pathlib.PurePosixPath(pin).parts \
                     or not pin.endswith((".test.sh", ".test.ts")) \
-                    or not (REPO / pin).resolve().is_relative_to(REPO) \
-                    or (REPO / pin).is_symlink() \
-                    or not (REPO / pin).is_file():
+                    or not stat_ok:
                 pin_bad.append(f"{fpath}:{rname} (pin {pin!r})")
             # Every entry must still sweep >=1 block at its declared
             # (file, type.name) -- the stale arm's reach extends to

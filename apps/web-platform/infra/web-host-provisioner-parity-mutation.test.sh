@@ -118,7 +118,13 @@ if [[ ! -s "$MAIN_PROG" || ! -s "$G2_PROG" ]]; then
   echo "FATAL: could not extract the guard's PYEOF and G2EOF programs -- the scoping below would be vacuous." >&2
   exit 2
 fi
-n_join=$(grep -cF 'os.path.join(INFRA' "$MAIN_PROG")
+# Exact OCCURRENCE counts for the pinned spellings below (the earlier grep -c
+# idiom counts LINES -- two call sites on one line read as 1 and the bound
+# passes vacuously). `[[:space:]]*\(` absorbs the legal `name ()` spelling
+# evasion; `tr -d` strips BSD wc -l padding.
+_sites() { grep -oE "$1" "$2" | wc -l | tr -d '[:space:]'; }
+
+n_join=$(_sites 'os\.path\.join[[:space:]]*\(INFRA' "$MAIN_PROG")
 if [[ "$n_join" != "1" ]]; then
   echo "FATAL: expected exactly one 'os.path.join(INFRA' in the guard (the read() helper), found $n_join." >&2
   echo "  A second reader can take an input this battery never sandboxes. Route it through read()." >&2
@@ -126,18 +132,20 @@ if [[ "$n_join" != "1" ]]; then
 fi
 
 # No `open(` outside the read() helper. The helper's own line is the single permitted match.
-n_open=$(grep -c 'open(' "$MAIN_PROG")
+n_open=$(_sites 'open[[:space:]]*\(' "$MAIN_PROG")
 if [[ "$n_open" != "1" ]]; then
   echo "FATAL: expected exactly one 'open(' in the guard (inside def read), found $n_open." >&2
   echo "  A direct open() bypasses read() and can take an input this battery never sandboxes." >&2
   exit 2
 fi
 
-# Every `read(` call site passes a STRING LITERAL. `grep -c 'read('` counts the `def read(n)`
+# Every `read(` call site passes a STRING LITERAL. `read[[:space:]]*\(` counts the `def read(n)`
 # line too, so the literal-site count must be exactly one fewer. A `read(SOME_VAR)` breaks this
 # (6 vs 4) while leaving the two assertions above satisfied -- that is the bypass review drove.
-n_read_call=$(grep -c 'read(' "$MAIN_PROG")
-n_read_lit=$(grep -c 'read("' "$MAIN_PROG")
+# The `[^.a-zA-Z_]` prefix excludes `.read(` (the open().read() method call on
+# the def line is not the helper); `read_text(` never matched anyway.
+n_read_call=$(_sites '(^|[^.a-zA-Z_])read[[:space:]]*\(' "$MAIN_PROG")
+n_read_lit=$(_sites '(^|[^.a-zA-Z_])read[[:space:]]*\("' "$MAIN_PROG")
 if [[ "$((n_read_call - 1))" != "$n_read_lit" ]]; then
   echo "FATAL: the guard has $((n_read_call - 1)) read() call sites but only $n_read_lit pass a" >&2
   echo "  string literal. A non-literal filename is invisible to the sandbox-membership check" >&2
@@ -187,29 +195,94 @@ if [[ "$n_reads" -lt "${#INPUTS[@]}" ]]; then
 fi
 
 # Guard 2 reads files ONLY through one `git ls-files` enumeration and one read_text() on its
-# results, and stats them ONLY through the pin check's is_file()/is_symlink()/resolve() trio.
-# A second reader (an open(), a literal path, an rglob) or an alternative stat SPELLING
-# (os.path.*, lstat, scandir, is_dir, readlink...) could take a file the scratch repository
-# below does not carry, so the family is pinned by spelling, not intent: the allowed call
-# sites are counted exactly (grep -o, occurrences -- the bound is one-call-site-exact) and
-# every other file-touching spelling is pinned at zero.
-_g2_count() { grep -oF "$1" "$G2_PROG" | wc -l; }
-if [[ "$(_g2_count '"ls-files"')" != 1 || "$(_g2_count 'read_text(')" != 1 \
-      || "$(_g2_count 'open(')" != 0 || "$(_g2_count 'glob(')" != 0 \
-      || "$(_g2_count 'is_file(')" != 1 || "$(_g2_count 'is_symlink(')" != 1 \
-      || "$(_g2_count '.resolve(')" != 3 \
-      || "$(_g2_count 'stat(')" != 0 || "$(_g2_count 'exists(')" != 0 \
-      || "$(_g2_count 'scandir(')" != 0 || "$(_g2_count 'listdir(')" != 0 \
-      || "$(_g2_count 'readlink(')" != 0 || "$(_g2_count 'is_dir(')" != 0 \
-      || "$(_g2_count 'is_socket(')" != 0 || "$(_g2_count 'is_fifo(')" != 0 \
-      || "$(_g2_count 'is_mount(')" != 0 || "$(_g2_count 'is_block_device(')" != 0 \
-      || "$(_g2_count 'is_char_device(')" != 0 || "$(_g2_count 'samefile(')" != 0 \
-      || "$(_g2_count 'os.path.')" != 0 ]]; then
+# results, and stats them ONLY through the pin check's is_file()/is_symlink()/resolve() trio
+# (the other two .resolve() sites are the REPO/INFRA argv canonicalization).
+# A second reader (open/read_bytes/read(...)), enumerator (iterdir/walk/...),
+# stat spelling (os.path.*, stat-family, access...), writer (write_text/mkdir/
+# symlink...) or exec channel (subprocess/Popen/eval...) could take or plant a
+# file the scratch repository below does not carry, so the plausible natural
+# spellings are pinned by occurrence -- `symlink(` alone is bound at 1 (it is
+# the is_symlink call's own substring). This is a tripwire over spellings, not
+# a closed sequence (the file's own lesson: per-line allow-lists admit
+# permitted-shape bypasses) -- `group(`, `str.replace(` and os.path.*-via-
+# from-import spellings cannot be pinned without colliding with legitimate
+# code, and a deliberate hostile edit defeats any grep; the real bound is the
+# sandbox + this list's fail-loud drift.
+if [[ "$(_sites '"ls-files"' "$G2_PROG")" != 1 \
+      || "$(_sites 'read_text[[:space:]]*\(' "$G2_PROG")" != 1 \
+      || "$(_sites 'is_file[[:space:]]*\(' "$G2_PROG")" != 1 \
+      || "$(_sites 'is_symlink[[:space:]]*\(' "$G2_PROG")" != 1 \
+      || "$(_sites '\.resolve[[:space:]]*\(' "$G2_PROG")" != 3 \
+      || "$(_sites 'subprocess\.run[[:space:]]*\(' "$G2_PROG")" != 1 \
+      || "$(_sites 'open[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'read[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'read_bytes' "$G2_PROG")" != 0 \
+      || "$(_sites 'glob[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'iterdir[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'walk[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'scandir[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'listdir[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'stat[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'statvfs' "$G2_PROG")" != 0 \
+      || "$(_sites 'statfs' "$G2_PROG")" != 0 \
+      || "$(_sites 'exists[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'access[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'getxattr' "$G2_PROG")" != 0 \
+      || "$(_sites 'listxattr' "$G2_PROG")" != 0 \
+      || "$(_sites 'isfile[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'islink[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'isdir[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'ismount[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'is_junction[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'is_dir[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'is_socket[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'is_fifo[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'is_mount[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'is_block_device[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'is_char_device[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'samefile[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'readlink[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'getsize[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'getmtime[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'getatime[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'getctime[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'realpath[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'abspath[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'owner[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'write_text' "$G2_PROG")" != 0 \
+      || "$(_sites 'write_bytes' "$G2_PROG")" != 0 \
+      || "$(_sites 'touch[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'mkdir[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'makedirs' "$G2_PROG")" != 0 \
+      || "$(_sites 'symlink[[:space:]]*\(' "$G2_PROG")" != 1 \
+      || "$(_sites 'symlink_to[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'hardlink_to' "$G2_PROG")" != 0 \
+      || "$(_sites 'rename[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'unlink[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'rmdir[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'shutil\.' "$G2_PROG")" != 0 \
+      || "$(_sites 'os\.path\.' "$G2_PROG")" != 0 \
+      || "$(_sites 'Popen' "$G2_PROG")" != 0 \
+      || "$(_sites 'check_output' "$G2_PROG")" != 0 \
+      || "$(_sites 'check_call' "$G2_PROG")" != 0 \
+      || "$(_sites 'subprocess\.call[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'os\.system' "$G2_PROG")" != 0 \
+      || "$(_sites 'os\.popen' "$G2_PROG")" != 0 \
+      || "$(_sites 'os\.spawn' "$G2_PROG")" != 0 \
+      || "$(_sites 'os\.exec' "$G2_PROG")" != 0 \
+      || "$(_sites 'eval[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'exec[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites 'getattr[[:space:]]*\(' "$G2_PROG")" != 0 \
+      || "$(_sites '__import__' "$G2_PROG")" != 0 \
+      || "$(_sites 'importlib' "$G2_PROG")" != 0 \
+      || "$(_sites 'socket\.' "$G2_PROG")" != 0 \
+      || "$(_sites 'urllib' "$G2_PROG")" != 0 \
+      || "$(_sites 'requests\.' "$G2_PROG")" != 0 ]]; then
   echo "FATAL: Guard 2 must read files only via one git ls-files enumeration and one read_text()," >&2
-  echo "  and touch paths only via the pin check's is_file()/is_symlink()/resolve() trio." >&2
+  echo "  and touch paths only via the pin check's is_file()/is_symlink()/resolve() sites --" >&2
+  echo "  a second reader, enumerator, stat spelling, writer or exec channel drifted in." >&2
   exit 2
 fi
-unset -f _g2_count
 # Every tracked (or new, unignored) .tf / .tf.json in the repo, as a path RELATIVE TO THE INFRA
 # DIR: web-platform infra files keep their short name (server.tf), the rest are reached through
 # ../../../ so the same SANDBOX/PRISTINE-relative copy and restore loops carry them.
@@ -2213,13 +2286,16 @@ expect_ext_probe_red "X23 (EXT probe: hygiene iterates EVERY file entry -- a pha
 # X24 exercises the resolve()-containment clause: the pin leaf is a REAL file
 # reached through a symlinked DIRECTORY component escaping REPO -- leaf
 # is_symlink() and is_file() both pass, only the resolve() bound rejects it.
+# The escape target lives under PRISTINE_REPO: per-run (no shared-TMPDIR name
+# collision), outside REPO (the discrimination the row needs), and inside the
+# EXIT trap's cleanup set.
 cases=$((cases + 1))
 restore
 ext_probes_run=$((ext_probes_run + 1))
 ext_probe_reds=$((ext_probe_reds + 1))
-X24_TARGET="$(dirname "$TF_REPO")/x24-target.test.sh"
+X24_TARGET="$PRISTINE_REPO/x24-target.test.sh"
 touch "$X24_TARGET" || { echo "FATAL: X24 setup could not create $X24_TARGET" >&2; exit 2; }
-ln -s "$(dirname "$TF_REPO")" "$TF_REPO/apps/web-platform/infra/x24-out" \
+ln -s "$PRISTINE_REPO" "$TF_REPO/apps/web-platform/infra/x24-out" \
   || { echo "FATAL: X24 setup could not create the dir symlink" >&2; exit 2; }
 [[ -L "$TF_REPO/apps/web-platform/infra/x24-out" && -f "$X24_TARGET" ]] \
   || { echo "FATAL: X24 setup did not land" >&2; exit 2; }
