@@ -28,7 +28,7 @@ on:
         type: string
         default: ""
       bump_type:
-        description: "Override bump type (empty = use PR labels)"
+        description: "Override bump type (empty = use PR labels; a retry with a different bump orphans the prior draft)"
         type: string
         default: ""
       force_run:
@@ -340,6 +340,8 @@ jobs:
           # The OLD bare `gh release view` check treated a draft as "done" and
           # skipped re-creation on every later run, freezing BUILD_VERSION.
           # Refs #4902 (stuck-draft deadlock).
+          # The draft's notes are overwritten at publish from the current run's PR (see the
+          # Finalise step), so a same-tag republish describes the latest merge (#7079).
           REL_JSON=$(mktemp)
           if gh release view "$TAG" --json isDraft >"$REL_JSON" 2>/dev/null; then
             IS_DRAFT=$(jq -r '.isDraft' "$REL_JSON")
@@ -1512,6 +1514,15 @@ jobs:
       # orphaned-draft path skips the audit-upload step above (gated on
       # create_release.released), which is correct: we only flip draft->published
       # here, never upload to a published (immutable) release.
+      # Notes on the self-heal path (#7079): the orphaned draft still carries the FIRST
+      # attempt's changelog (the create step is skipped for it), so on that path this step
+      # overwrites the draft's notes with this run's regenerated changelog in the SAME call
+      # that publishes it (atomic). It is gated on a resolved PR and non-blank content; on
+      # the no-PR paths (workflow_dispatch, give_up) the draft's existing notes are kept
+      # rather than replaced by the fallback text. Known limit: when a LATER, different merge
+      # recomputes the same tag, the Release page describes only that latest merge (the
+      # release contains both merges' code); the Slack announcement may differ on the no-PR
+      # paths, where it still carries the fallback text.
       - name: Finalise release (publish draft)
         if: >-
           steps.check_changed.outputs.changed == 'true' &&
@@ -1520,9 +1531,24 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
+          RELEASE_NOTES_FILE: ${{ steps.tmpfiles.outputs.release_notes }}
+          DRAFT_EXISTS: ${{ steps.idempotency.outputs.draft_exists }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
         run: |
-          gh release edit "$TAG" --draft=false
-          echo "Published release $TAG"
+          # One call: the regenerated notes and the publish are atomic. Only on the self-heal
+          # path, and only with a real PR-derived changelog (a resolved PR number AND non-blank
+          # notes). With a resolved PR the changelog step always writes a non-blank file (its
+          # `- $PR_TITLE` fallback); the blank test is defence in depth against that changing.
+          if [ "$DRAFT_EXISTS" = "true" ] && [ -n "$PR_NUMBER" ] && grep -q '[^[:space:]]' "$RELEASE_NOTES_FILE"; then
+            gh release edit "$TAG" --notes-file "$RELEASE_NOTES_FILE" --draft=false
+            echo "Published release $TAG (notes_regenerated=true, from this run's PR #$PR_NUMBER)"
+          else
+            if [ "$DRAFT_EXISTS" = "true" ]; then
+              echo "::warning::Orphaned draft $TAG published with its EXISTING notes: this run resolved no PR (workflow_dispatch / give_up) or produced a blank changelog."
+            fi
+            gh release edit "$TAG" --draft=false
+            echo "Published release $TAG"
+          fi
 
       # Notify on a self-heal too (#4902): an orphaned draft means the prior run
       # died BEFORE this step, so the re-publish is the FIRST successful release
