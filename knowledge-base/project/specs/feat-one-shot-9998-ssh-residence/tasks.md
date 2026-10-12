@@ -9,9 +9,10 @@ Plan: `knowledge-base/project/plans/2026-10-12-fix-provisioner-parity-ssh-reside
   `hcloud_server.web["web-N"]` names a block textually dials (regex
   `hcloud_server\.web\["(web-\d+)"\]` — any N, not just `FLEET_SSH_HOSTS`).
 - [ ] 1.2 Extend the `blocks`/`ssh_blocks` collection loop (~:1136-1180) to carry
-  the enclosing `terraform_data` resource name: nearest preceding
-  `resource "terraform_data" "<name>"` header in the comment-stripped `.tf`;
-  `.resource.terraform_data.<name>` segment of the `json_blocks` path for
+  the enclosing resource address: nearest preceding `resource "<type>" "<name>"`
+  header in the comment-stripped `.tf` (ANY type — a `connection {}` inside a
+  `null_resource`/`hcloud_server` must still attribute or fail closed);
+  `.resource.<type>.<name>` segment of the `json_blocks` path for
   `.tf.json`. Unresolvable → sentinel matching no allowance entry (fail-closed).
 - [ ] 1.3 Define `EXT_RESIDENCE` (`file → {resource_name: {hosts, reason}}`) seeded
   with `ci-ssh-key.tf:root_authorized_keys→{web-1}` and
