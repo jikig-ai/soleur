@@ -445,3 +445,25 @@ Two port changes made so the port carries the plan's rules and not a wider one (
 Changes: the finder `PJ_DEFS_AWK` bounds a stub's extent at the earliest of the window, the next opener of ANY verb that is a function, a stub-helper call or a heredoc writer (a one-line `printf ... >> "$d/args"` logging write is not a bound), the heredoc terminator named on the opener line, the closing brace at the opener's indent (or the opener line itself for a one-line stub, decided by the brace balance of the text after the first `{`), and the next opener of the verb itself; its helper-call opener now finds the verb in any argument (the same reading as R5a). The detector gains `cat 2>FILE` and `cat -` as drains (`x=$(cat 2>/dev/null)`, `cat -`); the non-drain pattern gains `test -t 0 && ...`, `[ -t 0 ]; then` (and the `test` form) and an input redirect after `cat`. The 14 `drains` rows are unchanged and still verified (no finder FAIL), so no existing stub read differently.
 
 Second readings (first readings are in the Phase 1 section): `producer-join-window` GREEN (crossverb, crossbrace, crossheredoc read `no`; logwrite and oneline read `ok`); `producer-drain-nonreading` GREEN on the detector side as well (the two accepted spellings are detected, the three non-reading ones are not), and the dynamic control still agrees on all five under both dispositions and both interpreters. The guard prints no finder or detector FAIL; its remaining red is the 65 `unlisted pair` lines, the triple pin (231 against 120) and `producer-join-verdicts` (the verdict functions land in the next commit).
+
+### Guard 3, the verdict controls and the merge pins (commit `b0b8921316`)
+
+Changes: the three row checks (malformed row, definition count, no drain) are `pj_check_rows <pairs>` (rows on stdin; prints its FAIL lines and returns 3 with `UNRESOLVED` for a row that finds no definition) and the triple pin is `pj_check_triples <found> <pin>`; `pj_fail` is gone. Each of the three verdict sinks (`pj_j` from the judge, `pj_rc` from the row checks, `pj_tc` from the triple pin) is one column-0 assignment and one column-0 merge `[[ -z "$x" ]] || { PJ_FAIL=1; printf ... }`, and all six statements plus the column-0 fold are counted into `producer-join-wiring`. The check `producer-join-verdicts` feeds the two functions nine fixtures that must each make a verdict print and one clean one that must print nothing (a compliant stub, a count that is off by one, a stub with no drain, a malformed row, two faulty rows in one run with both verdicts required, a row whose suite has no stub, a triple count that is off by one and one that is equal).
+
+First reading (Phase 1): RED, the functions did not exist. Final reading: GREEN (the guard prints no `producer-join-*` line). Neutered-verdict readings on a scratch shared clone of the committed tree, one mutant at a time, each asserting the edit landed and that the unmutated control prints no probe line (control: exit 1 only for the 65 `unlisted pair` lines the arms leave until Phase 4, no `producer-*` line), under `ulimit -v 6000000`, `timeout 240`, host load 20 to 49 (wall 21 to 48 s). A row counts as RED only when the guard exits non-zero and prints the named substring:
+
+| row | mutation | guard | named substring |
+| --- | --- | --- | --- |
+| M37 | the definition-count verdict `echo` replaced by `:` | exit 1 | `producer-join-verdicts: ... no 'stubs 'curl' in 1 definitions, the row pins 2'` |
+| M38 | the no-drain verdict `echo` replaced by `:` | exit 1 | `producer-join-verdicts: ... no 'defines the 'curl' stub with no stdin drain'` |
+| M39 | the malformed-row verdict `echo` replaced by `:` | exit 1 | `producer-join-verdicts: ... no 'malformed drains row'` |
+| M40 | the triple-pin verdict `echo` replaced by `:` | exit 1 | `producer-join-verdicts: ... no 'triples and PJ_TRIPLES pins 6'` |
+| M41 | the `pj_j` merge assignment blanked to `pj_j=""` | exit 1 | `producer-join-wiring: the pj_judge merge 1 and its assignment 0` |
+| M42 | the `no`-line loop test replaced by `continue` | exit 1 | `producer-join-verdicts: ... no 'defines the 'curl' stub with no stdin drain'` |
+| M43 | the row loop stops after its first row (second member) | exit 1 | `producer-join-verdicts: ... no 'with no stdin drain'` (the second row's verdict) |
+| M44 | the row-check driver is handed zero rows | exit 1 | `producer-join-verdicts: ... no 'stubs 'curl' in 1 definitions, the row pins 2'` |
+| M45 | `pj_unread` widened to accept rc 3 (S7b row) | exit 1 | `producer-hazard-control: ... [pj_unread grades a status it must not]` |
+| M45b | the row-check merge neutered to `:` | exit 1 | `producer-join-wiring: ... the row-check merge 0` |
+| M45c | the triple-pin assignment blanked | exit 1 | `producer-join-wiring: ... the triple-pin merge 1 and its assignment 0` |
+
+All eleven read RED; the S7b reading of the six unneutered verdicts (all exit 0 in 0.6) is now closed.
