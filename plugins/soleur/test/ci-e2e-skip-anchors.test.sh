@@ -190,7 +190,19 @@ anchor_in_e2e "classifier invoked from workflow"        "scripts/ci-e2e-classify
 # The classifier the PR is judged by is the BASE ref's copy — losing this line
 # re-opens the self-evaluation hole (a PR shipping `emit false` for itself).
 anchor_in_e2e "base-ref classifier judged, not the PR's" 'git show "origin/${GITHUB_BASE_REF}:scripts/ci-e2e-classify.sh"'
-anchor_in_e2e "full-history checkout for PR diff"       "github.event_name == 'pull_request' && 0 || 1"
+# The `0` is a quoted STRING: `A && 0 || 1` evaluates to 1 in an Actions expression (0 is falsy), which made this
+# checkout depth-1 on every PR and sent every PR down the enum-failed fallback (#9729). The unquoted spelling this
+# row used to pin certified the bug; plugins/soleur/test/ci-shard-totality-skip.test.sh sweeps every workflow for it.
+anchor_in_e2e "full-history checkout for PR diff"       "github.event_name == 'pull_request' && '0' || '1'"
+anchor_absent "no falsy-zero checkout ternary (&& 0 ||)" "&& 0 || 1 }}"
+# git's stderr is kept so a fallback names its cause; a line that sends it to /dev/null re-opens the invisible-cause hole.
+if printf '%s\n' "$e2e_section" | grep -E 'git (diff|show)' | grep -qF '2>/dev/null'; then
+  FAIL=$((FAIL + 1)); echo "FAIL a git diff/show in the e2e classify step discards stderr"
+else
+  PASS=$((PASS + 1)); echo "ok   no git diff/show line in the e2e classify step discards stderr"
+fi
+anchor_in_e2e "classify fallback prints the git stderr"  'git stderr: ['
+
 # The diff range is load-bearing: a narrowed spec (HEAD~1, fixed base) hides
 # app changes in earlier commits of a multi-commit PR.
 anchor_in_e2e "diff range is the PR merge-base"         'git diff --name-status "origin/${GITHUB_BASE_REF}...HEAD"'

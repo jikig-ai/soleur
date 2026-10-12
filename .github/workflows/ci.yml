@@ -1631,7 +1631,47 @@ jobs:
       # mutation and aborts the battery outright if it is not green, so this job still exercises
       # both guards against the real tree — which is what AC14 asks for: a cross-leg union
       # asserted from a job that is not itself a leg.
+      # (#9729) In-job applicability classifier, the same shape as `e2e` (#8450): a pull request whose diff is only
+      # markdown under knowledge-base/ or at the repo root cannot move this battery, so its steps are skipped. The
+      # verdict is judged by the BASE ref's classifier (a PR must not weaken the gate it is judged by) and every
+      # unknown (no base classifier yet, unresolvable diff) runs the battery. Deliberately in-job rather than a
+      # job-level `if:`/`needs:`: those two lines are pinned verbatim by scripts/ci-push-dedupe.test.sh and
+      # scripts/ci-draft-light.test.sh. The job still takes a runner for the checkout, the battery (~3 min per leg)
+      # is what is saved. plugins/soleur/test/ci-shard-totality-skip.test.sh pins this wiring.
+      - name: Classify shard-totality applicability
+        id: detect
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            GIT_ERR="$RUNNER_TEMP/shard-totality-git.err"
+            : > "$GIT_ERR"
+            if CHANGED="$(git diff --name-status "origin/${GITHUB_BASE_REF}...HEAD" 2>>"$GIT_ERR")" \
+              && git show "origin/${GITHUB_BASE_REF}:scripts/ci-shard-totality-classify.sh" > "$RUNNER_TEMP/ci-shard-totality-classify.sh" 2>>"$GIT_ERR"; then
+              APPLICABLE="$(printf '%s\n' "$CHANGED" | bash "$RUNNER_TEMP/ci-shard-totality-classify.sh" pull_request)"
+            else
+              echo "::warning::shard-totality classification fell back to enum-failed; git stderr: [$(tr '\n' ' ' < "$GIT_ERR" | cut -c1-300)] shallow=$(git rev-parse --is-shallow-repository 2>&1 | head -1) base_ref_resolves=$(git rev-parse --verify -q "origin/${GITHUB_BASE_REF}" >/dev/null 2>&1 && echo yes || echo no)"
+              APPLICABLE="$(bash scripts/ci-shard-totality-classify.sh --enum-failed)"
+            fi
+          else
+            APPLICABLE="$(bash scripts/ci-shard-totality-classify.sh "$EVENT_NAME" </dev/null)"
+          fi
+          case "$APPLICABLE" in
+            true|false) ;;
+            *) echo "::error::shard-totality classifier emitted invalid verdict '$APPLICABLE'" >&2; exit 1 ;;
+          esac
+          echo "applicable=$APPLICABLE" >> "$GITHUB_OUTPUT"
+          echo "::notice::shard-totality applicable=$APPLICABLE (event=$EVENT_NAME)"
+
+      - name: Record shard-totality skip verdict
+        if: steps.detect.outputs.applicable == 'false'
+        run: |
+          echo "::notice::shard-totality battery skipped: markdown-only diff"
+          echo "**shard-totality battery skipped: markdown-only diff** — classifier allowlist is markdown under \`knowledge-base/\` and root \`*.md\` only (#9729)." >> "$GITHUB_STEP_SUMMARY"
+
       - name: Guard 1 — shard-totality mutation battery (rows ${{ matrix.rows }}; every mutated row must drive the guard RED)
+        if: steps.detect.outputs.applicable == 'true'
         run: bash plugins/soleur/test/scripts-shard-totality-mutations.sh --rows "${{ matrix.rows }}"
 
   # Phase F #6325 — Grok fidelity CI: grok inspect contract + /go golden-path eval.
@@ -2046,7 +2086,10 @@ jobs:
           # `origin/${GITHUB_BASE_REF}...HEAD` diff can resolve; a shallow
           # clone would make every PR look unresolvable (which fails closed to
           # applicable=true anyway). Other events never diff — depth 1.
-          fetch-depth: ${{ github.event_name == 'pull_request' && 0 || 1 }}
+          # The 0 is a QUOTED STRING on purpose (#9729): an Actions expression treats the number 0 as falsy, so
+          # `A && 0 || 1` evaluates to 1 on every event. That made this checkout depth-1 on every PR and sent every
+          # PR (including all 14 of the last 14 knowledge-base-only ones) down the enum-failed fallback below.
+          fetch-depth: ${{ github.event_name == 'pull_request' && '0' || '1' }}
 
       # (#8450) In-job applicability classifier — verdict observed correct on
       # this PR's own diff (report-only push), so the heavy steps below are
@@ -2071,11 +2114,15 @@ jobs:
             # rules — conservative by construction. fetch-depth: 0 guarantees
             # the base object exists; a base without the classifier (pre-merge
             # main) or an unresolvable diff falls back to enum-failed = true.
-            if CHANGED="$(git diff --name-status "origin/${GITHUB_BASE_REF}...HEAD" 2>/dev/null)" \
-              && git show "origin/${GITHUB_BASE_REF}:scripts/ci-e2e-classify.sh" > "$RUNNER_TEMP/ci-e2e-classify.sh" 2>/dev/null; then
+            # git's stderr is KEPT, not discarded: with it thrown away the cause of every fallback was invisible
+            # for the whole life of this gate (#9729). The warning below prints only observed values.
+            GIT_ERR="$RUNNER_TEMP/e2e-git.err"
+            : > "$GIT_ERR"
+            if CHANGED="$(git diff --name-status "origin/${GITHUB_BASE_REF}...HEAD" 2>>"$GIT_ERR")" \
+              && git show "origin/${GITHUB_BASE_REF}:scripts/ci-e2e-classify.sh" > "$RUNNER_TEMP/ci-e2e-classify.sh" 2>>"$GIT_ERR"; then
               APPLICABLE="$(printf '%s\n' "$CHANGED" | bash "$RUNNER_TEMP/ci-e2e-classify.sh" pull_request)"
             else
-              echo "::warning::e2e classification fell back to enum-failed (diff unresolvable or classifier absent on base ref)"
+              echo "::warning::e2e classification fell back to enum-failed; git stderr: [$(tr '\n' ' ' < "$GIT_ERR" | cut -c1-300)] shallow=$(git rev-parse --is-shallow-repository 2>&1 | head -1) base_ref_resolves=$(git rev-parse --verify -q "origin/${GITHUB_BASE_REF}" >/dev/null 2>&1 && echo yes || echo no) head=$(git rev-parse --short HEAD 2>&1 | head -1) uid=$(id -u)"
               APPLICABLE="$(bash scripts/ci-e2e-classify.sh --enum-failed)"
             fi
           else
