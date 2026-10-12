@@ -243,7 +243,7 @@ G2-19 "currently fails 'guard still PASSED'").
    not discovered" philosophy).
 
 2. **Enclosing-resource resolution.** Extend G2's block collection so each
-   `ssh_blocks` entry also carries the enclosing `terraform_data` resource name:
+   `ssh_blocks` entry also carries the enclosing resource address:
    for `.tf`, the nearest preceding `resource "<type>" "<name>"` header before the
    block's byte offset (HCL resources do not nest, so last-header-wins is exact);
    for `.tf.json`, the `.resource.<type>.<name>` segment already present in the
@@ -487,9 +487,11 @@ superset (`.sh` under `infra/` only).
 
 1. Add `dials_fleet(b)` beside `dials_web_1`/`dials_web_2` (same normalization;
    returns the set of `web-N` names; handles dict blocks via `json.dumps`).
-2. Extend the block-collection loop to carry the enclosing `terraform_data`
-   resource name per block (nearest preceding `resource "terraform_data" "<name>"`
-   header for `.tf`; `.resource.terraform_data.<name>` path segment for
+2. Extend the block-collection loop to carry the enclosing resource address
+   per block (nearest preceding `resource "<type>" "<name>"` header for `.tf` —
+   ANY type, not just `terraform_data`: a `connection {}` inside a
+   `null_resource`/`hcloud_server` in an undeclared file must still attribute
+   or fail closed on the sentinel; `.resource.<type>.<name>` path segment for
    `.tf.json`; unresolvable → sentinel matching no allowance entry).
 3. Define `EXT_RESIDENCE` with the four seeded entries and mandatory `reason`
    strings; an empty/missing reason is itself a finding.
