@@ -64,6 +64,9 @@ cat > "$STUB_DIR/curl" <<'STUB'
 # them bare. It deliberately does NOT apply `${VAR:-default}` fallbacks: `:-`
 # also fires on an EMPTY value, which would silently substitute a well-formed
 # body for the empty-body fixture and make that test vacuous.
+# The scan pipes `Authorization: Bearer <PAT>` into `curl --header @-`, so this stub reads its stdin FIRST, exactly when argv carries that flag and
+# stdin is not a terminal: a stub that exits unread makes the scan's printf take SIGPIPE under its pipefail (#9217). The bytes are kept for the wire assert.
+case " $* " in *" --header @- "*) [ -t 0 ] || timeout 2 cat > "${0%/*}/header.stdin" ;; esac
 args="$*"
 data=""
 prev=""
@@ -210,9 +213,19 @@ export STUB_CAT_BODY='[{"wrong_column":"public.x"}]'
 run_scan
 expect_fail_mode "catalog rows without a string identity fail loud" catalog_malformed
 
+rm -f "$STUB_DIR/header.stdin"
 reset_stub
 run_scan
 expect_clean "genuine clean scan passes"
+# Wire assert (#9217): the PAT reached the curl stub on stdin, in the form the scan pipes. ${KNOB:-default}: an exported-empty knob must not
+# compare "" with "".
+_hdr_want="${STUB_HEADER_LINE:-Authorization: Bearer sbp_synthetic0000000000000000000000000000}"
+_hdr_got="$(cat "$STUB_DIR/header.stdin" 2>/dev/null)"
+if [[ "$_hdr_got" == "$_hdr_want" ]]; then
+  pass "the curl stub received the Authorization header on stdin (--header @- drained)"
+else
+  fail "curl stub stdin" "got '$_hdr_got', want '$_hdr_want'"
+fi
 
 echo "== AC7b: decision quadrants (fail-open in the DECISION logic) =="
 

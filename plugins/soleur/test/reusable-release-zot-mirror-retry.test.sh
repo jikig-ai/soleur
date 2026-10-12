@@ -98,13 +98,22 @@ fi
 # ---------------------------------------------------------------------------
 STUB_DIR="$TMP/bin"
 mkdir -p "$STUB_DIR"
-for c in sha256sum sudo tar sleep; do
+for c in sudo tar sleep; do
   cat > "$STUB_DIR/$c" <<'STUB'
 #!/usr/bin/env bash
 exit 0
 STUB
   chmod +x "$STUB_DIR/$c"
 done
+# `sha256sum` is its own stub: install_crane pipes the checksum line into `sha256sum -c -`, and a stub that exits
+# unread makes that `echo` take SIGPIPE under the step's pipefail (#9217). It reads first, only when argv carries
+# `-c -` and stdin is not a terminal, and keeps the bytes for the wire assert after T3.
+cat > "$STUB_DIR/sha256sum" <<'STUB'
+#!/usr/bin/env bash
+case " $* " in *" -c - "*) [ -t 0 ] || timeout 2 cat > "${0%/*}/sha256sum.stdin" ;; esac
+exit 0
+STUB
+chmod +x "$STUB_DIR/sha256sum"
 # `curl` and `cosign` are mode-aware so the crane-INSTALL arm and the cosign-SIGN arm can
 # be driven. Both had zero fixtures: each was individually deletable from the workflow with
 # the whole suite green, and the sign arm is the only stage whose message may legitimately
@@ -251,6 +260,10 @@ assert_eq "transient rc/status/warn" "$(echo "$out2" | cut -d' ' -f1-3)" "0 ok q
 echo "T3: happy path -> mirror_status=ok, exit 0, no ::error::"
 out3="$(run_mirror always_ok)"
 assert_eq "happy rc/status/warn" "$(echo "$out3" | cut -d' ' -f1-3)" "0 ok quiet"
+# Wire assert (#9217): the install step's checksum line reached the sha256sum stub intact. ${KNOB:-default}: an exported-empty knob
+# must not compare "" with "". The default is read from the extracted block, so a pin bump in the workflow moves it too.
+_sha_want="${MOCK_SHA256_LINE:-$(sed -n 's/^[[:space:]]*CRANE_SHA256="\([0-9a-f]\{64\}\)"$/\1/p' "$MIRROR_BLOCK" | head -1)  /tmp/crane.tgz}"
+assert_eq "T3 sha256sum stub received the checksum line the install step pipes" "$(cat "$STUB_DIR/sha256sum.stdin" 2>/dev/null)" "$_sha_want"
 
 # ---------------------------------------------------------------------------
 # T4/T5 (#6416) — the bridge-outcome branch.
