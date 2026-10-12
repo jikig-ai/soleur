@@ -172,7 +172,7 @@ done < <(discover_branch_diff | sort -u)
 # not fire. Plans/brainstorms root files DO fire — they are the artifacts.
 discover_untracked() {
   local st f sub
-  while IFS= read -r line; do
+  while IFS= read -r -d '' line; do
     st=${line:0:2}
     [[ "$st" == '??' ]] || continue
     f=${line:3}
@@ -180,11 +180,19 @@ discover_untracked() {
       */archive/*) ;;                                     # already archived
       knowledge-base/project/specs/*/*)
         sub=${f#knowledge-base/project/specs/}
-        printf 'knowledge-base/project/specs/%s\n' "${sub%%/*}" ;;
+        sub=${sub%%/*}
+        # Collapse to the dir ONLY when the dir is wholly untracked —
+        # `??` carries no provenance, so a stray file inside a
+        # partially-tracked spec dir (a sibling feature's live work, the
+        # M-row rule's analog) must not pull the whole dir into the move.
+        if git ls-files --error-unmatch -- "knowledge-base/project/specs/${sub}" >/dev/null 2>&1; then
+          continue
+        fi
+        printf 'knowledge-base/project/specs/%s\n' "$sub" ;;
       knowledge-base/project/plans/*|knowledge-base/project/brainstorms/*)
         [[ -f "$f" ]] && printf '%s\n' "$f" ;;
     esac
-  done < <(git status --porcelain --untracked-files=all -- \
+  done < <(git status --porcelain -z --untracked-files=all -- \
       knowledge-base/project/plans \
       knowledge-base/project/brainstorms \
       knowledge-base/project/specs 2>/dev/null || true)

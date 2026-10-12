@@ -1997,8 +1997,6 @@ template above — including its placement ABOVE `## Changelog` and the four gat
 
 Do not quote flag names -- write `--title` not `"--title"`.
 
-Present the PR URL to the user.
-
 ## Phase 6.45: KB Artifact Archival
 
 [skill-enforced: ship Phase 6.45 + hook ship-kb-archive-gate.sh]
@@ -2027,7 +2025,7 @@ git add -A knowledge-base && git commit -m "chore(kb): archive <branch> artifact
 
 Then sweep for stale references — archival without it strands every consumer in the same stroke: `grep -rn "specs/<branch>" --include='*.md' knowledge-base/ plugins/ apps/ | grep -v archive/` — repoint live-path hits or document them as intentionally live. One known residue: an `operator-bootstrap` `bootstrap.sh` is named by a follow-through issue's `auto_command:` at its LIVE path — post-archive that command 404s; record the archive path in the issue.
 
-A `WARNING: found a ... but NO ...` partial-discovery line means the union of both axes (slug match + branch diff) found one class but nothing of the other — surface it verbatim and confirm there is genuinely no artifact of the missing class before continuing. `No artifacts found` is clean — proceed. **Do not archive earlier than this step** (steps 2.5 and 5 read the live paths) and do not skip it because compound was deferred — the deferral decision exists precisely because these reads are upstream of it; once they have run, the deferral's reason is discharged and in-PR archival is strictly better than stranding. A `soleur:ship` re-entry after this step must resolve the spec/plan from the `archive/` path — Phase 1's live-path globs no longer match, so read the archived files directly rather than treating them as absent.
+A `WARNING: found a ... but NO ...` partial-discovery line means the union of the three axes (slug match + branch diff + untracked paths) found one class but nothing of the other — surface it verbatim and confirm there is genuinely no artifact of the missing class before continuing. `No artifacts found` is clean — proceed. **Do not archive earlier than this step** (steps 2.5 and 5 read the live paths) and do not skip it because compound was deferred — the deferral decision exists precisely because these reads are upstream of it; once they have run, the deferral's reason is discharged and in-PR archival is strictly better than stranding. A `soleur:ship` re-entry after this step must resolve the spec/plan from the `archive/` path — Phase 1's live-path globs no longer match, so read the archived files directly rather than treating them as absent.
 
 ## Semver Label and Changelog
 

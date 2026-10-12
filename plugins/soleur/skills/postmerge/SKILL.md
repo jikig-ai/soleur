@@ -537,24 +537,35 @@ comment and the Phase 7 summary. It does not itself block "done" (report-only, l
 
 The ship-side archival gate (`ship` Phase 6.45 + the `ship-kb-archive-gate.sh` PreToolUse hook) only sees merges that pass through
 the agent's own `gh pr merge` — UI merges, `gh api` merges, and queue merges from other harnesses bypass it. This phase is the
-catch-net: read the merged squash commit's diff and report any KB artifact the merge landed at a LIVE path.
+catch-net: read the merge's landed diff and report any KB artifact it left at a LIVE path.
 
-For the merge commit recorded in Phase 1, diff it against its parent over the three KB roots — the single-parent diff works for
-the squash shape and for a first-parent merge commit. `git fetch origin main` first, so the worktree actually holds the merge
-object:
+For the merge commit recorded in Phase 1, diff the whole merge range against `origin/main`'s merge-base — `<merge-sha>^..<sha>`
+only covers squash and first-parent merge shapes; a `--rebase`-shape merge lands N commits and a single-parent diff misses the
+earlier ones. `git fetch origin main` first, so the worktree holds both endpoints:
 
 ```bash
 git fetch origin main
-git diff --name-status --diff-filter=AM "<merge-sha>^" "<merge-sha>" -- \
+git diff --name-status --diff-filter=AMR \
+  "$(git merge-base origin/main <merge-sha>)" "<merge-sha>" -- \
   knowledge-base/project/specs knowledge-base/project/plans knowledge-base/project/brainstorms
 ```
 
-Rows under `*/archive/` are compliant — drop them. Every remaining `A`/`M` row is an artifact the merge landed live (an
-unarchived spec dir, plan, or brainstorm). Report the surviving rows **verbatim** as a **red post-merge status** — `KB archival
-read-back: <verbatim rows, or "clean">` — in the Phase 6 issue comment AND the Phase 7 summary, naming the one-line fix:
-`bash plugins/soleur/skills/archive-kb/scripts/archive-kb.sh` on a NEW branch + PR — archival cannot ride a PR that already
-merged. Like Phases 5.5/5.6/5.7 it is REPORT-ONLY: it never blocks the "done" verdict; the signal is for immediate operator
-attention, not rollback.
+Only `<root>/archive/` rows are compliant — a path under `specs/<live-dir>/archive/` is still inside a live spec dir. `R` rows
+are judged on the destination: `git mv specs/archive/x specs/y` lands a live path. Every remaining `A`/`M`/`R` row is an artifact
+the merge landed live. Report the surviving rows **verbatim** as a **red post-merge status** — `KB archival read-back:
+<verbatim rows, or "clean">` — in the Phase 6 issue comment AND the Phase 7 summary.
+
+**Remediation is per-row `git mv`, not `archive-kb.sh`:** the archiver's three discovery axes (slug glob, branch-diff, untracked
+`??`) cannot reach a spec dir that a leaked merge already committed — on a fresh branch all three return empty and the script
+exits `No artifacts found`, which reads as clean. On a NEW branch from `origin/main`, for each reported row:
+
+```bash
+git mv <row-path> knowledge-base/project/<root>/archive/$(date +%Y%m%d-%H%M%S)-<name> \
+  && git commit -m "chore(kb): archive leaked artifacts from <pr>"
+```
+
+then open a follow-up PR — archival cannot ride a PR that already merged. Like Phases 5.5/5.6/5.7 it is REPORT-ONLY: it never
+blocks the "done" verdict; the signal is for immediate operator attention, not rollback.
 
 ## Phase 6: Update Issue and Compound
 

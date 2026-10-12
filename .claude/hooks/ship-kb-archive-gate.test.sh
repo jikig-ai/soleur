@@ -167,7 +167,7 @@ assert_pass() {
   jsonl="$incidents/.claude/.rule-incidents.jsonl"
   local denied_rows=0
   if [[ -f "$jsonl" ]]; then
-    denied_rows=$(grep -c '"event_type":"deny"' "$jsonl" 2>/dev/null || echo 0)
+    denied_rows=$(grep -c '"event_type":"deny"' "$jsonl" 2>/dev/null || true)
   fi
   if [[ "$exit_code" -eq 0 && "$decision" != "deny" && "$denied_rows" -eq 0 ]]; then
     pass "$name"
@@ -194,7 +194,12 @@ assert_fixture_has() {
 
 run_hook() {
   local incidents="$1" payload="$2"
-  printf '%s' "$payload" | INCIDENTS_REPO_ROOT="$incidents" "$HOOK" 2>/dev/null
+  # CLAUDECODE= (empty) pins headless_or_stderr to its stderr arm — under a
+  # real session it routes warns to $LOG_DIR/$PPID.log and stderr checks
+  # see nothing. SOLEUR_SESSION_STATE_ROOT keeps the session-state lib's
+  # mkdir side effects inside the fixture, not the real repo's .git dir.
+  printf '%s' "$payload" | CLAUDECODE= SOLEUR_SESSION_STATE_ROOT="$incidents/state" \
+    INCIDENTS_REPO_ROOT="$incidents" "$HOOK" 2>/dev/null
 }
 
 # --- deny cases ------------------------------------------------------------
@@ -591,7 +596,7 @@ t34_skip_env_pass() {
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-skip" specdir)
   local out exit_code=0
   out=$(printf '%s' "$(make_payload "$work" "gh pr merge --squash --auto")" \
-        | SOLEUR_SKIP_KB_ARCHIVE_GATE=1 INCIDENTS_REPO_ROOT="$incidents" "$HOOK" 2>/dev/null) || exit_code=$?
+        | SOLEUR_SKIP_KB_ARCHIVE_GATE=1 CLAUDECODE= SOLEUR_SESSION_STATE_ROOT="$incidents/state" INCIDENTS_REPO_ROOT="$incidents" "$HOOK" 2>/dev/null) || exit_code=$?
   assert_pass "T34 SOLEUR_SKIP_KB_ARCHIVE_GATE=1" "$incidents" "$out" "${exit_code:-0}"
   rm -rf "$tmp"
 }
@@ -637,9 +642,9 @@ t36_shallow_warn_pass() {
   git -C "$work" push -q origin orphan-head
   local out err exit_code=0
   err=$(printf '%s' "$(make_payload "$work" "gh pr merge --squash --auto")" \
-        | INCIDENTS_REPO_ROOT="$incidents" "$HOOK" 2>&1 >/dev/null) || exit_code=$?
+        | CLAUDECODE= SOLEUR_SESSION_STATE_ROOT="$incidents/state" INCIDENTS_REPO_ROOT="$incidents" "$HOOK" 2>&1 >/dev/null) || exit_code=$?
   out=$(printf '%s' "$(make_payload "$work" "gh pr merge --squash --auto")" \
-        | INCIDENTS_REPO_ROOT="$incidents" "$HOOK" 2>/dev/null) || exit_code=$?
+        | CLAUDECODE= SOLEUR_SESSION_STATE_ROOT="$incidents/state" INCIDENTS_REPO_ROOT="$incidents" "$HOOK" 2>/dev/null) || exit_code=$?
   if [[ "$err" == *"ship-kb-archive-gate"* ]] && [[ "$err" == *"merge-base"* ]]; then
     assert_pass "T36 unresolvable merge-base warns + passes" "$incidents" "$out" "${exit_code:-0}"
   else
@@ -654,12 +659,238 @@ t37_stdout_json_clean() {
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-json" specdir)
   local out exit_code=0
   out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge --squash --auto")") || exit_code=$?
-  if printf '%s' "$out" | jq -e . >/dev/null 2>&1; then
+  # jq -s 'length==1', not `jq -e .`: the latter accepts a STREAM of N
+  # objects; the contract is exactly one.
+  if printf '%s' "$out" | jq -s 'length == 1' -e >/dev/null 2>&1; then
     pass "T37 stdout is exactly one JSON object"
   else
-    fail "T37 stdout failed jq parse"
+    fail "T37 stdout failed jq parse or emitted a stream"
   fi
   TOTAL=$((TOTAL + 1))
+  rm -rf "$tmp"
+}
+
+t44_lsremote_empty_deny() {
+  # Numbered merge whose pull ref does not exist: ls-remote returns
+  # nothing — unverifiable head → deny (fail-closed on the commonest
+  # mis-target).
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_kb_branch "$tmp" "feat-nopr" specdir)
+  local out exit_code=0
+  out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge 999 --squash")") || exit_code=$?
+  assert_deny "T44 ls-remote-empty numbered merge" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$tmp"
+}
+
+t45_unreachable_sha_deny() {
+  # --match-head-commit with a sha not present and not fetchable → deny.
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_kb_branch "$tmp" "feat-badsha" specdir)
+  local out exit_code=0
+  out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge --admin --match-head-commit 0000000000000000000000000000000000000001")") || exit_code=$?
+  assert_deny "T45 unreachable pinned sha" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$tmp"
+}
+
+t46_clean_sha_pass() {
+  # --match-head-commit on a clean head → pass (the sha arm is not
+  # deny-only).
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_kb_branch "$tmp" "feat-mhclean" clean)
+  local sha out exit_code=0
+  sha=$(git -C "$work" rev-parse "origin/feat-mhclean")
+  out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge --admin --match-head-commit $sha")") || exit_code=$?
+  assert_pass "T46 clean pinned sha" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$tmp"
+}
+
+t47_no_upstream_pass() {
+  # Flag-only merge on a branch that was never pushed: no origin/<branch>
+  # exists, gh has no head to merge — the gate's subject doesn't exist.
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  local work="$tmp/work" origin="$tmp/origin.git" incidents="$tmp/incidents"
+  mkdir -p "$work" "$incidents"
+  git init -q --bare "$origin"
+  init_git_repo "$work"
+  git -C "$work" remote add origin "$origin"
+  git -C "$work" commit -q --allow-empty -m "init"
+  git -C "$work" push -q origin main
+  git -C "$work" checkout -q -b feat-local
+  mkdir -p "$work/knowledge-base/project/specs/feat-local"
+  echo "x" > "$work/knowledge-base/project/specs/feat-local/spec.md"
+  git -C "$work" add -A
+  git -C "$work" commit -q -m "leaky, unpushed"
+  local out exit_code=0
+  out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge --squash --auto")") || exit_code=$?
+  assert_pass "T47 never-pushed branch" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$tmp"
+}
+
+t48_global_flags_deny() {
+  # `gh -R o/r pr merge 5` — Cobra global flags sit between gh and pr,
+  # invisible to the residue census → deny with the canonical-form hint.
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_kb_branch "$tmp" "feat-gf" specdir)
+  local out exit_code=0
+  out=$(run_hook "$incidents" "$(make_payload "$work" "gh -R jikig-ai/soleur pr merge 5")") || exit_code=$?
+  assert_deny "T48 global-flag merge" "$incidents" "$out" "${exit_code:-0}"
+  local reason
+  reason=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // ""')
+  if [[ "$reason" == *"global flags"* ]]; then
+    pass "T48b deny names the global-flags arm"
+  else
+    fail "T48b deny reason missing 'global flags': $reason"
+  fi
+  TOTAL=$((TOTAL + 1))
+  rm -rf "$tmp"
+}
+
+t49_multi_invocation_deny() {
+  # `gh pr merge --match-head-commit A && gh pr merge 6` — the sha arm's
+  # precedence would swallow the second invocation's census entirely.
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_kb_branch "$tmp" "feat-multi" clean)
+  local sha out exit_code=0
+  sha=$(git -C "$work" rev-parse "origin/feat-multi")
+  out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge --match-head-commit $sha && gh pr merge 6")") || exit_code=$?
+  assert_deny "T49 second invocation uncensused" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$tmp"
+}
+
+t50_comment_pointer_still_gates() {
+  # P1 regression: `# -R other/repo` is a comment, never a pointer. Before
+  # the scan-side gather the raw-text operand proved "foreign" and the
+  # merge passed silently. Now the comment is stripped → pr census → deny.
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_kb_branch "$tmp" "feat-cmt" specdir)
+  git -C "$work" push -q origin feat-cmt:refs/pull/50/head
+  local out exit_code=0
+  out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge 50 --squash # -R other/repo")") || exit_code=$?
+  assert_deny "T50 comment -R does not foreign-exit" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$tmp"
+}
+
+t51_quoted_env_still_gates() {
+  # A quoted `GH_REPO=` inside another command's string is text, never an
+  # assignment — must not foreign-exit the real merge.
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_kb_branch "$tmp" "feat-qenv" specdir)
+  git -C "$work" push -q origin feat-qenv:refs/pull/51/head
+  local out exit_code=0
+  out=$(run_hook "$incidents" "$(make_payload "$work" 'gh pr merge 51 --squash; echo "GH_REPO=other/repo"')") || exit_code=$?
+  assert_deny "T51 quoted GH_REPO does not foreign-exit" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$tmp"
+}
+
+t52_rename_R_deny() {
+  # `git mv <archived> <live>` — rename detection emits R (not A), and an
+  # AM-only census passes it silently. The dst path must be judged.
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  local work origin incidents
+  read -r work origin incidents < <(make_archived_branch "$tmp" "b-archrevive")
+  git -C "$work" mv "$work/knowledge-base/project/specs/archive/2026-10-12-b-archrevive" \
+    "$work/knowledge-base/project/specs/b-revived"
+  git -C "$work" commit -q -m "revive spec dir live"
+  git -C "$work" push -qu origin "b-archrevive"
+  local out exit_code=0
+  out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge --squash --auto")") || exit_code=$?
+  assert_deny "T52 rename-in to live path" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$tmp"
+}
+
+t53_subst_clean_pass() {
+  # `x=$(gh pr merge 5)` leaves a `)` in the residue — after cleaning the
+  # number resolves and a clean head passes (not a resolver deny).
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_kb_branch "$tmp" "feat-subok" clean)
+  git -C "$work" push -q origin feat-subok:refs/pull/53/head
+  local out exit_code=0
+  out=$(run_hook "$incidents" "$(make_payload "$work" "x=\$(gh pr merge 53)")") || exit_code=$?
+  assert_pass "T53 substitution clean head" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$tmp"
+}
+
+t54_subshell_cd_census_pass() {
+  # `(cd other-checkout; gh pr merge)` — same origin, DIFFERENT branch:
+  # the gate must census the cd'd checkout's branch, not the session's.
+  # Session branch is leaky; the cd'd branch is clean → pass proves the
+  # miscensus is closed (a session-branch census would deny).
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_kb_branch "$tmp" "feat-session" specdir)
+  git -C "$work" checkout -q -b clean-b main
+  git -C "$work" push -q origin clean-b
+  git -C "$work" checkout -q feat-session
+  local other="$tmp/other"
+  git clone -q "$origin" "$other" 2>/dev/null
+  git -C "$other" config user.email t@t.local
+  git -C "$other" config user.name "T"
+  git -C "$other" checkout -q clean-b
+  local out exit_code=0
+  out=$(run_hook "$incidents" "$(make_payload "$work" "(cd $other; gh pr merge --squash --auto)")") || exit_code=$?
+  assert_pass "T54 subshell cd censuses the cd'd branch" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$tmp"
+}
+
+t55_unresolvable_cd_deny() {
+  # `cd $VAR && gh pr merge` — the operand is a variable the hook cannot
+  # resolve; the merge's execution checkout is unprovable → deny.
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_kb_branch "$tmp" "feat-cdvar" specdir)
+  local out exit_code=0
+  out=$(run_hook "$incidents" "$(make_payload "$work" 'cd $OTHER_DIR && gh pr merge 5')") || exit_code=$?
+  assert_deny "T55 variable cd operand" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$tmp"
+}
+
+t56_brace_group_deny() {
+  # `{ gh pr merge 5; }` — brace-group boundary.
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_kb_branch "$tmp" "feat-brace" specdir)
+  git -C "$work" push -q origin feat-brace:refs/pull/56/head
+  local out exit_code=0
+  out=$(run_hook "$incidents" "$(make_payload "$work" "{ gh pr merge 56 --squash; }")") || exit_code=$?
+  assert_deny "T56 brace-group merge" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$tmp"
+}
+
+t57_launcher_args_deny() {
+  # `timeout 60 gh pr merge` — argument-taking launcher prefix.
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_kb_branch "$tmp" "feat-timeout" specdir)
+  git -C "$work" push -q origin feat-timeout:refs/pull/57/head
+  local out exit_code=0
+  out=$(run_hook "$incidents" "$(make_payload "$work" "timeout 60 gh pr merge 57 --squash")") || exit_code=$?
+  assert_deny "T57 timeout-launcher merge" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$tmp"
+}
+
+t58_redirect_clean_pass() {
+  # `gh pr merge 5 > /tmp/log` — the redirect word and target are not
+  # merge operands; a clean head passes rather than false-denying on a
+  # phantom positional.
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_kb_branch "$tmp" "feat-redir" clean)
+  git -C "$work" push -q origin feat-redir:refs/pull/58/head
+  local out exit_code=0
+  out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge 58 --squash > /tmp/merge-log")") || exit_code=$?
+  assert_pass "T58 redirect does not false-deny" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$tmp"
+}
+
+t59_nested_archive_deny() {
+  # specs/<live-dir>/archive/x.md is INSIDE a live spec dir — only
+  # <root>/archive/ is exempt, not any path containing an archive/
+  # component.
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_kb_branch "$tmp" "feat-nested" clean)
+  mkdir -p "$work/knowledge-base/project/specs/feat-nested/archive"
+  echo "x" > "$work/knowledge-base/project/specs/feat-nested/archive/inner.md"
+  git -C "$work" add -A
+  git -C "$work" commit -q -m "nested archive"
+  git -C "$work" push -qu origin feat-nested
+  local out exit_code=0
+  out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge --squash --auto")") || exit_code=$?
+  assert_deny "T59 nested archive/ under a live spec dir" "$incidents" "$out" "${exit_code:-0}"
   rm -rf "$tmp"
 }
 
@@ -673,8 +904,8 @@ t40_settings_registration() {
   fi
   local order reb ship
   order=$(jq -r '.hooks.PreToolUse[] | select(.matcher == "Bash") | .hooks[].command' "$settings" 2>/dev/null)
-  reb=$(printf '%s\n' "$order" | grep -n "ship-unpushed-commits-gate.sh" | head -1 | cut -d: -f1)
-  ship=$(printf '%s\n' "$order" | grep -n "ship-kb-archive-gate.sh" | head -1 | cut -d: -f1)
+  reb=$(printf '%s\n' "$order" | grep -n "ship-unpushed-commits-gate.sh" | head -1 | cut -d: -f1 || true)
+  ship=$(printf '%s\n' "$order" | grep -n "ship-kb-archive-gate.sh" | head -1 | cut -d: -f1 || true)
   if [[ -n "$reb" && -n "$ship" && "$ship" -gt "$reb" ]]; then
     pass "T40 settings.json registration after ship-unpushed-commits-gate"
   else
@@ -691,8 +922,8 @@ t41_devin_registration() {
   fi
   local order reb ship
   order=$(jq -r '.hooks.PreToolUse[] | select(.matcher == "^exec$") | .hooks[].command' "$devin_cfg" 2>/dev/null)
-  reb=$(printf '%s\n' "$order" | grep -n "ship-unpushed-commits-gate.sh" | head -1 | cut -d: -f1)
-  ship=$(printf '%s\n' "$order" | grep -n "ship-kb-archive-gate.sh" | head -1 | cut -d: -f1)
+  reb=$(printf '%s\n' "$order" | grep -n "ship-unpushed-commits-gate.sh" | head -1 | cut -d: -f1 || true)
+  ship=$(printf '%s\n' "$order" | grep -n "ship-kb-archive-gate.sh" | head -1 | cut -d: -f1 || true)
   if [[ -n "$reb" && -n "$ship" && "$ship" -gt "$reb" ]]; then
     pass "T41 .devin ^exec$ twin registered after unpushed gate"
   else
@@ -774,6 +1005,22 @@ t40_settings_registration
 t41_devin_registration
 t42_dispositions_row
 t43_resolver_parity
+t44_lsremote_empty_deny
+t45_unreachable_sha_deny
+t46_clean_sha_pass
+t47_no_upstream_pass
+t48_global_flags_deny
+t49_multi_invocation_deny
+t50_comment_pointer_still_gates
+t51_quoted_env_still_gates
+t52_rename_R_deny
+t53_subst_clean_pass
+t54_subshell_cd_census_pass
+t55_unresolvable_cd_deny
+t56_brace_group_deny
+t57_launcher_args_deny
+t58_redirect_clean_pass
+t59_nested_archive_deny
 
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
@@ -781,8 +1028,9 @@ echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 # Anti-vacuity floor: exact case floor, enforced OUTSIDE the verdict
 # machinery (a neutered assert cannot disarm it — guard-vacuity-floor's
 # mutant contract). Threshold is hand-maintained with the case list:
-# 50 assertions across 40 case invocations.
-MIN_ASSERTIONS=50
+# 67 assertions across 57 case invocations (T01/T48 carry a second
+# deny-reason check; T35, T36 assert two arms each).
+MIN_ASSERTIONS=67
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] vacuity floor: only %d assertions ran (floor %d) — the suite did not execute\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   exit 1
