@@ -407,6 +407,12 @@ if [[ "$sync_ok" -eq 1 ]]; then
     sync_ok=0
   fi
 fi
+# ADR-276 S3 (#9728): the head-verdict resolver is read independent of sync_ok/SYNC_SNAP (mirror of ship Phase 7).
+VERDICT_OK=0
+if [[ -n "$SYNC_ROOT" && -r "$SYNC_ROOT/scripts/ci-head-verdict.sh" ]] \
+   && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "$SYNC_ROOT/.claude-plugin/plugin.json" 2>/dev/null; then
+  VERDICT_OK=1
+fi
 # REQUIRED_CHECKS is fetched once, fail-open: empty array → no-op scan
 # (see ship/SKILL.md Phase 7 for the full rationale; do NOT harden).
 mapfile -t REQUIRED_CHECKS < <(gh api 'repos/{owner}/{repo}/rules/branches/main' \
@@ -444,7 +450,7 @@ while true; do
       # ADR-276 S3: a ready PR's red `test` may be the DRAFT run's row; ask the resolver.
       vstate=""
       for n in "${failed_names[@]}"; do
-        [[ "$n" == test && -n "$SYNC_SNAP" && -r "$SYNC_ROOT/scripts/ci-head-verdict.sh" ]] || continue
+        [[ "$n" == test && "$VERDICT_OK" -eq 1 ]] || continue
         vout="$(bash "$SYNC_ROOT/scripts/ci-head-verdict.sh" verdict "$PR" 2>/dev/null)" || vout=""
         vline="$(grep -m1 '^SOLEUR_CI_HEAD_VERDICT ' <<<"$vout")" || vline=""
         vstate="${vline#*state=}"; vstate="${vstate%% *}"; break
