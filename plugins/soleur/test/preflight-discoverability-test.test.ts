@@ -2933,7 +2933,14 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // TRUTH: the command (`bash scripts/probe-github-app-mint.sh`) reads GITHUB_APP_{ID,PRIVATE_KEY} via
   // `doppler run -p soleur -c dev_scheduled` and expects a `GITHUB_APP_MINT` line. NO SUBSTITUTE: a private
   // key's mint liveness has no unauthenticated read path — the JWT only exists signed. Genuine.
-  const BASELINE_DECLARED_PROBES = 63;
+  // #10045 (2026-10-12): +1 (63 -> 64) for `2026-10-11-chore-kdeny-kernel-stream-read-grant-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`bash scripts/betterstack-query.sh --since 6h --limit 100 --grep 'section=kdeny'`)
+  // reads the Better Stack Telemetry API under `doppler run -p soleur -c prd_terraform`; the emitted
+  // kdeny bundle's live content has no unauthenticated read path. NO SUBSTITUTE: the grant's host-side
+  // effectiveness (sudo policy accept) is asserted by the terraform_data execute probes at apply time,
+  // not repo-readable — the warehouse query is the only observable of the post-apply src=journal arm. Genuine.
+  const BASELINE_DECLARED_PROBES = 64;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
