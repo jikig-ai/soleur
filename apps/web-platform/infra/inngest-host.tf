@@ -334,19 +334,10 @@ locals {
   # Prose in a .tmpl that rides in user_data is NOT free; prose in .tf is. Keep the rationale — it
   # just stops being shipped to the host.
   inngest_user_data_plain = replace(templatefile("${path.module}/cloud-init-inngest.yml", {
-    # The retired plaintext backstop volume's id, as a LITERAL (#8285, D1). Deleting
-    # hcloud_volume.inngest_redis would otherwise change this input, change user_data, and
-    # force-replace the sole scheduler. The rendered user_data stays byte-identical, so the
-    # server plans no change. In pointer mode this id is only an allowlist member; if the Doppler
-    # pointer were ever lost the pre-cutover arm fails closed on the absent device.
-    inngest_volume_id = local.inngest_retired_plaintext_volume_id
-    # #6894 / ADR-142. The ADDITIVE target volume's id. The two-device resolver in
-    # cloud-init needs BOTH ids: the allowlist of devices it may touch is built from
-    # this pair, so a device that is neither is refused rather than probed. Threaded
-    # here in the same commit as the volume itself — the resolver is a Phase 3 edit,
-    # and supplying a key the template does not yet read is a no-op, whereas reading
-    # a key the map does not supply is a render-time FATAL. The cheap ordering is
-    # therefore supply-first, and it is what this line is.
+    # #6894 / ADR-142. The ONE volume's id (#9786 removed the retired plaintext backstop's
+    # id, `inngest_volume_id`, which #8285 had pinned as a literal). The resolver in cloud-init
+    # builds its allowlist of devices it may touch from this id alone, so any other device is
+    # refused rather than probed.
     inngest_luks_volume_id = hcloud_volume.inngest_redis_luks.id
     # #7695. Arms the post-recut refusal in the cloud-init LUKS discriminator. FALSE today and
     # for as long as the volume is ext4; the recut branch flips it in the same change that drops
@@ -571,10 +562,8 @@ resource "hcloud_server" "inngest" {
 # hcloud_volume.inngest_redis (the pre-cutover ext4 copy of the Redis AOF) and its attachment are
 # no longer declared. They were retired on 2026-10-09 by the reviewer-gated `inngest-backstop-retire`
 # dispatch (since deleted; runbook inngest-luks-cutover-6894.md, "Retiring the backstop"): the volume is
-# gone from Hetzner (GET -> 404 at 2026-10-09T16:21:26Z) and from state. Only the id below remains.
-locals {
-  inngest_retired_plaintext_volume_id = "106261946"
-}
+# gone from Hetzner (GET -> 404 at 2026-10-09T16:21:26Z) and from state. Its id (106261946) is no
+# longer a template input: #9786 stripped the plaintext resolver from cloud-init-inngest.yml.
 
 # ---------------- Deny-all PUBLIC ingress firewall ----------------
 # ZERO inbound rules = deny-all on the PUBLIC interface. Hetzner firewalls filter ONLY the

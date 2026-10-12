@@ -855,7 +855,7 @@ variable "grok_dogfood_private_ip" {
 #
 # It is not an operator-supplied value and has no secret content.
 variable "inngest_expect_luks" {
-  description = "Whether the dedicated inngest host should REFUSE to mount an ext4 /mnt/data (i.e. the LUKS recut has run)."
+  description = "INERT since #9786: no longer gates any boot behaviour (the ext4 mount arm and the expect_luks branches were stripped from cloud-init-inngest.yml). Still threaded as a template key and a telemetry field; retire with the follow-up tracker."
   type        = bool
   default     = false
 }

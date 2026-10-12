@@ -59,7 +59,6 @@ locals {
 
   rehearsal_user_data_plain = replace(templatefile("${path.module}/../cloud-init-inngest.yml", {
     # --- identity/scratch args (the ONLY deliberate divergences from prod's map) ---
-    inngest_volume_id      = hcloud_volume.rehearsal_inngest.id
     inngest_luks_volume_id = hcloud_volume.rehearsal_inngest_luks.id
     doppler_token          = doppler_service_token.rehearsal.key
     inngest_doppler_config = local.rehearsal_doppler_config

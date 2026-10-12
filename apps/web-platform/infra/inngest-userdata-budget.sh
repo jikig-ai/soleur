@@ -29,7 +29,6 @@
 #     zot-registry.tf). Exact, not bounds.
 #   * `zot_pull_token` — exactly 40, from `random_password.zot_pull { length = 40 }`. Exact.
 #   * the three `*_sha256` values — 64 hex, and BOTH arch branches are 64 hex, so exact.
-#   * `inngest_volume_id` — 9 digits, matching every live hcloud volume id in-repo.
 #   * `inngest_luks_volume_id` — 9 digits, same reasoning (#6894's additive volume). It is
 #     interpolated twice in the template (the first-boot resolver and the boot-reopen script).
 #   * `inngest_expect_luks` — "false" (5 B) is the LONGER of the two `tostring(bool)` forms, so
@@ -166,7 +165,6 @@ trap 'rm -rf "$TFDIR"' EXIT
 cat > "$TFDIR/main.tf" <<EOF
 locals {
   vars = {
-    inngest_volume_id      = "100000004"
     inngest_luks_volume_id = "100000005"
     inngest_expect_luks    = "false"
     doppler_token          = join(".", ["dp", "st", "prd", "STUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUB"])
