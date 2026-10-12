@@ -27,6 +27,11 @@
 #      grep finds NO live consumer outside this file's own tests, so the comment
 #      below claiming "downstream hooks read this" is currently unsupported —
 #      wire it or retire it, but do not delete it by accident.
+#  10. the bare-root HEAD self-heal: a child-process call to bare-head-self-heal.sh,
+#      made BEFORE the branch read so the `[session-context]` branch line reflects the
+#      repaired HEAD. It repairs a dangling `.git/HEAD` at a bare repo root and emits one
+#      SOLEUR_BARE_HEAD_HEALED line (appended last, after the tmpfs alarm block), and
+#      nothing on a healthy session. See .claude/hooks/README.md "Bare-root HEAD self-heal".
 #
 # WHAT MUST NOT BE "SIMPLIFIED": do not merge AGENTS.rules.md into AGENTS.md.
 # The index is re-rendered every turn and the corpus is injected once per
@@ -298,6 +303,14 @@ STAMP="[rules-loader] loaded: ${RULE_COUNT} of ${TOTAL_RULES} rules${FAIL_SAFE_N
 # Dropping a `|| …` guard here on the strength of the old claim would route the
 # session onto the FALLBACK path — the one with the least operator visibility.
 # Keep every external call inside a command-sub with a `|| …` fallback.
+# Bare-root HEAD self-heal (job 10 in the header). A CHILD process, so a failing or noisy helper
+# cannot reach this shell: `|| true` keeps the ERR trap quiet, and the prefix test below accepts
+# only the helper's first line, so nothing else it prints can enter context. Pure bash on purpose
+# (no `| grep -m1`): grep-q-pipe-guard.test.sh sweeps this directory for an early-exit grep in a
+# pipe. A missing helper (a stale bare-root copy of this file) is the same fail-open path.
+BARE_HEAL_OUT=$(bash "$(dirname "${BASH_SOURCE[0]}")/bare-head-self-heal.sh" "$REPO_ROOT" 2>/dev/null || true)
+BARE_HEAL_MARKER="${BARE_HEAL_OUT%%$'\n'*}"
+[[ "$BARE_HEAL_MARKER" == "SOLEUR_BARE_HEAD_HEALED "* ]] || BARE_HEAL_MARKER=""
 WS_BRANCH=$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "(unknown)")
 # Guard git's non-zero exit INSIDE the pipe, not after it. `… | wc -l || echo 0`
 # is a double-output bug under pipefail: when git fails, `wc -l` already emits
@@ -445,6 +458,6 @@ fi
 # bodies. It was lines 4-6 until ADR-151 removed the HINT line; the loader tests
 # assert these offsets positionally, so any future line added to the header must
 # move them again in the same commit. The alarm block trails everything.
-OUT_BODY="${STAMP}"$'\n'"[rules-loader] manifest: ${MANIFEST}"$'\n'"${SESSION_CONTEXT}"$'\n'"${CONTEXT}${TMPFS_ALARM_BLOCK}"
+OUT_BODY="${STAMP}"$'\n'"[rules-loader] manifest: ${MANIFEST}"$'\n'"${SESSION_CONTEXT}"$'\n'"${CONTEXT}${TMPFS_ALARM_BLOCK}${BARE_HEAL_MARKER:+$'\n'$BARE_HEAL_MARKER}"
 jq -nc --arg out "$OUT_BODY" '{ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: $out } }'
 exit 0
