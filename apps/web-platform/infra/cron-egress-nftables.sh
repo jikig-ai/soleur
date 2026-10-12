@@ -323,5 +323,19 @@ if [[ ! "$docker_user_rules" =~ $reply_re ]]; then
   nft insert rule ip filter DOCKER-USER iifname "$EGRESS_BRIDGE_IF" oifname "$BRIDGE_IF" ct state established,related accept comment '"soleur-egress: gw reply traffic (#9534)"'
   log "installed DOCKER-USER gw reply accept"
 fi
+# Third-interface direct-routing drop: the bridge is created gateway_mode
+# nat-unprotected (docker >=28's raw-PREROUTING protection is disabled — it
+# killed the designed docker0→gw leg at pre-conntrack). That mode also opens
+# direct-routed access to the gw from any OTHER ingress (a LAN-adjacent host
+# routed to the bridge subnet, or a third docker bridge). Our chains only jump
+# on {docker0, soleur-egress0}, so restore the boundary at our own layer: NEW
+# packets headed OUT egress0 that didn't come IN docker0 die here. Established
+# traffic (the gw's own upstream replies) is untouched; docker0 ingress keeps
+# the SOLEUR-EGRESS accept/deny discipline.
+routed_drop_re="oifname \"$EGRESS_BRIDGE_IF\" iifname != \"$BRIDGE_IF\" ct state new"
+if [[ ! "$docker_user_rules" =~ $routed_drop_re ]]; then
+  nft insert rule ip filter DOCKER-USER oifname "$EGRESS_BRIDGE_IF" iifname != "$BRIDGE_IF" ct state new counter drop comment '"soleur-egress: non-docker0 direct-routing drop (#9534)"'
+  log "installed DOCKER-USER non-docker0 direct-routing drop"
+fi
 
 log "OK: SOLEUR-EGRESS active (bridge=$BRIDGE_IF gw=$BRIDGE_GW)"

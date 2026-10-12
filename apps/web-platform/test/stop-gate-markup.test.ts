@@ -15,6 +15,11 @@ describe("stripStopGateMarkup", () => {
     });
   });
 
+  test("the plain Paused:/Blocked: label the hook now teaches is left alone", () => {
+    const label = "Paused: waiting on CI run 123 to finish.";
+    expect(stripStopGateMarkup(label)).toEqual({ text: label, hadMarkup: false, markupOnly: false });
+  });
+
   test("the hook's other sentinel (BLOCKED) is stripped too", () => {
     expect(stripStopGateMarkup("<stop>BLOCKED: waiting on CI</stop>").markupOnly).toBe(true);
   });

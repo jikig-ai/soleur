@@ -1670,6 +1670,10 @@ assert_grep "reply leg: established/related accept at DOCKER-USER" \
   'iifname "\$EGRESS_BRIDGE_IF" oifname "\$BRIDGE_IF" ct state established,related accept' "$LOADER"
 assert_grep "deny leg: egress0 jump at DOCKER-USER" \
   'iifname "\$EGRESS_BRIDGE_IF" counter jump SOLEUR-EGRESS-GW' "$LOADER"
+# nat-unprotected drops docker's raw-PREROUTING guard for ALL interfaces; the
+# oifname drop re-closes it for non-docker0 ingress at the designed layer.
+assert_grep "direct-routing drop: non-docker0 NEW packets to egress0 die (nat-unprotected boundary)" \
+  'oifname "\$EGRESS_BRIDGE_IF" iifname != "\$BRIDGE_IF" ct state new counter drop' "$LOADER"
 REPLY_LINE="$(grep -n 'iifname "\$EGRESS_BRIDGE_IF" oifname "\$BRIDGE_IF" ct state established,related accept' "$LOADER" | sed -n '1p' | cut -d: -f1)"
 GWJUMP_LINE="$(grep -n 'iifname "\$EGRESS_BRIDGE_IF" counter jump SOLEUR-EGRESS-GW' "$LOADER" | sed -n '1p' | cut -d: -f1)"
 # `nft insert` is LIFO: the jump must be installed FIRST so the reply-accept
