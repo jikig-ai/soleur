@@ -17,7 +17,7 @@
 // No regex is applied to anything unbounded: the 243 MB file is only ever scanned with
 // `Buffer.indexOf` over bounded chunks, and the parser sees a window of at most 4096 bytes.
 
-import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readFileSync, readSync } from "node:fs";
 import { join } from "node:path";
 
 export const TAIL_ANCHOR = '.push("--dev","/dev"),';
@@ -83,14 +83,18 @@ export function resolveVendoredBinary(
 ): VendoredBinary {
   const dir = join(nodeModulesDir, "@anthropic-ai", `${pkg}-linux-x64`);
   const path = join(dir, "claude");
-  if (!existsSync(path)) {
+  // One open, no existsSync: a check-then-open pair is a file-system race (CodeQL js/file-system-race).
+  let fd: number;
+  try {
+    fd = openSync(path, "r");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
     throw new Error(
       `BINARY_MISSING: @anthropic-ai/${pkg}-linux-x64 has no claude binary at ${path}. ` +
         "Run `npm ci` in apps/web-platform (the platform package is an optionalDependency); " +
         "a missing binary is a failure, never a skip, on linux-x64 and under CI.",
     );
   }
-  const fd = openSync(path, "r");
   let size: number;
   try {
     size = fstatSync(fd).size;
