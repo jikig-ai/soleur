@@ -155,9 +155,9 @@ write_files:
   - path: /usr/local/bin/inngest-luks-open.sh
     content: |
       #!/usr/bin/env bash
-      # Boot-reopen for the LUKS mappers under /mnt/data and /mnt/data-luks. Opens ONLY; never
-      # formats, never mkfs. On a pre-cutover host it opens what is already LUKS and leaves the
-      # plaintext store alone; under a pointer it opens exactly the volume the pointer names.
+      # Boot-reopen for the LUKS mapper under /mnt/data. Opens ONLY; never formats, never mkfs.
+      # With no pointer it opens the one rendered volume if it is LUKS and refuses otherwise;
+      # under a pointer it opens exactly the volume the pointer names.
       #
       # ESCAPING — THIS FILE IS A TERRAFORM TEMPLATE. Terraform unescapes dollar-dollar-brace to
       # dollar-brace and leaves
@@ -170,11 +170,9 @@ write_files:
       # that was never delivered. Measured 2026-09-18 (#6894). Write a bare dollar for everything,
       # and the doubled form only where a brace follows.
       set -euo pipefail
-      PLAIN_ID='${inngest_volume_id}'
       LUKS_ID='${inngest_luks_volume_id}'
       BYID=/dev/disk/by-id/scsi-0HC_Volume_
-      DEV="$${BYID}$${PLAIN_ID}"
-      STAGING_DEV="$${BYID}$${LUKS_ID}"
+      DEV="$${BYID}$${LUKS_ID}"
       # THE POINTER, staged into /etc/default/inngest-luks by the first-boot stage because this unit
       # runs before the network and cannot fetch it. Same authority as in the runcmd resolver.
       POINTER="$${INNGEST_LUKS_ACTIVE_VOLUME_ID:-}"
@@ -212,8 +210,8 @@ write_files:
         # POST-CUTOVER. The pointer names the store; it must be present and must be LUKS. There is
         # no fallback to the other volume — that fallback is the silent un-encryption Fork P refuses.
         case "$POINTER" in
-          "$PLAIN_ID"|"$LUKS_ID") ;;
-          *) fail reopen_pointer 1 n/a "the pointer names volume $POINTER, which is neither of this host's volumes" ;;
+          "$LUKS_ID") ;;
+          *) fail reopen_pointer 1 n/a "the pointer names volume $POINTER, which is not this host's volume" ;;
         esac
         CANON_DEV="$${BYID}$${POINTER}"
         wait_dev "$CANON_DEV" || fail reopen_device_wait 1 n/a "the pointer names $CANON_DEV and it is absent after 30s"
@@ -223,30 +221,14 @@ write_files:
         exit 0
       fi
 
-      # PRE-CUTOVER. The plaintext-id volume is canonical; open it only if it is already LUKS (the
-      # ADR-199 recut world). On an ext4 host there is nothing to open and nothing to decide.
+      # NO POINTER. The one rendered volume is canonical and must already be LUKS: open it, never
+      # format it. Anything else is a refusal, not a skip.
       wait_dev "$DEV" || fail reopen_device_wait 1 n/a "device absent after 30s"
       luks_type "$DEV"
       if [ "$BLK_TYPE" = crypto_LUKS ]; then
         open_as "$DEV" inngest-redis
-      elif [ "${inngest_expect_luks}" = "true" ]; then
-        fail reopen_not_luks 1 "$${BLK_TYPE:-empty}" "expect_luks=true but the device is not crypto_LUKS"
       else
-        emit reopen_skip_plaintext 0 "$${BLK_TYPE:-empty}" "pre-recut host; nothing to reopen"
-      fi
-
-      # The additive volume, staged under the NON-canonical name. Opened AFTER the canonical store,
-      # so a refusal here cannot stop the store's mapper from opening. Never formatted here: the
-      # runcmd stage is the only writer, and a raw volume on a later boot means that stage did not run.
-      if wait_dev "$STAGING_DEV"; then
-        luks_type "$STAGING_DEV"
-        case "$BLK_TYPE" in
-          crypto_LUKS) open_as "$STAGING_DEV" inngest-redis-staging ;;
-          "") fail reopen_staging_raw 1 empty "the additive volume is attached but was never formatted" ;;
-          *) fail reopen_staging_foreign 1 "$BLK_TYPE" "the additive volume carries an unexpected signature" ;;
-        esac
-      else
-        emit reopen_staging_absent 0 n/a "no additive volume attached"
+        fail reopen_not_luks 1 "$${BLK_TYPE:-empty}" "the volume is not crypto_LUKS"
       fi
     owner: root:root
     permissions: '0755'
@@ -1629,22 +1611,18 @@ runcmd:
     }
     trap luks_err EXIT
     EXPECT_LUKS='${inngest_expect_luks}'
-    # ── THE TWO VOLUMES, BY ID (#6894, ADR-142 additive blue-green) ──────────────────────
-    # PLAIN_ID is the live store as it exists today. LUKS_ID is the additive volume attached
-    # beside it. BOTH ids come from the template, so the pointer below can only ever name one
-    # of these two: a pointer naming a third id is a refusal, never a new device to open.
-    PLAIN_ID='${inngest_volume_id}'
+    # ── THE ONE VOLUME, BY ID (#6894, ADR-142; #9786 retired the plaintext volume) ───────
+    # LUKS_ID is the store's volume. It comes from the template, so the pointer below can only
+    # ever name this one: a pointer naming any other id is a refusal, never a new device to open.
     LUKS_ID='${inngest_luks_volume_id}'
     BYID=/dev/disk/by-id/scsi-0HC_Volume_
-    DEV="$${BYID}$${PLAIN_ID}"
-    STAGING_DEV="$${BYID}$${LUKS_ID}"
+    DEV="$${BYID}$${LUKS_ID}"
     MAPPER=/dev/mapper/inngest-redis
-    STAGING_MAPPER=/dev/mapper/inngest-redis-staging
     # THE POINTER (Fork P). Authoritative for which volume holds the store; the disk signature
     # only CORROBORATES it. It lives in Doppler, not on the root disk, because the only delivery
     # path to this host is a replace that destroys the root disk — a root-disk pointer would be
-    # erased by the very dispatch every later change must fire, and the resolver would then take
-    # the pointer-absent arm onto the stale plaintext AOF. Absent = the pre-cutover world.
+    # erased by the very dispatch every later change must fire. Absent = the unpointed arm below,
+    # which resolves the one volume by its signature and may not format it on a prd config.
     POINTER="$${INNGEST_LUKS_ACTIVE_VOLUME_ID:-}"
 
     # THE PROBE MUST BE ABLE TO MEASURE. Unprivileged `blkid -p` on a root-owned device prints
@@ -1658,9 +1636,7 @@ runcmd:
     [ -n "$${INNGEST_REDIS_LUKS_KEY:-}" ] || { echo "FATAL: INNGEST_REDIS_LUKS_KEY empty — refusing an unencrypted mount" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
 
     STAGE=volume_ids
-    case "$PLAIN_ID" in ''|*[!0-9]*) echo "FATAL: the plaintext volume id '$PLAIN_ID' did not render as a number" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1 ;; esac
-    case "$LUKS_ID" in ''|*[!0-9]*) echo "FATAL: the additive volume id '$LUKS_ID' did not render as a number" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1 ;; esac
-    [ "$PLAIN_ID" != "$LUKS_ID" ] || { echo "FATAL: both volume ids rendered as $PLAIN_ID — the resolver cannot tell the store from its backstop" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+    case "$LUKS_ID" in ''|*[!0-9]*) echo "FATAL: the volume id '$LUKS_ID' did not render as a number" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1 ;; esac
 
     # ── HELPERS ─────────────────────────────────────────────────────────────────────────────
     # wait_dev <path> — bounded attach wait. blkid on an ABSENT path returns rc 2, which the
@@ -1705,30 +1681,29 @@ runcmd:
     }
 
     # ── RESOLVE: which volume is /mnt/data ─────────────────────────────────────────────────
-    # Four worlds, and the pointer decides between them; the signature never does:
-    #   pointer absent                     -> pre-cutover. PLAIN_ID is canonical (the four-arm
-    #                                         discriminator below, unchanged); LUKS_ID is staged
-    #                                         at /mnt/data-luks under a NON-canonical mapper.
-    #   pointer = one of the two ids       -> that volume is canonical and MUST read crypto_LUKS.
-    #   pointer names an absent device     -> REFUSE. Falling through to the other volume is the
+    # Three worlds, and the pointer decides between them; the signature never does:
+    #   pointer absent                     -> unpointed. LUKS_ID is the one candidate (the four-arm
+    #                                         discriminator below); there is no choice to make.
+    #   pointer = LUKS_ID                  -> that volume is canonical and MUST read crypto_LUKS.
+    #   pointer names an absent device     -> REFUSE. Falling through to another device is the
     #                                         rejected signature rule's failure: plaintext mounted,
     #                                         no mapper, the Redis guard vacuous, writes on a stale AOF.
     #   pointer non-numeric / a third id   -> REFUSE, rather than derive a device path from it.
     STAGE=resolve
     case "$POINTER" in
       "")
-        MODE=plaintext_canonical
+        MODE=unpointed
         CANON_DEV="$DEV"
         ;;
       *[!0-9]*)
         echo "FATAL: INNGEST_LUKS_ACTIVE_VOLUME_ID is set but is not a volume id — refusing to derive a device path from it" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1
         ;;
-      "$PLAIN_ID"|"$LUKS_ID")
+      "$LUKS_ID")
         MODE=pointer
         CANON_DEV="$${BYID}$${POINTER}"
         ;;
       *)
-        echo "FATAL: the pointer names volume $POINTER, which is neither of this host's volumes ($PLAIN_ID, $LUKS_ID) — refusing rather than guessing which one holds the store" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1
+        echo "FATAL: the pointer names volume $POINTER, which is not this host's volume ($LUKS_ID) — refusing rather than guessing which one holds the store" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1
         ;;
     esac
     luks_emit resolve 0 n/a "mode=$MODE pointer=$${POINTER:-absent}"
@@ -1748,13 +1723,15 @@ runcmd:
     chown root:root /etc/default/inngest-luks
     [ -s /etc/default/inngest-luks ] || { echo "FATAL: /etc/default/inngest-luks is empty after staging — the boot-reopen unit would fail on every later boot" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
     if [ -n "$POINTER" ]; then
-      grep -qx "INNGEST_LUKS_ACTIVE_VOLUME_ID=$POINTER" /etc/default/inngest-luks || { echo "FATAL: the pointer did not land in /etc/default/inngest-luks — the boot-reopen unit would take the pre-cutover arm on boot 2" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+      grep -qx "INNGEST_LUKS_ACTIVE_VOLUME_ID=$POINTER" /etc/default/inngest-luks || { echo "FATAL: the pointer did not land in /etc/default/inngest-luks — the boot-reopen unit would take the unpointed arm on boot 2" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
     fi
     luks_emit luks_key_stage 0 n/a staged
-    # THE TWO VOLUME IDS, for inngest-luks-cutover.service (#6894). That script ships in the image
+    # THE VOLUME ID, for inngest-luks-cutover.service (#6894). That script ships in the image
     # and cannot see template variables, and it compares every mount against these ids — never a
-    # kernel name. Not secret (0644), but asserted: without them the cutover refuses every run.
-    printf 'INNGEST_LUKS_PLAIN_VOLUME_ID=%s\nINNGEST_LUKS_ADDITIVE_VOLUME_ID=%s\n' "$PLAIN_ID" "$LUKS_ID" > /etc/default/inngest-luks-volumes
+    # kernel name. Not secret (0644), but asserted: the file's presence keeps the cutover units
+    # active. The image-baked script reads a plaintext id from this file too and now refuses every
+    # flagged run `volume-ids-unreadable` (#9786): the cutover is complete, that refusal is the intent.
+    printf 'INNGEST_LUKS_ADDITIVE_VOLUME_ID=%s\n' "$LUKS_ID" > /etc/default/inngest-luks-volumes
     grep -qx "INNGEST_LUKS_ADDITIVE_VOLUME_ID=$LUKS_ID" /etc/default/inngest-luks-volumes || { echo "FATAL: /etc/default/inngest-luks-volumes did not land — the cutover unit would refuse every run" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
 
     if [ "$MODE" = pointer ]; then
@@ -1785,8 +1762,8 @@ runcmd:
       fstab_set /mnt/data "$MAPPER /mnt/data ext4 defaults,nofail 0 2"
       luks_emit mount_luks 0 crypto_LUKS "mode=pointer"
     else
-      # ── PRE-CUTOVER ARM — the #7695 four-arm discriminator over PLAIN_ID, unchanged except
-      # that its fstab writes now replace rather than append ──────────────────────────────
+      # ── UNPOINTED ARM — the #7695 discriminator over the one volume, minus its ext4 arm,
+      # with fstab writes that replace rather than append ─────────────────────────────────
       # ARM 0 — bounded device-presence wait, BEFORE the discriminator. blkid on an absent path
       # returns rc 2, which the accept-0-or-2 policy below would otherwise route straight into
       # the luksFormat arm. A volume that is merely slow to attach must not be read as blank.
@@ -1801,23 +1778,11 @@ runcmd:
       # grounds), so the cost of guessing is the whole AOF.
       STAGE=blkid_probe
       _blk_rc=0
-      BLK_TYPE="$(/usr/sbin/blkid -o value -s TYPE "$DEV" 2>/dev/null)" || _blk_rc=$?
+      BLK_TYPE="$(/usr/sbin/blkid -p -o value -s TYPE "$DEV" 2>/dev/null)" || _blk_rc=$?
       { [ "$_blk_rc" -eq 0 ] || [ "$_blk_rc" -eq 2 ]; } || { echo "FATAL: blkid could not read $DEV (rc=$_blk_rc) — refusing to write to a device whose contents are unknown" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
       luks_emit blkid_probe 0 "$${BLK_TYPE:-empty}"
 
       case "$${BLK_TYPE:-}" in
-        ext4)
-          # ARM 1 — the pre-recut steady state. Mount the plaintext volume as-is and say so.
-          if [ "$EXPECT_LUKS" = "true" ]; then
-            echo "FATAL: expect_luks=true but $DEV still carries an ext4 signature — the recut did not take. Refusing to mount the AOF plaintext while the ledger claims encryption." | tee -a "$INNGEST_LUKS_DETAIL"
-            exit 1
-          fi
-          STAGE=mount_ext4
-          mkdir -p /mnt/data
-          mountpoint -q /mnt/data || mount "$DEV" /mnt/data 2>>"$INNGEST_LUKS_DETAIL"
-          fstab_set /mnt/data "$DEV /mnt/data ext4 defaults,nofail 0 2"
-          luks_emit mount_ext4 0 ext4
-          ;;
         crypto_LUKS)
           # ARM 2 — already recut. Open and mount; never format.
           STAGE=luks_open_existing
@@ -1833,7 +1798,9 @@ runcmd:
           # ARM 3 — raw device, no signature. This is the ONLY arm that may write a new header on
           # the canonical device, and it is reachable only because blkid returned rc 0-or-2 with an
           # EMPTY type while running as root: a positive proof of blankness, not an inference from
-          # a failed probe.
+          # a failed probe. It is refused outright when the rendered config is prd (#9786): a lost
+          # pointer plus a damaged header reads blank, and the volume is the only copy of the AOF.
+          [ '${inngest_doppler_config}' != prd ] || { echo "FATAL: unpointed_raw_refused — $DEV reads blank on a prd-config host with no pointer; refusing to luksFormat the only copy of the AOF" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
           STAGE=luks_format
           printf '%s' "$INNGEST_REDIS_LUKS_KEY" | cryptsetup luksFormat --batch-mode --type luks2 --key-file - "$DEV" 2>>"$INNGEST_LUKS_DETAIL"
           luks_emit luks_format 0 empty
@@ -1882,94 +1849,10 @@ runcmd:
     # A mountpoint check proves something is mounted; it does not prove it is the store.
     STAGE=verify
     mountpoint -q /mnt/data || { echo "FATAL: /mnt/data is not a mountpoint after the stage completed" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
-    if [ "$MODE" = pointer ] || [ "$${BLK_TYPE:-}" != ext4 ]; then
-      mounted_from /mnt/data "$MAPPER" || { echo "FATAL: /mnt/data is not mounted from $MAPPER" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
-      backing_is "$MAPPER" "$CANON_DEV" || { echo "FATAL: $MAPPER is not backed by $CANON_DEV — the canonical mapper sits on the wrong volume" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
-    else
-      mounted_from /mnt/data "$DEV" || { echo "FATAL: /mnt/data is not mounted from $DEV" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
-    fi
+    mounted_from /mnt/data "$MAPPER" || { echo "FATAL: /mnt/data is not mounted from $MAPPER" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+    backing_is "$MAPPER" "$CANON_DEV" || { echo "FATAL: $MAPPER is not backed by $CANON_DEV — the canonical mapper sits on the wrong volume" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
     luks_emit verify 0 "$${BLK_TYPE:-empty}" "mode=$MODE"
 
-    # ── STAGING — the additive volume, pre-cutover only ─────────────────────────────────────
-    # Runs AFTER the canonical store is mounted and verified, so nothing here can delay or break
-    # the store the scheduler is serving from; a staging refusal is loud (its own stage, phoned
-    # home) and leaves /mnt/data exactly as the lines above left it. Under a pointer there is no
-    # staging: the additive volume IS the store, and the plaintext volume is the retained backstop,
-    # left attached and untouched.
-    #
-    # The staging arm writes ONLY to a device positively measured blank or already LUKS (Guard 1),
-    # under a NON-canonical mapper name: /dev/mapper/inngest-redis is the name the Redis mount guard
-    # keys on, so opening the staging volume under it would trip that guard's mapper-open state.
-    # Probes here use `-p` (bypass the cache): across an abort-and-retry the cached type is the
-    # previous run's, and the arms are destructive in opposite directions.
-    if [ "$MODE" != pointer ]; then
-      STAGE=staging_wait
-      if ! wait_dev "$STAGING_DEV"; then
-        # Absent: the plaintext-only world, byte-identical to the stage before #6894.
-        luks_emit staging_absent 0 n/a "no additive volume attached"
-      else
-        STAGE=staging_blkid_probe
-        _stg_rc=0
-        STG_TYPE="$(/usr/sbin/blkid -p -o value -s TYPE "$STAGING_DEV" 2>/dev/null)" || _stg_rc=$?
-        { [ "$_stg_rc" -eq 0 ] || [ "$_stg_rc" -eq 2 ]; } || { echo "FATAL: blkid could not read $STAGING_DEV (rc=$_stg_rc) — refusing to stage a device whose contents are unknown" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
-        luks_emit staging_blkid_probe 0 "$${STG_TYPE:-empty}"
-        case "$${STG_TYPE:-}" in
-          "")
-            STAGE=staging_luks_format
-            printf '%s' "$INNGEST_REDIS_LUKS_KEY" | cryptsetup luksFormat --batch-mode --type luks2 --key-file - "$STAGING_DEV" 2>>"$INNGEST_LUKS_DETAIL"
-            luks_emit staging_luks_format 0 empty
-            ;;
-          crypto_LUKS)
-            : # already formatted by an earlier boot — re-entry is idempotent
-            ;;
-          *)
-            echo "FATAL: the additive volume $STAGING_DEV carries TYPE=$STG_TYPE — the staging arm writes only to a device measured blank or already LUKS" | tee -a "$INNGEST_LUKS_DETAIL"
-            exit 1
-            ;;
-        esac
-        STAGE=staging_luks_open
-        [ -e "$STAGING_MAPPER" ] || printf '%s' "$INNGEST_REDIS_LUKS_KEY" | cryptsetup luksOpen --key-file - "$STAGING_DEV" inngest-redis-staging 2>>"$INNGEST_LUKS_DETAIL"
-        STAGE=staging_mapper_probe
-        _smap_rc=0
-        SMAP_TYPE="$(/usr/sbin/blkid -p -o value -s TYPE "$STAGING_MAPPER" 2>/dev/null)" || _smap_rc=$?
-        { [ "$_smap_rc" -eq 0 ] || [ "$_smap_rc" -eq 2 ]; } || { echo "FATAL: blkid could not read $STAGING_MAPPER (rc=$_smap_rc)" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
-        case "$${SMAP_TYPE:-}" in
-          "")
-            # mkfs only on a mapper positively measured empty, AFTER luksOpen created it.
-            STAGE=staging_mkfs
-            mkfs.ext4 -q "$STAGING_MAPPER" 2>>"$INNGEST_LUKS_DETAIL"
-            luks_emit staging_mkfs 0 empty
-            ;;
-          ext4)
-            : # a filesystem from an earlier boot — mount it, never recreate it
-            ;;
-          *)
-            echo "FATAL: the staging mapper carries TYPE=$SMAP_TYPE — refusing to create a filesystem over it" | tee -a "$INNGEST_LUKS_DETAIL"
-            exit 1
-            ;;
-        esac
-        STAGE=staging_mount
-        mkdir -p /mnt/data-luks
-        mountpoint -q /mnt/data-luks || mount "$STAGING_MAPPER" /mnt/data-luks 2>>"$INNGEST_LUKS_DETAIL"
-        fstab_set /mnt/data-luks "$STAGING_MAPPER /mnt/data-luks ext4 defaults,nofail 0 2"
-        STAGE=staging_verify
-        mounted_from /mnt/data-luks "$STAGING_MAPPER" || { echo "FATAL: /mnt/data-luks is not mounted from $STAGING_MAPPER" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
-        backing_is "$STAGING_MAPPER" "$STAGING_DEV" || { echo "FATAL: $STAGING_MAPPER is not backed by $STAGING_DEV — the staging mapper sits on the wrong volume" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
-        # THE EMIT CARRIES ITS MEASUREMENTS, not just its name (#6894 AC-33). A stage name proves
-        # the stage RAN; it is satisfiable while the staging path is a directory on the root disk
-        # under a mountpoint shadow — a recorded root cause in this estate. So the three readings
-        # the two assertions above just made are shipped off-box, where the follow-through re-checks
-        # them: the staging mount's resolved source, the mapper's sysfs backing, and the LIVE
-        # mount's source (which must differ — the staging arm must disturb nothing).
-        _sv_src="$(findmnt -no SOURCE /mnt/data-luks 2>/dev/null | head -1)"
-        _sv_dm="$(basename "$(readlink -f "$STAGING_MAPPER")" 2>/dev/null)"
-        _sv_back="$(ls "/sys/class/block/$${_sv_dm}/slaves" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
-        _sv_want="$(basename "$(readlink -f "$STAGING_DEV")" 2>/dev/null)"
-        _sv_live="$(findmnt -no SOURCE /mnt/data 2>/dev/null | head -1)"
-        luks_emit staging_verify 0 "$${STG_TYPE:-empty}" \
-          "stg_src=$${_sv_src:-unreadable} stg_backing=$${_sv_back:-unreadable} stg_dev=$${_sv_want:-unreadable} stg_devid=$${LUKS_ID} live_src=$${_sv_live:-unreadable}"
-      fi
-    fi
     # NO `trap - EXIT`: disarming on success would make the rc guard unreachable and untested.
     # That is why `luks_err` branches on rc instead — see its own note. Keeping the trap armed
     # while the handler treated rc=0 as a failure is what made every successful boot report
