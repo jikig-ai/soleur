@@ -15,6 +15,42 @@ requires_cpo_signoff: true
 Tracker: #10054 (stays open; this PR uses `Ref`, never `Closes`). Epic #9601, feature #9776, soak trackers #9976 (24 h) and #9776
 (7 d). Draft PR #10101. ADR-284 stays `adopting` in this PR; see "Sequencing" for why the flip is a later, measured step.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-12 (after plan review by DHH, Kieran, code-simplicity, architecture-strategist, spec-flow, CPO and CTO).
+**Research agents used:** learnings-researcher, repo-research-analyst, functional-discovery, CPO, CLO, CTO (Phase 2.5), plus the plan-review
+panel above; live read-only measurements against Better Stack, Sentry, `gh`, `npm view` and the installed SDK.
+
+### Key improvements
+
+1. The "prior batch grant" limb was redesigned: since #10072 the batch cache refuses destroy-capable heads by construction, so the
+   first draft's `cache.allow(destroy form) === true` precondition would have aborted every run. A live-grant control case now carries
+   the anti-vacuity burden.
+2. A defect in the SHIPPED soak probe was found by running the plan's own discoverability command: 34 Inngest-host journald rows that
+   quote the marker make it exit 3 SHAPE_DRIFT on every sweep. Guard 2 now field-isolates the decode counts (keeping the raw-count
+   truncation check) and adds a liveness arm and a 7 d zero-ask exit.
+3. The bisect harness became a detached scratch worktree plus per-version `npm install --no-save` (no symlink farm), with a fallback
+   when old SDKs cannot run on today's code, a per-pin code-side check, and explicit tree invariants for the feature worktree.
+4. Scope was cut where reviewers converged: `PROBE_MUTATE`, the terraform grant case, the non-autonomous member case, the second live
+   `gh` case, interim ADR-277 counts, and the unconditional Tier 2 bisect (recorded in `decision-challenges.md`).
+
+### New considerations discovered
+
+- The sweeper cron is `0 18 * * *`: trailing windows skip the first hours after T0, and the Guard 2 fix must merge before
+  2026-10-13T18:00Z or the first 24 h comment is noise. The measurement is an explicit [T0, T0+N] self-pulled read.
+- SDK semantics, quoted from the installed `sdk.d.ts` (0.3.284; re-read before relying on the line numbers):
+  `sandbox.autoAllowBashIfSandboxed` "is independent and still defaults to true, so set it to false to keep prompting for sandboxed
+  commands" (the `sandbox` option's `filesystem` doc, near line 8613), and `permissionPrompts` "`'host'` (default): this process,
+  through `canUseTool` or `permissionPromptToolName`. `'none'`: ... `canUseTool` is never called" (near line 2001). The second is a
+  second silent-inertness switch a future SDK or option change could flip; the probe's provenance line should print it when set.
+  Production also sets `allowUnsandboxedCommands: false` (`agent-runner-sandbox-config.ts`), so the `dangerouslyDisableSandbox`
+  route that made the callback look alive in mocked tests is closed.
+- `buildAgentEnv` passes `HOME` from the ambient env (allowlist) and injects `GH_TOKEN` only from `opts.ghToken`; the probe passes no
+  token, so `gh` has no credential in the probe, but the real `HOME` would be visible: hence the throwaway `HOME`.
+- Phase 4.7 note: the discoverability `expected_output` is the single whitespace-free literal `destroy-ask`, printed on every non-error
+  exit of the probe (`hosted destroy-ask window ...`); the block declares `credentials_required`, so Check 10 records SKIP-DECLARED
+  and the 15 s cap and literal-match conditions are not reachable at ship time.
+
 ## Overview
 
 Item 1 of the remaining sequence of agent-security epic #9601: take the hosted must-ask lane (ADR-284) from `adopting` towards
@@ -488,7 +524,7 @@ logs:
 
 discoverability_test:
   command: bash scripts/followthroughs/hosted-destroy-ask-window-9776-24h.sh
-  expected_output: "hosted destroy-ask window 24h"
+  expected_output: "destroy-ask"
   credentials_required: "Doppler prd_terraform BETTERSTACK_QUERY_HOST/USERNAME/PASSWORD - stored log rows are readable only with the ClickHouse connection credential; no unauthenticated probe reads the same stored rows (run as: doppler run -p soleur -c prd_terraform -- bash scripts/followthroughs/hosted-destroy-ask-window-9776-24h.sh)"
 ```
 
