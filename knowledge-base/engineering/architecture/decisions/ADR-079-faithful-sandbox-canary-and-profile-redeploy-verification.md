@@ -319,8 +319,8 @@ while the in-image one initially did not:
 1. **permissionMode `default`, not `bypassPermissions`.** `bypassPermissions` maps
    to `--dangerously-skip-permissions`, which `claude.exe` **refuses under root**
    ("cannot be used with root/sudo privileges") — and the in-image/CI capture runs
-   as root. The `canUseTool` force-allow + `autoAllowBashIfSandboxed` already
-   auto-allow the single Bash op, so `default` is sufficient and root-compatible.
+   as root. The canary's `allowedTools: ["Bash"]` rule and its `canUseTool` force-allow allow the single Bash op (the hosted sandbox config no
+   longer auto-allows it, #10054), so `default` is sufficient and root-compatible.
    (An off-image capture on a non-root dev user silently avoided this.)
 2. **The bwrap PATH shim answers `bwrap --version`** like the real binary, so the
    SDK's availability probe (`failIfUnavailable`) passes and proceeds to the real

@@ -275,7 +275,8 @@ write_files:
               -e 's/[0-9a-fA-F]\{8\}-[0-9a-fA-F]\{4\}-[0-9a-fA-F]\{4\}-[0-9a-fA-F]\{4\}-[0-9a-fA-F]\{12\}/UUID_REDACTED/g' \
               -e 's#/mnt/git-data\(-luks\)\{0,1\}/repositories/[^[:space:]]*#/mnt/git-data/repositories/REDACTED#g' \
               -e 's/dp\.\(st\|pt\|sa\|ct\|scim\|audit\)\.[A-Za-z0-9._-]\{10,\}/dp.REDACTED/g' \
-              -e 's/gh[pousr]_[A-Za-z0-9]\{20,\}/REDACTED_GH/g' \
+              -e 's#gh[pousr]_[A-Za-z0-9._~+/=-]\{20,\}#REDACTED_GH#g' \
+                -e 's#github_pat_[A-Za-z0-9._~+/=-]\{20,\}#REDACTED_GH#g' \
               -e 's#://[A-Za-z0-9._%+-]\{1,\}:[^@/[:space:]]\{1,\}@#://REDACTED@#g' \
               -e 's/[Bb]earer[[:space:]]\{1,\}[A-Za-z0-9._~+/=-]\{8,\}/Bearer REDACTED/g' \
               -e 's/-----BEGIN [A-Z ]*PRIVATE KEY-----.*/[PRIVATE KEY REDACTED]/' \

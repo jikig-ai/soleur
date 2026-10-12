@@ -613,7 +613,7 @@
   "nth": null,
   "test": "test/permission-callback-destroy-ask.test.ts",
   "detect": "cache laundering",
-  "equivalent": null
+  "equivalent": "since #10054 batchGrantablePrefix refuses every command that holds a destroy-capable token anywhere (git push and the other state-rewriting verbs, terraform, tofu, gh, shells, wrappers), so cache.allow() is false for every command the lane matches; the property is pinned one layer down by the classifier-vs-grant corpus test and mutant L30"
  },
  {
   "id": "L04-classifier-never-matches",
@@ -657,7 +657,7 @@
   "nth": null,
   "test": "test/permission-callback-destroy-ask.test.ts",
   "detect": "approving grants nothing durable",
-  "equivalent": null
+  "equivalent": "the granted `git push` prefix is never honoured: batchGrantablePrefix refuses every git push command, so the grant is inert; pinned one layer down by the classifier-vs-grant corpus test and mutant L30"
  },
  {
   "id": "L08-support-reaches-gate",
@@ -948,8 +948,8 @@
  {
   "id": "G02-banner-drops-lane-sentence",
   "file": "components/chat/autonomous-disclosure-banner.tsx",
-  "anchor": "\"commands (curl, wget, sudo, \u2026), but no blocklist is perfect. It also \" +\n  \"pauses to ask before",
-  "replace": "\"commands (curl, wget, sudo, \u2026), but no blocklist is perfect. It also \" +\n  \"asks before",
+  "anchor": "\"commands (curl, wget, sudo, …), but no blocklist is perfect. It also \" +\n  \"pauses to ask before",
+  "replace": "\"commands (curl, wget, sudo, …), but no blocklist is perfect. It also \" +\n  \"asks before",
   "count": 1,
   "nth": null,
   "test": "test/components/chat/autonomous-disclosure-banner.test.tsx",
@@ -1108,6 +1108,17 @@
   "nth": null,
   "test": "test/resolve-protected-branches.test.ts",
   "detect": "a positive result is memoised",
+  "equivalent": null
+ },
+ {
+  "id": "L30-grant-ignores-wrapped-destroy",
+  "file": "server/permission-callback-bash-batch.ts",
+  "anchor": "if (tokens.some((t) => NO_BATCH_HEADS.has(t))) return null;",
+  "replace": "if (NO_BATCH_HEADS.has(tokens[0])) return null;",
+  "count": 1,
+  "nth": null,
+  "test": "test/permission-callback-destroy-ask.test.ts",
+  "detect": "no command the classifier matches is grantable",
   "equivalent": null
  }
 ]

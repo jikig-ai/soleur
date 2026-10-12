@@ -52,8 +52,19 @@ const UUID_RE = /\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-
 
 // API-key-shaped: long base64-url-safe runs prefixed by a known sentinel.
 // Covered:
-//   GitHub classic PAT  ghp_/gho_/ghu_/ghs_/ghr_<20+ base64url>
-//   GitHub fine-grained github_pat_<22 alnum>_<59 alnum>
+//   GitHub classic PAT  ghp_/gho_/ghu_/ghs_/ghr_<20+ b64token>
+//   GitHub fine-grained github_pat_<22 b64token>_<59+ b64token>
+//                       (GitHub arms use the canonical b64token alphabet
+//                       [A-Za-z0-9._~+/=-] — the `bc_ok` class from
+//                       `scripts/lib/bearer-curl.sh`, ADR-280 — a strict
+//                       superset of the vendor-documented ghs_ shape. It
+//                       covers the rotated ~390-520-char ghs_<APPID>_<JWT>
+//                       installation-token format: the former alnum-only
+//                       class truncated this mask at the first
+//                       `.`/`~`/`+`/`/`/`=` byte and leaked the live tail
+//                       into the approval-card/run-log/destroy-ask/
+//                       debug-event sinks. Non-GitHub arms stay
+//                       documented-narrower — unmeasured vendor shapes.)
 //   Stripe live/test    sk_live_/pk_live_/rk_live_/sk_test_/pk_test_/rk_test_
 //   Anthropic           sk-ant-<20+>
 //   OpenAI              sk-<32+>
@@ -68,7 +79,7 @@ const UUID_RE = /\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-
 //                       public sb_publishable_/anon forms are deliberately NOT
 //                       matched (project refs + anon keys are public-grade).
 const API_KEY_RE =
-  /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_-]{20,}\b|\bgithub_pat_[A-Za-z0-9]{22}_[A-Za-z0-9]{59,}\b|\b(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{16,}\b|\bsk-ant-[A-Za-z0-9_-]{20,}\b|\bsk-[A-Za-z0-9]{32,}\b|\bAKIA[0-9A-Z]{16}\b|\bxox[abprs]-[0-9]+-[0-9]+-[A-Za-z0-9-]+\b|\bsbp_[A-Za-z0-9]{40}\b|\bsb_secret_[A-Za-z0-9_-]{20,}\b/g;
+  /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9._~+/=-]{20,}|\bgithub_pat_[A-Za-z0-9._~+/=-]{22}_[A-Za-z0-9._~+/=-]{59,}|\b(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{16,}\b|\bsk-ant-[A-Za-z0-9_-]{20,}\b|\bsk-[A-Za-z0-9]{32,}\b|\bAKIA[0-9A-Z]{16}\b|\bxox[abprs]-[0-9]+-[0-9]+-[A-Za-z0-9-]+\b|\bsbp_[A-Za-z0-9]{40}\b|\bsb_secret_[A-Za-z0-9_-]{20,}\b/g;
 
 // AWS_SECRET_ACCESS_KEY shape — the 40-char base64url is too generic to
 // match standalone (collides with arbitrary hashes). We anchor on the
@@ -106,7 +117,17 @@ const JWT_RE = /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10
 // is intentionally OMITTED so the UPPER_SNAKE anchor is exact (a lowercase
 // `password=x` is deliberately left to other gates — see AC4 test).
 const ENV_CRED_ASSIGN_RE =
-  /\b([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*_(?:TOKEN|KEY|SECRET|PASSWORD|PAT))\s*=\s*['"]?[^\s'"]+['"]?/g;
+  /\b([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*_(?:TOKEN|KEY|SECRET|PASSWORD|PAT)|PGPASSWORD|MYSQL_PWD)\s*=\s*['"]?[^\s'"]+['"]?/g;
+
+// Credential-bearing CLI FLAGS on the approval card (#10054: the Bash card, its push and its email now carry
+// the command of every non-safe Bash call). `terraform destroy -var 'db_password=<v>'` and `tool --token <v>`
+// are the shapes ENV_CRED_ASSIGN_RE cannot see (lowercase key, or a space-separated flag value). The flag/var
+// NAME is kept so the line stays readable; only the value is dropped. A lowercase bare `password=x` outside
+// these two shapes stays deliberately unredacted (AC4).
+const TF_VAR_CRED_RE =
+  /(-var\s+['"]?[A-Za-z0-9_]*(?:password|passwd|secret|token|api_?key|credential)[A-Za-z0-9_]*=)['"]?[^\s'"]+['"]?/gi;
+const CLI_CRED_FLAG_RE =
+  /(--(?:token|password|passwd|secret|api-key|auth-token|access-token)(?:\s+|=))['"]?[^\s'"]+['"]?/gi;
 
 // HTTP Authorization HEADER literal — `Authorization: Bearer <value>`,
 // `Authorization: Basic <b64>`, `Authorization: token <value>`. These show
@@ -176,6 +197,8 @@ export function redactGithubSourcedText(
     // Generic credential env-assignment (GH_TOKEN=, *_SECRET=, *_PAT=, …)
     // before API_KEY_RE so the value run is consumed with its key preserved.
     .replace(ENV_CRED_ASSIGN_RE, "$1=[redacted-key]")
+    .replace(TF_VAR_CRED_RE, "$1[redacted-key]")
+    .replace(CLI_CRED_FLAG_RE, "$1[redacted-key]")
     .replace(API_KEY_RE, "[redacted-key]")
     .replace(JWT_RE, "[redacted-jwt]")
     // Connection-string userinfo AFTER API_KEY_RE so a sentinel token in the

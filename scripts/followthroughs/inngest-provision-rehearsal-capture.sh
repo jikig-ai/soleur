@@ -271,10 +271,18 @@ ok()   { note "PASS: $1"; }
 viol() { note "VIOLATION: $1"; violated=1; }
 want() { note "WAIT: $1"; missing="${missing}$1; "; }
 
-# FORBIDDEN IN EVERY MODE (#9939): a `Failed to start inngest-luks*` journal row is the
-# false-failure shape the ConditionPathExists= conditions remove, and this channel must never
-# carry it. The needle is the systemd journal TEXT, not a stage= field: these rows are
-# journald/systemd rows, not phone-home markers. Counted against the mode's own row set —
+# FORBIDDEN IN EVERY MODE (#9939 + #9962): a `Failed to start <unit>*` journal row for any of
+# the conditioned units is the false-failure shape the ConditionPathExists= conditions remove,
+# and this channel must never carry it — the LUKS trio's #9939 conditions now cover the flip
+# pair, the provision unit, the heartbeat and vector/server units, so the needle covers the
+# `inngest`, `vector` and `soleur-inngest` unit-name prefixes (journald text is unit-name-first;
+# a bare `inngest` prefix would be blind to `Failed to start vector.service` and
+# `Failed to start soleur-inngest-provision.service` — review P2). A real start failure of any
+# named unit is a verdict either way — including the designed-loud transients (heartbeat ping
+# failure, probe failure), whose rows now fail the capture where the luks-only needle passed
+# them silently: a rehearsal with a failing inngest unit is a failed rehearsal.
+# The needle is the systemd journal TEXT, not a stage= field: these rows are journald/systemd
+# rows, not phone-home markers. Counted against the mode's own row set —
 # HOST_ROWS for phase-a/phase-b (this run's window), POST_ROWS for post-reboot (post-boundary).
 # Journald rows carry no iid=, so the count is host+window scoped by design: the workflow's
 # always-on --since bound is what excludes a prior life's storm rows on a re-capture. This is
@@ -288,22 +296,36 @@ want() { note "WAIT: $1"; missing="${missing}$1; "; }
 # "SYSLOG_IDENTIFIER":"systemd" (measured on the run-38031062344 storm rows, which also
 # carry UNIT=/JOB_RESULT=failed) or the journald console form systemd[N]:. grep -c consumes
 # all input, so no SIGPIPE.
-count_luks_failed() {
+count_inngest_failed() {
   # The {0,N} gaps tolerate the JSONEachRow-serialized escape (\" is a wire char) as well as
   # the unescaped ":"/= forms; a doppler/inngest row carries a non-systemd identifier, no
-  # UNIT=inngest-luks* field, and no systemd[N]: console prefix, so it cannot match. The
+  # UNIT=<unit> field, and no systemd[N]: console prefix, so it cannot match. The
   # UNIT arm covers a wire shape that drops SYSLOG_IDENTIFIER but keeps the journald
-  # job-done fields (measured storm rows carry both).
+  # job-done fields (measured storm rows carry both). The `[="]` anchor is load-bearing:
+  # `UNIT.{0,12}inngest` would also match `"_SYSTEMD_UNIT":"inngest-server.service"` — the
+  # doppler-tagged FP row — while a journald `UNIT` field is always `"UNIT":` or `UNIT=`.
+  # The BOOT_STAGE exclusion is the embedded-journalctl guard (review P2): post-boot-health
+  # rows carry `journalctl -u ... -n` output verbatim in jl=, which can embed a PRIOR life's
+  # `systemd[N]: Failed to start` text into a current-life row — a real systemd failure row
+  # never carries the SOLEUR_INNGEST_BOOT_STAGE marker. Two residuals remain: (1) a
+  # non-systemd, non-BOOT_STAGE row embedding journal-shaped text could still trip both
+  # filters — errs toward VIOLATION, which is the honest direction for an evidence artifact;
+  # (2) the SAME exclusion drops a real current-life failure whose only shipped copy is
+  # embedded journal text inside a BOOT_STAGE row — errs toward silence in exactly the
+  # dark-journald state `bootstrap-failure-journal` exists for. That loss is bounded: a
+  # genuinely failed unit emits no `bootstrap-done`, so the mode markers still gate the
+  # verdict to TRANSIENT rather than false-PASS.
   printf '%s\n' "$1" |
-    grep -F 'Failed to start inngest-luks' |
-    grep -cE 'SYSLOG_IDENTIFIER.{0,8}systemd|UNIT.{0,12}inngest-luks|systemd\[[0-9]+\]' 2>/dev/null || true
+    grep -v 'SOLEUR_INNGEST_BOOT_STAGE' |
+    grep -E 'Failed to start (inngest|vector|soleur-inngest)' |
+    grep -cE 'SYSLOG_IDENTIFIER.{0,8}systemd|[="]UNIT.{0,12}(inngest|vector|soleur-inngest)|systemd\[[0-9]+\]' 2>/dev/null || true
 }
-luks_failed_check() { # <row-set> — viol on any `Failed to start inngest-luks*` row
-  local n_luks_failed
-  n_luks_failed="$(count_luks_failed "$1")"
-  (( n_luks_failed > 0 )) \
-    && viol "${n_luks_failed} 'Failed to start inngest-luks*' journal row(s) — a LUKS unit failed to start (pre-staging ordering noise or a genuine start failure; both are verdicts, #9939)" \
-    || ok "zero 'Failed to start inngest-luks*' journal rows"
+inngest_failed_check() { # <row-set> — viol on any `Failed to start <tracked-unit>*` row
+  local n_inngest_failed
+  n_inngest_failed="$(count_inngest_failed "$1")"
+  (( n_inngest_failed > 0 )) \
+    && viol "${n_inngest_failed} 'Failed to start (inngest|vector|soleur-inngest)*' journal row(s) — a tracked unit failed to start (pre-staging ordering noise or a genuine start failure; both are verdicts, #9939+#9962)" \
+    || ok "zero 'Failed to start' journal rows for tracked units"
 }
 
 # FORBIDDEN IN EVERY MODE (#9786): the first-boot LUKS stage's unpointed-arm refusal. A rehearsal host
@@ -347,7 +369,7 @@ case "$MODE" in
     n_start_distinct="$(printf '%s\n' "$HOST_ROWS" | grep -oE 'stage=provision-attempt-start.{0,40}attempt=[0-9]+' | sort -u | wc -l | tr -d ' ')"
     (( n_start_distinct >= MIN_ATTEMPTS )) && ok "distinct provision-attempt-start attempts ${n_start_distinct} >= ${MIN_ATTEMPTS} (the retry loop retried NIC-less)" || want "distinct provision-attempt-start attempts ${n_start_distinct} >= ${MIN_ATTEMPTS} (the retry loop retried NIC-less)"
     (( n_nic_fail >= 1 ))        && ok "NIC-absent failure observed (private_nic_timeout/provision-nic-ABSENT n=${n_nic_fail})" || want "NIC-absent failure observed (private_nic_timeout/provision-nic-ABSENT n=${n_nic_fail})"
-    luks_failed_check "$HOST_ROWS"
+    inngest_failed_check "$HOST_ROWS"
     unpointed_refused_check "$HOST_ROWS"
     KEY=REHEARSAL_PHASE_A_OBSERVED
     ;;
@@ -367,7 +389,7 @@ case "$MODE" in
     n_exit="$(count_iid provision-attempt-exit-)"
     (( n_done >= 1 )) && ok "bootstrap-done emitted for this host (implies nic_present + zot + isolation + bootstrap all ran)" || want "bootstrap-done emitted for this host (n=${n_done})"
     note "info: ${n_exit} provision-attempt-exit-* row(s) in window (retries before convergence are expected); private_nic_ok n=${n_ok} (informational — emitted only when the wait actually ran)"
-    luks_failed_check "$HOST_ROWS"
+    inngest_failed_check "$HOST_ROWS"
     unpointed_refused_check "$HOST_ROWS"
     KEY=REHEARSAL_PHASE_B_RECOVERY
     ;;
@@ -387,7 +409,7 @@ case "$MODE" in
     n_provision="$(printf '%s\n' "$POST_ROWS" | grep -cE 'provision-attempt-start|provision-attempt-exit|bootstrap-done|provision-unit-armed' 2>/dev/null || true)"
     (( n_provision > 0 )) && viol "${n_provision} provision marker(s) AFTER the reboot boundary — the latch did not hold (provision re-ran post-reboot)" || ok "zero provision markers after the reboot boundary — the latch held"
     (( n_restage >= 1 ))  && ok "token-restage anchor re-emitted post-reboot ON THE PHONE-HOME CHANNEL (proves this boot ran AND the measured channel is live)" || want "token-restage anchor re-emitted post-reboot (stage=bs-token-restaged n=${n_restage})"
-    luks_failed_check "$POST_ROWS"
+    inngest_failed_check "$POST_ROWS"
     unpointed_refused_check "$POST_ROWS"
     KEY=REHEARSAL_POST_REBOOT_LATCH
     ;;

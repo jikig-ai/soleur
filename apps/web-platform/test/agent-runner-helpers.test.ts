@@ -91,7 +91,7 @@ describe("buildAgentSandboxConfig drift guard", () => {
     // Non-filesystem fields are static and must stay byte-identical.
     expect(result.enabled).toBe(true);
     expect(result.failIfUnavailable).toBe(true);
-    expect(result.autoAllowBashIfSandboxed).toBe(true);
+    expect(result.autoAllowBashIfSandboxed).toBe(false);
     expect(result.allowUnsandboxedCommands).toBe(false);
     expect(result.enableWeakerNestedSandbox).toBe(true);
     expect(result.network).toEqual({
