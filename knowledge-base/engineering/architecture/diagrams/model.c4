@@ -339,7 +339,7 @@ model {
       }
       sessionStore = database "Session Redis" {
         technology "Self-hosted Redis — TLS, EU (Phase 4a)"
-        description "Self-hosted EU Redis — ADR-059 replay buffer + session/control state; network-reachable, per-workspace key namespacing, TLS + requirepass. DISTINCT node from the loopback Inngest Redis (ADR-068 Phase 4a). AT REST: DESIGNED (ADR-068 Phase 4a), not provisioned: no host or volume exists. The Phase 4a PR must add an encryption-posture ledger row at birth (encryption-posture-ledger.json)"
+        description "Self-hosted EU Redis — ADR-059 replay buffer + session/control state; network-reachable, per-workspace key namespacing, TLS + requirepass. DISTINCT node from the loopback Inngest Redis (ADR-068 Phase 4a). AT REST: DESIGNED (ADR-068 Phase 4a), not provisioned; see encryption-posture-audit-2026-07-23.md"
       }
     }
   }

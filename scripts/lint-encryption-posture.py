@@ -1100,6 +1100,46 @@ def check_resource_partition(
     return tf_store_count
 
 
+# Redis client packages whose presence means the app talks to a Redis the ledger
+# must account for. Exact names only: `@opentelemetry/instrumentation-ioredis`
+# is instrumentation, not a client.
+REDIS_CLIENT_PACKAGES = frozenset(
+    {"redis", "ioredis", "@redis/client", "@upstash/redis", "@keyv/redis", "bullmq"}
+)
+
+
+def check_redis_client_dependency(
+    ledger: dict, repo_root: Path, fails: list[str]
+) -> None:
+    """A Redis client dependency in the web app with no `redis.*` ledger row means a
+    session/replay Redis (ADR-068 Phase 4a) is being added without an encryption-posture
+    row: a store with no *.tf anchor is invisible to the resource partition."""
+    pkg = repo_root / "apps" / "web-platform" / "package.json"
+    if not pkg.is_file():
+        return
+    try:
+        data = json.loads(read_text(pkg))
+    except ValueError:
+        fails.append(
+            f"FAIL: {pkg.relative_to(repo_root)} is not valid JSON -> cannot check "
+            "for a Redis client dependency"
+        )
+        return
+    deps: dict = {}
+    for key in ("dependencies", "devDependencies", "optionalDependencies"):
+        deps.update(data.get(key) or {})
+    clients = sorted(n for n in deps if n in REDIS_CLIENT_PACKAGES)
+    has_row = any(s["store"].startswith("redis.") for s in ledger["stores"])
+    # MUTATION-TARGET: MB-R1 start (redis client dependency without a redis.* row -> FAIL)
+    if clients and not has_row:
+        fails.append(
+            f"FAIL: Redis client dependency {', '.join(clients)} in "
+            "apps/web-platform/package.json but no redis.* stores[] row -> add a "
+            "stores[] row (and a non_iac_stores entry if it has no *.tf anchor) for "
+            "the Redis this client talks to"
+        )
+    # MUTATION-TARGET: MB-R1 end
+
 def check_positive_work_floor(
     ledger: dict, tf_store_count: int, fails: list[str]
 ) -> None:
@@ -1601,6 +1641,7 @@ def run_sweep(
     tf_inventory = scan_tf_inventory(tf_files, cache)
     tf_store_count = check_resource_partition(ledger, tf_inventory, fails)
     check_positive_work_floor(ledger, tf_store_count, fails)
+    check_redis_client_dependency(ledger, repo_root, fails)
     check_live_coverage_floor(ledger, fails)
     check_password_claims(ledger, tf_files, cache, fails)
     check_apparatus_pins(ledger, fails)

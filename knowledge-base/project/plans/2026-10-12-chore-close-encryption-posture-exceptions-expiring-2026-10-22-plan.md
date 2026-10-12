@@ -178,7 +178,7 @@ Post one comment covering: redis row removed with the measurement; baked-credent
 ## User-Brand Impact
 
 - **If this lands broken, the user experiences:** nothing directly; the failure is internal (every pull request red from 2026-10-23, delaying fixes that users wait for) or, worse, a ledger row that tells the next engineer a store is accounted for when it is not.
-- **If this leaks, the user's data is exposed via:** the retained plaintext volume `hcloud_volume.git_data` (seizure or snapshot of a disk holding id-bearing lock residue from erased-user requests); this plan neither creates nor widens that exposure, it re-dates and re-justifies it.
+- **If this leaks, the user's data is exposed via:** the retained plaintext volume `hcloud_volume.git_data` (seizure or snapshot of a disk holding id-bearing lock residue from erased-user requests); this plan neither creates nor widens that exposure, it re-dates and re-justifies it. Also the Inngest app-to-scheduler hop (plaintext on the private network; carries event payloads and step outputs, i.e. user prompts and agent output), re-dated to 2026-11-12 and tracked at #10136.
 - **Brand-survival threshold:** `aggregate pattern`
 - **Threshold decision (challengeable):** the change re-dates an existing exposure and adds no new store or connection, so it sits below `single-user incident`, which is reserved for changes that create exposure; a challenger may argue the plaintext residue itself is single-user class, in which case CPO sign-off and `soleur:engineering:review:user-impact-reviewer` apply.
 

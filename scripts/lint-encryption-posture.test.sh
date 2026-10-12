@@ -1885,9 +1885,70 @@ run_mutation "MB-L10" "MB-L10" "$V_SID" "$WC_LEDGER"
 run_mutation "MB-L11" "MB-L11" "$V_DUP" "$LEDGER_DUP"
 
 # ---------------------------------------------------------------------------
+# Redis client dependency without a redis.* ledger row (ADR-068 Phase 4a store):
+# the session Redis has no *.tf anchor, so the resource partition cannot see it.
+# ---------------------------------------------------------------------------
+REPO_RD_BAD="$TMPDIR_TEST/rd-bad"
+write_file "$REPO_RD_BAD/apps/web-platform/package.json" <<'EOF'
+{ "name": "fixture", "dependencies": { "ioredis": "5.4.1" } }
+EOF
+LEDGER_RD_BAD="$TMPDIR_TEST/rd-bad-ledger.json"
+write_file "$LEDGER_RD_BAD" <<'EOF'
+{
+  "schema_version": 1,
+  "store_classes": {},
+  "non_store_types": [],
+  "non_iac_stores": [],
+  "stores": [],
+  "connections": []
+}
+EOF
+REPO_RD_OTEL="$TMPDIR_TEST/rd-otel"
+write_file "$REPO_RD_OTEL/apps/web-platform/package.json" <<'EOF'
+{ "name": "fixture", "dependencies": { "@opentelemetry/instrumentation-ioredis": "0.40.0" } }
+EOF
+REPO_RD_OK="$TMPDIR_TEST/rd-ok"
+write_file "$REPO_RD_OK/apps/web-platform/package.json" <<'EOF'
+{ "name": "fixture", "dependencies": { "ioredis": "5.4.1" } }
+EOF
+LEDGER_RD_OK="$TMPDIR_TEST/rd-ok-ledger.json"
+write_file "$LEDGER_RD_OK" <<'EOF'
+{
+  "schema_version": 1,
+  "store_classes": {},
+  "non_store_types": [],
+  "non_iac_stores": ["redis.session_store"],
+  "stores": [
+    {
+      "store": "redis.session_store",
+      "kind": "provider-db",
+      "at_rest": {
+        "mechanism": "provider-managed:Fixture-SOC2-Type-II",
+        "evidence": "fixture trust center compliance page",
+        "attestation_url": "https://example.com/security",
+        "retrieved_on": "2026-06-01",
+        "defends_against": "a seized or decommissioned physical disk at the provider",
+        "does_not_defend": "a leaked credential or a misconfigured ACL",
+        "disclosed_as": "not-publicly-claimed",
+        "live_verification": "unavailable:no probe in this fixture"
+      }
+    }
+  ],
+  "connections": []
+}
+EOF
+run_case_reports "RD-1 redis client dependency, no redis.* row -> FAIL" 1 "Redis client dependency ioredis" \
+  --repo-sweep --repo-root "$REPO_RD_BAD" --ledger "$LEDGER_RD_BAD" --today "$TODAY"
+run_case_reports "RD-2 redis client dependency WITH a redis.* row -> PASS" 0 "encryption-posture:" \
+  --repo-sweep --repo-root "$REPO_RD_OK" --ledger "$LEDGER_RD_OK" --today "$TODAY"
+run_case_reports "RD-3 otel ioredis instrumentation is not a client -> PASS" 0 "encryption-posture:" \
+  --repo-sweep --repo-root "$REPO_RD_OTEL" --ledger "$LEDGER_RD_BAD" --today "$TODAY"
+run_mutation "MB-R1" "MB-R1" "$REPO_RD_BAD" "$LEDGER_RD_BAD"
+
+# ---------------------------------------------------------------------------
 # Minimum-cardinality guard (an empty/short run must not GREEN).
 # ---------------------------------------------------------------------------
-MIN_CASES=117  # measured TOTAL at #9941 (47 at #6907 + the web-class cases); raise with every added case (slack is attack budget)
+MIN_CASES=121  # measured TOTAL (117 at #9941 + RD-1..3 and MB-R1 for the Redis client dependency check); raise with every added case (slack is attack budget)
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then
