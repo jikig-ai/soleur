@@ -128,6 +128,8 @@ credential-bearing push URL the same way xtrace would.
 > `GITHUB_TOKEN`; see the Amendment dated 2026-09-30 (#9262). The `packages: read` GHCR login and
 > the `set -x` refusal are unchanged.
 
+*(See also 2026-10-11, #9454, ADR-285: the weekly weakness-digest PR now follows the same App-authored rule.)*
+
 **4. The bump is a PR authored by `soleur-ai[bot]`, never a direct push to
 main.** Branch `soleur/inngest-pin-vX.Y.Z`, commit identity
 `soleur-ai[bot] <273333864+soleur-ai[bot]@users.noreply.github.com>`, pushed

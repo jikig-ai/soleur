@@ -85,7 +85,7 @@ const log = createChildLogger("agent-sandbox");
 export type AgentSandboxConfig = {
   enabled: true;
   failIfUnavailable: true;
-  autoAllowBashIfSandboxed: true;
+  autoAllowBashIfSandboxed: false;
   allowUnsandboxedCommands: false;
   enableWeakerNestedSandbox: true;
   network: {
@@ -571,7 +571,11 @@ export function buildAgentSandboxConfig(
     // @anthropic-ai/claude-agent-sdk) — Tier 4 defense-in-depth
     // disappears with no Sentry signal. See #2634.
     failIfUnavailable: true,
-    autoAllowBashIfSandboxed: true,
+    // #10054: false so a sandboxed Bash call still reaches `canUseTool` (the SDK auto-allows it
+    // before the callback otherwise, and the must-ask lane / safe-Bash allowlist / autonomous
+    // toggle never run). The sandbox itself stays on. Pinned against the real SDK by the
+    // real-SDK C9 probe under scripts/ (ADR-284 post-merge verification).
+    autoAllowBashIfSandboxed: false,
     allowUnsandboxedCommands: false,
     // A fresh procfs mount inside a nested user namespace is refused (EPERM) under
     // docker's default masked /proc, so enableWeakerNestedSandbox makes the vendored
