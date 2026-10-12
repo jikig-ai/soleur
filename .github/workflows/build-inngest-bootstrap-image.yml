@@ -927,10 +927,10 @@ jobs:
           # over the CF-tunnel bridge from a GitHub runner. It does NOT prove the HOST can
           # pull: the host uses ZOT_PULL_* over the private NIC, and zot's accessControl can
           # grant push-read without pull-read. The host probe (web-zot-consumer-probe.sh, repo
-          # list in web-probe.tf) reads this repo's tags/list with the pull credential on web-1;
-          # other hosts pick the list up at their next replace. It does not resolve the PINNED
-          # tag's manifest, so a green run here is NOT sufficient evidence to write an @sha256
-          # pin into cloud-init.yml.
+          # list in web-probe.tf) reads this repo's tags/list with the pull credential on web-1 and
+          # HEADs the digest already pinned on main (the ZIREF line), not the digest this build
+          # produced; other hosts keep the bare list and never HEAD the pin. A green run here is
+          # therefore NOT sufficient evidence to write an @sha256 pin into cloud-init.yml.
           #
           # Retention is the second gap: cloud-init-registry.yml keeps only the 5
           # most-recently-pushed v* tags per repo with deleteUntagged + hourly gc, and its own
@@ -940,8 +940,9 @@ jobs:
             echo ""
             echo "> **This does not license a pin.** Green here means zot serves the digest to"
             echo "> the PUSH credential over the tunnel. The host probe (\`ZOT_PULL_*\`, private NIC)"
-            echo "> only lists this repo's tags and never resolves a pinned digest, and zot retention"
-            echo "> keeps only the 5 most recent \`v*\` tags. See the #7203 review findings."
+            echo "> HEADs only the digest already pinned on main, from web-1, not the digest this build"
+            echo "> produced, and zot retention keeps only the 5 most recent \`v*\` tags. See the #7203"
+            echo "> review findings."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Tear down cloudflared registry bridge

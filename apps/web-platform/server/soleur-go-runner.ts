@@ -2519,7 +2519,7 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
         // outside the `if (text)` below on purpose: a markup-only block is still
         // evidence the model is alive.
         recordAssistantBlock(state, "text", null);
-        // Plugin Stop-hook escape-hatch markup (`<stop>OPERATOR-GATE...</stop>`)
+        // Legacy Stop-hook escape-hatch markup (`<stop>OPERATOR-GATE...</stop>`)
         // must not become `onText` input or replace the previous block's text
         // (W8). This covers the cc text path only; tool inputs and the legacy
         // runner are outside it (ADR-093 amendment). Runs BEFORE the

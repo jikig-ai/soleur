@@ -336,7 +336,7 @@ describe("realSdkQueryFactory — unconditional pre-sandbox workspace-dir guaran
     mockBuildAgentSandboxConfig.mockReturnValue({
       enabled: true,
       failIfUnavailable: true,
-      autoAllowBashIfSandboxed: true,
+      autoAllowBashIfSandboxed: false,
       allowUnsandboxedCommands: false,
       enableWeakerNestedSandbox: true,
       network: { allowedDomains: [], allowManagedDomainsOnly: true },

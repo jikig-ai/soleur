@@ -237,10 +237,42 @@ function checkFeeders(
       }
       // Fixed-string containment (grep -F semantics) over code only: the pattern is a literal
       // arming construct, so regex interpretation would only invent metacharacter bugs.
-      if (!stripCommentLines(readFile(f.evidence.file)).includes(f.evidence.pattern)) {
+      const evidenceCode = stripCommentLines(readFile(f.evidence.file));
+      if (!evidenceCode.includes(f.evidence.pattern)) {
         violations.push(
           `heartbeat "${e.name}": "${f.evidence.file}" exists but its CODE does NOT contain the arming construct "${f.evidence.pattern}" — the ${f.kind} was renamed, removed, or survives only in a comment, so nothing feeds this heartbeat.`,
         );
+        continue;
+      }
+      // A WORKFLOW feeder (ADR-117 amendment 2026-10-11, #9703) is only "running" if something starts it
+      // and the script it names exists: a workflow with neither a schedule trigger nor a
+      // WATCHDOG_DISPATCH_TABLE row (ADR-248), or one naming a script that is gone, is evidence in code
+      // that never ran.
+      if (f.evidence.file.startsWith(".github/workflows/")) {
+        const base = f.evidence.file.slice(".github/workflows/".length);
+        const hasSchedule = /^\s*schedule:/m.test(evidenceCode);
+        let inTable = false;
+        try {
+          // The table is TypeScript: strip whole-line `//` comments (stripCommentLines handles `#` only).
+          const tableCode = readFile("apps/web-platform/server/watchdog-dispatch-table.ts")
+            .split("\n")
+            .filter((l) => !/^\s*\/\//.test(l))
+            .join("\n");
+          inTable = tableCode.includes(`workflowFile: "${base}"`);
+        } catch {
+          inTable = false;
+        }
+        if (!hasSchedule && !inTable) {
+          violations.push(
+            `heartbeat "${e.name}": workflow feeder "${f.evidence.file}" has no \`schedule:\` trigger and no WATCHDOG_DISPATCH_TABLE row — nothing starts it, so the heartbeat is declared fed by a workflow that never runs.`,
+          );
+        }
+        const script = f.evidence.pattern.replace(/^bash /, "");
+        if (!fileExists(script)) {
+          violations.push(
+            `heartbeat "${e.name}": workflow feeder runs "${script}" but that file does not exist.`,
+          );
+        }
       }
       continue;
     }
@@ -450,6 +482,31 @@ describe("feeder manifest — every arming claim is executable (#6537)", () => {
   });
 });
 
+/**
+ * Evidence SHAPE — a two-arm alternation, each arm bound on BOTH file and pattern (#9703):
+ *  - on-host arm: a timer-enable line or a `cron.d` drop-in delivered by a file under
+ *    apps/web-platform/infra/ (the original #6537 shapes);
+ *  - repo-side arm: a clock-dispatched verifier workflow (`.github/workflows/<x>.yml`) whose
+ *    arming construct is a `bash scripts/<x>.sh` invocation on a run line.
+ * A free-form pattern, or a path outside these two homes, matches neither arm. The pairing is what
+ * keeps the relaxation a shape rather than a hole: a workflow path with an infra-style pattern (or
+ * the reverse) is rejected.
+ */
+const ON_HOST_EVIDENCE = {
+  file: /^apps\/web-platform\/infra\//,
+  pattern: /^(systemctl enable --now [\w.-]+\.timer|- path: \/etc\/cron\.d\/[\w.-]+)$/,
+};
+const REPO_WORKFLOW_EVIDENCE = {
+  file: /^\.github\/workflows\/[\w.-]+\.yml$/,
+  pattern: /^bash scripts\/[\w.-]+\.sh$/,
+};
+function evidenceShapeOk(file: string, pattern: string): boolean {
+  return (
+    (ON_HOST_EVIDENCE.file.test(file) && ON_HOST_EVIDENCE.pattern.test(pattern)) ||
+    (REPO_WORKFLOW_EVIDENCE.file.test(file) && REPO_WORKFLOW_EVIDENCE.pattern.test(pattern))
+  );
+}
+
 describe("feeder guard is load-bearing (non-vacuity, #6537)", () => {
   const exists = (rel: string) => existsSync(resolve(REPO_ROOT, rel));
   const read = (rel: string) => readFileSync(resolve(REPO_ROOT, rel), "utf8");
@@ -530,12 +587,90 @@ describe("feeder guard is load-bearing (non-vacuity, #6537)", () => {
     for (const e of MANIFEST) {
       if (e.feeder.kind === "none") continue;
       const { file, pattern } = e.feeder.evidence;
-      expect(pattern).toMatch(/^(systemctl enable --now [\w.-]+\.timer|- path: \/etc\/cron\.d\/[\w.-]+)$/);
-      expect(file).toMatch(/^apps\/web-platform\/infra\//);
+      expect(evidenceShapeOk(file, pattern), `${e.name}: evidence ${file} / ${pattern} matches neither the on-host arm nor the repo-workflow arm`).toBe(true);
       const hits = stripCommentLines(read(file)).split(pattern).length - 1;
       expect(hits).toBeGreaterThan(0);
       expect(hits).toBeLessThanOrEqual(2); // bounded: a pattern matching everywhere proves nothing
     }
+  });
+
+  test("the evidence-shape alternation is a SHAPE, not one literal, and stays bound on both file and pattern (#9703 G3)", () => {
+    // Must-PASS non-canonical: a DIFFERENT workflow filename and script name of the allowed shapes.
+    expect(evidenceShapeOk(".github/workflows/scheduled-other-feeder.yml", "bash scripts/other-feeder.sh")).toBe(true);
+    // The original on-host arm is unchanged.
+    expect(evidenceShapeOk("apps/web-platform/infra/server.tf", "systemctl enable --now web-git-data-probe.timer")).toBe(true);
+    // A non-workflow, non-infra path is rejected even with a valid pattern.
+    expect(evidenceShapeOk("scripts/x.yml", "bash scripts/x.sh")).toBe(false);
+    // A free-form pattern is rejected even with a valid workflow path.
+    expect(evidenceShapeOk(".github/workflows/scheduled-x.yml", "echo bash scripts/x.sh")).toBe(false);
+    expect(evidenceShapeOk(".github/workflows/scheduled-x.yml", "bash scripts/x.sh --flag")).toBe(false);
+    // The arms are PAIRED: an infra file with a workflow-style pattern, and the reverse, match neither.
+    expect(evidenceShapeOk("apps/web-platform/infra/server.tf", "bash scripts/x.sh")).toBe(false);
+    expect(evidenceShapeOk(".github/workflows/scheduled-x.yml", "systemctl enable --now x.timer")).toBe(false);
+    // Nested path traversal / subdirectory is not a workflow file.
+    expect(evidenceShapeOk(".github/workflows/sub/x.yml", "bash scripts/x.sh")).toBe(false);
+  });
+
+  test("a workflow feeder whose script invocation is ABSENT or only in a comment FAILS checkFeeders (#9703 Guard 2 suite mutation)", () => {
+    const wfBase: ManifestEntry = {
+      name: "synthetic_workflow_fed",
+      arming: "external-probe",
+      paused: true,
+      exempt_reason: "x",
+      feeder: {
+        kind: "cron",
+        evidence: { file: ".github/workflows/scheduled-x.yml", pattern: "bash scripts/x.sh" },
+      },
+    };
+    const wfExists = () => true;
+    const scheduled = (run: string) => `on:\n  schedule:\n    - cron: '*/15 * * * *'\njobs:\n  a:\n    steps:\n${run}`;
+    // Absent entirely: the "survives only in a comment / absent" violation must fire.
+    const absent = checkFeeders([wfBase], wfExists, () => scheduled("      - run: echo hi\n"), noFeeder);
+    expect(absent.some((x) => x.includes("does NOT contain"))).toBe(true);
+    // Only in a comment line: stripCommentLines must hide it.
+    const commented = checkFeeders([wfBase], wfExists, () => scheduled("      # bash scripts/x.sh\n      - run: echo hi\n"), noFeeder);
+    expect(commented.some((x) => x.includes("does NOT contain"))).toBe(true);
+    // Present on a run line: passes (a regex-relaxed-to-match-everything check could not tell these apart).
+    const present = checkFeeders([wfBase], wfExists, () => scheduled("      - run: bash scripts/x.sh\n"), noFeeder);
+    expect(present).toEqual([]);
+    // Nothing starts it: workflow_dispatch only, and no dispatch-table row => FAIL (the ADR-117 rule).
+    const dispatchOnly = checkFeeders(
+      [wfBase],
+      wfExists,
+      (rel) => (rel.endsWith("watchdog-dispatch-table.ts") ? "export const T = [];" : "on:\n  workflow_dispatch: {}\njobs:\n  a:\n    steps:\n      - run: bash scripts/x.sh\n"),
+      noFeeder,
+    );
+    expect(dispatchOnly.some((x) => x.includes("nothing starts it"))).toBe(true);
+    // A row that exists only in a COMMENT is not a row.
+    const commentedRow = checkFeeders(
+      [wfBase],
+      wfExists,
+      (rel) => (rel.endsWith("watchdog-dispatch-table.ts") ? '// workflowFile: "scheduled-x.yml",' : "on:\n  workflow_dispatch: {}\njobs:\n  a:\n    steps:\n      - run: bash scripts/x.sh\n"),
+      noFeeder,
+    );
+    expect(commentedRow.some((x) => x.includes("nothing starts it"))).toBe(true);
+    // The same workflow with a dispatch-table row is clocked, so it passes.
+    const clocked = checkFeeders(
+      [wfBase],
+      wfExists,
+      (rel) => (rel.endsWith("watchdog-dispatch-table.ts") ? 'workflowFile: "scheduled-x.yml",' : "on:\n  workflow_dispatch: {}\njobs:\n  a:\n    steps:\n      - run: bash scripts/x.sh\n"),
+      noFeeder,
+    );
+    expect(clocked).toEqual([]);
+    // The script it names is gone => FAIL.
+    const noScript = checkFeeders(
+      [wfBase],
+      (rel) => rel !== "scripts/x.sh",
+      () => scheduled("      - run: bash scripts/x.sh\n"),
+      noFeeder,
+    );
+    expect(noScript.some((x) => x.includes("does not exist"))).toBe(true);
+    // A DIFFERENT workflow filename and script name of the allowed shapes also passes end to end.
+    const other: ManifestEntry = {
+      ...wfBase,
+      feeder: { kind: "cron", evidence: { file: ".github/workflows/scheduled-y.yml", pattern: "bash scripts/y-feeder.sh" } },
+    };
+    expect(checkFeeders([other], wfExists, () => scheduled("      - run: bash scripts/y-feeder.sh\n"), noFeeder)).toEqual([]);
   });
 });
 

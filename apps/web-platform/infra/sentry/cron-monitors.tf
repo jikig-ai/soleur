@@ -1055,6 +1055,43 @@ resource "sentry_cron_monitor" "zot_restart_loop_alarm" {
   timezone                = "UTC"
 }
 
+# #9703: GHA-fired via .github/workflows/scheduled-inngest-probe-heartbeat.yml (on.schedule
+# '*/15 * * * *' is the FALLBACK; the PRIMARY trigger is the web server's watchdog dispatch clock,
+# ADR-248, one workflow_dispatch per 15-minute UTC slot — see WATCHDOG_DISPATCH_TABLE). The workflow
+# is the repo-side verifier that feeds the Better Stack dead-probe heartbeat
+# `betteruptime_heartbeat.inngest_server_probe`: it beats only while a fresh host_role=dedicated
+# inngest-server-probe row is in the warehouse. A MISSED check-in here means the feeder went dark
+# (clock + fallback both dead, workflow disabled); a `status=error` check-in means the run WITHHELD
+# or FAILED a beat (stale or absent probe row, API/credential fault) — it says nothing about the
+# store itself, and the heartbeat (once armed) is the paging surface. GHA-fired by the web watchdog clock, NOT
+# Inngest: the heartbeat is the sole paging surface, so an Inngest-fired feeder would turn an Inngest
+# or web-1 outage into a false "probe dark" page (ADR-248 amendment 2026-10-11).
+#
+# checkin_margin_minutes = 60 is the parity ceiling (MAX_MARGIN_MINUTES in
+# sentry-monitor-iac-parity.test.ts) and covers the measured tail, so a slow runner queue does not
+# file a missed check-in while the heartbeat is still safe: 12 min clock worst case + 40.6 min
+# measured runner-queue max (2438 s over 40 runs of the zot watchdog, 2026-09-24 — the parity
+# test's QUEUE_ALLOWANCE_MINUTES of 30 is the asserted floor, this uses the observed max) + 6 min
+# runtime (max_runtime_minutes = 6; the job's `timeout-minutes: 6`) = 58.6 min <= 60. A dead trigger
+# opens a Sentry issue within interval + margin = 15 + 60 = 75 min (unrouted: it emails nobody until the
+# routing stage on #9703). Re-measure the queue tail on this workflow once
+# it has history, before changing the margin (same command as scheduled_inngest_health):
+#   for id in $(gh run list --workflow scheduled-inngest-probe-heartbeat.yml --limit 40 --json databaseId --jq '.[].databaseId'); do
+#     gh api repos/jikig-ai/soleur/actions/runs/$id/jobs --jq '[.jobs[] | select(.started_at != null) | ((.started_at|fromdate) - (.created_at|fromdate))] | max'; done | sort -n
+# Slug MUST match MONITOR_SLUG in the workflow's sentry-heartbeat step
+# (scheduled-inngest-probe-heartbeat). Unrouted under the two-PR rule: cron-monitor-alerts.tf.
+resource "sentry_cron_monitor" "scheduled_inngest_probe_heartbeat" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-inngest-probe-heartbeat"
+  schedule                = { crontab = "*/15 * * * *" }
+  checkin_margin_minutes  = 60
+  max_runtime_minutes     = 6
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
 # Executor liveness for the nightly Supabase advisor RLS gate (#3366).
 # Dispatched by apps/web-platform/server/inngest/functions/cron-supabase-advisor-scan.ts;
 # the check-in is posted at the END of .github/workflows/scheduled-supabase-advisor-scan.yml
