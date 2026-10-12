@@ -1473,14 +1473,18 @@ else:
 # arm), and the entry makes that permanent for the resource's life -- future
 # credential-bearing edits inside a member need no table diff. The bound is
 # declared, not re-checked here: every entry carries `pin`, a repo-relative
-# `*.test.*` path naming the suite that pins the member's provisioner content,
+# `*.test.sh`/`*.test.ts` path naming the suite that pins the member's provisioner content,
 # enforced in the hygiene arm below (present, shaped, extant). What the named
 # suite covers is review-verified, exactly as `reason`'s adequacy is.
 # `unclassifiable` (optional, default false) declares that the member's dials
 # may be non-literal/non-web -- the reviewed acknowledgment the
 # unclassifiable-dial arm (#10148) consults. `hosts` may be empty only under the
 # flag, and a flagged entry still owes >=1 swept block at its declared
-# (file, type.name): the marker cannot be asserted over nothing.
+# (file, type.name): the marker cannot be asserted over nothing. Named residual:
+# `dialed_hosts` is a whole-body TEXTUAL match, so a literal
+# `hcloud_server.web["web-1"]` in a member's NON-host attribute mints
+# dialed={web-1} and routes an actually-indirect dial through the fleet arm --
+# the pin suite is the backstop for that class, exactly as pin adequacy is.
 # (#9998 -- the w2_elsewhere arm was web-2-only and left web-1 and future web-N
 # dialers outside server.tf unclassified.)
 EXT_RESIDENCE = {
@@ -1572,8 +1576,11 @@ else:
 # (file, type.name) carrying `unclassifiable: true` -- the exemption surface
 # stays single. Iterate ALL `blocks` like fleet_elsewhere: a winrm label or a
 # `dynamic "connection"` spelling buys no invisibility. Inside-server.tf
-# indirection is a named residual (the issue scopes to outside server.tf; §1's
-# census already pins terraform_data member hosts literal).
+# indirection is a named residual (the issue scopes to outside server.tf): a
+# non-`terraform_data`/dynamic/winrm/type-less indirect dialer INSIDE server.tf
+# escapes §1's census AND this arm -- §1 pins `terraform_data` member hosts
+# literal, nothing more. Battery control G2-C8 pins that residual green so an
+# arm over-reaching into server.tf is loud.
 unclassifiable = []
 for loc, b, addr, _k in blocks:
     fpath = loc.rsplit(':', 1)[0]
@@ -1585,7 +1592,7 @@ for loc, b, addr, _k in blocks:
     entry = members.get(addr) if isinstance(members, dict) else None
     if isinstance(entry, dict) and entry.get("unclassifiable") is True:
         continue
-    unclassifiable.append(f"{loc} ({addr or 'unattributed'})")
+    unclassifiable.append(f"{loc} ({(addr or 'unattributed')!r})")
 if not unclassifiable:
     ok("G2: every connection block outside server.tf dials a classifiable literal "
        "hcloud_server.web[\"web-N\"] host (or holds an unclassifiable EXT_RESIDENCE entry)")
@@ -1603,10 +1610,10 @@ else:
 # table, so the invariant fails loudly HERE at guard runtime; the
 # reason-adequacy half is verified by review like ALLOWLIST/ONLY_JUSTIFIED --
 # and so is pin-adequacy (the bound forces the DECLARATION, not the coverage).
-# The pin check is an `is_file()` stat under REPO -- deliberately not a second
-# reader: the battery pins Guard 2 to exactly one file enumeration and one
-# file-read call site, so file CONTENT verification would be a deliberate
-# reader-pin amendment, not a silent extension.
+# The pin check is an existence stat under REPO -- deliberately not a second
+# reader: the battery pins Guard 2 to exactly one file enumeration, one
+# file-read call site, and one stat-family pair, so file CONTENT verification
+# would be a deliberate reader-pin amendment, not a silent extension.
 def ext_residence_hygiene(table, label):
     pin_bad = []
     stale = []
@@ -1629,14 +1636,18 @@ def ext_residence_hygiene(table, label):
                 stale.append(f"{fpath}:{rname} (malformed entry, empty reason, or "
                              "empty hosts without unclassifiable: true)")
                 continue
-            # `pin` is mandatory and bounded: a repo-relative `*.test.*` path
-            # that exists under REPO. A typo'd or dangling pin is the silent-drift
-            # class this table exists to catch, so existence is mechanical.
+            # `pin` is mandatory and bounded: a repo-relative `*.test.sh`/
+            # `*.test.ts` path that exists under REPO and is not a symlink (a
+            # committed link escaping REPO would satisfy the existence stat while the
+            # bound names nothing in-tree). A typo'd or dangling pin is the
+            # silent-drift class this table exists to catch, so existence is
+            # mechanical.
             pin = entry.get("pin")
             if not isinstance(pin, str) or not pin.strip() \
                     or pin.startswith("/") \
                     or ".." in pathlib.PurePosixPath(pin).parts \
-                    or ".test." not in pin.rsplit("/", 1)[-1] \
+                    or not pin.endswith((".test.sh", ".test.ts")) \
+                    or (REPO / pin).is_symlink() \
                     or not (REPO / pin).is_file():
                 pin_bad.append(f"{fpath}:{rname} (pin {pin!r})")
             # Every entry must still sweep >=1 block at its declared
@@ -1659,17 +1670,16 @@ def ext_residence_hygiene(table, label):
     return pin_bad, stale
 
 
+n_ext = sum(len(m) for m in EXT_RESIDENCE.values() if isinstance(m, dict))
 pin_bad, stale_ext = ext_residence_hygiene(EXT_RESIDENCE, "EXT_RESIDENCE")
 if not pin_bad:
-    n_ext = sum(len(m) for m in EXT_RESIDENCE.values())
     ok(f"G2: every EXT_RESIDENCE entry carries a pin naming an extant "
-       f"repo-relative *.test.* file ({n_ext} entries)")
+       f"repo-relative *.test.sh/*.test.ts file ({n_ext} entries)")
 else:
     no("G2: EXT_RESIDENCE pin — every entry must name an extant repo-relative "
-       "*.test.* file pinning the member's provisioner content (#10147): "
+       "*.test.sh/*.test.ts file pinning the member's provisioner content (#10147): "
        + ", ".join(pin_bad))
 if not stale_ext:
-    n_ext = sum(len(m) for m in EXT_RESIDENCE.values())
     ok(f"G2: every EXT_RESIDENCE entry resolves to a swept connection block and "
        f"carries a reason ({n_ext} entries)")
 else:
@@ -1693,48 +1703,51 @@ else:
 ext_probe_raw = os.environ.get("SOLEUR_PARITY_EXT_RESIDENCE_PROBE", "")
 if ext_probe_raw:
     # RecursionError is not a ValueError, and deeply-nested JSON raises it -- a
-    # traceback rather than the named failure this branch exists to produce.
+    # traceback rather than the named failure this branch exists to produce. The
+    # parse-failure path stops here: falling through to the shape check on {}
+    # would print a spurious ok() right after the FAIL.
+    probe_parsed = False
     try:
         ext_probe = json.loads(ext_probe_raw)
+        probe_parsed = True
     except (ValueError, RecursionError) as exc:
         no(f"G2: SOLEUR_PARITY_EXT_RESIDENCE_PROBE is set but is not parseable "
            f"JSON ({exc})")
-        ext_probe = {}
-    # Shape-check before use: {file: {type.name: entry}} with dict members.
-    # Field-level type errors are left to the hygiene checks, which report them
-    # as named malformed/stale findings rather than tracebacks.
-    if not isinstance(ext_probe, dict) or not all(
-            isinstance(fp, str) for fp in ext_probe.keys()):
-        no("G2: SOLEUR_PARITY_EXT_RESIDENCE_PROBE must be a JSON object of "
-           "{file: {type.name: entry}}")
-        ext_probe = {}
-    else:
-        # JSON `hosts` arrive as lists; normalize to frozensets (the shape the
-        # real table uses). Unhashable members stay lists so hygiene's
-        # malformed arm reports them instead of set() raising TypeError here.
-        norm = {}
-        for fp, mem in ext_probe.items():
-            if not isinstance(mem, dict):
-                norm[fp] = mem
-                continue
-            norm[fp] = {}
-            for rn, e in mem.items():
-                if isinstance(e, dict):
-                    e = dict(e)
-                    if isinstance(e.get("hosts"), list):
-                        try:
-                            e["hosts"] = frozenset(e["hosts"])
-                        except TypeError:
-                            pass
-                norm[fp][rn] = e
-        p_pin, p_stale = ext_residence_hygiene(norm, "EXT_RESIDENCE probe")
-        for m_ in p_pin:
-            no("G2: EXT_RESIDENCE probe pin — " + m_)
-        for m_ in p_stale:
-            no("G2: stale EXT_RESIDENCE probe entry — " + m_)
-        if not p_pin and not p_stale:
-            ok("G2: every EXT_RESIDENCE probe entry resolves and carries a pin "
-               "+ reason")
+    # Shape-check before use: {file: {type.name: entry}}. (Object keys from
+    # json.loads are always str; dict-ness is the only live question. Member-map
+    # and field-level type errors are left to the hygiene checks, which report
+    # them as named malformed/stale findings rather than tracebacks.)
+    if probe_parsed:
+        if not isinstance(ext_probe, dict):
+            no("G2: SOLEUR_PARITY_EXT_RESIDENCE_PROBE must be a JSON object of "
+               "{file: {type.name: entry}}")
+        else:
+            # JSON `hosts` arrive as lists; normalize to frozensets (the shape
+            # the real table uses). Unhashable members stay lists so hygiene's
+            # malformed arm reports them instead of set() raising TypeError here.
+            norm = {}
+            for fp, mem in ext_probe.items():
+                if not isinstance(mem, dict):
+                    norm[fp] = mem
+                    continue
+                norm[fp] = {}
+                for rn, e in mem.items():
+                    if isinstance(e, dict):
+                        e = dict(e)
+                        if isinstance(e.get("hosts"), list):
+                            try:
+                                e["hosts"] = frozenset(e["hosts"])
+                            except TypeError:
+                                pass
+                    norm[fp][rn] = e
+            p_pin, p_stale = ext_residence_hygiene(norm, "EXT_RESIDENCE probe")
+            for m_ in p_pin:
+                no("G2: EXT_RESIDENCE probe pin — " + m_)
+            for m_ in p_stale:
+                no("G2: stale EXT_RESIDENCE probe entry — " + m_)
+            if not p_pin and not p_stale:
+                ok("G2: every EXT_RESIDENCE probe entry resolves and carries a "
+                   "pin + reason")
 
 # The local is the ONE place the committed pin enters Terraform: defined once, read from the
 # committed file, through one() (exactly one key line) and the anchored ECDSA-P256 regex().

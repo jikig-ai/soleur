@@ -51,8 +51,11 @@ Plan: `knowledge-base/project/plans/2026-10-12-fix-ext-residence-hardening-plan.
   against `"pin"` values derived from the guard (FATAL on drift, the
   `EXPECTED_INPUTS`/`DERIVED_INPUTS` pattern); copy each into the sandbox under
   its repo-relative path so `(REPO / pin).is_file()` resolves.
-- [x] 2.6 Re-derive `FLOOR` (95→98), `PROBE_FLOOR` (7→13), `PROBE_RED_FLOOR`
-  (6→12), `cases` (+10) from the battery log; update the census comments.
+- [x] 2.6 Re-derive `FLOOR` (95→98), `PROBE_FLOOR`/`PROBE_RED_FLOOR`
+  stay per-family at 7/6 (§5); EXT family gets `EXT_PROBE_FLOOR=20`/
+  `EXT_PROBE_RED_FLOOR=19` (review split the floors per family; X-rows
+  grew X1-X7 → X1-X20). `cases` re-derived from the battery log; census
+  comments updated.
 
 ## Phase 3 — Verification
 

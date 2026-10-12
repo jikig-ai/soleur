@@ -358,9 +358,10 @@ sandboxed fails loudly on the baseline row.
 
 **Accounting.** `mutations_run`: G2-C6 was `expect_green` (uncounted); G2-38/39/40
 add 3 → `FLOOR` 95 → **98** (G2-C3's `_g2_json_row` stays counted, direction
-changes only). Probes: +6 red +1 green → `PROBE_FLOOR` 7 → **13**,
-`PROBE_RED_FLOOR` 6 → **12**. `cases` +10. All three comments re-derived from
-the battery log per file convention.
+changes only). Probes grew under review to X1-X20 (+13 red +1 green) and
+the floors were split per-family: `PROBE_FLOOR`/`PROBE_RED_FLOOR` stay 7/6
+(§5), `EXT_PROBE_FLOOR`/`EXT_PROBE_RED_FLOOR` land at **20**/**19**. All
+comments re-derived from the battery log per file convention.
 
 ## Technical Considerations
 
@@ -615,8 +616,9 @@ superset (`.sh` under `infra/` only).
    `SOLEUR_PARITY_EXT_RESIDENCE_PROBE`) + rows X1-X7.
 5. Add pin-file sandbox copies derived from the guard's `"pin"` values,
    reconciled against hardcoded `G2_PIN_INPUTS` (FATAL on drift).
-6. Re-derive `FLOOR` (95→98), `PROBE_FLOOR` (7→13), `PROBE_RED_FLOOR` (6→12),
-   `cases` (+10) from the battery log; update comments.
+6. Re-derive `FLOOR` (95→98); keep `PROBE_FLOOR`/`PROBE_RED_FLOOR` 7/6 and
+   add per-family `EXT_PROBE_FLOOR`/`EXT_PROBE_RED_FLOOR` (review split);
+   `cases` from the battery log; update comments.
 
 ### Phase 3 — Verification
 

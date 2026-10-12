@@ -168,6 +168,7 @@ while IFS= read -r wiring; do
 done <<'WIRINGS'
 check_allowlist(ALLOWLIST, "ALLOWLIST")
 if dest in ALLOWLIST: continue
+isinstance(entry, dict) and entry.get("unclassifiable")
 WIRINGS
 
 n_reads=0
@@ -187,9 +188,15 @@ fi
 # Guard 2 reads files ONLY through one `git ls-files` enumeration and one read_text() on its
 # results. A second reader (an open(), a literal path, an rglob) could take a file the scratch
 # repository below does not carry, so each shape is pinned and nothing else may open a file.
+# Stat-family calls are bounded the same way (#10147 pin check): exactly one is_file() + one
+# is_symlink() inside ext_residence_hygiene, and no exists()/stat() at all -- a second stat on
+# an unsandboxed path would widen what the pin check can reach without touching this list.
 if [[ "$(grep -c '"ls-files"' "$G2_PROG")" != 1 || "$(grep -c 'read_text(' "$G2_PROG")" != 1 \
-      || "$(grep -c 'open(' "$G2_PROG")" != 0 || "$(grep -c 'glob(' "$G2_PROG")" != 0 ]]; then
-  echo "FATAL: Guard 2 must read files only via one git ls-files enumeration and one read_text()." >&2
+      || "$(grep -c 'open(' "$G2_PROG")" != 0 || "$(grep -c 'glob(' "$G2_PROG")" != 0 \
+      || "$(grep -c 'is_file(' "$G2_PROG")" != 1 || "$(grep -c 'is_symlink(' "$G2_PROG")" != 1 \
+      || "$(grep -c '\.exists(' "$G2_PROG")" != 0 || "$(grep -cF '.stat(' "$G2_PROG")" != 0 ]]; then
+  echo "FATAL: Guard 2 must read files only via one git ls-files enumeration and one read_text()," >&2
+  echo "  and stat files only via the pin check's is_file()/is_symlink() pair." >&2
   exit 2
 fi
 # Every tracked (or new, unignored) .tf / .tf.json in the repo, as a path RELATIVE TO THE INFRA
@@ -1060,12 +1067,18 @@ s = s.replace(old, "install -D -m 0644 -o root -g root \"$SEED/$f\" \"/etc/syste
 # cannot be turned into a way to silence a real finding.
 probes_run=0
 probe_reds=0
+ext_probes_run=0
+ext_probe_reds=0
 
-# expect_probe_red <label> <anchor> <json> [mutator-file] [mutator-script]
-# The optional mutation runs FIRST, so a case can require the guard to reach a §2 verdict and
-# THEN check what the probe did or did not do to it (P4).
-expect_probe_red() {
-  local label="$1" anchor="$2" probe="$3" mfile="${4:-}" mscript="${5:-}"
+# Shared probe-row machinery (#10147): the §5 pair and the EXT_RESIDENCE pair were
+# ~46 lines each of the same dance, differing only in env-var name and which
+# counter family they feed. One impl keeps the families in lockstep.
+#   _probe_row_red_impl  <env-var> <run-var> <red-var> <label> <anchor> <json> [mutator-file] [mutator-script]
+#   _probe_row_green_impl <env-var> <run-var> <label> <json>
+# The optional mutation runs FIRST, so a case can require the guard to reach a
+# real verdict and THEN check what the probe did or did not do to it (P4, X6).
+_probe_row_red_impl() {
+  local varname="$1" runvar="$2" redvar="$3" label="$4" anchor="$5" probe="$6" mfile="${7:-}" mscript="${8:-}"
   cases=$((cases + 1))
   restore
   if [[ -n "$mfile" ]]; then
@@ -1076,9 +1089,10 @@ expect_probe_red() {
       no "$label: mutation did NOT land ($mfile byte-identical to pristine)"; restore; return
     fi
   fi
-  probes_run=$((probes_run + 1))
-  probe_reds=$((probe_reds + 1))
-  if SOLEUR_INFRA_DIR="$SANDBOX" SOLEUR_TF_REPO="$TF_REPO" SOLEUR_PARITY_ALLOWLIST_PROBE="$probe" bash "$GUARD" >"$OUT" 2>&1; then
+  local -n _run="$runvar" _red="$redvar"
+  _run=$((_run + 1))
+  _red=$((_red + 1))
+  if env SOLEUR_INFRA_DIR="$SANDBOX" SOLEUR_TF_REPO="$TF_REPO" "$varname=$probe" bash "$GUARD" >"$OUT" 2>&1; then
     no "$label: guard still PASSED with the hygiene rule broken -- the check asserts nothing"
   elif mutation_scorer_failed_on "$OUT" '\[FAIL\]' "$anchor"; then
     ok "$label: guard went RED on '$anchor'"
@@ -1088,18 +1102,25 @@ expect_probe_red() {
   restore
 }
 
-expect_probe_green() {
-  local label="$1" probe="$2"
+_probe_row_green_impl() {
+  local varname="$1" runvar="$2" label="$3" probe="$4"
   cases=$((cases + 1))
   restore
-  probes_run=$((probes_run + 1))
-  if SOLEUR_INFRA_DIR="$SANDBOX" SOLEUR_TF_REPO="$TF_REPO" SOLEUR_PARITY_ALLOWLIST_PROBE="$probe" bash "$GUARD" >"$OUT" 2>&1; then
-    ok "$label: guard stayed GREEN on a well-formed entry"
+  local -n _run="$runvar"
+  _run=$((_run + 1))
+  if env SOLEUR_INFRA_DIR="$SANDBOX" SOLEUR_TF_REPO="$TF_REPO" "$varname=$probe" bash "$GUARD" >"$OUT" 2>&1; then
+    ok "$label: guard stayed GREEN on a well-formed probe entry"
   else
-    no "$label: guard went RED on a WELL-FORMED probe entry, so the two REDs above prove only
+    no "$label: guard went RED on a WELL-FORMED probe entry, so the REDs above prove only
       that ANY probe reddens -- not that the hygiene rules discriminate. Output: $(<"$OUT")"
   fi
 }
+
+# expect_probe_red <label> <anchor> <json> [mutator-file] [mutator-script]
+expect_probe_red()       { _probe_row_red_impl SOLEUR_PARITY_ALLOWLIST_PROBE probes_run probe_reds "$@"; }
+expect_probe_green()     { _probe_row_green_impl SOLEUR_PARITY_ALLOWLIST_PROBE probes_run "$@"; }
+expect_ext_probe_red()   { _probe_row_red_impl SOLEUR_PARITY_EXT_RESIDENCE_PROBE ext_probes_run ext_probe_reds "$@"; }
+expect_ext_probe_green() { _probe_row_green_impl SOLEUR_PARITY_EXT_RESIDENCE_PROBE ext_probes_run "$@"; }
 
 expect_probe_red "P1 (§5: an entry with a blank reason)" \
   "ALLOWLIST probe entry '/usr/local/bin/disk-monitor.sh' has no stated reason" \
@@ -1112,49 +1133,14 @@ expect_probe_red "P2 (§5: an entry naming a path nothing writes)" \
 expect_probe_green "P3 (§5 control: a well-formed entry is accepted)" \
   '{"/usr/local/bin/disk-monitor.sh": "parity verified by fresh-boot-parity.test.sh"}'
 
-# ── EXT_RESIDENCE probe pair (#10147/#10148) ─────────────────────────────────
-# Same contract as the §5 pair, a different env var:
+# ── EXT_RESIDENCE probe family (#10147/#10148) ────────────────────────────────
+# Same contract as the §5 family, a different env var:
 # SOLEUR_PARITY_EXT_RESIDENCE_PROBE feeds a synthetic {file: {type.name: entry}}
 # table through the guard's ext_residence_hygiene() -- additive-only, NEVER
 # merged into the fleet_elsewhere/unclassifiable exemption consults (X6 is the
-# negative control). Shares probes_run/probe_reds: the floors bound every probe
-# family at once.
-expect_ext_probe_red() {
-  local label="$1" anchor="$2" probe="$3" mfile="${4:-}" mscript="${5:-}"
-  cases=$((cases + 1))
-  restore
-  if [[ -n "$mfile" ]]; then
-    if ! apply_mutation "$mfile" "$mscript"; then
-      no "$label: mutator errored -- the mutation never landed"; restore; return
-    fi
-    if cmp -s "$SANDBOX/$mfile" "$PRISTINE/$mfile"; then
-      no "$label: mutation did NOT land ($mfile byte-identical to pristine)"; restore; return
-    fi
-  fi
-  probes_run=$((probes_run + 1))
-  probe_reds=$((probe_reds + 1))
-  if SOLEUR_INFRA_DIR="$SANDBOX" SOLEUR_TF_REPO="$TF_REPO" SOLEUR_PARITY_EXT_RESIDENCE_PROBE="$probe" bash "$GUARD" >"$OUT" 2>&1; then
-    no "$label: guard still PASSED with the EXT_RESIDENCE hygiene rule broken -- the check asserts nothing"
-  elif mutation_scorer_failed_on "$OUT" '\[FAIL\]' "$anchor"; then
-    ok "$label: guard went RED on '$anchor'"
-  else
-    no "$label: guard went red but NOT via '$anchor' -- unrelated reason. Output: $(<"$OUT")"
-  fi
-  restore
-}
-
-expect_ext_probe_green() {
-  local label="$1" probe="$2"
-  cases=$((cases + 1))
-  restore
-  probes_run=$((probes_run + 1))
-  if SOLEUR_INFRA_DIR="$SANDBOX" SOLEUR_TF_REPO="$TF_REPO" SOLEUR_PARITY_EXT_RESIDENCE_PROBE="$probe" bash "$GUARD" >"$OUT" 2>&1; then
-    ok "$label: guard stayed GREEN on a well-formed EXT_RESIDENCE probe entry"
-  else
-    no "$label: guard went RED on a WELL-FORMED EXT_RESIDENCE probe entry, so the REDs above prove only
-      that ANY probe reddens -- not that the hygiene rules discriminate. Output: $(<"$OUT")"
-  fi
-}
+# negative control). Its rows feed their own counters (ext_probes_run /
+# ext_probe_reds) with their own floors, so one family's silent deletion cannot
+# be masked by the other. The X rows themselves sit after the mutation rows.
 
 # P4 is the NEGATIVE CONTROL for the whole probe design, and the only case here that can catch
 # the probe becoming a fail-open switch. The guard claims twice, in prose, that the probe "can
@@ -1775,7 +1761,7 @@ s = s.replace(old, """  connection {
 # via `unclassifiable` — the pinned gap became the pinned coverage, exactly as
 # the control's note prescribed. Same mutator, flipped expectation.
 expect_red "G2-38 (an indirect (non-literal) host dial outside server.tf is unclassifiable)" tunnel.tf \
-  "unclassifiable" '
+  "unclassifiable connection dial" '
 s += """
 resource "terraform_data" "g2_indirect" {
   connection {
@@ -1794,7 +1780,7 @@ resource "terraform_data" "g2_indirect" {
 # Arm isolation: a valid pinned host_key keeps every host_key arm green, so only
 # the unclassifiable arm can fire on a raw-IP dialer.
 expect_red "G2-39 (a raw-IP dialer with a valid host_key outside server.tf)" tunnel.tf \
-  "unclassifiable" '
+  "unclassifiable connection dial" '
 s += """
 resource "terraform_data" "g2_rawip" {
   connection {
@@ -1813,7 +1799,7 @@ resource "terraform_data" "g2_rawip" {
 # Iteration completeness: the arm does not stop at the first unclassifiable
 # block -- both members of the file are named in the finding.
 expect_red "G2-40 (two unclassifiable dialers in one file are both named)" tunnel.tf \
-  "unclassifiable" '
+  "unclassifiable connection dial" '
 s += """
 resource "terraform_data" "g2_indirect_a" {
   connection {
@@ -1848,6 +1834,28 @@ expect_green "G2-C7 (a provisioner-body edit inside an EXT_RESIDENCE member stay
 old = "      \"df -P /etc | tail -1 || true\","
 assert old in s
 s = s.replace(old, old + "\n      \"echo g2-c7 benign member-content edit\",", 1)
+'
+
+# DECLARED RESIDUAL (CTO ruling, #10148): the unclassifiable arm scopes to blocks
+# OUTSIDE server.tf, so a non-terraform_data resource inside server.tf dialing
+# through indirection engages no classification arm (§1's census is
+# terraform_data-typed; fleet_elsewhere needs a literal dial). This pins the
+# gap GREEN deliberately -- the same instrument G2-C6 was for the pre-#10148
+# outside-server.tf gap. If the residual is ever closed, this flips RED.
+expect_green "G2-C8 (a non-terraform_data indirect dialer inside server.tf stays GREEN -- declared residual)" server.tf '
+s += """
+resource "null_resource" "g2_residual" {
+  connection {
+    type = "ssh"
+    host = var.web1_ip
+    user = "root"
+    host_key = local.web_1_ssh_host_key
+  }
+  provisioner "remote-exec" {
+    inline = ["true"]
+  }
+}
+"""
 '
 
 expect_red "G2-4 (a new connection block without host_key in a DIFFERENT .tf)" tunnel.tf \
@@ -1974,6 +1982,10 @@ s = s[:j] + "  # benign comment added by the mutation battery\n" + s[j:]
 
 # .tf.json: a NEW file (so it is created and removed inline, not through restore()).
 G2_JSON="$SANDBOX/zz-g2.tf.json"
+# want==green is currently unreachable by construction (#10148): every .tf.json
+# connection block outside server.tf dials something the guard cannot classify,
+# so no green shape remains -- the branch stays because the helper is generic
+# and a future .tf.json EXT_RESIDENCE entry could make one.
 _g2_json_row() { # <label> <json> <expect: red|green> <anchor>
   local label="$1" json="$2" want="$3" anchor="${4:-}"
   cases=$((cases + 1))
@@ -2000,7 +2012,7 @@ _g2_json_row "G2-14 (.tf.json connection with host_key null)" \
 # .tf.json block is unclassifiable by construction. The mutation it was meant to
 # kill is preserved, re-scored.
 _g2_json_row "G2-C3 (.tf.json connection pinned to the local is unclassifiable)" \
-  '{"resource":{"terraform_data":{"j":{"connection":{"host":"192.0.2.14","host_key":"${local.web_1_ssh_host_key}"}}}}}' red "unclassifiable"
+  '{"resource":{"terraform_data":{"j":{"connection":{"host":"192.0.2.14","host_key":"${local.web_1_ssh_host_key}"}}}}}' red "unclassifiable connection dial"
 
 cases=$((cases + 1))
 restore
@@ -2028,15 +2040,15 @@ expect_ext_probe_red "X1 (EXT probe: unparseable JSON is named, not a traceback)
   "not parseable JSON" '{oops'
 
 expect_ext_probe_red "X2 (EXT probe: an entry missing its pin)" \
-  "pin" \
+  "EXT_RESIDENCE probe pin" \
   '{"apps/web-platform/infra/ci-ssh-key.tf":{"terraform_data.root_authorized_keys":{"hosts":["web-1"],"reason":"probe"}}}'
 
 expect_ext_probe_red "X3 (EXT probe: a pin naming a dangling path)" \
-  "pin" \
+  "EXT_RESIDENCE probe pin" \
   '{"apps/web-platform/infra/ci-ssh-key.tf":{"terraform_data.root_authorized_keys":{"hosts":["web-1"],"reason":"probe","pin":"apps/web-platform/infra/nope.test.sh"}}}'
 
 expect_ext_probe_red "X4 (EXT probe: a pin that is not a *.test.* file)" \
-  "pin" \
+  "EXT_RESIDENCE probe pin" \
   '{"apps/web-platform/infra/ci-ssh-key.tf":{"terraform_data.root_authorized_keys":{"hosts":["web-1"],"reason":"probe","pin":"apps/web-platform/infra/server.tf"}}}'
 
 expect_ext_probe_red "X5 (EXT probe: an unclassifiable-flagged entry over no swept block)" \
@@ -2048,7 +2060,7 @@ expect_ext_probe_red "X5 (EXT probe: an unclassifiable-flagged entry over no swe
 # (file, type.name). The finding must survive -- the probe is never merged into
 # the exemption consults.
 expect_ext_probe_red "X6 (EXT probe negative control: a probe entry cannot suppress an unclassifiable finding)" \
-  "unclassifiable" \
+  "unclassifiable connection dial" \
   '{"apps/web-platform/infra/tunnel.tf":{"terraform_data.g2_indirect":{"hosts":[],"reason":"probe","pin":"apps/web-platform/infra/luks-monitor-install.test.sh","unclassifiable":true}}}' \
   tunnel.tf '
 s += """
@@ -2068,6 +2080,87 @@ resource "terraform_data" "g2_indirect" {
 
 expect_ext_probe_green "X7 (EXT probe control: a well-formed entry is accepted)" \
   '{"apps/web-platform/infra/ci-ssh-key.tf":{"terraform_data.root_authorized_keys":{"hosts":["web-1"],"reason":"probe green control","pin":"apps/web-platform/infra/luks-monitor-install.test.sh"}}}'
+
+# X8-X20 close the probe-family's own coverage of every hygiene branch (review
+# found the shape-check, the malformed arms, each conjunct of the field gate,
+# per-entry iteration, and the pin-bound clauses all deletable under X1-X7).
+expect_ext_probe_red "X8 (EXT probe: a non-object probe is named, not a traceback)" \
+  "must be a JSON object" '["x"]'
+
+# The ghost member's own name is the discriminating anchor: it appears in the
+# finding only if iteration reached the second entry (the well-formed first
+# member resolves clean, so only the ghost can red).
+expect_ext_probe_red "X9 (EXT probe: hygiene iterates EVERY entry -- a malformed second member)" \
+  "terraform_data.ghost" '
+{
+  "apps/web-platform/infra/ci-ssh-key.tf": {
+    "terraform_data.root_authorized_keys": {"hosts": ["web-1"], "reason": "probe", "pin": "apps/web-platform/infra/luks-monitor-install.test.sh"},
+    "terraform_data.ghost": {"hosts": [], "reason": "probe", "pin": "apps/web-platform/infra/luks-monitor-install.test.sh", "unclassifiable": true}
+  }
+}
+'
+
+expect_ext_probe_red "X10 (EXT probe: a non-dict member map is malformed)" \
+  "malformed EXT_RESIDENCE probe member map" \
+  '{"apps/web-platform/infra/ci-ssh-key.tf": 5}'
+
+expect_ext_probe_red "X11 (EXT probe: a non-dict entry is malformed)" \
+  "(malformed entry)" \
+  '{"apps/web-platform/infra/ci-ssh-key.tf": {"terraform_data.root_authorized_keys": "y"}}'
+
+expect_ext_probe_red "X12 (EXT probe: empty hosts without unclassifiable: true is malformed)" \
+  "empty hosts" \
+  '{"apps/web-platform/infra/ci-ssh-key.tf": {"terraform_data.root_authorized_keys": {"hosts": [], "reason": "probe", "pin": "apps/web-platform/infra/luks-monitor-install.test.sh"}}}'
+
+expect_ext_probe_red "X13 (EXT probe: a non-bool unclassifiable flag is malformed)" \
+  "(malformed entry," \
+  '{"apps/web-platform/infra/ci-ssh-key.tf": {"terraform_data.root_authorized_keys": {"hosts": ["web-1"], "reason": "probe", "pin": "apps/web-platform/infra/luks-monitor-install.test.sh", "unclassifiable": "yes"}}}'
+
+expect_ext_probe_red "X14 (EXT probe: a non-set hosts field is malformed)" \
+  "(malformed entry," \
+  '{"apps/web-platform/infra/ci-ssh-key.tf": {"terraform_data.root_authorized_keys": {"hosts": "web-1", "reason": "probe", "pin": "apps/web-platform/infra/luks-monitor-install.test.sh"}}}'
+
+expect_ext_probe_red "X15 (EXT probe: an empty reason is malformed)" \
+  "(malformed entry," \
+  '{"apps/web-platform/infra/ci-ssh-key.tf": {"terraform_data.root_authorized_keys": {"hosts": ["web-1"], "reason": "", "pin": "apps/web-platform/infra/luks-monitor-install.test.sh"}}}'
+
+# `hosts ⊆ dialed` with swept >= 1: G2-22 fires `not swept` simultaneously, so
+# only a probe row over the real member isolates the over-declared-hosts clause.
+expect_ext_probe_red "X16 (EXT probe: an over-declared hosts set pre-authorizes a future dial)" \
+  "stale EXT_RESIDENCE" \
+  '{"apps/web-platform/infra/ci-ssh-key.tf": {"terraform_data.root_authorized_keys": {"hosts": ["web-1", "web-9"], "reason": "probe", "pin": "apps/web-platform/infra/luks-monitor-install.test.sh"}}}'
+
+expect_ext_probe_red "X17 (EXT probe: an absolute pin path escapes the repo-relative bound)" \
+  "EXT_RESIDENCE probe pin" \
+  '{"apps/web-platform/infra/ci-ssh-key.tf": {"terraform_data.root_authorized_keys": {"hosts": ["web-1"], "reason": "probe", "pin": "/tmp/x.test.sh"}}}'
+
+expect_ext_probe_red "X18 (EXT probe: a parent-traversal pin path escapes the repo-relative bound)" \
+  "EXT_RESIDENCE probe pin" \
+  '{"apps/web-platform/infra/ci-ssh-key.tf": {"terraform_data.root_authorized_keys": {"hosts": ["web-1"], "reason": "probe", "pin": "apps/../x.test.sh"}}}'
+
+expect_ext_probe_red "X19 (EXT probe: a pin with a non-test extension is rejected)" \
+  "EXT_RESIDENCE probe pin" \
+  '{"apps/web-platform/infra/ci-ssh-key.tf": {"terraform_data.root_authorized_keys": {"hosts": ["web-1"], "reason": "probe", "pin": "apps/web-platform/infra/notes.test.txt"}}}'
+
+# X20 exercises the is_symlink() clause: a committed-symlink pin would satisfy
+# the existence stat while naming nothing in-tree. The link is created in the
+# scratch repo and removed before restore.
+cases=$((cases + 1))
+restore
+ext_probes_run=$((ext_probes_run + 1))
+ext_probe_reds=$((ext_probe_reds + 1))
+ln -s luks-monitor-install.test.sh "$TF_REPO/apps/web-platform/infra/x20-pin-link.test.sh"
+if SOLEUR_INFRA_DIR="$SANDBOX" SOLEUR_TF_REPO="$TF_REPO" \
+   SOLEUR_PARITY_EXT_RESIDENCE_PROBE='{"apps/web-platform/infra/ci-ssh-key.tf": {"terraform_data.root_authorized_keys": {"hosts": ["web-1"], "reason": "probe", "pin": "apps/web-platform/infra/x20-pin-link.test.sh"}}}' \
+   bash "$GUARD" >"$OUT" 2>&1; then
+  no "X20 (EXT probe: a symlink pin is rejected): guard still PASSED"
+elif mutation_scorer_failed_on "$OUT" '\[FAIL\]' "EXT_RESIDENCE probe pin"; then
+  ok "X20 (EXT probe: a symlink pin is rejected): guard went RED on 'EXT_RESIDENCE probe pin'"
+else
+  no "X20 (EXT probe: a symlink pin is rejected): guard went red but NOT via the pin arm. Output: $(<"$OUT")"
+fi
+rm -f "$TF_REPO/apps/web-platform/infra/x20-pin-link.test.sh"
+restore
 
 # ── Accounting conservation (ADR-193 #3) ────────────────────────────────────────────────
 # Ordered BEFORE the three floors (ADR-193 #4). A neutered `ok` deflates `pass` while `cases`
@@ -2106,26 +2199,48 @@ if (( mutations_run < FLOOR )); then
   exit 1
 fi
 
-# The probes are counted separately: they never touch a file, so `mutations_run`'s
-# landed-vs-pristine proof does not apply to them and folding them in would weaken it.
+# The probes are counted separately: a probe row's own bookkeeping is not a
+# landed-vs-pristine proof, so folding them into `mutations_run` would weaken
+# it. (P4 and X6 DO apply a file mutation first -- but the probe assertion, not
+# the mutation, is what the row exists to score.)
 #
 # RED probes are counted separately AGAIN. The first version floored `probes_run`, which
 # `expect_probe_green` also increments -- so three GREEN controls would have satisfied a floor
 # whose failure text claims the RED arms ran. A floor that a passing control can satisfy is not
 # a floor on the thing it names.
-PROBE_FLOOR=14   # P1-P7 (§5 ALLOWLIST) + X1-X7 (EXT_RESIDENCE) = 14 probes_run
-PROBE_RED_FLOOR=12  # 6 §5 reds + 6 EXT reds; the GREEN controls cannot satisfy it
+#
+# Per-FAMILY floors (review, #10147): a single aggregate bound would let the
+# first future slack row mask the silent deletion of a whole family, so each
+# probe family carries its own run/red pair.
+PROBE_FLOOR=7   # P1-P7 (§5 ALLOWLIST family) = 7 probes_run
+PROBE_RED_FLOOR=6  # 6 §5 reds; the GREEN control cannot satisfy it
+EXT_PROBE_FLOOR=20   # X1-X20 (EXT_RESIDENCE family) = 20 ext_probes_run
+EXT_PROBE_RED_FLOOR=19  # 19 EXT reds; X7's GREEN control cannot satisfy it
 if (( probes_run < PROBE_FLOOR )); then
-  printf '\n[FATAL] anti-vacuity floor (probes): only %d hygiene probe(s) ran, expected >= %d.\n' \
+  printf '\n[FATAL] anti-vacuity floor (probes): only %d §5-hygiene probe(s) ran, expected >= %d.\n' \
     "$probes_run" "$PROBE_FLOOR" >&2
-  printf '  A probe family is unproven: the probe arms were deleted or never reached.\n' >&2
+  printf '  §5 is unproven: the probe arms were deleted or never reached.\n' >&2
   echo "=== provisioner-parity mutation: $pass passed, $fail failed, $cases cases ===" >&2
   exit 1
 fi
 if (( probe_reds < PROBE_RED_FLOOR )); then
-  printf '\n[FATAL] anti-vacuity floor (probe RED arms): only %d RED-arm probe(s) ran, expected >= %d.\n' \
+  printf '\n[FATAL] anti-vacuity floor (probe RED arms): only %d §5 RED-arm probe(s) ran, expected >= %d.\n' \
     "$probe_reds" "$PROBE_RED_FLOOR" >&2
-  printf '  The GREEN controls cannot stand in for them; probe failure arms are unproven.\n' >&2
+  printf '  The GREEN controls cannot stand in for them; §5 failure arms are unproven.\n' >&2
+  echo "=== provisioner-parity mutation: $pass passed, $fail failed, $cases cases ===" >&2
+  exit 1
+fi
+if (( ext_probes_run < EXT_PROBE_FLOOR )); then
+  printf '\n[FATAL] anti-vacuity floor (EXT probes): only %d EXT_RESIDENCE probe(s) ran, expected >= %d.\n' \
+    "$ext_probes_run" "$EXT_PROBE_FLOOR" >&2
+  printf '  The EXT_RESIDENCE hygiene surface is unproven: probe rows were deleted or never reached.\n' >&2
+  echo "=== provisioner-parity mutation: $pass passed, $fail failed, $cases cases ===" >&2
+  exit 1
+fi
+if (( ext_probe_reds < EXT_PROBE_RED_FLOOR )); then
+  printf '\n[FATAL] anti-vacuity floor (EXT probe RED arms): only %d EXT RESIDENCE RED-arm probe(s) ran, expected >= %d.\n' \
+    "$ext_probe_reds" "$EXT_PROBE_RED_FLOOR" >&2
+  printf '  The GREEN controls cannot stand in for them; EXT_RESIDENCE failure arms are unproven.\n' >&2
   echo "=== provisioner-parity mutation: $pass passed, $fail failed, $cases cases ===" >&2
   exit 1
 fi
