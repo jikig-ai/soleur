@@ -8,17 +8,23 @@ Run from inside the repository, in a tree with an empty `git status --porcelain`
 Read-only: it lists tracked files and reads them; it writes nothing and runs no suite.
 
 The BASE rules are a port of the guard's own derivation (`PJ_AWK` in `.claude/hooks/grep-q-pipe-guard.test.sh`, the
-S7b state): the base run MUST print the guard's own numbers (66 pairs, 120 producer triples at 0aae3f8680), or the port
-has drifted and every other figure below is void. Each recall ARM then relaxes exactly one rule of the base, so its
-increment over the base is attributable to that arm alone; the union row turns every arm on.
+S7b state). At 0aae3f8680, the S7b state, the base run prints the guard's own numbers (66 pairs, 120 producer triples);
+at any later head the base moves with the tree (at the S7c head it prints 67 pairs and 126 triples, because the branch's
+own `sha256sum` stub edit makes one more S7b pair visible, evidence AC-4), so "BASE equals the guard" is only checked
+against the guard run on the SAME tree, never against these two figures. This file is a one-time cross-check recorded in
+evidence.md and run by nothing in CI: the awk is authoritative, and a difference between the two is the port drifting.
+Each recall ARM relaxes exactly one rule of the base, so its increment over the base is attributable to that arm alone; the
+union row (U2) turns the shipped arms on and is the one that must equal the awk's sorted triples at the head.
 
   R1 lines    a logical line joined over a trailing backslash or a trailing single pipe, then scanned
   R2 wrap     the verb behind timeout / env / command / nice / stdbuf / exec / builtin / VAR=x (the wrapper stays a verb too)
   R3 prod     a producer other than printf/echo/cat (any stage before a single bar)
   R4 lib      pipefail taken from the process that runs the pipe: (a) forced on, (b) a file that sources the library has it,
               (c) the owning test file has it
-  R5 stubs    a stub made by a helper whose verb is not the first argument, or by a loop over verb names
-  R6 files    producers in .tf/.tftpl/.tpl/.tmpl/.template/.service files and in extensionless files with a shebang
+  R5 stubs    a stub made by a helper whose verb is not the first argument, or by a loop over verb names (the body on the next 15 lines, or on the
+              same line after `; do`)
+  R6 files    producers in .tf/.tftpl/.tmpl/.template/.service files (ARM_EXT, with the base .sh/.bash/.yml/.yaml: the guard's PJ_EXTS); `.tpl` and
+              the extensionless files with a shebang were measured and cut
   R8 annot    an annotation echo is stripped from its token to the closing unescaped quote of its string, not to the end of the line, so a pipe after it (or inside a command substitution in it) is read
   R7 stubname the guard's stub-file arm records `jq";` (quote and semicolon kept) for a stub written `> "$d/jq"; chmod`: found by this J0, not in the brief
 """
@@ -258,6 +264,9 @@ def stub_set(path, text, arms, is_test, extra_helpers=None):
                 var = m.group(1)
                 words = [w.strip('"\'') for w in m.group(2).split()]
                 body = '\n'.join(raw[idx + 1: idx + 16])
+                same = l[m.end():]   # the loop on one line: `for b in v; do printf x > "$d/$b"; done` (the guard's same-line arm)
+                if same.strip():
+                    body = same + '\n' + body
                 end = body.find('\ndone')
                 if end >= 0:
                     body = body[:end]
