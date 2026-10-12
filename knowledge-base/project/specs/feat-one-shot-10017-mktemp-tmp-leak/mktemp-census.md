@@ -61,7 +61,7 @@ and count cannot diverge) on branch `feat-one-shot-10017-mktemp-tmp-leak`.
 
 | File | Run context | Disposition | Basis |
 |---|---|---|---|
-| `tests/scripts/lib/git-data-birth-readiness-gate.sh` | sourced gate lib (CI + local test-all) | trap-RETURN (Phase 3) | sole `rung2-archive.*` producer; `_tmp` consumed only inside `_git_data_rung2_hash_at_sha`, sole caller `$( )` at :1912 — self-disarming `RETURN` trap with `/*`-rooted operand assertion; drop `.soleur-owned` marker write; per CTO ruling |
+| `tests/scripts/lib/git-data-birth-readiness-gate.sh` | sourced gate lib (CI + local test-all) | trap-RETURN (Phase 3) | sole `rung2-archive.*` producer; `_tmp` consumed only inside `_git_data_rung2_hash_at_sha`, sole caller `$( )` at :1913 — self-disarming `RETURN` trap with `/*`-rooted operand assertion; drop `.soleur-owned` marker write; per CTO ruling |
 | `plugins/soleur/scripts/lib/session-state.sh` | sourced library | do-not-touch | #6752 verified: EXIT trap re-arms the release-on-success bug; residual is one ~150B file per SIGKILL in a two-statement window |
 | `apps/web-platform/infra/workspaces-cutover.sh` | cutover orchestrator | do-not-touch | #6752 verified: the EXIT trap IS the LUKS rollback path; it already carries `trap cleanup EXIT` so it is not a census member — a speculative edit risks the irreversible cutover |
 | `scripts/learning-retrieval-bench.sh` (#6752 site) | operator-run bench | already-clean (verified) | every stray alloc (`:530`, `:564`, `:673`) is `rm -f`'d on all paths or lives under `TMP_ROOT` (owning EXIT trap :1168) |

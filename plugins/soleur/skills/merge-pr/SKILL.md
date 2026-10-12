@@ -406,7 +406,7 @@ if [[ "$sync_ok" -eq 1 ]]; then
     why="$SYNC_ROOT/.claude-plugin/plugin.json does not name soleur (ADR-179 identity check)"
   elif [[ ! -r "$SYNC_SH" ]]; then why="the script is missing"
   elif ! bash "$SYNC_SH" --help 2>/dev/null | grep -q -- '--step'; then why="its --help has no --step (an older copy)"
-  elif ! { SYNC_SNAP="$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)")" && trap 'rm -rf "$(dirname "$SYNC_SNAP")"' EXIT && cp "$SYNC_SH" "$SYNC_SNAP"; }; then why="the snapshot copy failed"
+  elif ! { SYNC_SNAP="$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)")" && trap 'rm -f "$SYNC_SNAP"; rmdir "$(dirname "$SYNC_SNAP")" 2>/dev/null' EXIT && cp "$SYNC_SH" "$SYNC_SNAP"; }; then why="the snapshot copy failed"
   fi
   if [[ -n "$why" ]]; then
     echo "[ship.phase7.precondition] sync-pr-behind.sh not usable at '$SYNC_SH': $why — BEHIND auto-sync disabled; export CLAUDE_PLUGIN_ROOT=<the installed soleur plugin root> (Devin/Codex: see that harness's INSTRUCTIONS.md), or sync by hand."

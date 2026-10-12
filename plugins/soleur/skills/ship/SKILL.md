@@ -924,7 +924,7 @@ LEDGER_TOUCHED=$(git diff origin/main...HEAD --name-only | grep -c 'knowledge-ba
 # (b) Capture + fence-strip the PR body (self-contained; fail CLOSED on an
 # unbalanced ``` so an unclosed fence cannot silently drop the rest of the body).
 PR_BODY_FILE=$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)")  # under a signed run-root: a missed rm is still reaper-eligible (#10017)
-trap 'rm -rf "$(dirname "$PR_BODY_FILE")"' EXIT INT TERM
+trap 'rm -f "$PR_BODY_FILE"; rmdir "$(dirname "$PR_BODY_FILE")" 2>/dev/null' EXIT INT TERM
 PR_BODY=$(gh pr view --json body --jq .body)
 printf '%s' "$PR_BODY" | awk '
   /^```/ { in_fence = !in_fence; next }
@@ -1393,7 +1393,7 @@ echo 'SOLEUR_RULE_APPLIED rule=wg-block-pr-ready-on-undeferred-operator-steps no
 
 ```bash
 PR_BODY_FILE=$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)")
-trap 'rm -rf "$(dirname "$PR_BODY_FILE")"' EXIT INT TERM
+trap 'rm -f "$PR_BODY_FILE"; rmdir "$(dirname "$PR_BODY_FILE")" 2>/dev/null' EXIT INT TERM
 PR_BODY=$(gh pr view --json body --jq .body)
 
 # Strip fenced code blocks (```...```) — the gate body and the AC section
@@ -1474,7 +1474,7 @@ done
    } > "$BODY_FILE"
    gh issue create --label type/chore --label deferred-automation \
      --title "$TITLE" --body-file "$BODY_FILE"
-   rm -f "$BODY_FILE"
+   rm -f "$BODY_FILE"; rmdir "$(dirname "$BODY_FILE")" 2>/dev/null
    ```
 
    The load-bearing part is the literal `deferred-automation` string in the
@@ -1506,7 +1506,7 @@ echo 'SOLEUR_RULE_APPLIED rule=wg-pm-class-followthrough-for-operator-dogfood no
 **Detection.** Capture the PR body (strip fenced code blocks, fail-closed on an unbalanced fence — reuse the Undeferred Operator-Step Gate's awk), concatenate the linked plan/spec (Shared Plan-File Resolution shape from preflight), then scan the combined text for a soak signal. Bash ERE has no `(?i)` — use `grep -iE`.
 
 ```bash
-COMBINED=$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)"); trap 'rm -rf "$(dirname "$COMBINED")"' EXIT INT TERM
+COMBINED=$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)"); trap 'rm -f "$COMBINED"; rmdir "$(dirname "$COMBINED")" 2>/dev/null' EXIT INT TERM
 gh pr view --json body --jq .body | awk '
   /^```/ { in_fence = !in_fence; next } !in_fence { print }
   END { if (in_fence) exit 2 }' > "$COMBINED" \
@@ -2267,7 +2267,7 @@ if [[ "$sync_ok" -eq 1 ]]; then
     why="$SYNC_ROOT/.claude-plugin/plugin.json does not name soleur (ADR-179 identity check)"
   elif [[ ! -r "$SYNC_SH" ]]; then why="the script is missing"
   elif ! bash "$SYNC_SH" --help 2>/dev/null | grep -q -- '--step'; then why="its --help has no --step (an older copy)"
-  elif ! { SYNC_SNAP="$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)")" && trap 'rm -rf "$(dirname "$SYNC_SNAP")"' EXIT && cp "$SYNC_SH" "$SYNC_SNAP"; }; then why="the snapshot copy failed"
+  elif ! { SYNC_SNAP="$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)")" && trap 'rm -f "$SYNC_SNAP"; rmdir "$(dirname "$SYNC_SNAP")" 2>/dev/null' EXIT && cp "$SYNC_SH" "$SYNC_SNAP"; }; then why="the snapshot copy failed"
   fi
   if [[ -n "$why" ]]; then
     echo "[ship.phase7.precondition] sync-pr-behind.sh not usable at '$SYNC_SH': $why — BEHIND auto-sync disabled; export CLAUDE_PLUGIN_ROOT=<the installed soleur plugin root> (Devin/Codex: see that harness's INSTRUCTIONS.md), or sync by hand."

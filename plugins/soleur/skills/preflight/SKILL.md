@@ -99,7 +99,7 @@ Both Check 6 (Brand-Survival Self-Review) and Check 10 (Discoverability Test Exe
 # Step S.1: fetch PR body to a private temp file (umask 077; mktemp).
 PR_BODY_FILE=$(umask 077 && mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)" preflight-pr-body.XXXXXXXX.md)
 gh pr view --json body --jq .body > "$PR_BODY_FILE"
-trap 'rm -f "$PR_BODY_FILE" "$COMBINED"' EXIT
+trap 'rm -f "$PR_BODY_FILE" "$COMBINED"; rmdir "$(dirname "$PR_BODY_FILE")" 2>/dev/null' EXIT
 
 # Step S.2: strip HTML comments and fenced code blocks from PR body.
 SCRUBBED_BODY=$(awk 'BEGIN{f=0} /^[[:space:]]*```/{f=!f; next} !f{print}' "$PR_BODY_FILE" \

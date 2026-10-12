@@ -51,8 +51,8 @@ Issue: #10017 (carries `Closes #9341` per decision-challenges ruling).
 ## Phase 3 — `rung2-archive.*` producer fix
 
 - [x] 3.1 Probe: verify a `RETURN` trap set inside a function fires when
-  the function runs under `$( )` (the :1912 call shape).
-- [x] 3.2 `tests/scripts/lib/git-data-birth-readiness-gate.sh:1440` —
+  the function runs under `$( )` (the :1913 call shape).
+- [x] 3.2 `tests/scripts/lib/git-data-birth-readiness-gate.sh:1447` —
   add self-disarming `trap … RETURN` (`trap - RETURN` inside the
   handler) with `/*`-rooted operand assertion before `rm -rf "$_tmp"`;
   cover all return paths.

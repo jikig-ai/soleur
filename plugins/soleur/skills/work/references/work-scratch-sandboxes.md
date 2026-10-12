@@ -168,6 +168,17 @@ makes a miss recoverable. Named `-t <name>.XXXXXXXX` *files* do not get this:
 a signed filename is still `unattributable` in the classifier — the signature
 must be on the DIRECTORY.
 
+Two boundary notes: (i) **portability** — the `-t soleur-run.$$.XXXXXXXX`
+template form is GNU; on BSD/macOS `-t` is a literal *prefix* and appends its
+own suffix (`soleur-run.<pid>.XXXXXXXX.<rand>`), which fails the classifier's
+name regex and reads `unattributable`. If you ever port the pattern, the
+BSD-safe form is `mktemp -d "$TMPDIR/soleur-run.$$.XXXXXXXX"`. (ii) **nested
+`.git` flips retention** — a git repo at depth ≥2 under the root (e.g.
+`git clone … "$d/sub"`) trips the nested-git conjunct and the dir is RETAINED
+by design; `git init` AT the root (depth 1, e.g. the hook-test main-CWD
+recipe in `work/SKILL.md`) stays reapable. Deliberate: the classifier refuses
+to reap under a second tree's live refs.
+
 ## Rejected shapes (do not reintroduce)
 
 - Hardlink copies (`cp -al`): hardlinks write THROUGH to the live repo, so a mutation edits the real file (#8800).

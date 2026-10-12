@@ -92,7 +92,7 @@ rather than cleaned-up-by-design.
   `#9534` CLOSED.
 - Cited artifacts verified on-disk: `scripts/lint-trap-tempfile-ownership.py`
   (with `--census`, highwater ratchet = 70), the 2026-10-11 workflow-issues
-  learning file, `tests/scripts/lib/git-data-birth-readiness-gate.sh:1440`
+  learning file, `tests/scripts/lib/git-data-birth-readiness-gate.sh:1447`
   (the sole `rung2-archive.*` producer), `scripts/soleur-tmp-purge.sh`,
   `plugins/soleur/scripts/lib/tmp-classify.sh`, `scripts/tmpfs-guard.sh`
   (Reapers 1-3 + count alarm), `scripts/lib/scratch-root.sh`
@@ -139,10 +139,10 @@ plan's invention).
   (d)/(e) non-shell allocation). `scripts/lint-trap-tempfile-ownership.highwater`
   ratchets the population — it must DROP by the number of files this fix
   removes from the population.
-- `tests/scripts/lib/git-data-birth-readiness-gate.sh:1440` —
+- `tests/scripts/lib/git-data-birth-readiness-gate.sh:1447` —
   `_git_data_rung2_hash_at_sha()`: single producer of `rung2-archive.*`;
   `_tmp` is used ONLY inside the function (archive-extract → link-sweep →
-  hash) — nothing downstream consumes it; called once, at :1911, inside
+  hash) — nothing downstream consumes it; called once, at :1913, inside
   `$( )`. Carries a `lint-trap-ownership: ok` annotation trading a bounded
   leak against an unprovable `rm -rf` operand, plus a `.soleur-owned`
   marker write for Reaper 3.
@@ -296,15 +296,15 @@ For every census row dispositioned `trap-*`:
 
 ### Phase 3 — `rung2-archive.*` producer fix
 
-`tests/scripts/lib/git-data-birth-readiness-gate.sh:1440` —
+`tests/scripts/lib/git-data-birth-readiness-gate.sh:1447` —
 `_git_data_rung2_hash_at_sha()`: the extracted tree is consumed ONLY
-inside the function (verified: single caller at :1911, no downstream
+inside the function (verified: single caller at :1913, no downstream
 path references). Replace the bounded-leak trade with an owning
 `trap … RETURN` that asserts `$_tmp` is absolute before `rm -rf` —
 covering every return path including the symlink-refusal early return.
 Before writing the fix, run a 3-line bash probe confirming a `RETURN`
 trap set inside a function executes when that function runs under
-`$( )` command substitution (the :1912 call shape) — Sharp Edge
+`$( )` command substitution (the :1913 call shape) — Sharp Edge
 #9045: trap semantics are measured, never reasoned. The trap body MUST
 self-disarm (`trap - RETURN` inside the handler): a `RETURN` trap is
 NOT scoped to the function that set it — it fires on every subsequent

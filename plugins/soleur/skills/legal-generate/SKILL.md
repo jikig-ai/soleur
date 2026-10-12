@@ -138,7 +138,7 @@ below.
    DRAFT="$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)")" || { echo "SOLEUR_LEGAL_GENERATE_HALT reason=draft-alloc-failed"
                           echo "legal-generate: cannot allocate a draft file — stopping before any draft text exists." >&2
                           exit 2; }
-   trap 'rm -rf "$(dirname "$DRAFT")"' EXIT INT TERM HUP
+   trap 'rm -f "$DRAFT"; rmdir "$(dirname "$DRAFT")" 2>/dev/null' EXIT INT TERM HUP
 
    # Write the generated draft into "$DRAFT" here — in THIS fence, before the gate below.
    # Use a QUOTED heredoc delimiter (`<<'DRAFT_EOF'`): company-context answers can contain

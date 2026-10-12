@@ -145,7 +145,7 @@ the next.
 DRAFT="$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)")" || { echo "SOLEUR_QUESTIONNAIRE_HALT reason=draft-alloc-failed"
                        echo "questionnaire-generate: cannot allocate a draft file — stopping before any draft text exists." >&2
                        exit 2; }
-trap 'rm -rf "$(dirname "$DRAFT")"' EXIT INT TERM HUP
+trap 'rm -f "$DRAFT"; rmdir "$(dirname "$DRAFT")" 2>/dev/null' EXIT INT TERM HUP
 
 # Write the assembled document into "$DRAFT" HERE, in THIS fence, before the gate below — each fenced
 # block is a separate Bash call and shell state does not persist, so a draft written in another fence

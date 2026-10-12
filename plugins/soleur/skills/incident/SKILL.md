@@ -289,7 +289,7 @@ Each halt emits a `SOLEUR_*` marker on stdout so a refusal is visible in telemet
 DRAFT="$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)")" || { echo "SOLEUR_INCIDENT_HALT reason=draft-alloc-failed"
                        echo "incident: cannot allocate a draft file — stopping before any post-mortem text exists." >&2
                        exit 2; }
-trap 'rm -rf "$(dirname "$DRAFT")"' EXIT INT TERM HUP
+trap 'rm -f "$DRAFT"; rmdir "$(dirname "$DRAFT")" 2>/dev/null' EXIT INT TERM HUP
 
 # Write the drafted post-mortem into "$DRAFT" here — in THIS fence, before the gate below.
 # Use a QUOTED heredoc delimiter (`<<'PIR_EOF'`), which is load-bearing twice over: production

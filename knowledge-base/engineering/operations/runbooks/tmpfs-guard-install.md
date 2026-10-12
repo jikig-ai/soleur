@@ -110,7 +110,7 @@ note for headless hosts. Where the systemd **user bus is unavailable**
 cannot connect at all — the fallback is a cron line or a manual cadence:
 
 ```cron
-37 4 * * * /path/to/soleur/scripts/soleur-tmp-purge.sh --apply && /path/to/soleur/scripts/soleur-tmp-purge.sh --drain
+37 4 * * * /path/to/soleur/scripts/soleur-tmp-purge.sh --apply ; /path/to/soleur/scripts/soleur-tmp-purge.sh --drain
 ```
 
 `--apply` **moves** entries into
