@@ -768,7 +768,7 @@ assert "11.d the allowlisted vars ARE visible with their values" \
   'grep -q "^PATH=" "$RENV" && grep -qx "HOME=$HOME_RW" "$RENV" && grep -qx "XDG_CACHE_HOME=$XDG" "$RENV" && grep -qx "CLAUDE_PLUGIN_ROOT=$R_MANIFEST" "$RENV" && grep -qx "TMPDIR=$SANDBOX/tmpdir" "$RENV" && grep -qx "SOLEUR_FETCH_TIMEOUT=3" "$RENV" && grep -qx "https_proxy=http://127.0.0.1:9" "$RENV" && grep -qx "NO_PROXY=localhost" "$RENV"' "env: $(tr '\n' ' ' < "$RENV")"
 assert "11.e an EMPTY allowlisted var (ALL_PROXY=) is not forwarded" '! grep -q "^ALL_PROXY=" "$RENV"'
 assert "11.f the child sees nothing outside the allowlist (SOLEUR_UPDATE_CHECK included)" \
-  '! sed -n "s/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p" "$RENV" | grep -qvxE "PATH|HOME|XDG_CACHE_HOME|CLAUDE_PLUGIN_ROOT|TMPDIR|SOLEUR_FETCH_TIMEOUT|SSL_CERT_FILE|SSL_CERT_DIR|CURL_CA_BUNDLE|GIT_SSL_CAINFO|http_proxy|https_proxy|all_proxy|no_proxy|HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY|_|PWD|SHLVL|OLDPWD"' "env: $(tr '\n' ' ' < "$RENV")"
+  'NAMES="$(sed -n "s/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p" "$RENV")"; ! grep -qvxE "PATH|HOME|XDG_CACHE_HOME|CLAUDE_PLUGIN_ROOT|TMPDIR|SOLEUR_FETCH_TIMEOUT|SSL_CERT_FILE|SSL_CERT_DIR|CURL_CA_BUNDLE|GIT_SSL_CAINFO|http_proxy|https_proxy|all_proxy|no_proxy|HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY|_|PWD|SHLVL|OLDPWD" <<<"$NAMES"' "env: $(tr '\n' ' ' < "$RENV")"
 assert "11.g SOLEUR_FETCH_TIMEOUT reaches the fetch: the git argv carries lowSpeedTime=3 (exact argv, else the stub exits 64)" \
   '[[ -e "$SENT_GIT" ]] && grep -q "http.lowSpeedTime=3 ls-remote" "$CALLS"' "calls: $(cat "$CALLS")"
 assert "11.h stdin, stdout and stderr of the detached child are all /dev/null" '[[ "$(cat "$RFDS")" == "fds: 0=null 1=null 2=null" ]]' "fds: $(cat "$RFDS")"
