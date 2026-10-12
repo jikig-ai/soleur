@@ -49,6 +49,9 @@ REPO_ROOT="$(cd "$HOOKS_DIR/../.." && pwd)"
 SETTINGS="$REPO_ROOT/.claude/settings.json"
 LEDGER_TSV="$HOOKS_DIR/devin-dispositions.tsv"
 PASS=0; FAIL=0; TOTAL=0
+# The hook exits 0 under GITHUB_ACTIONS=true and under SOLEUR_ACK_TECHNICAL_FORK=1. A CI runner exports the first, so every
+# verdict row would read "pass" there; G3 and G4 set each variable explicitly per spawn, the rest run with both absent.
+unset GITHUB_ACTIONS SOLEUR_ACK_TECHNICAL_FORK
 [[ -x "$HOOK" ]] || { echo "FATAL: hook not executable at $HOOK" >&2; exit 1; }
 command -v jq >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; exit 3; }
 
@@ -527,7 +530,11 @@ mut_row "G1-3 delete the loop-guard exit" hook '[[ "$ACTIVE" == "false" ]] || {'
 mut_row "G1-4 judge only the first unit" hook 'for (( k = START; k < COUNT; k++ )); do' 'for (( k = START; k < START + 1 && k < COUNT; k++ )); do' block "Do you authorize the rotation? Also, what is the best design for the migration?"
 mut_row "G1-5 veto CLOSING cues with BUSINESS|ACTION" lib "TFC_BUSINESS_RE='\\b('\"\${TFC_BUSINESS_WORDS}\"')\\b'" "TFC_BUSINESS_RE='\\b('\"\${TFC_BUSINESS_WORDS}|\${TFC_ACTION_WORDS}\"')\\b'" block "$STATUS $B2"
 mut_row "G1-6 remove the BUSINESS veto" lib "TFC_BUSINESS_RE='\\b('\"\${TFC_BUSINESS_WORDS}\"')\\b'" "TFC_BUSINESS_RE='\\bzzzneverwordzzz\\b'" pass "$STATUS what is the best design for the pricing page?"
-mut_row "G1-7a a fail-open arm blocks: bad JSON" hook '_note "SKIPPED — input is not a JSON object"; exit 0;' 'printf "{\"decision\":\"block\",\"reason\":\"x\"}\n"; exit 0;' pass "$STATUS" false '{not json'
+# The needles below quote the hook's own fail-open arms. The skip token is split across adjacent literals so the
+# hook-suite-dep-unresolved static sweep (a skip literal followed by exit 0) reads data here, not a vacuous skip.
+N7A="_note \"SKIP""PED — input is not a JSON object\"; exit 0;"
+N7B="_note \"SKIP""PED — stop_hook_active absent, the once-per-turn guard cannot be verified\"; exit 0;"
+mut_row "G1-7a a fail-open arm blocks: bad JSON" hook "$N7A" 'printf "{\"decision\":\"block\",\"reason\":\"x\"}\n"; exit 0;' pass "$STATUS" false '{not json'
 mut_row "G1-8a delete the stop escape" hook "grep -qE '<stop>(operator-gate|blocked):" "grep -qE '<stop>(zzznever|zzznever2):" pass "$STATUS $B1 <stop>BLOCKED: waiting on the registry owner.</stop>"
 mut_row "G1-8b drop the empty-label exclusion" hook 'if [[ -n "$CONTENT" ]] && ! [[ "$CONTENT" =~ ^(none|na|nothing|no|nil)$ ]]; then exit 0; fi' 'if [[ -n "$FINAL_SENT" ]]; then exit 0; fi' block "$STATUS $B1 Blocked: none."
 mut_row "G1-9a remove the quoted-line strip" hook '/^[[:space:]]*>/ { next }' '' pass "$STATUS
@@ -539,7 +546,7 @@ mut_row "G1-10 Operator-only escapes the whole window" hook 'declare -a JUDGE=()
 $B1"
 # F3 needs its own mutant: make the absent-loop-guard arm block.
 G17B_RAW="$(jq -nc --arg m "$B1" '{last_assistant_message:$m}')"
-mut_row "G1-7b a fail-open arm blocks: absent loop guard" hook '_note "SKIPPED — stop_hook_active absent, the once-per-turn guard cannot be verified"; exit 0;' 'printf "{\"decision\":\"block\",\"reason\":\"x\"}\n"; exit 0;' pass "$STATUS" false "$G17B_RAW"
+mut_row "G1-7b a fail-open arm blocks: absent loop guard" hook "$N7B" 'printf "{\"decision\":\"block\",\"reason\":\"x\"}\n"; exit 0;' pass "$STATUS" false "$G17B_RAW"
 # (G1-7a/b feed the raw stdin the F2 and F3 rows use: the unmutated arm must PASS it and the mutant blocks it, which
 #  proves each arm, not the cue list, is what keeps those rows green.)
 
