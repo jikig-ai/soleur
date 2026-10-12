@@ -13,6 +13,22 @@ brand_survival_threshold: aggregate pattern
 
 # chore(infra): retire the superseded 8296 probe and route the probe-heartbeat Sentry monitor (Stage 3b of #9703)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-12
+**Method:** targeted gate passes (4.6 user-brand, 4.7 observability, 4.8 PAT, 4.10 encryption, 4.11 guard, 4.12 scope) plus repo verification greps; the fan-out agent pass was not run because the change is a mechanical retire-and-refresh whose facts are all one grep away.
+
+### Key Improvements
+1. Phase 4.7 caught that the first `discoverability_test` declared a whole suite (over Check 10's 15 s cap); replaced with a one-line file probe that prints the literal `scheduled_inngest_probe_heartbeat.id` once routing lands (it prints nothing today, which is the red state).
+2. Phase 4.12 caught the Scope Check lacking Ask Mapping, Provenance and Split Assessment; rewritten with verbatim asks and justified `inferred` rows.
+3. Verified `monitor_ids` sort position (`scheduled_inngest_health` < `scheduled_inngest_probe_heartbeat` < `scheduled_integration_suites`), the absence of any test pinning the ledger string or the unrouted-map size (`git grep` over `scripts/`, `plugins/soleur/test`, `apps/web-platform/test` finds only audit-test fixtures), and that `ADR-117-executable-heartbeat-arming.md` carries the 2026-10-11 amendment the plan cites.
+
+### New Considerations Discovered
+- `.github/workflows/apply-web-platform-infra.yml` triggers on `apps/web-platform/infra/**`, which also covers the `sentry/` subdirectory: the comment-only edits fire the parent push-apply, whose plan must read "No changes"; the Sentry routing edit additionally fires `apply-sentry-infra.yml`.
+- `archive-kb.sh` unions branch-diff discovery even with an explicit slug, so it would archive this branch's own live plan; manual `git mv` is prescribed.
+- Closing #9703 stays an operator-authorized post-merge step; no PR text may contain a closing keyword.
+
+
 Draft PR: #10154. Reference form is `Ref #9703` everywhere (PR title, body, every commit). No closing keyword
 may appear in any of them, and `closingIssuesReferences` is asserted to be `[]` after every body edit.
 
@@ -95,17 +111,35 @@ siblings rebase over a smaller delta. Never `update-branch` a queued PR.
 
 ## Scope Check
 
-| Ask | Mapped to | Provenance |
-|---|---|---|
-| 1 delete the 8296 probe and its registrations | Phase 2 | brief |
-| 2 remove the follow-through directive from #9703 | Phase 1 | brief |
-| 3 route the Sentry monitor | Phase 3 | brief |
-| 4 refresh stale comments | Phase 4 | brief (with the content-anchor widening above) |
-| 5 ledger edit | Phase 5 | brief |
-| 6 archive Stage 3a plan and spec | Phase 6 | brief |
-| `model.c4` + `model.likec4.json`, `inngest-server.md` sentence, followthrough-convention.md example | Phase 4 | parent plan Phase 7 (3b content) and the same stale-reference class; justified, not inferred scope creep |
+### Ask Mapping
 
-No split needed: one PR, all edits are retire-and-refresh of one probe.
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "delete the superseded 8296 probe: scripts/followthroughs/inngest-luks-property-8296*, its test, the run_suite line in scripts/test-all.sh, the two *.tsv rows, test-affected-kb-consumers.baseline.txt rows, the 5a pointer in the 6894 runbook, and the MUST_FIND entry" | Phase 2; Files to Delete; Files to Edit (registrations, 6894 runbook) | mapped |
+| 2 | "remove the follow-through directive from #9703 (issue edit, ask before the production write if it is not a plain issue-body edit)" | Phase 1 | mapped |
+| 3 | "route the Sentry monitor scheduled_inngest_probe_heartbeat (apps/web-platform/infra/sentry/)" | Phase 3 | mapped |
+| 4 | "refresh stale comments at betterstack-logs-alerts.tf:277, cron-monitors.tf:1066, scripts/followthroughs/inngest-luks-property-8296.sh:63" | Phase 4 (third goes away with deletion) | mapped |
+| 5 | "edit scripts/encryption-posture-ledger.json as the plan's Stage 3b list says" | Phase 5 | mapped |
+| 6 | "also archive the Stage 3a plan and spec files" | Phase 6 | mapped |
+| 7 | "Plan the edits to minimize conflict and note it in the plan" | Research Insights overlap table; single-line ledger edit | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| Phase 0 read-only gate re-run | "Gate verified read-only 2026-10-12T19:05Z" (parent plan Phase 7: "3b gate (mechanical, read-only; all must hold before any deletion)") | asked |
+| Residual rows in the two `*.tsv.n` strays | "the two *.tsv rows" | inferred - same registration class; leaving them fails the residual-zero grep; CTO F1 |
+| `model.c4` clause + `model.likec4.json` regeneration | parent plan Phase 7: "edit the prose references (... `model.c4` + regenerate ...)" | asked (via the named Phase 7 list) |
+| `inngest-server.md` sentence, followthrough-convention.md example | parent plan Phase 7: "edit the prose references"; "refresh stale comments" | inferred - same stale-reference class, one sentence each; CTO F4 |
+| `cron-monitor-alerts.tf` label move + `alert-reference.json` regeneration | "route the Sentry monitor scheduled_inngest_probe_heartbeat" | asked |
+| Follow-up issue for the stray `.tsv.n` files | "Constraints: ... " (deferral tracking rule) | inferred - a deferral without an issue is invisible; CTO F1 |
+
+### Split Assessment
+
+- Subsystems touched: 4 roots - `scripts/`, `apps/web-platform/infra/` (+ `sentry/`), `knowledge-base/`, and the generated `model.likec4.json` under `knowledge-base/`; grouped by deploy surface that is 3 (scripts, infra, knowledge-base).
+- Planned files: 22 | Estimated changed lines: ~250 (two deletions of ~600 lines excluded from the estimate as pure removals)
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR - the pieces are mutually tripwired (the MUST_FIND entry reds if the script disappears alone; the totality checks red on an orphaned registration), so a split would land red.
 
 ## Domain Review
 
@@ -277,15 +311,15 @@ logs:
   where: GitHub Actions run logs (verdict= line) and Better Stack logtail rows SOLEUR_INNGEST_SERVER_PROBE
   retention: GitHub 90 days; Better Stack per team plan
 discoverability_test:
-  command: bash scripts/lib/inngest-probe-row.test.sh
-  expected_output: PASS
+  command: grep -o "sentry_cron_monitor.scheduled_inngest_probe_heartbeat.id" apps/web-platform/infra/sentry/cron-monitor-alerts.tf
+  expected_output: scheduled_inngest_probe_heartbeat.id
 ```
 
-The `discoverability_test` is a local, ssh-free, sub-15-second script (the suite is the MUST_FIND floor this PR edits, so it must stay green); its final lines print `PASS`-prefixed assertions. If the work phase measures it above the 15 s cap, replace it with `bash scripts/inngest-probe-heartbeat-feeder.sh --help`-class smoke only after verifying the flag exists (do not invent flags).
+The `discoverability_test` is a local, ssh-free, sub-second file probe that proves the routing half (P2) is declared; it does not claim the live heartbeat state. The live state is read by the Phase 0 gate (Better Stack read-only token inside `doppler run`, never printed) and by the nightly reconcile, which is why the gate and not this probe decides whether the deletion proceeds. The suite `scripts/lib/inngest-probe-row.test.sh` is run in Phase 7 as a test, not declared as the discoverability probe (a suite cannot finish inside preflight Check 10's 15 s cap).
 
 ## Encryption Posture
 
-No new store and no new connection. The ledger edit rewrites one `live_verification` string and keeps it `unavailable:`; the encryption claim and `does_not_defend` text are unchanged. Gate skipped by its own rule (no persistent store introduced); the lint is nonetheless run (Phase 5).
+No new store and no new connection. The ledger edit rewrites one `live_verification` string and keeps it `unavailable:`; the encryption claim and `does_not_defend` text are unchanged. The `.tf` trigger matched only comment and alert-routing edits: no persistent store and no cross-component connection is introduced, so there is no at_rest or in_transit entry to declare (Phase 2.11 skip rule). The lint is nonetheless run (Phase 5).
 
 ## Architecture Decision (ADR/C4)
 
