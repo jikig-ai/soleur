@@ -299,9 +299,17 @@ jobs:
         run: |
           set -uo pipefail
           # MU1 AC-2 engages here: dev_scheduled carries MU1_FIXTURE_* +
-          # GITHUB_APP_* — the test mints a live installation token and
-          # clones the fixture repo into a mkdtemp root. Intended: verifies
-          # the signup→clone path nightly.
+          # GITHUB_APP_* (the least-privilege `soleur-ci-fixture` App —
+          # contents:read on jikig-ai/mu1-fixture only, #9995). The test
+          # mints a live installation token and clones the fixture repo
+          # into a mkdtemp root. Intended: verifies the signup→clone path
+          # nightly.
+          # Fail fast on a dead/mismatched credential — the in-leg probe
+          # mints a JWT under the SAME doppler env the test reads, so a
+          # revoked key reds here with a named error instead of an opaque
+          # 401 inside vitest (the original #9995 failure shape).
+          doppler run -p soleur -c dev_scheduled -- \
+            bash "$GITHUB_WORKSPACE/scripts/probe-github-app-mint.sh"
           doppler run -p soleur -c dev_scheduled -- \
             env MU1_INTEGRATION=1 \
             npm run test:ci -- \
