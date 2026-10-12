@@ -31,6 +31,9 @@
 #     EVERY checkout state (soleur:schedule merges from a main checkout).
 #   - proven-foreign repo pointer (-R/--repo/GH_REPO/GH_HOST resolving to
 #     a DIFFERENT repository) — the merge is not ours
+#   - HEAD-path merges only: an in-command cd into a non-repository
+#     directory — gh fails there; numbered/sha/-R merges still resolve
+#     and deny instead
 #   - SOLEUR_SKIP_KB_ARCHIVE_GATE=1 (named in every deny)
 #   - `gh pr merge --help`/`-h` merges nothing (every invocation carries
 #     --help → exit 0; a real merge alongside one still gates)
@@ -356,14 +359,15 @@ _REPO_SAME=0
 if grep -qE '(^|[[:space:]])(--repo([[:space:]=]|$)|-[A-Za-z]*R)' <<<"$_scan_args" \
    || grep -qE '(^|[^A-Za-z0-9_])GH_(REPO|HOST)=' <<<"$SCAN_NOCOMMENT"; then
   _REPO_PTR=1
-  # Subshell-rebind $CMD/$SCAN so the pinned helper's operand gather reads
-  # scan-side text (quoted/comment pointers excluded) — its body stays
-  # byte-equal to pre-merge-rebase.sh's for the T43 parity pin. The rebind
-  # covers CMD and SCAN, the two ambient vars the pinned body reads; if
-  # the source helper ever gathers from a third ambient variable, the
-  # parity pin will re-copy the body and this rebind MUST be extended to
-  # match or the covered vars silently diverge.
-  ( CMD="$SCAN_NOCOMMENT"; SCAN="$SCAN_NOCOMMENT"; _repo_pointers_same_repo ) && _REPO_SAME=1
+  # Subshell-rebind the ambient vars the pinned body gathers from —
+  # $CMD/$SCAN (env operands) AND $_cmd_args (raw-side flag operands,
+  # which carries quoted `-R` mentions: `gh pr merge -R jikig-ai/soleur 5
+  # --body "-R other/repo"` would otherwise read as a mixed pointer set
+  # and exit 0 on a same-repo merge). Its body stays byte-equal to
+  # pre-merge-rebase.sh's for the T43 parity pin; if the source helper
+  # ever gathers from a fourth ambient variable, the parity pin re-copies
+  # the body and this rebind MUST be extended to match.
+  ( CMD="$SCAN_NOCOMMENT"; SCAN="$SCAN_NOCOMMENT"; _cmd_args=""; _repo_pointers_same_repo ) && _REPO_SAME=1
 fi
 if [[ "$_REPO_SAME" == "1" ]]; then
   _scan_args=$(_strip_repo_flags <<<"$_scan_args")
@@ -416,6 +420,19 @@ fi
 if [[ -z "$MERGE_TARGET_WHY" ]] \
    && grep -qE 'xargs([[:space:]]+[^[:space:];&|()]+)*[[:space:]]+gh([[:space:]]+[^[:space:];&|()]+)*[[:space:]]+pr[[:space:]]+merge' <<<"$SCAN_NOCOMMENT"; then
   MERGE_TARGET_WHY="xargs supplies the merge's operand via stdin; spell the PR number on the command line ('gh pr merge <N>')"
+fi
+
+# Operand-loss deny: a `$`/`~`-leading TOKEN in the raw invocation text
+# is an operand the resolver cannot prove (`gh pr merge $PR_NUM` reads
+# flag-only after the `$`-exclusion and would miscensus the HEAD path).
+# Leading-token only — a `>$f` redirect target or `--subject=$(date)`
+# inside a flag value does not trip it; `$(…)` still surfaces as its own
+# invocation via the `(` boundary. Checked on the RAW match text — the
+# residue class itself drops the `$`.
+if [[ -z "$MERGE_TARGET_WHY" ]] \
+   && grep -oE "${_MERGE_BOUNDARY}[[:space:]]*${_MERGE_PREFIX}gh${_GH_GFLAGS}[[:space:]]+pr[[:space:]]+merge([[:space:]][^;&|]*)?" <<<"$SCAN_NOCOMMENT" \
+        | grep -qE '[[:space:]][$~]'; then
+  MERGE_TARGET_WHY="the merge operand is a variable or home path the hook cannot resolve; spell the PR number literally ('gh pr merge <N>')"
 fi
 
 # Multi-invocation deny: one census object per command. A second `gh pr
@@ -520,6 +537,13 @@ if [[ -z "$MERGE_TARGET_WHY" ]]; then
     [[ -n "$_merge_off" && "$_off" -ge "$_merge_off" ]] && continue
     _kw=$(printf '%s' "$_seg" | grep -oE '(cd|pushd|popd)' | head -1 || true)
     if [[ "$_kw" == "popd" ]]; then _cd_bad=1; break; fi
+    # Subshell scope: `(cd x; make) && gh pr merge` — the cd is inside a
+    # paren group that closes before the merge, so it never steered the
+    # parent env; a `(cd x; gh pr merge)` keeps its group open THROUGH
+    # the merge (no `)` between them) and correctly rebinds.
+    if [[ -n "$_merge_off" && "${SCAN_NOCOMMENT:$_off:$((_merge_off - _off))}" == *')'* ]]; then
+      _cd_bad=1; break
+    fi
     _op=$(printf '%s' "$_seg" | awk '{print $NF}')
     if [[ "$_op" == "cd" || "$_op" == "pushd" || "$_op" == "-" || "$_op" == -* \
        || "$_op" == *'$'* || "$_op" == *'~'* ]]; then
@@ -535,9 +559,12 @@ if [[ -z "$MERGE_TARGET_WHY" ]]; then
       if [[ -z "$_cd_real" || ! -d "$_cd_real" ]]; then
         MERGE_TARGET_WHY="the command cd's into a directory the hook cannot resolve"
       elif ! git -C "$_cd_real" rev-parse --git-dir >/dev/null 2>&1; then
-        # cd into a non-repo dir: gh pr merge fails there — nothing for
-        # this gate to measure (same contract as a non-git .cwd).
-        exit 0
+        # cd into a non-repo dir: a HEAD-path merge fails there — nothing
+        # to measure (same contract as a non-git .cwd). But a NUMBERED or
+        # sha merge — and any -R/env-resolved one — still resolves a
+        # remote PR from a non-repo cwd, so this exit is head-path-only.
+        [[ "$TARGET_KIND" == "head" ]] && exit 0
+        MERGE_TARGET_WHY="the command cd's into a non-repository directory while naming a merge target"
       else
         _dir_origin=$(git -C "$_cd_real" remote get-url origin 2>/dev/null || true)
         if [[ -n "$_dir_origin" && "$_dir_origin" != "$_origin" ]]; then

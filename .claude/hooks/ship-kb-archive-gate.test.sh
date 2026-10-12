@@ -1055,6 +1055,62 @@ t72_cdk_word_pass() {
   rm -rf "$tmp"
 }
 
+t73_var_operand_deny() {
+  # `gh pr merge $PR_NUM` — the operand is a variable; excluding `$` from
+  # the residue makes it read flag-only, so the raw-match detect denies
+  # rather than miscensusing the session branch.
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_kb_branch "$tmp" "feat-varop" clean)
+  local out exit_code=0
+  out=$(run_hook "$incidents" "$(make_payload "$work" 'gh pr merge $PR_NUM')") || exit_code=$?
+  assert_deny "T73 variable merge operand" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$tmp"
+}
+
+t74_nonrepo_cd_numbered_deny() {
+  # `cd /tmp && gh pr merge -R jikig-ai/soleur 5` — a numbered merge
+  # resolves the remote PR even from a non-repo cwd; the non-repo exit
+  # is head-path-only, so this denies.
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_kb_branch "$tmp" "feat-nrcd" clean)
+  git -C "$work" remote set-url origin "git@github.com:jikig-ai/soleur.git"
+  git -C "$work" config url."$origin".insteadOf "git@github.com:jikig-ai/soleur.git"
+  local out exit_code=0
+  out=$(run_hook "$incidents" "$(make_payload "$work" "cd /tmp && gh pr merge -R jikig-ai/soleur 5")") || exit_code=$?
+  assert_deny "T74 non-repo cd + numbered merge" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$tmp"
+}
+
+t75_subshell_scoped_cd_deny() {
+  # `(cd /foreign; make) && gh pr merge` — the cd lives and dies in the
+  # subshell, so it cannot steer the merge; the `)` between it and the
+  # merge marks the scope unprovable → deny.
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_kb_branch "$tmp" "feat-scd" specdir)
+  local other="$tmp/other"
+  mkdir -p "$other"
+  local out exit_code=0
+  out=$(run_hook "$incidents" "$(make_payload "$work" "(cd $other; make) && gh pr merge --squash --auto")") || exit_code=$?
+  assert_deny "T75 subshell-scoped cd" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$tmp"
+}
+
+t76_quoted_R_body_still_gates() {
+  # `gh pr merge -R jikig-ai/soleur 76 --body "-R other/repo"` — the
+  # quoted foreign pointer is message text, not a pointer; without the
+  # `$_cmd_args` rebind it mixes into the same-repo proof and exits 0
+  # foreign. The census must deny the leaky head instead.
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_kb_branch "$tmp" "feat-bfp" specdir)
+  git -C "$work" remote set-url origin "git@github.com:jikig-ai/soleur.git"
+  git -C "$work" config url."$origin".insteadOf "git@github.com:jikig-ai/soleur.git"
+  git -C "$work" push -q origin feat-bfp:refs/pull/76/head
+  local out exit_code=0
+  out=$(run_hook "$incidents" "$(make_payload "$work" 'gh pr merge -R jikig-ai/soleur 76 --body "-R other/repo"')") || exit_code=$?
+  assert_deny "T76 quoted foreign -R in --body" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$tmp"
+}
+
 # --- registration + parity (integration) -----------------------------------
 
 t40_settings_registration() {
@@ -1195,6 +1251,10 @@ t69_popd_deny
 t70_xargs_deny
 t71_nested_subst_deny
 t72_cdk_word_pass
+t73_var_operand_deny
+t74_nonrepo_cd_numbered_deny
+t75_subshell_scoped_cd_deny
+t76_quoted_R_body_still_gates
 
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
@@ -1202,10 +1262,10 @@ echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 # Anti-vacuity floor: exact case floor, enforced OUTSIDE the verdict
 # machinery (a neutered assert cannot disarm it — guard-vacuity-floor's
 # mutant contract). Threshold is hand-maintained with the case list:
-# 80 assertions across 70 case invocations — 70 case verdicts + 4
+# 84 assertions across 74 case invocations — 74 case verdicts + 4
 # assert_fixture_has preconditions (T01/T02/T04/T20) + 6 second-verdict
 # arms (T01b/T09b/T15b/T18b/T35b/T48b).
-MIN_ASSERTIONS=80
+MIN_ASSERTIONS=84
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] vacuity floor: only %d assertions ran (floor %d) — the suite did not execute\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   exit 1
