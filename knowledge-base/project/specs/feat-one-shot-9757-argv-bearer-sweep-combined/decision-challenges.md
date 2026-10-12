@@ -40,6 +40,14 @@ Headless plan run: these are plan-review findings that argue the operator's stat
 - **Plan response:** adopted in reduced form: the existing opt-in `COMMUNITY_ARGV_DOCKER` row gains a `bash:3.2` run; no new always-on gate. This narrows the lead's literal ask ("a gate") to an opt-in gate.
 - **Ruling needed from:** operator, optional.
 
+## C6. Stage the registry template (B1, B2) as its own PR
+
+- **Operator direction:** one combined PR including the cloud-init-registry.yml htpasswd conversion.
+- **Finding (architecture review, verified):** `registry-host-replace-dispatch.yml` has a push trigger on `cloud-init-registry.yml` with no reviewer gate and no confirm token, so merging B1/B2 replaces the production registry host (the sole pull path) unattended, and the converted `htpasswd -Bin` boot block runs for the first time at that boot. The first plan draft (and the CTO assessment) said the edit had no live effect; both were wrong.
+- **Plan response:** B1/B2 are the last, single, peel-before-merge commit (with their suites, battery rows and ADR text); the plan recommends shipping them as a separate PR right after this one so the replace can be timed and watched, and retires the first-execution risk offline (boot block rendered from the real YAML and run through `bash -s` on `ubuntu:24.04` + `apache2-utils`, failure arms included).
+- **Cost of each choice:** one PR = one merge that also replaces the registry, with an unrelated read-only preflight that can refuse (then a hand re-fire); two PRs = a second review cycle and a second merge notice.
+- **Ruling needed from:** operator, before the merge-approval step. This is the decision the brief asked to have surfaced before pushing code.
+
 ## Not-yet-specified candidates (roadmap fog, not issues)
 
 None.
