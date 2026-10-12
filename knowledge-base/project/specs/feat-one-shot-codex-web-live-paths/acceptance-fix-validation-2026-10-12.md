@@ -82,6 +82,16 @@ or C.9 rerun was performed by either sync. Dockerfile, historical migrations,
 lockfiles and the canonical migration runner are unchanged across these main
 syncs; application changes still make the older image source-stale.
 
+The further egress-only main sync through
+`67ebbbeb4e46c04280125cc0d3d94358daecbe91` changes two infrastructure shell
+files. Web server/lib/component/test/config and locked-dependency inputs remain
+unchanged. Shell syntax, credential-refusal scan (two files, zero findings) and
+69/69 static egress drift checks passed, without contacting Docker or running the
+bootstrap. The preceding pushed head `d6deb11b` passed the CI Dockerfile builder
+and cli-tools stages, including Next TypeScript; its draft test aggregate confirms
+skipped Web/scripts legs. CI build-stage success is distinct from full production
+image and runtime admission. It retains the recorded dependency/tracing warnings.
+
 ## Gates that remain incomplete
 
 Required SAST is **VOID**: 568 rules loaded, zero files scanned. Semgrep 1.180.0

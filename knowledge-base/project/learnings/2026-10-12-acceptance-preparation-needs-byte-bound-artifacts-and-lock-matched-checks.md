@@ -50,3 +50,8 @@ older history. Before staging, measured `sha256sum` replaced that draft value,
 and unique end-of-file context restored chronological append order. A failed
 patch context was corrected by reading the actual final lines. Copy complete
 digests from the instrument; never reconstruct their omitted suffixes.
+
+The allocator is project-owned `scripts/soleur-sandbox.sh`; the installed plugin
+has no script at that guessed path. Discover the executable in the specified
+worktree. Generated unified patches also need conversion to `apply_patch`'s
+unnumbered hunk syntax. Neither lookup nor patch failure constitutes validation.

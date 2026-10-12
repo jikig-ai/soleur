@@ -1269,3 +1269,25 @@
 - The ensuing push requires its own exact-head CI and final-description watches.
   These records do not release current-source recovery, authenticated screenshots,
   routine qualification, permitted Web matrices or review/promotion.
+
+## Continuation update — 2026-10-12 egress-bootstrap sync
+
+- Exact pushed head `d6deb11b6db0b4d1f76fb0a064663346564f645d` completed
+  [CI 38227615220](https://github.com/jikig-ai/soleur/actions/runs/38227615220)
+  with successful Dockerfile builder/cli-tools stages, including Next TypeScript
+  checking. The required `test` aggregate is red; its executed log confirms
+  draft-skipped Web and both scripts legs. Whole-head/description watches were
+  armed; their ensuing supersession is not a final-source qualification verdict.
+  Build logs retain SDK/tracing, dependency/action deprecation and pepper notices,
+  cache-only output warnings and npm's 17-vulnerability summary. The push's
+  24 default-branch Dependabot alerts were verified live (one critical, ten high,
+  ten medium, three low); existing alerts remain tracked, with no security clearance.
+- Main then advanced to `67ebbbeb4e46c04280125cc0d3d94358daecbe91` and was
+  merged cleanly at `5dcddcaf205c1a60bccdbb17cf97728fdae80511`. Its two-path
+  change guards false-evaluating shell test/AND lists and failed Docker metadata
+  reads in the egress bootstrap. Shell syntax, changed-file credential refusal
+  (two files, zero findings) and the static egress drift suite (69/69) passed.
+  The suite contacts no Docker daemon. Web server/lib/component/test/config and
+  lock inputs are unchanged; no deployment, bootstrap or C.9 runtime ran.
+- A new push and final-description watch must cover this merged source. Every
+  recovery/auth/provider/routine/review/promotion blocker above remains intact.
