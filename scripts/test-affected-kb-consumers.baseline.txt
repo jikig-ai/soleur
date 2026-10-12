@@ -54,8 +54,12 @@ plugins/soleur/skills/incident/test/redact-sentinel.test.sh	knowledge-base/engin
 plugins/soleur/test/_base-notice-frontmatter.test.sh	knowledge-base/engineering/policies/content-vendoring.md
 plugins/soleur/test/admin-merge-ready-wiring.test.sh	knowledge-base/project/constitution.md
 plugins/soleur/test/brand-workshop-pen-commit-after-save.test.sh	knowledge-base/product/design
+plugins/soleur/test/ci-classify-step-exec.test.sh	knowledge-base
 plugins/soleur/test/ci-e2e-skip-anchors.test.sh	knowledge-base
+plugins/soleur/test/ci-e2e-skip-anchors.test.sh	knowledge-base/project/learnings
 plugins/soleur/test/ci-e2e-skip-anchors.test.sh	knowledge-base/project/specs
+plugins/soleur/test/ci-shard-totality-skip.test.sh	knowledge-base
+plugins/soleur/test/ci-shard-totality-skip.test.sh	knowledge-base/project/learnings
 plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh	knowledge-base/project/plans
 plugins/soleur/test/compaction-state-hook.test.sh	knowledge-base/project/plans
 plugins/soleur/test/compaction-state-hook.test.sh	knowledge-base/project/specs
@@ -129,7 +133,6 @@ scripts/guard-vacuity-floor	knowledge-base
 scripts/guard-vacuity-floor	knowledge-base/engineering/architecture/diagrams/model.c4
 scripts/guard-vacuity-floor	knowledge-base/engineering/operations/runbooks/cloudflare-pages-cutover.md
 scripts/guard-vacuity-floor	knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md
-scripts/guard-vacuity-floor	knowledge-base/engineering/operations/runbooks/web-host-reboot.md
 scripts/guard-vacuity-floor	knowledge-base/project/learnings/2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md
 scripts/guard-vacuity-floor	knowledge-base/project/specs/archive
 scripts/inngest-luks-property-8296	knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md

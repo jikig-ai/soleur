@@ -314,6 +314,9 @@ statements above (the R3 couplings and the `workspaces_luks` guard text) are his
 running host: web-2's live volume is converted by the single-use rebirth tracked as #9372, and the anti-pooling
 coupling (`WORKSPACES_LUKS_CUTOVER_AT`) stays the fence until a flip orchestrator consumes the marker (#9358).
 
+> **Superseded 2026-10-12 (#9372), in part:** the single-use rebirth ran on 2026-10-06 and its workflow is retired (ADR-263
+> addendum 2026-10-12); the anti-pooling fence is unchanged.
+
 ## Addendum — 2026-10-01 (#6604 step 7, PR B #9348): §Consequences "sole-copy protection" corrected
 
 Status unchanged. This corrects two claims in the §Consequences **Positive** bullet, "Sole-copy

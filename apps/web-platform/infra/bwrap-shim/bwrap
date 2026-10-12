@@ -48,12 +48,19 @@
 #     --bind-fd/--ro-bind-fd with dest /proc), in the outer argv AND inside
 #     every consumed --args payload (re-emit is selective, never verbatim).
 #     The vendored denyRead `--tmpfs /proc` then lands as the realized mask
-#     — an empty, mountless /proc, stronger than a pidns-scoped procfs and
-#     impossible to defeat with mount ordering OR by uncovering (a cover-
-#     mounted bind remains a live host-procfs mount object beneath the
-#     tmpfs; an inner process holding CAP_SYS_ADMIN in its mount namespace
-#     could umount the cover — dropping the token removes the mount object
-#     entirely). When the merged stream
+#     — an empty /proc tmpfs (the container's procfs sits beneath it, see
+#     below), stronger than a pidns-scoped procfs and
+#     impossible to defeat with mount ordering. Dropping (not covering) makes
+#     the stream carry NO argv-requested procfs mount at /proc, which is the
+#     property this shim states and the docker suite's recorder arm asserts.
+#     It is NOT a claim that no procfs object exists beneath the tmpfs: the
+#     vendored argv's recursive --ro-bind / / carries the container's procfs
+#     there after a drop as well (measured, #10065 measurements.md M3), and a
+#     drop and a cover differ only for a process holding CAP_SYS_ADMIN over the
+#     mount namespace; the barrier against that is INFERRED to be the vendor's
+#     --cap-drop ALL on an unelevated bwrap (every umount2 is EPERM in every
+#     arm; the attribution is not measured; the docker run tuples must also keep
+#     their posture, see ADR-075 addendum 2026-10-12). When the merged stream
 #     carries no `--tmpfs /proc` of its own, the shim appends one at the
 #     last setup position so the dropped exposure is never replaced by the
 #     root bind's procfs.

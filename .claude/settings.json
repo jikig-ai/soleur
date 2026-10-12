@@ -534,6 +534,17 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pre-closing-technical-fork-gate.sh",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }

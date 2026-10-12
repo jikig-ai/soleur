@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1194
-# generated-at=2026-10-11T18:08:59Z
+# generated-at=2026-10-12T08:32:10Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -43,6 +43,7 @@
 .claude/hooks/pkill-self-match-guard.test.sh	5
 .claude/hooks/post-dispatch-watch-gate.test.sh	3
 .claude/hooks/pre-ask-technical-fork-gate.test.sh	4
+.claude/hooks/pre-closing-technical-fork-gate.test.sh	5
 .claude/hooks/pre-merge-auto-close-scan.test.sh	6
 .claude/hooks/pre-merge-rebase-headless.test.sh	4
 .claude/hooks/pre-merge-rebase-parity.test.sh	5
@@ -64,6 +65,8 @@
 .claude/hooks/stub-argv-fidelity.test.sh	1
 apps/cla-evidence/scripts/_cf-admin-token.test.sh	8
 apps/cla-evidence/scripts/_r2-endpoint.test.sh	8
+apps/cla-evidence/scripts/_r2-sigv4-curl.test.sh	1
+apps/cla-evidence/scripts/bootstrap-r2-probe.test.sh	1
 apps/cla-evidence/scripts/gdpr-override.test.sh	2
 apps/cla-evidence/scripts/inspect.test.sh	6
 apps/cla-evidence/scripts/sentinel-pr.test.sh	5
@@ -224,6 +227,7 @@ plugins/soleur/test/operator-script.test.sh	6
 plugins/soleur/test/operator-stage-approval-hook.test.sh	2
 plugins/soleur/test/pencil-adapter-auth-hard-fail.test.sh	7
 plugins/soleur/test/pencil-setup-skill-cli-form.test.sh	6
+plugins/soleur/test/plugin-version.test.sh	8
 plugins/soleur/test/pr-fanout-ledger.test.sh	4
 plugins/soleur/test/preflight-check10-suite-integrity.test.sh	7
 plugins/soleur/test/proc.test.sh	2
@@ -253,6 +257,7 @@ plugins/soleur/test/ship-followthrough-directive.test.sh	7
 plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh	6
 plugins/soleur/test/ship-pir-action-items-gate.test.sh	8
 plugins/soleur/test/sync-pr-behind.test.sh	3
+plugins/soleur/test/technical-ruling-gate.test.sh	1
 plugins/soleur/test/terraform-drift-sentry-leg.test.sh	7
 plugins/soleur/test/terraform-drift-step-order.test.sh	6
 plugins/soleur/test/test-pyramid-fixtures.test.sh	3
@@ -265,6 +270,7 @@ plugins/soleur/test/vendor-bundle-coverage.test.sh	5
 plugins/soleur/test/vendor-drift-classify.test.sh	3
 plugins/soleur/test/vendor-drift-workflow.test.sh	8
 plugins/soleur/test/vendor-pin-integrity.test.sh	4
+plugins/soleur/test/version-banner-hook.test.sh	6
 plugins/soleur/test/web-host-escrow-diagnose-workflow.test.sh	5
 plugins/soleur/test/workflow-run-deploy-invariants.test.sh	3
 plugins/soleur/test/worktree-manager-atomic-config.test.sh	7
@@ -501,12 +507,7 @@ scripts/watchdog-arm-soak-9237	5
 scripts/watchdog-debounce-soak-9686	3
 scripts/web-fresh-boot-zot-8651	7
 scripts/web-host-escrow-preflight	3
-scripts/web-host-reboot	1
 scripts/web2-luks-live-6931	4
-scripts/web2-rebirth	4
-scripts/web2-rebirth-emptiness	4
-scripts/web2-rebirth-never-pooled	4
-scripts/web2-rebirth-recovery-check	6
 scripts/workspaces-plaintext-hold-9348	2
 scripts/zot-fill-rate-7341	6
 scripts/zot-last-err-redact-7500	7
@@ -599,9 +600,7 @@ tests/scripts/vector-redeliver-wiring	3
 tests/scripts/vendor-pin-gate-verdict	4
 tests/scripts/weakness-miner	2
 tests/scripts/web-host-birth-gate	6
-tests/scripts/web-host-rebirth-gate	6
 tests/scripts/web-host-replace-gate	2
-tests/scripts/web2-rebirth-classify	7
 tests/scripts/workspaces-luks-cutover-gate	7
 tests/scripts/workspaces-luks-recut-gate	5
 tests/scripts/write-known-hosts	3

@@ -563,26 +563,6 @@ AFFECTED_SCRIPTS_WEB2_LUKS_LIVE_6931_PATHS=(
   "scripts/betterstack-query.sh"
   "scripts/lib/test-affected-paths.sh"
 )
-# #9372: the rebirth recovery-check suite drives shims against the script and asserts no secret file is left in its own temp
-# directory; its verdict is scoped to the script, not to corpus drift.
-AFFECTED_SCRIPTS_WEB2_REBIRTH_RECOVERY_CHECK_PATHS=(
-  "scripts/web2-rebirth-recovery-check.sh"
-  "scripts/web2-rebirth-recovery-check.test.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
-# #9372: the web-host reboot suite walks the tracked tree under scripts/, .github/ and apps/ (its census of reboot-request call sites, so a
-# third such site anywhere in those roots is RED) and reads the workflow, the infra census suite and the rebirth scripts it pins
-# helper bodies against; its verdict is scoped to those three roots plus the three runbooks it reads (copies them into its sandbox and
-# pins the dispatch commands, the Better Stack query and the LUKS cutover cross-reference), not to the rest of the corpus (plugins/).
-AFFECTED_SCRIPTS_WEB_HOST_REBOOT_PATHS=(
-  "scripts/"
-  ".github/"
-  "apps/"
-  "knowledge-base/engineering/operations/runbooks/betterstack-log-query.md"
-  "knowledge-base/engineering/operations/runbooks/web-host-reboot.md"
-  "knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md"
-  "scripts/lib/test-affected-paths.sh"
-)
 AFFECTED_SCRIPTS_TUNNEL_CONNECTOR_CENSUS_PATHS=(
   "scripts/tunnel-connector-census.sh"
   "scripts/tunnel-connector-census.test.sh"
@@ -1267,6 +1247,16 @@ AFFECTED_SCRIPTS_CI_DRAFT_LIGHT_PATHS=(
   "scripts/guard-vacuity-floor.test.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/required-checks.txt"
+)
+
+# plugins/soleur/test/ci-shard-totality-skip (#9729, ADR-276 amendment) — the suite pins the shard-totality classify step in
+# ci.yml, executes the classifier script, and sweeps every workflow for the falsy-middle ternary shape, so the one corpus it walks
+# is .github/workflows. Declared from the repo paths its suite file names.
+AFFECTED_PLUGINS_SOLEUR_TEST_CI_SHARD_TOTALITY_SKIP_TEST_SH_PATHS=(
+  ".github/workflows"
+  "plugins/soleur/test/ci-shard-totality-skip.test.sh"
+  "scripts/ci-shard-totality-classify.sh"
+  "scripts/lib/test-affected-paths.sh"
 )
 
 # plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh (#8631, ADR-235) — its corpus

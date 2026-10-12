@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=38090871167,38088705648,38086978176,38085840669,38055372785
 # default-weight-ms=1194
-# generated-at=2026-10-11T18:08:59Z
+# generated-at=2026-10-12T08:32:10Z
 # generator=regenerate-shard-manifest.py v3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
 .claude/hooks/background-poll-prefer-monitor.test.sh	777	measured
@@ -40,6 +40,7 @@
 .claude/hooks/pkill-self-match-guard.test.sh	5072	measured
 .claude/hooks/post-dispatch-watch-gate.test.sh	962	measured
 .claude/hooks/pre-ask-technical-fork-gate.test.sh	1297	measured
+.claude/hooks/pre-closing-technical-fork-gate.test.sh	1194	floor
 .claude/hooks/pre-merge-auto-close-scan.test.sh	8927	measured
 .claude/hooks/pre-merge-rebase-headless.test.sh	267	measured
 .claude/hooks/pre-merge-rebase-parity.test.sh	5551	measured
@@ -61,6 +62,8 @@
 .claude/hooks/stub-argv-fidelity.test.sh	216	measured
 apps/cla-evidence/scripts/_cf-admin-token.test.sh	108	measured
 apps/cla-evidence/scripts/_r2-endpoint.test.sh	55	measured
+apps/cla-evidence/scripts/_r2-sigv4-curl.test.sh	1194	floor
+apps/cla-evidence/scripts/bootstrap-r2-probe.test.sh	1194	floor
 apps/cla-evidence/scripts/gdpr-override.test.sh	903	measured
 apps/cla-evidence/scripts/inspect.test.sh	198	measured
 apps/cla-evidence/scripts/sentinel-pr.test.sh	25	measured
@@ -221,6 +224,7 @@ plugins/soleur/test/operator-script.test.sh	90601	measured
 plugins/soleur/test/operator-stage-approval-hook.test.sh	5583	measured
 plugins/soleur/test/pencil-adapter-auth-hard-fail.test.sh	44	measured
 plugins/soleur/test/pencil-setup-skill-cli-form.test.sh	13	measured
+plugins/soleur/test/plugin-version.test.sh	1194	floor
 plugins/soleur/test/pr-fanout-ledger.test.sh	56062	measured
 plugins/soleur/test/preflight-check10-suite-integrity.test.sh	36705	measured
 plugins/soleur/test/proc.test.sh	2698	measured
@@ -250,6 +254,7 @@ plugins/soleur/test/ship-followthrough-directive.test.sh	447	measured
 plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh	124725	measured
 plugins/soleur/test/ship-pir-action-items-gate.test.sh	2569	measured
 plugins/soleur/test/sync-pr-behind.test.sh	32366	measured
+plugins/soleur/test/technical-ruling-gate.test.sh	1194	floor
 plugins/soleur/test/terraform-drift-sentry-leg.test.sh	543	measured
 plugins/soleur/test/terraform-drift-step-order.test.sh	58	measured
 plugins/soleur/test/test-pyramid-fixtures.test.sh	81	measured
@@ -262,6 +267,7 @@ plugins/soleur/test/vendor-bundle-coverage.test.sh	194	measured
 plugins/soleur/test/vendor-drift-classify.test.sh	201	measured
 plugins/soleur/test/vendor-drift-workflow.test.sh	363	measured
 plugins/soleur/test/vendor-pin-integrity.test.sh	816	measured
+plugins/soleur/test/version-banner-hook.test.sh	1194	floor
 plugins/soleur/test/web-host-escrow-diagnose-workflow.test.sh	6605	measured
 plugins/soleur/test/workflow-run-deploy-invariants.test.sh	5757	measured
 plugins/soleur/test/worktree-manager-atomic-config.test.sh	689	measured
@@ -498,12 +504,7 @@ scripts/watchdog-arm-soak-9237	2199	measured
 scripts/watchdog-debounce-soak-9686	563	measured
 scripts/web-fresh-boot-zot-8651	372	measured
 scripts/web-host-escrow-preflight	870	measured
-scripts/web-host-reboot	926588	measured
 scripts/web2-luks-live-6931	23754	measured
-scripts/web2-rebirth	112139	measured
-scripts/web2-rebirth-emptiness	13947	measured
-scripts/web2-rebirth-never-pooled	216	measured
-scripts/web2-rebirth-recovery-check	18212	measured
 scripts/workspaces-plaintext-hold-9348	825	measured
 scripts/zot-fill-rate-7341	2822	measured
 scripts/zot-last-err-redact-7500	1183	measured
@@ -596,9 +597,7 @@ tests/scripts/vector-redeliver-wiring	410	measured
 tests/scripts/vendor-pin-gate-verdict	46	measured
 tests/scripts/weakness-miner	324	measured
 tests/scripts/web-host-birth-gate	2274	measured
-tests/scripts/web-host-rebirth-gate	27910	measured
 tests/scripts/web-host-replace-gate	8693	measured
-tests/scripts/web2-rebirth-classify	1269	measured
 tests/scripts/workspaces-luks-cutover-gate	1314	measured
 tests/scripts/workspaces-luks-recut-gate	1562	measured
 tests/scripts/write-known-hosts	547	measured

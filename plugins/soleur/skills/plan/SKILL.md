@@ -1072,6 +1072,8 @@ After plan review, use the **AskUserQuestion tool** to present these options:
 
 **Question:** "Plan reviewed and ready at `knowledge-base/project/plans/YYYY-MM-DD-<type>-<name>-plan.md`. Context is saved to disk. What would you like to do next?" — append " Two automatic compactions have occurred, so `/clear` before `soleur:work` is recommended." only when a `SOLEUR_COMPACTION_DIRECTIVE` marker with `recommend=true` is present in this session (#8323). The unconditional "run `/clear` for maximum headroom" this replaces fired identically on a session with zero compactions and on one that had lost state twice, which is the whole defect.
 
+**Closing text:** the summary around these options is a closing message: put no technical question ("Decision for you:", "Your calls") to the operator in it; spawn `soleur:engineering:cto` (legal: `soleur:legal:clo`) and ask only the authorization. [technical-ruling-delegation.md](../brainstorm-techniques/references/technical-ruling-delegation.md).
+
 **Options:**
 
 1. **Open plan in editor** - Open the plan file for review
