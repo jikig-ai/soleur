@@ -545,15 +545,16 @@ earlier ones. `git fetch origin main` first, so the worktree holds both endpoint
 
 ```bash
 git fetch origin main
-git diff --name-status --diff-filter=AMR \
+git diff --name-status --diff-filter=AMRCT \
   "$(git merge-base origin/main <merge-sha>)" "<merge-sha>" -- \
   knowledge-base/project/specs knowledge-base/project/plans knowledge-base/project/brainstorms
 ```
 
-Only `<root>/archive/` rows are compliant — a path under `specs/<live-dir>/archive/` is still inside a live spec dir. `R` rows
-are judged on the destination: `git mv specs/archive/x specs/y` lands a live path. Every remaining `A`/`M`/`R` row is an artifact
-the merge landed live. Report the surviving rows **verbatim** as a **red post-merge status** — `KB archival read-back:
-<verbatim rows, or "clean">` — in the Phase 6 issue comment AND the Phase 7 summary.
+If `git merge-base` returns empty (shallow clone), diff `origin/main^..<merge-sha>` instead and report that fallback in the
+status line. Only `<root>/archive/` rows are compliant — a path under `specs/<live-dir>/archive/` is still inside a live spec
+dir. `R`/`C` rows are judged on the destination: `git mv specs/archive/x specs/y` lands a live path. Every remaining
+`A`/`M`/`R`/`C`/`T` row is an artifact the merge landed live. Report the surviving rows **verbatim** as a **red post-merge
+status** — `KB archival read-back: <verbatim rows, or "clean">` — in the Phase 6 issue comment AND the Phase 7 summary.
 
 **Remediation is per-row `git mv`, not `archive-kb.sh`:** the archiver's three discovery axes (slug glob, branch-diff, untracked
 `??`) cannot reach a spec dir that a leaked merge already committed — on a fresh branch all three return empty and the script
@@ -564,8 +565,10 @@ git mv <row-path> knowledge-base/project/<root>/archive/$(date +%Y%m%d-%H%M%S)-<
   && git commit -m "chore(kb): archive leaked artifacts from <pr>"
 ```
 
-then open a follow-up PR — archival cannot ride a PR that already merged. Like Phases 5.5/5.6/5.7 it is REPORT-ONLY: it never
-blocks the "done" verdict; the signal is for immediate operator attention, not rollback.
+then open a follow-up PR — archival cannot ride a PR that already merged. **M-row caveat:** an `M` on `specs/<dir>/` can be a
+drive-by edit to a SIBLING feature's in-flight spec — verify the dir belongs to the merged feature first; if not, revert the
+edit (`git checkout origin/main -- <path>` then commit) rather than `git mv`-ing another feature's dir. Like Phases 5.5/5.6/5.7
+it is REPORT-ONLY: it never blocks the "done" verdict; the signal is for immediate operator attention, not rollback.
 
 ## Phase 6: Update Issue and Compound
 

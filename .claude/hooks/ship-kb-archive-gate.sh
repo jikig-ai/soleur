@@ -32,6 +32,8 @@
 #   - proven-foreign repo pointer (-R/--repo/GH_REPO/GH_HOST resolving to
 #     a DIFFERENT repository) — the merge is not ours
 #   - SOLEUR_SKIP_KB_ARCHIVE_GATE=1 (named in every deny)
+#   - `gh pr merge --help`/`-h` merges nothing (every invocation carries
+#     --help → exit 0; a real merge alongside one still gates)
 #   - unresolvable merge-base (shallow clone) or a census diff that
 #     cannot run: git cannot compare. Both warn via headless_or_stderr —
 #     no fail-open path is silent.
@@ -45,7 +47,8 @@
 #   - git fetch fails (origin main, refs/pull/<N>/head, or the pinned
 #     sha): an unverifiable head is the silent-miss class this gate
 #     exists to end.
-#   - any A/M row at a non-archive path under the three KB roots in
+#   - any added, modified, type-changed, or renamed-in (R/C dst) row at a
+#     non-archive path under the three KB roots in
 #     merge-base...head.
 #
 # Hook ordering: wired after ship-unpushed-commits-gate.sh in
@@ -106,14 +109,18 @@ SCAN=$(strip_command_bodies "$CMD")
 # not absorbed. Documented residuals, shared with every sibling: quoted
 # `bash -c '…'` payloads (blanked by strip_command_bodies), `eval`
 # indirection, `$GH` variable invocation, `gh api …/merge`, path-qualified
-# `gh` (/usr/bin/gh), `\gh` alias-skip, `case`-branch merges, function
-# bodies (`f() { gh pr merge; }; f` — the call site carries no literal
-# text), UI merges, and the Monitor matcher (the whole merge-gate family
-# is unbound there) — none fire; postmerge Phase 5.8 is the net. The
-# census reads the head at invoke time but `--auto` merges the
-# queue-time head — a post-arm push of live-path artifacts slips every
-# gate in this family; Phase 5.8 catches the landed result.
-_MERGE_BOUNDARY='(^|&&|\|\||\||;|\(|`|\{|[[:space:]]--[[:space:]])'
+# `gh` (/usr/bin/gh), `\gh` alias-skip, `case`-branch merges, tokens split
+# by line-continuation (`gh pr` + backslash-newline + `merge`), remote
+# executors (`ssh host gh pr merge`), launcher binaries beyond the
+# enumerated prefix list, and function CALL SITES (`f() { gh pr merge; }`
+# — the body now fires and denies; only a definition's `f` invocation
+# slips, unprovable without executing the shell), UI merges, and the
+# Monitor matcher (the whole merge-gate family is unbound there) — none
+# fire; postmerge Phase 5.8 is the net. The census reads the head at
+# invoke time but `--auto` merges the queue-time head — a post-arm push
+# of live-path artifacts slips every gate in this family; Phase 5.8
+# catches the landed result.
+_MERGE_BOUNDARY='(^|&&|\|\||\||;|\(|`|\{|&|[[:space:]]--[[:space:]])'
 _MERGE_PREFIX='(([A-Za-z_][A-Za-z0-9_]*=[^[:space:]&#|;()]+|if|while|until|then|do|elif|else|!|time|command|builtin|exec|nohup)[[:space:]]+)*((sudo|env|timeout|nice|stdbuf|ionice|setsid|xargs|watch|flock|doas|pkexec)([[:space:]]+[^[:space:];&|()]+)*[[:space:]]+)?'
 _GH_GFLAGS='([[:space:]]+--?[A-Za-z0-9-]+(=[^[:space:]]+)?([[:space:]]+[^-[:space:]][^[:space:]]*)?)*'
 if ! grep -qE "${_MERGE_BOUNDARY}[[:space:]]*${_MERGE_PREFIX}gh${_GH_GFLAGS}[[:space:]]+pr[[:space:]]+merge([[:space:]]|$)" <<<"$SCAN"; then
@@ -121,21 +128,24 @@ if ! grep -qE "${_MERGE_BOUNDARY}[[:space:]]*${_MERGE_PREFIX}gh${_GH_GFLAGS}[[:s
 fi
 
 # One line per REAL `gh pr merge` invocation, carrying its post-`merge`
-# argument text. The extraction sed anchors on `gh[ ]+…pr[ ]+merge` itself
-# (greedy `.*` within a one-invocation-per-line match): the widened prefix
-# may carry `g` (`GH_HOST=ghe.corp`, `timeout`), which the source's
-# `^[^g]*` could not strip — a residue keeping `GH_HOST=ghe.corp gh`
-# first-token would deny a legitimate merge for the wrong reason.
-# Residues are cleaned for the consumers below: `#`-comments dropped (a
-# `# -R o/r` mention is text, never a pointer), `)`/`}`/backtick chars
-# removed (`x=$(gh pr merge 5)` leaves `5)`), and redirect words
-# (`> /tmp/log`, `2>&1`, `< file`) removed — none are merge operands.
+# argument text. The awk extracts after the FIRST `pr[ \t]+merge` in the
+# line — a sed `s/^.*gh…//` would greedily strip to the LAST, and a
+# residue containing a second literal (`gh pr merge 5 --subject gh pr
+# merge`) would collapse a numbered merge onto the HEAD path. `$(`/`)`
+# are excluded from the residue class so a nested `$(gh pr merge N)`
+# surfaces as its own invocation line (the `(` boundary matches it) and
+# the multi-invocation deny fires. Residues are then cleaned for the
+# consumers below: `#`-comments dropped (a `# -R o/r` mention is text,
+# never a pointer), `)`/`}`/backtick chars removed (`x=$(gh pr merge 5)`
+# leaves `5)`), and redirect words (`> /tmp/log`, `>log`, `5>log`,
+# `2>&1`, `< file`) removed — none are merge operands.
 # `|| true`: a no-match grep exits 1 under pipefail and would abort the hook.
 _merge_args() {
-  grep -oE "${_MERGE_BOUNDARY}[[:space:]]*${_MERGE_PREFIX}gh${_GH_GFLAGS}[[:space:]]+pr[[:space:]]+merge([[:space:]][^;&|\`]*)?" <<<"$1" \
-    | sed -E "s/^.*gh${_GH_GFLAGS}[[:space:]]+pr[[:space:]]+merge//; s/#.*//" \
+  grep -oE "${_MERGE_BOUNDARY}[[:space:]]*${_MERGE_PREFIX}gh${_GH_GFLAGS}[[:space:]]+pr[[:space:]]+merge([[:space:]][^;&|$\`()]*)?" <<<"$1" \
+    | awk '{ match($0, /pr[[:space:]]+merge/); print substr($0, RSTART+RLENGTH) }' \
+    | sed -E 's/#.*//' \
     | tr -d ')}\`' \
-    | sed -E 's/[[:space:]][0-9]*[<>]+(&[0-9-]+)?([[:space:]][^[:space:]&|;()]+)?//g' || true
+    | sed -E 's/[[:space:]][0-9]*[<>]+(&[0-9-]+)?([[:space:]]*[^[:space:]&|;()]+)?//g' || true
 }
 _scan_args=$(_merge_args "$SCAN")
 
@@ -348,14 +358,12 @@ if grep -qE '(^|[[:space:]])(--repo([[:space:]=]|$)|-[A-Za-z]*R)' <<<"$_scan_arg
   _REPO_PTR=1
   # Subshell-rebind $CMD/$SCAN so the pinned helper's operand gather reads
   # scan-side text (quoted/comment pointers excluded) — its body stays
-  # byte-equal to pre-merge-rebase.sh's for the T43 parity pin.
+  # byte-equal to pre-merge-rebase.sh's for the T43 parity pin. The rebind
+  # covers CMD and SCAN, the two ambient vars the pinned body reads; if
+  # the source helper ever gathers from a third ambient variable, the
+  # parity pin will re-copy the body and this rebind MUST be extended to
+  # match or the covered vars silently diverge.
   ( CMD="$SCAN_NOCOMMENT"; SCAN="$SCAN_NOCOMMENT"; _repo_pointers_same_repo ) && _REPO_SAME=1
-fi
-if [[ "$_REPO_PTR" == "1" && "$_REPO_SAME" != "1" ]] && _repo_pointers_all_parsed; then
-  # Every pointer parses and the set is not all-same-repo → the merge
-  # targets another repository. Not ours to census (ruling: proven-foreign
-  # exits 0; unprovable is the deny arm below).
-  exit 0
 fi
 if [[ "$_REPO_SAME" == "1" ]]; then
   _scan_args=$(_strip_repo_flags <<<"$_scan_args")
@@ -396,9 +404,18 @@ HEAD_OID=""
 # them, and stripping them would silently gate on THIS repo while gh
 # merges ANOTHER. Fail-closed: deny and name the canonical
 # `gh pr merge [-R owner/repo]` form. The detect requires a `-`-leading
-# token right after `gh` — `gh pr merge` itself never matches.
-if grep -qE 'gh[[:space:]]+-[^[:space:];&|()]+([[:space:]]+[^[:space:];&|()]+)*[[:space:]]+pr[[:space:]]+merge' <<<"$SCAN"; then
+# token right after `gh` — `gh pr merge` itself never matches — and runs
+# on SCAN_NOCOMMENT so a `# gh -R o/r pr merge` mention cannot deny.
+if grep -qE 'gh[[:space:]]+-[^[:space:];&|()]+([[:space:]]+[^[:space:];&|()]+)*[[:space:]]+pr[[:space:]]+merge' <<<"$SCAN_NOCOMMENT"; then
   MERGE_TARGET_WHY="global flags between 'gh' and 'pr' cannot be verified — spell it 'gh pr merge [-R owner/repo] <N>'"
+fi
+
+# xargs feeds the merge operand via stdin — invisible to the residue.
+# `echo 5 | xargs gh pr merge` would read flag-only and census the HEAD
+# path while gh merges a NUMBERED PR: deny the composition outright.
+if [[ -z "$MERGE_TARGET_WHY" ]] \
+   && grep -qE 'xargs([[:space:]]+[^[:space:];&|()]+)*[[:space:]]+gh([[:space:]]+[^[:space:];&|()]+)*[[:space:]]+pr[[:space:]]+merge' <<<"$SCAN_NOCOMMENT"; then
+  MERGE_TARGET_WHY="xargs supplies the merge's operand via stdin; spell the PR number on the command line ('gh pr merge <N>')"
 fi
 
 # Multi-invocation deny: one census object per command. A second `gh pr
@@ -408,6 +425,17 @@ fi
 # is two invocations, the flag-only one not arg-less noise.
 if [[ -z "$MERGE_TARGET_WHY" ]] && [[ "$(wc -l <<<"$_scan_args")" -gt 1 ]]; then
   MERGE_TARGET_WHY="more than one gh pr merge invocation in one command; merge one PR per call"
+fi
+
+# Proven-foreign exit — AFTER the multi-invocation arm above (a `-R
+# other/repo` on invocation 1 must not launder an uncensused invocation
+# 2) but BEFORE the positional census (a foreign `-R`'s operand is a
+# non-numeric positional that would falsely deny an exit-0 merge).
+if [[ -z "$MERGE_TARGET_WHY" && "$_REPO_PTR" == "1" && "$_REPO_SAME" != "1" ]] && _repo_pointers_all_parsed; then
+  # Every pointer parses and the set is not all-same-repo → the merge
+  # targets another repository. Not ours to census (ruling:
+  # proven-foreign exits 0; unprovable is the deny arm below).
+  exit 0
 fi
 
 if [[ -z "$MERGE_TARGET_WHY" && "$_tok_scan" != "$_tok_cmd" ]]; then
@@ -425,6 +453,11 @@ if [[ -z "$MERGE_TARGET_WHY" ]]; then
     MERGE_TARGET_WHY="the gh pr merge invocations differ once quoted text is removed"
   elif [[ -n "$_mhc_scan" ]] && [[ "$(grep -c . <<<"$_mhc_scan" || true)" != "1" ]]; then
     MERGE_TARGET_WHY="more than one --match-head-commit sha; merge one PR per command"
+  elif [[ -n "$_mhc_scan" ]] \
+       && [[ -n "$(printf '%s\n' "$_scan_args" \
+                  | sed -E 's/--match-head-commit([[:space:]]+|=)[0-9a-f]{40}/ /g' \
+                  | awk '{ for (i = 1; i <= NF; i++) if ($i !~ /^-/) print $i }' || true)" ]]; then
+    MERGE_TARGET_WHY="extra operands alongside --match-head-commit"
   elif [[ -n "$_mhc_scan" ]]; then
     TARGET_KIND="sha"; HEAD_OID="$_mhc_scan"
   elif grep -q -- '--match-head-commit' <<<"$_scan_args"; then
@@ -464,39 +497,55 @@ if [[ -z "$MERGE_TARGET_WHY" && "$_REPO_PTR" == "1" && "$_REPO_SAME" != "1" ]]; 
   MERGE_TARGET_WHY="the command points gh at another repository or one the hook cannot prove is this checkout's origin (-R/--repo, GH_REPO or GH_HOST); drop the pointer and re-issue"
 fi
 
-# In-command cd. Three rules (the ladder arm plus the review-found gaps):
-#   - cd into a DIFFERENT origin → deny (foreign checkout, verbatim arm).
-#   - cd whose operand the resolver cannot prove (quoted/blanked, a $VAR,
-#     a missing operand, a nonexistent path, a leading dash) → deny: a
-#     flag-only merge in an unknown checkout censuses the wrong branch —
-#     silently skipping it was the miscensus class itself.
-#   - cd into a SAME-origin checkout (a sibling worktree, a subdir of this
-#     one) → the merge RUNS there, so the head is resolved from that
-#     dir's branch — WORK_DIR is rebound below. The `(cd x; gh pr merge)`
-#     subshell form is scanned too (`(` in the boundary).
+# In-command dir changes. Rules:
+#   - A cd/pushd into a DIFFERENT origin → deny (verbatim arm).
+#   - Any dir-change the resolver cannot prove → deny: popd, `cd -`,
+#     bare `cd`, quoted/blanked/$VAR/~/leading-dash/nonexistent operands.
+#     A flag-only merge in an unknown checkout censuses the wrong branch.
+#   - A same-origin cd before the merge → the merge RUNS there, so the
+#     head is resolved from that dir's branch — WORK_DIR is rebound to the
+#     CUMULATIVE last cd (`cd a && cd b` executes from b, not a). A cd
+#     sighted at an offset AFTER the first merge invocation cannot steer
+#     it (`gh pr merge && cd /clean` is not a miscensus; treating it as
+#     one was the position-blind defect).
+# Scanned on SCAN_NOCOMMENT with the merge boundary set — `{ cd x; … }`,
+# `` `cd x` `` and ` -- cd x` shapes reach the same enumeration.
 if [[ -z "$MERGE_TARGET_WHY" ]]; then
   _origin=$(git -C "$WORK_DIR" remote get-url origin 2>/dev/null || true)
-  _cd_target=""
+  _merge_off=$(grep -boE "${_MERGE_BOUNDARY}[[:space:]]*${_MERGE_PREFIX}gh${_GH_GFLAGS}[[:space:]]+pr[[:space:]]+merge" <<<"$SCAN_NOCOMMENT" | head -1 | cut -d: -f1 || true)
+  _cd_acc="$WORK_DIR"
   _cd_bad=0
-  while IFS= read -r _dir; do
-    if [[ -z "$_dir" ]] || [[ "$_dir" == -* ]] || [[ "$_dir" == *'$'* ]] || [[ "$_dir" == *'~'* ]]; then
+  while IFS=: read -r _off _seg; do
+    # A cd at or after the first merge invocation cannot steer it.
+    [[ -n "$_merge_off" && "$_off" -ge "$_merge_off" ]] && continue
+    _kw=$(printf '%s' "$_seg" | grep -oE '(cd|pushd|popd)' | head -1 || true)
+    if [[ "$_kw" == "popd" ]]; then _cd_bad=1; break; fi
+    _op=$(printf '%s' "$_seg" | awk '{print $NF}')
+    if [[ "$_op" == "cd" || "$_op" == "pushd" || "$_op" == "-" || "$_op" == -* \
+       || "$_op" == *'$'* || "$_op" == *'~'* ]]; then
       _cd_bad=1; break
     fi
-    [[ "$_dir" == /* ]] || _dir="$WORK_DIR/$_dir"
-    if [[ ! -d "$_dir" ]]; then _cd_bad=1; break; fi
-    _dir_origin=$(git -C "$_dir" remote get-url origin 2>/dev/null || true)
-    if [[ -n "$_dir_origin" && "$_dir_origin" != "$_origin" ]]; then
-      MERGE_TARGET_WHY="the command cd's into a checkout of another repository"; break
-    fi
-    [[ -z "$_cd_target" ]] && _cd_target="$_dir"
-  done < <(grep -oE '(^|&&|\|\||;|\()[[:space:]]*(cd|pushd)([[:space:]]+[^;&|()[:space:]]+)?' <<<"$SCAN" \
-             | sed -E 's/.*(cd|pushd)[[:space:]]+//' \
-             | sed -E 's/^[[:space:]]*//' || true)
+    if [[ "$_op" == /* ]]; then _cd_acc="$_op"; else _cd_acc="${_cd_acc%/}/${_op}"; fi
+  done < <(grep -boE "${_MERGE_BOUNDARY}[[:space:]]*(cd|pushd|popd)([[:space:]]+[^;&|()[:space:]]+|[^[:alnum:]_]|$)" <<<"$SCAN_NOCOMMENT" || true)
   if [[ -z "$MERGE_TARGET_WHY" ]]; then
     if [[ "$_cd_bad" == "1" ]]; then
-      MERGE_TARGET_WHY="the command cd's into a directory the hook cannot resolve (quoted, variable, missing, or nonexistent operand)"
-    elif [[ -n "$_cd_target" ]]; then
-      WORK_DIR="$_cd_target"
+      MERGE_TARGET_WHY="the command changes directory in a way the hook cannot resolve (popd, cd -, or a quoted, variable, missing, or nonexistent operand)"
+    elif [[ "$_cd_acc" != "$WORK_DIR" ]]; then
+      _cd_real=$(cd -P "$_cd_acc" 2>/dev/null && pwd -P || true)
+      if [[ -z "$_cd_real" || ! -d "$_cd_real" ]]; then
+        MERGE_TARGET_WHY="the command cd's into a directory the hook cannot resolve"
+      elif ! git -C "$_cd_real" rev-parse --git-dir >/dev/null 2>&1; then
+        # cd into a non-repo dir: gh pr merge fails there — nothing for
+        # this gate to measure (same contract as a non-git .cwd).
+        exit 0
+      else
+        _dir_origin=$(git -C "$_cd_real" remote get-url origin 2>/dev/null || true)
+        if [[ -n "$_dir_origin" && "$_dir_origin" != "$_origin" ]]; then
+          MERGE_TARGET_WHY="the command cd's into a checkout of another repository"
+        else
+          WORK_DIR="$_cd_real"
+        fi
+      fi
     fi
   fi
 fi
@@ -504,6 +553,15 @@ fi
 if [[ -n "$MERGE_TARGET_WHY" ]]; then
   _deny "BLOCKED: cannot prove which head this merge lands (${MERGE_TARGET_WHY}). This gate censuses the exact head's diff for unarchived KB artifacts; a HEAD fallback would measure the wrong object. Re-issue with one bare PR number ('gh pr merge <N>') or a clean '--match-head-commit <40-hex>'. Hatch: SOLEUR_SKIP_KB_ARCHIVE_GATE=1 bypasses."
 fi
+
+# Toplevel-normalize: the census pathspecs are relative to git's cwd —
+# a `.cwd` or a same-origin cd into a SUBDIRECTORY would make
+# `git -C <subdir> diff -- knowledge-base/…` resolve to
+# <subdir>/knowledge-base/…, match nothing, and pass a leaky head
+# vacuously. Bare repos have no toplevel; they stay as-is (tree-relative
+# pathspecs already behave there).
+_wt_top=$(git -C "$WORK_DIR" rev-parse --show-toplevel 2>/dev/null || true)
+[[ -n "$_wt_top" ]] && WORK_DIR="$_wt_top"
 
 # --- resolve the head object ---------------------------------------------
 
@@ -524,10 +582,13 @@ if [[ "$TARGET_KIND" == "head" ]]; then
   fi
   # `gh pr merge` merges the PR's REMOTE head — census origin/<branch>, not
   # local HEAD, which can lag it (a live artifact pushed from elsewhere
-  # under-measures the same way; the sibling pays the same fetch cost,
-  # ship-unpushed-commits-gate.sh:131). A branch with no upstream has no
+  # under-measures the same way; ship-unpushed-commits-gate.sh pays the
+  # same fetch cost). Explicit refspec, NOT `fetch origin <branch>`: a
+  # checkout could carry a `remote.origin.fetch` mapping that leaves a
+  # stale refs/remotes/origin/<branch> behind — the census must read the
+  # object the remote actually serves. A branch with no upstream has no
   # mergeable head — gh fails before this gate's subject exists.
-  if ! git -C "$WORK_DIR" fetch --no-tags --quiet origin "$CURRENT_BRANCH" >/dev/null 2>&1; then
+  if ! git -C "$WORK_DIR" fetch --no-tags --quiet origin "+refs/heads/${CURRENT_BRANCH}:refs/remotes/origin/${CURRENT_BRANCH}" >/dev/null 2>&1; then
     if git -C "$WORK_DIR" rev-parse --verify -q "refs/remotes/origin/${CURRENT_BRANCH}" >/dev/null 2>&1; then
       _deny "BLOCKED: \`git fetch origin ${CURRENT_BRANCH}\` failed; cannot verify the pushed head for live-path KB artifacts. Run the fetch manually, then re-issue. Hatch: SOLEUR_SKIP_KB_ARCHIVE_GATE=1 bypasses."
     fi
@@ -614,6 +675,20 @@ if [[ "$_diff_rc" -gt 1 ]]; then
   exit 0
 fi
 
+# The probe above covers the common failure; the census diff itself gets
+# an rc check too — a second-call failure must not degrade to an empty
+# LEAKY silent pass.
+_census_f=$(mktemp "${TMPDIR:-/tmp}/kb-census.XXXXXX")
+if ! git -C "$WORK_DIR" diff --name-status -z --diff-filter=AMRCT \
+       "$BASE" "$HEAD_OID" -- \
+       knowledge-base/project/specs \
+       knowledge-base/project/plans \
+       knowledge-base/project/brainstorms > "$_census_f" 2>/dev/null; then
+  rm -f "$_census_f"
+  headless_or_stderr warn "[ship-kb-archive-gate] census diff failed; skipping KB-artifact census for this merge."
+  exit 0
+fi
+
 LEAKY=""
 count=0
 while IFS= read -r -d '' _st; do
@@ -633,11 +708,8 @@ while IFS= read -r -d '' _st; do
   LEAKY+="${_st}"$'\t'"${_path}"$'\n'
   count=$((count + 1))
   [[ "$count" -ge 10 ]] && break
-done < <(git -C "$WORK_DIR" diff --name-status -z --diff-filter=AMRCT \
-           "$BASE" "$HEAD_OID" -- \
-           knowledge-base/project/specs \
-           knowledge-base/project/plans \
-           knowledge-base/project/brainstorms 2>/dev/null)
+done < "$_census_f"
+rm -f "$_census_f"
 
 if [[ -z "$LEAKY" ]]; then
   # Sibling-convention silent exit on pass.
@@ -670,7 +742,7 @@ ${_TARGET_NOTE}
 Fix (from the repo root, on the PR's head branch): bash plugins/soleur/skills/archive-kb/scripts/archive-kb.sh
 then: git add -A knowledge-base && git commit -m \"chore(kb): archive <branch> artifacts at ship\" && git push
 (the check reads the pushed PR head — a local-only archive does not clear it).
-For an M-row on specs/<dir>/ — archive-kb refuses to collapse a modified live spec dir BY DESIGN, because an M row can be a drive-by edit to a sibling feature's in-flight spec: verify the dir is THIS feature's first (if not, drop the edit with \`git checkout -- <path>\`); if it is, the manual path is
+For an M-row on specs/<dir>/ — archive-kb refuses to collapse a modified live spec dir BY DESIGN, because an M row can be a drive-by edit to a sibling feature's in-flight spec: verify the dir is THIS feature's first (if not, revert the edit with \`git checkout origin/main -- <path>\` then commit+push — plain \`git checkout --\` restores from HEAD, which already contains it); if it is, the manual path is
   git mv knowledge-base/project/specs/<dir> knowledge-base/project/specs/archive/\$(date +%Y%m%d-%H%M%S)-<dir> && git commit && git push
 Ordering: archive only AFTER ship's last live-path reads — Phase 6 step 2.5 (decision-challenges render) and step 5 (Operator Holds). It belongs inside ship \"## Phase 6.45: KB Artifact Archival\".
 Hatch: SOLEUR_SKIP_KB_ARCHIVE_GATE=1 bypasses."

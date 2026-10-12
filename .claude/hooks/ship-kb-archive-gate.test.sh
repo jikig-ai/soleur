@@ -894,6 +894,167 @@ t59_nested_archive_deny() {
   rm -rf "$tmp"
 }
 
+t60_mhc_no_sha_deny() {
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_kb_branch "$tmp" "feat-nosha" clean)
+  local out exit_code=0
+  out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge --match-head-commit --squash")") || exit_code=$?
+  assert_deny "T60 --match-head-commit without sha" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$tmp"
+}
+
+t61_two_shas_deny() {
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_kb_branch "$tmp" "feat-twosha" clean)
+  local sha out exit_code=0
+  sha=$(git -C "$work" rev-parse "origin/feat-twosha")
+  out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge --match-head-commit $sha $sha")") || exit_code=$?
+  assert_deny "T61 two shas after --match-head-commit" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$tmp"
+}
+
+t62_unprovable_env_deny() {
+  # GH_REPO with no owner/repo shape cannot be proven same or foreign →
+  # unprovable → deny (T51 covered the quoted non-pointer; this is a real
+  # unparseable env operand).
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_kb_branch "$tmp" "feat-envptr" specdir)
+  local out exit_code=0
+  out=$(run_hook "$incidents" "$(make_payload "$work" "GH_REPO=noslash gh pr merge --squash")") || exit_code=$?
+  assert_deny "T62 unparseable GH_REPO env" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$tmp"
+}
+
+t63_background_multi_deny() {
+  # `gh pr merge 5 & gh pr merge 6` — a bare `&` is a command boundary
+  # too; two heads, one census → deny.
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_kb_branch "$tmp" "feat-amp" clean)
+  local out exit_code=0
+  out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge 5 & gh pr merge 6")") || exit_code=$?
+  assert_deny "T63 & separated invocations" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$tmp"
+}
+
+t64_brace_cd_deny() {
+  # `{ cd /foreign; gh pr merge; }` — the cd-scan shares the merge
+  # boundary set, so a brace-grouped foreign cd is seen.
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_kb_branch "$tmp" "feat-bcd" clean)
+  local foreign="$tmp/foreign" finc="$tmp/finc"
+  mkdir -p "$foreign" "$finc"
+  init_git_repo "$foreign"
+  git -C "$foreign" remote add origin https://github.com/other-org/other-repo.git
+  git -C "$foreign" commit -q --allow-empty -m "init"
+  local out exit_code=0
+  out=$(run_hook "$incidents" "$(make_payload "$work" "{ cd $foreign; gh pr merge 5; }")") || exit_code=$?
+  assert_deny "T64 brace-grouped foreign cd" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$tmp"
+}
+
+t65_comment_gflags_pass() {
+  # `gh pr merge 5 # runbook: gh -R o/r pr merge` — the global-flags
+  # detect reads the comment-stripped text; a mention must not deny.
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_kb_branch "$tmp" "feat-cmtgf" clean)
+  git -C "$work" push -q origin feat-cmtgf:refs/pull/65/head
+  local out exit_code=0
+  out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge 65 --squash # runbook: gh -R o/r pr merge")") || exit_code=$?
+  assert_pass "T65 global-flags mention in comment" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$tmp"
+}
+
+t66_subdir_cd_deny() {
+  # `(cd $work/subdir; gh pr merge)` — same origin, a SUBDIRECTORY: the
+  # census pathspecs are cwd-relative, so without toplevel normalization
+  # the diff resolves to subdir/knowledge-base/…, matches nothing, and a
+  # leaky head passes vacuously. Deny proves the fix.
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_kb_branch "$tmp" "feat-subdir" specdir)
+  mkdir -p "$work/docs"
+  local out exit_code=0
+  out=$(run_hook "$incidents" "$(make_payload "$work" "(cd $work/docs; gh pr merge --squash --auto)")") || exit_code=$?
+  assert_deny "T66 subdir cd still censuses the repo" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$tmp"
+}
+
+t67_trailing_cd_no_launder() {
+  # `gh pr merge && cd /foreign` — a cd AFTER the merge cannot steer its
+  # head; the leaky session branch must still census.
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_kb_branch "$tmp" "feat-trailcd" specdir)
+  local foreign="$tmp/foreign"
+  mkdir -p "$foreign"
+  init_git_repo "$foreign"
+  git -C "$foreign" remote add origin https://github.com/other-org/other-repo.git
+  git -C "$foreign" commit -q --allow-empty -m "init"
+  local out exit_code=0
+  out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge --squash --auto && cd $foreign")") || exit_code=$?
+  assert_deny "T67 trailing cd cannot launder" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$tmp"
+}
+
+t68_cumulative_cd_deny() {
+  # `cd a && cd b && gh pr merge` — the LAST dir-change governs; chaining
+  # a same-origin cd then a foreign one must deny on the foreign target,
+  # not pass on the first.
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_kb_branch "$tmp" "feat-cdcd" clean)
+  local foreign="$tmp/foreign"
+  mkdir -p "$foreign"
+  init_git_repo "$foreign"
+  git -C "$foreign" remote add origin https://github.com/other-org/other-repo.git
+  git -C "$foreign" commit -q --allow-empty -m "init"
+  local out exit_code=0
+  out=$(run_hook "$incidents" "$(make_payload "$work" "cd $work && cd $foreign && gh pr merge 5")") || exit_code=$?
+  assert_deny "T68 cumulative last-cd foreign" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$tmp"
+}
+
+t69_popd_deny() {
+  # popd's target lives in the dir stack — unprovable → deny.
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_kb_branch "$tmp" "feat-popd" clean)
+  local out exit_code=0
+  out=$(run_hook "$incidents" "$(make_payload "$work" "pushd /tmp >/dev/null; popd; gh pr merge 5")") || exit_code=$?
+  assert_deny "T69 popd unresolvable" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$tmp"
+}
+
+t70_xargs_deny() {
+  # `echo 5 | xargs gh pr merge` — the operand rides stdin; the residue
+  # is flag-only but the merge is numbered → unprovable → deny.
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_kb_branch "$tmp" "feat-xargs" clean)
+  local out exit_code=0
+  out=$(run_hook "$incidents" "$(make_payload "$work" "echo 5 | xargs gh pr merge")") || exit_code=$?
+  assert_deny "T70 xargs stdin operand" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$tmp"
+}
+
+t71_nested_subst_deny() {
+  # `gh pr merge $(gh pr merge 5)` — the inner merge is a second
+  # invocation via the `(` boundary → multi-invocation deny, not a census
+  # of whichever head the greedy extraction would pick.
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_kb_branch "$tmp" "feat-nest" clean)
+  local out exit_code=0
+  out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge \$(gh pr merge 5)")") || exit_code=$?
+  assert_deny "T71 nested merge invocation" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$tmp"
+}
+
+t72_cdk_word_pass() {
+  # `cdk deploy && gh pr merge` — `cdk` is not `cd`; the word boundary
+  # prevents a phantom dir-change from denying a clean merge.
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_kb_branch "$tmp" "feat-cdk" clean)
+  local out exit_code=0
+  out=$(run_hook "$incidents" "$(make_payload "$work" "cdk deploy && gh pr merge --squash --auto")") || exit_code=$?
+  assert_pass "T72 cdk-prefix is not cd" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$tmp"
+}
+
 # --- registration + parity (integration) -----------------------------------
 
 t40_settings_registration() {
@@ -1021,6 +1182,19 @@ t56_brace_group_deny
 t57_launcher_args_deny
 t58_redirect_clean_pass
 t59_nested_archive_deny
+t60_mhc_no_sha_deny
+t61_two_shas_deny
+t62_unprovable_env_deny
+t63_background_multi_deny
+t64_brace_cd_deny
+t65_comment_gflags_pass
+t66_subdir_cd_deny
+t67_trailing_cd_no_launder
+t68_cumulative_cd_deny
+t69_popd_deny
+t70_xargs_deny
+t71_nested_subst_deny
+t72_cdk_word_pass
 
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
@@ -1028,9 +1202,10 @@ echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 # Anti-vacuity floor: exact case floor, enforced OUTSIDE the verdict
 # machinery (a neutered assert cannot disarm it — guard-vacuity-floor's
 # mutant contract). Threshold is hand-maintained with the case list:
-# 67 assertions across 57 case invocations (T01/T48 carry a second
-# deny-reason check; T35, T36 assert two arms each).
-MIN_ASSERTIONS=67
+# 80 assertions across 70 case invocations — 70 case verdicts + 4
+# assert_fixture_has preconditions (T01/T02/T04/T20) + 6 second-verdict
+# arms (T01b/T09b/T15b/T18b/T35b/T48b).
+MIN_ASSERTIONS=80
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] vacuity floor: only %d assertions ran (floor %d) — the suite did not execute\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   exit 1
