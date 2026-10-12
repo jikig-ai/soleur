@@ -1167,6 +1167,8 @@ eqv_sh="$(_eqv "$EQV_SH")"
 #   JOINCAP (a logical line joins at most 50 further lines) and UNWRAPCAP (the 200 characters after a bar) are exact: the 51st further line, or a verb that ends at character 201, is not read, and fixtures sit on both sides of each
 #   value (and of JOINBYTES: a verb that ends at byte 8192 or 8193). The loop list is compacted at 32 entries; no output depends on that threshold (only finished entries are dropped), so it cannot be pinned by a fixture and is not. The scan of the bars of ONE physical line is quadratic in its bars and length (anybar takes a substring per
 #   bar): the longest physical line of the corpus is about 6 KB; 64000 bars on a 256 KB line took 19 s under gawk and 9 s under mawk 1.3.4 20200120 at load 10. A single physical line is not bounded by JOINBYTES.
+#   The loop arm is SLOWER under mawk: 30000 consecutive `for vN in zz; do` lines (a new loop variable each, so a new dynamic regex each) took 30 s under mawk 1.3.4 20200120 against 5 s under gawk, at load 10; the corpus itself takes
+#   1.2 s under mawk and 3.4 s under gawk. The compaction bounds the entries, not the regex compiles.
 #   Annotations (R8): the string of an annotation echo is dropped only when it is double-quoted, up to its FIRST double quote (ANNOT), so a pipe inside a `$( )` in the string is HIDDEN when the substitution holds no double
 #   quote (`$(cat f | head -1)`: annot-cmdsub-hidden) and READ, as residue, when it holds one (`$(printf '%s' "$p" | grep -c .)` leaves `echo "$p" | grep -c .) ...`: annot-cmdsub-quoted; the one tree instance, the
 #   `echo "::error::..."` lines of git-data-rung2-rehearsal.yml, is read by that accident, not by design); a single-quoted or unquoted `::error::` annotation drops the rest of the logical line; an annotation string that spans
@@ -2398,8 +2400,8 @@ done
 (( pj_dyn_n == 2 * (${#PJ_DRAIN_OK[@]} + ${#PJ_DRAIN_BAD[@]}) && ${#PJ_DRAIN_OK[@]} > 0 && ${#PJ_DRAIN_BAD[@]} > 0 \
    && pj_n_dok == 2 * ${#PJ_DRAIN_OK[@]} && pj_n_dbad == 2 * ${#PJ_DRAIN_BAD[@]} && pj_n_tok == ${#PJ_DRAIN_OK[@]} + ${#PJ_DET_EDGE[@]} && pj_n_tbad == ${#PJ_DRAIN_BAD[@]} )) \
   || sweep_probe_fail+=("producer-drain-zero: ${pj_dyn_n:-<err>} spelling runs for ${#PJ_DRAIN_OK[@]} accepted and ${#PJ_DRAIN_BAD[@]} non-reading spellings, and the four legs ran ${pj_n_dok:-<err>} / ${pj_n_dbad:-<err>} / ${pj_n_tok:-<err>} / ${pj_n_tbad:-<err>} times (want two dispositions each for the dynamic legs, one run each for the detector legs, and neither list empty — zero spellings ran is never a pass)")
-[[ -z "$pj_shp_bad" && "$pj_sh_tagged" -gt 0 && "$pj_shp_ok" == $((2 * pj_sh_tagged)) ]] \
-  || sweep_probe_fail+=("producer-shell-parity: an sh-tagged spelling reads differently under dash and under a bash named sh: ${pj_shp_bad:-none}; ${pj_shp_ok:-<err>} equal statuses for ${pj_sh_tagged:-<err>} sh-tagged spellings (want two per spelling and at least one) — retag it, reword it, or drop it: it would turn the guard red on a host with no dash")
+[[ -z "$pj_shp_bad" && "$pj_sh_tagged" -gt 0 && "$pj_shp_run" == $((2 * pj_sh_tagged)) && "$pj_shp_ok" == "$pj_shp_run" ]] \
+  || sweep_probe_fail+=("producer-shell-parity: an sh-tagged spelling reads differently under dash and under a bash named sh: ${pj_shp_bad:-none}; ${pj_shp_ok:-<err>} equal statuses in ${pj_shp_run:-<err>} runs for ${pj_sh_tagged:-<err>} sh-tagged spellings (want two runs per spelling, all equal, and at least one spelling) — retag it, reword it, or drop it: it would turn the guard red on a host with no dash")
 # The legs, floored as literals (reported directly): neutering a leg, or cutting its loop, leaves a count below the floor.
 pj_floor leg-dyn-ok 18 "$pj_r_dok" "the number of dynamic accepted-spelling runs"
 pj_floor leg-dyn-bad 52 "$pj_r_dbad" "the number of dynamic non-reading-spelling runs"
