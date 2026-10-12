@@ -241,11 +241,14 @@ drained tick double-fires the cron. That procedure's `routine_runs` check tells 
    `hcloud_volume.inngest_redis` by 2026-10-22.
    - **Retired 2026-10-12 (#9703 Stage 3b); the backstop was destroyed 2026-10-09 (#8285 PR B, §5b) and `op=luks-rollback` no longer exists:** the #8285 follow-through probe for
      the ledger-vs-device claim (the `inngest-luks-property-8296` script, its test and every registration) is
-     deleted, and its directive left #9703. A silent probe pipeline reads as healthy to the wrong-volume alert
-     (`treat_as_zero`); `betteruptime_heartbeat.inngest_server_probe` (armed 2026-10-12, #9703, arm record in
-     `inngest-server.md` section "Arming the probe heartbeat (#9703)") now carries that case, with the nightly
-     `heartbeat-live-reconcile` `fed-but-paused` check as the net. The retired probe never verified the LUKS
-     cipher either (the ledger's `live_verification` stays `unavailable:`), so no verification was lost.
+     deleted, and its directive was removed from #9703 (and the closed #8285) that day. A silent probe pipeline reads
+     as healthy to the wrong-volume alert (`treat_as_zero`); `betteruptime_heartbeat.inngest_server_probe` (armed
+     2026-10-12, #9703, arm record in `inngest-server.md` section "Arming the probe heartbeat (#9703)") now carries that
+     case, with the twice-daily (06:00 and 18:00 UTC) `heartbeat-live-reconcile` `fed-but-paused` check as the net.
+     **What was lost:** the probe's daily cross-read of the ledger claim against the probe row's `data_mount_src`
+     (the `/dev/mapper/inngest-redis` mapper path). The wrong-volume alert keys on `data_mount_devid` only, so a
+     right volume remounted without the dm-crypt mapper is no longer reported by anything automated. It never
+     verified the LUKS cipher either (the ledger's `live_verification` stays `unavailable:`).
    - **After a sanctioned `op=luks-rollback`**, see §5a.
 
 ---
@@ -266,8 +269,7 @@ nothing to restore from. Protection for that (delete protection, edge pins, key-
 
 **Signals that used to mean "the store went back to plaintext" are now incidents, not rollbacks.** The wrong-volume
 alert (`logtail_exploration_alert.inngest_luks_wrong_volume`), a probe row whose `data_mount_src` is not
-`/dev/mapper/inngest-redis`, and the property probe's `rollback_inversion` verdict all mean the store is on a device
-the ledger does not claim. Nothing here can put it back on a plaintext volume. Treat each as a production incident
+`/dev/mapper/inngest-redis` all mean the store is on a device the ledger does not claim. Nothing here can put it back on a plaintext volume. Treat each as a production incident
 (`soleur:incident`): read the newest `host_role=dedicated` `SOLEUR_INNGEST_SERVER_PROBE` row first (§5 step 1's query).
 
 **Signal -> route.** Read the newest `host_role=dedicated` probe row first, then pick the route; the host-replace route is a
@@ -277,13 +279,7 @@ production write and needs the operator's per-command go-ahead:
 | --- | --- | --- |
 | Host dark / probe silent, volume intact (first read `GET /v1/servers/<id>` with the read-only token, §5b read-backs: the LUKS volume must still be attached, else stop and escalate) | Host or shipper failure, store not implicated | `gh workflow run apply-web-platform-infra.yml -f apply_target=inngest-host-replace -f reason="<why>"` (keeps the LUKS volume by omission), then `gh workflow run cutover-inngest.yml -f op=resume` (#7228) |
 | `data_mount_src` is not `/dev/mapper/inngest-redis`, or the wrong-volume alert fires | The store is on a device the ledger does not claim | Incident (`soleur:incident`); do NOT replace the host until the probe row says which device is mounted |
-| `rollback_inversion` verdict from the property probe | The ledger claims LUKS but the measured store is not on `/dev/mapper/inngest-redis` | Incident; the verdict text names this section |
 | `op=luks-cutover` dispatched again | Refused on this host: the durable pointer is set and the flag is `done` (G1/G2) | Nothing to do |
-
-The probe's other verdicts are about the ledger or the probe pipeline, not about where the store is: `under_claim` is a
-ledger-only edit, `backstop_expired` cannot fire once the backstop row is gone, and `no_rows` / `producer_silent` /
-`row_unusable` / `ledger_unreadable` (exit 3) mean the probe pipeline went silent or unreadable (see the #9703 note under
-"Rules that stay in force"): that reads as "cannot establish", never as healthy.
 
 **Recovery routes that exist:** the host-replace route is the first row of the table above (note #7228: **every**
 replace strands the scheduler, whose one-dispatch recovery is `gh workflow run cutover-inngest.yml -f op=resume`).
@@ -295,7 +291,7 @@ replace strands the scheduler, whose one-dispatch recovery is `gh workflow run c
 `plaintext-exception`, answered the three `[2026-09-21 AMENDMENT (#8296)` cells of the Article 30 register, re-paused the
 wrong-volume alert and amended the C4 model and ADR-142. All of that assumed a plaintext volume to revert to. With the
 volume destroyed there is no plaintext exception to record, so none of those steps applies. This heading is kept
-(`op=luks-rollback` in the title) because the property probe's `ACTION REQUIRED` text still points readers at 5a.
+(`op=luks-rollback` in the title) so existing links to 5a still resolve.
 
 ---
 
