@@ -121,9 +121,9 @@ assert_not_grep "no leading whitespace" \
   '^[[:space:]]' "$DENY_FILE"
 bad_lines=$(grep -cvE '^[[:space:]]*(#|$)|^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$|^[0-9a-fA-F:]+/[0-9]{1,3}$' "$DENY_FILE" || true)
 if [[ "$bad_lines" == "0" ]]; then
-  ok "every non-comment deny line is a bare CIDR token"
+  PASS=$((PASS + 1)); echo "  PASS: every non-comment deny line is a bare CIDR token"
 else
-  no "non-CIDR non-comment deny lines present (loader reject-whole-file)"
+  FAIL=$((FAIL + 1)); echo "  FAIL: non-CIDR non-comment deny lines present (loader reject-whole-file)"
 fi
 
 echo "-- auth helper: token-file model --"
@@ -165,9 +165,9 @@ assert_grep "network rm retries teardown-lag (rm -f return != endpoint release)"
 # set -e aborts on a bare `[[ ]] && cmd` / `(( )) && cmd` in command position —
 # the foreign-endpoint filter, the retry cap and the subnet-clash probe all
 # carry false-evaluating runs. Every one must be an if-guard (an `if`-led
-# compound is exempt — the pattern below is anchored at column start).
-assert_not_grep "no bare [[ ]] && idiom (set -e aborts on the false leg)" '^[[:space:]]+\[\[[^]]*\]\] && ' "$BOOTSTRAP"
-assert_not_grep "no bare (( )) && idiom (set -e aborts on the false leg)" '^[[:space:]]+\(\([^)]*\)\) && ' "$BOOTSTRAP"
+# compound is exempt — the anchors start the line with the test itself).
+assert_not_grep "no bare [[ ]] && idiom (set -e aborts on the false leg)" '^[[:space:]]*\[\[[^]]*\]\] && ' "$BOOTSTRAP"
+assert_not_grep "no bare (( )) && idiom (set -e aborts on the false leg)" '^[[:space:]]*\(\([^)]*\)\) && ' "$BOOTSTRAP"
 assert_grep "image guaranteed local before teardown (registry blip cannot strand the rebuild)" 'docker image inspect "\$IMAGE"' "$BOOTSTRAP"
 assert_grep "post-bring-up liveness assert (apply green == path works)" '/dev/tcp/\$GW_IP/\$GW_PORT' "$BOOTSTRAP"
 assert_grep "rebuild emits a Better Stack-visible event (lands beside the probe stream)" 'egress_gw_bridge action=rebuilt' "$BOOTSTRAP"
