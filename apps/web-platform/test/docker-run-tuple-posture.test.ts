@@ -63,7 +63,7 @@ describe("docker run tuple posture (closed world)", () => {
       const r = runCheck(tmp);
       expect(r.status, `expected exit 1, got:\n${r.stdout}${r.stderr}`).toBe(1);
       expect(r.stdout).toMatch(/^FAIL UNKNOWN_OPTION: --cap-add in ci-deploy\.sh canary/m);
-      expect(r.stdout, "the failure must carry its remediation hint").toMatch(/^HINT UNKNOWN_OPTION: /m);
+      expect(r.stdout, "the failure must carry its remediation hint").toMatch(/^HINT UNKNOWN_OPTION: remove the option from the tuple/m);
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
@@ -165,6 +165,8 @@ describe("masked-/proc docker suite: static arms (no docker daemon needed)", () 
     ["bwrap made setuid by a symbolic mode with s", "ELEVATION", (c) => edit(path.join(c, "Dockerfile"), (t) => `${t}\nRUN chmod u=rwxs,go=rx /usr/bin/bwrap\n`)],
     ["bwrap made setuid with a quoted mode", "ELEVATION", (c) => edit(path.join(c, "Dockerfile"), (t) => `${t}\nRUN chmod "u+s" /usr/bin/bwrap\n`)],
     ["bwrap installed with a glued setuid mode", "ELEVATION", (c) => edit(path.join(c, "Dockerfile"), (t) => `${t}\nRUN install -m4755 /x /usr/bin/bwrap\n`)],
+    ["bwrap installed setuid by install -m", "ELEVATION", (c) => edit(path.join(c, "Dockerfile"), (t) => `${t}\nRUN install -m 4755 /x /usr/local/bin/bwrap\n`)],
+    ["bwrap made setuid by dpkg-statoverride", "ELEVATION", (c) => edit(path.join(c, "Dockerfile"), (t) => `${t}\nRUN dpkg-statoverride --update --add root root 4755 /usr/bin/bwrap\n`)],
     ["bwrap copied with a setuid --chmod", "ELEVATION", (c) => edit(path.join(c, "Dockerfile"), (t) => `${t}\nCOPY --chmod=4755 /x /usr/bin/bwrap\n`)],
     ["last USER is root", "USER_DRIFT", (c) => edit(path.join(c, "Dockerfile"), (t) => `${t}\nUSER root\n`)],
     ["canary fixture loses the vendor tail bind", "FIXTURE_TAIL", (c) => edit(path.join(c, "infra", "sandbox-canary-argv.json"), (t) => {

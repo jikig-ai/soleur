@@ -402,6 +402,13 @@ kill_row K22e-wrapper-runuser 'm_append "$CI_DEPLOY_REL" "runuser -u root -- doc
 kill_row K22f-create-other-image 'm_append "$CI_DEPLOY_REL" "docker create --name soleur-plugin-seed evil/img"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'carries words beyond'
 kill_row K22g-create-unlisted-variable-image 'm_append "$CI_DEPLOY_REL" "docker create --name soleur-plugin-seed \$EXTRA"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'carries words beyond'
 kill_row K22h-create-subst-image 'm_append "$CI_DEPLOY_REL" "docker create --name soleur-plugin-seed \"\$(printf x)\""' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'carries words beyond'
+kill_row K23a-exempt-then-indirect 'm_append "$CI_DEPLOY_REL" "docker create --name soleur-plugin-seed \"\$VERIFIED_REF\" >/dev/null; xargs docker run -d --privileged img"' 'indirect execution wrapper'
+kill_row K23b-exempt-then-app-name 'm_append "$CI_DEPLOY_REL" "docker create --name soleur-plugin-seed \"\$VERIFIED_REF\" >/dev/null; x=\"--name soleur-web-platform\""' 'ci-deploy.sh'
+kill_row K23c-cosign-privileged 'm_append "$CI_DEPLOY_REL" "docker run --rm --privileged \"\$COSIGN_IMAGE\" x"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'carries the option --privileged'
+kill_row K23d-cosign-env-preload 'm_append "$CI_DEPLOY_REL" "docker run --rm -e LD_PRELOAD=/x \"\$COSIGN_IMAGE\" x"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'unexpected value for -e'
+kill_row K23e-create-name-eq-other-image 'm_append "$CI_DEPLOY_REL" "docker create --name=soleur-plugin-seed evil/img"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'carries words beyond'
+kill_row K23f-heredoc-in-bracket-arith 'm_append_lines "$CI_DEPLOY_REL" "x=\$[ 1 <""<ZZ ]" "docker run -d --privileged img" "ZZ"' 'UNPARSEABLE_OPTION: a heredoc opener inside'
+kill_row K23g-create-dash-image 'm_append "$CI_DEPLOY_REL" "docker create --name soleur-plugin-seed --privileged"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'carries words beyond'
 kill_row K20i-memory-zero-unlimited 'm_repl prod "--memory \"\$PROD_MEMORY_CAP\"" "--memory 0"' 'POSTURE_VALUE: --memory 0 in ci-deploy.sh prod'
 kill_row K20h-main-file-symlink   'm_symlink "$CI_DEPLOY_REL" /dev/zero'                 'TUPLE_COUNT: cannot read ci-deploy.sh' 'not a regular file'
 
@@ -617,7 +624,7 @@ if [ "$((PASS + FAIL))" -ne "$ROWS" ]; then
   printf '[FATAL] accounting identity: passes(%s) + fails(%s) != rows(%s) - a verdict was discarded\n' "$PASS" "$FAIL" "$ROWS" >&2
   exit 1
 fi
-MIN_ROWS=192
+MIN_ROWS=199
 if [ "$ROWS" -lt "$MIN_ROWS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s rows ran, floor is %s\n' "$ROWS" "$MIN_ROWS" >&2
   exit 1
