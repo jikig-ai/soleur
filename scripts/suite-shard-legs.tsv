@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1194
-# generated-at=2026-10-11T10:27:01Z
+# generated-at=2026-10-12T08:59:55Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -224,6 +224,7 @@ plugins/soleur/test/operator-script.test.sh	6
 plugins/soleur/test/operator-stage-approval-hook.test.sh	2
 plugins/soleur/test/pencil-adapter-auth-hard-fail.test.sh	7
 plugins/soleur/test/pencil-setup-skill-cli-form.test.sh	6
+plugins/soleur/test/plugin-version.test.sh	8
 plugins/soleur/test/pr-fanout-ledger.test.sh	4
 plugins/soleur/test/preflight-check10-suite-integrity.test.sh	7
 plugins/soleur/test/proc.test.sh	2
@@ -265,6 +266,7 @@ plugins/soleur/test/vendor-bundle-coverage.test.sh	5
 plugins/soleur/test/vendor-drift-classify.test.sh	3
 plugins/soleur/test/vendor-drift-workflow.test.sh	8
 plugins/soleur/test/vendor-pin-integrity.test.sh	4
+plugins/soleur/test/version-banner-hook.test.sh	6
 plugins/soleur/test/web-host-escrow-diagnose-workflow.test.sh	5
 plugins/soleur/test/workflow-run-deploy-invariants.test.sh	3
 plugins/soleur/test/worktree-manager-atomic-config.test.sh	7
