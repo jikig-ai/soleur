@@ -44,7 +44,7 @@ TOKRE_BASE = re.compile(r'[A-Za-z0-9_.-]+[.](?:sh|bash|yml|yaml)(?=[^A-Za-z0-9_.
 TOKRE_ARM = re.compile(r'[A-Za-z0-9_.-]+[.](?:sh|bash|yml|yaml|tf|tftpl|tpl|tmpl|template|service)(?=[^A-Za-z0-9_.-]|$)')
 ANNOT = re.compile(r'::(error|warning|notice)::.*$')
 ANNOT_STR = re.compile(r'::(error|warning|notice)::(?:[^"\\]|\\.)*(?:"|$)')
-YAML_BLOCK = re.compile(r':[ \t]*[|>][-+]?[ \t]*$')
+YAML_BLOCK = re.compile(r'(:|(^|[ \t])-)[ \t]*[|>][-+]?[ \t]*$')   # `key: |` and the list-item `- |` (decision-challenges item 19)
 CASE_ALT = re.compile(r'^[ \t]*[A-Za-z_][A-Za-z0-9_.-]*[ \t]*\)')
 WORD = re.compile(r'[A-Za-z_][A-Za-z0-9_.-]*')
 FORRE = re.compile(r'^[ \t]*for[ \t]+([A-Za-z_][A-Za-z0-9_]*)[ \t]+in[ \t]+(.*?);?[ \t]*(?:;[ \t]*do\b|$)')
