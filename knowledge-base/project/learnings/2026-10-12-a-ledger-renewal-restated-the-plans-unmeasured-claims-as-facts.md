@@ -25,5 +25,6 @@ A renewal is the moment a plan's reasoning becomes a durable record, and a green
 5. **The first `git push` after the review commit failed with no readable cause; a plain retry succeeded.** One-off.
 
 ## Tags
+
 category: workflow-patterns
 module: encryption-posture-ledger
