@@ -460,13 +460,16 @@ else
   printf '[FLOOR] %s\n' "derivation B floor: only $B_N helper call sites (< $B_FLOOR) — the helper-call extractor matched (almost) nothing; every set assertion below is vacuous" >&2; exit 1
 fi
 
-# The two derivations must not be the same query wearing two hats. Equal cardinality is the
+# The two derivations must not be the same query wearing two hats. Equal SETS are the
 # signature of an accidentally-shared extractor, and it is also what makes a count comparison
-# (harness row H1) read green over a swapped member.
-if (( A_N != B_N )); then
-  pass "the two derivations are independent: |A|=$A_N != |B|=$B_N, so a count comparison could not stand in for the difference below"
+# (harness row H1) read green over a swapped member. Equal CARDINALITY alone is not that
+# signature: a file that legitimately joins both sets (a mutating git caller that adopts the
+# helper — the #9956 tier-census adoption) makes the counts coincide while the sets still
+# differ, so compare membership, not magnitude.
+if [[ "$A_SET" != "$B_SET" ]]; then
+  pass "the two derivations are independent: A and B differ as sets (|A|=$A_N, |B|=$B_N), so a count comparison could not stand in for the difference below"
 else
-  fail "|A| == |B| == $A_N — check the two extractors have not collapsed into one query"
+  fail "the two derivations return the same set — check the two extractors have not collapsed into one query"
 fi
 
 # --- the difference, printed -----------------------------------------------------------------------

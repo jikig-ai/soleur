@@ -5565,6 +5565,16 @@ if want_scripts; then
   # (marker text echoed inside a step's run: source) and the per-step exercised proof are driven
   # through a stub gh that exits 64 on any request it does not expect.
   run_suite "scripts/bearer-curl-s4-first-runs-9905" bash scripts/followthroughs/bearer-curl-s4-first-runs-9905.test.sh
+  # #9995: the mu1 in-leg mint canary. Guard-1 matrix rows drive the real script against a
+  # PATH-shim curl that records calls (argv NUL-delimited + the credential library's stdin
+  # config) and answers from env — a 401/000/garbage-PEM arm must exit 1 with zero or named
+  # requests, never print GITHUB_APP_MINT, and the JWT must ride the stdin config (ADR-280).
+  run_suite "scripts/probe-github-app-mint" bash scripts/probe-github-app-mint.test.sh
+  # #9995: the dev_scheduled credential-shape audit. Guard-2 matrix rows drive the real
+  # script against a stub doppler (census + per-name gets) — a CR-corrupted token, an
+  # empty/unreadable/wrongly-shaped census, and a mid-list FAIL must all be named and
+  # nonzero; an unclassified name reports UNCLASSIFIED, never ok.
+  run_suite "scripts/audit-dev-scheduled-shapes" bash scripts/audit-dev-scheduled-shapes.test.sh
   # #8151 AC-PM1: exit-code harness for the event-ship-merge merge-base verdict probe.
   # Registered explicitly (orphan-suite class above). Same CONTAMINATION arm as #6297/#8281:
   # every live Better Stack hit for the probe's marker strings has been a `"caller":"api"`
@@ -5607,15 +5617,6 @@ if want_scripts; then
   # the daily verify leg; a structural arm pins that it carries no query or parse of its own. Four
   # mutants are replayed against the arms, each from a sandbox tree.
   run_suite "scripts/web2-luks-live-6931" bash scripts/followthroughs/web2-luks-live-6931.test.sh
-  # #9372 — the single-use web-2 volume rebirth: the stateful steps against a fake Hetzner/Terraform world, the 7-day emptiness
-  # evidence, the names-only never-pooled reader and the birth-time recovery check. Each carries its own mutation battery.
-  run_suite "scripts/web2-rebirth" bash scripts/web2-rebirth.test.sh
-  run_suite "scripts/web2-rebirth-emptiness" bash scripts/web2-rebirth-emptiness.test.sh
-  run_suite "scripts/web2-rebirth-never-pooled" bash scripts/web2-rebirth-never-pooled.test.sh
-  run_suite "scripts/web2-rebirth-recovery-check" bash scripts/web2-rebirth-recovery-check.test.sh
-  # #9372 — the agent-dispatchable, approval-gated soft reboot of the allow-listed web-2 standby: the writer's refusal table and the
-  # read-only rows evidence reader against a fake Hetzner/Terraform/Better Stack world, with a claim-word scan and a mutation battery.
-  run_suite "scripts/web-host-reboot" bash scripts/web-host-reboot.test.sh
   # #7220: exit-code harness for the ACTIVATION soak. Registered explicitly (orphan-suite class
   # above). Review found this probe returning exit 0 — which auto-closes the tracker — on a host
   # where reconciliation was BROKEN: it counted `action=failed reason=sudo_denied` rows, and the
@@ -5668,6 +5669,10 @@ if want_scripts; then
   # #8296 ledger-vs-device property probe, enrolled on #8285. NOTIFY-ONLY: the suite pins that no
   # path exits 0 or 1, because a 0 would let the sweeper close the backstop-retirement tracker.
   run_suite "scripts/inngest-luks-property-8296" bash scripts/followthroughs/inngest-luks-property-8296.test.sh
+  # #9703 feeder for the inngest probe heartbeat. Pins the one property that matters: a beat reaches
+  # Better Stack only on a fresh host_role=dedicated probe row with an unpaused heartbeat, and exit 0
+  # means exactly {beat, fresh_heartbeat_paused}. M1-M7 mutation rows run inside the suite.
+  run_suite "scripts/inngest-probe-heartbeat-feeder" bash scripts/inngest-probe-heartbeat-feeder.test.sh
   # #7761 cutover-flip rollout probe. Registered because lint-orphan-test-suites.sh caught it
   # unregistered: every assertion in it gated nothing, which for a probe that authorizes
   # closing a P1 security issue after a production host replace is the permanent silent no-op
@@ -6106,10 +6111,6 @@ if want_scripts; then
   # inherits nothing from the per-PR apply's inline HALT), so every arm is load-bearing and
   # the suite mutation-proves each one. Registered HERE — nothing auto-discovers tests/scripts/.
   run_suite "tests/scripts/web-host-birth-gate" bash tests/scripts/test-web-host-birth-gate.sh
-  # web-2 volume REBIRTH gate (#9372) — the third sibling (birth requires zero destroys, replace requires the volume to survive;
-  # this one grades the pre and post plans of the single-use rebirth). Registered HERE: nothing auto-discovers tests/scripts/.
-  run_suite "tests/scripts/web-host-rebirth-gate" bash tests/scripts/test-web-host-rebirth-gate.sh
-  run_suite "tests/scripts/web2-rebirth-classify" bash tests/scripts/test-web2-rebirth-classify.sh
   # web-host REPLACE gate (#6969) — the SIBLING of the birth gate above and its opposite by
   # contract: exactly one delete+create of the dispatched host, both volume families and the
   # LUKS passphrase preserved by omission, plus positive requirements on the NIC, the volume

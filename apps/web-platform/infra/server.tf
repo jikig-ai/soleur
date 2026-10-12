@@ -531,7 +531,7 @@ resource "hcloud_server" "web" {
     #   web_host_key     — each.key ("web-1"/"web-2"); the env-writer upper-cases it to name the
     #     per-host Better Stack heartbeat URL var (WEB_NIC_GUARD_URL_WEB_2, …), matching the SSH
     #     provisioner's upper(replace(each.key,"-","_")).
-    #   zot_probe_repo   — local.zot_probe_repo (web-probe.tf:22), the ZOT_PROBE_REPO env value.
+    #   zot_probe_repo   — the BARE local.zot_probe_repo (web-probe.tf), the ZOT_PROBE_REPO a host writes at birth; web-1's SSH provisioner re-delivers the pinned variant.
     # betterstack_ingest_url + registry_endpoint are already in this map (reused, not re-added).
     web_probes_token = doppler_service_token.web_probes.key
     expected_ip      = var.web_hosts[each.key].private_ip
@@ -1003,7 +1003,7 @@ resource "terraform_data" "zot_consumer_probe_install" {
     file("${path.module}/web-zot-consumer-probe.service"),
     file("${path.module}/web-zot-consumer-probe.timer"),
     local.registry_endpoint,
-    local.zot_probe_repo,
+    local.zot_probe_repo_pinned,
     # Hash the read-scoped probe token so a `-replace` rotation re-fires delivery (see nic-guard).
     nonsensitive(sha256(doppler_service_token.web_probes.key)),
     local.ghcr_deny_sh,
@@ -1041,7 +1041,7 @@ resource "terraform_data" "zot_consumer_probe_install" {
       # DOPPLER_TOKEN (read-scoped web_probes) + HOME=/root on the unit are the two-fold unit-start
       # fix — see the web-private-nic-guard install above. #6438 §1.
       # umask 0137: never world/group-readable — the env file now holds a live prd read token (see nic-guard install).
-      "( umask 0137 && printf 'ZOT_ENDPOINT=%s\\nZOT_PROBE_REPO=%s\\nWEB_ZOT_CONSUMER_URL_KEY=%s\\nDOPPLER_TOKEN=%s\\nDOPPLER_ENABLE_VERSION_CHECK=false\\n' '${local.registry_endpoint}' '${local.zot_probe_repo}' 'WEB_ZOT_CONSUMER_URL_${upper(replace("web-1", "-", "_"))}' '${doppler_service_token.web_probes.key}' > /etc/default/web-zot-consumer-probe )",
+      "( umask 0137 && printf 'ZOT_ENDPOINT=%s\\nZOT_PROBE_REPO=%s\\nWEB_ZOT_CONSUMER_URL_KEY=%s\\nDOPPLER_TOKEN=%s\\nDOPPLER_ENABLE_VERSION_CHECK=false\\n' '${local.registry_endpoint}' '${local.zot_probe_repo_pinned}' 'WEB_ZOT_CONSUMER_URL_${upper(replace("web-1", "-", "_"))}' '${doppler_service_token.web_probes.key}' > /etc/default/web-zot-consumer-probe )",
       "chmod 600 /etc/default/web-zot-consumer-probe",
       "systemctl daemon-reload",
       "systemctl enable --now web-zot-consumer-probe.timer",
@@ -2141,12 +2141,12 @@ resource "terraform_data" "deploy_pipeline_fix" {
 # deploy-pipeline FILE_MAP set, plus TWO non-FILE_MAP duties: the #9169 ghcr.io hosts-file
 # deny (local.ghcr_deny_sh + its assertion, in the last, secret-free block;
 # web-ghcr-deny.test.sh) and, since #9393, the cron-egress artifacts a RUNNING
-# web-2 otherwise gets only at rebirth — the carved CIDR allow list, the resolver,
+# web-2 otherwise gets only at birth (a replace) — the carved CIDR allow list, the resolver,
 # the post-apply probe script, and (since #9534) the loader plus the gateway
 # deny-CIDR file it dies without, delivered then EXECUTED exactly as
 # terraform_data.cron_egress_firewall's terminal step does on web-1. The alarm
-# and systemd units stay birth-frozen until the
-# #9372 rebirth — the issue's stated scope — EXCEPT the loader, lifted from the
+# and systemd units stay birth-frozen (the #9372 rebirth workflow that was to
+# refresh them is retired, so the next refresh is a web-2 replace) — EXCEPT the loader, lifted from the
 # freeze here: #9534's resolver tick asserts eight enforcement markers including the
 # egress-gateway DOCKER-USER legs, which only the post-#9529 loader installs. A
 # birth-frozen loader cannot satisfy them, so the resolver self-heals every minute
@@ -2862,7 +2862,9 @@ locals {
   # #6604 step 7 — web-1's plaintext workspaces volume (105149570) was zeroed, read back,
   # detached and deleted, and its two addresses were forgotten from state (ADR-119 addendum;
   # knowledge-base/legal/audits/workspaces-plaintext-destruction-record.md). Only the hosts
-  # listed here still own a per-host plaintext volume; web-1's /workspaces lives solely on
+  # listed here own a per-host keyed volume (web-2: born raw and formatted LUKS by the guest
+  # provisioner at first boot, ADR-263); the local's name is historical and is pinned by the ledger
+  # evidence anchor and Guard B4, so it is not renamed. web-1's /workspaces lives solely on
   # hcloud_volume.workspaces_luks (workspaces-luks.tf). Guard B4 (workspaces-luks.test.sh).
   plaintext_workspaces_hosts = { for k, v in var.web_hosts : k => v if k != "web-1" }
 }
@@ -2889,19 +2891,20 @@ resource "hcloud_volume" "workspaces" {
 
   # (ADR-143 Phase 4.2 / #6459) prevent_destroy on the per-host /workspaces block volumes so a
   # stray `terraform destroy` / for_each key churn cannot silently drop a volume. This is the
-  # per-host plaintext volume (web-2 only, since #6604 step 7); web-1's sole-copy data is on the
+  # per-host keyed volume (web-2 only, since #6604 step 7); web-1's sole-copy data is on the
   # additive LUKS singleton hcloud_volume.workspaces_luks (workspaces-luks.tf, ADR-119), which
   # since #6604 step 7 carries its own prevent_destroy AND delete_protection (the
   # `apply_target=workspaces-luks-recut` `-replace` escape hatch is retired with it). The keyed volume
-  # is the store a fresh web host (web-2) formats LUKS at first boot once it is reborn raw (ADR-263, #9372).
+  # is the store web-2 formats LUKS at first boot (born raw 2026-10-06; the single-use rebirth workflow that
+  # created it retired 2026-10-12; ADR-263, #9372).
   # Not in the push-apply `-target` allow-list, so this adds no merge-apply behavior.
   #
   # `ignore_changes = [format]` is CREATION-ONLY and load-bearing; it is pinned together with the absent
   # `format` above by fresh-boot-parity.test.sh section 19. MEASURED on hcloud 1.63.0 (offline plan, 2026-10-01):
   # `format` is NOT ForceNew, dropping it without the ignore plans an in-place `ext4 -> null` on a
   # user-data volume, and WITH the ignore the plan is "No changes", so the merge is a no-op for the live
-  # (ext4) volumes. The live web-2 volume is converted by the gated rebirth, never by this block
-  # (ADR-263). Do NOT delete the ignore. The volume is reached by the push-apply -target set only
+  # (ext4) volumes. A volume's filesystem is decided by the guest provisioner at first boot, never by this
+  # block (ADR-263). Do NOT delete the ignore. The volume is reached by the push-apply -target set only
   # transitively (hcloud_server.web -> user_data -> workspaces_volume_id), which is why it matters.
   lifecycle {
     prevent_destroy = true

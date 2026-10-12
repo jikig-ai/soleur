@@ -438,6 +438,7 @@ MOCK
 create_docker_mock() {
   cat > "$1/docker" << 'MOCK'
 #!/bin/bash
+_ltok_in=""; case " $* " in *" --password-stdin "*) [ -t 0 ] || _ltok_in="$(timeout 2 cat)" ;; esac
 mode="${MOCK_DOCKER_MODE:-default}"
 
 # #9871 canary DIAG bundle. The bundle is ONE `docker exec ... /bin/sh -c <script> soleur-canary-diag`;
@@ -770,7 +771,7 @@ if [[ "${1:-}" == "login" ]]; then
     [[ "$_prev" == "-u" ]] && _luser="$_a"
     _prev="$_a"
   done
-  _ltok=""; [[ "$_stdin" == "1" ]] && _ltok="$(cat)"
+  _ltok=""; [[ "$_stdin" == "1" ]] && _ltok="$_ltok_in"
   # RECORD THE REGISTRY, not only the user. The user alone cannot answer "did this deploy log in
   # to ghcr.io?", which is the single property #8036 1c exists to guarantee. Recorded as
   # `LOGIN:<registry>\tuser=<user>` so a row can anchor on `^LOGIN:ghcr\.io\t` exactly.
@@ -10060,6 +10061,7 @@ gak_run_boot() {
   create_mock_doppler "$d/bin"; create_mock_logger "$d/bin"
   cat > "$d/bin/docker" <<'MOCK'
 #!/bin/bash
+case " $* " in *" --password-stdin "*) [ -t 0 ] || timeout 2 cat >/dev/null ;; esac
 if [[ "${1:-}" == "inspect" ]]; then echo "${MOCK_BOOT_RUNNING:-true}"; exit 0; fi
 if [[ "${1:-}" == "exec" && "$*" == *github-app-key-probe.mjs* ]]; then
   _gtok=0; _gkey=0; _giso=0

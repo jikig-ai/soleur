@@ -715,6 +715,8 @@ async function runQueryAttempt(opts: QueryAttemptOpts): Promise<QueryAttemptResu
       sandbox: {
         enabled: true,
         failIfUnavailable: true,
+        // Test-local literal (NOT the production builder's value, which is false since #10054): this live-SDK run has
+        // no canUseTool and no allowedTools, so it needs the sandbox auto-allow to let its probe Bash run at all.
         autoAllowBashIfSandboxed: true,
         allowUnsandboxedCommands: false,
         enableWeakerNestedSandbox: true,

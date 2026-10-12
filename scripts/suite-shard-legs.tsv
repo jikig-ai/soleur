@@ -2,8 +2,8 @@
 # n=8
 # generated-from-run=incremental
 # generated-from-runs=incremental
-# default-weight-ms=1194
-# generated-at=2026-10-12T08:59:55Z
+# default-weight-ms=1180
+# generated-at=2026-10-12T14:56:58Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -64,6 +64,8 @@
 .claude/hooks/stub-argv-fidelity.test.sh	1
 apps/cla-evidence/scripts/_cf-admin-token.test.sh	8
 apps/cla-evidence/scripts/_r2-endpoint.test.sh	8
+apps/cla-evidence/scripts/_r2-sigv4-curl.test.sh	1
+apps/cla-evidence/scripts/bootstrap-r2-probe.test.sh	1
 apps/cla-evidence/scripts/gdpr-override.test.sh	2
 apps/cla-evidence/scripts/inspect.test.sh	6
 apps/cla-evidence/scripts/sentinel-pr.test.sh	5
@@ -135,6 +137,7 @@ plugins/soleur/skills/review/test/emit-review-trailer.test.sh	5
 plugins/soleur/skills/review/test/fix-round-seats.test.sh	2
 plugins/soleur/skills/skill-security-scan/test/argv-ceiling.test.sh	1
 plugins/soleur/skills/skill-security-scan/test/meta-dir-reap.test.sh	2
+plugins/soleur/skills/skill-security-scan/test/redact-pii-ghs-shape.test.sh	1
 plugins/soleur/test/_base-notice-frontmatter.test.sh	8
 plugins/soleur/test/admin-merge-ready-wiring.test.sh	4
 plugins/soleur/test/audit-flag-flip.test.sh	5
@@ -254,6 +257,7 @@ plugins/soleur/test/ship-followthrough-directive.test.sh	7
 plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh	6
 plugins/soleur/test/ship-pir-action-items-gate.test.sh	8
 plugins/soleur/test/sync-pr-behind.test.sh	3
+plugins/soleur/test/technical-ruling-gate.test.sh	1
 plugins/soleur/test/terraform-drift-sentry-leg.test.sh	7
 plugins/soleur/test/terraform-drift-step-order.test.sh	6
 plugins/soleur/test/test-pyramid-fixtures.test.sh	3
@@ -290,6 +294,7 @@ scripts/anthropic-admin-key-6297	5
 scripts/anthropic-double-bill-8611	6
 scripts/assert-dependabot-drain-live	3
 scripts/assert-dependabot-drain-unit	2
+scripts/audit-dev-scheduled-shapes	1
 scripts/audit-suite-reads	8
 scripts/battery-ref-guard	5
 scripts/battery-tag-authorship	2
@@ -351,6 +356,7 @@ scripts/ghcr-read-retired-8036	3
 scripts/git-data-boot-poll-8178	4
 scripts/git-data-reboot-evidence-landed-8210	6
 scripts/guard-vacuity-floor	7
+scripts/hosted-destroy-ask-window-9776	8
 scripts/hostname-mislabel-web1-6616	6
 scripts/image-cve-scan	3
 scripts/image-cve-scan-window-9826	2
@@ -363,6 +369,7 @@ scripts/inngest-host-not-serving-7674	4
 scripts/inngest-host-state	2
 scripts/inngest-liveness-classify	3
 scripts/inngest-luks-property-8296	6
+scripts/inngest-probe-heartbeat-feeder	6
 scripts/inngest-provision-unit-8562	5
 scripts/inngest-restart-age-gate	1
 scripts/inngest-restart-poll-classify	3
@@ -449,6 +456,7 @@ scripts/orphan-process-reaper-mutations	5
 scripts/plugin-delivery-canary	7
 scripts/plugin-legacy-resolver-probe	3
 scripts/pre-push-ratchet-lane	4
+scripts/probe-github-app-mint	1
 scripts/probe-legal-corpus-truth-live	1
 scripts/prod-version-drift-check	5
 scripts/raise-tmp-tmpfs-ceiling	6
@@ -501,12 +509,7 @@ scripts/watchdog-arm-soak-9237	5
 scripts/watchdog-debounce-soak-9686	3
 scripts/web-fresh-boot-zot-8651	7
 scripts/web-host-escrow-preflight	3
-scripts/web-host-reboot	1
 scripts/web2-luks-live-6931	4
-scripts/web2-rebirth	4
-scripts/web2-rebirth-emptiness	4
-scripts/web2-rebirth-never-pooled	4
-scripts/web2-rebirth-recovery-check	6
 scripts/workspaces-plaintext-hold-9348	2
 scripts/zot-fill-rate-7341	6
 scripts/zot-last-err-redact-7500	7
@@ -599,9 +602,7 @@ tests/scripts/vector-redeliver-wiring	3
 tests/scripts/vendor-pin-gate-verdict	4
 tests/scripts/weakness-miner	2
 tests/scripts/web-host-birth-gate	6
-tests/scripts/web-host-rebirth-gate	6
 tests/scripts/web-host-replace-gate	2
-tests/scripts/web2-rebirth-classify	7
 tests/scripts/workspaces-luks-cutover-gate	7
 tests/scripts/workspaces-luks-recut-gate	5
 tests/scripts/write-known-hosts	3

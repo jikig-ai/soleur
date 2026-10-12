@@ -852,7 +852,7 @@ Two heartbeat families watch the image-pull path. Neither needs SSH to diagnose.
 
 | Heartbeat | Fed by | Period / grace | A missing beat means |
 |---|---|---|---|
-| `soleur-web-zot-consumer-web-1`, `-web-2` | `web-zot-consumer-probe.sh` on each web host, every 60 s | 180 / 60 | That web host could not get a servable tag list from zot for ANY probed repository (the web image or `jikig-ai/soleur-inngest-bootstrap`; web-2 still probes the web image only until its next replace) for about 4 min |
+| `soleur-web-zot-consumer-web-1`, `-web-2` | `web-zot-consumer-probe.sh` on each web host, every 60 s | 180 / 60 | That web host could not get a servable tag list from zot for ANY probed repository (the web image or `jikig-ai/soleur-inngest-bootstrap`; web-2 still probes the web image only until its next replace), or (web-1 only) could not HEAD the bootstrap image's pinned manifest, the `ZIREF` digest (#10004), for about 4 min |
 | `soleur-registry-prd` | `zot-liveness-heartbeat.sh` on the registry host, every 60 s | 60 / 30 | zot did not answer on the host's private IP, or the beat itself did not arrive, for 90 s |
 
 **Step 1: was it a planned registry replace?** Every `soleur-registry-prd` incident since the
@@ -902,8 +902,36 @@ doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1
   --grep SOLEUR_ZOT_PROBE_VERDICT --limit 20
 ```
 
-`repo=<path> code=200 verdict=servable` for both repositories is a healthy host. The beat goes absent when
-ANY repository does not serve, so a bootstrap-repo fault pages as "web zot consumer down" for the host.
+`repo=<path> code=200 verdict=servable` for both repositories is a healthy host on every host except web-1,
+where the bootstrap row must ALSO read `pin_verdict=pinned` (`verdict=` records only the tags/list result, so a
+`pin-missing` row still reads `code=200 verdict=servable`). The beat goes absent when ANY repository does not
+serve, so a bootstrap-repo fault pages as "web zot consumer down" for the host.
+
+Each marker row ends `pin_verdict=<none|skipped|pinned|pin-missing|auth-broke|unreachable|wedged|unexpected>`.
+On web-1 the bootstrap repository should read `pinned`: a HEAD of the digest hosts pull answered 200. `none`
+means the element carries no pin (the web image, which has no committed digest, #10044, and every host other
+than web-1, whose list is bare); `skipped` means its tag list was not 200, so the pin was not HEADed.
+A fault line `SUPPRESS ping: 404 — pinned manifest <repo>@sha256:<digest> is MISSING` ends `ref=<ref> repo=<path>`:
+`tags/list` still answers 200 but the pinned digest is gone from zot (evicted by the 5-tag retention, never
+mirrored, or garbage-collected), so a fresh host's pull of that pin would fail. Compare `ref=` with the `ZIREF`
+line on main (`/usr/bin/grep -a -n 'ZIREF=' apps/web-platform/infra/cloud-init-inngest.yml`): a different
+digest means web-1 holds a stale pin (a pin bump whose delivery to web-1 failed), the same digest means the
+pin is genuinely gone from zot (eviction, never mirrored, or garbage collection). Any other pin code (403,
+5xx, 000) is named in the line and suppresses the ping the same way.
+
+```bash
+# the pin fault lines (one per run while it persists), then the push apply that delivers a bump to web-1
+doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h --grep 'pinned manifest' --limit 10
+gh run list -R jikig-ai/soleur -w apply-web-platform-infra.yml -L 5
+gh run view <run-id> -R jikig-ai/soleur --log | grep zot_consumer_probe_install
+```
+
+A failed provisioner leaves `terraform_data.zot_consumer_probe_install` tainted, so the next apply retries the
+delivery: push a fix commit under `apps/web-platform/infra/**` or dispatch the owning workflow
+(`gh workflow run apply-web-platform-infra.yml --ref main -f reason='re-deliver the web-1 probe pin'`). Never
+`gh run rerun --failed` here: it re-runs the original merge ref, so after a later pin bump it would deliver the
+older pin again. The delivery is also not repeated when web-1 itself is rebuilt: cloud-init writes the bare list, so
+after a web-1 rebuild the bootstrap row reads `pin_verdict=none` until that resource is delivered again.
 
 `auth_broken` above 0 is a credential fault (the probe exits 3), not an outage. For a web-2 page,
 also check `soleur-web-nic-guard-web-2`. When both page together, the whole host was dark, not zot.
@@ -1064,7 +1092,7 @@ in NATIVE Vector shape, NOT the `tag_metrics`-flattened log shape.** So:
   Measured 2026-10-06 (#9372): with the pinned Vector 0.43.1 the remap is a silent no-op on metric events, so the
   stored row is the bare metric. The web-2 emptiness gate `scripts/web2-rebirth-emptiness.sh` reads exactly this native
   shape — `tags.host`, `namespace`, `tags.mountpoint`, `name`, `gauge.value` — and its suite resolves those paths against
-  a real-shape row.)
+  a real-shape row.) *(2026-10-12 (#9372): `scripts/web2-rebirth-emptiness.sh` is deleted with the rebirth workflow; the native stored-row shape described above is unchanged.)*
 
 Memory utilisation distribution for one host over 30 days (min available =
 worst-case peak usage; subtract from total for GB used):

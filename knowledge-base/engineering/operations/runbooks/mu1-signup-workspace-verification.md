@@ -26,7 +26,7 @@ The enforcing roadmap entry is `knowledge-base/product/roadmap.md`
 | # | Criterion | Primary evidence |
 |---|-----------|------------------|
 | AC-1 | Signup triggers automatic workspace-row creation | `MU1 AC-1` describe block in `mu1.integration.test.ts` (requires `MU1_INTEGRATION=1`) |
-| AC-2 | Workspace clones the user's connected GitHub repo | `MU1 AC-2` describe block in `mu1.integration.test.ts` (requires `MU1_FIXTURE_REPO_URL` + `MU1_FIXTURE_INSTALLATION_ID` + `MU1_INTEGRATION=1` for the full `doppler run` wrap). Manual staging fallback retained in step 4 below. |
+| AC-2 | Workspace clones the user's connected GitHub repo | `MU1 AC-2` describe block in `mu1.integration.test.ts` (requires `MU1_FIXTURE_REPO_URL` + `MU1_FIXTURE_INSTALLATION_ID` + `MU1_INTEGRATION=1` for the full `doppler run` wrap). The nightly `scheduled-integration-suites.yml` mu1 step also runs `scripts/probe-github-app-mint.sh` first — a live `GET /app` mint canary under the same `dev_scheduled` env; `GITHUB_APP_MINT status=200 slug=soleur-ci-fixture` in the step log is the credential-liveness evidence (#9995). Manual staging fallback retained in step 4 below. |
 | AC-3 | Latest Soleur plugin is installed in the workspace | `MU1 AC-3` describe block (always runs) |
 | AC-4 | Workspace is isolated per user | `MU1 AC-4` describe block (always runs) + `audit-bwrap-uid.sh` |
 
@@ -216,11 +216,19 @@ after any App settings change):
   `gh api /orgs/jikig-ai/installations --jq '.installations[] |
   select(.app_slug == "soleur-ai") | {id, repository_selection}'`.
   Expected: `{"id": 122213433, "repository_selection": "all"}`.
-- `GITHUB_APP_PRIVATE_KEY` exists in Doppler `dev` (copied from `prd` to
-  enable the gated AC-2 block). Dev-Doppler readers can mint installation
-  tokens for any `soleur-ai` installation; the App's org-scope (just
-  `jikig-ai`) bounds the blast radius. Re-evaluate if dev-Doppler access
-  widens beyond the founder team.
+- Credential provenance after #9995: `dev_scheduled` carries the
+  least-privilege **`soleur-ci-fixture`** App (`GITHUB_APP_ID` +
+  `GITHUB_APP_PRIVATE_KEY` + `MU1_FIXTURE_INSTALLATION_ID` — the fixture
+  App's repo-scoped installation on `jikig-ai/mu1-fixture` only,
+  `contents:read`; a dev-scheduled leak can only read fixture content).
+  The step's `GITHUB_APP_MINT status=200` line proves that pair mints.
+  Doppler `dev` still holds a `soleur-ai`-identity `GITHUB_APP_PRIVATE_KEY`
+  (the gated AC-2 block was authored against it); that copy is a **dead,
+  unregistered key** — the same fingerprint that produced #9995's 401 —
+  left deliberately unchanged (the `dev` config's app identity is wired
+  into local flows via `NEXT_PUBLIC_GITHUB_APP_SLUG`; see the #9995 audit
+  comment). A routine `doppler run -c dev` therefore still hard-fails AC-2
+  with the documented 401 — expected, not a new regression.
 
 ## Known Deferrals
 

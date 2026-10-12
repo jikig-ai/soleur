@@ -85,7 +85,7 @@ const log = createChildLogger("agent-sandbox");
 export type AgentSandboxConfig = {
   enabled: true;
   failIfUnavailable: true;
-  autoAllowBashIfSandboxed: true;
+  autoAllowBashIfSandboxed: false;
   allowUnsandboxedCommands: false;
   enableWeakerNestedSandbox: true;
   network: {
@@ -571,11 +571,18 @@ export function buildAgentSandboxConfig(
     // @anthropic-ai/claude-agent-sdk) — Tier 4 defense-in-depth
     // disappears with no Sentry signal. See #2634.
     failIfUnavailable: true,
-    autoAllowBashIfSandboxed: true,
+    // #10054: false so a sandboxed Bash call still reaches `canUseTool` (the SDK auto-allows it
+    // before the callback otherwise, and the must-ask lane / safe-Bash allowlist / autonomous
+    // toggle never run). The sandbox itself stays on. Pinned against the real SDK by the
+    // real-SDK C9 probe under scripts/ (ADR-284 post-merge verification).
+    autoAllowBashIfSandboxed: false,
     allowUnsandboxedCommands: false,
-    // Docker containers cannot mount proc inside user namespaces (kernel
-    // restriction). enableWeakerNestedSandbox skips --proc /proc in bwrap
-    // (#1557). `denyRead` is not what protects the CLI parent's environment;
+    // A fresh procfs mount inside a nested user namespace is refused (EPERM) under
+    // docker's default masked /proc, so enableWeakerNestedSandbox makes the vendored
+    // builder emit a tail `--bind /proc /proc` instead of `--proc /proc` (#1557). The
+    // bwrap shim then DROPS that tail bind (#10039), so the vendored `--tmpfs /proc`
+    // is the realized mask: no procfs at all inside the sandbox. `denyRead` alone is
+    // not what protects the CLI parent's environment;
     // the outcome (no readable environ carries the key) is measured in ADR-272
     // and pinned by sandbox-credential-deny-runtime.test.ts, the mechanism is not.
     enableWeakerNestedSandbox: true,

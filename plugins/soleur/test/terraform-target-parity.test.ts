@@ -87,8 +87,9 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 // 271 -> 277 (#9879 review fixes, +6): G2 destroy spellings + sub-root normalisation, G2 scanner linearity, and the G2e attribute pin
 // (live, mutation matrix, comment-stripper robustness, per-merge edge to the volume).
 // 277 -> 278 (#9879 review round 2, +1): G2e lexer/scanner linearity.
-// Exact again: grep -cE '^\s*test\(' = 278.
-const TEST_FLOOR = 278;
+// 278 -> 276 (#9372 retirement): the declared count was 279 (floor 278, one row loose); the single-use rebirth workflow's five-target describe (three tests) retired with the workflow and the G2 test was rewritten in place, so 279 - 3 = 276.
+// Exact again: grep -cE '^\s*test\(' = 276.
+const TEST_FLOOR = 276;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -2240,10 +2241,6 @@ const MAIN_ROOT_TF_WORKFLOWS = [
   "apply-deploy-pipeline-fix.yml",
   "scheduled-terraform-drift.yml",
   "infra-validation.yml",
-  // #9372: the dispatch-only, single-use web-2 rebirth plans and applies the main root (it retires after use, which
-  // takes this entry out and the census count back to 3; the create-only escrow workflow that sat beside it retired
-  // with the closing change).
-  "web2-luks-rebirth.yml",
 ];
 
 describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)", () => {
@@ -2372,7 +2369,7 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
     // computed at runtime from a changed-files job), so it is listed by hand; every other
     // entry must be found, and nothing else may be.
     expect(found).toEqual(MAIN_ROOT_TF_WORKFLOWS.filter((f) => f !== "infra-validation.yml").sort());
-    expect(found.length).toBe(4);
+    expect(found.length).toBe(3);
   });
 
   // ─── Inline pin-load arm (follower retired, #8211 PR2 / ADR-237 D6 amendment) ───────
@@ -4118,11 +4115,10 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
     }
   }, 60_000);
 
-  test("G2: tracked scripts - no state-write or flag verb co-occurs with a sole-copy address (web2-rebirth.sh stays legal)", () => {
+  test("G2: tracked scripts - no state-write or flag verb co-occurs with a sole-copy address", () => {
     const scripts = g2TrackedScripts();
     // MEASURED 2026-10-10: 537 files after the test/fixture skip (1063 before it), zero hits. The floor is a non-vacuity bound, not the count.
     expect(scripts.length).toBeGreaterThan(400); // the listing reached every directory class below, not just scripts/
-    expect(scripts).toContain("scripts/web2-rebirth.sh");
     for (const dir of [/^\.github\/actions\//, /^\.github\/scripts\//, /^scripts\//, /^apps\/[^/]+\/infra\//]) {
       expect(scripts.filter((p) => dir.test(p)).length, `no scanned file under ${dir}`).toBeGreaterThan(0);
     }
@@ -4132,10 +4128,16 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
     expect(naming.length).toBeGreaterThan(0);
     const hits = scripts.flatMap((rel) => g2ScriptHits(rel, readFileSync(resolve(REPO_ROOT, rel), "utf8")));
     expect(hits).toEqual([]);
-    // web2-rebirth really runs `terraform state rm` (a verb IS present) and names no sole-copy address: legal by content, not by exemption.
-    const rebirth = g2Code(readFileSync(resolve(REPO_ROOT, "scripts/web2-rebirth.sh"), "utf8"));
-    expect(G2_STATE_VERBS.some(([v, re]) => v === "state-rm" && re.test(rebirth))).toBe(true);
-    expect(g2Named(rebirth)).toEqual([]);
+    // Scratch control (the real-content control, a script retired with the rebirth workflow): a verb IS present
+    // and no sole-copy address is named, so the line is legal by content, not by exemption. It flows through the same two
+    // functions the population scan uses (g2Code/G2_STATE_VERBS and g2Named), embedded in a longer line with a leading `cd x &&`
+    // and a trailing comment, so a verb-less scanner (empty G2_STATE_VERBS) or a blind matcher cannot pass it.
+    const control = g2Code(`cd x && terraform state rm 'hcloud_volume.workspaces["web-2"]' # web-2 pinned form`);
+    expect(G2_STATE_VERBS.some(([v, re]) => v === "state-rm" && re.test(control))).toBe(true);
+    expect(g2Named(control)).toEqual([]);
+    expect(g2ScriptHits("c.sh", `cd x && terraform state rm 'hcloud_volume.workspaces["web-2"]' # web-2 pinned form`)).toEqual([]);
+    // The same line plus a second line naming a sole-copy address must report exactly that one hit, not "at least one" and not none.
+    expect(g2ScriptHits("c.sh", `cd x && terraform state rm 'hcloud_volume.workspaces["web-2"]'\nterraform state rm hcloud_volume.inngest_redis_luks`)).toEqual(["c.sh|state-rm|hcloud_volume.inngest_redis_luks"]);
     // Mutations on scratch strings: each spelling in a script is RED; the web-2 pinned form is not.
     const VOL = "hcloud_volume.inngest_redis_luks";
     expect(g2ScriptHits("s.sh", `terraform state rm 'hcloud_volume.inngest_redis_luks'`)).toEqual(["s.sh|state-rm|hcloud_volume.inngest_redis_luks"]);
@@ -6929,8 +6931,11 @@ describe("the ARM gate's deadlines fit its job", () => {
     // Since #7797 the bearer rides curl's stdin config channel, so the transport flags, the token
     // guard and the header live in ONE wrapper (`bs_api`) holding the file's only `curl`; the two
     // call sites (the GET and the PATCH) go through it, so what is pinned is one curl + two calls.
+    // #9980 added a THIRD credentialed call site: the named-monitor resolver's paginated list read
+    // (`--status` / `--arm-one`). The count is the honest number of call sites, and the intent of the
+    // pin survives: every credentialed call goes through `bs_api`, and `curl` stays at exactly one.
     expect(stripped.match(/curl\b/g)?.length).toBe(1);
-    expect(stripped.match(/\$\(bs_api /g)?.length).toBe(2);
+    expect(stripped.match(/\$\(bs_api /g)?.length).toBe(3);
     expect(stripped).toMatch(/-w '%\{http_code\}'/);
     expect(stripped).toMatch(/\[\[ "\$HB_PATCH_CODE" =~ \^2 \]\]/);
     // The sweep's outcome vocabulary is closed and documented in the same file.
@@ -7611,46 +7616,6 @@ describe("the web-class passphrase pair is reachable only from the apply job, wh
     const droppedWeb = message.replace(", random_password.workspaces_luks_web", "");
     expect(droppedWeb).not.toBe(message);
     expect(missingAddrs(droppedWeb, addrs)).toEqual(["random_password.workspaces_luks_web"]);
-  });
-});
-
-// --- #9372: the single-use web-2 rebirth's five-target set ---------------------------------------------------
-// `-target` walks a resource's DEPENDENCIES, never its dependents, so the rebirth names every member of the operation
-// explicitly: the server (replaced), its private NIC, the keyed volume (created raw after the Hetzner-side delete and the
-// state rm), the volume attachment, and the fleet firewall attachment (which only UPDATES). The two plan steps (`pre`, graded
-// before anything is touched, and `post`, graded before the apply) must carry exactly the same set, and it must name
-// web-2 only. The plan gate (tests/scripts/lib/web-host-rebirth-gate.sh) grades what the plan DOES; this row pins what the
-// plan is ALLOWED TO REACH.
-describe("web2-luks-rebirth.yml: the five-target set (#9372)", () => {
-  const REBIRTH_WF = resolve(REPO_ROOT, ".github/workflows/web2-luks-rebirth.yml");
-  const EXPECTED = [
-    "hcloud_firewall_attachment.web",
-    'hcloud_server.web["web-2"]',
-    'hcloud_server_network.web["web-2"]',
-    'hcloud_volume.workspaces["web-2"]',
-    'hcloud_volume_attachment.workspaces["web-2"]',
-  ].sort();
-  const planSteps = (): Array<{ name: string; run: string }> => {
-    const doc = parseYaml(readFileSync(REBIRTH_WF, "utf8")) as { jobs: { rebirth: { steps: Array<{ name?: string; run?: string }> } } };
-    return doc.jobs.rebirth.steps.filter((st) => typeof st.run === "string" && /terraform\s+plan\b/.test(st.run)).map((st) => ({ name: st.name ?? "", run: st.run as string }));
-  };
-  const targetsOf = (run: string): string[] => [...run.matchAll(/-target='([^']+)'/g)].map((m) => m[1]).sort();
-  const replacesOf = (run: string): string[] => [...run.matchAll(/-replace='([^']+)'/g)].map((m) => m[1]);
-
-  test("there are exactly two plan steps (pre and post), so the set below is not vacuous", () => {
-    expect(planSteps().map((p) => /`(pre|post)`/.exec(p.name)?.[1])).toEqual(["pre", "post"]);
-  });
-
-  test("both plans carry exactly the five targets, web-2 only, plus one -replace of the server", () => {
-    for (const p of planSteps()) {
-      expect([p.name, targetsOf(p.run)]).toEqual([p.name, EXPECTED]);
-      expect([p.name, replacesOf(p.run)]).toEqual([p.name, ['hcloud_server.web["web-2"]']]);
-      expect(p.run).not.toContain("web-1");
-    }
-  });
-
-  test("no sixth member can ride in: the volume's own destroy is not reachable (no destroy flag on either plan)", () => {
-    for (const p of planSteps()) expect([p.name, /-destroy\b/.test(p.run)]).toEqual([p.name, false]);
   });
 });
 

@@ -88,7 +88,8 @@ fi
 #
 # Under glob derivation the #7076 underived-set ratchet is GONE — subdir suites
 # derive like any other. What remains worth pinning is the PRIVILEGED bucket:
-# it must contain exactly the three root-requiring loopback suites, no more
+# it must contain exactly the three root-requiring loopback suites plus the root-requiring
+# docker /proc-mask suite (#10043: apparmor_parser + sysctl + docker daemon), no more
 # (a new entry waives execution, which is a coverage decision that must be made
 # in the open) and no fewer (a deleted entry would `bash` a sudo suite on every
 # local run and red it).
@@ -96,6 +97,7 @@ if [[ -z "${SOLEUR_MUTATION_CHILD:-}" ]]; then
 EXPECTED_PRIVILEGED=(
   apps/web-platform/infra/git-data-plaintext-snapshot-loopback.test.sh
   apps/web-platform/infra/inngest-redis-luks-loopback.test.sh
+  apps/web-platform/infra/sandbox-masked-proc-docker.test.sh
   apps/web-platform/infra/workspaces-luks-loopback.test.sh
 )
 _priv=$(mktemp); _epriv=$(mktemp)
@@ -104,7 +106,7 @@ printf '%s\n' "$OUT" \
   | LC_ALL=C sort -u > "$_priv"
 printf '%s\n' "${EXPECTED_PRIVILEGED[@]}" | LC_ALL=C sort -u > "$_epriv"
 if cmp -s "$_priv" "$_epriv"; then
-  ok "T2e: the privileged SKIP set is exactly the 3 known loopback suites (#7076)"
+  ok "T2e: the privileged SKIP set is exactly the 3 known loopback suites plus the docker /proc-mask suite (#7076, #10043)"
 else
   no "T2e: the privileged set CHANGED — a new exclusion is a coverage decision, not a refactor:"$'\n'"$(diff "$_epriv" "$_priv" | head -8)"
 fi

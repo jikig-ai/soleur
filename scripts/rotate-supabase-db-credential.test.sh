@@ -46,6 +46,7 @@ setup() {
 #!/usr/bin/env bash
 set -euo pipefail
 S="$STUB_STATE/secrets.json"
+in_=""; case " $* " in *" secrets set "*) [ -t 0 ] || in_="$(timeout 2 cat)" ;; esac
 case "$1 ${2:-}" in
   "configs -p") echo '[{"name":"dev"}]' ;;
   "secrets get")
@@ -55,7 +56,7 @@ case "$1 ${2:-}" in
     if [[ "$name" == *_ACCESS_TOKEN ]]; then echo -n synth-token; exit 0; fi
     jq -e -j --arg k "$name" '.[$k].computed' "$S" 2>/dev/null || exit 1 ;;
   "secrets set")
-    name="$3"; val="$(cat)"
+    name="$3"; val="$in_"
     jq --arg k "$name" --arg v "$val" '.[$k] = {computed:$v, raw:$v}' "$S" > "$S.new" && mv "$S.new" "$S" ;;
   "secrets -p") cat "$S" ;;
   *) echo "stub doppler: unhandled: $*" >&2; exit 9 ;;

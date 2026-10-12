@@ -1670,6 +1670,10 @@ assert_grep "reply leg: established/related accept at DOCKER-USER" \
   'iifname "\$EGRESS_BRIDGE_IF" oifname "\$BRIDGE_IF" ct state established,related accept' "$LOADER"
 assert_grep "deny leg: egress0 jump at DOCKER-USER" \
   'iifname "\$EGRESS_BRIDGE_IF" counter jump SOLEUR-EGRESS-GW' "$LOADER"
+# nat-unprotected drops docker's raw-PREROUTING guard for ALL interfaces; the
+# oifname drop re-closes it for non-docker0 ingress at the designed layer.
+assert_grep "direct-routing drop: non-docker0 NEW packets to egress0 die (nat-unprotected boundary)" \
+  'oifname "\$EGRESS_BRIDGE_IF" iifname != "\$BRIDGE_IF" ct state new counter drop' "$LOADER"
 REPLY_LINE="$(grep -n 'iifname "\$EGRESS_BRIDGE_IF" oifname "\$BRIDGE_IF" ct state established,related accept' "$LOADER" | sed -n '1p' | cut -d: -f1)"
 GWJUMP_LINE="$(grep -n 'iifname "\$EGRESS_BRIDGE_IF" counter jump SOLEUR-EGRESS-GW' "$LOADER" | sed -n '1p' | cut -d: -f1)"
 # `nft insert` is LIFO: the jump must be installed FIRST so the reply-accept
@@ -1697,6 +1701,15 @@ assert_grep "boot probe asserts the gateway container" 'soleur-egress-gw' "$SCRI
 # allow/deny verification on the real path — the deny line is the proof the
 # policy still holds mid-life).
 assert_grep "resolver carries the synthetic CONNECT pair probe" 'egress_gw_probe' "$RESOLVER"
+# The auth helper binds the CONNECT username to the token FILE CONTENT
+# ($user == $(<tokenfile)): the probe's mint must write "probe", an empty
+# file reads as a forged username and every allow-leg CONNECT is denied
+# (measured on web-1 2026-10-12: TCP_DENIED ERR_CACHE_ACCESS_DENIED,
+# allow_rc=56).
+assert_grep "probe token file carries 'probe' as its content (helper binds user==content)" \
+  "printf 'probe' >" "$RESOLVER"
+assert_not_grep "probe token is never minted empty (empty content always fails the helper)" \
+  ': > "\$EGRESS_GW_TOKEN_DIR/\$tok"' "$RESOLVER"
 # Scope-marker self-heal (#9534 heal-loop fix): the six presence markers cannot
 # see a ruleset baked while the gw was absent (unscoped member drop kills every
 # upstream dial; the docker0→gw accept missing). The heal check must therefore

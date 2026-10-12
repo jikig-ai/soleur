@@ -1506,7 +1506,7 @@ fi
 # not a plain integer (the same error). CC_DUP counts the extra rows.
 # census_ceiling_check <baseline> <ceiling> sets CC_LISTED / CC_BAD / CC_STALE / CC_DUP and reports on stderr.
 census_ceiling_check() {
-  local base="$1" ceil="$2" bp bn cl cp en rc _f _d
+  local base="$1" ceil="$2" bp bn cl cp en rc _f _d cc_root="${CC_ROOT:-$REPO_ROOT}"
   CC_LISTED=0
   CC_BAD=0
   CC_STALE=0
@@ -1535,13 +1535,13 @@ census_ceiling_check() {
   while IFS=$'\t' read -r cp _; do
     case "$cp" in '' | '#'*) continue ;; esac
     awk -F'\t' -v p="$cp" '$1 == p { f = 1 } END { exit !f }' "$base" && continue
-    if [ ! -e "$REPO_ROOT/$cp" ]; then
+    if [ ! -e "$cc_root/$cp" ]; then
       CC_STALE=$((CC_STALE + 1))
       printf 'stale census ceiling row: %s is not in baseline E and no longer exists\n' "$cp" >&2
       continue
     fi
     # An explicit path bypasses the baselines, so this reads the file's own verdict.
-    rc="$(rc_of "$LINT" "$REPO_ROOT/$cp")"
+    rc="$(rc_of "$LINT" "$cc_root/$cp")"
     en="$(cat "$WORK/out" "$WORK/err" | grep -cE "$E_MSG_RE")"
     if [ "$rc" = "0" ] && [ "$en" = "0" ]; then
       CC_STALE=$((CC_STALE + 1))
@@ -1550,13 +1550,24 @@ census_ceiling_check() {
   done < "$ceil"
 }
 CEIL_FILE="$FIX/rule-e-census-ceiling.tsv"
-census_ceiling_check "$BASE_E_FILE" "$CEIL_FILE"
-if [ "$CC_LISTED" -lt 1 ]; then
-  fail "Rule E baseline vs census ceiling: baseline E lists no entries, anti-vacuity floor is 1"
+# EVERY row below runs over a SYNTHESIZED pair, never the live one. The live baseline E is EMPTY (every
+# Rule E site is converted), and rows that read "the first real baseline row" would then vacate while
+# still printing PASS (#9756). The seed is two rows with distinct counts and a ceiling above one count,
+# pointing at two fixtures that still offend Rule E (read from the copy under $FIX, outside the
+# `fixtures/` directory the lint excludes); a third fixture is clean. CC_ROOT roots the stale-row lookups
+# at that copy. The live pair is checked separately, after the mutation rows, and may list zero entries.
+CC_ROOT="$FIX"
+CC_BASE="$WORK/cc-base.txt"
+CC_CEIL="$WORK/cc-ceil.tsv"
+printf 'violation-argv-user-multiline-sigv4.sh\t1\nviolation-argv-bearer-literal.sh\t2\n' > "$CC_BASE"
+printf 'violation-argv-user-multiline-sigv4.sh\t2\nviolation-argv-bearer-literal.sh\t2\n' > "$CC_CEIL"
+census_ceiling_check "$CC_BASE" "$CC_CEIL"
+if [ "$CC_LISTED" -lt 2 ]; then
+  fail "Rule E baseline vs census ceiling: the synthesized baseline lists fewer than 2 entries, anti-vacuity floor is 2"
 elif [ "$CC_BAD" != "0" ]; then
-  fail "Rule E baseline vs census ceiling: $CC_BAD baseline E entr(ies) exceed or are missing from the census table"
+  fail "Rule E baseline vs census ceiling: $CC_BAD synthesized baseline entr(ies) exceed or are missing from the census table"
 else
-  pass "Rule E baseline vs census ceiling: all $CC_LISTED baseline E entries are in the census table at or below their ceiling"
+  pass "Rule E baseline vs census ceiling: all $CC_LISTED synthesized baseline entries are in the census table at or below their ceiling"
 fi
 if [ "$CC_STALE" != "0" ]; then
   fail "Rule E census ceiling: $CC_STALE table row(s) have no baseline row and their file no longer offends -- a converted file must leave the table"
@@ -1572,9 +1583,9 @@ fi
 # Mutation rows for the check itself (each starts from the REAL pair, adds one defect, asserts it
 # LANDED, and must read RED; the control below must stay GREEN or the RED rows prove nothing).
 # (1) a ceiling row left behind for an existing file that is absent from the baseline and clean.
-{ cat "$CEIL_FILE"; printf 'scripts/lint-orphan-test-suites.sh\t1\n'; } > "$WORK/ceil-stale.tsv"
-if ! cmp -s "$CEIL_FILE" "$WORK/ceil-stale.tsv"; then
-  census_ceiling_check "$BASE_E_FILE" "$WORK/ceil-stale.tsv" 2>/dev/null
+{ cat "$CC_CEIL"; printf 'compliant-stdin-user-config.sh\t1\n'; } > "$WORK/ceil-stale.tsv"
+if ! cmp -s "$CC_CEIL" "$WORK/ceil-stale.tsv"; then
+  census_ceiling_check "$CC_BASE" "$WORK/ceil-stale.tsv" 2>/dev/null
   [ "$CC_STALE" = "1" ] && [ "$CC_BAD" = "0" ] \
     && pass "Rule E census ceiling M-stale: a table row for a clean file absent from the baseline fails (stale=$CC_STALE)" \
     || fail "Rule E census ceiling M-stale: a stale row on a clean file should give stale=1 bad=0, got stale=$CC_STALE bad=$CC_BAD"
@@ -1582,9 +1593,9 @@ else
   fail "Rule E census ceiling M-stale: the stale row did not land"
 fi
 # (2) ...and for a file that no longer exists at all.
-{ cat "$CEIL_FILE"; printf 'scripts/no-such-converted-file.sh\t1\n'; } > "$WORK/ceil-gone.tsv"
-if ! cmp -s "$CEIL_FILE" "$WORK/ceil-gone.tsv"; then
-  census_ceiling_check "$BASE_E_FILE" "$WORK/ceil-gone.tsv" 2>/dev/null
+{ cat "$CC_CEIL"; printf 'scripts/no-such-converted-file.sh\t1\n'; } > "$WORK/ceil-gone.tsv"
+if ! cmp -s "$CC_CEIL" "$WORK/ceil-gone.tsv"; then
+  census_ceiling_check "$CC_BASE" "$WORK/ceil-gone.tsv" 2>/dev/null
   [ "$CC_STALE" = "1" ] && [ "$CC_BAD" = "0" ] \
     && pass "Rule E census ceiling M-stale: a table row for a deleted file fails (stale=$CC_STALE)" \
     || fail "Rule E census ceiling M-stale: a stale row on a deleted file should give stale=1 bad=0, got stale=$CC_STALE bad=$CC_BAD"
@@ -1593,10 +1604,10 @@ else
 fi
 # (3) CONTROL: a baseline row removed while its file STILL offends is not stale (the lint itself
 # reports an unbaselined offender); without this the stale check could be "every unlisted row fails".
-_first="$(grep -vE '^(#|[[:space:]]*$)' "$BASE_E_FILE" | head -1 | cut -f1)"
-grep -vE "^${_first//./\\.}"$'\t' "$BASE_E_FILE" > "$WORK/base-minus-one.txt"
-if [ -n "$_first" ] && ! cmp -s "$BASE_E_FILE" "$WORK/base-minus-one.txt"; then
-  census_ceiling_check "$WORK/base-minus-one.txt" "$CEIL_FILE" 2>/dev/null
+_first="$(grep -vE '^(#|[[:space:]]*$)' "$CC_BASE" | head -1 | cut -f1)"
+grep -vE "^${_first//./\\.}"$'\t' "$CC_BASE" > "$WORK/base-minus-one.txt"
+if [ -n "$_first" ] && ! cmp -s "$CC_BASE" "$WORK/base-minus-one.txt"; then
+  census_ceiling_check "$WORK/base-minus-one.txt" "$CC_CEIL" 2>/dev/null
   [ "$CC_STALE" = "0" ] && [ "$CC_BAD" = "0" ] \
     && pass "Rule E census ceiling control: a table row whose baseline row was removed but whose file still offends is NOT stale" \
     || fail "Rule E census ceiling control: still-offending '$_first' must not read stale, got stale=$CC_STALE bad=$CC_BAD"
@@ -1606,9 +1617,9 @@ fi
 # (4) the baseline side: a baseline row above its ceiling reads RED.
 # One above the row's own CEILING, not one above its count: a ceiling may sit above a count (5 vs 6), and
 # `count + 1` then lands exactly ON the ceiling and reads green, which would make this row vacuous.
-awk -F'\t' -v OFS='\t' 'FNR == NR { if ($0 !~ /^#/ && NF >= 2) c[$1] = $2; next } /^#/ || NF < 2 { print; next } !d { $2 = c[$1] + 1; d = 1 } { print }' "$CEIL_FILE" "$BASE_E_FILE" > "$WORK/base-raised.txt"
-if ! cmp -s "$BASE_E_FILE" "$WORK/base-raised.txt"; then
-  census_ceiling_check "$WORK/base-raised.txt" "$CEIL_FILE" 2>/dev/null
+awk -F'\t' -v OFS='\t' 'FNR == NR { if ($0 !~ /^#/ && NF >= 2) c[$1] = $2; next } /^#/ || NF < 2 { print; next } !d { $2 = c[$1] + 1; d = 1 } { print }' "$CC_CEIL" "$CC_BASE" > "$WORK/base-raised.txt"
+if ! cmp -s "$CC_BASE" "$WORK/base-raised.txt"; then
+  census_ceiling_check "$WORK/base-raised.txt" "$CC_CEIL" 2>/dev/null
   [ "$CC_BAD" = "1" ] \
     && pass "Rule E census ceiling M-raise: a baseline count raised above its ceiling fails" \
     || fail "Rule E census ceiling M-raise: a raised baseline count should give bad=1, got bad=$CC_BAD"
@@ -1617,19 +1628,19 @@ else
 fi
 # (5) a path listed TWICE in the ceiling table (the first row stays correct, so the integer comparison alone would
 # read the pair as a clean row) and (6) twice in the baseline. Each must read as a duplicate and nothing else.
-_first="$(grep -vE '^(#|[[:space:]]*$)' "$BASE_E_FILE" | head -1)"
-{ cat "$CEIL_FILE"; printf '%s\n' "$_first"; } > "$WORK/ceil-dup.tsv"
-if [ -n "$_first" ] && ! cmp -s "$CEIL_FILE" "$WORK/ceil-dup.tsv"; then
-  census_ceiling_check "$BASE_E_FILE" "$WORK/ceil-dup.tsv" 2>/dev/null
+_first="$(grep -vE '^(#|[[:space:]]*$)' "$CC_BASE" | head -1)"
+{ cat "$CC_CEIL"; printf '%s\n' "$_first"; } > "$WORK/ceil-dup.tsv"
+if [ -n "$_first" ] && ! cmp -s "$CC_CEIL" "$WORK/ceil-dup.tsv"; then
+  census_ceiling_check "$CC_BASE" "$WORK/ceil-dup.tsv" 2>/dev/null
   [ "$CC_DUP" = "1" ] && [ "$CC_BAD" = "0" ] && [ "$CC_STALE" = "0" ] \
     && pass "Rule E census ceiling M-dup: a path listed twice in the ceiling table reads as a duplicate (dup=$CC_DUP bad=$CC_BAD stale=$CC_STALE)" \
     || fail "Rule E census ceiling M-dup: a doubled ceiling row should give dup=1 bad=0 stale=0, got dup=$CC_DUP bad=$CC_BAD stale=$CC_STALE"
 else
   fail "Rule E census ceiling M-dup: the doubled ceiling row did not land"
 fi
-{ cat "$BASE_E_FILE"; printf '%s\n' "$_first"; } > "$WORK/base-dup.txt"
-if [ -n "$_first" ] && ! cmp -s "$BASE_E_FILE" "$WORK/base-dup.txt"; then
-  census_ceiling_check "$WORK/base-dup.txt" "$CEIL_FILE" 2>/dev/null
+{ cat "$CC_BASE"; printf '%s\n' "$_first"; } > "$WORK/base-dup.txt"
+if [ -n "$_first" ] && ! cmp -s "$CC_BASE" "$WORK/base-dup.txt"; then
+  census_ceiling_check "$WORK/base-dup.txt" "$CC_CEIL" 2>/dev/null
   [ "$CC_DUP" = "1" ] \
     && pass "Rule E census ceiling M-dup: a path listed twice in the baseline reads as a duplicate (dup=$CC_DUP)" \
     || fail "Rule E census ceiling M-dup: a doubled baseline row should give dup=1, got dup=$CC_DUP"
@@ -1637,9 +1648,9 @@ else
   fail "Rule E census ceiling M-dup: the doubled baseline row did not land"
 fi
 # (7) a count that is not an integer must read as a defect, never as "not above the ceiling".
-awk -F'\t' -v OFS='\t' '/^#/ || NF < 2 { print; next } !d { $2 = "x" $2; d = 1 } { print }' "$BASE_E_FILE" > "$WORK/base-nan.txt"
-if ! cmp -s "$BASE_E_FILE" "$WORK/base-nan.txt"; then
-  census_ceiling_check "$WORK/base-nan.txt" "$CEIL_FILE" 2>/dev/null
+awk -F'\t' -v OFS='\t' '/^#/ || NF < 2 { print; next } !d { $2 = "x" $2; d = 1 } { print }' "$CC_BASE" > "$WORK/base-nan.txt"
+if ! cmp -s "$CC_BASE" "$WORK/base-nan.txt"; then
+  census_ceiling_check "$WORK/base-nan.txt" "$CC_CEIL" 2>/dev/null
   [ "$CC_BAD" = "1" ] \
     && pass "Rule E census ceiling M-nan: a non-integer baseline count reads as a defect (bad=$CC_BAD)" \
     || fail "Rule E census ceiling M-nan: a non-integer baseline count should give bad=1, got bad=$CC_BAD"
@@ -1650,20 +1661,20 @@ fi
 # Each is a different conjunct of the guard clause in census_ceiling_check: `[ -n "${cl//[0-9]/}" ]` and `[ -z "$bn" ]`.
 # Both inputs fail OPEN without their conjunct, because `[ "$bn" -gt "$cl" ]` on a non-integer is an integer-expression
 # error that `if` reads as false = "not above the ceiling". The (7) row above covers only the `${bn//[0-9]/}` conjunct.
-awk -F'\t' -v OFS='\t' '/^#/ || NF < 2 { print; next } !d { $2 = "x" $2; d = 1 } { print }' "$CEIL_FILE" > "$WORK/ceil-nan.tsv"
-if ! cmp -s "$CEIL_FILE" "$WORK/ceil-nan.tsv"; then
-  census_ceiling_check "$BASE_E_FILE" "$WORK/ceil-nan.tsv" 2>/dev/null
+awk -F'\t' -v OFS='\t' '/^#/ || NF < 2 { print; next } !d { $2 = "x" $2; d = 1 } { print }' "$CC_CEIL" > "$WORK/ceil-nan.tsv"
+if ! cmp -s "$CC_CEIL" "$WORK/ceil-nan.tsv"; then
+  census_ceiling_check "$CC_BASE" "$WORK/ceil-nan.tsv" 2>/dev/null
   [ "$CC_BAD" = "1" ] \
     && pass "Rule E census ceiling M-nan-ceiling: a non-integer CEILING reads as a defect (bad=$CC_BAD)" \
     || fail "Rule E census ceiling M-nan-ceiling: a non-integer ceiling should give bad=1, got bad=$CC_BAD"
 else
   fail "Rule E census ceiling M-nan-ceiling: the non-integer ceiling did not land"
 fi
-awk -F'\t' -v OFS='\t' '/^#/ || NF < 2 { print; next } !d { $2 = ""; d = 1 } { print }' "$BASE_E_FILE" > "$WORK/base-empty-tab.txt"
-awk -F'\t' '/^#/ || NF < 2 { print; next } !d { print $1; d = 1; next } { print }' "$BASE_E_FILE" > "$WORK/base-empty-bare.txt"
+awk -F'\t' -v OFS='\t' '/^#/ || NF < 2 { print; next } !d { $2 = ""; d = 1 } { print }' "$CC_BASE" > "$WORK/base-empty-tab.txt"
+awk -F'\t' '/^#/ || NF < 2 { print; next } !d { print $1; d = 1; next } { print }' "$CC_BASE" > "$WORK/base-empty-bare.txt"
 for _v in tab bare; do
-  if ! cmp -s "$BASE_E_FILE" "$WORK/base-empty-$_v.txt"; then
-    census_ceiling_check "$WORK/base-empty-$_v.txt" "$CEIL_FILE" 2>/dev/null
+  if ! cmp -s "$CC_BASE" "$WORK/base-empty-$_v.txt"; then
+    census_ceiling_check "$WORK/base-empty-$_v.txt" "$CC_CEIL" 2>/dev/null
     [ "$CC_BAD" = "1" ] \
       && pass "Rule E census ceiling M-empty-count ($_v): a baseline row with an EMPTY count reads as a defect (bad=$CC_BAD)" \
       || fail "Rule E census ceiling M-empty-count ($_v): an empty baseline count should give bad=1, got bad=$CC_BAD"
@@ -1697,18 +1708,32 @@ cc_mutant_row() { # <label> <perl-expr> <baseline> <ceiling>
   fi
 }
 cc_mutant_row 'Rule E census ceiling U-bn: the `${bn//[0-9]/}` conjunct deleted' \
-  's/\[ -n "\$\{bn\/\/\[0-9\]\/\}" \] \|\| //' "$WORK/base-nan.txt" "$CEIL_FILE"
+  's/\[ -n "\$\{bn\/\/\[0-9\]\/\}" \] \|\| //' "$WORK/base-nan.txt" "$CC_CEIL"
 cc_mutant_row 'Rule E census ceiling U-cl: the `${cl//[0-9]/}` conjunct deleted' \
-  's/ \|\| \[ -n "\$\{cl\/\/\[0-9\]\/\}" \]//' "$BASE_E_FILE" "$WORK/ceil-nan.tsv"
+  's/ \|\| \[ -n "\$\{cl\/\/\[0-9\]\/\}" \]//' "$CC_BASE" "$WORK/ceil-nan.tsv"
 cc_mutant_row 'Rule E census ceiling U-empty: the `-z "$bn"` conjunct deleted (empty count after a tab)' \
-  's/\[ -z "\$bn" \] \|\| //' "$WORK/base-empty-tab.txt" "$CEIL_FILE"
+  's/\[ -z "\$bn" \] \|\| //' "$WORK/base-empty-tab.txt" "$CC_CEIL"
 cc_mutant_row 'Rule E census ceiling U-empty: the `-z "$bn"` conjunct deleted (count column absent)' \
-  's/\[ -z "\$bn" \] \|\| //' "$WORK/base-empty-bare.txt" "$CEIL_FILE"
-# (8) CONTROL: the real pair reads clean on all three counters, or rows (5)-(7) prove nothing.
+  's/\[ -z "\$bn" \] \|\| //' "$WORK/base-empty-bare.txt" "$CC_CEIL"
+# (8) CONTROL: the synthesized pair reads clean on all three counters, or rows (5)-(7) prove nothing.
+census_ceiling_check "$CC_BASE" "$CC_CEIL" 2>/dev/null
+[ "$CC_DUP" = "0" ] && [ "$CC_BAD" = "0" ] && [ "$CC_STALE" = "0" ] \
+  && pass "Rule E census ceiling control: the synthesized baseline/ceiling pair reads clean (dup=$CC_DUP bad=$CC_BAD stale=$CC_STALE)" \
+  || fail "Rule E census ceiling control: the synthesized pair should read dup=0 bad=0 stale=0, got dup=$CC_DUP bad=$CC_BAD stale=$CC_STALE"
+# (8b) SEED MUTATION: raise one seeded count above its ceiling and the check must go RED. This is what proves the rows read
+# the synthesized pair and not the (empty) live one: against an empty live baseline no edit to the seed could change a verdict.
+printf 'violation-argv-user-multiline-sigv4.sh\t3\nviolation-argv-bearer-literal.sh\t2\n' > "$WORK/cc-base-seedmut.txt"
+census_ceiling_check "$WORK/cc-base-seedmut.txt" "$CC_CEIL" 2>/dev/null
+[ "$CC_BAD" = "1" ] \
+  && pass "Rule E census ceiling seed mutation: a seeded count raised above its ceiling reads RED (bad=$CC_BAD), so the rows read the synthesized pair" \
+  || fail "Rule E census ceiling seed mutation: a raised seeded count should give bad=1, got bad=$CC_BAD"
+unset CC_ROOT
+# (8c) the LIVE pair reads clean. It may list zero entries (baseline E is empty once every site is converted), so there is no
+# floor on it; its equality with the live offender set is the repo-wide run's job (and the --census row above).
 census_ceiling_check "$BASE_E_FILE" "$CEIL_FILE" 2>/dev/null
 [ "$CC_DUP" = "0" ] && [ "$CC_BAD" = "0" ] && [ "$CC_STALE" = "0" ] \
-  && pass "Rule E census ceiling control: the real baseline/ceiling pair reads clean (dup=$CC_DUP bad=$CC_BAD stale=$CC_STALE)" \
-  || fail "Rule E census ceiling control: the real pair should read dup=0 bad=0 stale=0, got dup=$CC_DUP bad=$CC_BAD stale=$CC_STALE"
+  && pass "Rule E census ceiling control: the live baseline/ceiling pair reads clean (listed=$CC_LISTED dup=$CC_DUP bad=$CC_BAD stale=$CC_STALE)" \
+  || fail "Rule E census ceiling control: the live pair should read dup=0 bad=0 stale=0, got dup=$CC_DUP bad=$CC_BAD stale=$CC_STALE"
 unset _first
 
 grep -qx -- '--- rule E ---' "$WORK/census" \
@@ -2805,13 +2830,237 @@ fi
 # drifting apart: every definition, including the prefixed variants of sourced libs, must carry the
 # one canonical body, and the population must not silently collapse.
 _CANON_BODY='{ local LC_ALL=C; case "${1:-}" in '"''"'|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }'
-_copies="$(git grep -hE '_bearer_ok\(\) *\{' -- '*.sh' ':!*.test.sh' ':!tests/scripts/test-*' ':!scripts/fixtures' | sed -E 's/^[[:space:]]*[A-Za-z0-9_]*_bearer_ok\(\) *//')"
+_copies="$(git -C "$REPO_ROOT" grep -hE '_bearer_ok\(\) *\{' -- '*.sh' ':!*.test.sh' ':!tests/scripts/test-*' ':!scripts/fixtures' | sed -E 's/^[[:space:]]*[A-Za-z0-9_]*_bearer_ok\(\) *//')"
 _n_copies="$(printf '%s\n' "$_copies" | grep -c . || true)"
 _n_off="$(printf '%s\n' "$_copies" | grep -vcxF -- "$_CANON_BODY" || true)"
 if [ "$_n_copies" -ge 63 ] && [ "$_n_off" = "0" ]; then
   pass "token-shape guard: all $_n_copies inline copies of _bearer_ok carry the one canonical body"
 else
   fail "token-shape guard drift: copies=$_n_copies off-canonical=$_n_off (anti-vacuity floor: >= 63 copies, the measured population, and 0 off-canonical)"
+fi
+
+# --- Guard 3 (#9999): stale GitHub-token-class census ---------------------------
+# Every GitHub-prefix-shaped char-class literal in the swept corpus must carry the
+# canonical credential alphabet `[A-Za-z0-9._~+/=-]` (RFC 6750 b64token — the same
+# class the token-shape guard above pins) or hold a documented-narrower allowlist
+# slot. A narrower class judges only the base62 prefix run of a rotated token: in
+# a redactor the tail leaks, in a detection pin the match silently misses
+# (#9972 -> #9999).
+#
+# Arms (a bare `ghs_[` grep cannot see forms C, D, or E):
+#   A) literal prefix:    gh<opsur>_<class>   and   github_pat_<class>  — the
+#      `\\?` variant catches the sed-quoted `ghs_\[...` spelling too
+#   B) alternation:       (…gh<member>…)_<class>     e.g. (?:ghp|gho|ghu|ghs|ghr)_
+#   C) bracketed prefix:  gh[<letters>]_<class>      e.g. gh[pousr]_
+#   D) factored prefix:   gh(...)_<class>            e.g. gh(?:p|o|u|s|r)_
+# A class is canonical iff it carries every b64token punctuation byte
+# independently (order-agnostic): '.' '_' '~' '+' '/' '=' '-'. A multi-class
+# literal (the two-segment `github_pat_[…]{22}_[…]{59,}` form) has EVERY class
+# judged — a canonical first segment must not launder a stale second.
+#
+# Corpus: every tracked file under the pattern-bearing extensions below, minus
+# knowledge-base/ (the doc corpus legitimately quotes legacy shapes) and minus
+# THIS file (the sweep machinery self-matches arm A by construction). Residual
+# blind spots, stated not hidden: extensionless files (Dockerfile, env/ini/
+# systemd units), .env/.service/.timer/.ps1/.rb/.go/.rs/.j2/.tmpl/.sed/.awk,
+# multi-line or runtime-assembled patterns, escape spellings beyond a single
+# backslash (\x5b/\u005b/octal), separator-obfuscation (`ghs[_]`), quantified
+# prefix classes (`gh[pousr]?_`), nested-paren alternations, and gitignored or
+# never-`git add`ed files, non-`_` prefix separators like `)[_-][`, classes
+# longer than the arms' 80-byte match window (a cost bound, not a semantic
+# one), a literal `]` class member (`[]a-z]` — invisible to the `[^]]+` arms
+# AND the judge), POSIX-class spellings (`[[:alnum:]._…]` — the judge reads
+# `[:alnum:` as the class and over-flags toward a slot; fails closed), and a
+# member class nested inside an arm-B/D alternation (`(?:ghp|xox[abpr])_` —
+# the inner `[abpr]` is judged as the value class; fails closed).
+_G3_PATHS=( '*.sh' '*.ts' '*.tsx' '*.js' '*.jsx' '*.mjs' '*.cjs' '*.md' '*.yml' '*.yaml'
+            '*.py' '*.json' '*.toml' '*.tf' '*.conf' '*.txt' '*.tsv'
+            ':!knowledge-base' ':!scripts/lint-shell-trace-credential-refusal.test.sh' )
+
+# Returns 0 when the hit carries a stale class (any `[…]` value class missing a
+# canonical byte). A `gh[…]` bracketed-prefix member class is a PREFIX selector,
+# not a value class, and is skipped.
+_ghs_class_stale() {
+  local _rest="$1" _c _cn _b
+  [[ "$_rest" =~ ^gh\[ ]] && _rest="${_rest#*]_}"
+  while [[ "$_rest" =~ \[([^]]+)\] ]]; do
+    _c="${BASH_REMATCH[1]}"
+    # The class must carry the alnum half of the alphabet — all three range
+    # spellings — not just a punctuation superset. [0-9a-f._~+/=-] truncates a
+    # real token mid-body, the same partial-disclosure family.
+    for _b in 'A-Z' 'a-z' '0-9'; do
+      [[ "$_c" == *"$_b"* ]] || return 0
+    done
+    # Strip ranges before the member checks: a `-` inside `A-Z`/`a-z`/`0-9` is
+    # source text, not a class MEMBER — checking for it un-stripped is vacuous.
+    _cn="${_c//[A-Za-z]-[A-Za-z]/}"; _cn="${_cn//[0-9]-[0-9]/}"
+    for _b in '.' '_' '~' '+' '/' '='; do
+      [[ "$_cn" == *"$_b"* ]] || return 0
+    done
+    case "$_cn" in *"-"*) ;; *) return 0 ;; esac
+    # Advance past the judged class's ']': [^]]+ guarantees the first ']' is
+    # its close. (Do NOT strip by ${BASH_REMATCH[0]} here — later =~ matches in
+    # this loop clobber it.)
+    _rest="${_rest#*\]}"
+  done
+  return 1
+}
+
+# Documented-narrower dispositions. $1=file $2=matched literal; 0 = allowlisted.
+# Keyed on the EXACT literal text, never a substring — a bracket- or
+# alternation-spelled class that covers ghs_ obliquely (gh[su]_, (ghp|gh[su])_)
+# carries no `ghs` substring and must still flag.
+_ghs_census_allow() {
+  case "$1" in
+    plugins/soleur/skills/incident/test/fixtures/legacy-bash-scanner.sh)
+      return 0 ;;  # fixture models a legacy scanner map; the legacy class IS its content
+    plugins/soleur/skills/deepen-plan/SKILL.md | \
+    plugins/soleur/skills/plan/references/plan-sharp-edges.md)
+      # docs cite vendor-current (unrotated) prefix formats / GitHub's own
+      # push-protection regex — the exact literals only
+      case "$2" in 'ghp_[A-Za-z0-9]'* | 'github_pat_[A-Za-z0-9_]'*) return 0 ;; *) return 1 ;; esac ;;
+    apps/web-platform/server/git-auth.ts)
+      case "$2" in 'ghs_[A-Za-z0-9.\-_]'*) return 0 ;; *) return 1 ;; esac ;;  # comment cites the vendor's recommended shape verbatim for contrast with the canonical superset
+    *) return 1 ;;
+  esac
+}
+
+# Per-arm sweeps — each rc and each hit count is asserted below: an arm whose
+# ERE silently breaks contributes zero rows under `|| true` and the aggregate
+# floor cannot see it (#8354's silent-collapse class).
+_ghs_arm_a1_rc=0; _ghs_arm_a1="$(git -C "$REPO_ROOT" grep -noE 'gh[opsur]_\\?\[[^]]{1,80}\]' -- "${_G3_PATHS[@]}" 2>/dev/null)" || _ghs_arm_a1_rc=$?
+_ghs_arm_a2_rc=0; _ghs_arm_a2="$(git -C "$REPO_ROOT" grep -noE 'github_pat_\\?\[[^]]{1,80}\](\{[0-9,]+\}_\\?\[[^]]{1,80}\])?' -- "${_G3_PATHS[@]}" 2>/dev/null)" || _ghs_arm_a2_rc=$?
+_ghs_arm_b_rc=0;  _ghs_arm_b="$(git -C "$REPO_ROOT" grep -noE '\([^)]*gh[opsur][^)]*\)_\\?\[[^]]{1,80}\]' -- "${_G3_PATHS[@]}" 2>/dev/null)" || _ghs_arm_b_rc=$?
+_ghs_arm_c_rc=0;  _ghs_arm_c="$(git -C "$REPO_ROOT" grep -noE 'gh\[[a-z]+\]_\\?\[[^]]{1,80}\]' -- "${_G3_PATHS[@]}" 2>/dev/null)" || _ghs_arm_c_rc=$?
+_ghs_arm_d_rc=0;  _ghs_arm_d="$(git -C "$REPO_ROOT" grep -noE 'gh\([^)]*\|[^)]*\)_\\?\[[^]]{1,80}\]' -- "${_G3_PATHS[@]}" 2>/dev/null)" || _ghs_arm_d_rc=$?
+_ghs_bad_rc=0
+for _v in "$_ghs_arm_a1_rc" "$_ghs_arm_a2_rc" "$_ghs_arm_b_rc" "$_ghs_arm_c_rc" "$_ghs_arm_d_rc"; do
+  [ "$_v" -ge 2 ] && _ghs_bad_rc=1
+done
+_ghs_arm_rows() { printf '%s\n' "$1" | grep -c . || true; }
+_ghs_n_a1="$(_ghs_arm_rows "$_ghs_arm_a1")"; _ghs_n_a2="$(_ghs_arm_rows "$_ghs_arm_a2")"
+_ghs_n_b="$(_ghs_arm_rows "$_ghs_arm_b")";   _ghs_n_c="$(_ghs_arm_rows "$_ghs_arm_c")"
+_ghs_n_d="$(_ghs_arm_rows "$_ghs_arm_d")"
+
+_ghs_hits="$(printf '%s\n%s\n%s\n%s\n%s\n' "$_ghs_arm_a1" "$_ghs_arm_a2" "$_ghs_arm_b" "$_ghs_arm_c" "$_ghs_arm_d" | sort -u)"
+_ghs_seen=0
+_ghs_stale=""
+_ghs_allowed=""
+while IFS= read -r _h; do
+  [ -n "$_h" ] || continue
+  _ghs_seen=$(( _ghs_seen + 1 ))
+  _f="${_h%%:*}"
+  _m="${_h#*:}"; _m="${_m#*:}"
+  if _ghs_census_allow "$_f" "$_m"; then _ghs_allowed="${_ghs_allowed}${_f}
+"; fi
+  if _ghs_class_stale "$_m" && ! _ghs_census_allow "$_f" "$_m"; then
+    _ghs_stale="${_ghs_stale}    ${_h}
+"
+  fi
+done <<<"$_ghs_hits"
+
+if [ -z "$_ghs_stale" ]; then
+  pass "stale-ghs census: all $_ghs_seen GitHub-prefix char-class literals carry the canonical b64token class or a documented-narrower slot"
+else
+  fail "stale-ghs census: non-canonical GitHub-prefix char-class literal(s):${_ghs_stale}    remedy: widen the class to the canonical b64token alphabet [A-Za-z0-9._~+/=-] (ADR-280), or add a documented-narrower slot in _ghs_census_allow()"
+fi
+
+# Anti-vacuity: the sweep must have classified a nonzero population, no arm may
+# have errored, and each arm that has live members must have produced them — an
+# arm silently dying under 2>/dev/null is invisible to the aggregate floor.
+if [ "$_ghs_bad_rc" -eq 0 ]; then
+  pass "stale-ghs census: all five sweep arms exited cleanly"
+else
+  fail "stale-ghs census: a sweep arm exited >= 2 (invalid ERE or grep failure) -- arm results a1=$_ghs_n_a1 a2=$_ghs_n_a2 b=$_ghs_n_b c=$_ghs_n_c d=$_ghs_n_d"
+fi
+
+if [ "$_ghs_n_a1" -ge 15 ] && [ "$_ghs_n_a2" -ge 8 ] && [ "$_ghs_n_b" -ge 3 ] && [ "$_ghs_n_c" -ge 3 ]; then
+  pass "stale-ghs census per-arm liveness: a1=$_ghs_n_a1 a2=$_ghs_n_a2 b=$_ghs_n_b c=$_ghs_n_c (d=$_ghs_n_d) hits"
+else
+  fail "stale-ghs census per-arm liveness regression: a1=$_ghs_n_a1 (floor 15) a2=$_ghs_n_a2 (floor 8) b=$_ghs_n_b (floor 3) c=$_ghs_n_c (floor 3) -- an arm went dark"
+fi
+
+# Arm d is structurally dark today (no gh(…)_ member in the corpus), so a
+# corpus floor cannot pin it — prove the PATTERN is alive and does not
+# false-positive on the `weigh(x)_[` word-prefix collision class instead.
+# NOTE: the probe literals are bound to variables — a here-string whose feed is a quoted
+# word reads as a heredoc opener to guard-vacuity-floor's `heredoc_lines_of` (it scans for
+# `<<` at every position, so the `<<<` + space + `'word` shape opens a phantom heredoc that
+# swallows every floor line after this one as fixture text — measured NO_FIRE).
+_ghs_armd_pos='gh(p|o)_[A-Za-z0-9]{20,}'
+_ghs_armd_neg='weigh(x)_[A-Za-z0-9]{20,}'
+if grep -qE 'gh\([^)]*\|[^)]*\)_\\?\[[^]]{1,80}\]' <<< "$_ghs_armd_pos" \
+   && ! grep -qE 'gh\([^)]*\|[^)]*\)_\\?\[[^]]{1,80}\]' <<< "$_ghs_armd_neg"; then
+  pass "stale-ghs census arm-d liveness: factored-prefix pattern fires on a synthesized alternation and spares word-prefix collisions"
+else
+  fail "stale-ghs census arm-d liveness: the factored-prefix ERE does not discriminate its own probe"
+fi
+
+# Reported DIRECTLY (printf + exit), never through pass()/fail(): _ghs_seen is a
+# counter under guard-vacuity-floor's detection, so a fail()-routed floor exits 0
+# under neutered machinery — the same shape as the suite-level floor below.
+if [ "$_ghs_seen" -lt 40 ]; then
+  printf '[FATAL] stale-ghs census classified only %s GitHub-prefix char-class literals — sweep went dark (floor 40)\n' "$_ghs_seen" >&2
+  exit 1
+fi
+pass "stale-ghs census corpus non-vacuous: $_ghs_seen classified literals (floor 40)"
+
+if _ghs_class_stale 'ghs_[A-Za-z0-9]{20,}'; then
+  pass "stale-ghs census discriminates: legacy base62 class flags"
+else
+  fail "stale-ghs census failed to flag the legacy base62 class (guard vacuous)"
+fi
+
+if ! _ghs_class_stale 'ghs_[A-Za-z0-9._~+/=-]{36,}'; then
+  pass "stale-ghs census discriminates: canonical b64token class passes"
+else
+  fail "stale-ghs census flags the canonical b64token class (over-firing)"
+fi
+
+if _ghs_class_stale 'ghs_[A-Za-z0-9.~+/=-]{36,}'; then
+  pass "stale-ghs census discriminates: a class missing '_' flags (truncates the ghs_<id>_<jwt> form)"
+else
+  fail "stale-ghs census accepts a class missing '_' -- the separator byte is not pinned"
+fi
+
+if ! _ghs_class_stale 'github_pat_[A-Za-z0-9._~+/=-]{22}_[A-Za-z0-9._~+/=-]{59,}' \
+   && _ghs_class_stale 'github_pat_[A-Za-z0-9._~+/=-]{22}_[A-Za-z0-9]{59,}'; then
+  pass "stale-ghs census discriminates two-segment literals: canonical both-segments passes, stale tail flags"
+else
+  fail "stale-ghs census misjudges a two-segment github_pat_ literal"
+fi
+
+if _ghs_class_stale 'gh[psr]_[A-Za-z0-9]' \
+   && ! _ghs_class_stale 'gh[psr]_[A-Za-z0-9._~+/=-]'; then
+  pass "stale-ghs census discriminates bracketed prefixes: prefix class skipped, value class judged"
+else
+  fail "stale-ghs census misjudges a bracketed-prefix literal"
+fi
+
+if _ghs_census_allow 'plugins/soleur/skills/deepen-plan/SKILL.md' 'ghp_[A-Za-z0-9]{20,}' \
+   && ! _ghs_census_allow 'plugins/soleur/skills/deepen-plan/SKILL.md' 'ghs_[A-Za-z0-9]{20,}' \
+   && ! _ghs_census_allow 'plugins/soleur/skills/deepen-plan/SKILL.md' 'gh[su]_[A-Za-z0-9]{20,}'; then
+  pass "stale-ghs census allowlist discriminates by exact literal, incl. oblique ghs_-covering spellings"
+else
+  fail "stale-ghs census allowlist lost prefix discrimination"
+fi
+
+if _ghs_census_allow 'apps/web-platform/server/git-auth.ts' 'ghs_[A-Za-z0-9.\-_]{36,}' \
+   && ! _ghs_census_allow 'apps/web-platform/server/git-auth.ts' 'ghs_[A-Za-z0-9]{36,}'; then
+  pass "stale-ghs census allowlist: git-auth.ts slot exempts only the cited vendor literal"
+else
+  fail "stale-ghs census allowlist: git-auth.ts slot loosened beyond the vendor citation"
+fi
+
+# This file list mirrors _ghs_census_allow's case arms — keep them coupled.
+_ghs_dead_slots=""
+for _slot in   'plugins/soleur/skills/incident/test/fixtures/legacy-bash-scanner.sh'   'plugins/soleur/skills/deepen-plan/SKILL.md'   'plugins/soleur/skills/plan/references/plan-sharp-edges.md'   'apps/web-platform/server/git-auth.ts'; do
+  grep -qF -- "$_slot" <<< "$_ghs_allowed" || _ghs_dead_slots="${_ghs_dead_slots} ${_slot}"
+done
+if [ -z "$_ghs_dead_slots" ]; then
+  pass "stale-ghs census: every allowlist slot discharged at least one hit (no dead dispositions)"
+else
+  fail "stale-ghs census allowlist slots no longer match any hit (file renamed or literal drifted):${_ghs_dead_slots}"
 fi
 
 printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
@@ -2828,7 +3077,11 @@ printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 # everything, and here the loss of the positive direction was not even reported.
 # A floor at the measured count makes any row deletion RED. It is a LOWER bound,
 # so adding rows never trips it; re-measure and raise it when rows are added.
-# Re-measured at 635 (review of #9753 round 2, WPc: the real-curl oracle over EVERY character of [0-9A-Za-z#:] in the spaced and
+# Re-measured at 651 (merge of #9999's Guard-3 census — five sweep arms over 17 extensions,
+# exact-literal allowlist, per-arm liveness, both-direction discrimination rows and the
+# allowlist-discrimination row — with #9756's 638 baseline: 649 + 2 merged rows).
+# Earlier: 638 (#9756: the census-ceiling rows moved onto a synthesized pair because baseline E is empty
+# Earlier: 635 (review of #9753 round 2, WPc: the real-curl oracle over EVERY character of [0-9A-Za-z#:] in the spaced and
 # glued spelling, its derived-alphabet equality row, the whole-table control and the per-character drop/add mutants, and the
 # census non-integer-ceiling / empty-count rows with their conjunct mutants, 205 assertions on top of the 430 below; the Rule E
 # fixture-row floor above moved from a stale 136 to the measured 329). Earlier: 430 (review of #9753, WP3: the glued-bundle and wrapper-second-credential fixtures, the real-curl oracle
@@ -2837,7 +3090,7 @@ printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 # alternate matrix, the hazard-member and YAML-arm mutant rows, on top of the 219 below). Earlier: 219 (PR #9674 review round 1: the YAML graph-walk, direct-under-.github, census-ceiling and
 # SKIP_SHELLS-parity rows, on top of the 198 below). Earlier: 198 (#9597 S1: the Rule E credential vocabulary and YAML-arm rows, the extractor, discovery, harness and
 # mutation rows added on top of the 119 recorded for the original Rule E rows).
-MIN_ASSERTIONS=635
+MIN_ASSERTIONS=651
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' \
     "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2

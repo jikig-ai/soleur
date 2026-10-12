@@ -40,9 +40,19 @@ esac
 `;
 
 // Permissive installation-token format check. GitHub does not document the
-// exact charset/length, so we log-warn (never throw) on mismatch — a strict
-// validator is a latent outage class the day GitHub extends the format.
-const TOKEN_FORMAT_RE = /^ghs_[A-Za-z0-9_-]{30,128}$/;
+// exact charset/length, so `git-auth.ts › gitWithInstallationAuth()`
+// log-warns (never throws) on mismatch — a strict validator is a latent
+// outage class the day GitHub extends the format. The vendor-recommended
+// shape is `ghs_[A-Za-z0-9.\-_]{36,}`; the canonical alphabet used below is
+// a strict superset of it, and the `{36,}` floor deliberately carries NO
+// ceiling — the vendor documents variable length, and issued tokens have
+// run ~390-520 chars (`ghs_<APPID>_<JWT>`), so the retired `{30,128}` bound
+// rejected every real token by LENGTH alone and the warn fired on every
+// call, training readers to ignore a real malformation warn. With the
+// ceiling gone, the warn doubles as a vendor-rotation tripwire: silence on
+// every call means the issued shape still holds, a fresh warn storm means
+// GitHub drifted again.
+const TOKEN_FORMAT_RE = /^ghs_[A-Za-z0-9._~+/=-]{36,}$/;
 
 // Prepended to every `git` invocation so inherited `credential.helper`
 // configurations (system, global, or per-repo) can never win over

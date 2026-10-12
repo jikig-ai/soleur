@@ -145,7 +145,7 @@
 # Format: <count>\t<path>
 1	apps/cla-evidence/scripts/ccla-add.sh
 1	apps/cla-evidence/scripts/sentinel-pr.sh
-3	apps/web-platform/infra/arm-heartbeats.sh
+4	apps/web-platform/infra/arm-heartbeats.sh
 1	apps/web-platform/infra/arm-heartbeats.test.sh
 4	apps/web-platform/infra/canary-bundle-claim-check.test.sh
 18	apps/web-platform/infra/ci-deploy.sh
@@ -215,7 +215,6 @@
 2	apps/web-platform/infra/scripts/gen-github-egress-cidr.sh
 1	apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh
 1	apps/web-platform/infra/ssl-full-mitigation-mutation.test.sh
-2	apps/web-platform/infra/web2-luks-rebirth-workflow.test.sh
 1	apps/web-platform/infra/web-git-data-probe.sh
 1	apps/web-platform/infra/web-zot-consumer-probe.sh
 6	apps/web-platform/infra/workspaces-boot-unlock.test.sh
@@ -356,6 +355,7 @@
 8	plugins/soleur/test/worktree-manager-stale-lock-diag.test.sh
 2	scripts/actions-queue-health.test.sh
 1	scripts/audit-bot-codeql-coverage.sh
+1	scripts/audit-dev-scheduled-shapes.sh
 1	scripts/capture-web-2-host-key.sh
 1	scripts/check-backstop-revision.sh
 6	scripts/check-backstop-revision.test.sh
@@ -431,6 +431,7 @@
 7	scripts/plugin-delivery-canary.sh
 37	scripts/plugin-delivery-canary.test.sh
 49	scripts/plugin-legacy-resolver-probe.test.sh
+1	scripts/probe-github-app-mint.sh
 29	scripts/prod-version-drift-check.test.sh
 5	scripts/raise-tmp-tmpfs-ceiling.sh
 3	scripts/raise-tmp-tmpfs-ceiling.test.sh
@@ -468,9 +469,6 @@
 1	scripts/update-ci-required-ruleset.sh
 1	scripts/upstream-report-scrub.sh
 1	scripts/weakness-miner.sh
-1	scripts/web2-rebirth-recovery-check.sh
-1	scripts/web2-rebirth-recovery-check.test.sh
-33	scripts/web2-rebirth.test.sh
 3	scripts/weekly-analytics.sh
 2	tests/commands/test-sync-producer-reachability.sh
 2	tests/commands/test-sync-rule-prune.sh

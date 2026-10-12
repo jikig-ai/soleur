@@ -377,6 +377,24 @@ AFFECTED_TESTS_SCRIPTS_APPLY_GITHUB_INFRA_MINT_SHAPE_PATHS=(
   "scripts/lib/test-affected-paths.sh"                    # THIS FILE
 )
 
+# apps/cla-evidence/scripts/_r2-sigv4-curl.test.sh (#9756) — a corpus walker: its set-identity rows read every
+# shell file under apps/cla-evidence for a curl that carries `--aws-sigv4` or `-u`/`--user`, so any shell edit
+# there is its subject (the glob edge), not only the helper it is named for.
+AFFECTED_APPS_CLA_EVIDENCE_SCRIPTS__R2_SIGV4_CURL_TEST_SH_PATHS=(
+  "glob:apps/cla-evidence/**.sh"
+  "scripts/lib/test-affected-paths.sh"                    # THIS FILE
+)
+
+# apps/cla-evidence/scripts/bootstrap-r2-probe.test.sh (#9756) — executes the real infra/bootstrap.sh (named only
+# through a script-dir-relative cd, which no derivation channel reaches) with the helper and the two scripts it sources.
+AFFECTED_APPS_CLA_EVIDENCE_SCRIPTS_BOOTSTRAP_R2_PROBE_TEST_SH_PATHS=(
+  "apps/cla-evidence/infra/bootstrap.sh"
+  "apps/cla-evidence/scripts/_r2-sigv4-curl.sh"
+  "apps/cla-evidence/scripts/_cf-admin-token.sh"
+  "apps/cla-evidence/scripts/_r2-endpoint.sh"
+  "scripts/lib/test-affected-paths.sh"                    # THIS FILE
+)
+
 # Suites the repo-wide-idiom census arm flags (their fixture code walks a tree)
 # whose real subject is a narrow SUT set, declared here rather than always-on:
 # the scan is scoped, so the edges are honest.
@@ -543,26 +561,6 @@ AFFECTED_SCRIPTS_WEB2_LUKS_LIVE_6931_PATHS=(
   "scripts/followthroughs/web2-luks-live-6931.test.sh"
   "scripts/lib/web2-luks-rows.sh"
   "scripts/betterstack-query.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
-# #9372: the rebirth recovery-check suite drives shims against the script and asserts no secret file is left in its own temp
-# directory; its verdict is scoped to the script, not to corpus drift.
-AFFECTED_SCRIPTS_WEB2_REBIRTH_RECOVERY_CHECK_PATHS=(
-  "scripts/web2-rebirth-recovery-check.sh"
-  "scripts/web2-rebirth-recovery-check.test.sh"
-  "scripts/lib/test-affected-paths.sh"
-)
-# #9372: the web-host reboot suite walks the tracked tree under scripts/, .github/ and apps/ (its census of reboot-request call sites, so a
-# third such site anywhere in those roots is RED) and reads the workflow, the infra census suite and the rebirth scripts it pins
-# helper bodies against; its verdict is scoped to those three roots plus the three runbooks it reads (copies them into its sandbox and
-# pins the dispatch commands, the Better Stack query and the LUKS cutover cross-reference), not to the rest of the corpus (plugins/).
-AFFECTED_SCRIPTS_WEB_HOST_REBOOT_PATHS=(
-  "scripts/"
-  ".github/"
-  "apps/"
-  "knowledge-base/engineering/operations/runbooks/betterstack-log-query.md"
-  "knowledge-base/engineering/operations/runbooks/web-host-reboot.md"
-  "knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md"
   "scripts/lib/test-affected-paths.sh"
 )
 AFFECTED_SCRIPTS_TUNNEL_CONNECTOR_CENSUS_PATHS=(
@@ -2137,5 +2135,24 @@ AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_AGENT_RUNNABLE_TEST_SH_PATHS=(
   "tests/"
   "plugins/soleur/test/operator-agent-runnable.test.sh"
   "plugins/soleur/test/lib/operator-stub-world.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/probe-github-app-mint (#9995) — the JWT reaches curl only through
+# scripts/lib/bearer-curl.sh's stdin-config channel, and the mu1 step of
+# scheduled-integration-suites.yml invokes it; an edit to either must select it.
+AFFECTED_SCRIPTS_PROBE_GITHUB_APP_MINT_PATHS=(
+  "scripts/probe-github-app-mint.sh"
+  "scripts/probe-github-app-mint.test.sh"
+  "scripts/lib/bearer-curl.sh"
+  ".github/workflows/scheduled-integration-suites.yml"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/audit-dev-scheduled-shapes (#9995) — census + per-name shape audit;
+# declared edges pin its SUT and its own battery.
+AFFECTED_SCRIPTS_AUDIT_DEV_SCHEDULED_SHAPES_PATHS=(
+  "scripts/audit-dev-scheduled-shapes.sh"
+  "scripts/audit-dev-scheduled-shapes.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )

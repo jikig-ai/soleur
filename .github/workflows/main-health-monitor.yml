@@ -835,11 +835,11 @@ jobs:
           REDACTED=$(printf '%s' "$SUMMARY" | sed -E \
             -e 's/-----(BEGIN|END) [A-Z ]*PRIVATE KEY-----/<redacted-private-key-marker>/g' \
             -e 's/^[[:space:]]*[A-Za-z0-9+/]{40,}={0,2}[[:space:]]*$/<redacted-key-material>/' \
+            -e 's|gh[pousr]_[A-Za-z0-9._~+/=-]{16,}|<redacted-gh-token>|g' \
+            -e 's|github_pat_[A-Za-z0-9._~+/=-]{20,}|<redacted-gh-pat>|g' \
             -e 's/(AKIA|ASIA|AGPA|AIDA|AROA|ANPA|ANVA)[A-Z0-9]{16}/<redacted-aws-key-id>/g' \
             -e 's/(aws_secret_access_key|aws_session_token)[[:space:]]*[=:][[:space:]]*[A-Za-z0-9\/+=]{20,}/\1=<redacted>/gI' \
             -e 's/X-Amz-(Signature|Security-Token|Credential)=[^&[:space:]]+/X-Amz-\1=<redacted>/g' \
-            -e 's/gh[pousr]_[A-Za-z0-9]{16,}/<redacted-gh-token>/g' \
-            -e 's/github_pat_[A-Za-z0-9_]{20,}/<redacted-gh-pat>/g' \
             -e 's/sk-ant-[A-Za-z0-9_-]{16,}/<redacted-anthropic-key>/g' \
             -e 's/sk_(test|live)_[A-Za-z0-9]{16,}/<redacted-stripe-key>/g' \
             -e 's/(rk_(test|live)|whsec)_[A-Za-z0-9]{16,}/<redacted-stripe-key>/g' \
