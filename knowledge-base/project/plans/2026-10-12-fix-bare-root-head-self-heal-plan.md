@@ -38,6 +38,7 @@ SessionStart hook prints that line.
 **Method:** direct empirical prototyping instead of a skill/agent fan-out (the change is ~25 lines of bash; the load-bearing risks are git behaviour and the loader's fail-open contract, both measurable). The helper and the loader wiring were prototyped in a scratchpad copy and run against synthesized fixtures on git 2.55; all Phase 4.6-4.12 gates were applied mechanically.
 
 ### Key Improvements
+
 1. **Loader wiring changed from `| grep -m1` to pure bash.** `.claude/hooks/grep-q-pipe-guard.test.sh` sweeps `.claude/hooks/*.sh` for a pipe into `grep -q/-m` (SIGPIPE-under-pipefail hazard; its `PATTERN_V2` also matches the `| { grep -m1 ...; }` brace form). The first draft would have reddened that suite.
 2. **Equivalent-mutant finding:** `rev-parse --is-bare-repository` is already `false` in a linked worktree (measured), so dropping the git-dir/common-dir check ALONE does not redden any case. The mutation matrix now says so and mutates both checks together.
 3. **Observability probe made runnable.** The first draft declared its own `*.test.sh` suite as the `discoverability_test.command` (suite-shaped, rejected by Phase 4.7 for a block authored in this change). Replaced by a self-contained `bash -c` probe that builds a throwaway bare repo and prints the marker (verified under `env -i`).
@@ -45,6 +46,7 @@ SessionStart hook prints that line.
 5. **Guard Contract added** (the helper's no-touch invariant is a safety property over the repo's refs).
 
 ### New Considerations Discovered
+
 - Measured: a dangling symbolic HEAD makes the loader's branch line read exactly `branch: HEAD` (the `\|\| echo "(unknown)"` fallback does not fire because `rev-parse --abbrev-ref HEAD` exits 0). Prototype run: first invocation -> `branch: main` + one marker line at the end of `additionalContext`; second -> no marker; stub helper printing junk and exiting 7 -> loader rc 0, valid envelope, no junk; helper file absent -> same.
 - The helper also heals correctly when invoked from a SUBDIRECTORY of the bare root and for a true bare layout (gitdir == dir).
 
@@ -378,3 +380,16 @@ See Phase 3 tables (H1-H10, L1-L3) and the test-bites mutation list.
 - `git config core.bare` is `true` inside linked worktrees (shared config); only `rev-parse --is-bare-repository` and the git-dir/common-dir comparison distinguish the root from a worktree.
 - Marker string interpolates a ref name read from `.git/HEAD`: strip control characters and cap length before it enters `additionalContext`.
 - Fixtures that call `git` must use the hermetic env from `git-fixture-env.sh`; an inherited `GIT_DIR` from a worktree hook environment would otherwise point the fixture at the real repo (rc=97 tripwire).
+
+## Review Amendments (2026-10-12, PR review)
+
+The 11-seat review superseded parts of Phase 1 above; the helper header is now the source of truth.
+Changes, with the seat that drove each: bareness is read from the config FILE and the layout is
+pinned to a real `<dir>/.git` directory, replacing `--is-bare-repository` plus the git-dir/common-dir
+check (history seat, ADR-173; structural seat; security seat), so a true-bare repo (H10 now asserts
+it is untouched) and a `.git` redirect are out of scope; inherited `GIT_*` location variables are
+unset; the target must be a `refs/heads/*` ref that does not EXIST (`show-ref` rc 1, never 128);
+the write runs with `core.hooksPath=/dev/null` and `core.fsmonitor=false`; the marker's old ref is
+allowlisted to `[A-Za-z0-9._/-]`; the loader call is time-boxed. The trigger heals only when the
+session cwd is the bare root, and applies to any repo with this layout that the session is opened
+in (disclosed in the README); that is accepted for a hook that ships only in this repo's `.claude/`.

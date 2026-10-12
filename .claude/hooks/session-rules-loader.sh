@@ -5,7 +5,8 @@
 # Matchers: startup|resume|clear|compact
 # Reads the envelope JSON on stdin and emits hookSpecificOutput.additionalContext
 # containing the whole rule corpus (AGENTS.rules.md) plus an operator-readable
-# stamp, the session-context snapshot, and the tmpfs-guard alarm block.
+# stamp, the session-context snapshot, the tmpfs-guard alarm block, and (only after a repair)
+# the bare-root HEAD heal marker.
 #
 # ADR-151 retired the CHANGE-CLASS CLASSIFIER, not this hook. The corpus is now
 # injected in full on every session, so there is no class to compute, no
@@ -303,12 +304,17 @@ STAMP="[rules-loader] loaded: ${RULE_COUNT} of ${TOTAL_RULES} rules${FAIL_SAFE_N
 # Dropping a `|| …` guard here on the strength of the old claim would route the
 # session onto the FALLBACK path — the one with the least operator visibility.
 # Keep every external call inside a command-sub with a `|| …` fallback.
+
 # Bare-root HEAD self-heal (job 10 in the header). A CHILD process, so a failing or noisy helper
 # cannot reach this shell: `|| true` keeps the ERR trap quiet, and the prefix test below accepts
 # only the helper's first line, so nothing else it prints can enter context. Pure bash on purpose
 # (no `| grep -m1`): grep-q-pipe-guard.test.sh sweeps this directory for an early-exit grep in a
-# pipe. A missing helper (a stale bare-root copy of this file) is the same fail-open path.
-BARE_HEAL_OUT=$(bash "$(dirname "${BASH_SOURCE[0]}")/bare-head-self-heal.sh" "$REPO_ROOT" 2>/dev/null || true)
+# pipe. A missing helper (a stale bare-root copy of this file) is the same fail-open path. The
+# call is time-boxed (`timeout`, when available): a hung git at the repo root must cost a few
+# seconds, not the whole rules corpus. SOLEUR_BARE_HEAL_TIMEOUT_S exists for the test.
+BARE_HEAL_TO=()
+if command -v timeout >/dev/null 2>&1; then BARE_HEAL_TO=(timeout "${SOLEUR_BARE_HEAL_TIMEOUT_S:-5}"); fi
+BARE_HEAL_OUT=$("${BARE_HEAL_TO[@]+"${BARE_HEAL_TO[@]}"}" bash "$(dirname "${BASH_SOURCE[0]}")/bare-head-self-heal.sh" "$REPO_ROOT" 2>/dev/null || true)
 BARE_HEAL_MARKER="${BARE_HEAL_OUT%%$'\n'*}"
 [[ "$BARE_HEAL_MARKER" == "SOLEUR_BARE_HEAD_HEALED "* ]] || BARE_HEAL_MARKER=""
 WS_BRANCH=$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "(unknown)")
@@ -457,7 +463,7 @@ fi
 # operator-glanceable header (STAMP/manifest, lines 1-2) and before the rule
 # bodies. It was lines 4-6 until ADR-151 removed the HINT line; the loader tests
 # assert these offsets positionally, so any future line added to the header must
-# move them again in the same commit. The alarm block trails everything.
+# move them again in the same commit. The alarm block, then the heal marker, trail everything.
 OUT_BODY="${STAMP}"$'\n'"[rules-loader] manifest: ${MANIFEST}"$'\n'"${SESSION_CONTEXT}"$'\n'"${CONTEXT}${TMPFS_ALARM_BLOCK}${BARE_HEAL_MARKER:+$'\n'$BARE_HEAL_MARKER}"
 jq -nc --arg out "$OUT_BODY" '{ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: $out } }'
 exit 0

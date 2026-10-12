@@ -3,12 +3,13 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1194
-# generated-at=2026-10-11T18:08:59Z
+# generated-at=2026-10-12T15:17:10Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
 .claude/hooks/agent-token-tee.test.sh	3
 .claude/hooks/background-poll-prefer-monitor.test.sh	7
+.claude/hooks/bare-head-self-heal.test.sh	5
 .claude/hooks/brand-hex-commit-gate.test.sh	8
 .claude/hooks/browser-snapshot-credential-guard.test.sh	7
 .claude/hooks/cla-signed-author-gate.test.sh	4
@@ -64,6 +65,8 @@
 .claude/hooks/stub-argv-fidelity.test.sh	1
 apps/cla-evidence/scripts/_cf-admin-token.test.sh	8
 apps/cla-evidence/scripts/_r2-endpoint.test.sh	8
+apps/cla-evidence/scripts/_r2-sigv4-curl.test.sh	4
+apps/cla-evidence/scripts/bootstrap-r2-probe.test.sh	8
 apps/cla-evidence/scripts/gdpr-override.test.sh	2
 apps/cla-evidence/scripts/inspect.test.sh	6
 apps/cla-evidence/scripts/sentinel-pr.test.sh	5
@@ -253,6 +256,7 @@ plugins/soleur/test/ship-followthrough-directive.test.sh	7
 plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh	6
 plugins/soleur/test/ship-pir-action-items-gate.test.sh	8
 plugins/soleur/test/sync-pr-behind.test.sh	3
+plugins/soleur/test/technical-ruling-gate.test.sh	6
 plugins/soleur/test/terraform-drift-sentry-leg.test.sh	7
 plugins/soleur/test/terraform-drift-step-order.test.sh	6
 plugins/soleur/test/test-pyramid-fixtures.test.sh	3

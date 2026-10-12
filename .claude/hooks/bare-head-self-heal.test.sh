@@ -14,9 +14,9 @@ trap 'rm -rf "$SANDBOX"' EXIT
 
 # Redirect incident telemetry into a per-suite sandbox BEFORE any case runs. Sourced after the
 # EXIT trap above on purpose: the lib composes with a trap that already exists.
-. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/test-incident-sandbox.sh"
-
 SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+. "$SCRIPT_DIR/lib/test-incident-sandbox.sh"
+
 HELPER="$SCRIPT_DIR/bare-head-self-heal.sh"
 LOADER="$SCRIPT_DIR/session-rules-loader.sh"
 MARKER_GONE="SOLEUR_BARE_HEAD_HEALED from=refs/heads/gone to=refs/heads/main"
@@ -74,10 +74,16 @@ FAIL=0
 FAILURES=()
 EXECUTED=()
 CUR=""
+CASE_N=0
+EMPTY_CASES=()
 
-begin() { EXECUTED+=("$1"); CUR="$1"; }
-ok() { PASS=$((PASS + 1)); printf '  ok   %s: %s\n' "$CUR" "$1"; }
-bad() { FAIL=$((FAIL + 1)); FAILURES+=("$CUR: $1"); printf '  FAIL %s: %s\n' "$CUR" "$1"; }
+# A case that executed no assertion is an empty case, whatever the totals say.
+close_case() {
+  if [[ -n "$CUR" ]] && (( CASE_N == 0 )); then EMPTY_CASES+=("$CUR"); fi
+}
+begin() { close_case; EXECUTED+=("$1"); CUR="$1"; CASE_N=0; }
+ok() { PASS=$((PASS + 1)); CASE_N=$((CASE_N + 1)); printf '  ok   %s: %s\n' "$CUR" "$1"; }
+bad() { FAIL=$((FAIL + 1)); CASE_N=$((CASE_N + 1)); FAILURES+=("$CUR: $1"); printf '  FAIL %s: %s\n' "$CUR" "$1"; }
 eq() {
   if [[ "$2" == "$3" ]]; then ok "$1"; else bad "$1 (expected [$2], got [$3])"; fi
 }
@@ -89,13 +95,17 @@ _f=$FAIL
 CUR="selftest"
 ok "selftest-pass" >/dev/null
 bad "selftest-fail" >/dev/null
-if (( PASS != _p + 1 || FAIL != _f + 1 )); then
-  printf 'FATAL: instrument self-test: ok/bad did not move their counters\n' >&2
+eq "selftest-eq-pass" "a" "a" >/dev/null
+eq "selftest-eq-fail" "a" "b" >/dev/null
+if (( PASS != _p + 2 || FAIL != _f + 2 )); then
+  printf 'FATAL: instrument self-test: ok/bad/eq did not move their counters\n' >&2
   exit 1
 fi
 PASS=$_p
 FAIL=$_f
 FAILURES=()
+CUR=""
+CASE_N=0
 
 # --- fixture builders -----------------------------------------------------------------------
 # seed_main <dir> [extra-branch]: one empty-tree commit on refs/heads/main (and on the extra
@@ -171,9 +181,13 @@ eq "HEAD now names main" "refs/heads/main" "$(head_of "$d")"
 eq "exit status is 0" "0" "$RC"
 
 begin H2
-run_helper "$SANDBOX/h1"
+d="$SANDBOX/h2"; mk_bare_root "$d" || bad "fixture"
+dangle "$d"
+run_helper "$d"
+eq "first run heals (precondition for idempotency)" "$MARKER_GONE" "$OUT"
+run_helper "$d"
 eq "second run is silent (idempotent)" "" "$OUT"
-eq "HEAD still main" "refs/heads/main" "$(head_of "$SANDBOX/h1")"
+eq "HEAD still main" "refs/heads/main" "$(head_of "$d")"
 eq "exit status is 0" "0" "$RC"
 
 begin H3
@@ -241,10 +255,100 @@ begin H10
 d="$SANDBOX/h10"; mk_true_bare "$d" || bad "fixture"
 dangle "$d"
 run_helper "$d"
-eq "true bare (gitdir == dir): healed" "$MARKER_GONE" "$OUT"
-eq "true bare HEAD now names main" "refs/heads/main" "$(head_of "$d")"
+eq "true bare (a mirror or server repo, not this layout): silent" "" "$OUT"
+eq "true bare HEAD untouched" "refs/heads/gone" "$(head_of "$d")"
+
+begin H11
+d="$SANDBOX/h11"; mk_bare_root "$d" feat || bad "fixture"
+git -C "$d" symbolic-ref HEAD refs/heads/feat
+git -C "$d" pack-refs --all
+run_helper "$d"
+eq "healthy HEAD naming a PACKED ref: silent" "" "$OUT"
+eq "packed healthy HEAD untouched" "refs/heads/feat" "$(head_of "$d")"
+
+begin H12
+d="$SANDBOX/h12"; mk_bare_root "$d" || bad "fixture"
+git -C "$d" pack-refs --all
+dangle "$d"
+run_helper "$d"
+eq "dangling HEAD with a PACKED main: healed" "$MARKER_GONE" "$OUT"
+eq "HEAD names main" "refs/heads/main" "$(head_of "$d")"
+
+begin H13
+d="$SANDBOX/h13"; mk_bare_root "$d" broken || bad "fixture"
+printf '0000000000000000000000000000000000000001\n' > "$d/.git/refs/heads/broken"
+git -C "$d" symbolic-ref HEAD refs/heads/broken
+run_helper "$d"
+eq "a ref that EXISTS but names a missing object is corruption, not dangling: silent" "" "$OUT"
+eq "corrupt-target HEAD untouched" "refs/heads/broken" "$(head_of "$d")"
+
+begin H14
+d="$SANDBOX/h14"; mk_bare_root "$d" || bad "fixture"
+git -C "$d" symbolic-ref HEAD refs/tags/gone
+run_helper "$d"
+eq "HEAD naming a tag ref (not a branch): silent" "" "$OUT"
+eq "tag-ref HEAD untouched" "refs/tags/gone" "$(head_of "$d")"
+
+begin H15
+real="$SANDBOX/h15-real"; mk_true_bare "$real" || bad "fixture"
+dangle "$real"
+stub="$SANDBOX/h15-stub"; mkdir -p "$stub"
+printf 'gitdir: %s\n' "$real" > "$stub/.git"
+run_helper "$stub"
+eq "a .git FILE redirecting to another repo: silent" "" "$OUT"
+eq "the redirect target is untouched" "refs/heads/gone" "$(head_of "$real")"
+
+begin H16
+a="$SANDBOX/h16a"; mk_bare_root "$a" || bad "fixture"
+dangle "$a"
+b="$SANDBOX/h16b"; mk_bare_root "$b" || bad "fixture"
+dangle "$b"
+RC=0
+OUT=$(GIT_DIR="$b/.git" bash "$HELPER" "$a" 2>/dev/null) || RC=$?
+eq "inherited GIT_DIR: the NAMED repo is the one healed" "$MARKER_GONE" "$OUT"
+eq "named repo HEAD now main" "refs/heads/main" "$(head_of "$a")"
+eq "the GIT_DIR repo is untouched" "refs/heads/gone" "$(head_of "$b")"
+
+begin H17
+d="$SANDBOX/h17"; mk_bare_root "$d" || bad "fixture"
+ran="$SANDBOX/h17-hook-ran"
+mkdir -p "$d/.git/hooks"
+printf '#!/bin/sh\ntouch "%s"\n' "$ran" > "$d/.git/hooks/reference-transaction"
+chmod +x "$d/.git/hooks/reference-transaction"
+git -C "$d" update-ref refs/heads/control "$(git -C "$d" rev-parse main)"
+if [[ -e "$ran" ]]; then ok "control: this fixture's reference-transaction hook fires on a normal ref write"; else bad "control: the hook did not fire, so the assertion below proves nothing"; fi
+dangle "$d"
+rm -f "$ran"
+run_helper "$d"
+eq "heal still happens" "$MARKER_GONE" "$OUT"
+if [[ -e "$ran" ]]; then bad "a repository-controlled reference-transaction hook ran"; else ok "no repository hook ran during the repair"; fi
+
+begin H18
+d="$SANDBOX/h18"; mk_bare_root "$d" || bad "fixture"
+git -C "$d" symbolic-ref HEAD "$(printf 'refs/heads/a\xe2\x80\xa8b')" || bad "fixture: git rejected the Unicode ref name"
+run_helper "$d"
+eq "a U+2028 in the old ref name is dropped from the marker" "SOLEUR_BARE_HEAD_HEALED from=refs/heads/ab to=refs/heads/main" "$OUT"
+
+begin H19
+b="$SANDBOX/h19b"; mk_bare_root "$b" || bad "fixture"
+dangle "$b"
+RC=0
+OUT=$(cd "$b" && bash "$HELPER" "$SANDBOX/h19-does-not-exist" 2>/dev/null) || RC=$?
+eq "nonexistent dir: silent (a failed cd must not fall through to the caller's own repo)" "" "$OUT"
+eq "nonexistent dir: exit status is 0" "0" "$RC"
+eq "the repo the caller stood in is untouched" "refs/heads/gone" "$(head_of "$b")"
 
 # --- loader cases ---------------------------------------------------------------------------
+# Pin the ambient state the loader reads, so the "marker is the trailing line" assertion does not
+# depend on whether the host happens to carry a tmpfs-guard alarm: a populated alarm file makes the
+# alarm block ALWAYS present, which is the only arrangement under which the ordering is observable.
+ALARM_FILE="$SANDBOX/tmpfs-alarms.log"
+HEARTBEAT_FILE="$SANDBOX/tmpfs-heartbeat"
+printf '2026-01-01T00:00:00Z fixture alarm\n' > "$ALARM_FILE"
+: > "$HEARTBEAT_FILE"
+export TMPFS_GUARD_ALARM_FILE="$ALARM_FILE" TMPFS_GUARD_HEARTBEAT_FILE="$HEARTBEAT_FILE"
+export SOLEUR_BARE_HEAL_TIMEOUT_S=2
+
 # A rule-corpus fixture committed BEFORE `core.bare true` (git add refuses once it is set), so the
 # root carries the on-disk files a synced bare root carries.
 mk_loader_root() {
@@ -294,11 +398,20 @@ eq "marker present exactly once" "1" "$(count_marker "$CTX")"
 last=$(tail -n 1 <<<"$CTX")
 eq "marker is the trailing line" "$MARKER_GONE" "$last"
 case "$CTX" in
+  *"[tmpfs-guard] /tmp alarm, most recent: 2026-01-01T00:00:00Z fixture alarm"*) ok "the alarm block is present, so the marker's position AFTER it is observable" ;;
+  *) bad "the alarm block is missing: the ordering assertion above is vacuous" ;;
+esac
+case "$CTX" in
   *"hr-test-core"*) ok "rule bodies still load" ;;
   *) bad "rule bodies missing from context" ;;
 esac
 invoke_loader "$LOADER" "$d"
+eq "second invocation exits 0" "0" "$LRC"
 eq "second invocation emits no marker" "0" "$(count_marker "$CTX")"
+case "$(sed -n 3p <<<"$CTX")" in
+  "[session-context] branch: main |"*) ok "second invocation still reads branch main" ;;
+  *) bad "second invocation branch line is wrong" ;;
+esac
 
 begin L2
 d="$SANDBOX/l2"; mk_loader_root "$d" || bad "fixture"
@@ -320,6 +433,14 @@ printf '#!/usr/bin/env bash\nprintf "junk line\\nINJECTED\\n"\nexit 7\n' > "$cop
 chmod +x "$copy/session-rules-loader.sh" "$copy/bare-head-self-heal.sh"
 invoke_loader "$copy/session-rules-loader.sh" "$d"
 eq "stub exits 7: loader exits 0" "0" "$LRC"
+case "$(sed -n 1p <<<"$CTX")" in
+  *FALLBACK*) bad "a failing helper degraded the loader to its FALLBACK envelope" ;;
+  *) ok "a failing helper did not trip the loader's ERR trap" ;;
+esac
+case "$(sed -n 3p <<<"$CTX")" in
+  "[session-context] branch:"*) ok "the session-context line is still on line 3" ;;
+  *) bad "line 3 is not the session-context line" ;;
+esac
 if jq -e '.hookSpecificOutput.additionalContext' <<<"$LOUT" >/dev/null 2>&1; then
   ok "envelope is valid JSON"
 else
@@ -337,16 +458,66 @@ eq "no marker from a non-marker helper" "0" "$(count_marker "$CTX")"
 printf '#!/usr/bin/env bash\nprintf "SOLEUR_BARE_HEAD_HEALED from=x to=y\\nINJECTED\\n"\nexit 0\n' > "$copy/bare-head-self-heal.sh"
 invoke_loader "$copy/session-rules-loader.sh" "$d"
 eq "only the first helper line is taken as the marker" "1" "$(count_marker "$CTX")"
+eq "the marker taken is exactly the helper's first line" "SOLEUR_BARE_HEAD_HEALED from=x to=y" "$(tail -n 1 <<<"$CTX")"
 case "$CTX" in
   *INJECTED*) bad "a second helper line reached the context" ;;
   *) ok "a second helper line did not reach the context" ;;
 esac
+printf '#!/usr/bin/env bash\nprintf "SOLEUR_BARE_HEAD_HEALEDX from=x to=y\\n"\nexit 0\n' > "$copy/bare-head-self-heal.sh"
+invoke_loader "$copy/session-rules-loader.sh" "$d"
+case "$CTX" in
+  *SOLEUR_BARE_HEAD_HEALEDX*) bad "a near-miss prefix (no space) was accepted as the marker" ;;
+  *) ok "a near-miss prefix was rejected" ;;
+esac
+
+begin L4
+d="$SANDBOX/l4-repo"; mk_loader_root "$d" || bad "fixture"
+dangle "$d"
+copy="$SANDBOX/l4-copy/.claude/hooks"
+assert_fixture_dir "$copy"
+mkdir -p "$copy"
+cp "$LOADER" "$copy/session-rules-loader.sh"
+chmod +x "$copy/session-rules-loader.sh"
+invoke_loader "$copy/session-rules-loader.sh" "$d"
+eq "no helper beside the loader (a stale bare-root copy): loader exits 0" "0" "$LRC"
+case "$CTX" in
+  *"hr-test-core"*) ok "rule bodies still load without the helper" ;;
+  *) bad "rule bodies missing without the helper" ;;
+esac
+eq "no marker without the helper" "0" "$(count_marker "$CTX")"
+
+begin L5
+if command -v timeout >/dev/null 2>&1; then
+  d="$SANDBOX/l5-repo"; mk_loader_root "$d" || bad "fixture"
+  copy="$SANDBOX/l5-copy/.claude/hooks"
+  assert_fixture_dir "$copy"
+  mkdir -p "$copy"
+  cp "$LOADER" "$copy/session-rules-loader.sh"
+  printf '#!/usr/bin/env bash\nexec sleep 60\n' > "$copy/bare-head-self-heal.sh"
+  chmod +x "$copy/session-rules-loader.sh" "$copy/bare-head-self-heal.sh"
+  t0=$SECONDS
+  invoke_loader "$copy/session-rules-loader.sh" "$d"
+  elapsed=$((SECONDS - t0))
+  eq "a hung helper: loader still exits 0" "0" "$LRC"
+  if (( elapsed < 30 )); then ok "a hung helper is cut off by the timeout (took ${elapsed}s, not 60s)"; else bad "a hung helper stalled the loader for ${elapsed}s"; fi
+  case "$CTX" in
+    *"hr-test-core"*) ok "rule bodies still load after a hung helper" ;;
+    *) bad "rule bodies missing after a hung helper" ;;
+  esac
+else
+  ok "skipped: no timeout binary on this host (the loader then runs the helper untimed)"
+fi
 
 # --- completion floors ------------------------------------------------------------------------
-DECLARED=(H1 H2 H3 H4 H5 H6 H7 H8 H9 H10 L1 L2 L3)
+close_case
+DECLARED=(H1 H2 H3 H4 H5 H6 H7 H8 H9 H10 H11 H12 H13 H14 H15 H16 H17 H18 H19 L1 L2 L3 L4 L5)
 if [[ "${EXECUTED[*]}" != "${DECLARED[*]}" ]]; then
   printf 'FATAL: declared cases differ from executed cases\n  declared: %s\n  executed: %s\n' \
     "${DECLARED[*]}" "${EXECUTED[*]}" >&2
+  exit 1
+fi
+if (( ${#EMPTY_CASES[@]} > 0 )); then
+  printf 'FATAL: cases that executed no assertion: %s\n' "${EMPTY_CASES[*]}" >&2
   exit 1
 fi
 if (( PASS + FAIL == 0 )); then

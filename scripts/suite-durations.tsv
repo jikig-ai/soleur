@@ -2,10 +2,11 @@
 # group=light
 # generated-from-runs=38090871167,38088705648,38086978176,38085840669,38055372785
 # default-weight-ms=1194
-# generated-at=2026-10-11T18:08:59Z
+# generated-at=2026-10-12T15:17:10Z
 # generator=regenerate-shard-manifest.py v3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
 .claude/hooks/background-poll-prefer-monitor.test.sh	777	measured
+.claude/hooks/bare-head-self-heal.test.sh	1194	floor
 .claude/hooks/brand-hex-commit-gate.test.sh	2974	measured
 .claude/hooks/browser-snapshot-credential-guard.test.sh	512	measured
 .claude/hooks/cla-signed-author-gate.test.sh	950	measured
@@ -61,6 +62,8 @@
 .claude/hooks/stub-argv-fidelity.test.sh	216	measured
 apps/cla-evidence/scripts/_cf-admin-token.test.sh	108	measured
 apps/cla-evidence/scripts/_r2-endpoint.test.sh	55	measured
+apps/cla-evidence/scripts/_r2-sigv4-curl.test.sh	1194	floor
+apps/cla-evidence/scripts/bootstrap-r2-probe.test.sh	1194	floor
 apps/cla-evidence/scripts/gdpr-override.test.sh	903	measured
 apps/cla-evidence/scripts/inspect.test.sh	198	measured
 apps/cla-evidence/scripts/sentinel-pr.test.sh	25	measured
@@ -250,6 +253,7 @@ plugins/soleur/test/ship-followthrough-directive.test.sh	447	measured
 plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh	124725	measured
 plugins/soleur/test/ship-pir-action-items-gate.test.sh	2569	measured
 plugins/soleur/test/sync-pr-behind.test.sh	32366	measured
+plugins/soleur/test/technical-ruling-gate.test.sh	1194	floor
 plugins/soleur/test/terraform-drift-sentry-leg.test.sh	543	measured
 plugins/soleur/test/terraform-drift-step-order.test.sh	58	measured
 plugins/soleur/test/test-pyramid-fixtures.test.sh	81	measured
