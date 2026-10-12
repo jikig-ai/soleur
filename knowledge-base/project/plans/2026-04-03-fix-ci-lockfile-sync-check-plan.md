@@ -126,7 +126,7 @@ No cross-domain implications detected -- CI infrastructure change with no user-f
 
 - Issue: [#1318](https://github.com/jikig-ai/soleur/issues/1318)
 - Parent issue: [#1307](https://github.com/jikig-ai/soleur/issues/1307)
-- Parent plan: `knowledge-base/project/plans/2026-03-30-fix-deploy-verification-docker-build-plan.md` (Task 3)
+- Parent plan: `knowledge-base/project/plans/archive/20261012-213508-2026-03-30-fix-deploy-verification-docker-build-plan.md` (Task 3)
 - Learning: `knowledge-base/project/learnings/2026-03-29-post-merge-release-workflow-verification.md`
 - Learning: `knowledge-base/project/learnings/2026-03-30-unused-dep-peer-conflict-docker-build.md`
 - Previous lockfile fix PR: [#1293](https://github.com/jikig-ai/soleur/pull/1293)

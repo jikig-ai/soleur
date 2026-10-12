@@ -621,7 +621,7 @@ Sandbox mechanics that make these rows honest (all verified against
   --detach` prescriptions that bypass install_deps.
 - `plugins/soleur/skills/git-worktree/SKILL.md:23,320,342,347-348` — manager
   mandate + documented manual paths.
-- `knowledge-base/project/specs/feat-worktree-auto-install/` — the 2026-03-28
+- `knowledge-base/project/specs/archive/20261012-213508-feat-worktree-auto-install/` — the 2026-03-28
   work that added install_deps (why #2398's stated repro is stale).
 - `knowledge-base/engineering/architecture/decisions/ADR-009-git-worktree-isolation.md`
   and `ADR-173-bare-config-polarity-for-linked-worktrees.md`.

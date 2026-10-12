@@ -85,7 +85,7 @@ Google OAuth consent screen branding is not just a single configuration — it r
 
 ## Cross-References
 
-- OAuth sign-in spec: `knowledge-base/project/specs/feat-oauth-sign-in/spec.md`
+- OAuth sign-in spec: `knowledge-base/project/specs/archive/20261012-213508-feat-oauth-sign-in/spec.md`
 - PKCE learning: `knowledge-base/project/learnings/2026-03-30-pkce-magic-link-same-browser-context.md`
 - Playwright automation learning: `knowledge-base/project/learnings/2026-03-09-x-provisioning-playwright-automation.md`
 - OAuth setup checklist: `knowledge-base/engineering/checklists/oauth-provider-setup.md`

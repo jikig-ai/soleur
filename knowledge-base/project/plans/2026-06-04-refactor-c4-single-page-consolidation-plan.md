@@ -204,7 +204,7 @@ content between the fence and `context` would change the parsed view id. Keep it
 
 These match the grep but are historical plans/specs/learnings that must NOT be rewritten:
 
-- `knowledge-base/project/plans/2026-03-27-feat-architecture-as-code-plan.md`
+- `knowledge-base/project/plans/archive/20261012-213508-2026-03-27-feat-architecture-as-code-plan.md`
 - `knowledge-base/project/plans/2026-04-06-chore-remove-telegram-bridge-plan.md`
 - `knowledge-base/project/plans/2026-06-04-docs-c4-diagrams-directory-readme-plan.md` (the PR #4936 plan)
 - `knowledge-base/project/plans/archive/**` (archived plans/specs)

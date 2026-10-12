@@ -95,7 +95,7 @@ Living status document for vendor DPAs, legal documents, and compliance action i
 
 ## Vendor DPA Status
 
-Source: `knowledge-base/project/specs/feat-vendor-ops-legal/dpa-verification-memo.md`
+Source: `knowledge-base/project/specs/archive/20261012-213508-feat-vendor-ops-legal/dpa-verification-memo.md`
 
 | Vendor | DPA Status | Signed/Verified | Transfer Mechanism | Data Region | Notes |
 |--------|-----------|----------------|-------------------|-------------|-------|

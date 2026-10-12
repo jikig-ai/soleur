@@ -100,7 +100,7 @@ None — chosen path uses only existing Soleur infrastructure.
 ## References
 
 - Repo: `anthropics/claude-for-legal@main` (Apache-2.0)
-- Prior brainstorm: `knowledge-base/project/brainstorms/2026-03-10-claude-marketplace-evaluation-brainstorm.md` (no-go on Anthropic distribution surface)
+- Prior brainstorm: `knowledge-base/project/brainstorms/archive/20261012-213508-2026-03-10-claude-marketplace-evaluation-brainstorm.md` (no-go on Anthropic distribution surface)
 - Prior brainstorm: `knowledge-base/project/brainstorms/2026-05-10-gosprinto-pin-policy-brainstorm.md` (lift-pin policy precedent if path ever revisited)
 - Prior learning: `knowledge-base/project/learnings/2026-05-09-evaluating-vendor-branded-claude-code-skills.md` (canonical playbook)
 - Prior learning: `knowledge-base/project/learnings/implementation-patterns/2026-02-22-bundle-external-plugin-into-soleur.md` (ralph-loop bundle precedent)

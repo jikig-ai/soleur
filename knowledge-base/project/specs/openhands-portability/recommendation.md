@@ -104,4 +104,4 @@ If proceeding to build:
 - OpenHands critical unknowns: `knowledge-base/project/specs/openhands-portability/critical-unknowns.md`
 - Gemini CLI portability inventory: `knowledge-base/project/specs/gemini-cli-portability/inventory.md`
 - Gemini CLI recommendation: `knowledge-base/project/specs/gemini-cli-portability/recommendation.md`
-- Codex portability inventory: `knowledge-base/project/specs/feat-codex-portability-inventory/inventory.md`
+- Codex portability inventory: `knowledge-base/project/specs/archive/20261012-213508-feat-codex-portability-inventory/inventory.md`

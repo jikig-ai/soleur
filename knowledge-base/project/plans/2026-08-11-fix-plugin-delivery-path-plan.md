@@ -152,7 +152,7 @@ That is a workflow fix, not part of this change.
 | Issue #7471 open, untargeted | `gh issue view 7471` — `state: OPEN`, label `type/bug`, no milestone | Holds |
 | #7409 resolved by PR #7426 | `gh issue view 7409` — `state: CLOSED`, `closedByPullRequestsReferences: [7426]` | Holds; this plan is downstream of it |
 | `plugins/soleur/plugin.json` carries the sentinel | Path does **not** exist. Manifest is `plugins/soleur/.claude-plugin/plugin.json` | **Stale path in the issue body.** Same file, wrong path. Every reference below uses the real one |
-| "Publish a real version" is an unconsidered idea | `knowledge-base/project/brainstorms/2026-03-03-tag-only-versioning-brainstorm.md` rejected-options table; ADR-017 `## Decision` | **Stale.** Writing a version into the manifests from CI is the *exact* alternative ADR-017 rejected, and for a reason that still holds — see "The rejected-alternative trap" below |
+| "Publish a real version" is an unconsidered idea | `knowledge-base/project/brainstorms/archive/20261012-213508-2026-03-03-tag-only-versioning-brainstorm.md` rejected-options table; ADR-017 `## Decision` | **Stale.** Writing a version into the manifests from CI is the *exact* alternative ADR-017 rejected, and for a reason that still holds — see "The rejected-alternative trap" below |
 | The lock/lease fix itself is correct | Out of scope by construction; ADR-178 is merged (`9b8cea08b`) | Holds |
 
 **The rejected-alternative trap.** The 2026-03-03 brainstorm chose the sentinel because
@@ -1428,7 +1428,7 @@ block is absent because no plaintext exception or disabled cert verification is 
      the two amended ADRs' *live* claims. Remaining hits are historical records only — measured
      at plan time, those live under `knowledge-base/project/plans/` (7 files, **not all under
      `archive/`**), `knowledge-base/project/plans/archive/`,
-     `knowledge-base/project/specs/feat-tag-only-versioning/` (**a non-archive spec**),
+     `knowledge-base/project/specs/archive/20261012-213508-feat-tag-only-versioning/` (**a non-archive spec**),
      `knowledge-base/project/specs/archive/…`, `knowledge-base/project/brainstorms/`, and
      `knowledge-base/project/learnings/`. The first draft of this AC named only the `archive/`
      paths and would have failed against a correct implementation.

@@ -31,7 +31,7 @@ deepened: 2026-04-02
 
 The Google OAuth consent screen displays "Sign in to ifsccnjhymdmidffkzhl.supabase.co" instead of "soleur.ai". Two root causes: (1) the Google Cloud OAuth consent screen was never configured with app branding (name, logo, domain, privacy/ToS URLs), and (2) the Supabase auth redirect URL uses the raw project URL because no custom domain or vanity subdomain is configured.
 
-This is a follow-up to the OAuth sign-in implementation (#1211) where "Custom branding of provider consent screens" was explicitly listed as a Non-Goal in `knowledge-base/project/specs/feat-oauth-sign-in/spec.md`. The learning in `knowledge-base/project/learnings/2026-03-30-pkce-magic-link-same-browser-context.md` documents that OAuth providers were configured via Playwright MCP but branding was not addressed.
+This is a follow-up to the OAuth sign-in implementation (#1211) where "Custom branding of provider consent screens" was explicitly listed as a Non-Goal in `knowledge-base/project/specs/archive/20261012-213508-feat-oauth-sign-in/spec.md`. The learning in `knowledge-base/project/learnings/2026-03-30-pkce-magic-link-same-browser-context.md` documents that OAuth providers were configured via Playwright MCP but branding was not addressed.
 
 ## Problem Statement
 
@@ -311,7 +311,7 @@ Three reviewers (DHH, Kieran, Code Simplicity) provided feedback. All agreed:
 
 ## References
 
-- OAuth sign-in spec: `knowledge-base/project/specs/feat-oauth-sign-in/spec.md` (Non-Goals: "Custom branding of provider consent screens")
+- OAuth sign-in spec: `knowledge-base/project/specs/archive/20261012-213508-feat-oauth-sign-in/spec.md` (Non-Goals: "Custom branding of provider consent screens")
 - PKCE/OAuth learning: `knowledge-base/project/learnings/2026-03-30-pkce-magic-link-same-browser-context.md`
 - Auth config script: `apps/web-platform/supabase/scripts/configure-auth.sh`
 - DNS Terraform: `apps/web-platform/infra/dns.tf`

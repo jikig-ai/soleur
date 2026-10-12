@@ -13,7 +13,7 @@ Anthropic has restricted Claude Code subscription access for OpenClaw users, cre
 
 ## Prior Art
 
-The Codex portability scan (`knowledge-base/project/specs/feat-codex-portability-inventory/inventory.md`) classified 122 components:
+The Codex portability scan (`knowledge-base/project/specs/archive/20261012-213508-feat-codex-portability-inventory/inventory.md`) classified 122 components:
 
 - **47.5% green** (58 -- portable as-is, mostly agents as prose)
 - **7.4% yellow** (9 -- need adaptation)
@@ -166,7 +166,7 @@ Research tasks do not have automated tests. Verification is empirical:
 
 ## References
 
-- Codex portability inventory: #513, `knowledge-base/project/specs/feat-codex-portability-inventory/inventory.md`
+- Codex portability inventory: #513, `knowledge-base/project/specs/archive/20261012-213508-feat-codex-portability-inventory/inventory.md`
 - Codex scan methodology: `knowledge-base/project/learnings/2026-03-10-codex-portability-scan-methodology.md`
 - Platform risk learning: `knowledge-base/project/learnings/2026-02-25-platform-risk-cowork-plugins.md`
 - BYOM guide: #1215

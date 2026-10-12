@@ -50,7 +50,7 @@ external contributors) without consuming Tier 2 (every-turn) context budget.
 ## Context
 
 - **Issue:** #1316
-- **Brainstorm:** `knowledge-base/project/brainstorms/2026-03-30-rule-audit-ci-brainstorm.md`
+- **Brainstorm:** `knowledge-base/project/brainstorms/archive/20261012-213508-2026-03-30-rule-audit-ci-brainstorm.md`
 - **Audit script:** `scripts/rule-audit.sh` (generated the migration candidates)
 - **Enforcement tier model:** Tier 1 (hooks) > Tier 2 (AGENTS.md) > Tier 3 (constitution.md)
 - **Annotation convention:** `[hook-enforced: script.sh Guard N]` per learning 2026-03-05

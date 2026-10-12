@@ -120,7 +120,7 @@ No cross-domain implications detected -- CI/infrastructure script fix with no us
 - Failed workflow run: <https://github.com/jikig-ai/soleur/actions/runs/23733883325>
 - Plausible Stats API v2 docs: <https://plausible.io/docs/stats-api>
 - Plausible Stats API v1 (legacy): <https://plausible.io/docs/stats-api-v1>
-- Original analytics plan: `knowledge-base/project/plans/2026-03-13-feat-weekly-analytics-improvements-plan.md`
+- Original analytics plan: `knowledge-base/project/plans/archive/20261012-213508-2026-03-13-feat-weekly-analytics-improvements-plan.md`
 - Script: `scripts/weekly-analytics.sh`
 - Test script: `scripts/test-weekly-analytics.sh`
 - Workflow: `.github/workflows/scheduled-weekly-analytics.yml`

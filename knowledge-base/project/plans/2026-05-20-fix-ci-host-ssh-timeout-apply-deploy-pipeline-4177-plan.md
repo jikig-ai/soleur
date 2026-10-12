@@ -344,7 +344,7 @@ Order: (a) `tunnel.tf` edits → (b) `dns.tf` edit → (c) `terraform validate` 
 - Issue: #4177
 - Source PR: #4165 (PAT-to-App migration that removed the masking PAT failure)
 - Cascade: #4144 (AC14-AC18 blocked), #4116 (Better Stack heartbeat blind zone), #4115, #4132
-- Brainstorm: `knowledge-base/project/brainstorms/2026-03-20-cloudflare-tunnel-deploy-brainstorm.md` (original CF Tunnel architectural decision, #749)
+- Brainstorm: `knowledge-base/project/brainstorms/archive/20261012-213508-2026-03-20-cloudflare-tunnel-deploy-brainstorm.md` (original CF Tunnel architectural decision, #749)
 - Existing precedent: `apps/web-platform/infra/tunnel.tf` (deploy webhook tunnel + Access service token)
 - Sibling workflows: `.github/workflows/apply-web-platform-infra.yml` (already excludes SSH-provisioned resources), `.github/workflows/apply-deploy-pipeline-fix.yml` (the workflow this plan unblocks)
 - Learnings consulted:

@@ -308,8 +308,8 @@ If either guard causes unexpected behavior, revert the single commit. No migrati
 
 ### Consulted but not applicable
 
-- `knowledge-base/project/plans/2026-03-18-fix-ci-pin-bun-version-scheduled-workflows-plan.md` — prior scheduled-workflow fix, different bug class (bun version pinning). Structural template reused for this plan.
-- `knowledge-base/project/plans/2026-03-10-feat-scheduled-community-monitoring-workflow-plan.md` — scheduled workflow creation pattern. Not relevant to jq guard.
+- `knowledge-base/project/plans/archive/20261012-213508-2026-03-18-fix-ci-pin-bun-version-scheduled-workflows-plan.md` — prior scheduled-workflow fix, different bug class (bun version pinning). Structural template reused for this plan.
+- `knowledge-base/project/plans/archive/20261012-213508-2026-03-10-feat-scheduled-community-monitoring-workflow-plan.md` — scheduled workflow creation pattern. Not relevant to jq guard.
 
 ### External research
 

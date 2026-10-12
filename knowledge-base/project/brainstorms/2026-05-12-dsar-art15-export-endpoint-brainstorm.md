@@ -208,5 +208,5 @@ export-<userId>-<jobId>.zip
 - Privacy Policy: `docs/legal/privacy-policy.md` §4.7, §4.8, §4.9, §8.1
 - GDPR Policy: `docs/legal/gdpr-policy.md` §6.1.b (lines 183-189)
 - DPD: `docs/legal/data-protection-disclosure.md` §2.3, §5.3
-- DPD plan precedent: `knowledge-base/project/plans/2026-03-20-legal-dpd-web-platform-data-subject-rights-plan.md`
+- DPD plan precedent: `knowledge-base/project/plans/archive/20261012-213508-2026-03-20-legal-dpd-web-platform-data-subject-rights-plan.md`
 - Draft PR: #3634

@@ -78,7 +78,7 @@ The deepen pass for #2887 identified 12 hits across the repo. Re-running the aud
 | `knowledge-base/project/plans/2026-04-02-fix-otp-code-length-mismatch-plan.md` | **KEEP** | historical plan referencing the prd Management API URL |
 | `knowledge-base/project/plans/2026-04-02-fix-google-oauth-consent-screen-branding-plan.md` | **KEEP** | historical plan |
 | `knowledge-base/project/plans/2026-04-18-sec-byok-tenant-isolation-verify-plan.md` | **KEEP** | historical plan |
-| `knowledge-base/project/plans/2026-03-29-chore-verify-production-deployment-e2e-plan.md` | **KEEP** | historical plan |
+| `knowledge-base/project/plans/archive/20261012-213508-2026-03-29-chore-verify-production-deployment-e2e-plan.md` | **KEEP** | historical plan |
 | `knowledge-base/project/plans/2026-04-27-fix-supabase-env-isolation-plan.md` | **KEEP** | parent plan — references both refs intentionally |
 
 Net: **2 files to edit**, 6 line edits total. All other hits are prd-bound infra or time-stamped historical artifacts and MUST NOT be rewritten.
