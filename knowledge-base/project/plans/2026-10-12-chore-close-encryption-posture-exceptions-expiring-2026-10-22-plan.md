@@ -9,6 +9,18 @@ type: chore
 requires_cpo_signoff: false
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-12 (headless). **Passes run:** Phase 4.6 (User-Brand Impact present, threshold `aggregate pattern`), 4.7 (Observability: all five fields present, command starts with allowlisted `python3`, finishes in about a second, `expected_output` is the literal `PASS`), 4.8 (no PAT-shaped variables), 4.10 (Encryption Posture present, every `does_not_defend` non-empty, every exception carries tracker and date), 4.11 (`python3 scripts/lint-guard-contract.py` exit 0, 1 entry), 4.12 (exactly one unfenced `## Scope Check`, all three subsections). No halt fired. Rule IDs cited: none. Live checks re-run: lint baseline PASS; `plugins/soleur/test/c4-count-parity.test.sh` ALL TESTS PASSED; ADR-068, ADR-142, ADR-198, ADR-220 and ADR-239 files exist.
+
+**Added by deepen:**
+- `knowledge-base/legal/article-30-register.md` was grepped for a session-Redis or replay-buffer entry (CLO ruling d): none, so removing the ledger row needs no register edit.
+- Serving path (CLO open item): web-1 `luks-monitor` row 2026-10-12T12:28Z reports `/mnt/data is LUKS-backed (mount_source=/dev/mapper/workspaces)` with `workspace_count=9`; with `git_data_store=disabled`, workspaces are served from that volume, not from the git-data host, so the published "serving volume is LUKS-encrypted" wording is not contradicted for web-1. No statement about web-2.
+- PR2 design correction (from review): the post-apply volume loop is inline, `GATE_MODE` is not in scope there, and the replace shape of the LUKS volume is already enforced by the pre-apply rotate gate (`tests/scripts/lib/git-data-host-replace-gate.sh`, rotate arm R1-R2). PR2 therefore extracts the loop, passes `APPLY_TARGET`, and carries a three-row matrix.
+- Attribution checks: the wipe body deletion in #8189 is stated in ADR-239 and the #8211 body; the 2026-10-11 rotate run is 38140050880 (job `git_data_host_replace`, step `Terraform apply … both-volumes-preserved assert` failed on `hcloud_volume.git_data_luks shows 1 delete/forget action(s)`).
+
+**Open items carried to work time (none needs the operator unless stated):** re-measure the Hetzner and Better Stack facts the day PR1 is written; create the in-transit tracker issue before editing the three rows; any wipe, any `git-data-host-rotate` re-dispatch and the 2026-10-24 CLO final re-ruling are operator or CLO actions, not part of either PR.
+
 ## Overview
 
 Six rows in `scripts/encryption-posture-ledger.json` carry `expires_on: 2026-10-22`. On 2026-10-23 the lint fails every pull request. Three are store rows (`redis.session_store`, `git_data.baked_credentials_on_host`, `hcloud_volume.git_data`); three are in-transit rows (two zot links, one Inngest link) that share the tracking issue #6897. This plan measures each row against live state, then converts, re-points or renews it with a justification that is true today. Nothing is renewed only to turn the lint green.
