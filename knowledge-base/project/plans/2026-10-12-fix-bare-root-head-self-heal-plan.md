@@ -289,16 +289,16 @@ No change to `.claude/settings.json`, `.devin/config.json`, `devin-dispositions.
 
 ### Pre-merge (PR)
 
-- [ ] `bash .claude/hooks/bare-head-self-heal.test.sh` passes (H1-H10, L1-L3).
-- [ ] `bash .claude/hooks/session-rules-loader.test.sh` still passes unchanged (positional line contract intact).
-- [ ] `bash .claude/hooks/settings-hook-exec-bit.test.sh` and `bash .claude/hooks/devin-matcher-parity.test.sh` pass (no registration change).
-- [ ] `bash .claude/hooks/grep-q-pipe-guard.test.sh`, `bash .claude/hooks/hookeventname-coverage.test.sh`, `bash .claude/hooks/stub-argv-fidelity.test.sh`, `bash scripts/rules-loader-stamp-probe.test.sh` (copies the loader alone: helper-absent fail-open path) and `bash scripts/lib/rule-line-regex-parity.test.sh` pass.
-- [ ] The Observability `discoverability_test.command` prints `SOLEUR_BARE_HEAD_HEALED` when run from the repo root after the change (verified under `env -i PATH=/usr/bin:/bin HOME=<tmp>`).
-- [ ] `git ls-files -s .claude/hooks/bare-head-self-heal.sh .claude/hooks/bare-head-self-heal.test.sh` shows mode `100755` for both.
-- [ ] `git diff --name-only origin/main...HEAD` shows no `AGENTS.md` / `AGENTS.rules.md` and no `settings.json`.
-- [ ] Each Phase 3 mutation turns the named case RED (recorded in the PR description).
-- [ ] README subsection names the marker string verbatim and the follow-up trigger.
-- [ ] Marker format is exactly `SOLEUR_BARE_HEAD_HEALED from=<ref> to=refs/heads/main`.
+- [x] `bash .claude/hooks/bare-head-self-heal.test.sh` passes (H1-H10, L1-L3).
+- [x] `bash .claude/hooks/session-rules-loader.test.sh` still passes unchanged (positional line contract intact).
+- [x] `bash .claude/hooks/settings-hook-exec-bit.test.sh` and `bash .claude/hooks/devin-matcher-parity.test.sh` pass (no registration change).
+- [x] `bash .claude/hooks/grep-q-pipe-guard.test.sh`, `bash .claude/hooks/hookeventname-coverage.test.sh`, `bash .claude/hooks/stub-argv-fidelity.test.sh`, `bash scripts/rules-loader-stamp-probe.test.sh` (copies the loader alone: helper-absent fail-open path) and `bash scripts/lib/rule-line-regex-parity.test.sh` pass.
+- [x] The Observability `discoverability_test.command` prints `SOLEUR_BARE_HEAD_HEALED` when run from the repo root after the change (verified under `env -i PATH=/usr/bin:/bin HOME=<tmp>`).
+- [x] `git ls-files -s .claude/hooks/bare-head-self-heal.sh .claude/hooks/bare-head-self-heal.test.sh` shows mode `100755` for both.
+- [x] `git diff --name-only origin/main...HEAD` shows no `AGENTS.md` / `AGENTS.rules.md` and no `settings.json`.
+- [x] Each Phase 3 mutation turns the named case RED (recorded in the PR description).
+- [x] README subsection names the marker string verbatim and the follow-up trigger.
+- [x] Marker format is exactly `SOLEUR_BARE_HEAD_HEALED from=<ref> to=refs/heads/main`.
 
 ### Post-merge (operator)
 
