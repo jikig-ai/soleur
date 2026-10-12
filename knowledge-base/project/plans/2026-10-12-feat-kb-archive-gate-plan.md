@@ -38,7 +38,10 @@ lane: cross-domain
 ### New Considerations Discovered
 
 - Sibling hooks `ship-unpushed-commits-gate.sh`/`cla-signed-author-gate.sh`
-  share the pre-`--` boundary gap — deferred to a tracking issue at ship.
+  share the pre-`--` boundary gap — deferral runs the
+  `wg-defer-only-after-inline-triage` triple test at ship: pass → file the
+  `type/chore` tracking issue; fail → durable in-place documentation
+  (comments at each sibling's trigger line), never conversation-only.
 - `archive-kb.sh` already `git add`s before `git mv` (:244-246), so the
   untracked fix is discovery-only.
 - Multi-PR commands (`gh pr merge 42 && gh pr merge 43`) stay in the
@@ -125,6 +128,11 @@ precedented in-tree:
   by `strip_command_bodies`), `eval "…"` indirection, variable/alias
   invocation (`$GH pr merge`), `gh api …/merge`, and UI merges — none
   fire the regex; Phase 5.8 reports the landed result regardless.
+  **Binding nuances (CTO ruling):** the trigger must NOT absorb the
+  sibling's `ready` alternation — `gh pr merge` alone (ruling: ready
+  marks review-readiness, not publication); the `\s--\s` member appears
+  in BOTH the fire-check regex and `_merge_args`' extraction regex, as
+  it does in the sibling's two sites.
 - **PR-head resolution** — import `pre-merge-rebase.sh`'s #8778/#9401
   resolver VERBATIM (byte-copied helpers with a provenance comment, parity-
   pinned by a suite row that diffs each function body against
@@ -162,7 +170,13 @@ Logic:
    `MERGE_TARGET_WHY` — for this gate a HEAD fallback on a wrong target
    is both a false-pass and a false-deny; the multi-PR posture mirrors
    the sibling's "merge one PR per command" and stays conservative —
-   looping per-invocation is a defensible v2, not v1.
+   looping per-invocation is a defensible v2, not v1. **Boundary
+   (CTO ruling):** the L-deny applies only to invocations that CARRY a
+   target token the ladder cannot prove; a purely flag-only invocation
+   (`gh pr merge --squash --auto`, no positional) has no named target
+   and correctly takes the HEAD path — do not conflate `--squash` (a
+   flag) with `somebranch` (a non-bare positional). Flag-first-with-
+   number stays in the conservative deny; the deny text says to reorder.
 5. **Fail-open scope (refined ruling — decision-challenges).** The brief's
    `main`/`detached`/`bare` fail-opens apply to the HEAD-based path,
    where the branch is the measured object and HEAD is meaningless in
@@ -175,7 +189,10 @@ Logic:
 6. `git fetch --no-tags origin main` — **fail-closed deny** on failure
    (sibling T9 posture; unverifiable head is the silent-miss class).
    `base=$(git merge-base origin/main "$HEAD_SHA")`; empty base (shallow
-   clone) → exit 0.
+   clone) → exit 0 **with a `headless_or_stderr` warn naming the cause**
+   (CTO ruling: no fail-open path is silent — a silent pass on an
+   unmeasurable merge is the reports-clean-because-it-could-not-look
+   shape).
 7. `git diff --name-status -z --diff-filter=AM "$base"..."$HEAD_SHA" --
    knowledge-base/project/specs knowledge-base/project/plans
    knowledge-base/project/brainstorms` (the `-z` + `read -d ''` form —
@@ -200,9 +217,15 @@ Logic:
    > then `git add -A knowledge-base && git commit -m "chore(kb): archive
    > <branch> artifacts at ship" && git push` — the check reads the pushed
    > PR head, so a local-only archive does not clear it.
+   > For an `M`-row on `specs/<dir>/` (archive-kb refuses to collapse a
+   > modified live spec dir by design): `git mv
+   > knowledge-base/project/specs/<dir>
+   > knowledge-base/project/specs/archive/<ts>-<dir>` + commit + push.
    > Ordering: archive only AFTER ship's last live-path reads — Phase 6
    > step 2.5 (decision-challenges render) and step 5 (Operator Holds).
    > It belongs inside ship `## Phase 6.45: KB Artifact Archival`.
+   > Hatch: `SOLEUR_SKIP_KB_ARCHIVE_GATE=1` bypasses (named in the deny —
+   > an undocumented hatch is discoverable only by reading the hook).
 
    Registration: `.claude/settings.json` PreToolUse/`Bash` immediately after
    `ship-unpushed-commits-gate.sh` (after `pre-merge-rebase.sh` so auto-sync
@@ -214,9 +237,13 @@ Logic:
    Adjacent finding (deferral): `ship-unpushed-commits-gate.sh` and
    `cla-signed-author-gate.sh` still use the `(^|&&|\|\||;)`-only boundary,
    so the `with_lock -- gh pr merge` form bypasses them on the sanctioned
-   arming path — the same #3689 class `pre-merge-rebase.sh` fixed. File a
-   tracking issue at ship time (per `wg-when-deferring-a-capability-create-a`);
-   out of this plan's edit set.
+   arming path — the same #3689 class `pre-merge-rebase.sh` fixed. Out of
+   this plan's edit set; the recording mechanism is conditional per the
+   CTO ruling — run the `wg-defer-only-after-inline-triage` triple test
+   at ship time: pass → file the `type/chore` tracking issue (per
+   `wg-when-deferring-a-capability-create-a`); fail → durable in-place
+   documentation (this Non-Goals note + a comment at each sibling's
+   trigger line naming the gap), never conversation-only.
 
 ### (b) `soleur:ship` — promote archival to `## Phase 6.45: KB Artifact Archival`
 
@@ -239,7 +266,11 @@ Logic:
   merge" structurally true for BOTH arms: there is no `gh pr merge` site
   left before Phase 6.45. (Rejected alternative: an in-place `###` heading
   inside the exists-arm — smaller diff but keeps the conditional-wrap and
-  two arming sites, which is the root cause being fixed.)
+  two arming sites, which is the root cause being fixed.) **CTO nuance:**
+  Phase 7's CI-failure recovery retains its `gh pr merge <number>
+  --squash --auto` re-queue — a second merge site by construction, but
+  post-archive and still covered by the hook; the invariant is "no merge
+  site before Phase 6.45", not "one site total". Do not remove it.
 - Phase 5 Final Checklist gains `- [ ] KB artifacts archived (Phase 6.45
   gate)` between the Phase 5.5 gate rows and "Push to remote".
 - Cross-reference updates (all "Phase 6 step 5.5"/"step 6" pins):
@@ -275,7 +306,11 @@ uncommitted topic-named plans / non-`feat-*` spec dirs — the residual of
 #7383 and adjacent to #9172's staged-but-unpersisted class (noted, not
 fixed here). Discovery is the only gap: the move path already runs
 `git add "$artifact"` before `git mv` (`archive-kb.sh:244-246`), so an
-untracked file moves cleanly once listed.
+untracked file moves cleanly once listed. **Scope (CTO ruling):** `??`
+rows only — staged/modified rows are already covered by branch-diff for
+tracked files; keep the spec-dir collapse symmetric (an untracked dir
+under `specs/` collapses to the dir; a lone untracked root-level file
+such as `specs/.gitkeep` does not fire).
 
 ## Technical Considerations
 
@@ -466,8 +501,10 @@ population it is measured against.
   `scripts/suite-shard-legs.tsv` and `bash
   scripts/lint-orphan-test-suites.sh` reports no orphan.
 - [ ] AC2: fixture — branch adds `specs/<dir>/<file>` live; `gh pr merge`
-  denied; reason contains `archive-kb.sh` and the ordering tokens for
-  step 2.5 / Operator Holds.
+  denied; reason contains `archive-kb.sh`, the ordering tokens for
+  step 2.5 / Operator Holds, the manual `git mv … specs/archive/` path
+  (for `M`-on-`specs/` denies archive-kb refuses), and the
+  `SOLEUR_SKIP_KB_ARCHIVE_GATE` hatch name.
 - [ ] AC3: fixture — topic-named plan added live (plan slug ≠ branch
   slug); `gh pr merge` denied (#7383 shape).
 - [ ] AC4: fixture — `M` row on a spec file live at base; denied.
@@ -477,8 +514,10 @@ population it is measured against.
 - [ ] AC7: fixture — additions confined to `learnings/` and non-KB code;
   passes (learnings are never archived).
 - [ ] AC8: HEAD-path fail-open verified on `main`/`master`, detached HEAD,
-  non-git-dir, and unresolvable merge-base — while `gh pr merge <N>` on
-  the same states still resolves `pull/N/head` and gates.
+  non-git-dir, and unresolvable merge-base — the merge-base case exits 0
+  but emits a `headless_or_stderr` warn naming the cause (never silent) —
+  while `gh pr merge <N>` on the same states still resolves `pull/N/head`
+  and gates.
 - [ ] AC9: no fire on non-matching commands, quoted-string/commit-body
   `gh pr merge`, `gh pr merge --help`, `bash -c` quoted payloads (the
   documented strip residual), and `gh pr ready`.
@@ -553,7 +592,8 @@ exercises the behavior; no browser/API surfaces):
 - Given origin unreachable, when `gh pr merge` is issued, then deny
   naming the fetch (AC12). `unit`
 - Given main / detached HEAD / bare repo, when `gh pr merge` is issued,
-  then silent pass (AC8). `unit`
+  then pass — silent on branch-state, warn-only on unresolvable
+  merge-base (AC8). `unit`
 - Given `echo 'gh pr merge'` or a `-m` body containing the phrase, when
   issued, then no fire (AC9). `unit`
 

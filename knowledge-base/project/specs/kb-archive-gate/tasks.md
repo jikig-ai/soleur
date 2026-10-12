@@ -16,7 +16,9 @@ Scope guard: this PR does NOT touch the existing backlog or any `*/archive/` pat
   `timeout`→`gtimeout`→bare wrapper, `^[0-9a-f]{40}$` oid check) with a
   provenance comment naming the source line range.
 - [ ] 1.3 Trigger regex `(^|&&|\|\||\||;|\(|\s--\s)\s*((<assignment>|if|while|until|then|do|elif|else|!|time|env|command|builtin|exec|nohup|sudo)\s+)*gh\s+pr\s+merge(\s|$)`
-  on `$SCAN`; `SOLEUR_SKIP_KB_ARCHIVE_GATE=1` pass-through.
+  on `$SCAN`; `SOLEUR_SKIP_KB_ARCHIVE_GATE=1` pass-through. `gh pr merge`
+  only — do NOT absorb the sibling's `ready` alternation; the `\s--\s`
+  member goes in BOTH the fire-check and `_merge_args` extraction regexes.
 - [ ] 1.4 Head resolution: `--match-head-commit <40-hex>` > bare number N
   (`git fetch --no-tags origin refs/pull/<N>/head` → FETCH_HEAD) > HEAD
   (flag-first/arg-less). L-state → deny with `MERGE_TARGET_WHY`.
@@ -24,15 +26,20 @@ Scope guard: this PR does NOT touch the existing backlog or any `*/archive/` pat
 - [ ] 1.5 Fail-open scope: `main`/`master`/detached/bare/non-git-dir exempt
   the HEAD path only; numbered and `--match-head-commit` merges always gate.
   `git fetch --no-tags origin main` failure → deny (fail-closed); empty
-  merge-base → exit 0.
+  merge-base → exit 0 WITH a `headless_or_stderr` warn naming the cause
+  (never silent). L-deny applies only to invocations carrying an
+  unprovable target token; flag-only (`--squash --auto`, no positional)
+  takes the HEAD path.
 - [ ] 1.6 Census: `git diff --name-status -z --diff-filter=AM base...HEAD`
   over `knowledge-base/project/{specs,plans,brainstorms}`, `read -d ''`
   parsing; drop `*/archive/*`; `specs/` requires `specs/<dir>/<file>`,
   `<dir>` != `archive`. Non-empty remainder → deny.
 - [ ] 1.7 Deny: `emit_incident "wg-kb-artifacts-archived-in-pr" deny` + jq
   JSON (`permissionDecision`, `hookEventName: PreToolUse`, reason ≤10
-  sanitized rows + `archive-kb.sh` remediation + ordering caveat naming
-  step 2.5 and Operator Holds). `bash -n` clean.
+  sanitized rows + `archive-kb.sh` remediation + manual `git mv …
+  specs/archive/<ts>-<dir>` path for `M`-on-`specs/` denies + ordering
+  caveat naming step 2.5 and Operator Holds + `SOLEUR_SKIP_KB_ARCHIVE_GATE`
+  hatch name). `bash -n` clean.
 
 ## Phase 2: The test suite + registration (deliverable a)
 
@@ -92,8 +99,10 @@ Scope guard: this PR does NOT touch the existing backlog or any `*/archive/` pat
 ## Phase 5: archive-kb discovery (deliverable d)
 
 - [ ] 5.1 Extend `archive-kb.sh` discovery to untracked paths:
-  `git status --porcelain` over the three roots, same `*/archive/*`
-  exclusion and spec-file→dir collapse; `|| true` under pipefail.
+  `git status --porcelain` `??` rows ONLY over the three roots (staged/
+  modified already covered by branch-diff), same `*/archive/*` exclusion
+  and spec-file→dir collapse — a lone untracked root-level file
+  (`specs/.gitkeep`) does not fire; `|| true` under pipefail.
 - [ ] 5.2 Record the measured verification (feat-one-shot-9969-edge-roots
   dry-run lists spec dir + topic-named plan) in `archive-kb/SKILL.md`;
   comment on #7383 at ship (do not close from the plan).
@@ -104,7 +113,10 @@ Scope guard: this PR does NOT touch the existing backlog or any `*/archive/` pat
   Workflow-Gates entry (≤600 B body, why-single-line);
   `AGENTS.md`: add the index pointer. Re-run
   `python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.rules.md`.
-- [ ] 6.2 File the deferral tracking issue for the sibling `\s--\s` gap
-  (`ship-unpushed-commits-gate.sh`, `cla-signed-author-gate.sh`).
+- [ ] 6.2 Deferral for the sibling `\s--\s` gap (`ship-unpushed-commits-
+  gate.sh`, `cla-signed-author-gate.sh`): run the
+  `wg-defer-only-after-inline-triage` triple test at ship — pass → file
+  the `type/chore` tracking issue; fail → durable in-place comments at
+  each sibling's trigger line.
 - [ ] 6.3 AC pass: tick AC1–AC21 in the plan (self-application AC21 at
   ship: Phase 6.45 archives this spec dir + plan before arming).
