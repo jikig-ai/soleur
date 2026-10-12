@@ -313,3 +313,77 @@ git_data_host_replace_gate() {
   fi
   return 1
 }
+
+# git_data_gate_mode <apply_target> — the ONE apply_target -> gate-mode mapping the post-apply
+# backstop uses (#10137). rc=1 with NO stdout for anything else, so a caller that does
+# `mode=$(git_data_gate_mode "$APPLY_TARGET") || exit 1` refuses a wiring fault instead of
+# defaulting to a permissive arm. The plan step in apply-web-platform-infra.yml derives its own
+# GATE_MODE inline; test-git-data-host-replace-gate.sh PA8 and terraform-target-parity.test.ts
+# hold the two mappings equal.
+git_data_gate_mode() {
+  case "${1:-}" in
+    git-data-host-replace) printf 'replace\n' ;;
+    git-data-host-rotate)  printf 'rotate\n' ;;
+    *) return 1 ;;
+  esac
+}
+
+# git_data_host_post_apply_assert <plan-json-file> <replace|rotate>   # 0=PASS, 1=ABORT
+#
+# THE POST-APPLY BACKSTOP (#10137). The apply step of job git_data_host_replace re-reads the
+# SAVED plan it just applied and asserts, belt-and-suspenders to git_data_host_replace_gate:
+#   - no volume in the mode's preserved set shows a delete/forget action,
+#   - the private NIC and BOTH store attachments show a create (re-attached).
+# The preserved set is per mode, built structurally: replace keeps BOTH data volumes, rotate keeps
+# ONLY the plaintext volume — rotate replaces hcloud_volume.git_data_luks on purpose, and the
+# pre-apply gate already requires luks_volume_rotated == 1 on the same plan, so no second positive
+# LUKS assertion is made here. An unknown or empty mode is a wiring fault and refuses.
+#
+# FAIL-CLOSED: `{"resource_changes":[]}` passes the readable and classifiable arms, so an empty
+# plan is rejected by the positive NIC / attachment creates, never by a count. Every jq result is
+# compared `!= "0"` / `== "0"` so an empty string (jq failed) refuses rather than satisfies.
+# Callers must use `if ! git_data_host_post_apply_assert ...; then exit 1; fi` — a bare call under
+# `set +e` fails open.
+# OUTPUT DISCIPLINE: addresses and counts only, never a .change.before/.change.after value.
+git_data_host_post_apply_assert() {
+  local plan_json="$1" mode="${2:-}"
+  local vols=() vol vol_deletes nic_creates att att_creates
+  case "$mode" in
+    replace) vols=(hcloud_volume.git_data hcloud_volume.git_data_luks) ;;
+    rotate)  vols=(hcloud_volume.git_data) ;;
+    *) echo "git_data_host_post_apply_assert: unknown mode '${mode}' - wiring fault, refusing"; return 1 ;;
+  esac
+  plan_gate_assert_readable     "git_data_host_post_apply_assert" "$plan_json" || return 1
+  plan_gate_assert_classifiable "git_data_host_post_apply_assert" "$plan_json" || return 1
+  for vol in "${vols[@]}"; do
+    vol_deletes=$(jq --arg v "$vol" '[.resource_changes[]?
+      | select(.address == $v)
+      | select(.change.actions? | any(. == "delete" or . == "forget"))] | length' "$plan_json" 2>/dev/null) || vol_deletes=""
+    if [[ "$vol_deletes" != "0" ]]; then
+      echo "::error::${vol} shows ${vol_deletes:-<unreadable>} delete/forget action(s) in the applied plan — the data store must be preserved. This should have been caught by the guard; failing hard."
+      return 1
+    fi
+  done
+  nic_creates=$(jq '[.resource_changes[]?
+    | select(.address == "hcloud_server_network.git_data")
+    | select(.change.actions? | index("create"))] | length' "$plan_json" 2>/dev/null) || nic_creates=""
+  if [[ -z "$nic_creates" || "$nic_creates" == "0" ]]; then
+    echo "::error::hcloud_server_network.git_data shows no create action in the applied plan — the new host would have no private NIC. This should have been caught by the guard; failing hard."
+    return 1
+  fi
+  for att in hcloud_volume_attachment.git_data hcloud_volume_attachment.git_data_luks; do
+    att_creates=$(jq --arg a "$att" '[.resource_changes[]?
+      | select(.address == $a)
+      | select(.change.actions? | index("create"))] | length' "$plan_json" 2>/dev/null) || att_creates=""
+    if [[ -z "$att_creates" || "$att_creates" == "0" ]]; then
+      echo "::error::${att} shows no create action in the applied plan — the new host would boot with that store UNMOUNTED. This should have been caught by the guard; failing hard."
+      return 1
+    fi
+  done
+  if [[ "$mode" = rotate ]]; then
+    echo "plaintext volume preserved (0 delete/forget); LUKS volume replaced as intended by the rotate arm; private NIC + both store attachments re-attached (create present) in the applied plan."
+  else
+    echo "both data volumes preserved (0 delete/forget), private NIC + both store attachments re-attached (create present) in the applied plan."
+  fi
+  return 0
+}

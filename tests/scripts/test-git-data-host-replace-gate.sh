@@ -537,6 +537,120 @@ else
   pass "R9 rotate-oos: out_of_scope still binds in rotate mode"
 fi
 
+# ── POST-APPLY BACKSTOP (#10137) ───────────────────────────────────────────────────────
+# git_data_host_post_apply_assert re-reads the SAVED plan after `terraform apply` (the apply step
+# in job git_data_host_replace sources it). The old inline loop asserted BOTH data volumes
+# preserved in both modes, so the rotate dispatch (which replaces hcloud_volume.git_data_luks on
+# purpose) failed its own job after a successful apply. The preserved-volume set is now per mode:
+# replace = plaintext + LUKS, rotate = plaintext only. Everything else (private NIC create, both
+# store-attachment creates, readable/classifiable plan, fail-closed mode) holds in both modes.
+pa_check() {  # <name> <want_rc> <needle> <mode> — grades $TMP/plan.json
+  gate_check "$1" git_data_host_post_apply_assert "$2" "$3" "$TMP/plan.json" "$4"
+}
+PA_NIC="$(rc_obj 'hcloud_server_network.git_data' '"delete","create"')"
+PA_ATT="$(rc_obj 'hcloud_volume_attachment.git_data' '"delete","create"')"
+PA_ATT_LUKS="$(rc_obj 'hcloud_volume_attachment.git_data_luks' '"delete","create"')"
+PA_PLAIN_DEL="$(rc_obj 'hcloud_volume.git_data' '"delete"')"
+PA_LUKS_DEL="$(rc_obj 'hcloud_volume.git_data_luks' '"delete"')"
+
+# PA1 (must-PASS): replace, volumes preserved by omission (the canonical shape).
+write_plan "${PASS_SET}"
+pa_check "PA1 replace + both volumes absent -> PASS" 0 "both data volumes preserved" replace
+# PA1b (must-PASS, non-canonical): the volumes explicitly present as no-op.
+write_plan "${PASS_SET},$(rc_obj 'hcloud_volume.git_data' '"no-op"'),$(rc_obj 'hcloud_volume.git_data_luks' '"no-op"')"
+pa_check "PA1b replace + both volumes explicit no-op -> PASS" 0 "both data volumes preserved" replace
+# PA2 (must-PASS, the #10137 repro): rotate legitimately replaces the LUKS volume.
+write_plan "${ROT_PASS_SET}"
+pa_check "PA2 rotate + LUKS volume delete+create (the #10137 repro) -> PASS" 0 "LUKS volume replaced as intended" rotate
+# PA3 (issue row 1): rotate + plaintext delete -> ABORT naming the plaintext volume.
+write_plan "${ROT_PASS_SET},${PA_PLAIN_DEL}"
+pa_check "PA3 rotate + plaintext volume delete -> ABORT" 1 "hcloud_volume.git_data shows 1 delete/forget" rotate
+write_plan "${ROT_PASS_SET},$(rc_obj 'hcloud_volume.git_data' '"forget"')"
+pa_check "PA3b rotate + plaintext volume forget -> ABORT (forget counts as delete)" 1 "hcloud_volume.git_data shows 1 delete/forget" rotate
+# PA4 (issue row 2): plain replace + LUKS delete -> ABORT naming the LUKS volume.
+write_plan "${PASS_SET},${PA_LUKS_DEL}"
+pa_check "PA4 replace + LUKS volume delete -> ABORT" 1 "hcloud_volume.git_data_luks shows 1 delete/forget" replace
+write_plan "${PASS_SET},${PA_PLAIN_DEL}"
+pa_check "PA4b replace + plaintext volume delete -> ABORT" 1 "hcloud_volume.git_data shows 1 delete/forget" replace
+# PA4c: a rotate plan graded as replace is refused (the mode, not the plan, decides).
+write_plan "${ROT_PASS_SET}"
+pa_check "PA4c rotate plan graded as replace -> ABORT" 1 "hcloud_volume.git_data_luks shows 1 delete/forget" replace
+
+# PA5 (issue row 3): empty resource_changes must not pass, in both modes. The readable and
+# classifiable arms pass {"resource_changes":[]}, so presence comes from the positive creates.
+write_plan ""
+pa_check "PA5 replace + empty resource_changes -> ABORT naming the missing NIC create" 1 "hcloud_server_network.git_data shows no create" replace
+pa_check "PA5 rotate + empty resource_changes -> ABORT naming the missing NIC create" 1 "hcloud_server_network.git_data shows no create" rotate
+printf '{"resource_changes":null}' > "$TMP/plan.json"
+pa_check "PA5 resource_changes null -> ABORT (readable arm)" 1 "post_apply_assert" rotate
+printf '{}' > "$TMP/plan.json"
+pa_check "PA5 resource_changes absent -> ABORT (readable arm)" 1 "post_apply_assert" replace
+write_plan "${PASS_SET},$(rc_obj 'hcloud_volume.workspaces' '')"
+pa_check "PA5 entry with an empty actions array -> ABORT (classifiable arm)" 1 "unclassifiable plan entry" replace
+
+# PA6: each positive create is load-bearing, in isolation.
+write_plan "${SERVER_REPLACE},${PA_ATT},${PA_ATT_LUKS}"
+pa_check "PA6 NIC create missing -> ABORT" 1 "hcloud_server_network.git_data shows no create" replace
+write_plan "${SERVER_REPLACE},${PA_NIC},${PA_ATT_LUKS}"
+pa_check "PA6 plaintext attachment create missing -> ABORT" 1 "hcloud_volume_attachment.git_data shows no create" replace
+write_plan "${SERVER_REPLACE},${PA_NIC},${PA_ATT}"
+pa_check "PA6 LUKS attachment create missing -> ABORT (second member, first compliant)" 1 "hcloud_volume_attachment.git_data_luks shows no create" replace
+write_plan "${SERVER_REPLACE},${PA_NIC},${PA_ATT},$(rc_obj 'hcloud_volume_attachment.git_data_luks' '"update"')"
+pa_check "PA6 LUKS attachment present but not created -> ABORT" 1 "hcloud_volume_attachment.git_data_luks shows no create" rotate
+
+# PA7: the mode is a wiring input. Unknown or empty refuses with a distinct message, never a
+# permissive default, and never reads the plan as a pass.
+write_plan "${ROT_PASS_SET}"
+pa_check "PA7 empty mode -> ABORT as a wiring fault" 1 "unknown mode '' - wiring fault" ""
+pa_check "PA7 bogus mode -> ABORT as a wiring fault" 1 "unknown mode 'bogus' - wiring fault" bogus
+pa_check "PA7 upper-case REPLACE -> ABORT (exact match only)" 1 "unknown mode 'REPLACE' - wiring fault" REPLACE
+# PA8: git_data_gate_mode is the single apply_target -> mode mapping.
+gm() { git_data_gate_mode "$1" 2>&1; }
+[[ "$(gm git-data-host-replace)" == "replace" ]] && pass || fail "PA8 git-data-host-replace did not map to replace"
+[[ "$(gm git-data-host-rotate)" == "rotate" ]] && pass || fail "PA8 git-data-host-rotate did not map to rotate"
+for _t in "" git-data-host-create web-host-replace "git-data-host-replace "; do
+  _o="$(git_data_gate_mode "$_t" 2>&1)"; _rc=$?
+  if [[ "$_rc" -ne 0 && -z "$_o" ]]; then pass; else fail "PA8 apply_target '${_t}' must return non-zero with no stdout (rc=${_rc}, out=${_o})"; fi
+done
+# PA9: output discipline — the function prints addresses and counts, never .change.before/after.
+write_plan "${ROT_PASS_SET},$(printf '{"address":"hcloud_volume.git_data","change":{"actions":["delete"],"before":{"user_data":"PA9-SENTINEL-OLD-USER-DATA"}}}')"
+_pa9="$(git_data_host_post_apply_assert "$TMP/plan.json" rotate 2>&1 || true)"
+if [[ "$_pa9" == *"PA9-SENTINEL-OLD-USER-DATA"* ]]; then fail "PA9 the post-apply assert leaked a .change.before value into its output"; else pass; fi
+
+# PM1-PM6 (Guard Contract, #10137): neuter each arm of the post-apply backstop on a COPY of the
+# lib and prove the fixture that exercises it is then let through. Each row's sed must change the
+# copy (gate_mutate_and_check refuses a byte-identical mutant, so a drifted expression cannot pass
+# vacuously). Fixtures are single-defect: every other requirement is satisfied.
+write_plan "${ROT_PASS_SET},${PA_PLAIN_DEL}"; cp "$TMP/plan.json" "$TMP/pm1.json"
+gate_mutate_and_check "PM1 rotate preserved set (plaintext volume dropped from it)" \
+  's/^    rotate)  vols=(hcloud_volume.git_data) ;;/    rotate)  vols=() ;;/' \
+  git_data_host_post_apply_assert "$TMP/pm1.json" rotate
+write_plan "${PASS_SET},${PA_LUKS_DEL}"; cp "$TMP/plan.json" "$TMP/pm2.json"
+gate_mutate_and_check "PM2 replace preserved set (LUKS volume dropped from it)" \
+  's/^    replace) vols=(hcloud_volume.git_data hcloud_volume.git_data_luks) ;;/    replace) vols=(hcloud_volume.git_data) ;;/' \
+  git_data_host_post_apply_assert "$TMP/pm2.json" replace
+write_plan "${SERVER_REPLACE},${PA_ATT},${PA_ATT_LUKS}"; cp "$TMP/plan.json" "$TMP/pm3.json"
+gate_mutate_and_check "PM3 private NIC create assertion (the empty-plan guard's first member)" \
+  's/^  if \[\[ -z "\$nic_creates" || "\$nic_creates" == "0" \]\]; then/  if false; then/' \
+  git_data_host_post_apply_assert "$TMP/pm3.json" replace
+write_plan "${SERVER_REPLACE},${PA_NIC},${PA_ATT}"; cp "$TMP/plan.json" "$TMP/pm4.json"
+gate_mutate_and_check "PM4 store-attachment create assertion (second member, first compliant)" \
+  's/^    if \[\[ -z "\$att_creates" || "\$att_creates" == "0" \]\]; then/    if false; then/' \
+  git_data_host_post_apply_assert "$TMP/pm4.json" replace
+write_plan "${ROT_PASS_SET}"; cp "$TMP/plan.json" "$TMP/pm5.json"
+gate_mutate_and_check "PM5 unknown-mode arm (turned into a permissive default)" \
+  's/^    \*) echo "git_data_host_post_apply_assert: unknown mode.*/    *) vols=() ;;/' \
+  git_data_host_post_apply_assert "$TMP/pm5.json" bogus
+write_plan "${PASS_SET},$(rc_obj 'hcloud_volume.workspaces' '')"; cp "$TMP/plan.json" "$TMP/pm6.json"
+gate_mutate_and_check "PM6 classifiability call in the post-apply assert (sole guard on an empty-actions entry)" \
+  's/^  plan_gate_assert_classifiable "git_data_host_post_apply_assert".*/  :/' \
+  git_data_host_post_apply_assert "$TMP/pm6.json" replace
+printf '{"resource_changes":null}' > "$TMP/pm7.json"
+gate_mutate_layered "PM7 readable call in the post-apply assert (hands off to the classifiable arm, never to PASS)" \
+  's/^  plan_gate_assert_readable     "git_data_host_post_apply_assert".*/  :/' \
+  "no resource_changes array" "unclassifiable plan entry" \
+  git_data_host_post_apply_assert "$TMP/pm7.json" replace
+
 # ANTI-VACUITY FLOOR (#6997). Nothing else asserts that the assertions RAN. Every
 # non-vacuity mechanism in this suite lives inside a helper — the `cmp -s` mutation floors,
 # the layered contract's unmutated control, the preamble-distinctive anchors — so deleting
@@ -554,11 +668,11 @@ fi
 # A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
 # suite on every legitimately-added assertion and train people to bump it unread.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 55 ]]; then
+if [[ "$_ran" -lt 89 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 55 (HK13 skips without terraform). Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 89 (HK13 skips without terraform). Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 55)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 89)\n' "$_ran"
 fi
 
 echo ""

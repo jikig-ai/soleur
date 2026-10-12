@@ -2182,6 +2182,38 @@ describe("git-data-host-replace dispatch -target/-replace set (scoped; plaintext
     expect(gitDataJobBlock).toMatch(/git_data_host_replace_gate\s+tfplan\.json\s+"?\$?GATE_MODE/);
   });
 
+  test("the apply step grades the saved plan through the mode-aware post-apply backstop (#10137)", () => {
+    // The apply step of this job (id: apply) used to carry an inline loop asserting BOTH data
+    // volumes preserved, which failed the rotate dispatch on its own intended LUKS replace.
+    const start = gitDataJobBlock.indexOf("        id: apply\n");
+    expect(start, "apply step (id: apply) not found in git_data_host_replace").toBeGreaterThan(-1);
+    const rest = gitDataJobBlock.slice(start);
+    const next = rest.indexOf("\n      - name:");
+    const applyStep = next === -1 ? rest : rest.slice(0, next);
+    expect(applyStep).toContain("APPLY_TARGET: ${{ inputs.apply_target }}");
+    expect(applyStep).toContain("git-data-host-replace-gate.sh");
+    expect(applyStep).toMatch(/GATE_MODE=\$\(git_data_gate_mode "\$APPLY_TARGET"\) \|\| \{/);
+    // `if !` so a refusal exits 1 even where errexit is suspended (a bare call fails open).
+    expect(applyStep).toMatch(/if ! git_data_host_post_apply_assert tfplan\.json "\$GATE_MODE"; then/);
+    // The inline loop is gone, and the old display name (false under rotate) with it.
+    expect(applyStep).not.toMatch(/for VOL in hcloud_volume\.git_data/);
+    expect(gitDataJobBlock).not.toContain("both-volumes-preserved assert");
+    // The flip gate and the poll/summary steps key on these; they must not move.
+    expect(applyStep).toContain("id: apply");
+    expect(gitDataJobBlock).toContain("Validate dispatch inputs (rotate confirm token)");
+    // Exactly one call site (the Observability probe counts it).
+    expect(gitDataJobBlock.match(/git_data_host_post_apply_assert tfplan\.json/g)?.length).toBe(1);
+  });
+
+  test("git_data_gate_mode and the plan step's GATE_MODE derivation map the same two targets (#10137)", () => {
+    const lib = readFileSync(resolve(REPO_ROOT, "tests/scripts/lib/git-data-host-replace-gate.sh"), "utf8");
+    expect(lib).toMatch(/git-data-host-replace\)\s+printf 'replace\\n'/);
+    expect(lib).toMatch(/git-data-host-rotate\)\s+printf 'rotate\\n'/);
+    expect(gitDataJobBlock).toContain("GATE_MODE=replace");
+    expect(gitDataJobBlock).toContain("GATE_MODE=rotate");
+    expect(gitDataJobBlock).toContain('inputs.apply_target }}" == "git-data-host-rotate"');
+  });
+
   test("the plaintext data volume is in NEITHER the base nor the rotate set (preserved by omission)", () => {
     // The deliberate divergence from registry (whose store volume IS in-scope for a resize). An
     // untargeted resource cannot be planned for destroy, so omission is what preserves it.
