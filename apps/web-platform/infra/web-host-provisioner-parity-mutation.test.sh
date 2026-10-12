@@ -266,6 +266,14 @@ restore() {
 
 apply_mutation() {
   local file="$1" script="$2"
+  # Compile-check the mutator BEFORE running the battery cycle: the canonical
+  # mistake is an extra-needle arg landing in the script slot (a needle string
+  # is not python) — fail fast and named rather than 'mutator errored' mid-run.
+  python3 -c 'import ast,sys; ast.parse(sys.argv[1])' "$script" || {
+    printf '\n[FATAL] mutator script is not valid python for %s -- expected a mutator, got: %.60s...\n' \
+      "$file" "$script" >&2
+    exit 1
+  }
   python3 - "$SANDBOX/$file" <<PYEOF
 import sys
 p = sys.argv[1]
