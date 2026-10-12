@@ -353,11 +353,14 @@ inngest_failed_check() { # <row-set> — viol on any `Failed to start <tracked-u
 # capture. The control row is emitted hourly by the inngest-server-probe unit as
 # `logger -t systemd -p err "SOLEUR_SYSTEMD_JOURNALD_CONTROL ..."` and rides the SAME
 # inngest_journald PRIORITY<=4 admission arm a real failure row does, so its presence in
-# the window proves the discriminated path is live. Two-stage shape mirrors
-# count_inngest_failed: the marker first, then the `"SYSLOG_IDENTIFIER":"systemd"` field —
-# a doppler/inngest row quoting the marker text cannot satisfy it (the measured
-# contamination class: control-API webhook payloads ship issue titles verbatim). Field-
-# scoped, not payload-scoped: the message text may differ; only marker + tag bind.
+# the window proves the discriminated path is live. The stage order mirrors
+# count_inngest_failed — marker grep first, BOOT_STAGE exclusion second — but the
+# decisive stage is own-field extraction, not a text fragment: a doppler/inngest row
+# quoting the marker text, the field pair, or this recipe verbatim cannot satisfy it
+# because jq reads the row's OWN SYSLOG_IDENTIFIER (the measured contamination class:
+# control-API webhook payloads ship issue titles verbatim). Field-true, not
+# payload-scoped: the message text may differ arbitrarily; only marker + own-field
+# tag bind.
 count_systemd_path_control() { # <row-set> — control rows carried on the systemd tag
   # FIELD-TRUE binding, not a text anchor: each candidate row's own SYSLOG_IDENTIFIER
   # field is extracted with jq (`fromjson` on the JSONEachRow line, then on `raw` for
