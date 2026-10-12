@@ -54,11 +54,15 @@
 # CASCADE — OR the second sanctioned pattern: ON DELETE SET NULL plus a
 # row-level `col NOT NULL -> NULL` carve-out inside the WORM trigger
 # (the audit_byok_use founder_id shape, mig 066; dsar_export_audit_pii
-# user_id, mig 160 — each also binds the transition to a deleted parent
-# via NOT EXISTS). This gate's `prosrc ILIKE '%RAISE EXCEPTION%'`
-# heuristic cannot distinguish the carved-out form, so it emits a
-# permanent ::warning:: for the carve-out tables — expected residue, not
-# evidence of a live contradiction.
+# user_id, mig 160 — 160 additionally binds the transition to a deleted
+# parent via NOT EXISTS, 066 does not). Two honest limits: (a) this
+# gate's `prosrc ILIKE '%RAISE EXCEPTION%'` heuristic cannot distinguish
+# the carved-out form, so it emits a permanent ::warning:: for
+# audit_byok_use — expected residue, not a live contradiction; (b) the
+# census scans only FKs referencing public.users — auth.users-referencing
+# WORM tables (dsar_export_audit_pii.user_id) are outside this gate's
+# envelope entirely, which is exactly how #9994's contradiction escaped
+# detection (tracked for a gate-extension follow-up).
 #
 # Run via:  doppler run -p soleur -c dev_scheduled -- bash apps/web-platform/scripts/preflight-worm-cascade-contradiction.sh
 # Requires: DATABASE_URL_POOLER (Doppler-injected). Runs after migrations are
@@ -172,7 +176,7 @@ if [[ -n "$errors" ]]; then
   echo "::error::WORM-vs-cascade contradiction breaks GDPR Art-17 account deletion for ALL users (#5372):"
   while IFS= read -r l; do [[ -z "$l" ]] && continue; echo "::error::  - $l"; done <<<"$errors"
   echo "::error::A STATEMENT-level WORM trigger fires on the FK cascade even against 0 rows, aborting auth.admin.deleteUser as a GoTrue 500."
-  echo "::error::Fix: use ON DELETE RESTRICT + pre-anonymise in account-delete.ts (the audit_byok_use pattern), not SET NULL/CASCADE. See issue #5372."
+  echo "::error::Fix: use ON DELETE RESTRICT + pre-anonymise in account-delete.ts (the workspace_member_actions pattern), or a SET NULL FK + row-level WORM carve-out (the audit_byok_use founder_id pattern, mig 066) — see issue #5372."
   exit 1
 fi
 

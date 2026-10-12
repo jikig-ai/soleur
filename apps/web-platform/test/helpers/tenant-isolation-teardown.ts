@@ -167,7 +167,18 @@ export async function tearDownTenantUser(
   // user before touching anything (a mismatched pair would scrub+delete a
   // real user under a synthetic-looking email). A missing auth row is
   // tolerated: deleteUser's not-found path below is the idempotent exit.
-  const { data: existing } = await service.auth.admin.getUserById(user.id);
+  // The error half is checked — a transient GoTrue failure must not read
+  // as "no auth row" and silently skip the binding (fail-closed).
+  const { data: existing, error: lookupErr } = await withGoTrueRetry(
+    `getUserById:${user.id}`,
+    () => service.auth.admin.getUserById(user.id!),
+  );
+  if (lookupErr && !/not found/i.test(lookupErr.message)) {
+    throw new Error(
+      `tearDownTenantUser: getUserById(${user.id}) failed — binding ` +
+        `unverifiable, refusing teardown: ${lookupErr.message}`,
+    );
+  }
   if (existing?.user && existing.user.email !== user.email) {
     throw new Error(
       `tearDownTenantUser: id/email mismatch — ${user.id} resolves to ` +
@@ -208,9 +219,9 @@ export async function tearDownTenantUser(
 
   if (fatalErrors.length > 0) {
     throw new Error(
-      `tearDownTenantUser: ${fatalErrors.length} RESTRICT-class anonymise ` +
+      `tearDownTenantUser: ${fatalErrors.length} anonymise ` +
         `failure(s) for ${user.email} — auth-delete would 500 on the FK ` +
-        `block. Fix the anonymise RPC(s) before retrying:\n  ` +
+        `block (or retain PII). Fix the anonymise RPC(s) before retrying:\n  ` +
         fatalErrors.join("\n  "),
     );
   }

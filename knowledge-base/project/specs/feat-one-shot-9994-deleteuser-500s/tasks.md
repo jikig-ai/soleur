@@ -58,9 +58,12 @@ Issue: #9994 · tracker: #9993 (reference only, never close).
 ## Phase 5 — Recurrence sentinel
 
 - [x] 5.1 Create `apps/web-platform/test/server/teardown-deleteuser-sentinel.test.ts` per the
-  plan's `## Guard Contract` (census over `test/*.integration.test.ts` + `test/helpers/*.ts`
-  for `\.admin\.deleteUser\(`; allowlist = 2 helpers + 4 manual-FK-reverse suites + mu1 with a
-  `#9995`-revisit comment; anti-vacuity floor ≥1). Post-fix census: 7 carriers.
+  plan's `## Guard Contract` — scope superseded by review round: the shipped guard is a
+  recursive ratchet over all source files under `test/**` (CANONICAL helper +
+  MANUAL_TEARDOWN_ALLOWLIST (5) + KNOWN_LEGACY_CARRIERS (15, the #10096 drain set) =
+  21 enumerated carriers), comment-stripped via the shared parser helper, widened
+  call shapes, per-file call-count pins, and a real-suite claimant check for
+  SYNTHETIC_PREFIXES.
 - [x] 5.2 Exercise the mutation matrix: scratch carriers in BOTH scope dirs
   (`test/*.integration.test.ts`, `test/helpers/*.ts`) drove the offender assertion
   RED with the correct named file; files removed after the run.

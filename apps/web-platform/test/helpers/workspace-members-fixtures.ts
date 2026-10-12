@@ -14,9 +14,10 @@
  * every destructive op.
  *
  * Cleanup is the test's responsibility — call
- * `tearDownSharedWorkspace(service, fixture)` in `afterAll`. The helper
- * unwinds in FK-RESTRICT-reverse order (members → workspaces →
- * organization → auth.users).
+ * `tearDownSharedWorkspace(service, fixture)` in `afterAll`. Members are
+ * torn down per-member via `tearDownTenantUser` (anonymise-first +
+ * auth delete inside the loop); workspace/org deletes follow as
+ * best-effort residue cleanup.
  */
 
 import { randomBytes } from "node:crypto";
@@ -166,11 +167,14 @@ export async function tearDownSharedWorkspace(
     await tearDownTenantUser(service, { id: m.userId, email: m.email });
   }
 
-  // 2. Workspace + organization — best-effort, production-tolerant: the
-  //    'added' workspace_member_actions rows written at fixture create
-  //    RESTRICT these deletes, so the rows often survive as NULL-owner
-  //    cruft (the same residue production erasure leaves). Warn, don't
-  //    swallow — a teardown failure should be visible in the log.
+  // 2. Workspace + organization — best-effort, production-tolerant:
+  //    residual RESTRICT workspace_id children (attestations,
+  //    invitations, byok_delegations, dsar_export_jobs, email_triage_items
+  //    — not workspace_member_actions, whose workspace_id is SET NULL
+  //    since mig 072) can block these deletes; whatever survives is
+  //    NULL-owner cruft (the same residue production erasure leaves).
+  //    Warn, don't swallow — a teardown failure should be visible in the
+  //    log.
   for (const [table, id] of [
     ["workspaces", fixture.workspaceId],
     ["organizations", fixture.organizationId],

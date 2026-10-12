@@ -26,7 +26,10 @@
 -- — while a direct `UPDATE ... SET user_id = NULL` from a privileged
 -- role (service_role bypasses the table's zero-policy RLS) against a LIVE
 -- user's audit row is rejected. Without it the gate would let any caller
--- holding UPDATE permanently de-link Art. 5(2) attribution.
+-- holding UPDATE permanently de-link Art. 5(2) attribution. A dangling
+-- non-NULL user_id (only reachable via an RI-bypassed delete) can also be
+-- nulled — acceptable: attribution was already destroyed out-of-band and
+-- the gate can never re-attribute (NEW.user_id IS NULL required).
 --
 -- Repro (dev, 2026-10-12):
 --   DELETE FROM auth.users WHERE id=...

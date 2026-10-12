@@ -18,13 +18,25 @@
  * pinned), or KNOWN_LEGACY_CARRIERS (the #10096 drain set — it can only
  * shrink; every entry names its tracked drain). A carrier appearing
  * ANYWHERE else — a new suite, a new subdirectory, an evading call form —
- * is RED. The census is recursive: `test/rls-fuzz/` and any future
- * `test/<subdir>/` cannot silently grow the defect.
+ * is RED. The census is recursive over `.ts`/`.tsx`/`.mts`/`.cts` under
+ * `test/` (symlinked files AND directories followed): `test/rls-fuzz/` and
+ * any future `test/<subdir>/` cannot silently grow the defect.
+ *
+ * Documented residuals (accepted, reviewed): comments are stripped via the
+ * shared TS-parser helper (helpers/strip-comments.ts) but STRING literals
+ * are not — a test name like `it("auth.admin.deleteUser(id) ...")` or a
+ * grep-shape constant counts as a carrier (fails loud, the safe direction;
+ * avoid verbatim call shapes in strings — write `admin.deleteUser` without
+ * the trailing `(`). Evasions needing more than a source grep — method
+ * extraction to a bare identifier, `import`-aliased wrappers, computed
+ * member names, `deleteUser (` with a space — are out of this guard's
+ * threat model (accidental regression, not adversarial authorship).
  */
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, test } from "vitest";
+import { stripComments } from "../helpers/strip-comments";
 import { SYNTHETIC_PREFIXES } from "../helpers/tenant-isolation-teardown";
 
 const TEST_ROOT = join(__dirname, "..");
@@ -57,7 +69,7 @@ const MANUAL_TEARDOWN_ALLOWLIST = new Set([
 ]);
 
 /**
- * Drain list for #10096 — `test/server/**` (and nested `scope_grants/`)
+ * Drain list for #10096 — `test/server/**` (and nested `scope-grants/`)
  * carries the same raw-deleteUser class silently (many in the worst
  * `.catch(() => {})` variant). Enumerating them here turns the deferral
  * into a ratchet: no NEW carrier can appear anywhere under `test/`
@@ -82,7 +94,11 @@ const KNOWN_LEGACY_CARRIERS = new Set([
   "test/server/ws-handler.tenant-isolation.test.ts",
 ]);
 
-/** Exact canonical-form call counts per enumerated file (see header note). */
+/**
+ * Exact carrier-form call counts per enumerated file — the union of every
+ * CALL_RES shape, so a non-canonical call added inside an allowlisted file
+ * also trips the pin (canonical-form-only counting would miss it).
+ */
 const EXPECTED_CALL_COUNTS: Readonly<Record<string, number>> = {
   "test/helpers/tenant-isolation-teardown.ts": 1,
   "test/concurrency-acquire-slot-workspace-id.integration.test.ts": 1,
@@ -125,63 +141,46 @@ const EXPECTED_CALL_COUNTS: Readonly<Record<string, number>> = {
  */
 const CALL_RES = [
   /\.deleteUser\(/,
+  /\.deleteUser\?\.\(/,
   /\[\s*["'`]deleteUser["'`]\s*\]/,
-  /\b(?:const|let|var)\s*\{[^}\n]*\bdeleteUser\b[^}\n]*\}\s*=\s*[^;\n]*\badmin\b/,
+  // Destructured alias from an admin-ish source (admin, authAdmin,
+  // adminSvc, getAdmin() — any RHS token containing admin/Admin) so mock
+  // destructures like `{ service, deleteUser } = mockService()` don't
+  // false-positive.
+  /\b(?:const|let|var)\s*\{[^}]*\bdeleteUser\b[^}]*\}\s*=\s*[^;\n]*\w*[Aa]dmin\w*/,
   /\bdeleteUser\s*\.\s*(?:call|apply|bind)\s*\(/,
 ];
 
-/** Count of the canonical `\.admin\.deleteUser\(` form — per-file pin basis. */
-const CANONICAL_CALL_RE = /\.admin\.deleteUser\s*\(/g;
+const SOURCE_EXT_RE = /\.[cm]?[jt]sx?$/;
 
-/**
- * Strip comments conservatively: drop C-style block comments, whole-line `//`
- * comments, and trailing `//` to EOL — except when the `//` is preceded by
- * `:` (URL protocols inside string literals). A contrived evasion would
- * need a call form inside a `//`-in-string on the same line — documented
- * accepted residual.
- */
-function stripComments(src: string): string {
-  return src
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .split("\n")
-    .map((line) => {
-      if (/^\s*(\/\/|\*)/.test(line)) return "";
-      const idx = line.indexOf("//");
-      if (idx > 0 && line[idx - 1] !== ":") return line.slice(0, idx);
-      return line;
-    })
-    .join("\n");
-}
-
-/** Recursively census every `.ts` file under `test/` for call shapes. */
+/** Recursively census every source file under `test/` for call shapes. */
 function deleteUserCarriers(): { carriers: string[]; byRel: Map<string, string> } {
   const byRel = new Map<string, string>();
-  const walk = (dir: string): void => {
-    for (const e of readdirSync(dir, { withFileTypes: true })) {
-      const full = join(dir, e.name);
-      if (e.isSymbolicLink()) {
-        // Follow links — a symlinked suite must not escape the census.
-        if (statSync(full).isFile() && e.name.endsWith(".ts")) {
-          byRel.set(
-            `test/${relative(TEST_ROOT, full)}`,
-            stripComments(readFileSync(full, "utf8")),
-          );
-        }
-        continue;
+  const visitedDirs = new Set<string>();
+  const visit = (full: string): void => {
+    let st: ReturnType<typeof statSync>;
+    try {
+      st = statSync(full); // follows symlinks
+    } catch {
+      return; // dangling link — nothing to census
+    }
+    if (st.isDirectory()) {
+      const real = realpathSync(full); // cycle guard for symlinked dirs
+      if (visitedDirs.has(real)) return;
+      visitedDirs.add(real);
+      for (const e of readdirSync(full, { withFileTypes: true })) {
+        visit(join(full, e.name));
       }
-      if (e.isDirectory()) {
-        walk(full);
-        continue;
-      }
-      if (e.isFile() && e.name.endsWith(".ts")) {
-        byRel.set(
-          `test/${relative(TEST_ROOT, full)}`,
-          stripComments(readFileSync(full, "utf8")),
-        );
-      }
+      return;
+    }
+    if (st.isFile() && SOURCE_EXT_RE.test(full)) {
+      byRel.set(
+        `test/${relative(TEST_ROOT, full)}`,
+        stripComments(readFileSync(full, "utf8"), full),
+      );
     }
   };
-  walk(TEST_ROOT);
+  visit(TEST_ROOT);
   const carriers = [...byRel.entries()]
     .filter(([, stripped]) => CALL_RES.some((re) => re.test(stripped)))
     .map(([rel]) => rel)
@@ -199,7 +198,8 @@ describe("teardown deleteUser sentinel (recurrence guard, #9994)", () => {
 
   test("anti-vacuity floor: the census finds every enumerated carrier", () => {
     // A call-shape drift (rename, spacing change) must be RED, never
-    // green-over-fewer-files. Today: 23 enumerated carriers across test/**.
+    // green-over-fewer-files. Green requires carriers == ENUMERATED
+    // exactly (floor + offender + stale triad below).
     expect(carriers.length).toBeGreaterThanOrEqual(ENUMERATED.size);
   });
 
@@ -229,25 +229,53 @@ describe("teardown deleteUser sentinel (recurrence guard, #9994)", () => {
   test("per-file call counts are pinned (an allowlisted file may not gain calls)", () => {
     const drift = [...ENUMERATED].flatMap((rel) => {
       const stripped = byRel.get(rel) ?? "";
-      const count = (stripped.match(CANONICAL_CALL_RE) ?? []).length;
-      return count === EXPECTED_CALL_COUNTS[rel] ? [] : [`${rel}: ${count}`];
+      const count = CALL_RES.reduce(
+        (n, re) =>
+          n + (stripped.match(new RegExp(re.source, "g")) ?? []).length,
+        0,
+      );
+      return count === EXPECTED_CALL_COUNTS[rel]
+        ? []
+        : [
+            `${rel}: ${count} (expected ${EXPECTED_CALL_COUNTS[rel] ?? "no entry"})`,
+          ];
     });
     expect(
       drift,
-      `files whose canonical-form deleteUser call count changed — a ` +
-        `new call inside an enumerated file is a review-required act ` +
+      `files whose deleteUser call-site count changed — a new call inside ` +
+        `an enumerated file is a review-required act ` +
         `(update EXPECTED_CALL_COUNTS in the same commit):\n  ${drift.join("\n  ")}`,
     ).toEqual([]);
   });
 
-  test("every SYNTHETIC_PREFIXES entry is claimed by at least one in-scope file", () => {
+  test("EXPECTED_CALL_COUNTS keys are exactly the enumerated set", () => {
+    // Two-directional: a set entry without a count key AND a count key
+    // orphaned by a drained/removed set entry are both RED.
+    expect([...Object.keys(EXPECTED_CALL_COUNTS)].sort()).toEqual(
+      [...ENUMERATED].sort(),
+    );
+  });
+
+  test("every SYNTHETIC_PREFIXES entry is claimed by a real suite file", () => {
     // Stale-prefix garbage collection: a renamed/deleted suite must not
     // leave its prefix allowlisted forever (boundary-widening drift).
-    const allSources = [...byRel.values()].join("\n");
-    const unclaimed = SYNTHETIC_PREFIXES.filter((p) => !allSources.includes(p));
+    // The claimant must be a file OTHER than the two prefix-defining
+    // files — the helper's own declaration and its unit test's literal
+    // copy would self-claim every prefix forever.
+    const DEFINITION_FILES = new Set([
+      "test/helpers/tenant-isolation-teardown.ts",
+      "test/helpers/tenant-isolation-teardown.test.ts",
+    ]);
+    const claimantSources = [...byRel.entries()]
+      .filter(([rel]) => !DEFINITION_FILES.has(rel))
+      .map(([, src]) => src)
+      .join("\n");
+    const unclaimed = SYNTHETIC_PREFIXES.filter(
+      (p) => !claimantSources.includes(p),
+    );
     expect(
       unclaimed,
-      `helper prefixes no test file claims — drop them from ` +
+      `helper prefixes no suite file claims — drop them from ` +
         `SYNTHETIC_PREFIXES (a stale prefix widens the teardown boundary):\n  ${unclaimed.join("\n  ")}`,
     ).toEqual([]);
   });

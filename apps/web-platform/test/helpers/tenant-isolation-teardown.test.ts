@@ -26,7 +26,7 @@ type RpcError = { code?: string; message: string } | null;
  */
 function mockService(
   rpcErrors: Record<string, RpcError>,
-  opts: { authEmail?: string | null } = {},
+  opts: { authEmail?: string | null; authError?: string } = {},
 ) {
   const deleteUser = vi.fn(async () => ({ error: null }));
   const rpc = vi.fn(async (name: string) => ({
@@ -34,7 +34,8 @@ function mockService(
   }));
   // Default: the auth row exists and its email matches whatever the test
   // declares via the `email` arg's SYNTHETIC_EMAIL — bound by the helper's
-  // new id<->email check. Pass opts.authEmail to diverge, null for not-found.
+  // new id<->email check. Pass opts.authEmail to diverge, null for
+  // not-found, or opts.authError for a GoTrue failure.
   const getUserById = vi.fn(async () => ({
     data: {
       user:
@@ -42,7 +43,7 @@ function mockService(
           ? null
           : { email: opts.authEmail ?? SYNTHETIC_EMAIL },
     },
-    error: null,
+    error: opts.authError ? { message: opts.authError } : null,
   }));
   // Cast through unknown — we only implement the surface tearDownTenantUser uses.
   const service = {
@@ -63,7 +64,7 @@ describe("tearDownTenantUser fatality classes", () => {
         id: "user-1",
         email: SYNTHETIC_EMAIL,
       }),
-    ).rejects.toThrow(/RESTRICT-class anonymise failure/);
+    ).rejects.toThrow(/anonymise failure/);
     // The throw must happen BEFORE the auth delete (the whole point of #5582:
     // surface the FK block as a red test, not a deleteUser 500 retry storm).
     expect(deleteUser).not.toHaveBeenCalled();
@@ -78,7 +79,7 @@ describe("tearDownTenantUser fatality classes", () => {
     });
     await expect(
       tearDownTenantUser(service, { id: "user-1", email: SYNTHETIC_EMAIL }),
-    ).rejects.toThrow(/RESTRICT-class anonymise failure/);
+    ).rejects.toThrow(/anonymise failure/);
     expect(deleteUser).not.toHaveBeenCalled();
   });
 
@@ -151,6 +152,21 @@ describe("tearDownTenantUser fatality classes", () => {
     await expect(
       tearDownTenantUser(service, { id: "user-1", email: SYNTHETIC_EMAIL }),
     ).rejects.toThrow(/id\/email mismatch/);
+    expect(rpc).not.toHaveBeenCalled();
+    expect(deleteUser).not.toHaveBeenCalled();
+  });
+
+  test("getUserById failure is fail-closed (binding unverifiable)", async () => {
+    // A transient GoTrue error must not read as "no auth row" and silently
+    // skip the binding — refuse before any RPC. ("boom" is non-retryable
+    // so withGoTrueRetry returns immediately — same fail-closed assertion.)
+    const { service, rpc, deleteUser } = mockService(
+      {},
+      { authEmail: null, authError: "boom" },
+    );
+    await expect(
+      tearDownTenantUser(service, { id: "user-1", email: SYNTHETIC_EMAIL }),
+    ).rejects.toThrow(/binding unverifiable/);
     expect(rpc).not.toHaveBeenCalled();
     expect(deleteUser).not.toHaveBeenCalled();
   });
