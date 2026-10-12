@@ -54,8 +54,12 @@ plugins/soleur/skills/incident/test/redact-sentinel.test.sh	knowledge-base/engin
 plugins/soleur/test/_base-notice-frontmatter.test.sh	knowledge-base/engineering/policies/content-vendoring.md
 plugins/soleur/test/admin-merge-ready-wiring.test.sh	knowledge-base/project/constitution.md
 plugins/soleur/test/brand-workshop-pen-commit-after-save.test.sh	knowledge-base/product/design
+plugins/soleur/test/ci-classify-step-exec.test.sh	knowledge-base
 plugins/soleur/test/ci-e2e-skip-anchors.test.sh	knowledge-base
+plugins/soleur/test/ci-e2e-skip-anchors.test.sh	knowledge-base/project/learnings
 plugins/soleur/test/ci-e2e-skip-anchors.test.sh	knowledge-base/project/specs
+plugins/soleur/test/ci-shard-totality-skip.test.sh	knowledge-base
+plugins/soleur/test/ci-shard-totality-skip.test.sh	knowledge-base/project/learnings
 plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh	knowledge-base/project/plans
 plugins/soleur/test/compaction-state-hook.test.sh	knowledge-base/project/plans
 plugins/soleur/test/compaction-state-hook.test.sh	knowledge-base/project/specs
