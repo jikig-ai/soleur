@@ -6,7 +6,7 @@ related: [4229, 4225, 2972]
 related_adrs: [ADR-029, ADR-023]
 amended_by: [ADR-044]
 related_plans:
-  - knowledge-base/project/plans/archive/20261013-014038-2026-05-21-feat-team-workspace-multi-user-plan.md
+  - knowledge-base/project/plans/2026-05-21-feat-team-workspace-multi-user-plan.md
 brand_survival_threshold: single-user incident
 ---
 
@@ -166,6 +166,6 @@ The cost: a small amount of "is this a backfilled solo workspace or a real one?"
 - **DSAR endpoints extend to workspace_member_id JOIN.** `dsar-reauth.ts` + `dsar-export.ts` add a sibling query path. Existing `founder_id` paths remain. AC-LEGAL-FLIP gates the flag flip on this DSAR completion.
 - **Member-removal kills in-flight agent sessions.** `agent-session-registry.ts` adds a `workspaceId` field + `abortAllWorkspaceMemberSessions(workspaceId, userId)` API. `workspace-membership.ts` invokes this after the `remove_workspace_member` RPC returns. WebSocket closes with `WS_CLOSE_CODES.MEMBERSHIP_REVOKED` (new code); UI shows a terminal "You were removed from <org name>" screen (AC-FLOW2).
 - **Rolling-deploy-safe.** RPC signature changes (Phase 1 SECURITY DEFINER additions) use overloading per `2026-05-12-stub-handlers-as-silent-undercount-vectors`. Old pods continue resolving v1 signatures during the rolling deploy window.
-- **Rollback runbook exists and lands BEFORE migration 053 commit.** `knowledge-base/project/specs/archive/20261013-014038-feat-team-workspace-multi-user/rollback.md` documents the 6-step incident response: disable flag, down-migrate 056→053, restore old policies, drop symlinks, notify members, post-mortem via `/soleur:compound`. AC-G.
+- **Rollback runbook exists and lands BEFORE migration 053 commit.** `knowledge-base/project/specs/feat-team-workspace-multi-user/rollback.md` documents the 6-step incident response: disable flag, down-migrate 056→053, restore old policies, drop symlinks, notify members, post-mortem via `/soleur:compound`. AC-G.
 - **Legal scaffolding (Phase 10) is a parallel PR with a hard dependency.** AC-LEGAL-FLIP blocks `FLAG_TEAM_WORKSPACE_INVITE=1` in any environment until ToS 2.2.0 + AUP §5.5 + DPD §2.3 + Side Letter template land. Encoded as a Doppler audit step in `/soleur:ship`.
 - **Future-revision-friendly invariants left in place.** `attestation_text` is frozen-at-insertion (WORM table); when the attestation copy changes ("I confirm this member is my employee or contractor under written agreement" → softer revision for external-team v2), the OLD text remains queryable for every existing member while NEW invitations use the NEW text. No row mutation, no schema change.
