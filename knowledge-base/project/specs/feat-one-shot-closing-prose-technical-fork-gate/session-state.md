@@ -19,3 +19,10 @@
 
 ### Components Invoked
 - soleur:plan, soleur:plan-review, soleur:deepen-plan; soleur:engineering:cto (ruled design T1-T8 and gave a devex review); learnings-researcher; dhh-rails, kieran-rails, code-simplicity (plan review); security-sentinel, spec-flow-analyzer, architecture-strategist (deepen).
+
+## Work Phase
+- Status: implementation complete, verification partial (pre-push lane and rollback simulation pending at the time of writing).
+- Delivered: lib + pre-ask refactor (145 cases), closing hook + suite (91 cases, 14 mutation rows), Stop registration + ledger row, guard-vacuity-floor promotion (MIN_FIRING_SUITES 51 -> 52, n_fires 292 -> 293 before the main merge), shard rows, four skill pointers (`work` byte-neutral via references/end-of-work-resume.md), ADR-084 addendum, C4 strings, carrier learning.
+- Phase 4 sample (counts only, in the PR body): 198 closings, 1 hit (technical, cue `strict`), 0 operator-class or ambiguous, recall about 20%.
+- Filed #10113 (the one follow-up; code-simplicity CONCUR); commented the graduation criterion on #10056. Net-issue-flow: closes #10057, files #10113, NET 0.
+- Ratchets: fixture-relative sites guarded with the canonical assert_fixture_dir (no baseline regenerated); lib self-check uses explicit names (an indirect expansion tripped the xtrace-refusal linter).
