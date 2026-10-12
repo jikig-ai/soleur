@@ -198,3 +198,18 @@ and pairing fingerprint
 covers that fix source and is separately watched; the following evidence-only
 commit still needs final-head checks. No operational execution or new approval
 is inferred from either review or preview.
+
+The later evidence head `a4f05882791a71f3f7aa3840646491e10497a5fd` settled
+69 passes / 11 skips / no pending or cancelled checks; only the draft `test`
+aggregate remained red. Main's subsequent sandbox-parity commit
+`c7ab8838f3fd41b3b0a0558e92723a0d523fdd35` merged cleanly at
+`3705a84b4ff1db3843ea68c927655ad5e20fb336`. The qualification code, browser
+validators and migration bodies are unchanged; incoming comments, tuple fixtures
+and test helpers require a fresh full-production input fingerprint. The offline
+wrapper passed again and preview derives **5,046** inputs / **188** migrations.
+The component and schema fingerprints above remain unchanged. This source has
+runtime manifest fingerprint `4f192983f84df76bdd1464cc001af8087870beb8df6cae690621100610d40416`
+and pairing fingerprint `326a174e3b621e50cf57c5c93ef38cbe555e72612eff87e615554eef9a4738e6`.
+Final documentation-only source binding and CI remain separate from this preview.
+No incoming Docker runtime test, production candidate/recovery command or
+authentication action was executed locally.

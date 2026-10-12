@@ -1382,3 +1382,25 @@
   188 migrations, plus the changed preparation components. CI 38270626162 is
   watched separately. The following evidence-only head needs fresh final checks;
   this is not full panel, SAST, image, recovery or Web qualification completion.
+
+### Final safe-preparation main sync
+
+- Evidence head `a4f05882791a71f3f7aa3840646491e10497a5fd` settled with
+  69 pass / 11 skip / zero pending or cancelled and only required `test` red
+  in CI 38272142276. The negative-token fixture lint is green. These are draft
+  checks; no full-suite, C.9 or runtime verdict is asserted.
+- Main then advanced by one sandbox-parity commit to
+  `c7ab8838f3fd41b3b0a0558e92723a0d523fdd35`, merged cleanly at
+  `3705a84b4ff1db3843ea68c927655ad5e20fb336`. The preparation code, URL/JWT
+  validators and migration bodies are unchanged. Incoming application/shim
+  edits change explanatory comments; added tuple/argv fixtures and test helpers
+  change the production input fingerprint. No incoming Docker runtime suite,
+  deployment, host action or production candidate build ran locally.
+- The offline wrapper passed again with optimization enabled in the parent
+  environment. Fresh preview derives 5,046 complete runtime/plugin inputs and
+  all 188 forward migrations. Preparation-component hash remains
+  `6c0d88a3e4a626591b1237e738066dbc6d349986456b97af23f252bbbf95a7b5`;
+  schema hash remains `baeb4ee9428e8187d98743d6fe84dd84a20c98162a5440f140df9891edc9f172`.
+  Earlier source pairings remain historical. The following evidence-only commit
+  changes no prepared runtime or boundary input and still needs exact-head CI.
+  No execution permission is renewed; all rollout/provider/account holds persist.
