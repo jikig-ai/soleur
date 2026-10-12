@@ -461,4 +461,4 @@ The 2026-10-09 amendment set 2026-10-22 as the target for destroying `hcloud_vol
 
 **Owner:** the operator, via #8211 and #6897. **Blocker chain:** the rotate-arm assert fix (#10137), then a fresh rotate dispatch that the operator authorises by naming the command, then #8209, #8609 and #8573, then a hash-bound wipe PR with its own rung-2 rehearsal, then the wipe itself, which the operator authorises by naming the command.
 
-Rule for the horizon: moving the ledger `expires_on` of `hcloud_volume.git_data` past 2026-11-12 requires a CLO re-ruling linked on #6897 first; a one-line date bump is not a renewal.
+Rule for the horizon: moving the ledger `expires_on` of `hcloud_volume.git_data` past 2026-11-12 requires a CLO re-ruling linked on #6897 first; a one-line date bump is not a renewal. This is a review-time rule: the lint treats `expires_on` as a clock only and does not enforce the cap.
