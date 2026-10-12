@@ -27,7 +27,7 @@ fresh host uses to unlock its `/workspaces` volume (`doppler_service_token.works
 ADR-263 D4) is never co-rotated with web-1's `WORKSPACES_LUKS_BOOT_TOKEN`, and it is baked into the
 host's `user_data`, which only a new host picks up. Its rotation **is** a host replacement: rotating it
 without replacing the host leaves that host unable to re-open its volume on its next reboot. (Not
-for web-2 before the volume rebirth, #9372: see "A `discriminate` fatal" below.)
+for web-2 before the volume rebirth, #9372: see "A `discriminate` fatal" below. **[Superseded 2026-10-12 (#9372): the rebirth ran on 2026-10-06 and its workflow is retired; the section named here carries the 2026-10-11 marker.]**)
 
 Dispatching the wrong one is safe by construction — each gate refuses the other's plan shape,
 and the `confirm` tokens are deliberately different — but it wastes a run.

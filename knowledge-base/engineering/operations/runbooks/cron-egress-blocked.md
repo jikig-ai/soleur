@@ -641,7 +641,7 @@ re-asserts a deny only when that resource's `triggers_replace` has moved; there 
 |---|---|---|
 | Registry (`host=soleur-registry`) | cloud-init only | A host replace through `registry-host-replace-dispatch.yml` after `scripts/registry-replace-preflight.sh` is clean. It is an outage window on the fleet's sole pull path ([registry-host-replace-dispatch.md](./registry-host-replace-dispatch.md)) and it dispatches `apply-web-platform-infra.yml`, so it needs that workflow enabled and the operator's approval. For an accident-guard loss, weigh whether the window is proportionate. |
 | web-1 | `terraform_data.zot_consumer_probe_install` (targeted by `apply-web-platform-infra.yml`) | No workflow lever without a trigger change: change `ghcr_deny_sh` or the probe files it hashes in a PR, or ask the operator to dispatch the owning workflow. A resource tainted by a failed deny assertion is re-applied the same way (server.tf's FATAL text names it). |
-| web-2 | `terraform_data.deploy_pipeline_fix_web2` (targeted only by `apply-deploy-pipeline-fix.yml`) | Same, through that workflow: bump the `dpf-web2-remote-exec-vN` trigger sentinel in server.tf or dispatch it after a taint. No plain `web-host-replace` until the #9372 rebirth (see the web-2 residual below). |
+| web-2 | `terraform_data.deploy_pipeline_fix_web2` (targeted only by `apply-deploy-pipeline-fix.yml`) | Same, through that workflow: bump the `dpf-web2-remote-exec-vN` trigger sentinel in server.tf or dispatch it after a taint. No plain `web-host-replace` until the #9372 rebirth (see the web-2 residual below). **[Superseded 2026-10-12 (#9372): the rebirth ran on 2026-10-06 and is retired; see the 2026-10-11 marker in web-host-replace.md and the update below the web-2 residual.]** |
 
 Whether an apply workflow can run right now is operator-owned state: read it live (the dated
 note under "Known residual: web-1 until the apply workflow runs" below records one observation).
@@ -697,6 +697,8 @@ is the #9372 rebirth run.
 ([run 37209725107](https://github.com/jikig-ai/soleur/actions/runs/37209725107), see the
 superseding note under "Known residual: web-1 until the apply workflow runs"); the #9372
 rebirth is the remaining closing event for #9393.*
+
+*Updated 2026-10-12 (#9372): the rebirth ran on 2026-10-06 and its workflow is retired, so "the #9372 rebirth" above is no longer a pending event. #9393 is CLOSED. The loader, alarm and systemd units this section calls birth-frozen reach a running web-2 only through a host replace, which web-host-replace.md (2026-10-11 marker) no longer holds back for the ext4 volume.*
 
 ### Known residual: web-1 until the apply workflow runs
 

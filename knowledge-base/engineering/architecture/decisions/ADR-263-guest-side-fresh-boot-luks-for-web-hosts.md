@@ -1,6 +1,6 @@
 ---
 title: Guest-side fresh-boot LUKS for web hosts - one mechanism, two Terraform addresses
-status: adopting
+status: accepted
 date: 2026-10-01
 amends: none
 supersedes: none
@@ -34,6 +34,10 @@ by #9372, because its `earliest` date is the rebirth plus three days; the workfl
 "Live conversion" is part of #9372's acceptance.
 
 > **Superseded 2026-10-08 (#9372), in part:** the reboot-proof requirement stated above (including `w2l_reboot_seen` and `reboot_not_seen`) no longer holds; see the addendum "evidence rule: immutability, not reboot" at the end of this ADR.
+
+> **Accepted 2026-10-12 (#9372):** the grader criterion above is met. `scripts/followthroughs/web2-luks-live-6931.sh` exited 0 on 2026-10-10 (sweeper run 38083925201) and was read again on 2026-10-12 (PASS, five distinct days of green probe rows after the readiness row, no non-green row, newest probe row fresh). The status therefore reads `accepted`, with the claim boundary of the 2026-10-11 addendum unchanged: formatted/opened plus green probes; reopen after a host restart, passphrase-loss recovery and emptiness are not graded.
+
+> **Superseded 2026-10-12 (#9372), in part:** "Adopting", "until then web-2 keeps its Hetzner-pre-formatted plaintext volume" and "a follow-through enrolled by #9372" describe the state before the grade. The conversion ran on 2026-10-06 and was graded on 2026-10-10; the single-use workflow behind it is deleted (addendum 2026-10-12 at the end of this ADR).
 
 ## Context
 
@@ -252,6 +256,8 @@ untouched. #9372 also owns the ledger flip (D6), the follow-through enrollment's
 escalation if web-2 never produces rows.
 
 > **Superseded 2026-10-08 (#9372), in part:** the reboot-proof requirement stated above (including `w2l_reboot_seen` and `reboot_not_seen`) no longer holds; see the addendum "evidence rule: immutability, not reboot" at the end of this ADR.
+
+> **Superseded 2026-10-12 (#9372), in part:** "Until #9372 runs, a plain `web-host-replace` of web-2 re-attaches that ext4 volume", "the workflow file is deleted after use" and "#9372 also owns the ledger flip" are dated. The conversion ran on 2026-10-06 (volume born raw, formatted at first boot), the ledger flip landed on 2026-10-10 and 2026-10-11, and the workflow file was deleted on 2026-10-12; a volume re-birth would now need a new workflow in a new reviewed change (addendum 2026-10-12 at the end of this ADR).
 
 ## Consequences
 
@@ -847,3 +853,11 @@ read-back, per ADR-282).
 **Hosts, restarts and readiness rows.** The volume was formatted at boot 77985247 (readiness row `luks_arm=formatted`, 2026-10-06T18:24Z; the row carries no server id, and the rebirth run's target was server 169085156); a reboot of server 169085156 was requested at the end of the rebirth run 37508997529 (2026-10-06T18:26Z); a later server 169095540 (created 2026-10-06T19:32Z) was the target of a graded-reboot dispatch, run 37671563967 (2026-10-07T19:04Z), whose observer reported NOT YET and whose run concluded failure; and as of 2026-10-11 the volume is attached to server 169271252. Readiness rows with `luks_arm=opened` exist for boots 479cd3f3 (2026-10-06T19:36Z) and dd08ac9d (2026-10-07T20:07Z). None of this is graded as a reopen test: the rule is immutability (2026-10-08 addendum), the rows are self-reported, and instance identity is a weak anchor.
 
 **Status.** Unchanged by this change: `adopting`. The Status section above ties `accepted` to the grader's PASS, and that condition is now met; the frontmatter flip is left to the ADR owner (who also holds #9642) rather than made as a side effect of a records change.
+
+## Addendum — 2026-10-12 (#9372, retirement and acceptance)
+
+**The retirement.** The single-use rebirth workflow (`.github/workflows/web2-luks-rebirth.yml`), the dispatch-only web-host reboot workflow (`.github/workflows/web-host-reboot.yml`) and everything that existed only for them are deleted: 7 scripts (the rebirth step script that ran `terraform state rm` against web-2's volume address, its emptiness, never-pooled, ready-poll and recovery-check helpers, and the reboot writer and its evidence reader), 2 plan gates, 9 suites and the gate fixtures, 24 files in all (the closing checklist of runbook `web2-luks-rebirth-9372.md`, row 5). The registrations that counted them moved in the same change: the main-root workflow census, the G2 sole-copy scan (its real-content control became a scratch control), the shard manifests, the vacuity-floor promoted list, the affected-path arrays and the baselines. The tombstone row that made a half retirement fail retired with them.
+
+**What changes in the record.** The single-use property now holds by absence: no workflow in the tree runs the volume delete, the one `terraform state rm` or the replace sequence the "Live conversion" section describes. `web_host_replace` is unchanged and still carries web-2's volume forward. A volume re-birth, passphrase-loss recovery (#9948) or a redo of the escrow step (#9949) now needs a new workflow in a new reviewed change, with this ADR amended first; the retired workflow is not a template to dispatch from history. The `terraform state rm` verb remains scanned by the G2 census, which stays red for any tracked script that pairs it with a sole-copy address.
+
+**Status.** Supersedes the "Status. Unchanged by this change: `adopting`" paragraph of the 2026-10-11 addendum: the grader criterion is met (PASS 2026-10-10, read again 2026-10-12), the frontmatter reads `accepted`, and the acceptance is a mechanical consequence of the criterion this ADR states for itself. The claim boundary of the 2026-10-11 addendum stands unchanged: formatted/opened plus green probes; reopen after a host restart is not graded; passphrase-loss recovery, the re-escrow step, the state restore substrate (#7992) and emptiness evidence are not claimed. The emptiness-evidence strictness question (#9642) was ruled moot and retrospective for this change by the CTO agent on 2026-10-11, because the single use already happened and the workflow is deleted; its three durable requirements for any future workflow that deletes a volume on evidence (content-level emptiness evidence, a second gate after the evidence step, a credential-parity check before the first real dispatch) are recorded in learning `knowledge-base/project/learnings/2026-10-12-a-destructive-single-use-workflow-needs-content-evidence-a-gate-after-it-and-credential-parity.md`.
