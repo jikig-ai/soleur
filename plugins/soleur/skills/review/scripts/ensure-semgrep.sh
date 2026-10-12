@@ -26,10 +26,12 @@ set -euo pipefail
 # (#9964). Bounded when `timeout`/`gtimeout` exists — a mandatory gate that
 # can hang is the same worst-shape failure as a vacuous pass.
 semgrep_works() {
+  SEMGREP_VERSION_ERR=""
   command -v semgrep >/dev/null 2>&1 || return 1
-  local t="" err
-  if command -v timeout >/dev/null 2>&1; then t="timeout 30"; elif command -v gtimeout >/dev/null 2>&1; then t="gtimeout 30"; fi
-  err="$($t semgrep --version 2>&1)" && return 0
+  local -a t=()
+  local err
+  if command -v timeout >/dev/null 2>&1; then t=(timeout -k 1 30); elif command -v gtimeout >/dev/null 2>&1; then t=(gtimeout -k 1 30); fi
+  err="$("${t[@]}" semgrep --version 2>&1)" && return 0
   SEMGREP_VERSION_ERR="$err"
   return 1
 }
@@ -51,11 +53,11 @@ else
   echo "semgrep not found on PATH — attempting auto-install" >&2
 fi
 
-installed=0
+attempted=0
 if command -v brew >/dev/null 2>&1; then
   echo "installing via brew..." >&2
+  attempted=1
   if brew install semgrep >&2; then
-    installed=1
     if semgrep_works; then command -v semgrep; exit 0; fi
   fi
   echo "brew install semgrep failed (or installed but still not runnable — a broken shim may be shadowing it)" >&2
@@ -63,8 +65,8 @@ fi
 
 if command -v pipx >/dev/null 2>&1; then
   echo "installing via pipx..." >&2
+  attempted=1
   if pipx install semgrep >&2; then
-    installed=1
     # pipx adds ~/.local/bin to PATH lazily; ensure binary is reachable.
     export PATH="$HOME/.local/bin:$PATH"
     if semgrep_works; then command -v semgrep; exit 0; fi
@@ -74,15 +76,15 @@ fi
 
 if command -v python3 >/dev/null 2>&1; then
   echo "installing via python3 -m pip --user..." >&2
+  attempted=1
   if python3 -m pip install --user semgrep >&2; then
-    installed=1
     export PATH="$HOME/.local/bin:$PATH"
     if semgrep_works; then command -v semgrep; exit 0; fi
   fi
   echo "pip --user install semgrep failed (or installed but still not runnable)" >&2
 fi
 
-if (( installed )); then
+if (( attempted )); then
   dead_shim_diag
   echo "install path(s) ran but semgrep still does not run — remove the dead shim or fix PATH ordering" >&2
   exit 1
