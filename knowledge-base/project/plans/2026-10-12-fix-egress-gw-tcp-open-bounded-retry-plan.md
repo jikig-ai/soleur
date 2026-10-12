@@ -16,6 +16,26 @@ brand_survival_threshold: aggregate pattern
 
 # fix: egress gateway bootstrap post-bring-up TCP open races squid start
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-12
+**Sections enhanced:** Proposed Solution (attempt counting, richer diagnostics, `timeout` around `docker logs`), Test harness (executable `docker` stub, integer-`SECONDS` tolerance, fixture cleanup), Post-merge verification (Monitor-armed wait, host-anchored Better Stack window, property-based close criterion, named owner), Guard Contract (cut to the rows that earn their keep), Network-Outage Deep-Dive (new).
+**Review inputs:** plan-review panel (DHH, Kieran, code-simplicity, CTO devex); deepen gates 4.5-4.8, 4.11, 4.12 run mechanically; verification probes run live (see below).
+
+### Key Improvements
+
+1. The one-line proposed function was executed in a scratch run: a bind-then-listen fixture opening at 2 s was answered on attempt 3, and a never-listening port with `GW_WAIT_S=3` died with the existing text after 3 s (`rc=1 elapsed=3`).
+2. The scratch run also falsified an assumption in the harness design: `timeout 10 docker logs` execs the real binary, so a shell-function `docker` stub is bypassed; the test needs an executable stub on a fakes PATH.
+3. `docker logs` over `--log-driver journald` and the `docker inspect` state format were verified live (ledger row 3).
+4. Review's `SECONDS` truncation finding (budget 3 ended at 2.06 s in 1 of 18 runs) changed the timing assertions to attempt counts plus a `[budget-1, budget+10]` band.
+
+### New Considerations Discovered
+
+- The next apply takes the `docker restart` arm (run 38229123048 shows it refused on both hosts too) and emits no `action=rebuilt` line; the evidence set was re-pointed accordingly.
+- A `discoverability_test` with `credentials_required` moves the repo-wide G1 ratchet (`BASELINE_DECLARED_PROBES` 62 -> 63) the moment the plan is committed; the bump is a Files-to-Edit item.
+- Deepen gates: 4.6 pass (threshold `aggregate pattern`); 4.7 pass (all five fields; `probe-verb-gate.sh` accepts the command, `credentials_required` is a real declaration, `expected_output` is the literal `result=ok`); 4.8 pass (no PAT-shaped token); 4.10 skip (no store or new connection); 4.11 pass (`lint-guard-contract.py` green, assembly names the chokepoint rather than members); 4.12 pass (one live `## Scope Check`, recommendation line present, no `unmapped` row). Cited rule ids (`cq-write-failing-tests-before`, `hr-monitor-not-run-in-background-for-polling`, `wg-use-closes-n-in-pr-body-not-title-to`) exist in AGENTS.md; cited issues/PRs exist (#10003 OPEN; #9534 CLOSED; #10084 MERGED).
+- Agent fan-out was deliberately limited to the four-seat plan-review panel already run on this plan: the change is one ~25-line bash block with no framework, schema or UI surface, so the maximum-coverage fan-out of unrelated reviewers (and per-skill sub-agents for Rails/UI/agent-native skills) had no section to attach to.
+
 ## Overview
 
 `apps/web-platform/infra/egress-gateway-bootstrap.sh` ends with a single liveness probe,
@@ -104,6 +124,18 @@ Ordered L3 -> L7:
 3. **L7 TLS / proxy.** Not applicable: the probe is a bare TCP open, no TLS.
 4. **L7 application (squid).** The discriminating hypothesis. ECONNREFUSED (RST) is not a firewall DROP (a drop would time out, not refuse); refused within 1-3 ms of `docker run -d` returning is consistent with "container started, squid not yet bound". Competing sub-hypothesis: squid exits at start (config/helper error). The poll discriminates: slow-start passes inside the window; crash-at-start fails after the window with container state + log tail naming the cause. Prior evidence that squid does run on this image/config: the earlier `egress_gw_probe` stream measured host -> gw healthy on web-1 (`egress-gateway-bootstrap.sh` comment lines 61-71).
 
+### Network-Outage Deep-Dive (deepen-plan Phase 4.5)
+
+Trigger matched (`SSH`, `timeout`, `Connection refused`, and the resource-shape trigger: `terraform_data.egress_gateway*` carry `provisioner "file"`/`"remote-exec"` over an SSH `connection`). Layer-by-layer status, L3 first:
+
+| Layer | Status | Artifact |
+|---|---|---|
+| L3 firewall allow-list (CI runner -> host :22) | not the failing hop; verified by outcome, `hcloud firewall describe` deliberately not run (no SSH-layer fix is proposed) | run 38228632851 and run 38229123048 logs: `terraform_data.egress_gateway_web2 (remote-exec): Connected!` ~1 s after dial on both runs (`gh run view <run> --log \| sed 's/\x1b\[[0-9;]*m//g' \| grep -E "Connected!"`) |
+| L3 firewall on the failing hop (host -> `172.31.100.2:8443`) | cleared: a drop would time out, this refused; and the loader's `cron-egress-nftables.sh` carries accept/drop only (no `reject`), sitting in `DOCKER-USER`/forward, not on host-originated OUTPUT | refusal text `Connection refused` in both runs; `grep -cE 'add rule .* reject' apps/web-platform/infra/cron-egress-nftables.sh` prints `0` (run at deepen time; a bare `grep reject` also hits comment words, so the pattern is anchored on `add rule`) |
+| L3 DNS / routing | not applicable: a literal bridge IP on a host-local docker network | n/a |
+| L7 TLS / proxy | not applicable: bare TCP open | n/a |
+| L7 application (squid) | the discriminating layer; gateway logs from the failing runs are not retrievable without SSH, which is exactly why the new `gw_diag` prints the state and log tail into the apply log on the next failure | no journal entry is available for the incident window; that absence is not evidence either way |
+
 ## Problem Statement
 
 `docker run -d` and `docker restart` return once the container process is started, not once squid has
@@ -170,7 +202,7 @@ Design notes (each is a claim the work phase re-verifies with a command; see the
 |---|---|---|
 | `docker run -d` / `restart` return before squid binds (a probe at t~0 is refused) | `gh run view 38228632851 --log \| sed 's/\x1b\[[0-9;]*m//g' \| grep -E "started soleur-egress-gw\|/dev/tcp/172.31.100.2/8443: Connection refused"` — started and refused are ~1-3 ms apart on both hosts; run 38229123048 shows the same on the `restarted` arm | RUN (this session) — holds |
 | a refused connect returns immediately; `timeout` only bounds filtered attempts | local bind-not-listen fixture (see Research Insights): `rc=1 t=0s` before listen, `rc=0` after | RUN — holds |
-| `docker logs` works on a container started with `--log-driver journald` (the gw's driver, bootstrap line 181) | Work phase: `docker run -d --log-driver journald --name t alpine sh -c 'echo x; sleep 60' && docker logs --tail 5 t` on a host with journald; if it fails, the log-tail lines and their comment are dropped (the state line alone still discriminates most modes) rather than adding a `journalctl` arm | NOT YET RUN — gate before writing the sentence |
+| `docker logs` works on a container started with `--log-driver journald` (the gw's driver, bootstrap line 181) | Work phase: `docker run -d --log-driver journald --name t alpine sh -c 'echo x; sleep 60' && docker logs --tail 5 t` on a host with journald; if it fails, the log-tail lines and their comment are dropped (the state line alone still discriminates most modes) rather than adding a `journalctl` arm | RUN at deepen time on this host (docker 29.7.2, systemd 261): `docker run -d --log-driver journald --name plan10003-journald-probe node:22-slim sh -c 'echo hello-from-gw; sleep 30'` then `timeout 10 docker logs --tail 5 plan10003-journald-probe` printed `hello-from-gw` rc 0, and the `docker inspect -f` state format (incl. `{{.RestartCount}}`, `{{.State.StartedAt}}`) printed `running running=true restarting=false restarts=0 exit=0 started=2026-10-12T09:37:59Z` — holds. Residual: the web hosts' daemon version is not queryable without SSH, so the comment says "docker logs reads the journald driver" and nothing version-specific; `timeout 10 ... \|\| true` bounds a daemon that behaves differently |
 
 If a row cannot be run, the sentence is dropped, not softened. The comment deliberately makes no claim about who sets `EGRESS_GW_WAIT_S` (that would need its own grep).
 
@@ -195,7 +227,7 @@ None. (`gh issue list --label code-review --state open --json number,title,body 
 
 1. `bash scripts/test-all.sh --capacity` first (the file mode is not executable in this checkout: `scripts/test-all.sh: Permission denied` when run directly, so invoke with `bash`). This session's reading was `CAPACITY_CONTENDED reason=sibling_runs,sibling_suites measured_runs=3 measured_suites=6` — sibling worktrees are running suites. Consequence: run the infra suites in isolation (`bash apps/web-platform/infra/egress-gateway.test.sh` alone, 0.5 s today), and re-run any `rc=124` infra suite alone before treating it as a failure.
 2. Record the shellcheck baseline: `shellcheck apps/web-platform/infra/egress-gateway-bootstrap.sh apps/web-platform/infra/egress-gateway.test.sh` currently reports 1 warning (SC2046 at bootstrap line 49, intentional word-splitting of `docker network ls -q`) and 6 info (SC2016 at test lines 141, 149, 162, 163, 171, 172 — grep patterns that deliberately contain a literal `$`). semgrep is broken on this host; shellcheck is the gate, and the bar is **no new finding relative to this baseline** (new code must be clean; the pre-existing ones are acknowledged, not fixed here).
-3. Run the claims-ledger `docker logs`/journald row.
+3. Re-run the claims-ledger `docker logs`/journald row if the comment wording changes (it already passed at deepen time).
 4. Confirm the G1 ratchet really moves once this plan is committed: `cd plugins/soleur && bun test test/preflight-discoverability-test.test.ts` fails with 63 declaring plans vs the 62 baseline (the bump is mechanical only if it does).
 
 ### Phase 1 — Test first (RED)
@@ -439,8 +471,8 @@ The static assertions (call site exactly once, old probe absent, `GW_WAIT_S` def
 ## Risks
 
 - **Downstream failures newly reachable.** With the bootstrap passing, `systemctl restart cron-egress-firewall.service` and anything after it in these resources runs for the first time on the tainted resources; a failure there is a different bug. Mitigation: Post-merge section distinguishes it and keeps `Ref`.
-- **Timing flake under contention.** The capacity probe reads `CAPACITY_CONTENDED`; the suite adds ~2-5 s of real sleeping. Mitigation: wide margins (late-open budget 20 s vs 2 s delay; never-open upper bound budget+10 s), outer `timeout` per case.
-- **`docker logs` driver behaviour** (journald) unverified until the ledger row runs.
+- **Timing flake under contention.** The capacity probe reads `CAPACITY_CONTENDED`; the suite adds ~2-5 s of real sleeping. Mitigation: wide margins (late-open budget 8 s vs 2 s delay; never-open band [budget-1, budget+10] s), outer `timeout` per case.
+- **`docker logs` driver behaviour** (journald) verified locally at deepen time (ledger row 3); the prod daemon version is not queryable without SSH, so the failure path is `timeout 10` + `|| true` bounded regardless.
 - **Image/baked-set churn.** The script is in the baked `host_script_files` set and the app image COPY set, so the merge also rebuilds the web-platform image; this is expected and unrelated to the apply order.
 
 ## Sharp Edges
