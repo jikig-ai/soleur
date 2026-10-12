@@ -6337,6 +6337,279 @@ else row "S5 negative canary (registry): the planted-canary run population is be
 echo "=== stage S5: Guard 1 and Guard 2 rows for the apply workflow and the registry template done ==="
 
 # =====================================================================================
+# STAGE S6 (argv-bearer sweep, Guard 3, #9757): no `htpasswd` invocation carries a password on argv.
+#
+# PROPERTY. No tracked, non-test, non-comment `htpasswd` invocation passes a password as an argument: no option cluster holds a lowercase `b`
+# (`-b` is the password-on-the-command-line flag; `-B` is bcrypt and is fine, in any order and combination: -Bin, -iB, -vi pass; -Bbn, -Bb, -bi,
+# -vb, -nbB and a split `-B -b` fail).
+#
+# DERIVATION. `git grep` (tracked AND untracked, so an uncommitted file is seen) over apps/, scripts/ and .github/, minus `*.test.sh` and `*.md`,
+# for `htpasswd` followed by an option token; whole-line comments and trailing YAML comments (` # ...`) are dropped before the invocation is
+# looked for. The scan is a FUNCTION OF A ROOT, so the mutation rows run the same text on a scratch repository. NOT COVERED, named: an invocation
+# through a variable, an `eval` or a `bash -c` string whose `htpasswd` is not followed by an option on the same line, and an invocation hidden
+# behind ` # ` inside a quoted string earlier on the same line.
+#
+# THE ONE-PR-LATER RESIDUAL. This PR converts only the registry-luks-recut rehearsal step (one site). The registry template
+# (apps/web-platform/infra/cloud-init-registry.yml: the `_htp_verify` probe and the two boot-step htpasswd lines) ships as its own follow-up PR
+# because merging that file replaces the production registry host unattended, so its three invocations stay argv-form here and are carried as an
+# EXPLICIT RESIDUAL ALLOWLIST (S6_ALLOW below, named by file and the whole stripped line). THE ALLOWLIST SHRINKS BY DELETION ONLY: the follow-up
+# registry PR deletes it, and an entry the scan no longer sees is itself RED ("stale-allowlist"), so converting a site without deleting its entry
+# fails here. The ceiling row pins the entry count, so growing the allowlist is an edit to a literal this stage asserts, never a quiet addition.
+#
+# FLOOR. The scan saw 4 invocations in 2 files on the real tree: 1 in the workflow + 3 residual in the registry template. The floor is 4 sites
+# in 2 files; it is also the count after the follow-up (workflow 1 + boot step 2 + probe 1), so it does not move when the allowlist is deleted.
+# A scan that sees fewer (renamed binary, moved roots, a broken regex) is RED, never a clean bill.
+#
+# The executable rows run the REAL step text (PyYAML-extracted from the workflow, up to and including the htpasswd line) under
+# `bash --noprofile --norc -eo pipefail` against a REFUSING stub `docker` that accepts exactly `run --rm -i httpd:2.4-alpine htpasswd -Bin <user>`
+# and reads stdin: without docker's own `-i` docker forwards nothing and the hash covers an EMPTY password, and the step is dispatch-only, so
+# nothing else would notice. The real-binary round trip lives in apps/web-platform/infra/htpasswd-stdin.test.sh (needs docker; this battery does not).
+# All passwords are synthesized or per-run throwaways; no value is printed.
+# =====================================================================================
+S6_WF=".github/workflows/apply-web-platform-infra.yml"
+S6_REG="apps/web-platform/infra/cloud-init-registry.yml"
+S6_SITE_FLOOR=4; S6_FILE_FLOOR=2; S6_ALLOW_CEIL=3
+S6_WF_LINE="$(cat <<'S6EOF'
+printf '%s' "$RP" | docker run --rm -i httpd:2.4-alpine htpasswd -Bin "$RU" > "${RUNNER_TEMP}/zot/htpasswd"
+S6EOF
+)"
+# The residual allowlist: <file><TAB><the whole stripped line>. The follow-up registry PR deletes every entry.
+S6_ALLOW=(
+"$S6_REG	htpasswd -vb /etc/zot/htpasswd \"\$1\" \"\$2\" >/dev/null 2>&1"
+"$S6_REG	htpasswd -Bbn '\${zot_pull_user}' \"\$ZOT_PULL_TOKEN\"  > /etc/zot/htpasswd"
+"$S6_REG	htpasswd -Bbn '\${zot_push_user}' \"\$ZOT_PUSH_TOKEN\" >> /etc/zot/htpasswd"
+)
+S6_ERE='(^|[^[:alnum:]_./-])htpasswd[[:space:]]+-[A-Za-z]'
+S6_ERE_INV='(^|[^[:alnum:]_./-])htpasswd([[:space:]]+-[A-Za-z]+)+'
+
+# One TSV record per invocation: file, line number, the option tokens, the whole stripped code line.
+s6_scan() { # <root>
+  local root="$1" rec file rest ln text body code m
+  while IFS= read -r rec; do
+    file="${rec%%:*}"; rest="${rec#*:}"; ln="${rest%%:*}"; text="${rest#*:}"
+    body="$(sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' <<<"$text")"
+    [[ "$body" == '#'* ]] && continue
+    code="$(sed -E 's/[[:space:]]#.*$//; s/[[:space:]]+$//' <<<"$body")"
+    while IFS= read -r m; do
+      [[ -n "$m" ]] || continue
+      printf '%s\t%s\t%s\t%s\n' "$file" "$ln" "$(sed -E 's/^.*htpasswd[[:space:]]+//' <<<"$m")" "$code"
+    done < <(grep -oE -e "$S6_ERE_INV" <<<"$code")
+  done < <(git -C "$root" grep -nIE --untracked -e "$S6_ERE" -- apps scripts .github ':!*.test.sh' ':!*.md' 2>/dev/null)
+}
+# The verdict over a root. Sets S6_J_REASONS (empty = GREEN), S6_J_SITES, S6_J_FILES. Reasons: floor, bad:<file>, workflow-identity, stale-allowlist.
+S6_J_REASONS=""; S6_J_SITES=0; S6_J_FILES=0
+s6_judge() { # <root>
+  local root="$1" scan file ln opts code a seen
+  scan="$(s6_scan "$root")"
+  S6_J_REASONS=""
+  S6_J_SITES="$(grep -c . <<<"$scan" || true)"
+  S6_J_FILES="$(cut -f1 <<<"$scan" | sort -u | grep -c . || true)"
+  [[ "$S6_J_SITES" -ge "$S6_SITE_FLOOR" && "$S6_J_FILES" -ge "$S6_FILE_FLOOR" ]] || S6_J_REASONS+=" floor"
+  while IFS=$'\t' read -r file ln opts code; do
+    [[ -n "$file" ]] || continue
+    if [[ "$opts" == *b* ]]; then
+      seen=0; for a in "${S6_ALLOW[@]}"; do [[ "$a" == "$file"$'\t'"$code" ]] && seen=1; done
+      [[ "$seen" == 1 ]] || S6_J_REASONS+=" bad:$file"
+    fi
+  done <<<"$scan"
+  [[ "$(awk -F'\t' -v f="$S6_WF" -v c="$S6_WF_LINE" '$1 == f { n++; if ($4 != c) o++ } END { print n + 0 "/" o + 0 }' <<<"$scan")" == "1/0" ]] || S6_J_REASONS+=" workflow-identity"
+  for a in "${S6_ALLOW[@]}"; do
+    grep -qxF -- "$a" < <(awk -F'\t' '{ print $1 "\t" $4 }' <<<"$scan") || S6_J_REASONS+=" stale-allowlist"
+  done
+  S6_J_REASONS="${S6_J_REASONS# }"
+}
+S6="$TMPD/s6"; assert_fixture_dir "$S6"; mkdir -p "$S6/base" "$S6/mut" "$S6/bin" "$S6/real"
+( source "$REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh" && git_fixture_env "$S6/base" || exit 1; git -C "$S6/base" init -q ) \
+  || fatal "S6 could not create the scratch repository"
+for f in "$S6_WF" "$S6_REG"; do mkdir -p "$S6/base/$(dirname "$f")"; cp "$REPO_ROOT/$f" "$S6/base/$f"; done
+# A fresh copy of the scratch tree per mutant (the scan is the SAME function over a root, so a mutant and the real tree are judged by one text).
+s6_fresh() { # <name>: prints the new root
+  local d="$S6/mut/$1"; assert_fixture_dir "$d"; rm -rf "$d"; cp -a "$S6/base" "$d" && printf '%s' "$d"
+}
+s6_put() { # <root> <relative path> <line>: write one line into a scratch tree
+  assert_fixture_dir "$1"; printf '%s\n' "$3" > "$1/$2"
+}
+s6_edit() { # <file> <old> <new> [<count>]: replace exactly <count> (default 1) occurrences, rc 1 when the edit did not land
+  python3 -I -c '
+import sys
+p, old, new, n = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+t = open(p).read()
+if t.count(old) != n: sys.exit(1)
+open(p, "w").write(t.replace(old, new))' "$1" "$2" "$3" "${4:-1}"
+}
+
+# --- the real tree --------------------------------------------------------------------
+s6_judge "$REPO_ROOT"
+S6_REAL_REASONS="$S6_J_REASONS"; S6_REAL_SITES="$S6_J_SITES"; S6_REAL_FILES="$S6_J_FILES"
+S6_REAL_SCAN="$(s6_scan "$REPO_ROOT")"
+if [[ -z "$S6_REAL_REASONS" ]]; then row "S6 Guard 3: no tracked htpasswd invocation outside the residual allowlist carries a password on argv ($S6_REAL_SITES invocations in $S6_REAL_FILES files, derived by git grep over apps/ scripts/ .github/)" ok
+else row "S6 Guard 3: an htpasswd invocation carries a password on argv outside the residual allowlist, or the workflow site or an allowlist entry drifted" fail "reasons='$S6_REAL_REASONS' sites=$S6_REAL_SITES files=$S6_REAL_FILES"; fi
+if [[ "$S6_REAL_SITES" -ge "$S6_SITE_FLOOR" && "$S6_REAL_FILES" -ge "$S6_FILE_FLOOR" && "$S6_REAL_SITES" -eq 4 && "$S6_REAL_FILES" -eq 2 ]]; then row "S6 floor: the scan saw $S6_REAL_SITES invocations in $S6_REAL_FILES files (workflow 1 + registry template 3: the floor is $S6_SITE_FLOOR sites in $S6_FILE_FLOOR files, and is the same after the follow-up converts the registry sites)" ok
+else row "S6 floor: the scan saw an unexpected population (the floor is $S6_SITE_FLOOR sites in $S6_FILE_FLOOR files; exactly 4 in 2 are expected until the follow-up registry PR)" fail "sites=$S6_REAL_SITES files=$S6_REAL_FILES"; fi
+# One anchored row per site: identity (file and the whole stripped line), never only a count.
+s6_site_is() { # <file> <whole line> <expect-b: 0|1>: exactly one record of <file> has that line, and its options hold a lowercase b iff <expect-b>
+  awk -F'\t' -v f="$1" -v c="$2" -v b="$3" '$1 == f { n++; if ($4 == c && (($3 ~ /b/) ? 1 : 0) == b) ok++ } END { exit !(n == 1 && ok == 1) }' <<<"$S6_REAL_SCAN"
+}
+s6_site_in_file_is() { # <file> <whole line> <expect-b>: the file holds exactly one record of that line (the file may hold other sites)
+  awk -F'\t' -v f="$1" -v c="$2" -v b="$3" '$1 == f && $4 == c { n++; if ((($3 ~ /b/) ? 1 : 0) == b) ok++ } END { exit !(n == 1 && ok == 1) }' <<<"$S6_REAL_SCAN"
+}
+if s6_site_is "$S6_WF" "$S6_WF_LINE" 0; then row "S6 site (workflow): the registry-luks-recut rehearsal step's single htpasswd invocation is exactly the stdin form with docker's own -i, and its options hold no b" ok
+else row "S6 site (workflow): the rehearsal step's htpasswd line is not the exact stdin form (printf '%s' \"\$RP\" | docker run --rm -i httpd:2.4-alpine htpasswd -Bin \"\$RU\" > ...)" fail "records=$(awk -F'\t' -v f="$S6_WF" '$1 == f' <<<"$S6_REAL_SCAN" | cut -f2,3 | tr '\t\n' ' :')"; fi
+S6_ALLOW_I=0
+for a in "${S6_ALLOW[@]}"; do
+  S6_ALLOW_I=$((S6_ALLOW_I + 1)); a_file="${a%%$'\t'*}"; a_line="${a#*$'\t'}"
+  case "$S6_ALLOW_I" in 1) a_name="the _htp_verify probe (htpasswd -vb)" ;; 2) a_name="the boot step's pull entry (htpasswd -Bbn)" ;; *) a_name="the boot step's push entry (htpasswd -Bbn)" ;; esac
+  if s6_site_in_file_is "$a_file" "$a_line" 1; then row "S6 residual site $S6_ALLOW_I (cloud-init-registry.yml): $a_name is still argv-form, present exactly once, and named by the allowlist (the follow-up registry PR converts it and deletes the entry)" ok
+  else row "S6 residual site $S6_ALLOW_I (cloud-init-registry.yml): $a_name is not present exactly once in its allowlisted form (converted without deleting its allowlist entry, or moved)" fail "line=$(cut -c1-60 <<<"$a_line")"; fi
+done
+S6_ALLOW_FILES="$(for a in "${S6_ALLOW[@]}"; do printf '%s\n' "${a%%$'\t'*}"; done | sort -u)"
+if [[ "${#S6_ALLOW[@]}" -eq "$S6_ALLOW_CEIL" && "$S6_ALLOW_FILES" == "$S6_REG" ]]; then row "S6 allowlist ceiling: exactly $S6_ALLOW_CEIL residual entries, all in $S6_REG (it shrinks by deletion only; the follow-up registry PR deletes it)" ok
+else row "S6 allowlist ceiling: the residual allowlist grew or spread beyond the three registry-template entries" fail "entries=${#S6_ALLOW[@]} files='${S6_ALLOW_FILES//$'\n'/,}'"; fi
+
+# --- mutations, on a scratch repository ----------------------------------------------------
+# M1 reintroduce the argv form in the workflow site.
+S6_M1="$(s6_fresh m1)"
+if s6_edit "$S6_M1/$S6_WF" 'htpasswd -Bin "$RU"' 'htpasswd -Bbn "$RU" "$RP"'; then
+  s6_judge "$S6_M1"
+  if [[ "$S6_J_REASONS" == *"bad:$S6_WF"* && "$S6_J_REASONS" == *workflow-identity* ]]; then row "S6 mutation 1: reintroducing -Bbn in the workflow site is RED (an argv password outside the allowlist, and the site's identity row)" ok
+  else row "S6 mutation 1: the workflow site reverted to -Bbn is not caught" fail "reasons='$S6_J_REASONS'"; fi
+else row "S6 mutation 1: the -Bin -> -Bbn edit did not land on the workflow (the converted site is missing)" fail "no 'htpasswd -Bin \"\$RU\"' once in the workflow"; fi
+# M2 a compliant fifth site is GREEN; a non-compliant one in a DIFFERENT file then makes it RED (identity, not a count: five sites in four files).
+S6_M2="$(s6_fresh m2)"; assert_fixture_dir "$S6_M2"; mkdir -p "$S6_M2/scripts" "$S6_M2/apps/web-platform/infra"
+printf '%s\n' "printf '%s' \"\$p\" | htpasswd -Bin svc > \"\$out\"" > "$S6_M2/scripts/zz-ok-fifth.sh"
+s6_judge "$S6_M2"; S6_M2_OK="$S6_J_REASONS"; S6_M2_SITES="$S6_J_SITES"
+s6_put "$S6_M2" scripts/zz-bad-sixth.sh 'htpasswd -Bbn svc "$p"'
+s6_judge "$S6_M2"
+if [[ -z "$S6_M2_OK" && "$S6_M2_SITES" -eq $((S6_REAL_SITES + 1)) && "$S6_J_REASONS" == *"bad:scripts/zz-bad-sixth.sh"* && "$S6_J_SITES" -eq $((S6_REAL_SITES + 2)) ]]; then
+  row "S6 mutation 2: a compliant fifth site is GREEN (and is seen), a non-compliant sixth site in a different file is RED" ok
+else row "S6 mutation 2: the fifth/sixth-site pair is judged wrong" fail "fifth='$S6_M2_OK' sites=$S6_M2_SITES sixth='$S6_J_REASONS' sites=$S6_J_SITES"; fi
+# M3 a fourth argv invocation inside the ALLOWLISTED file (a different line) is RED: the allowlist is by line identity, not by file.
+S6_M3="$(s6_fresh m3)"; assert_fixture_dir "$S6_M3"
+printf '%s\n' "    htpasswd -Bbn 'extra' \"\$EXTRA_TOKEN\" >> /etc/zot/htpasswd" >> "$S6_M3/$S6_REG"
+s6_judge "$S6_M3"
+if [[ "$S6_J_REASONS" == *"bad:$S6_REG"* && "$S6_J_SITES" -eq $((S6_REAL_SITES + 1)) ]]; then row "S6 mutation 3: a fourth argv htpasswd line added to the allowlisted registry file is RED (the allowlist names lines, not the file)" ok
+else row "S6 mutation 3: an extra argv line in the allowlisted file slips through" fail "reasons='$S6_J_REASONS' sites=$S6_J_SITES"; fi
+# M4 every spelling of the password-on-argv option cluster is RED, in any order and combination.
+S6_M4="$(s6_fresh m4)"; assert_fixture_dir "$S6_M4"; mkdir -p "$S6_M4/scripts"; S6_M4_MISS=""
+for v in '-Bb' '-bB' '-bi' '-vb' '-nbB' '-Bbn' '-bBn' '-B -b' '-i -vb' '-vb -B'; do
+  printf '%s\n' "htpasswd $v svc \"\$p\" > \"\$out\"" > "$S6_M4/scripts/zz-variant.sh"
+  s6_judge "$S6_M4"; [[ "$S6_J_REASONS" == *"bad:scripts/zz-variant.sh"* ]] || S6_M4_MISS+=" $v"
+done
+if [[ -z "$S6_M4_MISS" ]]; then row "S6 mutation 4: each option cluster holding a b (-Bb -bB -bi -vb -nbB -Bbn -bBn, a split -B -b, -i -vb, -vb -B) is RED" ok
+else row "S6 mutation 4: an option cluster holding a b is not caught" fail "missed:$S6_M4_MISS"; fi
+# M5 the scanned binary renamed in the scratch tree: the scan sees 0 sites and must be RED, never a clean bill.
+S6_M5="$(s6_fresh m5)"
+for f in "$S6_WF" "$S6_REG"; do sed -i -E 's/htpasswd([[:space:]]+-)/htpassw0\1/g' "$S6_M5/$f"; done
+s6_judge "$S6_M5"
+if [[ "$S6_J_SITES" -eq 0 && "$S6_J_REASONS" == *floor* ]]; then row "S6 mutation 5: with the scanned binary renamed the scan sees 0 sites and the floor is RED" ok
+else row "S6 mutation 5: a scan that sees nothing is not RED" fail "sites=$S6_J_SITES reasons='$S6_J_REASONS'"; fi
+# M6 an allowlist entry the scan no longer sees is RED (the follow-up PR must delete the allowlist when it converts the sites). A compliant site is added so the floor is not what trips.
+S6_M6="$(s6_fresh m6)"; assert_fixture_dir "$S6_M6"; mkdir -p "$S6_M6/scripts"
+printf '%s\n' "printf '%s' \"\$p\" | htpasswd -Bin svc > \"\$out\"" > "$S6_M6/scripts/zz-ok.sh"
+if s6_edit "$S6_M6/$S6_REG" '        htpasswd -vb /etc/zot/htpasswd "$1" "$2" >/dev/null 2>&1' '        printf '"'"'%s'"'"' "$2" | htpasswd -vi /etc/zot/htpasswd "$1" >/dev/null 2>&1'; then
+  s6_judge "$S6_M6"
+  if [[ "$S6_J_REASONS" == "stale-allowlist" ]]; then row "S6 mutation 6: converting a residual site without deleting its allowlist entry is RED (stale-allowlist, and nothing else)" ok
+  else row "S6 mutation 6: a stale allowlist entry is not (only) reported" fail "reasons='$S6_J_REASONS'"; fi
+else row "S6 mutation 6: the _htp_verify line was not found once with its exact text (re-anchor this row with the registry template)" fail "edit did not land"; fi
+# Must-PASS: other order/case (-iB, -iBn, -vi, -Bin, -Bn), `-vb` only in comments (a whole-line comment, a trailing YAML comment), and files outside the population.
+S6_M7="$(s6_fresh m7)"; assert_fixture_dir "$S6_M7"; mkdir -p "$S6_M7/scripts" "$S6_M7/.github/workflows" "$S6_M7/apps/web-platform/infra" "$S6_M7/knowledge-base"
+{ printf '%s\n' "printf '%s' \"\$p\" | htpasswd -iB svc > \"\$out\""
+  printf '%s\n' "printf '%s' \"\$p\" | htpasswd -iBn svc > \"\$out\""
+  printf '%s\n' "printf '%s' \"\$p\" | htpasswd -vi \"\$f\" svc"
+  printf '%s\n' "# htpasswd -vb \"\$f\" svc \"\$p\" would carry the password on argv"
+  printf '%s\n' "    # htpasswd -Bbn svc \"\$p\"   (an indented whole-line comment)"; } > "$S6_M7/scripts/zz-orders-and-comments.sh"
+printf '%s\n' "  - apache2-utils # htpasswd -vb f u p (a trailing YAML comment)" > "$S6_M7/.github/workflows/zz-trailing-comment.yml"
+printf '%s\n' 'htpasswd -Bbn svc "$p"' > "$S6_M7/apps/web-platform/infra/zz-fixture.test.sh"      # a *.test.sh is not in the population
+printf '%s\n' 'run `htpasswd -Bbn svc "$p"` to see it' > "$S6_M7/scripts/zz-docs.md"               # nor is a *.md
+printf '%s\n' 'htpasswd -Bbn svc "$p"' > "$S6_M7/knowledge-base/zz-notes.sh"                      # nor a path outside apps/ scripts/ .github/
+s6_judge "$S6_M7"
+if [[ -z "$S6_J_REASONS" && "$S6_J_SITES" -eq $((S6_REAL_SITES + 3)) ]]; then row "S6 must-pass: other option orders and cases (-iB, -iBn, -vi), -vb only inside whole-line and trailing YAML comments, and a test file, a markdown file and a path outside the roots are GREEN (the three compliant sites are seen)" ok
+else row "S6 must-pass: a compliant or excluded form is flagged, or the compliant sites were not seen" fail "reasons='$S6_J_REASONS' sites=$S6_J_SITES want=$((S6_REAL_SITES + 3))"; fi
+
+# --- the executable rows: the REAL workflow step under a refusing stub docker -----------------
+# The step is extracted with PyYAML (job registry_pull_path_gate, step id `throwaway`) and cut at the htpasswd line: everything before it (the zot pin
+# read, the mkdir, the throwaway user and password) runs for real; the later `docker run` of zot is not part of the property.
+S6_STEP="$S6/step.sh"
+python3 -I -c 'import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+steps = d["jobs"]["registry_pull_path_gate"]["steps"]
+run = [s["run"] for s in steps if isinstance(s, dict) and s.get("id") == "throwaway"]
+if len(run) != 1: sys.exit(3)
+out = []
+for line in run[0].split("\n"):
+    out.append(line)
+    if "htpasswd" in line and "docker run" in line: break
+else: sys.exit(4)
+open(sys.argv[2], "w").write("\n".join(out) + "\n")' "$REPO_ROOT/$S6_WF" "$S6_STEP" || fatal "S6 could not extract the rehearsal step (id throwaway) of $S6_WF up to its htpasswd line"
+for t in bash grep sed head openssl mkdir cat tr cut sha256sum wc od rm; do
+  p="$(type -P "$t" || true)"; [[ -n "$p" ]] && ln -sf "$p" "$S6/real/$t"
+done
+cat > "$S6/bin/docker" <<STUB_EOF
+#!$BASH_BIN
+# REFUSING stub docker. Accepts exactly: run --rm -i httpd:2.4-alpine htpasswd -Bin <user>, with a non-empty password on stdin.
+# Anything else is refused with exit 64 and one line in \$S6_LOG/refusals (argument COUNT and the first six words only: the password is never logged).
+# A real docker forwards no stdin without -i; the stub models that by refusing the call outright.
+set -u
+L="\${S6_LOG:?}"
+if [[ \$# -eq 7 && "\$1" == run && "\$2" == --rm && "\$3" == -i && "\$4" == httpd:2.4-alpine && "\$5" == htpasswd && "\$6" == -Bin && -n "\$7" && "\$7" != -* ]]; then
+  pw="\$(cat)"
+  if [[ -z "\$pw" ]]; then printf 'refused-empty-stdin\n' >> "\$L/refusals"; exit 64; fi
+  printf '%s\n' "\$7" > "\$L/user"
+  printf '%s' "\$pw" | sha256sum | cut -d' ' -f1 > "\$L/stdin.sha"
+  printf '%s\n' "\$#" > "\$L/argc"
+  printf '%s:\$2y\$05\$stubstubstubstubstubstuXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX\n' "\$7"
+  exit 0
+fi
+printf 'refused argc=%s a1=%s a2=%s a3=%s a4=%s a5=%s a6=%s\n' "\$#" "\${1-}" "\${2-}" "\${3-}" "\${4-}" "\${5-}" "\${6-}" >> "\$L/refusals"
+exit 64
+STUB_EOF
+chmod +x "$S6/bin/docker"
+S6_RUN_RC=0
+s6_run_step() { # <step file> <row dir>: the step under `bash --noprofile --norc -eo pipefail`, PATH = the stub + the few real tools
+  local step="$1" d="$2"; assert_fixture_dir "$d"; rm -rf "$d"; mkdir -p "$d/log" "$d/run"
+  env -i PATH="$S6/bin:$S6/real" HOME="$d" TMPDIR="$d" GITHUB_WORKSPACE="$REPO_ROOT" RUNNER_TEMP="$d/run" S6_LOG="$d/log" \
+    "$BASH_BIN" --noprofile --norc -eo pipefail "$step" > "$d/stdout" 2> "$d/stderr"
+  S6_RUN_RC=$?
+}
+s6_nrefusals() { if [[ -f "$1/log/refusals" ]]; then grep -c . "$1/log/refusals" || true; else echo 0; fi; }
+# The password of the run is the one `::add-mask::` line the step prints; it is compared by hash, never printed.
+s6_step_ok() { # <row dir>: rc 0, nothing refused, one 7-word call, an entry for the recorded user, and the stub read the masked password on stdin
+  local d="$1" maskhash
+  maskhash="$(sed -n 's/^::add-mask:://p' "$d/stdout" | head -1 | tr -d '\n' | sha256sum | cut -d' ' -f1)"
+  [[ "$S6_RUN_RC" -eq 0 && "$(s6_nrefusals "$d")" -eq 0 && "$(cat "$d/log/argc" 2>/dev/null)" == 7 ]] \
+    && [[ -s "$d/run/zot/htpasswd" && -n "$(cat "$d/log/user" 2>/dev/null)" && "$(cut -d: -f1 "$d/run/zot/htpasswd")" == "$(cat "$d/log/user")" ]] \
+    && [[ -n "$maskhash" && "$maskhash" == "$(cat "$d/log/stdin.sha" 2>/dev/null)" ]]
+}
+# Instrument control: the stub itself refuses a wrong shape and an empty stdin, and accepts the right one (otherwise every row below proves nothing).
+S6_C="$S6/ctl"; mkdir -p "$S6_C"; S6_CTL_BAD=""
+s6_stub() { rm -rf "$S6_C/log"; mkdir -p "$S6_C/log"; local stdin="$1"; shift; printf '%s' "$stdin" | env -i PATH="$S6/real" S6_LOG="$S6_C/log" "$S6/bin/docker" "$@" >/dev/null 2>&1; }
+s6_stub secret run --rm -i httpd:2.4-alpine htpasswd -Bin u || S6_CTL_BAD+=" right-shape-refused"
+for variant in "run --rm httpd:2.4-alpine htpasswd -Bin u" "run --rm -i httpd:2.4-alpine htpasswd -Bbn u pw" "run --rm -i httpd:2.4-alpine htpasswd -Bn u" "run -i httpd:2.4-alpine htpasswd -Bin u" "run --rm -i httpd:2.4-alpine htpasswd -Bin" "run --rm -i httpd:2.4-alpine htpasswd -Bin -x"; do
+  # shellcheck disable=SC2086
+  if s6_stub secret $variant; then S6_CTL_BAD+=" accepted[$variant]"
+  elif [[ "$(s6_nrefusals "$S6_C")" -ne 1 ]]; then S6_CTL_BAD+=" unlogged[$variant]"; fi
+done
+if s6_stub '' run --rm -i httpd:2.4-alpine htpasswd -Bin u; then S6_CTL_BAD+=" accepted-empty-stdin"; fi
+if [[ -z "$S6_CTL_BAD" ]]; then row "S6 instrument: the stub docker accepts exactly 'run --rm -i httpd:2.4-alpine htpasswd -Bin <user>' with a password on stdin and refuses (exit 64, one logged refusal) a missing -i, a -b form, a missing user, a wrong word and an empty stdin" ok
+else row "S6 instrument: the stub docker accepts a wrong shape, refuses the right one or does not log" fail "$S6_CTL_BAD"; fi
+s6_run_step "$S6_STEP" "$S6/row-good"
+if s6_step_ok "$S6/row-good"; then row "S6 executable: the REAL rehearsal step, run under bash -eo pipefail against the refusing stub docker, makes exactly one call (7 words, -i, -Bin <user>), nothing is refused, the password (by hash) arrived on stdin and the htpasswd file holds the entry" ok
+else row "S6 executable: the real rehearsal step did not make the one accepted stdin-form call" fail "rc=$S6_RUN_RC refusals=$(s6_nrefusals "$S6/row-good") argc=$(cat "$S6/row-good/log/argc" 2>/dev/null) stderr=$(head -c 160 "$S6/row-good/stderr" | tr '\n' ' ')"; fi
+# Mutations of the step text itself: drop docker's -i; put -b back (the original argv form).
+cp "$S6_STEP" "$S6/step-noi.sh"; cp "$S6_STEP" "$S6/step-b.sh"
+if s6_edit "$S6/step-noi.sh" 'docker run --rm -i httpd:2.4-alpine' 'docker run --rm httpd:2.4-alpine'; then
+  s6_run_step "$S6/step-noi.sh" "$S6/row-noi"
+  if [[ "$S6_RUN_RC" -ne 0 && "$(s6_nrefusals "$S6/row-noi")" -ge 1 ]] && ! s6_step_ok "$S6/row-noi"; then row "S6 mutation (executable): dropping docker's own -i from the step is RED (the stub refuses: docker would forward nothing and the hash would cover an empty password)" ok
+  else row "S6 mutation (executable): the step without docker -i is not caught" fail "rc=$S6_RUN_RC refusals=$(s6_nrefusals "$S6/row-noi")"; fi
+else row "S6 mutation (executable): the -i drop did not land on the step text (the step is not the stdin form)" fail "no 'docker run --rm -i httpd:2.4-alpine' once in the extracted step"; fi
+if s6_edit "$S6/step-b.sh" "printf '%s' \"\$RP\" | docker run --rm -i httpd:2.4-alpine htpasswd -Bin \"\$RU\"" 'docker run --rm httpd:2.4-alpine htpasswd -Bbn "$RU" "$RP"'; then
+  s6_run_step "$S6/step-b.sh" "$S6/row-b"
+  if [[ "$S6_RUN_RC" -ne 0 && "$(s6_nrefusals "$S6/row-b")" -ge 1 ]] && ! s6_step_ok "$S6/row-b"; then row "S6 mutation (executable): putting -b back (the original password-on-argv call) is RED (the stub refuses anything but the stdin form)" ok
+  else row "S6 mutation (executable): the step with -b back is not caught" fail "rc=$S6_RUN_RC refusals=$(s6_nrefusals "$S6/row-b")"; fi
+else row "S6 mutation (executable): the -b edit did not land on the step text (the step is not the stdin form)" fail "the printf-piped docker call was not found once in the extracted step"; fi
+echo "=== stage S6: Guard 3 rows (htpasswd password off argv: workflow site, residual allowlist, executable stub) done ==="
+
+# =====================================================================================
 # CONTROLS FOR THE VERDICT-OWNING HELPERS. Every helper that names failed checks (bk_check, bs_refusal, bs_ok_call, hmx_refused, evaluate_hmac,
 # evaluate_body) is driven here with a FABRICATED row directory that is green except for exactly ONE doctored fact, and the row requires the helper's
 # output to be exactly that one check's name. A clause with several alternatives (a regex `a|b|c`, a loop over values, an `||` of two files) gets one
@@ -6585,7 +6858,8 @@ check_conservation "$pass" "$fail" "$CASES" || exit 1
 SELFTEST_PASSES=0
 # 730 -> 752 at #9757 (held-back HMAC arms, census allowance, leads (a)(b)(g)): the MEASURED green total (752 passed, 0 failed; the self-test rows are
 # retracted, so SELFTEST_PASSES stays 0). Derived from the run, never estimated.
-EXPECTED_TESTS=752
+# 752 -> 770 at #9757 (stage S6, Guard 3: htpasswd password off argv): the 18 S6 rows, measured (770 passed, 0 failed).
+EXPECTED_TESTS=770
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2
