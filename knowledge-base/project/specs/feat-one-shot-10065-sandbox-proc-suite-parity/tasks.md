@@ -41,7 +41,7 @@ Run everything in an allocated sandbox (`scripts/soleur-sandbox.sh new|run-isola
 
 - [x] 4.1 `ISO_ARGV` from the canary fixture (`FIXTURE_TAIL` before any docker call)
 - [x] 4.2 Recorder arm (`DROP_FAILED`) and `MUTATE=shim-cover` seam
-- [x] 4.3 Umount-refused-under-vendor-caps arm with a caps-retained positive control (D1); recorder instrument control and path-normalization rows
+- [x] 4.3 (narrowed by M3: no umount arm, no positive control can exist in the unprivileged image) recorder instrument control and path-normalization rows
 - [x] 4.4 Correct the shim header comment (comment lines only) and ADR-075 (Decision clarification and Alternatives row); AC15 comment-only check
 - [x] 4.5 `docker inspect` arm on the running suite container (CapAdd, PidMode, User, MaskedPaths, apparmor and seccomp entries)
 
@@ -84,3 +84,9 @@ Run everything in an allocated sandbox (`scripts/soleur-sandbox.sh new|run-isola
 - Guard 3: `test/c4-render-argv-fixture.test.ts` (fixture pin, constants, literal census, no-procfs assertion) plus the suite's C4 replay arm.
 - Guard 4 rows 1-5 and the PATH forms (legacy, multi-var, `/usr/bin` first, compliant, stage-name case, last USER): suite static arms, verified by the 16-row static battery; live PATH arm and `MUTATE=shim-path`.
 - Local verification (2026-10-12, `SOLEUR_SANDBOX_DOCKER_APPARMOR=unconfined`): suite 34 passed 0 failed; seams `shim-splice`, `shim-bypass`, `shim-cover`, `shim-path`, `control-unmasked`, `sleeper-after`, `no-replay` each red on their own diagnostic; static battery 16/16 (red rows made zero docker calls). The AppArmor-profile half is proven only by CI.
+
+## Review round (2026-10-12, 13 seats, panel SHA 74b5c3de9c)
+
+Fixed inline (all in this PR): outer-wrap argv no-`--proc` assertion (was unpinned); census escapes (chained second statement after an exempt site, `<<` arithmetic/quoted heredoc blinding, `)` case-label position, uppercase `$DOCKER` indirect wrapper, symlink/unbounded read, privilege-class options on exempt sites, `--memory 0`); drop analyzer (`..` normalization, ordering vs the root bind, symlink/file dest, `--args` unmodeled); docker-suite static arms now also run in the REQUIRED lane (vitest wrapper with a failing `docker` stub, 9 mutated-copy rows) and the posture digest is pinned there; `ELEVATION` arm; `MUTATION_UNKNOWN`; exact `MIN_ASSERTIONS` (39); `CONTAINER_START_FAILED`; unbound-variable abort; in-image fixture regeneration command and remediation text; removal-direction rows; memoized binary scans; lockfile variants pinned to one version; live-tail spawns selected by shape; shared comment stripper; bind-table parity row; consumer floor 7; ADR-075 addendum (observed vs inferred, unelevated-bwrap condition, supersession pointer); stale comments.
+Tracked, not fixed (CONCUR from code-simplicity-reviewer): residual gaps in #10115 (SOLEUR_BWRAP_* hijack-list names, outer-wrap replay, runner-image fidelity, census scope), trigger = dependency on #10063.
+Local verification after fixes: docker suite 39/0 (unconfined override), tuple battery 137/137, vitest 7 files green incl. `CI=1`.

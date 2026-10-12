@@ -206,13 +206,23 @@ function parseCalls(win: string): { calls: TailCall[]; terminated: boolean } {
   }
 }
 
+/** The one supported way to refresh the committed canary fixture, and what to do without credentials. */
+export const FIXTURE_REGEN_HINT =
+  "To refresh infra/sandbox-canary-argv.json run, from the repo root with docker and ANTHROPIC_API_KEY set, " +
+  "`SANDBOX_CANARY_MODE=capture bash apps/web-platform/scripts/sandbox-canary-verify-in-image.sh` (it captures INSIDE the " +
+  "deploy base image; a bare `sandbox-canary.mjs --capture` on a dev host bakes in host-conditional tokens and is the wrong " +
+  "fixture for production). The SDK-bump CI gate runs the same script. Without credentials, stop and report this failure: " +
+  "never hand-edit the fixture and never re-pin to turn the check green.";
+
 export function extractBuilderTailFrom(src: ByteSource): BuilderTail {
   const hits = scanNeedles(src, { anchor: Buffer.from(TAIL_ANCHOR, "latin1") }).anchor;
   if (hits.length !== 1) {
     throw new Error(
       `TAIL_ANCHOR found ${hits.length} (want exactly 1 occurrence of ${TAIL_ANCHOR}). The vendored ` +
         "builder changed shape (refactor or minifier change): inspect the new builder in the platform " +
-        "binary, then update the anchor and EXPECTED_TAIL_CALLS in test/helpers/vendored-bwrap-tail.ts.",
+        "binary (`/usr/bin/grep -abo -F '<needle>' node_modules/@anthropic-ai/<pkg>-linux-x64/claude` prints each offset), " +
+        "decide whether the new shape still ends in the /proc mask, and only then update the anchor and EXPECTED_TAIL_CALLS in " +
+        "test/helpers/vendored-bwrap-tail.ts (a re-pin is a security decision, not a way to turn this green).",
     );
   }
   const offset = hits[0];
@@ -240,7 +250,8 @@ export function assertBuilderTail(tail: BuilderTail, label = "binary"): void {
       `changed (terminator found within ${TAIL_WINDOW_BYTES} bytes: ${tail.terminated}). ` +
       `want ${JSON.stringify(EXPECTED_TAIL_CALLS)} got ${JSON.stringify(tail.calls)}. ` +
       "Inspect the new builder first (an added mount after the proc branches can re-cover or re-expose /proc), " +
-      "then update EXPECTED_TAIL_CALLS and regenerate the fixture with the creds-gated sandbox-canary.mjs --capture.",
+      "then update EXPECTED_TAIL_CALLS ONLY if the new sequence still ends in the mask (a re-pin is a security decision, " +
+      "not a way to turn this green). " + FIXTURE_REGEN_HINT,
   );
 }
 
@@ -248,9 +259,13 @@ export function assertBuilderTail(tail: BuilderTail, label = "binary"): void {
 export function builderTailTokens(tail: BuilderTail, branch: "proc" | "bind"): string[] {
   assertBuilderTail(tail, "tokens");
   const out: string[] = [];
-  const picked = branch === "proc" ? 3 : 4;
+  const isProcBranch = (c: { args: string[] }) => c.args[0] === "--proc";
+  const isBindBranch = (c: { args: string[] }) => c.args[0] === "--bind" && c.args[1] === "/proc";
+  const branchStart = tail.calls.findIndex((c) => isProcBranch(c) || isBindBranch(c));
   tail.calls.forEach((c, i) => {
-    if (i >= 3 && i !== picked) return;
+    if (i >= branchStart && branchStart >= 0 && (isProcBranch(c) || isBindBranch(c))) {
+      if (branch === "proc" ? !isProcBranch(c) : !isBindBranch(c)) return;
+    }
     out.push(...c.args);
     if (c.opaque) out.push(CAP_SEGMENT);
   });
@@ -328,9 +343,7 @@ export function assertTailMatchesFixture(
   throw new Error(
     `TAIL_DRIFT [${label}]: the argv tail differs from the committed fixture infra/sandbox-canary-argv.json ` +
       `(tokens from its last --dev, cap segment normalized, proc alternation resolved). ` +
-      `fixture: ${f.join(" ")} | actual: ${a.join(" ")}. Inspect the new vendored builder first; the creds-gated ` +
-      "sandbox-canary.mjs --capture is the ONLY fixture regenerator (no creds-free path exists, by design), " +
-      "and the fixture must never be hand-edited.",
+      `fixture: ${f.join(" ")} | actual: ${a.join(" ")}. Inspect the new vendored builder first. ` + FIXTURE_REGEN_HINT,
   );
 }
 
@@ -421,22 +434,24 @@ export function assertLiteralCensus(
   check("NS_SITE_COUNT", "unsharePid", '"--unshare-pid" literals');
   check("ROOT_SITE_COUNT", "rootBind", '"--ro-bind","/","/" literals');
   check("HOOK_SITE_COUNT", "hookAnchors", "/run/claude-hook literals");
-  const capLines = lines.length;
   check("CAP_BARRIER", "capDropAll", '"--cap-drop","ALL" literals (the operative barrier to the container procfs)');
   check("CAP_BARRIER", "capDropTotal", 'every "--cap-drop" literal (a different drop value is a different barrier)');
   check("CAP_BARRIER", "capAddSetfcap", '"--cap-add","CAP_SETFCAP" literals (the only permitted --cap-add)');
   check("CAP_BARRIER", "capAddTotal", 'every "--cap-add" literal (any other capability is CAP_BARRIER)');
-  if (g.capAddTotal !== g.capAddSetfcap && !lines.some((l) => l.includes("capAddTotal"))) {
-    lines.push(`CAP_BARRIER every --cap-add literal must be CAP_SETFCAP: ${g.capAddTotal} total vs ${g.capAddSetfcap} CAP_SETFCAP`);
-  }
   if (lines.length === 0) return;
-  const procProblem = lines.slice(0, capLines).some((l) => l.startsWith("PROC_SITE_COUNT"));
-  const steps = procProblem
-    ? " A new procfs-mount site in the vendored builder: (1) inspect the new site in the platform binary " +
-      "(python3 -I mmap read around the new offset) and decide whether tenant input can reach it and whether " +
-      "the bwrap shim drops its --proc/--bind /proc, (2) update PINS in apps/web-platform/test/" +
-      "sandbox-vendored-argv-tail.test.ts with the re-measured counts and the measured version."
-    : " Inspect the builder's cap segment in the platform binary, then update PINS in apps/web-platform/test/" +
-      "sandbox-vendored-argv-tail.test.ts only if the barrier is unchanged. Only CAP_SETFCAP may ever be added.";
+  const siteProblem = lines.some((l) => /^(PROC_SITE_COUNT|NS_SITE_COUNT|ROOT_SITE_COUNT|HOOK_SITE_COUNT)\b/.test(l));
+  const capProblem = lines.some((l) => l.startsWith("CAP_BARRIER"));
+  const steps =
+    (siteProblem
+      ? " A site count moved in the vendored builder: (1) inspect the new site in the platform binary " +
+        "(`/usr/bin/grep -abo -F '<needle>' node_modules/@anthropic-ai/<pkg>-linux-x64/claude` prints each offset) and " +
+        "decide whether tenant input can reach it and whether the bwrap shim drops its --proc/--bind /proc, " +
+        "(2) only then update PINS in apps/web-platform/test/sandbox-vendored-argv-tail.test.ts with the re-measured " +
+        "counts and the measured version; a re-pin is a security decision, not a way to turn this green."
+      : "") +
+    (capProblem
+      ? " The cap segment moved: inspect it in the platform binary, then update PINS only if the barrier is unchanged " +
+        "(exactly one --cap-drop ALL; only CAP_SETFCAP may ever be added)."
+      : "");
   throw new Error(`[${label}] (${context}) ${lines.join("; ")}.${steps}`);
 }

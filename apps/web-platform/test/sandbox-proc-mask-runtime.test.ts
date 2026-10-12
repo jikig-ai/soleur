@@ -169,14 +169,24 @@ describe.skipIf(!SANDBOX_OK)("the vendored sandbox spawn reaches our bwrap shim 
     // (the fixture was captured as root; a non-root run records a shorter segment). The relative
     // order check above only sees `--tmpfs`/`--bind` positions; this one sees the whole tail.
     const fixture = readFixtureTail(CANARY_FIXTURE);
-    const setupTails = calls
+    // A setup spawn is selected by its SHAPE (`--dev` and `--unshare-pid` before the boundary), never by the
+    // property under test: selecting on `--tmpfs /proc` would silently skip a spawn that lost the denyRead.
+    const setupSpawns = calls
       .map((call) => call.split("\0").filter(Boolean))
       .filter((toks) => {
         const boundary = toks.indexOf("--");
         const setup = boundary >= 0 ? toks.slice(0, boundary) : toks;
-        return setup.some((t, i) => t === "--tmpfs" && setup[i + 1] === "/proc");
-      })
-      .map((toks) => liveTailOf(toks));
+        return setup.includes("--dev") && setup.includes("--unshare-pid");
+      });
+    for (const toks of setupSpawns) {
+      const boundary = toks.indexOf("--");
+      const setup = boundary >= 0 ? toks.slice(0, boundary) : toks;
+      expect(
+        setup.some((t, i) => t === "--tmpfs" && setup[i + 1] === "/proc"),
+        "a setup spawn lacks the config's `--tmpfs /proc` denyRead",
+      ).toBe(true);
+    }
+    const setupTails = setupSpawns.map((toks) => liveTailOf(toks));
     expect(setupTails.length, "TAIL_DRIFT: no recorded setup spawn to compare against the fixture tail").toBeGreaterThan(0);
     for (const tail of setupTails) {
       expect(tail, "TAIL_DRIFT: a setup spawn has no --dev before the -- boundary").not.toBeNull();
@@ -222,11 +232,11 @@ describe("live-spawn tail comparison (pure rows)", () => {
     expect(drift(noDrop)).toMatch(/CAP_BARRIER/);
   });
 
-  it("an extra `--tmpfs /proc` after the bind is TAIL_DRIFT naming the creds-gated --capture as the only regenerator", () => {
+  it("an extra `--tmpfs /proc` after the bind is TAIL_DRIFT naming the in-image regeneration command", () => {
     const msg = drift([...fixture, "--tmpfs", "/proc"]);
     expect(msg).toMatch(/TAIL_DRIFT/);
-    expect(msg).toMatch(/--capture/);
-    expect(msg).toMatch(/ONLY fixture regenerator/);
+    expect(msg).toMatch(/SANDBOX_CANARY_MODE=capture/);
+    expect(msg).toMatch(/never hand-edit the fixture/);
   });
 
   it("a spawn whose proc branch flipped to `--proc /proc` is TAIL_DRIFT", () => {

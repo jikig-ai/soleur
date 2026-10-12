@@ -13,7 +13,7 @@
 // reads, then re-derived by the helper); each pin names the version it was measured on. A new
 // procfs-mount site in a bump reds `PROC_SITE_COUNT`; a changed tail reds `TAIL_LITERALS`.
 
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -207,9 +207,24 @@ describe("sandbox-vendored-argv-tail: synthetic mutation rows (extractor + censu
   });
 
   it("a terminator `.push(\"--\",` beyond the 4 KiB window reds TAIL_LITERALS (bounded window)", () => {
-    const anchor = `Xe.push("--dev","/dev"),Xe.push("--unshare-pid");Xe.push("--unshare-user"),`;
-    const far = Buffer.from(`${anchor}${"y".repeat(5000)}Xe.push("--",Ie);`, "latin1");
+    // The complete expected sequence is present, so an UNBOUNDED window would pass; only the 4 KiB bound can red it.
+    const head = `Xe.push("--dev","/dev"),Xe.push("--unshare-pid");Xe.push("--unshare-user",...CAP({euid:1})),`;
+    const rest = `if(!ee)Xe.push("--proc","/proc");else Xe.push("--bind","/proc","/proc");Xe.push("--",Ie);`;
+    const unbounded = Buffer.from(`${head}${rest}`, "latin1");
+    const far = Buffer.from(`${head}${"y".repeat(5000)}${rest}`, "latin1");
+    expect(failureOf(() => assertBuilderTail(extractBuilderTail(unbounded), "synthetic"))).toBe("");
     expect(failureOf(() => assertBuilderTail(extractBuilderTail(far), "synthetic"))).toMatch(/TAIL_LITERALS/);
+  });
+
+  it("REMOVAL direction: a vanished root bind or a vanished hook sandbox reds its own census code, never passes", () => {
+    expect(failureOf(() => verify(synth({ noRootBind: true }), SDK_LIKE, "claude-agent-sdk"))).toMatch(
+      /ROOT_SITE_COUNT want 1 got 0/,
+    );
+    // The CLI pin names a hook sandbox; a buffer without one must red both hook codes (a respelled builder
+    // would otherwise count 0 sites and read clean).
+    const msg = failureOf(() => verify(synth({ withHookSite: false }), CLI_LIKE, "claude-code"));
+    expect(msg).toMatch(/HOOK_SITE_COUNT want 2 got 0/);
+    expect(msg).toMatch(/PROC_SITE_COUNT want 1 got 0/);
   });
 
   it("a second `\"--proc\",\"/proc\"` site reds `PROC_SITE_COUNT want 1 got 2` naming inspect-and-update steps", () => {
@@ -320,7 +335,8 @@ describe("sandbox-vendored-argv-tail: fixture tail equality (synthetic)", () => 
       assertTailMatchesFixture(builderTailTokens(tail, "bind"), [...fixtureTail(), "--tmpfs", "/proc"], "synthetic"),
     );
     expect(msg).toMatch(/TAIL_DRIFT/);
-    expect(msg).toMatch(/--capture/);
+    expect(msg).toMatch(/SANDBOX_CANARY_MODE=capture/);
+    expect(msg).toMatch(/Without credentials, stop and report/);
   });
 
   it("a fixture that lacks the `--bind /proc /proc` tail reds TAIL_DRIFT", () => {
@@ -352,62 +368,61 @@ describe.skipIf(SKIP_REAL)("sandbox-vendored-argv-tail: real vendored binaries",
         REAL_BINARY_TIMEOUT_MS,
       );
 
-      it(
-        "the builder tail is exactly the expected literal call sequence (TAIL_ANCHOR / TAIL_LITERALS)",
-        () => {
-          const bin = resolveVendoredBinary(pkg, join(APP_ROOT, "node_modules"));
-          const fs = fileSource(bin.path);
-          try {
-            const tail = extractBuilderTailFrom(fs.source);
-            expect(failureOf(() => assertBuilderTail(tail, `${pkg}@${bin.version}`))).toBe("");
-          } finally {
-            fs.close();
-          }
-        },
-        REAL_BINARY_TIMEOUT_MS,
-      );
+      // One read of the ~250 MB binary per package: the tail and the census are computed once and every row
+      // below asserts on them (each row used to reopen and rescan the file).
+      let scanned: { version: string; tail: ReturnType<typeof extractBuilderTailFrom>; census: ReturnType<typeof scanLiterals> };
+      beforeAll(() => {
+        const bin = resolveVendoredBinary(pkg, join(APP_ROOT, "node_modules"));
+        const fs = fileSource(bin.path);
+        try {
+          scanned = { version: bin.version, tail: extractBuilderTailFrom(fs.source), census: scanLiterals(fs.source) };
+        } finally {
+          fs.close();
+        }
+      }, REAL_BINARY_TIMEOUT_MS);
 
-      it(
-        "the procfs-mount, root-bind, cap-drop and cap-add literal census equals the measured pin",
-        () => {
-          const bin = resolveVendoredBinary(pkg, join(APP_ROOT, "node_modules"));
-          const fs = fileSource(bin.path);
-          try {
-            const census = scanLiterals(fs.source);
-            const msg = failureOf(() =>
-              assertLiteralCensus(census, pins, `${pkg}@${bin.version}`, `measured on ${pins.measuredVersion}`),
-            );
-            expect(msg).toBe("");
-          } finally {
-            fs.close();
-          }
-        },
-        REAL_BINARY_TIMEOUT_MS,
-      );
+      it("the builder tail is exactly the expected literal call sequence (TAIL_ANCHOR / TAIL_LITERALS)", () => {
+        expect(failureOf(() => assertBuilderTail(scanned.tail, `${pkg}@${scanned.version}`))).toBe("");
+      });
 
-      it(
-        "the builder tail equals the committed fixture tail (infra/sandbox-canary-argv.json), cap segment normalized",
-        () => {
-          const bin = resolveVendoredBinary(pkg, join(APP_ROOT, "node_modules"));
-          const fs = fileSource(bin.path);
-          try {
-            const tail = extractBuilderTailFrom(fs.source);
-            const msg = failureOf(() =>
-              assertTailMatchesFixture(
-                builderTailTokens(tail, selectedProcBranch()),
-                fixtureTail(),
-                `${pkg}@${bin.version}`,
-              ),
-            );
-            expect(msg).toBe("");
-          } finally {
-            fs.close();
-          }
-        },
-        REAL_BINARY_TIMEOUT_MS,
-      );
+      it("the procfs-mount, root-bind, cap-drop and cap-add literal census equals the measured pin", () => {
+        const msg = failureOf(() =>
+          assertLiteralCensus(scanned.census, pins, `${pkg}@${scanned.version}`, `measured on ${pins.measuredVersion}`),
+        );
+        expect(msg).toBe("");
+      });
+
+      it("the builder tail equals the committed fixture tail (infra/sandbox-canary-argv.json), cap segment normalized", () => {
+        const msg = failureOf(() =>
+          assertTailMatchesFixture(
+            builderTailTokens(scanned.tail, selectedProcBranch()),
+            fixtureTail(),
+            `${pkg}@${scanned.version}`,
+          ),
+        );
+        expect(msg).toBe("");
+      });
     });
   }
+});
+
+describe("sandbox-vendored-argv-tail: the scanned x64 binary stands for every platform package", () => {
+  it("package-lock.json pins every linux variant (x64, x64-musl, arm64, arm64-musl) of each package to the measured version", () => {
+    const lock = JSON.parse(readFileSync(join(APP_ROOT, "package-lock.json"), "utf8")) as {
+      packages: Record<string, { version?: string }>;
+    };
+    for (const pkg of PKGS) {
+      const variants = ["linux-x64", "linux-x64-musl", "linux-arm64", "linux-arm64-musl"];
+      for (const v of variants) {
+        const entry = lock.packages[`node_modules/@anthropic-ai/${pkg}-${v}`];
+        expect(entry, `${pkg}-${v} is missing from package-lock.json (a platform variant that is no longer pinned)`).toBeDefined();
+        expect(
+          entry?.version,
+          `${pkg}-${v} is pinned to ${entry?.version}, the scan measured ${PINS[pkg].measuredVersion}: the builder in another platform package may differ`,
+        ).toBe(PINS[pkg].measuredVersion);
+      }
+    }
+  });
 });
 
 describe("sandbox-vendored-argv-tail: independence from the ack trailer and git state", () => {

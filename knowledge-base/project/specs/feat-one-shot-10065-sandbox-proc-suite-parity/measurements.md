@@ -44,5 +44,6 @@ tuple check does not read `--env-file` content, and nothing in this diff edits a
 
 - M1: branch (b). The outer-wrap replay under the masks cannot be asserted in the unprivileged suite image (`wrong_elevation_userns`, unrelated to /proc),
   and a weaker assertion would pass for the wrong reason. The static pins (constants, literal census, outer fixture pin that already exists) ship; the
-  missing runtime replay is tracked by the issue linked from the PR body.
+  missing runtime replay is tracked in #10115 (the consolidated residual-gaps tracker; the SOLEUR_BWRAP_* hijack-list
+  residual below is item 1 there).
 - M2: branch (a). The C4 argv replay runs under the masks in the docker suite with a pass assertion.

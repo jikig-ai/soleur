@@ -48,7 +48,8 @@
 #     --bind-fd/--ro-bind-fd with dest /proc), in the outer argv AND inside
 #     every consumed --args payload (re-emit is selective, never verbatim).
 #     The vendored denyRead `--tmpfs /proc` then lands as the realized mask
-#     — an empty, mountless /proc, stronger than a pidns-scoped procfs and
+#     — an empty /proc tmpfs (the container's procfs sits beneath it, see
+#     below), stronger than a pidns-scoped procfs and
 #     impossible to defeat with mount ordering. Dropping (not covering) makes
 #     the stream carry NO argv-requested procfs mount at /proc, which is the
 #     property this shim states and the docker suite's recorder arm asserts.

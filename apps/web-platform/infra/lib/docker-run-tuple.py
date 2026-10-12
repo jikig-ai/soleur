@@ -25,6 +25,14 @@ too. It defaults to the repo root derived from this file's location.
 Tokens: UNKNOWN_OPTION, POSTURE_VALUE, TUPLE_COUNT, POSTURE_DIVERGENCE, ENV_NAME, UNPARSEABLE_OPTION,
 UNCLASSIFIED_DOCKER_RUN, TRAILING_ARGS, DUPLICATE_OPTION.
 
+What this proves and what it does not: the closed set lives here and the tuples live in the files this parses, and one
+diff can edit both, so a green check is CONSISTENCY between the two, not INTEGRITY of the posture. What outside the
+commit also has to move for a weakening to pass: the pinned digest literals in docker-run-tuple.test.sh and in
+test/docker-run-tuple-posture.test.ts (a second and third file), and, for systempaths=unconfined, the suite's runtime
+control arm. The census is a text scan: it covers the two main files plus the app container NAME anywhere under the
+infra directory and .github/workflows; a start site of the app image under a variable name in another file is not seen,
+and it reads the COMMITTED files only (a container started out of band on a host is not seen). Tracked in #10115.
+
 Stated residuals (outside the closed set by design, not claimed closed): the CONTENT of --env-file (Doppler prd;
 ci-deploy.sh overlay_github_app_key refuses runtime-hijack names such as PATH and LD_* only when that overlay
 runs) and the value of -e NODE_OPTIONS (pinned to the --max-old-space-size assignment lines, not to the flag set).
@@ -36,6 +44,7 @@ import hashlib
 import os
 import re
 import shlex
+import stat
 import sys
 
 MAX_LINE = 32768          # a logical line longer than this is never tokenized or regex-scanned
@@ -52,7 +61,8 @@ SECCOMP = "seccomp=/etc/docker/seccomp-profiles/soleur-bwrap.json"
 TMPFS = "/tmp:rw,nosuid,nodev,size=256m"
 LOG_DRIVERS = {"journald"}
 ADD_HOSTS = {"host.docker.internal:host-gateway"}
-MEM_LITERAL = re.compile(r"^[0-9]+[bkmgBKMG]?$")
+# a positive limit only: `--memory 0` means UNLIMITED in docker, which would pass a bare [0-9]+ pattern
+MEM_LITERAL = re.compile(r"^[1-9][0-9]*[bkmgBKMG]?$")
 
 _COMMON_ENV = {
     "INNGEST_BASE_URL": {"http://10.0.1.40:8288"},
@@ -99,7 +109,6 @@ EXEMPT_CREATE = {
 FLAGS = {"-d", "--init"}
 VALUE_OPTS = {"--name", "--log-driver", "--restart", "--memory", "--memory-swap", "--security-opt", "--tmpfs",
               "--env-file", "--add-host", "-e", "--env", "-v", "-p"}
-SINGLE = {"-d", "--init", "--name", "--log-driver", "--restart", "--memory", "--memory-swap", "--tmpfs", "--env-file"}
 
 NAME_RE = re.compile(r"--name(?:=|\s+)[\"']?soleur-web-platform")
 HEREDOC_RE = re.compile(r"(?<!<)<<-?\s*([\"']?)([A-Za-z_][A-Za-z0-9_]*)\1")
@@ -112,6 +121,11 @@ NODE_ASSIGN_RE = re.compile(r"(?<![\w$])(PROD|CANARY)_NODE_OPTIONS\s*\+?=")
 BOUNDARY_WORDS = {"if", "then", "do", "else", "elif", "while", "until", "!", "&&", "||", ";", "|", "&", "(", "{", "time"}
 WRAPPERS = {"sudo", "env", "command", "exec", "nohup", "nice", "ionice", "stdbuf", "timeout", "time"}
 ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=\S*$")
+# An exempt site is a named exception to the census, not an exception to the posture: it may never carry a
+# privilege-class option, so a `docker create --privileged ...` of an exempt name (later `docker start`ed)
+# cannot ride the exemption. (`--network host` is deliberately NOT denied: the cosign verifier run uses it.)
+EXEMPT_DENY_RE = re.compile(r"^(?:--privileged|--cap-add|--pid|--ipc|--uts|--userns|--cgroupns|--device|--security-opt)(?:=|$)")
+CASE_LABEL_RE = re.compile(r"^[^()\s]*\)$")
 TIMEOUT_ARG_RE = re.compile(r"^(?:\d+[smhd]?|-{1,2}[\w-]+(?:=\S*)?)$")
 
 
@@ -144,6 +158,42 @@ class Logical:
 
     def __init__(self, start, end, text, oversize, heredoc):
         self.start, self.end, self.text, self.oversize, self.heredoc = start, end, text, oversize, heredoc
+
+
+def heredoc_tags(text):
+    """Heredoc tags the line really opens: a `<<` inside quotes or inside `$(( ))` / `(( ))` arithmetic is a
+    shift or a string, and treating it as an opener would hide every following line from the census."""
+    tags = []
+    sq = dq = False
+    arith = 0
+    i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c == "\\" and not sq:
+            i += 2
+            continue
+        if c == "'" and not dq:
+            sq = not sq
+        elif c == '"' and not sq:
+            dq = not dq
+        elif not sq and not dq:
+            if text.startswith("((", i):
+                arith += 1
+                i += 2
+                continue
+            if arith and text.startswith("))", i):
+                arith -= 1
+                i += 2
+                continue
+            if not arith and text.startswith("<<", i):
+                m = HEREDOC_RE.match(text, i)
+                if m:
+                    tags.append(m.group(2))
+                    i = m.end()
+                    continue
+        i += 1
+    return tags
 
 
 def ends_with_continuation(raw):
@@ -188,7 +238,7 @@ def logical_lines(text):
                 parts.append((nstrip[:-1] if cont else nstrip).strip())
         joined = " ".join(parts)
         out.append(Logical(start + 1, i + 1, joined[:MAX_LINE], size > MAX_LINE, False))
-        tags = [m.group(2) for m in HEREDOC_RE.finditer(joined[:MAX_LINE])]
+        tags = heredoc_tags(joined[:MAX_LINE])
         if tags:
             active = (tags[0], start + 1)
             pending = tags[1:]
@@ -206,7 +256,7 @@ def cmd_position(prefix):
     i = len(toks)
     while i > 0:
         t = toks[i - 1]
-        if t in BOUNDARY_WORDS or t.endswith((";", "(", "{", "|", "&", "`")):
+        if t in BOUNDARY_WORDS or t.endswith((";", "(", "{", "|", "&", "`")) or CASE_LABEL_RE.match(t):
             return True
         if t == "-" and i == 1:
             return True            # YAML list marker
@@ -276,7 +326,6 @@ def find_sites(lines, fname):
                 nm = re.search(r"--name(?:=|\s+)[\"']?([\w$.{}-]+)", s.text)
                 s.name = nm.group(1) if nm else None
             sites.append(s)
-            break   # one site per logical line: a second docker word on it is part of the same statement
     return sites
 
 
@@ -306,7 +355,7 @@ def walk_options(site, spec, tuple_name):
             end = k
             break
     tail = toks[end:]
-    opts = toks[2:end] if site.plain else toks[2:end]
+    opts = toks[2:end]
     n = len(opts)
     seen = {}
     env_seen = set()
@@ -524,10 +573,16 @@ def resolve_layout(root):
 
 def read_text(path):
     try:
-        if os.path.getsize(path) > MAX_FILE:
+        st = os.lstat(path)
+        if not stat.S_ISREG(st.st_mode):
+            return None, "not a regular file (a symlink or device is never followed)"
+        if st.st_size > MAX_FILE:
             return None, "larger than %d bytes" % MAX_FILE
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
-            return fh.read(), None
+            data = fh.read(MAX_FILE + 1)
+        if len(data) > MAX_FILE:
+            return None, "larger than %d bytes" % MAX_FILE
+        return data, None
     except OSError as e:
         return None, str(e.strerror or e)
 
@@ -573,7 +628,7 @@ def scan(root):
                 own.update(range(s.line, s.end_line + 1))
                 extra.append("FAIL UNCLASSIFIED_DOCKER_RUN: %s:%d %s" % (fname, s.line, reason))
         for lg in lines:
-            if lg.heredoc or lg.oversize or lg.start in own or "docker" not in lg.text:
+            if lg.heredoc or lg.oversize or lg.start in own or "docker" not in lg.text.lower():
                 continue
             if INDIRECT_RE.search(lg.text) and docker_verb_anywhere(lg.text):
                 own.update(range(lg.start, lg.end + 1))
@@ -653,6 +708,9 @@ def classify_site(s, fname):
         s.rec, s.option_viols = walk_options(s, spec, ident)
         return None
     # exempt sites
+    bad_opt = [t for t in s.toks if EXEMPT_DENY_RE.match(t)]
+    if bad_opt:
+        return "docker %s site carries privilege-class option %s and is not a declared app tuple" % (s.verb, bad_opt[0])
     if s.verb == "run" and s.plain and "--rm" in s.toks and any((fname, "image", t) in EXEMPT_RUN for t in s.toks):
         s.kind = "exempt"
         return None
@@ -694,6 +752,28 @@ def digest():
     return hashlib.sha256(proj.encode()).hexdigest()[:12]
 
 
+HINTS = {
+    "UNKNOWN_OPTION": "remove the option from the tuple; widen the closed set here only with a security review, a posture option is never an allowlist entry",
+    "POSTURE_VALUE": "restore the declared value; the declared posture constants are edited only with a security review",
+    "ENV_NAME": "remove the environment variable from the tuple (PATH, loader and runtime-hijack names are never allowed)",
+    "DUPLICATE_OPTION": "keep exactly one occurrence; docker honours the last, so a second one hides the first",
+    "TRAILING_ARGS": "nothing may follow the image except `; then`",
+    "TUPLE_COUNT": "a start site was added, moved or renamed: declare it together with the site and keep the three-tuple expectation; never lower the count",
+    "UNCLASSIFIED_DOCKER_RUN": "declare it as an app tuple, or add a NAMED non-app exemption (EXEMPT_RUN / EXEMPT_CREATE); an exempt site may not carry privilege-class options",
+    "POSTURE_DIVERGENCE": "restore the apparmor, seccomp and tmpfs options on the named tuple",
+    "UNPARSEABLE_OPTION": "make the option literal; a variable, substitution or heredoc trick in option position is refused",
+}
+
+
+def hints(viols):
+    seen = []
+    for line in viols:
+        tok = line.split(":", 1)[0].replace("FAIL ", "", 1)
+        if tok in HINTS and tok not in seen:
+            seen.append(tok)
+    return ["HINT %s: %s" % (t, HINTS[t]) for t in seen]
+
+
 def default_root():
     here = os.path.dirname(os.path.abspath(__file__))
     return os.path.abspath(os.path.join(here, "..", "..", "..", ".."))
@@ -714,11 +794,13 @@ def main(argv):
         if viols:
             for line in viols:
                 print(line)
+            for line in hints(viols):
+                print(line)
             return 1
         print("docker-run-tuple:ok tuples=%d posture=%s" % (len(app_sites), digest()))
         return 0
     if viols:
-        for line in viols:
+        for line in viols + hints(viols):
             print(line, file=sys.stderr)
         return 1
     site = [s for s in app_sites if s.tuple == args.tuple_name][0]

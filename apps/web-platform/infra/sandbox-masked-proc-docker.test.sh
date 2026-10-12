@@ -44,8 +44,9 @@
 # nothing about it.
 #
 # NEVER SELF-SKIPS. An unusable environment fails with a literal token and exit 1 (DOCKER_UNAVAILABLE,
-# APPARMOR_UNAVAILABLE, SYSCTL_UNAVAILABLE, IMAGE_BUILD_FAILED, IMAGE_DRIFT, TUPLE_CHECK, FIXTURE_TAIL, BASE_LINEAGE,
-# PATH_ORDER, USER_DRIFT) — the opposite of sandbox-canary-regression.test.sh section B, whose never-fail
+# APPARMOR_UNAVAILABLE, SYSCTL_UNAVAILABLE, IMAGE_BUILD_FAILED, CONTAINER_START_FAILED, IMAGE_DRIFT, TUPLE_CHECK,
+# FIXTURE_TAIL, BASE_LINEAGE, PATH_ORDER, ELEVATION, USER_DRIFT, DROP_FAILED, SRC_ROOT_REFUSED, MUTATION_UNKNOWN,
+# MUTATION_NOT_APPLIED) — the opposite of sandbox-canary-regression.test.sh section B, whose never-fail
 # classification is the property that let this class ship.
 #
 # PRIVILEGED. Loads an AppArmor profile (apparmor_parser) and sets a sysctl, so it is invoked under `sudo` from the
@@ -67,6 +68,10 @@ SECCOMP="$SCRIPT_DIR/seccomp-bwrap.json"
 APPARMOR_PROFILE="$SCRIPT_DIR/apparmor-soleur-bwrap.profile"
 TUPLE_PY="$SCRIPT_DIR/lib/docker-run-tuple.py"
 MUTATE="${SANDBOX_MASKED_PROC_MUTATE:-}"
+case "$MUTATE" in
+  ""|shim-splice|shim-bypass|shim-cover|shim-path|control-unmasked|sleeper-after|no-replay) : ;;
+  *) echo "FAIL: MUTATION_UNKNOWN: SANDBOX_MASKED_PROC_MUTATE='$MUTATE' is not a seam of this suite (a typo would otherwise run the unmutated baseline and read as a surviving mutant)"; exit 1 ;;
+esac
 IMG="soleur-masked-proc-regression:$$"
 CTR="smp$$"
 WORK="$(mktemp -d "${TMPDIR:-/var/tmp}/sandbox-masked-proc.XXXXXXXX")"
@@ -124,7 +129,7 @@ if [[ "$TUPLE_RC" -eq 0 && "$TUPLE_OUT" == "docker-run-tuple:ok tuples=3 "* ]]; 
   pass "static: the three app-container docker run tuples are a closed set (${TUPLE_OUT})"
 else
   echo "$TUPLE_OUT"
-  die "TUPLE_CHECK: docker-run-tuple.py check rc=$TUPLE_RC: $(printf '%s' "$TUPLE_OUT" | head -c 300)"
+  die "TUPLE_CHECK: docker-run-tuple.py check rc=$TUPLE_RC: $(printf '%s' "$TUPLE_OUT" | head -c 1200) -- reproduce without docker in one second: python3 -I apps/web-platform/infra/lib/docker-run-tuple.py check"
 fi
 
 # 1b. The container's docker options are the PROD tuple's posture, line by line (`--opt value`). The seccomp path is the host
@@ -176,7 +181,7 @@ stage_ref() { # <stage name> -> its FROM reference (empty when the stage does no
   return 0
 }
 is_stage() { [[ -n "$(stage_ref "$1")" ]]; }
-(( ${#STAGE_NAMES[@]} > 0 )) || die "BASE_LINEAGE: no FROM instruction was parsed from $DOCKERFILE"
+(( ${#STAGE_NAMES[@]} > 0 )) || die "BASE_LINEAGE: no FROM instruction was parsed from $DOCKERFILE (this arm needs no docker: run the suite on any host, it stops after the static arms)"
 RUNNER_FROM="$(stage_ref runner)"
 [[ -n "$RUNNER_FROM" ]] || die "BASE_LINEAGE: $DOCKERFILE has no stage named runner"
 [[ "$RUNNER_FROM" == "cli-tools" ]] || die "BASE_LINEAGE: runner is FROM '$RUNNER_FROM', the shipped lineage is runner -> cli-tools"
@@ -214,7 +219,7 @@ while IFS= read -r dline; do
       CUR_STAGE="-"
       read -r -a ftok <<<"$dline"
       fi=1; [[ "${ftok[1]}" == --* ]] && fi=2
-      [[ "${ftok[fi + 1]^^}" == "AS" && -n "${ftok[fi + 2]:-}" ]] && CUR_STAGE="${ftok[fi + 2],,}"
+      [[ "${ftok[fi + 1]:-}" =~ ^[Aa][Ss]$ && -n "${ftok[fi + 2]:-}" ]] && CUR_STAGE="${ftok[fi + 2],,}"
       ;;
     "ENV "*)
       [[ "$CUR_STAGE" == "runner" || "$CUR_STAGE" == "cli-tools" ]] || continue
@@ -232,12 +237,29 @@ while IFS= read -r dline; do
         pv="${pv#\"}"; pv="${pv%\"}"
         pv="${pv//\$\{PATH\}/$BASE_PATH}"; pv="${pv//\$PATH/$BASE_PATH}"
         PATH_ENVS=$((PATH_ENVS + 1))
+        [[ "$pv" != *'$'* ]] || die "PATH_ORDER: stage $CUR_STAGE sets PATH to '$pv', which carries an unresolved variable (an ARG or ENV expansion cannot be ordered statically; write the literal PATH)"
         path_order_ok "$pv" || die "PATH_ORDER: stage $CUR_STAGE sets PATH to '$pv', /usr/bin precedes /usr/local/bin (the shim at /usr/local/bin/bwrap would be shadowed by the real bwrap)"
       fi
       ;;
   esac
 done < <(sed -e ':a' -e '/\\$/{N;s/\\\n//;ba' -e '}' "$DOCKERFILE")
 pass "static: no ENV PATH in the runner lineage puts /usr/bin before /usr/local/bin ($PATH_ENVS PATH assignment(s) read)"
+
+# 3b. The production bwrap is UNELEVATED: ADR-075's reasoning (a drop and a cover differ only for a process holding
+#     CAP_SYS_ADMIN; unprivileged bwrap drops every capability after setup) and the umount measurement in
+#     measurements.md hold only then. A setuid or file-capability bwrap would re-open that question, so an
+#     instruction that elevates it is a red here until the decision is re-made.
+ELEV_HIT=""
+while IFS= read -r dline; do
+  dline="${dline#"${dline%%[![:space:]]*}"}"
+  [[ "$dline" == \#* ]] && continue
+  if [[ "$dline" == *bwrap* ]] && { [[ "$dline" == *setcap* ]] || [[ "$dline" =~ chmod[^#]*(\+s|[[:space:]][0-7]?[4-7][0-7][0-7][0-7]([[:space:]]|$)) ]]; }; then
+    ELEV_HIT="$dline"
+    break
+  fi
+done < <(sed -e ':a' -e '/\\$/{N;s/\\\n//;ba' -e '}' "$DOCKERFILE")
+[[ -z "$ELEV_HIT" ]] || die "ELEVATION: the Dockerfile elevates bwrap ($(printf '%s' "$ELEV_HIT" | head -c 160)); ADR-075's cap-drop reasoning and the suite's unprivileged-bwrap measurements no longer describe production, re-decide before changing this arm"
+pass "static: no Dockerfile instruction elevates the production bwrap (no setcap, no setuid chmod)"
 
 # 4. The uid the suite container runs as is the one the Dockerfile creates, and the last USER is the app user.
 APP_UID_ALL="$(sed -n 's/.*useradd.*--uid[ =]\([0-9][0-9]*\).*/\1/p' "$DOCKERFILE")"
@@ -286,19 +308,26 @@ pass "static: the isolation argv is derived from the canary fixture (${#ISO_ARGV
 
 # 6. The argv analyzer behind the recorder arm. It is a pure function, so it is driven here with synthetic argv first:
 #    every spelling of a procfs mount at /proc must be flagged, and ordinary non-/proc mounts must pass.
-norm_path() { # collapse //, /./ and trailing / or /.
-  local p="$1"
-  while [[ "$p" == *//* ]]; do p="${p//\/\//\/}"; done
-  while [[ "$p" == */./* ]]; do p="${p//\/.\//\/}"; done
-  [[ "$p" == */. ]] && p="${p%/.}"
-  [[ "$p" != "/" ]] && p="${p%/}"
-  printf '%s' "${p:-/}"
+norm_path() { # collapse //, /./, .. and a trailing /; a relative path is returned as is
+  local p="$1" seg
+  local -a segs=() out=()
+  [[ "$p" == /* ]] || { printf '%s' "$p"; return 0; }
+  IFS='/' read -r -a segs <<<"$p"
+  for seg in "${segs[@]}"; do
+    case "$seg" in
+      ""|.) : ;;
+      ..) if (( ${#out[@]} > 0 )); then unset 'out[${#out[@]}-1]'; fi ;;
+      *) out+=("$seg") ;;
+    esac
+  done
+  local IFS=/
+  printf '/%s' "${out[*]}"
 }
 DROP_WHY=""
 drop_check() { # <argv token>... — 0 when no procfs mount is requested at /proc and exactly one `--tmpfs /proc` is present
   DROP_WHY=""
   local -a a=("$@")
-  local n=${#a[@]} i=0 tok tmpfs_proc=0 src dst
+  local n=${#a[@]} i=0 tok tmpfs_proc=0 src dst tmpfs_at=-1 root_bind_at=-1
   if (( n == 0 )); then DROP_WHY="empty argv (the recorder recorded nothing)"; return 1; fi
   while (( i < n )); do
     tok="${a[i]}"
@@ -306,18 +335,23 @@ drop_check() { # <argv token>... — 0 when no procfs mount is requested at /pro
       --) break ;;
       --proc) DROP_WHY="--proc ${a[i + 1]:-} requested"; return 1 ;;
       --tmpfs)
-        [[ "$(norm_path "${a[i + 1]:-}")" == /proc ]] && tmpfs_proc=$((tmpfs_proc + 1))
+        if [[ "$(norm_path "${a[i + 1]:-}")" == /proc ]]; then tmpfs_proc=$((tmpfs_proc + 1)); tmpfs_at=$i; fi
         i=$((i + 2)) ;;
       --bind|--ro-bind|--bind-try|--ro-bind-try|--dev-bind|--dev-bind-try)
         src="$(norm_path "${a[i + 1]:-}")"; dst="$(norm_path "${a[i + 2]:-}")"
         if [[ "$src" == /proc || "$dst" == /proc ]]; then DROP_WHY="$tok ${a[i + 1]:-} ${a[i + 2]:-} mounts procfs at /proc"; return 1; fi
+        [[ "$dst" == / ]] && root_bind_at=$i
         i=$((i + 3)) ;;
       --bind-fd|--ro-bind-fd)
         dst="$(norm_path "${a[i + 2]:-}")"
         if [[ "$dst" == /proc ]]; then DROP_WHY="$tok ${a[i + 1]:-} ${a[i + 2]:-} mounts at /proc"; return 1; fi
         i=$((i + 3)) ;;
-      --symlink|--setenv|--file|--bind-data|--ro-bind-data) i=$((i + 3)) ;;
-      --dev|--dir|--remount-ro|--chdir|--uid|--gid|--hostname|--unsetenv|--mqueue|--add-seccomp-fd|--seccomp|--json-status-fd|--userns-block-fd|--info-fd|--sync-fd|--block-fd|--cap-add|--cap-drop|--size|--perms|--exec-label|--file-label|--args|--lock-file|--userns|--userns2|--pidns)
+      --symlink|--file|--bind-data|--ro-bind-data)
+        dst="$(norm_path "${a[i + 2]:-}")"
+        if [[ "$dst" == /proc ]]; then DROP_WHY="$tok ${a[i + 1]:-} ${a[i + 2]:-} creates an entry at /proc"; return 1; fi
+        i=$((i + 3)) ;;
+      --setenv) i=$((i + 3)) ;;
+      --dev|--dir|--remount-ro|--chdir|--uid|--gid|--hostname|--unsetenv|--mqueue|--add-seccomp-fd|--seccomp|--json-status-fd|--userns-block-fd|--info-fd|--sync-fd|--block-fd|--cap-add|--cap-drop|--size|--perms|--exec-label|--file-label|--lock-file|--userns|--userns2|--pidns)
         i=$((i + 2)) ;;
       --unshare-all|--unshare-user|--unshare-user-try|--unshare-ipc|--unshare-pid|--unshare-net|--unshare-uts|--unshare-cgroup|--unshare-cgroup-try|--share-net|--new-session|--die-with-parent|--as-pid-1|--disable-userns|--assert-userns-disabled|--clearenv)
         i=$((i + 1)) ;;
@@ -325,13 +359,15 @@ drop_check() { # <argv token>... — 0 when no procfs mount is requested at /pro
     esac
   done
   if (( tmpfs_proc != 1 )); then DROP_WHY="expected exactly one --tmpfs /proc, saw $tmpfs_proc"; return 1; fi
+  if (( root_bind_at > tmpfs_at )); then DROP_WHY="--tmpfs /proc comes BEFORE the recursive root bind, so the container procfs is re-exposed over the mask"; return 1; fi
   return 0
 }
 drop_expect() { # <ok|bad> <label> <argv token>...
-  local want="$1" label="$2"; shift 2
+  local verdict_want="$1" label="$2"; shift 2
   local got=bad
   drop_check "$@" && got=ok
-  if [[ "$got" == "$want" ]]; then pass "analyzer: $label ($want${DROP_WHY:+: $DROP_WHY})"; else fail "analyzer: $label expected $want, got $got (${DROP_WHY:-no reason})"; fi
+  # shellcheck disable=SC2128  # DROP_WHY is always a scalar string; shellcheck reads it as an array from the ${a[i + 1]:-} text in its assignments
+  if [[ "$got" == "$verdict_want" ]]; then pass "analyzer: $label ($verdict_want${DROP_WHY:+: $DROP_WHY})"; else fail "analyzer: $label expected $verdict_want, got $got (${DROP_WHY:-no reason})"; fi
 }
 DROP_BASE=(--add-seccomp-fd 10 --unshare-user --unshare-pid --ro-bind / / --tmpfs /proc --dev /dev)
 drop_expect ok  "a dropped tail (the shim's output shape)"                     "${DROP_BASE[@]}" -- true
@@ -347,6 +383,10 @@ drop_expect bad "a cover (a second --tmpfs /proc after the vendor bind)"       "
 drop_expect bad "no --tmpfs /proc at all"                                      --unshare-user --ro-bind / / --dev /dev -- true
 drop_expect bad "an option the analyzer does not model"                        "${DROP_BASE[@]}" --frobnicate x -- true
 drop_expect bad "an empty argv"
+drop_expect bad "a bind destination spelled through .."                        "${DROP_BASE[@]}" --bind /x /a/../proc -- true
+drop_expect bad "a symlink created at /proc"                                  "${DROP_BASE[@]}" --symlink x /proc -- true
+drop_expect bad "an --args payload the analyzer cannot read"                  --args 4 "${DROP_BASE[@]}" -- true
+drop_expect bad "the --tmpfs /proc placed before the recursive root bind"     --unshare-user --tmpfs /proc --ro-bind / / --dev /dev -- true
 
 # ---------------------------------------------------------------------------
 # Environment — every failure is a literal token, never a skip.
@@ -486,7 +526,7 @@ start_container() { # <name> <extra docker run option...> — the prod tuple's p
   done
   docker run -d --name "$name" -u "$APP_UID" "${opts[@]}" "$@" \
     -v "$APP_DIR:/app:ro" -v "$SHIM_MOUNT:$SHIM_TARGET:ro" -v "$WORK/rec-bwrap:/usr/local/lib/suite-rec-bwrap:ro" "${EXTRA_MOUNTS[@]}" -e HOME=/home/soleur \
-    "$IMG" sleep 3600 >/dev/null 2>"$WORK/start.err" || die "IMAGE_BUILD_FAILED: container $name did not start: $(head -c 300 "$WORK/start.err")"
+    "$IMG" sleep 3600 >/dev/null 2>"$WORK/start.err" || die "CONTAINER_START_FAILED: container $name did not start (the image built; check the AppArmor profile, the seccomp path and the memory limits): $(head -c 300 "$WORK/start.err")"
 }
 
 # ---------------------------------------------------------------------------
@@ -624,7 +664,7 @@ fi
 if drop_check "${REC_ARGV[@]}"; then
   pass "recorder: the shim DROPPED the vendor procfs bind (no argv-requested procfs mount at /proc, exactly one --tmpfs /proc)"
 else
-  fail "DROP_FAILED: the argv the real bwrap received still requests a procfs mount at /proc or is malformed: $DROP_WHY"
+  fail "DROP_FAILED: the argv the real bwrap received still requests a procfs mount at /proc or is malformed: $DROP_WHY (the shim's neutralizer lives in infra/bwrap-shim/bwrap; SANDBOX_MASKED_PROC_MUTATE=shim-cover reproduces this failure shape)"
 fi
 
 # C4 render replay: the C4 sandbox bypasses the shim (/usr/bin/bwrap absolute), so its argv runs through the REAL bwrap
@@ -657,9 +697,14 @@ fi
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 # Anti-vacuity floor: a literal adjacent to its use (guard-vacuity-floor shape).
-MIN_ASSERTIONS=34
+MIN_ASSERTIONS=39
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
   echo "FAIL: only $((PASS + FAIL)) assertions ran (floor $MIN_ASSERTIONS) — the suite did not exercise its arms"
+  exit 1
+fi
+# The floor is EXACT: adding an assertion without raising the literal, or replacing one with another, must be visible.
+if (( PASS + FAIL > MIN_ASSERTIONS )); then
+  echo "FAIL: $((PASS + FAIL)) assertions ran but MIN_ASSERTIONS is $MIN_ASSERTIONS — set MIN_ASSERTIONS=$((PASS + FAIL)) deliberately"
   exit 1
 fi
 [[ "$FAIL" -eq 0 ]]

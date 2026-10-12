@@ -12,8 +12,10 @@
 //      detector; the docker suite replays it under the masks),
 //   2. a DIRECT no-procfs-mount assertion on the built argv (the pin alone
 //      would pass a regenerated fixture that gained `--proc /proc`),
-//   3. the two absolute-path constants, and
-//   4. a LITERAL census of every bwrap spawn target in server/** and
+//   3. the OUTER-WRAP argv (the second shim-bypassing spawner), pinned to the builder by agent-outer-wrap.test.ts:
+//      here, that it names exactly one /proc mount, the by-design `--bind /proc /proc`, and never `--proc`,
+//   4. the two absolute-path constants, and
+//   5. a LITERAL census of every bwrap spawn target in server/** and
 //      scripts/** (never a "first spawn argument" scan: c4-render nests bwrap
 //      in a bash argv, agent-outer-wrap has a spawn AND a spawnSync of
 //      different shapes, sandbox-canary.mjs spawns both `bwrap` and
@@ -25,6 +27,7 @@ import { describe, it, expect, vi } from "vitest";
 import { readFileSync, readdirSync, writeFileSync, statSync, mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { stripComments } from "./helpers/strip-comments";
 
 // c4-render and agent-outer-wrap import observability/sentry; the pins need
 // neither live (the logger is real: it has a createChildLogger factory).
@@ -130,19 +133,13 @@ function withInserted(argv: string[], extra: string[]): string[] {
 type Kinds = { BWRAP_BIN: number; BWRAP_PATH: number; literal: number; bare: number };
 const ZERO: Kinds = { BWRAP_BIN: 0, BWRAP_PATH: 0, literal: 0, bare: 0 };
 
-/** Drop full-line comments and a trailing `//` comment that sits outside a
- *  string. Line-based on purpose: a miss here can only add a false RED (a
- *  comment line counted), never hide a real spawn site. */
+/** Code lines only. TS/JS comments come from the real TypeScript parser (the shared helper every source-walk guard
+ *  uses, so `/* x *\/ spawn(BWRAP_BIN)` on one line is still seen and a `//` inside a string is not a comment);
+ *  shell has no parser here, so a full-line `#` comment is dropped and a trailing one is left in (a miss there can
+ *  only add a false RED, never hide a spawn site). */
 function codeLines(src: string, ext: string): string[] {
-  const lineComment = ext === ".sh" ? /^\s*#/ : /^\s*(\/\/|\/\*|\*)/;
-  return src
-    .split("\n")
-    .filter((l) => !lineComment.test(l))
-    .map((l) => {
-      if (ext === ".sh") return l;
-      const m = /\s\/\/(?![^"'`]*["'`][^"'`]*(?:["'`][^"'`]*["'`][^"'`]*)*$)/.exec(l);
-      return m ? l.slice(0, m.index) : l;
-    });
+  if (ext === ".sh") return src.split("\n").filter((l) => !/^\s*#/.test(l));
+  return stripComments(src, `x${ext}`).split("\n");
 }
 
 function censusSource(src: string, ext: string): Kinds {
@@ -406,11 +403,60 @@ describe("absolute-path constants and literal census (Guard 3)", () => {
   it("the comment stripper ignores comment lines and trailing comments (control)", () => {
     const src = [
       '// "bwrap" and BWRAP_BIN in a comment',
+      "/**",
       " * /usr/bin/bwrap in a doc block",
+      " */",
       "const x = 1; // BWRAP_PATH trailing",
       'const y = "bwrap";',
+      "/* note */ spawn(BWRAP_BIN, []);", // a comment earlier on the SAME line must not hide the spawn
+      'const u = "http://x/usr/bin/bwrap";', // a // inside a string is not a comment
     ].join("\n");
-    expect(censusSource(src, ".ts")).toEqual({ BWRAP_BIN: 0, BWRAP_PATH: 0, literal: 0, bare: 1 });
+    expect(censusSource(src, ".ts")).toEqual({ BWRAP_BIN: 1, BWRAP_PATH: 0, literal: 1, bare: 1 });
     expect(censusSource("# /usr/bin/bwrap\nexec /usr/bin/bwrap\n", ".sh").literal).toBe(1);
+  });
+});
+
+describe("outer-wrap spawn path (the second shim-bypassing spawner)", () => {
+  // agent-outer-wrap.test.ts pins this fixture to buildOuterWrapArgv; this file adds what that test does not
+  // assert: the argv shares the host procfs by design (arm F, #9723 residual) through ONE bind, and a fresh
+  // `--proc /proc` (the #9860 outage shape, refused under docker's default masks) is never added next to it.
+  const OUTER_FIXTURE = path.join(APP_ROOT, "infra", "agent-outer-wrap-argv.json");
+  const outerArgv = (): string[] => JSON.parse(readFileSync(OUTER_FIXTURE, "utf8")).bwrapSetupArgv;
+  const INSERT_AT = 10;
+
+  it("names exactly one procfs mount, the by-design `--bind /proc /proc`, and never --proc", () => {
+    const argv = outerArgv();
+    expect(argv.length).toBeGreaterThan(INSERT_AT);
+    expect(argv).not.toContain("--proc");
+    const hits = procfsMountTokens(argv);
+    expect(hits).toHaveLength(2); // the source and destination token of the one bind
+    const at = argv.indexOf("--bind");
+    const binds = argv.flatMap((t, i) => (t === "--bind" && argv[i + 1] === "/proc" ? [i] : []));
+    expect(binds).toHaveLength(1);
+    expect(argv.slice(binds[0], binds[0] + 3)).toEqual(["--bind", "/proc", "/proc"]);
+    expect(at).toBeGreaterThanOrEqual(0);
+  });
+
+  for (const [label, extra] of [
+    ["a fresh --proc /proc", ["--proc", "/proc"]],
+    ["--proc //proc", ["--proc", "//proc"]],
+    ["a second --bind /proc /proc", ["--bind", "/proc", "/proc"]],
+    ["--ro-bind /proc /x", ["--ro-bind", "/proc", "/x"]],
+  ] as Array<[string, string[]]>) {
+    it(`the detector reds on ${label} added to the outer-wrap argv`, () => {
+      const argv = outerArgv();
+      const mutated = [...argv.slice(0, INSERT_AT), ...extra, ...argv.slice(INSERT_AT)];
+      expect(procfsMountTokens(mutated).length).toBeGreaterThan(procfsMountTokens(argv).length);
+    });
+  }
+});
+
+describe("bind-family option table parity with the docker suite's drop analyzer", () => {
+  it("BIND_FLAGS equals the flags drop_check treats as binds (a table that drifts fails closed or hides a mount)", () => {
+    const suite = readFileSync(path.join(APP_ROOT, "infra", "sandbox-masked-proc-docker.test.sh"), "utf8");
+    const arm = /^\s*(--bind\|--ro-bind[^)\n]*)\)\s*$/m.exec(suite);
+    expect(arm, "the bind-family case arm of drop_check was not found").not.toBeNull();
+    const shellFlags = new Set(arm![1].split("|"));
+    expect([...shellFlags].sort()).toEqual([...BIND_FLAGS].sort());
   });
 });

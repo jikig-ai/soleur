@@ -32,8 +32,9 @@ CI_DEPLOY_REL="apps/web-platform/infra/ci-deploy.sh"
 CLOUD_INIT_REL="apps/web-platform/infra/cloud-init.yml"
 
 # The posture digest of the three real tuples (sha256 of the posture projection, first 12 hex). A posture
-# change is therefore a visible two-line diff in a second file; the helper and the tuples can be edited in
-# one diff, this literal is the second place that has to move.
+# change is therefore a visible diff in a second AND third file (test/docker-run-tuple-posture.test.ts pins the same
+# literal in the required lane); the helper and the tuples can be edited in one diff, these literals are the
+# places that have to move.
 EXPECTED_POSTURE="e959fc801d99"
 
 PASS=0
@@ -218,6 +219,11 @@ m_write() { # <relfile> <text>: create a new file in the tree
   mkdir -p "$(dirname "$T/$1")" || die "mkdir failed"
   printf '%s\n' "$2" > "$T/$1" || die "write failed"
 }
+m_symlink() { # <relfile> <target>: replace an existing file with a symlink (a scanned file must never be followed)
+  [ -f "$T/$1" ] || die "m_symlink: $1 missing"
+  rm -f "$T/$1" || die "rm failed"
+  ln -s "$2" "$T/$1" || die "ln failed"
+}
 m_rm() { # <relfile>
   [ -f "$T/$1" ] || die "m_rm: $1 missing"
   rm -f "$T/$1" || die "rm failed"
@@ -244,7 +250,9 @@ scorer_selftest() {
   mutation_scorer_failed_on "$l" '^FAIL ' 'TOKEN_X' && { printf 'INSTRUMENT FAIL - scorer matched a needle on a non-FAIL line\n' >&2; exit 2; }
   return 0
 }
-scorer_selftest
+# The consumer probe (lib/mutation-scorer-consumers.test.sh) stops at the FIRST scorer call; skipping the self-test
+# under it makes that first call the matrix's own (eval_kill), so "reaches the scorer" proves the rows are attributed.
+[ -n "${MUTATION_SCORER_PROBE:-}" ] || scorer_selftest
 
 # ---------------------------------------------------------------------------------------
 # ROW REGISTRY. A kill row names its mutation (a bash command evaluated in the row's tree) and its needles.
@@ -357,6 +365,16 @@ kill_row K14b-infra-script-site   'm_write apps/web-platform/infra/other.sh "doc
 kill_row K15-oversize-line        'm_append "$CI_DEPLOY_REL" "docker run -d $(head -c 200000 /dev/zero | tr "\0" "a")"' 'UNPARSEABLE_OPTION: logical line over' 'ci-deploy.sh'
 kill_row K16-missing-cloud-init   'm_rm "$CLOUD_INIT_REL"'                               'TUPLE_COUNT: cannot read cloud-init.yml' 'TUPLE_COUNT: want 3 got 2'
 kill_row K16b-unterminated-heredoc 'm_append "$CI_DEPLOY_REL" "cat <""<DRT_NEVER_CLOSED"'  'UNPARSEABLE_OPTION: unterminated heredoc DRT_NEVER_CLOSED'
+# --- #10065 review: the census must not be hidden by position, by a chained statement, by arithmetic, by a symlink ---
+kill_row K20a-chained-after-exempt-create 'm_append "$CI_DEPLOY_REL" "docker create --name soleur-plugin-seed \"\$VERIFIED_REF\" >/dev/null; docker run -d --privileged --cap-add SYS_ADMIN --name sneaky img"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh'
+kill_row K20b-chained-after-cosign 'm_append "$CI_DEPLOY_REL" "docker run --rm \"\$COSIGN_IMAGE\" x && docker run -d --privileged --name sneaky img"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh'
+kill_row K20c-heredoc-arithmetic-shift 'm_append_lines "$CI_DEPLOY_REL" "x=\$(( 1 <""<n ))" "docker run -d --privileged --name sneaky img" "n"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh'
+kill_row K20d-heredoc-quoted-opener 'm_append_lines "$CI_DEPLOY_REL" "echo \"<""<EOF\"" "docker run -d --privileged img" "EOF"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh'
+kill_row K20e-case-label-position 'm_append "$CI_DEPLOY_REL" "case \"\$X\" in start) docker run -d --cap-add ALL img ;; esac"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh'
+kill_row K20f-eval-upper-docker-var 'm_append "$CI_DEPLOY_REL" "eval \"\$DOCKER run -d img\""' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh'
+kill_row K20g-exempt-name-privileged 'm_append "$CI_DEPLOY_REL" "docker create --name soleur-plugin-seed --privileged -v /:/h img"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'privilege-class option --privileged'
+kill_row K20i-memory-zero-unlimited 'm_repl prod "--memory \"\$PROD_MEMORY_CAP\"" "--memory 0"' 'POSTURE_VALUE: --memory 0 in ci-deploy.sh prod'
+kill_row K20h-main-file-symlink   'm_symlink "$CI_DEPLOY_REL" /dev/zero'                 'TUPLE_COUNT: cannot read ci-deploy.sh' 'not a regular file'
 
 # --- must-PASS rows (non-canonical shapes of the SAME posture) ------------------------------------
 pass_row P1-reordered-equals      'm_secopts_last prod; m_repl prod "--restart unless-stopped" "--restart=unless-stopped"; m_repl prod "--log-driver journald" "--log-driver=journald"'
@@ -368,6 +386,7 @@ pass_row P6-benign-other-sites    'm_write .github/workflows/ok.yml "      - run
 pass_row P7-comments-and-strings  'm_append "$CI_DEPLOY_REL" "# docker run -d --name soleur-web-platform img"; m_append "$CI_DEPLOY_REL" "logger -t x \"FAILED: docker run -d\""; m_append "$CI_DEPLOY_REL" "echo docker create --name sneaky"'
 pass_row P8-exempt-create-site    'm_append "$CI_DEPLOY_REL" "docker create --name soleur-plugin-seed \"\$VERIFIED_REF\" >/dev/null"'
 pass_row P10-if-then-canary       'm_repl canary "docker run -d" "if docker run -d"; m_repl canary "\"\$VERIFIED_REF\"" "\"\$VERIFIED_REF\"; then"'
+pass_row P11-arithmetic-shift-no-docker 'm_append_lines "$CI_DEPLOY_REL" "x=\$(( 1 <<3 ))" "echo done"'
 pass_row P9-trailing-comment      'm_repl prod "; then" "; then # trailing note"'
 
 # ---------------------------------------------------------------------------------------
@@ -547,11 +566,12 @@ h1_stub classify check_options '[]' \
   K04a-prod-systempaths K04b-prod-systempaths-eq K07a-canary-env-path K07b-canary-env-ldpre \
   K08a-splat K10a-apparmor-unconfined K10b-seccomp-unconfined K10f-privileged K10r-volume-root
 h1_stub census check_count '[]' \
-  K05-prod-renamed K06-fourth-site-dup K11-heredoc-all K16-missing-cloud-init
+  K05-prod-renamed K06-fourth-site-dup K11-heredoc-all K16-missing-cloud-init K20h-main-file-symlink
 h1_stub projection check_projection '[]' \
   K09a-first-boot-no-apparmor K09b-prod-no-seccomp K09c-canary-no-tmpfs
 h1_stub unclassified check_census_extra '[]' \
-  K13a-create-app-name K13c-global-option K13f-unnamed-run K13g-bash-c-string K14a-workflow-start-site
+  K13a-create-app-name K13c-global-option K13f-unnamed-run K13g-bash-c-string K14a-workflow-start-site \
+  K20a-chained-after-exempt-create K20c-heredoc-arithmetic-shift K20g-exempt-name-privileged
 
 # ---------------------------------------------------------------------------------------
 # H2: the ledger. passes + fails must equal the rows executed (a verdict silently discarded would break it),
@@ -562,7 +582,7 @@ if [ "$((PASS + FAIL))" -ne "$ROWS" ]; then
   printf '[FATAL] accounting identity: passes(%s) + fails(%s) != rows(%s) - a verdict was discarded\n' "$PASS" "$FAIL" "$ROWS" >&2
   exit 1
 fi
-MIN_ROWS=123
+MIN_ROWS=137
 if [ "$ROWS" -lt "$MIN_ROWS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s rows ran, floor is %s\n' "$ROWS" "$MIN_ROWS" >&2
   exit 1

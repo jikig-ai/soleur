@@ -337,15 +337,25 @@ the shim can fix without widening anything. Rejected on least-privilege.
 > **Addendum — 2026-10-12 (#10065):** the "Dropping (not covering) is load-bearing" rationale above holds for a mount
 > NAMESPACE that carries no other procfs. The vendored argv for the agent runner begins with a recursive `--ro-bind / /`,
 > so the container's own procfs already sits beneath the vendor `--tmpfs /proc` after a drop as well; a drop and a cover
-> therefore differ only for a process holding `CAP_SYS_ADMIN` over the mount namespace, which the production sandbox never
-> grants (the vendored tail carries `--cap-drop ALL`, and unprivileged bwrap drops every capability after setup).
-> Measured 2026-10-12 (`knowledge-base/project/specs/feat-one-shot-10065-sandbox-proc-suite-parity/measurements.md`, M3): in
-> the unprivileged suite image every `umount2("/proc")` from inside the sandbox is EPERM for drop and cover alike, with and
-> without `--cap-add CAP_SYS_ADMIN`, so no behavioral probe separates them. The shim still drops, because "no argv-requested
-> procfs mount at `/proc`" is the property it can state and the suite can assert (the recorder arm of
-> `apps/web-platform/infra/sandbox-masked-proc-docker.test.sh`); the operative barrier against reaching a procfs beneath the
-> tmpfs is the capability drop, which `test/sandbox-vendored-argv-tail.test.ts` pins in both vendored binaries. The hook
-> sandbox builder in the CLI platform binary has no root bind, so the original sentence holds there.
+> therefore differ only for a process that could `umount` the tmpfs, i.e. one holding `CAP_SYS_ADMIN` over the mount
+> namespace. **Observed** 2026-10-12 (`knowledge-base/project/specs/feat-one-shot-10065-sandbox-proc-suite-parity/measurements.md`,
+> M3; run under `apparmor=unconfined`, so the AppArmor half is CI's): in the unprivileged suite image every
+> `umount2("/proc")` from inside the sandbox is EPERM for drop and cover alike, with and without `--cap-add CAP_SYS_ADMIN`,
+> so no behavioral probe separates them. **Inferred, not measured:** that attribution (unprivileged bwrap drops every
+> capability after setup, and the vendored tail carries `--cap-drop ALL`) is the reading consistent with those
+> observations; locked inherited mounts would also produce EPERM, and no positive control (a sandbox that CAN umount)
+> exists in that image. The shim still drops, because "no argv-requested procfs mount at `/proc`" is the property it can
+> state and the suite can assert (the recorder arm of `apps/web-platform/infra/sandbox-masked-proc-docker.test.sh`).
+> **Conditional on an UNELEVATED bwrap:** the equivalence holds while the production bwrap is neither setuid nor
+> file-capability'd (the 2026-10-09 addendum reverted that arm; the suite's static `ELEVATION` arm fails any Dockerfile
+> instruction that elevates it), and while the vendored tail keeps `--cap-drop ALL`, which
+> `test/sandbox-vendored-argv-tail.test.ts` pins in both vendored binaries. If either stops holding, drop versus cover
+> becomes load-bearing again and this addendum must be re-decided, not carried forward. The hook sandbox builder in the CLI
+> platform binary has no root bind, so the original sentence holds there.
+>
+> In effect this supersedes the sentences of the **Isolation effect** paragraph below that read "no procfs is mounted" and
+> "no-procfs-at-all": the realized mask is an empty `/proc` tmpfs with the container's procfs beneath it, and the paragraph's
+> conclusion (cross-tenant `/proc/<pid>/environ` reads are unreachable) rests on the unelevated-bwrap condition above.
 
 **Why the single-rung re-home.** The plan's rung-2 (`--bind-data` /
 `--ro-bind-data` / `--bind-fd` content binds for deleted or memfd sources)

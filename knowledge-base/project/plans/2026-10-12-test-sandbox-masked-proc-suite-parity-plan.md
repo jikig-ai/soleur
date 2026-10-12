@@ -679,8 +679,8 @@ logs:
   retention: the repository's Actions log retention (90 days by default)
 
 discoverability_test:
-  command: python3 apps/web-platform/infra/lib/docker-run-tuple.py check
-  expected_output: docker-run-tuple:ok
+  command: python3 -I apps/web-platform/infra/lib/docker-run-tuple.py check
+  expected_output: docker-run-tuple:ok tuples=3 posture=<12 hex>
 ```
 
 ## Acceptance Criteria
