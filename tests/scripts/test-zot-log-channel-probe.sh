@@ -686,7 +686,9 @@ assert "S6 an awk that produces NO summary -> exit 3, not a vacuous clean" \
   "[[ '$CASE_RC' -eq 3 ]] && grep -q 'grading pass produced no usable summary' <<<\"$CASE_OUT\""
 # Wire assert (#9217): the stub received every row the pass pipes (the log rows and the control rows, one line each). ${KNOB:-default}: an
 # exported-empty knob must not compare "" with "".
-_awk_want="${S6_AWK_STDIN_LINES:-$(( $(grep -c . "$S1_LOG") + $(grep -c . "$S1_CTL") ))}"
+# The value is interpolated into a condition assert() runs through eval, so an override that is not a bare integer falls back to the computed default.
+_awk_want="${S6_AWK_STDIN_LINES:-}"
+[[ "$_awk_want" =~ ^[0-9]+$ ]] || _awk_want="$(( $(grep -c . "$S1_LOG") + $(grep -c . "$S1_CTL") ))"
 assert "S6 the fake awk received the rows the grading pass pipes into it" \
   "[[ \"\$(grep -c . '$FAKEBIN/awk.stdin' 2>/dev/null)\" == '$_awk_want' && '$_awk_want' -gt 0 ]]"
 printf '#!/bin/sh\n[ -t 0 ] || timeout 2 cat >/dev/null\necho not-a-summary\n' > "$FAKEBIN/awk"; chmod +x "$FAKEBIN/awk"
