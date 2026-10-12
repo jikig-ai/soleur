@@ -566,7 +566,8 @@ if command -v timeout >/dev/null 2>&1; then
     *) bad "rule bodies missing after a hung helper" ;;
   esac
 else
-  ok "skipped: no timeout binary on this host (the loader then runs the helper untimed)"
+  echo "UNRESOLVED: timeout missing — L5 hung-helper arm not run; install timeout (coreutils)"
+  bad "L5 not run: no timeout binary on this host, so the hung-helper bound was not measured"
 fi
 
 # --- completion floors ------------------------------------------------------------------------
