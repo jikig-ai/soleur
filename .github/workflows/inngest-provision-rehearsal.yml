@@ -455,7 +455,7 @@ jobs:
         run: sleep 90
 
       # THE LATCH LEG. The reboot is the Hetzner API (control plane, never SSH — same shape
-      # as web-host-reboot.yml's #9372 job). The boundary timestamp is recorded FIRST so the
+      # as the web-host reboot workflow's #9372 job, retired 2026-10-12). The boundary timestamp is recorded FIRST so the
       # post-reboot capture's "no provision rows after this instant" has its boundary.
       - name: Reboot the rehearsal host (Hetzner API)
         id: reboot

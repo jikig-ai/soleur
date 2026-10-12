@@ -1919,8 +1919,7 @@ root = sys.argv[1]
 WRITER = ".github/workflows/workspaces-luks-verify.yml"
 READERS = {"scripts/lib/web2-luks-rows.sh", "apps/web-platform/infra/lb-weight-gate.sh", "apps/web-platform/infra/lb-weight-gate-with-marker.sh",
            ".github/workflows/infra-validation.yml", "scripts/followthroughs/web2-luks-live-6931.sh",
-           "scripts/lib/test-affected-paths.sh", "scripts/web2-rebirth-emptiness.sh", "scripts/web2-rebirth-never-pooled.sh", "scripts/web2-rebirth-ready-poll.sh",
-           "scripts/web-host-reboot-evidence.sh"}
+           "scripts/lib/test-affected-paths.sh"}
 KEY = re.compile(r"workspaces_luks_cutover[\"'_]*at\b|w2l_marker_name|web2-luks-rows", re.I)
 VERB = re.compile(r"doppler(?:_call)?\b[^\n]*\bsecrets\b[^\n]*\b(set|delete|upload)\b|resource\s+[\"']doppler_secret[\"']|api\.doppler\.com"
                   r"|/secrets?/(set|delete|upload)\b|/configs/config/secrets\b"
@@ -1962,6 +1961,37 @@ PY
     ok "G3 census: the whole tree names the key only in the one writer (exactly two write/delete sites) and its read-only users"
   else
     no "G3 census: $(printf '%s' "$g3_c" | tr '\n' ' ')"
+  fi
+
+  # --- the token census: the secret that carries the marker's write authority is bound by exactly ONE workflow ----
+  # The key census above matches the marker KEY, not the secret that authorises writing it, so a second workflow could
+  # bind DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER (and write the key under any spelling the key census does not know) without
+  # tripping it. The single-use rebirth workflow, which used to be the one other holder, is retired (#9372); this row
+  # pins that the holder stays this job alone. Occurrence-based over every file under .github/workflows and .github/actions,
+  # whole-line comments dropped, the name matched in upper case anywhere and in any case through the `secrets` context (GitHub secret names are case-insensitive); the second value
+  # is how many files were scanned, so an empty file list cannot read as clean. SCOPE: it pins the NAME of the secret in a
+  # workflow or composite-action file. It does not model reachability without the name: `toJSON(secrets)`, `secrets: inherit`
+  # into a reusable workflow, a Terraform alias of the token, or a second binding inside the verify workflow itself (the step-level
+  # env row above pins that one).
+  g3_token_holders() { # <root> -> "<holders, comma-joined>|<files scanned>"
+    local root="$1" f n=0 hits=() code
+    while IFS= read -r f; do
+      n=$((n + 1))
+      # herestring, not `grep -v … | grep -q`: under pipefail the early-closing -q SIGPIPEs the producer and a real hit reads as a miss
+      code="$(grep -v '^[[:space:]]*#' "$root/$f" || true)"
+      # the upper-case literal anywhere, or any case-spelling reached through the `secrets` context (a Terraform -target address
+      # such as github_actions_secret.doppler_token_workspaces_luks_marker is the lower-case name and is NOT a binding)
+      if grep -qF 'DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER' <<<"$code" || grep -qiE "secrets(\.|\[['\"])doppler_token_workspaces_luks_marker" <<<"$code"; then hits+=("$f"); fi
+    done < <(cd "$root" && { find .github/workflows .github/actions -type f 2>/dev/null || true; } | sed 's|^\./||' | LC_ALL=C sort)
+    local IFS=,
+    printf '%s|%s' "${hits[*]:-}" "$n"
+  }
+  g3_th="$(g3_token_holders "$PWD")"
+  # the floor is a non-vacuity bound (the real tree carries ~100 files), not a count of them
+  if [[ "${g3_th%%|*}" == ".github/workflows/workspaces-luks-verify.yml" && "${g3_th##*|}" -ge 5 ]]; then
+    ok "G3 token census: DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER is bound by exactly one workflow, the verify job (${g3_th##*|} files scanned)"
+  else
+    no "G3 token census: holders|files scanned = ${g3_th}"
   fi
 
   # =====================================================================================================
@@ -2120,6 +2150,37 @@ PY
   g3_plant "a write to a DIFFERENT secret" scripts/harmless-other.sh $'#!/usr/bin/env bash\ndoppler secrets set SOME_OTHER_SECRET x' no
   g3_plant "a test file that names the key (tests discuss it by design)" scripts/something.test.sh $'#!/usr/bin/env bash\necho WORKSPACES_LUKS_CUTOVER_AT' no
   g3_plant "a vendored dependency that names the key" node_modules/pkg/evil.js $'doppler secrets set WORKSPACES_LUKS_CUTOVER_AT x' no
+  # token census rows over the same synthetic root (its clean state is the control: only the verify workflow holds the token)
+  g3_th="$(g3_token_holders "$g3_cr")"
+  if [[ "${g3_th%%|*}" == ".github/workflows/workspaces-luks-verify.yml" && "${g3_th##*|}" -ge 2 ]]; then ok "G3 mutation 5b control: the synthetic root has exactly one token holder"; else no "G3 mutation 5b control: ${g3_th}"; fi
+  mkdir -p "$g3_cr/.github/workflows" "$g3_cr/.github/actions/ok"
+  printf '%s\n' $'runs:\n  using: composite\n  steps: []' > "$g3_cr/.github/actions/ok/action.yml"
+  printf '%s\n' $'jobs:\n  j:\n    steps:\n      - run: ./x\n        env:\n          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER }}' > "$g3_cr/.github/workflows/evil-holder.yml"
+  g3_th="$(g3_token_holders "$g3_cr")"
+  if [[ "${g3_th%%|*}" == ".github/workflows/evil-holder.yml,.github/workflows/workspaces-luks-verify.yml" ]]; then ok "G3 mutation 5b (a second workflow binds the token) -> RED (both holders reported, not just the first)"; else no "G3 mutation 5b: a second token holder was not reported: ${g3_th}"; fi
+  printf '%s\n' $'# DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER is bound by the verify workflow only\njobs: {}' > "$g3_cr/.github/workflows/evil-holder.yml"
+  g3_th="$(g3_token_holders "$g3_cr")"
+  if [[ "${g3_th%%|*}" == ".github/workflows/workspaces-luks-verify.yml" ]]; then ok "G3 mutation 5b (a comment that merely names the token) -> stays green (harmless)"; else no "G3 mutation 5b: a comment-only mention was flagged: ${g3_th}"; fi
+  # direction rows: each spelling that a narrower census would let through must be listed beside the verify workflow
+  g3_th_plant() { # <label> <relpath> <content>
+    mkdir -p "$(dirname "$g3_cr/$2")"; printf '%s\n' "$3" > "$g3_cr/$2"
+    g3_th="$(g3_token_holders "$g3_cr")"
+    if [[ "${g3_th%%|*}" == *"$2"* && "${g3_th%%|*}" == *"workspaces-luks-verify.yml"* ]]; then ok "G3 mutation 5b ($1) -> RED (census lists $2)"; else no "G3 mutation 5b ($1): the census did not list $2: ${g3_th}"; fi
+    rm -f "$g3_cr/$2"
+  }
+  g3_th_plant "a lower-case spelling of the secret name" .github/workflows/evil-lower.yml $'jobs:\n  j:\n    steps:\n      - run: ./x\n        env:\n          T: ${{ secrets.doppler_token_workspaces_luks_marker }}'
+  g3_th_plant "a composite action binds it" .github/actions/evil/action.yml $'runs:\n  using: composite\n  steps:\n    - shell: bash\n      run: ./x\n      env:\n        T: ${{ secrets.DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER }}'
+  g3_th_plant "a .yaml workflow binds it" .github/workflows/evil-yaml.yaml $'jobs:\n  j:\n    steps:\n      - run: ./x\n        env:\n          T: ${{ secrets.DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER }}'
+  g3_th_plant "a binding with a trailing comment on the same line" .github/workflows/evil-trailing.yml $'jobs:\n  j:\n    steps:\n      - run: ./x\n        env:\n          T: ${{ secrets.DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER }} # note'
+  g3_th_plant "the bracket spelling secrets['name']" .github/workflows/evil-bracket.yml $'jobs:\n  j:\n    steps:\n      - run: ./x\n        env:\n          T: ${{ secrets[\'doppler_token_workspaces_luks_marker\'] }}'
+  g3_th_plant "a mixed-case spelling through the secrets context" .github/workflows/evil-mixed.yml $'jobs:\n  j:\n    steps:\n      - run: ./x\n        env:\n          T: ${{ secrets.Doppler_Token_Workspaces_Luks_Marker }}'
+  g3_th_plant "the upper-case name as an env key with no secrets context" .github/workflows/evil-envkey.yml $'jobs:\n  j:\n    steps:\n      - run: ./x\n        env:\n          DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER: x'
+  # a Terraform address is the lower-case name and is NOT a binding (apply-web-platform-infra.yml carries one for real)
+  mkdir -p "$g3_cr/.github/workflows"; printf '%s\n' $'jobs:\n  j:\n    steps:\n      - run: |\n          terraform plan -target=github_actions_secret.doppler_token_workspaces_luks_marker' > "$g3_cr/.github/workflows/tf-address.yml"
+  g3_th="$(g3_token_holders "$g3_cr")"
+  if [[ "${g3_th%%|*}" == ".github/workflows/workspaces-luks-verify.yml" ]]; then ok "G3 mutation 5b (a Terraform -target address, lower-case name) -> stays green (not a binding)"; else no "G3 mutation 5b: a Terraform address was flagged as a holder: ${g3_th}"; fi
+  rm -f "$g3_cr/.github/workflows/tf-address.yml"
+  rm -f "$g3_cr/.github/workflows/evil-holder.yml"
   rm -rf "$g3_cr"
 
 
@@ -2271,7 +2332,8 @@ printf '\n%s passed, %s failed\n' "$pass" "$fail"
 # 2026-10-08 (#9372, immutability not reboot): S59 (noop readiness arm refused) and S60 (opened) + mutation row 22b,
 # with row 22 re-pointed at the old reboot requirement, 325 -> 332 (measured green count).
 # Review round 1: S61/S62 (the NEWEST readiness row decides, both directions) + mutation row 22c, 332 -> 335.
-WF_MIN_ASSERTIONS=335
+# #9372 retirement: the marker-token census (one real-tree row, three synthetic-root rows: control, second holder, comment-only; review round 1 added four direction rows: lower-case, composite action, .yaml, trailing comment) 335 -> 343 (measured green count).
+WF_MIN_ASSERTIONS=343
 if [[ "$pass" -lt "$WF_MIN_ASSERTIONS" ]]; then
   echo "FAIL - only $pass assertions ran (floor $WF_MIN_ASSERTIONS) — fewer verdicts than expected; a green run here would be vacuous"
   exit 1

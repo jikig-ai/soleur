@@ -842,7 +842,7 @@ resource "github_actions_secret" "workspaces_luks_boot_token" {
 #   2. `moved` wants a singleton source.
 #   3. (ADR-263, superseding ADR-143 R3's DEFER and the old "web-2 slated for destruction #6538"
 #      rationale, both now FALSE.) web-2 is a PERMANENT out-of-band standby (var.web_hosts, ADR-143 D2)
-#      and its volume is LUKS-backed AT BOOT (once reborn, #9372), not "in HCL": the keyed
+#      and its volume is formatted LUKS by the guest provisioner at first boot (#9372; graded 2026-10-10), not "in HCL": the keyed
 #      hcloud_volume.workspaces["web-2"] is born RAW (no `format`) and the baked
 #      workspaces-luks-provision.sh formats it on first boot
 #      through the same mechanism web-1's reopen units use. The topology is therefore ONE MECHANISM,
@@ -869,10 +869,11 @@ resource "github_actions_secret" "workspaces_luks_boot_token" {
 # cloud-init is SHARED across web-1 (populated) and web-2. It is enforced by
 # workspaces-luks-provision.test.sh (Guard 1), not by this comment.
 #
-# web-2's volume is plaintext ONLY until its single-use rebirth (ADR-263, #9372): the live volume was created
-# `ext4` and `ignore_changes = [format]` (server.tf) keeps the merge a no-op for it. Sentences about
-# web-2 being "LUKS-backed at boot" become true only after that rebirth and the first green probe. See
-# ADR-119 + ADR-143 + ADR-263.
+# web-2's volume was born RAW on 2026-10-06 and formats LUKS at first boot (ADR-263, #9372); the single-use
+# rebirth workflow that created it was retired 2026-10-12, and `ignore_changes = [format]` (server.tf) keeps a
+# merge a no-op for an already-created volume. The graded claim (the #6931 PASS of 2026-10-10) is formatted/opened
+# plus green probes only; reopen after a host restart, passphrase-loss recovery and emptiness are not graded.
+# See ADR-119 + ADR-143 + ADR-263.
 #
 # Size and location track web-1's live volume exactly: `var.volume_size` is the same
 # input `hcloud_volume.workspaces` uses, so the target can never be born smaller than
