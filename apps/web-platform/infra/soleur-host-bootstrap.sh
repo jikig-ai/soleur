@@ -281,7 +281,8 @@ cat > /usr/local/bin/soleur-boot-emit <<'EMITEOF'
   ESC=$(printf '\033')
   DETAIL=$(LC_ALL=C sed -e '/^Using /d' -e "s/${ESC}\\[[0-9;]*[a-zA-Z]//g" "$SRC" 2>/dev/null \
     | LC_ALL=C sed -e 's/dp\.\(st\|pt\|sa\|ct\|scim\|audit\)\.[A-Za-z0-9._-]\{10,\}/dp.REDACTED/g' \
-                -e 's/gh[pousr]_[A-Za-z0-9]\{20,\}/REDACTED_GH/g' \
+                -e 's#gh[pousr]_[A-Za-z0-9._~+/=-]\{20,\}#REDACTED_GH#g' \
+                  -e 's#github_pat_[A-Za-z0-9._~+/=-]\{20,\}#REDACTED_GH#g' \
                 -e 's#://[A-Za-z0-9._%+-]\{1,\}:[^@/[:space:]]\{1,\}@#://REDACTED@#g' \
                 -e 's/[Bb]earer[[:space:]]\{1,\}[A-Za-z0-9._~+/=-]\{8,\}/Bearer REDACTED/g' \
                 -e 's/-----BEGIN [A-Z ]*PRIVATE KEY-----.*/[PRIVATE KEY REDACTED]/' \

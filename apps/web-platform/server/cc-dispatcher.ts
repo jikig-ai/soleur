@@ -554,8 +554,8 @@ export {
 // surfaced to Sentry via `warnSilentFallback`
 // (cq-silent-fallback-must-mirror-to-sentry). Synthesized prefixes only.
 const REDACTION_FALLTHROUGH_PROBES = [
-  /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_-]{20,}/,
-  /\bgithub_pat_[A-Za-z0-9]{22}_/,
+  /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9._~+/=-]{20,}/,
+  /\bgithub_pat_[A-Za-z0-9._~+/=-]{22}_/,
   /Authorization\s*:\s*(?:Bearer|Basic|token)\s+\S/i,
   // Finding 3 — connection-string userinfo (`scheme://user:password@host`).
   // A surviving `user:pass@` after redaction means the new userinfo pattern
