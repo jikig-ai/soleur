@@ -81,8 +81,8 @@ TFC_CLOSING_EXTRA_RE='\b(prioriti[sz]\w*|publish\w*|announce\w*|auditors?|accoun
 # CLOSING-ONLY permission shapes (Ruled by CTO agent, 2026-10-12 review): an authorization request that the shared
 # RULING_PERM_RE (pinned by the pre-ask suite, never edited for a closing-only reason) does not name. Each member binds
 # the permission words to an ACTION verb, because bare `can i`, `should i`, `go ahead` or `proceed` are technical-fork
-# shapes too ("should we go ahead with approach A or B"). `should i` alone and every `we` form stay OUT on purpose.
-TFC_CLOSING_PERM_RE='\b(can|shall) i (now |just )?(go ahead|proceed|merge|deploy|ship|release|rotate|flip|arm|delete|revoke|apply|push)\b|\bshould i go ahead and (merge|deploy|ship|release|rotate|flip|arm|delete|revoke|apply|push)\b'
+# shapes too ("should we go ahead with approach A or B", "can i proceed with approach A or B"): `go ahead`/`proceed` count only when followed by `and`/`to` plus an action verb. `should i` alone and every `we` form stay OUT on purpose.
+TFC_CLOSING_PERM_RE='\b(can|shall) i (now |just )?(go ahead and |proceed (and|to) )?(merge|deploy|ship|release|rotate|flip|arm|delete|revoke|apply|push)\b|\bshould i go ahead and (merge|deploy|ship|release|rotate|flip|arm|delete|revoke|apply|push)\b'
 
 tfc_self_check() {
   [[ -n "${_TFC_COMPLETE-}" ]] || return 1

@@ -255,6 +255,8 @@ row "Q4d shall-i-go-ahead with an action verb" pass "shall i go ahead and deploy
 row "Q4e a we-form is not a permission shape (bar)" block "can we tighten the evidence threshold?"
 row "Q4f should-i is a ruling shape (ab)" block "should i use approach a or b for the retry queue?"
 row "Q4g can-i without an action verb is not an authorization (ab)" block "can i use approach a or b for the retry queue?"
+row "Q4m go-ahead without and+verb is a ruling shape (ab)" block "can i go ahead with approach a or b for the schema?"
+row "Q4n proceed without and+verb is a ruling shape (ab)" block "shall i proceed with design a or b? what is the right design for the schema?"
 row "Q4h should-we-go-ahead-with is a ruling shape (ab)" block "should we go ahead with approach a or b for the schema?"
 row "Q4i the ordering half of an authorization ask stays technical (cl3)" block "which order should the storage credentials be rotated in?"
 row "Q4j a sufficiency ask is the motivating miss (cl1)" block "is the coverage enough to deploy to production?"
@@ -262,7 +264,7 @@ row "Q4j a sufficiency ask is the motivating miss (cl1)" block "is the coverage 
 row "Q4k a sufficiency unit followed by an Approve? unit: the sufficiency ask is the motivating miss" block "Is the coverage enough to deploy to production? Approve?"
 TOTAL=$((TOTAL+1))
 qv_fail=""
-for qv in "can i" "shall i"; do for qverb in "go ahead" proceed merge deploy ship release rotate flip arm delete revoke apply push; do
+for qv in "can i" "shall i" "can i go ahead and" "shall i proceed and" "can i proceed to"; do for qverb in merge deploy ship release rotate flip arm delete revoke apply push; do
   spawn "$HOOK" "$(closing_json "$qv $qverb now, is the evidence enough?")"; [[ "$(verdict_from_out)" == "pass" ]] || qv_fail="$qv_fail [$qv $qverb]"
 done; done
 for qverb in merge deploy ship release rotate flip arm delete revoke apply push; do
@@ -628,8 +630,8 @@ else printf '  FAIL: V6 only %s mutants killed (floor 24)\n' "$KILLED" >&2; FAIL
 
 # --- inventory, accounting conservation and the assertion floor ---------------------------------------
 TOTAL=$((TOTAL+1))
-if [[ "$TOTAL" -eq 128 ]]; then echo "  PASS: V1 full inventory ran (128 cases)"; PASS=$((PASS+1))
-else echo "  FAIL: V1 expected 128 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
+if [[ "$TOTAL" -eq 130 ]]; then echo "  PASS: V1 full inventory ran (130 cases)"; PASS=$((PASS+1))
+else echo "  FAIL: V1 expected 130 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
 
 # Reported with printf + exit 1, never through a verdict helper: a floor routed through the machinery it backstops
 # is disarmed by the same edit it exists to catch (ADR-193).
@@ -638,7 +640,7 @@ if (( PASS + FAIL != TOTAL )); then
     "$PASS" "$FAIL" "$TOTAL" >&2
   exit 1
 fi
-MIN_CASES=128
+MIN_CASES=130
 if (( TOTAL < MIN_CASES )); then
   printf '\nFATAL: anti-vacuity: %d case(s) ran, floor is %d. The suite shrank rather than the hook improving.\n' \
     "$TOTAL" "$MIN_CASES" >&2
