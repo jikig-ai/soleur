@@ -1275,14 +1275,37 @@ function unwrap(str,   n, tk, i, t, w, u) {
     }
   }
 }
+# R3: a producer of any kind. Every single bar outside quotes is a pipe into the word after it (a bar preceded by a bar or a backslash, or followed by a bar, is
+# not; `|&` is). Quote parity of the text before the bar (an even number of unescaped double quotes and of single quotes) keeps a bar inside a string out; a
+# bar followed by a word and a closing parenthesis is a case-pattern alternation (`a|curl) :;;`), not a pipe. The old printf/echo/cat scan stays as a second
+# site source and the two are unioned, so a regression of this arm cannot move the rows the old scan defines.
+function anybar(l,   rest, base, p, pos, pc, nx, pre, after, q, nd, ns) {
+  rest = l; base = 0
+  while ((p = index(rest, "|")) > 0) {
+    pos = base + p; base = pos; rest = substr(l, pos + 1)
+    pc = (pos > 1) ? substr(l, pos - 1, 1) : ""
+    nx = substr(l, pos + 1, 1)
+    if (pc == "|" || pc == "\\" || nx == "|") continue
+    after = substr(l, pos + 1 + (nx == "&"))
+    sub(/^[ \t]+/, "", after)
+    if (after !~ /^[A-Za-z_"(){};]/ && substr(after, 1, 1) != sq) continue     # no word can follow: nothing to read
+    if (after ~ /^[A-Za-z_][A-Za-z0-9_.-]*[ \t]*\)/) continue                    # case-pattern alternation
+    pre = substr(l, 1, pos - 1); gsub(/\\./, "", pre); nd = gsub(/"/, "", pre); ns = gsub(sq, "", pre)
+    if (nd % 2 != 0 || ns % 2 != 0) continue                                      # the bar is inside a string
+    unwrap(after)
+  }
+}
 # The site scan of ONE logical line of a non-test file: the annotation strip (R8), the pipefail token, and every text pipe on it.
 function site(l,   s, m, w, tl) {
   if (l ~ /^[ \t]*#/) return
   if (index(l, "::")) gsub(ANNOT, "", l)   # an annotation echo shows the operator a command: its text is not a pipe, a pipe BEFORE it or AFTER its string still is
   if (index(l, "pipefail")) pf = 1
   if (isy && l ~ /shell:[ \t]*bash/) pf = 1
-  if (index(l, "|") && (index(l, "printf") || index(l, "echo") || index(l, "cat"))) {
-    o = (l !~ UNOBS); s = l
+  if (!index(l, "|")) return
+  o = (l !~ UNOBS)
+  anybar(l)
+  if (index(l, "printf") || index(l, "echo") || index(l, "cat")) {
+    s = l
     while (match(s, PIPE)) {
       m = substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH)
       sub(/^.*\|[ \t]*/, "", m)
@@ -1689,6 +1712,16 @@ PJ_CASES=(
   $'helper-arg2 @@ y:curl @@ fxprod.sh=set -o pipefail\nprintf x | curl -K -\n @@ fxa.test.sh={H} "$d" curl\nbash fxprod.sh\n'
   $'loop-built @@ y:curl y:jq @@ fxprod.sh=set -o pipefail\nprintf x | curl -K -\nprintf y | jq .\n @@ fxa.test.sh=for b in curl jq; do\n  printf x {GT} "$d/$b"\ndone\nbash fxprod.sh\n'
   $'loop-nonverb @@ n:curl n:jq @@ fxprod.sh=set -o pipefail\nprintf x | curl -K -\nprintf y | jq .\n @@ fxa.test.sh=for b in curl jq; do\n  printf x {GT} "$d/log"\ndone\nbash fxprod.sh\n'
+  $'other-producer @@ y:curl @@ fxprod.sh=set -o pipefail\njq -r .x f | curl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'other-producer-second-bar @@ y:curl y:tee @@ fxprod.sh=set -o pipefail\njq -r .x f | tee y | curl -K -\n @@ fxa.test.sh=curl() { :; }\ntee() { :; }\nbash fxprod.sh\n'
+  $'other-producer-and-amp @@ y:curl @@ fxprod.sh=set -o pipefail\njq -r .x f |& curl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'other-producer-status-dropped @@ n:curl @@ fxprod.sh=set -o pipefail\njq -r .x f | curl -K - || true\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'other-producer-wrapped @@ y:curl @@ fxprod.sh=set -o pipefail\njq -r .x f | timeout 5 curl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'quoted-bar @@ n:curl @@ fxprod.sh=set -o pipefail\nfoo "a | curl"\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'quoted-bar-single @@ n:curl @@ fxprod.sh=set -o pipefail\nfoo \'a | curl\'\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'case-alternation @@ n:curl @@ fxprod.sh=set -o pipefail\ncase $x in a|curl) :;; esac\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'command-v-any @@ n:curl @@ fxprod.sh=set -o pipefail\nfoo x | command -v curl\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'yaml-list-block-scalar @@ n:curl @@ fxprod.yml=runcmd:\n  - set -o pipefail\n  - |\n    curl -K - x\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.yml\n'
   $'tf-producer @@ y:curl @@ fxprod.tf=resource "x" "y" {\n  command = <<-EOT\n    set -o pipefail\n    printf x | curl -K -\n  EOT\n}\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.tf\n'
   $'tf-no-pipefail @@ n:curl @@ fxprod.tf=resource "x" "y" {\n  command = <<-EOT\n    printf x | curl -K -\n  EOT\n}\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.tf\n'
 )
