@@ -239,7 +239,7 @@ GHSTUB
 # soleur/inngest-pin-* PR) and records every `gh pr list` author and `gh pr view` number: an audit
 # that asks for one author only, drops the ci/ filter on the App list, or loses the merge is RED.
 t_both_authors_sampled() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d)  # lint-trap-ownership: ok removed by rm -rf at the end of this function, like every sibling test here
   cat > "$tmp/gh" <<'GHSTUB'
 #!/usr/bin/env bash
 if [[ "$1" == "pr" && "$2" == "list" ]]; then
@@ -249,7 +249,7 @@ if [[ "$1" == "pr" && "$2" == "list" ]]; then
   done
   printf '%s\n' "list author=$author" >> "${GH_CALLS:?}"
   case "$author" in
-    app/github-actions) echo '[{"number":11,"headRefName":"ci/other-bot-2026-10-10"}]' ;;
+    app/github-actions) echo '[{"number":14,"headRefName":"dependabot/npm/x"},{"number":11,"headRefName":"ci/other-bot-2026-10-10"}]' ;;
     app/soleur-infra) echo '[{"number":12,"headRefName":"ci/weakness-digest-2026-10-11"},{"number":13,"headRefName":"soleur/inngest-pin-v1.2.3"}]' ;;
     *) echo '[]' ;;
   esac
@@ -263,7 +263,8 @@ GHSTUB
   GH_CALLS="$tmp/calls" PATH="$tmp:$PATH" AUDIT_TELEMETRY_DIR="$tmp/state" \
     bash "$SCRIPT" >"$tmp/stdout" 2>"$tmp/stderr" || true
   if grep -qxF 'list author=app/github-actions' "$tmp/calls" && grep -qxF 'list author=app/soleur-infra' "$tmp/calls" \
-     && grep -qxF 'view 11' "$tmp/calls" && grep -qxF 'view 12' "$tmp/calls" && ! grep -qxF 'view 13' "$tmp/calls"; then
+     && grep -qxF 'view 11' "$tmp/calls" && grep -qxF 'view 12' "$tmp/calls" && grep -qxF 'view 14' "$tmp/calls" \
+     && ! grep -qxF 'view 13' "$tmp/calls"; then
     _report "T13 bot-PR sample merges app/github-actions and the ci/ PRs of app/soleur-infra, never an inngest-pin PR" ok
   else
     _report "T13 bot-PR sample merges app/github-actions and the ci/ PRs of app/soleur-infra, never an inngest-pin PR" fail "calls=$(tr '\n' '|' < "$tmp/calls")"

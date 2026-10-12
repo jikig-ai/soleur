@@ -103,9 +103,18 @@ Verify locally before pushing: `bash scripts/lint-bot-synthetic-completeness.sh`
 
 ### Adding a new bot workflow
 
-Prefer the composite action. Since #9454 it needs a `soleur-infra` App token for the PR itself, so the workflow follows the shape of `weakness-miner.yml` (ADR-285): a job with no secrets produces the content, and a second job on the main-only `infra-privileged` environment mints the token and calls the composite. Create `.github/workflows/<feature>.yml` (any filename except `pr-quality-guards.yml`); the credential job's steps are:
+Prefer the composite action. Since #9454 it needs a `soleur-infra` App token for the PR itself, so the workflow follows the shape of `weakness-miner.yml` (ADR-285): a job with no secrets produces the content, and a second job on the main-only `infra-privileged` environment mints the token and calls the composite. Create `.github/workflows/<feature>.yml` (any filename except `pr-quality-guards.yml`); the content job (no environment, no secret) uploads one file as an artifact, and the credential job (`needs:` it, `if: github.ref == 'refs/heads/main'`, `environment: infra-privileged`, permissions `contents: read` + `checks: write`) has exactly these steps, every third-party action pinned to a 40-hex SHA:
 
 ```yaml
+- uses: actions/checkout@<sha>
+  with:
+    ref: main
+    persist-credentials: false
+- uses: actions/download-artifact@<sha>
+  with:
+    name: <artifact>
+    path: knowledge-base/<dir>
+- uses: DopplerHQ/cli-action@<sha>
 - id: app
   uses: ./.github/actions/mint-infra-app-token
   with:

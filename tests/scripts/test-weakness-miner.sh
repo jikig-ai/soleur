@@ -372,6 +372,15 @@ def check_caller(fname, doc, jname, jobs, job, steps, idx, st):
             if (not set(dw) <= {"name", "path"} or "name" not in dw or not dp.startswith("knowledge-base/")
                     or ".." in dp.split("/") or dp.startswith("/")):
                 v("G17", "%s: the artifact download must set only name and a path under knowledge-base/ (got %r)" % (tag, dict(dw)))
+    if set(job) - {"needs", "if", "environment", "runs-on", "timeout-minutes", "permissions", "steps"} or job.get("runs-on") != "ubuntu-latest":
+        v("G20", "%s: the credential job may set only needs/if/environment/runs-on/timeout-minutes/permissions/steps and must run on ubuntu-latest (no container, defaults, strategy, services, env)" % tag)
+    for s in steps:
+        u = str(s.get("uses", "")).strip()
+        if u and resolve(u) is None and not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40}", u):
+            v("G20", "%s: every third-party action in the credential job must be pinned to a 40-hex commit SHA (got %s)" % (tag, u))
+    if (set(w) - {"add-paths", "branch-prefix", "commit-message", "pr-title-prefix", "pr-body", "change-summary", "pr-token", "gh-token"}
+            or str(w.get("skip-auto-merge", "false")).lower() != "false"):
+        v("G20", "%s: the composite step may pass only its content inputs and pr-token/gh-token, and must not skip auto-merge" % tag)
     chain = needs_closure(jobs, job)
     if not chain:
         v("G13", "%s: the credential job must depend on a separate content-producing job" % tag)
@@ -442,8 +451,8 @@ def code_of(line):
     return re.sub(r"(^|\s)#.*$", r"\1", blank_quotes(line))
 
 
-PRE = (r"(?:^|[;&|(!{`]|\$\(|\b(?:then|do|else|if|while|until|command|exec|env|xargs|time)\b)\s*"
-       r"(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*")
+PRE = (r"(?:^|[;&|(!{`)]|\$\(|\b(?:then|do|else|if|while|until|command|exec|env|xargs|time|nohup|sudo|timeout\s+\S+)\b)\s*"
+       r"(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*(?:\S*/)?")
 
 cdoc = yaml.safe_load(open(COMPOSITE))
 if "pr-token" not in (cdoc.get("inputs") or {}):
@@ -452,8 +461,8 @@ csteps = (cdoc.get("runs") or {}).get("steps") or []
 if not csteps:
     v("C2", "the composite's PR-opening step was not found")
 else:
-    if len(csteps) != 1 or "uses" in csteps[0]:
-        v("C2", "the composite must be exactly one inline run step: a second step or a `uses:` is outside the analysed body")
+    if len(csteps) != 1 or "uses" in csteps[0] or csteps[0].get("shell") != "bash" or set(csteps[0]) - {"name", "shell", "env", "run"}:
+        v("C2", "the composite must be exactly one inline `shell: bash` run step with only name/shell/env/run keys: a second step, a `uses:`, another shell or an `if`/working-directory is outside the analysed body")
     step = csteps[0]
     env = step.get("env") or {}
     if "GH_TOKEN" in env:
@@ -462,6 +471,7 @@ else:
         v("C4", "the step env must carry exactly PR_TOKEN from inputs.pr-token and GATE_TOKEN from inputs.gh-token")
     lines = [l for l in str(step.get("run", "")).splitlines() if l.strip() and not l.strip().startswith("#")]
     text = "\n".join(lines)
+    nocomment = "\n".join(re.sub(r"(^|\s)#.*$", r"\1", l) for l in lines)
     stmts = [l.strip() for l in lines]
     if len(stmts) < 2 or not stmts[0].startswith("set ") or not stmts[1].startswith('case "$-" in'):
         v("C5", "the first statements must be set and then the xtrace refusal (case \"$-\" in)")
@@ -483,18 +493,36 @@ else:
         if nochange >= 0 and blocks[0].start() > nochange:
             v("C6", "%s must come before the no-change exit" % label)
         for b in blocks:
-            if not re.search(r"\bexit\s+[1-9]", b.group(1)):
-                v("C6", "%s has a then-body that does not exit non-zero" % label)
-    xt = re.search(r'case "\$-" in(.*?)\n\s*esac', text, re.S)
-    if not xt or not re.search(r"\bexit\s+[1-9]", xt.group(1)):
-        v("C5", "the xtrace refusal must exit non-zero")
-    pm = re.search(r'^\s*_pr="\$PR_TOKEN"\s*$', text, re.M)
-    gm = re.search(r'^\s*_gate="\$GATE_TOKEN"\s*$', text, re.M)
+            body_lines = [l.strip() for l in b.group(1).splitlines() if l.strip()]
+            if (len(body_lines) != 2 or not (body_lines[0].startswith('echo "::error::') and body_lines[0].endswith('"'))
+                    or not re.fullmatch(r"exit [1-9][0-9]*", body_lines[1])):
+                v("C6", "%s must have exactly one echo of an ::error:: line then a bare exit N" % label)
+    if not re.search(
+            r'case "\$-" in\s*\n\s*\*x\*\)\s*\n\s*if \[ -n "\$\{PR_TOKEN:\+x\}\$\{GATE_TOKEN:\+x\}" \]; then\s*\n'
+            r'\s*echo "::error::[^\n]*"\s*\n\s*exit 78\s*\n\s*fi\s*\n\s*;;\s*\n\s*esac', text):
+        v("C5", "the xtrace refusal must be exactly: case on $-, *x*) with a live PR_TOKEN or GATE_TOKEN, one echo, exit 78")
+    pm = re.search(r'^\s*_pr="\$PR_TOKEN"\s*$', nocomment, re.M)
+    gm = re.search(r'^\s*_gate="\$GATE_TOKEN"\s*$', nocomment, re.M)
     if not pm or not gm:
         v("C18", '_pr must be assigned from "$PR_TOKEN" and _gate from "$GATE_TOKEN" (a swap authors as the workflow token)')
-    hm = re.search(r"^\s*_hdr=.*$", text, re.M)
-    if not hm or "x-access-token:${_pr}" not in hm.group(0) or "_gate" in hm.group(0):
-        v("C18", "the push header must be built from ${_pr} and never from _gate")
+    if not re.search(r'^\s*_hdr="Authorization: basic \$\(printf \'%s\' "x-access-token:\$\{_pr\}" \| base64 -w0\)"\s*$', nocomment, re.M):
+        v("C18", "the push header must be exactly _hdr=\"Authorization: basic $(printf '%s' \"x-access-token:${_pr}\" | base64 -w0)\" and never built from _gate")
+    for label, pat in (("_pr", r"^\s*_pr="), ("_gate", r"^\s*_gate="), ("_hdr", r"^\s*_hdr="), ("_bearer_ok", r"^\s*_bearer_ok\(\)"),
+                       ("gh_app", r"^\s*gh_app\(\)"), ("gh_gate", r"^\s*gh_gate\(\)"), ("git_remote", r"^\s*git_remote\(\)")):
+        if len(re.findall(pat, nocomment, re.M)) != 1:
+            v("C20", "%s must be defined or assigned exactly once (a later one wins at runtime)" % label)
+    allowed_lines = {
+        "_pr": (r'^\s*_pr="\$PR_TOKEN"\s*$', r'^\s*gh_app\(\)', r'^\s*_hdr=', r'^\s*unset _hdr _pr _gate\s*$'),
+        "_gate": (r'^\s*_gate="\$GATE_TOKEN"\s*$', r'^\s*gh_gate\(\)', r'^\s*unset _hdr _pr _gate\s*$'),
+        "PR_TOKEN": (r'if \[ -n "\$\{PR_TOKEN:\+x\}', r'if ! _bearer_ok "\$\{PR_TOKEN:-\}"', r'if \[\[ "\$PR_TOKEN" == "\$GATE_TOKEN" \]\]',
+                     r'^\s*_pr="\$PR_TOKEN"\s*$', r'^\s*unset PR_TOKEN GATE_TOKEN GH_TOKEN\s*$'),
+        "GATE_TOKEN": (r'if \[ -n "\$\{PR_TOKEN:\+x\}', r'if ! _bearer_ok "\$\{GATE_TOKEN:-\}"', r'if \[\[ "\$PR_TOKEN" == "\$GATE_TOKEN" \]\]',
+                       r'^\s*_gate="\$GATE_TOKEN"\s*$', r'^\s*unset PR_TOKEN GATE_TOKEN GH_TOKEN\s*$'),
+    }
+    for var, pats in allowed_lines.items():
+        for l in nocomment.splitlines():
+            if re.search(r"(?<![A-Za-z0-9_])%s(?![A-Za-z0-9_])" % re.escape(var), l) and not any(re.search(pt, l) for pt in pats):
+                v("C20", "%s may appear only where it is assigned, refused, scoped into its helper or unset: %s" % (var, l.strip()))
     um = re.search(r"^\s*unset\s+PR_TOKEN\s+GATE_TOKEN\s+GH_TOKEN\s*$", text, re.M)
     dl = text.find("curl -sSLo")
     if not um or (dl >= 0 and um.start() > dl) or (pm and um.start() < pm.start()) or (gm and um.start() < gm.start()):
@@ -512,8 +540,11 @@ else:
         if re.search(PRE + r"gh\s", l):
             v("C9", "a bare gh call (no gh_app or gh_gate helper): %s" % l.strip())
     for l in codelines:
-        if re.search(r"\b(eval|xargs)\b|\b(ba)?sh\s+-c\b", l):
-            v("C16", "eval, xargs and sh -c hide commands from the guard: %s" % l.strip())
+        if re.search(r"\b(eval|xargs|trap|source)\b|\b(ba)?sh\s+-c\b|set\s+\+e|python3\s+-c", l):
+            v("C16", "eval, xargs, trap, source, sh -c, set +e and python -c hide commands from the guard: %s" % l.strip())
+    for l in body.splitlines():
+        if re.search(PRE + r"(curl|wget)\b", code_of(l)) and "gitleaks" not in l:
+            v("C16", "a curl or wget other than the gitleaks download could author a PR through another client: %s" % l.strip())
     for verb in ("create", "edit", "merge"):
         if not re.search(PRE + r"gh_app\s+pr\s+%s\b" % verb, codebody, re.M):
             v("C10", "gh pr %s must go through gh_app, at command position" % verb)
@@ -530,23 +561,34 @@ else:
     for l in codelines:
         if re.search(PRE + r"git\s+(?:-[A-Za-z]\s+\S+\s+|--\S+\s+)*push\b", l):
             v("C12", "a bare git push uses the checkout credential, not the App token: %s" % l.strip())
-    gdef = re.search(r"^\s*git_remote\(\)\s*\{.*?^\s*\}", body, re.M | re.S)
-    if not gdef or not all(t in gdef.group(0) for t in ("GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=http.https://github.com/.extraheader", 'GIT_CONFIG_VALUE_0="$_hdr"')):
-        v("C12", "git_remote must pass the header through GIT_CONFIG_COUNT/KEY_0/VALUE_0 in the per-command environment")
+    if not re.search(r'^\s*git_remote\(\) \{\s*\n\s*GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http\.https://github\.com/\.extraheader \\\n'
+                     r'\s*GIT_CONFIG_VALUE_0="\$_hdr" git "\$@"\s*\n\s*\}\s*$', nocomment, re.M):
+        v("C12", "git_remote must be exactly the per-command GIT_CONFIG_COUNT/KEY_0/VALUE_0 header wrapper around git")
     for mm in re.finditer(r"\bgit_remote\s+([a-z-]+)", body):
         if mm.group(1) not in ("push", "ls-remote"):
             v("C12", "git_remote may only run push and ls-remote (got %s)" % mm.group(1))
-    if not re.search(r"base64 -w ?0|tr -d '\\n'", body):
-        v("C13", "the header must be built newline-free (base64 -w0 or tr -d)")
+    hline = re.search(r"^\s*_hdr=.*$", nocomment, re.M)
+    if not hline or "base64 -w0" not in hline.group(0):
+        v("C13", "the header must be built newline-free with base64 -w0")
     joined = re.sub(r"\\\n\s*", " ", body)
     ts = re.search(r"^\s*unset\s+(GIT_TRACE[^\n]*)$", joined, re.M)
     need = {"GIT_TRACE", "GIT_TRACE_CURL", "GIT_TRACE_REDACT", "GIT_CURL_VERBOSE", "GIT_HTTP_TRACE_AUTH_HEADER"}
-    first_git = body.find("git_remote()")
+    first_git = joined.find("git_remote()")
     if not ts or not need <= set(re.split(r"[\s\\]+", ts.group(1))) or (first_git >= 0 and ts.start() > first_git):
         v("C14", "the git trace variables must be unset before git_remote is defined (%s)" % ", ".join(sorted(need)))
-    for fm in re.finditer(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\(\)\s*\{", body, re.M):
+    for fm in re.finditer(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\(\)\s*\{", nocomment, re.M):
         if fm.group(1) not in ("_bearer_ok", "gh_app", "gh_gate", "git_remote"):
             v("C17", "an unrecognised shell function %s() can wrap gh or git outside the helpers" % fm.group(1))
+    bot_name = bot_email = ""
+    if CANON_SH and os.path.isfile(CANON_SH):
+        ctext = open(CANON_SH).read()
+        bn = re.search(r"^BOT_NAME='([^']+)'", ctext, re.M)
+        be = re.search(r"^BOT_EMAIL='([^']+)'", ctext, re.M)
+        bot_name, bot_email = (bn.group(1) if bn else ""), (be.group(1) if be else "")
+    un = re.findall(r'^\s*git config user\.name "([^"]+)"\s*$', nocomment, re.M)
+    ue = re.findall(r'^\s*git config user\.email "([^"]+)"\s*$', nocomment, re.M)
+    if not bot_name or un != [bot_name] or ue != [bot_email]:
+        v("C19", "the commit identity must be exactly the pin-bump script's BOT_NAME/BOT_EMAIL (the PR author, pusher and committer are one App identity)")
     canon = ""
     if CANON_SH and os.path.isfile(CANON_SH):
         cm = re.search(r"^_bearer_ok\(\).*$", open(CANON_SH).read(), re.M)
@@ -972,6 +1014,117 @@ def _():
     comp = sub(comp, '          gh_app pr merge "$BRANCH" --squash --auto\n', '          gh_app pr merge "$BRANCH" --squash --auto\n          eval "true"\n')
 
 
+
+# --- rows added after the fix round -------------------------------------------------------
+GATE_DEF = '        gh_gate() { GH_TOKEN="$_gate" gh "$@"; }\n'
+
+
+@row_fn("49-commit-identity-reverted")
+def _():
+    global comp
+    comp = sub(comp, 'git config user.name "soleur-infra[bot]"', 'git config user.name "github-actions[bot]"')
+
+
+@row_fn("50-second-pr-assignment")
+def _():
+    global comp
+    comp = sub(comp, GATE_DEF, GATE_DEF + '        _pr="$_gate"\n')
+
+
+@row_fn("51-refusal-exit-via-or")
+def _():
+    global comp
+    i = comp.index('if [[ "$PR_TOKEN" == "$GATE_TOKEN" ]]; then')
+    j = comp.index("exit 1", i)
+    comp = comp[:j] + "true || exit 1" + comp[j + len("exit 1"):]
+
+
+@row_fn("52-header-from-gate-with-pr-in-a-comment")
+def _():
+    global comp
+    comp = sub(comp, """"x-access-token:${_pr}" | base64 -w0)\"""", """"x-access-token:${_gate}" | base64 -w0)" # x-access-token:${_pr}""")
+
+
+@row_fn("53-bare-gh-in-a-case-arm")
+def _():
+    global comp
+    comp = sub(comp, GATE_DEF, GATE_DEF + '        case x in x) gh pr view 1 ;; esac\n')
+
+
+@row_fn("54-bare-gh-absolute-path")
+def _():
+    global comp
+    comp = sub(comp, GATE_DEF, GATE_DEF + '        /usr/bin/gh pr ready "$BRANCH"\n')
+
+
+@row_fn("55-curl-with-the-gate-token")
+def _():
+    global comp
+    comp = sub(comp, GATE_DEF, GATE_DEF + '        curl -H "Authorization: Bearer ${_gate}" https://api.github.com/repos/${REPO}/pulls\n')
+
+
+@row_fn("56-remote-action-not-allowlisted")
+def _():
+    global wf
+
+    def f(d):
+        d["jobs"]["open-pr"]["steps"].insert(2, {"uses": "evil/action@v1"})
+    wf = struct(f)
+
+
+@row_fn("57-needs-removed")
+def _():
+    global wf
+    wf = sub(wf, "    needs: mine\n", "")
+
+
+@row_fn("58-gh-app-closes-a-pr")
+def _():
+    global comp
+    comp = sub(comp, GATE_DEF, GATE_DEF + '        gh_app pr close "$BRANCH"\n')
+
+
+@row_fn("59-xtrace-refusal-without-exit")
+def _():
+    global comp
+    comp = sub(comp, "exit 78", ":")
+
+
+@row_fn("60-bearer-ok-redefined")
+def _():
+    global comp
+    comp = sub(comp, GATE_DEF, GATE_DEF + '        _bearer_ok() { return 0; }\n')
+
+
+@row_fn("61-gh-app-redefined")
+def _():
+    global comp
+    comp = sub(comp, GATE_DEF, GATE_DEF + '        gh_app() { GH_TOKEN="$_gate" "$(command -v gh)" "$@"; }\n')
+
+
+@row_fn("62-composite-shell-bash-x")
+def _():
+    global comp
+    comp = sub(comp, "      shell: bash\n", "      shell: bash -x {0}\n")
+
+
+@row_fn("63-credential-job-self-hosted")
+def _():
+    global wf
+    wf = sub(wf, "    environment: infra-privileged\n    runs-on: ubuntu-latest\n", "    environment: infra-privileged\n    runs-on: self-hosted\n")
+
+
+@row_fn("64-skip-auto-merge-true")
+def _():
+    global wf
+    wf = sub(wf, "          " + PRT + "\n", "          " + PRT + "\n          skip-auto-merge: 'true'\n")
+
+
+@row_fn("65-action-ref-is-a-branch")
+def _():
+    global wf
+    wf = sub(wf, "DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4", "DopplerHQ/cli-action@main")
+
 if row not in APPLY:
     sys.exit("unknown row %r" % row)
 APPLY[row]()
@@ -993,8 +1146,8 @@ GUARD_CASES=0
 GUARD_RAN_ROWS=""
 # The row names, listed a SECOND time and independently of the ROWS table below, so a deleted or
 # duplicated row changes the set and the floor at the bottom of the file refuses to report green.
-GUARD_EXPECTED_ROWS="1-pr-token-is-workflow-token 1b-pr-token-secrets-spelling 2-pr-token-deleted 3-mint-after-composite 4-environment-removed 5-third-caller-bad 7-bare-gh 8a-merge-through-gate 8b-create-through-gate 8c-edit-through-gate 9-push-without-app-header 10-check-runs-through-app 11a-equality-refusal-deleted 11b-unset-deleted 11c-step-level-gh-token 11d-pr-token-shape-check-dropped 12a-miner-in-credential-job 12b-environment-on-mine 12c-secret-in-mine 13-persist-credentials-dropped 14-extra-write-permission 15-pr-assign-swapped 16-gate-assign-swapped 17-header-from-gate-token 18-equality-refusal-inert 19-bearer-body-weakened 20-second-composite-step 21-bare-gh-env-prefixed 22-third-helper 23-gate-token-writes-a-pr-endpoint 24-merge-neutered-by-echo 25-trace-unset-after-push 26-caller-trailing-slash 27-caller-remote-spelling 28-if-or-always 29-secret-bracket-in-mine 30-mint-sibling-prefix-action 31-installation-id-changed 32-job-env-bash-env 33-download-path-widened 34-checkout-ref-dropped 35-mine-write-permission 36-mint-continue-on-error 37-mint-uses-other-action 38-mint-permissions-widened 39-mint-repositories-widened 40-mint-broad-doppler-token 41-mint-names-a-doppler-project 42-gh-token-is-the-app-token 43-composite-input-renamed 44-composite-pr-token-env-from-gate 45-statement-before-xtrace-refusal 46-gh-app-helper-uses-gate-token 47-header-built-with-newlines 48-eval-hides-a-command"
-GUARD_EXPECTED_CASES=59
+GUARD_EXPECTED_ROWS="1-pr-token-is-workflow-token 1b-pr-token-secrets-spelling 2-pr-token-deleted 3-mint-after-composite 4-environment-removed 5-third-caller-bad 7-bare-gh 8a-merge-through-gate 8b-create-through-gate 8c-edit-through-gate 9-push-without-app-header 10-check-runs-through-app 11a-equality-refusal-deleted 11b-unset-deleted 11c-step-level-gh-token 11d-pr-token-shape-check-dropped 12a-miner-in-credential-job 12b-environment-on-mine 12c-secret-in-mine 13-persist-credentials-dropped 14-extra-write-permission 15-pr-assign-swapped 16-gate-assign-swapped 17-header-from-gate-token 18-equality-refusal-inert 19-bearer-body-weakened 20-second-composite-step 21-bare-gh-env-prefixed 22-third-helper 23-gate-token-writes-a-pr-endpoint 24-merge-neutered-by-echo 25-trace-unset-after-push 26-caller-trailing-slash 27-caller-remote-spelling 28-if-or-always 29-secret-bracket-in-mine 30-mint-sibling-prefix-action 31-installation-id-changed 32-job-env-bash-env 33-download-path-widened 34-checkout-ref-dropped 35-mine-write-permission 36-mint-continue-on-error 37-mint-uses-other-action 38-mint-permissions-widened 39-mint-repositories-widened 40-mint-broad-doppler-token 41-mint-names-a-doppler-project 42-gh-token-is-the-app-token 43-composite-input-renamed 44-composite-pr-token-env-from-gate 45-statement-before-xtrace-refusal 46-gh-app-helper-uses-gate-token 47-header-built-with-newlines 48-eval-hides-a-command 49-commit-identity-reverted 50-second-pr-assignment 51-refusal-exit-via-or 52-header-from-gate-with-pr-in-a-comment 53-bare-gh-in-a-case-arm 54-bare-gh-absolute-path 55-curl-with-the-gate-token 56-remote-action-not-allowlisted 57-needs-removed 58-gh-app-closes-a-pr 59-xtrace-refusal-without-exit 60-bearer-ok-redefined 61-gh-app-redefined 62-composite-shell-bash-x 63-credential-job-self-hosted 64-skip-auto-merge-true 65-action-ref-is-a-branch"
+GUARD_EXPECTED_CASES=76
 
 t_workflow_pr_identity() {
   local real_wf="$REPO_ROOT/.github/workflows/weakness-miner.yml"
@@ -1151,7 +1304,7 @@ YML
 2-pr-token-deleted|G1
 3-mint-after-composite|G2
 4-environment-removed|G9
-5-third-caller-bad|open-pr-3
+5-third-caller-bad|G1
 7-bare-gh|C9
 8a-merge-through-gate|C10
 8b-create-through-gate|C10
@@ -1201,6 +1354,23 @@ YML
 46-gh-app-helper-uses-gate-token|C8
 47-header-built-with-newlines|C13
 48-eval-hides-a-command|C16
+49-commit-identity-reverted|C19
+50-second-pr-assignment|C20
+51-refusal-exit-via-or|C6
+52-header-from-gate-with-pr-in-a-comment|C18
+53-bare-gh-in-a-case-arm|C9
+54-bare-gh-absolute-path|C9
+55-curl-with-the-gate-token|C16
+56-remote-action-not-allowlisted|G11
+57-needs-removed|G13
+58-gh-app-closes-a-pr|C10
+59-xtrace-refusal-without-exit|C5
+60-bearer-ok-redefined|C20
+61-gh-app-redefined|C20
+62-composite-shell-bash-x|C2
+63-credential-job-self-hosted|G20
+64-skip-auto-merge-true|G20
+65-action-ref-is-a-branch|G20
 ROWS
 }
 

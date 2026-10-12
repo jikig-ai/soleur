@@ -55,7 +55,7 @@ public repository, so no setting is a verified lever.
 1. `weakness-miner.yml` authors, pushes and arms its digest PR as the `soleur-infra` App: the same author, pusher,
    committer and enqueuer as Control A (PR 10027). Residual differences are not removed and are named so a failed first
    run is read against them: the branch prefix (`ci/`, not `soleur/inngest-pin-`), the content class (one docs file),
-   and the synthetic check-runs the composite still posts beside the real runs. The App token is minted in the job that opens the PR, through
+   the trigger (a `schedule` run here, `workflow_dispatch` only for the pin bump), and the synthetic check-runs the composite still posts beside the real runs. The App token is minted in the job that opens the PR, through
    `.github/actions/mint-infra-app-token` (narrow source `soleur-infra-app`, installation `166065653`, scoped to
    `contents:write` and `pull_requests:write` on `soleur`), and reaches the composite as the new `pr-token` input.
 2. The workflow token keeps exactly one job: posting the synthetic check-runs, because the rulesets match check-runs from
