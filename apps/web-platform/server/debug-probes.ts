@@ -38,8 +38,8 @@ export interface DebugRedactionProbe {
 // with the `/g` dropped.
 export const DEBUG_REDACTION_PROBES: DebugRedactionProbe[] = [
   // ---- [redacted-key]: API-key sentinels + AWS/ENV credential assignments --
-  { redactedKind: "[redacted-key]", probe: /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_-]{20,}/ },
-  { redactedKind: "[redacted-key]", probe: /\bgithub_pat_[A-Za-z0-9]{22}_[A-Za-z0-9]{59,}/ },
+  { redactedKind: "[redacted-key]", probe: /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9._~+/=-]{20,}/ },
+  { redactedKind: "[redacted-key]", probe: /\bgithub_pat_[A-Za-z0-9._~+/=-]{22}_[A-Za-z0-9._~+/=-]{59,}/ },
   { redactedKind: "[redacted-key]", probe: /\b(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{16,}/ },
   { redactedKind: "[redacted-key]", probe: /\bsk-ant-[A-Za-z0-9_-]{20,}/ },
   { redactedKind: "[redacted-key]", probe: /\bsk-[A-Za-z0-9]{32,}/ },

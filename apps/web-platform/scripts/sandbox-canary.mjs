@@ -1613,8 +1613,8 @@ export async function doCapture({
             // NOT "bypassPermissions": that maps to --dangerously-skip-permissions,
             // which claude.exe REFUSES under root ("cannot be used with root/sudo
             // privileges") — and the capture runs as root in CI/in-image. The
-            // `canUseTool` force-allow below + `autoAllowBashIfSandboxed` in the
-            // sandbox config already auto-allow the one Bash op, so "default" is
+            // `canUseTool` force-allow below already allows the one Bash op (the
+            // sandbox config no longer auto-allows it, #10054), so "default" is
             // sufficient and root-compatible (#5913 in-image capture fix).
             permissionMode: "default",
             cwd: resolvedOwn,

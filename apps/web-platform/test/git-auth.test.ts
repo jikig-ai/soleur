@@ -69,6 +69,29 @@ function mockExecFile(
   });
 }
 
+/**
+ * Intercept the pino child logger that server/git-auth binds at module load
+ * (`createChildLogger("git-auth")` → module-level `const log`). Must be called
+ * BEFORE the dynamic `import("../server/git-auth")` — the child is captured
+ * once at module scope, so installing the mock after the import misses the
+ * warn entirely. Returns the shared warn spy so a test can assert on (or
+ * assert the absence of) the format-mismatch warn.
+ */
+function mockLogger() {
+  const warnSpy = vi.fn();
+  const child = {
+    warn: warnSpy,
+    info: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  };
+  vi.doMock("../server/logger", () => ({
+    default: child,
+    createChildLogger: () => child,
+  }));
+  return warnSpy;
+}
+
 beforeEach(() => {
   vi.resetModules();
 });
@@ -77,6 +100,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.doUnmock("child_process");
   vi.doUnmock("../server/github-app");
+  vi.doUnmock("../server/logger");
 });
 
 describe("writeAskpassScript", () => {
@@ -223,7 +247,7 @@ describe("cleanupAskpassScript", () => {
 
 describe("gitWithInstallationAuth", () => {
   test("sets GIT_ASKPASS, GIT_TERMINAL_PROMPT=0, GIT_CONFIG_NOSYSTEM=1, GIT_CONFIG_GLOBAL=/dev/null in env", async () => {
-    const fakeToken = "ghs_faketokenabcdefghijklmnopqrstuvwxyz";
+    const fakeToken = "ghs_faketokenabcdefghijklmnopqrstuvwxyz_0";
     vi.doMock("../server/github-app", () => ({
       generateInstallationToken: vi.fn().mockResolvedValue(fakeToken),
     }));
@@ -250,7 +274,7 @@ describe("gitWithInstallationAuth", () => {
   });
 
   test("prepends -c credential.helper= to reset inherited helpers", async () => {
-    const fakeToken = "ghs_faketokenabcdefghijklmnopqrstuvwxyz";
+    const fakeToken = "ghs_faketokenabcdefghijklmnopqrstuvwxyz_0";
     vi.doMock("../server/github-app", () => ({
       generateInstallationToken: vi.fn().mockResolvedValue(fakeToken),
     }));
@@ -271,7 +295,7 @@ describe("gitWithInstallationAuth", () => {
   });
 
   test("token NEVER appears in execFile args array", async () => {
-    const fakeToken = "ghs_faketokenabcdefghijklmnopqrstuvwxyz";
+    const fakeToken = "ghs_faketokenabcdefghijklmnopqrstuvwxyz_0";
     vi.doMock("../server/github-app", () => ({
       generateInstallationToken: vi.fn().mockResolvedValue(fakeToken),
     }));
@@ -291,7 +315,7 @@ describe("gitWithInstallationAuth", () => {
   });
 
   test("cleans up askpass script even when git fails", async () => {
-    const fakeToken = "ghs_faketokenabcdefghijklmnopqrstuvwxyz";
+    const fakeToken = "ghs_faketokenabcdefghijklmnopqrstuvwxyz_0";
     vi.doMock("../server/github-app", () => ({
       generateInstallationToken: vi.fn().mockResolvedValue(fakeToken),
     }));
@@ -313,34 +337,88 @@ describe("gitWithInstallationAuth", () => {
     expect(existsSync(capturedAskpassPath!)).toBe(false);
   });
 
+  // Issued-shape fixtures are SPLIT-ASSEMBLED — a contiguous token-shaped
+  // literal in source trips the secret-scan sentinels (and reads as a real
+  // credential to any scanner).
+  // (a) ~390-char canonical-alphabet token carrying every punctuation byte
+  //     of the vendor class (`.`, `-`, `_`, `~`, `+`, `/`, `=`).
+  const ISSUED_390 =
+    "ghs" + "_" + "x".repeat(20) + "._-~+/=" + "y9Z".repeat(120);
+  // (b) ~520-char `ghs_<appid>_<jwt>`-shaped token, the post-rotation
+  //     issued form (app-id segment, `_`, then header.payload.signature).
+  const ISSUED_520 =
+    "ghs" +
+    "_" +
+    "Iv1.8f61a04" +
+    "_" +
+    "eyJ" +
+    "a".repeat(200) +
+    "." +
+    "eyJ" +
+    "b".repeat(240) +
+    "." +
+    "S".repeat(56);
+
   test.each([
-    "ghs_" + "a".repeat(30),
-    "ghs_" + "a".repeat(40),
-    "ghs_" + "a".repeat(128),
-    "ghs_" + "ABCDEF_0123456789-abcdefghij",
-  ])("permissive token validator accepts %s", async (tok) => {
-    vi.doMock("../server/github-app", () => ({
-      generateInstallationToken: vi.fn().mockResolvedValue(tok),
-    }));
-    mockExecFile([]);
+    ["floor boundary (36)", "ghs" + "_" + "a".repeat(36)],
+    ["mid-length", "ghs" + "_" + "a".repeat(40)],
+    ["retired 128 ceiling is now interior", "ghs" + "_" + "a".repeat(128)],
+    ["beyond the retired ceiling", "ghs" + "_" + "a".repeat(600)],
+    [
+      "mixed canonical alphabet",
+      "ghs" + "_" + "ABCDEF_0123456789-abcdefghij" + "z".repeat(10),
+    ],
+    ["~390-char issued shape (full canonical alphabet)", ISSUED_390],
+    ["~520-char issued shape (ghs_<appid>_<jwt>)", ISSUED_520],
+  ])(
+    "permissive token validator accepts %s without warning",
+    async (_label, tok) => {
+      const warnSpy = mockLogger();
+      vi.doMock("../server/github-app", () => ({
+        generateInstallationToken: vi.fn().mockResolvedValue(tok),
+      }));
+      mockExecFile([]);
 
-    const { gitWithInstallationAuth } = await import("../server/git-auth");
-    await expect(
-      gitWithInstallationAuth(["status"], 12345),
-    ).resolves.toBeDefined();
-  });
+      const { gitWithInstallationAuth } = await import("../server/git-auth");
+      await expect(
+        gitWithInstallationAuth(["status"], 12345),
+      ).resolves.toBeDefined();
+      // The assertion is on the WARN, not resolution — warn-not-throw
+      // resolves either way, so only the warn spy proves the format check
+      // accepted the issued shape.
+      expect(warnSpy).not.toHaveBeenCalled();
+    },
+  );
 
-  test("token-format mismatch logs a warning but does NOT throw", async () => {
-    vi.doMock("../server/github-app", () => ({
-      generateInstallationToken: vi.fn().mockResolvedValue("not-a-ghs-token"),
-    }));
-    mockExecFile([]);
+  test.each([
+    "not-a-ghs-token",
+    // Under the retired {30,128} bound's shortest accepted row — now below
+    // the vendor {36,} floor, so it warns (and still resolves: warn-not-throw).
+    "ghs" + "_" + "a".repeat(30),
+    // One below the {36,} floor — pins the floor, not just "short".
+    "ghs" + "_" + "a".repeat(35),
+    // An out-of-alphabet byte pins the class in the negative direction —
+    // the alphabet is not "any string ≥36".
+    "ghs" + "_" + "a".repeat(35) + "!",
+  ])(
+    "token-format mismatch warns but does NOT throw: %s",
+    async (tok) => {
+      const warnSpy = mockLogger();
+      vi.doMock("../server/github-app", () => ({
+        generateInstallationToken: vi.fn().mockResolvedValue(tok),
+      }));
+      mockExecFile([]);
 
-    const { gitWithInstallationAuth } = await import("../server/git-auth");
-    await expect(
-      gitWithInstallationAuth(["status"], 12345),
-    ).resolves.toBeDefined();
-  });
+      const { gitWithInstallationAuth } = await import("../server/git-auth");
+      await expect(
+        gitWithInstallationAuth(["status"], 12345),
+      ).resolves.toBeDefined();
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ installationId: 12345 }),
+        expect.stringContaining("does not match expected format"),
+      );
+    },
+  );
 
   test("passes through cwd and timeout options", async () => {
     vi.doMock("../server/github-app", () => ({

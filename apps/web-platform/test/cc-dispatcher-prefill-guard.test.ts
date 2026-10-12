@@ -318,7 +318,7 @@ describe("realSdkQueryFactory — prefill-guard integration (#3250)", () => {
     mockBuildAgentSandboxConfig.mockReturnValue({
       enabled: true,
       failIfUnavailable: true,
-      autoAllowBashIfSandboxed: true,
+      autoAllowBashIfSandboxed: false,
       allowUnsandboxedCommands: false,
       enableWeakerNestedSandbox: true,
       network: { allowedDomains: [], allowManagedDomainsOnly: true },
@@ -412,7 +412,7 @@ describe("realSdkQueryFactory — context_reset signal (#3269)", () => {
     mockBuildAgentSandboxConfig.mockReturnValue({
       enabled: true,
       failIfUnavailable: true,
-      autoAllowBashIfSandboxed: true,
+      autoAllowBashIfSandboxed: false,
       allowUnsandboxedCommands: false,
       enableWeakerNestedSandbox: true,
       network: { allowedDomains: [], allowManagedDomainsOnly: true },

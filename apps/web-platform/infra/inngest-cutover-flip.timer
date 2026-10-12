@@ -1,5 +1,11 @@
 [Unit]
 Description=Poll the Inngest cutover flip flag every 30s (#6178)
+# SKIP-VS-FAIL (#9962): a condition on the TIMER is evaluated at activation, so an abort-host
+# never arms the 30s tick against a missing /etc/default/inngest-server at all — the service's
+# own condition is the second layer for non-timer starts. A skipped timer stays unarmed for the
+# boot's life (no re-evaluation); re-entry is a provision re-run's `enable --now` or a reboot
+# with the file present.
+ConditionPathExists=/etc/default/inngest-server
 
 [Timer]
 # The dedicated host has no inbound control channel; a 30s Doppler-flag poll is the only

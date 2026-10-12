@@ -1494,7 +1494,7 @@ describe("postAnthropicMessage (shared Anthropic transport)", () => {
 // ---------------------------------------------------------------------------
 
 // Runtime-constructed token shapes that MATCH the redaction-allowlist regexes
-// (sk-ant-[A-Za-z0-9_-]{20,}, ghs_[A-Za-z0-9_-]{20,}) WITHOUT a literal
+// (sk-ant-[A-Za-z0-9_-]{20,}, ghs_[A-Za-z0-9._~+/=-]{20,}) WITHOUT a literal
 // sk-ant-<alnum> string in the source (GitHub push-protection Sharp Edge — the
 // secret only exists at runtime, assembled from non-secret fragments).
 const SYNTH_SK_ANT = "sk-ant-" + "A".repeat(40);
