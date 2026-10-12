@@ -16,7 +16,9 @@
 # group adds three cues and a narrower veto; the pre-ask hook is NOT widened (group `shared` only).
 #
 # ON A WRONGFUL BLOCK (a closing message stopped that carried a real operator question):
-#   1. Find the closing in the local session transcript by the ledger row's sha256 of the unit.
+#   1. Find the closing in the local session transcript by the ledger row's sha256 of the unit (the hash is of the
+#      NORMALISED unit: lowercased, fences, quote lines and code spans stripped, CR and invisible characters removed,
+#      whitespace squeezed, then cut at the last '. ' or '! '; hash each candidate sentence of the closing the same way).
 #   2. Narrow the CLOSING cue in this file (a tighter shape, or a word in TFC_CLOSING_EXTRA_RE) and
 #      add a must-PASS fixture to pre-closing-technical-fork-gate.test.sh; raise MIN_CASES and the
 #      V1 literal together. That touches no other file.
@@ -44,7 +46,7 @@
 [[ -n "${_TFC_LOADED:-}" ]] && return 0
 _TFC_LOADED=1
 
-# ---- SHARED group: moved byte-identical from pre-ask-technical-fork-gate.sh ---------------------
+# ---- SHARED group: moved byte-identical from pre-ask-technical-fork-gate.sh (RULING_OPVOCAB_RE is recomposed from two halves, pinned equal)  ---------------------
 RULING_STRICT_RE='(\bhow (strict|rigorous)|\b(strictness|stricter|stringen[a-z]*))'
 RULING_EVID_NOUN_RE='\b(evidence|proof|check|gate|guard|validation|verification|criteria|assertion|test|lint)\b'
 RULING_BAR_RE='(\b(evidence|proof|emptiness) (bar|threshold|ceiling|floor|standard)|\badopting\b.*\baccepted\b)'

@@ -32,7 +32,6 @@ The rule had three enforcers and each read a different carrier: the pre-ask hook
 
 - The brief named the delegation reference as a PR (#9642); it is an open issue, and the file arrived in PR #10049. The brief's Stop-hook location was also wrong (the model hook is a PLUGIN hook, `plugins/soleur/hooks/unkept-promise-hook.sh`). **Prevention:** resolve every `#N` a brief names with `gh issue view`/`gh pr view` before building on its label.
 - The same session asked the founder three technical questions in closing prose AFTER the rule and its reference had been loaded; the founder's correction, not a gate, caught it. **Prevention:** the Stop hook in this PR; before ending a turn, any "Decision for you:" item is a ruling to delegate, not a question to ask.
-
 - A review-time design pass (simplicity + architecture seats) found two claims the PR's own prose got wrong: "a request to authorize passes in every shape" (four real authorization shapes blocked) and "one appended label disarms both gates" (false for the bold `**Paused**:` form). **Prevention:** probe the real hook with the claim's own examples before writing a universal into an ADR; the closing-only permission regex and the bold-label normalisation are the fixes.
 
 ## Tags

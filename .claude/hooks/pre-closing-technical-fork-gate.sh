@@ -8,14 +8,9 @@
 # for you: 1. 2. 3." / "Your calls: ..."). The founder corrected it: "you should ask the CTO, not me".
 # An enforcer that cannot read a carrier does not enforce it; this hook reads that carrier.
 #
-# ON A WRONGFUL BLOCK (a closing message stopped that carried a real operator question):
-#   1. Find the closing in the local session transcript by the sha256 in the ledger row (the row stores
-#      the cue name, the unit length and a hash, never the text).
-#   2. Narrow the CLOSING cue in lib/technical-fork-cues.sh (a tighter shape, or a word in
-#      TFC_CLOSING_EXTRA_RE) and add a must-PASS fixture to pre-closing-technical-fork-gate.test.sh;
-#      raise MIN_CASES and the V1 literal together. That touches no other file.
-#   3. A BUSINESS word is NEVER the fix: it changes the pinned RULING_OPVOCAB_RE literal and would
-#      silence the pre-ask hook too. Report false positives as a comment on #10056.
+# ON A WRONGFUL BLOCK: the procedure lives in the header of lib/technical-fork-cues.sh (find the closing by the ledger
+# row's sha256, which hashes the NORMALISED unit: lowercased, fences, quotes and code spans stripped, invisible
+# characters removed, whitespace squeezed; narrow the cue in the lib; add a must-PASS fixture).
 #
 # WHAT THIS IS NOT. It is ONE forced reconsideration per turn, not a guarantee: a repeat of the same
 # question after the block runs with `stop_hook_active == true` and passes. It is cue-based, so a
@@ -72,12 +67,15 @@ jq -e '(.last_assistant_message | type) == "string"' >/dev/null 2>&1 <<<"$INPUT"
   || { _note "SKIPPED — last_assistant_message absent or not a string"; exit 0; }
 MSG="$(jq -r '.last_assistant_message' 2>/dev/null <<<"$INPUT")" || { _note "SKIPPED — message unreadable"; exit 0; }
 [[ -n "$MSG" ]] || exit 0
+# Cheap pre-filter (performance seat): only a `?`-terminated unit can ever hit, and stripping can only REMOVE a `?`,
+# so a raw message without one cannot change a verdict; this skips ~14 of ~20 forks on the common turn end.
+[[ "$MSG" == *"?"* ]] || exit 0
 
 # One path variable, one place to edit when the pair graduates to the plugin.
 TFC_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/technical-fork-cues.sh"
 if [[ -s "$TFC_LIB" ]]; then
   # shellcheck source=lib/technical-fork-cues.sh
-  source "$TFC_LIB" 2>/dev/null
+  source "$TFC_LIB" >/dev/null 2>&1
 fi
 tfc_self_check 2>/dev/null || { _note "SKIPPED — cue lib missing or incomplete ($TFC_LIB)"; exit 0; }
 
@@ -93,10 +91,13 @@ PROSE="$(printf '%s\n' "$TAIL" | awk '
   f { next }
   /^[[:space:]]*>/ { next }
   { gsub(/`[^`]*`/, ""); print }')" || { _note "SKIPPED — strip failed"; exit 0; }
-# NBSP and U+2009 become a space, the zero-width characters U+200B-U+200D vanish, BEFORE any matching, so
-# a space the model can type but the cue cannot see does not defeat the cue.
-NORM="$(printf '%s\n' "$PROSE" \
-  | sed -e 's/\xc2\xa0/ /g' -e 's/\xe2\x80\x89/ /g' -e 's/\xe2\x80\x8b//g' -e 's/\xe2\x80\x8c//g' -e 's/\xe2\x80\x8d//g' \
+# CR is dropped (a CRLF closing would otherwise leave `?` followed by a byte that is no boundary). The unicode
+# spaces (NBSP, U+2000-200A, U+202F, U+205F, U+3000) become a space and the invisible characters (zero-width
+# U+200B-U+200F, U+2060, U+FEFF, soft hyphen, U+180E) vanish, BEFORE any matching, so text the model can type
+# but the cue cannot see does not defeat the cue. Stripping can only make the hook block MORE on a real cue.
+NORM="$(printf '%s\n' "$PROSE" | tr -d '\r' \
+  | sed -e 's/\xc2\xa0/ /g' -e 's/\xe2\x80[\x80-\x8a]/ /g' -e 's/\xe2\x80\xaf/ /g' -e 's/\xe2\x81\x9f/ /g' -e 's/\xe3\x80\x80/ /g' \
+        -e 's/\xe2\x80[\x8b-\x8f]//g' -e 's/\xe2\x81\xa0//g' -e 's/\xef\xbb\xbf//g' -e 's/\xc2\xad//g' -e 's/\xe1\xa0\x8e//g' \
   | tr '\t' ' ' | tr '[:upper:]' '[:lower:]' | tr -s ' ')" || { _note "SKIPPED — normalise failed"; exit 0; }
 CUT=0
 (( ${#NORM} > 1500 )) && CUT=1
@@ -160,11 +161,11 @@ UNITS="$(printf '%s\n' "$WIN" | awk -v cut="$CUT" '
 TAB=$'\t'
 FINAL="$(grep -E "^F${TAB}" <<<"$UNITS" | tail -n 1)"
 if [[ -n "$FINAL" ]]; then
-  FS="${FINAL#F"$TAB"}"
+  FINAL_SENT="${FINAL#F"$TAB"}"
   # `**Paused**:` is the plugin hook's accepted bold form too, so strip emphasis markers before the match.
-  FS="${FS//[*_]/}"
-  if [[ "$FS" =~ ^(paused|blocked): ]]; then
-    CONTENT="${FS#*:}"; CONTENT="${CONTENT//[[:punct:][:space:]]/}"
+  FINAL_SENT="${FINAL_SENT//[*_]/}"
+  if [[ "$FINAL_SENT" =~ ^(paused|blocked): ]]; then
+    CONTENT="${FINAL_SENT#*:}"; CONTENT="${CONTENT//[[:punct:][:space:]]/}"
     if [[ -n "$CONTENT" ]] && ! [[ "$CONTENT" =~ ^(none|na|nothing|no|nil)$ ]]; then exit 0; fi
   fi
 fi
@@ -172,7 +173,7 @@ fi
 # --- judge the last 12 units, each alone ------------------------------------------------------------
 declare -a JUDGE=()
 while IFS= read -r row; do
-  [[ "$row" == "U0${TAB}"* ]] && JUDGE+=("${row:3}")
+  [[ "$row" == "U0${TAB}"* ]] && JUDGE+=("${row#"U0${TAB}"}")
 done <<<"$UNITS"
 COUNT=${#JUDGE[@]}
 START=0
@@ -192,16 +193,16 @@ done
 [[ -n "$HIT_UNIT" ]] || exit 0
 
 # --- block: ONE JSON object, byte-constant text (never the unit, the cue or any model text) --------
-REASON='BLOCKED: your closing message asks the operator to choose on a TECHNICAL fork (whether evidence is enough, which design, or in what order). The operator is non-technical and cannot rule on it; the CTO agent can.
+REASON='STOPPED: your closing message asks the operator to choose on a TECHNICAL fork (whether evidence is enough, which design, or in what order). The operator is non-technical and cannot rule on it; the CTO agent can.
 
 Do this now: spawn soleur:engineering:cto with the Agent tool (legal questions: soleur:legal:clo), hand it the evidence and the options, and tell it "do NOT use AskUserQuestion". Act on its ruling and record it as "Ruled by CTO agent". The procedure and the closed list of rulings that do NOT go to the CTO are in technical-ruling-delegation.md (plugins/soleur/skills/brainstorm-techniques/references/technical-ruling-delegation.md).
 
 Then re-send your closing message with the ruling in it. Split the item: ask the operator only the authorization that remains, and only for a decision in this closed list: money, scope, priority, schedule, irreversible, production-mutating, legal-risk, brand. Say in one line why you re-sent (the CTO ruled, or the fork is operator-only), and restate only the delta plus the authorization: the operator has already read the first message.
 
-Only if the fork is genuinely operator-only, classify it instead of asking the CTO: start a sentence with Operator-only (money): or the matching category, then the reason. A final sentence beginning Paused: or Blocked: followed by what you are waiting on also ends this check.
+Only if the fork is genuinely operator-only, classify it instead of asking the CTO: put Operator-only (money): or the matching category, then the reason, directly before the question it covers (same paragraph). A final sentence beginning Paused: or Blocked: followed by what you are waiting on also ends this check.
 
 See hr-technical-fork-is-not-an-operator-question.'
-SYSMSG='pre-closing-technical-fork-gate: stopped once because the closing message asked the operator to rule on a technical fork. Release it by classifying the fork: Operator-only (money): the reason. To disarm this check for a whole session, start the session with SOLEUR_ACK_TECHNICAL_FORK=1.'
+SYSMSG='pre-closing-technical-fork-gate: stopped once because the closing message asked the operator to rule on a technical fork; the assistant was told to consult its CTO agent. If that was wrong, reply "send it anyway" (a repeat close always passes). The assistant can also release it with Operator-only (money): the reason, placed before the question. To disarm this check for a whole session, start the session with SOLEUR_ACK_TECHNICAL_FORK=1.'
 jq -n --arg r "$REASON" --arg m "$SYSMSG" '{decision:"block", reason:$r, systemMessage:$m}'
 
 # --- ledger row, AFTER the decision is printed (emit_incident takes an indefinite flock; if that flock hung until
@@ -217,7 +218,7 @@ _tfc_record() {
   umask 077
   if [[ -f "$(dirname "${BASH_SOURCE[0]}")/lib/incidents.sh" ]]; then
     # shellcheck source=lib/incidents.sh
-    source "$(dirname "${BASH_SOURCE[0]}")/lib/incidents.sh" 2>/dev/null
+    source "$(dirname "${BASH_SOURCE[0]}")/lib/incidents.sh" >/dev/null 2>&1
   fi
   declare -f emit_incident >/dev/null 2>&1 \
     && emit_incident "$_NAME" deny "$cue" "len=${len} sha256=${sha}" Stop >/dev/null 2>&1 || true

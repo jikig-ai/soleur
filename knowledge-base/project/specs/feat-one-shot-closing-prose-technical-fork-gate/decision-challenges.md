@@ -22,6 +22,7 @@ Persisted by the headless plan phase (ADR-084 channel). `ship` Phase 6 renders t
 | R3 `GITHUB_ACTIONS=true` early exit (review) | technical | Ruled by CTO agent, 2026-10-12: keep; no operator exists in CI, so every block there is wrongful by the rule's premise; recorded as added after T1-T8 |
 | R4 closing-only permission vocabulary (review) | technical | Ruled by CTO agent, 2026-10-12: `(can\|shall) i <action verb>` and `should i go ahead and <action verb>` only, closing group only, never bare `should i`/`go ahead`/`proceed`/`we` forms; a neighbouring `Approve?` does not exempt |
 | R5 `tfc_self_check` and the group argument (review) | technical | Ruled by CTO agent, 2026-10-12: completion sentinel as the last statement of the lib plus `declare -f`; keep the `shared`/`shared+closing` string (a typo fails loudly) |
+| R6 a neighbouring `Approve?` unit exempting a sufficiency question (review, user-impact P2-1) | technical | Ruled by CTO agent, 2026-10-12: no exemption across units (Q4) - the sufficiency ask is the motivating miss and a neighbour exemption would delete the gate's best case. Recorded as a stated residual; the founder's out is the repeat close, which always passes |
 
 ## S1 — Model dissent (class `taste`): the operator's stated direction was followed against the CTO's two-skill form
 

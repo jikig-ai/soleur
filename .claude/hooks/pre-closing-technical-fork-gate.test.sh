@@ -25,8 +25,9 @@
 #   G1-8  delete the stop escape; drop the empty-label exclusion    E1 flips pass -> block; E3b block -> pass
 #   G1-9  remove the code-span / quoted-line strip                  X2 flips pass -> block
 #   G1-10 Operator-only escapes the whole window                    E4 flips block -> pass
-#   G1-11 remove the judged-unit cap                                U3 exceeds its time bound
+#   G1-11 remove the 12-unit judging cap                               U3 exceeds its time bound
 #   G1-12 delete the closing-only permission exemption              Q4a flips pass -> block
+#   G1-13..16 leading-fragment drop, window size, first-12 judging, blank-line reset   W1b / W1d / L12b / E4b
 #   G2-1  re-add a local RULING_PERM_RE to the closing hook         the definition-site census reports two
 #   G2-2  the lib ignores its group argument                        a pre-ask row (NR2a) flips allow -> deny
 #   G2-3  change RULING_OPVOCAB_RE in the lib                       the byte-equality row flips
@@ -71,7 +72,7 @@ B1="is the existing census enough to close the G2 issue, given a personal CLI to
 B2="what is the right design for moving the three deploy-channel credentials out of branch-nameable storage?"
 B3="should the two credentials be rotated now, and in what order?"
 STATUS="Status: the census ran; 12 of 14 probes are green and the rest are queued."
-BLOCK_REASON_HEAD='BLOCKED: your closing message asks the operator to choose on a TECHNICAL fork'
+BLOCK_REASON_HEAD='STOPPED: your closing message asks the operator to choose on a TECHNICAL fork'
 TAB=$'\t'
 
 # --- the row machinery ------------------------------------------------------------------------------
@@ -178,8 +179,20 @@ if [[ -z "$a7_fail" ]]; then echo "  PASS: A7 business-vetoed design questions p
 row "A8 an operator priority question" pass "$STATUS Which should I do first, the P1 or the feature?"
 row "Z1 a cue AND a permission shape (the exemption must win)" pass "may i rotate the keys, and in what order?"
 row "L1 B3 with the loop guard set: at most one block per turn" pass "$STATUS $B3" true
-row "W1 B1 above 2000 bytes of status prose is outside the window" pass "$B1
-$(printf 'The census run is recorded and the probes are queued for the next window. %.0s' $(seq 1 30))"
+# W1 (i): B1 sits on line 2 so the leading-fragment drop (which only ever touches line 1) cannot hide it: ONLY the 1500-byte
+# window excludes it. W1b/W1c: the leading-fragment drop, with a control twin that must BLOCK (a veto word cut off by the window
+# start would otherwise make the fragment block). W1d: a question ~1200 bytes from the end is inside the window.
+PADLINE() { printf 'The census run is recorded and the probes are queued for the next window. %.0s' $(seq 1 "$1"); }
+row "W1 B1 on line 2 above 2000 bytes of status prose is outside the window" pass "x.
+$B1
+$(PADLINE 30)"
+W1_RUNON="$(printf 'a word and %.0s' $(seq 1 125))what is the right design for the migration?"
+W1_LEN=${#W1_RUNON}
+W1_X="$(printf 'x%.0s' $(seq 1 $((1500 - W1_LEN))))"
+row "W1b a window that starts mid-sentence drops the fragment (the pricing veto word was cut off)" pass "pricing $W1_X$W1_RUNON"
+row "W1c the twin without the cut: the same run-on question blocks" block "$W1_X$W1_RUNON"
+row "W1d B1 about 1200 bytes from the end is inside the window" block "$B1
+$(PADLINE 15)"
 # N1 — near-misses the plan measured: each must PASS.
 row "N1a a dark design is not a technical noun" pass "$STATUS do you want a dark design?"
 row "N1b a bare best-approach has no object" pass "$STATUS what is the best approach?"
@@ -197,7 +210,7 @@ o1_t0="$(date +%s%N | cut -b1-13)"
 spawn "$HOOK" "$(closing_json "$O1_UNIT")"
 o1_ms=$(( $(date +%s%N | cut -b1-13) - o1_t0 ))
 o1_v="$(verdict_from_out)"
-if [[ "$o1_v" != "bad" ]] && (( o1_ms < 3000 )) && ! grep -qF 'was not judged' <<<"$ERR"; then
+if [[ "$o1_v" != "bad" ]] && (( o1_ms < 3000 )) && ! grep -qE 'SKIPPED|NOTE' <<<"$ERR"; then
   printf '  PASS: O1 a worst-case 1500-byte unit is judged (%s) within the bound (%s ms), no cap\n' "$o1_v" "$o1_ms"; PASS=$((PASS+1))
 else printf '  FAIL: O1 verdict=%s elapsed=%s ms stderr=%s\n' "$o1_v" "$o1_ms" "$ERR" >&2; FAIL=$((FAIL+1)); fi
 TOTAL=$((TOTAL+1))
@@ -213,6 +226,26 @@ row "E2 an Operator-only label whose own sentence is the unit" pass "Operator-on
 row "E2b an Operator-only label governs the next unit in its paragraph" pass "Operator-only (money): the accounting call is below. $B1"
 row "E3 a final-sentence Paused label" pass "$STATUS $B1 Paused: waiting on CI."
 row "E3c a bold final Paused label (the plugin hook's accepted form)" pass "$STATUS $B1 **Paused**: waiting on CI."
+row "E3d a plain final Blocked label with content" pass "$STATUS $B1 Blocked: waiting on the registry owner."
+row "E3e empty stop escapes do not escape (BLOCKED, then BLOCKED with a space)" block "$STATUS $B1 <stop>BLOCKED:</stop> <stop>BLOCKED: </stop>"
+row "E4b an Operator-only label does not cross a blank line" block "Operator-only (money): the accounting call is below.
+
+$B1"
+row "E4c an Operator-only label covers ONE unit: the second question still blocks" block "Operator-only (money): the call is below. $B1 $B2"
+row "E4d an Operator-only label with no content does not escape" block "Operator-only (money):
+$B1"
+row "E4e an empty category does not escape" block "Operator-only (): $B1"
+TOTAL=$((TOTAL+1))
+ec_fail=""
+for ec_c in money scope priority schedule irreversible production-mutating legal-risk brand; do
+  spawn "$HOOK" "$(closing_json "Operator-only ($ec_c): $B1")"; [[ "$(verdict_from_out)" == "pass" ]] || ec_fail="$ec_fail $ec_c"
+done
+if [[ -z "$ec_fail" ]]; then echo "  PASS: E2c all eight Operator-only categories release their own sentence (the reason teaches all eight)"; PASS=$((PASS+1)); else printf '  FAIL: E2c categories not recognised:%s\n' "$ec_fail" >&2; FAIL=$((FAIL+1)); fi
+row "N1g an ordering question with no technical noun passes" pass "$STATUS in what order is the report?"
+# The 12-unit cap by VERDICT: B1 eleven units from the end is judged; B1 thirteen from the end is not.
+TINY11="$(printf 'a? %.0s' $(seq 1 11))"; TINY12="$(printf 'a? %.0s' $(seq 1 12))"
+row "L12a B1 followed by 11 tiny units is the 12th from the end: judged" block "$B1 $TINY11"
+row "L12b B1 followed by 12 tiny units is the 13th from the end: not judged" pass "$B1 $TINY12"
 # Q4 (Ruled by CTO agent, 2026-10-12 review): closing-only permission shapes bound to an ACTION verb pass; the bare
 # `can i` / `should i` / `go ahead` / `we` forms are technical-fork shapes and still block.
 row "Q4a can-i with an action verb (cue: suff)" pass "can i merge pr 123 now, is the evidence enough?"
@@ -227,13 +260,26 @@ row "Q4i the ordering half of an authorization ask stays technical (cl3)" block 
 row "Q4j a sufficiency ask is the motivating miss (cl1)" block "is the coverage enough to deploy to production?"
 # The full-hook form of Q4j: a neighbouring Approve? unit does NOT exempt the sufficiency unit above it (judged per sentence).
 row "Q4k a sufficiency unit followed by an Approve? unit: the sufficiency ask is the motivating miss" block "Is the coverage enough to deploy to production? Approve?"
+TOTAL=$((TOTAL+1))
+qv_fail=""
+for qv in "can i" "shall i"; do for qverb in "go ahead" proceed merge deploy ship release rotate flip arm delete revoke apply push; do
+  spawn "$HOOK" "$(closing_json "$qv $qverb now, is the evidence enough?")"; [[ "$(verdict_from_out)" == "pass" ]] || qv_fail="$qv_fail [$qv $qverb]"
+done; done
+for qverb in merge deploy ship release rotate flip arm delete revoke apply push; do
+  spawn "$HOOK" "$(closing_json "should i go ahead and $qverb now, is the evidence enough?")"; [[ "$(verdict_from_out)" == "pass" ]] || qv_fail="$qv_fail [should i go ahead and $qverb]"
+done
+if [[ -z "$qv_fail" ]]; then echo "  PASS: Q4l every action verb of the closing-only permission shapes exempts"; PASS=$((PASS+1)); else printf '  FAIL: Q4l verbs that did not exempt:%s\n' "$qv_fail" >&2; FAIL=$((FAIL+1)); fi
 row "E3b an EMPTY final label does not escape" block "$STATUS $B1 Blocked: none."
 row "E4 an unrelated Operator-only sentence does not escape another paragraph's question" block "Operator-only (money): should we charge for the second seat now?
 
 $B1"
 E5_BT="$STATUS the \` here is a stray backtick. $B1"
 row "E5b a lone stray backtick does not eat the question" block "$E5_BT"
-row "E5c NBSP inside the cue is normalised first" block "$STATUS is the existing census$(printf '\xc2\xa0')enough to close the G2 issue?"
+row "E5c NBSP at a literal-space position is normalised first" block "$STATUS is$(printf '\xc2\xa0')the existing census enough to close the G2 issue?"
+row "E5e U+2009 at a literal-space position is normalised first" block "$STATUS is$(printf '\xe2\x80\x89')the existing census enough to close the G2 issue?"
+row "E6a a CRLF closing is judged" block "$(printf 'Done.\r\nIs the existing census enough to close the G2 issue?\r\nBye')"
+row "E6b a word joiner inside the cue is removed first" block "$STATUS is the existing cen$(printf '\xe2\x81\xa0')sus enough to close the G2 issue?"
+row "E6c a BOM inside the cue is removed first" block "$STATUS is the existing census$(printf '\xef\xbb\xbf') enough to close the G2 issue?"
 row "E5d a zero-width space inside the cue is removed first" block "$STATUS is the existing cen$(printf '\xe2\x80\x8b')sus enough to close the G2 issue?"
 TOTAL=$((TOTAL+1))
 spawn "$HOOK" "$(closing_json "$STATUS
@@ -390,7 +436,7 @@ else printf '  FAIL: P1 registrations=%s count=%s timeout=%s ledger=%s\n' "$p1_r
 census_defs() { local f; for f in "$@"; do grep -qE '^RULING_[A-Z_]*_RE=' "$f" 2>/dev/null && printf '%s\n' "$f"; done; return 0; }
 census_callers() { local f; for f in "$@"; do case "$f" in *.test.sh|*/lib/technical-fork-cues.sh) continue ;; esac; grep -qE '(^|[^A-Za-z_])tfc_is_fork([^A-Za-z_]|$)' "$f" 2>/dev/null && printf '%s\n' "$f"; done; return 0; }
 TRACKED="$(git -C "$REPO_ROOT" ls-files -- .claude/hooks plugins/soleur/hooks | grep -E '\.sh$' | sed "s|^|$REPO_ROOT/|")"
-mapfile -t TRACKED_ARR <<<"$TRACKED"
+TRACKED_ARR=(); while IFS= read -r tr_f; do TRACKED_ARR+=("$tr_f"); done <<<"$TRACKED"
 TOTAL=$((TOTAL+1))
 c_defs="$(census_defs "${TRACKED_ARR[@]}")"; c_callers="$(census_callers "${TRACKED_ARR[@]}")"
 c_ndefs="$(grep -c . <<<"$c_defs")"; c_ncallers="$(grep -c . <<<"$c_callers")"
@@ -454,15 +500,17 @@ else printf '  FAIL: H4 applier rc: absent=%s unparseable=%s ok=%s\n' "$am_a" "$
 KILLED=0
 # mut_row <label> <hook|lib> <old> <new> <expect> <message> [active]: control gives <expect>, the mutant does not
 mut_row() {
-  local label="$1" which="$2" old="$3" new="$4" expect="$5" msg="$6" active="${7:-false}" target pristine ctl got mut_input
+  local label="$1" which="$2" old="$3" new="$4" expect="$5" msg="$6" active="${7:-false}" raw="${8:-}" target pristine ctl got mut_input
   TOTAL=$((TOTAL+1))
   mk_tree "${label//[^A-Za-z0-9]/_}" || { printf '  FAIL: %s — could not build the tree\n' "$label" >&2; FAIL=$((FAIL+1)); return 0; }
   case "$which" in hook) target="$TREE/pre-closing-technical-fork-gate.sh"; pristine="$HOOK" ;; lib) target="$TREE/lib/technical-fork-cues.sh"; pristine="$LIB" ;; *) echo "FATAL: bad mutation target" >&2; exit 2 ;; esac
-  mut_input="$(closing_json "$msg" "$active")"; [[ -n "${MUT_RAW:-}" ]] && mut_input="$MUT_RAW"
+  mut_input="$(closing_json "$msg" "$active")"; [[ -n "$raw" ]] && mut_input="$raw"
   spawn "$TREE/pre-closing-technical-fork-gate.sh" "$mut_input"; ctl="$(verdict_from_out)"
   if ! apply_mut "$target" "$old" "$new"; then printf '  FAIL: %s — the mutation did not land or the mutant does not parse\n' "$label" >&2; FAIL=$((FAIL+1)); return 0; fi
   if cmp -s "$pristine" "$target"; then printf '  FAIL: %s — the mutant is byte-identical to the pristine file\n' "$label" >&2; FAIL=$((FAIL+1)); return 0; fi
   spawn "$TREE/pre-closing-technical-fork-gate.sh" "$mut_input"; got="$(verdict_from_out)"
+  # A mutant that CRASHES (a bash diagnostic on stderr) fails open to "pass" and would be miscounted as killed.
+  if grep -qE '(^|: )line [0-9]+: ' <<<"$ERR"; then printf '  FAIL: %s — the mutant crashed (bash diagnostic), not a behavioural kill: %s\n' "$label" "$(head -c 160 <<<"$ERR")" >&2; FAIL=$((FAIL+1)); return 0; fi
   if [[ "$ctl" == "$expect" && "$got" != "$expect" && "$got" != "bad" ]]; then printf '  PASS: %s killed (control %s, mutant %s)\n' "$label" "$ctl" "$got"; PASS=$((PASS+1)); KILLED=$((KILLED+1))
   else printf '  FAIL: %s — control=%s mutant=%s want control %s and a different mutant verdict\n' "$label" "$ctl" "$got" "$expect" >&2; FAIL=$((FAIL+1)); fi
   return 0
@@ -474,14 +522,12 @@ mut_row "G1-1b dispatch -> false: B2" hook "$HOOK_DISPATCH" 'false' block "$STAT
 mut_row "G1-1c dispatch -> false: B3" hook "$HOOK_DISPATCH" 'false' block "$STATUS $B3"
 mut_row "G1-2 delete the permission exemption" lib 'grep -qE "$RULING_PERM_RE" <<<"$unit" && return 1' ':' pass "may i rotate the keys, and in what order?"
 mut_row "G1-3 delete the loop-guard exit" hook '[[ "$ACTIVE" == "false" ]] || {' ': || {' pass "$STATUS $B3" true
-mut_row "G1-4 judge only the first unit" hook 'for (( k = START; k < COUNT; k++ )); do' 'for (( k = START; k < START + 1 \&\& k < COUNT; k++ )); do' block "Do you authorize the rotation? Also, what is the best design for the migration?"
+mut_row "G1-4 judge only the first unit" hook 'for (( k = START; k < COUNT; k++ )); do' 'for (( k = START; k < START + 1 && k < COUNT; k++ )); do' block "Do you authorize the rotation? Also, what is the best design for the migration?"
 mut_row "G1-5 veto CLOSING cues with BUSINESS|ACTION" lib "TFC_BUSINESS_RE='\\b('\"\${TFC_BUSINESS_WORDS}\"')\\b'" "TFC_BUSINESS_RE='\\b('\"\${TFC_BUSINESS_WORDS}|\${TFC_ACTION_WORDS}\"')\\b'" block "$STATUS $B2"
 mut_row "G1-6 remove the BUSINESS veto" lib "TFC_BUSINESS_RE='\\b('\"\${TFC_BUSINESS_WORDS}\"')\\b'" "TFC_BUSINESS_RE='\\bzzzneverwordzzz\\b'" pass "$STATUS what is the best design for the pricing page?"
-MUT_RAW='{not json'
-mut_row "G1-7a a fail-open arm blocks: bad JSON" hook '_note "SKIPPED — input is not a JSON object"; exit 0;' 'printf "{\"decision\":\"block\",\"reason\":\"x\"}\n"; exit 0;' pass "$STATUS"
-MUT_RAW=""
+mut_row "G1-7a a fail-open arm blocks: bad JSON" hook '_note "SKIPPED — input is not a JSON object"; exit 0;' 'printf "{\"decision\":\"block\",\"reason\":\"x\"}\n"; exit 0;' pass "$STATUS" false '{not json'
 mut_row "G1-8a delete the stop escape" hook "grep -qE '<stop>(operator-gate|blocked):" "grep -qE '<stop>(zzznever|zzznever2):" pass "$STATUS $B1 <stop>BLOCKED: waiting on the registry owner.</stop>"
-mut_row "G1-8b drop the empty-label exclusion" hook 'if [[ -n "$CONTENT" ]] && ! [[ "$CONTENT" =~ ^(none|na|nothing|no|nil)$ ]]; then exit 0; fi' 'if [[ -n "$FS" ]]; then exit 0; fi' block "$STATUS $B1 Blocked: none."
+mut_row "G1-8b drop the empty-label exclusion" hook 'if [[ -n "$CONTENT" ]] && ! [[ "$CONTENT" =~ ^(none|na|nothing|no|nil)$ ]]; then exit 0; fi' 'if [[ -n "$FINAL_SENT" ]]; then exit 0; fi' block "$STATUS $B1 Blocked: none."
 mut_row "G1-9a remove the quoted-line strip" hook '/^[[:space:]]*>/ { next }' '' pass "$STATUS
 > $B1
 That quote is the hook's own fixture."
@@ -490,9 +536,8 @@ mut_row "G1-10 Operator-only escapes the whole window" hook 'declare -a JUDGE=()
 
 $B1"
 # F3 needs its own mutant: make the absent-loop-guard arm block.
-MUT_RAW="$(jq -nc --arg m "$B1" '{last_assistant_message:$m}')"
-mut_row "G1-7b a fail-open arm blocks: absent loop guard" hook '_note "SKIPPED — stop_hook_active absent, the once-per-turn guard cannot be verified"; exit 0;' 'printf "{\"decision\":\"block\",\"reason\":\"x\"}\n"; exit 0;' pass "$STATUS"
-MUT_RAW=""
+G17B_RAW="$(jq -nc --arg m "$B1" '{last_assistant_message:$m}')"
+mut_row "G1-7b a fail-open arm blocks: absent loop guard" hook '_note "SKIPPED — stop_hook_active absent, the once-per-turn guard cannot be verified"; exit 0;' 'printf "{\"decision\":\"block\",\"reason\":\"x\"}\n"; exit 0;' pass "$STATUS" false "$G17B_RAW"
 # (G1-7a/b feed the raw stdin the F2 and F3 rows use: the unmutated arm must PASS it and the mutant blocks it, which
 #  proves each arm, not the cue list, is what keeps those rows green.)
 
@@ -508,6 +553,13 @@ if apply_mut "$g11_target" 'if (( COUNT > 12 )); then START=$((COUNT - 12));' 'i
   else printf '  FAIL: G1-11 mutant rc=%s control rc=%s (want 124 and 0)\n' "$g11_rc" "$u3_rc" >&2; FAIL=$((FAIL+1)); fi
 else echo "  FAIL: G1-11 the mutation did not land" >&2; FAIL=$((FAIL+1)); fi
 
+mut_row "G1-13 drop the leading-fragment drop" hook 'if (NR == 1 && cut == 1) {' 'if (NR == 1 && cut == 99) {' pass "pricing $W1_X$W1_RUNON"
+mut_row "G1-14 narrow the window to 800 bytes" hook "tail -c 1500)\"" "tail -c 800)\"" block "$B1
+$(PADLINE 15)"
+mut_row "G1-15 judge the FIRST 12 units instead of the last 12" hook 'if (( COUNT > 12 )); then START=$((COUNT - 12));' 'if (( COUNT > 12 )); then START=0; COUNT=12;' pass "$B1 $TINY12"
+mut_row "G1-16 never reset the Operator-only cover on a blank line" hook '    if (line ~ /^ *$/) { esc = 0; next }' '    if (line ~ /^ *$/) { next }' block "Operator-only (money): the accounting call is below.
+
+$B1"
 # G1-12: delete the closing-only permission exemption (Q4): an authorization shape the shared vocabulary does not name must flip pass -> block.
 mut_row "G1-12 delete the closing-only permission exemption" lib '[[ "$closing" -eq 1 ]] && grep -qE "$TFC_CLOSING_PERM_RE" <<<"$unit" && return 1' ':' pass "can i merge pr 123 now, is the evidence enough?"
 
@@ -516,7 +568,7 @@ TOTAL=$((TOTAL+1))
 mk_tree g2_1 || true
 g21_nl=$'\n'
 if apply_mut "$TREE/pre-closing-technical-fork-gate.sh" 'LC_ALL=C' "LC_ALL=C${g21_nl}RULING_PERM_RE='(x)'" ; then
-  mapfile -t g21_files < <(find "$TREE" -name '*.sh' -type f)
+  g21_files=(); while IFS= read -r g21_f; do g21_files+=("$g21_f"); done < <(find "$TREE" -name '*.sh' -type f)
   g21_defs="$(census_defs "${g21_files[@]}" | grep -c .)"
   if [[ "$g21_defs" == "2" ]]; then echo "  PASS: G2-1 killed (the census reports a second definition site)"; PASS=$((PASS+1)); KILLED=$((KILLED+1))
   else printf '  FAIL: G2-1 census saw %s definition site(s), want 2\n' "$g21_defs" >&2; FAIL=$((FAIL+1)); fi
@@ -561,22 +613,23 @@ else printf '  FAIL: H1 neutered decider scored %s (want 0/3)\n' "$h1_res" >&2; 
 # --- dispatch non-vacuity: the named must-block rows were blocked with THIS hook's reason, and every spawn ran the SUT ---
 TOTAL=$((TOTAL+1))
 d_missing=""
-for d_r in B1 B2 B3 B4 B5a B5b B5c B6 B7 U1 E3b E4 E5b E5c E5d U2b; do
+D_NAMES="B1 B2 B3 B4 B5a B5b B5c B6 B7 U1 E3b E4 E5b E5c E5d U2b E4b E4c E6a"
+for d_r in $D_NAMES; do
   d_found=0
   for d_n in $BLOCKED_BY_THIS_HOOK; do [[ "$d_n" == "$d_r" ]] && d_found=1; done
   [[ "$d_found" -eq 1 ]] || d_missing="$d_missing $d_r"
 done
 if [[ -z "$d_missing" && "$RAN" -eq "$SPAWNS" && "$SPAWNS" -ge 70 ]]; then
-  printf '  PASS: V5 all %s named must-block rows were blocked by this hook'"'"'s reason; the SUT ran %s of %s spawns\n' "16" "$RAN" "$SPAWNS"; PASS=$((PASS+1))
+  printf '  PASS: V5 all %s named must-block rows were blocked by this hook'"'"'s reason; the SUT ran %s of %s spawns\n' "$(wc -w <<<"$D_NAMES" | tr -d ' ')" "$RAN" "$SPAWNS"; PASS=$((PASS+1))
 else printf '  FAIL: V5 missing=[%s] SUT markers=%s harness spawns=%s (want equal and >= 70)\n' "$d_missing" "$RAN" "$SPAWNS" >&2; FAIL=$((FAIL+1)); fi
 TOTAL=$((TOTAL+1))
-if [[ "$KILLED" -ge 20 ]]; then printf '  PASS: V6 %s mutants killed (floor 20)\n' "$KILLED"; PASS=$((PASS+1))
-else printf '  FAIL: V6 only %s mutants killed (floor 20)\n' "$KILLED" >&2; FAIL=$((FAIL+1)); fi
+if [[ "$KILLED" -ge 24 ]]; then printf '  PASS: V6 %s mutants killed (floor 24)\n' "$KILLED"; PASS=$((PASS+1))
+else printf '  FAIL: V6 only %s mutants killed (floor 24)\n' "$KILLED" >&2; FAIL=$((FAIL+1)); fi
 
 # --- inventory, accounting conservation and the assertion floor ---------------------------------------
 TOTAL=$((TOTAL+1))
-if [[ "$TOTAL" -eq 106 ]]; then echo "  PASS: V1 full inventory ran (106 cases)"; PASS=$((PASS+1))
-else echo "  FAIL: V1 expected 106 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
+if [[ "$TOTAL" -eq 128 ]]; then echo "  PASS: V1 full inventory ran (128 cases)"; PASS=$((PASS+1))
+else echo "  FAIL: V1 expected 128 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
 
 # Reported with printf + exit 1, never through a verdict helper: a floor routed through the machinery it backstops
 # is disarmed by the same edit it exists to catch (ADR-193).
@@ -585,7 +638,7 @@ if (( PASS + FAIL != TOTAL )); then
     "$PASS" "$FAIL" "$TOTAL" >&2
   exit 1
 fi
-MIN_CASES=106
+MIN_CASES=128
 if (( TOTAL < MIN_CASES )); then
   printf '\nFATAL: anti-vacuity: %d case(s) ran, floor is %d. The suite shrank rather than the hook improving.\n' \
     "$TOTAL" "$MIN_CASES" >&2
