@@ -16,3 +16,8 @@ None blocking. Host has gawk only (mawk unmeasured locally); markdownlint scope 
 
 ### Components Invoked
 soleur:plan, learnings-researcher, scoped advisor consult, soleur:plan-review (dhh, kieran, code-simplicity, cto), soleur:deepen-plan (mechanical halts and live citation verification; all-agent fan-out not run).
+
+## Review round (2026-10-12; appended)
+
+- The window-crossing control and the verdict controls (Guards 2 and 3) are closed on the head: the two findings that Phase 0.6 recorded as OPEN are fixed and have fixtures and neutered-verdict rows; the 0.6 table is the plan-time reading.
+- The review round is in progress: fix round A (guard code) is pushed at `e8e91ca13b` (153 pairs, 263 triples, 154 rows); fix round B (three suite edits and these documents) follows. The figures in the Decisions block above are plan-time (66 pairs, 120 triples); see decision-challenges items 59 and 60 for the reconciliation.

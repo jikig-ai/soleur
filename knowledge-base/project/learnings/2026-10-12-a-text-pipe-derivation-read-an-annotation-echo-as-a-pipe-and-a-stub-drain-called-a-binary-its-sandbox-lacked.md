@@ -38,3 +38,7 @@ A guard that derives its population from text is a function of every file the te
 
 category: test-failures
 module: grep-q-pipe-guard
+
+## Correction 2026-10-12 (#10085)
+
+The first Solution bullet (strip the text after an annotation token, "a pipe inside the annotation text is invisible" as the only limit) is incomplete. S7c's R8 measured that stripping to the end of the line also drops a real pipe AFTER a double-quoted annotation string (`echo "::error::x"; printf '%s' "$B" | jq .` loses the `jq` pipe), and for a single-quoted or unquoted annotation the strip still drops the rest of the line. Strip to the closing unescaped quote of a double-quoted string instead, and read a pipe inside a command substitution in the string as a pipe (the one real instance is `.github/workflows/git-data-rung2-rehearsal.yml` lines 478 and 784). The body above is left as written.
