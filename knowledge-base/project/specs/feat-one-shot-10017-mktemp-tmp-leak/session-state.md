@@ -53,7 +53,7 @@
   legal-generate/questionnaire/preflight/content-writer/admin-ip-refresh/
   hooks-README/rclone/reproduce-bug verified already-clean or bounded, then re-rooted under `soleur-run` per the review-round CTO ruling.
 
-- rung2-archive: self-disarming RETURN trap at birth-readiness-gate:1445;
+- rung2-archive: self-disarming RETURN trap at birth-readiness-gate:1449;
   4 residue arms added (263/263 suite green).
 
 - Residue canary caught ONE real miss — test-content-publisher.sh's sourced
@@ -66,3 +66,26 @@
 
 - Highwater 70 -> 36 with itemised ledger comment; --check-highwater green;
   landmine diffs empty.
+
+## Review Phase
+- Panel: 8/8 seats (git-history, pattern, architecture, security, performance,
+  data-integrity, agent-native, code-quality). Verdicts: 2×SHIP, 6×SHIP-WITH-FIXES.
+- P1s: none. Convergent P2s resolved in fix-round-1 (9e4c43b): runbook
+  cadence/mkdir/bus-fallback; architecture P2-2 routed to CTO spawn #2 —
+  ruling: `soleur-run.$$.XXXXXXXX` schema-root convention (zero classifier
+  edits; ~40 prose sites converted; normative section in
+  work-scratch-sandboxes.md); service `-` ExecStart prefix; rung2 basename
+  anchor; RES-disarm discriminating arm; community mv failure path; operand
+  asserts; fixed-name /tmp diagnostics routed; ledger/cite corrections.
+- Fix-round (ADR-267 targeted, seats via fix-round-seats.sh): 2 consolidated
+  seats covering 8 lenses. New findings resolved in round-2: prose
+  `rm -rf "$(dirname "$X")"` → `rm -f`+`rmdir` idiom (8 sites — inner-mktemp
+  `-p ""` fallback could resolve dirname to `/tmp`); cron `&&`→`;`; ruling row
+  moved into Decision Classes table; grok-measure alloc ordering;
+  check_setup recipe alignment; BSD -t + nested-git disclosures.
+- Trailers: `Reviewed-By-Soleur` (827aaac6c4, coverage full 8/8, tier none)
+  + `Reviewed-Fix-Round` (c9193aa88b, since 8f2f8b63).
+- QA: plan scenarios are unit/integration Given-When-Then — no browser/API
+  arms; prose-conversion shapes execution-verified (5 distinct mktemp forms
+  run green); lint 120/120, gate suite 263/263, residue 38-leaf run caught
+  + closed the content-publisher SUT-trap clobber.

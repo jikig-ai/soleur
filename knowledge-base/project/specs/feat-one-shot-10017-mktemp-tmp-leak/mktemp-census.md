@@ -88,18 +88,18 @@ instruction text only.
 |---|---|---|
 | `plugins/soleur/skills/ship/SKILL.md` (~8 sites: PR_BODY_FILE, BODY_FILE, `_ps`, TMP_TITLE/TMP_BODY/TMP_COMMITS, gate log, follow-through bodies) | add-cleanup-instruction | body/scratch files are consumed by a `gh` call or diff in the same step — instruction gains `rm -f` at the consumption point |
 | `plugins/soleur/skills/ship/SKILL.md:466` detached battery log | bounded-persistence | `mktemp -p "${TMPDIR:-/var/tmp}"` — `/var/tmp`, not the tmpfs `/tmp` class; the log must outlive the detached run it records |
-| `plugins/soleur/skills/preflight/SKILL.md:100,112` | already-clean (verified on inspection — no edit) | both allocs already pair with `trap 'rm -f "$PR_BODY_FILE" "$COMBINED"' EXIT` (:102) |
+| `plugins/soleur/skills/preflight/SKILL.md:100,112` | already-clean → re-rooted under signed `soleur-run` root | both allocs already pair with `trap 'rm -f "$PR_BODY_FILE" "$COMBINED"' EXIT` (:102) |
 | `plugins/soleur/skills/qa/SKILL.md:61,97` | add-cleanup-instruction | QA_LOG / playwright-install log — removed at QA teardown |
 | `plugins/soleur/skills/merge-pr/SKILL.md:210` | add-cleanup-instruction | changelog ours/theirs scratch consumed by the merge diff |
 | `plugins/soleur/skills/plan/SKILL.md:382` | add-cleanup-instruction | ISSUES_JSON consumed by the same step's read |
-| `plugins/soleur/skills/incident/SKILL.md:289` | already-clean (verified on inspection — no edit) | `DRAFT` already carries `trap 'rm -f "$DRAFT"' EXIT INT TERM HUP` |
-| `plugins/soleur/skills/legal-generate/SKILL.md:138` | already-clean (verified on inspection — no edit) | same draft-gate shape, already trapped |
-| `plugins/soleur/skills/questionnaire-generate/SKILL.md:145` | already-clean (verified on inspection — no edit) | same draft-gate shape, already trapped |
+| `plugins/soleur/skills/incident/SKILL.md:289` | already-clean → re-rooted under signed `soleur-run` root | `DRAFT` already carries `trap 'rm -f "$DRAFT"' EXIT INT TERM HUP` |
+| `plugins/soleur/skills/legal-generate/SKILL.md:138` | already-clean → re-rooted under signed `soleur-run` root | same draft-gate shape, already trapped |
+| `plugins/soleur/skills/questionnaire-generate/SKILL.md:145` | already-clean → re-rooted under signed `soleur-run` root | same draft-gate shape, already trapped |
 | `plugins/soleur/skills/schedule/SKILL.md:481` | add-cleanup-instruction | MERGE_ERR read for diagnostics then droppable |
-| `plugins/soleur/skills/content-writer/SKILL.md:138` | already-clean (verified on inspection — no edit) | end step already `rm -rf`s the scratch dir |
+| `plugins/soleur/skills/content-writer/SKILL.md:138` | already-clean → re-rooted under signed `soleur-run` root | end step already `rm -rf`s the scratch dir |
 | `plugins/soleur/skills/model-launch-review/SKILL.md:100` | add-cleanup-instruction | npm-pack scratch dir removed after extraction check |
 | `plugins/soleur/skills/architecture/references/likec4-reference.md:113` | add-cleanup-instruction | anonymous `$(mktemp)` → named `$_c4_out`, consumed then `rm -f` |
-| `plugins/soleur/skills/rclone/SKILL.md`, `reproduce-bug/SKILL.md:73`, `admin-ip-refresh/references/…:117`, `.claude/hooks/README.md` | already-clean (verified on inspection — no edit) | self-`rm`/`shred -u` trap already present in each |
+| `plugins/soleur/skills/rclone/SKILL.md`, `reproduce-bug/SKILL.md:73`, `admin-ip-refresh/references/…:117`, `.claude/hooks/README.md` | already-clean → re-rooted under signed `soleur-run` root | rclone self-`rm -rf`, README `rm -rf "$R"`, admin-ip `shred -u` trap; reproduce-bug deletes at its Phase-9 checklist |
 | `plugins/soleur/skills/work/references/work-scratch-sandboxes.md:52,124` | bounded-persistence | `/var/tmp` seat sandboxes — not the tmpfs `/tmp` class; lifetime is the seat's, owned by the seat protocol |
 
 ## Out-of-enumeration class-b members (no edits — recorded for completeness)
