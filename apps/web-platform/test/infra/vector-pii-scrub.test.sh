@@ -461,7 +461,7 @@ EXPECTED_TAGS=$(
     #      ship escapes the drift guard SILENTLY — an unmatched emission shape is a hole in
     #      the guard, not caught drift.
     # All four ship to the journal under SYSLOG_IDENTIFIER.
-    grep -qE '(^|\|)[[:space:]]*/?([[:alnum:]_.-]+/)*logger -t|:-logger\}" -t|\\n[[:space:]]*logger -t' "$f" || continue
+    grep -qE '(^|\|)[[:space:]]*/?([[:alnum:]_.-]+/)*logger -t|:-logger\}" -t|\\n[[:space:]]*/?([[:alnum:]_.-]+/)*logger -t' "$f" || continue
     # A file's LOG_TAG= feeds EXPECTED only when a `-t` call actually passes
     # it (#9534) — cron-egress-resolve.sh is the counterexample: its LOG_TAG is
     # the textual prefix log() echoes to stdout (which ships under the unit's
@@ -484,7 +484,7 @@ EXPECTED_TAGS=$(
     # still cannot enter the set.
     grep -hoP '(^|\|)[[:space:]]*/?([[:alnum:]_.-]+/)*logger -t[[:space:]]+\K[a-z0-9-]+' "$f"
     grep -hoP ':-logger\}" -t[[:space:]]+\K[a-z0-9-]+' "$f"
-    grep -hoP '\\n[[:space:]]*logger -t[[:space:]]+\K[a-z0-9-]+' "$f"
+    grep -hoP '\\n[[:space:]]*/?([[:alnum:]_.-]+/)*logger -t[[:space:]]+\K[a-z0-9-]+' "$f"
   done
   # #6556 Part 1 coverage extension — explicit SyslogIdentifier= in STANDALONE unit files
   # (*.service) and cloud-init write_files unit bodies (*.yml). These are NOT .sh heredocs and
@@ -757,7 +757,7 @@ elif ! printf '%s\n' "$SRC1_BLOCK" | grep -cE '^include_matches\.PRIORITY = \["0
   fail "Source 1 drift (#9963): include_matches.PRIORITY is no longer exactly [\"0\", \"1\", \"2\", \"3\", \"4\"] — the PRIORITY-3 systemd control row (and real 'Failed to start' rows) leaves the admission arm and silently stops shipping"
 elif ! printf '%s\n' "$SRC1_BLOCK" | grep -cE '^include_units = \["inngest-server\.service"\]$' >/dev/null; then
   fail "Source 1 drift (#9963): include_units changed — the unit's own rows at every priority stop shipping"
-elif ! awk '/^\[transforms\.pii_scrub/{f=1} f && /^inputs = /{print; exit}' "$VECTOR_TOML" | grep -q '"inngest_journald"'; then
+elif ! awk '/^\[transforms\.pii_scrub/{f=1; next} f && /^\[/{exit} f && /^inputs = /{print; exit}' "$VECTOR_TOML" | grep -q '"inngest_journald"'; then
   fail "Source 1 drift (#9963): inngest_journald is no longer an input of the pii_scrub chain (checked against the pii_scrub* transform block's own inputs line, not any inputs line)"
 else
   pass "Source 1 (inngest_journald) admits inngest-server.service OR PRIORITY 0-4 from any unit and feeds the scrub chain — the #9963 control-row arm holds"

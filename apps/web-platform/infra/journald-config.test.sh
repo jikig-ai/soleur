@@ -30,6 +30,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 CLOUD_INIT="$SCRIPT_DIR/cloud-init.yml"
 SERVER_TF="$SCRIPT_DIR/server.tf"
 DROPIN="$SCRIPT_DIR/journald-soleur.conf"
@@ -579,34 +580,41 @@ assert "9963b: the probe script EMITS SOLEUR_SYSTEMD_JOURNALD_CONTROL via /usr/b
   "[[ -n \"\$CONTROL_EMIT\" ]]"
 assert "9963c: the control emit carries -t systemd (the discriminator field consumers field-scope on — boundary-anchored: -t systemd-journald or a message-embedded -t systemd must not satisfy it)" \
   "printf '%s\n' \"\$CONTROL_EMIT\" | grep -cE -- '-t[[:space:]]+systemd([^a-zA-Z0-9-]|$)' >/dev/null"
-assert "9963d: the control emit orders '-t systemd -p err' as its flags (PRIORITY 3 — inside Source 1's {0..4} admission arm; a message-embedded -p err with no flag, a reordered pair, or -p errx must not satisfy it; equivalent spellings like -p user.err are deliberately flagged — the contract is exactly -t systemd -p err)" \
-  "printf '%s\n' \"\$CONTROL_EMIT\" | grep -cE -- '-t[[:space:]]+systemd[[:space:]]+-p[[:space:]]+err([[:space:]]|$)' >/dev/null"
+assert "9963d: the control emit's ARGV is exactly 'logger -t systemd -p err' (PRIORITY 3 — inside Source 1's {0..4} admission arm; -t must be the first flag, -p err the second and immediately before the message quote — a message-embedded pair, -t doppler -p err, a reordered pair, -p errx, or trailing flags like -n/--socket must not satisfy it; equivalent spellings like -p user.err are deliberately flagged — the contract is exactly -t systemd -p err)" \
+  "printf '%s\n' \"\$CONTROL_EMIT\" | grep -cE -- 'logger[[:space:]]+-t[[:space:]]+systemd[[:space:]]+-p[[:space:]]+err[[:space:]]+\"' >/dev/null"
 
-# UNCONDITIONALITY, same ADR-117 invariant as the emit it follows. Three pins, because a
-# keyword ban-list is a window always narrower than the property (review: `exit`,
-# `return`, a `fi`/`esac`/`done` closing a gate opened BEFORE the probe emit, and a
-# conditional wrapping BOTH emits each slipped the keyword set):
-#   (1) WHITELIST — between the probe emit and the control emit every non-blank line
-#       must be a COMMENT. `exit`, `return`, `exec`, `fi`, a mid-line `; if`, and every
-#       gate shape all violate it; documentation lines are fine.
-#   (2) TOP-LEVEL DEPTH ZERO — counting only COLUMN-0 conditional openers/closers
-#       (indented code can't wrap the emit without an enclosing col-0 opener), the
-#       control emit must sit at depth 0: a conditional opened before the probe emit
-#       and closed after the control wraps both while staying invisible to (1). The
-#       probe body embeds an awk program — a naive keyword scan counts its `if`/`for`
-#       tokens, so only col-0 lines count.
-#   (3) BEFORE THE TAIL GATE — the post-emit `if [ "$vector_active" ...]` phone-home
-#       gate (ADR-117's sanctioned post-emit branch) must come AFTER the control.
-BETWEEN_EMITS=""
-EMIT_DEPTH=-1
+# UNCONDITIONALITY, same ADR-117 invariant. A CLOSED-FORM pin, because every window
+# narrower than the property admitted a wrap (two fix rounds named the escapes:
+# `exit`/`return` between emits, `fi`/`esac`/`done` closing a gate opened BEFORE
+# the probe emit, a conditional wrapping BOTH emits, mid-line `; if` openers,
+# indented `if`/`fi` pairs, `{`/`(`/`coproc`/`&&` scopes, `done`/`fi` tokens in
+# prose lines, and suffix code on the emit line itself). So the pin is set-shaped,
+# not keyword-shaped: between the LAST col-0 conditional closer before the probe
+# emit and the post-emit `if [ "$vector_active" ]` tail gate (ADR-117's sanctioned
+# post-emit branch), the ONLY non-comment non-blank code lines allowed are exactly
+# the two emit lines. A gate opened anywhere in that region, closed anywhere, or
+# hidden behind a `;` suffix adds or alters a code line and fails the count; the
+# two emits must also carry no `;` separator, so code cannot ride an anchored line.
+LAST_CLOSER_LN=""
 TAIL_LN=""
+REGION_CODE=0
+EMIT_SEP=-1
+EMIT_DEPTH=-1
 if [[ -n "$PROBE_EMIT_LN" && -n "$CONTROL_LN" && "$CONTROL_LN" =~ ^[0-9]+$ && "$PROBE_EMIT_LN" =~ ^[0-9]+$ && "$CONTROL_LN" -gt "$PROBE_EMIT_LN" ]]; then
-  BETWEEN_EMITS="$(printf '%s\n' "$PROBE_BODY" | awk -v a="$PROBE_EMIT_LN" -v b="$CONTROL_LN" 'NR>a && NR<b')"
-  EMIT_DEPTH="$(printf '%s\n' "$PROBE_BODY" | awk -v b="$CONTROL_LN" 'NR<b && $0 ~ /^[^[:space:]#]/ { if ($0 ~ /^(if|for|while|until|select|case)([[:space:]]|$|\()/ ) d++; n = gsub(/(^|[[:space:];(])(fi|esac|done)([[:space:];)]|$)/, " ", $0); d -= n } END{print d+0}')"
-  TAIL_LN="$(printf '%s\n' "$PROBE_BODY" | grep -nE 'if \[ "\$vector_active"' | sed -n '1p' | cut -d: -f1 || true)"
+  LAST_CLOSER_LN="$(printf '%s\n' "$PROBE_BODY" | awk -v b="$PROBE_EMIT_LN" 'NR<b && $0 ~ /^(fi|esac|done)([[:space:];)]|$)/ {last=NR} END{print last+0}')"
+  TAIL_LN="$(printf '%s\n' "$PROBE_BODY" | grep -nE '^[[:space:]]*if \[ "\$vector_active"' | sed -n '1p' | cut -d: -f1 || true)"
+  # DEPTH at the control line must be ZERO at any indentation: an opener whose
+  # closer lands after the control wraps it. Indented opens count (a wrap is
+  # legal bash at any indent); `if (`/`for (` are excluded — the heredoc
+  # embeds an awk program and those are ITS keyword shapes, not shell's.
+  EMIT_DEPTH="$(printf '%s\n' "$PROBE_BODY" | awk -v b="$CONTROL_LN" 'NR<b && $0 !~ /^[[:space:]]*#/ { if ($0 ~ /^[[:space:]]*(if|for|while|until|select|case)[[:space:]]+[^ (]/) d++; n = gsub(/(^|[[:space:];(])(fi|esac|done)([[:space:];)]|$)/, " ", $0); d -= n } END{print d+0}')"
+  if [[ "$TAIL_LN" =~ ^[0-9]+$ && "$TAIL_LN" -gt "$CONTROL_LN" ]]; then
+    REGION_CODE="$(printf '%s\n' "$PROBE_BODY" | awk -v a="$LAST_CLOSER_LN" -v b="$TAIL_LN" 'NR>a && NR<b' | grep -cvE '^[[:space:]]*(#|$)' || true)"
+    EMIT_SEP="$(printf '%s\n' "$PROBE_BODY" | awk -v a="$PROBE_EMIT_LN" -v b="$CONTROL_LN" 'NR==a || NR==b' | grep -c ';' || true)"
+  fi
 fi
-assert "9963e: the control emit is UNCONDITIONAL — comment/blank-only between emits, top-level conditional depth zero, before the post-emit tail gate" \
-  "[[ \"$CONTROL_LN\" =~ ^[0-9]+\$ && \"$PROBE_EMIT_LN\" =~ ^[0-9]+\$ && \"$CONTROL_LN\" -gt \"$PROBE_EMIT_LN\" && \"$EMIT_DEPTH\" -eq 0 && \"$TAIL_LN\" =~ ^[0-9]+\$ && \"$CONTROL_LN\" -lt \"$TAIL_LN\" ]] && ! printf '%s\n' \"$BETWEEN_EMITS\" | grep -cvE '^[[:space:]]*(#|$)' | grep -c . >/dev/null"
+assert "9963e: the control emit is UNCONDITIONAL — conditional depth zero at the control line AND the region between the last top-level closer and the tail gate carries ONLY the two emits, neither with a ';' suffix" \
+  "[[ \"$CONTROL_LN\" =~ ^[0-9]+\$ && \"$PROBE_EMIT_LN\" =~ ^[0-9]+\$ && \"$CONTROL_LN\" -gt \"$PROBE_EMIT_LN\" && \"$LAST_CLOSER_LN\" =~ ^[0-9]+\$ && \"$LAST_CLOSER_LN\" -lt \"$PROBE_EMIT_LN\" && \"$EMIT_DEPTH\" -eq 0 && \"$TAIL_LN\" =~ ^[0-9]+\$ && \"$CONTROL_LN\" -lt \"$TAIL_LN\" && \"$REGION_CODE\" -eq 2 && \"$EMIT_SEP\" -eq 0 ]]"
 
 
 # Single emission chokepoint: the PROBESCRIPTEOF heredoc is the only place this marker may
@@ -617,8 +625,8 @@ assert "9963e: the control emit is UNCONDITIONAL — comment/blank-only between 
 # The sweep counts NON-COMMENT code lines carrying the marker across the host-emission
 # surface — line-shape anchors cannot see the non-`logger` channels, so the marker itself
 # is the discriminator. Comment lines may quote the marker freely (docs carry it).
-CONTROL_EMIT_COUNT="$(grep -rnF 'SOLEUR_SYSTEMD_JOURNALD_CONTROL' --include='*.sh' --include='*.yml' --exclude='*.test.sh' \
-    apps/web-platform/infra/ .github/workflows/ | grep -cvE '^[^:]+:[0-9]+:[[:space:]]*#' || true)"
+CONTROL_EMIT_COUNT="$(grep -rnF 'SOLEUR_SYSTEMD_JOURNALD_CONTROL' --exclude='*.test.sh' --exclude='*.md' \
+    "$REPO_ROOT"/apps/web-platform/infra/ "$REPO_ROOT"/.github/workflows/ | grep -cvE '^[^:]+:[0-9]+:[[:space:]]*#' || true)"
 assert "9963f: exactly ONE non-comment code line carries SOLEUR_SYSTEMD_JOURNALD_CONTROL across the host-emission surface (infra scripts + cloud-init write_files + workflow ssh steps)" \
   "[[ \"$CONTROL_EMIT_COUNT\" -eq 1 ]]"
 
@@ -627,6 +635,11 @@ assert "9963g: 'systemd' is ABSENT from the Source 4 include_matches.SYSLOG_IDEN
   "! printf '%s\n' \"\$HSJ\" | grep -cE '^[[:space:]]*\"systemd\",?\$' >/dev/null"
 
 
+# Known residuals (documented, not silent): a member written as a bare token inside
+# triple quotes (no inner double-quotes to tokenize), and an early `]` inside a
+# comment or a member value truncating the awk range. A TOML-parser extraction
+# (tomllib) would close both; kept out of this round to hold the suite's
+# dependency surface at grep/awk.
 # Tokenized never-add, over EVERY include_matches.SYSLOG_IDENTIFIER array in the file —
 # the property is "no exact-tag membership widens the systemd class", and a whole-line
 # element pin misses layout variants (`["sshd", "systemd"]` inline, `'systemd'` quoted,
@@ -638,15 +651,37 @@ SYSLOG_ID_MEMBERS="$(awk '/include_matches\.SYSLOG_IDENTIFIER/{f=1} f{print} f&&
 assert "9963h: NO include_matches.SYSLOG_IDENTIFIER array in vector.toml carries a 'systemd' member (tokenized, all sources, all layout variants)" \
   "! printf '%s\n' \"$SYSLOG_ID_MEMBERS\" | grep -cx 'systemd' >/dev/null"
 
+
+# Alternate TOML key spellings (P1-C1 fix-round): `include_matches.SYSLOG_IDENTIFIER`
+# can be written with whitespace (`include_matches . SYSLOG_IDENTIFIER`), a quoted
+# key (`include_matches."SYSLOG_IDENTIFIER"`), or an inline table
+# (`include_matches = { SYSLOG_IDENTIFIER = ["systemd"] }`) — semantically identical
+# to the dotted form but invisible to the array-body tokenizer above. Pin all
+# spelling variants absent by refusing ANY non-canonical reference form.
+assert "9963i: no ALTERNATE-SPELLING include_matches.SYSLOG_IDENTIFIER exists anywhere in vector.toml (whitespace, quoted-key, or inline-table forms — semantically identical escapes)" \
+  "! grep -cE 'include_matches[[:space:]]+\.[[:space:]]+SYSLOG_IDENTIFIER|include_matches\.[[:punct:]]+SYSLOG_IDENTIFIER|include_matches[[:space:]]*=[[:space:]]*\{[^}]*SYSLOG_IDENTIFIER' \"$SCRIPT_DIR/vector.toml\" >/dev/null"
+
+assert "9963j: NO VRL transform assigns .SYSLOG_IDENTIFIER (a stamped tag would forge the own-field read)" \
+  "! grep -cE '^[[:space:]]*\.SYSLOG_IDENTIFIER[[:space:]]*=' \"$SCRIPT_DIR/vector.toml\" >/dev/null"
+
+# Syntax-dead probe body (P1-A2 fix-round): all the emission pins read TEXT. A
+# probe body that fails to parse (a stray paren or unbalanced quote introduced
+# anywhere above the emit) produces zero rows while every textual pin stays
+# green. bash -n validates the generated script's grammar.
+assert "9963k: the PROBESCRIPTEOF probe body is syntactically valid bash (a parse-dead body emits zero rows)" \
+  "printf '%s\n' \"\$PROBE_BODY\" > /tmp/probe-body-\$\$.sh && bash -n /tmp/probe-body-\$\$.sh && rm -f /tmp/probe-body-\$\$.sh"
+
+
+echo ""
+
 # Anti-vacuity floor (ADR-193): a stranded run must never report clean. Floor, not
 # equality — developer-incremented. Reports directly, never through assert/pass/fail.
-MIN_TOTAL=96
+MIN_TOTAL=99
 if (( TOTAL < MIN_TOTAL )); then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$TOTAL" "$MIN_TOTAL" >&2
   exit 1
 fi
 
-echo ""
 echo "=== Results: $PASS/$TOTAL passed ==="
 if (( FAIL > 0 )); then
   echo "FAIL: $FAIL test(s) failed"

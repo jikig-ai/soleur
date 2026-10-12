@@ -451,12 +451,17 @@ rows "$TMP/r-ctrlforge.json" "$NOW" \
   "{\"SYSLOG_IDENTIFIER\":\"doppler\",\"_COMM\":\"inngest\",\"_SYSTEMD_UNIT\":\"inngest-server.service\",\"message\":\"SOLEUR_SYSTEMD_JOURNALD_CONTROL ts=1760222400 quoted inside a webhook payload\",\"host\":\"${HOST}\"}" \
   "{\"SYSLOG_IDENTIFIER\":\"doppler\",\"_COMM\":\"inngest\",\"message\":\"SOLEUR_SYSTEMD_JOURNALD_CONTROL ts=1760222400 and SYSLOG_IDENTIFIER=systemd prose quoted from the repo\",\"host\":\"${HOST}\"}" \
   "{\"SYSLOG_IDENTIFIER\":\"systemd-journald\",\"_COMM\":\"systemd-journald\",\"message\":\"SOLEUR_SYSTEMD_JOURNALD_CONTROL ts=1760222400 prefix-ident noise\",\"host\":\"${HOST}\"}" \
-  "{\"SYSLOG_IDENTIFIER\":\"doppler\",\"_COMM\":\"inngest\",\"message\":\"SOLEUR_SYSTEMD_JOURNALD_CONTROL plus the verbatim fragment \"SYSLOG_IDENTIFIER\":\"systemd\" quoted from the repo\",\"host\":\"${HOST}\"}" \
   "{\"SYSLOG_IDENTIFIER_X\":\"systemd\",\"message\":\"SOLEUR_SYSTEMD_JOURNALD_CONTROL suffix field-name noise\",\"host\":\"${HOST}\"}"
 # The BOOT_STAGE-embedded forgery is appended pre-escaped (rows()'s blanket "->\" pass
 # would mis-escape the \" inside jl= and poison the JSON — a transport-fault TRANSIENT
 # would pass this arm vacuously). printf \" -> \" and \\\" -> \\" so the raw lands as
 # jl="journalctl excerpt: \"SYSLOG_IDENTIFIER\":\"systemd\" ...embedded".
+# The escaped-fragment row is printf-appended for the same reason as the BOOT_STAGE
+# row below: its message must carry the verbatim pair `"SYSLOG_IDENTIFIER":"systemd"`
+# inside a VALID inner JSON object (own field stays doppler), which takes `\\\"` in
+# this shell — one level short produces `\"` (a raw that fails to parse, and the arm
+# verifies parse-death, not own-field rejection — N1 fix-round).
+printf '{"dt":"%s","raw":"{\\"SYSLOG_IDENTIFIER\\":\\"doppler\\",\\"_COMM\\":\\"inngest\\",\\"message\\":\\"SOLEUR_SYSTEMD_JOURNALD_CONTROL plus the verbatim fragment \\\\\\"SYSLOG_IDENTIFIER\\\\\\":\\\\\\"systemd\\\\\\" quoted from the repo\\",\\"host\\":\\"%s\\"}"}\n' "$NOW" "$HOST" >> "$TMP/r-ctrlforge.json"
 printf '{"dt":"%s","raw":"SOLEUR_INNGEST_BOOT_STAGE stage=post-boot-health jl=\\"journalctl excerpt: \\\\\\\"SYSLOG_IDENTIFIER\\\\\\\":\\\\\\\"systemd\\\\\\\" SOLEUR_SYSTEMD_JOURNALD_CONTROL embedded\\" \\"host\\":\\"%s\\""}\n' "$NOW" "$HOST" >> "$TMP/r-ctrlforge.json"
 # Guard the guard: the JSON must parse through the stub or the arm dies on a transport
 # fault and any TRANSIENT verdict satisfies it vacuously. python round-trip, no greps.

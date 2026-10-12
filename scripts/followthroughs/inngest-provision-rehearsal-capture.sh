@@ -137,6 +137,23 @@ if [[ ! "$WINDOW" =~ ^[0-9]+[[:space:]]+(MINUTE|HOUR|DAY|WEEK|MONTH)$ ]]; then
   echo "refusing: --window must be '<n> MINUTE|HOUR|DAY|WEEK|MONTH' (it is interpolated into the Better Stack SQL). Got: ${WINDOW}" >&2
   exit 64
 fi
+# FLOOR: the systemd-path control emits hourly (OnUnitActiveSec=1h), so a --window
+# under 60 minutes can end below the emit period and reopen exactly the
+# unsatisfiable-control hole the run-window read exists to close (code-quality
+# fix-round note). The workflow's default '2 HOUR' clears this; refuse smaller.
+_win_n="${WINDOW%%[[:space:]]*}"
+_win_unit="${WINDOW##*[[:space:]]}"
+case "$_win_unit" in
+  MINUTE) _win_min="$_win_n" ;;
+  HOUR)   _win_min=$(( _win_n * 60 )) ;;
+  DAY)    _win_min=$(( _win_n * 1440 )) ;;
+  WEEK)   _win_min=$(( _win_n * 10080 )) ;;
+  MONTH)  _win_min=$(( _win_n * 43200 )) ;;
+esac
+if (( _win_min < 60 )); then
+  echo "refusing: --window '${WINDOW}' is under the control row's hourly emit period — a run-window control read cannot be satisfied below 60 minutes." >&2
+  exit 64
+fi
 _ISO_TS_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$'
 for _ts_flag in since reboot-since; do
   case "$_ts_flag" in
@@ -325,7 +342,10 @@ want() { note "WAIT: $1"; missing="${missing}$1; "; }
 # "SYSLOG_IDENTIFIER":"systemd" (measured on the run-38031062344 storm rows, which also
 # carry UNIT=/JOB_RESULT=failed) or the journald console form systemd[N]:. grep -c consumes
 # all input, so no SIGPIPE.
-count_inngest_failed() {
+count_inngest_failed() {  # note: intentionally TEXT-level (the sibling control went
+    # field-true under review) — a forged doppler row can only manufacture false
+    # VIOLATIONS here, the honest loud direction; upgrading it is not in this PR's
+    # blast radius. The systemd path itself is field-bound by systemd_path_check.
   # The {0,N} gaps tolerate the JSONEachRow-serialized escape (\" is a wire char) as well as
   # the unescaped ":"/= forms; a doppler/inngest row carries a non-systemd identifier, no
   # UNIT=<unit> field, and no systemd[N]: console prefix, so it cannot match. The

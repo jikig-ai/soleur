@@ -1221,8 +1221,12 @@ logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_ac
 # admitted by inngest_journald's include_matches.PRIORITY {0..4} arm regardless of unit —
 # the SAME arm real PID-1 `Failed to start` rows take. The spoofed tag is load-bearing:
 # consumers discriminate the path by SYSLOG_IDENTIFIER=systemd, so the control must prove
-# THAT field shape transits. Absolute /usr/bin/logger per the :482 precedent; journald
-# stamps host itself (no host= field). NOT in Source 4 by design (vector.toml).
+# THAT field shape transits. Absolute /usr/bin/logger per the FAILLOG ExecStart
+# precedent (~:487); the sibling emit two lines up can stay bare `logger` — it emits
+# under $LOG_TAG (script-set), while this line's tag is the contract itself, so its
+# binary is pinned absolute to keep the emission independent of PATH resolution
+# (journald stamps host itself; no host= field). NOT in Source 4 by design
+# (vector.toml).
 /usr/bin/logger -t systemd -p err "SOLEUR_SYSTEMD_JOURNALD_CONTROL ts=$(date -u +%s) — rides the inngest_journald PRIORITY≤4 admission arm (#9963)"
 
 # --- second channel, AFTER the unconditional emit above (ADR-117 unaffected) ---
