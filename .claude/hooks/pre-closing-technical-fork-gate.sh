@@ -160,8 +160,8 @@ TAB=$'\t'
 FINAL="$(grep -E "^F${TAB}" <<<"$UNITS" | tail -n 1)"
 if [[ -n "$FINAL" ]]; then
   FS="${FINAL#F"$TAB"}"
-  if [[ "$FS" =~ ^(paused|blocked):[[:space:]]*(.*)$ ]]; then
-    CONTENT="${BASH_REMATCH[2]//[[:punct:][:space:]]/}"
+  if [[ "$FS" =~ ^(paused|blocked): ]]; then
+    CONTENT="${FS#*:}"; CONTENT="${CONTENT//[[:punct:][:space:]]/}"
     if [[ -n "$CONTENT" ]] && ! [[ "$CONTENT" =~ ^(none|na|nothing|no|nil)$ ]]; then exit 0; fi
   fi
 fi
@@ -169,7 +169,7 @@ fi
 # --- judge the last 12 units, each alone ------------------------------------------------------------
 declare -a JUDGE=()
 while IFS= read -r row; do
-  [[ "$row" == "U0${TAB}"* ]] && JUDGE+=("${row#U0"$TAB"}")
+  [[ "$row" == "U0${TAB}"* ]] && JUDGE+=("${row:3}")
 done <<<"$UNITS"
 COUNT=${#JUDGE[@]}
 START=0

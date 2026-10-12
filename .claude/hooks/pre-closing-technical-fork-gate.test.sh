@@ -379,6 +379,7 @@ if [[ "$c_lib_dirty" == "0" ]]; then echo "  PASS: C2 the lib is pure: no emit_i
 else printf '  FAIL: C2 the lib carries %s impure or repo-specific line(s)\n' "$c_lib_dirty" >&2; FAIL=$((FAIL+1)); fi
 TOTAL=$((TOTAL+1))
 v8_pinned='\b(prices?|pricing|plans?|tiers?|launch(es)?|dates?|deadlines?|licen[sc]es?|vendors?|logos?|copy|landing|budgets?|costs?|spend|revenue|invoices?|refunds?|schedules?|priorit(y|ies)|brand|hero|merge|deploy|ship|releases?|delete|prod|production)\b'
+# shellcheck disable=SC1090  # the lib path is a parameter: this reads the pristine and the mutant lib
 v8_of() { ( . "$1" 2>/dev/null; printf '%s' "${RULING_OPVOCAB_RE:-}" ); }
 if [[ "$(v8_of "$LIB")" == "$v8_pinned" ]]; then echo "  PASS: V8 RULING_OPVOCAB_RE in the lib is byte-equal to the pinned literal"; PASS=$((PASS+1))
 else echo "  FAIL: V8 RULING_OPVOCAB_RE drifted from the pinned literal" >&2; FAIL=$((FAIL+1)); fi
@@ -401,6 +402,7 @@ apply_mut() { # <file> <old> <new>: 0 only if the mutation LANDED and the mutant
   local f="$1" old="$2" new="$3" content
   content="$(cat "$f"; printf x)"; content="${content%x}"
   [[ "$content" == *"$old"* ]] || return 1
+  assert_fixture_dir "$f"
   printf '%s' "${content/"$old"/"$new"}" > "$f" || return 1
   bash -n "$f" 2>/dev/null
 }
@@ -410,7 +412,7 @@ TOTAL=$((TOTAL+1))
 am_f="$WORK/am-probe.sh"; assert_fixture_dir "$am_f"; printf 'echo one\n' > "$am_f"
 apply_mut "$am_f" "absent anchor" "x"; am_a=$?
 apply_mut "$am_f" "echo one" "if then"; am_b=$?
-printf 'echo one\n' > "$am_f"; apply_mut "$am_f" "echo one" "echo two"; am_c=$?
+assert_fixture_dir "$am_f"; printf 'echo one\n' > "$am_f"; apply_mut "$am_f" "echo one" "echo two"; am_c=$?
 if [[ "$am_a" -ne 0 && "$am_b" -ne 0 && "$am_c" -eq 0 ]]; then echo "  PASS: H4 the mutation applier refuses an absent anchor and an unparseable mutant"; PASS=$((PASS+1))
 else printf '  FAIL: H4 applier rc: absent=%s unparseable=%s ok=%s\n' "$am_a" "$am_b" "$am_c" >&2; FAIL=$((FAIL+1)); fi
 

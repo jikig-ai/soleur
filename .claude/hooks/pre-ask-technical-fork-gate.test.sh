@@ -22,6 +22,17 @@ set -uo pipefail
 HOOK="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/pre-ask-technical-fork-gate.sh"
 LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/technical-fork-cues.sh"
 PASS=0; FAIL=0; TOTAL=0
+# The CANONICAL copy, asserted byte-for-byte against every other copy by plugins/soleur/test/fixture-dir-operand-assert.test.sh.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
 [[ -x "$HOOK" ]] || { echo "FATAL: hook not executable at $HOOK" >&2; exit 1; }
 command -v jq >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; exit 3; }
 
@@ -841,6 +852,7 @@ else printf '  FAIL: V7 money members that did not veto:%s (control decision %s)
 # would change it and silence THIS hook too (the lib header names that as never the fix).
 TOTAL=$((TOTAL+1))
 v8_pinned='\b(prices?|pricing|plans?|tiers?|launch(es)?|dates?|deadlines?|licen[sc]es?|vendors?|logos?|copy|landing|budgets?|costs?|spend|revenue|invoices?|refunds?|schedules?|priorit(y|ies)|brand|hero|merge|deploy|ship|releases?|delete|prod|production)\b'
+# shellcheck disable=SC1090  # the lib path is a variable by design; the value is read by sourcing
 v8_live="$( ( . "$LIB" 2>/dev/null; printf '%s' "${RULING_OPVOCAB_RE:-}" ) )"
 if [[ -n "$v8_live" && "$v8_live" == "$v8_pinned" ]]; then echo "  PASS: V8 the lib's RULING_OPVOCAB_RE is byte-equal to the pinned pre-move literal"; PASS=$((PASS+1))
 else printf '  FAIL: V8 RULING_OPVOCAB_RE in the lib differs from the pinned literal (live: %s)\n' "$v8_live" >&2; FAIL=$((FAIL+1)); fi
@@ -886,6 +898,7 @@ else FAIL=$((FAIL+1)); fi
 TOTAL=$((TOTAL+1))
 m1_root="${SOLEUR_TEST_INCIDENT_ROOT:?sandbox root unset}/m1-missing-lib"
 m1_fail=0
+assert_fixture_dir "$m1_root"
 mkdir -p "$m1_root/with/lib" "$m1_root/without/lib" || m1_fail=1
 if [[ "$m1_fail" -eq 0 ]]; then
   for m1_f in "$(dirname "$HOOK")"/lib/*.sh; do
@@ -912,6 +925,7 @@ TOTAL=$((TOTAL+1))
 # The cue regexes live in the shared lib (technical-fork-cues.sh). Read the VALUE by sourcing the lib in a
 # subshell, never by sed over its source text: the lib builds RULING_OPVOCAB_RE by concatenation, so a text
 # read would see the assignment expression, not the regex.
+# shellcheck disable=SC1090  # the lib path is a variable by design; the value is read by sourcing
 v4_re="$( ( . "$LIB" 2>/dev/null; printf '%s' "${RULING_PERM_RE:-}" ) )"
 v4_re="${v4_re#(}"; v4_re="${v4_re%)}"
 if [[ -z "$v4_re" ]]; then

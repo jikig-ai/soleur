@@ -75,19 +75,22 @@ TFC_BUSINESS_RE='\b('"${TFC_BUSINESS_WORDS}"')\b'
 TFC_CLOSING_EXTRA_RE='\b(prioriti[sz]\w*|publish\w*|announce\w*|auditors?|accountants?|lawyers?|investors?|customers?|features?|roadmap|milestones?)\b'
 
 tfc_self_check() {
-  local v
-  for v in RULING_STRICT_RE RULING_EVID_NOUN_RE RULING_BAR_RE RULING_SUFF_RE RULING_STATUS_RE \
-           RULING_ADR_RE RULING_AB_RE RULING_TECH_RE RULING_PERM_RE RULING_OPVOCAB_RE RULING_MONEY_RE \
-           TFC_BUSINESS_WORDS TFC_ACTION_WORDS TFC_CL1_RE TFC_CL2A_RE TFC_CL2B_RE TFC_CL3_ORDER_RE \
-           TFC_CL3_NOUN_RE TFC_BUSINESS_RE TFC_CLOSING_EXTRA_RE; do
-    [[ -n "${!v-}" ]] || return 1
-  done
+  # Explicit names, not `${!name}`: an indirect expansion reads a variable chosen at runtime, which the
+  # xtrace-refusal linter (rightly) treats as a possible credential read. `${VAR-}` is safe under `set -u`.
+  [[ -n "${RULING_STRICT_RE-}" && -n "${RULING_EVID_NOUN_RE-}" && -n "${RULING_BAR_RE-}" \
+     && -n "${RULING_SUFF_RE-}" && -n "${RULING_STATUS_RE-}" && -n "${RULING_ADR_RE-}" \
+     && -n "${RULING_AB_RE-}" && -n "${RULING_TECH_RE-}" && -n "${RULING_PERM_RE-}" \
+     && -n "${RULING_OPVOCAB_RE-}" && -n "${RULING_MONEY_RE-}" && -n "${TFC_BUSINESS_WORDS-}" \
+     && -n "${TFC_ACTION_WORDS-}" && -n "${TFC_CL1_RE-}" && -n "${TFC_CL2A_RE-}" \
+     && -n "${TFC_CL2B_RE-}" && -n "${TFC_CL3_ORDER_RE-}" && -n "${TFC_CL3_NOUN_RE-}" \
+     && -n "${TFC_BUSINESS_RE-}" && -n "${TFC_CLOSING_EXTRA_RE-}" ]] || return 1
   declare -f tfc_is_fork >/dev/null 2>&1 || return 1
   return 0
 }
 
 tfc_is_fork() {
   local unit="${1-}" groups="${2-}" closing=0 hit="" asked ends
+  # shellcheck disable=SC2034  # TFC_HIT is the function's output channel, read by the sourcing hook
   TFC_HIT=""
   case "$groups" in
     shared) ;;
@@ -133,6 +136,7 @@ tfc_is_fork() {
   # The exemption: a PERMISSION shape ("may i", "ok to", "approve", "ack-destroy") reads the SAME unit
   # as the cues and applies to every cue, so an authorization is never blocked on one co-occurring word.
   grep -qE "$RULING_PERM_RE" <<<"$unit" && return 1
+  # shellcheck disable=SC2034  # read by the sourcing hook
   TFC_HIT="$hit"
   return 0
 }
