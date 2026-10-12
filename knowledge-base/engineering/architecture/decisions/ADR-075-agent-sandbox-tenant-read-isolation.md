@@ -334,6 +334,19 @@ did not. The shim now:
 in the shared container, not just the sandbox, as an interim for a defect
 the shim can fix without widening anything. Rejected on least-privilege.
 
+> **Addendum — 2026-10-12 (#10065):** the "Dropping (not covering) is load-bearing" rationale above holds for a mount
+> NAMESPACE that carries no other procfs. The vendored argv for the agent runner begins with a recursive `--ro-bind / /`,
+> so the container's own procfs already sits beneath the vendor `--tmpfs /proc` after a drop as well; a drop and a cover
+> therefore differ only for a process holding `CAP_SYS_ADMIN` over the mount namespace, which the production sandbox never
+> grants (the vendored tail carries `--cap-drop ALL`, and unprivileged bwrap drops every capability after setup).
+> Measured 2026-10-12 (`knowledge-base/project/specs/feat-one-shot-10065-sandbox-proc-suite-parity/measurements.md`, M3): in
+> the unprivileged suite image every `umount2("/proc")` from inside the sandbox is EPERM for drop and cover alike, with and
+> without `--cap-add CAP_SYS_ADMIN`, so no behavioral probe separates them. The shim still drops, because "no argv-requested
+> procfs mount at `/proc`" is the property it can state and the suite can assert (the recorder arm of
+> `apps/web-platform/infra/sandbox-masked-proc-docker.test.sh`); the operative barrier against reaching a procfs beneath the
+> tmpfs is the capability drop, which `test/sandbox-vendored-argv-tail.test.ts` pins in both vendored binaries. The hook
+> sandbox builder in the CLI platform binary has no root bind, so the original sentence holds there.
+
 **Why the single-rung re-home.** The plan's rung-2 (`--bind-data` /
 `--ro-bind-data` / `--bind-fd` content binds for deleted or memfd sources)
 is dead on production's bwrap 0.8.0: `--bind-data` EBADFs at write,

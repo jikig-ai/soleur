@@ -250,6 +250,7 @@ FILES_8855=(
   'apps/web-platform/infra/apex-single-node-replace-mutation.test.sh'
   'apps/web-platform/infra/ssl-full-mitigation-mutation.test.sh'
   'apps/web-platform/infra/www-apex-canonicalizer-mutation.test.sh'
+  'apps/web-platform/infra/docker-run-tuple.test.sh'
   'apps/web-platform/infra/web-host-provisioner-parity-mutation.test.sh'
   'apps/web-platform/test/infra/betterstack-send-failed-alert-mutation.test.sh'
 )
@@ -270,7 +271,7 @@ done
 distinct() { printf '%s\n' "$@" | sort -u | wc -l; }
 # The pinned sizes, declared ONCE and used by both the check and its message (raise the matching value
 # when you add a member to a list).
-PIN_7024=2; PIN_8664=2; PIN_8855=6; PIN_7376=3
+PIN_7024=2; PIN_8664=2; PIN_8855=7; PIN_7376=3
 if [[ -n "$missing_pins" ]] || (( $(distinct "${FILES_7024[@]}") != PIN_7024 || $(distinct "${FILES_8664[@]}") != PIN_8664 \
       || $(distinct "${FILES_8855[@]}") != PIN_8855 || $(distinct "${FILES_7376[@]}") != PIN_7376 )); then
   FAIL=1

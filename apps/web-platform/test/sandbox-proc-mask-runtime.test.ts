@@ -35,10 +35,17 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import { buildAgentSandboxConfig } from "@/server/agent-runner-sandbox-config";
 import { startAnthropicStub, type AnthropicStub } from "./helpers/anthropic-stub";
 import { pointCliAtStub, scrubAmbientCliEnv } from "./helpers/hermetic-cli-env";
+import {
+  assertTailMatchesFixture,
+  liveTailOf,
+  normalizeSpawnTail,
+  readFixtureTail,
+} from "./helpers/vendored-bwrap-tail";
 
 const APP_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const BWRAP_SHIM = join(APP_ROOT, "infra", "bwrap-shim", "bwrap");
 const BWRAP_BPF = join(APP_ROOT, "infra", "bwrap-userns-clone3-deny.bpf");
+const CANARY_FIXTURE = join(APP_ROOT, "infra", "sandbox-canary-argv.json");
 
 const BWRAP_OK =
   process.platform === "linux" &&
@@ -154,5 +161,81 @@ describe.skipIf(!SANDBOX_OK)("the vendored sandbox spawn reaches our bwrap shim 
       return tmpfsIdx >= 0 && bindIdx > tmpfsIdx;
     });
     expect(sawDefectShape, "no setup spawn carried `--tmpfs /proc` … `--bind /proc /proc`").toBe(true);
+
+    // #10065 live-tail row: for every recorded SETUP spawn (the ones carrying the config's
+    // `--tmpfs /proc` denyRead), the tokens from the last `--dev` to the `--` boundary equal the
+    // committed fixture tail (infra/sandbox-canary-argv.json), cap segment normalized: the literal
+    // tokens must match, `--cap-drop ALL` is required and every `--cap-add` must be CAP_SETFCAP
+    // (the fixture was captured as root; a non-root run records a shorter segment). The relative
+    // order check above only sees `--tmpfs`/`--bind` positions; this one sees the whole tail.
+    const fixture = readFixtureTail(CANARY_FIXTURE);
+    const setupTails = calls
+      .map((call) => call.split("\0").filter(Boolean))
+      .filter((toks) => {
+        const boundary = toks.indexOf("--");
+        const setup = boundary >= 0 ? toks.slice(0, boundary) : toks;
+        return setup.some((t, i) => t === "--tmpfs" && setup[i + 1] === "/proc");
+      })
+      .map((toks) => liveTailOf(toks));
+    expect(setupTails.length, "TAIL_DRIFT: no recorded setup spawn to compare against the fixture tail").toBeGreaterThan(0);
+    for (const tail of setupTails) {
+      expect(tail, "TAIL_DRIFT: a setup spawn has no --dev before the -- boundary").not.toBeNull();
+      assertTailMatchesFixture(tail as string[], fixture, "live spawn");
+    }
   }, 180_000);
+});
+
+// Creds-free, tool-free: the comparison the live row applies, driven on synthetic spawns built from
+// the committed fixture tail. A normalization that ignored the cap segment would pass the
+// CAP_SYS_ADMIN row; one that compared the raw segment would fail the non-root row.
+describe("live-spawn tail comparison (pure rows)", () => {
+  const fixture = readFixtureTail(CANARY_FIXTURE);
+  const spawn = (tail: string[]) => ["--new-session", "--ro-bind", "/", "/", "--tmpfs", "/proc", ...tail, "--", "bash", "-c", "true"];
+  const live = (toks: string[]) => liveTailOf(toks) as string[];
+  const drift = (tail: string[]) => {
+    try {
+      assertTailMatchesFixture(live(spawn(tail)), fixture, "live spawn");
+    } catch (e) {
+      return (e as Error).message;
+    }
+    return "";
+  };
+  const capAt = fixture.indexOf("--cap-drop");
+
+  it("the fixture's own tail matches itself (must-PASS control)", () => {
+    expect(drift(fixture)).toBe("");
+  });
+
+  it("a non-root spawn (`--cap-drop ALL` without `--cap-add CAP_SETFCAP`) matches the root-captured fixture", () => {
+    const nonRoot = fixture.filter((t, i) => !(i >= capAt + 2 && i < capAt + 4));
+    expect(nonRoot).not.toEqual(fixture);
+    expect(drift(nonRoot)).toBe("");
+  });
+
+  it("an added `--cap-add CAP_SYS_ADMIN` is rejected as CAP_BARRIER, not normalized away", () => {
+    const withAdmin = [...fixture.slice(0, capAt + 2), "--cap-add", "CAP_SYS_ADMIN", ...fixture.slice(capAt + 2)];
+    expect(drift(withAdmin)).toMatch(/CAP_BARRIER/);
+  });
+
+  it("a missing `--cap-drop ALL` is rejected as CAP_BARRIER", () => {
+    const noDrop = fixture.filter((t, i) => !(i >= capAt && i < capAt + 2));
+    expect(drift(noDrop)).toMatch(/CAP_BARRIER/);
+  });
+
+  it("an extra `--tmpfs /proc` after the bind is TAIL_DRIFT naming the creds-gated --capture as the only regenerator", () => {
+    const msg = drift([...fixture, "--tmpfs", "/proc"]);
+    expect(msg).toMatch(/TAIL_DRIFT/);
+    expect(msg).toMatch(/--capture/);
+    expect(msg).toMatch(/ONLY fixture regenerator/);
+  });
+
+  it("a spawn whose proc branch flipped to `--proc /proc` is TAIL_DRIFT", () => {
+    const flipped = [...fixture.slice(0, -3), "--proc", "/proc"];
+    expect(drift(flipped)).toMatch(/TAIL_DRIFT/);
+  });
+
+  it("normalizeSpawnTail is idempotent on its own output", () => {
+    const once = normalizeSpawnTail(fixture);
+    expect(normalizeSpawnTail(once)).toEqual(once);
+  });
 });
