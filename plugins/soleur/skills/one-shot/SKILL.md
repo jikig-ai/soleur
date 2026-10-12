@@ -303,6 +303,8 @@ terminal and files the issue instead. A re-invocation is a step *within* an arm,
 
    > **CONTINUATION GATE:** When ship finishes (including postmerge Step 3.8), proceed immediately to step 8 — do NOT ask "want me to monitor deploy?" or hand off to the operator.
 
+> **The Step 8 closing is a carrier too (signage; inside this loop no Stop hook backs it):** never end it with a technical question to the operator ("Decision for you:", "Your calls"); spawn `soleur:engineering:cto` (legal: `soleur:legal:clo`), record `Ruled by CTO agent`, ask only the authorization. [technical-ruling-delegation.md](../brainstorm-techniques/references/technical-ruling-delegation.md).
+
 8. Run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" show` beside DONE. Output `<promise>DONE</promise>` **only when** PR is merged, release workflows passed, and **postmerge Phase 7** printed `postmerge verification complete!`. If ship returned without postmerge, invoke `soleur:postmerge <PR-number>` (Grok) or `soleur:postmerge` (Claude) before emitting DONE.
 
 CRITICAL RULE: If a completion promise is set, you may ONLY output it when the statement is completely and unequivocally TRUE. Do not output false promises to escape the loop.
