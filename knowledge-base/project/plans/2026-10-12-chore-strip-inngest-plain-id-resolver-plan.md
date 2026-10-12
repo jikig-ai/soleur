@@ -15,6 +15,25 @@ status: PARKED (prepare + review + hold as draft; do not merge until a host repl
 
 # Strip the dead PLAIN_ID resolver arm from the Inngest cloud-init (PARKED change)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-12
+**Sections enhanced:** Research Reconciliation, Decisions (D6 added), Phases 0/3/4/5/6/7, Guard Contract, Scope Check, Encryption Posture, Acceptance Criteria, Risks
+**Method:** plan-time research (repo-research reads of the cited files, learnings-researcher, read-only GitHub/CI evidence) plus a 6-seat plan-review panel (DHH, Kieran, code-simplicity per-mechanism, architecture-strategist, spec-flow, CTO devex lens), then the deepen-plan halt gates run mechanically: 4.6 User-Brand Impact (present, threshold single-user incident), 4.7 Observability (5 fields; the discoverability command `bash apps/web-platform/infra/inngest-userdata-budget.sh --json` measured 0.67 s, prints `stored_bytes`), 4.8 PAT sweep (no hits), 4.9 UI wireframe (no UI surface, skipped), 4.10 Encryption Posture (fields filled; placeholder `n/a` values replaced), 4.11 Guard Contract (`python3 scripts/lint-guard-contract.py` rc=0 after the matrix labels were fixed: 3 guards, rows counted), 4.12 Scope Check (restructured to the canonical Ask Mapping / Plan-Item Provenance / Split Assessment schema). A 40-agent fan-out was deliberately not run: the change is a deletion with an already 6-seat-reviewed design, and the agent panel would re-derive the same file reads.
+
+### Key Improvements
+1. Reconciled the brief's "merge replaces the host" reading against code: per-merge apply prunes `hcloud_server.inngest`; the park rationale is restated on verified grounds (latent replace, drift red, `server_touched` abort, and an unexercised new boot path).
+2. Found the provision-rehearsal root as a second renderer of the same template (raw volumes, no pointer): the no-pointer arm is kept and re-pointed (D2) instead of deleted.
+3. Plan review found D2 would make `luksFormat` newly reachable on the sole copy; D6 (refuse to format when the rendered config is `prd`, `blkid -p`) and UNP5 close it.
+4. Test-suite assertions the first draft missed are now named (T1.8a 4->3, delete T1.8a2, G1.a 6->4, G1.b, loopback `run_arm` signature, floors set from measured/CI runs).
+
+### New Considerations Discovered
+- The AC5 test map is extracted by a regex anchored on its FIRST key; removing the key without moving the anchor yields an empty list.
+- The `parked` label does not exist and must be created; autonomous merge paths must be verified to skip drafts/label before ship ends.
+- Pointer verification must read the VALUE (`pointer=` on the `stage=resolve` row), not a Doppler name list; re-run at unpark.
+- No automated bring-up exists for a brand-new blank prd volume after the strip (DR procedure to be written when needed).
+
+
 Ref #9786. Follow-up of #8285 (retire the plaintext Redis AOF backstop). Draft PR #10081.
 
 ## Overview
@@ -145,17 +164,41 @@ zero matches.
 
 ## Scope Check
 
-| Ask (from brief / #9786) | Mapped to | Provenance |
-|---|---|---|
-| strip PLAIN_ID resolver arm + first-boot stage + runcmd resolver | Phase 2 (cloud-init stage) | issue |
-| matching `inngest_volume_id` map key | Phase 3 (`inngest-host.tf`, `inngest-userdata-budget.sh`, boot-emitter AC5, rehearsal.tf) | issue (+ rehearsal.tf consumer: `inferred`, cleanup - an unused `templatefile` key is harmless but misleading in a second renderer) |
-| `inngest-redis-luks*.test.sh` suites | Phase 4 | issue |
-| `inngest-luks-open.sh` pre-recut branches | Phase 2 (boot-reopen script) | issue |
-| `inngest-host.test.sh` D1 pin rows | Phase 4 | `inferred` (the local they pin is deleted; leaving them red is not an option) |
-| ADR-142 addendum amendment | Phase 5 | `inferred` (plan-skill Phase 2.10: amend the ADR that deferred this) |
-| park as draft PR, no merge | Phase 6 | brief |
-Split assessment: single PR; the only separable item (N2 `rollback)` arm, image-baked) is already a
-different artifact lifecycle and is a named non-goal with a tracking line on #9786.
+### Ask Mapping
+
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "strip the dead plaintext-volume resolver arm (PLAIN_ID / rollback resolver) from apps/web-platform/infra/cloud-init-inngest.yml" [brief] | Phase 2 (Region A + Region B), D1, D2 | mapped |
+| 2 | "plus the matching inngest_volume_id map key and its consumers named in the issue body (inngest-host.tf, inngest-userdata-budget.sh, inngest-boot-emitter.test.sh AC5 key-set parity floor, the inngest-redis-luks*.test.sh suites, inngest-luks-open.sh pre-recut branches)" [brief] | Phase 3 (3.1, 3.3, 3.4), Phase 4 (4.1, 4.2), Phase 2 Region A | mapped |
+| 3 | "the plan must PREPARE the change (code + tests), take it through review, and open/keep the PR as a DRAFT clearly marked PARKED" [brief] | Phase 6 (6.1-6.5), D5 | mapped |
+| 4 | "Do a read-only check whether any inngest host replace is planned (open issues/PRs/plans, workflow dispatch history)" [brief] | Research Insights - Premise Validation, Phase 0.2 | mapped |
+| 5 | "the plan must verify this reading from hcloud_server.inngest lifecycle / ignore_changes and the destroy-guard in apply-web-platform-infra.yml" [brief] | Research Reconciliation row 1, AC-P1 | mapped |
+| 6 | "the plan must name the overlap and keep this change's hunks narrowly scoped to the PLAIN_ID arm so a later rebase is mechanical" [brief] | Sibling-PR overlap table, Phase 2 hunk discipline, AC8 | mapped |
+| 7 | "NEVER touch web-1 LUKS volume 106443278 ... do not pin it. Do not change prevent_destroy or delete_protection. Do not touch betteruptime_heartbeat.inngest_server_probe." [brief] | Non-Goals N4, AC11 | mapped |
+| 8 | "state the host-replace blast radius honestly (merging would replace the sole-scheduler host; the Redis AOF volume is LUKS and sole copy)" [brief] | User-Brand Impact, Infrastructure (IaC) Apply path, Risks R1 | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| Region A / Region B edits in cloud-init-inngest.yml | asks 1-2 | asked |
+| inngest-host.tf, inngest-userdata-budget.sh, inngest-boot-emitter.test.sh, luks suites | ask 2 | asked |
+| inngest-provision-rehearsal/rehearsal.tf map line | - | inferred - justification: the rehearsal root renders the same template; leaving a key the template no longer reads is a misleading dead input in a second renderer |
+| inngest-host.test.sh D1 rows and local deletion | - | inferred - justification: the pin local exists only to feed the removed key; its guard rows would be red against the new tree |
+| D2 unpointed arm kept (re-pointed) | ask 1 (the issue's literal removal would break the provision-rehearsal gate and hr-fresh-host-provisioning-reachable-from-terraform-apply) | inferred - justification: enforcement contract - the live rehearsal gate and the fresh-host rule need a no-pointer boot |
+| D6 `prd` guard on the format arm + `blkid -p` | - | inferred - justification: safety - D2 makes `luksFormat` newly reachable on the sole copy; plan review found the regression |
+| MODE value rename | - | inferred - justification: a telemetry value naming a LUKS volume `plaintext_canonical` would be a false label (DC5) |
+| variables.tf description edit | - | inferred - justification: an inert input that still reads as live is a maintainer trap (CTO review) |
+| ledger rehearsal-row text | - | inferred - justification: the encryption-posture lint resolves these rows against the code the strip changes |
+| ADR-142 amendment, ADR-199 pointer | - | inferred - justification: plan-skill Phase 2.10 - ADR-142 D1 recorded this deferral, so the resolution belongs with the change |
+| `parked` label, base-SHA staleness rule, unpark checklist | ask 3 | asked |
+
+### Split Assessment
+
+- Subsystems touched: 3 - apps/web-platform/infra (cloud-init, tf, tests), scripts (ledger), knowledge-base (ADR/runbook)
+- Planned files: 13 | Estimated changed lines: ~700 (mostly deletions)
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR
 
 ## Decisions
 
@@ -373,7 +416,7 @@ able to read the diff as "deletions plus three re-pointed lines".
   base SHA + date and the staleness rule (if more than a handful of commits have touched
   `apps/web-platform/infra/*inngest*` or the three guarded suites since the base, re-validate, do not
   rebase blindly; the diff is re-reviewed at unpark), the unpark checklist (Phase 7), `Ref #9786`, ends with
-  the line `🤖 Generated with [Claude Code](https://claude.com/claude-code)`. Create and apply a `parked`
+  the line `🤖 Generated with [Claude Code](https://claude.com/claude-code)`. Create (`gh label create parked --color D4C5F9 --description "PR intentionally held; do not merge"`; the label does not exist today - verified `gh label list`) and apply a `parked`
   label (autonomous merge paths - drain-prs, one-shot, merge-pr - must be verified to skip drafts and that
   label before ship ends; do not assume). Keep it `draft`. Do NOT mark ready. Do NOT arm auto-merge. Do NOT
   run `soleur:ship` Phase 6+ merge steps, `gh pr merge`, or `postmerge`. Link #10081 from #8620, #9786 and
@@ -483,10 +526,10 @@ at_rest:
   disclosed_as: not-publicly-claimed
   live_verification: unavailable:no per-volume LUKS-type probe field yet (ledger row text); wrong-volume alert + resolve/verify stage rows are the runtime evidence
 in_transit:
-  - connection: none added or changed
-    tls: n/a
+  - connection: none added or changed (no new socket, endpoint or peer)
+    tls: unchanged - this change touches only on-host block-device resolution
     cert_verification: on (unchanged elsewhere)
-    does_not_defend: n/a
+    does_not_defend: no connection is introduced; the posture of existing connections is outside this change
     disclosed_as: not-publicly-claimed
 ```
 
@@ -537,6 +580,8 @@ the extraction can never silently return an empty or over-read list.
 `^  })`), the test's `RENDER_EXPR` map (extracted by a regex anchored on its FIRST key), and the template's
 own `${...}` consumers. Chokepoint: the `comm` diff of the first two plus the floor/bound pair. The
 second renderer (`rehearsal.tf`) is covered by `inngest-provision-rehearsal.test.sh`, not by this guard.
+**Mutation matrix:**
+
 | # | Mutation | Must go RED because |
 |---|---|---|
 | 1 | Re-add `inngest_volume_id` to the `.tf` map only | `comm` reports it missing from the test map |
@@ -557,6 +602,8 @@ assigns an `inngest_volume_id` template input (the pin local and the key are gon
 **Assembly.** All `*.tf` directly under `apps/web-platform/infra` (the function globs `"$dir"/*.tf`, non-recursive),
 comment- and `description =`-stripped; scan v1 (resource headers), v2' (zero `inngest_volume_id`
 assignments), v4 (live `hcloud_volume.inngest_redis` references).
+**Mutation matrix:**
+
 | # | Mutation | Must go RED because |
 |---|---|---|
 | 1 | Re-declare `resource "hcloud_volume" "inngest_redis"` | v1 |
@@ -575,6 +622,8 @@ suite's expectations in the same diff, which review reads.
 other than `LUKS_ID`'s, and no ext4 mount.
 **Assembly.** The two device readers (boot-reopen script, first-boot stage heredoc) and the one
 `/etc/default/inngest-luks-volumes` writer; chokepoint: the comment-stripped view of the template.
+**Mutation matrix:**
+
 | # | Mutation | Must go RED because |
 |---|---|---|
 | 1 | Re-add `PLAIN_ID=` in either reader | absence assertion (per reader, not whole-file) |
