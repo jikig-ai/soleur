@@ -98,6 +98,14 @@ retained "for repository lifetime" per Art. 32 evidence retention.
 `parse-override.sh` enforces this: artifacts whose body contains a raw email
 pattern outside the `approver:` field are rejected with `invalid_schema`.
 
+The path form is valid only inside the retention window: the scanner's startup
+reap removes `skill-security-scan-*` dirs older than `SKILL_SCAN_META_REAP_MIN`
+minutes (default 10080 = 7 days), and `$XDG_RUNTIME_DIR` is cleared on logout
+regardless (#6789, #6760). For a reference that must outlive the window, embed
+the findings inline — the schema's `oneOf` admits an object form — copied from
+the **redacted `.scan-meta.json`**, never from scanner stdout (the mandate
+above is about where the bytes come from, not the YAML shape).
+
 ## Multiple overrides per PR
 
 A single PR may install multiple skills. Each skill's override is one artifact
