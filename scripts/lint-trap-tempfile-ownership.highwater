@@ -1,4 +1,13 @@
-69  # class-b accept (ADR-129): tracked *.sh calling mktemp with ZERO trap...EXIT.
+70  # class-b accept (ADR-129): tracked *.sh calling mktemp with ZERO trap...EXIT.
+# 69 -> 70 (2026-10-11, #9980 / PR #10029): apps/web-platform/infra/arm-heartbeats.sh joins the
+# population by gaining `--arm-one`, whose books file is allocated by `mktemp` and has NO
+# owning `trap ... EXIT` BY DESIGN (Cut List C6, ADR-117 amendment): a trap would delete the
+# books file on the very interruption it exists to survive, and the printed `--sweep`
+# recovery command reads it afterwards. The two mktemp sites are annotated
+# `lint-trap-ownership: ok` with that reason (the census counts the file regardless of the
+# escape). Bounded: the private books file is removed on every clean finish, the
+# `state_remove` scratch file is renamed over the books or removed on every path, and the
+# preflight probe is removed on the same line that creates it.
 # 70th entrant (2026-10-06, #9510 / PR #9634): tests/scripts/lib/stock-preflight-gate.sh —
 # stock_recovery_report allocates a `terraform show -json` dump file under RUNNER_TEMP.
 # The library is SOURCED into the workflow step's shell, so a `trap ... EXIT` here would

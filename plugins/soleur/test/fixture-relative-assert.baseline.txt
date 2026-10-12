@@ -137,7 +137,7 @@
 # Format: <count>\t<path>
 1	apps/cla-evidence/scripts/ccla-add.sh
 1	apps/cla-evidence/scripts/sentinel-pr.sh
-3	apps/web-platform/infra/arm-heartbeats.sh
+4	apps/web-platform/infra/arm-heartbeats.sh
 1	apps/web-platform/infra/arm-heartbeats.test.sh
 4	apps/web-platform/infra/canary-bundle-claim-check.test.sh
 18	apps/web-platform/infra/ci-deploy.sh
