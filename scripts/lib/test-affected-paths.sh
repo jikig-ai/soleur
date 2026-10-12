@@ -1966,8 +1966,16 @@ AFFECTED_SCRIPTS_TEST_ALL_INFRA_COVERAGE_NOTICE_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
-# scripts/guard-vacuity-floor — derives its population from git ls-files '*.test.sh' — the
-# suite corpus under these roots.
+# scripts/guard-vacuity-floor — derives its population from git ls-files '*.test.sh' —
+# the suite corpus under these roots.
+# Verified read set (#9969): `git ls-files '*.test.sh'` whole-tree — every *.test.sh
+# under EVERY top-level root — plus fixture scripts/fixtures/vacuity-contract-control.sh
+# and its own file (covered by the scripts/ prefix). The glob: entries below cover the
+# 13 roots that lacked a declared prefix; the dir prefixes stay because converting them
+# would narrow coverage the suite already had (the #9945 precedent). Residual: a
+# dir-less `x.test.sh` at repo root is corpus yet inexpressible in this `dir/`
+# grammar (no head to mint); the th6 row in scripts/test-all-affected.test.sh
+# re-derives the live root set to catch NEW top-level dirs.
 AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS=(
 
   "apps/"
@@ -1977,6 +1985,19 @@ AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS=(
   "scripts/"
   "test/"
   "tests/"
+  "glob:.agents/**.test.sh"
+  "glob:.claude-plugin/**.test.sh"
+  "glob:.codex/**.test.sh"
+  "glob:.cursor-plugin/**.test.sh"
+  "glob:.devin/**.test.sh"
+  "glob:.grok/**.test.sh"
+  "glob:LICENSES/**.test.sh"
+  "glob:bin/**.test.sh"
+  "glob:docs/**.test.sh"
+  "glob:infra/**.test.sh"
+  "glob:knowledge-base/**.test.sh"
+  "glob:spike/**.test.sh"
+  "glob:todos/**.test.sh"
   "scripts/test-all.sh"
   "scripts/lib/test-affected-paths.sh"
 )
@@ -1994,6 +2015,13 @@ AFFECTED_SCRIPTS_LINT_INTEGRATION_ENV_GATES_BATTERY_PATHS=(
 
 # scripts/lint-orphan-test-suites — scans the registration corpus for unregistered suites;
 # subject is every *.test.* tree plus the runner that registers them.
+# Verified read set (#9969): `git ls-files '*.test.sh'` whole-tree, plus
+# `.github/workflows/*.yml` surfaces and the REQUIRED_RUNNERS files — the non-corpus
+# reads are already covered by the .github/, scripts/ and apps/ prefixes, so only the
+# *.test.sh corpus needed glob: coverage for the 13 roots without a declared prefix.
+# Residual: a dir-less `x.test.sh` at repo root is corpus yet inexpressible in this
+# `dir/` grammar (no head to mint); the th6 row in scripts/test-all-affected.test.sh
+# re-derives the live root set to catch NEW top-level dirs.
 AFFECTED_SCRIPTS_LINT_ORPHAN_TEST_SUITES_PATHS=(
 
   "apps/"
@@ -2003,6 +2031,19 @@ AFFECTED_SCRIPTS_LINT_ORPHAN_TEST_SUITES_PATHS=(
   "scripts/"
   "test/"
   "tests/"
+  "glob:.agents/**.test.sh"
+  "glob:.claude-plugin/**.test.sh"
+  "glob:.codex/**.test.sh"
+  "glob:.cursor-plugin/**.test.sh"
+  "glob:.devin/**.test.sh"
+  "glob:.grok/**.test.sh"
+  "glob:LICENSES/**.test.sh"
+  "glob:bin/**.test.sh"
+  "glob:docs/**.test.sh"
+  "glob:infra/**.test.sh"
+  "glob:knowledge-base/**.test.sh"
+  "glob:spike/**.test.sh"
+  "glob:todos/**.test.sh"
   "scripts/test-all.sh"
   "scripts/lib/test-affected-paths.sh"
 )
@@ -2164,5 +2205,40 @@ AFFECTED_SCRIPTS_PROBE_GITHUB_APP_MINT_PATHS=(
 AFFECTED_SCRIPTS_AUDIT_DEV_SCHEDULED_SHAPES_PATHS=(
   "scripts/audit-dev-scheduled-shapes.sh"
   "scripts/audit-dev-scheduled-shapes.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/lib/repo-write-boundary.test.sh (#9969) — verified read set: whole-tree
+# `git ls-files '*.sh'` content-keyed on `test-all\.sh` (every *.sh under every root is
+# corpus), plus scripts/test-all.sh (RUNNER: sandbox copies + sed), its SUT lib
+# scripts/lib/repo-write-boundary.sh, and its own file. Uniformly glob:-scoped: a dir
+# prefix over a doc-heavy root would over-select on non-.sh churn, and there is no
+# legacy prefix set to preserve. Residual: a dir-less `x.sh` at repo root is
+# inexpressible in this `dir/` grammar (no head to mint); the th6 row in
+# scripts/test-all-affected.test.sh re-derives the live root set for NEW dirs.
+AFFECTED_SCRIPTS_LIB_REPO_WRITE_BOUNDARY_TEST_SH_PATHS=(
+  "glob:.agents/**.sh"
+  "glob:.claude/**.sh"
+  "glob:.claude-plugin/**.sh"
+  "glob:.codex/**.sh"
+  "glob:.cursor-plugin/**.sh"
+  "glob:.devin/**.sh"
+  "glob:.github/**.sh"
+  "glob:.grok/**.sh"
+  "glob:LICENSES/**.sh"
+  "glob:apps/**.sh"
+  "glob:bin/**.sh"
+  "glob:docs/**.sh"
+  "glob:infra/**.sh"
+  "glob:knowledge-base/**.sh"
+  "glob:plugins/**.sh"
+  "glob:scripts/**.sh"
+  "glob:spike/**.sh"
+  "glob:test/**.sh"
+  "glob:tests/**.sh"
+  "glob:todos/**.sh"
+  "scripts/test-all.sh"
+  "scripts/lib/repo-write-boundary.sh"
+  "scripts/lib/repo-write-boundary.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
