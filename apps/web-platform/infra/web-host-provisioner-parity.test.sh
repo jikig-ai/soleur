@@ -1052,11 +1052,11 @@ main_rc=$?
 #
 # RESIDENCE is fleet-symmetric (#9998): §1's sibling census is server.tf-scoped, so ANY block
 # dialing web["web-N"] outside server.tf escapes it -- the fleet_elsewhere arm flags every such
-# block, and the EXT_RESIDENCE table is the single exemption surface ((file, resource)- and
+# block, and the EXT_RESIDENCE table is the single exemption surface ((file, type.name)- and
 # host-scoped, reason-mandatory, with a stale-entry arm).
 #
-# Floors: at least 23 blocks (19 in server.tf incl. web_1_host_key_probe, 1 in
-# ci-ssh-key.tf, 3 in workspaces-luks.tf) and at least 70 scanned files. The local
+# Floors: at least 23 blocks (measured 25 = 21 in server.tf incl. web_1_host_key_probe,
+# 1 in ci-ssh-key.tf, 3 in workspaces-luks.tf) and at least 70 scanned files. The local
 # must be defined exactly once, from
 # the committed pin. SOLEUR_TF_REPO overrides the repository root for the mutation battery, which
 # builds a scratch repository whose apps/web-platform/infra IS the SOLEUR_INFRA_DIR sandbox.
@@ -1172,16 +1172,25 @@ for f in files:
     # connection block, not the resource type). Span-containment, not
     # nearest-header: a connection {} inside a `data`/`output`/`locals`/top-level
     # construct following a resource must NOT attribute to that resource, so the
-    # span is computed via the same block_body() the walker uses. A block in no
-    # resource span is unattributable -> None, which matches no EXT_RESIDENCE
-    # entry (fail-closed).
+    # span is computed via the same block_body() the walker uses. Two spoof checks
+    # ride on the no-nesting invariant: (i) a header start inside an existing span
+    # is definitively a heredoc/string literal, not a real resource, and its span
+    # is DROPPED; (ii) outermost-first resolution -- a fake span nested inside a
+    # real one can never outrank the real container. Named residual: a fake
+    # `resource "t" "name"` literal inside a NON-resource construct's heredoc (a
+    # data block's string) has no real span to outrank it -- same textual-walk
+    # exposure class the connection sweep itself carries. A block in no resource
+    # span is unattributable -> None, which matches no EXT_RESIDENCE entry
+    # (fail-closed).
     res_spans = []
     for m in re.finditer(r'resource\s+"([^"\s]+)"\s+"([^"\s]+)"\s*\{', src):
+        if any(s_ < m.start() < e_ for s_, e_, _ in res_spans):
+            continue
         res_spans.append((m.start(), m.end() + len(block_body(src, m.end())) + 1,
                           f"{m.group(1)}.{m.group(2)}"))
     for m in re.finditer(r'(?<![\w.])connection\s*\{', src):
         line = src.count('\n', 0, m.start()) + 1
-        addr = next((a for s_, e_, a in reversed(res_spans)
+        addr = next((a for s_, e_, a in res_spans
                      if s_ < m.start() < e_), None)
         blocks.append((f"{rel}:{line}", block_body(src, m.end()), addr))
     for m in re.finditer(r'(?m)^\s*web_1_ssh_host_key\s*=', src):
@@ -1202,7 +1211,7 @@ def is_winrm(b):
     return bool(re.search(r'(?m)^\s*type\s*=\s*"winrm"', b))
 
 ssh_blocks = [(loc, b, a) for loc, b, a in blocks if not is_winrm(b)]
-FLOOR_BLOCKS = 23  # +1 #9151: deploy_pipeline_fix_web2; measured 23 = 19 server.tf + 1 ci-ssh-key.tf + 3 workspaces-luks.tf (#8632/#8706/#9123)
+FLOOR_BLOCKS = 23  # floor is a minimum, not the census: measured 25 = 21 server.tf + 1 ci-ssh-key.tf + 3 workspaces-luks.tf (#8632/#8706/#9123/#9151)
 if len(ssh_blocks) >= FLOOR_BLOCKS:
     ok(f"G2: swept {len(ssh_blocks)} SSH connection blocks (floor {FLOOR_BLOCKS})")
 else:
@@ -1278,10 +1287,14 @@ else:
 
 # Connection blocks that legitimately dial a fleet host from OUTSIDE server.tf:
 # the residence allowance is (file, type.name)-scoped AND host-scoped, so a second
-# phantom block inside an allowlisted file, a same-name/different-type resource,
-# or a dial to a host the entry does not name, is still a finding. `reason` is
-# mandatory -- an empty one fails the stale arm below, exactly as §5's
-# check_allowlist enforces reason.strip() non-empty.
+# phantom RESOURCE inside an allowlisted file, a same-name/different-type
+# resource, or a dial to a host the entry does not name, is still a finding.
+# Membership is per-RESOURCE, not per-block, by design: an entry declares "this
+# resource may dial these hosts", so a second same-host connection inside a
+# member (a provisioner-scoped override) stays in declared scope, while ANY dial
+# to an undeclared host still fails. `reason` is mandatory -- an empty one fails
+# the stale arm below, exactly as §5's check_allowlist enforces reason.strip()
+# non-empty.
 # (#9998 -- the w2_elsewhere arm was web-2-only and left web-1 and future web-N
 # dialers outside server.tf unclassified.)
 EXT_RESIDENCE = {

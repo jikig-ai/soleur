@@ -1398,6 +1398,34 @@ data "external" "g2_phantom_data" {
 """
 '
 
+# A fake `resource "t" "member"` literal inside a phantom's OWN heredoc produces a
+# span nested inside the phantom's real span. Outermost-first resolution + the
+# nested-span drop mean the fake can never outrank the real container — the
+# phantom's connection attributes to the phantom, not the member (design-pass P3).
+expect_red "G2-25 (a heredoc-spoofed member header inside a phantom)" ci-ssh-key.tf \
+  "outside server.tf" '
+s += """
+resource "terraform_data" "g2_spoof_hdr" {
+  provisioner "local-exec" {
+    command = <<-EOF
+      echo deploying
+      resource "terraform_data" "root_authorized_keys" {
+      provisioner "x" {
+    EOF
+  }
+  connection {
+    type = "ssh"
+    host = hcloud_server.web["web-1"].ipv4_address
+    user = "root"
+    host_key = local.web_1_ssh_host_key
+  }
+  provisioner "remote-exec" {
+    inline = ["set -e", "true"]
+  }
+}
+"""
+'
+
 expect_red "G2-4 (a new connection block without host_key in a DIFFERENT .tf)" tunnel.tf \
   "tunnel.tf:" '
 s += """
@@ -1590,7 +1618,7 @@ fi
 # the ADR-193 defect: a floor whose failure arm routes through the suite's own verdict helper
 # cannot witness that helper being neutered -- the assertion rows go quiet AND so does the floor
 # meant to notice the quiet. Each carries a DISTINCT message so a failure says WHICH tripped.
-FLOOR=64  # +5 #9151 mutation arms (M4a, M4b, G2-15, G2-16, G2-17; G2-C4 is a green control and does not increment) +7 review-pass arms (M2b, M4c, M4d, M4e, M4f, M4g, G2-18); +1 net #9970: control-C moved to expect_green (-1), M4j+M4k added (+2), control-D is a green control (+0); +6 #9998 residence rows (G2-19..24). Re-derive from the battery log when adding rows.
+FLOOR=65  # +5 #9151 mutation arms (M4a, M4b, G2-15, G2-16, G2-17; G2-C4 is a green control and does not increment) +7 review-pass arms (M2b, M4c, M4d, M4e, M4f, M4g, G2-18); +1 net #9970: control-C moved to expect_green (-1), M4j+M4k added (+2), control-D is a green control (+0); +7 #9998 residence rows (G2-19..25). Re-derive from the battery log when adding rows.
 if (( mutations_run < FLOOR )); then
   printf '\n[FATAL] anti-vacuity floor (mutations): only %d landed, attributed mutation(s) ran, expected >= %d.\n' \
     "$mutations_run" "$FLOOR" >&2
