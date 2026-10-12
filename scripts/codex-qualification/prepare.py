@@ -124,13 +124,28 @@ def preparation(repo, source):
     original = git(repo, 'show', source + ':apps/web-platform/Dockerfile').decode()
     controlled = controlled_dockerfile(original)
     browser = browser_contract()
+    component_tree = git(repo, 'ls-tree', '-r', '-z', source, '--',
+                         'scripts/codex-qualification', 'scripts/lib/codex-qualification.test.sh')
+    components = []
+    for item in component_tree.split(b'\0'):
+        if item:
+            header, path = item.split(b'\t', 1)
+            mode, kind, blob = header.decode().split()
+            require(kind == 'blob' and mode in ('100644', '100755'),
+                    'Preparation components must be committed regular files')
+            components.append({'path': path.decode(), 'blob': blob,
+                               'sha256': sha(git(repo, 'cat-file', 'blob', blob))})
+    require(components, 'Committed preparation component bundle absent')
     identity = {'source_sha': source, 'runtime_input_sha256': sha(canonical(manifest)),
                 'schema_sha256': sha(canonical(migrations)), 'browser_contract_sha256': sha(canonical(browser)),
                 'production_dockerfile_sha256': sha(original.encode()),
-                'controlled_dockerfile_sha256': sha(controlled.encode())}
+                'controlled_dockerfile_sha256': sha(controlled.encode()),
+                'preparation_components_sha256': sha(canonical(components)),
+                'supabase_cli_sha256': '3132b218461bf90d4cd5983b27b44031cd9b6c797c259a431b2e2520b5f7bdce'}
     return {'status': 'offline-prepared-runtime-and-independent-review-pending', 'attempt': ATTEMPT,
             'identity': identity, 'pairing_sha256': sha(canonical(identity)),
             'manifest': manifest, 'forward_migrations': migrations, 'browser': browser,
+            'component_manifest': components,
             'candidate': {'image_id': None, 'build_authorized': False, 'startup_authorized': False,
                           'source': 'full-production-Dockerfile-with-compiler-network-controls-only',
                           'browser_validation': 'original-production-URL-and-JWT-guards-preserved'},
@@ -166,8 +181,11 @@ def main():
     parser.add_argument('--source-sha', required=True)
     parser.add_argument('--preview', action='store_true', required=True)
     args = parser.parse_args()
+    require(not git(args.repo, 'status', '--porcelain', '--untracked-files=no', '--',
+                    'scripts/codex-qualification', 'scripts/lib/codex-qualification.test.sh').strip(),
+            'Preparation components changed; commit and prepare fresh fingerprints')
     result = preparation(args.repo, args.source_sha)
-    print(json.dumps({key: value for key, value in result.items() if key not in ('manifest', 'forward_migrations')}
+    print(json.dumps({key: value for key, value in result.items() if key not in ('manifest', 'forward_migrations', 'component_manifest')}
                      | {'tracked_input_count': len(result['manifest']),
                         'forward_migration_count': len(result['forward_migrations'])}, indent=2))
 

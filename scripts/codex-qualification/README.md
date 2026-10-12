@@ -8,7 +8,9 @@ October 11 runner is never imported or invoked.
 `prepare.py --repo <worktree> --source-sha <full-HEAD-SHA> --preview` reads only
 committed Git blobs and prints content-free preparation metadata. It binds the
 full production input set, original and controlled Dockerfiles, every complete
-forward migration, and a matching local synthetic browser-auth contract.
+forward migration, committed preparation components, pinned CLI executable
+digest, and a matching local synthetic browser-auth contract. A dirty preparation
+package refuses preview until its bytes are committed.
 Compilation receives four network-disabled directives; production URL/JWT
 validators are preserved. The image receipt validator rejects missing or
 mismatched source, schema, browser configuration, image ID, default user,

@@ -216,7 +216,8 @@ class Proxy:
                 handler.send_header('Content-Length', str(len(body)))
                 handler.send_header('Connection', 'close')
                 handler.end_headers()
-                handler.wfile.write(body)
+                if body:
+                    handler.wfile.write(body)
             else:
                 handler.send_response(response.status)
                 for k, v in response.getheaders():

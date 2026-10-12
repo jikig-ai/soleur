@@ -117,3 +117,29 @@ Keep draft, auto-merge off, Codex default-off and customer content blocked.
 Credential/provider/browser-auth, account/shared-write, deployment and flag/cohort
 restrictions persist. Project sharing, retention/inheritance and configured
 regions remain unresolved. Fresh pushed-head CI and description guards are owed.
+
+## Subsequent main sync and component binding
+
+The previous fingerprints are historical. During preparation, main advanced
+nine commits to `6a01e728cf416a9bb5f90eb150270ec3a7ec4fd3`, merged at
+`0691158c2016928f802d699d3d3efb7664e0c24b`. The sole conflict was the affected
+test index; the resolution preserves both main's mint/audit declarations and
+the qualification declaration. The diff against main contains only the added
+qualification declaration at that site. This main delta includes application,
+redaction, teardown and forward-schema changes; previous runtime hashes do not
+qualify it. The fresh preview derives **5,039** runtime inputs and **188** forward
+migrations, with source SHA and content fingerprints changed accordingly. Its
+schema fingerprint is `baeb4ee9428e8187d98743d6fe84dd84a20c98162a5440f140df9891edc9f172`.
+The owned browser contract and both Dockerfile hashes are unchanged.
+
+The preparation suite passed again on this merged source after repairing an
+empty HTTP 204 write and ensuring fixture cleanup precedes thread-error
+assertions. The registration census passed: 669 tracked suites covered, zero
+orphans. A preview with an incorrect supplied SHA refused before manifests;
+it was repeated with the full SHA read from Git. The contract now also binds
+all committed preparation components and the pinned CLI executable digest;
+dirty preparation components refuse CLI preview. Fresh final-head fingerprints
+are generated after commit. No operational command, image or independent review
+was supplied by this sync. Hooks remain disabled at `/dev/null`; no hook pass is
+claimed. The application matrix/full panel and all earlier execution restrictions
+remain incomplete.

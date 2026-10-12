@@ -1338,3 +1338,21 @@
   → full review/promotion remains open. Project sharing, retention/inheritance
   and configured regions remain unknown. The ensuing push needs exact-head CI
   and final-description watches.
+
+### Safe-preparation subsequent main sync
+
+- Nine further main commits through `6a01e728cf416a9bb5f90eb150270ec3a7ec4fd3`
+  merged at `0691158c2016928f802d699d3d3efb7664e0c24b`. The affected-index
+  conflict retained all three declarations. Incoming application/schema changes
+  invalidate the preceding 5,035/187 fingerprints; a fresh contract derives
+  5,039 runtime inputs and all 188 forward migrations. The offline preparation
+  suite passed again; registration census passed 669 covered / zero orphaned.
+- Empty 204 writes still caused a detectable fixture thread race; both proxy
+  and fake-backend writes now skip empty bodies, and fixture cleanup runs before
+  thread-error assertions. An incorrect SHA supplied to preview was refused;
+  the exact Git SHA was reread and used. Committed preparation components and
+  CLI provenance are now bound alongside source/schema/auth configuration.
+- No build, recovery, SQL, credentials/provider/browser-auth, shared write,
+  deployment or cohort action ran. No independent review is claimed. Historical
+  preparation fingerprints remain explicitly source-bound; final-head preview,
+  CI and final-description watches cover the ensuing push separately.

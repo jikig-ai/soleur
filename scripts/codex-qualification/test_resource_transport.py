@@ -28,7 +28,8 @@ class ResourceTransport(unittest.TestCase):
                 self.send_response(code)
                 self.send_header('Content-Length', str(len(data)))
                 self.end_headers()
-                self.wfile.write(data)
+                if data:
+                    self.wfile.write(data)
             def do_GET(self):
                 outer.requests.append(('GET', self.path))
                 value = outer.volume if self.path.startswith('/volumes/') else outer.network
@@ -60,9 +61,9 @@ class ResourceTransport(unittest.TestCase):
         self.backend.shutdown()
         self.backend.server_close()
         self.thread.join(timeout=5)
+        self.directory.cleanup()
         self.assertEqual(self.backend.errors, [], 'Fake backend thread failed')
         self.assertEqual(self.proxy.server.errors, [], 'Proxy thread failed')
-        self.directory.cleanup()
 
     def request(self, method, path, body=None):
         connection = UnixConnection(self.proxy.path)
