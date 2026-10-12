@@ -1441,15 +1441,16 @@ function loopchk(line,   k, i, nw2, wa, w) {
 }
 # R1: a code line that ends in a backslash, or in a single bar outside quotes that is not a YAML block-scalar indicator, absorbs the next line.
 function feed(raw,   t, s, q, nd, ns) {
+  if (hold && hbar && raw ~ /^[ \t]*#/) return   # a comment line between the stages of a pipe is not code: the pipe goes on past it
   if (hold) { t = raw; sub(/^[ \t]+/, "", t); cur = cur " " t; hn++ } else { cur = raw; hn = 0 }
   hold = 0
   t = substr(cur, length(cur), 1)
   if (hn < JOINCAP && (t == "\\" || t == "|" || t == " " || t == "\t" || t == "\r") && cur !~ /^[ \t]*#/) {   # only a line whose last character can end in a backslash or a bar is looked at
     s = cur; sub(/[ \t\r]+$/, "", s)
-    if (s ~ /\\$/ && s !~ /\\\\$/) { cur = substr(s, 1, length(s) - 1); hold = 1 }
+    if (s ~ /\\$/ && s !~ /\\\\$/) { cur = substr(s, 1, length(s) - 1); hold = 1; hbar = 0 }
     else if (s ~ /\|$/ && s !~ /\|\|$/ && s !~ YBLOCK) {
       q = substr(s, 1, length(s) - 1); gsub(/\\./, "", q); nd = gsub(/"/, "", q); ns = gsub(sq, "", q)
-      if (nd % 2 == 0 && ns % 2 == 0) { cur = s; hold = 1 }
+      if (nd % 2 == 0 && ns % 2 == 0) { cur = s; hold = 1; hbar = 1 }
     }
   }
   if (!hold) site(cur)
@@ -1506,7 +1507,7 @@ FNR == 1 {
     s = l
     while (match(s, PATHRE)) {
       m = substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH)
-      sub(/["; \t]+$/, "", m); sub(/^.*\//, "", m); addfp(file, m)   # the name, without the quote, the semicolon or the blank that ended the match (R7: `> "$d/jq"; chmod` was recorded as jq";)
+      sub(/["; \t]+$/, "", m); sub(/^.*\//, "", m); addfp(file, m)   # the name, without the quote, the semicolon or the blank that ended the match (R7: a stub file written to a jq path and followed by a semicolon was recorded as jq with the quote and the semicolon kept)
     }
   }
   if (ist && c == "f" && match(l, FORRE)) {   # R5b: remember the loop; its next lines are read by loopchk
@@ -1805,12 +1806,15 @@ PJ_CASES=(
   $'stub-other-verb @@ n:jq @@ fxprod.sh=set -o pipefail\nprintf x | jq .\n @@ fxa.test.sh=printf x {GT} "$d/awk"; chmod +x "$d/awk"\nbash fxprod.sh\n'
   $'pipe-split @@ y:curl @@ fxprod.sh=set -o pipefail\nprintf x |\n  curl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
   $'pipe-split-tab @@ y:curl @@ fxprod.sh=set -o pipefail\nprintf x |\n\tcurl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'comment-between-stages @@ y:curl @@ fxprod.sh=set -o pipefail\nprintf x |\n# a comment between the stages\ncurl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
   $'backslash-split @@ y:curl @@ fxprod.sh=set -o pipefail\nprintf \'%s\\n\' \\\n  "$a" | curl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'backslash-split-bar-first @@ y:curl @@ fxprod.sh=set -o pipefail\nprintf x | \\\n  curl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
   $'quoted-trailing-bar @@ n:curl @@ fxprod.sh=set -o pipefail\necho \'a |\ncurl b\'\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
   $'yaml-block-scalar @@ n:curl @@ fxprod.yml=steps:\n  - shell: bash\n    run: echo ab: |\n      curl a\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.yml\n'
   $'continuation-or-true @@ n:curl @@ fxprod.sh=set -o pipefail\nprintf x \\\n  | curl -K - || true\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
   $'wrapper-timeout @@ y:curl @@ fxprod.sh=set -o pipefail\nprintf x | timeout 5 curl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
   $'wrapper-timeout-k @@ y:curl @@ fxprod.sh=set -o pipefail\nprintf x | timeout -k 2 5 curl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'wrapper-timeout-s @@ y:curl @@ fxprod.sh=set -o pipefail\nprintf x | timeout -s KILL 5 curl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
   $'wrapper-env @@ y:curl @@ fxprod.sh=set -o pipefail\nprintf x | env -i VAR=1 curl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
   $'wrapper-assign @@ y:curl @@ fxprod.sh=set -o pipefail\nprintf x | VAR=1 curl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
   $'wrapper-nice @@ y:curl @@ fxprod.sh=set -o pipefail\nprintf x | nice -n 5 curl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
@@ -1828,6 +1832,7 @@ PJ_CASES=(
   $'library-sourcer-no-pipefail @@ n:curl @@ fxmain.sh=. ./fxlib.sh\n @@ fxlib.sh=printf x | curl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxlib.sh\n'
   $'helper-arg1 @@ y:curl @@ fxprod.sh=set -o pipefail\nprintf x | curl -K -\n @@ fxa.test.sh={H} curl\nbash fxprod.sh\n'
   $'helper-arg2 @@ y:curl @@ fxprod.sh=set -o pipefail\nprintf x | curl -K -\n @@ fxa.test.sh={H} "$d" curl\nbash fxprod.sh\n'
+  $'stub-in-sourced @@ y:curl @@ fxprod.sh=set -o pipefail\nprintf x | curl -K -\n @@ fxa.test.sh=. ./fxstubs.sh\nbash fxprod.sh\n @@ fxstubs.sh=curl() { :; }\n'
   $'loop-built @@ y:curl y:jq @@ fxprod.sh=set -o pipefail\nprintf x | curl -K -\nprintf y | jq .\n @@ fxa.test.sh=for b in curl jq; do\n  printf x {GT} "$d/$b"\ndone\nbash fxprod.sh\n'
   $'loop-nonverb @@ n:curl n:jq @@ fxprod.sh=set -o pipefail\nprintf x | curl -K -\nprintf y | jq .\n @@ fxa.test.sh=for b in curl jq; do\n  printf x {GT} "$d/log"\ndone\nbash fxprod.sh\n'
   $'other-producer @@ y:curl @@ fxprod.sh=set -o pipefail\njq -r .x f | curl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
@@ -1939,18 +1944,19 @@ pj_e_two="$(pj_defs "$probe/pj/bounded.sh" curl '*' | cut -d' ' -f1 | tr '\n' ' 
 [[ "$pj_e_ok" == "ok " && "$pj_e_bad" == "no |no |no |" && "$pj_e_two" == "no ok " ]] \
   || sweep_probe_fail+=("producer-join-finder-edges: heredoc-writer opener with a drain [${pj_e_ok:-none}] (want ok); heredoc opener / exit first / token only in a trailing comment [${pj_e_bad:-none}] (want no |no |no |); a window past the next definition [${pj_e_two:-none}] (want no ok)")
 # GUARD 2, the extent of a stub is its own. Each fixture is one bound alone: another verb's opener (crossverb: the first body is never closed), the closing brace
-# of the function (crossbrace), the heredoc terminator (crossheredoc); two must-pass fixtures hold the other side (a logging write before the drain is not a
-# bound; a one-line stub is its own extent). All five read through pj_defs, the finder the rows use.
+# of the function (crossbrace) or of a one-line stub (crossoneline), the heredoc terminator (crossheredoc); two must-pass fixtures hold the other side (a logging write before the drain is not a
+# bound; a one-line stub is its own extent). All six read through pj_defs, the finder the rows use.
 _lw="  printf x $_gt$_gt \"\$d/args\""   # split so that no line of this file reads as a file written to .../args
 printf '%s\n' 'curl() {' '  :' 'gh() {' '  cat >/dev/null' '}' > "$probe/pj/crossverb.sh"
 printf '%s\n' 'curl() {' '  :' '}' 'cat >/dev/null' > "$probe/pj/crossbrace.sh"
 printf '%s\n' "${_cw}curl\" <<'EOF'" ':' 'EOF' 'cat >/dev/null' > "$probe/pj/crossheredoc.sh"
 printf '%s\n' 'curl() {' "$_lw" '  cat >/dev/null' '}' > "$probe/pj/logwrite.sh"
 printf '%s\n' 'curl() { cat >/dev/null; }' > "$probe/pj/oneline.sh"
-pj_w_bad="$(for _n in crossverb crossbrace crossheredoc; do pj_defs "$probe/pj/$_n.sh" curl '*' | cut -d' ' -f1 | tr '\n' ' '; echo -n '|'; done)"
+printf '%s\n' 'curl() { :; }' 'cat >/dev/null' > "$probe/pj/crossoneline.sh"
+pj_w_bad="$(for _n in crossverb crossbrace crossheredoc crossoneline; do pj_defs "$probe/pj/$_n.sh" curl '*' | cut -d' ' -f1 | tr '\n' ' '; echo -n '|'; done)"
 pj_w_ok="$(for _n in logwrite oneline; do pj_defs "$probe/pj/$_n.sh" curl '*' | cut -d' ' -f1 | tr '\n' ' '; echo -n '|'; done)"
-[[ "$pj_w_bad" == "no |no |no |" && "$pj_w_ok" == "ok |ok |" ]] \
-  || sweep_probe_fail+=("producer-join-window: another verb's opener / the closing brace / the heredoc terminator must end a stub's extent [${pj_w_bad:-none}] (want crossverb, crossbrace, crossheredoc: no |no |no |); a logging write before the drain and a one-line stub must still read as drains [${pj_w_ok:-none}] (want logwrite, oneline: ok |ok |)")
+[[ "$pj_w_bad" == "no |no |no |no |" && "$pj_w_ok" == "ok |ok |" ]] \
+  || sweep_probe_fail+=("producer-join-window: another verb's opener / the closing brace / the heredoc terminator must end a stub's extent [${pj_w_bad:-none}] (want crossverb, crossbrace, crossheredoc, crossoneline: no |no |no |no |); a logging write before the drain and a one-line stub must still read as drains [${pj_w_ok:-none}] (want logwrite, oneline: ok |ok |)")
 # THE DYNAMIC CONTROL. A pin reads text; this runs the hazard. The producer writes more than a pipe buffer holds (1 MiB), so a stub
 # that exits unread fails the pipeline under pipefail whatever the timing, with SIGPIPE ignored (CI: EPIPE, rc 1) and with the default
 # disposition (rc 141); a stub that drains it succeeds. Each spelling runs under the interpreter it is tagged for. Both arrays feed the

@@ -95,9 +95,13 @@ def logical_lines(raw, join):
                     line = s[:-1] + ' ' + nxt.lstrip()
                     i += 1
                 elif s.endswith('|') and not s.endswith('||') and not YAML_BLOCK.search(s) and outside_quotes(s[:-1]):
-                    nxt = raw[i + 1]
-                    line = s + ' ' + nxt.lstrip()
-                    i += 1
+                    j = i + 1
+                    while j < n and raw[j].lstrip().startswith('#'):   # a comment line between the stages of a pipe is not code: the pipe goes on past it
+                        j += 1
+                    if j >= n:
+                        break
+                    line = s + ' ' + raw[j].lstrip()
+                    i = j
                 else:
                     break
         out.append((start + 1, line))
