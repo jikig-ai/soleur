@@ -2,19 +2,37 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { withGoTrueRetry } from "./gotrue-retry";
 
 /**
- * Synthetic-only allowlist gate for tenant-isolation test users.
+ * Synthetic-only prefix allowlist for integration-suite test users.
  *
  * Boundary sentinel (per `hr-write-boundary-sentinel-sweep-all-write-sites`):
- * the helper refuses to run against any email that doesn't match the
- * canonical tenant-isolation synthetic pattern. Mirrors the call-site
- * `assertSynthetic` guards but pulls the check into the helper itself so
- * a future caller copying the pattern cannot accidentally drop the guard.
+ * the helper refuses to run against any email outside the enumerated
+ * synthetic prefixes. Mirrors the call-site `assertSynthetic` guards but
+ * pulls the check into the helper itself so a future caller copying the
+ * pattern cannot accidentally drop the guard.
+ *
+ * Every member suite generates `<prefix>-<16 lowercase hex>@soleur.test`
+ * (`randomBytes(8).toString("hex")` — verified in-file per suite). Adding a
+ * suite's prefix is a one-line, review-visible edit; the `[a-f0-9]{16}`
+ * suffix pin is load-bearing — a permissive `<prefix>.*@` shape lets a
+ * fixture's leftovers match (the PR #2597 permissive-regex incident class).
+ * mu1.integration.test.ts uses a different domain (@soleur-test.invalid)
+ * and is deliberately NOT listed — its teardown is #9995's scope.
  */
-const SYNTHETIC_EMAIL_PATTERN =
-  /^tenant-isolation-[a-f0-9]{16}@soleur\.test$/;
+export const SYNTHETIC_PREFIXES = [
+  "tenant-isolation-",
+  "byok-isolation-",
+  "beta-crm-",
+  "cc-cross-tenant-",
+  "conv-rail-cross-tenant-",
+  "dsar-cross-tenant-",
+] as const;
+
+const SYNTHETIC_EMAIL_PATTERN = new RegExp(
+  `^(?:${SYNTHETIC_PREFIXES.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})[a-f0-9]{16}@soleur\\.test$`,
+);
 
 /**
- * FK-reverse cleanup for synthetic tenant-isolation users.
+ * FK-reverse cleanup for synthetic integration-suite users.
  *
  * Mig 053's `handle_new_user` trigger backfills every new `auth.users` row
  * with a solo organization, workspace, and workspace_members row. Each of
@@ -35,8 +53,9 @@ const SYNTHETIC_EMAIL_PATTERN =
  *
  * Pattern source: `tearDownSharedWorkspace` (apps/web-platform/test/
  * helpers/workspace-members-fixtures.ts:142). That helper targets a
- * multi-member fixture; this one covers the solo-canary case used in
- * `*tenant-isolation.test.ts`.
+ * multi-member fixture; this one covers the solo-user teardown for every
+ * suite whose synthetic prefix is enumerated in `SYNTHETIC_PREFIXES`
+ * (adopted beyond tenant-isolation for #9994).
  *
  * FK-cascade parity (#5582). The sequence below mirrors the full set of
  * anonymise_* RPCs `server/account-delete.ts` runs before

@@ -229,9 +229,19 @@ unit test in the always-on shard (mirrors `teardown-anonymise-parity.test.ts`'s 
   an explicit prefix allowlist preserves fail-closed — the helper still refuses any email
   outside the enumerated synthetic shapes. The alternative (parameterizing the pattern) would
   let a caller pass a permissive regex; rejected.
-- **No production code, no migrations:** `server/account-delete.ts`, all `supabase/migrations/`,
-  and all workflow files are untouched. The dev drift (#10095) is reconciled via the
-  dev-ledger machinery, not this PR.
+- **No production code, no migrations** *(amended at work time — see below):*
+  `server/account-delete.ts` and all workflow files are untouched. The dev drift
+  (#10095) is reconciled via the dev-ledger machinery, not this PR.
+- **Amendment (work time, operator-approved):** the dsar-export leg exposed a latent
+  **prod** defect requiring one migration: `dsar_export_audit_pii_no_mutate`'s WORM
+  gate lacked the `user_id→NULL` carve-out the `ON DELETE SET NULL` FK (mig 041) was
+  designed around — `auth.admin.deleteUser` 500'd for every user with an
+  export-audit row, on prd too. Migration
+  `160_dsar_export_audit_pii_cascade_null_carveout.sql` (+`.down`) adds the
+  carve-out mirroring `audit_byok_use_no_mutate`'s `founder_id` gate; applied to
+  dev under the dev-suite mutex (operator-approved reconcile; both
+  `NO ACTION`+`NOT NULL` FKs there realigned to `SET NULL`+nullable). This
+  constraint otherwise holds — no production TS or workflow changes.
 - **NFR:** no performance/security-surface change to shipped code; test-runtime cost increases
   slightly (22 RPCs per user teardown vs one call) — bounded, dev-only, and already paid by the
   suites using this helper.

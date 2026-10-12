@@ -35,6 +35,7 @@ import {
 } from "@supabase/supabase-js";
 import { randomBytes } from "crypto";
 import { ensureNodeWebSocketPolyfill } from "./helpers/node-websocket-polyfill";
+import { tearDownTenantUser } from "./helpers/tenant-isolation-teardown";
 
 const INTEGRATION_ENABLED =
   process.env.SUPABASE_DEV_INTEGRATION === "1";
@@ -192,14 +193,11 @@ describe.skipIf(!INTEGRATION_ENABLED)(
               `does not match synthetic email ${user.email}`,
           );
         }
-        const { error } = await service.auth.admin.deleteUser(user.id);
-        if (error && !/not found/i.test(error.message)) {
-          throw new Error(
-            `afterAll: deleteUser(${user.email}) failed: ${error.message}`,
-          );
-        }
+        // FK-reverse helper: trigger-created workspace_members rows are
+        // ON DELETE RESTRICT, so a raw deleteUser 500s (#9994).
+        await tearDownTenantUser(service, user);
       }
-    }, 30_000);
+    }, 60_000);
 
     test("user A receives ZERO payloads from user B's INSERT", async () => {
       receivedPayloads.length = 0;
@@ -208,6 +206,9 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         .from("conversations")
         .insert({
           user_id: userB.id,
+          // mig 059: workspace_id NOT NULL — the owner's id is the
+          // trigger-created solo workspace id (ADR-038 N2).
+          workspace_id: userB.id,
           repo_url: SHARED_REPO_URL,
           status: "active",
         })
@@ -268,6 +269,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         .from("conversations")
         .insert({
           user_id: userB.id,
+          workspace_id: userB.id,
           repo_url: SHARED_REPO_URL,
           status: "active",
         })

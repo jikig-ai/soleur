@@ -24,6 +24,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { randomBytes } from "crypto";
+import { tearDownTenantUser } from "./helpers/tenant-isolation-teardown";
 
 const INTEGRATION_ENABLED = process.env.SUPABASE_DEV_INTEGRATION === "1";
 
@@ -151,14 +152,13 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       for (const u of [userA, userB]) {
         if (!u.id) continue;
         assertSynthetic(u.email);
-        try {
-          await service.auth.admin.deleteUser(u.id);
-        } catch {
-          // Cleanup is best-effort — leaked synthetic emails are
-          // bounded by the pattern guard.
-        }
+        // FK-reverse helper, fail-loud by design (#9994): the previous
+        // best-effort swallow returned {error} unchecked and silently
+        // leaked the synthetic user — dev carries ~87k NULL-owner org rows
+        // of this cruft class.
+        await tearDownTenantUser(service, u);
       }
-    }, 30_000);
+    }, 60_000);
 
     test(
       "A's worker reads contain ZERO rows attributable to B (per-row WHERE + assertReadScope)",

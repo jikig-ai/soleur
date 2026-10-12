@@ -111,3 +111,67 @@ describe("tearDownTenantUser fatality classes", () => {
     expect(deleteUser).not.toHaveBeenCalled();
   });
 });
+
+describe("synthetic prefix allowlist (#9994)", () => {
+  // Every suite that routes teardown through this helper emits
+  // `<prefix>-<16 lowercase hex>@soleur.test` (randomBytes(8).toString("hex")).
+  const PREFIXES = [
+    "tenant-isolation-",
+    "byok-isolation-",
+    "beta-crm-",
+    "cc-cross-tenant-",
+    "conv-rail-cross-tenant-",
+    "dsar-cross-tenant-",
+  ];
+
+  for (const prefix of PREFIXES) {
+    test(`accepts ${prefix}<hex>@soleur.test`, async () => {
+      const { service, deleteUser } = mockService({});
+      await expect(
+        tearDownTenantUser(service, {
+          id: "user-1",
+          email: `${prefix}0123456789abcdef@soleur.test`,
+        }),
+      ).resolves.toBeUndefined();
+      expect(deleteUser).toHaveBeenCalledOnce();
+    });
+  }
+
+  test("non-allowlisted prefix is refused even with the exact suffix shape", async () => {
+    const { service, rpc, deleteUser } = mockService({});
+    await expect(
+      tearDownTenantUser(service, {
+        id: "user-1",
+        email: "unlisted-suite-0123456789abcdef@soleur.test",
+      }),
+    ).rejects.toThrow(/refusing non-synthetic email/);
+    expect(rpc).not.toHaveBeenCalled();
+    expect(deleteUser).not.toHaveBeenCalled();
+  });
+
+  test("non-soleur.test domain is refused even with an allowlisted prefix", async () => {
+    const { service, rpc, deleteUser } = mockService({});
+    await expect(
+      tearDownTenantUser(service, {
+        id: "user-1",
+        email: "tenant-isolation-0123456789abcdef@example.com",
+      }),
+    ).rejects.toThrow(/refusing non-synthetic email/);
+    expect(rpc).not.toHaveBeenCalled();
+    expect(deleteUser).not.toHaveBeenCalled();
+  });
+
+  test("wrong-suffix shape under an allowlisted prefix is refused", async () => {
+    const { service, rpc, deleteUser } = mockService({});
+    // Uppercase hex + wrong length — the [a-f0-9]{16} pin is load-bearing
+    // (PR #2597 permissive-regex incident class).
+    await expect(
+      tearDownTenantUser(service, {
+        id: "user-1",
+        email: "tenant-isolation-ABCDEF@soleur.test",
+      }),
+    ).rejects.toThrow(/refusing non-synthetic email/);
+    expect(rpc).not.toHaveBeenCalled();
+    expect(deleteUser).not.toHaveBeenCalled();
+  });
+});

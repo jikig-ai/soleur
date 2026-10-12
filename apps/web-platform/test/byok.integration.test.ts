@@ -18,6 +18,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { randomBytes } from "crypto";
 import { decryptKey, encryptKey } from "../server/byok";
+import { tearDownTenantUser } from "./helpers/tenant-isolation-teardown";
 
 const INTEGRATION_ENABLED = process.env.BYOK_INTEGRATION_TEST === "1";
 
@@ -151,15 +152,11 @@ describe.skipIf(!INTEGRATION_ENABLED)("BYOK per-tenant isolation (integration)",
             `does not match synthetic email ${user.email}`,
         );
       }
-      // public.users cascades to api_keys; auth.users cascades to public.users.
-      const { error } = await service.auth.admin.deleteUser(user.id);
-      if (error && !/not found/i.test(error.message)) {
-        throw new Error(
-          `afterAll: deleteUser(${user.email}) failed: ${error.message}`,
-        );
-      }
+      // FK-reverse helper: trigger-created workspace_members rows are
+      // ON DELETE RESTRICT, so a raw deleteUser 500s (#9994).
+      await tearDownTenantUser(service, user);
     }
-  }, 30_000);
+  }, 60_000);
 
   test("AC 3.a — user A's seeded ciphertext is visible to the service client", async () => {
     const { data, error } = await service
