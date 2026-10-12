@@ -2029,7 +2029,7 @@ Then sweep for stale references — archival without it strands every consumer i
 
 A `WARNING: found a ... but NO ...` partial-discovery line means the union of both axes (slug match + branch diff) found one class but nothing of the other — surface it verbatim and confirm there is genuinely no artifact of the missing class before continuing. `No artifacts found` is clean — proceed. **Do not archive earlier than this step** (steps 2.5 and 5 read the live paths) and do not skip it because compound was deferred — the deferral decision exists precisely because these reads are upstream of it; once they have run, the deferral's reason is discharged and in-PR archival is strictly better than stranding. A `soleur:ship` re-entry after this step must resolve the spec/plan from the `archive/` path — Phase 1's live-path globs no longer match, so read the archived files directly rather than treating them as absent.
 
-### Semver Label and Changelog
+## Semver Label and Changelog
 
 After the PR is created or updated, determine the appropriate semver label and apply it.
 
@@ -2081,7 +2081,7 @@ Replace `semver:patch` with `semver:minor` or `semver:major` as appropriate. Rep
 
 **Step 5:** Validate consistency -- if new agents, skills, or commands were detected in Step 1 but the label is `semver:patch`, warn the user that the label may be incorrect. New components typically warrant `semver:minor`.
 
-### Feature-Tweet Draft (pre-merge bundle)
+## Feature-Tweet Draft (pre-merge bundle)
 
 After the semver/`app:*` labels are applied, run the eligibility gate — **in this body, not
 behind the pointer.** The extraction under ADR-229 moved the whole step to the reference,

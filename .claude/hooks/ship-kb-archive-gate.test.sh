@@ -620,7 +620,8 @@ t35_bare_numbered_gates() {
 
 t36_shallow_warn_pass() {
   # Unresolvable merge-base: exit 0 WITH a headless_or_stderr warn — the
-  # fail-open path is never silent.
+  # fail-open path is never silent. The head the gate censuses is
+  # origin/<branch>, so the unrelated history must be PUSHED, not local.
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   local work="$tmp/work" incidents="$tmp/incidents"
   mkdir -p "$work" "$incidents"
@@ -629,11 +630,11 @@ t36_shallow_warn_pass() {
   git -C "$work" remote add origin "$tmp/origin.git"
   git -C "$work" commit -q --allow-empty -m "init"
   git -C "$work" push -q origin main
-  git -C "$work" checkout -q -b feat-shallow
-  # Simulate shallow: no second commit needed — craft a head unrelated to
-  # main by orphan checkout so merge-base fails.
+  # Orphan history pushed as the branch's remote head: merge-base with
+  # origin/main is empty — the shallow-clone class the warn covers.
   git -C "$work" checkout -q --orphan orphan-head
   git -C "$work" commit -q --allow-empty -m "orphan"
+  git -C "$work" push -q origin orphan-head
   local out err exit_code=0
   err=$(printf '%s' "$(make_payload "$work" "gh pr merge --squash --auto")" \
         | INCIDENTS_REPO_ROOT="$incidents" "$HOOK" 2>&1 >/dev/null) || exit_code=$?

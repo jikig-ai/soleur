@@ -98,7 +98,10 @@ SCAN=$(strip_command_bodies "$CMD")
 # not absorbed. Documented residuals, shared with every sibling: quoted
 # `bash -c '…'` payloads (blanked by strip_command_bodies), `eval`
 # indirection, `$GH` variable invocation, `gh api …/merge`, and UI merges
-# — none fire; postmerge Phase 5.8 is the net.
+# — none fire; postmerge Phase 5.8 is the net. The census reads the head
+# at invoke time but `--auto` merges the queue-time head — a post-arm
+# push of live-path artifacts slips every gate in this family; Phase 5.8
+# catches the landed result.
 _MERGE_BOUNDARY='(^|&&|\|\||\||;|\(|[[:space:]]--[[:space:]])'
 _MERGE_PREFIX='(([A-Za-z_][A-Za-z0-9_]*=[^[:space:]&#|;()]+|if|while|until|then|do|elif|else|!|time|env|command|builtin|exec|nohup|sudo)[[:space:]]+)*'
 if ! grep -qE "${_MERGE_BOUNDARY}[[:space:]]*${_MERGE_PREFIX}gh[[:space:]]+pr[[:space:]]+merge([[:space:]]|$)" <<<"$SCAN"; then
@@ -448,21 +451,41 @@ if [[ "$TARGET_KIND" == "head" ]]; then
   if [[ ! "$CURRENT_BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]] || [[ "$CURRENT_BRANCH" == -* ]]; then
     exit 0
   fi
-  HEAD_OID=$(git -C "$WORK_DIR" rev-parse HEAD 2>/dev/null || echo "")
+  # `gh pr merge` merges the PR's REMOTE head — census origin/<branch>, not
+  # local HEAD, which can lag it (a live artifact pushed from elsewhere
+  # under-measures the same way; the sibling pays the same fetch cost,
+  # ship-unpushed-commits-gate.sh:131). A branch with no upstream has no
+  # mergeable head — gh fails before this gate's subject exists.
+  if ! git -C "$WORK_DIR" fetch --no-tags --quiet origin "$CURRENT_BRANCH" >/dev/null 2>&1; then
+    if git -C "$WORK_DIR" rev-parse --verify -q "refs/remotes/origin/${CURRENT_BRANCH}" >/dev/null 2>&1; then
+      _deny "BLOCKED: \`git fetch origin ${CURRENT_BRANCH}\` failed; cannot verify the pushed head for live-path KB artifacts. Run the fetch manually, then re-issue. Hatch: SOLEUR_SKIP_KB_ARCHIVE_GATE=1 bypasses."
+    fi
+    exit 0
+  fi
+  HEAD_OID=$(git -C "$WORK_DIR" rev-parse "origin/${CURRENT_BRANCH}" 2>/dev/null || echo "")
   if [[ ! "$HEAD_OID" =~ ^[0-9a-f]{40}$ ]]; then
     exit 0
   fi
 elif [[ "$TARGET_KIND" == "pr" ]]; then
   # refs/pull/<N>/head, not refs/heads/<name>: needs no branch name in a
   # git argv, and no `gh` dependency — the ref is a git object.
-  # Fail-CLOSED on fetch failure (sibling T9 posture): an unverifiable
-  # head is the silent-miss class this gate exists to end.
-  if ! git -C "$WORK_DIR" fetch --no-tags --quiet origin "refs/pull/${PR_HEAD_NUMBER}/head" >/dev/null 2>&1; then
-    _deny "BLOCKED: \`git fetch origin refs/pull/${PR_HEAD_NUMBER}/head\` failed; cannot verify the merge head for live-path KB artifacts against an unfetched object. Retry the fetch manually (check network/origin), then re-issue. Hatch: SOLEUR_SKIP_KB_ARCHIVE_GATE=1 bypasses."
-  fi
-  HEAD_OID=$(git -C "$WORK_DIR" rev-parse FETCH_HEAD 2>/dev/null || echo "")
+  # `ls-remote`, NOT fetch-then-FETCH_HEAD: FETCH_HEAD is a shared mutable
+  # file, and a concurrent fetch in this clone (another session's hooks,
+  # a parallel drain) between the fetch and the rev-parse substitutes a
+  # DIFFERENT valid oid — the census then measures a head that is not the
+  # merge's. Pin the oid first, then fetch only if the object is missing
+  # (the fetch is for objects only; nothing reads FETCH_HEAD after).
+  # Fail-CLOSED on read/fetch failure (sibling T9 posture): an
+  # unverifiable head is the silent-miss class this gate exists to end.
+  HEAD_OID=$(git -C "$WORK_DIR" ls-remote origin "refs/pull/${PR_HEAD_NUMBER}/head" 2>/dev/null | awk '{print $1; exit}')
   if [[ ! "$HEAD_OID" =~ ^[0-9a-f]{40}$ ]]; then
-    _deny "BLOCKED: \`git fetch origin refs/pull/${PR_HEAD_NUMBER}/head\` returned no commit; cannot verify the merge head. Check the PR number, then re-issue. Hatch: SOLEUR_SKIP_KB_ARCHIVE_GATE=1 bypasses."
+    _deny "BLOCKED: \`git ls-remote origin refs/pull/${PR_HEAD_NUMBER}/head\` returned no commit; cannot verify the merge head for live-path KB artifacts against an unfetched object. Check the PR number and network/origin, then re-issue. Hatch: SOLEUR_SKIP_KB_ARCHIVE_GATE=1 bypasses."
+  fi
+  if ! git -C "$WORK_DIR" cat-file -e "${HEAD_OID}^{commit}" 2>/dev/null; then
+    if ! git -C "$WORK_DIR" fetch --no-tags --quiet origin "refs/pull/${PR_HEAD_NUMBER}/head" >/dev/null 2>&1 \
+       || ! git -C "$WORK_DIR" cat-file -e "${HEAD_OID}^{commit}" 2>/dev/null; then
+      _deny "BLOCKED: \`git fetch origin refs/pull/${PR_HEAD_NUMBER}/head\` failed; cannot verify the merge head for live-path KB artifacts against an unfetched object. Retry the fetch manually (check network/origin), then re-issue. Hatch: SOLEUR_SKIP_KB_ARCHIVE_GATE=1 bypasses."
+    fi
   fi
 else
   # --match-head-commit: the exact object GitHub will merge (the admin
