@@ -169,7 +169,8 @@ def validate_image_receipt(contract, receipt):
     require(isinstance(receipt, dict), 'Image receipt absent')
     require(receipt.get('identity') == contract['identity'], 'Source/schema/auth/config image identity differs')
     require(re.fullmatch(r'sha256:[0-9a-f]{64}', receipt.get('image_id', '')), 'Immutable image ID absent')
-    require(receipt.get('user') == 'soleur' and receipt.get('cmd') == ['node', 'dist/server/index.cjs'],
+    require(receipt.get('user') == 'soleur' and receipt.get('cmd') == ['node', 'dist/server/index.cjs'] and
+            receipt.get('entrypoint') == ['docker-entrypoint.sh'],
             'Production image user or entrypoint differs')
     require(receipt.get('browser_anon_key_sha256') == contract['browser']['anon_key_sha256'] and
             receipt.get('browser_auth_probe') == 'passed-owned-local-synthetic-auth',

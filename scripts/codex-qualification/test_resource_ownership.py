@@ -72,6 +72,7 @@ class ResourceOwnership(unittest.TestCase):
             })
 
     def test_unknown_host_privilege_fields_are_refused(self):
+        self.network()
         for field, value in [('VolumesFrom', ['foreign']), ('VolumeDriver', 'nfs'),
                              ('Links', ['foreign']), ('DeviceCgroupRules', ['a *:* rwm']),
                              ('GroupAdd', ['0']), ('CapDrop', []), ('StorageOpt', {'size': '1T'})]:
@@ -90,6 +91,7 @@ class ResourceOwnership(unittest.TestCase):
                 }).encode())
 
     def test_container_environment_cannot_introduce_provider_or_loader_controls(self):
+        self.network()
         for field in ('CODEX_ACCESS_TOKEN', 'OPENAI_API_KEY', 'SUPABASE_ACCESS_TOKEN',
                       'DATABASE_URL_POOLER', 'NODE_OPTIONS', 'LD_PRELOAD', 'HTTPS_PROXY'):
             with self.assertRaises(Refused):
@@ -97,6 +99,45 @@ class ResourceOwnership(unittest.TestCase):
                     'Image': IMAGE, 'Labels': {'com.supabase.cli.project': 'fixture'},
                     'Env': [field + '=synthetic-do-not-use'],
                 }).encode())
+
+    def test_container_requires_registered_network(self):
+        with self.assertRaises(Refused):
+            self.policy.admit('POST', '/containers/create?name=supabase_db_fixture', json.dumps({
+                'Image': IMAGE, 'Labels': {'com.supabase.cli.project': 'fixture'},
+            }).encode())
+
+    def test_container_uses_returned_network_id(self):
+        self.network()
+        _, body = self.policy.admit('POST', '/containers/create?name=supabase_db_fixture', json.dumps({
+            'Image': IMAGE, 'Labels': {'com.supabase.cli.project': 'fixture'},
+            'NetworkingConfig': {'EndpointsConfig': {'fixture-internal': {'Aliases': ['fixture-db']}}},
+        }).encode())
+        config = json.loads(body)
+        self.assertEqual(config['HostConfig']['NetworkMode'], NETWORK_ID)
+        self.assertEqual(set(config['NetworkingConfig']['EndpointsConfig']), {NETWORK_ID})
+
+    def test_reserved_volume_cannot_be_mounted(self):
+        self.network()
+        with self.assertRaises(Refused):
+            self.policy.admit('POST', '/containers/create?name=supabase_db_fixture', json.dumps({
+                'Image': IMAGE, 'Labels': {'com.supabase.cli.project': 'fixture'},
+                'HostConfig': {'Binds': ['supabase_db_fixture:/var/lib/postgresql/data']},
+            }).encode())
+
+    def test_daemon_logging_overrides_are_refused(self):
+        self.network()
+        with self.assertRaises(Refused):
+            self.policy.admit('POST', '/containers/create?name=supabase_db_fixture', json.dumps({
+                'Image': IMAGE, 'Labels': {'com.supabase.cli.project': 'fixture'},
+                'HostConfig': {'LogConfig': {'Type': 'syslog', 'Config': {'syslog-address': 'tcp://198.51.100.1:514'}}},
+            }).encode())
+
+    def test_blank_duplicate_names_are_refused(self):
+        self.network()
+        with self.assertRaises(Refused):
+            self.policy.admit('POST', '/containers/create?name=supabase_db_fixture&name=', json.dumps({
+                'Image': IMAGE, 'Labels': {'com.supabase.cli.project': 'fixture'},
+            }).encode())
 
 if __name__ == '__main__':
     unittest.main()

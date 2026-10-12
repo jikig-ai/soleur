@@ -41,6 +41,7 @@ class Preparation(unittest.TestCase):
         return {'identity': copy.deepcopy(self.contract['identity']),
                 'image_id': 'sha256:' + 'a' * 64, 'user': 'soleur',
                 'cmd': ['node', 'dist/server/index.cjs'],
+                'entrypoint': ['docker-entrypoint.sh'],
                 'browser_anon_key_sha256': self.contract['browser']['anon_key_sha256'],
                 'browser_auth_probe': 'passed-owned-local-synthetic-auth'}
 
@@ -53,6 +54,7 @@ class Preparation(unittest.TestCase):
                 validate_image_receipt(self.contract, receipt)
         for field, value in [('image_id', 'mutable-tag'), ('user', 'root'),
                              ('cmd', ['node', 'mock-server.js']), ('browser_anon_key_sha256', 'different'),
+                             ('entrypoint', ['/unreviewed-wrapper']), ('entrypoint', None),
                              ('browser_auth_probe', 'not-run')]:
             receipt = self.receipt()
             receipt[field] = value

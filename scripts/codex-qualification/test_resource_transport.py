@@ -44,6 +44,8 @@ class ResourceTransport(unittest.TestCase):
                 elif self.path == '/networks/create':
                     outer.network = {**data, 'Id': NETWORK_ID}
                     self.reply(201, {'Id': NETWORK_ID})
+                elif self.path.startswith('/containers/create'):
+                    self.reply(201, {'Id': 'c' * 64})
                 else:
                     self.reply(400, {})
             def do_DELETE(self):
@@ -125,6 +127,32 @@ class ResourceTransport(unittest.TestCase):
         self.assertEqual(len(self.requests), before)
         self.assertEqual(self.request('DELETE', '/volumes/' + VOLUME), 204)
         self.assertEqual(self.policy.volume_receipts, {})
+
+    def mount(self):
+        return self.request('POST', '/containers/create?name=supabase_db_fixture', {
+            'Image': IMAGE, 'Labels': {'com.supabase.cli.project': 'fixture'},
+            'HostConfig': {'Binds': [VOLUME + ':/var/lib/postgresql/data']},
+        })
+
+    def test_owned_mount_verifies_volume_and_network(self):
+        self.assertEqual(self.create('networks', 'fixture-internal'), 201)
+        self.assertEqual(self.create('volumes', VOLUME), 201)
+        self.assertEqual(self.mount(), 201)
+        self.assertEqual(self.requests[-3:][0:2], [('GET', '/networks/' + NETWORK_ID), ('GET', '/volumes/' + VOLUME)])
+
+    def test_replaced_volume_is_rejected_before_mount(self):
+        self.assertEqual(self.create('networks', 'fixture-internal'), 201)
+        self.assertEqual(self.create('volumes', VOLUME), 201)
+        self.volume['CreatedAt'] = 'foreign-replacement'
+        self.assertEqual(self.mount(), 403)
+        self.assertFalse(any(path.startswith('/containers/create') for _, path in self.requests))
+
+    def test_changed_network_is_rejected_before_container_create(self):
+        self.assertEqual(self.create('networks', 'fixture-internal'), 201)
+        self.assertEqual(self.create('volumes', VOLUME), 201)
+        self.network['Internal'] = False
+        self.assertEqual(self.mount(), 403)
+        self.assertFalse(any(path.startswith('/containers/create') for _, path in self.requests))
 
 if __name__ == '__main__':
     unittest.main()

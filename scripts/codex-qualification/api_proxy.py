@@ -175,6 +175,21 @@ class Proxy:
                     status, _ = self.inspect_resource('/volumes/' + name)
                     self.policy.require(status == 404, 'Preexisting or unreadable volume refused')
                     self.policy.recorded_volume_absence(name)
+                if handler.command == 'POST' and route == '/containers/create':
+                    self.policy.require(self.policy.network_id is not None,
+                                        'Container requires registered owned network')
+                    status, receipt = self.inspect_resource('/networks/' + self.policy.network_id)
+                    self.policy.require(status == 200, 'Owned network is not inspectable before attach')
+                    self.policy.verify_network(receipt)
+                    config = json.loads(payload)
+                    for bind in (config.get('HostConfig') or {}).get('Binds') or []:
+                        name = bind.split(':', 1)[0]
+                        if not name.startswith('/'):
+                            self.policy.require(name in self.policy.volume_receipts,
+                                                'Volume mount requires registered ownership')
+                            status, receipt = self.inspect_resource('/volumes/' + name)
+                            self.policy.require(status == 200, 'Owned volume is not inspectable before mount')
+                            self.policy.verify_volume(name, receipt)
                 path, payload = self.policy.admit(handler.command, handler.path, payload)
                 admitted_route = re.sub(r'^/v[0-9.]+(?=/)', '', urlsplit(path).path)
                 if handler.command == 'DELETE' and admitted_route.startswith('/volumes/'):

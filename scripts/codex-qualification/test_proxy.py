@@ -7,6 +7,7 @@ import tempfile
 import threading
 from api_policy import Policy
 from api_proxy import Proxy, UnixHTTPServer, UnixConnection
+from fixture_transport import receive_until
 
 with tempfile.TemporaryDirectory(prefix='codex9051-api-fixture-') as directory:
     root = Path(directory)
@@ -20,6 +21,9 @@ with tempfile.TemporaryDirectory(prefix='codex9051-api-fixture-') as directory:
         def do_GET(self):
             received.append(('GET', self.path, None))
             body = json.dumps([] if '/containers/json' in self.path else {'fixture': True}).encode()
+            if self.path.startswith('/networks/'):
+                body = json.dumps({'Id': 'd' * 64, 'Name': 'fixture-internal', 'Driver': 'bridge',
+                    'Internal': True, 'EnableIPv6': False, 'Labels': {'soleur.recovery.attempt': 'fixture'}}).encode()
             self.send_response(200)
             self.send_header('Content-Length', str(len(body)))
             self.end_headers()
@@ -48,6 +52,9 @@ with tempfile.TemporaryDirectory(prefix='codex9051-api-fixture-') as directory:
     backend_thread = threading.Thread(target=backend.serve_forever, daemon=True)
     backend_thread.start()
     p = Policy('fixture', 'fixture-internal', root, {image: image})
+    p.admit('POST', '/networks/create', json.dumps({'Name': p.network,
+            'Labels': {'com.supabase.cli.project': p.project}}).encode())
+    p.created_network(p.network, {'Id': 'd' * 64})
     proxy = Proxy(root / 'proxy.sock', root / 'fake.sock', p, lifetime=20)
     proxy.start()
     try:
@@ -73,14 +80,10 @@ with tempfile.TemporaryDirectory(prefix='codex9051-api-fixture-') as directory:
         request = ('POST /exec/' + exec_id + '/start HTTP/1.1\r\nHost: fixture\r\n'
                    'Connection: Upgrade\r\nUpgrade: tcp\r\nContent-Length: ' + str(len(payload)) + '\r\n\r\n').encode()
         front.sendall(request + payload)
-        data = b''
-        while b'fixture-ready\n' not in data:
-            data += front.recv(4096)
+        data = receive_until(front, b'fixture-ready\n')
         assert data.startswith(b'HTTP/1.1 101') and b'fixture-ready\n' in data
         front.sendall(b'PING')
-        data = b''
-        while b'fixture-reply:PING\n' not in data:
-            data += front.recv(4096)
+        data = receive_until(front, b'fixture-reply:PING\n')
         front.close()
         c = UnixConnection(str(root / 'proxy.sock'))
         c.request('GET', '/containers/json?all=true&filters=%7B%7D')

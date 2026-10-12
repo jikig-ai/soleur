@@ -1356,3 +1356,21 @@
   deployment or cohort action ran. No independent review is claimed. Historical
   preparation fingerprints remain explicitly source-bound; final-head preview,
   CI and final-description watches cover the ensuing push separately.
+
+### Focused review fix round
+
+- Capacity reset allowed a focused independent security review of pushed
+  `030275281d747227338cfd2e5fd71e1219914979`. Five dormant boundary findings
+  were fixed with failing regressions first. Test-design returned three fixture
+  findings before its final turn failed on model capacity; these were corrected,
+  with no full-review verdict or scoring claim. The preparation record owns details.
+- Corrected offline wrapper passes under `PYTHONOPTIMIZE=1`: 18 creation,
+  51 ownership/exec, 14 resource-policy, 12 collision, three receive-helper,
+  seven upgrade, ten resource-transport and six preparation checks. No Docker,
+  database, provider, browser/login, credentials or shared-write operation ran.
+- Exact-head CI 38267759335 settled with 68 pass / 11 skip / zero pending or
+  cancelled, and `test` plus `lint-bot-statuses` red. The lint's three negative
+  token-name fixture false positives were resolved through its dated non-caller
+  mechanism; the guard passes locally with zero violations. No real caller is
+  exempted. The changed fix source still needs its own push/watch and final
+  description guards; full panel, required SAST, recovery and matrices stay open.

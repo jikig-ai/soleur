@@ -41,12 +41,25 @@ ambiguous paths, duplicate query fields, provider/loader overrides and elevated
 exec requests are refused. A Docker-host administrator can still race or alter
 resources; these components do not establish host-admin isolation.
 
+Focused review additionally requires a registered network before container
+creation, rewrites attachments to its returned ID, and revalidates network and
+volume receipts immediately before attachment/mounting. Reserved volumes cannot
+be mounted. Logging is forced to a bounded local json-file configuration;
+daemon-side remote logging overrides are refused. Blank duplicate query values
+are retained and refused. Image receipts must include the inherited pinned-base
+`docker-entrypoint.sh` entrypoint as well as the application command.
+
 `bash scripts/lib/codex-qualification.test.sh` runs source pairing, actual
 production browser-validator, ownership, collision, privilege, failure-cleanup
 and HTTP upgrade fixtures. The transport fixtures contact only temporary fake
 Unix backends. The wrapper is covered by the existing `scripts/lib/*.test.sh`
 suite declaration. Python and Node with TypeScript stripping are required;
 missing tools fail the suite instead of silently skipping it.
+
+The wrapper uses `python3 -E -B` so inherited optimization/module variables cannot
+erase fixture assertions or redirect imports, and bounds each module to 120
+seconds. Transport marker reads fail on early EOF, deadline or oversized output.
+All fake backend/proxy thread-error inventories are checked during cleanup.
 
 Operational completion remains pending: TLS/namespace orchestration, strict
 per-role container environment/command review, source-bound full-schema SQL

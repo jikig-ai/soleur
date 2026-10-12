@@ -143,3 +143,43 @@ are generated after commit. No operational command, image or independent review
 was supplied by this sync. Hooks remain disabled at `/dev/null`; no hook pass is
 claimed. The application matrix/full panel and all earlier execution restrictions
 remain incomplete.
+
+## Focused independent review and corrections
+
+After the capacity reset, the security-sentinel independently reviewed pushed
+head `030275281d747227338cfd2e5fd71e1219914979` and returned five dormant
+preparation findings. Test-design independently reported three concrete fixture
+issues before its final turn failed on model capacity; no complete score or
+full test-design verdict is attributed to that turn. These are focused component
+reviews, not the full PR panel or operational rehearsal approval.
+
+Reserved-volume mounting now requires a successful receipt and reinspection.
+Containers require a registered network, attach by its returned ID and recheck
+isolation before creation. Arbitrary daemon logging overrides are rejected and
+local log output is bounded. Duplicate query names with blank values are refused.
+Image receipts must match the known inherited entrypoint, not just `Cmd`.
+New policy tests failed five cases against the old bytes; the entrypoint test
+also failed before correction. The fake transport now exercises successful mount
+plus stale-volume and changed-network denial before creation.
+
+The wrapper ignores Python environment settings and disables bytecode output;
+each module has a 120-second ceiling. Collision fixtures check every proxy's
+thread-error inventory. Marker reads now reject early EOF and oversized output,
+with three pure helper tests. The corrected wrapper passed with inherited
+`PYTHONOPTIMIZE=1`: 18 creation-policy, 51 ownership/exec, **14** resource-policy,
+12 collision, **three** receive-helper, seven upgrade, **ten** resource-transport
+and six preparation checks. No real socket backend/service, provider, SQL or
+authentication operation was used.
+
+Head `030275281d` settled with 68 passes, 11 skips, zero pending/cancelled and
+two reds in [CI 38267759335](https://github.com/jikig-ai/soleur/actions/runs/38267759335).
+The `lint-bot-statuses` log identified three negative token-name fixtures as
+un-pinned Supabase Management API callers. The existing dated non-caller allowlist
+now records those exact pure-policy/fixture files; no host call is waived or
+fake host pin inserted. The guard passed afterward: 44 files enumerated, zero
+violations. It retains its census note, 25 versus the 24 baseline, and three
+historical deprecation waivers; this is not provider/security clearance.
+The required `test` red still needs executed-log classification for this cycle.
+Superseded guard cancellations disappeared when replacement jobs settled.
+The ensuing fix push requires fresh exact-head and final-description checks.
+All runtime/qualification/promotion and consumed-authorization limits persist.

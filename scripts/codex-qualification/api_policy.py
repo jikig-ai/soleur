@@ -8,7 +8,7 @@ from urllib.parse import parse_qs, quote, urlencode, urlsplit
 class Refused(RuntimeError):
     pass
 
-class MissingOwnedContainer(RuntimeError):
+class MissingOwnedContainer(Refused):
     """A reserved name has no registered ID; answer 404 without consulting Docker."""
     pass
 
@@ -104,7 +104,7 @@ class Policy:
         self.require(not split.scheme and not split.netloc and not split.fragment,
                      'Only origin-form Docker API paths are admitted')
         route = re.sub(r'^/v[0-9.]+(?=/)', '', split.path)
-        query = parse_qs(split.query)
+        query = parse_qs(split.query, keep_blank_values=True)
         self.require(all(len(values) == 1 for values in query.values()), 'Duplicate query fields refused')
         data = json.loads(payload) if payload else {}
         self.require(isinstance(data,dict), 'Docker request must be a JSON object')
@@ -149,6 +149,7 @@ class Policy:
             self.volume_attempted.add(data['Name'])
             return path, json.dumps(data).encode()
         if method == 'POST' and route == '/containers/create':
+            self.require(self.network_id is not None, 'Container requires registered owned network')
             self.labels(data)
             name = query.get('name', [''])[0]
             if not name:
@@ -173,7 +174,7 @@ class Policy:
                          'Privilege elevation refused')
             self.require(not host.get('Devices') and not host.get('DeviceRequests'),
                          'Device access refused')
-            self.require(host.get('NetworkMode') in (None, '', self.network),
+            self.require(host.get('NetworkMode') in (None, '', self.network, self.network_id),
                          'Foreign/host/container network refused')
             for key in ('PidMode', 'IpcMode', 'UTSMode', 'CgroupnsMode'):
                 self.require(host.get(key) in (None, '', 'private'), 'Shared namespace refused: ' + key)
@@ -181,13 +182,16 @@ class Policy:
                          'Unreviewed host aliases refused')
             # CLI 2.84.2 adds this host escape by default on Linux. Remove it.
             host['ExtraHosts'] = []
+            self.require(host.get('LogConfig') in (None, {}, {'Type': 'json-file', 'Config': {}}),
+                         'Daemon logging override refused')
+            host['LogConfig'] = {'Type': 'json-file', 'Config': {'max-size': '10m', 'max-file': '1'}}
             for binding in (host.get('Binds') or []):
                 src = binding.split(':', 1)[0]
                 if src.startswith('/'):
                     self.require(Path(src).resolve().is_relative_to(self.scratch),
                                  'Host bind is outside task scratch')
                 else:
-                    self.require(src in self.volume_names, 'Unowned named volume refused')
+                    self.require(src in self.volume_receipts, 'Unowned named volume refused')
             self.require(not host.get('Mounts'), 'Unreviewed Mounts contract refused')
             for mappings in (host.get('PortBindings') or {}).values():
                 for mapping in mappings:
@@ -197,8 +201,12 @@ class Policy:
                                  'Unadmitted host port refused')
                     mapping['HostIp'] = '127.0.0.1'
             endpoints = (data.get('NetworkingConfig') or {}).get('EndpointsConfig', {})
-            self.require(set(endpoints) <= {self.network}, 'Foreign endpoint network refused')
+            self.require(set(endpoints) <= {self.network, self.network_id}, 'Foreign endpoint network refused')
+            self.require(len(endpoints) <= 1, 'Duplicate network aliases refused')
             self.require(all(not e.get('IPAMConfig') for e in endpoints.values()), 'Static endpoint IP refused')
+            self.require(all(set(e) <= {'Aliases'} for e in endpoints.values()),
+                         'Unreviewed endpoint fields refused')
+            data['NetworkingConfig'] = {'EndpointsConfig': {self.network_id: next(iter(endpoints.values()), {})}}
             for setting in data.get('Env') or []:
                 key = setting.split('=', 1)[0]
                 self.require(not key.startswith(('OPENAI_', 'ANTHROPIC_', 'CODEX_', 'DOPPLER_', 'FLAGS',
@@ -211,7 +219,7 @@ class Policy:
                 limit = 2 * 1024**3
             self.require(sum(self.memory.values()) + sum(self.pending.values()) + limit <= self.memory_budget,
                          'Total admitted memory budget exceeded')
-            host.update({'NetworkMode': self.network, 'Memory': limit, 'MemorySwap': limit,
+            host.update({'NetworkMode': self.network_id, 'Memory': limit, 'MemorySwap': limit,
                          'CpuPeriod': 100000,
                          'CpuQuota': 200000 if name.startswith('codex9051-renderer-') else 100000,
                          'PidsLimit': 256,
@@ -256,6 +264,8 @@ class Policy:
             return path, payload
         if method in ('GET', 'DELETE') and route.startswith('/networks/'):
             target = route[len('/networks/'):]
+            if method == 'GET' and target == self.network and self.network_id is None:
+                raise MissingOwnedContainer('No registered network exists for reserved name')
             self.require(self.network_id is not None and target in (self.network, self.network_id),
                          'Network operation requires successful owned creation')
             return prefix + '/networks/' + self.network_id, payload
@@ -340,6 +350,9 @@ def self_test():
     tag = 'public.ecr.aws/supabase/postgres:17.6.1.095'
     immutable = 'sha256:' + 'a' * 64
     p = Policy('fixture', 'fixture-internal', '/tmp/fixture', {tag: immutable, immutable: immutable})
+    p.admit('POST', '/networks/create', json.dumps({'Name': p.network,
+            'Labels': {'com.supabase.cli.project': p.project}}).encode())
+    p.created_network(p.network, {'Id': 'd' * 64})
     base = {'Image': tag, 'Labels': {'com.supabase.cli.project': 'fixture'},
             'HostConfig': {'PortBindings': {'5432/tcp': [{'HostPort': '59052'}]}}}
     route, body = p.admit('POST', '/v1.47/containers/create?name=supabase_db_fixture', json.dumps(base).encode())

@@ -11,6 +11,7 @@ IMAGE='sha256:'+'a'*64
 ID='b'*64
 NAME='supabase_db_fixture'
 received=[]
+proxies=[]
 conflict=True
 foreign_at_reserved_name=True
 checks=0
@@ -27,6 +28,9 @@ class Fake(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         received.append(('GET',self.path))
         value={'Id':'f'*64,'foreign':'synthetic-sentinel'} if NAME in self.path and foreign_at_reserved_name else {'Id':ID}
+        if self.path.startswith('/networks/'):
+            value={'Id':'d'*64,'Name':'fixture-internal','Driver':'bridge','Internal':True,
+                   'EnableIPv6':False,'Labels':{'soleur.recovery.attempt':'fixture'}}
         self.reply(200,value)
     def do_POST(self):
         self.rfile.read(int(self.headers.get('Content-Length','0')))
@@ -55,7 +59,11 @@ with tempfile.TemporaryDirectory(prefix='codex9051-name-collision-') as director
     config={'Image':IMAGE,'Labels':{'com.supabase.cli.project':'fixture'}}
     def create_proxy(suffix):
         p=Policy('fixture','fixture-internal',root,{IMAGE:IMAGE})
+        p.admit('POST','/networks/create',json.dumps({'Name':p.network,
+                'Labels':{'com.supabase.cli.project':p.project}}).encode())
+        p.created_network(p.network,{'Id':'d'*64})
         proxy=Proxy(root/(suffix+'.sock'),root/'fake.sock',p,lifetime=10)
+        proxies.append(proxy)
         proxy.start()
         return p,proxy
     try:
@@ -74,7 +82,7 @@ with tempfile.TemporaryDirectory(prefix='codex9051-name-collision-') as director
         try:
             before=len(received)
             status,_=request(proxy,'POST','/containers/create?name='+NAME,config)
-            assert status==409 and len(received)==before+1
+            assert status==409 and len(received)==before+2
             assert not p.ids and NAME not in p.name_ids and NAME not in p.pending and NAME in p.failed_names
             assert proxy.fatal
             checks+=1
@@ -114,3 +122,4 @@ with tempfile.TemporaryDirectory(prefix='codex9051-name-collision-') as director
         backend.server_close()
         thread.join(timeout=5)
         assert not backend.errors, 'Fake backend thread failed'
+        assert all(not proxy.server.errors for proxy in proxies), 'Proxy fixture thread failed'
