@@ -340,8 +340,9 @@ jobs:
           # The OLD bare `gh release view` check treated a draft as "done" and
           # skipped re-creation on every later run, freezing BUILD_VERSION.
           # Refs #4902 (stuck-draft deadlock).
-          # The draft's notes are overwritten at publish from the current run's PR (see the
-          # Finalise step), so a same-tag republish describes the latest merge (#7079).
+          # When a PR is resolved and its changelog is non-blank, the draft's notes are
+          # overwritten at publish from the current run's PR (see the Finalise step), so a
+          # same-tag republish describes the latest merge (#7079).
           REL_JSON=$(mktemp)
           if gh release view "$TAG" --json isDraft >"$REL_JSON" 2>/dev/null; then
             IS_DRAFT=$(jq -r '.isDraft' "$REL_JSON")
@@ -1522,7 +1523,9 @@ jobs:
       # rather than replaced by the fallback text. Known limit: when a LATER, different merge
       # recomputes the same tag, the Release page describes only that latest merge (the
       # release contains both merges' code); the Slack announcement may differ on the no-PR
-      # paths, where it still carries the fallback text.
+      # paths, where it still carries the fallback text. The orphaned run died before any
+      # notify step, so the earlier merge was never announced anywhere either; it is
+      # recoverable from its PR body.
       - name: Finalise release (publish draft)
         if: >-
           steps.check_changed.outputs.changed == 'true' &&
@@ -1544,7 +1547,7 @@ jobs:
             echo "Published release $TAG (notes_regenerated=true, from this run's PR #$PR_NUMBER)"
           else
             if [ "$DRAFT_EXISTS" = "true" ]; then
-              echo "::warning::Orphaned draft $TAG published with its EXISTING notes: this run resolved no PR (workflow_dispatch / give_up) or produced a blank changelog."
+              echo "::warning::Orphaned draft $TAG published with its EXISTING notes: this run resolved no PR (workflow_dispatch / give_up) or had no usable changelog (blank or unreadable)."
             fi
             gh release edit "$TAG" --draft=false
             echo "Published release $TAG"

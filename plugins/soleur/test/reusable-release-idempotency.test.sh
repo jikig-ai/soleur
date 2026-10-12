@@ -54,7 +54,7 @@ fi
 # T6b/T7b read the workflow through PyYAML; without it every helper call is an opaque
 # `<rc=1>` mismatch, so name the cause once instead.
 if ! python3 -I -c 'import yaml' 2>/dev/null; then
-  fail "PyYAML is required (python3 -c 'import yaml') for T6b/T7b"
+  fail "PyYAML is required (python3 -c 'import yaml') for T6b/T7b/T8"
   echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
   exit 1
 fi
@@ -138,7 +138,21 @@ case "$sub" in
     # One argument per line: `$*` flattens argv, so a dropped quote around a path with a
     # space is invisible there (T8 asserts on this file by position).
     if [[ -n "${GH_ARGV:-}" ]]; then printf '%s\n' "$@" >> "$GH_ARGV"; fi
-    exit 0 ;;
+    # Content of the --notes-file target AT CALL TIME: a recorded path alone cannot see a
+    # mutation that empties or rewrites the file between the blank test and this call.
+    if [[ -n "${GH_NOTES_SNAPSHOT:-}" ]]; then
+      prev=""
+      for a in "$@"; do
+        if [[ "$prev" == "--notes-file" ]]; then cat "$a" > "$GH_NOTES_SNAPSHOT" 2>/dev/null; fi
+        prev="$a"
+      done
+    fi
+    # MOCK_GH_EDIT_FAIL_NOTES=1 fails ONLY the call that carries --notes-file, so a fallback that
+    # retries without it (and succeeds) is distinguishable from a stub that fails everything.
+    if [[ "${MOCK_GH_EDIT_FAIL_NOTES:-0}" == 1 ]]; then
+      for a in "$@"; do if [[ "$a" == "--notes-file" ]]; then exit 1; fi; done
+    fi
+    exit "${MOCK_GH_EDIT_RC:-0}" ;;
   create)
     printf 'create %s\n' "$*" >> "$GH_TRACE"
     exit 0 ;;
@@ -770,8 +784,11 @@ fi
 # run_finalise <draft_exists> <pr_number> <notes_file>
 # argv one-per-line -> $TMP/argv-f, flattened trace -> $TMP/trace-f, stdout -> $TMP/out-f
 run_finalise() {
-  : > "$TMP/argv-f"; : > "$TMP/trace-f"; : > "$TMP/out-f"
+  : > "$TMP/argv-f"; : > "$TMP/trace-f"; : > "$TMP/out-f"; rm -f "$TMP/snap-f"
   ( cd "$REPO_ROOT" && \
+    GH_NOTES_SNAPSHOT="$TMP/snap-f" \
+    MOCK_GH_EDIT_RC="${FIN_EDIT_RC:-0}" \
+    MOCK_GH_EDIT_FAIL_NOTES="${FIN_FAIL_NOTES:-0}" \
     TAG="web-v1.2.3" \
     DRAFT_EXISTS="$1" \
     PR_NUMBER="$2" \
@@ -797,6 +814,11 @@ run_finalise "true" "123" "$REAL_NOTES"; rc_a=$?
 assert_eq "Finalise (a) draft+PR+notes -> exit 0, exactly one edit call, notes and publish in the SAME call" \
   "$rc_a $(edit_calls) $(argv_joined)" \
   "0 1 release|edit|web-v1.2.3|--notes-file|$REAL_NOTES|--draft=false|"
+if cmp -s "$TMP/snap-f" "$REAL_NOTES"; then
+  pass "Finalise (a) the notes file content at call time is the regenerated changelog"
+else
+  fail "Finalise (a) the content passed via --notes-file must equal the changelog (snapshot: $(head -c 120 "$TMP/snap-f" 2>/dev/null))"
+fi
 if grep -qF 'notes_regenerated=true' "$TMP/out-f" && ! grep -qF '::warning::' "$TMP/out-f"; then
   pass "Finalise (a) logs notes_regenerated=true and no warning"
 else
@@ -843,6 +865,37 @@ assert_eq "Finalise (e) CRLF/unicode/leading-blank notes -> one call with the ex
   "$rc_e $(edit_calls) $(argv_joined)" \
   "0 1 release|edit|web-v1.2.3|--notes-file|$NOTES_DIR/crlf-unicode.md|--draft=false|"
 
+# (e2) a changelog made ONLY of non-ASCII text is still a changelog: a [[:alnum:]] or [A-Za-z0-9]
+# blank test would treat it as blank and silently keep the stale notes.
+printf -- '- \xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e\n' > "$NOTES_DIR/cjk.md"
+printf -- '- \xf0\x9f\x9a\x80\n' > "$NOTES_DIR/emoji.md"
+for variant in cjk.md emoji.md; do
+  run_finalise "true" "123" "$NOTES_DIR/$variant"; rc_e2=$?
+  assert_eq "Finalise (e2) non-ASCII-only changelog ($variant) -> regenerated, one call" \
+    "$rc_e2 $(edit_calls) $(argv_joined)" \
+    "0 1 release|edit|web-v1.2.3|--notes-file|$NOTES_DIR/$variant|--draft=false|"
+done
+
+# (f) a failing `gh release edit` must fail the step and must not claim a publish, on both
+# branches: a trailing `|| true` / `|| echo` would otherwise announce a release that is
+# still an unpublished draft.
+assert_publish_fails() { # <draft_exists> <pr_number> <notes_file> <label>
+  FIN_EDIT_RC=1 run_finalise "$1" "$2" "$3"; local rc_f=$?
+  if [[ "$rc_f" != 0 ]] && ! grep -qF 'Published release' "$TMP/out-f"; then
+    pass "Finalise (f) failing gh release edit fails the step and prints no 'Published' ($4)"
+  else
+    fail "Finalise (f) a failing gh release edit must fail the step ($4; rc=$rc_f stdout: $(head -c 160 "$TMP/out-f"))"
+  fi
+}
+assert_publish_fails "true" "123" "$REAL_NOTES" "regenerating branch"
+# A rejected --notes-file call must NOT be retried as a plain publish: that would ship the stale
+# notes and report success, hiding the failure the regeneration exists to remove.
+FIN_FAIL_NOTES=1 run_finalise "true" "123" "$REAL_NOTES"; rc_fn=$?
+assert_eq "Finalise (f) a rejected notes call fails the step with NO plain-publish fallback" \
+  "$([[ "$rc_fn" != 0 ]] && echo failed || echo ok) $(edit_calls)" "failed 1"
+assert_publish_fails "true" "" "$REAL_NOTES" "no-PR draft branch"
+assert_publish_fails "false" "123" "$REAL_NOTES" "new-draft branch"
+
 # T8b: wiring. T8 sets env directly and cannot see a mis-wired `env:` line or a renamed step id.
 for pair in \
   "DRAFT_EXISTS=\${{ steps.idempotency.outputs.draft_exists }}" \
@@ -852,16 +905,95 @@ for pair in \
   assert_eq "Finalise env.$key wiring" \
     "$(wf_step_field "$STEP_FINALISE" "env.$key" || echo "<rc=$?>")" "${pair#*=}"
 done
+assert_eq "Finalise env.TAG wiring" \
+  "$(wf_step_field "$STEP_FINALISE" "env.TAG" || echo "<rc=$?>")" '${{ steps.version.outputs.tag }}'
+assert_eq "Finalise env key set is exactly the five wired keys" \
+  "$(wf_env_keys "$STEP_FINALISE" || echo "<rc=$?>")" "DRAFT_EXISTS,GH_TOKEN,PR_NUMBER,RELEASE_NOTES_FILE,TAG"
+# T8 runs the block under `bash -eo pipefail`; a `shell:` override or continue-on-error would change
+# what Actions runs / whether a failed publish fails the job.
+assert_eq "Finalise carries no shell: override" \
+  "$(wf_step_field "$STEP_FINALISE" shell || echo "<rc=$?>")" "<rc=4>"
+assert_eq "Finalise carries no continue-on-error" \
+  "$(wf_step_field "$STEP_FINALISE" continue-on-error || echo "<rc=$?>")" "<rc=4>"
 assert_eq "Finalise: every steps.<id> it reads is defined by a step" \
   "$(wf_ref_check "$STEP_FINALISE" || echo "<rc=$?>")" \
   "refs=check_changed,create_release,idempotency,pr,tmpfiles,version;unresolved="
 
-# Anti-vacuity floor (#7256): without it, deleting the T6b/T7b sections (or neutering the
+# ---------------------------------------------------------------------------
+# T8c (#7079): the PRODUCERS of the three Finalise inputs. T8/T8b set env directly and pin the
+# consumer's env: literals, so they cannot see a producer that stops emitting a value (the
+# feature then publishes the stale notes forever, with every T8 row green). Executes the real
+# `Find merged PR` and `Extract changelog from PR body` blocks and feeds their products to Finalise.
+# ---------------------------------------------------------------------------
+echo "T8c: producers of PR_NUMBER and the notes file (#7079)"
+
+STEP_PR="Find merged PR"
+STEP_CHANGELOG="Extract changelog from PR body"
+assert_eq "Extract-changelog step runs for an orphaned draft (gated on exists, not draft_exists)" \
+  "$(wf_step_field "$STEP_CHANGELOG" if || echo "<rc=$?>")" \
+  "steps.check_changed.outputs.changed == 'true' && steps.idempotency.outputs.exists == 'false'"
+assert_eq "Extract-changelog env.RELEASE_NOTES_FILE wiring" \
+  "$(wf_step_field "$STEP_CHANGELOG" "env.RELEASE_NOTES_FILE" || echo "<rc=$?>")" '${{ steps.tmpfiles.outputs.release_notes }}'
+assert_eq "Extract-changelog env.BODY_FILE wiring" \
+  "$(wf_step_field "$STEP_CHANGELOG" "env.BODY_FILE" || echo "<rc=$?>")" '${{ steps.tmpfiles.outputs.pr_body }}'
+
+PR_BLOCK="$TMP/pr-step.sh"
+CL_BLOCK="$TMP/changelog-step.sh"
+wf_step_field "$STEP_PR" run > "$PR_BLOCK" || : > "$PR_BLOCK"
+wf_step_field "$STEP_CHANGELOG" run > "$CL_BLOCK" || : > "$CL_BLOCK"
+
+if [[ ! -s "$PR_BLOCK" || ! -s "$CL_BLOCK" ]]; then
+  fail "could not extract the '$STEP_PR' / '$STEP_CHANGELOG' run blocks from $WF"
+else
+  PR_STUB_DIR="$TMP/bin-pr"
+  mkdir -p "$PR_STUB_DIR"
+  cat > "$PR_STUB_DIR/gh" <<'STUB'
+#!/usr/bin/env bash
+case "$1" in
+  api) printf '%s\n' "${MOCK_PR_NUM:-}" ;;
+  pr) printf '{"number":%s,"title":"Fix the thing","labels":[{"name":"semver:patch"}],"body":"intro\\n\\n## Changelog\\n\\n- real changelog line\\n\\n## Other\\n"}\n' "${MOCK_PR_NUM:-0}" ;;
+  *) exit 0 ;;
+esac
+STUB
+  chmod +x "$PR_STUB_DIR/gh"
+
+  # run_pr_step <event_name> <pr_num> -> products in $TMP/pr-out (GITHUB_OUTPUT) and $TMP/pr-body
+  run_pr_step() {
+    : > "$TMP/pr-out"; : > "$TMP/pr-body"
+    ( cd "$REPO_ROOT" && \
+      EVENT_NAME="$1" MOCK_PR_NUM="$2" COMMIT_MSG="chore: x (#999)" \
+      GITHUB_OUTPUT="$TMP/pr-out" GITHUB_REPOSITORY="o/r" GITHUB_SHA="deadbeef" \
+      PR_BODY_FILE="$TMP/pr-body" GH_TOKEN="stub" \
+      PATH="$PR_STUB_DIR:$PATH" \
+        bash -eo pipefail "$PR_BLOCK" > "$TMP/pr-stdout" 2>&1 )
+  }
+  pr_out_number() { sed -n 's/^number=//p' "$TMP/pr-out" | tail -1; }
+
+  run_pr_step "push" "123"; rc_p=$?
+  assert_eq "Find-merged-PR emits number=123 for a resolved PR" "$rc_p $(pr_out_number)" "0 123"
+  run_pr_step "workflow_dispatch" ""; rc_p=$?
+  assert_eq "Find-merged-PR emits an EMPTY number on workflow_dispatch" "$rc_p [$(pr_out_number)]" "0 []"
+
+  # Chain: PR step -> changelog step -> Finalise, all real blocks.
+  run_pr_step "push" "123"
+  CL_NOTES="$NOTES_DIR/chain-notes.md"
+  : > "$CL_NOTES"
+  ( cd "$REPO_ROOT" && PR_TITLE="Fix the thing" BODY_FILE="$TMP/pr-body" RELEASE_NOTES_FILE="$CL_NOTES" \
+      bash -eo pipefail "$CL_BLOCK" > "$TMP/cl-stdout" 2>&1 ); rc_c=$?
+  assert_eq "Extract-changelog writes the PR's changelog section into RELEASE_NOTES_FILE" \
+    "$rc_c $(tr -d '\n' < "$CL_NOTES")" "0 - real changelog line"
+  run_finalise "true" "$(pr_out_number)" "$CL_NOTES"; rc_chain=$?
+  assert_eq "Chain PR-step -> changelog-step -> Finalise: one call, notes flagged, content sent" \
+    "$rc_chain $(edit_calls) $(argv_joined) $(tr -d '\n' < "$TMP/snap-f")" \
+    "0 1 release|edit|web-v1.2.3|--notes-file|$CL_NOTES|--draft=false| - real changelog line"
+fi
+
+# Anti-vacuity floor (#7256): without it, deleting the T6b/T7b/T8 sections (or neutering the
 # assertion helpers) leaves a suite that prints `passed` and exits 0. Reported by printf +
 # exit, never through the fail() it backstops. Ratchet MIN_ASSERTIONS in the same commit as
 # any added assertion; slack in a floor is attack budget.
 ASSERTED=$((PASS + FAIL))
-MIN_ASSERTIONS=92
+MIN_ASSERTIONS=110
 if [[ "$ASSERTED" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity floor: only %d assertions ran, expected >= %d - the suite was stranded, not clean.\n' \
     "$ASSERTED" "$MIN_ASSERTIONS" >&2
