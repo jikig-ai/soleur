@@ -213,7 +213,9 @@ describe("Guard 1b — protocol anchors (the prose the corpus guard depends on)"
     // $DRAFT is trap-deleted at fence exit — an audit in a later fence greps a
     // dead path. Pin the audit's tokens AND that they sit before the fence's
     // closing exit inside the same block as the trap registration.
-    const fenceStart = SKILL.indexOf("trap 'rm -f \"$DRAFT\"'");
+    // Token stops before the handler's closing quote: #10017 extended the
+    // handler to `rm -f "$DRAFT"; rmdir "$(dirname "$DRAFT")" 2>/dev/null`.
+    const fenceStart = SKILL.indexOf("trap 'rm -f \"$DRAFT\"");
     const fenceEnd = SKILL.indexOf("exit \"$sentinel_rc\"");
     expect(fenceStart).toBeGreaterThan(-1);
     expect(fenceEnd).toBeGreaterThan(fenceStart);

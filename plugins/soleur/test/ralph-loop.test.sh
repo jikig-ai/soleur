@@ -4,6 +4,9 @@
 # Run: bash plugins/soleur/test/ralph-loop.test.sh
 
 set -euo pipefail
+SUITE_TMP=$(mktemp -d)
+[[ "$SUITE_TMP" == /* ]] || { echo "FATAL: SUITE_TMP is not absolute: $SUITE_TMP" >&2; exit 2; }
+trap 'rm -rf "$SUITE_TMP"' EXIT
 
 # jq is required by stop-hook.sh (tested here). Skip gracefully if missing.
 if ! command -v jq &>/dev/null; then
@@ -42,7 +45,7 @@ SUBSTANTIVE_RESPONSE="I have completed the refactoring of the authentication mod
 
 setup_test() {
   local test_dir
-  test_dir=$(mktemp -d)
+  test_dir=$(mktemp -d -p "$SUITE_TMP")
   assert_fixture_dir "$test_dir"
   git -C "$test_dir" init -q
   mkdir -p "$test_dir/.claude"

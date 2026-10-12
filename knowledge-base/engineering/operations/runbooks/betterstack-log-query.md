@@ -158,11 +158,19 @@ Live standing alarms over this source:
   CONNECT to metadata/RFC1918/ULA destinations. Dark-launch baseline is ~1 row per 5-min probe pair,
   so 20 clears only a real burst. Decode + revocation path:
   [`cron-egress-blocked.md`](./cron-egress-blocked.md#egress-gateway-better-stack-alerts).
-- **`logtail_exploration_alert.egress_gw_probe_silent`** (#9534, `lower_than 1` over 900 s, missing
-  data counts as zero): `soleur-egress-gw-probe-silent-prd`. Pages when the resolver's
-  `egress_gw_probe` heartbeat (`SYSLOG_IDENTIFIER=egress-gw-probe`, one row per 5 min) has been
-  absent for 15+ min — a dead timer or dead gateway can never read as green. Defined in
+- **`logtail_exploration_alert.egress_gw_probe_silent`** (#9534, `lower_than length(var.web_hosts)`
+  over 900 s, missing data counts as zero): `soleur-egress-gw-probe-silent-prd`. Pages when fewer
+  DISTINCT `host_name`s emitted an `egress_gw_probe` row (`SYSLOG_IDENTIFIER=egress-gw-probe`, one
+  row per 5 min per host) than the fleet roster over 15+ min — a dead timer, dead Vector pipeline
+  (a stale birth-frozen vector.toml allowlist is a measured failure mode), or dead host journal can
+  never read as green, and one host's beats cannot mask the other's silence. Defined in
   `apps/web-platform/infra/betterstack-logs-alerts.tf`. Decode:
+  [`cron-egress-blocked.md`](./cron-egress-blocked.md#egress-gateway-better-stack-alerts).
+- **`logtail_exploration_alert.egress_gw_probe_fail`** (#9534 review, `higher_than 0` over 900 s,
+  missing data counts as zero): `soleur-egress-gw-probe-fail-prd`. Pages on any `egress-gw-probe`
+  row carrying `result=fail` (allow leg refused, or deny leg BYPASSED — Squid accepted a denied
+  destination) or `reason=gw_absent` (the gateway container is missing). Previously Sentry-only
+  (`op=egress_gw_probe_fail`), which paged nobody. Decode + per-host repair:
   [`cron-egress-blocked.md`](./cron-egress-blocked.md#egress-gateway-better-stack-alerts).
 - **`scheduled-zot-restart-loop.yml`** (#6291; hourly, dispatched by the web-server watchdog clock since #8495 with a GHA-cron fallback — see `inngest-server.md` "How the external watchdogs are triggered") — the zot registry restart-loop
   recurrence alarm. Reads the `SOLEUR_ZOT_DISK` marker, fires a deduped `[ci/zot-restart-loop]`

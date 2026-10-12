@@ -135,7 +135,7 @@ Otherwise skip it. A project whose Blog note sets no jargon limits gets no scan.
 
 Scan the draft through a file, never by pasting it into a shell command: a heredoc is broken by a draft line equal to its delimiter, and re-pasting the whole draft on every re-scan costs its full length each time.
 
-1. Create a scratch directory: `mktemp -d` (one Bash call; note the printed path).
+1. Create a scratch directory: `mktemp -d -t soleur-run.$$.XXXXXXXX` (one Bash call; note the printed path — the signed root is what makes a missed cleanup reaper-eligible, #10017).
 2. Write the draft to `<that directory>/draft.md` with the **Write** tool.
 3. Scan it (one Bash call):
 

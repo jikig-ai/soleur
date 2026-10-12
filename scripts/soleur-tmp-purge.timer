@@ -1,0 +1,19 @@
+# soleur-tmp-purge.timer — OPTIONAL systemd user timer for
+# scripts/soleur-tmp-purge.sh. Installs to ~/.config/systemd/user/.
+# Pair with soleur-tmp-purge.service.
+# See knowledge-base/engineering/operations/runbooks/tmpfs-guard-install.md.
+#
+# Daily, not tmpfs-guard's 5-minute alarm cadence: this pass does real
+# classification + quarantine moves + TTL drain. Post-fix the attributable
+# classes accrue slowly (a residual per kill-window at worst), so a daily
+# sweep bounds them well under the alarm threshold.
+[Unit]
+Description=Run the Soleur tmp purge daily
+
+[Timer]
+OnBootSec=3min
+OnCalendar=daily
+AccuracySec=1h
+
+[Install]
+WantedBy=timers.target
