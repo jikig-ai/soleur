@@ -123,7 +123,7 @@ automated: repair the named cause and dispatch again.
 the boot continued, the volume is formatted, the header has no off-host copy): escrow is attempted **once, at
 birth**, so the only way to re-attempt it is a host replace (`web-host-replace`, with the config repaired first).
 While the web-class host holds no user data that costs one replace. Once a web-class host holds data, the
-remediation of this page is owned by the #9372 follow-up; no re-escrow step is defined here. **[Superseded 2026-10-12 (#9372): #9372 closes with the retirement change; the re-escrow step is tracked in #9949 and passphrase-loss recovery in #9948.]**
+remediation of this page is owned by the #9372 follow-up; no re-escrow step is defined here. **[Superseded 2026-10-12 (#9372): the #9372 follow-up ownership ended with the retirement change; the re-escrow step is tracked in #9949 and passphrase-loss recovery in #9948.]**
 
 **During an outage, when the preflight cannot pass.** The preflight has **no in-workflow bypass**, by design. The only
 operator-local route is the break-glass procedure in `web-host-birth.md` (written for a birth, with the preflight as its
@@ -326,9 +326,9 @@ the **same** volume. For a volume that is not raw, "fix the cause and replace th
 therefore circular: the new host meets the same `ext4` and takes the same fatal. The live web-2 volume
 is still the Hetzner-formatted `ext4` one until the volume rebirth (**#9372**). **Replacing web-2 before
 #9372 powers the new host off by design** (fail closed, serving weight 0, no user impact); do not
-dispatch it. **[Superseded 2026-10-12 (#9372): that rebirth workflow is deleted; a volume re-birth now needs a new workflow in a new reviewed change (ADR-263 addendum 2026-10-12).]** Only the rebirth, which deletes and re-creates the empty volume, clears a `discriminate`
+dispatch it. Only the rebirth, which deletes and re-creates the empty volume, clears a `discriminate`
 fatal on a non-raw volume. For every other stage, fix the named cause and then replace the host; the
-volume re-attaches to the new host.
+volume re-attaches to the new host. **[Superseded 2026-10-12 (#9372), as to this paragraph's web-2 sentences: web-2's volume is LUKS-formatted (the 2026-10-11 marker above), so a plain web-2 replace is no longer refused for the ext4 volume; the rebirth workflow named here is deleted, and a volume re-birth now needs a new workflow in a new reviewed change (ADR-263 addendum 2026-10-12).]**
 
 #### The daily web-2 verify leg (`web2_marker`) — reason to action
 

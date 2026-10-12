@@ -2172,6 +2172,14 @@ PY
   g3_th_plant "a composite action binds it" .github/actions/evil/action.yml $'runs:\n  using: composite\n  steps:\n    - shell: bash\n      run: ./x\n      env:\n        T: ${{ secrets.DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER }}'
   g3_th_plant "a .yaml workflow binds it" .github/workflows/evil-yaml.yaml $'jobs:\n  j:\n    steps:\n      - run: ./x\n        env:\n          T: ${{ secrets.DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER }}'
   g3_th_plant "a binding with a trailing comment on the same line" .github/workflows/evil-trailing.yml $'jobs:\n  j:\n    steps:\n      - run: ./x\n        env:\n          T: ${{ secrets.DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER }} # note'
+  g3_th_plant "the bracket spelling secrets['name']" .github/workflows/evil-bracket.yml $'jobs:\n  j:\n    steps:\n      - run: ./x\n        env:\n          T: ${{ secrets[\'doppler_token_workspaces_luks_marker\'] }}'
+  g3_th_plant "a mixed-case spelling through the secrets context" .github/workflows/evil-mixed.yml $'jobs:\n  j:\n    steps:\n      - run: ./x\n        env:\n          T: ${{ secrets.Doppler_Token_Workspaces_Luks_Marker }}'
+  g3_th_plant "the upper-case name as an env key with no secrets context" .github/workflows/evil-envkey.yml $'jobs:\n  j:\n    steps:\n      - run: ./x\n        env:\n          DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER: x'
+  # a Terraform address is the lower-case name and is NOT a binding (apply-web-platform-infra.yml carries one for real)
+  mkdir -p "$g3_cr/.github/workflows"; printf '%s\n' $'jobs:\n  j:\n    steps:\n      - run: |\n          terraform plan -target=github_actions_secret.doppler_token_workspaces_luks_marker' > "$g3_cr/.github/workflows/tf-address.yml"
+  g3_th="$(g3_token_holders "$g3_cr")"
+  if [[ "${g3_th%%|*}" == ".github/workflows/workspaces-luks-verify.yml" ]]; then ok "G3 mutation 5b (a Terraform -target address, lower-case name) -> stays green (not a binding)"; else no "G3 mutation 5b: a Terraform address was flagged as a holder: ${g3_th}"; fi
+  rm -f "$g3_cr/.github/workflows/tf-address.yml"
   rm -f "$g3_cr/.github/workflows/evil-holder.yml"
   rm -rf "$g3_cr"
 

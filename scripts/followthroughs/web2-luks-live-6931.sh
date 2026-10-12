@@ -34,7 +34,7 @@
 #
 # Enrollment (the tracker body carries the directive; the tracker carries the `follow-through` label):
 #   <!-- soleur:followthrough script=scripts/followthroughs/web2-luks-live-6931.sh earliest=<web-2 rebirth+3d> secrets=BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -->
-# It was set from the actual rebirth time by the #9372 rebirth dispatch of 2026-10-06 (workflow since retired; runbook web2-luks-rebirth-9372.md, closing row 4); the
+# Its value is the formula below applied to the running instance's readiness time (runbook web2-luks-rebirth-9372.md, closing row 4; the rebirth workflow is since retired); the
 # `<web-2 rebirth+3d>` placeholder above is the formula, not the value that is enrolled (as enrolled on #6931:
 # earliest=2026-10-10T20:10:00Z, so the window closes 2026-10-14T20:10:00Z, inside the exception that expires 2026-10-22).
 # All three names are bound in scheduled-followthrough-sweeper.yml's env: block (shared with #5934/#5110).

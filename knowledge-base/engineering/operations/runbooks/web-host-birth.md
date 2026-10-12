@@ -108,7 +108,7 @@ steps, not of the token; a narrower credential is tracked in <https://github.com
 the boot continued, the volume is formatted, the header has no off-host copy): escrow is attempted **once, at
 birth**, so the only way to re-attempt it is a host replace (`web-host-replace`, with the config repaired first).
 While the web-class host holds no user data that costs one replace. Once a web-class host holds data, the
-remediation of this page is owned by the #9372 follow-up; no re-escrow step is defined here. **[Superseded 2026-10-12 (#9372): #9372 closes with the retirement change; the re-escrow step is tracked in #9949 and passphrase-loss recovery in #9948.]**
+remediation of this page is owned by the #9372 follow-up; no re-escrow step is defined here. **[Superseded 2026-10-12 (#9372): the #9372 follow-up ownership ended with the retirement change; the re-escrow step is tracked in #9949 and passphrase-loss recovery in #9948.]**
 
 Read the stage's events for a host (no SSH):
 
