@@ -205,6 +205,8 @@ live; none carries `DOPPLER_TOKEN_INFRA_PRIVILEGED` until O3.
 
 ## Operator Sequence (canonical copy — verbatim from the plan)
 
+> One cell differs from the plan: O5's expected string is `forbidden`, not `token_readonly` (Hetzner's wording changed; measured 2026-09-29, #8209). Everything else below is verbatim.
+
 Reproduced verbatim from `knowledge-base/project/plans/2026-09-22-feat-evict-privileged-terraform-credentials-plan.md` §Operator Sequence. This runbook is the canonical copy; the plan section is its origin. There is no O9 — the numbering skips it. Rows and cells marked "added by #9262" or "changed by #9262" are not from that plan: their origin is `knowledge-base/project/plans/archive/20261004-100500-2026-09-30-infra-retier-pin-bump-and-automint-to-infra-privileged-plan.md` §Operator Sequence addition.
 
 <!-- markdownlint-disable MD034 -->
