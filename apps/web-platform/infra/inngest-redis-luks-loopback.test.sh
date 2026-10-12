@@ -140,7 +140,7 @@ done
 # `rehearsal_*` config (the default) and the arms that must refuse render `prd` or another value.
 render_stage() {
   local byid="$1" mnt="$2" fstab="$3" detail="$4" phone="$5" waitbound="${6:-30}" out="$7" cfg="${8:-rehearsal_loopback}"
-  # P1b relative-operand rule (#7810): the `> "$out"` below TRUNCATES whatever the 8th positional
+  # P1b relative-operand rule (#7810): the `> "$out"` below TRUNCATES whatever the 7th positional
   # names, and this function cannot see its root. Callers pass "$TMPROOT/...", but that is a fact
   # about the callers; a bare filename would truncate a file in the CWD instead.
   assert_fixture_dir "$out"

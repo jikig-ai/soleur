@@ -537,13 +537,28 @@ _act_ops="$(_norm_code "$CLOUD_INIT" | grep -E "$_OPS_TOK" || true)"
 if [ "$_act_ops" = "$_exp_ops" ]; then ok "T1.17f the set of lines that touch a device or mount is exactly the reviewed list ($(grep -c . <<<"$_act_ops") lines)"; else no "T1.17f a device-touching line was added, removed or changed — diff (expected vs actual): $(diff <(printf '%s\n' "$_exp_ops") <(printf '%s\n' "$_act_ops") | cut -c1-200 | head -12 | tr '\n' '|')"; fi
 _act_vars="$(_norm_code "$CLOUD_INIT" | grep -E "$_VAR_RE" || true)"
 if [ "$_act_vars" = "$_exp_vars" ]; then ok "T1.17g every assignment to DEV/MAPPER/BYID/LUKS_ID/CANON_DEV/POINTER is exactly the reviewed list ($(grep -c . <<<"$_act_vars") lines; a rebinding of what a destructive line operates on changes it)"; else no "T1.17g a device-variable assignment was added, removed or changed — diff (expected vs actual): $(diff <(printf '%s\n' "$_exp_vars") <(printf '%s\n' "$_act_vars") | cut -c1-200 | head -12 | tr '\n' '|')"; fi
-_IND_RE='(^|[^[:alnum:]_])eval([^[:alnum:]_]|$)|^[$][A-Za-z_]|^[$]\{[A-Za-z_][A-Za-z_0-9]*[:#%/^,-]|^"[$]\{[A-Za-z_][A-Za-z_0-9]*:[-=+?]|(^|[|;&(][[:space:]]*)(sh|bash|dash)[[:space:]]+-c([[:space:]]|$)|(^|[^[:alnum:]_])xargs([^[:alnum:]_]|$)|(^|[|;&(][[:space:]]*)exec[[:space:]]'
-_indirect="$(_norm_code "$CLOUD_INIT" | grep -E "$_IND_RE" || true)"
-if [ -z "$_indirect" ]; then ok "T1.17h no eval, variable-as-command, parameter-expansion-as-command, sh/bash -c, xargs or exec line (an operation cannot hide behind indirection from the closed sets)"; else no "T1.17h shell indirection appears in the template, which the closed sets cannot see through: ${_indirect}"; fi
-# T1.17j no redirect or tee targets a device variable: a raw write to the device (`head -c N /dev/zero > "$DEV"`,
-# `echo x | tee "$MAPPER"`) names none of the closed sets' tokens, so it is denied by its target.
-_dev_redirect="$(_norm_code "$CLOUD_INIT" | grep -E '(>>?|tee( -a)?)[[:space:]]*"?[$]\{?(DEV|MAPPER|CANON_DEV)([^[:alnum:]_]|$)' || true)"
-if [ -z "$_dev_redirect" ]; then ok "T1.17j no redirect or tee writes to \$DEV, \$MAPPER or \$CANON_DEV (a raw device write is denied by its target)"; else no "T1.17j a redirect or tee targets a device variable: ${_dev_redirect}"; fi
+# T1.17h/j scan the RENDERED form: the template writes every literal shell brace as `$${...}` (Terraform's escape),
+# so a pattern that looks for `${DEV}` or `${x:-y}` never matches a real line. Collapse `$${` to `${` first.
+_norm_rendered() { _norm_code "$1" | sed -e 's/[$][$]{/${/g'; }
+_IND_RE='(^|[^[:alnum:]_])eval([^[:alnum:]_]|$)|^[$][A-Za-z_]|^[$]\{[A-Za-z_][A-Za-z_0-9]*[:#%/^,-]|^"[$]\{[A-Za-z_][A-Za-z_0-9]*:[-=+?]|(^|[^[:alnum:]_./-])(sh|bash|dash)[[:space:]]+-c([[:space:]]|$)|(^|[^[:alnum:]_])xargs([^[:alnum:]_]|$)|(^|[^[:alnum:]_./-])exec[[:space:]]'
+_indirect="$(_norm_rendered "$CLOUD_INIT" | grep -E "$_IND_RE" || true)"
+if [ -z "$_indirect" ]; then ok "T1.17h no eval, variable-as-command, parameter-expansion-as-command, sh/bash -c, xargs or exec line, in rendered form (an operation cannot hide behind indirection from the closed sets)"; else no "T1.17h shell indirection appears in the template, which the closed sets cannot see through: ${_indirect}"; fi
+# T1.17j no redirect, tee or dd of= targets a device variable: a raw write to the device (`head -c N /dev/zero > "$DEV"`,
+# `echo x | tee "$MAPPER"`, `dd of="$DEV"`) names none of the closed sets' tokens, so it is denied by its target. This
+# covers writes whose target is spelled as one of the three device variables; it is not a general write guard.
+_RED_RE='(>>?|tee( +(-a|--append|--))*|of=)[[:space:]]*"?[$]\{?(DEV|MAPPER|CANON_DEV)([^[:alnum:]_]|$)'
+_dev_redirect="$(_norm_rendered "$CLOUD_INIT" | grep -E "$_RED_RE" || true)"
+if [ -z "$_dev_redirect" ]; then ok "T1.17j no redirect, tee or dd of= writes to \$DEV, \$MAPPER or \$CANON_DEV, in rendered form (a raw write to those variables is denied by its target)"; else no "T1.17j a redirect, tee or dd of= targets a device variable: ${_dev_redirect}"; fi
+# Controls: the two patterns must FLAG the escaped-form bypasses the first version missed, and must not flag the
+# template's own legitimate lines (zero hits above). Driven on literal samples, normalised the same way.
+_ctl_bad=""
+for _l in '$${OP:-true} "$DEV"' 'if x; then sh -c "$F" x; fi' '{ bash -c "$F"; }' 'env sh -c "$F"'; do
+  [ "$(printf '%s\n' "$_l" | sed -e 's/[$][$]{/${/g' | grep -cE "$_IND_RE")" -eq 1 ] || _ctl_bad="${_ctl_bad} ind:[${_l}]"
+done
+for _l in 'head -c 1 /dev/zero > "$${DEV}"' 'tee --append "$DEV"' 'tee -- "$DEV"' 'dd of="$DEV" bs=1' 'echo x | tee "$${MAPPER}"'; do
+  [ "$(printf '%s\n' "$_l" | sed -e 's/[$][$]{/${/g' | grep -cE "$_RED_RE")" -eq 1 ] || _ctl_bad="${_ctl_bad} red:[${_l}]"
+done
+if [ -z "$_ctl_bad" ]; then ok "T1.17k control: the indirection and device-redirect patterns flag the escaped-form and wrapped bypass shapes"; else no "T1.17k CONTROL: T1.17h/j miss bypass shapes:${_ctl_bad}"; fi
 _top="$(grep -vE '^[[:space:]]*#' "$CLOUD_INIT" | grep -E '^[a-z_]+:' | sed 's/:.*//' | tr '\n' ' ')"
 if [ "$_top" = "package_update packages groups users write_files runcmd " ]; then ok "T1.17i the template's top-level cloud-init keys are exactly package_update/packages/groups/users/write_files/runcmd (no fs_setup/disk_setup/mounts/bootcmd module)"; else no "T1.17i the top-level cloud-init keys changed: '${_top}' — a disk or mount module would act outside the shell inventory"; fi
 
@@ -679,17 +694,18 @@ if ! printf '%s\n' "$_LUKS_OPEN_UNIT" | grep -cE '^[[:space:]]*(EnvironmentFile|
 # guard DRIVEN across prd/dev/staging/empty/bare-rehearsal/rehearsal_*), T1.16j (STAGE set before the guard),
 # T1.17a-e (destructive-op inventory over the whole template, the reopen script's open-only property, resolver
 # refusal bodies and the reopen catch-all) are new (+8 in total with T1.10b).
-# 83 -> 80 (review fix round 3, CTO ruling A: inngest_expect_luks retired): T1.10a/b and T1.11a-c (-5) are replaced by
-# the single negative guard T1.10 (+1), and T1.17j (device-redirect pin, +1) is new: 83 - 5 + 1 + 1 = 80, exact.
+# 83 -> 81 (review fix round 3, CTO ruling A: inngest_expect_luks retired): T1.10a/b and T1.11a-c (-5) are replaced by
+# the single negative guard T1.10 (+1); T1.17j (device-redirect pin, +1) and T1.17k (a control that the T1.17h/j patterns
+# flag the escaped-form bypass shapes, +1) are new: 83 - 5 + 1 + 1 + 1 = 81, exact.
 # 78 -> 83 (review fix round 2): T1.16k (allowlist glob / rehearsal config prefix contract, +1) and the closed-set
 # pins T1.17f-i (+4). T1.16i was re-driven in-arm and keeps its count.
 # Self-contained: bash builtins and this suite's own counters only. A floor that lives in a helper
 # is silenced by the same move that silences the arms it guards.
-if [ "$executed" -lt 80 ]; then
+if [ "$executed" -lt 81 ]; then
   fail=$((fail + 1))
-  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 80. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
+  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 81. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
 else
-  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 80)\n' "$executed"
+  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 81)\n' "$executed"
 fi
 
 echo ""

@@ -458,10 +458,12 @@ When an approved `inngest-host-replace` window exists (or #8620 reaches the inng
      a no-op (`noop-done`). Any other value is a STOP. This is a different flag from the scheduler's
      `INNGEST_CUTOVER_FLIP` (see step 5).
    - The scheduler's flag `INNGEST_CUTOVER_FLIP` (Doppler `soleur-inngest/prd`; the replace job's preflight step
-     prints it) reads `done` or `flushed`. Those are the only two values whose stranded scheduler recovers with one
-     `op=resume` dispatch. `armed` and `flipping` drive the FSM to `aborted` (`op=resume` accepts `done` only), and an
-     unset or any other value makes the replaced host refuse EVERY prod start: for any of those, STOP, because the
-     replace would leave the sole scheduler dark with no one-dispatch recovery.
+     prints it) reads `done` or `flushed`. Those are the only two values the replaced host recovers from: `done`
+     strands the scheduler until one approval-gated `op=resume` dispatch (its G1 accepts `done` only), and `flushed`
+     self-resumes on the host's own timer with no dispatch. `armed` and `flipping` abort to `aborted` when the flush
+     latch (which survives the replace on `/mnt/data`) is recorded, and `op=resume` cannot clear `aborted`; an unset,
+     `aborted`, `rolled-back` or any other value makes the replaced host refuse EVERY prod start. For anything other
+     than `done` or `flushed`, STOP: the replace would leave the sole scheduler dark with no one-dispatch recovery.
 3. Merge IMMEDIATELY before step 4, in the one window (merging alone plants the drift alert and the
    `server_touched` abort). Check the drift issue body stays under its 60,000-byte `head -c` cap (a `user_data`
    diff is large).
@@ -513,7 +515,10 @@ variable, the template key, the `emit()` and `luks_emit` field and the `EXPECT_L
 (floor and bound in `inngest-boot-emitter.test.sh`); where this plan says 17 keys (Test Scenarios 1, AC5), read 16.
 T1.10 is now a negative guard (no infra, script or workflow file names the input); T1.11a-c went with the
 variable. This changes rendered `user_data` (the `expect_luks=` field leaves the stage rows); the production
-pointer arm stays byte-identical.
+pointer arm stays byte-identical. This reversal SUPERSEDES, where they conflict: AC11 and the Files-to-Edit entry
+for `variables.tf` ("description-only edit" / "one description line" -- the whole variable block is deleted), the
+"Explicitly NOT edited" line for `variables.tf`, and EVERY count of 17 template keys in this plan (AC2, AC3, AC5,
+Phase 3.4, the worked-example table, Test Scenarios): the key set is 16.
 
 ## Files to Edit
 

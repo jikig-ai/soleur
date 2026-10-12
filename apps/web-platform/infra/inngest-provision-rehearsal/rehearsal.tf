@@ -222,7 +222,7 @@ resource "doppler_service_token" "rehearsal" {
 # `rehearsal_inngest` is UNUSED since #9786: it used to mirror prod's retired plaintext AOF volume, and
 # the template no longer takes its id (the `inngest_volume_id` key is gone), so it is attached and
 # never read. It is kept for now only because removing it changes the rehearsal's attach topology, its
-# plan-shape fixtures and two ledger rows; removal is tracked in the #9786 follow-up tracker.
+# plan-shape fixtures and two ledger rows; removal is tracked in #10112.
 # Size matches prod's inngest_redis_volume_size default so the rehearsal exercises the same geometry.
 resource "hcloud_volume" "rehearsal_inngest" {
   name     = "${local.rehearsal_host_name}-store"

@@ -282,15 +282,15 @@
    },
    "at_rest": {
     "mechanism": "plaintext-exception",
-    "evidence": "apps/web-platform/infra/inngest-provision-rehearsal/rehearsal.tf, resource \"hcloud_volume\" \"rehearsal_inngest\" (RAW — no format attribute, no LUKS apparatus) — UNUSED since #9786: the rendered template no longer takes this volume's id, so the volume is attached and never read; it formerly mirrored the retired plaintext AOF volume of the production boot the #8539 forced-race rehearsal reproduces. Kept pending the #9786 follow-up tracker (removal changes the rehearsal's attach topology and plan-shape fixtures)",
+    "evidence": "apps/web-platform/infra/inngest-provision-rehearsal/rehearsal.tf, resource \"hcloud_volume\" \"rehearsal_inngest\" (RAW — no format attribute, no LUKS apparatus) — UNUSED since #9786: the rendered template no longer takes this volume's id, so the volume is attached and never read; it formerly mirrored the retired plaintext AOF volume of the production boot the #8539 forced-race rehearsal reproduces. Kept pending #10112 (removal changes the rehearsal's attach topology and plan-shape fixtures)",
     "defends_against": "nothing at the volume layer",
     "does_not_defend": "at-rest recovery of the detached device — acceptable here only because the volume is created empty for one boot and destroyed empty by the workflow's if:always() teardown",
     "disclosed_as": "not-publicly-claimed",
     "live_verification": "unavailable:n/a by construction — NO user data ever reaches a rehearsal host. The volume is created empty for one boot and destroyed empty by the workflow's if:always() teardown, with a post-teardown Hetzner API assertion that no soleur-inngest-rehearsal-* object survives (#9175).",
     "exception": {
-     "justification": "UNUSED LEFTOVER since #9786: it mirrored the prod plaintext member, which was destroyed in #8285, and the template no longer takes this volume's id, so it is attached to the rehearsal host and never read, mounted or formatted (the mapper name below is historical). It holds no data and is created empty and destroyed empty with the rehearsal. Removal is tracked in the #9786 follow-up tracker and changes the rehearsal's attach topology and plan-shape fixtures, so it is not done in the parked strip.",
+     "justification": "UNUSED LEFTOVER since #9786: it mirrored the prod plaintext member, which was destroyed in #8285, and the template no longer takes this volume's id, so it is attached to the rehearsal host and never read, mounted or formatted (the mapper name below is historical). It holds no data and is created empty and destroyed empty with the rehearsal. Removal is tracked in #10112 and changes the rehearsal's attach topology and plan-shape fixtures, so it is not done in the parked strip.",
      "tracking_issue": "#8285",
-     "reevaluate_when": "the #9175 rehearsal completes and the volumes are destroyed — the resource is transient by construction; also reevaluate when the #9786 follow-up tracker removes this unused volume (nothing in the template reads it any more)",
+     "reevaluate_when": "the #9175 rehearsal completes and the volumes are destroyed — the resource is transient by construction; also reevaluate when #10112 removes this unused volume (nothing in the template reads it any more)",
      "expires_on": "2026-12-31"
     }
    }
