@@ -328,6 +328,9 @@ if (( ! DRY_RUN )); then
   mkdir -p "$state_dir"
   ts=$(date -u +%Y%m%d-%H%M%S)
   tmpf=$(mktemp)
+  # Owning trap (ADR-129): after the mv the path is gone and rm -f is a no-op;
+  # the trap covers the alloc→mv window on a failure exit between them.
+  trap 'rm -f "$tmpf"' EXIT
   printf '%s' "$ENVELOPE" > "$tmpf"
   mv "$tmpf" "$state_dir/codeql-bot-coverage-${ts}.json"
 fi

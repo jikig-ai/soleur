@@ -142,6 +142,9 @@ apply_yaml_rules() {
 # ---------------------------------------------------------------------------
 stdin_to_tempfile() {
   local tmp
+  # lint-trap-ownership: ok — sourced library; caller owns cleanup by contract
+  # (every check-*.sh caller registers `trap 'rm -f "$tmp"…' EXIT`), and an
+  # EXIT trap here would fire before the caller reads the file (#10017 census).
   tmp="$(mktemp -t skill-scan-XXXXXX)"
   cat > "$tmp"
   echo "$tmp"

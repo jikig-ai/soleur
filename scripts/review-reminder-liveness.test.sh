@@ -9,6 +9,9 @@
 # `bash -eo pipefail` shell.
 
 set -uo pipefail
+SUITE_TMP=$(mktemp -d)
+[[ "$SUITE_TMP" == /* ]] || { echo "FATAL: SUITE_TMP is not absolute: $SUITE_TMP" >&2; exit 2; }
+trap 'rm -rf "$SUITE_TMP"' EXIT
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -46,7 +49,7 @@ fi
 
 # Run the extracted script in a scratch repo with a mock gh. Sets RC + OUT.
 run_scan() {
-  local d="$1" bin; bin=$(mktemp -d)
+  local d="$1" bin; bin=$(mktemp -d -p "$SUITE_TMP")
   cat > "$bin/gh" <<'GH'
 #!/usr/bin/env bash
 exit 0
@@ -59,7 +62,7 @@ GH
 }
 
 # Case A: AGENTS.rules.md WITH frontmatter → evaluated → exit 0, no ::error::.
-dA=$(mktemp -d); mkdir -p "$dA/knowledge-base"
+dA=$(mktemp -d -p "$SUITE_TMP"); mkdir -p "$dA/knowledge-base"
 cat > "$dA/AGENTS.rules.md" <<'EOF'
 ---
 last_reviewed: 2026-07-05
@@ -77,7 +80,7 @@ fi
 rm -rf "$dA"
 
 # Case B: AGENTS.rules.md WITHOUT frontmatter → not evaluated → ::error:: + exit 1.
-dB=$(mktemp -d); mkdir -p "$dB/knowledge-base"
+dB=$(mktemp -d -p "$SUITE_TMP"); mkdir -p "$dB/knowledge-base"
 printf '# corpus, frontmatter removed\n' > "$dB/AGENTS.rules.md"
 run_scan "$dB"
 if [[ "$RC" == "1" ]] && grep -q '::error::Required constitutional path' <<<"$OUT"; then
@@ -91,7 +94,7 @@ rm -rf "$dB"
 # `continue` skips the evaluated-marking → ::error:: + exit 1. Distinguishes
 # "cadence removed" from "whole frontmatter removed" (Case B) — the run must fail
 # loudly on either, not just the total wipe.
-dC=$(mktemp -d); mkdir -p "$dC/knowledge-base"
+dC=$(mktemp -d -p "$SUITE_TMP"); mkdir -p "$dC/knowledge-base"
 cat > "$dC/AGENTS.rules.md" <<'EOF'
 ---
 last_reviewed: 2026-07-05

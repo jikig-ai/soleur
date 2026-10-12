@@ -710,8 +710,16 @@ def _binds_before_use(line, var):
     b = re.search(_LEAD + _DECL + v + r'=', line)
     u = re.search(r'"\$\{?' + v + r'\}?', line)
     return bool(b and u and b.end() <= u.start())
-def _wrapper_root(fname, funcs, depth):
-    """Root class of what same-file-or-sourced function `fname` emits."""
+def _wrapper_root(fname, funcs, depth, outer=None):
+    """Root class of what same-file-or-sourced function `fname` emits.
+
+    `outer` is (lines, use_idx, skip) of the call site. A wrapper's emit chain
+    can die on a name the function never binds — the #10017 sweep routes
+    per-case allocs through `mktemp -d -p "$SUITE_TMP"`, whose prefix var is
+    bound at FILE scope, outside the body's lookup window. A `never-bound`
+    result retries the chain against the caller file's bindings, bounded by
+    the call line.
+    """
     if depth > 4 or fname not in funcs:
         return None
     lo, hi, blines = funcs[fname]
@@ -719,8 +727,12 @@ def _wrapper_root(fname, funcs, depth):
     for k in range(hi, lo - 1, -1):
         m = _EMITS.search(blines[k])
         if m:
-            return _chain_root(blines, k, m.group(1), set(), funcs,
-                               depth + 1, lo=lo, inclusive=one_line)[0]
+            root, endvar = _chain_root(blines, k, m.group(1), set(), funcs,
+                                       depth + 1, lo=lo, inclusive=one_line)
+            if root == "never-bound" and outer is not None:
+                root = _chain_root(outer[0], outer[1], endvar, outer[2],
+                                   funcs, depth + 1)[0]
+            return root
     # No `echo "$var"`. The value is whatever the LAST statement produced, so only that statement
     # may be read.
     for k in range(hi, lo - 1, -1):
@@ -743,9 +755,33 @@ def _wrapper_root(fname, funcs, depth):
         # disagreeing on the form this rule calls load-bearing.
         mm = re.search(r'\$\(\s*mktemp\b[^)]*\)', raw)
         if mm:
-            return _mktemp_class(mm.group(0)) or "mktemp-abs"
+            cls = _mktemp_class(mm.group(0)) or "mktemp-abs"
+            if cls == "mktemp-inherits":
+                pref = _mktemp_prefix(mm.group(0))
+                if pref and pref.startswith("/"):
+                    return "absolute-literal"
+                if pref:
+                    root = _chain_root(blines, k, pref, set(), funcs,
+                                       depth + 1, lo=lo)[0]
+                    if root == "never-bound" and outer is not None:
+                        root = _chain_root(outer[0], outer[1], pref, outer[2],
+                                           funcs, depth + 1)[0]
+                    return root
+            return cls
         args = raw[re.search(r'\bmktemp\b', raw).end():]
-        return _mktemp_class('$(mktemp' + args.split(';')[0].rstrip(' }') + ')') or "mktemp-abs"
+        cls = _mktemp_class('$(mktemp' + args.split(';')[0].rstrip(' }') + ')') or "mktemp-abs"
+        if cls == "mktemp-inherits":
+            pref = _mktemp_prefix('$(mktemp' + args.split(';')[0].rstrip(' }') + ')')
+            if pref and pref.startswith("/"):
+                return "absolute-literal"
+            if pref:
+                root = _chain_root(blines, k, pref, set(), funcs,
+                                   depth + 1, lo=lo)[0]
+                if root == "never-bound" and outer is not None:
+                    root = _chain_root(outer[0], outer[1], pref, outer[2],
+                                       funcs, depth + 1)[0]
+                return root
+        return cls
     return None
 def _chain_root(lines, use_idx, var, skip, funcs, depth=0, lo=0, inclusive=False):
     """Walk aliases and derivations to the root binding. Returns (root_class, final_var)."""
@@ -788,7 +824,8 @@ def _chain_root(lines, use_idx, var, skip, funcs, depth=0, lo=0, inclusive=False
             cur, use = _REL_DERIV.match(val).group(1), j
             continue
         if k == "call":
-            return (_wrapper_root(_REL_CALL.match(val).group(1), funcs, depth)
+            return (_wrapper_root(_REL_CALL.match(val).group(1), funcs, depth,
+                                  outer=(lines, use, skip))
                     or "call-unresolved"), cur
         return k, cur
     return "deep", cur

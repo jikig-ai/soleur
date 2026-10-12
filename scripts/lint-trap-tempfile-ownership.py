@@ -118,6 +118,8 @@ Modes:
     --census-tspy         print the rule (d) TS/PY population count and exit 0
     --census-detail       print every counter (shell, rule-d, rule-e, excluded tests,
                           files scanned per family, unparsed py) and exit 0
+    --census-files        print every class-b and rule-e MEMBER path as `<class>\t<path>`,
+                          derived from the same census_all pass that counts it, and exit 0
     --check-highwater     assert every census is at or below its highwater AND that a
                           highwater edited in this diff moved by exactly the amount the
                           census moved, comparing against the MERGE-BASE copy of the
@@ -1262,7 +1264,7 @@ class Tree:
         return self._texts.get(rel, "")
 
 
-def census_all(tree: Tree) -> dict[str, int]:
+def census_all(tree: Tree, members: dict[str, list[str]] | None = None) -> dict[str, int]:
     """Every counter the ratchet and the diagnostics read, from one pass over one tree.
 
     shell           class-b population: tracked *.sh with a mktemp and ZERO `trap ... EXIT`
@@ -1272,6 +1274,10 @@ def census_all(tree: Tree) -> dict[str, int]:
     excluded-tests  rule-d members that are runner-owned test files (counted, not gated)
     scanned-*       files walked per family -- the floors
     unparsed-py     candidate py files `ast` could not parse (they count toward rule-d)
+
+    When `members` is given it is filled with the membership lists the counts are derived
+    from, so a listing mode (`--census-files`) and every counter share this one predicate
+    pass -- the population is printed by the same implementation that counts it.
     """
     files = tree.files()
     shell = [f for f in files if f.endswith(SHELL_E_EXT)]
@@ -1285,6 +1291,7 @@ def census_all(tree: Tree) -> dict[str, int]:
             )
     tree.preload()
     roots = covered_roots(set(files), tree.text)
+    mem: dict[str, list[str]] = {"shell": [], "rule-d": [], "rule-e": [], "excluded-tests": []}
     out = {
         "shell": 0, "rule-d": 0, "rule-e": 0, "excluded-tests": 0,
         "scanned-shell": len([f for f in shell if f.endswith(SHELL_EXT)]),
@@ -1299,9 +1306,9 @@ def census_all(tree: Tree) -> dict[str, int]:
                 for ln in lines
             )
             if has_mk and not any(TRAP_EXIT.search(strip_comment(ln)) for ln in lines):
-                out["shell"] += 1
+                mem["shell"].append(f)
         if "mktemp" in tree.text(f) and shell_literal_base_sites(lines):
-            out["rule-e"] += 1
+            mem["rule-e"].append(f)
     for f in py + ts:
         text = tree.text(f)
         if not RAW_ALLOC_RE.search(text):
@@ -1311,12 +1318,16 @@ def census_all(tree: Tree) -> dict[str, int]:
         if not an.parsed and lang == "py":
             out["unparsed-py"] += 1
         if an.elits:
-            out["rule-e"] += 1
+            mem["rule-e"].append(f)
         if an.allocs and not (an.parsed and (an.cleanup or an.marker)):
             if runner_owned_test(f, lang, roots):
-                out["excluded-tests"] += 1
+                mem["excluded-tests"].append(f)
             else:
-                out["rule-d"] += 1
+                mem["rule-d"].append(f)
+    for key, lst in mem.items():
+        out[key] = len(lst)
+    if members is not None:
+        members.update(mem)
     return out
 
 
@@ -1469,16 +1480,22 @@ def main() -> int:
     ap.add_argument("--census", action="store_true")
     ap.add_argument("--census-tspy", action="store_true")
     ap.add_argument("--census-detail", action="store_true")
+    ap.add_argument("--census-files", action="store_true")
     ap.add_argument("--check-highwater", action="store_true")
     args = ap.parse_args()
 
-    if args.census or args.census_tspy or args.census_detail:
+    if args.census or args.census_tspy or args.census_detail or args.census_files:
+        members: dict[str, list[str]] = {}
         try:
-            c = census_all(Tree())
+            c = census_all(Tree(), members)
         except (FloorError, RuntimeError) as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 2
-        if args.census_detail:
+        if args.census_files:
+            for cls in ("shell", "rule-e"):
+                for f in members[cls]:
+                    print(f"{cls}\t{f}")
+        elif args.census_detail:
             for k, v in c.items():
                 print(f"{k}: {v}")
         elif args.census_tspy:
