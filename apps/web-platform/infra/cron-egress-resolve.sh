@@ -511,16 +511,21 @@ fi
 # first line: the object is gone, a deleted table or chain) IS an absent rule, not contention.
 # A missing binary (rc 127), another error that merely ends in the same words, or a different
 # status stays unreadable. Globals set:
-# ENF_JUMP ENF_DROP ENF_LOG (present|absent|unreadable), ENF_RC_JUMP, ENF_RC_DROP
-# (the LAST attempt's status), ENF_READ_FAILED, ENF_READ_RETRIED, ENF_HEAL.
+# ENF_JUMP ENF_DROP ENF_LOG (present|absent|unreadable), ENF_GWJUMP ENF_REPLY
+# ENF_GWDROP (same space), ENF_GWACCEPT ENF_GWMEMBER (present|absent|unreadable|skip —
+# `skip` = not assessable because the gateway is not running with a derivable IP),
+# ENF_RC_JUMP, ENF_RC_DROP (the LAST attempt's status), ENF_READ_FAILED,
+# ENF_READ_RETRIED, ENF_HEAL.
 # Needles: the jump by its target token (so `jump SOLEUR-EGRESS-OLD` does not count), the
 # drop rule and the default-drop log rule by their own comments (the drop comment's closing
-# quote excludes the log rule's "... default drop log").
+# quote excludes the log rule's "... default drop log"), and the two gateway scope rules
+# by their rendered CONTENT against the gateway's live inspect-derived IP — form-only
+# matches would stay green on a ruleset baked against a stale address.
 enforcement_probe() {
   ENF_JUMP=unreadable; ENF_DROP=unreadable; ENF_LOG=unreadable
   ENF_GWJUMP=unreadable; ENF_REPLY=unreadable; ENF_GWDROP=unreadable
   ENF_RC_JUMP=0; ENF_RC_DROP=0; ENF_READ_FAILED=false; ENF_READ_RETRIED=false; ENF_HEAL=false
-  local out_jump="" out_chain="" out_gw="" attempt jump_gone=false drop_gone=false gw_gone=false
+  local out_jump="" out_chain="" out_gw="" enfgw_ip="" gw_rc=0 attempt jump_gone=false drop_gone=false gw_gone=false
   local jump_re='jump[[:space:]]+SOLEUR-EGRESS([[:space:]]|$)'
   # Egress-gateway legs (#9534): the egress0 GW jump (its own needle — the
   # ([[:space:]]|$) boundary keeps `SOLEUR-EGRESS` from matching -GW), the
@@ -534,10 +539,10 @@ enforcement_probe() {
     jump_gone=false; drop_gone=false; gw_gone=false
     ENF_RC_JUMP=0; out_jump="$(nft list chain ip filter DOCKER-USER 2>&1)" || ENF_RC_JUMP=$?
     ENF_RC_DROP=0; out_chain="$(nft list chain ip filter SOLEUR-EGRESS 2>&1)" || ENF_RC_DROP=$?
-    out_gw="$(nft list chain ip filter SOLEUR-EGRESS-GW 2>&1)" || true
+    gw_rc=0; out_gw="$(nft list chain ip filter SOLEUR-EGRESS-GW 2>&1)" || gw_rc=$?
     if (( ENF_RC_JUMP == 1 )) && [[ "$out_jump" == "Error: No such file or directory"* ]]; then jump_gone=true; fi
     if (( ENF_RC_DROP == 1 )) && [[ "$out_chain" == "Error: No such file or directory"* ]]; then drop_gone=true; fi
-    if [[ "$out_gw" == "Error: No such file or directory"* ]]; then gw_gone=true; fi
+    if (( gw_rc == 1 )) && [[ "$out_gw" == "Error: No such file or directory"* ]]; then gw_gone=true; fi
     if { (( ENF_RC_JUMP == 0 )) || [[ "$jump_gone" == true ]]; } && { (( ENF_RC_DROP == 0 )) || [[ "$drop_gone" == true ]]; }; then break; fi
     ENF_READ_RETRIED=true
     if (( attempt == 1 )); then sleep "$sleep_s"; fi
@@ -553,8 +558,10 @@ enforcement_probe() {
     if [[ "$out_chain" == *'comment "soleur-egress: default drop"'* ]]; then ENF_DROP=present; fi
     if [[ "$out_chain" == *'comment "soleur-egress: default drop log"'* ]]; then ENF_LOG=present; fi
   fi
-  ENF_GWDROP=absent
-  if [[ "$out_gw" == *'comment "soleur-egress-gw: deny drop"'* ]]; then ENF_GWDROP=present; fi
+  if (( gw_rc == 0 )) || [[ "$gw_gone" == true ]]; then
+    ENF_GWDROP=absent
+    if [[ "$out_gw" == *'comment "soleur-egress-gw: deny drop"'* ]]; then ENF_GWDROP=present; fi
+  fi
   # #9534 scope check — the two gw rules whose CONTENT decays while every presence
   # marker stays green. The loader bakes them only when it can see the gateway at
   # run time: a loader run during a gw-down window installs the UNSCOPED member
@@ -562,14 +569,28 @@ enforcement_probe() {
   # accept. Result: every upstream dial from the gateway silently dies — CONNECT
   # is accepted by the inbound leg and then hangs until the client's own timeout
   # (measured: egress_gw_probe allow_rc=28 on web-1, 189 consecutive fails —
-  # Sentry issue context carries reason=allow_rc=28 code=000). Checking requires
-  # the gw to be RUNNING: with it down the unscoped drop is the correct
-  # fail-closed posture and asserting on it would heal-loop the host.
+  # Sentry issue context carries reason=allow_rc=28 code=000). The gate mirrors
+  # the LOADER's own bake precondition (running container AND a single inspect-
+  # derived IPv4 — cron-egress-nftables.sh applies the same regex): a gw that is
+  # docker-ps-visible but IP-less bakes unscoped, and a name-only gate here
+  # would heal-loop that state every minute — the same defect class, different
+  # gate definition. The needles bind the LIVE IP, not the scoping's presence:
+  # a ruleset baked against a stale address is the identical silent kill.
+  # Every docker call is timeout-wrapped like the rest of this file — a wedged
+  # dockerd must not cost the whole 120 s tick. With the gw not provably running
+  # the unscoped drop is the correct fail-closed posture and asserting on it
+  # would heal-loop the host (skip). A failed nft read reports `unreadable`,
+  # never `absent` — the failed-read contract above applies to these too.
   ENF_GWACCEPT=skip; ENF_GWMEMBER=skip
-  if grep -qx soleur-egress-gw < <(docker ps --format '{{.Names}}' 2>/dev/null); then
-    ENF_GWACCEPT=absent; ENF_GWMEMBER=absent
-    if [[ "$out_chain" == *'comment "soleur-egress: egress gateway (#9534)"'* ]]; then ENF_GWACCEPT=present; fi
-    if [[ "$out_gw" == *'saddr != '* ]]; then ENF_GWMEMBER=present; fi
+  enfgw_ip="$(timeout 10 docker inspect soleur-egress-gw -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' 2>/dev/null || true)"
+  if [[ "$enfgw_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+    && grep -qx soleur-egress-gw < <(timeout 10 docker ps --format '{{.Names}}' 2>/dev/null); then
+    ENF_GWACCEPT=unreadable; ENF_GWMEMBER=unreadable
+    if (( ENF_RC_DROP == 0 )) || [[ "$drop_gone" == true ]]; then ENF_GWACCEPT=absent; fi
+    if [[ "$out_chain" == *"ip daddr $enfgw_ip tcp dport 8443 accept"* ]] \
+      && [[ "$out_chain" == *'comment "soleur-egress: egress gateway (#9534)"'* ]]; then ENF_GWACCEPT=present; fi
+    if (( gw_rc == 0 )) || [[ "$gw_gone" == true ]]; then ENF_GWMEMBER=absent; fi
+    if [[ "$out_gw" == *"saddr != $enfgw_ip "* ]]; then ENF_GWMEMBER=present; fi
   fi
   if [[ "$ENF_JUMP" == unreadable || "$ENF_DROP" == unreadable ]]; then ENF_READ_FAILED=true; fi
   if [[ "$ENF_JUMP" != present || "$ENF_DROP" != present || "$ENF_LOG" != present \
@@ -614,7 +635,7 @@ enforcement_extra() {
 if [[ "${CRON_EGRESS_FROM_LOADER:-}" != "1" ]]; then
   enforcement_probe
   if [[ "$ENF_HEAL" == true ]]; then
-    log "WARN: enforcement rules missing — re-running loader (self-heal) jump=$ENF_JUMP drop=$ENF_DROP log=$ENF_LOG gwjump=$ENF_GWJUMP reply=$ENF_REPLY gwdrop=$ENF_GWDROP gwaccept=${ENF_GWACCEPT:-?} gwmember=${ENF_GWMEMBER:-?} read_failed=$ENF_READ_FAILED"
+    log "WARN: enforcement rules missing — re-running loader (self-heal) jump=$ENF_JUMP drop=$ENF_DROP log=$ENF_LOG gwjump=$ENF_GWJUMP reply=$ENF_REPLY gwdrop=$ENF_GWDROP gwaccept=${ENF_GWACCEPT:-unknown} gwmember=${ENF_GWMEMBER:-unknown} read_failed=$ENF_READ_FAILED"
     loader_rc=0
     timeout -k 2 60 "$LOADER" || loader_rc=$?
     extra="$(enforcement_extra "$loader_rc")"
@@ -902,7 +923,7 @@ run_egress_gw_probe() {
     log "egress_gw_probe result=skipped reason=budget"
     return 0
   fi
-  if [[ ! -d "$EGRESS_GW_TOKEN_DIR" ]] || ! grep -qx soleur-egress-gw < <(docker ps --format '{{.Names}}'); then
+  if [[ ! -d "$EGRESS_GW_TOKEN_DIR" ]] || ! grep -qx soleur-egress-gw < <(timeout 10 docker ps --format '{{.Names}}'); then
     log "egress_gw_probe result=skipped reason=gw_absent"
     return 0
   fi

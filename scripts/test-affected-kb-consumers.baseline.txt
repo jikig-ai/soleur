@@ -1,12 +1,16 @@
 .claude/hooks/brand-hex-commit-gate.test.sh	knowledge-base/marketing/brand-guide.md
 .claude/hooks/browser-snapshot-credential-guard.test.sh	knowledge-base/project/specs
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/followthrough-convention.md
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/inngest-server.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/brainstorms
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/brainstorms/archive
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/plans
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/specs
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/specs/archive
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/specs/feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh
 .claude/hooks/guardrails.test.sh	knowledge-base
 .claude/hooks/hook-input-contract.test.sh	knowledge-base/project
 .claude/hooks/iac-plan-write-guard.test.sh	knowledge-base/project/plans
@@ -130,6 +134,7 @@ scripts/guard-vacuity-floor	knowledge-base/project/learnings/2026-05-21-dev-supa
 scripts/guard-vacuity-floor	knowledge-base/project/specs/archive
 scripts/inngest-luks-property-8296	knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md
 scripts/inngest-luks-property-8296	knowledge-base/engineering/operations/runbooks/inngest-server.md
+scripts/inngest-probe-heartbeat-feeder	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 scripts/lib/incidents-roots.test.sh	knowledge-base/project
 scripts/lib/inngest-probe-row.test.sh	knowledge-base
 scripts/lib/inngest-probe-row.test.sh	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
@@ -210,6 +215,7 @@ tests/hooks/emissions	knowledge-base/engineering/operations/runbooks
 tests/scripts/betterstack-query-archive	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 tests/scripts/git-data-birth-readiness-gate	knowledge-base/engineering/operations/runbooks/git-data-birth.md
 tests/scripts/git-data-birth-readiness-gate	knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md
+tests/scripts/git-data-birth-readiness-gate	knowledge-base/project/specs
 tests/scripts/git-data-root-token-census	knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md
 tests/scripts/git-data-rung2-evidence-capture	knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md
 tests/scripts/git-data-rung2-evidence-capture	knowledge-base/project/learnings

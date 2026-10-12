@@ -137,8 +137,35 @@ assert_grep "strips/injects Proxy-Authorization" 'Proxy-Authorization' "$FORWARD
 assert_grep "gateway upstream" '8443|soleur-egress-gw' "$FORWARDER"
 
 echo "-- bootstrap: bring-up shape --"
-assert_grep "named bridge" 'com\.docker\.network\.bridge\.name=soleur-egress0' "$BOOTSTRAP"
+assert_grep "named bridge" 'BRIDGE_IF="soleur-egress0"' "$BOOTSTRAP"
+assert_grep "bridge name pinned into create option" 'com\.docker\.network\.bridge\.name="\$BRIDGE_IF"' "$BOOTSTRAP"
 assert_grep "subnet probe (collision-safe)" 'docker network (inspect|ls)' "$BOOTSTRAP"
+# Docker >= 28 drops cross-bridge dials to container IPs at raw-PREROUTING
+# (moby #49325/#49829), killing docker0->gw:8443 before DOCKER-USER can
+# accept it (measured: 1611 dropped SYNs, allow_rc=28 on web-1).
+# nat-unprotected keeps masquerade but omits that drop; our SOLEUR-EGRESS*
+# chains plus the loader's oifname drop are the boundary.
+assert_grep "bridge created nat-unprotected (docker >=28 direct-routing escape)" 'com\.docker\.network\.bridge\.gateway_mode_ipv4=nat-unprotected' "$BOOTSTRAP"
+assert_grep "old-daemon fallback: a second create without the option exists" 'docker network create --subnet="\$SUBNET" \\$' "$BOOTSTRAP"
+N_CREATES="$(grep -c 'docker network create' "$BOOTSTRAP")"
+if [[ "$N_CREATES" -eq 2 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: exactly two create arms (optioned + old-daemon fallback)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: expected exactly 2 'docker network create' sites, found $N_CREATES"
+fi
+assert_grep "post-create mode verify (a wrong-mode create on >=28 dies loud, never silently)" 'require_mode' "$BOOTSTRAP"
+assert_grep "existing bridge mode is inspected (immutable opts need rebuild)" 'index \.Options "com\.docker\.network\.bridge\.gateway_mode_ipv4"' "$BOOTSTRAP"
+assert_grep "rebuild gated on daemon >= 28 (<28 cannot set the mode — unconditional check would tear down every run)" 'SERVER_MAJOR.*-ge 28' "$BOOTSTRAP"
+assert_grep "sanitized version parse (no set -u abort on 'v28'/'4.x-podman' strings)" 'grep -oE .\^\[0-9\]' "$BOOTSTRAP"
+assert_grep "wrong-mode rebuild requires a successful mode inspect (no teardown on inspect blip)" 'MODE_RC == 0' "$BOOTSTRAP"
+assert_grep "foreign endpoints refuse the rebuild BEFORE the gw dies" 'non-gateway endpoints' "$BOOTSTRAP"
+assert_grep "gw container removed before bridge rm" 'docker rm -f "\$GW_NAME"' "$BOOTSTRAP"
+assert_grep "wrong-mode bridge is rebuilt (network rm)" 'docker network rm "\$NET_NAME"' "$BOOTSTRAP"
+assert_grep "network rm retries teardown-lag (rm -f return != endpoint release)" 'until docker network rm' "$BOOTSTRAP"
+assert_grep "image guaranteed local before teardown (registry blip cannot strand the rebuild)" 'docker image inspect "\$IMAGE"' "$BOOTSTRAP"
+assert_grep "post-bring-up liveness assert (apply green == path works)" '/dev/tcp/\$GW_IP/\$GW_PORT' "$BOOTSTRAP"
+assert_grep "rebuild emits a Better Stack-visible event (lands beside the probe stream)" 'egress_gw_bridge action=rebuilt' "$BOOTSTRAP"
+assert_not_grep "gateway_mode is never 'routed' (drops masquerade — gw could not dial upstream)" 'gateway_mode_ipv4="?routed' "$BOOTSTRAP"
 assert_grep "token dir" 'egress-tokens' "$BOOTSTRAP"
 assert_grep "digest-pinned image" '@sha256:' "$BOOTSTRAP"
 assert_grep "journald log driver" 'log-driver.*journald|--log-driver' "$BOOTSTRAP"

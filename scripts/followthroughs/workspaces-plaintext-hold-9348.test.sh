@@ -61,7 +61,7 @@ chmod +x "$STUB"
 NOJQ="$SUITE_TMP/nojq"
 mkdir -p "$NOJQ"
 assert_fixture_dir "$NOJQ"
-printf '#!/bin/sh\nexit 127\n' > "$NOJQ/jq"
+printf '#!/bin/sh\n[ -t 0 ] || timeout 2 cat >/dev/null\nexit 127\n' > "$NOJQ/jq"
 chmod +x "$NOJQ/jq"
 
 CALLS="$SUITE_TMP/calls.log"

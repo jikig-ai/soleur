@@ -24,6 +24,10 @@ export type Arming =
  * the arming line is deleted, i.e. prose alone would satisfy the guard built to kill prose.
  * Matching runs against a COMMENT-STRIPPED view for the same reason.
  *
+ * A `cron` row may instead name a WORKFLOW (`.github/workflows/<x>.yml`) and the `bash scripts/<x>.sh`
+ * line that runs the verifier (ADR-117 amendment 2026-10-11): `checkFeeders` then also requires a
+ * `schedule:` trigger or a `WATCHDOG_DISPATCH_TABLE` row, and that the script exists.
+ *
  * `none` is the honest declaration that nothing pings this heartbeat yet. It is not a loophole: it
  * costs a `tracking_issue`, and the guard asserts the heartbeat has no feeder by EITHER delivery
  * route this repo uses (see `feederDeliveryProbes`).
@@ -314,17 +318,23 @@ export const MANIFEST: ManifestEntry[] = [
     name: "inngest_server_probe",
     // #8516 — the dead-probe sibling of logtail_exploration_alert.inngest_luks_wrong_volume:
     // a pusher beats it only while a fresh host_role=dedicated inngest-server-probe row
-    // reaches the warehouse (hourly emission cadence; period 3600 + grace 1800). DP-10's delivery
-    // shape: born paused with the feeder deliberately deferred — candidate shapes live on #9703.
+    // reaches the warehouse (hourly emission cadence; period 3600 + grace 1800). FED; ARMING PENDING
+    // on #9703: the repo-side verifier (scripts/inngest-probe-heartbeat-feeder.sh) runs from a
+    // clock-dispatched workflow and beats only on a fresh row, but the heartbeat is still born
+    // paused until the operator's separately authorized arming step; `arming_pending` below is the
+    // honest declaration of that window, and the nightly reconcile keeps `fed-but-paused` silent
+    // for it until the record PR removes it.
     arming: "external-probe",
     paused: true,
     feeder: {
-      kind: "none",
-      url_secret: "INNGEST_SERVER_PROBE_HEARTBEAT_URL",
-      tracking_issue: 9703,
+      kind: "cron",
+      evidence: {
+        file: ".github/workflows/scheduled-inngest-probe-heartbeat.yml",
+        pattern: "bash scripts/inngest-probe-heartbeat-feeder.sh",
+      },
     },
     arming_pending: { tracking_issue: 9703 },
     exempt_reason:
-      "the feeder is a repo-side verifier (or a later host-side push) — remediation never requires an inngest-host-replace, precisely because a host push cannot see Vector-allowlist or sink failures (#6780). Not dedicated-host-boot, so ADR-103's replace_target requirement correctly does not fire.",
+      "fed; arming pending on #9703 — the feeder is a repo-side verifier workflow, remediation never requires an inngest-host-replace, precisely because a host push cannot see Vector-allowlist or sink failures (#6780). Not dedicated-host-boot, so ADR-103's replace_target requirement correctly does not fire.",
   },
 ];
