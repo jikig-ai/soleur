@@ -1523,9 +1523,11 @@ jobs:
       # rather than replaced by the fallback text. Known limit: when a LATER, different merge
       # recomputes the same tag, the Release page describes only that latest merge (the
       # release contains both merges' code); the Slack announcement may differ on the no-PR
-      # paths, where it still carries the fallback text. The orphaned run died before any
-      # notify step, so the earlier merge was never announced anywhere either; it is
-      # recoverable from its PR body.
+      # paths, where it still carries the fallback text. The orphaned run never reached the
+      # release-announcement steps (only the failure-gated FAILED/BLOCKED notices, which carry
+      # no changelog, can have fired), so the earlier merge's changelog was never announced; it
+      # is regenerable from that merge's PR body (found via git history) when that run resolved
+      # a PR and the body had a `## Changelog` section.
       - name: Finalise release (publish draft)
         if: >-
           steps.check_changed.outputs.changed == 'true' &&
@@ -1547,7 +1549,7 @@ jobs:
             echo "Published release $TAG (notes_regenerated=true, from this run's PR #$PR_NUMBER)"
           else
             if [ "$DRAFT_EXISTS" = "true" ]; then
-              echo "::warning::Orphaned draft $TAG published with its EXISTING notes: this run resolved no PR (workflow_dispatch / give_up) or had no usable changelog (blank or unreadable)."
+              echo "::warning::Orphaned draft $TAG published with its EXISTING notes: this run resolved no PR (workflow_dispatch / give_up) or had no usable changelog (blank or unreadable); PR_NUMBER=${PR_NUMBER:-<empty>}."
             fi
             gh release edit "$TAG" --draft=false
             echo "Published release $TAG"
