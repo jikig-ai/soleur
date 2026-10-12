@@ -1352,7 +1352,9 @@ BEGIN {
   ANNOT = "::(error|warning|notice)::([^\"\\\\]|\\\\.)*(\"|$)"   # R8: the annotation string, to its closing unescaped quote
   YBLOCK = "(:|(^|[ \t])-)[ \t]*[|>][-+]?[ \t]*$"   # a YAML block-scalar indicator (key: | or - |) ends a line with a bar that is not a pipe
   nw = split("timeout env command nice stdbuf exec builtin", wl, " "); for (i = 1; i <= nw; i++) WRAP[wl[i]] = 1
-  JOINCAP = 50
+  JOINCAP = 50   # a logical line joins at most this many further lines...
+  JOINBYTES = 8192   # ...and stops growing once it is this long (a longer one is read as far as it got, the rest as a line of its own)
+  UNWRAPCAP = 200   # the characters after a bar that unwrap reads: a wrapper chain longer than this names no verb
 }
 function base(p) { sub(/^.*\//, "", p); return p }
 function addsite(v) { nc++; cw[nc] = v; cobs[nc] = o }
@@ -1387,7 +1389,7 @@ function unwrap(str,   n, tk, i, t, w, u) {
 # not; `|&` is). Quote parity of the text before the bar (an even number of unescaped double quotes and of single quotes) keeps a bar inside a string out; a
 # bar followed by a word and a closing parenthesis is a case-pattern alternation (`a|curl) :;;`), not a pipe. The old printf/echo/cat scan stays as a second
 # site source and the two are unioned, so a regression of this arm cannot move the rows the old scan defines.
-function anybar(l,   rest, bs0, p, pos, pc, nx, pre, after, q, nd, ns) {
+function anybar(l,   rest, bs0, p, pos, pc, nx, pre, after, nd, ns) {
   rest = l; bs0 = 0
   while ((p = index(rest, "|")) > 0) {
     pos = bs0 + p; bs0 = pos; rest = substr(l, pos + 1)
@@ -1400,11 +1402,11 @@ function anybar(l,   rest, bs0, p, pos, pc, nx, pre, after, q, nd, ns) {
     if (after ~ /^[A-Za-z_][A-Za-z0-9_.-]*[ \t]*\)/) continue                    # case-pattern alternation
     pre = substr(l, 1, pos - 1); gsub(/\\./, "", pre); nd = gsub(/"/, "", pre); ns = gsub(sq, "", pre)
     if (nd % 2 != 0 || ns % 2 != 0) continue                                      # the bar is inside a string
-    unwrap(after)
+    unwrap(substr(after, 1, UNWRAPCAP))
   }
 }
 # The site scan of ONE logical line of a non-test file: the annotation strip (R8), the pipefail token, and every text pipe on it.
-function site(l,   s, m, w, tl) {
+function site(l,   s, m, rst) {
   if (l ~ /^[ \t]*#/) return
   if (index(l, "::")) gsub(ANNOT, "", l)   # an annotation echo shows the operator a command: its text is not a pipe, a pipe BEFORE it or AFTER its string still is
   if (index(l, "pipefail")) pf = 1
@@ -1419,9 +1421,16 @@ function site(l,   s, m, w, tl) {
       sub(/^.*\|[ \t]*/, "", m)
       if (m ~ /^sudo[ \t]+(-[A-Za-z0-9_]+[ \t]+)*[A-Za-z_]/) sub(/^sudo[ \t]+(-[A-Za-z0-9_]+[ \t]+)*/, "", m)
       addsite(m)
-      if ((m in WRAP) || substr(s, 1, 1) == "=") { tl = s; sub(/\|.*$/, "", tl); unwrap(m tl) }
+      if ((m in WRAP) || substr(s, 1, 1) == "=") { rst = s; sub(/\|.*$/, "", rst); unwrap(substr(m rst, 1, UNWRAPCAP)) }
     }
   }
+}
+# R5b: the loop list keeps its finished entries until no loop is active, so a file of loops each begun within 15 lines of the last would grow it without end and
+# loopchk would walk it on every line. At 32 entries the finished ones are dropped (at most 15 can be active); nothing a live entry reads moves.
+function lcompact(   k, j) {
+  j = 0
+  for (k = 1; k <= nlp; k++) if (ll[k] > 0) { j++; if (j != k) { lw[j] = lw[k]; ll[j] = ll[k]; lre1[j] = lre1[k]; lre2[j] = lre2[k] } }
+  nlp = j
 }
 # R5b: a stub built in a loop over verb names. The body is the next 15 lines up to a `done` at column 0; when a line of it writes a file named by
 # the loop variable (or calls a stub helper with it), every bare lowercase word of the loop list is a stub of the suite.
@@ -1447,7 +1456,7 @@ function feed(raw,   t, s, q, nd, ns) {
   if (hold) { t = raw; sub(/^[ \t]+/, "", t); cur = cur " " t; hn++ } else { cur = raw; hn = 0 }
   hold = 0
   t = substr(cur, length(cur), 1)
-  if (hn < JOINCAP && (t == "\\" || t == "|" || t == " " || t == "\t" || t == "\r") && cur !~ /^[ \t]*#/) {   # only a line whose last character can end in a backslash or a bar is looked at
+  if (hn < JOINCAP && length(cur) < JOINBYTES && (t == "\\" || t == "|" || t == " " || t == "\t" || t == "\r") && cur !~ /^[ \t]*#/) {   # only a line whose last character can end in a backslash or a bar is looked at
     s = cur; sub(/[ \t\r]+$/, "", s)
     if (s ~ /\\$/ && s !~ /\\\\$/) { cur = substr(s, 1, length(s) - 1); hold = 1; hbar = 0 }
     else if (s ~ /\|$/ && s !~ /\|\|$/ && s !~ YBLOCK) {
@@ -1518,7 +1527,8 @@ FNR == 1 {
     if (match(rest, /;[ \t]*do([^A-Za-z0-9_]|$)/)) rest = substr(rest, 1, RSTART - 1)
     sub(/;[ \t]*$/, "", rest)
     if (lact == 0) nlp = 0
-    nlp++; lact++; lv[nlp] = v; lw[nlp] = rest; ll[nlp] = 15
+    if (nlp >= 32) lcompact()
+    nlp++; lact++; lw[nlp] = rest; ll[nlp] = 15
     lre1[nlp] = "(cat|printf)[^|]*>>?[ \t]*\"?[^ \"]*/(\\$" v "([^A-Za-z0-9_]|$)|\\$\\{" v "\\})"
     lre2[nlp] = "^[ \t]*(make_stub|write_stub|stub_cmd|mkstub|stub)([^A-Za-z0-9_]|$)[^|]*\\$" v "([^A-Za-z0-9_]|$)"
   }
@@ -1576,7 +1586,8 @@ pj_derive() { local listing="$1"; shift; LC_ALL=C awk -v exts="$PJ_EXTS_RE" "$PJ
 # pj_join_pairs -> "<test file>\t<verb>\t<non-test file>" per derived pair x producer, unsorted. Tracked files only, so an untracked
 # scratch file cannot move the set. rc 0 whatever it derives; the caller treats an empty result as UNRESOLVED. One awk run over one
 # `git ls-files` listing, one token set per test file; the cheap `index` tests in front of each regex keep it to a few seconds (it reads about 42 MB;
-# measured 1.5 s CPU on an idle host, 5 s under load). LC_ALL=C: no locale-dependent classes, and one tracked fixture holds invalid UTF-8.
+# measured 4.4 to 5.5 s of user CPU at origin/main and 6.1 to 7.9 s at this head under load, S7c review performance seat). LC_ALL=C: no locale-dependent
+# classes, and one tracked fixture holds invalid UTF-8.
 pj_join_pairs() {
   local -a pj_files=() pj_spec=()
   local f e
@@ -1826,6 +1837,14 @@ mkdir -p "$probe/pj"
 # not); a file spec writes `text` to `name/file` flat in the case's own directory. The text is a bash $'...' string, so a case line never starts at
 # column 0 or with a stub opener, and the placeholders {GT} (a redirect) and {H} (a stub helper) keep this file from reading as a stub itself.
 # Every arm of the derivation has a case that must derive and a case that must not; a new case is one table line and moves no pin.
+# Generated fixture text for the three bounds of the derivation (no literal of this size in the table): a wrapper chain longer than UNWRAPCAP characters, a joined
+# line longer than JOINBYTES, and more loops than the loop list holds before it drops the finished ones.
+_pj_asg_long=''; for ((_i = 0; _i < 60; _i++)); do _pj_asg_long+='A=1 '; done      # 240 characters
+_pj_asg_short=''; for ((_i = 0; _i < 25; _i++)); do _pj_asg_short+='A=1 '; done    # 100 characters
+printf -v _pj_pad_big '%9000s' ''; _pj_pad_big="${_pj_pad_big// /a}"               # over JOINBYTES (8192)
+printf -v _pj_pad_small '%100s' ''; _pj_pad_small="${_pj_pad_small// /a}"
+# 29 loops, then the one that names the verb, then 5 more: the 33rd loop start drops the finished entries while the verb's loop is still live and moves it
+_pj_loops=''; for ((_i = 1; _i <= 35; _i++)); do if (( _i == 30 )); then _pj_loops+=$'for vkey in curl; do\n'; else _pj_loops+="for v$_i in zz; do"$'\n'; fi; done
 PJ_CASES=(
   $'base-printf @@ y:curl @@ fxprod.sh=set -o pipefail\nprintf x | curl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
   $'base-comment @@ n:curl @@ fxprod.sh=set -o pipefail\n# printf x | curl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
@@ -1881,6 +1900,11 @@ PJ_CASES=(
   $'command-v-any @@ n:curl @@ fxprod.sh=set -o pipefail\nfoo x | command -v curl\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
   $'yaml-list-block-scalar @@ n:curl @@ fxprod.yml=runcmd:\n  - set -o pipefail\n  - |\n    curl -K - x\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.yml\n'
   $'tf-producer @@ y:curl @@ fxprod.tf=resource "x" "y" {\n  command = <<-EOT\n    set -o pipefail\n    printf x | curl -K -\n  EOT\n}\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.tf\n'
+  $'wrapcap-under @@ y:curl @@ fxprod.sh=set -o pipefail\nprintf x | env '"$_pj_asg_short"$'curl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'wrapcap-over @@ n:curl @@ fxprod.sh=set -o pipefail\nprintf x | env '"$_pj_asg_long"$'curl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'joinbytes-under @@ n:curl @@ fxprod.sh=set -o pipefail\nprintf x | curl -K - \\\n  '"$_pj_pad_small"$' \\\n  || true\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'joinbytes-over @@ y:curl @@ fxprod.sh=set -o pipefail\nprintf x | curl -K - \\\n  '"$_pj_pad_big"$' \\\n  || true\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'loop-many @@ y:curl @@ fxprod.sh=set -o pipefail\nprintf x | curl -K -\n @@ fxa.test.sh='"$_pj_loops"$'  printf x {GT} "$d/$vkey"\ndone\nbash fxprod.sh\n'
   $'tf-no-pipefail @@ n:curl @@ fxprod.tf=resource "x" "y" {\n  command = <<-EOT\n    printf x | curl -K -\n  EOT\n}\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.tf\n'
 )
 # pj_split <string>: split on ` @@ ` into the array _pj_f
