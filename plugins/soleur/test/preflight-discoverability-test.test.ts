@@ -2940,7 +2940,13 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // kdeny bundle's live content has no unauthenticated read path. NO SUBSTITUTE: the grant's host-side
   // effectiveness (sudo policy accept) is asserted by the terraform_data execute probes at apply time,
   // not repo-readable — the warehouse query is the only observable of the post-apply src=journal arm. Genuine.
-  const BASELINE_DECLARED_PROBES = 64;
+  // #10003 (2026-10-12): +1 (64 -> 65) for `2026-10-12-fix-egress-gw-tcp-open-bounded-retry-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`scripts/betterstack-query.sh --since 1h --grep egress_gw_probe`) reads
+  // BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler soleur/prd_terraform). NO SUBSTITUTE: the property is the
+  // per-host `egress_gw_probe result=ok` row (journald -> vector -> the Logs warehouse), which has no
+  // unauthenticated read path; the host itself is no-SSH. Genuine.
+  const BASELINE_DECLARED_PROBES = 65;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

@@ -869,7 +869,7 @@ PROMOTED_FILES='^(\.claude/hooks/hook-suite-dep-unresolved\.test\.sh|\.claude/ho
 # qualifies: the floor is `-lt` over an independent verdict count (`$((PASS + FAIL))` /
 # `$((PASS + FAIL + DRIFT))`, counters incremented inside the helpers the floor backstops), emitted
 # by `printf`/`echo >&2` + `exit 1`/`exit 2` and never routed through a verdict it backstops
-# (ADR-193), and the bound (`30` / `3`) is a literal inside the `if`, so the mutant is
+# (ADR-193), and the bound (egress-gateway `118` since the poll suite landed, staleness `3`) is a literal inside the `if`, so the mutant is
 # CONSTRUCTIBLE and a neutered verdict machinery drives the count to 0 and FIRES.
 # `web-private-nic-guard.test.sh` and `cron-egress-enforce-probe.test.sh` gained their first anti-vacuity
 # floors in the #9632 review (credential hardening of the NIC guard and the egress probe). PROMOTED, not
