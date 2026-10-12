@@ -317,6 +317,7 @@
 1	plugins/soleur/skills/provision-cloudflare/scripts/provision-cloudflare.sh
 1	plugins/soleur/skills/provision-doppler/scripts/provision-doppler.sh
 1	plugins/soleur/skills/provision-github/scripts/provision-github.sh
+1	plugins/soleur/skills/review/test/ensure-semgrep.test.sh
 3	plugins/soleur/skills/skill-security-scan/scripts/run-scan.sh
 1	plugins/soleur/skills/skill-security-scan/scripts/run-self-test.sh
 3	plugins/soleur/test/ci-head-verdict.test.sh
