@@ -116,9 +116,9 @@ rm -rf "$_st"
 printf '\n=== htpasswd-stdin (the -i password-on-stdin form, real binary) ===\n\n'
 
 # ── PIN ROWS ─────────────────────────────────────────────────────────────────────────
-if printf '%s' "$UBUNTU_BASE" | grep -qE '^ubuntu:24\.04@sha256:[0-9a-f]{64}$'; then pass "P1: the ubuntu image is a tag@sha256:<64-hex> pin"
+if grep -qE '^ubuntu:24\.04@sha256:[0-9a-f]{64}$' <<<"$UBUNTU_BASE"; then pass "P1: the ubuntu image is a tag@sha256:<64-hex> pin"
 else fail "P1: UBUNTU_BASE is not a tag@sha256:<64-hex> pin" "$UBUNTU_BASE"; fi
-if printf '%s' "$HTTPD_IMAGE" | grep -qE '^httpd:2\.4-alpine@sha256:[0-9a-f]{64}$'; then pass "P2: the httpd image is a tag@sha256:<64-hex> pin"
+if grep -qE '^httpd:2\.4-alpine@sha256:[0-9a-f]{64}$' <<<"$HTTPD_IMAGE"; then pass "P2: the httpd image is a tag@sha256:<64-hex> pin"
 else fail "P2: HTTPD_IMAGE is not a tag@sha256:<64-hex> pin" "$HTTPD_IMAGE"; fi
 
 # ── DOCKER GATE (fail closed under CI) ───────────────────────────────────────────────
@@ -246,11 +246,11 @@ fi
 # ── FLOOR + LEDGER ───────────────────────────────────────────────────────────────────
 # Skipped rows count toward the floor (they were DECLARED), never toward passes. Reported with printf + exit
 # INSIDE this block, never through pass()/fail(): a neutered helper cannot disarm it.
-_ran=$((passes + fails + SKIPPED))
 if [ "$DECLARED_ROWS" -ne "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: the declared row count is %s but the floor literal is %s — raise both in one edit.\n' "$DECLARED_ROWS" "$FLOOR" >&2
   exit 1
 fi
+_ran=$((passes + fails + ${SKIPPED:-0}))   # ${SKIPPED:-0}: SKIPPED moves by N rows, not +1, so the vacuity meta-guard cannot zero it, and the default keeps its mutant bound
 if [ "$_ran" -lt 22 ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran/declared, floor is 22 — arms were deleted, skipped, or the suite exited early.\n' "$_ran" >&2
   exit 1

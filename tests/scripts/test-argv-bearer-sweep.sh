@@ -6551,8 +6551,8 @@ cat > "$S6/bin/docker" <<STUB_EOF
 # A real docker forwards no stdin without -i; the stub models that by refusing the call outright.
 set -u
 L="\${S6_LOG:?}"
+pw="\$(cat)"   # drain first, on every arm: a refusing arm that exits unread would make the producer's printf take SIGPIPE/EPIPE under pipefail
 if [[ \$# -eq 7 && "\$1" == run && "\$2" == --rm && "\$3" == -i && "\$4" == httpd:2.4-alpine && "\$5" == htpasswd && "\$6" == -Bin && -n "\$7" && "\$7" != -* ]]; then
-  pw="\$(cat)"
   if [[ -z "\$pw" ]]; then printf 'refused-empty-stdin\n' >> "\$L/refusals"; exit 64; fi
   printf '%s\n' "\$7" > "\$L/user"
   printf '%s' "\$pw" | sha256sum | cut -d' ' -f1 > "\$L/stdin.sha"

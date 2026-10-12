@@ -1145,14 +1145,13 @@ eqv_sh="$(_eqv "$EQV_SH")"
 # derivation is AUTHORITATIVE; j0-derive.py in the spec directory is a point-in-time measurement of the base commit.
 PJ_DRAIN_WINDOW=4
 PJ_ALL="$(git ls-files)"
-PJ_TRIPLES=120   # recomputed below from a green run: the number of distinct (test file, verb, producer file) triples
+PJ_TRIPLES=123   # recomputed below from a green run: the number of distinct (test file, verb, producer file) triples
 PJ_VOCAB=' not-a-command text-only unverified helper-built-stub variable-named-verb pass-through deliberate-fault arm-drain '
 PRODUCER_JOIN=(
   '.claude/hooks/grep-rewrite.test.sh | jq | drains | 2 | *'
   'apps/cla-evidence/scripts/bootstrap-r2-probe.test.sh | doppler | drains | 1 | *'
   'apps/web-platform/infra/ci-deploy.test.sh | curl | exempt | text-only derived sites cloud-init-inngest.yml:336,426 are grep-pinned only; ci-deploy.sh:378 feeds --config - via < <(printf) not a pipe'
   'apps/web-platform/infra/ci-deploy.test.sh | docker | drains | 2 | --password-stdin'
-  'apps/web-platform/infra/ci-deploy.test.sh | openssl | exempt | text-only derived sites scripts/cutover-inngest.sh:1372,1546 not executed here; fan_out no longer calls openssl'
   'apps/web-platform/infra/ci-deploy.test.sh | rc | exempt | not-a-command rc is a variable written by printf > $d/rc, no stub exists'
   'apps/web-platform/infra/ci-deploy.test.sh | tr | exempt | deliberate-fault stub exits 3 on purpose; pipeline status is the second tr, decided by the stub, not by a write race'
   'apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh | docker | exempt | blocked-#9956 suite red at origin/main'
@@ -1212,6 +1211,7 @@ PRODUCER_JOIN=(
   'scripts/rotate-supabase-db-credential.test.sh | doppler | drains | 1 | secrets set'
   'scripts/sweep-followthroughs.test.sh | gh | drains | 5 | --body-file -'
   'scripts/watch-registration-narrowing-9564.test.sh | gh | exempt | arm-drain the issue comment arm reads stdin in both branches before exit; keyed on the subcommand'
+  'tests/scripts/test-argv-bearer-sweep.sh | docker | drains | 1 | *'
   'tests/scripts/test-argv-bearer-sweep.sh | jq | exempt | pass-through shim records argv then execs the real jq on every path'
   'tests/scripts/test-git-data-birth-readiness-gate.sh | grep | exempt | pass-through shim execs the real grep; its exit-2 fault arm is reached only through a here-string since #9210, so no pipe reaches it'
 )
