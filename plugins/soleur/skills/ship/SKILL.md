@@ -1101,7 +1101,7 @@ Verify with the no-host-login status hook (per `hr-no-ssh-fallback-in-runbooks` 
 WEBHOOK_SECRET=$(doppler secrets get WEBHOOK_DEPLOY_SECRET -p soleur -c prd_terraform --plain)
 CF_ACCESS_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID -p soleur -c prd_terraform --plain)
 CF_ACCESS_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET -p soleur -c prd_terraform --plain)
-HMAC=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+HMAC=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')
 curl -fsS -H "X-Signature-256: sha256=${HMAC}" \
   -H "CF-Access-Client-Id: ${CF_ACCESS_ID}" \
   -H "CF-Access-Client-Secret: ${CF_ACCESS_SECRET}" \
