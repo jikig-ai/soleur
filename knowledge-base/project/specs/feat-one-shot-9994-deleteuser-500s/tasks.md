@@ -68,6 +68,18 @@ Issue: #9994 · tracker: #9993 (reference only, never close).
   (`test/*.integration.test.ts`, `test/helpers/*.ts`) drove the offender assertion
   RED with the correct named file; files removed after the run.
 
+## Phase 5c — CI ledger-parity reconcile (tenant-integration leg)
+
+An earlier PR CI run had applied the PRE-hardening 160 file to dev under
+`ALLOW_UNMERGED_DEV_APPLY` and ledgered it (blob 946d9067). The hardened file
+(blob 801cecdb) then tripped `dev-ledger-parity`: "runner never re-applies a
+ledgered filename." Resolution per the guard's own prescription: dispatched
+`dev-ledger-reconcile.yml` dry-run (`eligible=1 down=1`) then `execute=true` —
+discarded the stale ledger row and applied the paired `.down.sql` (function
+reverted to the 087 body on dev). The re-run's apply step restores the current
+file + fresh ledger row; the live function post-merge = file body + recorded
+sha, consistent end-to-end.
+
 ## Phase 5b — Scope expansion discovered at work time (operator-approved)
 
 The dsar-export leg surfaced two defects invisible at plan time:
