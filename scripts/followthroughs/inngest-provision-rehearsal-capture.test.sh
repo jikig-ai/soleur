@@ -254,7 +254,7 @@ rows "$TMP/r-postdegraded.json" "$NOW" \
 run "post-reboot FAIL: bootstrap-done-DEGRADED after the boundary is still provision re-entry" 1 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-postdegraded.json" -- "${BASE_ARGS[@]}" --mode post-reboot --reboot-since "2026-06-01T00:00:00"
 
-# ── #9939 forbidden-row arms: `Failed to start inngest-luks*` is a VIOLATION in every mode ──
+# ── #9939+#9962 forbidden-row arms: `Failed to start <tracked-unit>*` is a VIOLATION in every mode ──
 # A LUKS unit start attempted before its EnvironmentFile= files existed is the benign ordering
 # noise #9939 removes; the evidence artifact must FAIL on it, not merely carry it. These rows
 # are journald/systemd text — they carry no stage= field — and they ride the same host filter
@@ -298,10 +298,11 @@ rows "$TMP/r-luksfp.json" "$NOW" \
 run "phase-a PASS: the needle text inside a non-systemd (webhook) row is not a LUKS failure" 0 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-luksfp.json" -- "${BASE_ARGS[@]}" --mode phase-a
 
-# ── #9962: the needle widens to the shared `inngest` prefix — the conditioned units now
-# include the flip pair, provision, heartbeat, vector and server; their storm rows carry
-# `Failed to start inngest-<non-luks>` which the old `-luks` needle could not see. Same
-# systemd-row scoping: SYSLOG_IDENTIFIER=systemd or the anchored `"UNIT"`/`UNIT=` field
+# ── #9962: the needle widens to `Failed to start (inngest|vector|soleur-inngest)` — the
+# conditioned units now include the flip pair, provision, heartbeat, vector and server, and a
+# bare `inngest` prefix is blind to `Failed to start vector.service` /
+# `soleur-inngest-provision.service` (journald text is unit-name-first). Same systemd-row
+# scoping: SYSLOG_IDENTIFIER=systemd or the anchored `"UNIT"`/`UNIT=` field
 # (anchored so the doppler row's `_SYSTEMD_UNIT` field name cannot match).
 rows "$TMP/r-flipfail.json" "$NOW" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=provision-unit-armed detail=iid=abc123 \"host\":\"${HOST}\"" \
@@ -375,7 +376,7 @@ run "phase-a PASS under --since: a prior life's rows are excluded by the bound" 
 # initializes counters (`X=$((X+1))` increments) but not the FAILURES array — a floor on
 # `${#FAILURES[@]}` dies unbound under set -u and scores CONSTRUCTION, not FIRES. And MIN
 # must sit ADJACENT to the `if` — the mutant builder's walk-back stops at any comment.
-MIN=31
+MIN=36
 if (( passes + fails < MIN )); then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$((passes + fails))" "$MIN" >&2
   exit 1

@@ -452,6 +452,11 @@ def cmd_static(render):
         bool(cpath) and len(writes) >= 1, "condition=%s writes=%d" % (cond, len(writes)))
     chk("G3: exactly one latch write site (spellings normalized: : >, >, N>, &>, exec N>, tee, touch, install, cp, mv, ln, mkdir, dd of=, $VAR and \"$VAR\"/x)",
         len(writes) == 1, "found %d" % len(writes))
+    # Additive-hole guard (#9962 review): an UNNEGATED condition naming the latch path beside
+    # the `!` one would deadlock the unit permanently (start iff its own product exists) while
+    # every latch-shaped check above stays green — the `!` filter selects it away.
+    chk("G3: no unnegated ConditionPathExists names the latch path (permanent deadlock class)",
+        not [c for c in cond if not c.startswith("!") and npath(c) == cpath], "cond=%s" % cond)
     sd = vals(ssec, "Service", "StateDirectory")
     chk("G3: StateDirectory=soleur-inngest-provision (root disk, survives a reboot)", sd == ["soleur-inngest-provision"], "got %s" % sd)
     chk("G3: the latch path sits under /var/lib/soleur-inngest-provision/ (not tmpfs)", cpath.startswith(STATE_DIR + "/"), cpath)
@@ -1022,7 +1027,7 @@ echo "  C0: $C0_PASS assertions, all PASS"
 # EXACT, not a floor with slack: the control's assertion inventory is fixed by this file, so a
 # count that drifts (an assertion deleted, a scenario silently not run) is itself a RED. Bump it in
 # the same edit that adds an assertion.
-C0_EXPECTED=161
+C0_EXPECTED=162
 [ "$C0_PASS" -eq "$C0_EXPECTED" ] || { echo "  FAIL: C0 anti-vacuity — $C0_PASS assertions ran, the inventory is exactly $C0_EXPECTED"; exit 1; }
 
 # =================================================================================================

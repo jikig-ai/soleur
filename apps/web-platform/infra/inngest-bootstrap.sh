@@ -3,7 +3,9 @@
 #
 # Idempotent contract:
 #   - Downloads pinned inngest-cli, SHA256-verifies, installs to /usr/local/bin.
-#   - Writes systemd units for inngest-server.service + inngest-heartbeat.{service,timer}.
+#   - Writes systemd units for inngest-server.service, inngest-heartbeat.{service,timer},
+#     inngest-heartbeat-failure-log.service, inngest-server-probe.{service,timer}, and
+#     vector.service; stages the flip + LUKS cutover units from the image's /tmp payload.
 #   - On second invocation with the SAME version, short-circuits via
 #     `systemctl is-active` + version match.
 #   - On version bump: a DRAIN_SLEEP_SEC settle delay, then binary replace, then
@@ -369,8 +371,11 @@ OnFailure=inngest-heartbeat-failure-log.service
 # the 60s timer fires from boot — an absent file must SKIP the start (one "skipped, unmet
 # condition check" notice), never FAIL it into the every-60s storm + OnFailure ERR rows. The
 # EnvironmentFile= line stays unprefixed: once a start IS attempted, an absent file still fails
-# the unit — the fail-closed contract is retained. A skipped heartbeat is a MISSING heartbeat —
-# the Better Stack missing-marker alert is the designed detector for that state.
+# the unit — the fail-closed contract is retained. A skipped heartbeat is a MISSING heartbeat:
+# on this host the designed-dark signal is the web-1-fed inngest_consumer beat (the
+# missing-ping monitor pings nothing only while a beat never landed — the dark arm means that
+# alarm's arm state is an operator-runbook step, so the consumer beat is the channel that
+# pages either way).
 ConditionPathExists=/etc/default/inngest-server
 
 [Service]
@@ -490,7 +495,9 @@ cat > "$HEARTBEAT_TIMER" <<'TIMEREOF'
 [Unit]
 Description=Run Inngest heartbeat every 60s
 # SKIP-VS-FAIL (#9962): a condition on the TIMER is evaluated at activation — an abort-host
-# never arms the 60s tick against a missing /etc/default/inngest-server at all.
+# never arms the 60s tick against a missing /etc/default/inngest-server at all. A timer skipped
+# this way stays unarmed for the boot's life (systemd does not re-evaluate); re-entry is the
+# bootstrap `enable --now` on the next provision run or a reboot with the file present.
 ConditionPathExists=/etc/default/inngest-server
 
 [Timer]
@@ -1561,8 +1568,12 @@ Wants=network-online.target
 # on an aborted first boot a missing file must SKIP the start, never FAIL it into the
 # RestartSec=5 crash-loop storm. The EnvironmentFile= line stays unprefixed: once a start IS
 # attempted, an absent file still fails the unit — the fail-closed contract is retained.
-# A skipped server is a DARK server: the heartbeat + control-plane probes are the designed
-# detection for a missing production server.
+# A skipped server is a DARK server — the designed off-box detectors are the web-1-fed
+# betteruptime_heartbeat.inngest_consumer beat (armed; dies in ~4 min when the dedicated host
+# stops serving) and the inngest-server-probe unit (its EnvironmentFile is `-`-tolerant, so the
+# probe itself still runs). NOT the heartbeat — it is conditioned on this same file and skips
+# too (review finding: the earlier claim credited the heartbeat, which co-dies in exactly the
+# scenario the condition covers).
 ConditionPathExists=/etc/default/inngest-server
 
 [Service]

@@ -307,9 +307,14 @@ count_inngest_failed() {
   # The BOOT_STAGE exclusion is the embedded-journalctl guard (review P2): post-boot-health
   # rows carry `journalctl -u ... -n` output verbatim in jl=, which can embed a PRIOR life's
   # `systemd[N]: Failed to start` text into a current-life row — a real systemd failure row
-  # never carries the SOLEUR_INNGEST_BOOT_STAGE marker. A residual remains: a non-systemd,
-  # non-BOOT_STAGE row embedding journal-shaped text could still trip both filters — errs
-  # toward VIOLATION, which is the honest direction for an evidence artifact.
+  # never carries the SOLEUR_INNGEST_BOOT_STAGE marker. Two residuals remain: (1) a
+  # non-systemd, non-BOOT_STAGE row embedding journal-shaped text could still trip both
+  # filters — errs toward VIOLATION, which is the honest direction for an evidence artifact;
+  # (2) the SAME exclusion drops a real current-life failure whose only shipped copy is
+  # embedded journal text inside a BOOT_STAGE row — errs toward silence in exactly the
+  # dark-journald state `bootstrap-failure-journal` exists for. That loss is bounded: a
+  # genuinely failed unit emits no `bootstrap-done`, so the mode markers still gate the
+  # verdict to TRANSIENT rather than false-PASS.
   printf '%s\n' "$1" |
     grep -v 'SOLEUR_INNGEST_BOOT_STAGE' |
     grep -E 'Failed to start (inngest|vector|soleur-inngest)' |

@@ -9,7 +9,7 @@
 - [x] 1.6 `inngest-redis.service` — deliberately-loud comment
 
 ## Phase 2 — needle
-- [x] 2.1 capture.sh: `Failed to start inngest-luks` → `Failed to start inngest`; UNIT arm `inngest-luks` → `[="]UNIT.{0,12}inngest`; rename count_/check_ functions + strings
+- [x] 2.1 capture.sh: `Failed to start inngest-luks` → `Failed to start (inngest|vector|soleur-inngest)`; UNIT arm `inngest-luks` → `[="]UNIT.{0,12}(inngest|vector|soleur-inngest)`; BOOT_STAGE rows excluded (embedded-journalctl FP); rename count_/check_ functions + strings
 - [x] 2.2 capture.test.sh: fixtures for `inngest-cutover-flip.service` + `inngest-server.service` forbidden rows; FP control row still green
 
 ## Phase 3 — suite rows

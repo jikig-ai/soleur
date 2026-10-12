@@ -9,7 +9,7 @@ review — panel spawning at 2200469734
   on late-runcmd files with early-boot activation (census beyond the issue's
   named three, per write-boundary sweep).
 - inngest-redis: deliberately loud (RequiresMountsFor is its designed signal).
-- Needle: `Failed to start inngest` shared prefix + `[="]UNIT` anchored scope
+- Needle: `Failed to start (inngest|vector|soleur-inngest)` name-group + `[="]UNIT` anchored scope (a bare `inngest` prefix is blind to `vector.service`/`soleur-inngest-provision.service` — journald text is unit-name-first) + BOOT_STAGE-row exclusion
   arm (doppler `_SYSTEMD_UNIT` field cannot launder).
 - GuardA carrier drift is the sanctioned red window (precedent: #9944 →
   #10027); green returns on the next vinngest tag + pin bump.

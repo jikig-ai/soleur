@@ -14,7 +14,7 @@ calibration).
 | Unit | File | Activation | Storm shape | Disposition |
 |---|---|---|---|---|
 | inngest-cutover-flip.service | `/etc/default/inngest-server` | timer 30s, `Persistent` | `Failed to start` every 30s | CONDITION (service + timer) |
-| soleur-inngest-provision.service | `/etc/default/inngest-doppler` | boot re-entry timer + `start --no-block` | `Restart=on-failure` ×4 @120s | CONDITION (service; timer stays — its own condition already arms) |
+| soleur-inngest-provision.service | `/etc/default/inngest-doppler` | boot re-entry timer + `start --no-block` | `Restart=on-failure` ×4 @120s | CONDITION (service; its OnBootSec-only timer carries no condition — fires the service once per boot, one skip notice, no storm) |
 | inngest-heartbeat.service (bootstrap.sh) | `/etc/default/inngest-server` | timer 60s | same + `OnFailure` ERR rows | CONDITION (service + timer) |
 | vector.service (bootstrap.sh) | `/etc/default/inngest-server` | `WantedBy` boot + `RestartSec=10` | crash-loop | CONDITION (service) |
 | inngest-server.service (bootstrap.sh) | `/etc/default/inngest-server` | `WantedBy` boot + `RestartSec=5` | crash-loop (worst) | CONDITION (service) |
@@ -36,7 +36,7 @@ post-latch). For inngest-server specifically the consumer beat is the channel.
 
 ## Needle widening
 
-`Failed to start inngest-luks` → `Failed to start inngest` (shared prefix —
+`Failed to start inngest-luks` → `Failed to start (inngest|vector|soleur-inngest)` (name group —
 sees flip/heartbeat/vector/server/redis rows). The systemd-row scope arm
 `UNIT.{0,12}inngest-luks` → `UNIT.{0,12}inngest` would match the FP control
 row's `"_SYSTEMD_UNIT":"inngest-server.service"` — anchor it `[="]UNIT` so the
@@ -57,6 +57,6 @@ row's `"_SYSTEMD_UNIT":"inngest-server.service"` — anchor it `[="]UNIT` so the
 
 - AC-1: every conditioned unit carries `ConditionPathExists=<env-file>` in `[Unit]` exactly once; its `[Service]` `EnvironmentFile=` stays unprefixed; the path-set equality assertion shape (conditions ≡ envfiles) holds per unit, including the flip + heartbeat timers.
 - AC-2: `inngest-redis.service` carries no condition + a comment naming the deliberately-loud disposition.
-- AC-3: the capture's forbidden-row check counts a `Failed to start inngest*` row for any inngest unit and still rejects the doppler-tagged FP control row; function names say `inngest`, not `luks`.
+- AC-3: the capture's forbidden-row check counts a `Failed to start` row for any tracked unit (inngest-*, vector, soleur-inngest-provision) and still rejects the doppler-tagged FP control row; function names say `inngest`, not `luks`.
 - AC-4: `bash inngest.test.sh`, `inngest-provision-rehearsal-capture.test.sh`, `cloud-init-inngest-provision-unit.test.sh`, `inngest-redis-luks.test.sh`, `inngest-server-flip-guard.test.sh` green; provision-unit G4's "EnvironmentFile exactly once, no `-`" assertion still holds.
 - AC-5: mutation — drop the condition from any one conditioned unit → the corresponding assert row goes RED.
