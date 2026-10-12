@@ -231,14 +231,17 @@ explain the storm rows.
    trap. Cross-link #9963/#6551/#8875.
 2. **Emit `SOLEUR_SYSTEMD_JOURNALD_CONTROL`** once per
    `inngest-server-probe.timer` fire (hourly) inside the probe script heredoc
-   in `inngest-bootstrap.sh`, next to the existing unconditional
-   `SOLEUR_INNGEST_SERVER_PROBE` emit:
-   `logger -t systemd -p err "SOLEUR_SYSTEMD_JOURNALD_CONTROL host=$(hostname -s) ts=$(date -u +%s) — rides the inngest_journald PRIORITY≤4 admission arm (#9963)"`.
-   The spoofed tag is deliberate and load-bearing: consumers discriminate real
-   failure rows by `"SYSLOG_IDENTIFIER":"systemd"`, so the control must prove
-   THAT field shape transits (a different tag would prove a different arm).
-   `_COMM=logger`, `_TRANSPORT=syslog`, and the marker keep it trivially
-   distinguishable from PID-1 rows.
+   in `inngest-bootstrap.sh`, placed **immediately after** the unconditional
+   `SOLEUR_INNGEST_SERVER_PROBE` emit (:1211, "NO `if` may precede this line"
+   — the control emit must be equally unconditional):
+   `/usr/bin/logger -t systemd -p err "SOLEUR_SYSTEMD_JOURNALD_CONTROL ts=$(date -u +%s) — rides the inngest_journald PRIORITY≤4 admission arm (#9963)"`.
+   Journald stamps `host` itself; the marker + ts suffice. The spoofed tag is
+   deliberate and load-bearing: consumers discriminate real failure rows by
+   `"SYSLOG_IDENTIFIER":"systemd"`, so the control must prove THAT field shape
+   transits (a different tag would prove a different arm). `_COMM=logger`,
+   `_TRANSPORT=syslog`, and the marker keep it trivially distinguishable from
+   PID-1 rows. Precedent shape: `/usr/bin/logger -t <tag> -p err` is exactly
+   the `inngest-heartbeat-failure-log.service` emit (inngest-bootstrap.sh:482).
 3. **`--control-require` on `betterstack-assert-absence.sh`** — repeatable,
    AND'd onto the control predicate, byte-mirroring `--absence-require`. The
    systemd-path recipe becomes `--control 'SOLEUR_SYSTEMD_JOURNALD_CONTROL'
@@ -270,6 +273,10 @@ explain the storm rows.
   control emit/tag/priority/placement and `systemd`-not-in-Source-4.
 - `apps/web-platform/test/infra/vector-pii-scrub.test.sh` — PRIORITY-arm
   exemption registry + `systemd` entry + Source-1 PRIORITY-arm drift pin.
+- `.github/workflows/workspaces-luks-verify.yml` — comment correction at :491:
+  "SYSLOG_IDENTIFIER=systemd, which Vector does not ship" is false under the
+  actual semantics (PRIORITY≤4 systemd rows ship via Source 1's arm); point at
+  the pinned mechanism.
 - `scripts/betterstack-assert-absence.sh` — `--control-require` flag (usage,
   parse, predicate composition), recipe note in the usage text.
 - `scripts/betterstack-assert-absence.test.sh` — arms for `--control-require`
@@ -539,10 +546,10 @@ edge). A row-level control convention is below container granularity.
 
 ### Split Assessment
 
-- Subsystems touched: 3 — `apps/web-platform`, `scripts`, `knowledge-base`
-- Planned files: 9 | Estimated changed lines: ~450
+- Subsystems touched: 4 — `apps/web-platform`, `scripts`, `knowledge-base`, `.github`
+- Planned files: 10 | Estimated changed lines: ~460
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
-- Recommendation: single PR
+- Recommendation: single PR (root-count threshold met only because `.github/workflows/workspaces-luks-verify.yml` is a one-line comment correction riding the same doc sweep — splitting it would isolate nothing behavioral; no functional surface is touched outside `apps/web-platform` and `scripts`)
 
 ## Domain Review
 
@@ -644,6 +651,56 @@ globs → Product/UX Gate not triggered.
 - Floors never route through the assertion helpers they backstop (the
   pass/fail counters; use `printf >&2` + `exit 1` directly).
 - Merge conflicts are resolved by merging `origin/main`, never by rebasing.
+
+## Deepen Pass — 2026-10-12
+
+**Mode disclosure:** this harness exposes no Task/Agent spawn, so the
+deepen-plan fan-outs (per-section research agents, learnings sub-agents,
+review panel) could not be spawned. All gate checks, the verify-the-negative
+sweep, and the precedent diff ran in-process against the repo. The residual —
+no independent adversarial seats — is recorded in
+`specs/<branch>/decision-challenges.md`; `soleur:plan-review` may be re-run on
+this file if the pipeline wants a panel pass.
+
+**Gate results:**
+
+| Gate | Verdict | Note |
+|---|---|---|
+| 4.5 network-outage | skip | zero trigger-pattern matches in plan body; the plan drives no new `terraform apply` SSH-provisioned resource (delivery rides the existing `journald_persistent` path) |
+| 4.55 downtime & cutover | pass | the plan introduces NO replace/reboot — `inngest-host-replace` is the standing scheduled path every bootstrap change already rides; the web-1 `vector.service` reload is a telemetry-shipper restart, not a user-serving surface |
+| 4.6 user-brand impact | pass | section present; `threshold: none` + required scope-out bullet (diff touches `apps/*/infra/`, a sensitive-path regex match) |
+| 4.7 observability | pass | all five fields populated; `discoverability_test.command` = `grep -l …` (allowlisted verb, sub-second, literal `expected_output` path string) |
+| 4.8 PAT-shaped variables | pass | zero matches |
+| 4.9 UI wireframe | skip | no UI-surface file in either Files list |
+| 4.10 encryption posture | pass | no new persistent store or cross-component connection — the control rides the existing journald→Better Stack edge (model.c4:735-736); Files match no `.tf`/`.sql`/cloud-init/compose pattern |
+| 4.11 guard contract | pass | `lint-guard-contract.py` green (2 entries); assemblies name chokepoints (PROBESCRIPTEOF emission site, the Source-1 block admission arm, the AC3 derivation census, the Source-4 allowlist), not member lists |
+| 4.12 scope check | pass | 3 asks all `mapped`; 2 `inferred` provenance rows carry non-boilerplate justifications; `Recommendation:` present |
+
+**Verify-the-negative sweep (4.45):**
+
+| Negative claim in plan | Verification | Result |
+|---|---|---|
+| `systemd` is not in the Source-4 allowlist | read of `vector.toml:188-350` | confirms |
+| probe emit is not credential-gated | `PROBEUNITEOF` — `ExecStart=/usr/local/bin/inngest-server-probe.sh`, `-`-prefixed EnvironmentFiles, no `doppler run` wrapper; emit at :1211 is behind bounded calls and commented "unconditional" | confirms |
+| no Better Stack alert can be paged by the control row | `grep SYSLOG_IDENTIFIER` in `betterstack-logs-alerts.tf` — only `luks-monitor`/`ci-deploy`/`egress-gw-probe` selects; the one PRIORITY predicate is `='2'`; control is PRIORITY 3 with no `Failed to start` text | confirms |
+| marker-contaminating rows exist today (the forgery class the `--control-require` defeats) | capture.sh:296-297 documents 10 measured false matches on #9939's title under `ident=doppler` | confirms — the require is load-bearing |
+| journald itself cannot rate-drop the control | `journald-soleur.conf` sets only storage caps (no `RateLimit*` keys); defaults are ~1000 msg/30s per service — one extra line/hour is unreachable | confirms |
+| systemd-emitted `Failed to start` rows are PRIORITY 3 | measured storm rows carry PRIORITY err + `UNIT=`/`JOB_RESULT=failed` (capture.sh:296) — consistent with Source-1's `["0".."4"]` arm | confirms |
+
+**Precedent diff (4.4):** the emit shape `/usr/bin/logger -t <tag> -p err "…"`
+is the established idiom — `inngest-heartbeat-failure-log.service`'s
+`ExecStart` (inngest-bootstrap.sh:482) and the probe's own emit (:1211) use it
+byte-for-byte. The only novel element is the `systemd` tag value (deliberate,
+documented); no new pattern is introduced. Scheduled-work check: no new
+recurring job — the control rides the existing `inngest-server-probe.timer`.
+
+**Folded in from the sweep:** two stale "does not ship" consumer claims were
+found and added to the doc-correction scope — `inngest-bootstrap.sh:465`
+("un-shippable SYSLOG_IDENTIFIER=systemd 'Failed to start' row", written when
+the path was believed absent; the #9939 storm proves otherwise) and
+`.github/workflows/workspaces-luks-verify.yml:491` ("which Vector does not
+ship"). The `inngest-heartbeat-failure-log.service` unit stays — its tagged
+re-emit is belt-and-braces, not redundancy worth a removal decision in this PR.
 
 ## References
 
