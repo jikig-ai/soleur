@@ -824,7 +824,7 @@ jobs:
       # host-attributed probe-silent predicate (count(DISTINCT host_name), the
       # host-mask fix), the new probe-fail paging alert, every -target line, and
       # the mutation rows that each require this guard to red.
-      - name: Run egress gateway alerts drift guard (#9534: host-mask + fail paging)
+      - name: Run egress gateway alerts drift guard (#9534 host-mask + fail paging)
         run: bash apps/web-platform/test/infra/egress-gw-alert.test.sh
 
       # (#8611) The Anthropic-spend Logs alerts (inngest-step 524, daily burn, capture-dark): each
