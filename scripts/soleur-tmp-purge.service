@@ -1,0 +1,36 @@
+# soleur-tmp-purge.service — OPTIONAL systemd user unit for
+# scripts/soleur-tmp-purge.sh. Installs to ~/.config/systemd/user/.
+# Pair with soleur-tmp-purge.timer.
+# See knowledge-base/engineering/operations/runbooks/tmpfs-guard-install.md.
+#
+# This is the COUNT-shaped counterpart to tmpfs-guard's scratch reaper
+# (#10017): where tmpfs-guard reaps whole scratch trees, this unit runs the
+# purge's --apply pass, which quarantines ONLY the certain-attribution
+# classes (marker/schema dead owners, proven-unregistered worktrees, signed
+# prefix classes like rung2-archive.*, allowlisted file shapes, reapable
+# empty dirs). Bare `tmp.*` stays protected — it is not ours to delete.
+#
+# %h resolves to the installing user's $HOME — this unit assumes the soleur
+# checkout lives at ~/soleur; override with `systemctl --user edit` and a
+# WorkingDirectory/ExecStart drop-in if the checkout lives elsewhere.
+[Unit]
+Description=Soleur tmp purge (attribution-safe residual reaper for /tmp and /var/tmp)
+# Run only while the mounts exist; skip cleanly on unusual layouts.
+ConditionPathExists=/tmp
+ConditionPathExists=/var/tmp
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/soleur
+# Two ExecStart lines on a oneshot run in order: --apply quarantines the
+# certain-attribution classes; --drain then terminal-deletes quarantine
+# entries past their class TTL (drain is the only delete, and it is scoped
+# strictly beneath soleur-quarantine.<uid>/). The `-` prefix on --apply is
+# load-bearing: a contended or failed apply must NOT skip the drain —
+# quarantined past-TTL entries would strand otherwise.
+ExecStart=-%h/soleur/scripts/soleur-tmp-purge.sh --apply
+ExecStart=%h/soleur/scripts/soleur-tmp-purge.sh --drain
+# The purge serializes on its own flock and skips loudly under contention;
+# the timeout only bounds a wedged pass.
+TimeoutSec=300
+Environment=TMPDIR=/var/tmp

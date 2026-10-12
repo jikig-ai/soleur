@@ -229,7 +229,7 @@ else
                'real_behind=0; [[ "$s" == "OPEN BEHIND" ]] && real_behind=1' \
                '(( qwait == 1 )) || qidle=0' \
                '[ship.phase7.queue_wait]' '[ship.phase7.queue_wait_expired]' '[ship.phase7.queued]' \
-               '[ship.phase7.ready_unarmed]' 'ci-head-verdict.sh" verdict "$PR"' '"$vstate" == pending-full || "$vstate" == no-run'; do
+               '[ship.phase7.ready_unarmed]' 'VERDICT_OK=1' '"$VERDICT_OK" -eq 1' 'ci-head-verdict.sh" verdict "$PR"' '"$vstate" == pending-full || "$vstate" == no-run'; do
     if ! grep -qF -- "$token" "$MIRROR_FILE"; then
       fail "merge-pr mirror missing canonical token: $token"
     fi
@@ -2041,6 +2041,32 @@ run_scenario_both "V8-no-test-failure-no-resolver-call" "$QF" \
   "\[1/90\]" \
   "ready_unarmed|required_failed"
 rm -f "$QF"
+# V9-V11 — the resolver does not depend on BEHIND auto-sync (#9728 follow-up). With sync disabled (not inside a worktree)
+# the poll has no SYNC_SNAP; the verdict read used to be keyed on it, so a ready PR's draft-run `test` row read as a required
+# failure there. An identity-verified root alone enables the resolver; an unverifiable root keeps the raw reading.
+Q_TAIL='git() {
+  case "$1 ${2:-}" in
+    "rev-parse --is-inside-work-tree") echo false ;;
+    *) _git_base "$@" ;;
+  esac
+}'
+q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=required_fail MOCK_MERGED_AT=3 'echo pending-full > "$MOCK_STATE/vstate"'
+run_scenario_both "V9-sync-disabled-pending-full-still-ignores-the-draft-red-test" "$QF" \
+  "BEHIND auto-sync disabled
+\[1/90\] \[ship\.phase7\.behind_no_sync\]" \
+  "required_failed|ready_unarmed|$V_FORBID"
+rm -f "$QF"
+q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=required_fail 'echo stalled > "$MOCK_STATE/vstate"'
+run_scenario_both "V10-sync-disabled-stalled-stops-with-the-recovery-command" "$QF" \
+  "\[1/90\] \[ship\.phase7\.ready_unarmed\] .*stalled" \
+  "required_failed|MERGED|$V_FORBID"
+rm -f "$QF"
+q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=required_fail 'echo pending-full > "$MOCK_STATE/vstate"'
+SCEN_ROOT=unset run_scenario_both "V11-unset-root-keeps-the-raw-required_failed" "$QF" \
+  "\[1/90\] \[ship\.phase7\.required_failed\] check='test'" \
+  "ready_unarmed|$V_FORBID"
+rm -f "$QF"
+Q_TAIL=""
 SCEN_ROOT=""
 
 WANTQ="Q1-queue-armed-pending-waits-no-sync Q1e-queue-wait-under-errexit Q1m-mixed-members-pending-required-holds-the-wait Q1n-queue-rule-without-required-checks-syncs-as-today Q2-no-queue-rule-syncs-as-today Q2e-no-queue-rule-under-errexit Q3-rules-api-error-syncs-as-today Q3b-rules-error-with-a-queued-pr-prints-no-queued-line Q4-queue-but-armed-is-false-syncs-as-today Q4-queue-but-armed-is-error-syncs-as-today Q6-settled-green-expires-and-syncs Q6-settled-none-expires-and-syncs Q6-settled-error-expires-and-syncs Q6e-expiry-under-errexit Q6b-expiry-latches-then-budget-exhausts Q6c-idle-count-is-consecutive Q6d-pending-then-settled-expires-six-idle-ticks-after-the-last-pending Q6g-idle-then-pending-then-idle-resets-the-count Q6h-armed-flap-restarts-the-idle-count Q6f-pending-advisory-check-does-not-hold-the-wait Q12-absent-required-check-while-a-shard-runs-holds-the-wait Q12b-absent-required-check-with-nothing-running-expires Q7-dirty-derived-behind-still-syncs Q8-dequeue-while-waiting-stops Q9-queued-pr-reported-once-and-never-expired Q9b-expiry-with-an-unreadable-queue-read-stops-and-never-pushes Q10-required-check-failure-exits Q11-queue-rule-with-sync-disabled-keeps-the-named-stop"
