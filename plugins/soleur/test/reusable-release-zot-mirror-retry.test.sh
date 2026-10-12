@@ -258,6 +258,7 @@ assert_eq "transient rc/status/warn" "$(echo "$out2" | cut -d' ' -f1-3)" "0 ok q
 
 # T3 — happy path: crane succeeds first try for all three tags.
 echo "T3: happy path -> mirror_status=ok, exit 0, no ::error::"
+rm -f "$STUB_DIR/sha256sum.stdin"   # T1/T2 wrote the same bytes; the wire assert below must read T3's own drain
 out3="$(run_mirror always_ok)"
 assert_eq "happy rc/status/warn" "$(echo "$out3" | cut -d' ' -f1-3)" "0 ok quiet"
 # Wire assert (#9217): the install step's checksum line reached the sha256sum stub intact. ${KNOB:-default}: an exported-empty knob
