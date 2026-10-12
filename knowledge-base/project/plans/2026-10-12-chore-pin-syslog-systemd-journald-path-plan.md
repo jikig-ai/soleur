@@ -562,7 +562,7 @@ globs → Product/UX Gate not triggered.
 
 ## Acceptance Criteria
 
-- [ ] **AC1** `vector.toml` Source 1 and Source 2 header comments state the
+- [x] **AC1** `vector.toml` Source 1 and Source 2 header comments state the
   actual admission semantics — OR-over-record-fields client-side filtering
   with the `journald` source spawning `journalctl` unfiltered, verified against
   Vector `0.43.1` `src/sources/journald.rs` (`merge_units`, `contains_match`,
@@ -570,35 +570,35 @@ globs → Product/UX Gate not triggered.
   `include_matches.PRIORITY` arm → `sinks.betterstack` → source 2457081). The
   stale claims ("INFO+DEBUG … drop at source"; the implied Source-2 err-drop)
   are corrected; the #6551/#8875 links are present.
-- [ ] **AC2** `inngest-server-probe.sh` (inside the `PROBESCRIPTEOF` heredoc in
+- [x] **AC2** `inngest-server-probe.sh` (inside the `PROBESCRIPTEOF` heredoc in
   `inngest-bootstrap.sh`) emits
   `logger -t systemd -p err "SOLEUR_SYSTEMD_JOURNALD_CONTROL …"` once per probe
   run (hourly), unconditionally and outside any credential-gated block.
-- [ ] **AC3** `systemd` is added to NO `include_matches.SYSLOG_IDENTIFIER`
+- [x] **AC3** `systemd` is added to NO `include_matches.SYSLOG_IDENTIFIER`
   allowlist anywhere in `vector.toml`; a pin asserts it and fails on violation.
-- [ ] **AC4** `betterstack-assert-absence.sh` accepts repeatable
+- [x] **AC4** `betterstack-assert-absence.sh` accepts repeatable
   `--control-require <substring>` AND'd onto the control predicate; its usage
   text documents the systemd-path recipe
   (`--control 'SOLEUR_SYSTEMD_JOURNALD_CONTROL' --control-require '"SYSLOG_IDENTIFIER":"systemd"'`).
-- [ ] **AC5** The rehearsal capture's `inngest_failed_check` neighbour arm
+- [x] **AC5** The rehearsal capture's `inngest_failed_check` neighbour arm
   reports `want`/TRANSIENT (never `ok`) when the row set lacks a marker +
   `SYSLOG_IDENTIFIER=systemd` control row, and a doppler-tagged row quoting the
   marker does not satisfy the count.
-- [ ] **AC6** The Guard-Contract mutation rows are exercised: each RED row
+- [x] **AC6** The Guard-Contract mutation rows are exercised: each RED row
   (emit deleted, `-p` drift, `-t` drift, `systemd`-in-allowlist, PRIORITY-arm
   narrowed, second unregistered tag, contaminated-marker, no-require) produces
   a test failure; each must-PASS row passes.
-- [ ] **AC7** ADR-286 (or the ship-time next-free ordinal) exists in
+- [x] **AC7** ADR-286 (or the ship-time next-free ordinal) exists in
   `knowledge-base/engineering/architecture/decisions/` recording the
   OR-over-fields mechanism, the control convention, and the #6551/#8875
   deferral; status `adopting`.
-- [ ] **AC8** `bash -n` passes on every edited `.sh`; suites
+- [x] **AC8** `bash -n` passes on every edited `.sh`; suites
   `scripts/betterstack-assert-absence`,
   `scripts/followthroughs/inngest-provision-rehearsal-capture`,
   `apps/web-platform/infra/journald-config`,
   `apps/web-platform/test/infra/vector-pii-scrub` are green; no `<<< 'literal'`
   here-strings added to any `.test.sh`.
-- [ ] **AC9** The PR body and/or plan record the delivery staging explicitly:
+- [x] **AC9** The PR body and/or plan record the delivery staging explicitly:
   vector.toml reaches web-1 via `journald_persistent` on next apply; the
   inngest host emits the control only after the next
   `apply_target=inngest-host-replace` dispatch; interim `unshipping` on

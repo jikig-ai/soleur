@@ -34,4 +34,4 @@ Plan: `knowledge-base/project/plans/2026-10-12-chore-pin-syslog-systemd-journald
 ## Phase 6 — verify (AC8, AC9)
 
 - [x] 6.1 `bash -n` on every edited `.sh`; run suites `scripts/betterstack-assert-absence`, `scripts/followthroughs/inngest-provision-rehearsal-capture`, `apps/web-platform/infra/journald-config`, `apps/web-platform/test/infra/vector-pii-scrub` — all green.
-- [ ] 6.2 PR body records delivery staging: vector.toml → web-1 via `journald_persistent` replace on next apply; inngest host emits the control only after next `apply_target=inngest-host-replace` dispatch; interim `unshipping` on `soleur-inngest-prd` is correct. `Closes #9963`.
+- [x] 6.2 PR body records delivery staging: vector.toml → web-1 via `journald_persistent` replace on next apply; inngest host emits the control only after next `apply_target=inngest-host-replace` dispatch; interim `unshipping` on `soleur-inngest-prd` is correct. `Closes #9963`.
