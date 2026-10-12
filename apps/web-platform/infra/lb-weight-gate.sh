@@ -49,8 +49,9 @@
 #     ⊆ roster addrs (outbound dial), web-2 addr ∈ allowlist (inbound accept).
 #   Condition B (cut-over config-shape): GIT_DATA_STORE_ENABLED=="true"; GIT_DATA_LUKS_CUTOVER_AT
 #     AND WORKSPACES_LUKS_CUTOVER_AT (ADR-143 D3 coupling #2) each ISO-8601, parseable, ≥epoch, not
-#     future, now-marker ≥ <soak>_SOAK_DAYS(3)*86400. The WORKSPACES_LUKS marker is what keeps a plaintext
-#     web-2 from being pooled: it exists only after web-2's live LUKS conversion (#9372, ADR-263) and a soak.
+#     future, now-marker ≥ <soak>_SOAK_DAYS(3)*86400. The WORKSPACES_LUKS marker is what keeps a web-2 whose
+#     /workspaces is not attested LUKS-backed from being pooled: it is written only by the verify workflow's
+#     web2_marker job after a real on-host probe and a soak (#9372, ADR-263).
 set -euo pipefail
 
 # --- Structured fail-closed exit ---------------------------------------------
@@ -234,11 +235,10 @@ soak_secs=$(( SOAK_DAYS * 86400 ))
 [[ "$delta" -ge "$soak_secs" ]] || fail "B_luks_soak_not_elapsed"
 
 # --- B.6-B.10 — web-2 /workspaces LUKS-backed precondition (ADR-143 D3 coupling #2) -----------
-# This is the fence that keeps a plaintext web-2 from being pooled: this branch reddens unless web-2's
-# /workspaces is asserted LUKS-backed. web-2's for_each volume is plaintext-but-empty until its live
-# conversion (#9372, workspaces-luks.tf) and holds no user data; the ONLY way user data reaches it is a
-# flip, and a flip requires this marker. Same soak-marker shape as GIT_DATA_LUKS_CUTOVER_AT (the
-# WORKSPACES_LUKS_CUTOVER_AT is an ISO-8601 key in the DEDICATED Doppler config
+# This is the fence that keeps a web-2 whose /workspaces is not attested LUKS-backed from being pooled: this
+# branch reddens unless the marker is asserted. web-2's for_each volume (#9372, workspaces-luks.tf) holds no
+# user data; the ONLY way user data reaches it is a flip, and a flip requires this marker. Same soak-marker
+# shape as GIT_DATA_LUKS_CUTOVER_AT (the WORKSPACES_LUKS_CUTOVER_AT is an ISO-8601 key in the DEDICATED Doppler config
 # prd_workspaces_luks_marker, written only by workspaces-luks-verify.yml's web2_marker job after a real
 # on-host probe (ADR-263), kept while that probe stays GREEN and removed on a non-GREEN run;
 # absent/malformed/future/soak-not-elapsed = not satisfied = fail-closed). The check is SHAPE-ONLY: it

@@ -25,10 +25,11 @@
 # doppler_secret.workspaces_luks_web_key from this file plans a `delete` (or a `forget` for a `removed {}` block)
 # at an address the push-apply's rotation HALT (luks_passphrase_rotations) counts, and that HALT has no
 # acknowledgement path, so every push-apply would stop until a person used [skip-web-platform-apply] on each merge.
-# Retirement needs a dedicated, operator-run state change, planned and reviewed on its own. Likewise a `create` at
-# these addresses is legal ONLY until the first web-class volume is formatted: the HALT lets a first create through
-# because it cannot tell it from state loss, and after the first format a `create` here would mint a passphrase
-# that opens nothing.
+# Retirement needs a dedicated, operator-run state change, planned and reviewed on its own. Likewise the HALT also
+# counts a `create` of random_password.workspaces_luks_web (ADR-263 2026-10-06 supersession; tests/scripts/lib/
+# destroy-guard-filter-web-platform.jq, luks_passphrase_create_halt_addrs): no route creates it any more, so a
+# planned create means state lost the entry, and applying it would mint a passphrase that opens nothing. A create
+# of the Doppler copy alone stays legal because it restores the live value; widening the set is tracked in #9572.
 #
 # SEPARATE FILE by design: workspaces-luks.test.sh's A11 guard is file-scoped to workspaces-luks.tf,
 # workspaces-luks-header.test.sh pins workspaces-luks-header.tf, and #9348 edits workspaces-luks.tf. A new

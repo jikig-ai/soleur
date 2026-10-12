@@ -1180,7 +1180,7 @@ eqv_sh="$(_eqv "$EQV_SH")"
 # the port drifting, and only a person who runs it will see one.
 PJ_DRAIN_WINDOW=4
 PJ_ALL="$(git ls-files)"
-PJ_TRIPLES=263   # recomputed from a green run: the number of distinct (test file, verb, producer file) triples
+PJ_TRIPLES=258   # recomputed from a green run: the number of distinct (test file, verb, producer file) triples
 PJ_VOCAB=' not-a-command text-only unverified helper-built-stub variable-named-verb pass-through deliberate-fault arm-drain fenced '
 PRODUCER_JOIN=(
   '.claude/hooks/browser-snapshot-credential-guard.test.sh | jq | exempt | deliberate-fault never: def 156 `exit 127` first statement (jq absent shim; the row asserts the degraded deny) (reach T1; t1:rc1/0s red:rc0/1s; hits 1)'
@@ -1318,10 +1318,6 @@ PRODUCER_JOIN=(
   'scripts/test-jaccard-duplicates.sh | constitution.md | exempt | not-a-command a file name inside a markdown table printed by rule-audit, prose (reach T2; t2:rc0/1s; hits 0)'
   'scripts/verify-agent-security-slice1.test.sh | bash | exempt | text-only reach probe: suite ran green and no piped call reached the stub (1 non-test producers) (reach T2; t2:rc0/8s; hits 0)'
   'scripts/watch-registration-narrowing-9564.test.sh | gh | exempt | arm-drain the issue comment arm reads stdin in both branches before exit; keyed on the subcommand'
-  'scripts/web-host-reboot.test.sh | curl | exempt | arm-drain all-arms-keyed: def 44 `[[ have_cfg == 1 ]] && cat > stdin.last` at opener+11 after the arg loop, before any exit (reach T1; t1:rc124/300s; hits 2150 (stdin-flag))'
-  'scripts/web2-rebirth-recovery-check.test.sh | cryptsetup | exempt | arm-drain the open arm reads the key (cat to cs-stdin) before any exit; keyed on the subcommand'
-  'scripts/web2-rebirth-recovery-check.test.sh | curl | exempt | arm-drain all-arms-keyed: def 34 `[[ cfg -eq 0 ]] // { printf ... $(cat) }` at opener+9, before `exit 7` (reach T1; t1:rc0/49s; hits 544 (stdin-flag))'
-  'scripts/web2-rebirth.test.sh | curl | exempt | arm-drain all-arms-keyed: def 18 drains in the `--config -` case at opener+11 before the first exit (reach T1; t1:rc0/217s; hits 10526 (stdin-flag))'
   'tests/hooks/test_incidents.sh | jq | exempt | text-only reach probe: suite ran green and no piped call reached the stub (1 non-test producers) (reach T1; t1:rc0/1s; hits 0)'
   'tests/scripts/test-argv-bearer-sweep.sh | curl | exempt | arm-drain some-arms: 6 shims; 1523/3279 drain `cat > $D/$n.stdin` on `--config -` after the arg parse; 126/2484/3713 exit 99 on an unmodelled flag before any read; 3793 execs the real curl (reach T1; t1:rc124/301s; hits 455 (stdin-flag))'
   'tests/scripts/test-argv-bearer-sweep.sh | doppler | exempt | unverified reach probe: suite did not finish green here (cap or host), no matching piped call seen (3 non-test producers) (reach T1; t1:rc124/301s; hits 0 (stdin-flag))'
