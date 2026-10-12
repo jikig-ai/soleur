@@ -9,6 +9,52 @@ closes: [10017, 9341]
 lane: cross-domain
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-12
+**Gate results:** Phase 4.6 User-Brand (pass — `none`, no sensitive-path
+diff), 4.7 Observability (pass — verb allowlisted, literal output,
+probe script committed in-PR), 4.8 PAT (no hits), 4.9 UI-wireframe
+(no UI files — skip), 4.10 Encryption (trigger word `queue` is
+`merge-queue` prose — no new store/connection — skip), 4.11 Guard
+Contract (`lint-guard-contract.py` green, 1 entry, structural assembly),
+4.12 Scope Check (one unfenced section, all rows mapped/justified, no
+BLOCKED marker). 4.5 network-outage and 4.55 downtime: no trigger.
+
+**Verify-the-negative pass:** `rung2-archive` sole producer confirmed
+(`git-data-birth-readiness-gate.sh:1440` — zero other hits outside
+tests/docs/classifier); `_tmp` consumed only in-function; bare `tmp.*`
+protected-class confirmed in `tmp-classify.sh` + `soleur-tmp-purge.sh`
+contracts; `trap … EXIT|RETURN` census regex confirmed to cover RETURN
+(`TRAP_EXIT` at lint :192); cited lines
+`browser-snapshot-credential-guard.test.sh:153-158`, `#6991`,
+`#7208`, `#3595`, ADR-129/176/250, `cq-write-failing-tests-before`,
+`hr-all-infrastructure-provisioning-servers` all verified live.
+
+**Precedent-diff (Phase 4.4):** systemd user units — precedent
+`scripts/tmpfs-guard.{service,timer}` (optional, `~/.config/systemd/user/`,
+`Type=oneshot`, `WantedBy=timers.target`, TMPDIR pin comment) — new units
+mirror it 1:1. Owning-trap-with-explicit-rm precedent —
+`.claude/hooks/browser-snapshot-credential-guard.test.sh:153-158`.
+Provable-operand precedent — `assert_fixture_dir` in
+`tests/scripts/test-scratch-residue.sh`. List-mode precedent —
+`--census-detail` counter dump on the same `census_all` pass.
+Scheduled-work check: the units are host-local user timers, not repo
+cron — the Inngest/GHA-Actions precedent check does not reach them.
+
+**Key refinement:** tmpfiles.d `e`/`d` lines accept glob paths, but `e`
+cleans a directory's *contents* by age — not the top-level entry itself
+— so a literal `e /tmp/rung2-archive.*` rule reaps payload bytes while
+leaving the count-shaped dir shells it was meant to bound; a scoped
+`d /tmp`/`e /tmp` age sweep remains the rejected shared-base trade.
+This independently lands the Phase-4 assumption on the purge-timer form
+(recorded in `decision-challenges.md`).
+
+**Agent fan-out:** no Task/Agent tool in this subagent context —
+research, review, and domain agents were applied inline by the
+orchestrator (verified greps, ADR reads, standing-check audit) and the
+gaps recorded, not claimed as independent review.
+
 ## Overview
 
 Spec lacks valid `lane:` — defaulted to cross-domain (TR2 fail-closed).
@@ -270,10 +316,12 @@ with install steps + a note on the systemd-tmpfiles alternative and why
 attribution-based reclamation was preferred over a blanket `/tmp` age
 rule (the #6991 measurement: age/size cannot separate leaked artifacts
 from authored work on a shared base; the classifier can, for the classes
-it owns). If implementation prefers the literal systemd-tmpfiles route,
-the constraint is identical: the rule must target soleur-owned name
-classes only, never a bare `d /tmp`/`e /tmp` sweep — recorded as a
-pending technical ruling in `decision-challenges.md`.
+it owns). Verified at deepen time: `e`/`d` lines accept glob paths but
+an `e` rule cleans the matched directory's *contents* by age — the
+`rung2-archive.*` entry shells would remain, so a literal tmpfiles
+route cannot even express the count-shaped fix; the purge timer is the
+correct belt. Recorded as a pending technical ruling in
+`decision-challenges.md`.
 
 ### Phase 5 — Ratchet + verification
 
@@ -336,7 +384,7 @@ non-Terraform surface as the existing optional `tmpfs-guard.{service,timer}`
 user units (precedent: runbook `tmpfs-guard-install.md`). No Terraform
 root manages this host; no `apps/*/infra/` file is touched. The
 deliverable is repo files + runbook install steps, identical in shape to
-the shipped precedent — `hr-all-infrastructure-provisioning` is
+the shipped precedent — `hr-all-infrastructure-provisioning-servers` is
 satisfied because nothing is provisioned anywhere new.
 
 ## Observability

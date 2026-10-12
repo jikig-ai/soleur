@@ -64,8 +64,10 @@ Issue: #10017 (carries `Closes #9341` per decision-challenges ruling).
 - [ ] 4.3 Extend runbook
   `knowledge-base/engineering/operations/runbooks/tmpfs-guard-install.md`
   — install steps for the new units + the evaluated systemd-tmpfiles
-  alternative note (attribution-based preferred; a literal rule must be
-  scoped to soleur-owned name classes, never a bare `d /tmp` sweep).
+  alternative note: `e`/`d` accept globs but `e` cleans a matched dir's
+  *contents*, not the top-level entry shells — the literal route cannot
+  express the count-shaped fix, and a bare `d /tmp`/`e /tmp` sweep is
+  the rejected shared-base trade; the purge timer is the belt.
 
 ## Phase 5 — Ratchet + verification
 
