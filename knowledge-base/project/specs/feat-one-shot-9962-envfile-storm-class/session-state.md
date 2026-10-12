@@ -14,6 +14,22 @@ review — panel spawning at 2200469734
 - GuardA carrier drift is the sanctioned red window (precedent: #9944 →
   #10027); green returns on the next vinngest tag + pin bump.
 
+## Fix round (panel of 8, 4 returned, 4 rate-limited)
+- P2 needle blind to vector.service/soleur-inngest-provision.service → widened
+  to (inngest|vector|soleur-inngest) on both arms; fixtures added.
+- P2 embedded-journalctl FP (post-boot-health jl= embeds prior-life
+  `systemd[N]: Failed to start` text) → BOOT_STAGE rows excluded pre-scope;
+  fixture added.
+- P3 inngest-server comment misattributed heartbeat (co-conditioned) → names
+  inngest_consumer + tolerant probe; plan detector-set claim corrected
+  (inngest_server_probe monitor still paused/feeder-less, #9703).
+- P3 timer-skip stickiness documented (no re-evaluation until re-arm).
+- Filed #10078: web-host probe/webhook/vector units — same class, out of scope.
+- Inline lens coverage for rate-limited seats: mutation check (3 FAILs on
+  condition removal), _boot_unit delimiter-collision check, sibling-needle
+  census (clean — doc example only), no-history-of-deliberate-nonconditioning,
+  carrier-set match.
+
 ## Errors
 - `_sec_body` section matcher initially used exact `[Unit]` equality — missed
   the yaml-indented header; fixed indent-tolerant. Caught by suite RED.
