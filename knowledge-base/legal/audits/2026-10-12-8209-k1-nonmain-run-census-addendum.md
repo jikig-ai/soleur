@@ -321,8 +321,8 @@ count or the window disposition; they correct labels, internal consistency and s
    wording. Nothing in this file classifies the pre-window part CLEAN; it remains INCONCLUSIVE.
 2. **Label scope: KEEP the exact permitted wording, add the scope qualifier on the same line.** The permitted
    string `K1 CLEAN within [census date - 90d, census date]` is cited verbatim by the plan
-   (`knowledge-base/project/plans/2026-10-12-fix-git-data-rotate-post-apply-gate-and-cutover-resume-plan.md`)
-   and `knowledge-base/project/specs/feat-one-shot-git-data-luks-cutover-8211/decision-challenges.md`, which
+   (`knowledge-base/project/plans/archive/20261013-002507-2026-10-12-fix-git-data-rotate-post-apply-gate-and-cutover-resume-plan.md`)
+   and `knowledge-base/project/specs/archive/20261013-002507-feat-one-shot-git-data-luks-cutover-8211/decision-challenges.md`, which
    this change does not edit; renaming it here would leave those two records quoting a string this file no
    longer uses. The reviewers' concern, a bare label quoted without its scope, is met by (a) the qualifier
    "ATTRIBUTION RESULT ONLY: not a finding that no run resolved a prd token, that the App key or any prd
