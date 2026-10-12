@@ -2928,7 +2928,12 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // TRUTH: the event is read with a Sentry API token (Doppler prd); the event store has no anonymous query
   // form. NO SUBSTITUTE: the tag and user shape is pinned offline by cc-dispatcher-bash-sandbox-sentry-path.test.ts,
   // but that verifies code, not the deployed event stream. Genuine.
-  const BASELINE_DECLARED_PROBES = 62;
+  // #9995 (2026-10-11): +1 (62 -> 63) for `2026-10-11-fix-mu1-ac2-dev-scheduled-github-app-credential-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`bash scripts/probe-github-app-mint.sh`) reads GITHUB_APP_{ID,PRIVATE_KEY} via
+  // `doppler run -p soleur -c dev_scheduled` and expects a `GITHUB_APP_MINT` line. NO SUBSTITUTE: a private
+  // key's mint liveness has no unauthenticated read path — the JWT only exists signed. Genuine.
+  const BASELINE_DECLARED_PROBES = 63;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
