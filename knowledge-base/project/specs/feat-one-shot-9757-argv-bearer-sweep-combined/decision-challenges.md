@@ -48,6 +48,18 @@ Headless plan run: these are plan-review findings that argue the operator's stat
 - **Cost of each choice:** one PR = one merge that also replaces the registry, with an unrelated read-only preflight that can refuse (then a hand re-fire); two PRs = a second review cycle and a second merge notice.
 - **Ruling needed from:** operator, before the merge-approval step. This is the decision the brief asked to have surfaced before pushing code.
 
+## Resolution (2026-10-12)
+
+Appended after the work phase; the challenges above are the dated plan-phase record and are not edited.
+
+- **C1 (peel `inngest-bootstrap.sh`): PEELED.** Not because of PR 10073 but on a measurement made while building it: editing `inngest-bootstrap.sh` reddens `GuardA` in `apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh` by design (a baked carrier drifts from the pinned `vinngest-v*` tag) until a new tag is minted and the pin bumped, so the commit cannot be green inside this PR. The finished commit is preserved as `b48247d559` on the local branch `keep/9757-inngest-heartbeat-argv` and is tracked in #10120. #9757 item 2 stays partly open (`Ref`, not `Closes`).
+- **C2 (workflow htpasswd step): KEPT, as built.** One line in `apply-web-platform-infra.yml` (`printf '%s' "$RP" | docker run --rm -i httpd:2.4-alpine htpasswd -Bin "$RU"`), proved offline by a refusing stub docker row and the real-binary suite `apps/web-platform/infra/htpasswd-stdin.test.sh` (which also shows that without docker's own `-i` the hash covers an empty password). The step is dispatch-only, so it is first exercised live by the next `registry-luks-recut` dispatch.
+- **C3 (leads (b), (g), (d) in this PR): KEPT, as built.** (a), (b) and (g) are in the held-back HMAC commit (mask shape check before every `::add-mask::`, one bounded scrubbed first line instead of four raw body echoes); (d) is the docs and runbooks commit. Measured residual of (g): four raw `echo "$BODY"` sites remain (capture, inventory, 2.0 registry-probe, 2.6 doublefire-probe), outside the four sites the lead named; recorded in the ADR-280 addendum.
+- **C4 (archive chore inside this PR): KEPT, as planned.** Done from a throwaway clean worktree of `origin/main` and cherry-picked, so the branch-diff discovery did not archive this PR's own plan.
+- **C5 (lead (h), reduced form): KEPT, as built.** The existing opt-in `COMMUNITY_ARGV_DOCKER` row in `community-argv.test.sh` also runs the oracle under the `bash:3.2` image; no new always-on gate. It is evidence, not a gate, because the switch is set nowhere in CI.
+- **C6 (registry template B1/B2): STAGED OUT by operator ruling, "separate PR after this one".** Tracked in #10119. The S6 recurrence row carries a three-entry residual allowlist (the three registry-template lines) that the follow-up deletes; it shrinks by deletion only. Merging this PR therefore does not replace the registry host.
+- **Deviation recorded in the ADR addendum.** The heartbeat curls carry `--disable --noproxy '*'` because lint Rule D requires it for any curl taking `--config -`; the plan's `-q`-only text is superseded.
+
 ## Not-yet-specified candidates (roadmap fog, not issues)
 
 None.
