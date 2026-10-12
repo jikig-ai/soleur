@@ -31,8 +31,6 @@
 #   * the three `*_sha256` values — 64 hex, and BOTH arch branches are 64 hex, so exact.
 #   * `inngest_luks_volume_id` — 9 digits, same reasoning (#6894's additive volume). It is
 #     interpolated twice in the template (the first-boot resolver and the boot-reopen script).
-#   * `inngest_expect_luks` — "false" (5 B) is the LONGER of the two `tostring(bool)` forms, so
-#     it bounds the "true" recut branch too.
 #   * `doppler_arch` / `inngest_cli_arch` — "amd64" and "arm64" are both 5 B, so this render is
 #     ARCH-NEUTRAL in length and the measurement holds for either `var.inngest_server_type`.
 #   * `doppler_token` — a `dp.st.<config>.<body>` service token on project `soleur-inngest`,
@@ -166,7 +164,6 @@ cat > "$TFDIR/main.tf" <<EOF
 locals {
   vars = {
     inngest_luks_volume_id = "100000005"
-    inngest_expect_luks    = "false"
     doppler_token          = join(".", ["dp", "st", "prd", "STUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUB"])
     inngest_doppler_config = "prd"
     sdk_url                = "http://10.0.1.10:3000/api/inngest"

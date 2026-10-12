@@ -12,7 +12,7 @@ None blocking (Playwright MCP server failed to connect; not needed).
 - Merge reading corrected: a merge does not replace the host (no hcloud_server.* in the per-merge -target list; hcloud_server.inngest is in OPERATOR_APPLIED_EXCLUSIONS; ignore_changes is [ssh_keys] only). The PR is still PARKED: a merge plants a latent replace that shows as drift, makes the additive inngest-host dispatch abort at server_touched, and lets the new boot path ride the next dispatch unexercised. No replace window is scheduled (last inngest_host_replace job 2026-10-08).
 - D2: the no-pointer arm is kept and re-pointed at the LUKS volume (the provision-rehearsal root renders the same template with raw volumes and no pointer); only the ext4 arm and the staging block are removed. Departs from the issue's literal wording; recorded in decision-challenges.md.
 - D6: the unpointed arm refuses luksFormat when the rendered Doppler config is prd; new loopback arm UNP5 and two guard rows pin it.
-- Narrow scope: inngest_expect_luks stays as an inert input; the image-baked rollback arm in inngest-luks-cutover.sh is a non-goal; AC5 floor stays 17.
+- Narrow scope: the image-baked rollback arm in inngest-luks-cutover.sh is a non-goal. inngest_expect_luks was first kept as an inert input (D4) and then RETIRED in review fix round 3 (CTO ruling A: a later retirement would force a second host replace); AC5 key set is 16.
 - Ship phase stops at a reviewed DRAFT (label `parked`, base-SHA staleness rule, unpark checklist, one combined follow-up tracker).
 
 ### Components Invoked

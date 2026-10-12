@@ -208,43 +208,14 @@ else
   no "T1.9c4 an identity refusal does not exit non-zero — it fails OPEN on the host it gates (after-unreadable='${_x_unreadable}' after-no-project='${_x_noproj}')"
 fi
 
-# T1.10 expect_luks is TELEMETRY ONLY since #9786: it still rides the emit() of BOTH device readers
-# (so every row keeps its key set), and NOTHING branches on it. The retired post-recut refusal was the
-# only consumer; a re-added branch would silently re-arm a refusal the one-volume resolver no longer
-# has an ext4 arm to pair with. PER-WINDOW, NOT WHOLE-FILE for the emit side: a `-ge 2` over the whole
-# file is satisfied by two hits in ONE reader. The split point is the runcmd stage's own heredoc
-# opener: above it is the write_files region that ships /usr/local/bin/inngest-luks-open.sh (the BOOT-2
-# reader), from it down is the first-boot runcmd stage.
-_split="$(grep -n "bash -s <<'LUKSEOF'" "$CLOUD_INIT" | sed -n '1p' | cut -d: -f1)"
-if [ -n "$_split" ]; then
-  _expect_reopen="$(head -n "$((_split - 1))" "$CLOUD_INIT" | grep -vE '^[[:space:]]*#' | grep -cF 'expect_luks=')"
-  _expect_runcmd="$(tail -n +"$_split" "$CLOUD_INIT" | grep -vE '^[[:space:]]*#' | grep -cF 'expect_luks=')"
-  if [ "$_expect_runcmd" -ge 1 ] && [ "$_expect_reopen" -ge 1 ]; then ok "T1.10a expect_luks is still emitted by BOTH device readers (runcmd ${_expect_runcmd}x, reopen ${_expect_reopen}x)"; else no "T1.10a expect_luks is emitted by only one reader (runcmd ${_expect_runcmd}x, reopen ${_expect_reopen}x) — the row key sets diverge"; fi
-else
-  no "T1.10a could not locate the runcmd LUKS stage in $CLOUD_INIT — the per-window split is vacuous"
-fi
-# Every executable line that names the input must be the one assignment or one of the two emit rows (matched by
-# the emit row's own prefix, not by the key's text: a refusal message that merely contains `expect_luks=` is a consumer).
-_expect_other="$(grep -vE '^[[:space:]]*#' "$CLOUD_INIT" | grep -E 'EXPECT_LUKS|inngest_expect_luks' | grep -vE "EXPECT_LUKS='[$][{]inngest_expect_luks[}]'" | grep -vF 'SOLEUR_INNGEST_LUKS_STAGE stage=$1 rc=$2 blkid_type=' || true)"
-if [ -z "$_expect_other" ]; then ok "T1.10b nothing in the template branches on expect_luks (only the assignment and the emit rows name it)"; else no "T1.10b expect_luks has a consumer beyond telemetry: ${_expect_other}"; fi
-
-# T1.11 THE VARIABLE'S OWN COMMENT. `inngest_expect_luks` used to arm the post-recut ext4 refusal and
-# carried a sequencing warning (do not flip it before the host was replaced). #9786 removed the refusal,
-# so the variable is inert, but it is STILL a rendered template key: flipping it changes user_data bytes
-# and therefore replaces the host. The comment is what the next author follows, and it is not executable,
-# so both facts are pinned here.
-if grep -qF 'TELEMETRY ONLY. Nothing branches on it' "$VARIABLES_TF" && grep -qF 'changes user_data and replaces the host' "$VARIABLES_TF"; then ok "T1.11a the expect_luks comment says it is inert AND that flipping it still replaces the host"; else no "T1.11a the expect_luks comment lost its inert / replace-trigger statements — the next author will flip it expecting a refusal that no longer exists"; fi
-# Grep the SUPERSEDED wording, not the new one: a residual count over the new text is blind to a
-# partial revert that restores the old instruction alongside it.
-#
-# ANCHORED ON THE INSTRUCTION'S OPENING LINE, not on the bare phrase. The correction above QUOTES
-# the phrase it retracts — that is the append-only convention working — so a `grep -qF` for the
-# fragment matches the retraction itself and reports a violation that does not exist. It fired
-# that way on the first run. `cq-assert-anchor-not-bare-token`, in the one file in this branch
-# whose whole subject is that class.
-if grep -qE '^# This flips on the recut branch' "$VARIABLES_TF"; then no "T1.11b the superseded one-decision instruction is back as a live directive in variables.tf"; else ok "T1.11b the superseded one-decision instruction is not present as a directive"; fi
-# The default stays false so the rendered telemetry value, and therefore user_data, does not move.
-if grep -A4 'variable "inngest_expect_luks"' "$VARIABLES_TF" | grep -cE '^\s*default\s*=\s*false\s*$' >/dev/null; then ok "T1.11c inngest_expect_luks still defaults to false at merge"; else no "T1.11c inngest_expect_luks no longer defaults to false — the rendered telemetry value (and user_data) moved"; fi
+# T1.10 THE RETIRED INPUT STAYS RETIRED (#9786 review round 3, CTO ruling A). `inngest_expect_luks` armed the
+# post-recut ext4 refusal. #9786 deleted every branch on it and nothing in the repo read its `expect_luks=`
+# telemetry field, so the input was retired in the SAME change: leaving it would make its later retirement a
+# second user_data change, which replaces the sole scheduler host a second time for a cosmetic edit. No tracked
+# infra, script or workflow file may name it again (this file is the one exemption: it must be able to say what it
+# forbids). T1.11 (the variable's own comment and default) went with the variable.
+_expect_hits="$(grep -rIli 'expect_luks' "$SCRIPT_DIR" "$SCRIPT_DIR/../../../scripts" "$SCRIPT_DIR/../../../.github" --exclude=inngest-redis-luks.test.sh --exclude-dir=node_modules --exclude-dir=.terraform 2>/dev/null | sed "s|^$SCRIPT_DIR/||" | tr '\n' ' ')"
+if [ -z "$_expect_hits" ]; then ok "T1.10 no infra, script or workflow file names the retired inngest_expect_luks input (variable, template key, emit field and tests all gone)"; else no "T1.10 the retired inngest_expect_luks input is back in: ${_expect_hits}"; fi
 
 # T1.12 THE EXIT TRAP MUST NOT TREAT SUCCESS AS FAILURE. Driven, not grepped — the trap machinery
 # is extracted verbatim and run both ways, which needs no root and so belongs in THIS tier rather
@@ -259,7 +230,6 @@ _T12="$(mktemp -d)"; trap 'rm -rf "$_T12"' EXIT
   printf 'set -euo pipefail
 STAGE=luks_open
 INNGEST_LUKS_DETAIL=/dev/null
-EXPECT_LUKS=false
 '
   printf 'luks_emit() { echo "EMIT stage=$1 rc=$2"; }
 '
@@ -289,7 +259,7 @@ _T13="$(mktemp -d)"
 _t13_n=0; _t13_bad=""
 _t13_render() { sed -e 's/\$\${/${/g' -e 's/%%{/%{/g' \
   -e 's/\${inngest_luks_volume_id}/106999999/g' \
-  -e 's/\${inngest_expect_luks}/false/g' -e 's/\${[a-z_][a-z_0-9]*}/TEMPLATE_VALUE/g'; }
+  -e 's/\${[a-z_][a-z_0-9]*}/TEMPLATE_VALUE/g'; }
 # split write_files into one file per content block: a `  - path:` line, then `    content: |`, then
 # every line indented at least six spaces, ended by the first line at indent four
 awk -v out="${_T13:?}" '
@@ -473,8 +443,13 @@ if [ "$_reh_n" -eq 1 ] && [ "$_reh_glob" -eq 1 ]; then ok "T1.16k the guard's re
 # wipes, or mounts a device other than the one the resolver chose". T1.17a-e are TARGETED early-warning rows
 # with specific messages (a regex over command-position shapes; they are a denylist and a denylist of shapes
 # is bypassable by a list item, `sudo`, `then`, a path prefix, `dd`, `cryptsetup erase`...). The PROPERTY is
-# pinned by T1.17f-i below, which are CLOSED SETS: every normalised line that mentions a device-touching token
-# must equal the expected list, so a new shape of the same operation cannot add a line without naming it.
+# pinned by T1.17f-j below. T1.17f-g are CLOSED SETS: every normalised line that mentions a device-touching
+# token (or assigns a device variable) must equal the expected list, so a new shape of the same operation cannot
+# add a line without naming it. What the closed sets do NOT see, stated plainly: a device write on a line that
+# names none of the listed tokens and is reached neither through a redirect to a device variable (T1.17j) nor
+# through the indirection forms T1.17h denies (eval, a variable or `${x:-y}` as the command, sh/bash -c, xargs,
+# exec) -- for example a NEW shell function that wraps the write, or a command substitution. The loopback tier
+# (real devices, CI) and human review are the backstop for that residual; it is not claimed closed.
 _CI_OPS="$(printf '%s\n' "$_CI_CODE" | grep -vE 'echo "FATAL' || true)"
 _ops_fmt="$(grep -cE 'cryptsetup[^|;]*(luksFormat|luksErase|reencrypt|luksAddKey|luksRemoveKey|luksKillSlot|luksHeaderRestore)' <<<"$_CI_OPS" || true)"
 _ops_dest="$(grep -cE '(^[[:space:]]*|[|;&][[:space:]]*)(mkfs[.a-z0-9]*|mke2fs|wipefs|blkdiscard|shred|sgdisk|sfdisk|parted)[[:space:]]' <<<"$_CI_OPS" || true)"
@@ -562,8 +537,13 @@ _act_ops="$(_norm_code "$CLOUD_INIT" | grep -E "$_OPS_TOK" || true)"
 if [ "$_act_ops" = "$_exp_ops" ]; then ok "T1.17f the set of lines that touch a device or mount is exactly the reviewed list ($(grep -c . <<<"$_act_ops") lines)"; else no "T1.17f a device-touching line was added, removed or changed — diff (expected vs actual): $(diff <(printf '%s\n' "$_exp_ops") <(printf '%s\n' "$_act_ops") | cut -c1-200 | head -12 | tr '\n' '|')"; fi
 _act_vars="$(_norm_code "$CLOUD_INIT" | grep -E "$_VAR_RE" || true)"
 if [ "$_act_vars" = "$_exp_vars" ]; then ok "T1.17g every assignment to DEV/MAPPER/BYID/LUKS_ID/CANON_DEV/POINTER is exactly the reviewed list ($(grep -c . <<<"$_act_vars") lines; a rebinding of what a destructive line operates on changes it)"; else no "T1.17g a device-variable assignment was added, removed or changed — diff (expected vs actual): $(diff <(printf '%s\n' "$_exp_vars") <(printf '%s\n' "$_act_vars") | cut -c1-200 | head -12 | tr '\n' '|')"; fi
-_indirect="$(_norm_code "$CLOUD_INIT" | grep -E '(^|[^[:alnum:]_])eval([^[:alnum:]_]|$)|^[$][A-Za-z_]' || true)"
-if [ -z "$_indirect" ]; then ok "T1.17h no eval and no variable-as-command line (an operation cannot hide behind indirection from the closed sets)"; else no "T1.17h shell indirection appears in the template, which the closed sets cannot see through: ${_indirect}"; fi
+_IND_RE='(^|[^[:alnum:]_])eval([^[:alnum:]_]|$)|^[$][A-Za-z_]|^[$]\{[A-Za-z_][A-Za-z_0-9]*[:#%/^,-]|^"[$]\{[A-Za-z_][A-Za-z_0-9]*:[-=+?]|(^|[|;&(][[:space:]]*)(sh|bash|dash)[[:space:]]+-c([[:space:]]|$)|(^|[^[:alnum:]_])xargs([^[:alnum:]_]|$)|(^|[|;&(][[:space:]]*)exec[[:space:]]'
+_indirect="$(_norm_code "$CLOUD_INIT" | grep -E "$_IND_RE" || true)"
+if [ -z "$_indirect" ]; then ok "T1.17h no eval, variable-as-command, parameter-expansion-as-command, sh/bash -c, xargs or exec line (an operation cannot hide behind indirection from the closed sets)"; else no "T1.17h shell indirection appears in the template, which the closed sets cannot see through: ${_indirect}"; fi
+# T1.17j no redirect or tee targets a device variable: a raw write to the device (`head -c N /dev/zero > "$DEV"`,
+# `echo x | tee "$MAPPER"`) names none of the closed sets' tokens, so it is denied by its target.
+_dev_redirect="$(_norm_code "$CLOUD_INIT" | grep -E '(>>?|tee( -a)?)[[:space:]]*"?[$]\{?(DEV|MAPPER|CANON_DEV)([^[:alnum:]_]|$)' || true)"
+if [ -z "$_dev_redirect" ]; then ok "T1.17j no redirect or tee writes to \$DEV, \$MAPPER or \$CANON_DEV (a raw device write is denied by its target)"; else no "T1.17j a redirect or tee targets a device variable: ${_dev_redirect}"; fi
 _top="$(grep -vE '^[[:space:]]*#' "$CLOUD_INIT" | grep -E '^[a-z_]+:' | sed 's/:.*//' | tr '\n' ' ')"
 if [ "$_top" = "package_update packages groups users write_files runcmd " ]; then ok "T1.17i the template's top-level cloud-init keys are exactly package_update/packages/groups/users/write_files/runcmd (no fs_setup/disk_setup/mounts/bootcmd module)"; else no "T1.17i the top-level cloud-init keys changed: '${_top}' — a disk or mount module would act outside the shell inventory"; fi
 
@@ -699,15 +679,17 @@ if ! printf '%s\n' "$_LUKS_OPEN_UNIT" | grep -cE '^[[:space:]]*(EnvironmentFile|
 # guard DRIVEN across prd/dev/staging/empty/bare-rehearsal/rehearsal_*), T1.16j (STAGE set before the guard),
 # T1.17a-e (destructive-op inventory over the whole template, the reopen script's open-only property, resolver
 # refusal bodies and the reopen catch-all) are new (+8 in total with T1.10b).
+# 83 -> 80 (review fix round 3, CTO ruling A: inngest_expect_luks retired): T1.10a/b and T1.11a-c (-5) are replaced by
+# the single negative guard T1.10 (+1), and T1.17j (device-redirect pin, +1) is new: 83 - 5 + 1 + 1 = 80, exact.
 # 78 -> 83 (review fix round 2): T1.16k (allowlist glob / rehearsal config prefix contract, +1) and the closed-set
 # pins T1.17f-i (+4). T1.16i was re-driven in-arm and keeps its count.
 # Self-contained: bash builtins and this suite's own counters only. A floor that lives in a helper
 # is silenced by the same move that silences the arms it guards.
-if [ "$executed" -lt 83 ]; then
+if [ "$executed" -lt 80 ]; then
   fail=$((fail + 1))
-  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 83. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
+  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 80. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
 else
-  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 83)\n' "$executed"
+  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 80)\n' "$executed"
 fi
 
 echo ""

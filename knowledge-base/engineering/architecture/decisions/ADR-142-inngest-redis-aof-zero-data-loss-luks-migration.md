@@ -738,9 +738,10 @@ alert keys on it). (2) The image-baked `inngest-luks-cutover.sh` reads the plain
 which the stage no longer writes, so it refuses `volume-ids-unreadable` on every FLAGGED run (`armed`, `copying`,
 `copied`, `swapped`, `rollback`) and a refusal at that point writes the terminal flag `aborted` (nothing had been
 stopped, so nothing is restarted unless a crash left a freeze record); at flag `done` it is a no-op, so the replace
-window must confirm `flag=done` first. (3) `inngest_expect_luks` is inert but still a rendered
-key: changing it changes `user_data` and replaces the host.
+window must confirm `flag=done` first. (3) `inngest_expect_luks` was retired in the same change (the Terraform
+variable, the template key and the `expect_luks=` field on the LUKS stage rows): nothing in the repo read the field, and
+leaving an inert rendered key would have made its later removal a second `user_data` change, i.e. a second replace of
+the sole scheduler.
 
-**What this addendum does NOT change.** The pointer arm, the encryption mechanism, `inngest_expect_luks` as
-an inert template key and telemetry field, or the image-baked `inngest-luks-cutover.sh` (its `rollback)` arm
-needs an image release and pin bump).
+**What this addendum does NOT change.** The pointer arm, the encryption mechanism, or the image-baked
+`inngest-luks-cutover.sh` (its `rollback)` arm needs an image release and pin bump).

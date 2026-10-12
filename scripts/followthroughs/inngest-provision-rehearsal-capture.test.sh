@@ -303,7 +303,7 @@ run "phase-a PASS: the needle text inside a non-systemd (webhook) row is not a L
 # allowlist and the rehearsal config drifted apart. The row is the luks_emit shape the template really writes
 # (stage=<name> rc=<n> blkid_type=<t> ... — a blank device reads BLK_TYPE empty, which luks_err emits as
 # `unknown`). One arm per mode: the check is wired at three call sites and each needs its own proof.
-REFUSED_ROW="SOLEUR_INNGEST_LUKS_STAGE stage=unpointed_raw_refused rc=1 blkid_type=unknown expect_luks=false detail=FATAL \"host\":\"${HOST}\""
+REFUSED_ROW="SOLEUR_INNGEST_LUKS_STAGE stage=unpointed_raw_refused rc=1 blkid_type=unknown detail=FATAL \"host\":\"${HOST}\""
 rows "$TMP/r-unprefused-a.json" "$NOW" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=provision-unit-armed detail=iid=abc123 \"host\":\"${HOST}\"" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=1 iid=abc123 \"host\":\"${HOST}\"" \
@@ -325,6 +325,18 @@ rows "$TMP/r-unprefused-post.json" "$NOW" \
   "$REFUSED_ROW"
 run "post-reboot FAIL: a stage=unpointed_raw_refused row after the boundary is a violation" 1 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-unprefused-post.json" -- "${BASE_ARGS[@]}" --mode post-reboot --reboot-since "$PRE_REBOOT"
+
+# The second needle alternative: the inngest-luks-FAILED phone-home carries the failing stage in its detail
+# (`stage=inngest-luks-FAILED stage=<name> rc=<n>`). Without an arm of its own, deleting that alternative leaves the
+# suite green, and a drift in the phone-home row shape would then go unnoticed.
+rows "$TMP/r-unprefused-ph.json" "$NOW" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-unit-armed detail=iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=1 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=2 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=private_nic_timeout detail=boot=deadbee1.waited_s=150 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=inngest-luks-FAILED stage=unpointed_raw_refused rc=1 \"host\":\"${HOST}\""
+run "phase-a FAIL: the inngest-luks-FAILED phone-home row naming the refusal is a violation too" 1 \
+  "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-unprefused-ph.json" -- "${BASE_ARGS[@]}" --mode phase-a
 
 # NEGATIVE CONTROL: the bare stage name inside a NON-journal row (a webhook payload quoting #9786's text) is not a
 # refusal. The needle is anchored on the row shape, so a doppler-tagged body carrying the token must PASS.
@@ -357,7 +369,7 @@ run "phase-a PASS under --since: a prior life's rows are excluded by the bound" 
 # initializes counters (`X=$((X+1))` increments) but not the FAILURES array — a floor on
 # `${#FAILURES[@]}` dies unbound under set -u and scores CONSTRUCTION, not FIRES. And MIN
 # must sit ADJACENT to the `if` — the mutant builder's walk-back stops at any comment.
-MIN=35
+MIN=36
 if (( passes + fails < MIN )); then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$((passes + fails))" "$MIN" >&2
   exit 1

@@ -457,6 +457,11 @@ When an approved `inngest-host-replace` window exists (or #8620 reaches the inng
      at `assert_ids`, so never `copied`) and restores nothing unless a freeze record exists. At `done` the unit is
      a no-op (`noop-done`). Any other value is a STOP. This is a different flag from the scheduler's
      `INNGEST_CUTOVER_FLIP` (see step 5).
+   - The scheduler's flag `INNGEST_CUTOVER_FLIP` (Doppler `soleur-inngest/prd`; the replace job's preflight step
+     prints it) reads `done` or `flushed`. Those are the only two values whose stranded scheduler recovers with one
+     `op=resume` dispatch. `armed` and `flipping` drive the FSM to `aborted` (`op=resume` accepts `done` only), and an
+     unset or any other value makes the replaced host refuse EVERY prod start: for any of those, STOP, because the
+     replace would leave the sole scheduler dark with no one-dispatch recovery.
 3. Merge IMMEDIATELY before step 4, in the one window (merging alone plants the drift alert and the
    `server_touched` abort). Check the drift issue body stays under its 60,000-byte `head -c` cap (a `user_data`
    diff is large).
@@ -498,6 +503,17 @@ arm). The review found the one-literal denylist fails open for any other string.
 (the arm's own segment executed with the stage's state across seven configs), T1.16j (stage name), T1.16k (the
 glob and rehearsal.tf's `rehearsal_<run id>` are one contract), loopback UNP5 and UNP5b. The structural-cause
 finding (guards matching one spelling in one window) is closed by the whole-template closed-set pins T1.17f-i.
+
+**D4 is reversed (review fix round 3, binding CTO ruling A).** The plan kept `inngest_expect_luks` as an inert
+input and filed its retirement for "the same replace window". The code-simplicity reviewer dissented on that
+scope-out and the CTO ruled it into this PR: nothing in the repo reads the `expect_luks=` field, and any later
+retirement changes `user_data` again, replacing the sole scheduler a second time. Retired here: the `variables.tf`
+variable, the template key, the `emit()` and `luks_emit` field and the `EXPECT_LUKS=` assignment (cloud-init), the
+`inngest-host.tf`, `rehearsal.tf` and budget-script lines, and the test seds and params. The AC5 key set is **16**
+(floor and bound in `inngest-boot-emitter.test.sh`); where this plan says 17 keys (Test Scenarios 1, AC5), read 16.
+T1.10 is now a negative guard (no infra, script or workflow file names the input); T1.11a-c went with the
+variable. This changes rendered `user_data` (the `expect_luks=` field leaves the stage rows); the production
+pointer arm stays byte-identical.
 
 ## Files to Edit
 
@@ -722,7 +738,7 @@ data-protection change. Product/UX gate: NONE (no `components/**`, `app/**` file
 - AC11 No file outside the Files-to-Edit list changed (`git diff --name-only origin/main`); in particular none of `inngest-redis-luks.tf`, `inngest-luks-cutover.sh`, `inngest-redis-bootstrap.sh`, `apply-web-platform-infra.yml`, `betterstack-logs-alerts.tf`; `variables.tf` diff is one description line. **Amended in the review fix rounds:** comment-only, prose, ledger-text and documentation edits are exempt from the Files-to-Edit list, so these additional files carry them: `inngest-redis-luks.tf` and `betterstack-logs-alerts.tf` (comment wording), `betterstack-log-query.md`, `inngest-server.md` and `inngest-luks-cutover-6894.md` (runbook rows), ADR-142 and ADR-199 addenda, `.claude/hooks/grep-q-pipe-guard.test.sh` (line-number citations replaced by content anchors), `scripts/followthroughs/inngest-provision-rehearsal-capture.sh` and its test (a forbidden-row check for `stage=unpointed_raw_refused`), and `variables.tf` / `rehearsal.tf` comment blocks. The Non-Goals N4 files (`prevent_destroy`, `delete_protection`, `betteruptime_heartbeat.inngest_server_probe`) remain untouched.
 - AC12 PR #10081: `isDraft == true`, `autoMergeRequest == null`, `parked` label, title begins `PARKED`, body has "DO NOT MERGE" block + base SHA/date + staleness rule, `Ref #9786` present, no closing keyword (`grep -iE '(close[sd]?|fix(e[sd])?|resolve[sd]?) #9786'` empty), last line is the Claude Code attribution line; commit trailers present.
 - AC-P1 (park justification, one sentence plus anchors in the PR body): merging replaces nothing (`hcloud_server.inngest` in `OPERATOR_APPLIED_EXCLUSIONS`, no `hcloud_server.*` in the per-merge `-target` list, `ignore_changes = [ssh_keys]` only) but plants a latent replace that reds drift, aborts `inngest-host` at `server_touched`, and rides the next dispatch un-exercised; the new boot behaviour (D2/D6) has not run on a real boot. Note the automated bootstrap-pin-bump PRs already edit this file, so the first two consequences are partly pre-existing; the dominant park reason is the unexercised boot path.
-- AC13 One combined tracker exists (inert `inngest_expect_luks`; N2 rollback arm + image release + pin bump; rehearsal unused plain volume) with re-evaluation criterion "when #10081 unparks".
+- AC13 One combined tracker exists (N2 rollback arm + image release + pin bump; the rehearsal root's unused plain volume, which the operator excluded from this arc; DR bring-up for a blank `prd` volume; the duplicated reopen arms) with re-evaluation criterion "when #10081 lands". **Amended in review fix round 3:** `inngest_expect_luks` is NOT in the tracker any more; it was retired in this PR.
 - AC14 UNP5 (no pointer + raw + rendered `prd` config) REFUSES and formats nothing; deleting the D6 guard line reds it (Guard 3 row 7).
 - AC15 `scripts/lint-encryption-posture.py` + its test green, ledger rehearsal rows consistent with the new device roles.
 
@@ -777,7 +793,7 @@ data-protection change. Product/UX gate: NONE (no `components/**`, `app/**` file
 - N2 The `rollback)` arm and FSM text in `inngest-luks-cutover.sh` / its fixtures (image-baked; needs image release + pin bump + replace; tracked on #9786's comment).
 - N3 Web-2 workspaces volume, git_data volume, rehearsal volumes, ADR-198 baked credentials.
 - N4 Pinning the inngest volume attachment, changing `prevent_destroy`/`delete_protection`, touching `betteruptime_heartbeat.inngest_server_probe`, or web-1 LUKS volume 106443278.
-- N5 Retiring `inngest_expect_luks` (D4) and the rehearsal root's unused plain volume (R4).
+- N5 (amended) Retiring the rehearsal root's unused plain volume (R4). `inngest_expect_luks` (D4) was originally listed here and was pulled INTO scope in review fix round 3.
 
 ## Sharp Edges
 

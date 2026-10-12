@@ -135,18 +135,17 @@ done
 # template variables are substituted with fixed ids, and the by-id PREFIX is rebound to a per-arm
 # directory of REAL symlinks onto loop devices — the same alias-to-device indirection production
 # mounts through, where the previous revision rebound the device path to the loop device directly.
-# The rendered Doppler config is a parameter (9th): the unpointed format arm formats ONLY for a `rehearsal_*`
+# The rendered Doppler config is a parameter (8th): the unpointed format arm formats ONLY for a `rehearsal_*`
 # config (#9786 D6, an allowlist) and refuses every other value, so the arms that must format render a
 # `rehearsal_*` config (the default) and the arms that must refuse render `prd` or another value.
 render_stage() {
-  local expect="$1" byid="$2" mnt="$3" fstab="$4" detail="$5" phone="$6" waitbound="${7:-30}" out="$8" cfg="${9:-rehearsal_loopback}"
+  local byid="$1" mnt="$2" fstab="$3" detail="$4" phone="$5" waitbound="${6:-30}" out="$7" cfg="${8:-rehearsal_loopback}"
   # P1b relative-operand rule (#7810): the `> "$out"` below TRUNCATES whatever the 8th positional
   # names, and this function cannot see its root. Callers pass "$TMPROOT/...", but that is a fact
   # about the callers; a bare filename would truncate a file in the CWD instead.
   assert_fixture_dir "$out"
   awk '/doppler run --project soleur-inngest --config \${inngest_doppler_config\} -- bash -s <<.LUKSEOF.$/{f=1;next} /^    LUKSEOF$/{f=0} f' "$CLOUD_INIT" \
     | sed -e 's/\$\${/${/g' -e 's/%%{/%{/g' \
-          -e "s|\${inngest_expect_luks}|${expect}|g" \
           -e "s|\${inngest_luks_volume_id}|${LUKS_ID}|g" \
           -e "s|\${inngest_doppler_config}|${cfg}|g" \
           -e "s|^    BYID=/dev/disk/by-id/scsi-0HC_Volume_\$|    BYID=${byid}/scsi-0HC_Volume_|" \
@@ -163,7 +162,6 @@ render_stage() {
   local bad=""
   grep -qF 'inngest_volume_id' "$out" && bad="${bad} volume_id"
   grep -qF 'inngest_luks_volume_id' "$out" && bad="${bad} luks_volume_id"
-  grep -qF 'inngest_expect_luks' "$out" && bad="${bad} expect_luks"
   grep -qF 'inngest_doppler_config' "$out" && bad="${bad} doppler_config"
   grep -qF '$${' "$out" && bad="${bad} tf-escape"
   grep -qF "BYID=${byid}/scsi-0HC_Volume_" "$out" || bad="${bad} byid-rebind"
@@ -218,7 +216,7 @@ arm_reset() {
   return 0
 }
 
-# run_arm <name> <expect_luks> <loop|""> <want_rc> [waitbound] [pointer|""] [config] [decoy-loop|""]
+# run_arm <name> <loop|""> <want_rc> [waitbound] [pointer|""] [config] [decoy-loop|""]
 # Runs the rendered stage with INNGEST_REDIS_LUKS_KEY (and the pointer) in the environment, as
 # `doppler run` would supply them. An EMPTY loop argument means that volume is NOT ATTACHED: its
 # by-id alias is simply never created, which is the production shape of an absent volume. <decoy>
@@ -231,7 +229,7 @@ arm_reset() {
 # that wait out an absent one (ARM0, PTR2); T1.6 in the structural sibling pins that the SOURCE bound
 # is 30, so this is a declared harness knob rather than a budget the suite invented.
 run_arm() {
-  local name="$1" expect="$2" vol="$3" want="$4" wb="${5:-2}" pointer="${6:-}" cfg="${7:-rehearsal_loopback}" decoy="${8:-}"
+  local name="$1" vol="$2" want="$3" wb="${4:-2}" pointer="${5:-}" cfg="${6:-rehearsal_loopback}" decoy="${7:-}"
   # THE LABEL IS NOT A PATH. Every arm name here is a human sentence — spaces, and in one case a
   # slash. That directory becomes ARM_MNT, which render_stage substitutes into the SUT for the
   # UNQUOTED literal `/mnt/data`, so the rendered stage died at word-splitting with rc 127 before its
@@ -249,7 +247,7 @@ run_arm() {
   if [ -n "$vol" ]; then ln -s "$vol" "$ARM_BYID/scsi-0HC_Volume_${LUKS_ID}" || unavailable "by-id link failed for $name"; fi
   if [ -n "$decoy" ]; then ln -s "$decoy" "$ARM_BYID/scsi-0HC_Volume_${THIRD_ID}" || unavailable "decoy by-id link failed for $name"; fi
   : > "$TMPROOT/logger.log"; : > "$TMPROOT/phone.log"
-  render_stage "$expect" "$ARM_BYID" "$ARM_MNT" "$ARM_FSTAB" "$ARM_DETAIL" "$PHONE" "$wb" "$d/stage.sh" "$cfg"
+  render_stage "$ARM_BYID" "$ARM_MNT" "$ARM_FSTAB" "$ARM_DETAIL" "$PHONE" "$wb" "$d/stage.sh" "$cfg"
   ARM_RC=0
   INNGEST_REDIS_LUKS_KEY="$KEY" INNGEST_LUKS_ACTIVE_VOLUME_ID="$pointer" bash "$d/stage.sh" > "$d/out.log" 2>&1 || ARM_RC=$?
   cp "$TMPROOT/logger.log" "$ARM_LOG" 2>/dev/null || : > "$ARM_LOG"
@@ -268,11 +266,11 @@ backing_of() {
 # volume and the signature decides: ext4 and any foreign type REFUSE, crypto_LUKS opens, and only a
 # measured-blank device may be formatted — and only when the rendered Doppler config is `rehearsal_*`.
 
-# ── UNP3: ext4 REFUSES regardless of expect_luks ────────────────────────────────
-# The ext4 mount arm is gone. Before the strip this very fixture mounted as-is when expect_luks=false;
-# the input gates nothing now, so the arm that used to mount is run with the value that used to allow it.
+# ── UNP3: ext4 REFUSES ────────────────────────────────────────────────────────────
+# The ext4 mount arm is gone. Before the strip this very fixture mounted as-is (under the retired input's
+# permissive value); with the arm and the input removed it must refuse like any other foreign signature.
 L_EXT4="$(new_loop ext4 ext4)"
-run_arm "UNP3 ext4 REFUSES even with expect_luks=false" false "$L_EXT4" 1
+run_arm "UNP3 ext4 REFUSES" "$L_EXT4" 1
 if ! mountpoint -q "$ARM_MNT"; then ok "UNP3 nothing was mounted on the refusal path"; else no "UNP3 the refusal still mounted the ext4 device"; fi
 if grep -qF 'unhandled signature' "$ARM_DETAIL"; then ok "UNP3 the refusal names the unhandled signature"; else no "UNP3 the detail log does not explain the refusal"; fi
 if [ "$(/usr/sbin/blkid -p -o value -s TYPE "$L_EXT4" 2>/dev/null)" = "ext4" ]; then ok "UNP3 the ext4 device was left untouched"; else no "UNP3 the refusal path wrote to a device carrying data"; fi
@@ -281,7 +279,7 @@ if [ "$(/usr/sbin/blkid -p -o value -s TYPE "$L_EXT4" 2>/dev/null)" = "ext4" ]; 
 # Rendered with a `rehearsal_*` Doppler config (the provision-rehearsal shape). UNP5/UNP5b below are the same
 # fixture shape under `prd` and under a non-rehearsal value.
 L_RAW="$(new_loop raw raw)"
-run_arm "ARM3 empty device luksFormats, mkfs, mounts" false "$L_RAW" 0
+run_arm "ARM3 empty device luksFormats, mkfs, mounts" "$L_RAW" 0
 if [ "$(/usr/sbin/blkid -o value -s TYPE "$L_RAW" 2>/dev/null)" = "crypto_LUKS" ]; then ok "ARM3 the device now carries a LUKS2 header"; else no "ARM3 the device was not luksFormatted"; fi
 if [ "$(findmnt -no SOURCE "$ARM_MNT" 2>/dev/null)" = "/dev/mapper/inngest-redis" ]; then ok "ARM3 mounted from the MAPPER, not the raw device"; else no "ARM3 not mounted from /dev/mapper/inngest-redis"; fi
 if grep -qE 'stage=verify .*detail=mode=unpointed' "$ARM_LOG"; then ok "ARM3 the verify row reports mode=unpointed"; else no "ARM3 no stage=verify mode=unpointed marker"; fi
@@ -300,17 +298,16 @@ umount "$ARM3_MNT" >/dev/null 2>&1
 cryptsetup close inngest-redis >/dev/null 2>&1
 if [ ! -e /dev/mapper/inngest-redis ]; then ok "BOOT2 precondition: the mapper is closed (a fresh boot)"; else no "BOOT2 could not close the mapper — the case below would be vacuous"; fi
 
-# render_reopen <byid-dir> <expect> <out> — the reopen script, rendered the way Terraform renders it.
+# render_reopen <byid-dir> <out> — the reopen script, rendered the way Terraform renders it.
 # THE PREVIOUS RENDER WAS THE DEFECT'S HIDING PLACE. It applied a global doubled-dollar-to-dollar
 # sed, so it graded a script that Terraform never produces; the script Terraform DID produce failed
 # with `syntax error near unexpected token` on the live host on every boot (#6894). This render
 # applies only Terraform's two real escapes, and the arm below requires the result to PARSE.
 render_reopen() {
-  local byid="$1" expect="$2" out="$3"
+  local byid="$1" out="$2"
   assert_fixture_dir "$out"
   awk '/^  - path: \/usr\/local\/bin\/inngest-luks-open\.sh$/{f=1;next} f&&/^    content: \|$/{c=1;next} c&&/^    owner:/{exit} c' "$CLOUD_INIT" \
     | sed -e 's/^      //' -e 's/\$\${/${/g' -e 's/%%{/%{/g' \
-          -e "s|\${inngest_expect_luks}|${expect}|g" \
           -e "s|\${inngest_luks_volume_id}|${LUKS_ID}|g" \
           -e "s|^BYID=/dev/disk/by-id/scsi-0HC_Volume_\$|BYID=${byid}/scsi-0HC_Volume_|" \
           -e "s|\\[ \"\\\$_i\" -lt 30 \\]|[ \"\$_i\" -lt 2 ]|" \
@@ -319,8 +316,8 @@ render_reopen() {
 REOPEN="$TMPROOT/inngest-luks-open.sh"
 B2_BYID="$TMPROOT/b2-byid"; mkdir -p "$B2_BYID"
 ln -sf "$L_RAW" "$B2_BYID/scsi-0HC_Volume_${LUKS_ID}"
-render_reopen "$B2_BYID" true "$REOPEN"
-if [ -s "$REOPEN" ] && ! grep -qE 'inngest_(luks_)?volume_id|inngest_expect_luks|/dev/disk/by-id/' "$REOPEN" && grep -qF "BYID=${B2_BYID}/scsi-0HC_Volume_" "$REOPEN"; then
+render_reopen "$B2_BYID" "$REOPEN"
+if [ -s "$REOPEN" ] && ! grep -qE 'inngest_(luks_)?volume_id|/dev/disk/by-id/' "$REOPEN" && grep -qF "BYID=${B2_BYID}/scsi-0HC_Volume_" "$REOPEN"; then
   ok "BOOT2 the reopen script extracts and renders (Terraform's escapes only, by-id rebound)"
 else
   no "BOOT2 could not extract/render inngest-luks-open.sh — every assertion below would be vacuous"
@@ -367,7 +364,7 @@ fi
 # ── ARM 2: crypto_LUKS — open and mount; NEVER format. Rendered under `prd`: opening an existing
 # store is the one thing a lost pointer on a production host must still be able to do. ────────────
 cryptsetup close inngest-redis >/dev/null 2>&1
-run_arm "ARM2 crypto_LUKS opens and mounts" true "$L_RAW" 0 2 "" prd
+run_arm "ARM2 crypto_LUKS opens and mounts" "$L_RAW" 0 2 "" prd
 if [ "$(findmnt -no SOURCE "$ARM_MNT" 2>/dev/null)" = "/dev/mapper/inngest-redis" ]; then ok "ARM2 mounted from the mapper"; else no "ARM2 not mounted from the mapper"; fi
 
 # --- ARM2b — #8017's device resolution against a REAL, KERNEL-BUILT device tree -------------
@@ -455,7 +452,7 @@ cryptsetup close inngest-redis >/dev/null 2>&1
 
 # ── ARM 4: an unhandled signature — refuse ──────────────────────────────────────
 L_SWAP="$(new_loop swap swap)"
-run_arm "ARM4 unhandled signature REFUSES" false "$L_SWAP" 1
+run_arm "ARM4 unhandled signature REFUSES" "$L_SWAP" 1
 if grep -qF 'unhandled signature' "$ARM_DETAIL"; then ok "ARM4 the refusal names the unhandled type"; else no "ARM4 the detail log does not name the unhandled signature"; fi
 if [ "$(/usr/sbin/blkid -o value -s TYPE "$L_SWAP" 2>/dev/null)" = "swap" ]; then ok "ARM4 the device was left untouched"; else no "ARM4 the refusal path wrote to a device whose contents were unknown"; fi
 
@@ -463,7 +460,7 @@ if [ "$(/usr/sbin/blkid -o value -s TYPE "$L_SWAP" 2>/dev/null)" = "swap" ]; the
 # blkid on an absent path returns rc 2, which the accept-0-or-2 policy would otherwise route
 # straight into the luksFormat arm. The wait bound is lowered to 2 for this case ONLY; T1.6 pins
 # that the SOURCE bound is 30, so this is a declared harness knob rather than an invented budget.
-run_arm "ARM0 absent device REFUSES (never formats a non-device)" false "" 1 2
+run_arm "ARM0 absent device REFUSES (never formats a non-device)" "" 1 2
 if grep -qF 'is not a block device' "$ARM_DETAIL"; then ok "ARM0 the refusal names the absent device"; else no "ARM0 the detail log does not name the absent device"; fi
 
 # ── UNP5: no pointer + a RAW volume + a PRODUCTION config REFUSES, and formats nothing (D6) ───
@@ -471,7 +468,7 @@ if grep -qF 'is not a block device' "$ARM_DETAIL"; then ok "ARM0 the refusal nam
 # scheduler carries. A lost Doppler pointer on a damaged-header volume reads exactly like this, and
 # formatting it would destroy the only copy of the AOF. Deleting the refusal line must red THIS arm.
 L_RAW5="$(new_loop raw5 raw)"
-run_arm "UNP5 raw volume under a prd config REFUSES to format" false "$L_RAW5" 1 2 "" prd
+run_arm "UNP5 raw volume under a prd config REFUSES to format" "$L_RAW5" 1 2 "" prd
 if grep -qF 'unpointed_raw_refused' "$ARM_DETAIL"; then ok "UNP5 the refusal names unpointed_raw_refused"; else no "UNP5 the detail log does not name the D6 refusal"; fi
 if [ -z "$(/usr/sbin/blkid -p -o value -s TYPE "$L_RAW5" 2>/dev/null)" ]; then ok "UNP5 the device was NOT formatted (still blank)"; else no "UNP5 the refusal path wrote a header to the production volume"; fi
 if ! mountpoint -q "$ARM_MNT"; then ok "UNP5 nothing was mounted"; else no "UNP5 a volume was mounted under the refusal"; fi
@@ -483,7 +480,7 @@ arm_reset
 # Same blank device, no pointer, rendered with a config that is neither prd nor a rehearsal one. Only a
 # `rehearsal_*` config may format, so any other value (a new environment, a typo) must refuse too.
 L_RAW5B="$(new_loop raw5b raw)"
-run_arm "UNP5b raw volume under a non-rehearsal config REFUSES to format" false "$L_RAW5B" 1 2 "" staging
+run_arm "UNP5b raw volume under a non-rehearsal config REFUSES to format" "$L_RAW5B" 1 2 "" staging
 if grep -qF 'unpointed_raw_refused' "$ARM_DETAIL"; then ok "UNP5b the refusal names unpointed_raw_refused"; else no "UNP5b the detail log does not name the D6 refusal"; fi
 if [ -z "$(/usr/sbin/blkid -p -o value -s TYPE "$L_RAW5B" 2>/dev/null)" ]; then ok "UNP5b the device was NOT formatted (still blank)"; else no "UNP5b the refusal path wrote a header under a non-rehearsal config"; fi
 arm_reset
@@ -493,7 +490,7 @@ arm_reset
 # (exit 0); now it fails loudly, and the unit never formats.
 U4_BYID="$TMPROOT/u4-byid"; mkdir -p "$U4_BYID"
 ln -sf "$L_EXT4" "$U4_BYID/scsi-0HC_Volume_${LUKS_ID}"
-render_reopen "$U4_BYID" false "$TMPROOT/reopen-u4.sh"
+render_reopen "$U4_BYID" "$TMPROOT/reopen-u4.sh"
 : > "$TMPROOT/logger.log"
 R_RC=0
 INNGEST_REDIS_LUKS_KEY="$KEY" INNGEST_LUKS_ACTIVE_VOLUME_ID="" bash "$TMPROOT/reopen-u4.sh" > "$TMPROOT/reopen-u4.log" 2>&1 || R_RC=$?
@@ -516,7 +513,7 @@ fstab_count() { awk -v mp="$2" '$1 !~ /^#/ && $2 == mp' "$1" | wc -l; }
 # ── PTR1: the pointer names the volume — it is the canonical store ────────────────────────────
 # Rendered under `prd`, the config the sole scheduler carries: the production-shaped must-pass arm. The D6 refusal
 # lives only in the unpointed arm, so a guard that wrongly fired on the pointer path would red here.
-run_arm "PTR1 a pointer to the volume mounts it as the canonical store" false "$L_RAW" 0 2 "$LUKS_ID" prd
+run_arm "PTR1 a pointer to the volume mounts it as the canonical store" "$L_RAW" 0 2 "$LUKS_ID" prd
 if [ "$(findmnt -no SOURCE "$ARM_MNT" 2>/dev/null)" = "/dev/mapper/inngest-redis" ]; then ok "PTR1 /mnt/data is mounted from the CANONICAL mapper"; else no "PTR1 /mnt/data source is '$(findmnt -no SOURCE "$ARM_MNT" 2>/dev/null)'"; fi
 if [ "$(backing_of inngest-redis)" = "$(basename "$L_RAW")" ]; then ok "PTR1 the canonical mapper is backed by the volume (real sysfs slaves/)"; else no "PTR1 the canonical mapper is backed by '$(backing_of inngest-redis)'"; fi
 if [ -f "$ARM_MNT/canary" ]; then ok "PTR1 the store the pointer names is the one that was formatted (its canary is present)"; else no "PTR1 the canonical store is not the formatted one"; fi
@@ -529,7 +526,7 @@ arm_reset
 # A decoy ext4 volume is attached under a by-id alias this host does not own: the refusal must not
 # reach for it.
 L_DECOY="$(new_loop decoy ext4)"
-run_arm "PTR2 a pointer to an ABSENT volume REFUSES" false "" 1 2 "$LUKS_ID" rehearsal_loopback "$L_DECOY"
+run_arm "PTR2 a pointer to an ABSENT volume REFUSES" "" 1 2 "$LUKS_ID" rehearsal_loopback "$L_DECOY"
 if ! mountpoint -q "$ARM_MNT"; then ok "PTR2 nothing is mounted — no other volume is used as a fallback"; else no "PTR2 /mnt/data was mounted from '$(findmnt -no SOURCE "$ARM_MNT" 2>/dev/null)' — the silent un-encryption Fork P refuses"; fi
 if grep -qF 'is not attached' "$ARM_DETAIL"; then ok "PTR2 the refusal names the missing volume"; else no "PTR2 the detail log does not name the missing volume"; fi
 arm_reset
@@ -537,19 +534,19 @@ arm_reset
 # ── PTR3: the pointer names a THIRD id — refused before any device is derived (Guard 4, row 3) ───
 # The volume itself (a healthy LUKS store) and a decoy at the third id are both attached: the
 # refusal must come from the resolver's allowlist, not from a missing device.
-run_arm "PTR3 a pointer to a third volume id REFUSES" false "$L_RAW" 1 2 "$THIRD_ID" rehearsal_loopback "$L_DECOY"
+run_arm "PTR3 a pointer to a third volume id REFUSES" "$L_RAW" 1 2 "$THIRD_ID" rehearsal_loopback "$L_DECOY"
 if ! mountpoint -q "$ARM_MNT" && [ ! -e /dev/mapper/inngest-redis ]; then ok "PTR3 nothing is mounted and no mapper was opened"; else no "PTR3 a device was opened or mounted under a third-id pointer"; fi
 if grep -qF "not this host's volume" "$ARM_DETAIL"; then ok "PTR3 the refusal names the foreign pointer"; else no "PTR3 the detail log does not name the foreign pointer"; fi
 if [ "$(/usr/sbin/blkid -p -o value -s TYPE "$L_DECOY" 2>/dev/null)" = "ext4" ]; then ok "PTR3 the decoy volume was left untouched"; else no "PTR3 the refusal path touched the decoy volume"; fi
 arm_reset
 # ── PTR3b: the pointer names the RETIRED plaintext backstop's id — a stale value is a third id now ──
-run_arm "PTR3b a pointer to the retired plaintext volume id REFUSES" false "$L_RAW" 1 2 "$RETIRED_ID"
+run_arm "PTR3b a pointer to the retired plaintext volume id REFUSES" "$L_RAW" 1 2 "$RETIRED_ID"
 if grep -qF "not this host's volume" "$ARM_DETAIL"; then ok "PTR3b the retired id is refused as a foreign pointer"; else no "PTR3b the detail log does not name the foreign pointer"; fi
 arm_reset
 
 # ── PTR4: the pointer names a LUKS volume with an EMPTY filesystem — refuse, never mkfs ────────
 L_E="$(new_loop pte luks)"
-run_arm "PTR4 a pointer to an EMPTY store REFUSES" false "$L_E" 1 2 "$LUKS_ID"
+run_arm "PTR4 a pointer to an EMPTY store REFUSES" "$L_E" 1 2 "$LUKS_ID"
 if grep -qF 'not ext4' "$ARM_DETAIL"; then ok "PTR4 the refusal names the empty store"; else no "PTR4 the detail log does not name the empty store"; fi
 arm_reset
 # Opened under this suite's OWN inspection name, never the SUT's, only to look inside.
@@ -560,7 +557,7 @@ cryptsetup close inngest-insp >/dev/null 2>&1
 # ── BOOT2 under a pointer: the reopen unit opens exactly the volume the pointer names ─────────
 B3_BYID="$TMPROOT/b3-byid"; mkdir -p "$B3_BYID"
 ln -sf "$L_RAW" "$B3_BYID/scsi-0HC_Volume_${LUKS_ID}"
-render_reopen "$B3_BYID" false "$TMPROOT/reopen-b3.sh"
+render_reopen "$B3_BYID" "$TMPROOT/reopen-b3.sh"
 R_RC=0
 INNGEST_REDIS_LUKS_KEY="$KEY" INNGEST_LUKS_ACTIVE_VOLUME_ID="$LUKS_ID" bash "$TMPROOT/reopen-b3.sh" > "$TMPROOT/reopen-b3.log" 2>&1 || R_RC=$?
 if [ "$R_RC" -eq 0 ] && [ "$(backing_of inngest-redis)" = "$(basename "$L_RAW")" ]; then ok "BOOT2-PTR reboot reopens the volume as the canonical mapper"; else no "BOOT2-PTR rc=$R_RC canonical backing='$(backing_of inngest-redis)'"; sed -n '1,8p' "$TMPROOT/reopen-b3.log" >&2; fi
@@ -706,7 +703,7 @@ cryptsetup close inngest-redis >/dev/null 2>&1
 # 90 -> 79 (#9786), PROJECTED from that measured baseline by per-arm accounting, NOT yet measured: the authoring
 # machine has no passwordless sudo, so this suite did not run there. It must be confirmed against the first CI run
 # and, if it differs, the difference accounted for arm by arm before the literal moves.
-#   removed (-34): ARM1 4, ARM1b 3, REG 6, ST1 7, ST2 3, ST3 4 (the plaintext mount, its ext4/expect_luks refusal and
+#   removed (-34): ARM1 4, ARM1b 3, REG 6, ST1 7, ST2 3, ST3 4 (the plaintext mount, its ext4 refusal and
 #     the staging block); PTR1 no-staging-mapper + plaintext-backstop rows 2; the old PTR3 (a pointer to the plaintext
 #     volume) 3; BOOT2-PTR "opens nothing else" 1; BOOT2-STG 1.
 #   added (+23): UNP3 4 (ext4 refuses), ARM3 mode=unpointed row 1, UNP5 5 (prd refuses to format), UNP4 4 (reopen

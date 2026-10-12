@@ -339,10 +339,6 @@ locals {
     # builds its allowlist of devices it may touch from this id alone, so any other device is
     # refused rather than probed.
     inngest_luks_volume_id = hcloud_volume.inngest_redis_luks.id
-    # #7695 / #9786. INERT telemetry field (`expect_luks=` on the LUKS stage rows); nothing in the
-    # template branches on it any more. Still a rendered key, so changing the variable changes
-    # user_data. Threaded as a STRING so the rendered form does not depend on how HCL stringifies a bool.
-    inngest_expect_luks = tostring(var.inngest_expect_luks)
     # Scoped Doppler token → 0600 root env file. read/write on the ISOLATED `soleur-inngest`
     # project's `prd` root config (the flip FSM writes INNGEST_CUTOVER_FLIP under it — see the
     # doppler_service_token.inngest note above, #6178). It is a SEPARATE project — NO

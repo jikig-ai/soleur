@@ -21,6 +21,12 @@ Persisted by plan (headless). Rendered into the PR body by ship Phase 6.
 Template key, variable, rehearsal line and the `expect_luks=` telemetry field stay (narrow diff, Better
 Stack query stability). A tracking issue retires it at the same replace window.
 
+**REVERSED in the review fix round 3 (binding CTO ruling A).** The code-simplicity reviewer dissented on filing it
+as a scope-out: any later retirement changes `user_data` again and so replaces the sole scheduler a second time,
+which makes "at the same replace window" achievable only by doing it in this PR, and no Better Stack query, alert,
+workflow or script reads the field. `inngest_expect_luks` (variable, template key, rehearsal and budget-script lines,
+the `expect_luks=` field, and its tests) is retired here; the AC5 key set drops 17 -> 16.
+
 ## DC3 - Taste: park as a reviewed draft PR instead of closing the PR and keeping the patch on the issue
 
 Chosen because the brief mandates a draft PR; rot risk is mitigated by the unpark checklist and the

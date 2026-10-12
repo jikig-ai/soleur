@@ -176,9 +176,7 @@ write_files:
       # THE POINTER, staged into /etc/default/inngest-luks by the first-boot stage because this unit
       # runs before the network and cannot fetch it. Same authority as in the runcmd resolver.
       POINTER="$${INNGEST_LUKS_ACTIVE_VOLUME_ID:-}"
-      # expect_luks= is TELEMETRY ONLY since #9786 (nothing branches on it), but it is still a
-      # rendered input: changing the variable changes user_data and so replaces the host.
-      emit() { logger -t inngest-luks-stage "SOLEUR_INNGEST_LUKS_STAGE stage=$1 rc=$2 blkid_type=$${3:-n/a} expect_luks=${inngest_expect_luks} detail=$${4:-none}" || true; }
+      emit() { logger -t inngest-luks-stage "SOLEUR_INNGEST_LUKS_STAGE stage=$1 rc=$2 blkid_type=$${3:-n/a} detail=$${4:-none}" || true; }
       fail() { emit "$1" "$2" "$${3:-n/a}" "$4"; exit 1; }
 
       # Unprivileged blkid reads a populated device as blank (rc 2 / empty type). Assert, do not assume.
@@ -1558,9 +1556,9 @@ runcmd:
   #   TYPE=crypto_LUKS                    -> luksOpen + mount
   #   anything else (ext4 included)       -> FATAL
   #
-  # The plaintext ext4 arm and `expect_luks` refusal that used to sit here were removed in #9786:
-  # the plaintext volume was destroyed in #8285, so an ext4 signature on the one remaining
-  # volume is a surprise to refuse, never a state to mount. `expect_luks` is now telemetry only.
+  # The plaintext ext4 arm and the post-recut refusal (with the Terraform input that armed it) that
+  # used to sit here were removed in #9786: the plaintext volume was destroyed in #8285, so an ext4
+  # signature on the one remaining volume is a surprise to refuse, never a state to mount.
   - |
     set -a
     . /etc/default/inngest-doppler
@@ -1582,7 +1580,7 @@ runcmd:
       # journald-config.test.sh asserts BOTH sides, because Source 4 is exact-value equality
       # and a one-sided change is a silent no-op.
       logger -t inngest-luks-stage \
-        "SOLEUR_INNGEST_LUKS_STAGE stage=$1 rc=$2 blkid_type=$${3:-n/a} expect_luks=$${EXPECT_LUKS} detail=$${4:-none}" || true
+        "SOLEUR_INNGEST_LUKS_STAGE stage=$1 rc=$2 blkid_type=$${3:-n/a} detail=$${4:-none}" || true
     }
     luks_err() {
       rc=$?
@@ -1609,8 +1607,6 @@ runcmd:
       exit 1
     }
     trap luks_err EXIT
-    # TELEMETRY ONLY since #9786: nothing branches on EXPECT_LUKS; it is emitted on every row.
-    EXPECT_LUKS='${inngest_expect_luks}'
     # ── THE ONE VOLUME, BY ID (#6894, ADR-142; #9786 retired the plaintext volume) ───────
     # LUKS_ID is the store's volume. It comes from the template, so the pointer below can only
     # ever name this one: a pointer naming any other id is a refusal, never a new device to open.

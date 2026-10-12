@@ -70,7 +70,6 @@ locals {
     web_host_private_ips = "127.0.0.1"
     inngest_private_ip   = local.rehearsal_private_ip
     # --- MUST MATCH PROD (the checksums above are drift-pinned by the sentinel suite) ---
-    inngest_expect_luks    = "false"
     inngest_cli_arch       = local.rehearsal_arch
     inngest_cli_sha256     = local.rehearsal_arch == "arm64" ? local.inngest_cli_sha256_arm64 : local.inngest_cli_sha256
     vector_sha256          = local.rehearsal_arch == "arm64" ? local.vector_sha256_arm64 : local.vector_sha256

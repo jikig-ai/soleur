@@ -819,23 +819,6 @@ variable "grok_dogfood_private_ip" {
   default     = "10.0.1.50"
 }
 
-# #7695 / #9786. INERT. This used to arm the cloud-init discriminator's post-recut refusal (an
-# ext4 signature on the Redis AOF volume refused once the recut had run). The plaintext volume was
-# destroyed in #8285 and #9786 deleted the ext4 arm and every branch on this value, so it is
-# TELEMETRY ONLY. Nothing branches on it; it is emitted as `expect_luks=` on the LUKS stage rows.
-#
-# IT IS STILL A RENDERED TEMPLATE KEY. Flipping it changes user_data and replaces the host
-# (hcloud_server.inngest has no ignore_changes on user_data), and it will NOT refuse anything. The
-# four-dispatch delivery history that used to sit here lives in the ADR-199 addendum (2026-09-03).
-# Retirement is tracked with the other #9786 follow-ups; do not repurpose the name.
-#
-# It is not an operator-supplied value and has no secret content.
-variable "inngest_expect_luks" {
-  description = "INERT since #9786: no longer gates any boot behaviour (the ext4 mount arm and the expect_luks branches were stripped from cloud-init-inngest.yml). Still threaded as a template key and a telemetry field; retire with the follow-up tracker."
-  type        = bool
-  default     = false
-}
-
 # #6894 / ADR-142 — arms the "store is not on the encrypted volume" Better Stack alert
 # (betterstack-logs-alerts.tf, logtail_exploration_alert.inngest_luks_wrong_volume).
 #

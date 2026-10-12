@@ -25,7 +25,7 @@ Ship phase STOPS at a reviewed DRAFT PR (#10081). No merge, no apply, no replace
 - 3.2 rehearsal.tf: drop one map line.
 - 3.3 inngest-userdata-budget.sh: drop stub + header bullet; re-measure.
 - 3.4 inngest-boot-emitter.test.sh: RENDER_EXPR key, anchor, history comment.
-- 3.5 variables.tf: description-only edit marking `inngest_expect_luks` inert.
+- 3.5 variables.tf: description-only edit marking `inngest_expect_luks` inert. (Superseded in review fix round 3: the variable, template key and telemetry field are retired instead; AC5 key set 16.)
 
 ## Phase 4 - Suites
 - 4.1 luks suite: seds, T1.10, T1.8a (4->3), delete T1.8a2, G1.a floor 6->4 with accounting, G1.b STAGING_MAPPER, G4.e needle, recount floor 64.
