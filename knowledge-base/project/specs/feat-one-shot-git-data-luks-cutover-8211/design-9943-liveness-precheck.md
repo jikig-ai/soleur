@@ -110,26 +110,49 @@ mapped to `unrecognized`, and the sentinel-signal remedy of section 3 fork 2).
 Common: `set -euo pipefail`; refuse under xtrace (`exit 78`, as `git-data-flag-precheck.sh`); `LC_ALL=C`; source
 `scripts/lib/betterstack-sources.sh` (`BS_GIT_DATA_TABLE`, `BS_GIT_DATA_TABLE_S3`), `scripts/lib/betterstack-absence.sh`
 (`bs_absence_query_script`, `bs_absence_response_is_answer`) and `scripts/lib/betterstack-read-classify.sh`
-(`bs_read_classify`), exactly the libraries `git-data-boot-signal-poll.sh` uses. Every Better Stack read is the
-`git_data_served_empty_read` shape: `BS_TABLE="$BS_GIT_DATA_TABLE" BS_TABLE_S3="$BS_GIT_DATA_TABLE_S3"`, `timeout -k 5
+(`bs_read_classify`), the libraries `scripts/lib/git-data-boot-signal-poll.sh` sources. Every Better Stack read follows
+the `git_data_served_empty_read` shape, except for the scrub (that library function strips only THREE names,
+`DOPPLER_TOKEN`, `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, read in that file; this design's scrub is stricter,
+see the requirement below). The shape, with the library's own `env -u` form shown for reference: `BS_TABLE="$BS_GIT_DATA_TABLE" BS_TABLE_S3="$BS_GIT_DATA_TABLE_S3"`, `timeout -k 5
 45`, `doppler run -p soleur -c prd_terraform --only-secrets BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD
---no-exit-on-missing-only-secrets -- env -u DOPPLER_TOKEN -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u SHELLOPTS -u BASH_ENV -u BASHOPTS bash "$reader" "$sql"`,
-stdout and stderr to SEPARATE files (an HTTP error body can carry the query username). **Design requirement: one scrub set for
-every read.** All three reads (H, B, E) use `env -u DOPPLER_TOKEN -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u SHELLOPTS
--u BASH_ENV -u BASHOPTS`, so a reader call is never weaker than the heartbeat call (`SHELLOPTS`, `BASH_ENV` and
-`BASHOPTS` are how a child shell is made to trace or source something). Every read also uses the `--only-secrets`
+--no-exit-on-missing-only-secrets -- env -u DOPPLER_TOKEN -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY bash "$reader" "$sql"`,
+stdout and stderr to SEPARATE files (an HTTP error body can carry the query username). **Design requirement: one scrub form for
+every read, an `env -i` allow-list, not a deny-list.** An earlier draft mandated six `-u` flags (`DOPPLER_TOKEN`,
+`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `SHELLOPTS`, `BASH_ENV`, `BASHOPTS`) and said the set matched the poll
+library; the library strips only the first three, so that claim was wrong, and a deny-list cannot enumerate what is
+actually in this step's environment: the `CF Tunnel SSH bridge` step (a `uses:` step before this one, read in
+`.github/actions/cf-tunnel-ssh-bridge/action.yml`) appends `TUNNEL_SERVICE_TOKEN_ID`, `TUNNEL_SERVICE_TOKEN_SECRET`,
+`CI_SSH_KEYFILE`, `WEB_HOST_SSH`, `SERVER_IP` and `CLOUDFLARED_PID` to `$GITHUB_ENV`, and Actions gives every later
+step of the job that environment. No `-u` list above strips those names, so they would reach the reader process
+(`TUNNEL_SERVICE_TOKEN_SECRET` is a Cloudflare Access credential). The step's own `env:` block binding only
+`DOPPLER_TOKEN` is therefore not the whole story; the sentence in section 5 item 5 ("no key or bridge variable in its
+env") is corrected there. The mandated form for all three reads (H, B, E) is `env -i` with an explicit allow-list of
+exactly the names the reader or `arm-heartbeats.sh` reads (`PATH`, `LC_ALL`, the narrowed `BETTERSTACK_*` secret
+names, `BS_TABLE`, `BS_TABLE_S3`, and whatever else the build PR proves each script needs, named in the suite). The
+values are passed by name from inside the `bash -c` shell that `doppler run` starts, because `doppler run` injects its
+secrets into the process it launches and a bare `env -i` placed after it would drop them. It carries no `TF_VAR_*`,
+`AWS_*`, `TUNNEL_*`, `CI_SSH_*`, `WEB_HOST_SSH`, `SHELLOPTS`, `BASH_ENV` or `BASHOPTS` by construction.
+`design-wipe-body-pr.md` made the same move for its post-W8 steps (its section 2.2), so the two documents agree on the
+form; the flip report's row 1.1 form (the six-flag `env -u` deny-list) and the runbook's step-7 paste (three other flags)
+are deny-lists too, so the build PR re-points both to this form. Census row (build PR,
+`git-data-cutover-access.test.sh`): the `GITHUB_ENV` writers that precede `liveness_precheck` are pinned to exactly
+the bridge action's six names above, and any other step before `liveness_precheck` that appends to `$GITHUB_ENV` goes
+RED until it is judged (none does today: a grep of `git-data-cutover.yml` finds no such append; the bridge action is
+the only writer). Every read also uses the `--only-secrets`
 narrowed form: the unnarrowed `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh ...` form (the
 one a flip report or a runbook paste may show) injects every `prd_terraform` secret (cloud and state keys, Doppler
 tokens) into a process that reads vendor bytes, and is not an approved form for any read here. The Doppler shim row
-asserts the exact secret list and the scrub set for each of the three calls, and a mutant that drops `--only-secrets`
-or any `-u` goes RED. `--only-secrets` is what stops a
+asserts the exact secret list and the allow-list for each of the three calls, and a mutant that drops `--only-secrets`
+or adds a bridge variable to the allow-list goes RED. `--only-secrets` is what stops a
 stray `BS_TABLE` key in `prd_terraform` from re-pointing the read; it is not a credential boundary, which is why
-`env -u` strips the Doppler token. Table pin: the shared default source answers zero rows for this host forever
+the `env -i` allow-list (not `--only-secrets`) is what keeps the Doppler token and the bridge variables out. Table pin: the shared default source answers zero rows for this host forever
 (runbook "The D6 rotate"), so the script never calls the reader without both pins, and a test row proves it.
 
 **Read H, the monitor (Better Stack Uptime API, read scope).**
-`timeout -k 5 30 doppler run -p soleur -c prd_terraform --only-secrets BETTERSTACK_API_TOKEN_READONLY --no-exit-on-missing-only-secrets -- env -u DOPPLER_TOKEN -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u SHELLOPTS -u BASH_ENV -u BASHOPTS bash --noprofile --norc -c 'BS_TOKEN="$BETTERSTACK_API_TOKEN_READONLY" exec bash apps/web-platform/infra/arm-heartbeats.sh --status soleur-git-data-host-prd'`
-(the runbook's own step-7 form, so the token reaches the process by environment only and `arm-heartbeats.sh` puts the
+`timeout -k 5 30 doppler run -p soleur -c prd_terraform --only-secrets BETTERSTACK_API_TOKEN_READONLY --no-exit-on-missing-only-secrets -- bash --noprofile --norc -c 'BS_TOKEN="$BETTERSTACK_API_TOKEN_READONLY" exec env -i PATH="$PATH" LC_ALL=C BS_TOKEN="$BS_TOKEN" bash apps/web-platform/infra/arm-heartbeats.sh --status soleur-git-data-host-prd'`
+(the `env -i` allow-list shown is the shape, its exact names to be derived and pinned by the build PR)
+(derived from the runbook's own step-7 form, which strips only `SHELLOPTS`, `BASH_ENV` and `BASHOPTS`, the other half of the
+six-flag union an earlier draft mandated; the token reaches the process by environment only and `arm-heartbeats.sh` puts the
 bearer on curl's stdin config, ADR-280). `--status` has NO timeout of its own: it resolves the name over up to `ARM_LIST_MAX_PAGES=20` list pages at
 `ARM_CURL_MAX_TIME_S=15` s each, up to about 300 s per call (its `--arm-one` header tells callers to allow at least
 300 s), so Read H is wrapped in `timeout -k 5 30` (design requirement; section 5 prices it). A timeout there is
@@ -270,8 +293,10 @@ cancel the step before it printed a verdict word, which is the "could not tell" 
    `host_proof`, so the Cloudflare tunnel bridge and the root key fetched earlier in the job stay up through every
    attempt and sleep until the always-run teardown. On the degraded path that is up to about 9 minutes (the 540 s
    deadline) of extra exposure, versus roughly a minute for a healthy single-pass read. This is accepted because
-   the step uses neither (it reads Better Stack only, bound to `secrets.DOPPLER_TOKEN`, with no key or bridge
-   variable in its env), the exposure is time on an already-authorized job and not a new capability, and moving the
+   the step uses neither (it reads Better Stack only; its own `env:` binds `secrets.DOPPLER_TOKEN` alone, but the
+   bridge's `$GITHUB_ENV` variables are still in the job environment it inherits, which is why section 4 mandates the
+   `env -i` allow-list so none reaches a reader, and the root key stays a file under `$RUNNER_TEMP`, not an
+   environment variable), the exposure is time on an already-authorized job and not a new capability, and moving the
    step before the bridge was rejected in section 3 fork 1 for freshness. The deadline is what caps it; the step
    must not grow its own retry beyond it.
 
@@ -338,7 +363,23 @@ its `if`, add `DOPPLER_TOKEN_PRD` to its env, move it after `freeze`, drop the x
   What the liveness precheck cannot supply, and the d6 reader must (or the owner must check by hand until it does):
   an independent proof that the ok event and the `boot_complete` come from the host that EXISTS now, namely that
   the newest replace run itself concluded `success` and that the live git-data host's Hetzner server id or creation
-  time is later than the predecessor's last ok event. Until then the owner's runbook re-read, plus a look at the
+  time is later than the predecessor's last ok event.
+  **Option, recorded and NOT decided: this step could close the window itself.** `HCLOUD_TOKEN_READONLY` is read from
+  the same Doppler config this step already reads (`prd_terraform`, through `secrets.DOPPLER_TOKEN`; read in
+  `.github/actions/infra-credentials/action.yml` and the post-merge skill), so a fourth read (Read S) could `GET
+  /servers?name=soleur-git-data` (the name in `git-data.tf`), require exactly one server, and refuse unless Read B's
+  newest `boot_complete` `dt` is at or after that server's `created` (the check `design-wipe-body-pr.md` makes at its
+  R1 and W5). A predecessor's boot row predates the successor's `created`, so it would refuse as a new word such as
+  `boot_predates_server`, with no dependence on the d6 reader or #10166. Costs, to weigh when deciding: a Hetzner API
+  read inside a step that today reads only Better Stack (a new vendor, a new narrowed `--only-secrets
+  HCLOUD_TOKEN_READONLY` call, a new closed-vocabulary word in the script, the notify `case`, the runbook verdict map
+  and the vocabulary-parity row); the step must refuse rather than fall back to the read/write `HCLOUD_TOKEN` when
+  the read-only token is absent (the `infra-credentials` loader has such a fallback until operator step O5 mints
+  it, which this step must not inherit); Read S's cap and one more attempt-slice to price in section 5's 135 s per
+  attempt and 540 s deadline (and the `timeout-minutes` relation); a larger test matrix and mutant set (server count
+  zero or two, `created` unreadable, equal timestamps); and the wipe design's own caveat that `dt >= created` shows
+  the row belongs to the current server generation, not that the host is healthy. Whether to take it is a
+  decision for the build PR or the owner, not made here. Until then the owner's runbook re-read, plus a look at the
   newest replace run's own conclusion, is the only control for this window; the build PR must not describe the
   window as closed.
 - It is a point-in-time read before the freeze. The freeze window itself is bounded by the finalizer, not by this
@@ -354,7 +395,7 @@ Files: `apps/web-platform/infra/git-data-liveness-precheck.sh` and `.test.sh` (n
 amendment, not a rewrite of dated text); the workflow's job output `liveness_reason` and the `notify-failure` mapping of section 4 (closed `case`,
 `LIVENESS_UNPROVEN` subject word, step-summary line, the vocabulary-parity row); the `host_proof` sentinel signal or
 `github.run_attempt` fallback and the paging remedy of section 3 fork 2, with its notify-body test row; Read H's
-`timeout -k 5 30`, the 540 s deadline and the `timeout-minutes` relation row of section 5; the single scrub set and
+`timeout -k 5 30`, the 540 s deadline and the `timeout-minutes` relation row of section 5; the single `env -i` scrub form and
 `--only-secrets` assertion on all three reads of section 4; and a repo-wide `git grep` for every consumer of the flag precheck's path
 (`sandbox-hardening-contract.sh`, `encryption-posture-ledger.json`, `git-data-host-key-pin-shape-parity.test.ts` reference
 `git-data-flag-precheck`) to confirm none needs a sibling entry.

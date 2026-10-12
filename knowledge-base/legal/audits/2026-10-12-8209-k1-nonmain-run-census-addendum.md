@@ -3,11 +3,12 @@ title: "CLO addendum - K1 / L1 non-main GitHub run census re-derived 2026-10-12 
 type: clo-attestation
 date: 2026-10-12
 issue: 8209
-related_issues: [8609, 8551]
+related_issues: [8609, 9066, 8551]
 attestation-authority: clo
-status: "SIGNED-OFF PROVISIONAL (CLO-agent-attested, Soleur-as-tenant-zero v1, 2026-10-12). Takes effect on the merge of the PR that carries this file; until that merge it is a record in an unmerged branch. The attestation covers the scoped disposition in section 1 and nothing else. Operator veto retained. NOT INDEPENDENT REVIEW: this is a CLO-agent self-review run in the same workflow that drafted the file (section 10, ruling 6); it must not be cited, internally or externally, as independent or counsel review. External counsel re-review is reserved for the re-evaluation triggers (first arms-length user, EEA-out, regulated industry) and for the 2026-10-24 re-ruling (#8551)."
-disposition: "K1 CLEAN within [2026-07-14, 2026-10-12] (ATTRIBUTION RESULT ONLY: not a finding that no run resolved a prd token, that the App key or any prd credential was unused, or that no breach occurred; quote this whole line or do not quote it). Nothing else is concluded by this file. The part of the exposure window before 2026-07-14 stays INCONCLUSIVE until the 2026-10-24 re-ruling (#8551) decides whether the retention observation in section 6 changes that."
+status: "SIGNED-OFF PROVISIONAL (CLO-agent-attested, Soleur-as-tenant-zero v1, 2026-10-12). Takes effect on the merge of the PR that carries this file; until that merge it is a record in an unmerged branch. The attestation covers the scoped disposition in section 1 and nothing else. Operator veto retained. NOT INDEPENDENT REVIEW: this is a CLO-agent self-review run in the same workflow that drafted the file (section 10, ruling 6); it must not be cited, internally or externally, as independent or counsel review. External counsel re-review is reserved for the re-evaluation triggers (first arms-length user, EEA-out, regulated industry) and for the 2026-10-24 re-ruling (tracked on #9066; #8551 is the wording issue, section 10 ruling 10)."
+disposition: "K1 CLEAN within [2026-07-14, 2026-10-12] (ATTRIBUTION RESULT ONLY: not a finding that no run resolved a prd token, that the App key or any prd credential was unused, or that no breach occurred; quote this whole line or do not quote it). Nothing else is concluded by this file. The part of the exposure window before 2026-07-14 stays INCONCLUSIVE until the 2026-10-24 re-ruling (tracked on #9066) decides whether the retention observation in section 6 changes that."
 disposition_scope: "Attribution only (section 1, section 10 ruling 2). The permitted wording is the exact string 'K1 CLEAN within [census date - 90d, census date]'; the qualifier above travels with it on the same line."
+ruling_2026_10_13_fixround: "Section 10, rulings 9 and 10 (appended 2026-10-13): 9 dependabot[bot] figure qualified as in-window (340 inside the window, 379 total); 10 re-ruling tracker corrected from #8551 to #9066 in related_issues, status, disposition, related_records, section 6 and ruling 8. #8551 stays cited as the wording issue only. Status unchanged: SIGNED-OFF PROVISIONAL."
 ruling_2026_10_12_panel: "Section 10 records the CLO rulings on the 8 points of the 11-seat panel review (1 pre-window wording, 2 label scope, 3 claude[bot], 4 fork-flag coverage, 5 workflow-touching lower bound, 6 non-independence, 7 data minimisation, 8 tracker citation)."
 census_date: 2026-10-12
 coverage_window: "[2026-07-14, 2026-10-12]"
@@ -16,7 +17,7 @@ art_34_triggered: false
 art_33_note: "Set from this census's finding, not copied from the 8209/8609 records. The census found no fork run, no unattributable run, no unresolved run and no workflow-touching run (a lower-bound measure, section 4) by an actor outside the principal set (section 5, as ruled in section 9), so this census starts no Art. 33(1) clock. That is a statement about what this census triggers. It is not a finding that no personal-data breach occurred: the 8209/8609 records' own Art. 33 analysis is unchanged, K0 and K2-K4 stay open, and a single actor on a run is attribution, not proof of who held the credential. A non-clean result under the section 7 triggers would change this flag."
 art_34_note: "Not triggered by this census. No breach is established by it, so no high-risk assessment arises from it; the 8209/8609 Art. 34 positions are untouched and are re-run, not inherited, if any limb flips."
 open_limbs: "L1 / K1: INCONCLUSIVE, partially run: CLEAN within window (this file). L2-L5 and K0, K2-K4 stay INCONCLUSIVE and are not touched here. K4 cannot be measured by Jikigai. The closing re-pull after R6 stays owed."
-related_records: "`knowledge-base/legal/audits/2026-09-8209-prior-exposure-assessment.md` (L1); `knowledge-base/legal/audits/2026-09-30-8609-runtime-app-key-exposure-assessment.md` (K1). Both stay byte-unchanged; a pointer from them waits for the 2026-10-24 re-ruling (#8551)."
+related_records: "`knowledge-base/legal/audits/2026-09-8209-prior-exposure-assessment.md` (L1); `knowledge-base/legal/audits/2026-09-30-8609-runtime-app-key-exposure-assessment.md` (K1). Both stay byte-unchanged; a pointer from them waits for the 2026-10-24 re-ruling (tracked on #9066)."
 tier_classification: "Tier 1 - an internal assessment record. New file only. No public document is edited, no right is narrowed, no processing is added."
 semver: "No TC_VERSION bump."
 ---
@@ -236,7 +237,10 @@ recorded, so the sign and size of the delta cannot be explained; accrual of new 
 but that is not shown here and is not asserted. One observation from this pull, not an inference: 10,671
 non-main run records older than 2026-07-14 (back to 2026-03-19) were still listed and countable. That does not
 match the statement in the #8209 and #8609 records that run records older than 90 days are gone; those records
-stay byte-unchanged and the discrepancy goes to the 2026-10-24 re-ruling (#8551; #10136 is not this item, section 10 ruling 8). What, if anything,
+stay byte-unchanged and the discrepancy goes to the 2026-10-24 re-ruling (tracked on #9066; #10136 is not this item, section 10 ruling 8).
+
+> **Superseded 2026-10-13 (section 10, ruling 10): the sentence above first named #8551 as the re-ruling's tracker. #8551's body carries no 2026-10-24 or section 10.3 reference; #9066's does. The cell now reads #9066.**
+ What, if anything,
 else expires at 90 days (logs, artifacts) is not established by this census, which reads neither. The
 disposition window stays at 90 days because that is the coverage the earlier CLO ruling permits to be claimed.
 The L1(a) subset alone is 19,782, so the earlier 51,876 was not an L1(a)-only count unless run records were
@@ -329,12 +333,14 @@ count or the window disposition; they correct labels, internal consistency and s
 3. **claude[bot]: CORRECTED, removed from the allowlist and stated out of class.** It is a third-party-published
    App, not a Jikigai principal, and the section 1 class definition did not cover it. All 23 of its runs
    precede 2026-07-14, so the window disposition is unchanged. The same inconsistency applied, less sharply, to
-   `github-actions[bot]` (21 runs) and `dependabot[bot]` (340 runs), which are neither write collaborators nor
+   `github-actions[bot]` (21 runs) and `dependabot[bot]` (340 runs inside the window; 379 in total), which are neither write collaborators nor
    Jikigai-owned Apps; section 1 now names them as repository-native platform actors, enabled by this
    repository's own workflows and configuration (and the Dependabot secret store is empty, section 4). That
    naming states how the census applied the allowlist and does not widen what was found; it is a CLO ruling
    on the class definition, and the operator may overrule it. Section 9.3 "0 workflow-touching by an outsider
    across all 52,780" is true on the tip-diff basis (ruling 5) and is not relied on for the window.
+
+   > **Superseded 2026-10-13 (ruling 9): "`dependabot[bot]` (340 runs)" above read as a total. 340 is the in-window figure; the section 4 actor table shows 379 in total. The cell now says so.**
 4. **Fork flag coverage: CORRECTED.** The section 4 "Fork runs" row now states that the flag was read correctly
    for 31,918 of 52,780 rows (all `false`) and that the other 20,862 rows rest on `head_repository.full_name`
    plus the 4,385-PR listing, as section 3 step 5 already said. The conclusion is unchanged.
@@ -359,9 +365,38 @@ count or the window disposition; they correct labels, internal consistency and s
 8. **Tracker citation: CORRECTED.** `gh issue view 10136` returns "encryption-posture: private-network
    in-transit exceptions (zot x2, Inngest)", about plaintext in-transit links expiring 2026-10-22. It
    does not cover the K1 run-record retention observation or the pointer wording, and is removed from
-   `related_issues`, `status`, `related_records` and section 6. The 2026-10-24 re-ruling is tracked by #8551
-   (the DPD section 10.3(b) disclosure re-ruling, ADR-239). #8551's body does not itself mention this K1
-   observation, so this file is the carrier of that item into the re-ruling; a comment on #8551 pointing
+   `related_issues`, `status`, `related_records` and section 6. The 2026-10-24 re-ruling is tracked by #9066
+   (its body: "If this slips past 2026-10-24, the CLO re-rules on the §10.3(b) disclosure"; ADR-239, amendment
+   2026-10-09, records it there). #9066's body does not itself mention this K1
+   observation, so this file is the carrier of that item into the re-ruling; a comment on #9066 pointing
    here is a recommended follow-up (not made by this review, which writes nothing outside this file).
 
+   > **Superseded 2026-10-13 (ruling 10): this ruling first named #8551 as the 2026-10-24 re-ruling's tracker and the follow-up comment's target. #8551's body carries no 2026-10-24 or section 10.3 reference, so that sentence was wrong. The cell now reads #9066.**
+
 Effect: as section 9, fires on the merge of the PR that carries this file; operator veto retained.
+
+### Fix-round rulings, 2026-10-13 (append-only; appended after the 11-seat panel rulings above)
+
+Reviewer: `soleur:legal:clo`, as in section 9. A fix-round review found two factual drifts in the 2026-10-12
+edit. Status after these rulings: **stays SIGNED-OFF PROVISIONAL.** Neither ruling changes a count, the window
+disposition or the attestation scope; both correct a citation or a qualifier.
+
+9. **dependabot[bot] figure: QUALIFIED.** Ruling 3 wrote `dependabot[bot]` (340 runs). The section 4 actor table
+   shows 379 in total and 340 inside the window (0 workflow-touching). Ruling 3's sentence is about the
+   window disposition, so 340 is the right figure for it, but unqualified it read as a total. Ruling 3 now says
+   "340 runs inside the window; 379 in total", with a supersede marker under it. No count changes.
+10. **Re-ruling tracker: CORRECTED to #9066; #8551 kept as the wording issue only.** Verified 2026-10-13:
+    `gh issue view 9066` (OPEN, "git-data: erasure and provision lock files keep the user id on the store
+    after Art. 17 erasure") carries in its body "Deadline: merge the fix and the purge before the first
+    `GIT_DATA_STORE_ENABLED` flip. If this slips past 2026-10-24, the CLO re-rules on the §10.3(b)
+    disclosure."; ADR-239 (amendment 2026-10-09 (#9066)) records the re-ruling on #9066.
+    `gh issue view 8551` ("legal: published disclosures still call the git-data host \"never provisioned\"
+    (born 2026-09-14)") has a body with no 2026-10-24 or 10.3 reference. #8551 is where the published wording
+    gets changed, so it stays in `related_issues` as the wording issue, but it is not the re-ruling's tracker.
+    Corrected in place, each with a supersede marker where a dated sentence was changed: `related_issues`,
+    `status`, `disposition`, `related_records`, section 6, and ruling 8 (the recommended follow-up comment now
+    targets #9066). The 2026-10-12 sentences above are not rewritten silently: ruling 8 and section 6 carry a
+    marker, and the frontmatter carries `ruling_2026_10_13_fixround`.
+
+Effect: as section 9, fires on the merge of the PR that carries this file; operator veto retained. The
+follow-up comment on #9066 pointing here is still not made by this review, which writes nothing outside this file.

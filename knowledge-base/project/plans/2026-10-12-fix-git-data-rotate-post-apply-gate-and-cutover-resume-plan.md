@@ -4,6 +4,7 @@ date: 2026-10-12
 slug: git-data-rotate-post-apply-gate-and-cutover-resume
 branch: feat-one-shot-git-data-luks-cutover-8211
 issue: 10137
+# SUPERSEDED 2026-10-12: Phase 2 and closes: moved to PR #10155 (see ## Review reconciliation); this PR must not close #10137/#10067
 closes: "#10137, #10067"
 refs: "#8211, #8209, #8609, #8573, #9943, #10138, #6897, #8551, #10136, #9438"
 lane: cross-domain
@@ -292,11 +293,11 @@ No Product/UX surface: no UI files in the lists (mechanical UI override: none ma
 
 ## User-Brand Impact
 
-**If this lands broken, the user experiences:** nothing directly; a gate that wrongly refuses blocks the cutover chain (the flip stays unreachable, so the LUKS store keeps serving as today); a gate that wrongly passes could let a rotate or replace that destroyed the retained plaintext rollback volume report success, removing the rollback copy the Art. 17 residue analysis relies on.
+**If this lands broken, the user experiences:** nothing directly; a gate that wrongly refuses blocks the cutover chain (the flip stays unreachable, so the LUKS store keeps serving as today); a gate that wrongly passes cannot cause or prevent a destroy (revised 2026-10-12: the post-apply gate only detects after the apply; the destroy authority is the plan-time gate, see `## Review reconciliation`), so the failure mode is the wrongly-refusing gate that turns an already-applied rotate red (#10137).
 
 **If this leaks, the user's data is exposed via:** no new exposure vector: the gate prints counters and addresses only (PA11 holds the `.change.before/after` sentinel); the census records counts and run ids only, never a log body or secret value.
 
-**Brand-survival threshold:** aggregate pattern. Reason: this PR changes a CI assert and adds documents; the user-visible destructive step (the wipe) and the flip are design-only here and stay owner-gated. A `single-user incident` threshold applies to the later wipe-build PR, which must carry CPO sign-off then.
+**Brand-survival threshold:** aggregate pattern. Reason: this PR changes a CI assert and adds documents; the user-visible destructive step (the wipe) and the flip are design-only here and stay owner-gated. A `single-user incident` threshold applies to three later PRs (revised 2026-10-12): the rollback-rehearsal build PR, the first real `flip`, and the wipe-build PR; each must carry CPO sign-off.
 
 ## Observability
 
@@ -396,11 +397,12 @@ This section is appended after review. The text above is left as written; where 
 ### Phase 2 is SUPERSEDED by PR #10155
 
 - Phase 2 (the post-apply gate) and `closes: "#10137, #10067"` no longer apply to this PR. The code change was reverted from this branch (commit `fa58f3388e`); the implementation is preserved at `d2a1d0e766`.
-- Open sibling PR #10155 (`feat-one-shot-10137-rotate-arm-volume-assert`, same author, reviewed, at ship) carries the same fix with the same three required rows. The posture-assert rows and pins were hardened there instead. This PR is now documents and designs only and must NOT say `Closes #10137` or `Closes #10067`; #10155 closes them. AC8 above (PR body carries `Closes #10137`) is withdrawn.
+- Open sibling PR #10155 (`feat-one-shot-10137-rotate-arm-volume-assert`, same author, reviewed, at ship) carries the same fix with the same three required rows. The posture-assert rows and pins were hardened there instead. This PR is now documents and designs only and must NOT say `Closes #10137` or `Closes #10067`. #10155 closes only #10137 (`gh pr view 10155 --json closingIssuesReferences` returns #10137 alone); #10067 ("fix: git-data-host-rotate asserts both volumes on the rotate path", same defect) is NOT closed by it. To-do for the ship step: when #10155 merges, close #10067 by hand with a comment linking #10155. AC8 above (PR body carries `Closes #10137`) is withdrawn.
 
 ### Stale statements corrected
 
 - "The steps after the assert have never run to completion on the rotate path": wrong. In rotate run `38140050880` the assert step failed, but `Poll for the git-data boot-completion signal (replace)`, `Load the rotated git-data pin (same-version redeploy)` and `Dispatch summary` concluded `success` (`Post-replace readiness note (non-SSH)` was skipped). The "read those steps for rotate-specific assumptions" instruction is therefore partly obsolete.
+- Phase 1 row 1.5 "(context, not a gate)" for `d6_replace_stale`: wrong. The cutover precheck ends with `fail d6_replace_stale ...`, so it is a hard gate for a flip dispatch (see `flip-preconditions-report.md` row 1.5; tracker #10166). The Enhancement Summary note on the d6 reader ("near line 272") is a line-number citation and is stale; locate it by the `d6_replace_stale` content anchor.
 - "PRs 10133, 10086, 7390: all OPEN": PRs 10133 and 10086 are MERGED; 7390 is still open.
 - The apply step `Terraform apply (git-data-host -replace) — both-volumes-preserved assert` starts near line 4014 of `apply-web-platform-infra.yml`, not ~3943.
 
@@ -420,6 +422,8 @@ Precondition for ever re-dispatching rotate: never after the flip; require the f
 
 ### To file
 
-- The rotate-precondition hazard above (own tracked issue; do not widen #10155 or #10166).
-- Rule id and status printed by `scripts/sentry-alert-live-fidelity.sh`, so rule 1310055 can be read headlessly.
-- A mode-aware readiness note in `apply-web-platform-infra.yml`: under rotate the LUKS volume is replaced, but `Post-replace readiness note` still says "both volumes preserved".
+Only the first item was filed (#10175); the other two are not left as to-dos of this PR.
+
+- The rotate-precondition hazard above (own tracked issue; do not widen #10155 or #10166). FILED 2026-10-13 as #10175 (no open issue covered it, verified by `gh issue list --search`).
+- Rule id and status printed by `scripts/sentry-alert-live-fidelity.sh`, so rule 1310055 can be read headlessly: NOT filed from this PR. It stays a proposal, recorded in `flip-preconditions-report.md` row 1.3.
+- A mode-aware readiness note in `apply-web-platform-infra.yml`: under rotate the LUKS volume is replaced, but `Post-replace readiness note` still says "both volumes preserved". NOT filed from this PR: it belongs to PR #10155, which owns the post-apply and rotate-arm changes in that workflow.
