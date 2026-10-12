@@ -10,6 +10,9 @@
 # that per-test repo so the telemetry assertion (AC8) reads its own JSONL.
 
 set -uo pipefail
+SUITE_TMP=$(mktemp -d)
+[[ "$SUITE_TMP" == /* ]] || { echo "FATAL: SUITE_TMP is not absolute: $SUITE_TMP" >&2; exit 2; }
+trap 'rm -rf "$SUITE_TMP"' EXIT
 
 # Redirect incident telemetry into a per-suite sandbox BEFORE any case runs.
 # Inline per-call `INCIDENTS_REPO_ROOT=… bash "$HOOK"` is what leaked here:
@@ -33,7 +36,7 @@ COLLAPSED='{"version":"2.11","children":[]}'
 # mk_repo — fresh git repo in a tmp dir; echoes the dir.
 mk_repo() {
   local d
-  d="$(mktemp -d)"
+  d="$(mktemp -d -p "$SUITE_TMP")"
   : "${d:?fixture dir is empty; git -C <empty> would retarget this write}"
   git -C "$d" init -q
   git -C "$d" config user.email "test@example.com"
@@ -153,7 +156,7 @@ test_fail_open() {
 
   # non-repo path
   TOTAL=$((TOTAL + 1))
-  local tmpf; tmpf="$(mktemp)"; printf '%s' "$COLLAPSED" > "$tmpf"
+  local tmpf; tmpf="$(mktemp -p "$SUITE_TMP")"; printf '%s' "$COLLAPSED" > "$tmpf"
   if mk_payload "$tmpf" | bash "$HOOK" >/dev/null 2>&1; then
     pass "AC6b non-repo path → exit 0"
   else
@@ -216,7 +219,7 @@ test_noop_on_symlink() {
   local repo victim link rel
   repo="$(mk_repo)"
   : "${repo:?fixture dir is empty; git -C <empty> would retarget this write}"
-  victim="$(mktemp)"; printf '%s' "$COLLAPSED" > "$victim"   # collapsed-shaped victim
+  victim="$(mktemp -p "$SUITE_TMP")"; printf '%s' "$COLLAPSED" > "$victim"   # collapsed-shaped victim
   link="$repo/link.pen"; rel="link.pen"
   ln -s "$victim" "$link"
   git -C "$repo" add "$rel"; git -C "$repo" commit -q -m "add symlink pen"

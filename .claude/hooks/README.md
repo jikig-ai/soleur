@@ -159,7 +159,7 @@ One command, no SSH, no dashboard. It proves both halves: the operator is told
 **later** (the aggregate counter).
 
 ```bash
-R=$(mktemp -d)
+R=$(mktemp -d -t soleur-run.$$.XXXXXXXX)  # signed root: reapable if the rm -rf is missed (#10017)
 cp AGENTS.md AGENTS.rules.md "$R/"          # the aggregator resolves rules from this root
 printf 'not-json' | INCIDENTS_REPO_ROOT="$R" bash .claude/hooks/guardrails.sh \
   | jq -r '.hookSpecificOutput.permissionDecision'          # -> "ask"

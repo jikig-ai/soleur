@@ -141,7 +141,43 @@ of another session's disk usage. Litmus: three runs of an UNCHANGED tree giving 
 harness defect, never a re-run to repeat. A harness whose setup (`cp`/`mkdir`/`mktemp`) fails must `exit 2`, not
 continue into a confident wrong result.
 
-- **A NEW `.test.sh`'s fixture dir arms two repo-global ratchets that a targeted run cannot see:** `mktemp` with no owning `trap` (`lint-trap-tempfile-ownership` rule (c); a second `EXIT` trap would replace `test-helpers.sh`'s composed one, #8659) and an operand not provably absolute (`fixture-relative-assert`). Use `"$INCIDENTS_REPO_ROOT/<name>-$$"`, `assert_fixture_dir "$DIR"` before the `mkdir`/redirects AND again right before `rm -rf` (the scanner's guard window stops at the nearest function head), and run both suites by name before pushing. Never regenerate the baseline.
+- **A NEW `.test.sh`'s fixture dir arms two repo-global ratchets that a targeted run cannot see:** `mktemp` with no owning `trap` (`lint-trap-tempfile-ownership` rule (c); a second `EXIT` trap would replace `test-helpers.sh`'s composed one, #8659) and an operand not provably absolute (`fixture-relative-assert`). Use `"$INCIDENTS_REPO_ROOT/<name>-$$"`, `assert_fixture_dir "$DIR"` before the `mkdir`/redirects AND again right before `rm -rf` (the scanner's guard window stops at the nearest function head), and run both suites by name before pushing. Never regenerate the baseline. When adding a suite-owned `SUITE_TMP` root to an EXISTING suite, also grep the suite for `source`/`."` of a file that installs its OWN non-composing `trap … EXIT` — a sourced SUT replaces the suite's trap silently (`test-content-publisher.sh` leaked its root this way until the residue leaf caught it, #10017); the fix is a combined handler re-armed after the `source` line, never a second EXIT trap.
+
+## Ad-hoc agent scratch — the attributable default (#10017)
+
+When a skill step needs a throwaway file or dir that is *not* a tree copy —
+an issue body, a fetched response, a log capture — allocate it **inside a
+signed run root**, never as a bare `mktemp` top-level entry:
+
+```bash
+d=$(mktemp -d -t soleur-run.$$.XXXXXXXX)   # $$ = this shell's pid
+f=$(mktemp -p "$d")                       # or f="$d/<name>"
+# ... use "$f", then at the consumption point:
+rm -f "$f"; rmdir "$d"                    # (rm -rf "$d" if several artifacts)
+```
+
+Why the shape is load-bearing, not cosmetic: `tmp.*` top-level entries are a
+*protected* class in `tmp-classify.sh` — an unattributed bare name in a shared
+`/tmp` is not ours to delete (#6991 measured ~1.5k false-positive candidates),
+so a leaked bare `mktemp` can NEVER be reaped and only the count alarm sees it.
+A `soleur-run.<pid>.*` dir instead carries `schema:<pid>` attribution —
+dir contents inherit it — so a missed `rm` is still quarantined by
+`soleur-tmp-purge` once the owning pid is dead and the age floor passes. The
+`rm` at the consumption point is still the primary cleanup; the root is what
+makes a miss recoverable. Named `-t <name>.XXXXXXXX` *files* do not get this:
+a signed filename is still `unattributable` in the classifier — the signature
+must be on the DIRECTORY.
+
+Two boundary notes: (i) **portability** — the `-t soleur-run.$$.XXXXXXXX`
+template form is GNU; on BSD/macOS `-t` is a literal *prefix* and appends its
+own suffix (`soleur-run.<pid>.XXXXXXXX.<rand>`), which fails the classifier's
+name regex and reads `unattributable`. If you ever port the pattern, the
+BSD-safe form is `mktemp -d "$TMPDIR/soleur-run.$$.XXXXXXXX"`. (ii) **nested
+`.git` flips retention** — a git repo at depth ≥2 under the root (e.g.
+`git clone … "$d/sub"`) trips the nested-git conjunct and the dir is RETAINED
+by design; `git init` AT the root (depth 1, e.g. the hook-test main-CWD
+recipe in `work/SKILL.md`) stays reapable. Deliberate: the classifier refuses
+to reap under a second tree's live refs.
 
 ## Rejected shapes (do not reintroduce)
 

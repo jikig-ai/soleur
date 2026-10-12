@@ -10,6 +10,9 @@
 #               or empty metadata. Deny checks short-circuit regardless of the
 #               allow-set. Fail-closed on every uncertainty.
 set -euo pipefail
+SUITE_TMP=$(mktemp -d)
+[[ "$SUITE_TMP" == /* ]] || { echo "FATAL: SUITE_TMP is not absolute: $SUITE_TMP" >&2; exit 2; }
+trap 'rm -rf "$SUITE_TMP"' EXIT
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SCRIPT="$REPO_ROOT/scripts/lib/tweet-eligibility.sh"
@@ -32,7 +35,7 @@ _report() {
 # `gh pr diff ... --name-only`, both driven by MOCK_* env.
 _mkbin() {
   local d
-  d=$(mktemp -d)
+  d=$(mktemp -d -p "$SUITE_TMP")
   cat > "$d/gh" <<'GH'
 #!/usr/bin/env bash
 sub="$2"

@@ -909,6 +909,19 @@ EGRESS_GW_TOKEN_DIR="${EGRESS_GW_TOKEN_DIR:-/var/lib/soleur/egress-tokens}"
 EGRESS_GW_ALLOW_TARGET="${EGRESS_GW_ALLOW_TARGET:-https://api.github.com/}"
 EGRESS_GW_DENY_TARGET="${EGRESS_GW_DENY_TARGET:-https://169.254.169.254/}"
 
+# Every per-cycle verdict ships under the dedicated `egress-gw-probe` tag, not
+# just ok/fail: `log()` writes under the unit's ExecStart basename, which
+# Vector's Source-4 allowlist does NOT carry — a probe skipping every cycle
+# (gw_absent, container_absent, ...) was indistinguishable from a dead probe in
+# Better Stack, and the skip reason was journald-only. Cost is unchanged: skips
+# only run on a due cycle, so still ~288 rows/day/host. The interval gate and
+# the loader-recursion return below stay silent — they are per-minute/per-loader
+# paths, not per-cycle verdicts.
+probe_emit() {
+  log "egress_gw_probe $*"
+  logger -t egress-gw-probe "egress_gw_probe $*"
+}
+
 run_egress_gw_probe() {
   local now last stamp gw_ip tok result reason rc code
   if [[ "${CRON_EGRESS_FROM_LOADER:-}" == "1" ]]; then return 0; fi
@@ -920,20 +933,20 @@ run_egress_gw_probe() {
   echo "$now" > "$stamp"
 
   if (( SECONDS > 60 )); then
-    log "egress_gw_probe result=skipped reason=budget"
+    probe_emit "result=skipped reason=budget"
     return 0
   fi
   if [[ ! -d "$EGRESS_GW_TOKEN_DIR" ]] || ! grep -qx soleur-egress-gw < <(timeout 10 docker ps --format '{{.Names}}'); then
-    log "egress_gw_probe result=skipped reason=gw_absent"
+    probe_emit "result=skipped reason=gw_absent"
     return 0
   fi
   if ! container_running; then
-    log "egress_gw_probe result=skipped reason=container_absent"
+    probe_emit "result=skipped reason=container_absent"
     return 0
   fi
   gw_ip="$(docker inspect soleur-egress-gw -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' 2>/dev/null || true)"
   if [[ ! "$gw_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    log "egress_gw_probe result=skipped reason=no_gw_ip"
+    probe_emit "result=skipped reason=no_gw_ip"
     return 0
   fi
 
@@ -942,7 +955,7 @@ run_egress_gw_probe() {
   # ("$user" == "$(<tokenfile)") — the file must contain "probe", an empty
   # mint reads as a forged username and every CONNECT is denied (measured:
   # TCP_DENIED ERR_CACHE_ACCESS_DENIED on the allow leg, allow_rc=56).
-  printf 'probe' > "$EGRESS_GW_TOKEN_DIR/$tok" || { log "egress_gw_probe result=skipped reason=token_dir_unwritable"; return 0; }
+  printf 'probe' > "$EGRESS_GW_TOKEN_DIR/$tok" || { probe_emit "result=skipped reason=token_dir_unwritable"; return 0; }
 
   result=ok; reason=""
   rc=0
@@ -963,10 +976,11 @@ run_egress_gw_probe() {
   rm -f "$EGRESS_GW_TOKEN_DIR/$tok"
 
   # Dedicated tag: cron-egress-resolve is NOT in Vector's SYSLOG_IDENTIFIER
-  # allowlist (a per-tick tag would ship ~2k rows/day), so the heartbeat line
-  # is emitted under `egress-gw-probe` — the only resolver line Better Stack
-  # sees, ~288 rows/day. journald-local visibility is unchanged.
-  logger -t egress-gw-probe "egress_gw_probe result=$result ${reason:+reason=$reason}"
+  # allowlist (a per-tick tag would ship ~2k rows/day), so every verdict line —
+  # ok, fail AND skipped — goes through probe_emit under `egress-gw-probe`, the
+  # only resolver tag Better Stack sees, ~288 rows/day. journald-local
+  # visibility is unchanged (probe_emit keeps the log() line too).
+  probe_emit "result=$result ${reason:+reason=$reason}"
   if [[ "$result" == "fail" ]]; then
     sentry_event \
       "cron-egress-firewall: egress gateway CONNECT probe FAILED (${reason})" \

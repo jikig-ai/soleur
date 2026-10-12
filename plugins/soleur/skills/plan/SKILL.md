@@ -379,7 +379,7 @@ After the plan draft has enumerated its `## Files to Edit` and `## Files to Crea
 2. Query open code-review issues. **Use two-stage piping (`--json` then a standalone `jq --arg`), not single-stage `gh --jq` with `--arg`.** The `gh` CLI does NOT forward `--arg` to its embedded jq; a single-stage form produces `unknown arguments` at runtime. See learning `knowledge-base/project/learnings/2026-04-15-gh-jq-does-not-forward-arg-to-jq.md`.
 
     ```bash
-    ISSUES_JSON=$(mktemp -t open-review-issues.XXXXXXXX.json)
+    ISSUES_JSON=$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)" open-review-issues.XXXXXXXX.json)
     gh issue list --label code-review --state open \
       --json number,title,body --limit 200 > "$ISSUES_JSON"
     echo "ISSUES_JSON=$ISSUES_JSON"
@@ -396,7 +396,8 @@ After the plan draft has enumerated its `## Files to Edit` and `## Files to Crea
 
     A later Bash call does not inherit `ISSUES_JSON`, so carry the echoed path forward (or
     re-derive it in the same call). Do not substitute a fixed name: a concurrent `soleur:plan`
-    would overwrite the file between the write and this read.
+    would overwrite the file between the write and this read. When the last `jq` read is done,
+    `rm -f "$ISSUES_JSON"; rmdir "$(dirname "$ISSUES_JSON")" 2>/dev/null` — it is a snapshot, not an artifact (#10017).
 
 4. If any matches are returned, write a `## Open Code-Review Overlap` section to the plan file with a one-line bullet per match and an explicit disposition for each:
 
@@ -1071,6 +1072,8 @@ After plan review, use the **AskUserQuestion tool** to present these options:
 **Resume prompt (MANDATORY — AGENTS.md Communication):** Before presenting the question, generate a copy-pasteable resume prompt containing: skill to run (`soleur:work`), plan file path, branch name, worktree path, PR number, issue number, and a one-line summary of what was already done. Display it in a fenced code block so the user can paste it into a fresh session after `/clear`. This is the single most important output of the post-generation phase — without it, the user cannot resume in a new session without re-explaining context.
 
 **Question:** "Plan reviewed and ready at `knowledge-base/project/plans/YYYY-MM-DD-<type>-<name>-plan.md`. Context is saved to disk. What would you like to do next?" — append " Two automatic compactions have occurred, so `/clear` before `soleur:work` is recommended." only when a `SOLEUR_COMPACTION_DIRECTIVE` marker with `recommend=true` is present in this session (#8323). The unconditional "run `/clear` for maximum headroom" this replaces fired identically on a session with zero compactions and on one that had lost state twice, which is the whole defect.
+
+**Closing text:** the summary around these options is a closing message: put no technical question ("Decision for you:", "Your calls") to the operator in it; spawn `soleur:engineering:cto` (legal: `soleur:legal:clo`) and ask only the authorization. [technical-ruling-delegation.md](../brainstorm-techniques/references/technical-ruling-delegation.md).
 
 **Options:**
 

@@ -1701,6 +1701,21 @@ assert_grep "boot probe asserts the gateway container" 'soleur-egress-gw' "$SCRI
 # allow/deny verification on the real path — the deny line is the proof the
 # policy still holds mid-life).
 assert_grep "resolver carries the synthetic CONNECT pair probe" 'egress_gw_probe' "$RESOLVER"
+# Every per-cycle verdict must go through probe_emit (log + logger -t
+# egress-gw-probe). A `log "egress_gw_probe result=` call site ships under the
+# unit's ExecStart basename — not in Vector's Source-4 allowlist — so a
+# skip-only probe reads as dead silence in Better Stack and the skip reason is
+# undiagnosable off-box.
+assert_grep "probe_emit helper exists (verdict ships on the allowlisted tag)" 'probe_emit()' "$RESOLVER"
+assert_grep "probe_emit writes the tagged row" 'logger -t egress-gw-probe' "$RESOLVER"
+assert_not_grep "no result= line bypasses probe_emit (journald-only row)" \
+  'log "egress_gw_probe result=' "$RESOLVER"
+N_PROBE_TAGGED="$(grep -c 'logger -t egress-gw-probe' "$RESOLVER" || true)"
+if [[ "$N_PROBE_TAGGED" == "1" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: exactly one tagged emit site (probe_emit) — a second logger -t would ship outside the helper's contract"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: expected exactly 1 'logger -t egress-gw-probe' site, found $N_PROBE_TAGGED"
+fi
 # The auth helper binds the CONNECT username to the token FILE CONTENT
 # ($user == $(<tokenfile)): the probe's mint must write "probe", an empty
 # file reads as a forged username and every allow-leg CONNECT is denied
