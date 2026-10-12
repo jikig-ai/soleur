@@ -95,7 +95,10 @@ The modes exist (PR2). The `flip` dispatch is refused unless all of these hold:
   armed after a measured `up` transition on the CURRENT host (the manifest row's `arming_pending` is
   gone), and a re-read at the flip dispatch shows it `up` with a `state=ok` event under 15 minutes
   old and later than that host's `boot_complete`. A box ticked once goes stale at the next replace,
-  so it is RE-READ, never remembered. Procedure and reads:
+  so it is RE-READ, never remembered. **Armed 2026-10-12 (#9438, record PR):** the host from replace run
+  38140050880 was armed with `--arm-one` (#9980), `outcome=armed`, `status=up` within 11 s, id 506836; the
+  pre- and post-arm `--status` reads are on #9438. This records the arm, not the flip-time re-read, which
+  is still taken at the flip dispatch. Procedure and reads:
   [Liveness heartbeat](#liveness-heartbeat-9438). Until #9943 enforces it in the workflow, this item
   and its re-read are the only control.
 - **#8101** — remaining: the hooks copy, the post-copy fence readback and the wrappers' mapper

@@ -294,9 +294,11 @@ export const MANIFEST: ManifestEntry[] = [
       },
     },
     replace_target: { choice: "git-data-host-replace", server: "hcloud_server.git_data" },
-    // The monitor is deliberately paused-yet-fed between the replace and the arm. Removed by the
-    // record PR once a measured beat has armed it (the issue it names stays open until then).
-    arming_pending: { tracking_issue: 9438 },
+    // No `arming_pending`: it is ARMED. This row carried `arming_pending: { tracking_issue: 9438 }`
+    // while the monitor was paused-yet-fed between the host replace and the arm. The measured arm
+    // (`arm-heartbeats.sh --arm-one`, #9980) read `up` within 11 s on 2026-10-12; the verdict and the
+    // pre/post `--status` reads are on #9438. `paused: true` above stays: it is the source
+    // `.tf` state (born paused), not the live state.
   },
   {
     name: "registry_disk_prd",

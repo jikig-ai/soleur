@@ -1,6 +1,6 @@
 ---
 title: git-data host-originated liveness heartbeat — gate the beat on local checks, read the URL at runtime, arm only after a measured beat
-status: adopting
+status: accepted
 date: 2026-10-10
 supersedes: none
 issue: 9438
@@ -14,9 +14,12 @@ brand_survival_threshold: single-user incident
 
 ## Status
 
-**Adopting.** The decision describes the target state, which is only true after the owner's host replace and a measured first beat. The
-status moves to `accepted` when the dependent record PR (the one that closes #9438) records the measured beat. The ordinal was verified free
-against `origin/main` and every `origin/*` ref on 2026-10-10 and is re-verified at ship.
+**Accepted (2026-10-12, record PR closing #9438).** The decision described a target state that is only true after the owner's host replace
+and a measured first beat; both have happened. The host from replace run 38140050880 was armed with `arm-heartbeats.sh --arm-one` (#9980,
+PR #10029): `outcome=armed`, `status=up` within 11 s, monitor 506836 (`period=60 grace=300`, read live for the first time by that run's
+`--status`). The Slack half of the alert route is evidenced by Better Stack incident 1030432412 (`soleur-inngest-luks-wrong-volume-prd`, started
+2026-10-11, after ADR-260), whose timeline records "Incident update posted to #error-found." with Slack permalinks, read from the Uptime
+API. The ordinal was verified free against `origin/main` and every `origin/*` ref on 2026-10-10 and is re-verified at ship.
 
 ## Context
 
