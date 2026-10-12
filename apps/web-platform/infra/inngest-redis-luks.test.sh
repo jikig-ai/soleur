@@ -145,12 +145,11 @@ rm -f /tmp/.ilt-block.$$
 # in the Redis unit's ExecStartPre, not in a line that bricks the boot before anything can report.
 # TWO ARMS, because counting the GOOD lines is not the same claim as "there is no BAD one": a
 # further fstab write that omits nofail leaves the good count intact and the boot wedged.
-# (#6894) Every writer now goes through `fstab_set`, which REPLACES the mountpoint's line: four for
-# /mnt/data (the pointer arm plus the three pre-cutover mounting arms) and one for the staging mount.
+# (#6894) Every writer now goes through `fstab_set`, which REPLACES the mountpoint's line: three for
+# /mnt/data (the pointer arm plus the two unpointed mounting arms; #9786 deleted the ext4 arm and the
+# staging mount with the plaintext volume).
 _fstab_lines="$(grep -cE 'fstab_set /mnt/data "\$(DEV|MAPPER) /mnt/data ext4 defaults,nofail 0 2"' "$CLOUD_INIT")"
-if [ "$_fstab_lines" -eq 4 ]; then ok "T1.8a all four /mnt/data fstab writes go through fstab_set and retain nofail"; else no "T1.8a expected 4 nofail-carrying fstab_set writes for /mnt/data (pointer arm + three pre-cutover arms), found ${_fstab_lines}"; fi
-_fstab_stg="$(grep -cE 'fstab_set /mnt/data-luks "\$STAGING_MAPPER /mnt/data-luks ext4 defaults,nofail 0 2"' "$CLOUD_INIT")"
-if [ "$_fstab_stg" -eq 1 ]; then ok "T1.8a2 the staging mount's fstab write goes through fstab_set and retains nofail"; else no "T1.8a2 expected 1 nofail-carrying fstab_set write for /mnt/data-luks, found ${_fstab_stg}"; fi
+if [ "$_fstab_lines" -eq 3 ]; then ok "T1.8a all three /mnt/data fstab writes go through fstab_set and retain nofail"; else no "T1.8a expected 3 nofail-carrying fstab_set writes for /mnt/data (pointer arm + two unpointed mounting arms), found ${_fstab_lines}"; fi
 _fstab_all="$(grep -cE '/mnt/data(-luks)?[[:space:]]+ext4[[:space:]]' "$CLOUD_INIT")"
 _fstab_bad="$(grep -E '/mnt/data(-luks)?[[:space:]]+ext4[[:space:]]' "$CLOUD_INIT" | grep -cv 'nofail' || true)"
 if [ "$_fstab_bad" -eq 0 ]; then ok "T1.8b NO /mnt/data or /mnt/data-luks fstab line anywhere in the file omits nofail (${_fstab_all} checked)"; else no "T1.8b ${_fstab_bad} of ${_fstab_all} fstab lines omit nofail — a strict fstab wedges the boot on a host with no SSH and no console"; fi
@@ -289,7 +288,7 @@ if [ "$_rc" -ne 0 ] && printf '%s' "$_out" | grep -c 'inngest-luks-FAILED' >/dev
 _T13="$(mktemp -d)"
 _t13_n=0; _t13_bad=""
 _t13_render() { sed -e 's/\$\${/${/g' -e 's/%%{/%{/g' \
-  -e 's/\${inngest_volume_id}/106261946/g' -e 's/\${inngest_luks_volume_id}/106999999/g' \
+  -e 's/\${inngest_luks_volume_id}/106999999/g' \
   -e 's/\${inngest_expect_luks}/false/g' -e 's/\${[a-z_][a-z_0-9]*}/TEMPLATE_VALUE/g'; }
 # split write_files into one file per content block: a `  - path:` line, then `    content: |`, then
 # every line indented at least six spaces, ended by the first line at indent four
@@ -345,7 +344,7 @@ _g1_classify() {  # _g1_classify <label> <text>
     if [[ "$line" =~ ^[[:space:]]*[A-Z_]+=\"\$\(/usr/sbin/blkid(\ -p)?\ -o\ value\ -s\ TYPE\ \"[^\"]+\"\ 2\>/dev/null\)\"\ \|\|\ (_[a-z_]+)=\$\?$ ]]; then
       rcvar="${BASH_REMATCH[2]}"
       # a probe of a MAPPER must bypass the cache: across an abort-and-retry the cached type is stale
-      if [[ "$line" == *'"$MAPPER"'* || "$line" == *'"$STAGING_MAPPER"'* ]] && [[ "$line" != *'blkid -p '* ]]; then _g1_bad="${_g1_bad} ${label}:mapper-probe-without--p"; fi
+      if [[ "$line" == *'"$MAPPER"'* ]] && [[ "$line" != *'blkid -p '* ]]; then _g1_bad="${_g1_bad} ${label}:mapper-probe-without--p"; fi
     else
       _g1_bad="${_g1_bad} ${label}:UNCLASSIFIED[$(printf '%s' "$line" | sed 's/^[[:space:]]*//' | cut -c1-60)]"
     fi
@@ -353,7 +352,9 @@ _g1_classify() {  # _g1_classify <label> <text>
 }
 _g1_classify stage "$(printf '%s\n' "$_G1_STAGE" | sed 's/\$\${/${/g')"
 _g1_classify reopen "$(printf '%s\n' "$_G1_REOPEN" | sed -e 's/^      //' -e 's/\$\${/${/g')"
-if [ "$_g1_sites" -ge 6 ]; then ok "G1.a found ${_g1_sites} blkid probe sites across both device readers (floor 6)"; else no "G1.a found only ${_g1_sites} blkid sites — the walk is not reaching a reader"; fi
+# Floor 6 -> 4 (#9786), exact: the reopen script's luks_type probe, the stage's pointer_blkid_probe,
+# pointer_mapper_probe and unpointed blkid_probe. The two staging probes went with the staging block.
+if [ "$_g1_sites" -ge 4 ]; then ok "G1.a found ${_g1_sites} blkid probe sites across both device readers (floor 4)"; else no "G1.a found only ${_g1_sites} blkid sites — the walk is not reaching a reader"; fi
 if [ -z "$_g1_bad" ]; then ok "G1.b every blkid site captures its own rc and checks it against exactly 0-or-2; every mapper probe bypasses the cache"; else no "G1.b unclassified or unchecked probe sites:${_g1_bad}"; fi
 # Positive control: a second reader that skips the capture must be caught.
 _g1_sites=0; _g1_bad=""
@@ -364,15 +365,62 @@ if [[ "$_g1_bad" == *UNCLASSIFIED* ]]; then ok "G1.c positive control: an uncapt
 # G1.d the privilege assertion precedes the FIRST probe in each reader (measurements.md §1).
 _g1_order() { printf '%s\n' "$1" | awk '/id -u\)" -eq 0 \]/ && !p {p=NR} /\/usr\/sbin\/blkid/ && !b {b=NR} END { exit !(p && b && p < b) }'; }
 if _g1_order "$_G1_STAGE" && _g1_order "$_G1_REOPEN"; then ok "G1.d both readers assert root BEFORE their first blkid (unprivileged blkid reads a populated device as blank)"; else no "G1.d a device reader probes before asserting root — rc 2 from a Permission denied reads as blank and takes the luksFormat arm"; fi
-# G1.e mkfs targets ONLY a mapper, and only AFTER the luksOpen that creates it (mutation row 6).
-_g1_mkfs_bad="$(printf '%s\n' "$_G1_STAGE" | grep -E '^[[:space:]]*mkfs' | grep -vE 'mkfs\.ext4 -q "\$(MAPPER|STAGING_MAPPER)"' || true)"
-if [ -z "$_g1_mkfs_bad" ]; then ok "G1.e every mkfs in the stage targets a mapper, never a raw device"; else no "G1.e an mkfs targets something other than a mapper: ${_g1_mkfs_bad}"; fi
-_stg_open="$(printf '%s\n' "$_G1_STAGE" | grep -nE '^[[:space:]]*\[ -e "\$STAGING_MAPPER" \] \|\| printf' | sed -n '1p' | cut -d: -f1)"
-_stg_mkfs="$(printf '%s\n' "$_G1_STAGE" | grep -nE '^[[:space:]]*mkfs\.ext4 -q "\$STAGING_MAPPER"' | sed -n '1p' | cut -d: -f1)"
-if [ -n "$_stg_open" ] && [ -n "$_stg_mkfs" ] && [ "$_stg_open" -lt "$_stg_mkfs" ]; then ok "G1.f the staging mkfs comes after the staging luksOpen (line ${_stg_open} < ${_stg_mkfs})"; else no "G1.f staging mkfs is not after its luksOpen (open=${_stg_open:-none} mkfs=${_stg_mkfs:-none})"; fi
-# G1.g the staging arm never opens the CANONICAL mapper name: the Redis mount guard keys on it.
-_stg_region="$(printf '%s\n' "$_G1_STAGE" | awk '/STAGE=staging_wait/{f=1} f')"
-if printf '%s\n' "$_stg_region" | grep -cE 'cryptsetup luksOpen .* inngest-redis[[:space:]]|cryptsetup luksOpen .* inngest-redis[[:space:]]*2>>' >/dev/null; then no "G1.g the staging arm opens the canonical inngest-redis name — it would trip the Redis guard's mapper-open state"; else ok "G1.g the staging arm opens only the non-canonical inngest-redis-staging name"; fi
+# G1.e mkfs targets ONLY the canonical mapper, and only AFTER the luksOpen that creates it (mutation row 6).
+_g1_mkfs_bad="$(printf '%s\n' "$_G1_STAGE" | grep -E '^[[:space:]]*mkfs' | grep -vE 'mkfs\.ext4 -q "\$MAPPER"' || true)"
+if [ -z "$_g1_mkfs_bad" ]; then ok "G1.e every mkfs in the stage targets the mapper, never a raw device"; else no "G1.e an mkfs targets something other than the mapper: ${_g1_mkfs_bad}"; fi
+_fresh_open="$(printf '%s\n' "$_G1_STAGE" | grep -nE '^[[:space:]]*printf .* cryptsetup luksOpen --key-file - "\$DEV" inngest-redis 2>>' | sed -n '1p' | cut -d: -f1)"
+_fresh_mkfs="$(printf '%s\n' "$_G1_STAGE" | grep -nE '^[[:space:]]*mkfs\.ext4 -q "\$MAPPER"' | sed -n '1p' | cut -d: -f1)"
+if [ -n "$_fresh_open" ] && [ -n "$_fresh_mkfs" ] && [ "$_fresh_open" -lt "$_fresh_mkfs" ]; then ok "G1.f the unpointed mkfs comes after the fresh luksOpen (line ${_fresh_open} < ${_fresh_mkfs})"; else no "G1.f the unpointed mkfs is not after its luksOpen (open=${_fresh_open:-none} mkfs=${_fresh_mkfs:-none})"; fi
+
+# ═══ TIER 2b — the strip (#9786): one volume, no plaintext resolver ═════════════════════════
+# The template reads ONE volume id. Everything reachable only when the retired plaintext volume could
+# be canonical or staged is gone, and nothing can name it again. COMMENT-STRIPPED view, the same
+# `grep -vE '^[[:space:]]*#'` shape the AC1 grep uses: prose may still name the retired id, a statement
+# may not. Whole-file absence is per-reader by construction (zero hits in the file is zero in each reader).
+_CI_CODE="$(grep -vE '^[[:space:]]*#' "$CLOUD_INIT" || true)"
+_STRIP_NEEDLES='PLAIN_ID inngest_volume_id INNGEST_LUKS_PLAIN_VOLUME_ID STAGING_ reopen_skip_plaintext mount_ext4 plaintext_canonical'
+_strip_hits() {  # _strip_hits <text> — prints the needles that appear in the text
+  local _n _hit=""
+  for _n in $_STRIP_NEEDLES; do
+    [ "$(grep -cF -- "$_n" <<<"$1")" -gt 0 ] && _hit="${_hit} ${_n}"
+  done
+  printf '%s' "$_hit"
+}
+_strip_found="$(_strip_hits "$_CI_CODE")"
+if [ -z "$_strip_found" ]; then ok "T1.16a no executable line names the retired plaintext volume, its staging block, or its modes"; else no "T1.16a the retired plaintext resolver is back in a delivered line:${_strip_found}"; fi
+# Controls on T1.16a: a live statement must be caught, and prose must not be.
+if [ -n "$(_strip_hits "$(printf '    PLAIN_ID=%s\n' "'1'" | grep -vE '^[[:space:]]*#' || true)")" ]; then ok "T1.16b control: a live PLAIN_ID statement is flagged"; else no "T1.16b CONTROL: the absence predicate cannot see a live PLAIN_ID statement — T1.16a is vacuous"; fi
+if [ -z "$(_strip_hits "$(printf '    # PLAIN_ID was the plaintext volume (STAGING_DEV, reopen_skip_plaintext)\n' | grep -vE '^[[:space:]]*#' || true)")" ]; then ok "T1.16c control: a comment that names the retired id passes (comment-stripped view)"; else no "T1.16c CONTROL: a comment is graded as code — the strip cannot keep its own history"; fi
+# Both readers derive their device from the ONE rendered id, and the stage carries no ext4 arm or mount.
+# ANCHORED at the line start: an unanchored `DEV="..."` is also a substring of the STAGING_DEV line this strip deletes.
+_dev_reopen="$(printf '%s\n' "$_G1_REOPEN" | grep -cE '^[[:space:]]*DEV="\$\$\{BYID\}\$\$\{LUKS_ID\}"$')"
+_dev_stage="$(printf '%s\n' "$_G1_STAGE" | grep -cE '^[[:space:]]*DEV="\$\$\{BYID\}\$\$\{LUKS_ID\}"$')"
+_luksid_def="$(printf '%s\n%s\n' "$_G1_REOPEN" "$_G1_STAGE" | grep -cF "LUKS_ID='\${inngest_luks_volume_id}'")"
+if [ "$_dev_reopen" -eq 1 ] && [ "$_dev_stage" -eq 1 ] && [ "$_luksid_def" -eq 2 ]; then ok "T1.16d DEV is derived from LUKS_ID in BOTH readers, and LUKS_ID is the rendered id (reopen ${_dev_reopen}x, stage ${_dev_stage}x, defs ${_luksid_def}x)"; else no "T1.16d DEV is not derived from LUKS_ID exactly once per reader (reopen ${_dev_reopen}x, stage ${_dev_stage}x, LUKS_ID defs ${_luksid_def}x)"; fi
+_stage_code="$(printf '%s\n' "$_G1_STAGE" | grep -vE '^[[:space:]]*#' || true)"
+if [ "$(grep -cE '^[[:space:]]*ext4\)|mount[[:space:]]+"\$DEV"|"\$DEV /mnt/data' <<<"$_stage_code")" -eq 0 ]; then ok "T1.16e the stage has no ext4 arm and never mounts the raw device"; else no "T1.16e an ext4 arm or a raw-device mount is back in the first-boot stage"; fi
+# The unpointed probe bypasses the blkid cache (a stale type from an aborted attempt must not pick a
+# destructive arm). It is the STAGE=blkid_probe site, so it is located by its stage marker.
+if [ "$(printf '%s\n' "$_G1_STAGE" | grep -A3 -E '^[[:space:]]*STAGE=blkid_probe$' | grep -cF 'blkid -p -o value -s TYPE "$DEV"')" -eq 1 ]; then ok "T1.16f the unpointed blkid_probe uses blkid -p (no cached type decides a destructive arm)"; else no "T1.16f the unpointed blkid_probe is not a blkid -p probe"; fi
+# D6: the unpointed arm may not FORMAT on a production-config host. EVERY luksFormat site in the stage
+# must be preceded, in the same case arm, by the one-line refusal on the rendered Doppler config.
+_d6_scan() {  # _d6_scan <text> — prints "<luksFormat sites> <unguarded sites>"
+  awk '
+    /;;[[:space:]]*$/ || /^[[:space:]]*case / { g = 0 }
+    /unpointed_raw_refused/ && /inngest_doppler_config/ && /!= prd/ { g = 1 }
+    /^[[:space:]]*[^#[:space:]].*cryptsetup luksFormat/ { n++; if (!g) bad++ }
+    END { print n + 0, bad + 0 }' <<<"$1"
+}
+read -r _d6_n _d6_bad <<<"$(_d6_scan "$_G1_STAGE")"
+if [ "$_d6_n" -eq 1 ] && [ "$_d6_bad" -eq 0 ]; then ok "T1.16g the one luksFormat site is preceded by the prd refusal in its own arm (sites ${_d6_n}, unguarded ${_d6_bad})"; else no "T1.16g luksFormat sites=${_d6_n}, unguarded=${_d6_bad} — a format arm reachable on a prd-config host (D6)"; fi
+read -r _d6c_n _d6c_bad <<<"$(_d6_scan '        "")
+          [ '"'"'${inngest_doppler_config}'"'"' != prd ] || { echo "FATAL: unpointed_raw_refused" ; exit 1; }
+          printf x | cryptsetup luksFormat --key-file - "$DEV"
+          ;;
+        other)
+          printf x | cryptsetup luksFormat --key-file - "$DEV"
+          ;;')"
+if [ "$_d6c_n" -eq 2 ] && [ "$_d6c_bad" -eq 1 ]; then ok "T1.16h control: a SECOND, unguarded luksFormat after a guarded one is flagged (sites ${_d6c_n}, unguarded ${_d6c_bad})"; else no "T1.16h CONTROL: the per-site D6 scan missed an unguarded luksFormat (sites=${_d6c_n}, unguarded=${_d6c_bad}) — T1.16g is vacuous"; fi
 
 # ═══ TIER 3 — Guard 4: the pointer decides, never the signature (#6894) ════════════════════
 # THE POPULATION IS DERIVED. Every line in a DELIVERED artifact that names the pointer is found by
@@ -447,7 +495,7 @@ if printf '%s\n' "$_PTR_ARM" | grep -cF '[ "$${BLK_TYPE:-}" = crypto_LUKS ] || {
 if printf '%s\n' "$_PTR_ARM" | grep -cE '"\$DEV"' >/dev/null; then no "G4.d4 the pointer arm references the plaintext device — a fallback path exists (mutation row 2)"; else ok "G4.d4 the pointer arm never references the plaintext device (no fall-through)"; fi
 # G4.e the resolver refuses both malformed pointer shapes rather than deriving a path from them.
 _RES="$(printf '%s\n' "$_G1_STAGE" | awk '/^    STAGE=resolve$/{f=1} f&&/^    esac$/{print; exit} f')"
-if printf '%s\n' "$_RES" | grep -cF '*[!0-9]*)' >/dev/null && printf '%s\n' "$_RES" | grep -cF '"$PLAIN_ID"|"$LUKS_ID")' >/dev/null && printf '%s\n' "$_RES" | grep -cE '^      \*\)$' >/dev/null; then ok "G4.e the resolver has explicit arms for non-numeric, own-id and third-id pointers"; else no "G4.e the resolver lost an arm (non-numeric / one-of-two-ids / third id)"; fi
+if printf '%s\n' "$_RES" | grep -cF '*[!0-9]*)' >/dev/null && printf '%s\n' "$_RES" | grep -cF '"$LUKS_ID")' >/dev/null && printf '%s\n' "$_RES" | grep -cE '^      \*\)$' >/dev/null && printf '%s\n' "$_RES" | grep -cF 'MODE=unpointed' >/dev/null; then ok "G4.e the resolver has explicit arms for unpointed, non-numeric, own-id and third-id pointers"; else no "G4.e the resolver lost an arm (unpointed / non-numeric / own id / third id)"; fi
 # G4.f the arming marker MEASURES the unit, it does not trust enable's exit status.
 if grep -qF '_reopen_state="$(systemctl is-active inngest-luks-open.service 2>/dev/null || true)"' "$CLOUD_INIT" \
    && grep -qF 'if [ "$_reopen_state" = "active" ]; then' "$CLOUD_INIT"; then ok "G4.f inngest-luks-reopen-armed is emitted only when the unit reads active"; else no "G4.f the reopen arming marker trusts enable --now again — it reported success on 2026-09-17 on a boot where the unit failed"; fi
@@ -499,13 +547,16 @@ if ! printf '%s\n' "$_LUKS_OPEN_UNIT" | grep -cE '^[[:space:]]*(EnvironmentFile|
 # the floor stays 57 and is now exact (no slack). Its mutation (a second pointer reader appearing) is still killed by G4.b
 # (an unclassified site REDS) and G4.g2 (any dispatch-side pointer write fails).
 # #9939: T1.15a-e (reopen-unit ConditionPathExists= skip-vs-fail + mutation control) raised it 57 -> 62; review rounds added T1.15f set-parity (62 -> 63) then T1.15g reset-line coverage and set-identity (63 -> 64).
+# #9786: 64 -> 70, exact. T1.8a2 (the staging fstab write) and G1.g (the staging mapper name) went with the
+# staging block (-2); T1.16a-h (strip absence + its two controls, DEV derivation, no ext4 arm, blkid -p probe,
+# the per-site prd refusal and its mutation control) are new (+8). G1.f survives re-keyed to the unpointed mkfs.
 # Self-contained: bash builtins and this suite's own counters only. A floor that lives in a helper
 # is silenced by the same move that silences the arms it guards.
-if [ "$executed" -lt 64 ]; then
+if [ "$executed" -lt 70 ]; then
   fail=$((fail + 1))
-  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 64. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
+  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 70. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
 else
-  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 64)\n' "$executed"
+  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 70)\n' "$executed"
 fi
 
 echo ""

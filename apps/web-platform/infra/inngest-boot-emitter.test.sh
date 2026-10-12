@@ -236,7 +236,7 @@ else
   # `sentry_dsn` (#6500) is short, alphanumeric and non-hex on purpose: it must pass the emitter's
   # DSN shape check, and the redaction pattern backstop must NOT be able to catch its key, so the
   # Guard 4 cases prove the explicit enumeration rather than the backstop.
-  RENDER_EXPR="$(printf 'templatefile("%s", { inngest_volume_id="v", inngest_luks_volume_id="v2", inngest_expect_luks="false", doppler_token="d", inngest_doppler_config="prd", sdk_url="https://sdk", inngest_cli_arch="amd64", inngest_cli_sha256="s", vector_sha256="vs", doppler_arch="amd64", doppler_sha256="ds", web_host_private_ips="10.0.1.10", inngest_private_ip="10.0.1.40", betterstack_logs_token="BS_TOKEN_SENTINEL_7228", zot_registry_endpoint="10.0.1.30:5000", zot_pull_user="zu", zot_pull_token="zt", sentry_dsn="https://pubKEYx7@o1.ingest.invalid/42" })' "$CLOUD_INIT")"
+  RENDER_EXPR="$(printf 'templatefile("%s", { inngest_luks_volume_id="v2", inngest_expect_luks="false", doppler_token="d", inngest_doppler_config="prd", sdk_url="https://sdk", inngest_cli_arch="amd64", inngest_cli_sha256="s", vector_sha256="vs", doppler_arch="amd64", doppler_sha256="ds", web_host_private_ips="10.0.1.10", inngest_private_ip="10.0.1.40", betterstack_logs_token="BS_TOKEN_SENTINEL_7228", zot_registry_endpoint="10.0.1.30:5000", zot_pull_user="zu", zot_pull_token="zt", sentry_dsn="https://pubKEYx7@o1.ingest.invalid/42" })' "$CLOUD_INIT")"
   printf '%s\n' "$RENDER_EXPR" | terraform -chdir="$RENDER_DIR" console > "$RENDERED" 2>"$WORK/render.err"
 
   # KEY-SET PARITY WITH THE REAL CALL SITE (#7695). The map above is hand-kept, and the comment
@@ -270,7 +270,7 @@ else
   # entries are 4-space indented, so no interior line can match it.
   TF_KEYS="$(awk '/templatefile\("\$\{path\.module\}\/cloud-init-inngest\.yml", \{/,/^  \}\)/' \
     "$SCRIPT_DIR/inngest-host.tf" | grep -oE '^    [a-z0-9_]+ +=' | tr -d ' =' | sort -u)"
-  MAP_KEYS="$(grep -oE '\{ inngest_volume_id=.*\}' "${BASH_SOURCE[0]}" | sed -n '1p' \
+  MAP_KEYS="$(grep -oE '\{ inngest_luks_volume_id=.*\}' "${BASH_SOURCE[0]}" | sed -n '1p' \
     | grep -oE '[a-z0-9_]+=' | tr -d '=' | sort -u)"
   # Non-vacuity: an extraction that found nothing must not report parity. The floor is the ACTUAL
   # key count, not a round number safely below it (17 -> 18: #6500 threads `sentry_dsn`; 18 -> 19: #8539 threads `inngest_private_ip`; 19 -> 17: #8036 1d drops `ghcr_read_user`/`ghcr_read_token`, the retired GHCR bake) — a `-ge 10` passed at 13 while three keys were
@@ -287,8 +287,11 @@ else
   # 17 -> 18: #9175 threads `inngest_doppler_config` (the Doppler config name, parameterized for
   # the provision-rehearsal root) — the floor above stays 17 because that is the minimum the
   # non-vacuity contract was written against; the over-read bound tracks the real count exactly.
+  # 18 -> 17: #9786 drops `inngest_volume_id` (the retired plaintext backstop's id, dead since #8285). The
+  # extraction anchor on the MAP_KEYS line below moved to the new first key in the same change: anchored on
+  # the dropped key it would return an empty list. The floor and the bound now agree at 17.
   assert "AC5 key-set parity: the extraction stopped at the map's closing brace (over-read guard)" \
-    "[[ \$(printf '%s\\n' \"$TF_KEYS\" | grep -c .) -le 18 ]]"
+    "[[ \$(printf '%s\\n' \"$TF_KEYS\" | grep -c .) -le 17 ]]"
   MISSING="$(comm -23 <(printf '%s\n' "$TF_KEYS") <(printf '%s\n' "$MAP_KEYS") | tr '\n' ' ')"
   EXTRA="$(comm -13 <(printf '%s\n' "$TF_KEYS") <(printf '%s\n' "$MAP_KEYS") | tr '\n' ' ')"
   assert "AC5 key-set parity: this suite's render map matches inngest-host.tf (missing:${MISSING:-none} extra:${EXTRA:-none})" \
