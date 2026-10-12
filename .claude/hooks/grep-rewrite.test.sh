@@ -273,7 +273,7 @@ failopen "non-object root"             "$(jq -nc '["grep"]')"
 # fixture then passes against a hook that never met the condition it names.
 # (Measured: that form emitted a full envelope and the case still read green.)
 mkdir -p "$ROOT/badjq"
-printf '%s\n' '#!/usr/bin/env bash' 'exit 1' > "$ROOT/badjq/jq"; chmod +x "$ROOT/badjq/jq"
+printf '%s\n' '#!/usr/bin/env bash' '[ -t 0 ] || timeout 2 cat >/dev/null' 'exit 1' > "$ROOT/badjq/jq"; chmod +x "$ROOT/badjq/jq"
 rc_nojq="$(hook_rc "$(payload 'grep foo')" PATH="$ROOT/badjq:$PATH")"
 out_nojq="$(hook_run "$(payload 'grep foo')" PATH="$ROOT/badjq:$PATH")"
 if [[ "$rc_nojq" == "0" && -z "$out_nojq" ]]; then ok "AC10 jq exits non-zero → exit 0, empty stdout"
@@ -282,7 +282,7 @@ else bad "AC10 jq exits non-zero" "rc=$rc_nojq" "stdout=${out_nojq:0:120}"; fi
 # jq present, exit 0, but emitting NON-JSON. The dangerous shape: if the hook
 # trusted jq's exit code it would print the garbage as an envelope.
 mkdir -p "$ROOT/junkjq"
-printf '%s\n' '#!/usr/bin/env bash' 'echo "not json at all"' 'exit 0' > "$ROOT/junkjq/jq"
+printf '%s\n' '#!/usr/bin/env bash' '[ -t 0 ] || timeout 2 cat >/dev/null' 'echo "not json at all"' 'exit 0' > "$ROOT/junkjq/jq"
 chmod +x "$ROOT/junkjq/jq"
 rc_junk="$(hook_rc "$(payload 'grep foo')" PATH="$ROOT/junkjq:$PATH")"
 out_junk="$(hook_run "$(payload 'grep foo')" PATH="$ROOT/junkjq:$PATH")"

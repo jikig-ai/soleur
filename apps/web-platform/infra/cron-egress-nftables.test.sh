@@ -73,11 +73,13 @@ STUBS="$SCRATCH/stubs"; mkdir -p "$STUBS"
 # DOCKER-USER chains and the set elements in $FX/st so a second run (and `list chain`) sees the first one's state.
 cat > "$STUBS/nft" <<'EOF'
 #!/bin/bash
+# drains stdin first (the producer's writer must not take SIGPIPE); plain cat, because this suite runs the stub under env -i PATH=$FX/bin, which has no timeout
+body_in=""; case " $* " in *" -f "*) [ -t 0 ] || body_in=$(cat) ;; esac
 st="$FX/st"
 [ -n "${CEN_STUB_NOLOG:-}" ] || printf 'nft %s\n' "$*" >> "$FX/log"
 case "$1" in
   -f)
-    body=$(cat)
+    body=$body_in
     n=$(( $(cat "$st/txn.n" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$st/txn.n"
     if [ -z "${CEN_STUB_NOLOG:-}" ]; then printf '%s\n' "$body" > "$FX/txn.$n"; printf '<<< txn %s\n%s\n>>>\n' "$n" "$body" >> "$FX/log"; fi
     while IFS= read -r l; do
