@@ -2958,7 +2958,7 @@ jobs:
           mkdir -p "${RUNNER_TEMP}/zot"
           RU=$(openssl rand -hex 8); RP=$(openssl rand -hex 24)
           printf '::add-mask::%s\n' "$RP"
-          docker run --rm httpd:2.4-alpine htpasswd -Bbn "$RU" "$RP" > "${RUNNER_TEMP}/zot/htpasswd"
+          printf '%s' "$RP" | docker run --rm -i httpd:2.4-alpine htpasswd -Bin "$RU" > "${RUNNER_TEMP}/zot/htpasswd"
           cat > "${RUNNER_TEMP}/zot/config.json" <<CFG
           {
             "distSpecVersion": "1.1.0",
