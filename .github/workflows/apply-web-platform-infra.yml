@@ -4014,7 +4014,7 @@ jobs:
           epoch=$(date -u +%s)
           printf 'epoch=%s\n' "$epoch" >> "$GITHUB_OUTPUT"
           printf 'boot-trail anchor: %s (%s)\n' "$epoch" "$(date -u -d "@$epoch" +'%Y-%m-%d %H:%M:%S UTC')"
-      - name: Terraform apply (git-data-host -replace) — preserved-volumes assert
+      - name: Terraform apply (git-data-host -replace) — post-apply backstop
         if: inputs.plan_only != true
         id: apply
         working-directory: ${{ env.INFRA_DIR }}
@@ -4045,7 +4045,7 @@ jobs:
               replace)
                 echo "::error::terraform apply (git-data-host-replace) failed mid-replace — git-data may be DOWN (single-writer, no serving fallback); pushes/pulls fail (not corrupt); BOTH volumes are preserved — re-dispatch git-data-host-replace to recover from them" ;;
               rotate)
-                echo "::error::terraform apply (git-data-host-rotate) failed mid-replace — git-data may be DOWN (single-writer, no serving fallback); pushes/pulls fail (not corrupt). The plaintext volume is preserved (guarded); the LUKS volume, its passphrase and its published key are REPLACED TOGETHER by design on this arm, so a mid-apply failure can leave any of them replaced and the others not (the stranding state the gate header describes). This message does not prescribe a recovery: read the stock-recovery report above and knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md before re-dispatching." ;;
+                echo "::error::terraform apply (git-data-host-rotate) failed mid-replace — git-data may be DOWN (single-writer, no serving fallback); pushes/pulls fail. The plaintext volume is preserved (guarded); the LUKS volume, its passphrase and its published key are replaced or re-published TOGETHER by design on this arm, so a mid-apply failure can leave any of them replaced and the others not (the stranding state the gate header describes). This message does not prescribe a recovery: read the stock-recovery report above and knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md before re-dispatching." ;;
               *)
                 echo "::error::terraform apply (git-data host) failed mid-replace and the dispatch mode is unknown (the plan step's gate_mode output is empty) — git-data may be DOWN. Do not assume which volumes were preserved: read the stock-recovery report above before re-dispatching." ;;
             esac
@@ -4054,7 +4054,8 @@ jobs:
           # shellcheck source=tests/scripts/lib/git-data-host-replace-gate.sh
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/git-data-host-replace-gate.sh"
           if ! git_data_host_post_apply_assert tfplan.json "${GATE_MODE:-}"; then
-            echo "::error::git-data post-apply backstop (mode '${GATE_MODE//[^A-Za-z_-]/?}') refused the saved plan — the apply has ALREADY COMPLETED, so this is detective only: infrastructure has changed. The boot-completion poll below still runs. This should have been caught by the guard; failing hard."
+            gm_safe="${GATE_MODE:-}"; gm_safe="${gm_safe//[^A-Za-z_-]/?}"
+            echo "::error::git-data post-apply backstop (mode '${gm_safe:0:16}') refused the saved plan — the apply has ALREADY COMPLETED, so this is detective only: infrastructure has changed. The boot-completion poll below still runs, and the pin-load step follows it if the poll succeeds. This should have been caught by the guard; failing hard."
             exit 1
           fi
           # (#7226) The rotated pin fingerprint — the evidence the boot poll + the pin_load step's redeploy prove.

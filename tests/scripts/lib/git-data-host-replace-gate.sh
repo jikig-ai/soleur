@@ -341,12 +341,15 @@ git_data_host_replace_gate() {
 # no API, so it is the pre-apply gate's own bytes graded again after the apply has COMPLETED. A
 # refusal is therefore detective: the infrastructure has already changed. Wording below says "saved
 # plan shows" for that reason, never "the volume is preserved" as an observed outcome.
-# VOLUME ADDRESSES are matched by shape (root, indexed or module-prefixed), so a later `count`,
-# `for_each` or module move of a data volume cannot make the check count zero and pass.
+# VOLUMES are matched by the plan's own `.type` + `.name` (which cover root, indexed and
+# module-prefixed resources whatever the index key holds), with an address fallback for root and
+# indexed addresses, so a later `count`, `for_each` or module move of a data volume cannot make the
+# check count zero and pass. This is deliberately BROADER than the sibling gates' exact-address
+# match: a zero count here reads as "preserved", so the fail-closed direction is the wider net.
 # OUTPUT DISCIPLINE: addresses and counts only, never a .change.before/.change.after value.
 git_data_host_post_apply_assert() {
   local plan_json="$1" mode="${2:-}"
-  local vols=() vol vol_re vol_deletes nic_creates att att_creates safe_mode
+  local vols=() vol vol_deletes nic_creates att att_creates safe_mode
   case "$mode" in
     replace) vols=(git_data git_data_luks) ;;
     rotate)  vols=(git_data) ;;
@@ -358,9 +361,9 @@ git_data_host_post_apply_assert() {
   plan_gate_assert_readable     "git_data_host_post_apply_assert" "$plan_json" || return 1
   plan_gate_assert_classifiable "git_data_host_post_apply_assert" "$plan_json" || return 1
   for vol in "${vols[@]}"; do
-    vol_re='^(module\.[^.]+(\[[^\]]*\])?\.)*hcloud_volume\.'"${vol}"'(\[[^\]]*\])?$'
-    vol_deletes=$(jq --arg re "$vol_re" '[.resource_changes[]?
-      | select((.address // "") | test($re))
+    vol_deletes=$(jq --arg n "$vol" '("hcloud_volume." + $n) as $r | [.resource_changes[]?
+      | select((.type == "hcloud_volume" and .name == $n)
+               or ((.address // "") as $a | $a == $r or ($a | startswith($r + "["))))
       | select(.change.actions? | any(. == "delete" or . == "forget"))] | length' "$plan_json" 2>/dev/null) || vol_deletes=""
     if [[ "$vol_deletes" != "0" ]]; then
       echo "::error::hcloud_volume.${vol} shows ${vol_deletes:-<unreadable>} delete/forget action(s) in the saved plan that was applied — the data store must be preserved, and the apply has already completed. This should have been caught by the guard; failing hard."

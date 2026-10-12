@@ -20,6 +20,10 @@
 # -replace plan shape (server/network/both-attachments=delete+create,
 # firewall_attachment=update, volumes/passphrase=no-op/absent). No captured real plan file.
 #
+# This suite also covers the POST-apply backstop git_data_host_post_apply_assert (#10137): rows PA1-PA8
+# grade the saved plan per mode (replace: both volumes preserved; rotate: plaintext only), and PM1-PM7
+# neuter each of its arms on a copy of the lib (see the section before the anti-vacuity floor).
+#
 # Run: bash tests/scripts/test-git-data-host-replace-gate.sh
 
 set -uo pipefail
@@ -611,8 +615,17 @@ gate_check "PA2b rotate + LUKS volume absent -> PASS (the pre-apply gate owns th
 # create-before-destroy ordering, must not count zero and pass.
 write_plan "${ROT_PASS_SET},$(rc_obj 'hcloud_volume.git_data[0]' '"delete"')"
 gate_check "PA3c rotate + indexed plaintext volume delete -> ABORT" git_data_host_post_apply_assert 1 "hcloud_volume.git_data shows 1 delete/forget" "$TMP/plan.json" rotate
-write_plan "${ROT_PASS_SET},$(rc_obj 'module.store.hcloud_volume.git_data[\"a\"]' '"delete"')"
+# Module-prefixed shapes carry the plan's native type/name (a real plan always does); the module
+# instance key holds a dot and the index key a ], which an address pattern would mis-parse.
+_pa_native() { printf '{"address":"%s","type":"hcloud_volume","name":"%s","change":{"actions":["delete"]}}' "$1" "$2"; }
+write_plan "${ROT_PASS_SET},$(_pa_native 'module.store.hcloud_volume.git_data[\"a\"]' git_data)"
 gate_check "PA3c rotate + module-prefixed plaintext volume delete -> ABORT" git_data_host_post_apply_assert 1 "hcloud_volume.git_data shows 1 delete/forget" "$TMP/plan.json" rotate
+write_plan "${ROT_PASS_SET},$(_pa_native 'module.store[\"a.b\"].hcloud_volume.git_data' git_data)"
+gate_check "PA3c rotate + module instance key with a dot, plaintext volume delete -> ABORT" git_data_host_post_apply_assert 1 "hcloud_volume.git_data shows 1 delete/forget" "$TMP/plan.json" rotate
+write_plan "${ROT_PASS_SET},$(rc_obj 'hcloud_volume.git_data[\"a]b\"]' '"delete"')"
+gate_check "PA3c rotate + index key containing ] on the plaintext volume delete -> ABORT" git_data_host_post_apply_assert 1 "hcloud_volume.git_data shows 1 delete/forget" "$TMP/plan.json" rotate
+write_plan "${PASS_SET},$(_pa_native 'module.store.hcloud_volume.git_data_luks' git_data_luks)"
+gate_check "PA3c replace + module-prefixed LUKS volume delete -> ABORT" git_data_host_post_apply_assert 1 "hcloud_volume.git_data_luks shows 1 delete/forget" "$TMP/plan.json" replace
 write_plan "${ROT_PASS_SET},$(rc_obj 'hcloud_volume.git_data' '"create","delete"')"
 gate_check "PA3c rotate + plaintext volume create-before-destroy -> ABORT" git_data_host_post_apply_assert 1 "hcloud_volume.git_data shows 1 delete/forget" "$TMP/plan.json" rotate
 write_plan "${PASS_SET},$(rc_obj 'hcloud_volume.git_data_luks[1]' '"delete"')"
@@ -629,9 +642,13 @@ gate_check "PA7 bogus mode -> ABORT as a wiring fault" git_data_host_post_apply_
 gate_check "PA7 upper-case REPLACE -> ABORT (exact match only)" git_data_host_post_apply_assert 1 "unknown mode 'REPLACE' — wiring fault" "$TMP/plan.json" REPLACE
 gate_check "PA7 near-miss mode rotat -> ABORT (no glob or prefix match)" git_data_host_post_apply_assert 1 "unknown mode 'rotat' — wiring fault" "$TMP/plan.json" rotat
 gate_check "PA7 near-miss mode replace-x -> ABORT (no glob or prefix match)" git_data_host_post_apply_assert 1 "unknown mode 'replace-x' — wiring fault" "$TMP/plan.json" replace-x
-# The echoed mode is sanitized: a newline-bearing value cannot inject a line-leading annotation.
-_pa7_inj="$(git_data_host_post_apply_assert "$TMP/plan.json" $'rotate\n::error::injected' 2>&1 || true)"
-if [[ "$_pa7_inj" == *$'\n::error::injected'* ]]; then fail "PA7 a newline in the mode injected a line-leading ::error:: annotation"; else pass; fi
+# The echoed mode is sanitized and capped: a newline-bearing value cannot inject a line-leading
+# annotation (the fixture is short enough to survive the 16-char cap, so dropping the sanitization
+# is visible), and a long value is truncated.
+_pa7_inj="$(git_data_host_post_apply_assert "$TMP/plan.json" $'\n::error::x' 2>&1 || true)"
+if [[ "$_pa7_inj" == *$'\n::error::'* || "$_pa7_inj" != *"unknown mode '???error??x' — wiring fault"* ]]; then fail "PA7 a newline in the mode was not neutralized in the echoed message"; else pass; fi
+_pa7_long="$(git_data_host_post_apply_assert "$TMP/plan.json" "$(printf 'x%.0s' {1..40})" 2>&1 || true)"
+if [[ "$_pa7_long" != *"unknown mode 'xxxxxxxxxxxxxxxx' — wiring fault"* ]]; then fail "PA7 a 40-character mode was not truncated to 16 in the echoed message"; else pass; fi
 
 # PA8: output discipline — the function prints addresses and counts, never .change.before/after.
 # One sentinel per refusal arm (volume, NIC, attachment); a leak in any arm is a leak.
@@ -645,8 +662,8 @@ write_plan "${SERVER_REPLACE},${PA_NIC},${PA_ATT},$(printf '{"address":"hcloud_v
 _pa8="$(git_data_host_post_apply_assert "$TMP/plan.json" replace 2>&1 || true)"
 if [[ "$_pa8" == *"PA8-SENTINEL-OLD-USER-DATA"* || "$_pa8" != *"hcloud_volume_attachment.git_data_luks shows no create"* ]]; then fail "PA8 attachment arm leaked a .change.before value (or did not refuse)"; else pass; fi
 
-# PM1-PM6 (sole-guard) and PM7 (layered) (Guard Contract, #10137): neuter each arm of the post-apply backstop on a COPY of the
-# lib and prove the fixture that exercises it is then let through. Each row's sed must change the
+# PM1-PM6 (sole-guard) and PM7 (layered), Guard Contract #10137: neuter each arm of the post-apply
+# backstop on a COPY of the lib and prove the fixture that exercises it is then let through. Each row's sed must change the
 # copy (gate_mutate_and_check refuses a byte-identical mutant, so a drifted expression cannot pass
 # vacuously). Fixtures are single-defect: every other requirement is satisfied.
 write_plan "${ROT_PASS_SET},${PA_PLAIN_DEL}"; cp "$TMP/plan.json" "$TMP/pm1.json"
@@ -696,11 +713,11 @@ gate_mutate_layered "PM7 readable call in the post-apply assert (hands off to th
 # A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
 # suite on every legitimately-added assertion and train people to bump it unread.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 96 ]]; then
+if [[ "$_ran" -lt 100 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 96 (HK13 skips without terraform). Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 100 (HK13 skips without terraform). Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 96)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 100)\n' "$_ran"
 fi
 
 echo ""
