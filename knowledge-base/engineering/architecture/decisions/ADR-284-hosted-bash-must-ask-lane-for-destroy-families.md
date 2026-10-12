@@ -161,10 +161,11 @@ check that exercises hook-then-`canUseTool` precedence against the real binary; 
 
 **C9 result, measured limbs (2026-10-12, #10054).** The limbs the dev-hosted observation was meant to cover were exercised against the
 deployed SDK, bundled CLI and option builder, on the DEV HOST (host bwrap, `NODE_ENV=test`), not in the hosted container. Probe source
-file last changed in commit `60fdb273c5` (this PR; the run's HEAD was `821400be51`), run 2026-10-12T10:06:01Z. Deployed
-build: `/health` reported `build_sha` `0dc19ef389` (version 0.338.29); the lane and sandbox files are identical to the fix commit
-`dfb9e2dba5` (`git log dfb9e2dba5..origin/main` over the SDK pin, lockfile, sandbox config, sandbox hook, option builder, permission
-callback and lane files is empty). Output, verbatim (no paths):
+is the file as committed in `8c1d17e8e7` (this PR, after the review round; the run used the working tree whose probe file is byte-identical to
+that commit), run 2026-10-12T11:04:46Z. Deployed build: `/health` reported `build_sha` `edb74743f0` (version 0.338.32); the lane and sandbox
+files are identical to the fix commit `dfb9e2dba5` (`git log dfb9e2dba5..origin/main` over the SDK pin, lockfile, sandbox config, sandbox
+hook, option builder, permission callback and lane files is empty). An earlier identical run (10:06:01Z, build `0dc19ef389`) preceded the
+review-round hardening of the probe's selection and PASS rules. Output, verbatim (no paths):
 
 ```text
 PROVENANCE sdk=0.3.284 cli=2.1.284 node=v26.3.0 bun=1.4.3
