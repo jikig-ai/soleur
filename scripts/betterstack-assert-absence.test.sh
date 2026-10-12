@@ -265,12 +265,159 @@ else
   bad "--absence-require did not scope the absence read (rc=$rc): $out"
 fi
 
+# --- --control-require: field-scope the control predicate (#9963) --------------
+# A marker-substring control read is forgeable: webhook-payload rows under
+# ident=doppler quote repo text verbatim — issue #9939's own title produced 10
+# false matches (inngest-provision-rehearsal-capture.sh:296). --control-require
+# binds the control to the discriminator FIELD, so only a row carrying marker
+# AND "SYSLOG_IDENTIFIER":"systemd" proves the systemd journald path ships.
+#
+# The stub below emulates the warehouse rather than parroting the query: it
+# holds BOTH-count rows carrying marker + systemd identifier and
+# MARKER_ONLY-count rows carrying the marker under a different ident (the
+# contamination shape), and answers whichever count the received predicate
+# would return over that row set. A predicate missing the require counts the
+# marker-only rows too — which is what arm (b) must turn into `unshipping` and
+# arm (a) must exclude.
+echo "--- --control-require scopes the control read to marker + field (AND) ---"
+make_control_stub() {
+  local both="$1" marker_only="$2" absence="$3"
+  local total=$(( both + marker_only ))
+  cat > "$TMP/stub-ctl.sh" <<STUB
+#!/usr/bin/env bash
+sql="\$1"
+case "\$sql" in
+  SELECT*|*\$'\n'*SELECT*) : ;;
+  *) echo "stub: expected raw SQL as \\\$1, got '\$sql'" >&2; exit 64 ;;
+esac
+# Same host-scope check as make_stub — every read must carry it.
+case "\$sql" in
+  *"JSONExtractString(raw,'host_name') = 'soleur-web-1'"*) : ;;
+  *) echo "stub: read was not host-scoped" >&2; exit 65 ;;
+esac
+if [[ "\$sql" == *SOLEUR_SYSTEMD_JOURNALD_CONTROL* ]]; then
+  if [[ "\$sql" == *'"SYSLOG_IDENTIFIER":"systemd"'* ]]; then
+    echo "{\"n\":\"$both\"}"
+  else
+    echo "{\"n\":\"$total\"}"
+  fi
+else
+  echo "{\"n\":\"$absence\"}"
+fi
+exit 0
+STUB
+  chmod +x "$TMP/stub-ctl.sh"
+}
+
+# (a) Field-scoped control SATISFIED: rows carry marker AND the systemd
+# identifier → the control read proves the discriminated path is shipping and
+# the run reports the live verdict (clean), never unshipping.
+make_control_stub 3 2 0
+rc=0
+out=$(BETTERSTACK_QUERY_SCRIPT="$TMP/stub-ctl.sh" bash "$SUT" --host soleur-web-1 \
+  --absence 'IMAGE_PULL_FAIL' \
+  --control 'SOLEUR_SYSTEMD_JOURNALD_CONTROL' --control-require '"SYSLOG_IDENTIFIER":"systemd"' \
+  --since 6h 2>&1) || rc=$?
+eq "rows carrying marker+systemd satisfy --control-require (exit 0, live path)" "0" "$rc"
+if [[ "$out" == *'outcome=clean'* ]]; then
+  ok "verdict line reports clean — the field-scoped control is live"
+else
+  bad "no clean verdict for a satisfied --control-require: $out"
+fi
+if [[ "$out" == *'control_rows=3'* ]]; then
+  ok "control_rows counts field-scoped rows only — the 2 marker-only rows are excluded"
+else
+  bad "marker-only rows leaked into the control count: $out"
+fi
+
+# (b) ANTI-FORGERY ARM. The warehouse holds only marker-carrying rows under a
+# DIFFERENT ident (the doppler webhook-contamination shape). Marker-substring
+# alone would count 5 and certify a dead systemd path — the require must turn
+# the identical warehouse into unshipping.
+make_control_stub 0 5 0
+rc=0
+out=$(BETTERSTACK_QUERY_SCRIPT="$TMP/stub-ctl.sh" bash "$SUT" --host soleur-web-1 \
+  --absence 'IMAGE_PULL_FAIL' \
+  --control 'SOLEUR_SYSTEMD_JOURNALD_CONTROL' --control-require '"SYSLOG_IDENTIFIER":"systemd"' \
+  --since 6h 2>&1) || rc=$?
+eq "marker-only rows CANNOT satisfy --control-require (exit 2, unshipping)" "2" "$rc"
+if [[ "$out" == *'outcome=unshipping'* ]]; then
+  ok "verdict line reports unshipping — contamination cannot forge the control"
+else
+  bad "marker-only rows satisfied the field-scoped control: $out"
+fi
+
+# (c) Flag ABSENT: legacy behaviour — the control read stays marker-substring
+# only. The identical warehouse from (b) reports clean, so the require — not
+# the fixture — is what produced the unshipping above.
+make_control_stub 0 5 0
+rc=0
+out=$(BETTERSTACK_QUERY_SCRIPT="$TMP/stub-ctl.sh" bash "$SUT" --host soleur-web-1 \
+  --absence 'IMAGE_PULL_FAIL' --control 'SOLEUR_SYSTEMD_JOURNALD_CONTROL' \
+  --since 6h 2>&1) || rc=$?
+eq "no --control-require keeps the marker-substring control (exit 0)" "0" "$rc"
+if [[ "$out" == *'outcome=clean'* ]]; then
+  ok "legacy run reports clean on marker-substring alone"
+else
+  bad "flag-absent control behaviour changed: $out"
+fi
+if [[ "$out" == *'control_rows=5'* ]]; then
+  ok "legacy count sees every marker row — (b)'s narrowing came from the require"
+else
+  bad "legacy control count drifted: $out"
+fi
+
+# (d) Repeatable AND-composition, verified on the EMITTED SQL. The stub answers
+# 4 only when the control predicate carries marker AND REQ_ONE AND REQ_TWO in
+# composition order — the same dispatch trick the --absence-require arm uses,
+# so a dropped or OR'd require reads as unshipping, not clean.
+cat > "$TMP/stub-ctl-multi.sh" <<'STUB'
+#!/usr/bin/env bash
+sql="$1"
+case "$sql" in
+  SELECT*|*$'\n'*SELECT*) : ;;
+  *) echo "stub: expected raw SQL as \$1" >&2; exit 64 ;;
+esac
+case "$sql" in
+  *"JSONExtractString(raw,'host_name') = 'soleur-web-1'"*) : ;;
+  *) echo "stub: read was not host-scoped" >&2; exit 65 ;;
+esac
+if [[ "$sql" == *SOLEUR_SYSTEMD_JOURNALD_CONTROL* ]]; then
+  if [[ "$sql" == *SOLEUR_SYSTEMD_JOURNALD_CONTROL*AND*CTL_REQ_ONE*AND*CTL_REQ_TWO* ]]; then
+    echo '{"n":"4"}'
+  else
+    echo '{"n":"0"}'
+  fi
+else
+  echo '{"n":"0"}'
+fi
+exit 0
+STUB
+chmod +x "$TMP/stub-ctl-multi.sh"
+rc=0
+out=$(BETTERSTACK_QUERY_SCRIPT="$TMP/stub-ctl-multi.sh" bash "$SUT" --host soleur-web-1 \
+  --absence 'IMAGE_PULL_FAIL' \
+  --control 'SOLEUR_SYSTEMD_JOURNALD_CONTROL' \
+  --control-require 'CTL_REQ_ONE' --control-require 'CTL_REQ_TWO' \
+  --since 6h 2>&1) || rc=$?
+eq "every repeated --control-require reaches the control predicate AND'd (exit 0)" "0" "$rc"
+if [[ "$out" == *'outcome=clean'* ]]; then
+  ok "control predicate carried marker AND req1 AND req2 — stub-verified on the SQL"
+else
+  bad "a --control-require was dropped or OR'd — the stub saw an incomplete predicate: $out"
+fi
+if [[ "$out" == *'control_rows=4'* ]]; then
+  ok "control count comes from the fully composed predicate"
+else
+  bad "control count drifted: $out"
+fi
+
 # --- Anti-vacuity floor -----------------------------------------------------------------------
 # This suite imposes assertion floors on other people's guards and had none of its own. Neuter
 # ok()/bad()/eq() and it reported "0 passed, 0 failed / OK / exit 0" — indistinguishable from a
 # clean run. A FLOOR, not equality: the count is developer-incremented, so -eq turns every new
 # assertion into a spurious red.
-MIN_ASSERTIONS=36
+MIN_ASSERTIONS=47
 if [[ "$((pass + fail))" -lt "$MIN_ASSERTIONS" ]]; then
   echo "FATAL: only $((pass + fail)) assertions ran, expected >= $MIN_ASSERTIONS — the suite was stranded, not clean." >&2
   exit 1

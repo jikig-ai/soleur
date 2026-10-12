@@ -44,9 +44,36 @@
 
 data_dir = "/var/lib/vector"
 
-# ---------------- Source 1: inngest-server journald (WARN+) ----------------
-# Filter by syslog priority via `include_matches.PRIORITY`. INFO+DEBUG
-# (5,6,7) drop at source — keeps the log quota focused on signal.
+# ---------------- Source 1: inngest-server journald (unit OR PRIORITY<=4 arm) ----------------
+# ADMISSION SEMANTICS (#9963 — verified against Vector 0.43.1 src/sources/journald.rs,
+# the version pinned at vector.tf:13): the journald source spawns
+# `journalctl --follow --all --show-cursor --output=json` with NO match arguments —
+# it streams the ENTIRE journal and filters each decoded record client-side
+# (filter_matches / contains_match). contains_match is an OR over ALL record fields:
+# a record is admitted iff ANY of its fields has a value in that field's match set,
+# and `include_units` is merged into include_matches._SYSTEMD_UNIT. So this source
+# admits a row iff:
+#
+#   _SYSTEMD_UNIT = inngest-server.service (ANY priority)
+#     OR
+#   PRIORITY ∈ {0,1,2,3,4} (ANY unit, ANY SYSLOG_IDENTIFIER)
+#
+# Consequences, both measured and pinned:
+#   - The old "INFO+DEBUG (5,6,7) drop at source" claim was FALSE for the unit's own
+#     rows: PRIORITY-6 inngest lines DO ship (OBSERVED — betterstack-logs-alerts.tf:492-496
+#     records the OR behaviour). Only NON-unit rows are priority-capped.
+#   - EVERY host row at PRIORITY <= 4 ships here regardless of unit or identifier.
+#     PID-1 `Failed to start` rows (SYSLOG_IDENTIFIER=systemd, PRIORITY 3, UNIT= +
+#     JOB_RESULT=failed) are admitted by this arm and flow
+#     pii_scrub_* -> tag_journald -> sinks.betterstack -> Logs source 2457081. That is
+#     the path that shipped the #9939 storm (~1,240 rows/day) and the path #9963 pins;
+#     SOLEUR_SYSTEMD_JOURNALD_CONTROL (`/usr/bin/logger -t systemd -p err` in
+#     inngest-server-probe.sh, emitted by inngest-bootstrap.sh) is its positive control.
+#   - The `systemd` tag must NEVER join Source 4's exact-tag allowlist either — the
+#     PRIORITY arm already carries the rows that matter, and an exact-tag entry would
+#     also ship every PID-1 PRIORITY-6 Started/Stopped line (the quota trap the Source 4
+#     header names). Same mechanism, different issue: #6551 tracks the semantic fix,
+#     #8875 the emitter-selection rework; both stay open.
 # 0=EMERG, 1=ALERT, 2=CRIT, 3=ERR, 4=WARNING.
 [sources.inngest_journald]
 type = "journald"
@@ -55,9 +82,16 @@ include_matches.PRIORITY = ["0", "1", "2", "3", "4"]
 journal_directory = "/var/log/journal"
 batch_size = 16
 
-# ---------------- Source 2: system journald (CRIT+) ----------------
+# ---------------- Source 2: system journald (CRIT+, unit-excluded) ----------------
 # Kernel oops, OOM-killer, networking drops — anything CRIT or worse at
 # the host level. Tighter filter (PRIORITY 0-2) than the inngest source.
+# Same client-side evaluator as Source 1 (#9963): the journald source streams the
+# whole journal and filter_matches admits a record iff
+#   PRIORITY ∈ {0,1,2}  AND NOT  _SYSTEMD_UNIT ∈ {inngest-server.service, vector.service}
+# (includes are OR'd over record fields; excludes then drop on any match).
+# DOUBLE-ADMISSION: PRIORITY {0..2} ⊆ Source 1's {0..4} arm — every non-excluded host
+# CRIT+ row ships TWICE (once per source's own journalctl stream). Documented and
+# counted in the quota arithmetic; the dedupe fix belongs to #6551.
 [sources.system_journald]
 type = "journald"
 exclude_units = ["inngest-server.service", "vector.service"]
@@ -146,6 +180,14 @@ batch_size = 16
 # systemd include_matches is sd_journal_add_match exact-value equality, NOT
 # prefix/regex — a tag typo silently matches nothing).
 #
+# OVERLAP (#9963): a Source-4 tag row at PRIORITY <= 4 (e.g. ci-deploy's user.warning)
+# is ALSO admitted by Source 1's PRIORITY arm — those rows ship twice. Deliberately
+# documented, not fixed (dedupe belongs to #6551); conversely a `systemd` entry here
+# is the named trap — the tag's rows already ship via Source 1's arm at PRIORITY <= 4,
+# and an exact-tag entry would additionally ship every PID-1 PRIORITY-6
+# Started/Stopped line. NEVER add it; journald-config.test.sh + vector-pii-scrub.test.sh
+# pin its absence.
+#
 # NO `include_matches.PRIORITY` filter (deliberate — differs from Sources 1/2):
 # these lines are PRIORITY 4-6 (the #6536 inngest-heartbeat channel is PRIORITY 5-6),
 # which Source 2 drops; the SYSLOG_IDENTIFIER scoping to 14 known tags is already
@@ -166,9 +208,10 @@ batch_size = 16
 # dark arm and emits NO success-path row, so it adds ~0.)
 #
 # Steady-state delta is now a real SAVING, where pre-#6617b it was roughly neutral: the
-# `Failed to start` storm this replaced was itself shipping ~1,240 rows/day — though via a
-# mechanism this file does not explain (a live row carries SYSLOG_IDENTIFIER=systemd, which
-# NO source here admits; tracked separately).
+# `Failed to start` storm this replaced was itself shipping ~1,240 rows/day — via the
+# mechanism this file now names (#9963): those rows carry SYSLOG_IDENTIFIER=systemd at
+# PRIORITY 3 and ride Source 1's include_matches.PRIORITY {0..4} arm (OR over record
+# fields — any unit, any identifier), NOT this source.
 #
 # Rate-limited, NOT transition-only: what the ~24 buys is best-effort dark-host evidence the
 # host never had, and "emit once" or "emit on transition" would make a DEAD pusher and a
@@ -347,6 +390,11 @@ include_matches.SYSLOG_IDENTIFIER = [
   # registered in vector-pii-scrub.test.sh's SYSTEMD_UNIT_IDENTIFIERS (same mechanism as
   # `webhook`), NOT derivable by AC3 — the two must stay in lockstep.
   "sshd",
+  # DELIBERATELY ABSENT: `systemd` (#9963). PID-1 rows (Failed/Started/Stopped) already
+  # ship through Source 1's include_matches.PRIORITY arm at PRIORITY <= 4 — the exact-tag
+  # entry would add only the PRIORITY 5-6 chatter (every routine unit start/stop), the
+  # standing quota cost the header warns against. Registered in vector-pii-scrub.test.sh's
+  # PRIORITY_ARM_EXEMPTIONS and pinned absent here by journald-config.test.sh — do NOT add.
 ]
 journal_directory = "/var/log/journal"
 batch_size = 16

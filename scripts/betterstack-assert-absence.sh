@@ -40,7 +40,7 @@
 # Usage:
 #   doppler run -p soleur -c prd_terraform -- scripts/betterstack-assert-absence.sh \
 #     --host soleur-web-1 --absence 'IMAGE_PULL_FAIL' [--absence '...'] \
-#     [--control SOLEUR_PROBE_CANARY] [--since 6h]
+#     [--control SOLEUR_PROBE_CANARY] [--control-require '...'] [--since 6h]
 #
 # Exit codes are the outcome table above. Every run prints one machine-readable verdict line:
 #   SOLEUR_ABSENCE_ASSERT outcome=<o> host=<h> absence_rows=<n> control_rows=<n> since=<w>
@@ -71,7 +71,7 @@ ABSENCE=()
 usage() {
   cat >&2 <<'EOF'
 usage: betterstack-assert-absence.sh --host <host_name> --absence <substring> [--absence <substring>...]
-                                     [--absence-require <substring>] [--control <substring>] [--since <Nh|Nd>]
+                                     [--absence-require <substring>] [--control <substring>] [--control-require <substring>] [--since <Nh|Nd>]
 
   --host     REQUIRED. Exact host_name to scope BOTH the absence and control reads to.
   --absence  REQUIRED, repeatable. A row matching ANY of these makes the outcome `present`.
@@ -85,18 +85,29 @@ usage: betterstack-assert-absence.sh --host <host_name> --absence <substring> [-
              '"host":"soleur-inngest"') to discriminate the systemd journal path on the
              right machine.
   --control  Positive-control marker (default SOLEUR_PROBE_CANARY).
+  --control-require  Optional, repeatable. A substring a control row must ALSO
+             carry — AND'd onto the --control marker. Marker-substring alone is
+             forgeable: webhook-payload rows quote repo text verbatim under
+             ident=doppler (measured: issue #9939's own title produced 10 false
+             matches), so a path-scoped control must bind a discriminator field.
+             The systemd journald path recipe (#9963):
+               --control 'SOLEUR_SYSTEMD_JOURNALD_CONTROL' \
+               --control-require '"SYSLOG_IDENTIFIER":"systemd"'
+             A doppler-tagged row quoting the marker cannot satisfy it.
   --since    Window, minimum 1h (see the rate-limit note below). Default 6h.
 EOF
   exit 64
 }
 
 ABSENCE_REQUIRE=()
+CONTROL_REQUIRE=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --host)    HOST="${2:-}"; shift 2 ;;
     --absence) ABSENCE+=("${2:-}"); shift 2 ;;
     --absence-require) ABSENCE_REQUIRE+=("${2:-}"); shift 2 ;;
     --control) CONTROL_MARKER="${2:-}"; shift 2 ;;
+    --control-require) CONTROL_REQUIRE+=("${2:-}"); shift 2 ;;
     --since)   SINCE="${2:-}"; shift 2 ;;
     -h|--help) usage ;;
     *) echo "betterstack-assert-absence: unknown flag: $1" >&2; usage ;;
@@ -162,6 +173,17 @@ for pat in "${ABSENCE[@]}"; do
   absence_or+="$term"
 done
 
+# The control predicate composes the same way: the marker AND'd with every
+# --control-require. A marker-substring control is forgeable — webhook-payload
+# rows quote repo text verbatim under other idents (measured: 10 false matches
+# on #9939's title under ident=doppler) — so a path-scoped control binds the
+# discriminator FIELD, e.g. --control-require '"SYSLOG_IDENTIFIER":"systemd"'
+# for the systemd journald path (#9963, ADR-192 I-2).
+control_term="raw LIKE '%$(sql_lit "$CONTROL_MARKER")%'"
+for req in "${CONTROL_REQUIRE[@]+"${CONTROL_REQUIRE[@]}"}"; do
+  control_term="(${control_term} AND raw LIKE '%$(sql_lit "$req")%')"
+done
+
 # --- The read, in raw SQL (#7103 R3 4.2) ---
 #
 # HOST SCOPING. betterstack-query.sh has no --host flag, and its repeated --grep terms compile
@@ -221,7 +243,7 @@ verdict() {
 
 # CONTROL FIRST. Its failure modes (unknown, unshipping) both dominate any absence result: an
 # absence of zero means nothing until the channel is known to be carrying rows at all.
-control_rows="$(run_count "raw LIKE '%$(sql_lit "$CONTROL_MARKER")%'")" || {
+control_rows="$(run_count "$control_term")" || {
   echo "betterstack-assert-absence: the positive-control read did not answer. Reporting unknown rather than treating an unanswered query as an absence." >&2
   verdict unknown - - 3
 }

@@ -541,6 +541,76 @@ assert "R3-4.5e: that ExecStartPre line does NOT route through doppler run" \
 assert "R3-4.5f: the --canary-only BRANCH precedes the credential FATAL guards" \
   "[[ \"\$(grep -nE '^if \\[ \"\\\$\\{1:-\\}\" = \"--canary-only\" \\]' \"\$ZOT_PROBE_SH\" | sed -n '1p' | cut -d: -f1)\" -lt \"\$(grep -n 'ZOT_PULL_USER/ZOT_PULL_TOKEN unset' \"\$ZOT_PROBE_SH\" | sed -n '1p' | cut -d: -f1)\" ]]"
 
+# --- #9963: the SYSLOG_IDENTIFIER=systemd positive-control emit, tied to its wiring -----
+#
+# Two evidence surfaces — betterstack-assert-absence.sh's --control read and the rehearsal
+# capture's inngest_failed_check — depend on `SYSLOG_IDENTIFIER=systemd` journald rows
+# shipping. They DO ship: Vector's journald source spawns `journalctl` with NO match
+# arguments and evaluates contains_match as an OR over all record fields (journald.rs @
+# v0.43.1, the vector.tf:13 pin), so Source 1's `include_matches.PRIORITY = ["0".."4"]`
+# admits a PRIORITY-3 row from ANY unit and ANY identifier. The
+# SOLEUR_SYSTEMD_JOURNALD_CONTROL row is the positive control for that discriminated
+# path: same admission arm, same discriminator field, so its absence can never read as a
+# vacuous clean. Each link fails SILENTLY, so each is pinned here:
+#   - a deleted/renamed emit           -> no control rows -> consumers report unshipping
+#   - `-t` drift (leaves the systemd    -> a '"SYSLOG_IDENTIFIER":"systemd"' field-scoped
+#     discriminator field)                control read can never be satisfied -> unshipping
+#   - `-p` drift (err -> notice)       -> PRIORITY 5 leaves the {0..4} arm -> unshipping
+#   - "systemd" added to Source 4      -> ships ALL PID-1 chatter incl. every PRIORITY-6
+#     (the tempting "deliberate" fix)     Started/Stopped line — the quota blow the
+#                                        Source 4 header names. NEVER add it.
+#
+# Anchored on the EMISSION (the `logger` invocation line inside the probe heredoc), never
+# a bare marker token — the R3-4.5c lesson: a marker named but never emitted is the
+# dead-entry shape this exists to rule out, and the marker text is quoted verbatim by
+# consumers' recipes (a bare grep passes on those files alone).
+PROBE_BODY="$(awk "/<<'?PROBESCRIPTEOF/{f=1;next} f&&/^PROBESCRIPTEOF\$/{exit} f" "$INNGEST_BOOTSTRAP")"
+assert "9963a: PROBESCRIPTEOF heredoc body extracted (the control's only emission chokepoint)" \
+  "[[ -n \"\$PROBE_BODY\" ]] && printf '%s\n' \"\$PROBE_BODY\" | grep -cF 'SOLEUR_INNGEST_SERVER_PROBE' >/dev/null"
+
+# `|| true` is load-bearing under `set -euo pipefail` — pre-fix this grep matches nothing,
+# the capture returns non-zero, and the suite would die mid-run rather than reporting the
+# FAIL rows (the CI_DEPLOY_TAG :471-477 lesson). The emptiness asserts are the real check.
+CONTROL_EMIT="$(printf '%s\n' "$PROBE_BODY" | grep -nE '^[[:space:]]*/usr/bin/logger .*SOLEUR_SYSTEMD_JOURNALD_CONTROL' | sed -n '1p' || true)"
+PROBE_EMIT_LN="$(printf '%s\n' "$PROBE_BODY" | grep -nE 'logger -t "\$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE' | sed -n '1p' | cut -d: -f1 || true)"
+CONTROL_LN="${CONTROL_EMIT%%:*}"
+
+assert "9963b: the probe script EMITS SOLEUR_SYSTEMD_JOURNALD_CONTROL via /usr/bin/logger (emission-anchored, not a bare token)" \
+  "[[ -n \"\$CONTROL_EMIT\" ]]"
+assert "9963c: the control emit carries -t systemd (the discriminator field consumers field-scope on)" \
+  "printf '%s\n' \"\$CONTROL_EMIT\" | grep -cF -- '-t systemd' >/dev/null"
+assert "9963d: the control emit carries -p err (PRIORITY 3 — inside Source 1's {0..4} admission arm)" \
+  "printf '%s\n' \"\$CONTROL_EMIT\" | grep -cF -- '-p err' >/dev/null"
+
+# UNCONDITIONALITY, same ADR-117 invariant as the emit it follows: the control must sit
+# AFTER the unconditional SOLEUR_INNGEST_SERVER_PROBE emit and BEFORE any conditional
+# gate — an `if`/`case`/`for`/`while`/`until`/`elif` between them is a credential- or
+# state-gated emit, and a gated control reads as a dark path under exactly the failure it
+# exists to disprove. Anchored on the two emission lines, not on a comment position.
+BETWEEN_EMITS=""
+if [[ -n "$PROBE_EMIT_LN" && -n "$CONTROL_LN" && "$CONTROL_LN" =~ ^[0-9]+$ && "$PROBE_EMIT_LN" =~ ^[0-9]+$ && "$CONTROL_LN" -gt "$PROBE_EMIT_LN" ]]; then
+  BETWEEN_EMITS="$(printf '%s\n' "$PROBE_BODY" | awk -v a="$PROBE_EMIT_LN" -v b="$CONTROL_LN" 'NR>a && NR<b')"
+fi
+assert "9963e: the control emit is UNCONDITIONAL — after the probe emit, before any if/case/loop gate" \
+  "[[ \"\$CONTROL_LN\" =~ ^[0-9]+\$ && \"\$PROBE_EMIT_LN\" =~ ^[0-9]+\$ && \"\$CONTROL_LN\" -gt \"\$PROBE_EMIT_LN\" ]] && ! printf '%s\n' \"\$BETWEEN_EMITS\" | grep -cE '^[[:space:]]*(if|elif|else|case|for|while|until)([[:space:]]|\$)' >/dev/null"
+
+# Single emission chokepoint: the PROBESCRIPTEOF heredoc is the only place this marker may
+# be emitted — a second emit site (e.g. a sibling unit or a doppler-wrapped script) would
+# multiply the row cost and fork the chokepoint these pins watch.
+# grep -c prints "0" and exits non-zero on no match — bound to a var first so a missing
+# emit is an ordinary FAIL row, not a set -e death (same shape as CONTROL_EMIT above).
+CONTROL_EMIT_COUNT="$(grep -cE '^[[:space:]]*/?([[:alnum:]_.-]+/)*logger .*SOLEUR_SYSTEMD_JOURNALD_CONTROL' "$INNGEST_BOOTSTRAP" || true)"
+assert "9963f: exactly ONE logger emission of SOLEUR_SYSTEMD_JOURNALD_CONTROL exists in inngest-bootstrap.sh" \
+  "[[ \"\$CONTROL_EMIT_COUNT\" -eq 1 ]]"
+
+# NEVER-ADD pin (AC3): 'systemd' must never join the Source 4 exact-tag allowlist. The
+# control proves the PRIORITY-arm path, which already ships its rows; an allowlist entry
+# would ship every PID-1 line (all PRIORITY-6 unit chatter) — the quota trap. Anchored on
+# the quoted-array-element shape so the rationale comments mentioning the tag cannot
+# false-fire either way.
+assert "9963g: 'systemd' is ABSENT from the Source 4 include_matches.SYSLOG_IDENTIFIER allowlist (never-add pin)" \
+  "! printf '%s\n' \"\$HSJ\" | grep -cE '^[[:space:]]*\"systemd\",?\$' >/dev/null"
+
 echo ""
 echo "=== Results: $PASS/$TOTAL passed ==="
 if (( FAIL > 0 )); then

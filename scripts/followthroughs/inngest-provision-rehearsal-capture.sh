@@ -328,6 +328,30 @@ inngest_failed_check() { # <row-set> — viol on any `Failed to start <tracked-u
     || ok "zero 'Failed to start' journal rows for tracked units"
 }
 
+# POSITIVE CONTROL FOR THE systemd-TAGGED PATH (#9963). The `ok` above — "zero 'Failed to
+# start' journal rows" — is only as good as the channel that would carry such a row: a
+# silently dead SYSLOG_IDENTIFIER=systemd delivery path reads as a green zero on every
+# capture. The control row is emitted hourly by the inngest-server-probe unit as
+# `logger -t systemd -p err "SOLEUR_SYSTEMD_JOURNALD_CONTROL ..."` and rides the SAME
+# inngest_journald PRIORITY<=4 admission arm a real failure row does, so its presence in
+# the window proves the discriminated path is live. Two-stage shape mirrors
+# count_inngest_failed: the marker first, then the `"SYSLOG_IDENTIFIER":"systemd"` field —
+# a doppler/inngest row quoting the marker text cannot satisfy it (the measured
+# contamination class: control-API webhook payloads ship issue titles verbatim). Field-
+# scoped, not payload-scoped: the message text may differ; only marker + tag bind.
+count_systemd_path_control() { # <row-set> — control rows carried on the systemd tag
+  printf '%s\n' "$1" |
+    grep -F 'SOLEUR_SYSTEMD_JOURNALD_CONTROL' |
+    grep -cE 'SYSLOG_IDENTIFIER.{0,8}systemd' 2>/dev/null || true
+}
+systemd_path_check() { # <row-set> — want while the systemd path is unproven in this window
+  local n_control
+  n_control="$(count_systemd_path_control "$1")"
+  (( n_control >= 1 )) \
+    && ok "systemd-path control row observed (SOLEUR_SYSTEMD_JOURNALD_CONTROL on SYSLOG_IDENTIFIER=systemd, n=${n_control}) — the systemd-tagged delivery path is proven live" \
+    || want "systemd-path control row absent (SOLEUR_SYSTEMD_JOURNALD_CONTROL tagged SYSLOG_IDENTIFIER=systemd, n=${n_control}) — a zero 'Failed to start' count rides an unproven channel until it lands"
+}
+
 if [[ -z "$IID" && -z "$(printf '%s' "$HOST_ROWS" | tr -d '[:space:]')" ]]; then
   # Zero host rows with a live anchor is "dark so far", not "dark forever".
   echo "TRANSIENT (${MODE}): the source is answering but this host has emitted nothing yet — keep polling; the poll deadline owns the terminal verdict." >&2
@@ -351,6 +375,9 @@ case "$MODE" in
     n_start_distinct="$(printf '%s\n' "$HOST_ROWS" | grep -oE 'stage=provision-attempt-start.{0,40}attempt=[0-9]+' | sort -u | wc -l | tr -d ' ')"
     (( n_start_distinct >= MIN_ATTEMPTS )) && ok "distinct provision-attempt-start attempts ${n_start_distinct} >= ${MIN_ATTEMPTS} (the retry loop retried NIC-less)" || want "distinct provision-attempt-start attempts ${n_start_distinct} >= ${MIN_ATTEMPTS} (the retry loop retried NIC-less)"
     (( n_nic_fail >= 1 ))        && ok "NIC-absent failure observed (private_nic_timeout/provision-nic-ABSENT n=${n_nic_fail})" || want "NIC-absent failure observed (private_nic_timeout/provision-nic-ABSENT n=${n_nic_fail})"
+    # The control arm evaluates BEFORE the failed-count arm prints ok — a want/TRANSIENT on
+    # a dark systemd path must dominate the zero-failed-rows note (#9963).
+    systemd_path_check "$HOST_ROWS"
     inngest_failed_check "$HOST_ROWS"
     KEY=REHEARSAL_PHASE_A_OBSERVED
     ;;
@@ -370,6 +397,7 @@ case "$MODE" in
     n_exit="$(count_iid provision-attempt-exit-)"
     (( n_done >= 1 )) && ok "bootstrap-done emitted for this host (implies nic_present + zot + isolation + bootstrap all ran)" || want "bootstrap-done emitted for this host (n=${n_done})"
     note "info: ${n_exit} provision-attempt-exit-* row(s) in window (retries before convergence are expected); private_nic_ok n=${n_ok} (informational — emitted only when the wait actually ran)"
+    systemd_path_check "$HOST_ROWS"
     inngest_failed_check "$HOST_ROWS"
     KEY=REHEARSAL_PHASE_B_RECOVERY
     ;;
@@ -389,6 +417,7 @@ case "$MODE" in
     n_provision="$(printf '%s\n' "$POST_ROWS" | grep -cE 'provision-attempt-start|provision-attempt-exit|bootstrap-done|provision-unit-armed' 2>/dev/null || true)"
     (( n_provision > 0 )) && viol "${n_provision} provision marker(s) AFTER the reboot boundary — the latch did not hold (provision re-ran post-reboot)" || ok "zero provision markers after the reboot boundary — the latch held"
     (( n_restage >= 1 ))  && ok "token-restage anchor re-emitted post-reboot ON THE PHONE-HOME CHANNEL (proves this boot ran AND the measured channel is live)" || want "token-restage anchor re-emitted post-reboot (stage=bs-token-restaged n=${n_restage})"
+    systemd_path_check "$POST_ROWS"
     inngest_failed_check "$POST_ROWS"
     KEY=REHEARSAL_POST_REBOOT_LATCH
     ;;

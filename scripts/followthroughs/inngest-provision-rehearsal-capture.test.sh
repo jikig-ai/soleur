@@ -90,6 +90,8 @@ printf '#!/usr/bin/env bash\nexec python3 "%s" "$1"\n' "$TMP/bs-stub.py" > "$STU
 chmod +x "$STUB"
 
 # run <label> <want-rc> <extra-env...> -- <sut args...>; asserts rc and the terminal sentinel.
+# The combined output survives in LAST_OUT so an arm can additionally pin WHAT the run
+# printed (the verdict notes are the externally observable contract), not only its rc.
 run() {
   local label="$1" wrc="$2"; shift 2
   local envs=() args=()
@@ -97,6 +99,7 @@ run() {
   args=("$@")
   local out rc
   out="$(env "${envs[@]}" bash "$SUT" "${args[@]}" 2>&1)"; rc=$?
+  LAST_OUT="$out"
   if [[ "$rc" != "$wrc" ]]; then
     fail "$label — rc=${rc} (wanted ${wrc})" "$out"; return 1
   fi
@@ -120,6 +123,13 @@ rows() {
 
 BASE_ENV=(STUB_ANCHOR=500 BETTERSTACK_QUERY_SH="$STUB" SOLEUR_TEST_MODE=1)
 BASE_ARGS=(--host-name "$HOST" --evidence-url "$URL" --out "$TMP/ev.env" --window "2 HOUR")
+
+# (#9963) The systemd-path positive-control row in its measured journald-JSON wire shape —
+# the probe emits `logger -t systemd -p err "SOLEUR_SYSTEMD_JOURNALD_CONTROL ..."` hourly,
+# and the tag IS the discriminator under test. Every healthy-rehearsal fixture below
+# carries it: a zero 'Failed to start' count is a pass only once the path that would ship
+# such a row is proven live in the window.
+CTRL_ROW="{\"SYSLOG_IDENTIFIER\":\"systemd\",\"PRIORITY\":\"3\",\"_COMM\":\"logger\",\"message\":\"SOLEUR_SYSTEMD_JOURNALD_CONTROL ts=1760222400 rides the inngest_journald PRIORITY arm (#9963)\",\"host\":\"${HOST}\"}"
 
 # ── refusal arms (usage 64, never a verdict) ──────────────────────────────────
 run "prod host name is refused (soleur-inngest is not rehearsal-scoped)" 64 "${BASE_ENV[@]}" -- \
@@ -158,7 +168,8 @@ rows "$TMP/r-phasea.json" "$NOW" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=private_nic_timeout detail=boot=deadbee1.waited_s=150 \"host\":\"${HOST}\"" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=2 iid=abc123 \"host\":\"${HOST}\"" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=provision-nic-ABSENT detail=ip=10.0.1.60 attempt=2 iid=abc123 \"host\":\"${HOST}\"" \
-  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-exit-1 detail=attempt=2 why=provision-nic-ABSENT iid=abc123 \"host\":\"${HOST}\""
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-exit-1 detail=attempt=2 why=provision-nic-ABSENT iid=abc123 \"host\":\"${HOST}\"" \
+  "$CTRL_ROW"
 run "phase-a PASS: armed + 2 attempts + NIC-absent observed + zero bootstrap-done" 0 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-phasea.json" -- "${BASE_ARGS[@]}" --mode phase-a
 grep -qF 'REHEARSAL_PHASE_A_OBSERVED=PASS' "$TMP/ev.env" && pass "evidence file carries REHEARSAL_PHASE_A_OBSERVED=PASS" \
@@ -192,7 +203,8 @@ rows "$TMP/r-phaseb.json" "$NOW" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=3 iid=abc123 \"host\":\"${HOST}\"" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-exit-1 detail=attempt=3 why=pull-timeout iid=abc123 \"host\":\"${HOST}\"" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=4 iid=abc123 \"host\":\"${HOST}\"" \
-  "SOLEUR_INNGEST_BOOT_STAGE stage=bootstrap-done detail=attempt=4 iid=abc123 \"host\":\"${HOST}\""
+  "SOLEUR_INNGEST_BOOT_STAGE stage=bootstrap-done detail=attempt=4 iid=abc123 \"host\":\"${HOST}\"" \
+  "$CTRL_ROW"
 run "phase-b PASS: bootstrap-done ALONE (private_nic_ok is unreachable in the happy path)" 0 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-phaseb.json" -- "${BASE_ARGS[@]}" --mode phase-b
 grep -qF 'REHEARSAL_PHASE_B_RECOVERY=PASS' "$TMP/ev.env" && pass "evidence file carries REHEARSAL_PHASE_B_RECOVERY=PASS" \
@@ -214,7 +226,8 @@ run "phase-b TRANSIENT: bootstrap-done-DEGRADED is NOT bootstrap-done (no latch 
 PRE_REBOOT="2026-01-01T00:00:00"
 rows "$TMP/r-latch.json" "$NOW" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=bs-token-restaged detail=ok=1.boot-trace.channel.re-armed \"host\":\"${HOST}\"" \
-  "SOLEUR_INNGEST_BOOT_STAGE stage=some-unrelated detail=harmless \"host\":\"${HOST}\""
+  "SOLEUR_INNGEST_BOOT_STAGE stage=some-unrelated detail=harmless \"host\":\"${HOST}\"" \
+  "$CTRL_ROW"
 run "post-reboot PASS: restage anchor re-emitted ON THE PHONE-HOME CHANNEL, zero provision rows after boundary" 0 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-latch.json" -- "${BASE_ARGS[@]}" --mode post-reboot --reboot-since "$PRE_REBOOT"
 grep -qF 'REHEARSAL_POST_REBOOT_LATCH=PASS' "$TMP/ev.env" && pass "evidence file carries REHEARSAL_POST_REBOOT_LATCH=PASS" \
@@ -294,7 +307,8 @@ rows "$TMP/r-luksfp.json" "$NOW" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=1 iid=abc123 \"host\":\"${HOST}\"" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=2 iid=abc123 \"host\":\"${HOST}\"" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=private_nic_timeout detail=boot=deadbee1.waited_s=150 \"host\":\"${HOST}\"" \
-  "{\"SYSLOG_IDENTIFIER\":\"doppler\",\"_COMM\":\"inngest\",\"_SYSTEMD_UNIT\":\"inngest-server.service\",\"message\":\"githubEvent=issues title=Failed to start inngest-luks-open.service on fresh provision\",\"host\":\"${HOST}\"}"
+  "{\"SYSLOG_IDENTIFIER\":\"doppler\",\"_COMM\":\"inngest\",\"_SYSTEMD_UNIT\":\"inngest-server.service\",\"message\":\"githubEvent=issues title=Failed to start inngest-luks-open.service on fresh provision\",\"host\":\"${HOST}\"}" \
+  "$CTRL_ROW"
 run "phase-a PASS: the needle text inside a non-systemd (webhook) row is not a LUKS failure" 0 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-luksfp.json" -- "${BASE_ARGS[@]}" --mode phase-a
 
@@ -352,7 +366,8 @@ rows "$TMP/r-jlembedded.json" "$NOW" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=1 iid=abc123 \"host\":\"${HOST}\"" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=2 iid=abc123 \"host\":\"${HOST}\"" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=private_nic_timeout detail=boot=deadbee1.waited_s=150 \"host\":\"${HOST}\"" \
-  "SOLEUR_INNGEST_BOOT_STAGE stage=post-boot-health detail=iid=abc123 jl=[systemd[1]: Failed to start inngest-server.service - Inngest self-hosted server. ; systemd[1]: Failed to start vector.service - Vector observability shipper.] \"host\":\"${HOST}\""
+  "SOLEUR_INNGEST_BOOT_STAGE stage=post-boot-health detail=iid=abc123 jl=[systemd[1]: Failed to start inngest-server.service - Inngest self-hosted server. ; systemd[1]: Failed to start vector.service - Vector observability shipper.] \"host\":\"${HOST}\"" \
+  "$CTRL_ROW"
 run "phase-a PASS: a BOOT_STAGE row embedding journalctl 'Failed to start' text is not a violation" 0 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-jlembedded.json" -- "${BASE_ARGS[@]}" --mode phase-a
 
@@ -367,16 +382,69 @@ rows "$TMP/r-since.json" "$NOW" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=provision-unit-armed detail=iid=abc123 \"host\":\"${HOST}\"" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=1 iid=abc123 \"host\":\"${HOST}\"" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=2 iid=abc123 \"host\":\"${HOST}\"" \
-  "SOLEUR_INNGEST_BOOT_STAGE stage=private_nic_timeout detail=boot=deadbee1.waited_s=150 \"host\":\"${HOST}\""
+  "SOLEUR_INNGEST_BOOT_STAGE stage=private_nic_timeout detail=boot=deadbee1.waited_s=150 \"host\":\"${HOST}\"" \
+  "$CTRL_ROW"
 run "phase-a PASS under --since: a prior life's rows are excluded by the bound" 0 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-since.json" -- "${BASE_ARGS[@]}" --mode phase-a --since "$SINCE_BOUND" --out "$TMP/ev-since.env"
+
+# ── #9963 systemd-path positive-control arms ──────────────────────────────────
+# The zero-'Failed to start' count is only as good as the channel that would carry such a
+# row: a silently dead SYSLOG_IDENTIFIER=systemd delivery path reads as a green zero. The
+# control row ($CTRL_ROW above) rides the SAME PRIORITY<=4 admission arm a real failure row
+# does, so marker AND systemd-tag must both be present before the arm proceeds — the
+# discriminator under test is that field shape, not the marker alone.
+
+# (a) control PRESENT: marker + SYSLOG_IDENTIFIER=systemd on the same row -> the arm
+# proceeds and the run can PASS.
+rows "$TMP/r-ctrlpresent.json" "$NOW" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-unit-armed detail=iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=1 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=2 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=private_nic_timeout detail=boot=deadbee1.waited_s=150 \"host\":\"${HOST}\"" \
+  "$CTRL_ROW"
+run "phase-a PASS: the systemd-path control row is observed (marker + SYSLOG_IDENTIFIER=systemd)" 0 \
+  "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-ctrlpresent.json" -- "${BASE_ARGS[@]}" --mode phase-a
+grep -qF 'systemd-path control row observed' < <(printf '%s' "$LAST_OUT") && \
+  pass "control-present arm reports the control row observed" || \
+  fail "control-present arm reports the control row observed" "$LAST_OUT"
+
+# (b) control ABSENT: every other phase-a requirement met but no control row -> a zero
+# count is a `want` (TRANSIENT, keep polling), never a pass on an unproven channel.
+rows "$TMP/r-noctrl.json" "$NOW" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-unit-armed detail=iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=1 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=2 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=private_nic_timeout detail=boot=deadbee1.waited_s=150 \"host\":\"${HOST}\""
+run "phase-a TRANSIENT: control absent -> want (a zero failed-count on an unproven path is not a pass)" 2 \
+  "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-noctrl.json" -- "${BASE_ARGS[@]}" --mode phase-a
+grep -qF 'systemd-path control row absent' < <(printf '%s' "$LAST_OUT") && \
+  pass "control-absent arm names the missing control in its want" || \
+  fail "control-absent arm names the missing control in its want" "$LAST_OUT"
+
+# (c) CONTAMINATED: the marker text riding a NON-systemd row — the measured forgery class
+# (doppler-tagged webhook/issue-body payloads quoting repo text verbatim) — must NOT
+# satisfy the field-scoped check; the arm stays TRANSIENT and never reports the control
+# observed.
+rows "$TMP/r-ctrlforge.json" "$NOW" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-unit-armed detail=iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=1 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=2 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=private_nic_timeout detail=boot=deadbee1.waited_s=150 \"host\":\"${HOST}\"" \
+  "{\"SYSLOG_IDENTIFIER\":\"doppler\",\"_COMM\":\"inngest\",\"_SYSTEMD_UNIT\":\"inngest-server.service\",\"message\":\"SOLEUR_SYSTEMD_JOURNALD_CONTROL ts=1760222400 quoted inside a webhook payload\",\"host\":\"${HOST}\"}"
+run "phase-a TRANSIENT: the marker on a doppler-tagged row does NOT satisfy the control (measured contamination class)" 2 \
+  "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-ctrlforge.json" -- "${BASE_ARGS[@]}" --mode phase-a
+if grep -qF 'systemd-path control row observed' < <(printf '%s' "$LAST_OUT"); then
+  fail "contaminated arm never reports the control row observed" "$LAST_OUT"
+else
+  pass "contaminated arm never reports the control row observed"
+fi
 
 # ── floors (ADR-193): the ledger, never a bare counter ────────────────────────
 # `fails` is a scalar counter for exactly this floor: the vacuity guard's mutant slice
 # initializes counters (`X=$((X+1))` increments) but not the FAILURES array — a floor on
 # `${#FAILURES[@]}` dies unbound under set -u and scores CONSTRUCTION, not FIRES. And MIN
 # must sit ADJACENT to the `if` — the mutant builder's walk-back stops at any comment.
-MIN=36
+MIN=42
 if (( passes + fails < MIN )); then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$((passes + fails))" "$MIN" >&2
   exit 1
