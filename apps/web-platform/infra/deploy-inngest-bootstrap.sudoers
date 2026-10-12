@@ -188,3 +188,13 @@ deploy ALL=(root) NOPASSWD: DROPIN_TRY_RESTART
 # ============================================================================================
 Cmnd_Alias SYSTEMCTL_DAEMON_RELOAD = /usr/bin/systemctl daemon-reload
 deploy ALL=(root) NOPASSWD: SYSTEMCTL_DAEMON_RELOAD
+
+# #10045 — permits the canary `kdeny` DIAG row's bounded read of the HOST kernel
+# stream under kernel.dmesg_restrict=1: `-k` is dmesg-equivalent scope inside the
+# journald store, `-n 400 --since=-5min` bound volume and window (no -f, no unit
+# selector, no write). Sudo matches resolved command + argv literally — drift
+# denies, never widens — and every granted read emits a `sudo: … COMMAND=` record,
+# the per-invocation audit the rejected alternative (systemd-journal group
+# membership: ambient, whole-journal, silent) could not give.
+Cmnd_Alias KDENY_KERNEL_STREAM = /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat
+deploy ALL=(root) NOPASSWD: KDENY_KERNEL_STREAM

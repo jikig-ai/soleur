@@ -334,6 +334,32 @@ did not. The shim now:
 in the shared container, not just the sandbox, as an interim for a defect
 the shim can fix without widening anything. Rejected on least-privilege.
 
+> **Addendum — 2026-10-12 (#10065):** the "Dropping (not covering) is load-bearing" rationale above holds for a mount
+> NAMESPACE that carries no other procfs. The vendored argv for the agent runner begins with a recursive `--ro-bind / /`,
+> so the container's own procfs already sits beneath the vendor `--tmpfs /proc` after a drop as well; a drop and a cover
+> therefore differ only for a process that could `umount` the tmpfs, i.e. one holding `CAP_SYS_ADMIN` over the mount
+> namespace. **Observed** 2026-10-12 (`knowledge-base/project/specs/feat-one-shot-10065-sandbox-proc-suite-parity/measurements.md`,
+> M3; run under `apparmor=unconfined`, so the AppArmor half is CI's): in the unprivileged suite image every
+> `umount2("/proc")` from inside the sandbox is EPERM for drop and cover alike, with and without `--cap-add CAP_SYS_ADMIN`,
+> so no behavioral probe separates them. **Inferred, not measured:** that attribution (unprivileged bwrap drops every
+> capability after setup, and the vendored tail carries `--cap-drop ALL`) is the reading consistent with those
+> observations; locked inherited mounts would also produce EPERM, and no positive control (a sandbox that CAN umount)
+> exists in that image. The shim still drops, because "no argv-requested procfs mount at `/proc`" is the property it can
+> state and the suite can assert (the recorder arm of `apps/web-platform/infra/sandbox-masked-proc-docker.test.sh`).
+> **Conditional on three things:** (1) an UNELEVATED bwrap: the production bwrap is neither setuid nor file-capability'd
+> (the 2026-10-09 addendum reverted that arm; the suite's static `ELEVATION` arm is a best-effort scan of the common
+> Dockerfile spellings, backed by a live `stat` of the suite container's `/usr/bin/bwrap`, so it is not a proof); (2) the
+> vendored tail keeps `--cap-drop ALL`, which `test/sandbox-vendored-argv-tail.test.ts` pins in both vendored binaries;
+> (3) the three app-container `docker run` tuples keep their posture (no added capability, no host pid mode, no
+> `systempaths` override), which the closed-world tuple check `infra/lib/docker-run-tuple.py` enforces in the required
+> lane through `test/docker-run-tuple-posture.test.ts`. If any stops holding, drop versus cover
+> becomes load-bearing again and this addendum must be re-decided, not carried forward. The hook sandbox builder in the CLI
+> platform binary has no root bind, so the original sentence holds there.
+>
+> In effect this supersedes the sentences of the **Isolation effect** paragraph below that read "no procfs is mounted" and
+> "no-procfs-at-all": the realized mask is an empty `/proc` tmpfs with the container's procfs beneath it, and the paragraph's
+> conclusion (cross-tenant `/proc/<pid>/environ` reads are unreachable) rests on the unelevated-bwrap condition above.
+
 **Why the single-rung re-home.** The plan's rung-2 (`--bind-data` /
 `--ro-bind-data` / `--bind-fd` content binds for deleted or memfd sources)
 is dead on production's bwrap 0.8.0: `--bind-data` EBADFs at write,
@@ -345,7 +371,9 @@ verified end-to-end in-image (the re-homed binary executes through
 `/proc/self/fd/5`). Anything else refuses rather than shipping a silently
 broken multicall.
 
-**Isolation effect.** Preserved and, strictly, strengthened: the realized
+**Isolation effect.** *(Read with the 2026-10-12 (#10065) addendum above: the realized mask is an empty `/proc` tmpfs with
+the container's procfs beneath it, so "no procfs is mounted" and "no-procfs-at-all" below describe the argv, not the
+kernel mount set.)* Preserved and, strictly, strengthened: the realized
 mask is now no-procfs-at-all (previously a pidns-scoped procfs that still
 exposed the sandbox's own `/proc/<pid>` surface). `/proc/<pid>/environ`
 cross-tenant reads are unreachable because no procfs is mounted; the
@@ -375,8 +403,10 @@ path is retained against posture drift.
 
 **Deferred.** Per-tenant executor topology remains **#9773** (epic #9842) —
 this is an interim realization change, not the architecture. The
-least-privilege kernel-stream read for `kdeny` (`src=none`) is **#10045**,
-explicitly not folded into this change.
+least-privilege kernel-stream read for `kdeny` (`src=none`) was **#10045** —
+resolved 2026-10-11: the `KDENY_KERNEL_STREAM` fixed-argv sudoers grant plus a
+`sudo:`-signature denial fallback in `_canary_kdeny_read` give the row the host
+kernel stream it needed.
 
 **Basis.** `knowledge-base/project/specs/feat-one-shot-10032-sandbox-shim-procfs/measurements.md`
 (in-image repro + rewritten-argv spawn, rung-2 EBADF measurement,

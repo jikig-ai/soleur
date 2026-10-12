@@ -2142,6 +2142,8 @@ running. Decided 2026-10-03, with no new Terraform delivery code:
   boots from the baked image, whose host scripts carry the carve, so the rebirth is the delivery event. Its
   `image_tag` must be built from a commit that already carries the 2026-10-03 resolver and loader changes
   (`cron-egress-resolve.sh`, `cron-egress-nftables.sh`: baked host scripts whose content hash moves).
+  > **Superseded 2026-10-12 (#9372), in part:** the rebirth ran on 2026-10-06 and its workflow is retired; web-2's volume is
+  > LUKS-formatted, so the plain-replace refusal described here no longer applies (ADR-263 addendum 2026-10-12).
 - **web-1** is delivered by the first run of `apply-web-platform-infra.yml` (the only workflow whose
   `-target` list names `terraform_data.cron_egress_firewall`): that resource hashes the carve file, the resolver
   and the post-apply assertion, so a green run whose SSH apply step actually ran (it can green-skip, #7539) is

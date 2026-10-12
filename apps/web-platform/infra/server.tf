@@ -1774,10 +1774,10 @@ resource "terraform_data" "infra_config_handler_bootstrap" {
 
   # #4827 — the sudoers grant (with the new INFRA_CONFIG_INSTALL alias). Staged to
   # a temp path then visudo-validated + installed below; writing it directly would
-  # risk a half-written file in /etc/sudoers.d. The handler ALSO carries this file
-  # in its FILE_MAP, but the webhook self-heal of the sudoers is circular on the
-  # first apply (escalating its write needs the alias this file adds), so root SSH
-  # bootstraps it.
+  # risk a half-written file in /etc/sudoers.d. This file is deliberately NOT in
+  # the handler's FILE_MAP (#4827: a deploy-writable path to a sudoers file is an
+  # unbounded privilege escalation — visudo validates syntax, not policy), so
+  # root SSH is its only running-host channel.
   provisioner "file" {
     source      = "${path.module}/deploy-inngest-bootstrap.sudoers"
     destination = "/tmp/deploy-inngest-bootstrap.sudoers.staged"
@@ -1828,6 +1828,9 @@ resource "terraform_data" "infra_config_handler_bootstrap" {
       # #7220 — the daemon-reload grant landed. Without it the handler writes all 19 files and
       # then dies at activation, which is the incident this whole PR exists to close.
       "grep -q SYSTEMCTL_DAEMON_RELOAD /etc/sudoers.d/deploy-inngest-bootstrap",
+      # #10045 — the kdeny kernel-stream grant landed; without it the DIAG row
+      # falls back to src=none on every emitted bundle.
+      "grep -q KDENY_KERNEL_STREAM /etc/sudoers.d/deploy-inngest-bootstrap",
       # #7220 AC4 — POLICY PROBE, not another text grep. Every assertion above proves the BYTES
       # landed; none proves sudo actually grants the command. A file that parses but whose
       # User_Spec is missing, or whose alias never reaches `deploy`, passes every grep here and
@@ -1847,6 +1850,9 @@ resource "terraform_data" "infra_config_handler_bootstrap" {
       # performs the reload the DropInPaths assertions below depend on, which nothing else in
       # this provisioner does.
       "runuser -u deploy -- sudo -n /usr/bin/systemctl daemon-reload || { echo 'FATAL: deploy cannot run systemctl daemon-reload — SYSTEMCTL_DAEMON_RELOAD landed as text but does not resolve. This is #7220 unrepaired.' >&2; exit 1; }",
+      # #10045 — same effective-not-present assertion class for the kdeny grant: an
+      # idempotent read-only execute probe of the exact pinned argv.
+      "runuser -u deploy -- sudo -n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat >/dev/null || { echo 'FATAL: deploy cannot run the kdeny kernel-stream journalctl argv — KDENY_KERNEL_STREAM landed as text but does not resolve (#10045).' >&2; exit 1; }",
       # systemd-run cannot be safely executed here (it would schedule a real webhook restart
       # mid-provisioner), so this one stays list-mode, behind the availability probe above.
       "sudo -n -l -U deploy /usr/bin/systemd-run --collect --on-active=3s --unit=webhook-self-restart /usr/bin/systemctl restart webhook >/dev/null || { echo 'FATAL: sudo policy DENIES the --collect self-restart argv to deploy — the grant and the handler call site have drifted.' >&2; exit 1; }",
@@ -2141,12 +2147,12 @@ resource "terraform_data" "deploy_pipeline_fix" {
 # deploy-pipeline FILE_MAP set, plus TWO non-FILE_MAP duties: the #9169 ghcr.io hosts-file
 # deny (local.ghcr_deny_sh + its assertion, in the last, secret-free block;
 # web-ghcr-deny.test.sh) and, since #9393, the cron-egress artifacts a RUNNING
-# web-2 otherwise gets only at rebirth — the carved CIDR allow list, the resolver,
+# web-2 otherwise gets only at birth (a replace) — the carved CIDR allow list, the resolver,
 # the post-apply probe script, and (since #9534) the loader plus the gateway
 # deny-CIDR file it dies without, delivered then EXECUTED exactly as
 # terraform_data.cron_egress_firewall's terminal step does on web-1. The alarm
-# and systemd units stay birth-frozen until the
-# #9372 rebirth — the issue's stated scope — EXCEPT the loader, lifted from the
+# and systemd units stay birth-frozen (the #9372 rebirth workflow that was to
+# refresh them is retired, so the next refresh is a web-2 replace) — EXCEPT the loader, lifted from the
 # freeze here: #9534's resolver tick asserts eight enforcement markers including the
 # egress-gateway DOCKER-USER legs, which only the post-#9529 loader installs. A
 # birth-frozen loader cannot satisfy them, so the resolver self-heals every minute
@@ -2201,7 +2207,7 @@ resource "terraform_data" "deploy_pipeline_fix_web2" {
     local.ghcr_deny_sh,
     local.ghcr_deny_assert_sh,
     file("${path.module}/web-2-ssh-host-key.pub"),
-    "dpf-web2-remote-exec-v2",
+    "dpf-web2-remote-exec-v3",
   ]))
 
   connection {
@@ -2399,14 +2405,18 @@ resource "terraform_data" "deploy_pipeline_fix_web2" {
       "[ \"$(sha256sum /usr/local/bin/cron-egress-postapply-assert.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/cron-egress-postapply-assert.sh")}\" ]",
       "[ \"$(sha256sum /usr/local/bin/cron-egress-nftables.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/cron-egress-nftables.sh")}\" ]",
       "[ \"$(sha256sum /etc/soleur/egress-deny-cidrs.txt | cut -d' ' -f1)\" = \"${filesha256("${path.module}/egress-deny-cidrs.txt")}\" ]",
-      # The sudoers grant landed and parses — same four alias assertions as the web-1 bridge.
+      # The sudoers grant landed and parses — same five alias assertions as the web-1 bridge.
       "grep -q INFRA_CONFIG_INSTALL /etc/sudoers.d/deploy-inngest-bootstrap",
       "grep -q GIT_LOCK_CHARDEVICE_SWEEP /etc/sudoers.d/deploy-inngest-bootstrap",
       "grep -q DROPIN_TRY_RESTART /etc/sudoers.d/deploy-inngest-bootstrap",
       "grep -q SYSTEMCTL_DAEMON_RELOAD /etc/sudoers.d/deploy-inngest-bootstrap",
+      # #10045 — the kdeny kernel-stream grant landed (same content-assert class).
+      "grep -q KDENY_KERNEL_STREAM /etc/sudoers.d/deploy-inngest-bootstrap",
       # #7220 AC4 shape — resolve the REAL policy for deploy, not just the text.
       "sudo -n -l -U deploy >/dev/null 2>&1 || { echo 'FATAL: sudo -l -U list mode is unavailable on this host (sudo-rs?) — the policy probe cannot run. This is NOT a denial; the grant may be fine.' >&2; exit 1; }",
       "runuser -u deploy -- sudo -n /usr/bin/systemctl daemon-reload || { echo 'FATAL: deploy cannot run systemctl daemon-reload — SYSTEMCTL_DAEMON_RELOAD landed as text but does not resolve. This is #7220 unrepaired.' >&2; exit 1; }",
+      # #10045 — effective-not-present execute probe of the exact pinned argv (read-only, idempotent).
+      "runuser -u deploy -- sudo -n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat >/dev/null || { echo 'FATAL: deploy cannot run the kdeny kernel-stream journalctl argv — KDENY_KERNEL_STREAM landed as text but does not resolve (#10045).' >&2; exit 1; }",
       "sudo -n -l -U deploy /usr/bin/systemd-run --collect --on-active=3s --unit=webhook-self-restart /usr/bin/systemctl restart webhook >/dev/null || { echo 'FATAL: sudo policy DENIES the --collect self-restart argv to deploy — the grant and the handler call site have drifted.' >&2; exit 1; }",
       # Drop-in adoption: LoadState-guarded, one explicit line per unit.
       "if [ \"$(systemctl show -p LoadState --value vector.service)\" = loaded ]; then systemctl show -p DropInPaths vector.service | grep -c 'doppler-token.conf' >/dev/null || { echo 'FATAL: vector.service is loaded but its Doppler drop-in is not active after daemon-reload' >&2; exit 1; }; fi",
@@ -2862,7 +2872,9 @@ locals {
   # #6604 step 7 — web-1's plaintext workspaces volume (105149570) was zeroed, read back,
   # detached and deleted, and its two addresses were forgotten from state (ADR-119 addendum;
   # knowledge-base/legal/audits/workspaces-plaintext-destruction-record.md). Only the hosts
-  # listed here still own a per-host plaintext volume; web-1's /workspaces lives solely on
+  # listed here own a per-host keyed volume (web-2: born raw and formatted LUKS by the guest
+  # provisioner at first boot, ADR-263); the local's name is historical and is pinned by the ledger
+  # evidence anchor and Guard B4, so it is not renamed. web-1's /workspaces lives solely on
   # hcloud_volume.workspaces_luks (workspaces-luks.tf). Guard B4 (workspaces-luks.test.sh).
   plaintext_workspaces_hosts = { for k, v in var.web_hosts : k => v if k != "web-1" }
 }
@@ -2889,19 +2901,20 @@ resource "hcloud_volume" "workspaces" {
 
   # (ADR-143 Phase 4.2 / #6459) prevent_destroy on the per-host /workspaces block volumes so a
   # stray `terraform destroy` / for_each key churn cannot silently drop a volume. This is the
-  # per-host plaintext volume (web-2 only, since #6604 step 7); web-1's sole-copy data is on the
+  # per-host keyed volume (web-2 only, since #6604 step 7); web-1's sole-copy data is on the
   # additive LUKS singleton hcloud_volume.workspaces_luks (workspaces-luks.tf, ADR-119), which
   # since #6604 step 7 carries its own prevent_destroy AND delete_protection (the
   # `apply_target=workspaces-luks-recut` `-replace` escape hatch is retired with it). The keyed volume
-  # is the store a fresh web host (web-2) formats LUKS at first boot once it is reborn raw (ADR-263, #9372).
+  # is the store web-2 formats LUKS at first boot (born raw 2026-10-06; the single-use rebirth workflow that
+  # created it retired 2026-10-12; ADR-263, #9372).
   # Not in the push-apply `-target` allow-list, so this adds no merge-apply behavior.
   #
   # `ignore_changes = [format]` is CREATION-ONLY and load-bearing; it is pinned together with the absent
   # `format` above by fresh-boot-parity.test.sh section 19. MEASURED on hcloud 1.63.0 (offline plan, 2026-10-01):
   # `format` is NOT ForceNew, dropping it without the ignore plans an in-place `ext4 -> null` on a
   # user-data volume, and WITH the ignore the plan is "No changes", so the merge is a no-op for the live
-  # (ext4) volumes. The live web-2 volume is converted by the gated rebirth, never by this block
-  # (ADR-263). Do NOT delete the ignore. The volume is reached by the push-apply -target set only
+  # (ext4) volumes. A volume's filesystem is decided by the guest provisioner at first boot, never by this
+  # block (ADR-263). Do NOT delete the ignore. The volume is reached by the push-apply -target set only
   # transitively (hcloud_server.web -> user_data -> workspaces_volume_id), which is why it matters.
   lifecycle {
     prevent_destroy = true
