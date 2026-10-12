@@ -1385,10 +1385,10 @@ function unwrap(str,   n, tk, i, t, w, u) {
 # not; `|&` is). Quote parity of the text before the bar (an even number of unescaped double quotes and of single quotes) keeps a bar inside a string out; a
 # bar followed by a word and a closing parenthesis is a case-pattern alternation (`a|curl) :;;`), not a pipe. The old printf/echo/cat scan stays as a second
 # site source and the two are unioned, so a regression of this arm cannot move the rows the old scan defines.
-function anybar(l,   rest, base, p, pos, pc, nx, pre, after, q, nd, ns) {
-  rest = l; base = 0
+function anybar(l,   rest, bs0, p, pos, pc, nx, pre, after, q, nd, ns) {
+  rest = l; bs0 = 0
   while ((p = index(rest, "|")) > 0) {
-    pos = base + p; base = pos; rest = substr(l, pos + 1)
+    pos = bs0 + p; bs0 = pos; rest = substr(l, pos + 1)
     pc = (pos > 1) ? substr(l, pos - 1, 1) : ""
     nx = substr(l, pos + 1, 1)
     if (pc == "|" || pc == "\\" || nx == "|") continue
