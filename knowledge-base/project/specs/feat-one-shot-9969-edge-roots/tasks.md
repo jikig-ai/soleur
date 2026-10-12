@@ -41,7 +41,7 @@ Plan: `knowledge-base/project/plans/2026-10-12-fix-affected-edges-under-cover-si
 
 ## Phase 3: Verification
 
-- [ ] 3.1 `bash scripts/test-all-affected.test.sh` exits 0 — all `th` rows GREEN.
+- [x] 3.1 `bash scripts/test-all-affected.test.sh` exits 0 — all `th` rows GREEN.
 - [x] 3.2 `bash scripts/lint-orphan-test-suites.sh` exits 0 — census green, zero dead edges.
 - [x] 3.3 `bash scripts/guard-vacuity-floor.test.sh` and `bash scripts/lint-orphan-test-suites.test.sh` exit 0.
 - [x] 3.4 `bash scripts/test-all.sh --affected --print-affected-set` shows `edge:declared`

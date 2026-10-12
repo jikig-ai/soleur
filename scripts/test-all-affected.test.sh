@@ -115,7 +115,7 @@ PASS=$_self_pass; FAIL=$_self_fail; cases=0
 # (every edge suite selects -> rows f/q red), SOLEUR_SUBAGENT/SOLEUR_ALLOW_FULL_GATE
 # move the refusal arms, FORCE_ALL preempts the asserted fallback reason, and
 # TEST_TIMING_LOG would write synthetic skip rows into the operator's real log.
-ENV_SCRUB="-u TEST_GROUP -u SCRIPTS_SHARD -u CI -u SOLEUR_SUBAGENT -u SOLEUR_ALLOW_FULL_GATE -u SOLEUR_TEST_FORCE_ALL -u SOLEUR_INCIDENT_SKIP -u TC_RUNTIME_CEILING_S -u SOLEUR_ENUM_DEADLINE_S -u SECONDS -u SANDBOX_STAGED_NAMES"
+ENV_SCRUB="-u TEST_GROUP -u SCRIPTS_SHARD -u CI -u SOLEUR_SUBAGENT -u SOLEUR_ALLOW_FULL_GATE -u SOLEUR_TEST_FORCE_ALL -u SOLEUR_INCIDENT_SKIP -u TC_RUNTIME_CEILING_S -u SOLEUR_ENUM_DEADLINE_S -u SECONDS -u SANDBOX_STAGED_NAMES -u SANDBOX_DIFF_NAMES -u SANDBOX_DETECT_OK -u SANDBOX_HEAD_OK -u SANDBOX_PREFIXES -u SANDBOX_LIVE_UNTRACKED -u SANDBOX_SIBLINGS -u SANDBOX_RD_ROOT -u SANDBOX_RD_DIFF -u SANDBOX_RD_HASH -u SANDBOX_RECORD"
 
 # ---------------------------------------------------------------------------
 # Sandbox builder. $1 = sandbox runner path; $2 = "with-lib" | "no-lib".
@@ -2845,12 +2845,14 @@ else
 fi
 
 # ---- tg rows (Guard 2, #9813): the `glob:` hit arm ---------------------------------------
-# The five extension-bounded kb-corpus walkers carry `glob:` kb edges — a kb .md
-# line can never move their verdict. operator-agent-runnable keeps `^knowledge-base/`:
-# its Guard-1 corpus is content-keyed (g1_discover scans ANY extension for the
-# generated-script marker), so **.sh would under-cover it — the review's honest
-# disposition, at ~16 committed seconds per kb-md diff. Labels sit in the sandbox
-# keep-list, so "absent from RAN" is a real decline, never a trim artifact.
+# Six extension-bounded kb-corpus carriers hold `glob:` kb-.sh edges — the five
+# original walkers plus repo-write-boundary.test.sh, added under #9969 — a kb
+# .md line can never move their verdict. operator-agent-runnable keeps
+# `^knowledge-base/`: its Guard-1 corpus is content-keyed (g1_discover scans ANY
+# extension for the generated-script marker), so **.sh would under-cover it —
+# the review's honest disposition, at ~16 committed seconds per kb-md diff.
+# Labels sit in the sandbox keep-list, so "absent from RAN" is a real decline,
+# never a trim artifact.
 _TG_GLOB_WALKERS=(
   'plugins/soleur/test/operator-ack-guard.test.sh'
   'plugins/soleur/test/operator-script.test.sh'
@@ -2858,9 +2860,11 @@ _TG_GLOB_WALKERS=(
   'scripts/lint-shell-capture-exit-live'
   'scripts/lint-shell-trace-credential-refusal'
 )
-_TG_ALL_SIX=("${_TG_GLOB_WALKERS[@]}" 'plugins/soleur/test/operator-agent-runnable.test.sh')
-_tg_all_ran() { local _l; for _l in "${_TG_ALL_SIX[@]}"; do ran_exact "$_l" || return 1; done; }
-_tg_none_ran() { local _l; for _l in "${_TG_GLOB_WALKERS[@]}"; do ran_exact "$_l" && return 1; done; return 0; }
+_TG_ALL_SEVEN=("${_TG_GLOB_WALKERS[@]}" 'plugins/soleur/test/operator-agent-runnable.test.sh' 'scripts/lib/repo-write-boundary.test.sh')
+_tg_all_ran() { local _l; for _l in "${_TG_ALL_SEVEN[@]}"; do ran_exact "$_l" || return 1; done; }
+# rwb joins the .md decliners: its kb edge is `**.sh`-tailed like the five's.
+_TG_MD_DARK=("${_TG_GLOB_WALKERS[@]}" 'scripts/lib/repo-write-boundary.test.sh')
+_tg_none_ran() { local _l; for _l in "${_TG_MD_DARK[@]}"; do ran_exact "$_l" && return 1; done; return 0; }
 
 cases=$((cases + 1))
 SANDBOX_LIB=with-lib run_arm \
@@ -2870,7 +2874,7 @@ _rc=$ARM_RC
 if [[ "$_rc" == "0" ]] && _tg_none_ran \
   && ran_exact 'plugins/soleur/test/operator-agent-runnable.test.sh' \
   && ran_exact 'scripts/test-affected-kb-consumers'; then
-  pass "tg1: a kb .md line declines the five glob: walkers (agent-runnable + kb-consumers still select)"
+  pass "tg1: a kb .md line declines the six kb-.sh glob: carriers (agent-runnable + kb-consumers still select)"
 else
   fail "tg1: rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
 fi
@@ -2885,7 +2889,7 @@ for _sandbox_probe in 'knowledge-base/x.sh' 'knowledge-base/a/b/c.sh' 'knowledge
     -- --affected
   _rc=$ARM_RC
   if [[ "$_rc" == "0" ]] && _tg_all_ran; then
-    pass "tg2: ${_sandbox_probe} selects all six kb-corpus walkers"
+    pass "tg2: ${_sandbox_probe} selects all seven kb-corpus walkers"
   else
     fail "tg2 (${_sandbox_probe}): rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
   fi
@@ -2899,7 +2903,7 @@ SANDBOX_LIB=with-lib run_arm \
   -- --affected
 _rc=$ARM_RC
 if [[ "$_rc" == "0" ]] && _tg_all_ran; then
-  pass "tg3: a rename line whose SOURCE is a kb .sh selects all six kb-corpus walkers"
+  pass "tg3: a rename line whose SOURCE is a kb .sh selects all seven kb-corpus walkers"
 else
   fail "tg3: rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
 fi
@@ -2914,6 +2918,7 @@ _TG_TRAP_ONLY=(
   'plugins/soleur/test/operator-script.test.sh'
   'scripts/lint-shell-capture-exit-live'
   'scripts/lint-shell-trace-credential-refusal'
+  'scripts/lib/repo-write-boundary.test.sh'
 )
 for _ext in py bash ts mjs js; do
   cases=$((cases + 1))
@@ -2925,7 +2930,7 @@ for _ext in py bash ts mjs js; do
   for _l in "${_TG_TRAP_ONLY[@]}"; do ran_exact "$_l" && _tg_bad+=" $_l"; done
   if [[ "$_rc" == "0" && -z "$_tg_bad" ]] && ran_exact 'scripts/lint-trap-tempfile-ownership' \
     && ran_exact 'plugins/soleur/test/operator-agent-runnable.test.sh'; then
-    pass "tg4: knowledge-base/x.${_ext} selects only lint-trap-tempfile-ownership among the glob: walkers"
+    pass "tg4: knowledge-base/x.${_ext} selects only lint-trap-tempfile-ownership among the kb-.sh glob: carriers"
   else
     fail "tg4 (.${_ext}): rc=$_rc extras:${_tg_bad:-none} trap_ran=$(awk -F'\t' -v l='scripts/lint-trap-tempfile-ownership' '$1=="RAN"&&$2==l{f=1}END{print f+0}' <<<"$ARM_RECORD")"
   fi
@@ -2939,7 +2944,7 @@ _tg_bad=""
 for _l in "${_TG_TRAP_ONLY[@]}"; do ran_exact "$_l" && _tg_bad+=" $_l"; done
 if [[ "$_rc" == "0" && -z "$_tg_bad" ]] && ran_exact 'scripts/lint-trap-tempfile-ownership' \
   && ran_exact 'plugins/soleur/test/operator-agent-runnable.test.sh'; then
-  pass "tg4b: a kb bunfig.toml selects only lint-trap-tempfile-ownership among the glob: walkers"
+  pass "tg4b: a kb bunfig.toml selects only lint-trap-tempfile-ownership among the kb-.sh glob: carriers"
 else
   fail "tg4b: rc=$_rc extras:${_tg_bad:-none}"
 fi
@@ -2992,12 +2997,13 @@ fi
 # ---- th rows (#9969): whole-tree corpus suites' `glob:` edges ---------------
 # guard-vacuity-floor and lint-orphan-test-suites scan `git ls-files '*.test.sh'`
 # whole-tree; repo-write-boundary.test.sh scans whole-tree `*.sh` content-keyed
-# on `test-all\.sh`. Their declared edges enumerated only the roots holding
-# suites today, so a corpus file under an unlisted root (knowledge-base/, bin/,
-# infra/, docs/, the dot-dirs) was scanned but never selected — the diff moved
-# the verdict and the local gate stayed silent. The `glob:` entries these rows
-# pin live in scripts/lib/test-affected-paths.sh; the labels sit in the sandbox
-# keep-list, so "absent from RAN" is a real decline, never a trim artifact.
+# on `test-all\.sh`. The pair's declared edges enumerated only the roots holding
+# suites today, and rwb carried no declared array at all (edge:derived) — a
+# corpus file under an unlisted root was scanned but never selected: the diff
+# moved the verdict and the local gate stayed silent. The `glob:` entries these
+# rows pin live in scripts/lib/test-affected-paths.sh; the labels sit in the
+# sandbox keep-list, so "absent from RAN" is a real decline, never a trim
+# artifact (th7 pins that binding).
 _TH_TEST_SH_PAIR=(
   'scripts/guard-vacuity-floor'
   'scripts/lint-orphan-test-suites'
@@ -3010,6 +3016,21 @@ _TH_ALL_THREE=(
 _th_all_three_ran() { local _l; for _l in "${_TH_ALL_THREE[@]}"; do ran_exact "$_l" || return 1; done; }
 _th_test_sh_pair_ran() { local _l; for _l in "${_TH_TEST_SH_PAIR[@]}"; do ran_exact "$_l" || return 1; done; }
 _th_none_ran() { local _l; for _l in "${_TH_ALL_THREE[@]}"; do ran_exact "$_l" && return 1; done; return 0; }
+_th_rwb_only_ran() {
+  ran_exact 'scripts/lib/repo-write-boundary.test.sh' || return 1
+  ! ran_exact 'scripts/guard-vacuity-floor' && ! ran_exact 'scripts/lint-orphan-test-suites'
+}
+# Source the declarations lib and test one array's coverage of one root: a
+# member matches iff it is the `root/` dir prefix or a `glob:root/<tail>` edge.
+_th6_root_covered() { # <array-name> <root> — no declare -n (macOS bash 3.2)
+  local _n _i _m
+  eval "_n=\${#$1[@]}"
+  for ((_i=0; _i<_n; _i++)); do
+    eval "_m=\${$1[$_i]}"
+    [[ "$_m" == "$2/"* || "$_m" == "glob:$2/"* ]] && return 0
+  done
+  return 1
+}
 
 # th1 — a corpus-extension file under a previously-unlisted root selects all
 #       three: x.test.sh matches the **.test.sh tails AND the rwb **.sh tail.
@@ -3019,14 +3040,15 @@ SANDBOX_LIB=with-lib run_arm \
   -- --affected
 _rc=$ARM_RC
 if [[ "$_rc" == "0" ]] && _th_all_three_ran; then
-  pass "th1: knowledge-base/x.test.sh selects all three whole-tree corpus suites"
+  pass "th1: knowledge""-base/x.test.sh selects all three whole-tree corpus suites"
 else
   fail "th1: rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
 fi
 
-# th2 — a non-corpus-extension .sh selects ONLY repo-write-boundary.test.sh of
-#       the three: the **.test.sh tails decline, proving the glob: kind narrows
-#       rather than relocating the over-coverage the dir prefixes had.
+# th2 — a .sh outside the pair's corpus extension selects ONLY
+#       repo-write-boundary.test.sh of the three (.sh IS rwb's own corpus
+#       extension): the **.test.sh tails decline, proving the glob: kind
+#       narrows rather than relocating the over-coverage the dir prefixes had.
 cases=$((cases + 1))
 SANDBOX_LIB=with-lib run_arm \
   'SANDBOX_DIFF_NAMES=knowledge-base/x.sh' \
@@ -3035,7 +3057,7 @@ _rc=$ARM_RC
 if [[ "$_rc" == "0" ]] && ran_exact 'scripts/lib/repo-write-boundary.test.sh' \
   && ! ran_exact 'scripts/guard-vacuity-floor' \
   && ! ran_exact 'scripts/lint-orphan-test-suites'; then
-  pass "th2: knowledge-base/x.sh selects only repo-write-boundary.test.sh of the three"
+  pass "th2: knowledge""-base/x.sh selects only repo-write-boundary.test.sh of the three"
 else
   fail "th2: rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
 fi
@@ -3047,38 +3069,124 @@ SANDBOX_LIB=with-lib run_arm \
   -- --affected
 _rc=$ARM_RC
 if [[ "$_rc" == "0" ]] && _th_none_ran; then
-  pass "th3: knowledge-base/x.md selects none of the three corpus suites"
+  pass "th3: knowledge""-base/x.md selects none of the three corpus suites"
 else
   fail "th3: rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
 fi
 
-# th4 — every previously-unlisted root with a *.test.sh selects the *.test.sh
-#       pair (must-PASS inputs beyond the canonical kb path — `*` crosses `/`,
-#       so infra/a/b.test.sh and the nested kb path exercise depth too).
-for _sandbox_probe in 'bin/x.test.sh' 'infra/a/b.test.sh' 'docs/x.test.sh' \
-  'test/x.test.sh' 'tests/x.test.sh' 'knowledge-base/a/b/c.test.sh'; do
+# th4 — EVERY extant root's *.test.sh selects all three: the pair via its
+#       **.test.sh tail (or the retained dir prefix at test//tests/), rwb via
+#       **.sh. The thirteen probes over previously-unlisted roots pin the #9969
+#       hole per root — a well-formed-but-wrong tail (glob:.grok/**.tst.sh)
+#       mints cleanly and never fires; test/ and tests/ are prefix-covered
+#       controls, and the nested kb probe exercises depth (`*` crosses `/`).
+for _sandbox_probe in 'knowledge-base/a/b/c.test.sh' \
+  '.agents/x.test.sh' '.claude-plugin/x.test.sh' '.codex/x.test.sh' \
+  '.cursor-plugin/x.test.sh' '.devin/x.test.sh' '.grok/x.test.sh' \
+  'LICENSES/x.test.sh' 'bin/x.test.sh' 'docs/x.test.sh' \
+  'infra/a/b.test.sh' 'spike/x.test.sh' 'todos/x.test.sh' \
+  'test/x.test.sh' 'tests/x.test.sh'; do
   cases=$((cases + 1))
   SANDBOX_LIB=with-lib run_arm \
     "SANDBOX_DIFF_NAMES=${_sandbox_probe}" \
     -- --affected
   _rc=$ARM_RC
-  if [[ "$_rc" == "0" ]] && _th_test_sh_pair_ran; then
-    pass "th4: ${_sandbox_probe} selects the *.test.sh corpus pair"
+  if [[ "$_rc" == "0" ]] && _th_all_three_ran; then
+    pass "th4: ${_sandbox_probe} selects all three corpus suites"
   else
     fail "th4 (${_sandbox_probe}): rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
   fi
 done
 
+# th4b — rwb's `**.sh` tail per root: a bare .sh at every previously-unlisted
+#        root selects rwb and declines the pair; at the seven prefix-held
+#        roots it selects all three (the legacy prefixes cover any extension).
+for _sandbox_probe in 'knowledge-base/x.sh' \
+  '.agents/x.sh' '.claude-plugin/x.sh' '.codex/x.sh' '.cursor-plugin/x.sh' \
+  '.devin/x.sh' '.grok/x.sh' 'LICENSES/x.sh' 'bin/x.sh' 'docs/x.sh' \
+  'infra/a/b.sh' 'spike/x.sh' 'todos/x.sh'; do
+  cases=$((cases + 1))
+  SANDBOX_LIB=with-lib run_arm \
+    "SANDBOX_DIFF_NAMES=${_sandbox_probe}" \
+    -- --affected
+  _rc=$ARM_RC
+  if [[ "$_rc" == "0" ]] && _th_rwb_only_ran; then
+    pass "th4b: ${_sandbox_probe} selects only repo-write-boundary.test.sh of the three"
+  else
+    fail "th4b (${_sandbox_probe}): rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
+  fi
+done
+for _sandbox_probe in 'apps/x.sh' '.claude/x.sh' '.github/x.sh' \
+  'plugins/x.sh' 'scripts/x.sh' 'test/x.sh' 'tests/x.sh'; do
+  cases=$((cases + 1))
+  SANDBOX_LIB=with-lib run_arm \
+    "SANDBOX_DIFF_NAMES=${_sandbox_probe}" \
+    -- --affected
+  _rc=$ARM_RC
+  if [[ "$_rc" == "0" ]] && _th_all_three_ran; then
+    pass "th4b: ${_sandbox_probe} selects all three (dir-prefix root)"
+  else
+    fail "th4b (${_sandbox_probe}): rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
+  fi
+done
+
 # th5 — the new declared array moves the suite's receipt from edge:derived to
-#       edge:declared (the class pin; th2/th1 already pin its selection).
+#       edge:declared (the class pin; th1/th2/th4b already pin its selection).
+#       --print-affected-set ignores the diff, so the sandbox copy emits the
+#       identical AFFECTED_CLASS row in seconds — no ~4-min real enumerate.
 cases=$((cases + 1))
-_th5_class=$(cd "$REPO_ROOT" && env -u CI -u TEST_GROUP SOLEUR_DISABLE_SESSION_STATE=1 timeout 300 \
-  bash "$RUNNER" --print-affected-set 2>/dev/null \
-  | awk -F'\t' '$1=="AFFECTED_CLASS" && $2=="scripts/lib/repo-write-boundary.test.sh" {print $3}')
+SANDBOX_LIB=with-lib run_arm -- --print-affected-set
+_th5_class=$(awk -F'\t' '$1=="AFFECTED_CLASS" && $2=="scripts/lib/repo-write-boundary.test.sh" {print $3}' <<<"$ARM_OUT")
 if [[ "$_th5_class" == "edge:declared" ]]; then
   pass "th5: scripts/lib/repo-write-boundary.test.sh receipts edge:declared (was edge:derived)"
 else
   fail "th5: AFFECTED_CLASS for repo-write-boundary.test.sh = '${_th5_class:-<absent>}' (want edge:declared)"
+fi
+
+# th6 — exists→declared census: re-derive the tracked top-level root set live
+#       and require every root covered by each corpus suite (dir prefix or a
+#       glob head). A NEW top-level dir added without an edge entry reopens
+#       the #9969 hole; this row REDs it in CI, where the full gate runs.
+#       Root-level dir-less files have no head to mint — a grammar residual
+#       documented in the lib's comment blocks (NF>1 is the same filter: a
+#       dir-less path yields no root token). -c core.quotePath=false so the
+#       C-quoted Cyrillic fixture paths emit their real root, not `"…`.
+cases=$((cases + 1))
+_th6_missing=$(
+  source "$REPO_ROOT/scripts/lib/test-affected-paths.sh"
+  git -C "$REPO_ROOT" -c core.quotePath=false ls-files \
+    | awk -F/ 'NF>1{print $1}' | LC_ALL=C sort -u \
+    | while IFS= read -r _r; do
+        _th6_root_covered AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS "$_r" \
+          || echo "guard-vacuity-floor:$_r"
+        _th6_root_covered AFFECTED_SCRIPTS_LINT_ORPHAN_TEST_SUITES_PATHS "$_r" \
+          || echo "lint-orphan-test-suites:$_r"
+        _th6_root_covered AFFECTED_SCRIPTS_LIB_REPO_WRITE_BOUNDARY_TEST_SH_PATHS "$_r" \
+          || echo "repo-write-boundary.test.sh:$_r"
+      done
+)
+if [[ -z "$_th6_missing" ]]; then
+  pass "th6: every tracked top-level root is edge-covered by all three corpus suites"
+else
+  fail "th6: uncovered roots — ${_th6_missing//$'\n'/ }"
+fi
+
+# th7 — keep-list binding: every label the th rows assert on sits inside
+#       build_sandbox's injected case block — a decline verdict then reads a
+#       real decline, never a trim artifact. The block is windowed out of the
+#       sandbox copy so a same-string mention elsewhere cannot satisfy it.
+cases=$((cases + 1))
+_th7_sb="$TESTROOT/sb-keep-$cases/test-all.sh"
+build_sandbox "$_th7_sb" with-lib > /dev/null
+_th7_block=$(sed -n '/SANDBOX corpus trim/,/^  esac/p' "$_th7_sb")
+_th7_missing=""
+for _l in "${_TH_ALL_THREE[@]}"; do
+  grep -qF "$_l" <<<"$_th7_block" || _th7_missing+=" $_l"
+done
+if [[ -z "$_th7_missing" ]]; then
+  pass "th7: the three asserted labels sit in the sandbox keep-list"
+else
+  fail "th7: labels absent from the keep-list — decline asserts read trim artifacts:${_th7_missing}"
 fi
 
 echo ""
@@ -3087,7 +3195,7 @@ if (( PASS + FAIL != cases )); then
   echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
   exit 2
 fi
-MIN_CASES=125
+MIN_CASES=156
 if (( cases < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran — below the $MIN_CASES floor; a row block went missing" >&2
   exit 2

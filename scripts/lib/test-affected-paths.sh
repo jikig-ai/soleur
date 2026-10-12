@@ -1982,7 +1982,10 @@ AFFECTED_SCRIPTS_TEST_ALL_INFRA_COVERAGE_NOTICE_PATHS=(
 # under EVERY top-level root — plus fixture scripts/fixtures/vacuity-contract-control.sh
 # and its own file (covered by the scripts/ prefix). The glob: entries below cover the
 # 13 roots that lacked a declared prefix; the dir prefixes stay because converting them
-# would narrow coverage the suite already had (the #9945 precedent).
+# would narrow coverage the suite already had (the #9945 precedent). Residual: a
+# dir-less `x.test.sh` at repo root is corpus yet inexpressible in this `dir/`
+# grammar (no head to mint); the th6 row in scripts/test-all-affected.test.sh
+# re-derives the live root set to catch NEW top-level dirs.
 AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS=(
 
   "apps/"
@@ -2026,6 +2029,9 @@ AFFECTED_SCRIPTS_LINT_INTEGRATION_ENV_GATES_BATTERY_PATHS=(
 # `.github/workflows/*.yml` surfaces and the REQUIRED_RUNNERS files — the non-corpus
 # reads are already covered by the .github/, scripts/ and apps/ prefixes, so only the
 # *.test.sh corpus needed glob: coverage for the 13 roots without a declared prefix.
+# Residual: a dir-less `x.test.sh` at repo root is corpus yet inexpressible in this
+# `dir/` grammar (no head to mint); the th6 row in scripts/test-all-affected.test.sh
+# re-derives the live root set to catch NEW top-level dirs.
 AFFECTED_SCRIPTS_LINT_ORPHAN_TEST_SUITES_PATHS=(
 
   "apps/"
@@ -2217,7 +2223,9 @@ AFFECTED_SCRIPTS_AUDIT_DEV_SCHEDULED_SHAPES_PATHS=(
 # corpus), plus scripts/test-all.sh (RUNNER: sandbox copies + sed), its SUT lib
 # scripts/lib/repo-write-boundary.sh, and its own file. Uniformly glob:-scoped: a dir
 # prefix over a doc-heavy root would over-select on non-.sh churn, and there is no
-# legacy prefix set to preserve.
+# legacy prefix set to preserve. Residual: a dir-less `x.sh` at repo root is
+# inexpressible in this `dir/` grammar (no head to mint); the th6 row in
+# scripts/test-all-affected.test.sh re-derives the live root set for NEW dirs.
 AFFECTED_SCRIPTS_LIB_REPO_WRITE_BOUNDARY_TEST_SH_PATHS=(
   "glob:.agents/**.sh"
   "glob:.claude/**.sh"

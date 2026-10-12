@@ -151,7 +151,7 @@ fi
 # reddened on its own first run -- `tests/` uses a `test-*.sh` convention this producer does
 # not match. Re-derive with:
 #   git ls-files '*.test.sh' | awk -F/ 'NF{print $1}' | LC_ALL=C sort -u
-EXPECTED_SUITE_ROOTS=".claude apps plugins scripts"
+EXPECTED_SUITE_ROOTS=".claude .github apps plugins scripts"
 actual_roots="$(awk -F/ 'NF{print $1}' "$WORK/tracked" | LC_ALL=C sort -u | tr '\n' ' ')"
 actual_roots="${actual_roots% }"
 # Non-vacuity: an empty derivation must never be compared as a legitimate set. (It was, on the
