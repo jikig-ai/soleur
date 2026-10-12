@@ -5,6 +5,7 @@ User-Challenge items: the plan keeps the operator's stated direction as the defa
 
 ## Decision Classes
 
+<!-- lint-infra-ignore start -->
 | # | Challenge | Class | Plan default | Dissent (source) |
 |---|-----------|-------|--------------|------------------|
 | 1 | Cut the C4 argv fixture, its pin test and the C4 docker replay; assert "no /proc mount token in the built argv" in vitest instead | user-challenge (drops operator-requested scope: "the outer-wrap and C4-render spawn paths") | keep fixture, pin and replay (replay gated by measurement M2) | DHH, code-simplicity, CTO |
@@ -13,3 +14,4 @@ User-Challenge items: the plan keeps the operator's stated direction as the defa
 | 4 | Posture-only tuple check instead of the closed-world grammar | taste | closed-world (learning 2026-10-09 on spelling-keyed guards) | DHH |
 | 5 | Drop Phase 0 M3 (behavioral cover-vs-drop) as speculative, versus make it a hard gate that can reopen ADR-075 | taste | time-boxed hard gate for Phase 4 | DHH (cut) versus architecture-strategist (escalate) |
 | 6 | Defer the C4 and outer-wrap docker replays and the extractor to a follow-up issue | user-challenge (drops requested scope) | keep in this PR | CTO |
+<!-- lint-infra-ignore end -->

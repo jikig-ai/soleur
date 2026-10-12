@@ -66,6 +66,7 @@ ALLOWLIST_VARS=(
   "SOLEUR_ISOLATION_IN_IMAGE|in-image arm of test/sandbox-isolation.test.ts -- runs inside the runtime image, not GitHub CI (#9855)"
   "SOLEUR_ISOLATION_TEST_HOST|deliberate fail-loud host-capability opt-in; CI must not satisfy it (#9855)"
   "ANTHROPIC_ISOLATION_TEST_OK|manual opt-in for a host-level destructive arm (#9855)"
+  "C4_ARGV_FIXTURE_REGEN|developer-only fixture regeneration arm of test/c4-render-argv-fixture.test.ts; the test itself refuses to run when CI is set, so CI must not satisfy it (#10065)"
 )
 
 # repo-relative path | reason -- per-FILE exemptions from the collection arm,
