@@ -27,7 +27,7 @@ fresh host uses to unlock its `/workspaces` volume (`doppler_service_token.works
 ADR-263 D4) is never co-rotated with web-1's `WORKSPACES_LUKS_BOOT_TOKEN`, and it is baked into the
 host's `user_data`, which only a new host picks up. Its rotation **is** a host replacement: rotating it
 without replacing the host leaves that host unable to re-open its volume on its next reboot. (Not
-for web-2 before the volume rebirth, #9372: see "A `discriminate` fatal" below.)
+for web-2 before the volume rebirth, #9372: see "A `discriminate` fatal" below. **[Superseded 2026-10-12 (#9372): the rebirth ran on 2026-10-06 and its workflow is retired; the section named here carries the 2026-10-11 marker.]**)
 
 Dispatching the wrong one is safe by construction — each gate refuses the other's plan shape,
 and the `confirm` tokens are deliberately different — but it wastes a run.
@@ -123,7 +123,7 @@ automated: repair the named cause and dispatch again.
 the boot continued, the volume is formatted, the header has no off-host copy): escrow is attempted **once, at
 birth**, so the only way to re-attempt it is a host replace (`web-host-replace`, with the config repaired first).
 While the web-class host holds no user data that costs one replace. Once a web-class host holds data, the
-remediation of this page is owned by the #9372 follow-up; no re-escrow step is defined here.
+remediation of this page is owned by the #9372 follow-up; no re-escrow step is defined here. **[Superseded 2026-10-12 (#9372): the #9372 follow-up ownership ended with the retirement change; the re-escrow step is tracked in #9949 and passphrase-loss recovery in #9948.]**
 
 **During an outage, when the preflight cannot pass.** The preflight has **no in-workflow bypass**, by design. The only
 operator-local route is the break-glass procedure in `web-host-birth.md` (written for a birth, with the preflight as its
@@ -328,7 +328,7 @@ is still the Hetzner-formatted `ext4` one until the volume rebirth (**#9372**). 
 #9372 powers the new host off by design** (fail closed, serving weight 0, no user impact); do not
 dispatch it. Only the rebirth, which deletes and re-creates the empty volume, clears a `discriminate`
 fatal on a non-raw volume. For every other stage, fix the named cause and then replace the host; the
-volume re-attaches to the new host.
+volume re-attaches to the new host. **[Superseded 2026-10-12 (#9372), as to this paragraph's web-2 sentences: web-2's volume is LUKS-formatted (the 2026-10-11 marker above), so a plain web-2 replace is no longer refused for the ext4 volume; the rebirth workflow named here is deleted, and a volume re-birth now needs a new workflow in a new reviewed change (ADR-263 addendum 2026-10-12).]**
 
 #### The daily web-2 verify leg (`web2_marker`) — reason to action
 

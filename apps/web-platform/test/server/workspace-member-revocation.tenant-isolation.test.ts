@@ -156,13 +156,13 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       } catch {}
       await tearDownSharedWorkspace(service, fixtureX);
       await tearDownSharedWorkspace(service, fixtureY);
-      // #7101 — mirror the beforeAll's 60s budget. Teardown does strictly more
-      // remote work than setup: 11 sequential round-trips (1 explicit
-      // workspace_members delete + 6 for fixtureX's 2 members + 4 for
-      // fixtureY's 1 member), 3 of them `deleteUser` under withGoTrueRetry.
+      // #7101 — mirror the beforeAll's 60s budget. Teardown routes each
+      // member through tearDownTenantUser (anonymise-first, ~24 sequential
+      // round-trips per member): ~72 for fixtureX's 2 members + ~24 for
+      // fixtureY's 1 member + 3 `deleteUser` calls under withGoTrueRetry.
       // A fully-exhausted ladder is 4 sleeps (250/500/1000/2000ms base + up to
       // 250ms jitter each), so three of them cost up to ~14.25s — 71% of a 20s
-      // budget, leaving ~5.75s for all 11 round-trips. Inheriting the global
+      // budget before the ~96 round-trips. Inheriting the global
       // 20s here red-lined `main` on a docs-only PR with every assertion green.
     }, 60_000);
 

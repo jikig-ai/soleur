@@ -2830,13 +2830,237 @@ fi
 # drifting apart: every definition, including the prefixed variants of sourced libs, must carry the
 # one canonical body, and the population must not silently collapse.
 _CANON_BODY='{ local LC_ALL=C; case "${1:-}" in '"''"'|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }'
-_copies="$(git grep -hE '_bearer_ok\(\) *\{' -- '*.sh' ':!*.test.sh' ':!tests/scripts/test-*' ':!scripts/fixtures' | sed -E 's/^[[:space:]]*[A-Za-z0-9_]*_bearer_ok\(\) *//')"
+_copies="$(git -C "$REPO_ROOT" grep -hE '_bearer_ok\(\) *\{' -- '*.sh' ':!*.test.sh' ':!tests/scripts/test-*' ':!scripts/fixtures' | sed -E 's/^[[:space:]]*[A-Za-z0-9_]*_bearer_ok\(\) *//')"
 _n_copies="$(printf '%s\n' "$_copies" | grep -c . || true)"
 _n_off="$(printf '%s\n' "$_copies" | grep -vcxF -- "$_CANON_BODY" || true)"
 if [ "$_n_copies" -ge 63 ] && [ "$_n_off" = "0" ]; then
   pass "token-shape guard: all $_n_copies inline copies of _bearer_ok carry the one canonical body"
 else
   fail "token-shape guard drift: copies=$_n_copies off-canonical=$_n_off (anti-vacuity floor: >= 63 copies, the measured population, and 0 off-canonical)"
+fi
+
+# --- Guard 3 (#9999): stale GitHub-token-class census ---------------------------
+# Every GitHub-prefix-shaped char-class literal in the swept corpus must carry the
+# canonical credential alphabet `[A-Za-z0-9._~+/=-]` (RFC 6750 b64token — the same
+# class the token-shape guard above pins) or hold a documented-narrower allowlist
+# slot. A narrower class judges only the base62 prefix run of a rotated token: in
+# a redactor the tail leaks, in a detection pin the match silently misses
+# (#9972 -> #9999).
+#
+# Arms (a bare `ghs_[` grep cannot see forms C, D, or E):
+#   A) literal prefix:    gh<opsur>_<class>   and   github_pat_<class>  — the
+#      `\\?` variant catches the sed-quoted `ghs_\[...` spelling too
+#   B) alternation:       (…gh<member>…)_<class>     e.g. (?:ghp|gho|ghu|ghs|ghr)_
+#   C) bracketed prefix:  gh[<letters>]_<class>      e.g. gh[pousr]_
+#   D) factored prefix:   gh(...)_<class>            e.g. gh(?:p|o|u|s|r)_
+# A class is canonical iff it carries every b64token punctuation byte
+# independently (order-agnostic): '.' '_' '~' '+' '/' '=' '-'. A multi-class
+# literal (the two-segment `github_pat_[…]{22}_[…]{59,}` form) has EVERY class
+# judged — a canonical first segment must not launder a stale second.
+#
+# Corpus: every tracked file under the pattern-bearing extensions below, minus
+# knowledge-base/ (the doc corpus legitimately quotes legacy shapes) and minus
+# THIS file (the sweep machinery self-matches arm A by construction). Residual
+# blind spots, stated not hidden: extensionless files (Dockerfile, env/ini/
+# systemd units), .env/.service/.timer/.ps1/.rb/.go/.rs/.j2/.tmpl/.sed/.awk,
+# multi-line or runtime-assembled patterns, escape spellings beyond a single
+# backslash (\x5b/\u005b/octal), separator-obfuscation (`ghs[_]`), quantified
+# prefix classes (`gh[pousr]?_`), nested-paren alternations, and gitignored or
+# never-`git add`ed files, non-`_` prefix separators like `)[_-][`, classes
+# longer than the arms' 80-byte match window (a cost bound, not a semantic
+# one), a literal `]` class member (`[]a-z]` — invisible to the `[^]]+` arms
+# AND the judge), POSIX-class spellings (`[[:alnum:]._…]` — the judge reads
+# `[:alnum:` as the class and over-flags toward a slot; fails closed), and a
+# member class nested inside an arm-B/D alternation (`(?:ghp|xox[abpr])_` —
+# the inner `[abpr]` is judged as the value class; fails closed).
+_G3_PATHS=( '*.sh' '*.ts' '*.tsx' '*.js' '*.jsx' '*.mjs' '*.cjs' '*.md' '*.yml' '*.yaml'
+            '*.py' '*.json' '*.toml' '*.tf' '*.conf' '*.txt' '*.tsv'
+            ':!knowledge-base' ':!scripts/lint-shell-trace-credential-refusal.test.sh' )
+
+# Returns 0 when the hit carries a stale class (any `[…]` value class missing a
+# canonical byte). A `gh[…]` bracketed-prefix member class is a PREFIX selector,
+# not a value class, and is skipped.
+_ghs_class_stale() {
+  local _rest="$1" _c _cn _b
+  [[ "$_rest" =~ ^gh\[ ]] && _rest="${_rest#*]_}"
+  while [[ "$_rest" =~ \[([^]]+)\] ]]; do
+    _c="${BASH_REMATCH[1]}"
+    # The class must carry the alnum half of the alphabet — all three range
+    # spellings — not just a punctuation superset. [0-9a-f._~+/=-] truncates a
+    # real token mid-body, the same partial-disclosure family.
+    for _b in 'A-Z' 'a-z' '0-9'; do
+      [[ "$_c" == *"$_b"* ]] || return 0
+    done
+    # Strip ranges before the member checks: a `-` inside `A-Z`/`a-z`/`0-9` is
+    # source text, not a class MEMBER — checking for it un-stripped is vacuous.
+    _cn="${_c//[A-Za-z]-[A-Za-z]/}"; _cn="${_cn//[0-9]-[0-9]/}"
+    for _b in '.' '_' '~' '+' '/' '='; do
+      [[ "$_cn" == *"$_b"* ]] || return 0
+    done
+    case "$_cn" in *"-"*) ;; *) return 0 ;; esac
+    # Advance past the judged class's ']': [^]]+ guarantees the first ']' is
+    # its close. (Do NOT strip by ${BASH_REMATCH[0]} here — later =~ matches in
+    # this loop clobber it.)
+    _rest="${_rest#*\]}"
+  done
+  return 1
+}
+
+# Documented-narrower dispositions. $1=file $2=matched literal; 0 = allowlisted.
+# Keyed on the EXACT literal text, never a substring — a bracket- or
+# alternation-spelled class that covers ghs_ obliquely (gh[su]_, (ghp|gh[su])_)
+# carries no `ghs` substring and must still flag.
+_ghs_census_allow() {
+  case "$1" in
+    plugins/soleur/skills/incident/test/fixtures/legacy-bash-scanner.sh)
+      return 0 ;;  # fixture models a legacy scanner map; the legacy class IS its content
+    plugins/soleur/skills/deepen-plan/SKILL.md | \
+    plugins/soleur/skills/plan/references/plan-sharp-edges.md)
+      # docs cite vendor-current (unrotated) prefix formats / GitHub's own
+      # push-protection regex — the exact literals only
+      case "$2" in 'ghp_[A-Za-z0-9]'* | 'github_pat_[A-Za-z0-9_]'*) return 0 ;; *) return 1 ;; esac ;;
+    apps/web-platform/server/git-auth.ts)
+      case "$2" in 'ghs_[A-Za-z0-9.\-_]'*) return 0 ;; *) return 1 ;; esac ;;  # comment cites the vendor's recommended shape verbatim for contrast with the canonical superset
+    *) return 1 ;;
+  esac
+}
+
+# Per-arm sweeps — each rc and each hit count is asserted below: an arm whose
+# ERE silently breaks contributes zero rows under `|| true` and the aggregate
+# floor cannot see it (#8354's silent-collapse class).
+_ghs_arm_a1_rc=0; _ghs_arm_a1="$(git -C "$REPO_ROOT" grep -noE 'gh[opsur]_\\?\[[^]]{1,80}\]' -- "${_G3_PATHS[@]}" 2>/dev/null)" || _ghs_arm_a1_rc=$?
+_ghs_arm_a2_rc=0; _ghs_arm_a2="$(git -C "$REPO_ROOT" grep -noE 'github_pat_\\?\[[^]]{1,80}\](\{[0-9,]+\}_\\?\[[^]]{1,80}\])?' -- "${_G3_PATHS[@]}" 2>/dev/null)" || _ghs_arm_a2_rc=$?
+_ghs_arm_b_rc=0;  _ghs_arm_b="$(git -C "$REPO_ROOT" grep -noE '\([^)]*gh[opsur][^)]*\)_\\?\[[^]]{1,80}\]' -- "${_G3_PATHS[@]}" 2>/dev/null)" || _ghs_arm_b_rc=$?
+_ghs_arm_c_rc=0;  _ghs_arm_c="$(git -C "$REPO_ROOT" grep -noE 'gh\[[a-z]+\]_\\?\[[^]]{1,80}\]' -- "${_G3_PATHS[@]}" 2>/dev/null)" || _ghs_arm_c_rc=$?
+_ghs_arm_d_rc=0;  _ghs_arm_d="$(git -C "$REPO_ROOT" grep -noE 'gh\([^)]*\|[^)]*\)_\\?\[[^]]{1,80}\]' -- "${_G3_PATHS[@]}" 2>/dev/null)" || _ghs_arm_d_rc=$?
+_ghs_bad_rc=0
+for _v in "$_ghs_arm_a1_rc" "$_ghs_arm_a2_rc" "$_ghs_arm_b_rc" "$_ghs_arm_c_rc" "$_ghs_arm_d_rc"; do
+  [ "$_v" -ge 2 ] && _ghs_bad_rc=1
+done
+_ghs_arm_rows() { printf '%s\n' "$1" | grep -c . || true; }
+_ghs_n_a1="$(_ghs_arm_rows "$_ghs_arm_a1")"; _ghs_n_a2="$(_ghs_arm_rows "$_ghs_arm_a2")"
+_ghs_n_b="$(_ghs_arm_rows "$_ghs_arm_b")";   _ghs_n_c="$(_ghs_arm_rows "$_ghs_arm_c")"
+_ghs_n_d="$(_ghs_arm_rows "$_ghs_arm_d")"
+
+_ghs_hits="$(printf '%s\n%s\n%s\n%s\n%s\n' "$_ghs_arm_a1" "$_ghs_arm_a2" "$_ghs_arm_b" "$_ghs_arm_c" "$_ghs_arm_d" | sort -u)"
+_ghs_seen=0
+_ghs_stale=""
+_ghs_allowed=""
+while IFS= read -r _h; do
+  [ -n "$_h" ] || continue
+  _ghs_seen=$(( _ghs_seen + 1 ))
+  _f="${_h%%:*}"
+  _m="${_h#*:}"; _m="${_m#*:}"
+  if _ghs_census_allow "$_f" "$_m"; then _ghs_allowed="${_ghs_allowed}${_f}
+"; fi
+  if _ghs_class_stale "$_m" && ! _ghs_census_allow "$_f" "$_m"; then
+    _ghs_stale="${_ghs_stale}    ${_h}
+"
+  fi
+done <<<"$_ghs_hits"
+
+if [ -z "$_ghs_stale" ]; then
+  pass "stale-ghs census: all $_ghs_seen GitHub-prefix char-class literals carry the canonical b64token class or a documented-narrower slot"
+else
+  fail "stale-ghs census: non-canonical GitHub-prefix char-class literal(s):${_ghs_stale}    remedy: widen the class to the canonical b64token alphabet [A-Za-z0-9._~+/=-] (ADR-280), or add a documented-narrower slot in _ghs_census_allow()"
+fi
+
+# Anti-vacuity: the sweep must have classified a nonzero population, no arm may
+# have errored, and each arm that has live members must have produced them — an
+# arm silently dying under 2>/dev/null is invisible to the aggregate floor.
+if [ "$_ghs_bad_rc" -eq 0 ]; then
+  pass "stale-ghs census: all five sweep arms exited cleanly"
+else
+  fail "stale-ghs census: a sweep arm exited >= 2 (invalid ERE or grep failure) -- arm results a1=$_ghs_n_a1 a2=$_ghs_n_a2 b=$_ghs_n_b c=$_ghs_n_c d=$_ghs_n_d"
+fi
+
+if [ "$_ghs_n_a1" -ge 15 ] && [ "$_ghs_n_a2" -ge 8 ] && [ "$_ghs_n_b" -ge 3 ] && [ "$_ghs_n_c" -ge 3 ]; then
+  pass "stale-ghs census per-arm liveness: a1=$_ghs_n_a1 a2=$_ghs_n_a2 b=$_ghs_n_b c=$_ghs_n_c (d=$_ghs_n_d) hits"
+else
+  fail "stale-ghs census per-arm liveness regression: a1=$_ghs_n_a1 (floor 15) a2=$_ghs_n_a2 (floor 8) b=$_ghs_n_b (floor 3) c=$_ghs_n_c (floor 3) -- an arm went dark"
+fi
+
+# Arm d is structurally dark today (no gh(…)_ member in the corpus), so a
+# corpus floor cannot pin it — prove the PATTERN is alive and does not
+# false-positive on the `weigh(x)_[` word-prefix collision class instead.
+# NOTE: the probe literals are bound to variables — a here-string whose feed is a quoted
+# word reads as a heredoc opener to guard-vacuity-floor's `heredoc_lines_of` (it scans for
+# `<<` at every position, so the `<<<` + space + `'word` shape opens a phantom heredoc that
+# swallows every floor line after this one as fixture text — measured NO_FIRE).
+_ghs_armd_pos='gh(p|o)_[A-Za-z0-9]{20,}'
+_ghs_armd_neg='weigh(x)_[A-Za-z0-9]{20,}'
+if grep -qE 'gh\([^)]*\|[^)]*\)_\\?\[[^]]{1,80}\]' <<< "$_ghs_armd_pos" \
+   && ! grep -qE 'gh\([^)]*\|[^)]*\)_\\?\[[^]]{1,80}\]' <<< "$_ghs_armd_neg"; then
+  pass "stale-ghs census arm-d liveness: factored-prefix pattern fires on a synthesized alternation and spares word-prefix collisions"
+else
+  fail "stale-ghs census arm-d liveness: the factored-prefix ERE does not discriminate its own probe"
+fi
+
+# Reported DIRECTLY (printf + exit), never through pass()/fail(): _ghs_seen is a
+# counter under guard-vacuity-floor's detection, so a fail()-routed floor exits 0
+# under neutered machinery — the same shape as the suite-level floor below.
+if [ "$_ghs_seen" -lt 40 ]; then
+  printf '[FATAL] stale-ghs census classified only %s GitHub-prefix char-class literals — sweep went dark (floor 40)\n' "$_ghs_seen" >&2
+  exit 1
+fi
+pass "stale-ghs census corpus non-vacuous: $_ghs_seen classified literals (floor 40)"
+
+if _ghs_class_stale 'ghs_[A-Za-z0-9]{20,}'; then
+  pass "stale-ghs census discriminates: legacy base62 class flags"
+else
+  fail "stale-ghs census failed to flag the legacy base62 class (guard vacuous)"
+fi
+
+if ! _ghs_class_stale 'ghs_[A-Za-z0-9._~+/=-]{36,}'; then
+  pass "stale-ghs census discriminates: canonical b64token class passes"
+else
+  fail "stale-ghs census flags the canonical b64token class (over-firing)"
+fi
+
+if _ghs_class_stale 'ghs_[A-Za-z0-9.~+/=-]{36,}'; then
+  pass "stale-ghs census discriminates: a class missing '_' flags (truncates the ghs_<id>_<jwt> form)"
+else
+  fail "stale-ghs census accepts a class missing '_' -- the separator byte is not pinned"
+fi
+
+if ! _ghs_class_stale 'github_pat_[A-Za-z0-9._~+/=-]{22}_[A-Za-z0-9._~+/=-]{59,}' \
+   && _ghs_class_stale 'github_pat_[A-Za-z0-9._~+/=-]{22}_[A-Za-z0-9]{59,}'; then
+  pass "stale-ghs census discriminates two-segment literals: canonical both-segments passes, stale tail flags"
+else
+  fail "stale-ghs census misjudges a two-segment github_pat_ literal"
+fi
+
+if _ghs_class_stale 'gh[psr]_[A-Za-z0-9]' \
+   && ! _ghs_class_stale 'gh[psr]_[A-Za-z0-9._~+/=-]'; then
+  pass "stale-ghs census discriminates bracketed prefixes: prefix class skipped, value class judged"
+else
+  fail "stale-ghs census misjudges a bracketed-prefix literal"
+fi
+
+if _ghs_census_allow 'plugins/soleur/skills/deepen-plan/SKILL.md' 'ghp_[A-Za-z0-9]{20,}' \
+   && ! _ghs_census_allow 'plugins/soleur/skills/deepen-plan/SKILL.md' 'ghs_[A-Za-z0-9]{20,}' \
+   && ! _ghs_census_allow 'plugins/soleur/skills/deepen-plan/SKILL.md' 'gh[su]_[A-Za-z0-9]{20,}'; then
+  pass "stale-ghs census allowlist discriminates by exact literal, incl. oblique ghs_-covering spellings"
+else
+  fail "stale-ghs census allowlist lost prefix discrimination"
+fi
+
+if _ghs_census_allow 'apps/web-platform/server/git-auth.ts' 'ghs_[A-Za-z0-9.\-_]{36,}' \
+   && ! _ghs_census_allow 'apps/web-platform/server/git-auth.ts' 'ghs_[A-Za-z0-9]{36,}'; then
+  pass "stale-ghs census allowlist: git-auth.ts slot exempts only the cited vendor literal"
+else
+  fail "stale-ghs census allowlist: git-auth.ts slot loosened beyond the vendor citation"
+fi
+
+# This file list mirrors _ghs_census_allow's case arms — keep them coupled.
+_ghs_dead_slots=""
+for _slot in   'plugins/soleur/skills/incident/test/fixtures/legacy-bash-scanner.sh'   'plugins/soleur/skills/deepen-plan/SKILL.md'   'plugins/soleur/skills/plan/references/plan-sharp-edges.md'   'apps/web-platform/server/git-auth.ts'; do
+  grep -qF -- "$_slot" <<< "$_ghs_allowed" || _ghs_dead_slots="${_ghs_dead_slots} ${_slot}"
+done
+if [ -z "$_ghs_dead_slots" ]; then
+  pass "stale-ghs census: every allowlist slot discharged at least one hit (no dead dispositions)"
+else
+  fail "stale-ghs census allowlist slots no longer match any hit (file renamed or literal drifted):${_ghs_dead_slots}"
 fi
 
 printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
@@ -2853,7 +3077,10 @@ printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 # everything, and here the loss of the positive direction was not even reported.
 # A floor at the measured count makes any row deletion RED. It is a LOWER bound,
 # so adding rows never trips it; re-measure and raise it when rows are added.
-# Re-measured at 638 (#9756: the census-ceiling rows moved onto a synthesized pair because baseline E is empty, plus the seed-mutation and live-pair rows).
+# Re-measured at 651 (merge of #9999's Guard-3 census — five sweep arms over 17 extensions,
+# exact-literal allowlist, per-arm liveness, both-direction discrimination rows and the
+# allowlist-discrimination row — with #9756's 638 baseline: 649 + 2 merged rows).
+# Earlier: 638 (#9756: the census-ceiling rows moved onto a synthesized pair because baseline E is empty
 # Earlier: 635 (review of #9753 round 2, WPc: the real-curl oracle over EVERY character of [0-9A-Za-z#:] in the spaced and
 # glued spelling, its derived-alphabet equality row, the whole-table control and the per-character drop/add mutants, and the
 # census non-integer-ceiling / empty-count rows with their conjunct mutants, 205 assertions on top of the 430 below; the Rule E
@@ -2863,7 +3090,7 @@ printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 # alternate matrix, the hazard-member and YAML-arm mutant rows, on top of the 219 below). Earlier: 219 (PR #9674 review round 1: the YAML graph-walk, direct-under-.github, census-ceiling and
 # SKIP_SHELLS-parity rows, on top of the 198 below). Earlier: 198 (#9597 S1: the Rule E credential vocabulary and YAML-arm rows, the extractor, discovery, harness and
 # mutation rows added on top of the 119 recorded for the original Rule E rows).
-MIN_ASSERTIONS=638
+MIN_ASSERTIONS=651
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' \
     "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2

@@ -24,6 +24,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { randomBytes } from "crypto";
+import { tearDownTenantUser } from "./helpers/tenant-isolation-teardown";
 
 const INTEGRATION_ENABLED = process.env.SUPABASE_DEV_INTEGRATION === "1";
 
@@ -151,14 +152,13 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       for (const u of [userA, userB]) {
         if (!u.id) continue;
         assertSynthetic(u.email);
-        try {
-          await service.auth.admin.deleteUser(u.id);
-        } catch {
-          // Cleanup is best-effort — leaked synthetic emails are
-          // bounded by the pattern guard.
-        }
+        // FK-reverse helper, fail-loud by design (#9994): the previous
+        // best-effort swallow returned {error} unchecked and silently
+        // leaked the synthetic user — dev carries ~87k NULL-owner org rows
+        // of this cruft class.
+        await tearDownTenantUser(service, u);
       }
-    }, 30_000);
+    }, 60_000);
 
     test(
       "A's worker reads contain ZERO rows attributable to B (per-row WHERE + assertReadScope)",
@@ -238,8 +238,22 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         expect((rows![0] as { user_id: string }).user_id).toBe(userA.id);
         expect((rows![0] as { workspace_id: string }).workspace_id).toBe(userA.id);
 
-        // Cleanup the test job so the user can re-run the test.
-        await service.from("dsar_export_jobs").delete().eq("id", jobId);
+        // Cleanup the test job so the user can re-run the test. Mirror
+        // production's abort step (account-delete.ts): UPDATE status to a
+        // terminal state — a raw DELETE is dead code here because the
+        // audit_pii.job_id SET NULL cascade fires the WORM trigger (and
+        // the {error} return was unchecked, so it silently leaked a
+        // 'pending' NULL-user job that claim_next_dsar_export_job would
+        // pick up on dev).
+        const { error: abortErr } = await service
+          .from("dsar_export_jobs")
+          .update({
+            status: "failed",
+            failure_reason: "test_cleanup",
+            completed_at: new Date().toISOString(),
+          })
+          .eq("id", jobId);
+        expect(abortErr, "abort test job").toBeNull();
       },
       30_000,
     );

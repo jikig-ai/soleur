@@ -5,57 +5,91 @@ Derived from `knowledge-base/project/plans/2026-10-05-feat-open-web-egress-plan.
 
 ## Phase 1 — PR-A: Gateway infra dark-launch
 
-- [ ] 1.1 Author `infra/egress-deny-cidrs.txt` — the single deny-set source
+- [x] 1.1 Author `infra/egress-deny-cidrs.txt` — the single deny-set source
       (RFC1918, CGNAT, link-local, `10.0.1.0/24` cluster-private, `fc00::/7`,
       `fe80::/10`, `::/128`, `::ffff:0:0/96`, `64:ff9b::/96`, `2002::/16`)
-- [ ] 1.2 Author `infra/egress-gateway-squid.conf` — CONNECT-only,
+- [x] 1.2 Author `infra/egress-gateway-squid.conf` — CONNECT-only,
       `SSL_ports 443`, `to_localhost`+`to_linklocal` + file-backed `dst`
       deny, `proxy_auth REQUIRED`, `dns_v4_first`, JSON logformat
       (decision+close: decision/reason/requested_host/resolved_ip/bytes/
       duration/%un)
-- [ ] 1.3 Author `infra/egress-auth-helper.sh` — OK iff password exists as a
+- [x] 1.3 Author `infra/egress-auth-helper.sh` — OK iff password exists as a
       file under the ro-mounted `/etc/squid/session-tokens`
-- [ ] 1.4 Author `infra/egress-forwarder.mjs` — per-dispatch localhost
+- [x] 1.4 Author `infra/egress-forwarder.mjs` — per-dispatch localhost
       forwarder (bind `127.0.0.1:0`, tunnel to gw:8443, require session
       token inbound / inject `workspaceId:token` outbound); ships in the app
       image, not the bake chain
-- [ ] 1.5 Author `infra/egress-gateway-bootstrap.sh` — probe/reserve subnet,
+- [x] 1.5 Author `infra/egress-gateway-bootstrap.sh` — probe/reserve subnet,
       `docker network create` (named bridge), token dir, `docker run` Squid
       digest-pinned + mounts; idempotent
-- [ ] 1.6 Digest-freshness triptych (clone zot pattern): provenance doc,
+- [x] 1.6 Digest-freshness triptych (clone zot pattern): provenance doc,
       `rule-audit.yml` upstream-poll step, `egress-image-staleness.test.sh`
-- [ ] 1.7 `cron-egress-nftables.sh`: forward accept (docker0→gw:8443),
+- [x] 1.7 `cron-egress-nftables.sh`: forward accept (docker0→gw:8443),
       DOCKER-USER `established,related` reply accept before isolation, new
       `SOLEUR-EGRESS-GW` chain (iifname soleur-egress0, `ct state new`-scoped
       deny rendered from the CIDR file), IPv6 guard replication
-- [ ] 1.8 `cron-egress-resolve.sh`: extend self-heal needle set to the new
+- [x] 1.8 `cron-egress-resolve.sh`: extend self-heal needle set to the new
       chain + reply rule; render the egress0 drop from the CIDR file
-- [ ] 1.9 cloud-init.yml: one runcmd line (bootstrap before app docker run +
+- [x] 1.9 cloud-init.yml: one runcmd line (bootstrap before app docker run +
       before enforce-probe); app `docker run` gains the token-dir rw mount;
       stay under the 32,768 B cap
-- [ ] 1.10 Bake chain (all four): `host_script_files` (server.tf), Dockerfile
+- [x] 1.10 Bake chain (all four): `host_script_files` (server.tf), Dockerfile
       COPY, `.dockerignore` re-includes, `soleur-host-bootstrap.sh` install
       loops+assertions
-- [ ] 1.11 `terraform_data` SSH blocks for BOTH running hosts — web-1
+- [x] 1.11 `terraform_data` SSH blocks for BOTH running hosts — web-1
       (`egress_gateway`) and web-2 (`egress_gateway_web2`, the
       `local.web_2_ssh_host_key` + `%RAND%` script_path shape). Web-2 is not
       optional: its cloud-init is frozen, so replace-only delivery would leave
       entitled sessions there fail-closed until the next `-replace`.
-- [ ] 1.12 `apply-web-platform-infra.yml` `-target` allowlist entries for BOTH
+- [x] 1.12 `apply-web-platform-infra.yml` `-target` allowlist entries for BOTH
       gateway resources (post-bridge SSH stage); `terraform-target-parity.test.ts`
       update + the `web-host-provisioner-parity` web-2 dialer-class widening
-- [ ] 1.13 `vector.toml`: `egress_gw_journald` source +
+- [x] 1.13 `vector.toml`: `egress_gw_journald` source +
       `pii_scrub_drop_userdata` inputs wiring
-- [ ] 1.14 `cron-egress-enforce-probe.sh`: synthetic CONNECT pair
+- [x] 1.14 `cron-egress-enforce-probe.sh`: synthetic CONNECT pair
       (allow+deny) = heartbeat emitter + live policy verification
-- [ ] 1.15 `betterstack-logs-alerts.tf`: deny-class spike + heartbeat-absence
+- [x] 1.15 `betterstack-logs-alerts.tf`: deny-class spike + heartbeat-absence
       `logtail_exploration_alert`s (paid-tier ternary, `-target` lines, drift
       guard, runbook row)
-- [ ] 1.16 Tests: `cron-egress-firewall.test.sh` fixtures (rule order, reply
+- [x] 1.16 Tests: `cron-egress-firewall.test.sh` fixtures (rule order, reply
       accept, ct-state-new scope, one-way invariant); `egress-gateway.test.sh`
       (Guard 1 matrix); CIDR parity test; `web-host-provisioner-parity`;
       `cloud-init-user-data-size.test.ts`; `scripts/probes/
       egress-gateway-policy.sh` selftest sharing the same fixtures
+
+### Dark-launch observation — CLOSED 2026-10-12
+
+The observation ran ~19h after PR-A merged and found the path dark in
+production — `egress_gw_probe result=fail allow_rc=28` from 00:13Z.
+Three successive defects surfaced, each diagnosed on-host and fixed:
+
+- **#10046** — `deploy_pipeline_fix_web2` delivered the resolver but not
+  `cron-egress-nftables.sh`, so web-2's birth-frozen loader could not
+  satisfy the newer scope checks and looped `enforcement_missing`
+  (Sentry 127244085, quiet since 18:52Z). Same PR healed web-1's
+  scope-blind markers (unscoped `ct state new drop` baked while the gw
+  was down).
+- **#10062** — the remaining `allow_rc=28` was NOT scope-poison: Docker
+  >=28's direct-routing protection (moby #49325/#49829, per-subnet in
+  #52224) installed a raw-PREROUTING drop for traffic addressed to the
+  gw arriving off-bridge — 1611 dropped SYNs, pre-conntrack, unreachable
+  by DOCKER-USER. Bridge rebuilt `gateway_mode_ipv4=nat-unprotected`
+  (masquerade kept) + loader `oifname !docker0` drop restores the
+  third-interface boundary.
+- **#10084 / #10109** — the merged bootstrap then died on `set -e`
+  before teardown (`X && cmd` lists in command position), the liveness
+  assert raced Squid init, and the probe minted an EMPTY token file —
+  the auth helper binds username==file-content, so every CONNECT denied
+  `ERR_CACHE_ACCESS_DENIED` (`allow_rc=56`).
+
+Outcome, all machine-verified: `egress_gw_probe result=ok` on web-1 at
+11:52Z and 11:57Z 2026-10-12; `egress_gw_bridge action=rebuilt
+mode=nat-unprotected` on both hosts; Sentry 152831052 quiet since
+11:47Z; the apply's own `egress-probe-positive-ok`/`negative-ok` checks
+green. Remaining: #10047 (owner toggle + live session CONNECT line —
+the probe's synthetic CONNECT already proves the same path) and the
+alert-coverage follow-ups (`egress_gw_probe_fail` paging; per-host
+heartbeat attribution).
 
 ## Phase 2 — PR-B: Product wiring
 
