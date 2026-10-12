@@ -378,7 +378,7 @@ done
 # `mktemp -t some-other-name` orphans forever with no coverage. Flagless
 # `mktemp` emits `tmp.*`, which tmp-classify.sh assigns to systemd-tmpfiles —
 # outside the pin's scope by design.
-drift="$(grep -rhoE 'mktemp -[dt]+ "?[A-Za-z0-9_.*-]+' "$SCRIPT_DIR/../scripts/" \
+drift="$(grep -hoE 'mktemp -[dt]+ "?[A-Za-z0-9_.*-]+' "$SCRIPT_DIR/../scripts/"*.sh \
   | awk '{print $NF}' | tr -d '"' | grep -v '^skill-scan-' || true)"
 if [[ -z "$drift" ]]; then
   ok "every mktemp template under scripts/ emits a swept skill-scan-* name"
