@@ -1470,18 +1470,38 @@ pj_sourced() {
 # start of a statement. A drain is a bare cat or a cat with a redirect or a command substitution (not `cat FILE`, not `cat < FILE`), or dd of=.
 PJ_DEFS_AWK='
 BEGIN {
+  sq = sprintf("%c", 39)
   FNRE = "^[ \t]*(function[ \t]+)?" verb "[ \t]*\\(\\)[ \t]*\\{"
   PATHRE = "(cat|printf)[^|]*>[ \t]*\"?[^ \"]*/" verb "\"?([ \t;]|$)"
-  HELPRE = "^[ \t]*(make_stub|write_stub|stub_cmd|mkstub|stub)[ \t]+\"?" verb "([^A-Za-z0-9_.-]|$)"
+  HELPRE = "^[ \t]*(make_stub|write_stub|stub_cmd|mkstub|stub)[ \t]+([^<>;|&)]*[ \t])?\"?" verb "\"?([^A-Za-z0-9_.-]|$)"
+  # what ends the extent of a stub: the opener of ANY verb that is a function, a stub-helper call or a heredoc writer (not a one-line logging write)
+  ANYFN = "^[ \t]*(function[ \t]+)?[A-Za-z_][A-Za-z0-9_-]*[ \t]*\\(\\)[ \t]*\\{"
+  ANYHELP = "^[ \t]*(make_stub|write_stub|stub_cmd|mkstub|stub)[ \t]+"
+  ANYHD = "(cat|printf)[^|]*>[ \t]*\"?[^ \"]*/[A-Za-z][A-Za-z0-9_.-]*\"?[^<]*<<"
+  HDRE = "<<-?[ \t]*[\"" sq "]?[A-Za-z_][A-Za-z0-9_]*"
 }
 /^[ \t]*#/ || /^[ \t]*$/ { next }
 { code[++nc] = $0; cl[nc] = NR
-  if ($0 ~ FNRE || $0 ~ PATHRE || $0 ~ HELPRE) op[++no] = nc }
+  own = ($0 ~ FNRE || $0 ~ PATHRE || $0 ~ HELPRE)
+  if (own) op[++no] = nc
+  bnd[nc] = (own || $0 ~ ANYFN || $0 ~ ANYHELP || $0 ~ ANYHD) }
+function indent(t) { match(t, /^[ \t]*/); return RLENGTH }
 END {
   for (i = 1; i <= no; i++) {
     ok = 0; dead = 0; seen = (token == "*")
-    lim = (i < no) ? op[i + 1] - 1 : nc   # a window never crosses into the next definition of the verb
-    for (k = op[i]; k <= op[i] + win && k <= lim; k++) {
+    lim = op[i] + win
+    if (lim > nc) lim = nc
+    for (k = op[i] + 1; k <= lim; k++) if (bnd[k]) { lim = k - 1; break }          # the next opener of any verb: its body is not this stub
+    if (match(code[op[i]], HDRE)) {                                                 # a heredoc ends at its terminator line
+      dl = substr(code[op[i]], RSTART, RLENGTH); sub("^<<-?[ \t]*[\"" sq "]?", "", dl)
+      for (k = op[i] + 1; k <= lim; k++) if (code[k] ~ "^[ \t]*" dl "[ \t]*$") { lim = k - 1; break }
+    }
+    if (code[op[i]] ~ ANYFN) {                                                      # a function ends at its closing brace, or on its own line for a one-line stub
+      rest = code[op[i]]; sub(/^[^{]*\{/, "", rest); nopen = gsub(/\{/, "{", rest); nclose = gsub(/\}/, "}", rest)
+      if (nclose - nopen >= 1) lim = op[i]
+      else for (k = op[i] + 1; k <= lim; k++) if (code[k] ~ /^[ \t]*\}/ && indent(code[k]) <= indent(code[op[i]])) { lim = k - 1; break }
+    }
+    for (k = op[i]; k <= lim; k++) {
       ln = code[k]
       sub(/[ \t]#.*$/, "", ln)               # a trailing comment is not code
       if (index(ln, token) > 0) seen = 1
@@ -1492,10 +1512,11 @@ END {
   }
 }'
 # The ONE drain detector, shared by the pin above and the dynamic control below (bracket expressions, no backslashes: it travels through awk -v).
-PJ_DETECT='(^|[^[:alnum:]_./-])(cat([[:space:]]*([)]|>|;|[}]|[|][|]|$))|dd[[:space:]]+of=)'
+PJ_DETECT='(^|[^[:alnum:]_./-])(cat([[:space:]]*([)]|>|;|[}]|[|][|]|$)|[[:space:]]+(2>[^[:space:])<;|&}]*|-)[[:space:]]*([)]|>|;|[}]|[|][|]|$))|dd[[:space:]]+of=)'
 # ...minus the shapes that look like a drain and are not one: cat as the right side of a pipe, behind a constant short-circuit, behind a
-# non-negated tty test (it reads only on a terminal), backgrounded, or with a heredoc (cat <<EOF reads the heredoc, not the pipe).
-PJ_NODRAIN='[^|][|][[:space:]]*cat|(true|false|:)[[:space:]]*(&&|[|][|])[[:space:]]*cat|[[][[]?[[:space:]]+-t[[:space:]]+0[[:space:]]+[]][]]?[[:space:]]*&&|[^&]&[[:space:]]*$|cat[^|;]*<<'
+# non-negated tty test (it reads only on a terminal: `[ -t 0 ] &&`, `test -t 0 &&`, `if [ -t 0 ]; then`), backgrounded, with a heredoc (cat <<EOF reads the heredoc,
+# not the pipe), or with an input redirect (cat >/dev/null </dev/null reads the file).
+PJ_NODRAIN='[^|][|][[:space:]]*cat|(true|false|:)[[:space:]]*(&&|[|][|])[[:space:]]*cat|[[][[]?[[:space:]]+-t[[:space:]]+0[[:space:]]+[]][]]?[[:space:]]*(&&|;[[:space:]]*then)|(^|[^[:alnum:]_])test[[:space:]]+-t[[:space:]]+0[[:space:]]*(&&|;[[:space:]]*then)|[^&]&[[:space:]]*$|cat[^|;]*<<|cat[^|;<]*<[^<&]'
 pj_defs() { awk -v verb="$2" -v token="$3" -v win="$PJ_DRAIN_WINDOW" -v detect="$PJ_DETECT" -v nodrain="$PJ_NODRAIN" "$PJ_DEFS_AWK" "$1"; }
 pj_detects() { awk -v detect="$PJ_DETECT" -v nodrain="$PJ_NODRAIN" 'BEGIN { exit !(ARGV[1] ~ detect && ARGV[1] !~ nodrain) }' "$1"; }
 PJ_FAIL=0
