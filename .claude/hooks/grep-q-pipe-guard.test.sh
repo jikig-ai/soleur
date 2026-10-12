@@ -1321,7 +1321,9 @@ PRODUCER_JOIN=(
   'tests/scripts/test-zot-log-channel-probe.sh | awk | drains | 2 | *'
 )
 # PJ-DERIVE-BEGIN
-# One awk program: the five definitions of the derivation. mawk-safe (no \b, no gensub, no intervals).
+# One awk program: the five definitions of the derivation. Measured, not promised: the program parses and derives the same 262 triples under gawk, mawk 1.3.4
+# (20200120 and 20240123) and busybox awk 1.38 (command and result in the S7c evidence, fix round A); it uses no \b, no gensub and no intervals, and the
+# lint below (pj_collide) rejects a function parameter that is also a function name, the one construct gawk accepts and mawk does not.
 #   non-test file  tracked file of a PJ_EXTS extension, not test-shaped, not under knowledge-base/ or fixtures/
 #   test file      tracked .sh, test-shaped
 #   text pipe      on a logical line (joined over a trailing backslash or bar): (printf|echo|cat) ... | WORD, or any stage before a single bar
@@ -1654,6 +1656,17 @@ PJ_DETECT='(^|[^[:alnum:]_./-])(cat([[:space:]]*([)]|>|;|[}]|[|][|]|$)|[[:space:
 PJ_NODRAIN='[^|][|][[:space:]]*cat|(true|false|:)[[:space:]]*(&&|[|][|])[[:space:]]*cat|[[][[]?[[:space:]]+-t[[:space:]]+0[[:space:]]+[]][]]?[[:space:]]*(&&|;[[:space:]]*then)|(^|[^[:alnum:]_])test[[:space:]]+-t[[:space:]]+0[[:space:]]*(&&|;[[:space:]]*then)|[^&]&[[:space:]]*$|cat[^|;]*<<|cat[^|;<]*<[^<&]'
 pj_defs() { awk -v verb="$2" -v token="$3" -v win="$PJ_DRAIN_WINDOW" -v detect="$PJ_DETECT" -v nodrain="$PJ_NODRAIN" "$PJ_DEFS_AWK" "$1"; }
 pj_detects() { awk -v detect="$PJ_DETECT" -v nodrain="$PJ_NODRAIN" 'BEGIN { exit !(ARGV[1] ~ detect && ARGV[1] !~ nodrain) }' "$1"; }
+# pj_collide <awk program text> -> `<function>:<parameter>` per parameter of a `function f(...)` line that is also the name of a function of the same program.
+# gawk accepts that (outside --posix), mawk and busybox awk stop on it ("syntax error at or near <name>"), so the guard would pass here and turn red on a runner whose awk is
+# mawk. Pure awk (no gawk extension), run over the program texts and over fixtures that must and must not collide.
+PJ_COLLIDE_AWK='
+/^function[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]*\(/ {
+  l = $0; sub(/^function[ \t]+/, "", l); nm = l; sub(/[ \t]*\(.*$/, "", nm); isfn[nm] = 1
+  sub(/^[^(]*\(/, "", l); sub(/\).*$/, "", l)
+  n = split(l, pa, ","); for (i = 1; i <= n; i++) { w = pa[i]; gsub(/[ \t]+/, "", w); if (w != "") { np++; pf[np] = nm; pp[np] = w } }
+}
+END { for (i = 1; i <= np; i++) if (pp[i] in isfn) print pf[i] ":" pp[i] }'
+pj_collide() { printf '%s\n' "$1" | LC_ALL=C awk "$PJ_COLLIDE_AWK"; }
 PJ_FAIL=0
 # pj_judge <pairs>: the table's rows on stdin, one per line. Prints one FAIL line per way the rows disagree with the derived pairs (unlisted
 # pair, stale row, duplicate, reason outside the vocabulary, unknown kind). It touches no stub file, so the probe can drive it with fixtures.
@@ -1799,6 +1812,14 @@ pj_jc 'stale join row' '' 'ghost.test.sh | v | exempt | variable-named-verb x'
 pj_empty_n=$(pj_judge "$pj_pairs" </dev/null | grep -c 'unlisted pair' || true)
 [[ -z "$pj_jfail" && "$pj_empty_n" == "$pj_n" ]] \
   || sweep_probe_fail+=("producer-join-judge: the table verdicts misread their fixtures ${pj_jfail:-none}; with an empty table ${pj_empty_n:-<err>} of $pj_n derived pairs read as unlisted (want all)")
+# The collision lint (P1-1: the local `base` of anybar shadowed `function base`, which gawk takes and mawk rejects): the real programs must be clean, a known collision
+# must be found (positive control), a program with distinct names must pass (must-pass control).
+pj_col_real="$(pj_collide "$PJ_AWK")$(pj_collide "$PJ_DEFS_AWK")"
+pj_col_pos="$(pj_collide $'function base(p) { return p }\nfunction anybar(l,   rest, base, p) { return l }')"
+pj_col_neg="$(pj_collide $'function base(p) { return p }\nfunction anybar(l,   rest, bs0, p) { return l }')"
+pj_col_two="$(pj_collide $'function a(x) { return x }\nfunction b(y,   a) { return y }\nfunction c(a) { return a }' | tr '\n' ' ')"
+[[ -z "$pj_col_real" && "$pj_col_pos" == "anybar:base" && -z "$pj_col_neg" && "$pj_col_two" == "b:a c:a " ]] \
+  || sweep_probe_fail+=("awk-param-collision: a function parameter that is also a function name in the derivation or the finder program [${pj_col_real:-none}] (want none: mawk stops on it); the known collision read as [${pj_col_pos:-NOTHING}] (want anybar:base), the distinct-name program as [${pj_col_neg:-none}] (want none), two collisions as [${pj_col_two:-none}] (want b:a c:a)")
 mkdir -p "$probe/pj"
 # GUARD 1, the derivation fixture suite. One case table and one loop, run through pj_derive (the call the real run makes) and the shared extension list.
 # A case is `name @@ expectations @@ file=text @@ file=text`: each expectation is `y:VERB` (the pair fxa.test.sh|VERB must derive) or `n:VERB` (it must
@@ -2091,7 +2112,7 @@ wire_exit1=$(grep -A2 -E '[e]cho "FAIL: the derived sweep.s own probe is broken'
 # of checks (the pin's own line included); comment lines are excluded, so rewording a comment can neither hide a deletion nor trip the pin,
 # and the append is counted only where an `||` or `&&` operator immediately precedes it, so a bare tail with no operator cannot stand in for
 # a deleted check (a decoy that fabricates a whole `|| sweep_probe_fail+=(` line is an edit of the probe itself, which review reads).
-SWEEP_PROBE_CHECKS=50
+SWEEP_PROBE_CHECKS=51
 probe_checks=$(grep -cE '(\|\||&&)[[:space:]]+sweep_probe_fail\+=\(' <<<"$_code" || true)
 [[ "$probe_checks" == "$SWEEP_PROBE_CHECKS" ]] \
   || sweep_probe_fail+=("probe-count: this probe carries ${probe_checks:-<err>} checks, pinned at $SWEEP_PROBE_CHECKS — a deleted check cannot fail, so restore it or, if you ADDED one, raise SWEEP_PROBE_CHECKS")
