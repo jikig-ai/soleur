@@ -581,7 +581,7 @@ export function buildAgentSandboxConfig(
     // docker's default masked /proc, so enableWeakerNestedSandbox makes the vendored
     // builder emit a tail `--bind /proc /proc` instead of `--proc /proc` (#1557). The
     // bwrap shim then DROPS that tail bind (#10039), so the vendored `--tmpfs /proc`
-    // is the realized mask: no procfs at all inside the sandbox. `denyRead` alone is
+    // is the realized mask: an empty /proc tmpfs with no /proc/<pid> entries inside the sandbox (the container procfs sits beneath it). `denyRead` alone is
     // not what protects the CLI parent's environment;
     // the outcome (no readable environ carries the key) is measured in ADR-272
     // and pinned by sandbox-credential-deny-runtime.test.ts, the mechanism is not.

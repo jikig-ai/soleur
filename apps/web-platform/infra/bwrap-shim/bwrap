@@ -59,7 +59,8 @@
 #     drop and a cover differ only for a process holding CAP_SYS_ADMIN over the
 #     mount namespace; the barrier against that is INFERRED to be the vendor's
 #     --cap-drop ALL on an unelevated bwrap (every umount2 is EPERM in every
-#     arm; the attribution is not measured, ADR-075 addendum 2026-10-12). When the merged stream
+#     arm; the attribution is not measured; the docker run tuples must also keep
+#     their posture, see ADR-075 addendum 2026-10-12). When the merged stream
 #     carries no `--tmpfs /proc` of its own, the shim appends one at the
 #     last setup position so the dropped exposure is never replaced by the
 #     root bind's procfs.

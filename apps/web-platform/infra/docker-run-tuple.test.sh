@@ -394,6 +394,14 @@ kill_row K21p-wide-scope-symlink 'm_write apps/web-platform/infra/other.sh "echo
 kill_row K21q-setsid-wrapped-docker 'm_append "$CI_DEPLOY_REL" "setsid docker run -d --privileged img"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh'
 kill_row K21r-case-paren-label 'm_append "$CI_DEPLOY_REL" "case \"\$X\" in (start) docker run -d --cap-add ALL img ;; esac"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh'
 kill_row K21s-eval-lower-docker-var 'm_append "$CI_DEPLOY_REL" "eval \"\$docker run -d img\""' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh'
+kill_row K22a-heredoc-in-multiline-quote 'm_append_lines "$CI_DEPLOY_REL" ": '"'"'" "x <""<ZZ" "'"'"'" "docker run -d --privileged evil/img" ": '"'"'" "ZZ" "'"'"'"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh'
+kill_row K22b-heredoc-in-nested-quote 'm_append_lines "$CI_DEPLOY_REL" ": \"\$(echo \"<""<ZZ\")\"" "docker run -d --privileged evil/img" "ZZ"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh'
+kill_row K22c-wrapper-with-user-arg 'm_append "$CI_DEPLOY_REL" "sudo -u root docker run -d --privileged evil/img"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh'
+kill_row K22d-wrapper-flock 'm_append "$CI_DEPLOY_REL" "flock -n /tmp/l docker run -d --privileged evil/img"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh'
+kill_row K22e-wrapper-runuser 'm_append "$CI_DEPLOY_REL" "runuser -u root -- docker run -d --privileged evil/img"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh'
+kill_row K22f-create-other-image 'm_append "$CI_DEPLOY_REL" "docker create --name soleur-plugin-seed evil/img"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'carries words beyond'
+kill_row K22g-create-unlisted-variable-image 'm_append "$CI_DEPLOY_REL" "docker create --name soleur-plugin-seed \$EXTRA"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'carries words beyond'
+kill_row K22h-create-subst-image 'm_append "$CI_DEPLOY_REL" "docker create --name soleur-plugin-seed \"\$(printf x)\""' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'carries words beyond'
 kill_row K20i-memory-zero-unlimited 'm_repl prod "--memory \"\$PROD_MEMORY_CAP\"" "--memory 0"' 'POSTURE_VALUE: --memory 0 in ci-deploy.sh prod'
 kill_row K20h-main-file-symlink   'm_symlink "$CI_DEPLOY_REL" /dev/zero'                 'TUPLE_COUNT: cannot read ci-deploy.sh' 'not a regular file'
 
@@ -596,7 +604,9 @@ h1_stub unclassified check_census_extra '[]' \
   K20e-case-label-position K20f-eval-upper-docker-var K20g-exempt-name-privileged \
   K21a-chained-bare-after-create K21b-chained-bare-after-cosign K21c-create-with-volume K21d-create-with-user \
   K21e-create-with-pid K21f-cosign-cap-add K21g-cosign-host-mount K21h-cosign-root-user K21i-cosign-other-network \
-  K21j-cosign-image-swapped K21k-heredoc-single-quoted-opener K21l-heredoc-backslash-opener K21q-setsid-wrapped-docker K21r-case-paren-label K21s-eval-lower-docker-var
+  K21j-cosign-image-swapped K21k-heredoc-single-quoted-opener K21l-heredoc-backslash-opener K21q-setsid-wrapped-docker \
+  K22a-heredoc-in-multiline-quote K22b-heredoc-in-nested-quote K22c-wrapper-with-user-arg K22d-wrapper-flock \
+  K22e-wrapper-runuser K22f-create-other-image K22g-create-unlisted-variable-image K22h-create-subst-image K21r-case-paren-label K21s-eval-lower-docker-var
 
 # ---------------------------------------------------------------------------------------
 # H2: the ledger. passes + fails must equal the rows executed (a verdict silently discarded would break it),
@@ -607,7 +617,7 @@ if [ "$((PASS + FAIL))" -ne "$ROWS" ]; then
   printf '[FATAL] accounting identity: passes(%s) + fails(%s) != rows(%s) - a verdict was discarded\n' "$PASS" "$FAIL" "$ROWS" >&2
   exit 1
 fi
-MIN_ROWS=176
+MIN_ROWS=192
 if [ "$ROWS" -lt "$MIN_ROWS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s rows ran, floor is %s\n' "$ROWS" "$MIN_ROWS" >&2
   exit 1

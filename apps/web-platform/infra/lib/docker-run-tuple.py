@@ -169,14 +169,16 @@ class Logical:
         self.start, self.end, self.text, self.oversize, self.heredoc = start, end, text, oversize, heredoc
 
 
-def heredoc_tags(text):
-    """-> (tags, ambiguous). Heredoc tags the line really opens: a `<<` inside quotes or inside `$(( ))` / `(( ))`
+def heredoc_tags(text, state=(False, False, ())):
+    """-> (tags, ambiguous, state). The quote state (sq, dq, stack of enclosing `$(` contexts) is CARRIED in and out so a multi-line quoted string keeps hiding a
+    `<<` on its middle lines, and a `$( ... )` substitution has its own quote state. Heredoc tags the line really opens: a `<<` inside quotes or inside `$(( ))` / `(( ))`
     arithmetic is a shift or a string, and treating it as an opener would hide every following line from the census.
     A `<<` met inside a construct this small lexer does not model (`${ }`, `$[ ]`, `$'...'`, `[[ ]]`) cannot be
     decided either way, so it is reported as AMBIGUOUS (a violation) instead of being guessed."""
     tags = []
     ambiguous = False
-    sq = dq = False
+    sq, dq, stack0 = state
+    stack = list(stack0)    # (sq, dq) of the enclosing context for each open `$( ... )`
     arith = 0
     brace = 0       # ${ ... } nesting
     bracket = 0     # $[ ... ] nesting
@@ -198,6 +200,15 @@ def heredoc_tags(text):
             continue
         if c == "\\" and not sq:
             i += 2
+            continue
+        if not sq and text.startswith("$(", i) and not text.startswith("$((", i):
+            stack.append((sq, dq))
+            sq = dq = False
+            i += 2
+            continue
+        if c == ")" and stack and not sq and not dq:
+            sq, dq = stack.pop()
+            i += 1
             continue
         if c == "'" and not dq:
             if not sq and i > 0 and text[i - 1] == "$":
@@ -245,7 +256,7 @@ def heredoc_tags(text):
                         i = m.end()
                         continue
         i += 1
-    return tags, ambiguous
+    return tags, ambiguous, (sq, dq, tuple(stack))
 
 
 def ends_with_continuation(raw):
@@ -261,6 +272,7 @@ def logical_lines(text):
     out = []
     unterminated = []
     ambiguous = []        # line numbers whose `<<` sits in a construct the lexer does not model
+    qstate = (False, False, ())     # quote state carried across logical lines (a multi-line quoted string, an open `$(`)
     pending = []          # heredoc tags opened by the current logical line, in order
     active = None         # (tag, opened_at_line)
     i = 0
@@ -291,7 +303,7 @@ def logical_lines(text):
                 parts.append((nstrip[:-1] if cont else nstrip).strip())
         joined = " ".join(parts)
         out.append(Logical(start + 1, i + 1, joined[:MAX_LINE], size > MAX_LINE, False))
-        tags, ambiguous_here = heredoc_tags(joined[:MAX_LINE])
+        tags, ambiguous_here, qstate = heredoc_tags(joined[:MAX_LINE], qstate)
         if ambiguous_here:
             ambiguous.append(start + 1)
         if tags:
@@ -306,6 +318,18 @@ def logical_lines(text):
 
 
 # --- census -------------------------------------------------------------------------------------------------
+# Words whose arguments are DATA, never a command: a `docker run` after one of these is text (a message, a pattern, a path).
+# Every other statement-leading word is treated as a possible wrapper (`flock -n /l docker run`, `sudo -u root docker run`,
+# `runuser -u root -- docker run`...), because a wrapper allowlist is open-ended and a miss is a hidden start site.
+NON_EXEC_LEADERS = {
+    "echo", "printf", "grep", "egrep", "fgrep", "sed", "awk", "cat", "test", "[", "[[", "read", "log", "warn", "die", "info",
+    "error", "fail", "pass", "return", "local", "export", "declare", "readonly", "set", "unset", "source", ".", "cd", "jq",
+    "curl", "tee", "head", "tail", "wc", "sort", "cut", "tr", "ls", "rm", "mkdir", "mv", "cp", "chmod", "chown", "ln", "touch",
+    "sleep", "kill", "logger", "emit", "case", "for", "select", "wait", "trap", "type", "which", "command -v", "diff", "cmp",
+    "stat", "find", "xargs", "true", "false", ":", "shift", "getopts", "mapfile", "readarray", "tar", "gzip", "zcat", "sha256sum",
+}
+
+
 def cmd_position(prefix):
     toks = prefix.split()
     i = len(toks)
@@ -318,8 +342,26 @@ def cmd_position(prefix):
         if t in WRAPPERS or ASSIGN_RE.match(t) or t.startswith(("$", '"$', "${", '"${')) or TIMEOUT_ARG_RE.match(t):
             i -= 1
             continue
-        return False
+        return wrapped_command_position(toks)
     return True
+
+
+def wrapped_command_position(toks):
+    """A docker word reached through a wrapper this table does not list: walk back to the statement start and treat the
+    word as a command unless the statement leads with a data-taking word or the docker word sits inside an open quote."""
+    prefix = " ".join(toks)
+    if prefix.count("'") % 2 or prefix.count('"') % 2:
+        return False                                  # inside a quoted string
+    i = len(toks)
+    while i > 0:
+        t = toks[i - 1]
+        if t in BOUNDARY_WORDS or t.endswith((";", "(", "{", "|", "&", "`")) or CASE_LABEL_RE.match(t) or (t == "-" and i == 1):
+            break
+        i -= 1
+    stmt = [t for t in toks[i:] if not ASSIGN_RE.match(t)]
+    if not stmt:
+        return True
+    return stmt[0].strip("\"'") not in NON_EXEC_LEADERS and not stmt[0].startswith("#")
 
 
 def tokenize(text):
@@ -791,12 +833,21 @@ def _statement(toks):
     return toks
 
 
+# The image words the real exempt creates use (shlex has already removed the quotes). Closed list: a variable that is not
+# named here could carry a word-split `--privileged IMG`.
+EXEMPT_IMAGES = {"$IMAGE_REF", "$VERIFIED_REF", "$IREF", "$IMAGE:$TAG", "$(cat /run/soleur-image-ref)"}
+
+
+def exempt_image_ok(word):
+    return word in EXEMPT_IMAGES
+
+
 def exempt_create_violation(s):
     words = _statement(s.toks)
     # docker create --name NAME IMAGE   (nothing between, nothing after the image before the statement ends)
-    if len(words) == 5 and words[2] == "--name" and not words[4].startswith("-"):
+    if len(words) == 5 and words[2] == "--name" and exempt_image_ok(words[4]):
         return None
-    if len(words) == 4 and words[2].startswith("--name=") and not words[3].startswith("-"):
+    if len(words) == 4 and words[2].startswith("--name=") and exempt_image_ok(words[3]):
         return None
     return "carries words beyond `--name NAME IMAGE`: %s" % " ".join(words[2:8])
 

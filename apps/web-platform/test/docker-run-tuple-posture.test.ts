@@ -163,6 +163,8 @@ describe("masked-/proc docker suite: static arms (no docker daemon needed)", () 
     ["bwrap made setuid", "ELEVATION", (c) => edit(path.join(c, "Dockerfile"), (t) => `${t}\nRUN chmod u+s /usr/bin/bwrap\n`)],
     ["bwrap made setuid by octal mode", "ELEVATION", (c) => edit(path.join(c, "Dockerfile"), (t) => `${t}\nRUN chmod 4755 /usr/bin/bwrap\n`)],
     ["bwrap made setuid by a symbolic mode with s", "ELEVATION", (c) => edit(path.join(c, "Dockerfile"), (t) => `${t}\nRUN chmod u=rwxs,go=rx /usr/bin/bwrap\n`)],
+    ["bwrap made setuid with a quoted mode", "ELEVATION", (c) => edit(path.join(c, "Dockerfile"), (t) => `${t}\nRUN chmod "u+s" /usr/bin/bwrap\n`)],
+    ["bwrap installed with a glued setuid mode", "ELEVATION", (c) => edit(path.join(c, "Dockerfile"), (t) => `${t}\nRUN install -m4755 /x /usr/bin/bwrap\n`)],
     ["bwrap copied with a setuid --chmod", "ELEVATION", (c) => edit(path.join(c, "Dockerfile"), (t) => `${t}\nCOPY --chmod=4755 /x /usr/bin/bwrap\n`)],
     ["last USER is root", "USER_DRIFT", (c) => edit(path.join(c, "Dockerfile"), (t) => `${t}\nUSER root\n`)],
     ["canary fixture loses the vendor tail bind", "FIXTURE_TAIL", (c) => edit(path.join(c, "infra", "sandbox-canary-argv.json"), (t) => {

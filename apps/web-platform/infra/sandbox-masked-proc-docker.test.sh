@@ -35,7 +35,7 @@
 # attribution to the vendor's `--cap-drop ALL` is INFERRED, not measured, and holds only for an unelevated bwrap, and no
 # positive control exists). The recorder arm is the only discriminator, and it measures the shim's contract, "no
 # argv-requested procfs mount", not a kernel-level absence. The vendor's `--cap-drop ALL` is pinned by
-# test/sandbox-vendored-argv-tail.test.ts.
+# test/sandbox-vendored-argv-tail.test.ts, and the app container tuples keep their posture (infra/lib/docker-run-tuple.py).
 #
 # NOT COVERED HERE. The outer-wrap spawn (agent-outer-wrap.ts, /usr/bin/bwrap): its table carries the outer-wrap
 # elevation expectation, which the suite image's plain Debian bubblewrap does not meet, so `sandbox-canary.mjs --replay-outer` here
@@ -254,11 +254,12 @@ pass "static: no ENV PATH in the runner lineage puts /usr/bin before /usr/local/
 #     path; it cannot see an elevation done through a variable or a script. The live arm below stats the suite
 #     container's /usr/bin/bwrap, which checks the binary itself rather than the spelling.
 ELEV_TARGET_RE='bwrap|/usr/(local/)?s?bin'
-ELEV_ACTION_RE='setcap|dpkg-statoverride|--chmod=(0*[2-7][0-7]{3}|[ugoa]*[+=][rwxXt,ugoa+=]*s)([[:space:]]|$)|(chmod|install)[^#;&|]*([ =,][ugoa]*[+=][rwxXt]*s|[ =]0*[2-7][0-7]{3}([[:space:]]|$))'
+ELEV_ACTION_RE='setcap|setfattr|dpkg-statoverride|--chmod=(0*[2-7][0-7]{3}|[ugoa,]*[+=][rwxXtugo,+=-]*s[rwxXtugo,+=-]*)([[:space:]]|$)|chmod([[:space:]]+-[A-Za-z-]+)*[[:space:]]+(0*[2-7][0-7]{3}|[ugoa,]*[+=][rwxXtugo,+=-]*s[rwxXtugo,+=-]*)([[:space:]]|$)|install[^#;&|]*(-m|--mode=?)[[:space:]=]*(0*[2-7][0-7]{3}|[ugoa,]*[+=][rwxXtugo,+=-]*s[rwxXtugo,+=-]*)([[:space:]]|$)'
 ELEV_HIT=""
 while IFS= read -r dline; do
   dline="${dline#"${dline%%[![:space:]]*}"}"
   [[ "$dline" == \#* ]] && continue
+  dline="${dline//[\"\']/}"                       # a quoted mode (chmod "u+s" ...) is the same mode
   if [[ "$dline" =~ $ELEV_TARGET_RE && "$dline" =~ $ELEV_ACTION_RE ]]; then
     ELEV_HIT="$dline"
     break
@@ -329,6 +330,7 @@ norm_path() { # collapse //, /./, .. and a trailing /; a relative or empty path 
   local IFS=/
   printf '/%s' "${out[*]}"
 }
+under_proc() { [[ "$1" == /proc || "$1" == /proc/* ]]; }   # at or beneath /proc, after normalization
 rootish() { # <normalized destination> — "/" or anything that is not an absolute path (bwrap rejects those, so a pass here would be a guess)
   [[ -z "$1" || "$1" != /* || "$1" == / ]]
 }
@@ -349,6 +351,9 @@ drop_check() { # <argv token>... — 0 when no procfs mount is requested at /pro
       --bind|--ro-bind|--bind-try|--ro-bind-try|--dev-bind|--dev-bind-try)
         src="$(norm_path "${a[i + 1]:-}")"; dst="$(norm_path "${a[i + 2]:-}")"
         if [[ "$src" == /proc || "$dst" == /proc ]]; then DROP_WHY="$tok ${a[i + 1]:-} ${a[i + 2]:-} mounts procfs at /proc"; return 1; fi
+        if under_proc "$src" || { under_proc "$dst" && [[ ! "$dst" =~ ^/proc/self/fd/[0-9]+$ ]]; }; then
+          DROP_WHY="$tok ${a[i + 1]:-} ${a[i + 2]:-} mounts something at or from under /proc (only the /proc/self/fd/N re-home destination is allowed)"; return 1
+        fi
         rootish "$dst" && root_bind_at=$i
         i=$((i + 3)) ;;
       --bind-fd|--ro-bind-fd)
@@ -359,6 +364,9 @@ drop_check() { # <argv token>... — 0 when no procfs mount is requested at /pro
       --symlink|--file|--bind-data|--ro-bind-data)
         dst="$(norm_path "${a[i + 2]:-}")"
         if [[ "$dst" == /proc ]]; then DROP_WHY="$tok ${a[i + 1]:-} ${a[i + 2]:-} creates an entry at /proc"; return 1; fi
+        if [[ "$tok" == --symlink ]] && { under_proc "$(norm_path "${a[i + 1]:-}")" || [[ "$(norm_path "${a[i + 1]:-}")" == / ]]; }; then
+          DROP_WHY="--symlink ${a[i + 1]:-} ${a[i + 2]:-} aliases /proc or the root (a later bind through the alias would re-expose procfs)"; return 1
+        fi
         i=$((i + 3)) ;;
       --setenv) i=$((i + 3)) ;;
       --dev|--dir|--remount-ro|--chdir|--uid|--gid|--hostname|--unsetenv|--mqueue|--add-seccomp-fd|--seccomp|--json-status-fd|--userns-block-fd|--info-fd|--sync-fd|--block-fd|--cap-add|--cap-drop|--size|--perms|--exec-label|--file-label|--lock-file|--userns|--userns2|--pidns)
@@ -397,6 +405,10 @@ drop_expect bad "a bind destination spelled through .."                        "
 drop_expect bad "a symlink created at /proc"                                  "${DROP_BASE[@]}" --symlink x /proc -- true
 drop_expect bad "an --args payload the analyzer cannot read"                  --args 4 "${DROP_BASE[@]}" -- true
 drop_expect bad "the --tmpfs /proc placed before the recursive root bind"     --unshare-user --tmpfs /proc --ro-bind / / --dev /dev -- true
+drop_expect ok  "the /proc/self/fd/N re-home destination is allowed"            "${DROP_BASE[@]}" --ro-bind /usr/bin/node /proc/self/fd/5 -- true
+drop_expect bad "a bind of a path under /proc after the mask"                  "${DROP_BASE[@]}" --ro-bind /tmp/orig/x /proc/sys -- true
+drop_expect bad "a bind whose source is under /proc"                           "${DROP_BASE[@]}" --ro-bind /proc/sys /tmp/x -- true
+drop_expect bad "a symlink aliasing /proc"                                     "${DROP_BASE[@]}" --symlink /proc /tmp/b -- true
 drop_expect bad "a root bind spelled // after the --tmpfs /proc"              --unshare-user --tmpfs /proc --ro-bind / // --dev /dev -- true
 drop_expect bad "a root --ro-bind-fd after the --tmpfs /proc"                 --unshare-user --tmpfs /proc --ro-bind-fd 5 / --dev /dev -- true
 drop_expect bad "a relative bind destination after the --tmpfs /proc"         --unshare-user --tmpfs /proc --ro-bind / . --dev /dev -- true
@@ -589,8 +601,8 @@ else
 fi
 
 # Live elevation arm: the container's real bwrap carries no setuid or setgid bit. (The static arm scans the Dockerfile's
-# spellings; this checks the binary the suite runs. File capabilities need getcap, which the image does not carry.)
-LIVE_MODE="$(docker exec "$CTR" stat -c %a /usr/bin/bwrap 2>&1 | tail -1)"
+# spellings; this checks the binary the suite runs, through a symlink. File capabilities need getcap, which the image does not carry.)
+LIVE_MODE="$(docker exec "$CTR" stat -L -c %a /usr/bin/bwrap 2>&1 | tail -1)"
 if [[ "$LIVE_MODE" =~ ^[0-7]{3,4}$ && ! "$LIVE_MODE" =~ ^[2-7][0-7]{3}$ ]]; then
   pass "live elevation: /usr/bin/bwrap has mode $LIVE_MODE (no setuid or setgid bit)"
 else
@@ -720,7 +732,7 @@ fi
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 # Anti-vacuity floor: a literal adjacent to its use (guard-vacuity-floor shape).
-MIN_ASSERTIONS=44
+MIN_ASSERTIONS=48
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
   echo "FAIL: only $((PASS + FAIL)) assertions ran (floor $MIN_ASSERTIONS) — the suite did not exercise its arms"
   exit 1

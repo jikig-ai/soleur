@@ -435,7 +435,7 @@ export function assertLiteralCensus(
   check("NS_SITE_COUNT", "unsharePid", '"--unshare-pid" literals');
   check("ROOT_SITE_COUNT", "rootBind", '"--ro-bind","/","/" literals');
   check("HOOK_SITE_COUNT", "hookAnchors", "/run/claude-hook literals");
-  check("CAP_BARRIER", "capDropAll", '"--cap-drop","ALL" literals (the operative barrier to the container procfs)');
+  check("CAP_BARRIER", "capDropAll", '"--cap-drop","ALL" literals (inferred to be the barrier to the container procfs on an unelevated bwrap; ADR-075 addendum 2026-10-12)');
   check("CAP_BARRIER", "capDropTotal", 'every "--cap-drop" literal (a different drop value is a different barrier)');
   check("CAP_BARRIER", "capAddSetfcap", '"--cap-add","CAP_SETFCAP" literals (the only permitted --cap-add)');
   check("CAP_BARRIER", "capAddTotal", 'every "--cap-add" literal (any other capability is CAP_BARRIER)');

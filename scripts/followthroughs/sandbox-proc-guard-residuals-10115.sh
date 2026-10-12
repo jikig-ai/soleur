@@ -16,6 +16,7 @@
 # Exit semantics (enforced by scripts/sweep-followthroughs.sh):
 #   0 = PASS (the hijack-class line on main names SOLEUR_)
 #   2 = TRANSIENT (still not there, or gh/the API could not answer, or the anchor line moved: update this probe)
+#   78 = refused to run under xtrace (lands in the TRANSIENT bucket, #7797)
 # Never exits 1 (no FAIL verdict exists for "not yet").
 #
 # RETIREMENT: when #10115 closes, delete this file. Live references to it: the directive in #10115's body only
@@ -42,7 +43,7 @@ fi
 
 # The hijack-class line. A moved anchor is a probe fault, not a verdict about the residual: report it as TRANSIENT.
 # shellcheck disable=SC2016  # the anchor is a literal source fragment, not an expansion
-anchor="$(grep -F '_gak_hij=$(grep -E' <<<"$body" | head -1)"
+anchor="$(grep -E '^[[:space:]]*_gak_hij=\$\(grep -E' <<<"$body" | head -1)"
 if [[ -z "$anchor" ]]; then
   echo "TRANSIENT: the '_gak_hij=\$(grep -E' hijack-class line was not found in ci-deploy.sh on main; the function moved, update this probe" >&2
   exit 2
