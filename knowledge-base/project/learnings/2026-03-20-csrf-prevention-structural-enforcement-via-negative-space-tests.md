@@ -273,7 +273,7 @@ A developer upgrades `@supabase/ssr`. The new version introduces a different def
 
 ## See Also
 
-- **Plan:** `/knowledge-base/project/plans/2026-03-20-fix-csrf-protection-state-mutating-api-routes-plan.md` — Full implementation details
+- **Plan:** `/knowledge-base/project/plans/archive/20261012-213508-2026-03-20-fix-csrf-protection-state-mutating-api-routes-plan.md` — Full implementation details
 - **Implementation:** `apps/web-platform/lib/auth/csrf-coverage.test.ts` — Actual test code
 - **Learning:** `2026-03-20-security-fix-attack-surface-enumeration.md` — How to enumerate the full attack surface
 - **Learning:** `2026-03-20-security-refactor-adjacent-config-audit.md` — How to prevent config drift via inline comments

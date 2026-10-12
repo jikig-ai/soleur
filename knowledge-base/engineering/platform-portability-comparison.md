@@ -138,7 +138,7 @@ Unified comparison of Soleur portability across all analyzed agent platforms. Up
 
 ## Source Inventories
 
-- Codex: `knowledge-base/project/specs/feat-codex-portability-inventory/inventory.md`
+- Codex: `knowledge-base/project/specs/archive/20261012-213508-feat-codex-portability-inventory/inventory.md`
 - Gemini CLI: `knowledge-base/project/specs/gemini-cli-portability/inventory.md`
 - OpenHands: `knowledge-base/project/specs/openhands-portability/inventory.md`
 - OpenHands PoC: `knowledge-base/project/specs/openhands-portability/poc-results.md`

@@ -46,7 +46,7 @@ MCP is a first-class integration tier alongside REST APIs. Services that publish
 
 The desktop native app earns its existence specifically because browser automation is impossible on PWA, iOS, or Android. This is not "wrapping the web app" — it provides a capability no other surface can.
 
-Full brainstorm: `knowledge-base/project/brainstorms/2026-03-23-browser-automation-cloud-platform-brainstorm.md`
+Full brainstorm: `knowledge-base/project/brainstorms/archive/20261012-213508-2026-03-23-browser-automation-cloud-platform-brainstorm.md`
 
 ---
 
