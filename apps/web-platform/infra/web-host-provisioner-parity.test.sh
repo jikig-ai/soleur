@@ -1166,16 +1166,23 @@ for f in files:
         continue
     src = strip_hcl(raw)
     # Enclosing-resource attribution for the residence arm: HCL resources do not
-    # nest, so the last `resource "<type>" "<name>"` header before a block's offset
-    # is its container (ANY type -- a connection {} inside a null_resource or
+    # nest, so a block is inside the resource whose header's brace SPAN contains
+    # its offset (ANY type -- a connection {} inside a null_resource or
     # hcloud_server attributes the same way; residence is a property of the
-    # connection block, not the resource type). A block with no preceding header is
-    # unattributable -> None, which matches no EXT_RESIDENCE entry (fail-closed).
-    res_hdrs = [(m.start(), f"{m.group(1)}.{m.group(2)}")
-                for m in re.finditer(r'resource\s+"([^"\s]+)"\s+"([^"\s]+)"', src)]
+    # connection block, not the resource type). Span-containment, not
+    # nearest-header: a connection {} inside a `data`/`output`/`locals`/top-level
+    # construct following a resource must NOT attribute to that resource, so the
+    # span is computed via the same block_body() the walker uses. A block in no
+    # resource span is unattributable -> None, which matches no EXT_RESIDENCE
+    # entry (fail-closed).
+    res_spans = []
+    for m in re.finditer(r'resource\s+"([^"\s]+)"\s+"([^"\s]+)"\s*\{', src):
+        res_spans.append((m.start(), m.end() + len(block_body(src, m.end())) + 1,
+                          f"{m.group(1)}.{m.group(2)}"))
     for m in re.finditer(r'(?<![\w.])connection\s*\{', src):
         line = src.count('\n', 0, m.start()) + 1
-        addr = next((a for pos, a in reversed(res_hdrs) if pos < m.start()), None)
+        addr = next((a for s_, e_, a in reversed(res_spans)
+                     if s_ < m.start() < e_), None)
         blocks.append((f"{rel}:{line}", block_body(src, m.end()), addr))
     for m in re.finditer(r'(?m)^\s*web_1_ssh_host_key\s*=', src):
         line = src.count('\n', 0, m.start()) + 1
@@ -1270,15 +1277,16 @@ else:
        "local.web_2_ssh_host_key: " + ", ".join(bad_web2))
 
 # Connection blocks that legitimately dial a fleet host from OUTSIDE server.tf:
-# the residence allowance is (file, resource)-scoped AND host-scoped, so a second
-# phantom block inside an allowlisted file, or a dial to a host the entry does not
-# name, is still a finding. `reason` is mandatory -- an empty one fails the stale
-# arm below, exactly as §5's check_allowlist enforces reason.strip() non-empty.
+# the residence allowance is (file, type.name)-scoped AND host-scoped, so a second
+# phantom block inside an allowlisted file, a same-name/different-type resource,
+# or a dial to a host the entry does not name, is still a finding. `reason` is
+# mandatory -- an empty one fails the stale arm below, exactly as §5's
+# check_allowlist enforces reason.strip() non-empty.
 # (#9998 -- the w2_elsewhere arm was web-2-only and left web-1 and future web-N
 # dialers outside server.tf unclassified.)
 EXT_RESIDENCE = {
     "apps/web-platform/infra/ci-ssh-key.tf": {
-        "root_authorized_keys": {
+        "terraform_data.root_authorized_keys": {
             "hosts": frozenset({"web-1"}),
             "reason": "operator-local one-off authorized_keys install on web-1 "
                       "(the file's own header scopes it to operator-local apply), "
@@ -1286,17 +1294,17 @@ EXT_RESIDENCE = {
         },
     },
     "apps/web-platform/infra/workspaces-luks.tf": {
-        "luks_monitor_token_install": {
+        "terraform_data.luks_monitor_token_install": {
             "hosts": frozenset({"web-1"}),
             "reason": "web-1 LUKS boot-unlock chain member -- installs the monitor "
                       "token on web-1 only, not fleet provisioning",
         },
-        "luks_monitor_install": {
+        "terraform_data.luks_monitor_install": {
             "hosts": frozenset({"web-1"}),
             "reason": "web-1 LUKS boot-unlock chain member -- installs the monitor "
                       "helper + units on web-1 only, not fleet provisioning",
         },
-        "workspaces_boot_unlock_install": {
+        "terraform_data.workspaces_boot_unlock_install": {
             "hosts": frozenset({"web-1"}),
             "reason": "web-1 LUKS boot-unlock chain member -- installs the reopen "
                       "units on web-1 only, not fleet provisioning",
@@ -1316,8 +1324,8 @@ for loc, b, addr in ssh_blocks:
     dialed = dials_fleet(b)
     if not dialed or fpath == "apps/web-platform/infra/server.tf":
         continue
-    entry = EXT_RESIDENCE.get(fpath, {}).get(addr.split('.', 1)[-1] if addr else None)
-    if entry and dialed <= entry["hosts"]:
+    entry = EXT_RESIDENCE.get(fpath, {}).get(addr)
+    if isinstance(entry, dict) and dialed <= entry.get("hosts", frozenset()):
         continue
     fleet_elsewhere.append(f"{loc} ({addr or 'unattributed'} dials {sorted(dialed)})")
 if not fleet_elsewhere:
@@ -1337,13 +1345,20 @@ else:
 stale_ext = []
 for fpath, members in EXT_RESIDENCE.items():
     for rname, entry in members.items():
-        if not entry["reason"].strip():
-            stale_ext.append(f"{fpath}:{rname} (empty reason)")
+        hosts = entry.get("hosts")
+        reason = entry.get("reason", "")
+        if not isinstance(hosts, (set, frozenset)) or not isinstance(reason, str) \
+                or not reason.strip():
+            stale_ext.append(f"{fpath}:{rname} (malformed entry or empty reason)")
             continue
-        if not any(loc.split(':', 1)[0] == fpath and addr is not None
-                   and addr.split('.', 1)[-1] == rname
-                   and dials_fleet(b) & entry["hosts"]
-                   for loc, b, addr in ssh_blocks):
+        # Every DECLARED host must be dialed by a swept block of that exact
+        # resource: an over-declared hosts set would pre-authorize a future dial
+        # with no table diff, and a vanished resource leaves the entry stale.
+        dialed = set()
+        for loc, b, addr in ssh_blocks:
+            if loc.split(':', 1)[0] == fpath and addr == rname:
+                dialed |= dials_fleet(b)
+        if not hosts <= dialed:
             stale_ext.append(f"{fpath}:{rname}")
 if not stale_ext:
     n_ext = sum(len(m) for m in EXT_RESIDENCE.values())
