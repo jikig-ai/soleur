@@ -3004,30 +3004,41 @@ fi
 # rows pin live in scripts/lib/test-affected-paths.sh; the labels sit in the
 # sandbox keep-list, so "absent from RAN" is a real decline, never a trim
 # artifact (th7 pins that binding).
-_TH_TEST_SH_PAIR=(
-  'scripts/guard-vacuity-floor'
-  'scripts/lint-orphan-test-suites'
-)
 _TH_ALL_THREE=(
   'scripts/guard-vacuity-floor'
   'scripts/lint-orphan-test-suites'
   'scripts/lib/repo-write-boundary.test.sh'
 )
 _th_all_three_ran() { local _l; for _l in "${_TH_ALL_THREE[@]}"; do ran_exact "$_l" || return 1; done; }
-_th_test_sh_pair_ran() { local _l; for _l in "${_TH_TEST_SH_PAIR[@]}"; do ran_exact "$_l" || return 1; done; }
 _th_none_ran() { local _l; for _l in "${_TH_ALL_THREE[@]}"; do ran_exact "$_l" && return 1; done; return 0; }
 _th_rwb_only_ran() {
   ran_exact 'scripts/lib/repo-write-boundary.test.sh' || return 1
   ! ran_exact 'scripts/guard-vacuity-floor' && ! ran_exact 'scripts/lint-orphan-test-suites'
 }
-# Source the declarations lib and test one array's coverage of one root: a
-# member matches iff it is the `root/` dir prefix or a `glob:root/<tail>` edge.
-_th6_root_covered() { # <array-name> <root> — no declare -n (macOS bash 3.2)
+# The seven roots the pair covers by legacy dir prefix — a deliberate literal
+# set (same doctrine as EXPECTED_SUITE_ROOTS): a dropped prefix must flip the
+# .sh expectation and RED the probe, which a derived set would mask.
+_TH_PREFIX_ROOTS=(apps .claude .github plugins scripts test tests)
+_th_is_prefix_root() { local _r; for _r in "${_TH_PREFIX_ROOTS[@]}"; do [[ "$_r" == "$1" ]] && return 0; done; return 1; }
+# The live tracked top-level root set — th4/th4b/th4c probes AND th6's census
+# derive from it, so a new root joins every probe automatically. -c
+# core.quotePath=false so C-quoted names (the Cyrillic fixtures) emit their
+# real root; NF>1 drops dir-less paths, which yield no root token (a dir-less
+# corpus file is the documented grammar residual, not a root gap).
+_TH_ROOTS=$(git -C "$REPO_ROOT" -c core.quotePath=false ls-files \
+  | awk -F/ 'NF>1{print $1}' | LC_ALL=C sort -u)
+# Coverage predicate for th6: a member qualifies iff it is the exact `root/`
+# dir prefix or a `glob:root/` edge whose tail can match the corpus extension.
+# A file literal under the root does NOT count — it selects itself and nothing
+# else, and letting it satisfy the check re-opens the #9969 class one layer
+# down (the fix-round's literal-satisfaction hole). `*"$3"` anchors the tail
+# so a wrong-extension glob (glob:docs/**.md) reads uncovered.
+_th6_root_covered() { # <array-name> <root> <corpus-tail> — no declare -n (macOS bash 3.2)
   local _n _i _m
   eval "_n=\${#$1[@]}"
   for ((_i=0; _i<_n; _i++)); do
     eval "_m=\${$1[$_i]}"
-    [[ "$_m" == "$2/"* || "$_m" == "glob:$2/"* ]] && return 0
+    [[ "$_m" == "$2/" || "$_m" == "glob:$2/"*"$3" ]] && return 0
   done
   return 1
 }
@@ -3075,60 +3086,92 @@ else
 fi
 
 # th4 — EVERY extant root's *.test.sh selects all three: the pair via its
-#       **.test.sh tail (or the retained dir prefix at test//tests/), rwb via
-#       **.sh. The thirteen probes over previously-unlisted roots pin the #9969
-#       hole per root — a well-formed-but-wrong tail (glob:.grok/**.tst.sh)
-#       mints cleanly and never fires; test/ and tests/ are prefix-covered
-#       controls, and the nested kb probe exercises depth (`*` crosses `/`).
-for _sandbox_probe in 'knowledge-base/a/b/c.test.sh' \
-  '.agents/x.test.sh' '.claude-plugin/x.test.sh' '.codex/x.test.sh' \
-  '.cursor-plugin/x.test.sh' '.devin/x.test.sh' '.grok/x.test.sh' \
-  'LICENSES/x.test.sh' 'bin/x.test.sh' 'docs/x.test.sh' \
-  'infra/a/b.test.sh' 'spike/x.test.sh' 'todos/x.test.sh' \
-  'test/x.test.sh' 'tests/x.test.sh'; do
+#       **.test.sh tail (or the retained dir prefix at the seven listed
+#       roots), rwb via **.sh. The root list is derived live, so a NEW root
+#       joins the probe automatically; a well-formed-but-wrong tail
+#       (glob:.grok/**.tst.sh) mints cleanly and never fires — only a
+#       per-root behavioral probe catches that class. The nested probes
+#       exercise depth (`*` crosses `/`).
+while IFS= read -r _sandbox_probe; do
+  cases=$((cases + 1))
+  SANDBOX_LIB=with-lib run_arm \
+    "SANDBOX_DIFF_NAMES=${_sandbox_probe}/x.test.sh" \
+    -- --affected
+  _rc=$ARM_RC
+  if [[ "$_rc" == "0" ]] && _th_all_three_ran; then
+    pass "th4: ${_sandbox_probe}/x.test.sh selects all three corpus suites"
+  else
+    fail "th4 (${_sandbox_probe}/x.test.sh): rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
+  fi
+done <<<"$_TH_ROOTS"
+for _sandbox_probe in 'knowledge-base/a/b/c.test.sh' 'infra/a/b.test.sh'; do
   cases=$((cases + 1))
   SANDBOX_LIB=with-lib run_arm \
     "SANDBOX_DIFF_NAMES=${_sandbox_probe}" \
     -- --affected
   _rc=$ARM_RC
   if [[ "$_rc" == "0" ]] && _th_all_three_ran; then
-    pass "th4: ${_sandbox_probe} selects all three corpus suites"
+    pass "th4: ${_sandbox_probe} selects all three (nested)"
   else
     fail "th4 (${_sandbox_probe}): rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
   fi
 done
 
-# th4b — rwb's `**.sh` tail per root: a bare .sh at every previously-unlisted
-#        root selects rwb and declines the pair; at the seven prefix-held
-#        roots it selects all three (the legacy prefixes cover any extension).
-for _sandbox_probe in 'knowledge-base/x.sh' \
-  '.agents/x.sh' '.claude-plugin/x.sh' '.codex/x.sh' '.cursor-plugin/x.sh' \
-  '.devin/x.sh' '.grok/x.sh' 'LICENSES/x.sh' 'bin/x.sh' 'docs/x.sh' \
-  'infra/a/b.sh' 'spike/x.sh' 'todos/x.sh'; do
+# th4b — rwb's `**.sh` tail per root: a bare .sh at every unlisted root
+#        selects rwb and declines the pair; at the seven prefix-held roots it
+#        selects all three (the legacy prefixes cover any extension). Roots
+#        derived live; the listed/unlisted split keys on the literal
+#        _TH_PREFIX_ROOTS set, never on the declared data itself — a dropped
+#        prefix must flip the expectation and RED, not silently re-derive.
+while IFS= read -r _sandbox_probe; do
+  cases=$((cases + 1))
+  SANDBOX_LIB=with-lib run_arm \
+    "SANDBOX_DIFF_NAMES=${_sandbox_probe}/x.sh" \
+    -- --affected
+  _rc=$ARM_RC
+  if _th_is_prefix_root "$_sandbox_probe"; then
+    _th_ok=0; [[ "$_rc" == "0" ]] && _th_all_three_ran && _th_ok=1
+  else
+    _th_ok=0; [[ "$_rc" == "0" ]] && _th_rwb_only_ran && _th_ok=1
+  fi
+  if [[ "$_th_ok" == "1" ]]; then
+    pass "th4b: ${_sandbox_probe}/x.sh selects $( _th_is_prefix_root "$_sandbox_probe" && echo 'all three (dir-prefix root)' || echo 'only repo-write-boundary.test.sh' )"
+  else
+    fail "th4b (${_sandbox_probe}/x.sh): rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
+  fi
+done <<<"$_TH_ROOTS"
+for _sandbox_probe in 'knowledge-base/a/b/c.sh' 'infra/a/b.sh'; do
   cases=$((cases + 1))
   SANDBOX_LIB=with-lib run_arm \
     "SANDBOX_DIFF_NAMES=${_sandbox_probe}" \
     -- --affected
   _rc=$ARM_RC
   if [[ "$_rc" == "0" ]] && _th_rwb_only_ran; then
-    pass "th4b: ${_sandbox_probe} selects only repo-write-boundary.test.sh of the three"
+    pass "th4b: ${_sandbox_probe} selects only repo-write-boundary.test.sh (nested)"
   else
     fail "th4b (${_sandbox_probe}): rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
   fi
 done
-for _sandbox_probe in 'apps/x.sh' '.claude/x.sh' '.github/x.sh' \
-  'plugins/x.sh' 'scripts/x.sh' 'test/x.sh' 'tests/x.sh'; do
+
+# th4c — the NARROW direction per root: a non-corpus extension (.md) at every
+#        unlisted root selects NONE of the three — a malformed extension-less
+#        glob (glob:docs/**) added alongside a good one widens silently and
+#        only a decline probe catches it. The seven prefix roots legitimately
+#        select .md (dir prefixes cover any extension) — excluded by the same
+#        deliberate literal set.
+while IFS= read -r _sandbox_probe; do
+  _th_is_prefix_root "$_sandbox_probe" && continue
   cases=$((cases + 1))
   SANDBOX_LIB=with-lib run_arm \
-    "SANDBOX_DIFF_NAMES=${_sandbox_probe}" \
+    "SANDBOX_DIFF_NAMES=${_sandbox_probe}/x.md" \
     -- --affected
   _rc=$ARM_RC
-  if [[ "$_rc" == "0" ]] && _th_all_three_ran; then
-    pass "th4b: ${_sandbox_probe} selects all three (dir-prefix root)"
+  if [[ "$_rc" == "0" ]] && _th_none_ran; then
+    pass "th4c: ${_sandbox_probe}/x.md selects none of the three"
   else
-    fail "th4b (${_sandbox_probe}): rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
+    fail "th4c (${_sandbox_probe}/x.md): rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
   fi
-done
+done <<<"$_TH_ROOTS"
 
 # th5 — the new declared array moves the suite's receipt from edge:derived to
 #       edge:declared (the class pin; th1/th2/th4b already pin its selection).
@@ -3154,16 +3197,18 @@ fi
 cases=$((cases + 1))
 _th6_missing=$(
   source "$REPO_ROOT/scripts/lib/test-affected-paths.sh"
-  git -C "$REPO_ROOT" -c core.quotePath=false ls-files \
-    | awk -F/ 'NF>1{print $1}' | LC_ALL=C sort -u \
-    | while IFS= read -r _r; do
-        _th6_root_covered AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS "$_r" \
-          || echo "guard-vacuity-floor:$_r"
-        _th6_root_covered AFFECTED_SCRIPTS_LINT_ORPHAN_TEST_SUITES_PATHS "$_r" \
-          || echo "lint-orphan-test-suites:$_r"
-        _th6_root_covered AFFECTED_SCRIPTS_LIB_REPO_WRITE_BOUNDARY_TEST_SH_PATHS "$_r" \
-          || echo "repo-write-boundary.test.sh:$_r"
-      done
+  # Non-vacuity floor: an empty derivation must never read as a clean census
+  # (the lint producer's own arm carries the same guard — a broken ls-files
+  # yields zero roots and an empty miss set otherwise passes).
+  [[ -n "$_TH_ROOTS" ]] || { echo "EMPTY-ROOT-DERIVATION"; exit 0; }
+  while IFS= read -r _r; do
+    _th6_root_covered AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS "$_r" .test.sh \
+      || echo "guard-vacuity-floor:$_r"
+    _th6_root_covered AFFECTED_SCRIPTS_LINT_ORPHAN_TEST_SUITES_PATHS "$_r" .test.sh \
+      || echo "lint-orphan-test-suites:$_r"
+    _th6_root_covered AFFECTED_SCRIPTS_LIB_REPO_WRITE_BOUNDARY_TEST_SH_PATHS "$_r" .sh \
+      || echo "repo-write-boundary.test.sh:$_r"
+  done <<<"$_TH_ROOTS"
 )
 if [[ -z "$_th6_missing" ]]; then
   pass "th6: every tracked top-level root is edge-covered by all three corpus suites"
@@ -3181,7 +3226,11 @@ build_sandbox "$_th7_sb" with-lib > /dev/null
 _th7_block=$(sed -n '/SANDBOX corpus trim/,/^  esac/p' "$_th7_sb")
 _th7_missing=""
 for _l in "${_TH_ALL_THREE[@]}"; do
-  grep -qF "$_l" <<<"$_th7_block" || _th7_missing+=" $_l"
+  # Delimiter-anchored, not substring: a label is a case alternative only when
+  # it ends with `|` (mid-list) or `)` (last). A superstring or comment mention
+  # cannot satisfy the check.
+  grep -qF "${_l}|" <<<"$_th7_block" || grep -qF "${_l})" <<<"$_th7_block" \
+    || _th7_missing+=" $_l"
 done
 if [[ -z "$_th7_missing" ]]; then
   pass "th7: the three asserted labels sit in the sandbox keep-list"
@@ -3195,7 +3244,7 @@ if (( PASS + FAIL != cases )); then
   echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
   exit 2
 fi
-MIN_CASES=156
+MIN_CASES=178
 if (( cases < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran — below the $MIN_CASES floor; a row block went missing" >&2
   exit 2
