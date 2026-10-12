@@ -20,6 +20,7 @@ set -uo pipefail
 . "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/test-incident-sandbox.sh"
 
 HOOK="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/pre-ask-technical-fork-gate.sh"
+LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/technical-fork-cues.sh"
 PASS=0; FAIL=0; TOTAL=0
 [[ -x "$HOOK" ]] || { echo "FATAL: hook not executable at $HOOK" >&2; exit 1; }
 command -v jq >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; exit 3; }
@@ -834,12 +835,85 @@ v7_ctl=$(qobj "Is the evidence enough to start on the rebirth?" | mq_payload | "
 if [[ -z "$v7_bad" && "$v7_ctl" == "deny" ]]; then echo "  PASS: V7 every money-veto member silences the sufficiency cue (control denies)"; PASS=$((PASS+1))
 else printf '  FAIL: V7 money members that did not veto:%s (control decision %s)\n' "$v7_bad" "$v7_ctl" >&2; FAIL=$((FAIL+1)); fi
 
+# V8 — the shared lib's RULING_OPVOCAB_RE (the BUSINESS|ACTION concatenation) is byte-equal to the literal this
+# hook carried before the cues moved. A dropped or added member would change what the weak cues are vetoed by; V6
+# checks each member behaviourally, this pins the whole string, and a BUSINESS word added for a closing-only reason
+# would change it and silence THIS hook too (the lib header names that as never the fix).
+TOTAL=$((TOTAL+1))
+v8_pinned='\b(prices?|pricing|plans?|tiers?|launch(es)?|dates?|deadlines?|licen[sc]es?|vendors?|logos?|copy|landing|budgets?|costs?|spend|revenue|invoices?|refunds?|schedules?|priorit(y|ies)|brand|hero|merge|deploy|ship|releases?|delete|prod|production)\b'
+v8_live="$( ( . "$LIB" 2>/dev/null; printf '%s' "${RULING_OPVOCAB_RE:-}" ) )"
+if [[ -n "$v8_live" && "$v8_live" == "$v8_pinned" ]]; then echo "  PASS: V8 the lib's RULING_OPVOCAB_RE is byte-equal to the pinned pre-move literal"; PASS=$((PASS+1))
+else printf '  FAIL: V8 RULING_OPVOCAB_RE in the lib differs from the pinned literal (live: %s)\n' "$v8_live" >&2; FAIL=$((FAIL+1)); fi
+
+# L2 — one definition site. This hook sources the lib and defines no RULING_*_RE cue itself; the lib defines them.
+TOTAL=$((TOTAL+1))
+if grep -qE '^[[:space:]]*(source|\.)[[:space:]].*TFC_LIB' "$HOOK" && ! grep -qE '^RULING_[A-Z_]*_RE=' "$HOOK" && grep -qE '^RULING_PERM_RE=' "$LIB"; then
+  echo "  PASS: L2 the hook sources the shared lib and carries no RULING_*_RE definition of its own"; PASS=$((PASS+1))
+else echo "  FAIL: L2 the hook must source TFC_LIB and define no RULING_*_RE cue (one definition site: the lib)" >&2; FAIL=$((FAIL+1)); fi
+
+# NR1 — the pre-ask hook is NOT widened. The five sentences the plan measured against the pre-ask cues (the three
+# closing-message questions that must block there, and two that must pass) still ALLOW through an AskUserQuestion:
+# the closing group's cues are reachable only from the closing hook. A lib that ignored its group argument, or a
+# hook that asked for `shared+closing`, would deny the first three.
+TOTAL=$((TOTAL+1))
+nr1_fail=0
+nr1_i=0
+for nr1_q in \
+  "is the existing census enough to close the G2 issue, given a personal CLI token not listed and a branch-nameable write token on another config?" \
+  "what is the right design for moving the three deploy-channel credentials out of branch-nameable storage?" \
+  "should the two credentials be rotated now, and in what order?" \
+  "Do you authorize rotating HCLOUD_TOKEN now?" \
+  "which option do you want for the landing page headline?"; do
+  nr1_i=$((nr1_i+1))
+  ruling_check "NR1.$nr1_i" allow none "$(qobj "$nr1_q" | mq_payload)" || nr1_fail=$((nr1_fail+1))
+done
+if [[ "$nr1_fail" -eq 0 ]]; then echo "  PASS: NR1 the five closing-message sentences still ALLOW through AskUserQuestion (pre-ask is not widened)"; PASS=$((PASS+1))
+else FAIL=$((FAIL+1)); fi
+
+# NR2 — closing-only phrasings that the pre-ask hook must not deny, and a control that still does. The first two
+# are CL2 shapes; the control is a SHARED cue, which both hooks judge.
+TOTAL=$((TOTAL+1))
+nr2_fail=0
+ruling_check "NR2a" allow none "$(qobj "what is the right design for the retry queue?" | mq_payload)" || nr2_fail=$((nr2_fail+1))
+ruling_check "NR2b" allow none "$(qobj "do you want a migration design?" | mq_payload)" || nr2_fail=$((nr2_fail+1))
+ruling_check "NR2c" deny ruling "$(qobj "how strict should the evidence bar be?" | mq_payload)" || nr2_fail=$((nr2_fail+1))
+if [[ "$nr2_fail" -eq 0 ]]; then echo "  PASS: NR2 closing-only phrasings allow, the shared cue still denies (group argument honoured)"; PASS=$((PASS+1))
+else FAIL=$((FAIL+1)); fi
+
+# ML1 — a missing lib is parse doubt, never a blanket deny. The hook is copied beside a lib directory that lacks the
+# cue file; the ruling arm is skipped with a stderr line and the R1 ruling question is ALLOWED. A control run against
+# a copy that HAS the lib must still deny, or the row would pass over a hook that never reaches the arm at all.
+TOTAL=$((TOTAL+1))
+m1_root="${SOLEUR_TEST_INCIDENT_ROOT:?sandbox root unset}/m1-missing-lib"
+m1_fail=0
+mkdir -p "$m1_root/with/lib" "$m1_root/without/lib" || m1_fail=1
+if [[ "$m1_fail" -eq 0 ]]; then
+  for m1_f in "$(dirname "$HOOK")"/lib/*.sh; do
+    cp "$m1_f" "$m1_root/with/lib/" || m1_fail=1
+    [[ "${m1_f##*/}" == "technical-fork-cues.sh" ]] || cp "$m1_f" "$m1_root/without/lib/" || m1_fail=1
+  done
+  cp "$HOOK" "$m1_root/with/pre-ask-technical-fork-gate.sh" || m1_fail=1
+  cp "$HOOK" "$m1_root/without/pre-ask-technical-fork-gate.sh" || m1_fail=1
+fi
+m1_json="$(qobj "$R1_Q" | mq_payload)"
+m1_ctl=$(printf '%s' "$m1_json" | bash "$m1_root/with/pre-ask-technical-fork-gate.sh" 2>/dev/null | jq -r '.hookSpecificOutput.permissionDecision // "allow"' 2>/dev/null)
+m1_err_file="$m1_root/without.stderr"
+m1_out=$(printf '%s' "$m1_json" | bash "$m1_root/without/pre-ask-technical-fork-gate.sh" 2>"$m1_err_file")
+m1_dec=$(jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"${m1_out:-{\}}" 2>/dev/null || echo allow)
+if [[ "$m1_fail" -eq 0 && "$m1_ctl" == "deny" && "$m1_dec" == "allow" ]] && grep -qF 'cue lib missing or incomplete' "$m1_err_file"; then
+  echo "  PASS: ML1 a missing cue lib allows with a stderr line (control with the lib still denies)"; PASS=$((PASS+1))
+else printf '  FAIL: ML1 missing-lib: setup_fail=%s control=%s without_lib=%s (want 0/deny/allow plus the stderr line)\n' "$m1_fail" "$m1_ctl" "$m1_dec" >&2; FAIL=$((FAIL+1)); fi
+
 # V4— the ruling arm's EXEMPTION must stay a permission-shape vocabulary. Structural, like V3: extract
 # the regex from the hook source, require a non-vacuous member count, and refuse any bare action verb. A
 # bare verb here would exempt every ruling that merely MENTIONS the action ("...before the rebirth is
 # dispatched and the volume deleted") and turn the arm off for the sentences it exists to catch.
 TOTAL=$((TOTAL+1))
-v4_re="$(sed -n "s/^RULING_PERM_RE='(\(.*\))'$/\1/p" "$HOOK")"
+# The cue regexes live in the shared lib (technical-fork-cues.sh). Read the VALUE by sourcing the lib in a
+# subshell, never by sed over its source text: the lib builds RULING_OPVOCAB_RE by concatenation, so a text
+# read would see the assignment expression, not the regex.
+v4_re="$( ( . "$LIB" 2>/dev/null; printf '%s' "${RULING_PERM_RE:-}" ) )"
+v4_re="${v4_re#(}"; v4_re="${v4_re%)}"
 if [[ -z "$v4_re" ]]; then
   printf '  FAIL: V4 could not extract RULING_PERM_RE from the hook — the member checks below would pass over an empty set\n' >&2
   FAIL=$((FAIL+1))
@@ -883,8 +957,8 @@ else
 fi
 
 TOTAL=$((TOTAL+1))
-if [[ "$TOTAL" -eq 140 ]]; then echo "  PASS: V1 full inventory ran (140 cases)"; PASS=$((PASS+1))
-else echo "  FAIL: V1 expected 140 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
+if [[ "$TOTAL" -eq 145 ]]; then echo "  PASS: V1 full inventory ran (145 cases)"; PASS=$((PASS+1))
+else echo "  FAIL: V1 expected 145 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
 
 # --- V2: INSTRUMENT SELF-TEST — the helper's two branches must go to DIFFERENT buckets ------------
 #
@@ -964,7 +1038,7 @@ fi
 # The floor is the inventory literal V1 already pins, so there is ONE number to change when a case is
 # added and V1 names it in its own message. A suite that ran no cases, or whose verdict helper stopped
 # paying anything, cannot satisfy it.
-MIN_CASES=140
+MIN_CASES=145
 if (( TOTAL < MIN_CASES )); then
   printf '\nFATAL: anti-vacuity: %d case(s) ran, floor is %d. The suite shrank rather than the hook improving.\n' \
     "$TOTAL" "$MIN_CASES" >&2

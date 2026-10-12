@@ -317,21 +317,22 @@ fi
 # whole question (R6 pins it): wrongly blocking an authorization is the failure this header calls
 # worse, so the arm judges the question, not the sentence. The ship gate and the skill text are the
 # primary defence; this arm is the backstop at the moment of asking.
-RULING_STRICT_RE='(\bhow (strict|rigorous)|\b(strictness|stricter|stringen[a-z]*))'
-RULING_EVID_NOUN_RE='\b(evidence|proof|check|gate|guard|validation|verification|criteria|assertion|test|lint)\b'
-RULING_BAR_RE='(\b(evidence|proof|emptiness) (bar|threshold|ceiling|floor|standard)|\badopting\b.*\baccepted\b)'
-RULING_SUFF_RE='\b(is|are) (the )?(evidence|proof) (enough|sufficient|adequate)'
-RULING_STATUS_RE='\bstatus (flip|move|change)'
-RULING_ADR_RE='\b(adopting|accepted|decision record)\b'
-RULING_AB_RE='(\b(approach|variant|option) [ab]\b|\b[ab] (or|vs) [ab]\b)'
-RULING_TECH_RE='\b(architecture|schema|algorithm|substrate|data model|retry|queue|refactor)\b'
-RULING_PERM_RE='(\bmay i\b|\bis it fine to\b|\bok(ay)? to\b|\bgo-ahead\b|\bapprove[ds]?\b|\bauthori[sz]e|\back-destroy)'
-# Operator vocabulary: a question that NAMES money, scope, priority, schedule, brand, or a production action is the
-# operator's call however it is phrased. It vetoes the WEAK cues (C1 C2 C6 C7) only. Whole words, plural-tolerant, so
-# "deleted" and "dispatched" (the R1 incident question) do not veto it.
-RULING_OPVOCAB_RE='\b(prices?|pricing|plans?|tiers?|launch(es)?|dates?|deadlines?|licen[sc]es?|vendors?|logos?|copy|landing|budgets?|costs?|spend|revenue|invoices?|refunds?|schedules?|priorit(y|ies)|brand|hero|merge|deploy|ship|releases?|delete|prod|production)\b'
-# A money ask that carries an evidence-sufficiency phrase ("is the evidence enough to start charging") vetoes C4.
-RULING_MONEY_RE='\b(charging|paying|refunds?|invoices?|price|pricing|costs?|spend|revenue|contract|vendors?)\b'
+# The cue regexes (RULING_*_RE) and the verdict function `tfc_is_fork` live in ONE shared lib, which the
+# closing-message Stop hook (pre-closing-technical-fork-gate.sh) also calls, so the two cannot drift. This
+# hook asks for group `shared` only: its behaviour is byte-for-byte what the inline cues did, and the closing
+# group's extra cues never reach an AskUserQuestion. A missing, empty or truncated lib is parse doubt for THIS
+# arm: an empty cue regex matches every line, so the arm is skipped (announced) instead of judging with it.
+# The other arms of this hook are independent of the lib and keep running.
+TFC_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/technical-fork-cues.sh"
+__TFC_OK=0
+if [[ -s "$TFC_LIB" ]]; then
+  # shellcheck source=lib/technical-fork-cues.sh
+  source "$TFC_LIB" 2>/dev/null
+  tfc_self_check 2>/dev/null && __TFC_OK=1
+fi
+if [[ "$__TFC_OK" -ne 1 ]]; then
+  printf 'pre-ask-technical-fork-gate: technical-ruling arm skipped — cue lib missing or incomplete (%s), allowing without ruling classification.\n' "$TFC_LIB" >&2
+fi
 # One row per question: its lowercased TEXT only (every cue reads the question text, never an option label or
 # description). Whitespace is mapped to a plain space by code point (linear), never by a jq regex gsub (quadratic: a
 # 32 KB question took 9.5 s), and runs of spaces are squeezed by tr. An absent question yields an empty row; one that
@@ -345,7 +346,9 @@ RULING_ROWS="$(printf '%s' "$__HI_RAW" | jq -r '
     elif .question == null then ""
     else "\u0001" end
 ' 2>/dev/null | tr -s ' ')" || __RQS_RC=$?
-if [[ "$__RQS_RC" -ne 0 ]]; then
+if [[ "$__TFC_OK" -ne 1 ]]; then
+  :
+elif [[ "$__RQS_RC" -ne 0 ]]; then
   printf 'pre-ask-technical-fork-gate: technical-ruling parse skipped (jq rc=%s) — unrecognised questions shape, allowing without ruling classification.\n' \
     "$__RQS_RC" >&2
 elif [[ -n "$RULING_ROWS" ]]; then
@@ -355,29 +358,10 @@ elif [[ -n "$RULING_ROWS" ]]; then
       continue
     fi
     [[ -n "$__rq" ]] || continue
-    __hit=0
-    # WEAK cues (C1 strictness+evidence noun, C6 status flip+ADR word, C7 approach A|B+technical noun) read the
-    # INTERROGATIVE sentences only, so a question with no `?` has none, and a declarative sentence ("Merge PR 9628
-    # now. It adds the stricter evidence gate.") never fires them. The operator-vocabulary veto reads the whole
-    # question. Extraction is linear: awk splits on `?` and keeps, per segment, the text after the last sentence
-    # boundary ("! " or ". "; " vs. " is rewritten to " vs " first, so the A/B cue needs no optional period). A regex with a nested quantifier here cost ~13 s on a 32 KB question.
-    if [[ "$__rq" == *"?"* ]] && ! grep -qE "$RULING_OPVOCAB_RE" <<<"$__rq"; then
-      __ends=0; [[ "$__rq" == *"?" ]] && __ends=1
-      __asked="$(printf '%s' "$__rq" | awk -v ends="$__ends" 'BEGIN { RS = "?"; ORS = "" }
-        function emit(t) { gsub(/ vs\. /, " vs ", t); sub(/^.*(!|\. )/, "", t); print t "? " }
-        NR > 1 { emit(prev) }
-        { prev = $0 }
-        END { if (ends) emit(prev) }')"
-      if grep -qE "$RULING_STRICT_RE" <<<"$__asked" && grep -qE "$RULING_EVID_NOUN_RE" <<<"$__asked"; then __hit=1; fi
-      if [[ "$__hit" -eq 0 ]] && grep -qE "$RULING_STATUS_RE" <<<"$__asked" && grep -qE "$RULING_ADR_RE" <<<"$__asked"; then __hit=1; fi
-      if [[ "$__hit" -eq 0 ]] && grep -qE "$RULING_AB_RE" <<<"$__asked" && grep -qE "$RULING_TECH_RE" <<<"$__asked"; then __hit=1; fi
-    fi
-    # STRONG cues (C3 bar, C5 adopting...accepted, C4 sufficiency): technical on their own, no `?` needed. C4 alone
-    # yields to a money phrase.
-    if [[ "$__hit" -eq 0 ]] && grep -qE "$RULING_BAR_RE" <<<"$__rq"; then __hit=1; fi
-    if [[ "$__hit" -eq 0 ]] && grep -qE "$RULING_SUFF_RE" <<<"$__rq" && ! grep -qE "$RULING_MONEY_RE" <<<"$__rq"; then __hit=1; fi
-    [[ "$__hit" -eq 1 ]] || continue
-    grep -qE "$RULING_PERM_RE" <<<"$__rq" && continue
+    # The verdict (weak cues over the interrogative sentences, strong cues, the operator-vocabulary veto and the
+    # permission exemption, all judged over THIS question's text alone) is the shared lib's `tfc_is_fork`.
+    # Exit 1 is a pass and exit 2 (bad arguments) is treated as a pass: this arm can only ever deny on a clear hit.
+    if tfc_is_fork "$__rq" shared; then :; else continue; fi
     RULING_REASON="BLOCKED: this AskUserQuestion puts a TECHNICAL RULING to the operator.
 
 How strict an evidence bar must be, whether the evidence is sufficient, whether an ADR status moves, which of two named technical designs or approaches — these are engineering calls. The operator is non-technical and cannot rule on them; asking stalls the pipeline until someone guesses.
