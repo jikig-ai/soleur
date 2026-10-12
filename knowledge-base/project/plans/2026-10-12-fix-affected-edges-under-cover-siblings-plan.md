@@ -169,23 +169,24 @@ seven `REQUIRED_RUNNERS` files, so `.github/` and `scripts/` keep dir prefixes
 
 ## Proposed Solution
 
-Convert the two enumerating arrays to suffix-scoped `glob:` coverage over every
-top-level root, keeping dir prefixes only where the verified read set includes
-non-corpus files; declare a new `glob:`-scoped array for
-`scripts/lib/repo-write-boundary.test.sh`; pin with per-extension battery rows.
+Keep every already-declared dir prefix in place — the #9945 precedent keeps an
+honest prefix where it was already declared (`AFFECTED_SCRIPTS_LINT_TRAP_TEMPFILE_OWNERSHIP_PATHS`
+still carries `apps/`, `bin/`, `.claude/`, … beside its kb `glob:` entries; converting
+an honest prefix to a glob narrows selection, which is a separate unasked
+change) — and ADD `glob:` entries for the roots the arrays omit, which is
+exactly the shape the issue prescribes ("`glob:knowledge-base/**.test.sh`
+entries"). For the new rwb array there is no legacy to preserve, so it is
+uniformly `glob:`-scoped: its read set is `*.sh` only, and a dir prefix over a
+doc-heavy root would over-select on `.md` churn from day one.
 
-**Disposition table** (root = every existing top-level dir; R = root set of 20):
+**Disposition table** (verified read sets in Research Insights; the 20-root
+inventory is `git ls-files | awk -F/ 'NF>1{print $1}' | sort -u` at edit time):
 
-| Suite | Verified corpus | Dir prefixes kept (verified non-corpus reads) | `glob:` entries | Explicit entries |
+| Suite | Verified corpus | Existing entries kept | `glob:` entries added | Other entries added |
 |---|---|---|---|---|
-| `scripts/guard-vacuity-floor` | `*.test.sh` whole-tree | `scripts/fixtures/` (fixture `vacuity-contract-control.sh` is `.sh`, not `.test.sh`) | `glob:<root>/**.test.sh` × all 20 roots | `scripts/test-all.sh`, `scripts/lib/test-affected-paths.sh` |
-| `scripts/lint-orphan-test-suites` | `*.test.sh` whole-tree + `.github/workflows/*.yml` + REQUIRED_RUNNERS + libs | `.github/` (workflows + `scripts/test/run-all.sh`), `scripts/` (SUT + 4 REQUIRED_RUNNERS + both libs + battery) | `glob:<root>/**.test.sh` × all 20 roots | `apps/web-platform/infra/run-registered-suites.sh`, `scripts/lint-orphan-test-suites.test.sh`, `scripts/lib/test-affected-paths.sh` |
-| `scripts/lib/repo-write-boundary.test.sh` (NEW array `AFFECTED_SCRIPTS_LIB_REPO_WRITE_BOUNDARY_TEST_SH_PATHS`) | `*.sh` whole-tree, content-keyed on `test-all\.sh` | none — every verdict-moving read is `*.sh` | `glob:<root>/**.sh` × all 20 roots | `scripts/test-all.sh`, `scripts/lib/repo-write-boundary.sh`, `scripts/lib/repo-write-boundary.test.sh`, `scripts/lib/test-affected-paths.sh` |
-
-Explicit entries note: files already reachable via a kept dir prefix or a
-`glob:` are still listed where convention does (self `.test.sh`, the lib, the
-runner) — the census's self-inclusion arm requires the literal
-`scripts/lib/test-affected-paths.sh` member in every array.
+| `scripts/guard-vacuity-floor` (`AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS`) | `*.test.sh` whole-tree | all 9 (`apps/ .claude/ .github/ plugins/ scripts/ test/ tests/ scripts/test-all.sh scripts/lib/test-affected-paths.sh`) — `scripts/` already covers SUT + `scripts/fixtures/vacuity-contract-control.sh` | `glob:<root>/**.test.sh` for the 13 unlisted roots (`.agents .claude-plugin .codex .cursor-plugin .devin .grok LICENSES bin docs infra knowledge-base spike todos`) | none needed — the census's self-inclusion member is already present |
+| `scripts/lint-orphan-test-suites` (`AFFECTED_SCRIPTS_LINT_ORPHAN_TEST_SUITES_PATHS`) | `*.test.sh` whole-tree + `.github/workflows/*.yml` + REQUIRED_RUNNERS + libs | all 9 — `.github/` covers the workflow reads and `.github/scripts/test/run-all.sh`; `scripts/` covers SUT + 4 REQUIRED_RUNNERS + both libs + battery; `apps/` covers `apps/web-platform/infra/run-registered-suites.sh` and `apps/*/infra/main.test.sh` | `glob:<root>/**.test.sh` for the same 13 unlisted roots (`infra/*/main.test.sh` picks up `glob:infra/**.test.sh`) | none needed |
+| `scripts/lib/repo-write-boundary.test.sh` (NEW `AFFECTED_SCRIPTS_LIB_REPO_WRITE_BOUNDARY_TEST_SH_PATHS`) | `*.sh` whole-tree, content-keyed on `test-all\.sh` | — | `glob:<root>/**.sh` for all 20 roots | `scripts/test-all.sh`, `scripts/lib/repo-write-boundary.sh`, `scripts/lib/repo-write-boundary.test.sh`, `scripts/lib/test-affected-paths.sh` (census self-inclusion member) |
 
 **Documented residuals** (inexpressible in the current grammar — recorded, not
 silently accepted):
@@ -232,12 +233,29 @@ the `tg` precedent, RED-first per `cq-write-failing-tests-before`):
   the producer output pass it; no edit needed there.
 - Self-inclusion: every array must literally contain
   `scripts/lib/test-affected-paths.sh` (census arm ~line 1195) — a diff editing
-  only edge data then selects the suites it could blind. All three arrays carry it.
+  only edge data then selects the suites it could blind. The two existing
+  arrays already carry it; the new rwb array adds it explicitly.
 - Existing `tg` rows keep their semantics: the `th` rows assert only on the
   three new labels; kb walkers' selections on `x.test.sh`/`x.sh`/`x.md` are
   unchanged and not re-asserted.
 - No `scripts/test-all.sh` edit — the keep-list is injected by the battery's
   own Python rewrite; the runner's grammar is untouched (degrade preserved).
+- **kb-consumers ratchet authoring constraint** (`test-affected-kb-consumers`,
+  learning #12 of `2026-10-11-a-pin-that-reports-through-the-gate-it-pins…`):
+  the oracle scans each suite's argv code file for literal `knowledge-base/`
+  reads, but skips a line where a fixture word (`sandbox`, `mktemp`, `tmp`,
+  `fixture` — case-insensitive) precedes the path, and exempts both
+  declarations libs (`test-affected-paths.sh`, `test-relevance-paths.sh`) as
+  pure data. The new `glob:knowledge-base/**` entries therefore cost no
+  baseline rows; the `th` literals MUST stay inside `SANDBOX_*` env pairs or
+  `_sandbox*`-named variables (the `tg` rows' exact pattern — including the
+  python `"knowledge" + "-base/"` concat where a bare literal would land in a
+  scanned string). Run `bash scripts/test-affected-kb-consumers.test.sh` once
+  before pushing; a `SKIP reason=no-trigger` locally is NOT proof CI skips it.
+- Consumed-edge batteries need no edit: `TEST_ALL_AFFECTED_BATTERY_PATHS` and
+  `LINT_ORPHAN_BATTERY_PATHS` live in `scripts/lib/test-relevance-paths.sh`
+  (the map in `test-affected-paths.sh:328-331` points there) — unrelated to
+  these three arrays.
 
 ## User-Brand Impact
 
@@ -358,9 +376,10 @@ already guarded.
 
 1. Re-run the root enumeration (`git ls-files | awk -F/ 'NF>1{print $1}' |
    sort -u`) and reconcile against the 20-root plan list.
-2. Rewrite `AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS` and
-   `AFFECTED_SCRIPTS_LINT_ORPHAN_TEST_SUITES_PATHS` per the disposition table;
-   add `AFFECTED_SCRIPTS_LIB_REPO_WRITE_BOUNDARY_TEST_SH_PATHS` beside them.
+2. Append the 13 `glob:<root>/**.test.sh` entries to
+   `AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS` and
+   `AFFECTED_SCRIPTS_LINT_ORPHAN_TEST_SUITES_PATHS`; add the new
+   `AFFECTED_SCRIPTS_LIB_REPO_WRITE_BOUNDARY_TEST_SH_PATHS` array beside them.
 3. Update each array's comment block with the verified read set the
    disposition derives from (the method the issue prescribes — the comments
    are where the next author checks).
@@ -374,27 +393,26 @@ already guarded.
    `bash scripts/lint-orphan-test-suites.test.sh` — green.
 4. `bash scripts/test-all.sh --affected --print-affected-set` — confirm
    `edge:declared` receipts for the three labels.
-5. `git diff --name-only $(git merge-base HEAD origin/main)` — confirm the
+5. `bash scripts/test-affected-kb-consumers.test.sh` — green (no new baseline
+   rows; a local `SKIP reason=no-trigger` is not proof — see the kb-consumers
+   authoring constraint in Technical Considerations).
+6. `git diff --name-only $(git merge-base HEAD origin/main)` — confirm the
    diff is limited to the two source files plus planning artifacts.
 
 ## Files to Edit
 
 - `scripts/lib/test-affected-paths.sh` —
-  `AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS` (~line 1981): replace the 7 bare
-  dir prefixes with `glob:<root>/**.test.sh` × 20 roots + `scripts/fixtures/`;
-  keep `scripts/test-all.sh`, `scripts/lib/test-affected-paths.sh`.
-  `AFFECTED_SCRIPTS_LINT_ORPHAN_TEST_SUITES_PATHS` (~line 2007): replace
-  `apps/ .claude/ plugins/ test/ tests/` with `glob:<root>/**.test.sh` × 20
-  roots; keep `.github/`, `scripts/` dir prefixes; add
-  `apps/web-platform/infra/run-registered-suites.sh`,
-  `scripts/lint-orphan-test-suites.test.sh`; keep
-  `scripts/test-all.sh` (under `scripts/`), `scripts/lib/test-affected-paths.sh`.
+  `AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS` (~line 1981): append
+  `glob:<root>/**.test.sh` for the 13 unlisted roots.
+  `AFFECTED_SCRIPTS_LINT_ORPHAN_TEST_SUITES_PATHS` (~line 2007): append the
+  same 13 `glob:<root>/**.test.sh` entries.
   New `AFFECTED_SCRIPTS_LIB_REPO_WRITE_BOUNDARY_TEST_SH_PATHS`:
-  `glob:<root>/**.sh` × 20 roots + `scripts/test-all.sh`,
-  `scripts/lib/repo-write-boundary.sh`,
-  `scripts/lib/repo-write-boundary.test.sh`, `scripts/lib/test-affected-paths.sh`.
+  `glob:<root>/**.sh` for all 20 roots + `scripts/test-all.sh`,
+  `scripts/lib/repo-write-boundary.sh`, `scripts/lib/repo-write-boundary.test.sh`,
+  `scripts/lib/test-affected-paths.sh`.
   Update each array's comment block to record the verified read set the
-  disposition derives from.
+  disposition derives from (the method the issue prescribes — the comments are
+  where the next author checks).
 - `scripts/test-all-affected.test.sh` — add the three labels to `build_sandbox`'s
   injected keep-list case block; add the `th` row family (th1–th5 per Proposed
   Solution).
@@ -453,13 +471,11 @@ None.
   `scripts/lib/test-affected-paths.sh`.
 - [ ] `AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS` and
   `AFFECTED_SCRIPTS_LINT_ORPHAN_TEST_SUITES_PATHS` each contain
-  `glob:<root>/**.test.sh` for every top-level dir in the 20-root set
-  (`.agents .claude .claude-plugin .codex .cursor-plugin .devin .github .grok
-  LICENSES apps bin docs infra knowledge-base plugins scripts spike test tests
-  todos`), and neither retains a bare `apps/`, `.claude/`, `plugins/`, `test/`,
-  or `tests/` prefix. `lint-orphan` retains `.github/` and `scripts/` dir
-  prefixes plus `apps/web-platform/infra/run-registered-suites.sh`;
-  `guard-vacuity-floor` retains `scripts/fixtures/`.
+  `glob:<root>/**.test.sh` for every top-level dir NOT already declared —
+  the 13-root set `.agents .claude-plugin .codex .cursor-plugin .devin .grok
+  LICENSES bin docs infra knowledge-base spike todos` — while keeping all 9
+  existing entries verbatim (`apps/ .claude/ .github/ plugins/ scripts/ test/
+  tests/ scripts/test-all.sh scripts/lib/test-affected-paths.sh`).
 - [ ] `bash scripts/test-all-affected.test.sh` exits 0, including new rows
   proving: `knowledge-base/x.test.sh` selects all three labels;
   `knowledge-base/x.sh` selects only `scripts/lib/repo-write-boundary.test.sh`
@@ -474,6 +490,10 @@ None.
   census validates every new `glob:` head and reports no dead edges.
 - [ ] `bash scripts/guard-vacuity-floor.test.sh` and
   `bash scripts/lint-orphan-test-suites.test.sh` each exit 0.
+- [ ] `bash scripts/test-affected-kb-consumers.test.sh` exits 0 with no new
+  baseline rows — every `knowledge-base/` literal the `th` rows add sits inside
+  a `SANDBOX_*` env value or `_sandbox*`-named variable (the ratchet's fixture
+  skip), and the declarations lib is exempt as data.
 - [ ] `git diff --name-only` against merge-base is limited to
   `scripts/lib/test-affected-paths.sh` and `scripts/test-all-affected.test.sh`
   plus planning artifacts — no edit to `_affected_add_edge`, `_diff_edge_hit`,
@@ -526,8 +546,8 @@ covered under Engineering, which is the domain doing the work).
   `glob:`-scoped corpus (was: `edge:derived` self-edge).
 - `knowledge-base/x.md` selects none of the three (the `glob:` kind narrows —
   no relocated over-coverage).
-- `lint-orphan-test-suites` census green over ~60 new `glob:` members (all
-  heads resolve, zero dead edges).
+- `lint-orphan-test-suites` census green over ~46 new `glob:` members
+  (13 + 13 `**.test.sh` + 20 `**.sh`; all heads resolve, zero dead edges).
 
 ## Dependencies & Risks
 
@@ -566,6 +586,50 @@ covered under Engineering, which is the domain doing the work).
   `scripts/lint-orphan-test-suites.sh:95,112,319-320,345,362,538-561,608,975`;
   `scripts/lib/repo-write-boundary.test.sh:28,394,429,454,505,546,772`.
 
+## Deepen-Plan Enhancements
+
+**Deepened on:** 2026-10-12
+**Sections enhanced:** Proposed Solution (disposition shape), Technical
+Considerations (kb-consumers constraint, consumed-edge map), Implementation
+Phases, Files to Edit, Acceptance Criteria, Success Metrics
+**Method:** gates 4.4–4.12 run in-process (subagent context — no Task fan-out);
+all halt gates passed (User-Brand Impact, Observability, Guard Contract lint
+green, Scope Check compliant, no PAT/UI/encryption/store triggers).
+
+### Key Improvements
+
+1. **Disposition revised to the shipped #9945 shape.** An earlier draft of this
+   plan converted all dir prefixes to `glob:` (corpus-faithful narrowing). The
+   precedent-diff read showed the shipped convention is different:
+   `AFFECTED_SCRIPTS_LINT_TRAP_TEMPFILE_OWNERSHIP_PATHS` keeps honest dir
+   prefixes for already-declared roots and adds `glob:` only where a prefix is
+   missing or dishonest (kb's `.md` churn). The plan now appends `glob:` for the
+   13 unlisted roots and leaves the 9 existing entries verbatim — strictly
+   widening, zero under-coverage risk, minimal diff. The new rwb array is
+   uniformly `glob:` (no legacy to preserve).
+2. **kb-consumers ratchet constraint discovered.** Literal `knowledge-base/`
+   strings in the new `th` rows are charged to `test-all-affected` by the
+   dropped-consumer ratchet unless a fixture word precedes the path
+   (`SANDBOX_DIFF_NAMES=` qualifies; `DECLARATION_FILES` exempts the edge lib
+   itself). Authored into Technical Considerations + a Phase-3 verification
+   step + an AC.
+3. **Consumed-edge batteries ruled out of scope.** `TEST_ALL_AFFECTED_BATTERY_PATHS`
+   / `LINT_ORPHAN_BATTERY_PATHS` live in `scripts/lib/test-relevance-paths.sh`,
+   referenced by the `AFFECTED_CONSUMED_EDGES` map at
+   `test-affected-paths.sh:328-331` — no edit needed; recorded so the
+   implementer does not hunt for them in the wrong file.
+
+### New Considerations Discovered
+
+- The repo-wide-idiom arm's `git ls-files` regex
+  (`lint-orphan-test-suites.sh:1220`) does not match a quoted `-C` operand
+  (`git -C "$REPO_ROOT" ls-files`) — the reason `repo-write-boundary.test.sh`
+  was never flagged for classification. A regex fix is out of scope (the
+  declared array closes the coverage gap either way); noted for the record.
+- Root-level `*.test.sh`/`*.sh` and post-edit new top-level dirs remain
+  inexpressible in the current grammar — documented residuals pointing at the
+  deferred census-witness advisory.
+
 ## Sharp Edges
 
 - A plan whose `## User-Brand Impact` section is empty, contains only
@@ -578,5 +642,7 @@ covered under Engineering, which is the domain doing the work).
   between planning and merge degrades its entry to a `^<head>/` dir prefix,
   silently re-widening that root to dir-prefix selection (the census REDs it,
   which is the check, not the fix).
-- Do not "simplify" the 20-entry root enumeration back into fewer bare dir
-  prefixes during implementation — that is the defect this plan closes.
+- Do not "simplify" the per-root `glob:` enumeration back into bare dir
+  prefixes for the unlisted roots during implementation — a `knowledge-base/`
+  or `docs/` prefix is the over-selection class #9813 closed, and an omitted
+  root is the under-coverage defect this plan closes.
