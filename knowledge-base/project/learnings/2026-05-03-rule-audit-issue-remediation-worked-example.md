@@ -42,7 +42,7 @@ the actual state was:
 
 Net scope: two surgical text edits + one Phase 5 deferral issue
 (#3098) for widening the audit script's path heuristic. Plan at
-`knowledge-base/project/plans/2026-05-03-chore-rule-audit-2327-remediation-plan.md`.
+`knowledge-base/project/plans/archive/20261013-014038-2026-05-03-chore-rule-audit-2327-remediation-plan.md`.
 
 ## Key Insight
 

@@ -5,7 +5,7 @@ date: 2026-05-19
 related: [3244, 4077, 4078]
 related_adrs: [ADR-030, ADR-033-per-tenant-scope-grants]
 related_plans:
-  - knowledge-base/project/plans/2026-05-19-feat-trust-tier-pr-h-external-classes-plan.md
+  - knowledge-base/project/plans/archive/20261013-014038-2026-05-19-feat-trust-tier-pr-h-external-classes-plan.md
 brand_survival_threshold: single-user incident
 ---
 
@@ -105,4 +105,4 @@ When PR-I (#4078) lands the digest emitter, it gates on `SOLEUR_FR5_ENABLED` at 
 - Migration: `apps/web-platform/supabase/migrations/051_action_class_widening_and_action_sends.sql` (CHECK constraints at scope_grants + action_sends)
 - Exhaustiveness test: `apps/web-platform/test/server/scope-grants/action-class-exhaustive.test.ts`
 - Lint test: `apps/web-platform/test/lint/action-class-typed-literals.test.ts`
-- Plan: `knowledge-base/project/plans/2026-05-19-feat-trust-tier-pr-h-external-classes-plan.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-19-feat-trust-tier-pr-h-external-classes-plan.md`

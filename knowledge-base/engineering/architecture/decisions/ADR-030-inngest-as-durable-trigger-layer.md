@@ -5,7 +5,7 @@ date: 2026-05-17
 related: [3244, 3940, 3947, 3948, 5450]
 related_adrs: [ADR-005, ADR-023, ADR-027, ADR-046]
 related_plans:
-  - knowledge-base/project/plans/2026-05-05-feat-soleur-server-side-agentic-runtime-plan.md
+  - knowledge-base/project/plans/archive/20261013-014038-2026-05-05-feat-soleur-server-side-agentic-runtime-plan.md
   - knowledge-base/project/plans/2026-05-17-feat-pr-f-inngest-trigger-layer-plan.md
 brand_survival_threshold: single-user incident
 ---
@@ -159,7 +159,7 @@ The hourly cadence on the prd workflow (CPO decision 2026-07-01, changelog below
 - Plan: `knowledge-base/project/plans/2026-05-17-feat-pr-f-inngest-trigger-layer-plan.md` (v2, post-review)
 - Spec: `knowledge-base/project/specs/feat-pr-f-inngest-trigger-layer/spec.md`
 - Brainstorm: `knowledge-base/project/brainstorms/2026-05-17-pr-f-inngest-trigger-layer-brainstorm.md`
-- Parent plan (Increment 3 is PR-F): `knowledge-base/project/plans/2026-05-05-feat-soleur-server-side-agentic-runtime-plan.md` §3.1–3.5
+- Parent plan (Increment 3 is PR-F): `knowledge-base/project/plans/archive/20261013-014038-2026-05-05-feat-soleur-server-side-agentic-runtime-plan.md` §3.1–3.5
 - Parent epic: [#3244](https://github.com/jikig-ai/soleur/issues/3244)
 - Predecessor PRs (all MERGED, verified /work Phase 0.1 2026-05-17): #3240, #3395, #3854, #3883, #3922
 - Follow-up issues: #3947 (PR-G cohort onboarding), #3948 (cron migration TR9)

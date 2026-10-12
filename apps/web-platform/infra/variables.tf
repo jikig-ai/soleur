@@ -684,7 +684,7 @@ variable "inngest_config_digest" {
 # --- PR-H (#3244) — GitHub App + KB-drift -----------------------------------
 # Post-#4150: client_id / client_secret / github_actions_token /
 # doppler_token_kb_drift variables were deleted. See plan
-# knowledge-base/project/plans/2026-05-20-fix-apply-web-platform-infra-tf-autonomy-4150-plan.md
+# knowledge-base/project/plans/archive/20261013-014038-2026-05-20-fix-apply-web-platform-infra-tf-autonomy-4150-plan.md
 # Provider switched to App-installation auth (main.tf); kb-drift Doppler
 # token now minted in-band by `doppler_service_token` resource (kb-drift.tf).
 # autonomy-considered: provider-mint-applied (App auth + doppler_service_token).

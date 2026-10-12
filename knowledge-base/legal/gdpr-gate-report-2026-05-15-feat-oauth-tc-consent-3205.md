@@ -11,7 +11,7 @@
 - `apps/web-platform/app/api/accept-terms/route.ts`
 
 **Run timestamp:** 2026-05-15 (work Phase 2 exit, AC17).
-**Plan:** `knowledge-base/project/plans/2026-05-15-feat-oauth-tc-consent-residual-audit-plan.md`.
+**Plan:** `knowledge-base/project/plans/archive/20261013-014038-2026-05-15-feat-oauth-tc-consent-residual-audit-plan.md`.
 
 ---
 

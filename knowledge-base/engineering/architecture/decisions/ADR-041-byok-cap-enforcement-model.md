@@ -5,9 +5,9 @@ date: 2026-05-25
 related: [4379, 4124, 4378]
 related_adrs: [ADR-042, ADR-030]
 related_plans:
-  - knowledge-base/project/plans/2026-05-25-feat-anthropic-leader-loop-pr-b-plan.md
+  - knowledge-base/project/plans/archive/20261013-014038-2026-05-25-feat-anthropic-leader-loop-pr-b-plan.md
 related_specs:
-  - knowledge-base/project/specs/feat-4379-anthropic-leader-loop/spec.md
+  - knowledge-base/project/specs/archive/20261013-014038-feat-4379-anthropic-leader-loop/spec.md
 brand_survival_threshold: single-user incident
 ---
 
@@ -169,7 +169,7 @@ Cap/loop halts were previously silent (Sentry-only). PR-A wires `notifyOfflineUs
 
 ## References
 
-- Plan: `knowledge-base/project/plans/2026-05-25-feat-anthropic-leader-loop-pr-b-plan.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-25-feat-anthropic-leader-loop-pr-b-plan.md`
 - ADR-042: loop-topology dependency.
 - BYOK cap RPC: `apps/web-platform/supabase/migrations/061_byok_audit_workspace_id_rpcs.sql:81-148`
 - BYOK lease: `apps/web-platform/server/byok-lease.ts:338`

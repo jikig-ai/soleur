@@ -85,7 +85,7 @@ A 5-agent panel that produces only "BOTH panels fire" findings is suspicious —
 
 ## Cross-References
 
-- `knowledge-base/project/plans/2026-05-21-feat-pr-i-template-authorizations-plan.md` — the plan that surfaced these patterns (v1 → v2).
+- `knowledge-base/project/plans/archive/20261013-014038-2026-05-21-feat-pr-i-template-authorizations-plan.md` — the plan that surfaced these patterns (v1 → v2).
 - `knowledge-base/project/learnings/2026-05-11-five-agent-plan-review-panel-and-architectural-false-trails.md` — parent learning for the 5-agent panel + BOTH-panels-fire heuristic.
 - `knowledge-base/project/learnings/2026-05-18-worm-trigger-bypass-role-check-fails-under-postgrest-routing.md` — WORM bypass mechanism choice (Pattern 5).
 - `plugins/soleur/skills/plan-review/SKILL.md` — already enforces 5-agent panel at single-user-incident threshold; this learning validates the gate.

@@ -80,9 +80,9 @@ line):
   polices.
 - `knowledge-base/project/plans/2026-04-30-fix-terraform-drift-deploy-pipeline-fix-3061-plan.md:323`
   — "Operator must read the plan output and type `yes` interactively".
-- `knowledge-base/project/specs/feat-one-shot-fix-ci-ssh-auth-deploy-pipeline-fix/session-state.md:13`
+- `knowledge-base/project/specs/archive/20261013-014038-feat-one-shot-fix-ci-ssh-auth-deploy-pipeline-fix/session-state.md:13`
   — `terraform_data.root_authorized_keys` "must be applied LOCALLY by the operator".
-- `knowledge-base/project/specs/feat-one-shot-3485-tf-drift-fix/session-state.md:12` —
+- `knowledge-base/project/specs/archive/20261013-014038-feat-one-shot-3485-tf-drift-fix/session-state.md:12` —
   two `-target`-scoped applies, "each requires its own per-command operator ack".
 <!-- lint-infra-ignore end -->
 

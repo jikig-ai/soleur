@@ -53,7 +53,7 @@ Six review agents fanned out across distinct axes:
 
 Applied the trim at plan-review-finalisation time. Specific actions:
 
-1. **Rewrote the plan** to PR-A scope (`knowledge-base/project/plans/2026-05-12-feat-pino-userid-formatters-log-plan.md`). 5 phases, ~8 file-edits, ~6 ACs. Plan frontmatter records `plan_review_outcome: trim-per-both-panels-fire`.
+1. **Rewrote the plan** to PR-A scope (`knowledge-base/project/plans/archive/20261013-014038-2026-05-12-feat-pino-userid-formatters-log-plan.md`). 5 phases, ~8 file-edits, ~6 ACs. Plan frontmatter records `plan_review_outcome: trim-per-both-panels-fire`.
 2. **Narrowed the spec** to match. FR1 (formatters.log) + new FR2 (PA8 §(c)) + new FR3 (ADR-029) + new FR4 (CI gate) + new FR5 (shared helper) stay. Original FR2-FR6 deferred to #3710/#3711. TR3 null-handling row corrected (`pepper_unset_null` sentinel matches `observability.ts:53`).
 3. **Created ADR-029** documenting the rename-at-boundary pattern (per Architecture AP-011 advisory). Names follow-up issues by number.
 4. **Filed PR-B (#3710) and PR-C (#3711)** with concrete acceptance criteria. PR-B's body cites Architecture F3 scope-isolation gate as a load-bearing prereq.

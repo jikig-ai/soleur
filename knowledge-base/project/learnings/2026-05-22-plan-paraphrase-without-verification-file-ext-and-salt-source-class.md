@@ -140,9 +140,9 @@ backstop; the plan-time greps are the cheaper primary gate.
 
 ## Cross-References
 
-- Plan: `knowledge-base/project/plans/2026-05-22-feat-dsar-author-redaction-art-15-4-plan.md`
-- Spec: `knowledge-base/project/specs/feat-dsar-author-redaction-4319/spec.md`
-- Brainstorm: `knowledge-base/project/brainstorms/2026-05-22-dsar-author-redaction-brainstorm.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-22-feat-dsar-author-redaction-art-15-4-plan.md`
+- Spec: `knowledge-base/project/specs/archive/20261013-014038-feat-dsar-author-redaction-4319/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-22-dsar-author-redaction-brainstorm.md`
 - Deferred follow-ups: #4358, #4359
 - Related learnings:
   - `best-practices/2026-04-22-ts-sql-normalizer-parity-when-shipping-backfill-migration.md` — paraphrase-without-verification for issue-body claims (this is the plan-author analog).

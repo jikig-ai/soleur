@@ -100,4 +100,4 @@ This learning IS the session error.
 - Script: `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh` (line 565 = `git worktree add` call; line 608 = push-failure check; line 621 = success banner)
 - Related learning: `knowledge-base/project/learnings/2026-04-21-concurrent-cleanup-merged-wipes-active-worktree.md` (the race-window pattern that motivated the existing push-failure detection)
 - Rule: AGENTS.md `hr-when-a-command-exits-non-zero-or-prints`
-- Brainstorm where surfaced: `knowledge-base/project/brainstorms/2026-05-18-pr-g-cohort-onboarding-brainstorm.md`
+- Brainstorm where surfaced: `knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-18-pr-g-cohort-onboarding-brainstorm.md`

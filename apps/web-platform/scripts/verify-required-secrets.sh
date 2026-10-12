@@ -166,7 +166,7 @@ fi
 # `openssl rsa -check` on the decoded PEM and `[[ =~ ^[1-9][0-9]+$ ]]`
 # on APP_ID — these are run-time, not pre-flight, controls.
 #
-# See: knowledge-base/project/specs/feat-3187-gh-app-drift-guard/spec.md
+# See: knowledge-base/project/specs/archive/20261013-014038-feat-3187-gh-app-drift-guard/spec.md
 #
 # GH_APP_DRIFTGUARD_APP_ID: numeric App database ID, 5–10 digits.
 gh_app_id="${GH_APP_DRIFTGUARD_APP_ID:-}"

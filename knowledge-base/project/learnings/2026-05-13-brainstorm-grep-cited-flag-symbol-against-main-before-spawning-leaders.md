@@ -65,8 +65,8 @@ None detected this session — the brainstorm caught the staleness via leader co
 
 - Issue: #2939
 - Retirement PR: #3270
-- Brainstorm: `knowledge-base/project/brainstorms/2026-05-13-cc-soleur-go-stage-6-smoke-brainstorm.md`
-- Spec: `knowledge-base/project/specs/feat-cc-soleur-go-smoke-2939/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-13-cc-soleur-go-stage-6-smoke-brainstorm.md`
+- Spec: `knowledge-base/project/specs/archive/20261013-014038-feat-cc-soleur-go-smoke-2939/spec.md`
 - Existing brainstorm staleness hooks (sibling checks):
   - "Verifying referenced PR/issue state" — `plugins/soleur/skills/brainstorm/SKILL.md` Phase 1.1
   - "Verifying 'approach 1 vs approach 2' claims" — same

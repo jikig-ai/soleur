@@ -32,7 +32,7 @@
 #
 # See:
 #   - issue #3297 (the GSC fixes feature)
-#   - knowledge-base/project/plans/2026-05-05-feat-gsc-indexing-fixes-plan.md
+#   - knowledge-base/project/plans/archive/20261013-014038-2026-05-05-feat-gsc-indexing-fixes-plan.md
 #   - knowledge-base/project/learnings/2026-05-05-gsc-indexing-triage-patterns.md
 #   - knowledge-base/project/learnings/bug-fixes/2026-04-29-deploy-pipeline-fix-postapply-verification-cf-access.md
 #     (verify Transform Rule fires on the CF Access challenge response)

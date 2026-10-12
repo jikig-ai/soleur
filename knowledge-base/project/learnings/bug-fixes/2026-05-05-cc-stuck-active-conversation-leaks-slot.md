@@ -54,7 +54,7 @@ This bug surfaced as a 4010 WS close + a visible "Executing" badge stuck for 10+
 
 ## Related
 
-- Plan: `knowledge-base/project/plans/2026-05-05-fix-cc-chat-stuck-conversation-blocks-concurrency-slot-plan.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-05-fix-cc-chat-stuck-conversation-blocks-concurrency-slot-plan.md`
 - Migration 029 — pg_cron sweep + acquire_conversation_slot
 - Migration 036 — release-slot-on-archive trigger
 - Migration 037 — `find_stuck_active_conversations` RPC (this PR)

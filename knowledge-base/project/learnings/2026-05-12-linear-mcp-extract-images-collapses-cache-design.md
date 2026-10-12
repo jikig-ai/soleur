@@ -6,7 +6,7 @@ module: mcp-linear-server
 tags: [mcp, linear, multimodal, image-context, prompt-injection-of-context, redaction]
 related_issue: "#3635"
 related_pr: "#3631"
-related_brainstorm: knowledge-base/project/brainstorms/2026-05-12-linear-issue-image-context-brainstorm.md
+related_brainstorm: knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-12-linear-issue-image-context-brainstorm.md
 ---
 
 # Linear MCP `extract_images` returns viewable images directly — no cache, no auth handling

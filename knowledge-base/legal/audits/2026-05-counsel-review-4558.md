@@ -281,7 +281,7 @@ Once the CLO/CPO has signed every artifact row and made the LIA decision:
 3. Remove the `[DRAFT — pending CLO/counsel review per #4558]` marker from every
    legal artifact. Derive the authoritative list (do not hardcode a count):
    `grep -rl 'DRAFT — pending CLO/counsel review per #4558' docs/legal/ plugins/soleur/docs/pages/legal/ knowledge-base/legal/`
-   (the spec file `knowledge-base/project/specs/feat-workspace-repo-ownership/tasks.md`
+   (the spec file `knowledge-base/project/specs/archive/20261013-014038-feat-workspace-repo-ownership/tasks.md`
    also contains the literal string descriptively — do NOT strip it there; scope
    the edit to the legal directories). Remove the marker from both the section
    body AND the `Last Updated` byline of each doc; keep each canonical doc and its

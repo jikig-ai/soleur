@@ -178,11 +178,11 @@ The decision overrides the recommendation to park-with-artifact-commit. Operator
 - **Empirical verification after fix**: rerun of the Phase-0.7 probe with migrations 049+050 applied and tenant.ts UPSERTing the marker:
   - Runtime path (UPSERT performed) → `aud=soleur-runtime`, `exp-iat=600s`, precheck-injected jti ✓
   - Dashboard path (no UPSERT) → `aud=authenticated`, `exp-iat=3600s`, no jti rewrite ✓
-- **Plan amendment**: this section is the canonical write-up; the plan file (`knowledge-base/project/plans/2026-05-18-refactor-runtime-jwt-asymmetric-signing-substrate-plan.md`) is amended with a Phase-4 cross-reference back here.
+- **Plan amendment**: this section is the canonical write-up; the plan file (`knowledge-base/project/plans/archive/20261013-014038-2026-05-18-refactor-runtime-jwt-asymmetric-signing-substrate-plan.md`) is amended with a Phase-4 cross-reference back here.
 
 ## References
 
-- Plan: `knowledge-base/project/plans/2026-05-18-refactor-runtime-jwt-asymmetric-signing-substrate-plan.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-18-refactor-runtime-jwt-asymmetric-signing-substrate-plan.md`
 - Umbrella issue: [#3244](https://github.com/jikigai/soleur/issues/3244)
 - PR-B (HS256 substrate landed): [#3395](https://github.com/jikigai/soleur/pull/3395)
 - Issue this ADR resolves: [#3363](https://github.com/jikigai/soleur/issues/3363)

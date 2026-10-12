@@ -64,5 +64,5 @@ There are two distinct insights here that compound:
 - Issue #3120 — Theme D harness eval suite (independent track)
 - Source brainstorm — `knowledge-base/project/brainstorms/2026-05-04-harness-engineering-review-brainstorm.md`
 - Slice brainstorm — `knowledge-base/project/brainstorms/2026-05-04-behavior-harness-uplift-brainstorm.md`
-- Spec — `knowledge-base/project/specs/feat-behavior-harness-uplift/spec.md`
+- Spec — `knowledge-base/project/specs/archive/20261013-014038-feat-behavior-harness-uplift/spec.md`
 - Prior leak-cleanup learning — `knowledge-base/project/learnings/2026-02-10-api-key-leaked-in-git-history-cleanup.md`

@@ -5,7 +5,7 @@ date: 2026-05-22
 related: [2408, 2409]
 related_adrs: [ADR-022]
 related_plans:
-  - knowledge-base/project/plans/2026-05-22-feat-flagsmith-adoption-plan-v2.md
+  - knowledge-base/project/plans/archive/20261013-014038-2026-05-22-feat-flagsmith-adoption-plan-v2.md
 related_specs:
   - knowledge-base/project/specs/archive/20261013-003106-feat-feature-flag-provider/spec.md
 brand_survival_threshold: single-user incident

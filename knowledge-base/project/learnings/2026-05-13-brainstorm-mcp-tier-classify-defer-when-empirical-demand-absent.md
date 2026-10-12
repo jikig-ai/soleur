@@ -4,8 +4,8 @@ date: 2026-05-13
 category: project
 module: brainstorm
 issue: 2909
-brainstorm: knowledge-base/project/brainstorms/2026-05-13-mcp-tier-classify-cc-soleur-go-brainstorm.md
-spec: knowledge-base/project/specs/feat-mcp-tier-classify-2909/spec.md
+brainstorm: knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-13-mcp-tier-classify-cc-soleur-go-brainstorm.md
+spec: knowledge-base/project/specs/archive/20261013-014038-feat-mcp-tier-classify-2909/spec.md
 tags: [brainstorm, mcp, tier-classification, deny-by-default, dpa, user-brand-critical]
 ---
 
