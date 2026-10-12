@@ -248,6 +248,7 @@ cat > "$WM_GUARD_PY" <<'PYGUARD'
 soleur-infra App (#9454 item 4 / ADR-285). Prints one `VIOLATION <id>: <message>` line per
 finding and a final `CALLERS <n>` line. Always exits 0: the caller counts violations."""
 import copy
+import hashlib
 import json
 import os
 import posixpath
@@ -265,6 +266,19 @@ MINT_REL = ".github/actions/mint-infra-app-token"
 REMOTE_PREFIX = "jikig-ai/soleur/"
 ALLOWED_REMOTE = ("actions/checkout", "actions/download-artifact", "DopplerHQ/cli-action")
 INSTALLATION_ID = "166065653"
+# The closure. The regex rules below are diagnostics that name WHICH property moved; they cannot be
+# a closed list, because shell has more spellings than any list. The two pins are the closure: the
+# composite's inline run body (comments and blank lines normalised away), env, shell, inputs and
+# defaults, and the credential job of the digest workflow, are hashed, and any edit to either must
+# re-pin the hash in the same PR, where a reviewer sees it. Both pins are optional (a fixture run
+# without them skips only these two rules).
+PIN_COMPOSITE = os.environ.get("WM_GUARD_PIN_COMPOSITE", "")
+PIN_JOB = os.environ.get("WM_GUARD_PIN_JOB", "")
+PIN_JOB_KEY = "weakness-miner.yml::open-pr"
+
+
+def digest(obj):
+    return hashlib.sha256(json.dumps(obj, sort_keys=True, default=str).encode()).hexdigest()
 
 violations = []
 
@@ -303,6 +317,8 @@ def needs_closure(jobs, job):
 
 def check_caller(fname, doc, jname, jobs, job, steps, idx, st):
     tag = "%s::%s" % (fname, jname)
+    if PIN_JOB and tag == PIN_JOB_KEY and digest(job) != PIN_JOB:
+        v("C22", "%s: the credential job changed (sha256 %s, pinned %s). If deliberate, re-pin WM_OPENPR_JOB_PIN in tests/scripts/test-weakness-miner.sh in the same PR and record why in ADR-285" % (tag, digest(job), PIN_JOB))
     raw_uses = str(st.get("uses", "")).strip()
     if raw_uses != "./" + CALLED_REL:
         v("G0", "%s: the composite must be called by its canonical local spelling ./%s (got %r)" % (tag, CALLED_REL, raw_uses))
@@ -458,6 +474,13 @@ cdoc = yaml.safe_load(open(COMPOSITE))
 if "pr-token" not in (cdoc.get("inputs") or {}):
     v("C1", "the composite must declare the pr-token input")
 csteps = (cdoc.get("runs") or {}).get("steps") or []
+if PIN_COMPOSITE:
+    c0 = csteps[0] if csteps else {}
+    cnorm = "\n".join(l.rstrip() for l in str(c0.get("run", "")).splitlines() if l.strip() and not l.strip().startswith("#"))
+    cdig = digest({"run": cnorm, "env": c0.get("env"), "shell": c0.get("shell"), "uses": c0.get("uses"), "nsteps": len(csteps),
+                   "inputs": {k: [(x or {}).get("required"), (x or {}).get("default")] for k, x in (cdoc.get("inputs") or {}).items()}})
+    if cdig != PIN_COMPOSITE:
+        v("C21", "the composite's run body, env, shell, inputs or defaults changed (sha256 %s, pinned %s). If deliberate, re-pin WM_COMPOSITE_PIN in tests/scripts/test-weakness-miner.sh in the same PR and record why in the composite CHANGELOG and ADR-285" % (cdig, PIN_COMPOSITE))
 if not csteps:
     v("C2", "the composite's PR-opening step was not found")
 else:
@@ -1125,6 +1148,18 @@ def _():
     global wf
     wf = sub(wf, "DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4", "DopplerHQ/cli-action@main")
 
+
+@row_fn("66-composite-message-edited-without-repin")
+def _():
+    global comp
+    comp = sub(comp, "pr-token is empty or not a bearer token", "pr-token is bad")
+
+
+@row_fn("67-credential-job-edited-without-repin")
+def _():
+    global wf
+    wf = sub(wf, "    timeout-minutes: 15\n", "    timeout-minutes: 16\n")
+
 if row not in APPLY:
     sys.exit("unknown row %r" % row)
 APPLY[row]()
@@ -1133,9 +1168,16 @@ open(os.path.join(out, "wf", "weakness-miner.yml"), "w").write(wf)
 open(os.path.join(out, "composite.yml"), "w").write(comp)
 PYMUTATE
 
+# The closure (see the guard's header): sha256 pins of the composite's run body, env, shell, inputs and
+# defaults, and of the weakness-miner.yml::open-pr job. The regex rules in the guard are diagnostics;
+# these two pins are what makes a differently-spelled bypass red. A deliberate edit to either file
+# re-pins here in the same PR (the C21 / C22 message prints the new digest).
+WM_COMPOSITE_PIN="6162bd69a6beee267332f45c3a6a4f093926e28061860cd8a7fba3914e5fc25e"
+WM_OPENPR_JOB_PIN="2fc9dc34346729c028a71527a8035b7f55a03bdb864901fa0d02a853ad5f19c7"
 _wm_guard() { # $1 = workflows dir, $2 = composite path; prints the guard's lines
   WM_GUARD_WORKFLOWS="$1" WM_GUARD_COMPOSITE="$2" \
     WM_GUARD_CANON="$REPO_ROOT/.github/scripts/bump-inngest-bootstrap-pin.sh" \
+    WM_GUARD_PIN_COMPOSITE="$WM_COMPOSITE_PIN" WM_GUARD_PIN_JOB="$WM_OPENPR_JOB_PIN" \
     python3 -I "$WM_GUARD_PY" 2>&1
 }
 _wm_count() { # $1 = guard output; prints the number of VIOLATION lines
@@ -1146,8 +1188,8 @@ GUARD_CASES=0
 GUARD_RAN_ROWS=""
 # The row names, listed a SECOND time and independently of the ROWS table below, so a deleted or
 # duplicated row changes the set and the floor at the bottom of the file refuses to report green.
-GUARD_EXPECTED_ROWS="1-pr-token-is-workflow-token 1b-pr-token-secrets-spelling 2-pr-token-deleted 3-mint-after-composite 4-environment-removed 5-third-caller-bad 7-bare-gh 8a-merge-through-gate 8b-create-through-gate 8c-edit-through-gate 9-push-without-app-header 10-check-runs-through-app 11a-equality-refusal-deleted 11b-unset-deleted 11c-step-level-gh-token 11d-pr-token-shape-check-dropped 12a-miner-in-credential-job 12b-environment-on-mine 12c-secret-in-mine 13-persist-credentials-dropped 14-extra-write-permission 15-pr-assign-swapped 16-gate-assign-swapped 17-header-from-gate-token 18-equality-refusal-inert 19-bearer-body-weakened 20-second-composite-step 21-bare-gh-env-prefixed 22-third-helper 23-gate-token-writes-a-pr-endpoint 24-merge-neutered-by-echo 25-trace-unset-after-push 26-caller-trailing-slash 27-caller-remote-spelling 28-if-or-always 29-secret-bracket-in-mine 30-mint-sibling-prefix-action 31-installation-id-changed 32-job-env-bash-env 33-download-path-widened 34-checkout-ref-dropped 35-mine-write-permission 36-mint-continue-on-error 37-mint-uses-other-action 38-mint-permissions-widened 39-mint-repositories-widened 40-mint-broad-doppler-token 41-mint-names-a-doppler-project 42-gh-token-is-the-app-token 43-composite-input-renamed 44-composite-pr-token-env-from-gate 45-statement-before-xtrace-refusal 46-gh-app-helper-uses-gate-token 47-header-built-with-newlines 48-eval-hides-a-command 49-commit-identity-reverted 50-second-pr-assignment 51-refusal-exit-via-or 52-header-from-gate-with-pr-in-a-comment 53-bare-gh-in-a-case-arm 54-bare-gh-absolute-path 55-curl-with-the-gate-token 56-remote-action-not-allowlisted 57-needs-removed 58-gh-app-closes-a-pr 59-xtrace-refusal-without-exit 60-bearer-ok-redefined 61-gh-app-redefined 62-composite-shell-bash-x 63-credential-job-self-hosted 64-skip-auto-merge-true 65-action-ref-is-a-branch"
-GUARD_EXPECTED_CASES=76
+GUARD_EXPECTED_ROWS="1-pr-token-is-workflow-token 1b-pr-token-secrets-spelling 2-pr-token-deleted 3-mint-after-composite 4-environment-removed 5-third-caller-bad 7-bare-gh 8a-merge-through-gate 8b-create-through-gate 8c-edit-through-gate 9-push-without-app-header 10-check-runs-through-app 11a-equality-refusal-deleted 11b-unset-deleted 11c-step-level-gh-token 11d-pr-token-shape-check-dropped 12a-miner-in-credential-job 12b-environment-on-mine 12c-secret-in-mine 13-persist-credentials-dropped 14-extra-write-permission 15-pr-assign-swapped 16-gate-assign-swapped 17-header-from-gate-token 18-equality-refusal-inert 19-bearer-body-weakened 20-second-composite-step 21-bare-gh-env-prefixed 22-third-helper 23-gate-token-writes-a-pr-endpoint 24-merge-neutered-by-echo 25-trace-unset-after-push 26-caller-trailing-slash 27-caller-remote-spelling 28-if-or-always 29-secret-bracket-in-mine 30-mint-sibling-prefix-action 31-installation-id-changed 32-job-env-bash-env 33-download-path-widened 34-checkout-ref-dropped 35-mine-write-permission 36-mint-continue-on-error 37-mint-uses-other-action 38-mint-permissions-widened 39-mint-repositories-widened 40-mint-broad-doppler-token 41-mint-names-a-doppler-project 42-gh-token-is-the-app-token 43-composite-input-renamed 44-composite-pr-token-env-from-gate 45-statement-before-xtrace-refusal 46-gh-app-helper-uses-gate-token 47-header-built-with-newlines 48-eval-hides-a-command 49-commit-identity-reverted 50-second-pr-assignment 51-refusal-exit-via-or 52-header-from-gate-with-pr-in-a-comment 53-bare-gh-in-a-case-arm 54-bare-gh-absolute-path 55-curl-with-the-gate-token 56-remote-action-not-allowlisted 57-needs-removed 58-gh-app-closes-a-pr 59-xtrace-refusal-without-exit 60-bearer-ok-redefined 61-gh-app-redefined 62-composite-shell-bash-x 63-credential-job-self-hosted 64-skip-auto-merge-true 65-action-ref-is-a-branch 66-composite-message-edited-without-repin 67-credential-job-edited-without-repin"
+GUARD_EXPECTED_CASES=79
 
 t_workflow_pr_identity() {
   local real_wf="$REPO_ROOT/.github/workflows/weakness-miner.yml"
@@ -1244,6 +1286,23 @@ YML
     _report "identity guard H2: compliant non-canonical caller is GREEN" ok
   else
     _report "identity guard H2: compliant non-canonical caller is GREEN" FAIL "(got: $(printf '%s' "$out" | tr '\n' '|'))"
+  fi
+
+  # H3 — the pin normalises comments and blank lines away, so a reviewer-comment-only edit to the
+  # composite must stay GREEN while a content edit (rows 66 and 67) goes RED.
+  mkdir -p "$root/h3"
+  awk '{ print } /^        set -eo pipefail$/ { print ""; print "        # a comment added by a reviewer" }' "$real_comp" > "$root/h3/composite.yml"
+  GUARD_CASES=$((GUARD_CASES + 1))
+  if cmp -s "$root/h3/composite.yml" "$real_comp"; then
+    _report "identity guard H3: a comment-only edit must differ from the real composite" FAIL "(the awk edit did not land)"
+  else
+    out=$(_wm_guard "$REPO_ROOT/.github/workflows" "$root/h3/composite.yml")
+    n=$(_wm_count "$out")
+    if (( n == 0 )) && [[ "$out" == *"CALLERS 1"* ]]; then
+      _report "identity guard H3: a comment-only composite edit stays GREEN under the pin" ok
+    else
+      _report "identity guard H3: a comment-only composite edit stays GREEN under the pin" FAIL "(got: $(printf '%s' "$out" | tr '\n' '|'))"
+    fi
   fi
 
   # The real tree.
@@ -1371,6 +1430,8 @@ YML
 63-credential-job-self-hosted|G20
 64-skip-auto-merge-true|G20
 65-action-ref-is-a-branch|G20
+66-composite-message-edited-without-repin|C21
+67-credential-job-edited-without-repin|C22
 ROWS
 }
 

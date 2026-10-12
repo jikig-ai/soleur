@@ -71,7 +71,10 @@ public repository, so no setting is a verified lever.
    through `gh_app` and the check-run posts through `gh_gate`, so a bare `gh` call fails instead of silently authoring as
    the workflow token. The push carries the App token as a per-command `http.https://github.com/.extraheader`.
 5. A static guard in `tests/scripts/test-weakness-miner.sh` evaluates every caller of the composite (derived, floor of
-   one) and the composite itself, with a mutation battery. ADR-241's census row G7f counts four callers.
+   one) and the composite itself, with a mutation battery. Its regex rules are diagnostics that name which property moved: shell has more
+   spellings than any list, and two review rounds each found a fresh bypass. The closure is a sha256 pin of the
+   composite's run body, env, shell, inputs and defaults and of the `open-pr` job, so any edit to either must re-pin in
+   the same PR, where a reviewer sees it. ADR-241's census row G7f counts four callers.
 
 ## Exposure, stated plainly
 

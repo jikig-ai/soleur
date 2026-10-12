@@ -30,8 +30,9 @@ queue entry received no `merge_group` runs (PR 10013, 2026-10-11).
 - The step refuses a non-regular-file path before staging, and refuses a push when the date-suffixed
   branch already exists on origin (a same-day re-run), naming the delete command in the error.
 - The single in-repo caller (`weakness-miner.yml`) moves in the same change; the static guard in
-  `tests/scripts/test-weakness-miner.sh` evaluates every caller. The earned-green blocks, the
-  allowlist and the off-main refusal are unchanged.
+  `tests/scripts/test-weakness-miner.sh` evaluates every caller and hash-pins this composite's
+  run body, env, shell, inputs and defaults: an edit to any of them re-pins `WM_COMPOSITE_PIN` there in the same
+  PR. The earned-green blocks, the allowlist and the off-main refusal are unchanged.
 
 ## 2026-09-20 — ALLOWED_PATHS drops rule-metrics.json (#8377)
 
