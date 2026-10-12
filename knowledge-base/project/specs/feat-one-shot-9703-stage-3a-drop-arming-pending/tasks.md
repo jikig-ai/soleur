@@ -10,8 +10,8 @@ from Better Stack, not from the repo.
 ## Phase 1: RED - flip the parity test
 
 - 1.1 In `apps/web-platform/infra/inngest-server-probe-heartbeat.test.sh`, update the header comment (lines 13-15) and the section (h) comment.
-- 1.2 Replace the `arming_pending` presence assertion (lines 181-185) with its inverse, bound to the row block and to code lines only (comments stripped), with a cardinality check (exactly one `name: "inngest_server_probe"`) and positive `feeder:` / `exempt_reason:` checks.
-- 1.3 Move the other three section (h) assertions from the `grep -A 30` window to the row block. Keep `EXPECTED_PASSES=21`.
+- 1.2 Replace the `arming_pending` presence assertion (lines 181-185) with its inverse, bound to the row block (opening brace to closing brace, emitted for every row whose `name:` matches) with comment lines stripped, plus a positive `feeder:` check (see the plan's Phase 1 snippet).
+- 1.3 Leave the other section (h) assertions on their existing window. Keep `EXPECTED_PASSES=21`.
 - 1.4 Run `bash apps/web-platform/infra/inngest-server-probe-heartbeat.test.sh` and confirm it is RED against the unchanged manifest.
 
 ## Phase 2: GREEN - the manifest row
@@ -37,7 +37,8 @@ from Better Stack, not from the repo.
 
 ## Phase 5: verify and ship
 
-- 5.1 Guard 1 scratch-copy mutation rows M1-M6 (see the plan's Guard Contract); paste observed RED/GREEN lines into the PR body.
+- 5.1 Guard 1 scratch-copy mutation rows M1-M5 (see the plan's Guard Contract); record a one-line RED/GREEN summary in the PR body.
+- 5.1b Immediately before marking ready, take the runbook P3 read-only heartbeat state (`504655 up false 3600 1800`) and record it in the PR body; stop if it differs.
 - 5.2 Targeted suites from the plan's Acceptance Criteria; gate-own invocations (`lint-infra-no-human-steps.py --changed --base origin/main`, `lint-guard-contract.py`, `actionlint`, markdownlint on the md files).
 - 5.3 Union grep on the final diff: Stage 3b files untouched, `uptime-alerts.tf` comment-only, no closing keyword, trailer `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`.
 - 5.4 PR body: first line answers "does merging this alone mutate production?" (web image deploy + plugin patch release for the `plugins/soleur/lib` edit; push-apply must plan no changes for the probe resources; no Better Stack, Sentry or Terraform write). Then `Ref #9703`, `## Changelog`, and the closing line `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.

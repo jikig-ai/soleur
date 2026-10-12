@@ -16,6 +16,31 @@ brand_survival_threshold: none
 Spec lacks a `spec.md` for this branch, so `lane:` defaults to `cross-domain` (fail-closed). The PR is
 draft #10134. Every commit and the PR body say `Ref #9703` only; no closing keyword anywhere.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-12
+**Passes run:** mechanical halt gates (User-Brand Impact, Observability, PAT, UI-wireframe, Encryption Posture, Guard Contract, Scope Check, precedent diff), a live read of the three cited runs' verdict lines, an offline C4 regeneration baseline, and three report-only review seats (code-simplicity, test-design, observability-coverage). Network-outage, downtime and UI gates did not fire (no SSH or host surface, no UI file).
+
+### Key improvements folded in
+
+1. **Extractor bug found by measurement.** The first-draft row extractor started at the `name:` line, so a field placed above `name:` stayed GREEN. Replaced with a row-buffered extractor (opening brace to closing brace, every matching row); measured 1 hit on the current tree and 2 with the field above `name:`. Mutation matrix reduced from six to five rows (spelling and pass-count rows cut as redundant; above-`name:` row added).
+2. **Simplified the test change.** Dropped the separate cardinality count, the `exempt_reason:` positive check and the rewrite of the other two section (h) assertions (the buffered extractor covers duplicates; the existing window holds).
+3. **ADR-117 line 463.** "Nothing in this record states that the heartbeat is armed" would have contradicted the appended 2026-10-12 sentence; Phase 4 now qualifies it in the same edit.
+4. **Merge side effects corrected.** `version-bump-and-release.yml` has no `docs/`/`test/` exclusion (the plan said both workflows did); added `mint-inngest-bootstrap-tag.yml` (expect `result=noop`), `validate-vector-config.yml` and `infra-validation.yml` (also triggered by `model.c4`).
+5. **Fresh read before ready.** Phase 5 now takes the runbook's P3 read-only state (`504655 up false 3600 1800`) immediately before the PR is marked ready, so the arm record is a fresh read rather than a quote; a mismatch stops the PR.
+6. **Observability block** cites layers precisely (Sentry monitor unrouted, workflow run log) and says the selftest does not test this property; Guard 1 in CI does.
+7. **Scope Check** rewritten to the three-subsection schema with verbatim asks; an Encryption Posture section records why the `.tf` edit carries no store or connection.
+
+### Considered and not applied
+
+- Dropping `lint-infra-no-human-steps.py --changed` from the acceptance list (kept: it is the gate's own invocation and is cheap).
+- Removing the `inngest_consumer` runbook sentence at ~1192 from scope (kept: after this PR no row carries `arming_pending`, so the sentence would cite a field no row has; one sentence).
+
+### Verified live in this pass
+
+- Runs 38264380002, 38265381453, 38267189184: `conclusion=success`, `event=workflow_dispatch`, verdict lines `verdict=beat http=200` (ages 3266 s, 186 s, 1052 s).
+- Baselines green on the unchanged tree: `scripts/inngest-probe-heartbeat-feeder.test.sh` (151 cases), `luks-monitor.test.sh` (129), `heartbeat-reprovision-parity` and `heartbeat-live-reconcile` (157 pass, 0 fail), `c4-count-parity`, `inngest-server-probe-heartbeat.test.sh` (21).
+
 ## Overview
 
 `betteruptime_heartbeat.inngest_server_probe` (live id 504655, `soleur-inngest-server-probe-prd`,
@@ -95,7 +120,7 @@ Key repo facts, with the authority read:
 
 - `plugins/soleur/lib/heartbeat-manifest.ts` row `inngest_server_probe` (lines ~320-342): `arming_pending: { tracking_issue: 9703 }` at line 338; the row comment (lines 322-329) and `exempt_reason` (line 340) both say "arming pending". `paused: true` at line 331 is the **source `.tf`** state (born paused, `ignore_changes = [paused]`) and stays, as in the `git_data_host_prd` precedent.
 - `plugins/soleur/lib/heartbeat-live-reconcile.ts:1025`: `if (fed && !row.arming_pending && livePausedByName.get(disc.liveName) === true)` is the only consumer that changes behaviour; it only reads. Live is `up`, so the nightly run stays clean.
-- Merge side effects (the 2026-09-21 learning: a "merge is inert" claim is a property of the **final** file set): `plugins/soleur/lib/heartbeat-manifest.ts` is outside the `docs/` and `test/` exclusions of `web-platform-release.yml` and `version-bump-and-release.yml`, so merging builds and deploys the web image and cuts a plugin patch release (same as PR #10080 did). `apps/web-platform/infra/**` fires `apply-web-platform-infra.yml`, with or without the `uptime-alerts.tf` edit, because the test file already lives there; the push-apply `-target` plan for `betteruptime_heartbeat.inngest_server_probe` and `doppler_secret.inngest_server_probe_heartbeat_url` must show no changes (comment-only). Re-run the union grep on the final diff at work exit.
+- Merge side effects (the 2026-09-21 learning: a "merge is inert" claim is a property of the **final** file set): `plugins/soleur/lib/heartbeat-manifest.ts` is outside the `docs/` and `test/` exclusions of `web-platform-release.yml` (which has them), so merging builds and deploys the web image; `version-bump-and-release.yml` triggers on `plugins/soleur/**` with no such exclusion and cuts a plugin patch release (same as PR #10080 did). The deepen-pass review parsed every workflow's push/PR path filters against the planned file list: `apps/web-platform/infra/**` fires `apply-web-platform-infra.yml`, with or without the `uptime-alerts.tf` edit, because the test file already lives there (its push-apply `-target` plan for `betteruptime_heartbeat.inngest_server_probe` and `doppler_secret.inngest_server_probe_heartbeat_url` must show no changes: comment-only); `mint-inngest-bootstrap-tag.yml` also fires (`apps/web-platform/infra/inngest*` matches the edited test file) and must decide `result=noop` (it counts only `cp apps/web-platform/infra/<file>` carriers named by the build workflow, and the test file is not one); `validate-vector-config.yml` and `infra-validation.yml` fire as validation-only jobs (`infra-validation.yml` also lists `model.c4`). `apply-deploy-pipeline-fix.yml` and `deploy-docs.yml` do not fire. Re-run the union grep on the final diff at work exit.
 - `scripts/check-web-host-escrow-config.sh` census lists `uptime-alerts.tf` (`WEB1_FILES`) but strips comment-only lines before matching, so a comment edit cannot trip it. No test hashes `uptime-alerts.tf`.
 - PRs 10081 (parked draft) and 10086 (open) edit `runbooks/inngest-server.md` at lines ~27, ~610, ~1493 and ~3052. This plan's three runbook edits sit at ~1192, ~1539 and ~1680; the nearest hunk is 46 lines away.
 
@@ -104,22 +129,18 @@ Learnings applied: `2026-09-21-the-record-pr-was-inert-except-for-one-comment-an
 (a record of arming is the read-back, not the sentence that says it), and the PR #10080 review note that a
 `.tf` comment edit can be hash-bound (verified not to apply to `uptime-alerts.tf`, above).
 
+Precedent diff (deepen-plan 4.4, record-PR pattern). Precedent: PR #10080 / commit `67dec0d7c6`, the `git_data_host_prd`
+record PR (`git show 67dec0d7c6 --stat`: ADR-283, `model.c4`, `model.likec4.json`, a runbook, `knowledge-base/operations/expenses.md`, and
+`heartbeat-manifest.ts`; 37 insertions, 19 deletions). Same here: the manifest comment is a dated record that quotes the dropped field,
+`paused: true` stays, the live state is disclaimed as read from Better Stack, `model.c4` and its generated JSON move together.
+Differences: this plan adds a test flip (no test under `*.test.*` or `tests/` pinned the `git_data_host_prd` row's `arming_pending`), cites run ids instead of an
+`arm-heartbeats.sh --arm-one` verdict, and edits no `.tf` file there but one here (the `git-data.tf` comment was left alone in
+that review because it is hash-bound; `uptime-alerts.tf` is verified not to be).
+
+C4 regeneration is offline and deterministic (measured in the deepen pass): `bash scripts/regenerate-c4-model.sh --out <scratch>` on the unchanged tree printed `90 elements, 191 relations, 92 views` in about 5 s and `cmp` against the committed `model.likec4.json` reported IDENTICAL, so any diff after the `model.c4` edit is the edit itself.
+
 External research skipped: strong local context, no new external API. Community discovery and functional
 overlap skipped: no new stack and no new functionality.
-
-## Scope Check
-
-| Ask (from the brief) | Plan item |
-|---|---|
-| Drop `arming_pending` from the manifest row | Phase 2 |
-| Anything that parity-tests it | Phase 1 (`inngest-server-probe-heartbeat.test.sh`) |
-| Stale comments that say it is still pending (`uptime-alerts.tf`~528; runbook ~1192, ~1680) | Phase 3, Phase 4 |
-| Wording the read-back makes true, cite the run ids | Phase 3, Phase 4 (workflow header, runbook, ADR-117, `model.c4`) |
-| Not Stage 3b | `## Non-Goals` |
-
-No unmapped ask. Two items are `inferred` and justified: the workflow header line and the `model.c4` clause
-carry the same false claim (the parent plan names the C4 clause for 3a), so leaving them contradicts the
-manifest this PR changes. Split assessment: one PR, ~9 small files, one concern.
 
 ## Non-Goals
 
@@ -138,26 +159,27 @@ the test before the manifest and see it fail.
 - Header (lines 13-15): replace "plus arming_pending while the heartbeat is still paused" with "and NO
   arming_pending (dropped after the 2026-10-12 arm read-back, #9703)".
 - Section (h) comment (lines 150-152 region, "tracked, still-pending arming"): update to "armed; no arming_pending".
-- Replace the assertion at lines 181-185 with its inverse, bound to the **row block, code lines only**:
+- Replace the assertion at lines 181-185 with its inverse, bound to the **row block (opening brace to closing brace), code lines only**:
 
   ```bash
-  mf_row="$(awk '/name:[[:space:]]*"inngest_server_probe"/{p=1} p{print} p&&/^  \},?[[:space:]]*$/{exit}' "$MANIFEST")"
+  mf_row="$(awk '/^  \{[[:space:]]*$/{buf="";inrow=1} inrow{buf=buf $0 "\n"} inrow&&/^  \},?[[:space:]]*$/{if(buf ~ /name:[[:space:]]*"inngest_server_probe"/) printf "%s",buf; inrow=0}' "$MANIFEST")"
   mf_row_code="$(grep -vE '^[[:space:]]*//' <<<"$mf_row")"
-  mf_row_count="$(grep -cE 'name:[[:space:]]*"inngest_server_probe"' "$MANIFEST")"
-  if [ "$mf_row_count" -eq 1 ] && has "$mf_row_code" 'feeder:' && has "$mf_row_code" 'exempt_reason:' \
-    && ! has "$mf_row_code" 'arming_pending'; then
+  if has "$mf_row_code" 'feeder:' && ! has "$mf_row_code" 'arming_pending'; then
     ok "the inngest_server_probe row carries no arming_pending (armed 2026-10-12, #9703; re-adding it hides a re-pause from the reconcile)"
   else
-    no "the inngest_server_probe row must exist exactly once, and must not carry arming_pending in code"
+    no "the inngest_server_probe row must exist and must not carry arming_pending in code"
   fi
   ```
 
-  Comment lines are excluded because the dated record comment names the field (the `git_data_host_prd`
-  comment at manifest line 297 does the same). The `feeder:`/`exempt_reason:` positive checks make a broken
-  extractor fail instead of passing on empty input.
-- Switch the other three section-(h) assertions from the `grep -A 30` window to `mf_row` so a longer row comment
-  cannot push `feeder` out of a 30-line window. `EXPECTED_PASSES` stays 21 (one assertion replaced by its inverse,
-  none added or removed).
+  The extractor buffers each top-level row from its opening brace line to its closing brace line (both indented exactly
+  two spaces) and emits every buffer whose `name:` matches, so a field placed ABOVE `name:` and a duplicate row are both
+  inside the checked text (measured in the deepen pass: the first draft, which started at the `name:` line, stayed GREEN
+  for a field above `name:`; this form reports 1 hit on the current tree and 2 with the field above `name:`). Comment
+  lines are excluded because the dated record comment names the field (the `git_data_host_prd` comment at manifest line
+  297 does the same). The positive `feeder:` check makes a broken extractor fail instead of passing on empty input.
+- Leave the other section (h) assertions (name; feeder kind, file, pattern) on their existing `grep -A 30` window: it
+  holds today and rewriting passing assertions in a record PR buys nothing. `EXPECTED_PASSES` stays 21 (one assertion
+  replaced by its inverse, none added or removed).
 - Run `bash apps/web-platform/infra/inngest-server-probe-heartbeat.test.sh`; expect RED (the row still carries it).
 
 ### Phase 2 - the manifest row (GREEN)
@@ -212,9 +234,13 @@ Keep every edit to one sentence or paragraph; do not reflow around it.
     `fed-but-paused` class. Keep the rest of the paragraph (the "a paused heartbeat makes the feeder report
     `fresh_heartbeat_paused`" net argument, the rollback reading guidance, the "later stages tracked on #9703" sentence).
 - `knowledge-base/engineering/architecture/decisions/ADR-117-executable-heartbeat-arming.md`: in the
-  2026-10-11 amendment's **"Fed" is not "armed"** paragraph (lines ~459-466) append one dated sentence (2026-10-12
-  record: armed per the runbook block, `arming_pending` dropped, the reconcile's `fed-but-paused` class now covers
-  the row). Leave the generic mentions at lines 172 and 186 (the field still exists).
+  2026-10-11 amendment's **"Fed" is not "armed"** paragraph (lines ~459-466): (i) qualify the sentence at line ~463
+  "Nothing in this record states that the heartbeat is armed." as "As of the 2026-10-11 amendment, nothing in this
+  record stated that the heartbeat was armed; see the 2026-10-12 record below." (appending alone would leave a flat
+  contradiction beside the new sentence), and (ii) append one dated sentence (2026-10-12 record: armed per the runbook
+  block, `arming_pending` dropped, the reconcile's `fed-but-paused` class now covers the row). Line ~462 ("the row
+  ships with `arming_pending`") is historical and stays. Leave the generic mentions at lines 172 and 186 (the field
+  still exists).
 - `knowledge-base/engineering/architecture/diagrams/model.c4` line 320 (Inngest queue description): replace
   "so it is fed but NOT armed: arming is a separately authorized step tracked on #9703" with "armed 2026-10-12
   (read-back `status=up`, feeder runs `verdict=beat`, #9703)". Then `bash scripts/regenerate-c4-model.sh` to
@@ -225,6 +251,7 @@ Keep every edit to one sentence or paragraph; do not reflow around it.
 ### Phase 5 - verify, then ship
 
 - Targeted suites only (CI is authoritative), see `## Acceptance Criteria`.
+- Fresh read-only state check immediately before marking the PR ready (so the arm record is a fresh read, not a quote): the runbook's P3 read (`hbr` helper, `GET /api/v2/heartbeats`, URL attribute not selected, read-only token) must print `504655 up false 3600 1800`; record the line in the PR body. If it prints anything else, stop and do not mark ready: dropping `arming_pending` over a paused heartbeat would make the next nightly reconcile file a real `fed-but-paused` finding.
 - Union grep on the final diff for merge side effects (the 2026-09-21 learning) and the closing-keyword grep.
 - Commit trailer `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`; PR body: first line answers "does merging this
   alone mutate production?" (web image deploy and plugin patch release for the `plugins/soleur/lib` edit;
@@ -258,25 +285,26 @@ Re-run on the final file list before the PR is marked ready.
 
 ### Guard 1 — `inngest-server-probe-heartbeat.test.sh` section (h): the `inngest_server_probe` manifest row carries no `arming_pending`
 
-**Property.** The manifest row for `inngest_server_probe` exists exactly once and carries no `arming_pending` in code, so the nightly live reconcile cannot be told to ignore a paused-yet-fed state for this heartbeat.
+**Property.** The manifest row for `inngest_server_probe` exists and carries no `arming_pending` in code, so the nightly live reconcile cannot be told to ignore a paused-yet-fed state for this heartbeat.
 
-**Assembly.** The property quantifies over every `MANIFEST` row named `inngest_server_probe` in `plugins/soleur/lib/heartbeat-manifest.ts` (the single chokepoint every consumer reads: `heartbeat-live-reconcile.ts:1025` reads `row.arming_pending` off the same array, and `reconcile-live-heartbeats.ts` passes `MANIFEST`), and over the row's CODE lines only (the dated record comment legitimately names the field, so comment lines are excluded by construction rather than by a token allow-list). The extractor is bounded from the row's `name:` line to the row's closing brace line (the one indented exactly two spaces) and is tied to a cardinality check (exactly one such `name:` line in the file) so a duplicate row cannot hide behind the first. The suite's own dispatch is protected by the existing `EXPECTED_PASSES=21` count plus the positive `feeder:` and `exempt_reason:` checks inside the assertion. The guard compares no stored hash or count to the thing it protects, so there is no Anchor to name: it asserts a source property, and weakening it requires editing the test and the manifest in one diff, which the review sees together.
+**Assembly.** The property quantifies over every `MANIFEST` row named `inngest_server_probe` in `plugins/soleur/lib/heartbeat-manifest.ts` (the single chokepoint every consumer reads: `heartbeat-live-reconcile.ts:1025` reads `row.arming_pending` off the same array, and `reconcile-live-heartbeats.ts` passes `MANIFEST`), and over the row's CODE lines only (the dated record comment legitimately names the field, so comment lines are excluded by construction rather than by a token allow-list). The extractor buffers each top-level row from its opening brace line to its closing brace line (indented exactly two spaces) and emits every buffer whose `name:` matches, so the whole row (including a field above `name:`) and every duplicate row are inside the checked text. The suite's own dispatch is protected by the positive `feeder:` check inside the assertion (an extractor that finds nothing fails it) and by the existing `EXPECTED_PASSES=21` count. The guard compares no stored hash or count to the thing it protects, so there is no Anchor to name: it asserts a source property, and weakening it requires editing the test and the manifest in one diff, which the review sees together.
 
 **Mutation matrix.**
 
 | # | Edit under test | Must drive the guard |
 |---|---|---|
 | M1 | re-add `arming_pending: { tracking_issue: 9703 },` to the row | RED (the assertion's `! has ... arming_pending` arm) |
-| M2 | re-add it in a different spelling: `arming_pending:{tracking_issue:9703}` on one line, and separately split across three lines | RED both (the assertion matches the token, not one shape) |
-| M3 | own dispatch: rename the row's `name:` so the extractor finds nothing | RED (cardinality and positive `feeder:` checks reject empty input; it must not report "0 checked" green) |
-| M4 | add a SECOND `inngest_server_probe` row after the compliant first, carrying `arming_pending` | RED (cardinality check) |
-| M5 | harness row: delete the flipped assertion block from the suite | RED (`EXPECTED_PASSES` conservation: 20 passes, expected 21) |
-| M6 | must-PASS, not the canonical: add `arming_pending: { tracking_issue: 1 }` to a DIFFERENT row (for example `workspaces_luks`), and separately mention `arming_pending` only in a `//` comment inside this row | GREEN both (the guard must not reject everything; the comment form is explicitly permitted) |
+| M2 | own dispatch: rename the row's `name:` so the extractor finds nothing | RED (the positive `feeder:` check rejects empty input; it must not report "0 checked" green) |
+| M3 | add a SECOND `inngest_server_probe` row after the compliant first, carrying `arming_pending` | RED (the extractor emits every matching row) |
+| M4 | put the field ABOVE `name:` inside the row (measured GREEN with the first-draft extractor, the reason for the buffered form) | RED |
+| M5 | must-PASS, not the canonical: add `arming_pending: { tracking_issue: 1 }` to a DIFFERENT row (for example `workspaces_luks`), and separately mention `arming_pending` only in a `//` comment inside this row | GREEN both (the guard must not reject everything; the comment form is explicitly permitted) |
 
-Run each row on a scratch copy of the two files (not the working tree) and paste the observed RED/GREEN lines into
-the PR body. The remediation-tree check: after Phase 2 the row's own dated comment contains the literal
-`arming_pending: { tracking_issue: 9703 }` text; M6's second half proves the classifier does not match the
-remediation's own text.
+Run each row once on a scratch copy of the two files (never the working tree) and record a one-line summary in the PR body
+(for example "M1 RED, M2 RED, M3 RED, M4 RED, M5 GREEN/GREEN"). Grade a row on the assertion's own `[FAIL]` text, not the exit
+code: a failing assertion also trips the pass-count conservation check, so every RED prints two `[FAIL]` lines. Known and
+accepted: a trailing `// ...arming_pending...` comment on a CODE line reads as a hit (conservative false positive). The
+remediation-tree check: after Phase 2 the row's own dated comment contains the literal `arming_pending: { tracking_issue: 9703 }`
+text; M5's second half proves the classifier does not match the remediation's own text.
 
 ## User-Brand Impact
 
@@ -291,7 +319,7 @@ threshold: none, reason: the diff touches `apps/web-platform/infra/**` only in c
 
 ```yaml
 liveness_signal:
-  what: "Better Stack heartbeat soleur-inngest-server-probe-prd (id 504655), beaten by scheduled-inngest-probe-heartbeat.yml only on a fresh host_role=dedicated probe row; Sentry cron monitor scheduled-inngest-probe-heartbeat"
+  what: "Better Stack heartbeat soleur-inngest-server-probe-prd (id 504655), beaten by scheduled-inngest-probe-heartbeat.yml only on a fresh host_role=dedicated probe row; Sentry monitor scheduled-inngest-probe-heartbeat (unrouted)"
   cadence: "15-minute watchdog slots; period 3600 + grace 1800 (pages 5400 s after the last beat)"
   alert_target: "Better Stack team email policy; nightly heartbeat-live-reconcile files an issue on fed-but-paused"
   configured_in: "apps/web-platform/infra/uptime-alerts.tf (betteruptime_heartbeat.inngest_server_probe), .github/workflows/scheduled-inngest-probe-heartbeat.yml, plugins/soleur/lib/heartbeat-live-reconcile.ts"
@@ -303,11 +331,11 @@ failure_modes:
     detection: "nightly live reconcile class fed-but-paused (re-armed by this PR); the feeder itself exits 0 with fresh_heartbeat_paused and would not alert"
     alert_route: "reconcile-filed issue and Sentry monitor scheduled-heartbeat-reconcile"
   - mode: "arming_pending re-added by mistake"
-    detection: "inngest-server-probe-heartbeat.test.sh section (h) fails in CI"
-    alert_route: "red PR check"
+    detection: "inngest-server-probe-heartbeat.test.sh section (h) fails in the CI test-all job log (Guard 1)"
+    alert_route: "red PR check on the CI workflow run log"
   - mode: "probe pipeline dark"
     detection: "feeder withholds the beat (producer_silent or no_rows); heartbeat pages after 5400 s"
-    alert_route: "Better Stack heartbeat policy"
+    alert_route: "Better Stack heartbeat policy (team email); the Sentry monitor scheduled-inngest-probe-heartbeat is unrouted and opens an issue only, it pages no one; the workflow run log carries the verdict line"
 logs:
   where: "GitHub Actions run logs of Scheduled: Inngest Probe Heartbeat Feeder (gh run view <id> --log, no SSH)"
   retention: "GitHub Actions default 90 days; Better Stack incident history"
@@ -316,7 +344,7 @@ discoverability_test:
   expected_output: selftest=ok
 ```
 
-The selftest proves the feeder verdict logic offline (it measured 0.01 s here); the live armed state is a
+The selftest proves the feeder verdict logic offline (it measured 0.01 s here and printed `inngest-probe-feeder: selftest=ok`); it passes identically whether or not `arming_pending` is dropped, so the property this PR changes is covered by Guard 1 in CI, not by the selftest. The live armed state is a
 credentialed Better Stack read (`BETTERSTACK_API_TOKEN_READONLY`, Doppler `prd_terraform`) shown in the runbook's
 P3 read, which has no unauthenticated substitute and is therefore described, not declared as the executed probe.
 
@@ -335,25 +363,70 @@ access relationship is added or changes, so no `.c4` structural edit is in scope
 `model.c4`, `views.c4` and `spec.c4` before the edit and confirms the same, and `c4-count-parity` plus the two
 C4 vitest files are the evidence.
 
+## Encryption Posture
+
+No `at_rest` or `in_transit` entries are declared: this change introduces no persistent store and no new
+cross-component connection. `uptime-alerts.tf` matches the `.tf` detection pattern, but the edit is one comment
+sentence on an existing resource; the resource, the heartbeat URL secret and the `-target` allow-list are unchanged.
+
+## Scope Check
+
+### Ask Mapping
+
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "drop `arming_pending` from the Inngest probe heartbeat manifest row (plugins/soleur/lib/heartbeat-manifest.ts" [brief] | Phase 2; Files to Edit entry 1 | mapped |
+| 2 | "and anything that parity-tests it, e.g. apps/web-platform/infra/inngest-server-probe-heartbeat.test.sh" [brief] | Phase 1; Files to Edit entry 2; Guard Contract | mapped |
+| 3 | "plus the stale comments that say it is still pending, e.g. uptime-alerts.tf near line 528, runbook inngest-server.md near lines 1192 and 1680" [brief] | Phase 3 (`uptime-alerts.tf`); Phase 4 (runbook, three spots) | mapped |
+| 4 | "Scope: only the arming_pending drop and the wording that the read-back now makes true (cite the run ids)" [brief] | Phases 2-4 wording edits; evidence table cites the three run ids | mapped |
+| 5 | "Do NOT do Stage 3b (delete the 8296 probe, route the Sentry monitor, refresh other stale .tf comments)" [brief] | Non-Goals; Acceptance Criteria diff-scope item | mapped |
+| 6 | "Do not run terraform apply or any production write; plan-only." [brief] | Non-Goals; PR-body production statement | mapped |
+| 7 | "\"Ref #9703\" only, never a closing keyword" [brief] | Phase 5; Acceptance Criteria commit and PR text item | mapped |
+| 8 | "keep edits there minimal to limit merge conflicts" [brief] | Phase 4 (one sentence or paragraph per runbook spot; nearest 10086 hunk is 46 lines away) | mapped |
+| 9 | "Locally run only TEST_GROUP=affected or targeted suites; CI is authoritative." [brief] | Acceptance Criteria targeted-suites item | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| `plugins/soleur/lib/heartbeat-manifest.ts` | "drop `arming_pending` from the Inngest probe heartbeat manifest row" (ask 1) | asked |
+| `apps/web-platform/infra/inngest-server-probe-heartbeat.test.sh` | "anything that parity-tests it" (ask 2) | asked |
+| `apps/web-platform/infra/uptime-alerts.tf` (one sentence) | "uptime-alerts.tf near line 528" (ask 3) | asked |
+| `knowledge-base/engineering/operations/runbooks/inngest-server.md` (three spots) | "runbook inngest-server.md near lines 1192 and 1680" (ask 3) | asked |
+| `.github/workflows/scheduled-inngest-probe-heartbeat.yml` (header comment line) | "the stale comments that say it is still pending" (ask 3) | asked |
+| `ADR-117-executable-heartbeat-arming.md` (one dated sentence) | "the wording that the read-back now makes true" (ask 4) | asked |
+| `knowledge-base/engineering/architecture/diagrams/model.c4` and regenerated `model.likec4.json` | "the wording that the read-back now makes true" (ask 4) | inferred - justification: the parent plan's Phase 7 names "the ADR amendments and C4 clause" for Stage 3a, and the clause states "fed but NOT armed", which the read-back falsifies; `model.likec4.json` is generated from `model.c4` and a stale generated copy fails the C4 gates |
+| Guard Contract (five-row mutation matrix, scratch-copy runs) | - | inferred - justification: the flipped assertion IS a guard, so plan Phase 2.12 requires the contract; the rows are verified on scratch copies and not committed as a new battery |
+| `## Observability` block | - | inferred - justification: the diff touches `apps/web-platform/infra/`, which plan Phase 2.9 and deepen-plan 4.7 treat as code-class |
+
+### Split Assessment
+
+- Subsystems touched: 4 - `plugins/soleur/lib`, `apps/web-platform/infra`, `.github/workflows`, `knowledge-base/engineering`
+- Planned files: 8 (9 with the regenerated `model.likec4.json`) | Estimated changed lines: about 120 (about 10 of them in the generated JSON)
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR - the four roots trip the subsystem threshold only nominally: every edit is one comment, one sentence or one assertion that states the same fact, and the parent plan prescribes ONE record PR. Splitting would leave the repo contradicting itself between merges (manifest says armed, runbook says unarmed).
+
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
 
 - [ ] `plugins/soleur/lib/heartbeat-manifest.ts`: `rg -n 'arming_pending' plugins/soleur/lib/heartbeat-manifest.ts` shows only the interface field and comments; the `inngest_server_probe` row has none in code; `paused: true` and the `feeder` block are unchanged.
 - [ ] `bash apps/web-platform/infra/inngest-server-probe-heartbeat.test.sh` prints `21 passed, 0 failed`; it was RED before Phase 2.
-- [ ] Guard 1's matrix rows M1-M6 were each run on a scratch copy with the observed RED/GREEN recorded in the PR body (`plugins/soleur/lib/heartbeat-manifest.ts:<row>` is the mutation target; pointer for the assertion: `apps/web-platform/infra/inngest-server-probe-heartbeat.test.sh` section (h)).
-- [ ] `git diff origin/main --name-only` is a subset of `## Files to Edit` plus the files the pipeline itself writes (this plan, `knowledge-base/project/specs/feat-one-shot-9703-stage-3a-drop-arming-pending/tasks.md`, any `session-state.md` and `decision-challenges.md` under that spec directory, and a regenerated `knowledge-base/INDEX.md` if the pipeline emits one). No file under `scripts/followthroughs/`, `scripts/test-all.sh`, `scripts/*.tsv`, `scripts/test-affected-kb-consumers.baseline.txt`, `apps/web-platform/infra/sentry/`, `apps/web-platform/infra/betterstack-logs-alerts.tf`, `scripts/encryption-posture-ledger.json` or `knowledge-base/legal/` is touched.
+- [ ] Guard 1's matrix rows M1-M5 were each run once on a scratch copy with a one-line RED/GREEN summary recorded in the PR body (`plugins/soleur/lib/heartbeat-manifest.ts:<row>` is the mutation target; pointer for the assertion: `apps/web-platform/infra/inngest-server-probe-heartbeat.test.sh` section (h)).
+- [ ] `git diff origin/main --name-only` is a subset of `## Files to Edit` plus the files the pipeline itself writes (this plan, `knowledge-base/project/specs/feat-one-shot-9703-stage-3a-drop-arming-pending/tasks.md`, any `session-state.md` and `decision-challenges.md` under that spec directory, and a regenerated knowledge-base index file if the pipeline emits one). No file under `scripts/followthroughs/`, `scripts/test-all.sh`, `scripts/*.tsv`, `scripts/test-affected-kb-consumers.baseline.txt`, `apps/web-platform/infra/sentry/`, `apps/web-platform/infra/betterstack-logs-alerts.tf`, `scripts/encryption-posture-ledger.json` or `knowledge-base/legal/` is touched.
 - [ ] `git diff origin/main -- apps/web-platform/infra/uptime-alerts.tf` changes comment lines only (every `+`/`-` line starts with `#` after whitespace) and `terraform fmt -check apps/web-platform/infra/uptime-alerts.tf` exits 0.
-- [ ] `git grep -n -E 'fed but NOT armed|FED but not ARMED|arming pending|ARMING PENDING|arming_pending' -- ':!knowledge-base/project' ':!knowledge-base/legal'` returns no line that still presents the probe heartbeat as unarmed. Allowed residue: the `arming_pending?` interface field and its doc, the reconcile logic and its tests, the `git_data` and `inngest_consumer` dated records, ADR-117 generic mentions (lines ~172, ~186), the `git-data.tf` and `git-data-luks-cutover-5274.md` text (a different heartbeat), and the dated record comments.
+- [ ] `git grep -n -E 'fed but NOT armed|FED but not ARMED|arming pending|ARMING PENDING|arming_pending' -- ':!knowledge-base/project' ':!knowledge-base/legal'` returns no line that still presents the probe heartbeat as unarmed. Allowed residue: the `arming_pending?` interface field and its doc, the reconcile logic and its tests, the `git_data` and `inngest_consumer` dated records, ADR-117 generic mentions (lines ~172, ~186), the `git-data.tf` line 656 and `git-data-luks-cutover-5274.md` text (a different heartbeat), and the dated record comments.
 - [ ] The three run ids `38264380002`, `38265381453`, `38267189184` appear in the manifest comment and the runbook record, each with `verdict=beat`.
 - [ ] Targeted suites green locally: `bash scripts/inngest-probe-heartbeat-feeder.test.sh`; `bash apps/web-platform/infra/luks-monitor.test.sh`; `bash apps/web-platform/infra/www-apex-canonicalizer.test.sh`; `bash scripts/check-web-host-escrow-config.sh`; `bun test plugins/soleur/test/heartbeat-reprovision-parity.test.ts plugins/soleur/test/heartbeat-live-reconcile.test.ts plugins/soleur/test/terraform-target-parity.test.ts` (path-targeted from the repo root; the root `bunfig.toml` preloads the git tripwire and ignores `apps/web-platform/**`); `./node_modules/.bin/vitest run test/server/inngest/sentry-monitor-iac-parity.test.ts` from `apps/web-platform` (the workflow header edit is the only reason it is in scope); `bash plugins/soleur/test/c4-count-parity.test.sh`; the two C4 vitest files (`test/c4-code-syntax.test.ts`, `test/c4-render.test.ts`) from `apps/web-platform`. `TEST_GROUP=affected bash scripts/test-all.sh` is the broader option; CI is authoritative. Where a CI gate has its own invocation, run that invocation and not a path list: `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main`, `python3 scripts/lint-guard-contract.py` (no arguments), and `actionlint .github/workflows/scheduled-inngest-probe-heartbeat.yml`.
-- [ ] `model.likec4.json` was regenerated by `bash scripts/regenerate-c4-model.sh`, not hand-edited.
+- [ ] `model.likec4.json` was regenerated by `bash scripts/regenerate-c4-model.sh`, not hand-edited; `git diff --stat -- knowledge-base/engineering/architecture/diagrams/model.likec4.json` shows only the description-text lines of the repeated Inngest description (a regenerator version drift would show a larger diff and is reverted).
 - [ ] markdownlint (`./node_modules/.bin/markdownlint` if present, else the lefthook invocation) passes on the two edited `.md` files, this plan and `tasks.md` (a literal tab inside a quoted command and a list directly after a heading are the recurring violations).
 - [ ] Commit and PR text: `git log origin/main..HEAD --format=%B` and the PR body contain `Ref #9703` and no `Closes|Fixes|Resolves` keyword followed by #9703; the commit trailer is `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`; the PR body ends with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
+- [ ] The fresh read-only heartbeat state line (`504655 up false 3600 1800`) taken immediately before marking the PR ready is recorded in the PR body (Phase 5).
 - [ ] PR body states, first line, what merging does to production (see Phase 5) and that this change makes no Better Stack, Sentry or Terraform write.
 
 ### Post-merge
 
+- [ ] Read-only: confirm `mint-inngest-bootstrap-tag.yml` decided `result=noop` for the merge commit (it fires on the edited `apps/web-platform/infra/inngest*` test file).
 - [ ] Read-only: confirm `apply-web-platform-infra.yml`'s push run for the merge commit planned no changes for the two probe resources, and that `web-platform-release` and the plugin release completed. Comment on #9703 with the three run ids and the merge SHA.
 - [ ] Read-only, next day: the nightly `heartbeat-live-reconcile` run after this merge is clean (this is also the first half of the Stage 3b gate).
 
