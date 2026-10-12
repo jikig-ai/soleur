@@ -26,9 +26,17 @@
 
 ## Work Phase
 - Status: implementation complete, suites green
-- Guard: `web-host-provisioner-parity.test.sh` 18+10 passed on the real tree (fleet_elsewhere + EXT_RESIDENCE arms live, 4 seeded entries resolve)
-- Battery: `web-host-provisioner-parity-mutation.test.sh` 98/98 — G2-19..22 red on their anchors, G2-18 `outside server.tf` anchor intact, FLOOR 62 satisfied
+- Guard: `web-host-provisioner-parity.test.sh` 18+12 passed on the real tree (fleet_elsewhere + EXT_RESIDENCE + dropped-header + duplicate-addr arms live, 4 seeded entries resolve)
+- Battery: `web-host-provisioner-parity-mutation.test.sh` 113/113 — G2-19..35 red on their anchors, G2-C5/C6 green controls, FLOOR 93 = census, FLOOR_BLOCKS raised 23 → 25 (floor = census)
 - §1 confirmed untouched (srv-scoped census unchanged)
 - lint-shell-capture-exit --baseline: 0 new findings on both touched files
-- Implementation commit: 1ea385f11e
+- Implementation commit: 1ea385f11e; review fix commits: 49861f400f (design-pass P2s), 4b3446532f (heredoc-spoof), c4d32ae5bb (span cap + dup/type guards), 9abcbbed28 (enum exit set + blank_heredocs)
 - `test-all.sh --affected` selected=161/611 (infra diff → nested run-registered-suites); queued behind sibling runs (ticket 14) at work-phase end
+
+## Review Phase
+- Design-validity pass (design-risk: EXT_RESIDENCE decision table): code-simplicity + architecture seats — 0 P1, 3 P2 (type-erased exemption, non-span attribution, over-declared hosts) — all fixed in 49861f400f
+- Main panel: class=code, tier=none (plan-declared with sensitive-path scope-out) — git-history, pattern-recognition, security-sentinel, code-quality + structural-enumeration; shellcheck as bash-native deterministic gate (semgrep skipped — bash-only diff)
+- Panel findings → fixes: dup-addr arm (pattern P2), span-capture laundering (security P2-1), winrm/dynamic/server.tf-type/`.terraform`-segment exits (enum U1/U2/U3/U5), non-resource span drop + blank_heredocs (enum U7 + quote-flip), malformed-entry type guards, census/doc drift — commits c4d32ae5bb + 9abcbbed28
+- shellcheck: 1 info-level SC1091 (pre-existing source-path artifact, not a finding)
+- Fix-round: 6 targeted seats over 4b3446532f..HEAD — landed fixes: comment/string-aware blank_heredocs (P2 blanking-suppression hole found independently by 2 seats), nonres `\n?` brace, TOPLEVEL `\b(?!\s*=)` attribute exclusion, scalar `.tf.json` guards, `dial_text` consolidation, dynamic/winrm carve-out dialect check (RES-A/B), G2-34/35, distinguishing needles, FLOOR=census 93
+- Declared residuals (documented, not findings): non-literal dial spellings (G2-C6 pinned), `web-\d+` naming convention, gitignored/nested-repo files, remote module sources, .tf.json duplicate keys, non-connection SSH, `.tf.json` dup-addr blindness, single-quote `'` pairing inside heredoc markers (invalid-HCL-only)

@@ -39,12 +39,24 @@ Plan: `knowledge-base/project/plans/2026-10-12-fix-provisioner-parity-ssh-reside
 - [x] 2.2 `expect_red "G2-20 (a second phantom web-1 dialer in an allowlisted file)" workspaces-luks.tf "outside server.tf"` — proves resource-granularity.
 - [x] 2.3 `expect_red "G2-21 (a web-2 dialer in an allowlisted file)" workspaces-luks.tf "outside server.tf"` — proves host-scoping.
 - [x] 2.4 `expect_red "G2-22 (residence allowance entry gone stale)" ci-ssh-key.tf "stale EXT_RESIDENCE"` — mutator removes the `connection {}` block.
-- [x] 2.5 Bump `FLOOR` (`mutations_run` floor) 58 → 65 (+7 landed `expect_red`
-  rows — G2-19..22 as planned plus G2-23/24/25 from the review design pass) and
-  update the comment: `+7 #9998 residence rows (G2-19..25)`. `FLOOR_BLOCKS`
-  raised 23 → 25 to equal the measured census (was lagging by 2 — slack lets
-  blocks vanish unflagged). `PROBE_FLOOR`/`PROBE_RED_FLOOR`/`FLOOR_RESOURCES`
-  unchanged.
+- [x] 2.5 Bump `FLOOR` (`mutations_run` floor) 58 → 93 — re-derived to exact
+  census per test-design review (88 `expect_red` + M33b + 3 `_g2_json_row` +
+  G2-C2 = 93; slack lets rows vanish unflagged). G2-19..35 are the landed
+  `expect_red` rows; G2-C5/G2-C6 are green controls. `FLOOR_BLOCKS` raised
+  23 → 25 to equal the block census. `PROBE_FLOOR`/`PROBE_RED_FLOOR`/
+  `FLOOR_RESOURCES` unchanged.
+- [x] 2.6 Review-added arms (post-plan, from design pass + panel + fix round):
+  `dropped_hdrs` arm (resource header inside any containing span = finding),
+  `dup_addrs` arm (same-(dir,type.name) duplicate = finding, §1 collision
+  precedent), `blank_heredocs` (comment/string-aware heredoc blanking before
+  strip_hcl), `nonres_spans` (non-resource construct spans), span cap at next
+  top-level header, `dynamic "connection"` sweep, winrm-residence coverage,
+  server.tf terraform_data-only carve-out, `.terraform` segment filter,
+  malformed-entry/`is_winrm`/`host_keys`/dial-family type guards.
+- [x] 2.7 Green controls: G2-C5 (second same-host connection inside a member
+  stays exempt — per-resource membership is deliberate) and G2-C6 (indirect
+  non-literal host dial skips residence — declared residual, flips RED if an
+  unclassifiable-dial arm lands).
 
 ## Phase 3 — Verification
 

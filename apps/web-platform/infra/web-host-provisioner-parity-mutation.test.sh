@@ -1284,7 +1284,7 @@ resource "terraform_data" "g2_phantom_web2" {
   }
 }
 """
-'
+' "g2_phantom_web2"
 
 # A web-1 dialer WITH the correct local in a DIFFERENT .tf satisfies every host_key
 # arm but escapes §1's server.tf-scoped census — the fleet residence arm fires
@@ -1304,7 +1304,7 @@ resource "terraform_data" "g2_phantom_web1" {
   }
 }
 """
-'
+' "g2_phantom_web1"
 
 # The EXT_RESIDENCE allowance is (file, type.name)-scoped: workspaces-luks.tf is an
 # allowlisted FILE, but a NEW phantom resource inside it matches no declared member.
@@ -1323,7 +1323,7 @@ resource "terraform_data" "g2_phantom_wl" {
   }
 }
 """
-'
+' "g2_phantom_wl"
 
 # And host-scoped: workspaces-luks.tf's entries cover web-1 only, so a web-2
 # dialer in the same allowlisted file is still an escape.
@@ -1342,10 +1342,10 @@ resource "terraform_data" "g2_phantom_wl2" {
   }
 }
 """
-'
+' "g2_phantom_wl2"
 
 # The stale-allowance arm: delete the connection block an EXT_RESIDENCE entry
-# covers and the entry outlives the resource it names (#9998 G2-22).
+# covers and the entry no longer sweeps a matching dial (#9998 G2-22).
 expect_red "G2-22 (residence allowance entry gone stale)" ci-ssh-key.tf \
   "stale EXT_RESIDENCE" '
 old = """  connection {
@@ -1358,7 +1358,7 @@ old = """  connection {
 """
 assert old in s
 s = s.replace(old, "", 1)
-'
+' "swept only"
 
 # The exemption is keyed on the full `type.name`, not the resource name alone: a
 # same-name/different-type resource is a DIFFERENT resource and must not claim
@@ -1453,7 +1453,7 @@ resource "terraform_data" "g2_span_capture" {
   }
 }
 """
-'
+' "g2_span_capture"
 
 # A same-`type.name` duplicate resource attributes its blocks to the member's
 # address — exempt for free without the collision arm (§1 name-collision
@@ -1494,7 +1494,7 @@ resource "null_resource" "g2_srv_phantom" {
   }
 }
 """
-'
+' "g2_srv_phantom"
 
 # `type = "winrm"` exempts a block from the host_key arms (winrm has no ssh
 # host_key) but must not exempt it from residence — a winrm-labeled fleet dialer
@@ -1510,7 +1510,7 @@ resource "terraform_data" "g2_winrm" {
   }
 }
 """
-'
+' "g2_winrm"
 
 # `dynamic "connection"` previously matched no sweep token — the whole dynamic
 # block is now swept and its inner host/host_key lines seen (enum U2).
@@ -1529,7 +1529,7 @@ resource "terraform_data" "g2_dyn" {
   }
 }
 """
-'
+' "g2_dyn"
 
 # A fake member header nested inside a NON-resource construct's braces (not a
 # heredoc) plus a stray top-level connection {} could claim the member's
@@ -1553,8 +1553,86 @@ connection {
 """
 '
 
+# blank_heredocs is comment/string-aware: a `<<TAG` inside a # comment (or a
+# quoted string) must NOT pair with a later bare TAG line -- pre-fix that
+# pairing blanked REAL code and hid the phantom from every arm (fix-round N1).
+expect_red "G2-32 (a <<TAG inside a comment must not blank real code)" tunnel.tf \
+  "outside server.tf" '
+s += """
+# the marker below uses <<-X
+resource "terraform_data" "g2_blank_spoof" {
+  connection {
+    type = "ssh"
+    host = hcloud_server.web["web-1"].ipv4_address
+    user = "root"
+    host_key = local.web_1_ssh_host_key
+  }
+  provisioner "remote-exec" {
+    inline = ["set -e", "true"]
+  }
+}
+locals {
+  real = <<-X
+    body
+  X
+}
+"""
+' "g2_blank_spoof"
+
+# A `resource` header nested inside a non-resource construct whose brace opens
+# on the NEXT line (locals\n{) must still hit the drop arm — the nonres span
+# regex accepts one newline before `{` (fix-round N2).
+expect_red "G2-33 (a member-name literal inside locals-next-line-brace)" ci-ssh-key.tf \
+  "inside a containing block span" '
+s += """
+locals
+{
+  filler = 1
+  resource "terraform_data" "root_authorized_keys" {
+    nested = { x = 1 }
+  }
+}
+"""
+'
+
+# The server.tf carve-out delegates to §1's census, which speaks a narrower
+# dialect: literal `connection {}` + `type = "ssh"` inside terraform_data only.
+# A dynamic-spelled connection inside a server.tf terraform_data is invisible
+# to §1 — the carve-out must not exempt spellings §1 cannot see (enum RES-A).
+expect_red "G2-34 (a dynamic-spelled dialer inside server.tf terraform_data)" server.tf \
+  "outside server.tf" '
+s += """
+resource "terraform_data" "g2_dyn_srv" {
+  dynamic "connection" {
+    for_each = ["x"]
+    content {
+      type = "ssh"
+      host = hcloud_server.web["web-1"].ipv4_address
+      user = "root"
+      host_key = local.web_1_ssh_host_key
+    }
+  }
+}
+"""
+' "g2_dyn_srv"
+
+# Same dialect gap, RES-B: a winrm-typed block inside server.tf terraform_data
+# is invisible to §1 (requires type = "ssh") — the carve-out must not exempt it.
+expect_red "G2-35 (a winrm-typed block inside server.tf terraform_data)" server.tf \
+  "outside server.tf" '
+s += """
+resource "terraform_data" "g2_winrm_srv" {
+  connection {
+    type = "winrm"
+    host = hcloud_server.web["web-1"].ipv4_address
+    user = "Administrator"
+  }
+}
+"""
+' "g2_winrm_srv"
+
 # Membership is per-RESOURCE by design: a second same-host connection inside a
-# member (a provisioner-scoped override) stays in declared scope. A future
+# member (a second resource-level connection) stays in declared scope. A future
 # per-block tightening must deliberately flip this control.
 expect_green "G2-C5 (a second web-1 connection INSIDE a member stays exempt)" ci-ssh-key.tf '
 old = """  provisioner "remote-exec" {
@@ -1788,7 +1866,7 @@ fi
 # the ADR-193 defect: a floor whose failure arm routes through the suite's own verdict helper
 # cannot witness that helper being neutered -- the assertion rows go quiet AND so does the floor
 # meant to notice the quiet. Each carries a DISTINCT message so a failure says WHICH tripped.
-FLOOR=71  # +5 #9151 mutation arms (M4a, M4b, G2-15, G2-16, G2-17; G2-C4 is a green control and does not increment) +7 review-pass arms (M2b, M4c, M4d, M4e, M4f, M4g, G2-18); +1 net #9970: control-C moved to expect_green (-1), M4j+M4k added (+2), control-D is a green control (+0); +13 #9998 residence rows (G2-19..31; G2-C5/G2-C6 are green controls and do not increment). Re-derive from the battery log when adding rows.
+FLOOR=93  # floor = census (test-design review): 88 expect_red + M33b + 3 _g2_json_row + G2-C2 = 93 mutations_run. Slack lets rows vanish unflagged; G2-C5/G2-C6 (expect_green) do not increment, G2-C2/C3 DO. Prior derivation: +5 #9151 (M4a,M4b,G2-15..17) +7 review-pass (M2b,M4c..g,G2-18) +1 net #9970 (control-C -> green -1, M4j+M4k +2) +15 #9998 (G2-19..33). Re-derive from the battery log when adding rows.
 if (( mutations_run < FLOOR )); then
   printf '\n[FATAL] anti-vacuity floor (mutations): only %d landed, attributed mutation(s) ran, expected >= %d.\n' \
     "$mutations_run" "$FLOOR" >&2
