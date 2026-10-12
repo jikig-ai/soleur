@@ -27,3 +27,8 @@ soleur:plan, learnings-researcher, scoped advisor consult, soleur:plan-review (d
 - Review round done: seven seats read `0a8d2bd5e5..e737ea0814` plus the merge `8b43c9df5d`; twelve P2 findings, all fixed in the guard and the documents (evidence: "Post-merge and fix round C"; decisions 62 to 74). The guard is pushed on this branch; the three suites were not touched this round.
 - Numbers at this head (derived on the tree): 149 pairs, 258 triples, 150 rows (21 drains, 129 exempt, 2 fenced), `SWEEP_PROBE_CHECKS=54`, 102 derivation cases, `j0-derive.py` U2 equal to the awk. Every earlier "final" figure in this directory (153 / 263 / 154, 133 exempt, BASE 67 / 126) is the `e737ea0814` state, before the merge of main retired three suites.
 - The Decisions block above reads 66 pairs and 120 triples: that is the plan-time base (`0aae3f8680`), not a head.
+
+## Fix round D (2026-10-12; appended)
+
+- Verifier findings fixed (decision-challenges items 75 to 82; evidence "Fix round D"). Correction of the block above: "twelve P2 findings" should read fourteen (the evidence's review table sums per seat); the twelve counted distinct ones.
+- Numbers at this head: see the evidence section (149 pairs, 258 triples, 150 rows, 109 derivation cases, 17 `pj_floor` floors, `SWEEP_PROBE_CHECKS=54`).

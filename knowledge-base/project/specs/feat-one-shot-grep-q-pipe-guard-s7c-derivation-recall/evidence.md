@@ -844,3 +844,39 @@ The derived triples are unchanged by the change: the sorted triples of the awk b
 * Guard wall time with `taskset -c 0-7`: 9.0 to 10.0 s at load 5.5 to 7 against 5.6 to 6.8 s for `8b43c9df5d` (about 3 s more: 23 more derivation cases, the shell-parity runs, the four legs' counters); at load 13 to 20 the two are within noise (14 to 15 s). The Check-10 cap of 15 s is load-bound, as the performance seat measured; this round uses about 3 s of its quiet-host margin.
 * Lints: `shellcheck -S warning -x` on the guard 0 findings; `lint-shell-capture-exit.py --baseline` 0 new findings; `guard-vacuity-floor.test.sh` 23 passed, 0 failed; `lint-orphan-test-suites.sh` none orphaned; `plugins/soleur/test/fixture-relative-assert.test.sh` 62 passed (the same count as at base: no new relative redirect; the file is not under `scripts/`).
 * `scripts/test-affected-kb-consumers.test.sh` (once, nothing else writing): 22 passed, 1 failed of 23; the failure is `b1` (baseline differs from `--write-baseline` output: the one row `.claude/hooks/grep-q-pipe-guard.test.sh` -> `knowledge-base/engineering/operations/runbooks/web-host-reboot.md`, line 9 of `scripts/test-affected-kb-consumers.baseline.txt`). It is NOT caused by this round: the same single `b1` failure reproduces at the merge head `8b43c9df5d` in a detached worktree (22 of 23), because the merge dropped the guard row whose text named that runbook while the baseline kept its row (the baseline was last written by the merge commit). The baseline is outside this round's file list; deleting that one line makes the suite green.
+
+## Fix round D (2026-10-12; guard and documents; verifier findings F1 to F10 at `14add998c3`)
+
+Append-only: nothing above is edited. Decisions 75 to 82 hold the reasoning; this section holds what was run and the final numbers.
+
+### Mutations (one at a time, `mut.py` in four sandboxes `fixd1` to `fixd4`, landed by `filecmp`, KILLED = rc not 0 AND the row's own text)
+
+| Finding | Mutation | Named FAIL |
+| --- | --- | --- |
+| F1 | the `default` relaxation made unconditional | `producer-hazard-control: [the disposition verdict misread its fixtures (rc 1 for default is right only where SIGPIPE was inherited ignored) ...]` |
+| F1 | the SIGPIPE probe forced to 1; forced to 0 (run under `trap '' PIPE`) | `[the SIGPIPE probe (trap -p PIPE: 1) disagrees with SigIgn 0000000000000004 ...]`; `[... (trap -p PIPE: 0) disagrees with SigIgn 0000000000001004 ...][an unread stub did not give rc 1 ... ]` |
+| F1 | `default` always ignored; `ignore` never applied; the child premise removed | `[an unread stub did not give rc 1 under an ignored SIGPIPE and rc 141 under the default disposition: 1 and 1]`; `... 141 and 141`; `[... a child started with SIGPIPE ignored gave rc 141 for default (want 1)]` |
+| F2 | squeeze on every feed (`JOINBYTES` instead of `JOINBYTES + sqlen`); `sqlen` never set; `sqlen` not reset on a new logical line; a second bound that never fires; the head cut at `JOINBYTES + 1` | `[joinbytes-kept-since-squeeze must NOT derive curl][joinbytes-chain-3 must derive jq][joinbytes-chain-4 must derive jq]...`; same; `[joinbytes-two-lines must NOT derive curl]`; `[joinbytes-middle-dropped must derive curl][joinbytes-two-lines ...][joinbytes-edge-out ...]`; `[joinbytes-straddle-open must NOT derive curl][joinbytes-straddle-closed must derive curl]` |
+| F3 | the accepted-list parity loop emptied; the non-reading-list loop emptied | `floor shell-parity-ok: ... is 0, the floor is 12`; `floor shell-parity-bad: ... is 0, the floor is 38` |
+| F4 | the boundary class `[^[:alnum:]_./-]` put back; one must-be-non-drain spelling deleted; the boundary removed | `[non-reading spelling detected as a drain: /bin/echo cat >/dev/null][... /usr/bin/printf ...][... x.printf ...]`; `floor leg-det-bad: ... is 28, the floor is 29`; `[accepted spelling not detected: mytype cat >/dev/null]...` |
+| F5 | the lint loop over `PJ_AWK PJ_AWK`; over `PJ_DEFS_AWK PJ_AWK` | `awk-param-collision: ... read from 2 programs named [PJ_AWK PJ_AWK ] (want 2: PJ_AWK PJ_DEFS_AWK)` |
+| F6 | the bash symlink renamed `bashx` (not POSIX mode, so a top-level return goes on) | `producer-hazard-control: [a bash named sh gave rc 0 for a top-level return before a drain (want 2, or 0 on bash 3.2) ...]` |
+| F7 | `pj_floor leg-dyn-bad 52 52`; a `cases-y` floor over the case-table size | `producer-join-wiring: ... the floors not at column 0 with their listed literal exactly once [leg-dyn-bad]` (and `[cases-y]`) |
+| F9 | the reason made optional again; `#[0-9]*` | `producer-join-judge: ... [no 'must name its tracker issue' for a fixture that must print it]` |
+
+The earlier registries (the 79 mutants of round C, with two strings updated for the new text) were run again on this tree: 97 KILLED with their own text, 2 SURVIVED by design (the unmutated control, the loop compaction at 40), 1 invalid mutant (a bash syntax error) redone and killed. F8 and F10 are text; F6's comment rewording and F2's header sentence are checked by reading the greps `loop on one line`, `reports an error and goes on`, `64000 bars` (no stale statement left).
+
+### Runs on the final tree (whole guard: rc 0, 9 PASS lines, 0 FAIL, each)
+
+* gawk 5.4.1; mawk 1.3.4 20200120; mawk 1.3.4 20240123; BusyBox v1.38.0 awk; gawk under `env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp` (dash absent).
+* Under a parent that ignores SIGPIPE (`( trap '' PIPE; bash .claude/hooks/grep-q-pipe-guard.test.sh )`): gawk, dash-absent, mawk 20200120, busybox, all rc 0. At `14add998c3` the gawk run gave rc 1 (`... 1 and 1`).
+* The 258 derived triples are `cmp`-identical to the pre-change derivation (gawk, and mawk 20200120). The 61 x 1 MB stress: 0.4 s on the five shapes (no spaces, spaces, no bars ending in a bar, 100 bars per line with and without a trailing bar), 28 s on the 87,000-bars-per-line shape (base: no end in 250 s); unchanged from the round C figures.
+
+### Final numbers (derived on this tree)
+
+* Guard PASS line: 149 derived pairs, 258 producer triples; 21 of 21 drains rows verified, 129 exempt rows, 150 of 150 rows; 2 fenced rows. `PJ_TRIPLES=258` (header recipe 258; 149 pairs).
+* `PJ_CASES` 109 cases (71 must-derive, 50 must-not-derive expectations); `PJ_DRAIN_OK` 9, `PJ_DRAIN_BAD` 26, `PJ_DET_EDGE` 3, `PJ_DET_EDGE_BAD` 3. The 17 `pj_floor` floors, each pinned by name, literal and measured argument: cases 109, cases-run 109, cases-y 71, cases-n 50, drain-ok 9, drain-bad 26, judge-fixtures 22, rows-fixtures 11, triple-fixtures 5, count-fixtures 9, rowcount-fixtures 4, leg-dyn-ok 18, leg-dyn-bad 52, leg-det-ok 12, leg-det-bad 29, shell-parity-ok 12, shell-parity-bad 38; and `PJ_FLOOR_DRAINS=21`.
+* `SWEEP_PROBE_CHECKS=54`: the header recipe counts 54 (no check was added; the new controls extend `producer-hazard-control`).
+* `j0-derive.py` shipped arms: BASE 66 pairs / 125 triples, U2 +83 / +133 over 63 test files; the U2 sorted triples equal the awk's 258 (`cmp` empty; 149 pairs).
+* Lints: `shellcheck -S warning -x` on the guard 0; `lint-shell-capture-exit.py --baseline` 0 new findings; `guard-vacuity-floor.test.sh` 23 passed; `lint-orphan-test-suites.sh` none orphaned; `plugins/soleur/test/fixture-relative-assert.test.sh` 62 passed (the base count); `lint-infra-no-human-steps.py --changed` OK. `test-affected-kb-consumers.test.sh` was not re-run: no path literally named by a suite changed this round, and the baseline row it named was already removed at `14add998c3`.
+* Guard wall time (`taskset -c 0-7`): 13.5 to 17.3 s at load 8.7 to 9.5 (the host was loaded by other work; the quiet-host figures of round C, 9 to 10 s against 5.6 to 6.8 s for `8b43c9df5d`, stand as the best estimate).

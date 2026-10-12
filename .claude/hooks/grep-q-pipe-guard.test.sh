@@ -1131,7 +1131,7 @@ eqv_sh="$(_eqv "$EQV_SH")"
 #      and the test file (or one sourced file) stubs that verb. Pipefail is the file's own token, `shell: bash` in a workflow, or, for a library,
 #      the token of a file that sources it (a subprocess does not inherit the option, so the owning test file's token is not read). A site is read
 #      on a LOGICAL line (a trailing backslash or a trailing single bar outside quotes joins the next code line, a YAML block-scalar indicator
-#      does not; a joined line keeps its first 8192 bytes and the text joined after them, see STATED LIMITS) and is either the old printf/echo/cat
+#      does not; a joined line keeps its first 8192 bytes and the text joined after them, see Long lines under STATED LIMITS) and is either the old printf/echo/cat
 #      producer or ANY stage before a single bar outside quotes (a case-pattern alternation is not a pipe); the verb may sit behind timeout, env,
 #      command (not -v or -V), nice, stdbuf, exec, builtin or VAR=x; the string of a double-quoted annotation echo is dropped up to its FIRST double
 #      quote (a pipe before the echo or after that quote is read; what a `$( )` inside the string does is under Annotations in STATED LIMITS). A stub is a function, a file written to .../VERB (also `> "$d/jq"; chmod`),
@@ -1162,11 +1162,11 @@ eqv_sh="$(_eqv "$EQV_SH")"
 #   of a plain word; the owner relation, which is the basename as a whole token in the test file (a built name, or `.yaml` for `.yml`, is not matched; a test file that names a non-test file only in a FULL-LINE comment is
 #   not an owner, but one that names it in a trailing comment (`: # bash x.sh`) is, an over-read; a name that appears only in a SOURCED harness is not read: owner tokens are read in the test file itself, stubs one hop
 #   further); a stub stored two or more hops away.
-#   Long lines. A logical line that grows past JOINBYTES (8192) keeps joining, so the consumer of a trailing bar is still read, but it stops growing: its first 8192 bytes and the text joined after them are read, the text
-#   between is dropped (a site, or a `|| true`, only there is not seen: a missing site demands no row, a missing `|| true` demands one) and its quote parity is carried by at most one double and one single quote (squeeze).
+#   Long lines. A logical line that grows past JOINBYTES (8192) keeps joining, so the consumer of a trailing bar is still read, but it stops growing: its first 8192 bytes are read and so is the text joined since the last squeeze (up to 8192 more bytes: a chain of short lines behind a long one keeps every
+#   consumer in it; past that bound only the newest line is kept); the text between is dropped (a site, or a `|| true`, only there is not seen: a missing site demands no row, a missing `|| true` demands one) and its quote parity is carried by at most one double and one single quote (squeeze).
 #   JOINCAP (a logical line joins at most 50 further lines) and UNWRAPCAP (the 200 characters after a bar) are exact: the 51st further line, or a verb that ends at character 201, is not read, and fixtures sit on both sides of each
 #   value (and of JOINBYTES: a verb that ends at byte 8192 or 8193). The loop list is compacted at 32 entries; no output depends on that threshold (only finished entries are dropped), so it cannot be pinned by a fixture and is not. The scan of the bars of ONE physical line is quadratic in its bars and length (anybar takes a substring per
-#   bar): the longest physical line of the corpus is about 6 KB; 64000 bars on a 256 KB line took 19 s under gawk and 9 s under mawk 1.3.4 20200120 at load 10. A single physical line is not bounded by JOINBYTES.
+#   bar): the longest physical line of the corpus is about 6 KB; 64000 bars on a 256 KB line took 3.2 s under gawk and 2.3 s under mawk 1.3.4 20200120 at load 3.3 (256038 bytes), and 19 s and 9 s at load 10 (a similar line of 256000 bytes): the figures are load-bound, the quadratic shape is not. A single physical line is not bounded by JOINBYTES.
 #   The loop arm is SLOWER under mawk: 30000 consecutive `for vN in zz; do` lines (a new loop variable each, so a new dynamic regex each) took 30 s under mawk 1.3.4 20200120 against 5 s under gawk, at load 10; the corpus itself takes
 #   1.2 s under mawk and 3.4 s under gawk. The compaction bounds the entries, not the regex compiles.
 #   Annotations (R8): the string of an annotation echo is dropped only when it is double-quoted, up to its FIRST double quote (ANNOT), so a pipe inside a `$( )` in the string is HIDDEN when the substitution holds no double
@@ -1202,7 +1202,7 @@ PJ_DRAIN_WINDOW=4
 PJ_ALL="$(git ls-files)"
 PJ_TRIPLES=258   # recomputed from a green run: the number of distinct (test file, verb, producer file) triples
 PJ_VOCAB=' not-a-command text-only unverified helper-built-stub variable-named-verb pass-through deliberate-fault arm-drain fenced '
-PJ_FENCED_RE='^fenced[[:space:]]+#[0-9]+([[:space:]]|$)'   # the one word that carries a tracker link (pj_judge)
+PJ_FENCED_RE='^fenced[[:space:]]+#[0-9]+[[:space:]]+[^[:space:]]'   # the one word that carries a tracker link (pj_judge)
 PRODUCER_JOIN=(
   '.claude/hooks/browser-snapshot-credential-guard.test.sh | jq | exempt | deliberate-fault never: def 156 `exit 127` first statement (jq absent shim; the row asserts the degraded deny) (reach T1; t1:rc1/0s red:rc0/1s; hits 1)'
   '.claude/hooks/grep-rewrite.test.sh | grep | exempt | text-only reach probe: suite ran green and no piped call reached the stub (1 non-test producers) (reach T1; t1:rc0/10s; hits 2)'
@@ -1389,7 +1389,7 @@ BEGIN {
   YBLOCK = "(:|(^|[ \t])-)[ \t]*[|>][-+]?[ \t]*$"   # a YAML block-scalar indicator (key: | or - |) ends a line with a bar that is not a pipe
   nw = split("timeout env command nice stdbuf exec builtin", wl, " "); for (i = 1; i <= nw; i++) WRAP[wl[i]] = 1
   JOINCAP = 50   # a logical line joins at most this many further lines...
-  JOINBYTES = 8192   # ...and stops growing once it is this long: the first JOINBYTES bytes and what is joined after them are read, the text between is not (squeeze)
+  JOINBYTES = 8192   # ...and stops growing once it is this long: the first JOINBYTES bytes and what is joined after them (the text joined since the last squeeze, up to JOINBYTES, then only the newest line) are read, the text between is not (squeeze)
   UNWRAPCAP = 200   # the characters after a bar that unwrap reads: a wrapper chain longer than this names no verb
 }
 function base(p) { sub(/^.*\//, "", p); return p }
@@ -1491,17 +1491,20 @@ function loopchk(line,   k) {
 }
 # R1: a joined line that has grown past JOINBYTES keeps joining (so the consumer of a trailing bar is still read) but stops growing: its first JOINBYTES bytes stay, the text joined
 # after them is dropped (a site there is not read), and the quote parity of everything dropped is carried by at most one double and one single quote placed after the kept text, so
-# a later bar is judged as if the dropped text were still there. The pending trailing bar, if any, stays last.
+# a later bar is judged as if the dropped text were still there. The pending trailing bar, if any, stays last. The first squeeze runs when the line passes JOINBYTES; after it, the text
+# joined since is KEPT until it too passes JOINBYTES (sqlen is the length right after the last squeeze), so a chain of short lines behind a long one keeps every consumer in it; the
+# retained text is at most about 2 x JOINBYTES plus the line being joined.
 function squeeze(   q, h, qd, qs, hd, hs2) {
   q = substr(cur, 1, length(cur) - hbar); h = substr(q, 1, JOINBYTES)
   gsub(/\\./, "", q); qd = gsub(/"/, "", q); qs = gsub(sq, "", q)
   gsub(/\\./, "", h); hd = gsub(/"/, "", h); hs2 = gsub(sq, "", h)
   cur = substr(cur, 1, JOINBYTES) " " ((qd - hd) % 2 != 0 ? "\"" : "") ((qs - hs2) % 2 != 0 ? sq : "") (hbar ? "|" : "")
+  sqlen = length(cur)
 }
 # R1: a code line that ends in a backslash, or in a single bar outside quotes that is not a YAML block-scalar indicator, absorbs the next line.
 function feed(raw,   t, s, q, nd, ns, fn, fk, fw) {
   if (hold && hbar && raw ~ /^[ \t]*#/) return   # a comment line between the stages of a pipe is not code: the pipe goes on past it
-  if (hold) { if (length(cur) > JOINBYTES) squeeze(); t = raw; sub(/^[ \t]+/, "", t); cur = cur " " t; hn++ } else { cur = raw; hn = 0 }
+  if (hold) { if (length(cur) > JOINBYTES + sqlen) squeeze(); t = raw; sub(/^[ \t]+/, "", t); cur = cur " " t; hn++ } else { cur = raw; hn = 0; sqlen = 0 }
   hold = 0
   t = substr(cur, length(cur), 1)
   if (hn < JOINCAP && (t == "\\" || t == "|" || t == " " || t == "\t" || t == "\r") && cur !~ /^[ \t]*#/) {   # only a line whose last character can end in a backslash or a bar is looked at
@@ -1722,10 +1725,10 @@ PJ_DETECT='(^|[^[:alnum:]_./-])(cat([[:space:]]*([)]|>|;|[}]|[|][|]|$)|[[:space:
 # a background command reads /dev/null), with a heredoc (cat <<EOF reads the heredoc, not the pipe), with an input redirect (cat >/dev/null </dev/null reads the file,
 # `<&-` reads nothing), cat as a word of a command that only names it (`echo cat`, `type cat`, `which cat`, `command -v cat`), dd with a count (it stops after N blocks
 # and the writer is still blocked on the rest), or a line that exits or returns before the cat (`exit 0; cat >/dev/null`). Each of these is a real non-reader: the dynamic
-# control below runs every one against a 1 MiB pipe, except the `return` form, which is a non-reader under dash (it leaves the script) and not under a bash named sh (it reports an error and goes on; the shell-parity check
+# control below runs every one against a 1 MiB pipe, except the `return` form, which is a non-reader under dash (it leaves the script) and not under a bash 5 named sh (a bash invoked as sh is in POSIX mode and a failed `return` exits it with status 2; bash 3.2 as sh reports the error and goes on, rc 0; the shell-parity check
 # below rejects a spelling that differs): it is held by the `samereturn` window fixture alone. The left word boundary of the `echo|printf|type|which|command -v` alternative keeps an identifier that merely ends in one of
-# those words (`mytype cat >/dev/null`) a drain: PJ_DET_EDGE below.
-PJ_NODRAIN='[^|][|][[:space:]]*cat|(true|false|:)[[:space:]]*(&&|[|][|])[[:space:]]*cat|[[][[]?[[:space:]]+-t[[:space:]]+[0-9]+[[:space:]]+[]][]]?[[:space:]]*(&&|;[[:space:]]*then)|(^|[^[:alnum:]_])test[[:space:]]+-t[[:space:]]+[0-9]+[[:space:]]*(&&|;[[:space:]]*then)|[^&]&[[:space:]]*$|cat[^|;&]*[^&<>]&([^&>]|$)|cat[^|;]*<<|cat[^|;<]*<[^<&]|cat[^|;]*<&-|(^|[^[:alnum:]_./-])(echo|printf|type|which|command[[:space:]]+-[vV])[[:space:]]+([^;|&]*[[:space:]])?cat|(^|[^[:alnum:]_./-])dd[[:space:]][^;|&]*count=|^[[:space:]]*(exit|return)([[:space:]]+[0-9]+)?[[:space:]]*;'
+# those words (`mytype cat >/dev/null`) a drain, and lets a path-qualified one (`/bin/echo cat`, `x.printf cat`) read as the non-reader it is: PJ_DET_EDGE and PJ_DET_EDGE_BAD below.
+PJ_NODRAIN='[^|][|][[:space:]]*cat|(true|false|:)[[:space:]]*(&&|[|][|])[[:space:]]*cat|[[][[]?[[:space:]]+-t[[:space:]]+[0-9]+[[:space:]]+[]][]]?[[:space:]]*(&&|;[[:space:]]*then)|(^|[^[:alnum:]_])test[[:space:]]+-t[[:space:]]+[0-9]+[[:space:]]*(&&|;[[:space:]]*then)|[^&]&[[:space:]]*$|cat[^|;&]*[^&<>]&([^&>]|$)|cat[^|;]*<<|cat[^|;<]*<[^<&]|cat[^|;]*<&-|(^|[^[:alnum:]_-])(echo|printf|type|which|command[[:space:]]+-[vV])[[:space:]]+([^;|&]*[[:space:]])?cat|(^|[^[:alnum:]_./-])dd[[:space:]][^;|&]*count=|^[[:space:]]*(exit|return)([[:space:]]+[0-9]+)?[[:space:]]*;'
 pj_defs() { LC_ALL=C awk -v verb="$2" -v token="$3" -v win="$PJ_DRAIN_WINDOW" -v detect="$PJ_DETECT" -v nodrain="$PJ_NODRAIN" "$PJ_DEFS_AWK" "$1"; }
 pj_detects() { LC_ALL=C awk -v detect="$PJ_DETECT" -v nodrain="$PJ_NODRAIN" 'BEGIN { exit !(ARGV[1] ~ detect && ARGV[1] !~ nodrain) }' "$1"; }
 # pj_collide <awk program text> -> `<function>:<parameter>` per parameter of a `function f(...)` header that is also the name of a function of the same program, wherever that function is
@@ -1768,7 +1771,7 @@ pj_judge() {
           || echo "FAIL: exempt row without a vocabulary reason: $s | $v | exempt | ${r:0:60} (reason must be one of:$PJ_VOCAB)"
         # `fenced` is the one word that carries a tracker link: `fenced #<digits> <reason>`, the number the only machine-checked part (a bare `fenced` is a word anyone can type)
         [[ "$w" != fenced || "$r" =~ $PJ_FENCED_RE ]] \
-          || echo "FAIL: a fenced exempt row must name its tracker issue: $s | $v | exempt | ${r:0:60} (want: fenced #<digits> <reason>)"
+          || echo "FAIL: a fenced exempt row must name its tracker issue: $s | $v | exempt | ${r:0:60} (want: fenced #<digits> <reason>, the reason not empty)"
         # a variable-named-verb row is never stale (the derivation cannot see such a verb), but its suite must still exist
         [[ "$w" == variable-named-verb && -f "$s" ]] && vnv+="$s|$v"$'\n' ;;
       *) echo "FAIL: PRODUCER_JOIN row for $s $v has kind '$k' (want drains or exempt)" ;;
@@ -1899,7 +1902,7 @@ pj_jc 'stale join row' '' 'a.test.sh | v | exempt | text-only x'
 pj_jc 'duplicate PRODUCER_JOIN' 'a.test.sh|v' 'a.test.sh | v | exempt | text-only x' 'a.test.sh | v | exempt | text-only x'
 pj_jc 'without a vocabulary reason' 'a.test.sh|v' 'a.test.sh | v | exempt | banana x'
 pj_jc '' 'a.test.sh|v' 'a.test.sh | v | exempt | fenced #9217 x'
-pj_jc '' 'a.test.sh|v' 'a.test.sh | v | exempt | fenced #9217'
+pj_jc 'must name its tracker issue' 'a.test.sh|v' 'a.test.sh | v | exempt | fenced #9217'
 pj_jc 'must name its tracker issue' 'a.test.sh|v' 'a.test.sh | v | exempt | fenced x'
 pj_jc 'must name its tracker issue' 'a.test.sh|v' 'a.test.sh | v | exempt | fenced'
 pj_jc 'must name its tracker issue' 'a.test.sh|v' 'a.test.sh | v | exempt | fenced #x y'
@@ -1920,8 +1923,9 @@ pj_empty_n=$(pj_judge "$pj_pairs" </dev/null | grep -c 'unlisted pair' || true)
 # must be found (positive control), a program with distinct names must pass (must-pass control).
 # The real programs go through ONE call each, in a loop over their NAMES, and each call's `FUNCS <n>` trailer is counted: a program dropped from the loop, or a call removed, leaves a trailer missing, and a lint that
 # read fewer headers than the program's own column-0 `function` lines is red (the lint read the program, not an empty string).
-pj_col_raw=""; pj_col_cols=0
+pj_col_raw=""; pj_col_cols=0; pj_col_names=""
 for _pn in PJ_AWK PJ_DEFS_AWK; do
+  pj_col_names+="$_pn "
   pj_col_raw+="$(pj_collide_raw "${!_pn}")"$'\n'
   pj_col_cols=$((pj_col_cols + $(grep -c '^function' <<<"${!_pn}" || true)))
 done
@@ -1932,9 +1936,9 @@ pj_col_pos="$(pj_collide $'function base(p) { return p }\nfunction anybar(l,   r
 pj_col_neg="$(pj_collide $'function base(p) { return p }\nfunction anybar(l,   rest, bs0, p) { return l }')"
 pj_col_two="$(pj_collide $'function a(x) { return x }\nfunction b(y,   a) { return y }\nfunction c(a) { return a }' | tr '\n' ' ')"
 pj_col_shapes="$(pj_collide $'function base(p) { return p }\n    function anybar(l,   base) { return l }')|$(pj_collide $'function base(p) { return p } function anybar(l,   base) { return l }')|$(pj_collide $'function base(p) { return p }\nfunction anybar(l,\n   rest, base) { return l }')|$(pj_collide $'function anybar(l,   base) { return l }\nfunction base(p) { return p }')"
-[[ -z "$pj_col_real" && "$pj_col_progs" == 2 && "$pj_col_cols" -gt 0 && "$pj_col_read" -ge "$pj_col_cols" && "$pj_col_pos" == "anybar:base" && -z "$pj_col_neg" && "$pj_col_two" == "b:a c:a " \
+[[ -z "$pj_col_real" && "$pj_col_progs" == 2 && "$pj_col_names" == "PJ_AWK PJ_DEFS_AWK " && "$pj_col_cols" -gt 0 && "$pj_col_read" -ge "$pj_col_cols" && "$pj_col_pos" == "anybar:base" && -z "$pj_col_neg" && "$pj_col_two" == "b:a c:a " \
   && "$pj_col_shapes" == "anybar:base|anybar:base|anybar:base|anybar:base" ]] \
-  || sweep_probe_fail+=("awk-param-collision: a function parameter that is also a function name in the derivation or the finder program [${pj_col_real:-none}] (want none: mawk stops on it), read from ${pj_col_progs:-<err>} programs (want 2) with ${pj_col_read:-<err>} headers against ${pj_col_cols:-<err>} column-0 ones (want at least as many); the known collision read as [${pj_col_pos:-NOTHING}] (want anybar:base), the distinct-name program as [${pj_col_neg:-none}] (want none), two collisions as [${pj_col_two:-none}] (want b:a c:a); an indented header, two functions on one line, a parameter list continued on the next line and a function defined after its use read as [${pj_col_shapes:-NOTHING}] (want anybar:base four times)")
+  || sweep_probe_fail+=("awk-param-collision: a function parameter that is also a function name in the derivation or the finder program [${pj_col_real:-none}] (want none: mawk stops on it), read from ${pj_col_progs:-<err>} programs named [${pj_col_names}] (want 2: PJ_AWK PJ_DEFS_AWK) with ${pj_col_read:-<err>} headers against ${pj_col_cols:-<err>} column-0 ones (want at least as many); the known collision read as [${pj_col_pos:-NOTHING}] (want anybar:base), the distinct-name program as [${pj_col_neg:-none}] (want none), two collisions as [${pj_col_two:-none}] (want b:a c:a); an indented header, two functions on one line, a parameter list continued on the next line and a function defined after its use read as [${pj_col_shapes:-NOTHING}] (want anybar:base four times)")
 mkdir -p "$probe/pj"
 # GUARD 1, the derivation fixture suite. One case table and one loop, run through pj_derive (the call the real run makes) and the shared extension list.
 # A case is `name @@ expectations @@ file=text @@ file=text`: each expectation is `y:VERB` (the pair fxa.test.sh|VERB must derive) or `n:VERB` (it must
@@ -1959,6 +1963,7 @@ printf -v _pj_pad_small '%100s' ''; _pj_pad_small="${_pj_pad_small// /a}"
 _pj_cap_in='env '; for ((_i = 0; _i < 48; _i++)); do _pj_cap_in+='A=1 '; done; _pj_cap_in+='curl'                      # 200 characters, the verb ends at the cap
 _pj_cap_out='env '; for ((_i = 0; _i < 47; _i++)); do _pj_cap_out+='A=1 '; done; _pj_cap_out+='AB=1 curl'            # 201 characters
 printf -v _pj_jb_in '%8177s' ''; printf -v _pj_jb_out '%8178s' ''                                                    # blanks ahead of `printf x | curl`: 15 characters, so the verb ends at byte 8192 or 8193
+printf -v _pj_strad '%8190s' ''; _pj_strad=": ${_pj_strad// /a}"                                                    # 2 + 8190 bytes, so a double quote right after it is byte 8193 of the logical line: it straddles the 8192 cut
 printf -v _pj_blank70 '%70s' ''                                                                                       # trailing blanks past the 64-character window feed() looks at first
 _pj_jc_fill49=''; for ((_i = 0; _i < 49; _i++)); do _pj_jc_fill49+=$'  : \\\n'; done
 _pj_jc_fill50="$_pj_jc_fill49"$'  : \\\n'
@@ -2040,7 +2045,14 @@ PJ_CASES=(
   $'wrapcap-over @@ n:curl @@ fxprod.sh=set -o pipefail\nprintf x | env '"$_pj_asg_long"$'curl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
   $'joinbytes-under @@ n:curl @@ fxprod.sh=set -o pipefail\nprintf x | curl -K - \\\n  '"$_pj_pad_small"$' \\\n  || true\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
   $'joinbytes-over-tail @@ n:curl @@ fxprod.sh=set -o pipefail\nprintf x | curl -K - \\\n  '"$_pj_pad_big"$' \\\n  || true\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
-  $'joinbytes-middle-dropped @@ y:curl @@ fxprod.sh=set -o pipefail\nprintf x | curl -K - \\\n  '"$_pj_pad_big"$' \\\n  || true \\\n  : tail\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'joinbytes-middle-dropped @@ y:curl @@ fxprod.sh=set -o pipefail\nprintf x | curl -K - \\\n  '"$_pj_pad_big"$' \\\n  || true \\\n  '"$_pj_pad_big"$' \\\n  : tail\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'joinbytes-kept-since-squeeze @@ n:curl @@ fxprod.sh=set -o pipefail\nprintf x | curl -K - \\\n  '"$_pj_pad_big"$' \\\n  || true \\\n  : tail\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'joinbytes-chain-3 @@ y:jq y:tr @@ fxprod.sh=set -o pipefail\n: '"$_pj_pad_big"$' |\n  jq . |\n  tr a b\n @@ fxa.test.sh=jq() { :; }\ntr() { :; }\nbash fxprod.sh\n'
+  $'joinbytes-chain-4 @@ y:jq y:tr y:curl @@ fxprod.sh=set -o pipefail\n: '"$_pj_pad_big"$' |\n  jq . |\n  tr a b |\n  curl -K -\n @@ fxa.test.sh=jq() { :; }\ntr() { :; }\ncurl() { :; }\nbash fxprod.sh\n'
+  $'joinbytes-chain-backslash @@ y:jq y:tr @@ fxprod.sh=set -o pipefail\n: '"$_pj_pad_big"$' \\\n  | jq . \\\n  | tr a b\n @@ fxa.test.sh=jq() { :; }\ntr() { :; }\nbash fxprod.sh\n'
+  $'joinbytes-two-lines @@ n:curl y:jq @@ fxprod.sh=set -o pipefail\n: '"$_pj_pad_big"$' |\n  jq . \n'"$_pj_jb_out"$'printf x | curl -K - \\\n  : x\n @@ fxa.test.sh=curl() { :; }\njq() { :; }\nbash fxprod.sh\n'
+  $'joinbytes-straddle-open @@ n:curl @@ fxprod.sh=set -o pipefail\n'"$_pj_strad"$'"abc \\\n  : x | curl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
+  $'joinbytes-straddle-closed @@ y:curl @@ fxprod.sh=set -o pipefail\n'"$_pj_strad"$'"abc \\\n  : x" | curl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
   $'joinbytes-trailing-bar @@ y:curl @@ fxprod.sh=set -o pipefail\nprintf x | tr a b | : '"$_pj_pad_big"$' |\n  curl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
   $'joinbytes-trailing-bar-quote @@ y:curl @@ fxprod.sh=set -o pipefail\nprintf x | tr a b | : "'"$_pj_pad_big"$' x" |\n  curl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
   $'joinbytes-trailing-bar-squote @@ y:curl @@ fxprod.sh=set -o pipefail\nprintf x | tr a b | : \''"$_pj_pad_big"$' x\' |\n  curl -K -\n @@ fxa.test.sh=curl() { :; }\nbash fxprod.sh\n'
@@ -2076,7 +2088,7 @@ pj_floor() {
   [[ "$3" =~ ^[0-9]+$ ]] && (( $3 >= $2 )) \
     || { printf '%s\n' "FAIL: floor $1: $4 is ${3:-<none>}, the floor is $2 — something was deleted or did not run; restore it, or lower the floor in the same edit with the reason (and in the wiring check's list)"; exit 1; }
 }
-pj_floor cases 102 "${#PJ_CASES[@]}" "the number of derivation cases in the table"
+pj_floor cases 109 "${#PJ_CASES[@]}" "the number of derivation cases in the table"
 # pj_split <string>: split on ` @@ ` into the array _pj_f
 pj_split() { local s="$1"; _pj_f=(); while [[ "$s" == *' @@ '* ]]; do _pj_f+=("${s%% @@ *}"); s="${s#* @@ }"; done; _pj_f+=("$s"); }
 # pj_derive_dir <dir> -> the triples of the files flat in <dir>: the files whose extension is on PJ_EXTS are the file set (the real run's listing pathspec),
@@ -2124,9 +2136,9 @@ done
 # What RAN, not only what is declared: every case of the table was read (a loop cut to its first entries reds here), and the expectations evaluated on each side are floored as literals (a loop that
 # stops reading its expectations after the first one leaves a count below the floor). Reported directly, like the table floor, not through pj_dfail; a case that fails is named by derivation-fixtures instead.
 (( pj_cr == ${#PJ_CASES[@]} )) || { printf '%s\n' "FAIL: the derivation loop read $pj_cr of the table's ${#PJ_CASES[@]} cases"; exit 1; }
-pj_floor cases-run 102 "$pj_cr" "the number of derivation cases the loop ran"
-pj_floor cases-y 62 "$pj_ey" "the number of must-derive expectations evaluated"
-pj_floor cases-n 47 "$pj_en" "the number of must-not-derive expectations evaluated"
+pj_floor cases-run 109 "$pj_cr" "the number of derivation cases the loop ran"
+pj_floor cases-y 71 "$pj_ey" "the number of must-derive expectations evaluated"
+pj_floor cases-n 50 "$pj_en" "the number of must-not-derive expectations evaluated"
 # The verdict of each side is given an expectation that must fail it (a must-derive on output without the pair, a must-NOT-derive on output with it), and the record is unwound: a side whose verdict was
 # neutered would otherwise count every expectation as met. Reported directly.
 pj_ex_save="$pj_dfail"; pj_ex_dy=$pj_dy; pj_ex_dn=$pj_dn; pj_ex_ey=$pj_ey; pj_ex_en=$pj_en; pj_dfail=""
@@ -2323,13 +2335,20 @@ PJ_DET_EDGE=(
   'det|reprintf cat >/dev/null'
   'det|my_echo cat >/dev/null'
 )
+# ...and the other side of the same boundary: a path-qualified or dotted command word IS the word (`/bin/echo cat` prints, it does not read), so the detector must NOT credit these (detector-only, like the list above: the
+# last one is not a command on any host).
+PJ_DET_EDGE_BAD=(
+  'det|/bin/echo cat >/dev/null'
+  'det|/usr/bin/printf cat >/dev/null'
+  'det|x.printf cat >/dev/null'
+)
 # Floors (see pj_floor): a deleted spelling is the one edit no check of the lists can see. The run of every spelling against a real pipe is below; these two only keep the lists from shrinking unseen.
 pj_floor drain-ok 9 "${#PJ_DRAIN_OK[@]}" "the number of accepted drain spellings"
 pj_floor drain-bad 26 "${#PJ_DRAIN_BAD[@]}" "the number of non-reading spellings"
 # pj_hazard <interp> <ignore|default> <spelling> -> the pipeline's exit status under pipefail, on stdout. The interpreters: `bash`; `sh`, which is dash where the host has it (an sh-tagged spelling must not depend on
-# which /bin/sh the host has) and /bin/sh otherwise; `shbash`, a bash invoked under the name sh (what /bin/sh is on Arch, Fedora, macOS and in a container without dash).
-# THE RULE FOR AN sh-TAGGED SPELLING: it must read, or not read, the same under dash and under a bash named sh. A spelling whose meaning depends on the shell (a top-level `return`: dash leaves the script, bash
-# reports an error and goes on) would pass where dash is on PATH and turn the guard red on a host where it is not; the shell-parity check below runs every sh-tagged spelling under a bash named sh as well and requires
+# which /bin/sh the host has) and /bin/sh otherwise; `shbash`, a bash invoked under the name sh, so in POSIX mode (what /bin/sh is on Arch, Fedora, macOS and in a container without dash; the name is what sets the mode and is pinned by a control below).
+# THE RULE FOR AN sh-TAGGED SPELLING: it must read, or not read, the same under dash and under a bash named sh. A spelling whose meaning depends on the shell (a top-level `return`: dash leaves the script, a bash 5 named sh
+# exits with status 2 on the error, bash 3.2 named sh reports it and goes on, a bash not named sh goes on) would pass where dash is on PATH and turn the guard red on a host where it is not; the shell-parity check below runs every sh-tagged spelling under a bash named sh as well and requires
 # the verdict of its own list (the dash run is the main leg), so such a spelling is red HERE, on whichever host it is added.
 PJ_SH="$(command -v dash || true)"; [[ -n "$PJ_SH" ]] || PJ_SH=/bin/sh
 PJ_SH_BASH="$probe/pj/sh"; ln -s "$(command -v bash)" "$PJ_SH_BASH"
@@ -2355,12 +2374,28 @@ pj_leg_tbad() { if pj_detects "$1"; then printf '[non-reading spelling detected 
 # pj_leg <runs counter> <OK counter> <failure list> <leg function> <args...>: one run of a leg: the run is counted (the floors read these, so a failing spelling is named by its own check and not hidden behind a floor),
 # its OK is counted again, anything else is appended to the failure list
 pj_leg() { local run="$1" cnt="$2" lst="$3" r; shift 3; printf -v "$run" '%s' "$(( ${!run} + 1 ))"; r="$("$@")"; if [[ "$r" == OK ]]; then printf -v "$cnt" '%s' "$(( ${!cnt} + 1 ))"; else printf -v "$lst" '%s' "${!lst}$r"; fi; }
+pj_pipe_ign=0; [[ -n "$(trap -p PIPE)" ]] && pj_pipe_ign=1   # SIGPIPE inherited ignored: the guard was started by a parent that ignores it
 pj_dyn_ctl=""; pj_dyn_ok=""; pj_dyn_bad=""; pj_dyn_n=0; pj_n_dok=0; pj_n_dbad=0; pj_n_tok=0; pj_n_tbad=0; pj_r_dok=0; pj_r_dbad=0; pj_r_tok=0; pj_r_tbad=0
 pj_unread 141 && pj_unread 1 && ! pj_unread 0 && ! pj_unread 3 && ! pj_unread 124 && ! pj_unread 127 || pj_dyn_ctl+="[pj_unread grades a status it must not]"
 [[ "$(pj_hazard bash default 'exit 3')" == 3 ]] || pj_dyn_ctl+="[an exit 3 stub did not surface rc 3]"
 # The two dispositions are told apart: a stub that never reads makes the writer fail with rc 1 (EPIPE) where SIGPIPE is ignored (CI) and with rc 141 under the default disposition. pj_unread accepts both, so
-# without this a hazard that ignored its disposition argument, or applied one always, would pass every spelling.
-[[ "$(pj_hazard bash ignore ':')" == 1 && "$(pj_hazard bash default ':')" == 141 ]] || pj_dyn_ctl+="[an unread stub did not give rc 1 under an ignored SIGPIPE and rc 141 under the default disposition: $(pj_hazard bash ignore ':') and $(pj_hazard bash default ':')]"
+# without this a hazard that ignored its disposition argument, or applied one always, would pass every spelling. An ignored SIGPIPE is inherited and cannot be reset from bash, so where THIS guard was started with
+# SIGPIPE ignored (a CI runner: `trap -p PIPE` names it, read once above at the probe) the `default` run is ignored too and rc 1 is the right answer for both; rc 141 is asserted only where the guard itself sees SIGPIPE at
+# its default. pj_disp_ok is the verdict, given fixtures that must go both ways (the relaxation must not become unconditional), and a child started with SIGPIPE ignored must give rc 1 for `default` (the premise).
+pj_disp_ok() { # <rc under ignore> <rc under default> <1 when SIGPIPE was inherited ignored>
+  [[ "$1" == 1 ]] || return 1
+  if [[ "$3" == 1 ]]; then [[ "$2" == 1 || "$2" == 141 ]]; else [[ "$2" == 141 ]]; fi
+}
+pj_disp_ign="$(pj_hazard bash ignore ':')"; pj_disp_def="$(pj_hazard bash default ':')"
+pj_disp_inh="$( ( trap '' PIPE; pj_hazard bash default ':' ) )"
+{ pj_disp_ok 1 141 0 && pj_disp_ok 1 1 1 && pj_disp_ok 1 141 1 && ! pj_disp_ok 1 1 0 && ! pj_disp_ok 141 141 0 && ! pj_disp_ok 141 141 1 && ! pj_disp_ok 1 0 1 && ! pj_disp_ok 1 0 0 && [[ "$pj_disp_inh" == 1 ]]; } \
+  || pj_dyn_ctl+="[the disposition verdict misread its fixtures (rc 1 for default is right only where SIGPIPE was inherited ignored), or a child started with SIGPIPE ignored gave rc ${pj_disp_inh:-<none>} for default (want 1)]"
+# the probe is cross-checked against the kernel's own record where there is one (Linux: bit 12 of SigIgn is SIGPIPE), so a probe forced either way is red on the host that disagrees
+if [[ -r /proc/$$/status ]]; then
+  pj_sigign="$(sed -n 's/^SigIgn:[[:space:]]*//p' /proc/$$/status)"
+  [[ "$pj_sigign" =~ ^[0-9a-fA-F]+$ ]] && (( ((16#${pj_sigign: -4}) >> 12 & 1) == pj_pipe_ign )) || pj_dyn_ctl+="[the SIGPIPE probe (trap -p PIPE: $pj_pipe_ign) disagrees with SigIgn ${pj_sigign:-<none>} of /proc/$$/status]"
+fi
+pj_disp_ok "$pj_disp_ign" "$pj_disp_def" "$pj_pipe_ign" || pj_dyn_ctl+="[an unread stub did not give rc 1 under an ignored SIGPIPE and rc $( ((pj_pipe_ign)) && echo '1 or 141 (SIGPIPE was inherited ignored)' || echo 141) under the default disposition: $pj_disp_ign and $pj_disp_def]"
 # each leg is given an input that must fail it, or its verdict could be neutered unseen
 [[ "$(pj_leg_dok sh default ':')" != OK ]] || pj_dyn_ctl+="[the dynamic reader leg passed a stub that never reads]"
 [[ "$(pj_leg_dbad sh default 'cat >/dev/null')" != OK ]] || pj_dyn_ctl+="[the dynamic non-reader leg passed a stub that drains]"
@@ -2379,20 +2414,23 @@ for _d in ignore default; do
 done
 pj_det_bad=""
 for _e in ${PJ_DRAIN_OK[@]+"${PJ_DRAIN_OK[@]}"} ${PJ_DET_EDGE[@]+"${PJ_DET_EDGE[@]}"}; do pj_leg pj_r_tok pj_n_tok pj_det_bad pj_leg_tok "${_e#*|}"; done
-for _e in ${PJ_DRAIN_BAD[@]+"${PJ_DRAIN_BAD[@]}"}; do pj_leg pj_r_tbad pj_n_tbad pj_det_bad pj_leg_tbad "${_e#*|}"; done
+for _e in ${PJ_DRAIN_BAD[@]+"${PJ_DRAIN_BAD[@]}"} ${PJ_DET_EDGE_BAD[@]+"${PJ_DET_EDGE_BAD[@]}"}; do pj_leg pj_r_tbad pj_n_tbad pj_det_bad pj_leg_tbad "${_e#*|}"; done
 # The shell-parity rule (above), run: every sh-tagged spelling gives the verdict of its own list under a bash named sh as well (the dash run is the leg above), under both dispositions; counted like the legs. Its control is a
-# spelling that differs between the two shells, run under the bash only (so the control does not depend on the host having dash): `return 0; cat >/dev/null` must NOT read as a non-reader there.
-[[ "$(pj_leg_dbad shbash default 'return 0; cat >/dev/null')" != OK && "$(pj_leg_dbad shbash default ':')" == OK ]] || pj_dyn_ctl+="[a bash named sh did not tell a top-level return that goes on to drain from a stub that never reads]"
-pj_shp_bad=""; pj_shp_ok=0; pj_shp_run=0; pj_sh_tagged=0
+# spelling that differs between the shells, run under the bash only (so the control does not depend on the host having dash): `return 0; cat >/dev/null` must NOT read as a non-reader there, and the status says WHICH
+# bash it is: 2 where a bash named sh is in POSIX mode and exits on the failed `return` (bash 5), 0 for bash 3.2, which goes on (the name sh is pinned: a bash with another name goes on, rc 0, on every version, so a renamed symlink is red on bash 5).
+pj_ret_rc="$(pj_hazard shbash default 'return 0; cat >/dev/null')"
+[[ "$(pj_leg_dbad shbash default 'return 0; cat >/dev/null')" != OK && "$(pj_leg_dbad shbash default ':')" == OK && ( "$pj_ret_rc" == 2 || ( "${BASH_VERSINFO[0]}" -lt 4 && "$pj_ret_rc" == 0 ) ) ]] \
+  || pj_dyn_ctl+="[a bash named sh gave rc ${pj_ret_rc:-<none>} for a top-level return before a drain (want 2, or 0 on bash 3.2) or did not tell it from a stub that never reads]"
+pj_shp_bad=""; pj_shp_ok=0; pj_shp_run=0; pj_shp_run_a=0; pj_shp_run_b=0; pj_sh_tagged=0
 for _e in ${PJ_DRAIN_OK[@]+"${PJ_DRAIN_OK[@]}"}; do
   [[ "${_e%%|*}" == sh ]] || continue
   pj_sh_tagged=$((pj_sh_tagged + 1))
-  for _d in ignore default; do pj_leg pj_shp_run pj_shp_ok pj_shp_bad pj_leg_dok shbash "$_d" "${_e#*|}"; done
+  for _d in ignore default; do pj_leg pj_shp_run_a pj_shp_ok pj_shp_bad pj_leg_dok shbash "$_d" "${_e#*|}"; done
 done
 for _e in ${PJ_DRAIN_BAD[@]+"${PJ_DRAIN_BAD[@]}"}; do
   [[ "${_e%%|*}" == sh ]] || continue
   pj_sh_tagged=$((pj_sh_tagged + 1))
-  for _d in ignore default; do pj_leg pj_shp_run pj_shp_ok pj_shp_bad pj_leg_dbad shbash "$_d" "${_e#*|}"; done
+  for _d in ignore default; do pj_leg pj_shp_run_b pj_shp_ok pj_shp_bad pj_leg_dbad shbash "$_d" "${_e#*|}"; done
 done
 [[ -z "$pj_dyn_ctl" ]] \
   || sweep_probe_fail+=("producer-hazard-control: the control did not reproduce the failure: $pj_dyn_ctl — the guard would otherwise certify a hazard it cannot produce")
@@ -2401,15 +2439,19 @@ done
 [[ -z "$pj_dyn_bad" && -z "$pj_det_bad" ]] \
   || sweep_probe_fail+=("producer-drain-nonreading: non-reading spellings that made the pipeline succeed: ${pj_dyn_bad:-none}; detector disagreements: ${pj_det_bad:-none}")
 (( pj_dyn_n == 2 * (${#PJ_DRAIN_OK[@]} + ${#PJ_DRAIN_BAD[@]}) && ${#PJ_DRAIN_OK[@]} > 0 && ${#PJ_DRAIN_BAD[@]} > 0 \
-   && pj_n_dok == 2 * ${#PJ_DRAIN_OK[@]} && pj_n_dbad == 2 * ${#PJ_DRAIN_BAD[@]} && pj_n_tok == ${#PJ_DRAIN_OK[@]} + ${#PJ_DET_EDGE[@]} && pj_n_tbad == ${#PJ_DRAIN_BAD[@]} )) \
+   && pj_n_dok == 2 * ${#PJ_DRAIN_OK[@]} && pj_n_dbad == 2 * ${#PJ_DRAIN_BAD[@]} && pj_n_tok == ${#PJ_DRAIN_OK[@]} + ${#PJ_DET_EDGE[@]} && pj_n_tbad == ${#PJ_DRAIN_BAD[@]} + ${#PJ_DET_EDGE_BAD[@]} )) \
   || sweep_probe_fail+=("producer-drain-zero: ${pj_dyn_n:-<err>} spelling runs for ${#PJ_DRAIN_OK[@]} accepted and ${#PJ_DRAIN_BAD[@]} non-reading spellings, and the four legs ran ${pj_n_dok:-<err>} / ${pj_n_dbad:-<err>} / ${pj_n_tok:-<err>} / ${pj_n_tbad:-<err>} times (want two dispositions each for the dynamic legs, one run each for the detector legs, and neither list empty — zero spellings ran is never a pass)")
+pj_shp_run=$((pj_shp_run_a + pj_shp_run_b))
 [[ -z "$pj_shp_bad" && "$pj_sh_tagged" -gt 0 && "$pj_shp_run" == $((2 * pj_sh_tagged)) && "$pj_shp_ok" == "$pj_shp_run" ]] \
   || sweep_probe_fail+=("producer-shell-parity: an sh-tagged spelling does not give its list's verdict under a bash named sh (it differs between dash and bash): ${pj_shp_bad:-none}; ${pj_shp_ok:-<err>} listed verdicts in ${pj_shp_run:-<err>} runs for ${pj_sh_tagged:-<err>} sh-tagged spellings (want two runs per spelling, all as listed, and at least one spelling) — retag it, reword it, or drop it: it would turn the guard red on a host with no dash")
 # The legs, floored as literals (reported directly): neutering a leg, or cutting its loop, leaves a count below the floor.
 pj_floor leg-dyn-ok 18 "$pj_r_dok" "the number of dynamic accepted-spelling runs"
 pj_floor leg-dyn-bad 52 "$pj_r_dbad" "the number of dynamic non-reading-spelling runs"
 pj_floor leg-det-ok 12 "$pj_r_tok" "the number of detector accepted-spelling runs"
-pj_floor leg-det-bad 26 "$pj_r_tbad" "the number of detector non-reading-spelling runs"
+pj_floor leg-det-bad 29 "$pj_r_tbad" "the number of detector non-reading-spelling runs"
+# each of the two shell-parity loops (accepted list, non-reading list) is floored on its own runs: deleting one leaves the other's count equal to its own tagged count and passes the comparison above
+pj_floor shell-parity-ok 12 "$pj_shp_run_a" "the number of shell-parity runs of the accepted sh-tagged spellings"
+pj_floor shell-parity-bad 38 "$pj_shp_run_b" "the number of shell-parity runs of the non-reading sh-tagged spellings"
 # pj_floor itself is driven (a floor function that always passed would make every floor above a no-op): below its floor, or with no count, it prints its FAIL line and exits 1; at the floor it is silent and returns 0.
 pj_fl_rc=0; pj_fl_lo="$( ( pj_floor ctl 5 4 'a count' ) 2>&1 )" || pj_fl_rc=$?
 pj_fl_none="$( ( pj_floor ctl 5 '' 'a count' ) 2>&1 )" || true
@@ -2447,16 +2489,21 @@ wire_pjt=$(grep -cE '^\[\[ -z "\$pj_tc" \]\] \|\| \{ PJ_FAIL=1; ' <<<"$_code" ||
 wire_pjtt=$(grep -cE '^pj_tc="\$\(pj_check_triples "\$pj_tri_n" "\$PJ_TRIPLES"\)"[[:space:]]*$' <<<"$_code" || true)
 wire_pjg=$(grep -cE '^\(\( PJ_FAIL == 0 \)\) \|\| FAIL=1[[:space:]]*$' <<<"$_code" || true)
 # The floors report DIRECTLY (pj_floor: printf and exit), like the gate below, except the drains-row floor, which merges into PJ_FAIL beside the verdicts it follows and is pinned as such. WIRE_FLOORS lists every
-# pj_floor call by NAME and LITERAL: each must appear at column 0 exactly once with that literal (so a floor lowered to 1, turned into another floor, deleted or duplicated is red here), and no other pj_floor call
+# pj_floor call by NAME, LITERAL and MEASURED ARGUMENT: each must appear at column 0 exactly once with that literal and that count expression (so a floor lowered to 1, turned into another floor, deleted or duplicated is red here), and no other pj_floor call
 # may exist. The list is a second place on purpose: a floor is ratcheted by editing the call and its entry together.
 WIRE_FLOORS=(
-  'cases 102' 'cases-run 102' 'cases-y 62' 'cases-n 47' 'drain-ok 9' 'drain-bad 26'
-  'judge-fixtures 22' 'rows-fixtures 11' 'triple-fixtures 5' 'count-fixtures 9' 'rowcount-fixtures 4'
-  'leg-dyn-ok 18' 'leg-dyn-bad 52' 'leg-det-ok 12' 'leg-det-bad 26'
+  'cases 109 "${#PJ_CASES[@]}"' 'cases-run 109 "$pj_cr"' 'cases-y 71 "$pj_ey"' 'cases-n 50 "$pj_en"' 'drain-ok 9 "${#PJ_DRAIN_OK[@]}"' 'drain-bad 26 "${#PJ_DRAIN_BAD[@]}"'
+  'judge-fixtures 22 "$pj_jc_n"' 'rows-fixtures 11 "$pj_rcc_n"' 'triple-fixtures 5 "$pj_tcc_n"' 'count-fixtures 9 "$pj_ccc_n"' 'rowcount-fixtures 4 "$pj_cnt_n"'
+  'leg-dyn-ok 18 "$pj_r_dok"' 'leg-dyn-bad 52 "$pj_r_dbad"' 'leg-det-ok 12 "$pj_r_tok"' 'leg-det-bad 29 "$pj_r_tbad"'
+  'shell-parity-ok 12 "$pj_shp_run_a"' 'shell-parity-bad 38 "$pj_shp_run_b"'
 )
+# each entry is the call up to its message: name, literal AND the measured argument, so a floor cannot be satisfied by an expression that does not count what its name says
+wire_flr_lines="$(grep '^pj_floor ' <<<"$_code" || true)"
 wire_flr_bad=""
 for _fl in "${WIRE_FLOORS[@]}"; do
-  [[ "$(grep -cE "^pj_floor ${_fl% *} ${_fl#* } " <<<"$_code" || true)" == 1 ]] || wire_flr_bad+=" ${_fl% *}"
+  _fn=0
+  while IFS= read -r _l; do [[ "$_l" == "pj_floor $_fl "* ]] && _fn=$((_fn + 1)); done <<<"$wire_flr_lines"
+  [[ "$_fn" == 1 ]] || wire_flr_bad+=" ${_fl%% *}"
 done
 wire_flr_n=$(grep -cE '^pj_floor [a-z-]+ [0-9]+ ' <<<"$_code" || true)
 wire_flr_fn=$(grep -cE '^pj_floor\(\) \{[[:space:]]*$' <<<"$_code" || true)
