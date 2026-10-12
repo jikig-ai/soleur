@@ -294,11 +294,11 @@ export const MANIFEST: ManifestEntry[] = [
       },
     },
     replace_target: { choice: "git-data-host-replace", server: "hcloud_server.git_data" },
-    // No `arming_pending`: it is ARMED. This row carried `arming_pending: { tracking_issue: 9438 }`
-    // while the monitor was paused-yet-fed between the host replace and the arm. The measured arm
-    // (`arm-heartbeats.sh --arm-one`, #9980) read `up` within 11 s on 2026-10-12; the verdict and the
-    // pre/post `--status` reads are on #9438. `paused: true` above stays: it is the source
-    // `.tf` state (born paused), not the live state.
+    // No `arming_pending` (record PR for #9438). This row carried `arming_pending: { tracking_issue: 9438 }`
+    // while the monitor was paused-yet-fed between the host replace and the arm. On 2026-10-12 a measured
+    // arm (`arm-heartbeats.sh --arm-one`, #9980) read `up` within 11 s; the verdict and the pre/post
+    // `--status` reads are on #9438. That is a dated record: the live state is read from Better Stack, not
+    // from this file. `paused: true` above stays: it is the source `.tf` state (born paused).
   },
   {
     name: "registry_disk_prd",

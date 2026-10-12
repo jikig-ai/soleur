@@ -95,10 +95,12 @@ The modes exist (PR2). The `flip` dispatch is refused unless all of these hold:
   armed after a measured `up` transition on the CURRENT host (the manifest row's `arming_pending` is
   gone), and a re-read at the flip dispatch shows it `up` with a `state=ok` event under 15 minutes
   old and later than that host's `boot_complete`. A box ticked once goes stale at the next replace,
-  so it is RE-READ, never remembered. **Armed 2026-10-12 (#9438, record PR):** the host from replace run
-  38140050880 was armed with `--arm-one` (#9980), `outcome=armed`, `status=up` within 11 s, id 506836; the
-  pre- and post-arm `--status` reads are on #9438. This records the arm, not the flip-time re-read, which
-  is still taken at the flip dispatch. Procedure and reads:
+  so it is RE-READ, never remembered. **Armed 2026-10-12 (#9438, record PR):** the host that
+  replace run 38140050880 created (its `boot_complete` was read; the run's own conclusion is `failure`, at
+  a post-apply step after "Apply complete") was armed with `--arm-one` (#9980), `outcome=armed`, `status=up`
+  within 11 s, id 506836; the pre- and post-arm `--status` reads are on #9438. That is one read at one
+  instant, not the flip-time re-read, which is still taken at the flip dispatch and is the binding one. The
+  pre-arm soak read (step 6) is not recorded in this PR or on #9438. Procedure and reads:
   [Liveness heartbeat](#liveness-heartbeat-9438). Until #9943 enforces it in the workflow, this item
   and its re-read are the only control.
 - **#8101** — remaining: the hooks copy, the post-copy fence readback and the wrappers' mapper
@@ -1206,7 +1208,11 @@ authorization; a menu answer is not authorization.
    boots into `url_unavailable` and heals on its next tick once the secret exists, with no second
    replace.
 5. **Host replace with key rotation** (ADR-220 D6). This is the replace the cutover already
-   requires, so this change adds none. The monitor is paused, so it pages nothing.
+   requires, so this change adds none. For the first replace the monitor was paused, so it paged nothing.
+   Since the 2026-10-12 arm it is live: a later replace pages about 6 minutes in (period 60 s plus grace
+   300 s). Do not pause it by hand to avoid that: a paused armed monitor reads as `fed-but-paused` to the
+   nightly reconcile. If a replace needs a pause, say so on #9438 and re-arm with `--arm-one` afterwards;
+   steps 4 and 7 apply again only if the monitor is found paused.
 6. **Pre-arm soak read** (owner-authorized: it uses the Better Stack query token). The host's events
    land in the git-data Better Stack source, NOT the default table the query script reads, so the
    tables are pinned (the same pin the boot-poll read above uses). `$A` is the replace run's

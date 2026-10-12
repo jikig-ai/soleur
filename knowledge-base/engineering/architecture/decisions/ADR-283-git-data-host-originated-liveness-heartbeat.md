@@ -15,11 +15,15 @@ brand_survival_threshold: single-user incident
 ## Status
 
 **Accepted (2026-10-12, record PR closing #9438).** The decision described a target state that is only true after the owner's host replace
-and a measured first beat; both have happened. The host from replace run 38140050880 was armed with `arm-heartbeats.sh --arm-one` (#9980,
-PR #10029): `outcome=armed`, `status=up` within 11 s, monitor 506836 (`period=60 grace=300`, read live for the first time by that run's
-`--status`). The Slack half of the alert route is evidenced by Better Stack incident 1030432412 (`soleur-inngest-luks-wrong-volume-prd`, started
-2026-10-11, after ADR-260), whose timeline records "Incident update posted to #error-found." with Slack permalinks, read from the Uptime
-API. The ordinal was verified free against `origin/main` and every `origin/*` ref on 2026-10-10 and is re-verified at ship.
+and a measured first beat. The host that replace run 38140050880 created (its `boot_complete` was read; the run's own conclusion is `failure`, at
+a post-apply step after "Apply complete") was armed with `arm-heartbeats.sh --arm-one` (#9980, PR #10029): `outcome=armed`, `status=up` within
+11 s, monitor 506836 (`period=60 grace=300`, read live for the first time by that run's `--status`). That is one read at one instant. It does
+not authorize flipping `GIT_DATA_STORE_ENABLED`: the flip's precondition is the re-read at the flip dispatch (runbook), and the pre-arm soak
+read is not recorded here. Delivery to Slack is shown for a different monitor only: Better Stack incident 1030432412
+(`soleur-inngest-luks-wrong-volume-prd`, started 2026-10-11, after ADR-260) has timeline events "Incident update posted to #error-found." with
+Slack permalinks, read from the Uptime API. That is Better Stack's own record that it posted, not proof anyone read it, and monitor 506836 itself
+declares email only (`push=false`, no escalation policy). Slack delivery for this heartbeat is therefore unproven.
+The ordinal was verified free against `origin/main` and every `origin/*` ref on 2026-10-10 and is re-verified at ship.
 
 ## Context
 
@@ -49,7 +53,7 @@ inode table, a closed or unmounted LUKS store, a failed security unit, or a dead
    `user_data`, the rung-2 rehearsal render carries no production monitor, and a rehearsal host (whose scratch config lacks the secret) is
    structurally unable to ping it; the config name is compared by exact equality, never by prefix.
 4. **Born paused, armed only after a measured beat.** The monitor and its masked Doppler secret ride the per-merge `-target` list and are
-   refused by the birth route. The monitor ships paused with `ignore_changes = [paused]`, carries `arming_pending` in the heartbeat manifest,
+   refused by the birth route. The monitor ships paused with `ignore_changes = [paused]`, carried `arming_pending` in the heartbeat manifest until the 2026-10-12 arm,
    and is NOT in the per-merge arm list: the feeder reaches the host only through the owner-authorized replace, so an arm line would roll
    back and fail every merge until then (ADR-117). Arming is a separate, measured, owner-authorized step after a soak read.
 5. **A hard flip precondition, re-read at flip time.** The cutover runbook records it, with a read-only verification, a 30-minute soak
@@ -81,7 +85,7 @@ inode table, a closed or unmounted LUKS store, a failed security unit, or a dead
   `git-data-userdata-budget.sh`, recorded in the PR body) against the 32 KB cap.
 - A known-benign `miss` on a healthy fresh host is a payload defect fixed forward through the two-PR sequence; the thresholds are hash-bound
   and there is no agent waiver.
-- Between merge and replace there is a paused-yet-fed gap that the nightly `fed-but-paused` alarm is told to expect (`arming_pending`); it
+- (Historical, until the 2026-10-12 arm.) Between merge and replace there was a paused-yet-fed gap that the nightly `fed-but-paused` alarm was told to expect (`arming_pending`); it
   does not suppress `absent-live`.
 - Until #9943 lands, the precondition is a runbook item with a re-read, not a workflow gate.
 - A rehearsal host can never exercise the armed path (Doppler fetch, curl, ping): its scratch config lacks the secret by construction,
