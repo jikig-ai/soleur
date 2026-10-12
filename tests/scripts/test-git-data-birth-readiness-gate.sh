@@ -584,6 +584,11 @@ _r2res_report="$(
   export TMPDIR="$_r2res_base"
   o1="$(_git_data_rung2_hash_at_sha "$R2" "" ci.yml "$_R2_C1")"; r1=$?
   o2="$(_git_data_rung2_hash_at_sha "$R2" "absent-dir" ci.yml "$_R2_C1")"; r2=$?
+  # Disarm visibility: a DIRECT call (no nested substitution) leaves the trap's
+  # armed state inspectable by `trap -p RETURN` in this shell — the `$( )` calls
+  # above run in subshells whose trap tables are invisible here, so this arm is
+  # what actually discriminates a missing `trap - RETURN` self-disarm.
+  _git_data_rung2_hash_at_sha "$R2" "" ci.yml "$_R2_C1" >/dev/null 2>&1
   printf 'rc1=%s tok1=%s rc2=%s tok2=%s traps=[%s]\n' \
     "$r1" "${o1%%|*}" "$r2" "${o2%%|*}" "$(trap -p RETURN)"
 )"

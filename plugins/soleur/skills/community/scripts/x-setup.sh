@@ -473,7 +473,9 @@ cmd_write_env() {
       grep -v '^X_API_SECRET=' | \
       grep -v '^X_ACCESS_TOKEN=' | \
       grep -v '^X_ACCESS_TOKEN_SECRET='; } > "$tmp" || true
-    mv "$tmp" "$env_file"
+    # A `set -e` exit on mv failure would skip the RETURN trap — the alloc
+    # loses its only cleanup, so rm it inline on that path too.
+    mv "$tmp" "$env_file" || { rc=$?; rm -f "$tmp"; exit "$rc"; }
   fi
 
   # Set restrictive permissions BEFORE writing secrets

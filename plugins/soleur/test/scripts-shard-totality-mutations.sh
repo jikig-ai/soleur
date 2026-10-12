@@ -118,6 +118,7 @@ in_range() {
 }
 
 WORK="$(mktemp -d -t shard-mut.XXXXXXXX)" || { echo "FATAL: mktemp failed" >&2; exit 2; }
+[[ "$WORK" == /* ]] || { echo "FATAL: WORK is not absolute (TMPDIR was relative?): $WORK" >&2; exit 2; }
 
 PRISTINE_RUNNER="$WORK/test-all.sh.pristine"
 PRISTINE_GUARD="$WORK/guard.pristine"

@@ -58,7 +58,7 @@ Before executing any browser scenarios, check whether the dev server is reachabl
 
 2. **Detect the dev command:** Read `apps/web-platform/package.json` and extract the `scripts.dev` field. If no `dev` script exists, warn: "No dev script found in package.json — cannot auto-start server. Skipping browser scenarios." Continue to API verification steps (do not block the pipeline).
 
-3. **Start the server:** Change to the `apps/web-platform/` directory first (the dev command must run from the app root). Check if Doppler is available (`command -v doppler`). If available, start via `doppler run -p soleur -c dev -- <dev-command> > "$QA_LOG" 2>&1 &` (after `QA_LOG=$(mktemp -t qa-dev-server.XXXXXXXX.log)`). If Doppler is unavailable, start via `<dev-command> > "$QA_LOG" 2>&1 &`. Record the background PID **and echo `QA_LOG=$QA_LOG`** — a later Bash call does not inherit the variable, so the path must be recoverable from the transcript. A fixed name would collide with any concurrent QA session. Remove it at QA teardown (`rm -f "$QA_LOG"`) — it is scratch, and a count-shaped `/tmp` leak is real (#10017).
+3. **Start the server:** Change to the `apps/web-platform/` directory first (the dev command must run from the app root). Check if Doppler is available (`command -v doppler`). If available, start via `doppler run -p soleur -c dev -- <dev-command> > "$QA_LOG" 2>&1 &` (after `QA_LOG=$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)" qa-dev-server.XXXXXXXX.log)`). If Doppler is unavailable, start via `<dev-command> > "$QA_LOG" 2>&1 &`. Record the background PID **and echo `QA_LOG=$QA_LOG`** — a later Bash call does not inherit the variable, so the path must be recoverable from the transcript. A fixed name would collide with any concurrent QA session. Remove it at QA teardown (`rm -f` on the echoed `QA_LOG=` path — a later Bash call does not inherit the variable) — it is scratch, and a count-shaped `/tmp` leak is real (#10017).
 
 4. **Poll for readiness (30s timeout):** Poll `http://localhost:3000/` until it responds or 30 seconds have elapsed, whichever comes first. If the server responds, proceed to Step 2. If the timeout elapses:
    - Kill the background process by PID
@@ -94,10 +94,12 @@ This is the gate's semantic home. Run it when the diff (`git diff --name-only or
 
 ```bash
 cd apps/web-platform
-QA_PW_LOG=$(mktemp -t qa-pw-install.XXXXXXXX.log)
+QA_PW_LOG=$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)" qa-pw-install.XXXXXXXX.log)
 npx playwright install chromium >"$QA_PW_LOG" 2>&1 \
   || PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=ubuntu24.04-x64 npx playwright install chromium
-# The log exists for the failure path below — read it for the diagnosis, then `rm -f "$QA_PW_LOG"`; a path nobody recorded is a leak (#10017).
+# The log exists for the failure path below — read it for the diagnosis, then remove it
+# (`rm -f` on the recorded path — a later Bash call does not inherit $QA_PW_LOG); a path
+# nobody recorded is a leak (#10017).
 ```
 
 If BOTH the plain install and the override install fail (a genuinely unsupported host with no fallback build), do NOT run the gate and do NOT spend reasoning re-deriving whether it is a regression: this is **INFRA-BLOCKED**, not a code failure. Record in the QA report — "Step 2.6 nav-states gate INFRA-BLOCKED locally (Playwright browser uninstallable on <os>); CI's containerized `e2e` job (`mcr.microsoft.com/playwright:v1.58.2-jammy`) is the authoritative gate per #5009" — and proceed. Never block the pipeline on this.

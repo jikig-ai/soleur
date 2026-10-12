@@ -97,9 +97,10 @@ Only item 1 is auto-applied. Items 2–6 are reported in the PR body for human s
    `claude-sonnet-5` ABSENT — both are present in 2.1.219). The script now prints both
    versions and refuses to describe a mismatch as a measurement of the pin; to actually test
    a candidate version, unpack `@anthropic-ai/claude-code-linux-x64@<version>` and grep that
-   — **outside the repo**, e.g. in `$(mktemp -d)` (and `rm -rf` it when the
-   grep answers — an unremoved scratch dir is the count-shaped `/tmp` leak,
-   #10017). `npm pack` extracts to `./package/`, which no
+   — **outside the repo**, e.g. `unpack_dir=$(mktemp -d -t soleur-run.$$.XXXXXXXX)` (name it — an
+   anonymous `$(mktemp -d)` path can never be found again, and the signed
+   `soleur-run.$$.` root is what makes a missed `rm -rf "$unpack_dir"`
+   reaper-eligible anyway; #10017). `npm pack` extracts to `./package/`, which no
    exclusion covers; unpacking under `$ROOT` puts a compiled blob full of model ids inside the
    auto-fix surface. Selection now skips binaries (`grep -I`), so `--fix` will not byte-patch it,
    but the tarball still has no business in the tree.

@@ -97,7 +97,7 @@ Both Check 6 (Brand-Survival Self-Review) and Check 10 (Discoverability Test Exe
 
 ```bash
 # Step S.1: fetch PR body to a private temp file (umask 077; mktemp).
-PR_BODY_FILE=$(umask 077 && mktemp -t preflight-pr-body.XXXXXXXX.md)
+PR_BODY_FILE=$(umask 077 && mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)" preflight-pr-body.XXXXXXXX.md)
 gh pr view --json body --jq .body > "$PR_BODY_FILE"
 trap 'rm -f "$PR_BODY_FILE" "$COMBINED"' EXIT
 
@@ -109,7 +109,7 @@ SCRUBBED_BODY=$(awk 'BEGIN{f=0} /^[[:space:]]*```/{f=!f; next} !f{print}' "$PR_B
 PLAN_PATH=$(printf '%s' "$SCRUBBED_BODY" | grep -Eo 'knowledge-base/project/plans/[^[:space:])"`'\'']+\.md' | head -n 1 || true)
 
 # Step S.4: build the combined check input.
-COMBINED=$(mktemp -t preflight-combined.XXXXXXXX.md)
+COMBINED=$(mktemp -p "$(dirname "$PR_BODY_FILE")" preflight-combined.XXXXXXXX.md)
 printf '%s\n' "$SCRUBBED_BODY" > "$COMBINED"
 if [[ -n "$PLAN_PATH" && -f "$PLAN_PATH" ]]; then
   awk 'BEGIN{f=0} /^[[:space:]]*```/{f=!f; next} !f{print}' "$PLAN_PATH" \
@@ -129,7 +129,7 @@ Re-use the cached path-set from Phase 0 Step 0.1 (`"$PREFLIGHT_TMP/preflight-dif
 grep -E '(^|/)supabase/migrations/.*\.sql$' "$PREFLIGHT_TMP/preflight-diff-files.txt"
 ```
 
-The regex anchors are intentional: `(^|/)` accepts both top-level (`supabase/migrations/X.sql`) and nested-under-app-dir paths (`apps/web-platform/supabase/migrations/X.sql`); `.*\.sql$` accepts files at any depth under the migrations directory (matching git pathspec's `*` which crosses `/`). Verify at edit time via `a=$(mktemp) && b=$(mktemp) && git diff --name-only origin/main...HEAD -- '*/supabase/migrations/*.sql' supabase/migrations/*.sql > "$a" && grep -E '(^|/)supabase/migrations/.*\.sql$' "$PREFLIGHT_TMP/preflight-diff-files.txt" > "$b" && diff -u "$a" "$b"`.
+The regex anchors are intentional: `(^|/)` accepts both top-level (`supabase/migrations/X.sql`) and nested-under-app-dir paths (`apps/web-platform/supabase/migrations/X.sql`); `.*\.sql$` accepts files at any depth under the migrations directory (matching git pathspec's `*` which crosses `/`). Verify at edit time via `_v=$(mktemp -d -t soleur-run.$$.XXXXXXXX) && a=$(mktemp -p "$_v") && b=$(mktemp -p "$_v") && git diff --name-only origin/main...HEAD -- '*/supabase/migrations/*.sql' supabase/migrations/*.sql > "$a" && grep -E '(^|/)supabase/migrations/.*\.sql$' "$PREFLIGHT_TMP/preflight-diff-files.txt" > "$b" && diff -u "$a" "$b"`.
 
 If no migration files are found (grep rc=1), return **SKIP**.
 

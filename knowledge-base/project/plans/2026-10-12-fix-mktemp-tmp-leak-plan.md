@@ -22,11 +22,11 @@ Contract (`lint-guard-contract.py` green, 1 entry, structural assembly),
 BLOCKED marker). 4.5 network-outage and 4.55 downtime: no trigger.
 
 **Verify-the-negative pass:** `rung2-archive` sole producer confirmed
-(`git-data-birth-readiness-gate.sh:1440` — zero other hits outside
+(`git-data-birth-readiness-gate.sh:1447` — zero other hits outside
 tests/docs/classifier); `_tmp` consumed only in-function; bare `tmp.*`
 protected-class confirmed in `tmp-classify.sh` + `soleur-tmp-purge.sh`
 contracts; `trap … EXIT|RETURN` census regex confirmed to cover RETURN
-(`TRAP_EXIT` at lint :192); cited lines
+(`TRAP_EXIT` at lint :194); cited lines
 `browser-snapshot-credential-guard.test.sh:153-158`, `#6991`,
 `#7208`, `#3595`, ADR-129/176/250, `cq-write-failing-tests-before`,
 `hr-all-infrastructure-provisioning-servers` all verified live.
@@ -124,7 +124,7 @@ rather than cleaned-up-by-design.
 | Proposed mechanism | Property | Already covered by? |
 |---|---|---|
 | Per-site owning trap / explicit removal (census) | 1 | Lint rule (c) gates NEW lines only; the accepted population is unfenced debt — gap confirmed |
-| Producer-side cleanup (or owned-root move) at `git-data-birth-readiness-gate.sh:1440` | 2 | Reaper 3 reaps prefix class only past a 24h floor → steady-state ~1 day's accumulation; producer-side removal is the gap |
+| Producer-side cleanup (or owned-root move) at `git-data-birth-readiness-gate.sh:1447` | 2 | Reaper 3 reaps prefix class only past a 24h floor → steady-state ~1 day's accumulation; producer-side removal is the gap |
 | systemd-tmpfiles age rule (optional) | 3 | Count alarm detects only; Reaper 2 is size-gated; Reaper 3 never touches unattributable `tmp.*` — residual class has no reaper. Optional per issue |
 
 **Cut list:** none — all three issue-named mechanisms map to uncovered
@@ -142,7 +142,7 @@ plan's invention).
 - `tests/scripts/lib/git-data-birth-readiness-gate.sh:1440` —
   `_git_data_rung2_hash_at_sha()`: single producer of `rung2-archive.*`;
   `_tmp` is used ONLY inside the function (archive-extract → link-sweep →
-  hash) — nothing downstream consumes it; called once, at :1912, inside
+  hash) — nothing downstream consumes it; called once, at :1911, inside
   `$( )`. Carries a `lint-trap-ownership: ok` annotation trading a bounded
   leak against an unprovable `rm -rf` operand, plus a `.soleur-owned`
   marker write for Reaper 3.
@@ -298,7 +298,7 @@ For every census row dispositioned `trap-*`:
 
 `tests/scripts/lib/git-data-birth-readiness-gate.sh:1440` —
 `_git_data_rung2_hash_at_sha()`: the extracted tree is consumed ONLY
-inside the function (verified: single caller at :1912, no downstream
+inside the function (verified: single caller at :1911, no downstream
 path references). Replace the bounded-leak trade with an owning
 `trap … RETURN` that asserts `$_tmp` is absolute before `rm -rf` —
 covering every return path including the symlink-refusal early return.

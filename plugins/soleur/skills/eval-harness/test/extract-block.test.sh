@@ -29,11 +29,11 @@ roundtrips=0
 while IFS=$'\t' read -r target projected; do
   [[ -z "$target" ]] && continue
   committed="$REPO_ROOT/$projected"
-  if diff -u <(node "$GEN" "$target" --stdout) "$committed" >/tmp/eval-gate-roundtrip.diff 2>&1; then
+  if diff -u <(node "$GEN" "$target" --stdout) "$committed" > "$SUITE_TMP/eval-gate-roundtrip.diff" 2>&1; then
     pass "round-trip $target == committed projection"
   else
     fail "round-trip $target" "generated projection differs from committed $committed (run: node scripts/gen-skill-prompt.cjs $target)"
-    cat /tmp/eval-gate-roundtrip.diff
+    cat "$SUITE_TMP/eval-gate-roundtrip.diff"
   fi
   roundtrips=$((roundtrips + 1))
 done < <(node -e 'JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).forEach(e=>process.stdout.write(e.target+"\t"+e.projected_prompt_path+"\n"))' "$REGISTRY")
@@ -69,13 +69,13 @@ fi
 # --- CLI exits non-zero with stderr when a marker is missing ---
 tmp="$(mktemp -p "$SUITE_TMP")"
 printf 'this file has no sentinels\n' > "$tmp"
-if node "$EXTRACT" "$tmp" go-routing 2>/tmp/eval-gate-cli.err; then
+if node "$EXTRACT" "$tmp" go-routing 2>"$SUITE_TMP/eval-gate-cli.err"; then
   fail "extract-block CLI missing-marker exit" "CLI exited 0 on a file without markers"
 else
-  if grep -q "marker not found" /tmp/eval-gate-cli.err; then
+  if grep -q "marker not found" "$SUITE_TMP/eval-gate-cli.err"; then
     pass "extract-block CLI missing-marker exits non-zero with clear stderr"
   else
-    fail "extract-block CLI missing-marker stderr" "stderr lacked a clear message: $(cat /tmp/eval-gate-cli.err)"
+    fail "extract-block CLI missing-marker stderr" "stderr lacked a clear message: $(cat "$SUITE_TMP/eval-gate-cli.err")"
   fi
 fi
 rm -f "$tmp"

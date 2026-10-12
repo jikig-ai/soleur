@@ -1439,12 +1439,14 @@ _git_data_rung2_hash_at_sha() {
   # substitution subshell). The handler SELF-DISARMS first (`trap - RETURN`): a
   # RETURN trap is not scoped to the function that set it, so a live copy would
   # re-fire on every later function return in this shell, re-running
-  # `rm -rf "$_tmp"` under a possibly-reassigned name. The `/*` case is the
-  # provably-absolute operand the P1b guard requires before any `rm -rf`; a
-  # non-absolute result skips the delete (bounded leak, never an unprovable rm).
+  # `rm -rf "$_tmp"` under a possibly-reassigned name. The `/*/rung2-archive.*`
+  # case is the provably-absolute operand the P1b guard requires before any
+  # `rm -rf`, anchored to the basename this line just allocated so a later
+  # reassignment of `_tmp` cannot redirect the delete; a non-matching result
+  # skips the delete (bounded leak, never an unprovable rm).
   _tmp="$(mktemp -d -t rung2-archive.XXXXXXXX)" || {
     printf 'RUN_HASH_UNCOMPUTABLE|could not create a scratch directory to extract the archived tree. Nothing was measured — check free space and TMPDIR, then re-run.\n'; return 1; }
-  trap 'trap - RETURN; case "${_tmp:-}" in /*) rm -rf "$_tmp" ;; esac' RETURN
+  trap 'trap - RETURN; case "${_tmp:-}" in /*/rung2-archive.*) rm -rf "$_tmp" ;; esac' RETURN
   # `core.attributesfile=/dev/null` DISABLES THE GLOBAL/SYSTEM ATTRIBUTES FILE, AND NOTHING
   # MORE — the earlier comment here claimed it stopped a future `export-ignore`/`export-subst`
   # entry from making archived bytes differ from the worktree bytes, and that is false.

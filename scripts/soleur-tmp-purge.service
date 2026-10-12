@@ -25,8 +25,10 @@ WorkingDirectory=%h/soleur
 # Two ExecStart lines on a oneshot run in order: --apply quarantines the
 # certain-attribution classes; --drain then terminal-deletes quarantine
 # entries past their class TTL (drain is the only delete, and it is scoped
-# strictly beneath soleur-quarantine.<uid>/).
-ExecStart=%h/soleur/scripts/soleur-tmp-purge.sh --apply
+# strictly beneath soleur-quarantine.<uid>/). The `-` prefix on --apply is
+# load-bearing: a contended or failed apply must NOT skip the drain —
+# quarantined past-TTL entries would strand otherwise.
+ExecStart=-%h/soleur/scripts/soleur-tmp-purge.sh --apply
 ExecStart=%h/soleur/scripts/soleur-tmp-purge.sh --drain
 # The purge serializes on its own flock and skips loudly under contention;
 # the timeout only bounds a wedged pass.

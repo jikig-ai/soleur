@@ -298,7 +298,9 @@ cmd_write_env() {
     trap 'trap - RETURN; rm -f "$tmp"' RETURN
     { grep -v '^BSKY_HANDLE=' "$env_file" | \
       grep -v '^BSKY_APP_PASSWORD='; } > "$tmp" || true
-    mv "$tmp" "$env_file"
+    # A `set -e` exit on mv failure would skip the RETURN trap — the alloc
+    # loses its only cleanup, so rm it inline on that path too.
+    mv "$tmp" "$env_file" || { rc=$?; rm -f "$tmp"; exit "$rc"; }
   fi
 
   # Set restrictive permissions BEFORE writing secrets

@@ -207,7 +207,7 @@ CHANGELOG requires special handling to preserve entries from both sides without 
 Read both sides using git stage numbers (NOT `git show HEAD:` which only gives one side):
 
 ```bash
-ours=$(mktemp -t changelog-ours.XXXXXXXX.md); theirs=$(mktemp -t changelog-theirs.XXXXXXXX.md)
+ours=$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)" changelog-ours.XXXXXXXX.md); theirs=$(mktemp -p "$(dirname "$ours")" changelog-theirs.XXXXXXXX.md)
 git show :2:plugins/soleur/CHANGELOG.md > "$ours"
 git show :3:plugins/soleur/CHANGELOG.md > "$theirs"
 echo "ours=$ours theirs=$theirs"  # echo the paths: the Read/Write steps below need them, and a separate tool call does not inherit these vars
@@ -236,7 +236,7 @@ The line count should be roughly the sum of unique lines from both sides. If the
 Then remove both scratch files — they are consumed by the reconstruction and the wc check, and unremoved `mktemp` files are the count-shaped `/tmp` leak (#10017):
 
 ```bash
-rm -f "$ours" "$theirs"
+rm -f "$ours" "$theirs"; rmdir "$(dirname "$ours")" 2>/dev/null
 ```
 
 ```bash
@@ -406,7 +406,7 @@ if [[ "$sync_ok" -eq 1 ]]; then
     why="$SYNC_ROOT/.claude-plugin/plugin.json does not name soleur (ADR-179 identity check)"
   elif [[ ! -r "$SYNC_SH" ]]; then why="the script is missing"
   elif ! bash "$SYNC_SH" --help 2>/dev/null | grep -q -- '--step'; then why="its --help has no --step (an older copy)"
-  elif ! { SYNC_SNAP="$(mktemp)" && trap 'rm -f "$SYNC_SNAP"' EXIT && cp "$SYNC_SH" "$SYNC_SNAP"; }; then why="the snapshot copy failed"
+  elif ! { SYNC_SNAP="$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)")" && trap 'rm -rf "$(dirname "$SYNC_SNAP")"' EXIT && cp "$SYNC_SH" "$SYNC_SNAP"; }; then why="the snapshot copy failed"
   fi
   if [[ -n "$why" ]]; then
     echo "[ship.phase7.precondition] sync-pr-behind.sh not usable at '$SYNC_SH': $why — BEHIND auto-sync disabled; export CLAUDE_PLUGIN_ROOT=<the installed soleur plugin root> (Devin/Codex: see that harness's INSTRUCTIONS.md), or sync by hand."

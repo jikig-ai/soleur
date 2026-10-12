@@ -33,7 +33,7 @@ and count cannot diverge) on branch `feat-one-shot-10017-mktemp-tmp-leak`.
 | `plugins/soleur/skills/community/scripts/linkedin-setup.sh` | operator-run setup | trap-RETURN | same shape |
 | `plugins/soleur/skills/community/scripts/bsky-setup.sh` | operator-run setup | trap-RETURN | same shape |
 | `plugins/soleur/skills/eval-harness/test/extract-block.test.sh` | test suite | trap-EXIT | suite root |
-| `plugins/soleur/skills/rclone/scripts/check_setup.sh` | operator-run doctor | restructure | `mktemp` appears only inside a double-quoted `echo` of install instructions — a DATA mention the census counts; convert the echo to a single-quoted `printf` so no live `mktemp` token exists |
+| `plugins/soleur/skills/rclone/scripts/check_setup.sh` | operator-run doctor | restructure | `mktemp` appears only inside a double-quoted `echo` of install instructions — a DATA mention the census counts; convert the echo to a single-quoted `echo` so no live `mktemp` token exists |
 | `plugins/soleur/skills/skill-security-scan/scripts/lib.sh` | sourced library | annotate-bounded | `stdin_to_tempfile` contract: caller owns cleanup — verified all 5 `check-*.sh` callers register `trap 'rm -f "$tmp"…' EXIT`; adds the annotation |
 | `plugins/soleur/skills/skill-security-scan/scripts/run-self-test.sh` | operator/agent-run script | trap-EXIT | `tmp_manifest` is `mv`'d into place on success; trap covers the failure window |
 | `plugins/soleur/test/pencil-adapter-auth-hard-fail.test.sh` | test suite | trap-EXIT | suite root |
@@ -54,7 +54,7 @@ and count cannot diverge) on branch `feat-one-shot-10017-mktemp-tmp-leak`.
 | `scripts/seccomp-unenforced-alert.test.sh` | test suite | trap-EXIT | suite root |
 | `scripts/sentry-issue.test.sh` | test suite | trap-EXIT | suite root |
 | `scripts/test-content-publisher.sh` | test suite | trap-EXIT | suite root (8 allocs) |
-| `scripts/watch-live-verify-pass.sh` | session-run watcher | trap-EXIT | `body` is `rm -f`'d on the success path only — the ~6 early-exit paths leak it; THE ship-phase watcher from the issue's evidence |
+| `scripts/watch-live-verify-pass.sh` | session-run watcher | trap-EXIT | `body` is `rm -f`'d on the normal path only (the script runs `set -uo` without `-e`, so no intermediate early-exit — the residual window is a signal/kill mid-run); THE ship-phase watcher from the issue's evidence |
 | `scripts/watch-live-verify-pass.test.sh` | test suite | trap-EXIT | suite root |
 
 ## Mandatory rows
@@ -88,17 +88,18 @@ instruction text only.
 |---|---|---|
 | `plugins/soleur/skills/ship/SKILL.md` (~8 sites: PR_BODY_FILE, BODY_FILE, `_ps`, TMP_TITLE/TMP_BODY/TMP_COMMITS, gate log, follow-through bodies) | add-cleanup-instruction | body/scratch files are consumed by a `gh` call or diff in the same step — instruction gains `rm -f` at the consumption point |
 | `plugins/soleur/skills/ship/SKILL.md:466` detached battery log | bounded-persistence | `mktemp -p "${TMPDIR:-/var/tmp}"` — `/var/tmp`, not the tmpfs `/tmp` class; the log must outlive the detached run it records |
-| `plugins/soleur/skills/preflight/SKILL.md:100,112` | add-cleanup-instruction | PR-body/diff scratch consumed within the preflight step |
+| `plugins/soleur/skills/preflight/SKILL.md:100,112` | already-clean (verified on inspection — no edit) | both allocs already pair with `trap 'rm -f "$PR_BODY_FILE" "$COMBINED"' EXIT` (:102) |
 | `plugins/soleur/skills/qa/SKILL.md:61,97` | add-cleanup-instruction | QA_LOG / playwright-install log — removed at QA teardown |
 | `plugins/soleur/skills/merge-pr/SKILL.md:210` | add-cleanup-instruction | changelog ours/theirs scratch consumed by the merge diff |
 | `plugins/soleur/skills/plan/SKILL.md:382` | add-cleanup-instruction | ISSUES_JSON consumed by the same step's read |
-| `plugins/soleur/skills/incident/SKILL.md:289` | add-cleanup-instruction | DRAFT consumed at the gate-emission point |
-| `plugins/soleur/skills/legal-generate/SKILL.md:138` | add-cleanup-instruction | same draft-gate shape |
-| `plugins/soleur/skills/questionnaire-generate/SKILL.md:145` | add-cleanup-instruction | same draft-gate shape |
+| `plugins/soleur/skills/incident/SKILL.md:289` | already-clean (verified on inspection — no edit) | `DRAFT` already carries `trap 'rm -f "$DRAFT"' EXIT INT TERM HUP` |
+| `plugins/soleur/skills/legal-generate/SKILL.md:138` | already-clean (verified on inspection — no edit) | same draft-gate shape, already trapped |
+| `plugins/soleur/skills/questionnaire-generate/SKILL.md:145` | already-clean (verified on inspection — no edit) | same draft-gate shape, already trapped |
 | `plugins/soleur/skills/schedule/SKILL.md:481` | add-cleanup-instruction | MERGE_ERR read for diagnostics then droppable |
-| `plugins/soleur/skills/content-writer/SKILL.md:138` | add-cleanup-instruction | scratch dir lives for the skill run; removed at the end step |
+| `plugins/soleur/skills/content-writer/SKILL.md:138` | already-clean (verified on inspection — no edit) | end step already `rm -rf`s the scratch dir |
 | `plugins/soleur/skills/model-launch-review/SKILL.md:100` | add-cleanup-instruction | npm-pack scratch dir removed after extraction check |
-| `plugins/soleur/skills/rclone/SKILL.md`, `reproduce-bug/SKILL.md:73`, `architecture/references/likec4-reference.md:113`, `admin-ip-refresh/references/…:117`, `.claude/hooks/README.md` | add-cleanup-instruction / bounded-persistence per context | minor single sites |
+| `plugins/soleur/skills/architecture/references/likec4-reference.md:113` | add-cleanup-instruction | anonymous `$(mktemp)` → named `$_c4_out`, consumed then `rm -f` |
+| `plugins/soleur/skills/rclone/SKILL.md`, `reproduce-bug/SKILL.md:73`, `admin-ip-refresh/references/…:117`, `.claude/hooks/README.md` | already-clean (verified on inspection — no edit) | self-`rm`/`shred -u` trap already present in each |
 | `plugins/soleur/skills/work/references/work-scratch-sandboxes.md:52,124` | bounded-persistence | `/var/tmp` seat sandboxes — not the tmpfs `/tmp` class; lifetime is the seat's, owned by the seat protocol |
 
 ## Out-of-enumeration class-b members (no edits — recorded for completeness)
@@ -116,3 +117,12 @@ session-run. The census ratchet keeps them fenced meanwhile.
 `trap … EXIT INT TERM` covering its allocations. No edit; the ledger
 corrects the seed list. (`ship-soak-followthrough-gate.sh:161`
 `_plan_stripped` is `rm -f`'d on both branches — verified.)
+
+## Prose-site disposition follow-up (review rulings)
+
+Per the CTO ruling row in `decision-challenges.md` (schema-root routing over a
+signed-prefix allowlist), every prose-instructed alloc above now places the
+artifact inside a `mktemp -d -t soleur-run.$$.XXXXXXXX` root — the `rm` stays
+the primary cleanup, and the signed root makes a missed `rm` reaper-eligible
+(`schema:<pid>` attribution; bare `tmp.*` stays protected). The normative
+pattern lives in `plugins/soleur/skills/work/references/work-scratch-sandboxes.md`.

@@ -512,7 +512,9 @@ cmd_write_env() {
       grep -v '^DISCORD_WEBHOOK_URL=' | \
       grep -v '^DISCORD_RELEASES_WEBHOOK_URL=' | \
       grep -v '^DISCORD_BLOG_WEBHOOK_URL=' > "$tmp" || true
-    mv "$tmp" "$env_file"
+    # A `set -e` exit on mv failure would skip the RETURN trap — the alloc
+    # loses its only cleanup, so rm it inline on that path too.
+    mv "$tmp" "$env_file" || { rc=$?; rm -f "$tmp"; exit "$rc"; }
   fi
 
   # Set restrictive permissions BEFORE writing secrets

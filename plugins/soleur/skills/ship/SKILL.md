@@ -923,7 +923,8 @@ LEDGER_TOUCHED=$(git diff origin/main...HEAD --name-only | grep -c 'knowledge-ba
 
 # (b) Capture + fence-strip the PR body (self-contained; fail CLOSED on an
 # unbalanced ``` so an unclosed fence cannot silently drop the rest of the body).
-PR_BODY_FILE=$(mktemp); trap 'rm -f "$PR_BODY_FILE"' EXIT INT TERM
+PR_BODY_FILE=$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)")  # under a signed run-root: a missed rm is still reaper-eligible (#10017)
+trap 'rm -rf "$(dirname "$PR_BODY_FILE")"' EXIT INT TERM
 PR_BODY=$(gh pr view --json body --jq .body)
 printf '%s' "$PR_BODY" | awk '
   /^```/ { in_fence = !in_fence; next }
@@ -1391,8 +1392,8 @@ echo 'SOLEUR_RULE_APPLIED rule=wg-block-pr-ready-on-undeferred-operator-steps no
 **Detection.** Capture the PR body once, **strip fenced code blocks** (the gate body and `AC-PM` example snippets in PRs that edit this skill would otherwise self-trip), then run a multi-pattern grep with LIST-ANCHORED patterns. Bash ERE has no `(?i)` modifier — use `grep -iE`.
 
 ```bash
-PR_BODY_FILE=$(mktemp)
-trap 'rm -f "$PR_BODY_FILE"' EXIT INT TERM
+PR_BODY_FILE=$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)")
+trap 'rm -rf "$(dirname "$PR_BODY_FILE")"' EXIT INT TERM
 PR_BODY=$(gh pr view --json body --jq .body)
 
 # Strip fenced code blocks (```...```) — the gate body and the AC section
@@ -1459,7 +1460,7 @@ done
    # exemption's anchored match cannot see it — and the filing this rule
    # MANDATES would then be blocked by that gate with no exit but the
    # blanket override. Write the body to a file; do not inline it.
-   BODY_FILE="$(mktemp -t deferred-automation.XXXXXXXX.md)"
+   BODY_FILE="$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)" deferred-automation.XXXXXXXX.md)"
    # printf, not a heredoc: this snippet is indented inside a nested list, and
    # an indented terminator never closes a `<<EOF` (only `<<-EOF` strips, and
    # only TABS). Copy-pasting the heredoc form hangs the shell.
@@ -1505,7 +1506,7 @@ echo 'SOLEUR_RULE_APPLIED rule=wg-pm-class-followthrough-for-operator-dogfood no
 **Detection.** Capture the PR body (strip fenced code blocks, fail-closed on an unbalanced fence — reuse the Undeferred Operator-Step Gate's awk), concatenate the linked plan/spec (Shared Plan-File Resolution shape from preflight), then scan the combined text for a soak signal. Bash ERE has no `(?i)` — use `grep -iE`.
 
 ```bash
-COMBINED=$(mktemp); trap 'rm -f "$COMBINED"' EXIT INT TERM
+COMBINED=$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)"); trap 'rm -rf "$(dirname "$COMBINED")"' EXIT INT TERM
 gh pr view --json body --jq .body | awk '
   /^```/ { in_fence = !in_fence; next } !in_fence { print }
   END { if (in_fence) exit 2 }' > "$COMBINED" \
@@ -1519,12 +1520,12 @@ PLAN=$(grep -oE 'knowledge-base/project/(plans|specs)/[^[:space:])"`]+\.md' "$CO
 # Indent-tolerant (518 of 1905 plans indent a fence inside a list item) and
 # fail-closed on an unbalanced fence, matching the hook byte-for-byte.
 if [[ -n "$PLAN" && -f "$PLAN" ]]; then
-  _ps=$(mktemp)
+  _ps=$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)")
   if awk '/^[[:space:]]*```/ { f = !f; next } !f { print } END { if (f) exit 2 }' "$PLAN" > "$_ps" 2>/dev/null
   then cat "$_ps" >> "$COMBINED"
   else echo "SOAK-CORPUS-PLAN-UNSTRIPPED: unbalanced fence in $PLAN; appending unstripped" >&2; cat "$PLAN" >> "$COMBINED"
   fi
-  rm -f "$_ps"
+  rm -f "$_ps"; rmdir "$(dirname "$_ps")" 2>/dev/null
 fi
 # Say so when no plan resolved: every verdict below then comes from the body alone,
 # which is NOT the same fact as "read the plan and found no soak". Both used to exit
@@ -1705,7 +1706,7 @@ Before invoking `gh pr edit` or `gh pr create` below, scan the proposed PR title
 Write the proposed `PR_TITLE`, `PR_BODY`, and the branch commit messages (`git log origin/main..HEAD --format=%B`) to temp files, then run the shared scanner:
 
 ```bash
-TMP_TITLE=$(mktemp); TMP_BODY=$(mktemp); TMP_COMMITS=$(mktemp)
+_SCAN_DIR=$(mktemp -d -t soleur-run.$$.XXXXXXXX); TMP_TITLE=$(mktemp -p "$_SCAN_DIR"); TMP_BODY=$(mktemp -p "$_SCAN_DIR"); TMP_COMMITS=$(mktemp -p "$_SCAN_DIR")
 printf '%s\n' "$PR_TITLE" > "$TMP_TITLE"
 printf '%s\n' "$PR_BODY"  > "$TMP_BODY"
 git log origin/main..HEAD --format=%B > "$TMP_COMMITS"
@@ -1715,7 +1716,7 @@ git log origin/main..HEAD --format=%B > "$TMP_COMMITS"
 T_MATCHES=$(bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/auto-close-scan.sh" "$TMP_TITLE")
 B_MATCHES=$(bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/auto-close-scan.sh" "$TMP_BODY")
 C_MATCHES=$(bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/auto-close-scan.sh" "$TMP_COMMITS")
-rm -f "$TMP_TITLE" "$TMP_BODY" "$TMP_COMMITS"
+rm -f "$TMP_TITLE" "$TMP_BODY" "$TMP_COMMITS"; rmdir "$_SCAN_DIR" 2>/dev/null
 ```
 
 If `T_MATCHES` OR `B_MATCHES` OR `C_MATCHES` is non-empty:
@@ -1735,11 +1736,11 @@ The PR body of THIS Soleur PR will typically contain `Closes #N` lines that ARE 
 **Grok Build pre-push gate (mandatory before `git push`).** When the harness is Grok (`GROK_HOME` / `GROK_AGENT`), run from repo root and inspect exit code explicitly (do not pipe through `tail`):
 
 ```bash
-log=$(mktemp -t grok-pre-push-gate.XXXXXXXX.log)
+log=$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)" grok-pre-push-gate.XXXXXXXX.log)
 bash plugins/soleur/scripts/grok-pre-push-gate.sh > "$log" 2>&1; rc=$?; echo "EXIT=$rc LOG=$log"
 ```
 
-The log is scratch: a green run needs nothing in it, so `rm -f "$log"` when
+The log is scratch: a green run needs nothing in it, so `rm -f "$log"; rmdir "$(dirname "$log")" 2>/dev/null` when
 rc==0; on red, read it for the diagnosis and remove it once the failure is
 understood — it is a leak otherwise (#10017).
 
@@ -2266,7 +2267,7 @@ if [[ "$sync_ok" -eq 1 ]]; then
     why="$SYNC_ROOT/.claude-plugin/plugin.json does not name soleur (ADR-179 identity check)"
   elif [[ ! -r "$SYNC_SH" ]]; then why="the script is missing"
   elif ! bash "$SYNC_SH" --help 2>/dev/null | grep -q -- '--step'; then why="its --help has no --step (an older copy)"
-  elif ! { SYNC_SNAP="$(mktemp)" && trap 'rm -f "$SYNC_SNAP"' EXIT && cp "$SYNC_SH" "$SYNC_SNAP"; }; then why="the snapshot copy failed"
+  elif ! { SYNC_SNAP="$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)")" && trap 'rm -rf "$(dirname "$SYNC_SNAP")"' EXIT && cp "$SYNC_SH" "$SYNC_SNAP"; }; then why="the snapshot copy failed"
   fi
   if [[ -n "$why" ]]; then
     echo "[ship.phase7.precondition] sync-pr-behind.sh not usable at '$SYNC_SH': $why — BEHIND auto-sync disabled; export CLAUDE_PLUGIN_ROOT=<the installed soleur plugin root> (Devin/Codex: see that harness's INSTRUCTIONS.md), or sync by hand."
@@ -2761,11 +2762,11 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
    4. Paste run-URL + byte count + verbatim URLs into the closing comment
    ```
 
-   For each item, write the issue body to a temp file (do NOT use heredocs in this step — write with `body=$(mktemp -t follow-through-body.XXXXXXXX.md); { echo "..."; } > "$body"`, then `echo "BODY=$body"` so the path survives into the later `--body-file` and precondition-gate calls — a separate Bash call does not inherit `$body`), then create the issue:
+   For each item, write the issue body to a temp file (do NOT use heredocs in this step — write with `body=$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)" follow-through-body.XXXXXXXX.md); { echo "..."; } > "$body"`, then `echo "BODY=$body"` so the path survives into the later `--body-file` and precondition-gate calls — a separate Bash call does not inherit `$body`, so the `rm` below must also use that echoed path, not an unset variable), then create the issue:
 
    ```bash
    gh issue create --title "follow-through: <ITEM_DESCRIPTION>" --label "follow-through" --milestone "<MILESTONE>" --body-file "$body"
-   rm -f "$body"
+   rm -f "$body"; rmdir "$(dirname "$body")" 2>/dev/null
    ```
 
    Replace `<ITEM_DESCRIPTION>` with the text after the ⏳ emoji (trimmed). Replace `<MILESTONE>` with the value from the roadmap or "Post-MVP / Later".

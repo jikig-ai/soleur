@@ -91,10 +91,12 @@ empty dirs). Bare `tmp.*` stays protected — an unattributed bare name is not
 ours to delete; producer-side cleanup owns that class.
 
 The repo ships `scripts/soleur-tmp-purge.service` and
-`scripts/soleur-tmp-purge.timer` (15-minute cadence — this pass does real
-classification + quarantine moves, unlike the guard's cheap count check):
+`scripts/soleur-tmp-purge.timer` (daily cadence — this pass does real
+classification + quarantine moves + TTL drain, unlike the guard's cheap
+count check):
 
 ```bash
+mkdir -p ~/.config/systemd/user
 ln -sf "$PWD/scripts/soleur-tmp-purge.service" ~/.config/systemd/user/
 ln -sf "$PWD/scripts/soleur-tmp-purge.timer"  ~/.config/systemd/user/
 systemctl --user daemon-reload
@@ -103,7 +105,15 @@ systemctl --user list-timers soleur-tmp-purge.timer   # verify
 ```
 
 Same `~/soleur` assumption and drop-in override as Option 1 above; same linger
-note for headless hosts. `--apply` **moves** entries into
+note for headless hosts. Where the systemd **user bus is unavailable**
+(containers, `sudo -u`, SSH without `XDG_RUNTIME_DIR`) `systemctl --user`
+cannot connect at all — the fallback is a cron line or a manual cadence:
+
+```cron
+37 4 * * * /path/to/soleur/scripts/soleur-tmp-purge.sh --apply && /path/to/soleur/scripts/soleur-tmp-purge.sh --drain
+```
+
+`--apply` **moves** entries into
 `<base>/soleur-quarantine.<uid>/<class>/` and drains them past their class TTL
 — space recovers on drain, not on quarantine (see "Quarantine drain &
 restore"). Run `bash scripts/soleur-tmp-purge.sh --dry-run` once first to see

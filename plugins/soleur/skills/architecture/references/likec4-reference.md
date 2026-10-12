@@ -110,9 +110,9 @@ includes.
 
 ```bash
 npx -y likec4@1.50.0 validate --no-use-dot .                 # parse + check references
-_c4_out=$(mktemp)
+_c4_out=$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)")
 npx -y likec4@1.50.0 export json --no-use-dot -o "$_c4_out" .  # element/relation/view counts
-# ... read the counts from "$_c4_out" (jq) — then `rm -f "$_c4_out"`; an
+# ... read the counts from "$_c4_out" (jq) — then `rm -f "$_c4_out"; rmdir "$(dirname "$_c4_out")"`; an
 # anonymous `"$(mktemp)"` path can never be found again, so name it (#10017)
 ```
 

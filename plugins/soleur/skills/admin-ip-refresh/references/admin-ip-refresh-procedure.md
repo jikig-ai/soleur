@@ -114,7 +114,7 @@ Compose the new JSON list, write to a 0600 temp file, pipe via stdin, `shred -u`
 
 ```bash
 umask 077
-tmp="$(mktemp -t admin-ips.XXXXXX)"
+tmp="$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)" admin-ips.XXXXXX)"
 trap 'shred -u "$tmp" 2>/dev/null || rm -f "$tmp"' EXIT
 
 # Write the new list to the temp file:

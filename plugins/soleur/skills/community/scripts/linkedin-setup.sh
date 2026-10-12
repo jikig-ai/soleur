@@ -484,7 +484,9 @@ cmd_write_env() {
     # live copy would re-fire on every later function return in this shell.
     trap 'trap - RETURN; rm -f "$tmp"' RETURN
     grep -v '^LINKEDIN_' "$env_file" > "$tmp" || true
-    mv "$tmp" "$env_file"
+    # A `set -e` exit on mv failure would skip the RETURN trap — the alloc
+    # loses its only cleanup, so rm it inline on that path too.
+    mv "$tmp" "$env_file" || { rc=$?; rm -f "$tmp"; exit "$rc"; }
   fi
 
   # Set restrictive permissions BEFORE writing secrets
