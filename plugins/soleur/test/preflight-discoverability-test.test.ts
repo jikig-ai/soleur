@@ -2928,7 +2928,12 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // TRUTH: the event is read with a Sentry API token (Doppler prd); the event store has no anonymous query
   // form. NO SUBSTITUTE: the tag and user shape is pinned offline by cc-dispatcher-bash-sandbox-sentry-path.test.ts,
   // but that verifies code, not the deployed event stream. Genuine.
-  const BASELINE_DECLARED_PROBES = 62;
+  // #10054 (2026-10-12): +1 (62 -> 63) for `2026-10-12-feat-accept-hosted-must-ask-lane-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the soak probe reads stored Better Stack rows through the ClickHouse HTTP connection credential (Doppler
+  // prd_terraform); the warehouse has no unauthenticated read path. NO SUBSTITUTE: the decode and isolation are pinned
+  // offline by the probe's own fixture suite, but that verifies code, not the stored stream. Genuine.
+  const BASELINE_DECLARED_PROBES = 63;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
