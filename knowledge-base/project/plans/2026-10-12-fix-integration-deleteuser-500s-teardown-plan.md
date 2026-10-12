@@ -33,6 +33,35 @@ unit test instead of a red nightly.
 
 *Spec lacks valid `lane:` — defaulted to cross-domain (TR2 fail-closed).*
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-12 (soleur:deepen-plan)
+**Sections enhanced:** Problem Statement, Phase 2, Phase 4, Phase 5, Guard Contract,
+Observability, Non-Goals, Acceptance Criteria
+
+### Key improvements
+
+1. **Wider latent class measured, not guessed:** census over `test/**` found 32 files
+   containing `admin.deleteUser(` (13 on the nightly surface); supabase-js returns
+   `{ data, error }` rather than throwing, which is *why* ~18 `test/server/**` suites silently
+   leak synthetic users while only the result-checking suites went red. Filed as **#10096**.
+2. **`messages` fold-in added:** dev `information_schema` shows `messages.workspace_id` is also
+   `NOT NULL` — the same suites' `assistantRowFor`/direct message inserts would fail `23502`
+   the moment the conversation seeds pass. Phase 4 + AC6 now cover both tables.
+3. **`## Observability` added** (Phase 4.7 halt) with a Check-10-shaped
+   `discoverability_test` (`rg -l -e SYNTHETIC_PREFIXES …` → `tenant-isolation-teardown`).
+4. **Exact-shape constraint pinned by learning:** the prefix allowlist keeps the
+   `[a-f0-9]{16}` suffix; a permissive prefix repeats the PR #2597 permissive-regex incident.
+
+### New considerations discovered
+
+- The four allowlisted manual-FK-reverse suites were re-verified — each calls
+  `anonymise_workspace_members` + manual `workspaces` delete deliberately (WORM-trigger
+  bypass comment included); allowlisting is correct, not a gap.
+- Both acquire RPCs (`acquire_conversation_slot`, `acquire_worktree_lease`) already populate
+  `workspace_id` on dev — the #10094 failures are genuinely a different root cause.
+- All generator shapes verified in-file (5/5 emit `randomBytes(8).toString("hex")`).
+
 ## Problem Statement / Motivation
 
 - `test/beta-crm-dsar.integration.test.ts` AC10 calls `service.auth.admin.deleteUser(userA.id)`
@@ -102,6 +131,11 @@ PostgREST/psql `DELETE` surfaces the constraint name directly.)
   tenant-isolation.
 - `test/helpers/tenant-isolation-teardown.test.ts`: add positive cases per new prefix and the
   existing non-synthetic negatives; keep the throw-on-non-synthetic assertions.
+- **Exact-shape constraint (learning-pinned):** the `[a-f0-9]{16}` suffix is load-bearing, not
+  stylistic — every suite's generator emits `randomBytes(8).toString("hex")` (verified in-file:
+  beta-crm:36, byok:35, cc:82, rail:48, dsar:34). A permissive `<prefix>-.*@` shape would let a
+  future fixture's leftovers match (the PR #2597 incident class). See
+  `knowledge-base/project/learnings/best-practices/2026-04-18-destructive-test-allowlist-regex-must-pin-exact-shape.md`.
 
 ### Phase 3 — Adopt the helper in the five defective suites
 
@@ -129,9 +163,12 @@ manual FK-reverse teardown that works (verified in the run log); `mu1` is #9995'
 `conversations.workspace_id` AND `messages.workspace_id` are both `NOT NULL` on dev (verified
 live via `information_schema` 2026-10-12 — `user_concurrency_slots` and `worktree_write_lease`
 also carry NOT NULL workspace_id; those tables are not seeded by these suites). The
-trigger-created solo workspace id equals `user.id` (ADR-038 N2). These suites have been
-`describe.skip`-dormant since creation, so **every** insert site needs the audit, not just the
-ones the failed run reached:
+trigger-created solo workspace id equals `user.id` (ADR-038 N2). The contract-pair learning
+(`2026-05-22-tenant-integration-runtime-failures-post-mig-059.md`) records mig 059 making
+`workspace_id` NOT NULL on **six** write tables and every stale caller failing 23514/23502 —
+this fold-in is that class's test-side twin. These suites have been `describe.skip`-dormant
+since creation, so **every** insert site needs the audit, not just the ones the failed run
+reached:
 
 - `test/cc-dispatcher-cross-tenant.integration.test.ts` — `conversations` inserts (~lines 196,
   496) AND every `messages` insert: the `assistantRowFor({conversationId, content})` helper
@@ -330,6 +367,36 @@ membership.
 - [ ] AC6 — every `.from("conversations").insert(` AND `.from("messages").insert(` site in `cc-dispatcher-cross-tenant` and `conversations-rail-cross-tenant` supplies `workspace_id` (dev shows both columns NOT NULL); the Phase 4 verification command reports every site covered.
 - [ ] AC7 — probe evidence comment posted on #9994; heads-up comment posted on #9995; #9993 referenced and left open; #10094 + #10095 + #10096 exist and are referenced.
 - [ ] AC8 — post-merge, the next `scheduled-integration-suites.yml` run shows `supabase-dev` and `byok` legs green (or, if the run precedes merge, the leg-green evidence is the local AC1/AC2 runs + CI on the PR's own scheduled-workflow dispatch if available).
+
+## Observability
+
+The deliverable is test-side, so the observability surface is the CI legs and the sentinel —
+not production telemetry.
+
+- `liveness_signal`:
+  - `what`: `supabase-dev` and `byok` legs of `scheduled-integration-suites.yml` exit green;
+    `test/server/teardown-deleteuser-sentinel.test.ts` runs in the always-on `--project unit`
+    shard and passes.
+  - `where`: nightly run logs (`gh run list --workflow scheduled-integration-suites.yml`); the
+    PR's `test-all.sh` unit shard.
+- `error_reporting`:
+  - `what`: vitest failure output names the offending file — the sentinel prints the
+    un-allowlisted `deleteUser` carrier; leg failures print `Database error deleting user` /
+    `23502` in the suite's own stderr.
+  - `where`: workflow step output; tracker issue #9993 aggregates recurring reds.
+- `failure_modes`:
+  - `helper refuses new synthetic email` → teardown throws before deleteUser — loud, correct.
+  - `new suite adds raw deleteUser` → sentinel red at unit-shard time — loud, correct.
+  - `missing workspace_id on a seeded conversations/messages row` → `23502` in the leg — loud.
+  - `sentinel allowlist silently widened` → review-visible diff on the test source (the
+    allowlist is a named constant, not data).
+- `logs`: `npm run test:ci -- <files> --project unit --reporter=verbose` output in the leg
+  step; deleteUser error objects surfaced by suites that check the result.
+- `discoverability_test`:
+  - `command`: `rg -l -e SYNTHETIC_PREFIXES apps/web-platform/test/helpers/tenant-isolation-teardown.ts`
+  - `expected_output`: `tenant-isolation-teardown`
+  - `why`: proves the widened prefix allowlist shipped to the helper; a revert or rename makes
+    the probe print nothing.
 
 ## Test Scenarios
 
