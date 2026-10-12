@@ -143,7 +143,7 @@ run "a non-Actions evidence URL is refused" 64 "${BASE_ENV[@]}" -- \
 run "a malformed --window is refused (it reaches the SQL)" 64 "${BASE_ENV[@]}" -- \
   --host-name "$HOST" --evidence-url "$URL" --mode phase-a --window "0 DAY OR 1=1" --out "$TMP/e.env"
 run "refuse --window under the hourly control emit period (unsatisfiable run-window read)" 64 "${BASE_ENV[@]}" -- \
-  --host-name "$HOST" --evidence-url "$URL" --mode phase-a --window "59 MINUTE" --out "$TMP/e.env"
+  --host-name "$HOST" --evidence-url "$URL" --mode phase-a --window "60 MINUTE" --out "$TMP/e.env"
 run "refuse --window with a leading-zero count (octal arithmetic must not fire)" 64 "${BASE_ENV[@]}" -- \
   --host-name "$HOST" --evidence-url "$URL" --mode phase-a --window "030 MINUTE" --out "$TMP/e.env"
 run "post-reboot without --reboot-since is refused (the boundary is the whole claim)" 64 "${BASE_ENV[@]}" -- \

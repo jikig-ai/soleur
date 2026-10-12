@@ -362,10 +362,9 @@ include_matches.SYSLOG_IDENTIFIER = [
   # day) and lands in the SAME change that takes inngest-heartbeat's dark arm from ~1,440
   # rows/day to ~24 (#6617b), so this trio is a large net saving, not a new cost.
   #
-  # DELIBERATELY ABSENT: `inngest-boot-phone-home`. It is a pure curl POST to the Better
-  # Stack HTTP ingest and never calls `logger` — it has NO journald channel at all, so an
-  # entry for it could never match anything. It already ships direct; the tag would buy a
-  # dead line in an allowlist that is read as an inventory of live channels.
+  # (`inngest-boot-phone-home` WAS deliberately absent here until #7228 gave it a
+  # journald channel — the earlier note survived stale; the add's rationale is at
+  # the member above.)
   "inngest-redis",
   "inngest-nftables",
   "inngest-server-probe",

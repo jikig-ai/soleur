@@ -632,10 +632,23 @@ if [[ -n "$PROBE_EMIT_LN" && -n "$CONTROL_LN" && "$CONTROL_LN" =~ ^[0-9]+$ && "$
     # = 4 code lines. A `{`/`}`/`fi`/`esac`/`done`/`fi`-beyond-tail wrap adds a
     # code line (test-design E2).
     TAIL_CODE="$(printf '%s\n' "$PROBE_BODY" | awk -v b="$TAIL_LN" 'NR>=b' | grep -cvE '^[[:space:]]*(#|$)' || true)"
+    # The emit's argv pins flags + end; the MESSAGE is free text — a $(kill $$)/
+    # $(sleep 600)/backtick substitution inside it would run BEFORE logger execs
+    # and kill the emit while every conjunct stays green (verifier residual).
+    # Pin: exactly one $( and it must be $(date -u +%s); zero backticks.
+    EMIT_SUB_N="$(printf '%s\n' "$PROBE_BODY" | awk -v b="$CONTROL_LN" 'NR==b' | grep -oF '$(' | wc -l || true)"
+    EMIT_SUB_OK="$(printf '%s\n' "$PROBE_BODY" | awk -v b="$CONTROL_LN" 'NR==b' | grep -cF '$(date -u +%s)' || true)"
+    EMIT_BT="$(printf '%s\n' "$PROBE_BODY" | awk -v b="$CONTROL_LN" 'NR==b' | tr -cd '`' | wc -c || true)"
+    # Early-terminator blind spot (verifier): an exit/kill/exec/trap or a col-0
+    # return ABOVE the region dead-codes both emits while every region/depth
+    # conjunct stays green. Scan 1..CONTROL_LN, skipping # comment lines and
+    # lines carrying { or } (the embedded awk's exit calls live inside its
+    # braces). Function-internal indented return is legit; col-0 return is not.
+    EARLY_TERM="$(printf '%s\n' "$PROBE_BODY" | awk -v b="$CONTROL_LN" 'NR<b' | grep -vE '^[[:space:]]*#|[{}]' | grep -cE '(^|;|&&|\|\||then|do)[[:space:]]*(exit|exec|kill|trap)[[:space:]]|^return[[:space:]]' || true)"
   fi
 fi
-assert "9963e: the control emit is UNCONDITIONAL — depth zero at the emit AND net zero over the whole body, the closer line carries no rider, the region holds ONLY the two emits (no ;/&/| on either), and the tail is exactly the sanctioned 4-line gate" \
-  "[[ \"$CONTROL_LN\" =~ ^[0-9]+\$ && \"$PROBE_EMIT_LN\" =~ ^[0-9]+\$ && \"$CONTROL_LN\" -gt \"$PROBE_EMIT_LN\" && \"$LAST_CLOSER_LN\" =~ ^[0-9]+\$ && \"$LAST_CLOSER_LN\" -lt \"$PROBE_EMIT_LN\" && \"$CLOSER_LINE_CLEAN\" -eq 1 && \"$EMIT_DEPTH\" -eq 0 && \"$BODY_DEPTH\" -eq 0 && \"$TAIL_LN\" =~ ^[0-9]+\$ && \"$CONTROL_LN\" -lt \"$TAIL_LN\" && \"$REGION_CODE\" -eq 2 && \"$EMIT_SEP\" -eq 0 && \"$TAIL_CODE\" -eq 4 ]]"
+assert "9963e: the control emit is UNCONDITIONAL — depth zero at the emit AND net zero over the whole body, the closer line carries no rider, the region holds ONLY the two emits (no ;/&/|/< on either), the tail is exactly the sanctioned 4-line gate, the message carries only the sanctioned date substitution, and no early terminator precedes the emit" \
+  "[[ \"$CONTROL_LN\" =~ ^[0-9]+\$ && \"$PROBE_EMIT_LN\" =~ ^[0-9]+\$ && \"$CONTROL_LN\" -gt \"$PROBE_EMIT_LN\" && \"$LAST_CLOSER_LN\" =~ ^[0-9]+\$ && \"$LAST_CLOSER_LN\" -lt \"$PROBE_EMIT_LN\" && \"$CLOSER_LINE_CLEAN\" -eq 1 && \"$EMIT_DEPTH\" -eq 0 && \"$BODY_DEPTH\" -eq 0 && \"$TAIL_LN\" =~ ^[0-9]+\$ && \"$CONTROL_LN\" -lt \"$TAIL_LN\" && \"$REGION_CODE\" -eq 2 && \"$EMIT_SEP\" -eq 0 && \"$TAIL_CODE\" -eq 4 && \"$EMIT_SUB_N\" -eq 1 && \"$EMIT_SUB_OK\" -eq 1 && \"$EMIT_BT\" -eq 0 && \"$EARLY_TERM\" -eq 0 ]]"
 
 # Single emission chokepoint: the PROBESCRIPTEOF heredoc is the only place this marker may
 # be emitted. A second emit site — a sibling unit, a prefixed `env logger`, a `systemd-cat`
@@ -701,8 +714,8 @@ assert "9963j: NO VRL transform assigns .SYSLOG_IDENTIFIER (a stamped tag would 
 # include_matches.PRIORITY under app_container/egress_gw/host_scripts would
 # OR-admit everything at those priorities — the same quota trap property C
 # guards for SYSLOG_IDENTIFIER, one field over. Pin the field to Sources 1/2.
-assert "9963l: include_matches.PRIORITY exists ONLY under inngest_journald and system_journald (a PRIORITY arm added under any other journald source OR-admits the whole journal)" \
-  "! awk '/^\[sources\./{src=\$1} /^include_matches\.PRIORITY/{print src}' \"$SCRIPT_DIR/vector.toml\" | grep -vE 'inngest_journald|system_journald' | grep -c . >/dev/null"
+assert "9963l: include_matches.PRIORITY exists ONLY under inngest_journald and system_journald (a PRIORITY arm added under any other journald source OR-admits the whole journal; unanchored section tracking + exact-name match — inngest_journald_shadow does not pass)" \
+  "! sed 's/#.*$//' \"$SCRIPT_DIR/vector.toml\" | awk 'match(\$0,/sources\.[a-zA-Z_]+\]/){src=substr(\$0,RSTART+8,RLENGTH-9)} /include_matches[[:space:]]*\..{0,3}PRIORITY([^a-zA-Z]|$)/{if (src!=\"inngest_journald\" && src!=\"system_journald\") print src}' | grep -c . >/dev/null"
 
 assert "9963k: the PROBESCRIPTEOF probe body is syntactically valid under BOTH bash and sh (it declares #!/bin/sh — a bashism that passed bash -n would die under dash at runtime; a parse-dead body emits zero rows)" \
   "printf '%s\n' \"\$PROBE_BODY\" > /tmp/probe-body-\$\$.sh; rc=0; { bash -n /tmp/probe-body-\$\$.sh && sh -n /tmp/probe-body-\$\$.sh; } || rc=1; rm -f /tmp/probe-body-\$\$.sh; [[ \$rc -eq 0 ]]"

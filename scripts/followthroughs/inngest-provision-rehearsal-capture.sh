@@ -150,8 +150,10 @@ case "$_win_unit" in
   WEEK)   _win_min=$(( 10#${_win_n} * 10080 )) ;;
   MONTH)  _win_min=$(( 10#${_win_n} * 43200 )) ;;
 esac
-if (( _win_min < 60 )); then
-  echo "refusing: --window '${WINDOW}' is under the control row's hourly emit period — a run-window control read cannot be satisfied below 60 minutes." >&2
+# 61 not 60: AccuracySec=1min jitter means the worst emit gap is ~61 minutes, so
+# an exactly-1-hour window can still slip between emits.
+if (( _win_min < 61 )); then
+  echo "refusing: --window '${WINDOW}' is under the control row's worst emit gap (~61m: hourly timer plus AccuracySec jitter) — a run-window control read cannot be satisfied below that." >&2
   exit 64
 fi
 _ISO_TS_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$'
