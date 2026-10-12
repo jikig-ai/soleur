@@ -481,13 +481,18 @@ out=$(BETTERSTACK_QUERY_SCRIPT="$TMP/stub-ctl-field.sh" bash "$SUT" --host soleu
   --absence 'IMAGE_PULL_FAIL' --control 'SOLEUR_SYSTEMD_JOURNALD_CONTROL' \
   --control-require-field 'bad name=systemd' --since 6h 2>&1) || rc=$?
 eq "--control-require-field with a non-identifier name is refused (exit 64)" "64" "$rc"
+rc=0
+out=$(BETTERSTACK_QUERY_SCRIPT="$TMP/stub-ctl-field.sh" bash "$SUT" --host soleur-web-1 \
+  --absence 'IMAGE_PULL_FAIL' --control 'SOLEUR_SYSTEMD_JOURNALD_CONTROL' \
+  --control-require-field 'SYSLOG_IDENTIFIER=' --since 6h 2>&1) || rc=$?
+eq "--control-require-field with an EMPTY value is refused (exit 64 — '= ""' matches absent-field rows)" "64" "$rc"
 
 # --- Anti-vacuity floor -----------------------------------------------------------------------
 # This suite imposes assertion floors on other people's guards and had none of its own. Neuter
 # ok()/bad()/eq() and it reported "0 passed, 0 failed / OK / exit 0" — indistinguishable from a
 # clean run. A FLOOR, not equality: the count is developer-incremented, so -eq turns every new
 # assertion into a spurious red.
-MIN_ASSERTIONS=63
+MIN_ASSERTIONS=64
 if [[ "$((pass + fail))" -lt "$MIN_ASSERTIONS" ]]; then
   echo "FATAL: only $((pass + fail)) assertions ran, expected >= $MIN_ASSERTIONS — the suite was stranded, not clean." >&2
   exit 1

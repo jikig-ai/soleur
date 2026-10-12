@@ -198,7 +198,10 @@ done
 for req in "${CONTROL_REQUIRE_FIELD[@]+"${CONTROL_REQUIRE_FIELD[@]}"}"; do
   field_name="${req%%=*}"
   field_value="${req#*=}"
-  if [[ "$req" != *=* || ! "$field_name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+  # An empty value compiles to `= ''`, which JSONExtractString SATISFIES for rows
+  # lacking the field — a marker row with no SYSLOG_IDENTIFIER at all would then
+  # certify the path. Refuse it.
+  if [[ "$req" != *=* || ! "$field_name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ || -z "$field_value" ]]; then
     printf 'betterstack-assert-absence: --control-require-field expects <name>=<value> with a JSON-path identifier name (got %s)\n' "$req" >&2
     exit 64
   fi

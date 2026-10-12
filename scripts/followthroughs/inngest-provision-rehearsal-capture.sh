@@ -158,6 +158,7 @@ if ! [[ "$MIN_ATTEMPTS" =~ ^[0-9]+$ ]] || (( MIN_ATTEMPTS < 1 )); then
 fi
 
 [[ -r "$QUERY" ]] || { echo "TRANSIENT: query transport ${QUERY} not found." >&2; exit 2; }
+command -v jq >/dev/null 2>&1 || { echo "TRANSIENT: jq is required for the field-true systemd-path control count." >&2; exit 2; }
 
 # ── Query helpers ────────────────────────────────────────────────────────────
 # Mode-1 raw SQL against the source union (hot window + s3 archive). The host-name substring
@@ -340,24 +341,20 @@ inngest_failed_check() { # <row-set> — viol on any `Failed to start <tracked-u
 # contamination class: control-API webhook payloads ship issue titles verbatim). Field-
 # scoped, not payload-scoped: the message text may differ; only marker + tag bind.
 count_systemd_path_control() { # <row-set> — control rows carried on the systemd tag
-  # Three anchors, mirroring count_inngest_failed's discipline:
-  #   1. BOOT_STAGE exclusion — post-boot-health embeds `journalctl` output verbatim in
-  #      jl=, which can carry marker + field-shaped text from a PRIOR life inside a
-  #      current-life row; a real control row never carries the BOOT_STAGE marker.
-  #   2. marker — the control text itself.
-  #   3. the field ANCHORED on the serialized JSON pair shape — a `:` (never `=`),
-  #      then a quoted `"systemd"` value whose terminator is `\` (escaped wire),
-  #      `"`, `,` or `}`. This rejects `SYSLOG_IDENTIFIER=systemd` prose (the
-  #      measured quote-verbatim class: issue/commit text ships in doppler webhook
-  #      payloads — including this repo's own commit messages), and prefix-idents
-  #      like `"systemd-journald"` whose value continues past the name. Residual,
-  #      documented: a payload row quoting the exact escaped `\"SYSLOG_IDENTIFIER\":
-  #      \"systemd\"` fragment still satisfies the text-level check — the field-true
-  #      layer is the SQL side's --control-require-field JSONExtractString binding.
+  # FIELD-TRUE binding, not a text anchor: each candidate row's own SYSLOG_IDENTIFIER
+  # field is extracted with jq (`fromjson` on the JSONEachRow line, then on `raw` for
+  # the JSON-shaped journald rows). A doppler/webhook payload row can quote the marker,
+  # the field pair, and even this repo's own recipe verbatim — its OWN field is still
+  # `doppler` (the measured contamination class, and the security-review P2 the text-
+  # level anchor could not close). Non-JSON raws (BOOT_STAGE phone-home lines, plain
+  # markers) fail the inner fromjson and drop out; the explicit BOOT_STAGE grep stays
+  # as documented defense for embedded journalctl excerpts. `grep -cxF` makes the
+  # comparison exact — `systemd-journald` and `SYSLOG_IDENTIFIER_X` cannot qualify.
   printf '%s\n' "$1" |
-    grep -v 'SOLEUR_INNGEST_BOOT_STAGE' |
     grep -F 'SOLEUR_SYSTEMD_JOURNALD_CONTROL' |
-    grep -cE 'SYSLOG_IDENTIFIER.{0,4}:[^a-zA-Z0-9]{0,3}"systemd["\\},]' 2>/dev/null || true
+    grep -v 'SOLEUR_INNGEST_BOOT_STAGE' |
+    jq -Rr 'try (fromjson | .raw | fromjson | .SYSLOG_IDENTIFIER) // empty' 2>/dev/null |
+    grep -cxF 'systemd' || true
 }
 systemd_path_check() { # <row-set> — want while the systemd path is unproven in this window
   local n_control
