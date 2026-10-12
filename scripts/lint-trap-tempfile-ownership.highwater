@@ -1,4 +1,17 @@
-70  # class-b accept (ADR-129): tracked *.sh calling mktemp with ZERO trap...EXIT.
+36  # class-b accept (ADR-129): tracked *.sh calling mktemp with ZERO trap...EXIT.
+# 70 -> 36 (2026-10-12, #10017 / tmpfs-guard count-shaped-leak incident): the
+# mktemp census sweep. 34 files left the population — 23 test suites gained a
+# SUITE_TMP root + owning EXIT trap (the #7490 pattern), 4 community setup
+# scripts gained self-disarming RETURN traps, watch-live-verify-pass.sh /
+# grok-measure.sh / audit-bot-codeql-coverage.sh / run-self-test.sh gained
+# owning EXIT traps, tests/scripts/lib/git-data-birth-readiness-gate.sh gained
+# the rung2-archive RETURN trap, scripts-shard-totality-mutations.sh's
+# multi-line trap was flattened to the line-scoped predicate's shape, and
+# rclone check_setup.sh's echo'd `mktemp` (a DATA mention) went single-quoted.
+# The remaining 36 are annotate-bounded (sourced libs where an EXIT trap would
+# clobber the caller's, deliverable dirs) and out-of-enumeration members under
+# apps/, .github/, tests/ — dispositioned in
+# knowledge-base/project/specs/feat-one-shot-10017-mktemp-tmp-leak/mktemp-census.md.
 # 69 -> 70 (2026-10-11, #9980 / PR #10029): apps/web-platform/infra/arm-heartbeats.sh joins the
 # population by gaining `--arm-one`, whose books file is allocated by `mktemp` and has NO
 # owning `trap ... EXIT` BY DESIGN (Cut List C6, ADR-117 amendment): a trap would delete the

@@ -464,11 +464,18 @@ cmd_write_env() {
   if [[ -f "$env_file" ]]; then
     local tmp
     tmp=$(mktemp) || { echo "Error: Failed to create temp file." >&2; exit 1; }
+    # Owning trap (ADR-129): mv consumes $tmp on success, so the rm is a no-op
+    # on that path — it covers every early return between alloc and mv. The
+    # handler self-disarms first: a RETURN trap is not function-scoped, so a
+    # live copy would re-fire on every later function return in this shell.
+    trap 'trap - RETURN; rm -f "$tmp"' RETURN
     { grep -v '^X_API_KEY=' "$env_file" | \
       grep -v '^X_API_SECRET=' | \
       grep -v '^X_ACCESS_TOKEN=' | \
       grep -v '^X_ACCESS_TOKEN_SECRET='; } > "$tmp" || true
-    mv "$tmp" "$env_file"
+    # A `set -e` exit on mv failure would skip the RETURN trap — the alloc
+    # loses its only cleanup, so rm it inline on that path too.
+    mv "$tmp" "$env_file" || { rc=$?; rm -f "$tmp"; exit "$rc"; }
   fi
 
   # Set restrictive permissions BEFORE writing secrets

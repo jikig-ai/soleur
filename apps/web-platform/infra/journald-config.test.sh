@@ -162,6 +162,35 @@ assert "remote-exec positively asserts /var/log/journal exists" \
 assert "remote-exec asserts persistent storage via journalctl --header" \
   "grep -qE 'journalctl --header' <<<\"\$BLOCK\""
 
+# --- AC4b: terraform_data.journald_persistent_web2 — the running-web-2 twin ---
+# The web-1 resource above re-delivers vector.toml on every merge, but it dials
+# web-1 only and web-2's cloud-init never re-runs: without this twin a running
+# web-2 keeps whatever Source-4 allowlist its birth config baked, so any tag
+# added later is dark there (measured 2026-10-12: egress-gw-probe emitted to
+# web-2's journal every 5 min and dropped at the Vector filter for days).
+echo ""
+echo "--- AC4b: journald_persistent_web2 twin shape (running web-2 delivery) ---"
+# shellcheck disable=SC2034  # consumed via `eval "$condition"` in assert()
+BLOCK_W2=$(awk '
+  /^resource "terraform_data" "journald_persistent_web2"/ { f=1 }
+  f { print }
+  f && /^}/ { exit }
+' "$SERVER_TF")
+assert "terraform_data.journald_persistent_web2 resource declared" \
+  "[[ -n \"\$BLOCK_W2\" ]]"
+assert "twin triggers_replace hashes BOTH journald-soleur.conf and vector.toml (same re-delivery contract as web-1)" \
+  "grep -qE 'file\(\"\\\$\{path\.module\}/journald-soleur\.conf\"\)' <<<\"\$BLOCK_W2\" && grep -qE 'file\(\"\\\$\{path\.module\}/vector\.toml\"\)' <<<\"\$BLOCK_W2\""
+assert "twin dials web-2" \
+  "grep -qE 'host[[:space:]]*=[[:space:]]*hcloud_server\.web\[\"web-2\"\]\.ipv4_address' <<<\"\$BLOCK_W2\""
+assert "twin pins web-2's committed host key (never the web-1 local)" \
+  "grep -qE 'host_key[[:space:]]*=[[:space:]]*local\.web_2_ssh_host_key' <<<\"\$BLOCK_W2\""
+assert "twin renders @@HOST_NAME@@ to web-2's server name (soleur-web-2)" \
+  "grep -qE 'sed .s\|@@HOST_NAME@@\|\\\$\{hcloud_server\.web\[\"web-2\"\]\.name\}\|g.' <<<\"\$BLOCK_W2\""
+assert "twin installs + restarts Vector on web-2 (delivery proven, not assumed)" \
+  "grep -qE 'install -m 0644 /opt/soleur/vector\.toml /etc/vector/vector\.toml' <<<\"\$BLOCK_W2\" && grep -qE 'systemctl restart vector\.service' <<<\"\$BLOCK_W2\""
+assert "twin post-install assert pins the egress-gw-probe tag (the gap this twin exists to close)" \
+  "grep -qE \"grep -q 'egress-gw-probe' /etc/vector/vector\.toml\" <<<\"\$BLOCK_W2\""
+
 # --- AC5: runcmd creates /var/log/journal BEFORE the container starts ---
 echo ""
 echo "--- AC5: journald-persistence runs (in the bootstrap) before the container start ---"

@@ -101,6 +101,7 @@ fi
 
 # (d) Record the evidence once, with the record sentinel.
 body="$(mktemp)"
+trap 'rm -f "$body"' EXIT
 {
   echo "## live-verify PASS observed on a qualifying deploy — the flip is now unblocked"
   echo ""

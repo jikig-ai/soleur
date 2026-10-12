@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -uo pipefail
+SUITE_TMP=$(mktemp -d)
+[[ "$SUITE_TMP" == /* ]] || { echo "FATAL: SUITE_TMP is not absolute: $SUITE_TMP" >&2; exit 2; }
+trap 'rm -rf "$SUITE_TMP"' EXIT
 
 # Tests for sentry-issue.sh (#5495). Mirrors container-restart-monitor.test.sh:
 # PATH-prepended mock `curl` logging every invocation to $mock_dir/curl_args,
@@ -25,7 +28,7 @@ RW_TOKEN="rw_fake_TESTTOKEN_b2c7"
 # Run the SUT under a mock curl. Captures stdout, stderr, and curl_args separately.
 # Env toggles: MOCK_HTTP_CODE (default 200), MOCK_BODY, USE_RW_ONLY=1, NO_TOKEN=1.
 run_sut() {
-  local mock_dir; mock_dir="$(mktemp -d)"
+  local mock_dir; mock_dir="$(mktemp -d -p "$SUITE_TMP")"
   cat > "$mock_dir/curl" <<MOCK
 #!/bin/bash
 echo "\$*" >> "$mock_dir/curl_args"

@@ -15,6 +15,9 @@
 # minimal AGENTS.{md,rules.md} pair, and runs the linter.
 
 set -euo pipefail
+SUITE_TMP=$(mktemp -d)
+[[ "$SUITE_TMP" == /* ]] || { echo "FATAL: SUITE_TMP is not absolute: $SUITE_TMP" >&2; exit 2; }
+trap 'rm -rf "$SUITE_TMP"' EXIT
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUT="$SCRIPT_DIR/lint-agents-rule-budget.py"
@@ -91,7 +94,7 @@ t1a_current_tree_smoke() {
 # does NOT trip the per-rule 600 B cap (which only counts `^- ` lines
 # under `## <SECTIONS>` headings).
 t1b_warn_synth() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   make_index "$tmp/AGENTS.md"
   local index_size; index_size=$(wc -c < "$tmp/AGENTS.md")
   local target=$((44100 - index_size))
@@ -121,7 +124,7 @@ t1b_warn_synth() {
 
 # Case T2: B_ALWAYS > 46000 -> reject.
 t2_byte_budget_reject() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   make_index "$tmp/AGENTS.md"
   make_core_minimal "$tmp/AGENTS.rules.md"
   # Pad AGENTS.rules.md to drive B_ALWAYS past 46000. Padding goes in a comment
@@ -144,7 +147,7 @@ t2_byte_budget_reject() {
 
 # Case T3: per-rule body > 600 B -> reject.
 t3_per_rule_reject() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   make_index "$tmp/AGENTS.md"
   # AGENTS.rules.md with one rule body line at 700 B.
   {
@@ -171,7 +174,7 @@ t3_per_rule_reject() {
 
 # Case T4: AGENTS.rules.md missing -> exit 2.
 t4_missing_core() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   make_index "$tmp/AGENTS.md"
 
   local out rc
@@ -188,7 +191,7 @@ t4_missing_core() {
 
 # Case T5: per-rule cap fires in the corpus, not only in the index.
 t5_per_rule_in_docs_sidecar() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   make_index "$tmp/AGENTS.md"
   make_core_minimal "$tmp/AGENTS.rules.md"
   {
@@ -217,7 +220,7 @@ t5_per_rule_in_docs_sidecar() {
 # (e.g., 250 chars of `→` glyph at 3 B each = 750 B) MUST trip the cap.
 # Guards against char/byte conflation per plan TR6.
 t7_multi_byte_utf8_per_rule() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   make_index "$tmp/AGENTS.md"
   {
     echo "# AGENTS Core-class"
@@ -247,7 +250,7 @@ t7_multi_byte_utf8_per_rule() {
 # the session loader. Reported B_ALWAYS must equal index + stripped-core bytes,
 # and be strictly less than the raw on-disk sum (the frontmatter had bytes).
 t8_frontmatter_excluded_from_b_always() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   make_index "$tmp/AGENTS.md"
   cat > "$tmp/AGENTS.rules.md" <<'EOF'
 ---
@@ -291,7 +294,7 @@ EOF
 # consume the rule body, so the lint ERRORS (exit 1) rather than reporting a
 # falsely-low B_ALWAYS. This is the over-strip fail-hard guard.
 t9_malformed_frontmatter_errors() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   make_index "$tmp/AGENTS.md"
   cat > "$tmp/AGENTS.rules.md" <<'EOF'
 ---
@@ -316,7 +319,7 @@ EOF
 
 # Case T6: pointer index lines (short by construction) are never cap-rejected.
 t6_pointer_index_under_cap() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   make_index "$tmp/AGENTS.md"
   make_core_minimal "$tmp/AGENTS.rules.md"
 

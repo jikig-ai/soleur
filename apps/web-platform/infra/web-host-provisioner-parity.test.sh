@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Web-host provisioner DUAL-DELIVERY parity guard (#7000).
 #
-# WHAT THIS PINS. server.tf carries 18 `terraform_data` host provisioners whose SSH
+# WHAT THIS PINS. server.tf carries 19 `terraform_data` host provisioners whose SSH
 # `connection` is pinned to `hcloud_server.web["web-1"]`. That pinning is DELIBERATE and is
 # NOT a bug to be fixed by fanning them out over var.web_hosts:
 #
@@ -9,10 +9,10 @@
 #     cf-tunnel-ssh-bridge installs a single iptables NAT rule for it, and the tunnel
 #     connector is web-1-only by construction. web-2's public :22 is firewalled to
 #     var.admin_ips, which the non-static GH runner egress is not in.
-#   * All 18 are `-target=`ed by BARE address across two workflows (17 in
-#     apply-web-platform-infra.yml, infra_config_handler_bootstrap in
-#     apply-deploy-pipeline-fix.yml), and a bare -target hits EVERY for_each instance — so a
-#     fan-out would make every merge dial web-2:22 and hang to the SSH timeout. There is no
+#   * The host provisioners are `-target=`ed by BARE address in
+#     apply-web-platform-infra.yml and apply-deploy-pipeline-fix.yml, and a bare -target hits
+#     EVERY for_each instance — so a fan-out would make every merge dial web-2:22 and hang to
+#     the SSH timeout. There is no
 #     `timeout` on any connection block, so that burns the job budget.
 #   * ADR-114 ("Load-bearing constraint for any I2 implementation") ALREADY records this:
 #     "do NOT repoint the ... terraform_data.* connection { host } blocks ... every
@@ -282,7 +282,7 @@ for name, body in hcl_blocks(srv, "terraform_data"):
                "two terraform_data resources must not resolve to one identity")
         ssh_resources[nk] = body
 
-FLOOR_RESOURCES = 21  # +1 #9151: deploy_pipeline_fix_web2; +2 #9534: egress_gateway + egress_gateway_web2
+FLOOR_RESOURCES = 22  # +1 #9151: deploy_pipeline_fix_web2; +2 #9534: egress_gateway + egress_gateway_web2; +1 journald_persistent_web2
 if len(ssh_resources) >= FLOOR_RESOURCES:
     ok(f"1: swept {len(ssh_resources)} SSH-connected terraform_data resources (floor {FLOOR_RESOURCES})")
 else:
@@ -317,10 +317,13 @@ else:
        "CI genuinely gained another route, the forward, the firewall and the -target lists "
        "must change FIRST, and this check with them.")
 
-# The web-2 sibling class (#9151 / #7103-B4). The vetted web-2 dialer set is exactly two
-# resources today: deploy_pipeline_fix_web2 and (#9534) egress_gateway_web2 — the latter
+# The web-2 sibling class (#9151 / #7103-B4). The vetted web-2 dialer set is exactly three
+# resources today: deploy_pipeline_fix_web2, (#9534) egress_gateway_web2 — the latter
 # delivers the squid gateway to the RUNNING web-2 (replace-only delivery would leave an
-# entitled session on web-2 fail-closed until its next -replace). A web-2 dialer MUST pin
+# entitled session on web-2 fail-closed until its next -replace) — and
+# journald_persistent_web2, which re-delivers vector.toml so a Source-4 tag added after
+# web-2's birth is not dark there forever (measured: egress-gw-probe dropped at web-2's
+# stale allowlist for days while the probe ran). A web-2 dialer MUST pin
 # local.web_2_ssh_host_key (Guard 2's per-host rule asserts the twin from the connection
 # side; this side pins it from the resource census, so deleting EITHER local reference reds
 # here). It must NEVER carry the credential material web-1 receives: the full-prd Doppler
@@ -328,7 +331,7 @@ else:
 # carries all three — the failure that puts the prd credential on a host the issue
 # explicitly scopes out of this change.
 W2_DIALERS = [n for n, b in ssh_resources.items() if re.search(DIAL_W2, b)]
-W2_ALLOWED = {"deploy_pipeline_fix_web2", "egress_gateway_web2"}
+W2_ALLOWED = {"deploy_pipeline_fix_web2", "egress_gateway_web2", "journald_persistent_web2"}
 w2_bad_key = [n for n in W2_DIALERS
               if not re.search(r'host_key\s*=\s*local\.web_2_ssh_host_key', ssh_resources[n])]
 # Credential-boundary token set, widened at review: a bare `doppler_token` covers
@@ -395,7 +398,6 @@ ONLY_JUSTIFIED = {
     "git_data_probe_install@web-2": "birth-covered: predates web-2 birth",
     "infra_config_handler_bootstrap@web-2": "role-only: webhook receiver plumbing lives on web-1",
     "inngest_consumer_probe_install@web-2": "birth-covered: predates web-2 birth",
-    "journald_persistent@web-2": "birth-covered: predates web-2 birth",
     "orphan_reaper_install@web-2": "birth-covered: predates web-2 birth",
     "private_nic_guard_install@web-2": "birth-covered: predates web-2 birth",
     "registry_insecure_config@web-2": "birth-covered: predates web-2 birth",
@@ -1044,12 +1046,19 @@ main_rc=$?
 # §0-§5 parity program above reads the web-platform infra directory only; this one does not.
 #
 # PER BLOCK, not a comparison of totals: moving a host_key from one block into another keeps the
-# totals equal and must still go RED (one block has 0, the other 2). The walker strips comments
-# first, so tunnel.tf's prose mention of `connection { host }` is not a block. .tf.json files are
+# totals equal and must still go RED (one block has 0, the other 2). The walker first blanks
+# heredoc bodies, then strips comments, so tunnel.tf's prose mention of `connection { host }`
+# is not a block. .tf.json files are
 # parsed as JSON and every `connection` object (or list of objects) at any depth is a block.
 #
-# Floors: at least 23 blocks (19 in server.tf incl. web_1_host_key_probe, 1 in
-# ci-ssh-key.tf, 3 in workspaces-luks.tf) and at least 70 scanned files. The local
+# RESIDENCE is fleet-symmetric (#9998): §1's sibling census is server.tf-scoped AND
+# terraform_data-typed, so ANY block dialing web["web-N"] outside server.tf -- or inside
+# it under any other type/attribution -- escapes it: the fleet_elsewhere arm flags every
+# such block, and the EXT_RESIDENCE table is the single exemption surface ((file,
+# type.name)- and host-scoped, reason-mandatory, with a stale-entry arm).
+#
+# Floors: at least 25 blocks (21 in server.tf incl. web_1_host_key_probe,
+# 1 in ci-ssh-key.tf, 3 in workspaces-luks.tf) and at least 70 scanned files. The local
 # must be defined exactly once, from
 # the committed pin. SOLEUR_TF_REPO overrides the repository root for the mutation battery, which
 # builds a scratch repository whose apps/web-platform/infra IS the SOLEUR_INFRA_DIR sandbox.
@@ -1111,7 +1120,17 @@ ls = subprocess.run(["git", "-C", str(REPO), "ls-files", "-z", "--cached", "--ot
                     capture_output=True, text=True)
 if ls.returncode != 0:
     no(f"G2: git ls-files failed under {REPO}: {ls.stderr.strip()}")
-files = sorted({REPO / p for p in ls.stdout.split("\0") if p and ".terraform/" not in p})
+files = sorted({REPO / p for p in ls.stdout.split("\0")
+                if p and "/.terraform/" not in f"/{p}/"})
+# Segment match, not substring: `vend.terraform/x.tf` must still be swept (the
+# module loader does not care that a dirname merely CONTAINS '.terraform').
+# Enumerated boundaries (structural-enum review): --others/--exclude-standard
+# means a gitignored .tf or a NESTED GIT REPO is outside the universe (a
+# committed ignore rule is a reviewable diff; a nested repo is a module
+# boundary); fetched .terraform/modules code and remote/registry module sources
+# are out of repo-file scope by construction; a .tf.json object repeating the
+# "connection" key last-wins under json.loads; and SSH done outside connection
+# {} blocks (local-exec, data.external, CI scripts) is not this arm's property.
 FLOOR_FILES = 70
 if len(files) >= FLOOR_FILES:
     ok(f"G2: scanned {len(files)} .tf/.tf.json files (floor {FLOOR_FILES})")
@@ -1131,9 +1150,78 @@ def json_blocks(node, path):
         for i, v in enumerate(node):
             yield from json_blocks(v, f"{path}[{i}]")
 
-blocks = []   # (file:line, body-or-dict)
+def blank_heredocs(text):
+    # Replace heredoc BODIES with spaces (newlines preserved so offsets and line
+    # numbers stay exact): strip_hcl tracks `"` strings but not heredocs, so
+    # `{`/`}`/`"` inside `<<-TAG ... TAG` content corrupts every downstream
+    # scan -- span braces miscount (a member's span extends to EOF), a quoted
+    # `#`-comment un-strips into a live header, and a literal `resource`/`connection`
+    # token inside a heredoc spoofs real syntax. Blanking the body makes all of
+    # it invisible to every walker in one move -- heredoc text is STRING
+    # content, never blocks. Delimiter lines are kept. Must run BEFORE
+    # strip_hcl: an odd `"` count inside a heredoc (e.g. SQL quoting
+    # '{"message":"x ') would otherwise flip strip_hcl's in_str and silently
+    # un-strip or eat the real text after the heredoc (quote-flip corruption).
+    # The opener scan is itself comment/string-aware: a `<<TAG` inside a `#`/`//`/
+    # `/* */` comment or a quoted string must NOT pair with a later bare TAG line
+    # -- that pairing would blank REAL code and hide a resource from every arm
+    # (blanking is fail-OPEN: it deletes evidence, it never creates it).
+    out = list(text)
+    i = 0
+    n = len(text)
+    in_str = False
+    while i < n:
+        c = text[i]
+        if in_str:
+            if c == '\\':
+                i += 2
+                continue
+            if c == '"':
+                in_str = False
+            i += 1
+            continue
+        if c == '#' or text.startswith('//', i):
+            j = text.find('\n', i)
+            i = n if j < 0 else j
+            continue
+        if text.startswith('/*', i):
+            j = text.find('*/', i + 2)
+            i = n if j < 0 else j + 2
+            continue
+        if c == '"':
+            in_str = True
+            i += 1
+            continue
+        if text.startswith('<<', i):
+            m = re.match(r'<<-?"?([A-Za-z_][A-Za-z_0-9-]*)"?', text[i:])
+            if m:
+                tag = m.group(1)
+                dash = text[i + 2] == '-'  # `<<-` form permits an indented
+                                           # terminator; `<<` requires column 0
+                tm = re.search(
+                    r'(?m)^' + (r'[ \t]*' if dash else '') + tag + r'[ \t]*$',
+                    text[i + m.end():])
+                if tm:
+                    nl = text.find('\n', i + m.end())
+                    body_start = nl + 1 if nl != -1 else i + m.end()
+                    body_end = i + m.end() + tm.start()
+                    out[body_start:body_end] = [
+                        '\n' if ch == '\n' else ' '
+                        for ch in text[body_start:body_end]]
+                    i = i + m.end() + tm.end()
+                    continue
+            i += 1  # not a marker (or unterminated) -- skip just the `<<`
+            continue
+        i += 1
+    return ''.join(out)
+
+blocks = []   # (file:line, body-or-dict, enclosing "type.name" or None,
+              #  kind "conn"|"dyn")
 local_defs = []   # web_1_ssh_host_key definitions
 local_defs_2 = [] # web_2_ssh_host_key definitions (#9151)
+dropped_hdrs = [] # resource headers dropped for nesting inside another span
+seen_addrs = {}   # (dir, type.name) -> first loc, for duplicate-address findings
+dup_addrs = []    # same-module resources sharing a type.name address
 for f in files:
     raw = f.read_text()
     rel = f.relative_to(REPO)
@@ -1144,7 +1232,8 @@ for f in files:
             no(f"G2: {rel} is not valid JSON ({e}); its connection blocks cannot be checked")
             continue
         for loc, c in json_blocks(doc, ""):
-            blocks.append((f"{rel}:{loc}", c))
+            rm = re.match(r'^\.resource\.([^.]+)\.([^.]+)\.', loc)
+            blocks.append((f"{rel}:{loc}", c, f"{rm.group(1)}.{rm.group(2)}" if rm else None, "conn"))
         def defines_local(node, key):
             if isinstance(node, dict):
                 return key in node or any(defines_local(v, key) for v in node.values())
@@ -1156,10 +1245,85 @@ for f in files:
         if defines_local(doc, "web_2_ssh_host_key"):
             local_defs_2.append((f"{rel}:json", ""))
         continue
-    src = strip_hcl(raw)
-    for m in re.finditer(r'(?<![\w.])connection\s*\{', src):
+    src = strip_hcl(blank_heredocs(raw))
+    # Enclosing-resource attribution for the residence arm: HCL resources do not
+    # nest, so a block is inside the resource whose header's brace SPAN contains
+    # its offset (ANY type -- a connection {} inside a null_resource or
+    # hcloud_server attributes the same way; residence is a property of the
+    # connection block, not the resource type). Span-containment, not
+    # nearest-header: a connection {} inside a `data`/`output`/`locals`/top-level
+    # construct following a resource must NOT attribute to that resource, so the
+    # span is computed via the same block_body() the walker uses on the
+    # heredoc-blanked text, then CAPPED at the next top-level construct header --
+    # top-level constructs cannot live inside a resource, so any leftover brace
+    # imbalance (unterminated heredoc, blank_heredocs gap) can never extend a
+    # span past the resource's real end and absorb a later block (the cap
+    # direction fails CLOSED: a falsely-capped span only costs attribution,
+    # never grants it). Spoof checks ride on the no-nesting invariant: (i) a
+    # resource header inside another span (real resource body OR non-resource
+    # construct) is definitively string content or a fake, and its span is
+    # DROPPED + reported; (ii) outermost-first resolution -- a fake span nested
+    # inside a real one can never outrank the real container. A block in no
+    # resource span is unattributable -> None, which matches no EXT_RESIDENCE
+    # entry (fail-closed).
+    # the top-level grammar -- must track new keywords (single-sourced: the
+    # cap and the drop must never drift apart on which words open a construct)
+    NONRES_KW = ('data|module|locals|variable|output|terraform|provider|check|'
+                 'import|moved|removed|ephemeral|run|mock_provider')
+    TOPLEVEL_RE = re.compile(
+        r'(?m)^[ \t]*(?:resource|' + NONRES_KW + r')\b'
+        r'(?!\s*=)')  # `provider = x`/`output = y` attribute lines are NOT headers
+    toplevel_starts = [m.start() for m in TOPLEVEL_RE.finditer(src)]
+    # Spans for every NON-resource top-level construct: resources are top-level
+    # by grammar, so a `resource ".."` header inside a data/module/locals/output/
+    # variable/terraform/provider/check/import/moved/removed/ephemeral/run body
+    # is definitively string content -- dropping it kills the residual where a
+    # fake member-header in such a body claimed a stray top-level connection
+    # (enum U7). Corrupted non-resource spans over-extend -> real headers get
+    # dropped -> findings: fail-closed, never grants attribution.
+    nonres_spans = []
+    for tm in re.finditer(
+            r'(?m)^[ \t]*(?:' + NONRES_KW + r')'
+            r'\b(?!\s*=)[^\n{]*(?:\n[ \t]*)*\{',  # brace may open on a later line
+            src):
+        nonres_spans.append(
+            (tm.start(), tm.end() + len(block_body(src, tm.end())) + 1))
+    res_spans = []    # (start, capped_end, addr) — drives attribution
+    uncapped = []     # (start, uncapped_end) — drives the nested-header drop: a
+                      # header start inside a REAL body is string content even
+                      # when the real span was capped short of it (boundary case:
+                      # the cap is exactly where a heredoc-embedded fake lands)
+    for m in re.finditer(r'(?<![\w.])resource\s+"([^"\s]+)"\s+"([^"\s]+)"\s*\{', src):
         line = src.count('\n', 0, m.start()) + 1
-        blocks.append((f"{rel}:{line}", block_body(src, m.end())))
+        addr = f"{m.group(1)}.{m.group(2)}"
+        if any(s_ < m.start() < e_ for s_, e_ in uncapped) \
+                or any(s_ < m.start() < e_ for s_, e_ in nonres_spans):
+            dropped_hdrs.append(f"{rel}:{line} ({addr})")
+            continue
+        key = f"{rel.parent}:{addr}"   # same-module (same-dir) duplicate check —
+        if key in seen_addrs:          # a same-address second resource would
+            dup_addrs.append(          # inherit the first's EXT_RESIDENCE entry
+                f"{rel}:{line} ({addr}; first at {seen_addrs[key]})")
+        else:
+            seen_addrs[key] = f"{rel}:{line}"
+        uend = m.end() + len(block_body(src, m.end())) + 1
+        uncapped.append((m.start(), uend))
+        end = uend
+        nxt = next((t for t in toplevel_starts if t > m.start()), None)
+        if nxt is not None:
+            end = min(end, nxt)
+        res_spans.append((m.start(), end, addr))
+    # `dynamic "connection" { content { ... } }` is swept as one block: the whole
+    # dynamic body is the "connection body" -- host_key/host/type lines inside
+    # `content` are found by the same regexes, and the token-invisibility bypass
+    # (a connection spelled dynamically escaping every arm, enum U2) closes.
+    for m in re.finditer(
+            r'(?<![\w.])(?:dynamic\s+"connection"|connection)\s*\{', src):
+        line = src.count('\n', 0, m.start()) + 1
+        addr = next((a for s_, e_, a in res_spans
+                     if s_ < m.start() < e_), None)
+        kind = "dyn" if m.group(0).startswith('dynamic') else "conn"
+        blocks.append((f"{rel}:{line}", block_body(src, m.end()), addr, kind))
     for m in re.finditer(r'(?m)^\s*web_1_ssh_host_key\s*=', src):
         line = src.count('\n', 0, m.start()) + 1
         # Bound at the END OF THE LOCALS BLOCK, not a fixed width: the web-2 twin lives in a
@@ -1175,10 +1339,37 @@ for f in files:
 def is_winrm(b):
     if isinstance(b, dict):
         return b.get("type") == "winrm"
-    return bool(re.search(r'(?m)^\s*type\s*=\s*"winrm"', b))
+    return isinstance(b, str) and bool(re.search(r'(?m)^\s*type\s*=\s*"winrm"', b))
 
-ssh_blocks = [(loc, b) for loc, b in blocks if not is_winrm(b)]
-FLOOR_BLOCKS = 23  # +1 #9151: deploy_pipeline_fix_web2; measured 23 = 19 server.tf + 1 ci-ssh-key.tf + 3 workspaces-luks.tf (#8632/#8706/#9123)
+# Every dropped header is a finding: valid HCL cannot nest resources, so a
+# `resource ".." ".."` match inside another resource's -- or ANY non-resource
+# construct's -- span is heredoc/string
+# content at best and a spoofed member-name literal at worst (the span-capture
+# laundering path: fake span opens inside a NON-resource construct, swallows the
+# next real header, and launders a violating block into that member's exemption).
+if not dropped_hdrs:
+    ok("G2: no resource header hides inside a containing block span "
+       "(heredoc/string content or a spoofed member-name literal)")
+else:
+    no("G2: resource header inside a containing block span — not valid HCL; "
+       "string content needing review or a spoofed EXT_RESIDENCE member name: "
+       + ", ".join(dropped_hdrs))
+
+# Same-`type.name` duplicate check (§1's name-collision arm precedent): resources
+# sharing an address in one module is invalid HCL, but the guard does not
+# outsource identity to `terraform validate` -- a literal second
+# `resource "t" "member"` would otherwise attribute its connection blocks to the
+# member's EXT_RESIDENCE entry for free. Scoped to the .tf header walk: .tf.json
+# `type.name` collisions are currently invisible to this arm (named gap -- no
+# .tf.json file exists in the corpus today).
+if not dup_addrs:
+    ok("G2: no two resources in a module share the same type.name address")
+else:
+    no("G2: duplicate resource address — a same-address second resource can "
+       "inherit an EXT_RESIDENCE member's exemption: " + ", ".join(dup_addrs))
+
+ssh_blocks = [(loc, b, a) for loc, b, a, _k in blocks if not is_winrm(b)]
+FLOOR_BLOCKS = 25  # floor = census: 21 server.tf + 1 ci-ssh-key.tf + 3 workspaces-luks.tf (#8632/#8706/#9123/#9151/#9529); slack below census lets blocks vanish unflagged
 if len(ssh_blocks) >= FLOOR_BLOCKS:
     ok(f"G2: swept {len(ssh_blocks)} SSH connection blocks (floor {FLOOR_BLOCKS})")
 else:
@@ -1198,18 +1389,42 @@ def host_keys(b):
             m = re.fullmatch(r'\$\{\s*(.*?)\s*\}', v)
             return [m.group(1) if m else json.dumps(v)]
         return [json.dumps(v)]
-    return re.findall(r'(?m)^\s*host_key\s*=\s*(.+?)\s*$', b)
+    return re.findall(r'(?m)^\s*host_key\s*=\s*(.+?)\s*$', b) if isinstance(b, str) else []
+
+def dial_text(b):
+    return re.sub(r'\s+', '', b if isinstance(b, str) else json.dumps(b)) \
+        .replace('\\"', '"')
 
 def dials_web_1(b):
-    text = json.dumps(b) if isinstance(b, dict) else b
-    return 'hcloud_server.web["web-1"]' in re.sub(r'\s+', '', text).replace('\\"', '"')
+    return 'hcloud_server.web["web-1"]' in dial_text(b)
 
 def dials_web_2(b):
-    text = json.dumps(b) if isinstance(b, dict) else b
-    return 'hcloud_server.web["web-2"]' in re.sub(r'\s+', '', text).replace('\\"', '"')
+    return 'hcloud_server.web["web-2"]' in dial_text(b)
+
+# Fleet-wide dialer set: the same normalization as dials_web_1/dials_web_2 but the
+# host is ANY `web-N`, not just the two declared FLEET_SSH_HOSTS -- a future web-3
+# dialer outside server.tf is exactly the fail-closed case (the roster is declared,
+# not discovered; mirrors §1's _DIAL_HOST_RE / _fleet_extra shape). Two
+# load-bearing conventions, both declared residuals: host names must match
+# web-\d+ (a web-canary/web-1a matches nothing), and the dial must be LITERAL --
+# host = local.x/var.y/each.value/self or a raw IP engages no arm (an existing
+# member cannot switch to indirection -- the stale arm fires on hosts ⊆ ∅ --
+# but a NEW indirect dialer skips residence from birth; battery control G2-C6
+# pins the gap so closing it later is a deliberate act).
+def dialed_hosts(b):
+    return set(re.findall(r'hcloud_server\.web\["(web-\d+)"\]', dial_text(b)))
+
+def is_ssh_conn(b):
+    # §1's census dialect requires the literal `type = "ssh"` token: terraform
+    # defaults an omitted type to ssh, so a TYPE-LESS connection is a real SSH
+    # dialer that §1 cannot see -- the server.tf carve-out must not exempt it.
+    if isinstance(b, dict):
+        return b.get("type") == "ssh"
+    return isinstance(b, str) \
+        and bool(re.search(r'(?m)^\s*type\s*=\s*"ssh"', b))
 
 bad_count, bad_value, bad_web1, bad_web2 = [], [], [], []
-for loc, b in ssh_blocks:
+for loc, b, _addr in ssh_blocks:
     keys = host_keys(b)
     if len(keys) != 1:
         bad_count.append(f"{loc} (host_key x{len(keys)})")
@@ -1243,18 +1458,132 @@ else:
     no("G2: web-2 connection block pins host_key to something other than "
        "local.web_2_ssh_host_key: " + ", ".join(bad_web2))
 
-# Web-2 dialer residence (review enumeration): §1's sibling census reads server.tf
-# only, so a terraform_data dialing web["web-2"] born in another .tf/.tf.json would
-# face host_key rules here but escape the credential-boundary and destination
-# checks entirely. Assert every web-2-dialing connection block lives in
-# apps/web-platform/infra/server.tf; §1 then pins it to the sibling alone.
-w2_elsewhere = [loc for loc, b in ssh_blocks
-                if dials_web_2(b) and not loc.startswith("apps/web-platform/infra/server.tf:")]
-if not w2_elsewhere:
-    ok("G2: every web-2-dialing connection block lives in apps/web-platform/infra/server.tf")
+# Connection blocks that legitimately dial a fleet host from OUTSIDE server.tf:
+# the residence allowance is (file, type.name)-scoped AND host-scoped, so a second
+# phantom RESOURCE inside an allowlisted file, a same-name/different-type
+# resource, or a dial to a host the entry does not name, is still a finding.
+# Membership is per-RESOURCE, not per-block, by design: an entry declares "this
+# resource may dial these hosts", so a second same-host connection inside a
+# member (a second resource-level connection) stays in declared scope, while ANY dial
+# to an undeclared host still fails. `reason` is mandatory -- an empty one fails
+# the stale arm below, exactly as §5's check_allowlist enforces reason.strip()
+# non-empty. One standing waiver to keep in review: a member's provisioner
+# bodies sit outside §1's census and §2 by residence alone (the entry only
+# waives THIS arm), and the entry makes that permanent for the resource's life
+# -- future credential-bearing edits inside a member need no table diff, so a
+# NEW entry should carry a dedicated collateral pin (the four seeds are covered
+# by workspaces-luks/ci-ssh-key sibling pins; a per-member content bound is the
+# deferred hardening).
+# (#9998 -- the w2_elsewhere arm was web-2-only and left web-1 and future web-N
+# dialers outside server.tf unclassified.)
+EXT_RESIDENCE = {
+    "apps/web-platform/infra/ci-ssh-key.tf": {
+        "terraform_data.root_authorized_keys": {
+            "hosts": frozenset({"web-1"}),
+            "reason": "operator-local one-off authorized_keys install on web-1 "
+                      "(the file's own header scopes it to operator-local apply), "
+                      "not fleet provisioning",
+        },
+    },
+    "apps/web-platform/infra/workspaces-luks.tf": {
+        "terraform_data.luks_monitor_token_install": {
+            "hosts": frozenset({"web-1"}),
+            "reason": "web-1 LUKS boot-unlock chain member -- installs the monitor "
+                      "token on web-1 only, not fleet provisioning",
+        },
+        "terraform_data.luks_monitor_install": {
+            "hosts": frozenset({"web-1"}),
+            "reason": "web-1 LUKS boot-unlock chain member -- installs the monitor "
+                      "helper + units on web-1 only, not fleet provisioning",
+        },
+        "terraform_data.workspaces_boot_unlock_install": {
+            "hosts": frozenset({"web-1"}),
+            "reason": "web-1 LUKS boot-unlock chain member -- installs the reopen "
+                      "units on web-1 only, not fleet provisioning",
+        },
+    },
+}
+
+# Fleet dialer residence (#9998): §1's sibling census reads server.tf only, so a
+# connection block dialing any web["web-N"] born in another .tf/.tf.json faces the
+# host_key rules here but escapes the credential-boundary and destination checks
+# entirely. Assert every fleet-dialing block either lives in
+# apps/web-platform/infra/server.tf -- §1 then pins it to the sibling alone -- or
+# is a declared EXT_RESIDENCE member whose host set covers what it dials.
+fleet_elsewhere = []
+# Iterate ALL blocks, not ssh_blocks: a `type = "winrm"` line exempts a block
+# from the host_key arms (winrm has no ssh host_key) but must NOT exempt it from
+# residence -- a winrm-labeled block textually dialing a fleet host is mislabeled
+# at best and a one-line bypass at worst (structural-enum U1).
+for loc, b, addr, kind in blocks:
+    fpath = loc.rsplit(':', 1)[0]
+    dialed = dialed_hosts(b)
+    if not dialed:
+        continue
+    # server.tf is §1's universe -- but §1's census is terraform_data-typed AND
+    # speaks the literal `connection {}`/`type = "ssh"` dialect, so the carve-out
+    # only covers blocks §1 can actually see: a terraform_data-attributed plain
+    # connection whose body carries the `type = "ssh"` token. A dynamic-spelled,
+    # winrm-typed, TYPE-LESS (defaults to ssh at apply time but invisible to §1),
+    # null_resource or unattributed dialer inside server.tf escapes §1's
+    # enumeration AND residence without this refinement (enum U3, RES-A/RES-B).
+    if fpath == "apps/web-platform/infra/server.tf" and addr is not None \
+            and addr.startswith("terraform_data.") \
+            and kind == "conn" and is_ssh_conn(b):
+        continue
+    members = EXT_RESIDENCE.get(fpath)
+    entry = members.get(addr) if isinstance(members, dict) else None
+    if isinstance(entry, dict) and isinstance(entry.get("hosts"), (set, frozenset)) \
+            and dialed <= entry["hosts"]:
+        continue
+    fleet_elsewhere.append(f"{loc} ({addr or 'unattributed'} dials {sorted(dialed)})")
+if not fleet_elsewhere:
+    ok("G2: every fleet-dialing connection block lives in apps/web-platform/infra/server.tf "
+       "under a terraform_data resource (§1's census) or a declared EXT_RESIDENCE entry")
 else:
-    no("G2: web-2-dialing connection block(s) outside server.tf — they escape the "
-       "sibling-class credential/destination checks in §1: " + ", ".join(w2_elsewhere))
+    no("G2: fleet-dialing connection block(s) outside server.tf — or inside it "
+       "under a non-terraform_data type — escape the sibling-class checks in "
+       "§1: " + ", ".join(fleet_elsewhere)
+       + ". Declare an EXT_RESIDENCE entry (hosts + a reason) or move the "
+         "resource into server.tf as terraform_data.")
+
+# Allowance hygiene, folded into one arm (the §5 check_allowlist precedent): an
+# EXT_RESIDENCE entry that no longer sweeps a matching fleet-dialing block, or
+# whose reason is empty, is a finding. The mutation battery mutates .tf inputs only and cannot
+# reach this table, so the invariant fails loudly HERE at guard runtime; the
+# reason-mandatory half is verified by review like ALLOWLIST/ONLY_JUSTIFIED.
+stale_ext = []
+for fpath, members in EXT_RESIDENCE.items():
+    if not isinstance(members, dict):
+        stale_ext.append(f"{fpath} (malformed EXT_RESIDENCE member map)")
+        continue
+    for rname, entry in members.items():
+        if not isinstance(entry, dict):
+            stale_ext.append(f"{fpath}:{rname} (malformed entry)")
+            continue
+        hosts = entry.get("hosts")
+        reason = entry.get("reason", "")
+        if not isinstance(hosts, (set, frozenset)) or not isinstance(reason, str) \
+                or not reason.strip():
+            stale_ext.append(f"{fpath}:{rname} (malformed entry or empty reason)")
+            continue
+        # Every DECLARED host must be dialed by a swept block of that exact
+        # resource: an over-declared hosts set would pre-authorize a future dial
+        # with no table diff, and a vanished resource leaves the entry stale.
+        dialed = set()
+        for loc, b, addr in ssh_blocks:
+            if loc.rsplit(':', 1)[0] == fpath and addr == rname:
+                dialed |= dialed_hosts(b)
+        if not hosts <= dialed:
+            stale_ext.append(f"{fpath}:{rname}")
+if not stale_ext:
+    n_ext = sum(len(m) for m in EXT_RESIDENCE.values())
+    ok(f"G2: every EXT_RESIDENCE entry resolves to a swept fleet-dialing block and "
+       f"carries a reason ({n_ext} entries)")
+else:
+    no("G2: stale EXT_RESIDENCE entry — the resource it names no longer sweeps a "
+       "matching fleet-dialing connection block (or its reason is empty): "
+       + ", ".join(stale_ext))
 
 # The local is the ONE place the committed pin enters Terraform: defined once, read from the
 # committed file, through one() (exactly one key line) and the anchored ECDSA-P256 regex().
