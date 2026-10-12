@@ -34,9 +34,9 @@ PASS=0; FAIL=0
 pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 
-# Floor: the six batteries #8855 routed through the lib. A shrinking set means a battery stopped
-# sourcing the lib, which is the regression this suite exists to see. Raise it when one joins.
-MIN_CONSUMERS=6
+# Floor: the six batteries #8855 routed through the lib plus docker-run-tuple.test.sh (#10065). A shrinking set
+# means a battery stopped sourcing the lib, which is the regression this suite exists to see. Raise it when one joins.
+MIN_CONSUMERS=7
 if (( ${#CONSUMERS[@]} < MIN_CONSUMERS )); then
   printf 'mutation-scorer consumers: only %d batteries source the lib (floor %d):\n' "${#CONSUMERS[@]}" "$MIN_CONSUMERS"
   printf '  %s\n' "${CONSUMERS[@]}"
