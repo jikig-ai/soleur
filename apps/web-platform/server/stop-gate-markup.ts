@@ -2,15 +2,20 @@
 // escape-hatch markup from an assistant text block before the cc runner hands it to
 // `onText`.
 //
-// Why this exists: `plugins/soleur/hooks/unkept-promise-hook.sh` is an operator-CLI
-// guard whose block reason tells the model to write `<stop>OPERATOR-GATE: ...</stop>`
+// LEGACY: the hook's escape hatch is now a plain `Paused:` / `Blocked:` sentence that is
+// meant to be read and is never stripped. This file only cleans the old tag from rows
+// persisted before the web opt-out (api-messages.ts reads them back) and from a model
+// still emitting it from stale context. Delete it once no persisted row contains the tag.
+//
+// Why this exists: `plugins/soleur/hooks/unkept-promise-hook.sh` was an operator-CLI
+// guard whose block reason told the model to write `<stop>OPERATOR-GATE: ...</stop>`
 // (or `<stop>BLOCKED: ...</stop>`). In the web Concierge that tag replaced the model's
 // own question list (text is replaced per block, W8). The env opt-out in `agent-env.ts`
 // removes the producer; this strip is a second boundary on the cc runner's text path.
 // It is NOT a boundary for every surface: tool inputs, the legacy agent-runner, Codex
 // frames and the SDK transcript are outside it (see the ADR-093 amendment).
 //
-// Scope is deliberately the hook's own vocabulary, mirroring the hook's grep
+// Scope is deliberately the retired tag vocabulary
 // (`<stop>[[:space:]]*(OPERATOR-GATE|BLOCKED)`): an attribute-less `<stop>` followed by
 // one of those two words. Anything wider corrupts legitimate replies — an SVG gradient
 // answer carries `<stop offset="0" .../>` elements, and prose can mention the tag.
@@ -19,9 +24,8 @@
 // many openers with no closer cannot make it quadratic (a lazy `[\s\S]*?` regex did).
 //
 // Harness vocabulary is hard-coded here on purpose and must not grow into a
-// permanent tag allowlist. Remove this file once the producer is confirmed gone in
-// production (the `stop-gate-markup-stripped` Sentry op staying at zero is that
-// evidence); the parity guard classifies Stop hooks but never observes markup.
+// permanent tag allowlist. The Sentry op fires only on the live runner path, so a zero
+// count does not prove persisted rows are clean: check the messages table too.
 
 export interface StopGateStripResult {
   /** The text with every stop-gate span removed and, when any was found, tidied. */

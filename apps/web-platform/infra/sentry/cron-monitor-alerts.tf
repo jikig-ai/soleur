@@ -55,7 +55,11 @@ locals {
     # W3 (epic #9601) — the advisory runtime-image CVE scan's liveness monitor, added under the two-PR rule (a
     # monitor cannot be routed in the PR that creates it). Routing it is #9858. Until then a missed or errored
     # check-in (exit 3 = unmeasured posts error) opens a Sentry issue and emails nobody.
-    image_cve_scan = "advisory scan; the unrouted monitor opens a Sentry issue on a missed or unmeasured run but emails nobody; routing is the second PR of the two-PR rule (#9858)"
+    # #9703 — the Inngest probe-heartbeat verifier's liveness monitor, added under the two-PR rule (a monitor
+    # cannot be routed in the PR that creates it). Routing is a later stage of #9703; until then a missed or
+    # errored check-in opens a Sentry issue and emails nobody. The Better Stack heartbeat it feeds is the page.
+    scheduled_inngest_probe_heartbeat = "the Better Stack heartbeat it feeds is the paging surface; the unrouted monitor opens a Sentry issue on a missed or withheld run but emails nobody; routing is a later stage of #9703 (#9703)"
+    image_cve_scan                    = "advisory scan; the unrouted monitor opens a Sentry issue on a missed or unmeasured run but emails nobody; routing is the second PR of the two-PR rule (#9858)"
   }
 }
 

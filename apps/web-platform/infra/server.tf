@@ -531,7 +531,7 @@ resource "hcloud_server" "web" {
     #   web_host_key     — each.key ("web-1"/"web-2"); the env-writer upper-cases it to name the
     #     per-host Better Stack heartbeat URL var (WEB_NIC_GUARD_URL_WEB_2, …), matching the SSH
     #     provisioner's upper(replace(each.key,"-","_")).
-    #   zot_probe_repo   — local.zot_probe_repo (web-probe.tf:22), the ZOT_PROBE_REPO env value.
+    #   zot_probe_repo   — the BARE local.zot_probe_repo (web-probe.tf), the ZOT_PROBE_REPO a host writes at birth; web-1's SSH provisioner re-delivers the pinned variant.
     # betterstack_ingest_url + registry_endpoint are already in this map (reused, not re-added).
     web_probes_token = doppler_service_token.web_probes.key
     expected_ip      = var.web_hosts[each.key].private_ip
@@ -1003,7 +1003,7 @@ resource "terraform_data" "zot_consumer_probe_install" {
     file("${path.module}/web-zot-consumer-probe.service"),
     file("${path.module}/web-zot-consumer-probe.timer"),
     local.registry_endpoint,
-    local.zot_probe_repo,
+    local.zot_probe_repo_pinned,
     # Hash the read-scoped probe token so a `-replace` rotation re-fires delivery (see nic-guard).
     nonsensitive(sha256(doppler_service_token.web_probes.key)),
     local.ghcr_deny_sh,
@@ -1041,7 +1041,7 @@ resource "terraform_data" "zot_consumer_probe_install" {
       # DOPPLER_TOKEN (read-scoped web_probes) + HOME=/root on the unit are the two-fold unit-start
       # fix — see the web-private-nic-guard install above. #6438 §1.
       # umask 0137: never world/group-readable — the env file now holds a live prd read token (see nic-guard install).
-      "( umask 0137 && printf 'ZOT_ENDPOINT=%s\\nZOT_PROBE_REPO=%s\\nWEB_ZOT_CONSUMER_URL_KEY=%s\\nDOPPLER_TOKEN=%s\\nDOPPLER_ENABLE_VERSION_CHECK=false\\n' '${local.registry_endpoint}' '${local.zot_probe_repo}' 'WEB_ZOT_CONSUMER_URL_${upper(replace("web-1", "-", "_"))}' '${doppler_service_token.web_probes.key}' > /etc/default/web-zot-consumer-probe )",
+      "( umask 0137 && printf 'ZOT_ENDPOINT=%s\\nZOT_PROBE_REPO=%s\\nWEB_ZOT_CONSUMER_URL_KEY=%s\\nDOPPLER_TOKEN=%s\\nDOPPLER_ENABLE_VERSION_CHECK=false\\n' '${local.registry_endpoint}' '${local.zot_probe_repo_pinned}' 'WEB_ZOT_CONSUMER_URL_${upper(replace("web-1", "-", "_"))}' '${doppler_service_token.web_probes.key}' > /etc/default/web-zot-consumer-probe )",
       "chmod 600 /etc/default/web-zot-consumer-probe",
       "systemctl daemon-reload",
       "systemctl enable --now web-zot-consumer-probe.timer",
@@ -2140,13 +2140,14 @@ resource "terraform_data" "deploy_pipeline_fix" {
 # Scope boundary (named so it does not read as an omission): this resource covers the
 # deploy-pipeline FILE_MAP set, plus TWO non-FILE_MAP duties: the #9169 ghcr.io hosts-file
 # deny (local.ghcr_deny_sh + its assertion, in the last, secret-free block;
-# web-ghcr-deny.test.sh) and, since #9393, the three cron-egress artifacts a RUNNING
-# web-2 otherwise gets only at rebirth — the carved CIDR allow list, the resolver, and
-# the post-apply probe script, delivered then EXECUTED exactly as
-# terraform_data.cron_egress_firewall's terminal step does on web-1. The loader
-# (cron-egress-nftables.sh), alarm, and systemd units stay birth-frozen until the
+# web-ghcr-deny.test.sh) and, since #9393, the cron-egress artifacts a RUNNING
+# web-2 otherwise gets only at rebirth — the carved CIDR allow list, the resolver,
+# the post-apply probe script, and (since #9534) the loader plus the gateway
+# deny-CIDR file it dies without, delivered then EXECUTED exactly as
+# terraform_data.cron_egress_firewall's terminal step does on web-1. The alarm
+# and systemd units stay birth-frozen until the
 # #9372 rebirth — the issue's stated scope — EXCEPT the loader, lifted from the
-# freeze here: #9534's resolver tick asserts six enforcement markers including the
+# freeze here: #9534's resolver tick asserts eight enforcement markers including the
 # egress-gateway DOCKER-USER legs, which only the post-#9529 loader installs. A
 # birth-frozen loader cannot satisfy them, so the resolver self-heals every minute
 # forever (measured: enforcement_missing on soleur-web-2 since the #9393 resolver
@@ -2188,9 +2189,14 @@ resource "terraform_data" "deploy_pipeline_fix_web2" {
     file("${path.module}/cron-egress-allowlist-cidr.txt"),
     file("${path.module}/cron-egress-resolve.sh"),
     file("${path.module}/cron-egress-postapply-assert.sh"),
-    # #9534 — the loader too: the resolver's six-marker heal check fails forever
+    # #9534 — the loader too: the resolver's eight-marker heal check fails forever
     # against a pre-#9529 (birth-frozen) loader that cannot install the gw legs.
+    # Its deny-file precondition (die at :151 when the file is missing) is
+    # co-delivered here so the delivered loader is self-sufficient on this
+    # channel — egress_gateway_web2 ships the same bytes, but an apply ordering
+    # where this resource runs first must not strand the loader in a die-loop.
     file("${path.module}/cron-egress-nftables.sh"),
+    file("${path.module}/egress-deny-cidrs.txt"),
     hcloud_server.web["web-2"].id,
     local.ghcr_deny_sh,
     local.ghcr_deny_assert_sh,
@@ -2328,11 +2334,17 @@ resource "terraform_data" "deploy_pipeline_fix_web2" {
     source      = "${path.module}/cron-egress-postapply-assert.sh"
     destination = "/usr/local/bin/cron-egress-postapply-assert.sh"
   }
-  # #9534 — the loader itself; the resolver's six-marker heal check is unsatisfiable
-  # without it (a birth-frozen loader has no Phase-4.5 egress-gateway legs).
+  # #9534 — the loader itself; the resolver's eight-marker heal check is unsatisfiable
+  # without it (a birth-frozen loader has no Phase-4.5 egress-gateway legs). Its
+  # hard deny-file precondition rides the same channel (loader :151 dies without
+  # it — co-delivering makes the pair atomic on this resource).
   provisioner "file" {
     source      = "${path.module}/cron-egress-nftables.sh"
     destination = "/usr/local/bin/cron-egress-nftables.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/egress-deny-cidrs.txt"
+    destination = "/etc/soleur/egress-deny-cidrs.txt"
   }
 
   provisioner "remote-exec" {
@@ -2349,11 +2361,11 @@ resource "terraform_data" "deploy_pipeline_fix_web2" {
       "chmod 0644 /etc/systemd/system/webhook.service /etc/systemd/system/vector.service.d/10-vector-doppler-token.conf /etc/systemd/system/inngest-heartbeat.service.d/10-inngest-heartbeat-doppler-token.conf /etc/systemd/system/inngest-server.service.d/10-inngest-server-doppler-token.conf /etc/systemd/system/inngest-redis.service.d/10-inngest-redis-doppler-token.conf",
       "chown root:deploy /etc/webhook/hooks.json",
       "chmod 0640 /etc/webhook/hooks.json",
-      # #9393 — the three cron-egress artifacts land root:root; the two scripts get
-      # the same 0755 the web-1 resource gives them, the carved CIDR file 0644.
-      "chown root:root /usr/local/bin/cron-egress-resolve.sh /usr/local/bin/cron-egress-postapply-assert.sh /usr/local/bin/cron-egress-nftables.sh /etc/soleur/cron-egress-allowlist-cidr.txt",
+      # #9393 — the five cron-egress artifacts land root:root; the three scripts get
+      # the same 0755 the web-1 resource gives them, the two data files 0644.
+      "chown root:root /usr/local/bin/cron-egress-resolve.sh /usr/local/bin/cron-egress-postapply-assert.sh /usr/local/bin/cron-egress-nftables.sh /etc/soleur/cron-egress-allowlist-cidr.txt /etc/soleur/egress-deny-cidrs.txt",
       "chmod 0755 /usr/local/bin/cron-egress-resolve.sh /usr/local/bin/cron-egress-postapply-assert.sh /usr/local/bin/cron-egress-nftables.sh",
-      "chmod 0644 /etc/soleur/cron-egress-allowlist-cidr.txt",
+      "chmod 0644 /etc/soleur/cron-egress-allowlist-cidr.txt /etc/soleur/egress-deny-cidrs.txt",
       "visudo -cf /tmp/deploy-inngest-bootstrap.sudoers.staged",
       "install -o root -g root -m 0440 /tmp/deploy-inngest-bootstrap.sudoers.staged /etc/sudoers.d/deploy-inngest-bootstrap",
       "rm -f /tmp/deploy-inngest-bootstrap.sudoers.staged",
@@ -2386,6 +2398,7 @@ resource "terraform_data" "deploy_pipeline_fix_web2" {
       "[ \"$(sha256sum /usr/local/bin/cron-egress-resolve.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/cron-egress-resolve.sh")}\" ]",
       "[ \"$(sha256sum /usr/local/bin/cron-egress-postapply-assert.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/cron-egress-postapply-assert.sh")}\" ]",
       "[ \"$(sha256sum /usr/local/bin/cron-egress-nftables.sh | cut -d' ' -f1)\" = \"${filesha256("${path.module}/cron-egress-nftables.sh")}\" ]",
+      "[ \"$(sha256sum /etc/soleur/egress-deny-cidrs.txt | cut -d' ' -f1)\" = \"${filesha256("${path.module}/egress-deny-cidrs.txt")}\" ]",
       # The sudoers grant landed and parses — same four alias assertions as the web-1 bridge.
       "grep -q INFRA_CONFIG_INSTALL /etc/sudoers.d/deploy-inngest-bootstrap",
       "grep -q GIT_LOCK_CHARDEVICE_SWEEP /etc/sudoers.d/deploy-inngest-bootstrap",
@@ -2771,8 +2784,8 @@ resource "terraform_data" "egress_gateway" {
 # hot-delivery channels today; update when adding one):
 #   terraform_data.deploy_pipeline_fix_web2 — the full deploy-pipeline set
 #     (ci-deploy, webhook.service, infra-config, inngest-*, service drop-ins)
-#     + the three cron-egress artifacts (resolver, allowlist-cidr,
-#     post-apply assert) (#9151, #9393)
+#     + the five cron-egress artifacts (resolver, allowlist-cidr, post-apply
+#     assert, loader, gw deny-CIDRs) (#9151, #9393, #9534)
 #   terraform_data.egress_gateway_web2    — four gateway artifacts
 #     (squid.conf, auth helper, deny CIDRs, bootstrap) (#9534)
 # Everything else reaches a running web-2 only via -replace (birth set) or
