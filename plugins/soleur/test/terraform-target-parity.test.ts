@@ -2182,6 +2182,72 @@ describe("git-data-host-replace dispatch -target/-replace set (scoped; plaintext
     expect(gitDataJobBlock).toMatch(/git_data_host_replace_gate\s+tfplan\.json\s+"?\$?GATE_MODE/);
   });
 
+  test("the apply step grades the saved plan through the mode-aware post-apply backstop (#10137)", () => {
+    // The apply step used to carry an inline loop asserting BOTH data volumes preserved, which failed
+    // the rotate dispatch on its own intended LUKS replace. Every pin below runs on the step with
+    // comments stripped, anchored on a non-comment line: a comment that quotes the construct (the
+    // step documents all of them) must not satisfy a pin.
+    const raw = extractStep(gitDataJobBlock, /Terraform apply \(git-data-host -replace\)/);
+    expect(raw, "apply step not found in git_data_host_replace").not.toBeNull();
+    const step = stripComments(raw!);
+    // Step shape the flip gate / poll / summary key on, and nothing that tolerates a refusal.
+    expect(step).toMatch(/^\s*id: apply$/m);
+    expect(step).toMatch(/^\s*if: inputs\.plan_only != true$/m);
+    expect(step, "a continue-on-error (any quoting) would turn a refusal into a tolerated failure").not.toMatch(/continue-on-error/);
+    // The mode is the one the plan step's gate accepted, read through env (no second mapping).
+    expect(step).toMatch(/^\s*GATE_MODE: \$\{\{ steps\.plan\.outputs\.gate_mode \}\}$/m);
+    expect(step).not.toContain("APPLY_TARGET");
+    // The lib is actually sourced, at the step's top level, and the guarded call follows it
+    // IMMEDIATELY: nothing between them can wrap the call in a condition or reassign the mode.
+    const src = step.match(/^ {10}source "\$\{GITHUB_WORKSPACE\}\/tests\/scripts\/lib\/git-data-host-replace-gate\.sh"$/m);
+    expect(src, "the lib must be sourced by a real top-level line").not.toBeNull();
+    const callRe = /^ {10}if ! git_data_host_post_apply_assert tfplan\.json "\$\{GATE_MODE:-\}"; then\n([\s\S]*?)\n {10}fi\n/m;
+    const call = step.match(callRe);
+    expect(call, "the post-apply call must be a top-level `if ! … ; then … fi`").not.toBeNull();
+    expect(step.slice(src!.index! + src![0].length, call!.index!).trim()).toBe("");
+    // The refusal body must actually exit 1 (an annotation alone lets the job go green).
+    expect(call![1]).toMatch(/^\s*exit 1$/m);
+    // The call comes after the terraform apply, and nothing between them reassigns the mode or
+    // exits successfully early.
+    const applyAt = step.indexOf("terraform apply -no-color -input=false tfplan");
+    expect(applyAt).toBeGreaterThan(-1);
+    expect(applyAt).toBeLessThan(call!.index!);
+    // (scanned from the START of the step: a reassignment before the apply line is the same failure)
+    expect(step.slice(0, call!.index!)).not.toMatch(/\bGATE_MODE\+?=|-v GATE_MODE|\bread\b[^\n]*\bGATE_MODE\b|GATE_MODE:=|\bexit 0\b/);
+    // The inline loop is gone, and the old display name (false under rotate) with it.
+    expect(step).not.toMatch(/for VOL in hcloud_volume\.git_data/);
+    expect(gitDataJobBlock).not.toContain("both-volumes-preserved assert");
+    expect(gitDataJobBlock).toContain("Validate dispatch inputs (rotate confirm token)");
+    // The rotate failure annotation is its own arm, and an unknown mode takes a neutral arm rather
+    // than the plain-replace claim that both volumes are preserved.
+    expect(step).toMatch(/^\s*rotate\)\n\s*echo "::error::terraform apply \(git-data-host-rotate\) failed mid-replace/m);
+    expect(step).toMatch(/^\s*\*\)\n\s*echo "::error::terraform apply \(git-data host\) failed mid-replace and the dispatch mode is unknown/m);
+    // Exactly one call site in the job (the Observability probe counts it).
+    expect(gitDataJobBlock.match(/git_data_host_post_apply_assert tfplan\.json/g)?.length).toBe(1);
+  });
+
+  test("the plan step publishes the mode its gate accepted, once, directly after the gate block (#10137)", () => {
+    const raw = extractStep(gitDataJobBlock, /Terraform plan \(scoped git-data-host -replace\)/);
+    expect(raw, "plan step not found in git_data_host_replace").not.toBeNull();
+    const step = stripComments(raw!);
+    const publish = "printf 'gate_mode=%s\\n' \"$GATE_MODE\" >> \"$GITHUB_OUTPUT\"";
+    expect(step.split(publish).length - 1, "the plan step must publish gate_mode exactly once").toBe(1);
+    const gateCall = step.indexOf('if ! git_data_host_replace_gate tfplan.json "$GATE_MODE"; then');
+    expect(gateCall).toBeGreaterThan(-1);
+    // The gate block closes at the step's top-level `fi` (a nested `fi` is indented deeper).
+    const closeAt = step.indexOf("\n          fi\n", gateCall);
+    expect(closeAt).toBeGreaterThan(gateCall);
+    const publishAt = step.indexOf(publish);
+    expect(publishAt).toBeGreaterThan(closeAt);
+    // Directly after the gate block, at the top level: nothing between the gate's closing `fi` and
+    // the publish, so it is unconditional and cannot follow a reassignment of the mode (the #10137
+    // failure shape: rotate graded as replace again, with the gate having accepted rotate).
+    expect(step.slice(closeAt + "\n          fi\n".length, publishAt).trim()).toBe("");
+    expect(step.slice(step.lastIndexOf("\n", publishAt) + 1, publishAt)).toBe("          ");
+    // One reader of the output in the whole job.
+    expect(gitDataJobBlock.split("steps.plan.outputs.gate_mode").length - 1).toBe(1);
+  });
+
   test("the plaintext data volume is in NEITHER the base nor the rotate set (preserved by omission)", () => {
     // The deliberate divergence from registry (whose store volume IS in-scope for a resize). An
     // untargeted resource cannot be planned for destroy, so omission is what preserves it.
