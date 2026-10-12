@@ -415,3 +415,37 @@ since #8036, so a loss is not a deploy or user outage.
   unmeasured in the Count bullet above, is at least 11. While the workflow is paused again, a
   later merge under `apps/web-platform/infra/` triggers no apply, as that bullet says for the
   disabled state.
+
+## Amendment — 2026-10-12 (#9534 review): the twelfth/thirteenth Logs alerts land; host-attributed silence
+
+#9534's egress-gateway pair (`egress_gw_deny_spike`, `egress_gw_probe_silent`) brought the count to
+**12**; review found two defects this change closes, and the new `egress_gw_probe_fail` is the
+thirteenth.
+
+- **The host-mask defect.** `egress_gw_probe_silent` counted ROWS per bucket. Both web hosts
+  multiplex into source 2457081, so one emitting host's ~3 rows/15 min kept the aggregate above the
+  `lower_than 1` threshold while the other host shipped nothing — and web-2 was in fact shipping
+  nothing: its `/etc/vector/vector.toml` was frozen at a pre-`egress-gw-probe` revision (the
+  `journald_persistent` re-delivery provisioner dials web-1 only; closed by the
+  `journald_persistent_web2` twin in the same follow-up). The predicate is now a whole-window scalar
+  counting `DISTINCT JSONExtractString(raw, 'host_name')` against `lower_than
+  length(var.web_hosts)`. This restates the standing rule for absence alerts on multiplexed
+  sources: count emitting HOSTS (or scope the conjunct to one), never rows.
+- **`egress_gw_probe_fail` pages what Sentry-only could not.** The probe's `result=fail` rows (allow
+  leg refused / deny bypassed) posted only a Sentry event (`op=egress_gw_probe_fail`), which pages
+  nobody. The alert predicates on the shipped row: `result=fail` OR `reason=gw_absent` (the
+  gateway-missing skip class — a probe that cannot run is an incident, not silence; other skip
+  reasons stay non-paging because the silent alert already owns "pipeline alive?"). `higher_than 0`
+  over 900 s — a real failure recurs every probe cycle, and a single `deny_bypassed` row is already
+  security-critical.
+- **Live probe (2026-10-12, source 2457081).** As written, fail needle: rows exist in the window
+  (web-1's recovery-era `allow_rc=28` stream, 451 tagged rows/3 d total, 1 distinct host —
+  soleur-web-platform — because web-2's rows were being dropped at its stale Vector allowlist).
+  Silent predicate as written: `count(DISTINCT host_name)` over 15 min returned 1 < 2 while web-2's
+  delivery was still missing — a TRUE positive for the deployed-at-merge defect, resolved by the
+  twin's apply.
+- **Enforcement.** All six egress resources sit in `apply-web-platform-infra.yml`'s MAIN plan
+  `-target=` set; the drift guard `apps/web-platform/test/infra/egress-gw-alert.test.sh` pins every
+  conjunct, the host-distinct scalar shape, the paging semantics, the emitter needles in
+  `cron-egress-resolve.sh`, and the runbook anchor — and carries the mutation rows proving it can
+  red.
