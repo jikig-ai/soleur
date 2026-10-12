@@ -2329,8 +2329,8 @@ pj_floor drain-bad 26 "${#PJ_DRAIN_BAD[@]}" "the number of non-reading spellings
 # pj_hazard <interp> <ignore|default> <spelling> -> the pipeline's exit status under pipefail, on stdout. The interpreters: `bash`; `sh`, which is dash where the host has it (an sh-tagged spelling must not depend on
 # which /bin/sh the host has) and /bin/sh otherwise; `shbash`, a bash invoked under the name sh (what /bin/sh is on Arch, Fedora, macOS and in a container without dash).
 # THE RULE FOR AN sh-TAGGED SPELLING: it must read, or not read, the same under dash and under a bash named sh. A spelling whose meaning depends on the shell (a top-level `return`: dash leaves the script, bash
-# reports an error and goes on) would pass where dash is on PATH and turn the guard red on a host where it is not; the shell-parity check below runs every sh-tagged spelling under both and requires the same
-# status, so such a spelling is red HERE, on whichever host it is added.
+# reports an error and goes on) would pass where dash is on PATH and turn the guard red on a host where it is not; the shell-parity check below runs every sh-tagged spelling under a bash named sh as well and requires
+# the verdict of its own list (the dash run is the main leg), so such a spelling is red HERE, on whichever host it is added.
 PJ_SH="$(command -v dash || true)"; [[ -n "$PJ_SH" ]] || PJ_SH=/bin/sh
 PJ_SH_BASH="$probe/pj/sh"; ln -s "$(command -v bash)" "$PJ_SH_BASH"
 pj_hazard() {
@@ -2380,16 +2380,19 @@ done
 pj_det_bad=""
 for _e in ${PJ_DRAIN_OK[@]+"${PJ_DRAIN_OK[@]}"} ${PJ_DET_EDGE[@]+"${PJ_DET_EDGE[@]}"}; do pj_leg pj_r_tok pj_n_tok pj_det_bad pj_leg_tok "${_e#*|}"; done
 for _e in ${PJ_DRAIN_BAD[@]+"${PJ_DRAIN_BAD[@]}"}; do pj_leg pj_r_tbad pj_n_tbad pj_det_bad pj_leg_tbad "${_e#*|}"; done
-# The shell-parity rule (above), run: every sh-tagged spelling under both shells, under both dispositions, the same status (counted like the legs: OK answers). The comparison is given a pair that must differ and a pair that must not.
-pj_shcmp() { if [[ "$1" == "$2" ]]; then printf OK; else printf '[%s: rc %s under %s, rc %s under a bash named sh]' "$3" "$1" "$PJ_SH" "$2"; fi; }
-[[ "$(pj_shcmp 0 141 x)" != OK && "$(pj_shcmp 0 0 x)" == OK ]] || pj_dyn_ctl+="[the shell-parity comparison did not tell a differing status from an equal one]"
+# The shell-parity rule (above), run: every sh-tagged spelling gives the verdict of its own list under a bash named sh as well (the dash run is the leg above), under both dispositions; counted like the legs. Its control is a
+# spelling that differs between the two shells, run under the bash only (so the control does not depend on the host having dash): `return 0; cat >/dev/null` must NOT read as a non-reader there.
+[[ "$(pj_leg_dbad shbash default 'return 0; cat >/dev/null')" != OK && "$(pj_leg_dbad shbash default ':')" == OK ]] || pj_dyn_ctl+="[a bash named sh did not tell a top-level return that goes on to drain from a stub that never reads]"
 pj_shp_bad=""; pj_shp_ok=0; pj_shp_run=0; pj_sh_tagged=0
-for _e in ${PJ_DRAIN_OK[@]+"${PJ_DRAIN_OK[@]}"} ${PJ_DRAIN_BAD[@]+"${PJ_DRAIN_BAD[@]}"}; do
+for _e in ${PJ_DRAIN_OK[@]+"${PJ_DRAIN_OK[@]}"}; do
   [[ "${_e%%|*}" == sh ]] || continue
   pj_sh_tagged=$((pj_sh_tagged + 1))
-  for _d in ignore default; do
-    pj_leg pj_shp_run pj_shp_ok pj_shp_bad pj_shcmp "$(pj_hazard sh "$_d" "${_e#*|}")" "$(pj_hazard shbash "$_d" "${_e#*|}")" "${_e#*|}"
-  done
+  for _d in ignore default; do pj_leg pj_shp_run pj_shp_ok pj_shp_bad pj_leg_dok shbash "$_d" "${_e#*|}"; done
+done
+for _e in ${PJ_DRAIN_BAD[@]+"${PJ_DRAIN_BAD[@]}"}; do
+  [[ "${_e%%|*}" == sh ]] || continue
+  pj_sh_tagged=$((pj_sh_tagged + 1))
+  for _d in ignore default; do pj_leg pj_shp_run pj_shp_ok pj_shp_bad pj_leg_dbad shbash "$_d" "${_e#*|}"; done
 done
 [[ -z "$pj_dyn_ctl" ]] \
   || sweep_probe_fail+=("producer-hazard-control: the control did not reproduce the failure: $pj_dyn_ctl — the guard would otherwise certify a hazard it cannot produce")
@@ -2401,7 +2404,7 @@ done
    && pj_n_dok == 2 * ${#PJ_DRAIN_OK[@]} && pj_n_dbad == 2 * ${#PJ_DRAIN_BAD[@]} && pj_n_tok == ${#PJ_DRAIN_OK[@]} + ${#PJ_DET_EDGE[@]} && pj_n_tbad == ${#PJ_DRAIN_BAD[@]} )) \
   || sweep_probe_fail+=("producer-drain-zero: ${pj_dyn_n:-<err>} spelling runs for ${#PJ_DRAIN_OK[@]} accepted and ${#PJ_DRAIN_BAD[@]} non-reading spellings, and the four legs ran ${pj_n_dok:-<err>} / ${pj_n_dbad:-<err>} / ${pj_n_tok:-<err>} / ${pj_n_tbad:-<err>} times (want two dispositions each for the dynamic legs, one run each for the detector legs, and neither list empty — zero spellings ran is never a pass)")
 [[ -z "$pj_shp_bad" && "$pj_sh_tagged" -gt 0 && "$pj_shp_run" == $((2 * pj_sh_tagged)) && "$pj_shp_ok" == "$pj_shp_run" ]] \
-  || sweep_probe_fail+=("producer-shell-parity: an sh-tagged spelling reads differently under dash and under a bash named sh: ${pj_shp_bad:-none}; ${pj_shp_ok:-<err>} equal statuses in ${pj_shp_run:-<err>} runs for ${pj_sh_tagged:-<err>} sh-tagged spellings (want two runs per spelling, all equal, and at least one spelling) — retag it, reword it, or drop it: it would turn the guard red on a host with no dash")
+  || sweep_probe_fail+=("producer-shell-parity: an sh-tagged spelling does not give its list's verdict under a bash named sh (it differs between dash and bash): ${pj_shp_bad:-none}; ${pj_shp_ok:-<err>} listed verdicts in ${pj_shp_run:-<err>} runs for ${pj_sh_tagged:-<err>} sh-tagged spellings (want two runs per spelling, all as listed, and at least one spelling) — retag it, reword it, or drop it: it would turn the guard red on a host with no dash")
 # The legs, floored as literals (reported directly): neutering a leg, or cutting its loop, leaves a count below the floor.
 pj_floor leg-dyn-ok 18 "$pj_r_dok" "the number of dynamic accepted-spelling runs"
 pj_floor leg-dyn-bad 52 "$pj_r_dbad" "the number of dynamic non-reading-spelling runs"

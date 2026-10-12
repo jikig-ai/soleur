@@ -21,3 +21,9 @@ soleur:plan, learnings-researcher, scoped advisor consult, soleur:plan-review (d
 
 - The window-crossing control and the verdict controls (Guards 2 and 3) are closed on the head: the two findings that Phase 0.6 recorded as OPEN are fixed and have fixtures and neutered-verdict rows; the 0.6 table is the plan-time reading.
 - The review round is in progress: fix round A (guard code) is pushed at `e8e91ca13b` (153 pairs, 263 triples, 154 rows); fix round B (three suite edits and these documents) follows. The figures in the Decisions block above are plan-time (66 pairs, 120 triples); see decision-challenges items 59 and 60 for the reconciliation.
+
+## Fix round C (2026-10-12; appended)
+
+- Review round done: seven seats read `0a8d2bd5e5..e737ea0814` plus the merge `8b43c9df5d`; twelve P2 findings, all fixed in the guard and the documents (evidence: "Post-merge and fix round C"; decisions 62 to 74). The guard is pushed on this branch; the three suites were not touched this round.
+- Numbers at this head (derived on the tree): 149 pairs, 258 triples, 150 rows (21 drains, 129 exempt, 2 fenced), `SWEEP_PROBE_CHECKS=54`, 102 derivation cases, `j0-derive.py` U2 equal to the awk. Every earlier "final" figure in this directory (153 / 263 / 154, 133 exempt, BASE 67 / 126) is the `e737ea0814` state, before the merge of main retired three suites.
+- The Decisions block above reads 66 pairs and 120 triples: that is the plan-time base (`0aae3f8680`), not a head.

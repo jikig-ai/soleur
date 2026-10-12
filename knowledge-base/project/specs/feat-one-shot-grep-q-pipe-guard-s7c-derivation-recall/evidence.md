@@ -759,3 +759,87 @@ Pair runs (HEAD before this round, then the edited file, same sandbox, same host
 * **Lines that still read `blocked-#9956` are historical and superseded by decision-challenges item 43:** the section 0.4 and 0.5 table rows for `cloud-init-inngest-bootstrap.test.sh` (docker, about line 287; timeout, about line 327) and `reach-table.tsv` rows 15 and 105. They record the plan-time classification and are not edited. The `action` column of `reach-table.tsv` is likewise plan-time (a TSV has no comment line to say so): the rows of the guard are the current state.
 * **The late finding "the annotation skip has no real instances" is false.** J0's R8 is `+0 pairs, +1 triple`, and the triple is real: `tests/scripts/test-git-data-birth-readiness-gate.sh | grep | .github/workflows/git-data-rung2-rehearsal.yml`, from `printf '%s' "$probe_out" | grep -c .` inside `$(...)` in the `echo "::error::..."` lines 478 and 784 of that workflow.
 * **Item 24 against section 0.1:** `69 / 51` and `66 / 48` are the same measurement counted with and without three listed pairs that only gain a producer (decision-challenges item 60).
+
+## Post-merge and fix round C (2026-10-12; guard, documents and one learning; review panel of seven seats at `8b43c9df5d`)
+
+Append-only: nothing above is edited; this section supersedes the figures and statements it names. Fix-round commits: guard `39cb00fc81` (fenced rule, JOINBYTES, floors, controls, collision lint, dash-less hosts, header), documents `c51f9c31fc`, guard `8508116948`, and the commits that follow this section (their subjects are in the report; `git log 8b43c9df5d..HEAD` is the list).
+
+### The merge with main, and which figure belongs to which head
+
+* `8b43c9df5d` merged `origin/main` into the branch. Main's change deleted `web-host-reboot.yml` and `web2-luks-rebirth.yml` and retired their suites (`scripts/web-host-reboot.test.sh`, `scripts/web2-rebirth.test.sh`, `scripts/web2-rebirth-recovery-check.test.sh`). Four rows were dropped from `PRODUCER_JOIN` (web-host-reboot curl; web2-rebirth-recovery-check cryptsetup and curl; web2-rebirth curl), all exempt, and `PJ_TRIPLES` went from 263 to 258 (five triples: web-host-reboot curl over two producers, the recovery-check pair over two verbs, web2-rebirth curl).
+* **Every earlier "final" figure in this directory is the `e737ea0814` state**: 153 pairs, 263 triples, 154 rows, 133 exempt rows, `PJ_TRIPLES=263`, `BASE 67 / 126`, `120 + 1 + 5 = 126`, `U2 +86 / +137` over 66 test files, `+85 over 67`. At the merge head and at the fix-round-C head the guard prints 149 pairs, 258 triples, 150 rows, 129 exempt rows, and `j0-derive.py` prints `BASE 66 pairs, 125 triples` and `U2 +83 pairs, +133 triples over 63 test files` (149 = 66 + 83, 258 = 125 + 133 = 120 + 138). The BASE moved from 126 to 125 because the one retired pair that the base rules could see (recovery-check cryptsetup) is gone; the evidence's "a figure this section does not explain" for the guard on current main (120) is main's own retirement of a web2 cryptsetup row.
+* `reach-table.tsv` rows 84 to 86 and the evidence tables for the three retired suites (the t1 timing rows, the EXEC listing and the arm-drain table, about lines 106, 110, 125, 252 to 254 and 318 to 320 above) are HISTORICAL: those suites no longer exist and no guard row corresponds to them. They are not edited.
+
+### Review result (seven seats, report-only, at `8b43c9df5d`; fix diff `0a8d2bd5e5..e737ea0814` plus the merge)
+
+| Seat | P2 | P3 | Disposition |
+| --- | --- | --- | --- |
+| security | 1 (`JOINBYTES` stops joining, so a trailing-bar consumer on the next line is not derived) | 5 | Fixed (decision 64); P3 comments fixed, the collision lint widened (67), the `fenced` residual closed by 62; the hand-read zot row now says so |
+| architecture | 1 (`fenced` weaker than `blocked-#N`) | 6 | Fixed (62); the stale header limit and the unstated limits fixed (68); R1 x R3 fixtures added; the granularity gap stays the plan's NOT-fixed item (72) |
+| git-history | 3 (annotation claims disagree across header, learning and `j0-derive.py`; loop-on-one-line limit; no post-merge figures) | 4 | All fixed (68, this section, the learning's further correction, `j0-derive.py`); item 59's arithmetic and item 8 corrected as items 69 and 70 |
+| pattern | 0 | 7 | Wording, floor-message and boundary items fixed (62, 65, 68, NODRAIN left boundary); naming, stray `;`, helper-list copies and `def NNN` citations not fixed (71, 72) |
+| test-design | 7 (no `n` counter; floors on the table not on what ran; row existence; wanted-text controls with empty output; collision dispatch; `ignore` versus `default`; four legs) | many | All seven fixed (65 to 67) with a named FAIL each (below); the P3 survivors fixed or recorded (66, 72 to 74) |
+| code-quality | 1 (the same loop-on-one-line limit) | 11 | Fixed; the dead inner `\|\| true` dropped and the outer one pinned by a wire regex; `wire_flr` replaced by one regex per floor NAME and value; the drains-floor text widened; tasks.md 0.3 corrected |
+| performance | 1 (the `sh\|return 0; cat >/dev/null` spelling is non-reading only under dash) | 2 | Fixed (63): reproduced rc 1 at `8b43c9df5d`, rc 0 now; the two residual cost items stated in the header |
+
+### Instruments
+
+Four sandboxes from `bash scripts/soleur-sandbox.sh new fixc1` to `fixc4` (git-initialised, control first: the unmutated guard rc 0 in each), the guard under `( ulimit -v 6000000; ... )`. A mutation is one text replacement of the guard file written into a sandbox; **landed** is `filecmp` of the file that ran against the pristine copy (differs), **KILLED** is rc not 0 AND the row's own FAIL text in the output (the harness `mut.py` and registries `reg1.py` to `reg5.py` are in the scratch directory `/var/tmp/s7c/review/c/`, outside the repository). Awk binaries copied out of images and put first on `PATH` as `awk` in a sandbox: mawk 1.3.4 20200120 (`node:22-slim`), mawk 1.3.4 20240123 (`ubuntu:24.04`), BusyBox v1.38.0 (`busybox:latest`), versions asserted (`awk -W version`) before the run; gawk 5.4.1 is the host's. The dash-less run is `env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp` (`command -v dash` is empty there, `/bin/sh` is bash on this host; dash lives in `~/.local/bin`).
+
+### Mutations of this round (final guard; every mutant KILLED with its own text except the equivalent compaction mutant; the unmutated control is rc 0)
+
+| Item | Mutation (one at a time) | Result: the named FAIL |
+| --- | --- | --- |
+| 1 | the `return 0; cat` spelling put back into `PJ_DRAIN_BAD` | `producer-shell-parity: ... [shbash/ignore return 0; cat >/dev/null][shbash/default ...]` (and, on a dash-less host, `producer-drain-nonreading`) |
+| 1 | the shell-parity comparison made trivially true | `producer-hazard-control: [a bash named sh did not tell a top-level return ...]` |
+| 4 | `JOINBYTES` 4096 / 8191 / 16384; 8193 | `derivation-fixtures ... [joinbytes-edge-in must derive curl]`; `[joinbytes-edge-out must NOT derive curl]` |
+| 4 | the old stop at the cap put back | `[joinbytes-trailing-bar must derive curl]`, `-quote`, `-squote`, `joinbytes-over-tail` |
+| 4 | `squeeze` without the double-quote fix / without the single-quote fix / without the pending bar | `[joinbytes-trailing-bar-quote must derive curl]` / `[joinbytes-trailing-bar-squote must derive curl]` / `[joinbytes-trailing-bar must derive curl]` |
+| 4 | the end-of-line window without its fallback for 64 trailing blanks | `[join-blanks-bar must derive curl][join-blanks-backslash must NOT derive curl]` |
+| 10 | `UNWRAPCAP` 199 / 150 / 201; `JOINCAP` 49 / 6 / 51 | `[wrapcap-edge-in must derive curl]` / `[wrapcap-edge-out must NOT derive curl]`; `[joincap-in must NOT derive curl]` / `[joincap-out must derive curl]` |
+| 10 | loop compaction at 40 instead of 32 | SURVIVED (equivalent: only finished entries are dropped; stated in the header, decision 66) |
+| 5 | `#[0-9]+` loosened to `*`; the fenced check removed; `blocked-#N` accepted again; a tenth vocabulary word; a fenced row flipped to `unverified`; a fenced row without a number; the zot row's first word changed | `producer-join-judge: ... [no 'must name its tracker issue' ...]`; `[no 'without a vocabulary reason' ...]`; `the closed vocabulary reads [... fenced blocked ]`; `the table holds 1 fenced rows`; `a fenced exempt row must name its tracker issue: ...`; `exempt row without a vocabulary reason: ...zot-image-fetch... cryptsetup` |
+| 6a | loop over the first case only; first expectation only; the `n` verdict neutered; the `y` verdict neutered | `the derivation loop read 1 of the table's 102 cases`; `floor cases-y: ... evaluated is 57, the floor is 62`; `derivation-fixtures control: ... [nothing] for a must-NOT-derive ...` and the mirror for `y` |
+| 6b | all rows of one driver family deleted (five families), and all at once | `floor judge-fixtures ... is 2, the floor is 22`; `floor rows-fixtures ... 2 ... 11`; `triple-fixtures 2 ... 5`; `count-fixtures 2 ... 9`; `rowcount-fixtures 1 ... 4` |
+| 6c | `pj_jc` / `pj_rcc` weakened from "contains the wanted text" to "printed something" | `producer-join-negative-controls: ... [[pj_rcc][pj_tcc][pj_ccc][pj_cntfx]] of [...]` (the weakened driver missing from the list) |
+| 6d | `PJ_DEFS_AWK` left out of the lint loop; the call removed; the collision reintroduced in `PJ_AWK` (`bs0` -> `base`); an indented `function zz(t,   indent)` added to `PJ_DEFS_AWK` | `awk-param-collision: ... read from 1 programs (want 2)`; `read from 0 programs`; `[anybar:base]`; `[zz:indent]` |
+| 12 | the lint restricted to column-0 headers | `awk-param-collision: ... an indented header ... read as [NOTHING]` |
+| 6e | the `ignore` argument never matching; `SIGPIPE` always ignored | `producer-hazard-control: [an unread stub did not give rc 1 under an ignored SIGPIPE and rc 141 under the default disposition: 141 and 141]` / `... 1 and 1` |
+| 6f | each of the four legs neutered; each leg's loop cut to its first spelling | `producer-hazard-control: [the dynamic reader leg passed a stub that never reads]` and the three siblings; `floor leg-dyn-ok ... is 2, the floor is 18`, `leg-dyn-bad 2 ... 52`, `leg-det-ok 10 ... 12`, `leg-det-bad 1 ... 26` |
+| 11 | the left word boundary of `(echo\|printf\|type\|which\|command -v)` removed; `printf` removed from it; `-[vV]` -> `-v` | `detector disagreements: [accepted spelling not detected: mytype cat >/dev/null][... reprintf ...][... my_echo ...]`; `[non-reading spelling detected as a drain: printf cat >/dev/null]`; `[... command -V cat >/dev/null]` |
+| 7 | `pj_floor cases` literal 102 -> 1; every literal -> 1; one floor turned into another; the function neutered | `producer-join-wiring: ... the floors not at column 0 with their listed literal exactly once [...]`; `producer-floor-control: pj_floor exited 0 below its floor (want 1) printing []` |
+| 7 | `PJ_FLOOR_DRAINS` 21 -> 1 | `producer-join-wiring: ... the drains-row floor 1 and its value 0` |
+| 9 | the outer `\|\| true` of the count-line `read` removed | `producer-join-wiring: ... the read of the count line 0` |
+| 9 | a drains row flipped to exempt / made stale / made malformed | `the checker verified 20 drains rows, the floor is 21 — a drains row was flipped to exempt, deleted, gone stale ... or malformed`; plus `stale join row` / `malformed drains row` |
+| 8 | `pj_check_counts` compared with `>=` | `producer-join-verdicts: [no 'looked at 306 of the table' for counts that must print it: ][no 'looked at 153 of the table' ...][no 'looked at 154 ...']` |
+| 8 | the row counter incremented twice | `the definition checker looked at 300 of the table's 150 rows` and the ROWS-CHECKED fixtures red |
+| 13 | the any-producer scan skipped on joined lines; the workflow shell token removed; `"?bash` allowed; the quote-parity test removed; the owner scan made to ignore trailing comments | `[r1r3-any-producer-split must derive curl]` (and four stale rows); `[yml-shell-bash must derive curl][yml-shell-bash-args-overread ...]`; `[yml-shell-quoted-known-miss must NOT derive curl]`; `[r1r3-dq-cmdsub-split-known-miss ...]` with the prose-word pairs; `[owner-trailing-comment-overread must derive curl]` |
+| 14 | `json` added to `PJ_EXTS` | `[ext-unlisted-json must NOT derive curl]` |
+| 3 | the annotation strip to the end of the line; the annotation strip removed | `[annot-pipe-after must derive jq][annot-cmdsub must derive tr][annot-cmdsub-quoted must derive grep]` (and `PJ_TRIPLES pins 258` against 257); `[annot-cmdsub-hidden must NOT derive head]` (and unlisted pairs) |
+| 12 | the same-line loop arm without the stub-helper form | `[loop-sameline-helper must derive curl][... jq]` |
+| 2 | `PJ_TRIPLES` 259 | `the derivation found 258 ... triples and PJ_TRIPLES pins 259` |
+| (one) | a mutant written with a quote inside the single-quoted awk program | rc 2 (bash syntax error): an invalid mutant, redone as `"?bash` above |
+
+### Stress inputs for the JOINBYTES change (derivation awk alone, 61 lines of 1 MB each ending in ` \` or ` |`, then `printf x | curl -K -`; wall seconds at load 3 to 10; base is the awk of `8b43c9df5d`)
+
+| Shape | Base | Final |
+| --- | --- | --- |
+| no spaces, ` \` | 0.5 | 0.3 |
+| `ab ` repeated (spaces), ` \` | 0.6 | 0.3 (the first form of the change, which copied the whole line to strip its blanks, took 2.6 to 2.9; the end of the line is now stripped from a 64-character window) |
+| 87,000 bars per line, ` \` | no end in 250 s | 29 (the last eleven lines are still scanned bar by bar: `anybar`'s quadratic term, stated in the header) |
+| no bars, trailing ` \|` | 0.7 | 0.5 |
+| 100 bars per line, ` \` | 3.3 | 0.3 |
+| 100 bars per line, trailing ` \|` | 3.0 | 0.4 |
+| a 9000-character line ending in a bar, its consumer `curl -K -` on the next line | derives nothing | derives `curl` |
+
+The derived triples are unchanged by the change: the sorted triples of the awk before and after are `cmp`-identical (258), under gawk and under mawk 20200120. Other measurements for the header: 64000 bars on a 256 KB line 19 s gawk, 9 s mawk 20200120; 30000 consecutive `for vN in zz; do` lines 5 s gawk, 30 s mawk (the same lines with ONE variable name: 0.9 s gawk, 0.3 s mawk); the corpus 3.4 s gawk, 1.2 s mawk (load 10); longest physical line of the corpus 5903 bytes.
+
+### Final numbers, derived on the tree this section is committed on
+
+* Guard PASS line: `149 derived pairs, 258 producer triples; 21 of 21 drains rows verified by the checker, 129 exempt rows with a vocabulary reason, 150 of 150 rows read`; 150 `JOINED` lines, 12 `DEFERRED` lines; the table holds 2 `fenced` rows. `PJ_TRIPLES=258` (header recipe: `pj_join_pairs | LC_ALL=C sort -u | wc -l` = 258; pairs by `cut -f1,2 | sort -u` = 149).
+* `PJ_CASES` 102 cases (62 must-derive and 47 must-not-derive expectations), `PJ_DRAIN_OK` 9, `PJ_DRAIN_BAD` 26 (19 of them sh-tagged with 6 accepted ones: 25 sh-tagged spellings), `PJ_DET_EDGE` 3. The 15 `pj_floor` floors: cases 102, cases-run 102, cases-y 62, cases-n 47, drain-ok 9, drain-bad 26, judge-fixtures 22, rows-fixtures 11, triple-fixtures 5, count-fixtures 9, rowcount-fixtures 4, leg-dyn-ok 18, leg-dyn-bad 52, leg-det-ok 12, leg-det-bad 26; and `PJ_FLOOR_DRAINS=21`. `SWEEP_PROBE_CHECKS=54` (the header recipe counts 54; it was 52 before `producer-shell-parity` and `producer-floor-control`).
+* `j0-derive.py` (shipped arms): `BASE 66 pairs, 125 triples`, `U2 +83 pairs, +133 triples over 63 test files`; the U2 sorted triples equal the awk's 258 (`cmp` empty; 149 pairs). The BASE arm set alone gives 125, so the comparison is not trivially empty.
+* Header limit figures re-measured on the final tree: ignoring the quote-parity test 258 -> 281 (+23 triples; 12 new pairs, ten prose words and two real, `grep` and `markdown-lint.sh`; nine triples on existing pairs: five `jq`, one `sed`, one `sha256sum`, two `tr`); relaxing the case-pattern exclusion 258 -> 262 (+4 triples, 3 new pairs: `false`, `t`, `write`). The 31 stub definitions of the 21 drains rows (sum of the definitions column) were the ones read for "no drains row relies on a credited non-reader".
+* The whole guard, rc 0 with nine PASS lines and no FAIL line, under gawk 5.4.1, mawk 1.3.4 20200120, mawk 1.3.4 20240123, BusyBox v1.38.0 awk, and gawk under `env -i PATH=/usr/local/bin:/usr/bin:/bin` with dash absent. At `8b43c9df5d` the last command gave rc 1 with `producer-drain-nonreading: ... [sh/ignore return 0; cat >/dev/null][sh/default return 0; cat >/dev/null]` (the finding). The new bash constructs (`printf -v` with an indirect name, `[[ =~ $var ]]`, indirect expansion) were also run under real bash 3.2.57 (`bash:3.2`) as fragments; the whole guard under bash 3.2 was not re-run this round (the first fix round's run stands).
+* Guard wall time with `taskset -c 0-7`: 9.0 to 10.0 s at load 5.5 to 7 against 5.6 to 6.8 s for `8b43c9df5d` (about 3 s more: 23 more derivation cases, the shell-parity runs, the four legs' counters); at load 13 to 20 the two are within noise (14 to 15 s). The Check-10 cap of 15 s is load-bound, as the performance seat measured; this round uses about 3 s of its quiet-host margin.
+* Lints: `shellcheck -S warning -x` on the guard 0 findings; `lint-shell-capture-exit.py --baseline` 0 new findings; `guard-vacuity-floor.test.sh` 23 passed, 0 failed; `lint-orphan-test-suites.sh` none orphaned; `plugins/soleur/test/fixture-relative-assert.test.sh` 62 passed (the same count as at base: no new relative redirect; the file is not under `scripts/`).
