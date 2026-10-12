@@ -5,7 +5,7 @@ The plugin-version banner (PR #10064) first shipped with `git ls-remote` and a G
 `curl` run straight from the hook's cwd with the user's environment. A security seat showed that
 a project's `.git/config` (`url.<base>.insteadOf`, `http.extraHeader`, `core.sshCommand`) or a
 `GIT_CONFIG_COUNT` env could redirect the "fixed URL" lookup, attach an `Authorization` header,
-or run a command, and that the very common user-global `url."git@github.com:".insteadOf` turns the
+or run a command, and that the very common user-global ssh-style `url.<base>.insteadOf` rewrite turns the
 "unauthenticated" lookup into an SSH-key-authenticated one. Plugin hooks are global: they fire in
 every project the user opens, so the project is attacker-controlled input.
 
