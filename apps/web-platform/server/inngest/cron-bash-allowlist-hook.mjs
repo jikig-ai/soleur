@@ -762,8 +762,8 @@ export function parseAllowlist(lines) {
 // patterns are not a substitute for it.
 const SECRET_QUERY_PATTERNS = [
   /eyJ[A-Za-z0-9_-]{16,}/, // JWT / base64url-JSON header (e.g. Supabase ACCESS token; opaque refresh tokens are NOT matchable)
-  /gh[posru]_[A-Za-z0-9]{20,}/, // GitHub PAT / installation / OAuth tokens
-  /github_pat_[A-Za-z0-9_]{20,}/,
+  /gh[posru]_[A-Za-z0-9._~+/=-]{20,}/, // GitHub PAT / installation / OAuth tokens
+  /github_pat_[A-Za-z0-9._~+/=-]{20,}/,
   /sk-ant-[A-Za-z0-9_-]{16,}/, // Anthropic API key
   /sbp_[A-Za-z0-9]{20,}/, // Supabase access token
   /sk_(live|test)_[A-Za-z0-9]{16,}/, // Stripe secret key

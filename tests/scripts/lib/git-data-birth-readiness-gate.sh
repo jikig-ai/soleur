@@ -1051,8 +1051,10 @@ git_data_rung2_token_sets() {
 }
 
 # _git_data_rung2_bearer_ok <token> — the token-shape allowlist for the stdin config channel.
-# Prefixed (a sourced library shares its caller's namespace). GitHub tokens are alphanumeric
-# plus `_` (ghp_…, ghs_…, github_pat_…), all inside this set; the extra `. ~ + / =` are tolerated.
+# Prefixed (a sourced library shares its caller's namespace). The allowlist is the RFC 6750
+# b64token alphabet [A-Za-z0-9._~+/=-] — the canonical credential class (scripts/lib/bearer-curl.sh,
+# ADR-280), not a vendor's issued format: GitHub's `ghs_` installation tokens now run ~390-520
+# chars over that alphabet, and ghp_… / github_pat_… sit inside it as well.
 _git_data_rung2_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
 
 # _git_data_rung2_fetch <path-suffix>
