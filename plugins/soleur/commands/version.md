@@ -16,7 +16,15 @@ This explicit run contacts github.com regardless of `SOLEUR_UPDATE_CHECK`, becau
 Run via the **Bash tool**:
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/plugin-version.sh" --compare --refresh
+if grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" 2>/dev/null; then
+  if [ -f "${CLAUDE_PLUGIN_ROOT}/scripts/plugin-version.sh" ]; then
+    bash "${CLAUDE_PLUGIN_ROOT}/scripts/plugin-version.sh" --compare --refresh
+  else
+    echo "source=unknown"
+  fi
+else
+  echo "source=unknown"
+fi
 ```
 
 If `CLAUDE_PLUGIN_ROOT` is not set or the script does not exist at that path, do not look for it anywhere else (a script from the current directory is not trusted): print `Installed:  unknown` and stop. The output is `key=value` lines: `source`, `version`, `commit`, `marketplace`, `cache`, `latest_status`, `latest`, `latest_commit`, `relation`, `reason`, `cache_dir`. Use only these values.

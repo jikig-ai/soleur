@@ -17,6 +17,9 @@
 # Fails open: every path exits 0 and any error prints nothing. Plugin hooks are GLOBAL
 # (they fire in every project), so a banner that errors or blocks would hit every session.
 set -uo pipefail
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
 # `set -u` aborts with status 1 and no ERR trap on an unbound variable; force a clean exit.
 trap 'exit 0' EXIT
 
