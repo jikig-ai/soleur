@@ -41,7 +41,9 @@ for cand in 172.31.100.0/24 172.31.101.0/24 172.31.102.0/24 172.31.103.0/24; do
   fi
   clash=0
   while read -r s; do
-    [[ -n "$s" && "${s%.*.*}" == "$fam" ]] && clash=1
+    # set -e: a bare test-AND-assignment here aborts on the first NON-matching
+    # subnet (docker0's 172.17 mismatches every candidate on a fresh host).
+    if [[ -n "$s" && "${s%.*.*}" == "$fam" ]]; then clash=1; fi
   done < <(docker network inspect $(docker network ls -q 2>/dev/null) -f '{{range .IPAM.Config}}{{.Subnet}}{{end}}' 2>/dev/null || true)
   if (( clash == 0 )); then SUBNET="$cand"; break; fi
 done
@@ -107,7 +109,7 @@ else
     # fail AFTER the gw is gone, wedging every re-run in a permanently-deleted
     # gw state (strictly worse than running on a wrong-mode bridge).
     MEMBERS="$(docker network inspect "$NET_NAME" -f '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null || true)"
-    EXTRA="$(for m in $MEMBERS; do [[ "$m" != "$GW_NAME" ]] && echo "$m"; done)"
+    EXTRA="$(for m in $MEMBERS; do if [[ "$m" != "$GW_NAME" ]]; then echo "$m"; fi; done)"
     [[ -z "$EXTRA" ]] || die "bridge $NET_NAME has non-gateway endpoints ($EXTRA) — detach them before the mode rebuild"
     # Ensure the image is local BEFORE the gw is torn down: the run arm's pull
     # is the rebuild window's dominant term and a registry blip there would
@@ -121,7 +123,7 @@ else
     _rm_tries=0
     until docker network rm "$NET_NAME" >/dev/null 2>&1; do
       _rm_tries=$(( _rm_tries + 1 ))
-      (( _rm_tries >= 3 )) && die "network rm $NET_NAME failed after gw removal (reattach the gw by re-running this script)"
+      if (( _rm_tries >= 3 )); then die "network rm $NET_NAME failed after gw removal (reattach the gw by re-running this script)"; fi
       sleep 1
     done
     create_bridge
