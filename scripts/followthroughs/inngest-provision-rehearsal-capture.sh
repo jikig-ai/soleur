@@ -271,13 +271,18 @@ ok()   { note "PASS: $1"; }
 viol() { note "VIOLATION: $1"; violated=1; }
 want() { note "WAIT: $1"; missing="${missing}$1; "; }
 
-# FORBIDDEN IN EVERY MODE (#9939 + #9962): a `Failed to start inngest*` journal row is the
-# false-failure shape the ConditionPathExists= conditions remove, and this channel must never
-# carry it — the LUKS trio's #9939 conditions now cover the flip pair, the provision unit, the
-# heartbeat and vector/server units, so the needle widens to the shared `inngest` prefix to see
-# their rows too (a real inngest-* start failure is a verdict either way). The needle is the
-# systemd journal TEXT, not a stage= field: these rows are journald/systemd rows, not phone-home
-# markers. Counted against the mode's own row set —
+# FORBIDDEN IN EVERY MODE (#9939 + #9962): a `Failed to start <unit>*` journal row for any of
+# the conditioned units is the false-failure shape the ConditionPathExists= conditions remove,
+# and this channel must never carry it — the LUKS trio's #9939 conditions now cover the flip
+# pair, the provision unit, the heartbeat and vector/server units, so the needle covers the
+# `inngest`, `vector` and `soleur-inngest` unit-name prefixes (journald text is unit-name-first;
+# a bare `inngest` prefix would be blind to `Failed to start vector.service` and
+# `Failed to start soleur-inngest-provision.service` — review P2). A real start failure of any
+# named unit is a verdict either way — including the designed-loud transients (heartbeat ping
+# failure, probe failure), whose rows now fail the capture where the luks-only needle passed
+# them silently: a rehearsal with a failing inngest unit is a failed rehearsal.
+# The needle is the systemd journal TEXT, not a stage= field: these rows are journald/systemd
+# rows, not phone-home markers. Counted against the mode's own row set —
 # HOST_ROWS for phase-a/phase-b (this run's window), POST_ROWS for post-reboot (post-boundary).
 # Journald rows carry no iid=, so the count is host+window scoped by design: the workflow's
 # always-on --since bound is what excludes a prior life's storm rows on a re-capture. This is
@@ -294,21 +299,28 @@ want() { note "WAIT: $1"; missing="${missing}$1; "; }
 count_inngest_failed() {
   # The {0,N} gaps tolerate the JSONEachRow-serialized escape (\" is a wire char) as well as
   # the unescaped ":"/= forms; a doppler/inngest row carries a non-systemd identifier, no
-  # UNIT=inngest* field, and no systemd[N]: console prefix, so it cannot match. The
+  # UNIT=<unit> field, and no systemd[N]: console prefix, so it cannot match. The
   # UNIT arm covers a wire shape that drops SYSLOG_IDENTIFIER but keeps the journald
   # job-done fields (measured storm rows carry both). The `[="]` anchor is load-bearing:
   # `UNIT.{0,12}inngest` would also match `"_SYSTEMD_UNIT":"inngest-server.service"` — the
   # doppler-tagged FP row — while a journald `UNIT` field is always `"UNIT":` or `UNIT=`.
+  # The BOOT_STAGE exclusion is the embedded-journalctl guard (review P2): post-boot-health
+  # rows carry `journalctl -u ... -n` output verbatim in jl=, which can embed a PRIOR life's
+  # `systemd[N]: Failed to start` text into a current-life row — a real systemd failure row
+  # never carries the SOLEUR_INNGEST_BOOT_STAGE marker. A residual remains: a non-systemd,
+  # non-BOOT_STAGE row embedding journal-shaped text could still trip both filters — errs
+  # toward VIOLATION, which is the honest direction for an evidence artifact.
   printf '%s\n' "$1" |
-    grep -F 'Failed to start inngest' |
-    grep -cE 'SYSLOG_IDENTIFIER.{0,8}systemd|[="]UNIT.{0,12}inngest|systemd\[[0-9]+\]' 2>/dev/null || true
+    grep -v 'SOLEUR_INNGEST_BOOT_STAGE' |
+    grep -E 'Failed to start (inngest|vector|soleur-inngest)' |
+    grep -cE 'SYSLOG_IDENTIFIER.{0,8}systemd|[="]UNIT.{0,12}(inngest|vector|soleur-inngest)|systemd\[[0-9]+\]' 2>/dev/null || true
 }
-inngest_failed_check() { # <row-set> — viol on any `Failed to start inngest*` row
+inngest_failed_check() { # <row-set> — viol on any `Failed to start <tracked-unit>*` row
   local n_inngest_failed
   n_inngest_failed="$(count_inngest_failed "$1")"
   (( n_inngest_failed > 0 )) \
-    && viol "${n_inngest_failed} 'Failed to start inngest*' journal row(s) — an inngest unit failed to start (pre-staging ordering noise or a genuine start failure; both are verdicts, #9939+#9962)" \
-    || ok "zero 'Failed to start inngest*' journal rows"
+    && viol "${n_inngest_failed} 'Failed to start (inngest|vector|soleur-inngest)*' journal row(s) — a tracked unit failed to start (pre-staging ordering noise or a genuine start failure; both are verdicts, #9939+#9962)" \
+    || ok "zero 'Failed to start' journal rows for tracked units"
 }
 
 if [[ -z "$IID" && -z "$(printf '%s' "$HOST_ROWS" | tr -d '[:space:]')" ]]; then

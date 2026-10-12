@@ -321,6 +321,40 @@ rows "$TMP/r-serverfail.json" "$NOW" \
 run "phase-a FAIL: a 'Failed to start inngest-server*' row flags via the UNIT arm even without SYSLOG_IDENTIFIER" 1 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-serverfail.json" -- "${BASE_ARGS[@]}" --mode phase-a
 
+# The two non-`inngest`-prefixed conditioned units (review P2: a bare `inngest` prefix was
+# blind to them while the comment claimed coverage).
+rows "$TMP/r-vectorfail.json" "$NOW" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-unit-armed detail=iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=1 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=2 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=private_nic_timeout detail=boot=deadbee1.waited_s=150 \"host\":\"${HOST}\"" \
+  "{\"SYSLOG_IDENTIFIER\":\"systemd\",\"UNIT\":\"vector.service\",\"JOB_RESULT\":\"failed\",\"message\":\"Failed to start vector.service - Vector observability shipper (journald + host_metrics -> Better Stack Logs).\",\"host\":\"${HOST}\"}"
+run "phase-a FAIL: a 'Failed to start vector.service' journal row is a violation (#9962 needle)" 1 \
+  "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-vectorfail.json" -- "${BASE_ARGS[@]}" --mode phase-a
+
+rows "$TMP/r-provisionfail.json" "$NOW" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-unit-armed detail=iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=1 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=2 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=private_nic_timeout detail=boot=deadbee1.waited_s=150 \"host\":\"${HOST}\"" \
+  "{\"SYSLOG_IDENTIFIER\":\"systemd\",\"UNIT\":\"soleur-inngest-provision.service\",\"JOB_RESULT\":\"failed\",\"message\":\"Failed to start soleur-inngest-provision.service - Provision the dedicated inngest host from its pinned bootstrap image, retrying until one attempt succeeds (#8562).\",\"host\":\"${HOST}\"}"
+run "phase-a FAIL: a 'Failed to start soleur-inngest-provision*' journal row is a violation (#9962 needle)" 1 \
+  "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-provisionfail.json" -- "${BASE_ARGS[@]}" --mode phase-a
+
+# EMBEDDED-JOURNALCTL FALSE-POSITIVE GUARD (review P2): post-boot-health rows carry
+# `journalctl -u ... -n` output verbatim in jl= — a prior life's `systemd[N]: Failed to
+# start inngest-*` console text can ride a CURRENT-life BOOT_STAGE row. A real systemd
+# failure row never carries the SOLEUR_INNGEST_BOOT_STAGE marker, so marker rows are
+# excluded before the scope arms run. This fixture must PASS (the embedded text is noise).
+rows "$TMP/r-jlembedded.json" "$NOW" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-unit-armed detail=iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=1 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=2 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=private_nic_timeout detail=boot=deadbee1.waited_s=150 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=post-boot-health detail=iid=abc123 jl=[systemd[1]: Failed to start inngest-server.service - Inngest self-hosted server. ; systemd[1]: Failed to start vector.service - Vector observability shipper.] \"host\":\"${HOST}\""
+run "phase-a PASS: a BOOT_STAGE row embedding journalctl 'Failed to start' text is not a violation" 0 \
+  "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-jlembedded.json" -- "${BASE_ARGS[@]}" --mode phase-a
+
 # --since IS THE SAME-RUN-ID RE-RUN GATE (the workflow passes it on every capture call): a
 # prior life's bootstrap-done inside the window would trip the no-done check, but the bound
 # excludes it — this arm proves the bound is wired, not just parsed.

@@ -24,11 +24,15 @@ calibration).
 
 The compensating-detector argument (skipped ≠ invisible): an absent env file
 post-provision is a real anomaly — but every conditioned unit's absence is
-detected by a designed dark channel (Better Stack missing-heartbeat marker,
-the flip FSM's phone-home, the probe's dark-arm, vector's shipping silence),
-identical to the #9939 precedent's "dispatch-side liveness refusal +
-no-terminal-flag confirm timeout". For inngest-server specifically the FSM +
-control-plane probes are the channel.
+detected by a designed dark channel. The honestly-measured set on the dedicated
+host is narrower than the #9939 precedent implies: `inngest_consumer` (web-1-fed
+beat, armed) is the solid detector; the inngest_server_probe missing-beat
+monitor is `paused`/feeder-less pending #9703; the heartbeat co-skips on the
+same file; vector's own silence is NOT alarmed. Ops consequence: after an
+env-file loss the host goes quiet — and a condition-skipped unit never
+self-recovers after the file is restored (needs an explicit start or re-arm;
+the provision `!done` latch prevents the provision unit from re-entering
+post-latch). For inngest-server specifically the consumer beat is the channel.
 
 ## Needle widening
 
