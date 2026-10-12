@@ -219,7 +219,7 @@ run_scan
 expect_clean "genuine clean scan passes"
 # Wire assert (#9217): the PAT reached the curl stub on stdin, in the form the scan pipes. ${KNOB:-default}: an exported-empty knob must not
 # compare "" with "".
-_hdr_want="${STUB_HEADER_LINE:-Authorization: Bearer sbp_synthetic0000000000000000000000000000}"
+_hdr_want="${ADVSCAN_WANT_HEADER_LINE:-Authorization: Bearer sbp_synthetic0000000000000000000000000000}"
 _hdr_got="$(cat "$STUB_DIR/header.stdin" 2>/dev/null)"
 if [[ "$_hdr_got" == "$_hdr_want" ]]; then
   pass "the curl stub received the Authorization header on stdin (--header @- drained)"
