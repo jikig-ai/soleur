@@ -231,9 +231,10 @@ check "selftest" 1 2 >/dev/null; has "selftest" "abc" "zzz" >/dev/null; hasnt "s
 if [ "$FAIL" -ne $((st_f + 3)) ] || [ "$PASS" -ne "$st_p" ]; then
   printf '[FATAL] instrument self-test: check/has/hasnt did not reject a failing input (FAIL %s->%s, PASS %s->%s)\n' "$st_f" "$FAIL" "$st_p" "$PASS" >&2
   exit 1
+else
+  ST_RAN=1
 fi
 PASS=$st_p; FAIL=$st_f; CHECKED=$st_c
-ST_RAN=1
 
 # --- exit vocabulary and xtrace
 for f in r1 r2 r3 s1 s3 drift empty; do
