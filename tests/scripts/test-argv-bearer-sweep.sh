@@ -6610,6 +6610,176 @@ else row "S6 mutation (executable): the -b edit did not land on the step text (t
 echo "=== stage S6: Guard 3 rows (htpasswd password off argv: workflow site, residual allowlist, executable stub) done ==="
 
 # =====================================================================================
+# STAGE S6-HB (argv-bearer sweep, Guard 2, #9757): a heartbeat URL reaches curl only on the stdin config, after the shape judgement.
+#
+# PROPERTY. A Better Stack heartbeat URL's PATH is the credential. In the converted host scripts it is never an argument of any process: it rides curl's
+# stdin config (`--config -`), after a shape guard that refuses (zero requests, one value-free marker) a scheme other than https://, an empty rest and any
+# byte outside [A-Za-z0-9._~:/?&=%+-]. The behavioural rows (hostile values, per-attempt stdin, zero requests, zero sleeps, the dash run) live in the
+# scripts' own suites (luks-monitor.test.sh, web-git-data-probe.test.sh, inngest.test.sh); this stage owns the DERIVED POPULATION.
+#
+# DERIVATION. Every tracked-or-untracked apps/web-platform/infra/*.sh (not *.test.sh) whose non-comment code mentions `heartbeat` is a heartbeat script (a
+# file that names no heartbeat, e.g. a Pages probe whose own variable is also called URL, is outside the population). In such a file every logical line
+# (continuations joined, whole-line comments dropped) has its `< <(...)` stdin feed removed, is split into segments on `||`, `&&`, `;` and `|`, and every
+# segment holding a `curl` command word whose remaining text names `$URL`, `$hb_url` or a `*HEARTBEAT_URL` variable is a VIOLATION: the URL is on argv.
+# (`$INNGEST_HEALTH_URL`, the local health probe in the same file as the heartbeat, is not a heartbeat variable.) NOT COVERED, named: a URL carried in a
+# variable that is none of those names, an `eval`, and the registry template's own heartbeat curls (cloud-init-registry.yml, tracked in #10093).
+#
+# EXPLICIT RESIDUAL ALLOWLIST (S6H_ALLOW: file, the segment text, the exact number of occurrences): the same-class probe scripts that still carry the
+# URL on argv, tracked in #10093. THE ALLOWLIST SHRINKS BY DELETION ONLY: an entry the scan no longer sees, or a count that moved, is RED.
+# CONVERTED SCRIPTS (S6H_CONVERTED): exactly one stdin config line (`url = "..."`) each, and exactly one copy of the shape-guard class, on a line BEFORE it.
+# =====================================================================================
+S6H_DIR="apps/web-platform/infra"
+S6H_CONVERTED=(luks-monitor.sh web-git-data-probe.sh)
+S6H_FILE_FLOOR=7
+S6H_ALLOW_CEIL=4
+S6H_CLASS='[!A-Za-z0-9._~:/?\&=%+-]'
+S6H_ALLOW=(
+"$S6H_DIR/web-zot-consumer-probe.sh	curl -fsS -m 10 -o /dev/null \"\$URL\" 2>/dev/null	2"
+"$S6H_DIR/inngest-consumer-probe.sh	curl -fsS -m 10 -o /dev/null \"\$URL\" 2>/dev/null	2"
+"$S6H_DIR/web-private-nic-guard.sh	beat() { curl --disable --noproxy '*' -fsS -m 10 -o /dev/null \"\$URL\" 2>/dev/null	1"
+"$S6H_DIR/inngest-bootstrap.sh	exec /usr/bin/curl -gfsS --max-time 10 \"\$INNGEST_HEARTBEAT_URL\" >/dev/null	1"
+)
+# One TSV record per finding. V: a violating segment (file, segment). C: a stdin config line (file, line number). G: a guard class literal (file, line
+# number). P: a heartbeat-population file (file).
+s6h_scan() { # <root>
+  python3 -I -c '
+import re, subprocess, sys
+root = sys.argv[1]
+files = subprocess.run(["git", "-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard"], capture_output=True, check=True).stdout.decode().split("\0")
+pat = re.compile(r"^apps/web-platform/infra/[^/]+\.sh$")
+cmd = re.compile(r"(?:^|[\s({;|&])(?:/usr/bin/)?curl(?=\s|$)")
+var = re.compile(r"\$\{?(?:URL|hb_url|[A-Z][A-Z0-9_]*HEARTBEAT_URL)(?![A-Za-z0-9_])")
+cfg = re.compile(r"url = \"(?:%s|\$\{?[A-Za-z_]*HEARTBEAT_URL)")
+cls = sys.argv[2]
+for f in sorted(set(files)):
+    if not pat.match(f) or f.endswith(".test.sh"): continue
+    try: raw = open(root + "/" + f, encoding="utf-8", errors="replace").read().split("\n")
+    except OSError: continue
+    logical, cur, start = [], "", 0
+    for i, l in enumerate(raw, 1):
+        s = l.strip()
+        if not cur and s.startswith("#"): continue
+        if not cur: start = i
+        if s.endswith("\\"): cur += s[:-1] + " "; continue
+        logical.append((start, cur + s)); cur = ""
+    if cur: logical.append((start, cur))
+    if not any(re.search(r"heartbeat", t, re.I) for _, t in logical): continue
+    print("P\t" + f)
+    for n, t in logical:
+        if cfg.search(t): print("C\t%s\t%d" % (f, n))
+        if cls in t: print("G\t%s\t%d" % (f, n))
+        u = re.sub(r"<\s*<\(.*?\)", "", t)
+        for seg in re.split(r"\s*(?:\|\||&&|;|\|)\s*", u):
+            seg = " ".join(seg.split())
+            if cmd.search(seg) and var.search(seg): print("V\t%s\t%s" % (f, seg))
+' "$1" "$S6H_CLASS"
+}
+# The verdict over a root. Sets S6H_J_REASONS (empty = GREEN) and S6H_J_FILES. Reasons: floor, argv:<file>, stale-allowlist, cfg:<file>, guard:<file>.
+S6H_J_REASONS=""; S6H_J_FILES=0
+s6h_judge() { # <root>
+  local root="$1" scan a file seg want got c g cl gl f
+  scan="$(s6h_scan "$root")"; S6H_J_REASONS=""
+  S6H_J_FILES="$(grep -c '^P	' <<<"$scan" || true)"
+  [[ "$S6H_J_FILES" -ge "$S6H_FILE_FLOOR" ]] || S6H_J_REASONS+=" floor"
+  # every violating (file, segment) must be allowlisted with exactly its count
+  while IFS=$'\t' read -r got file seg; do
+    [[ -n "$file" ]] || continue
+    want=""; for a in "${S6H_ALLOW[@]}"; do [[ "$a" == "$file"$'\t'"$seg"$'\t'* ]] && want="${a##*$'\t'}"; done
+    [[ "$want" == "$got" ]] || S6H_J_REASONS+=" argv:$file"
+  done < <(awk -F'\t' '$1 == "V" { k = $2 "\t" $3; n[k]++ } END { for (k in n) print n[k] "\t" k }' <<<"$scan")
+  for a in "${S6H_ALLOW[@]}"; do
+    file="${a%%$'\t'*}"; seg="${a#*$'\t'}"; seg="${seg%$'\t'*}"; want="${a##*$'\t'}"
+    got="$(awk -F'\t' -v f="$file" -v s="$seg" '$1 == "V" && $2 == f && $3 == s { n++ } END { print n + 0 }' <<<"$scan")"
+    [[ "$got" == "$want" ]] || S6H_J_REASONS+=" stale-allowlist"
+  done
+  for f in "${S6H_CONVERTED[@]}"; do
+    file="$S6H_DIR/$f"
+    c="$(awk -F'\t' -v f="$file" '$1 == "C" && $2 == f { n++ } END { print n + 0 }' <<<"$scan")"
+    cl="$(awk -F'\t' -v f="$file" '$1 == "C" && $2 == f { print $3; exit }' <<<"$scan")"
+    g="$(awk -F'\t' -v f="$file" '$1 == "G" && $2 == f { n++ } END { print n + 0 }' <<<"$scan")"
+    gl="$(awk -F'\t' -v f="$file" '$1 == "G" && $2 == f { print $3; exit }' <<<"$scan")"
+    [[ "$c" == 1 ]] || S6H_J_REASONS+=" cfg:$file"
+    [[ "$g" == 1 && -n "$gl" && -n "$cl" && "$gl" -lt "$cl" ]] || S6H_J_REASONS+=" guard:$file"
+  done
+  S6H_J_REASONS="${S6H_J_REASONS# }"
+}
+S6H="$TMPD/s6h"; assert_fixture_dir "$S6H"; mkdir -p "$S6H/base" "$S6H/mut"
+( source "$REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh" && git_fixture_env "$S6H/base" || exit 1; git -C "$S6H/base" init -q ) \
+  || fatal "S6-HB could not create the scratch repository"
+mkdir -p "$S6H/base/$S6H_DIR"
+# The scratch tree holds every script the real verdict names, plus two controls: a non-heartbeat probe whose own variable is also called URL (outside the
+# population: it must NOT be flagged) and the already-converted git-data-liveness.sh (a stdin-form heartbeat script that is not in S6H_CONVERTED).
+for f in "${S6H_CONVERTED[@]}" web-zot-consumer-probe.sh inngest-consumer-probe.sh web-private-nic-guard.sh inngest-bootstrap.sh pages-build-identity-probe.sh git-data-liveness.sh; do
+  cp "$REPO_ROOT/$S6H_DIR/$f" "$S6H/base/$S6H_DIR/$f"
+done
+s6h_fresh() { local d="$S6H/mut/$1"; assert_fixture_dir "$d"; rm -rf "$d"; cp -a "$S6H/base" "$d" && printf '%s' "$d"; }
+
+# --- the real tree ---------------------------------------------------------------------
+s6h_judge "$REPO_ROOT"; S6H_REAL_REASONS="$S6H_J_REASONS"; S6H_REAL_FILES="$S6H_J_FILES"
+if [[ -z "$S6H_REAL_REASONS" ]]; then row "S6-HB Guard 2: no heartbeat curl in apps/web-platform/infra/*.sh carries its URL on argv outside the residual allowlist, and each converted script has exactly one guarded stdin config line ($S6H_REAL_FILES heartbeat scripts derived)" ok
+else row "S6-HB Guard 2: a heartbeat URL is on curl argv outside the residual allowlist, an allowlist entry is stale, or a converted script lost its guarded stdin config line" fail "reasons='$S6H_REAL_REASONS' files=$S6H_REAL_FILES"; fi
+S6H_SCAN="$(s6h_scan "$REPO_ROOT")"
+s6h_ncfg() { awk -F'\t' -v f="$S6H_DIR/$1" '$1 == "C" && $2 == f { n++ } END { print n + 0 }' <<<"$S6H_SCAN"; }
+s6h_inpop() { awk -F'\t' -v f="$S6H_DIR/$1" '$1 == "P" && $2 == f { n++ } END { print n + 0 }' <<<"$S6H_SCAN"; }
+for f in "${S6H_CONVERTED[@]}"; do
+  if [[ "$(s6h_ncfg "$f")" -eq 1 && "$(s6h_inpop "$f")" -eq 1 ]]; then row "S6-HB converted $f: in the derived heartbeat population, exactly one stdin config line (the single guarded transport), no violating segment" ok
+  else row "S6-HB converted $f: not in the population, or not exactly one stdin config line" fail "cfg=$(s6h_ncfg "$f") inpop=$(s6h_inpop "$f")"; fi
+done
+S6H_ALLOW_FILES="$(for a in "${S6H_ALLOW[@]}"; do printf '%s\n' "${a%%$'\t'*}"; done | sort -u | grep -c . || true)"
+if [[ "${#S6H_ALLOW[@]}" -eq "$S6H_ALLOW_CEIL" && "$S6H_ALLOW_FILES" -eq "$S6H_ALLOW_CEIL" ]]; then row "S6-HB allowlist ceiling: exactly $S6H_ALLOW_CEIL residual entries in $S6H_ALLOW_FILES distinct files (it shrinks by deletion only; #10093 converts the three probe scripts)" ok
+else row "S6-HB allowlist ceiling: the residual allowlist grew or repeats a file" fail "entries=${#S6H_ALLOW[@]} files=$S6H_ALLOW_FILES want=$S6H_ALLOW_CEIL"; fi
+
+# --- mutation rows (the SAME scan over a scratch tree) ------------------------------------
+# M1 (Guard 2 row 1): the URL back on argv in a converted script.
+S6H_M1="$(s6h_fresh m1)"
+if s6_edit "$S6H_M1/$S6H_DIR/web-git-data-probe.sh" '--config - 2>/dev/null < <(printf '"'"'url = "%s"\n'"'"' "$URL"); }' '"$URL" 2>/dev/null; }'; then
+  s6h_judge "$S6H_M1"
+  if [[ "$S6H_J_REASONS" == *"argv:$S6H_DIR/web-git-data-probe.sh"* && "$S6H_J_REASONS" == *"cfg:$S6H_DIR/web-git-data-probe.sh"* ]]; then row "S6-HB mutation 1: the URL back on curl argv in a converted script is RED (an argv violation, and the script's stdin config line is gone)" ok
+  else row "S6-HB mutation 1: an argv heartbeat URL in a converted script is not caught" fail "reasons='$S6H_J_REASONS'"; fi
+else row "S6-HB mutation 1: the argv edit did not land (re-anchor with web-git-data-probe.sh)" fail "no transport line once in the scratch copy"; fi
+# M3 (Guard 2 row 3): a second heartbeat curl outside the guarded line after a compliant first. Both spellings: URL on argv, and an unguarded second stdin config line.
+S6H_M3="$(s6h_fresh m3)"; assert_fixture_dir "$S6H_M3"; printf '%s\n' '[ -n "$hb_url" ] && curl -fsS "$hb_url" >/dev/null 2>&1' >> "$S6H_M3/$S6H_DIR/luks-monitor.sh"
+s6h_judge "$S6H_M3"; S6H_M3A="$S6H_J_REASONS"
+S6H_M3B="$(s6h_fresh m3b)"; assert_fixture_dir "$S6H_M3B"; printf '%s\n' "curl --disable --noproxy '*' -gfsS --config - >/dev/null < <(printf 'url = \"%s\"\\n' \"\$hb_url\")" >> "$S6H_M3B/$S6H_DIR/luks-monitor.sh"
+s6h_judge "$S6H_M3B"; S6H_M3BR="$S6H_J_REASONS"
+if [[ "$S6H_M3A" == *"argv:$S6H_DIR/luks-monitor.sh"* && "$S6H_M3BR" == *"cfg:$S6H_DIR/luks-monitor.sh"* ]]; then row "S6-HB mutation 3: a second heartbeat curl after the compliant one is RED, both as an argv URL and as a second (unguarded) stdin config line" ok
+else row "S6-HB mutation 3: a second heartbeat curl in a converted script is not caught" fail "argv='$S6H_M3A' cfg='$S6H_M3BR'"; fi
+# M-guard: the shape-guard class altered or missing in a converted script.
+S6H_MG="$(s6h_fresh mg)"
+if s6_edit "$S6H_MG/$S6H_DIR/luks-monitor.sh" "$S6H_CLASS" '[!A-Za-z0-9]'; then s6h_judge "$S6H_MG"; S6H_MGR="$S6H_J_REASONS"; else S6H_MGR="edit-missed"; fi
+if [[ "$S6H_MGR" == *"guard:$S6H_DIR/luks-monitor.sh"* ]]; then row "S6-HB mutation (guard): a converted script without the exact shape-guard class is RED" ok
+else row "S6-HB mutation (guard): a missing or altered shape-guard class is not caught" fail "reasons='$S6H_MGR'"; fi
+# M-stale: converting a residual site without deleting its allowlist entry is RED (and nothing else: the converted site is compliant).
+S6H_MS="$(s6h_fresh ms)"
+if s6_edit "$S6H_MS/$S6H_DIR/web-private-nic-guard.sh" '-o /dev/null "$URL" 2>/dev/null; }' '-o /dev/null --config - 2>/dev/null < <(printf '"'"'url = "%s"\n'"'"' "$URL"); }'; then
+  s6h_judge "$S6H_MS"
+  if [[ "$S6H_J_REASONS" == "stale-allowlist" ]]; then row "S6-HB mutation (stale): converting a residual probe script without deleting its allowlist entry is RED (stale-allowlist, and nothing else)" ok
+  else row "S6-HB mutation (stale): a stale allowlist entry is not (only) reported" fail "reasons='$S6H_J_REASONS'"; fi
+else row "S6-HB mutation (stale): the residual edit did not land (re-anchor with web-private-nic-guard.sh)" fail "no argv beat line once"; fi
+# M-grow: a new argv heartbeat curl in a file outside the allowlist, and one more occurrence inside an allowlisted file (the allowlist names counts).
+S6H_MN="$(s6h_fresh mn)"; assert_fixture_dir "$S6H_MN"; printf '%s\n' 'NOTE=heartbeat' 'curl -fsS "$HB_HEARTBEAT_URL" >/dev/null' > "$S6H_MN/$S6H_DIR/zz-new-heartbeat.sh"
+s6h_judge "$S6H_MN"; S6H_MNA="$S6H_J_REASONS"
+S6H_MN2="$(s6h_fresh mn2)"; assert_fixture_dir "$S6H_MN2"; printf '%s\n' '  curl -fsS -m 10 -o /dev/null "$URL" 2>/dev/null' >> "$S6H_MN2/$S6H_DIR/web-zot-consumer-probe.sh"
+s6h_judge "$S6H_MN2"; S6H_MNB="$S6H_J_REASONS"
+if [[ "$S6H_MNA" == *"argv:$S6H_DIR/zz-new-heartbeat.sh"* && "$S6H_MNB" == *"argv:$S6H_DIR/web-zot-consumer-probe.sh"* ]]; then row "S6-HB mutation (growth): a new heartbeat script with its URL on argv is RED, and so is one more occurrence inside an allowlisted file" ok
+else row "S6-HB mutation (growth): the residual allowlist can grow silently" fail "new='$S6H_MNA' extra='$S6H_MNB'"; fi
+# M-floor: the scanned population renamed away: 0 heartbeat scripts must be RED, never a clean bill.
+S6H_MF="$(s6h_fresh mf)"; sed -i -E 's/[Hh][Ee][Aa][Rr][Tt][Bb][Ee][Aa][Tt]/hrtbt/g' "$S6H_MF/$S6H_DIR"/*.sh
+s6h_judge "$S6H_MF"
+if [[ "$S6H_J_FILES" -eq 0 && "$S6H_J_REASONS" == *floor* ]]; then row "S6-HB mutation (floor): with every heartbeat word renamed the scan sees 0 scripts and the floor is RED" ok
+else row "S6-HB mutation (floor): a scan that sees nothing is not RED" fail "files=$S6H_J_FILES reasons='$S6H_J_REASONS'"; fi
+# Must-PASS (Guard 2 row 8, population half): the control probes. A non-heartbeat probe whose variable is also named URL is outside the population; the
+# local health curl next to a heartbeat is not a heartbeat variable. The unmodified scratch tree is GREEN first (so the controls are the only change).
+s6h_judge "$S6H/base"; S6H_BASE_REASONS="$S6H_J_REASONS"; S6H_BASE_FILES="$S6H_J_FILES"
+S6H_MP="$(s6h_fresh mp)"; assert_fixture_dir "$S6H_MP"
+printf '%s\n' 'NOTE=heartbeat' 'INNGEST_HEALTH_URL="${X:-http://127.0.0.1:8288/health}"' 'curl -fsS "$INNGEST_HEALTH_URL" >/dev/null' > "$S6H_MP/$S6H_DIR/zz-health-next-to-heartbeat.sh"
+printf '%s\n' 'URL="${PROBE_URL:?}"' 'curl -sS --max-time 20 "$URL" >/dev/null' > "$S6H_MP/$S6H_DIR/zz-plain-url-probe.sh"
+s6h_judge "$S6H_MP"
+if [[ -z "$S6H_BASE_REASONS" && -z "$S6H_J_REASONS" && "$S6H_J_FILES" -eq $((S6H_BASE_FILES + 1)) ]]; then row "S6-HB must-pass: a local health curl beside a heartbeat, and a non-heartbeat probe whose variable is also named URL, are GREEN (only the first joins the population)" ok
+else row "S6-HB must-pass: a control probe is flagged, or the population moved unexpectedly" fail "base='$S6H_BASE_REASONS' reasons='$S6H_J_REASONS' files=$S6H_J_FILES base_files=$S6H_BASE_FILES"; fi
+echo "=== stage S6-HB: Guard 2 rows (heartbeat URL off curl argv: derived population, residual allowlist, converted-script identity) done ==="
+
+# =====================================================================================
 # CONTROLS FOR THE VERDICT-OWNING HELPERS. Every helper that names failed checks (bk_check, bs_refusal, bs_ok_call, hmx_refused, evaluate_hmac,
 # evaluate_body) is driven here with a FABRICATED row directory that is green except for exactly ONE doctored fact, and the row requires the helper's
 # output to be exactly that one check's name. A clause with several alternatives (a regex `a|b|c`, a loop over values, an `||` of two files) gets one
@@ -6859,7 +7029,8 @@ SELFTEST_PASSES=0
 # 730 -> 752 at #9757 (held-back HMAC arms, census allowance, leads (a)(b)(g)): the MEASURED green total (752 passed, 0 failed; the self-test rows are
 # retracted, so SELFTEST_PASSES stays 0). Derived from the run, never estimated.
 # 752 -> 770 at #9757 (stage S6, Guard 3: htpasswd password off argv): the 18 S6 rows, measured (770 passed, 0 failed).
-EXPECTED_TESTS=770
+# 770 -> 781 at #9757 (stage S6-HB, Guard 2: heartbeat URL off curl argv, derived population): the 11 S6-HB rows, measured (781 passed, 0 failed).
+EXPECTED_TESTS=781
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2
