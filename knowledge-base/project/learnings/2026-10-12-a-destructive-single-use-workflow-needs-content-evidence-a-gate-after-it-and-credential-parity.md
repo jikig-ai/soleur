@@ -57,6 +57,11 @@ list for any future workflow that deletes a volume on evidence.
 
 ## Session Errors
 
-None in the diff. One measured deviation from the plan: the incremental shard-manifest regeneration also added
-floor rows for seven suites that main registers but its manifests lacked, and the infra runner derives its set from
-committed files only, so the infra regeneration had to run after the first local commit.
+None violated a hard rule. Each item below was caught by a check that ran, not by luck.
+
+1. **Counts written from memory** (a PJ_TRIPLES delta, an infra manifest row claim, a floor's arithmetic) were wrong in the first PR-body draft and one code comment. Caught by the code-quality seat. **Prevention:** derive every number in the PR body and in floor comments from a command run AFTER the last merge of main, and paste the command beside it.
+2. **The infra shard-manifest regeneration read committed files only** (`git ls-tree HEAD`), so the first run after `git rm` kept the two deleted suites' rows, and the incremental generator also added floor rows for seven suites main registers but its manifests lacked. **Prevention:** commit the deletions locally before `regenerate-shard-manifest.py --group infra`, then read the diff for rows the plan did not expect.
+3. **Widening the new census to match any case also matched a Terraform `-target` address** (`github_actions_secret.doppler_token_workspaces_luks_marker` in `apply-web-platform-infra.yml`); the real-tree row caught it on the first run. **Prevention:** keep one real-tree row beside the synthetic ones, and scope a case-insensitive match to the context that is case-insensitive (`secrets.`), not to the whole line.
+4. **Two merges of origin/main conflicted on single-literal hot spots** (the `PROMOTED_FILES` regex line and the `PJ_TRIPLES` count), each resolved by taking main's line and re-applying the PR's one-token change. **Prevention:** merge main before the first push of a deletion PR and again before review; re-run the owning suite after each resolution instead of trusting the textual merge.
+5. **`bun test` was pointed at a vitest-only suite path and `$TMPDIR` was unset** (one wasted run each). **Prevention:** none beyond the sharp edge already in the review skill; one-off.
+6. **semgrep-core crashed on a 430 KB single test file.** **Prevention:** scan the added lines of a very large file instead (done); a non-zero semgrep exit with no findings is not a clean result.
