@@ -54,8 +54,8 @@ residual-name grep, and sweep the claim ("the probe reports X") rather than the 
 5. **Decision-class category invented instead of copied.** Recovery: the ruling gate rejected it;
    changed to `operator (production-mutating)`. **Prevention:** copy the category word from
    `technical-ruling-delegation.md` section 1 verbatim.
-6. **Draft-run `test` row read as red before checking it was the draft run's.** No change needed;
-   the lesson is already in the operator brief (`ci-head-verdict.sh verdict <PR>`).
+6. **Draft-run `test` row read as red before checking it was the draft run's.** No change needed.
+   **Prevention:** run `plugins/soleur/scripts/ci-head-verdict.sh verdict <PR>` first; `never-ready` or `pending-full` means the `test` row is the draft run's.
 
 ## Tags
 category: workflow-issues
