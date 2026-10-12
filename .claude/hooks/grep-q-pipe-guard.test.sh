@@ -1287,7 +1287,7 @@ FNR == 1 {
     s = l
     while (match(s, PATHRE)) {
       m = substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH)
-      sub(/"?[ \t]?$/, "", m); sub(/^.*\//, "", m); addfp(file, m)
+      sub(/["; \t]+$/, "", m); sub(/^.*\//, "", m); addfp(file, m)   # the name, without the quote, the semicolon or the blank that ended the match (R7: `> "$d/jq"; chmod` was recorded as jq";)
     }
   }
   if (ist) {
