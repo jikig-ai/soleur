@@ -16,3 +16,9 @@ None blocking (see plan Session Summary: three gh issue create calls refused by 
 
 ### Components Invoked
 soleur:plan, soleur:plan-review, soleur:deepen-plan
+
+## Work Phase (2026-10-12)
+- C1 outcome: the inngest-bootstrap.sh heartbeat commit was PEELED from this PR and kept on the local side branch keep/9757-inngest-heartbeat-argv (sha b48247d559). Reason (measured by slice 4): editing inngest-bootstrap.sh makes cloud-init-inngest-bootstrap.test.sh GuardA red by design until the minted tag and pin bump merge, so the commit cannot be green inside this PR. It ships as its own PR; #9757 item 2 stays partly open (Ref, not Closes).
+- C6 outcome: registry template (B1, B2) excluded per the operator ruling; the S6 htpasswd row carries the two registry files as a residual allowlist that the follow-up PR deletes.
+- Slice commits so far: inspect-evidence xtrace refusal; linkedin write-env + canonical HMAC docs; held-back HMAC arms + census + leads (a)(b)(g); workflow htpasswd + S6 + htpasswd-stdin suite; heartbeat URLs for web-git-data-probe and luks-monitor.
+- Slice 4 deviation to record in the ADR addendum: the heartbeat curls use --disable --noproxy '*' (lint Rule D forces it) instead of the plan's -q-only; the plan's text saying otherwise is superseded.
