@@ -1050,6 +1050,11 @@ main_rc=$?
 # first, so tunnel.tf's prose mention of `connection { host }` is not a block. .tf.json files are
 # parsed as JSON and every `connection` object (or list of objects) at any depth is a block.
 #
+# RESIDENCE is fleet-symmetric (#9998): §1's sibling census is server.tf-scoped, so ANY block
+# dialing web["web-N"] outside server.tf escapes it -- the fleet_elsewhere arm flags every such
+# block, and the EXT_RESIDENCE table is the single exemption surface ((file, resource)- and
+# host-scoped, reason-mandatory, with a stale-entry arm).
+#
 # Floors: at least 23 blocks (19 in server.tf incl. web_1_host_key_probe, 1 in
 # ci-ssh-key.tf, 3 in workspaces-luks.tf) and at least 70 scanned files. The local
 # must be defined exactly once, from
@@ -1133,7 +1138,7 @@ def json_blocks(node, path):
         for i, v in enumerate(node):
             yield from json_blocks(v, f"{path}[{i}]")
 
-blocks = []   # (file:line, body-or-dict)
+blocks = []   # (file:line, body-or-dict, enclosing "type.name" or None)
 local_defs = []   # web_1_ssh_host_key definitions
 local_defs_2 = [] # web_2_ssh_host_key definitions (#9151)
 for f in files:
@@ -1146,7 +1151,8 @@ for f in files:
             no(f"G2: {rel} is not valid JSON ({e}); its connection blocks cannot be checked")
             continue
         for loc, c in json_blocks(doc, ""):
-            blocks.append((f"{rel}:{loc}", c))
+            rm = re.match(r'^\.resource\.([^.]+)\.([^.]+)\.', loc)
+            blocks.append((f"{rel}:{loc}", c, f"{rm.group(1)}.{rm.group(2)}" if rm else None))
         def defines_local(node, key):
             if isinstance(node, dict):
                 return key in node or any(defines_local(v, key) for v in node.values())
@@ -1159,9 +1165,18 @@ for f in files:
             local_defs_2.append((f"{rel}:json", ""))
         continue
     src = strip_hcl(raw)
+    # Enclosing-resource attribution for the residence arm: HCL resources do not
+    # nest, so the last `resource "<type>" "<name>"` header before a block's offset
+    # is its container (ANY type -- a connection {} inside a null_resource or
+    # hcloud_server attributes the same way; residence is a property of the
+    # connection block, not the resource type). A block with no preceding header is
+    # unattributable -> None, which matches no EXT_RESIDENCE entry (fail-closed).
+    res_hdrs = [(m.start(), f"{m.group(1)}.{m.group(2)}")
+                for m in re.finditer(r'resource\s+"([^"\s]+)"\s+"([^"\s]+)"', src)]
     for m in re.finditer(r'(?<![\w.])connection\s*\{', src):
         line = src.count('\n', 0, m.start()) + 1
-        blocks.append((f"{rel}:{line}", block_body(src, m.end())))
+        addr = next((a for pos, a in reversed(res_hdrs) if pos < m.start()), None)
+        blocks.append((f"{rel}:{line}", block_body(src, m.end()), addr))
     for m in re.finditer(r'(?m)^\s*web_1_ssh_host_key\s*=', src):
         line = src.count('\n', 0, m.start()) + 1
         # Bound at the END OF THE LOCALS BLOCK, not a fixed width: the web-2 twin lives in a
@@ -1179,7 +1194,7 @@ def is_winrm(b):
         return b.get("type") == "winrm"
     return bool(re.search(r'(?m)^\s*type\s*=\s*"winrm"', b))
 
-ssh_blocks = [(loc, b) for loc, b in blocks if not is_winrm(b)]
+ssh_blocks = [(loc, b, a) for loc, b, a in blocks if not is_winrm(b)]
 FLOOR_BLOCKS = 23  # +1 #9151: deploy_pipeline_fix_web2; measured 23 = 19 server.tf + 1 ci-ssh-key.tf + 3 workspaces-luks.tf (#8632/#8706/#9123)
 if len(ssh_blocks) >= FLOOR_BLOCKS:
     ok(f"G2: swept {len(ssh_blocks)} SSH connection blocks (floor {FLOOR_BLOCKS})")
@@ -1210,8 +1225,17 @@ def dials_web_2(b):
     text = json.dumps(b) if isinstance(b, dict) else b
     return 'hcloud_server.web["web-2"]' in re.sub(r'\s+', '', text).replace('\\"', '"')
 
+# Fleet-wide dialer set: the same normalization as dials_web_1/dials_web_2 but the
+# host is ANY `web-N`, not just the two declared FLEET_SSH_HOSTS -- a future web-3
+# dialer outside server.tf is exactly the fail-closed case (the roster is declared,
+# not discovered; mirrors §1's _DIAL_HOST_RE / _fleet_extra shape).
+def dials_fleet(b):
+    text = json.dumps(b) if isinstance(b, dict) else b
+    return set(re.findall(r'hcloud_server\.web\["(web-\d+)"\]',
+                          re.sub(r'\s+', '', text).replace('\\"', '"')))
+
 bad_count, bad_value, bad_web1, bad_web2 = [], [], [], []
-for loc, b in ssh_blocks:
+for loc, b, _addr in ssh_blocks:
     keys = host_keys(b)
     if len(keys) != 1:
         bad_count.append(f"{loc} (host_key x{len(keys)})")
@@ -1245,18 +1269,90 @@ else:
     no("G2: web-2 connection block pins host_key to something other than "
        "local.web_2_ssh_host_key: " + ", ".join(bad_web2))
 
-# Web-2 dialer residence (review enumeration): §1's sibling census reads server.tf
-# only, so a terraform_data dialing web["web-2"] born in another .tf/.tf.json would
-# face host_key rules here but escape the credential-boundary and destination
-# checks entirely. Assert every web-2-dialing connection block lives in
-# apps/web-platform/infra/server.tf; §1 then pins it to the sibling alone.
-w2_elsewhere = [loc for loc, b in ssh_blocks
-                if dials_web_2(b) and not loc.startswith("apps/web-platform/infra/server.tf:")]
-if not w2_elsewhere:
-    ok("G2: every web-2-dialing connection block lives in apps/web-platform/infra/server.tf")
+# Connection blocks that legitimately dial a fleet host from OUTSIDE server.tf:
+# the residence allowance is (file, resource)-scoped AND host-scoped, so a second
+# phantom block inside an allowlisted file, or a dial to a host the entry does not
+# name, is still a finding. `reason` is mandatory -- an empty one fails the stale
+# arm below, exactly as §5's check_allowlist enforces reason.strip() non-empty.
+# (#9998 -- the w2_elsewhere arm was web-2-only and left web-1 and future web-N
+# dialers outside server.tf unclassified.)
+EXT_RESIDENCE = {
+    "apps/web-platform/infra/ci-ssh-key.tf": {
+        "root_authorized_keys": {
+            "hosts": frozenset({"web-1"}),
+            "reason": "operator-local one-off authorized_keys install on web-1 "
+                      "(the file's own header scopes it to operator-local apply), "
+                      "not fleet provisioning",
+        },
+    },
+    "apps/web-platform/infra/workspaces-luks.tf": {
+        "luks_monitor_token_install": {
+            "hosts": frozenset({"web-1"}),
+            "reason": "web-1 LUKS boot-unlock chain member -- installs the monitor "
+                      "token on web-1 only, not fleet provisioning",
+        },
+        "luks_monitor_install": {
+            "hosts": frozenset({"web-1"}),
+            "reason": "web-1 LUKS boot-unlock chain member -- installs the monitor "
+                      "helper + units on web-1 only, not fleet provisioning",
+        },
+        "workspaces_boot_unlock_install": {
+            "hosts": frozenset({"web-1"}),
+            "reason": "web-1 LUKS boot-unlock chain member -- installs the reopen "
+                      "units on web-1 only, not fleet provisioning",
+        },
+    },
+}
+
+# Fleet dialer residence (#9998): §1's sibling census reads server.tf only, so a
+# connection block dialing any web["web-N"] born in another .tf/.tf.json faces the
+# host_key rules here but escapes the credential-boundary and destination checks
+# entirely. Assert every fleet-dialing block either lives in
+# apps/web-platform/infra/server.tf -- §1 then pins it to the sibling alone -- or
+# is a declared EXT_RESIDENCE member whose host set covers what it dials.
+fleet_elsewhere = []
+for loc, b, addr in ssh_blocks:
+    fpath = loc.split(':', 1)[0]
+    dialed = dials_fleet(b)
+    if not dialed or fpath == "apps/web-platform/infra/server.tf":
+        continue
+    entry = EXT_RESIDENCE.get(fpath, {}).get(addr.split('.', 1)[-1] if addr else None)
+    if entry and dialed <= entry["hosts"]:
+        continue
+    fleet_elsewhere.append(f"{loc} ({addr or 'unattributed'} dials {sorted(dialed)})")
+if not fleet_elsewhere:
+    ok("G2: every fleet-dialing connection block lives in apps/web-platform/infra/server.tf "
+       "or a declared EXT_RESIDENCE entry")
 else:
-    no("G2: web-2-dialing connection block(s) outside server.tf — they escape the "
-       "sibling-class credential/destination checks in §1: " + ", ".join(w2_elsewhere))
+    no("G2: fleet-dialing connection block(s) outside server.tf — they escape the "
+       "sibling-class credential/destination checks in §1: " + ", ".join(fleet_elsewhere)
+       + ". Declare an EXT_RESIDENCE entry (hosts + a reason) or move the resource "
+         "into server.tf.")
+
+# Allowance hygiene, folded into one arm (the §5 check_allowlist precedent): an
+# EXT_RESIDENCE entry that outlives the resource it names, or whose reason is
+# empty, is a finding. The mutation battery mutates .tf inputs only and cannot
+# reach this table, so the invariant fails loudly HERE at guard runtime; the
+# reason-mandatory half is verified by review like ALLOWLIST/ONLY_JUSTIFIED.
+stale_ext = []
+for fpath, members in EXT_RESIDENCE.items():
+    for rname, entry in members.items():
+        if not entry["reason"].strip():
+            stale_ext.append(f"{fpath}:{rname} (empty reason)")
+            continue
+        if not any(loc.split(':', 1)[0] == fpath and addr is not None
+                   and addr.split('.', 1)[-1] == rname
+                   and dials_fleet(b) & entry["hosts"]
+                   for loc, b, addr in ssh_blocks):
+            stale_ext.append(f"{fpath}:{rname}")
+if not stale_ext:
+    n_ext = sum(len(m) for m in EXT_RESIDENCE.values())
+    ok(f"G2: every EXT_RESIDENCE entry resolves to a swept fleet-dialing block and "
+       f"carries a reason ({n_ext} entries)")
+else:
+    no("G2: stale EXT_RESIDENCE entry — the resource it names no longer sweeps a "
+       "matching fleet-dialing connection block (or its reason is empty): "
+       + ", ".join(stale_ext))
 
 # The local is the ONE place the committed pin enters Terraform: defined once, read from the
 # committed file, through one() (exactly one key line) and the anchored ECDSA-P256 regex().

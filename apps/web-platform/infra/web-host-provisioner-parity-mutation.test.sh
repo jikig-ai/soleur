@@ -1286,6 +1286,80 @@ resource "terraform_data" "g2_phantom_web2" {
 """
 '
 
+# A web-1 dialer WITH the correct local in a DIFFERENT .tf satisfies every host_key
+# arm but escapes §1's server.tf-scoped census — the fleet residence arm fires
+# (#9998: G2-18 proved web-2; this is the symmetric web-1 escape).
+expect_red "G2-19 (a web-1-dialing block WITH the correct local in a DIFFERENT .tf)" tunnel.tf \
+  "outside server.tf" '
+s += """
+resource "terraform_data" "g2_phantom_web1" {
+  connection {
+    type = "ssh"
+    host = hcloud_server.web["web-1"].ipv4_address
+    user = "root"
+    host_key = local.web_1_ssh_host_key
+  }
+  provisioner "remote-exec" {
+    inline = ["set -e", "true"]
+  }
+}
+"""
+'
+
+# The EXT_RESIDENCE allowance is (file, resource)-scoped: workspaces-luks.tf is an
+# allowlisted FILE, but a NEW phantom resource inside it matches no declared member.
+expect_red "G2-20 (a second phantom web-1 dialer in an allowlisted file)" workspaces-luks.tf \
+  "outside server.tf" '
+s += """
+resource "terraform_data" "g2_phantom_wl" {
+  connection {
+    type = "ssh"
+    host = hcloud_server.web["web-1"].ipv4_address
+    user = "root"
+    host_key = local.web_1_ssh_host_key
+  }
+  provisioner "remote-exec" {
+    inline = ["set -e", "true"]
+  }
+}
+"""
+'
+
+# And host-scoped: workspaces-luks.tf's entries cover web-1 only, so a web-2
+# dialer in the same allowlisted file is still an escape.
+expect_red "G2-21 (a web-2 dialer in an allowlisted file)" workspaces-luks.tf \
+  "outside server.tf" '
+s += """
+resource "terraform_data" "g2_phantom_wl2" {
+  connection {
+    type = "ssh"
+    host = hcloud_server.web["web-2"].ipv4_address
+    user = "root"
+    host_key = local.web_2_ssh_host_key
+  }
+  provisioner "remote-exec" {
+    inline = ["set -e", "true"]
+  }
+}
+"""
+'
+
+# The stale-allowance arm: delete the connection block an EXT_RESIDENCE entry
+# covers and the entry outlives the resource it names (#9998 G2-22).
+expect_red "G2-22 (residence allowance entry gone stale)" ci-ssh-key.tf \
+  "stale EXT_RESIDENCE" '
+old = """  connection {
+    type     = "ssh"
+    host     = hcloud_server.web["web-1"].ipv4_address
+    user     = "root"
+    agent    = true
+    host_key = local.web_1_ssh_host_key
+  }
+"""
+assert old in s
+s = s.replace(old, "", 1)
+'
+
 expect_red "G2-4 (a new connection block without host_key in a DIFFERENT .tf)" tunnel.tf \
   "tunnel.tf:" '
 s += """
@@ -1478,7 +1552,7 @@ fi
 # the ADR-193 defect: a floor whose failure arm routes through the suite's own verdict helper
 # cannot witness that helper being neutered -- the assertion rows go quiet AND so does the floor
 # meant to notice the quiet. Each carries a DISTINCT message so a failure says WHICH tripped.
-FLOOR=58  # +5 #9151 mutation arms (M4a, M4b, G2-15, G2-16, G2-17; G2-C4 is a green control and does not increment) +7 review-pass arms (M2b, M4c, M4d, M4e, M4f, M4g, G2-18); +1 net #9970: control-C moved to expect_green (-1), M4j+M4k added (+2), control-D is a green control (+0). Re-derive from the battery log when adding rows.
+FLOOR=62  # +5 #9151 mutation arms (M4a, M4b, G2-15, G2-16, G2-17; G2-C4 is a green control and does not increment) +7 review-pass arms (M2b, M4c, M4d, M4e, M4f, M4g, G2-18); +1 net #9970: control-C moved to expect_green (-1), M4j+M4k added (+2), control-D is a green control (+0); +4 #9998 residence rows (G2-19..22). Re-derive from the battery log when adding rows.
 if (( mutations_run < FLOOR )); then
   printf '\n[FATAL] anti-vacuity floor (mutations): only %d landed, attributed mutation(s) ran, expected >= %d.\n' \
     "$mutations_run" "$FLOOR" >&2
