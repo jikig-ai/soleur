@@ -23,3 +23,12 @@
 
 ## Technical Rulings
 - cto_spawns=1 (one batched `soleur:engineering:cto` spawn, 8 rows ruled 2026-10-12; 7 confirmed, row 5 corrected: enclosing-resource resolution is type-generic, not `terraform_data`-pinned — plan amended)
+
+## Work Phase
+- Status: implementation complete, suites green
+- Guard: `web-host-provisioner-parity.test.sh` 18+10 passed on the real tree (fleet_elsewhere + EXT_RESIDENCE arms live, 4 seeded entries resolve)
+- Battery: `web-host-provisioner-parity-mutation.test.sh` 98/98 — G2-19..22 red on their anchors, G2-18 `outside server.tf` anchor intact, FLOOR 62 satisfied
+- §1 confirmed untouched (srv-scoped census unchanged)
+- lint-shell-capture-exit --baseline: 0 new findings on both touched files
+- Implementation commit: 1ea385f11e
+- `test-all.sh --affected` selected=161/611 (infra diff → nested run-registered-suites); queued behind sibling runs (ticket 14) at work-phase end
