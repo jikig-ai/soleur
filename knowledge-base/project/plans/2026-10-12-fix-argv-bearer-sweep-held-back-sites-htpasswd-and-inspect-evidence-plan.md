@@ -15,6 +15,25 @@ lane: cross-domain
 
 # fix(security): argv-bearer sweep, held-back HMAC and heartbeat sites, htpasswd argv, inspect-evidence xtrace refusal
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-12 (after plan-review by DHH, Kieran and code-simplicity; CTO assessment; then security-sentinel, architecture-strategist, observability-coverage-reviewer and test-design-reviewer; gates 4.6-4.12 and 4.55 run).
+
+### Key improvements
+
+1. **The registry template merge replaces the production registry host automatically** (`registry-host-replace-dispatch.yml` has a push trigger on `cloud-init-registry.yml`; the first draft said "no live effect"). The registry slice is now the last, one-commit, peel-before-merge slice, recommended as its own PR, with the first-live-execution risk of the boot block retired offline on the shipped host image.
+2. **The inngest heartbeat body is POSIX `sh`** (dash): process substitution would have killed the live beat. It uses a heredoc; the shape guard is a negated-class `case`, measured under dash; the three scripts no longer share a byte-identical copy.
+3. **The census allowance moved to the single code view** both regex sites already read through, as a fixed-string whole-line match (an ERE built from the canonical python body is fragile), and the S4 stage's own hold-back rows, the `EXPECTED_TESTS` floor and the S2-A literals are named.
+4. **Coupling table completed:** `web-platform-release.yml` fires on every `apps/web-platform/**` and non-docs plugin change (a production app deploy); squash-merge means per-commit staging is a pre-merge peel point only.
+5. **Test placement corrected:** the real-binary/container rows move to a new infra suite (the `scripts` shard asserts no docker); several existing negative rows go vacuous once the URL leaves argv and are enumerated; `web-git-data-probe.test.sh` never executed its transport line.
+6. **Measured:** `htpasswd -i` on `ubuntu:24.04` and `httpd:2.4-alpine` (exit codes, hash cross-verification, 72-byte truncation parity, 255-byte stdin limit); small heredocs are pipes in dash, busybox and bash 5; curl's config parser treats only `\` and `"` specially inside quotes.
+
+### New considerations discovered
+
+- `/etc/zot/htpasswd` is created under the default umask and chmod'd after (a world-readable window the rewritten lines can close at no byte cost).
+- Same-class residuals (#10093): three more heartbeat probe scripts, the registry heartbeat curls, the Cloudflare admin token in `apps/cla-evidence/infra/object_lock.tf`, the `psql "$DATABASE_URL"` class, and agent-executed markdown bearer snippets.
+- The 60 s inngest heartbeat would flood a persistent refusal marker; it reuses the hourly rate limiter.
+
 ## Overview
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
@@ -118,6 +137,8 @@ ADR corpus: ADR-280 names the held-back sites as an S4 obligation and carries a 
 - `2026-09-11-the-gate-i-built-for-a-dark-host-was-blind-to-the-byte-shape-of-nothing.md`: `--changed` drops the baseline for
   any touched file, so debt is paid in the PR that touches it. Run the changed-file lint first (Phase 0).
 
+**Deepen-plan gate evaluation (2026-10-12).** 4.6 user-brand impact: present, `aggregate pattern`. 4.7 observability: five fields present, probe command passes `probe-verb-gate.sh`, has no shell-active character, and prints `FAIL` on `main` by design (the RED reading) and `OK` once Phase 4 lands. 4.8 PAT sweep: no match. 4.9 UI wireframe: no UI surface. 4.10 encryption posture: the path pattern `cloud-init.*\.ya?ml$` matches `cloud-init-registry.yml`, but the plan introduces no persistent store and no connection (it changes how a password reaches `htpasswd` inside an existing boot step), so per plan Phase 2.11 it skips; recorded here rather than as a vacuous section. 4.11 guard contract: `lint-guard-contract.py` green, 4 entries; assembly reads structural (chokepoints named). 4.12 scope check: one unfenced section, no `unmapped` cell, no BLOCKED marker. 4.55 downtime: addressed in `## Downtime & Cutover`. Founder-stated check: skipped (headless).
+
 **Measured now (not argued).** On `httpd:2.4-alpine`: `printf pw | htpasswd -Bin user` hashes; `printf pw | htpasswd -vi file
 user` verifies with exit 0 (match), 3 (mismatch), 6 (user absent), 1 (file unreadable) — the same codes the probe branches
 on; a trailing newline on stdin still matches; empty stdin reports mismatch (3). On `bash:3.2.57`: the community HMAC helper
@@ -156,15 +177,19 @@ same-uid and root readers of `/proc/<pid>/environ`, and the child environment of
   No openssl flag reads an HMAC key from stdin, so the env-prefix form is the only argv-safe one.
 - **Census allowance (the ask's "two census regexes").** Both regex sites (`apps/web-platform/infra/cutover-inngest-workflow.test.sh`: the
   `#6617 probe arms make exactly 2 network/tool calls` assertion ~1850 and `check_rpg_tool_count` ~3365) already read the arms through ONE code view,
-  `_probe_arms_code_of` (~1815: comments dropped, echo arguments emptied, continuations joined). Put the allowance there, as a final filter that deletes
-  lines matching `^[[:space:]]*SIG=\$\(printf '' \| <canonical-hmac-text>\) \|\| SIG=""$` (anchored on both ends, so any appended `; python3 ...` or
-  `; curl ...` leaves the line in the view and the count moves). Neither regex then needs to change, and they cannot drift apart. The deviation from the
+  `_probe_arms_code_of` (~1815: comments dropped, echo arguments emptied, continuations joined). Put the allowance there, as a final filter that deletes, after trimming leading
+  whitespace, only lines **byte-equal to the two exact permitted forms** (the canonical assignment with and without its `|| SIG=""` tail), by fixed-string whole-line
+  comparison (`grep -vxF -f <forms>` or `awk '$0==c'`), never an ERE built from the canonical text (its python body carries `.`, `(`, `|` and `[`, and one unescaped
+  `|` makes an anchor bind to a single branch). Any appended `; python3 ...` or `; curl ...` leaves the line in the view and the count moves; the filter also hides
+  the line from the other predicates on the same view (body flags, doppler, loops), harmless for fixed text and stated in the comment. Before the filter runs, a row
+  asserts exactly one canonical line per arm. Neither regex then needs to change, and they cannot drift apart. The deviation from the
   ask's wording (edit the regexes) is deliberate and recorded in Scope Check: the property the regex edit buys is bought once, at the chokepoint.
   The census counts LINES (`grep -cE`), so one canonical line is one allowed line; a second tool on the same physical line is the append mutant above.
 - `tests/scripts/test-argv-bearer-sweep.sh` STAGE S2-A part 2 (~1712-1910) encodes the hold-back: 17 converted copies, the `-hmac` operand at exactly the
   two arm anchors, the "one-line comment naming plan decision D1" row, and mutation rows pinned on arm counts. Rewrite to the end state: 19 converted copies,
   zero `-hmac` operands left in the script, the D1 comment row removed with the comments it counted, mutation rows repointed (reverting either arm to `-hmac`
   must red the parity row; the stray-tool mutants red the census). The hold-back comments in `cutover-inngest.sh` are deleted with the sites.
+  **The S4 stage encodes the same hold-back and must move in the same commit** (`tests/scripts/test-argv-bearer-sweep.sh`, content anchors): `S4_HMAC_ALLOW="scripts/cutover-inngest.sh:2"` and the census rows that require `S4_CENSUS_HITS >= S4_CENSUS_HIT_FLOOR` and `RAW_N > hits` (they go red at zero hits, and the wrapper control uses the cutover script as its known positive: give it a synthesized positive instead); `S4_HM_COPIES_WANT=24` and `S4_HM_HELD == 2`; the `hm_hmacflag` reader (~2901); the S2-A rows `hm_audit_ok`, the `seq 1 17` loops, `hm_last == 17`, `HM_PYARMS == 0` (false by design now) and the `heldpy`/`heldpy2` mutants. Phase 6(d) also empties `S4_HMAC_MD_ALLOW` (ship/SKILL.md and deploy-status-debugging.md). The battery's literal `EXPECTED_TESTS=730` floor (with `SELFTEST_PASSES`) is re-pinned to the measured total after the row changes; never left loosening silently.
 - Leads in the same file. `scripts/cutover-inngest.sh` is not an apply path (`cutover-inngest.yml` triggers only on itself and dispatch):
   (a) at the `-H @-` feed (~556-559, anchor `printf 'Authorization: Bearer %s\n' "$tok"`) run `_bearer_ok "$tok"` first (a refusal takes the existing
   empty-token arm's verdict class and prints the marker the way the other arms do); at the local `--config -` (~3123, anchor `Credential headers ride curl's stdin
@@ -184,25 +209,22 @@ line differ by script (no byte-identical-copy parity row; one derived-population
 |---|---|---|---|
 | `luks-monitor.sh` retry loop (`hb_pushed=false` / `curl -gfsS --max-time 10 "$hb_url"`, ~437) | bash, `set -uo pipefail` | `curl -gfsS --max-time 10 --config - >/dev/null 2>&1 < <(printf 'url = "%s"\n' "$hb_url")` | its existing `log` helper (journald, `LOG_TAG=luks-monitor`) |
 | `web-git-data-probe.sh` `_ping()` (~40, two `\|\|`-chained attempts) | bash, `set -u` | the same form, one fresh substitution **per attempt**; `-g` is NEW here (the script has none today) | stderr `echo` (no `LOG_TAG`/`logger` in this script; the unit's SyslogIdentifier ships it; a literal `logger -t` would break the vector-pii-scrub drift fixture) |
-| `inngest-bootstrap.sh` heredoc `HEARTBEATSCRIPTEOF` (~308, `exec /usr/bin/curl -gfsS --max-time 10 "$INNGEST_HEARTBEAT_URL"`) | **POSIX `sh` (dash)** — `#!/bin/sh`, run as `sh` by `inngest.test.sh` | `exec /usr/bin/curl -gfsS --max-time 10 --config - >/dev/null <<HBCFG` with the body `url = "$INNGEST_HEARTBEAT_URL"` and a closing `HBCFG` line (a heredoc, never process substitution, and no line starting with `printf`/`echo`/`logger` that names the URL: `inngest.test.sh` ~608 bans exactly that) | the script's existing `logger -t "$LOG_TAG"` |
+| `inngest-bootstrap.sh` heredoc `HEARTBEATSCRIPTEOF` (~308, `exec /usr/bin/curl -gfsS --max-time 10 "$INNGEST_HEARTBEAT_URL"`) | **POSIX `sh` (dash)** — `#!/bin/sh`, run as `sh` by `inngest.test.sh` | `exec /usr/bin/curl -gfsS --max-time 10 --config - >/dev/null <<HBCFG` with the body `url = "$INNGEST_HEARTBEAT_URL"` and a closing `HBCFG` line (a heredoc, never process substitution, and no line starting with `printf`/`echo`/`logger` that names the URL: `inngest.test.sh` ~608 bans exactly that; the nested `HBCFG` heredoc must not disturb the awk block extraction and `LOG_TAG` derivation at `inngest.test.sh` ~140 and ~320, nor `ci-deploy.test.sh` ~6059's systemctl count, so both suites join the Phase 0 baseline; dash, busybox ash and bash 5 give a small heredoc a pipe, not a file, measured via `/proc/self/fd/0`) | the script's existing `logger -t "$LOG_TAG"` |
 
-- **Shape guard.** After no trimming (a trailing whitespace or any control byte is refused, matching the SigV4 helper), the value must be non-empty, start with
-  `https://`, and contain only `[A-Za-z0-9._~:/?&=%+-]` after the scheme. In the POSIX script this is a `case` pattern, never `[[ =~ ]]`. The guard exists to close the one
+- **Shape guard.** With no trimming (a trailing whitespace or any control byte is refused, matching the SigV4 helper), the value must be non-empty, start with
+  `https://`, and contain only `[A-Za-z0-9._~:/?&=%+-]` after the scheme. In the POSIX script this is a `case` over the part after the scheme with a **negated** class, never `[[ =~ ]]` and never a positive pattern (a positive `https://[...]*` only constrains the first character, because `*` matches quotes and newlines): `case ${v#https://} in ''|*[!A-Za-z0-9._~:/?\&=%+-]*) refuse ;; esac` (measured under dash: refuses a trailing newline, a quote, a space and `#`; passes a clean URL). A hostile-value row fails a positive-pattern implementation. In curl's config parser only `\` and `"` are special inside quotes (`%`, `&`, `?`, `=`, `+`, `:`, `~`, `#` measured literal on curl 8.22), and `@` is outside the class, so no userinfo redirect. The guard exists to close the one
   real hazard on this path, config-directive injection through `url = "%s"` (a quote, backslash or newline); it deliberately does NOT pin the host, so it cannot
   mis-refuse a healthy URL (it admits a superset of the proven `_url_ok` shape in `apps/web-platform/infra/git-data-liveness.sh`) (a host pin would also force a production test seam). A refusal makes **zero** requests, prints
   `SOLEUR_CREDENTIAL_REFUSED script=<name> reason=<token_shape|control_char> var=<NAME>` (value-free; both reasons are already in the closed set the other scripts use),
   and folds into the script's existing failure arm (`heartbeat_push_failed` in `luks-monitor.sh`; the existing WARN path in `web-git-data-probe.sh`; the
   heartbeat unit's nonzero exit). It is never an argv fallback (ADR-280 decision 4).
+- **The inngest heartbeat runs every 60 s**: a persistent refusal would ship ~1,440 marker rows a day, so the marker goes through the heartbeat script's existing hourly `dark_arm_emit_due`-style rate limiter (the exit stays nonzero every tick; only the log line is limited), or the quota cost is accepted explicitly in the ADR addendum.
 - **`luks-monitor.sh` validates once, before the 3-attempt loop** (not inside the retried curl): a refusal then prints one marker and goes straight to
   `emit_readiness_and_die heartbeat_push_failed` with zero curl calls and no `sleep 2` x2.
-- **No transport change.** The converted lines keep today's flags and add only `--config -` (and `-g` where absent). `--disable --noproxy '*'` (ADR-280 decision 6)
-  is NOT added here: it is not needed to take the URL off argv and is unmeasured on these hosts, where a proxy or `.curlrc` egress path would turn a healthy beat off.
+- **Transport.** The converted lines keep today's flags and add `--config -` (and `-g` where absent) and a leading `-q` (ignore `~/.curlrc` and `CURL_HOME`: measured, a `.curlrc` `proxy =` line is honored alongside `--config -`, and these scripts run as root). `--disable --noproxy '*'` (ADR-280 decision 6) is NOT added: it is the library's broader transport change, not needed to take the URL off argv, and unmeasured on these hosts. Recorded as a deviation from decision 6 in the ADR addendum; the guard also deviates from decision 7 (no trailing-whitespace trim: it refuses) and has no host pin (a Doppler writer could point the beat at any https host; accepted, recorded as a residual).
 - A **read-only shape count precedes the edit** (Phase 0): list the live heartbeat URLs and confirm each stored value passes the shape guard, printing counts only. If any value
   fails, stop and decide then (no pre-designed fallback).
-- Test seams: the suites match curl **argv** today (`luks-monitor.test.sh` `curl .*betterstack.test` counts; `inngest.test.sh` ~611-648 PATH shim). After the change the
-  stub curl reads the stdin config and records the `url = "` line **per attempt, unconditionally**, and fails on a missing line; fixtures keep their stub host (the guard has no
-  host pin). The POSIX script gets a **dash** row: `sh -n` and one real run under dash (a local `/bin/sh` may be bash, so a green local run proves nothing; use a container image
-  whose `sh` is dash or busybox, with the image named in the row).
+- Test seams: the suites match curl **argv** today. After the change the stub curl reads the stdin config and records the `url = "` line **per attempt, unconditionally**, and fails on a missing line; fixtures keep their stub host (the guard has no host pin). Every consumer is enumerated and repointed, because some existing NEGATIVE rows go vacuous once the URL leaves argv: `luks-monitor.test.sh` ~622 (`! has 'curl .*betterstack.test'`, standby profile) and ~352 (`nhas 'curl .*HEARTBEAT` alternation with `curl -gfsS`) can no longer fail and are repointed to the recorded line; positive rows ~573, ~604, ~638 red loudly and are repointed; `inngest.test.sh` ~611-648 PATH shim and the ~608 ban on `printf`/`echo`/`logger` lines naming the URL stay. **`web-git-data-probe.test.sh` never executes the transport line today**: `_ping` returns at the `SOLEUR_GIT_DATA_PROBE_PING_LOG` seam and both `run_seam` and `run_real` set it; the per-attempt rows need a new harness (seam unset, a PATH curl stub, `SOLEUR_GIT_DATA_PROBE_REACH_OVERRIDE=reachable`). The POSIX script gets a **dash** row: `sh -n` and one real run under dash (a local `/bin/sh` may be bash, so a green local run proves nothing; use a container image whose `sh` is dash or busybox, named by digest in the row, in the infra-validation legs that assert docker).
 
 ### B. htpasswd passwords off argv
 
@@ -224,12 +246,13 @@ All four sites move to `htpasswd -i` (password on stdin), keeping the exit-code 
    ~610 prose, plus `apps/web-platform/infra/zot-image.provenance.md` ~139 "baked with `htpasswd -Bbn`"); the line-18 trailing comment is not stripped from
    `user_data`, so shortening it also buys bytes. Net `user_data` growth is measured with `registry-userdata-budget.sh` before and after; ~100 B of headroom
    is the constraint, a shortfall is paid by stripping non-rationale bytes in the same file, never by raising `REGISTRY_GZIP_BUDGET`.
+   The same lines are the world-readable window the plan rewrites anyway: `> /etc/zot/htpasswd` runs under the default umask and `chmod 600` follows, so the bcrypt hashes are 0644 until then. Create the file first with `install -m 600 /dev/null /etc/zot/htpasswd` (replacing the post-hoc `chmod`), keeping the empty-token guards above the pipelines.
 3. `.github/workflows/apply-web-platform-infra.yml` (anchor: `docker run --rm httpd:2.4-alpine htpasswd -Bbn "$RU" "$RP"`, ~2958, job `registry_pull_path_gate`,
    `if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'registry-luks-recut'`): `printf '%s' "$RP" | docker run --rm -i httpd:2.4-alpine htpasswd -Bin "$RU" > "${RUNNER_TEMP}/zot/htpasswd"`.
    The password is a per-run `openssl rand -hex 24` throwaway, already masked; the exposure is the docker client argv. The step is dispatch-only and destructive-path,
    so it is **not exercised by the merge-triggered push run**; the proof is an offline row plus the measured behavior above, and the first live run is the next
    `registry-luks-recut` dispatch. The workflow file is 464,451 B against the 490,000 B gate; the edit adds under 50 B.
-4. Recurrence row (Guard 3): new stage S6 in `tests/scripts/test-argv-bearer-sweep.sh`.
+4. Recurrence row (Guard 3): new stage S6 in `tests/scripts/test-argv-bearer-sweep.sh` (derived from `git ls-files`/`git grep` with `:!*.test.sh`, the way the S3-S5 stages derive, so a scratch tree and CI see the same population). The **real-binary and container rows live in a new infra suite**, `apps/web-platform/infra/htpasswd-stdin.test.sh` (auto-registered by the infra glob, ADR-252), because the `scripts` shard that runs the battery asserts no docker and installs no `apache2-utils`, while the infra-validation legs assert docker fail-closed; `registry-boot-guard.test.sh` stays static and docker-free (weight 0). The new suite fails closed on a missing docker or binary in CI and names its image by digest.
 
 `htpasswd` reads at most 255 bytes of password on stdin (`MAX_STRING_LEN`); the tokens are far shorter.
 
@@ -260,28 +283,30 @@ plan and spec** (A/M rows under the KB roots), which would archive the live plan
 | `apps/web-platform/infra/web-git-data-probe.sh` + `.test.sh` (A2) | push apply | `terraform_data.git_data_probe_install` is in the post-bridge `-target` list and `triggers_replace` hashes the script: **SSH re-delivery of the script to web-1**, then the (idempotent) timer enable. Live effect: the next 60 s tick runs the converted ping. The script is also in the baked `host_script_files` list whose content hash renders into web cloud-init (`hcloud_server.web` ignores `user_data`, so no replace), but `host-image-coherence-preflight.sh` refuses a host create or replace until the rebuilt image lands: a transient window that the release above closes. |
 | `apps/web-platform/infra/luks-monitor.sh` + `.test.sh` (A2) | push apply | `terraform_data.luks_monitor_install` (also `-target`ed; hashes `luks-monitor.sh`): **SSH re-delivery to web-1**; the next daily run uses the converted push. Same `host_script_files` note. |
 | `apps/web-platform/infra/inngest-bootstrap.sh` + `inngest.test.sh` (A2) | push apply (no Terraform diff) **and** `mint-inngest-bootstrap-tag.yml` (`apps/web-platform/infra/inngest*`) | The mint workflow mints the next `vinngest-v*` tag, dispatches `build-inngest-bootstrap-image.yml` (environment `infra-privileged`, main-only), publishes the image and runs its pin-bump job. **No host change** until a later image deploy or host replace. |
-| `apps/web-platform/infra/cloud-init-registry.yml` + `registry-boot-guard.test.sh` + `zot-image.provenance.md` (B) | push apply | `user_data` of `hcloud_server.registry` re-renders (ForceNew, no `ignore_changes`): `-/+` in an **untargeted** plan only (the 12 h drift detector and a full apply; the replace was already pending), **not** in the push apply's `-target` sets. **No live effect** until the registry host is replaced through `registry-host-replace-dispatch.yml`. |
+| `apps/web-platform/infra/cloud-init-registry.yml` + `registry-boot-guard.test.sh` (B1, B2) | push apply (no Terraform diff in its `-target` sets) **and `registry-host-replace-dispatch.yml`**, which has a PUSH trigger on this exact file (`on.push.paths`: `cloud-init-registry.yml`, `zot-registry.tf`, `variables.tf`; no reviewer gate, no confirm token; its header says "the merge IS the intent to deliver") | The dispatcher renders `user_data` offline at both SHAs and, on a byte change, runs `registry-host-replace` after a read-only preflight that refuses when the fleet is already serving off its last tier. **Merging B1/B2 therefore replaces the production registry host (the sole pull path) automatically**, and the converted `htpasswd -Bin` boot block executes for the first time on the new host at boot. A boot failure under `set -euo pipefail` leaves zot not launched: the #6400 hazard (a degraded registry becoming a deploy outage). The volume is preserved (`store_destroyed==0`). Comment-only changes to whole-line comments are stripped at render and do not count as a byte change; code and the trailing line-18 comment do. |
+| `apps/web-platform/infra/zot-image.provenance.md` (B, comment-level sentence) | push apply only (`infra/**`); not a dispatcher input | Docs. |
 | `.github/workflows/apply-web-platform-infra.yml` (B) | push apply (the workflow file is its own trigger) | The merge-triggered run executes the new copy; the converted step lives in the dispatch-only `registry_pull_path_gate` job, so it is **not run** by the push. |
 | `apply-deploy-pipeline-fix.yml`, `apply-inngest-rls.yml`, `apply-sentry-infra.yml`, `apply-github-infra.yml` | none of this PR's files | Their `paths:` lists do not match any file here (`apply-deploy-pipeline-fix.yml` uses an explicit list; re-check it at implementation). |
 | `scripts/cutover-inngest.sh`, `scripts/betterstack-query.sh`, `tests/scripts/**`, `scripts/lint-*`, `scheduled-inngest-health.yml`, `git-data-cutover.yml` | none of the apply, mint or release workflows | Not apply paths (`cutover-inngest.yml` is dispatch-only). |
 | `apps/cla-evidence/**` (C) | the CLA workflows (not an apply) | None here: this PR does not touch `apps/cla-evidence/infra` (#7675 stays out). |
 | `knowledge-base/**` runbooks, ADR addendum, archive moves | none | Docs. |
 
-**Net live effect of the merge:** one production web-app release and deploy (container restart; routine for any `apps/web-platform` or plugin change), two SSH re-deliveries of probe scripts to web-1, one inngest bootstrap tag and image publication (no host change), and otherwise no-op applies. The converted heartbeat ping is the only runtime behaviour change and its failure mode is a false page, not data loss. Nothing in this PR dispatches an apply (`hr-menu-option-ack-not-prod-write-auth`; #9905 stays an observation tracker, and the merge-triggered push run may itself count toward it). A `git revert` of one commit undoes the code but not a delivery that already fired; the deliveries are idempotent, so re-delivering the reverted bytes is the recovery.
+**Net live effect of the merge:** one production web-app release and deploy (container restart; routine for any `apps/web-platform` or plugin change), two SSH re-deliveries of probe scripts to web-1, one inngest bootstrap tag and image publication (no host change), **one automatic registry host replace if B1/B2 are in the merge** (the one non-routine, higher-stakes firing), and otherwise no-op applies. The converted heartbeat ping is the only runtime behaviour change and its failure mode is a false page, not data loss. Nothing in this PR dispatches anything by hand (`hr-menu-option-ack-not-prod-write-auth`; #9905 stays an observation tracker, and the merge-triggered push run may itself count toward it). The merge squashes the branch into one commit, so **after the merge there is nothing left to revert** per commit: the staging below is a set of pre-merge peel points, and a post-merge revert is a new PR whose own merge re-fires everything it touches (for the registry file, another host replace). Deliveries are idempotent, so re-delivering the reverted bytes is the recovery.
 
-**Recommendation.** One PR is workable and matches the operator's instruction; staging is **not required**, with two conditions:
+**Recommendation.** One PR is workable and matches the operator's instruction for everything except the registry template; **recommend staging the registry template (B1, B2) as its own PR merged right after this one**, and keeping B3 (the dispatch-only workflow step) in this PR. Reasons: B1/B2 is the only slice whose merge triggers an unattended replace of the sole pull path, whose first live execution is the boot block itself, and whose preflight can refuse for reasons unrelated to this change (the operator then re-fires by hand); everything else is a no-op, a web-1 file re-delivery or a routine release. The S5 slice recorded the same shape (the registry changes in ONE commit that can be declined only before merge). If the operator keeps one PR, the conditions are:
 
-1. **Commit order is the staging.** Each apply-firing change is a separable commit, revertable alone: (1) C + D + docs (no infra apply; the plugin markdown still fires the app release), (2) A1 + leads (a)(b)(g) + linkedin + battery rows (infra apply: no-op only, via the census edit), (3) B, (4) A2 for `web-git-data-probe.sh` and `luks-monitor.sh`, (5) A2 for `inngest-bootstrap.sh` **last**.
-2. **`inngest-bootstrap.sh` is the slice to peel if its draft collision is unresolved.** PR 10073 (`feat-one-shot-9962-envfile-storm-class`) edits the same file, `inngest.test.sh` and `cloud-init-inngest.yml`; whichever merges second rebases and each merge mints a tag. If #10073 has not merged when implementation reaches commit (5), recommend landing (5) after #10073 rather than in this PR (the umbrella then stays `Ref`), because it is the only slice whose firing (a tag mint plus image build) is neither a no-op nor a web-1 re-delivery. A reviewer view (DHH) recommends peeling it by default; it is recorded as a decision challenge and the operator's instruction to include it stands unless the collision forces the peel.
+1. **Commit order is the staging, and it only exists before merge.** Each firing change is a separable commit, peelable before the squash: (1) C + D + docs (no infra apply; the plugin markdown still fires the app release), (2) A1 + leads (a)(b)(g) + linkedin + battery rows (infra apply: no-op only, via the census edit), (3) B3 (workflow step, not run by the push), (4) A2 for `web-git-data-probe.sh` and `luks-monitor.sh`, (5) A2 for `inngest-bootstrap.sh`, (6) **B1 + B2, the registry template, last, with its suites, its battery rows and its ADR text in that one commit**, so declining the replace is one revert before the merge.
+2. **Peel (5) if PR 10073 has not merged** (it edits the same file, `inngest.test.sh` and `cloud-init-inngest.yml`; each merge mints a tag), and **peel (6) unless the operator approves the registry replace notice by name**. Both are recorded as decision challenges (C1, C6).
+3. **The first-live-execution risk of (6) is retired offline before merge:** the boot block is rendered from the real YAML and executed through `bash -s` inside an `ubuntu:24.04` + `apache2-utils` container (the shipped host image), including the failure arms; the replace preflight is read-only and runs at merge, not before.
 
-The merge is **gated on explicit operator approval** of (i) merging at all and (ii) the apply and release notice above; neither is implied by earlier menu answers. Pre-merge there is no way to prove the SSH re-delivery path except the offline suites; post-merge verification is read-only (below). The PR body's **first line** states whether merging alone mutates production (yes: the list above).
+The merge is **gated on explicit operator approval** of (i) merging at all and (ii) the apply, release and registry-replace notice above; neither is implied by earlier menu answers. Pre-merge there is no way to prove the SSH re-delivery path except the offline suites; post-merge verification is read-only (below). The PR body's **first line** states whether merging alone mutates production (yes: the list above).
 
 ## Implementation Phases
 
 ### Phase 0 — Baselines and measurements (read-only, no commits)
 
 1. Run the changed-file lint at the start: `python3 scripts/lint-shell-trace-credential-refusal.py --changed` and record which touched files are baselined (only `inspect-evidence.sh` and `luks-monitor.sh` appear in baseline A; `luks-monitor.sh` already carries the `case "$-"` refusal near its top, so its row looks stale: confirm, and delete it in the commit that touches the file).
-2. Green baseline of every suite this PR edits: `cutover-inngest-workflow.test.sh`, `tests/scripts/test-argv-bearer-sweep.sh`, `community-argv.test.sh`, `registry-boot-guard.test.sh`, `luks-monitor.test.sh`, `web-git-data-probe.test.sh`, `inngest.test.sh`, `inspect.test.sh`, `scripts/lint-shell-trace-credential-refusal.test.sh`, `apps/web-platform/infra/registry-userdata-budget.test.sh`, `web-host-provisioner-parity.test.sh`, and the vitest `apps/web-platform/test/git-lock-marker-telemetry.test.ts` (walks every `SOLEUR_*` sentinel a plugin skill script emits: `linkedin-setup.sh` emits the already-registered `SOLEUR_CREDENTIAL_REFUSED`, so it should stay green; run it to prove it). Record pre-existing reds, do not absorb them.
+2. Green baseline of every suite this PR edits: `cutover-inngest-workflow.test.sh`, `tests/scripts/test-argv-bearer-sweep.sh`, `community-argv.test.sh`, `registry-boot-guard.test.sh`, `luks-monitor.test.sh`, `web-git-data-probe.test.sh`, `inngest.test.sh`, `inspect.test.sh`, `scripts/lint-shell-trace-credential-refusal.test.sh`, `apps/web-platform/infra/registry-userdata-budget.test.sh`, `web-host-provisioner-parity.test.sh`, `ci-deploy.test.sh` (pins `inngest-bootstrap.sh` systemctl counts), `infra-config-gate.test.sh` (scans every infra `*.sh` for byte-length and newline-position invariants, so the new heredoc and process-substitution constructs must pass it), and the vitest `apps/web-platform/test/git-lock-marker-telemetry.test.ts` (walks every `SOLEUR_*` sentinel a plugin skill script emits: `linkedin-setup.sh` emits the already-registered `SOLEUR_CREDENTIAL_REFUSED`, so it should stay green; run it to prove it). Record pre-existing reds, do not absorb them.
 3. `registry-userdata-budget.sh` stored size now (~21,500 B vs the 21,600 ratchet; the Hetzner cap is 32,768 B, so this is a repo ratchet and not an outage threshold).
 4. Read-only live shape count of the three heartbeat URL values against the shape guard (read-scoped Doppler token, counts only, never the value). If any value fails, stop and decide.
 5. `gh pr view 10073 --json state,files` and `gh pr view 7390 ...` again (collision re-probe).
@@ -300,7 +325,7 @@ Copy the `_wenv_class` / `_wenv_refuse` / `_wenv_validate` block verbatim from `
 
 ### Phase 4 — B: htpasswd (registry template, workflow)
 
-RED first: executable rows (Guard 3) fail on main. Convert the four sites; sweep the three comments; measure `user_data` size; add a stub-docker row asserting the workflow step's `docker run` carries `-i` (without it docker does not forward stdin and the hash covers an empty password; the step is dispatch-only so nothing else would notice).
+RED first: executable rows (Guard 3) fail on main. B3 (workflow step) is commit 3; B1 + B2 (registry template, comments, suites, battery rows, ADR text) are the LAST commit (6). In the boot block also replace the post-hoc `chmod 600 /etc/zot/htpasswd` with `install -m 600 /dev/null /etc/zot/htpasswd` before the first write (the hashes are world-readable under the default umask until the chmod; byte-neutral, and the empty-token `[ -n ... ]` guards stay above the pipelines). Measure `user_data` size; add a refusing stub-docker row (accepts exactly `run --rm -i httpd:2.4-alpine htpasswd -Bin <user>`, exit 64 on anything else, refusal log asserted empty) for the workflow step: without `-i` docker does not forward stdin and the hash covers an empty password, and the step is dispatch-only so nothing else would notice.
 
 ### Phase 5 — A2: heartbeat URLs (commits 4 and 5)
 
@@ -318,7 +343,7 @@ Archive as described; then the full verification list (Acceptance Criteria), the
 
 ### ADR
 
-Amend **ADR-280** with a short `## Addendum — 2026-10-12 (#9757 residue)`; no new ordinal (status stays `adopting`). It records: (1) the held-back HMAC arms close (zero `-hmac` operands in `cutover-inngest.sh`) and the census allowance lives in the single code view; (2) `htpasswd -i` is the stdin form for passwords (not curl, so not the library; Rule E does not see it; recurrence is the S6 derived row); (3) heartbeat URLs on checkout-less hosts use an inline shape guard plus `--config -` (heredoc under dash, process substitution under bash), no host pin, no `--disable --noproxy` change; (4) residuals: same-uid `/proc/<pid>/environ` readers, the three further heartbeat probe scripts and the skill markdown snippets (#10093), and that the B3 workflow step is first exercised at the next `registry-luks-recut`. This is a task in Phase 6, not a follow-up issue.
+Amend **ADR-280** with a short `## Addendum — 2026-10-12 (#9757 residue)`; no new ordinal (status stays `adopting`). It records: (1) the held-back HMAC arms close (zero `-hmac` operands in `cutover-inngest.sh`) and the census allowance lives in the single code view; (2) `htpasswd -i` is the stdin form for passwords (not curl, so not the library; Rule E does not see it; recurrence is the S6 derived row); (3) heartbeat URLs on checkout-less hosts use an inline shape guard plus `--config -` and `-q` (heredoc under dash, process substitution under bash): recorded deviations from decision 6 (no `--disable --noproxy`), decision 7 (no trailing-whitespace trim; it refuses) and the library's destination handling (no host pin, so a Doppler writer could redirect the beat; accepted); the inline-wrapper exception is justified by the checkout-less-host property, as the S5 registry copies were; (4) residuals: same-uid `/proc/<pid>/environ` readers, the three further heartbeat probe scripts and the skill markdown snippets (#10093), and that the B3 workflow step is first exercised at the next `registry-luks-recut`. This is a task in Phase 6, not a follow-up issue.
 
 ### C4 views
 
@@ -342,7 +367,8 @@ The addendum ships in the same PR as the code it describes; the status flip `ado
 |---|---|---|
 | 1 | Append `; python3 -c 'import os'` (or `|| SIG="" ; curl ...`) to the canonical line's physical line | RED (the line no longer matches the anchored allowance, so the count moves) |
 | 2 | Add a second, non-canonical `python3 -I -c ...` line to one arm after the compliant canonical line | RED |
-| 3 | Add a second canonical line to the same arm | RED (the census does not count it, so the S2-A parity row (copy count 19 -> 20) is the guard; the matrix row asserts that row reds) |
+| 3 | Add a second canonical line to the same arm | RED (the exactly-one-canonical-per-arm row before the filter; the S2-A parity count 19 -> 20 is the second line of defence) |
+| 3b | Delete the allowance filter in a scratch copy of the suite (harness row) | RED (the canonical lines then read as extra tools) |
 | 4 | Rename the arm anchor so the code view is empty | RED (the suite floors arms seen at 2) |
 | 5 | Revert one arm to `openssl dgst -hmac` | RED (S2-A parity and zero-`-hmac` rows) |
 | 6 | Must-PASS: the canonical line at a different indentation, with and without the trailing `|| SIG=""`, which the contract permits | GREEN |
@@ -362,7 +388,9 @@ The addendum ships in the same PR as the code it describes; the status flip `ado
 | 3 | Add a second heartbeat `curl` outside the guarded line in the same file, after a compliant first | RED (derived-population row) |
 | 4 | Stub curl that ignores stdin and records nothing | RED (a missing recorded `url = "` line fails the row; per-attempt count asserted for the two `_ping` attempts) |
 | 5 | Move `luks-monitor.sh`'s guard inside the retry loop | RED (refusal must make 0 curl calls and exactly 1 marker) |
-| 6 | Must-PASS: a well-formed URL with a different token than the canonical fixture; for the POSIX script, the same row executed under dash | GREEN, one request per attempt |
+| 6 | Make the POSIX script use `[[ ]]` or process substitution | RED (the dash row) |
+| 7 | Positive-pattern `case` guard instead of the negated class | RED (hostile-value row) |
+| 8 | Must-PASS: a well-formed URL with a different token than the canonical fixture; for the POSIX script, the same row executed under dash | GREEN, one request per attempt |
 
 ### Guard 3 — No `htpasswd` invocation carries a password on argv
 
@@ -375,9 +403,9 @@ The addendum ships in the same PR as the code it describes; the status flip `ado
 | # | Mutation | Expected |
 |---|---|---|
 | 1 | Reintroduce `htpasswd -Bbn u "$p"` in one of the four sites | RED |
-| 2 | Add a compliant fifth site, then a non-compliant sixth in a different file | RED |
+| 2 | Add a compliant fifth site, then a non-compliant sixth in a different file | RED (sites are asserted by identity, one anchored row per site, never only by count: four hits in one file would satisfy a count) |
 | 3 | Rename the scanned binary in the scratch tree so the scan sees 0 sites | RED (floor >= 4) |
-| 4 | Executable rows: a stub `htpasswd` records argv (token absent from argv, present on stdin); a real-binary round trip (`-Bin` hash verified by `-vi` = 0, wrong password = 3, absent user = 6, unreadable file = 1) | RED when the call is argv-form or the exit-code map drifts |
+| 4 | Executable rows: a stub `htpasswd` records argv (token absent from argv, present on stdin; the stub also reds if it ignores stdin); a real-binary round trip in the new infra suite (`-Bin` hash verified by `-vi` = 0, wrong password = 3, absent user = 6, unreadable file = 1); a refusing stub `docker` for the workflow step (mutations: drop `-i`, put `-b` back) | RED when the call is argv-form, loses `-i`, or the exit-code map drifts |
 | 5 | Must-PASS: option cluster in another order/case (`-iB`), and a `-vb` that appears only in a YAML comment | GREEN |
 
 ### Guard 4 — `inspect-evidence.sh` refuses to run traced with the pair set
@@ -393,6 +421,17 @@ The addendum ships in the same PR as the code it describes; the status flip `ado
 | 1 | Delete the preamble | RED (the must-refuse row and lint Rule A) |
 | 2 | Make the preamble refuse unconditionally | RED (the must-pass row: the same argv without `-x`, with a stub `aws`, runs to rc 0) |
 | 3 | Re-add the row to baseline A while the file is compliant | RED or a recorded stale-row finding (verify which in Phase 1; if the lint tolerates it, delete this row) |
+
+## Downtime & Cutover
+
+No operation in this PR takes a serving surface offline, and none schedules a replace. Named, with the zero-downtime path each already follows:
+
+- **`hcloud_server.registry` `user_data` re-render (ForceNew).** The edit makes the render differ, which an untargeted plan shows as `-/+`; the replace was already pending (the S5 and zot-pin changes) and is **not** in the push apply's `-target` sets. The bytes reach a host only through the existing `registry-host-replace-dispatch.yml` gate (it renders `user_data` at both SHAs and delivers on a byte change), whose own preconditions (sole-copy LUKS volume protection set, ADR-282; stock probe; dispatch-only authorization) are unchanged. Zero downtime from this PR; the registry is not touched until a separately authorized replace.
+- **web-1 re-delivery of `web-git-data-probe.sh` and `luks-monitor.sh`.** A file copy plus an already-enabled timer; neither unit is a serving surface, no restart of a serving process. A beat or two may be late during the copy; both heartbeat policies carry grace (git-data 180 s).
+- **Web app release (`web-platform-release.yml`).** The routine deploy path every `apps/web-platform` change takes, with its existing drain; nothing in this PR changes it.
+- **Inngest bootstrap tag mint (commit 5 only).** Publishes an image and a pin; no host change until a later image deploy or replace, each separately gated.
+
+Residual downtime: none accepted, no maintenance window needed. Per-stage rollback: the Rollback section.
 
 ## Infrastructure (IaC)
 
@@ -425,32 +464,38 @@ Better Stack heartbeat behavior is unchanged (same URL, same GET). No paid-tier 
 
 ```yaml
 liveness_signal:
-  what: "Better Stack heartbeats git_data_prd (web-git-data-probe), workspaces_luks (luks-monitor daily push), inngest_prd (inngest-heartbeat 60s unit); their continued arrival after the merge-triggered re-delivery is the proof the converted ping works"
+  what: "Better Stack heartbeats git_data_prd (web-git-data-probe), workspaces_luks (luks-monitor daily push), inngest_prd (inngest-heartbeat 60s unit); their continued arrival after the merge-triggered re-delivery is the proof the converted ping works. The beat is the primary alarm, the refusal marker only names a cause"
   cadence: "60s (git-data probe, inngest heartbeat) and daily (luks-monitor)"
   alert_target: "operator email via the existing Better Stack heartbeat policies (git-data.tf, workspaces-luks.tf, inngest.tf)"
   configured_in: "apps/web-platform/infra/git-data.tf:593, apps/web-platform/infra/workspaces-luks.tf, apps/web-platform/infra/inngest.tf"
 error_reporting:
-  destination: "host journald (logger tag per script) shipped by Vector to Better Stack Logs; observability layer: host journal -> Better Stack, no SSH"
-  fail_loud: "SOLEUR_CREDENTIAL_REFUSED script=<name> reason=<token_shape|control_char> var=<NAME> from a converted heartbeat script, plus the existing heartbeat_push_failed / WARN lines; the missed beat itself pages through the heartbeat policy"
+  destination: "layer 3, host journald to Vector Source 4 to Better Stack Logs (tags web-git-data-probe, luks-monitor, inngest-heartbeat are allowlisted in vector.toml; no PRIORITY filter; the PII scrub does not touch a value-free SOLEUR_CREDENTIAL_REFUSED line); layer 6 for the cutover script, the GitHub Actions run log"
+  fail_loud: "SOLEUR_CREDENTIAL_REFUSED script=<name> reason=<token_shape|control_char> var=<NAME> from a converted heartbeat script (rate-limited hourly on the 60 s inngest unit), plus the existing heartbeat_push_failed and WARN lines; the missed beat itself pages through the heartbeat policy"
 failure_modes:
   - mode: "stored heartbeat URL fails the shape guard (rotation, storage accident, Better Stack URL form change)"
-    detection: "SOLEUR_CREDENTIAL_REFUSED row in Better Stack Logs queried with scripts/betterstack-query.sh --grep SOLEUR_CREDENTIAL_REFUSED; independent of the beat because a refused script still logs"
-    alert_route: "the heartbeat policy pages on the missed beat (the primary alarm, and it does not depend on the log path); the marker row only names the cause and rides the same journald -> Vector -> Better Stack path, so it can be missing exactly when that path is the fault"
-  - mode: "htpasswd -vi mapped wrongly so the registry probe reports unknown or false for a healthy credential"
-    detection: "htpasswd_pull_matches / htpasswd_push_matches fields of SOLEUR_ZOT_DISK in Better Stack Logs"
-    alert_route: "existing zot divergence alert (betterstack-logs-alerts.tf)"
+    detection: "layer 3: SOLEUR_CREDENTIAL_REFUSED row in Better Stack Logs via scripts/betterstack-query.sh --grep SOLEUR_CREDENTIAL_REFUSED; independent of the beat because a refused script still logs"
+    alert_route: "the heartbeat policy pages on the missed beat (the primary alarm, independent of the log path); the marker row only names the cause and rides the same journald, Vector, Better Stack path, so it can be absent exactly when that path is the fault"
+  - mode: "htpasswd -vi mis-mapped so the registry probe reports unknown or false for a healthy credential, or the boot-step htpasswd fails on the replaced registry host"
+    detection: "layer 3 is NOT Vector here: the registry host POSTs SOLEUR_ZOT_DISK directly from cloud-init-registry.yml (~1029); read htpasswd_pull_matches and htpasswd_push_matches with betterstack-query.sh --grep SOLEUR_ZOT_DISK. A boot-step failure leaves zot not launched, which the same line reports as state_status=unknown and the host heartbeat as missing"
+    alert_route: "no alert keys on htpasswd_*_matches today (betterstack-logs-alerts.tf keys SOLEUR_ZOT_DISK on store_luks and store_escrow); detection is query-only for the mismatch, and the missing host heartbeat and the pull-path health gate cover the not-launched case"
   - mode: "registry user_data exceeds the gzip budget"
-    detection: "cloud-init-user-data-size.test.ts and registry-userdata-budget.sh in CI before merge"
+    detection: "layer 6: cloud-init-user-data-size.test.ts and registry-userdata-budget.sh, a required CI check on the PR run log"
     alert_route: "required CI check fails the PR"
   - mode: "census allowance lets a stray tool call into a read-only probe arm"
-    detection: "Guard 1 mutation rows in the infra suite"
+    detection: "layer 6: Guard 1 mutation rows in the infra suite (infra-validation run log)"
     alert_route: "infra-validation CI check fails the PR"
+  - mode: "a cutover-inngest.sh refusal from leads (a), (b), (g): a malformed token or Cloudflare value now refuses before a request"
+    detection: "layer 6: the ::error:: line and SOLEUR_CREDENTIAL_REFUSED marker in the dispatched run's log"
+    alert_route: "the dispatching run fails visibly; no host effect"
+  - mode: "the registry-luks-recut rehearsal step loses docker -i and hashes an empty password"
+    detection: "layer 6: the refusing stub-docker row in CI before merge; at run time the rehearsal's own negative control in the same step"
+    alert_route: "required CI check fails the PR"
 logs:
-  where: "Better Stack Logs (host scripts via Vector), GitHub Actions run logs (cutover-inngest.sh markers)"
+  where: "Better Stack Logs (host scripts via Vector; registry host direct POST), GitHub Actions run logs (cutover-inngest.sh markers, suites)"
   retention: "Better Stack Logs team retention; Actions logs 90 days"
 discoverability_test:
-  command: python3 -c "print(len([1 for l in open('apps/web-platform/infra/cloud-init-registry.yml') if __import__('re').search(r'htpasswd +-[A-Za-z]*b[A-Za-z]* +[^ (]', l)]))"
-  expected_output: "0"
+  command: python3 -c "print('OK' if sum(1 for f in ('apps/web-platform/infra/cloud-init-registry.yml', '.github/workflows/apply-web-platform-infra.yml') for l in open(f) if __import__('re').search(r'htpasswd +-[A-Za-z]*b[A-Za-z]* +[^ (]', l)) == 0 else 'FAIL')"
+  expected_output: "OK"
 ```
 
 ## Domain Review
@@ -505,7 +550,7 @@ discoverability_test:
 
 - `scripts/cutover-inngest.sh` (HMAC arms 1372/1546; leads (a) 556-559 and 3123, (b) six mask sites, (g) four body echoes; delete hold-back comments)
 - `apps/web-platform/infra/cutover-inngest-workflow.test.sh` (allowance filter in `_probe_arms_code_of`; the two regex sites and the M2.9 mutation rows keep their text; update rows that count tools)
-- `tests/scripts/test-argv-bearer-sweep.sh` (S2-A part 2 end-state rows; new stage S6: heartbeat derived population with its residual allowlist, htpasswd recurrence, executable rows incl. the rendered-block `bash -s` row and the stub-docker `-i` row)
+- `tests/scripts/test-argv-bearer-sweep.sh` (S2-A part 2 and the S4 hold-back rows to the end state, `EXPECTED_TESTS` re-pin; new stage S6: heartbeat derived population with its residual allowlist, htpasswd recurrence, executable rows incl. the rendered-block `bash -s` row and the stub-docker `-i` row)
 - `apps/web-platform/infra/inngest-bootstrap.sh`, `apps/web-platform/infra/inngest.test.sh` (heartbeat heredoc; commit 5; collision with PR 10073)
 - `apps/web-platform/infra/web-git-data-probe.sh`, `apps/web-platform/infra/web-git-data-probe.test.sh`
 - `apps/web-platform/infra/luks-monitor.sh`, `apps/web-platform/infra/luks-monitor.test.sh`
@@ -521,7 +566,8 @@ discoverability_test:
 
 ## Files to Create
 
-- none beyond this plan's own artifacts (`knowledge-base/project/specs/feat-one-shot-9757-argv-bearer-sweep-combined/tasks.md`, `decision-challenges.md`); the S6 stage lives in the existing battery on purpose, to keep the apply-firing footprint minimal.
+- `apps/web-platform/infra/htpasswd-stdin.test.sh` (real-binary and container rows; fail-closed docker; auto-registered by the infra glob).
+- Plus this plan's own artifacts (`knowledge-base/project/specs/feat-one-shot-9757-argv-bearer-sweep-combined/tasks.md`, `decision-challenges.md`); the S6 stage lives in the existing battery on purpose, to keep the apply-firing footprint minimal.
 
 ## Open Code-Review Overlap
 
@@ -533,15 +579,16 @@ None (open `code-review` issues queried by body-contains on every planned path; 
 
 ### Pre-merge (PR)
 
-- [ ] `cutover-inngest.sh` has zero `openssl dgst -hmac` occurrences and 19 byte-identical canonical copies; the allowance lives only in `_probe_arms_code_of` and is an anchored whole-line match that admits the `|| SIG=""` tail (`scripts/cutover-inngest.sh`, `apps/web-platform/infra/cutover-inngest-workflow.test.sh`, `tests/scripts/test-argv-bearer-sweep.sh` S2-A part 2).
+- [ ] `cutover-inngest.sh` has zero `openssl dgst -hmac` occurrences and 19 byte-identical canonical copies; the allowance lives only in `_probe_arms_code_of` and is an anchored whole-line match that admits the `|| SIG=""` tail (`scripts/cutover-inngest.sh`, `apps/web-platform/infra/cutover-inngest-workflow.test.sh`, `tests/scripts/test-argv-bearer-sweep.sh` S2-A part 2 and the S4 hold-back rows, `EXPECTED_TESTS` re-pinned to the measured total).
 - [ ] All Guard 1-4 mutation rows exist and each RED row reds against the mutant; must-PASS rows green.
 - [ ] Heartbeat: for each of the three scripts, a recorded-stdin row shows the URL only in the recorded `url = "` line, never in recorded argv, once per attempt (both `_ping` attempts); hostile and empty values make zero requests and print the marker exactly once (`luks-monitor.sh`: validated before the retry loop, no `sleep`); the stub fails on a missing recorded line; the inngest heartbeat body passes `sh -n` and one real run under a dash-or-busybox `sh` named in the row; the derived population over `apps/web-platform/infra/*.sh` finds no heartbeat curl with the URL on argv outside the explicit residual allowlist (`web-zot-consumer-probe.sh`, `inngest-consumer-probe.sh`, `web-private-nic-guard.sh`, #10093) (`tests/scripts/test-argv-bearer-sweep.sh` S6, `luks-monitor.test.sh`, `web-git-data-probe.test.sh`, `inngest.test.sh`; `INNGEST_HEALTH_URL` is not a heartbeat).
-- [ ] htpasswd: stub-argv row (token absent from argv, present on stdin) for the probe function (127/6/1 map to `unknown` through the pipe) and for the boot block extracted from the YAML, rendered (templatefile variables and `$${...}` escapes) and executed through `bash -s` (a failing first `htpasswd` aborts before the `>>` line); real-binary round trip (a PATH `htpasswd` or the `httpd:2.4-alpine` image, never silently skipped in CI): `-Bin` hash verified by `-vi` returns 0/3/6/1; a stub-docker row asserts the workflow step's `docker run` carries `-i`; derived recurrence row floors at 4 sites.
+- [ ] htpasswd: stub-argv row (token absent from argv, present on stdin) for the probe function (127/6/1 map to `unknown` through the pipe) and for the boot block extracted from the YAML, rendered (templatefile variables and `$${...}` escapes) and executed through `bash -s` (a failing first `htpasswd` aborts before the `>>` line); real-binary round trip in the new `apps/web-platform/infra/htpasswd-stdin.test.sh` (fail-closed on a missing docker or binary in CI; image named by digest): `-Bin` hash verified by `-vi` returns 0/3/6/1 on `ubuntu:24.04` + `apache2-utils` and on `httpd:2.4-alpine`; a refusing stub-docker row for the workflow step (drop `-i` or put `-b` back reds); derived recurrence row floors at 4 sites asserted by identity (one anchored row per site).
 - [ ] `registry-boot-guard.test.sh` green; `cloud-init-user-data-size.test.ts` green with `REGISTRY_GZIP_BUDGET` unchanged; `registry-userdata-budget.sh` stored size recorded before and after in the PR body.
 - [ ] `inspect-evidence.sh`: `bash -x` with the pair set exits 78; without `-x` it runs; baseline row 5 deleted; `python3 scripts/lint-shell-trace-credential-refusal.py` repo-wide green; `scripts/lint-shell-trace-credential-refusal.test.sh` green.
 - [ ] `linkedin-setup.sh` carries the byte-identical validator block called before the first write; community suite manifest lists four validated writers and no deferred row; `apps/web-platform/test/git-lock-marker-telemetry.test.ts` green.
-- [ ] Leads: (a), (b), (g) rows green; (d) `git grep -n 'dgst .*-hmac'` over `plugins/` and `knowledge-base/engineering/operations/` returns only oracle/test mentions; (f) verified; (h) the opt-in docker row runs `bash:3.2`; (c), (e) and the residual same-class sites have trackers #10091, #10092, #10093 (recorded in the PR body).
-- [ ] ADR-280 addendum present; C4 parity green (`plugins/soleur/test/c4-count-parity.test.sh`).
+- [ ] Leads: (a), (b), (g) rows green; (d) `git grep -n 'dgst .*-hmac'` over `plugins/` and `knowledge-base/engineering/operations/` returns only oracle/test mentions; (f) verified; (h) the opt-in docker row gains a `bash:3.2` run (opt-in via `COMMUNITY_ARGV_DOCKER`, set nowhere in CI, so it is evidence recorded in the #9757 tick and NOT a gate); (c), (e) and the residual same-class sites have trackers #10091, #10092, #10093 (recorded in the PR body).
+- [ ] The registry template (B1, B2) is ONE commit with its suites, battery rows and ADR text; the boot block, rendered from the real YAML, runs through `bash -s` inside `ubuntu:24.04` + `apache2-utils` including the failure arms; `install -m 600 /dev/null /etc/zot/htpasswd` replaces the post-hoc `chmod`; `registry-userdata-budget.sh` before and after is recorded.
+- [ ] ADR-280 addendum present (records the deviations from decisions 6 and 7: no `--disable --noproxy`, `-q` only; no trailing-whitespace trim; no host pin); C4 parity green (`plugins/soleur/test/c4-count-parity.test.sh`).
 - [ ] D done by script from a clean-`origin/main` worktree and cherry-picked; `git diff --name-status origin/main...HEAD -- knowledge-base/project/plans knowledge-base/project/specs` shows the two archive renames plus this PR's own plan and spec as additions only (the merge-base form, never the moving tip).
 - [ ] PR body ends with Closes lines only for completed issues: `Closes #10089`; `Ref #9757` (promote to `Closes #9757` only if (c) and (e) were also done in this PR, which this plan does not intend), `Ref #9597`, `Ref #7797`, `Ref #9905`.
 - [ ] PR body: its first line states that merging alone mutates production (one web app release and deploy, two web-1 probe re-deliveries, one bootstrap tag mint if commit 5 is in); it carries the Production-apply coupling table, the commit-order staging and an explicit "merge awaiting operator approval" line. `npx markdownlint-cli2` is clean on the plan and tasks.
@@ -552,6 +599,7 @@ None (open `code-review` issues queried by body-contains on every planned path; 
 - [ ] The merge-triggered `web-platform-release.yml` run deploys and `apply-web-platform-infra.yml` push run concludes success; the `git_data_probe_install` and `luks_monitor_install` steps report applied or unchanged, not failed.
 - [ ] `git_data_prd` heartbeat is up again within two minutes of the re-delivery (`arm-heartbeats.sh --status`, read-only); no `SOLEUR_CREDENTIAL_REFUSED` row for the converted scripts in Better Stack Logs.
 - [ ] The mint workflow run (if `inngest-bootstrap.sh` shipped) concludes success; no host change claimed.
+- [ ] If B1/B2 shipped: the `registry-host-replace-dispatch.yml` run's verdict is read (delivered, or a named preflight refusal, in which case the operator re-fires by hand); on the new host `SOLEUR_ZOT_DISK` reports `htpasswd_pull_matches=true htpasswd_push_matches=true` and a non-unknown `zot_image_digest` (read with `betterstack-query.sh --grep SOLEUR_ZOT_DISK`, no SSH).
 - [ ] The #9757 checklist is updated item by item with evidence; #9905 gets a one-line note if the push run exercised a tracked workflow.
 
 ## Test Scenarios
@@ -579,6 +627,8 @@ None (open `code-review` issues queried by body-contains on every planned path; 
 - **R8: census allowance is a guard weakening.** Anchored whole-line regex in the single code view; the 19-copy parity row and `bc_hmac_sha256_hex` are the independent anchors (Guard 1).
 - **R9: archive script traps its own branch's artifacts** (branch-diff discovery). Run from a clean `origin/main` worktree.
 - **R10: pre-existing and not ours:** cla-evidence `plan` job (#7675); the other URL-path secrets and library gaps in #9757 comments.
+- **R13: the registry template merge replaces the registry host unattended** (`registry-host-replace-dispatch.yml` push trigger). Mitigation: last peelable commit, offline rendered-block execution on the shipped host image, recommended as its own PR, operator approval of the replace notice by name. Residual: the dispatcher's preflight is read-only and runs at merge.
+- **R14: local battery runtime.** `tests/scripts/test-argv-bearer-sweep.sh` is green offline in about 3m50s locally (47 s on the CI leg, `suite-durations.tsv`); run the whole battery once per commit and the new stages by name while iterating.
 - **R11: the merge deploys the web app.** Any `apps/web-platform/**` or non-docs plugin change fires `web-platform-release.yml`; the operator notice names it. Routine, but a restart of the production container.
 - **R12: guard line numbers drift.** Every cited line number is as of 2026-10-12 and is paired with a content anchor; five commits will land before the last slice, so implementers re-anchor by content (`cq-cite-content-anchor-not-line-number`).
 
