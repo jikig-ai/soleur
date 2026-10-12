@@ -660,6 +660,8 @@ jobs:
               -target=logtail_exploration_alert.egress_gw_deny_spike \
               -target=logtail_exploration.egress_gw_probe_silent \
               -target=logtail_exploration_alert.egress_gw_probe_silent \
+              -target=logtail_exploration.egress_gw_probe_fail \
+              -target=logtail_exploration_alert.egress_gw_probe_fail \
               -target=random_password.inngest_redis_luks \
               -target=doppler_secret.inngest_redis_luks_key \
               -target=supabase_project.prd

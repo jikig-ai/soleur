@@ -820,6 +820,13 @@ jobs:
       - name: Run hosts-file GHCR deny lost alert drift guard (#9391)
         run: bash apps/web-platform/test/infra/ghcr-blocked-alert.test.sh
 
+      # (#9534 review) The egress-gateway Logs alerts: deny-spike shape, the
+      # host-attributed probe-silent predicate (count(DISTINCT host_name), the
+      # host-mask fix), the new probe-fail paging alert, every -target line, and
+      # the mutation rows that each require this guard to red.
+      - name: Run egress gateway alerts drift guard (#9534: host-mask + fail paging)
+        run: bash apps/web-platform/test/infra/egress-gw-alert.test.sh
+
       # (#8611) The Anthropic-spend Logs alerts (inngest-step 524, daily burn, capture-dark): each
       # queries the emitter's real shape and field path, aggregates only, every -target line, and
       # its mutation rows.
