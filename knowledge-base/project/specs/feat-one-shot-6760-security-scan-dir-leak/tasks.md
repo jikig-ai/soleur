@@ -17,8 +17,9 @@ Plan: `knowledge-base/project/plans/2026-10-12-fix-skill-security-scan-runtime-d
 - [ ] 1.3 Extend `plugins/soleur/skills/skill-security-scan/test/meta-dir-reap.test.sh`
       with scratch-family arms (test sets `TMPDIR` to a fixture root):
       old `skill-scan-input-*` file reaped; old `skill-scan-results-*` dir
-      reaped; old `skill-scan-*.code`-style sibling reaped; fresh
-      `skill-scan-*` entry spared; source anchors for
+      reaped; old `skill-scan-*.code`-style sibling reaped; an old
+      `skill-security-scan-*` dir under `TMPDIR` reaped (XDG-toggle
+      crossover arm); fresh `skill-scan-*` entry spared; source anchors for
       `-name 'skill-scan-*'`, `-user "$(id -u)"`, and the `! -path` exclusions
       (with a positive control that each regex matches the live code).
 - [ ] 1.4 In `plugins/soleur/scripts/lib/tmp-classify.sh`, replace the
