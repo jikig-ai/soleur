@@ -3902,9 +3902,9 @@ jobs:
         working-directory: ${{ env.INFRA_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        # Scoped -replace of the git-data server + its 4 id-referencing dependents. The two data
-        # volumes + the LUKS passphrase are PRESERVED BY OMISSION (not -targeted → cannot be
-        # planned for destroy). The sourced git_data_host_replace_gate (no [ack-destroy] bypass)
+        # Scoped -replace of the git-data server + its 4 id-referencing dependents. In plain replace
+        # the two data volumes + the LUKS passphrase are PRESERVED BY OMISSION (not -targeted →
+        # cannot be planned for destroy); the rotate arm adds the LUKS trio below. The sourced git_data_host_replace_gate (no [ack-destroy] bypass)
         # reads the STRUCTURED plan JSON and ABORTS unless the plan is EXACTLY the scoped recreate.
         run: |
           set -uo pipefail
@@ -3960,6 +3960,10 @@ jobs:
             grep -E 'will be destroyed|must be replaced|will be updated in-place|Plan:' tfplan.txt | head -30 >&2
             exit 1
           fi
+          # (#10137) Publish the mode the gate just ACCEPTED, so the apply step grades the saved plan
+          # under this same mode instead of deriving a second one. An absent output reaches the
+          # post-apply assert's unknown-mode arm and refuses.
+          printf 'gate_mode=%s\n' "$GATE_MODE" >> "$GITHUB_OUTPUT"
           # #6453 STOCK preflight — TRIPWIRE, not a routine gate (posture matches :447).
           # This path needs the gate MOST, and not for the -replace reason the others do:
           # `terraform plan -replace=<addr>` on an address NOT in state exits 0 with no warning
@@ -4015,19 +4019,20 @@ jobs:
         working-directory: ${{ env.INFRA_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          APPLY_TARGET: ${{ inputs.apply_target }}
+          GATE_MODE: ${{ steps.plan.outputs.gate_mode }}
         # Apply the saved, guarded plan. The post-apply backstop (git_data_host_post_apply_assert,
         # tests/scripts/lib/git-data-host-replace-gate.sh) re-reads the SAVED plan (the exact plan
-        # we applied): the plaintext data volume carries 0 delete/forget actions in BOTH modes, the
-        # LUKS volume too in plain replace (the rotate arm replaces it ON PURPOSE, #10137), and the
-        # private NIC + BOTH store attachments show a create (re-attached) —
-        # belt-and-suspenders to the guard.
+        # we applied) under the mode the plan step's gate accepted (its gate_mode output): the
+        # plaintext data volume carries 0 delete/forget actions in BOTH modes, the LUKS volume too
+        # in plain replace (the rotate arm replaces it ON PURPOSE, #10137), and the private NIC +
+        # BOTH store attachments show a create (re-attached) — belt-and-suspenders to the guard.
         run: |
           set -euo pipefail
           # A mid-replace apply failure (old host destroyed, new create fails — quota/image/boot)
           # leaves git-data DOWN with the writer-side CAS fence offline. UNLIKE registry (GHCR
-          # fallback) / inngest (paused reminders), git-data has NO serving fallback — but BOTH
-          # volumes are preserved (guarded), so re-dispatch recovers from them. Writes FAIL, not
+          # fallback) / inngest (paused reminders), git-data has NO serving fallback — in plain
+          # replace BOTH volumes are preserved (guarded), so re-dispatch recovers from them; the
+          # rotate arm replaces the LUKS volume by design. Writes FAIL, not
           # corrupt (single-writer at replicas=1 → no split-brain). Emit a self-documenting
           # recovery annotation, then fail hard (gating behavior unchanged).
           if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
@@ -4035,17 +4040,17 @@ jobs:
             # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
             source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
             stock_recovery_report git-data-host-replace tfplan.json --probe-state
-            echo "::error::terraform apply (git-data-host-replace) failed mid-replace — git-data may be DOWN (single-writer, no serving fallback); pushes/pulls fail (not corrupt); BOTH volumes are preserved — re-dispatch git-data-host-replace to recover from them"
+            if [[ "${GATE_MODE:-}" = rotate ]]; then
+              echo "::error::terraform apply (git-data-host-rotate) failed mid-replace — git-data may be DOWN (single-writer, no serving fallback); pushes/pulls fail (not corrupt). The plaintext volume is preserved (guarded); the LUKS volume is REPLACED by design on this arm, so it may already be a fresh volume. Read the destroy-guard output and the stock-recovery report above before re-dispatching — this message does not prescribe a recovery for the rotate arm."
+            else
+              echo "::error::terraform apply (git-data-host-replace) failed mid-replace — git-data may be DOWN (single-writer, no serving fallback); pushes/pulls fail (not corrupt); BOTH volumes are preserved — re-dispatch git-data-host-replace to recover from them"
+            fi
             exit 1
           fi
           # shellcheck source=tests/scripts/lib/git-data-host-replace-gate.sh
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/git-data-host-replace-gate.sh"
-          GATE_MODE=$(git_data_gate_mode "$APPLY_TARGET") || {
-            echo "::error::unknown apply_target '${APPLY_TARGET}' for the post-apply backstop — wiring fault; failing hard."
-            exit 1
-          }
-          if ! git_data_host_post_apply_assert tfplan.json "$GATE_MODE"; then
-            echo "::error::git-data post-apply backstop (mode ${GATE_MODE}) refused the applied plan — see the lines above. This should have been caught by the guard; failing hard."
+          if ! git_data_host_post_apply_assert tfplan.json "${GATE_MODE:-}"; then
+            echo "::error::git-data post-apply backstop (mode '${GATE_MODE:-}') refused the applied plan — see the lines above. This should have been caught by the guard; failing hard."
             exit 1
           fi
           # (#7226) The rotated pin fingerprint — the evidence the boot poll + the pin_load step's redeploy prove.
@@ -4120,7 +4125,7 @@ jobs:
           {
             echo "## git-data-host-replace readiness (non-SSH)"
             echo ""
-            echo "In-job gates: the destroy-guard + post-apply jq asserts (both volumes preserved, NIC + both store attachments re-attached), and the boot-signal poll (stage:boot_complete from THIS host generation, with luks_mounted/repo_root/hooks_path/provision/luks_reopen_unit positive)."
+            echo "In-job gates: the destroy-guard + post-apply asserts (plaintext volume preserved, and the LUKS volume too in plain replace; NIC + both store attachments re-attached), and the boot-signal poll (stage:boot_complete from THIS host generation, with luks_mounted/repo_root/hooks_path/provision/luks_reopen_unit positive)."
             echo ""
             echo "Not yet checked: that git transport SERVES. The web-host \`git ls-remote\` probe is #5274 PR C; the existing web-host probe only proves :22 is open. git-data is a deny-all blind host (no SSH)."
           } >> "$GITHUB_STEP_SUMMARY"

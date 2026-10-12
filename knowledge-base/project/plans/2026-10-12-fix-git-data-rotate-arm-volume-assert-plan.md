@@ -254,3 +254,7 @@ No cross-domain implications detected: CI-assertion fix on existing infrastructu
 - The flip gate keys on the step name matching "rotate confirm token"; do not rename it.
 - The Observability probe greps the call text `git_data_host_post_apply_assert tfplan.json`; keep exactly one such call line in the workflow (comments must name the function without the `tfplan.json` suffix) or the expected count of `1` drifts.
 - Do not claim that this PR fixes the flip: it removes the false failure only. The flip gate still needs a successful rotate run, which is operator-named.
+
+## Amendment 2026-10-12 (review, #10155)
+
+Two design-validity seats (simplicity, architecture) converged that the second apply_target-to-mode mapping (`git_data_gate_mode`, the apply step's `APPLY_TARGET` env, PA8 and a substring parity test) was avoidable. Ruled by CTO agent, 2026-10-12: the plan step publishes the mode its gate accepted as a `gate_mode` step output and the apply step reads it through `env: GATE_MODE: ${{ steps.plan.outputs.gate_mode }}`; the post-apply mode is then by construction the mode the saved plan was graded under, and an absent output reaches the assert's unknown-mode arm and refuses. The Phase 2/3 text above that names `git_data_gate_mode` and `APPLY_TARGET` describes the pre-review design and is superseded by this section. The mid-replace annotation and the readiness note were also made mode-aware (AP-021: a CI message names only a cause the job measured).

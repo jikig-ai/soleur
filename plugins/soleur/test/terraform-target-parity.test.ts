@@ -2190,11 +2190,13 @@ describe("git-data-host-replace dispatch -target/-replace set (scoped; plaintext
     const rest = gitDataJobBlock.slice(start);
     const next = rest.indexOf("\n      - name:");
     const applyStep = next === -1 ? rest : rest.slice(0, next);
-    expect(applyStep).toContain("APPLY_TARGET: ${{ inputs.apply_target }}");
+    // The mode is the one the plan step's gate accepted, read through env (no second mapping).
+    expect(applyStep).toContain("GATE_MODE: ${{ steps.plan.outputs.gate_mode }}");
     expect(applyStep).toContain("git-data-host-replace-gate.sh");
-    expect(applyStep).toMatch(/GATE_MODE=\$\(git_data_gate_mode "\$APPLY_TARGET"\) \|\| \{/);
+    expect(applyStep).not.toContain("git_data_gate_mode");
+    expect(applyStep).not.toContain("APPLY_TARGET");
     // `if !` so a refusal exits 1 even where errexit is suspended (a bare call fails open).
-    expect(applyStep).toMatch(/if ! git_data_host_post_apply_assert tfplan\.json "\$GATE_MODE"; then/);
+    expect(applyStep).toMatch(/if ! git_data_host_post_apply_assert tfplan\.json "\$\{GATE_MODE:-\}"; then/);
     // The inline loop is gone, and the old display name (false under rotate) with it.
     expect(applyStep).not.toMatch(/for VOL in hcloud_volume\.git_data/);
     expect(gitDataJobBlock).not.toContain("both-volumes-preserved assert");
@@ -2205,13 +2207,18 @@ describe("git-data-host-replace dispatch -target/-replace set (scoped; plaintext
     expect(gitDataJobBlock.match(/git_data_host_post_apply_assert tfplan\.json/g)?.length).toBe(1);
   });
 
-  test("git_data_gate_mode and the plan step's GATE_MODE derivation map the same two targets (#10137)", () => {
-    const lib = readFileSync(resolve(REPO_ROOT, "tests/scripts/lib/git-data-host-replace-gate.sh"), "utf8");
-    expect(lib).toMatch(/git-data-host-replace\)\s+printf 'replace\\n'/);
-    expect(lib).toMatch(/git-data-host-rotate\)\s+printf 'rotate\\n'/);
-    expect(gitDataJobBlock).toContain("GATE_MODE=replace");
-    expect(gitDataJobBlock).toContain("GATE_MODE=rotate");
-    expect(gitDataJobBlock).toContain('inputs.apply_target }}" == "git-data-host-rotate"');
+  test("the plan step publishes the mode its gate accepted, exactly once, after the gate call (#10137)", () => {
+    const planStart = gitDataJobBlock.indexOf("        id: plan\n");
+    expect(planStart, "plan step (id: plan) not found in git_data_host_replace").toBeGreaterThan(-1);
+    const rest = gitDataJobBlock.slice(planStart);
+    const next = rest.indexOf("\n      - name:");
+    const planStep = next === -1 ? rest : rest.slice(0, next);
+    const publish = "printf 'gate_mode=%s\\n' \"$GATE_MODE\" >> \"$GITHUB_OUTPUT\"";
+    expect(planStep.split(publish).length - 1, "the plan step must publish gate_mode exactly once").toBe(1);
+    // Placed after the gate call, so a published mode always means that mode was graded and accepted.
+    expect(planStep.indexOf(publish)).toBeGreaterThan(planStep.indexOf('git_data_host_replace_gate tfplan.json "$GATE_MODE"'));
+    // One reader of the output in the whole job.
+    expect(gitDataJobBlock.split("steps.plan.outputs.gate_mode").length - 1).toBe(1);
   });
 
   test("the plaintext data volume is in NEITHER the base nor the rotate set (preserved by omission)", () => {

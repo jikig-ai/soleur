@@ -94,6 +94,7 @@
 #
 # Usage:  source tests/scripts/lib/git-data-host-replace-gate.sh
 #         GIT_DATA_ROOT_KEY_FINGERPRINT_FILE=<path> git_data_host_replace_gate <plan-json-file> [replace|rotate]   # 0=PASS, 1=ABORT
+#         git_data_host_post_apply_assert <plan-json-file> <replace|rotate>   # post-apply backstop (#10137), 0=PASS, 1=ABORT
 #
 # MODE=rotate (#8211 PR2 / ADR-220 D6 — `apply_target=git-data-host-rotate`): the ONE path
 # permitted to touch the LUKS store, because a rotated passphrase can only pair with a FRESH
@@ -314,20 +315,6 @@ git_data_host_replace_gate() {
   return 1
 }
 
-# git_data_gate_mode <apply_target> — the ONE apply_target -> gate-mode mapping the post-apply
-# backstop uses (#10137). rc=1 with NO stdout for anything else, so a caller that does
-# `mode=$(git_data_gate_mode "$APPLY_TARGET") || exit 1` refuses a wiring fault instead of
-# defaulting to a permissive arm. The plan step in apply-web-platform-infra.yml derives its own
-# GATE_MODE inline; test-git-data-host-replace-gate.sh PA8 and terraform-target-parity.test.ts
-# hold the two mappings equal.
-git_data_gate_mode() {
-  case "${1:-}" in
-    git-data-host-replace) printf 'replace\n' ;;
-    git-data-host-rotate)  printf 'rotate\n' ;;
-    *) return 1 ;;
-  esac
-}
-
 # git_data_host_post_apply_assert <plan-json-file> <replace|rotate>   # 0=PASS, 1=ABORT
 #
 # THE POST-APPLY BACKSTOP (#10137). The apply step of job git_data_host_replace re-reads the
@@ -337,7 +324,9 @@ git_data_gate_mode() {
 # The preserved set is per mode, built structurally: replace keeps BOTH data volumes, rotate keeps
 # ONLY the plaintext volume — rotate replaces hcloud_volume.git_data_luks on purpose, and the
 # pre-apply gate already requires luks_volume_rotated == 1 on the same plan, so no second positive
-# LUKS assertion is made here. An unknown or empty mode is a wiring fault and refuses.
+# LUKS assertion is made here. The mode is the one the plan step's gate accepted (the workflow
+# publishes it as that step's gate_mode output); an unknown, empty or absent mode is a wiring fault
+# and refuses.
 #
 # FAIL-CLOSED: `{"resource_changes":[]}` passes the readable and classifiable arms, so an empty
 # plan is rejected by the positive NIC / attachment creates, never by a count. Every jq result is

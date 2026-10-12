@@ -598,20 +598,12 @@ pa_check "PA6 LUKS attachment create missing -> ABORT (second member, first comp
 write_plan "${SERVER_REPLACE},${PA_NIC},${PA_ATT},$(rc_obj 'hcloud_volume_attachment.git_data_luks' '"update"')"
 pa_check "PA6 LUKS attachment present but not created -> ABORT" 1 "hcloud_volume_attachment.git_data_luks shows no create" rotate
 
-# PA7: the mode is a wiring input. Unknown or empty refuses with a distinct message, never a
-# permissive default, and never reads the plan as a pass.
+# PA7: the mode is a wiring input (the plan step's gate_mode output). Unknown, empty or absent
+# refuses with a distinct message, never a permissive default, and never reads the plan as a pass.
 write_plan "${ROT_PASS_SET}"
 pa_check "PA7 empty mode -> ABORT as a wiring fault" 1 "unknown mode '' - wiring fault" ""
 pa_check "PA7 bogus mode -> ABORT as a wiring fault" 1 "unknown mode 'bogus' - wiring fault" bogus
 pa_check "PA7 upper-case REPLACE -> ABORT (exact match only)" 1 "unknown mode 'REPLACE' - wiring fault" REPLACE
-# PA8: git_data_gate_mode is the single apply_target -> mode mapping.
-gm() { git_data_gate_mode "$1" 2>&1; }
-[[ "$(gm git-data-host-replace)" == "replace" ]] && pass || fail "PA8 git-data-host-replace did not map to replace"
-[[ "$(gm git-data-host-rotate)" == "rotate" ]] && pass || fail "PA8 git-data-host-rotate did not map to rotate"
-for _t in "" git-data-host-create web-host-replace "git-data-host-replace "; do
-  _o="$(git_data_gate_mode "$_t" 2>&1)"; _rc=$?
-  if [[ "$_rc" -ne 0 && -z "$_o" ]]; then pass; else fail "PA8 apply_target '${_t}' must return non-zero with no stdout (rc=${_rc}, out=${_o})"; fi
-done
 # PA9: output discipline — the function prints addresses and counts, never .change.before/after.
 write_plan "${ROT_PASS_SET},$(printf '{"address":"hcloud_volume.git_data","change":{"actions":["delete"],"before":{"user_data":"PA9-SENTINEL-OLD-USER-DATA"}}}')"
 _pa9="$(git_data_host_post_apply_assert "$TMP/plan.json" rotate 2>&1 || true)"
@@ -668,11 +660,11 @@ gate_mutate_layered "PM7 readable call in the post-apply assert (hands off to th
 # A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
 # suite on every legitimately-added assertion and train people to bump it unread.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 89 ]]; then
+if [[ "$_ran" -lt 83 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 89 (HK13 skips without terraform). Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 83 (HK13 skips without terraform). Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 89)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 83)\n' "$_ran"
 fi
 
 echo ""
