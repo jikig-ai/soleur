@@ -23,7 +23,12 @@ Plan: `knowledge-base/project/plans/2026-10-12-fix-provisioner-parity-ssh-reside
   not covered by an `EXT_RESIDENCE` entry supersetting `dialed`. Keep the literal
   `outside server.tf` in the fail text (G2-18/G2-19..21 anchors).
 - [ ] 1.5 Add the stale-allowance check: every `EXT_RESIDENCE` entry resolves to a
-  swept block on a declared host; an orphaned entry is a `[FAIL]`.
+  swept block dialing a host in the entry's `hosts` set, AND its `reason` is
+  non-empty (guard-internal self-check — the battery mutates `.tf` inputs only,
+  so this invariant fails loudly at guard runtime and is verified by code
+  review). FAIL text carries the literal `stale EXT_RESIDENCE entry` (distinct
+  from the residence arm's `residence allowance` phrasing so G2-22 anchors
+  correctly).
 - [ ] 1.6 Update the header scope comment (residence is fleet-symmetric; the
   allowance is the single exemption surface).
 
@@ -32,9 +37,10 @@ Plan: `knowledge-base/project/plans/2026-10-12-fix-provisioner-parity-ssh-reside
 - [ ] 2.1 `expect_red "G2-19 (a web-1-dialing block WITH the correct local in a DIFFERENT .tf)" tunnel.tf "outside server.tf"` — phantom `terraform_data` carrying `host_key = local.web_1_ssh_host_key`.
 - [ ] 2.2 `expect_red "G2-20 (a second phantom web-1 dialer in an allowlisted file)" workspaces-luks.tf "outside server.tf"` — proves resource-granularity.
 - [ ] 2.3 `expect_red "G2-21 (a web-2 dialer in an allowlisted file)" workspaces-luks.tf "outside server.tf"` — proves host-scoping.
-- [ ] 2.4 `expect_red "G2-22 (residence allowance entry gone stale)" ci-ssh-key.tf "<stale-allowance anchor>"` — mutator removes the `connection {}` block.
-- [ ] 2.5 Re-derive `FLOOR`/`cases` accounting from the battery log; update the
-  `FLOOR=58` comment (:1481) with the new arithmetic.
+- [ ] 2.4 `expect_red "G2-22 (residence allowance entry gone stale)" ci-ssh-key.tf "stale EXT_RESIDENCE"` — mutator removes the `connection {}` block.
+- [ ] 2.5 Bump `FLOOR` (`mutations_run` floor) 58 → 62 (+4 landed `expect_red`
+  rows) and update the comment (:1481): `+4 #9998 residence rows (G2-19..22)`.
+  `PROBE_FLOOR`/`PROBE_RED_FLOOR`/`FLOOR_BLOCKS`/`FLOOR_RESOURCES` unchanged.
 
 ## Phase 3 — Verification
 

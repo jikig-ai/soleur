@@ -13,6 +13,43 @@ domain: engineering
 
 # fix(infra): provisioner-parity G2 residence is web-2-only — web-fleet SSH dialers outside server.tf escape fleet classification
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-12
+**Sections enhanced:** Hypotheses (Network-Outage Deep-Dive), Proposed Solution
+(FLOOR semantics, stale-anchor literal, dual-host dial edge), Acceptance Criteria
+(AC8 honesty fix), new Risks & Mitigations with precedent-diff.
+**Research agents used:** none — this session has no Agent/Task tool; the
+deepen-plan fan-out (skill sub-agents, learnings agents, per-section research,
+review panel) was performed inline by the planning agent and the substitution is
+recorded in `specs/feat-one-shot-9998-ssh-residence/decision-challenges.md`.
+
+### Key Improvements
+
+1. `FLOOR` is `mutations_run` (landed mutations), not `cases` — 4 new `expect_red`
+   rows raise it 58 → 62, comment re-derived per file convention.
+2. AC8 corrected: the battery mutates `.tf` inputs only and cannot reach the
+   guard's `EXT_RESIDENCE` table, so the reason-mandatory invariant is a
+   guard-internal self-check folded into the stale-allowance arm — not a
+   battery-proven assertion.
+3. Residence scope deliberately covers ANY `web-\d+` dialer (superset of the
+   issue's "all declared fleet hosts") — a future web-3 dialer outside server.tf
+   fails closed, matching M4i's declared-roster philosophy.
+4. Stale-allowance FAIL text pinned to the literal `stale EXT_RESIDENCE entry` so
+   battery row G2-22 anchors on its own arm, not the residence arm's
+   `residence allowance` phrasing.
+
+### New Considerations Discovered
+
+- The issue's "currently zero" premise was false (4 legit external web-1 dialers)
+  — the plan's allowance design, already load-bearing, is confirmed by this
+  deepening, not weakened.
+- `apply-web-platform-infra.yml` triggers on `apps/web-platform/infra/**` — the
+  merge fires the routine apply even though no `.tf` changes; PR body must carry
+  the merge-effect first line.
+- Zero `.tf.json` files exist in the repo; `.tf.json` coverage stays a defensive
+  shape (mirrors G2-13/14/C3), not a live-input requirement.
+
 ## Overview
 
 Guard 2 of `apps/web-platform/infra/web-host-provisioner-parity.test.sh` sweeps every
@@ -172,6 +209,22 @@ live SSH session exists anywhere in the code path under change. Opt-out per
    and one `read_text(` site, zero `open(`/ `glob(` sites), plus the issue's own
    demonstration that the escape is observable with `git grep` alone.
 
+### Network-Outage Deep-Dive
+
+Deepen-plan Phase 4.5 enforcement layer fired on the `SSH` token (telemetry
+re-emitted). Layer-by-layer verification status against the checklist:
+
+| Layer | Status | Artifact |
+|---|---|---|
+| L3 firewall allow-list | not applicable — no live dial | Guard 2 reads files only via one `git ls-files` + one `read_text()` (reader-shape pin at `web-host-provisioner-parity-mutation.test.sh:188-194`); no egress exists to allowlist |
+| L3 DNS / routing | not applicable — no live dial | same artifact |
+| L7 TLS / proxy | not applicable — no HTTPS path under change | same artifact |
+| L7 application | not applicable — no service under diagnosis | the defect is a text-sweep classification asymmetry, reproduced statically by battery row G2-4's shape plus a `host_key` line |
+
+No open hypothesis requires a service-layer probe before the fix; the firewall-first
+ordering rule is satisfied vacuously because nothing in the change path touches a
+network.
+
 ## Proposed Solution
 
 Two parts, one atomic PR — the guard arm without its battery row is unproven, and
@@ -213,16 +266,26 @@ G2-19 "currently fails 'guard still PASSED'").
    `(loc, body, resource_name)` in `ssh_blocks`, compute `dialed = dials_fleet(b)`;
    skip when empty or when the file IS server.tf; otherwise require an
    `EXT_RESIDENCE` entry for `(file, resource_name)` whose `hosts` superset covers
-   `dialed`. Fail text keeps the literal `outside server.tf` so the existing G2-18
+   `dialed`. Superset semantics handle the multi-dial edge: a block dialing BOTH
+   web-1 and web-2 in an allowlisted file is flagged (`{web-1,web-2}` is not a
+   subset of `{web-1}`), as is any `web-\d+` not in the entry's set. Fail text keeps
+   the literal `outside server.tf` so the existing G2-18
    anchor and the new G2-19 anchor both resolve: `"G2: web-fleet-dialing connection
    block(s) outside server.tf — they escape the sibling-class credential/destination
    checks in §1 and carry no residence allowance: "`.
 
 5. **Stale-allowance arm.** Every `EXT_RESIDENCE` entry must resolve to a swept
-   block: the file is present in the walk, the resource name resolves, and at least
-   one of its blocks dials a declared host. An entry naming a resource that no
-   longer carries a fleet-dialing block is a finding — the exemption cannot rot
-   in place after its resource is deleted or repointed.
+   block: the file is present in the walk, the resource name resolves, and at
+   least one swept block at `(file, resource_name)` has `dials_fleet`
+   intersecting the entry's `hosts` — AND the entry's `reason` is non-empty
+   (guard-internal self-check; the battery mutates `.tf` inputs only and cannot
+   reach the table, so this invariant is verified by code review and fails loudly
+   at guard runtime if violated). An entry whose resource lost its connection
+   block, or repointed it off every declared host, is a finding — the exemption
+   cannot rot in place after its resource is deleted or repointed. FAIL text
+   carries the literal
+   `stale EXT_RESIDENCE entry` so the battery row anchors on THIS arm rather than
+   the residence arm's `residence allowance` phrasing.
 
 6. **Header comment.** Extend the G2 section's scope note: residence is
    fleet-symmetric; the allowance is the single exemption surface.
@@ -234,14 +297,18 @@ G2-19 "currently fails 'guard still PASSED'").
 | G2-19 | Append a web-1-dialing `terraform_data` WITH `host_key = local.web_1_ssh_host_key` to `tunnel.tf` (the issue's demonstrated escape) | `outside server.tf` | P1 — the arm fires where today it cannot |
 | G2-20 | Append a SECOND phantom web-1-dialing `terraform_data` (different resource name) to `workspaces-luks.tf` | `outside server.tf` | P2 — allowance is resource-granular, not a file blanket |
 | G2-21 | Append a web-2-dialing block to `workspaces-luks.tf` (an allowlisted file) | `outside server.tf` | P2 — allowance is host-scoped; web-2 residence keeps zero exceptions |
-| G2-22 | Delete the `connection {}` block from `ci-ssh-key.tf` | stale-allowance text | P3 — the orphaned entry is a finding |
+| G2-22 | Delete the `connection {}` block from `ci-ssh-key.tf` | `stale EXT_RESIDENCE` | P3 — the orphaned entry is a finding |
 
 Green coverage stays with the existing baseline row: the real tree's four declared
 dialers are the must-PASS members, swept on every run.
 
-Update the `FLOOR=58` comment and re-derive the case count from the battery log
-(+4 rows). No changes to `FLOOR_BLOCKS`/`FLOOR_RESOURCES` — the battery mutates the
-sandbox, not the real tree.
+Accounting (`web-host-provisioner-parity-mutation.test.sh:1481`): `FLOOR` floors
+`mutations_run` (landed `expect_red`/`expect_green` mutations), not `cases` — four
+new `expect_red` rows raise it 58 → 62 and the annotation is re-derived per the
+file convention (`+4 #9998 residence rows (G2-19..22)`). `PROBE_FLOOR`/
+`PROBE_RED_FLOOR` are untouched (no probe rows added), as are `FLOOR_BLOCKS`/
+`FLOOR_RESOURCES` in the guard — the battery mutates the sandbox, not the real
+tree.
 
 ## Technical Considerations
 
@@ -486,8 +553,11 @@ None.
 - [ ] AC7: §1's census is untouched — `ssh_resources`, `uncovered`, `stale`, and
   `_fleet_extra` remain `srv`-scoped; the fix is G2-side only (per the issue's
   guard-side fix-shape).
-- [ ] AC8: An `EXT_RESIDENCE` entry with an empty/missing `reason` is a finding
-  (the exemption surface is reason-mandatory like `ALLOWLIST`/`ONLY_JUSTIFIED`).
+- [ ] AC8: The guard carries a runtime self-check that an `EXT_RESIDENCE` entry
+  with an empty/missing `reason` fails loudly (guard-internal invariant folded
+  into the stale-allowance arm — the battery mutates `.tf` inputs only and cannot
+  reach the table, so this is verified by code review, matching the
+  `ALLOWLIST`/`ONLY_JUSTIFIED` reason-mandatory convention).
 
 ## Test Scenarios
 
@@ -510,6 +580,37 @@ None.
 - Given `tunnel.tf` carrying only comment mentions of `connection {` and
   `hcloud_server.web["web-1"]`, when the guard runs, then it stays green —
   `strip_hcl` precedes the walk. (`integration`, control extending G2-C2's pin)
+
+## Risks & Mitigations
+
+| Risk | Mitigation |
+|---|---|
+| The allowance becomes a file-level blanket that a second phantom hides behind | Resource-granular `(file, resource_name)` keys; battery row G2-20 reds on exactly that shape |
+| A web-2/web-N dialer slips in under a web-1 allowance | Host-scoped `hosts` sets with superset coverage; battery row G2-21 reds on it |
+| Allowance rots after its resource is deleted or repointed | Stale-allowance arm + G2-22; FAIL literal `stale EXT_RESIDENCE entry` |
+| Anchor drift: renaming the fail text silently un-pins G2-18 | `outside server.tf` retained verbatim in the new arm's message; AC4 asserts G2-18 still passes |
+| Textual-dial scope misses indirect host spellings | Named residual gap (Technical Considerations item d) with the issue's `git grep` tripwire carried forward — a deliberate scope cut, not an oversight |
+| Enclosing-resource resolution mis-attributes a block | Fail-closed: unresolvable name matches no allowance entry and reds; `.tf` uses last-preceding-`resource` (HCL resources do not nest), `.tf.json` uses the `json_blocks` path |
+| Merge fires the apply workflow on `infra/**` | No `.tf`/`triggers_replace` change → no-diff apply; PR body carries the merge-effect first line (Context section) |
+
+**Precedent-diff (deepen-plan Phase 4.4).** Pattern-bound elements against their
+canonical repo precedents:
+
+- `EXT_RESIDENCE` vs `ALLOWLIST` (`web-host-provisioner-parity.test.sh:148`) and
+  `ONLY_JUSTIFIED` (`:391`): same dict-with-mandatory-reason shape, extended from
+  flat `key → reason` to `key → {hosts, reason}` because the exemption needs a
+  second dimension (which hosts). Divergence is minimal and deliberate.
+- `dials_fleet` vs `dials_web_1`/`dials_web_2` (`:1200-1207`): identical
+  normalization (`re.sub(r'\s+','',text).replace('\\"','"')`, `json.dumps` for
+  dict blocks); the only change is `findall` on `hcloud_server\.web\["(web-\d+)"\]`
+  returning a set instead of a per-host boolean.
+- G2-19..22 rows vs G2-18 (`mutation.test.sh:1272`): same
+  `expect_red "<label>" <file> <anchor> '<python mutator>'` form; G2-19's mutator
+  mirrors G2-18's appended-resource heredoc, differing only in the dialed host
+  (web-1) and the added `host_key` line — the exact delta the issue demonstrates.
+- Stale-allowance arm vs the file's own rot-guards (`ALLOWLIST` header comment:
+  "a claim that silently outlives the set it described is the exact defect") —
+  the arm mechanizes the same convention.
 
 ## Non-Goals
 
