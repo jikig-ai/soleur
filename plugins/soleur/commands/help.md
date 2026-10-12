@@ -12,7 +12,7 @@ Display a formatted overview of all available Soleur capabilities. Read the plug
 
 Use the **Read tool** to read `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json` to get the plugin name, description, and metadata.
 
-Then resolve the installed version with the **Bash tool**: run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/plugin-version.sh" --installed` (if `CLAUDE_PLUGIN_ROOT` is not set or the script is not there, use `plugins/soleur/scripts/plugin-version.sh` in a monorepo checkout). It prints `key=value` lines: `source=manifest` with `version=`, `source=commit` with `commit=` (a 12-character hash), or `source=unknown`/`source=none`. Use only what it prints. The manifest carries no `version` key by design (#7471), so never report a version read from it yourself and never guess one. This call is local and does no network lookup.
+Then resolve the installed version with the **Bash tool**: run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/plugin-version.sh" --installed` (if the script is not at that path, treat the version as unknown and do not look for it elsewhere). It prints `key=value` lines: `source=manifest` with `version=`, `source=commit` with `commit=` (a 12-character hash), or `source=unknown`/`source=none`. Use only what it prints. The manifest carries no `version` key by design (#7471), so never report a version read from it yourself and never guess one. This call is local and does no network lookup.
 
 If `CLAUDE_PLUGIN_ROOT` is not set or the path does not exist, try reading from `plugins/soleur/.claude-plugin/plugin.json` (monorepo checkout) or `~/.claude/plugins/*/soleur/.claude-plugin/plugin.json` (legacy installed path).
 
@@ -59,7 +59,7 @@ Soleur - The Company-as-a-Service Platform
 
 [Version line: `Soleur <version>` when source=manifest, `Soleur commit <commit>` when source=commit.
  When source is unknown or none, print no version line; print only the hint
- "Version unknown - run /soleur:version".]
+ "Version unknown (on Claude Code: run /soleur:version)".]
 
 COMMANDS:
   /soleur:go <what you want>  The recommended way to use Soleur

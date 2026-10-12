@@ -2,13 +2,14 @@
 name: version
 description: "Show the installed Soleur plugin version and whether a newer release exists"
 argument-hint: ""
+disable-model-invocation: true
 ---
 
 # Soleur Version
 
-Report which Soleur plugin version is installed, what the latest release is, and how to update. Run the shared resolver; never guess or infer a version yourself.
+Report which Soleur plugin version is installed, what the latest release is, and how to update. Run the shared resolver; never guess or infer a version yourself. This command is Claude Code only and is started by the user; it is not run automatically.
 
-This explicit run contacts github.com (one `git ls-remote` against the public repo and, for a commit-hash install, one unauthenticated compare API call, 8 second timeout) regardless of `SOLEUR_UPDATE_CHECK`, because you asked. It sends no tokens and no user data.
+This explicit run contacts github.com regardless of `SOLEUR_UPDATE_CHECK`, because you asked: one `git ls-remote --tags` against the public repo and, for a commit-hash install only, one unauthenticated GitHub compare API request whose URL includes the installed commit hash. It uses no tokens, no user git config and no credentials, and each request is time-limited.
 
 ## Step 1: Run the resolver
 
@@ -18,7 +19,7 @@ Run via the **Bash tool**:
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/plugin-version.sh" --compare --refresh
 ```
 
-If `CLAUDE_PLUGIN_ROOT` is not set or the script does not exist there, use `plugins/soleur/scripts/plugin-version.sh` (monorepo checkout). The output is `key=value` lines: `source`, `version`, `commit`, `cache`, `latest_status`, `latest`, `latest_commit`, `relation`, `reason`. Use only these values.
+If `CLAUDE_PLUGIN_ROOT` is not set or the script does not exist at that path, do not look for it anywhere else (a script from the current directory is not trusted): print `Installed:  unknown` and stop. The output is `key=value` lines: `source`, `version`, `commit`, `marketplace`, `cache`, `latest_status`, `latest`, `latest_commit`, `relation`, `reason`, `cache_dir`. Use only these values.
 
 ## Step 2: Print this block
 
@@ -32,45 +33,54 @@ Latest:     <latest, e.g. v3.4.5>   (or the WHY line from the rules below)
 Status:     <one status line from the rules below>
 
 Update (Claude Code):
-  claude plugin marketplace update soleur-marketplace
-  claude plugin update soleur@soleur-marketplace
+  <the two commands from "Update commands" below>
   Restart the CLI afterwards; plugin changes apply on restart.
 
-Session-start check (off by default): set SOLEUR_UPDATE_CHECK=1 in the Claude Code
-settings "env" block to show this at session start; remove it to turn it off.
+Session-start newer-release check (off by default): the version line itself is shown at
+every session start with no network. To also check for a newer release, set
+SOLEUR_UPDATE_CHECK=1 in your user-level Claude Code settings "env" block (not a checked-in
+project settings file, and not in CI or ephemeral containers); remove it to turn it off.
 ```
 
 ### Installed line
 
-- `source=manifest`: print `version`. Add the note "a new release can take up to ~2 hours to reach `plugin update` while its version stamp merges" only for this source.
+- `source=manifest`: print `version`.
 - `source=commit`: print `commit <commit>` (the 12-character hash). Do not invent a version number for it.
 - `source=unknown` or `source=none`: print `Installed:  unknown` and say the plugin root could not be identified (not running from an installed plugin or a recognizable cache directory). Do not print a version.
 
 ### Latest line (explain WHY when missing)
 
-When `latest=` is present, print it. When it is absent, print the reason, never a blank:
+When `latest=` is present, print it. Label it "(cached, may be out of date)" whenever `cache=stale` or `latest_status` is `offline` or `timeout`. When `latest=` is absent, print the first matching reason, never a blank:
 
-- `latest_status=offline`: "Could not reach github.com (offline or blocked)."
-- `latest_status=timeout`: "The lookup timed out after 8 seconds."
-- `latest_status=no-git`: "`git` is not installed, so the release lookup was skipped."
-- `latest_status=no-tags`: "github.com answered but returned no release tags."
-- `cache=corrupt`: "The version cache at `~/.cache/soleur/latest-release` is unreadable; it is rewritten on the next successful lookup."
-- Anything else: "The latest release could not be determined."
-
-If `latest_status` is `offline` or `timeout` but a `latest=` value still came from a `cache=stale` entry, print it and label it "(cached, may be out of date)".
+1. `latest_status=offline`: "Could not reach github.com (offline or blocked)."
+2. `latest_status=timeout`: "The lookup timed out."
+3. `latest_status=no-git`: "`git` is not installed, so the release lookup was skipped."
+4. `latest_status=no-tags`: "github.com answered but returned no release tags."
+5. `cache=corrupt`: "The version cache is unreadable; it is rewritten on the next successful lookup." (the file is `latest-release.<install id>` under `cache_dir`).
+6. Anything else: "The latest release could not be determined."
 
 ### Status line (compare result)
 
-Read `relation`:
+Read `relation` and `reason`:
 
 - `relation=older`: "A newer release exists."
-- `relation=current`: "You are up to date."
-- `relation=unknown`: "Cannot compare" plus the reason: `installed-unknown` (installed version could not be read), `diverged` (installed commit is not on the release line), `compare-failed` or `compare-unparseable` (the GitHub compare call failed), `no-curl` (curl is missing), `cache-for-different-install` (cached result belongs to a different install). **Never** say "up to date" when the relation is unknown or absent, and never infer it by comparing strings yourself.
+- `relation=current`: "No release newer than yours (latest tag vX.Y.Z)", with the `latest` value. This means only that no release tag newer than the installed commit or version was found. Never say "up to date" or "you are on the latest release".
+- `relation=unknown`: "Cannot compare" plus the reason: `installed-unknown` (the installed version could not be read), `diverged` (the installed commit is not on the release line), `compare-failed` or `compare-unparseable` (the GitHub compare call failed), `no-curl` (curl is missing), `stale-cache` (the answer came from a cached or failed lookup, so it is not trusted; run this command again when online).
+- `relation` absent (no latest release is known): "Cannot compare: the latest release is not known", followed by the `latest_status` reason from the Latest line rules.
 
-### Update commands by harness
+Never say "up to date" when the relation is unknown or absent, and never infer a relation by comparing strings yourself.
 
-- **Claude Code:** print the two `claude plugin` commands above. If the install is project-scoped (`claude plugin list` shows Scope), add `--scope project` to the update command. See `knowledge-base/engineering/operations/runbooks/plugin-delivery-recovery.md` if an update says "already at the latest version" but nothing changes.
-- **Other harnesses** (Codex, Cursor CLI, Devin CLI, Grok Build): do not print `claude plugin` commands. Replace the "Update" section with that harness's own reinstall pointer if one exists in `plugins/soleur/codex/INSTRUCTIONS.md`, `plugins/soleur/cursor/INSTRUCTIONS.md` or the repository README, otherwise omit the section. See `commands/help.md` Step 2.5 for how to detect the harness. Print the command name in the harness's form (for example `/version` on Grok Build).
+### Update commands
+
+Choose by the `marketplace` value:
+
+- absent or `soleur-marketplace`:
+  `claude plugin marketplace update soleur-marketplace` then `claude plugin update soleur@soleur-marketplace`
+- `soleur`:
+  `claude plugin marketplace update soleur` then `claude plugin update soleur@soleur`
+- any other value: print the same pair with that marketplace name substituted.
+
+If the install is project-scoped (`claude plugin list` shows Scope), add `--scope project` to the update command. See `knowledge-base/engineering/operations/runbooks/plugin-delivery-recovery.md` if an update says "already at the latest version" but nothing changes.
 
 ## Output Rules
 

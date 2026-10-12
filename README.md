@@ -188,7 +188,7 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound
 | `/soleur:go` | Unified entry point -- routes to the right workflow skill |
 | `/soleur:sync` | Analyze codebase and populate knowledge-base |
 | `/soleur:help` | List all available Soleur commands, agents, and skills |
-| `/soleur:version` | Show the installed plugin version and whether a newer release exists |
+| `/soleur:version` | Show the installed plugin version and whether a newer release exists (Claude Code only) |
 
 Claude Code: `/soleur:go`. Grok Build: `/go`.
 
