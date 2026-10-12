@@ -113,19 +113,28 @@ VALUE_OPTS = {"--name", "--log-driver", "--restart", "--memory", "--memory-swap"
 NAME_RE = re.compile(r"--name(?:=|\s+)[\"']?soleur-web-platform")
 HEREDOC_RE = re.compile(r"(?<!<)<<-?\s*([\"']?)([A-Za-z_][A-Za-z0-9_]*)\1")
 GLOBAL_OPTS = r"(?:(?:-H|--host|--config|--context|-c|-l|--log-level)(?:\s+|=)\S+|-D|--debug|--tls|--tlsverify)"
-DOCKER_WORD = re.compile(r"(?<![\w./$-])(?:/(?:[\w.-]+/)*)?docker(?![\w.-])|\"?\$\{?\w*DOCKER\w*\}?\"?")
+DOCKER_WORD = re.compile(r"(?<![\w./$-])(?:/(?:[\w.-]+/)*)?docker(?![\w.-])|(?i:\"?\$\{?\w*DOCKER\w*\}?\"?)")
 VERB_RE = re.compile(r"\s+(?:" + GLOBAL_OPTS + r"\s+)*(?P<grp>(?:container|service|compose)\s+)?(?P<verb>run|create|up)\b")
 PLAIN_VERB_RE = re.compile(r"\s+(?P<verb>run|create)\b")
 INDIRECT_RE = re.compile(r"\b(?:eval|xargs|ssh)\b|\b(?:ba)?sh\s+-\w*c\b")
 NODE_ASSIGN_RE = re.compile(r"(?<![\w$])(PROD|CANARY)_NODE_OPTIONS\s*\+?=")
 BOUNDARY_WORDS = {"if", "then", "do", "else", "elif", "while", "until", "!", "&&", "||", ";", "|", "&", "(", "{", "time"}
-WRAPPERS = {"sudo", "env", "command", "exec", "nohup", "nice", "ionice", "stdbuf", "timeout", "time"}
+WRAPPERS = {"sudo", "env", "command", "exec", "nohup", "nice", "ionice", "stdbuf", "timeout", "time", "setsid"}
 ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=\S*$")
-# An exempt site is a named exception to the census, not an exception to the posture: it may never carry a
-# privilege-class option, so a `docker create --privileged ...` of an exempt name (later `docker start`ed)
-# cannot ride the exemption. (`--network host` is deliberately NOT denied: the cosign verifier run uses it.)
-EXEMPT_DENY_RE = re.compile(r"^(?:--privileged|--cap-add|--pid|--ipc|--uts|--userns|--cgroupns|--device|--security-opt)(?:=|$)")
-CASE_LABEL_RE = re.compile(r"^[^()\s]*\)$")
+# An exempt site is a named exception to the census, not an exception to the posture, so it is parsed CLOSED-WORLD
+# too: a `docker create` is exactly `--name NAME IMAGE` (every real site is), and the cosign verifier run is exactly
+# the option set it uses today. Anything else (a volume, a mount, a user, a capability, a privilege flag, a different
+# image) is UNCLASSIFIED rather than riding the exemption.
+COSIGN_FLAGS = {"--rm", "--quiet"}
+COSIGN_VALUE_OPTS = {
+    "--network": {"host"},
+    "--user": {"$cosign_user"},
+    "-e": {"DOCKER_CONFIG=$cosign_cfg_dir"},
+    "-v": {"$GHCR_DOCKER_CONFIG:$cosign_cfg_dir/config.json:ro", "$COSIGN_TRUSTED_ROOT_HOST:/etc/cosign/trusted_root.json:ro"},
+}
+COSIGN_IMAGE = "$COSIGN_IMAGE"
+# `case x in a) …`, `a|b) …` and the parenthesised `(a) …` label forms all put a command in command position.
+CASE_LABEL_RE = re.compile(r"^\(?[^()\s]*\)$")
 TIMEOUT_ARG_RE = re.compile(r"^(?:\d+[smhd]?|-{1,2}[\w-]+(?:=\S*)?)$")
 
 
@@ -161,39 +170,82 @@ class Logical:
 
 
 def heredoc_tags(text):
-    """Heredoc tags the line really opens: a `<<` inside quotes or inside `$(( ))` / `(( ))` arithmetic is a
-    shift or a string, and treating it as an opener would hide every following line from the census."""
+    """-> (tags, ambiguous). Heredoc tags the line really opens: a `<<` inside quotes or inside `$(( ))` / `(( ))`
+    arithmetic is a shift or a string, and treating it as an opener would hide every following line from the census.
+    A `<<` met inside a construct this small lexer does not model (`${ }`, `$[ ]`, `$'...'`, `[[ ]]`) cannot be
+    decided either way, so it is reported as AMBIGUOUS (a violation) instead of being guessed."""
     tags = []
+    ambiguous = False
     sq = dq = False
     arith = 0
+    brace = 0       # ${ ... } nesting
+    bracket = 0     # $[ ... ] nesting
+    cond = 0        # [[ ... ]] nesting
+    ansi = False    # $'...' (backslash escapes the quote)
     i = 0
     n = len(text)
     while i < n:
         c = text[i]
+        if ansi:
+            if c == "\\":
+                i += 2
+                continue
+            if c == "'":
+                ansi = False
+            elif text.startswith("<<", i):
+                ambiguous = True
+            i += 1
+            continue
         if c == "\\" and not sq:
             i += 2
             continue
         if c == "'" and not dq:
-            sq = not sq
+            if not sq and i > 0 and text[i - 1] == "$":
+                ansi = True
+            else:
+                sq = not sq
         elif c == '"' and not sq:
             dq = not dq
         elif not sq and not dq:
-            if text.startswith("((", i):
+            if text.startswith("${", i):
+                brace += 1
+                i += 2
+                continue
+            if text.startswith("$[", i):
+                bracket += 1
+                i += 2
+                continue
+            if text.startswith("[[", i):
+                cond += 1
+                i += 2
+                continue
+            if cond and text.startswith("]]", i):
+                cond -= 1
+                i += 2
+                continue
+            if brace and c == "}":
+                brace -= 1
+            elif bracket and c == "]":
+                bracket -= 1
+            elif text.startswith("((", i):
                 arith += 1
                 i += 2
                 continue
-            if arith and text.startswith("))", i):
+            elif arith and text.startswith("))", i):
                 arith -= 1
                 i += 2
                 continue
-            if not arith and text.startswith("<<", i):
-                m = HEREDOC_RE.match(text, i)
-                if m:
-                    tags.append(m.group(2))
-                    i = m.end()
-                    continue
+            elif text.startswith("<<", i) and not text.startswith("<<<", i):
+                if brace or bracket or cond:
+                    ambiguous = True
+                elif not arith:
+                    m = HEREDOC_RE.match(text, i)
+                    if m:
+                        tags.append(m.group(2))
+                        i = m.end()
+                        continue
         i += 1
-    return tags
+    return tags, ambiguous
 
 
 def ends_with_continuation(raw):
@@ -204,10 +256,11 @@ def ends_with_continuation(raw):
 def logical_lines(text):
     """Bash-faithful logical lines. Backslash-newline joins; a comment-only line inside a continuation ends the
     command (bash turns `cmd \\` + `# note` into `cmd # note`); heredoc bodies are yielded as heredoc lines.
-    Returns (lines, unterminated) where unterminated is a list of (tag, lineno)."""
+    Returns (lines, unterminated, ambiguous): unterminated is a list of (tag, lineno), ambiguous a list of linenos."""
     phys = text.split("\n")
     out = []
     unterminated = []
+    ambiguous = []        # line numbers whose `<<` sits in a construct the lexer does not model
     pending = []          # heredoc tags opened by the current logical line, in order
     active = None         # (tag, opened_at_line)
     i = 0
@@ -238,7 +291,9 @@ def logical_lines(text):
                 parts.append((nstrip[:-1] if cont else nstrip).strip())
         joined = " ".join(parts)
         out.append(Logical(start + 1, i + 1, joined[:MAX_LINE], size > MAX_LINE, False))
-        tags = heredoc_tags(joined[:MAX_LINE])
+        tags, ambiguous_here = heredoc_tags(joined[:MAX_LINE])
+        if ambiguous_here:
+            ambiguous.append(start + 1)
         if tags:
             active = (tags[0], start + 1)
             pending = tags[1:]
@@ -247,7 +302,7 @@ def logical_lines(text):
         unterminated.append((active[0], active[1]))
     for tag in pending:
         unterminated.append((tag, 0))
-    return out, unterminated
+    return out, unterminated, ambiguous
 
 
 # --- census -------------------------------------------------------------------------------------------------
@@ -608,7 +663,10 @@ def scan(root):
         if text is None:
             unreadable.append((fname, why))
             continue
-        lines, unterminated = logical_lines(text)
+        lines, unterminated, ambiguous = logical_lines(text)
+        for ln in ambiguous:
+            scan_viols.append("FAIL UNPARSEABLE_OPTION: a heredoc opener inside ${ }, $[ ], $'...' or [[ ]] in %s:%d cannot be decided "
+                              "(bash may or may not open a heredoc there, which would hide every following line); rewrite the line" % (fname, ln))
         for tag, ln in unterminated:
             scan_viols.append("FAIL UNPARSEABLE_OPTION: unterminated heredoc %s in %s:%d" % (tag, fname, ln))
         for lg in lines:
@@ -622,8 +680,7 @@ def scan(root):
                 if s.kind == "app":
                     own.update(range(s.line, s.end_line + 1))
                     app_sites.append(s)
-                elif s.kind == "exempt":
-                    own.update(range(s.line, s.end_line + 1))
+                # an exempt site does NOT own its lines: the indirect-wrapper and app-name scans below still read them
             else:
                 own.update(range(s.line, s.end_line + 1))
                 extra.append("FAIL UNCLASSIFIED_DOCKER_RUN: %s:%d %s" % (fname, s.line, reason))
@@ -664,6 +721,8 @@ def scan(root):
             break
         text, why = read_text(path)
         if text is None:
+            scan_viols.append("FAIL UNPARSEABLE_OPTION: cannot scan %s (%s); a file that cannot be read cannot be shown free of an app start site"
+                              % (relname(path, root), why))
             continue
         if "soleur-web-platform" not in text:
             continue
@@ -708,17 +767,60 @@ def classify_site(s, fname):
         s.rec, s.option_viols = walk_options(s, spec, ident)
         return None
     # exempt sites
-    bad_opt = [t for t in s.toks if EXEMPT_DENY_RE.match(t)]
-    if bad_opt:
-        return "docker %s site carries privilege-class option %s and is not a declared app tuple" % (s.verb, bad_opt[0])
     if s.verb == "run" and s.plain and "--rm" in s.toks and any((fname, "image", t) in EXEMPT_RUN for t in s.toks):
+        bad = exempt_run_violation(s)
+        if bad:
+            return "the cosign verifier run %s (an exempt site is parsed closed-world: only its real option set is allowed)" % bad
         s.kind = "exempt"
         return None
     if s.verb == "create" and s.plain and name is not None and (fname, name) in EXEMPT_CREATE:
+        bad = exempt_create_violation(s)
+        if bad:
+            return "exempt `docker create` of %s %s (an exempt create is exactly `--name NAME IMAGE`)" % (name, bad)
         s.kind = "exempt"
         return None
     return "docker %s%s site that is neither a declared app tuple nor a named exemption (name %s)" % (
         s.group + " " if s.group else "", s.verb, name if name is not None else "none")
+
+
+def _statement(toks):
+    """Tokens up to the first punctuation token (`;`, `&&`, `|`, a redirect): the docker command's own words."""
+    for k, t in enumerate(toks):
+        if t and all(c in "();<>|&" for c in t):
+            return toks[:k]
+    return toks
+
+
+def exempt_create_violation(s):
+    words = _statement(s.toks)
+    # docker create --name NAME IMAGE   (nothing between, nothing after the image before the statement ends)
+    if len(words) == 5 and words[2] == "--name" and not words[4].startswith("-"):
+        return None
+    if len(words) == 4 and words[2].startswith("--name=") and not words[3].startswith("-"):
+        return None
+    return "carries words beyond `--name NAME IMAGE`: %s" % " ".join(words[2:8])
+
+
+def exempt_run_violation(s):
+    words = _statement(s.toks)
+    i = 2
+    n = len(words)
+    while i < n:
+        t = words[i]
+        if t in COSIGN_FLAGS:
+            i += 1
+            continue
+        if t in COSIGN_VALUE_OPTS:
+            if i + 1 >= n or words[i + 1] not in COSIGN_VALUE_OPTS[t]:
+                return "has an unexpected value for %s" % t
+            i += 2
+            continue
+        if t.startswith("-"):
+            return "carries the option %s" % t
+        if t != COSIGN_IMAGE:
+            return "starts a different image or command (%s) instead of %s" % (t, COSIGN_IMAGE)
+        return None
+    return "has no image"
 
 
 def _prefix_ok(self):
@@ -758,10 +860,10 @@ HINTS = {
     "ENV_NAME": "remove the environment variable from the tuple (PATH, loader and runtime-hijack names are never allowed)",
     "DUPLICATE_OPTION": "keep exactly one occurrence; docker honours the last, so a second one hides the first",
     "TRAILING_ARGS": "nothing may follow the image except `; then`",
-    "TUPLE_COUNT": "a start site was added, moved or renamed: declare it together with the site and keep the three-tuple expectation; never lower the count",
-    "UNCLASSIFIED_DOCKER_RUN": "declare it as an app tuple, or add a NAMED non-app exemption (EXEMPT_RUN / EXEMPT_CREATE); an exempt site may not carry privilege-class options",
+    "TUPLE_COUNT": "a start site was added, moved or renamed: declare it together with the site and keep the three-tuple expectation; never lower the count (when the line says `cannot read`, a scanned file is missing, unreadable or not a regular file: restore it)",
+    "UNCLASSIFIED_DOCKER_RUN": "declare it as an app tuple, or add a NAMED non-app exemption (EXEMPT_RUN / EXEMPT_CREATE) ONLY with a security review: an exempt site is closed-world too (a create is exactly `--name NAME IMAGE`)",
     "POSTURE_DIVERGENCE": "restore the apparmor, seccomp and tmpfs options on the named tuple",
-    "UNPARSEABLE_OPTION": "make the option literal; a variable, substitution or heredoc trick in option position is refused",
+    "UNPARSEABLE_OPTION": "make the option literal; a variable, substitution or ambiguous heredoc opener is refused, and a file that cannot be read cannot be shown free of a start site",
 }
 
 

@@ -372,7 +372,28 @@ kill_row K20c-heredoc-arithmetic-shift 'm_append_lines "$CI_DEPLOY_REL" "x=\$(( 
 kill_row K20d-heredoc-quoted-opener 'm_append_lines "$CI_DEPLOY_REL" "echo \"<""<EOF\"" "docker run -d --privileged img" "EOF"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh'
 kill_row K20e-case-label-position 'm_append "$CI_DEPLOY_REL" "case \"\$X\" in start) docker run -d --cap-add ALL img ;; esac"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh'
 kill_row K20f-eval-upper-docker-var 'm_append "$CI_DEPLOY_REL" "eval \"\$DOCKER run -d img\""' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh'
-kill_row K20g-exempt-name-privileged 'm_append "$CI_DEPLOY_REL" "docker create --name soleur-plugin-seed --privileged -v /:/h img"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'privilege-class option --privileged'
+kill_row K20g-exempt-name-privileged 'm_append "$CI_DEPLOY_REL" "docker create --name soleur-plugin-seed --privileged -v /:/h img"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'exempt `docker create` of soleur-plugin-seed carries words beyond'
+# --- #10065 review round 2: an exempt site is parsed closed-world, a chained second start needs no privilege flag to be refused,
+# --- and a `<<` the lexer cannot decide (single quote, backslash, ${ }, $[ ], $'...') never hides the lines after it
+kill_row K21a-chained-bare-after-create 'm_append "$CI_DEPLOY_REL" "docker create --name soleur-plugin-seed \"\$VERIFIED_REF\" >/dev/null; docker run -d --name sneaky img"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh'
+kill_row K21b-chained-bare-after-cosign 'm_append "$CI_DEPLOY_REL" "docker run --rm \"\$COSIGN_IMAGE\" x && docker run -d img"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh'
+kill_row K21c-create-with-volume 'm_append "$CI_DEPLOY_REL" "docker create --name soleur-plugin-seed -v /:/h img"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'carries words beyond'
+kill_row K21d-create-with-user 'm_append "$CI_DEPLOY_REL" "docker create --name soleur-plugin-seed --user root img"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'carries words beyond'
+kill_row K21e-create-with-pid 'm_append "$CI_DEPLOY_REL" "docker create --pid host --name soleur-plugin-seed img"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'carries words beyond'
+kill_row K21f-cosign-cap-add 'm_append "$CI_DEPLOY_REL" "docker run --rm --cap-add SYS_ADMIN \"\$COSIGN_IMAGE\" x"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'carries the option --cap-add'
+kill_row K21g-cosign-host-mount 'm_append "$CI_DEPLOY_REL" "docker run --rm -v /:/h \"\$COSIGN_IMAGE\" x"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'unexpected value for -v'
+kill_row K21h-cosign-root-user 'm_append "$CI_DEPLOY_REL" "docker run --rm --user root \"\$COSIGN_IMAGE\" x"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'unexpected value for --user'
+kill_row K21i-cosign-other-network 'm_append "$CI_DEPLOY_REL" "docker run --rm --network container:web \"\$COSIGN_IMAGE\" x"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'unexpected value for --network'
+kill_row K21j-cosign-image-swapped 'm_append "$CI_DEPLOY_REL" "docker run --rm evil/img \"\$COSIGN_IMAGE\""' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh' 'starts a different image'
+kill_row K21k-heredoc-single-quoted-opener 'm_append_lines "$CI_DEPLOY_REL" "echo '"'"'<""<EOF'"'"'" "docker run -d --privileged img" "EOF"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh'
+kill_row K21l-heredoc-backslash-opener 'm_append_lines "$CI_DEPLOY_REL" "echo \\<""<EOF" "docker run -d --privileged img" "EOF"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh'
+kill_row K21m-heredoc-in-param-expansion 'm_append_lines "$CI_DEPLOY_REL" "x=\${X:-<""<EOF}" "docker run -d --privileged img" "EOF"' 'UNPARSEABLE_OPTION: a heredoc opener inside'
+kill_row K21n-heredoc-in-ansi-quote 'm_append_lines "$CI_DEPLOY_REL" "x=\$'"'"'<""<EOF'"'"'" "docker run -d --privileged img" "EOF"' 'UNPARSEABLE_OPTION: a heredoc opener inside'
+kill_row K21o-heredoc-in-double-bracket 'm_append_lines "$CI_DEPLOY_REL" "[[ a <""<EOF ]]" "docker run -d --privileged img" "EOF"' 'UNPARSEABLE_OPTION: a heredoc opener inside'
+kill_row K21p-wide-scope-symlink 'm_write apps/web-platform/infra/other.sh "echo x"; m_symlink apps/web-platform/infra/other.sh /dev/zero' 'UNPARSEABLE_OPTION: cannot scan apps/web-platform/infra/other.sh' 'not a regular file'
+kill_row K21q-setsid-wrapped-docker 'm_append "$CI_DEPLOY_REL" "setsid docker run -d --privileged img"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh'
+kill_row K21r-case-paren-label 'm_append "$CI_DEPLOY_REL" "case \"\$X\" in (start) docker run -d --cap-add ALL img ;; esac"' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh'
+kill_row K21s-eval-lower-docker-var 'm_append "$CI_DEPLOY_REL" "eval \"\$docker run -d img\""' 'UNCLASSIFIED_DOCKER_RUN: ci-deploy.sh'
 kill_row K20i-memory-zero-unlimited 'm_repl prod "--memory \"\$PROD_MEMORY_CAP\"" "--memory 0"' 'POSTURE_VALUE: --memory 0 in ci-deploy.sh prod'
 kill_row K20h-main-file-symlink   'm_symlink "$CI_DEPLOY_REL" /dev/zero'                 'TUPLE_COUNT: cannot read ci-deploy.sh' 'not a regular file'
 
@@ -564,14 +585,18 @@ h1_stub() { # <stub name> <function> <return expr> <row id>...
 h1_stub classify check_options '[]' \
   K01-prod-cap-add-space K02-first-boot-cap-add-eq K03a-canary-pid-eq K03b-canary-pid-space \
   K04a-prod-systempaths K04b-prod-systempaths-eq K07a-canary-env-path K07b-canary-env-ldpre \
-  K08a-splat K10a-apparmor-unconfined K10b-seccomp-unconfined K10f-privileged K10r-volume-root
+  K08a-splat K10a-apparmor-unconfined K10b-seccomp-unconfined K10f-privileged K10r-volume-root K20i-memory-zero-unlimited
 h1_stub census check_count '[]' \
   K05-prod-renamed K06-fourth-site-dup K11-heredoc-all K16-missing-cloud-init K20h-main-file-symlink
 h1_stub projection check_projection '[]' \
   K09a-first-boot-no-apparmor K09b-prod-no-seccomp K09c-canary-no-tmpfs
 h1_stub unclassified check_census_extra '[]' \
   K13a-create-app-name K13c-global-option K13f-unnamed-run K13g-bash-c-string K14a-workflow-start-site \
-  K20a-chained-after-exempt-create K20c-heredoc-arithmetic-shift K20g-exempt-name-privileged
+  K20a-chained-after-exempt-create K20b-chained-after-cosign K20c-heredoc-arithmetic-shift K20d-heredoc-quoted-opener \
+  K20e-case-label-position K20f-eval-upper-docker-var K20g-exempt-name-privileged \
+  K21a-chained-bare-after-create K21b-chained-bare-after-cosign K21c-create-with-volume K21d-create-with-user \
+  K21e-create-with-pid K21f-cosign-cap-add K21g-cosign-host-mount K21h-cosign-root-user K21i-cosign-other-network \
+  K21j-cosign-image-swapped K21k-heredoc-single-quoted-opener K21l-heredoc-backslash-opener K21q-setsid-wrapped-docker K21r-case-paren-label K21s-eval-lower-docker-var
 
 # ---------------------------------------------------------------------------------------
 # H2: the ledger. passes + fails must equal the rows executed (a verdict silently discarded would break it),
@@ -582,7 +607,7 @@ if [ "$((PASS + FAIL))" -ne "$ROWS" ]; then
   printf '[FATAL] accounting identity: passes(%s) + fails(%s) != rows(%s) - a verdict was discarded\n' "$PASS" "$FAIL" "$ROWS" >&2
   exit 1
 fi
-MIN_ROWS=137
+MIN_ROWS=176
 if [ "$ROWS" -lt "$MIN_ROWS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s rows ran, floor is %s\n' "$ROWS" "$MIN_ROWS" >&2
   exit 1

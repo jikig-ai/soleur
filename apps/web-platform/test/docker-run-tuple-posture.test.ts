@@ -30,7 +30,7 @@ const CI_DEPLOY = path.join(APP_ROOT, "infra", "ci-deploy.sh");
 const CLOUD_INIT = path.join(APP_ROOT, "infra", "cloud-init.yml");
 
 // The posture digest of the three real tuples. docker-run-tuple.test.sh pins the same literal: a posture change is a
-// visible edit in this file AND that one, not only in the helper that computes it.
+// visible edit in this file AND that one, not only in the helper that computes it (a failure here says to update both).
 const EXPECTED_POSTURE = "e959fc801d99";
 
 function runCheck(root?: string) {
@@ -43,7 +43,10 @@ describe("docker run tuple posture (closed world)", () => {
     const r = runCheck();
     expect(r.error, `python3 could not be spawned: ${String(r.error)}`).toBeUndefined();
     expect(r.status, `docker-run-tuple.py check failed:\n${r.stdout}${r.stderr}`).toBe(0);
-    expect(r.stdout.trim()).toBe(`docker-run-tuple:ok tuples=3 posture=${EXPECTED_POSTURE}`);
+    expect(
+      r.stdout.trim(),
+      `the tuple posture digest changed: if the change is intended and security-reviewed, update BOTH EXPECTED_POSTURE literals (this file and infra/docker-run-tuple.test.sh)`,
+    ).toBe(`docker-run-tuple:ok tuples=3 posture=${EXPECTED_POSTURE}`);
     expect(r.stdout).not.toMatch(/^FAIL /m);
   });
 
@@ -60,6 +63,7 @@ describe("docker run tuple posture (closed world)", () => {
       const r = runCheck(tmp);
       expect(r.status, `expected exit 1, got:\n${r.stdout}${r.stderr}`).toBe(1);
       expect(r.stdout).toMatch(/^FAIL UNKNOWN_OPTION: --cap-add in ci-deploy\.sh canary/m);
+      expect(r.stdout, "the failure must carry its remediation hint").toMatch(/^HINT UNKNOWN_OPTION: /m);
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
@@ -97,6 +101,7 @@ describe("masked-/proc docker suite: static arms (no docker daemon needed)", () 
     // The copy seam is refused under CI; the real docker run is never involved here, so CI is dropped unless a row sets it.
     if (!("CI" in (opts.env ?? {}))) delete env.CI;
     delete env.SOLEUR_SANDBOX_DOCKER_APPARMOR;
+    if (!opts.copy) delete env.SANDBOX_MASKED_PROC_SRC_ROOT; // an inherited copy seam would silently test another tree
     delete env.SANDBOX_MASKED_PROC_MUTATE;
     if (opts.env && "SANDBOX_MASKED_PROC_MUTATE" in opts.env) env.SANDBOX_MASKED_PROC_MUTATE = opts.env.SANDBOX_MASKED_PROC_MUTATE;
     const r = spawnSync("bash", [SUITE], { encoding: "utf8", timeout: 90_000, env, cwd: work });
@@ -122,24 +127,43 @@ describe("masked-/proc docker suite: static arms (no docker daemon needed)", () 
     writeFileSync(file, after);
   };
 
+  // The counts the suite must print are read from its own source, so adding or deleting an arm is a deliberate edit of the
+  // suite and this test follows it (a hard-coded number here would only restate the suite).
+  const SUITE_SRC = readFileSync(SUITE, "utf8");
+  const STATIC_ARMS = (SUITE_SRC.match(/^\s*pass "static: /gm) ?? []).length;
+  const ANALYZER_ROWS = (SUITE_SRC.match(/^\s*drop_expect (?:ok|bad) /gm) ?? []).length;
+
   it("the unmutated tree passes every static arm and then stops at DOCKER_UNAVAILABLE with no docker call but `docker info`", () => {
     expect(existsSync(SUITE)).toBe(true);
+    expect(STATIC_ARMS, "no `pass \"static: ` line was found in the suite source (the anchor moved)").toBeGreaterThan(0);
+    expect(ANALYZER_ROWS, "no `drop_expect` row was found in the suite source (the anchor moved)").toBeGreaterThan(0);
     const r = runSuite();
     expect(r.status, r.out.slice(0, 2000)).toBe(1);
     expect(r.out).toMatch(/FAIL: DOCKER_UNAVAILABLE/);
-    expect(r.out.match(/^ {2}pass: static: /gm) ?? []).toHaveLength(7);
-    expect((r.out.match(/^ {2}pass: analyzer: /gm) ?? []).length).toBeGreaterThanOrEqual(16);
+    expect(
+      (r.out.match(/^ {2}pass: static: /gm) ?? []).length,
+      `the suite source declares ${STATIC_ARMS} static arms; a different number ran (an arm was skipped or died silently)`,
+    ).toBe(STATIC_ARMS);
+    expect(
+      (r.out.match(/^ {2}pass: analyzer: /gm) ?? []).length,
+      `the suite source declares ${ANALYZER_ROWS} analyzer rows; a different number ran`,
+    ).toBe(ANALYZER_ROWS);
     expect(r.out.match(/^ {2}FAIL: /gm) ?? [], "an assertion failed before the docker gate").toHaveLength(0);
     expect(r.dockerCalls).toEqual(["info"]);
   }, 120_000);
 
+  // The cli-tools base digest is read from the Dockerfile (a hard-coded copy here would go stale on every base bump).
+  const CLI_TOOLS_FROM = /^(FROM \S+@sha256:)([0-9a-f]{8})([0-9a-f]{56} AS cli-tools)$/m;
   const ROWS: Array<[string, string, (copy: string) => void]> = [
-    ["cli-tools FROM another digest", "BASE_LINEAGE", (c) => edit(path.join(c, "Dockerfile"), (t) => t.replace(/^(FROM node:22-slim@sha256:)4f77a690(\S+ AS cli-tools)$/m, (_m, a: string, b: string) => `${a}0000a690${b}`))],
+    ["cli-tools FROM another digest", "BASE_LINEAGE", (c) => edit(path.join(c, "Dockerfile"), (t) => t.replace(CLI_TOOLS_FROM, (_m, a: string, _d: string, b: string) => `${a}00000000${b}`))],
     ["runner FROM builder", "BASE_LINEAGE", (c) => edit(path.join(c, "Dockerfile"), (t) => t.replace("FROM cli-tools AS runner", "FROM builder AS runner"))],
     ["ENV PATH puts /usr/bin first", "PATH_ORDER", (c) => edit(path.join(c, "Dockerfile"), (t) => t.replace("ENV NODE_ENV=production", "ENV NODE_ENV=production\nENV PATH=/usr/bin:/usr/local/bin:$PATH"))],
     ["ENV PATH from an unresolved ARG", "PATH_ORDER", (c) => edit(path.join(c, "Dockerfile"), (t) => t.replace("ENV NODE_ENV=production", "ENV NODE_ENV=production\nENV PATH=$EXTRA_PATH"))],
     ["bwrap given a file capability", "ELEVATION", (c) => edit(path.join(c, "Dockerfile"), (t) => `${t}\nRUN setcap cap_sys_admin+ep /usr/bin/bwrap\n`)],
     ["bwrap made setuid", "ELEVATION", (c) => edit(path.join(c, "Dockerfile"), (t) => `${t}\nRUN chmod u+s /usr/bin/bwrap\n`)],
+    ["bwrap made setuid by octal mode", "ELEVATION", (c) => edit(path.join(c, "Dockerfile"), (t) => `${t}\nRUN chmod 4755 /usr/bin/bwrap\n`)],
+    ["bwrap made setuid by a symbolic mode with s", "ELEVATION", (c) => edit(path.join(c, "Dockerfile"), (t) => `${t}\nRUN chmod u=rwxs,go=rx /usr/bin/bwrap\n`)],
+    ["bwrap copied with a setuid --chmod", "ELEVATION", (c) => edit(path.join(c, "Dockerfile"), (t) => `${t}\nCOPY --chmod=4755 /x /usr/bin/bwrap\n`)],
     ["last USER is root", "USER_DRIFT", (c) => edit(path.join(c, "Dockerfile"), (t) => `${t}\nUSER root\n`)],
     ["canary fixture loses the vendor tail bind", "FIXTURE_TAIL", (c) => edit(path.join(c, "infra", "sandbox-canary-argv.json"), (t) => {
       const j = JSON.parse(t);
@@ -161,6 +185,15 @@ describe("masked-/proc docker suite: static arms (no docker daemon needed)", () 
       expect(r.dockerCalls, "a docker call happened before the static arm refused").toEqual([]);
     }, 120_000);
   }
+
+  it("a lowercase `as` stage name is read like `AS` (the static arms still pass; a stricter parse would only be a false red)", () => {
+    const copy = makeCopy("row-lowercase-as");
+    edit(path.join(copy, "Dockerfile"), (t) => t.replace(/^(FROM \S+) AS cli-tools$/m, "$1 as cli-tools"));
+    const r = runSuite({ copy });
+    expect(r.out).toMatch(/FAIL: DOCKER_UNAVAILABLE/);
+    expect(r.out.match(/^ {2}pass: static: /gm) ?? [], r.out.slice(0, 1500)).toHaveLength(STATIC_ARMS);
+    expect(r.dockerCalls).toEqual(["info"]);
+  }, 120_000);
 
   it("the copy seam is refused under CI and an unknown mutation seam is refused (neither silently runs the baseline)", () => {
     const copy = makeCopy("row-seams");

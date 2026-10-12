@@ -35,7 +35,7 @@ Run everything in an allocated sandbox (`scripts/soleur-sandbox.sh new|run-isola
 - [x] 3.1 Static `check` before the docker environment checks; `SANDBOX_MASKED_PROC_SRC_ROOT` seam refused under `CI`
 - [x] 3.2 `start_container` from `posture --tuple prod`; `-u` from Dockerfile `useradd --uid`
 - [x] 3.3 BASE via `runner FROM` one hop (`BASE_LINEAGE`); static and live PATH arms
-- [x] 3.4 Raise `MIN_ASSERTIONS` literal (34, exact)
+- [x] 3.4 Raise `MIN_ASSERTIONS` literal (exact; the final value is the one in the suite source, 44 after review round 2)
 
 ## Phase 4 Isolation arm (P3, P5; after M3)
 
@@ -65,9 +65,9 @@ Run everything in an allocated sandbox (`scripts/soleur-sandbox.sh new|run-isola
 
 ## Phase 8 Verification (targeted)
 
-- [ ] 8.1 Unit battery, `tsc --noEmit`, vitest files by path, docker suite baseline plus every mutation seam red
-- [ ] 8.2 `guard-vacuity-floor`, `lint-orphan-test-suites`, `fixture-relative-assert`, `apt-bounded`, `grep-q-pipe-guard`, `c4-count-parity`, `lint-guard-contract.py`
-- [ ] 8.3 Guard Contract row-to-test map recorded here once the tests exist
+- [x] 8.1 Unit battery, `tsc --noEmit`, vitest files by path, docker suite baseline plus every mutation seam red
+- [x] 8.2 `guard-vacuity-floor`, `lint-orphan-test-suites`, `fixture-relative-assert`, `apt-bounded`, `grep-q-pipe-guard`, `c4-count-parity`, `lint-guard-contract.py`
+- [x] 8.3 Guard Contract row-to-test map recorded here once the tests exist
 
 ## Phase 9 Ship
 
@@ -79,14 +79,19 @@ Run everything in an allocated sandbox (`scripts/soleur-sandbox.sh new|run-isola
 - 4.3 narrowed by M3: no behavioral cover-vs-drop or umount arm (every umount2 is EPERM, no positive control exists in the unprivileged image); the recorder arm is the discriminator. 4.4 shipped as the ADR-075 addendum and the shim header comment correction.
 - 5.1 = branch (b): outer-wrap replay cannot run (`wrong_elevation_userns`, M1); tracked in #10115. 5.2/5.3 = branch (a): static pins plus the C4 replay run under the masks.
 - 7.4 apt-bounded: no SPECS edit needed (the derived container reuses `start_container`; the guard now sits before the apt budget lines). 7.6 (required-lane wrapper) = `test/docker-run-tuple-posture.test.ts`.
-- Guard 1 rows 1-11, H1/H2, P1-P10: `apps/web-platform/infra/docker-run-tuple.test.sh` (123 rows) and the suite's static call; row 5-6-11 count floor of exactly 3 in `docker-run-tuple.py`.
-- Guard 2 rows 1 (`MUTATE=shim-cover`, red via DROP_FAILED only), 6 (fixture rows, static battery), 7 (`shim-bypass`), recorder instrument control and analyzer path-normalization rows (in the suite, 13 analyzer rows); rows 2-5, 9-11 (tail drift, anchors, binary missing, procfs site counts, cap barrier): `test/sandbox-vendored-argv-tail.test.ts` and `test/sandbox-proc-mask-runtime.test.ts`. Row 8 (arm deletion) is carried by the exact `MIN_ASSERTIONS=34` literal.
+- Guard 1 rows 1-11, H1/H2, P1-P10: `apps/web-platform/infra/docker-run-tuple.test.sh` (176 rows after review round 2; `MIN_ROWS` is exact) and the suite's static call; row 5-6-11 count floor of exactly 3 in `docker-run-tuple.py`.
+- Guard 2 rows 1 (`MUTATE=shim-cover`, red via DROP_FAILED only), 6 (fixture rows, static battery), 7 (`shim-bypass`), recorder instrument control and analyzer path-normalization rows (in the suite, 21 analyzer rows); rows 2-5, 9-11 (tail drift, anchors, binary missing, procfs site counts, cap barrier): `test/sandbox-vendored-argv-tail.test.ts` and `test/sandbox-proc-mask-runtime.test.ts`. Row 8 (arm deletion) is carried by the exact `MIN_ASSERTIONS=34` literal.
 - Guard 3: `test/c4-render-argv-fixture.test.ts` (fixture pin, constants, literal census, no-procfs assertion) plus the suite's C4 replay arm.
-- Guard 4 rows 1-5 and the PATH forms (legacy, multi-var, `/usr/bin` first, compliant, stage-name case, last USER): suite static arms, verified by the 16-row static battery; live PATH arm and `MUTATE=shim-path`.
-- Local verification (2026-10-12, `SOLEUR_SANDBOX_DOCKER_APPARMOR=unconfined`): suite 34 passed 0 failed; seams `shim-splice`, `shim-bypass`, `shim-cover`, `shim-path`, `control-unmasked`, `sleeper-after`, `no-replay` each red on their own diagnostic; static battery 16/16 (red rows made zero docker calls). The AppArmor-profile half is proven only by CI.
+- Guard 4 rows 1-5 and the PATH forms (legacy, multi-var, `/usr/bin` first, compliant, stage-name case, last USER): suite static arms, verified by the static arms through `test/docker-run-tuple-posture.test.ts` (the counts are read from the suite source); live PATH arm and `MUTATE=shim-path`.
+- Local verification (2026-10-12, `SOLEUR_SANDBOX_DOCKER_APPARMOR=unconfined`): suite 34 passed 0 failed at the first run (superseded by the line below); seams `shim-splice`, `shim-bypass`, `shim-cover`, `shim-path`, `control-unmasked`, `sleeper-after`, `no-replay` each red on their own diagnostic; static battery 16/16 (red rows made zero docker calls). The AppArmor-profile half is proven only by CI.
 
 ## Review round (2026-10-12, 13 seats, panel SHA 74b5c3de9c)
 
 Fixed inline (all in this PR): outer-wrap argv no-`--proc` assertion (was unpinned); census escapes (chained second statement after an exempt site, `<<` arithmetic/quoted heredoc blinding, `)` case-label position, uppercase `$DOCKER` indirect wrapper, symlink/unbounded read, privilege-class options on exempt sites, `--memory 0`); drop analyzer (`..` normalization, ordering vs the root bind, symlink/file dest, `--args` unmodeled); docker-suite static arms now also run in the REQUIRED lane (vitest wrapper with a failing `docker` stub, 9 mutated-copy rows) and the posture digest is pinned there; `ELEVATION` arm; `MUTATION_UNKNOWN`; exact `MIN_ASSERTIONS` (39); `CONTAINER_START_FAILED`; unbound-variable abort; in-image fixture regeneration command and remediation text; removal-direction rows; memoized binary scans; lockfile variants pinned to one version; live-tail spawns selected by shape; shared comment stripper; bind-table parity row; consumer floor 7; ADR-075 addendum (observed vs inferred, unelevated-bwrap condition, supersession pointer); stale comments.
 Tracked, not fixed (CONCUR from code-simplicity-reviewer): residual gaps in #10115 (SOLEUR_BWRAP_* hijack-list names, outer-wrap replay, runner-image fidelity, census scope), trigger = dependency on #10063.
-Local verification after fixes: docker suite 39/0 (unconfined override), tuple battery 137/137, vitest 7 files green incl. `CI=1`.
+Local verification after round 1 fixes: docker suite 39/0 (unconfined override), tuple battery 137/137, vitest 7 files green incl. `CI=1`.
+
+## Review round 2 (fix-commit targeted round, 7 report-only seats)
+
+Fixed inline: exempt sites parsed closed-world (create is exactly `--name NAME IMAGE`, the cosign run is its exact option set) instead of a denylist, and exempt lines no longer shield the indirect and name scans; `<<` inside `${ }`, `$[ ]`, `$'...'`, `[[ ]]` is refused as ambiguous; unreadable, symlinked or oversize wide-scope files are violations; case-insensitive `$DOCKER` variable, `setsid` wrapper, `(label)` case form; analyzer treats relative, empty and fd root binds as root binds; ELEVATION widened (symbolic and octal modes, `--chmod=`, `install -m`, `dpkg-statoverride`) plus a live `stat` arm, worded as best-effort; the capability attribution is hedged as inferred (suite header, shim header, measurements M1/M3, ADR-075 with a third condition and an inline pointer at the Isolation effect paragraph); the posture wrapper derives the digest and reads exact arm counts from the suite source; the #10115 probe is now an event-grep on main's `ci-deploy.sh`.
+Local verification after round 2: docker suite 44/0 (unconfined override), all 7 seams red on their own diagnostics (`shim-splice` mount proc refused, `shim-bypass` VISIBLE and DROP_FAILED, `shim-cover` DROP_FAILED only, `shim-path` PATH_ORDER, `control-unmasked` control not refused, `sleeper-after` no sibling, `no-replay` non-vacuity), tuple battery 176/176, 5 vitest files 112/112 (and the posture and vendored-tail files green under `CI=1`), `tsc --noEmit` clean, shellcheck clean at warning level for the changed suites, guard-vacuity, grep-q-pipe-guard, orphan lint, mutation-scorer consumers, apt-bounded, fixture-relative (62/62), lint-guard-contract all green. The #10115 probe was driven offline with a stub `gh` across the three states (open, closed, anchor moved).

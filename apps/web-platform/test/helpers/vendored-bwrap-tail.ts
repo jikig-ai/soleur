@@ -212,7 +212,8 @@ export const FIXTURE_REGEN_HINT =
   "`SANDBOX_CANARY_MODE=capture bash apps/web-platform/scripts/sandbox-canary-verify-in-image.sh` (it captures INSIDE the " +
   "deploy base image; a bare `sandbox-canary.mjs --capture` on a dev host bakes in host-conditional tokens and is the wrong " +
   "fixture for production). The SDK-bump CI gate runs the same script. Without credentials, stop and report this failure: " +
-  "never hand-edit the fixture and never re-pin to turn the check green.";
+  "never hand-edit the fixture and never re-pin to turn the check green. After a capture, check that the verdict is not " +
+  "canary_infra_error and that the fixture file actually changed (the capture is a paid Haiku call).";
 
 export function extractBuilderTailFrom(src: ByteSource): BuilderTail {
   const hits = scanNeedles(src, { anchor: Buffer.from(TAIL_ANCHOR, "latin1") }).anchor;
@@ -220,7 +221,7 @@ export function extractBuilderTailFrom(src: ByteSource): BuilderTail {
     throw new Error(
       `TAIL_ANCHOR found ${hits.length} (want exactly 1 occurrence of ${TAIL_ANCHOR}). The vendored ` +
         "builder changed shape (refactor or minifier change): inspect the new builder in the platform " +
-        "binary (`/usr/bin/grep -abo -F '<needle>' node_modules/@anthropic-ai/<pkg>-linux-x64/claude` prints each offset), " +
+        "binary (`/usr/bin/grep -abo -F '<needle>' apps/web-platform/node_modules/@anthropic-ai/{claude-agent-sdk,claude-code}-linux-x64/claude` prints each offset), " +
         "decide whether the new shape still ends in the /proc mask, and only then update the anchor and EXPECTED_TAIL_CALLS in " +
         "test/helpers/vendored-bwrap-tail.ts (a re-pin is a security decision, not a way to turn this green).",
     );
@@ -444,7 +445,7 @@ export function assertLiteralCensus(
   const steps =
     (siteProblem
       ? " A site count moved in the vendored builder: (1) inspect the new site in the platform binary " +
-        "(`/usr/bin/grep -abo -F '<needle>' node_modules/@anthropic-ai/<pkg>-linux-x64/claude` prints each offset) and " +
+        "(`/usr/bin/grep -abo -F '<needle>' apps/web-platform/node_modules/@anthropic-ai/{claude-agent-sdk,claude-code}-linux-x64/claude` prints each offset) and " +
         "decide whether tenant input can reach it and whether the bwrap shim drops its --proc/--bind /proc, " +
         "(2) only then update PINS in apps/web-platform/test/sandbox-vendored-argv-tail.test.ts with the re-measured " +
         "counts and the measured version; a re-pin is a security decision, not a way to turn this green."

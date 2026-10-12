@@ -31,13 +31,14 @@
 # WHAT THE BEHAVIORAL ARMS CANNOT SEPARATE (measured, #10065 measurements.md M3). A cover (`--tmpfs /proc` over the
 # kept vendor bind) and a drop give the SAME observations here: the vendor argv starts with a recursive `--ro-bind / /`,
 # so the container's procfs sits beneath the tmpfs after either, and no process in an unprivileged bwrap sandbox holds
-# a capability that could uncover it (every umount2 attempt is EPERM, with or without --cap-add, because unprivileged
-# bwrap drops all capabilities and no positive control exists). The recorder arm is the only discriminator, and it
-# measures the shim's contract, "no argv-requested procfs mount", not a kernel-level absence. The operative barrier is
-# the vendor's `--cap-drop ALL`, pinned by test/sandbox-vendored-argv-tail.test.ts.
+# a capability that could uncover it (every umount2 attempt is EPERM in every arm, with or without --cap-add; the
+# attribution to the vendor's `--cap-drop ALL` is INFERRED, not measured, and holds only for an unelevated bwrap, and no
+# positive control exists). The recorder arm is the only discriminator, and it measures the shim's contract, "no
+# argv-requested procfs mount", not a kernel-level absence. The vendor's `--cap-drop ALL` is pinned by
+# test/sandbox-vendored-argv-tail.test.ts.
 #
-# NOT COVERED HERE. The outer-wrap spawn (agent-outer-wrap.ts, /usr/bin/bwrap): its table is built for the ELEVATED
-# production binary, and the suite image has plain Debian bubblewrap, so `sandbox-canary.mjs --replay-outer` here
+# NOT COVERED HERE. The outer-wrap spawn (agent-outer-wrap.ts, /usr/bin/bwrap): its table carries the outer-wrap
+# elevation expectation, which the suite image's plain Debian bubblewrap does not meet, so `sandbox-canary.mjs --replay-outer` here
 # reports sandbox_broken/wrong_elevation_userns, a verdict unrelated to /proc (measured). A weaker assertion would pass
 # for the wrong reason, so only the static pins run (test/c4-render-argv-fixture.test.ts, agent-outer-wrap.test.ts).
 # The isolation argv omits the fixture's `--unshare-net`: the arm measures /proc visibility and a netns changes
@@ -181,7 +182,7 @@ stage_ref() { # <stage name> -> its FROM reference (empty when the stage does no
   return 0
 }
 is_stage() { [[ -n "$(stage_ref "$1")" ]]; }
-(( ${#STAGE_NAMES[@]} > 0 )) || die "BASE_LINEAGE: no FROM instruction was parsed from $DOCKERFILE (this arm needs no docker: run the suite on any host, it stops after the static arms)"
+(( ${#STAGE_NAMES[@]} > 0 )) || die "BASE_LINEAGE: no FROM instruction was parsed from $DOCKERFILE (the static arms run before any docker call: test/docker-run-tuple-posture.test.ts drives them with a stub docker on any host)"
 RUNNER_FROM="$(stage_ref runner)"
 [[ -n "$RUNNER_FROM" ]] || die "BASE_LINEAGE: $DOCKERFILE has no stage named runner"
 [[ "$RUNNER_FROM" == "cli-tools" ]] || die "BASE_LINEAGE: runner is FROM '$RUNNER_FROM', the shipped lineage is runner -> cli-tools"
@@ -218,7 +219,7 @@ while IFS= read -r dline; do
     "FROM "*)
       CUR_STAGE="-"
       read -r -a ftok <<<"$dline"
-      fi=1; [[ "${ftok[1]}" == --* ]] && fi=2
+      fi=1; [[ "${ftok[1]:-}" == --* ]] && fi=2
       [[ "${ftok[fi + 1]:-}" =~ ^[Aa][Ss]$ && -n "${ftok[fi + 2]:-}" ]] && CUR_STAGE="${ftok[fi + 2],,}"
       ;;
     "ENV "*)
@@ -246,20 +247,25 @@ done < <(sed -e ':a' -e '/\\$/{N;s/\\\n//;ba' -e '}' "$DOCKERFILE")
 pass "static: no ENV PATH in the runner lineage puts /usr/bin before /usr/local/bin ($PATH_ENVS PATH assignment(s) read)"
 
 # 3b. The production bwrap is UNELEVATED: ADR-075's reasoning (a drop and a cover differ only for a process holding
-#     CAP_SYS_ADMIN; unprivileged bwrap drops every capability after setup) and the umount measurement in
-#     measurements.md hold only then. A setuid or file-capability bwrap would re-open that question, so an
-#     instruction that elevates it is a red here until the decision is re-made.
+#     CAP_SYS_ADMIN, and an unelevated bwrap drops its capabilities after setup, INFERRED) and the umount measurement in
+#     measurements.md hold only then. A setuid or file-capability bwrap would re-open that question, so a RUN line that
+#     elevates it is a red here until the decision is re-made. This is a best-effort scan of the common spellings (setcap,
+#     symbolic or octal chmod, install -m, --chmod=, dpkg-statoverride) on a line that names bwrap or a /usr/(local/)bin
+#     path; it cannot see an elevation done through a variable or a script. The live arm below stats the suite
+#     container's /usr/bin/bwrap, which checks the binary itself rather than the spelling.
+ELEV_TARGET_RE='bwrap|/usr/(local/)?s?bin'
+ELEV_ACTION_RE='setcap|dpkg-statoverride|--chmod=(0*[2-7][0-7]{3}|[ugoa]*[+=][rwxXt,ugoa+=]*s)([[:space:]]|$)|(chmod|install)[^#;&|]*([ =,][ugoa]*[+=][rwxXt]*s|[ =]0*[2-7][0-7]{3}([[:space:]]|$))'
 ELEV_HIT=""
 while IFS= read -r dline; do
   dline="${dline#"${dline%%[![:space:]]*}"}"
   [[ "$dline" == \#* ]] && continue
-  if [[ "$dline" == *bwrap* ]] && { [[ "$dline" == *setcap* ]] || [[ "$dline" =~ chmod[^#]*(\+s|[[:space:]][0-7]?[4-7][0-7][0-7][0-7]([[:space:]]|$)) ]]; }; then
+  if [[ "$dline" =~ $ELEV_TARGET_RE && "$dline" =~ $ELEV_ACTION_RE ]]; then
     ELEV_HIT="$dline"
     break
   fi
 done < <(sed -e ':a' -e '/\\$/{N;s/\\\n//;ba' -e '}' "$DOCKERFILE")
 [[ -z "$ELEV_HIT" ]] || die "ELEVATION: the Dockerfile elevates bwrap ($(printf '%s' "$ELEV_HIT" | head -c 160)); ADR-075's cap-drop reasoning and the suite's unprivileged-bwrap measurements no longer describe production, re-decide before changing this arm"
-pass "static: no Dockerfile instruction elevates the production bwrap (no setcap, no setuid chmod)"
+pass "static: no Dockerfile RUN line elevates bwrap by a common spelling (setcap, setuid/setgid chmod or install, dpkg-statoverride; best-effort, the live stat arm checks the binary)"
 
 # 4. The uid the suite container runs as is the one the Dockerfile creates, and the last USER is the app user.
 APP_UID_ALL="$(sed -n 's/.*useradd.*--uid[ =]\([0-9][0-9]*\).*/\1/p' "$DOCKERFILE")"
@@ -308,11 +314,11 @@ pass "static: the isolation argv is derived from the canary fixture (${#ISO_ARGV
 
 # 6. The argv analyzer behind the recorder arm. It is a pure function, so it is driven here with synthetic argv first:
 #    every spelling of a procfs mount at /proc must be flagged, and ordinary non-/proc mounts must pass.
-norm_path() { # collapse //, /./, .. and a trailing /; a relative path is returned as is
+norm_path() { # collapse //, /./, .. and a trailing /; a relative or empty path is returned as is
   local p="$1" seg
   local -a segs=() out=()
   [[ "$p" == /* ]] || { printf '%s' "$p"; return 0; }
-  IFS='/' read -r -a segs <<<"$p"
+  IFS='/' read -r -d '' -a segs < <(printf '%s' "$p") || true
   for seg in "${segs[@]}"; do
     case "$seg" in
       ""|.) : ;;
@@ -322,6 +328,9 @@ norm_path() { # collapse //, /./, .. and a trailing /; a relative path is return
   done
   local IFS=/
   printf '/%s' "${out[*]}"
+}
+rootish() { # <normalized destination> — "/" or anything that is not an absolute path (bwrap rejects those, so a pass here would be a guess)
+  [[ -z "$1" || "$1" != /* || "$1" == / ]]
 }
 DROP_WHY=""
 drop_check() { # <argv token>... — 0 when no procfs mount is requested at /proc and exactly one `--tmpfs /proc` is present
@@ -340,11 +349,12 @@ drop_check() { # <argv token>... — 0 when no procfs mount is requested at /pro
       --bind|--ro-bind|--bind-try|--ro-bind-try|--dev-bind|--dev-bind-try)
         src="$(norm_path "${a[i + 1]:-}")"; dst="$(norm_path "${a[i + 2]:-}")"
         if [[ "$src" == /proc || "$dst" == /proc ]]; then DROP_WHY="$tok ${a[i + 1]:-} ${a[i + 2]:-} mounts procfs at /proc"; return 1; fi
-        [[ "$dst" == / ]] && root_bind_at=$i
+        rootish "$dst" && root_bind_at=$i
         i=$((i + 3)) ;;
       --bind-fd|--ro-bind-fd)
         dst="$(norm_path "${a[i + 2]:-}")"
         if [[ "$dst" == /proc ]]; then DROP_WHY="$tok ${a[i + 1]:-} ${a[i + 2]:-} mounts at /proc"; return 1; fi
+        rootish "$dst" && root_bind_at=$i
         i=$((i + 3)) ;;
       --symlink|--file|--bind-data|--ro-bind-data)
         dst="$(norm_path "${a[i + 2]:-}")"
@@ -387,6 +397,10 @@ drop_expect bad "a bind destination spelled through .."                        "
 drop_expect bad "a symlink created at /proc"                                  "${DROP_BASE[@]}" --symlink x /proc -- true
 drop_expect bad "an --args payload the analyzer cannot read"                  --args 4 "${DROP_BASE[@]}" -- true
 drop_expect bad "the --tmpfs /proc placed before the recursive root bind"     --unshare-user --tmpfs /proc --ro-bind / / --dev /dev -- true
+drop_expect bad "a root bind spelled // after the --tmpfs /proc"              --unshare-user --tmpfs /proc --ro-bind / // --dev /dev -- true
+drop_expect bad "a root --ro-bind-fd after the --tmpfs /proc"                 --unshare-user --tmpfs /proc --ro-bind-fd 5 / --dev /dev -- true
+drop_expect bad "a relative bind destination after the --tmpfs /proc"         --unshare-user --tmpfs /proc --ro-bind / . --dev /dev -- true
+drop_expect bad "an empty bind destination after the --tmpfs /proc"           --unshare-user --tmpfs /proc --ro-bind / "" --dev /dev -- true
 
 # ---------------------------------------------------------------------------
 # Environment — every failure is a literal token, never a skip.
@@ -574,6 +588,15 @@ else
   fail "PATH_ORDER: for uid $APP_UID 'command -v bwrap' is '$LIVE_BWRAP' and the first 'type -a bwrap' entry is '$LIVE_FIRST' (expected /usr/local/bin/bwrap first)"
 fi
 
+# Live elevation arm: the container's real bwrap carries no setuid or setgid bit. (The static arm scans the Dockerfile's
+# spellings; this checks the binary the suite runs. File capabilities need getcap, which the image does not carry.)
+LIVE_MODE="$(docker exec "$CTR" stat -c %a /usr/bin/bwrap 2>&1 | tail -1)"
+if [[ "$LIVE_MODE" =~ ^[0-7]{3,4}$ && ! "$LIVE_MODE" =~ ^[2-7][0-7]{3}$ ]]; then
+  pass "live elevation: /usr/bin/bwrap has mode $LIVE_MODE (no setuid or setgid bit)"
+else
+  fail "ELEVATION: /usr/bin/bwrap in the suite container has mode '$LIVE_MODE' (a setuid or setgid bwrap re-opens the cap-drop reasoning, or stat failed)"
+fi
+
 # Posture arm: the running container carries what the tuple says. systempaths is consumed client-side by docker, so it
 # is never asserted through SecurityOpt; the masks themselves are the proof (control arm) and HostConfig.MaskedPaths
 # is the inspect-side confirmation.
@@ -643,7 +666,7 @@ PIDDIRS="$(iso_probe "$SHIM_BIN" "$NPID")"
   && pass "isolation: through the shim the sibling process is ABSENT from the sandbox's /proc" \
   || fail "isolation: through the shim the sibling is '$ISO_SHIM' (expected ABSENT)"
 [[ "$PIDDIRS" == "0" ]] \
-  && pass "isolation: /proc inside the sandbox lists no pid directory (no procfs at all)" \
+  && pass "isolation: /proc inside the sandbox lists no pid directory" \
   || fail "isolation: /proc inside the sandbox lists '$PIDDIRS' pid directories (expected 0)"
 [[ "$ISO_REAL" == "VISIBLE" ]] \
   && pass "discrimination: through the real bwrap with the vendor tail bind the sibling is VISIBLE (the leak the mask closes)" \
@@ -697,7 +720,7 @@ fi
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
 # Anti-vacuity floor: a literal adjacent to its use (guard-vacuity-floor shape).
-MIN_ASSERTIONS=39
+MIN_ASSERTIONS=44
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
   echo "FAIL: only $((PASS + FAIL)) assertions ran (floor $MIN_ASSERTIONS) — the suite did not exercise its arms"
   exit 1

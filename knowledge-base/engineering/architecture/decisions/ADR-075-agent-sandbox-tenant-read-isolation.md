@@ -346,10 +346,13 @@ the shim can fix without widening anything. Rejected on least-privilege.
 > observations; locked inherited mounts would also produce EPERM, and no positive control (a sandbox that CAN umount)
 > exists in that image. The shim still drops, because "no argv-requested procfs mount at `/proc`" is the property it can
 > state and the suite can assert (the recorder arm of `apps/web-platform/infra/sandbox-masked-proc-docker.test.sh`).
-> **Conditional on an UNELEVATED bwrap:** the equivalence holds while the production bwrap is neither setuid nor
-> file-capability'd (the 2026-10-09 addendum reverted that arm; the suite's static `ELEVATION` arm fails any Dockerfile
-> instruction that elevates it), and while the vendored tail keeps `--cap-drop ALL`, which
-> `test/sandbox-vendored-argv-tail.test.ts` pins in both vendored binaries. If either stops holding, drop versus cover
+> **Conditional on three things:** (1) an UNELEVATED bwrap: the production bwrap is neither setuid nor file-capability'd
+> (the 2026-10-09 addendum reverted that arm; the suite's static `ELEVATION` arm is a best-effort scan of the common
+> Dockerfile spellings, backed by a live `stat` of the suite container's `/usr/bin/bwrap`, so it is not a proof); (2) the
+> vendored tail keeps `--cap-drop ALL`, which `test/sandbox-vendored-argv-tail.test.ts` pins in both vendored binaries;
+> (3) the three app-container `docker run` tuples keep their posture (no added capability, no host pid mode, no
+> `systempaths` override), which the closed-world tuple check `infra/lib/docker-run-tuple.py` enforces in the required
+> lane through `test/docker-run-tuple-posture.test.ts`. If any stops holding, drop versus cover
 > becomes load-bearing again and this addendum must be re-decided, not carried forward. The hook sandbox builder in the CLI
 > platform binary has no root bind, so the original sentence holds there.
 >
@@ -368,7 +371,9 @@ verified end-to-end in-image (the re-homed binary executes through
 `/proc/self/fd/5`). Anything else refuses rather than shipping a silently
 broken multicall.
 
-**Isolation effect.** Preserved and, strictly, strengthened: the realized
+**Isolation effect.** *(Read with the 2026-10-12 (#10065) addendum above: the realized mask is an empty `/proc` tmpfs with
+the container's procfs beneath it, so "no procfs is mounted" and "no-procfs-at-all" below describe the argv, not the
+kernel mount set.)* Preserved and, strictly, strengthened: the realized
 mask is now no-procfs-at-all (previously a pidns-scoped procfs that still
 exposed the sandbox's own `/proc/<pid>` surface). `/proc/<pid>/environ`
 cross-tenant reads are unreachable because no procfs is mounted; the

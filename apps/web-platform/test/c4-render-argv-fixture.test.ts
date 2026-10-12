@@ -430,11 +430,9 @@ describe("outer-wrap spawn path (the second shim-bypassing spawner)", () => {
     expect(argv).not.toContain("--proc");
     const hits = procfsMountTokens(argv);
     expect(hits).toHaveLength(2); // the source and destination token of the one bind
-    const at = argv.indexOf("--bind");
     const binds = argv.flatMap((t, i) => (t === "--bind" && argv[i + 1] === "/proc" ? [i] : []));
     expect(binds).toHaveLength(1);
     expect(argv.slice(binds[0], binds[0] + 3)).toEqual(["--bind", "/proc", "/proc"]);
-    expect(at).toBeGreaterThanOrEqual(0);
   });
 
   for (const [label, extra] of [
