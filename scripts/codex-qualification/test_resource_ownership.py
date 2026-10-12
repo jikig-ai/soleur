@@ -2,13 +2,17 @@
 import json
 import unittest
 from api_policy import Policy, Refused
+from fixture_roles import fixture_profiles
 
 IMAGE = 'sha256:' + 'a' * 64
 NETWORK_ID = 'b' * 64
 
 class ResourceOwnership(unittest.TestCase):
     def setUp(self):
-        self.policy = Policy('fixture', 'fixture-internal', '/tmp/fixture', {IMAGE: IMAGE})
+        profiles = fixture_profiles('fixture', {IMAGE: IMAGE})
+        profiles['supabase_db_fixture']['aliases'] = ['fixture-db']
+        self.policy = Policy('fixture', 'fixture-internal', '/tmp/fixture', {IMAGE: IMAGE},
+                             role_profiles=profiles)
 
     def create(self, kind, name):
         return self.policy.admit('POST', '/' + kind + '/create', json.dumps({

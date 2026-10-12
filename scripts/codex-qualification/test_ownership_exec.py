@@ -2,6 +2,7 @@
 import copy
 import json
 from api_policy import Policy, Refused, MissingOwnedContainer
+from fixture_roles import fixture_profiles
 
 IMAGE = 'sha256:' + 'a' * 64
 ID = 'b' * 64
@@ -12,7 +13,8 @@ OPS = [('POST', 'start'), ('POST', 'stop'), ('POST', 'kill'), ('POST', 'exec'),
 checks = 0
 
 def fresh():
-    policy = Policy('fixture','fixture-internal','/tmp/fixture',{IMAGE:IMAGE})
+    policy = Policy('fixture','fixture-internal','/tmp/fixture',{IMAGE:IMAGE},
+                    role_profiles=fixture_profiles('fixture', {IMAGE:IMAGE}))
     policy.admit('POST', '/networks/create', json.dumps({'Name': policy.network,
                  'Labels': {'com.supabase.cli.project': policy.project}}).encode())
     policy.created_network(policy.network, {'Id': 'd' * 64})

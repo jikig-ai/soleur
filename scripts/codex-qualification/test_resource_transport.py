@@ -6,6 +6,7 @@ import tempfile
 import threading
 import unittest
 from api_policy import Policy
+from fixture_roles import fixture_profiles, fixture_image
 from api_proxy import Proxy, UnixHTTPServer, UnixConnection
 
 IMAGE = 'sha256:' + 'a' * 64
@@ -19,6 +20,7 @@ class ResourceTransport(unittest.TestCase):
         self.requests = []
         self.volume = None
         self.network = None
+        self.image = fixture_image(IMAGE)
         outer = self
         class Fake(http.server.BaseHTTPRequestHandler):
             protocol_version = 'HTTP/1.1'
@@ -32,7 +34,8 @@ class ResourceTransport(unittest.TestCase):
                     self.wfile.write(data)
             def do_GET(self):
                 outer.requests.append(('GET', self.path))
-                value = outer.volume if self.path.startswith('/volumes/') else outer.network
+                value = (outer.image if self.path.startswith('/images/') else
+                         outer.volume if self.path.startswith('/volumes/') else outer.network)
                 self.reply(200 if value else 404, value or {})
             def do_POST(self):
                 data = json.loads(self.rfile.read(int(self.headers.get('Content-Length', '0'))))
@@ -54,7 +57,8 @@ class ResourceTransport(unittest.TestCase):
         self.backend = UnixHTTPServer(str(self.root / 'backend.sock'), Fake)
         self.thread = threading.Thread(target=self.backend.serve_forever, daemon=True)
         self.thread.start()
-        self.policy = Policy('fixture', 'fixture-internal', self.root, {IMAGE: IMAGE})
+        self.policy = Policy('fixture', 'fixture-internal', self.root, {IMAGE: IMAGE},
+                             role_profiles=fixture_profiles('fixture', {IMAGE: IMAGE}, bind=True))
         self.proxy = Proxy(self.root / 'proxy.sock', self.root / 'backend.sock', self.policy, lifetime=20)
         self.proxy.start()
 
@@ -138,7 +142,23 @@ class ResourceTransport(unittest.TestCase):
         self.assertEqual(self.create('networks', 'fixture-internal'), 201)
         self.assertEqual(self.create('volumes', VOLUME), 201)
         self.assertEqual(self.mount(), 201)
-        self.assertEqual(self.requests[-3:][0:2], [('GET', '/networks/' + NETWORK_ID), ('GET', '/volumes/' + VOLUME)])
+        self.assertEqual(self.requests[-4:][0:3], [('GET', '/networks/' + NETWORK_ID),
+                         ('GET', '/images/' + IMAGE + '/json'), ('GET', '/volumes/' + VOLUME)])
+
+    def test_altered_inherited_image_env_is_refused_before_create(self):
+        self.assertEqual(self.create('networks', 'fixture-internal'), 201)
+        self.assertEqual(self.create('volumes', VOLUME), 201)
+        self.image['Config']['Env'].append('UNREVIEWED=changed')
+        self.assertEqual(self.mount(), 403)
+        self.assertFalse(any(path.startswith('/containers/create') for _, path in self.requests))
+
+    def test_omitted_bind_is_materialized_and_rechecked_before_create(self):
+        self.assertEqual(self.create('networks', 'fixture-internal'), 201)
+        self.assertEqual(self.create('volumes', VOLUME), 201)
+        self.volume['CreatedAt'] = 'foreign-replacement'
+        self.assertEqual(self.request('POST', '/containers/create?name=supabase_db_fixture', {
+            'Image': IMAGE, 'Labels': {'com.supabase.cli.project': 'fixture'}}), 403)
+        self.assertFalse(any(path.startswith('/containers/create') for _, path in self.requests))
 
     def test_replaced_volume_is_rejected_before_mount(self):
         self.assertEqual(self.create('networks', 'fixture-internal'), 201)

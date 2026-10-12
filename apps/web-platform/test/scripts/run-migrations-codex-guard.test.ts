@@ -42,7 +42,7 @@ esac
     const lock = result.sql.search(/^LOCK TABLE public\.workspace_engine_settings IN ACCESS EXCLUSIVE MODE;/m);
     const rejection = result.sql.search(/^\s*RAISE EXCEPTION 'Codex auth-mode migration refused:/m);
     const body = result.sql.search(/^CREATE TABLE public\.synthetic_migration_body/m);
-    const ledger = result.sql.search(/^INSERT INTO public\._schema_migrations/m);
+    const ledger = result.sql.search(/^\s*INSERT INTO public\._schema_migrations/m);
     expect(lock).toBeGreaterThan(0);
     expect(rejection).toBeGreaterThan(lock);
     expect(body).toBeGreaterThan(rejection);

@@ -181,7 +181,15 @@ class Proxy:
                     status, receipt = self.inspect_resource('/networks/' + self.policy.network_id)
                     self.policy.require(status == 200, 'Owned network is not inspectable before attach')
                     self.policy.verify_network(receipt)
+                path, payload = self.policy.admit(handler.command, handler.path, payload)
+                if handler.command == 'POST' and route == '/containers/create':
+                    # Recheck the materialized role recipe, including omitted API
+                    # fields; inspecting only client-supplied Binds misses defaults.
                     config = json.loads(payload)
+                    name = parse_qs(urlsplit(path).query)['name'][0]
+                    status, receipt = self.inspect_resource('/images/' + config['Image'] + '/json')
+                    self.policy.require(status == 200, 'Immutable role image is not inspectable')
+                    self.policy.roles.verify_image(name, receipt)
                     for bind in (config.get('HostConfig') or {}).get('Binds') or []:
                         name = bind.split(':', 1)[0]
                         if not name.startswith('/'):
@@ -190,7 +198,6 @@ class Proxy:
                             status, receipt = self.inspect_resource('/volumes/' + name)
                             self.policy.require(status == 200, 'Owned volume is not inspectable before mount')
                             self.policy.verify_volume(name, receipt)
-                path, payload = self.policy.admit(handler.command, handler.path, payload)
                 admitted_route = re.sub(r'^/v[0-9.]+(?=/)', '', urlsplit(path).path)
                 if handler.command == 'DELETE' and admitted_route.startswith('/volumes/'):
                     status, receipt = self.inspect_resource(admitted_route)
@@ -266,7 +273,10 @@ class Proxy:
                 backend.close()
 
     def hijack(self, handler, path, payload):
-        backend = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as backend:
+            return self.hijack_owned(handler, path, payload, backend)
+
+    def hijack_owned(self, handler, path, payload, backend):
         backend.settimeout(30)
         backend.connect(self.backend)
         headers = dict(handler.headers)
@@ -299,6 +309,8 @@ class Proxy:
                     try: destination.shutdown(socket.SHUT_WR)
                     except OSError: pass
                     continue
+                if source is front:
+                    raise Refused('Exec stdin is unavailable; source-bound mounted recipes required')
                 total += len(data)
                 if total > 32 * 1024**2:
                     raise Refused('Docker exec stream exceeds reviewed bound')

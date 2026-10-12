@@ -440,7 +440,16 @@ for migration_file in "$MIGRATIONS_DIR"/*.sql; do
       cat "$migration_file"
     fi
     if [[ -n "$content_sha" ]]; then
-      printf "\nINSERT INTO public._schema_migrations (filename, content_sha) VALUES ('%s', '%s');\n" "$filename" "$content_sha"
+      # A fresh --bootstrap=skip schema does not have content_sha until 054.
+      # Inspect AFTER this migration body in the SAME transaction: the file
+      # adding the column gets its own apply-time hash, while earlier rows stay
+      # NULL when 054 adds it. Do not create/backfill columns outside migrations.
+      printf '\nDO $migration_ledger$\nBEGIN\n'
+      printf "  IF EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'public._schema_migrations'::regclass AND attname = 'content_sha' AND NOT attisdropped) THEN\n"
+      printf "    INSERT INTO public._schema_migrations (filename, content_sha) VALUES ('%s', '%s');\n" "$filename" "$content_sha"
+      printf '  ELSE\n'
+      printf "    INSERT INTO public._schema_migrations (filename) VALUES ('%s');\n" "$filename"
+      printf '  END IF;\nEND;\n$migration_ledger$;\n'
     else
       printf "\nINSERT INTO public._schema_migrations (filename) VALUES ('%s');\n" "$filename"
     fi

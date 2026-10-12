@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import re
 from urllib.parse import parse_qs, quote, urlencode, urlsplit
+from role_profiles import RoleProfiles
 
 class Refused(RuntimeError):
     pass
@@ -13,7 +14,7 @@ class MissingOwnedContainer(Refused):
     pass
 
 class Policy:
-    def __init__(self, project, network, scratch, images, memory_budget=8 * 1024**3):
+    def __init__(self, project, network, scratch, images, memory_budget=8 * 1024**3, role_profiles=None):
         self.project = project
         self.network = network
         self.scratch = Path(scratch).resolve()
@@ -28,6 +29,7 @@ class Policy:
         self.memory = {}
         self.memory_budget = memory_budget
         self.job = 0
+        self.roles = RoleProfiles(role_profiles, self.require)
         self.network_id = None
         self.network_pending = False
         self.network_attempted = False
@@ -39,6 +41,18 @@ class Policy:
         self.names = {'supabase_' + role + '_' + project for role in
                       ('db', 'kong', 'auth', 'inbucket', 'rest', 'storage')}
         self.names.update({'codex9051-renderer-' + project + '-' + x for x in ('first', 'replacement')})
+        self.names.update({'codex9051-' + role + '-' + project for role in ('browser', 'tls', 'resolver')})
+        self.names.update({'codex9051-job-' + project + '-' + str(x) for x in range(1, 9)})
+        for name, profile in self.roles.profiles.items():
+            role = profile['role']
+            expected = ('supabase_' + role + '_' + project if role in
+                        ('db', 'kong', 'auth', 'inbucket', 'rest', 'storage') else
+                        'codex9051-' + role + '-' + project)
+            valid = (name in {expected + '-first', expected + '-replacement'} if role == 'renderer' else
+                     name in {'codex9051-job-' + project + '-' + str(x) for x in range(1, 9)}
+                     if role == 'migration' else name == expected)
+            self.require(valid and name in self.names, 'Role/name identity differs')
+            self.require(profile['image'] in self.images.values(), 'Role image is outside admitted inventory')
 
     def require(self, ok, message):
         if not ok:
@@ -52,7 +66,8 @@ class Policy:
                      'Container mutation/read requires a successfully created registered ID')
         return identifier
 
-    def exec_config(self, data):
+    def exec_config(self, data, name):
+        self.roles.exec(name, data)
         self.require(set(data) <= {'Cmd','Env','Privileged','User','WorkingDir','Tty',
                      'AttachStdin','AttachStdout','AttachStderr','DetachKeys','ConsoleSize'},
                      'Unreviewed exec-create field refused')
@@ -66,17 +81,14 @@ class Policy:
                      all(isinstance(x,str) and '\x00' not in x for x in command) and
                      sum(len(x) for x in command) <= 8192, 'Bounded exec command required')
         environment = [] if data.get('Env') is None else data['Env']
-        allowed = {'PATH': {'/usr/local/bin:/usr/bin:/bin','/usr/bin:/bin'},
-                   'HOME': {'/tmp','/home/soleur'}, 'LANG': {'C','C.UTF-8'},
-                   'NODE_ENV': {'production'}, 'NEXT_TELEMETRY_DISABLED': {'1'}}
-        self.require(isinstance(environment,list) and len(environment) <= len(allowed),
+        self.require(isinstance(environment,list) and len(environment) <= 128,
                      'Unreviewed exec environment refused')
         seen = set()
         for setting in environment:
             self.require(isinstance(setting,str) and '=' in setting and '\x00' not in setting,
                          'Malformed exec environment refused')
             key,value = setting.split('=',1)
-            self.require(key in allowed and value in allowed[key] and key not in seen,
+            self.require(key not in seen,
                          'Exec credential or unreviewed environment refused')
             seen.add(key)
         for key in ('AttachStdin','AttachStdout','AttachStderr'):
@@ -162,12 +174,13 @@ class Policy:
             self.require(name not in self.creation_names, 'Container creation attempt cannot be reused')
             self.require(data.get('Image') in self.images, 'Unadmitted image refused')
             data['Image'] = self.images[data['Image']]
+            profile = self.roles.create(name, data)
             host = copy.deepcopy(data.get('HostConfig') or {})
             self.require(set(host) <= {'Privileged', 'CapAdd', 'Devices', 'DeviceRequests',
                          'NetworkMode', 'PidMode', 'IpcMode', 'UTSMode', 'CgroupnsMode',
                          'ExtraHosts', 'Binds', 'Mounts', 'PortBindings', 'Memory', 'MemorySwap',
                          'CpuPeriod', 'CpuQuota', 'PidsLimit', 'RestartPolicy', 'SecurityOpt',
-                         'AutoRemove', 'ShmSize', 'ReadonlyRootfs', 'LogConfig'},
+                         'AutoRemove', 'ShmSize', 'ReadonlyRootfs', 'LogConfig', 'Dns', 'DnsSearch', 'DnsOptions', 'Sysctls'},
                          'Unreviewed container host fields refused')
             self.require(host.get('AutoRemove') in (None, False), 'Automatic removal loses provenance')
             self.require(not host.get('Privileged') and not host.get('CapAdd'),
@@ -206,7 +219,7 @@ class Policy:
             self.require(all(not e.get('IPAMConfig') for e in endpoints.values()), 'Static endpoint IP refused')
             self.require(all(set(e) <= {'Aliases'} for e in endpoints.values()),
                          'Unreviewed endpoint fields refused')
-            data['NetworkingConfig'] = {'EndpointsConfig': {self.network_id: next(iter(endpoints.values()), {})}}
+            data['NetworkingConfig'] = {'EndpointsConfig': {self.network_id: {'Aliases': profile['aliases']}}}
             for setting in data.get('Env') or []:
                 key = setting.split('=', 1)[0]
                 self.require(not key.startswith(('OPENAI_', 'ANTHROPIC_', 'CODEX_', 'DOPPLER_', 'FLAGS',
@@ -240,7 +253,8 @@ class Policy:
                          (method == 'DELETE' and operation is None))
             self.require(permitted, 'Container operation refused')
             if method == 'POST' and operation == 'exec':
-                self.exec_config(data)
+                name = next(name for name, value in self.name_ids.items() if value == identifier)
+                self.exec_config(data, name)
             suffix = '/' + operation if operation else ''
             rewritten = prefix + '/containers/' + identifier + suffix
             if split.query:
@@ -347,9 +361,14 @@ class Policy:
 
 
 def self_test():
+    from fixture_roles import fixture_profiles
     tag = 'public.ecr.aws/supabase/postgres:17.6.1.095'
     immutable = 'sha256:' + 'a' * 64
-    p = Policy('fixture', 'fixture-internal', '/tmp/fixture', {tag: immutable, immutable: immutable})
+    profiles = fixture_profiles('fixture', {immutable: immutable})
+    profiles['supabase_db_fixture']['host']['PortBindings'] = {'5432/tcp': [{'HostPort': '59052'}]}
+    profiles['codex9051-job-fixture-1']['host']['PortBindings'] = {'5432/tcp': [{'HostPort': '59052'}]}
+    p = Policy('fixture', 'fixture-internal', '/tmp/fixture', {tag: immutable, immutable: immutable},
+               role_profiles=profiles)
     p.admit('POST', '/networks/create', json.dumps({'Name': p.network,
             'Labels': {'com.supabase.cli.project': p.project}}).encode())
     p.created_network(p.network, {'Id': 'd' * 64})

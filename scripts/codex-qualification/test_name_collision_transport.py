@@ -5,6 +5,7 @@ from pathlib import Path
 import tempfile
 import threading
 from api_policy import Policy
+from fixture_roles import fixture_profiles, fixture_image
 from api_proxy import Proxy, UnixHTTPServer, UnixConnection
 
 IMAGE='sha256:'+'a'*64
@@ -31,6 +32,8 @@ class Fake(http.server.BaseHTTPRequestHandler):
         if self.path.startswith('/networks/'):
             value={'Id':'d'*64,'Name':'fixture-internal','Driver':'bridge','Internal':True,
                    'EnableIPv6':False,'Labels':{'soleur.recovery.attempt':'fixture'}}
+        if self.path.startswith('/images/'):
+            value = fixture_image(IMAGE)
         self.reply(200,value)
     def do_POST(self):
         self.rfile.read(int(self.headers.get('Content-Length','0')))
@@ -58,7 +61,8 @@ with tempfile.TemporaryDirectory(prefix='codex9051-name-collision-') as director
     thread.start()
     config={'Image':IMAGE,'Labels':{'com.supabase.cli.project':'fixture'}}
     def create_proxy(suffix):
-        p=Policy('fixture','fixture-internal',root,{IMAGE:IMAGE})
+        p=Policy('fixture','fixture-internal',root,{IMAGE:IMAGE},
+                 role_profiles=fixture_profiles('fixture', {IMAGE:IMAGE}))
         p.admit('POST','/networks/create',json.dumps({'Name':p.network,
                 'Labels':{'com.supabase.cli.project':p.project}}).encode())
         p.created_network(p.network,{'Id':'d'*64})
@@ -82,7 +86,9 @@ with tempfile.TemporaryDirectory(prefix='codex9051-name-collision-') as director
         try:
             before=len(received)
             status,_=request(proxy,'POST','/containers/create?name='+NAME,config)
-            assert status==409 and len(received)==before+2
+            assert status==409 and received[before:]==[
+                ('GET', '/networks/'+'d'*64), ('GET', '/images/'+IMAGE+'/json'),
+                ('POST', '/containers/create?name='+NAME)]
             assert not p.ids and NAME not in p.name_ids and NAME not in p.pending and NAME in p.failed_names
             assert proxy.fatal
             checks+=1

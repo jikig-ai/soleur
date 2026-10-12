@@ -6,6 +6,7 @@ import socket
 import tempfile
 import threading
 from api_policy import Policy
+from fixture_roles import fixture_profiles, fixture_image
 from api_proxy import Proxy, UnixHTTPServer, UnixConnection
 from fixture_transport import receive_until
 
@@ -24,6 +25,8 @@ with tempfile.TemporaryDirectory(prefix='codex9051-api-fixture-') as directory:
             if self.path.startswith('/networks/'):
                 body = json.dumps({'Id': 'd' * 64, 'Name': 'fixture-internal', 'Driver': 'bridge',
                     'Internal': True, 'EnableIPv6': False, 'Labels': {'soleur.recovery.attempt': 'fixture'}}).encode()
+            if self.path.startswith('/images/'):
+                body = json.dumps(fixture_image(image)).encode()
             self.send_response(200)
             self.send_header('Content-Length', str(len(body)))
             self.end_headers()
@@ -38,8 +41,7 @@ with tempfile.TemporaryDirectory(prefix='codex9051-api-fixture-') as directory:
                 self.end_headers()
                 self.wfile.write(b'fixture-ready\n')
                 self.wfile.flush()
-                assert self.rfile.read(4) == b'PING'
-                self.wfile.write(b'fixture-reply:PING\n')
+                self.wfile.write(b'fixture-reply:OUTPUT\n')
                 self.wfile.flush()
                 self.close_connection = True
                 return
@@ -51,7 +53,8 @@ with tempfile.TemporaryDirectory(prefix='codex9051-api-fixture-') as directory:
     backend = UnixHTTPServer(str(root / 'fake.sock'), Fake)
     backend_thread = threading.Thread(target=backend.serve_forever, daemon=True)
     backend_thread.start()
-    p = Policy('fixture', 'fixture-internal', root, {image: image})
+    p = Policy('fixture', 'fixture-internal', root, {image: image},
+               role_profiles=fixture_profiles('fixture', {image: image}))
     p.admit('POST', '/networks/create', json.dumps({'Name': p.network,
             'Labels': {'com.supabase.cli.project': p.project}}).encode())
     p.created_network(p.network, {'Id': 'd' * 64})
@@ -82,8 +85,9 @@ with tempfile.TemporaryDirectory(prefix='codex9051-api-fixture-') as directory:
         front.sendall(request + payload)
         data = receive_until(front, b'fixture-ready\n')
         assert data.startswith(b'HTTP/1.1 101') and b'fixture-ready\n' in data
-        front.sendall(b'PING')
-        data = receive_until(front, b'fixture-reply:PING\n')
+        if b'fixture-reply:OUTPUT\n' not in data:
+            data += receive_until(front, b'fixture-reply:OUTPUT\n')
+        assert b'fixture-reply:OUTPUT\n' in data
         front.close()
         c = UnixConnection(str(root / 'proxy.sock'))
         c.request('GET', '/containers/json?all=true&filters=%7B%7D')
@@ -99,7 +103,7 @@ with tempfile.TemporaryDirectory(prefix='codex9051-api-fixture-') as directory:
         c.close()
         assert len(received) == before and proxy.fatal
         print(json.dumps({'transport_checks': 7, 'docker_calls': 0,
-                          'http_upgrade_and_bidirectional_exec': 'pass', 'pull_refusal': 'pass'}))
+                          'http_upgrade_and_output_only_exec': 'pass', 'pull_refusal': 'pass'}))
     finally:
         proxy.stop()
         backend.shutdown()

@@ -61,10 +61,37 @@ erase fixture assertions or redirect imports, and bounds each module to 120
 seconds. Transport marker reads fail on early EOF, deadline or oversized output.
 All fake backend/proxy thread-error inventories are checked during cleanup.
 
-Operational completion remains pending: TLS/namespace orchestration, strict
-per-role container environment/command review, source-bound full-schema SQL
-scenario review, immutable built-image/filesystem/auth evidence, independent
-review, and fresh exact-command approval. Keep the schema replacement forward
+The new `local_tls.py` and `namespace.py` provide callable TLS/DNS boundaries
+and namespace recipes. Synthetic TLS sockets test real CA/SAN/SNI/Host refusal;
+they do not establish container DNS/route isolation or browser authentication.
+TLS and DNS use non-root roles with only the exact namespace low-port sysctl.
+Browser trust recipes scope NSS to a separate owned HOME and browser profile.
+No component changes host DNS or global trust.
+
+`role_profiles.py` requires exact controller-owned role profiles before creation
+or exec. The proxy rechecks the complete inherited immutable image Config and
+materialized volume mounts before creation. Missing profiles, role/image/name
+confusion, changed command/environment/user/directory, aliases, ports, DNS,
+mounts and unknown top-level fields refuse. Exec admits exact recipes and no
+stdin, including upgrade streams; SQL/script inputs need read-only mounted,
+source-bound files. `fixture_roles.py` contains synthetic test profiles only;
+these must never be used as production service profiles. The seven upgrade
+checks now exercise output-only exec. Historical bidirectional fixtures no
+longer describe the current execution admission.
+
+`rehearsal.py --repo <worktree> --source-sha <full-HEAD-SHA> --preview` binds
+all committed complete forward SQL bodies, the canonical runner, production
+guard and eleven scenario artifacts (ten committed plus the derived ledger
+census). A fresh-schema defect in the canonical runner was fixed: ledger column
+availability is checked after each body inside its atomic transaction, so
+pre-054 rows stay unhashed and subsequent rows carry their original blob hash.
+No migration body or production guard changes. SQL remains unexecuted; the
+prepared race requires observed holder/waiter blocking, not elapsed time.
+
+Operational completion remains pending: actual role image/config profiles,
+TLS/namespace orchestration and observations, retained storage/workspace file
+byte manifests, session race controller, immutable built-image/filesystem/auth
+evidence, independent review, and fresh exact-command approval. Keep the schema replacement forward
 only, with no migration pre-marking or weakened production migration guard.
 No claim of a complete or independently reviewed rehearsal is made here.
 Hosted App Server authentication remains BLOCKED in both modes. A different
