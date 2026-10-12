@@ -24,7 +24,18 @@ PASS=0
 FAIL=0
 # One owning root for every fixture, removed on ANY exit path (a die between allocation and the per-case rm would
 # otherwise leak the fixture repository).
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
 WORK_ROOT="$(mktemp -d "${TMPDIR:-/var/tmp}/ci-classify-exec.XXXXXXXX")" || { echo "FATAL: mktemp failed" >&2; exit 2; }
+assert_fixture_dir "$WORK_ROOT"
 trap 'rm -rf "$WORK_ROOT"' EXIT
 pass() { PASS=$((PASS + 1)); echo "ok   $1"; }
 fail() { FAIL=$((FAIL + 1)); echo "FAIL $1"; }
@@ -37,17 +48,6 @@ if [ "$PASS" -ne $((_p0 + 1)) ] || [ "$FAIL" -ne $((_f0 + 1)) ]; then
   exit 1
 fi
 PASS=$_p0; FAIL=$_f0
-
-assert_fixture_dir() {
-  case "${1-}" in
-    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
-    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
-    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
-    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
-    /*) : ;;
-    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
-  esac
-}
 
 # Extract the run: block of a named step inside a named job. One PyYAML program, not a regex over text.
 extract_step() { # <job> <step-name-prefix> <out-file>
@@ -64,18 +64,24 @@ sys.exit(3)
 PY
 }
 
-# run_case <job> <step-prefix> <classifier-relpath> <mode> <expect-verdict> [warn-needle]
+# run_case <job> <step-prefix> <classifier-relpath> <mode> <expect-verdict> [warn-needle...]
 #   mode = md      : markdown-only PR diff, base ref carries the classifier
 #          code    : app-code PR diff, base ref carries the classifier
 #          shallow : no origin/<base> ref at all (the depth-1 clone shape)
+#          weak    : code diff, and the CHECKED-OUT classifier is replaced by one that always says false (uncommitted, so it is
+#                    not in the diff): the step must judge by the BASE ref's copy, so the verdict stays true
+#          mixed   : a markdown row sorted BEFORE a code row in one diff: every row must be read, not only the first
+#          big     : a code row first, then ~1500 markdown rows (> 64 KB listing): the early-exit classifier must not
+#                    SIGPIPE the producer and red the step
 run_case() {
-  local job="$1" prefix="$2" classifier="$3" mode="$4" expect="$5" needle="${6-}"
+  local job="$1" prefix="$2" classifier="$3" mode="$4" expect="$5"; shift 5
   local root work out step_file rc got warn
   assert_fixture_dir "$WORK_ROOT"
   root="$WORK_ROOT/$job-$mode"
   mkdir -p "$root" || { fail "mkdir failed ($job/$mode)"; return; }
   assert_fixture_dir "$root"
   work="$root/work"
+  assert_fixture_dir "$work"
   out="$root/github_output"
   step_file="$root/step.sh"
   mkdir -p "$work" "$root/tmp"
@@ -95,14 +101,30 @@ run_case() {
     "${g[@]}" update-ref refs/remotes/origin/main HEAD
   fi
   "${g[@]}" checkout -q -b pr
-  if [ "$mode" = "code" ]; then
-    mkdir -p "$work/apps"
-    printf 'y\n' > "$work/apps/x.ts"
-  else
-    printf 'z\n' > "$work/knowledge-base/a.md"
-  fi
+  case "$mode" in
+    code|weak)
+      mkdir -p "$work/apps"
+      printf 'y\n' > "$work/apps/x.ts" ;;
+    mixed)
+      mkdir -p "$work/zz"
+      printf 'z\n' > "$work/knowledge-base/a.md"
+      printf 'y\n' > "$work/zz/x.ts" ;;
+    big)
+      mkdir -p "$work/aa" "$work/knowledge-base/big"
+      printf 'y\n' > "$work/aa/x.ts"
+      local i=0
+      while [ "$i" -lt 1500 ]; do
+        printf 'z\n' > "$work/knowledge-base/big/a-rather-long-markdown-file-name-to-fill-the-pipe-buffer-$i.md"
+        i=$((i + 1))
+      done ;;
+    *)
+      printf 'z\n' > "$work/knowledge-base/a.md" ;;
+  esac
   "${g[@]}" add -A
   "${g[@]}" commit -q -m change
+  if [ "$mode" = "weak" ]; then
+    printf '#!/usr/bin/env bash\nprintf "false\\n"\n' > "$work/$classifier"
+  fi
 
   : > "$out"
   warn="$root/stdout"
@@ -122,13 +144,14 @@ run_case() {
   else
     fail "$job/$mode: want applicable=$expect got='${got}' rc=$rc ($(tr '\n' ' ' < "$warn" | cut -c1-200))"
   fi
-  if [ -n "$needle" ]; then
+  local needle
+  for needle in "$@"; do
     if grep -qF -e "$needle" "$warn"; then
       pass "$job/$mode: warning names the measured cause ($needle)"
     else
       fail "$job/$mode: warning lacks '$needle' ($(tr '\n' ' ' < "$warn" | cut -c1-200))"
     fi
-  fi
+  done
   rm -rf "$root"
 }
 
@@ -139,12 +162,15 @@ for spec in \
   echo "── $job"
   run_case "$job" "$prefix" "$classifier" md      false
   run_case "$job" "$prefix" "$classifier" code    true
-  run_case "$job" "$prefix" "$classifier" shallow true "base_ref_resolves=no"
+  run_case "$job" "$prefix" "$classifier" shallow true "base_ref_resolves=no" "fatal:"
+  run_case "$job" "$prefix" "$classifier" weak    true
+  run_case "$job" "$prefix" "$classifier" mixed   true
+  run_case "$job" "$prefix" "$classifier" big     true
 done
 
 total=$((PASS + FAIL))
-if [ "$total" -lt 8 ]; then
-  printf '[FATAL] assertion floor: only %s assertions ran, want >=8\n' "$total" >&2
+if [ "$total" -lt 16 ]; then
+  printf '[FATAL] assertion floor: only %s assertions ran, want >=16\n' "$total" >&2
   exit 1
 fi
 echo

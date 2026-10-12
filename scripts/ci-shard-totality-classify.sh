@@ -19,6 +19,12 @@
 # authority, ADR-276). `--enum-failed` is the verdict the calling step uses when `git diff` itself failed: it emits
 # `true`. Missing or unknown argv exits NON-ZERO so a broken classifier reds the job instead of fabricating a skip.
 #
+# Reproduce a verdict locally (CI judges by the BASE ref's copy of this file, so a PR cannot weaken the gate it is judged by):
+#   git diff --name-status origin/main...HEAD | bash scripts/ci-shard-totality-classify.sh pull_request
+# The classifier reads `--name-status`, which carries no file mode: an added symlink or an exec-bit change on a `.md` is treated as
+# markdown. That is accepted here because the battery's census reads only `*.sh`/`*.bash` and shebang files; a caller whose tests follow
+# symlinks must not reuse this allowlist.
+#
 # Modelled on scripts/ci-e2e-classify.sh (#8450); the allowlist is deliberately narrower (markdown only), because
 # knowledge-base/ also holds scripts the battery's census can see.
 set -uo pipefail

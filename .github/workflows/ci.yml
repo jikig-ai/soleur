@@ -1649,10 +1649,11 @@ jobs:
             : > "$GIT_ERR"
             if CHANGED="$(git diff --name-status "origin/${GITHUB_BASE_REF}...HEAD" 2>>"$GIT_ERR")" \
               && git show "origin/${GITHUB_BASE_REF}:scripts/ci-shard-totality-classify.sh" > "$RUNNER_TEMP/ci-shard-totality-classify.sh" 2>>"$GIT_ERR"; then
-              APPLICABLE="$(printf '%s\n' "$CHANGED" | bash "$RUNNER_TEMP/ci-shard-totality-classify.sh" pull_request)"
+              # Here-string, not `printf | bash`: see the e2e classify step (SIGPIPE on a >64 KB listing).
+              APPLICABLE="$(bash "$RUNNER_TEMP/ci-shard-totality-classify.sh" pull_request <<<"$CHANGED")"
             else
-              echo "::warning::shard-totality classification fell back to enum-failed; git stderr: [$(tr '\n' ' ' < "$GIT_ERR" | cut -c1-300)] shallow=$(git rev-parse --is-shallow-repository 2>&1 | head -1) base_ref_resolves=$(git rev-parse --verify -q "origin/${GITHUB_BASE_REF}" >/dev/null 2>&1 && echo yes || echo no)"
-              APPLICABLE="$(bash scripts/ci-shard-totality-classify.sh --enum-failed)"
+              echo "::warning::shard-totality classification fell back to enum-failed; git stderr: [$(tr '\n' ' ' < "$GIT_ERR" | cut -c1-300)] shallow=$(git rev-parse --is-shallow-repository 2>&1 | head -1) base_ref_resolves=$(git rev-parse --verify -q "origin/${GITHUB_BASE_REF}" >/dev/null 2>&1 && echo yes || echo no) head=$(git rev-parse --short HEAD 2>&1 | head -1) uid=$(id -u)"
+              APPLICABLE=true
             fi
           else
             APPLICABLE="$(bash scripts/ci-shard-totality-classify.sh "$EVENT_NAME" </dev/null)"
@@ -1671,7 +1672,8 @@ jobs:
           echo "**shard-totality battery skipped: markdown-only diff** — classifier allowlist is markdown under \`knowledge-base/\` and root \`*.md\` only (#9729)." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Guard 1 — shard-totality mutation battery (rows ${{ matrix.rows }}; every mutated row must drive the guard RED)
-        if: steps.detect.outputs.applicable == 'true'
+        # `!= 'false'`, not `== 'true'`: an absent or unexpected output must RUN the battery, never skip it.
+        if: steps.detect.outputs.applicable != 'false'
         run: bash plugins/soleur/test/scripts-shard-totality-mutations.sh --rows "${{ matrix.rows }}"
 
   # Phase F #6325 — Grok fidelity CI: grok inspect contract + /go golden-path eval.
@@ -2091,9 +2093,9 @@ jobs:
           # PR (including all 14 of the last 14 knowledge-base-only ones) down the enum-failed fallback below.
           fetch-depth: ${{ github.event_name == 'pull_request' && '0' || '1' }}
 
-      # (#8450) In-job applicability classifier — verdict observed correct on
-      # this PR's own diff (report-only push), so the heavy steps below are
-      # gated on it. Deliberately NOT a detect-changes output + `needs:` edge:
+      # (#8450) In-job applicability classifier; the heavy steps below are
+      # gated on it. (An earlier revision of this comment claimed the verdict was "observed correct on this PR's own
+      # diff". That cannot have been observed: the checkout was depth 1, so the diff never resolved, see fetch-depth above.) Deliberately NOT a detect-changes output + `needs:` edge:
       # a failed upstream job would needs-skip `e2e`, and a skipped required
       # check posts GREEN — the fail-open shape this file warns about. A
       # classify-step failure reds the job instead. (The ONE job-level
@@ -2120,10 +2122,14 @@ jobs:
             : > "$GIT_ERR"
             if CHANGED="$(git diff --name-status "origin/${GITHUB_BASE_REF}...HEAD" 2>>"$GIT_ERR")" \
               && git show "origin/${GITHUB_BASE_REF}:scripts/ci-e2e-classify.sh" > "$RUNNER_TEMP/ci-e2e-classify.sh" 2>>"$GIT_ERR"; then
-              APPLICABLE="$(printf '%s\n' "$CHANGED" | bash "$RUNNER_TEMP/ci-e2e-classify.sh" pull_request)"
+              # A here-string, not `printf | bash`: the classifier exits at the first non-allowlisted row without reading the
+              # rest, so on a name-status listing over the 64 KB pipe buffer the printf takes SIGPIPE and pipefail reds the step.
+              APPLICABLE="$(bash "$RUNNER_TEMP/ci-e2e-classify.sh" pull_request <<<"$CHANGED")"
             else
               echo "::warning::e2e classification fell back to enum-failed; git stderr: [$(tr '\n' ' ' < "$GIT_ERR" | cut -c1-300)] shallow=$(git rev-parse --is-shallow-repository 2>&1 | head -1) base_ref_resolves=$(git rev-parse --verify -q "origin/${GITHUB_BASE_REF}" >/dev/null 2>&1 && echo yes || echo no) head=$(git rev-parse --short HEAD 2>&1 | head -1) uid=$(id -u)"
-              APPLICABLE="$(bash scripts/ci-e2e-classify.sh --enum-failed)"
+              # A LITERAL, never the PR's own copy of the classifier: the base-ref rule above is only worth anything if the
+              # fallback cannot be turned into `false` by editing the checked-out script.
+              APPLICABLE=true
             fi
           else
             APPLICABLE="$(bash scripts/ci-e2e-classify.sh "$EVENT_NAME" </dev/null)"

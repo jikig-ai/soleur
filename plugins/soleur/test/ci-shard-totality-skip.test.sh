@@ -14,7 +14,7 @@
 # never a re-implemented mirror; (b) ci.yml wiring anchors scoped to the shard-totality-mutations job
 # section: the classify step precedes the battery step, the battery step is gated on the verdict, the
 # verdict is validated and emitted, the checkout is full-history on a pull_request (an EXECUTED
-# evaluation of the ternary, not a spelling pin), and the job carries no job-level if:/needs: beyond the
+# check on the ternary: a sweep for falsy-middle shapes, not an evaluation), and the job carries no job-level if:/needs: beyond the
 # two pinned by scripts/ci-push-dedupe.test.sh and scripts/ci-draft-light.test.sh.
 #
 # Auto-discovered by scripts/test-all.sh (`plugins/soleur/test/*.test.sh`).
@@ -83,6 +83,14 @@ expect_verdict "subdir md outside kb runs"               true  pull_request $'M\
 expect_verdict "knowledge-base-evil prefix runs"         true  pull_request $'M\tknowledge-base-evil/x.md\n'
 expect_verdict "C-quoted path runs"                      true  pull_request $'M\t"knowledge-base/x\\ny.md"\n'
 expect_verdict "second row after a compliant first runs" true  pull_request $'M\tknowledge-base/a.md\nM\tscripts/test-all.sh\n'
+# A final row with no trailing newline must still be read (the `|| [ -n "$line" ]` limb); dropping it would skip the battery.
+expect_verdict "final row without trailing newline runs"  true  pull_request $'M\tknowledge-base/a.md\nM\tscripts/x.sh'
+expect_verdict "markdown suffix then more runs"          true  pull_request $'M\tknowledge-base/x.md.sh\n'
+expect_verdict "single-slash .md is NOT root-md safe"    true  pull_request $'M\tapps/README.md\n'
+expect_verdict "docs/legal md runs (not allowlisted)"    true  pull_request $'M\tdocs/legal/x.md\n'
+expect_verdict "bare knowledge-base path runs"           true  pull_request $'M\tknowledge-base\n'
+expect_verdict "classifier self-edit runs"               true  pull_request $'M\tscripts/ci-shard-totality-classify.sh\n'
+expect_verdict "own suite self-edit runs"                true  pull_request $'M\tplugins/soleur/test/ci-shard-totality-skip.test.sh\n'
 
 echo "── non-PR events always run"
 expect_verdict "push runs"                               true  push             $'M\tknowledge-base/a.md\n'
@@ -104,10 +112,10 @@ in_section "base-ref classifier judged, not the PR's"    'git show "origin/${GIT
 in_section "diff range is the PR merge-base"             'git diff --name-status "origin/${GITHUB_BASE_REF}...HEAD"'
 in_section "invalid verdict is a red job"                '::error::shard-totality classifier emitted invalid verdict'
 in_section "verdict emitted to GITHUB_OUTPUT"            'applicable=$APPLICABLE" >> "$GITHUB_OUTPUT'
-in_section "enum-failure fallback wired"                 "--enum-failed"
+in_section "enum-failure fallback is a literal true"     'APPLICABLE=true'
 in_section "git stderr is captured, not discarded"       'GIT_ERR'
 
-if printf '%s\n' "$section" | grep -cE '(2>/dev/null)' >/dev/null && printf '%s\n' "$section" | grep -E 'git (diff|show)' | grep -qF '2>/dev/null'; then
+if printf '%s\n' "$section" | grep -E 'git (diff|show)' | grep -qE '2> *(/dev/null|&-)|&>'; then
   fail "a git diff/show in the classify step discards stderr (the e2e enum-failed cause was invisible for that reason)"
 else
   pass "no git diff/show line discards stderr"
@@ -120,8 +128,24 @@ else
   fail "classify step is conditional or not found"
 fi
 
-gate_count="$(printf '%s\n' "$section" | grep -c "steps.detect.outputs.applicable == 'true'")"
-if [ "$gate_count" -eq 1 ]; then pass "exactly one step (the battery) gated on applicable"; else fail "applicable gate count is $gate_count, want 1"; fi
+battery_step="$(printf '%s\n' "$section" | awk '/^      - name: Guard 1 — shard-totality mutation battery/{f=1; print; next} f && /^      - /{exit} f{print}')"
+if printf '%s\n' "$battery_step" | grep -qxE "        if: steps\.detect\.outputs\.applicable != 'false'"; then
+  pass "the battery step itself carries the fail-closed gate (!= 'false')"
+else
+  fail "the battery step lacks its own 'if: steps.detect.outputs.applicable != false' line"
+fi
+skip_step="$(printf '%s\n' "$section" | awk '/^      - name: Record shard-totality skip verdict/{f=1; print; next} f && /^      - /{exit} f{print}')"
+if printf '%s\n' "$skip_step" | grep -qxE "        if: steps\.detect\.outputs\.applicable == 'false'"; then
+  pass "the skip-verdict step is gated on == 'false'"
+else
+  fail "the skip-verdict step lacks its == 'false' gate"
+fi
+
+# The classifier's allowlist arms are the security boundary: pin them lexically and by count (fixtures cannot enumerate widenings).
+grep -qF 'knowledge-base/*.md) ;;' "$CLASSIFIER" && pass "allowlist arm: knowledge-base/*.md" || fail "allowlist arm knowledge-base/*.md missing/widened"
+grep -qF '*.md)' "$CLASSIFIER" && pass "allowlist arm: root *.md" || fail "allowlist arm *.md missing"
+path_arms="$(awk '/^  case "\$path" in/,/^  esac/' "$CLASSIFIER" | grep -cE '^ {4}[^ ]' || true)"
+if [ "$path_arms" -eq 3 ]; then pass "path-case arm count is exactly 3"; else fail "path-case arm count is $path_arms, want 3 (allowlist widened or catch-all lost?)"; fi
 
 classify_line="$(printf '%s\n' "$section" | grep -n 'ci-shard-totality-classify' | head -1 | cut -d: -f1)"
 battery_line="$(printf '%s\n' "$section" | grep -n 'scripts-shard-totality-mutations.sh --rows' | head -1 | cut -d: -f1)"
@@ -141,16 +165,16 @@ if [ -z "$falsy_hits" ]; then
 else
   fail "falsy-middle ternary found (always evaluates to the right operand): $falsy_hits"
 fi
-depth_line="$(grep -n "fetch-depth: \${{ github.event_name == 'pull_request'" "$CI_YML" | head -5)"
-if [ -n "$depth_line" ] && ! printf '%s\n' "$depth_line" | grep -qE "&&[[:space:]]*0[[:space:]]*\|\|"; then
-  pass "pull_request full-history ternary yields a truthy '0' string"
+e2e_section="$(awk '/^  e2e:/{f=1} f && !/^  e2e:/ && /^  [a-zA-Z0-9_-]+:/{exit} f{print}' "$CI_YML")"
+if printf '%s\n' "$e2e_section" | grep -qF "fetch-depth: \${{ github.event_name == 'pull_request' && '0' || '1' }}"; then
+  pass "e2e checkout depth ternary yields the truthy string '0' on pull_request"
 else
-  fail "fetch-depth ternary missing or still falsy-zero: $depth_line"
+  fail "e2e fetch-depth ternary is not the quoted-'0' form"
 fi
 
 total=$((PASS + FAIL))
-if [ "$total" -lt 41 ]; then
-  printf '[FATAL] assertion floor: only %s assertions ran, want >=41\n' "$total" >&2
+if [ "$total" -lt 52 ]; then
+  printf '[FATAL] assertion floor: only %s assertions ran, want >=52\n' "$total" >&2
   exit 1
 fi
 echo
