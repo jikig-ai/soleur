@@ -1046,8 +1046,9 @@ main_rc=$?
 # §0-§5 parity program above reads the web-platform infra directory only; this one does not.
 #
 # PER BLOCK, not a comparison of totals: moving a host_key from one block into another keeps the
-# totals equal and must still go RED (one block has 0, the other 2). The walker strips comments
-# first, so tunnel.tf's prose mention of `connection { host }` is not a block. .tf.json files are
+# totals equal and must still go RED (one block has 0, the other 2). The walker first blanks
+# heredoc bodies, then strips comments, so tunnel.tf's prose mention of `connection { host }`
+# is not a block. .tf.json files are
 # parsed as JSON and every `connection` object (or list of objects) at any depth is a block.
 #
 # RESIDENCE is fleet-symmetric (#9998): §1's sibling census is server.tf-scoped AND
@@ -1204,9 +1205,9 @@ def blank_heredocs(text):
                     nl = text.find('\n', i + m.end())
                     body_start = nl + 1 if nl != -1 else i + m.end()
                     body_end = i + m.end() + tm.start()
-                    for j_ in range(body_start, body_end):
-                        if out[j_] != '\n':
-                            out[j_] = ' '
+                    out[body_start:body_end] = [
+                        '\n' if ch == '\n' else ' '
+                        for ch in text[body_start:body_end]]
                     i = i + m.end() + tm.end()
                     continue
             i += 1  # not a marker (or unterminated) -- skip just the `<<`
@@ -1214,7 +1215,8 @@ def blank_heredocs(text):
         i += 1
     return ''.join(out)
 
-blocks = []   # (file:line, body-or-dict, enclosing "type.name" or None)
+blocks = []   # (file:line, body-or-dict, enclosing "type.name" or None,
+              #  kind "conn"|"dyn")
 local_defs = []   # web_1_ssh_host_key definitions
 local_defs_2 = [] # web_2_ssh_host_key definitions (#9151)
 dropped_hdrs = [] # resource headers dropped for nesting inside another span
@@ -1264,9 +1266,12 @@ for f in files:
     # inside a real one can never outrank the real container. A block in no
     # resource span is unattributable -> None, which matches no EXT_RESIDENCE
     # entry (fail-closed).
-    TOPLEVEL_RE = re.compile(  # the top-level grammar -- must track new keywords
-        r'(?m)^[ \t]*(?:resource|data|module|locals|variable|output|terraform|'
-        r'provider|check|import|moved|removed|ephemeral|run|mock_provider)\b'
+    # the top-level grammar -- must track new keywords (single-sourced: the
+    # cap and the drop must never drift apart on which words open a construct)
+    NONRES_KW = ('data|module|locals|variable|output|terraform|provider|check|'
+                 'import|moved|removed|ephemeral|run|mock_provider')
+    TOPLEVEL_RE = re.compile(
+        r'(?m)^[ \t]*(?:resource|' + NONRES_KW + r')\b'
         r'(?!\s*=)')  # `provider = x`/`output = y` attribute lines are NOT headers
     toplevel_starts = [m.start() for m in TOPLEVEL_RE.finditer(src)]
     # Spans for every NON-resource top-level construct: resources are top-level
@@ -1278,9 +1283,8 @@ for f in files:
     # dropped -> findings: fail-closed, never grants attribution.
     nonres_spans = []
     for tm in re.finditer(
-            r'(?m)^[ \t]*(?:data|module|locals|variable|output|terraform|provider|'
-            r'check|import|moved|removed|ephemeral|run|mock_provider)'
-            r'\b(?!\s*=)[^\n{]*\n?[ \t]*\{',  # brace may open on the next line
+            r'(?m)^[ \t]*(?:' + NONRES_KW + r')'
+            r'\b(?!\s*=)[^\n{]*(?:\n[ \t]*)*\{',  # brace may open on a later line
             src):
         nonres_spans.append(
             (tm.start(), tm.end() + len(block_body(src, tm.end())) + 1))
@@ -1338,7 +1342,8 @@ def is_winrm(b):
     return isinstance(b, str) and bool(re.search(r'(?m)^\s*type\s*=\s*"winrm"', b))
 
 # Every dropped header is a finding: valid HCL cannot nest resources, so a
-# `resource ".." ".."` match inside another resource's span is heredoc/string
+# `resource ".." ".."` match inside another resource's -- or ANY non-resource
+# construct's -- span is heredoc/string
 # content at best and a spoofed member-name literal at worst (the span-capture
 # laundering path: fake span opens inside a NON-resource construct, swallows the
 # next real header, and launders a violating block into that member's exemption).
@@ -1408,6 +1413,15 @@ def dials_web_2(b):
 # pins the gap so closing it later is a deliberate act).
 def dialed_hosts(b):
     return set(re.findall(r'hcloud_server\.web\["(web-\d+)"\]', dial_text(b)))
+
+def is_ssh_conn(b):
+    # §1's census dialect requires the literal `type = "ssh"` token: terraform
+    # defaults an omitted type to ssh, so a TYPE-LESS connection is a real SSH
+    # dialer that §1 cannot see -- the server.tf carve-out must not exempt it.
+    if isinstance(b, dict):
+        return b.get("type") == "ssh"
+    return isinstance(b, str) \
+        and bool(re.search(r'(?m)^\s*type\s*=\s*"ssh"', b))
 
 bad_count, bad_value, bad_web1, bad_web2 = [], [], [], []
 for loc, b, _addr in ssh_blocks:
@@ -1509,12 +1523,13 @@ for loc, b, addr, kind in blocks:
     # server.tf is §1's universe -- but §1's census is terraform_data-typed AND
     # speaks the literal `connection {}`/`type = "ssh"` dialect, so the carve-out
     # only covers blocks §1 can actually see: a terraform_data-attributed plain
-    # non-winrm connection. A dynamic-spelled, winrm-typed, null_resource or
-    # unattributed dialer inside server.tf escapes §1's enumeration AND
-    # residence without this refinement (enum U3, RES-A/RES-B).
+    # connection whose body carries the `type = "ssh"` token. A dynamic-spelled,
+    # winrm-typed, TYPE-LESS (defaults to ssh at apply time but invisible to §1),
+    # null_resource or unattributed dialer inside server.tf escapes §1's
+    # enumeration AND residence without this refinement (enum U3, RES-A/RES-B).
     if fpath == "apps/web-platform/infra/server.tf" and addr is not None \
             and addr.startswith("terraform_data.") \
-            and kind == "conn" and not is_winrm(b):
+            and kind == "conn" and is_ssh_conn(b):
         continue
     members = EXT_RESIDENCE.get(fpath)
     entry = members.get(addr) if isinstance(members, dict) else None

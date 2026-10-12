@@ -1631,6 +1631,38 @@ resource "terraform_data" "g2_winrm_srv" {
 """
 ' "g2_winrm_srv"
 
+# The carve-out only exempts blocks §1's census can see — which requires the
+# literal `type = "ssh"` token (terraform's default IS ssh, so a type-less
+# connection is a real SSH dialer that §1 cannot see; fix-round verifier A).
+expect_red "G2-36 (a type-less connection inside server.tf terraform_data)" server.tf \
+  "outside server.tf" '
+s += """
+resource "terraform_data" "g2_typeless_srv" {
+  connection {
+    host = hcloud_server.web["web-1"].ipv4_address
+    user = "root"
+    host_key = local.web_1_ssh_host_key
+  }
+}
+"""
+' "g2_typeless_srv"
+
+# Blank line(s) between a non-resource keyword and its brace must not slip the
+# nonres span regex (locals\n\n{); the drop arm must still fire (verifier B).
+expect_red "G2-37 (a member-name literal inside locals-blank-line-brace)" ci-ssh-key.tf \
+  "inside a containing block span" '
+s += """
+locals
+
+{
+  filler = 1
+  resource "terraform_data" "root_authorized_keys" {
+    nested = { x = 1 }
+  }
+}
+"""
+'
+
 # Membership is per-RESOURCE by design: a second same-host connection inside a
 # member (a second resource-level connection) stays in declared scope. A future
 # per-block tightening must deliberately flip this control.
@@ -1866,7 +1898,7 @@ fi
 # the ADR-193 defect: a floor whose failure arm routes through the suite's own verdict helper
 # cannot witness that helper being neutered -- the assertion rows go quiet AND so does the floor
 # meant to notice the quiet. Each carries a DISTINCT message so a failure says WHICH tripped.
-FLOOR=93  # floor = census (test-design review): 88 expect_red + M33b + 3 _g2_json_row + G2-C2 = 93 mutations_run. Slack lets rows vanish unflagged; G2-C5/G2-C6 (expect_green) do not increment, G2-C2/C3 DO. Prior derivation: +5 #9151 (M4a,M4b,G2-15..17) +7 review-pass (M2b,M4c..g,G2-18) +1 net #9970 (control-C -> green -1, M4j+M4k +2) +15 #9998 (G2-19..33). Re-derive from the battery log when adding rows.
+FLOOR=95  # floor = census (test-design review): 90 expect_red + M33b + 3 _g2_json_row + G2-C2 = 95 mutations_run. Slack lets rows vanish unflagged; G2-C5/G2-C6 (expect_green) do not increment, G2-C2/C3 DO. Prior derivation: +5 #9151 (M4a,M4b,G2-15..17) +7 review-pass (M2b,M4c..g,G2-18) +1 net #9970 (control-C -> green -1, M4j+M4k +2) +15 #9998 (G2-19..33). Re-derive from the battery log when adding rows.
 if (( mutations_run < FLOOR )); then
   printf '\n[FATAL] anti-vacuity floor (mutations): only %d landed, attributed mutation(s) ran, expected >= %d.\n' \
     "$mutations_run" "$FLOOR" >&2
