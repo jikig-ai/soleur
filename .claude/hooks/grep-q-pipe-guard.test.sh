@@ -1144,7 +1144,7 @@ eqv_sh="$(_eqv "$EQV_SH")"
 # derivation is AUTHORITATIVE; j0-derive.py in the spec directory is a point-in-time measurement of the base commit.
 PJ_DRAIN_WINDOW=4
 PJ_ALL="$(git ls-files)"
-PJ_TRIPLES=120   # recomputed below from a green run: the number of distinct (test file, verb, producer file) triples
+PJ_TRIPLES=119   # recomputed below from a green run: the number of distinct (test file, verb, producer file) triples
 PJ_VOCAB=' not-a-command text-only unverified helper-built-stub variable-named-verb pass-through deliberate-fault arm-drain '
 PRODUCER_JOIN=(
   '.claude/hooks/grep-rewrite.test.sh | jq | drains | 2 | *'
@@ -1211,7 +1211,6 @@ PRODUCER_JOIN=(
   'scripts/rotate-supabase-db-credential.test.sh | doppler | drains | 1 | secrets set'
   'scripts/sweep-followthroughs.test.sh | gh | drains | 5 | --body-file -'
   'scripts/watch-registration-narrowing-9564.test.sh | gh | exempt | arm-drain the issue comment arm reads stdin in both branches before exit; keyed on the subcommand'
-  'scripts/web2-rebirth-recovery-check.test.sh | cryptsetup | exempt | arm-drain the open arm reads the key (cat to cs-stdin) before any exit; keyed on the subcommand'
   'tests/scripts/test-argv-bearer-sweep.sh | jq | exempt | pass-through shim records argv then execs the real jq on every path'
   'tests/scripts/test-git-data-birth-readiness-gate.sh | grep | exempt | pass-through shim execs the real grep; its exit-2 fault arm is reached only through a here-string since #9210, so no pipe reaches it'
 )

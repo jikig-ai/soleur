@@ -2,7 +2,7 @@
 # group=infra
 # generated-from-runs=36327508617,36323335413,36249105039,36194570054,36186259058
 # default-weight-ms=1000
-# generated-at=2026-10-07T09:45:57Z
+# generated-at=2026-10-12T08:32:10Z
 # generator=regenerate-shard-manifest.py v3
 apps/web-platform/infra/apex-single-node-replace-mutation.test.sh	12000	measured
 apps/web-platform/infra/apex-single-node-replace.test.sh	500	measured
@@ -35,6 +35,8 @@ apps/web-platform/infra/cutover-inngest-workflow.test.sh	18500	measured
 apps/web-platform/infra/disk-monitor.test.sh	1000	measured
 apps/web-platform/infra/doppler-download-error-channel.test.sh	3000	measured
 apps/web-platform/infra/doppler-injection-bound.test.sh	5000	measured
+apps/web-platform/infra/egress-gateway.test.sh	1000	floor
+apps/web-platform/infra/egress-gw-image-staleness.test.sh	1000	floor
 apps/web-platform/infra/firewall-9000-deny.test.sh	0	measured
 apps/web-platform/infra/fresh-boot-parity.test.sh	500	measured
 apps/web-platform/infra/fresh-boot-ready.test.sh	0	measured
@@ -83,12 +85,14 @@ apps/web-platform/infra/inngest-inventory.test.sh	7000	measured
 apps/web-platform/infra/inngest-luks-cutover.test.sh	22500	measured
 apps/web-platform/infra/inngest-luks-sole-copy.test.sh	1000	floor
 apps/web-platform/infra/inngest-nic-wait.test.sh	34500	measured
+apps/web-platform/infra/inngest-provision-rehearsal.test.sh	1000	floor
 apps/web-platform/infra/inngest-rearm-reminders.test.sh	4000	measured
 apps/web-platform/infra/inngest-redis-luks.test.sh	500	measured
 apps/web-platform/infra/inngest-registry-probe.test.sh	1500	measured
 apps/web-platform/infra/inngest-rls/apply-inngest-rls-workflow.test.sh	1000	measured
 apps/web-platform/infra/inngest-rls/inngest-rls.test.sh	0	measured
 apps/web-platform/infra/inngest-server-flip-guard.test.sh	500	measured
+apps/web-platform/infra/inngest-server-probe-heartbeat.test.sh	1000	floor
 apps/web-platform/infra/inngest-vector-download.test.sh	500	measured
 apps/web-platform/infra/inngest-wiped-volume-verify.test.sh	2000	measured
 apps/web-platform/infra/inngest.test.sh	4000	measured
