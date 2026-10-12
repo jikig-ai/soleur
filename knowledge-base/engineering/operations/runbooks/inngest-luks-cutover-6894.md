@@ -623,6 +623,11 @@ and no `BASELINE_DECLARED_PROBES` bump were created.
   not a reason to open a shell.
 - **Rolling back later, on purpose.** There is no rollback: `op=luks-rollback` was retired by #8285 PR B and the
   plaintext volume it would have copied back to was destroyed on 2026-10-09 (§5a, §5b).
+- **After the host replace that carries #9786 (parked; not yet in force).** The template resolves the one LUKS volume.
+  An unpointed boot-reopen of a non-LUKS volume now FAILS `reopen_not_luks` (it used to skip with exit 0), and the
+  first-boot stage row for the no-pointer world reads `mode=unpointed` (was `plaintext_canonical`). A blank volume on a
+  `prd` host is refused (`unpointed_raw_refused`); there is no automated bring-up for a brand-new blank `prd` volume, so
+  that case needs a disaster-recovery procedure written when it is ever needed (ADR-142, addendum 2026-10-12).
 
 ---
 

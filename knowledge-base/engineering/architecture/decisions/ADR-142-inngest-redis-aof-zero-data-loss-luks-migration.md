@@ -396,6 +396,9 @@ plans no change. The pin also removes the only graph edge between the server and
 makes a targeted destroy of the volume safe. The dead plaintext resolver arm stays in `user_data`
 until the next replace that is already scheduled for another reason (#9786).
 
+> **Resolved by #9786, adopting:** the dead arm and the input are removed at the next replace — see the
+> 2026-10-12 addendum. D1's byte-identical `user_data` principle is knowingly given up at that window.
+
 **D2. Erasure runs on a short-lived throwaway server, not on the Inngest host.**
 The detached volume is attached to a Terraform-managed, count-gated, deny-all-inbound Hetzner server
 that zeroes it with `blkdiscard -z`, reads it back with O_DIRECT and posts a
@@ -709,3 +712,25 @@ apply has landed the one in-place update on `hcloud_volume.inngest_redis_luks`, 
 
 **What this addendum does NOT change.** The decision, its encryption mechanism, the additive-cutover design, or any earlier
 amendment or addendum.
+
+## Addendum — 2026-10-12 (#9786, strip the dead plaintext resolver)
+
+Appended; nothing above is edited beyond the one pointer under D1. Ref #9786, Ref #8285.
+
+**Status of this addendum: adopting.** The change is prepared and parked as a draft PR; it takes effect
+only when `hcloud_server.inngest` is next replaced (`apply_target=inngest-host-replace`), which is not
+scheduled. Until then the live host still runs the template D1 left in place.
+
+**Decision.** The cloud-init template stops reading `inngest_volume_id` and the pin local is deleted. The
+first-boot stage and the boot-reopen script resolve ONE volume, `inngest_luks_volume_id`. ARM 1 (ext4
+mount), the staging block and the `expect_luks` branches are removed. The pointer arm is unchanged. With no
+pointer the one candidate is resolved by signature (`crypto_LUKS` opens, anything else except blank
+refuses): there is no choice to make, so the 2026-09-18 amendment's "a pointer, never a signature" (its section 2) still holds wherever a
+choice exists. The telemetry `mode` value for that world is `unpointed` (was `plaintext_canonical`). The
+no-pointer arm may not `luksFormat` when the rendered Doppler config is `prd` (`unpointed_raw_refused`), so a
+lost pointer on a damaged-header volume cannot reformat the sole copy; a brand-new blank `prd` volume has no
+automated bring-up path and needs a written disaster-recovery procedure when it is ever needed.
+
+**What this addendum does NOT change.** The pointer arm, the encryption mechanism, `inngest_expect_luks` as
+an inert template key and telemetry field, or the image-baked `inngest-luks-cutover.sh` (its `rollback)` arm
+needs an image release and pin bump).
