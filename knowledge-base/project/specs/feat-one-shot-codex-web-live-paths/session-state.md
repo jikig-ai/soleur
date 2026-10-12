@@ -1291,3 +1291,50 @@
   lock inputs are unchanged; no deployment, bootstrap or C.9 runtime ran.
 - A new push and final-description watch must cover this merged source. Every
   recovery/auth/provider/routine/review/promotion blocker above remains intact.
+
+## Continuation update — 2026-10-12 safe qualification preparation
+
+- PR head `457623c28850c862de3e47fb50384cf4e6f163eb` was verified draft,
+  disarmed and BEHIND. Main `0dc19ef389e9a8f064fa5837bfecc911cc7c941c`
+  merged cleanly at `09bf6a4f68053db6405d75174d22f53a0d818d1b`. The incoming
+  thirteen-path delta changed infrastructure/evidence only; the static Inngest
+  suite passed 451/451 and fake-log capture passed 36/36. No infrastructure
+  operation or C.9 runtime ran.
+- The [new preparation record](safe-qualification-preparation-2026-10-12.md)
+  binds 5,035 full-production/plugin inputs, all 187 forward migration bodies
+  and matching synthetic local browser configuration. Original production
+  URL/JWT guards pass that generated fixture and reject the old candidate's
+  placeholder configuration. No image is built; TLS/namespace orchestration,
+  full-schema scenario review and independent review remain pending. The
+  preparation tool has no operational command or approval-consumption path.
+- New committed boundary components repair network/volume ownership and
+  cleanup provenance, close additional privilege/environment fields, and allow
+  registered cleanup after refusal without admitting execution. The registered
+  offline wrapper passed 18 creation, 51 ownership/exec, nine resource-policy,
+  12 collision, seven upgrade, seven resource-transport and six preparation
+  checks. Five guard-removal mutants failed. Fixture ratchets passed 62/62
+  and 71/71; shell capture/credential refusal lints passed. This is preparation
+  evidence, not production composition, full-suite, recovery or Web evidence.
+- One specialist errored on the harness usage limit; the second remained pending
+  initialization and was interrupted. Root examined the preparation sequentially;
+  no independent review or new CTO ruling is claimed. Required SAST stays VOID;
+  Ref #10082 and Ref #9791 were freshly verified OPEN. Full panel and C.9
+  root-cause clearance remain incomplete.
+- Session gates succeeded on escalated retry after sandbox maintenance-lock
+  refusal. They cleaned three merge-evidenced local worktrees and retained dirty
+  or unproven branches; this task's MCP config stayed clean. Socket fixtures also
+  required sandbox retry. Missing Node at `/usr/bin/node` was corrected by
+  resolving the available test interpreter; a mutation oracle was corrected to
+  accept syntax-valid behavioral ERROR results. A synthetic HTTP 204 body caused
+  BrokenPipe noise and was corrected, with thread-error assertions added.
+  No failed step or printed warning is treated as passing evidence.
+- User `continue` renewed no build/recovery/credential/provider permission.
+  No Docker daemon, image pull, application/database startup, SQL, browser login,
+  account/shared write, deployment or flag/cohort action occurred. The old runner
+  remains withdrawn. Planned hosted App Server auth is BLOCKED in both modes;
+  an alternative concrete API-funded route is separately PENDING. Keep draft,
+  auto-merge off, default-off and customer content blocked. Current-source recovery
+  → authenticated screenshots → eligible routine → permitted Web/CLO matrices
+  → full review/promotion remains open. Project sharing, retention/inheritance
+  and configured regions remain unknown. The ensuing push needs exact-head CI
+  and final-description watches.

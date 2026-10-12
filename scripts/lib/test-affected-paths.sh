@@ -2157,3 +2157,12 @@ AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_AGENT_RUNNABLE_TEST_SH_PATHS=(
   "plugins/soleur/test/lib/operator-stub-world.sh"
   "scripts/lib/test-affected-paths.sh"
 )
+
+# Offline qualification contract reads every committed runtime/plugin input.
+AFFECTED_SCRIPTS_LIB_CODEX_QUALIFICATION_TEST_SH_PATHS=(
+  "scripts/codex-qualification/"
+  "scripts/lib/codex-qualification.test.sh"
+  "apps/web-platform/"
+  "plugins/soleur/"
+  "scripts/lib/test-affected-paths.sh"
+)
