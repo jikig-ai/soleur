@@ -1123,7 +1123,7 @@ eqv_sh="$(_eqv "$EQV_SH")"
 # THE PRODUCER SIDE (S7b, #9217 Arm P). The consumer side above bans `| grep -q`; this half covers the OTHER end of the same
 # pipe: a non-test script feeds text into a verb, and a test STUB for that verb exits without reading stdin, so the writer dies
 # (SIGPIPE 141, or EPIPE where CI ignores SIGPIPE). Three guards share one table, PRODUCER_JOIN, whose evidence is
-# knowledge-base/project/specs/feat-one-shot-grep-q-pipe-guard-s7b-producer-join/evidence.md.
+# knowledge-base/project/specs/archive/20261012-033826-feat-one-shot-grep-q-pipe-guard-s7b-producer-join/evidence.md.
 #   1. SET IDENTITY over what the derivation can see. pj_join_pairs derives every (test file, verb) pair where the test file names
 #      a non-test file that pipes printf/echo/cat into the verb ON ONE LINE, in a file that mentions pipefail, with its status
 #      observed, and the test file (or one sourced file) stubs that verb. Every derived pair has exactly one row and every row still
