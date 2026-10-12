@@ -1234,7 +1234,11 @@ BEGIN {
   PATHRE = "(cat|printf)[^|]*>[ \t]*\"?[^ \"]*/[A-Za-z][A-Za-z0-9_.-]*\"?([ \t;]|$)"
   HELPRE = "(make_stub|write_stub|stub_cmd|mkstub|stub)[ \t]+\"?[A-Za-z][A-Za-z0-9_.-]*"
   SRCRE = "^[ \t]*(\\.|source)[ \t]+\"?[^\" \t;]+"
-  TOKRE = "[A-Za-z0-9_.-]+[.](sh|bash|yml|yaml)([^A-Za-z0-9_.-]|$)"
+  TOKRE = "[A-Za-z0-9_.-]+[.](" exts ")([^A-Za-z0-9_.-]|$)"   # R6: one list (-v exts=a|b|c from PJ_EXTS) feeds the non-test test, this pattern and the listing pathspec
+  NTEXT = "[.](" exts ")$"
+  nx = split(exts, xl, "|"); for (i = 1; i <= nx; i++) xdot[i] = "." xl[i]
+  HELPCALL = "^[ \t]*(make_stub|write_stub|stub_cmd|mkstub|stub)[ \t]+[^<>;|&)]*"   # R5a: a stub-helper call at the start of a statement, every argument
+  FORRE = "^[ \t]*for[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]+in[ \t]+"           # R5b: a loop over verb names
   sq = sprintf("%c", 39)
   STRIPL = "^[\"" sq "(){};]+"; STRIPR = "[\"" sq "(){};]+$"
   ANNOT = "::(error|warning|notice)::([^\"\\\\]|\\\\.)*(\"|$)"   # R8: the annotation string, to its closing unescaped quote
@@ -1288,6 +1292,24 @@ function site(l,   s, m, w, tl) {
     }
   }
 }
+# R5b: a stub built in a loop over verb names. The body is the next 15 lines up to a `done` at column 0; when a line of it writes a file named by
+# the loop variable (or calls a stub helper with it), every bare lowercase word of the loop list is a stub of the suite.
+function loopchk(line,   k, i, nw2, wa, w) {
+  for (k = 1; k <= nlp; k++) {
+    if (ll[k] <= 0) continue
+    if (line ~ /^done/) { ll[k] = 0; lact--; continue }
+    ll[k]--
+    if (ll[k] == 0) lact--
+    if (line ~ lre1[k] || line ~ lre2[k]) {
+      nw2 = split(lw[k], wa, /[ \t]+/)
+      for (i = 1; i <= nw2; i++) {
+        w = wa[i]; sub(STRIPL, "", w); sub(STRIPR, "", w)
+        if (w ~ /^[a-z][a-z0-9_.-]*$/) hs[file, w] = 1
+      }
+      if (ll[k] > 0) { ll[k] = 0; lact-- }
+    }
+  }
+}
 # R1: a code line that ends in a backslash, or in a single bar outside quotes that is not a YAML block-scalar indicator, absorbs the next line.
 function feed(raw,   t, s, q, nd, ns) {
   if (hold) { t = raw; sub(/^[ \t]+/, "", t); cur = cur " " t; hn++ } else { cur = raw; hn = 0 }
@@ -1331,15 +1353,16 @@ function stubbed(t, w,   r, b, c) {
 NR == FNR { b = base($0); bc[b]++; bp[b] = $0; next }
 FNR == 1 {
   flush(); fin(); file = FILENAME
-  isnt = (file ~ /\.(sh|bash|yml|yaml)$/ && file !~ TESTISH)
+  isnt = (file ~ NTEXT && file !~ TESTISH)
   iss = (file ~ /\.sh$/)
   ist = (iss && file ~ TESTSHAPE && file !~ /^knowledge-base\// && file !~ /\/fixtures\//)
   isy = (file ~ /\.(yml|yaml)$/)
-  pf = 0; nc = 0
+  pf = 0; nc = 0; nlp = 0; lact = 0
   if (ist) tl[++nt] = file
 }
 {
   if (isnt) feed($0)
+  if (ist && lact > 0) loopchk($0)
   if ($0 ~ /^[ \t]*#/) next
   l = $0
   sub(/::(error|warning|notice)::.*$/, "", l)   # physical lines: the pipefail token of a test file (the sourcer of a library may be one), and the stubs below
@@ -1354,8 +1377,19 @@ FNR == 1 {
       sub(/["; \t]+$/, "", m); sub(/^.*\//, "", m); addfp(file, m)   # the name, without the quote, the semicolon or the blank that ended the match (R7: `> "$d/jq"; chmod` was recorded as jq";)
     }
   }
+  if (ist && index(l, "for") && match(l, FORRE)) {   # R5b: remember the loop; its next lines are read by loopchk
+    v = substr(l, RSTART, RLENGTH); rest = substr(l, RSTART + RLENGTH)
+    sub(/^[ \t]*for[ \t]+/, "", v); sub(/[ \t]+in[ \t]+$/, "", v)
+    if (match(rest, /;[ \t]*do([^A-Za-z0-9_]|$)/)) rest = substr(rest, 1, RSTART - 1)
+    sub(/;[ \t]*$/, "", rest)
+    if (lact == 0) nlp = 0
+    nlp++; lact++; lv[nlp] = v; lw[nlp] = rest; ll[nlp] = 15
+    lre1[nlp] = "(cat|printf)[^|]*>>?[ \t]*\"?[^ \"]*/(\\$" v "([^A-Za-z0-9_]|$)|\\$\\{" v "\\})"
+    lre2[nlp] = "^[ \t]*(make_stub|write_stub|stub_cmd|mkstub|stub)([^A-Za-z0-9_]|$)[^|]*\\$" v "([^A-Za-z0-9_]|$)"
+  }
   if (ist) {
-    if (index(l, ".sh") || index(l, ".bash") || index(l, ".yml") || index(l, ".yaml")) {
+    xf = 0; for (xi = 1; xi <= nx; xi++) if (index(l, xdot[xi])) { xf = 1; break }
+    if (xf) {
       s = l
       while (match(s, TOKRE)) {
         m = substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH)
@@ -1367,6 +1401,16 @@ FNR == 1 {
       while (match(s, HELPRE)) {
         m = substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH)
         sub(/^(make_stub|write_stub|stub_cmd|mkstub|stub)[ \t]+"?/, "", m); hs[file, m] = 1
+      }
+      if (match(l, HELPCALL)) {   # R5a: the verb is not always the first argument (mkstub DIR VERB)
+        m = substr(l, RSTART, RLENGTH)
+        sub(/^[ \t]*(make_stub|write_stub|stub_cmd|mkstub|stub)[ \t]+/, "", m)
+        na = split(m, ag, /[ \t]+/)
+        for (k = 1; k <= na; k++) {
+          w = ag[k]
+          if (w ~ /^"[a-z][a-z0-9_.-]*"$/) w = substr(w, 2, length(w) - 2)
+          if (w ~ /^[a-z][a-z0-9_.-]*$/) hs[file, w] = 1
+        }
       }
     }
   }
@@ -1390,7 +1434,7 @@ END {
 }'
 # The ONE extension list. The listing pathspec (pj_join_pairs and the fixture runner), the non-test test and the owner-token pattern all
 # read it, so no arm can widen one of the three and not the others. The awk gets it as `-v exts=a|b|c` (pj_exts_re).
-PJ_EXTS='sh bash yml yaml'
+PJ_EXTS='sh bash yml yaml tf tftpl template service tmpl'
 pj_exts_re() { local e out=""; for e in $PJ_EXTS; do out+="${out:+|}$e"; done; printf '%s' "$out"; }
 # pj_derive <listing file> <files...> -> "<test file>\t<verb>\t<non-test file>" per derived pair x producer, unsorted. The ONE call of the derivation:
 # the real run and every derivation fixture go through it, so a fixture exercises the same program the tree does.

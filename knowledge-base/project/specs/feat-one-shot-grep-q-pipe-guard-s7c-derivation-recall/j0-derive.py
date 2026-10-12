@@ -30,7 +30,7 @@ import sys
 TESTISH = re.compile(r'(\.test\.sh$|^tests/|/tests?/|^knowledge-base/|\.md$|/fixtures/|\.test\.ts$|(^|/)test-[^/]*\.sh$)')
 TESTSHAPE = re.compile(r'(\.test\.sh$|^tests/|/tests?/|(^|/)test-[^/]*\.sh$)')
 BASE_EXT = ('.sh', '.bash', '.yml', '.yaml')
-ARM_EXT = ('.tf', '.tftpl', '.tpl', '.tmpl', '.template', '.service')
+ARM_EXT = ('.tf', '.tftpl', '.tmpl', '.template', '.service')   # the guard's extension list (PJ_EXTS); `.tpl` and the extensionless half of R6 were cut with the measure
 PIPE = re.compile(r'(^|[^|])(printf|echo|cat)([^A-Za-z0-9_|][^|]*)?\|[ \t]*(sudo[ \t]+(-[A-Za-z0-9_]+[ \t]+)*)?([A-Za-z_][A-Za-z0-9_.-]*)')
 UNOBS = re.compile(r'\|\|[ \t]*(true|:)([^A-Za-z0-9_]|$)')
 FNRE = re.compile(r'^[ \t]*(function[ \t]+)?([A-Za-z_][A-Za-z0-9_-]*)[ \t]*\(\)[ \t]*\{')
@@ -41,7 +41,7 @@ HELPCALL = re.compile(r'^[ \t]*' + HELPERS + r'[ \t]+(.*)$')
 HELPCALL_ANY = re.compile(r'^[ \t]*(?:make_stub|write_stub|stub_cmd|mkstub|stub|mk_stub|make_shim|mkshim|fake_bin|fake_cmd|make_fake|stub_bin|install_stub|shim)\b[ \t]*(.*)$')
 SRCRE = re.compile(r'^[ \t]*(?:\.|source)[ \t]+"?([^" \t;]+)')
 TOKRE_BASE = re.compile(r'[A-Za-z0-9_.-]+[.](?:sh|bash|yml|yaml)(?=[^A-Za-z0-9_.-]|$)')
-TOKRE_ARM = re.compile(r'[A-Za-z0-9_.-]+[.](?:sh|bash|yml|yaml|tf|tftpl|tpl|tmpl|template|service)(?=[^A-Za-z0-9_.-]|$)')
+TOKRE_ARM = re.compile(r'[A-Za-z0-9_.-]+[.](?:sh|bash|yml|yaml|tf|tftpl|tmpl|template|service)(?=[^A-Za-z0-9_.-]|$)')
 ANNOT = re.compile(r'::(error|warning|notice)::.*$')
 ANNOT_STR = re.compile(r'::(error|warning|notice)::(?:[^"\\]|\\.)*(?:"|$)')
 YAML_BLOCK = re.compile(r'(:|(^|[ \t])-)[ \t]*[|>][-+]?[ \t]*$')   # `key: |` and the list-item `- |` (decision-challenges item 19)
@@ -217,47 +217,10 @@ WRITE_TO_PARAM = re.compile(r'>>?[ \t]*"?[^ "\n]*/(\$\{?([1-9])\}?|\$\{?([A-Za-z
 LOCALP = re.compile(r'(?:local[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)="?\$\{?([1-9])\}?')
 
 
-def helper_defs(raw):
-    """-> {helper name: set(param index)} for functions whose body writes a file whose last path part is a positional parameter."""
-    out = {}
-    i = 0
-    n = len(raw)
-    while i < n:
-        m = FNRE.match(raw[i]) if not re.match(r'^[ \t]*#', raw[i]) else None
-        if not m:
-            i += 1
-            continue
-        name = m.group(2)
-        indent = len(raw[i]) - len(raw[i].lstrip())
-        j = i + 1
-        body = []
-        while j < n and not (raw[j].strip() == '}' and len(raw[j]) - len(raw[j].lstrip()) <= indent) and j < i + 60:
-            if not re.match(r'^[ \t]*#', raw[j]):
-                body.append(raw[j])
-            j += 1
-        txt = '\n'.join(body)
-        alias = {mm.group(1): mm.group(2) for mm in LOCALP.finditer(txt)}
-        idxs = set()
-        for mm in WRITE_TO_PARAM.finditer(txt):
-            if mm.group(2):
-                idxs.add(int(mm.group(2)))
-            elif mm.group(3) in alias:
-                idxs.add(int(alias[mm.group(3)]))
-        if idxs and name not in ('stub',):
-            out[name] = idxs
-        i = j + 1 if j > i else i + 1
-    return out
-
-
 def stub_set(path, text, arms, is_test, extra_helpers=None):
     """-> the set of verbs the file stubs (function definitions, files written to .../WORD, and for a test file helper calls)."""
     st = set()
     raw = text.split('\n')
-    hd = {}
-    if is_test and 'R5a' in arms:
-        hd = dict(helper_defs(raw))
-        if extra_helpers:
-            hd.update(extra_helpers)
     for idx, line in enumerate(raw):
         if re.match(r'^[ \t]*#', line):
             continue
@@ -277,14 +240,14 @@ def stub_set(path, text, arms, is_test, extra_helpers=None):
         if is_test and 'stub' in l:
             for m in HELPRE.finditer(l):
                 st.add(re.sub(r'^' + HELPERS + r'[ \t]+"?', '', m.group(0)))
-        if is_test and hd:
-            toks = l.split()
-            if toks and toks[0] in hd:
-                for k in hd[toks[0]]:
-                    if k <= len(toks) - 1:
-                        w = toks[k].strip('"\'')
-                        if BARE.match(w):
-                            st.add(w)
+        if is_test and 'R5a' in arms:
+            # a stub-helper call at the start of a statement: every bare lowercase argument (the verb is not always the first: mkstub DIR VERB)
+            m = re.match(r'^[ \t]*' + HELPERS + r'[ \t]+([^<>;|&)]*)', l)
+            if m:
+                for w in m.group(1).split():
+                    w = w[1:-1] if len(w) > 2 and w[0] == '"' and w[-1] == '"' else w
+                    if BARE.match(w):
+                        st.add(w)
         if is_test and 'R5b' in arms:
             m = FORRE.match(l)
             if m:
@@ -295,7 +258,7 @@ def stub_set(path, text, arms, is_test, extra_helpers=None):
                 if end >= 0:
                     body = body[:end]
                 pat = r'(\$' + var + r'\b|\$\{' + var + r'\})'
-                if re.search(r'(cat|printf)[^\n|]*>>?[ \t]*"?[^ "\n]*/' + pat, body) or re.search(r'^[ \t]*(' + '|'.join(list(hd) + ['make_stub', 'write_stub', 'stub_cmd', 'mkstub', 'stub']) + r')\b[^\n]*' + pat, body, re.M):
+                if re.search(r'(cat|printf)[^\n|]*>>?[ \t]*"?[^ "\n]*/' + pat, body) or re.search(r'^[ \t]*(' + '|'.join(['make_stub', 'write_stub', 'stub_cmd', 'mkstub', 'stub']) + r')\b[^\n]*' + pat, body, re.M):
                     for w in words:
                         if BARE.match(w):
                             st.add(w)
@@ -318,10 +281,6 @@ def derive(files, arms, quiet=True):
             continue
         if f.endswith(nontest_ext):
             nontest.append(f)
-        elif 'R6' in arms and '.' not in base(f) and not f.endswith('/') and '/node_modules/' not in f:
-            t = get(f)
-            if has_shebang(t) and re.match(r'#!.*\b(ba)?sh\b', t.split('\n', 1)[0]):
-                nontest.append(f)
     tests = [f for f in files if f.endswith('.sh') and TESTSHAPE.search(f) and not f.startswith('knowledge-base/') and '/fixtures/' not in f]
     bc = collections.Counter(base(f) for f in files)
     bp = {base(f): f for f in files}
@@ -342,18 +301,13 @@ def derive(files, arms, quiet=True):
             l = ANNOT.sub('', line)
             if 'pipefail' in l:
                 pf = True
-            if any(e in l for e in ('.sh', '.bash', '.yml', '.yaml', '.tf', '.tftpl', '.tpl', '.tmpl', '.template', '.service')):
+            if any(e in l for e in ('.sh', '.bash', '.yml', '.yaml', '.tf', '.tftpl', '.tmpl', '.template', '.service')):
                 for m in tokre.finditer(l):
                     toks.add(m.group(0))
             if re.match(r'^[ \t]*(\.|source)[ \t]', l):
                 m = SRCRE.match(l)
                 if m:
                     refs.append(base(m.group(1)))
-        if 'R6' in arms:
-            # an extensionless producer is named by its bare basename: every whole word of a code line is a token
-            for line in text.split('\n'):
-                if not re.match(r'^[ \t]*#', line):
-                    toks.update(WORD.findall(line))
         ttok[t] = toks
         tsrc[t] = refs
         tpf[t] = pf
