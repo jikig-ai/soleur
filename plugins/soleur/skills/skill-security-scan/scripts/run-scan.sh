@@ -189,7 +189,9 @@ done
 ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 meta_base="${SKILL_SCAN_META_BASE:-${XDG_RUNTIME_DIR:-/tmp}}"
 
-# Bound the per-invocation meta_dir leak (#6789). Each run creates
+# Bound the per-invocation meta_dir leak (#6789) and the scratch orphans under
+# ${TMPDIR:-/tmp} (#6760) — both families bounded here by the same age floor.
+# Each run creates
 # skill-security-scan-<pid>/ and NOTHING removes it: measured 12,889 leaked
 # dirs. The fix is a STARTUP age-reap of OLDER siblings — deliberately NOT a
 # `trap 'rm -rf "$meta_dir"' EXIT`. `.scan-meta.json` is GDPR Art. 32 evidence:
@@ -220,6 +222,27 @@ if [ -d "$meta_base" ]; then
   # same dir) are tolerated.
   find "$meta_base" -mindepth 1 -maxdepth 1 -type d \
     -name 'skill-security-scan-*' -user "$(id -u)" -mmin "+${_reap_min}" \
+    -exec rm -rf {} + 2>/dev/null || true
+fi
+
+# #6760: same age-floor sweep for the scratch families under ${TMPDIR:-/tmp}.
+# Two orphan classes the meta-base reap cannot reach: the `skill-scan-*`
+# scratch producers (skill-scan-input-*, skill-scan-results-*,
+# skill-scan-XXXXXX + .code/.fm/.body/.req/.resp siblings — created by
+# `mktemp -t` under TMPDIR and EXIT-trap-cleaned only on a clean exit), and
+# `skill-security-scan-*` meta dirs written under /tmp before XDG_RUNTIME_DIR
+# was set (the env-flip crossover — unreachable by the meta-base sweep once
+# the env flips). Same floor, same uid scope, same tolerance of rm races.
+# The `! -path` exclusions are load-bearing and asymmetric with the meta reap
+# above: INPUT and results_dir are created BEFORE this reap (unlike meta_dir,
+# created after), so under a pathological low floor (the test seam uses 0) a
+# scan whose category checks take >=1 min would reap its own live scratch
+# mid-run. Excluding them fails toward under-reaping — the safe direction.
+if [ -d "${TMPDIR:-/tmp}" ]; then
+  find "${TMPDIR:-/tmp}" -mindepth 1 -maxdepth 1 -user "$(id -u)" \
+    -mmin "+${_reap_min}" \
+    \( -name 'skill-security-scan-*' -o -name 'skill-scan-*' \) \
+    ! -path "$INPUT" ! -path "$results_dir" \
     -exec rm -rf {} + 2>/dev/null || true
 fi
 
