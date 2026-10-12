@@ -27,22 +27,25 @@
 set -uo pipefail
 
 dir="${1:-$PWD}"
+# Enter the directory once instead of passing `git -C "$dir"` at every call: a failed `cd` exits
+# here, so no later git call can run against the caller's own repository.
+cd -- "$dir" 2>/dev/null || exit 0
 
-[[ "$(git -C "$dir" rev-parse --is-bare-repository 2>/dev/null)" == "true" ]] || exit 0
+[[ "$(git rev-parse --is-bare-repository 2>/dev/null)" == "true" ]] || exit 0
 
-git_dir=$(git -C "$dir" rev-parse --absolute-git-dir 2>/dev/null) || exit 0
-common_dir=$(git -C "$dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || exit 0
+git_dir=$(git rev-parse --absolute-git-dir 2>/dev/null) || exit 0
+common_dir=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || exit 0
 [[ -n "$git_dir" && "$git_dir" == "$common_dir" ]] || exit 0
 
-old=$(git -C "$dir" symbolic-ref -q HEAD 2>/dev/null) || exit 0
+old=$(git symbolic-ref -q HEAD 2>/dev/null) || exit 0
 [[ "$old" == refs/* ]] || exit 0
 
-if git -C "$dir" show-ref --verify -q "$old" 2>/dev/null; then
+if git show-ref --verify -q "$old" 2>/dev/null; then
   exit 0
 fi
-git -C "$dir" show-ref --verify -q refs/heads/main 2>/dev/null || exit 0
+git show-ref --verify -q refs/heads/main 2>/dev/null || exit 0
 
-git -C "$dir" symbolic-ref HEAD refs/heads/main 2>/dev/null || exit 0
+git symbolic-ref HEAD refs/heads/main 2>/dev/null || exit 0
 
 # The old ref name is read from `.git/HEAD` and enters agent context via the loader: strip control
 # characters and cap its length first.

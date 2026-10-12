@@ -148,6 +148,7 @@ dangle() {
 
 head_of() {
   local r
+  assert_fixture_dir "$1"
   r=$(git -C "$1" symbolic-ref -q HEAD || printf '<detached>')
   printf '%s' "$r"
 }
