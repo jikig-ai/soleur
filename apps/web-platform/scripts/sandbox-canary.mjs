@@ -239,7 +239,7 @@ export function buildBwrapInvocation(fixture) {
 //     CLONE_NEWNS needs a CAP_SYS_ADMIN it does not hold: EPERM on every
 //     kernel, measured 2026-10-06 / bwrap 0.12. A real fork is the
 //     blanket-clone-deny tripwire.)
-//   proc_mask — /proc inside MUST contain no procfs at all (#10032: the
+//   proc_mask — /proc inside MUST be an empty tmpfs with no /proc/<pid> entries (#10032: the
 //     shim drops every procfs mount at /proc — including the vendor tail
 //     `--bind /proc /proc` — so the denyRead `--tmpfs /proc` is the realized
 //     mask: an empty, mountless /proc carrying only the apply-seccomp

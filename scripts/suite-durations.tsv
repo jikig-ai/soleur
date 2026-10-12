@@ -40,6 +40,7 @@
 .claude/hooks/pkill-self-match-guard.test.sh	5072	measured
 .claude/hooks/post-dispatch-watch-gate.test.sh	962	measured
 .claude/hooks/pre-ask-technical-fork-gate.test.sh	1297	measured
+.claude/hooks/pre-closing-technical-fork-gate.test.sh	1194	floor
 .claude/hooks/pre-merge-auto-close-scan.test.sh	8927	measured
 .claude/hooks/pre-merge-rebase-headless.test.sh	267	measured
 .claude/hooks/pre-merge-rebase-parity.test.sh	5551	measured
@@ -223,6 +224,7 @@ plugins/soleur/test/operator-script.test.sh	90601	measured
 plugins/soleur/test/operator-stage-approval-hook.test.sh	5583	measured
 plugins/soleur/test/pencil-adapter-auth-hard-fail.test.sh	44	measured
 plugins/soleur/test/pencil-setup-skill-cli-form.test.sh	13	measured
+plugins/soleur/test/plugin-version.test.sh	1194	floor
 plugins/soleur/test/pr-fanout-ledger.test.sh	56062	measured
 plugins/soleur/test/preflight-check10-suite-integrity.test.sh	36705	measured
 plugins/soleur/test/proc.test.sh	2698	measured
@@ -265,6 +267,7 @@ plugins/soleur/test/vendor-bundle-coverage.test.sh	194	measured
 plugins/soleur/test/vendor-drift-classify.test.sh	201	measured
 plugins/soleur/test/vendor-drift-workflow.test.sh	363	measured
 plugins/soleur/test/vendor-pin-integrity.test.sh	816	measured
+plugins/soleur/test/version-banner-hook.test.sh	1194	floor
 plugins/soleur/test/web-host-escrow-diagnose-workflow.test.sh	6605	measured
 plugins/soleur/test/workflow-run-deploy-invariants.test.sh	5757	measured
 plugins/soleur/test/worktree-manager-atomic-config.test.sh	689	measured

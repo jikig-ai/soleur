@@ -36,7 +36,7 @@
       "items": { "type": "string" }
     },
     "non_iac_stores": {
-      "description": "R8: stores with NO *.tf anchor (Supabase, Doppler, Better Stack, the R2 state backend, session Redis). The expected-count floor counts these explicitly so deleting a row cannot silently lower the floor.",
+      "description": "R8: stores with NO *.tf anchor (Supabase, Doppler, Better Stack, the R2 state backend). The expected-count floor counts these explicitly so deleting a row cannot silently lower the floor.",
       "type": "array",
       "items": { "type": "string" }
     },

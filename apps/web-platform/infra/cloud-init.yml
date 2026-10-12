@@ -127,6 +127,10 @@ write_files:
       # never happened. Scope bounded by infra-config-install.sh's gates, not by argv.
       Cmnd_Alias SYSTEMCTL_DAEMON_RELOAD = /usr/bin/systemctl daemon-reload
       deploy ALL=(root) NOPASSWD: SYSTEMCTL_DAEMON_RELOAD
+
+      # #10045 kdeny kernel-stream read.
+      Cmnd_Alias KDENY_KERNEL_STREAM = /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat
+      deploy ALL=(root) NOPASSWD: KDENY_KERNEL_STREAM
     owner: root:root
     permissions: '0440'
 

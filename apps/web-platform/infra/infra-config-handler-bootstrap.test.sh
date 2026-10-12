@@ -277,6 +277,39 @@ assert "post-write asserts inngest-heartbeat drop-in is LOADED (DropInPaths)" \
 assert "post-write asserts inngest-server drop-in is LOADED (DropInPaths)" \
   "printf '%s' \"\$BLOCK\" | grep -cF 'DropInPaths inngest-server.service' >/dev/null"
 
+# --- #10045: KDENY_KERNEL_STREAM rides BOTH bridges (Guard 2 of the plan) ------------------
+# The canary `kdeny` row reads the host kernel stream through a fixed-argv sudoers grant.
+# Both running-host bridges must assert the grant is EFFECTIVE, not merely present — the
+# strongest assertion class is the EXECUTE probe (an effective read proves the policy
+# resolved; a missing/drifted grant denies and fails the apply). The web-1 bridge is $BLOCK
+# (already extracted above); the web-2 bridge is terraform_data.deploy_pipeline_fix_web2,
+# whose remote-exec sentinel is bumped v2 -> v3 in lockstep with the content edit.
+echo ""
+echo "--- #10045: KDENY_KERNEL_STREAM grant assertions in both terraform_data bridges ---"
+assert "web-1 remote-exec asserts the KDENY_KERNEL_STREAM grant landed in the file" \
+  "printf '%s' \"\$BLOCK\" | grep -cE 'grep -q KDENY_KERNEL_STREAM /etc/sudoers.d/deploy-inngest-bootstrap' >/dev/null"
+assert "web-1 remote-exec EXECUTES the pinned journalctl read as deploy (effective, not merely present)" \
+  "printf '%s' \"\$BLOCK\" | grep -cF 'runuser -u deploy -- sudo -n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat >/dev/null' >/dev/null"
+assert "the web-1 journalctl execute probe is fatal, not advisory" \
+  "printf '%s' \"\$BLOCK\" | grep -F 'runuser -u deploy -- sudo -n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat' | grep -cF 'exit 1' >/dev/null"
+# shellcheck disable=SC2034  # consumed via `eval "$condition"` in assert()
+DPF2_BLOCK=$(awk '
+  /^resource "terraform_data" "deploy_pipeline_fix_web2"/ { f=1 }
+  f { print }
+  f && /^}/ { exit }
+' "$SERVER_TF")
+assert "deploy_pipeline_fix_web2 block is non-empty" "[[ -n \"\$DPF2_BLOCK\" ]]"
+assert "web-2 remote-exec asserts the KDENY_KERNEL_STREAM grant landed in the file" \
+  "printf '%s' \"\$DPF2_BLOCK\" | grep -cE 'grep -q KDENY_KERNEL_STREAM /etc/sudoers.d/deploy-inngest-bootstrap' >/dev/null"
+assert "web-2 remote-exec EXECUTES the pinned journalctl read as deploy (effective, not merely present)" \
+  "printf '%s' \"\$DPF2_BLOCK\" | grep -cF 'runuser -u deploy -- sudo -n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat >/dev/null' >/dev/null"
+assert "the web-2 journalctl execute probe is fatal, not advisory" \
+  "printf '%s' \"\$DPF2_BLOCK\" | grep -F 'runuser -u deploy -- sudo -n /usr/bin/journalctl -k -n 400 --since=-5min --no-pager -o cat' | grep -cF 'exit 1' >/dev/null"
+assert "the web-2 remote-exec sentinel is bumped to dpf-web2-remote-exec-v3" \
+  "printf '%s' \"\$DPF2_BLOCK\" | grep -cF 'dpf-web2-remote-exec-v3' >/dev/null"
+assert "no stale dpf-web2-remote-exec-v2 sentinel survives in the web-2 block" \
+  "! printf '%s' \"\$DPF2_BLOCK\" | grep -cF 'dpf-web2-remote-exec-v2' >/dev/null"
+
 # ── ASSERTION-COUNT FLOOR (#7220 review) ───────────────────────────────────────────────
 # This suite had NO floor, so deleting assert calls — or an `assert` helper that silently stopped
 # incrementing — would report a clean, smaller run and exit 0. That is the same silent-shrink hole
@@ -315,7 +348,8 @@ fi
 #
 # Zero headroom against the current count, so any deletion is loud. Ratchet when adding arms,
 # and read a floor failure on an otherwise-green run as "you added assertions, update this".
-BOOTSTRAP_MIN_ASSERTIONS=50
+# #10045: 50 -> 59 (the KDENY_KERNEL_STREAM both-bridges block added 9 rows).
+BOOTSTRAP_MIN_ASSERTIONS=59
 if (( CASES < BOOTSTRAP_MIN_ASSERTIONS )); then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$CASES" "$BOOTSTRAP_MIN_ASSERTIONS" >&2

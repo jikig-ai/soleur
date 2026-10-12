@@ -95,6 +95,14 @@
 #                  count rose -- a rise in an existing row would be a regression, a new
 #                  file is churn.
 #
+#   +2 (2026-10-12) plugin-version.sh (#10064): a NEW file; no pre-existing row moved. Its two sites
+#                  are the cache write (`} > "$tmp"` and `mv -f "$tmp" "$CACHE_FILE"`). The destination is
+#                  a plugin script (it cannot source the test helper `assert_fixture_dir`), and the
+#                  code does enforce what the guard would: a relative XDG_CACHE_HOME or HOME is
+#                  IGNORED (resolve_cache_dir keeps only `/`-rooted bases) and the write is refused
+#                  unless the cache dir is owned, non-symlink and was just created. The two test
+#                  suites added by the same PR carry NO baseline rows: every fixture write is under
+#                  a canonical `assert_fixture_dir`.
 #   1439 -> 1440   #6894, ship-time advisor round: one more `$STATE_DIR` write in
 #                  inngest-luks-cutover.sh (the rollback-verified latch) — same root class as the
 #                  ten rows already itemised below; the row goes 10 -> 11 and nothing else moves.
@@ -141,7 +149,7 @@
 1	apps/web-platform/infra/arm-heartbeats.test.sh
 4	apps/web-platform/infra/canary-bundle-claim-check.test.sh
 18	apps/web-platform/infra/ci-deploy.sh
-6	apps/web-platform/infra/ci-deploy.test.sh
+7	apps/web-platform/infra/ci-deploy.test.sh
 1	apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh
 1	apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh
 7	apps/web-platform/infra/container-restart-monitor.sh
@@ -281,6 +289,7 @@
 3	plugins/soleur/scripts/lib/tmp-classify.sh
 1	plugins/soleur/scripts/pipeline-tally.sh
 5	plugins/soleur/scripts/pipeline-tally.test.sh
+2	plugins/soleur/scripts/plugin-version.sh
 2	plugins/soleur/scripts/render-c4-model.sh
 1	plugins/soleur/scripts/setup-ralph-loop.sh
 2	plugins/soleur/scripts/taste-profile-update.sh
