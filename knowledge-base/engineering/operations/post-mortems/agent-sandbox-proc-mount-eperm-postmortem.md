@@ -3,10 +3,10 @@ title: "agent sandbox spawns failed closed under docker's masked /proc, and noth
 date: 2026-10-11
 incident_pr: 10043
 incident_window: "From the shim splice (#9723), first shipped in the image of about 2026-10-09T04:52Z, to #10039 merging 2026-10-11T18:29Z. Whether any tenant Bash call failed in that window was not measurable: that gap is part of the incident."
-recovery_at: "Fix merged 2026-10-11T18:29Z (#10039). Recovery in production is NOT yet verified: the close condition on #9860 is the first post-deploy faithful canary reporting pass."
+recovery_at: "2026-10-12T00:51:13Z: the faithful canary read `verdict=pass reason=ok` on a post-fix deploy, and again at 01:01:35Z on the deploy of 758607f05d (#10043). #10039 merged 2026-10-11T18:29Z."
 suspected_change: "#9723 spliced a fresh `--proc /proc` into the bwrap argv. Under docker's default masked /proc a fresh procfs mount from a nested user namespace is refused (`bwrap: Can't mount proc on /newroot/proc: Operation not permitted`), so every sandboxed spawn failed closed."
 brand_survival_threshold: single-user incident
-status: ongoing
+status: resolved
 triggers:
   - availability (agent Bash sandbox could not spawn in the production image; the faithful canary reported sandbox_broken / bwrap_operation_not_permitted)
 art_33_triggered: false
@@ -30,7 +30,7 @@ The agent's Bash sandbox (bubblewrap inside the shared web container) could not 
 
 ## Status
 
-ongoing — the fix is merged (#10039) but the post-deploy faithful canary has not yet been read as `pass`.
+resolved — the faithful canary passes on post-fix deploys (see Recovery verification); #9860 is closed. One related signal stays open and is out of scope: the separate report-only outer-wrap canary still logs `wrong_elevation_userns` (tracked by #9797).
 
 ## Symptom
 
@@ -39,8 +39,8 @@ Faithful canary verdict `sandbox_broken` with reason `bwrap_operation_not_permit
 ## Incident Timeline
 
 - **Start time (detected):** before 2026-10-11; first read in the canary self-diagnosis bundle (#9860).
-- **End time (recovered):** not yet verified in production (see Status).
-- **Duration (MTTR):** TBD, pending the post-deploy canary read.
+- **End time (recovered):** 2026-10-12T00:51:13Z, the first post-fix faithful-canary pass read (an upper bound: the exact deploy time of #10039 was not pinned).
+- **Duration (MTTR):** at most about 68 hours from the first shipped splice (about 2026-10-09T04:52Z) to the first pass read.
 
 | Actor | Time (UTC) | Action |
 |---|---|---|
@@ -49,6 +49,8 @@ Faithful canary verdict `sandbox_broken` with reason `bwrap_operation_not_permit
 | agent | 2026-10-11 | Lab measurement on bubblewrap 0.8.0 reproduces the refusal under docker's default masks. |
 | agent | 2026-10-11T18:29Z | #10039 merges: the shim drops procfs mounts so the vendored `--tmpfs /proc` is the mask. |
 | agent | 2026-10-11 | #10043 adds the production-posture CI gate and the Bash-denial Sentry mirror. |
+| agent | 2026-10-12T00:51:13Z | First post-fix faithful canary pass read: `verdict=pass reason=ok`. |
+| agent | 2026-10-12T01:01:35Z | The deploy of 758607f05d (#10043) reads `verdict=pass reason=ok` again; `deploy-arm.sh served` reports CONTAINS; #9860 closed. |
 
 ## Participants and Systems Involved
 
@@ -76,7 +78,7 @@ system (a code change in the shim).
 
 ## Recovery verification
 
-Pending: `doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 3h --grep SOLEUR_CANARY_SANDBOX_DIAG` after the next deploy; expected verdict `pass`.
+Verified 2026-10-12 with `doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 40m --grep canary` (host ci-deploy rows): `Faithful sandbox canary (non-blocking): verdict=pass reason=ok` at 00:51:13Z and at 01:01:35Z. `/health` reported `build_sha` 758607f05d with Supabase connected. The `SOLEUR_CANARY_SANDBOX_DIAG` bundle is emitted only on a failing probe, so its absence is consistent with the pass but is not itself the evidence.
 
 ---
 
@@ -93,7 +95,7 @@ Pending: `doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-que
 ## Versions of Components
 
 - **Version(s) that triggered the outage:** the release carrying #9723.
-- **Version(s) that restored the service:** the release carrying #10039 (production verification pending).
+- **Version(s) that restored the service:** the release carrying #10039 (verified by the faithful-canary pass of 2026-10-12).
 
 ## Impact details
 
@@ -136,7 +138,7 @@ A report-only canary and a green weaker probe read as health; the denial path ha
 
 | Issue | Action | Owner |
 |---|---|---|
-| #9860 | Read the first post-deploy faithful canary and close only when it reports pass | operator |
+| #9860 | Read the first post-deploy faithful canary and close only when it reports pass (done 2026-10-12, closed) | operator |
 | #10052 | Paging alert for the new `op:bash-tool-result` Sentry event (blocked on #7985) | engineering |
 | #10045 | Kernel-stream read for the deploy user, so a kernel denial is observable without SSH | engineering |
 | #10065 | Assert parity of the CI suite with the real docker run tuples and the vendored argv tail | engineering |
