@@ -35,6 +35,8 @@ beforeEach(() => {
     GROK_SUBAGENTS: process.env.GROK_SUBAGENTS,
     DEVIN: process.env.DEVIN,
     DEVIN_HOME: process.env.DEVIN_HOME,
+    CURSOR_INVOKED_AS: process.env.CURSOR_INVOKED_AS,
+    CURSOR_AGENT: process.env.CURSOR_AGENT,
   };
   delete process.env.CLAUDECODE;
   delete process.env.CODEX_THREAD_ID;
@@ -44,6 +46,8 @@ beforeEach(() => {
   delete process.env.GROK_SUBAGENTS;
   delete process.env.DEVIN;
   delete process.env.DEVIN_HOME;
+  delete process.env.CURSOR_INVOKED_AS;
+  delete process.env.CURSOR_AGENT;
 });
 
 afterEach(() => {
@@ -99,9 +103,22 @@ describe("detectHarness", () => {
     expect(detectHarness(env({}))).toBe("unknown");
   });
 
-  test("slice 1 does not classify a cursor-shaped env", () => {
+  test("CURSOR_AGENT is not the CLI marker", () => {
     expect(detectHarness(env({ CURSOR_AGENT: "1" }))).toBe("unknown");
     expect(detectHarness(env({ CLAUDECODE: "1", CURSOR_AGENT: "1" }))).toBe("claude");
+  });
+
+  test("Guard 4: nonempty CURSOR_INVOKED_AS returns cursor after the four arms", () => {
+    expect(detectHarness(env({}))).toBe("unknown");
+    expect(detectHarness(env({ CURSOR_INVOKED_AS: "" }))).toBe("unknown");
+    expect(detectHarness(env({ CLAUDECODE: "1" }))).toBe("claude");
+    expect(
+      detectHarness(env({ CLAUDECODE: "1", CURSOR_INVOKED_AS: "cursor-agent" })),
+    ).toBe("claude");
+    expect(detectHarness(env({ GROK_HOME: "/home/user/.grok", CURSOR_INVOKED_AS: "cursor-agent" }))).toBe("grok");
+    expect(detectHarness(env({ CODEX_THREAD_ID: "thread", CURSOR_INVOKED_AS: "cursor-agent" }))).toBe("codex");
+    expect(detectHarness(env({ DEVIN: "1", CURSOR_INVOKED_AS: "cursor-agent" }))).toBe("devin");
+    expect(detectHarness(env({ CURSOR_INVOKED_AS: "cursor-agent" }))).toBe("cursor");
   });
 });
 
@@ -147,8 +164,9 @@ describe("formatSkillInvocation", () => {
       ["GROK_HOME", "/"],
       ["CODEX_THREAD_ID", "$soleur:"],
       ["DEVIN", "/soleur:"],
+      ["CURSOR_INVOKED_AS", "/"],
     ] as const) {
-      for (const k of ["CLAUDECODE", "GROK_HOME", "CODEX_THREAD_ID", "DEVIN"]) delete process.env[k];
+      for (const k of ["CLAUDECODE", "GROK_HOME", "CODEX_THREAD_ID", "DEVIN", "CURSOR_INVOKED_AS", "CURSOR_AGENT"]) delete process.env[k];
       process.env[env] = "1";
       const out = formatSkillInvocation("plan", "#123");
       expect(out.startsWith(prefix)).toBe(true);
@@ -170,6 +188,17 @@ describe("formatSkillInvocation", () => {
       "/soleur:one-shot fix auth",
     );
     expect(formatSkillInvocation("brainstorm")).toBe("/soleur:brainstorm");
+  });
+
+  test("cursor formats bare go and sync and prefixes every other skill", () => {
+    process.env.CURSOR_INVOKED_AS = "cursor-agent";
+    expect(formatSkillInvocation("go")).toBe("/go");
+    expect(formatSkillInvocation("sync", "now")).toBe("/sync now");
+    expect(formatSkillInvocation("plan", "#123")).toBe("/soleur-plan #123");
+    expect(formatSkillInvocation("soleur:one-shot")).toBe("/soleur-one-shot");
+    expect(formatSkillInvocation("plan", "#123")).not.toContain("(args:");
+    expect(formatSkillInvocation("plan", "#123")).not.toContain("Skill");
+    expect(formatSkillInvocation("plan", "#123")).not.toContain("Task");
   });
 });
 
@@ -211,6 +240,21 @@ describe("invokeSkill", () => {
     expect(inv.instruction).toContain("Do NOT improvise");
   });
 
+  test("cursor returns a slash command and does not name the Skill or Task tool", () => {
+    process.env.CURSOR_INVOKED_AS = "cursor-agent";
+    const inv = invokeSkill("one-shot", "fix bug");
+
+    expect(inv.harness).toBe("cursor");
+    expect(inv.tool).toBe("slash_command");
+    expect(inv.command).toBe("/soleur-one-shot fix bug");
+    expect(inv.args).toBe("fix bug");
+    expect(inv.instruction).toContain("/soleur-one-shot fix bug");
+    expect(inv.instruction).toContain("canonical file");
+    expect(inv.instruction).toContain("Steps 0–8");
+    expect(inv.instruction).not.toContain("Skill");
+    expect(inv.instruction).not.toContain("Task");
+  });
+
   test("one-shot invocation includes pipeline completion suffix", () => {
     process.env.GROK_HOME = "/home/user/.grok";
     const inv = invokeSkill("one-shot", "implement Phase F");
@@ -244,6 +288,20 @@ describe("spawnAgent", () => {
     expect(spawn.instruction).toContain("soleur:legal:clo");
   });
 
+  test("cursor types the prefixed agent slash and does not use the Task tool", () => {
+    process.env.CURSOR_INVOKED_AS = "cursor-agent";
+    const spawn = spawnAgent("legal:clo", "Attestation for #456");
+
+    expect(spawn.harness).toBe("cursor");
+    expect(spawn.tool).toBe("slash_command");
+    expect(spawn.agent).toBe("soleur-legal-clo");
+    expect(spawn.instruction).toContain("/soleur-legal-clo");
+    expect(spawn.instruction).not.toContain("Skill");
+    expect(spawn.instruction).not.toContain("Task");
+    expect(spawn.instruction).not.toContain("run_subagent");
+    expect(spawn.instruction).not.toContain("AwaitShell");
+  });
+
   test("devin uses run_subagent", () => {
     process.env.DEVIN = "1";
     delete process.env.CLAUDECODE;
@@ -273,6 +331,17 @@ describe("formatAgentSpawn", () => {
     expect(text).toContain("spawn_subagent");
     expect(text).toContain("soleur-legal-clo");
     expect(text).toContain("soleur:legal:clo");
+  });
+
+  test("cursor mentions the prefixed slash and not the Task tool", () => {
+    process.env.CURSOR_INVOKED_AS = "cursor-agent";
+    const text = formatAgentSpawn("legal:clo", "prompt body");
+    expect(text).toContain("/soleur-legal-clo");
+    expect(text).toContain("prompt body");
+    expect(text).not.toContain("Skill");
+    expect(text).not.toContain("Task");
+    expect(text).not.toContain("run_subagent");
+    expect(text).not.toContain("AwaitShell");
   });
 
   test("devin mentions run_subagent", () => {
@@ -336,8 +405,10 @@ describe("routingInstructions", () => {
     expect(md).not.toContain("AwaitShell");
     expect(md).not.toContain("Stop hook");
     expect(md).toContain("canonical file");
-    expect(md).toContain("does not classify the session as cursor");
-    expect(md).toContain("does not run hooks");
+    expect(md).toContain("classifies the session as cursor");
+    expect(md).not.toContain("does not classify");
+    expect(md).toContain("not a live registry");
+    expect(md).toContain("does not block a commit");
   });
 });
 

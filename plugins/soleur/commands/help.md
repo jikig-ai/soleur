@@ -42,7 +42,7 @@ Detect the active harness before printing commands:
   with Codex skill mentions and skill-loading instructions substituted. Omit the
   `(type /soleur:<name>)` user-invoked marker: Codex ignores the key (ADR-236).
   Render the HOW THE SKILLS FIT TOGETHER map verbatim.
-- **Cursor CLI:** `/go` and `/sync` stay bare. Every other skill is `/soleur-<name>`, including `/soleur-help`, `/soleur-plan`, and `/soleur-review`. Cursor's `/plan`, `/help`, `/review`, and `/shell` are built-ins; do not type them for Soleur. Do not call the Skill tool, the Task tool, `run_subagent`, or AwaitShell. Slice 1 does not run hooks and does not classify the session as cursor. Use the Cursor CLI column in Step 3 for this harness. Read [Cursor compatibility instructions](../cursor/INSTRUCTIONS.md).
+- **Cursor CLI:** `/go` and `/sync` stay bare. Every other skill is `/soleur-<name>`, including `/soleur-help`, `/soleur-plan`, and `/soleur-review`. Cursor's `/plan`, `/help`, `/review`, and `/shell` are built-ins; do not type them for Soleur. Do not call the Skill tool, the Task tool, `run_subagent`, or AwaitShell. A nonempty CURSOR_INVOKED_AS classifies the session as cursor. This does not run hooks, and it does not block a commit. Use the Cursor CLI column in Step 3 for this harness. Read [Cursor compatibility instructions](../cursor/INSTRUCTIONS.md).
 
 Use the matching column in Step 3 below.
 
@@ -238,7 +238,7 @@ AGENTS: [N] agents across [M] categories
 SKILLS: [N] skills
   Start here: /go <what you want> picks the right skill for you.
   /go and /sync stay bare. Every other skill is /soleur-<name>.
-  Slice 1 does not run hooks and does not classify the session as cursor.
+  A nonempty CURSOR_INVOKED_AS classifies the session as cursor. This does not run hooks, and it does not block a commit.
 
 Quick start: /go <what you want to do>
 Full docs:   See plugins/soleur/cursor/INSTRUCTIONS.md
