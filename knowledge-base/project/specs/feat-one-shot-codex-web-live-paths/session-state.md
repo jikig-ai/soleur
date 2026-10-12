@@ -1239,3 +1239,33 @@
   `continue`. Current-source recovery → authenticated screenshots → eligible
   routine → permitted Web/CLO matrices → full review/promotion remains incomplete.
   Project sharing, retention/inheritance and configured regions remain unknown.
+
+## Continuation update — 2026-10-12 post-fix main sync and withdrawn recovery
+
+- Commit `db6fb7cb5b84d1a6d3619dbdbe06b9646ae3857e` retains the verified retry,
+  obsolete-turn delivery, complete-answer and settings-reconciliation fixes.
+  Thirteen main commits through `dfb9e2dba52c60244eb856716462f50ca6b74aae`
+  merged cleanly at `74381e9baffa1b5bca64afd1e16faf7ca139d899`; affected
+  fixtures passed 275 unit plus 17 component tests again with exact membership,
+  zero failures/skips/TODOs and both exits zero. The private compiler pass
+  predates this main merge. Logs contain the expected pepper notice and deliberate
+  settings error stimulus; no warning-free or full-suite verdict is claimed.
+- Two further main commits through `67dec0d7c6f9cdb36c98381c9312d3d7f5881788`
+  merged at `aa45feb8b5bcb35635467ea84d0d5c8f98ec9ee0`. Their seven paths
+  contain operations evidence and the heartbeat manifest; application test/source
+  files are unchanged from the tested merge. No infrastructure operation ran.
+- Ruled by CTO agent: do not consume a rehearsal against the stale, browser-auth
+  incompatible candidate. The [historical recovery proposal](recovery-proposal-2026-10-11.md)
+  is WITHDRAWN, and its old entrypoint refuses unconditionally. Its original
+  bytes/digest are archived. A separate draft-only prototype repairs registered-ID
+  admission and exec privilege/environment controls; 51 ownership/exec, 12
+  collision transport and seven hijack checks passed and were independently
+  repeated. No Docker/SQL/provider calls or runtime authorization occurred.
+- No eligible routine consumer was found in the current producer paths; the
+  fail-closed rejection remains. Proposed hosted App Server auth is BLOCKED for
+  both modes under the October 12 CLO supplement; a different concrete API-funded
+  route is separately PENDING. Required SAST remains VOID (Ref #10082), full review
+  incomplete and all promotion/credential/deployment/cohort restrictions intact.
+- The ensuing push requires its own exact-head CI and final-description watches.
+  These records do not release current-source recovery, authenticated screenshots,
+  routine qualification, permitted Web matrices or review/promotion.

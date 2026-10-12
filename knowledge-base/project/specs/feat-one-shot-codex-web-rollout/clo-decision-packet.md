@@ -258,3 +258,14 @@ qualification and separate Web matrices remain independent prerequisites.
 This continuation grants no credential/provider/account operation, shared write,
 deployment or flag/cohort change. Keep PR draft and auto-merge disarmed, Codex
 default-off and customer content blocked.
+
+## Hosted App Server authentication supplement — 2026-10-12
+
+The attributable [CLO supplement](../../../legal/audits/2026-10-12-codex-web-hosted-auth-restriction.md#consequence-for-remaining-acceptance-criteria)
+supersedes the October 11 permission assessment for the proposed route: hosted
+App Server authentication is **BLOCKED for both API-key and managed modes**.
+A different, concretely specified API-funded route remains separately PENDING.
+The published restriction covers App Server authentication; it does not establish
+a blanket contractual prohibition on hosting the executable. No exception was
+supplied, and operator approval cannot override provider restrictions. No live
+provider, credential or account operation is admitted by this supplement.

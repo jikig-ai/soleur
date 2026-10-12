@@ -63,6 +63,25 @@ application; its earlier removed sandbox is not the sole validation evidence.
 A separate simplicity reviewer found no additional blocking defect introduced
 by the final retry, delivery, text and reconciliation changes.
 
+### Main synchronization and repeated affected checks
+
+The fixes were committed at `db6fb7cb5b84d1a6d3619dbdbe06b9646ae3857e`.
+Thirteen main commits through `dfb9e2dba52c60244eb856716462f50ca6b74aae`
+merged cleanly at `74381e9baffa1b5bca64afd1e16faf7ca139d899`. The same
+thirteen unit files and settings component then passed **275 + 17 tests** again,
+with both exits zero, exact JSON file membership and no failures/skips/TODOs.
+Logs retain the fail-closed pepper notice and intentional settings error stimulus.
+The private all-source compiler pass above predates this merge; it is not a
+post-merge all-source compiler verdict.
+
+Two further main commits through `67dec0d7c6f9cdb36c98381c9312d3d7f5881788`
+merged at `aa45feb8b5bcb35635467ea84d0d5c8f98ec9ee0`. Their seven-path delta
+contains operations records and the heartbeat manifest. All `apps/web-platform`
+files are byte-identical to the tested `74381e9b` tree. No infrastructure action
+or C.9 rerun was performed by either sync. Dockerfile, historical migrations,
+lockfiles and the canonical migration runner are unchanged across these main
+syncs; application changes still make the older image source-stale.
+
 ## Gates that remain incomplete
 
 Required SAST is **VOID**: 568 rules loaded, zero files scanned. Semgrep 1.180.0

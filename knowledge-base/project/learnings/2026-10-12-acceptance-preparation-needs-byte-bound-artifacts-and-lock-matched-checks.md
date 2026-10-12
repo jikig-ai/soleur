@@ -43,3 +43,10 @@ before authenticated QA is requested.
 Provider permission cannot be supplied by an operator approval. The published
 hosted App Server authentication restriction is a live-execution blocker; its
 scope must be distinguished from an unproven blanket ban on hosting a binary.
+
+During draft evidence preparation, a digest was incorrectly expanded from a
+short summary prefix, and generic append context placed dated sections inside
+older history. Before staging, measured `sha256sum` replaced that draft value,
+and unique end-of-file context restored chronological append order. A failed
+patch context was corrected by reading the actual final lines. Copy complete
+digests from the instrument; never reconstruct their omitted suffixes.
