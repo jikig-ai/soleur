@@ -159,10 +159,11 @@ expect_green_added() {
 # 66 -> 67 at #9597 (S4): NON_PAGING_MARKERS gains SOLEUR_CREDENTIAL_REFUSED — infra-config-verify.sh prints
 # it to stderr inside the apply-deploy-pipeline-fix job, so it never reaches web-1 journald. One census row;
 # the case count is unchanged.
+# 71 -> 73 at #9757 residue: luks-monitor.sh and web-git-data-probe.sh now emit SOLEUR_CREDENTIAL_REFUSED (non-paging), one stays-below-crit check each.
 # 67 -> 71 at #9597 (S5): the four Better Stack posting scripts of cloud-init-registry.yml (disk heartbeat, log shipper,
 # private-NIC guard, boot block) each print SOLEUR_CREDENTIAL_REFUSED on a refused ingest token, to stderr and never at crit. The guard
 # scans cloud-init*.yml, so each emitter is one NON_PAGING census row (+4); the case count is unchanged. No mutation row changes.
-BASELINE_PASSES=71
+BASELINE_PASSES=73
 BASELINE_CASES=9
 restore; cases=$((cases + 1))
 if run_guard; then ok "baseline: guard is GREEN against the unmutated sandbox"
