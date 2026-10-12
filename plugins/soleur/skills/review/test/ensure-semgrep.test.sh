@@ -23,7 +23,7 @@ mkarm() {
   local dir
   dir="$(mktemp -d)"
   mkdir -p "$dir/home" "$dir/tools"
-  for t in chmod cat printf env ls cp mkdir; do
+  for t in chmod cat env ls cp mkdir; do
     command -v "$t" >/dev/null 2>&1 && ln -sf "$(command -v "$t")" "$dir/tools/$t"
   done
   printf '%s\n' "$dir"
@@ -84,7 +84,7 @@ printf '#!/bin/sh\necho "pipx:$1:$2" >>"%s/called"\nif [ "$1" = "install" ] && [
 mkdir -p "$D6/home/.local/bin"
 run_sut "$D6" >/dev/null 2>&1; RC=$?
 assert "dead shim + brew fails + pipx installs to HOME/.local/bin: exit 0" "[ $RC -eq 0 ] && grep -q 'pipx:install:semgrep' '$D6/called'"
-assert "arm F: the HOME/.local/bin prepend is what made the install visible" "grep -q -- '--version' '$D6/home/.local/bin/probe-log' 2>/dev/null || grep -q -- '--version' '$D6/probe-log'"
+assert "arm F: the HOME/.local/bin prepend is what made the install visible" "grep -q -- '--version' '$D6/probe-log'"
 
 # --- arm G: the probe RUNS on every rc-0 path (vacuity pin) ----------------
 D7="$(mkarm)"; probe_semgrep "$D7"
@@ -98,7 +98,7 @@ printf '#!/bin/sh\necho "python3:$*" >>"%s/called"\nif [ "$1" = "-m" ] && [ "$2"
 mkdir -p "$D8/home/.local/bin"
 run_sut "$D8" >/dev/null 2>&1; RC=$?
 assert "dead shim + python3 -m pip --user success: exit 0, argv-faithful" "[ $RC -eq 0 ] && grep -q 'python3:-m pip install --user semgrep' '$D8/called'"
-assert "arm H: re-probe ran the pip-installed binary" "grep -q -- '--version' '$D8/probe-log' 2>/dev/null || grep -q -- '--version' '$D8/home/.local/bin/probe-log'"
+assert "arm H: re-probe ran the pip-installed binary" "grep -q -- '--version' '$D8/probe-log'"
 
 # --- arm I: installer present but FAILED (nothing installed) → rc 1 ------
 D9="$(mkarm)"; dead_semgrep "$D9"; fail_stub "$D9" brew
