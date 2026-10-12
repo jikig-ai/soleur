@@ -6,7 +6,7 @@
 # NOT watch the Inngest scheduler, and credential placement is not the reason.
 # Triggers: the web watchdog clock is primary, `schedule:` is the fallback; keep workflow_dispatch and
 # the concurrency group (cancel-in-progress: false) and no other trigger (sentry-monitor-iac-parity.test.ts).
-# FED but not ARMED until the runbook arming step (knowledge-base/engineering/operations/runbooks/inngest-server.md).
+# FED and ARMED (2026-10-12; read-back in the runbook section "Arming the probe heartbeat", knowledge-base/engineering/operations/runbooks/inngest-server.md).
 # A Sentry `error` check-in means withheld or failed, not "feeder broken".
 
 name: "Scheduled: Inngest Probe Heartbeat Feeder"
