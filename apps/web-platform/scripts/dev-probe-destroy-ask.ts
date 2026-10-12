@@ -362,6 +362,14 @@ for (const c of selected) {
     }
   }
   const evBefore = envelopes.length;
+  // Read BEFORE the run: runCase revokes the grant on exit, so a read afterwards is always false and would mislead.
+  let cacheAllowsBefore: boolean | null = null;
+  if (c.grant) {
+    const pre = getBashApprovalCache("probe-user", `probe-${c.name}`);
+    pre.grant(c.grant);
+    cacheAllowsBefore = pre.allow(c.command);
+    pre.revoke();
+  }
   const r = await runCase(c);
   ran += 1;
   const bashUsed = r.ranTools.includes("Bash");
@@ -398,7 +406,7 @@ for (const c of selected) {
   if (verdict === "UNCONTROLLED") { cantRun = true; cantRunReason = "grant-control-not-established"; }
   if (c.preflightFile) { try { rmSync(c.preflightFile, { force: true }); } catch { /* best effort */ } }
   console.log(
-    `PROBE ${c.name} canUseToolCalls=[${r.seen.join(",")}] verdict=${verdict} bashAttempted=${bashUsed} gateCalls=${r.options.length} approveRejectOptions=${approveReject} cardOk=${cardOk} neutral=${neutral} sentryAskEvents=${asks.length} sentryOk=${emitted}${c.grant ? ` cacheAllows=${getBashApprovalCache("probe-user", `probe-${c.name}`).allow(c.command)}` : ""}${r.err ? ` err=${r.err}` : ""} ${PROV}`,
+    `PROBE ${c.name} canUseToolCalls=[${r.seen.join(",")}] verdict=${verdict} bashAttempted=${bashUsed} gateCalls=${r.options.length} approveRejectOptions=${approveReject} cardOk=${cardOk} neutral=${neutral} sentryAskEvents=${asks.length} sentryOk=${emitted}${c.grant ? ` cacheAllowsBeforeRun=${cacheAllowsBefore}` : ""}${r.err ? ` err=${r.err}` : ""} ${PROV}`,
   );
 }
 
