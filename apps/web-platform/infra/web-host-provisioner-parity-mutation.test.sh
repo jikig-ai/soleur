@@ -1354,6 +1354,10 @@ resource "terraform_data" "g2_phantom_wl2" {
 
 # The stale-allowance arm: delete the connection block an EXT_RESIDENCE entry
 # covers and the entry no longer sweeps a matching dial (#9998 G2-22).
+# NB: no `swept only` co-fire needle -- whether the block floor also trips
+# depends on the SANDBOX's whole-repo census (untracked .tf artifacts from
+# sibling suites differ between local and CI), so the co-fire is
+# environment-dependent and must not gate the row (CI leg 4, 2026-10-12).
 expect_red "G2-22 (residence allowance entry gone stale)" ci-ssh-key.tf \
   "stale EXT_RESIDENCE" '
 old = """  connection {
@@ -1366,7 +1370,7 @@ old = """  connection {
 """
 assert old in s
 s = s.replace(old, "", 1)
-' "swept only"
+'
 
 # The exemption is keyed on the full `type.name`, not the resource name alone: a
 # same-name/different-type resource is a DIFFERENT resource and must not claim
