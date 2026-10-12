@@ -31,9 +31,11 @@
 #       called in the current shell (never inside $(...)), or TFC_HIT is lost. No size cap lives
 #       here: the pre-ask suite pins DENY on 30-60 KB questions, and the closing hook bounds what
 #       it feeds this function itself.
-#   tfc_self_check                exit 0 only if every cue variable is non-empty and tfc_is_fork is
-#       defined. An EMPTY cue regex matches every line, so a consumer that sources a truncated lib
-#       must treat a failed self-check as parse doubt and fail OPEN, never judge with it.
+#   tfc_self_check                exit 0 only if the lib was sourced COMPLETELY: `_TFC_COMPLETE` is the very last
+#       statement of this file, so a truncated source never reaches it, and `tfc_is_fork` must be defined. An EMPTY
+#       cue regex matches every line, so a consumer that sources a truncated lib must treat a failed self-check as
+#       parse doubt and fail OPEN, never judge with it. (Ruled by CTO agent, 2026-10-12: a sentinel instead of a
+#       per-variable list, which a new cue would silently miss.)
 #
 # PURE BY CONSTRUCTION: no set options, no emit_incident, no .claude/ or CLAUDE_PROJECT_DIR paths, no
 # repo-specific nouns (so graduating the pair to the plugin is a move, not a rewrite). Linear regexes
@@ -74,16 +76,14 @@ TFC_BUSINESS_RE='\b('"${TFC_BUSINESS_WORDS}"')\b'
 # ones included) and to no cue in the pre-ask group.
 TFC_CLOSING_EXTRA_RE='\b(prioriti[sz]\w*|publish\w*|announce\w*|auditors?|accountants?|lawyers?|investors?|customers?|features?|roadmap|milestones?)\b'
 
+# CLOSING-ONLY permission shapes (Ruled by CTO agent, 2026-10-12 review): an authorization request that the shared
+# RULING_PERM_RE (pinned by the pre-ask suite, never edited for a closing-only reason) does not name. Each member binds
+# the permission words to an ACTION verb, because bare `can i`, `should i`, `go ahead` or `proceed` are technical-fork
+# shapes too ("should we go ahead with approach A or B"). `should i` alone and every `we` form stay OUT on purpose.
+TFC_CLOSING_PERM_RE='\b(can|shall) i (now |just )?(go ahead|proceed|merge|deploy|ship|release|rotate|flip|arm|delete|revoke|apply|push)\b|\bshould i go ahead and (merge|deploy|ship|release|rotate|flip|arm|delete|revoke|apply|push)\b'
+
 tfc_self_check() {
-  # Explicit names, not `${!name}`: an indirect expansion reads a variable chosen at runtime, which the
-  # xtrace-refusal linter (rightly) treats as a possible credential read. `${VAR-}` is safe under `set -u`.
-  [[ -n "${RULING_STRICT_RE-}" && -n "${RULING_EVID_NOUN_RE-}" && -n "${RULING_BAR_RE-}" \
-     && -n "${RULING_SUFF_RE-}" && -n "${RULING_STATUS_RE-}" && -n "${RULING_ADR_RE-}" \
-     && -n "${RULING_AB_RE-}" && -n "${RULING_TECH_RE-}" && -n "${RULING_PERM_RE-}" \
-     && -n "${RULING_OPVOCAB_RE-}" && -n "${RULING_MONEY_RE-}" && -n "${TFC_BUSINESS_WORDS-}" \
-     && -n "${TFC_ACTION_WORDS-}" && -n "${TFC_CL1_RE-}" && -n "${TFC_CL2A_RE-}" \
-     && -n "${TFC_CL2B_RE-}" && -n "${TFC_CL3_ORDER_RE-}" && -n "${TFC_CL3_NOUN_RE-}" \
-     && -n "${TFC_BUSINESS_RE-}" && -n "${TFC_CLOSING_EXTRA_RE-}" ]] || return 1
+  [[ -n "${_TFC_COMPLETE-}" ]] || return 1
   declare -f tfc_is_fork >/dev/null 2>&1 || return 1
   return 0
 }
@@ -136,7 +136,11 @@ tfc_is_fork() {
   # The exemption: a PERMISSION shape ("may i", "ok to", "approve", "ack-destroy") reads the SAME unit
   # as the cues and applies to every cue, so an authorization is never blocked on one co-occurring word.
   grep -qE "$RULING_PERM_RE" <<<"$unit" && return 1
+  [[ "$closing" -eq 1 ]] && grep -qE "$TFC_CLOSING_PERM_RE" <<<"$unit" && return 1
   # shellcheck disable=SC2034  # read by the sourcing hook
   TFC_HIT="$hit"
   return 0
 }
+
+# MUST stay the very last statement: tfc_self_check reads it to prove the file was sourced completely.
+_TFC_COMPLETE=1

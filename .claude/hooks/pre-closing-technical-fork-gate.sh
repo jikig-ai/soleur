@@ -21,10 +21,11 @@
 # question after the block runs with `stop_hook_active == true` and passes. It is cue-based, so a
 # phrasing outside the vocabulary passes (recall decay: the remedy is the miss, cue, fixture loop, never
 # preemptive widening). And it is mostly inert INSIDE a ralph loop: plugins/soleur/hooks/stop-hook.sh
-# blocks every Stop while a loop (soleur:one-shot) is active and never reads `stop_hook_active`, so after
-# the first block every later Stop in the chain carries it true and this hook exits at arm 4.
-# Mid-pipeline closing messages in a one-shot run are therefore not judged; the pointer line in the
-# one-shot skill is signage there, not hook-backed.
+# blocks every Stop while a loop (soleur:one-shot) is active and never reads `stop_hook_active`, so only the
+# FIRST Stop of a chain is judged (it carries false; ralph and this hook may both block it, and the model then
+# sees two reasons, which is benign: the next Stop carries true for both). Every later Stop in the chain,
+# including the one-shot Step 8 closing, carries true and exits at arm 4, so mid-pipeline closing messages
+# are not judged; the pointer line in the one-shot skill is signage there, not hook-backed.
 #
 # FAIL OPEN, AND WHY (ADR-157 "What this supersedes": absorbing a failure is correct for a Stop hook; a
 # Stop hook cannot ask). A wrongly blocked closing message is the worse failure, so every parse doubt
@@ -160,6 +161,8 @@ TAB=$'\t'
 FINAL="$(grep -E "^F${TAB}" <<<"$UNITS" | tail -n 1)"
 if [[ -n "$FINAL" ]]; then
   FS="${FINAL#F"$TAB"}"
+  # `**Paused**:` is the plugin hook's accepted bold form too, so strip emphasis markers before the match.
+  FS="${FS//[*_]/}"
   if [[ "$FS" =~ ^(paused|blocked): ]]; then
     CONTENT="${FS#*:}"; CONTENT="${CONTENT//[[:punct:][:space:]]/}"
     if [[ -n "$CONTENT" ]] && ! [[ "$CONTENT" =~ ^(none|na|nothing|no|nil)$ ]]; then exit 0; fi
@@ -178,9 +181,9 @@ if (( COUNT > 12 )); then START=$((COUNT - 12)); _note "NOTE — $COUNT question
 HIT_UNIT=""; HIT_CUE=""
 for (( k = START; k < COUNT; k++ )); do
   u="${JUDGE[$k]}"
-  # The cap lives in THIS caller, not the lib: the pre-ask suite pins DENY on 30-60 KB questions, so a cap
-  # inside the shared function would weaken that gate. A unit over 600 bytes is not judged.
-  if (( ${#u} > 600 )); then _note "NOTE — a question unit over 600 bytes was not judged"; continue; fi
+  # No per-unit size cap (Ruled by CTO agent, 2026-10-12 review): the 1500-byte window already bounds a unit, the
+  # regexes are linear (bounded gaps), and a cap would turn any long run-on question into an unjudged bypass.
+  # The suite pins a worst-case 1500-byte unit under a time bound instead.
   tfc_is_fork "$u" shared+closing
   rc=$?
   if (( rc == 0 )); then HIT_UNIT="$u"; HIT_CUE="$TFC_HIT"; break; fi
@@ -201,7 +204,8 @@ See hr-technical-fork-is-not-an-operator-question.'
 SYSMSG='pre-closing-technical-fork-gate: stopped once because the closing message asked the operator to rule on a technical fork. Release it by classifying the fork: Operator-only (money): the reason. To disarm this check for a whole session, start the session with SOLEUR_ACK_TECHNICAL_FORK=1.'
 jq -n --arg r "$REASON" --arg m "$SYSMSG" '{decision:"block", reason:$r, systemMessage:$m}'
 
-# --- ledger row, AFTER the decision is printed (emit_incident takes an indefinite flock) ---------------
+# --- ledger row, AFTER the decision is printed (emit_incident takes an indefinite flock; if that flock hung until
+# the registration's 10 s timeout the harness might discard the printed block, a fail-open loss, accepted: holds are brief) ---
 # Cue name, unit length and sha256 only: CL3 vocabulary (credentials, tokens, keys) makes the units
 # secret-adjacent, and the row only has to let a later reader find the unit by hash in a local transcript.
 # One function, the only repo-local dependency, so graduation to the plugin rewrites exactly this.

@@ -17,6 +17,11 @@ Persisted by the headless plan phase (ADR-084 channel). `ship` Phase 6 renders t
 | S2 escape scope of `Operator-only (category):` (own sentence plus the next unit) versus the CTO's whole-window wording | taste | |
 | T7 reconciliation with R3, #10057 and #10056 | technical | Ruled by CTO agent, 2026-10-12: R3 stands for the exact-label arm; close #10057 as superseded, file ONE follow-up for the rule's `[hook-enforced:]` tag, leave #10056 open with the graduation criterion - no `AGENTS.rules.md` edit under ADR-092 |
 | T8 most likely failure and the cheapest cut | technical | Ruled by CTO agent, 2026-10-12: recall decay; do not broaden preemptively, use the miss, cue, fixture loop; keep the CLOSING group separate so pre-ask is not widened |
+| R1 600-byte per-unit cap in the closing hook (review) | technical | Ruled by CTO agent, 2026-10-12: cut it; the 1500-byte window bounds a unit, regexes are linear; pin a worst-case 1500-byte unit under a time bound |
+| R2 scope of `Operator-only (category):` (review) | technical | Ruled by CTO agent, 2026-10-12: keep own sentence plus next unit (recall on honestly mixed closings); document `Paused:`/`Blocked:` as the shared whole-closing leak |
+| R3 `GITHUB_ACTIONS=true` early exit (review) | technical | Ruled by CTO agent, 2026-10-12: keep; no operator exists in CI, so every block there is wrongful by the rule's premise; recorded as added after T1-T8 |
+| R4 closing-only permission vocabulary (review) | technical | Ruled by CTO agent, 2026-10-12: `(can\|shall) i <action verb>` and `should i go ahead and <action verb>` only, closing group only, never bare `should i`/`go ahead`/`proceed`/`we` forms; a neighbouring `Approve?` does not exempt |
+| R5 `tfc_self_check` and the group argument (review) | technical | Ruled by CTO agent, 2026-10-12: completion sentinel as the last statement of the lib plus `declare -f`; keep the `shared`/`shared+closing` string (a typo fails loudly) |
 
 ## S1 — Model dissent (class `taste`): the operator's stated direction was followed against the CTO's two-skill form
 

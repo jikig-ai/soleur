@@ -26,6 +26,7 @@
 #   G1-9  remove the code-span / quoted-line strip                  X2 flips pass -> block
 #   G1-10 Operator-only escapes the whole window                    E4 flips block -> pass
 #   G1-11 remove the judged-unit cap                                U3 exceeds its time bound
+#   G1-12 delete the closing-only permission exemption              Q4a flips pass -> block
 #   G2-1  re-add a local RULING_PERM_RE to the closing hook         the definition-site census reports two
 #   G2-2  the lib ignores its group argument                        a pre-ask row (NR2a) flips allow -> deny
 #   G2-3  change RULING_OPVOCAB_RE in the lib                       the byte-equality row flips
@@ -187,18 +188,23 @@ row "N1d publishing is a business act" pass "$STATUS is the baseline enough to p
 row "N1e prioritising is the operator's call" pass "$STATUS in what order should we prioritize the migrations?"
 row "N1f shipping features is a roadmap question" pass "$STATUS in what order should we ship the features, config first?"
 
-# --- the unit cap lives in the CALLER (O1) and not in the lib (O2) -----------------------------------
-O1_PAD="$(printf 'the existing census covers the whole inventory of probes and nothing else matters here, %.0s' $(seq 1 9))"
+# --- no per-unit cap (Ruled by CTO agent, 2026-10-12 review). O1: a worst-case ~1500-byte unit packed with cue vocabulary is
+# bounded by the window and by the linear regexes, not by a cap that would let a long run-on question through unjudged.
+# O2: the pre-ask hook still denies a long question, so no cap leaked into the shared lib either.
 TOTAL=$((TOTAL+1))
-spawn "$HOOK" "$(closing_json "$O1_PAD is the existing census enough to close the G2 issue?")"
-if [[ "$(verdict_from_out)" == "pass" ]] && grep -qF 'over 600 bytes was not judged' <<<"$ERR"; then
-  echo "  PASS: O1 an oversize unit is not judged (pass, stderr note)"; PASS=$((PASS+1))
-else printf '  FAIL: O1 verdict=%s stderr=%s\n' "$(verdict_from_out)" "$ERR" >&2; FAIL=$((FAIL+1)); fi
+O1_UNIT="$(printf 'is the evidence the census the audit the baseline the gate the proof %.0s' $(seq 1 22))enough?"
+o1_t0="$(date +%s%N | cut -b1-13)"
+spawn "$HOOK" "$(closing_json "$O1_UNIT")"
+o1_ms=$(( $(date +%s%N | cut -b1-13) - o1_t0 ))
+o1_v="$(verdict_from_out)"
+if [[ "$o1_v" != "bad" ]] && (( o1_ms < 3000 )) && ! grep -qF 'was not judged' <<<"$ERR"; then
+  printf '  PASS: O1 a worst-case 1500-byte unit is judged (%s) within the bound (%s ms), no cap\n' "$o1_v" "$o1_ms"; PASS=$((PASS+1))
+else printf '  FAIL: O1 verdict=%s elapsed=%s ms stderr=%s\n' "$o1_v" "$o1_ms" "$ERR" >&2; FAIL=$((FAIL+1)); fi
 TOTAL=$((TOTAL+1))
 o2_q="$(printf 'How strict must the emptiness evidence be before the volume rebirth is dispatched, given %.0s' $(seq 1 12))and the plaintext volume deleted?"
 o2_json="$(jq -nc --arg q "$o2_q" '{tool_name:"AskUserQuestion", cwd:".", session_id:"t", tool_input:{questions:[{question:$q, options:[{label:"Yes",description:"go"},{label:"No",description:"stop"}]}]}}')"
 o2_dec="$(printf '%s' "$o2_json" | bash "$PREASK" 2>/dev/null | jq -r '.hookSpecificOutput.permissionDecision // "allow"' 2>/dev/null)"
-if (( ${#o2_q} > 600 )) && [[ "$o2_dec" == "deny" ]]; then echo "  PASS: O2 the same kind of oversize question still DENIES through the pre-ask hook (no cap in the lib)"; PASS=$((PASS+1))
+if (( ${#o2_q} > 600 )) && [[ "$o2_dec" == "deny" ]]; then echo "  PASS: O2 the same kind of oversize question still DENIES through the pre-ask hook (no cap leaked into the lib)"; PASS=$((PASS+1))
 else printf '  FAIL: O2 len=%s decision=%s\n' "${#o2_q}" "$o2_dec" >&2; FAIL=$((FAIL+1)); fi
 
 # --- escapes ----------------------------------------------------------------------------------------
@@ -206,6 +212,21 @@ row "E1 a BLOCKED stop escape" pass "$STATUS $B1 <stop>BLOCKED: waiting on the r
 row "E2 an Operator-only label whose own sentence is the unit" pass "Operator-only (money): should we charge for the second seat now?"
 row "E2b an Operator-only label governs the next unit in its paragraph" pass "Operator-only (money): the accounting call is below. $B1"
 row "E3 a final-sentence Paused label" pass "$STATUS $B1 Paused: waiting on CI."
+row "E3c a bold final Paused label (the plugin hook's accepted form)" pass "$STATUS $B1 **Paused**: waiting on CI."
+# Q4 (Ruled by CTO agent, 2026-10-12 review): closing-only permission shapes bound to an ACTION verb pass; the bare
+# `can i` / `should i` / `go ahead` / `we` forms are technical-fork shapes and still block.
+row "Q4a can-i with an action verb (cue: suff)" pass "can i merge pr 123 now, is the evidence enough?"
+row "Q4b shall-i-proceed with an action verb (cue: cl3)" pass "shall i proceed and rotate the production credentials now, in what order?"
+row "Q4c should-i-go-ahead-and with an action verb" pass "should i go ahead and rotate the storage credentials?"
+row "Q4d shall-i-go-ahead with an action verb" pass "shall i go ahead and deploy to production?"
+row "Q4e a we-form is not a permission shape (bar)" block "can we tighten the evidence threshold?"
+row "Q4f should-i is a ruling shape (ab)" block "should i use approach a or b for the retry queue?"
+row "Q4g can-i without an action verb is not an authorization (ab)" block "can i use approach a or b for the retry queue?"
+row "Q4h should-we-go-ahead-with is a ruling shape (ab)" block "should we go ahead with approach a or b for the schema?"
+row "Q4i the ordering half of an authorization ask stays technical (cl3)" block "which order should the storage credentials be rotated in?"
+row "Q4j a sufficiency ask is the motivating miss (cl1)" block "is the coverage enough to deploy to production?"
+# The full-hook form of Q4j: a neighbouring Approve? unit does NOT exempt the sufficiency unit above it (judged per sentence).
+row "Q4k a sufficiency unit followed by an Approve? unit: the sufficiency ask is the motivating miss" block "Is the coverage enough to deploy to production? Approve?"
 row "E3b an EMPTY final label does not escape" block "$STATUS $B1 Blocked: none."
 row "E4 an unrelated Operator-only sentence does not escape another paragraph's question" block "Operator-only (money): should we charge for the second seat now?
 
@@ -265,22 +286,26 @@ if [[ "$(jq -r '.systemMessage // ""' <<<"$OUT" 2>/dev/null)" == *'disarmed by S
 
 # --- missing, empty or truncated lib is parse doubt, never a blanket block --------------------------
 TOTAL=$((TOTAL+1))
-ML="$WORK/ml"; assert_fixture_dir "$ML"; mkdir -p "$ML/without/lib" "$ML/empty/lib" "$ML/with/lib"
+ML="$WORK/ml"; assert_fixture_dir "$ML"; mkdir -p "$ML/without/lib" "$ML/empty/lib" "$ML/with/lib" "$ML/trunc/lib"
 ml_ok=1
 for ml_f in "$HOOKS_DIR"/lib/*.sh; do
   cp "$ml_f" "$ML/with/lib/" || ml_ok=0
-  [[ "${ml_f##*/}" == "technical-fork-cues.sh" ]] || { cp "$ml_f" "$ML/without/lib/" && cp "$ml_f" "$ML/empty/lib/"; } || ml_ok=0
+  [[ "${ml_f##*/}" == "technical-fork-cues.sh" ]] || { cp "$ml_f" "$ML/without/lib/" && cp "$ml_f" "$ML/empty/lib/" && cp "$ml_f" "$ML/trunc/lib/"; } || ml_ok=0
 done
 : > "$ML/empty/lib/technical-fork-cues.sh"
-for ml_d in with without empty; do cp "$HOOK" "$ML/$ml_d/pre-closing-technical-fork-gate.sh" || ml_ok=0; done
+# A lib TRUNCATED before its completion sentinel (the realistic failure: a partial write or a bad merge) must fail open too.
+grep -v '^_TFC_COMPLETE=1$' "$LIB" > "$ML/trunc/lib/technical-fork-cues.sh" || ml_ok=0
+for ml_d in with without empty trunc; do cp "$HOOK" "$ML/$ml_d/pre-closing-technical-fork-gate.sh" || ml_ok=0; done
 ml_j="$(closing_json "$B1")"
 spawn "$ML/with/pre-closing-technical-fork-gate.sh" "$ml_j"; ml_ctl="$(verdict_from_out)"
 spawn "$ML/without/pre-closing-technical-fork-gate.sh" "$ml_j"; ml_a="$(verdict_from_out)"; ml_a_err="$ERR"
 spawn "$ML/empty/pre-closing-technical-fork-gate.sh" "$ml_j"; ml_b="$(verdict_from_out)"; ml_b_err="$ERR"
-if [[ "$ml_ok" -eq 1 && "$ml_ctl" == "block" && "$ml_a" == "pass" && "$ml_b" == "pass" ]] \
-   && grep -qF 'cue lib missing or incomplete' <<<"$ml_a_err" && grep -qF 'cue lib missing or incomplete' <<<"$ml_b_err"; then
-  echo "  PASS: ML1 a missing or empty lib fails open with a stderr line (control with the lib blocks)"; PASS=$((PASS+1))
-else printf '  FAIL: ML1 setup=%s control=%s missing=%s empty=%s\n' "$ml_ok" "$ml_ctl" "$ml_a" "$ml_b" >&2; FAIL=$((FAIL+1)); fi
+spawn "$ML/trunc/pre-closing-technical-fork-gate.sh" "$ml_j"; ml_c="$(verdict_from_out)"; ml_c_err="$ERR"
+if [[ "$ml_ok" -eq 1 && "$ml_ctl" == "block" && "$ml_a" == "pass" && "$ml_b" == "pass" && "$ml_c" == "pass" ]] \
+   && grep -qF 'cue lib missing or incomplete' <<<"$ml_a_err" && grep -qF 'cue lib missing or incomplete' <<<"$ml_b_err" \
+   && grep -qF 'cue lib missing or incomplete' <<<"$ml_c_err"; then
+  echo "  PASS: ML1 a missing, empty or truncated lib fails open with a stderr line (control with the lib blocks)"; PASS=$((PASS+1))
+else printf '  FAIL: ML1 setup=%s control=%s missing=%s empty=%s truncated=%s\n' "$ml_ok" "$ml_ctl" "$ml_a" "$ml_b" "$ml_c" >&2; FAIL=$((FAIL+1)); fi
 
 # --- the block output: one JSON object, byte-constant text, no model text ------------------------------
 TOTAL=$((TOTAL+1))
@@ -373,6 +398,16 @@ if [[ "$c_defs" == "$REPO_ROOT/.claude/hooks/lib/technical-fork-cues.sh" && "$c_
    && grep -qF '/pre-ask-technical-fork-gate.sh' <<<"$c_callers" && grep -qF '/pre-closing-technical-fork-gate.sh' <<<"$c_callers"; then
   echo "  PASS: C1 exactly one RULING_*_RE definition site (the lib) and both hooks call tfc_is_fork"; PASS=$((PASS+1))
 else printf '  FAIL: C1 definition sites=[%s] callers=[%s]\n' "$(tr '\n' ' ' <<<"$c_defs")" "$(tr '\n' ' ' <<<"$c_callers")" >&2; FAIL=$((FAIL+1)); fi
+TOTAL=$((TOTAL+1))
+c_fn="$(for f in "${TRACKED_ARR[@]}"; do grep -qE '^tfc_is_fork\(\)' "$f" 2>/dev/null && printf '%s\n' "$f"; done)"
+c_tfc="$(for f in "${TRACKED_ARR[@]}"; do grep -qE '^TFC_[A-Z0-9_]*_RE=' "$f" 2>/dev/null && printf '%s\n' "$f"; done)"
+if [[ "$c_fn" == "$REPO_ROOT/.claude/hooks/lib/technical-fork-cues.sh" && "$c_tfc" == "$REPO_ROOT/.claude/hooks/lib/technical-fork-cues.sh" ]]; then
+  echo "  PASS: C3 the verdict function and every TFC_*_RE cue are defined in exactly one file (the lib)"; PASS=$((PASS+1))
+else printf '  FAIL: C3 function sites=[%s] TFC cue sites=[%s]\n' "$(tr '\n' ' ' <<<"$c_fn")" "$(tr '\n' ' ' <<<"$c_tfc")" >&2; FAIL=$((FAIL+1)); fi
+TOTAL=$((TOTAL+1))
+c_last="$(grep -vE '^[[:space:]]*(#|$)' "$LIB" | tail -n 1)"
+if [[ "$c_last" == "_TFC_COMPLETE=1" ]]; then echo "  PASS: C4 the completion sentinel is the last statement of the lib"; PASS=$((PASS+1))
+else printf '  FAIL: C4 the last statement of the lib is [%s], not the completion sentinel\n' "$c_last" >&2; FAIL=$((FAIL+1)); fi
 TOTAL=$((TOTAL+1))
 c_lib_dirty="$(grep -vE '^[[:space:]]*#' "$LIB" | grep -ciE 'emit_incident|\.claude/|CLAUDE_PROJECT_DIR|soleur|hcloud|g2' || true)"
 if [[ "$c_lib_dirty" == "0" ]]; then echo "  PASS: C2 the lib is pure: no emit_incident, no repo path, no repo-specific noun"; PASS=$((PASS+1))
@@ -473,6 +508,9 @@ if apply_mut "$g11_target" 'if (( COUNT > 12 )); then START=$((COUNT - 12));' 'i
   else printf '  FAIL: G1-11 mutant rc=%s control rc=%s (want 124 and 0)\n' "$g11_rc" "$u3_rc" >&2; FAIL=$((FAIL+1)); fi
 else echo "  FAIL: G1-11 the mutation did not land" >&2; FAIL=$((FAIL+1)); fi
 
+# G1-12: delete the closing-only permission exemption (Q4): an authorization shape the shared vocabulary does not name must flip pass -> block.
+mut_row "G1-12 delete the closing-only permission exemption" lib '[[ "$closing" -eq 1 ]] && grep -qE "$TFC_CLOSING_PERM_RE" <<<"$unit" && return 1' ':' pass "can i merge pr 123 now, is the evidence enough?"
+
 # G2-1: a second RULING_*_RE definition in the closing hook must make the census report two sites.
 TOTAL=$((TOTAL+1))
 mk_tree g2_1 || true
@@ -532,13 +570,13 @@ if [[ -z "$d_missing" && "$RAN" -eq "$SPAWNS" && "$SPAWNS" -ge 70 ]]; then
   printf '  PASS: V5 all %s named must-block rows were blocked by this hook'"'"'s reason; the SUT ran %s of %s spawns\n' "16" "$RAN" "$SPAWNS"; PASS=$((PASS+1))
 else printf '  FAIL: V5 missing=[%s] SUT markers=%s harness spawns=%s (want equal and >= 70)\n' "$d_missing" "$RAN" "$SPAWNS" >&2; FAIL=$((FAIL+1)); fi
 TOTAL=$((TOTAL+1))
-if [[ "$KILLED" -ge 19 ]]; then printf '  PASS: V6 %s mutants killed (floor 19)\n' "$KILLED"; PASS=$((PASS+1))
-else printf '  FAIL: V6 only %s mutants killed (floor 19)\n' "$KILLED" >&2; FAIL=$((FAIL+1)); fi
+if [[ "$KILLED" -ge 20 ]]; then printf '  PASS: V6 %s mutants killed (floor 20)\n' "$KILLED"; PASS=$((PASS+1))
+else printf '  FAIL: V6 only %s mutants killed (floor 20)\n' "$KILLED" >&2; FAIL=$((FAIL+1)); fi
 
 # --- inventory, accounting conservation and the assertion floor ---------------------------------------
 TOTAL=$((TOTAL+1))
-if [[ "$TOTAL" -eq 91 ]]; then echo "  PASS: V1 full inventory ran (91 cases)"; PASS=$((PASS+1))
-else echo "  FAIL: V1 expected 91 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
+if [[ "$TOTAL" -eq 106 ]]; then echo "  PASS: V1 full inventory ran (106 cases)"; PASS=$((PASS+1))
+else echo "  FAIL: V1 expected 106 cases, ran $TOTAL" >&2; FAIL=$((FAIL+1)); fi
 
 # Reported with printf + exit 1, never through a verdict helper: a floor routed through the machinery it backstops
 # is disarmed by the same edit it exists to catch (ADR-193).
@@ -547,7 +585,7 @@ if (( PASS + FAIL != TOTAL )); then
     "$PASS" "$FAIL" "$TOTAL" >&2
   exit 1
 fi
-MIN_CASES=91
+MIN_CASES=106
 if (( TOTAL < MIN_CASES )); then
   printf '\nFATAL: anti-vacuity: %d case(s) ran, floor is %d. The suite shrank rather than the hook improving.\n' \
     "$TOTAL" "$MIN_CASES" >&2
