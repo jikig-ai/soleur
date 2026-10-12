@@ -378,6 +378,18 @@ git -C "$d" symbolic-ref HEAD "$long"
 run_helper "$d"
 eq "an over-long old ref name is capped at 80 characters" "SOLEUR_BARE_HEAD_HEALED from=${long:0:80} to=refs/heads/main" "$OUT"
 
+begin H23
+d="$SANDBOX/h23"; mk_bare_root "$d" || bad "fixture"
+git -C "$d" config core.bare yes
+dangle "$d"
+run_helper "$d"
+eq "core.bare spelled as the valid boolean 'yes' still heals" "$MARKER_GONE" "$OUT"
+d="$SANDBOX/h23b"; mk_bare_root "$d" || bad "fixture"
+git -C "$d" config core.bare banana
+dangle "$d"
+run_helper "$d"
+eq "core.bare set to a non-boolean fails closed" "" "$OUT"
+
 # --- loader cases ---------------------------------------------------------------------------
 # Pin the ambient state the loader reads, so the "marker is the trailing line" assertion does not
 # depend on whether the host happens to carry a tmpfs-guard alarm: a populated alarm file makes the
@@ -559,7 +571,7 @@ fi
 
 # --- completion floors ------------------------------------------------------------------------
 close_case
-DECLARED=(H1 H2 H3 H4 H5 H6 H7 H8 H9 H10 H11 H12 H13 H14 H15 H16 H17 H18 H19 H20 H21 H22 L1 L2 L3 L4 L5)
+DECLARED=(H1 H2 H3 H4 H5 H6 H7 H8 H9 H10 H11 H12 H13 H14 H15 H16 H17 H18 H19 H20 H21 H22 H23 L1 L2 L3 L4 L5)
 if [[ "${EXECUTED[*]}" != "${DECLARED[*]}" ]]; then
   printf 'FATAL: declared cases differ from executed cases\n  declared: %s\n  executed: %s\n' \
     "${DECLARED[*]}" "${EXECUTED[*]}" >&2
