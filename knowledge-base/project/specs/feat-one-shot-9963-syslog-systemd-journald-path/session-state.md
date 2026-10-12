@@ -36,3 +36,12 @@
 - Fix commits (cont.): 6e9ad1aab1 (lazy CONTROL_ROWS fetch, ADR mechanism refresh, ac12 consistency), f59ebcaea4 (closed-form 9963e, argv/ census widening, semantic spelling/VRL pins, window floor).
 - Fix-round 2: 6 targeted seats at HEAD f59ebcaea4 against diff 3c4ef84129..HEAD. New round-2 findings closed in the f59+ follow-up commit: r-since discrimination witness arm (dropped --since now verifiably flips the verdict), octal-safe --window math + test arms, whole-file SYSLOG_IDENTIFIER canonical-form pin (sub-table headers, multiline inline tables, asymmetric whitespace, VRL forge forms), bare include_matches container refusal, PRIORITY-arm scoping (9963l), EMIT_SEP extended to [;&|<>] (&&-continuation, <<'X' swallow, > redirect), argv end-anchor (trailing --socket), CLOSER_LINE_CLEAN rider check, whole-body net depth (spanning wraps), tail-code census, ORDER BY dt DESC (newest-rows-survive-truncation), pii_scrub_drop_userdata exact head anchor, ACTUAL_TAGS charset parity, N1 inner-parse guard, docs/count staleness sweeps.
 - Tally: seats=22, fix_rounds=2 (cap reached — any further round escalates to a full class panel).
+
+## Ship Phase
+- Verification pass: fresh-eyes seat verified all fix-commit closures; residuals (early-terminator blind spot, message substitution, 9963l normalization, 61m floor, stale phone-home comment) closed in cef3f53342.
+- Trailers: Reviewed-By-Soleur (full 7/7) + Reviewed-Fix-Round over 3c4ef84129..cef3f53342.
+- CI fix: xtrace credential refusal added to ac12-telemetry-positive-control-7103.sh (lint-shell-trace-credential-refusal).
+- Compound: workflow-issues/2026-10-12-a-text-grep-over-a-grammar-is-never-closed.md (canonical-form-negation + session errors).
+- PR body: suite counts refreshed (101/66/50/39), review evidence, ## Changelog.
+- Status: marked ready, auto-merge armed (merge queue), mergeState BEHIND pending queue+CI.
+- Operator-gated (not blockers): git-data rung-2 stale pending fresh dispatch on main; GuardA red by design pending vinngest-v1.1.51 re-bake; #10099 <<< ban observed.
