@@ -15,7 +15,7 @@ related_brainstorm: knowledge-base/project/brainstorms/2026-05-12-linear-issue-i
 
 Brainstorm for `/soleur:linear-fetch` started with a default assumption: to get a Linear issue's screenshot in front of the agent, we'd need to (a) fetch the markdown via `mcp__linear-server__get_issue`, (b) parse `uploads.linear.app/*` URLs out of it, (c) download the bytes with a Linear bearer token, (d) cache them somewhere — `/tmp` or under `knowledge-base/` — and (e) pass file paths to `Read` so the model sees them. That design pulls in: token boundary, gitignore rules, lifetime/cleanup, signed-URL credential handling, and a precommit guard against committed signed URLs.
 
-The chat-attachments brainstorm (`knowledge-base/project/brainstorms/2026-04-11-chat-attachments-brainstorm.md`) reinforced this framing — its decision was "Agent SDK `query()` is string-only, so multimodal images must be written to workspace filesystem and referenced by path."
+The chat-attachments brainstorm (`knowledge-base/project/brainstorms/archive/20261013-003106-2026-04-11-chat-attachments-brainstorm.md`) reinforced this framing — its decision was "Agent SDK `query()` is string-only, so multimodal images must be written to workspace filesystem and referenced by path."
 
 CTO challenged this with: "check what `mcp__linear-server__extract_images` actually returns before designing the cache."
 

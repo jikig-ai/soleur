@@ -92,7 +92,7 @@ increased-N median.
 ## Session errors
 
 - **Plan subagent did not produce `tasks.md` in the specs directory** —
-  Recovery: manually created `knowledge-base/project/specs/feat-one-shot-drain-marketing-chores/`
+  Recovery: manually created `knowledge-base/project/specs/archive/20261013-003106-feat-one-shot-drain-marketing-chores/`
   and wrote `session-state.md` directly. Minor; no blocking impact.
   Prevention: if one-shot step 2 assumes the plan subagent writes `tasks.md` to
   the specs directory, verify the assumption in the one-shot skill Step 2 after

@@ -112,7 +112,7 @@ The isolation model is enforced at four layers, in order of precedence:
   `--bootstrap=skip` flag).
 
 **Operational sequence (post-merge):** see plan §Acceptance Criteria
-in `knowledge-base/project/plans/2026-04-27-fix-supabase-env-isolation-plan.md`
+in `knowledge-base/project/plans/archive/20261013-003106-2026-04-27-fix-supabase-env-isolation-plan.md`
 for the full operator checklist (provision project, apply migrations,
 rotate 6 Doppler keys, audit `ci` config, update
 `mu1-cleanup-guard.mjs` `DEV_PROJECT_REF` in a follow-up PR, close
@@ -156,7 +156,7 @@ without the exposure — reopen then. Decision record: DC-1 in
 
 - Issue: #2887 (P0 single-DB blast radius)
 - Discovery: PR #2858 ship Phase 7 migrate-job failure
-- Plan: `knowledge-base/project/plans/2026-04-27-fix-supabase-env-isolation-plan.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-003106-2026-04-27-fix-supabase-env-isolation-plan.md`
 - Follow-up issues: #2910 (staging Supabase project), #2911
   (`run-migrations.sh --bootstrap=skip` flag)
 - Adjacent learnings:

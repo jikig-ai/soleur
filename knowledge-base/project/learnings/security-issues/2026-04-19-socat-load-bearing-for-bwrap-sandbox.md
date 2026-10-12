@@ -73,5 +73,5 @@ auditing the production image footprint:
   "no silent failure modes" principle.
 - `knowledge-base/project/learnings/security-issues/bwrap-sandbox-three-layer-docker-fix-20260405.md`
   — earlier work on bwrap inside Docker.
-- `knowledge-base/project/specs/feat-verify-workspace-isolation/sdk-probe-notes.md`
+- `knowledge-base/project/specs/archive/20261013-003106-feat-verify-workspace-isolation/sdk-probe-notes.md`
   — full strace output from the 2026-04-19 capture.

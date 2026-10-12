@@ -101,7 +101,7 @@ but breaking for any workflow with budget or pricing assumptions.
   pass and show the command + output in a fenced block. Do not cite
   SHAs from memory."
 - **Spec dir naming collision.** The plan subagent wrote `tasks.md` to
-  `knowledge-base/project/specs/feat-one-shot-fix-ux-audit-thinking-api/`
+  `knowledge-base/project/specs/archive/20261013-003106-feat-one-shot-fix-ux-audit-thinking-api/`
   (matching branch name), but a subsequent session-state write used a
   shortened name `feat-fix-ux-audit-thinking-api/`, producing two sibling
   dirs that had to be consolidated mid-session. **Prevention:** skill

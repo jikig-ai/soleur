@@ -58,7 +58,7 @@ Two complementary practices:
 
 ## Related
 
-- Brainstorm: `knowledge-base/project/brainstorms/2026-04-23-agents-md-budget-revisit-brainstorm.md` (discoverability litmus + retirement protocol)
+- Brainstorm: `knowledge-base/project/brainstorms/archive/20261013-003106-2026-04-23-agents-md-budget-revisit-brainstorm.md` (discoverability litmus + retirement protocol)
 - Plan: `knowledge-base/project/plans/2026-05-15-chore-agents-shrink-b-always-below-22000-plan.md` (this PR's plan with three-iteration history visible)
 - PR #3837 (this PR)
 - Issue #3834 (per-rule cap audit — follow-up shrink work)
