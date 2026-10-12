@@ -1306,7 +1306,7 @@ resource "terraform_data" "g2_phantom_web1" {
 """
 '
 
-# The EXT_RESIDENCE allowance is (file, resource)-scoped: workspaces-luks.tf is an
+# The EXT_RESIDENCE allowance is (file, type.name)-scoped: workspaces-luks.tf is an
 # allowlisted FILE, but a NEW phantom resource inside it matches no declared member.
 expect_red "G2-20 (a second phantom web-1 dialer in an allowlisted file)" workspaces-luks.tf \
   "outside server.tf" '
@@ -1378,7 +1378,7 @@ resource "null_resource" "root_authorized_keys" {
   }
 }
 """
-'
+' "null_resource.root_authorized_keys"
 
 # Attribution is span-bounded, not nearest-header: a connection {} inside a
 # `data` block after root_authorized_keys is in NO resource span -> unattributed
@@ -1396,7 +1396,7 @@ data "external" "g2_phantom_data" {
   }
 }
 """
-'
+' "unattributed"
 
 # A fake `resource "t" "member"` literal inside a phantom's OWN heredoc produces a
 # span nested inside the phantom's real span. Outermost-first resolution + the
@@ -1424,15 +1424,14 @@ resource "terraform_data" "g2_spoof_hdr" {
   }
 }
 """
-'
+' "g2_spoof_hdr"
 
 # Span-capture laundering (security review P2-1): a fake member header inside a
-# NON-resource construct's heredoc opens a span that swallows the NEXT real
-# resource — its real span is dropped, and pre-fix its blocks attributed to the
-# member. Two arms now catch it: the dropped header is itself a finding, and the
-# span cap leaves the swallowed blocks unattributed.
+# NON-resource construct's heredoc used to open a span that swallowed the NEXT
+# real resource. blank_heredocs now makes the fake invisible entirely — the
+# phantom's own resource is what the residence arm flags.
 expect_red "G2-26 (a member-name literal inside a locals heredoc)" workspaces-luks.tf \
-  "inside another resource's span" '
+  "outside server.tf" '
 s += """
 locals {
   spoof = <<-EOF
@@ -1452,6 +1451,104 @@ resource "terraform_data" "g2_span_capture" {
   provisioner "remote-exec" {
     inline = ["set -e", "true"]
   }
+}
+"""
+'
+
+# A same-`type.name` duplicate resource attributes its blocks to the member's
+# address — exempt for free without the collision arm (§1 name-collision
+# precedent; pattern-review P2). Invalid HCL, but the guard does not outsource
+# identity to `terraform validate`.
+expect_red "G2-27 (a duplicate same-address member resource)" ci-ssh-key.tf \
+  "duplicate resource address" '
+s += """
+resource "terraform_data" "root_authorized_keys" {
+  connection {
+    type = "ssh"
+    host = hcloud_server.web["web-1"].ipv4_address
+    user = "root"
+    host_key = local.web_1_ssh_host_key
+  }
+  provisioner "remote-exec" {
+    inline = ["set -e", "true"]
+  }
+}
+"""
+'
+
+# §1's census is terraform_data-typed, so the residence carve-out inside
+# server.tf only covers terraform_data.* blocks — a null_resource dialer there
+# escapes BOTH enumerations without the refinement (enum U3, the largest hole).
+expect_red "G2-28 (a null_resource web-1 dialer inside server.tf)" server.tf \
+  "outside server.tf" '
+s += """
+resource "null_resource" "g2_srv_phantom" {
+  connection {
+    type = "ssh"
+    host = hcloud_server.web["web-1"].ipv4_address
+    user = "root"
+    host_key = local.web_1_ssh_host_key
+  }
+  provisioner "remote-exec" {
+    inline = ["set -e", "true"]
+  }
+}
+"""
+'
+
+# `type = "winrm"` exempts a block from the host_key arms (winrm has no ssh
+# host_key) but must not exempt it from residence — a winrm-labeled fleet dialer
+# is a one-line bypass (enum U1).
+expect_red "G2-29 (a winrm-labeled web-1 dialer outside server.tf)" tunnel.tf \
+  "outside server.tf" '
+s += """
+resource "terraform_data" "g2_winrm" {
+  connection {
+    type = "winrm"
+    host = hcloud_server.web["web-1"].ipv4_address
+    user = "Administrator"
+  }
+}
+"""
+'
+
+# `dynamic "connection"` previously matched no sweep token — the whole dynamic
+# block is now swept and its inner host/host_key lines seen (enum U2).
+expect_red "G2-30 (a dynamic-spelled web-1 dialer outside server.tf)" tunnel.tf \
+  "outside server.tf" '
+s += """
+resource "terraform_data" "g2_dyn" {
+  dynamic "connection" {
+    for_each = ["x"]
+    content {
+      type = "ssh"
+      host = hcloud_server.web["web-1"].ipv4_address
+      user = "root"
+      host_key = local.web_1_ssh_host_key
+    }
+  }
+}
+"""
+'
+
+# A fake member header nested inside a NON-resource construct's braces (not a
+# heredoc) plus a stray top-level connection {} could claim the member's
+# exemption: the non-resource span drop now deletes the fake span entirely and
+# reports it (enum U7). The stray connection is separately unattributed.
+expect_red "G2-31 (stray connection + member-name literal in output braces)" ci-ssh-key.tf \
+  "inside a containing block span" '
+s += """
+output "spoof" {
+  value = { a = 1 }
+  resource "terraform_data" "root_authorized_keys" {
+    filler = { x = 1 }
+  }
+}
+connection {
+  type = "ssh"
+  host = hcloud_server.web["web-1"].ipv4_address
+  user = "root"
+  host_key = local.web_1_ssh_host_key
 }
 """
 '
@@ -1476,7 +1573,7 @@ s = s.replace(old, """  connection {
 """ + old, 1)
 '
 
-# DECLARED RESIDUAL (CTO-ruling #3, security review P2-2): dials_fleet is a
+# DECLARED RESIDUAL (CTO-ruling #3, security review P2-2): dialed_hosts is a
 # literal `hcloud_server.web["web-N"]` match — a connection dialing through
 # indirection (local.*/var.*/data.*/self/each.value, or a literal IP) engages no
 # arm and stays GREEN. This pins the gap deliberately: the asymmetry is that an
@@ -1691,7 +1788,7 @@ fi
 # the ADR-193 defect: a floor whose failure arm routes through the suite's own verdict helper
 # cannot witness that helper being neutered -- the assertion rows go quiet AND so does the floor
 # meant to notice the quiet. Each carries a DISTINCT message so a failure says WHICH tripped.
-FLOOR=66  # +5 #9151 mutation arms (M4a, M4b, G2-15, G2-16, G2-17; G2-C4 is a green control and does not increment) +7 review-pass arms (M2b, M4c, M4d, M4e, M4f, M4g, G2-18); +1 net #9970: control-C moved to expect_green (-1), M4j+M4k added (+2), control-D is a green control (+0); +8 #9998 residence rows (G2-19..26; G2-C5/G2-C6 are green controls and do not increment). Re-derive from the battery log when adding rows.
+FLOOR=71  # +5 #9151 mutation arms (M4a, M4b, G2-15, G2-16, G2-17; G2-C4 is a green control and does not increment) +7 review-pass arms (M2b, M4c, M4d, M4e, M4f, M4g, G2-18); +1 net #9970: control-C moved to expect_green (-1), M4j+M4k added (+2), control-D is a green control (+0); +13 #9998 residence rows (G2-19..31; G2-C5/G2-C6 are green controls and do not increment). Re-derive from the battery log when adding rows.
 if (( mutations_run < FLOOR )); then
   printf '\n[FATAL] anti-vacuity floor (mutations): only %d landed, attributed mutation(s) ran, expected >= %d.\n' \
     "$mutations_run" "$FLOOR" >&2
