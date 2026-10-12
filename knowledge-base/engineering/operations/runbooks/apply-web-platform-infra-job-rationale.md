@@ -382,7 +382,7 @@ single-use web-2 rebirth workflow (#9372) to one added line, and `web-host-escro
 job that runs `terraform apply` with a `-target` or `-replace` of `hcloud_server.web[` carry it. The step runs after the
 reviewer approval of the dispatch environment, so a refused birth spends one approval; moving it to a preceding ungated
 job is recorded as a taste call in the #9377 decision challenges. The provider token is write-capable; a read-only
-preflight token is a tracked deferral (<https://github.com/jikig-ai/soleur/issues/9461>).
+preflight token is a tracked deferral (<https://github.com/jikig-ai/soleur/issues/9461>). *(2026-10-12 (#9372): the single-use rebirth workflow named above is deleted; the census still applies to every remaining job that runs `terraform apply` with a `-target` or `-replace` of `hcloud_server.web[`.)*
 
 **The widened HALT in `apply`.** `luks_passphrase_rotations` (the jq counter in
 `tests/scripts/lib/destroy-guard-filter-web-platform.jq`) now covers six addresses: the inngest pair and, for the

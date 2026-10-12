@@ -979,6 +979,10 @@ One dated line, no status change: the dispatch-only `web-host-reboot.yml` job `r
 
 **The approval gate on this consumer is a rule, not a platform separation (measured 2026-10-07).** `web-platform-infra-apply` has a custom deployment branch policy that lists exactly `main`, a single required reviewer whose login is `deruelle` (the owner), and `prevent_self_review` false. The dispatching agent's `gh` identity is that same login, so the platform enforces only the branch (a run from another ref never starts the gated job) and does not separate dispatching from approving. The separation is the owner's explicit per-dispatch go-ahead naming the production write (`hr-menu-option-ack-not-prod-write-auth`) and the owner doing the approving; an agent never approves its own dispatch. The issue records the same property for the other gated environments. Whether destructive dispatches should be two-party (`prevent_self_review` and a distinct agent identity, a `.tf` change) is tracked on #8044 and is not decided here. A re-run of the workflow is refused by design (a `github.run_attempt` guard), so an approval is never silently reused for a second request.
 
+### 2026-10-12 (#9372): `web-host-reboot.yml` is retired, and its Tier-B consumer with it
+
+One dated line, no status change: the dispatch-only `web-host-reboot.yml` (jobs `reboot` and `observe`), recorded as a Tier-B consumer in the 2026-10-07 entry above, was deleted on 2026-10-12 together with the web-2 rebirth workflow (ADR-263 addendum 2026-10-12). The 2026-10-07 entry stays as the dated record. The `web-platform-infra-apply` environment and the Tier-B secrets it served are shared with live workflows and are not changed by the retirement.
+
 ### 2026-10-08 (#8767): `cutover-inngest.yml` `op=backup` is Tier B, and currently ungated
 
 `op=backup`'s Hetzner `create_image` is a **write**, so its `HCLOUD_TOKEN` read is **Tier B**; the generation-anchor read stays Tier A (`HCLOUD_TOKEN_READONLY`). The runbook row for `cutover-inngest.yml::cutover` is split in two accordingly (a tier classification change, recorded here rather than as a new ADR, as the 2026-09-30 and 2026-10-02 entries do).
