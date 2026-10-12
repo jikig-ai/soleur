@@ -36,7 +36,7 @@ export type PermissionLayer =
 export function logPermissionDecision(
   layer: PermissionLayer,
   toolName: string,
-  decision: "allow" | "deny",
+  decision: "allow" | "deny" | "defer",
   reason?: string,
 ): void {
   // Early return — unset flag must not allocate an object literal.

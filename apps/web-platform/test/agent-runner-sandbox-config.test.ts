@@ -149,7 +149,7 @@ describe("agent-runner sandbox hardening (#2634)", () => {
     // toBeDefined check above.
     expect(options.sandbox.enabled).toBe(true);
     expect(options.sandbox.allowUnsandboxedCommands).toBe(false);
-    expect(options.sandbox.autoAllowBashIfSandboxed).toBe(true);
+    expect(options.sandbox.autoAllowBashIfSandboxed).toBe(false);
     expect(options.sandbox.network.allowManagedDomainsOnly).toBe(true);
   });
 

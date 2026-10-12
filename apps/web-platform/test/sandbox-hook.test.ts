@@ -134,14 +134,23 @@ describe("createSandboxHook - Bash env access", () => {
     expectDenied(result, "environment variables");
   });
 
-  test("allows clean Bash command", async () => {
-    const result = await invokeHook("Bash", { command: "ls -la" });
-    expectExplicitAllow(result);
+  // #10054: a hook `allow` resolves the permission BEFORE `canUseTool` (SDK 0.3.284), which made every
+  // Bash gate in createCanUseTool inert. The hook must give Bash NO decision so `canUseTool` decides.
+  function expectNoDecision(result: SyncHookJSONOutput) {
+    expect(result.hookSpecificOutput).toBeUndefined();
+    expect(result.continue).toBe(true);
+  }
+
+  test("gives a clean Bash command no decision (canUseTool decides)", async () => {
+    expectNoDecision(await invokeHook("Bash", { command: "ls -la" }));
   });
 
-  test("allows Bash with empty command", async () => {
-    const result = await invokeHook("Bash", { command: "" });
-    expectExplicitAllow(result);
+  test("gives Bash with an empty command no decision", async () => {
+    expectNoDecision(await invokeHook("Bash", { command: "" }));
+  });
+
+  test("gives a destroy-family Bash command no decision (never an allow)", async () => {
+    expectNoDecision(await invokeHook("Bash", { command: "git push --force origin main" }));
   });
 });
 
