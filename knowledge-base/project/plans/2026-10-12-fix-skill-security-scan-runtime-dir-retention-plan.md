@@ -15,6 +15,48 @@ brand_survival_threshold: none
 
 > Spec lacks valid `lane:` — defaulted to `cross-domain` (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-12
+**Gate results:** Phase 4.6 User-Brand (pass — `none`, no sensitive-path
+diff), 4.7 Observability (pass — `discoverability_test` suite-shape argued
+down with measurement: 1,251 ms suite, `0 failed` literal), 4.8 PAT (no
+hits), 4.9 UI-wireframe (no UI files — skip), 4.10 Encryption (no
+store/connection triggers — skip), 4.11 Guard Contract
+(`lint-guard-contract.py` green, 1 entry, structural assembly), 4.12 Scope
+Check (1 unfenced section, all asks mapped/descoped+justified, single-PR
+recommendation). 4.4 precedent-diff run inline (mirrors shipped sibling +
+tmpfs-guard reaper shape). 4.5 network-outage / 4.55 downtime — not
+triggered.
+
+### Key Improvements from Deepening
+
+1. The scratch sweep's design hardened during the inline spec-flow pass:
+   `! -path "$INPUT" ! -path "$results_dir"` exclusions were added because
+   own-scratch — unlike `meta_dir` — is created *before* the reap site, so a
+   pathological low `SKILL_SCAN_META_REAP_MIN` plus ≥1-min category checks
+   would reap live own-scratch mid-run (the asymmetry the shipped comment
+   does not cover).
+2. The sweep's `-o` arm covers `skill-security-scan-*` under `${TMPDIR:-/tmp}`
+   (the XDG-toggle crossover), discovered while enumerating allocation roots.
+3. Verified mechanically: `mktemp -t` honors `TMPDIR` on this host
+   (`/tmp/mkt-td/skill-scan-test-*` produced); `meta-dir-reap.test.sh` runs
+   green ("9 passed, 0 failed"); `lint-guard-contract.py` scans the plan
+   clean; every `knowledge-base/*.md` citation in the plan resolves; no
+   open `code-review` issues touch the five target files.
+
+### New Considerations Discovered
+
+- The `find` probe on this host reports 234 live `skill-security-scan-*`
+  dirs under the current runtime base — within-window steady state, the
+  shipped policy working as designed.
+- `tmp-classify.sh:27` carries a second `skill-security-scan-*` mention in a
+  descriptive protected-names list — left untouched (accurate; only the
+  `:108` justification is stale).
+- Plan-review panel and scoped advisor consult could not spawn (no Task
+  capability in this context) — recorded in `decision-challenges.md`;
+  deepen-plan's gate phases serve as the next verification layer.
+
 ## Overview
 
 Issue #6760 reported `run-scan.sh` leaking one `skill-security-scan-<pid>` dir
@@ -266,10 +308,22 @@ Three small edits at existing seams, no new machinery:
   so a concurrent reap never touches it — identical to the shipped argument
   for meta dirs. `-user "$(id -u)"` keeps the sweep uid-scoped on shared
   hosts.
+- **Precedent (deepen-plan 4.4).** The prescribed sweep mirrors the shipped
+  sibling verbatim — same `-mindepth 1 -maxdepth 1 -user "$(id -u)" -mmin`
+  predicate set, same `-exec rm -rf {} + 2>/dev/null || true` tolerance —
+  and the same shape as `scripts/tmpfs-guard.sh`'s reaper candidate scan
+  (`find … -mindepth 1 -maxdepth 1 -user "$uid" -mmin "+${age_min}"`). The
+  only novel elements are the grouped `-o` name pair (precedent shape:
+  `\( A -o B \)` is the canonical `find` grouping) and the `! -path`
+  exclusions (no precedent needed — own-path exclusion is new because the
+  scratch family is the first whose allocations predate the reap).
 - **`skill-scan-*` prefix ownership.** The producer set is fully enumerated
   in Research Insights; no other repo tool writes that prefix to `${TMPDIR}`
-  (verified by `git grep`). The glob does NOT match `skill-security-scan-*`
-  (different prefix) — the durable family stays governed by its own policy.
+  (verified by `git grep`). The scratch glob does NOT collide with the
+  durable family (`skill-scan-*` vs `skill-security-scan-*` are distinct
+  prefixes); the durable family's inclusion under `TMPDIR` is by the
+  deliberate `-o` arm for the XDG-toggle crossover, and it is governed by
+  the identical floor — the same policy, not a weaker one.
 - **SIGPIPE/`set -e` safety.** The new find carries `2>/dev/null || true`
   like its sibling — a vanished candidate mid-reap (concurrent cleanup) is
   tolerated, never fatal to the scan.
@@ -393,6 +447,12 @@ logs:
 discoverability_test:
   command:         bash plugins/soleur/skills/skill-security-scan/test/meta-dir-reap.test.sh
   expected_output: "0 failed"
+  # Argued down (deepen-plan 4.7 over-inclusive suite proxy): the command
+  # matches the suite-shape reject regex (*.test.*), but it IS the smallest
+  # command producing the signal liveness_signal.what names — measured
+  # 1,251 ms in scripts/suite-durations.tsv (re-run green 2026-10-12, "9
+  # passed, 0 failed"), well inside Check 10's 15 s cap. A registration
+  # probe (grep of suite-shard-legs.tsv) would prove scheduling, not health.
 ```
 
 ## Guard Contract
@@ -468,8 +528,14 @@ glob superset (all paths are `.sh`/`.md` under `plugins/soleur/`).
   `_reap_min` under `${TMPDIR:-/tmp}` at startup, uid-scoped
   (`-user "$(id -u)"`), with the same `2>/dev/null || true` tolerance as the
   existing sweep
-- [ ] Entries named `skill-scan-*` younger than the floor are not reaped;
-  entries not matching `skill-scan-*` are never reaped
+- [ ] The same sweep's `-o` arm reaps `skill-security-scan-*` dirs under
+  `${TMPDIR:-/tmp}` (XDG-toggle crossover) at the same floor, while the
+  shipped meta-base sweep is unchanged
+- [ ] The sweep excludes the current run's own `$INPUT` and `$results_dir`
+  (`! -path` exclusions present in the live code)
+- [ ] Entries matching the swept patterns but younger than the floor are not
+  reaped; entries matching neither `skill-scan-*` nor
+  `skill-security-scan-*` are never reaped
 - [ ] The current run's own `.scan-meta.json` exists after the process exits
   (existing AC8 contract preserved — no EXIT trap over `meta_dir`/`meta_path`)
 - [ ] `run-scan.sh` comments reference `#6760` alongside `#6789` for the
