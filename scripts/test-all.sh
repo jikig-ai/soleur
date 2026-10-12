@@ -5566,9 +5566,9 @@ if want_scripts; then
   # through a stub gh that exits 64 on any request it does not expect.
   run_suite "scripts/bearer-curl-s4-first-runs-9905" bash scripts/followthroughs/bearer-curl-s4-first-runs-9905.test.sh
   # #9995: the mu1 in-leg mint canary. Guard-1 matrix rows drive the real script against a
-  # PATH-shim curl that records calls (argv NUL-delimited + the bearer-curl.sh stdin config)
-  # and answers from env — a 401/000/garbage-PEM arm must exit 1 with zero or named requests,
-  # never print GITHUB_APP_MINT, and the JWT must ride the stdin config (ADR-280).
+  # PATH-shim curl that records calls (argv NUL-delimited + the credential library's stdin
+  # config) and answers from env — a 401/000/garbage-PEM arm must exit 1 with zero or named
+  # requests, never print GITHUB_APP_MINT, and the JWT must ride the stdin config (ADR-280).
   run_suite "scripts/probe-github-app-mint" bash scripts/probe-github-app-mint.test.sh
   # #9995: the dev_scheduled credential-shape audit. Guard-2 matrix rows drive the real
   # script against a stub doppler (census + per-name gets) — a CR-corrupted token, an
