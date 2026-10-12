@@ -1,7 +1,7 @@
 # Flip preconditions: live read (git-data LUKS cutover, #8211)
 
 - Read at: 2026-10-12, 19:12Z to 19:18Z (all times UTC).
-- Scope: read-only. No workflow dispatch, no terraform apply, no production write. No secret value was printed; the pin fingerprint is recorded as a prefix of 8 characters only.
+- Scope: read-only. No workflow dispatch, no terraform apply, no production write. No secret value was printed (three reads exceeded "names only"; see Caveats and disclosed deviations); the pin fingerprint is recorded as a prefix of 8 characters only.
 - Method: every row below is read from live state (Better Stack, Doppler names, GitHub Actions, the public `/health` endpoint), not from runbook text and not from a merged PR.
 
 ## Verdicts
@@ -10,9 +10,9 @@
 |---|---|---|
 | 1.1 | `git_data_ssh_client=present` on the DEPLOYED build | VERIFIED |
 | 1.2 | pin secret name present in `prd`; post-redeploy `git_data_pin=present` | VERIFIED |
-| 1.3 | pin-fault Sentry rule live (drift run under 24 h) | VERIFIED (rule id 1310055 not read directly; see caveat) |
+| 1.3 | pin-fault Sentry rule live (drift run under 24 h) | VERIFIED on the drift run only; rule id 1310055 cannot be read headlessly end to end (see caveats and proposal) |
 | 1.4 | host liveness heartbeat: up, newest `state=ok` under 15 min, later than `boot_complete` | VERIFIED at the read instant; not the binding flip-time re-read |
-| 1.5 | `d6_replace_stale` (context, not a gate) | NOT satisfied by a real rotate; reads as satisfied by a plain replace (finding) |
+| 1.5 | `d6_replace_stale` (a hard `fail` in `git-data-cutover.yml`, not context) | NOT satisfied by a real rotate; the reader has two holes (a plain replace satisfies it; a newer failed or plan-only rotate is skipped); tracker #10166 |
 
 These are point-in-time reads. A web-platform deploy of a newer sha was queued at the time of the read (see 1.1), so rows 1.1 and 1.2 must be re-read at the flip dispatch.
 
@@ -26,10 +26,18 @@ Deployed build, tied to a sha:
 
 Better Stack read (bounded, `--limit 20`):
 
+Command form (narrowed, the form `design-9943-liveness-precheck.md` prescribes: only the three Better Stack query secrets reach the process, and the Doppler token and AWS keys are stripped for the reader):
+
 ```
-doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
+doppler run -p soleur -c prd_terraform \
+  --only-secrets BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD \
+  --no-exit-on-missing-only-secrets -- \
+  env -u DOPPLER_TOKEN -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY \
+  scripts/betterstack-query.sh \
   --since '2026-10-12 18:00:00' --grep git_data_ssh_client= --limit 20
 ```
+
+Note: the reads in this report were taken with the unnarrowed form (`doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh ...`), which loads every `prd_terraform` secret into the reader process. The narrowed form above is what to use for any repeat; the unnarrowed form is disclosed as a deviation in the caveats section, not repeated.
 
 Result: 3 rows, all `msg=git_data_ssh_client=present`, `gitDataSshClient=true`, `host_name=soleur-web-platform`:
 
@@ -53,7 +61,7 @@ Loaded pin on the deployed build (Better Stack, `--since '2026-10-12 18:40:00' -
 
 - `2026-10-12 18:45:12.450 soleur-web-platform git_data_pin=present fp=SHA256:Ny0nYTfj...` (prefix 8 only). Same container start as the 1.1 row, on build `1ff24abfb1`.
 - Earlier rows the same day (17:11, 17:27, 17:50, 18:20) carry the same fingerprint prefix `Ny0nYTfj`.
-- Cross-check without printing the key: the fingerprint of the Doppler `prd` value, computed locally with `ssh-keygen -lf -`, has the prefix `SHA256:Ny0nYTfj`. The loaded pin and the published secret agree on the 8-character prefix.
+- Cross-check without printing the key: the fingerprint of the Doppler `prd` value, computed locally with `ssh-keygen -lf -` (the value was piped in locally; nothing was printed, see the disclosed deviations), has the prefix `SHA256:Ny0nYTfj`. The loaded pin and the published secret agree on the 8-character prefix.
 - The fingerprint differs from the one the runbook records for 2026-09-25 (`SHA256:4eErm...`), which is consistent with the host key rotating on replace. The most recent host replace is run `38140050880` (2026-10-11), whose `Load the rotated git-data pin (same-version redeploy)` step concluded `success`.
 
 ## 1.3 Pin-fault Sentry rule live: VERIFIED (caveat on rule id)
@@ -66,6 +74,7 @@ Loaded pin on the deployed build (Better Stack, `--since '2026-10-12 18:40:00' -
 - `git diff --stat 0aae3f86 HEAD -- apps/web-platform/infra/sentry` is empty: the reference and rule declarations have not changed since the drift run's sha, and that sha is an ancestor of this branch.
 - Caveat 1: the numeric rule id `1310055` is not printed by the fidelity run, so the id-to-rule mapping is taken from ADR-237 and the cutover workflow, not read here. The cutover workflow's own live precheck (`git-data-cutover.yml`, GET `alert-rules/1310055/` with `SENTRY_ACTIONS_RO_TOKEN`) will read the id at the flip dispatch.
 - Caveat 2: `SENTRY_ACTIONS_RO_TOKEN` is a GitHub secret and is not in Doppler `prd` or `prd_terraform`, so `scripts/sentry-alert-live-fidelity.sh` was not run live from this session. As a probe only, a read of `.../alert-rules/1310055/` with the Doppler `SENTRY_ISSUE_RO_TOKEN` returned HTTP 404. That token is issue-scoped and the endpoint is the legacy alert-rules path, so this result is inconclusive and is NOT counted as evidence either way. Row 1.3 rests on the drift run only.
+- Proposal (rule id readability): the fidelity script does not print the numeric rule id or the rule status, so no headless read can tie id 1310055 to the live rule. Propose that `scripts/sentry-alert-live-fidelity.sh` print `rule_id` and `status` per in-scope rule (names and numbers only). Until then the only end-to-end read of 1310055 is the cutover precheck at flip time, with `SENTRY_ACTIONS_RO_TOKEN`.
 
 ## 1.4 Host liveness heartbeat: VERIFIED at the read instant
 
@@ -88,23 +97,35 @@ Events (git-data table pin `t520508_soleur_git_data_prd_logs` UNION `t520508_sol
 
 Limits of this row: it is one read at one instant, the same kind the runbook says is NOT the binding one. The runbook requires the re-read at the flip dispatch. The runbook records the arm at 2026-10-12 (monitor id 506836, `--arm-one`); this read confirms the monitor is still `up` and unpaused. Enforcement in the workflow (#9943) does not exist yet, so this check remains a manual re-read until that build lands.
 
-## 1.5 `d6_replace_stale` (context, not a gate)
+## 1.5 `d6_replace_stale` (a hard gate in the cutover precheck)
+
+The cutover precheck ends with `fail d6_replace_stale "no successful git-data-host-rotate run on record ..."` when the reader finds no qualifying run, so a flip dispatch is refused on it. The earlier label "context, not a gate" was wrong.
 
 Command: `gh run list --workflow apply-web-platform-infra.yml --event workflow_dispatch --limit 100`, then each run's `git_data_host_replace` job and steps.
 
 - Rotate run: `38140050880` (2026-10-11T12:38:48Z) concluded `failure`. Its `Terraform apply (git-data-host -replace) — both-volumes-preserved assert` step failed (the defect of #10137). The `git_data_host_replace` job conclusion is `failure`. This is the only rotate dispatch on record (its `Rotate precondition — served store measured empty` step ran and succeeded).
 - Correction to the plan text: the plan says the steps after the assert "have never run to completion". In run `38140050880` the later steps were recorded `success`: `Poll for the git-data boot-completion signal (replace)`, `Load the rotated git-data pin (same-version redeploy)` and `Dispatch summary`. Only the assert step and therefore the job conclusion are red. So the rotate path's boot poll and pin load have run once, on a host that was already created by the apply.
-- Finding (reader reads as satisfied by a plain replace): the d6 reader in `.github/workflows/git-data-cutover.yml` (precheck step, around line 270) stamps `d6_replace_stale` from the first run whose `git_data_host_replace` job concluded `success` AND whose step matching `rotate confirm token` concluded `success`. That step (`Validate dispatch inputs (rotate confirm token)` in `apply-web-platform-infra.yml`, around line 3745) is deliberately unconditional and exits 0 with `rotate confirm: n/a` for any non-rotate target. Run `37846545572` (2026-10-08T21:24:27Z, `apply_target=git-data-host-replace`, log line `rotate confirm: n/a (target 'git-data-host-replace')`) has the job `success`, that step `success`, and sits at position 10 of the 40 runs the reader scans. As coded, the reader would stamp `d6 rotate stamp: run 37846545572` although no rotate has succeeded. This was read from run data and workflow text only; the cutover precheck itself was not executed. This does not change the owner-gated order (the rotate must still be dispatched), but it means the d6 precheck cannot be relied on as the guard against a missing rotate. It belongs on #10137 as a follow-up, not in this PR's scope.
+- Finding, hole 1 (a plain replace satisfies the reader): the d6 reader in `.github/workflows/git-data-cutover.yml` (precheck step, around line 270) stamps `d6_replace_stale` from the first run whose `git_data_host_replace` job concluded `success` AND whose step matching `rotate confirm token` concluded `success`. That step (`Validate dispatch inputs (rotate confirm token)` in `apply-web-platform-infra.yml`, around line 3745) is deliberately unconditional and exits 0 with `rotate confirm: n/a` for any non-rotate target. Run `37846545572` (2026-10-08T21:24:27Z, `apply_target=git-data-host-replace`, log line `rotate confirm: n/a (target 'git-data-host-replace')`) has the job `success`, that step `success`, and is the 11th of the 40 runs the reader scans (0-based index 10 in `gh run list --workflow apply-web-platform-infra.yml --branch main --event workflow_dispatch --limit 40`, re-read 2026-10-12). As coded, the reader would stamp `d6 rotate stamp: run 37846545572` although no rotate has succeeded. This was read from run data and workflow text only; the cutover precheck itself was not executed.
+- Finding, hole 2 (newer failed or plan-only rotate runs are skipped): the reader `continue`s past any run whose job did not conclude `success`, then takes the first older success. A newer FAILED rotate (run `38140050880`, which created the new host and then failed at the assert) is skipped in favour of an older plain-replace success. Separately, a rotate dispatched with `plan_only=true` runs the same job with its apply steps skipped (`if: inputs.plan_only != true`), so the job and the unconditional `rotate confirm token` step both conclude `success` with nothing applied; the reader would stamp it as a completed rotate.
+- Consequence and tracker: this does not change the owner-gated order (the rotate must still be dispatched), but the d6 precheck cannot be relied on as the guard against a missing or failed rotate. The tracker is open issue #10166 ("decision: should the cutover's key-rotation check only accept a real rotate run? (found in PR #10155)"), not #10137: #10137 is the post-apply assert defect and is to be closed by PR #10155, so a finding parked there would be lost. Treat the d6 reader hardening as a hard precondition row for the first real `flip`.
 
 ## Owner-gated remainder (NOT in scope; listed only)
 
 1. `HCLOUD_TOKEN`, then `CF_API_TOKEN_R2`, then `TF_STATE_AWS_*` rotation (#8209).
 2. G2 probes; G1 last.
 3. Windowed prd write credential (#8573, #8609).
-4. Rotate re-dispatch (`apply_target=git-data-host-rotate`, `confirm=ROTATE-GIT-DATA`) only after the #10137 fix merges; the owner names the command.
-5. Flip-then-rollback rehearsal (designed in plan 4.2); `flip`; the wipe (#10138; designed in plan 4.1).
+4. Rotate re-dispatch only after the #10137 fix lands (PR #10155) and #10166 is settled. Workflow `apply-web-platform-infra.yml`, inputs `apply_target=git-data-host-rotate confirm=ROTATE-GIT-DATA` (the job runs in the `infra-privileged` environment). Whether that environment's approval can be given headlessly is UNVERIFIED: it was not tested here, and approval is the owner's action. The owner names the command. A re-dispatch triggers a same-version fleet redeploy (see the plan's review reconciliation).
+5. Flip-then-rollback rehearsal (designed in plan 4.2) and the first real flip: workflow `git-data-cutover.yml`, `mode=flip confirm=FLIP-GIT-DATA`; rollback is `mode=rollback confirm=ROLLBACK-GIT-DATA` (the other modes today are `proof` with `CUTOVER-GIT-DATA`, `unfreeze` with `UNFREEZE-GIT-DATA` plus an optional `lineage`, and `redeploy` with `REDEPLOY-GIT-DATA`). The job runs in the `web-platform-infra-apply` environment; headless approval is UNVERIFIED. The wipe (#10138) has no dispatch string yet: `mode=wipe` and its typed volume-id confirm exist only in the design (plan 4.1), so there is no literal to give until the wipe-build PR lands.
 6. After flip: 7-day soak, ADR-068 to `accepted`, close #6897.
 7. Decision dates: CLO re-ruling 2026-10-24; plaintext-volume retention 2026-11-12 (a second slip returns to the CLO per ADR-239 Amendment 2026-10-12).
 8. Build PRs that follow the designs: wipe body, rollback-rehearsal dispatch, #9943 precheck.
 
-Also remaining, from this report: re-read rows 1.1 to 1.4 at the flip dispatch (the deployed sha is about to change; the heartbeat re-read is the binding one); and a direct read of rule id 1310055 with `SENTRY_ACTIONS_RO_TOKEN` (done by the cutover workflow's own precheck at flip time).
+Also remaining, from this report: re-read rows 1.1 to 1.4 at the flip dispatch (the deployed sha moved during the read, so 1.1 and 1.2 are stale by construction; the heartbeat re-read is the binding one); a direct read of rule id 1310055 with `SENTRY_ACTIONS_RO_TOKEN` (done by the cutover workflow's own precheck at flip time); and #10166 (d6 reader) as a hard precondition row for the first real flip.
+
+## Caveats and disclosed deviations
+
+This report was scoped as read-only with names only. Three reads went beyond that and are disclosed so they are not repeated:
+
+- The Better Stack reads used the unnarrowed `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh ...` form (every `prd_terraform` secret loaded into the reader). Repeat with the narrowed form shown in row 1.1 (`--only-secrets` plus `env -u` for the reads).
+- A probe of `.../alert-rules/1310055/` with the Doppler `SENTRY_ISSUE_RO_TOKEN` returned HTTP 404: the endpoint is outside that token's scope, so it was an out-of-scope credentialed probe and is not evidence (row 1.3). Do not repeat it.
+- The host-key pin value from Doppler `prd` was piped locally into `ssh-keygen -lf -` to compare fingerprints. Nothing was printed except the 8-character fingerprint prefix, but this read the secret value, which is more than "names only". A name-only check, or the loaded-pin fingerprint in Better Stack alone (row 1.2), is the form to repeat.

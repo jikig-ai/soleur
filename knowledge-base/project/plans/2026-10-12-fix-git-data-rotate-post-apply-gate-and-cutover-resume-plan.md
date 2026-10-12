@@ -279,10 +279,12 @@ Three files under `knowledge-base/project/specs/feat-one-shot-git-data-luks-cuto
 **Domains relevant:** Engineering (infrastructure), Legal
 
 ### Engineering
+
 **Status:** reviewed
 **Assessment:** CTO rulings F1-F6 recorded in `decision-challenges.md` (post-apply assert extraction and positive rotate assertion, fail-closed on empty/unknown input, wipe as a `mode=wipe` in the cutover workflow, #9943 as a dedicated precheck script bound to the `prd_terraform` token).
 
 ### Legal
+
 **Status:** reviewed
 **Assessment:** CLO framing for the K1 addendum (wording limits, clo-attestation PROVISIONAL, new file only, non-clean branch triggers a fresh Art. 33 clock) is incorporated in Phase 3. The addendum itself is reviewed and signed by `soleur:legal:clo` after the counts exist.
 
@@ -386,3 +388,38 @@ discoverability_test:
 - Do not print `.change.before`/`.after` (old user_data embeds the old host private key and this lands in a public log).
 - Census output files live outside the repo; the addendum cites them by new filename and hash, never by pasting rows of actors beyond counts and run ids.
 - The `$K1_DIR` census is a long paginated read; run it as a bounded background command with `Monitor`, not a foreground poll.
+
+## Review reconciliation (2026-10-12)
+
+This section is appended after review. The text above is left as written; where it conflicts with this section, this section wins.
+
+### Phase 2 is SUPERSEDED by PR #10155
+
+- Phase 2 (the post-apply gate) and `closes: "#10137, #10067"` no longer apply to this PR. The code change was reverted from this branch (commit `fa58f3388e`); the implementation is preserved at `d2a1d0e766`.
+- Open sibling PR #10155 (`feat-one-shot-10137-rotate-arm-volume-assert`, same author, reviewed, at ship) carries the same fix with the same three required rows. The posture-assert rows and pins were hardened there instead. This PR is now documents and designs only and must NOT say `Closes #10137` or `Closes #10067`; #10155 closes them. AC8 above (PR body carries `Closes #10137`) is withdrawn.
+
+### Stale statements corrected
+
+- "The steps after the assert have never run to completion on the rotate path": wrong. In rotate run `38140050880` the assert step failed, but `Poll for the git-data boot-completion signal (replace)`, `Load the rotated git-data pin (same-version redeploy)` and `Dispatch summary` concluded `success` (`Post-replace readiness note (non-SSH)` was skipped). The "read those steps for rotate-specific assumptions" instruction is therefore partly obsolete.
+- "PRs 10133, 10086, 7390: all OPEN": PRs 10133 and 10086 are MERGED; 7390 is still open.
+- The apply step `Terraform apply (git-data-host -replace) — both-volumes-preserved assert` starts near line 4014 of `apply-web-platform-infra.yml`, not ~3943.
+
+### User-Brand Impact, re-read
+
+- The post-apply gate only DETECTS after the apply: it re-grades the saved plan after `terraform apply` has run, so a wrongly-passing post-apply gate can neither cause nor prevent a destroy. The destroy authority is the plan-time `git_data_host_replace_gate`, which refuses before apply. The real failure mode of the old assert was a wrongly-refusing gate that turned an already-applied rotate red, which is #10137.
+- The K1 non-main run census addendum (`knowledge-base/legal/audits/2026-10-12-8209-k1-nonmain-run-census-addendum.md`) is a posture-bearing artifact. It stays `aggregate pattern` (an attribution-only result, internal record, no user data path) and its "K1 CLEAN" label is an attribution result, not a no-incident finding.
+- `single-user incident` applies to three later PRs, not to this documents-only PR: the rollback-rehearsal build PR (its flag-on window is a real production flip), the first real `flip`, and the wipe-build PR. Each must carry CPO sign-off.
+- Hard precondition row for the first real flip: #10166 (the d6 reader accepts a plain replace, skips a newer failed rotate, and accepts a `plan_only=true` rotate). Until it is settled the human gate is the only control that a rotate really completed.
+- Blast radius of a rotate re-dispatch: it triggers a same-version fleet redeploy (web-1 restart about 75 s per the runbook), which the User-Brand text above does not mention.
+
+### Pre-existing P1 hazard (data-integrity review): rotate precondition can destroy the only copy
+
+The rotate precondition `Rotate precondition — served store measured empty` reads only the latest `stage=boot_complete` row for the git-data host: no time bound, not tied to the current server creation, and it does not read `GIT_DATA_STORE_ENABLED`, the `GIT_DATA_LUKS_CUTOVER_AT` stamp or the freeze sentinel. After the first flip, users replicate repositories to git-data without a reboot, so the row still says `served_repos=0`; a `git-data-host-rotate` dispatch would pass that precondition and the plan-time gate (exact delete+create) and destroy the LUKS volume while the plaintext volume is empty by construction, losing every replicated repository. It is latent today (flag false, flip not done).
+
+Precondition for ever re-dispatching rotate: never after the flip; require the flag false AND the stamp absent (or a recorded rollback newer than the stamp) AND the boot row at or after the current server's creation. The runbook "D6 rotate" section must say "never after the flip". This needs its own tracked issue; it is NOT filed here.
+
+### To file
+
+- The rotate-precondition hazard above (own tracked issue; do not widen #10155 or #10166).
+- Rule id and status printed by `scripts/sentry-alert-live-fidelity.sh`, so rule 1310055 can be read headlessly.
+- A mode-aware readiness note in `apply-web-platform-infra.yml`: under rotate the LUKS volume is replaced, but `Post-replace readiness note` still says "both volumes preserved".
