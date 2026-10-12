@@ -2923,7 +2923,12 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler soleur/prd_terraform). NO SUBSTITUTE: the property is
   // the per-repository marker row web-1's probe emits with the pin verdict (journald -> vector Source 4 -> the
   // Logs warehouse), which has no unauthenticated read path; the host itself is no-SSH. Genuine.
-  const BASELINE_DECLARED_PROBES = 61;
+  // #9860 (2026-10-11): +1 (61 -> 62) for `2026-10-11-fix-agent-sandbox-proc-mask-systempaths-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the event is read with a Sentry API token (Doppler prd); the event store has no anonymous query
+  // form. NO SUBSTITUTE: the tag and user shape is pinned offline by cc-dispatcher-bash-sandbox-sentry-path.test.ts,
+  // but that verifies code, not the deployed event stream. Genuine.
+  const BASELINE_DECLARED_PROBES = 62;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
