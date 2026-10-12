@@ -37,7 +37,7 @@ Phase 6 **full-replaces** the body, so fold the artifact into the generated body
    here, in the main context, so a wrong assumption does not ride through `work` and `review`.
 2. **ship Phase 5.5:** `--branch` (the artifact check; it also looks under `specs/archive/` for this branch).
 3. **ship Phase 6, right after the `gh pr edit` that writes the final body and before `gh pr ready`:**
-   `b=$(mktemp -t pr-body.XXXXXXXX); if gh pr view PR_NUMBER --json body --jq .body > "$b"; then bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/technical-ruling-gate.sh" --pr-body "$b"; rc=$?; else rc=2; fi; rm -f "$b"; echo "gate-rc=$rc"`
+   `b=$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)" pr-body.XXXXXXXX); if gh pr view PR_NUMBER --json body --jq .body > "$b"; then bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/technical-ruling-gate.sh" --pr-body "$b"; rc=$?; else rc=2; fi; rm -f "$b"; echo "gate-rc=$rc"`
    Read the printed `gate-rc=`; no `gate-rc=0` line means do not proceed. Exit 0: go on to `gh pr ready`. Exit 1: remedy item 4 below, then
    `gh pr edit` and re-run. Exit 2 (the fetch failed, the body is empty or whitespace-only, an unclosed fence, or an unreadable file):
    fix the fetch and re-run (at most three tries, then stop with the PR draft); never `gh pr ready` past it.
