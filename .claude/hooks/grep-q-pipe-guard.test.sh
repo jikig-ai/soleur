@@ -1236,7 +1236,7 @@ BEGIN {
   SRCRE = "^[ \t]*(\\.|source)[ \t]+\"?[^\" \t;]+"
   TOKRE = "[A-Za-z0-9_.-]+[.](" exts ")([^A-Za-z0-9_.-]|$)"   # R6: one list (-v exts=a|b|c from PJ_EXTS) feeds the non-test test, this pattern and the listing pathspec
   NTEXT = "[.](" exts ")$"
-  nx = split(exts, xl, "|"); for (i = 1; i <= nx; i++) xdot[i] = "." xl[i]
+  XRE = "[.](" exts ")([^A-Za-z0-9_.-]|$)"
   HELPCALL = "^[ \t]*(make_stub|write_stub|stub_cmd|mkstub|stub)[ \t]+[^<>;|&)]*"   # R5a: a stub-helper call at the start of a statement, every argument
   FORRE = "^[ \t]*for[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]+in[ \t]+"           # R5b: a loop over verb names
   sq = sprintf("%c", 39)
@@ -1302,7 +1302,7 @@ function site(l,   s, m, w, tl) {
   if (index(l, "pipefail")) pf = 1
   if (isy && l ~ /shell:[ \t]*bash/) pf = 1
   if (!index(l, "|")) return
-  o = (l !~ UNOBS)
+  o = !(index(l, "||") && l ~ UNOBS)
   anybar(l)
   if (index(l, "printf") || index(l, "echo") || index(l, "cat")) {
     s = l
@@ -1337,7 +1337,8 @@ function loopchk(line,   k, i, nw2, wa, w) {
 function feed(raw,   t, s, q, nd, ns) {
   if (hold) { t = raw; sub(/^[ \t]+/, "", t); cur = cur " " t; hn++ } else { cur = raw; hn = 0 }
   hold = 0
-  if (hn < JOINCAP && (index(cur, "\\") || index(cur, "|")) && cur !~ /^[ \t]*#/) {
+  t = substr(cur, length(cur), 1)
+  if (hn < JOINCAP && (t == "\\" || t == "|" || t == " " || t == "\t" || t == "\r") && cur !~ /^[ \t]*#/) {   # only a line whose last character can end in a backslash or a bar is looked at
     s = cur; sub(/[ \t\r]+$/, "", s)
     if (s ~ /\\$/ && s !~ /\\\\$/) { cur = substr(s, 1, length(s) - 1); hold = 1 }
     else if (s ~ /\|$/ && s !~ /\|\|$/ && s !~ YBLOCK) {
@@ -1384,11 +1385,13 @@ FNR == 1 {
   if (ist) tl[++nt] = file
 }
 {
-  if (isnt) feed($0)
+  # a line with none of these can change nothing in the site scan, so only these (and the continuation of a joined line) reach it
+  if (isnt && (hold || index($0, "|") || index($0, "\\") || index($0, "pipefail") || (isy && index($0, "shell:")))) feed($0)
   if (ist && lact > 0) loopchk($0)
-  if ($0 ~ /^[ \t]*#/) next
+  match($0, /^[ \t]*/); c = substr($0, RLENGTH + 1, 1)   # the first character of the code decides which of the statement-start rules below can apply
+  if (c == "#") next
   l = $0
-  sub(/::(error|warning|notice)::.*$/, "", l)   # physical lines: the pipefail token of a test file (the sourcer of a library may be one), and the stubs below
+  if (index(l, "::")) sub(/::(error|warning|notice)::.*$/, "", l)   # physical lines: the pipefail token of a test file (the sourcer of a library may be one), and the stubs below
   if (!isnt && index(l, "pipefail")) pf = 1
   if (iss && index(l, "()")) {
     if (l ~ FNRE) { m = l; sub(/^[ \t]*(function[ \t]+)?/, "", m); sub(/[ \t]*\(\).*$/, "", m); addfp(file, m) }
@@ -1400,7 +1403,7 @@ FNR == 1 {
       sub(/["; \t]+$/, "", m); sub(/^.*\//, "", m); addfp(file, m)   # the name, without the quote, the semicolon or the blank that ended the match (R7: `> "$d/jq"; chmod` was recorded as jq";)
     }
   }
-  if (ist && index(l, "for") && match(l, FORRE)) {   # R5b: remember the loop; its next lines are read by loopchk
+  if (ist && c == "f" && match(l, FORRE)) {   # R5b: remember the loop; its next lines are read by loopchk
     v = substr(l, RSTART, RLENGTH); rest = substr(l, RSTART + RLENGTH)
     sub(/^[ \t]*for[ \t]+/, "", v); sub(/[ \t]+in[ \t]+$/, "", v)
     if (match(rest, /;[ \t]*do([^A-Za-z0-9_]|$)/)) rest = substr(rest, 1, RSTART - 1)
@@ -1411,8 +1414,7 @@ FNR == 1 {
     lre2[nlp] = "^[ \t]*(make_stub|write_stub|stub_cmd|mkstub|stub)([^A-Za-z0-9_]|$)[^|]*\\$" v "([^A-Za-z0-9_]|$)"
   }
   if (ist) {
-    xf = 0; for (xi = 1; xi <= nx; xi++) if (index(l, xdot[xi])) { xf = 1; break }
-    if (xf) {
+    if (index(l, ".") && l ~ XRE) {
       s = l
       while (match(s, TOKRE)) {
         m = substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH)
@@ -1437,7 +1439,7 @@ FNR == 1 {
       }
     }
   }
-  if (l ~ /^[ \t]*(\.|source)[ \t]/ && match(l, SRCRE)) {
+  if ((c == "." || c == "s") && l ~ /^[ \t]*(\.|source)[ \t]/ && match(l, SRCRE)) {
     m = substr(l, RSTART, RLENGTH); sub(/^[ \t]*(\.|source)[ \t]+"?/, "", m); sub(/"$/, "", m); m = base(m)
     nsb[m]++; sb[m, nsb[m]] = file
     if (ist) { nref[file]++; ref[file, nref[file]] = m }
@@ -1456,12 +1458,12 @@ END {
   }
 }'
 # The ONE extension list. The listing pathspec (pj_join_pairs and the fixture runner), the non-test test and the owner-token pattern all
-# read it, so no arm can widen one of the three and not the others. The awk gets it as `-v exts=a|b|c` (pj_exts_re).
+# read it, so no arm can widen one of the three and not the others. The awk gets it as `-v exts=a|b|c` (PJ_EXTS_RE).
 PJ_EXTS='sh bash yml yaml tf tftpl template service tmpl'
-pj_exts_re() { local e out=""; for e in $PJ_EXTS; do out+="${out:+|}$e"; done; printf '%s' "$out"; }
+PJ_EXTS_RE="${PJ_EXTS// /|}"
 # pj_derive <listing file> <files...> -> "<test file>\t<verb>\t<non-test file>" per derived pair x producer, unsorted. The ONE call of the derivation:
 # the real run and every derivation fixture go through it, so a fixture exercises the same program the tree does.
-pj_derive() { local listing="$1"; shift; LC_ALL=C awk -v exts="$(pj_exts_re)" "$PJ_AWK" "$listing" "$@"; }
+pj_derive() { local listing="$1"; shift; LC_ALL=C awk -v exts="$PJ_EXTS_RE" "$PJ_AWK" "$listing" "$@"; }
 # pj_join_pairs -> "<test file>\t<verb>\t<non-test file>" per derived pair x producer, unsorted. Tracked files only, so an untracked
 # scratch file cannot move the set. rc 0 whatever it derives; the caller treats an empty result as UNRESOLVED. One awk run over one
 # `git ls-files` listing, one token set per test file; the cheap `index` tests in front of each regex keep it to a few seconds (it reads about 42 MB;
@@ -1480,11 +1482,14 @@ pj_pair_set() { LC_ALL=C awk -F'\t' '{ print $1 "|" $2 }' | LC_ALL=C sort -u; }
 # pj_trim <variable name>: strip leading and trailing blanks from the named variable.
 pj_trim() { local __t="${!1}"; __t="${__t#"${__t%%[![:space:]]*}"}"; __t="${__t%"${__t##*[![:space:]]}"}"; printf -v "$1" '%s' "$__t"; }
 # pj_sourced <test file> -> the tracked .sh files it sources, one hop, by unique basename (the derivation's rule: one awk, one index of PJ_ALL).
+# PJ_UNIQ_SH: the tracked .sh files whose basename is unique among ALL tracked files (the derivation's one-hop sourcing rule), built once so that pj_sourced reads
+# a short list instead of the whole listing on each call.
+PJ_UNIQ_SH="$(printf '%s\n' "$PJ_ALL" | awk '{ b = $0; sub(/^.*\//, "", b); bc[b]++; bp[b] = $0 } END { for (b in bc) if (bc[b] == 1 && bp[b] ~ /\.sh$/) print bp[b] }')"
 pj_sourced() {
-  awk -v self="$1" 'NR == FNR { b = $0; sub(/^.*\//, "", b); bc[b]++; bp[b] = $0; next }
+  awk -v self="$1" 'NR == FNR { b = $0; sub(/^.*\//, "", b); bu[b] = $0; next }
     /^[ \t]*#/ { next }
     match($0, /^[ \t]*(\.|source)[ \t]+"?[^" \t;]+/) { m = substr($0, RSTART, RLENGTH); sub(/^[ \t]*(\.|source)[ \t]+"?/, "", m); sub(/^.*\//, "", m)
-      if (bc[m] == 1 && bp[m] ~ /\.sh$/ && bp[m] != self) print bp[m] }' <(printf '%s\n' "$PJ_ALL") "$1"
+      if ((m in bu) && bu[m] != self) print bu[m] }' <(printf '%s\n' "$PJ_UNIQ_SH") "$1"
 }
 # pj_defs <file> <verb> <token> -> one line per stub definition of the verb in the file: `ok <file>:<line>` when a drain keyed on the
 # token (any drain when the token is *; the token may sit on an earlier line of the window than the drain) sits in the definition's
@@ -1732,14 +1737,15 @@ pj_split() { local s="$1"; _pj_f=(); while [[ "$s" == *' @@ '* ]]; do _pj_f+=("$
 pj_derive_dir() {
   local d="$1" f e
   local -a sel=()
+  : > "$d.lst"
   for f in "$d"/*; do
-    f="${f##*/}"
+    f="${f##*/}"; printf '%s\n' "$f" >> "$d.lst"
     for e in $PJ_EXTS; do
       if [[ "$f" == *."$e" ]]; then sel+=("$f"); break; fi
     done
   done
   (( ${#sel[@]} > 0 )) || return 0
-  ( cd "$d" && pj_derive <(printf '%s\n' *) "${sel[@]}" )
+  ( cd "$d" && pj_derive "$d.lst" "${sel[@]}" )
 }
 pj_dfail=""; pj_dy=0
 mkdir -p "$probe/pjd"
