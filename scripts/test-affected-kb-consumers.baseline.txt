@@ -125,13 +125,11 @@ scripts/followthrough-varq-ban	knowledge-base/engineering/operations/runbooks/be
 scripts/followthrough-varq-ban	knowledge-base/project
 scripts/followthrough-varq-ban	knowledge-base/project/specs
 scripts/git-data-reboot-evidence-landed-8210	knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md
-scripts/guard-vacuity-floor	knowledge-base
 scripts/guard-vacuity-floor	knowledge-base/engineering/architecture/diagrams/model.c4
 scripts/guard-vacuity-floor	knowledge-base/engineering/operations/runbooks/cloudflare-pages-cutover.md
 scripts/guard-vacuity-floor	knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md
 scripts/guard-vacuity-floor	knowledge-base/engineering/operations/runbooks/web-host-reboot.md
 scripts/guard-vacuity-floor	knowledge-base/project/learnings/2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md
-scripts/guard-vacuity-floor	knowledge-base/project/specs/archive
 scripts/inngest-luks-property-8296	knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md
 scripts/inngest-luks-property-8296	knowledge-base/engineering/operations/runbooks/inngest-server.md
 scripts/inngest-probe-heartbeat-feeder	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
@@ -144,12 +142,9 @@ scripts/lint-agents-compound-sync-unit	knowledge-base/engineering/operations/run
 scripts/lint-agents-compound-sync-unit	knowledge-base/project
 scripts/lint-agents-compound-sync-unit	knowledge-base/project/learnings
 scripts/lint-agents-compound-sync-unit	knowledge-base/project/promotion-config.yml
-scripts/lint-orphan-test-suites	knowledge-base
-scripts/lint-orphan-test-suites	knowledge-base/engineering/architecture/diagrams
 scripts/lint-orphan-test-suites	knowledge-base/engineering/operations/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md
 scripts/lint-orphan-test-suites	knowledge-base/legal/article-30-2-register.md
 scripts/lint-orphan-test-suites	knowledge-base/legal/article-30-register.md
-scripts/lint-orphan-test-suites	knowledge-base/legal/audits
 scripts/lint-orphan-test-suites	knowledge-base/legal/audits/2026-05-12-gdpr-gate-plan-phase-2-7-outcome.md
 scripts/lint-orphan-test-suites	knowledge-base/legal/audits/2026-05-17-sentry-ingest-window-auth-users-audit.md
 scripts/lint-orphan-test-suites	knowledge-base/legal/audits/2026-06-counsel-review-5103.md
@@ -183,8 +178,6 @@ scripts/lint-orphan-test-suites	knowledge-base/legal/audits/2026-10-counsel-revi
 scripts/lint-orphan-test-suites	knowledge-base/legal/breach-register.md
 scripts/lint-orphan-test-suites	knowledge-base/legal/ccla-register.md
 scripts/lint-orphan-test-suites	knowledge-base/legal/compliance-posture.md
-scripts/lint-orphan-test-suites	knowledge-base/project
-scripts/lint-orphan-test-suites	knowledge-base/project/learnings
 scripts/lint-skill-body-budget	knowledge-base/engineering/operations/runbooks
 scripts/measure-plan-sharp-edges-turns	knowledge-base/project/plans
 scripts/pre-push-ratchet-lane	knowledge-base

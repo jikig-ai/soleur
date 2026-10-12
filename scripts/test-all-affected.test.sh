@@ -238,7 +238,10 @@ s = s.replace(old, old + '''  # SANDBOX corpus trim (#8322 suite): only the labe
     scripts/lint-trap-tempfile-ownership|\\
     scripts/lint-shell-capture-exit-live|\\
     scripts/lint-shell-trace-credential-refusal|\\
-    scripts/test-affected-kb-consumers) : ;;
+    scripts/test-affected-kb-consumers|\\
+    scripts/guard-vacuity-floor|\\
+    scripts/lint-orphan-test-suites|\\
+    scripts/lib/repo-write-boundary.test.sh) : ;;
     *) return 0 ;;
   esac
 ''', 1)
@@ -2619,7 +2622,7 @@ fi
 # ~150. `--print-selection` runs the SAME pre-pass a real run applies and prints
 # what THIS diff selects, without running a suite.
 #
-# p1: rows and summary for a forced diff. Sandbox corpus = 6 runnable labels.
+# p1: rows and summary for a forced diff. Sandbox corpus = 16 runnable labels.
 cases=$((cases + 1))
 SANDBOX_LIB=with-lib run_arm \
   'SANDBOX_DIFF_NAMES=test/x-community.test.ts' \
@@ -2628,9 +2631,9 @@ _rc=$ARM_RC
 _sel_yes=$(awk -F'\t' '$1=="AFFECTED_SELECTED" && $3=="1"{print $2}' <<<"$ARM_OUT" | sort | tr '\n' ' ')
 _sum=$(awk -F'\t|[[:space:]]' '$1=="AFFECTED_SUMMARY"' <<<"$ARM_OUT" | head -1)
 if [[ "$_rc" == "0" ]] \
-  && [[ "$_sel_yes" == "plugins/soleur/test/operator-ack-guard.test.sh plugins/soleur/test/operator-agent-runnable.test.sh plugins/soleur/test/operator-script.test.sh scripts/lint-dual-lockfile scripts/lint-shell-capture-exit-live scripts/lint-shell-trace-credential-refusal scripts/lint-trap-tempfile-ownership test/x-community " ]] \
+  && [[ "$_sel_yes" == "plugins/soleur/test/operator-ack-guard.test.sh plugins/soleur/test/operator-agent-runnable.test.sh plugins/soleur/test/operator-script.test.sh scripts/guard-vacuity-floor scripts/lint-dual-lockfile scripts/lint-orphan-test-suites scripts/lint-shell-capture-exit-live scripts/lint-shell-trace-credential-refusal scripts/lint-trap-tempfile-ownership test/x-community " ]] \
   && grep -qF $'AFFECTED_SELECTED\tplugins/soleur\t0' <<<"$ARM_OUT" \
-  && grep -qF 'selected=8 of=13 always_on=1 edge=7 fallback=none' <<<"$_sum" \
+  && grep -qF 'selected=10 of=16 always_on=1 edge=9 fallback=none' <<<"$_sum" \
   && [[ "$(ran_count)" == "0" ]]; then
   pass "p1: --print-selection prints the exact selected set + summary and runs nothing"
 else
@@ -2672,7 +2675,7 @@ SANDBOX_LIB=with-lib run_arm \
   'SANDBOX_DIFF_NAMES=test/x-community.test.ts' \
   -- --affected
 if [[ "$ARM_RC" == "0" ]] && grep -qF 'AFFECTED_SUMMARY' <<<"$ARM_OUT" \
-  && grep -qF 'selected=8 of=13' <<<"$ARM_OUT"; then
+  && grep -qF 'selected=10 of=16' <<<"$ARM_OUT"; then
   pass "p4: a real --affected run prints the AFFECTED_SUMMARY line"
 else
   fail "p4: rc=$ARM_RC summary lines=$(grep -c AFFECTED_SUMMARY <<<"$ARM_OUT")"
@@ -2971,17 +2974,111 @@ else
   fail "tg5: rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
 fi
 
-# The receipt carries the minted edge verbatim (real index, print arm).
+# The receipt carries the minted edge verbatim (real index, print arm). The
+# family is six since #9969: the five tg walkers plus repo-write-boundary.test.sh,
+# whose new declared array carries the same ^glob:knowledge-base/**.sh edge.
 # The probe and needle are COMPOSED — a literal `knowledge-base/<path>` here is a
 # fixture the kb-consumers oracle would otherwise charge to this suite as a read.
 cases=$((cases + 1))
 _tg_rcpt_n=$(cd "$REPO_ROOT" && env -u CI -u TEST_GROUP SOLEUR_DISABLE_SESSION_STATE=1 timeout 300 \
   bash "$RUNNER" --print-selection --paths="knowledge""-base/project/specs/foo.md" all 2>/dev/null \
   | awk -F'\t' '$1=="AFFECTED_SELECTED" && index($5, "^glob:knowledge" "-base/**.sh") && $3=="0" {n++} END{print n+0}')
-if [[ "$_tg_rcpt_n" == "5" ]]; then
-  pass "tg6: the five glob: walkers' kb-.md AFFECTED_SELECTED rows carry the ^glob: edge, selected=0"
+if [[ "$_tg_rcpt_n" == "6" ]]; then
+  pass "tg6: the six kb-.sh glob: walkers' kb-.md AFFECTED_SELECTED rows carry the ^glob: edge, selected=0"
 else
-  fail "tg6: ^glob: sel=0 rows: ${_tg_rcpt_n} (want 5)"
+  fail "tg6: ^glob: sel=0 rows: ${_tg_rcpt_n} (want 6)"
+fi
+
+# ---- th rows (#9969): whole-tree corpus suites' `glob:` edges ---------------
+# guard-vacuity-floor and lint-orphan-test-suites scan `git ls-files '*.test.sh'`
+# whole-tree; repo-write-boundary.test.sh scans whole-tree `*.sh` content-keyed
+# on `test-all\.sh`. Their declared edges enumerated only the roots holding
+# suites today, so a corpus file under an unlisted root (knowledge-base/, bin/,
+# infra/, docs/, the dot-dirs) was scanned but never selected — the diff moved
+# the verdict and the local gate stayed silent. The `glob:` entries these rows
+# pin live in scripts/lib/test-affected-paths.sh; the labels sit in the sandbox
+# keep-list, so "absent from RAN" is a real decline, never a trim artifact.
+_TH_TEST_SH_PAIR=(
+  'scripts/guard-vacuity-floor'
+  'scripts/lint-orphan-test-suites'
+)
+_TH_ALL_THREE=(
+  'scripts/guard-vacuity-floor'
+  'scripts/lint-orphan-test-suites'
+  'scripts/lib/repo-write-boundary.test.sh'
+)
+_th_all_three_ran() { local _l; for _l in "${_TH_ALL_THREE[@]}"; do ran_exact "$_l" || return 1; done; }
+_th_test_sh_pair_ran() { local _l; for _l in "${_TH_TEST_SH_PAIR[@]}"; do ran_exact "$_l" || return 1; done; }
+_th_none_ran() { local _l; for _l in "${_TH_ALL_THREE[@]}"; do ran_exact "$_l" && return 1; done; return 0; }
+
+# th1 — a corpus-extension file under a previously-unlisted root selects all
+#       three: x.test.sh matches the **.test.sh tails AND the rwb **.sh tail.
+cases=$((cases + 1))
+SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_DIFF_NAMES=knowledge-base/x.test.sh' \
+  -- --affected
+_rc=$ARM_RC
+if [[ "$_rc" == "0" ]] && _th_all_three_ran; then
+  pass "th1: knowledge-base/x.test.sh selects all three whole-tree corpus suites"
+else
+  fail "th1: rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
+fi
+
+# th2 — a non-corpus-extension .sh selects ONLY repo-write-boundary.test.sh of
+#       the three: the **.test.sh tails decline, proving the glob: kind narrows
+#       rather than relocating the over-coverage the dir prefixes had.
+cases=$((cases + 1))
+SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_DIFF_NAMES=knowledge-base/x.sh' \
+  -- --affected
+_rc=$ARM_RC
+if [[ "$_rc" == "0" ]] && ran_exact 'scripts/lib/repo-write-boundary.test.sh' \
+  && ! ran_exact 'scripts/guard-vacuity-floor' \
+  && ! ran_exact 'scripts/lint-orphan-test-suites'; then
+  pass "th2: knowledge-base/x.sh selects only repo-write-boundary.test.sh of the three"
+else
+  fail "th2: rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
+fi
+
+# th3 — a non-corpus extension under an unlisted root selects NONE of the three.
+cases=$((cases + 1))
+SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_DIFF_NAMES=knowledge-base/x.md' \
+  -- --affected
+_rc=$ARM_RC
+if [[ "$_rc" == "0" ]] && _th_none_ran; then
+  pass "th3: knowledge-base/x.md selects none of the three corpus suites"
+else
+  fail "th3: rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
+fi
+
+# th4 — every previously-unlisted root with a *.test.sh selects the *.test.sh
+#       pair (must-PASS inputs beyond the canonical kb path — `*` crosses `/`,
+#       so infra/a/b.test.sh and the nested kb path exercise depth too).
+for _sandbox_probe in 'bin/x.test.sh' 'infra/a/b.test.sh' 'docs/x.test.sh' \
+  'test/x.test.sh' 'tests/x.test.sh' 'knowledge-base/a/b/c.test.sh'; do
+  cases=$((cases + 1))
+  SANDBOX_LIB=with-lib run_arm \
+    "SANDBOX_DIFF_NAMES=${_sandbox_probe}" \
+    -- --affected
+  _rc=$ARM_RC
+  if [[ "$_rc" == "0" ]] && _th_test_sh_pair_ran; then
+    pass "th4: ${_sandbox_probe} selects the *.test.sh corpus pair"
+  else
+    fail "th4 (${_sandbox_probe}): rc=$_rc — $(awk -F'\t' '$1=="RAN"{print $2}' <<<"$ARM_RECORD" | tr '\n' ' ')"
+  fi
+done
+
+# th5 — the new declared array moves the suite's receipt from edge:derived to
+#       edge:declared (the class pin; th2/th1 already pin its selection).
+cases=$((cases + 1))
+_th5_class=$(cd "$REPO_ROOT" && env -u CI -u TEST_GROUP SOLEUR_DISABLE_SESSION_STATE=1 timeout 300 \
+  bash "$RUNNER" --print-affected-set 2>/dev/null \
+  | awk -F'\t' '$1=="AFFECTED_CLASS" && $2=="scripts/lib/repo-write-boundary.test.sh" {print $3}')
+if [[ "$_th5_class" == "edge:declared" ]]; then
+  pass "th5: scripts/lib/repo-write-boundary.test.sh receipts edge:declared (was edge:derived)"
+else
+  fail "th5: AFFECTED_CLASS for repo-write-boundary.test.sh = '${_th5_class:-<absent>}' (want edge:declared)"
 fi
 
 echo ""
@@ -2990,7 +3087,7 @@ if (( PASS + FAIL != cases )); then
   echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
   exit 2
 fi
-MIN_CASES=115
+MIN_CASES=125
 if (( cases < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran — below the $MIN_CASES floor; a row block went missing" >&2
   exit 2
