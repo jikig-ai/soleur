@@ -47,9 +47,8 @@ their export did not complete.
    with the same salt:
 
    ```bash
-   echo -n "<user-id>" | \
-     openssl dgst -sha256 -hmac "$SOLEUR_SENTRY_PII_SALT" | \
-     awk '{print $2}'
+   printf '%s' "<user-id>" | \
+     HMAC_KEY="$SOLEUR_SENTRY_PII_SALT" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())'; echo
    ```
 
    For the database side of the same window — a Postgres error or a PostgREST

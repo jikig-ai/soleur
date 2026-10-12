@@ -215,6 +215,75 @@ else
   red "FAIL: TS13 expected 'no records for PR #4242' + 'tombstone <' hint; got:"; red "$out"; fail=1
 fi
 
+# ── xtrace refusal (#7797 / #10089, Guard 4) ───────────────────────────────
+# `bash -x` with the R2 pair in the environment would print the secret on the
+# `+ AWS_SECRET_ACCESS_KEY=...` trace line of aws_exec. The script must refuse
+# (rc 78) as its first act, before any aws call, and print no value.
+XTRACE_SECRET="sentinel-r2-secret-$$-do-not-print"
+XTRACE_KEYID="sentinel-r2-keyid-$$-do-not-print"
+mk_aws_stub '{"schema_version":"1.0","actor":{"login":"carol"},"pr_of_record":{"number":4242}}'
+# Wrap the stub so every invocation leaves a line: "before any aws call" is checkable.
+mv "$work/aws" "$work/aws.real"
+cat > "$work/aws" <<EOF
+#!/usr/bin/env bash
+echo called >> "$work/aws.calls"
+exec "$work/aws.real" "\$@"
+EOF
+chmod +x "$work/aws"
+: > "$work/aws.calls"
+
+run_traced() { # <env-assignment>... ; runs `bash -x` with the given extra env
+  env PATH="$work:$PATH" \
+    R2_CLA_EVIDENCE_BUCKET=soleur-cla-evidence \
+    R2_CLA_EVIDENCE_ENDPOINT=https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com \
+    "$@" bash -x "$SUT" by-pr 4242
+}
+
+out=$(run_traced R2_CLA_EVIDENCE_ACCESS_KEY_ID="$XTRACE_KEYID" R2_CLA_EVIDENCE_SECRET="$XTRACE_SECRET" 2>&1) && rc=0 || rc=$?
+if [[ "$rc" -eq 78 ]] && grep -q 'refusing to trace with a live credential set' <<<"$out" \
+   && ! grep -qF "$XTRACE_SECRET" <<<"$out" && ! grep -qF "$XTRACE_KEYID" <<<"$out" \
+   && [[ ! -s "$work/aws.calls" ]]; then
+  green "PASS: XT1 bash -x with R2_CLA_EVIDENCE_SECRET set -> rc 78, value-free, no aws call"
+else
+  red "FAIL: XT1 expected rc 78 + refusal line + no value + no aws call; got rc=$rc"
+  red "$(printf '%s' "$out" | sed "s/$XTRACE_SECRET/<SECRET>/g; s/$XTRACE_KEYID/<KEYID>/g")"
+  fail=1
+fi
+
+# XT2: the other credential name the lint requires the guard to cover.
+: > "$work/aws.calls"
+out=$(run_traced AWS_SECRET_ACCESS_KEY="$XTRACE_SECRET" 2>&1) && rc=0 || rc=$?
+if [[ "$rc" -eq 78 ]] && ! grep -qF "$XTRACE_SECRET" <<<"$out" && [[ ! -s "$work/aws.calls" ]]; then
+  green "PASS: XT2 bash -x with AWS_SECRET_ACCESS_KEY set -> rc 78, value-free"
+else
+  red "FAIL: XT2 expected rc 78 + no value + no aws call; got rc=$rc"; fail=1
+fi
+
+# XT3 (must-pass): the same argv WITHOUT -x runs to rc 0 on a happy-path fixture
+# that differs from the canonical one (a different actor), so a refusal that
+# fired unconditionally would not read green.
+: > "$work/aws.calls"
+out=$(env PATH="$work:$PATH" \
+  R2_CLA_EVIDENCE_ACCESS_KEY_ID="$XTRACE_KEYID" R2_CLA_EVIDENCE_SECRET="$XTRACE_SECRET" \
+  R2_CLA_EVIDENCE_BUCKET=soleur-cla-evidence \
+  R2_CLA_EVIDENCE_ENDPOINT=https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com \
+  bash "$SUT" by-pr 4242 2>&1) && rc=0 || rc=$?
+if [[ "$rc" -eq 0 ]] && grep -q '"login": "carol"' <<<"$out" && [[ -s "$work/aws.calls" ]]; then
+  green "PASS: XT3 same argv without -x, pair set -> rc 0 and the stub aws was called"
+else
+  red "FAIL: XT3 expected rc 0 + carol record + aws called; got rc=$rc"; red "$out"; fail=1
+fi
+
+# XT4 (must-pass, bites an unconditional refusal): traced but with NO pair in the
+# environment, the usage error still runs (rc 64), because there is nothing to leak.
+out=$(env -u AWS_SECRET_ACCESS_KEY -u R2_CLA_EVIDENCE_ACCESS_KEY_ID -u R2_CLA_EVIDENCE_SECRET \
+  PATH="$work:$PATH" bash -x "$SUT" 2>&1) && rc=0 || rc=$?
+if [[ "$rc" -eq 64 ]] && ! grep -q 'refusing to trace' <<<"$out"; then
+  green "PASS: XT4 bash -x with the pair unset -> usage rc 64, no refusal"
+else
+  red "FAIL: XT4 expected rc 64 and no refusal with the pair unset; got rc=$rc"; fail=1
+fi
+
 if [[ "$fail" -eq 0 ]]; then
   green "ALL Phase 7 inspect.test.sh tests passed."
 fi
