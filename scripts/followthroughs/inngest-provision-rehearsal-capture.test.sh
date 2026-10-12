@@ -300,13 +300,42 @@ run "phase-a PASS: the needle text inside a non-systemd (webhook) row is not a L
 
 # ── #9786: `stage=unpointed_raw_refused` on a rehearsal host is a VIOLATION in every mode ──
 # The rehearsal host is the one place the unpointed arm is allowed to format; the refusal there means the
-# allowlist and the rehearsal config drifted apart. The row carries the stage the template sets before the guard.
+# allowlist and the rehearsal config drifted apart. The row is the luks_emit shape the template really writes
+# (stage=<name> rc=<n> blkid_type=<t> ... — a blank device reads BLK_TYPE empty, which luks_err emits as
+# `unknown`). One arm per mode: the check is wired at three call sites and each needs its own proof.
+REFUSED_ROW="SOLEUR_INNGEST_LUKS_STAGE stage=unpointed_raw_refused rc=1 blkid_type=unknown expect_luks=false detail=FATAL \"host\":\"${HOST}\""
+rows "$TMP/r-unprefused-a.json" "$NOW" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-unit-armed detail=iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=1 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=2 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=private_nic_timeout detail=boot=deadbee1.waited_s=150 \"host\":\"${HOST}\"" \
+  "$REFUSED_ROW"
+run "phase-a FAIL: a stage=unpointed_raw_refused row is a violation" 1 \
+  "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-unprefused-a.json" -- "${BASE_ARGS[@]}" --mode phase-a
+
 rows "$TMP/r-unprefused-b.json" "$NOW" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=provision-unit-armed detail=iid=abc123 \"host\":\"${HOST}\"" \
   "SOLEUR_INNGEST_BOOT_STAGE stage=bootstrap-done detail=iid=abc123 \"host\":\"${HOST}\"" \
-  "SOLEUR_INNGEST_LUKS_STAGE stage=unpointed_raw_refused rc=1 blkid_type=empty expect_luks=false detail=FATAL \"host\":\"${HOST}\""
+  "$REFUSED_ROW"
 run "phase-b FAIL: a stage=unpointed_raw_refused row is a violation even beside bootstrap-done" 1 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-unprefused-b.json" -- "${BASE_ARGS[@]}" --mode phase-b
+
+rows "$TMP/r-unprefused-post.json" "$NOW" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=bs-token-restaged detail=ok=1 \"host\":\"${HOST}\"" \
+  "$REFUSED_ROW"
+run "post-reboot FAIL: a stage=unpointed_raw_refused row after the boundary is a violation" 1 \
+  "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-unprefused-post.json" -- "${BASE_ARGS[@]}" --mode post-reboot --reboot-since "$PRE_REBOOT"
+
+# NEGATIVE CONTROL: the bare stage name inside a NON-journal row (a webhook payload quoting #9786's text) is not a
+# refusal. The needle is anchored on the row shape, so a doppler-tagged body carrying the token must PASS.
+rows "$TMP/r-unprefused-fp.json" "$NOW" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-unit-armed detail=iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=1 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-attempt-start detail=attempt=2 iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=private_nic_timeout detail=boot=deadbee1.waited_s=150 \"host\":\"${HOST}\"" \
+  "{\"SYSLOG_IDENTIFIER\":\"doppler\",\"_COMM\":\"inngest\",\"_SYSTEMD_UNIT\":\"inngest-server.service\",\"message\":\"githubEvent=issues title=strip the plaintext arm stage=unpointed_raw_refused is the new refusal\",\"host\":\"${HOST}\"}"
+run "phase-a PASS: the bare stage name inside a non-journal (webhook) row is not a refusal" 0 \
+  "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-unprefused-fp.json" -- "${BASE_ARGS[@]}" --mode phase-a
 
 # --since IS THE SAME-RUN-ID RE-RUN GATE (the workflow passes it on every capture call): a
 # prior life's bootstrap-done inside the window would trip the no-done check, but the bound
@@ -328,7 +357,7 @@ run "phase-a PASS under --since: a prior life's rows are excluded by the bound" 
 # initializes counters (`X=$((X+1))` increments) but not the FAILURES array — a floor on
 # `${#FAILURES[@]}` dies unbound under set -u and scores CONSTRUCTION, not FIRES. And MIN
 # must sit ADJACENT to the `if` — the mutant builder's walk-back stops at any comment.
-MIN=32
+MIN=35
 if (( passes + fails < MIN )); then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$((passes + fails))" "$MIN" >&2
   exit 1

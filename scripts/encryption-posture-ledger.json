@@ -288,9 +288,9 @@
     "disclosed_as": "not-publicly-claimed",
     "live_verification": "unavailable:n/a by construction — NO user data ever reaches a rehearsal host. The volume is created empty for one boot and destroyed empty by the workflow's if:always() teardown, with a post-teardown Hetzner API assertion that no soleur-inngest-rehearsal-* object survives (#9175).",
     "exception": {
-     "justification": "It mirrors the PROD plaintext member BY DESIGN. Making the rehearsal volume LUKS while hcloud_volume.inngest_redis is plaintext would rehearse a boot that does not exist — the provision-rehearsal's entire value is that it boots what production would boot, so its dual-volume shape has to match production's, including the currently unencrypted member.",
+     "justification": "UNUSED LEFTOVER since #9786: it mirrored the prod plaintext member, which was destroyed in #8285, and the template no longer takes this volume's id, so it is attached to the rehearsal host and never read, mounted or formatted (the mapper name below is historical). It holds no data and is created empty and destroyed empty with the rehearsal. Removal is tracked in the #9786 follow-up tracker and changes the rehearsal's attach topology and plan-shape fixtures, so it is not done in the parked strip.",
      "tracking_issue": "#8285",
-     "reevaluate_when": "the #9175 rehearsal completes and the volumes are destroyed — the resource is transient by construction; also reevaluate if hcloud_volume.inngest_redis's posture changes (this mirror must move with it, or the rehearsal stops rehearsing production)",
+     "reevaluate_when": "the #9175 rehearsal completes and the volumes are destroyed — the resource is transient by construction; also reevaluate when the #9786 follow-up tracker removes this unused volume (nothing in the template reads it any more)",
      "expires_on": "2026-12-31"
     }
    }

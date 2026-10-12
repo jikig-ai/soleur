@@ -224,7 +224,7 @@ zero matches.
   prod boot with a lost Doppler pointer dies harmlessly at ARM 0 (the retired plaintext device no longer
   exists). After D2 the same state would reach `LUKS_ID`, the sole copy; a damaged header reads as blank
   (blkid rc 0/2, empty type) and ARM 3 would `luksFormat` it. ARM 3 therefore gains one guard line at its
-  top: `[ '${inngest_doppler_config}' = prd ]` -> `echo FATAL ... unpointed_raw_refused` + `exit 1`. The
+  top: `[ '${inngest_doppler_config}' = prd ]` -> `echo FATAL ... unpointed_raw_refused` + `exit 1` (**amended: now a `rehearsal_*` allowlist, see Review Round Amendments**). The
   value is already a template key (`prd` for prod, `rehearsal_<runid>` for the rehearsal), so no new key and
   AC5 stays at 17. ARM 2 (open an existing LUKS volume) stays available on `prd`, so a lost pointer with an
   intact volume still boots. The first-boot unpointed probe also switches from cached `blkid` to `blkid -p`
@@ -305,7 +305,7 @@ Region B - first-boot LUKS stage heredoc (`LUKSEOF` block):
   `grep -qx` assertion stays unchanged.
 - B5 `if [ "$MODE" = pointer ]; then ... else ... fi`: the pointer arm is untouched. In the `else`
   (unpointed) arm delete ARM 1 (`ext4)` case and its `EXPECT_LUKS` refusal); keep ARM 0/2/4 unchanged;
-  ARM 3 gains the D6 guard line (refuse when `'${inngest_doppler_config}' = prd`) as its first statement;
+  ARM 3 gains the D6 guard line (refuse when `'${inngest_doppler_config}' = prd`; **amended to the `rehearsal_*` allowlist**) as its first statement;
   the `blkid_probe` line gains `-p` (D6). `STAGE=` names for these arms are unchanged.
   Keep `EXPECT_LUKS='${inngest_expect_luks}'` and the `luks_emit` field (D4).
 - B6 delete the `if [ "$MODE" != pointer ]; then ... STAGING ... fi` block (STAGING_* stages).
@@ -429,43 +429,75 @@ able to read the diff as "deletions plus three re-pointed lines".
 
 ### Phase 7 - Unpark checklist (documented in the PR body; NOT executed in this run)
 
-> **Revised in the #10081 review fix round.** The first version asked for a rehearsal dispatch against the
+> **Revised in the #10081 review fix rounds.** The first version asked for a rehearsal dispatch against the
 > branch. `inngest-provision-rehearsal.yml` runs under `environment: web-platform-infra-apply`, which carries a
 > main-only deployment-branch policy (the workflow says so: a branch dispatch could run a neutered plan-shape
 > guard), so it CANNOT be dispatched from this branch. The rehearsal therefore runs from main after the merge,
-> inside the same window, and the abort path is a revert BEFORE any replace dispatch.
+> inside the same window, and the abort path is a revert BEFORE any replace dispatch. Round 2 added the
+> #7228 inherited-`done` stall (the replace is not finished until the scheduler serves), the rehearsal's
+> `dry_run=false` + confirm token, and narrowed what the capture script is claimed to automate.
 
 When an approved `inngest-host-replace` window exists (or #8620 reaches the inngest rebuild window):
 1. `git rebase origin/main` (apply the staleness rule); re-run Phase 4 suites + `inngest-userdata-budget.sh`.
 2. Re-run Phase 0.1 and 0.1b immediately before the merge, and record both in the PR:
-   - `pointer=106903269` read as a VALUE from the latest `stage=resolve` row **of the live host**. Filter on
-     `host=soleur-inngest` (rehearsal hosts emit `host=soleur-inngest-rehearsal-<run id>` and read
-     `mode=unpointed pointer=absent`, which must not be mistaken for the live host).
+   - `pointer=106903269` read as a VALUE from the latest `stage=resolve` row **of the live host**. Select the
+     live host by an EXACT host-name match applied to the query result (`host == soleur-inngest`), not by a
+     `--grep` substring: `scripts/betterstack-query.sh --grep` is a substring OR-match, so `host=soleur-inngest`
+     also matches `soleur-inngest-rehearsal-<run id>` rows, which read `mode=unpointed pointer=absent` and must
+     not be mistaken for the live host (that mistake fails safe, as a STOP, but sends the check the wrong way).
    - **Zero rows fallback:** the live host emits `resolve` rows only at first boot, so a short window can return
-     none. Widen the query window (for example 90 days) until the latest `stage=resolve` row for `host=soleur-inngest`
-     appears, and if no such row can be found at all, STOP: an unverified pointer is a third-id refusal on a host with no SSH.
-   - The cutover flag reads `done`. D3 leaves the image-baked cutover script refusing every flagged run
-     (`volume-ids-unreadable`), and a refusal writes a TERMINAL flag (`aborted`/`copied`) and restarts services;
-     at `done` it is a no-op. Any other flag value is a STOP.
+     none. Widen the query window until the latest `stage=resolve` row for the live host appears. If none can be
+     found at all (the last first boot is older than the log source retains), the second source is the Doppler
+     VALUE of `INNGEST_LUKS_ACTIVE_VOLUME_ID` on `soleur-inngest/prd`, read through the approved read-only path
+     and compared to `106903269` without printing it. If neither source confirms it, STOP: an unverified pointer
+     is a third-id refusal on a host with no SSH.
+   - The LUKS cutover flag (`INNGEST_LUKS_CUTOVER` on `soleur-inngest/prd`; its rows are
+     `SOLEUR_INNGEST_LUKS_CUTOVER ... flag=`) reads `done`. D3 leaves the image-baked cutover script refusing every
+     flagged run (`volume-ids-unreadable`); a refusal writes the terminal flag `aborted` (`PHASE` is still `init`
+     at `assert_ids`, so never `copied`) and restores nothing unless a freeze record exists. At `done` the unit is
+     a no-op (`noop-done`). Any other value is a STOP. This is a different flag from the scheduler's
+     `INNGEST_CUTOVER_FLIP` (see step 5).
 3. Merge IMMEDIATELY before step 4, in the one window (merging alone plants the drift alert and the
    `server_touched` abort). Check the drift issue body stays under its 60,000-byte `head -c` cap (a `user_data`
    diff is large).
-4. Dispatch `inngest-provision-rehearsal.yml` from main (the only end-to-end proof of the unpointed fresh-provision
-   arm on a real boot; it never exercises the pointer arm). Its capture must report `mode=unpointed`,
-   `stage=verify`, and ZERO `stage=unpointed_raw_refused` rows (the capture script now fails on that row: it
-   would mean the `rehearsal_*` allowlist and the rehearsal Doppler config disagree). **If it is red: revert the
-   merge BEFORE any replace dispatch** (the live host is untouched until step 5).
-5. Dispatch `apply_target=inngest-host-replace` under its own reviewer gate. Post-replace verification via
-   Better Stack, positive: `stage=resolve ... mode=pointer pointer=106903269`, `stage=verify`,
-   `inngest-luks-reopen-armed`, probe row `data_mount_devid=scsi-0HC_Volume_106903269`. Negative: zero
-   `stage=unpointed_raw_refused`, zero `volume-ids-unreadable`, zero `inngest-luks-FAILED`, and the
-   `SOLEUR_INNGEST_LUKS_CUTOVER` rows read `noop-done`. **Abort path:** a failed first boot leaves the sole
-   scheduler dark with no SSH; recovery is a revert of this PR plus a second, separately approved
-   `inngest-host-replace` dispatch (the pointer arm is byte-identical to main, so a failure here points at the
-   rendered inputs, not the production path).
+4. Dispatch `inngest-provision-rehearsal.yml` from main with `dry_run=false` and the confirm token
+   `REHEARSE-INNGEST-PROVISION` (the default `dry_run=true` renders and asserts the plan and produces NO capture,
+   so a default dispatch would clear this gate vacuously). It is the only end-to-end proof of the unpointed
+   fresh-provision arm on a real boot; it never exercises the pointer arm. The capture script automates ONE
+   check for this change: ZERO `stage=unpointed_raw_refused` rows (a row means the `rehearsal_*` allowlist and the
+   rehearsal Doppler config disagree). The positive evidence is read by hand from Better Stack for the rehearsal
+   host: `stage=resolve ... mode=unpointed` and `stage=verify`. **If either is wrong: revert the merge BEFORE any
+   replace dispatch** (the live host is untouched until step 5).
+5. Dispatch `apply_target=inngest-host-replace` under its own reviewer gate. **The replace is not finished when the
+   dispatch reports success** (#7228, `inngest-server.md` "Inherited `done` after a host replace"):
+   `INNGEST_CUTOVER_FLIP=done` lives in Doppler and outlives the host, while the `done-owner` marker lives on the
+   root disk the replace destroys, so the new host inherits a `done` it never earned and `inngest-server` stays
+   `activating http_code=000` until `gh workflow run cutover-inngest.yml -f op=resume` is dispatched AND
+   approved (its environment carries a required reviewer; the replace job's `::warning::` prints this
+   recovery). Then verify, positive: `stage=resolve ... mode=pointer pointer=106903269`, `stage=verify`,
+   `inngest-luks-reopen-armed`, probe row `data_mount_devid=scsi-0HC_Volume_106903269`, AND the scheduler
+   serving (probe `server_active=active`, or the `SERVING=yes` verdict of the host-state reader in
+   `inngest-server.md`). Negative: zero `stage=unpointed_raw_refused`, zero `volume-ids-unreadable`, zero
+   `inngest-luks-FAILED`, and the `SOLEUR_INNGEST_LUKS_CUTOVER` rows read `noop-done`. **Abort path:** a failed
+   first boot leaves the sole scheduler dark with no SSH; recovery is a revert of this PR plus a second,
+   separately approved `inngest-host-replace` dispatch, which strands on the same inherited `done` and needs the
+   same `op=resume` (the pointer arm is byte-identical to main, so a failure here points at the rendered
+   inputs, not the production path).
 6. Fold #10073, any pending bootstrap-pin-bump PR and other pending `user_data` PRs into the same window
    deliberately, one dispatch. Saved Better Stack queries keyed on `mode=plaintext_canonical` must be
    re-keyed to `mode=unpointed`.
+
+## Review Round Amendments (2026-10-12, #10081)
+
+Appended; the decisions above are not rewritten. **D6 is amended from a denylist to an allowlist.** Where this
+plan says the format arm refuses "when the rendered config is `prd`" (Decisions D6, the Phase 2 and Phase 3 text,
+UNP5, AC14), the shipped guard is `case '${inngest_doppler_config}' in rehearsal_*) ;; *) ... exit 1 ;; esac`:
+only a `rehearsal_*` config may format, so `prd`, an empty value and any value added later all refuse
+(`unpointed_raw_refused`, with `STAGE=unpointed_raw_refused` set on the line before so the failure row names the
+arm). The review found the one-literal denylist fails open for any other string. Test pins: T1.16g (shape), T1.16i
+(the arm's own segment executed with the stage's state across seven configs), T1.16j (stage name), T1.16k (the
+glob and rehearsal.tf's `rehearsal_<run id>` are one contract), loopback UNP5 and UNP5b. The structural-cause
+finding (guards matching one spelling in one window) is closed by the whole-template closed-set pins T1.17f-i.
 
 ## Files to Edit
 
@@ -684,10 +716,10 @@ data-protection change. Product/UX gate: NONE (no `components/**`, `app/**` file
 - AC5 `inngest-redis-luks-loopback.test.sh` re-keyed ARM0/2/3/4, UNP3-UNP5 and the kept PTR arms green in CI (locally only if the harness reports available); ARM1/ST*/REG removed, not skipped.
 - AC6 `bash apps/web-platform/infra/inngest-userdata-budget.sh` exit 0 and stored bytes <= baseline 19,680 B (strictly smaller).
 - AC7 The pointer arm hunk (`if [ "$MODE" = pointer ]; then ... STAGE=mount_luks ... luks_emit mount_luks 0 crypto_LUKS "mode=pointer"`) is byte-identical to `origin/main`'s (diff of that range empty).
-- AC8 `git diff origin/main -- apps/web-platform/infra/cloud-init-inngest.yml` hunks all fall inside the two regions named in Phase 2 (no hunk between the boot-reopen script's end and the `LUKSEOF` start, and none after the `inngest-luks-reopen-armed` item). **Amended in the review fix round:** comment-only lines (whole-line `# ` comments, stripped from the rendered `user_data` by `inngest_rationale_strip`) are exempt, so the stale lead-in comment above the `LUKSEOF` item and the comments at the `mkdir -p /mnt/data` item and the RESOLVE header are corrected; the only added code hunk outside the regions is none (the D6 guard and its `STAGE=` line sit inside Region B).
+- AC8 `git diff origin/main -- apps/web-platform/infra/cloud-init-inngest.yml` hunks all fall inside the two regions named in Phase 2 (no hunk between the boot-reopen script's end and the `LUKSEOF` start, and none after the `inngest-luks-reopen-armed` item). **Amended in the review fix round:** whole-line `# ` comments (stripped from the rendered `user_data` by `inngest_rationale_strip`) are exempt, so the stale lead-in comment above the `LUKSEOF` item and the comments at the `mkdir -p /mnt/data` item and the RESOLVE header are corrected there. No NON-comment hunk lies outside the two regions: the D6 guard and its `STAGE=` line sit inside Region B.
 - AC9 `.claude/hooks/grep-q-pipe-guard.test.sh` still reads `cloud-init-inngest.yml | = | 4`; `templatefile-bare-dollar-guard.test.sh`, `cloud-init-inngest-bootstrap.test.sh`, `cloud-init-inngest-provision-unit.test.sh`, `inngest-provision-rehearsal.test.sh`, `journald-config.test.sh`, `cloud-init-user-data-size.test.ts`, `lint-encryption-posture` suite/lint, `c4-count-parity.test.sh` green.
 - AC10 ADR-142 addendum amended (status "adopting"); `grep -rn "ADR-142" ` unchanged ordinal (no new ADR).
-- AC11 No file outside the Files-to-Edit list changed (`git diff --name-only origin/main`); in particular none of `inngest-redis-luks.tf`, `inngest-luks-cutover.sh`, `inngest-redis-bootstrap.sh`, `apply-web-platform-infra.yml`, `betterstack-logs-alerts.tf`; `variables.tf` diff is one description line.
+- AC11 No file outside the Files-to-Edit list changed (`git diff --name-only origin/main`); in particular none of `inngest-redis-luks.tf`, `inngest-luks-cutover.sh`, `inngest-redis-bootstrap.sh`, `apply-web-platform-infra.yml`, `betterstack-logs-alerts.tf`; `variables.tf` diff is one description line. **Amended in the review fix rounds:** comment-only, prose, ledger-text and documentation edits are exempt from the Files-to-Edit list, so these additional files carry them: `inngest-redis-luks.tf` and `betterstack-logs-alerts.tf` (comment wording), `betterstack-log-query.md`, `inngest-server.md` and `inngest-luks-cutover-6894.md` (runbook rows), ADR-142 and ADR-199 addenda, `.claude/hooks/grep-q-pipe-guard.test.sh` (line-number citations replaced by content anchors), `scripts/followthroughs/inngest-provision-rehearsal-capture.sh` and its test (a forbidden-row check for `stage=unpointed_raw_refused`), and `variables.tf` / `rehearsal.tf` comment blocks. The Non-Goals N4 files (`prevent_destroy`, `delete_protection`, `betteruptime_heartbeat.inngest_server_probe`) remain untouched.
 - AC12 PR #10081: `isDraft == true`, `autoMergeRequest == null`, `parked` label, title begins `PARKED`, body has "DO NOT MERGE" block + base SHA/date + staleness rule, `Ref #9786` present, no closing keyword (`grep -iE '(close[sd]?|fix(e[sd])?|resolve[sd]?) #9786'` empty), last line is the Claude Code attribution line; commit trailers present.
 - AC-P1 (park justification, one sentence plus anchors in the PR body): merging replaces nothing (`hcloud_server.inngest` in `OPERATOR_APPLIED_EXCLUSIONS`, no `hcloud_server.*` in the per-merge `-target` list, `ignore_changes = [ssh_keys]` only) but plants a latent replace that reds drift, aborts `inngest-host` at `server_touched`, and rides the next dispatch un-exercised; the new boot behaviour (D2/D6) has not run on a real boot. Note the automated bootstrap-pin-bump PRs already edit this file, so the first two consequences are partly pre-existing; the dominant park reason is the unexercised boot path.
 - AC13 One combined tracker exists (inert `inngest_expect_luks`; N2 rollback arm + image release + pin bump; rehearsal unused plain volume) with re-evaluation criterion "when #10081 unparks".

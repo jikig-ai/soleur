@@ -46,7 +46,7 @@ Live standing alarms over this source:
   is **not** the encrypted volume's — i.e. Redis is writing unencrypted again after the cutover
   (an on-host rollback, or a boot that mounted a device other than the additive volume; the
   plaintext volume is destroyed and the template has no arm for it since #9786, so this is the
-  tripwire for a regression of that). Nothing else notices: the scheduler is healthy in all three.
+  tripwire for a regression of that). Nothing else notices: the scheduler is healthy in both.
   **Armed.** It shipped paused, because before the cutover the plaintext alias was the CORRECT
   value and an armed rule would have paged continuously. Since #8296 the variable's declared
   default is `true`, so every apply arms it: the push apply of `b53173a04` did so, and the alert

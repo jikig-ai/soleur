@@ -223,8 +223,9 @@ if [ -n "$_split" ]; then
 else
   no "T1.10a could not locate the runcmd LUKS stage in $CLOUD_INIT — the per-window split is vacuous"
 fi
-# Every executable line that names the input must be the one assignment or an emit; anything else is a consumer.
-_expect_other="$(grep -vE '^[[:space:]]*#' "$CLOUD_INIT" | grep -E 'EXPECT_LUKS|inngest_expect_luks' | grep -vE "EXPECT_LUKS='[$][{]inngest_expect_luks[}]'" | grep -vF 'expect_luks=' || true)"
+# Every executable line that names the input must be the one assignment or one of the two emit rows (matched by
+# the emit row's own prefix, not by the key's text: a refusal message that merely contains `expect_luks=` is a consumer).
+_expect_other="$(grep -vE '^[[:space:]]*#' "$CLOUD_INIT" | grep -E 'EXPECT_LUKS|inngest_expect_luks' | grep -vE "EXPECT_LUKS='[$][{]inngest_expect_luks[}]'" | grep -vF 'SOLEUR_INNGEST_LUKS_STAGE stage=$1 rc=$2 blkid_type=' || true)"
 if [ -z "$_expect_other" ]; then ok "T1.10b nothing in the template branches on expect_luks (only the assignment and the emit rows name it)"; else no "T1.10b expect_luks has a consumer beyond telemetry: ${_expect_other}"; fi
 
 # T1.11 THE VARIABLE'S OWN COMMENT. `inngest_expect_luks` used to arm the post-recut ext4 refusal and
@@ -242,7 +243,7 @@ if grep -qF 'TELEMETRY ONLY. Nothing branches on it' "$VARIABLES_TF" && grep -qF
 # that way on the first run. `cq-assert-anchor-not-bare-token`, in the one file in this branch
 # whose whole subject is that class.
 if grep -qE '^# This flips on the recut branch' "$VARIABLES_TF"; then no "T1.11b the superseded one-decision instruction is back as a live directive in variables.tf"; else ok "T1.11b the superseded one-decision instruction is not present as a directive"; fi
-# And the default must still be false at merge — the whole ordering rests on it.
+# The default stays false so the rendered telemetry value, and therefore user_data, does not move.
 if grep -A4 'variable "inngest_expect_luks"' "$VARIABLES_TF" | grep -cE '^\s*default\s*=\s*false\s*$' >/dev/null; then ok "T1.11c inngest_expect_luks still defaults to false at merge"; else no "T1.11c inngest_expect_luks no longer defaults to false — the rendered telemetry value (and user_data) moved"; fi
 
 # T1.12 THE EXIT TRAP MUST NOT TREAT SUCCESS AS FAILURE. Driven, not grepped — the trap machinery
@@ -432,37 +433,48 @@ read -r _d6d_n _d6d_bad <<<"$(_d6_scan "        \"\")
           printf x | cryptsetup luksFormat --key-file - \"\$DEV\"
           ;;")"
 if [ "$_d6c_n" -eq 2 ] && [ "$_d6c_bad" -eq 1 ] && [ "$_d6d_n" -eq 1 ] && [ "$_d6d_bad" -eq 1 ]; then ok "T1.16h control: a SECOND unguarded luksFormat, and a guard commented out in place, are both flagged (${_d6c_n}/${_d6c_bad}, ${_d6d_n}/${_d6d_bad})"; else no "T1.16h CONTROL: the per-site D6 scan missed an unguarded luksFormat (second site ${_d6c_n}/${_d6c_bad}, commented guard ${_d6d_n}/${_d6d_bad}) — T1.16g is vacuous"; fi
-# T1.16i DRIVE the guard statement itself, with the config values it must treat differently. rc 0 means
-# the arm may continue to luksFormat; rc 1 plus the refusal text means it was stopped. A guard that matches
-# T1.16g by SHAPE but never exits (`|| { exit 1; }` swallowed, `exit 0`, an inverted pattern) fails here.
-_d6_line="$(grep -E "^[[:space:]]*case '[$][{]inngest_doppler_config[}]' in rehearsal_" <<<"$_G1_STAGE" | sed -n '1p')"
+# T1.16i DRIVE the guard IN ITS ARM, with the stage's real state. The segment is everything between the
+# empty-signature arm's label and `STAGE=luks_format`, so a guard that depends on state the stage itself sets
+# (`[ "$STAGE" != unpointed_raw_refused ] && exit 1` passes a driver that leaves STAGE unset and reaches
+# luksFormat on the host), or any extra line wedged between the guard and the format, is executed too. STAGE is
+# preset to what the stage holds on entry to the arm (blkid_probe). A sentinel after the segment must be
+# reached ONLY for a rehearsal_* config. rc 1 plus the refusal text means the arm was stopped.
+_d6_seg="$(printf '%s\n' "$_G1_STAGE" | awk '/^        ""\)$/{f=1;next} f&&/^          STAGE=luks_format$/{exit} f' | grep -vE '^[[:space:]]*#' || true)"
 _d6_tmp="$(mktemp)"; : > "$_d6_tmp"
 _d6_bad_cfg=""
-if [ -z "$_d6_line" ]; then
-  no "T1.16i could not extract the D6 guard line — the behavioural drive is vacuous"
+if [ -z "$_d6_seg" ] || ! grep -qF 'STAGE=unpointed_raw_refused' <<<"$_d6_seg"; then
+  no "T1.16i could not extract the empty-signature arm's guard segment — the behavioural drive is vacuous"
 else
   for _cfg in prd dev staging rehearsal '' rehearsal_1 rehearsal_loopback; do
-    _stmt="${_d6_line//'${inngest_doppler_config}'/$_cfg}"
-    _rc=0; _o="$(DEV=/dev/null INNGEST_LUKS_DETAIL="$_d6_tmp" bash -c "$_stmt" 2>&1)" || _rc=$?
+    _stmt="${_d6_seg//'${inngest_doppler_config}'/$_cfg}"
+    _rc=0; _o="$(DEV=/dev/null INNGEST_LUKS_DETAIL="$_d6_tmp" bash -c "set -euo pipefail; STAGE=blkid_probe; ${_stmt}; echo REACHED_FORMAT" 2>&1)" || _rc=$?
     case "$_cfg" in
-      rehearsal_*) { [ "$_rc" -eq 0 ] && [ -z "$_o" ]; } || _d6_bad_cfg="${_d6_bad_cfg} [${_cfg}: rc=${_rc} should be 0]" ;;
-      *)           { [ "$_rc" -eq 1 ] && grep -q 'unpointed_raw_refused' <<<"$_o"; } || _d6_bad_cfg="${_d6_bad_cfg} [${_cfg:-<empty>}: rc=${_rc} should be 1 with the refusal text]" ;;
+      rehearsal_*) { [ "$_rc" -eq 0 ] && [ "$_o" = REACHED_FORMAT ]; } || _d6_bad_cfg="${_d6_bad_cfg} [${_cfg}: rc=${_rc} should be 0 and reach the format step]" ;;
+      *)           { [ "$_rc" -eq 1 ] && grep -q 'unpointed_raw_refused' <<<"$_o" && ! grep -q 'REACHED_FORMAT' <<<"$_o"; } || _d6_bad_cfg="${_d6_bad_cfg} [${_cfg:-<empty>}: rc=${_rc} should be 1 with the refusal text and no format step]" ;;
     esac
   done
-  if [ -z "$_d6_bad_cfg" ]; then ok "T1.16i driven: the guard refuses prd/dev/staging/empty/bare-'rehearsal' and passes only rehearsal_* (rc and refusal text)"; else no "T1.16i the D6 guard misbehaves when executed:${_d6_bad_cfg}"; fi
+  if [ -z "$_d6_bad_cfg" ]; then ok "T1.16i driven in-arm with the stage's state: prd/dev/staging/empty/bare-'rehearsal' stop before the format step; only rehearsal_* reaches it"; else no "T1.16i the D6 guard segment misbehaves when executed:${_d6_bad_cfg}"; fi
 fi
 rm -f "$_d6_tmp"
 # T1.16j the refusal names its OWN stage: luks_err ships $STAGE, so without this the off-box row reads
 # stage=blkid_probe and the diagnosis names the wrong arm.
 if [ "$(printf '%s\n' "$_G1_STAGE" | grep -B1 -E "^[[:space:]]*case '[$][{]inngest_doppler_config[}]' in rehearsal_" | grep -cE '^[[:space:]]*STAGE=unpointed_raw_refused$')" -eq 1 ]; then ok "T1.16j the D6 refusal sets STAGE=unpointed_raw_refused on the line before the guard"; else no "T1.16j the D6 guard is not immediately preceded by STAGE=unpointed_raw_refused — the refusal would ship as stage=blkid_probe"; fi
 
+# T1.16k The allowlist glob and the rehearsal root's config name are ONE contract: the guard formats only for
+# `rehearsal_*`, and the rehearsal root renders `rehearsal_<run id>`. Renaming either side alone leaves every
+# local suite green and makes the (paid) rehearsal refuse to format; pin both ends here.
+_reh_tf="$SCRIPT_DIR/inngest-provision-rehearsal/rehearsal.tf"
+_reh_n="$(grep -vE '^[[:space:]]*#' "$_reh_tf" 2>/dev/null | grep -cxE '[[:space:]]*rehearsal_doppler_config[[:space:]]*=[[:space:]]*"rehearsal_[$][{]var[.]rehearsal_run_id[}]"' || true)"
+_reh_glob="$(printf '%s\n' "$_G1_STAGE" | grep -cF "in rehearsal_*) ;; *) echo" || true)"
+if [ "$_reh_n" -eq 1 ] && [ "$_reh_glob" -eq 1 ]; then ok "T1.16k the guard's rehearsal_* glob and rehearsal.tf's rehearsal_<run id> config name agree (one each)"; else no "T1.16k the allowlist glob and the rehearsal config prefix are out of step (rehearsal.tf defs ${_reh_n}, guard globs ${_reh_glob}) — the rehearsal would refuse to format"; fi
+
 # ═══ TIER 2c — the destructive-operation inventory (#9786 review: structural-cause roll-up) ══════════
 # T1.16g/e guard one SPELLING in one WINDOW. The property is "nothing in the delivered template formats,
-# wipes, or mounts a device other than the one the resolver chose", which is an inventory over the whole
-# comment-stripped file (both readers, every runcmd item and write_files script), not a name list. Each
-# count is EXACT, so a second site, a variant spelling (`--batch-mode`, mke2fs, wipefs), a mount of
-# another source, or a new item outside the LUKS window changes a number and reds. Lines that merely
-# QUOTE an operation inside `echo "FATAL: ..."` are excluded; they are messages, not operations.
+# wipes, or mounts a device other than the one the resolver chose". T1.17a-e are TARGETED early-warning rows
+# with specific messages (a regex over command-position shapes; they are a denylist and a denylist of shapes
+# is bypassable by a list item, `sudo`, `then`, a path prefix, `dd`, `cryptsetup erase`...). The PROPERTY is
+# pinned by T1.17f-i below, which are CLOSED SETS: every normalised line that mentions a device-touching token
+# must equal the expected list, so a new shape of the same operation cannot add a line without naming it.
 _CI_OPS="$(printf '%s\n' "$_CI_CODE" | grep -vE 'echo "FATAL' || true)"
 _ops_fmt="$(grep -cE 'cryptsetup[^|;]*(luksFormat|luksErase|reencrypt|luksAddKey|luksRemoveKey|luksKillSlot|luksHeaderRestore)' <<<"$_CI_OPS" || true)"
 _ops_dest="$(grep -cE '(^[[:space:]]*|[|;&][[:space:]]*)(mkfs[.a-z0-9]*|mke2fs|wipefs|blkdiscard|shred|sgdisk|sfdisk|parted)[[:space:]]' <<<"$_CI_OPS" || true)"
@@ -488,6 +500,72 @@ _res_pointer="$(grep -c 'MODE=pointer' <<<"$_res2" || true)"; _res_unp="$(grep -
 _reopen_allow_bad="$(printf '%s\n' "$_G1_REOPEN" | grep -cE '^[[:space:]]*\*\)[[:space:]]*;;' || true)"
 _reopen_allow_ok="$(printf '%s\n' "$_G1_REOPEN" | grep -cF '*) fail reopen_pointer 1 n/a' || true)"
 if [ "$_res_pointer" -eq 1 ] && [ "$_res_unp" -eq 1 ] && [ "$_res_exit" -eq 2 ] && [ "$_reopen_allow_bad" -eq 0 ] && [ "$_reopen_allow_ok" -eq 1 ]; then ok "T1.17e the resolver sets MODE=pointer only for the own-id arm and refuses the other two shapes with exit 1; the reopen allowlist's catch-all refuses (pointer ${_res_pointer}, unpointed ${_res_unp}, exit ${_res_exit})"; else no "T1.17e a resolver refusal body or the reopen allowlist changed (MODE=pointer ${_res_pointer}, MODE=unpointed ${_res_unp}, exit 1 ${_res_exit}, reopen catch-all passes ${_reopen_allow_bad}, refuses ${_reopen_allow_ok})"; fi
+
+# ── T1.17f-i CLOSED SETS (the class fix for the inventory's shape-bypass) ────────────────────────────
+# Normalise the way a shell reads the text: drop whole-line comments, join backslash continuations, trim indent.
+# Then the set of lines that mention ANY device-touching token (cryptsetup subcommands, mkfs/mke2fs/wipefs/dd and
+# friends, mount/umount, fstab, cloud-init disk modules) is compared WHOLE-LINE to the list below, in order. A
+# new line, in any shape (runcmd list item, `sudo`, path-qualified, after `echo "FATAL"; `), fails with a diff;
+# a deliberate change edits this list in the same commit, which is the point. Residual, stated: an operation
+# reached through shell indirection (`$op "$DEV"`, `eval`) names none of these tokens, so T1.17h denies the
+# indirection forms themselves.
+_norm_code() { grep -vE '^[[:space:]]*#' "$1" | sed -e ':a' -e '/\\$/{N;s/\\\n[[:space:]]*/ /;ba}' -e 's/^[[:space:]]*//'; }
+_OPS_TOK='(^|[^[:alnum:]_])(luksFormat|luksOpen|luksClose|luksErase|erase|reencrypt|luksAddKey|luksRemoveKey|luksKillSlot|luksHeaderRestore|luksChangeKey|luksConvertKey|mkfs[.a-z0-9]*|mke2fs|wipefs|blkdiscard|shred|sgdisk|sfdisk|parted|fdisk|dd|mkswap|truncate|cryptsetup|mount|umount|fstab|fstab_set|fs_setup|disk_setup|bootcmd|mounts|swapon|losetup|dmsetup)([^[:alnum:]_]|$)'
+_VAR_RE='^(export[[:space:]]+)?(DEV|MAPPER|BYID|LUKS_ID|CANON_DEV|POINTER|MNT|CANON_NAME)='
+_exp_ops="$(cat <<'EXPEOF'
+- cryptsetup # #7695 guest-side LUKS-at-rest for /mnt/data (the Redis AOF store)
+After=cryptsetup-pre.target systemd-udev-settle.service
+printf '%s' "$INNGEST_REDIS_LUKS_KEY" | cryptsetup luksOpen --key-file - "$1" "$2"
+[ -n "$${INNGEST_REDIS_LUKS_KEY:-}" ] || { echo "FATAL: INNGEST_REDIS_LUKS_KEY empty — refusing an unencrypted mount" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+fstab_set() {
+_fs_tmp="$(mktemp /etc/fstab.soleur.XXXXXX)"
+awk -v mp="$1" '$1 ~ /^#/ || $2 != mp' /etc/fstab > "$_fs_tmp"
+cat "$_fs_tmp" > /etc/fstab
+_fs_n="$(awk -v mp="$1" '$1 !~ /^#/ && $2 == mp' /etc/fstab | wc -l)"
+[ "$_fs_n" -eq 1 ] || { echo "FATAL: fstab carries $_fs_n lines for $1 after the rewrite — exactly one is required" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+[ -e "$MAPPER" ] || printf '%s' "$INNGEST_REDIS_LUKS_KEY" | cryptsetup luksOpen --key-file - "$CANON_DEV" inngest-redis 2>>"$INNGEST_LUKS_DETAIL"
+mountpoint -q /mnt/data || mount "$MAPPER" /mnt/data 2>>"$INNGEST_LUKS_DETAIL"
+fstab_set /mnt/data "$MAPPER /mnt/data ext4 defaults,nofail 0 2"
+[ -e "$MAPPER" ] || printf '%s' "$INNGEST_REDIS_LUKS_KEY" | cryptsetup luksOpen --key-file - "$DEV" inngest-redis 2>>"$INNGEST_LUKS_DETAIL"
+mountpoint -q /mnt/data || mount "$MAPPER" /mnt/data 2>>"$INNGEST_LUKS_DETAIL"
+fstab_set /mnt/data "$MAPPER /mnt/data ext4 defaults,nofail 0 2"
+case '${inngest_doppler_config}' in rehearsal_*) ;; *) echo "FATAL: unpointed_raw_refused — $DEV reads blank on a non-rehearsal config with no pointer; refusing to luksFormat the only copy of the AOF" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1 ;; esac
+printf '%s' "$INNGEST_REDIS_LUKS_KEY" | cryptsetup luksFormat --batch-mode --type luks2 --key-file - "$DEV" 2>>"$INNGEST_LUKS_DETAIL"
+printf '%s' "$INNGEST_REDIS_LUKS_KEY" | cryptsetup luksOpen --key-file - "$DEV" inngest-redis 2>>"$INNGEST_LUKS_DETAIL"
+STAGE=mkfs
+mkfs.ext4 -q "$MAPPER" 2>>"$INNGEST_LUKS_DETAIL"
+luks_emit mkfs 0 empty
+mountpoint -q /mnt/data || mount "$MAPPER" /mnt/data 2>>"$INNGEST_LUKS_DETAIL"
+fstab_set /mnt/data "$MAPPER /mnt/data ext4 defaults,nofail 0 2"
+STAGE=fstab
+_fstab_n="$(awk '$1 !~ /^#/ && $2 == "/mnt/data"' /etc/fstab | wc -l)"
+[ "$_fstab_n" -eq 1 ] || { echo "FATAL: /mnt/data mounted but fstab carries $_fstab_n lines for it — exactly one is required for the mount to survive a reboot" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+luks_emit fstab 0 "$${BLK_TYPE:-empty}"
+EXPEOF
+)"
+_exp_vars="$(cat <<'EXPEOF'
+LUKS_ID='${inngest_luks_volume_id}'
+BYID=/dev/disk/by-id/scsi-0HC_Volume_
+DEV="$${BYID}$${LUKS_ID}"
+POINTER="$${INNGEST_LUKS_ACTIVE_VOLUME_ID:-}"
+CANON_DEV="$${BYID}$${POINTER}"
+LUKS_ID='${inngest_luks_volume_id}'
+BYID=/dev/disk/by-id/scsi-0HC_Volume_
+DEV="$${BYID}$${LUKS_ID}"
+MAPPER=/dev/mapper/inngest-redis
+POINTER="$${INNGEST_LUKS_ACTIVE_VOLUME_ID:-}"
+CANON_DEV="$DEV"
+CANON_DEV="$${BYID}$${POINTER}"
+EXPEOF
+)"
+_act_ops="$(_norm_code "$CLOUD_INIT" | grep -E "$_OPS_TOK" || true)"
+if [ "$_act_ops" = "$_exp_ops" ]; then ok "T1.17f the set of lines that touch a device or mount is exactly the reviewed list ($(grep -c . <<<"$_act_ops") lines)"; else no "T1.17f a device-touching line was added, removed or changed — diff (expected vs actual): $(diff <(printf '%s\n' "$_exp_ops") <(printf '%s\n' "$_act_ops") | cut -c1-200 | head -12 | tr '\n' '|')"; fi
+_act_vars="$(_norm_code "$CLOUD_INIT" | grep -E "$_VAR_RE" || true)"
+if [ "$_act_vars" = "$_exp_vars" ]; then ok "T1.17g every assignment to DEV/MAPPER/BYID/LUKS_ID/CANON_DEV/POINTER is exactly the reviewed list ($(grep -c . <<<"$_act_vars") lines; a rebinding of what a destructive line operates on changes it)"; else no "T1.17g a device-variable assignment was added, removed or changed — diff (expected vs actual): $(diff <(printf '%s\n' "$_exp_vars") <(printf '%s\n' "$_act_vars") | cut -c1-200 | head -12 | tr '\n' '|')"; fi
+_indirect="$(_norm_code "$CLOUD_INIT" | grep -E '(^|[^[:alnum:]_])eval([^[:alnum:]_]|$)|^[$][A-Za-z_]' || true)"
+if [ -z "$_indirect" ]; then ok "T1.17h no eval and no variable-as-command line (an operation cannot hide behind indirection from the closed sets)"; else no "T1.17h shell indirection appears in the template, which the closed sets cannot see through: ${_indirect}"; fi
+_top="$(grep -vE '^[[:space:]]*#' "$CLOUD_INIT" | grep -E '^[a-z_]+:' | sed 's/:.*//' | tr '\n' ' ')"
+if [ "$_top" = "package_update packages groups users write_files runcmd " ]; then ok "T1.17i the template's top-level cloud-init keys are exactly package_update/packages/groups/users/write_files/runcmd (no fs_setup/disk_setup/mounts/bootcmd module)"; else no "T1.17i the top-level cloud-init keys changed: '${_top}' — a disk or mount module would act outside the shell inventory"; fi
 
 # ═══ TIER 3 — Guard 4: the pointer decides, never the signature (#6894) ════════════════════
 # THE POPULATION IS DERIVED. Every line in a DELIVERED artifact that names the pointer is found by
@@ -561,7 +639,7 @@ if printf '%s\n' "$_PTR_ARM" | grep -cE '^[[:space:]]*(mkfs|printf .* cryptsetup
 if printf '%s\n' "$_PTR_ARM" | grep -cF '[ "$${BLK_TYPE:-}" = crypto_LUKS ] || {' >/dev/null; then ok "G4.d3 the pointer's device must CORROBORATE as crypto_LUKS (mutation row 3)"; else no "G4.d3 the crypto_LUKS corroboration is gone — the pointer could certify a plaintext device as the store"; fi
 if printf '%s\n' "$_PTR_ARM" | grep -cE '"\$DEV"' >/dev/null; then no "G4.d4 the pointer arm references the unpointed-arm device \$DEV — a fallback path exists (mutation row 2)"; else ok "G4.d4 the pointer arm never references the unpointed-arm device \$DEV (no fall-through)"; fi
 # G4.e the resolver refuses both malformed pointer shapes rather than deriving a path from them.
-_RES="$(printf '%s\n' "$_G1_STAGE" | awk '/^    STAGE=resolve$/{f=1} f&&/^    esac$/{print; exit} f')"
+_RES="$_res2"
 if printf '%s\n' "$_RES" | grep -cF '*[!0-9]*)' >/dev/null && printf '%s\n' "$_RES" | grep -cxF '      "$LUKS_ID")' >/dev/null && printf '%s\n' "$_RES" | grep -cE '^      \*\)$' >/dev/null && printf '%s\n' "$_RES" | grep -cF 'MODE=unpointed' >/dev/null; then ok "G4.e the resolver has explicit arms for unpointed, non-numeric, own-id and third-id pointers"; else no "G4.e the resolver lost an arm (unpointed / non-numeric / own id / third id)"; fi
 # G4.f the arming marker MEASURES the unit, it does not trust enable's exit status.
 if grep -qF '_reopen_state="$(systemctl is-active inngest-luks-open.service 2>/dev/null || true)"' "$CLOUD_INIT" \
@@ -620,14 +698,16 @@ if ! printf '%s\n' "$_LUKS_OPEN_UNIT" | grep -cE '^[[:space:]]*(EnvironmentFile|
 # #9786 review fix round: 70 -> 78, exact. T1.10 split into a/b (+1: emit-only and no-consumer), T1.16i (the D6
 # guard DRIVEN across prd/dev/staging/empty/bare-rehearsal/rehearsal_*), T1.16j (STAGE set before the guard),
 # T1.17a-e (destructive-op inventory over the whole template, the reopen script's open-only property, resolver
-# refusal bodies and the reopen catch-all) are new (+7).
+# refusal bodies and the reopen catch-all) are new (+8 in total with T1.10b).
+# 78 -> 83 (review fix round 2): T1.16k (allowlist glob / rehearsal config prefix contract, +1) and the closed-set
+# pins T1.17f-i (+4). T1.16i was re-driven in-arm and keeps its count.
 # Self-contained: bash builtins and this suite's own counters only. A floor that lives in a helper
 # is silenced by the same move that silences the arms it guards.
-if [ "$executed" -lt 78 ]; then
+if [ "$executed" -lt 83 ]; then
   fail=$((fail + 1))
-  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 78. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
+  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 83. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
 else
-  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 78)\n' "$executed"
+  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 83)\n' "$executed"
 fi
 
 echo ""

@@ -736,8 +736,9 @@ and needs a written disaster-recovery procedure when it is ever needed.
 opens and mounts it rather than refusing, and the only marker is `pointer=absent` on the `stage=resolve` row (no
 alert keys on it). (2) The image-baked `inngest-luks-cutover.sh` reads the plaintext id from the volumes file,
 which the stage no longer writes, so it refuses `volume-ids-unreadable` on every FLAGGED run (`armed`, `copying`,
-`copied`, `swapped`, `rollback`) and a refusal writes a terminal flag and restarts services; at flag `done` it is a
-no-op, so the replace window must confirm `flag=done` first. (3) `inngest_expect_luks` is inert but still a rendered
+`copied`, `swapped`, `rollback`) and a refusal at that point writes the terminal flag `aborted` (nothing had been
+stopped, so nothing is restarted unless a crash left a freeze record); at flag `done` it is a no-op, so the replace
+window must confirm `flag=done` first. (3) `inngest_expect_luks` is inert but still a rendered
 key: changing it changes `user_data` and replaces the host.
 
 **What this addendum does NOT change.** The pointer arm, the encryption mechanism, `inngest_expect_luks` as

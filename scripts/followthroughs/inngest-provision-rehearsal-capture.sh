@@ -314,7 +314,11 @@ luks_failed_check() { # <row-set> — viol on any `Failed to start inngest-luks*
 # guard so the luks_err row and the inngest-luks-FAILED phone-home both carry it.
 unpointed_refused_check() { # <row-set> — viol on any stage=unpointed_raw_refused row
   local n_refused
-  n_refused="$(printf '%s\n' "$1" | grep -cF 'stage=unpointed_raw_refused' 2>/dev/null || true)"
+  # ANCHORED on the row shape, never the bare token: #9786's own title/body and any webhook payload that quotes
+  # the stage name would otherwise read as a violation (the same false-positive class #9939 narrowed
+  # luks_failed_check for). The two real shapes both end the stage in `rc=`: the luks_emit row, and the
+  # inngest-luks-FAILED phone-home that carries `stage=<name> rc=<n>` in its detail.
+  n_refused="$(printf '%s\n' "$1" | grep -cE '(SOLEUR_INNGEST_LUKS_STAGE stage=|inngest-luks-FAILED.{0,80}stage=)unpointed_raw_refused rc=' 2>/dev/null || true)"
   (( n_refused > 0 )) \
     && viol "${n_refused} stage=unpointed_raw_refused row(s) — the unpointed LUKS arm refused to format on a rehearsal host (the allowlist and the rehearsal Doppler config disagree, #9786)" \
     || ok "zero stage=unpointed_raw_refused rows"

@@ -1553,8 +1553,8 @@ runcmd:
   # host) the one rendered volume is read as:
   #
   #   device absent after a bounded wait  -> FATAL (never format a path that is not a device)
-  #   TYPE empty (no signature)           -> rehearsal config only: luksFormat + luksOpen + mkfs
-  #                                          + mount. On a prd config: FATAL unpointed_raw_refused
+  #   TYPE empty (no signature)           -> rehearsal_* config only: luksFormat + luksOpen + mkfs
+  #                                          + mount. Any other config: FATAL unpointed_raw_refused
   #   TYPE=crypto_LUKS                    -> luksOpen + mount
   #   anything else (ext4 included)       -> FATAL
   #
@@ -1622,7 +1622,7 @@ runcmd:
     # only CORROBORATES it. It lives in Doppler, not on the root disk, because the only delivery
     # path to this host is a replace that destroys the root disk — a root-disk pointer would be
     # erased by the very dispatch every later change must fire. Absent = the unpointed arm below,
-    # which resolves the one volume by its signature and may not format it on a prd config.
+    # which resolves the one volume by its signature and may format it ONLY on a rehearsal_* config.
     POINTER="$${INNGEST_LUKS_ACTIVE_VOLUME_ID:-}"
 
     # THE PROBE MUST BE ABLE TO MEASURE. Unprivileged `blkid -p` on a root-owned device prints

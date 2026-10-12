@@ -135,8 +135,9 @@ done
 # template variables are substituted with fixed ids, and the by-id PREFIX is rebound to a per-arm
 # directory of REAL symlinks onto loop devices — the same alias-to-device indirection production
 # mounts through, where the previous revision rebound the device path to the loop device directly.
-# The rendered Doppler config is a parameter (9th): the unpointed format arm refuses when it is `prd`
-# (#9786 D6), and the arms that must format render a non-prd config.
+# The rendered Doppler config is a parameter (9th): the unpointed format arm formats ONLY for a `rehearsal_*`
+# config (#9786 D6, an allowlist) and refuses every other value, so the arms that must format render a
+# `rehearsal_*` config (the default) and the arms that must refuse render `prd` or another value.
 render_stage() {
   local expect="$1" byid="$2" mnt="$3" fstab="$4" detail="$5" phone="$6" waitbound="${7:-30}" out="$8" cfg="${9:-rehearsal_loopback}"
   # P1b relative-operand rule (#7810): the `> "$out"` below TRUNCATES whatever the 8th positional
@@ -265,7 +266,7 @@ backing_of() {
 # ═══ THE UNPOINTED ARMS (no pointer): the four-arm discriminator over the ONE volume ═════════
 # After #9786 there is no plaintext volume. With no pointer the stage resolves the single rendered
 # volume and the signature decides: ext4 and any foreign type REFUSE, crypto_LUKS opens, and only a
-# measured-blank device may be formatted — and never when the rendered Doppler config is `prd`.
+# measured-blank device may be formatted — and only when the rendered Doppler config is `rehearsal_*`.
 
 # ── UNP3: ext4 REFUSES regardless of expect_luks ────────────────────────────────
 # The ext4 mount arm is gone. Before the strip this very fixture mounted as-is when expect_luks=false;
@@ -277,8 +278,8 @@ if grep -qF 'unhandled signature' "$ARM_DETAIL"; then ok "UNP3 the refusal names
 if [ "$(/usr/sbin/blkid -p -o value -s TYPE "$L_EXT4" 2>/dev/null)" = "ext4" ]; then ok "UNP3 the ext4 device was left untouched"; else no "UNP3 the refusal path wrote to a device carrying data"; fi
 
 # ── ARM 3: empty device — the ONLY arm that may write a header ──────────────────
-# Rendered with a NON-prd Doppler config (the provision-rehearsal shape). UNP5 below is the same
-# fixture shape under `prd`.
+# Rendered with a `rehearsal_*` Doppler config (the provision-rehearsal shape). UNP5/UNP5b below are the same
+# fixture shape under `prd` and under a non-rehearsal value.
 L_RAW="$(new_loop raw raw)"
 run_arm "ARM3 empty device luksFormats, mkfs, mounts" false "$L_RAW" 0
 if [ "$(/usr/sbin/blkid -o value -s TYPE "$L_RAW" 2>/dev/null)" = "crypto_LUKS" ]; then ok "ARM3 the device now carries a LUKS2 header"; else no "ARM3 the device was not luksFormatted"; fi
@@ -713,16 +714,19 @@ cryptsetup close inngest-redis >/dev/null 2>&1
 #     BOOT2-PTR3 2 (reopen unit refuses a third id).
 #   90 - 34 + 23 = 79. Every counted assertion is on the success path, so the count is exact, not a lower bound.
 #
-# 79 -> 81 (#9786 review fix round), also PROJECTED: the ARM0 "nothing created at the absent alias" row is deleted
-# (-1: the harness never creates that alias when the volume is absent, so it could not fail); UNP5 gains the
-# stage=unpointed_raw_refused failure-row assertion (+1); UNP5b is new (+3: rc, refusal text, device untouched; the
-# refusal is an allowlist, so a non-rehearsal non-prd config must refuse too). PTR1 now renders under `prd` with
-# no count change. Net +3 - 1 = +2 -> 81. Confirm against the first CI run before the literal is trusted.
-if [ "$executed" -lt 81 ]; then
+# 79 -> 82 (#9786 review fix round), also PROJECTED, and corrected by the round-1 fix-round seats (security,
+# test-design and code-quality each read the first version of this comment as one low): ARM0 "nothing created at the
+# absent alias" row deleted (-1: the harness never creates that alias when the volume is absent, so it could not
+# fail); UNP5 gains the stage=unpointed_raw_refused failure-row assertion (+1); UNP5b is new (+3: the run_arm rc row,
+# the refusal text, the device untouched; the refusal is an allowlist, so a non-rehearsal non-prd config must
+# refuse too). PTR1 now renders under `prd` with no count change. Net -1 + 1 + 3 = +3 -> 79 + 3 = 82.
+# Confirm against the first CI run before the literal is trusted; if the measured count differs, account for it arm
+# by arm before moving the literal.
+if [ "$executed" -lt 82 ]; then
   fail=$((fail + 1))
-  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 81. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
+  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 82. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
 else
-  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 81)\n' "$executed"
+  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 82)\n' "$executed"
 fi
 
 echo ""
