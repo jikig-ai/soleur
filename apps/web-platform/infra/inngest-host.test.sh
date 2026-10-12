@@ -676,24 +676,31 @@ grep -qE 'inngest-boot-phone-home\.sh flip-assets-(staged|MISSING)' "$CLOUD_INIT
   && pass || fail "cloud-init-inngest.yml must phone-home the flip-assets staging outcome (flip-assets-staged / flip-assets-MISSING) so a future staging failure self-diagnoses off-box (#6178)"
 
 # 6. D1 GUARD (#8285, #9786). The retired plaintext backstop volume is no longer declared, and the
-#    cloud-init `inngest_volume_id` input is gone: the template no longer reads it, so no *.tf in the
-#    root may assign it again. Property: "removing the backstop volume cannot change this host's
-#    rendered user_data, and the retired id cannot come back as a template input". Three scans over
+#    cloud-init `inngest_volume_id` input is gone: the template no longer reads it, so nothing in the
+#    root may assign it again. Property: "the retired volume is not declared, and the retired id cannot
+#    come back as a template input". (Before #9786 this guard also held `user_data` byte-identical across
+#    the backstop's removal by pinning the id as a literal; #9786 deliberately changes user_data once, in a
+#    parked PR, and removes the pin.) Scans over
 #    comment-stripped *.tf (a comment naming a resource must not satisfy or trip them):
 #      v1 neither retired address is declared; v2 zero `inngest_volume_id =` assignments in any file
 #      of the root; v4 no live reference to hcloud_volume.inngest_redis (the `_luks` sibling is a
-#      different resource and is allowed). The rehearsal root is another directory, graded by
-#      inngest-provision-rehearsal.test.sh, not by this scan.
+#      different resource and is allowed). The rehearsal root's *.tf and the budget script are
+#      scanned for v2 as well (the template has three renderers); v1/v4 stay root-only.
 d1_violations() { # d1_violations <dir>
-  local dir="$1" f stripped n
+  local dir="$1" f stripped extra_scan n
   # Comment lines and `description = "..."` lines are prose, not references (a variable description may
   # name the retired address to explain what it pins); a depends_on, attribute access or resource header
   # is what v1/v4 are after.
+  # The scan covers the root's *.tf, the rehearsal root's *.tf (the second renderer of this template) and the
+  # budget script (the third); the last two are absent from the fixtures and skipped there. The key is
+  # matched QUOTED or bare, at line start or inline, and with `=` or `:` (JSON-style) so a spelling change
+  # cannot walk past it.
   stripped="$(for f in "$dir"/*.tf; do [ -f "$f" ] && grep -vE '^[[:space:]]*(#|//|description[[:space:]]*=)' "$f"; done)"
+  extra_scan="$(for f in "$dir"/inngest-provision-rehearsal/*.tf "$dir"/inngest-userdata-budget.sh; do [ -f "$f" ] && grep -vE '^[[:space:]]*(#|//|description[[:space:]]*=)' "$f"; done)"
   [[ -n "$stripped" ]] || { echo "no .tf content scanned (fail closed)"; return 0; }
   grep -qE '^[[:space:]]*resource[[:space:]]+"hcloud_volume(_attachment)?"[[:space:]]+"inngest_redis"' <<<"$stripped" \
     && echo "v1: hcloud_volume(_attachment).inngest_redis is declared again"
-  n="$(grep -cE '^[[:space:]]*inngest_volume_id[[:space:]]*=' <<<"$stripped")"
+  n="$(grep -cE '(^|[^[:alnum:]_])["'"'"']?inngest_volume_id["'"'"']?[[:space:]]*[=:]' <<<"${stripped}"$'\n'"${extra_scan}")"
   [[ "$n" == 0 ]] || echo "v2: expected zero inngest_volume_id assignments, found ${n}"
   grep -qE 'hcloud_volume\.inngest_redis([^_[:alnum:]]|$)' <<<"$stripped" \
     && echo "v4: a live reference to hcloud_volume.inngest_redis remains"
@@ -704,6 +711,7 @@ d1_fixture() { # d1_fixture <name> <extra tf> [second-file tf] — a compliant h
   mkdir -p "$d" || return 1
   printf 'resource "hcloud_server" "inngest" {\n  user_data = templatefile("x", {\n    inngest_luks_volume_id = hcloud_volume.inngest_redis_luks.id\n  })\n}\n%s\n' "${2:-}" > "$d/inngest-host.tf"
   if [[ -n "${3:-}" ]]; then printf '%s\n' "$3" > "$d/extra.tf"; fi
+  if [[ -n "${4:-}" ]]; then mkdir -p "$d/inngest-provision-rehearsal" && printf '%s\n' "$4" > "$d/inngest-provision-rehearsal/rehearsal.tf"; fi
   echo "$d"
 }
 _D1_OUT="$(d1_violations "$DIR")"
@@ -732,6 +740,18 @@ d1_row RED "D1-M3 the input is reintroduced as the retired literal in a SECOND f
 d1_row RED "D1-M5 a live reference hides in another expression" "$(d1_fixture m5 $'output "x" {\n  value = hcloud_volume.inngest_redis.id\n}')" "v4:"
 d1_row RED "D1-M6 two reintroduced assignments are both counted" "$(d1_fixture m6 $'locals {\n  b = templatefile("y", {\n    inngest_volume_id = "1"\n  })\n}' $'locals {\n  c = templatefile("z", {\n    inngest_volume_id = "2"\n  })\n}')" "found 2"
 d1_row RED "D1-M7 an empty root scans nothing" "$(mkdir -p "${_G1_TMP}/d1-empty" && echo "${_G1_TMP}/d1-empty")" "fail closed"
+d1_row RED "D1-M8 the input is reintroduced with a QUOTED key" "$(d1_fixture m8 '' $'locals {\n  b = templatefile("y", {\n    "inngest_volume_id" = "1"\n  })\n}')" "found 1"
+d1_row RED "D1-M9 the input is reintroduced INLINE in a one-line map" "$(d1_fixture m9 $'locals {\n  b = templatefile("y", { inngest_volume_id = "1" })\n}')" "found 1"
+d1_row RED "D1-M10 the input is reintroduced in the REHEARSAL root (the template's second renderer)" "$(d1_fixture m10 '' '' $'locals {\n  b = templatefile("y", {\n    inngest_volume_id = "1"\n  })\n}')" "found 1"
+# D1-V VALUE PINS. D1 proves the retired key stays gone; it said nothing about what the surviving key is
+# BOUND to, so `inngest_luks_volume_id = "106261946"` (the retired id) or any other literal would have passed
+# every suite while pointing the resolver at a destroyed device. Pin each renderer's binding to its own
+# declared LUKS volume, comment-stripped and whole-line.
+_pin_prod="$(grep -vE '^[[:space:]]*#' "$DIR/inngest-host.tf" | grep -cxE '[[:space:]]*inngest_luks_volume_id[[:space:]]*=[[:space:]]*hcloud_volume\.inngest_redis_luks\.id')"
+[[ "$_pin_prod" == 1 ]] && pass || fail "D1-V1 inngest-host.tf must bind inngest_luks_volume_id to hcloud_volume.inngest_redis_luks.id exactly once (found ${_pin_prod})"
+_pin_reh="$(grep -vE '^[[:space:]]*#' "$DIR/inngest-provision-rehearsal/rehearsal.tf" | grep -cxE '[[:space:]]*inngest_luks_volume_id[[:space:]]*=[[:space:]]*hcloud_volume\.rehearsal_inngest_luks\.id')"
+[[ "$_pin_reh" == 1 ]] && pass || fail "D1-V2 rehearsal.tf must bind inngest_luks_volume_id to hcloud_volume.rehearsal_inngest_luks.id exactly once (found ${_pin_reh})"
+
 # D1-H2 HARNESS ROW: the RED rows must be able to fail the suite. With d1_violations neutered to
 # `return 0` the same RED row must register a failure; if it registers a pass the RED rows above
 # prove nothing. Driven in a subshell so the neutered function and its counters never leak.
@@ -745,7 +765,9 @@ _D1_NEUTERED="$( d1_violations() { return 0; }; fails=0; fail() { fails=$((fails
 # 99 -> 100 (#9786): measured 101 before the D1 rewrite (the old floor carried 2 of slack). The rewrite drops the
 # pin-drift, pin-as-reference and pin-missing rows (-3), adds a second-file reintroduction row (+1) and the
 # neutered-scan harness row (+1): 101 - 3 + 1 + 1 = 100, exact.
-INNGEST_HOST_MIN_ASSERTIONS=100
+# 100 -> 105 (#9786 review fix round): D1-M8 quoted key, D1-M9 inline map, D1-M10 rehearsal-root reintroduction
+# (+3), and the D1-V1/V2 value pins on the surviving key (+2). Exact.
+INNGEST_HOST_MIN_ASSERTIONS=105
 if [ "$((passes + fails))" -lt "$INNGEST_HOST_MIN_ASSERTIONS" ]; then
   printf 'FAIL: only %s assertions ran against a floor of %s — a section was skipped or the suite narrowed\n' "$((passes + fails))" "$INNGEST_HOST_MIN_ASSERTIONS" >&2
   exit 1

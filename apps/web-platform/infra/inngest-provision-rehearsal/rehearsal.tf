@@ -216,10 +216,15 @@ resource "doppler_service_token" "rehearsal" {
 }
 
 # --- The two volumes ---------------------------------------------------------
-# Mirrors prod's pair: a plaintext AOF volume and the LUKS target volume, both RAW (no
-# `format` — the blkid signature IS the LUKS discriminator; declaring ext4 would make the
-# resolver's empty arm unreachable, see inngest-redis-luks.tf's header note). Size matches
-# prod's inngest_redis_volume_size default so the rehearsal exercises the same geometry.
+# `rehearsal_inngest_luks` is the volume the rendered template resolves and (with no pointer, on a
+# `rehearsal_*` config) luksFormats; it is RAW (no `format` — the blkid signature IS the LUKS
+# discriminator; declaring ext4 would make the resolver's empty arm unreachable, see
+# inngest-redis-luks.tf's header note).
+# `rehearsal_inngest` is UNUSED since #9786: it used to mirror prod's retired plaintext AOF volume, and
+# the template no longer takes its id (the `inngest_volume_id` key is gone), so it is attached and
+# never read. It is kept for now only because removing it changes the rehearsal's attach topology, its
+# plan-shape fixtures and two ledger rows; removal is tracked in the #9786 follow-up tracker.
+# Size matches prod's inngest_redis_volume_size default so the rehearsal exercises the same geometry.
 resource "hcloud_volume" "rehearsal_inngest" {
   name     = "${local.rehearsal_host_name}-store"
   size     = 10

@@ -819,39 +819,15 @@ variable "grok_dogfood_private_ip" {
   default     = "10.0.1.50"
 }
 
-# #7695. Arms the cloud-init LUKS discriminator's post-recut refusal on the dedicated inngest
-# host. While FALSE, an ext4 signature on the Redis AOF volume is the expected pre-recut state
-# and is mounted as-is. Once TRUE, an ext4 signature means the recut did not take, and the boot
-# refuses rather than putting in-flight job payloads back on a plaintext volume while the
-# encryption-posture ledger claims otherwise.
+# #7695 / #9786. INERT. This used to arm the cloud-init discriminator's post-recut refusal (an
+# ext4 signature on the Redis AOF volume refused once the recut had run). The plaintext volume was
+# destroyed in #8285 and #9786 deleted the ext4 arm and every branch on this value, so it is
+# TELEMETRY ONLY. Nothing branches on it; it is emitted as `expect_luks=` on the LUKS stage rows.
 #
-# THIS MUST NOT FLIP IN THE SAME CHANGE THAT DROPS `format`, and an earlier revision of this
-# comment said it must ("the two are one decision"). Following that instruction bricks the
-# dedicated host's store. The two settings act at different moments:
-#
-#   `format` governs what a CREATE produces — it matters exactly once, on the recut apply.
-#   `inngest_expect_luks` governs what every BOOT refuses — it matters on every boot after it flips.
-#
-# The delivery order is four dispatches (ADR-199 addendum, 2026-09-03). HISTORICAL: all four have
-# run or been superseded; the `inngest-volume-recut` dispatch named below no longer exists (the
-# 2026-09-20 additive cutover, ADR-142, replaced it, and the plaintext volume was retired on 2026-10-09
-# through the since-removed `inngest-backstop-retire` dispatch, #8285).
-#
-#   1. merge                    `format` gone; expect_luks STILL false
-#   2. inngest-host-replace     first boot; the volume is STILL the old ext4 one, so ARM 1 mounts
-#                               it plaintext and the host serves. With expect_luks=true here, ARM 1
-#                               REFUSES instead, /mnt/data never mounts, inngest-redis.service's
-#                               mount guard correctly declines to start, and the dedicated host
-#                               comes up with no store — on a host with no SSH and no console.
-#   3. inngest-volume-recut     the volume is destroyed and re-created RAW (this is where dropping
-#                               `format` pays off; ignore_changes suppresses diffs, never creates)
-#   4. inngest-host-replace     first boot against a RAW device: ARM 3 luksFormats it. ARM 3 does
-#                               not consult expect_luks at all, so the cut does not need it either.
-#
-# So expect_luks buys nothing until AFTER step 4, and costs the host its store if flipped before
-# step 2. Flip it in a LATER change, once a boot has been observed reaching
-# `SOLEUR_INNGEST_LUKS_STAGE stage=fstab` on /dev/mapper/inngest-redis — at which point an ext4
-# signature really does mean the recut did not take, which is the only state it exists to refuse.
+# IT IS STILL A RENDERED TEMPLATE KEY. Flipping it changes user_data and replaces the host
+# (hcloud_server.inngest has no ignore_changes on user_data), and it will NOT refuse anything. The
+# four-dispatch delivery history that used to sit here lives in the ADR-199 addendum (2026-09-03).
+# Retirement is tracked with the other #9786 follow-ups; do not repurpose the name.
 #
 # It is not an operator-supplied value and has no secret content.
 variable "inngest_expect_luks" {

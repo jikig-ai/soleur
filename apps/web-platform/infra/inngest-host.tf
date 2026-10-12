@@ -339,12 +339,9 @@ locals {
     # builds its allowlist of devices it may touch from this id alone, so any other device is
     # refused rather than probed.
     inngest_luks_volume_id = hcloud_volume.inngest_redis_luks.id
-    # #7695. Arms the post-recut refusal in the cloud-init LUKS discriminator. FALSE today and
-    # for as long as the volume is ext4; the recut branch flips it in the same change that drops
-    # `format` from hcloud_volume.inngest_redis. It is threaded as a STRING because templatefile
-    # interpolates it into a shell comparison (`[ "$EXPECT_LUKS" = "true" ]`) — a bare bool would
-    # render as `true`/`false` and compare correctly, but the explicit tostring() makes the
-    # rendered form independent of how HCL chooses to stringify it.
+    # #7695 / #9786. INERT telemetry field (`expect_luks=` on the LUKS stage rows); nothing in the
+    # template branches on it any more. Still a rendered key, so changing the variable changes
+    # user_data. Threaded as a STRING so the rendered form does not depend on how HCL stringifies a bool.
     inngest_expect_luks = tostring(var.inngest_expect_luks)
     # Scoped Doppler token → 0600 root env file. read/write on the ISOLATED `soleur-inngest`
     # project's `prd` root config (the flip FSM writes INNGEST_CUTOVER_FLIP under it — see the

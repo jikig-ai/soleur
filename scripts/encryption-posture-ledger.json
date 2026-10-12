@@ -282,7 +282,7 @@
    },
    "at_rest": {
     "mechanism": "plaintext-exception",
-    "evidence": "apps/web-platform/infra/inngest-provision-rehearsal/rehearsal.tf, resource \"hcloud_volume\" \"rehearsal_inngest\" (RAW — no format attribute, no LUKS apparatus) — a posture mirror of hcloud_volume.inngest_redis's declaration, because the #8539 forced-race rehearsal's two-volume shape must match the production boot it rehearses",
+    "evidence": "apps/web-platform/infra/inngest-provision-rehearsal/rehearsal.tf, resource \"hcloud_volume\" \"rehearsal_inngest\" (RAW — no format attribute, no LUKS apparatus) — UNUSED since #9786: the rendered template no longer takes this volume's id, so the volume is attached and never read; it formerly mirrored the retired plaintext AOF volume of the production boot the #8539 forced-race rehearsal reproduces. Kept pending the #9786 follow-up tracker (removal changes the rehearsal's attach topology and plan-shape fixtures)",
     "defends_against": "nothing at the volume layer",
     "does_not_defend": "at-rest recovery of the detached device — acceptable here only because the volume is created empty for one boot and destroyed empty by the workflow's if:always() teardown",
     "disclosed_as": "not-publicly-claimed",

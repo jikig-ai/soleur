@@ -306,6 +306,20 @@ luks_failed_check() { # <row-set> — viol on any `Failed to start inngest-luks*
     || ok "zero 'Failed to start inngest-luks*' journal rows"
 }
 
+# FORBIDDEN IN EVERY MODE (#9786): the first-boot LUKS stage's unpointed-arm refusal. A rehearsal host
+# renders a `rehearsal_*` Doppler config with NO pointer and a raw volume, which is exactly the one state
+# in which the template may luksFormat. `stage=unpointed_raw_refused` on this host means the allowlist
+# and the rehearsal config disagree (a renamed config prefix), i.e. the rehearsal no longer exercises the
+# format arm it exists to rehearse, and no further polling heals it. The stage name is set before the
+# guard so the luks_err row and the inngest-luks-FAILED phone-home both carry it.
+unpointed_refused_check() { # <row-set> — viol on any stage=unpointed_raw_refused row
+  local n_refused
+  n_refused="$(printf '%s\n' "$1" | grep -cF 'stage=unpointed_raw_refused' 2>/dev/null || true)"
+  (( n_refused > 0 )) \
+    && viol "${n_refused} stage=unpointed_raw_refused row(s) — the unpointed LUKS arm refused to format on a rehearsal host (the allowlist and the rehearsal Doppler config disagree, #9786)" \
+    || ok "zero stage=unpointed_raw_refused rows"
+}
+
 if [[ -z "$IID" && -z "$(printf '%s' "$HOST_ROWS" | tr -d '[:space:]')" ]]; then
   # Zero host rows with a live anchor is "dark so far", not "dark forever".
   echo "TRANSIENT (${MODE}): the source is answering but this host has emitted nothing yet — keep polling; the poll deadline owns the terminal verdict." >&2
@@ -330,6 +344,7 @@ case "$MODE" in
     (( n_start_distinct >= MIN_ATTEMPTS )) && ok "distinct provision-attempt-start attempts ${n_start_distinct} >= ${MIN_ATTEMPTS} (the retry loop retried NIC-less)" || want "distinct provision-attempt-start attempts ${n_start_distinct} >= ${MIN_ATTEMPTS} (the retry loop retried NIC-less)"
     (( n_nic_fail >= 1 ))        && ok "NIC-absent failure observed (private_nic_timeout/provision-nic-ABSENT n=${n_nic_fail})" || want "NIC-absent failure observed (private_nic_timeout/provision-nic-ABSENT n=${n_nic_fail})"
     luks_failed_check "$HOST_ROWS"
+    unpointed_refused_check "$HOST_ROWS"
     KEY=REHEARSAL_PHASE_A_OBSERVED
     ;;
   phase-b)
@@ -349,6 +364,7 @@ case "$MODE" in
     (( n_done >= 1 )) && ok "bootstrap-done emitted for this host (implies nic_present + zot + isolation + bootstrap all ran)" || want "bootstrap-done emitted for this host (n=${n_done})"
     note "info: ${n_exit} provision-attempt-exit-* row(s) in window (retries before convergence are expected); private_nic_ok n=${n_ok} (informational — emitted only when the wait actually ran)"
     luks_failed_check "$HOST_ROWS"
+    unpointed_refused_check "$HOST_ROWS"
     KEY=REHEARSAL_PHASE_B_RECOVERY
     ;;
   post-reboot)
@@ -368,6 +384,7 @@ case "$MODE" in
     (( n_provision > 0 )) && viol "${n_provision} provision marker(s) AFTER the reboot boundary — the latch did not hold (provision re-ran post-reboot)" || ok "zero provision markers after the reboot boundary — the latch held"
     (( n_restage >= 1 ))  && ok "token-restage anchor re-emitted post-reboot ON THE PHONE-HOME CHANNEL (proves this boot ran AND the measured channel is live)" || want "token-restage anchor re-emitted post-reboot (stage=bs-token-restaged n=${n_restage})"
     luks_failed_check "$POST_ROWS"
+    unpointed_refused_check "$POST_ROWS"
     KEY=REHEARSAL_POST_REBOOT_LATCH
     ;;
 esac

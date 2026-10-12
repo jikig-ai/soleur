@@ -117,7 +117,7 @@ Refusal reasons, and what each one is telling you:
 
 | `reason=` | Meaning |
 | --- | --- |
-| `luks-key-absent` / `redis-password-absent` / `volume-ids-unreadable` | The unit's own inputs did not arrive — a Doppler name is missing, or the first-boot stage did not write `/etc/default/inngest-luks-volumes`. Nothing was stopped. |
+| `luks-key-absent` / `redis-password-absent` / `volume-ids-unreadable` | The unit's own inputs did not arrive — a Doppler name is missing, or the first-boot stage did not write `/etc/default/inngest-luks-volumes`. Nothing was stopped. **After the host replace that carries #9786 this is the EXPECTED answer to any flagged run** (flag `armed`/`copying`/`copied`/`swapped`/`rollback`): the stage no longer writes the plaintext id the image-baked script reads, the cutover is complete, and at flag `done` the unit is a no-op. A refusal writes a terminal flag, so do not dispatch a flagged run on a host in that state. |
 | `pointer-already-set` | This host is already past the cutover. There is no verb to go back (§5a); nothing to do. |
 | `canonical-not-plaintext` / `staging-not-mapper` / `staging-wrong-backing` / `canonical-mapper-open` | The pre-cutover topology is not what the FSM requires. The host is not in the state this dispatch acts on; read the probe row before doing anything. |
 | `envfile-key-absent` | `/etc/default/inngest-luks` carries no passphrase, so the boot-reopen unit could not open the store on the next boot. Refused before anything stopped. |
@@ -625,9 +625,12 @@ and no `BASELINE_DECLARED_PROBES` bump were created.
   plaintext volume it would have copied back to was destroyed on 2026-10-09 (§5a, §5b).
 - **After the host replace that carries #9786 (parked; not yet in force).** The template resolves the one LUKS volume.
   An unpointed boot-reopen of a non-LUKS volume now FAILS `reopen_not_luks` (it used to skip with exit 0), and the
-  first-boot stage row for the no-pointer world reads `mode=unpointed` (was `plaintext_canonical`). A blank volume on a
-  `prd` host is refused (`unpointed_raw_refused`); there is no automated bring-up for a brand-new blank `prd` volume, so
-  that case needs a disaster-recovery procedure written when it is ever needed (ADR-142, addendum 2026-10-12).
+  first-boot stage row for the no-pointer world reads `mode=unpointed` (was `plaintext_canonical`). A blank volume is
+  formatted only on a `rehearsal_*` config; on any other config the stage fails with `stage=unpointed_raw_refused`
+  (`inngest-luks-FAILED` phone-home carries the same stage), and there is no automated bring-up for a brand-new blank
+  `prd` volume, so that case needs a disaster-recovery procedure written when it is ever needed (ADR-142, addendum
+  2026-10-12). A lost pointer over an INTACT LUKS volume boots (opened and mounted) and is visible only as
+  `pointer=absent` on the `stage=resolve` row.
 
 ---
 

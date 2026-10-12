@@ -177,8 +177,9 @@ resource "logtail_exploration_alert" "monitor_send_failed" {
 # WHAT IT DETECTS. After the LUKS cutover, the dedicated host's own probe row resolves the device
 # backing /mnt/data all the way to a Hetzner by-id alias (`data_mount_devid`, probe_schema=8). Post
 # cutover that alias must be the ADDITIVE volume's. Anything else is the store having moved back —
-# an on-host rollback, a reboot that took the pre-cutover arm because the pointer went missing, or
-# a replace whose first boot resolved the plaintext volume — and each of those means writes are
+# an on-host rollback, or any boot that mounted a device other than the additive volume (the
+# plaintext volume is destroyed and the template no longer has an arm for it, #9786, so this is now
+# the tripwire for a regression of that, not a reachable state) — and each of those means writes are
 # landing UNENCRYPTED again, which is the one thing this whole change exists to prevent. Nothing
 # else notices: the scheduler is healthy in every one of those states, so uptime stays green.
 #

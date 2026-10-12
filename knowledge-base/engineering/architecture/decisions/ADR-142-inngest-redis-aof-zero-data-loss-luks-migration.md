@@ -727,9 +727,18 @@ mount), the staging block and the `expect_luks` branches are removed. The pointe
 pointer the one candidate is resolved by signature (`crypto_LUKS` opens, anything else except blank
 refuses): there is no choice to make, so the 2026-09-18 amendment's "a pointer, never a signature" (its section 2) still holds wherever a
 choice exists. The telemetry `mode` value for that world is `unpointed` (was `plaintext_canonical`). The
-no-pointer arm may not `luksFormat` when the rendered Doppler config is `prd` (`unpointed_raw_refused`), so a
-lost pointer on a damaged-header volume cannot reformat the sole copy; a brand-new blank `prd` volume has no
-automated bring-up path and needs a written disaster-recovery procedure when it is ever needed.
+no-pointer arm may `luksFormat` ONLY when the rendered Doppler config starts `rehearsal_` (an allowlist: `prd`
+and any other value refuse as `unpointed_raw_refused`, with that as the failure row's stage), so a lost pointer on a
+damaged-header volume cannot reformat the sole copy; a brand-new blank `prd` volume has no automated bring-up path
+and needs a written disaster-recovery procedure when it is ever needed.
+
+**Consequences recorded at review.** (1) A lost pointer over an INTACT LUKS volume now boots: the unpointed arm
+opens and mounts it rather than refusing, and the only marker is `pointer=absent` on the `stage=resolve` row (no
+alert keys on it). (2) The image-baked `inngest-luks-cutover.sh` reads the plaintext id from the volumes file,
+which the stage no longer writes, so it refuses `volume-ids-unreadable` on every FLAGGED run (`armed`, `copying`,
+`copied`, `swapped`, `rollback`) and a refusal writes a terminal flag and restarts services; at flag `done` it is a
+no-op, so the replace window must confirm `flag=done` first. (3) `inngest_expect_luks` is inert but still a rendered
+key: changing it changes `user_data` and replaces the host.
 
 **What this addendum does NOT change.** The pointer arm, the encryption mechanism, `inngest_expect_luks` as
 an inert template key and telemetry field, or the image-baked `inngest-luks-cutover.sh` (its `rollback)` arm

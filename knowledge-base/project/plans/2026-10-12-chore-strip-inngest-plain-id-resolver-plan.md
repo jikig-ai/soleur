@@ -429,20 +429,41 @@ able to read the diff as "deletions plus three re-pointed lines".
 
 ### Phase 7 - Unpark checklist (documented in the PR body; NOT executed in this run)
 
+> **Revised in the #10081 review fix round.** The first version asked for a rehearsal dispatch against the
+> branch. `inngest-provision-rehearsal.yml` runs under `environment: web-platform-infra-apply`, which carries a
+> main-only deployment-branch policy (the workflow says so: a branch dispatch could run a neutered plan-shape
+> guard), so it CANNOT be dispatched from this branch. The rehearsal therefore runs from main after the merge,
+> inside the same window, and the abort path is a revert BEFORE any replace dispatch.
+
 When an approved `inngest-host-replace` window exists (or #8620 reaches the inngest rebuild window):
 1. `git rebase origin/main` (apply the staleness rule); re-run Phase 4 suites + `inngest-userdata-budget.sh`.
-2. Confirm `inngest-provision-rehearsal.yml` can be dispatched from a branch ref (its environment/deployment
-   policy may be main-only), then dispatch it against the branch (separate root, scratch resources): the only
-   end-to-end proof of the unpointed fresh-provision arm on a real boot. It never exercises the pointer arm
-   with the stripped template (covered by AC7 byte-identity + loopback PTR rows).
-3. Re-run Phase 0.1 (`pointer=106903269` VALUE from the latest `stage=resolve` row) and 0.1b immediately
-   before the dispatch; record both in the PR. Any other pointer value is a third-id refusal on a no-SSH host.
-4. Merge IMMEDIATELY before the dispatch, in one window (merging alone plants the drift alert and the
-   `server_touched` abort). Check the drift issue body stays under its 60,000-byte `head -c` cap (a
-   `user_data` diff is large). Dispatch `apply_target=inngest-host-replace` under its own reviewer gate.
-   Post-replace verify via Better Stack: `stage=resolve ... mode=pointer`, `stage=verify`,
-   `inngest-luks-reopen-armed`, probe row `data_mount_devid=scsi-0HC_Volume_106903269`.
-5. Fold #10073, any pending bootstrap-pin-bump PR and other pending `user_data` PRs into the same window
+2. Re-run Phase 0.1 and 0.1b immediately before the merge, and record both in the PR:
+   - `pointer=106903269` read as a VALUE from the latest `stage=resolve` row **of the live host**. Filter on
+     `host=soleur-inngest` (rehearsal hosts emit `host=soleur-inngest-rehearsal-<run id>` and read
+     `mode=unpointed pointer=absent`, which must not be mistaken for the live host).
+   - **Zero rows fallback:** the live host emits `resolve` rows only at first boot, so a short window can return
+     none. Widen the query window (for example 90 days) until the latest `stage=resolve` row for `host=soleur-inngest`
+     appears, and if no such row can be found at all, STOP: an unverified pointer is a third-id refusal on a host with no SSH.
+   - The cutover flag reads `done`. D3 leaves the image-baked cutover script refusing every flagged run
+     (`volume-ids-unreadable`), and a refusal writes a TERMINAL flag (`aborted`/`copied`) and restarts services;
+     at `done` it is a no-op. Any other flag value is a STOP.
+3. Merge IMMEDIATELY before step 4, in the one window (merging alone plants the drift alert and the
+   `server_touched` abort). Check the drift issue body stays under its 60,000-byte `head -c` cap (a `user_data`
+   diff is large).
+4. Dispatch `inngest-provision-rehearsal.yml` from main (the only end-to-end proof of the unpointed fresh-provision
+   arm on a real boot; it never exercises the pointer arm). Its capture must report `mode=unpointed`,
+   `stage=verify`, and ZERO `stage=unpointed_raw_refused` rows (the capture script now fails on that row: it
+   would mean the `rehearsal_*` allowlist and the rehearsal Doppler config disagree). **If it is red: revert the
+   merge BEFORE any replace dispatch** (the live host is untouched until step 5).
+5. Dispatch `apply_target=inngest-host-replace` under its own reviewer gate. Post-replace verification via
+   Better Stack, positive: `stage=resolve ... mode=pointer pointer=106903269`, `stage=verify`,
+   `inngest-luks-reopen-armed`, probe row `data_mount_devid=scsi-0HC_Volume_106903269`. Negative: zero
+   `stage=unpointed_raw_refused`, zero `volume-ids-unreadable`, zero `inngest-luks-FAILED`, and the
+   `SOLEUR_INNGEST_LUKS_CUTOVER` rows read `noop-done`. **Abort path:** a failed first boot leaves the sole
+   scheduler dark with no SSH; recovery is a revert of this PR plus a second, separately approved
+   `inngest-host-replace` dispatch (the pointer arm is byte-identical to main, so a failure here points at the
+   rendered inputs, not the production path).
+6. Fold #10073, any pending bootstrap-pin-bump PR and other pending `user_data` PRs into the same window
    deliberately, one dispatch. Saved Better Stack queries keyed on `mode=plaintext_canonical` must be
    re-keyed to `mode=unpointed`.
 
@@ -663,7 +684,7 @@ data-protection change. Product/UX gate: NONE (no `components/**`, `app/**` file
 - AC5 `inngest-redis-luks-loopback.test.sh` re-keyed ARM0/2/3/4, UNP3-UNP5 and the kept PTR arms green in CI (locally only if the harness reports available); ARM1/ST*/REG removed, not skipped.
 - AC6 `bash apps/web-platform/infra/inngest-userdata-budget.sh` exit 0 and stored bytes <= baseline 19,680 B (strictly smaller).
 - AC7 The pointer arm hunk (`if [ "$MODE" = pointer ]; then ... STAGE=mount_luks ... luks_emit mount_luks 0 crypto_LUKS "mode=pointer"`) is byte-identical to `origin/main`'s (diff of that range empty).
-- AC8 `git diff origin/main -- apps/web-platform/infra/cloud-init-inngest.yml` hunks all fall inside the two regions named in Phase 2 (no hunk between the boot-reopen script's end and the `LUKSEOF` start, and none after the `inngest-luks-reopen-armed` item).
+- AC8 `git diff origin/main -- apps/web-platform/infra/cloud-init-inngest.yml` hunks all fall inside the two regions named in Phase 2 (no hunk between the boot-reopen script's end and the `LUKSEOF` start, and none after the `inngest-luks-reopen-armed` item). **Amended in the review fix round:** comment-only lines (whole-line `# ` comments, stripped from the rendered `user_data` by `inngest_rationale_strip`) are exempt, so the stale lead-in comment above the `LUKSEOF` item and the comments at the `mkdir -p /mnt/data` item and the RESOLVE header are corrected; the only added code hunk outside the regions is none (the D6 guard and its `STAGE=` line sit inside Region B).
 - AC9 `.claude/hooks/grep-q-pipe-guard.test.sh` still reads `cloud-init-inngest.yml | = | 4`; `templatefile-bare-dollar-guard.test.sh`, `cloud-init-inngest-bootstrap.test.sh`, `cloud-init-inngest-provision-unit.test.sh`, `inngest-provision-rehearsal.test.sh`, `journald-config.test.sh`, `cloud-init-user-data-size.test.ts`, `lint-encryption-posture` suite/lint, `c4-count-parity.test.sh` green.
 - AC10 ADR-142 addendum amended (status "adopting"); `grep -rn "ADR-142" ` unchanged ordinal (no new ADR).
 - AC11 No file outside the Files-to-Edit list changed (`git diff --name-only origin/main`); in particular none of `inngest-redis-luks.tf`, `inngest-luks-cutover.sh`, `inngest-redis-bootstrap.sh`, `apply-web-platform-infra.yml`, `betterstack-logs-alerts.tf`; `variables.tf` diff is one description line.
@@ -675,7 +696,7 @@ data-protection change. Product/UX gate: NONE (no `components/**`, `app/**` file
 
 ### Post-merge (operator-run, NOT part of this run; documented in the PR for the unpark)
 
-- Phase 7 checklist items 1-5. Nothing here is automated by this plan; the replace itself is the
+- Phase 7 checklist items 1-6. Nothing here is automated by this plan; the replace itself is the
   existing reviewer-gated dispatch.
 
 ## Test Scenarios

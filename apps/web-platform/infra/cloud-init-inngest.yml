@@ -176,6 +176,8 @@ write_files:
       # THE POINTER, staged into /etc/default/inngest-luks by the first-boot stage because this unit
       # runs before the network and cannot fetch it. Same authority as in the runcmd resolver.
       POINTER="$${INNGEST_LUKS_ACTIVE_VOLUME_ID:-}"
+      # expect_luks= is TELEMETRY ONLY since #9786 (nothing branches on it), but it is still a
+      # rendered input: changing the variable changes user_data and so replaces the host.
       emit() { logger -t inngest-luks-stage "SOLEUR_INNGEST_LUKS_STAGE stage=$1 rc=$2 blkid_type=$${3:-n/a} expect_luks=${inngest_expect_luks} detail=$${4:-none}" || true; }
       fail() { emit "$1" "$2" "$${3:-n/a}" "$4"; exit 1; }
 
@@ -208,7 +210,7 @@ write_files:
 
       if [ -n "$POINTER" ]; then
         # POST-CUTOVER. The pointer names the store; it must be present and must be LUKS. There is
-        # no fallback to the other volume — that fallback is the silent un-encryption Fork P refuses.
+        # no fallback to any other device — that fallback is the silent un-encryption Fork P refuses.
         case "$POINTER" in
           "$LUKS_ID") ;;
           *) fail reopen_pointer 1 n/a "the pointer names volume $POINTER, which is not this host's volume" ;;
@@ -1466,8 +1468,8 @@ runcmd:
   # Mount the Redis AOF volume by id at /mnt/data (inngest-redis.conf `dir /mnt/data/redis`).
   # `nofail` so a volume hiccup does not wedge boot; the redis unit's RequiresMountsFor=
   # /mnt/data pins Redis behind this mount so the AOF never lands on the ephemeral root disk.
-  # #7695: the plaintext `mount … || true` + ext4 fstab line that used to live here have MOVED,
-  # not been duplicated — they are now the ext4 arm of the LUKS discriminator further down, which
+  # #7695: the plaintext `mount … || true` + ext4 fstab line that used to live here were REMOVED,
+  # not moved: the mount now happens only in the LUKS stage further down (the mapper), which
   # cannot run until the Doppler CLI and token file exist. `mkdir` stays here so the mountpoint
   # exists for anything that probes it in between.
   - mkdir -p /mnt/data
@@ -1540,28 +1542,25 @@ runcmd:
   # Doppler (INNGEST_REDIS_LUKS_KEY on the isolated soleur-inngest/prd), so this stage
   # cannot run before the CLI install + token file above. The mount was previously a
   # plaintext `mount … || true` up at the mkdir; it has been REMOVED, not duplicated —
-  # grep this file for `scsi-0HC_Volume_` and there must be exactly one consumer, this one.
+  # grep this file for `scsi-0HC_Volume_` and the consumers are this stage and the boot-reopen
+  # script (both derive DEV from the same template id).
   #
-  # THE DISCRIMINATOR READS THE DEVICE, NOT TERRAFORM, and that is load-bearing in BOTH
-  # directions. `hcloud_volume.inngest_redis` no longer declares `format` at all (dropped
-  # 2026-09-03, #7695, so the recut's replacement volume is born RAW — `ignore_changes`
-  # suppresses diffs, never creates), while the LIVE device is still ext4 from its 2026-07-07
-  # creation. So the Terraform attribute and the disk disagree today and would have disagreed
-  # the other way before the drop: it was never a truthful statement about what is on the disk.
-  # blkid is. Five arms, and every non-handled state is FATAL rather than a fallthrough:
+  # THE DISCRIMINATOR READS THE DEVICE, NOT TERRAFORM. `hcloud_volume.inngest_redis_luks`
+  # is born RAW (`ignore_changes` suppresses diffs, never creates), so the Terraform attribute
+  # was never a truthful statement about what is on the disk. blkid is. Every non-handled
+  # state is FATAL rather than a fallthrough. With a pointer set (the production path) the
+  # pointer arm applies and refuses everything but crypto_LUKS. With NO pointer (a rehearsal
+  # host) the one rendered volume is read as:
   #
   #   device absent after a bounded wait  -> FATAL (never format a path that is not a device)
-  #   TYPE=ext4                           -> pre-recut: mount as-is.  post-recut: FATAL
-  #   TYPE empty (no signature)           -> luksFormat + luksOpen + mkfs + mount
+  #   TYPE empty (no signature)           -> rehearsal config only: luksFormat + luksOpen + mkfs
+  #                                          + mount. On a prd config: FATAL unpointed_raw_refused
   #   TYPE=crypto_LUKS                    -> luksOpen + mount
-  #   anything else                       -> FATAL
+  #   anything else (ext4 included)       -> FATAL
   #
-  # The ext4 arm is what keeps this deliverable. The volume is ext4 TODAY and this cloud-init
-  # edit force-replaces the host, so the very first boot under this stage is the ext4 case.
-  # A three-arm mirror of git-data (which owns a born-raw volume) would have made that boot
-  # FATAL and taken the host dark on merge. `expect_luks` is what arms the post-recut refusal:
-  # once the recut has run, an ext4 signature means the recut silently did not take, and
-  # mounting it would put the AOF back on plaintext while every artifact claims otherwise.
+  # The plaintext ext4 arm and `expect_luks` refusal that used to sit here were removed in #9786:
+  # the plaintext volume was destroyed in #8285, so an ext4 signature on the one remaining
+  # volume is a surprise to refuse, never a state to mount. `expect_luks` is now telemetry only.
   - |
     set -a
     . /etc/default/inngest-doppler
@@ -1610,6 +1609,7 @@ runcmd:
       exit 1
     }
     trap luks_err EXIT
+    # TELEMETRY ONLY since #9786: nothing branches on EXPECT_LUKS; it is emitted on every row.
     EXPECT_LUKS='${inngest_expect_luks}'
     # ── THE ONE VOLUME, BY ID (#6894, ADR-142; #9786 retired the plaintext volume) ───────
     # LUKS_ID is the store's volume. It comes from the template, so the pointer below can only
@@ -1682,8 +1682,8 @@ runcmd:
 
     # ── RESOLVE: which volume is /mnt/data ─────────────────────────────────────────────────
     # Three worlds, and the pointer decides between them; the signature never does:
-    #   pointer absent                     -> unpointed. LUKS_ID is the one candidate (the four-arm
-    #                                         discriminator below); there is no choice to make.
+    #   pointer absent                     -> unpointed. LUKS_ID is the one candidate (the
+    #                                         signature discriminator below); no choice to make.
     #   pointer = LUKS_ID                  -> that volume is canonical and MUST read crypto_LUKS.
     #   pointer names an absent device     -> REFUSE. Falling through to another device is the
     #                                         rejected signature rule's failure: plaintext mounted,
@@ -1798,9 +1798,11 @@ runcmd:
           # ARM 3 — raw device, no signature. This is the ONLY arm that may write a new header on
           # the canonical device, and it is reachable only because blkid returned rc 0-or-2 with an
           # EMPTY type while running as root: a positive proof of blankness, not an inference from
-          # a failed probe. It is refused outright when the rendered config is prd (#9786): a lost
-          # pointer plus a damaged header reads blank, and the volume is the only copy of the AOF.
-          [ '${inngest_doppler_config}' != prd ] || { echo "FATAL: unpointed_raw_refused — $DEV reads blank on a prd-config host with no pointer; refusing to luksFormat the only copy of the AOF" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+          # a failed probe. It is an ALLOWLIST (#9786): only a rehearsal_* config may format. A lost
+          # pointer plus a damaged header reads blank on a real host, and the volume is the only
+          # copy of the AOF, so every other config (prd today, anything added later) refuses.
+          STAGE=unpointed_raw_refused
+          case '${inngest_doppler_config}' in rehearsal_*) ;; *) echo "FATAL: unpointed_raw_refused — $DEV reads blank on a non-rehearsal config with no pointer; refusing to luksFormat the only copy of the AOF" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1 ;; esac
           STAGE=luks_format
           printf '%s' "$INNGEST_REDIS_LUKS_KEY" | cryptsetup luksFormat --batch-mode --type luks2 --key-file - "$DEV" 2>>"$INNGEST_LUKS_DETAIL"
           luks_emit luks_format 0 empty

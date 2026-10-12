@@ -270,7 +270,11 @@ else
   # entries are 4-space indented, so no interior line can match it.
   TF_KEYS="$(awk '/templatefile\("\$\{path\.module\}\/cloud-init-inngest\.yml", \{/,/^  \}\)/' \
     "$SCRIPT_DIR/inngest-host.tf" | grep -oE '^    [a-z0-9_]+ +=' | tr -d ' =' | sort -u)"
-  MAP_KEYS="$(grep -oE '\{ inngest_luks_volume_id=.*\}' "${BASH_SOURCE[0]}" | sed -n '1p' \
+  # Anchored on the `RENDER_EXPR=` ASSIGNMENT LINE, not on the first `{ inngest_luks_volume_id=` anywhere in
+  # this file: a copy of the key map in a comment above would otherwise be the first match and the real map
+  # could drift unseen (#9786 review).
+  MAP_KEYS="$(grep -E '^  RENDER_EXPR="[$]\(printf ' "${BASH_SOURCE[0]}" | sed -n '1p' \
+    | grep -oE '\{ inngest_luks_volume_id=.*\}' \
     | grep -oE '[a-z0-9_]+=' | tr -d '=' | sort -u)"
   # Non-vacuity: an extraction that found nothing must not report parity. The floor is the ACTUAL
   # key count, not a round number safely below it (17 -> 18: #6500 threads `sentry_dsn`; 18 -> 19: #8539 threads `inngest_private_ip`; 19 -> 17: #8036 1d drops `ghcr_read_user`/`ghcr_read_token`, the retired GHCR bake) — a `-ge 10` passed at 13 while three keys were

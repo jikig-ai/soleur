@@ -464,7 +464,6 @@ if [ "$(/usr/sbin/blkid -o value -s TYPE "$L_SWAP" 2>/dev/null)" = "swap" ]; the
 # that the SOURCE bound is 30, so this is a declared harness knob rather than an invented budget.
 run_arm "ARM0 absent device REFUSES (never formats a non-device)" false "" 1 2
 if grep -qF 'is not a block device' "$ARM_DETAIL"; then ok "ARM0 the refusal names the absent device"; else no "ARM0 the detail log does not name the absent device"; fi
-if [ ! -e "$ARM_BYID/scsi-0HC_Volume_${LUKS_ID}" ]; then ok "ARM0 nothing was created at the absent alias"; else no "ARM0 the stage created something at an alias that was not a block device"; fi
 
 # ── UNP5: no pointer + a RAW volume + a PRODUCTION config REFUSES, and formats nothing (D6) ───
 # The same fixture shape as ARM3 — blank device, no pointer — rendered with the config the sole
@@ -476,6 +475,16 @@ if grep -qF 'unpointed_raw_refused' "$ARM_DETAIL"; then ok "UNP5 the refusal nam
 if [ -z "$(/usr/sbin/blkid -p -o value -s TYPE "$L_RAW5" 2>/dev/null)" ]; then ok "UNP5 the device was NOT formatted (still blank)"; else no "UNP5 the refusal path wrote a header to the production volume"; fi
 if ! mountpoint -q "$ARM_MNT"; then ok "UNP5 nothing was mounted"; else no "UNP5 a volume was mounted under the refusal"; fi
 if ! grep -qF 'stage=luks_format' "$ARM_LOG"; then ok "UNP5 no luks_format stage ran"; else no "UNP5 a luks_format stage ran under a prd config"; fi
+if grep -qE 'stage=unpointed_raw_refused rc=1' "$ARM_LOG"; then ok "UNP5 the off-box failure row carries stage=unpointed_raw_refused (not blkid_probe)"; else no "UNP5 the failure row does not name the refusal stage — the diagnosis would point at the probe"; fi
+arm_reset
+
+# ── UNP5b: the refusal is an ALLOWLIST, not a denylist of `prd` ────────────────────────────────
+# Same blank device, no pointer, rendered with a config that is neither prd nor a rehearsal one. Only a
+# `rehearsal_*` config may format, so any other value (a new environment, a typo) must refuse too.
+L_RAW5B="$(new_loop raw5b raw)"
+run_arm "UNP5b raw volume under a non-rehearsal config REFUSES to format" false "$L_RAW5B" 1 2 "" staging
+if grep -qF 'unpointed_raw_refused' "$ARM_DETAIL"; then ok "UNP5b the refusal names unpointed_raw_refused"; else no "UNP5b the detail log does not name the D6 refusal"; fi
+if [ -z "$(/usr/sbin/blkid -p -o value -s TYPE "$L_RAW5B" 2>/dev/null)" ]; then ok "UNP5b the device was NOT formatted (still blank)"; else no "UNP5b the refusal path wrote a header under a non-rehearsal config"; fi
 arm_reset
 
 # ── UNP4: the boot-reopen unit with NO pointer opens a LUKS volume and refuses everything else ──
@@ -504,7 +513,9 @@ arm_reset
 fstab_count() { awk -v mp="$2" '$1 !~ /^#/ && $2 == mp' "$1" | wc -l; }
 
 # ── PTR1: the pointer names the volume — it is the canonical store ────────────────────────────
-run_arm "PTR1 a pointer to the volume mounts it as the canonical store" false "$L_RAW" 0 2 "$LUKS_ID"
+# Rendered under `prd`, the config the sole scheduler carries: the production-shaped must-pass arm. The D6 refusal
+# lives only in the unpointed arm, so a guard that wrongly fired on the pointer path would red here.
+run_arm "PTR1 a pointer to the volume mounts it as the canonical store" false "$L_RAW" 0 2 "$LUKS_ID" prd
 if [ "$(findmnt -no SOURCE "$ARM_MNT" 2>/dev/null)" = "/dev/mapper/inngest-redis" ]; then ok "PTR1 /mnt/data is mounted from the CANONICAL mapper"; else no "PTR1 /mnt/data source is '$(findmnt -no SOURCE "$ARM_MNT" 2>/dev/null)'"; fi
 if [ "$(backing_of inngest-redis)" = "$(basename "$L_RAW")" ]; then ok "PTR1 the canonical mapper is backed by the volume (real sysfs slaves/)"; else no "PTR1 the canonical mapper is backed by '$(backing_of inngest-redis)'"; fi
 if [ -f "$ARM_MNT/canary" ]; then ok "PTR1 the store the pointer names is the one that was formatted (its canary is present)"; else no "PTR1 the canonical store is not the formatted one"; fi
@@ -701,11 +712,17 @@ cryptsetup close inngest-redis >/dev/null 2>&1
 #     unit, no pointer), PTR1 mode=pointer row 1, the new PTR3 4 (third id, decoy untouched), PTR3b 2 (retired id),
 #     BOOT2-PTR3 2 (reopen unit refuses a third id).
 #   90 - 34 + 23 = 79. Every counted assertion is on the success path, so the count is exact, not a lower bound.
-if [ "$executed" -lt 79 ]; then
+#
+# 79 -> 81 (#9786 review fix round), also PROJECTED: the ARM0 "nothing created at the absent alias" row is deleted
+# (-1: the harness never creates that alias when the volume is absent, so it could not fail); UNP5 gains the
+# stage=unpointed_raw_refused failure-row assertion (+1); UNP5b is new (+3: rc, refusal text, device untouched; the
+# refusal is an allowlist, so a non-rehearsal non-prd config must refuse too). PTR1 now renders under `prd` with
+# no count change. Net +3 - 1 = +2 -> 81. Confirm against the first CI run before the literal is trusted.
+if [ "$executed" -lt 81 ]; then
   fail=$((fail + 1))
-  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 79. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
+  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 81. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
 else
-  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 79)\n' "$executed"
+  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 81)\n' "$executed"
 fi
 
 echo ""

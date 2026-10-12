@@ -298,6 +298,16 @@ rows "$TMP/r-luksfp.json" "$NOW" \
 run "phase-a PASS: the needle text inside a non-systemd (webhook) row is not a LUKS failure" 0 \
   "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-luksfp.json" -- "${BASE_ARGS[@]}" --mode phase-a
 
+# ── #9786: `stage=unpointed_raw_refused` on a rehearsal host is a VIOLATION in every mode ──
+# The rehearsal host is the one place the unpointed arm is allowed to format; the refusal there means the
+# allowlist and the rehearsal config drifted apart. The row carries the stage the template sets before the guard.
+rows "$TMP/r-unprefused-b.json" "$NOW" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=provision-unit-armed detail=iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_BOOT_STAGE stage=bootstrap-done detail=iid=abc123 \"host\":\"${HOST}\"" \
+  "SOLEUR_INNGEST_LUKS_STAGE stage=unpointed_raw_refused rc=1 blkid_type=empty expect_luks=false detail=FATAL \"host\":\"${HOST}\""
+run "phase-b FAIL: a stage=unpointed_raw_refused row is a violation even beside bootstrap-done" 1 \
+  "${BASE_ENV[@]}" STUB_ROWS="$TMP/r-unprefused-b.json" -- "${BASE_ARGS[@]}" --mode phase-b
+
 # --since IS THE SAME-RUN-ID RE-RUN GATE (the workflow passes it on every capture call): a
 # prior life's bootstrap-done inside the window would trip the no-done check, but the bound
 # excludes it — this arm proves the bound is wired, not just parsed.
@@ -318,7 +328,7 @@ run "phase-a PASS under --since: a prior life's rows are excluded by the bound" 
 # initializes counters (`X=$((X+1))` increments) but not the FAILURES array — a floor on
 # `${#FAILURES[@]}` dies unbound under set -u and scores CONSTRUCTION, not FIRES. And MIN
 # must sit ADJACENT to the `if` — the mutant builder's walk-back stops at any comment.
-MIN=31
+MIN=32
 if (( passes + fails < MIN )); then
   printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$((passes + fails))" "$MIN" >&2
   exit 1
