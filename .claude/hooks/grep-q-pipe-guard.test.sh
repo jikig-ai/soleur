@@ -1711,7 +1711,7 @@ PJ_FAIL=0
 # An unlisted pair names the non-test file(s) that derive it, read from the triples in pj_raw (the derivation's third column), so a contributor sees which
 # pipe caused it; with no triples for the pair it says so instead of printing an empty list.
 pj_judge() {
-  local pairs="$1" row s v k r w keys="" vnv="" sorted unl stale dupes p prod="" ent pn
+  local pairs="$1" row s v k r w keys="" vnv="" sorted unl unlj stale dupes p ent
   while IFS= read -r row; do
     [[ -z "$row" ]] && continue
     IFS='|' read -r s v k r <<<"$row"; pj_trim s; pj_trim v; pj_trim k; pj_trim r
@@ -1731,15 +1731,15 @@ pj_judge() {
   unl="$(LC_ALL=C comm -23 <(printf '%s\n' "$pairs") <(printf '%s\n' "$sorted"))"
   stale="$(LC_ALL=C comm -13 <(printf '%s\n' "$pairs") <(printf '%s\n' "$sorted") | { grep -vxF -f <(printf '%s' "$vnv") || true; })"
   dupes="$(uniq -d <<<"$sorted")"
-  if [[ -n "$unl" ]]; then   # one awk over the triples, not one per pair: the producer files of each (suite|verb), unique and sorted
-    while IFS=$'\t' read -r k r; do prod+="$k"$'\t'"$r"$'\n'; done < <(LC_ALL=C sort -u <<<"${pj_raw-}" | LC_ALL=C awk -F'\t' 'NF >= 3 { k = $1 "|" $2; if (k in m) m[k] = m[k] ", " $3; else m[k] = $3 } END { for (k in m) print k "\t" m[k] }' | LC_ALL=C sort)
+  if [[ -n "$unl" ]]; then   # ONE awk joins the unlisted pairs (file 1, in order) with the triples (file 2): the producer files of each pair, unique and sorted; no per-pair lookup in bash
+    unlj="$(LC_ALL=C awk -F'\t' 'NR == FNR { if ($0 != "") { u[$0] = 1; ord[++n] = $0 } next }
+      NF >= 3 { k = $1 "|" $2; if (k in u) { if (k in m) m[k] = m[k] ", " $3; else m[k] = $3 } }
+      END { for (i = 1; i <= n; i++) print ord[i] "\t" ((ord[i] in m) ? m[ord[i]] : "") }' <(printf '%s\n' "$unl") <(LC_ALL=C sort -u <<<"${pj_raw-}"))"
   fi
-  while IFS= read -r p; do
+  while IFS=$'\t' read -r p ent; do
     [[ -z "$p" ]] && continue
-    ent=""; pn=$'\n'"$prod"   # a plain string lookup on the line start, no associative array (bash 3.2)
-    if [[ "$pn" == *$'\n'"$p"$'\t'* ]]; then ent="${pn#*$'\n'"$p"$'\t'}"; ent="${ent%%$'\n'*}"; fi
     echo "FAIL: unlisted pair: ${p%%|*} stubs '${p#*|}' and names a non-test file that pipes text into it (${ent:-producer file not in pj_raw}) — add a PRODUCER_JOIN row: '${p%%|*} | ${p#*|} | drains | <definitions> | <flag token or *>' (drain form: the case line in the FAIL text of a drains row) or an exempt row with a reason from:$PJ_VOCAB blocked-#N"
-  done <<<"$unl"
+  done <<<"${unlj-}"
   while IFS= read -r p; do
     [[ -z "$p" ]] && continue
     echo "FAIL: stale join row: ${p%%|*} | ${p#*|} no longer derives (its stub, its producer or its suite is gone) — delete the row"
