@@ -168,8 +168,8 @@ thread-error inventory. Marker reads now reject early EOF and oversized output,
 with three pure helper tests. The corrected wrapper passed with inherited
 `PYTHONOPTIMIZE=1`: 18 creation-policy, 51 ownership/exec, **14** resource-policy,
 12 collision, **three** receive-helper, seven upgrade, **ten** resource-transport
-and six preparation checks. No real socket backend/service, provider, SQL or
-authentication operation was used.
+and six preparation checks. Only task-owned fake Unix backends were used; no
+Docker daemon, application/database, provider, SQL or authentication operation ran.
 
 Head `030275281d` settled with 68 passes, 11 skips, zero pending/cancelled and
 two reds in [CI 38267759335](https://github.com/jikig-ai/soleur/actions/runs/38267759335).
@@ -179,7 +179,22 @@ now records those exact pure-policy/fixture files; no host call is waived or
 fake host pin inserted. The guard passed afterward: 44 files enumerated, zero
 violations. It retains its census note, 25 versus the 24 baseline, and three
 historical deprecation waivers; this is not provider/security clearance.
-The required `test` red still needs executed-log classification for this cycle.
+The executed aggregate log confirms the required `test` red comes from draft-
+skipped Web and both scripts legs (`draft: full battery owed at ready`).
 Superseded guard cancellations disappeared when replacement jobs settled.
 The ensuing fix push requires fresh exact-head and final-description checks.
 All runtime/qualification/promotion and consumed-authorization limits persist.
+
+Security-sentinel independently verified the focused fixes at pushed source
+`6428d58575376cddd49de8a37ce1527e8c8cf76c`, repeated the pure policy/helper
+and entrypoint checks, and found no remaining concrete issue in that fix scope.
+This is a focused fix verdict; full PR review and runtime qualification remain
+incomplete. The fresh source-bound preview retains 5,039 runtime inputs and all
+188 migrations, with preparation-component fingerprint
+`6c0d88a3e4a626591b1237e738066dbc6d349986456b97af23f252bbbf95a7b5`
+and pairing fingerprint
+`10452f442db92d943c3772eb96e050a398e477ad31ea21a2f07a252d442be460`.
+[CI 38270626162](https://github.com/jikig-ai/soleur/actions/runs/38270626162)
+covers that fix source and is separately watched; the following evidence-only
+commit still needs final-head checks. No operational execution or new approval
+is inferred from either review or preview.

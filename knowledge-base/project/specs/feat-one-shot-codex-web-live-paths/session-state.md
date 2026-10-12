@@ -1374,3 +1374,11 @@
   mechanism; the guard passes locally with zero violations. No real caller is
   exempted. The changed fix source still needs its own push/watch and final
   description guards; full panel, required SAST, recovery and matrices stay open.
+
+- The executed prior `test` aggregate confirms draft-skipped Web/scripts legs.
+  Focused-fix source `6428d58575376cddd49de8a37ce1527e8c8cf76c` was pushed;
+  security-sentinel independently verified the fixes with no remaining concrete
+  issue in that scope. Fresh preview binds the same 5,039 runtime inputs and
+  188 migrations, plus the changed preparation components. CI 38270626162 is
+  watched separately. The following evidence-only head needs fresh final checks;
+  this is not full panel, SAST, image, recovery or Web qualification completion.
