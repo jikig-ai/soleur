@@ -90,17 +90,7 @@ This is the gate's semantic home. Run it when the diff (`git diff --name-only or
 
 **Deterministic layer (BLOCKING).** Run the committed `nav-states-*.e2e.ts` spec in the existing `authenticated` Playwright project — real headless Chromium + real Next.js SSR seeded by the **offline mock-Supabase storageState** (`e2e/global-setup.ts` + `e2e/helpers/supabase-mocks.ts`). Zero credentials; NO `dev-signin`; never point at a live origin (CLO: synthetic fixtures only).
 
-**Browser-readiness preflight (unsupported-host guard — do this FIRST).** On a host newer than the pinned Playwright officially supports (e.g. Ubuntu 26.04 vs the `apps/web-platform` `@playwright/test` pin), a plain `playwright install` fails with `does not support chromium ... on <os>` and every test then dies at `browserType.launch: Executable doesn't exist` **before any navigation** — the false-fail that repeatedly costs a QA session its whole run. Recover automatically by retrying the install with the host-platform override, which pulls the nearest supported fallback build (verified `ubuntu26.04-x64` → `ubuntu24.04-x64`; once the fallback build is in cache the launcher resolves it at runtime with NO override, so the override stays out of the run command and can never leak onto a supported host like CI's Jammy container):
-
-```bash
-cd apps/web-platform
-QA_PW_LOG=$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)" qa-pw-install.XXXXXXXX.log)
-npx playwright install chromium >"$QA_PW_LOG" 2>&1 \
-  || PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=ubuntu24.04-x64 npx playwright install chromium
-# The log exists for the failure path below — read it for the diagnosis, then remove it
-# (`rm -f` on the recorded path — a later Bash call does not inherit $QA_PW_LOG); a path
-# nobody recorded is a leak (#10017).
-```
+**Browser-readiness preflight (unsupported-host guard — do this FIRST).** On a host newer than the pinned Playwright officially supports, a plain `playwright install` fails before any navigation — the false-fail that repeatedly costs a QA session its whole run. Run the install probe in [browser-preflight.md](./references/browser-preflight.md) — it logs under a `soleur-run` root (#10017) and retries with the host-platform override.
 
 If BOTH the plain install and the override install fail (a genuinely unsupported host with no fallback build), do NOT run the gate and do NOT spend reasoning re-deriving whether it is a regression: this is **INFRA-BLOCKED**, not a code failure. Record in the QA report — "Step 2.6 nav-states gate INFRA-BLOCKED locally (Playwright browser uninstallable on <os>); CI's containerized `e2e` job (`mcr.microsoft.com/playwright:v1.58.2-jammy`) is the authoritative gate per #5009" — and proceed. Never block the pipeline on this.
 
