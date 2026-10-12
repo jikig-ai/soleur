@@ -184,14 +184,12 @@ for f in "$results_dir"/*.json; do
   mv "$summary_file.next" "$summary_file"
 done
 
-# Write .scan-meta.json next to input (or to runtime dir for stdin).
+# Write .scan-meta.json under meta_base (XDG_RUNTIME_DIR, else /tmp).
 # umask 077 ensures persisted findings are not world-readable on shared hosts.
 ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 meta_base="${SKILL_SCAN_META_BASE:-${XDG_RUNTIME_DIR:-/tmp}}"
 
-# Bound the per-invocation meta_dir leak (#6789) and the scratch orphans under
-# ${TMPDIR:-/tmp} (#6760) — both families bounded here by the same age floor.
-# Each run creates
+# Bound the per-invocation meta_dir leak (#6789). Each run creates
 # skill-security-scan-<pid>/ and NOTHING removes it: measured 12,889 leaked
 # dirs. The fix is a STARTUP age-reap of OLDER siblings — deliberately NOT a
 # `trap 'rm -rf "$meta_dir"' EXIT`. `.scan-meta.json` is GDPR Art. 32 evidence:
@@ -213,8 +211,17 @@ meta_base="${SKILL_SCAN_META_BASE:-${XDG_RUNTIME_DIR:-/tmp}}"
 # window caps that at a manageable steady state. A longer-lived reference is the
 # same pre-existing fragility the override mechanism already carries
 # ($XDG_RUNTIME_DIR is cleared on logout regardless), out of scope here.
-# SKILL_SCAN_META_REAP_MIN overrides the floor (minutes).
+# SKILL_SCAN_META_REAP_MIN overrides the floor (minutes). Non-numeric values
+# fall back to the default rather than silently disabling BOTH reaps below.
 _reap_min="${SKILL_SCAN_META_REAP_MIN:-10080}"
+[[ "$_reap_min" =~ ^[0-9]+$ ]] || _reap_min=10080
+# The scratch sweep gets a 60-minute minimum: `-mmin "+0"` matches any past
+# mtime, and `! -samefile` below covers only THIS run's scratch — a floor
+# under an hour lets a pathological or test-seam invocation reap a concurrent
+# scan's live INPUT/results_dir. Scratch has no post-exit consumer (unlike
+# meta_dir's Art. 32 evidence), so erring toward a higher floor is the safe
+# direction; the meta sweep keeps the operator's floor verbatim.
+_scratch_min=$(( _reap_min < 60 ? 60 : _reap_min ))
 if [ -d "$meta_base" ]; then
   # -maxdepth 1 -type d, older than the floor, own the current uid. `-mmin` on
   # each dir is safe here: the dir is written once at creation and never touched
@@ -225,24 +232,39 @@ if [ -d "$meta_base" ]; then
     -exec rm -rf {} + 2>/dev/null || true
 fi
 
-# #6760: same age-floor sweep for the scratch families under ${TMPDIR:-/tmp}.
-# Two orphan classes the meta-base reap cannot reach: the `skill-scan-*`
+# #6760: age-floor sweep for the scratch families under ${TMPDIR:-/tmp} —
+# orphans the meta-base reap cannot reach. Three classes: the `skill-scan-*`
 # scratch producers (skill-scan-input-*, skill-scan-results-*,
 # skill-scan-XXXXXX + .code/.fm/.body/.req/.resp siblings — created by
-# `mktemp -t` under TMPDIR and EXIT-trap-cleaned only on a clean exit), and
-# `skill-security-scan-*` meta dirs written under /tmp before XDG_RUNTIME_DIR
-# was set (the env-flip crossover — unreachable by the meta-base sweep once
-# the env flips). Same floor, same uid scope, same tolerance of rm races.
-# The `! -path` exclusions are load-bearing and asymmetric with the meta reap
-# above: INPUT and results_dir are created BEFORE this reap (unlike meta_dir,
-# created after), so under a pathological low floor (the test seam uses 0) a
-# scan whose category checks take >=1 min would reap its own live scratch
-# mid-run. Excluding them fails toward under-reaping — the safe direction.
-if [ -d "${TMPDIR:-/tmp}" ]; then
-  find "${TMPDIR:-/tmp}" -mindepth 1 -maxdepth 1 -user "$(id -u)" \
-    -mmin "+${_reap_min}" \
-    \( -name 'skill-security-scan-*' -o -name 'skill-scan-*' \) \
-    ! -path "$INPUT" ! -path "$results_dir" \
+# `mktemp -t` under TMPDIR and EXIT-trap-cleaned only on a clean exit);
+# `skill-security-scan-*` meta dirs stranded under /tmp by the
+# XDG_RUNTIME_DIR env flip (when ${TMPDIR:-/tmp} resolves to that base —
+# with a custom TMPDIR the pre-flip orphans sit on a root this sweep does
+# not scan); and `sss-write.*` err-captures from the skill's own write-hook.
+# Same uid scope, same tolerance of rm races; -mount keeps the descent off
+# bind/FUSE mounts inside a spoofed family dir.
+#
+# Top-level `-mmin` is the sole age test because every producer write creates
+# a new entry (dir mtime tracks its last child) — a write-once invariant
+# matching the meta reap's, so an OLD entry is definitionally orphaned.
+#
+# The `! -samefile` exclusions are load-bearing and asymmetric with the meta
+# reap: INPUT and results_dir are created BEFORE this reap (meta_dir is
+# created after), so without them this run's own live scratch is a reap
+# candidate — `-mmin "+0"` matches any past mtime, so even a test-seam
+# floor of 0 is a live-own-scratch wipe without the exclusion. `-samefile`
+# (inode compare), never `-path` (literal/fnmatch string compare): a
+# relative or glob-shaped INPUT spelling defeats string equality and could
+# rm -rf the very file the operator asked to scan.
+tmp_root="$(cd "${TMPDIR:-/tmp}" 2>/dev/null && pwd -P)"
+if [ -n "$tmp_root" ] && [ -d "$tmp_root" ]; then
+  # `cd -P` above resolves a symlinked base (macOS /tmp -> private/tmp) —
+  # `find` under default -P does not descend a symlinked startpoint, so
+  # without canonicalization the sweep silently no-ops there.
+  find "$tmp_root" -mindepth 1 -maxdepth 1 -mount -user "$(id -u)" \
+    -mmin "+${_scratch_min}" \
+    \( -name 'skill-security-scan-*' -o -name 'skill-scan-*' -o -name 'sss-write.*' \) \
+    ! -samefile "$INPUT" ! -samefile "$results_dir" \
     -exec rm -rf {} + 2>/dev/null || true
 fi
 

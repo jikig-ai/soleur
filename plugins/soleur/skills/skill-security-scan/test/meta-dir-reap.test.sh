@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# meta-dir-reap.test.sh — the startup age-reap for run-scan.sh's meta_dir (#6789).
+# meta-dir-reap.test.sh — the startup age-reap for run-scan.sh's meta_dir
+# (#6789) and the scratch-orphan sweep under TMPDIR (#6760).
 #
 # WHAT THIS GUARDS. Each run-scan.sh invocation creates
 # ${XDG_RUNTIME_DIR:-/tmp}/skill-security-scan-<pid>/ and, before #6789, NOTHING
@@ -32,6 +33,13 @@ trap 'rm -rf "$TESTROOT"' EXIT
 META_BASE="$TESTROOT/meta"
 mkdir -p "$META_BASE"
 
+# The scratch sweep (#6760) runs over ${TMPDIR:-/tmp} — seal it in EVERY
+# scan invocation below so no arm sweeps the host's real TMPDIR (at floor 0
+# that would wipe live scratch of a concurrent scan).
+SCRATCH_META="$TESTROOT/tmp-meta"
+SCRATCH="$TESTROOT/tmp"
+mkdir -p "$SCRATCH_META" "$SCRATCH"
+
 # A tiny, benign skill body — the scan's verdict is irrelevant here.
 INPUT="$TESTROOT/skill.md"
 printf '# Demo skill\n\nThis skill reads a file.\n' > "$INPUT"
@@ -39,7 +47,8 @@ printf '# Demo skill\n\nThis skill reads a file.\n' > "$INPUT"
 run_scan() {
   SKILL_SCAN_META_BASE="$META_BASE" \
   SKILL_SCAN_META_REAP_MIN="${1:-1440}" \
-    bash "$RUN_SCAN" "$INPUT" 2>/dev/null
+  TMPDIR="$SCRATCH_META" \
+    bash "$RUN_SCAN" "${2:-$INPUT}" 2>/dev/null
 }
 
 echo "=== run-scan.sh meta_dir age-reap (#6789) ==="
@@ -149,15 +158,13 @@ echo "=== run-scan.sh scratch-orphan sweep under TMPDIR (#6760) ==="
 # skill-scan-XXXXXX + .code/.fm/.body/.req/.resp siblings) are created under
 # TMPDIR by `mktemp -t`, and skill-security-scan-* meta dirs written under /tmp
 # before XDG_RUNTIME_DIR was set are unreachable by the meta-base sweep (the
-# env-flip crossover). Fixtures are synthesized under a seam TMPDIR.
-SCRATCH="$TESTROOT/tmp"
-mkdir -p "$SCRATCH"
+# env-flip crossover). Fixtures are synthesized under the seam $SCRATCH.
 
 run_scan_tmp() {
   SKILL_SCAN_META_BASE="$META_BASE" \
   SKILL_SCAN_META_REAP_MIN="${1:-1440}" \
   TMPDIR="$SCRATCH" \
-    bash "$RUN_SCAN" "$INPUT" 2>/dev/null
+    bash "$RUN_SCAN" "${2:-$INPUT}" 2>/dev/null
 }
 
 # --- Arm 8: an old skill-scan-input-* FILE is reaped ------------------------
@@ -203,54 +210,116 @@ else
   bad "the old skill-security-scan-* TMPDIR dir was NOT reaped"
 fi
 
-# --- Arm 12: a FRESH skill-scan-* entry is spared (age gate holds) ----------
-fresh="$SCRATCH/skill-scan-input-999104"
-echo x > "$fresh"
+# --- Arm 12: an sss-write.* hook orphan is reaped ---------------------------
+old_sss="$SCRATCH/sss-write.999104.err"
+echo x > "$old_sss"; touch -d "-3000 minutes" "$old_sss"
 run_scan_tmp 1440 >/dev/null
-if [[ -e "$fresh" ]]; then
-  ok "a fresh skill-scan-* entry under TMPDIR is NOT reaped (age gate holds)"
+if [[ ! -e "$old_sss" ]]; then
+  ok "an old sss-write.* hook err-capture is reaped from TMPDIR"
 else
-  bad "a fresh skill-scan-* entry was wrongly reaped"
+  bad "the old sss-write.* entry was NOT reaped"
 fi
 
-# --- Arm 13: source anchors for the scratch sweep ---------------------------
+# --- Arm 13: a MID-AGE skill-scan-* entry is spared (age gate holds) --------
+# 300 min < floor 1440: discriminates both an over-reap AND a floor shrink to
+# a positive value below the gap — an age-0 fixture only discriminates +0.
+mid="$SCRATCH/skill-scan-input-999105"
+echo x > "$mid"; touch -d "-300 minutes" "$mid"
+run_scan_tmp 1440 >/dev/null
+if [[ -e "$mid" ]]; then
+  ok "a mid-age skill-scan-* entry under TMPDIR is NOT reaped (age gate holds)"
+else
+  bad "a mid-age skill-scan-* entry was wrongly reaped"
+fi
+
+# --- Arm 14: an unrelated old entry under TMPDIR is NEVER reaped ------------
+# The arm-6 counterpart for the scratch sweep — a post-group -o widening
+# (`\) -o -name '*'`) satisfies NAME_RE's literal anchor while reaping every
+# aged own-uid entry in TMPDIR; only a behavioral arm catches it.
+unrel="$SCRATCH/some-unrelated-entry"
+mkdir -p "$unrel"; echo x > "$unrel/f"
+touch -d "-3000 minutes" "$unrel/f" "$unrel"
+run_scan_tmp 1440 >/dev/null
+if [[ -e "$unrel" ]]; then
+  ok "an old entry NOT named like a producer family is never reaped"
+else
+  bad "the sweep deleted an unrelated entry — name filter missing"
+fi
+
+# --- Arm 15: a NESTED family-named entry is spared (depth bound) ------------
+# -mindepth 1 -maxdepth 1 bounds the reap to top-level entries — a nested
+# skill-scan-* inside a foreign tree must survive (TMPDIR is shared space).
+mkdir -p "$SCRATCH/otherdir"
+nested="$SCRATCH/otherdir/skill-scan-999106"
+echo x > "$nested"; touch -d "-3000 minutes" "$nested" "$SCRATCH/otherdir"
+run_scan_tmp 1440 >/dev/null
+if [[ -e "$nested" ]]; then
+  ok "a nested skill-scan-* below a foreign dir is NOT reaped (depth bound)"
+else
+  bad "the sweep reaped a nested entry — depth bound missing"
+fi
+
+# --- Arm 16: a backdated family-named positional INPUT survives -------------
+# Behavioral pin for the own-scratch exclusion: the file is a reap candidate
+# by name AND age (backdated past every floor), and survives only because
+# `! -samefile "$INPUT"` excludes it. A glob metachar in the name proves the
+# exclusion is inode-based, not a -path string/fnmatch compare.
+victim="$SCRATCH/skill-scan-input-[victim]"
+printf '# scanned body\n' > "$victim"
+touch -d "-3000 minutes" "$victim"
+out="$(run_scan_tmp 0 "$victim")"
+meta_path="$(sed -n 's/^\.scan-meta\.json written to: //p' <<<"$out" | head -1)"
+if [[ -e "$victim" && -n "$meta_path" ]]; then
+  ok "a backdated skill-scan-* positional INPUT survives (own-scratch exclusion is behavioral, not anchor-only)"
+else
+  bad "the sweep reaped the scan's own input file (exclusion defeated); exists=$(test -e "$victim" && echo yes) meta='$meta_path'"
+fi
+
+# --- Arm 17: source anchors for the scratch sweep ---------------------------
 # Pin the load-bearing predicates on the live code (cq-assert-anchor-not-bare-
-# token): the grouped -name arms, the -user scope on the TMPDIR find, and the
-# ! -path own-scratch exclusions (INPUT/results_dir predate the reap, unlike
-# meta_dir — the asymmetry that makes the exclusions load-bearing).
+# token): the grouped -name arms, uid/age/depth predicates, -xdev, and the
+# ! -samefile own-scratch exclusions (INPUT/results_dir predate the reap,
+# unlike meta_dir — the asymmetry that makes the exclusions load-bearing).
 # The grouped predicate is written `\( -name … \)` in the source, so the ERE
 # pins the literal backslashes via a char class (ERE `\(` is a literal paren,
 # not `\` + `(` — an unescaped-backslash reading is how this anchor vacuated).
-NAME_RE="[\\\\]\\( -name 'skill-security-scan-\\*' -o -name 'skill-scan-\\*' [\\\\]\\)"
+NAME_RE="[\\\\]\\( -name 'skill-security-scan-\\*' -o -name 'skill-scan-\\*' -o -name 'sss-write\\.\\*' [\\\\]\\)"
 scratch_find="$(grep -vE '^[[:space:]]*#' "$SCRIPT_DIR/../scripts/run-scan.sh" \
-  | grep -A6 'if \[ -d "${TMPDIR:-/tmp}" \]')"
+  | grep -A10 'tmp_root=')"
 if grep -qE "$NAME_RE" <<<"$scratch_find"; then
-  ok "the TMPDIR sweep names both families (-o grouped -name arms)"
+  ok "the TMPDIR sweep names all three families (-o grouped -name arms)"
 else
-  bad "the TMPDIR sweep is missing the grouped -name arms for both families"
+  bad "the TMPDIR sweep is missing the grouped -name arms"
 fi
-if grep -qF -- '-user "$(id -u)"' <<<"$scratch_find"; then
-  ok "the TMPDIR sweep is scoped to the current uid (-user)"
+for anchor in '-mindepth 1 -maxdepth 1' '-mount' '-mmin' '-user "$(id -u)"' \
+              '-samefile "$INPUT"' '-samefile "$results_dir"'; do
+  if grep -qF -- "$anchor" <<<"$scratch_find"; then
+    ok "the TMPDIR sweep pins: $anchor"
+  else
+    bad "the TMPDIR sweep is missing predicate: $anchor"
+  fi
+done
+# Producer-prefix pin: every `mktemp -t`/`-dt` template under the skill's
+# scripts/ must emit inside the sweep's name window — a new producer writing
+# `mktemp -t some-other-name` orphans forever with no coverage.
+drift="$(grep -rhoE 'mktemp -[dt]+ "?[A-Za-z0-9_.*-]+' "$SCRIPT_DIR/../scripts/" \
+  | awk '{print $NF}' | tr -d '"' | grep -v '^skill-scan-' || true)"
+if [[ -z "$drift" ]]; then
+  ok "every mktemp template under scripts/ emits a swept skill-scan-* name"
 else
-  bad "the TMPDIR sweep has no -user predicate — could reap another user's dirs"
-fi
-if grep -qF -- '-path "$INPUT"' <<<"$scratch_find" \
-   && grep -qF -- '-path "$results_dir"' <<<"$scratch_find"; then
-  ok "the TMPDIR sweep excludes live own-scratch (! -path INPUT/results_dir)"
-else
-  bad "the TMPDIR sweep lacks the ! -path own-scratch exclusions"
+  bad "producer outside the sweep window: $drift"
 fi
 # POSITIVE CONTROLS: each anchor must MATCH a synthetic live-shaped line, or a
 # typo'd pattern reads "clean forever" and every arm above is vacuous.
-if grep -qE "$NAME_RE" <<<"find \"\${TMPDIR:-/tmp}\" \( -name 'skill-security-scan-*' -o -name 'skill-scan-*' \)"; then
+if grep -qE "$NAME_RE" <<<"find \"\$tmp_root\" \( -name 'skill-security-scan-*' -o -name 'skill-scan-*' -o -name 'sss-write.*' \)"; then
   ok "the grouped -name regex is live (matches the predicate shape)"
 else
   bad "the grouped -name regex matches nothing — the anchor arm is vacuous"
 fi
-if grep -qF -- '-path "$INPUT"' <<<"find /tmp ! -path \"\$INPUT\" ! -path \"\$results_dir\""; then
-  ok "the ! -path exclusion anchors are live (match the predicate shape)"
+if grep -qF -- '-samefile "$INPUT"' <<<"find /tmp ! -samefile \"\$INPUT\" ! -samefile \"\$results_dir\""; then
+  ok "the ! -samefile exclusion anchors are live (match the predicate shape)"
 else
-  bad "the ! -path anchors match nothing — the anchor arm is vacuous"
+  bad "the ! -samefile anchors match nothing — the anchor arm is vacuous"
 fi
 
 echo "=== meta-dir-reap: $PASS passed, $FAIL failed ==="

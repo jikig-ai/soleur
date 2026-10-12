@@ -74,10 +74,11 @@ The remaining work is the close-out the issue was deliberately left open for:
 document the shipped retention policy where operators and override-artifact
 authors actually read, extend the same startup reap to the sibling scratch
 families a killed scan leaves behind (measured: 45 `skill-scan-input-*` files
-and 4 `skill-scan-results-*` dirs leaked on the #6726 incident date —
-2026-07-22 contention plan), correct the stale `#6760 deliberate retention`
-justification on the `tmp-classify.sh` protection row (open task 8.8 of the
-mktemp-census lineage), and close #6760 with evidence via the PR body.
+and 4 `skill-scan-results-*` dirs dated 2026-07-20, tallied across the
+2026-07-22 and 2026-07-27 plans), correct the stale `#6760 deliberate
+retention` justification on the `tmp-classify.sh` protection row (added by
+PR #8738; stale against the shipped #6828 reap), and close #6760 with
+evidence via the PR body.
 
 ## Problem Statement / Motivation
 
@@ -101,7 +102,9 @@ mktemp-census lineage), and close #6760 with evidence via the PR body.
   `# #6760 deliberate retention`. The protection is correct (a generic reaper
   must not out-race the evidence window the scanner's own policy grants), but
   the justification is stale: retention is now *bounded by policy*, not
-  "deliberate". The sibling task file records this as open item 8.8.
+  "deliberate". (The sibling lineage's open task 8.8 flags a different
+  `#6760` comment — the harm-reduction claim in the #6734 spec; this row's
+  comment was added later by PR #8738 and is stale on its own.)
 
 ## Proposed Solution
 
@@ -114,8 +117,8 @@ Three small edits at existing seams, no new machinery:
    ```bash
    # Scratch orphans (`skill-scan-*`) — plus any meta_dir orphans a previous
    # run left under TMPDIR when XDG_RUNTIME_DIR was unset. SIGKILL leaks
-   # these; measured 45 `skill-scan-input-*` + 4 `skill-scan-results-*` on the
-   # #6726 incident date (#6760). Unlike `meta_dir`, own-scratch is created
+   # these; measured 45 `skill-scan-input-*` + 4 `skill-scan-results-*`
+   # dated 2026-07-20 (#6760). Unlike `meta_dir`, own-scratch is created
    # BEFORE this point, so exclude the live paths explicitly — under a
    # pathological low `SKILL_SCAN_META_REAP_MIN` the age gate alone does not
    # protect a slow scan's own scratch.
@@ -254,11 +257,11 @@ Three small edits at existing seams, no new machinery:
 ### Related issues / PRs
 
 - #6760 (this work, OPEN) · #6789 / PR #6828 (shipped the meta reap,
-  2026-07-22) · #6726 (incident that produced the measured scratch leak) ·
+  2026-07-22) · 2026-07-20 (date of the measured leaked entries — the
+  earlier plans' "`#6726`" label resolves to an unrelated merged PR) ·
   #6734 (trap-ownership class — the issue explicitly distinguishes itself) ·
-  #10017 / PR #10129 (mktemp census — drew the "#6760 out of scope" boundary
-  and recorded open task 8.8, the stale-comment correction this plan picks
-  up) · ADR-129 (accepted class-b population, unchanged).
+  #10017 / PR #10129 (mktemp census — drew the "#6760 out of scope"
+  boundary) · ADR-129 (accepted class-b population, unchanged).
 
 ### Conventions
 
@@ -275,8 +278,8 @@ Three small edits at existing seams, no new machinery:
 | "creates one directory per invocation that nothing ever removes" | `run-scan.sh:215-224` age-reaps `skill-security-scan-*` siblings older than `SKILL_SCAN_META_REAP_MIN` at startup (shipped 2026-07-22, #6828) | Stale for the meta family. Plan re-scopes to close-out + residual families; records the ruling in `decision-challenges.md`. |
 | "It needs a retention policy" | Policy exists in code but is undocumented anywhere a consumer reads | Phase 2 doc edits (SKILL.md, override-mechanism.md). |
 | Options: prune-at-startup / caller-owns / stable-path | Option (a) already chosen and shipped | No second decision needed; floor value recorded as a decision-challenges row. |
-| (implicit) only meta dirs leak | Measured 45 `skill-scan-input-*` + 4 `skill-scan-results-*` leaks on the incident date (2026-07-22 plan) | Extend the same reap to the `skill-scan-*` scratch family. |
-| `#6760 deliberate retention` (`tmp-classify.sh:108`) | Retention is bounded-by-policy, not "deliberate"; open task 8.8 flags the comment as false | Correct the comment; keep the protection. |
+| (implicit) only meta dirs leak | Measured 45 `skill-scan-input-*` + 4 `skill-scan-results-*` leaks dated 2026-07-20 (2026-07-22 + 2026-07-27 plans) | Extend the same reap to the `skill-scan-*` scratch family. |
+| `#6760 deliberate retention` (`tmp-classify.sh:108`) | Retention is bounded-by-policy, not "deliberate" — the comment postdates the shipped #6828 reap it should cite (added by PR #8738) | Correct the comment; keep the protection. |
 
 ## Technical Considerations
 
@@ -512,7 +515,7 @@ glob superset (all paths are `.sh`/`.md` under `plugins/soleur/`).
 | `meta-dir-reap.test.sh` new arms | — | inferred — justification: the guard contract for the reap extension; the suite is the existing assertion site for this property (arms 1–7 already pin the meta family) |
 | `SKILL.md` retention docs | "It needs a retention policy" | asked |
 | `override-mechanism.md` TTL guidance | "It needs a retention policy" | asked — the path-form `findings_json` guidance is where the policy's consumer-visible TTL must live |
-| `tmp-classify.sh` comment correction | — | inferred — justification: open task 8.8 of the mktemp-census lineage recorded the `#6760 deliberate retention` justification as false ("withdraw the comment"); a stale comment certifies a policy that does not exist |
+| `tmp-classify.sh` comment correction | — | inferred — justification: the `#6760 deliberate retention` comment (added by PR #8738, after the #6828 reap it should cite) certifies a policy that does not exist — retention is bounded by the scanner's own startup reap, not "deliberate" |
 | PR body `Closes #6760` + evidence | "It needs a retention policy" | asked — closing the tracking issue against the shipped mechanism is the ask's completion |
 
 ### Split Assessment
@@ -607,8 +610,7 @@ contain `plugins/soleur/skills/skill-security-scan` or
 
 - **Do nothing / comment-only close of #6760.** Rejected: leaves the policy
   undocumented (P3), the scratch families unbounded (P4, measured leak), and
-  the stale `tmp-classify.sh` justification in place (P6, tracked as open
-  task 8.8).
+  the stale `tmp-classify.sh` justification in place (P6).
 - **Extend tmpfs-guard Reaper 2.** Rejected: its 100 MB size floor is
   structurally blind to count-shaped leaks (the sibling task file's own
   learning); the scanner's producer-side startup reap is the correct site.

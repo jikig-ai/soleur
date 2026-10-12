@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://soleur.ai/schemas/skill-security-scan/scan-meta.json",
   "title": "Skill Security Scan Meta",
-  "description": "Per-scan metadata persisted as .scan-meta.json next to the scanned file. Captures rule-pack SHA at scan time so rule updates do NOT retroactively re-classify previously-scanned skills (CTO Decision 13).",
+  "description": "Per-scan metadata persisted as .scan-meta.json under ${XDG_RUNTIME_DIR:-/tmp}/skill-security-scan-<pid>/ (or SKILL_SCAN_META_BASE). Captures rule-pack SHA at scan time so rule updates do NOT retroactively re-classify previously-scanned skills (CTO Decision 13).",
   "type": "object",
   "required": [
     "scanner_version",
