@@ -14,13 +14,15 @@
  * every destructive op.
  *
  * Cleanup is the test's responsibility — call
- * `tearDownSharedWorkspace(service, fixture)` in `afterAll`. The helper
- * unwinds in FK-RESTRICT-reverse order (members → workspaces →
- * organization → auth.users).
+ * `tearDownSharedWorkspace(service, fixture)` in `afterAll`. Members are
+ * torn down per-member via `tearDownTenantUser` (anonymise-first +
+ * auth delete inside the loop); workspace/org deletes follow as
+ * best-effort residue cleanup.
  */
 
 import { randomBytes } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { tearDownTenantUser } from "./tenant-isolation-teardown";
 import { withGoTrueRetry } from "./gotrue-retry";
 
 export const WORKSPACE_FIXTURE_EMAIL_RE =
@@ -141,6 +143,14 @@ export async function createSharedWorkspaceMembers(
 
 /**
  * FK-RESTRICT-reverse cleanup. Idempotent — repeated calls are safe.
+ *
+ * Member teardown routes through `tearDownTenantUser` (anonymise-first):
+ * the prior shape — a raw `workspace_members` DELETE then `deleteUser` —
+ * was broken in the #9994 class on two counts: the member DELETE fired
+ * `workspace_members_audit`, writing RESTRICT `workspace_member_actions`
+ * rows that blocked the auth delete, and the `try/catch {}` swallowed
+ * every failure so the members leaked silently. The RPC path suppresses
+ * the audit writer and scrubs the RESTRICT refs before deleteUser.
  */
 export async function tearDownSharedWorkspace(
   service: SupabaseClient,
@@ -150,33 +160,30 @@ export async function tearDownSharedWorkspace(
     assertSyntheticWorkspaceFixture(m.email);
   }
 
-  // 1. workspace_members rows for ALL members (owner's trigger row included).
+  // 1. Members — anonymise-first teardown deletes their workspace_members
+  //    rows without firing the audit writer, scrubs RESTRICT references,
+  //    then deletes the auth user. Fail-loud by design.
   for (const m of fixture.members) {
-    try {
-      await service.from("workspace_members").delete().eq("user_id", m.userId);
-    } catch {}
+    await tearDownTenantUser(service, { id: m.userId, email: m.email });
   }
 
-  // 2. Workspace (RESTRICT to organizations — handled in step 3).
-  try {
-    await service.from("workspaces").delete().eq("id", fixture.workspaceId);
-  } catch {}
-
-  // 3. Organization.
-  try {
-    await service
-      .from("organizations")
-      .delete()
-      .eq("id", fixture.organizationId);
-  } catch {}
-
-  // 4. Auth users (CASCADE to public.users). Retry past GoTrue rate limits
-  // and the opaque transient "Database error deleting user".
-  for (const m of fixture.members) {
-    try {
-      await withGoTrueRetry(`deleteUser:${m.userId}`, () =>
-        service.auth.admin.deleteUser(m.userId),
+  // 2. Workspace + organization — best-effort, production-tolerant:
+  //    residual RESTRICT workspace_id children (attestations,
+  //    invitations, byok_delegations, dsar_export_jobs, email_triage_items
+  //    — not workspace_member_actions, whose workspace_id is SET NULL
+  //    since mig 072) can block these deletes; whatever survives is
+  //    NULL-owner cruft (the same residue production erasure leaves).
+  //    Warn, don't swallow — a teardown failure should be visible in the
+  //    log.
+  for (const [table, id] of [
+    ["workspaces", fixture.workspaceId],
+    ["organizations", fixture.organizationId],
+  ] as const) {
+    const { error } = await service.from(table).delete().eq("id", id);
+    if (error) {
+      console.warn(
+        `tearDownSharedWorkspace: ${table}(${id}) delete skipped: ${error.message} (expected once audit rows exist — NULL-owner cruft class)`,
       );
-    } catch {}
+    }
   }
 }

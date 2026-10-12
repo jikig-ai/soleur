@@ -48,7 +48,7 @@ declare -A SECRET=(
   [stripe_acct]='\bacct_[A-Za-z0-9]{16,}\b'
   [stripe_cust_pi_seti_sub_in]='\b(cus|pi|seti|sub|in)_[A-Za-z0-9]{14,}\b'
   [env_var]='\b(DOPPLER|SENTRY|STRIPE|SUPABASE|OPENAI|ANTHROPIC|GITHUB|VERCEL|CLOUDFLARE|HETZNER|FLAGSMITH|RESEND|TAILSCALE)_[A-Z_]+=[^[:space:]]+'
-  [github_token]='\b(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{30,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b'
+  [github_token]='\b(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9._~+/=-]{30,}|\bgithub_pat_[A-Za-z0-9._~+/=-]{20,}'
   [anthropic_key]='\bsk-ant-[A-Za-z0-9_-]{32,}\b'
   [openai_key]='\bsk-(proj-)?[A-Za-z0-9_-]{20,}\b'
   [supabase_pat]='\bsbp_[a-z0-9]{20,}\b|\b(sb_secret|sb_publishable)_[A-Za-z0-9]{20,}\b'
