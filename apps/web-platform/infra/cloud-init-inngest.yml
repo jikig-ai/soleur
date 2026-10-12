@@ -1418,6 +1418,11 @@ write_files:
       Wants=network-online.target docker.service
       After=network-online.target docker.service inngest-luks-open.service inngest-bs-token-restage.service inngest-nftables.service
       ConditionPathExists=!/var/lib/soleur-inngest-provision/done
+      # SKIP-VS-FAIL (#9962, the #9939 pattern): /etc/default/inngest-doppler is a runcmd write —
+      # a boot re-entry before (or after an abort of) that write must SKIP the unit, never FAIL
+      # it into the Restart=on-failure ×4 retry storm. The EnvironmentFile= line stays unprefixed:
+      # once a start IS attempted, an absent file still fails the unit — fail-closed is retained.
+      ConditionPathExists=/etc/default/inngest-doppler
       StartLimitIntervalSec=0
 
       [Service]

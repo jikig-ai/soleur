@@ -226,12 +226,14 @@ tests/scripts/no-tofu-ssh-mutation	knowledge-base
 tests/scripts/rule-metrics-aggregate	knowledge-base/project
 tests/scripts/scratch-residue	knowledge-base/engineering/policies/content-vendoring.md
 tests/scripts/scratch-residue	knowledge-base/legal/compliance-posture.md
+tests/scripts/scratch-residue	knowledge-base/project
 tests/scripts/scratch-residue	knowledge-base/project/learnings
 tests/scripts/scratch-residue	knowledge-base/project/plans
 tests/scripts/scratch-residue	knowledge-base/project/weakness-digest.md
 tests/scripts/sentry-alert-drift-workflow	knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json
 tests/scripts/sentry-monitors-audit-class-d	knowledge-base/legal/article-30-register.md
 tests/scripts/sentry-monitors-audit-class-d	knowledge-base/legal/audits
+tests/scripts/weakness-miner	knowledge-base/project
 tests/scripts/weakness-miner	knowledge-base/project/learnings
 tests/scripts/weakness-miner	knowledge-base/project/weakness-digest.md
 tests/scripts/zot-inventory	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md

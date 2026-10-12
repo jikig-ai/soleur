@@ -1144,7 +1144,7 @@ eqv_sh="$(_eqv "$EQV_SH")"
 # derivation is AUTHORITATIVE; j0-derive.py in the spec directory is a point-in-time measurement of the base commit.
 PJ_DRAIN_WINDOW=4
 PJ_ALL="$(git ls-files)"
-PJ_TRIPLES=119   # recomputed below from a green run: the number of distinct (test file, verb, producer file) triples
+PJ_TRIPLES=120   # recomputed below from a green run: the number of distinct (test file, verb, producer file) triples
 PJ_VOCAB=' not-a-command text-only unverified helper-built-stub variable-named-verb pass-through deliberate-fault arm-drain '
 PRODUCER_JOIN=(
   '.claude/hooks/grep-rewrite.test.sh | jq | drains | 2 | *'

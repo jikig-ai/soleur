@@ -1028,6 +1028,10 @@ This supersedes the 2026-10-01 bullet "Pre-existing, unchanged here" for the app
   `infra/github` root, and the root's README still carries stale local-apply recipes. Neither can write; a planted value shows up there as a
   plan difference.
 
+### 2026-10-11 (#9454): `weakness-miner.yml::open-pr` is a fourth composite caller (narrow source, `infra-privileged`)
+
+One dated line, no status change: the weekly digest PR is authored, pushed and armed as the `soleur-infra` App from the new `open-pr` job (narrow source `soleur-infra-app`, `DOPPLER_TOKEN_INFRA_APP`, scoped to `contents:write` + `pull_requests:write` on `soleur`; ADR-285). Read D11's "release jobs" as "unattended App-token jobs" from here (D11's text is not rewritten); census row G7f counts four callers. Inventory row: `infra-credential-tiers-8209.md` (Group 4).
+
 ## References
 
 - Plan: `knowledge-base/project/plans/2026-09-22-feat-evict-privileged-terraform-credentials-plan.md`
