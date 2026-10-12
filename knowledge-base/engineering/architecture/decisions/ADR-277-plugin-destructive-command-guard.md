@@ -466,7 +466,10 @@ Binding rulings: `knowledge-base/project/specs/archive/20261011-050138-feat-9776
 - **D8 stands.** The plugin hook stays off in hosted sessions (`AGENT_ENV_OVERRIDES` is unchanged). Enabling it is a later
   consolidation, conditional on a measured hosted `ask`.
 - **CPO3-R1 (P1): still OPEN** until the post-merge verification in ADR-284 has passed on dev and the 24 h and 7 d numbers are recorded
-  below (CPO4-R7). **Measured numbers: not yet recorded.**
+  below (CPO4-R7). **Measured numbers: pending, soak open since 2026-10-12.** The first shipment of the lane (#9977) was inert (#10054), so
+  both windows were re-timed from the deploy of the fix (Web Platform Release run 38223902738, T0 2026-10-12T08:40Z): the 24 h window closes
+  2026-10-13T08:40Z and the 7 d window 2026-10-19T08:40Z. The final counts are recorded once, by the flip PR (ADR-284 "Flip checklist");
+  nothing is measured yet, and the readouts so far live in ADR-284's C9 block.
 - **CPO3-R2: opened by the CPO third pass; satisfied in part by #9792** (it added the exposure statement to the copy); **superseded by
   this PR's CLO-signed copy**, which removes "Until a stricter check ships ... without asking" and adds one hedged assurance
   (`knowledge-base/legal/audits/2026-10-counsel-review-9776-ask-gate.md`). Existing acknowledgements stay valid (a narrowing; CLO Q2).
