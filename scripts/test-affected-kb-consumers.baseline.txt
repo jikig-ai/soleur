@@ -228,8 +228,11 @@ tests/scripts/inngest-host-shape-gate	knowledge-base/project/specs
 tests/scripts/inngest-host-shape-gate	knowledge-base/project/specs/archive
 tests/scripts/no-tofu-ssh-mutation	knowledge-base
 tests/scripts/rule-metrics-aggregate	knowledge-base/project
+tests/scripts/scratch-residue	knowledge-base
 tests/scripts/scratch-residue	knowledge-base/engineering/policies/content-vendoring.md
 tests/scripts/scratch-residue	knowledge-base/legal/compliance-posture.md
+tests/scripts/scratch-residue	knowledge-base/marketing
+tests/scripts/scratch-residue	knowledge-base/marketing/brand-guide.md
 tests/scripts/scratch-residue	knowledge-base/project
 tests/scripts/scratch-residue	knowledge-base/project/learnings
 tests/scripts/scratch-residue	knowledge-base/project/plans

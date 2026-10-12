@@ -4,6 +4,9 @@
 # fixtures are synthesised inline (cq-test-fixtures-synthesized-only); none
 # are copied from app code.
 set -euo pipefail
+SUITE_TMP=$(mktemp -d)
+[[ "$SUITE_TMP" == /* ]] || { echo "FATAL: SUITE_TMP is not absolute: $SUITE_TMP" >&2; exit 2; }
+trap 'rm -rf "$SUITE_TMP"' EXIT
 
 # Redirect incident telemetry into a per-suite sandbox BEFORE any case runs.
 # Inline per-call `INCIDENTS_REPO_ROOT=… bash "$HOOK"` is what leaked here:
@@ -44,7 +47,7 @@ _reason()   { echo "$1" | jq -r '.hookSpecificOutput.permissionDecisionReason //
 # discovers: apps/web-platform/app/globals.css with a :root token block.
 # The palette here defines the "brand" colours; anything else is off-brand.
 _seed_repo() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   (
     cd "$tmp"
     git init -q -b main
@@ -366,7 +369,7 @@ t_palette_poison_via_unstaged_worktree() {
 #      yields a palette so the email off-brand check works ----
 
 t_single_line_token_css_palette() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   ( cd "$tmp"
     git init -q -b main
     git config user.email t@t; git config user.name t
