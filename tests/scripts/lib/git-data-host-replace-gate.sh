@@ -94,7 +94,6 @@
 #
 # Usage:  source tests/scripts/lib/git-data-host-replace-gate.sh
 #         GIT_DATA_ROOT_KEY_FINGERPRINT_FILE=<path> git_data_host_replace_gate <plan-json-file> [replace|rotate]   # 0=PASS, 1=ABORT
-#         git_data_post_apply_gate <plan-json-file> <git-data-host-replace|git-data-host-rotate>        # 0=PASS, 1=ABORT
 #
 # MODE=rotate (#8211 PR2 / ADR-220 D6 — `apply_target=git-data-host-rotate`): the ONE path
 # permitted to touch the LUKS store, because a rotated passphrase can only pair with a FRESH
@@ -313,107 +312,4 @@ git_data_host_replace_gate() {
     echo "git_data_host_replace_gate: ABORT — plan is NOT the exact scoped git-data-host recreate (out-of-scope change, a git-data/LUKS volume destroy/forget, a LUKS passphrase rotation, no server replace, stripped private NIC, an unmounted store [a volume-attachment not re-created], a stripped firewall, or an SSH host key that was not rotated with the host / a pin that was not re-published)"
   fi
   return 1
-}
-
-# git_data_post_apply_gate <plan-json-file> <apply_target> (#10137 / #10067)
-#
-# The POST-APPLY preservation assert, run by the apply step of the git_data_host_replace job
-# against the SAVED plan it just applied. That job is entered by BOTH apply_target values, so
-# one call covers both modes:
-#   plaintext hcloud_volume.git_data  : 0 delete/forget in BOTH modes (an address absent from
-#                                       resource_changes counts as 0 — the canonical plan omits
-#                                       untargeted volumes, so requiring presence would redden it)
-#   LUKS hcloud_volume.git_data_luks  : replace -> 0 delete/forget (absent is valid)
-#                                       rotate  -> MUST be present and EVERY entry exactly
-#                                                  delete AND create (an action-set match, not an
-#                                                  order match). Rotate deliberately -replaces it,
-#                                                  so a preserved-LUKS assert refuses the intended
-#                                                  plan, and a bare skip would pass a rotate that
-#                                                  never replaced the volume.
-#   hcloud_server_network.git_data, hcloud_volume_attachment.git_data and
-#   hcloud_volume_attachment.git_data_luks each carry a create (both modes).
-# An empty/absent resource_changes, an unreadable plan and an unknown or empty apply_target all
-# refuse. OUTPUT DISCIPLINE as above: counters and addresses only, never .change.before/after.
-git_data_post_apply_gate() {
-  local plan_json="${1:-}" apply_target="${2:-}"
-  local counts pt_del luks_del luks_present luks_replace nic patt latt
-
-  plan_gate_assert_readable     "git_data_post_apply_gate" "$plan_json" || return 1
-  plan_gate_assert_classifiable "git_data_post_apply_gate" "$plan_json" || return 1
-
-  if ! jq -e '(.resource_changes | type == "array") and ((.resource_changes | length) > 0)' "$plan_json" >/dev/null 2>&1; then
-    echo "git_data_post_apply_gate: ABORT — the plan carries no resource_changes entries; an empty plan proves nothing was preserved or re-attached, so it is not graded as clean."
-    return 1
-  fi
-
-  case "$apply_target" in
-    git-data-host-replace|git-data-host-rotate) ;;
-    *)
-      echo "git_data_post_apply_gate: ABORT — apply_target must be git-data-host-replace or git-data-host-rotate (got '${apply_target}'); a wiring fault is refused, never defaulted to a mode."
-      return 1
-      ;;
-  esac
-
-  if ! counts=$(jq -c '
-        def acts: (.change.actions? // []);
-        {
-          pt_del: ([ .resource_changes[]? | select(.address == "hcloud_volume.git_data")
-                     | select(acts | any(. == "delete" or . == "forget")) ] | length),
-          luks_del: ([ .resource_changes[]? | select(.address == "hcloud_volume.git_data_luks")
-                       | select(acts | any(. == "delete" or . == "forget")) ] | length),
-          luks_present: ([ .resource_changes[]? | select(.address == "hcloud_volume.git_data_luks") ] | length),
-          luks_replace: ([ .resource_changes[]? | select(.address == "hcloud_volume.git_data_luks")
-                           | select((acts | length) == 2 and (acts | index("delete")) != null and (acts | index("create")) != null) ] | length),
-          nic: ([ .resource_changes[]? | select(.address == "hcloud_server_network.git_data")
-                  | select(acts | index("create")) ] | length),
-          patt: ([ .resource_changes[]? | select(.address == "hcloud_volume_attachment.git_data")
-                   | select(acts | index("create")) ] | length),
-          latt: ([ .resource_changes[]? | select(.address == "hcloud_volume_attachment.git_data_luks")
-                   | select(acts | index("create")) ] | length)
-        }' "$plan_json" 2>/dev/null); then
-    echo "git_data_post_apply_gate: jq evaluation failed on ${plan_json}"
-    return 1
-  fi
-  pt_del=$(echo "$counts" | jq -r '.pt_del')
-  luks_del=$(echo "$counts" | jq -r '.luks_del')
-  luks_present=$(echo "$counts" | jq -r '.luks_present')
-  luks_replace=$(echo "$counts" | jq -r '.luks_replace')
-  nic=$(echo "$counts" | jq -r '.nic')
-  patt=$(echo "$counts" | jq -r '.patt')
-  latt=$(echo "$counts" | jq -r '.latt')
-  plan_gate_assert_numeric "git_data_post_apply_gate" "plaintext_volume_deletes=${pt_del}" "luks_volume_deletes=${luks_del}" "luks_volume_entries=${luks_present}" "luks_volume_replaces=${luks_replace}" "nic_creates=${nic}" "plaintext_attachment_creates=${patt}" "luks_attachment_creates=${latt}" || return 1
-
-  echo "git_data_post_apply_gate: mode=${apply_target} plaintext_volume_deletes=${pt_del} luks_volume_deletes=${luks_del} luks_volume_entries=${luks_present} luks_volume_replaces=${luks_replace} nic_creates=${nic} plaintext_attachment_creates=${patt} luks_attachment_creates=${latt}"
-
-  if [[ "$pt_del" -ne 0 ]]; then
-    echo "::error::hcloud_volume.git_data shows ${pt_del} delete/forget action(s) in the applied plan — the plaintext data store must be preserved in both modes. This should have been caught by the guard; failing hard."
-    return 1
-  fi
-  if [[ "$apply_target" = git-data-host-rotate ]]; then
-    if [[ "$luks_replace" -lt 1 || "$luks_present" -ne "$luks_replace" ]]; then
-      echo "::error::hcloud_volume.git_data_luks must show exactly delete AND create under git-data-host-rotate (replace entries=${luks_replace} of ${luks_present}) — a rotate that did not replace the LUKS volume pairs the new passphrase with the old header. This should have been caught by the guard; failing hard."
-      return 1
-    fi
-  elif [[ "$luks_del" -ne 0 ]]; then
-    echo "::error::hcloud_volume.git_data_luks shows ${luks_del} delete/forget action(s) in the applied plan — the LUKS data store must be preserved under git-data-host-replace. This should have been caught by the guard; failing hard."
-    return 1
-  fi
-  if [[ "$nic" -eq 0 ]]; then
-    echo "::error::hcloud_server_network.git_data shows no create action in the applied plan — the new host would have no private NIC. This should have been caught by the guard; failing hard."
-    return 1
-  fi
-  if [[ "$patt" -eq 0 ]]; then
-    echo "::error::hcloud_volume_attachment.git_data shows no create action in the applied plan — the new host would boot with that store UNMOUNTED. This should have been caught by the guard; failing hard."
-    return 1
-  fi
-  if [[ "$latt" -eq 0 ]]; then
-    echo "::error::hcloud_volume_attachment.git_data_luks shows no create action in the applied plan — the new host would boot with that store UNMOUNTED. This should have been caught by the guard; failing hard."
-    return 1
-  fi
-  if [[ "$apply_target" = git-data-host-rotate ]]; then
-    echo "git_data_post_apply_gate: PASS — plaintext volume preserved (0 delete/forget), LUKS volume replaced (delete+create), private NIC + both store attachments re-attached"
-  else
-    echo "git_data_post_apply_gate: PASS — both data volumes preserved (0 delete/forget), private NIC + both store attachments re-attached"
-  fi
-  return 0
 }

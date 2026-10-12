@@ -537,101 +537,6 @@ else
   pass "R9 rotate-oos: out_of_scope still binds in rotate mode"
 fi
 
-# ── git_data_post_apply_gate (#10137 / #10067) ────────────────────────────────────
-# The post-apply preservation assert, rotate-aware: the plaintext hcloud_volume.git_data is
-# untouched in BOTH modes; the LUKS hcloud_volume.git_data_luks is untouched under
-# git-data-host-replace but REPLACED (delete + create) under git-data-host-rotate. Every row
-# asserts an EXACT rc (0 or 1), so an undefined function (rc 127) fails must-PASS and
-# must-FAIL rows alike — a missing implementation cannot read as a refusal.
-PA_NIC="$(rc_obj 'hcloud_server_network.git_data' '"delete","create"')"
-PA_VA="$(rc_obj 'hcloud_volume_attachment.git_data' '"delete","create"')"
-PA_VA_LUKS="$(rc_obj 'hcloud_volume_attachment.git_data_luks' '"delete","create"')"
-PA_BASE="${PA_NIC},${PA_VA},${PA_VA_LUKS}"
-PA_LUKS_REPLACE="$(rc_obj 'hcloud_volume.git_data_luks' '"delete","create"')"
-PA_PT_REPLACE="$(rc_obj 'hcloud_volume.git_data' '"delete","create"')"
-
-write_pa_plan() { printf '{"resource_changes":[%s]}' "$1" > "$TMP/plan.json"; }
-pa_expect() { # <label> <want_rc> <apply_target>
-  git_data_post_apply_gate "$TMP/plan.json" "$3" >"$TMP/pa.out" 2>&1
-  local rc=$?
-  if [[ "$rc" -eq "$2" ]]; then pass; else fail "$1: apply_target='$3' want rc=$2 got rc=$rc"; fi
-}
-
-# PA1: plaintext volume REPLACED under rotate -> ABORT (rotate preserves the plaintext volume).
-write_pa_plan "${PA_BASE},${PA_LUKS_REPLACE},${PA_PT_REPLACE}"
-pa_expect "PA1 rotate+plaintext-deleted" 1 git-data-host-rotate
-
-# PA2: LUKS volume REPLACED under plain replace -> ABORT (replace preserves both volumes).
-write_pa_plan "${PA_BASE},${PA_LUKS_REPLACE}"
-pa_expect "PA2 replace+luks-deleted" 1 git-data-host-replace
-
-# PA3: empty resource_changes must not pass, in either mode, and says so explicitly.
-write_pa_plan ""
-pa_expect "PA3a empty-plan" 1 git-data-host-replace
-pa_expect "PA3b empty-plan" 1 git-data-host-rotate
-if grep -q 'no resource_changes' "$TMP/pa.out"; then pass; else fail "PA3c: empty plan did not name the empty-resource_changes cause"; fi
-
-# PA4 (must-PASS): the canonical rotate shape — LUKS replaced, plaintext absent.
-write_pa_plan "${PA_BASE},${PA_LUKS_REPLACE}"
-pa_expect "PA4 canonical-rotate" 0 git-data-host-rotate
-
-# PA5 (must-PASS): the canonical replace shape — both volumes absent (preserved by omission).
-write_pa_plan "${PA_BASE}"
-pa_expect "PA5 canonical-replace" 0 git-data-host-replace
-
-# PA6 (must-PASS, non-canonical): both volumes present as explicit no-op entries.
-write_pa_plan "${PA_BASE},$(rc_obj 'hcloud_volume.git_data' '"no-op"'),$(rc_obj 'hcloud_volume.git_data_luks' '"no-op"')"
-pa_expect "PA6 replace-explicit-noop" 0 git-data-host-replace
-
-# PA7: rotate must POSITIVELY replace LUKS — delete-only and absent both ABORT.
-write_pa_plan "${PA_BASE},$(rc_obj 'hcloud_volume.git_data_luks' '"delete"')"
-pa_expect "PA7a rotate-luks-delete-only" 1 git-data-host-rotate
-write_pa_plan "${PA_BASE}"
-pa_expect "PA7b rotate-luks-absent" 1 git-data-host-rotate
-
-# PA8: NIC and each store attachment must show a create, in both modes.
-write_pa_plan "${PA_VA},${PA_VA_LUKS},${PA_LUKS_REPLACE}"
-pa_expect "PA8a nic-create-missing" 1 git-data-host-rotate
-write_pa_plan "${PA_NIC},${PA_VA_LUKS},${PA_LUKS_REPLACE}"
-pa_expect "PA8b plaintext-attachment-create-missing" 1 git-data-host-rotate
-write_pa_plan "${PA_NIC},${PA_VA}"
-pa_expect "PA8c luks-attachment-create-missing" 1 git-data-host-replace
-
-# PA9: an empty / unknown apply_target is a wiring fault -> refuse, never default to a mode.
-write_pa_plan "${PA_BASE}"
-pa_expect "PA9a empty-target" 1 ""
-pa_expect "PA9b other-dispatch-target" 1 git-data-host-create
-pa_expect "PA9c other-dispatch-target" 1 workspaces-luks-cutover
-
-# PA10: a duplicate hcloud_volume.git_data entry carrying a delete AFTER a compliant first entry.
-write_pa_plan "${PA_BASE},${PA_LUKS_REPLACE},$(rc_obj 'hcloud_volume.git_data' '"no-op"'),$(rc_obj 'hcloud_volume.git_data' '"delete"')"
-pa_expect "PA10 duplicate-plaintext-delete" 1 git-data-host-rotate
-
-# PA11: output discipline — a sentinel planted in .change.before is never printed, on a refusal
-# or on a pass (the gate reports counters and addresses only).
-PA_SENTINEL="PA11_SENTINEL_$$"
-write_pa_plan "${PA_BASE},${PA_LUKS_REPLACE},{\"address\":\"hcloud_volume.git_data\",\"change\":{\"actions\":[\"delete\"],\"before\":{\"x\":\"${PA_SENTINEL}\"}}}"
-pa_expect "PA11a sentinel-refusal" 1 git-data-host-rotate
-if grep -q "$PA_SENTINEL" "$TMP/pa.out"; then fail "PA11a: .change.before content leaked into the refusal output"; else pass; fi
-write_pa_plan "${PA_BASE},{\"address\":\"hcloud_volume.git_data\",\"change\":{\"actions\":[\"no-op\"],\"before\":{\"x\":\"${PA_SENTINEL}\"}}}"
-pa_expect "PA11b sentinel-pass" 0 git-data-host-replace
-if grep -q "$PA_SENTINEL" "$TMP/pa.out"; then fail "PA11b: .change.before content leaked into the pass output"; else pass; fi
-
-# PA12: dispatch pin — the workflow's apply step sources the gate lib, passes the dispatch
-# target in, and no longer carries the inline both-volumes loop. Content anchors, not line numbers.
-WF="${DIR}/../../.github/workflows/apply-web-platform-infra.yml"
-PA_STEP="$(awk '
-  /- name: Terraform apply \(git-data-host -replace\) — both-volumes-preserved assert/ { on=1; next }
-  on && /^      - name:/ { exit }
-  on { print }' "$WF")"
-if [[ -z "$PA_STEP" ]]; then
-  fail "PA12: the git-data-host -replace apply step was not found in the workflow"
-else
-  if grep -qE '^[[:space:]]*git_data_post_apply_gate tfplan\.json "\$\{APPLY_TARGET\}" \|\| exit 1$' <<<"$PA_STEP"; then pass; else fail "PA12a: the apply step does not call git_data_post_apply_gate with \"\${APPLY_TARGET}\""; fi
-  if grep -qE '^[[:space:]]*APPLY_TARGET: \$\{\{ inputs\.apply_target \}\}$' <<<"$PA_STEP"; then pass; else fail "PA12b: the apply step does not pass APPLY_TARGET from inputs.apply_target"; fi
-  if grep -qF 'for VOL in hcloud_volume.git_data' <<<"$PA_STEP"; then fail "PA12c: the inline both-volumes loop is still in the apply step"; else pass; fi
-fi
-
 # ANTI-VACUITY FLOOR (#6997). Nothing else asserts that the assertions RAN. Every
 # non-vacuity mechanism in this suite lives inside a helper — the `cmp -s` mutation floors,
 # the layered contract's unmutated control, the preamble-distinctive anchors — so deleting
@@ -649,11 +554,11 @@ fi
 # A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
 # suite on every legitimately-added assertion and train people to bump it unread.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 79 ]]; then
+if [[ "$_ran" -lt 55 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 79 (HK13 skips without terraform). Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 55 (HK13 skips without terraform). Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 79)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 55)\n' "$_ran"
 fi
 
 echo ""
