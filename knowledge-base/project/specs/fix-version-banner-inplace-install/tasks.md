@@ -2,6 +2,11 @@
 
 Plan: `knowledge-base/project/plans/2026-10-12-fix-plugin-version-checkout-identity-plan.md`
 
+## Phase 0.0 - premise probe (before any test or code)
+
+- 0.0.1 Append a distinct probe line to `version-banner.sh` in the cache copy (`installPath`) and the folder copy; run one `cd /tmp && claude -p "reply ok"`; read which probe fired; restore both (`worktree-manager.sh sync` for the folder copy); repeat with `--plugin-dir <worktree>/plugins/soleur`
+- 0.0.2 Write the observed roots to `specs/fix-version-banner-inplace-install/measurements.md`; apply the outcome table (folder -> proceed; cache -> STOP and re-scope; neither -> re-run interactively, else STOP)
+
 ## Phase 0 - RED first
 
 - 0.1 Add the T1 positive fixtures and the T2 table-driven silent loop to `plugins/soleur/test/plugin-version.test.sh` (hand-written trees under `assert_fixture_dir`; no git needed)
@@ -12,10 +17,10 @@ Plan: `knowledge-base/project/plans/2026-10-12-fix-plugin-version-checkout-ident
 
 ## Phase 1 - resolver
 
-- 1.1 `read_small` (builtin `read -n 512` after `[[ -f ]]`) and `packed_ref_sha` (cap+1 `head -c` into awk)
-- 1.2 `valid_ref_name` (deny-list via regex + `case`, no arrays) and `resolve_checkout_commit` (anchor, `.git` file, `commondir`, loose-then-packed)
-- 1.3 Wire into `resolve_installed` after the 12-hex branch; `INST_ID` = sha12; cache file `latest-release.checkout`
-- 1.4 `compute_relation`: `commit|checkout`; update the header comments
+- 1.1 `file_size` (`stat -c %s || stat -f %z`), `read_small` (`[[ -f && -r ]]`, size <= 512, `{ IFS= read -r -n 512; } 2>/dev/null || true`) and `packed_ref_sha` (size <= 4 MiB, awk with `ENVIRON`)
+- 1.2 `valid_ref_name` (deny-list via `case`, no arrays) and `resolve_checkout_commit` (anchor incl. existence of `marketplace.json` and `plugin.json`, parameter-expansion paths, `.git` file, `commondir`, loose-then-packed)
+- 1.3 Wire into `resolve_installed` after the 12-hex branch; `INST_ID` = sha12; cache file `latest-release.checkout`; `load_cache` maps another commit's checkout entry to `cache=missing`
+- 1.4 `compute_relation`: `commit|checkout` with a 12-hex re-validation before `curl`; update the header comments (incl. the cache paragraph)
 
 ## Phase 2 - hook
 
@@ -23,15 +28,15 @@ Plan: `knowledge-base/project/plans/2026-10-12-fix-plugin-version-checkout-ident
 
 ## Phase 3 - commands
 
-- 3.1 `commands/version.md`: top paragraph, key notes, Installed line rules, `compare-failed` sentence, `source=checkout` arm FIRST in the Step 2 template line and "Choose by" list (fetch-then-sync for the bare layout, `git pull` for a clone, `--plugin-dir` line, HEAD-not-files line, moving-checkout line)
+- 3.1 `commands/version.md`: top paragraph, key notes, Installed line rules, `compare-failed` sentence, `source=checkout` arm FIRST in the Step 2 template line and "Choose by" list (three labelled sub-cases with the `rev-parse --is-bare-repository` test: bare = fetch-then-sync, clone = `git pull`, `--plugin-dir` = no marketplace commands; HEAD-not-files line; moving-checkout line; unknown-text sentence for an unreadable checkout)
 - 3.2 `commands/help.md`: key list + version-line template
 
 ## Phase 4 - docs, C4, legal
 
 - 4.1 README "Version Visibility" sentence + pointer; runbook one-sentence pointer
-- 4.2 `model.c4` edge wording; regenerate `model.likec4.json`
+- 4.2 `model.c4` edge wording (two phrases); regenerate `model.likec4.json`; ADR-182 one-line dated amendment
 - 4.3 Legal clarification edits (privacy policy 4.1, GDPR policy ~53, DPD 3.1(e)) in canonical + mirror, Last Updated notes, then `legal-doc-shas.ts` LAST
-- 4.4 `grep -rn 'commit-hash install'` sweep ends with every hit widened or marketplace-only
+- 4.4 Sweep `commit-hash install|one file per install|install id|cached per install` (`| grep -vi checkout` prints only intentionally marketplace-only lines, listed in the PR)
 
 ## Phase 5 - floors and gates
 
@@ -43,4 +48,4 @@ Plan: `knowledge-base/project/plans/2026-10-12-fix-plugin-version-checkout-ident
 
 - 6.1 In the bare root: `git fetch --no-tags origin main:main`, then `worktree-manager.sh sync`
 - 6.2 `claude plugin marketplace update soleur && claude plugin update soleur@soleur`
-- 6.3 `claude plugin list` and the headless `--include-hook-events` capture; paste both; follow-up issue if no banner line
+- 6.3 Record `H0`, run the headless `--include-hook-events` capture from `/tmp`, record `H1`; PASS = banner sha in `{H0,H1}` plus the literal `(local checkout)`; paste the three outputs; linked follow-up issue if no banner line
