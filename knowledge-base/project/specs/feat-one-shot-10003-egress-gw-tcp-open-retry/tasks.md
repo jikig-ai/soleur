@@ -26,7 +26,7 @@ Spec lacks a `lane:` — defaulted to cross-domain (fail-closed), recorded in th
 
 - [x] 3.1 Replace the single probe in `apps/web-platform/infra/egress-gateway-bootstrap.sh` with `GW_WAIT_S`, `gw_diag`, `wait_for_gw_tcp` and the bare call; keep the existing `die` text last; only ledger-verified comment sentences
 - [x] 3.2 Run the suite alone, shellcheck (no new findings), `egress-gw-image-staleness.test.sh`, `scripts/guard-vacuity-floor.test.sh`
-- [x] 3.3 Bump `BASELINE_DECLARED_PROBES` 62 -> 63 in `plugins/soleur/test/preflight-discoverability-test.test.ts` with the PLACEMENT/TRUTH/NO-SUBSTITUTE comment
+- [x] 3.3 Bump `BASELINE_DECLARED_PROBES` 64 -> 65 in `plugins/soleur/test/preflight-discoverability-test.test.ts` with the PLACEMENT/TRUTH/NO-SUBSTITUTE comment
 
 ## Phase 4: Mutation battery
 
