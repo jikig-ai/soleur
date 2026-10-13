@@ -916,15 +916,15 @@ cryptsetup close inngest-redis >/dev/null 2>&1
 # and, if it differs, the difference accounted for arm by arm before the literal moves.
 #
 # #10217 added W1-W4 (late-attach / never-attach / bound-0 / drift control), SH1-SH4 (reopen
-# self-heal arms) and the render_reopen rebind asserts — MEASURED 118 by CI
-# deploy-script-tests-fixed (run 38425065480), the floor moves to it. The review round then added
-# SH5 (wrong-source convergence), the W2 sleep-liveness and SH1 unrelated-line-survival asserts —
-# still floor-above; the next sudo run re-measures upward, never down.
-if [ "$executed" -lt 118 ]; then
+# self-heal arms) and the render_reopen rebind asserts — 118 measured by CI run 38425065480. The
+# review fix-round then added SH5 (wrong-source convergence), SH6 (fstab-heal under a live mount),
+# the W2 sleep-liveness and SH1 unrelated-line-survival asserts and the render_reopen rebind
+# asserts — re-MEASURED 127 by deploy-script-tests-fixed run 38436586418, floor moves to 127.
+if [ "$executed" -lt 127 ]; then
   fail=$((fail + 1))
-  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 118. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
+  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 127. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
 else
-  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 118)\n' "$executed"
+  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 127)\n' "$executed"
 fi
 
 echo ""
