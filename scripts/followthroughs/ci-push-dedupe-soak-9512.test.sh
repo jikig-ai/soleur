@@ -6,6 +6,8 @@
 # The clock is injected (SOAK_NOW_EPOCH), the ADR file and test-all.sh are fixture copies (SOAK_ADR_FILE,
 # SOAK_TEST_ALL), so no row sleeps and none depends on the wall clock or the live repo.
 # Fixtures are synthesized (shas are `sha###`, the tracker is #4242); nothing is written outside a mktemp dir.
+# FIXTURE KEYS KEEP THE HISTORICAL NAMES (`untrustedact`, `marker=untrusted|collab|contrib`, the decoy association column): trust is the
+# fake permission table (perms.tsv), never the association.
 set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -108,7 +110,7 @@ chmod +x "$TMP/bin/gh"
 #   pdbad=K  the K newest full runs have a red push-dedupe   prefull=K  K non-elided runs BEFORE the activation, 20000 s each
 #   reactivate: a DEACTIVATED marker EARLIER than the activation   twoact: an older ACTIVATED too   twodeact: an older
 #   DEACTIVATED before a newer one that follows the activation   marker=collab|contrib: the census comment's author holds `write` | `read`
-#   crlf: markers end in CRLF   badts: ACTIVATED without the Z   midact: ACTIVATED only mid-line or with trailing text
+#   crlf: markers end in CRLF (a line follows each marker: the lib turns a LONE trailing CR into a line ending, a CR before an LF survives to the caller)   badts: ACTIVATED without the Z   midact: ACTIVATED only mid-line or with trailing text
 #   marker=lookalike|foreign   a census URL on a lookalike or foreign host   latebatch: the DEACTIVATED marker is staged in a SECOND
 #   fixture batch (the fixture merges both into one list; gh's own paging is measured, not modelled)
 #   merged=<ISO>  the S2 PR merge time (default MERGED_ISO)
@@ -120,17 +122,18 @@ chmod +x "$TMP/bin/gh"
 #   author's permission is `read` (the decoy must be ignored)   permfail: `priv-op`'s permission read is a 403
 #   collabact: the activation is by collab-op (decoy association COLLABORATOR) holding `write`   noneact: by maint-op (decoy association NONE) holding `maintain`
 #   regcomment: test-all.sh names the suite only in a comment/echo   nostatus: the ADR has no status line
+#   nocreated: no comment carries a createdAt (the BODIES view must not need it; the comments view would be rc 2)
 build_fx() {
   local fx="$1" ne="$2" nf="$3" es="$4" fs="$5"; shift 5
   assert_fixture_dir "$fx"; rm -rf "$fx"; mkdir -p "$fx"
   local actdays=12 noact=0 untrustedact=0 deact=0 unmatched=0 early=0 marker=yes pdred=0 unmerged=0 noissue=0 adr=adopting noreg=0 extra="" kv
-  local privact=0 assocowner=0 permfail=0 collabact=0 noneact=0 merged="$MERGED_ISO" pdbad=0 prefull=0 reactivate=0 twoact=0 twodeact=0 crlf=0 badts=0 midact=0 latebatch=0 regcomment=0 nostatus=0 cr=
+  local privact=0 assocowner=0 permfail=0 collabact=0 noneact=0 merged="$MERGED_ISO" pdbad=0 prefull=0 reactivate=0 twoact=0 twodeact=0 crlf=0 badts=0 midact=0 latebatch=0 regcomment=0 nostatus=0 nocreated=0 cr=
   for kv in "$@"; do
     case "$kv" in
       actdays=*) actdays="${kv#*=}" ;; noact) noact=1 ;; untrustedact) untrustedact=1 ;; deact) deact=1 ;;
       unmatched=*) unmatched="${kv#*=}" ;; early=*) early="${kv#*=}" ;; marker=*) marker="${kv#*=}" ;;
       merged=*) merged="${kv#*=}" ;; pdbad=*) pdbad="${kv#*=}" ;; prefull=*) prefull="${kv#*=}" ;; reactivate) reactivate=1 ;; twoact) twoact=1 ;; twodeact) twodeact=1 ;;
-      crlf) crlf=1 ;; badts) badts=1 ;; midact) midact=1 ;; latebatch) latebatch=1 ;; regcomment) regcomment=1 ;; nostatus) nostatus=1 ;;
+      crlf) crlf=1 ;; badts) badts=1 ;; midact) midact=1 ;; latebatch) latebatch=1 ;; regcomment) regcomment=1 ;; nostatus) nostatus=1 ;; nocreated) nocreated=1 ;;
       pdred) pdred=1 ;; unmerged) unmerged=1 ;; noissue) noissue=1 ;; adr=*) adr="${kv#*=}" ;; noreg) noreg=1 ;; extra=*) extra="${kv#*=}" ;;
       privact) privact=1 ;; assocowner) assocowner=1 ;; permfail) permfail=1 ;; collabact) collabact=1 ;; noneact) noneact=1 ;;
       fail*) : > "$fx/fail-${kv#fail}" ;;
@@ -213,7 +216,7 @@ build_fx() {
     (( noneact )) && { assoc=NONE; actl=',"login":"maint-op"'; }
     if (( badts )); then cm="$cm,{\"body\":\"S2-ACTIVATED: ${act_iso%Z}\",\"author_association\":\"OWNER\"}"
     elif (( midact )); then cm="$cm,{\"body\":\"see S2-ACTIVATED: $act_iso\\nS2-ACTIVATED: $act_iso and then some\",\"author_association\":\"OWNER\"}"
-    else cm="$cm,{\"body\":\"activated${cr}\\nS2-ACTIVATED: $act_iso${cr}\",\"author_association\":\"$assoc\"$actl}"; fi
+    else cm="$cm,{\"body\":\"activated${cr}\\nS2-ACTIVATED: $act_iso${cr}${cr:+\\nthanks}\",\"author_association\":\"$assoc\"$actl}"; fi
     (( twoact )) && cm="$cm,{\"body\":\"S2-ACTIVATED: $(iso_at -$((8 * 86400)))\",\"author_association\":\"OWNER\"}"
     (( reactivate )) && cm="$cm,{\"body\":\"S2-DEACTIVATED: $(iso_at -86400)\",\"author_association\":\"OWNER\"}"
     (( twodeact )) && cm="$cm,{\"body\":\"S2-DEACTIVATED: $(iso_at -86400)\",\"author_association\":\"OWNER\"}"
@@ -223,7 +226,7 @@ build_fx() {
     else cm="$cm,{\"body\":\"S2-DEACTIVATED: $(iso_at 3600)\",\"author_association\":\"OWNER\"}"; fi
   fi
   case "$marker" in
-    yes)         cm="$cm,{\"body\":\"exit census${cr}\\nS2-EXIT-CENSUS: https://github.com/jikig-ai/soleur/issues/4242#issuecomment-1${cr}\",\"author_association\":\"MEMBER\"}" ;;
+    yes)         cm="$cm,{\"body\":\"exit census${cr}\\nS2-EXIT-CENSUS: https://github.com/jikig-ai/soleur/issues/4242#issuecomment-1${cr}${cr:+\\nthanks}\",\"author_association\":\"MEMBER\"}" ;;
     lookalike)   cm="$cm,{\"body\":\"S2-EXIT-CENSUS: https://githubXcom/x/y\",\"author_association\":\"OWNER\"}" ;;
     foreign)     cm="$cm,{\"body\":\"S2-EXIT-CENSUS: https://example.com/x/y\",\"author_association\":\"OWNER\"}" ;;
     contrib)     cm="$cm,{\"body\":\"S2-EXIT-CENSUS: https://github.com/x/y\",\"author_association\":\"CONTRIBUTOR\"}" ;;
@@ -242,6 +245,7 @@ build_fx() {
     {OWNER:"owner-op",MEMBER:"member-op",COLLABORATOR:"collab-op",CONTRIBUTOR:"contrib-op",NONE:"none-op"} as $m
     | {comments: ($a + $b | to_entries | map({author:{login:(.value.login // $m[.value.author_association])},
         authorAssociation:.value.author_association, createdAt:($t0 + .key * 60 | todate), body:.value.body}))}' > "$fx/gql-comments-4242.json"
+  if (( nocreated )); then assert_fixture_dir "$fx"; jq 'del(.comments[].createdAt)' "$fx/gql-comments-4242.json" > "$fx/nc.json" && mv "$fx/nc.json" "$fx/gql-comments-4242.json"; fi
   local pp=admin; (( permfail )) && pp=403
   printf 'owner-op\tadmin\nmember-op\twrite\ncollab-op\twrite\ncontrib-op\tread\nnone-op\t404\npriv-op\t%s\nownread-op\tread\nmaint-op\tmaintain\n' "$pp" > "$fx/perms.tsv"
 }
@@ -259,10 +263,11 @@ expect() {
   if [[ "$rc" == "$want" && "$out" == *"$text"* ]]; then pass "$label (rc=$rc)"; else fail "$label: want rc=$want containing '$text', got rc=$rc: $(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi
 }
 
-# mk_tree <name> [probe source] [nolink|nofn|srcfail] -> prints the path of a copy of the probe inside a MIRRORED tree: the probe sources
-# the trust lib by a relative path, so a lone copy in $TMP would resolve nothing, the helper call would return 127, `|| fail_api` would
-# turn EVERY mutant "caught" and the verdict would prove nothing. scripts/lib is a symlink to the real lib (probe-only mutants; lib
-# mutants live in the lib suite); `nolink` leaves it out (a control), `nofn` puts a lib that sources cleanly but defines no view, `srcfail` one that defines both views and then returns non-zero.
+# mk_tree <name> [probe source] [nolink|nofn|srcfail|onlybodies|onlycomments] -> prints the path of a copy of the probe inside a MIRRORED tree: the probe
+# sources the trust lib by a relative path, so a lone copy in $TMP would resolve no lib, the source guard would exit 3 on EVERY row, every mutant
+# would be "caught" by that alone and the verdict would prove nothing. scripts/lib is a symlink to the real lib (probe-only mutants; lib
+# mutants live in the lib suite); `nolink` leaves it out (a control), `nofn` puts a lib that sources cleanly but defines no view, `srcfail` one that
+# defines both views and then returns non-zero, `onlybodies` | `onlycomments` one that defines only that view (an empty-answering stub).
 mk_tree() {
   local d="$TMP/tree-$1"; rm -rf "$d"; mkdir -p "$d/scripts/followthroughs"
   cp "${2:-$PROBE}" "$d/scripts/followthroughs/ci-push-dedupe-soak-9512.sh"
@@ -270,6 +275,8 @@ mk_tree() {
     nolink) : ;;
     nofn) mkdir -p "$d/scripts/lib"; printf '# a lib that defines nothing\n' > "$d/scripts/lib/trusted-verdict.sh" ;;
     srcfail) mkdir -p "$d/scripts/lib"; printf 'trusted_verdict_bodies() { return 0; }\ntrusted_verdict_comments() { return 0; }\nreturn 3\n' > "$d/scripts/lib/trusted-verdict.sh" ;;
+    onlybodies) mkdir -p "$d/scripts/lib"; printf 'trusted_verdict_bodies() { return 0; }\n' > "$d/scripts/lib/trusted-verdict.sh" ;;
+    onlycomments) mkdir -p "$d/scripts/lib"; printf 'trusted_verdict_comments() { return 0; }\n' > "$d/scripts/lib/trusted-verdict.sh" ;;
     *) ln -s "$REPO_ROOT/scripts/lib" "$d/scripts/lib" ;;
   esac
   printf '%s\n' "$d/scripts/followthroughs/ci-push-dedupe-soak-9512.sh"
@@ -314,6 +321,31 @@ r_srcfail()   { build_fx "$TMP/g4c" 10 15 510 2568
   local keep="$PROBE_UNDER" t; t="$(mk_tree srcfail "$PROBE_UNDER" srcfail)"; PROBE_UNDER="$t"
   expect "CANNOT ESTABLISH: a lib whose source returns non-zero is the same message even when both views are defined" 3 "CANNOT ESTABLISH: trusted-verdict lib unavailable" "$TMP/g4c"
   PROBE_UNDER="$keep"; }
+r_nobodies()  { build_fx "$TMP/g4d" 10 15 510 2568
+  local keep="$PROBE_UNDER" t; t="$(mk_tree nobodies "$PROBE_UNDER" onlycomments)"; PROBE_UNDER="$t"
+  expect "CANNOT ESTABLISH: a lib lacking ONLY the bodies view (the view this probe calls) is the lib-unavailable message" 3 "CANNOT ESTABLISH: trusted-verdict lib unavailable" "$TMP/g4d"
+  PROBE_UNDER="$keep"; }
+r_onlybodies(){ build_fx "$TMP/g4e" 0 25 510 2568 noact
+  local keep="$PROBE_UNDER" t; t="$(mk_tree onlybodies "$PROBE_UNDER" onlybodies)"; PROBE_UNDER="$t"
+  expect "NOT YET: a lib lacking ONLY the comments view (a view this probe never calls) still runs the probe" 2 "not activated" "$TMP/g4e"
+  PROBE_UNDER="$keep"; }
+r_bodies_nocreated() { build_fx "$TMP/g4f" 10 15 510 2568 nocreated; expect "PASS: trusted comments with NO createdAt still activate and census: this probe reads the BODIES view, which ignores t (the comments view would be exit 3)" 0 "PASS" "$TMP/g4f"; }
+r_trfail()    { build_fx "$TMP/g4g" 10 15 510 2568
+  assert_fixture_dir "$TMP"; mkdir -p "$TMP/bin-trfail"; printf '#!/usr/bin/env bash\nexit 5\n' > "$TMP/bin-trfail/tr"; chmod +x "$TMP/bin-trfail/tr"
+  expect "CANNOT ESTABLISH: a failing CR strip (tr) is never read as 'no marker'" 3 "(CR strip)" "$TMP/g4g" PATH="$TMP/bin-trfail:$TMP/bin:$PATH"; }
+NEED_NEW=(grep sed tr tail head date rm)   # the tools the probe or the lib runs that the need list did not name before the review
+r_needtools() { build_fx "$TMP/g4h" 10 15 510 2568
+  local t b ok=1 d out rc; assert_fixture_dir "$TMP"
+  for t in "${NEED_NEW[@]}"; do
+    d="$TMP/bin-no-$t"; rm -rf "$d"; mkdir -p "$d"; cp "$TMP/bin/gh" "$d/gh"
+    for b in bash env cat dirname rm mkdir mktemp basename wc cut uniq sort grep sed tr tail head date awk jq base64 timeout; do
+      [ "$b" = "$t" ] && continue
+      command -v "$b" >/dev/null 2>&1 && ln -s "$(command -v "$b")" "$d/$b"
+    done
+    out="$(env FX="$TMP/g4h" PATH="$d" GH_TOKEN=x SOAK_NOW_EPOCH="$NOW_EPOCH" SOAK_ADR_FILE="$TMP/g4h/ADR-276-fixture.md" SOAK_TEST_ALL="$TMP/g4h/test-all.sh" bash "$PROBE_UNDER" 2>&1)"; rc=$?
+    if [[ "$rc" != 3 || "$out" != *"CANNOT ESTABLISH: $t is not installed"* ]]; then ok=0; fail "need tools: without $t want rc 3 'CANNOT ESTABLISH: $t is not installed', got rc=$rc: $(printf '%s' "$out" | head -2 | tr '\n' '|')"; fi
+  done
+  (( ok )) && pass "CANNOT ESTABLISH: each of ${NEED_NEW[*]} missing from PATH is exit 3 naming it, never a silent 'no marker'"; }
 r_write_act() { build_fx "$TMP/g5" 10 15 510 2568 collabact;         expect "PASS: an activation by an author holding write counts, whatever the decoy association" 0 "PASS" "$TMP/g5"; }
 r_maint_act(){ build_fx "$TMP/g6" 10 15 510 2568 noneact;        expect "PASS: an activation by an author holding maintain counts, whatever the decoy association" 0 "PASS" "$TMP/g6"; }
 r_nonactive_deadline(){ build_fx "$TMP/d7" 0 25 510 2568 noact;     expect "FAIL: 30 days after the merge and nothing activated: activate, or revert" 1 "activate, or revert" "$TMP/d7" SOAK_NOW_EPOCH=$((NOW_EPOCH + 31 * 86400)); }
@@ -352,7 +384,7 @@ ALL_ROWS=(r_pass r_zero r_unmatched1 r_unmatched3 r_over r_allmean r_nomarker r_
           r_adr_proposed r_unregistered r_stuck29 r_stuck30 r_nonactive_deadline r_deact r_commentsfail
           r_adr_idle r_adr_quoted r_adr_case r_adr_note r_adr_nostatus r_adr_missing r_testall_missing r_regcomment r_prefull
           r_reactivate r_twoact r_twodeact r_latebatch r_idle_cap r_max_cap r_would r_marker_write r_marker_read r_crlf r_badts r_midact
-          r_lookalike r_foreign r_pdbad6 r_pdbad5 r_pdbad_dark r_pdbad_few r_deadline_edge r_privmember r_assoc_decoy r_permfail r_nolib r_nofn r_srcfail r_write_act r_maint_act)
+          r_lookalike r_foreign r_pdbad6 r_pdbad5 r_pdbad_dark r_pdbad_few r_deadline_edge r_privmember r_assoc_decoy r_permfail r_nolib r_nofn r_srcfail r_write_act r_maint_act r_nobodies r_onlybodies r_bodies_nocreated r_trfail r_needtools)
 run_rows() { local r; for r in "$@"; do "$r"; done; }
 run_rows "${ALL_ROWS[@]}"
 
@@ -477,8 +509,14 @@ mutant m-empty-helper "$_HELPER" 'trusted_raw=""' r_pass r_privmember r_seven r_
 mutant m-comments-quiet 'fail_comments() { echo "CANNOT ESTABLISH: comment or permission read failed ($1)"; exit 3; }' 'fail_comments() { echo "CANNOT ESTABLISH: comment or permission read failed ($1)"; exit 0; }' r_commentsfail r_permfail
 # the function check removed AND the missing views stubbed to print nothing, so the mutant runs on instead of crashing on `command not found` (which proves nothing)
 mutant m-no-fn-check ' \
-   || ! declare -F trusted_verdict_bodies >/dev/null || ! declare -F trusted_verdict_comments >/dev/null; then' ' \
-   || { declare -F trusted_verdict_bodies >/dev/null || trusted_verdict_bodies() { :; }; declare -F trusted_verdict_comments >/dev/null || trusted_verdict_comments() { :; }; false; }; then' r_nofn
+   || ! declare -F trusted_verdict_bodies >/dev/null; then' ' \
+   || { declare -F trusted_verdict_bodies >/dev/null || trusted_verdict_bodies() { :; }; false; }; then' r_nofn r_nobodies
+mutant m-guard-wrong-view ' \
+   || ! declare -F trusted_verdict_bodies >/dev/null; then' ' \
+   || ! { declare -F trusted_verdict_comments >/dev/null && { declare -F trusted_verdict_bodies >/dev/null || trusted_verdict_bodies() { :; }; }; }; then' r_nobodies r_onlybodies
+mutant m-comments-view "$_HELPER" 'trusted_raw="$(trusted_verdict_comments "$tracker" "$REPO" | jq -r .b)" || fail_comments "tracker $tracker comments (trusted-author resolution)"' r_bodies_nocreated
+mutant m-tr-unchecked ' || fail_comments "tracker $tracker comments (CR strip)"' '' r_trfail
+mutant m-need-short 'for need in gh jq base64 awk mktemp sort grep sed tr tail head date rm; do' 'for need in gh jq base64 awk mktemp sort; do' r_needtools
 mutant m-no-source-check 'if ! source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" 2>/dev/null && pwd)/trusted-verdict.sh" \
    ||' 'if ! { source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" 2>/dev/null && pwd)/trusted-verdict.sh"; true; } \
    ||' r_srcfail
@@ -514,8 +552,16 @@ else fail "harness control: the identity copy turned $MUT_REDS row(s) red (the t
 PROBE_UNDER="$(mk_tree nolink "$PROBE" nolink)"; core_rows_quiet "${ALL_ROWS[@]}"; PROBE_UNDER="$PROBE"
 if [ "$MUT_REDS" -gt 0 ]; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: a copy without the lib symlink turns $MUT_REDS row(s) red (the tree resolves the lib)"
 else fail "harness control: a copy without the lib symlink turned no row red"; fi
-if [ "$CTRL_OK" -ne 5 ]; then fail "harness controls: $CTRL_OK of 5 held"; fi
-if [ "$MUT_RUN" -eq "$MUT_CAUGHT" ] && [ "$MUT_RUN" -ge 54 ]; then pass "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught"; else fail "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught (every mutant must be caught; floor 54)"; fi
+# the VERDICT itself: an inert mutant fed through `mutant` must be REPORTED as a survivor and make the suite red (counters restored after).
+# A verdict forced to `caught` (`if [ "$MUT_REDS" -gt 0 ]` -> `if true`) reports the inert mutant as caught and fails this control.
+_p0=$passes; _f0=$fails; _a0=$asserted; _n0=${#FAILURES[@]}; _r0=$MUT_RUN; _c0=$MUT_CAUGHT
+mutant c-inert 'MAX_RUNS=100' 'MAX_RUNS=100;' r_pass > "$TMP/inert.out"
+_inert_fails=$((fails - _f0)); _inert_caught=$((MUT_CAUGHT - _c0))
+passes=$_p0; fails=$_f0; asserted=$_a0; FAILURES=("${FAILURES[@]:0:$_n0}"); MUT_RUN=$_r0; MUT_CAUGHT=$_c0
+if [ "$_inert_fails" -eq 1 ] && [ "$_inert_caught" -eq 0 ] && grep -q 'went red' "$TMP/inert.out"; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: an inert mutant is reported as a SURVIVOR and makes the suite red"
+else fail "harness control: an inert mutant was not reported as a survivor (fails=$_inert_fails caught=$_inert_caught)"; fi
+if [ "$CTRL_OK" -ne 6 ]; then fail "harness controls: $CTRL_OK of 6 held"; fi
+if [ "$MUT_RUN" -eq "$MUT_CAUGHT" ] && [ "$MUT_RUN" -ge 58 ]; then pass "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught"; else fail "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught (every mutant must be caught; floor 58)"; fi
 
 # the request-shape mutants cannot reach a row's EXIT CODE (the fake gh answers any well-formed jobs path), so they are
 # pinned by the requests.log assertion above: drop each parameter from a copy and confirm the assertion text no longer holds
@@ -545,12 +591,12 @@ if [ -z "$_shape_bad" ]; then pass "request-shape mutants (jobs filter dropped, 
 # harness row: a probe that always exits 0 must be refused by the named rows (the rows can fail)
 printf '#!/usr/bin/env bash\necho PASS\nexit 0\n' > "$TMP/always-pass.sh"; chmod +x "$TMP/always-pass.sh"
 PROBE_UNDER="$TMP/always-pass.sh"; core_rows_quiet "${ALL_ROWS[@]}"; PROBE_UNDER="$PROBE"
-if [ "$MUT_REDS" -ge 54 ]; then pass "HARNESS: an always-PASS probe turns $MUT_REDS rows red"; else fail "HARNESS: an always-PASS probe turned only $MUT_REDS rows red"; fi
+if [ "$MUT_REDS" -ge 64 ]; then pass "HARNESS: an always-PASS probe turns $MUT_REDS rows red"; else fail "HARNESS: an always-PASS probe turned only $MUT_REDS rows red"; fi
 
 printf 'ci-push-dedupe-soak-9512: %d passed, %d failed, %d assertion(s) executed\n' "$passes" "$fails" "$asserted"
 # DELIBERATELY NOT ROUTED THROUGH fail(): compares against a literal and exits directly.
 _total=$((passes + fails))
-_FLOOR=139
+_FLOOR=149
 if [ "$_total" -lt "$_FLOOR" ]; then
   printf '[FATAL] assertion floor: executed %d < %d\n' "$_total" "$_FLOOR" >&2
   exit 1

@@ -103,13 +103,6 @@
 #                  unless the cache dir is owned, non-symlink and was just created. The two test
 #                  suites added by the same PR carry NO baseline rows: every fixture write is under
 #                  a canonical `assert_fixture_dir`.
-#
-#   2026-10-13   #9818 row moves (source edits, not detector): ci-draft-light-soak-9728.test.sh 20->18 and
-#                  trusted-verdict.test.sh 18->18. The probe-trust change added fixture writes to both suites
-#                  (four rows each at first); they now run under the canonical `assert_fixture_dir` (the tracker-
-#                  comment staging block in the S3 suite, the helpers and the new rows in the lib suite), as the
-#                  S2 suite already did with zero rows. The guarded S3 block also covers two pre-existing staging
-#                  writes, hence 20->18 rather than 20->20.
 #   1439 -> 1440   #6894, ship-time advisor round: one more `$STATE_DIR` write in
 #                  inngest-luks-cutover.sh (the rollback-verified latch) — same root class as the
 #                  ten rows already itemised below; the row goes 10 -> 11 and nothing else moves.
@@ -140,6 +133,14 @@
 #                     1  scripts/followthroughs/inngest-luks-cutover-6894.sh:120 -- also a FALSE
 #                        POSITIVE: `[[ "$NEWEST_BAD" > "$NEWEST_DONE" ]]` is a LEXICOGRAPHIC
 #                        comparison inside `[[ ]]`, not a redirect. Same reasoning as above.
+#
+#   2026-10-13   #9818 row moves (source edits, not detector). e09e4e614d: ci-draft-light-soak-9728.test.sh
+#                  20->22 (+2) and trusted-verdict.test.sh 18->22 (+4), the fixture writes the probe-trust change
+#                  added to both suites. Then 22->18 in each, in this series: the writes run under the canonical
+#                  `assert_fixture_dir` (the tracker-comment staging block in the S3 suite, the helpers and the
+#                  new rows in the lib suite), as the S2 suite already did with zero rows; the guarded S3 block
+#                  also covers two pre-existing staging writes, hence 22->18 and not 22->20. The lib suite is
+#                  18 -> 18 net, the S3 suite 20 -> 18 net.
 #
 # A future change that SHRINKS this file deserves the scrutiny a growth would get. From the count
 # alone, a better resolver and a detector that stopped looking are indistinguishable, and across

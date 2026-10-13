@@ -61,8 +61,9 @@
 #               or that ran on a non-draft PR, a merge_group entry behind a light head, the dark deadline, or a soak
 #               that never lit)
 #   2 = NOT YET (not merged, not activated, deactivated, too few days or light pushes, or the exit census is missing)
-#   3 = CANNOT ESTABLISH (gh/jq/timeout/GH_TOKEN/resolver missing, the trust lib unavailable, or a GitHub API read failed, including the tracker's
-#               comment read and a permission lookup: the sweeper retries)
+#   3 = CANNOT ESTABLISH (a tool, GH_TOKEN, the resolver or the trust lib missing, a GitHub API read failed (the tracker's comment read and a
+#               permission lookup fail for the causes in the rc 2 list in the header of scripts/lib/trusted-verdict.sh), or a local jq
+#               projection of the comments failed: the sweeper retries)
 #   78 = refused to run under xtrace while GH_TOKEN is set (#7797)
 #
 # RETIREMENT: when #9728's tracker closes, delete this file, its .test.sh, the run_suite line in scripts/test-all.sh,
@@ -95,15 +96,16 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # test seam (the sweeper runs this under env -i, so it is inert in production)
 VERDICT_CMD="${CI_HEAD_VERDICT_BIN:-$HERE/../../plugins/soleur/scripts/ci-head-verdict.sh}"
 
-for need in gh jq timeout base64 awk mktemp sort; do
+# every external command the probe runs directly or through the trust lib (a missing one is exit 3, never a silent "no marker")
+for need in gh jq timeout base64 awk mktemp sort grep sed tr tail head date rm; do
   command -v "$need" >/dev/null 2>&1 || { echo "CANNOT ESTABLISH: $need is not installed"; exit 3; }
 done
 [ -n "${GH_TOKEN:-}" ] || { echo "CANNOT ESTABLISH: GH_TOKEN is not set (the tracker directive must declare secrets=GH_TOKEN)"; exit 3; }
 [ -r "$VERDICT_CMD" ] || { echo "CANNOT ESTABLISH: the verdict resolver $VERDICT_CMD is not readable"; exit 3; }
 # shellcheck source=../lib/trusted-verdict.sh
 if ! source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" 2>/dev/null && pwd)/trusted-verdict.sh" \
-   || ! declare -F trusted_verdict_bodies >/dev/null || ! declare -F trusted_verdict_comments >/dev/null; then
-  echo "CANNOT ESTABLISH: trusted-verdict lib unavailable (missing, unsourceable, or without its two views)"; exit 3
+   || ! declare -F trusted_verdict_comments >/dev/null; then
+  echo "CANNOT ESTABLISH: trusted-verdict lib unavailable (missing, unsourceable, or without trusted_verdict_comments)"; exit 3
 fi
 
 NOW="${SOAK_NOW_EPOCH:-$(date -u +%s)}"
@@ -111,6 +113,7 @@ NOW="${SOAK_NOW_EPOCH:-$(date -u +%s)}"
 
 fail_api() { echo "CANNOT ESTABLISH: GitHub API read failed ($1)"; exit 3; }
 fail_comments() { echo "CANNOT ESTABLISH: comment or permission read failed ($1)"; exit 3; }
+fail_projection() { echo "CANNOT ESTABLISH: comment projection failed (local jq) ($1)"; exit 3; }
 api() { gh api "$@" 2>/dev/null; }
 
 # --- the S3 PR merge time ------------------------------------------------------------------------------------------------
@@ -120,7 +123,7 @@ merged_epoch="$(date -u -d "$merged_at" +%s 2>/dev/null)" || fail_api "merge tim
 
 # --- the tracker: markers, trusted authors only (one JSON object per comment: its time and its body) --------------------------
 comments="$(trusted_verdict_comments "$TRACKER" "$REPO")" || fail_comments "tracker $TRACKER comments (trusted-author resolution)"
-trusted="$(jq -r '.b' <<<"$comments" 2>/dev/null | tr -d '\r')" || fail_comments "tracker $TRACKER comments (projection)"
+trusted="$(jq -r '.b' <<<"$comments" 2>/dev/null | tr -d '\r')" || fail_projection "tracker $TRACKER comments (projection)"
 TS_RE='[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z'
 first_on="$(printf '%s\n' "$trusted" | grep -oE "^S3-ACTIVATED: $TS_RE\$" | sed 's/^S3-ACTIVATED: //' | sort | head -n 1)"
 last_on="$(printf '%s\n' "$trusted" | grep -oE "^S3-ACTIVATED: $TS_RE\$" | sed 's/^S3-ACTIVATED: //' | sort | tail -n 1)"
@@ -129,7 +132,7 @@ census_marked="$(printf '%s\n' "$trusted" | grep -cE '^S3-EXIT-CENSUS: https://g
 # the earliest trusted S3-CONFIRMED comment (a github URL, or a quoted statement of at least 3 characters), by createdAt
 CONF_RE='^S3-CONFIRMED: (https://github\.com/[^ ]+|"[^"]{3,}")$'
 conf_iso="$(jq -r --arg re "$CONF_RE" 'select(.b | split("\n") | map(rtrimstr("\r")) | any(test($re))) | .t' <<<"$comments" 2>/dev/null | sort | head -n 1)" \
-  || fail_comments "tracker $TRACKER comments (confirmation projection)"
+  || fail_projection "tracker $TRACKER comments (confirmation projection)"
 conf_epoch=""
 [ -n "$conf_iso" ] && { conf_epoch="$(date -u -d "$conf_iso" +%s 2>/dev/null)" || fail_api "confirmation time $conf_iso"; }
 has_on=0; active=0; deactivated=0; first_on_epoch=0; act_epoch=0; off_epoch=0

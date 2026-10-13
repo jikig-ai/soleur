@@ -135,7 +135,7 @@ fi
 # Both are fixed here: order by position and take the last, and REDACT the anchor before echoing
 # so nothing this script prints can ever be re-read as a verdict. Chronological order is safe
 # because `.comments[]` returns oldest-first and the author filter above means only authors with
-# write access can place a verdict at all — so "the latest member judgement" is exactly the right rule.
+# write access can place a verdict at all — so "the latest verdict from an author holding admin, maintain or write" is exactly the right rule.
 verdicts="$(printf '%s\n' "$body" | grep -E '^RESULT: (PASS|FAIL)\b' || true)"
 last="$(printf '%s\n' "$verdicts" | grep -E '^RESULT: (PASS|FAIL)\b' | tail -1)"
 

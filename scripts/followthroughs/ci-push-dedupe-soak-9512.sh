@@ -45,8 +45,8 @@
 #   0 = PASS    1 = FAIL (a wrong elision, a failing push-dedupe job, the mean over target, a deadline, or a
 #               deregistered proof suite)
 #   2 = NOT YET (not activated, too few elided runs or days, or the exit census marker is missing)
-#   3 = CANNOT ESTABLISH (gh/jq/GH_TOKEN missing, the trust lib unavailable, or a GitHub API read failed, including the tracker's comment
-#               read and a permission lookup: the sweeper retries)
+#   3 = CANNOT ESTABLISH (a tool, gh/GH_TOKEN or the trust lib missing, or a GitHub API read failed, including the tracker's comment
+#               read and a permission lookup, the causes being the rc 2 list in the header of scripts/lib/trusted-verdict.sh: the sweeper retries)
 #   78 = refused to run under xtrace while GH_TOKEN is set (#7797)
 #
 # RETIREMENT: when #9512's tracker closes, delete this file, its .test.sh, the run_suite line in scripts/test-all.sh,
@@ -80,14 +80,15 @@ ADR_FILE_OVERRIDE="${SOAK_ADR_FILE:-}"
 ADR_DIR="$HERE/../../knowledge-base/engineering/architecture/decisions"
 TEST_ALL="${SOAK_TEST_ALL:-$HERE/../test-all.sh}"
 
-for need in gh jq base64 awk mktemp sort; do
+# every external command the probe runs directly or through the trust lib (a missing one is exit 3, never a silent "no marker")
+for need in gh jq base64 awk mktemp sort grep sed tr tail head date rm; do
   command -v "$need" >/dev/null 2>&1 || { echo "CANNOT ESTABLISH: $need is not installed"; exit 3; }
 done
 [ -n "${GH_TOKEN:-}" ] || { echo "CANNOT ESTABLISH: GH_TOKEN is not set (the tracker directive must declare secrets=GH_TOKEN)"; exit 3; }
 # shellcheck source=../lib/trusted-verdict.sh
 if ! source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" 2>/dev/null && pwd)/trusted-verdict.sh" \
-   || ! declare -F trusted_verdict_bodies >/dev/null || ! declare -F trusted_verdict_comments >/dev/null; then
-  echo "CANNOT ESTABLISH: trusted-verdict lib unavailable (missing, unsourceable, or without its two views)"; exit 3
+   || ! declare -F trusted_verdict_bodies >/dev/null; then
+  echo "CANNOT ESTABLISH: trusted-verdict lib unavailable (missing, unsourceable, or without trusted_verdict_bodies)"; exit 3
 fi
 
 NOW="${SOAK_NOW_EPOCH:-$(date -u +%s)}"
@@ -108,7 +109,7 @@ issues="$(api "repos/$REPO/issues?labels=follow-through&state=open&per_page=100"
 tracker="$(jq -r '.[0] // empty' <<<"$issues" 2>/dev/null)" || fail_api "tracker lookup"
 [ -n "$tracker" ] || { echo "NOT YET: the tracker issue carrying the $DIRECTIVE_SCRIPT directive was not found among open follow-through issues"; exit 2; }
 trusted_raw="$(trusted_verdict_bodies "$tracker" "$REPO")" || fail_comments "tracker $tracker comments (trusted-author resolution)"
-trusted="$(printf '%s\n' "$trusted_raw" | tr -d '\r')"
+trusted="$(printf '%s\n' "$trusted_raw" | tr -d '\r')" || fail_comments "tracker $tracker comments (CR strip)"
 TS_RE='[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z'
 last_on="$(printf '%s\n' "$trusted" | grep -oE "^S2-ACTIVATED: $TS_RE\$" | sed 's/^S2-ACTIVATED: //' | sort | tail -n 1)"
 last_off="$(printf '%s\n' "$trusted" | grep -oE "^S2-DEACTIVATED: $TS_RE\$" | sed 's/^S2-DEACTIVATED: //' | sort | tail -n 1)"
