@@ -821,7 +821,7 @@ including the gated real-git rows. No `e2e`.
   lowercase twin, non-hex} against each of the three 40-hex sites (detached HEAD, loose ref, packed `$1`).
 - **Real-git fixtures:** a `core.bare=true` fixture makes `git status` die before `core.fsmonitor` fires, so
   the witness uses a SEPARATE non-bare malicious fixture and is gated by an independent probe, not the
-  code under test. Copy reality: `# pack-refs with: peeled fully-peeled sorted ` (trailing space), absolute
+  code under test. Copy reality: `# pack-refs with: peeled fully-peeled sorted` followed by a trailing space, absolute
   `gitdir:` plus `\n`, `commondir` `../..`, reftable HEAD `ref: refs/heads/.invalid` with `refs/heads` a
   regular file. T7 is one loop over FOUR real shapes with a unique sha per ref and HEAD != main: normal
   clone (loose), bare-in-`.git` clone (packed), `git worktree add`, the same worktree after `git pack-refs
