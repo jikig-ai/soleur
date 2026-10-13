@@ -429,9 +429,9 @@ fi
 # inside a flag value does not trip it; `$(…)` still surfaces as its own
 # invocation via the `(` boundary. Checked on the RAW match text — the
 # residue class itself drops the `$`.
+_operand_hits=$(grep -oE "${_MERGE_BOUNDARY}[[:space:]]*${_MERGE_PREFIX}gh${_GH_GFLAGS}[[:space:]]+pr[[:space:]]+merge([[:space:]][^;&|]*)?" <<<"$SCAN_NOCOMMENT" || true)
 if [[ -z "$MERGE_TARGET_WHY" ]] \
-   && grep -oE "${_MERGE_BOUNDARY}[[:space:]]*${_MERGE_PREFIX}gh${_GH_GFLAGS}[[:space:]]+pr[[:space:]]+merge([[:space:]][^;&|]*)?" <<<"$SCAN_NOCOMMENT" \
-        | grep -qE '[[:space:]][$~]'; then
+   && grep -qE '[[:space:]][$~]' <<<"$_operand_hits"; then
   MERGE_TARGET_WHY="the merge operand is a variable or home path the hook cannot resolve; spell the PR number literally ('gh pr merge <N>')"
 fi
 
@@ -706,6 +706,7 @@ fi
 # an rc check too — a second-call failure must not degrade to an empty
 # LEAKY silent pass.
 _census_f=$(mktemp "${TMPDIR:-/tmp}/kb-census.XXXXXX")
+trap 'rm -f "$_census_f"' EXIT
 if ! git -C "$WORK_DIR" diff --name-status -z --diff-filter=AMRCT \
        "$BASE" "$HEAD_OID" -- \
        knowledge-base/project/specs \

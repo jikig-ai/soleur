@@ -123,6 +123,7 @@ make_archived_branch() {
   local tmp="$1" branch="$2"
   local work origin incidents
   read -r work origin incidents < <(make_kb_branch "$tmp" "$branch" clean)
+  assert_fixture_dir "$work"
   git -C "$work" mv "$work/knowledge-base/project/specs/$branch" \
     "$work/knowledge-base/project/specs/archive/2026-10-12-$branch"
   git -C "$work" add -A
@@ -208,6 +209,7 @@ t01_specdir_deny() {
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-leak" specdir)
   assert_fixture_dir "$work"
+  assert_fixture_dir "$work"
   assert_fixture_has "T01 fixture" "$work/knowledge-base/project/specs/feat-leak/tasks.md"
   local payload out exit_code=0
   payload=$(make_payload "$work" "gh pr merge --squash --auto")
@@ -231,6 +233,7 @@ t01_specdir_deny() {
 t02_topicplan_deny() {
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-topic" topicplan)
+  assert_fixture_dir "$work"
   assert_fixture_has "T02 fixture" "$work/knowledge-base/project/plans/2026-10-12-zz-other-topic-plan.md"
   local out exit_code=0
   out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge --squash --auto")") || exit_code=$?
@@ -241,6 +244,7 @@ t02_topicplan_deny() {
 t03_modspec_deny() {
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-mod" modspec)
+  assert_fixture_dir "$work"
   local out exit_code=0
   out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge")") || exit_code=$?
   assert_deny "T03 M row on base-live spec file" "$incidents" "$out" "${exit_code:-0}"
@@ -250,6 +254,7 @@ t03_modspec_deny() {
 t04_brainstorm_deny() {
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-storm" brainstorm)
+  assert_fixture_dir "$work"
   assert_fixture_has "T04 fixture" "$work/knowledge-base/project/brainstorms/2026-10-12-zz-topic.md"
   local out exit_code=0
   out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge --squash")") || exit_code=$?
@@ -260,6 +265,7 @@ t04_brainstorm_deny() {
 t05_withlock_deny() {
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-lock" specdir)
+  assert_fixture_dir "$work"
   local out exit_code=0
   # The sanctioned arming form (ship emits this via session-state.sh).
   out=$(run_hook "$incidents" "$(make_payload "$work" 'bash "$SS_LIB" with_lock merge-main 600 -- gh pr merge --squash --auto')") || exit_code=$?
@@ -270,6 +276,7 @@ t05_withlock_deny() {
 t06_envprefix_deny() {
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-env" specdir)
+  assert_fixture_dir "$work"
   local out exit_code=0
   out=$(run_hook "$incidents" "$(make_payload "$work" "FOO=1 gh pr merge --squash --auto")") || exit_code=$?
   assert_deny "T06 env-assignment prefix" "$incidents" "$out" "${exit_code:-0}"
@@ -279,6 +286,7 @@ t06_envprefix_deny() {
 t07_pipe_deny() {
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-pipe" specdir)
+  assert_fixture_dir "$work"
   local out exit_code=0
   out=$(run_hook "$incidents" "$(make_payload "$work" "cat /dev/null | gh pr merge --squash --auto")") || exit_code=$?
   assert_deny "T07 pipe-boundary merge" "$incidents" "$out" "${exit_code:-0}"
@@ -288,6 +296,7 @@ t07_pipe_deny() {
 t08_subst_deny() {
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-subst" specdir)
+  assert_fixture_dir "$work"
   local out exit_code=0
   out=$(run_hook "$incidents" "$(make_payload "$work" "x=\$(gh pr merge --squash --auto)")") || exit_code=$?
   assert_deny "T08 paren substitution merge" "$incidents" "$out" "${exit_code:-0}"
@@ -297,6 +306,7 @@ t08_subst_deny() {
 t09_keyword_deny() {
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-kw" specdir)
+  assert_fixture_dir "$work"
   local out exit_code=0
   out=$(run_hook "$incidents" "$(make_payload "$work" "time gh pr merge --squash --auto")") || exit_code=$?
   assert_deny "T09a time-prefixed merge" "$incidents" "$out" "${exit_code:-0}"
@@ -310,6 +320,7 @@ t09_keyword_deny() {
 t10_pullref_deny() {
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-remote" specdir)
+  assert_fixture_dir "$work"
   # Publish the leaky head as refs/pull/42/head, then sit on a CLEAN branch.
   git -C "$work" push -q origin feat-remote:refs/pull/42/head
   git -C "$work" checkout -q -b reviewer main
@@ -322,6 +333,7 @@ t10_pullref_deny() {
 t11_pullref_clean_pass() {
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-ok" clean)
+  assert_fixture_dir "$work"
   git -C "$work" push -q origin feat-ok:refs/pull/43/head
   git -C "$work" checkout -q -b reviewer main
   local out exit_code=0
@@ -333,6 +345,7 @@ t11_pullref_clean_pass() {
 t12_matchhead_deny() {
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-mhc" specdir)
+  assert_fixture_dir "$work"
   local sha
   sha=$(git -C "$work" rev-parse HEAD)
   git -C "$work" checkout -q -b reviewer main
@@ -349,6 +362,7 @@ t12_matchhead_deny() {
 t13_samerepo_R_deny() {
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-samer" specdir)
+  assert_fixture_dir "$work"
   git -C "$work" remote set-url origin "git@github.com:jikig-ai/soleur.git"
   git -C "$work" config url."$origin".insteadOf "git@github.com:jikig-ai/soleur.git"
   git -C "$work" push -q origin feat-samer:refs/pull/44/head
@@ -362,6 +376,7 @@ t13_samerepo_R_deny() {
 t14_foreign_R_pass() {
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-foreign" specdir)
+  assert_fixture_dir "$work"
   git -C "$work" remote set-url origin "git@github.com:jikig-ai/soleur.git"
   git -C "$work" config url."$origin".insteadOf "git@github.com:jikig-ai/soleur.git"
   local out exit_code=0
@@ -374,6 +389,7 @@ t14_foreign_R_pass() {
 t15_unprovable_R_deny() {
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-unprov" specdir)
+  assert_fixture_dir "$work"
   local out exit_code=0
   # -R with no operand cannot be verified → deny carrying MERGE_TARGET_WHY.
   out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge 46 -R")") || exit_code=$?
@@ -392,6 +408,7 @@ t15_unprovable_R_deny() {
 t16_foreign_cd_deny() {
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-cd" specdir)
+  assert_fixture_dir "$work"
   local foreign="$tmp/foreign"
   mkdir -p "$foreign"
   init_git_repo "$foreign"
@@ -406,6 +423,7 @@ t16_foreign_cd_deny() {
 t17_scancmd_disagree_deny() {
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-disagree" specdir)
+  assert_fixture_dir "$work"
   local out exit_code=0
   # `877"9"` survives raw but strips to 877 — the two sides disagree.
   out=$(run_hook "$incidents" "$(make_payload "$work" 'gh pr merge 877"9" --squash')") || exit_code=$?
@@ -416,6 +434,7 @@ t17_scancmd_disagree_deny() {
 t18_fetchfail_deny() {
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-nonet" specdir)
+  assert_fixture_dir "$work"
   git -C "$work" remote set-url origin /nonexistent/path/to/repo.git
   local out exit_code=0
   out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge --squash --auto")") || exit_code=$?
@@ -434,6 +453,7 @@ t18_fetchfail_deny() {
 t19_flagfirst_number_deny() {
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-reorder" specdir)
+  assert_fixture_dir "$work"
   local out exit_code=0
   # Flag-first-with-number: conservative deny; the text says to reorder.
   out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge --squash 48")") || exit_code=$?
@@ -444,6 +464,7 @@ t19_flagfirst_number_deny() {
 t20_multi_after_compliant_deny() {
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-multi" specdir)
+  assert_fixture_dir "$work"
   # Archive the base-live spec dir AND add a second live dir: second
   # member still leaks → deny (first-member short-circuit is the class).
   mkdir -p "$work/knowledge-base/project/specs/b-second"
@@ -461,6 +482,7 @@ t20_multi_after_compliant_deny() {
 t21_flagonly_headpath_deny() {
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-flagonly" specdir)
+  assert_fixture_dir "$work"
   local out exit_code=0
   out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge --squash --auto")") || exit_code=$?
   assert_deny "T21 flag-only invocation takes HEAD path" "$incidents" "$out" "${exit_code:-0}"
@@ -472,6 +494,7 @@ t21_flagonly_headpath_deny() {
 t22_archiveonly_pass() {
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-arch" archive)
+  assert_fixture_dir "$work"
   local out exit_code=0
   out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge --squash --auto")") || exit_code=$?
   assert_pass "T22 archive-only diff passes" "$incidents" "$out" "${exit_code:-0}"
@@ -481,6 +504,7 @@ t22_archiveonly_pass() {
 t23_archived_move_pass() {
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_archived_branch "$tmp" "feat-moved")
+  assert_fixture_dir "$work"
   local out exit_code=0
   out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge --squash --auto")") || exit_code=$?
   assert_pass "T23 spec dir git-mv'd under archive/ passes" "$incidents" "$out" "${exit_code:-0}"
@@ -490,6 +514,7 @@ t23_archived_move_pass() {
 t24_learnings_pass() {
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-learn" learnings)
+  assert_fixture_dir "$work"
   local out exit_code=0
   out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge --squash --auto")") || exit_code=$?
   assert_pass "T24 learnings/ never gated" "$incidents" "$out" "${exit_code:-0}"
@@ -499,6 +524,7 @@ t24_learnings_pass() {
 t25_nonkb_pass() {
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-nonkb" nonkb)
+  assert_fixture_dir "$work"
   local out exit_code=0
   out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge --squash --auto")") || exit_code=$?
   assert_pass "T25 non-KB diff passes" "$incidents" "$out" "${exit_code:-0}"
@@ -508,6 +534,7 @@ t25_nonkb_pass() {
 t26_ready_nofire_pass() {
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-ready" specdir)
+  assert_fixture_dir "$work"
   local out exit_code=0
   # `gh pr ready` alone is review-readiness, never gated.
   out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr ready 42")") || exit_code=$?
@@ -518,6 +545,7 @@ t26_ready_nofire_pass() {
 t27_help_pass() {
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-help" specdir)
+  assert_fixture_dir "$work"
   local out exit_code=0
   out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge --help")") || exit_code=$?
   assert_pass "T27 --help pass-through" "$incidents" "$out" "${exit_code:-0}"
@@ -527,6 +555,7 @@ t27_help_pass() {
 t28_quoted_mention_pass() {
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-quoted" specdir)
+  assert_fixture_dir "$work"
   local out exit_code=0
   out=$(run_hook "$incidents" "$(make_payload "$work" "echo 'gh pr merge example'")") || exit_code=$?
   assert_pass "T28 quoted mention does not fire" "$incidents" "$out" "${exit_code:-0}"
@@ -536,6 +565,7 @@ t28_quoted_mention_pass() {
 t29_commitbody_pass() {
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-cbody" specdir)
+  assert_fixture_dir "$work"
   local out exit_code=0
   out=$(run_hook "$incidents" "$(make_payload "$work" $'git add . && git commit -m "ship note\ngh pr merge must not be hand-rolled\n"')") || exit_code=$?
   assert_pass "T29 commit-body mention does not fire" "$incidents" "$out" "${exit_code:-0}"
@@ -545,6 +575,7 @@ t29_commitbody_pass() {
 t30_bashc_quoted_pass() {
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-bashc" specdir)
+  assert_fixture_dir "$work"
   local out exit_code=0
   # Documented residual shared with every sibling: the quoted payload is
   # blanked by strip_command_bodies and does not fire.
@@ -594,6 +625,7 @@ t33_nongitdir_pass() {
 t34_skip_env_pass() {
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-skip" specdir)
+  assert_fixture_dir "$work"
   local out exit_code=0
   out=$(printf '%s' "$(make_payload "$work" "gh pr merge --squash --auto")" \
         | SOLEUR_SKIP_KB_ARCHIVE_GATE=1 CLAUDECODE= SOLEUR_SESSION_STATE_ROOT="$incidents/state" INCIDENTS_REPO_ROOT="$incidents" "$HOOK" 2>/dev/null) || exit_code=$?
@@ -607,12 +639,13 @@ t35_bare_numbered_gates() {
   # every checkout state).
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-bare" specdir)
+  assert_fixture_dir "$work"
   git -C "$work" push -q origin feat-bare:refs/pull/55/head
   local bare="$tmp/bare.git" binc="$tmp/binc"
   mkdir -p "$binc"
   git init -q --bare "$bare"
   git -C "$bare" remote add origin "$origin"
-  git -C "$bare" fetch -q origin main
+  git -C "$bare" fetch -q --no-tags origin main
   local out exit_code=0
   out=$(run_hook "$binc" "$(make_payload "$bare" "gh pr merge 55 --squash")") || exit_code=$?
   assert_deny "T35 bare repo still gates a numbered merge" "$binc" "$out" "${exit_code:-0}"
@@ -657,6 +690,7 @@ t36_shallow_warn_pass() {
 t37_stdout_json_clean() {
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-json" specdir)
+  assert_fixture_dir "$work"
   local out exit_code=0
   out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge --squash --auto")") || exit_code=$?
   # jq -s 'length==1', not `jq -e .`: the latter accepts a STREAM of N
@@ -676,6 +710,7 @@ t44_lsremote_empty_deny() {
   # mis-target).
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-nopr" specdir)
+  assert_fixture_dir "$work"
   local out exit_code=0
   out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge 999 --squash")") || exit_code=$?
   assert_deny "T44 ls-remote-empty numbered merge" "$incidents" "$out" "${exit_code:-0}"
@@ -686,6 +721,7 @@ t45_unreachable_sha_deny() {
   # --match-head-commit with a sha not present and not fetchable → deny.
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-badsha" specdir)
+  assert_fixture_dir "$work"
   local out exit_code=0
   out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge --admin --match-head-commit 0000000000000000000000000000000000000001")") || exit_code=$?
   assert_deny "T45 unreachable pinned sha" "$incidents" "$out" "${exit_code:-0}"
@@ -697,6 +733,7 @@ t46_clean_sha_pass() {
   # deny-only).
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-mhclean" clean)
+  assert_fixture_dir "$work"
   local sha out exit_code=0
   sha=$(git -C "$work" rev-parse "origin/feat-mhclean")
   out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge --admin --match-head-commit $sha")") || exit_code=$?
@@ -731,6 +768,7 @@ t48_global_flags_deny() {
   # invisible to the residue census → deny with the canonical-form hint.
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-gf" specdir)
+  assert_fixture_dir "$work"
   local out exit_code=0
   out=$(run_hook "$incidents" "$(make_payload "$work" "gh -R jikig-ai/soleur pr merge 5")") || exit_code=$?
   assert_deny "T48 global-flag merge" "$incidents" "$out" "${exit_code:-0}"
@@ -750,6 +788,7 @@ t49_multi_invocation_deny() {
   # precedence would swallow the second invocation's census entirely.
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-multi" clean)
+  assert_fixture_dir "$work"
   local sha out exit_code=0
   sha=$(git -C "$work" rev-parse "origin/feat-multi")
   out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge --match-head-commit $sha && gh pr merge 6")") || exit_code=$?
@@ -763,6 +802,7 @@ t50_comment_pointer_still_gates() {
   # merge passed silently. Now the comment is stripped → pr census → deny.
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-cmt" specdir)
+  assert_fixture_dir "$work"
   git -C "$work" push -q origin feat-cmt:refs/pull/50/head
   local out exit_code=0
   out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge 50 --squash # -R other/repo")") || exit_code=$?
@@ -775,6 +815,7 @@ t51_quoted_env_still_gates() {
   # assignment — must not foreign-exit the real merge.
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-qenv" specdir)
+  assert_fixture_dir "$work"
   git -C "$work" push -q origin feat-qenv:refs/pull/51/head
   local out exit_code=0
   out=$(run_hook "$incidents" "$(make_payload "$work" 'gh pr merge 51 --squash; echo "GH_REPO=other/repo"')") || exit_code=$?
@@ -788,6 +829,7 @@ t52_rename_R_deny() {
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   local work origin incidents
   read -r work origin incidents < <(make_archived_branch "$tmp" "b-archrevive")
+  assert_fixture_dir "$work"
   git -C "$work" mv "$work/knowledge-base/project/specs/archive/2026-10-12-b-archrevive" \
     "$work/knowledge-base/project/specs/b-revived"
   git -C "$work" commit -q -m "revive spec dir live"
@@ -803,6 +845,7 @@ t53_subst_clean_pass() {
   # number resolves and a clean head passes (not a resolver deny).
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-subok" clean)
+  assert_fixture_dir "$work"
   git -C "$work" push -q origin feat-subok:refs/pull/53/head
   local out exit_code=0
   out=$(run_hook "$incidents" "$(make_payload "$work" "x=\$(gh pr merge 53)")") || exit_code=$?
@@ -817,6 +860,7 @@ t54_subshell_cd_census_pass() {
   # miscensus is closed (a session-branch census would deny).
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-session" specdir)
+  assert_fixture_dir "$work"
   git -C "$work" checkout -q -b clean-b main
   git -C "$work" push -q origin clean-b
   git -C "$work" checkout -q feat-session
@@ -836,6 +880,7 @@ t55_unresolvable_cd_deny() {
   # resolve; the merge's execution checkout is unprovable → deny.
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-cdvar" specdir)
+  assert_fixture_dir "$work"
   local out exit_code=0
   out=$(run_hook "$incidents" "$(make_payload "$work" 'cd $OTHER_DIR && gh pr merge 5')") || exit_code=$?
   assert_deny "T55 variable cd operand" "$incidents" "$out" "${exit_code:-0}"
@@ -846,6 +891,7 @@ t56_brace_group_deny() {
   # `{ gh pr merge 5; }` — brace-group boundary.
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-brace" specdir)
+  assert_fixture_dir "$work"
   git -C "$work" push -q origin feat-brace:refs/pull/56/head
   local out exit_code=0
   out=$(run_hook "$incidents" "$(make_payload "$work" "{ gh pr merge 56 --squash; }")") || exit_code=$?
@@ -857,6 +903,7 @@ t57_launcher_args_deny() {
   # `timeout 60 gh pr merge` — argument-taking launcher prefix.
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-timeout" specdir)
+  assert_fixture_dir "$work"
   git -C "$work" push -q origin feat-timeout:refs/pull/57/head
   local out exit_code=0
   out=$(run_hook "$incidents" "$(make_payload "$work" "timeout 60 gh pr merge 57 --squash")") || exit_code=$?
@@ -870,6 +917,7 @@ t58_redirect_clean_pass() {
   # phantom positional.
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-redir" clean)
+  assert_fixture_dir "$work"
   git -C "$work" push -q origin feat-redir:refs/pull/58/head
   local out exit_code=0
   out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge 58 --squash > /tmp/merge-log")") || exit_code=$?
@@ -883,6 +931,7 @@ t59_nested_archive_deny() {
   # component.
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-nested" clean)
+  assert_fixture_dir "$work"
   mkdir -p "$work/knowledge-base/project/specs/feat-nested/archive"
   echo "x" > "$work/knowledge-base/project/specs/feat-nested/archive/inner.md"
   git -C "$work" add -A
@@ -897,6 +946,7 @@ t59_nested_archive_deny() {
 t60_mhc_no_sha_deny() {
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-nosha" clean)
+  assert_fixture_dir "$work"
   local out exit_code=0
   out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge --match-head-commit --squash")") || exit_code=$?
   assert_deny "T60 --match-head-commit without sha" "$incidents" "$out" "${exit_code:-0}"
@@ -906,6 +956,7 @@ t60_mhc_no_sha_deny() {
 t61_two_shas_deny() {
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-twosha" clean)
+  assert_fixture_dir "$work"
   local sha out exit_code=0
   sha=$(git -C "$work" rev-parse "origin/feat-twosha")
   out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge --match-head-commit $sha $sha")") || exit_code=$?
@@ -919,6 +970,7 @@ t62_unprovable_env_deny() {
   # unparseable env operand).
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-envptr" specdir)
+  assert_fixture_dir "$work"
   local out exit_code=0
   out=$(run_hook "$incidents" "$(make_payload "$work" "GH_REPO=noslash gh pr merge --squash")") || exit_code=$?
   assert_deny "T62 unparseable GH_REPO env" "$incidents" "$out" "${exit_code:-0}"
@@ -930,6 +982,7 @@ t63_background_multi_deny() {
   # too; two heads, one census → deny.
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-amp" clean)
+  assert_fixture_dir "$work"
   local out exit_code=0
   out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge 5 & gh pr merge 6")") || exit_code=$?
   assert_deny "T63 & separated invocations" "$incidents" "$out" "${exit_code:-0}"
@@ -941,6 +994,7 @@ t64_brace_cd_deny() {
   # boundary set, so a brace-grouped foreign cd is seen.
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-bcd" clean)
+  assert_fixture_dir "$work"
   local foreign="$tmp/foreign" finc="$tmp/finc"
   mkdir -p "$foreign" "$finc"
   init_git_repo "$foreign"
@@ -957,6 +1011,7 @@ t65_comment_gflags_pass() {
   # detect reads the comment-stripped text; a mention must not deny.
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-cmtgf" clean)
+  assert_fixture_dir "$work"
   git -C "$work" push -q origin feat-cmtgf:refs/pull/65/head
   local out exit_code=0
   out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge 65 --squash # runbook: gh -R o/r pr merge")") || exit_code=$?
@@ -971,6 +1026,7 @@ t66_subdir_cd_deny() {
   # leaky head passes vacuously. Deny proves the fix.
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-subdir" specdir)
+  assert_fixture_dir "$work"
   mkdir -p "$work/docs"
   local out exit_code=0
   out=$(run_hook "$incidents" "$(make_payload "$work" "(cd $work/docs; gh pr merge --squash --auto)")") || exit_code=$?
@@ -983,6 +1039,7 @@ t67_trailing_cd_no_launder() {
   # head; the leaky session branch must still census.
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-trailcd" specdir)
+  assert_fixture_dir "$work"
   local foreign="$tmp/foreign"
   mkdir -p "$foreign"
   init_git_repo "$foreign"
@@ -1000,6 +1057,7 @@ t68_cumulative_cd_deny() {
   # not pass on the first.
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-cdcd" clean)
+  assert_fixture_dir "$work"
   local foreign="$tmp/foreign"
   mkdir -p "$foreign"
   init_git_repo "$foreign"
@@ -1015,6 +1073,7 @@ t69_popd_deny() {
   # popd's target lives in the dir stack — unprovable → deny.
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-popd" clean)
+  assert_fixture_dir "$work"
   local out exit_code=0
   out=$(run_hook "$incidents" "$(make_payload "$work" "pushd /tmp >/dev/null; popd; gh pr merge 5")") || exit_code=$?
   assert_deny "T69 popd unresolvable" "$incidents" "$out" "${exit_code:-0}"
@@ -1026,6 +1085,7 @@ t70_xargs_deny() {
   # is flag-only but the merge is numbered → unprovable → deny.
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-xargs" clean)
+  assert_fixture_dir "$work"
   local out exit_code=0
   out=$(run_hook "$incidents" "$(make_payload "$work" "echo 5 | xargs gh pr merge")") || exit_code=$?
   assert_deny "T70 xargs stdin operand" "$incidents" "$out" "${exit_code:-0}"
@@ -1038,6 +1098,7 @@ t71_nested_subst_deny() {
   # of whichever head the greedy extraction would pick.
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-nest" clean)
+  assert_fixture_dir "$work"
   local out exit_code=0
   out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge \$(gh pr merge 5)")") || exit_code=$?
   assert_deny "T71 nested merge invocation" "$incidents" "$out" "${exit_code:-0}"
@@ -1049,6 +1110,7 @@ t72_cdk_word_pass() {
   # prevents a phantom dir-change from denying a clean merge.
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-cdk" clean)
+  assert_fixture_dir "$work"
   local out exit_code=0
   out=$(run_hook "$incidents" "$(make_payload "$work" "cdk deploy && gh pr merge --squash --auto")") || exit_code=$?
   assert_pass "T72 cdk-prefix is not cd" "$incidents" "$out" "${exit_code:-0}"
@@ -1061,6 +1123,7 @@ t73_var_operand_deny() {
   # rather than miscensusing the session branch.
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-varop" clean)
+  assert_fixture_dir "$work"
   local out exit_code=0
   out=$(run_hook "$incidents" "$(make_payload "$work" 'gh pr merge $PR_NUM')") || exit_code=$?
   assert_deny "T73 variable merge operand" "$incidents" "$out" "${exit_code:-0}"
@@ -1073,6 +1136,7 @@ t74_nonrepo_cd_numbered_deny() {
   # is head-path-only, so this denies.
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-nrcd" clean)
+  assert_fixture_dir "$work"
   git -C "$work" remote set-url origin "git@github.com:jikig-ai/soleur.git"
   git -C "$work" config url."$origin".insteadOf "git@github.com:jikig-ai/soleur.git"
   local out exit_code=0
@@ -1087,6 +1151,7 @@ t75_subshell_scoped_cd_deny() {
   # merge marks the scope unprovable → deny.
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-scd" specdir)
+  assert_fixture_dir "$work"
   local other="$tmp/other"
   mkdir -p "$other"
   local out exit_code=0
@@ -1102,6 +1167,7 @@ t76_quoted_R_body_still_gates() {
   # foreign. The census must deny the leaky head instead.
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-bfp" specdir)
+  assert_fixture_dir "$work"
   git -C "$work" remote set-url origin "git@github.com:jikig-ai/soleur.git"
   git -C "$work" config url."$origin".insteadOf "git@github.com:jikig-ai/soleur.git"
   git -C "$work" push -q origin feat-bfp:refs/pull/76/head
