@@ -712,9 +712,9 @@ fi
 # MINUS that function's body, and the heartbeat itself is asserted to never
 # signal the holder (every `kill` in it targets its own sleep child).
 _hb_body="$(awk '/^_tc_wait_heartbeat\(\) \{/{f=1} f{print} f && /^\}/{exit}' "$LIB")"
-_hb_code="$(grep -vE '^[[:space:]]*#' <<<"$_hb_body")"
+_hb_code="$(grep -vE '^[[:space:]]*#' <<<"$_hb_body" || true)"
 lib_code="$(awk '/^_tc_wait_heartbeat\(\) \{/{skip=1; next} skip && /^}/{skip=0; next} !skip' "$LIB" \
-  | grep -vE '^[[:space:]]*#')"
+  | grep -vE '^[[:space:]]*#' || true)"
 cases=$((cases + 1))
 if [[ "$(grep -cE 'kill -0|/proc/[^/]*holder|stale_pid|holder_pid' <<<"$lib_code" || true)" -eq 0 ]]; then
   pass "Phase 3.6: the lib contains no stale-holder detection path (heartbeat reader excluded)"
