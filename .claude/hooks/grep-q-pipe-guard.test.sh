@@ -1356,7 +1356,7 @@ PRODUCER_JOIN=(
   'tests/scripts/test-workspaces-luks-cutover-gate.sh | cryptsetup | exempt | text-only reach probe: suite ran green and no piped call reached the stub (1 non-test producers) (reach T1; t1:rc0/5s; hits 0)'
   'tests/scripts/test-zot-log-channel-probe.sh | awk | drains | 2 | *'
 )
-# A row may spell its test-file column with one `~` before the extension (`name~.sh`): scripts/battery-tag-authorship.test.sh follows every path literal of a closure
+# A row may spell its test-file column with one `~` before the extension (`name~.sh`): the battery-tag-authorship suite follows every path literal of a closure
 # member, so a row that names a glob-collected suite in full pulls that suite (and its tag-authoring git commands) into the battery closure. The `~` hides the literal from
 # that scan; this line removes it before any reader sees a row.
 PRODUCER_JOIN=("${PRODUCER_JOIN[@]//\~/}")
