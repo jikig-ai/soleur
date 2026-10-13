@@ -1429,3 +1429,10 @@
   unverified and no current-source C.9 remain. All credential/provider/browser-
   auth/account/shared-write/deployment/flag/cohort restrictions persist; sharing,
   retention/inheritance and configured regions remain unknown.
+- Final handoff main sync includes `f7a0e2a4435ec6dbab67c2b43d2d4b00e9c3d1a1`.
+  The complete offline wrapper passed after the clean merge; preview still
+  counts 5,061 runtime inputs and 188 migrations. Runtime manifest is now
+  `94a080e8e549335ab1eb6e4d652c55e56180ecd36465a32507d485f9f73abb3c`;
+  schema and preparation components are unchanged. Final exact-source export,
+  pairing and CI/description receipts belong to the PR description and local
+  ignored evidence. No build, recovery, auth or operational approval occurred.

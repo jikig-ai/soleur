@@ -101,6 +101,19 @@ matrices → full review/promotion remains open.
 
 ## Session errors and corrections
 
+Before the final handoff, main advanced to
+`f7a0e2a4435ec6dbab67c2b43d2d4b00e9c3d1a1` and was merged cleanly at
+`117398ad64b8c5d7df5fbe126dfcda78f76748b0`. The complete runtime manifest
+changed to `94a080e8e549335ab1eb6e4d652c55e56180ecd36465a32507d485f9f73abb3c`
+with 5,061 inputs and 188 migrations. Schema, browser, production/controlled
+Dockerfile, preparation-component and pinned-CLI hashes remain those above.
+The earlier `4fd454b930` draft head settled 69 pass / 11 skip, only draft
+aggregate `test` red in CI 38360852376; description guards 38361193803 passed.
+Those checks are historical after this main sync. Fresh source pairing,
+file-only export and exact-head CI/description evidence are recorded in the
+PR description and ignored local receipts, without converting this record
+into an operational authorization or runtime verdict.
+
 - Sandbox denied locks, sockets, network and `/var/tmp` scaffolds; exact retries
   passed. A failed enumerator generated secondary orphan diagnostics, not real
   orphan evidence. **Prevention:** check producer exit before its derived census.
