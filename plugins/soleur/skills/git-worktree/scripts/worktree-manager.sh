@@ -4497,7 +4497,10 @@ sync_bare_files() {
       stale_count=$((stale_count + 1))
       rmdir -p "$(dirname "$GIT_ROOT/$rel")" 2>/dev/null || true
     fi
-  done < <(comm -23 \
+  # comm must run under LC_ALL=C like the two sorts feeding it: under en_US.UTF-8 it reports
+  # "not in sorted order" and its output deletes TRACKED dotfiles the checkout-index above
+  # just restored (.claude-plugin/marketplace.json, .gitignore, .github/ ...).
+  done < <(LC_ALL=C comm -23 \
     <(git log HEAD --pretty=format: --name-only --diff-filter=AMRC 2>/dev/null | LC_ALL=C sort -u | sed '/^$/d') \
     <(git ls-tree -r --name-only HEAD 2>/dev/null | LC_ALL=C sort -u))
   if [[ "$stale_count" -gt 0 ]]; then

@@ -107,4 +107,57 @@ assert_eq "v2" "$(cat "$BARE/knowledge-base/marketing/doc.md")" "doc.md still v2
 assert_file_exists "$BARE/.env" ".env still preserved after 2nd run"
 echo ""
 
+echo "Test 6: locale-independent prune — tracked dotfiles survive a non-C collation"
+# The prune diffs two LC_ALL=C-sorted streams with comm; comm itself must run under
+# LC_ALL=C too, or an en_US collation (dotfiles sort differently) makes it report
+# "not in sorted order" and the unreliable output deletes TRACKED files that were just
+# materialized (measured: .claude-plugin/marketplace.json, .gitignore, .github/ ...).
+LOC=""
+for cand in en_US.utf8 en_US.UTF-8; do
+  if LC_ALL="$cand" bash -c ':' 2>/dev/null && locale -a 2>/dev/null | grep -qix "$cand"; then LOC="$cand"; break; fi
+done
+if [[ -z "$LOC" ]]; then
+  echo "  SKIP: no en_US UTF-8 locale installed on this host"
+else
+  SEED2="$TEST_DIR/seed2"
+  git init -q -b main "$SEED2"
+  git -C "$SEED2" config user.email "test@test.local"
+  git -C "$SEED2" config user.name "Test"
+  mkdir -p "$SEED2/.claude-plugin" "$SEED2/apps"
+  printf '{}\n'   > "$SEED2/.claude-plugin/marketplace.json"
+  printf 'ignore\n' > "$SEED2/.gitignore"
+  printf 'a\n'    > "$SEED2/apps/a.md"
+  printf 'r\n'    > "$SEED2/README.md"
+  git -C "$SEED2" add .
+  git -C "$SEED2" commit -q -m "commit1"
+  # GNU comm only checks sort order once it has seen an UNPAIRED line, so the fixture
+  # needs a tracked-deleted path that sorts FIRST in C order (leading dot) ahead of the
+  # kept README.md/apps/a.md pair, whose relative order differs between C and en_US.
+  printf 'gone\n' > "$SEED2/.0-old.md"
+  printf 'gone\n' > "$SEED2/old.md"
+  git -C "$SEED2" add .0-old.md old.md
+  git -C "$SEED2" commit -q -m "commit2: add old files"
+  git -C "$SEED2" rm -q .0-old.md old.md
+  git -C "$SEED2" commit -q -m "commit3: delete old files"
+  BARE2="$TEST_DIR/bare2.git"
+  git clone -q --bare "$SEED2" "$BARE2"
+  printf 'gone\n' > "$BARE2/old.md"      # tracked-deleted leftovers: must still be pruned
+  printf 'gone\n' > "$BARE2/.0-old.md"
+  cd "$BARE2"
+  LC_ALL="$LOC" bash "$SCRIPT" --yes sync-bare-files > "$TEST_DIR/sync3.log" 2>&1 || {
+    echo "  WARN: locale sync exited non-zero:"; sed 's/^/    /' "$TEST_DIR/sync3.log"; }
+  assert_file_exists "$BARE2/.claude-plugin/marketplace.json" "marketplace.json survives under $LOC"
+  assert_file_exists "$BARE2/.gitignore" ".gitignore survives under $LOC"
+  assert_file_exists "$BARE2/apps/a.md" "apps/a.md survives under $LOC"
+  assert_file_exists "$BARE2/README.md" "README.md survives under $LOC"
+  assert_file_not_exists "$BARE2/old.md" "tracked-deleted old.md still pruned under $LOC"
+  assert_file_not_exists "$BARE2/.0-old.md" "tracked-deleted .0-old.md still pruned under $LOC"
+  if grep -q 'not in sorted order' "$TEST_DIR/sync3.log"; then
+    FAIL=$((FAIL + 1)); echo "  FAIL: comm reported unsorted input under $LOC"
+  else
+    PASS=$((PASS + 1)); echo "  PASS: no comm sort-order complaint under $LOC"
+  fi
+fi
+echo ""
+
 print_results
