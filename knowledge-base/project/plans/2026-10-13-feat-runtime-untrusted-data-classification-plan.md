@@ -257,6 +257,8 @@ logged fetched content or email addresses.
 
 **Brand-survival threshold:** single-user incident
 
+Concrete artifact/vector pairs (added after review): `WebFetchOutput.result` (a model-processed summary) can drop or paraphrase an injection, or exceed the 256 KB scan window (the unscanned tail is annotated, never enveloped); the `untrusted-classify` log line carries a hashed workspace id, the conversation id and sizes (retained at WARN); a flag-resolution failure or Flagsmith outage silently leaves the scan OFF (liveness alert is deferred to #10195); subagent fetches and resumed transcripts are not covered; email, inbox and CRM keep static framing only (no scoring); a quoted payload on a page that reads as security writing can evade the heuristic.
+
 CPO sign-off is required before `soleur:work` begins (`requires_cpo_signoff: true`); `soleur:engineering:review:user-impact-reviewer`
 runs at review. The v1 posture (annotate/observe, flags default off in prd, no claim) is deliberately the conservative end.
 
@@ -387,9 +389,9 @@ return `flagged:false` (the defense text must not trip its own detector).
 
 - [x] `server/untrusted-content.ts` exports `classify`, `envelope`, `UntrustedSource`, `createUntrustedContentHook`; `bun apps/web-platform/scripts/untrusted-content-eval.ts` runs and prints `EVAL PASS`.
 - [x] WebFetch PostToolUse hook is registered iff `webEgress` and the classify flag are on, matcher exactly `WebFetch` (`agent-runner-query-options.ts`, PostToolUse list).
-- [x] Hook returns `{}` for unflagged results, `additionalContext` (data-only warning + reason codes) for flagged results, and also an annotation noting uninspected content when `truncated`; `unscored` (error/unknown shape) returns `{}` by design and logs. Returns `updatedToolOutput` only when `untrusted-content-wrap` is on, classify is on AND Phase 0 confirmed it is honored; otherwise that branch and flag do not exist.
+- [x] Hook returns `{}` for unflagged results, `additionalContext` (data-only warning + reason codes) for flagged results, and also an annotation noting uninspected content when `truncated`; `unscored` (error/unknown shape) returns `{}` by design and logs. Returns `updatedToolOutput` only when `untrusted-content-wrap` is on and classify is on. (Phase 0 could not confirm the model sees the rewrite: the branch ships behind a default-off flag, decision-challenges W1; a dev canary gates enabling it, #10195.)
 - [x] Email, inbox and CRM tools source their envelope from the shared module; existing tests pass unchanged (`test/server/email-triage-tools.test.ts:449` exact-text assertion).
-- [x] Scorer and hook fail open: a thrown scorer, an unrecognized `tool_response` shape, or a > 256 KB payload never blocks or alters the turn and emits telemetry (`untrusted-content.ts` try/catch plus `reportSilentFallback`).
+- [x] Scorer and hook fail open: a thrown scorer, an unrecognized `tool_response` shape, or a > 256 KB payload never blocks or alters the turn and emits telemetry (`untrusted-content.ts` try/catch plus the debounced `mirrorWithDebounce` mirrors).
 - [x] Telemetry contains no content, query string, matched substring or email address (test).
 - [ ] Two flags created through `soleur:flag-create`; prd default off. (Code-wired, env mirror 0; Flagsmith feature creation is the operator's typed-yes step, `create.sh <flag> --flagsmith-only`, W4.)
 
@@ -399,7 +401,7 @@ return `flagged:false` (the defense text must not trip its own detector).
 - [x] No public or marketing copy changed; no doc claims the platform "protects against prompt injection". Scoped wording only inside the ADR.
 - [x] ADR-287 written with measured numbers, Alternatives Considered, and `status: adopting` for wrap.
 - [x] Roadmap CP1 row text updated to "heuristic v1, LLM tier conditional" via `soleur:product-roadmap` (the plan does not edit roadmap.md).
-- [x] Tracking issues filed and linked from #4671: ONE P1 "remaining surfaces" issue (cron GitHub issue bodies, `github_read_*` MCP tools, plugin-side CLI, KB reads, attachments) filed before merge; taint-based capability downgrade (blocked-by relation to #4672); LLM-tier classifier (conditional on eval); wrap-flag enable decision with the 7-day soak (follow-through enrollment, see Sharp Edges).
+- [x] Tracking issues filed and linked from #4671 (#10194 remaining surfaces, #10195 soak and wrap-enable, #10196 taint downgrade + LLM tier, blocked by #4672; the four planned items became three): ONE P1 "remaining surfaces" issue (cron GitHub issue bodies, `github_read_*` MCP tools, plugin-side CLI, KB reads, attachments) filed before merge; taint-based capability downgrade (blocked-by relation to #4672); LLM-tier classifier (conditional on eval); wrap-flag enable decision with the 7-day soak (follow-through enrollment, see Sharp Edges).
 
 ### Quality Gates
 

@@ -1129,3 +1129,14 @@ Swap `load%` for the `name` filter (and `maxIf(v,n='load15')`) to read sustained
 CPU pressure. After web-2 is born, re-run with `tags.host='soleur-web-2'` to
 confirm it emits metrics and to drive the resize-or-keep-`cx23` decision
 (ADR-143 D1). Serves `hr-no-dashboard-eyeball-pull-data-yourself`.
+
+## `op:"untrusted-classify"` (WebFetch injection scan, ADR-287 / #4671)
+
+One WARN line per WebFetch result in sessions with web egress and the `untrusted-content-classify` flag on. The pino payload sits under
+`.message` in the stored row (see the extraction note above), with fields `op`, `source`, `score`, `flagged`, `reasonCodes`,
+`contentLength`, `truncated`, `unscored`, `unscoredReason`, `scorerMs`, `mode`, `rewriteEmitted`, `workspaceIdHash`, `sessionId`. Never
+content, URLs or addresses. `rewriteEmitted` means the hook returned a rewrite, not that the model saw it.
+
+Soak/liveness read: `doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 7d --grep untrusted-classify`
+(counts only). Zero lines for 24 h while web-egress sessions exist is an alert, not a quiet window; with the flag off (the default) zero
+lines is the expected state. The alerts themselves are tracked on #10195.

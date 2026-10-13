@@ -3,9 +3,9 @@
 Plan: knowledge-base/project/plans/2026-10-13-feat-runtime-untrusted-data-classification-plan.md
 
 ## Phase 0 - Spike
-- [x] 0.1 Capture WebFetch PostToolUse input shapes (string/object/blocks, error responses); record in plan Research Insights
+- [ ] 0.1 (shapes from SDK typings, no live capture) Capture WebFetch PostToolUse input shapes (string/object/blocks, error responses); record in plan Research Insights
 - [ ] 0.2 (unverified: subagent hook coverage; recorded as not covered in ADR-287) Check hook fires for Task subagents; check additionalContext coexists with updatedToolOutput
-- [x] 0.3 Check whether updatedToolOutput is honored for built-in WebFetch; decide whether wrap flag/code exists
+- [ ] 0.3 (static analysis only: SDK typings and binary strings; end-to-end rewrite NOT observed, ADR-287) Check whether updatedToolOutput is honored for built-in WebFetch; decide whether wrap flag/code exists
 - [x] 0.4 Run bun on a trivial script importing `@/`-aliased code to settle alias resolution
 
 ## Phase 1 - RED first
