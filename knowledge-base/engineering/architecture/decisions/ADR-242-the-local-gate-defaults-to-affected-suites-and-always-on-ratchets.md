@@ -743,8 +743,8 @@ diff would select no corpus suite: a silent hole. The same fix round's review id
 further residuals on different surfaces: `--paths` elements were diff-name stand-ins that never
 matched a git path line (`./x` silently selected nothing — a misleading diagnostic), and the th6
 root-coverage census certified a `glob:<root>/` edge by *suffix shape* rather than *matchability*
-(a `sub/*.test.sh` tail ends in `.test.sh` yet reaches nothing beneath the root the corpus scan
-actually enumerates).
+(a `sub/*.test.sh` tail ends in `.test.sh` yet reaches only that subtree — it under-covers the
+root the corpus scan enumerates).
 
 27. **The root-anchored `glob:` grammar stays unrepresentable; detection, not extension, is the
     durable posture.** A dir-less corpus file is detected loudly — the th8 row in
@@ -759,7 +759,10 @@ actually enumerates).
     extend on evidence* — the grammar grows for a member that exists, never for one that might.
     Companion hardening in the same change: `--paths` elements normalize a leading `./` run to
     fixpoint at the parse arm and refuse unclean spellings (empty elements, absolute, `..` or
-    `/.` or `//` segments, a trailing `/`, TAB/LF bytes) with a named rc-2 error — a print-only
+    `/.` or `//` segments, a trailing `/`, control bytes) with a named rc-2 error — a print-only
     diagnostic that silently selects nothing is a lie; and the th6 census predicate now requires
     a literal `glob:<root>/` head plus a bare `*<ext>` or `**<ext>` tail, so only an edge that
-    can actually match the corpus class certifies it.
+    can actually match the corpus class certifies it. Note for readers of
+    `scripts/audit-suite-reads.sh`: its `UNCOVERED_AWK` compares an edge by literal equality or
+    `<dir>/` prefix only, so a read covered solely by a `glob:` member reports as uncovered —
+    over-report, the safe direction; those rows are not oracle disagreements.

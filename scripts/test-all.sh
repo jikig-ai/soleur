@@ -313,18 +313,24 @@ while [[ "${1:-}" == --* ]]; do
       # diagnostic. Strip a leading `./` run to fixpoint, then refuse (named
       # error echoing the element + a valid example, rc 2) anything still not a
       # clean repo-relative path. Rejected shapes: empty elements (a,,b / a
-      # trailing comma / --paths=.), absolute paths, `..` SEGMENTS (substring
-      # `..` is legal name content — foo..bar.sh passes), `//` or `/.`
-      # segments/trails (a/./b; the doubled-head ././x carries one), a trailing
-      # `/` (a dir ref is not a diff path), and TAB/LF bytes (the ingestion
-      # point joins on commas and the edge matcher splits on TAB — either byte
-      # mints fake diff lines). The rejects run on the RAW element before the
-      # ./ strip: every shape the strip could leave behind (.., //, /., a
-      # trailing /) is already present pre-strip, so normalization can never
-      # mint a reject shape that escaped the case — no post-strip re-check is
-      # needed. _affected_normpath is deliberately NOT called: it is defined
-      # ~2500 lines below this top-level parse loop, and it collapses a/../b
-      # where this arm rejects.
+      # trailing comma / --paths= — bare `.`/`./` and trailing-`/` elements are
+      # dir refs, not file diff paths, and land in the last case arm),
+      # absolute paths, `..` SEGMENTS (substring `..` is legal name content —
+      # foo..bar.sh passes), `//` or `/.` segments/trails (a/./b; the
+      # doubled-head ././x carries one), and control bytes (the ingestion point
+      # joins on commas and the edge matcher splits on TAB — such a byte mints
+      # fake diff lines, and git C-quotes every control byte anyway so the
+      # spelling can never match a real path line). The rejects run on the RAW
+      # element before the ./ strip: every shape the strip could leave behind
+      # (.., //, /., a trailing /) is already present pre-strip, so
+      # normalization can never mint a reject shape that escaped the case — no
+      # post-strip re-check is needed. A repeated --paths= is last-wins. Legal
+      # name bytes that simply cannot match (glob metachars, `~`, `\`, a
+      # comma inside one filename) stay admitted — the reject set names the
+      # lie classes, not every unmatchable spelling; a comma is the delimiter
+      # and cannot be expressed inside an element. _affected_normpath is
+      # deliberately NOT called: it is defined ~2500 lines below this top-level
+      # parse loop, and it collapses a/../b where this arm rejects.
       _PRINT_PATHS=""
       _pp_rest="${1#--paths=},"
       while [[ -n "$_pp_rest" ]]; do
@@ -332,18 +338,22 @@ while [[ "${1:-}" == --* ]]; do
         _pp_rest="${_pp_rest#*,}"
         _pp_orig="$_pp"
         _pp_why=""
+        # `..` is checked before `/.` — `a/../b` carries both and the traversal
+        # is the reason worth naming.
         case "$_pp" in
           "")                  _pp_why="empty element" ;;
           /*)                  _pp_why="absolute path" ;;
-          *$'\t'*|*$'\n'*)     _pp_why="TAB/LF byte" ;;
+          *[[:cntrl:]]*)       _pp_why="control byte" ;;
           *//*)                _pp_why="// segment" ;;
-          */./*|*/.)           _pp_why="/. segment" ;;
           ..|../*|*/..|*/../*) _pp_why=".. path segment" ;;
+          */./*|*/.)           _pp_why="/. segment" ;;
           .|*/)                _pp_why="not a file diff path" ;;
         esac
         while [[ "$_pp" == ./* ]]; do _pp="${_pp#./}"; done
         if [[ -n "$_pp_why" ]]; then
-          echo "ERROR: --paths element '${_pp_orig}' rejected (${_pp_why}); expected a comma-joined list of clean repo-relative paths, e.g. --paths=scripts/foo.sh,docs/a.md" >&2
+          # the element is arbitrary operator input — scrub control bytes so
+          # the rejected bytes cannot forge stderr lines
+          echo "ERROR: --paths element '${_pp_orig//[[:cntrl:]]/?}' rejected (${_pp_why}); expected a comma-joined list of clean repo-relative paths, e.g. --paths=scripts/foo.sh,docs/a.md" >&2
           exit 2
         fi
         _PRINT_PATHS+="${_PRINT_PATHS:+,}${_pp}"
@@ -376,7 +386,7 @@ declines five self-test mutation batteries whose subject the diff does not touch
                         of the real diff (print-only; never narrows a real run).
                         Elements normalize (a leading ./ is stripped); unclean
                         spellings — empty elements, absolute, .. or /. or //
-                        segments, a trailing /, TAB/LF — refuse rc 2.
+                        segments, a trailing /, control bytes — refuse rc 2.
   --affected-scope=V    diff source for affected selection: branch (default) or
                         staged (the index — what the pre-commit hook gates on).
                         Selects on the INDEX only: committed edits are not in that

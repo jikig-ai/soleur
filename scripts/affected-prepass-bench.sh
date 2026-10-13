@@ -871,23 +871,27 @@ for probe in "${PROBES[@]}"; do
   b_cpu=(); b_wall=(); h_cpu=(); h_wall=()
   load_start="$(load1)"
   n=$HEAD_RUNS; (( BASE_RUNS > n )) && n=$BASE_RUNS
-  side_failed=""
+  side_failed=""; side_err=""
   for (( i=1; i<=n; i++ )); do
     if (( i <= BASE_RUNS )); then
       read -r w u s rc < <(run_timed "$B_DIR" "$SCRATCH/b$probe_i.$i.out" "$SCRATCH/b$probe_i.$i.err" bash "$B_RUNNER" --print-selection "--paths=$probe")
-      [[ "$rc" == "0" ]] || side_failed="base run $i exited rc=$rc"
+      [[ "$rc" == "0" ]] || { side_failed="base run $i exited rc=$rc"; side_err="$SCRATCH/b$probe_i.$i.err"; }
       b_wall+=("$w"); b_cpu+=("$(awk -v u="$u" -v s="$s" 'BEGIN{printf "%.1f", u+s}')")
     fi
     if (( i <= HEAD_RUNS )); then
       read -r w u s rc < <(run_timed "$H_DIR" "$SCRATCH/h$probe_i.$i.out" "$SCRATCH/h$probe_i.$i.err" bash "$H_RUNNER" --print-selection "--paths=$probe")
-      [[ "$rc" == "0" ]] || side_failed="head run $i exited rc=$rc"
+      [[ "$rc" == "0" ]] || { side_failed="head run $i exited rc=$rc"; side_err="$SCRATCH/h$probe_i.$i.err"; }
       h_wall+=("$w"); h_cpu+=("$(awk -v u="$u" -v s="$s" 'BEGIN{printf "%.1f", u+s}')")
     fi
   done
   load_end="$(load1)"
   echo "== probe $probe_i: $probe"
   if [[ -n "$side_failed" ]]; then
-    echo "DIFFERS: $side_failed (both sides must exit 0)"; OVERALL=1; continue
+    # A nonzero side usually means the runner rejected the PROBE (rc 2, e.g. an
+    # unclean --paths element per #10117) — surface the side's stderr so the
+    # caller sees the named error rather than chasing a phantom stream
+    # divergence; the EXIT trap deletes $SCRATCH, so this is the only copy.
+    echo "DIFFERS: $side_failed (both sides must exit 0): $(head -c 300 "$side_err" 2>/dev/null | tr '\n' ' ')"; OVERALL=1; continue
   fi
   b_lab="$SCRATCH/labels.base.$probe_i"; h_lab="$SCRATCH/labels.head.$probe_i"
   assert_fixture_dir "$b_lab"; assert_fixture_dir "$h_lab"

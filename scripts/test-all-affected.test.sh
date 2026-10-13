@@ -2874,7 +2874,7 @@ fi
 #     and `/.` segments, a trailing `/` (a dir ref is not a diff path), TAB and
 #     LF bytes (they mint fake diff lines downstream), and the `/./`-residual
 #     class a fixpoint strip alone would leave behind (././x).
-for _q8_in in 'a,,b' '.' './' '/abs/x.sh' 'a/../b' 'a//b' 'a/./b' 'dir/' $'a\tb.sh' $'a\nb.sh' '././x' '..' 'x/..'; do
+for _q8_in in 'a,,b' '.' './' '/abs/x.sh' 'a/../b' '../x.sh' 'x/..' 'x/.' 'a//b' 'a/./b' 'dir/' $'a\tb.sh' $'a\nb.sh' $'a\x1bb.sh' '././x' '..'; do
   cases=$((cases + 1))
   _q8_rc=0
   _q8_out=$(env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
@@ -2901,8 +2901,9 @@ else
 fi
 
 # q9: legal spellings the reject set must NOT touch — `..` not segment-anchored
-#     and a literal space are both valid git path content.
-for _q9_in in 'foo..bar.sh' 'a b.sh'; do
+#     and a literal space are both valid git path content; a leading-dot root
+#     (.github) is a first-class root, not a /. segment.
+for _q9_in in 'foo..bar.sh' 'a b.sh' '.github/workflows/x.yml'; do
   cases=$((cases + 1))
   SANDBOX_LIB=with-lib run_arm \
     -- --print-selection "--paths=${_q9_in}"
@@ -3098,12 +3099,25 @@ _th_is_prefix_root() { local _r; for _r in "${_TH_PREFIX_ROOTS[@]}"; do [[ "$_r"
 _th_ls_files() {
   if [[ -n "${_TH_REPO:-}" ]]; then
     assert_fixture_dir "$_TH_REPO"
-    case "$_TH_REPO" in
-      "$TESTROOT"/*) : ;;
-      *) printf 'FATAL: _TH_REPO %s escapes TESTROOT; refusing\n' "$_TH_REPO" >&2; return 2 ;;
-    esac
+    # Confinement must compare RESOLVED paths AND the resolved gitdir: a
+    # symlink inside TESTROOT passes a lexical prefix check while git follows
+    # it out of the fixture, and a `.git` FILE (the `git worktree add` shape)
+    # hands discovery a foreign gitdir with no symlink at all. rc_g keeps a
+    # lefthook-injected GIT_DIR/GIT_INDEX_FILE out of the fixture reads (the
+    # suite is always-on and can run inside hook context — #7772/#7835).
+    local _tc _abs _gd
+    _tc=$(cd -P -- "$TESTROOT" && pwd -P)
+    _abs=$(cd -P -- "$_TH_REPO" 2>/dev/null && pwd -P) \
+      || { printf 'FATAL: _TH_REPO %s does not resolve\n' "$_TH_REPO" >&2; return 2; }
+    [[ "$_abs" == "$_tc"/* ]] \
+      || { printf 'FATAL: _TH_REPO %s escapes TESTROOT; refusing\n' "$_TH_REPO" >&2; return 2; }
+    _gd=$(rc_g -C "$_abs" rev-parse --absolute-git-dir 2>/dev/null) \
+      || { printf 'FATAL: _TH_REPO %s is not a git work tree\n' "$_TH_REPO" >&2; return 2; }
+    [[ "$_gd" == "$_tc"/* ]] \
+      || { printf 'FATAL: _TH_REPO %s links a gitdir outside TESTROOT; refusing\n' "$_TH_REPO" >&2; return 2; }
+    _TH_REPO="$_abs"
   fi
-  git -C "${_TH_REPO:-$REPO_ROOT}" -c core.quotePath=false ls-files
+  rc_g -C "${_TH_REPO:-$REPO_ROOT}" -c core.quotePath=false ls-files
 }
 # The live tracked top-level root set — th4/th4b/th4c probes AND th6's census
 # derive from it, so a new root joins every probe automatically. -c
@@ -3116,12 +3130,20 @@ _TH_ROOTS=$(_th_ls_files | awk -F/ 'NF>1{print $1}' | LC_ALL=C sort -u)
 # th8-m4 mutant could not be told apart from the whole filter dying; the split
 # keeps the surviving y.sh flag as the discriminator. Arm 2's `NF<2` is arm 1's
 # condition spelled differently — a discoverability pin admits exactly one
-# single-field-count token file-wide, and arm 1 carries it (second occurrence
-# breaks the pin).
+# single-field-count token file-wide, and arm 1 carries it (a second occurrence
+# breaks the pin). Arms 3/4 close the C-quote channel: git quote_path ALWAYS
+# C-quotes `"`, `\` and control bytes regardless of core.quotePath=false, so a
+# dir-less `x<TAB>y.test.sh` emits `"x\ty.test.sh"` — the extension still ends
+# the name before the closing quote, and a real `/` inside quotes is a genuine
+# dir separator (a name cannot contain one), so NF<2 stays correct. Membership
+# is index-defined: an untracked dir-less file is not yet corpus (the real
+# diff channel surfaces it via --others, but no suite's verified read set does).
 _th_root_corpus() { # dir-less corpus members on stdin, one per line
   awk -F/ '
-    NF==1 && /\.test\.sh$/              {print; next}
-    NF<2  && /\.sh$/ && !/\.test\.sh$/  {print}
+    NF==1 && /\.test\.sh$/                    {print; next}
+    NF<2  && /\.sh$/ && !/\.test\.sh$/        {print; next}
+    NF<2  && /^".*\.test\.sh"$/               {print; next}
+    NF<2  && /^".*\.sh"$/ && !/\.test\.sh"$/  {print}
   '
 }
 # Coverage predicate for th6 (#10117 FR2 — tightened from a suffix check to a
@@ -3132,25 +3154,35 @@ _th_root_corpus() { # dir-less corpus members on stdin, one per line
 # the check re-opens the #9969 class one layer down (the fix-round's
 # literal-satisfaction hole). Nor do tails that merely END in the extension:
 # a literal-in-glob (`x.test.sh`), a subset (`pre*.test.sh`, `*x.test.sh`), a
-# subdir scope (`sub/*.test.sh`), a wrong extension, or the overlapping
-# `**.test.sh` tail under a `.sh` corpus — none of them covers every corpus
-# member beneath the root, and the old `*"$3"` suffix shape certified all of
-# them anyway.
+# subdir scope (`sub/*.test.sh` — under-covers, reaches only the subtree), or
+# the overlapping `**.test.sh` tail under a `.sh` corpus — the old `*"$3"`
+# suffix shape certified those; head-side (`glob:docsx/`…), wrong-extension
+# and bare file-literal members were already declined and stay declined.
 _th6_root_covered() { # <array-name> <root> <corpus-tail> — no declare -n (macOS bash 3.2)
+  # $1 reaches eval below — restrict it to identifier shape (the same guard the
+  # runner's resolve_edges applies), and the RHS stays quoted so a space-
+  # bearing member cannot split inside the eval'd assignment.
+  [[ "$1" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
   local _n _i _m _tail
   eval "_n=\${#$1[@]}"
   for ((_i=0; _i<_n; _i++)); do
-    eval "_m=\${$1[$_i]}"
+    eval "_m=\"\${$1[$_i]}\""
     # A bare `<root>/` dir member certifies its whole subtree — this disjunct
-    # is what covers the seven _TH_PREFIX_ROOTS.
-    [[ "$_m" == "$2/" ]] && return 0
+    # is what covers the seven _TH_PREFIX_ROOTS. It counts ONLY when the root
+    # still exists on disk: the mint arm drops the member when it fails -e at
+    # classify time (a tracked dir deleted in the worktree without `git rm`
+    # stays in _TH_ROOTS — the census must decline in parity rather than
+    # certify an edge that never reaches the selection pass).
+    [[ "$_m" == "$2/" && -d "${_TH_REPO:-$REPO_ROOT}/$2" ]] && return 0
     # Head anchor is the literal `glob:<root>/` prefix — a `glob:<root>x/…`
     # member names a DIFFERENT root and must not certify this one.
     [[ "$_m" == "glob:$2/"* ]] || continue
     _tail="${_m#"glob:$2/"}"
     # QUOTED RHS is a literal string compare — the quotes carry the fix:
     # unquoted, `*${3}` would be a glob pattern and the arm would degenerate
-    # back to the suffix check this predicate exists to remove.
+    # back to the suffix check this predicate exists to remove. Superset tails
+    # (`**`, `**.sh` certifying a `.test.sh` corpus) decline too — RED, the
+    # safe direction.
     [[ "$_tail" == "*${3}" || "$_tail" == "**${3}" ]] && return 0
   done
   return 1
@@ -3307,6 +3339,18 @@ fi
 #       the th8 row below detects loudly (#10117; extension deferred to #10198).
 #       -c core.quotePath=false so the
 #       C-quoted Cyrillic fixture paths emit their real root, not `"…`.
+# Members anchored at <root> that did NOT certify coverage — the decline
+# diagnostic the fail line carries so an engineer hitting the red does not
+# have to reverse-engineer WHICH member the census rejected.
+_th6_declined() { # <array-name> <root> — space-joined declined members anchored at <root>
+  [[ "$1" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
+  local _i _n _m
+  eval "_n=\${#$1[@]}"
+  for ((_i=0; _i<_n; _i++)); do
+    eval "_m=\"\${$1[$_i]}\""
+    case "$_m" in "$2/"*|"glob:$2/"*) printf ' %s' "$_m" ;; esac
+  done
+}
 cases=$((cases + 1))
 _th6_missing=$(
   source "$REPO_ROOT/scripts/lib/test-affected-paths.sh"
@@ -3316,11 +3360,11 @@ _th6_missing=$(
   [[ -n "$_TH_ROOTS" ]] || { echo "EMPTY-ROOT-DERIVATION"; exit 0; }
   while IFS= read -r _r; do
     _th6_root_covered AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS "$_r" .test.sh \
-      || echo "guard-vacuity-floor:$_r"
+      || echo "guard-vacuity-floor:${_r}$(_th6_declined AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS "$_r" | sed 's/^ */ [declined: /;s/$/]/;s/^ *$//')"
     _th6_root_covered AFFECTED_SCRIPTS_LINT_ORPHAN_TEST_SUITES_PATHS "$_r" .test.sh \
-      || echo "lint-orphan-test-suites:$_r"
+      || echo "lint-orphan-test-suites:${_r}$(_th6_declined AFFECTED_SCRIPTS_LINT_ORPHAN_TEST_SUITES_PATHS "$_r" | sed 's/^ */ [declined: /;s/$/]/;s/^ *$//')"
     _th6_root_covered AFFECTED_SCRIPTS_LIB_REPO_WRITE_BOUNDARY_TEST_SH_PATHS "$_r" .sh \
-      || echo "repo-write-boundary.test.sh:$_r"
+      || echo "repo-write-boundary.test.sh:${_r}$(_th6_declined AFFECTED_SCRIPTS_LIB_REPO_WRITE_BOUNDARY_TEST_SH_PATHS "$_r" | sed 's/^ */ [declined: /;s/$/]/;s/^ *$//')"
   done <<<"$_TH_ROOTS"
 )
 if [[ -z "$_th6_missing" ]]; then
@@ -3373,8 +3417,9 @@ if not m:
     sys.exit("function not found: " + os.environ["MUTFN"])
 fn = m.group(0).replace(os.environ["MUTFN"] + "()", os.environ["MUTNAME"] + "()", 1)
 # A self-referencing target would leave the mutant's interior calls bound to the
-# ORIGINAL — the row could read a false pass on unmutated code.
-assert (os.environ["MUTFN"] + "()") not in fn, "self-reference left in mutant"
+# ORIGINAL — the row could read a false pass on unmutated code. Plain substring,
+# not `FN()`: a recursive call site is `foo args`, no parens.
+assert os.environ["MUTFN"] not in fn, "self-reference left in mutant"
 old, new = os.environ["MUTOLD"], os.environ["MUTNEW"]
 if fn.count(old) != 1:
     sys.exit("anchor not exactly-once: x%d" % fn.count(old))
@@ -3384,14 +3429,17 @@ PY
 }
 
 # th6v — the tightened census predicate binds matchability, not suffix shape
-#        (FR2). Each decline is a coverage lie the old `*"$3"` suffix check
-#        admitted: a literal filename inside a glob tail, a subset wildcard, a
-#        subdir-scoped tail, a string-prefix head on a DIFFERENT root, the
-#        wrong-extension tail, a file literal, a near-miss extension, and the
-#        `**.test.sh`-for-`.sh` overlap the suffix check could never see
-#        (`.test.sh` ends in `.sh`). Accepts pin the retained grammar: both
-#        bare wildcard tails, the bare `<root>/` dir member, and a covering
-#        member found AFTER a declining one (the walk does not stop early).
+#        (FR2). The declines have two provenances: literal-in-glob, subset,
+#        subdir-scoped and `.sh`-overlap tails are the coverage lies the old
+#        `*"$3"` suffix check genuinely admitted; head-side, wrong-ext,
+#        file-literal, near-ext and the dir-member declines pin the boundary
+#        the tightened grammar must NOT grow. The dir-member cells also pin
+#        the -d parity probe: `fakenonexistent/` declines because its root is
+#        absent on disk (the mint arm drops it on -e, so certifying it here
+#        would be a lie), and `docs/sub/` / `docsx/` decline on the exact
+#        string anchor. Accepts pin the retained grammar: both bare wildcard
+#        tails, the bare `<root>/` dir member, and a covering member found
+#        AFTER a declining one (the walk does not stop early).
 cases=$((cases + 1))
 _th6v_out=$(
   _t() { # <root> <ext> <member>...
@@ -3413,11 +3461,14 @@ _th6v_out=$(
   _t docs .sh      'glob:docs/**.test.sh'                     # overlap class — decline
   _t docs .sh      'glob:docs/**.sh'                          # **.sh corpus tail — accept
   _t docs .test.sh 'glob:docs/sub/*.test.sh' 'glob:docs/**.test.sh'  # late cover — accept
+  _t docs .test.sh 'docs/sub/'                                # dir member below the root — decline
+  _t docs .test.sh 'docsx/'                                   # dir member astride the root name — decline
+  _t fakenonexistent .test.sh 'fakenonexistent/'              # dir member, worktree-absent root — decline
 )
-if [[ "${_th6v_out% }" == "1 1 1 0 0 0 0 0 0 0 0 0 1 1" ]]; then
-  pass "th6v: decline literal/subset/subdir/head-side/wrong-ext/literal/near-ext/overlap; accept both bare tails, dir member, late-covering member"
+if [[ "${_th6v_out% }" == "1 1 1 0 0 0 0 0 0 0 0 0 1 1 0 0 0" ]]; then
+  pass "th6v: decline lit-glob/subset-2/subdir/head-side/wrong-ext/lit-file/near-ext/overlap/dir-below/dir-astride/dir-absent; accept both bare tails, dir member, late cover"
 else
-  fail "th6v: got '${_th6v_out}' want '1 1 1 0 0 0 0 0 0 0 0 0 1 1'"
+  fail "th6v: got '${_th6v_out}' want '1 1 1 0 0 0 0 0 0 0 0 0 1 1 0 0 0'"
 fi
 
 # th6m — mutation dispatch over the predicate (Guard 2): each row mutates ONE
@@ -3500,10 +3551,10 @@ _th8_eval() {
 _th8_fix_repo() { # <name> [root-file...]
   local _d="$TESTROOT/th8fx-$1"; shift
   mkdir -p "$_d" || return 1
-  ( cd "$_d" && git init -q ) || return 1
+  ( cd "$_d" && rc_g init -q ) || return 1
   local _f
   for _f in "$@"; do printf 'fixture\n' > "$_d/$_f" || return 1; done
-  if (($#)); then ( cd "$_d" && git add -f -- "$@" ) || return 1; fi
+  if (($#)); then ( cd "$_d" && rc_g add -f -- "$@" ) || return 1; fi
 }
 
 # th8 (FR3, #10117) — dir-less repo-root corpus detection. The `glob:` grammar
@@ -3564,8 +3615,8 @@ fi
 cases=$((cases + 1))
 _th8_fix_repo m4 x.test.sh y.sh
 if _th_fn_mut _th_root_corpus _th8_m4_corpus \
-    '&& /\.test\.sh$/              {print; next}' \
-    '&& /\.nevermatch$/            {print; next}'; then
+    '&& /\.test\.sh$/                    {print; next}' \
+    '&& /\.nevermatch$/                  {print; next}'; then
   _th8_m=$(_TH_REPO="$TESTROOT/th8fx-m4" _th_ls_files | _th8_m4_corpus)
 else
   _th8_m="MUTATION-DID-NOT-LAND"
@@ -3599,6 +3650,19 @@ else
   fail "th8-m6: output='${_th8_m}' (want TH8-PRODUCER-FAILED refusal)"
 fi
 
+# th8-m7: a dir-less corpus file whose name git C-quotes — `"`, `\` and control
+#         bytes are quoted REGARDLESS of core.quotePath=false, so the listing
+#         emits `"x\ty.test.sh"` and a $-anchored extension regex alone would
+#         see nothing. The quoted-name arms flag it.
+cases=$((cases + 1))
+_th8_fix_repo m7 $'x\ty.test.sh'
+_th8_m=$(_TH_REPO="$TESTROOT/th8fx-m7" _th8_eval)
+if [[ "$_th8_m" == *'"'* && "$_th8_m" == *'test.sh"'* ]]; then
+  pass "th8-m7: a C-quoted dir-less member is flagged (quote channel closed)"
+else
+  fail "th8-m7: output='${_th8_m}' (want the quoted name flagged)"
+fi
+
 echo ""
 # Conservation + floor: a truncated row block must not read as green.
 if (( PASS + FAIL != cases )); then
@@ -3608,7 +3672,7 @@ fi
 # The floor embeds the live _TH_ROOTS census (~3 cases per tracked top-level
 # dir across th4/th4b/th4c): a top-level-dir REMOVAL shrinks the corpus
 # legitimately — recompute the literal rather than misdiagnosing truncation.
-MIN_CASES=221
+MIN_CASES=226
 if (( cases < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran — below the $MIN_CASES floor; a row block went missing" >&2
   exit 2
