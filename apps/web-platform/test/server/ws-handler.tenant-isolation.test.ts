@@ -33,6 +33,7 @@ import {
   _resetTenantCache,
 } from "@/lib/supabase/tenant";
 import { registerSharedMintCache } from "@/test/helpers/mint-once";
+import { tearDownTenantUser } from "@/test/helpers/tenant-isolation-teardown";
 
 const INTEGRATION_ENABLED = process.env.TENANT_INTEGRATION_TEST === "1";
 
@@ -114,9 +115,9 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       for (const user of [userA, userB]) {
         if (!user.id) continue;
         assertSynthetic(user.email);
-        await service.auth.admin.deleteUser(user.id).catch(() => {});
+        await tearDownTenantUser(service, user);
       }
-    }, 30_000);
+    }, 60_000);
 
     test("tryLedgerDivergenceRecovery — A cannot read B's visible conversations", async () => {
       const { data, error } = await aClient

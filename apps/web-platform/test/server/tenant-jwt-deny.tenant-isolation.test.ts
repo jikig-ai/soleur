@@ -39,6 +39,7 @@ import {
   _resetTenantCache,
   _setMintFnForTest,
 } from "@/lib/supabase/tenant";
+import { tearDownTenantUser } from "@/test/helpers/tenant-isolation-teardown";
 
 const INTEGRATION_ENABLED = process.env.TENANT_INTEGRATION_TEST === "1";
 
@@ -94,13 +95,15 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       expect(user.id).toBeTruthy();
     });
 
+    // 60_000: the helper runs ~24 sequential round-trips under
+    // withGoTrueRetry (#10096 timeout amendment).
     afterAll(async () => {
       if (!user.id) return;
       assertSynthetic(user.email);
       // Clean any test-inserted deny-list rows for this synthetic founder.
       await service.from("denied_jti").delete().eq("founder_id", user.id);
-      await service.auth.admin.deleteUser(user.id);
-    });
+      await tearDownTenantUser(service, user);
+    }, 60_000);
 
     beforeEach(async () => {
       _resetTenantCache();
@@ -241,12 +244,14 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       expect(user.id).toBeTruthy();
     });
 
+    // 60_000: the helper runs ~24 sequential round-trips under
+    // withGoTrueRetry (#10096 timeout amendment).
     afterAll(async () => {
       if (!user.id) return;
       assertSynthetic(user.email);
       await service.from("denied_jti").delete().eq("founder_id", user.id);
-      await service.auth.admin.deleteUser(user.id);
-    });
+      await tearDownTenantUser(service, user);
+    }, 60_000);
 
     beforeEach(async () => {
       _resetTenantCache();
