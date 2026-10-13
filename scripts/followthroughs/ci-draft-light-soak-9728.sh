@@ -62,8 +62,8 @@
 #               that never lit)
 #   2 = NOT YET (not merged, not activated, deactivated, too few days or light pushes, or the exit census is missing)
 #   3 = CANNOT ESTABLISH (a tool, GH_TOKEN, the resolver or the trust lib missing, a GitHub API read failed (the tracker's comment read and a
-#               permission lookup fail for the causes in the rc 2 list in the header of scripts/lib/trusted-verdict.sh), or a local jq
-#               projection of the comments failed: the sweeper retries)
+#               permission lookup fail for the causes in the rc 2 list in the header of scripts/lib/trusted-verdict.sh), a local jq
+#               projection of the comments failed, or a marker read (grep/sed/sort/head/tail over the trusted text) failed: the sweeper retries)
 #   78 = refused to run under xtrace while GH_TOKEN is set (#7797)
 #
 # RETIREMENT: when #9728's tracker closes, delete this file, its .test.sh, the run_suite line in scripts/test-all.sh,
@@ -96,8 +96,9 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # test seam (the sweeper runs this under env -i, so it is inert in production)
 VERDICT_CMD="${CI_HEAD_VERDICT_BIN:-$HERE/../../plugins/soleur/scripts/ci-head-verdict.sh}"
 
-# every external command the probe runs directly or through the trust lib (a missing one is exit 3, never a silent "no marker")
-for need in gh jq timeout base64 awk mktemp sort grep sed tr tail head date rm; do
+# every external command this probe and the trust lib run by name, builtins aside (a missing one is exit 3, never a silent "no marker"; the row
+# r_needcomplete runs the probe to PASS on a PATH holding exactly these, so a command added without a name here fails that row)
+for need in gh jq timeout base64 awk mktemp sort grep sed tr tail head date rm dirname; do
   command -v "$need" >/dev/null 2>&1 || { echo "CANNOT ESTABLISH: $need is not installed"; exit 3; }
 done
 [ -n "${GH_TOKEN:-}" ] || { echo "CANNOT ESTABLISH: GH_TOKEN is not set (the tracker directive must declare secrets=GH_TOKEN)"; exit 3; }
@@ -114,6 +115,7 @@ NOW="${SOAK_NOW_EPOCH:-$(date -u +%s)}"
 fail_api() { echo "CANNOT ESTABLISH: GitHub API read failed ($1)"; exit 3; }
 fail_comments() { echo "CANNOT ESTABLISH: comment or permission read failed ($1)"; exit 3; }
 fail_projection() { echo "CANNOT ESTABLISH: comment projection failed (local jq) ($1)"; exit 3; }
+fail_marker() { echo "CANNOT ESTABLISH: marker read failed ($1)"; exit 3; }
 api() { gh api "$@" 2>/dev/null; }
 
 # --- the S3 PR merge time ------------------------------------------------------------------------------------------------
@@ -125,10 +127,26 @@ merged_epoch="$(date -u -d "$merged_at" +%s 2>/dev/null)" || fail_api "merge tim
 comments="$(trusted_verdict_comments "$TRACKER" "$REPO")" || fail_comments "tracker $TRACKER comments (trusted-author resolution)"
 trusted="$(jq -r '.b' <<<"$comments" 2>/dev/null | tr -d '\r')" || fail_projection "tracker $TRACKER comments (projection)"
 TS_RE='[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z'
-first_on="$(printf '%s\n' "$trusted" | grep -oE "^S3-ACTIVATED: $TS_RE\$" | sed 's/^S3-ACTIVATED: //' | sort | head -n 1)"
-last_on="$(printf '%s\n' "$trusted" | grep -oE "^S3-ACTIVATED: $TS_RE\$" | sed 's/^S3-ACTIVATED: //' | sort | tail -n 1)"
-last_off="$(printf '%s\n' "$trusted" | grep -oE "^S3-DEACTIVATED: $TS_RE\$" | sed 's/^S3-DEACTIVATED: //' | sort | tail -n 1)"
-census_marked="$(printf '%s\n' "$trusted" | grep -cE '^S3-EXIT-CENSUS: https://github\.com/[^ ]+$')"
+# The marker reads. A marker is read through a grep | sed | sort | head/tail chain, and a bare `x="$(chain)"` drops the status of every stage: a failing
+# sed/sort/head/tail, or a grep error (rc >= 2), read as "no marker", and a dropped DEACTIVATED marker turns a verdict that should be NOT YET into a PASS
+# at rc 0. So each chain's whole status array is taken in ONE assignment (inside the substitution, right after the pipeline) and checked: grep rc 1
+# (no match) is an answer, every other non-zero status anywhere in the chain is CANNOT ESTABLISH naming the read.
+marker_stamp() {   # <marker name> <first|last>: sets MARKER_VAL to the EARLIEST or LATEST `<name>: <ISO>` stamp ("" = no such marker)
+  local name="$1" pick="$2" r st
+  r="$(printf '%s\n' "$trusted" | grep -oE "^$name: $TS_RE\$" | sed "s/^$name: //" | sort | if [ "$pick" = first ]; then head -n 1; else tail -n 1; fi; printf '#%s' "${PIPESTATUS[*]}")"
+  st="${r##*#}"; MARKER_VAL="${r%#*}"; MARKER_VAL="${MARKER_VAL%$'\n'}"
+  case "$st" in "0 0 0 0 0"|"0 1 0 0 0") : ;; *) fail_marker "$name $pick" ;; esac
+}
+marker_count() {   # <marker name> <ERE>: sets MARKER_VAL to the number of trusted lines matching the ERE
+  local name="$1" r st
+  r="$(printf '%s\n' "$trusted" | grep -cE "$2"; printf '#%s' "${PIPESTATUS[*]}")"
+  st="${r##*#}"; MARKER_VAL="${r%#*}"; MARKER_VAL="${MARKER_VAL%$'\n'}"
+  case "$st" in "0 0"|"0 1") [[ "$MARKER_VAL" =~ ^[0-9]+$ ]] || fail_marker "$name" ;; *) fail_marker "$name" ;; esac
+}
+marker_stamp S3-ACTIVATED first; first_on="$MARKER_VAL"
+marker_stamp S3-ACTIVATED last; last_on="$MARKER_VAL"
+marker_stamp S3-DEACTIVATED last; last_off="$MARKER_VAL"
+marker_count S3-EXIT-CENSUS '^S3-EXIT-CENSUS: https://github\.com/[^ ]+$'; census_marked="$MARKER_VAL"
 # the earliest trusted S3-CONFIRMED comment (a github URL, or a quoted statement of at least 3 characters), by createdAt
 CONF_RE='^S3-CONFIRMED: (https://github\.com/[^ ]+|"[^"]{3,}")$'
 conf_iso="$(jq -r --arg re "$CONF_RE" 'select(.b | split("\n") | map(rtrimstr("\r")) | any(test($re))) | .t' <<<"$comments" 2>/dev/null | sort | head -n 1)" \
@@ -139,6 +157,8 @@ has_on=0; active=0; deactivated=0; first_on_epoch=0; act_epoch=0; off_epoch=0
 if [ -n "$first_on" ]; then
   has_on=1
   first_on_epoch="$(date -u -d "$first_on" +%s 2>/dev/null)" || fail_api "activation time $first_on"
+  # an earliest ACTIVATED with no latest one cannot be (one is the other or older): `date -d ""` is TODAY, which would read as an activation now
+  [ -n "$last_on" ] || fail_marker "S3-ACTIVATED last (empty while the earliest is $first_on)"
   act_epoch="$(date -u -d "$last_on" +%s 2>/dev/null)" || fail_api "activation time $last_on"
   if [ -n "$last_off" ]; then off_epoch="$(date -u -d "$last_off" +%s 2>/dev/null)" || fail_api "deactivation time $last_off"; fi
   if [ "$act_epoch" -gt "$off_epoch" ]; then active=1; else deactivated=1; fi

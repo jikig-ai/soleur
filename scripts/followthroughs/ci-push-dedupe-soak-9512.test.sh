@@ -332,8 +332,8 @@ r_onlybodies(){ build_fx "$TMP/g4e" 0 25 510 2568 noact
 r_bodies_nocreated() { build_fx "$TMP/g4f" 10 15 510 2568 nocreated; expect "PASS: trusted comments with NO createdAt still activate and census: this probe reads the BODIES view, which ignores t (the comments view would be exit 3)" 0 "PASS" "$TMP/g4f"; }
 r_trfail()    { build_fx "$TMP/g4g" 10 15 510 2568
   assert_fixture_dir "$TMP"; mkdir -p "$TMP/bin-trfail"; printf '#!/usr/bin/env bash\nexit 5\n' > "$TMP/bin-trfail/tr"; chmod +x "$TMP/bin-trfail/tr"
-  expect "CANNOT ESTABLISH: a failing CR strip (tr) is never read as 'no marker'" 3 "(CR strip)" "$TMP/g4g" PATH="$TMP/bin-trfail:$TMP/bin:$PATH"; }
-NEED_NEW=(grep sed tr tail head date rm)   # the tools the probe or the lib runs that the need list did not name before the review
+  expect "CANNOT ESTABLISH: a failing CR strip (tr) is never read as 'no marker', and the label says the LOCAL projection failed (not a comment or permission read)" 3 "comment projection failed (local tool) (tracker 4242 comments (CR strip))" "$TMP/g4g" PATH="$TMP/bin-trfail:$TMP/bin:$PATH"; }
+NEED_NEW=(grep sed tr tail head date rm dirname)   # the tools the probe or the lib runs by name that the need list did not name before the review
 r_needtools() { build_fx "$TMP/g4h" 10 15 510 2568
   local t b ok=1 d out rc; assert_fixture_dir "$TMP"
   for t in "${NEED_NEW[@]}"; do
@@ -346,6 +346,39 @@ r_needtools() { build_fx "$TMP/g4h" 10 15 510 2568
     if [[ "$rc" != 3 || "$out" != *"CANNOT ESTABLISH: $t is not installed"* ]]; then ok=0; fail "need tools: without $t want rc 3 'CANNOT ESTABLISH: $t is not installed', got rc=$rc: $(printf '%s' "$out" | head -2 | tr '\n' '|')"; fi
   done
   (( ok )) && pass "CANNOT ESTABLISH: each of ${NEED_NEW[*]} missing from PATH is exit 3 naming it, never a silent 'no marker'"; }
+# mkshim <dir> <tool> <glob over the joined argv> <nth matching call> <err|silent>: a dir with the fake gh and ONE tool that, on its nth call whose
+# argv matches the glob, exits 2 (err) or exits 0 printing nothing (silent), and runs the real tool on every other call
+mkshim() {
+  local d="$1" t="$2" pat="$3" nth="$4" mode="$5" act real; real="$(command -v "$t")"
+  case "$mode" in err) act='exit 2' ;; silent) act='exit 0' ;; esac
+  assert_fixture_dir "$d"; rm -rf "$d"; mkdir -p "$d"; cp "$TMP/bin/gh" "$d/gh"
+  printf '#!/usr/bin/env bash\ncase "$*" in %s) n=$(( $(cat %q 2>/dev/null || echo 0) + 1 )); echo "$n" > %q; if [ "$n" = %s ]; then %s; fi ;; esac\nexec %q "$@"\n' \
+    "$pat" "$d/cnt" "$d/cnt" "$nth" "$act" "$real" > "$d/$t"
+  chmod +x "$d/gh" "$d/$t"
+}
+# the marker chains: each (chain, tool) failure injected on ITS chain only is exit 3 naming the read, never "no marker". The DEACTIVATED chain runs against a fixture whose
+# HEALTHY verdict is FAIL (a dropped DEACTIVATED marker used to read as an active soak and PASS at rc 0).
+r_markers() {
+  local spec label tool pat nth mode kind d fx n=0
+  local -a specs=(
+    "S2-ACTIVATED|grep|*S2-ACTIVATED*|1|err|pass"   "S2-ACTIVATED|sed|*S2-ACTIVATED*|1|err|pass"   "S2-ACTIVATED|sort|*|1|err|pass"   "S2-ACTIVATED|tail|*|1|err|pass"
+    "S2-DEACTIVATED|grep|*S2-DEACTIVATED*|1|err|deact" "S2-DEACTIVATED|sed|*S2-DEACTIVATED*|1|err|deact" "S2-DEACTIVATED|sort|*|2|err|deact" "S2-DEACTIVATED|tail|*|2|err|deact"
+    "S2-EXIT-CENSUS|grep|*S2-EXIT-CENSUS*|1|err|pass" "S2-EXIT-CENSUS|grep|*S2-EXIT-CENSUS*|1|silent|pass")
+  for spec in "${specs[@]}"; do
+    IFS='|' read -r label tool pat nth mode kind <<<"$spec"; n=$((n + 1)); fx="$TMP/mk$n"; d="$TMP/bin-mk$n"
+    if [ "$kind" = deact ]; then build_fx "$fx" 10 15 510 2568 deact; else build_fx "$fx" 10 15 510 2568; fi
+    mkshim "$d" "$tool" "$pat" "$nth" "$mode"
+    expect "CANNOT ESTABLISH: $tool ($mode) failing on the $label chain only is exit 3 naming that read, never 'no marker'" 3 "CANNOT ESTABLISH: marker read failed ($label)" "$fx" PATH="$d:$TMP/bin:$PATH"
+  done
+}
+r_deact_healthy() { build_fx "$TMP/mkh" 10 15 510 2568 deact; expect "FAIL: the healthy verdict of the DEACTIVATED fixture (elided runs after a recorded deactivation) is FAIL, so a dropped DEACTIVATED marker would have been a PASS" 1 "no activation on record" "$TMP/mkh"; }
+r_needcomplete() { build_fx "$TMP/g4i" 10 15 510 2568
+  local d="$TMP/bin-exact" t line out rc; assert_fixture_dir "$TMP"; rm -rf "$d"; mkdir -p "$d"; cp "$TMP/bin/gh" "$d/gh"
+  line="$(grep -m1 '^for need in ' "$PROBE_UNDER")"; line="${line#for need in }"; line="${line%%; do*}"
+  for t in $line bash env cat; do if [ ! -e "$d/$t" ] && command -v "$t" >/dev/null 2>&1; then ln -s "$(command -v "$t")" "$d/$t"; fi; done
+  out="$(env FX="$TMP/g4i" PATH="$d" GH_TOKEN=x SOAK_NOW_EPOCH="$NOW_EPOCH" SOAK_ADR_FILE="$TMP/g4i/ADR-276-fixture.md" SOAK_TEST_ALL="$TMP/g4i/test-all.sh" bash "$PROBE_UNDER" 2>&1)"; rc=$?
+  if [[ "$rc" == 0 && "$out" == *"PASS"* && "$out" != *"not found"* ]]; then pass "PASS on a PATH holding exactly the need list (+ bash env cat): the list names every external command the probe and the lib run"
+  else fail "need list incomplete: rc=$rc out=$(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi; }
 r_write_act() { build_fx "$TMP/g5" 10 15 510 2568 collabact;         expect "PASS: an activation by an author holding write counts, whatever the decoy association" 0 "PASS" "$TMP/g5"; }
 r_maint_act(){ build_fx "$TMP/g6" 10 15 510 2568 noneact;        expect "PASS: an activation by an author holding maintain counts, whatever the decoy association" 0 "PASS" "$TMP/g6"; }
 r_nonactive_deadline(){ build_fx "$TMP/d7" 0 25 510 2568 noact;     expect "FAIL: 30 days after the merge and nothing activated: activate, or revert" 1 "activate, or revert" "$TMP/d7" SOAK_NOW_EPOCH=$((NOW_EPOCH + 31 * 86400)); }
@@ -384,7 +417,7 @@ ALL_ROWS=(r_pass r_zero r_unmatched1 r_unmatched3 r_over r_allmean r_nomarker r_
           r_adr_proposed r_unregistered r_stuck29 r_stuck30 r_nonactive_deadline r_deact r_commentsfail
           r_adr_idle r_adr_quoted r_adr_case r_adr_note r_adr_nostatus r_adr_missing r_testall_missing r_regcomment r_prefull
           r_reactivate r_twoact r_twodeact r_latebatch r_idle_cap r_max_cap r_would r_marker_write r_marker_read r_crlf r_badts r_midact
-          r_lookalike r_foreign r_pdbad6 r_pdbad5 r_pdbad_dark r_pdbad_few r_deadline_edge r_privmember r_assoc_decoy r_permfail r_nolib r_nofn r_srcfail r_write_act r_maint_act r_nobodies r_onlybodies r_bodies_nocreated r_trfail r_needtools)
+          r_lookalike r_foreign r_pdbad6 r_pdbad5 r_pdbad_dark r_pdbad_few r_deadline_edge r_privmember r_assoc_decoy r_permfail r_nolib r_nofn r_srcfail r_write_act r_maint_act r_nobodies r_onlybodies r_bodies_nocreated r_trfail r_needtools r_markers r_deact_healthy r_needcomplete)
 run_rows() { local r; for r in "$@"; do "$r"; done; }
 run_rows "${ALL_ROWS[@]}"
 
@@ -493,8 +526,7 @@ mutant m-testall-readable '[ -r "$TEST_ALL" ] || fail_api "scripts/test-all.sh"'
 mutant m-registered-comment 'grep -cE '"'"'^[[:space:]]*run_suite[[:space:]].*scripts/ci-push-dedupe\.test\.sh'"'"'' 'grep -cF '"'"'scripts/ci-push-dedupe.test.sh'"'"'' r_regcomment
 mutant m-continue-inside 'early_list="$early_list run=$id sha=${sha:0:10}"; fi
     continue' 'early_list="$early_list run=$id sha=${sha:0:10}"; continue; fi' r_prefull
-mutant m-latest-on 'sed '"'"'s/^S2-ACTIVATED: //'"'"' | sort | tail -n 1' 'sed '"'"'s/^S2-ACTIVATED: //'"'"' | sort | head -n 1' r_twoact
-mutant m-latest-off 'sed '"'"'s/^S2-DEACTIVATED: //'"'"' | sort | tail -n 1' 'sed '"'"'s/^S2-DEACTIVATED: //'"'"' | sort | head -n 1' r_twodeact
+mutant m-latest 'sort | tail -n 1; printf '"'"'#%s'"'"'' 'sort | head -n 1; printf '"'"'#%s'"'"'' r_twoact r_twodeact
 mutant m-off-any '[ "$on_epoch" -gt "$off_epoch" ]' '[ -z "$last_off" ]' r_reactivate
 mutant m-idle-cap '(( active )) || cap="$IDLE_RUNS"' ':' r_idle_cap
 mutant m-max-cap 'MAX_RUNS=100 ' 'MAX_RUNS=30  ' r_max_cap
@@ -515,14 +547,25 @@ mutant m-guard-wrong-view ' \
    || ! declare -F trusted_verdict_bodies >/dev/null; then' ' \
    || ! { declare -F trusted_verdict_comments >/dev/null && { declare -F trusted_verdict_bodies >/dev/null || trusted_verdict_bodies() { :; }; }; }; then' r_nobodies r_onlybodies
 mutant m-comments-view "$_HELPER" 'trusted_raw="$(trusted_verdict_comments "$tracker" "$REPO" | jq -r .b)" || fail_comments "tracker $tracker comments (trusted-author resolution)"' r_bodies_nocreated
-mutant m-tr-unchecked ' || fail_comments "tracker $tracker comments (CR strip)"' '' r_trfail
-mutant m-need-short 'for need in gh jq base64 awk mktemp sort grep sed tr tail head date rm; do' 'for need in gh jq base64 awk mktemp sort; do' r_needtools
+mutant m-tr-unchecked ' || fail_projection "tracker $tracker comments (CR strip)"' '' r_trfail
+mutant m-projection-label 'fail_projection() { echo "CANNOT ESTABLISH: comment projection failed (local tool) ($1)"; exit 3; }' 'fail_projection() { echo "CANNOT ESTABLISH: comment or permission read failed ($1)"; exit 3; }' r_trfail
+# the marker chains: each restored to the bare, unchecked form the review found (the status of every stage dropped)
+mutant m-act-unchecked 'marker_stamp S2-ACTIVATED; last_on="$MARKER_VAL"' 'last_on="$(printf '"'"'%s\n'"'"' "$trusted" | grep -oE "^S2-ACTIVATED: $TS_RE\$" | sed '"'"'s/^S2-ACTIVATED: //'"'"' | sort | tail -n 1)"' r_markers
+mutant m-deact-unchecked 'marker_stamp S2-DEACTIVATED; last_off="$MARKER_VAL"' 'last_off="$(printf '"'"'%s\n'"'"' "$trusted" | grep -oE "^S2-DEACTIVATED: $TS_RE\$" | sed '"'"'s/^S2-DEACTIVATED: //'"'"' | sort | tail -n 1)"' r_markers
+mutant m-census-unchecked 'marker_count S2-EXIT-CENSUS '"'"'^S2-EXIT-CENSUS: https://github\.com/[^ ]+$'"'"'; census_marked="$MARKER_VAL"' 'census_marked="$(printf '"'"'%s\n'"'"' "$trusted" | grep -cE '"'"'^S2-EXIT-CENSUS: https://github\.com/[^ ]+$'"'"')"' r_markers
+mutant m-stamp-status-any 'case "$st" in "0 0 0 0 0"|"0 1 0 0 0") : ;; *) fail_marker "$name" ;; esac' ':' r_markers
+mutant m-stamp-rc1 '"0 0 0 0 0"|"0 1 0 0 0") : ;;' '"0 0 0 0 0") : ;;' r_pass r_deact
+mutant m-count-status-any 'case "$st" in "0 0"|"0 1") [[ "$MARKER_VAL" =~ ^[0-9]+$ ]] || fail_marker "$name" ;; *) fail_marker "$name" ;; esac' ':' r_markers
+mutant m-count-numeric ') [[ "$MARKER_VAL" =~ ^[0-9]+$ ]] || fail_marker "$name" ;;' ') : ;;' r_markers
+mutant m-count-rc1 '"0 0"|"0 1") [[' '"0 0") [[' r_nomarker r_noperm_marker
+mutant m-undeclared-tool 'NOW="${SOAK_NOW_EPOCH:-$(date -u +%s)}"' 'NOW="${SOAK_NOW_EPOCH:-$(date -u +%s)}"; wc -l </dev/null >/dev/null' r_needcomplete
+mutant m-need-short 'for need in gh jq base64 awk mktemp sort grep sed tr tail head date rm dirname; do' 'for need in gh jq base64 awk mktemp sort; do' r_needtools
 mutant m-no-source-check 'if ! source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" 2>/dev/null && pwd)/trusted-verdict.sh" \
    ||' 'if ! { source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" 2>/dev/null && pwd)/trusted-verdict.sh"; true; } \
    ||' r_srcfail
 mutant m-ts-loose 'T[0-9]{2}:[0-9]{2}:[0-9]{2}Z'"'"'' 'T[0-9:]+Z?'"'"'' r_badts
-mutant m-act-anchor-start 'grep -oE "^S2-ACTIVATED: $TS_RE\$"' 'grep -oE "S2-ACTIVATED: $TS_RE\$"' r_midact
-mutant m-act-anchor-end 'grep -oE "^S2-ACTIVATED: $TS_RE\$"' 'grep -oE "^S2-ACTIVATED: $TS_RE"' r_midact
+mutant m-act-anchor-start 'grep -oE "^$name: $TS_RE\$"' 'grep -oE "$name: $TS_RE\$"' r_midact
+mutant m-act-anchor-end 'grep -oE "^$name: $TS_RE\$"' 'grep -oE "^$name: $TS_RE"' r_midact
 mutant m-census-dot ''"'"'^S2-EXIT-CENSUS: https://github\.com/[^ ]+$'"'"'' ''"'"'^S2-EXIT-CENSUS: https://github.com/[^ ]+$'"'"'' r_lookalike
 mutant m-census-host ''"'"'^S2-EXIT-CENSUS: https://github\.com/[^ ]+$'"'"'' ''"'"'^S2-EXIT-CENSUS: https://[^ ]+$'"'"'' r_foreign
 mutant m-pd-off 'if (( seen >= PD_MIN_SAMPLE && pd_bad * 5 > seen )); then' 'if false; then' r_pdbad6 r_pdbad_dark
@@ -552,16 +595,39 @@ else fail "harness control: the identity copy turned $MUT_REDS row(s) red (the t
 PROBE_UNDER="$(mk_tree nolink "$PROBE" nolink)"; core_rows_quiet "${ALL_ROWS[@]}"; PROBE_UNDER="$PROBE"
 if [ "$MUT_REDS" -gt 0 ]; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: a copy without the lib symlink turns $MUT_REDS row(s) red (the tree resolves the lib)"
 else fail "harness control: a copy without the lib symlink turned no row red"; fi
-# the VERDICT itself: an inert mutant fed through `mutant` must be REPORTED as a survivor and make the suite red (counters restored after).
-# A verdict forced to `caught` (`if [ "$MUT_REDS" -gt 0 ]` -> `if true`) reports the inert mutant as caught and fails this control.
-_p0=$passes; _f0=$fails; _a0=$asserted; _n0=${#FAILURES[@]}; _r0=$MUT_RUN; _c0=$MUT_CAUGHT
-mutant c-inert 'MAX_RUNS=100' 'MAX_RUNS=100;' r_pass > "$TMP/inert.out"
-_inert_fails=$((fails - _f0)); _inert_caught=$((MUT_CAUGHT - _c0))
-passes=$_p0; fails=$_f0; asserted=$_a0; FAILURES=("${FAILURES[@]:0:$_n0}"); MUT_RUN=$_r0; MUT_CAUGHT=$_c0
-if [ "$_inert_fails" -eq 1 ] && [ "$_inert_caught" -eq 0 ] && grep -q 'went red' "$TMP/inert.out"; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: an inert mutant is reported as a SURVIVOR and makes the suite red"
-else fail "harness control: an inert mutant was not reported as a survivor (fails=$_inert_fails caught=$_inert_caught)"; fi
-if [ "$CTRL_OK" -ne 6 ]; then fail "harness controls: $CTRL_OK of 6 held"; fi
-if [ "$MUT_RUN" -eq "$MUT_CAUGHT" ] && [ "$MUT_RUN" -ge 58 ]; then pass "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught"; else fail "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught (every mutant must be caught; floor 58)"; fi
+# the VERDICT itself: an inert, a PARSE-crashing and an anchor-NOT-LANDED mutant fed through `mutant` must each be REPORTED as what it is (exactly one
+# failure, nothing counted as caught, the right word in the report); counters are restored after. A verdict forced to `caught`
+# (`if [ "$MUT_REDS" -gt 0 ]` -> `if true`) reports the inert mutant as caught and fails the first control. ctrl_verdict refuses an empty word, and the
+# last control asserts it can REFUSE (a wrong word must fail it), so deleting the word check from the helper goes red.
+ctrl_verdict() { # <name> <word the report must contain> <old> <new> <row ids...>
+  local name="$1" word="$2"; shift 2
+  [ -n "$word" ] || return 2
+  local p0=$passes f0=$fails a0=$asserted n0=${#FAILURES[@]} r0=$MUT_RUN c0=$MUT_CAUGHT nfail ncaught
+  mutant "$name" "$@" > "$TMP/ctrl-$name.out"
+  nfail=$((fails - f0)); ncaught=$((MUT_CAUGHT - c0))
+  passes=$p0; fails=$f0; asserted=$a0; FAILURES=("${FAILURES[@]:0:$n0}"); MUT_RUN=$r0; MUT_CAUGHT=$c0
+  [ "$nfail" -eq 1 ] && [ "$ncaught" -eq 0 ] && grep -q -- "$word" "$TMP/ctrl-$name.out"
+}
+if ctrl_verdict c-inert 'went red' 'MAX_RUNS=100' 'MAX_RUNS=100;' r_pass; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: an inert mutant is reported as a SURVIVOR and makes the suite red"
+else fail "harness control: an inert mutant was not reported as a survivor"; fi
+if ctrl_verdict c-parse-verdict CRASHED 'MAX_RUNS=100' 'MAX_RUNS=100; readonly X=(' r_pass; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: a PARSE-crashing mutant fed through mutant() is reported CRASHED and makes the suite red"
+else fail "harness control: a parse-crashing mutant was not reported as CRASHED through mutant()"; fi
+if ctrl_verdict c-nolanding 'did NOT land' 'ANCHOR_THAT_IS_NOT_IN_THE_PROBE_ZZ' 'x' r_pass; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: a mutant whose anchor does not land is reported NOT LANDED and makes the suite red"
+else fail "harness control: a mutant with a missing anchor was not reported as NOT LANDED"; fi
+if ! ctrl_verdict c-wrongword CRASHED 'MAX_RUNS=100' 'MAX_RUNS=100;' r_pass && ! ctrl_verdict c-emptyword '' 'MAX_RUNS=100' 'MAX_RUNS=100;' r_pass; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: the verdict helper REFUSES a report that lacks the expected word (and an empty word), so its word check cannot be deleted green"
+else fail "harness control: the verdict helper accepted a report without the expected word"; fi
+# CRASH_RE alternatives: one runtime-only mutant per alternative (each parses; only that alternative can flag it). `command not found` is the c-crash-rt control above.
+mutant_probe c-crash-badsub 'MAX_RUNS=100' 'MAX_RUNS=100; _x=a; : "${_x@Z}"' r_pass
+if [ "$MUT_LANDED" -eq 1 ] && [ "$MUT_CRASHED" -eq 1 ] && bash -n "$TMP/mut-c-crash-badsub.sh" 2>/dev/null; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: a mutant that dies on a bad substitution is flagged as crashed (CRASH_RE keeps that alternative)"
+else fail "harness control: the bad-substitution mutant was not flagged (landed=$MUT_LANDED crashed=$MUT_CRASHED)"; fi
+mutant_probe c-crash-unbound 'MAX_RUNS=100' 'MAX_RUNS=100; : "$UNSET_ZZ_SENTINEL"' r_pass
+if [ "$MUT_LANDED" -eq 1 ] && [ "$MUT_CRASHED" -eq 1 ] && bash -n "$TMP/mut-c-crash-unbound.sh" 2>/dev/null; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: a mutant that dies on an unbound variable is flagged as crashed (CRASH_RE keeps that alternative)"
+else fail "harness control: the unbound-variable mutant was not flagged (landed=$MUT_LANDED crashed=$MUT_CRASHED)"; fi
+mutant_probe c-crash-syntax 'MAX_RUNS=100' "MAX_RUNS=100; eval '('" r_pass
+if [ "$MUT_LANDED" -eq 1 ] && [ "$MUT_CRASHED" -eq 1 ] && bash -n "$TMP/mut-c-crash-syntax.sh" 2>/dev/null; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: a mutant whose runtime eval dies on a syntax error is flagged as crashed (CRASH_RE keeps that alternative)"
+else fail "harness control: the runtime syntax-error mutant was not flagged (landed=$MUT_LANDED crashed=$MUT_CRASHED)"; fi
+if [ "$CTRL_OK" -ne 12 ]; then fail "harness controls: $CTRL_OK of 12 held"; fi
+if [ "$MUT_RUN" -eq "$MUT_CAUGHT" ] && [ "$MUT_RUN" -ge 67 ]; then pass "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught"; else fail "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught (every mutant must be caught; floor 67)"; fi
 
 # the request-shape mutants cannot reach a row's EXIT CODE (the fake gh answers any well-formed jobs path), so they are
 # pinned by the requests.log assertion above: drop each parameter from a copy and confirm the assertion text no longer holds
@@ -591,12 +657,12 @@ if [ -z "$_shape_bad" ]; then pass "request-shape mutants (jobs filter dropped, 
 # harness row: a probe that always exits 0 must be refused by the named rows (the rows can fail)
 printf '#!/usr/bin/env bash\necho PASS\nexit 0\n' > "$TMP/always-pass.sh"; chmod +x "$TMP/always-pass.sh"
 PROBE_UNDER="$TMP/always-pass.sh"; core_rows_quiet "${ALL_ROWS[@]}"; PROBE_UNDER="$PROBE"
-if [ "$MUT_REDS" -ge 64 ]; then pass "HARNESS: an always-PASS probe turns $MUT_REDS rows red"; else fail "HARNESS: an always-PASS probe turned only $MUT_REDS rows red"; fi
+if [ "$MUT_REDS" -ge 76 ]; then pass "HARNESS: an always-PASS probe turns $MUT_REDS rows red"; else fail "HARNESS: an always-PASS probe turned only $MUT_REDS rows red"; fi
 
 printf 'ci-push-dedupe-soak-9512: %d passed, %d failed, %d assertion(s) executed\n' "$passes" "$fails" "$asserted"
 # DELIBERATELY NOT ROUTED THROUGH fail(): compares against a literal and exits directly.
 _total=$((passes + fails))
-_FLOOR=149
+_FLOOR=176
 if [ "$_total" -lt "$_FLOOR" ]; then
   printf '[FATAL] assertion floor: executed %d < %d\n' "$_total" "$_FLOOR" >&2
   exit 1

@@ -45,8 +45,9 @@
 #   0 = PASS    1 = FAIL (a wrong elision, a failing push-dedupe job, the mean over target, a deadline, or a
 #               deregistered proof suite)
 #   2 = NOT YET (not activated, too few elided runs or days, or the exit census marker is missing)
-#   3 = CANNOT ESTABLISH (a tool, gh/GH_TOKEN or the trust lib missing, or a GitHub API read failed, including the tracker's comment
-#               read and a permission lookup, the causes being the rc 2 list in the header of scripts/lib/trusted-verdict.sh: the sweeper retries)
+#   3 = CANNOT ESTABLISH (a tool, gh/GH_TOKEN or the trust lib missing, a GitHub API read failed, including the tracker's comment
+#               read and a permission lookup, the causes being the rc 2 list in the header of scripts/lib/trusted-verdict.sh, or a marker
+#               read (grep/sed/sort/tail over the trusted text) failed: the sweeper retries)
 #   78 = refused to run under xtrace while GH_TOKEN is set (#7797)
 #
 # RETIREMENT: when #9512's tracker closes, delete this file, its .test.sh, the run_suite line in scripts/test-all.sh,
@@ -74,16 +75,17 @@ IDLE_RUNS=10         # while nothing is activated only a wrong elision matters: 
 MEAN_LIMIT_HUNDREDTHS_MIN=2908
 MEAN_LIMIT_TEXT="29.08"
 PD_MIN_SAMPLE=5      # push-dedupe failures are judged only over at least this many sampled runs, and fail above 20%
+# every external command this probe and the trust lib run by name, builtins aside (a missing one is exit 3, never a silent "no marker"; the row
+# r_needcomplete runs the probe to PASS on a PATH holding exactly these, so a command added without a name here fails that row)
+for need in gh jq base64 awk mktemp sort grep sed tr tail head date rm dirname; do
+  command -v "$need" >/dev/null 2>&1 || { echo "CANNOT ESTABLISH: $need is not installed"; exit 3; }
+done
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # test seams (the sweeper runs this under env -i, so they are inert in production)
 ADR_FILE_OVERRIDE="${SOAK_ADR_FILE:-}"
 ADR_DIR="$HERE/../../knowledge-base/engineering/architecture/decisions"
 TEST_ALL="${SOAK_TEST_ALL:-$HERE/../test-all.sh}"
 
-# every external command the probe runs directly or through the trust lib (a missing one is exit 3, never a silent "no marker")
-for need in gh jq base64 awk mktemp sort grep sed tr tail head date rm; do
-  command -v "$need" >/dev/null 2>&1 || { echo "CANNOT ESTABLISH: $need is not installed"; exit 3; }
-done
 [ -n "${GH_TOKEN:-}" ] || { echo "CANNOT ESTABLISH: GH_TOKEN is not set (the tracker directive must declare secrets=GH_TOKEN)"; exit 3; }
 # shellcheck source=../lib/trusted-verdict.sh
 if ! source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" 2>/dev/null && pwd)/trusted-verdict.sh" \
@@ -96,6 +98,8 @@ NOW="${SOAK_NOW_EPOCH:-$(date -u +%s)}"
 
 fail_api() { echo "CANNOT ESTABLISH: GitHub API read failed ($1)"; exit 3; }
 fail_comments() { echo "CANNOT ESTABLISH: comment or permission read failed ($1)"; exit 3; }
+fail_projection() { echo "CANNOT ESTABLISH: comment projection failed (local tool) ($1)"; exit 3; }
+fail_marker() { echo "CANNOT ESTABLISH: marker read failed ($1)"; exit 3; }
 api() { gh api "$@" 2>/dev/null; }
 
 # --- the S2 PR merge time ----------------------------------------------------------------------------------
@@ -109,11 +113,27 @@ issues="$(api "repos/$REPO/issues?labels=follow-through&state=open&per_page=100"
 tracker="$(jq -r '.[0] // empty' <<<"$issues" 2>/dev/null)" || fail_api "tracker lookup"
 [ -n "$tracker" ] || { echo "NOT YET: the tracker issue carrying the $DIRECTIVE_SCRIPT directive was not found among open follow-through issues"; exit 2; }
 trusted_raw="$(trusted_verdict_bodies "$tracker" "$REPO")" || fail_comments "tracker $tracker comments (trusted-author resolution)"
-trusted="$(printf '%s\n' "$trusted_raw" | tr -d '\r')" || fail_comments "tracker $tracker comments (CR strip)"
+trusted="$(printf '%s\n' "$trusted_raw" | tr -d '\r')" || fail_projection "tracker $tracker comments (CR strip)"
 TS_RE='[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z'
-last_on="$(printf '%s\n' "$trusted" | grep -oE "^S2-ACTIVATED: $TS_RE\$" | sed 's/^S2-ACTIVATED: //' | sort | tail -n 1)"
-last_off="$(printf '%s\n' "$trusted" | grep -oE "^S2-DEACTIVATED: $TS_RE\$" | sed 's/^S2-DEACTIVATED: //' | sort | tail -n 1)"
-census_marked="$(printf '%s\n' "$trusted" | grep -cE '^S2-EXIT-CENSUS: https://github\.com/[^ ]+$')"
+# The marker reads. A marker is read through a grep | sed | sort | tail chain, and a bare `x="$(chain)"` drops the status of every stage: a failing
+# sed/sort/tail, or a grep error (rc >= 2), read as "no marker", and a dropped DEACTIVATED marker turns a verdict that should be FAIL into a PASS at rc 0.
+# So each chain's whole status array is taken in ONE assignment (inside the substitution, right after the pipeline) and checked: grep rc 1 (no match)
+# is an answer, every other non-zero status anywhere in the chain is CANNOT ESTABLISH naming the read.
+marker_stamp() {   # <marker name>: sets MARKER_VAL to the LATEST `<name>: <ISO>` stamp ("" = no such marker)
+  local name="$1" r st
+  r="$(printf '%s\n' "$trusted" | grep -oE "^$name: $TS_RE\$" | sed "s/^$name: //" | sort | tail -n 1; printf '#%s' "${PIPESTATUS[*]}")"
+  st="${r##*#}"; MARKER_VAL="${r%#*}"; MARKER_VAL="${MARKER_VAL%$'\n'}"
+  case "$st" in "0 0 0 0 0"|"0 1 0 0 0") : ;; *) fail_marker "$name" ;; esac
+}
+marker_count() {   # <marker name> <ERE>: sets MARKER_VAL to the number of trusted lines matching the ERE
+  local name="$1" r st
+  r="$(printf '%s\n' "$trusted" | grep -cE "$2"; printf '#%s' "${PIPESTATUS[*]}")"
+  st="${r##*#}"; MARKER_VAL="${r%#*}"; MARKER_VAL="${MARKER_VAL%$'\n'}"
+  case "$st" in "0 0"|"0 1") [[ "$MARKER_VAL" =~ ^[0-9]+$ ]] || fail_marker "$name" ;; *) fail_marker "$name" ;; esac
+}
+marker_stamp S2-ACTIVATED; last_on="$MARKER_VAL"
+marker_stamp S2-DEACTIVATED; last_off="$MARKER_VAL"
+marker_count S2-EXIT-CENSUS '^S2-EXIT-CENSUS: https://github\.com/[^ ]+$'; census_marked="$MARKER_VAL"
 act_epoch=""; active=0
 if [ -n "$last_on" ]; then
   on_epoch="$(date -u -d "$last_on" +%s 2>/dev/null)" || fail_api "activation time $last_on"
