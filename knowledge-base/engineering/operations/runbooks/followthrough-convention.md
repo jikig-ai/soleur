@@ -223,9 +223,16 @@ merge timestamp; its directive declares `secrets=GH_TOKEN`).
   ACTIVATED) reads `.t` and projects `.b` with `jq -r '.b'`. Both are views of one core. The causes of
   rc 2 are the ONE list in the header of `scripts/lib/trusted-verdict.sh` (the comments view has one
   cause of its own there); this runbook does not restate it. Map rc 2 to the probe's CANNOT ESTABLISH
-  exit, which is 3 (the sweeper renders 3 as CANNOT ESTABLISH and 2 as NOT YET, so an `exit 2` on a
-  failed read tells the operator to wait), and check any projection too: an empty projection after a
-  jq failure erases every marker and reproduces the false FAIL.
+  exit: a NEW probe exits 3 (the sweeper renders 3 as CANNOT ESTABLISH and 2 as NOT YET, so an `exit 2`
+  on a failed read tells the operator to wait). The three `RESULT:` probes that predate the rule
+  (`concierge-strand-754ee124-5733.sh`, `cpx22-invoice-reconcile-7431.sh`,
+  `inngest-zot-client-authz-6500.sh`) exit 2 on rc 2, which renders NOT YET and is still non-closing;
+  they are not migrated here. Check any projection too, and check the marker chains: an empty
+  projection after a jq failure erases every marker, and a bare `x="$(... | grep | sed | sort | tail)"`
+  drops the status of every stage (a failing sed/sort/tail or a grep error reads as "no marker", so a
+  dropped DEACTIVATED marker can turn a FAIL into a PASS). Take the whole `PIPESTATUS` array in one
+  assignment and treat grep rc 1 as the only non-zero answer: the stub template shows the shape and the
+  two soak probes carry it.
 
   **Paging.** `gh issue view --json comments` returns ALL pages of comments: measured 214 returned
   against 214 on the issue (`gh api` comment count) on #9777 at review time, and 220 against 220 on

@@ -52,8 +52,12 @@ esac
 #   - GH probe:   gh run list --workflow <wf>.yml --status success --limit 1 --json conclusion | jq -e ... && exit 0 || exit 1
 #   - Operator-confirmed: source the trusted-verdict lib; NEVER read .comments[].body directly.
 #       source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/trusted-verdict.sh"
-#       bodies="$(trusted_verdict_bodies <N>)" || exit 3      # lib rc 2 = a failed trust read, never "no verdict": exit 3 (CANNOT ESTABLISH), NOT 2 (NOT YET)
-#       last="$(printf '%s\n' "$bodies" | grep -E '^RESULT: (PASS|FAIL)\b' | tail -1)"
+#       bodies="$(trusted_verdict_bodies <N>)" || exit 3      # lib rc 2 = a failed trust read, never "no verdict": a new probe exits 3 (CANNOT ESTABLISH), not 2 (NOT YET)
+#       # read the marker through a CHECKED chain: a bare `last="$(... | grep ... | tail -1)"` drops the status of every stage, so a grep error (rc >= 2)
+#       # or a failing tail reads as "no verdict" (grep rc 1 = no match is an answer; every other non-zero status is not)
+#       last="$(printf '%s\n' "$bodies" | grep -E '^RESULT: (PASS|FAIL)\b' | tail -1; printf '#%s' "${PIPESTATUS[*]}")"
+#       case "${last##*#}" in "0 0 0"|"0 1 0") : ;; *) echo "CANNOT ESTABLISH: marker read failed (RESULT)"; exit 3 ;; esac
+#       last="${last%#*}"; last="${last%$'\n'}"
 #       [[ "$last" =~ ^RESULT:\ PASS ]] && exit 0 || exit 1
 #     Which view: the bodies view is the default. A probe that needs the COMMENT'S created time (the
 #     S3 soak orders S3-CONFIRMED before S3-ACTIVATED by it) calls the comments view instead, which
@@ -63,7 +67,9 @@ esac
 #       trusted="$(jq -r '.b' <<<"$recs" | tr -d '\r')" || exit 3   # check the projection too
 #     Both examples exit 3 on a failed trust read: the sweeper renders 3 as CANNOT ESTABLISH and 2 as
 #     NOT YET (scripts/sweep-followthroughs.sh, the rc -> word map), so exit 2 would tell the operator
-#     "wait" about a read that FAILED. Reserve 2 for "the evidence is not there yet".
+#     "wait" about a read that FAILED. New probes reserve 2 for "the evidence is not there yet". The three
+#     `RESULT:` probes that predate the rule (concierge-strand-754ee124-5733.sh, cpx22-invoice-reconcile-7431.sh,
+#     inngest-zot-client-authz-6500.sh) exit 2 on a lib rc 2, which renders NOT YET: still non-closing.
 #
 #     The unfiltered `.comments[].body` form this line used to show is FORGEABLE: the repo is
 #     public with issues open, so one HTTP POST of `RESULT: PASS` from any authenticated user
