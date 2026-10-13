@@ -125,8 +125,9 @@ savings claims like "90%" are scoped to terminal-output tokens, not your bill.</
    grep the session log) for <code>SOLEUR_EXT_FILTER</code>. Agents: re-derive it with
    <code>env -u CODEX_THREAD_ID -u PLUGIN_ROOT CLAUDE_PLUGIN_ROOT=1 \
      bash &lt;plugin&gt;/hooks/ext-filter-detect.sh --self-test</code>.
-   <code>tool=none</code> means no filter detected — not "no filter exists" (a managed-settings
-   hook or a PATH the hook process can't see can still hide one). Claude Code sessions only —
+   <code>tool=none</code> means no filter detected — not "no filter exists" (an org-policy
+   settings hook, or a PATH the hook process does not inherit, can still hide one). Claude
+   Code sessions only —
    a Devin or other-harness session has no marker by design; there, check
    <code>command -v rtk</code> and <code>~/.claude/settings.json</code> for hook entries
    manually.</li>
