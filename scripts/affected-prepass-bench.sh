@@ -891,7 +891,7 @@ for probe in "${PROBES[@]}"; do
     # unclean --paths element per #10117) — surface the side's stderr so the
     # caller sees the named error rather than chasing a phantom stream
     # divergence; the EXIT trap deletes $SCRATCH, so this is the only copy.
-    echo "DIFFERS: $side_failed (both sides must exit 0): $(head -c 300 "$side_err" 2>/dev/null | tr '\n' ' ' | LC_ALL=C tr '[:cntrl:]' '?')"; OVERALL=1; continue
+    echo "DIFFERS: $side_failed (both sides must exit 0); first failing stderr: $(head -c 300 "$side_err" 2>/dev/null | tr '\n' ' ' | LC_ALL=C tr '[:cntrl:]' '?')"; OVERALL=1; continue
   fi
   b_lab="$SCRATCH/labels.base.$probe_i"; h_lab="$SCRATCH/labels.head.$probe_i"
   assert_fixture_dir "$b_lab"; assert_fixture_dir "$h_lab"

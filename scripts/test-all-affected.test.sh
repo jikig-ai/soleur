@@ -3478,8 +3478,12 @@ PY
 #        absent on disk (the mint arm drops it on -e, so certifying it here
 #        would be a lie), and `docs/sub/` / `docsx/` decline on the exact
 #        string anchor. Accepts pin the retained grammar: both bare wildcard
-#        tails, the bare `<root>/` dir member, and a covering member found
-#        AFTER a declining one (the walk does not stop early).
+#        tails, the bare `<root>/` dir member (in every covering spelling the
+#        mint honors, incl. metachar-free `glob:<root>`/`glob:<root>/`), and a
+#        covering member found AFTER a declining one (the walk does not stop
+#        early). The `docs` accept cells probe the LIVE checkout's `docs/` —
+#        deliberate (-d parity is the point); a root `docs/` removal flips
+#        them to declines.
 cases=$((cases + 1))
 _th6v_out=$(
   _t() { # <root> <ext> <member>...
@@ -3594,6 +3598,8 @@ _th8_eval() {
 # *.test.sh would silently drop the fixture otherwise). Zero file args =
 # a repo with an empty listing — the producer-liveness arm.
 _th8_fix_repo() { # <name> [root-file...]
+  # The name mints a TESTROOT path — keep it a safe token.
+  [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]] || return 1
   local _d="$TESTROOT/th8fx-$1"; shift
   mkdir -p "$_d" || return 1
   ( cd "$_d" && rc_g init -q ) || return 1
