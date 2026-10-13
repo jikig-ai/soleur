@@ -39,16 +39,26 @@
 #
 # RC 2 (TRANSIENT) is the ONE list below, and it is the only copy: every other comment, runbook,
 # stub and probe label points here. rc 2 always leaves stdout EMPTY, and the probes map it to
-# their own exit (the soak probes exit 3 with a label that names the read; concierge exits 2).
+# their own exit. Exit-code contract: probes written after this lib (the soak probes, and the stub
+# template for new probes) exit 3 on rc 2, which the sweeper renders CANNOT ESTABLISH; the three
+# `RESULT:` probes that predate the rule (concierge-strand-754ee124-5733.sh,
+# cpx22-invoice-reconcile-7431.sh, inngest-zot-client-authz-6500.sh) exit 2 on rc 2, which the
+# sweeper renders NOT YET: still non-closing, so nothing closes on a failed read either way.
 #   1. the comment read (`gh issue view`) failed;
 #   2. a permission read failed (anything but a 2xx or a 404, which means "not a user");
-#   3. a stage AFTER the trust decision failed: the row split lost a row, the base64 decode, a
-#      field extraction, a trusted body that holds a NUL byte, the fence strip, the record
-#      build, or the distinct-login count (stderr names the stage: `stage '<name>' failed`);
+#   3. a stage AFTER the comment read failed (stderr names it: `stage '<name>' failed`, or the
+#      author for the absent-memo guard): the row split lost or gained a row (rowcount), the
+#      base64 decode, a row-field extraction (author, body, created), the distinct-login count
+#      (logincount), an author with no memoized permission, a trusted body that holds a NUL byte
+#      (that one is deterministic: it will not clear on retry, edit the comment), the fence
+#      strip, the record build, or the bodies view's `jq -r .b` projection;
 #   4. the comments view ONLY: a trusted comment whose `createdAt` is missing or not ISO.
-# Every stage after the trust decision is all-or-nothing: each substitution is checked, and
-# two counts (rows collected vs rows in the input, distinct logins collected vs distinct logins
-# in the memo) catch what a status cannot see. Fenced blocks are stripped by CommonMark-style
+# Every stage after the comment read is all-or-nothing: each substitution is checked, and two
+# counts (rows collected vs rows in the input, distinct logins collected vs distinct logins in
+# the memo) catch what a status cannot see. The NUL guard is defence in depth: real `gh`
+# rewrites control characters in its JSON output (U+0000 arrives as the two characters `^@`),
+# so a NUL cannot reach this lib in production; the suite drives it synthetically (its fake
+# `gh` runs the system jq). Fenced blocks are stripped by CommonMark-style
 # rules (backtick/tilde fences, the length rule, the info-string rule); HTML comments and
 # `<pre>` blocks are NOT handled.
 #
@@ -67,7 +77,11 @@
 # `unset` first: an inherited EXPORTED scalar of the same name would otherwise be converted by
 # `declare -gA` into an array whose key `0` holds its value, and a login `0` (it passes the
 # shape guard) would then read as pre-resolved.
-unset _TRUSTED_VERDICT_PERM 2>/dev/null
+if ! unset _TRUSTED_VERDICT_PERM 2>/dev/null; then
+  # a READONLY variable of that name: `declare -gA` would fail too and print the refusal below, which would be false
+  echo "trusted-verdict: cannot reset the memo table _TRUSTED_VERDICT_PERM (it is readonly in this shell). REFUSING rather than reusing a table this lib did not build." >&2
+  return 2 2>/dev/null || exit 2
+fi
 if ! declare -gA _TRUSTED_VERDICT_PERM 2>/dev/null; then
   # REFUSE, never degrade. Without associative arrays (bash 3.2 — stock macOS
   # /bin/bash), `_TRUSTED_VERDICT_PERM[$login]=` creates an INDEXED array whose
@@ -175,12 +189,13 @@ _trusted_verdict_strip_fences() {
     }'
 }
 
-# _trusted_verdict_stage_fail <stage> <issue>
+# _trusted_verdict_stage_fail <stage> <issue> [detail]
 #   The ONE exit for a failed stage after the comment read: names the stage on stderr (the
 #   rows assert the stage name, so two guards that would both end in rc 2 stay distinguishable).
-#   The caller `return 2`s; this only speaks.
+#   Without a detail the stage is a transient fault; a stage whose cause is deterministic
+#   passes its own wording. The caller `return 2`s; this only speaks.
 _trusted_verdict_stage_fail() {
-  echo "trusted-verdict: stage '$1' failed on #$2. TRANSIENT, not a dropped comment." >&2
+  echo "trusted-verdict: stage '$1' failed on #$2. ${3:-TRANSIENT, not a dropped comment.}" >&2
 }
 
 # _trusted_verdict_core <issue-number> <repo>
@@ -196,7 +211,7 @@ _trusted_verdict_stage_fail() {
 #   The core does NOT validate `t`: the bodies view does not use it. Call it inside
 #   `$(...)`: the memo lives for the one call, which is all a single read needs.
 #
-#   ALL-OR-NOTHING AFTER THE TRUST DECISION, enforced as an invariant and not stage by stage:
+#   ALL-OR-NOTHING AFTER THE COMMENT READ, enforced as an invariant and not stage by stage:
 #   every command substitution below is checked (`x="$(cmd)" || fail`, never `local x=$(cmd)`),
 #   and two CONSERVATION counts defeat the failures a status cannot see (a here-string that
 #   loses lines): the rows the split loop collected must equal the rows the input holds
@@ -276,10 +291,12 @@ _trusted_verdict_core() {
     # A NUL byte cannot cross a bash command substitution: `$(...)` drops it silently, which
     # can JOIN `S2-ACTI<NUL>VATED` into a live marker. Refuse the trusted comment instead.
     nul="$(printf '%s' "${rows[i]}" | jq -r '.[1:][] | explode | any(. == 0)')" || { _trusted_verdict_stage_fail nulcheck "$issue"; return 2; }
-    case "$nul" in *true*) _trusted_verdict_stage_fail nul "$issue"; return 2 ;; esac
+    case "$nul" in *true*) _trusted_verdict_stage_fail nul "$issue" "A trusted comment contains a NUL byte; this will not clear on retry: edit that comment."; return 2 ;; esac
     # A lone CR is a line ending in CommonMark; normalise it to LF so the fence strip sees the
-    # same lines a renderer does (CRLF is left alone: the awk accepts a trailing CR).
-    body="$(printf '%s' "${rows[i]}" | jq -r '.[1] | gsub("\r(?!\n)"; "\n")')" || { _trusted_verdict_stage_fail body "$issue"; return 2; }
+    # same lines a renderer does (CRLF is left alone: the awk accepts a trailing CR). The `contains`
+    # guard keeps CR-free bodies (almost all of them) off the regex: gsub is quadratic in the number of
+    # lone CRs (measured 34 s for 65k of them on jq 1.8.2).
+    body="$(printf '%s' "${rows[i]}" | jq -r '.[1] | if contains("\r") then gsub("\r(?!\n)"; "\n") else . end')" || { _trusted_verdict_stage_fail body "$issue"; return 2; }
     created="$(printf '%s' "${rows[i]}" | jq -r '.[2]')" || { _trusted_verdict_stage_fail created "$issue"; return 2; }
     body="$(printf '%s\n' "$body" | _trusted_verdict_strip_fences)" || { _trusted_verdict_stage_fail strip "$issue"; return 2; }
     # The body goes to jq on STDIN, never as an `--arg` (one argv string is capped near 128 KiB:
@@ -303,10 +320,13 @@ _trusted_verdict_core() {
 #            which is a legitimate answer)
 #   rc 2   = TRANSIENT, causes in the header's rc 2 list. NOT evidence of absence.
 trusted_verdict_bodies() {
-  local issue="$1" repo="${2:-jikig-ai/soleur}" records
+  local issue="$1" repo="${2:-jikig-ai/soleur}" records proj
   records="$(_trusted_verdict_core "$issue" "$repo")" || return 2
   [[ -n "$records" ]] || return 0
-  printf '%s\n' "$records" | jq -r '.b' || return 2
+  # captured, then printed on success only: a projection that dies half way must not leave a prefix on
+  # stdout (the trailing `x` keeps the substitution from eating the last bodies' newlines)
+  proj="$(printf '%s\n' "$records" | jq -r '.b' && printf x)" || return 2
+  printf '%s' "${proj%x}"
   return 0
 }
 

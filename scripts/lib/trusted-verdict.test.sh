@@ -292,16 +292,19 @@ else
 fi
 
 # --- row 9 (MUTATION): an unresolved author is TRANSIENT, never a silent drop ---
-# Loop 1 resolves exactly the author set loop 2 reads, so a memo MISS is unreachable
+# Pass 2 resolves exactly the author set pass 3 reads, so a memo MISS is unreachable
 # in the shipped lib. That is why it needs a mutation rather than a fixture: the
 # original code said `*) continue ;;`, which merges "resolved as untrusted" with
 # "never resolved at all" — the collapse this lib's own header forbids, at the one
-# place the header did not assert it. Neuter loop 1's resolver call and require the
-# lib to REFUSE rather than quietly return a shorter list.
+# place the header did not assert it. Neuter pass 2's resolver call AND the logincount
+# conservation check (which would otherwise answer first, with its own message) and require
+# the absent-memo guard itself to REFUSE, by its own stderr text, rather than quietly return
+# a shorter list.
 MUT="$SB/trusted-verdict-no-resolve.sh"
-sed 's|^    if ! _trusted_verdict_permission "$login" "$repo" >/dev/null; then|    if false; then|' "$LIB" > "$MUT"
-if diff -q "$LIB" "$MUT" >/dev/null; then
-  fail "row 9: the resolver-call marker is absent from the lib — the mutation did not land and this row is vacuous"
+sed -e 's|^    if ! _trusted_verdict_permission "$login" "$repo" >/dev/null; then|    if false; then|' \
+    -e 's|_trusted_verdict_stage_fail logincount "$issue"; return 2;|true;|' "$LIB" > "$MUT"
+if diff -q "$LIB" "$MUT" >/dev/null || ! grep -q '^    if false; then$' "$MUT" || grep -q 'stage_fail logincount' "$MUT"; then
+  fail "row 9: the resolver-call or logincount marker is absent from the lib — the mutation did not land and this row is vacuous"
 else
   cat > "$SB/one-verdict.json" <<'JSON'
 {"comments":[{"author":{"login":"deruelle"},"body":"RESULT: PASS"}]}
@@ -309,17 +312,17 @@ JSON
   printf 'deruelle\tadmin\n' > "$SB/perms-mut"
   stub_env 5733 "$SB/one-verdict.json" "$SB/perms-mut"
   mout="$(
-    env "${STUB_ENV[@]}" bash -c 'set -uo pipefail; source "$1"; trusted_verdict_bodies "$2" >/dev/null 2>&1; echo $?' _ "$MUT" 5733
+    env "${STUB_ENV[@]}" bash -c 'set -uo pipefail; source "$1"; trusted_verdict_bodies "$2" >/dev/null 2>"$3"; echo $?' _ "$MUT" 5733 "$SB/row9.err"
   )"
-  if [[ "$mout" == "2" ]]; then
-    pass "row 9 MUTATION: an author with no memoized permission yields TRANSIENT (rc=2), not a silent drop"
+  if [[ "$mout" == "2" ]] && grep -q 'no memoized permission' "$SB/row9.err"; then
+    pass "row 9 MUTATION: an author with no memoized permission yields TRANSIENT (rc=2) from the absent-memo guard itself, not a silent drop"
   else
-    fail "row 9 MUTATION: expected rc=2 from the un-resolved author; got rc=$mout"
+    fail "row 9 MUTATION: expected rc=2 and the 'no memoized permission' refusal from the un-resolved author; got rc=$mout err=[$(head -c 200 "$SB/row9.err")]"
   fi
 fi
 
 # =====================================================================================
-# THE TWO-VIEW MATRIX (rows M-H1 .. M-H11, M-NOSLICE and the review rows M-BIG .. M-LOGINCOUNT). Each row is a FUNCTION so a lib mutant (below) can
+# THE TWO-VIEW MATRIX (rows M-H1 .. M-H11, M-NOSLICE and the review rows M-BIG .. M-READONLY). Each row is a FUNCTION so a lib mutant (below) can
 # re-run it against a mutated copy. Every negative assertion has a POSITIVE TWIN on the same
 # input that differs only in the stubbed permission (an over-trusting or under-trusting
 # mutant is then visible from both sides). Every comment carries a CONTRIBUTOR authorAssociation
@@ -533,8 +536,9 @@ h_fsm() { # M-FENCE the strip is a fence state machine: opener/closer character 
   fsm_case "a backtick opener whose info string holds a backtick is inline code, not a fence (the marker after it is KEPT)" $'```x``` inline code\n'"$M"$'\nafter' $'```x``` inline code\n'"$M"$'\nafter'
   fsm_case "a tilde opener may carry a backtick in its info string (still a fence)" $'~~~ a`b\nM\n~~~\nafter' 'after'
   fsm_case "a lone CR is a line ending: a fence opened after it strips the marker inside it" $'text\r```\n'"$M"$'\n```' 'text'
+  fsm_case "several lone CRs in one body are each a line ending (a global substitution, not the first CR only)" $'a\rb\r```\n'"$M"$'\n```' $'a\nb'
   fsm_case "CRLF line endings are left alone" $'one\r\ntwo' $'one\r\ntwo'
-  (( FSM_OK )) && pass "M-FENCE: 22 fence shapes (flat, tilde, 4-backtick wrapper, mixed characters, indentation, tab, closer length, CRLF closer, 2-char runs, trailing text, backtick info string, lone CR, unclosed) strip as CommonMark-style fences do; HTML comments and <pre> are not handled"
+  (( FSM_OK )) && pass "M-FENCE: 23 fence shapes (flat, tilde, 4-backtick wrapper, mixed characters, indentation, tab, closer length, CRLF closer, 2-char runs, trailing text, backtick info string, lone CR, unclosed) strip as CommonMark-style fences do; HTML comments and <pre> are not handled"
 }
 h_repo() { # M-REPO a non-default repository argument is used in BOTH the permission URL and the issue read, in BOTH views; the default repo is never touched
   mkc "$SB/h.json" priv-op "S2-ACTIVATED: $T2" "$T2"; mkp 'priv-op\tadmin\n'
@@ -602,13 +606,14 @@ h_nul() { # M-NUL a NUL byte in a TRUSTED body is rc 2 (bash would drop it and J
   for view in trusted_verdict_comments trusted_verdict_bodies; do
     run_case_raw "$view" 9818 "$SB/h.json" "$SB/pm.tsv"
     if ! rc2_stage nul; then ok=0; fail "M-NUL ($view): a NUL in a trusted body must be rc 2 + empty stdout naming stage nul, got rc=$RAW_RC out=[$RAW_OUT]"; fi
+    if ! grep -q 'will not clear on retry' "$SB/err.log" || grep -q 'TRANSIENT' "$SB/err.log"; then ok=0; fail "M-NUL ($view): the NUL stage must say it is deterministic (will not clear on retry), never TRANSIENT, got err=[$(head -c 200 "$SB/err.log")]"; fi
   done
   nul_fixture 'S2-ACTIVATED: 2026-10-11T09:48:17Z'
   for view in trusted_verdict_comments trusted_verdict_bodies; do
     run_case_raw "$view" 9818 "$SB/h.json" "$SB/pm.tsv"
     if (( RAW_MISS != 0 )) || [[ "$RAW_RC" != 0 ]] || ! grep -qF "S2-ACTIVATED: $T2" <<<"$RAW_OUT"; then ok=0; fail "M-NUL twin ($view): the same comment without a NUL, and an untrusted NUL body beside it, must succeed, got rc=$RAW_RC out=[$RAW_OUT]"; fi
   done
-  (( ok )) && pass "M-NUL: a NUL in a trusted body is rc 2 with empty stdout (stage nul) in both views; an untrusted NUL body and a NUL-free twin are fine"
+  (( ok )) && pass "M-NUL (synthetic: the fake gh runs the system jq; real gh rewrites U+0000 to ^@): a NUL in a trusted body is rc 2 with empty stdout (stage nul, deterministic wording) in both views; an untrusted NUL body and a NUL-free twin are fine"
 }
 mkfailtool() { # <dir> <tool> <script body>: a dir with the gh stub and ONE tool that fails in a chosen way
   assert_fixture_dir "$SB"; mkdir -p "$1"; cp "$SB/bin/gh" "$1/gh"
@@ -658,7 +663,66 @@ h_logincount() { # M-LOGINCOUNT a resolver that claims success but leaves nothin
   done
   (( ok )) && pass "M-LOGINCOUNT: distinct logins resolved != distinct logins collected is rc 2 with empty stdout (stage logincount), in both views"
 }
-LIB_ROWS=(h_h1 h_h2 h_h3 h_h4_parity h_h4_abs h_h5 h_h6 h_h7 h_h8 h_noslice h_h10 h_crlf h_h11 h_big h_recfail h_fsm h_repo h_case h_login_shape h_null_author h_underscore h_inherit h_nul h_stagefail h_rowcount h_logincount)
+h_empty() { # M-EMPTY an empty thread, and a thread whose every comment is dropped (null author, bad login shape), is rc 0 with EMPTY stdout in both views: an empty read must never reach the row-split loop
+  local view variant ok=1
+  mkp 'priv-op\tadmin\n'
+  for variant in empty alldropped; do
+    assert_fixture_dir "$SB"
+    if [[ "$variant" == empty ]]; then printf '%s\n' '{"comments":[]}' > "$SB/h.json"
+    else printf '%s\n' '{"comments":[{"author":null,"authorAssociation":"OWNER","body":"RESULT: PASS","createdAt":"'"$T1"'"},{"author":{"login":"a/../b"},"authorAssociation":"OWNER","body":"RESULT: PASS","createdAt":"'"$T2"'"}]}' > "$SB/h.json"; fi
+    for view in trusted_verdict_comments trusted_verdict_bodies; do
+      run_case_raw "$view" 9818 "$SB/h.json" "$SB/pm.tsv"
+      if (( RAW_MISS != 0 )) || [[ "$RAW_RC" != 0 ]] || [[ -s "$SB/raw.out" ]] || [[ "$(nreq perm)" != 0 ]]; then ok=0; fail "M-EMPTY ($variant, $view): want rc 0, empty stdout and no permission request, got rc=$RAW_RC out=[$RAW_OUT] perm-requests=$(nreq perm)"; fi
+    done
+  done
+  (( ok )) && pass "M-EMPTY: an empty thread and a thread with every comment dropped are rc 0 with empty stdout and zero permission requests, in both views"
+}
+h_bodyproj() { # M-BODYPROJ the bodies view's `jq -r .b` projection dying after printing its first record is rc 2 with EMPTY stdout (no prefix); the healthy twin returns both bodies
+  assert_fixture_dir "$SB"
+  mkfailtool "$SB/bin-bodyproj" jq "case \"\$*\" in \"-r .b\") $REAL_JQ \"\$@\" | head -n 1; exit 5 ;; esac; exec $REAL_JQ \"\$@\""
+  mkc "$SB/h.json" priv-op "first" "$T1" priv-op "second" "$T2"; mkp 'priv-op\tadmin\n'
+  local ok=1
+  STUB_BIN="$SB/bin-bodyproj" run_case_raw trusted_verdict_bodies 9818 "$SB/h.json" "$SB/pm.tsv"
+  if (( RAW_MISS != 0 )) || [[ "$RAW_RC" != 2 ]] || [[ -s "$SB/raw.out" ]]; then ok=0; fail "M-BODYPROJ: a projection that prints a record and then fails must be rc 2 with EMPTY stdout, got rc=$RAW_RC out=[$RAW_OUT]"; fi
+  run_case_raw trusted_verdict_bodies 9818 "$SB/h.json" "$SB/pm.tsv"
+  if (( RAW_MISS != 0 )) || [[ "$RAW_RC" != 0 || "$RAW_OUT" != $'first\nsecond' ]]; then ok=0; fail "M-BODYPROJ twin: a healthy jq must return both bodies, got rc=$RAW_RC out=[$RAW_OUT]"; fi
+  (( ok )) && pass "M-BODYPROJ: a bodies projection that dies half way is rc 2 with empty stdout (no prefix), so rc 2 always leaves stdout empty; the healthy twin returns both bodies"
+}
+h_rowextra() { # M-ROWEXTRA the conservation check is two-sided: a split loop that GAINS a row (an injected duplicate) is rc 2 naming stage rowcount, never a longer thread
+  local view ok=1
+  mkc "$SB/h.json" priv-op "S2-ACTIVATED: $T1" "$T1" priv-op "two" "$T1" priv-op "S2-DEACTIVATED: $T2" "$T2"; mkp 'priv-op\tadmin\n'
+  for view in trusted_verdict_comments trusted_verdict_bodies; do
+    INJECT='_rn=0; _prev=; read() { if (( ++_rn == 2 )); then b64="$_prev"; return 0; fi; builtin read "$@"; _rc=$?; _prev="$b64"; return $_rc; }' run_case_raw "$view" 9818 "$SB/h.json" "$SB/pm.tsv"
+    if ! rc2_stage rowcount; then ok=0; fail "M-ROWEXTRA ($view): a split that gains a duplicate row (4 rows for 3 comments) must be rc 2 + empty stdout naming stage rowcount, got rc=$RAW_RC out=[$RAW_OUT] err=[$(head -c 200 "$SB/err.log")]"; fi
+  done
+  (( ok )) && pass "M-ROWEXTRA: rows collected > rows in the input is rc 2 with empty stdout (stage rowcount), in both views: the count check is two-sided"
+}
+h_stageempty() { # M-STAGEEMPTY a decode or an author extraction that EXITS 0 and prints nothing is rc 2 naming THAT stage (not the next one), in both views
+  local ok=1 view spec stage tool body
+  mkc "$SB/h.json" priv-op "S2-ACTIVATED: $T2" "$T2"; mkp 'priv-op\tadmin\n'
+  local -a specs=(
+    "decode|base64|exit 0"
+    "author|jq|case \"\$*\" in *\".[0]\"*) exit 0 ;; esac; exec $REAL_JQ \"\$@\"")
+  for spec in "${specs[@]}"; do
+    stage="${spec%%|*}"; tool="${spec#*|}"; body="${tool#*|}"; tool="${tool%%|*}"
+    mkfailtool "$SB/bin-empty-$stage" "$tool" "$body"
+    for view in trusted_verdict_comments trusted_verdict_bodies; do
+      STUB_BIN="$SB/bin-empty-$stage" run_case_raw "$view" 9818 "$SB/h.json" "$SB/pm.tsv"
+      if ! rc2_stage "$stage"; then ok=0; fail "M-STAGEEMPTY ($view, $stage): a $tool that exits 0 with no output must be rc 2 + empty stdout naming stage $stage, got rc=$RAW_RC out=[$RAW_OUT] err=[$(head -c 200 "$SB/err.log")]"; fi
+    done
+  done
+  (( ok )) && pass "M-STAGEEMPTY: a base64 decode or a jq author extraction that exits 0 with no output is rc 2 naming that stage, in both views"
+}
+h_readonly() { # M-READONLY a readonly memo name is refused with a TRUTHFUL message (it is not a bash-3.2 shell); the unset twin sources cleanly
+  assert_fixture_dir "$SB"
+  local out rc twin trc ok=1
+  out="$(env bash -c 'readonly _TRUSTED_VERDICT_PERM=x; source "$1"; echo "sourced-rc=$?"' _ "${LIB_UNDER:-$LIB}" 2>&1)"
+  if [[ "$out" != *"sourced-rc=2"* || "$out" != *"readonly"* || "$out" == *"no associative arrays"* ]]; then ok=0; fail "M-READONLY: a readonly memo name must be refused (rc 2) naming 'readonly', never the no-associative-arrays text, got [$out]"; fi
+  twin="$(env bash -c 'source "$1"; echo "sourced-rc=$?"' _ "${LIB_UNDER:-$LIB}" 2>&1)"
+  if [[ "$twin" != "sourced-rc=0" ]]; then ok=0; fail "M-READONLY twin: the same source without a readonly name must be silent and rc 0, got [$twin]"; fi
+  (( ok )) && pass "M-READONLY: a readonly _TRUSTED_VERDICT_PERM is refused (rc 2) with a message that says readonly, not 'no associative arrays'; the clean twin sources silently"
+}
+LIB_ROWS=(h_h1 h_h2 h_h3 h_h4_parity h_h4_abs h_h5 h_h6 h_h7 h_h8 h_noslice h_h10 h_crlf h_h11 h_big h_recfail h_fsm h_repo h_case h_login_shape h_null_author h_underscore h_inherit h_nul h_stagefail h_rowcount h_logincount h_empty h_bodyproj h_rowextra h_stageempty h_readonly)
 for _r in "${LIB_ROWS[@]}"; do "$_r"; done
 
 # --- harness integrity: a stub that answers `admin` to EVERYONE must redden the negative rows (the rows can fail) ----------
@@ -737,8 +801,8 @@ mutant_lib m-partial-output  "h_h6" "$RESOLVE"$'\n      return 2' "$RESOLVE"$'\n
   '_trusted_verdict_stage_fail logincount "$issue"; return 2;' 'true;' \
   "    out=\"\${out}\${rec}\"\$${Q}\\n${Q}" \
   "    printf '%s\\n' \"\$body\"; out=\"\${out}\${rec}\"\$${Q}\\n${Q}"
-# EQUIVALENT single edits (measured: each survives every row above, so neither is a mutant on its own): turning the memo guard off alone, or `sort -u` into `cat` alone, each leave exactly one
-# request per distinct author because the OTHER one still deduplicates. Only the two together are a mutant.
+# EQUIVALENT single edits (measured: each survives every row above, so neither is a mutant on its own): turning the memo guard off alone, or the `seen` array (pass 1's distinct-author
+# collector) off alone, each leave exactly one request per distinct author because the OTHER one still deduplicates. Only the two together are a mutant.
 mutant_lib m-no-dedupe       "h_h8" '  if [[ -n "${_TRUSTED_VERDICT_PERM[$key]:-}" ]]; then' '  if false; then' \
   '    if [[ -z "${seen[${author,,}]+x}" ]]; then' '    if true; then'
 mutant_lib m-jq-slice-100     "h_noslice" '        .comments[]' '        .comments[0:100][]'
@@ -770,10 +834,10 @@ mutant_lib m-no-author-select "h_null_author" "$SEL"$'\n' ''
 mutant_lib m-rec-empty-arm   "h_recfail" ' || [[ -z "$rec" ]]; then' '; then'
 BODIES_CALL='  records="$(_trusted_verdict_core "$issue" "$repo")" || return 2
   [[ -n "$records" ]] || return 0
-  printf'
+  # captured'
 mutant_lib m-bodies-repo     "h_repo" "$BODIES_CALL" '  records="$(_trusted_verdict_core "$issue" "jikig-ai/soleur")" || return 2
   [[ -n "$records" ]] || return 0
-  printf'
+  # captured'
 COMMENTS_CALL='  records="$(_trusted_verdict_core "$issue" "$repo")" || return 2
   [[ -n "$records" ]] || return 0
   if ! printf'
@@ -782,8 +846,18 @@ mutant_lib m-comments-repo   "h_repo" "$COMMENTS_CALL" '  records="$(_trusted_ve
   if ! printf'
 mutant_lib m-shape-no-underscore "h_underscore" '[A-Za-z0-9_-]{0,38}' '[A-Za-z0-9-]{0,38}'
 mutant_lib m-inherit-unset   "h_inherit" 'unset _TRUSTED_VERDICT_PERM 2>/dev/null' ':'
-mutant_lib m-no-nul          "h_nul" 'case "$nul" in *true*) _trusted_verdict_stage_fail nul "$issue"; return 2 ;; esac' ':'
-mutant_lib m-no-lonecr       "h_fsm" ' | gsub("\r(?!\n)"; "\n")' ''
+mutant_lib m-no-nul          "h_nul" '_trusted_verdict_stage_fail nul "$issue" "A trusted comment contains a NUL byte; this will not clear on retry: edit that comment."; return 2 ;; esac' ';; esac'
+mutant_lib m-no-lonecr       "h_fsm" 'if contains("\r") then gsub("\r(?!\n)"; "\n") else . end' '.'
+mutant_lib m-lonecr-once     "h_fsm" 'then gsub("\r(?!\n)"; "\n") else' 'then sub("\r(?!\n)"; "\n") else'
+mutant_lib m-rowcount-lt     "h_rowextra" '(( ${#rows[@]} != n_in ))' '(( ${#rows[@]} < n_in ))'
+mutant_lib m-no-raw-guard    "h_empty" '  if [[ -n "$raw" ]]; then
+    while IFS= read -r b64; do' '  if true; then
+    while IFS= read -r b64; do'
+mutant_lib m-bodies-proj-unchecked "h_bodyproj" 'printf x)" || return 2' 'printf x)" || true'
+mutant_lib m-decode-nonempty "h_stageempty" ' && [[ -n "$row" ]]' ''
+mutant_lib m-author-nonempty "h_stageempty" ' && [[ -n "$author" ]]' ''
+mutant_lib m-unset-unchecked "h_readonly" 'if ! unset _TRUSTED_VERDICT_PERM 2>/dev/null; then' 'unset _TRUSTED_VERDICT_PERM 2>/dev/null; if false; then'
+mutant_lib m-nul-wording     "h_nul" ' "A trusted comment contains a NUL byte; this will not clear on retry: edit that comment."' ''
 mutant_lib m-no-rowcount     "h_rowcount" '_trusted_verdict_stage_fail rowcount "$issue"; return 2;' 'true;'
 mutant_lib m-no-logincount   "h_logincount" '_trusted_verdict_stage_fail logincount "$issue"; return 2;' 'true;'
 for _st in strip decode author body created nulcheck; do
@@ -820,16 +894,38 @@ cp "$LIB" "$SB/identity.sh"
 lib_rows_quiet "$SB/identity.sh" "${LIB_ROWS[@]}"
 if (( MUT_REDS == 0 && MUT_CRASHED == 0 )); then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: an unmutated copy of the lib turns no row red over the full row set"
 else fail "harness control: the identity copy turned $MUT_REDS row(s) red (crashed=$MUT_CRASHED): the harness is polluted"; fi
-# the verdict itself: an inert mutant fed through mutant_lib must be REPORTED as a survivor and must make the suite red (counters restored after)
-_p0=$PASS; _f0=$FAIL; _r0=$MUT_RUN; _c0=$MUT_CAUGHT
-assert_fixture_dir "$SB"
-mutant_lib c-inert "h_h2 h_h3" "$PRED" '    admin|maintain|write) return 0; ;;' >"$SB/inert.out"
-_inert_fails=$((FAIL - _f0)); _inert_caught=$((MUT_CAUGHT - _c0))
-PASS=$_p0; FAIL=$_f0; MUT_RUN=$_r0; MUT_CAUGHT=$_c0
-if (( _inert_fails == 1 && _inert_caught == 0 )) && grep -q 'SURVIVED' "$SB/inert.out"; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: an inert mutant is reported SURVIVED and makes the suite red"
-else fail "harness control: an inert mutant was not reported as a survivor (fails=$_inert_fails caught=$_inert_caught)"; fi
-if (( CTRL_OK != 6 )); then fail "harness controls: $CTRL_OK of 6 held"; fi
-if (( MUT_RUN == MUT_CAUGHT && MUT_RUN >= 48 )); then pass "LIB MUTANTS: $MUT_CAUGHT of $MUT_RUN caught"; else fail "LIB MUTANTS: $MUT_CAUGHT of $MUT_RUN caught (every mutant must be caught; floor 48)"; fi
+# the verdict itself: an inert, a PARSE-crashing and an anchor-NOT-LANDED mutant fed through mutant_lib must each be REPORTED as what it is
+# (exactly one failure, nothing counted as caught, the right word in the report); counters are restored after. ctrl_verdict refuses an empty
+# word, and the last control below asserts it can REFUSE (a wrong word must fail it), so deleting the word check from the helper goes red.
+ctrl_verdict() { # <name> <word the report must contain> <rows> <old> <new>
+  local name="$1" word="$2"; shift 2
+  [[ -n "$word" ]] || return 2
+  local p0=$PASS f0=$FAIL r0=$MUT_RUN c0=$MUT_CAUGHT nfail ncaught
+  assert_fixture_dir "$SB"
+  mutant_lib "$name" "$@" >"$SB/ctrl-$name.out"
+  nfail=$((FAIL - f0)); ncaught=$((MUT_CAUGHT - c0))
+  PASS=$p0; FAIL=$f0; MUT_RUN=$r0; MUT_CAUGHT=$c0
+  (( nfail == 1 && ncaught == 0 )) && grep -q -- "$word" "$SB/ctrl-$name.out"
+}
+if ctrl_verdict c-inert SURVIVED "h_h2 h_h3" "$PRED" '    admin|maintain|write) return 0; ;;'; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: an inert mutant is reported SURVIVED and makes the suite red"
+else fail "harness control: an inert mutant was not reported as a survivor"; fi
+if ctrl_verdict c-parse-verdict CRASHED "h_h2 h_h3" "$PRED" "$PRED"$'\n  readonly X=('; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: a PARSE-crashing mutant fed through mutant_lib is reported CRASHED and makes the suite red"
+else fail "harness control: a parse-crashing mutant was not reported as CRASHED through mutant_lib"; fi
+if ctrl_verdict c-nolanding 'did NOT land' "h_h2 h_h3" 'ANCHOR_THAT_IS_NOT_IN_THE_LIB_ZZ' 'x'; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: a mutant whose anchor does not land is reported NOT LANDED and makes the suite red"
+else fail "harness control: a mutant with a missing anchor was not reported as NOT LANDED"; fi
+if ! ctrl_verdict c-wrongword CRASHED "h_h2 h_h3" "$PRED" '    admin|maintain|write) return 0; ;;' && ! ctrl_verdict c-emptyword '' "h_h2 h_h3" "$PRED" '    admin|maintain|write) return 0; ;;'; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: the verdict helper REFUSES a report that lacks the expected word (and an empty word), so its word check cannot be deleted green"
+else fail "harness control: the verdict helper accepted a report without the expected word"; fi
+# CRASH_RE alternatives: one runtime-only mutant per alternative (each parses; only that alternative can flag it)
+mutant_lib_build c-crash-badsub "$PRED" '    admin|maintain|write) _x=a; : "${_x@Z}"; return 0 ;;'
+lib_rows_quiet "$MUT_FILE" h_h2 h_h3
+if (( MUT_LANDED == 1 && MUT_CRASHED == 1 )) && bash -n "$MUT_FILE" 2>/dev/null; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: a mutant that dies on a bad substitution is flagged as crashed (CRASH_RE keeps that alternative)"
+else fail "harness control: the bad-substitution mutant was not flagged (landed=$MUT_LANDED crashed=$MUT_CRASHED)"; fi
+mutant_lib_build c-crash-syntax "$PRED" "    admin|maintain|write) eval '('; return 0 ;;"
+lib_rows_quiet "$MUT_FILE" h_h2 h_h3
+if (( MUT_LANDED == 1 && MUT_CRASHED == 1 )) && bash -n "$MUT_FILE" 2>/dev/null; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: a mutant whose runtime eval dies on a syntax error is flagged as crashed (CRASH_RE keeps that alternative)"
+else fail "harness control: the runtime syntax-error mutant was not flagged (landed=$MUT_LANDED crashed=$MUT_CRASHED)"; fi
+if (( CTRL_OK != 11 )); then fail "harness controls: $CTRL_OK of 11 held"; fi
+if (( MUT_RUN == MUT_CAUGHT && MUT_RUN >= 56 )); then pass "LIB MUTANTS: $MUT_CAUGHT of $MUT_RUN caught"; else fail "LIB MUTANTS: $MUT_CAUGHT of $MUT_RUN caught (every mutant must be caught; floor 56)"; fi
 
 echo ""
 echo "passed=$PASS failed=$FAIL"
@@ -859,7 +955,7 @@ echo "passed=$PASS failed=$FAIL"
 #    meta-guard cannot recognise is indistinguishable from a floor that crashed.
 SELFTEST_PASSES=1
 REAL=$(( PASS - SELFTEST_PASSES ))
-MIN_ASSERTIONS=94
+MIN_ASSERTIONS=112
 if [[ "$REAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity assertion floor: only %d real assertion(s) ran (PASS=%d minus %d self-test), expected >= %d.\n' \
     "$REAL" "$PASS" "$SELFTEST_PASSES" "$MIN_ASSERTIONS" >&2
