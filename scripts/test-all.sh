@@ -237,7 +237,9 @@ _PRINT_SELECTION=0
 # --paths=<a,b,...> (#9307): with --print-selection only, select against THESE paths
 # instead of the real diff -- "what would these files select?". Print-only by
 # construction (--print-selection exits before any suite runs), so it can never
-# narrow a real run's diff.
+# narrow a real run's diff. Elements are normalized at the parse arm (#10117):
+# a leading ./ is stripped to fixpoint, and unclean spellings refuse rc 2 — a
+# bad element must never silently select nothing.
 _PRINT_PATHS=""
 _PRINT_PATHS_REQ=0
 # --affected-scope=branch|staged (#9173): which diff the affected axis selects
@@ -305,7 +307,45 @@ while [[ "${1:-}" == --* ]]; do
       _AFFECTED_REQ=1
       ;;
     --paths=*)
-      _PRINT_PATHS="${1#--paths=}"
+      # Per-element normalize+reject (#10117). The comma-joined list stands in
+      # for a diff-name blob downstream; an unclean element never matches a git
+      # path line — `./x` silently selected nothing, which is a lie in a
+      # diagnostic. Strip a leading `./` run to fixpoint, then refuse (named
+      # error echoing the element + a valid example, rc 2) anything still not a
+      # clean repo-relative path. Rejected shapes: empty elements (a,,b / a
+      # trailing comma / --paths=.), absolute paths, `..` SEGMENTS (substring
+      # `..` is legal name content — foo..bar.sh passes), `//` or `/.`
+      # segments/trails (a/./b; the doubled-head ././x carries one), a trailing
+      # `/` (a dir ref is not a diff path), and TAB/LF bytes (the ingestion
+      # point joins on commas and the edge matcher splits on TAB — either byte
+      # mints fake diff lines). _affected_normpath is deliberately NOT called:
+      # it is defined ~2500 lines below this top-level parse loop, and it
+      # collapses a/../b where this arm rejects.
+      _PRINT_PATHS=""
+      _pp_rest="${1#--paths=},"
+      while [[ -n "$_pp_rest" ]]; do
+        _pp="${_pp_rest%%,*}"
+        _pp_rest="${_pp_rest#*,}"
+        _pp_orig="$_pp"
+        _pp_why=""
+        case "$_pp" in
+          "")                  _pp_why="empty element" ;;
+          /*)                  _pp_why="absolute path" ;;
+          *$'\t'*|*$'\n'*)     _pp_why="TAB/LF byte" ;;
+          *//*)                _pp_why="// segment" ;;
+          */./*|*/.)           _pp_why="/. segment" ;;
+          ..|../*|*/..|*/../*) _pp_why=".. path segment" ;;
+          .|*/)                _pp_why="not a file diff path" ;;
+        esac
+        while [[ "$_pp" == ./* ]]; do _pp="${_pp#./}"; done
+        [[ -z "$_pp" || "$_pp" == . || "$_pp" == ./* ]] \
+          && _pp_why="${_pp_why:-empty after ./ normalization}"
+        if [[ -n "$_pp_why" ]]; then
+          echo "ERROR: --paths element '${_pp_orig}' rejected (${_pp_why}); expected a comma-joined list of clean repo-relative paths, e.g. --paths=scripts/foo.sh,docs/a.md" >&2
+          exit 2
+        fi
+        _PRINT_PATHS+="${_PRINT_PATHS:+,}${_pp}"
+      done
       _PRINT_PATHS_REQ=1
       ;;
     --print-affected-set)
@@ -332,6 +372,9 @@ declines five self-test mutation batteries whose subject the diff does not touch
                         classes and ignores the diff.
   --paths=a,b           with --print-selection: select against these paths instead
                         of the real diff (print-only; never narrows a real run).
+                        Elements normalize (a leading ./ is stripped); unclean
+                        spellings — empty elements, absolute, .. or /. or //
+                        segments, a trailing /, TAB/LF — refuse rc 2.
   --affected-scope=V    diff source for affected selection: branch (default) or
                         staged (the index — what the pre-commit hook gates on).
                         Selects on the INDEX only: committed edits are not in that

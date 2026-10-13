@@ -12,6 +12,7 @@ amended_by:
   - "#9400 (2026-10-01) — the affected-ratchets pre-push lane moves the cheap ratchet net earlier than the local gate (push time, merged tree); the required `test` context remains the merge gate; see ## Amendment — 2026-10-01 (#9400)"
   - "#9813 (2026-10-10) — decision 22: the `glob:<literal-head>/<glob-tail>` declared-edge kind for corpus walkers, the five-site malformed-shape doctrine, and the per-suite dispositions; see ## Amendment — 2026-10-10 (#9813)"
   - "#9814 (2026-10-11) — the local weight-drift detector: TEST_TIMING_LOG defaults on affected-shaped local runs and the epilogue emits advisory WEIGHT_DRIFT lines against committed weights; see ## Amendment — 2026-10-11 (#9814)"
+  - "#10117 (2026-10-13) — decision 27: the root-anchored `glob:` grammar residual is detected, not extended; the extension triggers only on a live dir-less corpus file (#10198); see ## Amendment — 2026-10-13 (#10117)"
 ---
 
 # ADR-242: `test-all.sh` — the local gate defaults to the affected set plus always-on ratchets (#8322)
@@ -732,3 +733,31 @@ Alternatives added by this amendment:
 | Export `WEBPLAT_RELATED` | The #9814 learning's env-scrub class: an exported var leaks into every suite child (a nested runner would inherit the parent's list). `env` per registration is the bounded channel. |
 | Meta-hit = subset of diff under the app | Two meta entries live outside the app (`scripts/lib/test-affected-paths.sh`'s sibling, `test-relevance-paths.sh`) — membership is checked against the whole diff, not only app paths. |
 | Decline the whole feature because `related` misses dynamic imports | The residual is bounded: zero-resolution falls back to full, the meta set covers run-semantics files, and a dynamic-import-only change is already the class of diff a reviewer flags. Accepting a bounded coverage gap buys the measured ~40-60 s per app diff. |
+
+## Amendment — 2026-10-13 (#10117)
+
+Context: decision 22's `glob:<literal-head>/<glob-tail>` edge kind covered every corpus member
+under a directory but stopped at the grammar boundary — a dir-less corpus file at the repository
+root (`x.test.sh`, `x.sh`) has no `<dir>/` head to mint, so no declared edge can cover it and its
+diff would select no corpus suite: a silent hole. The same fix round's review identified two
+further residuals on different surfaces: `--paths` elements were diff-name stand-ins that never
+matched a git path line (`./x` silently selected nothing — a misleading diagnostic), and the th6
+root-coverage census certified a `glob:<root>/` edge by *suffix shape* rather than *matchability*
+(a `sub/*.test.sh` tail ends in `.test.sh` yet reaches nothing beneath the root the corpus scan
+actually enumerates).
+
+27. **The root-anchored `glob:` grammar stays unrepresentable; detection, not extension, is the
+    durable posture.** A dir-less corpus file is detected loudly — the th8 row in
+    `scripts/test-all-affected.test.sh` re-derives the single-component complement of
+    `git ls-files` (`.test.sh` and `.sh`-but-not-`.test.sh` as disjoint classes, with a
+    producer-liveness floor and `_TH_REPO` fixture confinement) and REDs the first battery run
+    carrying one — while the grammar extension is deferred to #10198 and activates only when a
+    live member exists. Until it lands, an author carrying such a file takes the interim
+    recourse: a literal edge or an ALWAYS_ON entry. The decision is *detect now, extend on
+    evidence* — the grammar grows for a member that exists, never for one that might.
+    Companion hardening in the same change: `--paths` elements normalize a leading `./` run to
+    fixpoint at the parse arm and refuse unclean spellings (empty elements, absolute, `..` or
+    `/.` or `//` segments, a trailing `/`, TAB/LF bytes) with a named rc-2 error — a print-only
+    diagnostic that silently selects nothing is a lie; and the th6 census predicate now requires
+    a literal `glob:<root>/` head plus a bare `*<ext>` or `**<ext>` tail, so only an edge that
+    can actually match the corpus class certifies it.
