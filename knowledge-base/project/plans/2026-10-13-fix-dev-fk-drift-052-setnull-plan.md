@@ -56,8 +56,10 @@ and compare-and-set the `_schema_migrations.content_sha` ledger row to main's
     2026-05-19 21:13:16+00`.
   - `public.audit_github_token_use`: **0 rows** (0 with non-NULL founder_id) —
     RESTRICT has not bitten yet; the mu1 suite (#9995) would mint rows.
-  - `pg_depend`: **0 dependent objects** on the constraint — safe to drop and
-    re-create.
+  - `pg_depend`: **0 non-internal dependents** on the constraint (4 rows with
+    `deptype='i'` — the internal RI triggers the constraint itself owns on
+    `audit_github_token_use` and `public.users`; `DROP CONSTRAINT` cascades
+    them automatically). Safe to drop and re-create.
   - `founder_id` is **nullable** (`attnotnull=f`) — SET NULL-compatible; no
     column-nullability drift.
   - Sibling FK `audit_github_token_use_workspace_id_fkey` is `r` — that matches
@@ -220,9 +222,10 @@ doppler run -p soleur -c dev -- bash -c 'psql "${DATABASE_URL_POOLER:-$DATABASE_
   select filename, content_sha from public._schema_migrations \
     where filename = '"'"'052_multi_source_dedup.sql'"'"';
   select count(*) from public.audit_github_token_use;
-  select count(*) from pg_depend d join pg_constraint c on c.oid = d.objid \
+  select count(*) from pg_depend d \
     where d.refobjid = (select oid from pg_constraint \
-      where conname = '"'"'audit_github_token_use_founder_id_fkey'"'"')"'
+      where conname = '"'"'audit_github_token_use_founder_id_fkey'"'"') \
+    and d.deptype <> '"'"'i'"'"'"'
 ```
 
 Gates (checked in order; each failure is a STOP, not a proceed):
@@ -241,8 +244,9 @@ Gates (checked in order; each failure is a STOP, not a proceed):
 - **G4 — `content_sha` non-NULL and ≠ `a14380522d48c1f56b03dcf3e940dd7ae82d082b`
   and ≠ `048013204a426cf4a024d083a57b22367b436b7a`:** a third applied body →
   stop and re-triage against the live catalog before any write.
-- **G5 — `pg_depend` dependents ≠ 0** → reassess the drop (order/cascade); stop
-  if any dependent is unexpected.
+- **G5 — non-internal `pg_depend` dependents ≠ 0** (`deptype <> 'i'`) → reassess
+  the drop (order/cascade); stop if any dependent is unexpected. The 4
+  `deptype='i'` RI triggers the constraint owns are expected and auto-cascade.
 
 (0 rows expected in the table; a nonzero count does NOT gate — SET NULL works
 with data — but record the count in the repair evidence.)
@@ -283,6 +287,9 @@ PostgREST) per the learning.
 Scratch file `$BK/repair-052.sql` (never committed; lives only in /tmp):
 
 ```sql
+-- Lock risk: the re-ADD briefly takes SHARE ROW EXCLUSIVE on hot table
+-- public.users to create/drop its RI triggers; lock_timeout bounds the wait
+-- and fails the unit rather than queue behind other writers.
 SET LOCAL lock_timeout = '30s';
 SET LOCAL statement_timeout = '120s';
 
