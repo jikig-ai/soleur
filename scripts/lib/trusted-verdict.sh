@@ -103,21 +103,44 @@ _trusted_verdict_permission() {
   return 0
 }
 
-# trusted_verdict_bodies <issue-number> [repo]
-#   stdout: the bodies of comments whose author is trusted, oldest-first, with
-#           fenced code blocks stripped so a quoted template cannot arm a probe.
-#   rc 0   = the read succeeded (an EMPTY result means "no trusted verdict yet",
-#            which is a legitimate answer)
-#   rc 2   = TRANSIENT: the comment read or a permission read failed. NOT evidence
-#            of absence.
-trusted_verdict_bodies() {
-  local issue="$1" repo="${2:-jikig-ai/soleur}" raw logins login perm out=""
-  # `.author.login` AND `.body`, tab-joined. A comment with no author cannot be
-  # attributed and is dropped by the `select`, so it can never carry a verdict.
+# _trusted_verdict_is_trusted_perm <permission>
+#   rc 0 = the permission may speak for this repository (admin, maintain, write)
+#   rc 1 = anything else (triage, read, none, ...). The ONE place the trust set is written.
+_trusted_verdict_is_trusted_perm() {
+  case "$1" in
+    admin|maintain|write) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# _trusted_verdict_strip_fences   (stdin -> stdout)
+#   Drops fenced blocks so a quoted template cannot arm a probe. Both fence spellings:
+#   CommonMark allows ``` and ~~~, and stripping only one left the other as a live
+#   channel for a quoted template to arm a probe.
+_trusted_verdict_strip_fences() {
+  awk '/^[[:space:]]*(```|~~~)/ { f = !f; next } !f { print }'
+}
+
+# _trusted_verdict_core <issue-number> <repo>
+#   THE chokepoint: the only place a comment read becomes trusted text. One
+#   `gh issue view --json comments` read (all pages), every distinct author resolved
+#   through `_trusted_verdict_permission` BEFORE anything is emitted, then one JSON
+#   object `{t, b}` per trusted comment, API order: `t` = `createdAt` verbatim (empty
+#   when absent), `b` = the body with fenced blocks stripped.
+#   rc 0 = the read succeeded (empty stdout = no trusted comment)
+#   rc 2 = TRANSIENT: the comment read or a permission read failed; stdout is EMPTY
+#          (output is accumulated and printed once, so a failure never leaves a prefix)
+#   The core does NOT validate `t`: the bodies view does not use it. Call it inside
+#   `$(...)` — the memo lives for the one call, which is all a single read needs.
+_trusted_verdict_core() {
+  local issue="$1" repo="$2" raw logins login perm out=""
+  # `.author.login`, `.body` and `.createdAt`, as one base64 JSON array per comment. A
+  # comment with no author cannot be attributed and is dropped by the `select`, so it
+  # can never carry a verdict.
   if ! raw="$(gh issue view "$issue" --repo "$repo" --json comments --jq '
         .comments[]
         | select((.author.login // "") != "")
-        | [(.author.login), (.body // "")]
+        | [(.author.login), (.body // ""), (.createdAt // "")]
         | @base64' 2>/dev/null)"; then
     return 2
   fi
@@ -137,10 +160,11 @@ trusted_verdict_bodies() {
 
   while IFS= read -r b64; do
     [[ -n "$b64" ]] || continue
-    local pair author body
-    pair="$(printf '%s' "$b64" | base64 -d)"
-    author="$(printf '%s' "$pair" | jq -r '.[0]')"
-    body="$(printf '%s' "$pair" | jq -r '.[1]')"
+    local row author body created
+    row="$(printf '%s' "$b64" | base64 -d)"
+    author="$(printf '%s' "$row" | jq -r '.[0]')"
+    body="$(printf '%s' "$row" | jq -r '.[1]')"
+    created="$(printf '%s' "$row" | jq -r '.[2]')"
     perm="${_TRUSTED_VERDICT_PERM[$author]:-}"
     # An ABSENT memo entry is not a negative answer. Loop 1 above resolves exactly
     # this author set and returns 2 on any failure, so this is unreachable today —
@@ -154,17 +178,26 @@ trusted_verdict_bodies() {
       echo "trusted-verdict: no memoized permission for '${author}' — the resolver did not run for this author. TRANSIENT, not untrusted." >&2
       return 2
     fi
-    case "$perm" in
-      admin|maintain|write) ;;
-      *) continue ;;
-    esac
-    # Drop fenced blocks so a quoted template cannot arm the probe.
-      # Both fence spellings: CommonMark allows ``` and ~~~, and stripping only one
-    # left the other as a live channel for a quoted template to arm a probe.
-  body="$(printf '%s\n' "$body" | awk '/^[[:space:]]*(```|~~~)/ { f = !f; next } !f { print }')"
-    out="${out}${body}"$'\n'
+    _trusted_verdict_is_trusted_perm "$perm" || continue
+    body="$(printf '%s\n' "$body" | _trusted_verdict_strip_fences)"
+    out="${out}$(jq -nc --arg t "$created" --arg b "$body" '{t: $t, b: $b}')"$'\n'
   done <<<"$raw"
 
   printf '%s' "$out"
+  return 0
+}
+
+# trusted_verdict_bodies <issue-number> [repo]
+#   stdout: the bodies of comments whose author is trusted, oldest-first, with
+#           fenced code blocks stripped so a quoted template cannot arm a probe.
+#   rc 0   = the read succeeded (an EMPTY result means "no trusted verdict yet",
+#            which is a legitimate answer)
+#   rc 2   = TRANSIENT: the comment read or a permission read failed. NOT evidence
+#            of absence.
+trusted_verdict_bodies() {
+  local issue="$1" repo="${2:-jikig-ai/soleur}" records
+  records="$(_trusted_verdict_core "$issue" "$repo")" || return 2
+  [[ -n "$records" ]] || return 0
+  jq -r '.b' <<<"$records" || return 2
   return 0
 }
