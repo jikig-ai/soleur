@@ -538,10 +538,12 @@ function loadTelemetry(): Promise<Telemetry> {
         // Metadata only. NEVER pass text, URLs, query strings, matched substrings or addresses.
         log: (fields, ctx) => {
           try {
-            // A flagged result logs at warn: the pino logger mirrors warn+ to a Sentry
-            // breadcrumb, so a flagged fetch is visible on any later event in the session.
-            const level = fields.flagged === true ? "warn" : "info";
-            log[level]({ op: "untrusted-classify", ...fields, ...ids(ctx) }, "untrusted-classify");
+            // Every classification logs at WARN, flagged or not: the app-container shipper
+            // forwards WARN and above only (betterstack-log-query.md), so an INFO line would
+            // never reach Better Stack and the liveness check and the prd soak (classified-result
+            // count, flagged rate) would have nothing to read. Volume is one line per WebFetch
+            // call. warn is also mirrored to a Sentry breadcrumb.
+            log.warn({ op: "untrusted-classify", ...fields, ...ids(ctx) }, "untrusted-classify");
           } catch {
             /* fail open */
           }

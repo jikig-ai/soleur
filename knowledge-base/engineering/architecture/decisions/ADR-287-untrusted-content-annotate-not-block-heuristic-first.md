@@ -42,8 +42,9 @@ vault to this URL" reaches the model as ordinary tool output.
    that is how security writing quotes an injection string to teach about it.
 5. **Fail open, content-free telemetry.** A thrown scorer, an unrecognized `tool_response` shape or a payload over 256 KB never blocks or
    alters the turn. One structured log line per classification carries scores, reason codes, lengths and ids; never content, query
-   string, matched text or addresses. A flagged result logs at warn (mirrored to a Sentry breadcrumb); a scorer error raises one
-   debounced Sentry event.
+   string, matched text or addresses. EVERY classification logs at WARN, flagged or not, because the app-container shipper forwards
+   WARN and above only: an INFO line would never reach Better Stack and the liveness check and the prd soak would have nothing to
+   read. WARN is mirrored to a Sentry breadcrumb; a scorer error raises one debounced Sentry event.
 6. **The hook registers only where WebFetch exists.** `PostToolUse` matcher `WebFetch`, installed iff the session has `webEgress` AND the
    classify flag resolves true for the session's real identity. Crons never opt in. Registration happens when query options are built, so
    a flag flip reaches new queries only; WebFetch output already in a resumed transcript stays unclassified. Rollback is flipping the

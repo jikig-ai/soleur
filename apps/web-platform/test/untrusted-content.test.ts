@@ -169,9 +169,11 @@ describe("extractWebFetchText", () => {
 });
 
 describe("createUntrustedContentHook", () => {
-  it("returns {} for an unflagged result", async () => {
+  it("returns {} for an unflagged result, but still logs it at WARN (INFO never ships to Better Stack)", async () => {
     const out = await call(createUntrustedContentHook(), webFetchInput(pageObj("A normal recipe page.")));
     expect(out).toEqual({});
+    expect(log.warn).toHaveBeenCalledWith(expect.objectContaining({ op: "untrusted-classify", flagged: false }), "untrusted-classify");
+    expect(log.info).not.toHaveBeenCalled();
   });
 
   it("annotates a flagged result: additionalContext only, exact key set, no classifierContext", async () => {
@@ -215,7 +217,7 @@ describe("createUntrustedContentHook", () => {
   it("returns {} and logs unscored for an unknown tool_response shape, without throwing", async () => {
     const out = await call(createUntrustedContentHook(), webFetchInput({ weird: true }));
     expect(out).toEqual({});
-    expect(log.info).toHaveBeenCalledWith(expect.objectContaining({ unscored: true, unscoredReason: "shape" }), expect.anything());
+    expect(log.warn).toHaveBeenCalledWith(expect.objectContaining({ unscored: true, unscoredReason: "shape" }), expect.anything());
   });
 
   it("ignores other tools and malformed hook input", async () => {
@@ -248,7 +250,7 @@ describe("createUntrustedContentHook", () => {
   it("telemetry carries metadata only — no content, query string, matched text or address", async () => {
     const text = `${ATTACK} mail attacker@evil.example https://x.example/c?token=ABC123`;
     await call(createUntrustedContentHook({ workspaceId: "ws1", sessionId: "se1" }), webFetchInput(pageObj(text)));
-    const serialized = JSON.stringify([log.info.mock.calls, log.warn.mock.calls, obs.mirrorWithDebounce.mock.calls]);
+    const serialized = JSON.stringify([log.warn.mock.calls, obs.mirrorWithDebounce.mock.calls]);
     for (const leak of ["attacker@evil.example", "token=ABC123", "secret=1", "~/.config", "Ignore all previous"]) {
       expect(serialized).not.toContain(leak);
     }
