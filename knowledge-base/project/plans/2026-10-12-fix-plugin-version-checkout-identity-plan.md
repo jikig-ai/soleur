@@ -641,7 +641,8 @@ session start of every project.)
   --is-bare-repository`, `git fetch --no-tags origin main:main`, `worktree-manager.sh sync`, `git pull`,
   `claude plugin marketplace update soleur`, `claude plugin update soleur@soleur`, `--plugin-dir` and "HEAD
   commit"; that arm and the Step 2 template line contain no `soleur-marketplace`; the arm precedes the
-  "absent or `soleur-marketplace`" bullet; the `source=unknown` text mentions an unreadable local checkout;
+  marketplace bullets (which apply to `source=manifest` or `source=commit`, with `marketplace` absent or
+  `soleur-marketplace`); the `source=unknown` text mentions an unreadable local checkout;
   `disable-model-invocation: true` is still in the frontmatter.
 - [ ] The Phase 4 sweep command prints only intentionally marketplace-only lines (each listed in the PR);
   each legal canonical and mirror carry byte-identical new sentences; `legal-doc-shas.ts` equals
