@@ -44,41 +44,104 @@
 
 data_dir = "/var/lib/vector"
 
-# ---------------- Source 1: inngest-server journald (unit OR PRIORITY<=4 arm) ----------------
+# ---------------- Source 1: inngest-server journald (unit OR PRIORITY 3-4 arm) ----------------
 # ADMISSION SEMANTICS (#9963 — verified against Vector 0.43.1 src/sources/journald.rs,
 # the version pinned at vector.tf:13): the journald source spawns
 # `journalctl --follow --all --show-cursor --output=json` with NO match arguments —
 # it streams the ENTIRE journal and filters each decoded record client-side
 # (filter_matches / contains_match). contains_match is an OR over ALL record fields:
 # a record is admitted iff ANY of its fields has a value in that field's match set,
-# and `include_units` is merged into include_matches._SYSTEMD_UNIT. So this source
-# admits a row iff:
+# `include_units` is merged into include_matches._SYSTEMD_UNIT, and EVERY
+# `exclude_matches`/`exclude_units` match drops the record BEFORE the include check
+# (excludes win over includes — `exclude_units` merges into
+# exclude_matches._SYSTEMD_UNIT). So this source admits a row iff:
 #
-#   _SYSTEMD_UNIT = inngest-server.service (ANY priority)
-#     OR
-#   PRIORITY ∈ {0,1,2,3,4} (ANY unit, ANY SYSLOG_IDENTIFIER)
+#   ( _SYSTEMD_UNIT = inngest-server.service (ANY priority)
+#       OR
+#     PRIORITY ∈ {3,4} (ANY unit, ANY SYSLOG_IDENTIFIER) )
+#   AND NOT  SYSLOG_IDENTIFIER ∈ <Source 4's exact tag set>
+#   AND NOT  CONTAINER_NAME     ∈ {soleur-web-platform, soleur-egress-gw}
+#
+# PARTITION CONTRACT (#6551 — the semantic fix this file twice assigned to that
+# issue): every journald record reaches Better Stack through AT MOST ONE source.
+# The arm is {3,4} — disjoint from Source 2's {0..2} — and the two
+# exclude_matches maps hand the tagged and container-armed classes back to the
+# sources that own them, closing the three double-admission windows the {0..4}
+# arm created: host CRIT+ (S1∩S2), tagged rows at PRIORITY ≤ 4 (S1∩S4), and
+# container stderr — fd 2 maps to PRIORITY 3 under Docker's journald driver —
+# (S1∩S3/S3b). apps/web-platform/test/infra/vector-admission.test.sh emulates
+# this evaluator over the real match sets and fails CI on any corpus row
+# admitting at multiplicity > 1.
 #
 # Consequences, both measured and pinned:
 #   - The old "INFO+DEBUG (5,6,7) drop at source" claim was FALSE for the unit's own
 #     rows: PRIORITY-6 inngest lines DO ship (OBSERVED — betterstack-logs-alerts.tf:492-496
-#     records the OR behaviour). Only NON-unit rows are priority-capped.
-#   - EVERY host row at PRIORITY <= 4 ships here regardless of unit or identifier.
+#     records the OR behaviour; the unit arm admits ANY priority). Only NON-unit
+#     rows are priority-capped.
+#   - Untagged host rows at PRIORITY 3-4 ship here regardless of unit or identifier;
+#     untagged PRIORITY 0-2 rows ship via Source 2 instead (disjoint windows).
 #     PID-1 `Failed to start` rows (SYSLOG_IDENTIFIER=systemd, PRIORITY 3, UNIT= +
 #     JOB_RESULT=failed) are admitted by this arm and flow
 #     pii_scrub_* -> tag_journald -> sinks.betterstack -> Logs source 2457081. That is
 #     the path that shipped the #9939 storm (~1,240 rows/day) and the path #9963 pins;
 #     SOLEUR_SYSTEMD_JOURNALD_CONTROL (`/usr/bin/logger -t systemd -p err` in
 #     inngest-server-probe.sh, emitted by inngest-bootstrap.sh) is its positive control.
-#   - The `systemd` tag must NEVER join Source 4's exact-tag allowlist either — the
-#     PRIORITY arm already carries the rows that matter, and an exact-tag entry would
-#     also ship every PID-1 PRIORITY-6 Started/Stopped line (the quota trap the Source 4
-#     header names). Same mechanism, different issue: #6551 tracks the semantic fix,
-#     #8875 the emitter-selection rework; both stay open.
+#   - The `systemd` identifier must NEVER join ANY SYSLOG_IDENTIFIER match array in
+#     EITHER direction: an INCLUDE entry (Source 4's allowlist) would also ship
+#     every PID-1 PRIORITY-6 Started/Stopped line — the quota trap the Source 4
+#     header names — and an EXCLUDE entry (the exclude_matches arrays below or on
+#     Source 2) would SILENCE the class entirely, the worse direction. The arms
+#     already carry every systemd row worth shipping. #6551 landed the partition;
+#     #8875 tracks the emitter-selection rework.
 # 0=EMERG, 1=ALERT, 2=CRIT, 3=ERR, 4=WARNING.
 [sources.inngest_journald]
 type = "journald"
 include_units = ["inngest-server.service"]
-include_matches.PRIORITY = ["0", "1", "2", "3", "4"]
+include_matches.PRIORITY = ["3", "4"]
+# #6551 partition mirrors: BOTH exclude sets keep this source's {3,4} arm disjoint
+# from the owners of the overlapping classes. SYSLOG_IDENTIFIER below must equal
+# [sources.host_scripts_journald].include_matches.SYSLOG_IDENTIFIER EXACTLY (a
+# tagged row then ships once via Source 4 instead of double-shipping through the
+# arm); CONTAINER_NAME must equal the union of Sources 3/3b's
+# include_matches.CONTAINER_NAME (container stderr — PRIORITY 3 — then ships once
+# via its container source and traverses app_container_warn_filter as intended).
+# `soleur-web-platform-canary` is DELIBERATELY NOT in the container exclusion:
+# canary stderr has shipped through this arm since #4267 and must keep doing so —
+# the silence direction is worse than over-ship. `systemd` must NEVER join the
+# SYSLOG_IDENTIFIER array (see the header: an exclude silences the class).
+# vector-admission.test.sh asserts both mirrors tokenized set-equality.
+exclude_matches.SYSLOG_IDENTIFIER = [
+  "egress-gw-probe",
+  "infra-config-apply",
+  "infra-config-install",
+  "ci-deploy",
+  "inngest-enumerate-reminders",
+  "inngest-rearm-reminders",
+  "inngest-wiped-volume-verify",
+  "inngest-inventory",
+  "git-lock-chardevice-sweep",
+  "webhook",
+  "inngest-cutover-flip",
+  "inngest-server-flip-guard",
+  "inngest-registry-probe",
+  "inngest-doublefire-probe",
+  "inngest-luks-stage",
+  "inngest-luks-cutover",
+  "inngest-boot-phone-home",
+  "inngest-bs-token-restage",
+  "inngest-heartbeat",
+  "luks-monitor",
+  "workspaces-luks-reopen",
+  "web-zot-consumer-probe",
+  "web-git-data-probe",
+  "web-nic-guard",
+  "inngest-consumer-probe",
+  "inngest-redis",
+  "inngest-nftables",
+  "inngest-server-probe",
+  "sshd",
+]
+exclude_matches.CONTAINER_NAME = ["soleur-web-platform", "soleur-egress-gw"]
 journal_directory = "/var/log/journal"
 batch_size = 16
 
@@ -87,15 +150,64 @@ batch_size = 16
 # the host level. Tighter filter (PRIORITY 0-2) than the inngest source.
 # Same client-side evaluator as Source 1 (#9963): the journald source streams the
 # whole journal and filter_matches admits a record iff
-#   PRIORITY ∈ {0,1,2}  AND NOT  _SYSTEMD_UNIT ∈ {inngest-server.service, vector.service}
-# (includes are OR'd over record fields; excludes then drop on any match).
-# DOUBLE-ADMISSION: PRIORITY {0..2} ⊆ Source 1's {0..4} arm — every non-excluded host
-# CRIT+ row ships TWICE (once per source's own journalctl stream). Documented and
-# counted in the quota arithmetic; the dedupe fix belongs to #6551.
+#   PRIORITY ∈ {0,1,2}
+#   AND NOT  _SYSTEMD_UNIT ∈ {inngest-server.service}
+#   AND NOT  SYSLOG_IDENTIFIER ∈ <Source 4's exact tag set>
+# (includes are OR'd over record fields; excludes then drop on any match —
+# excludes win over includes).
+#
+# PARTITION (#6551): this is now the ONLY admission of untagged PRIORITY 0-2
+# host rows — Source 1's arm is {3,4}, so the old S1∩S2 double-ship (every
+# non-excluded host CRIT+ row paying twice) is closed. The
+# exclude_matches.SYSLOG_IDENTIFIER below mirrors Source 4's tag set verbatim:
+# a tagged crit row (e.g. a `logger -p user.crit` refusal under an S4 tag)
+# ships ONCE via Source 4, so the #7898 off-box refusal path survives through
+# the tag channel rather than double-shipping here. `vector.service` was
+# REMOVED from exclude_units in the same change: its crit rows used to ride
+# Source 1's 0-2 sub-arm, and keeping the exclusion under the narrowed {3,4}
+# arm would have dropped vector.service CRIT rows entirely — the silence
+# direction, worse than over-ship. `systemd` must NEVER join the
+# SYSLOG_IDENTIFIER exclusion (it would silence the PID-1 class; see Source 1's
+# header). vector-admission.test.sh asserts the tag-set mirror verbatim.
 [sources.system_journald]
 type = "journald"
-exclude_units = ["inngest-server.service", "vector.service"]
+exclude_units = ["inngest-server.service"]
 include_matches.PRIORITY = ["0", "1", "2"]
+# #6551 partition mirror — must equal Source 4's
+# include_matches.SYSLOG_IDENTIFIER EXACTLY (asserted tokenized by
+# vector-admission.test.sh). Keep member order aligned with Source 4's array so
+# a human diff stays readable; the assertion is set-equality, not order.
+exclude_matches.SYSLOG_IDENTIFIER = [
+  "egress-gw-probe",
+  "infra-config-apply",
+  "infra-config-install",
+  "ci-deploy",
+  "inngest-enumerate-reminders",
+  "inngest-rearm-reminders",
+  "inngest-wiped-volume-verify",
+  "inngest-inventory",
+  "git-lock-chardevice-sweep",
+  "webhook",
+  "inngest-cutover-flip",
+  "inngest-server-flip-guard",
+  "inngest-registry-probe",
+  "inngest-doublefire-probe",
+  "inngest-luks-stage",
+  "inngest-luks-cutover",
+  "inngest-boot-phone-home",
+  "inngest-bs-token-restage",
+  "inngest-heartbeat",
+  "luks-monitor",
+  "workspaces-luks-reopen",
+  "web-zot-consumer-probe",
+  "web-git-data-probe",
+  "web-nic-guard",
+  "inngest-consumer-probe",
+  "inngest-redis",
+  "inngest-nftables",
+  "inngest-server-probe",
+  "sshd",
+]
 journal_directory = "/var/log/journal"
 batch_size = 16
 
@@ -109,10 +221,19 @@ batch_size = 16
 # The canary container ALSO logs to journald (ci-deploy.sh) but is excluded here
 # as an implicit consequence of exact-value matching: systemd `include_matches`
 # is FIELD=value equality (sd_journal_add_match), not prefix/substring, so
-# `["soleur-web-platform"]` never matches `soleur-web-platform-canary`. Canary
-# journald coverage is intentionally local-only (docker logs), not warehoused —
-# do NOT widen this to a prefix/regex (would double Better Stack quota). A
-# parity fixture in vector-pii-scrub.test.sh pins the exclusion.
+# `["soleur-web-platform"]` never matches `soleur-web-platform-canary`.
+# What that buys the canary is narrower than this comment once claimed ("canary
+# journald coverage is intentionally local-only" — never true): canary STDOUT
+# (PRIORITY 6) indeed ships nowhere — deliberately local-only (docker logs), not
+# warehoused — but canary STDERR lands at PRIORITY 3 and has shipped through
+# Source 1's PRIORITY arm since #4267. The #6551 partition keeps it that way:
+# Source 1's exclude_matches.CONTAINER_NAME omits the canary deliberately, so
+# canary stderr still single-ships via the {3,4} arm — its ONLY warehoused
+# channel — while this source stays excluded. Do NOT widen this to a
+# prefix/regex (would double Better Stack quota), and do NOT add the canary to
+# Source 1's CONTAINER_NAME exclusion (that would silence the channel — the
+# worse direction). A parity fixture in vector-pii-scrub.test.sh pins the
+# exact-name exclusion; vector-admission.test.sh pins the stderr arm admission.
 #
 # NO `include_matches.PRIORITY` filter (deliberate — differs from Sources 1/2):
 # pino writes EVERY level to fd 1 (stdout) with no `destination` configured
@@ -180,13 +301,20 @@ batch_size = 16
 # systemd include_matches is sd_journal_add_match exact-value equality, NOT
 # prefix/regex — a tag typo silently matches nothing).
 #
-# OVERLAP (#9963): a Source-4 tag row at PRIORITY <= 4 (e.g. ci-deploy's user.warning)
-# is ALSO admitted by Source 1's PRIORITY arm — those rows ship twice. Deliberately
-# documented, not fixed (dedupe belongs to #6551); conversely a `systemd` entry here
-# is the named trap — the tag's rows already ship via Source 1's arm at PRIORITY <= 4,
-# and an exact-tag entry would additionally ship every PID-1 PRIORITY-6
-# Started/Stopped line. NEVER add it; journald-config.test.sh + vector-pii-scrub.test.sh
-# pin its absence.
+# PARTITION (#6551 — the fix this file assigned to that issue): a Source-4 tag row
+# at PRIORITY <= 4 (e.g. ci-deploy's user.warning) used to double-admit through
+# Source 1's {0..4} arm, and a tagged CRIT row triple-admitted (Sources 1+2+4).
+# The arm is now {3,4} and BOTH armed sources carry
+# exclude_matches.SYSLOG_IDENTIFIER mirroring this exact tag set, so a tagged row
+# ships ONCE through this source at every priority — verified by
+# vector-admission.test.sh's corpus, not by this comment. Conversely a `systemd`
+# entry here is the named trap — its rows already ship via the PRIORITY arms
+# ({3,4} via Source 1, {0..2} via Source 2), and an exact-tag entry would
+# additionally ship every PID-1 PRIORITY-6 Started/Stopped line. The same verdict
+# holds in the EXCLUDE direction: a `systemd` member of either
+# exclude_matches.SYSLOG_IDENTIFIER mirror would silence the class entirely.
+# NEVER add it to any SYSLOG_IDENTIFIER match array, include or exclude;
+# journald-config.test.sh (9963g/h/m) + vector-pii-scrub.test.sh pin its absence.
 #
 # NO `include_matches.PRIORITY` filter (deliberate — differs from Sources 1/2):
 # these lines are PRIORITY 4-6 (the #6536 inngest-heartbeat channel is PRIORITY 5-6),
@@ -210,7 +338,7 @@ batch_size = 16
 # Steady-state delta is now a real SAVING, where pre-#6617b it was roughly neutral: the
 # `Failed to start` storm this replaced was itself shipping ~1,240 rows/day — via the
 # mechanism this file now names (#9963): those rows carry SYSLOG_IDENTIFIER=systemd at
-# PRIORITY 3 and ride Source 1's include_matches.PRIORITY {0..4} arm (OR over record
+# PRIORITY 3 and ride Source 1's include_matches.PRIORITY {3,4} arm (OR over record
 # fields — any unit, any identifier), NOT this source.
 #
 # Rate-limited, NOT transition-only: what the ~24 buys is best-effort dark-host evidence the
@@ -305,7 +433,7 @@ include_matches.SYSLOG_IDENTIFIER = [
   # unit now sets SyslogIdentifier=inngest-heartbeat (inngest-bootstrap.sh) and this entry
   # ships that channel: BOTH the ping script's own dark-arm row AND the unit's raw
   # doppler/curl stderr. Source 4 is the ONLY viable home — the unit's output is PRIORITY 5-6
-  # (SyslogLevel=info), which Source 1's PRIORITY 0-4 cut drops; this source has no PRIORITY
+  # (SyslogLevel=info), which Source 1's PRIORITY {3,4} arm drops; this source has no PRIORITY
   # filter. Adding it to Source 1 instead is the trap the naive fix falls into.
   "inngest-heartbeat",
   # #6604: the daily LUKS at-rest probe (luks-monitor.timer → luks-monitor.sh, `logger -t
@@ -389,9 +517,10 @@ include_matches.SYSLOG_IDENTIFIER = [
   # registered in vector-pii-scrub.test.sh's SYSTEMD_UNIT_IDENTIFIERS (same mechanism as
   # `webhook`), NOT derivable by AC3 — the two must stay in lockstep.
   "sshd",
-  # DELIBERATELY ABSENT: `systemd` (#9963). PID-1 rows (Failed/Started/Stopped) already
-  # ship through Source 1's include_matches.PRIORITY arm at PRIORITY <= 4 — the exact-tag
-  # entry would add only the PRIORITY 5-6 chatter (every routine unit start/stop), the
+  # DELIBERATELY ABSENT: `systemd` (#9963). PID-1 rows already ship through the
+  # partitioned PRIORITY arms — Failed/CRIT-and-worse via Source 2 at PRIORITY
+  # {0..2}, ERR/WARN via Source 1 at {3,4} — so the exact-tag entry would add only
+  # the PRIORITY 5-6 chatter (every routine unit start/stop), the
   # standing quota cost the header warns against. Registered in vector-pii-scrub.test.sh's
   # PRIORITY_ARM_EXEMPTIONS and pinned absent here by journald-config.test.sh — do NOT add.
 ]
