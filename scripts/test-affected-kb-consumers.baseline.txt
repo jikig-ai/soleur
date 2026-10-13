@@ -120,6 +120,7 @@ scripts/compound-promote	knowledge-base/project/learnings/2026-03-21-kb-migratio
 scripts/compound-promote	knowledge-base/project/learnings/2026-04-14-plan-prescribed-test-framework-not-available.md
 scripts/compound-promote	knowledge-base/project/learnings/2026-05-19-retrieval-diagnostic-findings.md
 scripts/compound-promote	knowledge-base/project/learnings/promotion-log.md
+scripts/compound-promote	knowledge-base/project/plans
 scripts/compound-promote	knowledge-base/project/plans/archive/20261013-014038-2026-05-19-feat-learnings-retrieval-bench-plan.md
 scripts/compound-promote	knowledge-base/project/promotion-config.yml
 scripts/compound-promote	knowledge-base/project/specs/archive/20261013-014038-feat-learnings-retrieval-bench/spec.md
