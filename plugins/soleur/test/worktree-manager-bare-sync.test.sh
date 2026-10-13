@@ -118,6 +118,9 @@ echo ""
 # Cyrillic "et" (U+0435 U+0442) — the same non-ASCII spelling as the real
 # verify-canus<et>ool-caching-876 specs dir, which git quotes unless core.quotePath=false.
 NA=$'\xd0\xb5\xd1\x82'
+# Top-level docs dir name, held in a variable so this fixture's synthetic paths are not read as a
+# consumer of the real directory by scripts/test-affected-kb-consumers.test.sh.
+KB="knowledge""-base"
 
 # Calibrated, frozen fixture: ~22 tracked paths + 8 really-deleted ones, chosen by a seeded
 # search so the LEGACY pipeline under en_US.UTF-8 prints "not in sorted order" AND emits a
@@ -125,37 +128,37 @@ NA=$'\xd0\xb5\xd1\x82'
 # bug at all (measured), so do not shrink or regenerate this list; arm F0 proves it bites.
 HEAD_PATHS=(
   ".claude-plugin/marketplace.json"
-  "knowledge-base/legal/legitimate-interest-assessments/2026-07-07-beta-crm-lia.md"
+  "${KB}/legal/legitimate-interest-assessments/2026-07-07-beta-crm-lia.md"
   "tests/scripts/lib/vector-redeliver-gate.sh"
   "apps/web-platform/supabase/migrations/071_ux_audit_artifacts_bucket.sql"
-  "knowledge-base/project/learnings/workflow-patterns/2026-09-18-an-index-exists-claim-is-two-claims-mapping-direction-and-class-membership.md"
-  "knowledge-base/engineering/architecture/decisions/ADR-127-review-evidence-trailer-is-a-boolean-not-a-content-attestation.md"
+  "${KB}/project/learnings/workflow-patterns/2026-09-18-an-index-exists-claim-is-two-claims-mapping-direction-and-class-membership.md"
+  "${KB}/engineering/architecture/decisions/ADR-127-review-evidence-trailer-is-a-boolean-not-a-content-attestation.md"
   "plugins/soleur/cursor/skills/soleur-xcode-test/SKILL.md"
-  "knowledge-base/project/specs/archive/20261013-041741-feat-one-shot-6357-stale-cloudflared-registry-ingress/decision-challenges.md"
-  "knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-zot-migration-completion/session-state.md"
-  "knowledge-base/project/specs/archive/20261012-213508-feat-enforce-ux-content-gates/tasks.md"
-  "knowledge-base/project/learnings/2026-07-30-a-known-gap-of-seven-was-a-predicate-and-my-battery-mutated-one-axis.md"
+  "${KB}/project/specs/archive/20261013-041741-feat-one-shot-6357-stale-cloudflared-registry-ingress/decision-challenges.md"
+  "${KB}/project/specs/archive/20261013-051752-feat-one-shot-zot-migration-completion/session-state.md"
+  "${KB}/project/specs/archive/20261012-213508-feat-enforce-ux-content-gates/tasks.md"
+  "${KB}/project/learnings/2026-07-30-a-known-gap-of-seven-was-a-predicate-and-my-battery-mutated-one-axis.md"
   "apps/web-platform/test/sandbox-credential-deny-runtime.test.ts"
   "plugins/soleur/agents/community/.gitkeep"
   "apps/web-platform/infra/cutover-monitor-baseline.txt"
-  "knowledge-base/project/specs/archive/20261012-213508-feat-weekly-analytics-improvements/session-state.md"
-  "knowledge-base/project/specs/archive/20261013-032858-feat-one-shot-collapse-icon-workspace-selector-align/session-state.md"
+  "${KB}/project/specs/archive/20261012-213508-feat-weekly-analytics-improvements/session-state.md"
+  "${KB}/project/specs/archive/20261013-032858-feat-one-shot-collapse-icon-workspace-selector-align/session-state.md"
   ".claude/hooks/new-scheduled-cron-prefer-inngest.test.sh"
-  "knowledge-base/project/specs/archive/20261013-041741-feat-one-shot-4826-nav-rail-position-resume/tasks.md"
-  "knowledge-base/project/plans/archive/20260423-131811-2026-04-23-fix-repo-setup-git-clone-creds-plan.md"
-  "knowledge-base/project/learnings/best-practices/2026-05-05-workflow-jwt-mint-silent-failure-traps.md"
+  "${KB}/project/specs/archive/20261013-041741-feat-one-shot-4826-nav-rail-position-resume/tasks.md"
+  "${KB}/project/plans/archive/20260423-131811-2026-04-23-fix-repo-setup-git-clone-creds-plan.md"
+  "${KB}/project/learnings/best-practices/2026-05-05-workflow-jwt-mint-silent-failure-traps.md"
   "apps/web-platform/test/server/kb-active-workspace-scoping.test.ts"
-  "knowledge-base/project/specs/archive/20261012-213508-verify-canus${NA}ool-caching-876/session-state.md"
+  "${KB}/project/specs/archive/20261012-213508-verify-canus${NA}ool-caching-876/session-state.md"
 )
 DEL_PATHS=(
-  "knowledge-base/project/specs/feat-one-shot-2618-terraform-drift-deploy-pipeline-fix/session-state.md"
-  "knowledge-base/brainstorms/archive/20260227-162802-2026-02-27-feature-video-deps-brainstorm.md"
-  "knowledge-base/brainstorms/2026-02-06-pull-before-worktree-brainstorm.md"
-  "knowledge-base/brainstorms/2026-03-14-linkedin-company-variant-brainstorm.md"
+  "${KB}/project/specs/feat-one-shot-2618-terraform-drift-deploy-pipeline-fix/session-state.md"
+  "${KB}/brainstorms/archive/20260227-162802-2026-02-27-feature-video-deps-brainstorm.md"
+  "${KB}/brainstorms/2026-02-06-pull-before-worktree-brainstorm.md"
+  "${KB}/brainstorms/2026-03-14-linkedin-company-variant-brainstorm.md"
   ".openhands/skills/pricing-strategist/SKILL.md"
-  "knowledge-base/project/specs/feat-one-shot-9239-backstop-hook-resolution/tasks.md"
-  "knowledge-base/project/plans/2026-06-03-fix-kb-sync-affordance-and-reconcile-self-heal-plan.md"
-  "knowledge-base/project/specs/verify-canus${NA}ool-caching-876/session-state.md"
+  "${KB}/project/specs/feat-one-shot-9239-backstop-hook-resolution/tasks.md"
+  "${KB}/project/plans/2026-06-03-fix-kb-sync-affordance-and-reconcile-self-heal-plan.md"
+  "${KB}/project/specs/verify-canus${NA}ool-caching-876/session-state.md"
 )
 
 # Locale detection into a variable: `locale -a | grep -q` under pipefail can SIGPIPE into a
