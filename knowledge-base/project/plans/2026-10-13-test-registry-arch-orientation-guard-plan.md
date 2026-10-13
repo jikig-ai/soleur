@@ -14,6 +14,41 @@ brand_survival_threshold: none
 
 # test: prove the registry arch orientation guard durable and pin the precondition the budget script leans on
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-13
+**Sections enhanced:** Scope Check (rewritten to the Phase 2.4 schema), Observability (probe made Check-10 compliant), Phase 2 (exact sed expressions, precedent diff), Guard Contract (reconciled with review cuts).
+**Review inputs:** CTO ruling (4 questions, plus a follow-up), DHH, Kieran and code-simplicity plan reviews, learnings search, sandbox measurements and a scratchpad prototype. A 40-agent fan-out was deliberately not run: the change is one bash suite with a measured baseline, and the gates that matter (4.6 to 4.12) were run mechanically below.
+
+### Key Improvements
+
+1. Scope Check now carries Ask Mapping, Plan-Item Provenance and Split Assessment (the previous single table would have HALTed Phase 4.12).
+2. The Observability `discoverability_test` no longer runs the whole suite (a Check-10 15-second-cap and `*.test.sh` reject); it greps the floor line, which exists before and after the change.
+3. Exact, anchored sed expressions are prescribed for every arm; Kieran found that the unescaped `? "arm64"` form fails under `sed -E` (`Invalid preceding regular expression`), which would have surfaced as SEDERR.
+4. Precedent diff against `git-data-luks.test.sh` `assert_mutation` recorded below.
+
+### New Considerations Discovered
+
+- Kieran confirmed against the tree: `registry_arch` declared at `zot-registry.tf:82` (the only line-start assignment); `hcloud_server.registry` at 442-686; `precondition {` at ~640; the amd64 condition at 641; the arch-enum precondition at 646; R3's assert at `registry-boot-guard.test.sh:422`; floor at line 551. The plan's earlier "15 new / 143 / 138" arithmetic was correct for the pre-cut arm set; it is now 11 new, 139 run, floor 134.
+- The EXIT trap preserves the suite's exit status (exit 1, exit 2 and a fall-through after `[ ... ] || exit 1` all verified).
+
+### Gate results (deepen-plan 4.6 to 4.12, run mechanically)
+
+- 4.6 User-Brand Impact: present, threshold `none` with the required `threshold: none, reason:` bullet (the files sit under `apps/[^/]+/infra/`, which matches the sensitive-path regex).
+- 4.7 Observability: all five fields present; command starts with allowlisted `grep`, no `ssh`, runs in milliseconds; `expected_output` is the literal `MIN_ASSERTIONS=` (verified: the command prints `MIN_ASSERTIONS=123` today).
+- 4.8 PAT-shaped variables: no match.
+- 4.9 UI wireframe: no UI surface; skipped.
+- 4.10 Encryption posture: no `.tf`/migration/cloud-init in Files to Edit and no new store or connection; skipped.
+- 4.11 Guard Contract: `python3 scripts/lint-guard-contract.py` green (2 entries); Assembly names the chokepoint (the single line-start assignment; the scoped resource block), not today's members; matrix rows derived from the property, not from the finished code (the code does not exist yet).
+- 4.12 Scope Check: one unfenced section, three subsections, no `unmapped`, every `inferred` row justified, Recommendation present.
+- 4.55 Downtime: not triggered (test-only change). 4.5 network outage: not triggered.
+- Citations verified live: PR #7325 MERGED (R3 introduced there, `git log -S p_registry_arch_derivation` -> 9005d13a39); #9147 (`1b57de9120`) is the commit that moved the host boot onto the mirror asset (#8714 5.3b-iii; #8714 itself is closed); #10205 OPEN; #7335 OPEN.
+- No AGENTS.md rule IDs are cited in the plan body.
+
+### Precedent diff (Phase 4.4)
+
+Precedent: `git-data-luks.test.sh` `assert_mutation` (line 613) - writes the mutant to a `mktemp` file, fails loud on a sed error (`MUTATION SED FAILED`) and on a non-landing mutation (`MUTATION DID NOT LAND`, via `cmp -s`), then scores `0` from the predicate as a caught mutation. The new `_mutant_verdict` mirrors that contract (SEDERR / NOLAND / RED / GREEN) but returns a verdict string instead of calling the suite's `pass`/`fail`, because `registry-boot-guard.test.sh` scores through `assert()` (which `eval`s a condition string) and has no `pass`/`fail` pair. Differences, deliberate: (1) a scratch dir owned by an EXIT trap instead of per-call `rm -f` (lint rule (c)); (2) a verdict string so the sed expression never passes through `eval`; (3) the baseline assertion (R3 exists; R4 adds its own) is what makes a `0` meaningful. Not shared with the git-data suite because the two suites score differently and `registry-luks.test.sh` already carries its own copy (seventh-copy convention per the code-simplicity review).
+
 ## Overview
 
 Issue #7335 asked for an A16-style orientation test for `local.registry_arch` in `apps/web-platform/infra/zot-registry.tf`, mutation proof that it
@@ -123,21 +158,39 @@ the existing A16/R3 pair is the overlap and is the subject of this plan).
 
 ## Scope Check
 
-| Ask (from the brief) | Mapped to | Provenance |
-|---|---|---|
-| Orientation test modelled on A16 (prefix + both branches, replay set) | R3 already present; extended by T1/T2 arms (keeps its fixture set) | operator-stated |
-| Registered infra suite | `registry-boot-guard.test.sh` (glob-registered, ADR-252) | operator-stated |
-| INVERT and DELETE mutation proof on a sandbox copy; four suites stay green today | Measured in Research Insights; re-run after the change (T4); permanent in-suite arms (T2) | operator-stated |
-| Cover or scope out `doppler_sha256` | Scope out, cite A15 (T3) | operator-stated |
-| Cover or scope out the budget script's amd64 branch | Cover via R4 precondition guard (T2) | operator-stated |
-| Edit no user_data, do not touch `cloud-init-registry.yml` | Files lists below contain neither | operator-stated |
-| Run all registered infra suites | T4 | operator-stated |
-| Smallest fix | One file edited (plus plan artifacts) | operator-stated |
-| PR body items (`Closes #7335`, `Ref #10205`, `## Changelog`, archived plan path, BASELINE re-check) | Ship-phase reminders below | operator-stated |
-| Raise `MIN_ASSERTIONS` | follows from adding assertions to a floor-guarded suite | inferred (mechanically required: the floor must move in lockstep or the new arms are deletable at green; justified by the suite's own comment) |
-| Arch-enum precondition presence arm | none | not added: outside the budget script's dependency (CTO ruling) |
+### Ask Mapping
 
-Split assessment: one concern, one file; no split.
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "add an orientation test for `local.registry_arch` in apps/web-platform/infra/zot-registry.tf, modelled on A16 (`p_arch_derivation`) in apps/web-platform/infra/git-data-luks.test.sh (extract the prefix and both branch values from the line, replay over synthesized types: cax11/21/31/41 -> arm64, ca99 -> amd64 pins the prefix length, cpx22/cx23/ccx13 -> amd64; synthesized fixtures only)" [brief] | R3 already on main (`p_registry_arch_derivation`, same replay table); Phase 2 R3 arms keep it armed | mapped |
+| 2 | "Put it in a registered infra suite (registry-boot-guard.test.sh or a sibling)" [brief] | Files to Edit: `registry-boot-guard.test.sh` | mapped |
+| 3 | "prove with the INVERT and DELETE mutations on a sandbox copy that each now fails where today four suites stay green" [brief] | Research Insights (measured) + Phase 4 step 1 + Phase 2 R3 arms 1-2 | mapped |
+| 4 | "Cover or explicitly scope out the two adjacent consumers: `local.doppler_sha256` and the hardcoded amd64 branch in registry-userdata-budget.sh" [brief] | `doppler_sha256`: scope-out citing A15 (Phase 3); budget script: R4 guard (Phase 2) | mapped |
+| 5 | "EDIT NO user_data and do not touch cloud-init-registry.yml" [brief] | Files lists exclude it; AC pins the diff | mapped |
+| 6 | "Run all registered infra suites." [brief] | Phase 4 step 3 | mapped |
+| 7 | "Smallest fix." [brief] | one edited source file; review cuts applied | mapped |
+| 8 | "PR body: `Closes #7335`, include `Ref #10205` (epic), a `## Changelog` section, cite plan files by ARCHIVED path once archived, re-check BASELINE_DECLARED_PROBES against origin/main before the final push (66 at last check)." [brief] | Acceptance Criteria PR-body items; tasks 4.1-4.3 | mapped |
+| 9 | "Two adjacent consumers are unguarded by the same gap and should be covered or explicitly scoped out" [issue #7335] | same as ask 4 | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| `registry-boot-guard.test.sh` edit | "Put it in a registered infra suite (registry-boot-guard.test.sh or a sibling)" | asked |
+| R3 mutation arms (INVERT, DELETE, WIDEN, must-PASS, NOLAND) | "prove with the INVERT and DELETE mutations on a sandbox copy" (asks 1 and 3) | asked |
+| R4 precondition-presence guard | "Cover or explicitly scope out ... the hardcoded amd64 branch in registry-userdata-budget.sh" | asked |
+| Scope-out of `doppler_sha256` with A15 citation and comment refresh | "Cover or explicitly scope out the two adjacent consumers" | asked |
+| `MIN_ASSERTIONS` raise | — | inferred — justification: the suite's own anti-vacuity floor must move in lockstep with the added assertions or the new arms are deletable at green (the floor comment says so) |
+| WIDEN arm and NOLAND control row | "ca99 -> amd64 pins the prefix length" (WIDEN) | asked (WIDEN); NOLAND control is inferred — justification: without it a sed that matches nothing scores as a caught mutation (the harness failure class in the cited learnings) |
+| `mktemp -d` + EXIT trap in the suite | — | inferred — justification: the arms need a scratch copy of `zot-registry.tf` ("EDIT NO user_data"; the real tree must never be mutated) and `lint-trap-tempfile-ownership` rule (c) requires an owning trap |
+| Run all registered suites; PR-body items | "Run all registered infra suites." / "PR body: `Closes #7335`..." | asked |
+
+### Split Assessment
+
+- Subsystems touched: 1 — apps/web-platform
+- Planned files: 1 source file (plus 3 plan/spec artifacts under knowledge-base) | Estimated changed lines: ~120
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR
 
 ## Files to Edit
 
@@ -192,6 +245,24 @@ line -> RED; COMMENT-OUT the condition line -> RED; RESOURCE-RENAME (the header 
 block) -> RED; must-PASS reformatted equivalent (`condition=local.registry_arch=="amd64" # ok`) -> GREEN. (Review cut, taste: FLIP-to-`arm64` dropped, killed
 by the same exact-string match as DELETE.) Each arm lists its exact sed expression in the work-phase tasks; the NOLAND check catches an expression that
 matches nothing, and the work phase confirms each mutant differs from the original by exactly the intended line (`diff` shows one changed line).
+
+Exact sed expressions (all `sed -E`; a literal `?` MUST be written `\?`, and every expression is anchored to its target line so the `zot_image` selector at
+line 108, the `doppler_sha256` line at 110 and the `error_message` strings are untouched):
+
+| Arm | Expression |
+|---|---|
+| R3 INVERT | `/^[[:space:]]*registry_arch[[:space:]]*=/ s/\? "arm64" : "amd64"/? "amd64" : "arm64"/` |
+| R3 DELETE | `/^[[:space:]]*registry_arch[[:space:]]*=/d` |
+| R3 WIDEN | `/^[[:space:]]*registry_arch[[:space:]]*=/ s/"cax"/"ca"/` |
+| R3 must-PASS | `/^[[:space:]]*registry_arch[[:space:]]*=/ s/ \? "arm64" : "amd64"/?"arm64":"amd64" # reformatted/` |
+| R3 NOLAND control | `s/this-text-is-not-in-the-file/x/` |
+| R4 DELETE | `/^[[:space:]]*condition[[:space:]]*=[[:space:]]*local\.registry_arch[[:space:]]*==[[:space:]]*"amd64"/d` |
+| R4 WEAKEN | `/^[[:space:]]*condition[[:space:]]*=[[:space:]]*local\.registry_arch/ s/local\.registry_arch[[:space:]]*==[[:space:]]*"amd64"/true/` |
+| R4 COMMENT-OUT | `/^[[:space:]]*condition[[:space:]]*=[[:space:]]*local\.registry_arch[[:space:]]*==[[:space:]]*"amd64"/ s/^/# /` |
+| R4 RESOURCE-RENAME | `s/^resource "hcloud_server" "registry" \{/resource "hcloud_server" "registry2" {/` |
+| R4 must-PASS | `/^[[:space:]]*condition[[:space:]]*=[[:space:]]*local\.registry_arch/ s/condition[[:space:]]*=[[:space:]]*local\.registry_arch[[:space:]]*==[[:space:]]*"amd64"/condition=local.registry_arch=="amd64" # ok/` |
+
+All ten expressions above were extracted from this table and run, exactly as written, against a pristine copy of `zot-registry.tf` in the scratchpad (verdicts: INVERT, DELETE, WIDEN, and the four R4 mutations RED; both must-PASS rows GREEN; the NOLAND control NOLAND; each mutant differs by one or two diff lines). The work phase re-runs them in the real suite and confirms each mutant differs from the original by exactly one line.
 
 Assertion count: R3 adds 5, R4 adds 6 (baseline + 4 RED + 1 must-PASS) = **11 new**; current run is 128 against `MIN_ASSERTIONS=123` (slack 5), so
 the floor becomes 134 and the run becomes 139.
@@ -290,16 +361,16 @@ threshold: none, reason: the change adds test assertions to an existing suite an
 
 ```yaml
 liveness_signal:
-  what: the registry-boot-guard suite runs and reports its pass/fail ledger line
-  cadence: every infra-touching PR and push (infra-validation.yml deploy-script-tests, sharded K=4, registered by filesystem glob)
+  what: the registry-boot-guard suite is registered (filesystem glob) and floor-guarded; the in-file MIN_ASSERTIONS anti-vacuity floor is the signal that its assertions actually ran
+  cadence: every infra-touching PR and push (infra-validation.yml deploy-script-tests, sharded K=4, run-registered-suites.sh)
   alert_target: infra-validation required-check status on the PR; main-health-monitor for main
-  configured_in: .github/workflows/infra-validation.yml (run-registered-suites.sh)
+  configured_in: .github/workflows/infra-validation.yml (run-registered-suites.sh) and the MIN_ASSERTIONS line in apps/web-platform/infra/registry-boot-guard.test.sh
 error_reporting:
   destination: CI job log with per-suite `RED <path>` and ::error annotations
   fail_loud: yes - the suite exits 1 on any failed assertion and on the MIN_ASSERTIONS floor
 failure_modes:
   - mode: R3 neutered or an arm silently not landing
-    detection: NOLAND/SEDERR verdicts fail their assertion; floor trips if arms are deleted
+    detection: NOLAND/SEDERR verdicts fail their assertion; the floor trips if arms are deleted
     alert_route: RED suite on the PR
   - mode: precondition deleted from the registry host resource
     detection: R4 baseline assertion
@@ -308,8 +379,8 @@ logs:
   where: GitHub Actions deploy-script-tests leg logs
   retention: GitHub default (90 days)
 discoverability_test:
-  command: bash apps/web-platform/infra/registry-boot-guard.test.sh
-  expected_output: 0 failed
+  command: grep -E "^MIN_ASSERTIONS=" apps/web-platform/infra/registry-boot-guard.test.sh
+  expected_output: MIN_ASSERTIONS=
 ```
 
 ## Domain Review

@@ -13,7 +13,7 @@ Single file edited: `apps/web-platform/infra/registry-boot-guard.test.sh`. Do NO
 
 - [ ] 2.1 Add `MUT_DIR="$(mktemp -d)"` with `trap 'rm -rf "$MUT_DIR"' EXIT` in the same hunk (lint-trap-tempfile-ownership rule (c)); confirm the suite's exit status is unchanged.
 - [ ] 2.2 Add `_mutant_verdict FN SED_EXPR` (SEDERR / NOLAND / RED / GREEN), called outside `assert`.
-- [ ] 2.3 R3 arms: INVERT, DELETE, WIDEN prefix to `ca`, must-PASS reformat, NOLAND control (5 assertions); each sed anchored to the `registry_arch =` declaration line.
+- [ ] 2.3 R3 arms (exact, `\?`-escaped, line-anchored sed expressions are in the plan Phase 2 table): INVERT, DELETE, WIDEN prefix to `ca`, must-PASS reformat, NOLAND control (5 assertions).
 - [ ] 2.4 R4: `p_registry_amd64_only_precondition` (comment-stripped, block-scoped awk) + header comment (amd64-only boot image property; budget script dependency; A15 owns `doppler_sha256`) + baseline + DELETE, WEAKEN-to-true, COMMENT-OUT, RESOURCE-RENAME, must-PASS (6 assertions).
 - [ ] 2.5 Refresh the R2/R3 comment block: remove "still uncovered - #7335", cite A15 and R4.
 - [ ] 2.6 Raise `MIN_ASSERTIONS` 123 -> 134 (run becomes 139) and update the floor comment with the measured count.
