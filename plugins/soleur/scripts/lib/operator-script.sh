@@ -1033,6 +1033,28 @@ soleur_op_env_commit() {
   chmod 600 "$env_file"
 }
 
+# soleur_op_has_control_char <value>
+#   Success when the value holds ANY control character: the C0 set (tab, ESC,
+#   the bell ...), DEL, and — the two the line-break check below already names —
+#   CR and LF. The class is evaluated under `local LC_ALL=C` so the verdict is
+#   BYTE-based and does not depend on the caller's locale (a bare `LC_ALL=C`
+#   assignment would leak into the sourcing caller; `local` cannot). Under C only
+#   the 0x00-0x1f and 0x7f bytes are control characters, so a UTF-8 credential is
+#   judged the same in every locale.
+#
+#   U+0085 (NEL), U+2028 and U+2029 are deliberately NOT refused, and that is
+#   stated rather than assumed: they are the Unicode "line" separators, but the
+#   sink here is a file read by `grep -a '^KEY='` and by the generated scripts'
+#   byte-oriented `read`/`source`, none of which treats them as a line end — only a
+#   consumer that Unicode-splits lines (a Python `splitlines`, a JS regexp `$`
+#   with `m`) would, and no consumer of this file does. Refusing them would also
+#   reject legitimate non-ASCII credentials. The ledger, a JSON sink that DOES care,
+#   strips them in its own writer.
+soleur_op_has_control_char() {
+  local LC_ALL=C
+  [[ "$1" == *[[:cntrl:]]* ]]
+}
+
 # soleur_op_env_upsert <env-file> <KEY> <value>
 #   ATOMIC: the new `KEY=value` line is appended to the temp file BEFORE the
 #   `mv`, so there is no instant at which the key is absent from the .env (the
@@ -1044,6 +1066,13 @@ soleur_op_env_upsert() {
   soleur_op_validate_key "$key" || return 1
   if [[ "$value" == *$'\n'* || "$value" == *$'\r'* ]]; then
     printf 'SOLEUR_BOOTSTRAP_BAD_ARG key=%s reason=value-contains-line-break\n' "$key"
+    return 1
+  fi
+  # Any OTHER control character (tab, ESC, DEL ...): a value written raw as `KEY=value`
+  # must stay one printable line. The marker names the KEY (already validated to the
+  # identifier alphabet) and never the value.
+  if soleur_op_has_control_char "$value"; then
+    printf 'SOLEUR_BOOTSTRAP_BAD_ARG key=%s reason=value-contains-control-char\n' "$key"
     return 1
   fi
   env_file="$(readlink -f -- "$env_file" 2>/dev/null || printf '%s' "$env_file")"

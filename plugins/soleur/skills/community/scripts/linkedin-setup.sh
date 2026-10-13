@@ -496,6 +496,130 @@ _wenv_validate() {
   done
 }
 
+# (#10091) write-env commit: ONE helper, byte-identical in the four setup scripts (a drift row pins
+# it). `_wenv_write <env_file> <remove-ERE> <KEY=VALUE>...` replaces the old remove-then-append, which
+# raced (two writers each read the file, each rewrote it, the later mv lost the earlier's keys), was
+# not atomic (the append hit the live file after the mv) and widened a new file before the chmod.
+# The edit is built in a temp file beside the RESOLVED .env (same filesystem, so the final `mv -f` is
+# one atomic rename) under `umask 077` (0600 from birth), serialized by ONE mutual-exclusion
+# mechanism on every platform: an owner-pid `mkdir` lock directory (`<.env>.lock.d`). No flock (a
+# flock run and a mkdir run exclude nothing against each other, flock without a timeout blocks
+# forever, and `exec {fd}<` needs bash 4.1 while macOS ships 3.2). A lock whose owner pid is dead is
+# recovered by an atomic `mv` to a unique name (only one waiter wins the rename; a claim that turns
+# out to hold a LIVE owner is put back), never rmdir-then-mkdir. The wait is bounded (about 10 s,
+# SOLEUR_WENV_LOCK_TICKS x 0.1 s) and FAILS CLOSED: no write, a value-free marker, exit 1, .env
+# untouched. grep exit 1 (nothing left) is normal; exit 2 (an unreadable .env) aborts, because
+# swallowing it would install an empty file over the credentials. A symlinked .env is resolved first
+# (the real target is rewritten, the link survives); a dangling link or a non-regular target is
+# refused. The lock, the temp and the claim are released on EXIT INT TERM HUP. Residual, stated: a
+# SIGKILL leaves its lock (recovered by the next run via the dead pid) and its temp (swept by the next
+# run, under the lock); a recycled pid can keep a dead owner looking live until the wait times out;
+# the owner check uses `kill -0`, so a lock held by another user reads as dead.
+_WENV_LOCK="" _WENV_TMP=""
+_wenv_unlock() { # idempotent: remove our temp, release the lock only if it is still ours
+  local _wo=""
+  if [[ -n "$_WENV_TMP" ]]; then rm -f -- "$_WENV_TMP"; _WENV_TMP=""; fi
+  if [[ -n "$_WENV_LOCK" ]]; then
+    { read -r _wo < "$_WENV_LOCK/owner"; } 2>/dev/null || _wo=""
+    if [[ -z "$_wo" || "$_wo" == "$$" ]]; then rm -rf -- "$_WENV_LOCK"; fi
+    _WENV_LOCK=""
+  fi
+}
+_wenv_fail() { # <reason> <human text>: value-free marker on stderr, one human line on stdout, exit 1
+  printf 'SOLEUR_CREDENTIAL_REFUSED script=%s reason=%s var=ENV_FILE phase=write-env\n' "$SOLEUR_TRANSPORT_SCRIPT" "$1" >&2
+  echo "Error: $2 Nothing was written and your existing .env is unchanged."
+  exit 1
+}
+_wenv_write() {
+  local _wf="$1" _wre="$2" _wr _wl _wd _wi=0 _wk=0 _ws=0 _wt _wown _wp _wc _wrc _wn _wum
+  shift 2
+  if _wr="$(readlink -f -- "$_wf" 2>/dev/null)" && [[ -n "$_wr" ]]; then
+    :
+  elif [[ -L "$_wf" ]]; then
+    _wenv_fail env_unresolvable "The .env link at ${_wf} could not be resolved."
+  else
+    _wr="$_wf"
+  fi
+  if [[ -L "$_wf" && ! -e "$_wr" ]]; then
+    _wenv_fail env_dangling_link "The .env at ${_wf} is a link to a file that does not exist."
+  fi
+  if [[ -e "$_wr" && ! -f "$_wr" ]]; then
+    _wenv_fail env_not_regular "The .env at ${_wf} is not a regular file."
+  fi
+  _wl="${_wr}.lock.d"
+  _wt="${SOLEUR_WENV_LOCK_TICKS:-100}"
+  [[ "$_wt" =~ ^[0-9]{1,4}$ ]] || _wt=100
+  _wum="$(umask)"
+  umask 077
+  trap '_wenv_unlock' EXIT
+  trap '_wenv_unlock; exit 130' INT
+  trap '_wenv_unlock; exit 143' TERM
+  trap '_wenv_unlock; exit 129' HUP
+  while :; do
+    if mkdir -- "$_wl" 2>/dev/null; then
+      _WENV_LOCK="$_wl"
+      printf '%s\n' "$$" > "$_wl/owner" || _wenv_fail env_write_failed "The lock at ${_wl} could not be recorded."
+      break
+    fi
+    _wk=$((_wk + 1))
+    if (( _wk > 1000 )); then
+      _wenv_fail env_lock_timeout "Another write-env run holds the lock at ${_wl}; gave up. If no other run is active, remove that directory."
+    fi
+    if [[ ! -d "$_wl" ]]; then
+      _wd="${_wr%/*}"; [[ "$_wd" != "$_wr" ]] || _wd=.
+      [[ -d "$_wd" && -w "$_wd" ]] || _wenv_fail env_dir_unwritable "The directory of ${_wf} does not allow a lock to be created."
+      continue
+    fi
+    _wown=""
+    { read -r _wown < "$_wl/owner"; } 2>/dev/null || _wown=""
+    _wc=0
+    if [[ "$_wown" =~ ^[0-9]+$ ]]; then
+      _ws=0
+      if [[ "$_wown" == "$$" ]] || ! kill -0 "$_wown" 2>/dev/null; then _wc=1; fi
+    else
+      _ws=$((_ws + 1))
+      if (( _ws > 30 )); then _wc=1; fi
+    fi
+    if (( _wc == 1 )); then
+      if mv -- "$_wl" "${_wl}.stale.$$.${_wk}" 2>/dev/null; then
+        _wp=""
+        { read -r _wp < "${_wl}.stale.$$.${_wk}/owner"; } 2>/dev/null || _wp=""
+        if [[ "$_wp" == "$_wown" ]] || { [[ "$_wp" =~ ^[0-9]+$ ]] && ! kill -0 "$_wp" 2>/dev/null; }; then
+          rm -rf -- "${_wl}.stale.$$.${_wk}"
+        elif [[ ! -e "$_wl" ]] && mv -- "${_wl}.stale.$$.${_wk}" "$_wl" 2>/dev/null; then
+          :
+        else
+          rm -rf -- "${_wl}.stale.$$.${_wk}"
+        fi
+      fi
+      continue
+    fi
+    _wi=$((_wi + 1))
+    if (( _wi >= _wt )); then
+      _wenv_fail env_lock_timeout "Another write-env run holds the lock at ${_wl}; waited and gave up. If no other run is active, remove that directory."
+    fi
+    sleep 0.1 2>/dev/null || sleep 1
+  done
+  for _wn in "${_wr}".tmp.??????; do
+    if [[ -f "$_wn" && ! -L "$_wn" && -O "$_wn" ]]; then rm -f -- "$_wn"; fi
+  done
+  _WENV_TMP="$(mktemp "${_wr}.tmp.XXXXXX")" || _wenv_fail env_write_failed "A temp file could not be created beside ${_wf}."
+  if [[ -f "$_wr" ]]; then
+    _wrc=0
+    LC_ALL=C grep -a -v -E "$_wre" "$_wr" > "$_WENV_TMP" || _wrc=$?
+    if (( _wrc > 1 )); then
+      _wenv_fail env_unreadable "The existing .env at ${_wf} could not be read."
+    fi
+  fi
+  printf '%s\n' "$@" >> "$_WENV_TMP" || _wenv_fail env_write_failed "The new values could not be written beside ${_wf}."
+  chmod 600 "$_WENV_TMP" || _wenv_fail env_write_failed "The temp file beside ${_wf} could not be restricted to mode 600."
+  mv -f -- "$_WENV_TMP" "$_wr" || _wenv_fail env_write_failed "The new .env could not be moved into place at ${_wf}."
+  _WENV_TMP=""
+  _wenv_unlock
+  trap - EXIT INT TERM HUP
+  umask "$_wum"
+}
+
 cmd_write_env() {
   local repo_root
   repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
@@ -516,32 +640,12 @@ cmd_write_env() {
   # Every value is checked BEFORE the first write (see the allow-list above).
   _wenv_validate LINKEDIN_CLIENT_ID LINKEDIN_CLIENT_SECRET LINKEDIN_ACCESS_TOKEN LINKEDIN_PERSON_URN
 
-  # Remove existing LINKEDIN_ vars if .env exists
-  if [[ -f "$env_file" ]]; then
-    local tmp
-    tmp=$(mktemp) || { echo "Error: Failed to create temp file." >&2; exit 1; }
-    # Owning trap (ADR-129): mv consumes $tmp on success, so the rm is a no-op
-    # on that path — it covers every early return between alloc and mv. The
-    # handler self-disarms first: a RETURN trap is not function-scoped, so a
-    # live copy would re-fire on every later function return in this shell.
-    trap 'trap - RETURN; rm -f "$tmp"' RETURN
-    grep -v '^LINKEDIN_' "$env_file" > "$tmp" || true
-    # A `set -e` exit on mv failure would skip the RETURN trap — the alloc
-    # loses its only cleanup, so rm it inline on that path too.
-    mv "$tmp" "$env_file" || { rc=$?; rm -f "$tmp"; exit "$rc"; }
-  fi
-
-  # Set restrictive permissions BEFORE writing secrets
-  touch "$env_file"
-  chmod 600 "$env_file"
-
-  # Append LinkedIn vars
-  {
-    echo "LINKEDIN_CLIENT_ID=${LINKEDIN_CLIENT_ID}"
-    echo "LINKEDIN_CLIENT_SECRET=${LINKEDIN_CLIENT_SECRET}"
-    echo "LINKEDIN_ACCESS_TOKEN=${LINKEDIN_ACCESS_TOKEN}"
-    echo "LINKEDIN_PERSON_URN=${LINKEDIN_PERSON_URN}"
-  } >> "$env_file"
+  # One atomic, serialized, mode-600-from-birth write (see _wenv_write above).
+  _wenv_write "$env_file" '^LINKEDIN_' \
+    "LINKEDIN_CLIENT_ID=${LINKEDIN_CLIENT_ID}" \
+    "LINKEDIN_CLIENT_SECRET=${LINKEDIN_CLIENT_SECRET}" \
+    "LINKEDIN_ACCESS_TOKEN=${LINKEDIN_ACCESS_TOKEN}" \
+    "LINKEDIN_PERSON_URN=${LINKEDIN_PERSON_URN}"
 
   echo "Wrote 4 variables to ${env_file} (permissions: 600)" >&2
 }
