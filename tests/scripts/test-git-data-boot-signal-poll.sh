@@ -604,6 +604,11 @@ if grep -qF "DOPPLER_TOKEN=<unset> AWS_SECRET_ACCESS_KEY=<unset>" "$d/env"; then
 else _report "S23f the reader runs with no Doppler or R2 credential in its environment" bad "env: $(cat "$d/env")"; fi
 in_step "$d" "git_data_boot_complete_dt_read relative.out '$SANDBOX/e' && echo DT_RC=0 || echo DT_RC=\$?" >/dev/null
 have    "S23g a relative stdout target is refused (rc 78)"        "DT_RC=78"
+in_step "$d" "git_data_boot_complete_dt_read '$SANDBOX/s23.out' relative.err && echo DT_RC=0 || echo DT_RC=\$?" >/dev/null
+have    "S23g2 a relative stderr target is refused (rc 78) and names its caller" "DT_RC=78"
+have    "S23g3 the refusal carries the caller's own label"         "git_data_boot_complete_dt_read: refusing a relative stderr target"
+in_step "$d" "_git_data_bs_read lbl no_such_sql_fn '$SANDBOX/s23.out' '$SANDBOX/s23.err' && echo H_RC=0 || echo H_RC=\$?" >/dev/null
+have    "S23g4 the shared helper refuses an unknown sql function (rc 78)" "H_RC=78"
 # The pure verdicts. fresh() runs the freshness verdict and prints "<token>/<rc>".
 fresh() { in_step "$d" "t=\$(git_data_boot_complete_freshness '$1' '$2') && r=0 || r=\$?; echo \"V=\$t/\$r\"" >/dev/null; sed -n 's/^V=//p' "$SANDBOX/out"; }
 for _row in \
@@ -656,10 +661,11 @@ _total=$((pass + fail))
 #    38
 # RAISED 184 -> 185 (#5274): S20i, plaintext_journal=clean does not gate the poll.
 # RAISED 185 -> 186 (#9677): S22, the library's gdboot scratch lands under the suite sandbox.
+# RAISED 213 -> 216 (#10175 review): S23g2/g3 relative stderr target and its label, S23g4 the shared helper refuses an unknown sql function.
 # RAISED 186 -> 213 (#10175), ITEMISED: 7 S23a-g the freshness read's SQL, pins, credential route and
 #     relative-target refusal; 11 S23h-r the freshness verdicts (strict boundary both sides, unreadable arms,
 #     newest row decides); 9 S23s-za the Hetzner created parse (one server only, decoy, key order).
-_EXACT=213
+_EXACT=216
 if (( _total != _EXACT )); then
   printf 'FAIL: assertion count: %d ran, expected exactly %d — coverage changed; update _EXACT deliberately\n' "$_total" "$_EXACT" >&2
   exit 1

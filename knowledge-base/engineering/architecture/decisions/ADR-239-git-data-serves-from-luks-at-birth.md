@@ -471,8 +471,9 @@ may hold the only copy of the replicated repositories, and the rotate's emptines
 a flipped store never refreshes. The guard reads run records, not the flag and not the cutover stamp (the stamp
 survives a rollback, and rollback is flag-off only, so a rollback does not make the store clean). It needs no prd
 Doppler token in the apply workflow (alternative G above stands). It proves the history is complete by pinning two
-post-seam runs that must stay listed: run records expire after 90 days, so the guard fails closed once they expire
-until a PR re-baselines the pins. A second layer requires the newest `boot_complete` row to be newer than the current
+post-seam runs that must stay listed and readable: run records can be deleted (the retention horizon is unknown: run
+records 196 days old are still listed today) and GitHub strips step lists at about 170 days, so the guard fails closed
+by about 2027-03-18 at the latest until a PR re-baselines the pins. A second layer requires the newest `boot_complete` row to be newer than the current
 server's creation. Ruled by CTO agent, 2026-10-13 (CPO sign-off with conditions; CLO: no Art. 17/32 conflict while it
 guards only the automated rotate, with a key-compromise break-glass).
 

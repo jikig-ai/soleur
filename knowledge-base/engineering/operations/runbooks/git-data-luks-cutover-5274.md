@@ -196,8 +196,9 @@ erasure working); the rehearsal is dispatched only on the user's per-step author
 **Never dispatch the rotate after the flip, or after any run that executed the flag-write step.** From the first
 `flip` the LUKS volume may hold the only copy of the replicated repositories, and a rotate destroys it. The rule for
 an operator is: dispatch a rotate only if no run of `git-data-cutover.yml` executed the `Write GIT_DATA_STORE_ENABLED`
-step (any conclusion other than skipped, in any attempt); if the guard refuses with `store_dirty`,
-`cutover_in_flight` or `scan_unreadable`, do not dispatch again and escalate on #10175 and #8571. A flip that was
+step (any conclusion other than skipped, in any attempt). If the guard refuses with `store_dirty`, do not dispatch
+again and escalate on #10175 and #8571; with `cutover_in_flight`, wait for that run and re-dispatch once; with
+`scan_unreadable`, re-dispatch at most once and then stop and escalate. A flip that was
 refused at a precondition, a `mode=proof` run and a rehearsal that never reached the write step leave the store
 clean, and the rotate stays allowed. The apply workflow enforces the rule (#10175): the step `Rotate precondition —
 store never written (cutover run records)` refuses the rotate once any attempt of any `git-data-cutover.yml` run
@@ -255,29 +256,35 @@ front of it. A rotate that is refused here has no in-workflow exit (below). A `d
 after a flip attempt (the stamped rotate aged out of the 100-run window) is a deadlock the guard cannot resolve by
 dispatch; the durable rotate stamp is tracked in #10216.
 
-The same history can fail closed for age, not for a flip: run records are kept 90 days on this public repository, and
-a job's step list is stripped from run records older than about 170 days, so a step-less job record cannot be reached
-while retention stays at 90 (revisit that if retention is raised).
-
 ### Re-baselining the pinned runs (#10175)
 
-The scan proves the history is complete by requiring two post-seam runs to still be listed as `completed`
-(`GDSD_PINNED_RUNS` in `scripts/lib/git-data-store-dirty-scan.sh`: `36685251588` from 2026-09-30 and `37823216637`
-from 2026-10-08). Run records expire after 90 days and `total_count` shrinks with them, so without that proof an
-expired flip would read clean. The oldest pin expires about **2026-12-29**; the scan prints a `::warning::` once the
-oldest pin is older than 60 days, and tracker #10216 carries a calendar item for 2026-12-01. After expiry the rotate
-guard refuses with `scan_unreadable pinned_run_missing` until the pins move. To re-baseline: while the old pin is
-still listed, run
+The scan proves the history is complete by requiring two post-seam runs to still be listed as `completed` and their
+step lists readable (`GDSD_PINNED_RUNS` in `scripts/lib/git-data-store-dirty-scan.sh`: `36685251588` from 2026-09-30
+and `37823216637` from 2026-10-08). Run records can be deleted and `total_count` shrinks with them, so without that
+proof a deleted flip would read clean. Two measured facts set the horizon (2026-10-13, read-only API): run records
+are still listed at 196 days although the artifact-and-log retention setting reads 90 days, so the deletion horizon is
+unknown and not relied on; and GitHub strips a job's step list at about 170 days, after which a step-less post-seam
+job reads `unreadable`. The scan therefore turns closed by about **2027-03-18** at the latest (170 days after the
+oldest pin), earlier if a pin is deleted. It prints a `::warning::` once the oldest pin is more than 120 days old, but
+only while a rotate is dispatched, so the real early warning is the tracker #10216 calendar item for **2026-12-01**.
+To re-baseline: while the old pins are still listed and readable, run
 `GITHUB_REPOSITORY=jikig-ai/soleur bash -c 'source scripts/lib/git-data-store-dirty-scan.sh; git_data_store_dirty_list | git_data_store_dirty_scan'`
 and require `store_clean`; then open a PR that sets `GDSD_PINNED_RUNS` to two newer completed runs of
-`git-data-cutover.yml` (dispatch a `mode=proof` run if none is newer than the seam) and updates the same ids here.
-After a flip the scan is dirty for good, so the pins can no longer be moved and the only exits are the break-glass
-below or the live emptiness proof (#10211).
+`git-data-cutover.yml` (dispatch a `mode=proof` run if none is newer than the seam), and update the two run ids in
+`plugins/soleur/test/terraform-target-parity.test.ts` only if its derived constants moved (they are read from the
+library). **If the window is missed** (the guard already reports `pinned_run_missing`), the history can no longer be
+proven complete from run records: the only exits are an owner attestation PR (owner and CLO reviewing) that moves the
+pins and states, with evidence (the Doppler `GIT_DATA_STORE_ENABLED` value is not `true`, and no `git_data_store=`
+readback of `enabled` in Better Stack since the last pin), that no flip happened in the gap; or the live emptiness
+proof (#10211). After a flip the scan is dirty for good, so the pins can no longer be moved.
 
 **Owner action after the #10175 PR merges:** a "Re-run failed jobs" on a rotate run that predates the guard executes
 the OLD workflow, which has no guard. Delete those run records so nothing can be re-run:
-`gh run delete 38140050880`, `gh run delete 38383684022`, `gh run delete 38384137515` (none carries the d6 marker,
-so the d6 stamp is unaffected).
+`gh run delete 38140050880`, `gh run delete 38383684022`, `gh run delete 38384137515`. None carries the d6 marker, so
+no stamp is lost, but the deletion DOES change the flip gate's reading: while run 38384137515 (a failed rotate
+attempt) is the newest rotate record, `d6_last_rotate_failed` blocks the flip and an older success cannot override it;
+once it and 38140050880 are deleted the gate reads `d6_replace_stale` (no stamped rotate), and a fresh rotate on the
+never-flipped store is the next step. Deleting only one of the two failed attempts leaves the other blocking.
 
 ### When a rotate is needed after the flip (#10175)
 

@@ -143,6 +143,7 @@ SQL
 # credential scope, one redirect site, so the two reads cannot drift in how they are pinned.
 _git_data_bs_read() {
   local label="$1" sqlfn="$2" outfile="$3" errfile="$4" reader
+  declare -F "$sqlfn" >/dev/null || { printf '%s: unknown sql function: %s\n' "$label" "$sqlfn" >&2; return 78; }
   case "$outfile" in /*) : ;; *) printf '%s: refusing a relative stdout target: %s\n' "$label" "$outfile" >&2; return 78 ;; esac
   case "$errfile" in /*) : ;; *) printf '%s: refusing a relative stderr target: %s\n' "$label" "$errfile" >&2; return 78 ;; esac
   reader="$(bs_absence_query_script)"

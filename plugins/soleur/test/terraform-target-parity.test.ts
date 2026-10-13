@@ -91,8 +91,7 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 // 278 -> 276 (#9372 retirement): the declared count was 279 (floor 278, one row loose); the single-use rebirth workflow's five-target describe (three tests) retired with the workflow and the G2 test was rewritten in place, so 279 - 3 = 276.
 // Exact again: grep -cE '^\s*test\(' = 276.
 // 276 -> 279 (#10166, +3): the d6 rotate marker / flip gate wiring describe (real-tree pins, twelve-mutant battery, the executed gate block). The 2 rows of slack were already there (declared 278 vs floor 276 on main).
-// 283 -> 286 (#10175 review, +3): the flag-seam credential enumeration and the two executed-step tests.
-// 279 -> 283 (#10175, +4): the rotate's store-never-written gate describe (real-tree pins, thirteen-mutant battery, the no-other-flag-writer scan, the census pin). The 2 rows of slack above are unchanged (declared 285).
+// 279 -> 286 (#10175, +7): the rotate's store-never-written gate describe (real-tree pins, the wiring mutation battery, the no-other-flag-writer scan, the flag-seam credential enumeration, the census pin, and the two executed-step tests). The 2 rows of slack above are unchanged (declared 288).
 const TEST_FLOOR = 286;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
@@ -8097,8 +8096,10 @@ describe("the rotate's store-never-written gate (#10175)", () => {
     if (!run) throw new Error(`step not found: ${name}`);
     return run;
   };
-  const PIN_A = "36685251588";
-  const PIN_B = "37823216637";
+  const PINS = libText.match(/^readonly GDSD_PINNED_RUNS="(\d+) (\d+)"$/m);
+  if (!PINS) throw new Error("GDSD_PINNED_RUNS is not two run ids in the library");
+  const PIN_A = PINS[1];
+  const PIN_B = PINS[2];
   const WRITE_STEP = "Write GIT_DATA_STORE_ENABLED (via the";
   const jobsBody = (writeConclusion: string) =>
     JSON.stringify({ jobs: [{ name: "cutover", conclusion: "success", steps: [{ name: "x", conclusion: "success" }, { name: WRITE_STEP, conclusion: writeConclusion }] }] });
@@ -8123,8 +8124,11 @@ describe("the rotate's store-never-written gate (#10175)", () => {
   const GH_STUB = `
 repo="example-org/example-repo"
 base="repos/$repo/actions/workflows/git-data-cutover.yml/runs"
-if [[ "\${1-}" == api && "\${2-}" == "$base?per_page=1" ]]; then [[ -f "$FX/total" ]] || exit 1; cat "$FX/total"; exit 0; fi
-if [[ "\${1-}" == api && "\${2-}" == --paginate && "\${3-}" == "$base?per_page=100" ]]; then [[ -f "$FX/list.tsv" ]] || exit 1; cat "$FX/list.tsv"; exit 0; fi
+if [[ "\${1-}" == api && "\${2-}" == "$base?per_page=1" && "\${3-}" == --jq && -n "\${4-}" ]]; then
+  [[ -f "$FX/total" ]] || exit 1; jq -n --argjson n "$(cat "$FX/total")" '{total_count: $n}' | jq -r "$4"; exit $?; fi
+if [[ "\${1-}" == api && "\${2-}" == --paginate && "\${3-}" == "$base?per_page=100" && "\${4-}" == --jq && -n "\${5-}" ]]; then
+  [[ -f "$FX/list.tsv" ]] || exit 1
+  jq -R -s 'split("\\n") | map(select(length > 0) | split("\\t")) | {workflow_runs: map({id: (.[0] | tonumber? // .[0]), status: .[1], run_attempt: (.[2] | tonumber? // .[2]), created_at: .[3]})}' "$FX/list.tsv" | jq -r "$5"; exit $?; fi
 if [[ "\${1-}" == api && "\${2-}" =~ ^repos/$repo/actions/runs/([0-9]+)/attempts/([0-9]+)/jobs\\?per_page=100$ && $# -eq 2 ]]; then
   f="$FX/\${BASH_REMATCH[1]}.\${BASH_REMATCH[2]}.json"; [[ -f "$f" ]] || exit 1; cat "$f"; exit 0; fi
 echo "gh stub refused: $*" >&2; exit 64`;
@@ -8138,12 +8142,18 @@ echo "gh stub refused: $*" >&2; exit 64`;
 
   test("EXECUTED store-never-written step: each verdict maps to its exit code and annotation (and a mutant of any arm changes an outcome)", () => {
     const run = stepRun(STORE_STEP);
+    // A workspace whose library prints store_clean but returns status 1: the verdict word and the scan's own status
+    // must agree, and a disagreement refuses (the guard the real library cannot reach, so it is driven by a stub).
+    const stubWs = mkdtempSync(join(tmpdir(), "stub-ws-"));
+    mkdirSync(join(stubWs, "scripts", "lib"), { recursive: true });
+    writeFileSync(join(stubWs, "scripts", "lib", "git-data-store-dirty-scan.sh"), "git_data_store_dirty_list() { :; }\ngit_data_store_dirty_scan() { echo store_clean; return 1; }\n");
     const cases: Array<{ name: string; files: Record<string, string>; env?: Record<string, string>; rc: number; has: string[] }> = [
       { name: "clean, both pins listed", files: scenario([[PIN_B, "completed"], [PIN_A, "completed"]], { [PIN_A]: clean, [PIN_B]: clean }), rc: 0, has: ["store_clean", "rotate precondition ok"] },
       { name: "a pinned run wrote the flag", files: scenario([[PIN_B, "completed"], [PIN_A, "completed"]], { [PIN_A]: clean, [PIN_B]: jobsBody("success") }), rc: 1, has: ["store_dirty", `run ${PIN_B}`, "no bypass input"] },
       { name: "a cutover run is in flight", files: scenario([["9", "in_progress"], [PIN_B, "completed"], [PIN_A, "completed"]], { [PIN_A]: clean, [PIN_B]: clean }), rc: 1, has: ["cutover_in_flight"] },
       { name: "a pinned run expired (retention)", files: scenario([[PIN_B, "completed"]], { [PIN_B]: clean }), rc: 1, has: ["scan_unreadable", "pinned_run_missing"] },
       { name: "gh cannot read the listing", files: {}, rc: 1, has: ["scan_unreadable"] },
+      { name: "the scan prints store_clean but returns status 1 (verdict and status disagree)", files: {}, env: { GITHUB_WORKSPACE: stubWs }, rc: 1, has: ["scan_unreadable", "status 1"] },
       { name: "the library cannot be loaded", files: scenario([[PIN_B, "completed"], [PIN_A, "completed"]], { [PIN_A]: clean, [PIN_B]: clean }), env: { GITHUB_WORKSPACE: "/nonexistent-workspace" }, rc: 1, has: ["UNREADABLE", "could not be loaded"] },
     ];
     const outcome = (r: string) => cases.map((c) => { const x = runStep(r, { ...storeEnv, ...c.env }, c.files, { gh: GH_STUB }); return `${x.rc}:${c.has.every((h) => x.out.includes(h))}`; }).join(",");
@@ -8160,6 +8170,7 @@ echo "gh stub refused: $*" >&2; exit 64`;
       ["scan fed an empty history", (t) => t.replace("git_data_store_dirty_list | git_data_store_dirty_scan", "true | git_data_store_dirty_scan")],
       ["scan reads nothing from the list", (t) => t.replace("git_data_store_dirty_list | git_data_store_dirty_scan", "git_data_store_dirty_scan </dev/null")],
       ["case on a constant", (t) => t.replace('case "${verdict%% *}" in', 'case "store_clean" in')],
+      ["the status guard on the store_clean arm is removed", (t) => t.replace('[[ "$rc" -eq 0 ]] ||', "true ||")],
       ["the library path is wrong", (t) => t.replace('source "${GITHUB_WORKSPACE}/scripts/lib/git-data-store-dirty-scan.sh"', 'source "${GITHUB_WORKSPACE}/scripts/lib/git-data-store-dirty-scan.sh.x"')],
     ];
     for (const [label, mut] of mutants) {
@@ -8167,6 +8178,7 @@ echo "gh stub refused: $*" >&2; exit 64`;
       expect(mutated, `mutation did not land: ${label}`).not.toBe(run);
       expect(outcome(mutated), `mutant survived: ${label}`).not.toBe(base);
     }
+    rmSync(stubWs, { recursive: true, force: true });
   }, 60000);
 
   test("EXECUTED emptiness step freshness block: fresh passes; stale, missing server, missing token and a populated store refuse (and arm mutants change an outcome)", () => {
@@ -8174,7 +8186,8 @@ echo "gh stub refused: $*" >&2; exit 64`;
     const created = "2026-10-13T10:00:00+00:00"; // epoch 1791885600
     const readerBin = `if [[ "$1" == *toUnixTimestamp* ]]; then cat "$FX/epoch"; else cat "$FX/served"; fi`;
     const doppler = `while [[ $# -gt 0 && "$1" != "--" ]]; do shift; done; shift || true; exec "$@"`;
-    const curlBin = `cat >/dev/null 2>&1 || true; [[ -f "$FX/servers" ]] || exit 22; cat "$FX/servers"`;
+    // curl is argv-selective: the exact Hetzner name filter and the --max-time bound must be on the request.
+    const curlBin = `cat >/dev/null 2>&1 || true; case "$*" in *"https://api.hetzner.cloud/v1/servers?name=soleur-git-data"*) :;; *) echo "curl stub refused: $*" >&2; exit 22;; esac; case "$*" in *"--max-time 15"*) :;; *) echo "curl stub: no --max-time 15" >&2; exit 22;; esac; [[ -f "$FX/servers" ]] || exit 22; cat "$FX/servers"`;
     const server = (n: number) => JSON.stringify({ servers: Array.from({ length: n }, () => ({ name: "soleur-git-data", created })) });
     const env = (extra: Record<string, string> = {}) => ({ DOPPLER_TOKEN: "synthetic", HCLOUD_TOKEN: "synthetic-hcloud-token", BETTERSTACK_QUERY_SCRIPT: "", ...extra });
     const files = (epoch: number | null, served: string, servers: string | null) => ({
@@ -8182,7 +8195,6 @@ echo "gh stub refused: $*" >&2; exit 64`;
       epoch: epoch === null ? "" : `{"epoch":${epoch}}\n`,
       ...(servers === null ? {} : { servers }),
     });
-    const bins = (readerPath: string) => ({ doppler, curl: curlBin, reader: readerBin, __r: readerPath });
     const go = (r: string, epoch: number | null, served: string, servers: string | null, extra: Record<string, string> = {}) => {
       const root = mkdtempSync(join(tmpdir(), "emptiness-exec-"));
       try {
@@ -8198,9 +8210,8 @@ echo "gh stub refused: $*" >&2; exit 64`;
         return { rc: x.status, out: `${x.stdout}${x.stderr}` };
       } finally { rmSync(root, { recursive: true, force: true }); }
     };
-    void bins;
     const cases: Array<{ name: string; args: [number | null, string, string | null, Record<string, string>?]; rc: number; has: string[] }> = [
-      { name: "fresh row", args: [1791885601, "0", server(1)], rc: 0, has: ["is newer than the current server's creation"] },
+      { name: "fresh row", args: [1791885601, "0", server(1)], rc: 0, has: ["is newer than the current server's creation", "::add-mask::synthetic-hcloud-token"] },
       { name: "row EQUAL to created is stale", args: [1791885600, "0", server(1)], rc: 1, has: ["stale_boot_complete"] },
       { name: "row before created is stale", args: [1791885599, "0", server(1)], rc: 1, has: ["stale_boot_complete"] },
       { name: "two servers refuse", args: [1791885700, "0", server(2)], rc: 1, has: ["boot_complete_unreadable"] },
@@ -8224,6 +8235,9 @@ echo "gh stub refused: $*" >&2; exit 64`;
       ["the whole freshness verdict is a constant", (t) => t.replace('case "$fresh" in', 'case "fresh" in')],
       ["created epoch is ignored", (t) => t.replace('git_data_boot_complete_freshness "$drows" "$created_epoch"', 'git_data_boot_complete_freshness "$drows" "0"')],
       ["the HCLOUD_TOKEN guard is removed", (t) => t.replace('if [[ -z "${HCLOUD_TOKEN:-}" ]]; then', "if false; then")],
+      ["the Hetzner name filter is dropped", (t) => t.replace("servers?name=soleur-git-data", "servers")],
+      ["the Hetzner call loses its --max-time bound", (t) => t.replace("-sS --max-time 15 'https://api.hetzner.cloud", "-sS 'https://api.hetzner.cloud")],
+      ["the token mask is removed", (t) => t.replace("printf '::add-mask::%s\\n' \"$HCLOUD_TOKEN\"", ":")],
     ];
     for (const [label, mut] of mutants) {
       const mutated = mut(run);

@@ -3789,9 +3789,11 @@ jobs:
       # flag-off only; the data stays on LUKS). It reads neither the flag nor the cutover stamp. There is NO
       # bypass input and no continue-on-error on this step; an unreadable record refuses (fail closed).
       # The step runs BEFORE the existing precondition, the rung-2 interlock and every plan step.
-      # The scan also proves the history is COMPLETE (two pinned post-seam runs must still be listed: run records
-      # expire after 90 days, and the pins expire about 2026-12-29, after which this step refuses until the pins are
-      # re-baselined: runbook "Re-baselining the pinned runs", tracker #10216). The step is bounded to 10 minutes.
+      # The scan also proves the history is COMPLETE: two pinned post-seam runs must still be listed (run records
+      # can be deleted, and a deleted flip would otherwise read clean) and their step lists readable (GitHub strips
+      # step lists at about 170 days), so the step refuses by about 2027-03-18 at the latest until the pins are
+      # re-baselined (runbook "Re-baselining the pinned runs"; tracker #10216 carries a 2026-12-01 item). The step is
+      # bounded to 10 minutes.
       # A re-run of a rotate run that predates this step executes the OLD workflow, which has no guard: the owner
       # deletes those three run records after merge (runbook; tracker #10216).
       - name: Rotate precondition — store never written (cutover run records)
@@ -3813,7 +3815,7 @@ jobs:
               echo "rotate precondition ok: no run of git-data-cutover.yml has executed the flag-write step, and the history is proven complete" ;;
             store_dirty) echo "::error::rotate precondition REFUSED (store_dirty) — run ${verdict#* } of git-data-cutover.yml executed the flag-write step, so the LUKS store may hold the ONLY copy of replicated repositories and a rotate would destroy it. There is no bypass input and no approval on infra-privileged lifts it. Do not re-dispatch. See the runbook section 'When a rotate is needed after the flip' (escalate on #10175 and #8571)."; exit 1 ;;
             cutover_in_flight) echo "::error::rotate precondition REFUSED (cutover_in_flight) — run ${verdict#* } of git-data-cutover.yml is still running. Re-dispatch after it finishes."; exit 1 ;;
-            *) echo "::error::rotate precondition REFUSED (scan_unreadable) — the cutover run records could not all be read or the history could not be proven complete (${verdict}). Failing closed: an unreadable history is not a clean one. Re-dispatch at most once, then stop and see the runbook verdict table (pinned_run_missing means the pinned runs expired: 'Re-baselining the pinned runs'; tracker #10216)."; exit 1 ;;
+            *) echo "::error::rotate precondition REFUSED (scan_unreadable) — the cutover run records could not all be read or the history could not be proven complete (${verdict}). Failing closed: an unreadable history is not a clean one. Re-dispatch at most once, then stop and see the runbook verdict table (pinned_run_missing means a pinned run is no longer listed: 'Re-baselining the pinned runs'; tracker #10216)."; exit 1 ;;
           esac
 
       # (#8211 PR2 / ADR-220 D6) ROTATE PRECONDITION — the store must be measured EMPTY

@@ -84,13 +84,15 @@ dirty_body() { fx "$JOB" "${1:-success}" "$(steps "$OTHER|success" "$WRITE|${1:-
 # gh shim: models the three `gh api` shapes the library issues; anything else is refused loudly.
 gh() {
   printf '%s\n' "$*" >> "$GH_CALLS"
-  if [[ "${1-}" == api && "${2-}" == "${BASE}?per_page=1" && "${3-}" == --jq && "${4-}" == .total_count ]]; then
+  # The two list calls run the library's REAL --jq program (arg 4 / arg 5) over a JSON page built from the fixtures,
+  # so a reordered or truncated projection changes what the scan reads.
+  if [[ "${1-}" == api && "${2-}" == "${BASE}?per_page=1" && "${3-}" == --jq && -n "${4-}" ]]; then
     [[ -f "$FX/total" ]] || return 1
-    cat "$FX/total"; return 0
+    jq -n --argjson n "$(cat "$FX/total")" '{total_count: $n}' | jq -r "$4"; return $?
   fi
-  if [[ "${1-}" == api && "${2-}" == --paginate && "${3-}" == "${BASE}?per_page=100" && "${4-}" == --jq ]]; then
+  if [[ "${1-}" == api && "${2-}" == --paginate && "${3-}" == "${BASE}?per_page=100" && "${4-}" == --jq && -n "${5-}" ]]; then
     [[ -f "$FX/list.tsv" ]] || return 1
-    cat "$FX/list.tsv"; return 0
+    jq -R -s 'split("\n") | map(select(length > 0) | split("\t")) | {workflow_runs: map({id: (.[0] | tonumber? // .[0]), status: .[1], run_attempt: (.[2] | tonumber? // .[2]), created_at: .[3]})}' "$FX/list.tsv" | jq -r "$5"; return $?
   fi
   if [[ "${1-}" == api && "${2-}" =~ ^repos/${GITHUB_REPOSITORY}/actions/runs/([0-9]+)/attempts/([0-9]+)/jobs\?per_page=100$ && "$#" -eq 2 ]]; then
     [[ -f "$FX/${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.json" ]] || return 1
@@ -109,9 +111,10 @@ addrun() {
   for kv in "$@"; do printf '%s' "${kv#*:}" > "$FX/${id}.${kv%%:*}.json"; done
 }
 settotal() { printf '%s\n' "$1" > "$FX/total"; }
-# scan_nopins: the scan with NO pinned-run proof (most rows model arbitrary histories); the pin rows below drive the
-# real default (GDSD_PINNED_RUNS) by calling the scan with no argument.
-scan_nopins() { git_data_store_dirty_scan ""; }
+# scan_nopins: the scan with NO pinned-run proof (most rows model arbitrary histories; the literal --no-pins is the
+# only way to say so); the pin rows below drive the real default (GDSD_PINNED_RUNS) by calling the scan with no
+# argument, and an EMPTY argument must NOT disable the proof (row K10).
+scan_nopins() { git_data_store_dirty_scan --no-pins; }
 # check_scan: the production composition list | scan (the pipeline status is the scan's own).
 check_scan() { # LABEL EXPECTED-REGEX EXPECTED-RC
   local out rc=0
@@ -146,8 +149,17 @@ if [[ "${1-}" == "--mutant-run" ]]; then
   [[ "$(git_data_store_dirty_list | scan_nopins)" == "cutover_in_flight 9" ]] || killed=1
   newfx; addrun 10 completed 1 "1:$(clean_body)"; addrun 11 queued 2 "1:$(dirty_body success)"; settotal 2
   [[ "$(git_data_store_dirty_list | scan_nopins)" == "store_dirty 11" ]] || killed=1
-  newfx; addrun 12 completed 1 "1:$(clean_body)"; settotal 1
+  P1C="$(printf '%s\n' "$GDSD_PINNED_RUNS" | tr ' ' '\n' | sed -n 1p)"; P2C="$(printf '%s\n' "$GDSD_PINNED_RUNS" | tr ' ' '\n' | sed -n 2p)"
+  newfx; addrun "$P1C" completed 1 "1:$(clean_body)"; settotal 1
   [[ "$(git_data_store_dirty_list | git_data_store_dirty_scan)" == "scan_unreadable pinned_run_missing" ]] || killed=1
+  newfx; addrun "9${P1C}" completed 1 "1:$(clean_body)"; addrun "$P2C" completed 1 "1:$(clean_body)"; settotal 2
+  [[ "$(git_data_store_dirty_list | git_data_store_dirty_scan)" == "scan_unreadable pinned_run_missing" ]] || killed=1
+  newfx; CREATED=2020-01-01T00:00:00Z addrun "$P1C" completed 1 "1:$(clean_body)"; CREATED="$(date -u -d '1 day ago' +%Y-%m-%dT%H:%M:%SZ)" addrun "$P2C" completed 1 "1:$(clean_body)"; settotal 2
+  [[ "$(git_data_store_dirty_list | git_data_store_dirty_scan 2>&1 >/dev/null)" == *"::warning::"* ]] || killed=1
+  newfx; settotal 0
+  [[ "$(git_data_store_dirty_list | git_data_store_dirty_scan "" 2>/dev/null)" == "scan_unreadable pinned_run_missing" ]] || killed=1
+  newfx; CREATED=2026-09-20T00:00:00Z addrun 15 completed 1 "1:$(fx "$JOB" failure "$(steps)")"; settotal 1
+  [[ "$(git_data_store_dirty_list | scan_nopins)" == "store_clean" ]] || killed=1
   newfx; addrun 13 completed 1 "1:$(fx "${JOB}_x" success "$(steps "$WRITE|success")")"; settotal 1
   [[ "$(git_data_store_dirty_list | scan_nopins)" == "scan_unreadable 13" ]] || killed=1
   [[ "$killed" -eq 1 ]] && echo "MUTANT-KILLED" || echo "MUTANT-SURVIVED"
@@ -166,6 +178,8 @@ check_verdict "C6b write step ABSENT on a run that predates the seam (read-only-
 check_verdict "C7 empty-steps job cancelled while queued (must not deadlock)" clean "$(fx "$JOB" cancelled "$(steps)")"
 check_verdict "C7b empty-steps job skipped (approval rejected)" clean "$(fx "$JOB" skipped "$(steps)")"
 check_verdict "C7c empty-steps job with no conclusion (queued or waiting)" unreadable "$(fx "$JOB" null "$(steps)")"
+check_verdict "C7d a step-less job of a post-seam run with a final conclusion is unreadable (stripped steps)" unreadable "$(fx "$JOB" success "$(steps)")"
+check_verdict "C7e a step-less job of a PRE-seam run is clean (could not write; old step lists are stripped)" clean "$(fx "$JOB" failure "$(steps)")" preseam
 check_verdict "C8 no job named cutover (a decoy name) in a post-seam run: a rename, never clean" unreadable "$(fx "${JOB}_decoy" success "$(steps "$WRITE|success")")"
 check_verdict "C8b case variant of the job name is not the job (post-seam: unreadable)" unreadable "$(fx "$(tr '[:lower:]' '[:upper:]' <<<"$JOB")" success "$(steps "$WRITE|success")")"
 check_verdict "C8c a pre-seam run may list no cutover job at all: clean" clean "$(fx "${JOB}_decoy" success "$(steps "$WRITE|success")")" preseam
@@ -208,14 +222,25 @@ newfx; addrun 999 completed 1 "1:$(clean_body)"; addrun "$P2ID" completed 1 "1:$
 check_scan_pins "K5 extra newer clean runs beside both pins stay clean" 'store_clean' 0
 newfx; addrun "$P2ID" completed 1 "1:$(clean_body)"; addrun "$P1ID" completed 1 "1:$(dirty_body success)"; settotal 2
 check_scan_pins "K6 a dirty pinned run is still dirty (the pin proves completeness, not cleanliness)" "store_dirty $P1ID" 1
-# K7: a clearly old oldest pin prints the age warning on stderr (a 2020 date keeps the row independent of today's date).
-newfx; CREATED=2020-01-01T00:00:00Z addrun "$P1ID" completed 1 "1:$(clean_body)"; CREATED=2020-01-01T00:00:00Z addrun "$P2ID" completed 1 "1:$(clean_body)"; settotal 2
+# K7: the age warning keys on the OLDEST pin: one pin from 2020 and one from today still warns.
+RECENT="$(date -u -d '1 day ago' +%Y-%m-%dT%H:%M:%SZ)"
+newfx; CREATED=2020-01-01T00:00:00Z addrun "$P1ID" completed 1 "1:$(clean_body)"; CREATED="$RECENT" addrun "$P2ID" completed 1 "1:$(clean_body)"; settotal 2
 out="$(git_data_store_dirty_list | git_data_store_dirty_scan 2>&1 >/dev/null)"
-if [[ "$out" == *"::warning::"* ]]; then pass "K7 a 2020 pin triggers the age warning"; else fail "K7 no warning for a 2020 pin: '$out'"; fi
+if [[ "$out" == *"::warning::"* ]]; then pass "K7 an old OLDEST pin (beside a recent one) triggers the age warning"; else fail "K7 no warning for a 2020 oldest pin: '$out'"; fi
+newfx; CREATED="$RECENT" addrun "$P1ID" completed 1 "1:$(clean_body)"; CREATED="$RECENT" addrun "$P2ID" completed 1 "1:$(clean_body)"; settotal 2
+out="$(git_data_store_dirty_list | git_data_store_dirty_scan 2>&1 >/dev/null)"
+if [[ -z "$out" ]]; then pass "K7b two recent pins print no warning"; else fail "K7b a warning for recent pins: '$out'"; fi
+newfx; CREATED=2020-01-01T00:00:00Z addrun "$P1ID" completed 1 "1:$(clean_body)"; CREATED=2020-01-01T00:00:00Z addrun "$P2ID" completed 1 "1:$(clean_body)"; settotal 2
 out="$(git_data_store_dirty_list | git_data_store_dirty_scan 2>&1)"
 if [[ "$out" == *store_clean* && "$(printf '%s' "$out" | sed -n '$p')" == store_clean ]]; then pass "K8 the verdict stays ONE last line on stdout beside the warning"; else fail "K8 verdict line disturbed: '$out'"; fi
 newfx; addrun "$P2ID" completed 1 "1:$(clean_body)"; addrun "$P1ID" completed 1 "1:$(clean_body)"; settotal 2
 if [[ "$(git_data_store_dirty_list | git_data_store_dirty_scan "abc" 2>/dev/null)" == "scan_unreadable pinned_run_missing" ]]; then pass "K9 a malformed pin argument fails closed"; else fail "K9 a malformed pin was accepted"; fi
+newfx; settotal 0
+if [[ "$(git_data_store_dirty_list | git_data_store_dirty_scan "" 2>/dev/null)" == "scan_unreadable pinned_run_missing" ]]; then pass "K10 an EMPTY pin argument does not disable the proof (empty history stays refused)"; else fail "K10 an empty argument turned the proof off"; fi
+newfx; addrun "9${P1ID}" completed 1 "1:$(clean_body)"; addrun "$P2ID" completed 1 "1:$(clean_body)"; settotal 2
+check_scan_pins "K11 a run whose id merely ENDS with a pinned id is not the pin (no substring match)" 'scan_unreadable pinned_run_missing' 1
+newfx; addrun "$P1ID" completed 1 "1:$(clean_body)"; settotal 1
+check_scan_pins "K12 only the OLDER pin listed, the NEWER pin missing: every pin is checked, not just the first" 'scan_unreadable pinned_run_missing' 1
 newfx; addrun 103 completed 1 "1:$(clean_body)"; addrun 102 completed 1 "1:$(dirty_body success)"; settotal 2
 check_scan "S3 newest run clean, an OLDER run wrote (mutation 1: older dirty must not be masked)" 'store_dirty 102' 1
 newfx; addrun 203 completed 1 "1:$(clean_body)"; addrun 202 completed 1 "1:$(clean_body)"; addrun 201 completed 1 "1:$(dirty_body failure)"; settotal 3
@@ -333,6 +358,12 @@ mutate "in_progress run skipped"            's/in_progress\) echo "cutover_in_fl
 mutate "queued re-run attempts skipped"     's/last=\$\(\(attempt - 1\)\)/last=0/'
 mutate "pinned-run proof dropped"            's/\[\[ -n "\$pre" \]\] \|\| \{ echo "scan_unreadable pinned_run_missing"; return 1; \}/true/'
 mutate "a missing cutover job reads clean"   's/if \$j == null then \(if \$preseam then "clean" else "unreadable" end\)/if $j == null then "clean"/'
+mutate "pin matching by substring"          's/\[\[ "\$rid" == "\$pin" && "\$status" == completed \]\]/[[ "$rid" == *"$pin" \&\& "$status" == completed ]]/'
+mutate "only the first pin is checked"       's/for pin in \$pins; do/for pin in ${pins%% *}; do/'
+mutate "the age warning keys on the newest pin" 's/"\$pre" < "\$oldest"/"$oldest" < "$pre"/'
+mutate "an empty pin argument disables the proof" 's/local pins="\$\{1:-\$GDSD_PINNED_RUNS\}"/local pins="${1-$GDSD_PINNED_RUNS}"/'
+mutate "the list projection drops run_attempt" 's/\[\.id, \.status, \.run_attempt, \.created_at\]/[.id, .status, .created_at, .created_at]/'
+mutate "pre-seam step-less job stays unreadable" 's/\(if \$preseam or \(/(if false or (/'
 mutate "empty-steps cancelled job unreadable" 's/then "clean" else "unreadable" end\)/then "unreadable" else "unreadable" end)/'
 
 # ---------------------------------------------------------------------------------------------------
@@ -345,7 +376,7 @@ printf '== %d passed, %d failed\n' "$PASS" "$FAIL"
 # PASS==1 at that point, which proves the literal.
 SELFTEST_PASSES=1
 REAL=$(( PASS - SELFTEST_PASSES ))
-MIN_ASSERTIONS=81
+MIN_ASSERTIONS=93
 if [[ "$REAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity assertion floor: only %d real assertion(s) ran (PASS=%d minus %d self-test), expected >= %d.\n' \
     "$REAL" "$PASS" "$SELFTEST_PASSES" "$MIN_ASSERTIONS" >&2

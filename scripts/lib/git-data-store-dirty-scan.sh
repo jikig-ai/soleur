@@ -20,8 +20,9 @@
 #       "total<TAB><n>". Returns non-zero (printing nothing useful) when any page could not be read.
 #   git_data_store_dirty_scan [PINS]                reads git_data_store_dirty_list's output on stdin and
 #       prints ONE line: store_clean | store_dirty <id> | cutover_in_flight <id> | scan_unreadable [<id>|pinned_run_missing].
-#       PINS is a space-separated run-id list that must all be listed as completed; omitted, it is
-#       GDSD_PINNED_RUNS (the workflow passes nothing, and a test pins that), and a test passes "" for none.
+#       PINS is a space-separated run-id list that must all be listed as completed; omitted OR EMPTY, it is
+#       GDSD_PINNED_RUNS (the workflow passes nothing, and a test pins that), and a test passes the literal
+#       --no-pins to model an arbitrary history without the completeness proof.
 #       Returns 0 iff store_clean. Every attempt of every run is read: `gh run view` lists only the latest
 #       attempt, and a re-run that skips the write step must not hide the first attempt's write.
 #
@@ -35,18 +36,22 @@ readonly GDSD_JOB_NAME="cutover"
 # PARSED workflow, so a fix of the YAML (quoting the name) reds a test instead of silently making every
 # recorded run's step "absent". Do not "correct" this to the full text without migrating that pin.
 readonly GDSD_WRITE_STEP="Write GIT_DATA_STORE_ENABLED (via the"
-# PROOF THAT THE HISTORY IS COMPLETE (review 2026-10-13, CTO F-A). Run records expire (this public repo keeps
-# them 90 days) and `total_count` shrinks with the rows, so the count cross-check alone cannot see an expired
-# flip. Two post-seam runs are pinned: both must still be listed as `completed`, or the scan refuses with
-# `scan_unreadable pinned_run_missing`. Retention deletes oldest first, so a listed pin means nothing newer has
-# expired, and runs from before the seam could not write the flag, so their expiry is harmless. The oldest pin
-# (36685251588, 2026-09-30) expires about 2026-12-29; after that the guard fails CLOSED until a PR moves the pins
-# to newer runs while the old pin is still listed (runbook: "Re-baselining the pinned runs", tracker #10216).
-# GitHub also strips a job's step list at about 170 days, but a run stops being listed at 90, so a step-less
-# record from an old run cannot be reached while retention stays at 90 (row 3 below; revisit if it is raised).
+# PROOF THAT THE HISTORY IS COMPLETE (review 2026-10-13, CTO F-A). Run records can be deleted (by retention or by
+# hand) and `total_count` shrinks with the rows, so the count cross-check alone cannot see a deleted flip. Two
+# post-seam runs are pinned: both must still be listed as `completed`, or the scan refuses with
+# `scan_unreadable pinned_run_missing`. Deletion is oldest-first under retention, so a listed pin means nothing newer
+# has expired, and runs from before the seam could not write the flag, so their deletion is harmless.
+# MEASURED 2026-10-13: this repository's run list still shows runs 196 days old although the artifact-and-log
+# retention setting reads 90 days, so the real expiry horizon is not known; the guard does not rely on it.
+# A SECOND, measured horizon: GitHub strips a job's step list at about 170 days (a 174-day-old run is listed with no
+# steps). A step-less job of a run created after the seam reads unreadable (row 3 below), so the oldest pin
+# (36685251588, created 2026-09-30) turns the guard CLOSED at about 2027-03-18 even if no run is deleted. Pre-seam
+# runs with no steps read clean (they could not write the flag). Either way the exit is a PR that moves the pins to
+# newer runs while the old pin is still listed and the scan prints store_clean (runbook: "Re-baselining the pinned
+# runs", tracker #10216, which carries a 2026-12-01 calendar item, well inside both horizons).
 readonly GDSD_PINNED_RUNS="36685251588 37823216637"
 # The pin-age warning threshold, days: the scan prints `::warning::` once the oldest pin is older than this.
-readonly GDSD_PIN_WARN_DAYS=60
+readonly GDSD_PIN_WARN_DAYS=120
 
 # The write step does not exist in runs created before the seam landed (the read-only-proof era, merged
 # 2026-09-30T02:18:17Z in the real-modes PR): such a run could not write the flag, so an ABSENT step there
@@ -61,7 +66,8 @@ readonly GDSD_SEAM_ADDED_AT="2026-09-30T02:18:17Z"
 #     (a post-seam run always lists the job, skipped or not; a missing one is a rename, a caller wrapper or a
 #     renamed job, never evidence that the store is clean)
 #   3 the job has no steps: concluded skipped/cancelled (never ran, approval
-#     rejected, cancelled while queued)                                       -> clean
+#     rejected, cancelled while queued), or the run predates the seam (it could
+#     not write the flag; step lists of old runs are stripped)                -> clean
 #   4 the job has no steps and any other conclusion (null: queued/waiting)    -> unreadable
 #   5 the job ran and the write step is absent: clean when $preseam is true    -> clean / unreadable
 #     (the run predates the step), otherwise a rename
@@ -76,7 +82,7 @@ _GDSD_JQ='
       else
         (($j.steps // []) | if type == "array" then . else [] end) as $steps
         | if ($steps | length) == 0 then
-            (if (($j.conclusion // "") == "skipped" or ($j.conclusion // "") == "cancelled") then "clean" else "unreadable" end)
+            (if $preseam or (($j.conclusion // "") == "skipped" or ($j.conclusion // "") == "cancelled") then "clean" else "unreadable" end)
           else
             ([$steps[] | select(type == "object" and .name == $step)] | .[0]) as $w
             | if $w == null then (if $preseam then "clean" else "unreadable" end)
@@ -114,7 +120,8 @@ git_data_store_dirty_list() {
 }
 
 git_data_store_dirty_scan() {
-  local pins="${1-$GDSD_PINNED_RUNS}" pin oldest="" age_s line
+  local pins="${1:-$GDSD_PINNED_RUNS}" pin oldest="" age_s line
+  [[ "${1-}" == --no-pins ]] && pins=""
   local rid status attempt created n last body tok rc expect="" seen=0 pre
   local -a lines=()
   while IFS=$'\t' read -r rid status attempt created; do
