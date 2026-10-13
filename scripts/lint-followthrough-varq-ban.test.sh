@@ -33,6 +33,22 @@
 #   R4-M2h must-PASS: the lib-routed compliant shape                 -> exit 0 (widening counterweight)
 #   R4-M3  DISPATCH: guard COPY with the rule-4 grep deleted         -> exit 0 on the M1 fixture
 #   R4-M4  guard COPY with rule 4's file count forced to 0           -> exit 2, diagnostic names rule 4
+#
+# RULE 5 (#9818) -- the author-association SPELLING ban, plus the two rule-4 widenings it rides with:
+#   R5-M1  a lib-sourcing probe that ALSO names `.author_association` on code  -> exit 1 at the TRUE line, `rule 5:`
+#   R5-M2  the camelCase `.authorAssociation` spelling                          -> exit 1, `rule 5:`
+#   R5-M3  must-PASS: the word only in WHOLE-LINE comments                      -> exit 0
+#   R5-M4  CHARACTERIZATION: a trailing `# why` mention on an executable line   -> exit 1 (a documented limitation)
+#   R5-M5  must-PASS: the word in a `.test.sh` fixture                          -> exit 0 (exempt)
+#   R5-M6  a second probe after a compliant first                               -> cited (the walk does not stop)
+#   R5-M7  DISPATCH: guard COPY with the rule-5 grep deleted                    -> exit 0 on the M1 fixture
+#   R5-M8  guard COPY with rule 5's counter forced to 0, production run        -> exit 2 naming rule 5 (rule 1's floor did NOT fire)
+#   R5-M9  regex neutered: canary intact -> exit 2; canary deleted too -> M1 exits 0 (the canary is not dead code)
+#   R5-M10 an UNFILTERED marker reader (issues/N/comments + S4-ACTIVATED, no lib) -> exit 1, `rule 4:` (the VERDICT_BRANCH widening)
+#   R5-M11 DISPATCH: guard COPY with VERDICT_BRANCH reverted to RESULT:        -> exit 0 on the M10 fixture
+#   R5-M12 DISPATCH: guard COPY with LIB_CALL reverted to the bodies view       -> the denominator row reads 0
+#   R5-H1  must-PASS non-canonical: a probe that calls only `trusted_verdict_comments` -> exit 0, `checked 1 comment-reading probe(s)`
+#   R5-H2  the live tree: zero rule-5 hits, and the walk examined at least the floor
 #   R2-H2  must-PASS non-canonical: the NEW name + a Better Stack  -> exit 0
 #          name + a comment about "the sweeper's Sentry secret"
 #   R2-H3  must-PASS: an EMPTY sandbox dir                         -> exit 0 (pins the sandbox floor exemption)
@@ -615,7 +631,7 @@ EOF
 run_guard "$d"
 (( GUARD_RC == 0 )); check $? "R4-M2b must-PASS: a comment read with no RESULT: verdict branch does not fire" "R4-M2b expected exit 0, got $GUARD_RC: $GUARD_OUT"
 
-# --- R4-M2c: an inline authorAssociation filter is SUBSUMED, with no rule of its own ---
+# --- R4-M2c: an inline authorAssociation filter is a rule-4 violation (and, since #9818, a rule-5 one) ---
 d=$(mkcase r4_m2c)
 cat >"$d/probe-inline-filter.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -625,7 +641,8 @@ grep -qxE 'RESULT: PASS' <<<"$bodies" && exit 0
 exit 1
 EOF
 run_guard "$d"
-(( GUARD_RC == 1 )); check $? "R4-M2c an inline authorAssociation filter still fires (the old ban is subsumed)" "R4-M2c expected exit 1, got $GUARD_RC: $GUARD_OUT"
+(( GUARD_RC == 1 )); check $? "R4-M2c an inline authorAssociation filter still fires (rule 5 fires too, so rule 4 is asserted by its own prefix)" "R4-M2c expected exit 1, got $GUARD_RC: $GUARD_OUT"
+grep -q 'rule 4:' <<<"$GUARD_OUT"; check $? "R4-M2c the inline filter is ALSO a rule-4 violation (a dead rule 4 must not hide behind rule 5)" "R4-M2c no 'rule 4:' citation: $GUARD_OUT"
 
 # --- R4-M2d: SOURCING the lib and then ignoring it must still fire (the wire, not the endpoint) ---
 # Anchoring on the filename rather than the CALL accepted exactly this: both endpoints present,
@@ -747,6 +764,177 @@ else
   grep -q 'rule 4 (trusted-verdict obligation)' <<<"$R4F_OUT"; check $? "R4-M4 the floor diagnostic names RULE 4 specifically" "R4-M4 diagnostic does not name rule 4: $R4F_OUT"
 fi
 
+# =====================================================================================================
+# RULE 5 (#9818) -- the author-association spelling ban, and the rule-4 widenings (VERDICT_BRANCH, LIB_CALL).
+# =====================================================================================================
+# R5-M1: the PRECONDITION is satisfied (the probe sources the lib and calls the view) AND the property is
+# violated (it also names the field on an executable line). Rule 4 alone would not fire: no raw comment read.
+d=$(mkcase r5_m1)
+cat >"$d/probe-lib-plus-assoc.sh" <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+# a comment line so the offender is NOT line 4
+source "$(dirname "$0")/../lib/trusted-verdict.sh"
+who=$(gh api repos/o/r/issues/1 --jq '.author_association')
+trusted_verdict_comments 1 >/dev/null
+EOF
+run_guard "$d"
+(( GUARD_RC == 1 )); check $? "R5-M1 a lib-sourcing probe that also names .author_association on code -> exit 1" "R5-M1 expected exit 1, got $GUARD_RC: $GUARD_OUT"
+grep -q 'probe-lib-plus-assoc.sh:5: rule 5:' <<<"$GUARD_OUT"; check $? "R5-M1 cites the offender at its TRUE line with the rule 5 prefix" "R5-M1 mis-cited: $GUARD_OUT"
+grep -q 'trusted-verdict.sh' <<<"$GUARD_OUT" && grep -q '#6617' <<<"$GUARD_OUT"; check $? "R5-M1 the diagnostic names the permission lib and the #6617 measurement" "R5-M1 diagnostic lacks the lib or #6617: $GUARD_OUT"
+R5_M1_DIR="$d"
+
+# R5-M2: the GraphQL camelCase spelling.
+d=$(mkcase r5_m2)
+cat >"$d/probe-camel.sh" <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+source "$(dirname "$0")/../lib/trusted-verdict.sh"
+x=$(gh issue view 1 --json comments --jq '.comments[0].authorAssociation')
+trusted_verdict_comments 1 >/dev/null
+EOF
+run_guard "$d"
+(( GUARD_RC == 1 )); check $? "R5-M2 the camelCase .authorAssociation spelling -> exit 1" "R5-M2 expected exit 1, got $GUARD_RC: $GUARD_OUT"
+grep -q 'probe-camel.sh:4: rule 5:' <<<"$GUARD_OUT"; check $? "R5-M2 cites the camelCase line with the rule 5 prefix" "R5-M2 mis-cited: $GUARD_OUT"
+
+# R5-M3 (must-PASS): the word only in WHOLE-LINE comments, both spellings, as every migrated probe header carries it.
+d=$(mkcase r5_m3)
+cat >"$d/probe-header-only.sh" <<'EOF'
+#!/usr/bin/env bash
+# Trust is resolved through the lib, NOT from author_association / authorAssociation: that field is
+# computed against the READING token's visibility (#6617, #8389).
+set -uo pipefail
+    # an indented whole-line comment naming authorAssociation is also stripped
+source "$(dirname "$0")/../lib/trusted-verdict.sh"
+trusted_verdict_comments 1 >/dev/null
+EOF
+run_guard "$d"
+(( GUARD_RC == 0 )); check $? "R5-M3 must-PASS: the word only in whole-line comments does not fire" "R5-M3 expected exit 0, got $GUARD_RC: $GUARD_OUT"
+
+# R5-M4 CHARACTERIZATION (a documented false positive, pinned on purpose): a TRAILING comment on an executable line fires.
+d=$(mkcase r5_m4)
+cat >"$d/probe-trailing.sh" <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+echo ok  # not authorAssociation, see the lib
+EOF
+run_guard "$d"
+(( GUARD_RC == 1 )); check $? "R5-M4 CHARACTERIZATION: a trailing '# why' mention on an executable line fires (the strip is whole-line only; breaks on purpose if that is ever fixed)" "R5-M4 expected exit 1, got $GUARD_RC: $GUARD_OUT"
+
+# R5-M5 (must-PASS): a .test.sh fixture legitimately carries the field as a decoy.
+d=$(mkcase r5_m5)
+cat >"$d/probe-fixture.test.sh" <<'EOF'
+#!/usr/bin/env bash
+printf '{"authorAssociation":"CONTRIBUTOR","author_association":"CONTRIBUTOR"}\n'
+EOF
+run_guard "$d"
+(( GUARD_RC == 0 )); check $? "R5-M5 must-PASS: the word in a .test.sh fixture is exempt" "R5-M5 expected exit 0, got $GUARD_RC: $GUARD_OUT"
+
+# R5-M6: a second offender after a compliant first is cited too (the walk does not stop at the first file).
+d=$(mkcase r5_m6)
+printf '#!/usr/bin/env bash\necho ok\n' >"$d/a-compliant.sh"
+printf '#!/usr/bin/env bash\nx=1\ny=.author_association\n' >"$d/b-bad.sh"
+printf '#!/usr/bin/env bash\nx=1\nz=.authorAssociation\n' >"$d/c-bad.sh"
+run_guard "$d"
+(( GUARD_RC == 1 )) && grep -q 'b-bad.sh:3: rule 5:' <<<"$GUARD_OUT" && grep -q 'c-bad.sh:3: rule 5:' <<<"$GUARD_OUT"; check $? "R5-M6 both offenders after a compliant first file are cited" "R5-M6 expected both b-bad and c-bad cited, got rc=$GUARD_RC: $GUARD_OUT"
+
+# R5-M7 DISPATCH: deleting the rule-5 grep makes the M1 fixture pass -- that grep IS the mechanism.
+R5_GUARD="$SANDBOX/guard-no-rule5-grep.sh"
+sed '/# rule5-grep/d' "$GUARD" >"$R5_GUARD"
+if diff -q "$GUARD" "$R5_GUARD" >/dev/null; then
+  check 1 "" "R5-M7 DISPATCH: the rule5-grep marker is absent from the guard -- the mutation did not land and the row is vacuous"
+else
+  R5_OUT="$(bash "$R5_GUARD" "$R5_M1_DIR" 2>&1)"; R5_RC=$?
+  (( R5_RC == 0 )); check $? "R5-M7 DISPATCH: deleting the rule-5 grep makes the M1 fixture pass" "R5-M7 expected exit 0 from the gutted guard, got $R5_RC: $R5_OUT"
+fi
+
+# R5-M8: rule 5's OWN floor on its OWN counter; rule 1's floor must NOT be the one that fires.
+R5F_GUARD="$SANDBOX/guard-rule5-zero.sh"
+sed 's|^  scanned_rule5=\$((scanned_rule5 + 1)).*# rule5-count$|  scanned_rule5=$((scanned_rule5 + 0))  # rule5-count|' "$GUARD" >"$R5F_GUARD"
+if diff -q "$GUARD" "$R5F_GUARD" >/dev/null; then
+  check 1 "" "R5-M8 the rule5-count marker is absent -- the mutation did not land and the row is vacuous"
+else
+  R5F_OUT="$(bash "$R5F_GUARD" 2>&1)"; R5F_RC=$?
+  (( R5F_RC == 2 )); check $? "R5-M8 rule 5's own floor breach -> exit 2" "R5-M8 expected exit 2, got $R5F_RC: $R5F_OUT"
+  grep -q 'rule 5 (author-association ban)' <<<"$R5F_OUT"; check $? "R5-M8 the floor diagnostic names RULE 5 specifically" "R5-M8 diagnostic does not name rule 5: $R5F_OUT"
+  ! grep -q 'expected the full set' <<<"$R5F_OUT"; check $? "R5-M8 rule 1's floor did NOT fire first (rule 5's counter is its own)" "R5-M8 rule 1's floor message appeared: $R5F_OUT"
+fi
+
+# R5-M9: the regex canary. Neutered regex with the canary INTACT -> exit 2; neutered regex with the canary deleted -> the M1 fixture
+# passes, which proves the canary was the only thing standing between a neutered pattern and a silent clean.
+R5N_GUARD="$SANDBOX/guard-rule5-neutered.sh"
+sed "s|^RULE5_RE='author_?association'.*# rule5-re\$|RULE5_RE='zzneverzz'  # rule5-re|" "$GUARD" >"$R5N_GUARD"
+R5NC_GUARD="$SANDBOX/guard-rule5-neutered-nocanary.sh"
+sed '/# rule5-canary/d' "$R5N_GUARD" >"$R5NC_GUARD"
+if diff -q "$GUARD" "$R5N_GUARD" >/dev/null || diff -q "$R5N_GUARD" "$R5NC_GUARD" >/dev/null; then
+  check 1 "" "R5-M9 the rule5-re / rule5-canary markers are absent -- the mutation did not land and the row is vacuous"
+else
+  R5N_OUT="$(bash "$R5N_GUARD" "$R5_M1_DIR" 2>&1)"; R5N_RC=$?
+  (( R5N_RC == 2 )); check $? "R5-M9 a neutered regex with the canary intact -> exit 2" "R5-M9 expected exit 2, got $R5N_RC: $R5N_OUT"
+  grep -q 'rule 5 (author-association ban) regex canary' <<<"$R5N_OUT"; check $? "R5-M9 the canary diagnostic names rule 5" "R5-M9 canary message missing: $R5N_OUT"
+  R5NC_OUT="$(bash "$R5NC_GUARD" "$R5_M1_DIR" 2>&1)"; R5NC_RC=$?
+  (( R5NC_RC == 0 )); check $? "R5-M9 the same neutered regex WITHOUT the canary reports clean over the M1 fixture (the canary is not dead code)" "R5-M9 expected exit 0 from the canary-less neutered guard, got $R5NC_RC: $R5NC_OUT"
+fi
+
+# R5-M10: an UNFILTERED marker reader: a REST comments read, branching on an S4-ACTIVATED marker, no lib, and no
+# association spelling -- so it passed rules 4 and 5 until VERDICT_BRANCH learned the marker names.
+d=$(mkcase r5_m10)
+cat >"$d/probe-marker-unfiltered.sh" <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+bodies=$(gh api repos/o/r/issues/1/comments --jq '.[].body')
+grep -qE '^S4-ACTIVATED: ' <<<"$bodies" && exit 0
+exit 1
+EOF
+run_guard "$d"
+(( GUARD_RC == 1 )); check $? "R5-M10 an unfiltered S4-ACTIVATED marker reader -> exit 1" "R5-M10 expected exit 1, got $GUARD_RC: $GUARD_OUT"
+grep -q 'probe-marker-unfiltered.sh:3: rule 4:' <<<"$GUARD_OUT"; check $? "R5-M10 it is a rule-4 violation at the comment-read line" "R5-M10 no rule 4 citation: $GUARD_OUT"
+R5_M10_DIR="$d"
+
+# R5-M11 DISPATCH: VERDICT_BRANCH reverted to RESULT: -> the M10 fixture passes (the widening is the mechanism).
+R5V_GUARD="$SANDBOX/guard-verdict-branch-reverted.sh"
+sed "s#^VERDICT_BRANCH=.*#VERDICT_BRANCH='RESULT:'#" "$GUARD" >"$R5V_GUARD"
+if diff -q "$GUARD" "$R5V_GUARD" >/dev/null; then
+  check 1 "" "R5-M11 the VERDICT_BRANCH line is absent -- the mutation did not land and the row is vacuous"
+else
+  R5V_OUT="$(bash "$R5V_GUARD" "$R5_M10_DIR" 2>&1)"; R5V_RC=$?
+  (( R5V_RC == 0 )); check $? "R5-M11 DISPATCH: reverting VERDICT_BRANCH to RESULT: lets the unfiltered marker reader through" "R5-M11 expected exit 0 from the reverted guard, got $R5V_RC: $R5V_OUT"
+fi
+
+# R5-H1 (must-PASS, non-canonical): different variable names, only the NEW view, a marker branch; compliant. The summary must COUNT it
+# as a comment-reading probe (the denominator must not shrink when a probe migrates onto trusted_verdict_comments).
+d=$(mkcase r5_h1)
+cat >"$d/probe-marker-compliant.sh" <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+source "$(dirname "$0")/../lib/trusted-verdict.sh"
+recs=$(trusted_verdict_comments 77 jikig-ai/soleur) || exit 3
+armed=$(jq -r '.b' <<<"$recs" | grep -cE '^S9-ACTIVATED: ')
+(( armed > 0 )) && exit 0
+exit 2
+EOF
+run_guard "$d"
+(( GUARD_RC == 0 )); check $? "R5-H1 must-PASS: a probe that calls only trusted_verdict_comments is compliant" "R5-H1 expected exit 0, got $GUARD_RC: $GUARD_OUT"
+grep -q 'checked 1 comment-reading probe(s)' <<<"$GUARD_OUT"; check $? "R5-H1 it is COUNTED in rule 4's denominator (hermetic: 1 in a sandbox of 1)" "R5-H1 denominator did not count the probe: $GUARD_OUT"
+R5_H1_DIR="$d"
+
+# R5-M12 DISPATCH: LIB_CALL reverted to the bodies view only -> the same sandbox reads 0 comment-reading probes.
+R5L_GUARD="$SANDBOX/guard-lib-call-reverted.sh"
+sed "s#^LIB_CALL=.*#LIB_CALL='trusted_verdict_bodies'#" "$GUARD" >"$R5L_GUARD"
+if diff -q "$GUARD" "$R5L_GUARD" >/dev/null; then
+  check 1 "" "R5-M12 the LIB_CALL line is absent -- the mutation did not land and the row is vacuous"
+else
+  R5L_OUT="$(bash "$R5L_GUARD" "$R5_H1_DIR" 2>&1)"
+  grep -q 'checked 0 comment-reading probe(s)' <<<"$R5L_OUT"; check $? "R5-M12 DISPATCH: reverting LIB_CALL drops the migrated probe from the denominator (the widening is the mechanism)" "R5-M12 expected 'checked 0', got: $R5L_OUT"
+fi
+
+# R5-H2: the live tree. Zero rule-5 hits, and the walk examined at least the floor.
+R5_LIVE_OUT="$(bash "$GUARD" 2>&1)"; R5_LIVE_RC=$?
+(( R5_LIVE_RC == 0 )); check $? "R5-H2 the live tree is clean under rules 1-5" "R5-H2 live tree not clean (rc=$R5_LIVE_RC): $R5_LIVE_OUT"
+! grep -q 'rule 5:' <<<"$R5_LIVE_OUT"; check $? "R5-H2 zero rule-5 citations on the live tree" "R5-H2 rule 5 fired on the live tree: $R5_LIVE_OUT"
+R5_N="$(sed -n 's/.*rule 5 (author-association ban) examined \([0-9][0-9]*\) probe.*/\1/p' <<<"$R5_LIVE_OUT")"
+[[ "$R5_N" =~ ^[0-9]+$ ]] && (( R5_N >= 100 )); check $? "R5-H2 rule 5's walk examined $R5_N probe(s) on the live tree (floor 100)" "R5-H2 rule 5 examined '$R5_N' probe(s), expected >= 100: $R5_LIVE_OUT"
+
 # --- Accounting (ADR-193). Emitted DIRECTLY, never through fail(): a conservation check routed
 # through the verdict helper it polices cannot report the fault that corrupted it. ---
 if (( passes + fails != asserted )); then
@@ -779,7 +967,7 @@ fi
 passes=$_p; fails=$_f; asserted=$_a
 if (( _n > 0 )); then FAILURES=("${_saved[@]}"); else FAILURES=(); fi
 
-MIN_ASSERTIONS=80
+MIN_ASSERTIONS=115
 if (( asserted < MIN_ASSERTIONS )); then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$asserted" "$MIN_ASSERTIONS" >&2
   exit 1
