@@ -15,6 +15,24 @@ brand_survival_threshold: none
 
 # fix: tmp-gate residuals — #10167 block-mapping presence check, #6752 verified-clean close-out, #7004 measured-producer adoption
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-13
+**Sections enhanced:** Proposed Solution (#7004 splice shape), Observability (4.7 proxy argued down), Research Insights (citations re-verified)
+**Research agents used:** inline (no Task-spawn capability in this context — recorded in `decision-challenges.md`); all deepen-plan halts/gates ran mechanically
+
+### Key Improvements
+
+1. **Trap-splice shape corrected against the live chain.** `cloud-init-inngest-bootstrap.test.sh`'s EXIT trap is a *growing* four-arm chain (:164→:809→:1179→:1714); each assignment replaces the prior trap, so `_soleur_scratch_cleanup` must be appended to **every** arm, with the `test-all.sh:507-514` stub-fallback (`declare -F … || _soleur_scratch_cleanup() { :; }`) so the name always resolves. A mid-chain assert failure through an unspliced arm would leak the whole root — the dominant window.
+2. **`harness-discovery-smoke.ts` adoption placement verified.** `bun <file>` (ci.yml:1819,1865) does not run bunfig `[test].preload`, so the script binds no root today; `ensureScratchSession()` goes as a top-level statement after imports, matching `git-tripwire.ts:108`.
+3. **Every cited symbol/line re-verified against `origin/main`** in the deepen pass: `ensureScratchSession` :195, `writeScratchMarker` :122, `normalizeScratchBase` :73, `soleur_scratch_session_begin` :76, `_soleur_scratch_cleanup` :158, `add_leaf` :181, `parse-override.sh` grep at :74, all three parse-override call doors (pr-quality-guards.yml:786/822, postmerge:133, hook:23), ci.yml invocation lines.
+
+### New Considerations Discovered
+
+- `ensureScratchSession()`'s inherited-root arm (`SOLEUR_SCRATCH_SESSION_ROOT` already set → pins TMPDIR to it, returns it, never deletes a parent-owned root) makes the Guard 2 "must-PASS nested shape" row a real code path, not a hypothetical.
+- The cloud-init test's own :1712 comment already documents the "extend, don't replace" convention the splice uses — the edit is in-file convention, not novel.
+- `discoverability_test.command` trips the 4.7 suite-shape proxy (`/test/` path); argued down inline in the Observability block (the suite IS the probe, ~7-arm scratch-git smoke, well under 15s).
+
 ## Overview
 
 Bundle three residual follow-ups in the tmp/scratch-gate neighborhood that
@@ -74,13 +92,16 @@ surfaced around the merged #6760 close-out (PR #10158):
   then the `declare -F _soleur_scratch_cleanup` guard.
 - `tests/scripts/test-scratch-residue.sh` — Guard 1 canary: registered leaves
   run twice (delta arm = zero residue after normal exit; counting arm = ≥1
-  entry in a handed-in parent root, anti-vacuity). `add_leaf` registry at :182+;
+  entry in a handed-in parent root, anti-vacuity). `add_leaf` registry at :181+;
   `sh` kind supported (PATH-shim mktemp counting).
 - `apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh` — 12 `mktemp`
-  sites, all under a growing EXIT trap (:164→:809→:1179→:1714). Producer of the
-  measured `inngest-ci-*` (2,374) + `inngest-arm-*` (4,748) classes — kill-residue
-  only today; registered suite (run-registered-suites "cloud-init" group) so the
-  runner path is already owned. Direct-run is the gap.
+  sites, all under a growing EXIT trap (:164→:809→:1179→:1714; the :1712 comment
+  documents the same "extend, don't replace" convention the plan's splice uses).
+  Producer of the measured `inngest-ci-*` (2,374) + `inngest-arm-*` (4,748)
+  classes — kill-residue only today; registered suite (run-registered-suites
+  "cloud-init" group) so the runner path is already owned, and the file is
+  already trap-covered so it is NOT a `lint-trap-tempfile-ownership` census
+  member. Direct-run is the gap.
 - `plugins/soleur/scripts/harness-discovery-smoke.ts` — `scratchDir()` (:50)
   allocates `harness-discovery-{codex,devin}-*` homes; has a `SCRATCH[]` +
   `cleanupScratch()` exit path (:55) but no ownership marker — kill-residue
@@ -217,18 +238,29 @@ producers:
 
 1. `apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh` — source
    `scripts/lib/scratch-root.sh` opportunistically and call
-   `soleur_scratch_session_begin` before the first `mktemp` (:163), mirroring
-   `test-all.sh:505-515` (missing lib degrades, never blocks). Splice
-   `_soleur_scratch_cleanup` into the FINAL EXIT-trap assignment (:1714) —
-   ADR-129: never a second trap; intermediate trap replacement between :164
-   and :1714 deliberately leaves the root marker-attributable (fail-closed).
-   Covers `inngest-ci-*`, `inngest-arm-*`, `inngest-runcmd-*`, `guarda-*`,
-   `nicg1-*`, `g4pull-*` residue on direct runs.
+   `soleur_scratch_session_begin "$TMPDIR" || true` before the first `mktemp`
+   (:163), mirroring the canonical sequence at `test-all.sh:507-514`:
+   `declare -F` gate on `begin`, then
+   `declare -F _soleur_scratch_cleanup || _soleur_scratch_cleanup() { :; }`
+   so each trap arm can name the cleanup unconditionally. Then append
+   `_soleur_scratch_cleanup || true` to **every arm of the growing
+   EXIT-trap chain** (:164, :809, :1179, :1714) — each assignment replaces
+   the previous trap, so a mid-chain assert failure exits through an arm
+   that, unspliced, would leak the whole root. This is the dominant leak
+   window; ADR-129's "single owner" is preserved because the file still has
+   exactly one `trap` live at any time (the chain itself already documents
+   this "extend, don't replace" convention at :1712). Covers `inngest-ci-*`,
+   `inngest-arm-*`, `inngest-runcmd-*`, `guarda-*`, `nicg1-*`, `g4pull-*`
+   residue on direct runs.
 2. `plugins/soleur/scripts/harness-discovery-smoke.ts` — call
-   `ensureScratchSession()` at `main()` entry (import from
-   `../test/lib/scratch-session`) so `scratchDir()` homes land under an owned
-   `soleur-run.<pid>.*` root; the existing `SCRATCH[]`/`cleanupScratch()` exit
-   path is unchanged (kill-residue is the gap it closes, not clean exits).
+   `ensureScratchSession()` as a top-level statement immediately after
+   imports (the same placement `git-tripwire.ts:108` uses; `main()` runs
+   after and `scratchDir()` at :50 then allocates under the owned root) —
+   import from `../test/lib/scratch-session`. The existing
+   `SCRATCH[]`/`cleanupScratch()` exit path is unchanged (kill-residue is
+   the gap it closes, not clean exits). Under a `bun <file>` invocation the
+   bunfig `[test].preload` does not run, so the script currently binds no
+   root at all — the import is the adoption, not a duplication.
 
 Register `cloud-init-inngest-bootstrap.test.sh` as a `sh` leaf in
 `tests/scripts/test-scratch-residue.sh` so the adoption is proven
@@ -258,7 +290,8 @@ marker-format parity pin the residue suite already carries.
 
 ### Phase 3 — #7004 bounded adoption
 
-- `cloud-init-inngest-bootstrap.test.sh`: source + `begin` + cleanup splice.
+- `cloud-init-inngest-bootstrap.test.sh`: source + `begin` + cleanup
+  spliced into all four growing-trap arms (see Proposed Solution).
 - `harness-discovery-smoke.ts`: `ensureScratchSession()` at entry.
 - `test-scratch-residue.sh`: register the sh leaf; run the residue suite.
 - Verify suite passes standalone (`bash apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh`).
@@ -348,6 +381,10 @@ logs:
 discoverability_test:
   command:         bash plugins/soleur/skills/skill-security-scan/test/parse-override.test.sh
   expected_output: OK:
+  # 4.7 suite-shape proxy argued down: this file is the probe — a ~7-arm
+  # scratch-git fixture smoke (git init + 3 commits + one parse run per arm),
+  # measured at work time well under Check 10's 15s cap; no smaller command
+  # prints the `OK:` liveness signal, and the file itself is created in this PR.
 ```
 
 ## Architecture Decision (ADR/C4)

@@ -42,10 +42,15 @@ Legend: `[ ]` todo · `[x]` done.
 
 - [ ] 3.1 `apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh`:
       opportunistic `source scripts/lib/scratch-root.sh` +
-      `soleur_scratch_session_begin` before the first `mktemp` (:163), mirroring
-      `scripts/test-all.sh:505-515` (missing lib degrades, never blocks).
-      Splice `_soleur_scratch_cleanup` into the FINAL EXIT-trap assignment
-      (:1714) — ADR-129, never a second trap. → AC5
+      `soleur_scratch_session_begin "$TMPDIR" || true` before the first
+      `mktemp` (:163), mirroring `scripts/test-all.sh:507-514` —
+      `declare -F` gate on begin, then
+      `declare -F _soleur_scratch_cleanup || _soleur_scratch_cleanup() { :; }`
+      stub so each arm names it unconditionally. Append
+      `_soleur_scratch_cleanup || true` to ALL FOUR growing EXIT-trap
+      assignments (:164, :809, :1179, :1714) — each replaces the previous
+      trap; a mid-chain failure through an unspliced arm leaks the root.
+      ADR-129 single-owner preserved. → AC5
 - [ ] 3.2 `plugins/soleur/scripts/harness-discovery-smoke.ts`: import +
       `ensureScratchSession()` at entry (top-level statement before `main()`
       runs — same placement as `git-tripwire.ts:108`). → AC6
