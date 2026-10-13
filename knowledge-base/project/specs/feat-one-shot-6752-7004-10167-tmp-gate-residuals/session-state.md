@@ -47,3 +47,10 @@
 - Residue leaf: 232/232 incl. sh-cloud-init-inngest delta+counting arms
 - SIGKILL probe executed manually (leaves are never killed by the suite): TMPDIR=<priv> + timeout -s KILL 4
   → rc=137, residue = exactly one marker-bearing soleur-run.<pid>.* root with .soleur-owned — the #7004 contract
+
+## Ship Phase — IN PROGRESS
+- Phase 0/1/1.5/2: clean (trailers parse, Reviewed-Coverage full 10/10, learning committed)
+- Phase 5.4 preflight: PASS/SKIP — Check 4 distinct refs (dev mlwiodleouzwniehynfz vs prd ifsccnjhymdmidffkzhl via api.soleur.ai CNAME), Check 6 threshold+reason scope-out in plan, Check 10 probe = the suite itself (OK: 18 assertions), Check 13 NO-BLOCK
+- Phase 5.5: review-findings exit gate 0 unresolved; net-issue-flow PASS (net -1); operator-step gate no list-anchored matches; vendor-expense gate not triggered
+- Advisor consult found 1 real blocker (extractor first-match + `-F:` truncation vs last-wins presence) — fixed in d0fc8f4431, arms 11+12 pin it, floor 16->18, suite 18/18
+- Phase 4 --affected battery: queued on advisory lock (ticket 49, pos 4), siblings hold it
