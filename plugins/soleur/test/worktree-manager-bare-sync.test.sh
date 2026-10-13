@@ -133,16 +133,20 @@ else
   # GNU comm only checks sort order once it has seen an UNPAIRED line, so the fixture
   # needs a tracked-deleted path that sorts FIRST in C order (leading dot) ahead of the
   # kept README.md/apps/a.md pair, whose relative order differs between C and en_US.
+  # `.zz-gone.md` sorts LAST in C order but between `apps/` and `README.md` under en_US, which is what
+  # makes GNU comm (without LC_ALL=C) emit the KEPT paths README.md and apps/a.md as deletions.
   printf 'gone\n' > "$SEED2/.0-old.md"
   printf 'gone\n' > "$SEED2/old.md"
-  git -C "$SEED2" add .0-old.md old.md
+  printf 'gone\n' > "$SEED2/.zz-gone.md"
+  git -C "$SEED2" add .0-old.md old.md .zz-gone.md
   git -C "$SEED2" commit -q -m "commit2: add old files"
-  git -C "$SEED2" rm -q .0-old.md old.md
+  git -C "$SEED2" rm -q .0-old.md old.md .zz-gone.md
   git -C "$SEED2" commit -q -m "commit3: delete old files"
   BARE2="$TEST_DIR/bare2.git"
   git clone -q --bare "$SEED2" "$BARE2"
   printf 'gone\n' > "$BARE2/old.md"      # tracked-deleted leftovers: must still be pruned
   printf 'gone\n' > "$BARE2/.0-old.md"
+  printf 'gone\n' > "$BARE2/.zz-gone.md"
   cd "$BARE2"
   LC_ALL="$LOC" bash "$SCRIPT" --yes sync-bare-files > "$TEST_DIR/sync3.log" 2>&1 || {
     echo "  WARN: locale sync exited non-zero:"; sed 's/^/    /' "$TEST_DIR/sync3.log"; }
@@ -152,6 +156,7 @@ else
   assert_file_exists "$BARE2/README.md" "README.md survives under $LOC"
   assert_file_not_exists "$BARE2/old.md" "tracked-deleted old.md still pruned under $LOC"
   assert_file_not_exists "$BARE2/.0-old.md" "tracked-deleted .0-old.md still pruned under $LOC"
+  assert_file_not_exists "$BARE2/.zz-gone.md" "tracked-deleted .zz-gone.md still pruned under $LOC"
   if grep -q 'not in sorted order' "$TEST_DIR/sync3.log"; then
     FAIL=$((FAIL + 1)); echo "  FAIL: comm reported unsorted input under $LOC"
   else

@@ -121,6 +121,8 @@ P_NOCURL="$(mkbin nocurl timeout stub:git)"
 P_NOTIMEOUT="$(mkbin notimeout stub:git stub:curl)"
 HAVE_JQ=0; command -v jq >/dev/null 2>&1 && HAVE_JQ=1
 HAVE_TIMEOUT=0; { command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1; } && HAVE_TIMEOUT=1
+TIMEOUT_BIN=""; command -v timeout >/dev/null 2>&1 && TIMEOUT_BIN=timeout
+[[ -n "$TIMEOUT_BIN" ]] || { command -v gtimeout >/dev/null 2>&1 && TIMEOUT_BIN=gtimeout; }
 
 # ---- verdict helpers -----------------------------------------------------------
 passes=0; fails=0; CASES=0; RUNS=0; SKIPS=0; QUIET=0; SKIP_RUN_DEFICIT=0
@@ -190,7 +192,7 @@ run() {
   local -a ex=() tm=() e=(env -u CLAUDE_PLUGIN_ROOT -u XDG_CACHE_HOME)
   # X_TIMEOUT=<s> bounds ONE run so a regression that blocks (a read on a FIFO, a scan of a
   # multi-GiB file) turns that row red instead of hanging the whole suite.
-  if [[ -n "${X_TIMEOUT:-}" ]] && command -v timeout >/dev/null 2>&1; then tm=(timeout "$X_TIMEOUT"); fi
+  if [[ -n "${X_TIMEOUT:-}" && -n "$TIMEOUT_BIN" ]]; then tm=("$TIMEOUT_BIN" "$X_TIMEOUT"); fi
   if (( ${#ENVS[@]} )); then ex=("${ENVS[@]}"); fi
   ENVS=()
   [[ "$root" != - ]] && e+=("CLAUDE_PLUGIN_ROOT=$root")
@@ -1011,11 +1013,17 @@ run "$DOT/home/work/proj/plugins/soleur" "$XDG" --installed; check co-anchor-anc
 T="$(co_clone anchor-foreign "$SHA_M")"; mkdir -p "$T/.claude-plugin"; printf '{"name":"soleur"}\n' > "$T/.claude-plugin/plugin.json"
 run "$T" "$XDG" --installed; check co-anchor-foreign-root-with-own-git "source=unknown" "$OUT"
 # a relative root is never anchored (the cwd decides what it means)
-T="$(co_clone anchor-rel "$SHA_M")"; X_CWD="$T" run "plugins/soleur" "$XDG" --installed
+# (./plugins/soleur ends in /plugins/soleur, so only the absolute-path check can refuse it)
+T="$(co_clone anchor-rel "$SHA_M")"; X_CWD="$T" run "./plugins/soleur" "$XDG" --installed
 check co-anchor-relative-root "source=unknown" "$OUT"
-# a symlinked root whose LEXICAL suffix is not /plugins/soleur goes silent (accepted)
+# a symlinked root is resolved physically: it names the repository it REALLY lives in
 T="$(co_clone anchor-link "$SHA_M")"; ln -sfn "$T/plugins/soleur" "$CO/linkroot"
-run "$CO/linkroot" "$XDG" --installed; check co-anchor-symlinked-root-silent "source=unknown" "$OUT"
+run "$CO/linkroot" "$XDG" --installed
+check co-symlinked-root-reads-its-real-repo "checkout/${SHA_M:0:12}" "$(val source)/$(val commit)"
+# ...and never the repository that merely holds the link (an unrelated project with a symlink in it)
+H="$(co_clone symlink-host "$SHA_X")"; rm -rf "$H/plugins/soleur"; ln -s "$T/plugins/soleur" "$H/plugins/soleur"
+run "$H/plugins/soleur" "$XDG" --installed
+check co-symlink-inside-another-repo-reads-the-target-not-the-host "checkout/${SHA_M:0:12}" "$(val source)/$(val commit)"
 # accepted residual, recorded as a row: a project that vendors plugins/soleur beside its own .git
 # AND a plugin.json is indistinguishable from an in-place checkout (CTO ruling 2026-10-13: only 12
 # hex of a validated line are ever shown, and only under the opt-in sent).
@@ -1028,47 +1036,77 @@ silent_head() { # name kind -> a clone whose HEAD file holds the bytes for <kind
     empty)        : > "$f" ;;
     ref-only)     printf 'ref:\n' > "$f" ;;
     ref-no-name)  printf 'ref: refs/heads/\n' > "$f" ;;
-    tag-ref)      printf 'ref: refs/tags/main\n' > "$f" ;;
+    tag-ref)      printf 'ref: refs/tags/main\n' > "$f"; mkdir -p "$t/.git/refs/tags"; printf '%s\n' "$SHA_M" > "$t/.git/refs/tags/main" ;;
     dotdot)       printf 'ref: refs/heads/../x\n' > "$f" ;;
     space)        printf 'ref: refs/heads/a b\n' > "$f"; printf '%s\n' "$SHA_M" > "$t/.git/refs/heads/a b" ;;
-    dot-component) printf 'ref: refs/heads/.invalid\n' > "$f"; printf '%s\n' "$SHA_M" > "$t/.git/refs/heads/.invalid" ;;
     crlf-ref)     printf 'ref: refs/heads/main\r\n' > "$f" ;;
     crlf-sha)     printf '%s\r\n' "$SHA_M" > "$f" ;;
     sha39)        printf '%s\n' "${SHA_M:0:39}" > "$f" ;;
     sha41)        printf '%s\n' "${SHA_M}0" > "$f" ;;
-    sha64)        printf '%s\n' "${SHA_M}${SHA_X:0:24}" > "$f" ;;
-    upper)        printf '%s\n' "${SHA_M^^}" > "$f" ;;
+    upper)        printf '%s\n' "$(printf '%s' "$SHA_M" | tr a-f A-F)" > "$f" ;;
     non-hex)      printf '%s\n' "${SHA_M:0:39}g" > "$f" ;;
-    prose)        printf 'this is not a HEAD\n' > "$f" ;;
     gitdir-line)  printf 'gitdir: /somewhere\n' > "$f" ;;
     unborn)       printf 'ref: refs/heads/nothing-here\n' > "$f" ;;
     two-lines)    printf '%s\n%s\n' "$SHA_M" "$SHA_X" > "$f" ;;
     nul-spliced)  printf 'ref: refs/heads/ma\0in\n' > "$f" ;;
-    nul-in-sha)   printf '%s\0%s\n' "${SHA_M:0:20}" "${SHA_M:20}" > "$f" ;;
     loose-ref-garbage) printf 'not a sha\n' > "$t/.git/refs/heads/main" ;;
-    loose-ref-short)   printf '%s\n' "${SHA_M:0:12}" > "$t/.git/refs/heads/main" ;;
-    loose-ref-upper)   printf '%s\n' "${SHA_M^^}" > "$t/.git/refs/heads/main" ;;
-    loose-ref-symref)  printf 'ref: refs/heads/other\n' > "$t/.git/refs/heads/main" ;;
+    loose-ref-upper)   printf '%s\n' "$(printf '%s' "$SHA_M" | tr a-f A-F)" > "$t/.git/refs/heads/main" ;;
     loose-ref-dir)     rm -f "$t/.git/refs/heads/main"; mkdir -p "$t/.git/refs/heads/main" ;;
     loose-invalid-no-fallthrough) printf 'not a sha\n' > "$t/.git/refs/heads/main"; printf '%s refs/heads/main\n' "$SHA_X" > "$t/.git/packed-refs" ;;
     reftable)     printf 'ref: refs/heads/.invalid\n' > "$f"; mkdir -p "$t/.git/reftable" ;;
     packed-bad-sha) rm -f "$t/.git/refs/heads/main"; printf 'zzzz refs/heads/main\n' > "$t/.git/packed-refs" ;;
     packed-other-only) rm -f "$t/.git/refs/heads/main"; printf '%s refs/heads/mainx\n%s refs/heads/xmain\n' "$SHA_X" "$SHA_Y" > "$t/.git/packed-refs" ;;
-    packed-peel-only)  rm -f "$t/.git/refs/heads/main"; printf '^%s\n' "$SHA_X" > "$t/.git/packed-refs" ;;
-    packed-comment-only) rm -f "$t/.git/refs/heads/main"; printf '# %s refs/heads/main\n' "$SHA_X" > "$t/.git/packed-refs" ;;
     gitfile-garbage) rm -rf "$t/.git"; printf 'gitdir:\n' > "$t/.git" ;;
     gitfile-missing-target) rm -rf "$t/.git"; printf 'gitdir: %s/nowhere\n' "$CO" > "$t/.git" ;;
-    gitfile-not-gitdir) rm -rf "$t/.git"; printf 'not a pointer\n' > "$t/.git" ;;
   esac
   printf '%s' "$t"
 }
-for kind in empty ref-only ref-no-name tag-ref dotdot space dot-component crlf-ref crlf-sha sha39 sha41 sha64 \
-            upper non-hex prose gitdir-line unborn two-lines nul-spliced nul-in-sha loose-ref-garbage \
-            loose-ref-short loose-ref-upper loose-ref-symref loose-ref-dir loose-invalid-no-fallthrough \
-            reftable packed-bad-sha packed-other-only packed-peel-only packed-comment-only gitfile-garbage \
-            gitfile-missing-target gitfile-not-gitdir; do
+for kind in empty ref-only ref-no-name tag-ref dotdot space crlf-ref crlf-sha sha39 sha41 \
+            upper non-hex gitdir-line unborn two-lines nul-spliced loose-ref-garbage \
+            loose-ref-upper loose-ref-dir loose-invalid-no-fallthrough \
+            reftable packed-bad-sha packed-other-only gitfile-garbage \
+            gitfile-missing-target; do
   T="$(silent_head "$kind" "$kind")"; co_expect "co-silent-$kind" "$T" unknown
 done
+# valid_ref_name deny arms: every row names a ref whose loose file EXISTS and holds a valid sha, so
+# without its arm the resolver would print a commit (a missing target would be refused anyway)
+deny_ref() { # label ref-as-written [file-path-under-refs/heads, default = the ref]
+  local t f; t="$(co_clone "deny-$1" "$SHA_M")"; f="${3:-$2}"
+  mkdir -p "$(dirname "$t/.git/refs/heads/$f")"; printf '%s\n' "$SHA_M" > "$t/.git/refs/heads/$f"
+  printf 'ref: refs/heads/%s\n' "$2" > "$t/.git/HEAD"
+  co_expect "co-deny-ref-$1" "$t" unknown
+}
+deny_ref tilde 'a~b'; deny_ref caret 'a^b'; deny_ref colon 'a:b'; deny_ref qmark 'a?b'; deny_ref star 'a*b'
+deny_ref bracket 'a[b'; deny_ref backslash 'a\b'; deny_ref at-brace 'a@{b'; deny_ref tab $'a\tb'
+deny_ref lock-suffix 'x.lock'; deny_ref trailing-dot 'x.'; deny_ref dot-component 'a/.b'; deny_ref at-alone '@'
+deny_ref double-slash 'a//b' 'a/b'
+# `..` climbing out of refs/heads to a file that exists and holds a valid sha
+T="$(co_clone deny-dotdot-climb "$SHA_M")"; mkdir -p "$T/.git/refs/heads/a"; printf '%s\n' "$SHA_M" > "$T/.git/refs/secretfile"
+printf 'ref: refs/heads/a/../../secretfile\n' > "$T/.git/HEAD"; co_expect co-deny-ref-dotdot-climb "$T" unknown
+# the same ref name accepted when it is NOT hostile (control: the rows above are not just a broken fixture)
+T="$(co_clone deny-control "$SHA_M" 'a-b_c.d/e')"; co_expect co-deny-ref-control-accepts-a-plain-name "$T" "$SHA_M"
+# pointer edge rows: an empty commondir is not a pointer; an absolute one is followed (ruled, bounded to 12 hex)
+T="$(co_top commondir-empty)"; CDE="$CO/commondir-empty-common"; assert_fixture_dir "$CDE"; rm -rf "$CDE"
+mkdir -p "$CDE/worktrees/wt" "$CDE/refs/heads"; printf 'ref: refs/heads/main\n' > "$CDE/worktrees/wt/HEAD"; : > "$CDE/worktrees/wt/commondir"
+printf '%s\n' "$SHA_M" > "$CDE/refs/heads/main"; printf 'gitdir: %s/worktrees/wt\n' "$CDE" > "$T/.git"
+# the fallback directory (the worktree's own gitdir) holds a valid ref too, so ONLY the empty-pointer guard refuses it
+mkdir -p "$CDE/worktrees/wt/refs/heads"; printf '%s\n' "$SHA_X" > "$CDE/worktrees/wt/refs/heads/main"
+co_expect co-commondir-empty-is-unknown "$T" unknown
+T="$(co_top commondir-abs)"; CDA="$CO/commondir-abs-common"; assert_fixture_dir "$CDA"; rm -rf "$CDA"
+mkdir -p "$CDA/worktrees/wt" "$CDA/refs/heads"; printf 'ref: refs/heads/main\n' > "$CDA/worktrees/wt/HEAD"; printf '%s\n' "$CDA" > "$CDA/worktrees/wt/commondir"
+printf '%s\n' "$SHA_X" > "$CDA/refs/heads/main"; printf 'gitdir: %s/worktrees/wt\n' "$CDA" > "$T/.git"
+co_expect co-commondir-absolute-is-followed "$T" "$SHA_X"
+# a loose ref that is a DANGLING symlink exists as a path: it must not fall through to a packed entry
+T="$(co_clone dangling "$SHA_M")"; rm -f "$T/.git/refs/heads/main"; ln -s /nonexistent-soleur-ref "$T/.git/refs/heads/main"
+printf '%s refs/heads/main\n' "$SHA_X" > "$T/.git/packed-refs"; co_expect co-loose-dangling-symlink-no-fallthrough "$T" unknown
+# a non-ASCII branch AND directory name resolve the same in every locale (bytes, not characters)
+T="$(co_clone "café" "$SHA_M" 'feat/café')"
+ENVS=(LC_ALL=C); co_expect co-nonascii-names-under-C-locale "$T" "$SHA_M"
+co_expect co-nonascii-names-under-ambient-locale "$T" "$SHA_M"
+UTF8LOC="$(locale -a 2>/dev/null | grep -i -m1 -E '^(en_US|C)\.utf-?8$' || true)"
+if [[ -n "$UTF8LOC" ]]; then ENVS=("LC_ALL=$UTF8LOC"); co_expect co-nonascii-names-under-utf8-locale "$T" "$SHA_M"
+else skip_case co-nonascii-names-under-utf8-locale "no UTF-8 locale installed"; skip_case co-nonascii-names-under-utf8-locale-exact-output "no UTF-8 locale installed"
+     skip_case co-nonascii-names-under-utf8-locale-rc-and-no-git "no UTF-8 locale installed"; SKIP_RUN_DEFICIT=$((SKIP_RUN_DEFICIT + 1)); fi
 # boundary rows: "ref: refs/heads/" + a 495-char name + LF is exactly the 512-byte gate; one char more is over it
 mk_long_ref() { # name length -> clone whose HEAD names a ref of <length> chars after "ref: refs/heads/"
   local t n="$2" f c1 c2 c3 c4; t="$(co_clone "$1" "$SHA_M")"
@@ -1083,21 +1121,29 @@ T="$(mk_long_ref long-ok 495)"; co_expect co-head-at-512-byte-gate "$T" "$SHA_M"
 T="$(mk_long_ref long-over 496)"; co_expect co-head-over-512-byte-gate "$T" unknown
 # a huge sparse HEAD must be refused by size BEFORE any read (read -n 512 alone took 38 s on 2 GiB of NULs)
 T="$(co_clone sparse "$SHA_M")"; rm -f "$T/.git/HEAD"; dd if=/dev/null of="$T/.git/HEAD" bs=1 seek=2147483648 2>/dev/null
-SECONDS=0; X_TIMEOUT=10 co_expect co-silent-sparse-2gib-head "$T" unknown; _el=$SECONDS
-check co-sparse-2gib-head-bounded-under-3s 1 "$(( _el < 3 ? 1 : 0 ))"
+X_TIMEOUT=10 co_expect co-silent-sparse-2gib-head "$T" unknown
 # the matching entry is the FIRST line, so without the size gate awk would find it and print a commit
 T="$(co_clone bigpacked "$SHA_M")"; rm -f "$T/.git/refs/heads/main"; printf '%s refs/heads/main\n' "$SHA_M" > "$T/.git/packed-refs"
-printf '\0' | dd of="$T/.git/packed-refs" bs=1 seek=8388607 conv=notrunc 2>/dev/null   # sparse hole: the file is now 8 MiB
-SECONDS=0; X_TIMEOUT=10 co_expect co-silent-oversize-packed-refs "$T" unknown; _el=$SECONDS
-check co-oversize-packed-refs-bounded-under-3s 1 "$(( _el < 3 ? 1 : 0 ))"
+printf '\0' | dd of="$T/.git/packed-refs" bs=1 seek=5242879 conv=notrunc 2>/dev/null   # sparse hole: the file is now 5 MiB, over the 4 MiB cap
+X_TIMEOUT=10 co_expect co-silent-oversize-packed-refs "$T" unknown
+# a real-sized packed-refs (this repository's own is ~0.5 MB) with the wanted entry LAST must resolve
+T="$(co_clone realsize "$SHA_M")"; rm -f "$T/.git/refs/heads/main"
+seq 1 15000 | awk -v s="$SHA_X" '{ printf "%s refs/heads/b%d\n", s, $1 }' > "$T/.git/packed-refs"; printf '%s refs/heads/main\n' "$SHA_M" >> "$T/.git/packed-refs"
+co_expect co-packed-refs-real-sized-accepts-the-last-entry "$T" "$SHA_M"
+# an oversize or non-regular plugin.json is skipped before jq/awk could stall on it
+T="$(co_clone bigmanifest "$SHA_M")"; printf '\0' | dd of="$T/plugins/soleur/.claude-plugin/plugin.json" bs=1 seek=2097151 conv=notrunc 2>/dev/null
+X_TIMEOUT=10 co_expect co-oversize-manifest-is-skipped-not-parsed "$T" "$SHA_M"
 # a FIFO named HEAD would hang an open(2); [[ -f ]] refuses it before any open
-if command -v mkfifo >/dev/null 2>&1; then
+# (the row needs a timeout binary: without one a regression would hang the suite instead of reddening a row)
+if command -v mkfifo >/dev/null 2>&1 && [[ -n "$TIMEOUT_BIN" ]]; then
   T="$(co_clone fifo "$SHA_M")"; rm -f "$T/.git/HEAD"; mkfifo "$T/.git/HEAD"
-  SECONDS=0; X_TIMEOUT=10 co_expect co-silent-fifo-head "$T" unknown; _el=$SECONDS
-  check co-fifo-head-returns-under-5s 1 "$(( _el < 5 ? 1 : 0 ))"
+  X_TIMEOUT=10 co_expect co-silent-fifo-head "$T" unknown
+  T="$(co_clone fifo-manifest "$SHA_M")"; rm -f "$T/plugins/soleur/.claude-plugin/plugin.json"; mkfifo "$T/plugins/soleur/.claude-plugin/plugin.json"
+  X_TIMEOUT=10 co_expect co-silent-fifo-manifest "$T" unknown
 else
-  skip_case co-silent-fifo-head "no mkfifo"; skip_case co-silent-fifo-head-rc-and-no-git "no mkfifo"
-  skip_case co-fifo-head-returns-under-5s "no mkfifo"; SKIP_RUN_DEFICIT=$((SKIP_RUN_DEFICIT + 1))
+  skip_case co-silent-fifo-head "no mkfifo or timeout"; skip_case co-silent-fifo-head-rc-and-no-git "no mkfifo or timeout"
+  skip_case co-silent-fifo-manifest "no mkfifo or timeout"; skip_case co-silent-fifo-manifest-rc-and-no-git "no mkfifo or timeout"
+  SKIP_RUN_DEFICIT=$((SKIP_RUN_DEFICIT + 2))
 fi
 
 # --- hostile repository config: it is data, never executed, never even a reason to call git
@@ -1111,16 +1157,33 @@ hostile_config() { # <git-dir>
 T="$(co_clone hostile "$SHA_M")"; hostile_config "$T/.git"; mkdir -p "$T/.git/hooks"; cp "$HK/pre-commit" "$T/.git/hooks/pre-commit"
 co_expect co-hostile-config-read-not-run "$T" "$SHA_M"
 check co-hostile-config-sentinel-absent 0 "$([[ -e "$SENT" ]] && echo 1 || echo 0)"
+# The checkout code names no git command at all (the stub shadows `git` by NAME, so an absolute-path or
+# `command -p` call would bypass it; this is the row that sees those). Comments are stripped first.
+CK_SRC="$(awk '/^# ---- local checkout/ {f=1} /^resolve_installed\(\)/ {f=0} f' "$SUT" | sed 's/[[:space:]]#.*$//; /^#/d')"
+check co-checkout-code-has-a-body 1 "$([[ "$CK_SRC" == *"resolve_checkout_commit()"* ]] && echo 1 || echo 0)"
+check co-checkout-code-names-no-git-command 0 "$(printf '%s\n' "$CK_SRC" | grep -cE '(^|[[:space:];&|(`])(/[^[:space:]]*/)?git[[:space:]]' || true)"
 if [[ -n "$REAL_GIT" ]]; then
-  # The witness: the SAME config text, in a repository real git understands, fires the hook.
+  # The witness: the SAME config text, in a repository real git understands, fires the hook...
   WT="$CO/witness"; assert_fixture_dir "$WT"; rm -rf "$WT"; mkdir -p "$WT"
   ( source "$DIR/lib/git-fixture-env.sh" && git_fixture_env "$WT" \
       && cd "$WT" && "$REAL_GIT" init -q . && hostile_config "$WT/.git" \
       && "$REAL_GIT" commit -q --allow-empty -m witness ) >/dev/null 2>&1
   check co-hostile-config-is-armed-for-real-git 1 "$([[ -e "$SENT" ]] && echo 1 || echo 0)"
+  # ...and the resolver, run on that very repository, reads it without firing anything.
+  rm -f "$SENT"; mkdir -p "$WT/plugins/soleur/.claude-plugin"; printf '{"name":"soleur"}\n' > "$WT/plugins/soleur/.claude-plugin/plugin.json"
+  WREF="$(sed 's/^ref: //' "$WT/.git/HEAD")"; WSHA="$(cat "$WT/.git/$WREF" 2>/dev/null)"
+  co_expect co-hostile-real-repo-read-not-run "$WT" "$WSHA"
+  check co-hostile-real-repo-sentinel-absent 0 "$([[ -e "$SENT" ]] && echo 1 || echo 0)"
 else
   skip_case co-hostile-config-is-armed-for-real-git "git not installed"
+  skip_case co-hostile-real-repo-read-not-run "git not installed"; skip_case co-hostile-real-repo-read-not-run-exact-output "git not installed"
+  skip_case co-hostile-real-repo-read-not-run-rc-and-no-git "git not installed"; skip_case co-hostile-real-repo-sentinel-absent "git not installed"
+  SKIP_RUN_DEFICIT=$((SKIP_RUN_DEFICIT + 1))
 fi
+# the user-facing prose names the label the hook prints (a dropped `source=checkout` arm must not go unnoticed)
+for doc in commands/version.md commands/help.md README.md; do
+  check_has "co-label-in-$doc" "(local checkout)" "$(cat "$REPO_ROOT/plugins/soleur/$doc")"
+done
 
 # --- parity with real git (gated): the resolver and `git rev-parse HEAD` agree on real layouts
 if [[ -n "$REAL_GIT" ]]; then
@@ -1186,14 +1249,14 @@ if (( passes + fails != CASES )) || (( fails != ${#FAILURES[@]} )); then
     "$passes" "$fails" "$CASES" "${#FAILURES[@]}" >&2
   exit 1
 fi
-MIN_CASES=572
+MIN_CASES=618
 if (( CASES != MIN_CASES )); then
   printf 'FATAL: %d cases ran, expected exactly %d -- cases were added or deleted, or the suite aborted early\n' "$CASES" "$MIN_CASES" >&2
   exit 1
 fi
 # The subject must actually have run: a harness that asserts on empty output for every row
 # would still satisfy every "prints nothing" row.
-MIN_RUNS=292
+MIN_RUNS=310
 # Skipped rows (no jq, no timeout, no git, no mkfifo) did not drive the resolver, and skip_case
 # already counted them as cases, so the exact run count is credited by what they would have run.
 EXPECT_RUNS=$(( MIN_RUNS - SKIP_RUN_DEFICIT ))

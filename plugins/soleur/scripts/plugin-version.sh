@@ -24,8 +24,8 @@
 # its .git/config, hooks and attributes are untrusted project input. The lookup is anchored on
 # the layout (the root ends in /plugins/soleur, <top>/.git exists, plugin.json exists), never a
 # walk up to "the first .git", which would adopt a dotfiles repository above the project. Every
-# file is size-gated by stat BEFORE it is read, only a 40-hex first line is accepted, and only
-# its first 12 hex are ever printed.
+# file is size-gated by stat BEFORE it is read, HEAD and loose refs must be exactly one line,
+# only a 40-hex commit is accepted, and only its first 12 hex are ever printed.
 # The plugin root is CLAUDE_PLUGIN_ROOT, or, when that is unset (the Bash tool does not
 # always export it), the directory one level above this script's directory.
 #
@@ -63,6 +63,7 @@ SHA40_RE='^[0-9a-f]{40}$'
 SHA12_RE='^[0-9a-f]{12}$'
 SMALL_MAX=512        # bytes: HEAD, loose refs, .git pointer files, commondir
 PACKED_MAX=4194304   # bytes: packed-refs (this repository's own is ~0.5 MB)
+MANIFEST_MAX=1048576 # bytes: plugin.json (the real one is ~1 KB)
 TTL_S=86400
 # A failed compare is cached as fresh for only this long (the fetched stamp is backdated by
 # TTL_S - FAIL_FRESH_S), so one rate-limit response does not silence the notice for a day.
@@ -161,8 +162,11 @@ manifest_version_nojq() {
 }
 
 read_manifest_version() {
-  local f="$1" v=""
-  [[ -r "$f" ]] || return 0
+  local f="$1" v="" n
+  # A FIFO or a /dev/zero symlink here would stall jq/awk for the whole hook budget.
+  [[ -f "$f" && -r "$f" ]] || return 0
+  n="$(file_size "$f")" || return 0
+  (( n <= MANIFEST_MAX )) || return 0
   if command -v jq >/dev/null 2>&1; then
     v="$(jq -r '.version // empty' "$f" 2>/dev/null)" || v=""
   else
@@ -172,7 +176,7 @@ read_manifest_version() {
 }
 
 # ---- local checkout (source=checkout): plain file reads, never git ---------------------
-# These are the only readers of repository bytes. Every read is gated on regular-file-ness
+# These (and the manifest read, gated the same way) are the only readers of repository bytes. Every read is gated on regular-file-ness
 # AND on a stat size first (a FIFO or device would hang an open; a sparse multi-GiB HEAD of
 # NULs took 38 s through `read -n 512` alone), and nothing is executed, sourced or evaluated.
 CK_VAL=""
@@ -185,7 +189,7 @@ file_size() { # path -> byte count on stdout; nothing when it cannot be measured
 }
 
 read_small() { # path -> CK_VAL = the file's single line (no newline); 1 when absent, irregular, oversize or not exactly one line
-  local f="$1" n line="" rc=0 got
+  local f="$1" n line="" rc=0 got LC_ALL=C   # bytes, not characters: a non-ASCII name must not change the verdict
   CK_VAL=""
   [[ -f "$f" && -r "$f" ]] || return 1
   n="$(file_size "$f")" || return 1
@@ -194,7 +198,8 @@ read_small() { # path -> CK_VAL = the file's single line (no newline); 1 when ab
   # What was consumed must be exactly what the file holds. `read` silently drops NUL bytes and
   # stops at the first newline, so a NUL-spliced or multi-line file consumes fewer bytes than
   # its size and is refused instead of printing an identity from a string that is not its
-  # bytes. A multibyte name counts as fewer characters than bytes, so it is refused too.
+  # bytes. LC_ALL=C makes ${#line} count bytes in every locale, so a non-ASCII branch or path
+  # resolves the same under C and UTF-8 (a character count would silently drop the banner).
   got=${#line}
   if (( rc == 0 && got < SMALL_MAX )); then got=$((got + 1)); fi   # the newline `read` consumed
   (( got == n )) || return 1
@@ -217,16 +222,20 @@ packed_ref_sha() { # commondir ref -> CK_VAL = sha for the exact ref in packed-r
   [[ -f "$f" && -r "$f" ]] || return 1
   n="$(file_size "$f")" || return 1
   (( n >= 1 && n <= PACKED_MAX )) || return 1
+  # A comment line (`# ...`) and a peel line (`^sha`) can never have the ref as $2, so no rule is
+  # needed for them; a record longer than any real entry is skipped before awk splits it.
   CK_VAL="$(SOLEUR_REF="$2" awk '
-    /^[#^]/ { next }
-    NF >= 2 && $2 == ENVIRON["SOLEUR_REF"] { print $1; exit }' "$f" 2>/dev/null)" || CK_VAL=""
+    length($0) < 512 && $2 == ENVIRON["SOLEUR_REF"] { print $1; exit }' "$f" 2>/dev/null)"
   [[ "$CK_VAL" =~ $SHA40_RE ]]
 }
 
 resolve_checkout_commit() { # absolute plugin root -> CK_VAL = 40-hex HEAD commit, else 1
-  local root="${1%/}" top gd="" common head ref line
+  local root="${1%/}" top gd="" common head ref
   CK_VAL=""
   case "$root" in /*) ;; *) return 1 ;; esac
+  # Physical path first: a plugin root that is a symlink into another checkout must read THAT
+  # checkout's HEAD, not the HEAD of the repository that merely holds the link.
+  root="$(cd -P -- "$root" 2>/dev/null && pwd -P)" || return 1
   case "$root" in */plugins/soleur) ;; *) return 1 ;; esac
   top="${root%/plugins/soleur}"
   [[ -n "$top" ]] || return 1

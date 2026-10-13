@@ -962,13 +962,7 @@ for lay in bad nogit emptyhead; do
   new_xdg; reset_calls; run_hook "CLAUDE_PLUGIN_ROOT=$t/plugins/soleur" "SOLEUR_UPDATE_CHECK=1"
   assert "15.c unreadable checkout ($lay): no output, rc 0, no git/curl, no lock" '[[ -z "$OUT" ]] && (( RC == 0 )) && (( $(n_git) + $(n_curl) == 0 )) && [[ ! -e "$(LOCK)" ]]' "got: $OUT"
 done
-# a hostile .git/config is data: the banner still prints and no program named in it ever runs
-CO_HOST="$(mkco hostile)"; HSENT="$SANDBOX/co-hostile.fired"; rm -f "$HSENT"
-printf '#!/bin/sh\necho fired > "%s"\nexit 0\n' "$HSENT" > "$SANDBOX/co-hostile-prog"; chmod +x "$SANDBOX/co-hostile-prog"
-printf '[core]\n\tfsmonitor = %s\n\tsshCommand = %s\n\thooksPath = %s\n[alias]\n\trev-parse = !%s\n' \
-  "$SANDBOX/co-hostile-prog" "$SANDBOX/co-hostile-prog" "$SANDBOX" "$SANDBOX/co-hostile-prog" > "$CO_HOST/.git/config"
-new_xdg; reset_calls; run_hook "CLAUDE_PLUGIN_ROOT=$CO_HOST/plugins/soleur"
-assert "15.d hostile .git/config: banner printed, git never called, nothing executed" '[[ "$(msg)" == "$MCO" && ! -e "$HSENT" ]] && (( $(n_git) == 0 ))' "got: $(msg)"
+# (the hostile .git/config proof lives in plugin-version.test.sh, against a repository real git can arm)
 # opt-in: the cache is the one stable latest-release.checkout; a warning needs relation=older for THIS commit
 new_xdg; put_cache checkout v9.9.9 "$((NOW - 60))" older "$CO12"; reset_calls
 run_hook "CLAUDE_PLUGIN_ROOT=$CO_CLONE/plugins/soleur" "SOLEUR_UPDATE_CHECK=1"
@@ -1015,7 +1009,7 @@ HOOK="$HOOK_REAL"
 # --- verdict ------------------------------------------------------------
 # Floors are the EXACT counts of a full run (no slack: a vanished section must turn the suite red).
 # The root-only skips never run the subject, so they lower the run/banner floors by what they skipped.
-MIN_CASES=235
+MIN_CASES=234
 if (( CASES < MIN_CASES )); then
   printf 'FATAL: assertion floor breached -- ran %d cases, floor is %d. Cases were deleted, or the suite aborted early.\n' \
     "$CASES" "$MIN_CASES" >&2
@@ -1027,7 +1021,7 @@ if (( passes + fails + SKIPS != CASES )); then
 fi
 # The subject must actually have run and printed: a harness that asserts on empty output
 # for every row would still satisfy the "prints nothing" rows.
-MIN_RUNS=113; MIN_BANNERS=92
+MIN_RUNS=112; MIN_BANNERS=91
 # A root-only skip never runs the subject, so the observed side is credited with what it skipped.
 if (( RUNS + SKIP_RUN_DEFICIT < MIN_RUNS || BANNERS + SKIP_RUN_DEFICIT < MIN_BANNERS )); then
   printf 'FATAL: subject ran %d times (floor %d) and printed %d banners (floor %d). The harness asserted without driving the hook.\n' \
