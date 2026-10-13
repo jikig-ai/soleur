@@ -56,5 +56,11 @@ class Barrier(unittest.TestCase):
     def test_fatal_between_admission_and_dispatch_cannot_dispatch(self):
         self.fixture(lambda p: setattr(p, 'fatal', 'synthetic later failure'), at_dispatch=True)
 
+    def test_cleanup_during_body_read_cannot_dispatch_execution(self):
+        self.fixture(lambda p: p.begin_cleanup())
+
+    def test_cleanup_between_admission_and_dispatch_cannot_dispatch_execution(self):
+        self.fixture(lambda p: p.begin_cleanup(), at_dispatch=True)
+
 if __name__ == '__main__':
     unittest.main()

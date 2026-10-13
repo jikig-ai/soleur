@@ -22,6 +22,8 @@ SAST, C.9 clearance, authentication evidence or promotion approval.
 | Foreign Host fixture can contact upstream and still pass | TLS-refusal-upstream-oracle | test-design-reviewer | qualification boundary corrections |
 | No prohibited stdin transport assertion | exec-upgrade-stdin-oracle | test-design-reviewer | qualification boundary corrections |
 | Comment-only runner anchors remove blockers | runner-shape-comment-vacuity | data-integrity-guardian | qualification boundary corrections |
+| Pending execution survives cleanup transition; transport fatal lacks lock | proxy-admission-state-race | security-sentinel | qualification cleanup correction |
+| Backend EOF can precede proxy fatal publication | exec-upgrade-stdin-oracle | test-design-reviewer | qualification cleanup correction |
 
 ## Binding technical direction
 

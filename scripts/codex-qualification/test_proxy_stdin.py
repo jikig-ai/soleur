@@ -72,6 +72,15 @@ class Stdin(unittest.TestCase):
                     front.sendall(b'PROHIBITED-SYNTHETIC-INPUT')
                     self.assertTrue(done.wait(5), 'Backend did not close after refusal')
                     self.assertEqual(received, [b''])
+                    # Backend EOF occurs while hijack unwinds, before fail()
+                    # publishes fatal. Frontend EOF follows the final refusal.
+                    total = 0
+                    while True:
+                        block = front.recv(4096)
+                        if not block:
+                            break
+                        total += len(block)
+                        self.assertLessEqual(total, 8192, 'Unbounded synthetic refusal response')
                     self.assertIsNotNone(proxy.fatal)
                     self.assertIn('Exec stdin is unavailable', proxy.fatal)
             finally:

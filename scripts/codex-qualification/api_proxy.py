@@ -167,7 +167,7 @@ class Proxy:
                 raise Refused('Docker request body exceeds reviewed bound')
             payload = handler.rfile.read(length)
             with self.lock:
-                self.require_open()
+                self.require_open(handler.command, handler.path)
                 route = re.sub(r'^/v[0-9.]+(?=/)', '', urlsplit(handler.path).path)
                 if handler.command == 'POST' and route == '/volumes/create':
                     config = json.loads(payload)
@@ -221,7 +221,7 @@ class Proxy:
             headers['Content-Length'] = str(len(payload))
             headers['Connection'] = 'close'
             with self.lock:
-                self.require_open()
+                self.require_open(handler.command, path)
                 backend.request(handler.command, path, body=payload, headers=headers)
             response = backend.getresponse()
             # Creation responses must be recorded before the client can start an ID.
@@ -268,7 +268,8 @@ class Proxy:
         except (Refused, ValueError, KeyError, json.JSONDecodeError) as exc:
             self.fail(handler, str(exc))
         except Exception as exc:
-            self.fatal = 'Proxy transport failed: ' + type(exc).__name__
+            with self.lock:
+                self.fatal = 'Proxy transport failed: ' + type(exc).__name__
             handler.close_connection = True
         finally:
             if response is not None:
@@ -280,10 +281,15 @@ class Proxy:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as backend:
             return self.hijack_owned(handler, path, payload, backend)
 
-    def require_open(self):
+    def require_open(self, method, path):
         """Call under the controller lock at admission and immediately at dispatch."""
         if time.monotonic() >= self.deadline or (self.fatal and not self.cleanup_only):
             raise Refused(self.fatal or 'Proxy deadline exhausted')
+        if self.cleanup_only:
+            route = re.sub(r'^/v[0-9.]+(?=/)', '', urlsplit(path).path)
+            if not ((method == 'DELETE' and re.fullmatch(r'/(containers|volumes|networks)/[^/]+', route)) or
+                    (method == 'GET' and re.fullmatch(r'/(containers/[^/]+/json|networks/[^/]+)', route))):
+                raise Refused('Cleanup admits only registered inventory inspection and deletion')
 
     def hijack_owned(self, handler, path, payload, backend):
         backend.settimeout(30)
@@ -293,7 +299,7 @@ class Proxy:
         request = (handler.command + ' ' + path + ' HTTP/1.1\r\n' +
                    ''.join(k + ': ' + v + '\r\n' for k, v in headers.items()) + '\r\n').encode()
         with self.lock:
-            self.require_open()
+            self.require_open(handler.command, path)
             backend.sendall(request + payload)
         head = b''
         while b'\r\n\r\n' not in head:
