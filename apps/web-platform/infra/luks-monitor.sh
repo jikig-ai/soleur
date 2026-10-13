@@ -432,9 +432,28 @@ hb_url="$(doppler secrets get WORKSPACES_LUKS_HEARTBEAT_URL --plain --config prd
 # blip red the daily probe and file an issue would trade a silent gap for a noisy one. Three
 # attempts, each capped at 10s, 2s apart: ~36s worst case, well inside the unit's runtime. An
 # EXHAUSTED push is the same "cannot report" state as an absent URL, so it ends the same way.
+#
+# The URL's PATH is the credential (Better Stack heartbeat), so it must not ride curl's argument list
+# (readable by every local user in /proc/<pid>/cmdline; ADR-280, #9757): it reaches curl on the stdin
+# config (`--config -`); `--disable` (first, so no ~/.curlrc is read as root) and `--noproxy '*'` confine the transport (lint Rule D). This host
+# has no checkout, so this is the inline form of the library. The value is judged BEFORE the retry loop
+# and with no trimming: a scheme other than https://, an empty rest, or any byte outside
+# [A-Za-z0-9._~:/?&=%+-] (a quote, backslash or newline would add directives to the config grammar,
+# a control byte or space is no URL) is refused. A refusal prints one value-free marker, makes zero
+# requests and sleeps zero times, and ends as an exhausted push does (the same cannot-report state).
+hb_url_ok() {
+  local LC_ALL=C
+  case "$1" in https://*) ;; *) return 1 ;; esac
+  case "${1#https://}" in ''|*[!A-Za-z0-9._~:/?\&=%+-]*) return 1 ;; esac
+}
+if ! hb_url_ok "$hb_url"; then
+  case "$hb_url" in *[[:cntrl:]]*) hb_reason=control_char ;; *) hb_reason=token_shape ;; esac
+  log "SOLEUR_CREDENTIAL_REFUSED script=luks-monitor reason=$hb_reason var=WORKSPACES_LUKS_HEARTBEAT_URL"
+  emit_readiness_and_die heartbeat_push_failed
+fi
 hb_pushed=false
 for _ in 1 2 3; do
-  if curl -gfsS --max-time 10 "$hb_url" >/dev/null 2>&1; then hb_pushed=true; break; fi
+  if curl --disable --noproxy '*' -gfsS --max-time 10 --config - >/dev/null 2>&1 < <(printf 'url = "%s"\n' "$hb_url"); then hb_pushed=true; break; fi
   sleep 2
 done
 [ "$hb_pushed" = true ] || emit_readiness_and_die heartbeat_push_failed

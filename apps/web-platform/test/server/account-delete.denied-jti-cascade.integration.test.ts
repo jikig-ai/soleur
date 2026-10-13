@@ -1,7 +1,7 @@
 /**
  * deleteAccount × denied_jti — pins migration 106 (Art-17 founder-erasure gap).
  *
- * Plan ref: knowledge-base/project/plans/2026-06-15-fix-authusers-delete-cascade-dev-drift-plan.md
+ * Plan ref: knowledge-base/project/plans/archive/20261013-032858-2026-06-15-fix-authusers-delete-cascade-dev-drift-plan.md
  *
  * Background (#5372 fold-in): migration 037 defined
  *   denied_jti.founder_id ... REFERENCES public.users(id) ON DELETE RESTRICT

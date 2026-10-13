@@ -21,7 +21,7 @@ Connect the existing reviewed Codex Web adapter to real conversation and routine
 
 ### Premise validation and reconciliation
 
-`gh pr view 8980` reported MERGED at `1f919b01c7a1ab9c056af6aa19369cd3fd48599d`. This worktree begins at `51909c6fb4a459c0c1a6bf49347150c3d2b43b5f`. The current source confirms the user’s remaining gap: `ws-handler.ts` and `routines/run-routine.ts` still call `assertLegacyEngineBinding`; the Codex conversation and routine bridges have direct tests but no real handler consumer. The existing [rollout plan](2026-09-21-feat-codex-web-controlled-rollout-plan.md), [qualification record](../specs/feat-one-shot-codex-web-rollout/codex-qualification-record.md), and [CLO packet](../specs/feat-one-shot-codex-web-rollout/clo-decision-packet.md) remain the policy/evidence sources. Local CLI and App Server smokes are narrower than authenticated Web qualification.
+`gh pr view 8980` reported MERGED at `1f919b01c7a1ab9c056af6aa19369cd3fd48599d`. This worktree begins at `51909c6fb4a459c0c1a6bf49347150c3d2b43b5f`. The current source confirms the user’s remaining gap: `ws-handler.ts` and `routines/run-routine.ts` still call `assertLegacyEngineBinding`; the Codex conversation and routine bridges have direct tests but no real handler consumer. The existing [rollout plan](archive/20261013-051752-2026-09-21-feat-codex-web-controlled-rollout-plan.md), [qualification record](../specs/archive/20261013-051752-feat-one-shot-codex-web-rollout/codex-qualification-record.md), and [CLO packet](../specs/archive/20261013-051752-feat-one-shot-codex-web-rollout/clo-decision-packet.md) remain the policy/evidence sources. Local CLI and App Server smokes are narrower than authenticated Web qualification.
 
 This branch has no `spec.md` with a valid `lane:`; planning defaults to `cross-domain`.
 
@@ -124,7 +124,7 @@ The resumed fix also covers these concrete failure modes:
 - `apps/web-platform/server/routines/run-routine.ts`, eligible `apps/web-platform/server/inngest/functions/` consumers, `apps/web-platform/app/api/dashboard/routines/run/route.ts`, `apps/web-platform/server/routines-tools.ts`, and tests — producer/consumer contract and trusted attribution.
 - `apps/web-platform/server/agent-engine-persistence.ts`, its SQL migration and lifecycle tests — turn attempts, durable sequence, protected recovery and erasure/DSAR path from ADR-233.
 - `apps/web-platform/server/codex-web-runtime.ts`, `apps/web-platform/server/agent-engine-dispatch.ts`, `apps/web-platform/server/agent-engine-data-egress-policy.ts`, transport/launcher and tests only where the mapped real paths expose a gap. Keep the existing conversation and routine dispatch bridges unless a failing real-path test shows a missing capability.
-- `knowledge-base/project/specs/feat-one-shot-codex-web-rollout/codex-qualification-record.md` and `clo-decision-packet.md` for actual mode evidence and disposition status.
+- `knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-codex-web-rollout/codex-qualification-record.md` and `clo-decision-packet.md` for actual mode evidence and disposition status.
 
 ## Design reference
 

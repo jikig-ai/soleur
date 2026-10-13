@@ -229,9 +229,9 @@ kex, the root cause is not fail2ban. Diagnose in this order:
 
 ## Related
 
-- Plan: `knowledge-base/project/plans/2026-04-19-fix-prod-ssh-kex-reset-plan.md`.
+- Plan: `knowledge-base/project/plans/archive/20261013-003106-2026-04-19-fix-prod-ssh-kex-reset-plan.md`.
 - Prior plan (installed fail2ban):
-  `knowledge-base/project/plans/2026-03-19-security-add-fail2ban-ssh-protection-plan.md`.
+  `knowledge-base/project/plans/archive/20261012-213508-2026-03-19-security-add-fail2ban-ssh-protection-plan.md`.
 - AGENTS.md rules: `hr-all-infrastructure-provisioning-servers`,
   `hr-never-label-any-step-as-manual-without`,
   `cq-for-production-debugging-use`.

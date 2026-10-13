@@ -52,8 +52,8 @@ This generalizes beyond #3269: any time `fix-issue` bails out of a `deferred-sco
 
 - Parent issue: #3269 — surface prefill-guard fires to model + user (context-reset signal)
 - Bot-fix attempt comment: https://github.com/jikig-ai/soleur/issues/3269#issuecomment-4395333534
-- Brainstorm: `knowledge-base/project/brainstorms/2026-05-07-prefill-guard-context-reset-signal-brainstorm.md`
-- Spec: `knowledge-base/project/specs/feat-prefill-guard-context-reset-signal/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-07-prefill-guard-context-reset-signal-brainstorm.md`
+- Spec: `knowledge-base/project/specs/archive/20261013-014038-feat-prefill-guard-context-reset-signal/spec.md`
 - ADR-025: WS lifecycle-notice event family
 - Related rule: `hr-weigh-every-decision-against-target-user-impact`
 - Related rule: `hr-when-triaging-a-batch-of-issues-never` (also names `fix-issue` as not authoritative for triage decisions)

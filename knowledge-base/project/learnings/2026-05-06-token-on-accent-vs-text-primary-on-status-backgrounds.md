@@ -80,7 +80,7 @@ For future token migrations:
 
 1. **Three migration agents made the same wrong mapping independently.** Recovery: orchestrator post-implementation sweep with a single `sed` invocation across the affected files. Prevention: token-mapping prompts must enumerate contrast-pair precedence before generic mappings.
 2. **Group A migration missed `app/(dashboard)/dashboard/chat/layout.tsx`** — file was outside the explicit hand-listed scope but contained tokenizable classes; only caught by code-quality reviewer post-implementation. Recovery: P2 fix-inline (commit `99bbcc4f`). Prevention: migration-group prompts should accept a glob pattern (`app/(dashboard)/**/*.tsx`) and let the agent expand to the actual file list, rather than hand-enumerating files which can miss layout/template siblings.
-3. **Plan subagent did not create the spec directory.** `knowledge-base/project/specs/feat-one-shot-fix-light-theme-incomplete-styling/` was missing when the orchestrator tried to write `session-state.md`. Recovery: orchestrator `mkdir -p` before writing. Prevention: plan skill should create the spec dir during plan generation (Phase 0 of the plan skill).
+3. **Plan subagent did not create the spec directory.** `knowledge-base/project/specs/archive/20261013-014038-feat-one-shot-fix-light-theme-incomplete-styling/` was missing when the orchestrator tried to write `session-state.md`. Recovery: orchestrator `mkdir -p` before writing. Prevention: plan skill should create the spec dir during plan generation (Phase 0 of the plan skill).
 
 ## Tags
 

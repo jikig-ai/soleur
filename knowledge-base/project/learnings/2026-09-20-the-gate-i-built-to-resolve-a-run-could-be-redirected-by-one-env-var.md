@@ -257,7 +257,7 @@ durable sentence I thought I was deriving was written a month earlier:
 | --- | --- |
 | `knowledge-base/project/plans/archive/20260811-002501-2026-08-10-fix-infra-suite-runner-parallel-flake-plan.md` — *"takes ~23 minutes against a 15-second cap. A command a gate cannot execute proves nothing about discoverability"* | 2026-08-10 |
 | `scripts/git-data-rung2-gate-verdict.sh` › `# WHY NOT THE SUITE` — both halves, cap and prose matcher | #8388, **written by me two days before this PR** |
-| `knowledge-base/project/plans/2026-09-19-fix-git-data-rung2-gate-load-bearing-plan.md` › `# AMENDED 2026-09-20` | this cycle |
+| `knowledge-base/project/plans/archive/20261013-051752-2026-09-19-fix-git-data-rung2-gate-load-bearing-plan.md` › `# AMENDED 2026-09-20` | this cycle |
 
 So this class belongs with the other five, not apart from them, and the count is **six of six**
 already on record. What was genuinely missing is not the statement but the **enforcement**: a plan

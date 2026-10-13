@@ -1227,9 +1227,9 @@ required. Discoverability without SSH:
 ## References
 
 - Migration PR: #1095
-- Migration plan: `knowledge-base/project/plans/2026-03-24-feat-scheduled-tasks-cloud-migration-plan.md`
+- Migration plan: `knowledge-base/project/plans/archive/20261012-213508-2026-03-24-feat-scheduled-tasks-cloud-migration-plan.md`
 - Migration spec: `knowledge-base/project/specs/archive/20260325-003628-feat-scheduled-tasks-migration/`
-- Silence-detection plan: `knowledge-base/project/plans/2026-04-21-fix-scheduled-content-generator-cloud-task-silence-plan.md`
+- Silence-detection plan: `knowledge-base/project/plans/archive/20261013-003106-2026-04-21-fix-scheduled-content-generator-cloud-task-silence-plan.md`
 - Prior incident learning: `knowledge-base/project/learnings/2026-04-03-content-cadence-gap-cloud-task-migration.md`
 - Doppler token-scope learning: `knowledge-base/project/learnings/2026-03-29-doppler-service-token-config-scope-mismatch.md`
 - Peer watchdog pattern: `.github/workflows/scheduled-cf-token-expiry-check.yml`

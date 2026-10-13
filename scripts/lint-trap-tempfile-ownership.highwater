@@ -11,7 +11,7 @@
 # The remaining 36 are annotate-bounded (sourced libs where an EXIT trap would
 # clobber the caller's, deliverable dirs) and out-of-enumeration members under
 # apps/, .github/, tests/ — dispositioned in
-# knowledge-base/project/specs/feat-one-shot-10017-mktemp-tmp-leak/mktemp-census.md.
+# knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-10017-mktemp-tmp-leak/mktemp-census.md.
 # 69 -> 70 (2026-10-11, #9980 / PR #10029): apps/web-platform/infra/arm-heartbeats.sh joins the
 # population by gaining `--arm-one`, whose books file is allocated by `mktemp` and has NO
 # owning `trap ... EXIT` BY DESIGN (Cut List C6, ADR-117 amendment): a trap would delete the

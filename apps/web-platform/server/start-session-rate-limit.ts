@@ -1,6 +1,6 @@
 // Sliding-window rate limiter for ws-handler `start_session`.
 //
-// Plan: knowledge-base/project/plans/2026-04-23-feat-cc-route-via-soleur-go-plan.md
+// Plan: knowledge-base/project/plans/archive/20261013-003106-2026-04-23-feat-cc-route-via-soleur-go-plan.md
 // Stage 2 §"Files to edit" (ws-handler.ts `start_session` rate limit) /
 // Stage 2.5 RED / Stage 2.15 GREEN / Stage 6.11 security smoke.
 //

@@ -27,14 +27,14 @@ points motivated this decision:
    → ship → compound) is not first-class in web UX.
 
 The ~2026-04-23 brainstorm (see
-`knowledge-base/project/brainstorms/2026-04-23-cc-single-leader-routing-brainstorm.md`)
+`knowledge-base/project/brainstorms/archive/20261013-003106-2026-04-23-cc-single-leader-routing-brainstorm.md`)
 pivoted from a minimal "single primary leader" patch to a more ambitious
 "SDK as router" approach: route web turns through the SAME `/soleur:go`
 command that the CLI uses, so web and CLI converge on identical workflow
 semantics.
 
 Stage 0 of plan
-`knowledge-base/project/plans/2026-04-23-feat-cc-route-via-soleur-go-plan.md`
+`knowledge-base/project/plans/archive/20261013-003106-2026-04-23-feat-cc-route-via-soleur-go-plan.md`
 spiked the pattern. The 2026-04-24 rerun under streaming-input mode
 (`prompt: AsyncIterable`) produced the data the decision is based on:
 
@@ -155,7 +155,7 @@ ships here; the dispatcher abstraction lifts above it later).
 
 ## 2026-04-29 follow-up — Command Center QA fixes (PR #3020)
 
-Three QA findings from the V1 dogfood drove this amendment. See plan `knowledge-base/project/plans/2026-04-29-fix-command-center-qa-permissions-runaway-rename-plan.md`.
+Three QA findings from the V1 dogfood drove this amendment. See plan `knowledge-base/project/plans/archive/20261013-003106-2026-04-29-fix-command-center-qa-permissions-runaway-rename-plan.md`.
 
 ### Decision 1 — Safe-Bash auto-approve allowlist (NOT `bypassPermissions`)
 

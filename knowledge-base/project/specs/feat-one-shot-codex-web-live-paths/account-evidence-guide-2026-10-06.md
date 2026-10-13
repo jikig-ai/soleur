@@ -10,7 +10,7 @@ status: pending-no-live-authorization
 Scoped internal assessment by `soleur:legal:clo` (`/root/public_clo`),
 against the source SHA above. This supplements the
 [mode audit](../../../legal/audits/2026-10-03-codex-web-mode-authorization.md)
-and [public-source reassessment](../feat-one-shot-codex-web-rollout/clo-decision-packet.md#public-source-clo-reassessment--2026-10-05).
+and [public-source reassessment](../archive/20261013-051752-feat-one-shot-codex-web-rollout/clo-decision-packet.md#public-source-clo-reassessment--2026-10-05).
 It changes no published legal document and grants no live authorization.
 
 ## Published evidence and existing owner statement

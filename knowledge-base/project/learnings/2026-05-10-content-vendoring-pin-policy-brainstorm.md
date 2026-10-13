@@ -6,7 +6,7 @@ tags: [brainstorm-process, learnings-researcher, vendor-pin, freshness-pattern, 
 synced_to: [brainstorm, learnings-researcher]
 component: brainstorm
 problem_type: brainstorm_process
-related_artifacts: [knowledge-base/project/brainstorms/2026-05-10-gosprinto-pin-policy-brainstorm.md, knowledge-base/project/specs/feat-gosprinto-pin-policy/spec.md, knowledge-base/project/learnings/2026-05-09-evaluating-vendor-branded-claude-code-skills.md, https://github.com/jikig-ai/soleur/issues/3517, https://github.com/jikig-ai/soleur/pull/3521]
+related_artifacts: [knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-10-gosprinto-pin-policy-brainstorm.md, knowledge-base/project/specs/archive/20261013-014038-feat-gosprinto-pin-policy/spec.md, knowledge-base/project/learnings/2026-05-09-evaluating-vendor-branded-claude-code-skills.md, https://github.com/jikig-ai/soleur/issues/3517, https://github.com/jikig-ai/soleur/pull/3521]
 severity: medium
 ---
 
@@ -118,10 +118,10 @@ The brainstorm session soft-skipped Phase 0.25 (roadmap-freshness reconciliation
 
 ## Cross-References
 
-- Brainstorm document: `knowledge-base/project/brainstorms/2026-05-10-gosprinto-pin-policy-brainstorm.md`
-- Plan: `knowledge-base/project/plans/2026-05-10-feat-content-vendoring-pin-policy-plan.md`
-- Tasks: `knowledge-base/project/specs/feat-gosprinto-pin-policy/tasks.md`
-- Spec: `knowledge-base/project/specs/feat-gosprinto-pin-policy/spec.md`
+- Brainstorm document: `knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-10-gosprinto-pin-policy-brainstorm.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-10-feat-content-vendoring-pin-policy-plan.md`
+- Tasks: `knowledge-base/project/specs/archive/20261013-014038-feat-gosprinto-pin-policy/tasks.md`
+- Spec: `knowledge-base/project/specs/archive/20261013-014038-feat-gosprinto-pin-policy/spec.md`
 - Tracking issue: #3517
 - Draft PR: #3521
 - Source PR (the lift): #3501

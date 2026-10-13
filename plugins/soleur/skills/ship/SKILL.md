@@ -1084,10 +1084,8 @@ The PR's diff will produce drift on `terraform_data.deploy_pipeline_fix` — by 
 ```bash
 if [[ -z "${CI:-}" && -z "${GITHUB_ACTIONS:-}" ]] && ssh-add -l >/dev/null 2>&1; then
   cd apps/web-platform/infra
-  # Only the bridge target here (NOT deploy_pipeline_fix): the in-session fallback
-  # exists to land a handler/helper/sudoers change immediately; the webhook push
-  # (deploy_pipeline_fix) is independently covered by the CI auto-apply and does not
-  # need the operator's SSH path. Do NOT widen this to a 2-target apply.
+  # Bridge target only (NOT deploy_pipeline_fix): this fallback lands a handler/helper/
+  # sudoers change now; the webhook push is covered by the CI auto-apply. Never widen it.
   doppler run -p soleur -c prd_terraform -- \
     terraform apply -target=terraform_data.infra_config_handler_bootstrap -input=true
   # The Terraform "yes" prompt is the load-bearing authorization
@@ -1095,13 +1093,13 @@ if [[ -z "${CI:-}" && -z "${GITHUB_ACTIONS:-}" ]] && ssh-add -l >/dev/null 2>&1;
 fi
 ```
 
-Verify with the no-host-login status hook (per `hr-no-ssh-fallback-in-runbooks` — `files_written == files_total` via `/hooks/infra-config-status`, NOT an SSH hash compare):
+Verify via the no-host-login status hook (`hr-no-ssh-fallback-in-runbooks`; `files_written == files_total` at `/hooks/infra-config-status`, never an SSH hash compare):
 
 ```bash
 WEBHOOK_SECRET=$(doppler secrets get WEBHOOK_DEPLOY_SECRET -p soleur -c prd_terraform --plain)
 CF_ACCESS_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID -p soleur -c prd_terraform --plain)
 CF_ACCESS_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET -p soleur -c prd_terraform --plain)
-HMAC=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+HMAC=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')
 curl -fsS -H "X-Signature-256: sha256=${HMAC}" \
   -H "CF-Access-Client-Id: ${CF_ACCESS_ID}" \
   -H "CF-Access-Client-Secret: ${CF_ACCESS_SECRET}" \
@@ -2271,6 +2269,14 @@ if [[ "$sync_ok" -eq 1 ]]; then
     sync_ok=0
   fi
 fi
+# ADR-276 S3 (#9728): the head-verdict resolver is read independent of sync_ok/SYNC_SNAP. A disabled BEHIND auto-sync (not in a
+# worktree, an old sync script) says nothing about the resolver; keying it on the snapshot made a ready PR's draft-run `test` row
+# read as a required failure there. Identity-verified root plus a readable script is the whole condition.
+VERDICT_OK=0
+if [[ -n "$SYNC_ROOT" && -r "$SYNC_ROOT/scripts/ci-head-verdict.sh" ]] \
+   && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "$SYNC_ROOT/.claude-plugin/plugin.json" 2>/dev/null; then
+  VERDICT_OK=1
+fi
 # Required-check names: fetched ONCE (rules change only by operator action).
 # Fail-open by design: an API failure leaves REQUIRED_CHECKS empty and the per-tick
 # scan a no-op; do NOT "harden" to fail-closed (breaks repos without branch
@@ -2321,7 +2327,7 @@ while true; do
       # ADR-276 S3: a ready PR's red `test` may be the DRAFT run's row; ask the resolver.
       vstate=""
       for n in "${failed_names[@]}"; do
-        [[ "$n" == test && -n "$SYNC_SNAP" && -r "$SYNC_ROOT/scripts/ci-head-verdict.sh" ]] || continue
+        [[ "$n" == test && "$VERDICT_OK" -eq 1 ]] || continue
         vout="$(bash "$SYNC_ROOT/scripts/ci-head-verdict.sh" verdict "$PR" 2>/dev/null)" || vout=""
         vline="$(grep -m1 '^SOLEUR_CI_HEAD_VERDICT ' <<<"$vout")" || vline=""
         vstate="${vline#*state=}"; vstate="${vstate%% *}"; break

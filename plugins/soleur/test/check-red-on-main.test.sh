@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2329,SC2015,SC2016  # row/mutation functions are dispatched indirectly; A && B || why is the assertion idiom; jq programs are single-quoted on purpose
 # Suite for plugins/soleur/scripts/check-red-on-main.sh (#9402) -- Guard 1 of the plan's Guard
-# Contract (knowledge-base/project/plans/2026-10-01-chore-quarantine-red-main-checks-plan.md).
+# Contract (knowledge-base/project/plans/archive/20261013-062704-2026-10-01-chore-quarantine-red-main-checks-plan.md).
 #
 # ── THE SEAM ─────────────────────────────────────────────────────────────────────────────────
 # `gh` is a PATH stub that answers ONLY the requests the SUT is expected to make, keyed on the

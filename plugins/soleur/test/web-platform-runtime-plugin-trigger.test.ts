@@ -1,5 +1,5 @@
 // Behavioral drift-guard for the runtime-plugin deploy gap
-// (knowledge-base/project/plans/2026-07-02-fix-runtime-plugin-deploy-to-concierge-host-plan.md).
+// (knowledge-base/project/plans/archive/20261013-041741-2026-07-02-fix-runtime-plugin-deploy-to-concierge-host-plan.md).
 //
 // Root cause: a runtime-affecting plugins/soleur/** merge never rebuilt+deployed
 // the web-platform image, so the Concierge host mount kept running stale plugin

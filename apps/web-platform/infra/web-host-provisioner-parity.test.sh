@@ -1064,7 +1064,7 @@ main_rc=$?
 # builds a scratch repository whose apps/web-platform/infra IS the SOLEUR_INFRA_DIR sandbox.
 TF_REPO="${SOLEUR_TF_REPO:-$ROOT}"
 python3 - "$TF_REPO" "$INFRA" <<'G2EOF'
-import json, pathlib, re, subprocess, sys
+import json, os, pathlib, re, subprocess, sys
 
 REPO = pathlib.Path(sys.argv[1]).resolve()
 INFRA = pathlib.Path(sys.argv[2]).resolve()
@@ -1405,12 +1405,13 @@ def dials_web_2(b):
 # host is ANY `web-N`, not just the two declared FLEET_SSH_HOSTS -- a future web-3
 # dialer outside server.tf is exactly the fail-closed case (the roster is declared,
 # not discovered; mirrors §1's _DIAL_HOST_RE / _fleet_extra shape). Two
-# load-bearing conventions, both declared residuals: host names must match
+# load-bearing conventions: host names must match
 # web-\d+ (a web-canary/web-1a matches nothing), and the dial must be LITERAL --
-# host = local.x/var.y/each.value/self or a raw IP engages no arm (an existing
-# member cannot switch to indirection -- the stale arm fires on hosts ⊆ ∅ --
-# but a NEW indirect dialer skips residence from birth; battery control G2-C6
-# pins the gap so closing it later is a deliberate act).
+# host = local.x/var.y/each.value/self or a raw IP matches NOTHING here, but no
+# longer goes unclassified: the unclassifiable-dial arm below flags every swept
+# connection block outside server.tf whose dialed set is empty (#10148 closed
+# the residual this comment used to declare; battery row G2-38 -- the converted
+# G2-C6 control -- pins the arm red).
 def dialed_hosts(b):
     return set(re.findall(r'hcloud_server\.web\["(web-\d+)"\]', dial_text(b)))
 
@@ -1467,19 +1468,32 @@ else:
 # member (a second resource-level connection) stays in declared scope, while ANY dial
 # to an undeclared host still fails. `reason` is mandatory -- an empty one fails
 # the stale arm below, exactly as §5's check_allowlist enforces reason.strip()
-# non-empty. One standing waiver to keep in review: a member's provisioner
-# bodies sit outside §1's census and §2 by residence alone (the entry only
-# waives THIS arm), and the entry makes that permanent for the resource's life
-# -- future credential-bearing edits inside a member need no table diff, so a
-# NEW entry should carry a dedicated collateral pin (the four seeds are covered
-# by workspaces-luks/ci-ssh-key sibling pins; a per-member content bound is the
-# deferred hardening).
+# non-empty. Per-member content bound (#10147): a member's provisioner bodies
+# sit outside §1's census and §2 by residence alone (the entry only waives THIS
+# arm), and the entry makes that permanent for the resource's life -- future
+# credential-bearing edits inside a member need no table diff. The bound is
+# declared, not re-checked here: every entry carries `pin`, a repo-relative
+# `*.test.sh`/`*.test.ts` path naming the suite that pins the member's provisioner content,
+# enforced in the hygiene arm below (present, shaped, extant). What the named
+# suite covers is review-verified, exactly as `reason`'s adequacy is.
+# `unclassifiable` (optional, default false) declares that the member's dials
+# may be non-literal/non-web -- the reviewed acknowledgment the
+# unclassifiable-dial arm (#10148) consults. `hosts` may be empty only under the
+# flag, and a flagged entry still owes >=1 swept block at its declared
+# (file, type.name): the marker cannot be asserted over nothing. Named residual:
+# `dialed_hosts` is a whole-body TEXTUAL match, so a literal
+# `hcloud_server.web["web-1"]` in a member's NON-host attribute mints
+# dialed={web-1} and routes an actually-indirect dial through the fleet arm --
+# the pin suite is the backstop for that class, exactly as pin adequacy is.
 # (#9998 -- the w2_elsewhere arm was web-2-only and left web-1 and future web-N
 # dialers outside server.tf unclassified.)
 EXT_RESIDENCE = {
     "apps/web-platform/infra/ci-ssh-key.tf": {
         "terraform_data.root_authorized_keys": {
             "hosts": frozenset({"web-1"}),
+            # wiring-level pin (--target presence + exclusion allowlist), not a
+            # body pin -- the asymmetry is declared, not hidden (#10147)
+            "pin": "plugins/soleur/test/terraform-target-parity.test.ts",
             "reason": "operator-local one-off authorized_keys install on web-1 "
                       "(the file's own header scopes it to operator-local apply), "
                       "not fleet provisioning",
@@ -1488,16 +1502,19 @@ EXT_RESIDENCE = {
     "apps/web-platform/infra/workspaces-luks.tf": {
         "terraform_data.luks_monitor_token_install": {
             "hosts": frozenset({"web-1"}),
+            "pin": "apps/web-platform/infra/luks-monitor-install.test.sh",
             "reason": "web-1 LUKS boot-unlock chain member -- installs the monitor "
                       "token on web-1 only, not fleet provisioning",
         },
         "terraform_data.luks_monitor_install": {
             "hosts": frozenset({"web-1"}),
+            "pin": "apps/web-platform/infra/luks-monitor-install.test.sh",
             "reason": "web-1 LUKS boot-unlock chain member -- installs the monitor "
                       "helper + units on web-1 only, not fleet provisioning",
         },
         "terraform_data.workspaces_boot_unlock_install": {
             "hosts": frozenset({"web-1"}),
+            "pin": "apps/web-platform/infra/workspaces-boot-unlock.test.sh",
             "reason": "web-1 LUKS boot-unlock chain member -- installs the reopen "
                       "units on web-1 only, not fleet provisioning",
         },
@@ -1547,43 +1564,204 @@ else:
        + ". Declare an EXT_RESIDENCE entry (hosts + a reason) or move the "
          "resource into server.tf as terraform_data.")
 
-# Allowance hygiene, folded into one arm (the §5 check_allowlist precedent): an
-# EXT_RESIDENCE entry that no longer sweeps a matching fleet-dialing block, or
-# whose reason is empty, is a finding. The mutation battery mutates .tf inputs only and cannot
-# reach this table, so the invariant fails loudly HERE at guard runtime; the
-# reason-mandatory half is verified by review like ALLOWLIST/ONLY_JUSTIFIED.
-stale_ext = []
-for fpath, members in EXT_RESIDENCE.items():
-    if not isinstance(members, dict):
-        stale_ext.append(f"{fpath} (malformed EXT_RESIDENCE member map)")
+# Unclassifiable-dial arm (#10148). `dialed_hosts` matches only the literal
+# `hcloud_server.web["web-N"]` spelling, so a swept connection block outside
+# server.tf whose host expression is anything else -- `local.x`/`var.y`/
+# `each.value`/`self`, a raw IP, a literal non-web reference
+# (`hcloud_server.git_data.*`, a module output), a `.tf.json` object with no
+# `host` key, or no `host` at all -- engaged no arm: an existing member cannot
+# switch to indirection (the stale arm fires on hosts ⊆ ∅) but a NEW indirect
+# dialer skipped classification from birth. Flag every swept block whose dialed
+# set is empty; the only waiver is an EXT_RESIDENCE entry for its
+# (file, type.name) carrying `unclassifiable: true` -- the exemption surface
+# stays single. Iterate ALL `blocks` like fleet_elsewhere: a winrm label or a
+# `dynamic "connection"` spelling buys no invisibility. Inside-server.tf
+# indirection is a named residual (the issue scopes to outside server.tf): a
+# non-`terraform_data`/dynamic/winrm/type-less indirect dialer INSIDE server.tf
+# escapes §1's census AND this arm -- §1 pins `terraform_data` member hosts
+# literal, nothing more. Battery control G2-C8 pins that residual green so an
+# arm over-reaching into server.tf is loud.
+unclassifiable = []
+for loc, b, addr, _k in blocks:
+    fpath = loc.rsplit(':', 1)[0]
+    if fpath == "apps/web-platform/infra/server.tf":
         continue
-    for rname, entry in members.items():
-        if not isinstance(entry, dict):
-            stale_ext.append(f"{fpath}:{rname} (malformed entry)")
+    if dialed_hosts(b):
+        continue
+    members = EXT_RESIDENCE.get(fpath)
+    entry = members.get(addr) if isinstance(members, dict) else None
+    if isinstance(entry, dict) and entry.get("unclassifiable") is True:
+        continue
+    unclassifiable.append(f"{loc} ({(addr or 'unattributed')!r})")
+if not unclassifiable:
+    ok("G2: every connection block outside server.tf dials a classifiable literal "
+       "hcloud_server.web[\"web-N\"] host (or holds an unclassifiable EXT_RESIDENCE entry)")
+else:
+    no("G2: unclassifiable connection dial(s) outside server.tf — the host "
+       "expression is not a literal hcloud_server.web[\"web-N\"] reference the "
+       "guard can classify: " + ", ".join(unclassifiable)
+       + ". Point it at a literal fleet reference, or declare the member's "
+         "EXT_RESIDENCE entry with unclassifiable: true.")
+
+# Allowance hygiene, folded into one arm (the §5 check_allowlist precedent): an
+# EXT_RESIDENCE entry that no longer sweeps a matching block, whose reason is
+# empty, or whose `pin` does not name an extant repo-relative `*.test.sh`/
+# `*.test.ts` file resolving inside REPO is a finding. The mutation battery mutates .tf inputs only and cannot reach this
+# table, so the invariant fails loudly HERE at guard runtime; the
+# reason-adequacy half is verified by review like ALLOWLIST/ONLY_JUSTIFIED --
+# and so is pin-adequacy (the bound forces the DECLARATION, not the coverage).
+# The pin check is an existence stat under REPO -- deliberately not a second
+# reader: the battery pins Guard 2 to exactly one file enumeration, one
+# file-read call site, and the stat-family call sites below, so file CONTENT
+# verification would be a deliberate reader-pin amendment, not a silent
+# extension.
+def ext_residence_hygiene(table, label):
+    pin_bad = []
+    stale = []
+    for fpath, members in table.items():
+        if not isinstance(members, dict):
+            stale.append(f"{fpath} (malformed {label} member map)")
             continue
-        hosts = entry.get("hosts")
-        reason = entry.get("reason", "")
-        if not isinstance(hosts, (set, frozenset)) or not isinstance(reason, str) \
-                or not reason.strip():
-            stale_ext.append(f"{fpath}:{rname} (malformed entry or empty reason)")
-            continue
-        # Every DECLARED host must be dialed by a swept block of that exact
-        # resource: an over-declared hosts set would pre-authorize a future dial
-        # with no table diff, and a vanished resource leaves the entry stale.
-        dialed = set()
-        for loc, b, addr in ssh_blocks:
-            if loc.rsplit(':', 1)[0] == fpath and addr == rname:
-                dialed |= dialed_hosts(b)
-        if not hosts <= dialed:
-            stale_ext.append(f"{fpath}:{rname}")
+        for rname, entry in members.items():
+            if not isinstance(entry, dict):
+                stale.append(f"{fpath}:{rname} (malformed entry)")
+                continue
+            hosts = entry.get("hosts")
+            reason = entry.get("reason", "")
+            unclass = entry.get("unclassifiable") is True
+            if ("unclassifiable" in entry
+                    and not isinstance(entry["unclassifiable"], bool)) \
+                    or not isinstance(hosts, (set, frozenset)) \
+                    or not isinstance(reason, str) or not reason.strip() \
+                    or (not hosts and not unclass):
+                stale.append(f"{fpath}:{rname} (malformed entry, empty reason, or "
+                             "empty hosts without unclassifiable: true)")
+                continue
+            # `pin` is mandatory and bounded: a repo-relative `*.test.sh`/
+            # `*.test.ts` path that exists under REPO, resolving inside it (a
+            # committed symlink -- leaf OR intermediate component -- escaping
+            # REPO would satisfy the existence stat while the bound names
+            # nothing in-tree). A typo'd or dangling pin is the silent-drift
+            # class this table exists to catch, so existence is mechanical.
+            # REPO is already canonicalized (above), so the containment check
+            # compares real paths.
+            pin = entry.get("pin")
+            # The stat trio is wrapped so a hostile path (embedded NUL --
+            # ValueError on lstat; a symlink loop -- RuntimeError on old
+            # Pythons) yields a named pin finding, not a traceback.
+            try:
+                stat_ok = isinstance(pin, str) \
+                    and (REPO / pin).resolve().is_relative_to(REPO) \
+                    and not (REPO / pin).is_symlink() \
+                    and (REPO / pin).is_file()
+            except (OSError, ValueError, RuntimeError):
+                stat_ok = False
+            if not isinstance(pin, str) or not pin.strip() \
+                    or pin.startswith("/") \
+                    or ".." in pathlib.PurePosixPath(pin).parts \
+                    or not pin.endswith((".test.sh", ".test.ts")) \
+                    or not stat_ok:
+                pin_bad.append(f"{fpath}:{rname} (pin {pin!r})")
+            # Every entry must still sweep >=1 block at its declared
+            # (file, type.name) -- the stale arm's reach extends to
+            # unclassifiable-flagged entries, whose `hosts ⊆ dialed` is vacuous
+            # at ∅ ⊆ ∅. For literal entries this was only implied by a
+            # non-empty hosts set; now it is checked outright.
+            swept = sum(1 for _loc, _b, a, _k in blocks
+                        if _loc.rsplit(':', 1)[0] == fpath and a == rname)
+            # Every DECLARED host must be dialed by a swept block of that exact
+            # resource: an over-declared hosts set would pre-authorize a future
+            # dial with no table diff, and a vanished resource leaves the entry
+            # stale.
+            dialed = set()
+            for loc, b, addr in ssh_blocks:
+                if loc.rsplit(':', 1)[0] == fpath and addr == rname:
+                    dialed |= dialed_hosts(b)
+            if not swept or not hosts <= dialed:
+                stale.append(f"{fpath}:{rname}")
+    return pin_bad, stale
+
+
+n_ext = sum(len(m) for m in EXT_RESIDENCE.values() if isinstance(m, dict))
+pin_bad, stale_ext = ext_residence_hygiene(EXT_RESIDENCE, "EXT_RESIDENCE")
+if not pin_bad:
+    ok(f"G2: every EXT_RESIDENCE entry carries a pin naming an extant "
+       f"repo-relative *.test.sh/*.test.ts file ({n_ext} entries)")
+else:
+    no("G2: EXT_RESIDENCE pin — every entry must name an extant repo-relative "
+       "*.test.sh/*.test.ts file pinning the member's provisioner content (#10147): "
+       + ", ".join(pin_bad))
 if not stale_ext:
-    n_ext = sum(len(m) for m in EXT_RESIDENCE.values())
-    ok(f"G2: every EXT_RESIDENCE entry resolves to a swept fleet-dialing block and "
+    ok(f"G2: every EXT_RESIDENCE entry resolves to a swept connection block and "
        f"carries a reason ({n_ext} entries)")
 else:
     no("G2: stale EXT_RESIDENCE entry — the resource it names no longer sweeps a "
-       "matching fleet-dialing connection block (or its reason is empty): "
+       "matching connection block (or its reason is empty): "
        + ", ".join(stale_ext))
+
+# REACHABILITY PROBE (the §5 SOLEUR_PARITY_ALLOWLIST_PROBE precedent, #7014 gap
+# 2). The hygiene checks above are STRUCTURALLY UNREACHABLE from the mutation
+# battery: no edit to the swept .tf files can add, remove or corrupt an
+# EXT_RESIDENCE entry, so the pin/stale arms could be deleted with the battery
+# still reporting a full pass. This env var feeds a synthetic entry set through
+# the SAME hygiene function so every arm is proven to fire.
+#
+# It is deliberately NOT merged into EXT_RESIDENCE. An env var able to SUPPRESS
+# a fleet_elsewhere or unclassifiable finding would be a fail-open switch on the
+# guard's load-bearing invariant, and a test hook must never be able to make a
+# real failure disappear. This one can only ADD failures. CI never sets it --
+# the only setter in the repo is the mutation battery, same contract as
+# SOLEUR_PARITY_ALLOWLIST_PROBE and SOLEUR_INFRA_DIR.
+ext_probe_raw = os.environ.get("SOLEUR_PARITY_EXT_RESIDENCE_PROBE", "")
+if ext_probe_raw:
+    # RecursionError is not a ValueError, and deeply-nested JSON raises it -- a
+    # traceback rather than the named failure this branch exists to produce.
+    # (It is unreachable on Linux today: MAX_ARG_STRLEN caps the env var under
+    # the nesting depth CPython needs to recurse -- kept as portability armor.)
+    # The parse-failure path stops here: falling through to the shape check on
+    # {} would print a spurious ok() right after the FAIL.
+    probe_parsed = False
+    try:
+        ext_probe = json.loads(ext_probe_raw)
+        probe_parsed = True
+    except (ValueError, RecursionError) as exc:
+        no(f"G2: SOLEUR_PARITY_EXT_RESIDENCE_PROBE is set but is not parseable "
+           f"JSON ({exc})")
+    # Shape-check before use: {file: {type.name: entry}}. (Object keys from
+    # json.loads are always str; dict-ness is the only live question. Member-map
+    # and field-level type errors are left to the hygiene checks, which report
+    # them as named malformed/stale findings rather than tracebacks.)
+    if probe_parsed:
+        if not isinstance(ext_probe, dict):
+            no("G2: SOLEUR_PARITY_EXT_RESIDENCE_PROBE must be a JSON object of "
+               "{file: {type.name: entry}}")
+        else:
+            # JSON `hosts` arrive as lists; normalize to frozensets (the shape
+            # the real table uses). Unhashable members stay lists so hygiene's
+            # malformed arm reports them instead of set() raising TypeError here.
+            norm = {}
+            for fp, mem in ext_probe.items():
+                if not isinstance(mem, dict):
+                    norm[fp] = mem
+                    continue
+                norm[fp] = {}
+                for rn, e in mem.items():
+                    if isinstance(e, dict):
+                        e = dict(e)
+                        if isinstance(e.get("hosts"), list):
+                            try:
+                                e["hosts"] = frozenset(e["hosts"])
+                            except TypeError:
+                                pass
+                    norm[fp][rn] = e
+            p_pin, p_stale = ext_residence_hygiene(norm, "EXT_RESIDENCE probe")
+            for m_ in p_pin:
+                no("G2: EXT_RESIDENCE probe pin — " + m_)
+            for m_ in p_stale:
+                no("G2: stale EXT_RESIDENCE probe entry — " + m_)
+            if not p_pin and not p_stale:
+                ok("G2: every EXT_RESIDENCE probe entry resolves and carries a "
+                   "pin + reason")
 
 # The local is the ONE place the committed pin enters Terraform: defined once, read from the
 # committed file, through one() (exactly one key line) and the anchored ECDSA-P256 regex().

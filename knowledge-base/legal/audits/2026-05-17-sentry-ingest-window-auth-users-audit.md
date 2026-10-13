@@ -4,7 +4,7 @@ date: 2026-05-17
 incident_pir: knowledge-base/engineering/operations/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md
 parent_issue: "#3861"
 pr: "#3904"
-plan: knowledge-base/project/plans/2026-05-16-feat-sentry-residency-a2-branch-c-plan.md
+plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-16-feat-sentry-residency-a2-branch-c-plan.md
 classification: art-30-5-accountability-evidence
 ropa_entry: PA8 §(d) Recipients cell in knowledge-base/legal/article-30-register.md
 framing_superseded_by: knowledge-base/legal/audits/2026-05-19-sentry-token-scope-probe-divergence.md

@@ -513,7 +513,7 @@ The `PreToolUse` interceptor this ADR ships is registered in
 `plugins/soleur/hooks/hooks.json` (and in repo `.claude/settings.json` for
 dogfooding) on the matcher `Bash`. Measured in a controlled Devin child
 session
-(`knowledge-base/project/specs/feat-settings-matcher-devin-audit/envelope-capture.md`),
+(`knowledge-base/project/specs/archive/20261013-051752-feat-settings-matcher-devin-audit/envelope-capture.md`),
 that matcher is **dead under Devin CLI**: Devin loads the registry but
 dispatches the lowercase wire name `exec`, which `Bash` never matches. For
 the window during which `plugins/soleur/devin/INSTRUCTIONS.md` asserted the

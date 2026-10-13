@@ -2,7 +2,7 @@
 // Query lifecycle, cost + runaway circuit breakers, sticky-workflow sentinel
 // consumption, pre-dispatch narration directive.
 //
-// Plan: knowledge-base/project/plans/2026-04-23-feat-cc-route-via-soleur-go-plan.md
+// Plan: knowledge-base/project/plans/archive/20261013-003106-2026-04-23-feat-cc-route-via-soleur-go-plan.md
 // ADR: knowledge-base/engineering/architecture/decisions/ADR-022-sdk-as-router.md
 // Stage 2 — tasks 2.2 (RED) / 2.9 (GREEN) / 2.21 (RED) / 2.22 (GREEN) /
 //           2.23 (RED) / 2.24 (GREEN).

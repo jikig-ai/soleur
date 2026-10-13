@@ -5,7 +5,7 @@ date: 2026-07-01
 related: [5766, 5417, 5694, 5767, 5240]
 related_adrs: [ADR-030, ADR-033]
 related_plans:
-  - knowledge-base/project/plans/2026-07-01-feat-durable-agent-run-lifecycle-plan.md
+  - knowledge-base/project/plans/archive/20261013-041741-2026-07-01-feat-durable-agent-run-lifecycle-plan.md
 brand_survival_threshold: single-user incident
 ---
 

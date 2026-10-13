@@ -102,7 +102,7 @@ needed in the repository evidence. This request has not been sent:
 A support response must be bound to the intended project; generic documentation
 does not prove its actual settings. Record unanswered items as unknown. Provider
 permission for the exact hosted authentication route remains a separate request
-prepared in the [account guide](../feat-one-shot-codex-web-live-paths/account-evidence-guide-2026-10-06.md#exact-provider-route).
+prepared in the [account guide](../../feat-one-shot-codex-web-live-paths/account-evidence-guide-2026-10-06.md#exact-provider-route).
 
 ## Read-only inspection authorization and access results — 2026-10-07
 

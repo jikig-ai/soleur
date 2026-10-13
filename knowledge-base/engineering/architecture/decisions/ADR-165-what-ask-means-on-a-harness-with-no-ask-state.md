@@ -121,7 +121,7 @@ before failing open; `separator` is marked inapplicable rather than decided.
 **Recoverability is an ASSUMPTION here, not an established fact.** Three rows
 above say a deny is "recoverable in-band" because the reason string returns to
 the agent. This repo does not establish that:
-`knowledge-base/project/specs/openhands-portability/critical-unknowns.md`
+`knowledge-base/project/specs/archive/20261013-003106-openhands-portability/critical-unknowns.md`
 still carries *"Verification needed: … Confirm PreToolUse blocking with JSON
 output injects `additionalContext` into agent prompt."* The decision is sound
 either way — a deny with an unread reason is still strictly better than the

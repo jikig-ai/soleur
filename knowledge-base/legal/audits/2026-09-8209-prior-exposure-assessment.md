@@ -9,7 +9,7 @@ disposition: "REACHABILITY-ONLY — assessment, NOT a presumed breach. Following
 disposition_history: "SIGNED-OFF PROVISIONAL 2026-09-23 on five open evidentiary limbs (GitHub run census, Doppler access logs, Hetzner actions, Cloudflare account audit log, exposure-window start). No limb has been run at the date of this record."
 signed_off_at: 2026-09-23
 signed_off_by: "CLO agent (attestation authority for the Soleur-as-tenant-zero v1 posture; operator retains an optional veto)"
-awareness_anchor: "2026-09-22 — the measurement session recorded in `knowledge-base/project/plans/2026-09-22-feat-evict-privileged-terraform-credentials-plan.md` (§Measurements, M1-M12), which established that `prd_terraform` is a branch config of `prd` and that a repository-level CI secret reads it. No monitor surfaced this; no monitor could, because every read is a legitimate read by a legitimate holder."
+awareness_anchor: "2026-09-22 — the measurement session recorded in `knowledge-base/project/plans/archive/20261013-051752-2026-09-22-feat-evict-privileged-terraform-credentials-plan.md` (§Measurements, M1-M12), which established that `prd_terraform` is a branch config of `prd` and that a repository-level CI secret reads it. No monitor surfaced this; no monitor could, because every read is a legitimate read by a legitimate holder."
 art_33_triggered: false
 art_34_triggered: false
 art_33_deadline: "not due — no Art. 33 duty arose on the facts established to date, so nothing fell due 72h from the awareness anchor. Re-opens with a FRESH 72h from awareness of any evidence of use surfaced by a limb below."

@@ -41,7 +41,7 @@ The common failure mode is treating a rename as a mechanical text substitution w
 
 2. **Architecture regression in plan**: The plan specified replacing "Data Processing Agreement" with "Data Protection Disclosure" in the generic legal-document-generator. This was wrong -- the generator is a cross-project tool and DPA is a legitimate document type for SaaS projects with processor relationships. The Sharp Edges section already referenced DPA, which would have become a dead reference. Fix: added Data Protection Disclosure as an 8th document type alongside the existing Data Processing Agreement.
 
-3. **Missed file in plan**: The CLA plan file (`knowledge-base/project/plans/2026-02-26-feat-cla-contributor-agreements-plan.md`) contained a stale reference to the old filename but was not in the plan's file list. Caught by post-edit verification grep. Fix: always grep the full repo after bulk renames, not just the planned file list.
+3. **Missed file in plan**: The CLA plan file (`knowledge-base/project/plans/archive/20261012-213508-2026-02-26-feat-cla-contributor-agreements-plan.md`) contained a stale reference to the old filename but was not in the plan's file list. Caught by post-edit verification grep. Fix: always grep the full repo after bulk renames, not just the planned file list.
 
 ## Tags
 

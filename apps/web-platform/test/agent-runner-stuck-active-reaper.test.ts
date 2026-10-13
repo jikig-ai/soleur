@@ -1,7 +1,7 @@
 /**
  * Phase 3 (#stuck-active fix) — periodic reaper for stuck-active conversations.
  *
- * Plan: knowledge-base/project/plans/2026-05-05-fix-cc-chat-stuck-conversation-blocks-concurrency-slot-plan.md
+ * Plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-05-fix-cc-chat-stuck-conversation-blocks-concurrency-slot-plan.md
  *
  * The reaper periodically calls `find_stuck_active_conversations` (migration
  * 037) and finalizes any candidate row to status='failed', releases the

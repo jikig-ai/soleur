@@ -257,7 +257,7 @@ criteria or explicitly accepted.
 
 ## Cross-references
 
-- Plan: `knowledge-base/project/plans/2026-04-18-ops-verify-signup-workspace-provisioning-plan.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-003106-2026-04-18-ops-verify-signup-workspace-provisioning-plan.md`
 - Issue: [#1448][i1448]
 - Roadmap row: `knowledge-base/product/roadmap.md` Pre-Phase 4 MU1.
 - Learning: `knowledge-base/project/learnings/security-issues/docker-seccomp-blocks-bwrap-sandbox-20260405.md`

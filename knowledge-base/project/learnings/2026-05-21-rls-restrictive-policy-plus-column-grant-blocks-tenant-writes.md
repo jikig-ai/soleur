@@ -127,6 +127,6 @@ Two compounding side benefits of the RPC pattern:
 - AGENTS.md hard rule [id: cq-pg-security-definer-search-path-pin-pg-temp] — sibling concept; the `auth.uid()` pin is to function-body semantics what `search_path` pin is to extension-namespace semantics.
 - AGENTS.md [id: cq-silent-fallback-must-mirror-to-sentry] — without this, prod write-rejections look like absence-of-activity instead of failure.
 - AGENTS.md [id: hr-write-boundary-sentinel-sweep-all-write-sites] — the column-grant/RLS pair IS a write-boundary sentinel, but at the DB layer rather than the TypeScript layer.
-- Plan: `knowledge-base/project/plans/2026-05-21-feat-workspace-reconciliation-with-main-plan.md`
-- Spec: `knowledge-base/project/specs/feat-workspace-reconciliation-4224/spec.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-21-feat-workspace-reconciliation-with-main-plan.md`
+- Spec: `knowledge-base/project/specs/archive/20261013-014038-feat-workspace-reconciliation-4224/spec.md`
 - PR: #4226

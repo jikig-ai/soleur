@@ -39,7 +39,7 @@ wording change requires a delta review before discharge.
 Source records reviewed: `compliance-posture.md` (last_updated 2026-09-30),
 `data-processing-agreements/openai.md` (snapshot 2026-09-25),
 `clo-decision-packet.md` and `codex-qualification-record.md` in
-`knowledge-base/project/specs/feat-one-shot-codex-web-rollout/`, plus the legal
+`knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-codex-web-rollout/`, plus the legal
 diff and migrations 143, 149, 150 and 152. Stated historical live observations
 come from those records; this review did not independently repeat them.
 

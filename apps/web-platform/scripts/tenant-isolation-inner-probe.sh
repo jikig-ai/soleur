@@ -4,7 +4,7 @@
 # wrap. Every caller passes it as stdin to `bash -s` so the script text
 # travels on the pipe, not the filesystem (nothing under /app/scripts is
 # bound inside the wrap). Callers — the founder check
-# (knowledge-base/project/specs/feat-5863-tenant-fs-isolation/tenant-isolation-probe.sh),
+# (knowledge-base/project/specs/archive/20261013-062704-feat-5863-tenant-fs-isolation/tenant-isolation-probe.sh),
 # the deploy canary arm (sandbox-canary.mjs --replay-outer), and the test
 # suite — share THIS body so no independently drifting copy can stay green
 # while the deployed mount table regresses.

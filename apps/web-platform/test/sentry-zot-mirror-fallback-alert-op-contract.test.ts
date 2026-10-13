@@ -636,7 +636,7 @@ const CAPTURE = JSON.parse(
   readFileSync(
     join(
       here,
-      "../../../knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json",
+      "../../../knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json",
     ),
     "utf8",
   ),

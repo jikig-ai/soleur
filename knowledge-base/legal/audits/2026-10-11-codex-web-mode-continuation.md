@@ -9,7 +9,7 @@ status: blocked-live-authorization
 api_key_live_disposition: pending-account-custody-and-provider-route-evidence
 managed_hosted_auth_disposition: blocked-provider-permitted-integration
 customer_content_status: blocked
-decision_packet: knowledge-base/project/specs/feat-one-shot-codex-web-rollout/clo-decision-packet.md
+decision_packet: knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-codex-web-rollout/clo-decision-packet.md
 prior_disposition: knowledge-base/legal/audits/2026-10-03-codex-web-mode-authorization.md
 review_by: 2026-10-15
 reevaluation_triggers:
@@ -22,7 +22,7 @@ reevaluation_triggers:
 
 **API key remains PENDING without live authorization. The existing managed
 hosted-auth integration remains BLOCKED.** This attributable internal v1
-disposition supplements the [decision packet](../../project/specs/feat-one-shot-codex-web-rollout/clo-decision-packet.md#public-source-clo-reassessment--2026-10-05)
+disposition supplements the [decision packet](../../project/specs/archive/20261013-051752-feat-one-shot-codex-web-rollout/clo-decision-packet.md#public-source-clo-reassessment--2026-10-05)
 and [prior mode audit](2026-10-03-codex-web-mode-authorization.md). It grants no
 synthetic provider egress or customer-content authorization. The request to
 continue remaining acceptance criteria supplies no new vendor permission or
@@ -36,7 +36,7 @@ legal review, not an executed agreement or external counsel opinion.
 | Canonical T&C, Privacy Policy, GDPR Policy, Data Protection Disclosure, AUP, Cookie Policy, Disclaimer, individual and corporate CLA | Present; inventory records T&C/AUP dated 2026-10-08. Other listed dates are historical, not a new consistency attestation. | No published-document edits in this reassessment. Existing PR-conditioned amendments remain conditioned on merge/application. |
 | [Compliance posture](../compliance-posture.md#agent-engine-processing-migration-138--pr-8082) and [OpenAI snapshot](../data-processing-agreements/openai.md) | Reviewed; provider processing remains gated. Public vendor record is not account-specific DPA acceptance. | Preserve processing and qualification holds. |
 | Decision packet and 2026-10-03 mode audit | Reviewed; no evidence discharging either mode hold. | This dated audit is an append-only continuation; earlier measurements and dispositions retain their dates. |
-| [2026-10-07 control intake](../../project/specs/feat-one-shot-codex-web-rollout/api-control-evidence-2026-10-07.md) | Reviewed; organization sharing selections persisted in operator-reported reload. Project sharing/inheritance, retention and configured storage/processing regions remain unknown. | Obtain project-bound, sanitized evidence; repeated storage-error screens establish no retention finding. |
+| [2026-10-07 control intake](../../project/specs/archive/20261013-051752-feat-one-shot-codex-web-rollout/api-control-evidence-2026-10-07.md) | Reviewed; organization sharing selections persisted in operator-reported reload. Project sharing/inheritance, retention and configured storage/processing regions remain unknown. | Obtain project-bound, sanitized evidence; repeated storage-error screens establish no retention finding. |
 | Current source named below | Reviewed for custody, mode selection and egress boundary; guarded, not live-qualified. | Engineering must establish exact route and independent recovery/Web qualification. |
 
 ## Fresh provider-source findings

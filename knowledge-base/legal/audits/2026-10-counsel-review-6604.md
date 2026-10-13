@@ -5,7 +5,7 @@ date: 2026-10-01
 issue: 6604
 related_issues: [6588, 6931, 6897, 5274, 8625, 6964]
 pr: 9348
-plan: knowledge-base/project/plans/2026-10-01-feat-workspaces-plaintext-wipe-pr-b-convergence-plan.md
+plan: knowledge-base/project/plans/archive/20261013-062704-2026-10-01-feat-workspaces-plaintext-wipe-pr-b-convergence-plan.md
 parent_review: knowledge-base/legal/audits/2026-07-counsel-review-6588.md
 adr: knowledge-base/engineering/architecture/decisions/ADR-119-luks-at-rest-for-the-live-workspaces-volume.md
 brand_survival_threshold: single-user incident
