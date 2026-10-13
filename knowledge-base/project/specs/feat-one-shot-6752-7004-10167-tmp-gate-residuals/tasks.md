@@ -36,7 +36,11 @@ Legend: `[ ]` todo · `[x]` done.
 - [ ] 2.2 Confirm `python3 scripts/lint-trap-tempfile-ownership.py --census`
       unchanged (the three files are not class-b members).
 - [ ] 2.3 `gh issue comment 6752` with the evidence (census Mandatory-rows cite
-      + fresh verification output). PR body carries `Closes #6752`. → AC4
+      + fresh verification output). Per CTO dissent (decision-challenges.md
+      Item 12): the comment must record the bounded residual —
+      `learning-retrieval-bench.sh`'s `JSON_TMP`/`LEARNING_TMP` are mv-consumed
+      with a narrow `set -e` abort window — never claim zero residual. PR body
+      carries `Closes #6752`. → AC4
 
 ## Phase 3 — #7004: bounded producer adoption
 
