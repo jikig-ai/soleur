@@ -281,8 +281,10 @@ per-site by design; a shared function would be three functions wearing one
 name). The python oracle (`test/…hook.test.sh` `unwrap()` 539–587) is the
 independent second implementation sharing no code — assembly is both copies.
 The exec-subcommand *data* (not the code) now lives in ~6 places — the
-canonical grammar table in `known-external-tools.md` is the source of truth
-and `plugins/soleur/test/rtk-grammar-parity.test.sh` extracts the set from
+canonical grammar table is `plugins/soleur/scripts/lib/ext-filter-grammar.tsv`
+(created in Phase 1 so the parity suite has a source before Phase 4 docs
+exist; the doc cites and reproduces it) — and
+`plugins/soleur/test/rtk-grammar-parity.test.sh` extracts the set from
 each site and asserts equality against canonical (parity by extraction —
 the oracle is never wired to the table).
 
@@ -507,8 +509,9 @@ date so a screenshot carries the claim's vintage.
 ### Phase 4 — Support surface
 
 13. `plugins/soleur/docs/pages/known-external-tools.md` (new; frontmatter per
-    `goal-primitive.md`) — the canonical grammar table lives here (per-wrapper
-    exec-subcommand set + payload class, version-pinned) — plus: posture table
+    `goal-primitive.md`) — the canonical grammar table is reproduced here from
+    `plugins/soleur/scripts/lib/ext-filter-grammar.tsv` (the Phase-1
+    canonical source the parity guard extracts from) — plus: posture table
     with RTK tier per Phase 3 outcome **stamped with measured version + date**
     and "re-run `ext-filter-divergence.sh` after an rtk upgrade" (posture is a
     point-in-time statement); Headroom `measured-incompatible` claims carry
@@ -578,6 +581,7 @@ date so a screenshot carries the claim's vintage.
 
 - `plugins/soleur/hooks/ext-filter-detect.sh`
 - `plugins/soleur/test/ext-filter-detect-hook.test.sh`
+- `plugins/soleur/scripts/lib/ext-filter-grammar.tsv`
 - `plugins/soleur/test/rtk-grammar-parity.test.sh`
 - `plugins/soleur/scripts/ext-filter-divergence.sh`
 - `plugins/soleur/scripts/ext-filter-divergence-corpus.txt`
