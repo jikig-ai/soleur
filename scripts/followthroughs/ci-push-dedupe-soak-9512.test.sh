@@ -99,17 +99,18 @@ chmod +x "$TMP/bin/gh"
 
 # build_fx <dir> <n_elided> <n_full> <elided_run_seconds> <full_run_seconds> [key=value ...]
 #   actdays=D    S2-ACTIVATED comment D days before the injected now (default 12), by an OWNER; noact: none
-#   untrustedact: the activation comment is by a NONE-association commenter   deact: a LATER S2-DEACTIVATED (OWNER)
+#   untrustedact: the activation comment is by a login with NO repository permission (the fake endpoint answers 404)   deact: a LATER S2-DEACTIVATED (owner-op)
 #   unmatched=K  the K oldest elided runs have no merge_group voucher   early=K  K extra elided runs BEFORE the activation
-#   marker=yes|none|mid|untrusted|nonurl|placeholder   the S2-EXIT-CENSUS comment (default yes)
+#   marker=yes|none|mid|untrusted|nonurl|placeholder   the S2-EXIT-CENSUS comment (default yes; `untrusted` = a login with no permission)
 #   adr=<status>  ADR-276 status line (default adopting)   noreg: test-all.sh lacks the proof suite
 #   extra=<kind>  one more NON-elided run (mixed|nots|pdred): a shape a loose elision predicate would call elided
 #   pdred: one full run's push-dedupe is red   unmerged / noissue / failX: the X read fails (jobs|push|mg|comments)
 #   pdbad=K  the K newest full runs have a red push-dedupe   prefull=K  K non-elided runs BEFORE the activation, 20000 s each
 #   reactivate: a DEACTIVATED marker EARLIER than the activation   twoact: an older ACTIVATED too   twodeact: an older
-#   DEACTIVATED before a newer one that follows the activation   marker=collab|contrib: the census comment's association
+#   DEACTIVATED before a newer one that follows the activation   marker=collab|contrib: the census comment's author holds `write` | `read`
 #   crlf: markers end in CRLF   badts: ACTIVATED without the Z   midact: ACTIVATED only mid-line or with trailing text
-#   marker=lookalike|foreign   a census URL on a lookalike or foreign host   page2: the DEACTIVATED marker is on page 2
+#   marker=lookalike|foreign   a census URL on a lookalike or foreign host   latebatch: the DEACTIVATED marker is staged in a SECOND
+#   fixture batch (the fixture merges both into one list; gh's own paging is measured, not modelled)
 #   merged=<ISO>  the S2 PR merge time (default MERGED_ISO)
 #   EVERY comment carries an `authorAssociation` DECOY and a stable author login that maps to a row of perms.tsv (the fake
 #   permission endpoint): owner-op admin, member-op write, collab-op write, contrib-op read, none-op 404. The DEFAULT activation
@@ -117,19 +118,19 @@ chmod +x "$TMP/bin/gh"
 #   repository permission is admin, so an association-consulting probe fails ~40 rows, not two.
 #   privact: names that default (the row r_privmember pins it)   assocowner: the activation comment's association is OWNER but its
 #   author's permission is `read` (the decoy must be ignored)   permfail: `priv-op`'s permission read is a 403
-#   collabact: the activation is by a COLLABORATOR-association author with `write`   noneact: by a NONE-association author with `maintain`
+#   collabact: the activation is by collab-op (decoy association COLLABORATOR) holding `write`   noneact: by maint-op (decoy association NONE) holding `maintain`
 #   regcomment: test-all.sh names the suite only in a comment/echo   nostatus: the ADR has no status line
 build_fx() {
   local fx="$1" ne="$2" nf="$3" es="$4" fs="$5"; shift 5
   assert_fixture_dir "$fx"; rm -rf "$fx"; mkdir -p "$fx"
   local actdays=12 noact=0 untrustedact=0 deact=0 unmatched=0 early=0 marker=yes pdred=0 unmerged=0 noissue=0 adr=adopting noreg=0 extra="" kv
-  local privact=0 assocowner=0 permfail=0 collabact=0 noneact=0 merged="$MERGED_ISO" pdbad=0 prefull=0 reactivate=0 twoact=0 twodeact=0 crlf=0 badts=0 midact=0 page2=0 regcomment=0 nostatus=0 cr=
+  local privact=0 assocowner=0 permfail=0 collabact=0 noneact=0 merged="$MERGED_ISO" pdbad=0 prefull=0 reactivate=0 twoact=0 twodeact=0 crlf=0 badts=0 midact=0 latebatch=0 regcomment=0 nostatus=0 cr=
   for kv in "$@"; do
     case "$kv" in
       actdays=*) actdays="${kv#*=}" ;; noact) noact=1 ;; untrustedact) untrustedact=1 ;; deact) deact=1 ;;
       unmatched=*) unmatched="${kv#*=}" ;; early=*) early="${kv#*=}" ;; marker=*) marker="${kv#*=}" ;;
       merged=*) merged="${kv#*=}" ;; pdbad=*) pdbad="${kv#*=}" ;; prefull=*) prefull="${kv#*=}" ;; reactivate) reactivate=1 ;; twoact) twoact=1 ;; twodeact) twodeact=1 ;;
-      crlf) crlf=1 ;; badts) badts=1 ;; midact) midact=1 ;; page2) page2=1 ;; regcomment) regcomment=1 ;; nostatus) nostatus=1 ;;
+      crlf) crlf=1 ;; badts) badts=1 ;; midact) midact=1 ;; latebatch) latebatch=1 ;; regcomment) regcomment=1 ;; nostatus) nostatus=1 ;;
       pdred) pdred=1 ;; unmerged) unmerged=1 ;; noissue) noissue=1 ;; adr=*) adr="${kv#*=}" ;; noreg) noreg=1 ;; extra=*) extra="${kv#*=}" ;;
       privact) privact=1 ;; assocowner) assocowner=1 ;; permfail) permfail=1 ;; collabact) collabact=1 ;; noneact) noneact=1 ;;
       fail*) : > "$fx/fail-${kv#fail}" ;;
@@ -201,7 +202,7 @@ build_fx() {
   printf '{"workflow_runs":[%s{"event":"merge_group","status":"in_progress","conclusion":null,"head_sha":"shaZZZ"}]}\n' "$mg2" > "$fx/mg-2.json"
   if (( noissue )); then printf '[]\n' > "$fx/issues.json"
   else printf '[{"number":4242,"body":"<!-- soleur:followthrough script=scripts/followthroughs/ci-push-dedupe-soak-9512.sh earliest=2026-10-10T00:00:00Z secrets=GH_TOKEN -->"},{"number":4243,"body":"unrelated"}]\n' > "$fx/issues.json"; fi
-  # the tracker's comments (staging shape: [{body, author_association, login?}]; converted to the issue-view shape below)
+  # the tracker's comments (staging shape: [{body, author_association (a DECOY the probe must ignore), login?}]; converted to the issue-view shape below)
   local cm='[{"body":"noted","author_association":"OWNER"}' cm2='['
   iso_at() { date -u -d "@$((act_epoch + $1))" +%Y-%m-%dT%H:%M:%SZ; }
   if (( ! noact )); then
@@ -218,7 +219,7 @@ build_fx() {
     (( twodeact )) && cm="$cm,{\"body\":\"S2-DEACTIVATED: $(iso_at -86400)\",\"author_association\":\"OWNER\"}"
   fi
   if (( deact || twodeact )); then
-    if (( page2 )); then cm2="$cm2{\"body\":\"S2-DEACTIVATED: $(iso_at 3600)\",\"author_association\":\"OWNER\"}"
+    if (( latebatch )); then cm2="$cm2{\"body\":\"S2-DEACTIVATED: $(iso_at 3600)\",\"author_association\":\"OWNER\"}"
     else cm="$cm,{\"body\":\"S2-DEACTIVATED: $(iso_at 3600)\",\"author_association\":\"OWNER\"}"; fi
   fi
   case "$marker" in
@@ -234,7 +235,7 @@ build_fx() {
   esac
   assert_fixture_dir "$fx"
   printf '%s]\n' "$cm" > "$fx/stage-4242.json"
-  (( page2 )) && printf '%s]\n' "$cm2" > "$fx/stage-4242-2.json"
+  (( latebatch )) && printf '%s]\n' "$cm2" > "$fx/stage-4242-2.json"
   # the `gh issue view --json comments` shape (what the trusted-author lib reads): every comment gets a stable login that
   # maps to a permission row, while its association stays on the comment as a DECOY the probe must ignore
   jq -n --argjson a "$(cat "$fx/stage-4242.json")" --argjson b "$( [ -f "$fx/stage-4242-2.json" ] && cat "$fx/stage-4242-2.json" || echo '[]')" --argjson t0 "$((act_epoch - 90000))" '
@@ -258,16 +259,17 @@ expect() {
   if [[ "$rc" == "$want" && "$out" == *"$text"* ]]; then pass "$label (rc=$rc)"; else fail "$label: want rc=$want containing '$text', got rc=$rc: $(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi
 }
 
-# mk_tree <name> [probe source] [nolink|stublib] -> prints the path of a copy of the probe inside a MIRRORED tree: the probe sources
+# mk_tree <name> [probe source] [nolink|nofn|srcfail] -> prints the path of a copy of the probe inside a MIRRORED tree: the probe sources
 # the trust lib by a relative path, so a lone copy in $TMP would resolve nothing, the helper call would return 127, `|| fail_api` would
 # turn EVERY mutant "caught" and the verdict would prove nothing. scripts/lib is a symlink to the real lib (probe-only mutants; lib
-# mutants live in the lib suite); `nolink` leaves it out (a control), `stublib` puts a stub lib whose helper prints non-JSON.
+# mutants live in the lib suite); `nolink` leaves it out (a control), `nofn` puts a lib that sources cleanly but defines no view, `srcfail` one that defines both views and then returns non-zero.
 mk_tree() {
   local d="$TMP/tree-$1"; rm -rf "$d"; mkdir -p "$d/scripts/followthroughs"
   cp "${2:-$PROBE}" "$d/scripts/followthroughs/ci-push-dedupe-soak-9512.sh"
   case "${3:-}" in
     nolink) : ;;
-    stublib) mkdir -p "$d/scripts/lib"; printf 'trusted_verdict_comments() { printf "not json at all\n"; return 0; }\n' > "$d/scripts/lib/trusted-verdict.sh" ;;
+    nofn) mkdir -p "$d/scripts/lib"; printf '# a lib that defines nothing\n' > "$d/scripts/lib/trusted-verdict.sh" ;;
+    srcfail) mkdir -p "$d/scripts/lib"; printf 'trusted_verdict_bodies() { return 0; }\ntrusted_verdict_comments() { return 0; }\nreturn 3\n' > "$d/scripts/lib/trusted-verdict.sh" ;;
     *) ln -s "$REPO_ROOT/scripts/lib" "$d/scripts/lib" ;;
   esac
   printf '%s\n' "$d/scripts/followthroughs/ci-push-dedupe-soak-9512.sh"
@@ -289,26 +291,34 @@ r_jobsfail()  { build_fx "$TMP/c12" 10 15 510 2568 failjobs;        expect "CANN
 r_decoy_mixed(){ build_fx "$TMP/c13" 10 15 510 2568 extra=mixed;    expect "PASS: a run with mixed skipped/success test-scripts legs is NOT elided" 0 "elided=10 " "$TMP/c13"; }
 r_decoy_nots() { build_fx "$TMP/c14" 10 15 510 2568 extra=nots;     expect "PASS: a run with no test-scripts job at all is NOT elided" 0 "elided=10 " "$TMP/c14"; }
 r_decoy_pdred(){ build_fx "$TMP/c15" 10 15 510 2568 extra=pdred;    expect "PASS: skipped test-scripts with a RED push-dedupe is NOT elided" 0 "elided=10 " "$TMP/c15"; }
-r_untrusted_act(){ build_fx "$TMP/d4" 0 25 510 2568 untrustedact;   expect "NOT YET: an activation comment by a NONE-association commenter is ignored" 2 "not activated" "$TMP/d4"; }
-r_untrusted_act_elided(){ build_fx "$TMP/d5" 5 20 510 2568 untrustedact; expect "FAIL: elided runs while only an untrusted activation exists" 1 "no activation on record" "$TMP/d5"; }
-r_untrusted_marker(){ build_fx "$TMP/d6" 10 15 510 2568 marker=untrusted; expect "NOT YET: an exit-census marker by an untrusted commenter does not count" 2 "S2-EXIT-CENSUS" "$TMP/d6"; }
+r_noperm_act(){ build_fx "$TMP/d4" 0 25 510 2568 untrustedact;   expect "NOT YET: an activation comment by a login with no repository permission (404) is ignored" 2 "not activated" "$TMP/d4"; }
+r_noperm_act_elided(){ build_fx "$TMP/d5" 5 20 510 2568 untrustedact; expect "FAIL: elided runs while the only activation is by a login with no repository permission" 1 "no activation on record" "$TMP/d5"; }
+r_noperm_marker(){ build_fx "$TMP/d6" 10 15 510 2568 marker=untrusted; expect "NOT YET: an exit-census marker by a login with no repository permission does not count" 2 "S2-EXIT-CENSUS" "$TMP/d6"; }
 r_nonurl_marker(){ build_fx "$TMP/d6b" 10 15 510 2568 marker=nonurl; expect "NOT YET: an exit-census marker without an https github URL does not count" 2 "S2-EXIT-CENSUS" "$TMP/d6b"; }
 r_adr_proposed(){ build_fx "$TMP/d12" 10 15 510 2568 adr=proposed;  expect "FAIL: elided runs while ADR-276 still reads proposed" 1 "'proposed'" "$TMP/d12"; }
 r_unregistered(){ build_fx "$TMP/d13" 10 15 510 2568 noreg;         expect "FAIL: the proof suite is no longer registered in test-all.sh" 1 "no longer registered" "$TMP/d13"; }
 r_stuck29()   { build_fx "$TMP/d14" 4 21 510 2568 actdays=29 merged=2026-09-20T00:00:00Z; expect "NOT YET: 29 days active with 4 elided runs (the deadline is 30)" 2 "4 elided" "$TMP/d14"; }
 r_stuck30()   { build_fx "$TMP/d15" 4 21 510 2568 actdays=30 merged=2026-09-20T00:00:00Z; expect "FAIL: 30 days active and the proof is not eliding" 1 "proof is not eliding" "$TMP/d15"; }
-r_privmember(){ build_fx "$TMP/g1" 10 15 510 2568 privact;          expect "PASS: an activation by a private-org-member admin (association CONTRIBUTOR) is read under the permission lookup" 0 "PASS" "$TMP/g1"; }
-r_assocowner(){ build_fx "$TMP/g2" 0 25 510 2568 assocowner;        expect "NOT YET: an activation by an OWNER-association author whose permission is read is ignored (the association is a decoy)" 2 "not activated" "$TMP/g2"; }
-r_permfail()  { build_fx "$TMP/g3" 10 15 510 2568 permfail;          expect "CANNOT ESTABLISH: a 403 on the activation author's permission read is never a pass and never 'untrusted'" 3 "CANNOT ESTABLISH" "$TMP/g3"; }
-r_badjq()     { build_fx "$TMP/g4" 10 15 510 2568
-  local keep="$PROBE_UNDER" t; t="$(mk_tree badjq "$PROBE_UNDER" stublib)"; PROBE_UNDER="$t"
-  expect "CANNOT ESTABLISH: helper output the projection cannot parse is never read as 'no marker'" 3 "(projection)" "$TMP/g4"
+r_privmember(){ build_fx "$TMP/g1" 10 15 510 2568 privact;          expect "PASS: an activation by a private-org-member admin (decoy association CONTRIBUTOR) counts: trust is the permission lookup" 0 "PASS" "$TMP/g1"; }
+r_assoc_decoy(){ build_fx "$TMP/g2" 0 25 510 2568 assocowner;        expect "NOT YET: an activation by an OWNER-association author whose permission is read is ignored (the association is a decoy)" 2 "not activated" "$TMP/g2"; }
+r_permfail()  { build_fx "$TMP/g3" 10 15 510 2568 permfail;          expect "CANNOT ESTABLISH: a 403 on the activation author's permission read is never a pass and never 'untrusted'" 3 "comment or permission read failed" "$TMP/g3"; }
+r_nolib()     { build_fx "$TMP/g4" 10 15 510 2568
+  local keep="$PROBE_UNDER" t; t="$(mk_tree nolib "$PROBE_UNDER" nolink)"; PROBE_UNDER="$t"
+  expect "CANNOT ESTABLISH: a missing trust lib is its own message, never 'GitHub API read failed'" 3 "CANNOT ESTABLISH: trusted-verdict lib unavailable" "$TMP/g4"
   PROBE_UNDER="$keep"; }
-r_collabact() { build_fx "$TMP/g5" 10 15 510 2568 collabact;         expect "PASS: an activation by a COLLABORATOR-association author with write counts" 0 "PASS" "$TMP/g5"; }
-r_noneact_maint(){ build_fx "$TMP/g6" 10 15 510 2568 noneact;        expect "PASS: an activation by a NONE-association author holding maintain counts" 0 "PASS" "$TMP/g6"; }
+r_nofn()      { build_fx "$TMP/g4b" 10 15 510 2568
+  local keep="$PROBE_UNDER" t; t="$(mk_tree nofn "$PROBE_UNDER" nofn)"; PROBE_UNDER="$t"
+  expect "CANNOT ESTABLISH: a lib that sources but defines no view is the same message" 3 "CANNOT ESTABLISH: trusted-verdict lib unavailable" "$TMP/g4b"
+  PROBE_UNDER="$keep"; }
+r_srcfail()   { build_fx "$TMP/g4c" 10 15 510 2568
+  local keep="$PROBE_UNDER" t; t="$(mk_tree srcfail "$PROBE_UNDER" srcfail)"; PROBE_UNDER="$t"
+  expect "CANNOT ESTABLISH: a lib whose source returns non-zero is the same message even when both views are defined" 3 "CANNOT ESTABLISH: trusted-verdict lib unavailable" "$TMP/g4c"
+  PROBE_UNDER="$keep"; }
+r_write_act() { build_fx "$TMP/g5" 10 15 510 2568 collabact;         expect "PASS: an activation by an author holding write counts, whatever the decoy association" 0 "PASS" "$TMP/g5"; }
+r_maint_act(){ build_fx "$TMP/g6" 10 15 510 2568 noneact;        expect "PASS: an activation by an author holding maintain counts, whatever the decoy association" 0 "PASS" "$TMP/g6"; }
 r_nonactive_deadline(){ build_fx "$TMP/d7" 0 25 510 2568 noact;     expect "FAIL: 30 days after the merge and nothing activated: activate, or revert" 1 "activate, or revert" "$TMP/d7" SOAK_NOW_EPOCH=$((NOW_EPOCH + 31 * 86400)); }
 r_deact()     { build_fx "$TMP/d16" 0 25 510 2568 deact;            expect "NOT YET: a later S2-DEACTIVATED ends the activation" 2 "not activated" "$TMP/d16"; }
-r_commentsfail(){ build_fx "$TMP/e-c" 10 15 510 2568 failcomments;  expect "CANNOT ESTABLISH: the tracker comments read fails (403)" 3 "CANNOT ESTABLISH" "$TMP/e-c"; }
+r_commentsfail(){ build_fx "$TMP/e-c" 10 15 510 2568 failcomments;  expect "CANNOT ESTABLISH: the tracker comments read fails (403)" 3 "comment or permission read failed" "$TMP/e-c"; }
 r_adr_idle()  { build_fx "$TMP/f1" 0 25 510 2568 noact adr=proposed; expect "NOT YET: ADR-276 reading proposed with NOTHING elided is not a failure" 2 "not activated" "$TMP/f1"; }
 r_adr_quoted(){ build_fx "$TMP/f2" 10 15 510 2568 'adr="proposed"';  expect "FAIL: a quoted \"proposed\" status still counts" 1 "'proposed'" "$TMP/f2"; }
 r_adr_case()  { build_fx "$TMP/f3" 10 15 510 2568 adr=Proposed;      expect "FAIL: a capitalised Proposed status still counts" 1 "'proposed'" "$TMP/f3"; }
@@ -321,12 +331,12 @@ r_prefull()   { build_fx "$TMP/f9" 10 15 510 2568 prefull=3;         expect "PAS
 r_reactivate(){ build_fx "$TMP/f10" 10 15 510 2568 reactivate;       expect "PASS: a DEACTIVATED marker EARLIER than the activation does not end it" 0 "PASS" "$TMP/f10"; }
 r_twoact()    { build_fx "$TMP/f11" 10 15 510 2568 twoact;           expect "the LATEST of two ACTIVATED markers sets the age" 0 "age_days=12 " "$TMP/f11"; }
 r_twodeact()  { build_fx "$TMP/f12" 0 25 510 2568 twodeact;          expect "NOT YET: the LATEST of two DEACTIVATED markers ends the activation" 2 "not activated" "$TMP/f12"; }
-r_page2()     { build_fx "$TMP/f13" 0 25 510 2568 deact page2;       expect "NOT YET: a DEACTIVATED marker on comments page 2 is read" 2 "not activated" "$TMP/f13"; }
+r_latebatch() { build_fx "$TMP/f13" 0 25 510 2568 deact latebatch;   expect "NOT YET: a DEACTIVATED marker staged in a second fixture batch is read (the probe does not slice the comment list; gh's own paging is measured 220/220 on #9777, not modelled here)" 2 "not activated" "$TMP/f13"; }
 r_idle_cap()  { build_fx "$TMP/f14" 0 12 510 2568 noact early=1;     expect "NOT YET: while idle only the newest 10 runs are sampled (an elided run at position 13 is outside)" 2 "not activated" "$TMP/f14"; }
 r_max_cap()   { build_fx "$TMP/f15" 10 60 510 2000;                  expect "FAIL: all 70 runs (the cap is 100) set the mean; the newest 30 alone would pass" 1 "over 29.08" "$TMP/f15"; }
 r_would()     { build_fx "$TMP/f16" 10 15 510 2568;                  expect "the 'Proof holds for this SHA' step conclusions are counted" 0 "would_elide_runs=10 " "$TMP/f16"; }
-r_collab()    { build_fx "$TMP/f17" 10 15 510 2568 marker=collab;    expect "PASS: a COLLABORATOR's exit-census comment counts" 0 "PASS" "$TMP/f17"; }
-r_contrib()   { build_fx "$TMP/f18" 10 15 510 2568 marker=contrib;   expect "NOT YET: a CONTRIBUTOR's exit-census comment does not count" 2 "S2-EXIT-CENSUS" "$TMP/f18"; }
+r_marker_write()    { build_fx "$TMP/f17" 10 15 510 2568 marker=collab;    expect "PASS: an exit-census comment by an author holding write counts" 0 "PASS" "$TMP/f17"; }
+r_marker_read()   { build_fx "$TMP/f18" 10 15 510 2568 marker=contrib;   expect "NOT YET: an exit-census comment by an author holding only read does not count" 2 "S2-EXIT-CENSUS" "$TMP/f18"; }
 r_crlf()      { build_fx "$TMP/f19" 10 15 510 2568 crlf;             expect "PASS: CRLF comment lines (browser-posted) still parse" 0 "PASS" "$TMP/f19"; }
 r_badts()     { build_fx "$TMP/f20" 0 25 510 2568 badts;             expect "NOT YET: an ACTIVATED timestamp without the Z is not a marker" 2 "not activated" "$TMP/f20"; }
 r_midact()    { build_fx "$TMP/f21" 0 25 510 2568 midact;            expect "NOT YET: ACTIVATED mid-line or with trailing text is not a marker" 2 "not activated" "$TMP/f21"; }
@@ -338,11 +348,11 @@ r_pdbad_dark(){ build_fx "$TMP/f26" 0 25 510 2568 noact pdbad=6;     expect "FAI
 r_pdbad_few() { build_fx "$TMP/f27" 0 4 510 2568 noact pdbad=4;      expect "NOT YET: fewer than 5 sampled runs are never judged on push-dedupe failures" 2 "not activated" "$TMP/f27"; }
 r_deadline_edge(){ build_fx "$TMP/f28" 0 25 510 2568 noact;          expect "NOT YET: exactly 30 days after the merge is not yet past the deadline" 2 "not activated" "$TMP/f28" SOAK_NOW_EPOCH=$(( $(date -u -d "$MERGED_ISO" +%s) + 30 * 86400 )); }
 ALL_ROWS=(r_pass r_zero r_unmatched1 r_unmatched3 r_over r_allmean r_nomarker r_nine r_six r_seven r_precedence r_jobsfail
-          r_decoy_mixed r_decoy_nots r_decoy_pdred r_untrusted_act r_untrusted_act_elided r_untrusted_marker r_nonurl_marker
+          r_decoy_mixed r_decoy_nots r_decoy_pdred r_noperm_act r_noperm_act_elided r_noperm_marker r_nonurl_marker
           r_adr_proposed r_unregistered r_stuck29 r_stuck30 r_nonactive_deadline r_deact r_commentsfail
           r_adr_idle r_adr_quoted r_adr_case r_adr_note r_adr_nostatus r_adr_missing r_testall_missing r_regcomment r_prefull
-          r_reactivate r_twoact r_twodeact r_page2 r_idle_cap r_max_cap r_would r_collab r_contrib r_crlf r_badts r_midact
-          r_lookalike r_foreign r_pdbad6 r_pdbad5 r_pdbad_dark r_pdbad_few r_deadline_edge r_privmember r_assocowner r_permfail r_badjq r_collabact r_noneact_maint)
+          r_reactivate r_twoact r_twodeact r_latebatch r_idle_cap r_max_cap r_would r_marker_write r_marker_read r_crlf r_badts r_midact
+          r_lookalike r_foreign r_pdbad6 r_pdbad5 r_pdbad_dark r_pdbad_few r_deadline_edge r_privmember r_assoc_decoy r_permfail r_nolib r_nofn r_srcfail r_write_act r_maint_act)
 run_rows() { local r; for r in "$@"; do "$r"; done; }
 run_rows "${ALL_ROWS[@]}"
 
@@ -429,9 +439,9 @@ mutant m-elided-mean  'n=$((n + 1)); total_s=$((total_s + secs))' 'n=$((n + 1));
 mutant m-boundary     'total_s * 100 > MEAN_LIMIT_HUNDREDTHS_MIN * 60 * n' 'total_s * 100 >= MEAN_LIMIT_HUNDREDTHS_MIN * 60 * n' r_pass
 mutant m-api-quiet    'fail_api() { echo "CANNOT ESTABLISH: GitHub API read failed ($1)"; exit 3; }' 'fail_api() { echo "CANNOT ESTABLISH: GitHub API read failed ($1)"; exit 0; }' r_jobsfail r_commentsfail
 mutant m-precedence   'if (( wrong > 0 )); then' 'if (( wrong > 0 && elided >= MIN_ELIDED )); then' r_precedence
-mutant m-no-marker    'if (( census_marked == 0 )); then' 'if false; then' r_nomarker r_untrusted_marker r_nonurl_marker
+mutant m-no-marker    'if (( census_marked == 0 )); then' 'if false; then' r_nomarker r_noperm_marker r_nonurl_marker
 mutant m-unmatched-ok 'covered="$(jq -r --arg sha "$sha" '"'"'map(select(. == $sha)) | length'"'"' <<<"$mg_json" 2>/dev/null)" || fail_api "voucher lookup"' 'covered=1' r_unmatched1
-mutant m-trusted      'trusted_json="$(trusted_verdict_comments "$tracker" "$REPO")" || fail_api "tracker $tracker comments (trusted-author resolution)"' 'trusted_json="$(trusted_verdict_comments "$tracker" "$REPO")"' r_commentsfail r_permfail
+mutant m-trusted      'trusted_raw="$(trusted_verdict_bodies "$tracker" "$REPO")" || fail_comments "tracker $tracker comments (trusted-author resolution)"' 'trusted_raw="$(trusted_verdict_bodies "$tracker" "$REPO")"' r_commentsfail r_permfail
 mutant m-adr-status   '[ "$adr_status" = "proposed" ]' '[ "$adr_status" = "never" ]' r_adr_proposed
 mutant m-registered   'if (( suite_registered == 0 )); then' 'if false; then' r_unregistered
 mutant m-stuck-deadline 'if (( age_days >= DEADLINE_DAYS )); then' 'if false; then' r_stuck30
@@ -458,13 +468,20 @@ mutant m-idle-cap '(( active )) || cap="$IDLE_RUNS"' ':' r_idle_cap
 mutant m-max-cap 'MAX_RUNS=100 ' 'MAX_RUNS=30  ' r_max_cap
 mutant m-would-count '[[ "$proof_holds" =~ ^[0-9]+$ ]] && [ "$proof_holds" -gt 0 ] && would=$((would + 1))' ':' r_would
 mutant m-step-name 'select(.name == "Proof holds for this SHA" and' 'select(.name == "Proof holds" and' r_would
-mutant m-crlf '<<<"$trusted_json" | tr -d '"'"'\r'"'"')"' '<<<"$trusted_json")"' r_crlf
+mutant m-crlf '"$trusted_raw" | tr -d '"'"'\r'"'"')"' '"$trusted_raw")"' r_crlf
 # the trust-source mutants: the helper call is replaced by a raw `issue view` read through the same fake arm
-_HELPER='trusted_json="$(trusted_verdict_comments "$tracker" "$REPO")" || fail_api "tracker $tracker comments (trusted-author resolution)"'
-mutant m-legacy-assoc "$_HELPER" 'trusted_json="$(gh issue view "$tracker" --repo "$REPO" --json comments --jq '"'"'.comments[] | select(.authorAssociation | IN("OWNER", "MEMBER", "COLLABORATOR")) | {t: .createdAt, b: .body} | tojson'"'"')" || fail_api "tracker $tracker comments"' r_privmember r_assocowner
-mutant m-project-raw "$_HELPER" 'trusted_json="$(gh issue view "$tracker" --repo "$REPO" --json comments --jq '"'"'.comments[] | {t: .createdAt, b: .body} | tojson'"'"')" || fail_api "tracker $tracker comments"' r_assocowner r_untrusted_act r_untrusted_act_elided r_untrusted_marker r_contrib
-mutant m-empty-helper "$_HELPER" 'trusted_json=""' r_pass r_privmember r_seven r_collabact
-mutant m-no-projection-check ' || fail_api "tracker $tracker comments (projection)"' '' r_badjq
+_HELPER='trusted_raw="$(trusted_verdict_bodies "$tracker" "$REPO")" || fail_comments "tracker $tracker comments (trusted-author resolution)"'
+mutant m-legacy-assoc "$_HELPER" 'trusted_raw="$(gh issue view "$tracker" --repo "$REPO" --json comments --jq '"'"'.comments[] | select(.authorAssociation | IN("OWNER", "MEMBER", "COLLABORATOR")) | .body'"'"')" || fail_comments "tracker $tracker comments"' r_privmember r_assoc_decoy
+mutant m-unfiltered-raw "$_HELPER" 'trusted_raw="$(gh issue view "$tracker" --repo "$REPO" --json comments --jq '"'"'.comments[] | .body'"'"')" || fail_comments "tracker $tracker comments"' r_assoc_decoy r_noperm_act r_noperm_act_elided r_noperm_marker r_marker_read
+mutant m-empty-helper "$_HELPER" 'trusted_raw=""' r_pass r_privmember r_seven r_write_act
+mutant m-comments-quiet 'fail_comments() { echo "CANNOT ESTABLISH: comment or permission read failed ($1)"; exit 3; }' 'fail_comments() { echo "CANNOT ESTABLISH: comment or permission read failed ($1)"; exit 0; }' r_commentsfail r_permfail
+# the function check removed AND the missing views stubbed to print nothing, so the mutant runs on instead of crashing on `command not found` (which proves nothing)
+mutant m-no-fn-check ' \
+   || ! declare -F trusted_verdict_bodies >/dev/null || ! declare -F trusted_verdict_comments >/dev/null; then' ' \
+   || { declare -F trusted_verdict_bodies >/dev/null || trusted_verdict_bodies() { :; }; declare -F trusted_verdict_comments >/dev/null || trusted_verdict_comments() { :; }; false; }; then' r_nofn
+mutant m-no-source-check 'if ! source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" 2>/dev/null && pwd)/trusted-verdict.sh" \
+   ||' 'if ! { source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" 2>/dev/null && pwd)/trusted-verdict.sh"; true; } \
+   ||' r_srcfail
 mutant m-ts-loose 'T[0-9]{2}:[0-9]{2}:[0-9]{2}Z'"'"'' 'T[0-9:]+Z?'"'"'' r_badts
 mutant m-act-anchor-start 'grep -oE "^S2-ACTIVATED: $TS_RE\$"' 'grep -oE "S2-ACTIVATED: $TS_RE\$"' r_midact
 mutant m-act-anchor-end 'grep -oE "^S2-ACTIVATED: $TS_RE\$"' 'grep -oE "^S2-ACTIVATED: $TS_RE"' r_midact
@@ -498,7 +515,7 @@ PROBE_UNDER="$(mk_tree nolink "$PROBE" nolink)"; core_rows_quiet "${ALL_ROWS[@]}
 if [ "$MUT_REDS" -gt 0 ]; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: a copy without the lib symlink turns $MUT_REDS row(s) red (the tree resolves the lib)"
 else fail "harness control: a copy without the lib symlink turned no row red"; fi
 if [ "$CTRL_OK" -ne 5 ]; then fail "harness controls: $CTRL_OK of 5 held"; fi
-if [ "$MUT_RUN" -eq "$MUT_CAUGHT" ] && [ "$MUT_RUN" -ge 52 ]; then pass "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught"; else fail "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught (every mutant must be caught; floor 52)"; fi
+if [ "$MUT_RUN" -eq "$MUT_CAUGHT" ] && [ "$MUT_RUN" -ge 54 ]; then pass "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught"; else fail "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught (every mutant must be caught; floor 54)"; fi
 
 # the request-shape mutants cannot reach a row's EXIT CODE (the fake gh answers any well-formed jobs path), so they are
 # pinned by the requests.log assertion above: drop each parameter from a copy and confirm the assertion text no longer holds
@@ -528,12 +545,12 @@ if [ -z "$_shape_bad" ]; then pass "request-shape mutants (jobs filter dropped, 
 # harness row: a probe that always exits 0 must be refused by the named rows (the rows can fail)
 printf '#!/usr/bin/env bash\necho PASS\nexit 0\n' > "$TMP/always-pass.sh"; chmod +x "$TMP/always-pass.sh"
 PROBE_UNDER="$TMP/always-pass.sh"; core_rows_quiet "${ALL_ROWS[@]}"; PROBE_UNDER="$PROBE"
-if [ "$MUT_REDS" -ge 52 ]; then pass "HARNESS: an always-PASS probe turns $MUT_REDS rows red"; else fail "HARNESS: an always-PASS probe turned only $MUT_REDS rows red"; fi
+if [ "$MUT_REDS" -ge 54 ]; then pass "HARNESS: an always-PASS probe turns $MUT_REDS rows red"; else fail "HARNESS: an always-PASS probe turned only $MUT_REDS rows red"; fi
 
 printf 'ci-push-dedupe-soak-9512: %d passed, %d failed, %d assertion(s) executed\n' "$passes" "$fails" "$asserted"
 # DELIBERATELY NOT ROUTED THROUGH fail(): compares against a literal and exits directly.
 _total=$((passes + fails))
-_FLOOR=135
+_FLOOR=139
 if [ "$_total" -lt "$_FLOOR" ]; then
   printf '[FATAL] assertion floor: executed %d < %d\n' "$_total" "$_FLOOR" >&2
   exit 1
