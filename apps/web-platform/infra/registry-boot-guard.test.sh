@@ -493,8 +493,8 @@ _arm "R3 arm: a SECOND declaration goes RED (the guard reads exactly one)" RED p
   "$_R3_DECL a \\  registry_arch = \"arm64\""
 _arm "R3 arm: a reformatted EQUIVALENT declaration stays GREEN (not spelling-bound)" GREEN p_registry_arch_derivation \
   "$_R3_DECL s/ \? \"arm64\" : \"amd64\"/?\"arm64\":\"amd64\" \/\/ reformatted/"
-_arm "R3 arm: a trailing # comment containing a /* glob stays GREEN (line comments strip before block comments)" GREEN p_registry_arch_derivation \
-  "$_R3_DECL s/\$/ # see \/var\/*/"
+_arm "R3 arm: a # comment ABOVE the declaration containing a /* glob stays GREEN (line comments strip before block comments)" GREEN p_registry_arch_derivation \
+  "$_R3_DECL i # see /var/*"
 _arm "R3 arm: an edit that matches nothing reports NOLAND, not a false catch" NOLAND p_registry_arch_derivation \
   's/this-text-is-not-in-the-file/x/'
 
