@@ -221,7 +221,7 @@ CMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null |
 NL=$'\n'
 # Prefix words that can precede `ps` (or a matcher) in a simple command without
 # changing what runs: each may carry flag/numeric arguments.
-PFX='(sudo|command|env|exec|nice|time|timeout|nohup|setsid|stdbuf|ionice|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*)([[:space:]]+[^|;&(){}[:space:]]+)*[[:space:]]+'
+PFX='(sudo|command|env|exec|nice|time|timeout|nohup|setsid|stdbuf|ionice|rtk|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*)([[:space:]]+[^|;&(){}[:space:]]+)*[[:space:]]+'
 # A `ps` token at a command boundary: start of text, `|`, `;`, `&`, `(` (covers
 # `$(`), a backtick, `{`, `!`, a newline, or a shell keyword — then optional
 # prefix words and a directory path. Never `^` alone (constitution) — the
@@ -334,7 +334,7 @@ literal_ok() { [[ -n "$1" && "$1" != *[\$\`\'\"]* ]]; }
 # WORD and WORD_REST (the stage text after the word).
 WORD=""; WORD_REST=""
 stage_word() {
-  local s="$1" w pfx=0
+  local s="$1" w pfx=0 rtk_prev=0
   while :; do
     s="${s#"${s%%[![:space:]]*}"}"
     w="${s%%[[:space:]]*}"; s="${s#"$w"}"
@@ -342,6 +342,11 @@ stage_word() {
     w="${w#\\}"; w="${w##*/}"
     case "$w" in
       command|env|exec|nice|time|timeout|nohup|setsid|stdbuf|ionice|sudo) pfx=1; continue ;;
+      # rtk (#10230): a wrapper on every shape — a word after it may be an
+      # exec subcommand (`rtk run ps aux`), consumed as part of the prefix
+      # rather than landed on as the matcher word.
+      rtk) pfx=1; rtk_prev=1; continue ;;
+      run|err|test|proxy|bypass|summary) (( rtk_prev )) && { rtk_prev=0; pfx=1; continue; } ;;
       [A-Za-z_]*=*) pfx=1; continue ;;
       -*|[0-9]*) (( pfx )) && continue ;;
     esac

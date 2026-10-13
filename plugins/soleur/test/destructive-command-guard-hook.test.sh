@@ -223,7 +223,7 @@ mkrepo() { # mkrepo <dir> <current-branch> <origin-head-branch|-> <upstream-head
 # --- the recording stubs -----------------------------------------------------------------------------
 # Every stub records `argc NUL cwd NUL name NUL arg NUL ...` (one file per invocation: a pipeline runs its
 # members concurrently) and exits 0. They call no external program.
-STUB_NAMES="rm terraform tofu terragrunt pulumi git sudo doas env timeout nice nohup doppler aws-vault op xargs ls cat grep find docker npm wc tee sort head tail sed awk curl jq tar python3 diff mkdir cp mv date make node touch sleep chmod kubectl psql"
+STUB_NAMES="rm terraform tofu terragrunt pulumi git sudo doas env timeout nice nohup rtk doppler aws-vault op xargs ls cat grep find docker npm wc tee sort head tail sed awk curl jq tar python3 diff mkdir cp mv date make node touch sleep chmod kubectl psql"
 if [[ -z "$FAST" ]]; then
   assert_fixture_dir "$STUB"
   cat > "$STUB/rm" <<'STUBEOF'
@@ -584,6 +584,30 @@ def unwrap(name, args):
             i += 1
             if a in ("-n", "--adjustment"):
                 i += 1
+    elif name == "rtk":
+        # globals: -v/-vv/-vvv/--verbose (count) and --skip-env (global = true,
+        # legal before AND after the exec subcommand). An unknown -word lands
+        # as argv0 -> none; the hook's L rows pin the asks the oracle cannot.
+        while i < n and args[i].startswith("-") and args[i] != "-":
+            a = args[i]
+            i += 1
+            if a == "--":
+                break
+            if a in ("-v", "-vv", "-vvv", "--verbose", "--skip-env") or a.startswith("--skip-env="):
+                continue
+            i -= 1
+            break
+        if i < n and args[i] in ("run", "err", "test", "proxy", "bypass", "summary"):
+            i += 1
+            while i < n and args[i].startswith("-"):
+                a = args[i]
+                i += 1
+                if a == "--":
+                    break
+                if a == "--skip-env" or a.startswith("--skip-env="):
+                    continue
+                i -= 1
+                break
     return args[i:]
 
 
@@ -598,7 +622,7 @@ def decide(argv, cwd, depth=0):
         d = tf_decision(args)
     elif name == "git":
         d = git_decision(args, cwd)
-    elif name in ("sudo", "doas", "env", "timeout", "nice", "nohup"):
+    elif name in ("sudo", "doas", "env", "timeout", "nice", "nohup", "rtk"):
         d = decide(unwrap(name, args), cwd, depth + 1)
     for idx, a in enumerate(args):
         if a == "--":
@@ -1705,6 +1729,51 @@ L @@ wrapper: timeout --signal KILL 5 rm -rf ~ @@ deny @@ - @@ timeout --signal 
 L @@ wrapper: timeout -k 5 10 rm -rf ~ @@ deny @@ - @@ timeout -k 5 10 rm -rf ~
 L @@ wrapper: nice --adjustment 5 rm -rf ~ @@ deny @@ - @@ nice --adjustment 5 rm -rf ~
 L @@ wrapper: nice -n5 rm -rf ~ (an attached value) @@ deny @@ - @@ nice -n5 rm -rf ~
+# ---- rtk (external output-filter wrapper, #10230): `rtk <cmd>` always reaches <cmd> — a
+# filtered-subcommand exec (rtk git), an exec subcommand (run|err|test|proxy|bypass|summary),
+# or the run_fallback raw exec of an unrecognized word. Grammar verified 2026-10-13 against
+# src/lib.rs + src/core/constants.rs on develop; X rows only cover shapes the oracle models,
+# every ask shape is an L row.
+X @@ wrapper: rtk rm -rf ~ @@ deny @@ - @@ rtk rm -rf ~
+X @@ wrapper: rtk rm -rf / @@ deny @@ - @@ rtk rm -rf /
+X @@ wrapper: rtk terraform destroy @@ ask @@ - @@ rtk terraform destroy
+X @@ wrapper: rtk git push --force origin main @@ ask @@ @R1@ @@ rtk git push --force origin main
+X @@ wrapper: rtk run rm -rf ~ @@ deny @@ - @@ rtk run rm -rf ~
+X @@ wrapper: rtk err rm -rf ~ @@ deny @@ - @@ rtk err rm -rf ~
+X @@ wrapper: rtk test rm -rf ~ @@ deny @@ - @@ rtk test rm -rf ~
+X @@ wrapper: rtk proxy git push --force origin main @@ ask @@ @R1@ @@ rtk proxy git push --force origin main
+X @@ wrapper: rtk bypass rm -rf ~ @@ deny @@ - @@ rtk bypass rm -rf ~
+X @@ wrapper: rtk summary rm -rf ~ @@ deny @@ - @@ rtk summary rm -rf ~
+X @@ wrapper: rtk -v run rm -rf ~ @@ deny @@ - @@ rtk -v run rm -rf ~
+X @@ wrapper: rtk -vv rm -rf ~ @@ deny @@ - @@ rtk -vv rm -rf ~
+X @@ wrapper: rtk --skip-env run rm -rf ~ @@ deny @@ - @@ rtk --skip-env run rm -rf ~
+X @@ wrapper: rtk run --skip-env rm -rf ~ (the one global legal after the subcommand) @@ deny @@ - @@ rtk run --skip-env rm -rf ~
+X @@ wrapper: rtk -- rm -rf ~ @@ deny @@ - @@ rtk -- rm -rf ~
+X @@ wrapper: rtk run -- rm -rf ~ @@ deny @@ - @@ rtk run -- rm -rf ~
+X @@ wrapper: rtk run rtk run rm -rf ~ @@ deny @@ - @@ rtk run rtk run rm -rf ~
+X @@ wrapper: sudo rtk rm -rf ~ @@ deny @@ - @@ sudo rtk rm -rf ~
+X @@ wrapper: rtk rtk rm -rf ~ @@ deny @@ - @@ rtk rtk rm -rf ~
+X @@ wrapper: rtk sudo rm -rf ~ @@ deny @@ - @@ rtk sudo rm -rf ~
+X @@ wrapper: rtk env rm -rf ~ (pinned over-deny: rtk's own env subcommand never execs rm, and judging it through the env arm stays the safe direction) @@ deny @@ - @@ rtk env rm -rf ~
+X @@ wrapper: rtk git status @@ none @@ - @@ rtk git status
+X @@ wrapper: rtk ls @@ none @@ - @@ rtk ls
+X @@ wrapper: rtk gain @@ none @@ - @@ rtk gain
+X @@ wrapper: rtk session @@ none @@ - @@ rtk session
+X @@ wrapper: bare rtk run @@ none @@ - @@ rtk run
+# string payloads never reach argv judgement — they ask unparsed-wrapper (L rows; the oracle
+# cannot model an ask)
+L @@ wrapper: rtk run -c 'rm -rf ~' asks (string payload) @@ ask @@ - @@ rtk run -c 'rm -rf ~'
+L @@ wrapper: rtk run --command 'rm -rf ~' asks (long form of -c) @@ ask @@ - @@ rtk run --command 'rm -rf ~'
+L @@ wrapper: rtk run --command='rm -rf ~' asks (the = form) @@ ask @@ - @@ rtk run --command='rm -rf ~'
+L @@ wrapper: rtk run --shell fish -c 'rm -rf ~' asks @@ ask @@ - @@ rtk run --shell fish -c 'rm -rf ~'
+L @@ wrapper: rtk err --shell fish 'rm -rf ~' asks (the positional becomes a script) @@ ask @@ - @@ rtk err --shell fish 'rm -rf ~'
+L @@ wrapper: rtk test --shell fish 'rm -rf ~' asks @@ ask @@ - @@ rtk test --shell fish 'rm -rf ~'
+L @@ wrapper: rtk summary --shell fish 'rm -rf ~' asks @@ ask @@ - @@ rtk summary --shell fish 'rm -rf ~'
+L @@ wrapper: rtk err 'rm -rf ~' asks (a one-word string payload could be joined to sh -c upstream) @@ ask @@ - @@ rtk err 'rm -rf ~'
+L @@ wrapper: rtk run --ultra-compact rm -rf ~ asks (unknown post-subcommand option -> ask, never land on it) @@ ask @@ - @@ rtk run --ultra-compact rm -rf ~
+L @@ wrapper: rtk --badopt rm -rf ~ asks (unknown pre-subcommand option) @@ ask @@ - @@ rtk --badopt rm -rf ~
+L @@ case: RTK rm -rf ~ (a case-insensitive filesystem runs RTK as rtk) @@ deny @@ - @@ RTK rm -rf ~
+L @@ case: Rtk run rm -rf ~ @@ deny @@ - @@ Rtk run rm -rf ~
 # ---- more wrappers than the guard unwraps is an ask, never a silent allow
 L @@ wrapper: eight nested sudo are still unwrapped (deny) @@ deny @@ - @@ sudo sudo sudo sudo sudo sudo sudo sudo rm -rf /
 L @@ wrapper: nine nested sudo before rm -rf / ask (wrapper-depth) @@ ask @@ - @@ sudo sudo sudo sudo sudo sudo sudo sudo sudo rm -rf /
@@ -1963,6 +2032,8 @@ rule_env() { # <label> <rule id> <stdin text> [ENV=VAL ...]: the same for a row 
 }
 rule_row "rule id: env -S asks with its own rule id" "env -S 'rm -rf /'" - unparsed-wrapper
 rule_row "rule id: env -iS asks with its own rule id" "env -iS 'rm -rf /'" - unparsed-wrapper
+rule_row "rule id: rtk run -c asks with its own rule id" "rtk run -c 'rm -rf ~'" - unparsed-wrapper
+rule_row "rule id: rtk err --shell asks with its own rule id" "rtk err --shell fish 'rm -rf ~'" - unparsed-wrapper
 rule_row "rule id: nine nested sudo ask with the wrapper-depth rule id" 'sudo sudo sudo sudo sudo sudo sudo sudo sudo ls "x"' - wrapper-depth
 # every other id the hook can emit has its own exact-id row (the roster row only proves the id is LISTED; these prove it is what the hook SAYS)
 rule_row "rule id: rm -rf ~ denies with the recursive-delete-home rule id" 'rm -rf ~' - recursive-delete-home
@@ -2820,7 +2891,7 @@ if [[ -n "$ROWSEL" ]]; then
   [[ "$FAIL_COUNT" -eq 0 ]]
   exit
 fi
-MIN_CASES=1232
+MIN_CASES=1272
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1

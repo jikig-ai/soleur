@@ -19,7 +19,7 @@ set -uo pipefail
 
 HOOK="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/pkill-self-match-guard.sh"
 VERDICTS=()
-MIN_ASSERTIONS=128
+MIN_ASSERTIONS=134
 
 pass() { VERDICTS+=("PASS"); printf '  ok   %s\n' "$1"; }
 fail() { VERDICTS+=("FAIL"); printf '  FAIL %s\n' "$1"; }
@@ -227,6 +227,14 @@ run_case "D29 env-assignment prefix" 'LC_ALL=C ps -eo args | grep -c test-all.sh
 run_case "D30 brace group" '{ ps aux | grep -c foo-daemon; }' deny
 run_case "D31 backtick substitution" 'n=`ps aux | grep -c foo-daemon`' deny
 run_case "D32 timeout prefix" 'timeout 5 ps aux | grep -c foo-daemon' deny
+# rtk (#10230): a word between the prefix and the payload — `rtk ps`, `rtk run ps`,
+# `rtk -v run ps` all still reach ps through stage_word's exec-subcommand consumption.
+run_case "D32r1 rtk ps prefix" 'rtk ps aux | grep -c foo-daemon' deny
+run_case "D32r2 rtk run ps" 'rtk run ps aux | grep -c foo-daemon' deny
+run_case "D32r3 rtk -v run ps" 'rtk -v run ps aux | grep -c foo-daemon' deny
+run_case "D32r4 rtk err ps" 'rtk err ps aux | grep -c foo-daemon' deny
+run_case "D32r5 sudo rtk ps" 'sudo rtk ps aux | grep -c foo-daemon' deny
+run_case "D32r6 rtk bypass ps" 'rtk bypass ps aux | grep -c foo-daemon' deny
 # Redirects and pipe spellings before the stage.
 run_case "D33 2>&1 before the pipe" 'ps -eo args 2>&1 | grep -c test-all.sh' deny
 run_case "D34 |& pipe" 'ps -eo args |& grep -c test-all.sh' deny

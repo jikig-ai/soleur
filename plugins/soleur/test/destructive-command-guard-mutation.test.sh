@@ -351,7 +351,15 @@ mut_M8()  {
 }
 
 # id | edited file (relative) | well-formedness kind | rows ERE | selected floor | detector ERE
-M_IDS="M1 M2 M3a M3b M4a M4b M5a M5b M6a M6b M7a M7b M8"
+M_IDS="M1 M2 M3a M3b M4a M4b M5a M5b M6a M6b M7a M7b M8 M9a M9b M9c M9d M9e"
+# --- M9: rtk unwrap (#10230). Each mutant hits ONE site of the rtk mechanism; the rows that kill it are
+# the `wrapper: rtk`/`case: RTK` rows of destructive-command-guard-hook.test.sh.
+mut_M9a() { mut_replace "$1/$HK" 'nice|rtk|-p)  # `-p`: see wrap_skip' 'nice|-p)  # `-p`: see wrap_skip' 1; }
+mut_M9b() { mut_replace "$1/$HK" 'rtk)  # grammar per the header prose' 'zzrtk)  # grammar per the header prose' 1; }
+mut_M9c() { mut_replace "$1/$HK" 'rtk) FN="rtk"' 'zzrtk) FN="rtk"' 1; }
+mut_M9d() { mut_replace "$1/$HK" $'                *) note 1 unparsed-wrapper; return 0 ;;' $'                *) break ;;' 1; }
+mut_M9e() { mut_replace "$1/$HK" '                  note 1 unparsed-wrapper; return 0 ;;' '                  : ;;' 1; }
+
 mdef() { # mdef <id> -> sets M_FILE M_KIND M_ROWS M_FLOOR M_DETECT
   case "$1" in
     M1)  M_FILE="$HK"; M_KIND="sh"; M_FLOOR=4
@@ -393,6 +401,21 @@ mdef() { # mdef <id> -> sets M_FILE M_KIND M_ROWS M_FLOOR M_DETECT
     M8)  M_FILE="$HK"; M_KIND="sh"; M_FLOOR=6
          M_ROWS='\(M8\)|^(terraform destroy|rm -rf ~)$|^jq-less: (rm -f jq|the hand-built)'
          M_DETECT='\(M8\)|hand-built output|^  \[FAIL\] (terraform destroy|rm -rf ~) ' ;;
+    M9a) M_FILE="$HK"; M_KIND="sh"; M_FLOOR=36
+         M_ROWS='wrapper: (sudo |bare )?rtk'
+         M_DETECT='wrapper: rtk' ;;
+    M9b) M_FILE="$HK"; M_KIND="sh"; M_FLOOR=18
+         M_ROWS='wrapper: rtk (run|err|test|bypass|summary|proxy)'
+         M_DETECT='wrapper: rtk (run|err|test|bypass|summary|proxy)' ;;
+    M9c) M_FILE="$HK"; M_KIND="sh"; M_FLOOR=2
+         M_ROWS='case: RTK|case: Rtk'
+         M_DETECT='case: RTK|case: Rtk' ;;
+    M9d) M_FILE="$HK"; M_KIND="sh"; M_FLOOR=8
+         M_ROWS='wrapper: rtk (run -c|run --command|run --shell|err --shell|test --shell|summary --shell|run --ultra-compact)'
+         M_DETECT='wrapper: rtk (run -c|run --command|run --shell|err --shell|test --shell|summary --shell|run --ultra-compact)' ;;
+    M9e) M_FILE="$HK"; M_KIND="sh"; M_FLOOR=1
+         M_ROWS='wrapper: rtk err .rm -rf ~. asks'
+         M_DETECT='wrapper: rtk err .rm -rf ~. asks' ;;
     *) harness_die "unknown mutant $1" ;;
   esac
 }
@@ -400,7 +423,7 @@ mdef() { # mdef <id> -> sets M_FILE M_KIND M_ROWS M_FLOOR M_DETECT
 # the union of every selection: the control runs it first
 UNION=""
 for _id in $M_IDS; do mdef "$_id"; UNION="${UNION:+$UNION|}($M_ROWS)"; done
-UNION_FLOOR=73
+UNION_FLOOR=100
 
 # current_timeout reads its two inputs (the first field of the load-average file, the core count): driven with fixtures, so a wrong field,
 # a wrong file or a constant is a red row, not a green one (only scaled_timeout's arithmetic was rowed before)
