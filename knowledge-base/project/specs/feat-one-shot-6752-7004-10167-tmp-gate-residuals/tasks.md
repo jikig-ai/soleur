@@ -37,7 +37,7 @@ Legend: `[ ]` todo · `[x]` done.
       unchanged (the three files are not class-b members).
 - [x] 2.3 `gh issue comment 6752` with the evidence (census Mandatory-rows cite
       + fresh verification output). Per CTO dissent (decision-challenges.md
-      Item 12): the comment must record the bounded residual —
+      `#6752` ruling row): the comment must record the bounded residual —
       `learning-retrieval-bench.sh`'s `JSON_TMP`/`LEARNING_TMP` are mv-consumed
       with a narrow `set -e` abort window — never claim zero residual. PR body
       carries `Closes #6752`. → AC4

@@ -12,12 +12,15 @@
 # surfaces as `missing fields: findings_json` → invalid_schema → the
 # PreToolUse hook denies the Write and the pr-quality-guards CI job reddens.
 #
-# THE RULING (decision-challenges.md Item 15, CTO). A required field counts
-# PRESENT iff a `^f:` top-level key line exists AND either (a) non-whitespace
-# content follows the colon on the same line, or (b) a following INDENTED
-# (whitespace-led) line carries content before the next top-level key.
-# Comments and blank lines are neutral — they neither satisfy presence nor
-# close the block. The dissent pins `f:   ` (whitespace-only) as REJECT.
+# THE RULING (decision-challenges.md `#10167` ruling row, CTO). A required
+# field counts PRESENT iff a `^f:` top-level key line exists AND either (a)
+# non-whitespace non-null content follows the colon on the same line, or (b) a
+# following INDENTED (whitespace-led) line carries content before the block
+# ends — where "the block ends" is the next recognized key OR any other
+# column-0 content line. Comments and blank lines are neutral — they neither
+# satisfy presence nor close the block. Rejects: `f:` bare, `f:   `
+# (whitespace-only — the dissent), `f: null`/`~` (YAML null), `f:value` (no
+# separation space — YAML reads a plain scalar, not a mapping).
 #
 # THE FIXTURE. Each arm builds a scratch repo under $SUITE_TMP: `git init`, one
 # empty base commit on ref `base`, then the synthesized override artifact(s)
@@ -42,8 +45,23 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PARSE="$SCRIPT_DIR/../scripts/parse-override.sh"
 MANIFEST="$SCRIPT_DIR/../references/rules/manifest.yaml"
 
+# Session scratch root (#7004, ADR-250): adopt the owned `soleur-run.<pid>.*`
+# root so a SIGKILL's residue is attributable to this suite — the same
+# opportunistic pattern this PR ships for cloud-init-inngest-bootstrap.test.sh
+# (eat your own cooking). Mirrors scripts/test-all.sh's adoption block: lib
+# absent → degrade to the pre-#7004 shape, never block the suite.
+_SCRATCH_LIB="$SCRIPT_DIR/../../../scripts/lib/scratch-root.sh"
+if [[ -f "$_SCRATCH_LIB" ]]; then
+  # shellcheck source=../../../../scripts/lib/scratch-root.sh
+  source "$_SCRATCH_LIB" || true
+fi
+if declare -F soleur_scratch_session_begin >/dev/null 2>&1; then
+  soleur_scratch_session_begin "${TMPDIR:-/tmp}" || true
+fi
+
 # Scratch root with its owning trap installed before ANY source or further
-# allocation — the trap is this file's only cleanup owner (ADR-129).
+# allocation — the trap is this file's only cleanup owner (ADR-129). Under a
+# bound session, SUITE_TMP already lands inside the owned root.
 SUITE_TMP="$(mktemp -d -t parse-override.XXXXXXXX)"
 trap 'rm -rf "$SUITE_TMP"' EXIT
 
@@ -86,7 +104,12 @@ MANIFEST_SHA="$(sha256sum "$MANIFEST" | cut -d' ' -f1)"
 PASS=0
 FAIL=0
 ok()  { PASS=$((PASS + 1)); echo "  [ok] $1"; }
-bad() { FAIL=$((FAIL + 1)); echo "  [FAIL] $1" >&2; }
+bad() {
+  FAIL=$((FAIL + 1)); echo "  [FAIL] $1" >&2
+  # Surface the gate's stderr on failure — run_parse redirects it to a file
+  # the EXIT trap deletes, so a crash's diagnostics are otherwise lost.
+  if [[ -s "$SUITE_TMP/parse.err" ]]; then tail -3 "$SUITE_TMP/parse.err" >&2; fi
+}
 
 OVERRIDE_DIR="knowledge-base/engineering/security/skill-overrides"
 
@@ -148,6 +171,7 @@ PARSE_RC=0
 run_parse() {
   local d="$1"
   assert_fixture_dir "$d"
+  : > "$SUITE_TMP/parse.err"
   PARSE_OUT="$(cd "$d" && bash "$PARSE" --base base --head HEAD 2>"$SUITE_TMP/parse.err")"
   PARSE_RC=$?
 }
@@ -165,6 +189,19 @@ reason_for() {
 }
 
 echo "=== parse-override.sh presence check (#10167) ==="
+
+# --- Arm 0: instrument self-check --------------------------------------------
+# Drive both counters once each (output suppressed — the assertion is the
+# counter delta, not the line). A suite whose ok/bad never move reports a
+# green vacuously; the exit gate below also pins an arm-count floor.
+_self_pass=$PASS; _self_fail=$FAIL
+ok "self-check" >/dev/null
+bad "self-check" 2>/dev/null
+if [[ $PASS -eq $((_self_pass + 1)) && $FAIL -eq $((_self_fail + 1)) ]]; then
+  PASS=$_self_pass; FAIL=$_self_fail
+else
+  echo "FATAL: ok/bad counters did not move — instrument dead" >&2; exit 2
+fi
 
 # --- Arm 1 (MUST-PASS, non-canonical): block-mapping findings_json ACCEPT -----
 # The defect itself: schema-permitted spelling the old grep rejected.
@@ -326,7 +363,126 @@ else
   bad "verdict: LOW-RISK not rejected (rc=$PARSE_RC, reason='$reason', out=$PARSE_OUT)"
 fi
 
+# --- Arm 4d: stale-cur — indented stray under an UNRECOGNIZED col-0 key -------
+# `findings_json:` bare, then `other :` (space-before-colon — legal YAML, not
+# recognized by this gate's key regex), then an indented line. The block ends
+# at ANY col-0 content line, so `  k: v` must NOT credit findings_json. A
+# predicate that only resets `cur` on recognized key lines back-fills the
+# pending field — the security-sentinel/structural-enum review finding.
+R="$REPOS/arm-stale-cur"
+rel="$OVERRIDE_DIR/2026-10-13-stalecur-skill.md"
+rel_ok="$OVERRIDE_DIR/2026-10-13-ok-skill.md"
+mk_repo "$R"
+write_artifact "$R" "ok-skill" 'findings_json: {"code-execution": {"verdict": "REVIEW", "count": 2}}'
+write_artifact "$R" "stalecur-skill" $'findings_json:\nother :\n  k: v'
+commit_all "$R" "add override artifacts"
+run_parse "$R"
+reason="$(reason_for "$rel")"
+if [[ "$PARSE_RC" -ne 0 ]] && in_bucket invalid_schema "$rel" && in_bucket matched "$rel_ok" \
+   && [[ "$reason" == *"missing fields"* && "$reason" == *"findings_json"* ]]; then
+  ok "indented stray under an unrecognized col-0 key does not back-fill (missing fields)"
+else
+  bad "stale-cur back-fill accepted (rc=$PARSE_RC, reason='$reason', out=$PARSE_OUT)"
+fi
+
+# --- Arm 4e: no-separation-space key REJECT ------------------------------------
+# `verdict:HIGH-RISK` — YAML requires `:` + space/EOL for a mapping entry;
+# without it the whole line is a plain scalar and the field is absent. The
+# pre-#10167 grep rejected this spelling; an `^f:`-alone predicate accepts it,
+# and the file's downstream extractors read `f:v` too — an end-to-end bypass
+# (review P2). write_artifact always emits `verdict: <v>`, so this arm writes
+# the artifact directly.
+R="$REPOS/arm-nospace"
+rel="$OVERRIDE_DIR/2026-10-13-nospace-skill.md"
+rel_ok="$OVERRIDE_DIR/2026-10-13-ok-skill.md"
+mk_repo "$R"
+write_artifact "$R" "ok-skill" 'findings_json: {"code-execution": {"verdict": "REVIEW", "count": 2}}'
+mkdir -p "$R/$OVERRIDE_DIR"
+{
+  printf -- '---\n'
+  printf 'skill: nospace-skill\n'
+  printf 'source: https://example.com/skills/nospace-skill\n'
+  printf 'findings_json: {"code-execution": {"verdict": "HIGH-RISK", "count": 1}}\n'
+  printf 'justification: operator accepted the residual risk after review\n'
+  printf 'approver: fixture@example.com\n'
+  printf 'scanner_version: 0.1.0\n'
+  printf 'rule_pack_sha256: %s\n' "$MANIFEST_SHA"
+  printf 'verdict:HIGH-RISK\n'
+  printf 'timestamp: 2026-10-13T00:00:00Z\n'
+  printf -- '---\n\n'
+  printf '# Override: nospace-skill\n\n## Findings\n%s/redacted.scan-meta.json\n\n## Justification\nReviewed and accepted.\n' "$OVERRIDE_DIR"
+} > "$R/$rel"
+commit_all "$R" "add override artifacts"
+run_parse "$R"
+reason="$(reason_for "$rel")"
+if [[ "$PARSE_RC" -ne 0 ]] && in_bucket invalid_schema "$rel" && in_bucket matched "$rel_ok" \
+   && [[ "$reason" == *"missing fields"* && "$reason" == *"verdict"* ]]; then
+  ok "no-separation-space verdict:HIGH-RISK rejects (a scalar, not a mapping)"
+else
+  bad "no-separation-space key accepted — end-to-end bypass (rc=$PARSE_RC, reason='$reason', out=$PARSE_OUT)"
+fi
+
+# --- Arm 4f: findings_json: null REJECT ----------------------------------------
+# A YAML null is not "present" for a schema-required field — `f: null`/`f: ~`
+# must report missing, not satisfy presence.
+R="$REPOS/arm-null"
+rel="$OVERRIDE_DIR/2026-10-13-null-skill.md"
+rel_ok="$OVERRIDE_DIR/2026-10-13-ok-skill.md"
+mk_repo "$R"
+write_artifact "$R" "ok-skill" 'findings_json: {"code-execution": {"verdict": "REVIEW", "count": 2}}'
+write_artifact "$R" "null-skill" 'findings_json: null'
+commit_all "$R" "add override artifacts"
+run_parse "$R"
+reason="$(reason_for "$rel")"
+if [[ "$PARSE_RC" -ne 0 ]] && in_bucket invalid_schema "$rel" && in_bucket matched "$rel_ok" \
+   && [[ "$reason" == *"missing fields"* && "$reason" == *"findings_json"* ]]; then
+  ok "findings_json: null rejects (YAML null is absent for a required field)"
+else
+  bad "findings_json: null not rejected (rc=$PARSE_RC, reason='$reason', out=$PARSE_OUT)"
+fi
+
+# --- Arm 4g: duplicate key — LAST occurrence wins -------------------------------
+# `findings_json: {}` then a bare `findings_json:` — YAML last-wins makes the
+# field null; a first-seen latch would keep it present (review P3).
+R="$REPOS/arm-dup"
+rel="$OVERRIDE_DIR/2026-10-13-dup-skill.md"
+rel_ok="$OVERRIDE_DIR/2026-10-13-ok-skill.md"
+mk_repo "$R"
+write_artifact "$R" "ok-skill" 'findings_json: {"code-execution": {"verdict": "REVIEW", "count": 2}}'
+write_artifact "$R" "dup-skill" $'findings_json: {}\nfindings_json:'
+commit_all "$R" "add override artifacts"
+run_parse "$R"
+reason="$(reason_for "$rel")"
+if [[ "$PARSE_RC" -ne 0 ]] && in_bucket invalid_schema "$rel" && in_bucket matched "$rel_ok" \
+   && [[ "$reason" == *"missing fields"* && "$reason" == *"findings_json"* ]]; then
+  ok "duplicate findings_json resolves last-wins (trailing bare key is missing)"
+else
+  bad "duplicate key latched first-wins (rc=$PARSE_RC, reason='$reason', out=$PARSE_OUT)"
+fi
+
+# --- Arm 8: empty-diff baseline -------------------------------------------------
+# The modal CI path: a diff containing no override artifacts at all must
+# return rc 0 with all three buckets empty (pr-quality-guards.yml consumes
+# this shape directly).
+R="$REPOS/arm-empty-diff"
+mk_repo "$R"
+git -C "$R" commit -q --allow-empty -m "no artifacts"
+run_parse "$R"
+if [[ "$PARSE_RC" -eq 0 ]] \
+   && [[ "$(printf '%s' "$PARSE_OUT" | jq '[.matched[], .invalid_schema[], .stale_findings[]] | length')" == "0" ]]; then
+  ok "empty-diff baseline: rc=0, all buckets empty"
+else
+  bad "empty-diff baseline broken (rc=$PARSE_RC, out=$PARSE_OUT)"
+fi
+
 echo "=== parse-override: $PASS passed, $FAIL failed ==="
+# Assertion floor: a run that executed fewer than every arm reads RED, never
+# vacuously green (mirrors the scratch-residue suite's guard-recognized
+# `(( PASS < N ))` shape so the floor meta-guard sees this suite too).
+if (( PASS < 14 )); then
+  echo "VACUITY: only $PASS of 14 arms ran — refusing green" >&2
+  exit 1
+fi
 if [[ "$FAIL" -eq 0 ]]; then
   echo "OK: $PASS assertions"
   exit 0

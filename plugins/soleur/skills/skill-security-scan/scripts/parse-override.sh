@@ -69,34 +69,47 @@ for path in "${added[@]}"; do
   ' "$path")"
 
   required_fields=(skill source findings_json justification approver scanner_version rule_pack_sha256 verdict timestamp)
-  # Presence is TWO-ARMED (#10167, decision-challenges.md Item 15): a `^f:`
-  # top-level key counts present iff (a) non-whitespace content follows the
-  # colon on the same line — `f: v`, `f: {}`, `f: |` — OR (b) a following
-  # INDENTED (whitespace-led) line carries content before the next top-level
-  # key — the block mapping/sequence/scalar spellings the schema's
-  # `oneOf string|object` admits for findings_json. `f:` bare and `f:   `
-  # (whitespace-only — the CTO dissent) still report missing, so the check
-  # cannot degenerate into key-line existence. `^`-anchored key matching keeps
-  # a nested same-named key from false-presenting; comment-only and blank
-  # lines are neutral — they neither satisfy presence nor close the block.
+  # Presence is TWO-ARMED (#10167, decision-challenges.md `#10167` ruling row,
+  # CTO): a `^f:` top-level key counts present iff (a) non-whitespace, non-null
+  # content follows the colon on the same line — `f: v`, `f: {}`, `f: |` — OR
+  # (b) a following INDENTED (whitespace-led) line carries content before the
+  # block ends — the block-mapping spelling the schema's `oneOf string|object`
+  # admits for findings_json. Rejects: `f:` bare, `f:   ` (whitespace-only —
+  # the CTO dissent; the pre-#10167 grep accepted it), `f: null`/`f: ~`
+  # (a YAML null is not present for a required field), and `f:value` — with
+  # no separation space YAML reads the whole line as a plain SCALAR, not a
+  # mapping entry, so the key arm requires `:` followed by whitespace or EOL.
+  # The block ends at the next recognized key line OR any other column-0
+  # content line (`other :`, `"q":`, `9x:`, `- item`, `...`) — an indented
+  # stray under a construct this gate does not parse cannot back-fill the
+  # pending key. `^`-anchored matching keeps a nested same-named key from
+  # false-presenting; comment and blank lines are neutral — they neither
+  # satisfy presence nor close the block. A repeated key RECOMPUTES rather
+  # than latching (YAML last-wins): `f: v` then `f:` reports missing. Scope:
+  # presence, not type — `f: []`/`f: 5` count present and remain the schema
+  # validator's problem; quoted keys (`'f':`) and `f : v` are legal YAML this
+  # gate does not recognize — they report missing (deny-direction by design).
   missing="$(printf '%s\n' "$fm" | awk -v fields="${required_fields[*]}" '
     BEGIN { n = split(fields, req, " ") }
-    /^[A-Za-z_][A-Za-z0-9_-]*:/ {
+    /^[A-Za-z_][A-Za-z0-9_-]*:([[:space:]]|$)/ {
       key = $0; sub(/:.*/, "", key)
       cur = key; seen[key] = 1
-      rest = $0; sub(/^[^:]*:/, "", rest)
-      if (rest ~ /^[[:space:]]*[^[:space:]#]/) content[key] = 1
+      content[key] = 0
+      rest = $0; sub(/^[^:]*:[[:space:]]*/, "", rest)
+      if (rest !~ /^[[:space:]]*$/ && rest !~ /^[[:space:]]*#/ &&
+          rest !~ /^(null|Null|NULL|~)([[:space:]]|$)/) content[key] = 1
       next
     }
     /^[[:space:]]+[^[:space:]#]/ {
       if (cur != "") content[cur] = 1
       next
     }
+    /^[^[:space:]#]/ { cur = "" }
     END {
       out = ""
       for (i = 1; i <= n; i++) {
         f = req[i]
-        if (!(f in seen) || !(f in content)) out = out f " "
+        if (!(f in seen) || !content[f]) out = out f " "
       }
       printf "%s", out
     }

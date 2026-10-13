@@ -171,7 +171,12 @@ echo "--- AC4: extracted shell snippet POSIX-portable ---"
 # never blocks the suite; under run-registered-suites.sh the parent's exported
 # SOLEUR_SCRATCH_SESSION_ROOT makes begin a no-op. "${TMPDIR:-/tmp}" — not a
 # bare "$TMPDIR" — because `set -u` aborts on the unbound expansion even under
-# `|| true`, and /tmp is mktemp's own default when TMPDIR is unset.
+# `|| true`, and /tmp is mktemp's own default when TMPDIR is unset. The
+# explicit base is load-bearing a second way: an explicit arg is honored
+# as-given (scratch-root.sh only normalizes /tmp-subdir bases it DERIVES), so
+# the residue suite's private measured TMPDIR ($BASE/d.<leaf>) stays private —
+# a no-arg or normalized call would lift the root to real /tmp and make that
+# leaf's delta arm measure the wrong directory.
 _SCRATCH_LIB="$SCRIPT_DIR/../../../scripts/lib/scratch-root.sh"
 if [[ -f "$_SCRATCH_LIB" ]]; then
   # shellcheck source=scripts/lib/scratch-root.sh

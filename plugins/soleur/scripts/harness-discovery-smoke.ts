@@ -17,7 +17,10 @@
  *
  * The pure functions below are exported and unit-tested offline against synthesized
  * fixtures (`plugins/soleur/test/harness-discovery-smoke.test.ts`); the CLI-driving
- * half is the same code under a real binary.
+ * half is the same code under a real binary. NOTE: importing this module binds a
+ * per-process scratch session (`ensureScratchSession()` at load, below) — importers
+ * of the pure functions get the environment mutation too; it is a no-op nested under
+ * an already-bound root.
  *
  * `scripts/codex-plugin-smoke.mjs` is deliberately UNTOUCHED: it is the operator-local
  * check of an already-installed plugin and its hooks, and needs `~/.codex` state this
