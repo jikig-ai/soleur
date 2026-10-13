@@ -20,11 +20,21 @@
 # `GET /repos/{owner}/{repo}/collaborators/{login}/permission` resolves EFFECTIVE
 # permission and does not depend on membership visibility (measured 2026-09-19:
 # `admin` for the operator, `none` for `github-actions[bot]`, under the operator
-# token). One call per DISTINCT author, memoized WITHIN ONE `trusted_verdict_bodies`
-# INVOCATION — every consumer calls it under command substitution, so the memo dies
-# with that subshell and does not carry across calls (measured; the upside is that a
-# login-keyed, repo-unaware table cannot leak a permission between repos). So a thread with many comments
-# from one author costs one request.
+# token). One call per DISTINCT author, memoized WITHIN ONE VIEW INVOCATION
+# (`trusted_verdict_bodies` or `trusted_verdict_comments`) — every consumer calls a view
+# under command substitution, so the memo dies with that subshell and does not carry
+# across calls (measured; the upside is that a login-keyed, repo-unaware table cannot
+# leak a permission between repos). So a thread with many comments from one author
+# costs one request.
+#
+# TWO VIEWS OF ONE CORE. `_trusted_verdict_core` is the only place a comment read
+# becomes trusted text; the public functions are projections of it:
+#   trusted_verdict_bodies    the trusted bodies, one per comment (`RESULT:` probes)
+#   trusted_verdict_comments  one compact JSON object `{t, b}` per trusted comment, `t`
+#                             the comment's `createdAt` (marker probes that order
+#                             markers by time, such as the S3 soak probe)
+# Both return 2 on any unreadable trust decision, with EMPTY stdout. The probes map
+# rc 2 to their own exit (the soak probes: 3 via `fail_api`; concierge: 2).
 #
 # SOURCED, never executed: no top-level `exit` (a sourced `exit` terminates the
 # SOURCING parent), no `set -e`. Callers keep their own exit semantics.
@@ -32,6 +42,7 @@
 # Usage:
 #   source "$(dirname "${BASH_SOURCE[0]}")/../lib/trusted-verdict.sh"
 #   if ! bodies="$(trusted_verdict_bodies 5733)"; then exit 2; fi   # 2 = TRANSIENT
+#   if ! json="$(trusted_verdict_comments 9818)"; then exit 3; fi   # {t,b} per trusted comment
 #
 # Convention: knowledge-base/engineering/operations/runbooks/followthrough-convention.md
 
@@ -199,5 +210,25 @@ trusted_verdict_bodies() {
   records="$(_trusted_verdict_core "$issue" "$repo")" || return 2
   [[ -n "$records" ]] || return 0
   jq -r '.b' <<<"$records" || return 2
+  return 0
+}
+
+# trusted_verdict_comments <issue-number> [repo]
+#   stdout: one compact JSON object per trusted comment, oldest-first: {"t": <createdAt>, "b": <body, fences stripped>}.
+#           Project with `jq -r '.b'` (the same text `trusted_verdict_bodies` returns) or sort on `.t`.
+#   rc 0   = the read succeeded (empty stdout = no trusted comment yet, a legitimate answer)
+#   rc 2   = TRANSIENT: the comment read or a permission read failed, OR a trusted comment's
+#            `createdAt` is missing or not `YYYY-MM-DDTHH:MM:SSZ` (a caller sorts `t`
+#            lexicographically and may hand it to `date -d`, which accepts natural
+#            language). Never a default timestamp. stdout is EMPTY on rc 2.
+trusted_verdict_comments() {
+  local issue="$1" repo="${2:-jikig-ai/soleur}" records
+  records="$(_trusted_verdict_core "$issue" "$repo")" || return 2
+  [[ -n "$records" ]] || return 0
+  if ! jq -e -s 'all(.[]; .t | test("\\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\\z"))' <<<"$records" >/dev/null 2>&1; then
+    echo "trusted-verdict: a trusted comment on #${issue} has a missing or non-ISO createdAt. TRANSIENT, not a default timestamp." >&2
+    return 2
+  fi
+  printf '%s\n' "$records"
   return 0
 }
