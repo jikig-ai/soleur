@@ -3977,8 +3977,9 @@ cleanup_merged_worktrees() {
           echo -e "${RED}Error: could not force-update refs/heads/main${NC}"
         fi
       fi
-      # Auto-sync stale on-disk files so the next session reads current versions
-      sync_bare_files
+      # Auto-sync stale on-disk files so the next session reads current versions. A failure here
+      # (e.g. the root's HEAD names a branch this run just reaped) must not skip the rest of cleanup.
+      sync_bare_files || echo -e "${YELLOW}Warning: sync-bare-files failed; run it again after fixing the root's HEAD${NC}"
     else
       # SOLEUR-GUARD-MAINRESET-START
       # Establish the precondition BEFORE the destructive call, not after it (#8400).
@@ -4454,22 +4455,17 @@ create_draft_pr() {
   echo -e "${GREEN}Draft PR created: $pr_url${NC}"
 }
 
-# _prune_has_symlink_ancestor <rel>: true when any DIRECTORY component of $GIT_ROOT/<rel> is a
-# symlink. `rm -f` follows a symlinked parent, so a history path under a directory that later
-# became a symlink would delete the link TARGET: a tracked file (HEAD:dir/f does not resolve
-# through a symlink, so the blob guard cannot see it) or, for an out-of-tree link, a file outside
-# the root. Pure bash (no forks); the candidate is skipped, so this fails toward KEEPING it.
+# _prune_has_symlink_ancestor <rel>: true when the real path of <rel>'s directory differs from its
+# spelled-out path under the real bare root, i.e. a component is a symlink (or `..`, `.`, `//`).
+# `rm -f` follows a symlinked parent, so a history path under a directory that later became a symlink
+# would delete the link TARGET: a tracked file (HEAD:dir/f does not resolve through a symlink, so the
+# blob guard cannot see it) or a file outside the root. Needs GIT_ROOT_REAL; a candidate that cannot
+# be resolved counts as true, so the caller skips it.
 _prune_has_symlink_ancestor() {
-  local rel="$1" cur="$GIT_ROOT" dir part
-  dir="${rel%/*}"
-  [[ "$dir" == "$rel" ]] && return 1
-  while [[ -n "$dir" ]]; do
-    part="${dir%%/*}"
-    cur="$cur/$part"
-    [[ -L "$cur" ]] && return 0
-    if [[ "$dir" == */* ]]; then dir="${dir#*/}"; else dir=""; fi
-  done
-  return 1
+  local dir="${1%/*}" real
+  [[ "$dir" == "$1" ]] && return 1
+  real=$(cd -P -- "$GIT_ROOT/$dir" 2>/dev/null && pwd -P) || return 0
+  [[ "$real" != "$GIT_ROOT_REAL/$dir" ]]
 }
 
 # Sync critical on-disk files from git HEAD in a bare repo.
@@ -4489,15 +4485,15 @@ sync_bare_files() {
 
   echo -e "${BLUE}Syncing on-disk files from git HEAD...${NC}"
 
-  # ONE commit, the BARE ROOT's HEAD, for the whole function. This runs from the bare root or any
-  # worktree of it, and a bare `git ... HEAD` in a worktree resolves THAT worktree's branch: a
-  # feature branch that deleted or moved a file `main` still tracks then looked like "tracked
-  # nowhere" and the prune removed it from the root (the blob guard asked the same wrong HEAD, so
-  # it could not object). Pinning the sha also closes the window in which a moving HEAD gave
-  # `log`, `ls-tree` and the guard three different answers.
+  # The BARE ROOT's HEAD, resolved once. This runs from the bare root or any worktree of it; a bare
+  # `git ... HEAD` in a worktree is THAT worktree's branch, so every git call below runs in the root
+  # (-C / cd) and uses this sha. Without it a feature branch that deleted a file `main` still tracks
+  # made the prune remove it from the root, and the blob guard asked the same wrong HEAD.
   local head_sha
   if ! head_sha=$(git -C "$GIT_ROOT" rev-parse --verify -q 'HEAD^{commit}' 2>/dev/null); then
-    echo -e "${RED}Error: checkout-index from HEAD failed${NC}"
+    local head_ref
+    head_ref=$(sed -n 's/^ref: //p' "$(git -C "$GIT_ROOT" rev-parse --absolute-git-dir 2>/dev/null)/HEAD" 2>/dev/null || true)
+    echo -e "${RED}Error: the bare root's HEAD does not resolve (${head_ref:-detached}); nothing was synced${NC}"
     return 1
   fi
 
@@ -4511,58 +4507,47 @@ sync_bare_files() {
   # tracked file from HEAD (content refresh, additive -- never touches untracked
   # node_modules/.env/.mcp.json/.worktrees/_site/.playwright-mcp); a history-scoped
   # prune then removes tracked-deleted leftovers. Result: on-disk == HEAD exactly.
-  local tmp_index
-  tmp_index=$(mktemp)
-  if ! (cd "$GIT_ROOT" && GIT_INDEX_FILE="$tmp_index" git read-tree "$head_sha" 2>/dev/null) \
-    || ! (cd "$GIT_ROOT" && GIT_INDEX_FILE="$tmp_index" git --work-tree="$GIT_ROOT" checkout-index -a -f 2>/dev/null); then
+  local scratch
+  scratch=$(mktemp -d)
+  if ! (cd "$GIT_ROOT" && GIT_INDEX_FILE="$scratch/index" git read-tree "$head_sha" 2>/dev/null) \
+    || ! (cd "$GIT_ROOT" && GIT_INDEX_FILE="$scratch/index" git --work-tree="$GIT_ROOT" checkout-index -a -f 2>/dev/null); then
     echo -e "${RED}Error: checkout-index from HEAD failed${NC}"
-    rm -f "$tmp_index"
+    rm -rf "$scratch"
     return 1
   fi
-  rm -f "$tmp_index"
 
-  # Prune stale tracked-deleted files: paths git EVER tracked (the history
-  # discriminator -- NOT a raw disk scan) that are absent from HEAD but still on disk.
-  # The history gate is the safety boundary: paths git never tracked (runtime artifacts)
-  # never enter the candidate set and are never removed. A path that WAS tracked once, then
-  # untracked and ignored (a committed-by-mistake .env), IS in the set and is removed.
+  # Prune stale tracked-deleted files: paths git EVER tracked (the history discriminator, NOT a raw
+  # disk scan) that are absent from HEAD but still on disk. A path git never tracked (a runtime
+  # artifact) never enters the set; one tracked once and since untracked and ignored (a committed-by-
+  # mistake .env) does, and is removed.
   #
-  # Locale: every sed/sort/comm stage of the candidate pipeline runs under LC_ALL=C. A comm in
-  # the user's locale over C-sorted inputs prints "not in sorted order" and returns a WRONG
-  # difference that included tracked files (it deleted .claude-plugin/marketplace.json,
-  # breaking the local plugin marketplace). core.quotePath=false keeps non-ASCII paths
-  # byte-exact. Git still quotes names holding a tab, newline, quote or backslash: such a
-  # DELETED file is never pruned (its quoted spelling never exists on disk) and stays stale,
-  # which is the safe direction.
+  # Every sed/sort/comm stage runs under LC_ALL=C: a comm in the user's locale over C-sorted input
+  # prints "not in sorted order" and returns a WRONG difference that included tracked files (it
+  # deleted .claude-plugin/marketplace.json and broke the local plugin marketplace).
+  # core.quotePath=false keeps non-ASCII names byte-exact; git still quotes names holding a tab,
+  # newline, quote or backslash, and those are skipped, so such a deleted file stays stale (safe).
   #
-  # Safety net, independent of sort order: each on-disk candidate is checked against the
-  # object database at the pinned commit right before removal. Any hit means the candidate
-  # set is wrong, so the WHOLE prune is abandoned (a set proven wrong cannot be trusted for
-  # its other members). Candidates that merely LOOK different on disk are skipped rather than
-  # trusted: a non-plain path, a symlinked ancestor (see _prune_has_symlink_ancestor), and,
-  # when the root IS the git dir, a name git itself owns (config, hooks/, refs/ ...). A prune
-  # larger than SOLEUR_SYNC_PRUNE_MAX (default 5000) is skipped; the ceiling counts paths
-  # about to be removed, not candidates (a healthy history already yields thousands). Every
-  # abort or skip returns 0 so cleanup-merged completes, and the final line says it was skipped.
-  local stale_count=0 rel prune_dir prune_ok=1 prune_skipped=0 tracked_hits=0 root_is_gitdir=0
+  # Safety net, independent of sort order: each on-disk candidate is checked against the pinned
+  # commit right before removal, and ANY tracked hit abandons the whole prune (a set proven wrong
+  # cannot be trusted for its other members). Candidates that merely look removable are skipped:
+  # a non-plain path or one under a symlink (_prune_has_symlink_ancestor), and, when the root IS the
+  # git dir, the top-level names git owns (best effort; the production layout is `<root>/.git`).
+  # SOLEUR_SYNC_PRUNE_MAX (default 5000) bounds the paths about to be REMOVED, not the candidates
+  # (a healthy history already yields thousands). Every skip returns 0 and is announced.
+  local stale_count=0 rel prune_ok=1 prune_skipped=0 tracked_hit="" root_is_gitdir=0
   local prune_max="${SOLEUR_SYNC_PRUNE_MAX:-5000}"
   local -a prune_list=()
   if ! [[ "$prune_max" =~ ^[0-9]{1,9}$ ]]; then
     printf '%bWARN: ignoring invalid SOLEUR_SYNC_PRUNE_MAX=%s (want 0-999999999), using 5000%b\n' "$YELLOW" "$prune_max" "$NC" >&2
     prune_max=5000
   fi
-  # 10#: a leading zero ("08") is an octal ERROR in [[ -gt ]], which evaluates false and
-  # silently disables the ceiling.
-  prune_max=$((10#$prune_max))
-  prune_dir=$(mktemp -d 2>/dev/null) || prune_ok=0
-  if [[ "$prune_ok" -eq 1 ]]; then
-    git -C "$GIT_ROOT" -c core.quotePath=false log "$head_sha" --pretty=format: --name-only --diff-filter=AMRC 2>/dev/null \
-      | LC_ALL=C sed '/^$/d' | LC_ALL=C sort -u > "$prune_dir/ever" || prune_ok=0
-    git -C "$GIT_ROOT" -c core.quotePath=false ls-tree -r --name-only "$head_sha" 2>/dev/null \
-      | LC_ALL=C sort -u > "$prune_dir/head" || prune_ok=0
-  fi
-  if [[ "$prune_ok" -eq 1 && -s "$prune_dir/head" ]]; then
-    LC_ALL=C comm -23 "$prune_dir/ever" "$prune_dir/head" > "$prune_dir/cand" || prune_ok=0
+  prune_max=$((10#$prune_max))   # 10#: "08" is an octal ERROR in [[ -gt ]] and would silence the ceiling
+  git -C "$GIT_ROOT" -c core.quotePath=false log "$head_sha" --pretty=format: --name-only --diff-filter=AMRC 2>/dev/null \
+    | LC_ALL=C sed '/^$/d' | LC_ALL=C sort -u > "$scratch/ever" || prune_ok=0
+  git -C "$GIT_ROOT" -c core.quotePath=false ls-tree -r --name-only "$head_sha" 2>/dev/null \
+    | LC_ALL=C sort -u > "$scratch/head" || prune_ok=0
+  if [[ "$prune_ok" -eq 1 && -s "$scratch/head" ]]; then
+    LC_ALL=C comm -23 "$scratch/ever" "$scratch/head" > "$scratch/cand" || prune_ok=0
   else
     prune_ok=0
   fi
@@ -4570,18 +4555,16 @@ sync_bare_files() {
     prune_skipped=1
     printf '%bWARN: prune skipped, could not compute the candidate set from git%b\n' "$YELLOW" "$NC" >&2
   else
-    # A root that IS the git dir (a `*.git` bare layout) holds git's own files beside the tree.
-    if [[ "$(cd "$(git -C "$GIT_ROOT" rev-parse --absolute-git-dir 2>/dev/null)" 2>/dev/null && pwd -P)" == "$(cd "$GIT_ROOT" && pwd -P)" ]]; then
+    local GIT_ROOT_REAL
+    GIT_ROOT_REAL=$(cd -P -- "$GIT_ROOT" && pwd -P)
+    if [[ "$(git -C "$GIT_ROOT" rev-parse --absolute-git-dir 2>/dev/null)" == "$GIT_ROOT_REAL" ]]; then
       root_is_gitdir=1
     fi
     while IFS= read -r rel; do
-      [[ -n "$rel" ]] || continue
-      case "/$rel/" in
-        *"/../"*|*"/./"*|"//"*|*"//"*) continue ;;
-      esac
+      [[ "$rel" == \"* || "${rel%%/*}" == ".git" ]] && continue
       if [[ "$root_is_gitdir" -eq 1 ]]; then
         case "${rel%%/*}" in
-          HEAD|config|description|packed-refs|hooks|info|objects|refs|logs|worktrees|shallow|modules|index|branches|FETCH_HEAD|ORIG_HEAD|COMMIT_EDITMSG) continue ;;
+          HEAD|config|config.worktree|description|packed-refs|hooks|info|objects|refs|logs|worktrees|shallow|modules|index|branches|FETCH_HEAD|ORIG_HEAD|MERGE_HEAD|CHERRY_PICK_HEAD|REVERT_HEAD|AUTO_MERGE|COMMIT_EDITMSG|gc.log|gc.pid|rr-cache|*.lock) continue ;;
         esac
       fi
       [[ -f "$GIT_ROOT/$rel" || -L "$GIT_ROOT/$rel" ]] || continue
@@ -4589,18 +4572,15 @@ sync_bare_files() {
       # blob, not cat-file -e: -e also succeeds for a tree, and a path that is a
       # directory at HEAD is not a tracked file.
       if [[ "$(git -C "$GIT_ROOT" cat-file -t "$head_sha:$rel" 2>/dev/null)" == "blob" ]]; then
-        tracked_hits=$((tracked_hits + 1))
-        printf '%bERROR: tracked path in prune set: %s%b\n' "$RED" "$rel" "$NC" >&2
-        # The abort is already decided; cap the output (a real ordering bug lists ~1000 paths).
-        if [[ "$tracked_hits" -ge 10 ]]; then break; fi
-        continue
+        tracked_hit="$rel"
+        break
       fi
       prune_list+=("$rel")
-    done < "$prune_dir/cand"
-    if [[ "$tracked_hits" -gt 0 ]]; then
+    done < "$scratch/cand"
+    if [[ -n "$tracked_hit" ]]; then
       prune_skipped=1
-      printf '%bWARN: prune aborted, tracked path(s) were in the prune set (%s shown; an ordering bug); nothing removed%b\n' \
-        "$YELLOW" "$tracked_hits" "$NC" >&2
+      printf '%bERROR: tracked path in prune set: %s%b\n' "$RED" "$tracked_hit" "$NC" >&2
+      printf '%bWARN: prune aborted, the candidate set is wrong (an ordering bug); nothing removed%b\n' "$YELLOW" "$NC" >&2
     elif [[ "${#prune_list[@]}" -gt "$prune_max" ]]; then
       prune_skipped=1
       printf '%bWARN: prune skipped, %s stale paths exceed SOLEUR_SYNC_PRUNE_MAX=%s; raise it to prune anyway%b\n' \
@@ -4609,14 +4589,14 @@ sync_bare_files() {
       for rel in ${prune_list[@]+"${prune_list[@]}"}; do
         if rm -f "$GIT_ROOT/$rel"; then
           stale_count=$((stale_count + 1))
-          # rmdir -p cleans directories emptied by the removal; run RELATIVE to the root
-          # so the walk stops at the first non-empty parent and can never climb above it.
+          # rmdir -p cleans directories emptied by the removal; relative to the root, so the walk
+          # stops at the first non-empty parent and can never climb above it.
           (cd "$GIT_ROOT" && rmdir -p -- "$(dirname -- "$rel")" 2>/dev/null) || true
         fi
       done
     fi
   fi
-  if [[ -n "$prune_dir" ]]; then rm -rf "$prune_dir"; fi
+  rm -rf "$scratch"
   if [[ "$stale_count" -gt 0 ]]; then
     echo -e "${YELLOW}Removed $stale_count stale tracked-deleted file(s) from bare root${NC}"
   fi

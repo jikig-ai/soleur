@@ -216,9 +216,10 @@ The prune is locale-independent (every `sed`/`sort`/`comm` stage runs under `LC_
 in the user's locale once deleted tracked files, including `.claude-plugin/marketplace.json`) and
 runs against the **bare root's** HEAD, pinned once, even when `sync` is started from a worktree on
 another branch. Each candidate is checked against that commit right before removal, and a path under
-a symlinked directory, a `..` path, and (when the root is the git dir) a name git owns are skipped.
+a symlinked directory, a `.`/`..`/`.git` path, a quoted spelling, and (when the root is the git dir)
+a top-level name git owns are skipped (best effort for that legacy `*.git` layout).
 A candidate that HEAD still tracks aborts the **whole** prune with `ERROR: tracked path in prune set`
-(nothing is removed; the first 10 are listed). A prune larger than `SOLEUR_SYNC_PRUNE_MAX` (default
+(nothing is removed; the first one found is named). A prune larger than `SOLEUR_SYNC_PRUNE_MAX` (default
 5000, counted on paths about to be removed; a leading zero is read as decimal, an invalid value falls
 back to 5000 with a `WARN`, `0` skips every prune) is skipped with a `WARN`. There are three skip
 paths (tracked hit, ceiling, could not compute the candidate set), all exit 0 so `cleanup-merged`
@@ -244,9 +245,10 @@ file executed from the bare root. The mirror is complete, but it is not
 automatic — on-disk files at a `core.bare=true` root are never updated by git
 itself, so a stale copy survives until this runs.
 
-If `sync-bare-files` fails with `checkout-index from HEAD failed`, check the bare root's `HEAD`: a
-PR merge that deleted the branch `HEAD` named leaves it dangling, and `git symbolic-ref HEAD
-refs/heads/main` at the root repairs it. The Claude Code and Devin SessionStart loader does this
+If `sync-bare-files` fails with `checkout-index from HEAD failed` or `the bare root's HEAD does not
+resolve (<ref>)`, check the bare root's `HEAD`: a PR merge that deleted the branch `HEAD` named leaves
+it dangling, and `git -C <bare-root> symbolic-ref HEAD refs/heads/main` repairs it (name the root with
+`-C`: run bare from a worktree it would re-point that worktree). The Claude Code and Devin SessionStart loader does this
 automatically (`.claude/hooks/README.md`, "Bare-root HEAD self-heal"); other harnesses do not.
 
 ## Workflow Examples
