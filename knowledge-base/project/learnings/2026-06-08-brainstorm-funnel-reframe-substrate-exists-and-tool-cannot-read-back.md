@@ -69,7 +69,7 @@ artifacts committed and pushed without retry.
 - [#5049](https://github.com/jikig-ai/soleur/issues/5049) — parent issue
 - `knowledge-base/project/learnings/2026-04-10-query-existing-data-before-building-analytics-pipelines.md` — substrate-check precedent
 - `knowledge-base/project/learnings/2026-03-30-plausible-http-402-graceful-skip.md` — Plausible Growth plan has no Stats API
-- `knowledge-base/project/brainstorms/2026-06-08-waitlist-activation-funnel-brainstorm.md` — this brainstorm
+- `knowledge-base/project/brainstorms/archive/20261013-032858-2026-06-08-waitlist-activation-funnel-brainstorm.md` — this brainstorm
 
 ## Tags
 

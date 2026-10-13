@@ -10,7 +10,7 @@
 // AC-2 is deferred until a public fixture repo exists — see #2605.
 //
 // See:
-//   - knowledge-base/project/plans/2026-04-18-ops-verify-signup-workspace-provisioning-plan.md
+//   - knowledge-base/project/plans/archive/20261013-003106-2026-04-18-ops-verify-signup-workspace-provisioning-plan.md
 //   - knowledge-base/engineering/operations/runbooks/mu1-signup-workspace-verification.md
 
 import { tmpdir } from "os";

@@ -101,7 +101,7 @@ insufficient — the copy that runs must match the copy that is tested). Example
 `plan-review/lib/named-panel.mjs` + `test/plan-review-named-panel.test.ts`. The
 parent `SKILL.md` links its workflow via an opt-in pointer; the prose skill stays
 the default. Decision record + the full migrate-vs-keep inventory:
-`knowledge-base/project/specs/feat-review-workflow-prototype/spec.md`.
+`knowledge-base/project/specs/archive/20261013-032858-feat-review-workflow-prototype/spec.md`.
 
 ### Adding a New Domain
 

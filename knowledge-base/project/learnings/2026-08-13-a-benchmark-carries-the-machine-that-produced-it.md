@@ -226,8 +226,8 @@ net-positive backlog for polish. Whoever next touches this file's R1 or floor re
 
 ## Related
 
-- `knowledge-base/project/brainstorms/2026-08-13-prebake-rehearsal-image-brainstorm.md`
-- `knowledge-base/project/specs/feat-prebake-rehearsal-image-7535/spec.md`
+- `knowledge-base/project/brainstorms/archive/20261013-051752-2026-08-13-prebake-rehearsal-image-brainstorm.md`
+- `knowledge-base/project/specs/archive/20261013-051752-feat-prebake-rehearsal-image-7535/spec.md`
 - `knowledge-base/project/learnings/2026-07-27-instrument-misreports-own-coverage-and-subagent-counts-are-claims.md`
   — the count-level version of the same rule; this extends it to timings.
 - `knowledge-base/project/learnings/2026-07-03-faithful-canary-capture-must-run-in-the-deploy-base-image.md`

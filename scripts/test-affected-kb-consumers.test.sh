@@ -288,9 +288,10 @@ def covers(edge, p):
                 # A dir ref is covered iff p/head nest — the glob's reach intersects it.
                 # This is an optimistic approximation: declared globs scope by
                 # extension-class, and a dir ref under the head may carry file
-                # classes the tail declines. Correct-by-construction today (the
-                # glob carriers' kb reads are confined to their tail extensions);
-                # a deeper head (`kb/legal/**.sh`) would need the tighter read.
+                # classes the tail declines. #9969 widened the carrier set (the
+                # *.test.sh pair now hold glob:knowledge-base/**.test.sh while
+                # charged reads under those dirs include .md/.yml); tightening
+                # the rule to tail-vs-charged-classes is tracked as a scope-out.
                 return p.startswith(head) or head.startswith(p.rstrip("/") + "/")
             return fnmatch.fnmatchcase(p, g)
         if e.endswith("/"):

@@ -23,7 +23,7 @@
 //   test failures — asserted by PARSING the JSON, never grepping file text.
 //
 // Mutation matrices live in
-// knowledge-base/project/plans/2026-09-29-fix-backstop-hook-version-resolution-plan.md
+// knowledge-base/project/plans/archive/20261013-051752-2026-09-29-fix-backstop-hook-version-resolution-plan.md
 // (Guard Contract, Guards 2 and 3). Absence is a violation everywhere below —
 // never a vacuous pass.
 

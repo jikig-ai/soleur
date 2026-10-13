@@ -192,7 +192,17 @@ erasure working); the rehearsal is dispatched only on the user's per-step author
 
 `d6_replace_stale` requires a completed `git-data-host-rotate` run — a fresh host PLUS a re-minted
 `GIT_DATA_LUKS_KEY`, volume and Doppler secret together (the passphrase can only rotate with a fresh
-volume). Dispatch it off `main`:
+volume). A rotate run counts only when its job succeeded AND it carries the last-step marker
+`Rotate completed (d6 marker)` (#10166): runs from before the marker cannot discharge D6, so the rotate
+must be dispatched once more after that change merges (a destructive re-rotate: fresh host, re-minted
+key). A later plain replace does not invalidate a stamp (it never re-mints the key); the stamp attests that
+a rotate job completed, not the key-escrow state. Never re-run a rotate run from the GitHub UI: the gate
+reads the latest attempt, so a re-run hides the failed attempt from it (the failed attempt stays visible with
+`gh run view <id> --attempt 1`). A re-run that completes as a rotate stamps, but it re-executes the destructive
+apply; one refused at the plan gate reads as nothing having happened and lets an older stamp discharge D6.
+Dispatch a fresh rotate instead. A rotate run that dies before its precondition step (checkout or credential setup) or is refused at that step never reached the apply, so it reads `skip` like a failed plain replace: the run record carries no dispatch inputs to tell them apart, and an older stamp stays valid because nothing was changed (a ruled trade-off, 2026-10-13: the gate blocks only on an attempt whose apply began). (Two statements here are inferred from the run-record shape and have not been observed on a live run: that a re-run refused at the plan gate reads `skip`, and that an in-progress run which does not list the job yet is treated as in flight.) The gate
+reads the 100 newest dispatch runs of the apply workflow (every target counts toward the 100), so a rotate
+older than that is not visible to it. Dispatch it off `main`:
 
 ```bash
 gh workflow run apply-web-platform-infra.yml --ref main   -f apply_target=git-data-host-rotate -f confirm=ROTATE-GIT-DATA -f reason="<why this rotate, with the issue number>"
@@ -963,6 +973,9 @@ escalate to the CLO rather than rushing G3.
 | Precondition: the #8209 Tier-B seam is not seeded | `verdict=precondition_8209_open` | Set `DOPPLER_TOKEN_INFRA_PRIVILEGED` on the environment (ADR-241 R7), then re-dispatch. |
 | Precondition: the pin-fault Sentry rule is not live | `verdict=pin_fault_paging_absent` | Rule 1310055 unreadable or disabled — the read is live (`SENTRY_ACTIONS_RO_TOKEN`), not inferred. Enable it or fix the token before flipping. |
 | Precondition: no completed `git-data-host-rotate` | `verdict=d6_replace_stale` | Dispatch `apply_target=git-data-host-rotate confirm=ROTATE-GIT-DATA` off `main` (above). A plain replace cannot discharge D6 — it re-mints no LUKS key. |
+| Precondition: the newest rotate attempt did not complete | `verdict=d6_last_rotate_failed` | The newest `git-data-host-rotate` attempt (the run id is in the remedy line) failed, was cancelled or timed out after its apply began, so host and key state are uncertain, and an older success does not discharge D6. Read it with `gh run view <id> --log-failed` and the sections above, repair, and dispatch a fresh rotate; only a newer successful rotate supersedes it. The block is sticky: its only exits are a newer successful rotate or the failed run aging out of the 100-run window; re-running the failed run is a risky exit, not a safe one (a re-run that completes stamps but re-executes the destructive apply; one refused at the plan gate hides the failure from the gate), and a fresh dispatch refused at its precondition reads `skip` (inferred from the run record shape) and does not supersede it. There is no bypass input and no passphrase-loss recovery path is defined for this host, so a refused re-rotate is read from that run's precondition line, not worked around. |
+| Precondition: a replace or rotate run is still going | `verdict=d6_rotate_in_flight` | A `git-data-host-replace`/`-rotate` run (id in the remedy line) is running, queued or waiting for approval, or is a non-complete run that does not list the job yet, so its target cannot be read. Re-dispatch the flip when it completes. Cancel it only if `gh run view <id> --json status` reads `waiting` (a stale approval request); never cancel an `in_progress` run, since cancelling mid-apply can leave the host destroyed. |
+| Precondition: run state could not be read | `verdict=d6_run_unreadable` | `gh run list`/`gh run view` failed, returned nothing or an unparseable body, or the stamp library could not be loaded from the checkout. Nothing was concluded; run `gh run view <id> --json jobs` for the id in the remedy line to see why, then re-dispatch the flip. A listed run whose `gh run view` keeps failing strands the flip until a newer successful rotate exists; there is no bypass. |
 | Precondition: a web deploy is in flight | `verdict=deploy_in_flight` | Wait for `web-platform-release.yml` to settle; a mid-flip env rebake would be an unattributed cutover. |
 | Precondition: running image below the emitter floor | `verdict=live_image_stale` | `/health` reports a release older than `vars.GIT_DATA_EMITTER_FLOOR` — the `git_data_store=` emitter is not live, so a flip could not prove itself. |
 | A host never reported the flag's new value | `verdict=deploy_assert_failed` | The `git_data_store=<value>` emit never landed in Better Stack within the poll window — the finalizer has already unwound; reconcile the emit path before re-dispatching. |

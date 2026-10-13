@@ -30,7 +30,7 @@ and the sharpest failure mode of this feature is acting on the wrong one:
 Acting on the wrong plane is a `single-user incident`: a founder either fails to get paid, or a
 malformed money-demand is dispatched from the wrong account (test-vs-live, Soleur's-vs-founder's).
 
-Phase-0 runtime grounding (`knowledge-base/project/specs/feat-invoice-skill/phase0-stripe-mcp-findings.md`)
+Phase-0 runtime grounding (`knowledge-base/project/specs/archive/20261013-041741-feat-invoice-skill/phase0-stripe-mcp-findings.md`)
 established that the hosted MCP exposes **generic** tools (`stripe_api_read`/`stripe_api_write` + an
 op-id, `get_stripe_account_info`), not named ones, and that the write tool has **no HTTP header slot**
 — so Stripe's `Idempotency-Key` header cannot be passed, and the skill uses metadata reconciliation

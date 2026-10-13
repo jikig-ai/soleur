@@ -9,7 +9,7 @@ tags: [workflow, plan, deepen-plan, cq-gh-issue-label-verify-name, 3378]
 
 ## Problem
 
-The plan for PR #3378 (`knowledge-base/project/plans/2026-05-06-fix-x-robots-tag-api-noop-comment-plan.md`) prescribed GitHub labels `infrastructure` and `seo` in its Acceptance Criteria for the post-merge re-evaluation tracking issue. At issue-creation time, neither label existed in the `jikig-ai/soleur` repo. `gh label list --limit 200` showed the closest available labels were `domain/engineering`, `chore`, and `priority/p3-low`.
+The plan for PR #3378 (`knowledge-base/project/plans/archive/20261013-014038-2026-05-06-fix-x-robots-tag-api-noop-comment-plan.md`) prescribed GitHub labels `infrastructure` and `seo` in its Acceptance Criteria for the post-merge re-evaluation tracking issue. At issue-creation time, neither label existed in the `jikig-ai/soleur` repo. `gh label list --limit 200` showed the closest available labels were `domain/engineering`, `chore`, and `priority/p3-low`.
 
 If the plan's AC had been applied verbatim, `gh issue create --label "infrastructure" --label "seo"` would have failed with "label not found" and forced a recovery substitution at issue-creation time — exactly what happened.
 

@@ -6,7 +6,7 @@ tags: [brainstorm, verify, issue, body, enumerations, against, live, state]
 description: 'Issue body enumerations (counts, candidate lists, "Group N has ~X items") drift between issue creation and brainstorm. Run a `gh run list` / `gh issue view` / direct `ls` sanity-check against live state BEFORE letting the enumeration shape brainstorm scope. Pairs with two adjacent verification patterns documented inline.'
 metadata: {'type': 'best-practice', 'category': 'brainstorm-flow', 'module': 'brainstorm'}
 name: brainstorm-verify-issue-body-enumerations-against-live-state
-related_brainstorm: knowledge-base/project/brainstorms/2026-05-18-tr9-agent-loop-crons-inngest-migration-brainstorm.md
+related_brainstorm: knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-18-tr9-agent-loop-crons-inngest-migration-brainstorm.md
 related_issues:
   - 3948
   - 3244
@@ -84,6 +84,6 @@ The signal is sharpest when the enumeration cites named candidates whose names h
 ## Related
 
 - Issue: #3948 (TR9 cron migration); productize follow-up #3990; parent epic #3244; predecessor PR-F #3940
-- Brainstorm output: `knowledge-base/project/brainstorms/2026-05-18-tr9-agent-loop-crons-inngest-migration-brainstorm.md`
-- Spec output: `knowledge-base/project/specs/feat-agent-loop-crons-inngest-tr9/spec.md`
+- Brainstorm output: `knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-18-tr9-agent-loop-crons-inngest-migration-brainstorm.md`
+- Spec output: `knowledge-base/project/specs/archive/20261013-014038-feat-agent-loop-crons-inngest-tr9/spec.md`
 - AGENTS.md rules touched: `pdr-when-a-user-message-contains-a-clear` (lane=cross-domain inferred from user-brand-critical override; routes to triad), `hr-weigh-every-decision-against-target-user-impact` (USER_BRAND_CRITICAL gate fired and emitted telemetry)

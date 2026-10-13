@@ -64,10 +64,10 @@ patterns — not dashboards):
 
 - `knowledge-base/engineering/operations/runbooks/plausible-pii-erasure.md`
 - `knowledge-base/engineering/operations/runbooks/plausible-dashboard-filter-audit.md`
-- `knowledge-base/project/plans/2026-04-17-fix-analytics-track-path-pii-plan.md`
-- `knowledge-base/project/plans/2026-04-18-docs-path-pii-followups-plausible-erasure-and-filter-audit-plan.md`
-- `knowledge-base/project/specs/feat-fix-analytics-track-path-pii/`
-- `knowledge-base/project/specs/feat-one-shot-close-2507-2508-path-pii-followups/`
+- `knowledge-base/project/plans/archive/20261013-003106-2026-04-17-fix-analytics-track-path-pii-plan.md`
+- `knowledge-base/project/plans/archive/20261013-003106-2026-04-18-docs-path-pii-followups-plausible-erasure-and-filter-audit-plan.md`
+- `knowledge-base/project/specs/archive/20261013-003106-feat-fix-analytics-track-path-pii/`
+- `knowledge-base/project/specs/archive/20261013-003106-feat-one-shot-close-2507-2508-path-pii-followups/`
 - Any prior learning file that quoted a sample raw-PII path.
 
 Any hit outside the list above is a candidate dashboard or filter
@@ -143,6 +143,6 @@ remediation section above is the prescription.
 
 - Scrubber source: `apps/web-platform/app/api/analytics/track/sanitize.ts`, symbol `SCRUB_PATTERNS`.
 - Sibling runbook: `plausible-pii-erasure.md` (historical-event erasure path).
-- Scrubber plan: `knowledge-base/project/plans/2026-04-17-fix-analytics-track-path-pii-plan.md`.
+- Scrubber plan: `knowledge-base/project/plans/archive/20261013-003106-2026-04-17-fix-analytics-track-path-pii-plan.md`.
 - Plausible Stats API v1: <https://plausible.io/docs/stats-api-v1>.
 - Related issues: #2462 (root), #2503 (merged scrubber PR), #2508 (this runbook), #2507 (erasure runbook).

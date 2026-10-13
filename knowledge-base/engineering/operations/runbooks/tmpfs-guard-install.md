@@ -122,7 +122,7 @@ what a pass would move.
 ### Why not a systemd-tmpfiles rule instead
 
 Evaluated and rejected for this leak (#10017; CTO ruling in
-`knowledge-base/project/specs/feat-one-shot-10017-mktemp-tmp-leak/decision-challenges.md`):
+`knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-10017-mktemp-tmp-leak/decision-challenges.md`):
 
 - `e`-/`d`-type rules age a directory's *contents* — they do not remove the
   matching top-level entry shells themselves. `rung2-archive.*/` directories

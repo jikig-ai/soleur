@@ -29,7 +29,7 @@ Names are not specifications. "Marketplace" can mean a plugin directory, an ente
 
 ## Related
 
-- `knowledge-base/project/brainstorms/2026-03-10-claude-marketplace-evaluation-brainstorm.md` — full evaluation
+- `knowledge-base/project/brainstorms/archive/20261012-213508-2026-03-10-claude-marketplace-evaluation-brainstorm.md` — full evaluation
 - `knowledge-base/project/learnings/2026-02-25-platform-risk-cowork-plugins.md` — prior platform risk analysis
 - GitHub issue #521 — revisit tracker (April 2026)
 

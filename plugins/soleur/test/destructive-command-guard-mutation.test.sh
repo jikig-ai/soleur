@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2016,SC2015,SC2034  # `A && B || C` is the row idiom; the anchors below are single-quoted LITERAL hook text and are never expanded; a few globals are read by helpers in other functions
-# Guard 1 of the W2 plan, mutation half (plan Phase 1.6; knowledge-base/project/plans/2026-10-06-feat-plugin-destructive-command-guard-w2-plan.md):
+# Guard 1 of the W2 plan, mutation half (plan Phase 1.6; knowledge-base/project/plans/archive/20261013-062704-2026-10-06-feat-plugin-destructive-command-guard-w2-plan.md):
 # the chokepoint rows M1-M8 of the destructive-command hook's mutation matrix, executed in CI against a COPY
 # of the plugin tree. The other matrix rows (9-20) were run once at work time and are recorded in
-# knowledge-base/project/specs/feat-agent-security-three-layers/phase-0-measurements.md (section 1.6).
+# knowledge-base/project/specs/archive/20261013-062704-feat-agent-security-three-layers/phase-0-measurements.md (section 1.6).
 #
 # WALL-TIME. Measured 2026-10-07 on a 16-core machine at a load average of 4-6: 105 s wall (67 s user + 43 s system), of which the
 # control run is 13 s. The full hook suite alone is about 2.5 minutes of wall time at that load (see its header), so every

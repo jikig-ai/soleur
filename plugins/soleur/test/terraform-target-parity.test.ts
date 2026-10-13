@@ -67,6 +67,7 @@ import {
   lstatSync,
   writeFileSync,
   mkdtempSync,
+  mkdirSync,
   rmSync,
 } from "fs";
 import { tmpdir } from "os";
@@ -89,7 +90,8 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 // 277 -> 278 (#9879 review round 2, +1): G2e lexer/scanner linearity.
 // 278 -> 276 (#9372 retirement): the declared count was 279 (floor 278, one row loose); the single-use rebirth workflow's five-target describe (three tests) retired with the workflow and the G2 test was rewritten in place, so 279 - 3 = 276.
 // Exact again: grep -cE '^\s*test\(' = 276.
-const TEST_FLOOR = 276;
+// 276 -> 279 (#10166, +3): the d6 rotate marker / flip gate wiring describe (real-tree pins, twelve-mutant battery, the executed gate block). The 2 rows of slack were already there (declared 278 vs floor 276 on main).
+const TEST_FLOOR = 279;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -1400,7 +1402,7 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   // #6122 (ADR-096) — the zot registry host + its volume/network/firewall/creds/heartbeat
   // ALL ride the operator's initial full (untargeted) `terraform apply` + drift detector,
   // exactly like the git-data host above (CTO ruling 2026-07-06,
-  // knowledge-base/project/specs/feat-registry-oidc-migration/apply-path-cto-ruling.md).
+  // knowledge-base/project/specs/archive/20261013-041741-feat-registry-oidc-migration/apply-path-cto-ruling.md).
   // The per-PR CI `-target` path bridges over SSH to the EXISTING web host; it cannot
   // provision a brand-new host, a new private network attach, or that host's firewall.
   // NONE are in the workflow `-target` list. `doppler_secret.*` here (incl the host-token copies
@@ -2180,6 +2182,72 @@ describe("git-data-host-replace dispatch -target/-replace set (scoped; plaintext
 
   test("the gate is invoked with the mode argument (rotate passes through)", () => {
     expect(gitDataJobBlock).toMatch(/git_data_host_replace_gate\s+tfplan\.json\s+"?\$?GATE_MODE/);
+  });
+
+  test("the apply step grades the saved plan through the mode-aware post-apply backstop (#10137)", () => {
+    // The apply step used to carry an inline loop asserting BOTH data volumes preserved, which failed
+    // the rotate dispatch on its own intended LUKS replace. Every pin below runs on the step with
+    // comments stripped, anchored on a non-comment line: a comment that quotes the construct (the
+    // step documents all of them) must not satisfy a pin.
+    const raw = extractStep(gitDataJobBlock, /Terraform apply \(git-data-host -replace\)/);
+    expect(raw, "apply step not found in git_data_host_replace").not.toBeNull();
+    const step = stripComments(raw!);
+    // Step shape the flip gate / poll / summary key on, and nothing that tolerates a refusal.
+    expect(step).toMatch(/^\s*id: apply$/m);
+    expect(step).toMatch(/^\s*if: inputs\.plan_only != true$/m);
+    expect(step, "a continue-on-error (any quoting) would turn a refusal into a tolerated failure").not.toMatch(/continue-on-error/);
+    // The mode is the one the plan step's gate accepted, read through env (no second mapping).
+    expect(step).toMatch(/^\s*GATE_MODE: \$\{\{ steps\.plan\.outputs\.gate_mode \}\}$/m);
+    expect(step).not.toContain("APPLY_TARGET");
+    // The lib is actually sourced, at the step's top level, and the guarded call follows it
+    // IMMEDIATELY: nothing between them can wrap the call in a condition or reassign the mode.
+    const src = step.match(/^ {10}source "\$\{GITHUB_WORKSPACE\}\/tests\/scripts\/lib\/git-data-host-replace-gate\.sh"$/m);
+    expect(src, "the lib must be sourced by a real top-level line").not.toBeNull();
+    const callRe = /^ {10}if ! git_data_host_post_apply_assert tfplan\.json "\$\{GATE_MODE:-\}"; then\n([\s\S]*?)\n {10}fi\n/m;
+    const call = step.match(callRe);
+    expect(call, "the post-apply call must be a top-level `if ! … ; then … fi`").not.toBeNull();
+    expect(step.slice(src!.index! + src![0].length, call!.index!).trim()).toBe("");
+    // The refusal body must actually exit 1 (an annotation alone lets the job go green).
+    expect(call![1]).toMatch(/^\s*exit 1$/m);
+    // The call comes after the terraform apply, and nothing between them reassigns the mode or
+    // exits successfully early.
+    const applyAt = step.indexOf("terraform apply -no-color -input=false tfplan");
+    expect(applyAt).toBeGreaterThan(-1);
+    expect(applyAt).toBeLessThan(call!.index!);
+    // (scanned from the START of the step: a reassignment before the apply line is the same failure)
+    expect(step.slice(0, call!.index!)).not.toMatch(/\bGATE_MODE\+?=|-v GATE_MODE|\bread\b[^\n]*\bGATE_MODE\b|GATE_MODE:=|\bexit 0\b/);
+    // The inline loop is gone, and the old display name (false under rotate) with it.
+    expect(step).not.toMatch(/for VOL in hcloud_volume\.git_data/);
+    expect(gitDataJobBlock).not.toContain("both-volumes-preserved assert");
+    expect(gitDataJobBlock).toContain("Validate dispatch inputs (rotate confirm token)");
+    // The rotate failure annotation is its own arm, and an unknown mode takes a neutral arm rather
+    // than the plain-replace claim that both volumes are preserved.
+    expect(step).toMatch(/^\s*rotate\)\n\s*echo "::error::terraform apply \(git-data-host-rotate\) failed mid-replace/m);
+    expect(step).toMatch(/^\s*\*\)\n\s*echo "::error::terraform apply \(git-data host\) failed mid-replace and the dispatch mode is unknown/m);
+    // Exactly one call site in the job (the Observability probe counts it).
+    expect(gitDataJobBlock.match(/git_data_host_post_apply_assert tfplan\.json/g)?.length).toBe(1);
+  });
+
+  test("the plan step publishes the mode its gate accepted, once, directly after the gate block (#10137)", () => {
+    const raw = extractStep(gitDataJobBlock, /Terraform plan \(scoped git-data-host -replace\)/);
+    expect(raw, "plan step not found in git_data_host_replace").not.toBeNull();
+    const step = stripComments(raw!);
+    const publish = "printf 'gate_mode=%s\\n' \"$GATE_MODE\" >> \"$GITHUB_OUTPUT\"";
+    expect(step.split(publish).length - 1, "the plan step must publish gate_mode exactly once").toBe(1);
+    const gateCall = step.indexOf('if ! git_data_host_replace_gate tfplan.json "$GATE_MODE"; then');
+    expect(gateCall).toBeGreaterThan(-1);
+    // The gate block closes at the step's top-level `fi` (a nested `fi` is indented deeper).
+    const closeAt = step.indexOf("\n          fi\n", gateCall);
+    expect(closeAt).toBeGreaterThan(gateCall);
+    const publishAt = step.indexOf(publish);
+    expect(publishAt).toBeGreaterThan(closeAt);
+    // Directly after the gate block, at the top level: nothing between the gate's closing `fi` and
+    // the publish, so it is unconditional and cannot follow a reassignment of the mode (the #10137
+    // failure shape: rotate graded as replace again, with the gate having accepted rotate).
+    expect(step.slice(closeAt + "\n          fi\n".length, publishAt).trim()).toBe("");
+    expect(step.slice(step.lastIndexOf("\n", publishAt) + 1, publishAt)).toBe("          ");
+    // One reader of the output in the whole job.
+    expect(gitDataJobBlock.split("steps.plan.outputs.gate_mode").length - 1).toBe(1);
   });
 
   test("the plaintext data volume is in NEITHER the base nor the rotate set (preserved by omission)", () => {
@@ -7619,6 +7687,259 @@ describe("the web-class passphrase pair is reachable only from the apply job, wh
     expect(missingAddrs(droppedWeb, addrs)).toEqual(["random_password.workspaces_luks_web"]);
   });
 });
+
+// --- the d6 rotate marker and the flip gate that reads it (#10166) ------------------------------
+// The flip's d6_replace_stale precondition matched a step NAME (`rotate confirm token`) that is
+// unconditional and concludes success on EVERY target, so a plain replace or a plan-only rotate
+// discharged it. The fix is a last-step marker plus a gate that reads it through
+// scripts/lib/git-data-rotate-stamp.sh. Both endpoints are unit-tested elsewhere (the lib suite and
+// the census); what pins the WIRE between them is here: the marker's position and `if:`, the gate
+// sourcing and calling the lib in order, the name constants shared by lib and workflow, and the
+// confirm-token step staying unconditional and unread. Every text pin runs on comment-stripped,
+// line-anchored text (a comment can quote the forbidden spelling), and the structural pins read
+// the PARSED job steps so a quoting variant of `always()` or `continue-on-error` cannot hide.
+const MARKER_IF = "inputs.apply_target == 'git-data-host-rotate' && inputs.plan_only != true";
+const CONFIRM_STEP = "Validate dispatch inputs (rotate confirm token)";
+
+/** The step block holding `id: <id>` (header to the next step or job header), or null. */
+function extractStepById(workflowText: string, id: string): string | null {
+  const lines = workflowText.split("\n");
+  const idAt = lines.findIndex((l) => new RegExp(`^ {8}id: ${id}\\s*$`).test(l));
+  if (idAt === -1) return null;
+  let start = idAt;
+  while (start >= 0 && !/^ {6}- name:/.test(lines[start])) start--;
+  if (start < 0) return null;
+  let end = lines.length;
+  for (let i = idAt + 1; i < lines.length; i++) {
+    if (/^ {6}- name:/.test(lines[i]) || /^ {2}[A-Za-z0-9_-]+:/.test(lines[i])) {
+      end = i;
+      break;
+    }
+  }
+  return lines.slice(start, end).join("\n");
+}
+
+/** Violations of the marker/gate/constants wiring; empty on a healthy tree. */
+function checkRotateMarkerWiring(applyText: string, cutoverText: string, libText: string): string[] {
+  const v: string[] = [];
+  const constant = (name: string): string | null =>
+    libText.match(new RegExp(`^readonly ${name}="([^"]*)"$`, "m"))?.[1] ?? null;
+  const jobId = constant("GDRS_JOB_NAME");
+  const preName = constant("GDRS_PRECONDITION_STEP");
+  const applyName = constant("GDRS_APPLY_STEP");
+  const markerName = constant("GDRS_MARKER_STEP");
+  for (const [k, val] of [["GDRS_JOB_NAME", jobId], ["GDRS_PRECONDITION_STEP", preName], ["GDRS_APPLY_STEP", applyName], ["GDRS_MARKER_STEP", markerName]] as const) {
+    if (val === null || val === "") v.push(`lib constant ${k} is missing or empty`);
+  }
+  if (!jobId || !preName || !applyName || !markerName) return v;
+  // P-h: the em dash is U+2014 in both lib constants that carry one.
+  if (!preName.includes("\u2014") || !applyName.includes("\u2014")) v.push("the lib's precondition/apply constants lost the U+2014 em dash");
+
+  let steps: Array<Record<string, unknown>>;
+  try {
+    const doc = parseYaml(applyText) as { jobs: Record<string, { name?: unknown; steps?: Array<Record<string, unknown>> }> };
+    steps = doc.jobs[jobId]?.steps ?? [];
+    // The lib matches the job by its DISPLAY name, which is the job id only while the job has no `name:`.
+    if ("name" in (doc.jobs[jobId] ?? {})) v.push(`job ${jobId} gained a name: key, so the lib's exact job-name match no longer sees it`);
+    if ("continue-on-error" in (doc.jobs[jobId] ?? {})) v.push(`job ${jobId} carries continue-on-error, so a failed job could still read green`);
+    // The marker only means "the whole job succeeded" if no step can fail while the job stays green.
+    for (const st of steps) if ("continue-on-error" in st) v.push(`step '${String(st.name)}' of ${jobId} carries continue-on-error, so a failed step could still reach the marker`);
+    // No other job may carry the job's display name or a marker-named step (the lib reads `.jobs[]` by name).
+    for (const [id, job] of Object.entries(doc.jobs)) {
+      if (id === jobId) continue;
+      if (job.name === jobId) v.push(`job ${id} is named '${jobId}', so the lib could read it as the replace job`);
+      if ((job.steps ?? []).some((st) => st.name === markerName)) v.push(`job ${id} carries a step named '${markerName}'`);
+    }
+  } catch (e) {
+    return [...v, `the apply workflow does not parse: ${(e as Error).message.split("\n")[0]}`];
+  }
+  if (steps.length === 0) return [...v, `job ${jobId} has no steps (the lib's GDRS_JOB_NAME no longer names a job)`];
+  const named = (n: string) => steps.filter((s) => s.name === n);
+  // P-a: position. The marker is the literal last step, directly after Dispatch summary.
+  if (steps[steps.length - 1].name !== markerName) v.push(`the last step of ${jobId} is '${String(steps[steps.length - 1].name)}', not the marker '${markerName}'`);
+  if (steps.length < 2 || steps[steps.length - 2].name !== "Dispatch summary") v.push("the step before the marker is not 'Dispatch summary'");
+  // P-g: constants parity. Each name exists exactly once in the job.
+  for (const [what, n] of [["marker", markerName], ["precondition", preName], ["apply", applyName]] as const) {
+    if (named(n).length !== 1) v.push(`the ${what} step '${n}' appears ${named(n).length} times in ${jobId} (expected exactly 1)`);
+  }
+  // P-b: the marker's `if:` is exactly the ruled string, and it carries no other gating key.
+  const marker = named(markerName)[0];
+  if (marker) {
+    if (marker.if !== MARKER_IF) v.push(`the marker's if: is '${String(marker.if)}', not '${MARKER_IF}'`);
+    for (const key of ["continue-on-error", "timeout-minutes"]) if (key in marker) v.push(`the marker carries ${key}`);
+  }
+  // P-c: the name matches none of the census G5 gate-name patterns
+  // (tests/scripts/test-infra-privileged-tier-census.sh GATE_NAME) and, per the #10166 ruling, carries
+  // neither 'Validate' nor 'confirm'.
+  if (/interlock|validate|confirm|verify\s+required|preflight/i.test(markerName)) v.push("the marker's name matches a census gate-name pattern or contains 'Validate'/'confirm'");
+  // P-d: the confirm-token step still exists once and stays unconditional (census G5c).
+  const confirm = named(CONFIRM_STEP);
+  if (confirm.length !== 1) v.push(`the confirm-token step appears ${confirm.length} times (expected 1)`);
+  else if ("if" in confirm[0]) v.push("the confirm-token step gained an if: (it must stay unconditional, census G5c)");
+
+  // P-e/P-f: the gate. Pins run on the comment-stripped flip_preconditions step.
+  const rawGate = extractStepById(cutoverText, "flip_preconditions");
+  if (rawGate === null) return [...v, "the flip_preconditions step was not found in git-data-cutover.yml"];
+  const gate = stripComments(rawGate);
+  if (!/^ {10}source "\$\{GITHUB_WORKSPACE:\?\}\/scripts\/lib\/git-data-rotate-stamp\.sh" \|\| fail d6_run_unreadable /m.test(gate)) v.push("the gate does not source the stamp lib with a fail-closed || fail");
+  if ((gate.match(/git_data_d6_scan/g) ?? []).length !== 1) v.push("the gate must call git_data_d6_scan exactly once");
+  if (!/^ {12}\*\) fail d6_run_unreadable /m.test(gate)) v.push("the gate's case has no fail-closed *) arm");
+  // P-f: the gate no longer reads the confirm-token step or inlines a step-selection jq.
+  const cutoverStripped = stripComments(cutoverText);
+  if (/rotate confirm token/i.test(cutoverStripped)) v.push("git-data-cutover.yml still reads the 'rotate confirm token' step");
+  if (/select\(\.name \| test\(/.test(cutoverStripped)) v.push("git-data-cutover.yml still has an inline step-selection jq");
+  if (/\bjobs_json=/.test(cutoverStripped)) v.push("git-data-cutover.yml still captures jobs_json inline");
+  return v;
+}
+
+describe("the d6 rotate marker and the flip gate that reads it (#10166)", () => {
+  const applyText = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const cutoverText = readFileSync(resolve(REPO_ROOT, ".github/workflows/git-data-cutover.yml"), "utf8");
+  const libText = readFileSync(resolve(REPO_ROOT, "scripts/lib/git-data-rotate-stamp.sh"), "utf8");
+
+  test("the real tree satisfies every wiring pin (marker last + exact if:, gate sources/scans/cases, constants, confirm step unconditional)", () => {
+    expect(checkRotateMarkerWiring(applyText, cutoverText, libText)).toEqual([]);
+  });
+
+  test("twelve mutants of the wiring each make the check non-empty, for the right reason, and each mutation actually landed", () => {
+    const markerRun = 'run: echo "git-data-host-rotate completed - apply, boot poll, pin load and summary succeeded (the d6 marker)"';
+    const mutants: Array<{ label: string; want: RegExp; apply?: (s: string) => string; cutover?: (s: string) => string; lib?: (s: string) => string }> = [
+      { label: "drop the plan_only conjunct", want: /the marker's if: is/, apply: (s) => s.replace(` && inputs.plan_only != true\n        ${markerRun}`, `\n        ${markerRun}`) },
+      { label: "drop the apply_target conjunct", want: /the marker's if: is/, apply: (s) => s.replace(`if: inputs.apply_target == 'git-data-host-rotate' && inputs.plan_only != true\n        ${markerRun}`, `if: inputs.plan_only != true\n        ${markerRun}`) },
+      { label: "add always() to the marker", want: /the marker's if: is/, apply: (s) => s.replace(`if: ${MARKER_IF}\n        ${markerRun}`, `if: always() && ${MARKER_IF}\n        ${markerRun}`) },
+      { label: "append a step after the marker", want: /the last step of git_data_host_replace is/, apply: (s) => s.replace(`        ${markerRun}\n`, `        ${markerRun}\n\n      - name: Trailing step\n        run: echo trailing\n`) },
+      {
+        label: "restore the old confirm-token read in the gate",
+        want: /still reads the 'rotate confirm token' step/,
+        cutover: (s) => s.replace('          d6="$(git_data_d6_scan <<<"$ids")" || true\n', '          d6="$(git_data_d6_scan <<<"$ids")" || true\n          rotate_ok="$(jq -r \'.steps[] | select(.name | test("rotate confirm token"; "i")) | .conclusion\' <<<"$jobs_json")"\n'),
+      },
+      {
+        label: "add continue-on-error to the apply step",
+        want: /carries continue-on-error/,
+        apply: (s) => s.replace("      - name: Terraform apply (git-data-host -replace) \u2014 post-apply backstop\n", "      - name: Terraform apply (git-data-host -replace) \u2014 post-apply backstop\n        continue-on-error: true\n"),
+      },
+      { label: "give the job a name: key", want: /gained a name: key/, apply: (s) => s.replace("\n  git_data_host_replace:\n", "\n  git_data_host_replace:\n    name: git-data host replace\n") },
+      {
+        label: "carry the marker step name in another job",
+        want: /carries a step named/,
+        apply: (s) => {
+          const at = s.indexOf("      - name: Dispatch summary", s.indexOf("      - name: Rotate completed (d6 marker)"));
+          return at < 0 ? s : s.slice(0, at) + "      - name: Rotate completed (d6 marker)" + s.slice(at + "      - name: Dispatch summary".length);
+        },
+      },
+      { label: "add continue-on-error to the job", want: /job git_data_host_replace carries continue-on-error/, apply: (s) => s.replace("\n  git_data_host_replace:\n", "\n  git_data_host_replace:\n    continue-on-error: true\n") },
+      {
+        label: "name another job like the replace job",
+        want: /is named 'git_data_host_replace'/,
+        apply: (s) => s.replace("\n  workspaces_luks_cutover:\n", "\n  workspaces_luks_cutover:\n    name: git_data_host_replace\n"),
+      },
+      {
+        label: "rename the marker to a census gate-name pattern (workflow and lib together)",
+        want: /matches a census gate-name pattern/,
+        apply: (s) => s.replace("      - name: Rotate completed (d6 marker)\n", "      - name: Rotate preflight done\n"),
+        lib: (s) => s.replace('readonly GDRS_MARKER_STEP="Rotate completed (d6 marker)"', 'readonly GDRS_MARKER_STEP="Rotate preflight done"'),
+      },
+      { label: "change one character of the marker constant", want: /the last step of git_data_host_replace is|appears 0 times/, lib: (s) => s.replace('readonly GDRS_MARKER_STEP="Rotate completed (d6 marker)"', 'readonly GDRS_MARKER_STEP="Rotate completed (d6 markes)"') },
+    ];
+    expect(mutants.length).toBe(12);
+    for (const m of mutants) {
+      const a = m.apply ? m.apply(applyText) : applyText;
+      const c = m.cutover ? m.cutover(cutoverText) : cutoverText;
+      const l = m.lib ? m.lib(libText) : libText;
+      expect(a !== applyText || c !== cutoverText || l !== libText, `the mutation '${m.label}' did not change any text`).toBe(true);
+      const violations = checkRotateMarkerWiring(a, c, l);
+      expect(violations, `the mutant '${m.label}' was not caught`).not.toEqual([]);
+      // Caught for the RIGHT reason: a mutant that merely breaks the parse would also be non-empty.
+      expect(violations.join("\n"), `the mutant '${m.label}' was caught for the wrong reason`).toMatch(m.want);
+    }
+  });
+
+  test("the gate's d6 block, EXECUTED against a modelled gh, reaches the right verdict for each scan outcome", () => {
+    const doc = parseYaml(cutoverText) as { jobs: Record<string, { steps?: Array<{ id?: string; run?: string }> }> };
+    const run = Object.values(doc.jobs).flatMap((j) => j.steps ?? []).find((st) => st.id === "flip_preconditions")?.run;
+    expect(run, "the flip_preconditions run block must exist").toBeTruthy();
+    const failFn = run!.match(/^ *fail\(\) \{.*\}$/m)?.[0];
+    expect(failFn, "the step's own fail() must be extractable").toBeTruthy();
+    const from = run!.indexOf('source "${GITHUB_WORKSPACE:?}/scripts/lib/git-data-rotate-stamp.sh"');
+    const to = run!.indexOf("# deploy_in_flight");
+    expect(from, "the d6 block must start at the lib source line").toBeGreaterThan(-1);
+    expect(to).toBeGreaterThan(from);
+    const blockText = run!.slice(from, to);
+    const harnessFor = (block: string) => `set -euo pipefail\n${failFn}\nlast_ok=""\n${block}\necho "LAST_OK=$last_ok"\n`;
+
+    const c = (n: string) => libText.match(new RegExp(`^readonly ${n}="([^"]*)"$`, "m"))![1];
+    const [pre, apply, marker] = [c("GDRS_PRECONDITION_STEP"), c("GDRS_APPLY_STEP"), c("GDRS_MARKER_STEP")];
+    const job = (conclusion: string | null, steps: Array<[string, string | null]>) =>
+      JSON.stringify({ jobs: [{ name: c("GDRS_JOB_NAME"), conclusion, steps: steps.map(([name, conclusion]) => ({ name, conclusion })) }] });
+    const stamped = job("success", [[pre, "success"], [apply, "success"], [marker, "success"]]);
+    const plain = job("success", [[pre, "skipped"], [apply, "success"], [marker, "skipped"]]);
+    const failedRotate = job("failure", [[pre, "success"], [apply, "failure"], [marker, "skipped"]]);
+    const inFlight = job(null, [[pre, "success"], [apply, null]]);
+
+    // gh models exactly the two calls the block may make and REFUSES any other argv (exit 64: the full
+    // `run list` argv is compared word for word, so an added, removed, reordered or changed selector turns the
+    // capture into a failure instead of quietly reading the right fixture). The list goes through the REAL --jq filter.
+    const ghStub = `#!/usr/bin/env bash
+if [[ "\${1-} \${2-}" == "run list" ]]; then
+  [[ $# -eq 14 && "\${*:1:13}" == "run list --workflow apply-web-platform-infra.yml --branch main --event workflow_dispatch --limit 100 --json databaseId,status --jq" ]] \
+    || { echo "gh stub refused: $*" >&2; exit 64; }
+  jqf="\${14}"
+  [[ -f "$FX/list.json" ]] || exit 1
+  exec jq -r "$jqf" "$FX/list.json"
+fi
+if [[ "\${1-} \${2-}" == "run view" && "\${4-}" == "--json" && "\${5-}" == "jobs" && $# -eq 5 ]]; then
+  [[ -f "$FX/$3.json" ]] || exit 1
+  cat "$FX/$3.json"; exit 0
+fi
+echo "gh stub refused: $*" >&2
+exit 64
+`;
+    type Case = { name: string; list: Array<[number | string, string]> | null; bodies: Record<number, string>; rc: number; verdict?: string; has?: string[]; hasNot?: string[]; mutate?: [string, string] };
+    const cases: Case[] = [
+      { name: "an older stamped run behind a newer plain replace discharges D6", list: [[2, "completed"], [1, "completed"]], bodies: { 2: plain, 1: stamped }, rc: 0, has: ["d6 rotate stamp: run 1", "LAST_OK=1"] },
+      { name: "only plain replaces leaves D6 open", list: [[2, "completed"]], bodies: { 2: plain }, rc: 1, verdict: "d6_replace_stale", has: ["apply_target=git-data-host-rotate"] },
+      { name: "an empty run list leaves D6 open", list: [], bodies: {}, rc: 1, verdict: "d6_replace_stale" },
+      { name: "a failed newest rotate blocks over an older stamp", list: [[3, "completed"], [1, "completed"]], bodies: { 3: failedRotate, 1: stamped }, rc: 1, verdict: "d6_last_rotate_failed", has: ["run 3", "gh run view 3 --log-failed", "dispatch a FRESH rotate", "Do not re-run the failed run"] },
+      { name: "an in-flight newest run blocks over an older stamp", list: [[3, "in_progress"], [1, "completed"]], bodies: { 3: inFlight, 1: stamped }, rc: 1, verdict: "d6_rotate_in_flight", has: ["(run 3)", "Cancel it only if", "never cancel an in_progress run"] },
+      { name: "an unreadable newest run blocks over an older stamp", list: [[4, "completed"], [1, "completed"]], bodies: { 1: stamped }, rc: 1, verdict: "d6_run_unreadable", has: ["(run 4)", "gh run view 4 --json jobs"] },
+      { name: "a non-numeric id stops the scan and the gate names no run", list: [["abc", "completed"], [1, "completed"]], bodies: { 1: stamped }, rc: 1, verdict: "d6_run_unreadable", has: ["(run n/a)"], hasNot: ["gh run view"] },
+      // The bare-stamp guard is unreachable through the real lib (it always prints an id), so drive it by replacing the scan.
+      { name: "a stamp reported without a run id fails closed", list: [[1, "completed"]], bodies: { 1: stamped }, rc: 1, verdict: "d6_run_unreadable", has: ["without a run id"], mutate: ['"$(git_data_d6_scan <<<"$ids")"', '"$(echo d6_stamped)"'] },
+      { name: "a failed run list blocks", list: null, bodies: {}, rc: 1, verdict: "d6_run_unreadable" },
+      // Control: the stub is SELECTIVE. The same block with its --event selector changed is refused by the stub,
+      // and the refusal flips the verdict (an accepting stub would have let the stamped fixture discharge D6).
+      { name: "CONTROL: a changed selector is refused by the modelled gh", list: [[1, "completed"]], bodies: { 1: stamped }, rc: 1, verdict: "d6_run_unreadable", has: ["gh stub refused"], mutate: ["--event workflow_dispatch", "--event push"] },
+    ];
+    const root = mkdtempSync(join(tmpdir(), "d6-gate-exec-"));
+    try {
+      mkdirSync(join(root, "bin"));
+      writeFileSync(join(root, "bin", "gh"), ghStub, { mode: 0o755 });
+      for (const [i, cs] of cases.entries()) {
+        const fx = join(root, `fx${i}`);
+        mkdirSync(fx);
+        if (cs.list) writeFileSync(join(fx, "list.json"), JSON.stringify(cs.list.map(([databaseId, status]) => ({ databaseId, status }))));
+        for (const [id, body] of Object.entries(cs.bodies)) writeFileSync(join(fx, `${id}.json`), body);
+        let block = blockText;
+        if (cs.mutate) {
+          block = blockText.replace(cs.mutate[0], cs.mutate[1]);
+          expect(block, `${cs.name}: the mutation must change the block`).not.toBe(blockText);
+        }
+        const r = spawnSync("bash", ["--noprofile", "--norc", "-c", harnessFor(block)], {
+          encoding: "utf8",
+          env: { PATH: `${join(root, "bin")}:${process.env.PATH ?? ""}`, HOME: root, LC_ALL: "C", FX: fx, GITHUB_WORKSPACE: REPO_ROOT },
+        });
+        const out = `${r.stdout}${r.stderr}`;
+        expect(r.status, `${cs.name}: exit status (output: ${out.slice(0, 400)})`).toBe(cs.rc);
+        if (cs.verdict) expect(out, `${cs.name}: verdict`).toContain(`verdict=${cs.verdict}`);
+        for (const h of cs.has ?? []) expect(out, `${cs.name}: output`).toContain(h);
+        for (const h of cs.hasNot ?? []) expect(out, `${cs.name}: output must not contain`).not.toContain(h);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 
 // --- suite-level anti-vacuity (#7656 C8) --------------------------------------------------------
 // The bash side has had a minimum-cardinality floor since it was written; this file had none. A

@@ -43,7 +43,7 @@ A feature flag for the contract surface would require runtime branching in the p
 
 ### Source
 
-PR #3440 multi-agent review (architecture-strategist F1, data-integrity-guardian P1+P2, user-impact-reviewer F1+F3+F4+F5). Plan section: `knowledge-base/project/plans/2026-05-07-feat-chapter-chunking-pdf-resolver-plan.md` §Status lines 55-56.
+PR #3440 multi-agent review (architecture-strategist F1, data-integrity-guardian P1+P2, user-impact-reviewer F1+F3+F4+F5). Plan section: `knowledge-base/project/plans/archive/20261013-014038-2026-05-07-feat-chapter-chunking-pdf-resolver-plan.md` §Status lines 55-56.
 
 ### Placement
 

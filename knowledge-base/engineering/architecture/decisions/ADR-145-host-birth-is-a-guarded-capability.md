@@ -5,7 +5,7 @@
 - **Issue:** #6730 (no automated route can create `hcloud_server.web`). Related: #6416 (the birth-without-NIC incident the HALT exists for), #6090/#6575 (the baked-DSN dark-boot class), #6712 (apply-time image skew), ADR-080 (stale-image `stage=verify` abort).
 - **Amends:** ADR-128 (its R1–R5 preamble said the pinned-image chain in the `host_creates` HALT carries those MUSTs "until that path exists" — it now exists and carries them itself).
 - **Extends:** ADR-068 (multi-host web cluster), ADR-143 (host lifecycle — this is the *birth* half; ADR-143 owns replacement and drain).
-- **Plan:** `knowledge-base/project/plans/2026-07-25-feat-web-host-birth-path-plan.md`
+- **Plan:** `knowledge-base/project/plans/archive/20261013-041741-2026-07-25-feat-web-host-birth-path-plan.md`
 
 ## Context
 

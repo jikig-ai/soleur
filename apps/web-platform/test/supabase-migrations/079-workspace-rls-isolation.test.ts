@@ -31,7 +31,7 @@ import path from "node:path";
 // DEDICATED dev Supabase project at apply time, per
 // hr-dev-prd-distinct-supabase-projects (NEVER the shared dev pre-merge).
 //
-// Plan: knowledge-base/project/plans/2026-05-28-feat-workspace-repo-ownership-plan.md §Phase 5
+// Plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-28-feat-workspace-repo-ownership-plan.md §Phase 5
 // ADR:  knowledge-base/engineering/architecture/decisions/ADR-044-workspace-repo-ownership.md
 
 const ROW_POLICY_MIGRATION = path.resolve(

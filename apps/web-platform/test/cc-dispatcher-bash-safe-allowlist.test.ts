@@ -25,7 +25,7 @@
  *   of `safe-bash.ts` ("find and grep are
  *   intentionally omitted — both accept -exec and could shell out").
  *
- * Plan: knowledge-base/project/plans/2026-05-15-refactor-cc-path-drain-3343-3344-plan.md
+ * Plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-15-refactor-cc-path-drain-3343-3344-plan.md
  * Issues: Closes #3344.
  */
 import { describe, it, expect } from "vitest";

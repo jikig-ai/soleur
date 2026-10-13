@@ -5,9 +5,9 @@ date: 2026-06-12
 related: [5085, 5080, 5103]
 related_adrs: [ADR-056]
 related_plans:
-  - knowledge-base/project/plans/2026-06-11-feat-operator-weekly-comprehension-digest-plan.md
+  - knowledge-base/project/plans/archive/20261013-032858-2026-06-11-feat-operator-weekly-comprehension-digest-plan.md
 related_specs:
-  - knowledge-base/project/specs/feat-operator-weekly-digest/spec.md
+  - knowledge-base/project/specs/archive/20261013-032858-feat-operator-weekly-digest/spec.md
 brand_survival_threshold: single-user incident
 ---
 
