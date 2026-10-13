@@ -345,9 +345,9 @@ if [[ -n "$REPO_ROOT" ]]; then
     if [[ -n "$v" ]]; then census_bad+="$f: $v"$'\n'; fi
   done < <(git -C "$REPO_ROOT" ls-files '*.sh')
 fi
-census_examined_ok="no"
-if [[ "$census_examined" -ge 1 ]]; then census_examined_ok="yes"; fi
-assert_eq "yes" "$census_examined_ok" "[census] examined at least one in-scope script (population floor)"
+# Population floor expressed as an assertion value, not an `if` on the counter: an `if` over a
+# counter reads as a hand-rolled anti-vacuity floor to scripts/guard-vacuity-floor.test.sh.
+assert_eq "yes" "$([[ "$census_examined" -ge 1 ]] && echo yes || echo no)" "[census] examined at least one in-scope script (population floor)"
 assert_eq "" "$census_bad" "[census] no tracked script compares a C-sorted list with a locale-bound comm/join"
 echo ""
 
