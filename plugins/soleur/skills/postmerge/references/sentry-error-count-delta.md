@@ -47,11 +47,15 @@ if [[ -z "$SENTRY_READ_TOKEN" ]]; then
   echo "WARNING: neither SENTRY_ISSUE_RO_TOKEN nor SENTRY_ISSUE_RW_TOKEN is set (the prd SENTRY_AUTH_TOKEN 403s on /issues/<id>/). Sentry error-count delta: SKIPPED."
 elif [[ ! "$ISSUE_ID" =~ ^[A-Za-z0-9_-]+$ ]]; then
   echo "WARNING: issue id '$ISSUE_ID' is not a bare token. Sentry error-count delta: SKIPPED."
+elif ! (LC_ALL=C; case "$SENTRY_READ_TOKEN" in *[!A-Za-z0-9._~+/=-]*) exit 1;; esac); then
+  echo "WARNING: Sentry read token refused (unexpected characters). Sentry error-count delta: SKIPPED."
 else
+  # argv shows in /proc/<pid>/cmdline, so the token rides curl's stdin config. Bash only, never under `bash -x`.
   # Query the issue; capture curl's rc — a failed GET is SKIPPED, not STILL-FIRING.
   get_rc=0
-  ISSUE_JSON=$(curl -sfS -H "Authorization: Bearer ${SENTRY_READ_TOKEN}" \
-    "https://${API_HOST}/api/0/organizations/${SENTRY_ORG}/issues/${ISSUE_ID}/") || get_rc=$?
+  ISSUE_JSON=$(curl --disable --proto '=https' -m 30 -fsS --config - \
+    "https://${API_HOST}/api/0/organizations/${SENTRY_ORG}/issues/${ISSUE_ID}/" \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_READ_TOKEN")) || get_rc=$?
   if (( get_rc != 0 )) || ! ISSUE_STATUS=$(jq -er '.status' <<<"$ISSUE_JSON" 2>/dev/null); then
     echo "WARNING: Sentry issue GET failed (curl rc=$get_rc, or no .status in the body). Sentry error-count delta: SKIPPED."
     ISSUE_STATUS=""
@@ -105,13 +109,16 @@ Interpretation (all outcomes are **WARN-only — never a merge blocker**):
 # this state-mutating PUT). Body is discarded (-o /dev/null) — it returns the
 # full issue object, which can carry production event data; only the HTTP code
 # is load-bearing.
+# The write token passes the same character class (else the PUT is skipped) and rides curl's stdin
+# config, as in the GET: argv shows in /proc/<pid>/cmdline. Bash only, never under `bash -x`.
 if [[ -n "$SENTRY_RW_TOKEN" && "$ISSUE_STOPPED" == "true" && "$ISSUE_STATUS" != "resolved" \
-      && "$ISSUE_ID" =~ ^[A-Za-z0-9_-]+$ ]]; then
-  RESOLVE_HTTP=$(curl -sS -o /dev/null -w '%{http_code}' -X PUT \
-    -H "Authorization: Bearer ${SENTRY_RW_TOKEN}" \
-    -H "Content-Type: application/json" \
+      && "$ISSUE_ID" =~ ^[A-Za-z0-9_-]+$ ]] \
+   && (LC_ALL=C; case "$SENTRY_RW_TOKEN" in *[!A-Za-z0-9._~+/=-]*) exit 1;; esac); then
+  RESOLVE_HTTP=$(curl --disable --proto '=https' -m 30 -sS -o /dev/null -w '%{http_code}' -X PUT \
+    --config - -H "Content-Type: application/json" \
     -d '{"status":"resolved"}' \
-    "https://${API_HOST}/api/0/organizations/${SENTRY_ORG}/issues/${ISSUE_ID}/")
+    "https://${API_HOST}/api/0/organizations/${SENTRY_ORG}/issues/${ISSUE_ID}/" \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_RW_TOKEN"))
   if [[ "$RESOLVE_HTTP" == "200" ]]; then
     SENTRY_DELTA=AUTO-RESOLVED
     echo "Sentry error-count delta: AUTO-RESOLVED issue ${ISSUE_ID}."

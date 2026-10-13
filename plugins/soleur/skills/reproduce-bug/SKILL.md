@@ -28,8 +28,11 @@ Think about the places it could go wrong looking at the codebase. Look for loggi
    ORG=$(doppler secrets get SENTRY_ORG -p soleur -c prd --plain)
    PROJ=$(doppler secrets get SENTRY_PROJECT -p soleur -c prd --plain)
    TOK=$(doppler secrets get SENTRY_ISSUE_RW_TOKEN -p soleur -c prd --plain)
-   curl -s -H "Authorization: Bearer $TOK" \
+   # argv shows in /proc/<pid>/cmdline, so the token rides curl's stdin config. Bash only, never under `bash -x`.
+   (LC_ALL=C; case "$TOK" in ''|*[!A-Za-z0-9._~+/=-]*) exit 1;; esac) || { echo "token refused" >&2; exit 1; }
+   curl --disable --proto '=https' -m 30 -sS --config - \
      "https://jikigai-eu.sentry.io/api/0/projects/$ORG/$PROJ/issues/?query=<keyword>&statsPeriod=24h&limit=5" \
+     < <(printf 'header = "Authorization: Bearer %s"\n' "$TOK") \
      | jq -r '.[]? | "\(.lastSeen) | \(.title) | n=\(.count)"'
    ```
 

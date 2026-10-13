@@ -205,7 +205,10 @@ If either credential is missing, return **SKIP** with note: "Supabase credential
 For each table/column pair extracted in Step 1.2, issue a read-only GET request:
 
 ```bash
-curl -sf "<SUPABASE_URL>/rest/v1/<table>?select=<column>&limit=1" -H "apikey: <SERVICE_ROLE_KEY>" -H "Authorization: Bearer <SERVICE_ROLE_KEY>"
+# argv shows in /proc/<pid>/cmdline, so the key rides curl's stdin config. Bash only, never under `bash -x`.
+(LC_ALL=C; case "$SERVICE_ROLE_KEY" in ''|*[!A-Za-z0-9._~+/=-]*) exit 1;; esac) || { echo "token refused" >&2; exit 1; }
+curl --disable --proto '=https' -m 30 -fsS --config - "<SUPABASE_URL>/rest/v1/<table>?select=<column>&limit=1" \
+  < <(printf 'header = "apikey: %s"\nheader = "Authorization: Bearer %s"\n' "$SERVICE_ROLE_KEY" "$SERVICE_ROLE_KEY")
 ```
 
 - A **200 response** (even empty `[]`) confirms the column exists -- migration is applied.

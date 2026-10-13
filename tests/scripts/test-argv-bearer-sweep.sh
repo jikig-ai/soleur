@@ -6780,6 +6780,233 @@ else row "S6-HB must-pass: a control probe is flagged, or the population moved u
 echo "=== stage S6-HB: Guard 2 rows (heartbeat URL off curl argv: derived population, residual allowlist, converted-script identity) done ==="
 
 # =====================================================================================
+# STAGE S7 (argv-bearer sweep, Guard 3 for markdown, #10093): no tracked agent-run markdown teaches a bearer or apikey header on curl argv.
+#
+# PROPERTY. No tracked `plugins/**/*.md` carries a `curl` command word together with a `-H`/`--header` whose header name is Authorization, apikey,
+# X-Api-Key, Private-Token or Api-Key, outside the residual allowlist. An agent copies a snippet verbatim, and argv shows in /proc/<pid>/cmdline; the
+# compliant form puts the header on curl's stdin config (`--config -`). Rule E does not read markdown, so this stage is the only recurrence guard.
+#
+# DERIVATION. ONE scan over `git ls-files` (tracked and untracked) `plugins/**/*.md`, excluding the plugin docs site (plugins/soleur/docs/) and any
+# `knowledge-base/` tree (history, not agent-run). It runs over LOGICAL lines: backslash continuations are joined (the `-H` is usually on the second
+# line) and the join STOPS at a code-fence boundary (a continuation ending a line before the closing fence is flushed, never glued to the prose after
+# it). A table cell is one physical line and is never split on pipe, semicolon or double-ampersand. Matches are pattern-anchored, not line-anchored:
+# `-H`, `--header`, `--header=`, `-H"Authorization` with no space, a lowercase header name, a short-option cluster ending in H. A `curl` command word
+# must be present, so prose that names `-H` without it, the argv-safe `-H @<(printf ...)` form (the header name is inside the process substitution),
+# and the compliant `header = "Authorization: Bearer %s"` on `--config -` are all outside the pattern.
+# A second rule (reason stdin:<file>): a logical line that holds `curl ... --config -` AND a second stdin consumer (`-d @-`, `--data-binary @-`,
+# `-T -`, `-H @-`, a heredoc, or a pipe into curl beside the `< <(...)` feed) is RED, because both consume stdin and the config would be eaten.
+#
+# EXPLICIT RESIDUAL ALLOWLIST (S7_ALLOW: file, the exact number of hits): skill-creator/references/api-security.md documents the chat-visibility threat
+# model with BAD examples. THE ALLOWLIST SHRINKS BY DELETION ONLY: a ceiling constant caps the entry count, a count that moved is RED, and the hit floor
+# (the measured allowlisted count) makes a scan that sees nothing RED.
+# NOT COVERED, named: a header carried in a variable (`-H "$AUTH_HEADER"`), an `eval`, and a snippet in a file type other than markdown.
+# =====================================================================================
+S7_ALLOW_CEIL=1; S7_HIT_FLOOR=5
+S7_ALLOW=(
+"plugins/soleur/skills/skill-creator/references/api-security.md	5"
+)
+# One TSV record per finding. V: a violating logical line (file, start line, text). Q: a curl that reads stdin twice (file, start line).
+s7_scan() { # <root>
+  python3 -I -c '
+import re, subprocess, sys
+root = sys.argv[1]
+files = subprocess.run(["git", "-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "plugins"], capture_output=True, check=True).stdout.decode().split("\0")
+cmd = re.compile(r"(?:^|[\s({;|&`\x27\"=])(?:/usr/bin/)?curl(?=\s|$)")
+hdr = re.compile(r"(?<![\w-])(?:-[A-Za-z]*H|--header)(?:\s*=\s*|\s*)[\"\x27]?\s*(?i:Authorization|apikey|X-Api-Key|Private-Token|Api-Key)(?![\w-])")
+cfg = re.compile(r"(?<![\w-])(?:--config|-K)(?:\s+|=)-(?=\s|$|[\"\x27])")
+two = re.compile(r"(?<![\w-])(?:-[A-Za-z]*d|--data|--data-binary|--data-raw|--data-urlencode|--json)(?:\s*|=)[\"\x27]?@-(?=\s|$|[\"\x27])"
+                 r"|(?<![\w-])(?:-[A-Za-z]*T|--upload-file)(?:\s+|=)[\"\x27]?-(?=\s|$|[\"\x27])"
+                 r"|(?<![\w-])-H\s+@-(?=\s|$)|<<")
+pipe = re.compile(r"\|\s*(?:/usr/bin/)?curl(?=\s|$)")
+feed = re.compile(r"<\s*<\(")
+for f in sorted(set(files)):
+    if not re.match(r"^plugins/.*\.md$", f) or f.startswith("plugins/soleur/docs/") or "/knowledge-base/" in "/" + f: continue
+    try: raw = open(root + "/" + f, encoding="utf-8", errors="replace").read().split("\n")
+    except OSError: continue
+    logical, cur, start = [], "", 0
+    for i, l in enumerate(raw, 1):
+        s = l.strip()
+        if s.startswith("```") or s.startswith("~~~"):
+            if cur: logical.append((start, cur)); cur = ""
+            logical.append((i, s)); continue
+        if not cur: start = i
+        if s.endswith("\\"): cur += s[:-1] + " "; continue
+        logical.append((start, cur + s)); cur = ""
+    if cur: logical.append((start, cur))
+    for n, t in logical:
+        if not cmd.search(t): continue
+        if hdr.search(t): print("V\t%s\t%d\t%s" % (f, n, " ".join(t.split())[:80]))
+        if cfg.search(t) and (two.search(t) or (pipe.search(t) and feed.search(t))): print("Q\t%s\t%d" % (f, n))
+' "$1"
+}
+# The verdict over a root. Sets S7_J_REASONS (empty = GREEN) and S7_J_HITS. Reasons: floor, argv:<file>, allow-count:<file>, ceiling, stdin:<file>.
+S7_J_REASONS=""; S7_J_HITS=0
+s7_judge() { # <root>
+  local root="$1" scan a file want got f
+  scan="$(s7_scan "$root")"; S7_J_REASONS=""
+  S7_J_HITS="$(grep -c '^V	' <<<"$scan" || true)"
+  [[ "$S7_J_HITS" -ge "$S7_HIT_FLOOR" ]] || S7_J_REASONS+=" floor"
+  [[ "${#S7_ALLOW[@]}" -le "$S7_ALLOW_CEIL" ]] || S7_J_REASONS+=" ceiling"
+  # every file with a violating line must be allowlisted with exactly its count
+  while IFS=$'\t' read -r got file; do
+    [[ -n "$file" ]] || continue
+    want=""; for a in "${S7_ALLOW[@]}"; do [[ "$a" == "$file"$'\t'* ]] && want="${a##*$'\t'}"; done
+    if [[ -z "$want" ]]; then S7_J_REASONS+=" argv:$file"; elif [[ "$want" != "$got" ]]; then S7_J_REASONS+=" allow-count:$file"; fi
+  done < <(awk -F'\t' '$1 == "V" { n[$2]++ } END { for (k in n) print n[k] "\t" k }' <<<"$scan")
+  # an allowlist entry whose file no longer carries a hit is stale (delete the entry and lower the floor together)
+  for a in "${S7_ALLOW[@]}"; do
+    file="${a%%$'\t'*}"
+    got="$(awk -F'\t' -v f="$file" '$1 == "V" && $2 == f { n++ } END { print n + 0 }' <<<"$scan")"
+    [[ "$got" -gt 0 ]] || S7_J_REASONS+=" allow-count:$file"
+  done
+  while IFS= read -r f; do [[ -n "$f" ]] && S7_J_REASONS+=" stdin:$f"; done < <(awk -F'\t' '$1 == "Q" { print $2 }' <<<"$scan" | sort -u)
+  S7_J_REASONS="${S7_J_REASONS# }"
+}
+S7="$TMPD/s7"; assert_fixture_dir "$S7"; mkdir -p "$S7/base" "$S7/mut"
+( source "$REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh" && git_fixture_env "$S7/base" || exit 1; git -C "$S7/base" init -q ) \
+  || fatal "S7 could not create the scratch repository"
+S7_CONVERTED=(
+  plugins/soleur/skills/postmerge/SKILL.md
+  plugins/soleur/skills/postmerge/references/sentry-error-count-delta.md
+  plugins/soleur/skills/reproduce-bug/SKILL.md
+  plugins/soleur/skills/preflight/SKILL.md
+  plugins/soleur/skills/ship/SKILL.md
+  plugins/soleur/agents/engineering/infra/infra-security.md
+  plugins/soleur/agents/engineering/review/deployment-verification-agent.md
+  plugins/soleur/skills/flag-delete/SKILL.md
+  plugins/soleur/skills/flag-list/SKILL.md
+)
+S7_APIDOC="plugins/soleur/skills/skill-creator/references/api-security.md"
+S7_SAFE=(plugins/soleur/skills/cf-token-scope/references/widen-playbook.md plugins/soleur/skills/trigger-cron/SKILL.md)
+for f in "${S7_CONVERTED[@]}" "$S7_APIDOC" "${S7_SAFE[@]}"; do
+  [[ -f "$REPO_ROOT/$f" ]] || fatal "S7 fixture source $f is missing"
+  mkdir -p "$S7/base/$(dirname "$f")"; cp "$REPO_ROOT/$f" "$S7/base/$f"
+done
+s7_fresh() { local d="$S7/mut/$1"; assert_fixture_dir "$d"; rm -rf "$d"; cp -a "$S7/base" "$d" && printf '%s' "$d"; }
+# A mini tree: the allowlisted documentation file (so the floor is met) plus ONE variant file zz.md holding the text under test.
+S7_MINI="$S7/mini"; mkdir -p "$S7_MINI"
+( source "$REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh" && git_fixture_env "$S7_MINI" || exit 1; git -C "$S7_MINI" init -q ) || fatal "S7 could not create the mini repository"
+mkdir -p "$S7_MINI/$(dirname "$S7_APIDOC")" "$S7_MINI/plugins/zz"; cp "$S7/base/$S7_APIDOC" "$S7_MINI/$S7_APIDOC"
+s7_variant() { # <name> <text, printf-%b escapes honoured> -> S7_J_REASONS for a mini tree whose zz.md holds exactly the text
+  local d="$S7/mut/v-$1"; assert_fixture_dir "$d"; rm -rf "$d"; cp -a "$S7_MINI" "$d" || fatal "S7 variant copy"
+  printf '%b\n' "$2" > "$d/plugins/zz/zz.md"; s7_judge "$d"
+}
+S7_Q="'" # a literal single quote for the variant texts
+S7_PRINTF="< <(printf ${S7_Q}header = \"Authorization: Bearer %s\"\\\\n${S7_Q} \"\$T\")"
+
+# --- the real tree ---------------------------------------------------------------------
+s7_judge "$REPO_ROOT"; S7_REAL_REASONS="$S7_J_REASONS"; S7_REAL_HITS="$S7_J_HITS"
+if [[ -z "$S7_REAL_REASONS" ]]; then row "S7 Guard 3: no tracked plugins/**/*.md puts an Authorization, apikey, X-Api-Key, Private-Token or Api-Key header on curl argv outside the residual allowlist, and none reads stdin twice ($S7_REAL_HITS hits, all in the allowlisted documentation file)" ok
+else row "S7 Guard 3: a markdown snippet puts a bearer or apikey header on curl argv, or reads stdin twice, outside the residual allowlist" fail "reasons='$S7_REAL_REASONS' hits=$S7_REAL_HITS"; fi
+S7_ALLOW_N=0; for a in "${S7_ALLOW[@]}"; do S7_ALLOW_N=$((S7_ALLOW_N + 1)); done
+if [[ "$S7_ALLOW_N" -eq "$S7_ALLOW_CEIL" && "$S7_ALLOW_N" -eq 1 && "${S7_ALLOW[0]}" == "$S7_APIDOC"$'\t'"$S7_HIT_FLOOR" ]]; then row "S7 allowlist ceiling: exactly $S7_ALLOW_CEIL residual entry ($S7_APIDOC, $S7_HIT_FLOOR measured hits; it shrinks by deletion only)" ok
+else row "S7 allowlist ceiling: the residual allowlist grew or its measured count moved" fail "entries=$S7_ALLOW_N ceiling=$S7_ALLOW_CEIL"; fi
+# The unmodified scratch tree is GREEN first, so every mutation row below changes exactly one thing against a known-good tree.
+s7_judge "$S7/base"; S7_BASE_REASONS="$S7_J_REASONS"
+if [[ -z "$S7_BASE_REASONS" ]]; then row "S7 control: the unmutated scratch tree (the nine converted files, the documentation file and the argv-safe controls) is GREEN" ok
+else row "S7 control: the unmutated scratch tree is not GREEN" fail "reasons='$S7_BASE_REASONS'"; fi
+
+# --- mutation rows (the SAME scan over a scratch tree) ----------------------------------------
+# M1: a violating header re-added to a converted file.
+S7_M1="$(s7_fresh m1)"; S7_M1F="plugins/soleur/skills/reproduce-bug/SKILL.md"
+printf '%s\n' '```bash' 'curl -s -H "Authorization: Bearer $TOK" "https://x.example/api"' '```' >> "$S7_M1/$S7_M1F"
+s7_judge "$S7_M1"
+if [[ "$S7_J_REASONS" == "argv:$S7_M1F" ]]; then row "S7 mutation 1: the argv bearer header re-added to a converted file is RED, by file identity and nothing else" ok
+else row "S7 mutation 1: a re-added argv header in a converted file is not caught" fail "reasons='$S7_J_REASONS'"; fi
+# M2: a compliant converted snippet in one file, then a violating one in a different file: only the second is named.
+S7_M2="$(s7_fresh m2)"
+printf '%s\n' '```bash' "curl --disable --proto '=https' -m 30 -fsS --config - \"\$URL\" $S7_PRINTF" '```' >> "$S7_M2/plugins/soleur/skills/postmerge/SKILL.md"
+printf '%s\n' '```bash' 'curl -fsS -H "apikey: $K" "$URL"' '```' >> "$S7_M2/plugins/soleur/skills/preflight/SKILL.md"
+s7_judge "$S7_M2"
+if [[ "$S7_J_REASONS" == "argv:plugins/soleur/skills/preflight/SKILL.md" ]]; then row "S7 mutation 2: a compliant snippet then a violating one in another file is RED for the second file only (identity, not a count)" ok
+else row "S7 mutation 2: the second file's violation is not named, or the compliant snippet is flagged" fail "reasons='$S7_J_REASONS'"; fi
+# M3: the allowlist grows by one entry (a new file with a hit, allowlisted with its count): the ceiling is RED.
+S7_M3="$(s7_fresh m3)"; printf '%s\n' '`curl -H "Authorization: Bearer $T" "$U"`' > "$S7_M3/plugins/soleur/skills/zz-new.md"
+S7_ALLOW_SAVE=("${S7_ALLOW[@]}"); S7_ALLOW+=("plugins/soleur/skills/zz-new.md	1")
+s7_judge "$S7_M3"; S7_M3R="$S7_J_REASONS"; S7_ALLOW=("${S7_ALLOW_SAVE[@]}")
+if [[ "$S7_M3R" == "ceiling" ]]; then row "S7 mutation 3: the allowlist growing by one entry is RED on the ceiling (and the new entry's own hit is the only thing it hides)" ok
+else row "S7 mutation 3: the residual allowlist can grow silently" fail "reasons='$S7_M3R'"; fi
+# M3b: one more hit inside the allowlisted documentation file (the entry names a count, not a licence). M3c: an entry whose file carries no hit (stale).
+S7_M3B="$(s7_fresh m3b)"; printf '%s\n' 'curl -sS -H "Authorization: Bearer $T" "$U"' >> "$S7_M3B/$S7_APIDOC"
+s7_judge "$S7_M3B"; S7_M3BR="$S7_J_REASONS"
+S7_M3C="$(s7_fresh m3c)"; S7_ALLOW_SAVE=("${S7_ALLOW[@]}"); S7_ALLOW=("plugins/soleur/skills/zz-gone.md	1")
+s7_judge "$S7_M3C"; S7_M3CR="$S7_J_REASONS"; S7_ALLOW=("${S7_ALLOW_SAVE[@]}")
+if [[ "$S7_M3BR" == "allow-count:$S7_APIDOC" && "$S7_M3CR" == *"allow-count:plugins/soleur/skills/zz-gone.md"* ]]; then row "S7 mutation 3 (count, stale): one more hit inside the allowlisted file is RED on its count, and an entry whose file has no hit is RED as stale" ok
+else row "S7 mutation 3 (count, stale): the allowlisted count can move, or a stale entry survives" fail "extra-hit='$S7_M3BR' stale='$S7_M3CR'"; fi
+# M4: every scanned header word renamed in a scratch tree: the scan sees 0 hits and the floor is RED, never a clean bill.
+S7_M4="$(s7_fresh m4)"; find "$S7_M4/plugins" -name '*.md' -exec sed -i -E 's/[Aa]uthorization/Authz/g; s/apikey/apik/g; s/[Xx]-[Aa]pi-[Kk]ey/x-k/g; s/[Pp]rivate-[Tt]oken/priv/g; s/[Aa]pi-[Kk]ey/ak/g' {} +
+s7_judge "$S7_M4"
+if [[ "$S7_J_HITS" -eq 0 && "$S7_J_REASONS" == *floor* ]]; then row "S7 mutation 4: with every scanned header word renamed the scan sees 0 hits and the floor is RED" ok
+else row "S7 mutation 4: a scan that sees nothing is not RED" fail "hits=$S7_J_HITS reasons='$S7_J_REASONS'"; fi
+# M5: the header on a backslash-continuation line of an otherwise converted snippet (a per-line scan is green over it).
+s7_variant m5 "\`\`\`bash\ncurl --disable --proto '=https' -m 30 -fsS --config - \\\\\n  -H \"Authorization: Bearer \$T\" \"\$U\" $S7_PRINTF\n\`\`\`"
+S7_M5R="$S7_J_REASONS"
+s7_variant m5b "\`\`\`bash\ncurl -fsS \"\$U\" \\\\\n  -H \"\$EXTRA\" \\\\\n  --header 'apikey: x'\n\`\`\`"
+if [[ "$S7_M5R" == "argv:plugins/zz/zz.md" && "$S7_J_REASONS" == "argv:plugins/zz/zz.md" ]]; then row "S7 mutation 5: the header on a continuation line (also two joins deep) is RED through the logical-line join" ok
+else row "S7 mutation 5: a header on a continuation line is not caught" fail "one-join='$S7_M5R' two-join='$S7_J_REASONS'"; fi
+# M6: shape variants, one per spelling, each RED: --header=, lowercase name, -H"Authorization with no space, a table cell, a short-option cluster.
+S7_M6BAD=""
+s7_variant m6a 'curl -sS --header=Authorization:Bearer-x "$U"'; [[ "$S7_J_REASONS" == "argv:plugins/zz/zz.md" ]] || S7_M6BAD+=" --header="
+s7_variant m6b 'curl -sS -H "authorization: Bearer $T" "$U"'; [[ "$S7_J_REASONS" == "argv:plugins/zz/zz.md" ]] || S7_M6BAD+=" lowercase"
+s7_variant m6c 'curl -sS -H"Authorization: Bearer $T" "$U"'; [[ "$S7_J_REASONS" == "argv:plugins/zz/zz.md" ]] || S7_M6BAD+=" -H-nospace"
+s7_variant m6d '| Error rate | `curl -sS -H "Authorization: Bearer $T" "$U"` divided by x | error_rate > 0.01 |'; [[ "$S7_J_REASONS" == "argv:plugins/zz/zz.md" ]] || S7_M6BAD+=" table-cell"
+s7_variant m6e 'curl -sSH "Authorization: Bearer $T" "$U"'; [[ "$S7_J_REASONS" == "argv:plugins/zz/zz.md" ]] || S7_M6BAD+=" cluster"
+s7_variant m6f '$ curl --header "Authorization: Bearer $T" "$U"'; [[ "$S7_J_REASONS" == "argv:plugins/zz/zz.md" ]] || S7_M6BAD+=" --header-space"
+if [[ -z "$S7_M6BAD" ]]; then row "S7 mutation 6: --header=, a lowercase header name, -H\"Authorization with no space, a table cell, a short-option cluster and --header are each RED" ok
+else row "S7 mutation 6: a header spelling slips through" fail "missed=$S7_M6BAD"; fi
+# M6-lead: the curl command word is recognised after each lead-in (command substitution, list operators, a pipe, a backtick span, a path).
+S7_M6LBAD=""
+for lead in '$(' '{' 'a;' 'a|' 'a&&' '`' "'" '"' '=' '/usr/bin/'; do
+  s7_variant "m6l" "x=${lead}curl -sS -H \"Authorization: Bearer \$T\" \"\$U\")"; [[ "$S7_J_REASONS" == "argv:plugins/zz/zz.md" ]] || S7_M6LBAD+=" [$lead]"
+done
+if [[ -z "$S7_M6LBAD" ]]; then row "S7 mutation 6 (lead): a curl directly after \$(, {, ;, |, &&, a backtick, a quote, = and /usr/bin/ is found, each RED" ok
+else row "S7 mutation 6 (lead): a curl lead-in slips through" fail "missed=$S7_M6LBAD"; fi
+# M6-names: one variant per header-name alternative of the pattern (a control that drives one arm lets the others be deleted unseen).
+S7_M6NBAD=""
+for nm in Authorization apikey X-Api-Key Private-Token Api-Key; do
+  s7_variant "m6n-$nm" "curl -sS -H \"$nm: \$T\" \"\$U\""; [[ "$S7_J_REASONS" == "argv:plugins/zz/zz.md" ]] || S7_M6NBAD+=" $nm"
+done
+if [[ -z "$S7_M6NBAD" ]]; then row "S7 mutation 6 (names): each of Authorization, apikey, X-Api-Key, Private-Token and Api-Key on curl argv is RED" ok
+else row "S7 mutation 6 (names): a header name of the pattern is not caught" fail "missed=$S7_M6NBAD"; fi
+# M7: a continuation ending a line just before the closing fence: no false positive (the join stops at the fence), and a real violation on that
+# last line is not hidden.
+s7_variant m7a "\`\`\`bash\ncurl --disable --proto '=https' -m 30 -fsS --config - \"\$U\" \\\\\n\`\`\`\nSend -H \"Authorization: Bearer \$T\" with it."; S7_M7A="$S7_J_REASONS"
+s7_variant m7b "\`\`\`bash\ncurl -fsS -H \"Authorization: Bearer \$T\" \\\\\n\`\`\`\nProse after the fence."; S7_M7B="$S7_J_REASONS"
+s7_variant m7c "curl -sS \"\$U\" \\\\\n\`\`\`\\\\\n-H \"Authorization: Bearer \$T\""; S7_M7C="$S7_J_REASONS"
+s7_variant m7d "curl -sS \"\$U\" \\\\\n~~~\\\\\n-H \"Authorization: Bearer \$T\""; S7_M7D="$S7_J_REASONS"
+if [[ -z "$S7_M7A" && "$S7_M7B" == "argv:plugins/zz/zz.md" && -z "$S7_M7C" && -z "$S7_M7D" ]]; then row "S7 mutation 7: a continuation ending just before the closing fence is no false positive (the join stops at the fence) and hides no curl" ok
+else row "S7 mutation 7: the logical-line join crosses a fence boundary, or hides a curl before it" fail "false-positive='$S7_M7A' hidden='$S7_M7B' glued-backtick-fence='$S7_M7C' glued-tilde-fence='$S7_M7D'"; fi
+# M8: a second stdin consumer beside --config -: each is RED; a plain -d body beside --config - is not.
+S7_M8BAD=""
+s7_variant m8a "curl --disable -fsS --config - -d @- \"\$U\" $S7_PRINTF"; [[ "$S7_J_REASONS" == "stdin:plugins/zz/zz.md" ]] || S7_M8BAD+=" -d@-"
+s7_variant m8b "curl --disable -fsS --config - --data-binary @- \"\$U\" $S7_PRINTF"; [[ "$S7_J_REASONS" == "stdin:plugins/zz/zz.md" ]] || S7_M8BAD+=" --data-binary"
+s7_variant m8c "curl --disable -fsS --config - -T - \"\$U\" $S7_PRINTF"; [[ "$S7_J_REASONS" == "stdin:plugins/zz/zz.md" ]] || S7_M8BAD+=" -T"
+s7_variant m8d "curl --disable -fsS --config - \"\$U\" <<EOF"; [[ "$S7_J_REASONS" == "stdin:plugins/zz/zz.md" ]] || S7_M8BAD+=" heredoc"
+s7_variant m8e "echo x | curl --disable -fsS --config - \"\$U\" $S7_PRINTF"; [[ "$S7_J_REASONS" == "stdin:plugins/zz/zz.md" ]] || S7_M8BAD+=" pipe-into-curl"
+for sc in "-H @-" "--data @-" "--data-raw @-" "--json @-" "--data-urlencode @-" "--upload-file -" "-d@-"; do
+  s7_variant "m8x" "curl --disable -fsS --config - $sc \"\$U\" $S7_PRINTF"; [[ "$S7_J_REASONS" == "stdin:plugins/zz/zz.md" ]] || S7_M8BAD+=" [$sc]"
+done
+s7_variant m8k "curl --disable -fsS -K - -d @- \"\$U\" $S7_PRINTF"; [[ "$S7_J_REASONS" == "stdin:plugins/zz/zz.md" ]] || S7_M8BAD+=" -K"
+s7_variant m8f "curl --disable -fsS --config - -d '{\"a\":1}' \"\$U\" $S7_PRINTF"; [[ -z "$S7_J_REASONS" ]] || S7_M8BAD+=" plain--d-flagged"
+if [[ -z "$S7_M8BAD" ]]; then row "S7 mutation 8: every second stdin consumer (-d @-, --data(-binary|-raw|-urlencode) @-, --json @-, -T -, --upload-file -, -H @-, a heredoc, a pipe into curl, and -K - as the config) beside --config - is RED; an inline -d body beside it is GREEN" ok
+else row "S7 mutation 8: a second stdin consumer beside --config - is not caught (or a plain -d body is)" fail "wrong=$S7_M8BAD"; fi
+# Must-PASS: the compliant stdin-config form, the argv-safe -H @<(printf ...) form, prose naming -H with no curl command word, curl's own -H of a
+# non-credential header, and the two excluded trees (the plugin docs site and a knowledge-base tree hold no agent-run snippet).
+S7_MPBAD=""
+s7_variant mp1 "(LC_ALL=C; case \"\$T\" in ''|*[!A-Za-z0-9._~+/=-]*) exit 1;; esac) || { echo \"token refused\" >&2; exit 1; }\ncurl --disable --proto '=https' -m 30 -fsS --config - \"\$U\" $S7_PRINTF"; [[ -z "$S7_J_REASONS" ]] || S7_MPBAD+=" stdin-config"
+s7_variant mp2 "curl -H @<(printf 'Authorization: Bearer %s' \"\$TOK\") https://api.cloudflare.com/client/v4/user/tokens/verify"; [[ -z "$S7_J_REASONS" ]] || S7_MPBAD+=" argv-safe-H@"
+s7_variant mp3 'Pass the token with `-H` and an Authorization header on the request, never on the command line.'; [[ -z "$S7_J_REASONS" ]] || S7_MPBAD+=" prose-no-curl"
+s7_variant mp4 'curl -sS -H "Content-Type: application/json" -d "{}" "$U"'; [[ -z "$S7_J_REASONS" ]] || S7_MPBAD+=" non-credential-H"
+s7_variant mp6 'curl -sS -H "Authorizations: x" -H "Api-Keyed: y" -H "apikeys: z" -H "X-Api-Key-Version: 2" "$U"'; [[ -z "$S7_J_REASONS" ]] || S7_MPBAD+=" longer-header-names"
+S7_MPD="$S7/mut/v-mp5"; assert_fixture_dir "$S7_MPD"; rm -rf "$S7_MPD"; cp -a "$S7_MINI" "$S7_MPD"; mkdir -p "$S7_MPD/plugins/soleur/docs" "$S7_MPD/plugins/soleur/knowledge-base/x"
+printf '%s\n' 'curl -H "Authorization: Bearer $T" "$U"' > "$S7_MPD/plugins/zz/zz.txt"
+printf '%s\n' 'curl -H "Authorization: Bearer $T" "$U"' > "$S7_MPD/plugins/soleur/docs/zz.md"; printf '%s\n' 'curl -H "Authorization: Bearer $T" "$U"' > "$S7_MPD/plugins/soleur/knowledge-base/x/zz.md"
+s7_judge "$S7_MPD"; [[ -z "$S7_J_REASONS" ]] || S7_MPBAD+=" excluded-trees"
+if [[ -z "$S7_MPBAD" ]]; then row "S7 must-pass: the stdin-config form, the argv-safe -H @<(printf ...) form, prose with -H and no curl, non-credential -H headers (including names that only start like a credential name), and the docs site, a knowledge-base tree and a non-markdown file are GREEN" ok
+else row "S7 must-pass: a compliant form is flagged" fail "flagged=$S7_MPBAD"; fi
+echo "=== stage S7: Guard 3 rows (markdown bearer headers off curl argv: derived census, residual allowlist, logical-line join, stdin conflict) done ==="
+
+# =====================================================================================
 # CONTROLS FOR THE VERDICT-OWNING HELPERS. Every helper that names failed checks (bk_check, bs_refusal, bs_ok_call, hmx_refused, evaluate_hmac,
 # evaluate_body) is driven here with a FABRICATED row directory that is green except for exactly ONE doctored fact, and the row requires the helper's
 # output to be exactly that one check's name. A clause with several alternatives (a regex `a|b|c`, a loop over values, an `||` of two files) gets one
@@ -7030,7 +7257,8 @@ SELFTEST_PASSES=0
 # retracted, so SELFTEST_PASSES stays 0). Derived from the run, never estimated.
 # 752 -> 770 at #9757 (stage S6, Guard 3: htpasswd password off argv): the 18 S6 rows, measured (770 passed, 0 failed).
 # 770 -> 781 at #9757 (stage S6-HB, Guard 2: heartbeat URL off curl argv, derived population): the 11 S6-HB rows, measured (781 passed, 0 failed).
-EXPECTED_TESTS=781
+# 781 -> 796 at #10093 (stage S7, Guard 3 for markdown: bearer and apikey headers off curl argv in plugins/**/*.md): the 15 S7 rows, measured (796 passed, 0 failed).
+EXPECTED_TESTS=796
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2

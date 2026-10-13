@@ -162,8 +162,11 @@ SENTRY_TOKEN=$(doppler secrets get SENTRY_AUTH_TOKEN -p soleur -c prd --plain 2>
 SENTRY_ORG=$(doppler secrets get SENTRY_ORG -p soleur -c prd --plain 2>/dev/null || echo "jikigai")
 API_HOST="${SENTRY_ORG}.sentry.io"
 
-curl -sfS -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+# argv shows in /proc/<pid>/cmdline, so the token rides curl's stdin config. Bash only, never under `bash -x`.
+(LC_ALL=C; case "$SENTRY_TOKEN" in ''|*[!A-Za-z0-9._~+/=-]*) exit 1;; esac) || { echo "token refused" >&2; exit 1; }
+curl --disable --proto '=https' -m 30 -fsS --config - \
   "https://${API_HOST}/api/0/organizations/${SENTRY_ORG}/monitors/?per_page=100" \
+  < <(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_TOKEN") \
   | jq '[.[] | {slug: .slug, status: .status}] | map(select(.status != "ok" and .status != "active"))'
 ```
 

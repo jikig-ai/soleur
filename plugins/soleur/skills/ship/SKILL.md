@@ -2935,8 +2935,10 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block â
    ```bash
    SUPABASE_URL=$(doppler secrets get NEXT_PUBLIC_SUPABASE_URL -p soleur -c prd --plain)
    SUPABASE_KEY=$(doppler secrets get SUPABASE_SERVICE_ROLE_KEY -p soleur -c prd --plain)
-   curl -s "$SUPABASE_URL/rest/v1/<table>?select=<new_column>&limit=1" \
-     -H "apikey: $SUPABASE_KEY" -H "Authorization: Bearer $SUPABASE_KEY"
+   # argv shows in /proc/<pid>/cmdline: the key rides curl's stdin config. Bash only, never under `bash -x`.
+   (LC_ALL=C; case "$SUPABASE_KEY" in ''|*[!A-Za-z0-9._~+/=-]*) exit 1;; esac) || { echo "token refused" >&2; exit 1; }
+   curl --disable --proto '=https' -m 30 -sS --config - "$SUPABASE_URL/rest/v1/<table>?select=<new_column>&limit=1" \
+     < <(printf 'header = "apikey: %s"\nheader = "Authorization: Bearer %s"\n' "$SUPABASE_KEY" "$SUPABASE_KEY")
    ```
 
 - If the query returns data (even `null` values): the column exists. Report "Migration verified: `<column>` exists in `<table>`."

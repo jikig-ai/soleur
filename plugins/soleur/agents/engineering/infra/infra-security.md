@@ -54,29 +54,34 @@ TOKEN=$(doppler secrets get CF_API_TOKEN_AUDIT -p soleur -c dev --plain)
 ZONE_ID="5af02a2f394e9ba6e0ea23c381a26b67"
 ACCT_ID="4d5ba6f096b2686fbdd404167dd4e125"
 
+# argv shows in /proc/<pid>/cmdline, so the token rides curl's stdin config on every call below.
+# Bash only, never under `bash -x`.
+(LC_ALL=C; case "$TOKEN" in ''|*[!A-Za-z0-9._~+/=-]*) exit 1;; esac) || { echo "token refused" >&2; exit 1; }
+cf() { curl --disable --proto '=https' -m 30 -sS --config - "$@" < <(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN"); }
+
 # Zone Settings (SSL mode, security level, browser integrity, bot fight mode)
-curl -s -H "Authorization: Bearer $TOKEN" "$BASE/zones/$ZONE_ID/settings" | jq '.result[] | {id, value}'
+cf "$BASE/zones/$ZONE_ID/settings" | jq '.result[] | {id, value}'
 
 # DNS Records
-curl -s -H "Authorization: Bearer $TOKEN" "$BASE/zones/$ZONE_ID/dns_records" | jq '.result[] | {name, type, content, proxied}'
+cf "$BASE/zones/$ZONE_ID/dns_records" | jq '.result[] | {name, type, content, proxied}'
 
 # SSL Certificates
-curl -s -H "Authorization: Bearer $TOKEN" "$BASE/zones/$ZONE_ID/ssl/certificate_packs" | jq '.result'
+cf "$BASE/zones/$ZONE_ID/ssl/certificate_packs" | jq '.result'
 
 # Firewall Rules (may return empty on Free plan — WAF is Pro+)
-curl -s -H "Authorization: Bearer $TOKEN" "$BASE/zones/$ZONE_ID/firewall/rules" | jq '.result'
+cf "$BASE/zones/$ZONE_ID/firewall/rules" | jq '.result'
 
 # Account Settings
-curl -s -H "Authorization: Bearer $TOKEN" "$BASE/accounts/$ACCT_ID" | jq '.result'
+cf "$BASE/accounts/$ACCT_ID" | jq '.result'
 
 # Audit Logs
-curl -s -H "Authorization: Bearer $TOKEN" "$BASE/accounts/$ACCT_ID/audit_logs?per_page=5" | jq '.result[] | {action, when, actor_email: (.actor.email | split("@") | "***@" + .[1])}'
+cf "$BASE/accounts/$ACCT_ID/audit_logs?per_page=5" | jq '.result[] | {action, when, actor_email: (.actor.email | split("@") | "***@" + .[1])}'
 
 # Notification Policies
-curl -s -H "Authorization: Bearer $TOKEN" "$BASE/accounts/$ACCT_ID/alerting/v3/policies" | jq '.result[] | {name, enabled, alert_type}'
+cf "$BASE/accounts/$ACCT_ID/alerting/v3/policies" | jq '.result[] | {name, enabled, alert_type}'
 
 # Token health check
-curl -s -H "Authorization: Bearer $TOKEN" "$BASE/user/tokens/verify" | jq '.result.status'
+cf "$BASE/user/tokens/verify" | jq '.result.status'
 ```
 
 **PII redaction:** Actor emails in the audit log jq filter are redacted by default (`***@domain.com`) to avoid displaying PII in conversation output. Full emails are available in the raw API response when needed for incident investigation.
