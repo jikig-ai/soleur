@@ -812,7 +812,7 @@ cryptsetup close inngest-redis >/dev/null 2>&1
 # Extracted from inngest-redis-bootstrap.sh and driven directly. A guard that only ever runs on a
 # host is a guard nothing can falsify.
 GUARD_SRC="$TMPROOT/mount-guard.src.sh"
-awk "/^install -m 0755 \/dev\/stdin \/usr\/local\/bin\/inngest-redis-mount-guard.sh.*GUARDEOF\$/{f=1;next} /^GUARDEOF\$/{f=0} f" "$REDIS_BOOTSTRAP" > "$GUARD_SRC"
+awk "/^install -m 0755 \/dev\/stdin \/usr\/local\/bin\/inngest-redis-mount-guard.sh.*'GUARDEOF'\$/{f=1;next} /^GUARDEOF\$/{f=0} f" "$REDIS_BOOTSTRAP" > "$GUARD_SRC"
 if [ -s "$GUARD_SRC" ]; then ok "GUARD extracts from inngest-redis-bootstrap.sh"; else no "GUARD could not be extracted — the cases below would be vacuous"; fi
 # A POSITIVE CONTROL ON THE EXTRACTION, the same shape as G10's in the dark gate: a range that ran
 # to EOF or stopped early is still non-empty, and every negative arm below would pass on it.
