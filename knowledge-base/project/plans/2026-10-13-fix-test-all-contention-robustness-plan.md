@@ -406,9 +406,10 @@ without a Task/Agent tool: `soleur:engineering:discovery:functional-discovery`,
 domain leaders, `soleur:product:spec-flow-analyzer` (Phase 3), the
 advisor-tier consult (Phase 4.5), and the plan-review panel could not be
 spawned. Functional overlap and domain assessment were performed inline;
-technical rulings are recorded `pending - assumed:` in
+technical rulings were recorded `pending - assumed:` in
 `knowledge-base/project/specs/feat-one-shot-7697-10209-8163-contention-robustness/decision-challenges.md`
-per the technical-ruling-delegation rule.
+and ruled by a single batched `soleur:engineering:cto` spawn at the pre-work
+gate (2026-10-13) — see that file's `## Decision Classes` table.
 
 ## Research Reconciliation — Spec vs. Codebase
 
@@ -583,10 +584,10 @@ through that conditional.
 
 ### Engineering
 
-**Status:** reviewed (partial — domain-leader spawn unavailable in this
-subagent context; the three technical rulings are persisted to
-`decision-challenges.md` as `pending - assumed:` rows for the ship/review
-stage to adjudicate)
+**Status:** reviewed (partial — domain-leader spawn unavailable in the
+planning subagent context; the technical rulings persisted to
+`decision-challenges.md` as `pending - assumed:` rows were adjudicated by a
+batched `soleur:engineering:cto` spawn at the pre-work gate, 2026-10-13)
 
 **Assessment:** Devex/test-infrastructure change. The load-bearing judgments
 are the C8 contract question (#10209 names two legitimate shapes and requires
@@ -640,7 +641,7 @@ against every planned file:
 | 5 | [issue #7697] "`flock -w` demonstrably returns after its timeout under the conditions test-all actually runs in (or the timeout is implemented in a way that does)" | FR-1 + Guard 1 | mapped |
 | 6 | [issue #7697] "A holder that has made no progress for N minutes is detectable — a heartbeat the waiters can read" | FR-2 + Guard 2 | mapped |
 | 7 | [issue #7697] "`gitleaks-merge-commit.test.sh` cannot block indefinitely on a pipe read" | FR-3 | mapped |
-| 8 | [issue #10209] "have the C8 sandbox pin a marker that exempts it from the sibling refusal (it measures a stub, not real suites), or have C8 assert on the refusal branch explicitly when siblings are detected" | FR-4 (exemption shape — the false antecedent is removed rather than bypassed; recorded as a `pending - assumed:` technical row) | mapped |
+| 8 | [issue #10209] "have the C8 sandbox pin a marker that exempts it from the sibling refusal (it measures a stub, not real suites), or have C8 assert on the refusal branch explicitly when siblings are detected" | FR-4 (exemption shape — the false antecedent is removed rather than bypassed; Ruled by CTO agent, 2026-10-13, see `decision-challenges.md`) | mapped |
 | 9 | [issue #8163] "read `test-all.sh --capacity`'s `measured_runs` and report rather than assert when siblings were present during the run" | FR-5 (uses `tc_siblings` — the same /proc measurement `measured_runs` reports — sampled directly, avoiding a nested runner invocation) | mapped |
 
 ### Plan-Item Provenance
