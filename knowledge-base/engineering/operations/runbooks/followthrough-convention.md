@@ -211,19 +211,26 @@ merge timestamp; its directive declares `secrets=GH_TOKEN`).
   `author_association` or `authorAssociation` (either spelling, any case) on an executable line
   (whole-line comments are stripped, a trailing `# why` mention fires, no per-line opt-out). Rule 5
   bans the spelling; rule 4 owns the obligation. Rule 4 alone stayed green over the S2 and S3 soak
-  probes because it keyed on `RESULT:`, which a marker probe never writes — they filtered on
-  `author_association` and dropped the operator's activation marker (#9818: a daily false "elided
-  with no activation on record" FAIL, found by running the unmodified probe under the operator
-  token, which returned `NOT YET`, and under the sweeper token, which returned `FAIL`: same code,
-  same repo state, different token).
+  probes because it keyed on `RESULT:`, which a marker probe never writes: they filtered on
+  `author_association` and dropped the operator's activation marker (#9818). Incident and
+  measurement: `knowledge-base/project/learnings/2026-10-13-a-lint-anchored-on-the-verdict-word-stayed-green-over-the-marker-probes-that-had-the-same-defect.md`.
 
-  **Which view.** `trusted_verdict_bodies <issue>` returns the trusted bodies (verdict probes).
-  `trusted_verdict_comments <issue>` returns one compact JSON object `{t,b}` per trusted comment
-  (`t` = `createdAt`, `b` = the fence-stripped body): marker probes use it and project with
-  `jq -r '.b'`; a probe that orders markers by comment time (S3's CONFIRMED-before-ACTIVATED)
-  also reads `.t`. Both are views of one core, so trust, memoization, fence stripping and the rc 2
-  contract are identical. Map rc 2 to the probe's CANNOT ESTABLISH exit and check the projection
-  too: an empty projection after a jq failure erases every marker and reproduces the false FAIL.
+  **Which view.** Need the comment's created time -> `trusted_verdict_comments <issue>`; otherwise
+  `trusted_verdict_bodies <issue>`. The bodies view returns the trusted, fence-stripped bodies (a
+  `RESULT:` probe, or a marker probe that orders markers by the marker's own timestamp, like S2).
+  The comments view returns one compact JSON object `{t,b}` per trusted comment (`t` = `createdAt`,
+  `b` = the fence-stripped body): a probe that orders by comment time (S3's CONFIRMED-before-
+  ACTIVATED) reads `.t` and projects `.b` with `jq -r '.b'`. Both are views of one core, so trust,
+  memoization and fence stripping are identical, and both return rc 2 when a comment or permission
+  read fails; the comments view has ONE extra rc 2 cause: a trusted comment whose `createdAt` is
+  missing or not ISO. Map rc 2 to the probe's CANNOT ESTABLISH exit and check any projection too:
+  an empty projection after a jq failure erases every marker and reproduces the false FAIL.
+
+  **Paging.** `gh issue view --json comments` returns ALL pages of comments: measured 214 returned
+  against 214 on the issue (`gh api` comment count) on #9777 at review time, and 220 against 220 on
+  2026-10-13 after the thread grew, gh 2.102.0. The fake `gh` in the suites cannot model pagination,
+  so no suite pins it; the rows named `latebatch` / `M-NOSLICE` pin only that the probe's and the
+  lib's own jq do not slice a long comment list.
 
   **Semantics to state, not to rediscover.**
   - Trust is resolved at READ time: a commenter demoted later stops counting retroactively (an old
@@ -236,8 +243,10 @@ merge timestamp; its directive declares `secrets=GH_TOKEN`).
   - A seated bot must never relay raw issue text at line start (a relayed `S2-ACTIVATED:` line
     authored by a writer-level bot would count).
   - Behavior changes #9818 made for the soak probes: fenced blocks are now stripped (a marker
-    inside a fence counted before and is ignored now), and a `read`/`triage` collaborator no longer
-    counts (they did under `COLLABORATOR`).
+    inside a CommonMark-style fence counted before and is ignored now), a `read`/`triage`
+    collaborator no longer counts (they did under `COLLABORATOR`), and an org MEMBER whose only
+    access is the org base permission (`read`/`triage`) stopped counting too (they did under
+    `MEMBER`).
 
   The difference is load-bearing and was measured. While the rule banned the wrong MECHANISM, a
   live probe read `.comments[].body` with **no author filter at all** — strictly worse than what

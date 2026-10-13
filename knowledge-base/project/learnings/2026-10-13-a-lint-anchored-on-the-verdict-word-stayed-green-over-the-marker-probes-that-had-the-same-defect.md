@@ -12,7 +12,7 @@ Three things made it survive:
 
 ## Solution
 
-- Give the trust decision one chokepoint with two views. `trusted_verdict_comments` (`{t,b}` per trusted comment, `t` = `createdAt`) joins `trusted_verdict_bodies`, both projections of `_trusted_verdict_core`; marker probes keep the per-comment time their ordering needs (S3's CONFIRMED-before-ACTIVATED) and an unreadable trust decision stays rc 2, never "no marker".
+- Give the trust decision one chokepoint with two views. `trusted_verdict_comments` (`{t,b}` per trusted comment, `t` = `createdAt`) joins `trusted_verdict_bodies`, both projections of `_trusted_verdict_core`; a probe that needs the per-comment time (S3's CONFIRMED-before-ACTIVATED) reads the comments view, one that orders by the marker's own timestamp (S2) reads the bodies view, and an unreadable trust decision stays rc 2, never "no marker".
 - Widen the lint on BOTH axes. Rule 5 bans the spelling (`author_association`, `authorAssociation`) on executable lines with its own counter, floor and regex canary; rule 4's anchor now includes the `S<n>-...` soak markers, and its lib-call denominator accepts the new view so migrating a probe does not shrink the corpus the floor counts.
 - Check the projection, not just the read. The S3 probe's `jq -r '.b'` had no failure check: an empty projection after a jq failure erases every marker and reproduces the very false FAIL being fixed.
 
@@ -23,9 +23,9 @@ Three things made it survive:
 - **A masked sibling is still live.** When a defect is found in one probe, grep the whole class (`git grep -niE 'author_?association' scripts/followthroughs`), then check WHY the sibling has not reported it before treating it as latent.
 - **A mirrored mutation tree is part of the test.** Once the probes source the lib by relative path, a lone mutant copy in a temp dir resolves nothing, every helper call returns 127, `|| fail_api` turns every row red, and every mutant reads as "caught". Build the tree with the lib symlinked, then prove it with an identity copy (zero reds across the row set) and a copy with the symlink removed (at least one red).
 
-## Session Errors
+## The same silent-drop class, one level down (found in review)
 
-- A python edit script written as a shell heredoc (`<<'EOF'`) embedded test fixtures that themselves used `cat <<'EOF'`, so the shell ended the script at the first fixture terminator and executed the rest of the text as commands (every write was refused because the fixture directory variable was empty, so nothing landed). Prevention: when generated text contains heredocs, write it to a file first and have the script read the file, or use a terminator that cannot occur in the payload.
+The review of the fix found the lib's own post-trust text pipeline had the silent-drop edges this change exists to remove, only after the trust decision instead of before it: a trusted body past the single-argv limit (about 128 KiB) failed `jq --arg b "$body"` with `Argument list too long`, the status was never checked, and the comment vanished with rc 0 (a marker or verdict lost with no signal); and the fence strip toggled on any fence-looking line, so a 4-backtick fence wrapping a 3-backtick line, or a backtick fence "closed" by a tilde line, exposed a quoted marker as live. The rule these two share: **every stage after the trust decision must be all-or-nothing**: no input goes through an argv, every status is checked, and any anomaly is rc 2 (TRANSIENT), never a shorter result. The matching test discipline is a row per stage that can lose a comment plus a mutant that reverts it. Prevention for fixture-writing too: when generated text contains heredocs, write it to a file first and have the script read the file, or use a terminator that cannot occur in the payload.
 
 ## Tags
 category: workflow-issues

@@ -52,10 +52,14 @@ esac
 #       bodies="$(trusted_verdict_bodies <N>)" || exit 2      # rc 2 = TRANSIENT, not "no verdict"
 #       last="$(printf '%s\n' "$bodies" | grep -E '^RESULT: (PASS|FAIL)\b' | tail -1)"
 #       [[ "$last" =~ ^RESULT:\ PASS ]] && exit 0 || exit 1
-#     A MARKER probe (an `S<n>-ACTIVATED:` line that arms a soak) calls the other view, which also
-#     carries each comment's createdAt as one JSON object {t,b} per trusted comment:
-#       recs="$(trusted_verdict_comments <N>)" || exit 3      # rc 2 = TRANSIENT; CANNOT ESTABLISH
+#     Which view: the bodies view is the default. A probe that needs the COMMENT'S created time (the
+#     S3 soak orders S3-CONFIRMED before S3-ACTIVATED by it) calls the comments view instead, which
+#     carries each trusted comment's createdAt as one JSON object {t,b} per comment (a marker probe
+#     that orders by the marker's own timestamp, like S2, needs only the bodies view above):
+#       recs="$(trusted_verdict_comments <N>)" || exit 3      # rc 2 = TRANSIENT, here exit 3 (CANNOT ESTABLISH)
 #       trusted="$(jq -r '.b' <<<"$recs" | tr -d '\r')" || exit 3   # check the projection too
+#     Exit 2 above and exit 3 here are the same thing to the sweeper: the legend at the top makes every
+#     code other than 0 and 1 a retry. 3 is the soak probes' own spelling of CANNOT ESTABLISH.
 #
 #     The unfiltered `.comments[].body` form this line used to show is FORGEABLE: the repo is
 #     public with issues open, so one HTTP POST of `RESULT: PASS` from any authenticated user
