@@ -65,6 +65,11 @@ unavailable() {
   echo "inngest-redis-luks-loopback: LOOPBACK_UNAVAILABLE — real-device evidence was NOT collected." >&2
   echo "This is a FAILURE, not a skip: run as root on a host with losetup + cryptsetup +" >&2
   echo "mkfs.ext4 + a dm-crypt-capable kernel (GitHub-hosted ubuntu runners qualify, via sudo)." >&2
+  # The anti-vacuity floor must be reachable on EVERY early exit, not only at the tail:
+  # an unavailable run measured nothing, and a floor that cannot see that is decorative.
+  # (This is also what lets the vacuity-guard mutation battery score the floor FIRES on a
+  # non-sudo host — the neutered mutant exits here and the sentinel still prints.)
+  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 127. The suite exited before executing.\n' "$executed" >&2
   exit 2
 }
 
@@ -144,7 +149,9 @@ render_stage() {
   # names, and this function cannot see its root. Callers pass "$TMPROOT/...", but that is a fact
   # about the callers; a bare filename would truncate a file in the CWD instead.
   assert_fixture_dir "$out"
-  awk '/doppler run --project soleur-inngest --config \${inngest_doppler_config\} -- bash -s <<.LUKSEOF.$/{f=1;next} /^    LUKSEOF$/{f=0} f' "$CLOUD_INIT" \
+  # NOTE: no heredoc opener in the needle — a literal one here opens a span in guard-vacuity-floor's
+  # heredoc-blanker and hides this suite's own tail floor (it did exactly that before #10228).
+  awk '/doppler run --project soleur-inngest --config \${inngest_doppler_config\} -- bash -s.*LUKSEOF./{f=1;next} /^    LUKSEOF$/{f=0} f' "$CLOUD_INIT" \
     | sed -e 's/\$\${/${/g' -e 's/%%{/%{/g' \
           -e "s|\${inngest_expect_luks}|${expect}|g" \
           -e "s|\${inngest_volume_id}|${PLAIN_ID}|g" \
@@ -620,7 +627,10 @@ if grep -qF 'appeared after' "$ARM_LOG"; then ok "W1 the wait emitted its appear
 # shape breaks out of the loop and settles before reporting, so the contract-compliant count here is <= 1 —
 # W2 (which exhausts the bound) pins the == 1 direction.
 _w1_settle="$(grep -c 'settle' "$ARM_UDEVADM" 2>/dev/null || true)"
-if [ "$_w1_settle" -le 1 ]; then ok "W1 udevadm settle recorded ${_w1_settle}x across a multi-pass wait — NOT per pass"; else no "W1 udevadm settle ran ${_w1_settle}x — a per-pass settle is back"; fi
+# CAUTION: arm-level `if` lines must not name the counter words `pass`/`fail`/`executed` —
+# vacuity-floor's detector reads a `-lt/-le/-ge` comparison beside a counter WORD as a floor
+# candidate, so "multi-pass" here would slice this line into a mutant and mask the real tail floor.
+if [ "$_w1_settle" -le 1 ]; then ok "W1 udevadm settle recorded ${_w1_settle}x across a multi-iteration wait — NOT per iteration"; else no "W1 udevadm settle ran ${_w1_settle}x — a per-iteration settle is back"; fi
 arm_reset
 
 # ── W2: the link never materialises — the SAME named FATAL inside the rebound bound ────────────
@@ -652,7 +662,9 @@ arm_reset
 # split-and-count the structural arm performs: reopen window keeps its 300, runcmd window reads
 # zero. A whole-file count would pass this — that is the defect T1.6 exists to catch.
 _MUTD="$(mktemp -d)"; _MUTC="$_MUTD/ci-mut.yml"; cp "$CLOUD_INIT" "$_MUTC"
-_msplit="$(grep -n "bash -s <<'LUKSEOF'" "$_MUTC" | sed -n '1p' | cut -d: -f1)"
+# The heredoc needle is assembled, not literal: a bare opener token in this file would open a
+# span in guard-vacuity-floor's heredoc-blanker and hide the suite's own anti-vacuity floor.
+_lu_lt='<'; _msplit="$(grep -n "bash -s ${_lu_lt}${_lu_lt}'LUKSEOF'" "$_MUTC" | sed -n '1p' | cut -d: -f1)"
 if [ -n "$_msplit" ]; then
   { head -n "$((_msplit - 1))" "$_MUTC"; tail -n +"$_msplit" "$_MUTC" | sed '0,/\[ "\$_i" -lt 300 \]/s//[ "$_i" -lt 30 ]/'; } > "$_MUTC.new"
   _m6r="$(head -n "$((_msplit - 1))" "$_MUTC.new" | grep -cE '\[ "\$_i" -lt 300 \]')"
@@ -800,7 +812,7 @@ cryptsetup close inngest-redis >/dev/null 2>&1
 # Extracted from inngest-redis-bootstrap.sh and driven directly. A guard that only ever runs on a
 # host is a guard nothing can falsify.
 GUARD_SRC="$TMPROOT/mount-guard.src.sh"
-awk "/^install -m 0755 \/dev\/stdin \/usr\/local\/bin\/inngest-redis-mount-guard.sh <<'GUARDEOF'\$/{f=1;next} /^GUARDEOF\$/{f=0} f" "$REDIS_BOOTSTRAP" > "$GUARD_SRC"
+awk "/^install -m 0755 \/dev\/stdin \/usr\/local\/bin\/inngest-redis-mount-guard.sh.*GUARDEOF\$/{f=1;next} /^GUARDEOF\$/{f=0} f" "$REDIS_BOOTSTRAP" > "$GUARD_SRC"
 if [ -s "$GUARD_SRC" ]; then ok "GUARD extracts from inngest-redis-bootstrap.sh"; else no "GUARD could not be extracted — the cases below would be vacuous"; fi
 # A POSITIVE CONTROL ON THE EXTRACTION, the same shape as G10's in the dark gate: a range that ran
 # to EOF or stopped early is still non-empty, and every negative arm below would pass on it.
@@ -923,6 +935,7 @@ cryptsetup close inngest-redis >/dev/null 2>&1
 if [ "$executed" -lt 127 ]; then
   fail=$((fail + 1))
   printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 127. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
+  exit 1
 else
   printf 'ok   - anti-vacuity floor: %s assertions ran (floor 127)\n' "$executed"
 fi
