@@ -69,12 +69,38 @@ for path in "${added[@]}"; do
   ' "$path")"
 
   required_fields=(skill source findings_json justification approver scanner_version rule_pack_sha256 verdict timestamp)
-  missing=""
-  for f in "${required_fields[@]}"; do
-    if ! grep -qE "^${f}:[[:space:]]" <<<"$fm"; then
-      missing+="$f "
-    fi
-  done
+  # Presence is TWO-ARMED (#10167, decision-challenges.md Item 15): a `^f:`
+  # top-level key counts present iff (a) non-whitespace content follows the
+  # colon on the same line — `f: v`, `f: {}`, `f: |` — OR (b) a following
+  # INDENTED (whitespace-led) line carries content before the next top-level
+  # key — the block mapping/sequence/scalar spellings the schema's
+  # `oneOf string|object` admits for findings_json. `f:` bare and `f:   `
+  # (whitespace-only — the CTO dissent) still report missing, so the check
+  # cannot degenerate into key-line existence. `^`-anchored key matching keeps
+  # a nested same-named key from false-presenting; comment-only and blank
+  # lines are neutral — they neither satisfy presence nor close the block.
+  missing="$(printf '%s\n' "$fm" | awk -v fields="${required_fields[*]}" '
+    BEGIN { n = split(fields, req, " ") }
+    /^[A-Za-z_][A-Za-z0-9_-]*:/ {
+      key = $0; sub(/:.*/, "", key)
+      cur = key; seen[key] = 1
+      rest = $0; sub(/^[^:]*:/, "", rest)
+      if (rest ~ /^[[:space:]]*[^[:space:]#]/) content[key] = 1
+      next
+    }
+    /^[[:space:]]+[^[:space:]#]/ {
+      if (cur != "") content[cur] = 1
+      next
+    }
+    END {
+      out = ""
+      for (i = 1; i <= n; i++) {
+        f = req[i]
+        if (!(f in seen) || !(f in content)) out = out f " "
+      }
+      printf "%s", out
+    }
+  ')"
   if [ -n "$missing" ]; then
     invalid="$(echo "$invalid" | jq --arg p "$path" --arg r "missing fields: ${missing}" '. + [{path: $p, reason: $r}]')"
     continue
