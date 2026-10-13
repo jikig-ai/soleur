@@ -333,9 +333,11 @@ logs:
   where: web-platform structured logs to Better Stack; fields source, score, flagged, reasonCodes, contentLength, truncated, mode, rewritten, scorerMs, workspaceId, sessionId; never content, query string, matched text or addresses
   retention: Better Stack default retention for the web-platform source
 discoverability_test:
-  command: bun apps/web-platform/scripts/untrusted-content-eval.ts
-  expected_output: EVAL PASS
+  command: grep -l untrusted-classify knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
+  expected_output: betterstack-log-query.md
 ```
+
+The probe above proves the liveness query is documented where an operator looks, without SSH. It deliberately avoids `bun`: preflight's Check 10 sandbox PATH is `/usr/local/bin:/usr/bin:/bin`, so a mise-installed `bun` or `node` returns rc 127 there. The scorer itself is proven by the eval (`bun apps/web-platform/scripts/untrusted-content-eval.ts` prints `EVAL PASS`) and by `npx vitest run test/untrusted-content-eval.test.ts` in CI.
 
 ## Guard Contract
 
