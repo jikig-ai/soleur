@@ -11,6 +11,28 @@ brand_survival_threshold: aggregate pattern
 lane: cross-domain
 ---
 
+## Review-round amendment (2026-10-13) — supersedes the design sections below where they differ
+
+The 10-seat review panel and a simplicity pass returned, and the CTO agent ruled on the four forks
+the simplicity seat raised (ruled 2026-10-13, recorded in `decision-challenges.md`). The shipped
+design is smaller than the one this plan describes:
+
+- **Section-1 LUKS wait: deleted.** The bootstrap's LUKS glob is unchanged from `main`; the
+  `luks-discover` sentinels, `_gd_luks_scan` and their tests are gone. The `luks_open` heredoc is the
+  first-boot LUKS wait.
+- **The `GIT_DATA_ATTACH_WAIT_S` seam: deleted.** The bound is the literal 300 s (30 passes of
+  `sleep 10`); there is no `-u` strip, no census C2 change and no seam tests. Tests drive the bound
+  through the pass on which the link lands.
+- **`udevadm settle`: dropped from the helper and from the heredoc loop; one settle follows the
+  heredoc loop**, ahead of the single-shot probes that gate `luksFormat`. The helper charges 10 s
+  and sleeps 10 s, so counted time is real time.
+- **Added:** `timeout 10` on the plaintext size probe, and a log line naming the last measured state
+  before the unchanged FATAL.
+- **Tests pruned** to one row per distinct property, each mutation row asserting its own reason; the
+  heredoc loop is pinned in B18 (`sleep 1`, the counter, the exact bound, the post-loop settle).
+- Acceptance criteria and scenarios below that name the seam, the section-1 wait, `luks-discover`
+  or the in-loop settle describe the superseded design and are not part of what shipped.
+
 ## Enhancement Summary
 
 **Deepened on:** 2026-10-13
@@ -151,9 +173,14 @@ None. Queried open `code-review` issues (200 limit) for each file in Files to Ed
 
 ## User-Brand Impact
 
-**If this lands broken, the user experiences:** nothing today (measured 2026-10-13 by inheritance from #10175: the store flag is off and no repository is served from git-data). After the flip, a host that cannot finish first boot refuses every store action, so a Delete Account is refused and logged as an Art. 17 event until the host boots (runbook "If the fresh host fails a boot check").
-**If this leaks, the user's data is exposed via:** a regression that lets the plaintext-volume check be skipped after a timeout, so a host with a populated plaintext volume is served as verified; the Guard Contract below makes that edit drive the suite RED.
-**Brand-survival threshold:** aggregate pattern (planner default, challengeable; recorded as taste). Reason: fail-closed by construction, no user-facing path while the flag is off, and the one dangerous edit is mutation-tested.
+**If this lands broken, the user experiences:** nothing today (inherited from #10175, 2026-10-13: the store flag is off and no repository is served from git-data). After the flip, a host that cannot finish first boot refuses every store action, so a Delete Account is refused and logged as an Art. 17 event until the host boots (runbook "If the fresh host fails a boot check"). Artifact: the user's repositories on the LUKS volume, unreachable until a good boot.
+**If this leaks, the user's data is exposed via:**
+
+- **Operator running the rotate (artifact: the half-rotated host's LUKS volume 107125716 and its passphrase):** a re-run destroys the volume; that it holds no user repository is inferred, not read (runbook entry, 2026-10-13), and whether the rotate's precondition can read a never-booted host is unverified.
+- **Future served user (artifact: the plaintext legacy volume's contents):** a regression that skips or weakens the plaintext-empty check after a timeout, so a populated plaintext volume is served as verified; the wait returns only for a block device of size above zero, the FATAL is unchanged, and the Guard 1 rows drive the suite RED on an edit that removes either.
+- **Art. 17 deleter (artifact: the erasure marker and `boot_complete` booleans):** a rehearsal evidence PR claiming the wait ran when the delay was not applied; the evidence file does not record the delay, so the evidence PR states it from the run log (rehearsal runbook).
+
+**Brand-survival threshold:** aggregate pattern (planner default, challengeable; recorded as taste). Reason: fail-closed by construction, no user-facing path while the store flag is off, and the one dangerous edit is mutation-tested. The host's own evidence file calls it the store for every connected user's source code, so the threshold becomes `single-user incident` (with CPO sign-off) before the store flag flips; it does not need to for this fix.
 
 ## Observability
 

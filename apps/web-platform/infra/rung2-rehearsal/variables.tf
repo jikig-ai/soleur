@@ -119,7 +119,7 @@ variable "rehearsal_phase" {
 }
 
 variable "rehearsal_attach_delay_s" {
-  description = "(#10196) Seconds the PAYLOAD-phase boot's plaintext volume attachment is held back after the server is created (the LUKS attachment waits half, rounded down), so the paid rehearsal exercises git-data-bootstrap.sh's bounded device wait. 0 (the default) is the old behaviour; the seed phase sleeps 0 whatever this is. Capped at 240 so the delay stays well inside the apply step bound."
+  description = "(#10138) Seconds the PAYLOAD-phase plaintext attachment is held back after server create (LUKS waits half, rounded down), so the paid rehearsal exercises the bootstrap's bounded attach wait. 0 (default) is the old behaviour; the seed phase sleeps 0. Capped at 240 so a typo cannot burn a paid rehearsal."
   type        = number
   default     = 0
 

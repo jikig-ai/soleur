@@ -262,20 +262,13 @@ resource "hcloud_server" "rehearsal" {
   }
 }
 
-# --- (#10196) The deliberate late attachment ----------------------------------------------
-# Real rotate run 38384137515 lost a race the rehearsals never could: Hetzner attached the volume
-# about 70 s after cloud-init needed it, while rehearsal attaches landed in 17-33 s. These two
-# resources hold each attachment back after the server exists, so the PAYLOAD boot sees its
-# volumes arrive late and the bootstrap's bounded wait has to run. The old code FATALs under this
-# delay, so a PASS implies the wait ran. LUKS waits half (floor), the plaintext volume the full
-# delay, which lands the LUKS device before the bootstrap starts and the plaintext one after.
-#
-# triggers_replace is the SERVER ID ONLY. The sleep length lives in `environment`: a value in
-# triggers would let a differing -var between plan and destroy replace the resource. A replaced
-# server makes the id unknown, so the sleep re-runs on every payload and replace-arm boot. No
-# `count`: the address would carry `[0]`, which plan-shape's create regex refuses. The seed phase
-# sleeps 0 (the seed host must boot as before). Not a prod address: `.rehearsal` scoped, and
-# plan-shape admits exactly these two replaces.
+# --- (#10138) The deliberate late attachment ----------------------------------------------
+# Real rotate run 38384137515 lost an attachment race the rehearsals never could (17-33 s here, 65 s
+# and 125 s there). These two resources hold each attachment back after the server exists so the
+# PAYLOAD boot has to wait: LUKS floor(delay/2) s (exercising the heredoc's wait), plaintext the full
+# delay (exercising the bootstrap's). triggers_replace is the server id ONLY, so a differing -var
+# between plan and destroy cannot replace the resource; no `count` (plan-shape's create regex refuses
+# a `[0]` address); the seed phase sleeps 0. plan-shape admits exactly these two replaces.
 resource "terraform_data" "rehearsal_attach_delay_luks" {
   triggers_replace = hcloud_server.rehearsal.id
 

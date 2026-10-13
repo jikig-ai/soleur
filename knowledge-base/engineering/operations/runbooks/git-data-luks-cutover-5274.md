@@ -927,33 +927,32 @@ escalate to the CLO rather than rushing G3.
 ### 2026-10-13: the real rotate's first boot lost the volume-attachment race (#10138)
 
 Recorded, not edited into the steps above. `git-data-host-rotate` run 38384137515 applied (7 added,
-3 changed, 7 destroyed; measured, apply log, 2026-10-13) and the fresh host's bootstrap then died at
+3 changed, 7 destroyed; measured, apply log, 2026-10-13), and the fresh host's bootstrap then died at
 10:37:11Z with `FATAL: plaintext_unverified reason=source — /dev/disk/by-id/scsi-0HC_Volume_106867358
-does not resolve to a block device`; the boot poll ended `VERDICT=silent` after its 20 reads.
+does not resolve to a block device`; the boot poll ended `VERDICT=silent` after its 20 reads
+(measured, same log). The attachment timings, and why they overstate guest-side latency, are in
+ADR-239's 2026-10-13 amendment; they are not repeated here.
 
-**Measured (2026-10-13, read-only: the run log and Sentry events, none read from a host).** The
-server was created at 10:36:13Z. The LUKS attachment finished at 10:37:18Z (65 s) and the plaintext
-volume's at 10:38:19Z (125 s). Sentry shows `bootcmd_start` 10:36:30Z, `gitdata_runcmd_ok` 10:36:51Z
-and the fatal at 10:37:11Z, so the check ran about 70 s before its attachment completed. The
-bootstrap resolved the by-id link once and exited. Five earlier boots attached both volumes in
-17-33 s (runs 38140050880, 36118115758, 38356246710); this one hit the tail. Whether Hetzner
-serialises attachment actions per server is **unmeasured**, and nothing here depends on it.
+**State left behind.**
 
-**State left behind (measured where marked, otherwise inherited from the run and the plan).** New
-server 170081857 and new LUKS volume 107125716 exist (measured: the apply log). The rotate's own
-precondition read `served_repos=0` before it destroyed anything (measured: its step log). The old
-server and the old LUKS volume are gone (measured: the apply log). The d6 gate reads
-`d6_last_rotate_failed 38384137515` (measured: the gate's own scan, 2026-10-13); only a newer
-successful rotate carrying the `Rotate completed (d6 marker)` supersedes it. No claim is made here
-about the previous key's escrow, passphrase recovery or reopening.
+- Server 170081857 and LUKS volume 107125716 were created (measured, apply log, 2026-10-13; a
+  snapshot, not a current-state read). The old server and old LUKS volume were destroyed (same).
+- The rotate's own precondition read `served_repos=0` before it destroyed anything (measured, its
+  step log, 2026-10-13). Nothing was read from 170081857 or volume 107125716.
+- That 107125716 holds no user repository is **inferred** (the bootstrap exits before any repository
+  is created and the store flag is off), 2026-10-13. Whether the rotate's `served_repos=0`
+  precondition can read a host that never emitted `boot_complete` is **unverified**: check that
+  before the rotate, because it either wedges (see step 4) or reads 0 without having measured.
+- The d6 gate reads `d6_last_rotate_failed 38384137515` (measured, the gate's own scan, 2026-10-13);
+  only a newer successful rotate carrying the `Rotate completed (d6 marker)` supersedes it.
+- No claim is made about the previous key's escrow, passphrase recovery or reopening.
 
-**The fix** (PR #10210) waits for the attachment: `_gd_attach_wait` in `git-data-bootstrap.sh`
-(counted bound, `GIT_DATA_ATTACH_WAIT_S`, default 300 s, stripped from the production invocation) at
-the plaintext link and at the section-1 LUKS discovery, and the `luks_open` heredoc's device wait
-raised from 30 to 300 counted passes. After the bound the same named FATAL fires and the
-plaintext-empty verification is never skipped. A boot that waits costs nothing extra on the poll
-budget: the poll starts after `terraform apply` returns, and apply blocks until both attachments
-finish.
+**The fix** (PR #10210): the bootstrap waits up to 300 s at the plaintext link and the `luks_open`
+heredoc's device wait is 300 counted passes (ADR-239 amendment). After the bound the same named
+FATAL fires and the plaintext-empty verification is never skipped. The poll starts after
+`terraform apply` returns and apply blocks on both attachments, so a waiting boot adds only its
+post-attach tail (up to 56 s in rehearsal 38356246710; inferred from the sequencing, not measured on
+a waiting boot).
 
 **Recovery order (forward only; each dispatch needs an explicit go-ahead that names the command).**
 A new server is unavoidable: `user_data` is ForceNew and runcmd is once-per-instance, so no existing
@@ -963,17 +962,18 @@ path re-runs first boot on 170081857.
    payload hash, so the rotate's interlock refuses until new evidence exists.
 2. Rehearsal: `gh workflow run git-data-rung2-rehearsal.yml --ref main -f confirm=REHEARSE-GIT-DATA
    -f dry_run=false` (paid; it now delays both attachments on purpose, see the rehearsal runbook).
-3. The evidence-only PR (see that runbook's "After a PASS"). Hold every merge that touches a bound
-   file until it lands.
+3. The evidence-only PR (see that runbook's "After a PASS"); its description states the delay the
+   run actually applied, read from the run log. Hold every merge that touches a bound file until it
+   lands.
 4. If the sibling gate PR for the rotate precondition (#10207) merged as drafted, its
    `stale_boot_complete` refusal needs a `boot_complete` newer than the server's creation, and
-   170081857 never booted: run a plain replace first
-   (`apply_target=git-data-host-replace`, `plan_only=true` before the real one). Otherwise go to 5.
+   170081857 never emitted one: run a plain replace first (`apply_target=git-data-host-replace`,
+   `plan_only=true` before the real one). Otherwise go to 5.
 5. The rotate: `apply_target=git-data-host-rotate -f confirm=ROTATE-GIT-DATA`, `plan_only=true`
-   first, then the real run. It destroys the LUKS volume and re-mints the passphrase again.
+   first, then the real run. It destroys LUKS volume 107125716 and re-mints the passphrase again.
 
-A plain replace "just to test" is not recommended: it builds a host with no gate benefit. The
-schedule coupling is tracked on #10138: if this sequence slips past about 2026-11-05, tell the CLO.
+A plain replace outside step 4 buys no gate benefit. The schedule coupling is tracked on #10138: if
+this sequence slips past about 2026-11-05, tell the CLO.
 
 ## Verdict map
 

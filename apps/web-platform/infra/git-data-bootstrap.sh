@@ -64,35 +64,27 @@ assert_not_symlink() {
   fi
 }
 
-# (#10138) A volume ATTACHMENT can land after first boot has started: Hetzner attaches block volumes
-# as separate actions once the server exists, and run 38384137515 (2026-10-13) reached the plaintext
-# check about 70 s before its attachment finished. _gd_attach_wait <label> <predicate> re-runs the
-# WHOLE predicate each pass (a "some volume exists" wait would return early when the other volume
-# attached first), charges 10 s per pass by COUNTING (the loop never reads the clock), and returns 1
-# after the bound so the caller keeps its named FATAL. The bound is GIT_DATA_ATTACH_WAIT_S: unset means
-# 300, an EMPTY or non-numeric value is refused (a plain `-` default, never `:-`), 0 probes once and
-# never sleeps, and `env -u` strips it from the production invocation. Callers call it directly,
-# never inside $( ), so its exit survives and the predicate's assignments reach the caller.
+# (#10138) A volume ATTACHMENT can land after first boot has started: Hetzner attaches volumes as
+# separate actions once the server exists (run 38384137515, 2026-10-13: the plaintext volume
+# attached about 70 s after the check below). _gd_attach_wait <label> <predicate> re-runs the WHOLE
+# predicate every 10 s for up to 300 s (counted, never the clock; no settle, so counted time is real
+# time) and returns 1 after the bound, so the caller keeps its named FATAL. Call it directly, never
+# inside $( ): the predicate's assignments must reach the caller.
 # ---- BEGIN attach-wait helper ----
+readonly _AW_BOUND_S=300
 _gd_attach_wait() {
-  local _aw_label="$1" _aw_pred="$2" _aw_bound _aw_waited=0
-  _aw_bound="${GIT_DATA_ATTACH_WAIT_S-300}"
-  case "$_aw_bound" in
-    ''|*[!0-9]*) log "FATAL: attach_wait_invalid — GIT_DATA_ATTACH_WAIT_S must be whole seconds, 0 to 9999"; exit 1 ;;
-  esac
-  [ "${#_aw_bound}" -le 4 ] || { log "FATAL: attach_wait_invalid — GIT_DATA_ATTACH_WAIT_S must be whole seconds, 0 to 9999"; exit 1; }
-  _aw_bound=$((10#$_aw_bound))
+  local _aw_label="$1" _aw_pred="$2" _aw_waited=0
   if "$_aw_pred"; then return 0; fi
-  log "waiting up to ${_aw_bound}s for ${_aw_label}: the volume attachment is still in flight"
-  while [ "$_aw_waited" -lt "$_aw_bound" ]; do
-    udevadm settle --timeout=5 >/dev/null 2>&1 || true
-    sleep 5
+  log "waiting up to ${_AW_BOUND_S}s for ${_aw_label}: the volume attachment is still in flight"
+  while [ "$_aw_waited" -lt "$_AW_BOUND_S" ]; do
+    sleep 10
     _aw_waited=$((_aw_waited + 10))
     if "$_aw_pred"; then
-      log "${_aw_label} appeared after ${_aw_waited}s of the ${_aw_bound}s bound"
+      log "${_aw_label} appeared after ${_aw_waited}s"
       return 0
     fi
   done
+  log "${_aw_label} did not appear within the ${_AW_BOUND_S}s bound"
   return 1
 }
 # ---- END attach-wait helper ----
@@ -120,24 +112,18 @@ if ! mountpoint -q "$GIT_DATA_ROOT"; then
     # explicit `cryptsetup isLuks` discriminator, so the plaintext volume in the set is skipped,
     # not mis-bound. The web-1 ambiguity #6604 fixes is the INVERSE (a raw-glob mount with no
     # discriminator), which is exactly the form this section no longer has.
-# ---- BEGIN luks-discover unit ----
-    _gd_luks_scan() {
-      luks_dev=""
-      for dev in /dev/disk/by-id/scsi-0HC_Volume_*; do
-        [[ -e "$dev" ]] || continue
-        if cryptsetup isLuks "$dev"; then
-          luks_dev="$dev"
-          break
-        fi
-      done
-      [[ -n "$luks_dev" ]]
-    }
-    _gd_attach_wait "LUKS volume" _gd_luks_scan || true
+    luks_dev=""
+    for dev in /dev/disk/by-id/scsi-0HC_Volume_*; do
+      [[ -e "$dev" ]] || continue
+      if cryptsetup isLuks "$dev"; then
+        luks_dev="$dev"
+        break
+      fi
+    done
     [[ -n "$luks_dev" ]] || {
       log "FATAL: no LUKS-formatted volume found among attached block volumes"
       exit 1
     }
-# ---- END luks-discover unit ----
     printf '%s' "$GIT_DATA_LUKS_KEY" | cryptsetup luksOpen --key-file - "$luks_dev" git-data || {
       log "FATAL: luksOpen failed for $luks_dev"
       exit 1
@@ -460,15 +446,20 @@ if [ -n "$_pt_id" ]; then
   [[ "$_pt_id" =~ ^[0-9]+$ ]] || { log "FATAL: plaintext_unverified reason=source — volume id '$_pt_id' is not numeric"; exit 1; }
   _pt_link="${GIT_DATA_PLAINTEXT_DEV:-/dev/disk/by-id/scsi-0HC_Volume_$_pt_id}"
   _pt_dev=""
-  # (#10138) Wait for a late attachment: the predicate re-resolves the link on every pass and hands
-  # the node to the caller through _pt_dev. A zero-size or non-block node never satisfies it, and the
-  # FATAL below is the unchanged one, so a timeout can never read as "no plaintext volume".
+  # (#10138) Wait for a late attachment. The predicate re-resolves the link every pass and hands the
+  # node to the caller through _pt_dev; the FATAL below is the unchanged one, so a timeout can never
+  # read as "no plaintext volume". _pt_state names which check failed last; `timeout 10` keeps one
+  # blocked probe from outliving the counted bound.
+  _pt_state=""
   _gd_pt_ready() {
     _pt_dev="$(realpath -e "$_pt_link" 2>/dev/null || true)"
-    [ -n "$_pt_dev" ] && [ "$(stat -L -c %F "$_pt_dev" 2>/dev/null || true)" = "block special file" ] \
-      && [ "$(blockdev --getsize64 "$_pt_dev" 2>/dev/null || echo 0)" -gt 0 ]
+    if [ -z "$_pt_dev" ]; then _pt_state="the link does not resolve"; return 1; fi
+    if [ "$(stat -L -c %F "$_pt_dev" 2>/dev/null || true)" != "block special file" ]; then _pt_state="the node is not a block special file"; return 1; fi
+    if ! [ "$(timeout 10 blockdev --getsize64 "$_pt_dev" 2>/dev/null || echo 0)" -gt 0 ]; then _pt_state="the block device reports size 0"; return 1; fi
+    return 0
   }
   if ! _gd_attach_wait "plaintext volume $_pt_id" _gd_pt_ready; then
+    log "plaintext volume $_pt_id last state: ${_pt_state:-unprobed}"
     log "FATAL: plaintext_unverified reason=source — $_pt_link does not resolve to a block device"
     exit 1
   fi

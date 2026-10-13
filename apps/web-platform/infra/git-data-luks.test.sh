@@ -1308,8 +1308,13 @@ p_isluks_rc_branch() {
   # (#10138) The literal is EXACTLY 300, with a boundary: a prefix match would also accept 3000 or
   # 30000 (an effectively unbounded wait), and the original `-lt 30` would still match `-lt 300`.
   if ! grep -Eq '_i"?[[:space:]]*-lt[[:space:]]*300([^0-9]|$)' <<<"$slice"; then echo 0; return; fi
-  # ...and the loop settles udev so a late-attached node's by-id link exists before the next probe.
-  if ! grep -Eq '/usr/bin/udevadm[[:space:]]+settle[[:space:]]+--timeout=[0-9]+' <<<"$slice"; then echo 0; return; fi
+  # ...each pass SLEEPS one second and COUNTS one (a `sleep 0` or a lost increment turns the 300-pass
+  # wait into a no-wait or an unbounded one while the literal above still reads 300)...
+  if ! grep -Eq '^[[:space:]]*sleep 1;[[:space:]]*_i=\$\(\(_i\+1\)\)[[:space:]]*$' <<<"$slice"; then echo 0; return; fi
+  # ...and ONE settle sits between the loop's `done` and the isLuks probe, so the single-shot probes
+  # that gate luksFormat never read a node udev is still processing.
+  _between="$(awk '/^[[:space:]]*done[[:space:]]*$/{f=1;next} /_isluks_err=/{exit} f' <<<"$slice")"
+  if ! grep -Eq '^[[:space:]]*/usr/bin/udevadm settle --timeout=[0-9]+ >/dev/null 2>&1 \|\| true[[:space:]]*$' <<<"$_between"; then echo 0; return; fi
   echo 1
 }
 
@@ -1363,8 +1368,12 @@ assert_mutation "B18 isLuks-rc-branch (wait literal back to 30)" p_isluks_rc_bra
   's#_i" -lt 300 \]#_i" -lt 30 ]#'
 assert_mutation "B18 isLuks-rc-branch (wait literal unbounded, 30000)" p_isluks_rc_branch "$CLOUD_INIT" \
   's#_i" -lt 300 \]#_i" -lt 30000 ]#'
-assert_mutation "B18 isLuks-rc-branch (the udev settle removed from the wait)" p_isluks_rc_branch "$CLOUD_INIT" \
-  '/\/usr\/bin\/udevadm settle --timeout=2/d'
+assert_mutation "B18 isLuks-rc-branch (wait sleeps 0 s per pass)" p_isluks_rc_branch "$CLOUD_INIT" \
+  's#sleep 1; _i=#sleep 0; _i=#'
+assert_mutation "B18 isLuks-rc-branch (wait never counts: unbounded)" p_isluks_rc_branch "$CLOUD_INIT" \
+  's#sleep 1; _i=\$\(\(_i\+1\)\)#sleep 1; _i=\$_i#'
+assert_mutation "B18 isLuks-rc-branch (the post-loop udev settle removed)" p_isluks_rc_branch "$CLOUD_INIT" \
+  '/\/usr\/bin\/udevadm settle --timeout=10/d'
 # (h) INVERT the refusal rather than deleting it. This is the arm that matters: `==` refuses a
 # blank volume and formats the damaged-header populated store. A token-presence predicate stays
 # green on it; this one must not.
@@ -1546,12 +1555,13 @@ assert_mutation "B20 bootstrap-log-to-stderr (back to stdout)" p_bootstrap_log_s
 # A floor (`-lt`), never an equality: the count is developer-incremented, so `-eq` would
 # redden the suite on every legitimate new arm and teach the next author to edit the guard
 # instead of trusting it.
-# RAISED 133 -> 157 (#10138): the suite already measured 154 against the stale 133, so 21 assertions
-# were pure slack; this edit adds 3 B18 mutation arms (wait literal back to 30, unbounded 30000, the
-# udev settle removed) and the floor is set to the measured total, so slack is zero again.
+# RAISED 133 -> 159 (#10138): the suite already measured 154 against the stale 133, so 21 assertions
+# were pure slack; this edit adds the exact-300 pin, the sleep/count pin, the post-loop settle pin and
+# five B18 mutation arms (literal back to 30, unbounded 30000, sleep 0, no count, settle removed), and
+# the floor is set to the measured total, so slack is zero again.
 total=$((passes + fails))
-if [ "$total" -lt 157 ]; then
-  echo "FAIL: ran only ${total} assertions (<157) — suite did not execute fully" >&2
+if [ "$total" -lt 159 ]; then
+  echo "FAIL: ran only ${total} assertions (<159) — suite did not execute fully" >&2
   exit 1
 fi
 

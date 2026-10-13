@@ -300,12 +300,17 @@ awk -v b="$PT_BEGIN" -v e="$PT_END" '$0==b{f=1;next} $0==e{f=0} f' "$BOOTSTRAP" 
 _n=$(grep -c . "$PT_UNIT" || true)
 [ "$_n" -ge 60 ] || instrument "the plaintext-count unit extracted only $_n lines (sentinels moved or deleted)"
 bash -n "$PT_UNIT" || instrument "the extracted plaintext-count unit is not valid bash on its own"
+# (#10138) The unit calls _gd_attach_wait, which is defined ABOVE the unit in the bootstrap, so the
+# prelude must carry it too: without it every arm dies at `_gd_attach_wait: command not found` and
+# reports the source FATAL before it reaches the snapshot code.
 PT_PRELUDE="$TMPROOT/pt-prelude.sh"
 {
   printf 'GIT_DATA_EMIT=/nonexistent/git-data-emit\n'
   awk '/^log\(\) \{$/{f=1} f{print} f&&/^\}$/{exit}' "$BOOTSTRAP"
+  awk -v b='# ---- BEGIN attach-wait helper ----' -v e='# ---- END attach-wait helper ----' '$0==b{f=1;next} $0==e{f=0} f' "$BOOTSTRAP"
 } > "$PT_PRELUDE" || instrument "prelude write failed"
 grep -q '^log() {' "$PT_PRELUDE" || instrument "log() was not copied out of the bootstrap"
+grep -q '^_gd_attach_wait() {' "$PT_PRELUDE" || instrument "_gd_attach_wait was not copied out of the bootstrap (the unit calls it)"
 PT_TRAILER="$TMPROOT/pt-trailer.sh"
 printf 'printf "plaintext_journal=%%s\\n" "$_plaintext_journal"\nprintf "plaintext_volume=%%s\\n" "$_plaintext_volume"\nprintf "plaintext_count=%%s\\n" "${_pt_n:-}"\n' > "$PT_TRAILER" || instrument "trailer write failed"
 

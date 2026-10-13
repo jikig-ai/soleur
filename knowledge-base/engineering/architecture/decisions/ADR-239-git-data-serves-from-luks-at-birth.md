@@ -465,23 +465,35 @@ Rule for the horizon: moving the ledger `expires_on` of `hcloud_volume.git_data`
 
 ## Amendment 2026-10-13 — first boot may precede the volume attachments (#10138)
 
-**Context (measured, run 38384137515, 2026-10-13).** Cloud-init first boot starts when the server
-is created; Hetzner attaches block volumes afterwards as separate actions. The fresh host's
-bootstrap reached its plaintext-volume check about 70 s before that attachment finished (LUKS 65 s,
-plaintext 125 s after server create) and, resolving the by-id link once, died at the named FATAL
-`plaintext_unverified reason=source`. Nothing was served and no marker was written; the failure was
-fail-closed and cost a host build. Five earlier boots attached in 17-33 s, so the race was latent.
+**Context (measured 2026-10-13: the apply log of run 38384137515 and Sentry; nothing was read from a
+host).** Cloud-init first boot starts when the server is created; Hetzner attaches block volumes
+afterwards as separate actions. Terraform recorded the LUKS attachment finishing 65 s and the
+plaintext one 125 s after server create. Those are API-completion times, not the moment the guest
+first saw each device (`gitdata_runcmd_ok` fired at 10:36:51Z, before the 10:37:18Z LUKS completion),
+so they overstate guest-side latency. Sentry shows the bootstrap's plaintext check dying at
+10:37:11Z, about 70 s before the plaintext attachment completed at 10:38:19Z: it resolved the by-id
+link once and exited at the named FATAL `plaintext_unverified reason=source`. Four earlier boots
+(runs 38140050880, 36118115758, and the seed and payload phases of 38356246710) attached both
+volumes in 17-33 s as Terraform recorded them, so the race was latent. The boot was fail-closed and
+wrote no marker (inferred from the code order, not read from a host); that nothing was served
+rests on the store flag being off (inherited from #10175, 2026-10-13).
 
-**Decision.** Waiting for an attachment is part of proving a layout. The bootstrap waits under a
-counted bound (`GIT_DATA_ATTACH_WAIT_S`, default 300 s, an invalid value refused, never read from
-the clock) at the plaintext link and at the section-1 LUKS discovery, and the `luks_open`
-heredoc's device wait is 300 counted passes. The wait changes WHEN the device is resolved, never
-what is checked: after the bound the same named FATAL fires, the plaintext-empty verification is
-never skipped, and the device number is still pinned and re-checked before `--setro`. The seam is
-a test seam stripped from the production invocation (the census C2 contract). The rung-2
-rehearsal now delays both attachments on purpose so the required paid run exercises the wait.
+**Decision.** Waiting for an attachment is part of proving a layout. The bootstrap waits at the
+plaintext link for up to 300 s: 30 passes of `sleep 10`, counted and never read from the clock, a
+literal rather than a seam. The `luks_open` heredoc's device wait is 300 counted passes of
+`sleep 1`, followed by one `udevadm settle` before the single-shot probes that gate `luksFormat`.
+The wait changes WHEN the device is resolved, never what is checked: after the bound the same named
+FATAL fires, the plaintext-empty verification is never skipped, and the device number is still
+pinned and re-checked before `--setro`. A FATAL inside the heredoc aborts the concatenated runcmd
+script, so the bootstrap never runs after it (read from the template, 2026-10-13). The bootstrap's
+own LUKS discovery is unchanged: it runs only when the store is not yet mounted, which the heredoc
+has already ensured on a first boot. The rung-2 rehearsal now delays both attachments on purpose
+(LUKS by floor(delay/2) s, plaintext by the full delay; the workflow sets 150), so the paid run
+exercises the heredoc wait and the bootstrap wait. One rehearsal at 150 s does not prove the 300 s
+bound, and that a PASS implies the wait ran is an inference: no `boot_complete` field records it.
 
 **Consequences.** The payload hash moves, so the committed rung-2 evidence is stale until a fresh
-rehearsal and an evidence-only PR land; the rotate's own interlock refuses until then. This
+rehearsal and an evidence-only PR land, and the rotate's own interlock refuses until then. This
 amendment does not change the status line, the retention date or any legal wording, and makes no
-claim about key escrow. Recorded in the runbook entry of the same date.
+claim about key escrow. The recovery order and the half-rotated host are in the runbook entry of
+the same date.

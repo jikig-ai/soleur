@@ -53,3 +53,10 @@ No task in this file dispatches a workflow, runs terraform apply, writes Doppler
 - [x] 5.2 PR comment on #10207 about the `stale_boot_complete` wedge (no #10207 file edited)
 - [x] 5.3 Run the full local suite list from the plan's Acceptance Criteria; lint (`scripts/lint-guard-contract.py`, markdownlint on touched docs)
 - [ ] 5.4 PR body lists the rehearsal / replace / rotate commands as UNRUN and gated on a go-ahead that names each command
+
+## Review-round amendment (2026-10-13)
+
+Tasks 0.7, 1.1 (seam), 1.4, 1.5 and the section-1 / seam / in-loop-settle parts of 2.1, 2.2 and 3.x were
+implemented and then superseded by the CTO's review-round ruling (see `decision-challenges.md`): the
+seam, the section-1 LUKS wait, the census change and the in-loop settles no longer exist; the heredoc
+keeps one post-loop settle. The plan's amendment banner lists the shipped design.
