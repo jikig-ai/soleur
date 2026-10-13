@@ -891,7 +891,7 @@ for probe in "${PROBES[@]}"; do
     # unclean --paths element per #10117) — surface the side's stderr so the
     # caller sees the named error rather than chasing a phantom stream
     # divergence; the EXIT trap deletes $SCRATCH, so this is the only copy.
-    echo "DIFFERS: $side_failed (both sides must exit 0): $(head -c 300 "$side_err" 2>/dev/null | tr '\n' ' ' | LC_ALL=C tr -d '[:cntrl:]')"; OVERALL=1; continue
+    echo "DIFFERS: $side_failed (both sides must exit 0): $(head -c 300 "$side_err" 2>/dev/null | tr '\n' ' ' | LC_ALL=C tr '[:cntrl:]' '?')"; OVERALL=1; continue
   fi
   b_lab="$SCRATCH/labels.base.$probe_i"; h_lab="$SCRATCH/labels.head.$probe_i"
   assert_fixture_dir "$b_lab"; assert_fixture_dir "$h_lab"
@@ -912,7 +912,7 @@ for probe in "${PROBES[@]}"; do
       _cmds_n="$(grep -c '^SUITE_COMMAND' "$CMDS_FILE" 2>/dev/null)" || _cmds_n=0
       if [[ "$_cmds_rc" != "0" || "$_cmds_n" == "0" ]]; then
         # A blind walker passes anything within its ceilings: refuse before comparing.
-        echo "DIFFERS: cannot enumerate the head's suite commands (rc=$_cmds_rc, $_cmds_n SUITE_COMMAND record(s)); the leaf walker would be blind: $(head -c 300 "$SCRATCH/cmds.err.$probe_i" 2>/dev/null | tr '\n' ' ' | LC_ALL=C tr -d '[:cntrl:]')"
+        echo "DIFFERS: cannot enumerate the head's suite commands (rc=$_cmds_rc, $_cmds_n SUITE_COMMAND record(s)); the leaf walker would be blind: $(head -c 300 "$SCRATCH/cmds.err.$probe_i" 2>/dev/null | tr '\n' ' ' | LC_ALL=C tr '[:cntrl:]' '?')"
         OVERALL=1; continue
       fi
     fi

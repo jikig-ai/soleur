@@ -589,7 +589,7 @@ AFFECTED_A_TWO_PATHS=(
 
 # Whole-prefix sweep, not a named list — a named GIT_* list went stale within
 # a day once already (sc9's comment). The subshell keeps the unsets out of the
-# caller's env.
+# caller's env. GIT_TRACE is swept too — fixture ops stay quiet by design.
 rc_g() { ( for _v in "${!GIT_@}"; do unset "$_v"; done; exec git "$@" ); }
 
 # Build a scratch repo whose origin/main is the base commit. $2 = "broken-lib" makes the base lib
@@ -1689,7 +1689,7 @@ _wt_fixture() { # $1 = fixture root
   _WT=""; _SB=""
   rc_g init -q "$d/repo" || return 1
   rc_g -C "$d/repo" -c user.email=suite@example.com -c user.name=suite \
-    commit -qm init --allow-empty || return 1
+    -c commit.gpgsign=false commit -qm init --allow-empty || return 1
   rc_g -C "$d/repo" worktree add -q --detach "$d/wt" HEAD || return 1
   build_sandbox "$d/sb/test-all.sh" with-lib >/dev/null || return 1
   _WT="$d/wt"; _SB="$d/sb/test-all.sh"
@@ -2222,7 +2222,7 @@ fi
 #
 # TWO HARSHNESS DETAILS, both caught by the architecture seat (#9197):
 # - the eval unsets the runner's full 9-name GIT_* list, not just GIT_DIR:
-#   this suite is always-on, so it runs inside the lefthook bun-test hook
+#   this suite is edge-selected, so it still runs inside the lefthook bun-test hook
 #   itself — where lefthook injects GIT_INDEX_FILE/GIT_WORK_TREE and the
 #   eval'd `git diff --cached` would read the bookkeeping index instead of
 #   the scratch repo's;
@@ -2234,7 +2234,7 @@ cases=$((cases + 1))
 REAL_REPO="$TESTROOT/realstate-staged"
 mkdir -p "$REAL_REPO"
 # The fixture BUILD unset the whole GIT_* prefix before any git op — this
-# suite is always-on, so it runs inside the very lefthook hook that injects
+# suite is edge-selected, so it still runs inside the very lefthook hook that injects
 # GIT_INDEX_FILE/GIT_WORK_TREE/GIT_DIR. Under that env an unscrubbed
 # `git add`/`git commit`/`git update-ref` inside the scratch repo lands on
 # the LIVE index and refs (data-loss class #7772/#7835 — 16 stray commits
@@ -2246,7 +2246,7 @@ if (
   for _v in "${!GIT_@}"; do unset "$_v"; done
   cd "$REAL_REPO"
   git init -q -b main .
-  git config user.email t@t; git config user.name t
+  git config user.email t@t; git config user.name t; git config commit.gpgsign false
   echo base > base.txt
   mkdir -p scripts
   echo tracked > scripts/tracked-unstaged-fixture.sh
@@ -3128,7 +3128,7 @@ _th_ls_files() {
     # unresolvable TESTROOT must never leave _tc empty (an empty prefix would
     # degenerate `== "$_tc"/*` to `== /*` and admit every absolute path).
     local _tc _abs _gd
-    _tc=$(cd -P -- "$TESTROOT" && pwd -P) \
+    _tc=$(cd -P -- "$TESTROOT" 2>/dev/null && pwd -P) \
       || { printf 'FATAL: TESTROOT %s does not resolve\n' "$TESTROOT" >&2; return 2; }
     _abs=$(cd -P -- "$_TH_REPO" 2>/dev/null && pwd -P) \
       || { printf 'FATAL: _TH_REPO %s does not resolve\n' "$_TH_REPO" >&2; return 2; }
@@ -3192,6 +3192,9 @@ _th6_root_covered() { # <array-name> <root> <corpus-tail> — no declare -n (mac
   # bearing member cannot split inside the eval'd assignment. The `+`-guarded
   # expansion keeps an unset array from aborting under `set -u` (bash 3.2).
   [[ "$1" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
+  # A set-but-empty _TH_REPO is a wiring bug — refuse (decline, fail-loud)
+  # rather than silently probing the live listing.
+  [[ -z "${_TH_REPO+set}" || -n "$_TH_REPO" ]] || return 1
   local _n _i _m _tail
   eval "_n=\${$1[@]+\"\${#$1[@]}\"}"
   _n=${_n:-0}
@@ -3200,12 +3203,16 @@ _th6_root_covered() { # <array-name> <root> <corpus-tail> — no declare -n (mac
     # A bare `<root>/` dir member (or the slash-less `<root>` spelling — the
     # mint arm probes -e/-d and mints `^<root>/` for either) certifies its
     # whole subtree — this disjunct is what covers the seven _TH_PREFIX_ROOTS.
-    # It counts ONLY when the root still exists on disk: the mint arm drops
-    # the member when the probe fails at classify time (a tracked dir deleted
-    # in the worktree without `git rm` stays in _TH_ROOTS — the census must
-    # decline in parity rather than certify an edge that never reaches the
+    # Metachar-free `glob:<root>`/`glob:<root>/` spellings mint the same
+    # `^<root>/` edge via the mint's literal recursion, so they accept too —
+    # declining them would false-RED a fully covering declaration. It counts
+    # ONLY when the root still exists on disk: the mint arm drops the member
+    # when the probe fails at classify time (a tracked dir deleted in the
+    # worktree without `git rm` stays in _TH_ROOTS — the census must decline
+    # in parity rather than certify an edge that never reaches the
     # selection pass).
-    [[ ("$_m" == "$2/" || "$_m" == "$2") && -d "${_TH_REPO:-$REPO_ROOT}/$2" ]] && return 0
+    [[ ("$_m" == "$2/" || "$_m" == "$2" || "$_m" == "glob:$2" || "$_m" == "glob:$2/") \
+      && -d "${_TH_REPO:-$REPO_ROOT}/$2" ]] && return 0
     # Head anchor is the literal `glob:<root>/` prefix — a `glob:<root>x/…`
     # member names a DIFFERENT root and must not certify this one.
     [[ "$_m" == "glob:$2/"* ]] || continue
@@ -3499,11 +3506,14 @@ _th6v_out=$(
   _t fakenonexistent .test.sh 'fakenonexistent/'              # dir member, worktree-absent root — decline
   _t docs .test.sh 'docs'                                     # slash-less dir member — mint parity, accept
   _t fakenonexistent .test.sh 'fakenonexistent'               # slash-less, worktree-absent — decline
+  _t docs .test.sh 'glob:docs'                                # metachar-free glob — mints ^docs/ — accept
+  _t docs .test.sh 'glob:docs/'                               # metachar-free glob+slash — mints ^docs/ — accept
+  _t fakenonexistent .test.sh 'glob:fakenonexistent'          # same, worktree-absent — decline
 )
-if [[ "${_th6v_out% }" == "1 1 1 0 0 0 0 0 0 0 0 0 1 1 0 0 0 1 0" ]]; then
-  pass "th6v: decline lit-glob/subset-2/subdir/head-side/wrong-ext/lit-file/near-ext/overlap/dir-below/dir-astride/dir-absent/absent-bare; accept bare tails, dir member (both spellings), late cover"
+if [[ "${_th6v_out% }" == "1 1 1 0 0 0 0 0 0 0 0 0 1 1 0 0 0 1 0 1 1 0" ]]; then
+  pass "th6v: decline lit-glob/subset-2/subdir/head-side/wrong-ext/lit-file/near-ext/overlap/dir-below/dir-astride/dir-absent-3; accept bare tails, dir member (all spellings), late cover"
 else
-  fail "th6v: got '${_th6v_out}' want '1 1 1 0 0 0 0 0 0 0 0 0 1 1 0 0 0 1 0'"
+  fail "th6v: got '${_th6v_out}' want '1 1 1 0 0 0 0 0 0 0 0 0 1 1 0 0 0 1 0 1 1 0'"
 fi
 
 # th6m — mutation dispatch over the predicate (Guard 2): each row mutates ONE
@@ -3588,7 +3598,12 @@ _th8_fix_repo() { # <name> [root-file...]
   mkdir -p "$_d" || return 1
   ( cd "$_d" && rc_g init -q ) || return 1
   local _f
-  for _f in "$@"; do printf 'fixture\n' > "$_d/$_f" || return 1; done
+  # The fixture contract is dir-less basenames — refuse a path or a leading-dash
+  # name so a bad arg can't write outside the fixture or trip option parsing.
+  for _f in "$@"; do
+    [[ "$_f" != */* && "$_f" != -* && -n "$_f" ]] || return 1
+    printf 'fixture\n' > "$_d/$_f" || return 1
+  done
   if (($#)); then ( cd "$_d" && rc_g add -f -- "$@" ) || return 1; fi
 }
 
@@ -3701,7 +3716,9 @@ fi
 
 # th8-m8: deaden arm 4 (the quoted `.sh` class) in a sourced mutant — the
 #         quoted `.test.sh` still flags via arm 3 while the quoted `.sh` goes
-#         silent, proving arm 4 carries weight.
+#         silent, proving arm 4 carries weight. The input is printf-emitted
+#         C-quote text, not the producer — m7 already owns the end-to-end
+#         channel; this row isolates the filter arm.
 cases=$((cases + 1))
 if _th_fn_mut _th_root_corpus _th8_m8_corpus \
     '!/\.test\.sh"$/  {print}' \
