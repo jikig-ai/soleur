@@ -103,6 +103,9 @@ The modes exist (PR2). The `flip` dispatch is refused unless all of these hold:
   pre-arm soak read (step 6) is not recorded in this PR or on #9438. Procedure and reads:
   [Liveness heartbeat](#liveness-heartbeat-9438). Until #9943 enforces it in the workflow, this item
   and its re-read are the only control.
+- **No post-flip rotate route is accepted, in writing (#10175).** The owner has recorded that from the first flip no
+  workflow dispatch can rotate the LUKS key until #8571 or the "store measured empty" marker lands, and names the
+  [break-glass](#when-a-rotate-is-needed-after-the-flip-10175) as the only route for a key compromise.
 - **#8101** — remaining: the hooks copy, the post-copy fence readback and the wrappers' mapper
   assertion, carried in #8211 ("Carried from #8101"). The wrapper edit is hash-bound, so it follows
   the [two-PR sequence](git-data-rung2-rehearsal.md#changing-the-payload-the-two-pr-sequence). The
@@ -190,6 +193,15 @@ erasure working); the rehearsal is dispatched only on the user's per-step author
 
 ### The D6 rotate (dispatch BEFORE the flip)
 
+**Never dispatch the rotate after the flip, or after any flip or rollback attempt (a rehearsal included).** From
+the first `flip` the LUKS volume may hold the only copy of the replicated repositories, and a rotate destroys it.
+The apply workflow enforces this (#10175): the step `Rotate precondition — store never written (cutover run
+records)` refuses the rotate once any attempt of any `git-data-cutover.yml` run executed the flag-write step,
+whatever that step concluded (a failed or cancelled write may have landed), and a rollback does not reopen it:
+rollback is flag-off only and the data stays on the LUKS volume (ADR-239). There is no bypass input. The rule
+reads run records, not the flag and not `GIT_DATA_LUKS_CUTOVER_AT` (the stamp survives a rollback, so it decides
+nothing). See [When a rotate is needed after the flip](#when-a-rotate-is-needed-after-the-flip-10175).
+
 `d6_replace_stale` requires a completed `git-data-host-rotate` run — a fresh host PLUS a re-minted
 `GIT_DATA_LUKS_KEY`, volume and Doppler secret together (the passphrase can only rotate with a fresh
 volume). A rotate run counts only when its job succeeded AND it carries the last-step marker
@@ -212,7 +224,52 @@ The rotate's `served_repos=0` precondition reads the latest `stage=boot_complete
 `host_name=soleur-git-data` out of Better Stack — pinned to the git-data source
 (`t520508_soleur_git_data_prd_logs` UNION'd with the `s3` archive; the emit is once-per-boot, and the
 shared inngest source the reader defaults to answers zero rows for this host) — and fails closed when
-the store cannot be read empty.
+the store cannot be read empty. That reading is a once-per-boot observation, **not a live proof of
+emptiness**: a flipped store takes writes without a reboot and the row still says `served_repos=0`. It
+is therefore only a second layer: the step also requires the row to be strictly newer than the single
+`soleur-git-data` server's Hetzner `created` time (so a row from a previous host cannot discharge it), and
+the first layer is the run-record step above. Both steps run before the rung-2 interlock and every plan step.
+
+| Rotate precondition refusal (step annotation) | Meaning | Action |
+|---|---|---|
+| `store_dirty` (names a run id) | That run of `git-data-cutover.yml` executed the flag-write step (any attempt, any conclusion). The store may hold the only copy of replicated repositories. | Do not rotate. Read [When a rotate is needed after the flip](#when-a-rotate-is-needed-after-the-flip-10175). There is no bypass input. |
+| `cutover_in_flight` (names a run id) | A cutover run is still running. | Re-dispatch after it finishes. |
+| `scan_unreadable` | A run record could not be read: an API error, a page or count mismatch, an unknown run status, or the flag-write step is absent from a run created after the seam landed (a rename). | Fail closed: an unreadable history is not a clean one. Re-dispatch once; if it repeats, compare the step name constant in `scripts/lib/git-data-store-dirty-scan.sh` with `git-data-cutover.yml` (the parity test pins them). The name GitHub records is the YAML-parsed one, truncated at the first space-then-hash (`Write GIT_DATA_STORE_ENABLED (via the`). |
+| `stale_boot_complete` | The newest `boot_complete` row is not newer than the current server's creation, so `served_repos=0` describes a previous host. | Wait for the current host's `boot_complete`, or investigate the emit path. |
+| `boot_complete_unreadable` | The `boot_complete` time or the server's creation time could not be read (exactly one server named `soleur-git-data` is required; `HCLOUD_TOKEN` must be loaded). | Fail closed; re-dispatch once the read path is verified. |
+
+The scan reads every attempt of every run (a re-run that skips the write step cannot hide the first attempt's
+write). Runs created before 2026-09-30T02:18:17Z predate the write step and could not write the flag, so an
+absent step there is clean. Known residuals, accepted by the owner as a floor against the accidental dispatch
+and not a defence against a hostile owner: run records deleted by hand, and a flag set outside the workflow, are
+invisible to the scan (the typed token and the `infra-privileged` approval remain), and a rotate that is refused
+here has no in-workflow exit (below). A `d6_replace_stale` that fires again after a flip attempt (the stamped
+rotate aged out of the 100-run window) is a deadlock the guard cannot resolve by dispatch; the follow-up is a
+durable rotate stamp (#10175).
+
+### When a rotate is needed after the flip (#10175)
+
+The guard is a floor against the accidental dispatch, not a prohibition on ever rotating.
+
+- **No bypass input.** The workflow offers none and the step carries no `continue-on-error`.
+- **A suspected `GIT_DATA_LUKS_KEY` compromise (a Doppler secret exposure included) is an owner-run break-glass,
+  not a workflow dispatch.** Contain first: revoke access to the secret and detach the volume per the host-incident
+  procedure. Git-data is a replica of what the web hosts hold, so it is re-seeded from them (each workspace's next
+  session end force-pushes every head and tag). Then land a reviewed PR that lifts the guard for one dispatch, with
+  the owner and the CLO named as reviewers, then rotate. Containment within hours, re-encryption within days, and
+  Art. 33's 72 hours counted from awareness.
+- **Accepted residue.** An erased repository is unlinked, not overwritten (ADR-239), so the ordinary Art. 17
+  residue stays until a copy mode (#8571) or the "store measured empty" marker (the follow-up below) lands. That
+  acceptance is re-evaluated by **2026-11-12**, the date of the plaintext-volume outer-retention decision; a second
+  slip returns to the CLO (ADR-239 Amendment 2026-10-12).
+- **Escalate** on issue #10175 (the guard) and issue #8571 (copy mode), and to the owner.
+
+Follow-ups, not built here: the mode-unique "store measured empty" marker step in `git-data-cutover.yml`, which is
+the later live proof and the exit from dirty (blocked on #8571 for a populated store); #9943 (machine-enforce the
+heartbeat flip precondition, merged design, a different workflow); #6975 (a per-host heartbeat suffix so a healthy
+web-1 probe cannot mask a dead web-2-to-git-data path, a Terraform fan-out). The web-fed `soleur-git-data-prd`
+heartbeat is not a flip precondition, so #6975 does not block the flip: the binding read is the host's own
+`soleur-git-data-host-prd`.
 
 ## What the read-only dispatch does
 

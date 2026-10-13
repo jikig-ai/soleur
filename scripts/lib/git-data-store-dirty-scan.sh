@@ -27,7 +27,12 @@
 # plugins/soleur/test/terraform-target-parity.test.ts (a rename on one side reds a test, not a flip).
 readonly GDSD_WORKFLOW_FILE="git-data-cutover.yml"
 readonly GDSD_JOB_NAME="cutover"
-readonly GDSD_WRITE_STEP="Write GIT_DATA_STORE_ENABLED (via the #8573 seam)"
+# The step is written `name: Write GIT_DATA_STORE_ENABLED (via the #8573 seam)` in git-data-cutover.yml, and YAML
+# reads ` #` as the start of a comment, so the name GitHub records, and the API returns for every run, is the
+# truncated text below (measured on run 37823216637, 2026-10-08). The parity test pins this constant against the
+# PARSED workflow, so a fix of the YAML (quoting the name) reds a test instead of silently making every
+# recorded run's step "absent". Do not "correct" this to the full text without migrating that pin.
+readonly GDSD_WRITE_STEP="Write GIT_DATA_STORE_ENABLED (via the"
 # The write step does not exist in runs created before the seam landed (the read-only-proof era, merged
 # 2026-09-30T02:18:17Z in the real-modes PR): such a run could not write the flag, so an ABSENT step there
 # is clean by construction, and an absent step in a LATER run is still a rename (unreadable).

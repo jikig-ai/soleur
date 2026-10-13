@@ -153,6 +153,64 @@ git_data_served_empty_read() {
     >"$outfile" 2>"$errfile"
 }
 
+# git_data_boot_complete_dt_read <outfile> <errfile>
+# (#10175) The rotate precondition's FRESHNESS read: the newest boot_complete row's ingest time as epoch
+# seconds. git_data_served_empty_sql is deliberately NOT changed (existing pins): this is a sibling query over
+# the same pinned tables, so the two reads cannot disagree about which row is newest. `dt` is Better Stack's
+# ingest clock, the same clock the boot poll's anchor is compared against (AP-027).
+git_data_boot_complete_dt_sql() {
+  cat <<'SQL'
+              SELECT toUnixTimestamp(dt) AS epoch
+              FROM (SELECT dt, raw FROM remote($BS_TABLE)
+                    UNION ALL SELECT dt, raw FROM s3Cluster(primary, $BS_TABLE_S3) WHERE _row_type = 1)
+              WHERE JSONExtractString(raw,'stage') = 'boot_complete'
+                AND JSONExtractString(raw,'host_name') = 'soleur-git-data'
+              ORDER BY dt DESC LIMIT 1 FORMAT JSONEachRow
+SQL
+}
+git_data_boot_complete_dt_read() {
+  local outfile="$1" errfile="$2" reader
+  case "$outfile" in /*) : ;; *) printf 'git_data_boot_complete_dt_read: refusing a relative stdout target: %s\n' "$outfile" >&2; return 78 ;; esac
+  case "$errfile" in /*) : ;; *) printf 'git_data_boot_complete_dt_read: refusing a relative stderr target: %s\n' "$errfile" >&2; return 78 ;; esac
+  reader="$(bs_absence_query_script)"
+  BS_TABLE="$BS_GIT_DATA_TABLE" BS_TABLE_S3="$BS_GIT_DATA_TABLE_S3" \
+    timeout -k 5 "$GIT_DATA_BOOT_READ_TIMEOUT_S" \
+    doppler run -p soleur -c prd_terraform \
+      --only-secrets BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD \
+      --no-exit-on-missing-only-secrets \
+      -- env -u DOPPLER_TOKEN -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY \
+      bash "$reader" "$(git_data_boot_complete_dt_sql)" \
+    >"$outfile" 2>"$errfile"
+}
+
+# git_data_server_created_epoch <hetzner-servers-json>
+# (#10175) Prints the creation time, epoch seconds, of THE git-data server. Refuses (rc 1, prints nothing)
+# unless the body lists EXACTLY ONE server, named soleur-git-data, with a parseable `created`: zero servers,
+# two servers (a replace caught half-way), a decoy name or a missing field are all "could not tell".
+git_data_server_created_epoch() {
+  local body="${1-}" created epoch
+  jq -e '(.servers | type) == "array" and (.servers | length) == 1 and (.servers[0] | type) == "object" and .servers[0].name == "soleur-git-data"' \
+    <<<"$body" >/dev/null 2>&1 || return 1
+  created="$(jq -r '.servers[0].created // empty' <<<"$body" 2>/dev/null)" || return 1
+  [[ "$created" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$ ]] || return 1
+  epoch="$(date -u -d "$created" +%s 2>/dev/null)" || return 1
+  [[ "$epoch" =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "$epoch"
+}
+
+# git_data_boot_complete_freshness <rows> <created_epoch>
+# (#10175) The freshness verdict, ONE token, rc 0 only for `fresh`: the newest boot_complete row's epoch must be
+# STRICTLY greater than the server's creation epoch (a row at the creation instant, or before it, is the previous
+# host's). `stale_boot_complete` (rc 1) is a measured refusal; `boot_complete_unreadable` (rc 2) is "could not tell".
+git_data_boot_complete_freshness() {
+  local rows="${1-}" created="${2-}" epoch
+  [[ "$created" =~ ^[0-9]+$ ]] || { echo boot_complete_unreadable; return 2; }
+  epoch="$(printf '%s' "$rows" | head -1 | jq -r 'if type == "object" and ((.epoch | type) == "string" or (.epoch | type) == "number") then (.epoch | tostring) else empty end' 2>/dev/null)" || epoch=""
+  [[ "$epoch" =~ ^[0-9]+$ ]] || { echo boot_complete_unreadable; return 2; }
+  if (( epoch > created )); then echo fresh; return 0; fi
+  echo stale_boot_complete; return 1
+}
+
 # git_data_boot_poll_decide <found> <final_answered>   (yes/no, yes/no)
 # The verdict, as a pure function so a suite can drive every arm. It rests on the FINAL
 # read, and the caller also reports how many reads answered, so "the final read failed after

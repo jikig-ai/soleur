@@ -586,6 +586,62 @@ _gd_n="$(find "$SANDBOX" -maxdepth 1 -type d -name 'gdboot.*' | grep -c . || tru
 if (( _gd_n >= _GD_POLLS_MIN )); then _report "S22 every gdboot scratch dir ($_gd_n) lands under the suite sandbox, not the shared TMPDIR" ok
 else _report "S22 gdboot scratch dirs land under the suite sandbox" bad "only $_gd_n of >= $_GD_POLLS_MIN found under $SANDBOX"; fi
 
+# ── S23  (#10175) the rotate freshness read: pins, credential route, and the pure verdicts ──────────────────
+d=$(mkshim s23 "$(spec '0|{"epoch":"1790000001"}|')")
+in_step "$d" "git_data_boot_complete_dt_read '$SANDBOX/s23.out' '$SANDBOX/s23.err' && echo DT_RC=0 || echo DT_RC=\$?" >/dev/null
+have    "S23a the dt read ran and returned 0"                      "DT_RC=0"
+if grep -qF "toUnixTimestamp(dt)" "$d/sql" && grep -qF "stage') = 'boot_complete'" "$d/sql" && grep -qF "host_name') = 'soleur-git-data'" "$d/sql"; then
+  _report "S23b the SQL reads the newest boot_complete epoch on host_name=soleur-git-data" ok
+else _report "S23b the SQL reads the newest boot_complete epoch on host_name=soleur-git-data" bad "sql: $(tr '\n' ' ' < "$d/sql" | cut -c1-200)"; fi
+if grep -qF "ORDER BY dt DESC LIMIT 1" "$d/sql"; then _report "S23c the SQL takes exactly the newest row" ok
+else _report "S23c the SQL takes exactly the newest row" bad "no ORDER BY dt DESC LIMIT 1"; fi
+if grep -q "wrong_table" "$d/tables"; then _report "S23d the library pins its OWN git-data tables (the harness's wrong table lost)" bad "wrong table reached the reader"
+else _report "S23d the library pins its OWN git-data tables (the harness's wrong table lost)" ok; fi
+if grep -qF -- "--only-secrets BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD" "$d/doppler_argv"; then
+  _report "S23e the credential route is --only-secrets with the three reader keys" ok
+else _report "S23e the credential route is --only-secrets with the three reader keys" bad "argv: $(cat "$d/doppler_argv")"; fi
+if grep -qF "DOPPLER_TOKEN=<unset> AWS_SECRET_ACCESS_KEY=<unset>" "$d/env"; then _report "S23f the reader runs with no Doppler or R2 credential in its environment" ok
+else _report "S23f the reader runs with no Doppler or R2 credential in its environment" bad "env: $(cat "$d/env")"; fi
+in_step "$d" "git_data_boot_complete_dt_read relative.out '$SANDBOX/e' && echo DT_RC=0 || echo DT_RC=\$?" >/dev/null
+have    "S23g a relative stdout target is refused (rc 78)"        "DT_RC=78"
+# The pure verdicts. fresh() runs the freshness verdict and prints "<token>/<rc>".
+fresh() { in_step "$d" "t=\$(git_data_boot_complete_freshness '$1' '$2') && r=0 || r=\$?; echo \"V=\$t/\$r\"" >/dev/null; sed -n 's/^V=//p' "$SANDBOX/out"; }
+for _row in \
+  '{"epoch":"1790000010"}|1790000000|fresh/0|S23h epoch 10 s after created is fresh' \
+  '{"epoch":1790000010}|1790000000|fresh/0|S23i a numeric epoch parses' \
+  '{"epoch":"1790000001"}|1790000000|fresh/0|S23j one second after created is fresh (strictness boundary)' \
+  '{"epoch":"1790000000"}|1790000000|stale_boot_complete/1|S23k epoch EQUAL to created is stale (strict)' \
+  '{"epoch":"1789999999"}|1790000000|stale_boot_complete/1|S23l one second before created is stale' \
+  '|1790000000|boot_complete_unreadable/2|S23m an empty read is unreadable, never fresh' \
+  '{"x":"1"}|1790000000|boot_complete_unreadable/2|S23n a row without an epoch is unreadable' \
+  '{"epoch":"abc"}|1790000000|boot_complete_unreadable/2|S23o a non-numeric epoch is unreadable' \
+  '{"epoch":"1790000010"}||boot_complete_unreadable/2|S23p a missing created epoch is unreadable' \
+  '{"epoch":"1790000010"}|x|boot_complete_unreadable/2|S23q a non-numeric created epoch is unreadable' \
+  '{"epoch":"1790000005"}\n{"epoch":"1789000000"}|1790000000|fresh/0|S23r only the FIRST (newest) row decides'; do
+  IFS='|' read -r _r _c _want _label <<<"$_row"
+  _got="$(fresh "$(printf '%b' "$_r")" "$_c")"
+  if [[ "$_got" == "$_want" ]]; then _report "$_label" ok; else _report "$_label" bad "got $_got want $_want"; fi
+done
+# Hetzner servers body -> creation epoch. exactly one server, named soleur-git-data, parseable created.
+created() { in_step "$d" "git_data_server_created_epoch '$1' && echo '|RC=0' || echo \"|RC=\$?\"" >/dev/null; tr -d '\n' < "$SANDBOX/out"; }
+_one='{"servers":[{"name":"soleur-git-data","created":"2026-10-13T10:00:00+00:00"}]}'
+_reordered='{"meta":{"x":1},"servers":[{"id":1,"created":"2026-10-13T10:00:00+00:00","name":"soleur-git-data"}]}'
+_frac='{"servers":[{"name":"soleur-git-data","created":"2026-10-13T10:00:00.5Z"}]}'
+for _row in \
+  "${_one}|1791885600|RC=0|S23s one server, offset created" \
+  "${_reordered}|1791885600|RC=0|S23t different key order and extra fields" \
+  "${_frac}|1791885600|RC=0|S23u fractional seconds with Z" \
+  '{"servers":[]}||RC=1|S23v zero servers refuses' \
+  '{"servers":[{"name":"soleur-git-data","created":"2026-10-13T10:00:00+00:00"},{"name":"soleur-git-data","created":"2026-10-01T10:00:00+00:00"}]}||RC=1|S23w two servers (a replace caught half-way) refuses' \
+  '{"servers":[{"name":"soleur-git-data-old","created":"2026-10-13T10:00:00+00:00"}]}||RC=1|S23x a decoy name refuses' \
+  '{"servers":[{"name":"soleur-git-data"}]}||RC=1|S23y a missing created refuses' \
+  '{"servers":[{"name":"soleur-git-data","created":"yesterday"}]}||RC=1|S23z an unparseable created refuses' \
+  'not json||RC=1|S23za a non-JSON body refuses'; do
+  IFS='|' read -r _r _want_epoch _want_rc _label <<<"$_row"
+  _got="$(created "$_r")"
+  if [[ "$_got" == "${_want_epoch}|${_want_rc}" ]]; then _report "$_label" ok; else _report "$_label" bad "got '$_got' want '${_want_epoch}|${_want_rc}'"; fi
+done
+
 # ── Assertion count: EXACT, printf + exit, never through the helper it backstops ──
 _total=$((pass + fail))
 # RAISED 146 -> 184 (#8211), ITEMISED:
@@ -600,7 +656,10 @@ _total=$((pass + fail))
 #    38
 # RAISED 184 -> 185 (#5274): S20i, plaintext_journal=clean does not gate the poll.
 # RAISED 185 -> 186 (#9677): S22, the library's gdboot scratch lands under the suite sandbox.
-_EXACT=186
+# RAISED 186 -> 213 (#10175), ITEMISED: 7 S23a-g the freshness read's SQL, pins, credential route and
+#     relative-target refusal; 11 S23h-r the freshness verdicts (strict boundary both sides, unreadable arms,
+#     newest row decides); 9 S23s-za the Hetzner created parse (one server only, decoy, key order).
+_EXACT=213
 if (( _total != _EXACT )); then
   printf 'FAIL: assertion count: %d ran, expected exactly %d — coverage changed; update _EXACT deliberately\n' "$_total" "$_EXACT" >&2
   exit 1

@@ -91,7 +91,8 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 // 278 -> 276 (#9372 retirement): the declared count was 279 (floor 278, one row loose); the single-use rebirth workflow's five-target describe (three tests) retired with the workflow and the G2 test was rewritten in place, so 279 - 3 = 276.
 // Exact again: grep -cE '^\s*test\(' = 276.
 // 276 -> 279 (#10166, +3): the d6 rotate marker / flip gate wiring describe (real-tree pins, twelve-mutant battery, the executed gate block). The 2 rows of slack were already there (declared 278 vs floor 276 on main).
-const TEST_FLOOR = 279;
+// 279 -> 283 (#10175, +4): the rotate's store-never-written gate describe (real-tree pins, thirteen-mutant battery, the no-other-flag-writer scan, the census pin). The 2 rows of slack above are unchanged (declared 285).
+const TEST_FLOOR = 283;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -7897,7 +7898,7 @@ exit 64
     type Case = { name: string; list: Array<[number | string, string]> | null; bodies: Record<number, string>; rc: number; verdict?: string; has?: string[]; hasNot?: string[]; mutate?: [string, string] };
     const cases: Case[] = [
       { name: "an older stamped run behind a newer plain replace discharges D6", list: [[2, "completed"], [1, "completed"]], bodies: { 2: plain, 1: stamped }, rc: 0, has: ["d6 rotate stamp: run 1", "LAST_OK=1"] },
-      { name: "only plain replaces leaves D6 open", list: [[2, "completed"]], bodies: { 2: plain }, rc: 1, verdict: "d6_replace_stale", has: ["apply_target=git-data-host-rotate"] },
+      { name: "only plain replaces leaves D6 open", list: [[2, "completed"]], bodies: { 2: plain }, rc: 1, verdict: "d6_replace_stale", has: ["apply_target=git-data-host-rotate", "NEVER been flipped", "do NOT dispatch it", "#10175", "#8571", "no bypass input"], hasNot: ["re-dispatch it from main"] },
       { name: "an empty run list leaves D6 open", list: [], bodies: {}, rc: 1, verdict: "d6_replace_stale" },
       { name: "a failed newest rotate blocks over an older stamp", list: [[3, "completed"], [1, "completed"]], bodies: { 3: failedRotate, 1: stamped }, rc: 1, verdict: "d6_last_rotate_failed", has: ["run 3", "gh run view 3 --log-failed", "dispatch a FRESH rotate", "Do not re-run the failed run"] },
       { name: "an in-flight newest run blocks over an older stamp", list: [[3, "in_progress"], [1, "completed"]], bodies: { 3: inFlight, 1: stamped }, rc: 1, verdict: "d6_rotate_in_flight", has: ["(run 3)", "Cancel it only if", "never cancel an in_progress run"] },
@@ -7946,6 +7947,141 @@ exit 64
 // `test.skip` typo, a stray `.only`, or a narrowed filter reports "0 fail" and reads as success —
 // the outermost gap, and the one `expectNonEmptyDispatch` cannot see, because it only fires from
 // inside a test that RAN.
+
+// --- the rotate's "store never written" gate (#10175) -------------------------------------------
+// After the first real flip the LUKS volume may hold the only copy of replicated repositories. The rotate's
+// emptiness step reads one boot-time row, so a new step reads git-data-cutover.yml's run records instead
+// (scripts/lib/git-data-store-dirty-scan.sh). The lib suite pins the decisions; what pins the WIRE is here:
+// the step's position (before the emptiness step, the rung-2 interlock and the plan), its exact `if:`, a
+// GITHUB_TOKEN-only environment, no continue-on-error and no input-driven bypass, the job's exact permissions,
+// the lib's three name constants against git-data-cutover.yml, and that no other file writes the flag.
+const STORE_STEP = "Rotate precondition \u2014 store never written (cutover run records)";
+const EMPTY_STEP = "Rotate precondition \u2014 served store measured empty";
+const STORE_STEP_IF = "inputs.apply_target == 'git-data-host-rotate'";
+const FLAG_WRITERS_ALLOWED = [
+  ".github/workflows/git-data-cutover.yml",
+  "apps/web-platform/infra/git-data-flag-precheck.sh",
+];
+
+/** Violations of the store-never-written wiring; empty on a healthy tree. */
+function checkStoreNeverWrittenWiring(applyText: string, cutoverText: string, libText: string): string[] {
+  const v: string[] = [];
+  const constant = (name: string): string | null =>
+    libText.match(new RegExp(`^readonly ${name}="([^"]*)"$`, "m"))?.[1] ?? null;
+  const wfFile = constant("GDSD_WORKFLOW_FILE");
+  const jobName = constant("GDSD_JOB_NAME");
+  const writeStep = constant("GDSD_WRITE_STEP");
+  if (wfFile !== "git-data-cutover.yml") v.push(`GDSD_WORKFLOW_FILE is '${String(wfFile)}', not git-data-cutover.yml`);
+  if (!jobName || !writeStep) return [...v, "lib constants GDSD_JOB_NAME / GDSD_WRITE_STEP are missing"];
+  try {
+    const cdoc = parseYaml(cutoverText) as { jobs: Record<string, { name?: unknown; steps?: Array<Record<string, unknown>> }> };
+    const cj = cdoc.jobs[jobName];
+    if (!cj) v.push(`git-data-cutover.yml has no job '${jobName}'`);
+    else {
+      if ("name" in cj) v.push(`job ${jobName} gained a name: key, so the scan's exact display-name match no longer sees it`);
+      const w = (cj.steps ?? []).filter((st) => st.name === writeStep);
+      if (w.length !== 1) v.push(`the flag-write step '${writeStep}' appears ${w.length} times in ${jobName} (expected exactly 1)`);
+    }
+    const adoc = parseYaml(applyText) as { jobs: Record<string, { permissions?: Record<string, string>; steps?: Array<Record<string, unknown>> }> };
+    const job = adoc.jobs["git_data_host_replace"];
+    if (!job) return [...v, "git_data_host_replace job not found"];
+    const perms = job.permissions ?? {};
+    if (JSON.stringify(Object.entries(perms).sort()) !== JSON.stringify([["actions", "read"], ["contents", "read"]])) {
+      v.push(`git_data_host_replace permissions are ${JSON.stringify(perms)}, not exactly contents: read + actions: read`);
+    }
+    const steps = job.steps ?? [];
+    const idx = (n: string) => steps.findIndex((st) => st.name === n);
+    const at = idx(STORE_STEP);
+    if (steps.filter((st) => st.name === STORE_STEP).length !== 1) v.push(`the step '${STORE_STEP}' appears ${steps.filter((st) => st.name === STORE_STEP).length} times (expected exactly 1)`);
+    if (at < 0) return [...v, "the store-never-written step is missing"];
+    const st = steps[at];
+    for (const [what, name] of [["the emptiness step", EMPTY_STEP], ["the rung-2 interlock", "Rung-2 rehearsal interlock (refuses an un-rehearsed payload on the live host)"], ["the terraform plan", "Terraform plan (scoped git-data-host -replace) + destroy-guard"]] as const) {
+      const j = idx(name);
+      if (j < 0) v.push(`${what} '${name}' was not found`);
+      else if (j < at) v.push(`the store-never-written step is AFTER ${what}`);
+    }
+    if (st.if !== STORE_STEP_IF) v.push(`its if: is '${String(st.if)}', not '${STORE_STEP_IF}'`);
+    for (const key of ["continue-on-error", "timeout-minutes"]) if (key in st) v.push(`the step carries ${key}`);
+    const env = (st.env ?? {}) as Record<string, string>;
+    if (JSON.stringify(Object.keys(env).sort()) !== JSON.stringify(["GITHUB_REPOSITORY", "GH_TOKEN"].sort())) v.push(`its env is ${JSON.stringify(Object.keys(env))}, not exactly GH_TOKEN + GITHUB_REPOSITORY`);
+    if (env.GH_TOKEN !== "${{ secrets.GITHUB_TOKEN }}") v.push("GH_TOKEN is not bound to secrets.GITHUB_TOKEN alone");
+    const run = String(st.run ?? "");
+    const runStripped = stripComments(run);
+    if (/\binputs\./.test(runStripped) || /\$\{\{\s*inputs\./.test(runStripped)) v.push("the step's script reads a dispatch input (a bypass)");
+    if (/secrets\.(?!GITHUB_TOKEN)/.test(JSON.stringify(st))) v.push("the step binds a secret other than GITHUB_TOKEN");
+    if ((runStripped.match(/git_data_store_dirty_scan/g) ?? []).length !== 1) v.push("the step must call git_data_store_dirty_scan exactly once");
+    for (const token of ["store_clean", "store_dirty", "cutover_in_flight"]) if (!runStripped.includes(token)) v.push(`the step's case has no ${token} arm`);
+    if (!/^\s+\*\) echo "::error::[^\n]*exit 1 ;;/m.test(runStripped)) v.push("the step's case has no fail-closed *) arm");
+    if (/\|\|\s*true/.test(runStripped)) v.push("the step swallows a failure with || true");
+  } catch (e) {
+    return [...v, `a workflow does not parse: ${(e as Error).message.split("\n")[0]}`];
+  }
+  return v;
+}
+
+/** Files (repo-relative) that set GIT_DATA_STORE_ENABLED through doppler, other than the allowed writers. */
+function otherFlagWriters(files: Array<[string, string]>): string[] {
+  return files
+    .filter(([path, text]) => !FLAG_WRITERS_ALLOWED.includes(path) && /doppler\s+secrets\s+set[^\n]*GIT_DATA_STORE_ENABLED|GIT_DATA_STORE_ENABLED[^\n]*doppler\s+secrets\s+set/.test(stripComments(text)))
+    .map(([path]) => path);
+}
+
+describe("the rotate's store-never-written gate (#10175)", () => {
+  const applyText = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const cutoverText = readFileSync(resolve(REPO_ROOT, ".github/workflows/git-data-cutover.yml"), "utf8");
+  const libText = readFileSync(resolve(REPO_ROOT, "scripts/lib/git-data-store-dirty-scan.sh"), "utf8");
+
+  test("the real tree satisfies every wiring pin (order, if:, env, permissions, constants, fail-closed arms)", () => {
+    expect(checkStoreNeverWrittenWiring(applyText, cutoverText, libText)).toEqual([]);
+  });
+
+  test("a mutation battery: each edit to the wiring is caught", () => {
+    const sw = (a: string, b: string) => (t: string) => { if (!t.includes(a)) throw new Error(`mutation anchor missing: ${a.slice(0, 50)}`); return t.replace(a, b); };
+    const mutants: Array<{ label: string; apply?: (t: string) => string; cutover?: (t: string) => string; lib?: (t: string) => string; want: RegExp }> = [
+      { label: "continue-on-error added to the new step", apply: sw(`      - name: ${STORE_STEP}\n        if: ${STORE_STEP_IF}\n`, `      - name: ${STORE_STEP}\n        if: ${STORE_STEP_IF}\n        continue-on-error: true\n`), want: /continue-on-error/ },
+      { label: "an input-driven bypass in the step", apply: sw(`          echo "store-never-written verdict: \${verdict}"`, `          [[ "\${{ inputs.reason }}" == force ]] && exit 0\n          echo "store-never-written verdict: \${verdict}"`), want: /dispatch input|bypass/ },
+      { label: "if: widened to every replace target", apply: sw(`        if: ${STORE_STEP_IF}\n        env:\n          GH_TOKEN`, `        if: inputs.apply_target == 'git-data-host-replace'\n        env:\n          GH_TOKEN`), want: /its if: is/ },
+      { label: "a prd Doppler token bound to the step", apply: sw(`          GH_TOKEN: \${{ secrets.GITHUB_TOKEN }}\n          GITHUB_REPOSITORY`, `          GH_TOKEN: \${{ secrets.GITHUB_TOKEN }}\n          DOPPLER_TOKEN: \${{ secrets.DOPPLER_TOKEN }}\n          GITHUB_REPOSITORY`), want: /not exactly GH_TOKEN|secret other than/ },
+      { label: "actions: read dropped from the job permissions", apply: sw(`    permissions:\n      contents: read\n      actions: read\n    # (#6977)`, `    permissions:\n      contents: read\n    # (#6977)`), want: /permissions/ },
+      { label: "an extra scope added to the job permissions", apply: sw(`      actions: read\n    # (#6977)`, `      actions: read\n      packages: read\n    # (#6977)`), want: /permissions/ },
+      { label: "step renamed in the workflow", apply: sw(`- name: ${STORE_STEP}`, `- name: Rotate precondition \u2014 store never written`), want: /missing|appears 0 times/ },
+      { label: "step moved after the emptiness step", apply: (t) => { const a = t.indexOf(`      - name: ${STORE_STEP}`); const b = t.indexOf(`      # (#8211 PR2 / ADR-220 D6) ROTATE PRECONDITION`); const c = t.indexOf(`      # (#8210) THE RUNG-2 INTERLOCK`); if (a < 0 || b < 0 || c < 0 || !(a < b && b < c)) throw new Error("mutation anchors missing"); return t.slice(0, a) + t.slice(b, c) + t.slice(a, b) + t.slice(c); }, want: /AFTER the emptiness step/ },
+      { label: "the *) fail-closed arm removed", apply: sw(`            *) echo "::error::rotate precondition REFUSED (scan_unreadable)`, `            ignored) echo "::error::rotate precondition REFUSED (scan_unreadable)`), want: /fail-closed \*\) arm/ },
+      { label: "the lib's write-step constant drifts from the cutover workflow", lib: sw(`GDSD_WRITE_STEP="Write GIT_DATA_STORE_ENABLED (via the"`, `GDSD_WRITE_STEP="Write GIT_DATA_STORE_ENABLED (via the seam"`), want: /appears 0 times/ },
+      { label: "the lib's job constant drifts", lib: sw(`readonly GDSD_JOB_NAME="cutover"`, `readonly GDSD_JOB_NAME="cutover2"`), want: /no job 'cutover2'/ },
+      { label: "the lib's workflow-file constant drifts", lib: sw(`readonly GDSD_WORKFLOW_FILE="git-data-cutover.yml"`, `readonly GDSD_WORKFLOW_FILE="git-data-cutover2.yml"`), want: /GDSD_WORKFLOW_FILE/ },
+      { label: "the cutover job gains a display name", cutover: sw(`  cutover:\n    runs-on: ubuntu-24.04`, `  cutover:\n    name: Cutover\n    runs-on: ubuntu-24.04`), want: /gained a name/ },
+    ];
+    for (const m of mutants) {
+      let a = applyText, c = cutoverText, l = libText;
+      try { if (m.apply) a = m.apply(a); if (m.cutover) c = m.cutover(c); if (m.lib) l = m.lib(l); } catch (e) { throw new Error(`mutant '${m.label}': ${(e as Error).message}`); }
+      const found = checkStoreNeverWrittenWiring(a, c, l);
+      expect(found.length, `mutant '${m.label}' was not caught`).toBeGreaterThan(0);
+      expect(found.join(" | "), `mutant '${m.label}' was caught for the wrong reason`).toMatch(m.want);
+    }
+  });
+
+  test("no file other than the cutover workflow and the flag precheck writes GIT_DATA_STORE_ENABLED (a second writer is invisible to the run-record scan)", () => {
+    const files = spawnSync("git", ["ls-files", ".github", "scripts", "apps/web-platform/infra", "plugins"], { cwd: REPO_ROOT, encoding: "utf8" }).stdout
+      .split("\n").filter((f) => /\.(ya?ml|sh|ts|mjs|py|tf|tmpl)$/.test(f) && !/\.test\./.test(f));
+    expect(files.length).toBeGreaterThan(100);
+    const read: Array<[string, string]> = files.map((f) => [f, readFileSync(resolve(REPO_ROOT, f), "utf8")] as [string, string]);
+    expect(otherFlagWriters(read)).toEqual([]);
+    // Control: the detector fires on a synthetic second writer and ignores a comment naming the spelling.
+    expect(otherFlagWriters([["x/new.sh", "printf true | doppler secrets set GIT_DATA_STORE_ENABLED -p soleur -c prd"]])).toEqual(["x/new.sh"]);
+    expect(otherFlagWriters([["x/new.sh", "# doppler secrets set GIT_DATA_STORE_ENABLED is the only writer"]])).toEqual([]);
+  });
+
+  test("the census is unchanged except job-level actions: read (no new secret bound to the job)", () => {
+    const doc = parseYaml(applyText) as { jobs: Record<string, { steps?: Array<{ env?: Record<string, string>; with?: Record<string, string> }> }> };
+    const secrets = new Set<string>();
+    for (const st of doc.jobs["git_data_host_replace"].steps ?? []) {
+      for (const val of [...Object.values(st.env ?? {}), ...Object.values(st.with ?? {})]) for (const m of String(val).matchAll(/secrets\.([A-Z0-9_]+)/g)) secrets.add(m[1]);
+    }
+    expect([...secrets].sort()).toEqual(["DOPPLER_TOKEN", "DOPPLER_TOKEN_INFRA_PRIVILEGED", "GITHUB_TOKEN"]);
+  });
+});
+
 describe("this suite itself cannot be silently narrowed", () => {
   const selfText = readFileSync(resolve(import.meta.dir, "terraform-target-parity.test.ts"), "utf8");
 
