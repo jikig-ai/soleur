@@ -63,8 +63,9 @@ cross-checked against `grep -rn "deleteUser" apps/web-platform/test/`):
    recursive census over `test/**` and enforces it via the `KNOWN_LEGACY_CARRIERS`
    ratchet (the drain set IS the scope widening). The remaining work is draining
    the ratchet, not widening the scan.
-2. Issue fix shape adopted with one correction: 14/15 drain files use the
-   `tenant-isolation-[a-f0-9]{16}@soleur.test` shape already allowlisted;
+2. Issue fix shape adopted with one correction: 14/15 drain files already emit
+   an allowlisted prefix (13 × `tenant-isolation-` + 1 × `workspace-fixture-`,
+   the member-revocation fixture user);
    `workspace-backfill-trigger-parity.test.ts` uses
    `workspace-backfill-parity-[a-f0-9]{16}@soleur.test`, which needs a one-line
    `SYNTHETIC_PREFIXES` addition (the designed mechanism per the helper docblock).
@@ -100,7 +101,7 @@ parity-guarded by `teardown-anonymise-parity.test.ts`), then `deleteUser` under
 |---|---|---|
 | 8 × `.catch` suites | `afterAll` loops users, `assertSynthetic`, `deleteUser().catch(()=>{})` | Swap for `await tearDownTenantUser(service, user)`; keep `assertSynthetic` + any preceding non-user cleanup (attachment-pipeline's storage `.remove()` stays — storage bytes don't cascade, gdpr-gate TS-05) |
 | action-sends-worm | `afterAll` loops `[userA,userB]`: try/catch `anonymise_action_sends` + `anonymise_scope_grants` + `deleteUser`; in-test throwaway user (~line 451) try/catch `anonymise_scope_grants`+`deleteUser` | Both RPCs already in the helper sequence — replace each 2–3-op block with one helper call, both sites |
-| email-triage-worm | Same shape; `anonymise_email_triage_items` + `deleteUser` ×2 (afterAll ~194, in-test ~579) | Both helper-covered; swap both sites |
+| email-triage-worm | afterAll ~194 runs `anonymise_email_triage_items` + `deleteUser` per user; in-test ~579 is a bare try/catch `deleteUser` | Both helper-covered; swap both sites |
 | template-authorizations-worm | 3-RPC try/catch + `deleteUser` (all three RPCs in helper) | Swap |
 | tenant-jwt-deny | TWO describes, each `afterAll`: `denied_jti` row delete + bare `deleteUser` | Keep the `denied_jti` delete (founder_id CASCADE since mig 106 — belt-and-suspenders, minimal diff), then `tearDownTenantUser` |
 | scope-grants/lifecycle | afterAll bare `deleteUser(userA.id)` relying on the test having run `anonymise_scope_grants` at step 7 — leaks userA if the test fails early | Helper anonymises scope_grants itself — strictly more robust |

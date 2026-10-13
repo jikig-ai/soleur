@@ -647,7 +647,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         expect(row!.status).toBe("acknowledged");
       } finally {
         // Best-effort teardown (this is the last case; afterAll's user-delete
-        // also cascades the membership). Ignore WORM/remove-RPC restrictions.
+        // also anonymise-cleans the membership under worm_bypass). Ignore WORM/remove-RPC restrictions.
         await service
           .from("workspace_members")
           .delete()
