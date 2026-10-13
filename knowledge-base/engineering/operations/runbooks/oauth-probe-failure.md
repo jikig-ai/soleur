@@ -594,7 +594,7 @@ which files an issue naming each finding's class and remedy). Ownership since
 
 To repair `auth-per-user-loop` (captured id `566671`): take its entry from the
 committed capture
-(`jq '.[] | select(.name == "auth-per-user-loop")' knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json`),
+(`jq '.[] | select(.name == "auth-per-user-loop")' knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json`),
 PUT it to `/api/0/organizations/<org>/workflows/566671/`, GET it back, and re-run
 the probe. This is the same remedy the drift issue's reading guide gives for the
 `FROZEN …` classes. The rule cannot become a native, apply-repaired rule until

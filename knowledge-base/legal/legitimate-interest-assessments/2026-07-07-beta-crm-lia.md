@@ -2,7 +2,7 @@
 title: "Legitimate Interest Assessment — Owner-private beta-tester / prospect CRM capture store"
 type: legitimate-interest-assessment
 date: 2026-07-07
-plan: knowledge-base/project/plans/2026-07-07-feat-beta-conversation-capture-plan.md
+plan: knowledge-base/project/plans/archive/20261013-041741-2026-07-07-feat-beta-conversation-capture-plan.md
 adr: knowledge-base/engineering/architecture/decisions/ADR-102-beta-crm-capture-store-per-tenant-owner-private-agent-native.md
 issue: 6165
 status: draft-requires-counsel-review

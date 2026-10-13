@@ -2,7 +2,7 @@
 # Tests for scripts/lint-agents-rule-budget.py.
 #
 # Issue: #3684. Covers Phase 1 of the rule-budget pre-commit linter plan
-# (knowledge-base/project/plans/2026-05-12-chore-agents-md-pre-commit-rule-budget-plan.md):
+# (knowledge-base/project/plans/archive/20261013-014038-2026-05-12-chore-agents-md-pre-commit-rule-budget-plan.md):
 #   T1: current tree lints clean, exit 0 (tier depends on the live corpus size;
 #       assert the EXIT CODE, never a tier — the tier moves as rules land)
 #   T2: AGENTS.rules.md grown past 46 k -> exit 1 + `B_ALWAYS=... > 46000`

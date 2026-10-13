@@ -4,7 +4,7 @@
 #
 # Brand-survival: a regression here means a uploads.linear.app signed URL
 # can leak into a committed artifact on a public-GitHub repo. See
-# knowledge-base/project/specs/feat-linear-issue-image-context/spec.md FR7
+# knowledge-base/project/specs/archive/20261013-014038-feat-linear-issue-image-context/spec.md FR7
 # and the plan's User-Brand Impact section.
 #
 # Hostname matching is case-insensitive (DNS is case-insensitive — a URL like

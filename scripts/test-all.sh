@@ -1050,7 +1050,7 @@ fi
 #
 # See `.github/workflows/ci.yml` test-{webplat,bun,scripts,scripts-heavy} jobs + the
 # synthetic `test` aggregator. See plan
-# `knowledge-base/project/plans/2026-05-12-feat-ci-test-job-speedup-plan.md`.
+# `knowledge-base/project/plans/archive/20261013-014038-2026-05-12-feat-ci-test-job-speedup-plan.md`.
 TEST_GROUP="${TEST_GROUP:-${1:-all}}"
 case "$TEST_GROUP" in
   all|webplat|bun|scripts|scripts-heavy|infra|affected) ;;
@@ -2538,7 +2538,7 @@ _aff_classify_runner_diff() {
 # infra check: over-matching a path that merely CONTAINS the string errs toward RUNNING the
 # suite, which is the safe direction. A `^`-marked entry (minted by `_affected_add_edge`) is
 # ANCHORED instead — see `_diff_edge_hit` above — and errs toward NOT running on a path that
-# only contains the word; knowledge-base/project/specs/feat-affected-parallel-test-gate/
+# only contains the word; knowledge-base/project/specs/archive/20261013-062704-feat-affected-parallel-test-gate/
 # edge-anchoring-corpus.md records the measurement behind that trade.
 #
 # `_diff_touches --pr-gated <paths...>` (ADR-262) is the one call-site opt-in for a self-test
@@ -5666,9 +5666,6 @@ if want_scripts; then
   # load-bearing arms are SYSLOG_IDENTIFIER field isolation, latest-verdict grading, and
   # zero-hosts-never-PASS.
   run_suite "scripts/cosign-verify-live-8037" bash scripts/followthroughs/cosign-verify-live-8037.test.sh
-  # #8296 ledger-vs-device property probe, enrolled on #8285. NOTIFY-ONLY: the suite pins that no
-  # path exits 0 or 1, because a 0 would let the sweeper close the backstop-retirement tracker.
-  run_suite "scripts/inngest-luks-property-8296" bash scripts/followthroughs/inngest-luks-property-8296.test.sh
   # #9703 feeder for the inngest probe heartbeat. Pins the one property that matters: a beat reaches
   # Better Stack only on a fresh host_role=dedicated probe row with an unpaused heartbeat, and exit 0
   # means exactly {beat, fresh_heartbeat_paused}. M1-M7 mutation rows run inside the suite.

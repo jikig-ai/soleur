@@ -12,7 +12,7 @@ import { resolve } from "node:path";
 // because it would burn GoTrue rate-limit budget on every CI run).
 //
 // References:
-// - Plan: knowledge-base/project/plans/2026-05-25-feat-jti-revoke-rls-3930-3932-plan.md §Phase 2.1
+// - Plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-25-feat-jti-revoke-rls-3930-3932-plan.md §Phase 2.1
 // - Sibling pattern: apps/web-platform/test/scripts/hash-user-id.test.ts
 
 const SCRIPT_PATH = resolve(__dirname, "../../scripts/revoke-jti.ts");

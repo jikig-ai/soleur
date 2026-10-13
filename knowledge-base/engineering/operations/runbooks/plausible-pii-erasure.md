@@ -244,7 +244,7 @@ is not invisible (per AGENTS.md `wg-when-deferring-a-capability-create-a`).
 ## Cross-references
 
 - Scrubber source: `apps/web-platform/app/api/analytics/track/sanitize.ts`, symbol `SCRUB_PATTERNS`.
-- Scrubber plan: `knowledge-base/project/plans/2026-04-17-fix-analytics-track-path-pii-plan.md`.
+- Scrubber plan: `knowledge-base/project/plans/archive/20261013-003106-2026-04-17-fix-analytics-track-path-pii-plan.md`.
 - Sibling runbook: `plausible-dashboard-filter-audit.md` (one-time audit for saved dashboards that pinned raw paths).
 - Plausible Stats API v1: <https://plausible.io/docs/stats-api-v1>.
 - Plausible Community Edition schema: <https://github.com/plausible/community-edition>.

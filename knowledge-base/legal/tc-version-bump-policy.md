@@ -9,8 +9,8 @@ related:
   - apps/web-platform/scripts/check-tc-document-sha.sh
   - apps/web-platform/test/legal-doc-consistency.test.ts
   - knowledge-base/legal/article-30-register.md
-  - knowledge-base/project/plans/2026-05-15-feat-oauth-tc-consent-residual-audit-plan.md
-  - knowledge-base/project/plans/2026-05-22-feat-legal-doc-sha-mirror-guard-plan.md
+  - knowledge-base/project/plans/archive/20261013-014038-2026-05-15-feat-oauth-tc-consent-residual-audit-plan.md
+  - knowledge-base/project/plans/archive/20261013-014038-2026-05-22-feat-legal-doc-sha-mirror-guard-plan.md
 ---
 
 # TC_VERSION Bump Policy

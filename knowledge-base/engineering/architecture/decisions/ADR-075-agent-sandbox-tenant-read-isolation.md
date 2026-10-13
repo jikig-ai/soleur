@@ -408,7 +408,7 @@ resolved 2026-10-11: the `KDENY_KERNEL_STREAM` fixed-argv sudoers grant plus a
 `sudo:`-signature denial fallback in `_canary_kdeny_read` give the row the host
 kernel stream it needed.
 
-**Basis.** `knowledge-base/project/specs/feat-one-shot-10032-sandbox-shim-procfs/measurements.md`
+**Basis.** `knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-10032-sandbox-shim-procfs/measurements.md`
 (in-image repro + rewritten-argv spawn, rung-2 EBADF measurement,
 `systempaths=unconfined` contrast); `infra/bwrap-shim/bwrap`;
 `test/bwrap-shim.test.ts`; `scripts/sandbox-canary.mjs`.

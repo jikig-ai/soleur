@@ -2,13 +2,14 @@
 # n=8
 # generated-from-run=incremental
 # generated-from-runs=incremental
-# default-weight-ms=1180
-# generated-at=2026-10-12T20:48:00Z
+# default-weight-ms=1177
+# generated-at=2026-10-13T14:36:23Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
 .claude/hooks/agent-token-tee.test.sh	3
 .claude/hooks/background-poll-prefer-monitor.test.sh	7
+.claude/hooks/bare-head-self-heal.test.sh	1
 .claude/hooks/brand-hex-commit-gate.test.sh	8
 .claude/hooks/browser-snapshot-credential-guard.test.sh	7
 .claude/hooks/cla-signed-author-gate.test.sh	4
@@ -136,6 +137,7 @@ plugins/soleur/skills/linear-fetch/test/persist-safe-integration.test.sh	4
 plugins/soleur/skills/linear-fetch/test/redact-linear-urls.test.sh	6
 plugins/soleur/skills/provision-hetzner/test/provision-hetzner-characterization.test.sh	1
 plugins/soleur/skills/review/test/emit-review-trailer.test.sh	5
+plugins/soleur/skills/review/test/ensure-semgrep.test.sh	1
 plugins/soleur/skills/review/test/fix-round-seats.test.sh	2
 plugins/soleur/skills/skill-security-scan/test/argv-ceiling.test.sh	1
 plugins/soleur/skills/skill-security-scan/test/meta-dir-reap.test.sh	2
@@ -298,6 +300,7 @@ scripts/anthropic-admin-key-6297	5
 scripts/anthropic-double-bill-8611	6
 scripts/assert-dependabot-drain-live	3
 scripts/assert-dependabot-drain-unit	2
+scripts/audit-dev-scheduled-shapes	1
 scripts/audit-suite-reads	8
 scripts/battery-ref-guard	5
 scripts/battery-tag-authorship	2
@@ -371,7 +374,6 @@ scripts/inngest-cutover-flip-rollout-7761	7
 scripts/inngest-host-not-serving-7674	4
 scripts/inngest-host-state	2
 scripts/inngest-liveness-classify	3
-scripts/inngest-luks-property-8296	6
 scripts/inngest-probe-heartbeat-feeder	6
 scripts/inngest-provision-unit-8562	5
 scripts/inngest-restart-age-gate	1
@@ -382,6 +384,7 @@ scripts/inngest-zot-client-authz-6500	3
 scripts/learning-retrieval-bench	7
 scripts/lib/bearer-curl.test.sh	8
 scripts/lib/frontmatter-strip.test.sh	1
+scripts/lib/git-data-rotate-stamp.test.sh	1
 scripts/lib/incidents-roots.test.sh	3
 scripts/lib/inngest-probe-row.test.sh	6
 scripts/lib/legal-base-ref.test.sh	7
@@ -459,6 +462,7 @@ scripts/orphan-process-reaper-mutations	5
 scripts/plugin-delivery-canary	7
 scripts/plugin-legacy-resolver-probe	3
 scripts/pre-push-ratchet-lane	4
+scripts/probe-github-app-mint	1
 scripts/probe-legal-corpus-truth-live	1
 scripts/prod-version-drift-check	5
 scripts/raise-tmp-tmpfs-ceiling	6

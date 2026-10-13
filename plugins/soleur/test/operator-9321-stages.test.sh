@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The re-cut #9321 bootstrap, driven stage by stage against STUBBED vendors (ADR-264).
 #
-# knowledge-base/project/specs/feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh gives the two
+# knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh gives the two
 # App-token release jobs a Doppler credential that reads only the two soleur-infra App values: copy
 # the values into the soleur-infra-app container, prove the copy is the live App with a real RS256
 # JWT, mint the read-only service token scoped to that container, store it as the infra-privileged
@@ -45,7 +45,7 @@ PLUGIN_ROOT="$(cd "${SUITE_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${PLUGIN_ROOT}/../.." && pwd)"
 LIB="${PLUGIN_ROOT}/scripts/lib/operator-script.sh"
 HOOK="${PLUGIN_ROOT}/hooks/operator-stage-approval.sh"
-S="${REPO_ROOT}/knowledge-base/project/specs/feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh"
+S="${REPO_ROOT}/knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh"
 
 PASS_COUNT=0
 FAIL_COUNT=0

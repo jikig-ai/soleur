@@ -23,7 +23,7 @@ Two verified causes for root-owned files:
 1. Legacy root-user containers from before the non-root migration (Dockerfile `USER soleur` added later)
 2. Kernel-specific user namespace behavior on certain configurations where the mapping is incomplete
 
-Note: The original hypothesis that bwrap UID remapping (`--uid 0 --gid 0`) causes root-owned files was debunked by the #1546 investigation. Bwrap's user namespace always maps writes back to the host UID regardless of in-sandbox appearance. See `knowledge-base/project/plans/2026-04-05-investigate-bwrap-uid-remap-root-owned-files-plan.md`.
+Note: The original hypothesis that bwrap UID remapping (`--uid 0 --gid 0`) causes root-owned files was debunked by the #1546 investigation. Bwrap's user namespace always maps writes back to the host UID regardless of in-sandbox appearance. See `knowledge-base/project/plans/archive/20261013-003106-2026-04-05-investigate-bwrap-uid-remap-root-owned-files-plan.md`.
 
 ## Investigation
 

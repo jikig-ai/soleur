@@ -49,7 +49,7 @@ EXIT_CODE=0
 **Date:** 2026-04-22
 **Contrived input (verbatim):** `fix: intermittent SSH connection reset when deploying to soleur-web-platform from GitHub Actions runner`
 **Regex matches:** `SSH`, `connection reset` — two hard hits against the Phase 1.4 trigger list in `plan/SKILL.md:123`.
-**Isolation worktree:** ran from a sibling worktree on `tmp/verify-ssh-gate` (non-`feat-*` branch) so plan-skill's Save Tasks step was a no-op per `plan/SKILL.md:499–501`. This prevented `knowledge-base/project/specs/feat-one-shot-verify-follow-through-2690-2691/tasks.md` from being clobbered and prevented the throwaway plan from being auto-committed + auto-pushed.
+**Isolation worktree:** ran from a sibling worktree on `tmp/verify-ssh-gate` (non-`feat-*` branch) so plan-skill's Save Tasks step was a no-op per `plan/SKILL.md:499–501`. This prevented `knowledge-base/project/specs/archive/20261013-003106-feat-one-shot-verify-follow-through-2690-2691/tasks.md` from being clobbered and prevented the throwaway plan from being auto-committed + auto-pushed.
 
 **Verification method caveat:** This verification was delegated to a general-purpose subagent which, per its own return contract, followed the `plan-network-outage-checklist.md` prescription directly rather than spawning the full ceremonial subagent fan-out (repo-research, learnings-researcher, functional-discovery, plan-review, etc.). The shortcut was acceptable because the Phase 1.4 / Phase 4.5 output contracts are deterministic procedural rules (read checklist → include its output in `## Hypotheses`; match regex → emit `Network-Outage Deep-Dive` subsection) — the gate's firing logic is what #2691 requested be verified, and the full subagent fan-out does not alter Phase 1.4 / 4.5 output structure. A future verification could force the full ceremonial run by invoking `skill: soleur:plan` from the main conversation context against the sibling worktree; the shortcut here is noted so it is not mistaken for a proof of end-to-end skill invocation.
 
@@ -96,7 +96,7 @@ Evidence excerpt (table row):
 - Sibling worktree removed: `git worktree remove .worktrees/tmp/verify-ssh-gate --force`.
 - Branch deleted: `git branch -D tmp/verify-ssh-gate`.
 - `git worktree list` confirms no `tmp/verify-ssh-gate` entry remains.
-- THIS feature branch's `knowledge-base/project/specs/feat-one-shot-verify-follow-through-2690-2691/tasks.md` unchanged by the Phase 2 exercise — the sibling-worktree isolation worked as designed.
+- THIS feature branch's `knowledge-base/project/specs/archive/20261013-003106-feat-one-shot-verify-follow-through-2690-2691/tasks.md` unchanged by the Phase 2 exercise — the sibling-worktree isolation worked as designed.
 
 **Outcome:** PASS. Both gates fired as specified; ordering and subsection contracts hold.
 

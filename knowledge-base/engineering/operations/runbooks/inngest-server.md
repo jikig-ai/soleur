@@ -1686,9 +1686,7 @@ makes the feeder report `fresh_heartbeat_paused` with exit 0, so the feeder itse
 reconcile is only meaningful after that record PR. If the command rolled back, read the newest completed run's
 `verdict=` line: `fresh_heartbeat_paused` after the unpause means that run predates it, `beat_failed` means
 the feeder cannot deliver, and any withheld verdict means the probe pipeline itself is dark (the finding this
-heartbeat exists for). To retry after a rollback, re-run the command (the heartbeat is paused again). The
-later stages (the cleanup gate and the order in which the superseded 8296 probe and its follow-through
-directive are removed) are tracked on #9703.
+heartbeat exists for). To retry after a rollback, re-run the command (the heartbeat is paused again).
 
 ## Unpause heartbeat
 
@@ -1754,7 +1752,7 @@ to fix the durability regression, not to prune its fallback store.
 > **Supabase Postgres** (`--postgres-uri`, dedicated EU project, session pooler :5432) +
 > **self-hosted Redis** (`--redis-uri`, AOF on `/mnt/data`). Closes the silent-loss gap where a
 > host re-provision drops every HTTP-armed `event-scheduled-reminder`. Executes the Postgres
-> migration ADR-030 deferred. Plan: `knowledge-base/project/plans/2026-06-17-feat-inngest-durable-backend-supabase-postgres-plan.md`.
+> migration ADR-030 deferred. Plan: `knowledge-base/project/plans/archive/20261013-032858-2026-06-17-feat-inngest-durable-backend-supabase-postgres-plan.md`.
 
 ### Host-rebuild durability matrix (per mechanism)
 

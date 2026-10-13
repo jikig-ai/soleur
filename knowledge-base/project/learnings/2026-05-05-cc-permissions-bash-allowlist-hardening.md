@@ -93,10 +93,10 @@ WeakMap keyed by ctx is the right shape — state auto-clears when conversation 
 
 ## Cross-references
 
-- Plan: `knowledge-base/project/plans/2026-05-05-fix-cc-readonly-os-commands-plan.md`
-- Brainstorm: `knowledge-base/project/brainstorms/2026-05-05-cc-session-bugs-batch-brainstorm.md`
-- Bundle spec: `knowledge-base/project/specs/feat-cc-session-bugs-batch/spec.md`
-- Prior allowlist plan: `knowledge-base/project/plans/2026-04-29-fix-command-center-qa-permissions-runaway-rename-plan.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-05-fix-cc-readonly-os-commands-plan.md`
+- Brainstorm: `knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-05-cc-session-bugs-batch-brainstorm.md`
+- Bundle spec: `knowledge-base/project/specs/archive/20261013-014038-feat-cc-session-bugs-batch/spec.md`
+- Prior allowlist plan: `knowledge-base/project/plans/archive/20261013-003106-2026-04-29-fix-command-center-qa-permissions-runaway-rename-plan.md`
 - Defense-in-depth invariant: `knowledge-base/project/learnings/security-issues/2026-03-20-canuse-tool-sandbox-defense-in-depth.md` (referenced; verify path)
 - AGENTS.md rules invoked: `cq-silent-fallback-must-mirror-to-sentry`, `cq-write-failing-tests-before`, `hr-weigh-every-decision-against-target-user-impact`
 - PR #3277, Issue #3252, Sibling bundle: #3250 (P1), #3251 (P2), #3253 (P3)

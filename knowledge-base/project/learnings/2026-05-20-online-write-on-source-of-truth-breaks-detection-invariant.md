@@ -105,5 +105,5 @@ degraded to a tautology checker (`x == x`).
 - Issue #4115 (originating brainstorm)
 - Issue #3187 (drift-guard implementation)
 - Brainstorm: `knowledge-base/project/brainstorms/2026-05-20-github-app-manifest-brainstorm.md`
-- Brainstorm: `knowledge-base/project/brainstorms/2026-05-05-github-app-drift-guard-brainstorm.md`
+- Brainstorm: `knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-05-github-app-drift-guard-brainstorm.md`
 - Rule: `hr-weigh-every-decision-against-target-user-impact`

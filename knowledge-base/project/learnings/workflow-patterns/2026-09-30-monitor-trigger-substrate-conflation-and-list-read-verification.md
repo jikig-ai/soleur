@@ -58,7 +58,7 @@ Three latent defects paged/discarded in one morning (post-mortem
 
 ## Reference
 
-- Plan: `knowledge-base/project/plans/2026-09-30-fix-cron-machinery-monitoring-integrity-plan.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-062704-2026-09-30-fix-cron-machinery-monitoring-integrity-plan.md`
 - Issues: #9272, #9273, #9274 — soak: `scripts/followthroughs/cron-machinery-soak-9272.sh`
 
 ## Session Errors

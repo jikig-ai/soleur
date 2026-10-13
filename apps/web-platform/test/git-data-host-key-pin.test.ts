@@ -1,6 +1,6 @@
 // #7226 / #5914 — Guard 5 (the app's git-data transport is always pinned; an absent or
 // malformed pin refuses, whatever the store flag says) and Guard 3 (pin shape), app side.
-// Plans: knowledge-base/project/plans/2026-09-21-security-pin-web-1-and-git-data-ssh-host-keys-plan.md
+// Plans: knowledge-base/project/plans/archive/20261013-051752-2026-09-21-security-pin-web-1-and-git-data-ssh-host-keys-plan.md
 // and 2026-09-28-feat-git-data-delete-unpinned-fallback-arm-5914-plan.md (host-key step 6).
 //
 // Every test re-imports the module under vi.resetModules() + vi.unstubAllEnvs(), so no

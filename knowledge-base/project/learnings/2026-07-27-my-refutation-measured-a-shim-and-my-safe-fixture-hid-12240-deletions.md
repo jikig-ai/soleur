@@ -192,6 +192,6 @@ cursor rather than by a time window.
 
 ## Related
 
-- `knowledge-base/project/specs/feat-one-shot-6992-iac-guard-sigpipe-fail-open/sweep.md` — full sweep, measurements, direction taxonomy
+- `knowledge-base/project/specs/archive/20261013-041741-feat-one-shot-6992-iac-guard-sigpipe-fail-open/sweep.md` — full sweep, measurements, direction taxonomy
 - `knowledge-base/project/learnings/test-failures/2026-07-18-pipefail-grep-q-early-match-sigpipe-flakes-drift-guards.md` — the prior art this PR's plan cited and then talked itself out of
 - #7004 (count-shaped reclamation), #7005 (remaining sweep scope)

@@ -80,7 +80,7 @@ Bash resolves the name at execution time. Nothing is parsed, so nothing can be m
 ## Measurements
 
 Measured 2026-08-03 in an isolated `claude -p` (2.1.220) against a throwaway `--settings` file;
-full evidence in `knowledge-base/project/specs/feat-7165-grep-rewrite-updatedinput/`.
+full evidence in `knowledge-base/project/specs/archive/20261013-051752-feat-7165-grep-rewrite-updatedinput/`.
 
 | Question | Result |
 |---|---|

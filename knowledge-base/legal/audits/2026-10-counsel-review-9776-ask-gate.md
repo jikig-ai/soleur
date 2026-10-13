@@ -7,7 +7,7 @@ pr: 9977
 status: SIGNED-OFF (CLO-agent-attested, Soleur-as-tenant-zero v1)
 signed_off_at: 2026-10-10
 signed_off_by: "CLO agent"
-disposition: "DISCHARGED (C1-C8 verified 2026-10-11 on the final tree; C9 post-merge observation pending, banner assurance ship-blocked in prod verification until recorded)"
+disposition: "NOT DISCHARGED as of 2026-10-12 (#10054): C1-C8 were verified 2026-10-11 against a mocked SDK and the live path was inert until the 2026-10-12 08:38Z deploy; C9 is a PROPOSED equivalence pending operator ratification, limb (b) production arrival NOT OBSERVED; banner assurance stays ship-blocked in prod verification until both limbs are recorded"
 conditions:
   - "C1 — one unit: banner copy, toggle copy, lane and tests ship in one build and one commit/revert unit; no feature flag; copy applied byte-for-byte from the ruling."
   - "C2 — the statement is true on the live canUseTool path: the real-factory wiring test, an un-acked owner is gated, and a prior git push or terraform grant does not launder the destroy forms."
@@ -17,7 +17,7 @@ conditions:
   - "C6 — tracking issue filed before merge for the AUP 5.7 / T&C 3a.7 parenthetical revision (deadline 2027-01-08 or earlier trigger); linked in the PR body and here."
   - "C7 — legal artifacts untouched and asserted: docs/legal/**, plugins/soleur/docs/pages/legal/**, TC_VERSION, TC_DOCUMENT_SHA, LEGAL_DOC_SHAS have an empty diff; the PR body states no TC_VERSION bump and no re-acceptance."
   - "C8 — ADR-284, the ADR-277 addendum and the C4 text do not say the hosted gate is complete; they carry the residual list."
-  - "C9 — post-merge, one recorded observation on dev hosted (throwaway repo): the card appears for git push --force origin <default> and terraform destroy and the telemetry arrives. Until then the banner assurance is ship-blocked in prod verification."
+  - "C9 [superseded 2026-10-12 (#10054): see the Addendum at the end — a PROPOSED equivalence, pending operator ratification] — post-merge, one recorded observation on dev hosted (throwaway repo): the card appears for git push --force origin <default> and terraform destroy and the telemetry arrives. Until then the banner assurance is ship-blocked in prod verification."
 supersedes_in_part: knowledge-base/legal/audits/2026-10-counsel-review-9776.md
 re_evaluation_triggers: "First arms-length Workspace Owner; first EEA-out operator; first regulated-industry tenant; any change widening or narrowing the lane's recognised set (including adding GraphQL deleteRef/deleteRepository/updateRef, terragrunt or pulumi); a measured miss in the near-miss telemetry on a destructive spelling; any new unblocked destructive command family; any change to BLOCKED_BASH_PATTERNS or the read-only allowlist; any enablement of the plugin hook in hosted sessions (ADR-277 D8 change); the next TC_VERSION bump; publication of #9603's hosted-coverage claim; 2027-01-08; any conversion of autonomous execution into a third-party-effecting send (Art. 22(3))."
 ---
@@ -97,5 +97,11 @@ retention period or transfer; lawful basis unchanged (Art. 6(1)(f) with Art. 32)
 
 ## Overall disposition
 
-**DISCHARGED** if C1-C9 hold at ship. C9 is a post-merge observation: until it is recorded the banner assurance stays ship-blocked in prod
+**[Superseded 2026-10-12 (#10054): NOT DISCHARGED; see the Addendum at the end.]** **DISCHARGED** if C1-C9 hold at ship. C9 is a post-merge observation: until it is recorded the banner assurance stays ship-blocked in prod
 verification and the operator is told so. If C1 or C2 fails the disposition is BLOCKED.
+
+## Addendum — 2026-10-12 (#10054)
+
+> **Superseded 2026-10-12 (#10054):** "C1-C8 verified 2026-10-11 ... C9 post-merge observation pending" and the C2 verification above. C2 was verified against a mocked SDK. The live path was inert until the 2026-10-12 08:38Z deploy, so for that interval the banner assurance was not true in production. The overall disposition stays not DISCHARGED until C9 limb (b) is recorded and limb (a) is ratified.
+
+**C9 — PROPOSED equivalence, pending operator ratification (not discharged).** The dev-hosted observation is proposed to be replaced by two limbs. **(a) Card behaviour:** the real-SDK probe `apps/web-platform/scripts/dev-probe-destroy-ask.ts` passing on the deployed SDK, bundled CLI and option builder (SDK 0.3.284, CLI 2.1.284), run on the DEV HOST and not in the hosted container (so the container sandbox is not exercised), for the owner, a non-owner member, a stale batch grant with a live-grant control, and the `gh` repo-delete family, with in-process emission of the pino line and Sentry event asserted. See ADR-284, "Runtime proof / C9 result". **(b) Production telemetry arrival:** NOT OBSERVED. There were no natural asks in the first hour after deploy, and the `ci` Doppler config carries no DSN or Better Stack token, so a local run cannot arrive at the sinks. Limb (a) may be closed by ratified decision, which closes it but does not make it a dev-hosted observation. Limb (b) stays open until one production arrival is recorded, pulled by API, or the operator records an explicit acceptance of in-process emission plus channel liveness as the substitute (ADR-284 Flip checklist criteria 4 and 6), after which the CLO updates this disposition. The wording "the ask gate is verified in production" may not appear anywhere.

@@ -82,8 +82,8 @@ console.log('Top 5:', counts.sort((a,b) => b.words - a.words).slice(0,5).map(c =
 
 ## Related
 
-- `knowledge-base/project/plans/2026-04-21-feat-peer-plugin-audit-sub-mode-plan.md` (this feature's plan)
+- `knowledge-base/project/plans/archive/20261013-003106-2026-04-21-feat-peer-plugin-audit-sub-mode-plan.md` (this feature's plan)
 - `knowledge-base/project/learnings/2026-04-21-peer-plugin-audit-brainstorm-patterns.md` (earlier session learning)
-- `knowledge-base/project/specs/feat-claude-skills-audit/spec.md` TR2 (Token-budget compliance)
+- `knowledge-base/project/specs/archive/20261013-003106-feat-claude-skills-audit/spec.md` TR2 (Token-budget compliance)
 - `plugins/soleur/test/components.test.ts:140-161` (the enforcing test)
 - PR `#2734`, issue `#2722`

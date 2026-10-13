@@ -141,7 +141,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # #5863 arm F — the mountns-only outer session wrap deliberately carries ZERO
 # --unshare-* flags: the vendored inner sandbox unconditionally unshares
 # user+pid+net and cannot nest under an outer userns (measured 2026-10-08;
-# see knowledge-base/project/plans/2026-10-08-feat-tenant-fs-isolation-plan.md
+# see knowledge-base/project/plans/archive/20261013-062704-2026-10-08-feat-tenant-fs-isolation-plan.md
 # Phase 0). NOTE: the file-cap elevation arm was reverted — released bwrap
 # (0.8–0.12) DIES on `real_uid != 0 && has_caps()`; upstream has no file-cap
 # support, so a cap'd /usr/bin/bwrap is poison to every bwrap call in the

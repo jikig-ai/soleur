@@ -77,7 +77,7 @@ The widened search trades "scoped to one block" for "matched via a stronger sema
 
 ## Cross-references
 
-- Plan: `knowledge-base/project/plans/2026-04-29-fix-deploy-pipeline-fix-ship-gate-and-postapply-contract-plan.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-003106-2026-04-29-fix-deploy-pipeline-fix-ship-gate-and-postapply-contract-plan.md`
 - PR: #3038 (Ref #2881, #3034)
 - Related: `knowledge-base/project/learnings/test-failures/2026-04-02-lazy-regex-semicolons-typescript-structural-tests.md` — same parity-test class (asserting structural invariants in markdown documentation via regex)
 - Resource definition: `apps/web-platform/infra/server.tf` (`terraform_data "deploy_pipeline_fix"` + `locals.hooks_json`)

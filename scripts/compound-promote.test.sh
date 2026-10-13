@@ -6,7 +6,7 @@
 # Tests for scripts/compound-promote.sh.
 #
 # Covers Phase 2 of the compound-promotion-loop plan
-# (knowledge-base/project/plans/2026-05-11-feat-compound-promotion-loop-plan.md):
+# (knowledge-base/project/plans/archive/20260511-172959-2026-05-11-feat-compound-promotion-loop-plan.md):
 #   T1: no promotion-config.yml → exit 0 + `::compound-promote-status::no-config`
 #   T2: promotion-config.yml with `enabled: false` → exit 0 +
 #       `::compound-promote-status::disabled`

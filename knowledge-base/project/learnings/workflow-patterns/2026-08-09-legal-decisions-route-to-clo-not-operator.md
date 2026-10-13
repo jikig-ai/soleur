@@ -93,7 +93,7 @@ string as a **pass**. Two checks over one token, agreeing, one of them wrong.
 - `plugins/soleur/skills/work/SKILL.md` — the CTO routing gate this mirrors, and both new gates
 - `knowledge-base/project/learnings/workflow-patterns/2026-06-15-architectural-fork-decisions-route-to-cto-not-operator.md`
   — the engineering precedent (#5325), same shape, same wrong first instinct
-- `knowledge-base/project/specs/feat-one-shot-7347-dpd-operator-assisted-scope/review-findings.md`
+- `knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7347-dpd-operator-assisted-scope/review-findings.md`
   — the ten P1s, including the three that prompted this
 - Memory: *never defer operator actions — Soleur users are non-technical; automate everything or fix
   in-session.* The routing default was the same failure in a new domain.

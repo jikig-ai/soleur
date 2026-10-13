@@ -2450,7 +2450,7 @@ mkdir -p "$T/nbfz/fzbin" || { printf 'FAIL SETUP: mkdir fzbin\n' >&2; exit 1; }
 cat > "$T/nbfz/fzbin/doppler" <<'SHIM'
 #!/usr/bin/env bash
 case "$1 $2" in
-  "secrets set") printf 'flagwrite\n' >> "$FZ_LOG"; exit "${STUB_FLAGWRITE_RC:-0}" ;;
+  "secrets set") [ -t 0 ] || timeout 2 cat > "$FZ_LOG.stdin"; printf 'flagwrite\n' >> "$FZ_LOG"; exit "${STUB_FLAGWRITE_RC:-0}" ;;
   "secrets get") echo stub-value; exit 0 ;;
 esac
 exit 0
@@ -2492,6 +2492,9 @@ case_fz() { # <finalizer-body-file>
   fz_run "$body" flip skipped "freeze_held flag_written"
   fz_expect "FZ1 flip, clean total unwind" 0 "ran=1 " 1 || return 1
   [[ "$FZ_LOGTXT" == *"flagwrite"* ]] && [[ "$FZ_LOGTXT" == *"track"* ]] || { FZ_WHY="FZ1 the unwind did not write the flag off and redeploy: $FZ_DETAIL"; return 1; }
+  # Wire assert (#9217): the flag-off value reached the doppler stub on stdin (the stub reads it first, before it logs or exits). ${KNOB:-default}: an
+  # exported-empty knob must not compare "" with "".
+  [ "$(cat "$T/nbfz/fz/log.stdin" 2>/dev/null)" = "${FZ_FLAG_OFF_VALUE:-false}" ] || { FZ_WHY="FZ1 the flag-off value did not reach the doppler stub on stdin: $FZ_DETAIL"; return 1; }
   fz_run "$body" flip skipped "freeze_held" STUB_UNFREEZE_RC=1
   fz_expect "FZ2 flip, unfreeze fails" 1 "freeze_held=1 ran=1 recovery_failed=1 " 1 || return 1
   fz_run "$body" flip skipped "flag_written" STUB_FLAGWRITE_RC=1

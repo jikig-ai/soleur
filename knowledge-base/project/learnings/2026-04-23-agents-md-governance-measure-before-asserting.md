@@ -106,7 +106,7 @@ If ANY of the four patterns applies, the rule PASSES the litmus (keep it). The d
 - Issue #2762 — retired-ids allowlist (load-bearing unblock for real byte savings)
 - Issue #2686 — original hybrid decision that banked on the estimate
 - PR #2754 — the migration that shipped +21 bytes net
-- Prior brainstorm: `knowledge-base/project/brainstorms/2026-04-21-agents-md-rule-threshold-brainstorm.md`
+- Prior brainstorm: `knowledge-base/project/brainstorms/archive/20261013-003106-2026-04-21-agents-md-rule-threshold-brainstorm.md`
 - Foundational learning: `knowledge-base/project/learnings/2026-02-25-lean-agents-md-gotchas-only.md` (ETH Zurich context cost data)
 - Retirement pattern learning: `knowledge-base/project/learnings/2026-04-21-agents-md-rule-retirement-deprecation-pattern.md`
 - Byte-budget learning: `knowledge-base/project/learnings/2026-04-18-agents-md-byte-budget-and-why-compression.md`

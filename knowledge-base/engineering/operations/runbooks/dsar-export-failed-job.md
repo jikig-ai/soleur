@@ -7,7 +7,7 @@ date: 2026-05-12
 # DSAR Export — Failed Job Triage
 
 **Issue:** #3637
-**Plan:** `knowledge-base/project/plans/2026-05-12-feat-dsar-art15-export-endpoint-plan.md`
+**Plan:** `knowledge-base/project/plans/archive/20261013-014038-2026-05-12-feat-dsar-art15-export-endpoint-plan.md`
 **Related:** `dsar-export-oversize.md`
 
 ## Symptom

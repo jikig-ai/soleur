@@ -111,5 +111,5 @@ anyway). It stands unaffected. The genuinely suspect readings are any that treat
   read-only, rides the existing `scheduled-followthrough-sweeper.yml`.
 - Record-correction: two `model.c4` edge edits (isolated→shared/collision; overclaim caveat), an
   ADR-100 create-time-render pointer, and this learning.
-- Plan: `knowledge-base/project/plans/2026-07-17-fix-host-name-telemetry-mislabel-plan.md`.
+- Plan: `knowledge-base/project/plans/archive/20261013-041741-2026-07-17-fix-host-name-telemetry-mislabel-plan.md`.
 - ADR: `knowledge-base/engineering/architecture/decisions/ADR-100-inngest-dedicated-single-host-singleton-control-plane.md`.

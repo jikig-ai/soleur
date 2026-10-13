@@ -1,6 +1,6 @@
 /**
  * Cross-workspace isolation suite — Path C (hybrid) per
- * knowledge-base/project/specs/feat-verify-workspace-isolation/{spec,sdk-probe-notes}.md.
+ * knowledge-base/project/specs/archive/20261013-003106-feat-verify-workspace-isolation/{spec,sdk-probe-notes}.md.
  *
  * Direct-bwrap cases (this file): FR2/3/4/5/6/7 — tier-4 process isolation, deterministic.
  * SDK-query cases (this file): FR2-smoke/8/9 — full-stack LLM sandbox, live API key.

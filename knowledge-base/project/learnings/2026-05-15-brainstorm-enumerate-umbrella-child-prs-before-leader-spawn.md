@@ -23,7 +23,7 @@ Concrete sequence:
 1. Operator invoked `/soleur:go #3244` → routed to `/soleur:brainstorm`.
 2. Phase 0.5 spawned CPO + CLO + CTO triad. CTO prompt instructed it to
    "verify the gate-zero premise" and read the umbrella spec at
-   `knowledge-base/project/specs/feat-agent-runtime-platform/spec.md` and
+   `knowledge-base/project/specs/archive/20261013-014038-feat-agent-runtime-platform/spec.md` and
    `tasks.md`.
 3. CTO read `tasks.md` on main and reported: "Phase 1.1 through 1.4 of PR-B
    are already DONE in this worktree per `tasks.md:54-90` … 1.5.1 migrate the

@@ -5,7 +5,7 @@ date: 2026-05-18
 related: [3244, 3947, 3984]
 related_adrs: [ADR-030]
 related_plans:
-  - knowledge-base/project/plans/2026-05-18-feat-pr-g-cohort-onboarding-plan.md
+  - knowledge-base/project/plans/archive/20261013-014038-2026-05-18-feat-pr-g-cohort-onboarding-plan.md
 brand_survival_threshold: single-user incident
 ---
 
@@ -75,9 +75,9 @@ Brand-survival threshold for PR-G: `single-user incident`. The operator (2026-05
 
 ## References
 
-- Plan: `knowledge-base/project/plans/2026-05-18-feat-pr-g-cohort-onboarding-plan.md`
-- Spec: `knowledge-base/project/specs/feat-pr-g-cohort-onboarding/spec.md`
-- Brainstorm: `knowledge-base/project/brainstorms/2026-05-18-pr-g-cohort-onboarding-brainstorm.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-18-feat-pr-g-cohort-onboarding-plan.md`
+- Spec: `knowledge-base/project/specs/archive/20261013-014038-feat-pr-g-cohort-onboarding/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-18-pr-g-cohort-onboarding-brainstorm.md`
 - Migration: `apps/web-platform/supabase/migrations/048_scope_grants.sql`
 - Server module: `apps/web-platform/server/scope-grants/is-granted.ts`
 - Webhook predicate: `apps/web-platform/app/api/webhooks/stripe/route.ts:437`

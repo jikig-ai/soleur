@@ -1,11 +1,12 @@
 # suite-durations.tsv — aggregated per-suite durations (ADR-240 amd.)
 # group=light
 # generated-from-runs=38090871167,38088705648,38086978176,38085840669,38055372785
-# default-weight-ms=1180
-# generated-at=2026-10-12T20:48:00Z
+# default-weight-ms=1177
+# generated-at=2026-10-13T14:36:23Z
 # generator=regenerate-shard-manifest.py v3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
 .claude/hooks/background-poll-prefer-monitor.test.sh	777	measured
+.claude/hooks/bare-head-self-heal.test.sh	1180	floor
 .claude/hooks/brand-hex-commit-gate.test.sh	2974	measured
 .claude/hooks/browser-snapshot-credential-guard.test.sh	512	measured
 .claude/hooks/cla-signed-author-gate.test.sh	950	measured
@@ -51,7 +52,7 @@
 .claude/hooks/session-rules-loader-headless.test.sh	55	measured
 .claude/hooks/session-rules-loader.test.sh	4490	measured
 .claude/hooks/settings-hook-exec-bit.test.sh	291	measured
-.claude/hooks/ship-kb-archive-gate.test.sh	1180	floor
+.claude/hooks/ship-kb-archive-gate.test.sh	1177	floor
 .claude/hooks/ship-net-issue-flow-gate.test.sh	12401	measured
 .claude/hooks/ship-operator-step-gate.test.sh	89	measured
 .claude/hooks/ship-runbook-ssh-gate.test.sh	71	measured
@@ -133,6 +134,7 @@ plugins/soleur/skills/linear-fetch/test/persist-safe-integration.test.sh	50	meas
 plugins/soleur/skills/linear-fetch/test/redact-linear-urls.test.sh	235	measured
 plugins/soleur/skills/provision-hetzner/test/provision-hetzner-characterization.test.sh	108	measured
 plugins/soleur/skills/review/test/emit-review-trailer.test.sh	3428	measured
+plugins/soleur/skills/review/test/ensure-semgrep.test.sh	1177	floor
 plugins/soleur/skills/review/test/fix-round-seats.test.sh	566	measured
 plugins/soleur/skills/skill-security-scan/test/argv-ceiling.test.sh	809	measured
 plugins/soleur/skills/skill-security-scan/test/meta-dir-reap.test.sh	1251	measured
@@ -295,6 +297,7 @@ scripts/anthropic-admin-key-6297	1883	measured
 scripts/anthropic-double-bill-8611	92	measured
 scripts/assert-dependabot-drain-live	40	measured
 scripts/assert-dependabot-drain-unit	1352	measured
+scripts/audit-dev-scheduled-shapes	1180	floor
 scripts/audit-suite-reads	83151	measured
 scripts/battery-ref-guard	150	measured
 scripts/battery-tag-authorship	26224	measured
@@ -368,7 +371,6 @@ scripts/inngest-cutover-flip-rollout-7761	8455	measured
 scripts/inngest-host-not-serving-7674	297	measured
 scripts/inngest-host-state	1982	measured
 scripts/inngest-liveness-classify	208	measured
-scripts/inngest-luks-property-8296	4112	measured
 scripts/inngest-probe-heartbeat-feeder	1194	floor
 scripts/inngest-provision-unit-8562	1061	measured
 scripts/inngest-restart-age-gate	75	measured
@@ -379,6 +381,7 @@ scripts/inngest-zot-client-authz-6500	499	measured
 scripts/learning-retrieval-bench	922	measured
 scripts/lib/bearer-curl.test.sh	3576	measured
 scripts/lib/frontmatter-strip.test.sh	197	measured
+scripts/lib/git-data-rotate-stamp.test.sh	1177	floor
 scripts/lib/incidents-roots.test.sh	177	measured
 scripts/lib/inngest-probe-row.test.sh	11441	measured
 scripts/lib/legal-base-ref.test.sh	324	measured
@@ -456,6 +459,7 @@ scripts/orphan-process-reaper-mutations	134967	measured
 scripts/plugin-delivery-canary	4094	measured
 scripts/plugin-legacy-resolver-probe	972	measured
 scripts/pre-push-ratchet-lane	8809	measured
+scripts/probe-github-app-mint	1180	floor
 scripts/probe-legal-corpus-truth-live	131	measured
 scripts/prod-version-drift-check	22764	measured
 scripts/raise-tmp-tmpfs-ceiling	1186	measured

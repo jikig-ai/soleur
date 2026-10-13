@@ -85,8 +85,8 @@ For multi-agent workflows in general: agent capability ≠ agent authorization. 
 
 - PR #3602 (PR-A1, merged 2026-05-12 07:03 UTC)
 - Branch: `worktree-feat-cc-soleur-go-transcript-hardening-pr-a2-3603`
-- Plan: `knowledge-base/project/plans/2026-05-12-feat-cc-soleur-go-transcript-hardening-pr-a2-plan.md`
-- Tasks: `knowledge-base/project/specs/feat-cc-soleur-go-transcript-hardening-pr-a2-3603/tasks.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-12-feat-cc-soleur-go-transcript-hardening-pr-a2-plan.md`
+- Tasks: `knowledge-base/project/specs/archive/20261013-014038-feat-cc-soleur-go-transcript-hardening-pr-a2-3603/tasks.md`
 - Review skill: `plugins/soleur/skills/review/SKILL.md` §5 (second-reviewer CONCUR gate)
 - Commit 52869eb7 — agent-authored P1 fix bundle
 - Commit 7bb469d0 — LRU cap on _p0DedupMap (this session)

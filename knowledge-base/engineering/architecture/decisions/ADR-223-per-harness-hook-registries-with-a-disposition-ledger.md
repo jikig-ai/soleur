@@ -12,7 +12,7 @@ Devin CLI loads `.claude/settings.json` hooks (`read_config_from.claude`),
 but its tool wire names are lowercase (`exec`, `write`, `edit`,
 `ask_user_question`, `run_subagent`, `skill`) where Claude matchers spell
 `Bash`, `Write`, `AskUserQuestion`. Measured in a controlled child session
-(`knowledge-base/project/specs/feat-settings-matcher-devin-audit/envelope-capture.md`):
+(`knowledge-base/project/specs/archive/20261013-051752-feat-settings-matcher-devin-audit/envelope-capture.md`):
 
 - `Bash` matchers are dead under Devin — the hook is loaded but never
   dispatched (#8205's latent-defect class, ~24 registrations).
