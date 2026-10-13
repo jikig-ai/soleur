@@ -439,8 +439,9 @@ export function buildAgentQueryOptions(
           ],
         },
       ],
-      // PostToolUse hooks (all fail-open, observe/additive-only — never touch the
-      // tool floor):
+      // PostToolUse hooks (all fail-open; none touches the tool floor. All but the
+      // optional WebFetch hook below are observe/additive-only; that one may also, behind a
+      // flag, REWRITE a flagged WebFetch result via updatedToolOutput — ADR-287):
       //   - ALWAYS: the #4826 git-lock marker mirror (matcher "Bash"). Observe-only;
       //     re-emits the in-sandbox SOLEUR_GIT_LOCK_*/"worktree wedge" markers to the
       //     server-side logger (→ Better Stack + Sentry breadcrumb), closing ADR-081's

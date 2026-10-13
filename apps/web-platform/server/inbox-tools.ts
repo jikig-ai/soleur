@@ -23,8 +23,7 @@ interface BuildInboxToolsOpts {
 }
 
 // The merged list carries email-derived rows (sender/subject/summary) that are
-// UNTRUSTED third-party content — envelope the payload so the agent sees the
-// caution before any third-party content.
+// UNTRUSTED third-party content; the "inbox" preamble in server/untrusted-content.ts frames them.
 
 export function buildInboxTools(opts: BuildInboxToolsOpts) {
   const { userId } = opts;
