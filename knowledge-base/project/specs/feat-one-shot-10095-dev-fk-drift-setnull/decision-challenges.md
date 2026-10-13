@@ -1,0 +1,15 @@
+# Decision Challenges — feat-one-shot-10095-dev-fk-drift-setnull
+
+Planning ran on a harness with no Agent/Task tool, so `pending - assumed`
+placeholders were written for the two `technical` rows per the
+technical-ruling-delegation contract; the `operator (scope)` row records the
+already-authorized-scope determination with its evidence. `soleur:ship`
+renders this table into the PR body.
+
+## Decision Classes
+
+| Item | Class | Ruling |
+|------|-------|--------|
+| Dev DB write (DROP/ADD FK constraint + ledger CAS UPDATE + comment replay on shared dev-Supabase, under the dev-suite mutex) — already-authorized issue scope, or does it need an explicit operator ack row? | operator (scope) | Authorized by issue scope (assumed at plan time, confirmed in-line): #10095 itself prescribes the write — "Apply the §Content-drift repair on dev (re-create the FK with `ON DELETE SET NULL` to match main)". Dev is unshared and synthetic-only per `hr-dev-prd-distinct-supabase-projects`, which the learning explicitly distinguishes from the prd-write ack class of `hr-menu-option-ack-not-prod-write-auth`; no prd credential is resolved anywhere in the plan. Direct precedent: #9994's 2026-10-12 closeout executed the identical write class on dev (dsar_export_jobs/dsar_export_audit_pii reconcile — "operator-approved, mutex + ledger backup + single transaction"). |
+| Exact repair SQL shape — class C targeted unit: `ALTER TABLE public.audit_github_token_use DROP CONSTRAINT audit_github_token_use_founder_id_fkey` + `ADD CONSTRAINT … FOREIGN KEY (founder_id) REFERENCES public.users(id) ON DELETE SET NULL`, the `anonymise_audit_github_token_use` comment replay, and the ledger CAS DO-block, applied via session-mode URL with `--single-transaction -v ON_ERROR_STOP=1 -f` | technical | pending - assumed: two ALTER TABLE statements (drop then re-add, 0-row table so FK validation is instant; `pg_depend` verified 0 dependents at plan time), followed by the comment replay (dev carries the applied blob's RESTRICT-era comment; only 052 ever comments the function so main's latest text is the 052-final text) and the CAS update — all in one `--single-transaction` unit on the `:5432` session-mode URL, matching the writer convention in `dev-ledger-reconcile.sh` (timeout pins, DO-block ROW_COUNT assert). |
+| Ledger `content_sha` rewrite — needed? (verify-first: the 052 row's sha is NULL, a pre-054 row by design) | technical | pending - assumed: yes — write `048013204a426cf4a024d083a57b22367b436b7a` (main's 052 blob) via `UPDATE … WHERE filename='052_multi_source_dedup.sql' AND content_sha IS NULL` with a ROW_COUNT=1 assert inside the same transaction. Verified at plan time that the row's `content_sha` is NULL (not a competing applied sha), so the CAS predicate `IS NULL` is the compare-and-set guard — anything that populated it between Phase 0 and the write matches 0 rows, raises, and rolls the whole unit back. Beyond the procedure's prescription it also registers the row for the content-drift probe, which skips NULL-sha rows today (the blind spot that hid this drift). |
