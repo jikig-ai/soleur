@@ -97,6 +97,18 @@ class RoleAdmission(unittest.TestCase):
         with self.assertRaises(Refused):
             policy(value)
 
+    def test_inherited_volumes_need_explicit_bound_destinations(self):
+        value = profiles()
+        value[NAME]['image_config']['Volumes'] = {'/fixture-data': {}}
+        with self.assertRaises(Refused):
+            policy(value)
+        value[NAME]['host']['Binds'] = ['supabase_db_fixture:/fixture-data']
+        p = policy(value)
+        p.roles.verify_image(NAME, {'Id': IMAGE, 'Config': value[NAME]['image_config']})
+        # A profile is not volume ownership; creation still refuses reserved mounts.
+        with self.assertRaises(Refused):
+            request(p)
+
     def test_role_host_dns_mount_alias_and_port_profiles_are_exact(self):
         for host in ({'Dns': ['8.8.8.8']}, {'Binds': ['/tmp/fixture:/unreviewed']},
                      {'PortBindings': {'443/tcp': [{'HostPort': '59051'}]}},

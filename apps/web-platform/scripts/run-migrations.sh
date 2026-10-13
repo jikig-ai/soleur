@@ -444,11 +444,15 @@ for migration_file in "$MIGRATIONS_DIR"/*.sql; do
       # Inspect AFTER this migration body in the SAME transaction: the file
       # adding the column gets its own apply-time hash, while earlier rows stay
       # NULL when 054 adds it. Do not create/backfill columns outside migrations.
+      # SQL dollar-quote delimiter is literal, not shell interpolation.
+      # shellcheck disable=SC2016
       printf '\nDO $migration_ledger$\nBEGIN\n'
       printf "  IF EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'public._schema_migrations'::regclass AND attname = 'content_sha' AND NOT attisdropped) THEN\n"
       printf "    INSERT INTO public._schema_migrations (filename, content_sha) VALUES ('%s', '%s');\n" "$filename" "$content_sha"
       printf '  ELSE\n'
       printf "    INSERT INTO public._schema_migrations (filename) VALUES ('%s');\n" "$filename"
+      # SQL dollar-quote delimiter is literal, not shell interpolation.
+      # shellcheck disable=SC2016
       printf '  END IF;\nEND;\n$migration_ledger$;\n'
     else
       printf "\nINSERT INTO public._schema_migrations (filename) VALUES ('%s');\n" "$filename"

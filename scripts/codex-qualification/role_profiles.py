@@ -54,6 +54,20 @@ class RoleProfiles:
             require(not profile['image_config'].get('OnBuild'), 'Inherited build triggers refused')
             require(isinstance(profile['host'], dict) and set(profile['host']) <= HOST_FIELDS,
                     'Unknown role host recipe')
+            volumes = profile['image_config'].get('Volumes')
+            require(volumes is None or isinstance(volumes, dict), 'Malformed inherited volumes')
+            binds = profile['host'].get('Binds', [])
+            require(isinstance(binds, list), 'Exact role bind list required')
+            destinations = set()
+            for bind in binds:
+                require(isinstance(bind, str) and '\x00' not in bind and
+                        len(bind.split(':')) in (2, 3), 'Exact source/destination bind required')
+                parts = bind.split(':')
+                require(parts[1].startswith('/') and parts[1] not in destinations and
+                        (len(parts) == 2 or parts[2] in ('ro', 'rw')), 'Ambiguous role bind destination')
+                destinations.add(parts[1])
+            require(all(destination in destinations for destination in (volumes or {})),
+                    'Inherited anonymous volume is outside owned bind census')
             sysctls = profile['host'].get('Sysctls')
             require(not sysctls or (profile['role'] in ('tls', 'resolver') and
                     sysctls == {'net.ipv4.ip_unprivileged_port_start': '0'}), 'Unreviewed namespace sysctl')

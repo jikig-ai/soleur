@@ -6,6 +6,8 @@ import ssl
 import tempfile
 import threading
 import unittest
+from unittest.mock import Mock, patch
+import local_tls
 from local_tls import Refused, material_recipe, generate_fixture_material, server_context, client_context, TLSProxy
 from prepare import browser_contract
 
@@ -130,6 +132,50 @@ class LocalTLS(unittest.TestCase):
                 TLSProxy(self.hostname, ip, 8000)
 
     def test_actual_https_listener_refuses_foreign_host_before_upstream(self):
+        upstream = Mock(side_effect=OSError('Fixture forbids every upstream connection'))
+        status, payload = self.https_response(b'GET / HTTP/1.0\r\nHost: foreign.invalid\r\n\r\n', upstream)
+        self.assertEqual(status, 502)
+        self.assertEqual(payload, b'')
+        upstream.assert_not_called()
+
+    def test_actual_https_listener_forwards_valid_host_to_strict_synthetic_response(self):
+        payload = b'owned-synthetic-upstream-response'
+        response = Mock(status=200)
+        response.getheaders.return_value = [('Content-Type', 'text/plain')]
+        response.read.return_value = payload
+        connection = Mock()
+        connection.getresponse.return_value = response
+        upstream = Mock(return_value=connection)
+        status, actual = self.https_response(('GET /fixture HTTP/1.0\r\nHost: ' + self.hostname +
+                                             '\r\nConnection: close\r\n\r\n').encode(), upstream)
+        self.assertEqual(status, 200)
+        self.assertEqual(actual, payload)
+        upstream.assert_called_once_with('172.28.5.3', 8000, timeout=5)
+        connection.request.assert_called_once_with('GET', '/fixture', b'',
+                                                   {'Host': self.hostname, 'X-Forwarded-Proto': 'https'})
+        connection.getresponse.assert_called_once_with()
+        response.read.assert_called_once_with(TLSProxy.LIMIT + 1)
+        connection.close.assert_called_once_with()
+
+    def test_foreign_host_oracle_detects_deleted_handler_admission(self):
+        # Compile an isolated in-memory mutant. The exercised listener still
+        # uses the fail-on-construction mock, so no nonfixture socket can open.
+        source = Path(local_tls.__file__).read_text()
+        guard = '\n                    proxy.admit(self.command, self.path, list(self.headers.items()))\n'
+        self.assertEqual(source.count(guard), 1)
+        namespace = {'__name__': 'synthetic_tls_admission_mutant'}
+        exec(compile(source.replace(guard, '\n'), '<synthetic-tls-admission-mutant>', 'exec'), namespace)
+        result = unittest.TestResult()
+        with patch.dict(globals(), {'TLSProxy': namespace['TLSProxy']}):
+            unittest.FunctionTestCase(self.test_actual_https_listener_refuses_foreign_host_before_upstream).run(result)
+        self.assertEqual(result.errors, [])
+        self.assertEqual(len(result.failures), 1)
+        self.assertIn("Expected 'mock' to not have been called", result.failures[0][1])
+        self.assertIn("call('172.28.5.3', 8000, timeout=5)", result.failures[0][1])
+
+    def https_response(self, request, upstream):
+        # Every upstream constructor is mocked for the complete server lifetime.
+        # Even a deleted admission guard cannot contact the nonfixture address.
         server = TLSProxy(self.hostname, '172.28.5.3').make_server(('127.0.0.1', 0), self.material)
         errors = []
         def serve():
@@ -139,21 +185,22 @@ class LocalTLS(unittest.TestCase):
                 errors.append(error)
         server.timeout = 3
         worker = threading.Thread(target=serve)
-        worker.start()
-        try:
-            with socket.create_connection(server.server_address, timeout=3) as raw:
-                with client_context(self.material['ca']).wrap_socket(raw, server_hostname=self.hostname) as connection:
-                    connection.sendall(b'GET / HTTP/1.0\r\nHost: foreign.invalid\r\n\r\n')
-                    response = http.client.HTTPResponse(connection)
-                    response.begin()
-                    self.assertEqual(response.status, 502)
-                    self.assertEqual(response.read(), b'')
-                    response.close()
-        finally:
-            worker.join(4)
-            server.server_close()
-            self.assertFalse(worker.is_alive())
-            self.assertEqual(errors, [])
+        with patch('local_tls.http.client.HTTPConnection', upstream):
+            worker.start()
+            try:
+                with socket.create_connection(server.server_address, timeout=3) as raw:
+                    with client_context(self.material['ca']).wrap_socket(raw, server_hostname=self.hostname) as connection:
+                        connection.sendall(request)
+                        response = http.client.HTTPResponse(connection)
+                        response.begin()
+                        result = response.status, response.read()
+                        response.close()
+                        return result
+            finally:
+                worker.join(4)
+                server.server_close()
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(errors, [])
 
 
 if __name__ == '__main__':

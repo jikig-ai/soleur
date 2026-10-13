@@ -8,6 +8,12 @@ from prepare import canonical, git, preparation, require, sha
 
 RUNNER = 'apps/web-platform/scripts/run-migrations.sh'
 GUARD = 'apps/web-platform/scripts/sql/codex-auth-mode-pre-migration.sql'
+# Exact canonical bytes, including the narrow literal-SQL ShellCheck comments.
+# Updating this pin requires review of the complete replacement runner; comment
+# anchors, reordered assembly and other changes never establish clearance.
+REVIEWED_RUNNER_SHA256 = '63b2335267a729eb703634c1bae762b053b6ce6cdb3a679bf2952a6d400e9fb5'
+# Historical baseline bc0f0d47: known fresh-schema failure, never clearance.
+BLOCKED_BASELINE_RUNNER_SHA256 = '93b55c090ed2827ffe902ecccde5e68c1d9e5a47bc7abe57c70760640bf702b4'
 SCENARIOS = ('00_support.sql', '10_seed.sql', '20_before_replacement.sql',
              '21_after_replacement.sql', '30_scope_and_ack.sql', '40_race_holder.sql',
              '41_race_waiter.sql', '42_race_observe.sql', '43_race_assert.sql', '50_erasure.sql')
@@ -35,27 +41,17 @@ def ledger_sql(migrations):
             "END $census$;\n")
 
 def runner_blockers(runner, migrations):
-    # This is evidence of the current-source blocker, not a general shell parser.
-    # Any changed shape requires review before this recipe can claim clearance.
-    text = runner.decode()
-    anchors = ["filename TEXT PRIMARY KEY,", "applied_at TIMESTAMPTZ NOT NULL DEFAULT now()",
-               'git hash-object "$migration_file"',
-               "INSERT INTO public._schema_migrations (filename, content_sha)"]
-    if not all(anchor in text for anchor in anchors):
-        return ['runner-shape-review-required']
+    identity = sha(runner)
+    if identity == BLOCKED_BASELINE_RUNNER_SHA256:
+        return ['fresh-ledger-content-sha-column']
+    if identity != REVIEWED_RUNNER_SHA256:
+        return ['runner-identity-review-required']
     creators = [item for item in migrations
                 if re.search(rb'ADD COLUMN IF NOT EXISTS content_sha text',
                              base64.b64decode(item['body_base64']))]
     if len(creators) != 1:
         return ['content-sha-creation-review-required']
-    fixed = ["printf '\\nDO $migration_ledger$\\nBEGIN\\n'",
-             "FROM pg_attribute WHERE attrelid = 'public._schema_migrations'::regclass AND attname = 'content_sha' AND NOT attisdropped",
-             "INSERT INTO public._schema_migrations (filename) VALUES ('%s');"]
-    if all(anchor in text for anchor in fixed):
-        return []
-    if migrations and migrations[0]['path'] < creators[0]['path']:
-        return ['fresh-ledger-content-sha-column']
-    return ['runner-shape-review-required']
+    return []
 
 def recipe(repo, source):
     contract = preparation(repo, source)

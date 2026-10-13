@@ -81,7 +81,8 @@ class Proxy:
         Path(self.path).unlink(missing_ok=True)
 
     def fail(self, handler, message):
-        self.fatal = message
+        with self.lock:
+            self.fatal = message
         body = json.dumps({'message': 'Recovery boundary refused: ' + message}).encode()
         handler.send_response(403)
         handler.send_header('Content-Type', 'application/json')
@@ -166,6 +167,7 @@ class Proxy:
                 raise Refused('Docker request body exceeds reviewed bound')
             payload = handler.rfile.read(length)
             with self.lock:
+                self.require_open()
                 route = re.sub(r'^/v[0-9.]+(?=/)', '', urlsplit(handler.path).path)
                 if handler.command == 'POST' and route == '/volumes/create':
                     config = json.loads(payload)
@@ -218,7 +220,9 @@ class Proxy:
                        if k.lower() not in HOP_HEADERS | {'host', 'content-length'}}
             headers['Content-Length'] = str(len(payload))
             headers['Connection'] = 'close'
-            backend.request(handler.command, path, body=payload, headers=headers)
+            with self.lock:
+                self.require_open()
+                backend.request(handler.command, path, body=payload, headers=headers)
             response = backend.getresponse()
             # Creation responses must be recorded before the client can start an ID.
             route = re.sub(r'^/v[0-9.]+(?=/)', '', urlsplit(path).path)
@@ -276,6 +280,11 @@ class Proxy:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as backend:
             return self.hijack_owned(handler, path, payload, backend)
 
+    def require_open(self):
+        """Call under the controller lock at admission and immediately at dispatch."""
+        if time.monotonic() >= self.deadline or (self.fatal and not self.cleanup_only):
+            raise Refused(self.fatal or 'Proxy deadline exhausted')
+
     def hijack_owned(self, handler, path, payload, backend):
         backend.settimeout(30)
         backend.connect(self.backend)
@@ -283,7 +292,9 @@ class Proxy:
         headers['Content-Length'] = str(len(payload))
         request = (handler.command + ' ' + path + ' HTTP/1.1\r\n' +
                    ''.join(k + ': ' + v + '\r\n' for k, v in headers.items()) + '\r\n').encode()
-        backend.sendall(request + payload)
+        with self.lock:
+            self.require_open()
+            backend.sendall(request + payload)
         head = b''
         while b'\r\n\r\n' not in head:
             block = backend.recv(4096)

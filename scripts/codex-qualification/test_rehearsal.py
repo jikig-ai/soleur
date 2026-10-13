@@ -2,12 +2,37 @@
 import base64
 from pathlib import Path
 import shutil
+import subprocess
 import tempfile
 import unittest
 from prepare import Refused, git, sha
-from rehearsal import ledger_sql, recipe, runner_blockers
+from rehearsal import BLOCKED_BASELINE_RUNNER_SHA256, ledger_sql, recipe, runner_blockers
 
 REPO = Path(__file__).resolve().parents[2]
+
+class RunnerAdmission(unittest.TestCase):
+    def test_only_exact_canonical_runner_clears_identity_review(self):
+        runner = (REPO/'apps/web-platform/scripts/run-migrations.sh').read_bytes()
+        migrations = [{'path':'migrations/001_fixture.sql','body_base64':''},
+                      {'path':'migrations/054_ledger.sql',
+                       'body_base64':base64.b64encode(b'ADD COLUMN IF NOT EXISTS content_sha text').decode()}]
+        self.assertEqual(runner_blockers(runner,migrations),[])
+        start=runner.index(b'    if [[ -n "$content_sha" ]]; then')
+        end=runner.index(b'\n  } | psql',start)
+        assembly=runner[start:end]
+        commented=b'\n'.join(b'# '+line for line in assembly.splitlines())
+        mutants={
+            'comment-only':b'\n'.join(b'# '+line for line in runner.splitlines())+b'\nexit 0\n',
+            'deleted-assembly':runner[:start]+b'    :\n'+runner[end:]+b'\n'+commented+b'\n',
+            'commented-assembly':runner[:start]+b'    :\n'+commented+b'\n'+runner[end:],
+            'moved-before-body':runner.replace(assembly,b'',1).replace(b'  if ! {\n',b'  if ! {\n'+assembly+b'\n',1),
+        }
+        for label,body in mutants.items():
+            with self.subTest(mutant=label):
+                syntax=subprocess.run(['bash','-n'],input=body,capture_output=True,
+                                      env={'PATH':'/usr/bin:/bin'},timeout=5)
+                self.assertEqual(syntax.returncode,0,syntax.stderr.decode())
+                self.assertEqual(runner_blockers(body,migrations),['runner-identity-review-required'])
 
 class Rehearsal(unittest.TestCase):
     @classmethod
@@ -60,12 +85,20 @@ class Rehearsal(unittest.TestCase):
             ledger_sql(files + [{'path': "migrations/a'bad.sql", 'blob': 'a'*40, 'body_base64': ''}])
 
     def test_fresh_schema_fix_is_recognized_but_inherited_runner_stays_blocked(self):
-        old = b"filename TEXT PRIMARY KEY,\napplied_at TIMESTAMPTZ NOT NULL DEFAULT now()\ngit hash-object \"$migration_file\"\nINSERT INTO public._schema_migrations (filename, content_sha)"
+        # Reconstruct the exact historical baseline without requiring that
+        # commit to exist in a shallow CI checkout; verify its full identity.
+        current=(REPO/'apps/web-platform/scripts/run-migrations.sh').read_bytes()
+        start=current.index(b'      # A fresh --bootstrap=skip')
+        end=current.index(b'    else\n',start)
+        prior=b'''      printf "\\nINSERT INTO public._schema_migrations (filename, content_sha) VALUES ('%s', '%s');\\n" "$filename" "$content_sha"
+'''
+        old=current[:start]+prior+current[end:]
+        self.assertEqual(sha(old),BLOCKED_BASELINE_RUNNER_SHA256)
         self.assertEqual(runner_blockers(old, self.result['forward_migrations']), ['fresh-ledger-content-sha-column'])
         self.assertEqual(runner_blockers((REPO/'apps/web-platform/scripts/run-migrations.sh').read_bytes(),self.result['forward_migrations']), [])
         self.assertFalse(self.result['execute_available'])
         self.assertEqual(self.result['runner']['argv'], ['bash', 'apps/web-platform/scripts/run-migrations.sh', '--bootstrap=skip'])
-        self.assertEqual(runner_blockers(b'other runner', []), ['runner-shape-review-required'])
+        self.assertEqual(runner_blockers(b'other runner', []), ['runner-identity-review-required'])
 
     def test_runtime_receipts_are_required_and_operations_zero(self):
         self.assertEqual(set(self.result['operations'].values()), {0})
