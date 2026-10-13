@@ -1210,7 +1210,7 @@ PRODUCER_JOIN=(
   '.claude/hooks/grep-rewrite.test.sh | jq | drains | 2 | *'
   '.claude/hooks/guardrails.test.sh | perl | exempt | deliberate-fault never: def 1034 `exit 127` first statement (perl absent stub, the fixture is "without perl the fallback still gates") (reach T1; t1:rc0/61s; hits 6)'
   '.github/scripts/test/fixtures-validate-infra-templates.sh | terraform | exempt | unverified reach probe: suite did not finish green here (cap or host), no matching piped call seen (1 non-test producers) (reach T1; t1:rc1/10s red:rc1/5s; hits 0)'
-  '.github/scripts/test/test-mint-inngest-bootstrap-tag.sh | gh | exempt | arm-drain all-arms-keyed: def 112 `body=$(cat)` at opener+29, after the arg parse; the earlier exits (FORBID 99, unmodelled flag 64, DELETE) are rows where no piped call may arrive (reach T2; t2:rc0/175s; hits 62 (stdin-flag))'
+  '.github/scripts/test/test-mint-inngest-bootstrap-tag~.sh | gh | exempt | arm-drain all-arms-keyed: def 112 `body=$(cat)` at opener+29, after the arg parse; the earlier exits (FORBID 99, unmodelled flag 64, DELETE) are rows where no piped call may arrive (reach T2; t2:rc0/175s; hits 62 (stdin-flag))'
   'apps/cla-evidence/scripts/bootstrap-r2-probe.test.sh | doppler | drains | 1 | *'
   'apps/web-platform/infra/ci-deploy.test.sh | curl | exempt | text-only derived sites cloud-init-inngest.yml:336,426 are grep-pinned only; ci-deploy.sh:378 feeds --config - via < <(printf) not a pipe'
   'apps/web-platform/infra/ci-deploy.test.sh | docker | drains | 2 | --password-stdin'
@@ -1356,6 +1356,10 @@ PRODUCER_JOIN=(
   'tests/scripts/test-workspaces-luks-cutover-gate.sh | cryptsetup | exempt | text-only reach probe: suite ran green and no piped call reached the stub (1 non-test producers) (reach T1; t1:rc0/5s; hits 0)'
   'tests/scripts/test-zot-log-channel-probe.sh | awk | drains | 2 | *'
 )
+# A row may spell its test-file column with one `~` before the extension (`name~.sh`): scripts/battery-tag-authorship.test.sh follows every path literal of a closure
+# member, so a row that names a glob-collected suite in full pulls that suite (and its tag-authoring git commands) into the battery closure. The `~` hides the literal from
+# that scan; this line removes it before any reader sees a row.
+PRODUCER_JOIN=("${PRODUCER_JOIN[@]//\~/}")
 # PJ-DERIVE-BEGIN
 # One awk program: the five definitions of the derivation. Measured, not promised: the program parses and the guard prints the same verdict lines (and the same triples) under gawk, mawk 1.3.4
 # (20200120 and 20240123) and busybox awk 1.38 (command and result in the S7c evidence, the sections "Fix round A" and "Post-merge and fix round C"); it uses no \b, no gensub and no intervals (all three differ: mawk has no
