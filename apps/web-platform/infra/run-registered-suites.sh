@@ -1065,7 +1065,7 @@ dump_one() {
 UNACCOUNTED=()
 if (( PASS + RED != ${#SUITES[@]} )); then
   mapfile -t UNACCOUNTED < <(
-    comm -13 \
+    LC_ALL=C comm -13 \
       <(sed -nE 's/^(PASS|RED) +//p' "$LOG" | LC_ALL=C sort -u) \
       <(printf '%s\n' "${SUITES[@]}" | LC_ALL=C sort -u)
   )

@@ -764,7 +764,10 @@ done < <(grep -hE '^[[:space:]]*[0-9*][0-9*/,-]*( +[0-9*][0-9*/,-]*){4} +root ' 
          | grep -vF 'zot-log-shipper.sh' | awk '{print $1}')
 MINE_MINUTES="$TMP/minemins"
 expand_minutes "$CRON_MINUTE" > "$MINE_MINUTES"
-COLLISIONS="$(comm -12 <(sort -n "$SIB_MINUTES" | uniq) <(sort -n "$MINE_MINUTES" | uniq) | tr '\n' ' ')"
+# Both sides are compared as byte strings: comm needs LEXICOGRAPHICALLY sorted input, so a numeric sort
+# (sort -n) feeding it drops real overlaps ({5,15,30} vs {15,45} returned nothing) and the disjointness
+# assertion below passed over a genuine cron collision.
+COLLISIONS="$(LC_ALL=C comm -12 <(LC_ALL=C sort -u "$SIB_MINUTES") <(LC_ALL=C sort -u "$MINE_MINUTES") | tr '\n' ' ')"
 assert "T12 at least one sibling cron line was found (otherwise the disjointness check is vacuous)" \
   "[[ -s '$SIB_MINUTES' ]]"
 assert "T12 the shipper's minutes are DISJOINT from every sibling doppler-run cron (collisions: '$COLLISIONS')" \

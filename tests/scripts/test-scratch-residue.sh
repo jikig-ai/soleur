@@ -7,12 +7,13 @@
 # SIGTERM, including the soleur-inc-* incident sandbox. A SIGKILLed runner leaves only an entry the
 # reapers can attribute (marker-bearing soleur-run.<pid>.* root, classified marker:<pid>).
 #
-# LEAVES. The eight directly-run suites measured leaking on main (6 bun TS suites, grep-rewrite,
-# test-weakness-miner) PLUS one bun suite run from plugins/soleur (its own bunfig preload), one shell
-# suite that sources test-helpers.sh (its normal-exit leaf), one `python -m unittest` module, the pytest
-# chokepoint hook (pytest itself is not installed on every host, so the hook pytest calls is driven
-# directly: pytest_configure is the whole of the conftest chokepoint) and two vitest leaves -- one
-# existing test and one GENERATED test that really mkdtemp's and leaks if the root is unbound.
+# LEAVES. The directly-run suites measured leaking on main plus the leaves added since — TS suites
+# driven via `bun test`, shell suites and producer scripts run directly (one sources test-helpers.sh,
+# two adopt scratch-session mid-flight), a `python -m unittest` module, the pytest chokepoint hook
+# (pytest itself is not installed on every host, so the hook pytest calls is driven directly:
+# pytest_configure is the whole of the conftest chokepoint) and vitest leaves including a GENERATED
+# test that really mkdtemp's and leaks if the root is unbound. The `add_leaf` registry below is the
+# enumeration; this paragraph names the categories, not the count.
 #
 # PROBES (beyond the leaves): SIGTERM/SIGINT/SIGKILL per runtime, the marker contract and a byte/mode
 # PARITY pin across the three writers (with drifted-copy controls), the python fork guard,
@@ -222,6 +223,14 @@ add_leaf sh-seccomp-alert       'bash scripts/seccomp-unenforced-alert.test.sh' 
 add_leaf sh-sentry-issue        'bash scripts/sentry-issue.test.sh' sh
 add_leaf sh-content-publisher   'bash scripts/test-content-publisher.sh' sh
 add_leaf sh-watch-live-verify   'bash scripts/watch-live-verify-pass.test.sh' sh
+# (#7004) 12 mktemp sites under a growing four-arm EXIT trap; the begin+splice
+# adoption confines direct-run residue (the measured inngest-ci-*/inngest-arm-*
+# kill-residue classes) to an owned soleur-run.<pid>.* root. CI/GITHUB_ACTIONS
+# are scrubbed: under ambient CI vars the suite takes its CI-mode path and
+# HARD-FAILS on tag assertions that need a tags-fetched checkout (the shard's
+# clone lacks them) — residue is the leaf's probe, and the suite's own CI job
+# runs those assertions under the full fetch.
+add_leaf sh-cloud-init-inngest  'env -u CI -u GITHUB_ACTIONS bash apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh' sh
 add_leaf py-unittest            'python3 -m unittest tests.scripts.test_lint_rule_ids'
 add_leaf py-pytest-configure    'python3 -c "import tests.conftest as c; c.pytest_configure()"'
 VITEST_BIN="$REPO_ROOT/apps/web-platform/node_modules/.bin/vitest"
@@ -324,12 +333,19 @@ verdict "$([[ "$n_noop" == "0" ]] && echo 0 || echo 1)" "H3: a no-op runtime lea
 REAL_MKTEMP="$(command -v mktemp)"
 assert_fixture_dir "$BASE"
 mkdir -p "$BASE/shim"
-cat > "$BASE/shim/mktemp" <<'SHIMEOF'
+cat > "$BASE/shim/mktemp" <<SHIMEOF
 #!/bin/sh
-printf 'x\n' >> "$SOLEUR_SHIM_LOG"
-exec "$SOLEUR_REAL_MKTEMP" "$@"
+# The env-carried SOLEUR_SHIM_LOG is wiped when a leaf sandboxes a child with
+# \`env -i\` (cloud-init-inngest-bootstrap.test.sh's G4 runner does) while the
+# shim stays on the inherited PATH — the old form also read env-carried
+# SOLEUR_REAL_MKTEMP and then ran \`exec ""\` so the LEAF failed 127, an
+# instrument breaking the measured system. The real mktemp path is baked in at
+# creation; the count line is skipped (never fails) when the log var is gone.
+# Bound: allocations inside env-scrubbed children go uncounted — safe direction
+# (a false-RED on anti-vacuity, never a false-GREEN).
+[ -n "\${SOLEUR_SHIM_LOG:-}" ] && printf 'x\n' >> "\$SOLEUR_SHIM_LOG"
+exec "$REAL_MKTEMP" "\$@"
 SHIMEOF
-export SOLEUR_REAL_MKTEMP="$REAL_MKTEMP"
 chmod +x "$BASE/shim/mktemp"
 shim_count() { if [[ -f "$1" ]]; then wc -l < "$1" | tr -d ' '; else echo 0; fi; }
 assert_fixture_dir "$BASE"
