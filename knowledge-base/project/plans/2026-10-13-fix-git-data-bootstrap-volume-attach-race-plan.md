@@ -34,8 +34,8 @@ design is smaller than the one this plan describes:
   sleep and settle counts, the size-0 refusal, five mutants). The rehearsal and plan-shape suites
   kept the pins the CTO restored in the fix round (delay command, cap below 300, LUKS stagger,
   four plan-shape refusal rows).
-- **Measured at the review head (2026-10-13):** `user_data` stored 30,732 B of 32,768 B (headroom
-  2,036 B; 2,656 B on `main`, so this PR spends 620 B). Five earlier boots in the Overview and
+- **Measured at the review head (2026-10-13):** `user_data` stored 30,736 B of 32,768 B (headroom
+  2,032 B; 2,656 B on `main`, so this PR spends 624 B); payload digest `a6092398c8e0034e04a22a4ca73a135998ebd35de88930c580b84ec8dffdb1f2`. Five earlier boots in the Overview and
   Context sections below means four (ADR-239 names them).
 - Everything below that names the seam, the section-1 wait, `luks-discover`, the in-loop settle, the
   "Guard 4" label (now the late-attach guard), or a 5 s sleep with a 5 s settle describes the
