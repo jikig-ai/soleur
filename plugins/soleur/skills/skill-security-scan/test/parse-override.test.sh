@@ -535,14 +535,72 @@ else
   bad "tab-separated findings_json accepted (rc=$PARSE_RC, reason='$reason', out=$PARSE_OUT)"
 fi
 
+# --- Arm 11: valued-duplicate keys resolve last-wins end-to-end ---------------
+# Presence recomputes on each key occurrence; the value extractors must read
+# the SAME occurrence. Two verdict orders pin the direction both ways: the
+# dup-high arm must MATCH (last is HIGH-RISK) and the dup-low arm must reject
+# (last is LOW-RISK). A first-match extractor passes arm A and fails arm B
+# backwards — each direction discriminates. (ship-advisor finding)
+R="$REPOS/arm-duphi"
+rel="$OVERRIDE_DIR/2026-10-13-duphi-skill.md"
+mk_repo "$R"
+write_artifact "$R" "duphi-skill" \
+  $'findings_json: {"code-execution": {"verdict": "REVIEW", "count": 1}}\nverdict: LOW-RISK' \
+  "HIGH-RISK"
+commit_all "$R" "add override artifact"
+run_parse "$R"
+dup_hi_ok=0
+[[ "$PARSE_RC" -eq 0 ]] && in_bucket matched "$rel" && dup_hi_ok=1
+
+R="$REPOS/arm-duplo"
+rel="$OVERRIDE_DIR/2026-10-13-duplo-skill.md"
+mk_repo "$R"
+write_artifact "$R" "duplo-skill" \
+  $'findings_json: {"code-execution": {"verdict": "REVIEW", "count": 1}}\nverdict: HIGH-RISK' \
+  "LOW-RISK"
+commit_all "$R" "add override artifact"
+run_parse "$R"
+reason="$(reason_for "$rel")"
+if [[ "$dup_hi_ok" -eq 1 && "$PARSE_RC" -ne 0 ]] && in_bucket invalid_schema "$rel" \
+   && [[ "$reason" == *"verdict must be"* ]]; then
+  ok "valued-duplicate verdict resolves last-wins (HIGH-RISK-last matched, LOW-RISK-last rejected)"
+else
+  bad "valued-dup divergence (hi_rc/dup_ok=$dup_hi_ok lo_rc=$PARSE_RC reason='$reason' out=$PARSE_OUT)"
+fi
+
+# --- Arm 12: embedded-colon values must not truncate to a valid prefix --------
+# `-F:`/`print $2` extraction reads `sha:junk` as `sha` and `slug:junk` as
+# `slug` — the gate then validates a prefix the document never wrote. Two
+# artifacts in one repo: the sha-suffixed one lands in stale_findings (prefix
+# compare on the full scalar), the skill-suffixed one fails the slug regex.
+R="$REPOS/arm-trunc"
+rel_sha="$OVERRIDE_DIR/2026-10-13-sha-trunc-skill.md"
+rel_sk="$OVERRIDE_DIR/2026-10-13-sk-trunc-skill.md"
+mk_repo "$R"
+write_artifact "$R" "sha-trunc-skill" \
+  "findings_json: {\"code-execution\": {\"verdict\": \"REVIEW\", \"count\": 0}}"$'\n'"rule_pack_sha256: ${MANIFEST_SHA}:junk" \
+  "HIGH-RISK" "rule_pack_sha256"
+write_artifact "$R" "sk-trunc-skill" \
+  "findings_json: {\"code-execution\": {\"verdict\": \"REVIEW\", \"count\": 0}}"$'\n'"skill: sk-trunc-skill:junk" \
+  "HIGH-RISK" "skill"
+commit_all "$R" "add override artifacts"
+run_parse "$R"
+reason="$(reason_for "$rel_sk")"
+if [[ "$PARSE_RC" -ne 0 ]] && in_bucket stale_findings "$rel_sha" \
+   && in_bucket invalid_schema "$rel_sk" && [[ "$reason" == *"skill: field invalid"* ]]; then
+  ok "embedded-colon values reject (sha:junk -> stale, slug:junk -> invalid)"
+else
+  bad "embedded-colon truncation accepted (rc=$PARSE_RC, reason='$reason', out=$PARSE_OUT)"
+fi
+
 echo "=== parse-override: $PASS passed, $FAIL failed ==="
 # Real failures first — report them as failures, not as vacuity.
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi
 # Assertion floor: a run that executed fewer than every arm reads RED, never
 # vacuously green — the `(( PASS < N ))` counter-comparison shape is the one
 # guard-vacuity-floor.test.sh derives floors from.
-if (( PASS < 16 )); then
-  echo "VACUITY: only $PASS of 16 arms passed — refusing green" >&2
+if (( PASS < 18 )); then
+  echo "VACUITY: only $PASS of 18 arms passed — refusing green" >&2
   exit 1
 fi
 echo "OK: $PASS assertions"

@@ -94,11 +94,10 @@ for path in "${added[@]}"; do
   # (deny-direction by design); the key arm's ` ` (not [[:space:]]) and the
   # block arm's leading-space requirement deny tab indentation, which YAML
   # forbids (CRLF is normalized first — `\r` is stripped before matching, so a
-  # CRLF-authored block map still reads as a key + indented block). Deliberate
-  # asymmetry: presence resolves duplicate keys last-wins,
-  # but the value extractors below take the FIRST `^f:` match — a repeated key
-  # reads stale downstream; single-dup shapes still fail closed (a trailing
-  # empty dup is reported missing here), so the divergence is cosmetic.
+  # CRLF-authored block map still reads as a key + indented block). Duplicate
+  # keys resolve last-wins here AND in the value extractors below — presence
+  # and extraction must read the same occurrence, or the gate and the artifact
+  # disagree about which value was validated (ship advisor finding).
   missing="$(printf '%s\n' "$fm" | awk -v fields="${required_fields[*]}" '
     BEGIN { n = split(fields, req, " ") }
     { sub(/\r$/, "") }
@@ -131,7 +130,10 @@ for path in "${added[@]}"; do
   fi
 
   # Verdict must be HIGH-RISK or REVIEW.
-  verdict="$(echo "$fm" | awk -F: '/^verdict:/ { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); gsub(/"|'"'"'/, "", $2); print $2; exit }')"
+  # Last-wins, whole-rest-of-line: a `-F:` field read truncates `verdict:
+  # HIGH-RISK:junk` at the embedded colon and validates the prefix, and a
+  # first-match read diverges from presence's last-wins — both fail open.
+  verdict="$(echo "$fm" | awk '/^verdict:/ { v = $0 } END { sub(/^verdict:[[:space:]]*/, "", v); gsub(/"|'"'"'/, "", v); gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); print v }')"
   case "$verdict" in
     HIGH-RISK|REVIEW) ;;
     *)
@@ -145,13 +147,14 @@ for path in "${added[@]}"; do
   # these `format:` constraints but no validator ran — enforce them here.
   field_value() {
     echo "$fm" | awk -v fld="$1" '
-      $0 ~ "^"fld":" {
-        # Capture everything after the first colon (preserve embedded :).
-        sub("^"fld":[[:space:]]*", "")
-        gsub(/^["'"'"']|["'"'"']$/, "")
-        gsub(/^[[:space:]]+|[[:space:]]+$/, "")
-        print
-        exit
+      $0 ~ "^"fld":" { v = $0 }
+      END {
+        # Capture everything after the first colon (preserve embedded :),
+        # last occurrence wins — presence resolved last-wins.
+        sub("^"fld":[[:space:]]*", "", v)
+        gsub(/^["'"'"']|["'"'"']$/, "", v)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+        print v
       }'
   }
   approver="$(field_value approver)"
@@ -186,7 +189,7 @@ for path in "${added[@]}"; do
   fi
 
   # Freshness: rule_pack_sha256 prefix must match current manifest sha (≥8 chars).
-  artifact_sha="$(echo "$fm" | awk -F: '/^rule_pack_sha256:/ { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); gsub(/"|'"'"'/, "", $2); print $2; exit }')"
+  artifact_sha="$(echo "$fm" | awk '/^rule_pack_sha256:/ { v = $0 } END { sub(/^rule_pack_sha256:[[:space:]]*/, "", v); gsub(/"|'"'"'/, "", v); gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); print v }')"
   prefix_len="${#artifact_sha}"
   if [ "$prefix_len" -lt 8 ]; then
     invalid="$(echo "$invalid" | jq --arg p "$path" --arg r "rule_pack_sha256 prefix too short (need >=8 chars)" '. + [{path: $p, reason: $r}]')"
@@ -203,7 +206,7 @@ for path in "${added[@]}"; do
   # frontmatter slug match each other (defense-in-depth against template-copy
   # mistakes), AND that consumers (CI gate, PreToolUse hook) verify the slug
   # binds to the specific HIGH-RISK skill being installed.
-  artifact_skill="$(echo "$fm" | awk -F: '/^skill:/ { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); gsub(/"|'"'"'/, "", $2); print $2; exit }')"
+  artifact_skill="$(echo "$fm" | awk '/^skill:/ { v = $0 } END { sub(/^skill:[[:space:]]*/, "", v); gsub(/"|'"'"'/, "", v); gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); print v }')"
   if [ -z "$artifact_skill" ] || ! [[ "$artifact_skill" =~ $slug_re ]]; then
     invalid="$(echo "$invalid" | jq --arg p "$path" --arg r "skill: field invalid (got: $artifact_skill)" '. + [{path: $p, reason: $r}]')"
     continue
