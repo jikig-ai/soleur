@@ -18,6 +18,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Use kebab-case for all file and directory names (agents, skills, commands, learnings, plans)
 - Agent descriptions must be 1-3 sentences of routing text only (when to use this agent) -- no `<example>` blocks, no `<commentary>`, no protocol details. Examples bloat the system prompt on every turn; routing accuracy comes from concise descriptions plus disambiguation sentences for sibling agents
 - Agent prompts must contain only instructions the LLM would get wrong without them -- omit general domain knowledge, error handling, and boilerplate the model already knows
+- Batch edit scripts (heredoc python/sed applied to repo files) must assert the needle matched -- `assert old in s` before `s.replace`, or a post-write `grep -F` -- because a silent no-match that reports applied ships an unverified diff; verify the post-state exists, never the edit script's own output (PR #10228 fix round)
 - Agent frontmatter must include a `model` field (`inherit`, `haiku`, `sonnet`, `opus`, or `fable`) to control execution model
 - Command frontmatter must include an `argument-hint` field describing expected arguments
 - Add allow rules to `.claude/settings.json` for session-start commands that inherently require `$()` -- don't extract them into scripts
