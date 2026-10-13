@@ -273,9 +273,11 @@ resource "logtail_exploration_alert" "inngest_luks_wrong_volume" {
   # wrong-volume rows while the store sitting on a non-encrypted device goes unpaged (the plaintext
   # volume hcloud_volume.inngest_redis this once named was destroyed 2026-10-09, #8285).
   # The dead-probe sibling that carries the absence-of-signal case is
-  # betteruptime_heartbeat.inngest_server_probe (uptime-alerts.tf), born paused pending its
-  # feeder (tracked there, #9703); scripts/followthroughs/inngest-luks-property-8296.sh reports the
-  # same silence as a daily CANNOT ESTABLISH on that tracker in the interim.
+  # betteruptime_heartbeat.inngest_server_probe (uptime-alerts.tf), armed and fed by
+  # scheduled-inngest-probe-heartbeat.yml (#9703; arm record: runbook inngest-server.md section
+  # "Arming the probe heartbeat (#9703)"; live state is read from Better Stack, not from this file).
+  # The daily follow-through probe that once reported the same silence was retired 2026-10-12
+  # (#9703 Stage 3b).
   alert_type          = "threshold"
   operator            = "higher_than"
   value               = 0

@@ -151,7 +151,6 @@ MUST_FIND=(
   "tests/scripts/lib/inngest-host-dark-gate.sh"
   "scripts/followthroughs/inngest-host-not-serving-7674.sh"
   "scripts/followthroughs/inngest-cutover-flip-rollout-7761.sh"
-  "scripts/followthroughs/inngest-luks-property-8296.sh"
   "scripts/followthroughs/inngest-luks-cutover-6894.sh"
   "scripts/inngest-host-state.sh"
   "scripts/inngest-probe-heartbeat-feeder.sh"

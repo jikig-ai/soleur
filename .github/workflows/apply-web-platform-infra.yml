@@ -4171,6 +4171,18 @@ jobs:
             *) echo "::warning::unrecognised outcome pair '${APPLY_OUTCOME}/${POLL_OUTCOME}' — read the step log; do not treat this run as verified" ;;
           esac
 
+      - name: Rotate completed (d6 marker)
+        # (#10166) Read by git-data-cutover.yml's d6_replace_stale gate through scripts/lib/git-data-rotate-stamp.sh.
+        # LAST step, no always(), no continue-on-error: the implicit success() makes "marker success" mean
+        # "every earlier step, including Dispatch summary's exit 1 backstops, succeeded". Skipped on a plain
+        # replace, on a plan-only rotate and after any failure. Its name matches none of the census G5
+        # gate-name patterns (interlock, validate dispatch, verify required, preflight; the parity test pins a
+        # superset of them) and carries neither
+        # "Validate" nor "confirm" (the #10166 ruling); the comment sits INSIDE the step because extractStep
+        # cuts at the next `- name:`, so a comment above it would attach to Dispatch summary's block.
+        if: inputs.apply_target == 'git-data-host-rotate' && inputs.plan_only != true
+        run: echo "git-data-host-rotate completed - apply, boot poll, pin load and summary succeeded (the d6 marker)"
+
   # Selected by `-f apply_target=workspaces-luks-cutover` (#6604, ADR-119). The FIVE workspaces_luks
   # resources (workspaces-luks.tf) are OPERATOR_APPLIED_EXCLUSIONS — deliberately NOT in the per-PR
   # `-target=` allow-list (they ride THIS dispatch), and the per-PR `host_creates` TRIPWIRE fires on
