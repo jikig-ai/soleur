@@ -37,7 +37,10 @@ import { createHash, randomBytes } from "node:crypto";
 
 import { mintFounderJwt } from "@/lib/supabase/tenant";
 import { isTemplateAuthorized } from "@/server/templates/is-template-authorized";
-import { tearDownTenantUser } from "@/test/helpers/tenant-isolation-teardown";
+import {
+  hasUndeletableActionSendsAnchor,
+  tearDownTenantUser,
+} from "@/test/helpers/tenant-isolation-teardown";
 
 const INTEGRATION_ENABLED = process.env.TENANT_INTEGRATION_TEST === "1";
 
@@ -181,7 +184,15 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       for (const u of [userA, userB]) {
         if (!u.id) continue;
         assertSynthetic(u.email);
-        await tearDownTenantUser(service, u);
+        try {
+          await tearDownTenantUser(service, u);
+        } catch (err) {
+          // #10254: a user who ever had an action_sends row is undeletable
+          // (anonymised WORM row anchors its message). Tolerate ONLY that
+          // verified defect — any other teardown failure stays loud.
+          if (!(await hasUndeletableActionSendsAnchor(service, u.id)))
+            throw err;
+        }
       }
     }, 60_000);
 

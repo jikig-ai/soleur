@@ -358,3 +358,20 @@ in `decision-challenges.md` (operator-scope, recommended authorized action).
 ## Files to Create
 
 - None.
+
+## Post-review discovery: #10254 tolerated residue
+
+`tenant-integration` run 38469450080 surfaced a **pre-existing production
+schema defect** the loud teardown correctly exposed:
+`action_sends.message_id` is `NOT NULL REFERENCES messages(id)` (NO ACTION,
+mig 051) and the anonymised WORM row keeps anchoring its message, so
+`deleteUser` 500s on `action_sends_message_id_fkey` for any user who ever had
+an action_sends row — `server/account-delete.ts` has no unanchor path either
+(Art-17 erasure gap, filed as #10254).
+
+Only `action-sends-worm` and `template-authorizations-worm` seed action_sends
+among the 15 carriers. Their three teardown sites wrap `tearDownTenantUser` in
+a try/catch that rethrows UNLESS the exported
+`hasUndeletableActionSendsAnchor` probe confirms the documented defect shape —
+the tolerance swallows only #10254's known cause; every other teardown failure
+stays loud. The leaked user rows are owned by #10254.
