@@ -135,9 +135,9 @@ done
 PROBE_SRC="$SCRIPT_DIR/../../../scripts/followthroughs/registry-luks-live-8386.sh"
 if [ -r "$PROBE_SRC" ]; then
   # shellcheck disable=SC2034  # read inside assert()'s eval'd condition string, which shellcheck cannot follow
-  EMITTED_NAMES="$(printf '%s\n' "$LINE_ASSIGN" | grep -oE 'store_[a-z_]+=' | sed 's/=$//' | sort -u)"
+  EMITTED_NAMES="$(printf '%s\n' "$LINE_ASSIGN" | grep -oE 'store_[a-z_]+=' | sed 's/=$//' | LC_ALL=C sort -u)"
   # shellcheck disable=SC2034  # read inside assert()'s eval'd condition string, which shellcheck cannot follow
-  CONSUMED_NAMES="$(grep -oE '^F_[A-Z]+="store_[a-z_]+"' "$PROBE_SRC" | sed -E 's/.*"(store_[a-z_]+)"/\1/' | sort -u)"
+  CONSUMED_NAMES="$(grep -oE '^F_[A-Z]+="store_[a-z_]+"' "$PROBE_SRC" | sed -E 's/.*"(store_[a-z_]+)"/\1/' | LC_ALL=C sort -u)"
   assert "the emitter ships at least one store_* field (extraction non-vacuity)" \
     "[ -n \"\$EMITTED_NAMES\" ]"
   assert "the grader names at least one store_* field (extraction non-vacuity)" \
@@ -146,7 +146,7 @@ if [ -r "$PROBE_SRC" ]; then
   # not required: store_mount_base is emitted for off-box auditability of a __NOMATCH__ row and
   # is producer-only by design (CTO ruling, #8386 review).
   assert "every field the grader reads is a field the emitter ships" \
-    "[ -z \"\$(comm -23 <(printf '%s\\n' \"\$CONSUMED_NAMES\") <(printf '%s\\n' \"\$EMITTED_NAMES\"))\" ]"
+    "[ -z \"\$(LC_ALL=C comm -23 <(printf '%s\\n' \"\$CONSUMED_NAMES\") <(printf '%s\\n' \"\$EMITTED_NAMES\"))\" ]"
 else
   assert "the grader source is readable (the seam assertion above is not vacuous)" "false"
 fi

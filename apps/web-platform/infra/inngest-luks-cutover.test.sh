@@ -837,9 +837,9 @@ if [ "$_dcfg_bad" -eq 0 ]; then ok "structural: every doppler secrets call is --
 # The seam list is DERIVED, not trusted: every LUKS_* read in the body is in the gate's unset list.
 # A name the script ASSIGNS is not a seam (the environment value is overwritten), so it is excluded.
 _assigned="$(grep -oE '^[[:space:]]*LUKS_[A-Z_]+=' "$SUT" | tr -d ' =' | LC_ALL=C sort -u)"
-_seam_body="$(grep -oE '\$\{?LUKS_[A-Z_]+' "$SUT" | tr -d '${' | LC_ALL=C sort -u | comm -23 - <(printf '%s\n' "$_assigned"))"
+_seam_body="$(grep -oE '\$\{?LUKS_[A-Z_]+' "$SUT" | tr -d '${' | LC_ALL=C sort -u | LC_ALL=C comm -23 - <(printf '%s\n' "$_assigned"))"
 _seam_gate="$(awk '/for _seam in \\/{f=1;next} f&&/^  do$/{exit} f' "$SUT" | grep -oE 'LUKS_[A-Z_]+' | LC_ALL=C sort -u)"
-if [ -n "$_seam_gate" ] && [ "$_seam_body" = "$_seam_gate" ]; then ok "structural: every seam read is in the argv-gated unset list ($(printf '%s\n' "$_seam_gate" | grep -c .) names)"; else no "structural: seam set drift — body-only: $(comm -23 <(printf '%s\n' "$_seam_body") <(printf '%s\n' "$_seam_gate") | tr '\n' ' ')"; fi
+if [ -n "$_seam_gate" ] && [ "$_seam_body" = "$_seam_gate" ]; then ok "structural: every seam read is in the argv-gated unset list ($(printf '%s\n' "$_seam_gate" | grep -c .) names)"; else no "structural: seam set drift — body-only: $(LC_ALL=C comm -23 <(printf '%s\n' "$_seam_body") <(printf '%s\n' "$_seam_gate") | tr '\n' ' ')"; fi
 # T2's readability predicates are SEPARATE from its comparisons (Guard 2 row 1).
 if grep -qF 'if [[ "$a" == "__UNREADABLE__" || "$b" == "__UNREADABLE__" ]]; then printf '"'"'t2-listing-unreadable'"'"'' "$SUT" \
    && grep -qF 'if ! is_uint "$a" || ! is_uint "$b"; then printf '"'"'t2-bytes-unreadable'"'"'' "$SUT"; then ok "structural: T2 checks readability on its own before any comparison"; else no "structural: a T2 readability check was merged into (or removed from) its comparison"; fi
