@@ -101,6 +101,7 @@ DELAY_PT=terraform_data.rehearsal_attach_delay_pt
 # entries are that output verbatim apart from the ids, which are fixed strings here.
 real_delay_plan() {
   local out="$1"; shift
+  assert_fixture_dir "$out"
   plan "$out" "$@"
   jq -c --arg l "$DELAY_LUKS" --arg p "$DELAY_PT" '.resource_changes += ([$l, $p] | map({
       address: ., mode: "managed", type: "terraform_data", name: (. | split(".")[1]),

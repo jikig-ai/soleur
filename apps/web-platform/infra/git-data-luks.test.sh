@@ -1392,7 +1392,12 @@ assert_mutation "B18 isLuks-rc-branch (the size probe loses its timeout)" p_islu
 # timeout on a scratch PATH. Two rewrites are needed and both are asserted to have landed: the
 # absolute tool paths point at the stubs, and `-b` (a block-special test no fixture can satisfy
 # without root) becomes `-e`; B18 still pins the real `-b`. Each scenario asserts its OWN counts.
-_b18r_dir="$(mktemp -d "${TMPDIR:-/tmp}/gdluks-b18r.XXXXXX")"
+_b18r_dir="$(mktemp -d -t gdluks-b18r.XXXXXX)" || { echo "FAIL: mktemp (B18r)" >&2; exit 2; }
+case "$_b18r_dir" in
+  /*) ;;
+  *) echo "FATAL: B18r scratch dir '$_b18r_dir' is not absolute; refusing" >&2; exit 2 ;;
+esac
+trap 'rm -rf "$_b18r_dir"' EXIT
 mkdir -p "$_b18r_dir/bin"
 cat > "$_b18r_dir/bin/sleep" <<'STUB'
 printf 'sleep %s\n' "$*" >> "$B18R_LOG"
