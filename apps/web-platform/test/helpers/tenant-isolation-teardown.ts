@@ -17,6 +17,10 @@ import { withGoTrueRetry } from "./gotrue-retry";
  * fixture's leftovers match (the PR #2597 permissive-regex incident class).
  * mu1.integration.test.ts uses a different domain (@soleur-test.invalid)
  * and is deliberately NOT listed — its teardown is #9995's scope.
+ *
+ * `workspace-backfill-parity-` was added for #10096's drain of
+ * workspace-backfill-trigger-parity.test.ts — the lone drain file whose
+ * generator deviates from the `tenant-isolation-` shape.
  */
 export const SYNTHETIC_PREFIXES = [
   "tenant-isolation-",
@@ -26,6 +30,7 @@ export const SYNTHETIC_PREFIXES = [
   "conv-rail-cross-tenant-",
   "dsar-cross-tenant-",
   "workspace-fixture-",
+  "workspace-backfill-parity-",
 ] as const;
 
 const escapeRegExp = (s: string): string =>

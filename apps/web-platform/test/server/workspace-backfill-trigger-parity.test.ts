@@ -32,6 +32,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { randomBytes } from "node:crypto";
 import { DEFAULT_ORG_NAME } from "@/lib/workspace-name";
+import { tearDownTenantUser } from "@/test/helpers/tenant-isolation-teardown";
 
 const INTEGRATION_ENABLED = process.env.TENANT_INTEGRATION_TEST === "1";
 
@@ -105,21 +106,15 @@ describe.skipIf(!INTEGRATION_ENABLED)(
     afterAll(async () => {
       if (!service || !user.id) return;
       assertSynthetic(user.email);
-      // FK-RESTRICT cascade unwinds: members → workspaces → organizations.
-      // Wrap each in try/catch (the PostgREST builder is a thenable, not
-      // a real Promise; `.catch` chained on the builder is invalid).
-      try {
-        await service.from("workspace_members").delete().eq("user_id", user.id);
-      } catch {}
-      try {
-        await service.from("workspaces").delete().eq("id", user.id);
-      } catch {}
-      try {
-        await service.from("organizations").delete().eq("owner_user_id", user.id);
-      } catch {}
-      try {
-        await service.auth.admin.deleteUser(user.id);
-      } catch {}
+      // The prior manual FK-reverse (members → workspaces → organizations →
+      // auth delete) silently failed: the member delete re-fires the WORM
+      // audit trigger, leaving a workspace_member_actions RESTRICT row that
+      // re-blocks the auth delete inside a swallowed try/catch. The helper
+      // anonymises instead of deleting those rows, so nothing re-fires the
+      // audit trigger; NULL-owner org/workspace residue is the accepted
+      // canonical-helper semantic (#10096). Fail-loud: a teardown failure
+      // reds the suite instead of leaking the user.
+      await tearDownTenantUser(service, user);
     }, 30_000);
 
     test("trigger creates the canonical solo trio on signup", async () => {

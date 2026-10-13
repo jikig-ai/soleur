@@ -37,6 +37,7 @@ import { createHash, randomBytes } from "node:crypto";
 
 import { mintFounderJwt } from "@/lib/supabase/tenant";
 import { isTemplateAuthorized } from "@/server/templates/is-template-authorized";
+import { tearDownTenantUser } from "@/test/helpers/tenant-isolation-teardown";
 
 const INTEGRATION_ENABLED = process.env.TENANT_INTEGRATION_TEST === "1";
 
@@ -170,34 +171,19 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       userA_grantId = grantRows![0].id as string;
     });
 
+    // The helper's anonymise-first sequence covers all three RPCs this
+    // suite ran manually (anonymise_action_sends,
+    // anonymise_template_authorizations, anonymise_scope_grants) and is
+    // fail-loud per #10096 — a swallowed teardown error is a silent user
+    // leak. 60_000: ~24 sequential round-trips × 2 users under
+    // withGoTrueRetry.
     afterAll(async () => {
       for (const u of [userA, userB]) {
         if (!u.id) continue;
         assertSynthetic(u.email);
-        try {
-          await service.rpc("anonymise_action_sends", { p_user_id: u.id });
-        } catch {
-          /* tolerate */
-        }
-        try {
-          await service.rpc("anonymise_template_authorizations", {
-            p_user_id: u.id,
-          });
-        } catch {
-          /* tolerate */
-        }
-        try {
-          await service.rpc("anonymise_scope_grants", { p_user_id: u.id });
-        } catch {
-          /* tolerate */
-        }
-        try {
-          await service.auth.admin.deleteUser(u.id);
-        } catch {
-          /* tolerate */
-        }
+        await tearDownTenantUser(service, u);
       }
-    });
+    }, 60_000);
 
     // --- Carve-out (#4709) seed helpers ---------------------------------
     // A fresh active scope_grant for userA (prior tests anonymise userA's
