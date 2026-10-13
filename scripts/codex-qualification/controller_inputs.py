@@ -147,7 +147,8 @@ def writer_census(writers):
         require(type(writer['process_pid']) is int and writer['process_pid'] > 0, 'Writer PID required')
         text_identity(writer['process_birth'])
         identities.append((writer['container_id'], writer['process_pid'], writer['process_birth']))
-    require(len(set(identities)) == len(identities), 'Duplicate writer identity refused')
+    require(len({(container, pid) for container, pid, _birth in identities}) == len(identities),
+            'Duplicate writer PID or contradictory process birth refused')
     return sorted(identities)
 
 

@@ -54,8 +54,18 @@ class ControllerInputs(unittest.TestCase):
         self.assertEqual(self.contract['roles']['db']['profile'], None)
 
     def test_complete_role_and_reserved_name_census(self):
+        expected = {role: ('supabase_' + role + '_synthetic-attempt',)
+                    for role in ('db', 'kong', 'auth', 'inbucket', 'rest', 'storage')}
+        expected.update(renderer=('codex9051-renderer-synthetic-attempt-first',
+                                  'codex9051-renderer-synthetic-attempt-replacement'),
+                        migration=tuple('codex9051-job-synthetic-attempt-' + str(n) for n in range(1, 9)),
+                        browser=('codex9051-browser-synthetic-attempt',),
+                        tls=('codex9051-tls-synthetic-attempt',),
+                        resolver=('codex9051-resolver-synthetic-attempt',))
+        self.assertEqual(set(expected), set(operational.ROLES))
         for role in operational.ROLES:
-            for name in inputs.role_names('synthetic-attempt', role):
+            self.assertEqual(inputs.role_names('synthetic-attempt', role), expected[role])
+            for name in expected[role]:
                 profile = dict(self.profile, role=role)
                 result = inputs.profile_spec(self.contract, 'synthetic-attempt', name, profile,
                                              reviewed_profile=profile, observed_image=self.image,
@@ -89,6 +99,15 @@ class ControllerInputs(unittest.TestCase):
         changed['Config']['Healthcheck'] = {'Test': ['CMD', 'other']}
         with self.assertRaises(Refused):
             self.profile_check(again=changed)
+
+    def test_consistent_reviewed_root_user_refuses_at_nonroot_guard(self):
+        for user in ('root', '0', '0000', 'root:1001', '0:1001'):
+            profile = copy.deepcopy(self.profile)
+            profile['create']['User'] = user
+            with self.subTest(user=user), self.assertRaisesRegex(Refused, 'Nonroot effective role user'):
+                inputs.profile_spec(self.contract, 'synthetic-attempt', 'supabase_db_synthetic-attempt',
+                                    profile, reviewed_profile=profile, observed_image=self.image,
+                                    reobserved_image=self.image)
 
     def test_inherited_environment_must_be_represented(self):
         profile, image = copy.deepcopy(self.profile), copy.deepcopy(self.image)
@@ -197,7 +216,7 @@ class ControllerInputs(unittest.TestCase):
                        'observer_id': 'synthetic-observer', 'artifact_sha256': '5' * 64}
         return manifest, observation
 
-    def retention_check(self, before=None, after=None, prior=None, current=None):
+    def retention_check(self, before=None, after=None, prior=None, current=None, writers=None):
         first, old = self.retained('before', 100)
         second, new = self.retained('after', 110)
         return inputs.retention_spec(self.contract, first if before is None else before,
@@ -206,7 +225,7 @@ class ControllerInputs(unittest.TestCase):
                                      expected_owner='synthetic-owner', expected_database='synthetic-db',
                                      expected_resource={key: value for key, value in first['binding'].items()
                                                         if key != 'quiescence_id'},
-                                     expected_writers=old['writers'], now=120)
+                                     expected_writers=old['writers'] if writers is None else writers, now=120)
 
     def test_retention_observations_keep_ownership_and_quiescence_unverified(self):
         result = self.retention_check()
@@ -250,6 +269,26 @@ class ControllerInputs(unittest.TestCase):
         old['quiescent_writers'][0]['process_birth'] = 'reused'
         with self.assertRaises(Refused):
             self.retention_check(prior=old)
+
+    def test_consistent_duplicate_pid_with_conflicting_births_refuses(self):
+        _, prior = self.retained('before', 100)
+        _, current = self.retained('after', 110)
+        writers = prior['writers'] + [dict(prior['writers'][0], process_birth='birth-2')]
+        for observation in (prior, current):
+            observation['writers'] = copy.deepcopy(writers)
+            observation['quiescent_writers'] = copy.deepcopy(writers)
+        with self.assertRaisesRegex(Refused, 'Duplicate writer'):
+            self.retention_check(prior=prior, current=current, writers=writers)
+
+    def test_every_specification_preserves_common_pending_authority(self):
+        results = (self.profile_check(), inputs.builder_spec(self.contract, self.builder, reviewed=self.builder),
+                   inputs.adapter_requirements(self.contract), self.retention_check())
+        for number, result in enumerate(results):
+            with self.subTest(entry=number):
+                for field in ('execute_authorized', 'profile_admissible', 'authentication_established'):
+                    self.assertIs(result[field], False)
+                for field in ('issuer_verification', 'independent_review'):
+                    self.assertEqual(result[field], 'pending')
 
     def test_matching_foreign_resource_and_root_still_refuse(self):
         before, prior = self.retained('before', 100)

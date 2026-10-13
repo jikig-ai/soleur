@@ -86,3 +86,34 @@ screenshots, eligible routine, permitted Web/CLO matrices and full review/promot
   wrapper's final verdict must be read from its explicit exit receipt, separately
   from transport completion notifications. Hooks are configured at `/dev/null`;
   explicit checks own the source validation.
+
+# Focused review and correction
+
+Three independent seats reviewed pushed `1e393ea93fe4305db97e80af3d7b1680250d5529`
+and each repeated 71 targeted cases. Security reported no concrete finding.
+Data integrity reproduced one structural defect: simultaneous writers could
+share a container/PID while declaring different process births. The matching
+expected and observed inventories passed because only complete triples were
+deduplicated. The correction rejects duplicate container/PID pairs. A regression
+failed on the reviewed implementation with the intended `Refused not raised`
+assertion, then passed after the guard changed.
+
+Test design identified three oracle gaps, also corrected: independently enumerate
+both renderer and eight migration reservations; exercise matching reviewed root
+user profiles at the nonroot guard; assert every pending authority field across
+all four entry points. Its original score was 8.3/10, Grade B, with all new
+tests classified as unit. Independent mutations were unverified because the
+approved sandbox allocator refused its disk-backed scratch roots; no fallback
+copy or live mutation was used. The built-in manifest discriminator remains
+separate evidence. Corrected targeted totals are 74 cases (22 inputs plus the
+preceding 52); pushed-source reverification remains owed.
+
+The complete wrapper passed before this correction. Fixture-relative/directory,
+guard-vacuity, temporary-file and plan-gate checks passed 63/71/23/120/41
+assertions. Registration census passed 679 covered and zero orphans. Staged
+secret scanning, ShellCheck, shell syntax and whitespace checks passed.
+
+Main advanced with one documentation-only closeout commit,
+`b2d842729accb31d2c830379d7a87a8cdac95411`; its five paths are outside application,
+schema and qualification controller code. Source pairing and final export require
+refresh after inclusion. No incoming command or operational action is executed.
