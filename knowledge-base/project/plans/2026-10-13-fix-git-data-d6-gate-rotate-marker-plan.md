@@ -477,22 +477,22 @@ beyond that.
 
 ### Pre-merge (PR)
 
-- [ ] AC1. `Rotate completed (d6 marker)` is the LAST step of `git_data_host_replace`, after `Dispatch summary`, with `if:` exactly
+- [x] AC1. `Rotate completed (d6 marker)` is the LAST step of `git_data_host_replace`, after `Dispatch summary`, with `if:` exactly
   `inputs.apply_target == 'git-data-host-rotate' && inputs.plan_only != true`, no `always()`, no `continue-on-error`; its name
   contains neither "Validate" nor "confirm" (P-a..P-c; `apply-web-platform-infra.yml`, end of the job block).
-- [ ] AC2. The gate (`git-data-cutover.yml`, `flip_preconditions`) selects the marker via `git_data_d6_scan`/`git_data_rotate_run_verdict` in
+- [x] AC2. The gate (`git-data-cutover.yml`, `flip_preconditions`) selects the marker via `git_data_d6_scan`/`git_data_rotate_run_verdict` in
   `scripts/lib/git-data-rotate-stamp.sh` by exact job and step name, requires `success`, fails closed on missing / skipped /
   empty / unreadable; the old `rotate confirm token` match is gone and the comment is corrected (P-e, P-f).
-- [ ] AC3. A failed or cancelled newest rotate attempt blocks (`d6_last_rotate_failed`) and an older success cannot mask it
+- [x] AC3. A failed or cancelled newest rotate attempt blocks (`d6_last_rotate_failed`) and an older success cannot mask it
   (rows R5, R6, S2); a refusal before apply does not block (R7, S7); unreadable run JSON or a failed run list stops the scan (S3, P-e).
-- [ ] AC4. Offline jq fixtures: replace (R1), plan-only rotate (R2), missing marker (R3) rejected; real rotate (R4) accepted;
+- [x] AC4. Offline jq fixtures: replace (R1), plan-only rotate (R2), missing marker (R3) rejected; real rotate (R4) accepted;
   all in `scripts/lib/git-data-rotate-stamp.test.sh`, passing, with a floor measured from the final green run.
-- [ ] AC5. Parity pins P-a..P-h pass on the real tree, comment-stripped and line-anchored
+- [x] AC5. Parity pins P-a..P-h pass on the real tree, comment-stripped and line-anchored
   (`plugins/soleur/test/terraform-target-parity.test.ts`); the confirm-token step is still unconditional (P-d) and
   `tests/scripts/test-infra-privileged-tier-census.sh` G5a-c is green.
-- [ ] AC6. The mutation batteries (lib M1-M4, parity rows including "drop the `plan_only` conjunct") are each RED on their mutant and green on
+- [x] AC6. The mutation batteries (lib M1-M4, parity rows including "drop the `plan_only` conjunct") are each RED on their mutant and green on
   the control; each row asserts its mutation changed the text.
-- [ ] AC7. ADR-220 sentence corrected and runbook rows added (Phase 4); no new ADR; nothing outside the Files lists changed.
+- [x] AC7. ADR-220 sentence corrected and runbook rows added (Phase 4); no new ADR; nothing outside the Files lists changed.
 - [ ] AC8. PR body: `Closes #10166`; states nothing was dispatched/applied/written/wiped, that the modified workflow is
   not to be dispatched after merge, and that runs predating the marker cannot qualify (so the rotate re-dispatch in #10138 is
   required after this merges). It also records a read-only `gh run view <id> --json jobs` of the newest `git_data_host_replace`

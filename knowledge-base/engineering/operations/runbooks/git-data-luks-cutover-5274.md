@@ -192,7 +192,7 @@ erasure working); the rehearsal is dispatched only on the user's per-step author
 
 `d6_replace_stale` requires a completed `git-data-host-rotate` run — a fresh host PLUS a re-minted
 `GIT_DATA_LUKS_KEY`, volume and Doppler secret together (the passphrase can only rotate with a fresh
-volume). Dispatch it off `main`:
+volume). A rotate run counts only when its job succeeded AND it carries the last-step marker `Rotate completed (d6 marker)` (#10166): runs from before the marker cannot discharge D6, so the rotate must be dispatched once more after that change merges; a later plain replace does not invalidate a stamp (it never re-mints the key). Dispatch it off `main`:
 
 ```bash
 gh workflow run apply-web-platform-infra.yml --ref main   -f apply_target=git-data-host-rotate -f confirm=ROTATE-GIT-DATA -f reason="<why this rotate, with the issue number>"
@@ -963,6 +963,9 @@ escalate to the CLO rather than rushing G3.
 | Precondition: the #8209 Tier-B seam is not seeded | `verdict=precondition_8209_open` | Set `DOPPLER_TOKEN_INFRA_PRIVILEGED` on the environment (ADR-241 R7), then re-dispatch. |
 | Precondition: the pin-fault Sentry rule is not live | `verdict=pin_fault_paging_absent` | Rule 1310055 unreadable or disabled — the read is live (`SENTRY_ACTIONS_RO_TOKEN`), not inferred. Enable it or fix the token before flipping. |
 | Precondition: no completed `git-data-host-rotate` | `verdict=d6_replace_stale` | Dispatch `apply_target=git-data-host-rotate confirm=ROTATE-GIT-DATA` off `main` (above). A plain replace cannot discharge D6 — it re-mints no LUKS key. |
+| Precondition: the newest rotate attempt did not complete | `verdict=d6_last_rotate_failed` | The newest `git-data-host-rotate` attempt (the run id is in the remedy line) failed or was cancelled after the apply began, so host and key state are uncertain, and an older success does not discharge D6. Read that run and the sections above, repair, and re-dispatch the rotate; a newer successful rotate supersedes it. The block is sticky: its only exits are a newer successful rotate or the failed run aging out of the 100-run window, and a re-dispatch refused at the precondition does not supersede it. |
+| Precondition: a replace or rotate run is still going | `verdict=d6_rotate_in_flight` | A `git-data-host-replace`/`-rotate` run (id in the remedy line) is running, queued or waiting for approval, so the stamp cannot be read yet. Re-dispatch the flip when it completes; cancel a stale waiting run. |
+| Precondition: run state could not be read | `verdict=d6_run_unreadable` | `gh run list`/`gh run view` failed, returned nothing, or the stamp library could not be loaded from the checkout. Nothing was concluded; re-dispatch the flip. |
 | Precondition: a web deploy is in flight | `verdict=deploy_in_flight` | Wait for `web-platform-release.yml` to settle; a mid-flip env rebake would be an unattributed cutover. |
 | Precondition: running image below the emitter floor | `verdict=live_image_stale` | `/health` reports a release older than `vars.GIT_DATA_EMITTER_FLOOR` — the `git_data_store=` emitter is not live, so a flip could not prove itself. |
 | A host never reported the flag's new value | `verdict=deploy_assert_failed` | The `git_data_store=<value>` emit never landed in Better Stack within the poll window — the finalizer has already unwound; reconcile the emit path before re-dispatching. |
