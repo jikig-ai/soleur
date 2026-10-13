@@ -13,6 +13,21 @@ brand_survival_threshold: single-user incident
 
 # feat: Runtime untrusted-data classification (indirect prompt-injection defense)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-13
+**Gates run:** 4.6 User-Brand Impact (pass, threshold single-user incident), 4.7 Observability (pass: 5 fields, `bun` allowlisted, literal `EVAL PASS`, no ssh, new block), 4.8 PAT (none), 4.9 UI wireframe (no UI surface, skipped), 4.10 Encryption Posture (no store/connection, skipped), 4.11 Guard Contract (`lint-guard-contract.py` green, assembly names chokepoints), 4.12 Scope Check (one unfenced section, all rows compliant), 4.55 Downtime (no trigger).
+**Verification passes:** cited issues/PRs live-checked (#4671, #4672, #9543, #9545, #3242, #3243, #10192 open; #9534 closed); labels `priority/p1-high`, `domain/engineering`, `type/security`, `follow-through` exist; ADR ordinal re-derived from fetched `origin/main` (highest ADR-286, so ADR-287 stays provisional); cited rule `wg-architecture-decision-is-a-plan-deliverable` is migrated-but-active (`scripts/migrated-rule-ids.txt`, now in plan Phase 2.10); ADR status `adopting` is an existing vocabulary value (ADR-280 and five others); `agent-runner.ts` has zero `webEgress` matches (confirmed, not edited).
+
+### Key improvements
+1. SDK semantics pinned verbatim (below) and a single-rewriter rule added: the `updatedToolOutput` rewrite must come from exactly one hook, because sibling hooks run in parallel on the ORIGINAL output and rewrites compete last-write-wins.
+2. Verify-the-negative sweep of the plan's negative claims, with outcomes recorded.
+3. Observability discoverability probe made executable without the network (`bun` eval script).
+
+### New considerations discovered
+- `PostToolUseHookSpecificOutput` also carries `classifierContext` (auto-mode permission classifier). The hook MUST NOT populate it: the SDK docs warn untrusted tool text copied there "reaches the permission classifier with host-application framing". Added as a test row (hook output never contains `classifierContext`).
+- `additionalContext` is paired with the rewrite in the SAME hook result (rewrite-integrity rule in the SDK docs), so annotation and envelope come from one hook, never two.
+
 ## Overview
 
 Hosted agents now fetch arbitrary web pages (open-web egress, #9534 Phase A, ADR-278) and read third-party email, CRM and
@@ -77,6 +92,25 @@ blockade for happy-dom (`2026-05-20-happy-dom-ws-fetch-blockade.md`).
 `ruflo-aidefence` detect/block (design reading only, none installed). Build is justified.
 
 **Open code-review overlap.** See section below.
+
+### Deepen Research Insights
+
+**SDK semantics (verbatim, `apps/web-platform/node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts:2657-2671`, `PostToolUseHookSpecificOutput`):**
+- `updatedToolOutput?: unknown;` doc: "Replaces the tool output before it is sent to the model"
+- `updatedMCPToolOutput?: unknown;` doc: "Replaces the output for MCP tools only. Prefer updatedToolOutput, which works for all tools"
+- `classifierContext?: string;` doc excerpt: "do not copy untrusted tool output or third-party text into it blindly" and "hooks run in parallel on the ORIGINAL output ... an identity rewrite competes last-write-wins with sibling rewrites".
+The types state `updatedToolOutput` works for all tools; runtime behavior on built-in WebFetch remains unproven, which is exactly what Phase 0 settles. Honored-on-synchronous-hook-responses-only applies to `classifierContext`; the hook is synchronous either way.
+
+**Verify-the-negative sweep** (plan claims of the form "never/does not"):
+- "`agent-runner.ts` never passes `webEgress`": confirms (grep count 0).
+- "Crons never opt in to web egress": confirms per ADR-278 text and `CANONICAL_DISALLOWED_TOOLS` default at `agent-runner-query-options.ts:62`; the wiring test row asserts it for the hook.
+- "no content in telemetry": a claim about code that does not exist yet; carried by Guard row 11 rather than asserted.
+- "taint downgrade not in v1": confirms, no `canUseTool` edit in Files to Edit.
+Post-edit self-audit: no references remain to the dropped parity test, `agent-runner.ts` edit, `known-evasion` bucket or the script-as-alias-free constraint (grep on the plan).
+
+**Precedent diff.** PostToolUse registration follows the existing matcher-keyed list (`Bash`, `Skill`) and the `enablePhaseSurfaceHint`/`enableContextQueries` opt-in arg pattern; multiple hooks per matcher are already tolerated. The sibling observe-only fail-open precedent is `createGitLockMarkerHook`. No precedent exists for an OUTPUT-rewriting hook (ADR-162 covers input rewriting) - pattern is novel, so the ADR states the output-rewriter rule and the single-rewriter invariant.
+
+**Edge cases added.** (1) Hook output never contains `classifierContext` (test). (2) `additionalContext` and `updatedToolOutput` returned in the same result. (3) Two WebFetch calls in one turn are classified independently; the per-session count is metadata only. (4) A redirect/404 WebFetch response is classified as non-page content and not flagged for lack of text (handled in `extractWebFetchText` shape table from Phase 0). (5) Payload containing the literal closing delimiter is neutralized before wrapping (test scenario already present).
 
 ## Technical Rulings (CTO)
 
@@ -270,7 +304,7 @@ the C4 vitest syntax/render tests after any edit. A "no C4 impact" conclusion mu
 
 ### Sequencing
 
-ADR authored now describing target state with an in-body adopting note for the wrap flag (the ADR frontmatter status vocabulary is checked against existing ADRs at work time; becomes accepted after the observe window).
+ADR authored now describing target state with `status: adopting` (valid vocabulary, ADR-280 precedent), flipped to `accepted` after the observe window.
 
 ## Observability
 
@@ -329,6 +363,7 @@ Playwright, plugin-side CLI.
 | 8 | Scorer mutates input (e.g. strips zero-width from the payload returned) | one-line payload-identity test: scorer input equals the original byte-for-byte |
 | 9 | Truncation moved to drop the tail silently (no `truncated` flag) | truncation test asserts `truncated=true` and that an attack past the cap is reported as unscored-tail |
 | 10 | Order: apply control-char strip AFTER the size cap in `envelope()` | padding test: 10 000 NUL bytes before a visible attack string leave the visible string inside the capped output (reorder row; observes inside the window) |
+| 12 | Hook output populates `classifierContext` or returns a rewrite from a second hook | output-shape test asserts the key set is exactly `{hookEventName, additionalContext, updatedToolOutput?}` and that only one registered hook can emit `updatedToolOutput` |
 | 11 | Log call includes `text` or `url.search` | telemetry test asserts the serialized log contains none of the fixture content, query string or email addresses |
 
 **Harness rows.** (a) Delete the eval corpus file or empty its `attack` array: the eval suite must fail with "0 fixtures"
