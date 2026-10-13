@@ -608,9 +608,9 @@ if [ "$(grep -c 'after 300s' "$CLOUD_INIT")" -ge 4 ] && ! grep -q 'after 30s\b' 
 # is silenced by the same move that silences the arms it guards.
 if [ "$executed" -lt 85 ]; then
   fail=$((fail + 1))
-  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 81. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
+  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 85. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
 else
-  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 81)\n' "$executed"
+  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 85)\n' "$executed"
 fi
 
 echo ""
