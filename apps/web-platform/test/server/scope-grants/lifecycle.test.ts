@@ -110,7 +110,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         assertSynthetic(userA.email);
         await tearDownTenantUser(service, userA);
       }
-    });
+    }, 60_000);
 
     test("lifecycle: grant → tier change → revoke → re-grant", async () => {
       // ── 1. Grant fresh ────────────────────────────────────────────────

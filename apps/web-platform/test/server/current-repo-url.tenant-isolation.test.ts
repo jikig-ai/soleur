@@ -101,7 +101,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         assertSynthetic(user.email);
         await tearDownTenantUser(service, user);
       }
-    }, 30_000);
+    }, 60_000);
 
     test("baseline: A reads own users row", async () => {
       const { data, error } = await aClient

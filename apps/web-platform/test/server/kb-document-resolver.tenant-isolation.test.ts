@@ -114,7 +114,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         // user_session_state row cascades on user delete (ON DELETE CASCADE).
         await tearDownTenantUser(service, user);
       }
-    }, 30_000);
+    }, 60_000);
 
     test("baseline: A reads own user_session_state row", async () => {
       const { data, error } = await aClient

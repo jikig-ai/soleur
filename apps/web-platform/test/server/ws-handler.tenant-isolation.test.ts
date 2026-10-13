@@ -117,7 +117,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         assertSynthetic(user.email);
         await tearDownTenantUser(service, user);
       }
-    }, 30_000);
+    }, 60_000);
 
     test("tryLedgerDivergenceRecovery — A cannot read B's visible conversations", async () => {
       const { data, error } = await aClient

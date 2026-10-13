@@ -121,7 +121,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         assertSynthetic(user.email);
         await tearDownTenantUser(service, user);
       }
-    }, 30_000);
+    }, 60_000);
 
     test("BYOK fetch — A's tenant JWT cannot read B's api_keys row (PR-C §2.11)", async () => {
       // `runWithByokLease` → `fetchAndDecryptIntoSlot` runs this SELECT

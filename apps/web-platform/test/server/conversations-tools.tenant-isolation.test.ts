@@ -123,7 +123,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         assertSynthetic(user.email);
         await tearDownTenantUser(service, user);
       }
-    }, 30_000);
+    }, 60_000);
 
     test("baseline: A's tenant JWT lists own conversation", async () => {
       const { data, error } = await aClient

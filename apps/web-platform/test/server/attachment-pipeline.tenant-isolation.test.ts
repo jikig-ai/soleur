@@ -184,7 +184,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         assertSynthetic(user.email);
         await tearDownTenantUser(service, user);
       }
-    }, 30_000);
+    }, 60_000);
 
     // ──────────────────────────────────────────────────────────────────
     // FR1 — cross-tenant Storage SELECT deny (the brand-survival vector
@@ -270,7 +270,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
           size_bytes: 1,
         });
       expect(error).toBeNull();
-      // Cleanup the positive-control row so afterAll's auth.admin.deleteUser
+      // Cleanup the positive-control row so afterAll's tearDownTenantUser sweep
       // cascade has a clean target set. PostgrestBuilder is a thenable but
       // not a Promise, so it has no `.catch` — await first, then ignore.
       try {
