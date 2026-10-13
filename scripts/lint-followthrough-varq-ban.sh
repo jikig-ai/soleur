@@ -190,13 +190,16 @@ done <<<"$rule2_hits"
 # EXIT-CENSUS>` soak marker. The `S<n>-...` spelling is a CONVENTION the anchor encodes (the S2
 # and S3 soak probes of ADR-276 use it) and is brittle by nature: a future marker family named
 # otherwise is invisible to it, so a new family must be added to the anchor in the same change.
-# COVERAGE LIMIT: a `READS_COMMENTS` route or a marker spelling outside the lists below is NOT
-# covered (deferred, tracked at DEFERRED-TRACKER-PLACEHOLDER; widening them flags probes that are
-# compliant by other means today). It was widened from `RESULT:` alone in #9818 because a marker probe that read `issues/N/comments`
-# directly with NO author filter has no `RESULT:` line and, since it filters on nothing, no
-# `author_association` spelling for rule 5 either -- it passed both rules.
+# The anchor was widened from `RESULT:` alone in #9818 because a marker probe that read
+# `issues/N/comments` directly with NO author filter has no `RESULT:` line and, since it filters on
+# nothing, no `author_association` spelling for rule 5 either -- it passed both rules.
 # A probe that filters inline on `authorAssociation` also reads comments, branches on a verdict
 # and does not call the lib, so it fires here (and, since #9818, on rule 5 as well).
+#
+# COVERAGE LIMIT: a `READS_COMMENTS` route or a marker spelling outside the lists below is NOT
+# covered (deferred, tracked at DEFERRED-TRACKER-PLACEHOLDER; widening them flags probes that are
+# compliant by other means today).
+#
 # Three bypasses, all measured against synthetic probes at ship time (#8389 advisor consult),
 # all of them shapes a compliant-LOOKING probe reaches for:
 #   (a) the REST route was invisible. `gh api "repos/$R/issues/$N/comments" --jq '.[].body'`
@@ -434,14 +437,18 @@ fi
 # and gets the default 10.
 MIN_PROBES="${VARQ_BAN_MIN_PROBES:-10}"
 # Rule 4's own floor, on its OWN measure: probes that consume issue comments by any route.
-# MEASURED 2026-10-13 on the tree this change was written against: EIGHT (direct readers
-# anthropic-admin-key-6297 and inngest-watchdog-functions-query-6407, neither a verdict; the rest
-# via the lib, among them concierge-strand-754ee124-5733, cpx22-invoice-reconcile-7431,
-# inngest-zot-client-authz-6500 and the S2 and S3 soak probes). The floor is for VACUITY, not for
-# pinning the corpus: a broken READS_COMMENTS regex or walk drives the count to zero and the rule
-# would report clean over a corpus it cannot see, so it trips at 3 (well under the measured 8, so
-# retiring a tracker does not red the tree). It is a FLOOR, not an equality: a new comment-reading
-# probe must not have to edit this number.
+# MEASURED 2026-10-13 with this rule's own READS_COMMENTS and LIB_CALL regexes over the comment-
+# stripped probes: EIGHT. Three are DIRECT readers (anthropic-admin-key-6297,
+# inngest-watchdog-functions-query-6407 and watchdog-arm-soak-9237: none branches on a `RESULT:`
+# or `S<n>-` marker, which is why none fires) and five route through the lib (concierge-strand-
+# 754ee124-5733, cpx22-invoice-reconcile-7431, inngest-zot-client-authz-6500 and the S2 and S3
+# soak probes). The floor is for VACUITY, not for pinning the corpus: a broken READS_COMMENTS regex
+# or walk drives the count to zero and the rule would report clean over a corpus it cannot see, so
+# it trips at 3 (well under the measured 8, so retiring a tracker does not red the tree).
+# WHICH NUMBERS ARE EXACT. The floors in this file (MIN_PROBES, MIN_REF_FILES, MIN_REFS, this one and
+# MIN_RULE5_FILES) are FLOORS by design: the corpus they walk legitimately grows and shrinks, and a
+# new probe must not have to edit them. The exact counts by design (ADR-193) are the suites'
+# accounting-conservation checks (`passes + fails == cases`) and their row-by-row ratchets, not these.
 MIN_COMMENT_READERS="${VARQ_BAN_MIN_COMMENT_READERS:-3}"
 if [[ "$is_production_run" == "yes" ]] && (( scanned < MIN_PROBES )); then
   echo "ERROR: only $scanned non-test probe(s) scanned in $TARGET_DIR -- expected the full set; the glob or path is broken" >&2
@@ -464,7 +471,7 @@ fi
 # no rule's floor vouches for another's walk, and the regex canary above guards the pattern itself.
 # VARQ_BAN_MIN_RULE5_FILES is a TEST-ONLY override (mirroring VARQ_BAN_MIN_COMMENT_READERS).
 # MEASURED 119 non-test probes (2026-10-13) on the tree this rule was written against; floored just
-# under it so retiring a tracker does not red the tree (a FLOOR, not an equality).
+# under it so retiring a tracker does not red the tree (a floor, see "WHICH NUMBERS ARE EXACT" above).
 MIN_RULE5_FILES="${VARQ_BAN_MIN_RULE5_FILES:-100}"
 if [[ "$is_production_run" == "yes" ]] && (( scanned_rule5 < MIN_RULE5_FILES )); then
   echo "ERROR: rule 5 (author-association ban) examined only $scanned_rule5 probe(s) in $TARGET_DIR -- expected at least $MIN_RULE5_FILES; the walk is broken, and the rule is reporting clean over a corpus it cannot see" >&2

@@ -60,6 +60,8 @@
 #   R5-N3  must-NOT-trip: a bare `ACTIVATED:` line (no `S<n>-` prefix) -> exit 0; the guard COPY without the prefix
 #          requirement -> exit 1 (the prefix is what keeps unrelated words quiet)
 #   R5-N4  a rule-5 offender NESTED in a subdirectory -> exit 1 `rule 5:`; the guard COPY with the walk at -maxdepth 1 -> exit 0
+#   R5-N5  the same for RULE 4's walk: a rule-4 offender NESTED in a subdirectory -> exit 1 `rule 4:`; the guard COPY with
+#          rule 4's walk at -maxdepth 1 -> exit 0
 #
 # ADR-193 floor: `asserted` moves at the CALL SITE (check()), never inside pass()/fail(); the
 # conservation identity and MIN_ASSERTIONS are reported with printf + exit 1, never via fail().
@@ -1008,6 +1010,23 @@ else
   (( R5N4_RC == 0 )); check $? "R5-N4 DISPATCH: a non-recursive rule-5 walk misses the nested offender (the recursion is the mechanism)" "R5-N4 expected exit 0 from the flat-walk guard, got $R5N4_RC: $R5N4_OUT"
 fi
 
+# --- R5-N5: rule 4's walk is RECURSIVE too (symmetry with R5-N4). A rule-4 offender in a subdirectory of the probe dir is cited.
+d=$(mkcase r5_n5)
+mkdir -p "$d/nested/deeper"
+printf '%s\n' '#!/usr/bin/env bash' 'set -uo pipefail' \
+  "bodies=\$(gh api repos/o/r/issues/1/comments --jq '.[].body')" \
+  "grep -qE '^RESULT: PASS' <<<\"\$bodies\" && exit 0" 'exit 1' >"$d/nested/deeper/probe-nested-r4.sh"
+run_guard "$d"
+(( GUARD_RC == 1 )) && grep -q 'probe-nested-r4.sh:3: rule 4:' <<<"$GUARD_OUT"; check $? "R5-N5 a rule-4 offender two directories down -> exit 1 with a rule 4 citation" "R5-N5 expected exit 1 with a rule 4 citation, got $GUARD_RC: $GUARD_OUT"
+R5N5_GUARD="$SANDBOX/guard-rule4-flat.sh"
+sed "/^done < <(find \"\$TARGET_DIR\" -type f -name '\*\.sh' ! -name '\*\.test\.sh' | sort)\$/s/find \"\$TARGET_DIR\"/find \"\$TARGET_DIR\" -maxdepth 1/" "$GUARD" >"$R5N5_GUARD"
+if diff -q "$GUARD" "$R5N5_GUARD" >/dev/null; then
+  check 1 "" "R5-N5 DISPATCH: rule 4's walk find is absent -- the mutation did not land and the row is vacuous"
+else
+  R5N5_OUT="$(bash "$R5N5_GUARD" "$d" 2>&1)"; R5N5_RC=$?
+  (( R5N5_RC == 0 )); check $? "R5-N5 DISPATCH: a non-recursive rule-4 walk misses the nested offender (the recursion is the mechanism)" "R5-N5 expected exit 0 from the flat-walk guard, got $R5N5_RC: $R5N5_OUT"
+fi
+
 # R5-H2: the live tree. Zero rule-5 hits, and the walk examined at least the floor.
 R5_LIVE_OUT="$(bash "$GUARD" 2>&1)"; R5_LIVE_RC=$?
 (( R5_LIVE_RC == 0 )); check $? "R5-H2 the live tree is clean under rules 1-5" "R5-H2 live tree not clean (rc=$R5_LIVE_RC): $R5_LIVE_OUT"
@@ -1049,7 +1068,7 @@ fi
 passes=$_p; fails=$_f; asserted=$_a
 if (( _n > 0 )); then FAILURES=("${_saved[@]}"); else FAILURES=(); fi
 
-MIN_ASSERTIONS=128
+MIN_ASSERTIONS=130
 if (( asserted < MIN_ASSERTIONS )); then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$asserted" "$MIN_ASSERTIONS" >&2
   exit 1
