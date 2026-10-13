@@ -18,3 +18,8 @@ Plan: knowledge-base/project/plans/2026-10-13-fix-git-data-rotate-post-flip-guar
 - 3.1 Runbook D6 section: never after the flip, verdict table, corrected served_repos paragraph, web-fed heartbeat sentence, follow-up notes
 - 3.2 File/refresh follow-ups: F4 live-proof marker, #9943, #6975 (re-evaluation criteria, milestone)
 - 3.3 Run suites, markdownlint, shellcheck; no dispatch/apply
+
+## Deepen additions
+- 1.5 Test rows: every-attempt re-run fixture, empty-steps cancelled job must-PASS, no-other-writer parity, census-unchanged pin
+- 2.5 Scan: iterate run_attempt via /attempts/{n}/jobs; pin workflow file name and step literal in parity test
+- 3.4 Runbook: "When a rotate is needed after the flip" (break-glass, Art. 17 residue date, escalation #10175/#8571), flip-precondition item, d6 age-out deadlock note

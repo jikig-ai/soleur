@@ -14,6 +14,13 @@ requires_cpo_signoff: true
 
 Spec lacks valid lane: defaulted to cross-domain (fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-13
+**Agents used:** soleur:engineering:cto (forks F1-F7), architecture-strategist, code-simplicity-reviewer, cpo, clo
+**Key improvements:** scan reads every run attempt and defines "ran" (re-run and cancelled-job holes); d6 message made unconditional; post-flip break-glass and flip-prerequisite items from CPO/CLO; Observability section added; no-other-writer parity test.
+**Open disagreement (operator may cut at review):** simplicity review would defer the boot_complete freshness layer and count cross-check; kept per CTO F3 and the operator's ask.
+
 ## Overview
 
 The rotate precondition in the git-data replace job reads one boot-time row and so cannot tell a store that the flip has since populated. This plan adds a credential-free guard that refuses a rotate once any cutover run has attempted a flag write, adds a boot_complete freshness check as a second layer, amends the d6 failure text that steers the owner toward a rotate, and records the rule in the runbook. #9943 and #6975 are evaluated and left as scoped follow-ups.
