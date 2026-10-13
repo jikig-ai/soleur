@@ -68,3 +68,5 @@ what they do to YOUR machinery even when you decide not to adopt them.
 category: workflow-patterns
 module: brainstorm
 related: [feat-headroom-token-compression-eval, ADR-162, ADR-264, #10230]
+
+The layer-decomposition rule itself is extracted at `plugins/soleur/skills/brainstorm/references/external-platform-vendor-bundles.md` (brainstorm SKILL.md is at its byte ceiling — the pointer lives here).
