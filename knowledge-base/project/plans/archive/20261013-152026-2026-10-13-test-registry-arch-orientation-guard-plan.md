@@ -41,7 +41,7 @@ brand_survival_threshold: none
 - 4.10 Encryption posture: no `.tf`/migration/cloud-init in Files to Edit and no new store or connection; skipped.
 - 4.11 Guard Contract: `python3 scripts/lint-guard-contract.py` green (2 entries); Assembly names the chokepoint (the single line-start assignment; the scoped resource block), not today's members; matrix rows derived from the property, not from the finished code (the code does not exist yet).
 - 4.12 Scope Check: one unfenced section, three subsections, no `unmapped`, every `inferred` row justified, Recommendation present.
-- 4.55 Downtime: not triggered (test-only change). 4.5 network outage: not triggered.
+- 4.55 Downtime: not triggered (test-only change). 4.5 network-connectivity gate: not triggered.
 - Citations verified live: PR #7325 MERGED (R3 introduced there, `git log -S p_registry_arch_derivation` -> 9005d13a39); #9147 (`1b57de9120`) is the commit that moved the host boot onto the mirror asset (#8714 5.3b-iii; #8714 itself is closed); #10205 OPEN; #7335 OPEN.
 - No AGENTS.md rule IDs are cited in the plan body.
 
@@ -143,7 +143,7 @@ comment-out and resource-rename, GREEN on a reformatted equivalent.
 **Open code-review overlap (Phase 1.7.5).** Queried open `code-review` issues for `registry-boot-guard.test.sh`, `zot-registry.tf`,
 `registry-userdata-budget.sh`: none.
 
-**Network-outage / community discovery / functional overlap.** Not triggered (no SSH/firewall keywords; stack is bash + Terraform, both covered;
+**Network-connectivity / community discovery / functional overlap.** Not triggered (no SSH/firewall keywords; stack is bash + Terraform, both covered;
 the existing A16/R3 pair is the overlap and is the subject of this plan).
 
 ## Research Reconciliation - Spec vs. Codebase
