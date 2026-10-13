@@ -90,7 +90,7 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 // 277 -> 278 (#9879 review round 2, +1): G2e lexer/scanner linearity.
 // 278 -> 276 (#9372 retirement): the declared count was 279 (floor 278, one row loose); the single-use rebirth workflow's five-target describe (three tests) retired with the workflow and the G2 test was rewritten in place, so 279 - 3 = 276.
 // Exact again: grep -cE '^\s*test\(' = 276.
-// 276 -> 280 (#10166, +4): the d6 rotate marker / flip gate wiring describe (real-tree pins, nine-mutant battery, the executed gate block, confirm-token direct pin). The 2 rows of slack were already there (declared 278 vs floor 276 on main).
+// 276 -> 280 (#10166, +4): the d6 rotate marker / flip gate wiring describe (real-tree pins, eleven-mutant battery, the executed gate block, confirm-token direct pin). The 2 rows of slack were already there (declared 278 vs floor 276 on main).
 const TEST_FLOOR = 280;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
@@ -7796,7 +7796,7 @@ function checkRotateMarkerWiring(applyText: string, cutoverText: string, libText
   if (!/--json databaseId,status\b[^\n]*@tsv'\)" \|\| \\\n\s+fail d6_run_unreadable /.test(gate)) v.push("the run-list capture does not fail closed with d6_run_unreadable");
   if (!/^ {12}\*\) fail d6_run_unreadable /m.test(gate)) v.push("the gate's case has no fail-closed *) arm");
   for (const verdict of ["d6_stamped", "d6_last_rotate_failed", "d6_rotate_in_flight", "d6_run_unreadable", "d6_replace_stale"]) {
-    if (!new RegExp(`^ {12}${verdict}\\) `, "m").test(gate)) v.push(`the gate's case has no ${verdict} arm`);
+    if (!new RegExp(`^ {12}${verdict}\\)( |$)`, "m").test(gate)) v.push(`the gate's case has no ${verdict} arm`);
   }
   // P-f: the gate no longer reads the confirm-token step or inlines a step-selection jq.
   const cutoverStripped = stripComments(cutoverText);
@@ -7815,7 +7815,7 @@ describe("the d6 rotate marker and the flip gate that reads it (#10166)", () => 
     expect(checkRotateMarkerWiring(applyText, cutoverText, libText)).toEqual([]);
   });
 
-  test("nine mutants of the wiring each make the check non-empty, for the right reason, and each mutation actually landed", () => {
+  test("eleven mutants of the wiring each make the check non-empty, for the right reason, and each mutation actually landed", () => {
     const markerRun = 'run: echo "git-data-host-rotate completed - apply, boot poll, pin load and summary succeeded (the d6 marker)"';
     const mutants: Array<{ label: string; want: RegExp; apply?: (s: string) => string; cutover?: (s: string) => string; lib?: (s: string) => string }> = [
       { label: "drop the plan_only conjunct", want: /the marker's if: is/, apply: (s) => s.replace(` && inputs.plan_only != true\n        ${markerRun}`, `\n        ${markerRun}`) },
@@ -7841,9 +7841,20 @@ describe("the d6 rotate marker and the flip gate that reads it (#10166)", () => 
           return at < 0 ? s : s.slice(0, at) + "      - name: Rotate completed (d6 marker)" + s.slice(at + "      - name: Dispatch summary".length);
         },
       },
+      {
+        label: "name another job like the replace job",
+        want: /is named 'git_data_host_replace'/,
+        apply: (s) => s.replace("\n  workspaces_luks_cutover:\n", "\n  workspaces_luks_cutover:\n    name: git_data_host_replace\n"),
+      },
+      {
+        label: "rename the marker to a census gate-name pattern (workflow and lib together)",
+        want: /matches a census gate-name pattern/,
+        apply: (s) => s.replace("      - name: Rotate completed (d6 marker)\n", "      - name: Rotate preflight done\n"),
+        lib: (s) => s.replace('readonly GDRS_MARKER_STEP="Rotate completed (d6 marker)"', 'readonly GDRS_MARKER_STEP="Rotate preflight done"'),
+      },
       { label: "change one character of the marker constant", want: /the last step of git_data_host_replace is|appears 0 times/, lib: (s) => s.replace('readonly GDRS_MARKER_STEP="Rotate completed (d6 marker)"', 'readonly GDRS_MARKER_STEP="Rotate completed (d6 markes)"') },
     ];
-    expect(mutants.length).toBe(9);
+    expect(mutants.length).toBe(11);
     for (const m of mutants) {
       const a = m.apply ? m.apply(applyText) : applyText;
       const c = m.cutover ? m.cutover(cutoverText) : cutoverText;
@@ -7866,7 +7877,8 @@ describe("the d6 rotate marker and the flip gate that reads it (#10166)", () => 
     const to = run!.indexOf("# deploy_in_flight");
     expect(from, "the d6 block must start at the lib source line").toBeGreaterThan(-1);
     expect(to).toBeGreaterThan(from);
-    const harness = `set -euo pipefail\n${failFn}\nlast_ok=""\n${run!.slice(from, to)}\necho "LAST_OK=$last_ok"\n`;
+    const blockText = run!.slice(from, to);
+    const harnessFor = (block: string) => `set -euo pipefail\n${failFn}\nlast_ok=""\n${block}\necho "LAST_OK=$last_ok"\n`;
 
     const c = (n: string) => libText.match(new RegExp(`^readonly ${n}="([^"]*)"$`, "m"))![1];
     const [pre, apply, marker] = [c("GDRS_PRECONDITION_STEP"), c("GDRS_APPLY_STEP"), c("GDRS_MARKER_STEP")];
@@ -7877,18 +7889,15 @@ describe("the d6 rotate marker and the flip gate that reads it (#10166)", () => 
     const failedRotate = job("failure", [[pre, "success"], [apply, "failure"], [marker, "skipped"]]);
     const inFlight = job(null, [[pre, "success"], [apply, null]]);
 
-    // gh models exactly the two calls the block may make and REFUSES any other argv (exit 64), so a changed
-    // selector (--event, --limit, --branch, the workflow file, the --json fields) turns the capture into a
-    // failure instead of quietly reading the right fixture. The list is passed through the REAL --jq filter.
+    // gh models exactly the two calls the block may make and REFUSES any other argv (exit 64: the full
+    // `run list` argv is compared word for word, so an added, removed, reordered or changed selector turns the
+    // capture into a failure instead of quietly reading the right fixture). The list goes through the REAL --jq filter.
     const ghStub = `#!/usr/bin/env bash
 if [[ "\${1-} \${2-}" == "run list" ]]; then
-  args=" $* "
-  for want in " --workflow apply-web-platform-infra.yml " " --branch main " " --event workflow_dispatch " " --limit 100 " " --json databaseId,status "; do
-    [[ "$args" == *"$want"* ]] || { echo "gh stub refused: $*" >&2; exit 64; }
-  done
-  jqf=""; prev=""
-  for a in "$@"; do [[ "$prev" == "--jq" ]] && jqf="$a"; prev="$a"; done
-  [[ -n "$jqf" && -f "$FX/list.json" ]] || exit 1
+  [[ $# -eq 14 && "\${*:1:13}" == "run list --workflow apply-web-platform-infra.yml --branch main --event workflow_dispatch --limit 100 --json databaseId,status --jq" ]] \
+    || { echo "gh stub refused: $*" >&2; exit 64; }
+  jqf="\${14}"
+  [[ -f "$FX/list.json" ]] || exit 1
   exec jq -r "$jqf" "$FX/list.json"
 fi
 if [[ "\${1-} \${2-}" == "run view" && "\${4-}" == "--json" && "\${5-}" == "jobs" && $# -eq 5 ]]; then
@@ -7898,15 +7907,19 @@ fi
 echo "gh stub refused: $*" >&2
 exit 64
 `;
-    type Case = { name: string; list: Array<[number, string]> | null; bodies: Record<number, string>; rc: number; verdict?: string; has?: string[] };
+    type Case = { name: string; list: Array<[number | string, string]> | null; bodies: Record<number, string>; rc: number; verdict?: string; has?: string[]; mutate?: [string, string] };
     const cases: Case[] = [
       { name: "an older stamped run behind a newer plain replace discharges D6", list: [[2, "completed"], [1, "completed"]], bodies: { 2: plain, 1: stamped }, rc: 0, has: ["d6 rotate stamp: run 1", "LAST_OK=1"] },
-      { name: "only plain replaces leaves D6 open", list: [[2, "completed"]], bodies: { 2: plain }, rc: 1, verdict: "d6_replace_stale" },
+      { name: "only plain replaces leaves D6 open", list: [[2, "completed"]], bodies: { 2: plain }, rc: 1, verdict: "d6_replace_stale", has: ["apply_target=git-data-host-rotate"] },
       { name: "an empty run list leaves D6 open", list: [], bodies: {}, rc: 1, verdict: "d6_replace_stale" },
       { name: "a failed newest rotate blocks over an older stamp", list: [[3, "completed"], [1, "completed"]], bodies: { 3: failedRotate, 1: stamped }, rc: 1, verdict: "d6_last_rotate_failed", has: ["run 3"] },
-      { name: "an in-flight newest run blocks over an older stamp", list: [[3, "in_progress"], [1, "completed"]], bodies: { 3: inFlight, 1: stamped }, rc: 1, verdict: "d6_rotate_in_flight" },
-      { name: "an unreadable newest run blocks over an older stamp", list: [[4, "completed"], [1, "completed"]], bodies: { 1: stamped }, rc: 1, verdict: "d6_run_unreadable" },
+      { name: "an in-flight newest run blocks over an older stamp", list: [[3, "in_progress"], [1, "completed"]], bodies: { 3: inFlight, 1: stamped }, rc: 1, verdict: "d6_rotate_in_flight", has: ["(run 3)"] },
+      { name: "an unreadable newest run blocks over an older stamp", list: [[4, "completed"], [1, "completed"]], bodies: { 1: stamped }, rc: 1, verdict: "d6_run_unreadable", has: ["(run 4)"] },
+      { name: "a non-numeric id stops the scan and the gate names no run", list: [["abc", "completed"], [1, "completed"]], bodies: { 1: stamped }, rc: 1, verdict: "d6_run_unreadable", has: ["(run n/a)"] },
       { name: "a failed run list blocks", list: null, bodies: {}, rc: 1, verdict: "d6_run_unreadable" },
+      // Control: the stub is SELECTIVE. The same block with its --event selector changed is refused by the stub,
+      // and the refusal flips the verdict (an accepting stub would have let the stamped fixture discharge D6).
+      { name: "CONTROL: a changed selector is refused by the modelled gh", list: [[1, "completed"]], bodies: { 1: stamped }, rc: 1, verdict: "d6_run_unreadable", has: ["gh stub refused"], mutate: ["--event workflow_dispatch", "--event push"] },
     ];
     const root = mkdtempSync(join(tmpdir(), "d6-gate-exec-"));
     try {
@@ -7917,7 +7930,12 @@ exit 64
         mkdirSync(fx);
         if (cs.list) writeFileSync(join(fx, "list.json"), JSON.stringify(cs.list.map(([databaseId, status]) => ({ databaseId, status }))));
         for (const [id, body] of Object.entries(cs.bodies)) writeFileSync(join(fx, `${id}.json`), body);
-        const r = spawnSync("bash", ["--noprofile", "--norc", "-c", harness], {
+        let block = blockText;
+        if (cs.mutate) {
+          block = blockText.replace(cs.mutate[0], cs.mutate[1]);
+          expect(block, `${cs.name}: the mutation must change the block`).not.toBe(blockText);
+        }
+        const r = spawnSync("bash", ["--noprofile", "--norc", "-c", harnessFor(block)], {
           encoding: "utf8",
           env: { PATH: `${join(root, "bin")}:${process.env.PATH ?? ""}`, HOME: root, LC_ALL: "C", FX: fx, GITHUB_WORKSPACE: REPO_ROOT },
         });

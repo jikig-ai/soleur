@@ -4176,7 +4176,8 @@ jobs:
         # LAST step, no always(), no continue-on-error: the implicit success() makes "marker success" mean
         # "every earlier step, including Dispatch summary's exit 1 backstops, succeeded". Skipped on a plain
         # replace, on a plan-only rotate and after any failure. Its name matches none of the census G5
-        # gate-name patterns (interlock, validate dispatch, verify required, preflight) and carries neither
+        # gate-name patterns (interlock, validate dispatch, verify required, preflight; the parity test pins a
+        # superset of them) and carries neither
         # "Validate" nor "confirm" (the #10166 ruling); the comment sits INSIDE the step because extractStep
         # cuts at the next `- name:`, so a comment above it would attach to Dispatch summary's block.
         if: inputs.apply_target == 'git-data-host-rotate' && inputs.plan_only != true

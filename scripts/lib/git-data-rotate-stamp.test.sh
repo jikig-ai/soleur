@@ -117,6 +117,10 @@ check_verdict "R5b failed rotate recorded under the pre-#10155 apply step name" 
 # R6b — cancelled or timed out while the apply step was running: the step is listed with no conclusion.
 check_verdict "R6b apply step listed with no conclusion (cancelled mid-flight)" rotate_failed \
   "$(fx "$JOB" cancelled "$(steps "$PRE|success" "$APPLY|null" "$MARK|skipped")")"
+# R6c — the precondition step itself listed with no conclusion (cancelled while it ran): "unknown" is not
+# "absent", so a started step is never read as a plain replace.
+check_verdict "R6c precondition and apply both listed with no conclusion" rotate_failed \
+  "$(fx "$JOB" cancelled "$(steps "$PRE|null" "$APPLY|null")")"
 # R7 — refused at the precondition: nothing was mutated, so it must NOT block (the false-block guard).
 check_verdict "R7 refused at the precondition" skip \
   "$(fx "$JOB" failure "$(steps "$PRE|failure" "$APPLY|skipped" "$MARK|skipped")")"
@@ -147,6 +151,9 @@ done
 # R14 — a successful job with steps absent or null reads skip, not stamped.
 check_verdict "R14 steps absent on a successful job" skip '{"jobs":[{"name":"'"$JOB"'","conclusion":"success"}]}'
 check_verdict "R14b steps null on a successful job" skip '{"jobs":[{"name":"'"$JOB"'","conclusion":"success","steps":null}]}'
+check_verdict "R14c steps empty on a FAILED job (runner lost at setup: nothing mutated)" skip '{"jobs":[{"name":"'"$JOB"'","conclusion":"failure","steps":[]}]}'
+check_verdict "R14d steps is not an array" skip '{"jobs":[{"name":"'"$JOB"'","conclusion":"success","steps":"x"}]}'
+check_verdict "R14e step entries that are not objects" skip '{"jobs":[{"name":"'"$JOB"'","conclusion":"success","steps":[7,null]}]}'
 # R15 — a green marker inside a failed job (a failed post-job step) is closed, and surprising on purpose.
 check_verdict "R15 marker success but job failure" rotate_failed \
   "$(fx "$JOB" failure "$(steps "$PRE|success" "$APPLY|success" "$MARK|success")")"
@@ -283,7 +290,7 @@ printf '\ngit-data-rotate-stamp.test.sh: %d passed, %d failed\n' "$PASS" "$FAIL"
 # asserts PASS==1 at that point, which proves the literal.
 SELFTEST_PASSES=1
 REAL=$(( PASS - SELFTEST_PASSES ))
-MIN_ASSERTIONS=53
+MIN_ASSERTIONS=57
 if [[ "$REAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity assertion floor: only %d real assertion(s) ran (PASS=%d minus %d self-test), expected >= %d.\n' \
     "$REAL" "$PASS" "$SELFTEST_PASSES" "$MIN_ASSERTIONS" >&2

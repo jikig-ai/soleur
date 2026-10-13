@@ -10,17 +10,17 @@
 # checkout, the same boundary as scripts/lib/bearer-curl.sh, held by the main-restricted reviewer environment.
 #
 # Why not the old confirm-token step: `Validate dispatch inputs (rotate confirm token)` is unconditional
-# (census G5c) and concludes success on EVERY target (it prints `rotate confirm: n/a` on every non-rotate
-# target and passes silently on a rotate), so a plain replace or a plan-only rotate satisfied the gate
-# without any rotation.
+# (census G5c) and concludes success on every non-rotate target (printing `rotate confirm: n/a`) and on a
+# rotate with the right confirm token, so a plain replace or a plan-only rotate satisfied the gate without
+# any rotation.
 #
 # API (the library never calls fail/exit: it runs inside $(...), and every failure is an explicit check):
 #   git_data_rotate_run_verdict <jobs-json>   prints ONE token, returns 0 iff `stamped`:
 #       stamped | skip | in_flight | rotate_failed | unreadable
 #   git_data_d6_scan                          reads "<run id><TAB><run status>" lines on stdin, newest
 #       first, and prints ONE line: d6_stamped <id> | d6_last_rotate_failed <id> | d6_rotate_in_flight <id>
-#       | d6_run_unreadable [<id>] | d6_replace_stale. Returns 0 iff d6_stamped. The id is absent only when
-#       the input line itself was not a numeric run id.
+#       | d6_run_unreadable [<id>] | d6_replace_stale. Returns 0 iff d6_stamped. d6_run_unreadable carries no
+#       id when the input line was not a numeric run id, and d6_replace_stale never names a run.
 #
 # The four names below are matched byte for byte against the apply workflow by
 # plugins/soleur/test/terraform-target-parity.test.ts. The em dash is U+2014.
@@ -31,8 +31,9 @@ readonly GDRS_MARKER_STEP="Rotate completed (d6 marker)"
 
 # One jq program, input by here-string (never bare stdin, so a caller's id stream is never consumed).
 # A step is "absent" (not in the job's list at all: a rename, or the step never existed), "skipped", or
-# carries its conclusion; a step that IS listed but has no conclusion yet is "unknown" (it was running
-# when the job was cancelled or timed out), and "unknown" is NOT "absent": it means the step began.
+# carries its conclusion; a step that IS listed but has no conclusion is "unknown" and is treated as "it
+# began" (the fail-closed assumption for a job cancelled or timed out mid-step; no recorded run shows the
+# shape), and "unknown" is NOT "absent".
 # Rows, evaluated in order:
 #   1 not an object, or .jobs not an array                                         -> unreadable
 #   2 no job named exactly $job, or the job was skipped                            -> skip

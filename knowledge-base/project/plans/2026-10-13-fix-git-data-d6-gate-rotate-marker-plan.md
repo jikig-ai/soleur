@@ -593,6 +593,6 @@ exempt because every pin runs on comment-stripped text (and a lib/workflow comme
 - Pins added: no job-level `name:`, no `continue-on-error` on any step of the job, no marker-named step or
   same-named job elsewhere, the census gate-name regex mirrored, and the gate's d6 block is EXECUTED against a
   modelled `gh` (case-arm bodies, `--event`/`--limit`/field order, post-scan reassignment).
-- Accepted residuals, recorded in the runbook: operator re-run of a rotate run overwrites its failed attempt's
-  record; the 100-run window counts every target; a deleted run record unmasks an older stamp; the stamp does not
+- Accepted residuals, recorded in the runbook: an operator re-run of a rotate run hides the failed attempt from the
+  gate's default (latest-attempt) view; the 100-run window counts every target; a deleted run record unmasks an older stamp; the stamp does not
   attest escrow state. `--limit` was not raised (worst case is already 101 sequential calls).
