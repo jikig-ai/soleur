@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=38090871167,38088705648,38086978176,38085840669,38055372785
 # default-weight-ms=1180
-# generated-at=2026-10-12T19:24:07Z
+# generated-at=2026-10-13T10:37:45Z
 # generator=regenerate-shard-manifest.py v3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
 .claude/hooks/background-poll-prefer-monitor.test.sh	777	measured
@@ -133,9 +133,11 @@ plugins/soleur/skills/linear-fetch/test/persist-safe-integration.test.sh	50	meas
 plugins/soleur/skills/linear-fetch/test/redact-linear-urls.test.sh	235	measured
 plugins/soleur/skills/provision-hetzner/test/provision-hetzner-characterization.test.sh	108	measured
 plugins/soleur/skills/review/test/emit-review-trailer.test.sh	3428	measured
+plugins/soleur/skills/review/test/ensure-semgrep.test.sh	1180	floor
 plugins/soleur/skills/review/test/fix-round-seats.test.sh	566	measured
 plugins/soleur/skills/skill-security-scan/test/argv-ceiling.test.sh	809	measured
 plugins/soleur/skills/skill-security-scan/test/meta-dir-reap.test.sh	1251	measured
+plugins/soleur/skills/skill-security-scan/test/parse-override.test.sh	1180	floor
 plugins/soleur/skills/skill-security-scan/test/redact-pii-ghs-shape.test.sh	1180	floor
 plugins/soleur/test/_base-notice-frontmatter.test.sh	7093	measured
 plugins/soleur/test/admin-merge-ready-wiring.test.sh	10959	measured
