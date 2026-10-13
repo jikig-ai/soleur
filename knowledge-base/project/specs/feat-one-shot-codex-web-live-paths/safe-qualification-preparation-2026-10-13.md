@@ -53,7 +53,7 @@ these are source-specific checks, not full PR/SAST/runtime clearance. Host Node
 leaf checks do not attest production parity; Bun enumeration warned of the
 installed/pinned mismatch without executing Bun suites.
 
-## Scoped advisory GDPR gate
+## Draft CI
 
 [CI 38357777571](https://github.com/jikig-ai/soleur/actions/runs/38357777571)
 settled 69 pass / 11 skip / no pending or cancelled checks. Only required `test`
@@ -61,6 +61,8 @@ is red; its executed log reports draft-skipped Web and both scripts legs and
 `draft: full battery owed at ready`. The token-name lint correction is green.
 This is the recorded source's draft CI, not a full-suite or runtime verdict.
 Final evidence-only head CI and description checks remain separate.
+
+## Scoped advisory GDPR gate
 
 **This is not legal review. Findings are heuristic. Consult `soleur:legal:clo` + `soleur:legal:legal-compliance-auditor` before merging.**
 
