@@ -223,8 +223,8 @@ logs:
   where: GitHub Actions job log of the flip_preconditions step
   retention: GitHub Actions default (90 days)
 discoverability_test:
-  command: bash -c 'source scripts/lib/git-data-rotate-stamp.sh; git_data_rotate_run_verdict "{\"jobs\":[]}" || true'
-  expected_output: skip
+  command: bash scripts/lib/git-data-rotate-stamp.test.sh
+  expected_output: 0 failed
 ```
 
 ## Open Code-Review Overlap
