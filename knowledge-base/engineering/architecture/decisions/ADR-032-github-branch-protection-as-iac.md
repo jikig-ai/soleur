@@ -839,7 +839,7 @@ The organisation plan change the 2026-09-14 amendment named as reopener
 (iii) has occurred: `gh api orgs/jikig-ai --jq .plan.name` returns `team`,
 verified 2026-09-22T10:19:56Z (`UPGRADE_NOT_BEFORE`, recorded as `earliest=`
 on #8450's enrolled followthrough directive and in
-`knowledge-base/project/specs/feat-8450-ci-concurrency/measurements.md` via
+`knowledge-base/project/specs/archive/20261013-051752-feat-8450-ci-concurrency/measurements.md` via
 the ledger PR). The concurrent-job pool is now documented at 60 hosted
 jobs, up from the Free plan's 20 that made capacity a binding factor.
 

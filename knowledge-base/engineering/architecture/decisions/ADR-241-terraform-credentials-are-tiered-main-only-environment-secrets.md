@@ -763,7 +763,7 @@ sequence in the runbook's §Runtime App key (#8609), which is the canonical copy
 - **Labels.** In this ADR, R1–R8 are residuals. The runbook's steps are written "R-step N"
   (R-step 7 is the GitHub key delete); an unqualified "R7" here always means the residual.
 
-Plan: `knowledge-base/project/plans/2026-09-30-security-evict-runtime-app-key-from-prd-reachability-plan.md`.
+Plan: `knowledge-base/project/plans/archive/20261013-051752-2026-09-30-security-evict-runtime-app-key-from-prd-reachability-plan.md`.
 
 ### 2026-09-30 (#9262): the inngest-release App-token consumers move to Tier B
 
@@ -1065,7 +1065,7 @@ Nothing else flips. Measured read-only on 2026-10-12 (names and access levels on
 
 ## References
 
-- Plan: `knowledge-base/project/plans/2026-09-22-feat-evict-privileged-terraform-credentials-plan.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-051752-2026-09-22-feat-evict-privileged-terraform-credentials-plan.md`
   (Decision, Guard Contract, Operator Sequence, User-Brand Impact)
 - Runbook: `knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md`
 - Terraform: `apps/web-platform/infra/infra-privileged-environment.tf` (the Tier-B carriers and the

@@ -209,7 +209,7 @@ live; none carries `DOPPLER_TOKEN_INFRA_PRIVILEGED` until O3.
 
 > One cell differs from the plan: O5's expected string is `forbidden`, not `token_readonly` (Hetzner's wording changed; measured 2026-09-29, #8209). Everything else below is verbatim.
 
-Reproduced verbatim from `knowledge-base/project/plans/2026-09-22-feat-evict-privileged-terraform-credentials-plan.md` §Operator Sequence. This runbook is the canonical copy; the plan section is its origin. There is no O9 — the numbering skips it. Rows and cells marked "added by #9262" or "changed by #9262" are not from that plan: their origin is `knowledge-base/project/plans/archive/20261004-100500-2026-09-30-infra-retier-pin-bump-and-automint-to-infra-privileged-plan.md` §Operator Sequence addition.
+Reproduced verbatim from `knowledge-base/project/plans/archive/20261013-051752-2026-09-22-feat-evict-privileged-terraform-credentials-plan.md` §Operator Sequence. This runbook is the canonical copy; the plan section is its origin. There is no O9 — the numbering skips it. Rows and cells marked "added by #9262" or "changed by #9262" are not from that plan: their origin is `knowledge-base/project/plans/archive/20261004-100500-2026-09-30-infra-retier-pin-bump-and-automint-to-infra-privileged-plan.md` §Operator Sequence addition.
 
 <!-- markdownlint-disable MD034 -->
 **Conventions.**
@@ -510,7 +510,7 @@ as a deliberate, announced step rather than letting it arrive during an unrelate
 
 ## Runtime App key (#8609)
 
-**This section is the CANONICAL copy of the #8609 operator sequence (R-steps 0–9, ADR-241 D10).** It was moved verbatim from `knowledge-base/project/plans/2026-09-30-security-evict-runtime-app-key-from-prd-reachability-plan.md` §Operator Sequence, which now points here, and revised in place by the PR-A review (2026-09-30; this section is new in that PR). The generated bootstrap script, `knowledge-base/project/specs/feat-one-shot-8609-evict-runtime-app-key-prd/bootstrap.sh`, stages every row with a per-command go-ahead and runs each row's verification; it links here and does not restate the reasoning.
+**This section is the CANONICAL copy of the #8609 operator sequence (R-steps 0–9, ADR-241 D10).** It was moved verbatim from `knowledge-base/project/plans/archive/20261013-051752-2026-09-30-security-evict-runtime-app-key-from-prd-reachability-plan.md` §Operator Sequence, which now points here, and revised in place by the PR-A review (2026-09-30; this section is new in that PR). The generated bootstrap script, `knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-8609-evict-runtime-app-key-prd/bootstrap.sh`, stages every row with a per-command go-ahead and runs each row's verification; it links here and does not restate the reasoning.
 
 **Labels.** The rows below are **R-steps** ("R-step 7" is the GitHub delete). ADR-241's **residuals** R1–R8 are a different namespace ("residual R7" is the state key closed at #8209 O5b). Always write the qualifier.
 

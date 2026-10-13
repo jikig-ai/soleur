@@ -163,7 +163,7 @@ nothing.
 reconstruction supports a narrower statement — no records from their venture database were read,
 and the working material was schema, configuration, tests and documentation — but a fixtures file
 containing officer records was present in the tree and a read of it cannot be positively excluded.
-See `knowledge-base/project/specs/feat-one-shot-7331-alpha-tester-terms-dpa/session-scope-reconstruction.md`.
+See `knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7331-alpha-tester-terms-dpa/session-scope-reconstruction.md`.
 
 ---
 

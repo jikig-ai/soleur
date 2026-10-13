@@ -78,8 +78,8 @@ plugins/soleur/test/fixture-env-adoption.test.sh	knowledge-base/project/plans
 plugins/soleur/test/fixture-env-adoption.test.sh	knowledge-base/project/specs
 plugins/soleur/test/generate-kb-index.test.sh	knowledge-base/engineering/architecture/decisions/ADR-174-kb-index-exclusion-supersedes-per-feature-archival.md
 plugins/soleur/test/go-session-gates.test.sh	knowledge-base/engineering/operations/post-mortems/dashboard-error-postmortem.md
-plugins/soleur/test/go-session-gates.test.sh	knowledge-base/project/specs/feat-one-shot-7450-git-root-anchor-untrusted/arm4-probe/arm5-delivered.txt
-plugins/soleur/test/go-session-gates.test.sh	knowledge-base/project/specs/feat-one-shot-7450-git-root-anchor-untrusted/arm4-probe/commands/zzzprobe.md
+plugins/soleur/test/go-session-gates.test.sh	knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7450-git-root-anchor-untrusted/arm4-probe/arm5-delivered.txt
+plugins/soleur/test/go-session-gates.test.sh	knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7450-git-root-anchor-untrusted/arm4-probe/commands/zzzprobe.md
 plugins/soleur/test/infra-validation-detect.test.sh	knowledge-base/project/plans
 plugins/soleur/test/kb-search-support-path.test.sh	knowledge-base/project/learnings
 plugins/soleur/test/lane-frontmatter.test.sh	knowledge-base/project/specs/archive/20261013-003106-feat-claude-skills-audit/spec.md
@@ -231,7 +231,7 @@ tests/scripts/scratch-residue	knowledge-base/project
 tests/scripts/scratch-residue	knowledge-base/project/learnings
 tests/scripts/scratch-residue	knowledge-base/project/plans
 tests/scripts/scratch-residue	knowledge-base/project/weakness-digest.md
-tests/scripts/sentry-alert-drift-workflow	knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json
+tests/scripts/sentry-alert-drift-workflow	knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json
 tests/scripts/sentry-monitors-audit-class-d	knowledge-base/legal/article-30-register.md
 tests/scripts/sentry-monitors-audit-class-d	knowledge-base/legal/audits
 tests/scripts/weakness-miner	knowledge-base/project

@@ -12,7 +12,7 @@ tags: [performance, middleware, auth, supabase, caching]
 ## Status
 
 Accepted — 2026-09-25. Delivers the plan
-`knowledge-base/project/plans/2026-09-25-perf-dashboard-section-load-latency-plan.md`;
+`knowledge-base/project/plans/archive/20261013-051752-2026-09-25-perf-dashboard-section-load-latency-plan.md`;
 closes #5531, #5532, #5533, #5654.
 
 ## Context

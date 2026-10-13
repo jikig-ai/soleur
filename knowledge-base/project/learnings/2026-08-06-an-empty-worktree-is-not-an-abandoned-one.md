@@ -30,7 +30,7 @@ Consequences:
 1. The concurrent session hard-reset the branch (`reset: moving to b63bab198`),
    **discarding commit `4943757d7`** which held this session's brainstorm doc
    and spec.
-2. Both sessions wrote `knowledge-base/project/specs/feat-alpha-onboarding-motion/spec.md`.
+2. Both sessions wrote `knowledge-base/project/specs/archive/20261013-051752-feat-alpha-onboarding-motion/spec.md`.
    The other session's spec overwrote this one at the shared path.
 3. A spawned `ux-design-lead` agent had its `.pen` files destroyed mid-task and
    had to recover them from a dangling commit.

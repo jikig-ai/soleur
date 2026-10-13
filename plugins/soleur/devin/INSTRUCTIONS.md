@@ -251,7 +251,7 @@ claim that an independent review occurred when it did not.
 
 Review and trust the plugin hooks through `/hooks` before relying on them.
 Installation does not grant hook trust. Measured hook semantics under Devin
-(envelope capture: `knowledge-base/project/specs/feat-settings-matcher-devin-audit/envelope-capture.md`):
+(envelope capture: `knowledge-base/project/specs/archive/20261013-051752-feat-settings-matcher-devin-audit/envelope-capture.md`):
 
 - **Wire names are lowercase**: `exec`, `write`, `edit`, `ask_user_question`,
   `run_subagent`, `skill`. Claude-style matchers (`Bash`, `Write|Edit`, …)

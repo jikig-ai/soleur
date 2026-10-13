@@ -36,8 +36,8 @@ source "${REPO_ROOT}/plugins/soleur/test/test-helpers.sh"
 
 GO_MD="${REPO_ROOT}/plugins/soleur/commands/go.md"
 PAYLOAD="${REPO_ROOT}/plugins/soleur"
-ARM5_DELIVERED="${REPO_ROOT}/knowledge-base/project/specs/feat-one-shot-7450-git-root-anchor-untrusted/arm4-probe/arm5-delivered.txt"
-PROBE_MD="${REPO_ROOT}/knowledge-base/project/specs/feat-one-shot-7450-git-root-anchor-untrusted/arm4-probe/commands/zzzprobe.md"
+ARM5_DELIVERED="${REPO_ROOT}/knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7450-git-root-anchor-untrusted/arm4-probe/arm5-delivered.txt"
+PROBE_MD="${REPO_ROOT}/knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7450-git-root-anchor-untrusted/arm4-probe/commands/zzzprobe.md"
 
 BASH_BIN="$(command -v bash)"
 [ -n "$BASH_BIN" ] || { echo "FATAL: no bash on PATH" >&2; exit 2; }

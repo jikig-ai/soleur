@@ -1116,7 +1116,7 @@ now has a monitor.**
   is the workflow's `detectorIds`, and `sentry_cron_monitor.id` is the detector id. The evidence
   (schema, provider source at the tag, the vendor's own example, and the getsentry paths for
   hop 2 and the throttle) is M1-M12 in
-  `knowledge-base/project/plans/2026-09-24-feat-route-cron-monitor-failures-to-email-alert-plan.md`.
+  `knowledge-base/project/plans/archive/20261013-051752-2026-09-24-feat-route-cron-monitor-failures-to-email-alert-plan.md`.
   Hop 2 was also confirmed on a live event (the #8630 measurement comment).
 - **Design.** One `sentry_alert.cron_monitor_failure`, in its own file `cron-monitor-alerts.tf`,
   binds every declared cron monitor inline. It fires on `first_seen_event`, `reappeared_event`

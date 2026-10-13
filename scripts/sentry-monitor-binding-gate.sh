@@ -38,7 +38,7 @@ set -uo pipefail
 
 PLAN="${1:?usage: sentry-monitor-binding-gate.sh <plan.json> [expected-id]}"
 # Provenance of the literal: measured against live prod on 2026-09-04 and
-# recorded in knowledge-base/project/specs/fix-7650-sentry-alert-migration/
+# recorded in knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/
 # phase2-measurements-2026-09-04.md — it is the id
 # `data.sentry_project_issue_stream_monitor.web_platform` resolves to, and the
 # same value all 27 `.change.after.monitor_ids` carry in the verified plan.
