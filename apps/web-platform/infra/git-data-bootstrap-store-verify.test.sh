@@ -1382,7 +1382,7 @@ run_unit "$UNIT"
 AW_ONTIME="$(verdict_line)"
 ok "$((RC != 0))" "AW0 the on-time run exits 0 (rc=$RC)" "$(cat "$FX/err")"
 ok "$(( $(sleeps) != 0 ))" "AW0 an on-time link costs no sleep (the first probe answers)"
-ok "$(grep -q 'waiting up to' "$FX/err"; echo $(( $? == 0 )))" "AW0 and no wait line was logged"
+ok "$(err_has 'waiting up to' | tr 01 10)" "AW0 and no wait line was logged"
 
 # A. the link appears late -> proceeds with the on-time verdict.
 new_fixture aw1-late-2
