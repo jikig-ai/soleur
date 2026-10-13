@@ -52,6 +52,10 @@ esac
 #       bodies="$(trusted_verdict_bodies <N>)" || exit 2      # rc 2 = TRANSIENT, not "no verdict"
 #       last="$(printf '%s\n' "$bodies" | grep -E '^RESULT: (PASS|FAIL)\b' | tail -1)"
 #       [[ "$last" =~ ^RESULT:\ PASS ]] && exit 0 || exit 1
+#     A MARKER probe (an `S<n>-ACTIVATED:` line that arms a soak) calls the other view, which also
+#     carries each comment's createdAt as one JSON object {t,b} per trusted comment:
+#       recs="$(trusted_verdict_comments <N>)" || exit 3      # rc 2 = TRANSIENT; CANNOT ESTABLISH
+#       trusted="$(jq -r '.b' <<<"$recs" | tr -d '\r')" || exit 3   # check the projection too
 #
 #     The unfiltered `.comments[].body` form this line used to show is FORGEABLE: the repo is
 #     public with issues open, so one HTTP POST of `RESULT: PASS` from any authenticated user
@@ -60,12 +64,12 @@ esac
 #     membership renders as CONTRIBUTOR under GITHUB_TOKEN and their verdict is dropped
 #     silently (#6617: two months of nightly FAIL on an already-recorded verdict).
 #
-#     lint-followthrough-varq-ban.sh rule 4 enforces the OBLIGATION, not a ban on one spelling:
-#     under scripts/followthroughs/, reading issue comments AND branching on a RESULT: verdict
-#     without calling trusted_verdict_bodies is the violation. The authorAssociation form is
-#     subsumed by that, and so is an unfiltered read with no author filter at all — which is the
-#     shape a ban on the wrong mechanism could not see. Calling the lib does not license a raw
-#     .comments[].body read beside it.
+#     lint-followthrough-varq-ban.sh enforces both halves: rule 4 is the OBLIGATION (under
+#     scripts/followthroughs/, reading issue comments AND branching on a RESULT: verdict or an
+#     S<n>- soak marker without calling trusted_verdict_bodies / trusted_verdict_comments is the
+#     violation, so an unfiltered read with no author filter at all is caught), and rule 5 is the
+#     SPELLING ban (author_association / authorAssociation on an executable line). Calling the lib
+#     does not license a raw .comments[].body read beside it.
 
 echo "TRANSIENT: stub not customized" >&2
 exit 2

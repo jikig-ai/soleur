@@ -177,7 +177,7 @@ merge timestamp; its directive declares `secrets=GH_TOKEN`).
 - The sweeper uses `gh` CLI for issue close/comment, not raw token interpolation.
 
 - **An operator-confirmed probe filters verdicts through `scripts/lib/trusted-verdict.sh`, never an
-  inline `authorAssociation` select.** `jikig-ai/soleur` is public with issues open, so an
+  inline `authorAssociation` (GraphQL) or `author_association` (REST) select.** `jikig-ai/soleur` is public with issues open, so an
   unfiltered `.comments[].body` accepts a verdict from any authenticated GitHub user (#7448). The
   filter that closed that hole introduced a quieter one: **`authorAssociation` is computed against
   the READING token's visibility**, so a member whose org membership is PRIVATE renders as
@@ -204,11 +204,40 @@ merge timestamp; its directive declares `secrets=GH_TOKEN`).
   comments on nearly every tracker and answers 404, so collapsing the two makes every such thread
   permanently unresolvable — the same permanent red, reached from the other side.
 
-  `scripts/lint-followthrough-varq-ban.sh` rule 4 enforces the POSITIVE OBLIGATION, not a ban on
-  one wrong spelling: a probe under `scripts/followthroughs/` that reads issue comments AND
-  branches on a `RESULT:` verdict must route that decision through the lib. An inline
-  `authorAssociation` select is subsumed — it reads comments, branches on a verdict and does not
-  call `trusted_verdict_bodies`, so it fires without needing a rule of its own.
+  `scripts/lint-followthrough-varq-ban.sh` rule 4 enforces the POSITIVE OBLIGATION: a probe
+  under `scripts/followthroughs/` that reads issue comments AND branches on a `RESULT:` verdict or
+  an `S<n>-ACTIVATED|DEACTIVATED|CONFIRMED|EXIT-CENSUS` soak marker must route that decision
+  through the lib. Rule 5 (#9818) is the complementary SPELLING ban: no non-test probe may name
+  `author_association` or `authorAssociation` (either spelling, any case) on an executable line
+  (whole-line comments are stripped, a trailing `# why` mention fires, no per-line opt-out). Rule 5
+  bans the spelling; rule 4 owns the obligation. Rule 4 alone stayed green over the S2 and S3 soak
+  probes because it keyed on `RESULT:`, which a marker probe never writes — they filtered on
+  `author_association` and dropped the operator's activation marker (#9818: a daily false "elided
+  with no activation on record" FAIL, found by running the unmodified probe under the operator
+  token, which returned `NOT YET`, and under the sweeper token, which returned `FAIL`: same code,
+  same repo state, different token).
+
+  **Which view.** `trusted_verdict_bodies <issue>` returns the trusted bodies (verdict probes).
+  `trusted_verdict_comments <issue>` returns one compact JSON object `{t,b}` per trusted comment
+  (`t` = `createdAt`, `b` = the fence-stripped body): marker probes use it and project with
+  `jq -r '.b'`; a probe that orders markers by comment time (S3's CONFIRMED-before-ACTIVATED)
+  also reads `.t`. Both are views of one core, so trust, memoization, fence stripping and the rc 2
+  contract are identical. Map rc 2 to the probe's CANNOT ESTABLISH exit and check the projection
+  too: an empty projection after a jq failure erases every marker and reproduces the false FAIL.
+
+  **Semantics to state, not to rediscover.**
+  - Trust is resolved at READ time: a commenter demoted later stops counting retroactively (an old
+    `ACTIVATED` can become live again if its `DEACTIVATED` author is demoted), and a user promoted
+    later retroactively legitimizes their earlier markers.
+  - `write` is enough to close a tracker, which is broader than "owner/member/collaborator" in a
+    tracker's issue text; the set is `admin`/`maintain`/`write`.
+  - `createdAt` is CREATION time, not edit time (`gh` exposes no `updatedAt`), so S3's
+    CONFIRMED-before-ACTIVATED check guards operator mistakes, not tampering by a writer.
+  - A seated bot must never relay raw issue text at line start (a relayed `S2-ACTIVATED:` line
+    authored by a writer-level bot would count).
+  - Behavior changes #9818 made for the soak probes: fenced blocks are now stripped (a marker
+    inside a fence counted before and is ignored now), and a `read`/`triage` collaborator no longer
+    counts (they did under `COLLABORATOR`).
 
   The difference is load-bearing and was measured. While the rule banned the wrong MECHANISM, a
   live probe read `.comments[].body` with **no author filter at all** — strictly worse than what
