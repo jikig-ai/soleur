@@ -875,12 +875,12 @@ for probe in "${PROBES[@]}"; do
   for (( i=1; i<=n; i++ )); do
     if (( i <= BASE_RUNS )); then
       read -r w u s rc < <(run_timed "$B_DIR" "$SCRATCH/b$probe_i.$i.out" "$SCRATCH/b$probe_i.$i.err" bash "$B_RUNNER" --print-selection "--paths=$probe")
-      [[ "$rc" == "0" ]] || { side_failed="base run $i exited rc=$rc"; side_err="$SCRATCH/b$probe_i.$i.err"; }
+      [[ "$rc" == "0" ]] || { side_failed="${side_failed:+$side_failed; }base run $i exited rc=$rc"; side_err="${side_err:-$SCRATCH/b$probe_i.$i.err}"; }
       b_wall+=("$w"); b_cpu+=("$(awk -v u="$u" -v s="$s" 'BEGIN{printf "%.1f", u+s}')")
     fi
     if (( i <= HEAD_RUNS )); then
       read -r w u s rc < <(run_timed "$H_DIR" "$SCRATCH/h$probe_i.$i.out" "$SCRATCH/h$probe_i.$i.err" bash "$H_RUNNER" --print-selection "--paths=$probe")
-      [[ "$rc" == "0" ]] || { side_failed="head run $i exited rc=$rc"; side_err="$SCRATCH/h$probe_i.$i.err"; }
+      [[ "$rc" == "0" ]] || { side_failed="${side_failed:+$side_failed; }head run $i exited rc=$rc"; side_err="${side_err:-$SCRATCH/h$probe_i.$i.err}"; }
       h_wall+=("$w"); h_cpu+=("$(awk -v u="$u" -v s="$s" 'BEGIN{printf "%.1f", u+s}')")
     fi
   done
@@ -891,7 +891,7 @@ for probe in "${PROBES[@]}"; do
     # unclean --paths element per #10117) — surface the side's stderr so the
     # caller sees the named error rather than chasing a phantom stream
     # divergence; the EXIT trap deletes $SCRATCH, so this is the only copy.
-    echo "DIFFERS: $side_failed (both sides must exit 0): $(head -c 300 "$side_err" 2>/dev/null | tr '\n' ' ')"; OVERALL=1; continue
+    echo "DIFFERS: $side_failed (both sides must exit 0): $(head -c 300 "$side_err" 2>/dev/null | tr '\n' ' ' | LC_ALL=C tr -d '[:cntrl:]')"; OVERALL=1; continue
   fi
   b_lab="$SCRATCH/labels.base.$probe_i"; h_lab="$SCRATCH/labels.head.$probe_i"
   assert_fixture_dir "$b_lab"; assert_fixture_dir "$h_lab"
@@ -912,7 +912,7 @@ for probe in "${PROBES[@]}"; do
       _cmds_n="$(grep -c '^SUITE_COMMAND' "$CMDS_FILE" 2>/dev/null)" || _cmds_n=0
       if [[ "$_cmds_rc" != "0" || "$_cmds_n" == "0" ]]; then
         # A blind walker passes anything within its ceilings: refuse before comparing.
-        echo "DIFFERS: cannot enumerate the head's suite commands (rc=$_cmds_rc, $_cmds_n SUITE_COMMAND record(s)); the leaf walker would be blind: $(head -c 300 "$SCRATCH/cmds.err.$probe_i" 2>/dev/null | tr '\n' ' ')"
+        echo "DIFFERS: cannot enumerate the head's suite commands (rc=$_cmds_rc, $_cmds_n SUITE_COMMAND record(s)); the leaf walker would be blind: $(head -c 300 "$SCRATCH/cmds.err.$probe_i" 2>/dev/null | tr '\n' ' ' | LC_ALL=C tr -d '[:cntrl:]')"
         OVERALL=1; continue
       fi
     fi

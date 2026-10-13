@@ -587,7 +587,10 @@ AFFECTED_A_TWO_PATHS=(
 )
 '
 
-rc_g() { env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git "$@"; }
+# Whole-prefix sweep, not a named list — a named GIT_* list went stale within
+# a day once already (sc9's comment). The subshell keeps the unsets out of the
+# caller's env.
+rc_g() { ( for _v in "${!GIT_@}"; do unset "$_v"; done; exec git "$@" ); }
 
 # Build a scratch repo whose origin/main is the base commit. $2 = "broken-lib" makes the base lib
 # unparseable (the G4 row). Never links into the live tree.
@@ -1684,10 +1687,10 @@ fi
 _wt_fixture() { # $1 = fixture root
   local d="$1"
   _WT=""; _SB=""
-  git init -q "$d/repo" || return 1
-  git -C "$d/repo" -c user.email=suite@example.com -c user.name=suite \
+  rc_g init -q "$d/repo" || return 1
+  rc_g -C "$d/repo" -c user.email=suite@example.com -c user.name=suite \
     commit -qm init --allow-empty || return 1
-  git -C "$d/repo" worktree add -q --detach "$d/wt" HEAD || return 1
+  rc_g -C "$d/repo" worktree add -q --detach "$d/wt" HEAD || return 1
   build_sandbox "$d/sb/test-all.sh" with-lib >/dev/null || return 1
   _WT="$d/wt"; _SB="$d/sb/test-all.sh"
 }
@@ -2900,6 +2903,20 @@ else
   fail "q8b: rc=$_q8e_rc out=$(tail -1 <<<"$_q8e")"
 fi
 
+# q8c: the echoed element is scrubbed — a control-byte element must reach
+#      stderr as a SINGLE line with ?-substituted bytes, never as a forged
+#      multi-line error block.
+cases=$((cases + 1))
+_q8s_rc=0
+_q8s=$(env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 \
+  bash "$RUNNER" --print-selection "--paths=a"$'\nb'".sh" 2>&1) || _q8s_rc=$?
+if [[ "$_q8s_rc" == "2" ]] && grep -qF 'a?b.sh' <<<"$_q8s" \
+  && [[ "$(grep -cF 'ERROR: --paths element' <<<"$_q8s")" == "1" ]]; then
+  pass "q8c: control-byte element echoes scrubbed on a single line"
+else
+  fail "q8c: rc=$_q8s_rc out=$(tail -1 <<<"$_q8s")"
+fi
+
 # q9: legal spellings the reject set must NOT touch — `..` not segment-anchored
 #     and a literal space are both valid git path content; a leading-dot root
 #     (.github) is a first-class root, not a /. segment.
@@ -3097,16 +3114,22 @@ _th_is_prefix_root() { local _r; for _r in "${_TH_PREFIX_ROOTS[@]}"; do [[ "$_r"
 # seam must never retarget the family at a sibling checkout whose populated
 # listing would read green.
 _th_ls_files() {
-  if [[ -n "${_TH_REPO:-}" ]]; then
+  # `${_TH_REPO+set}` not `${_TH_REPO:-}` — a set-but-empty value is a wiring
+  # bug and must refuse rather than silently fall back to the live listing.
+  if [[ -n "${_TH_REPO+set}" ]]; then
     assert_fixture_dir "$_TH_REPO"
     # Confinement must compare RESOLVED paths AND the resolved gitdir: a
     # symlink inside TESTROOT passes a lexical prefix check while git follows
     # it out of the fixture, and a `.git` FILE (the `git worktree add` shape)
     # hands discovery a foreign gitdir with no symlink at all. rc_g keeps a
     # lefthook-injected GIT_DIR/GIT_INDEX_FILE out of the fixture reads (the
-    # suite is always-on and can run inside hook context — #7772/#7835).
+    # suite is edge-selected and still runs inside the bun-test lefthook hook
+    # — #7772/#7835). Every substitution in this block fails closed — an
+    # unresolvable TESTROOT must never leave _tc empty (an empty prefix would
+    # degenerate `== "$_tc"/*` to `== /*` and admit every absolute path).
     local _tc _abs _gd
-    _tc=$(cd -P -- "$TESTROOT" && pwd -P)
+    _tc=$(cd -P -- "$TESTROOT" && pwd -P) \
+      || { printf 'FATAL: TESTROOT %s does not resolve\n' "$TESTROOT" >&2; return 2; }
     _abs=$(cd -P -- "$_TH_REPO" 2>/dev/null && pwd -P) \
       || { printf 'FATAL: _TH_REPO %s does not resolve\n' "$_TH_REPO" >&2; return 2; }
     [[ "$_abs" == "$_tc"/* ]] \
@@ -3122,16 +3145,21 @@ _th_ls_files() {
 # The live tracked top-level root set — th4/th4b/th4c probes AND th6's census
 # derive from it, so a new root joins every probe automatically. -c
 # core.quotePath=false so C-quoted names (the Cyrillic fixtures) emit their
-# real root; NF>1 drops dir-less paths, which yield no root token. A dir-less
+# real root; NF>1 drops dir-less paths, which yield no root token. Caveat:
+# a dir name carrying `"`/`\`/control bytes emits C-quoted (`"x\ty/…`) and
+# mints a phantom root token — the same dir-less grammar residual one level
+# up; the verdict stays correct since no anchored edge can match the escaped
+# diff lines either. A dir-less
 # corpus file is the grammar residual the th8 row detects loudly — see below.
 _TH_ROOTS=$(_th_ls_files | awk -F/ 'NF>1{print $1}' | LC_ALL=C sort -u)
 # The dir-less (single-component) complement of the root projection, classified
 # DISJOINTLY — under a monolithic \.sh$ arm, deadening one extension inside a
 # th8-m4 mutant could not be told apart from the whole filter dying; the split
 # keeps the surviving y.sh flag as the discriminator. Arm 2's `NF<2` is arm 1's
-# condition spelled differently — a discoverability pin admits exactly one
-# single-field-count token file-wide, and arm 1 carries it (a second occurrence
-# breaks the pin). Arms 3/4 close the C-quote channel: git quote_path ALWAYS
+# condition spelled differently — the single-field-count token stays singular
+# file-wide so a mutation anchor can count arms precisely, and arm 1 carries it
+# (a second occurrence would make an exactly-once anchor ambiguous). Arms 3/4
+# close the C-quote channel: git quote_path ALWAYS
 # C-quotes `"`, `\` and control bytes regardless of core.quotePath=false, so a
 # dir-less `x<TAB>y.test.sh` emits `"x\ty.test.sh"` — the extension still ends
 # the name before the closing quote, and a real `/` inside quotes is a genuine
@@ -3161,19 +3189,23 @@ _th_root_corpus() { # dir-less corpus members on stdin, one per line
 _th6_root_covered() { # <array-name> <root> <corpus-tail> — no declare -n (macOS bash 3.2)
   # $1 reaches eval below — restrict it to identifier shape (the same guard the
   # runner's resolve_edges applies), and the RHS stays quoted so a space-
-  # bearing member cannot split inside the eval'd assignment.
+  # bearing member cannot split inside the eval'd assignment. The `+`-guarded
+  # expansion keeps an unset array from aborting under `set -u` (bash 3.2).
   [[ "$1" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
   local _n _i _m _tail
-  eval "_n=\${#$1[@]}"
+  eval "_n=\${$1[@]+\"\${#$1[@]}\"}"
+  _n=${_n:-0}
   for ((_i=0; _i<_n; _i++)); do
     eval "_m=\"\${$1[$_i]}\""
-    # A bare `<root>/` dir member certifies its whole subtree — this disjunct
-    # is what covers the seven _TH_PREFIX_ROOTS. It counts ONLY when the root
-    # still exists on disk: the mint arm drops the member when it fails -e at
-    # classify time (a tracked dir deleted in the worktree without `git rm`
-    # stays in _TH_ROOTS — the census must decline in parity rather than
-    # certify an edge that never reaches the selection pass).
-    [[ "$_m" == "$2/" && -d "${_TH_REPO:-$REPO_ROOT}/$2" ]] && return 0
+    # A bare `<root>/` dir member (or the slash-less `<root>` spelling — the
+    # mint arm probes -e/-d and mints `^<root>/` for either) certifies its
+    # whole subtree — this disjunct is what covers the seven _TH_PREFIX_ROOTS.
+    # It counts ONLY when the root still exists on disk: the mint arm drops
+    # the member when the probe fails at classify time (a tracked dir deleted
+    # in the worktree without `git rm` stays in _TH_ROOTS — the census must
+    # decline in parity rather than certify an edge that never reaches the
+    # selection pass).
+    [[ ("$_m" == "$2/" || "$_m" == "$2") && -d "${_TH_REPO:-$REPO_ROOT}/$2" ]] && return 0
     # Head anchor is the literal `glob:<root>/` prefix — a `glob:<root>x/…`
     # member names a DIFFERENT root and must not certify this one.
     [[ "$_m" == "glob:$2/"* ]] || continue
@@ -3345,10 +3377,11 @@ fi
 _th6_declined() { # <array-name> <root> — space-joined declined members anchored at <root>
   [[ "$1" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
   local _i _n _m
-  eval "_n=\${#$1[@]}"
+  eval "_n=\${$1[@]+\"\${#$1[@]}\"}"
+  _n=${_n:-0}
   for ((_i=0; _i<_n; _i++)); do
     eval "_m=\"\${$1[$_i]}\""
-    case "$_m" in "$2/"*|"glob:$2/"*) printf ' %s' "$_m" ;; esac
+    case "$_m" in "$2"|"$2/"*|"glob:$2"|"glob:$2/"*) printf ' %s' "$_m" ;; esac
   done
 }
 cases=$((cases + 1))
@@ -3360,11 +3393,11 @@ _th6_missing=$(
   [[ -n "$_TH_ROOTS" ]] || { echo "EMPTY-ROOT-DERIVATION"; exit 0; }
   while IFS= read -r _r; do
     _th6_root_covered AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS "$_r" .test.sh \
-      || echo "guard-vacuity-floor:${_r}$(_th6_declined AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS "$_r" | sed 's/^ */ [declined: /;s/$/]/;s/^ *$//')"
+      || echo "guard-vacuity-floor:${_r}$(_th6_declined AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS "$_r" | sed 's/^ */ [declined: /;s/$/]/')"
     _th6_root_covered AFFECTED_SCRIPTS_LINT_ORPHAN_TEST_SUITES_PATHS "$_r" .test.sh \
-      || echo "lint-orphan-test-suites:${_r}$(_th6_declined AFFECTED_SCRIPTS_LINT_ORPHAN_TEST_SUITES_PATHS "$_r" | sed 's/^ */ [declined: /;s/$/]/;s/^ *$//')"
+      || echo "lint-orphan-test-suites:${_r}$(_th6_declined AFFECTED_SCRIPTS_LINT_ORPHAN_TEST_SUITES_PATHS "$_r" | sed 's/^ */ [declined: /;s/$/]/')"
     _th6_root_covered AFFECTED_SCRIPTS_LIB_REPO_WRITE_BOUNDARY_TEST_SH_PATHS "$_r" .sh \
-      || echo "repo-write-boundary.test.sh:${_r}$(_th6_declined AFFECTED_SCRIPTS_LIB_REPO_WRITE_BOUNDARY_TEST_SH_PATHS "$_r" | sed 's/^ */ [declined: /;s/$/]/;s/^ *$//')"
+      || echo "repo-write-boundary.test.sh:${_r}$(_th6_declined AFFECTED_SCRIPTS_LIB_REPO_WRITE_BOUNDARY_TEST_SH_PATHS "$_r" | sed 's/^ */ [declined: /;s/$/]/')"
   done <<<"$_TH_ROOTS"
 )
 if [[ -z "$_th6_missing" ]]; then
@@ -3464,11 +3497,13 @@ _th6v_out=$(
   _t docs .test.sh 'docs/sub/'                                # dir member below the root — decline
   _t docs .test.sh 'docsx/'                                   # dir member astride the root name — decline
   _t fakenonexistent .test.sh 'fakenonexistent/'              # dir member, worktree-absent root — decline
+  _t docs .test.sh 'docs'                                     # slash-less dir member — mint parity, accept
+  _t fakenonexistent .test.sh 'fakenonexistent'               # slash-less, worktree-absent — decline
 )
-if [[ "${_th6v_out% }" == "1 1 1 0 0 0 0 0 0 0 0 0 1 1 0 0 0" ]]; then
-  pass "th6v: decline lit-glob/subset-2/subdir/head-side/wrong-ext/lit-file/near-ext/overlap/dir-below/dir-astride/dir-absent; accept both bare tails, dir member, late cover"
+if [[ "${_th6v_out% }" == "1 1 1 0 0 0 0 0 0 0 0 0 1 1 0 0 0 1 0" ]]; then
+  pass "th6v: decline lit-glob/subset-2/subdir/head-side/wrong-ext/lit-file/near-ext/overlap/dir-below/dir-astride/dir-absent/absent-bare; accept bare tails, dir member (both spellings), late cover"
 else
-  fail "th6v: got '${_th6v_out}' want '1 1 1 0 0 0 0 0 0 0 0 0 1 1 0 0 0'"
+  fail "th6v: got '${_th6v_out}' want '1 1 1 0 0 0 0 0 0 0 0 0 1 1 0 0 0 1 0'"
 fi
 
 # th6m — mutation dispatch over the predicate (Guard 2): each row mutates ONE
@@ -3653,14 +3688,32 @@ fi
 # th8-m7: a dir-less corpus file whose name git C-quotes — `"`, `\` and control
 #         bytes are quoted REGARDLESS of core.quotePath=false, so the listing
 #         emits `"x\ty.test.sh"` and a $-anchored extension regex alone would
-#         see nothing. The quoted-name arms flag it.
+#         see nothing. The quoted-name arms flag it — both disjoint classes
+#         observed (quoted `.test.sh` AND quoted `.sh`).
 cases=$((cases + 1))
-_th8_fix_repo m7 $'x\ty.test.sh'
+_th8_fix_repo m7 $'x\ty.test.sh' $'x\ty.sh'
 _th8_m=$(_TH_REPO="$TESTROOT/th8fx-m7" _th8_eval)
-if [[ "$_th8_m" == *'"'* && "$_th8_m" == *'test.sh"'* ]]; then
-  pass "th8-m7: a C-quoted dir-less member is flagged (quote channel closed)"
+if [[ "$_th8_m" == *'"x\ty.test.sh"'* && "$_th8_m" == *'"x\ty.sh"'* ]]; then
+  pass "th8-m7: C-quoted dir-less members flag, both disjoint classes (quote channel closed)"
 else
-  fail "th8-m7: output='${_th8_m}' (want the quoted name flagged)"
+  fail "th8-m7: output='${_th8_m}' (want both quoted names flagged)"
+fi
+
+# th8-m8: deaden arm 4 (the quoted `.sh` class) in a sourced mutant — the
+#         quoted `.test.sh` still flags via arm 3 while the quoted `.sh` goes
+#         silent, proving arm 4 carries weight.
+cases=$((cases + 1))
+if _th_fn_mut _th_root_corpus _th8_m8_corpus \
+    '!/\.test\.sh"$/  {print}' \
+    '!/\.test\.sh"$/  {next}'; then
+  _th8_m=$(printf '"x\\ty.sh"\n"x\\ty.test.sh"\n' | _th8_m8_corpus)
+else
+  _th8_m="MUTATION-DID-NOT-LAND"
+fi
+if [[ "$_th8_m" != *'x\ty.sh"'* && "$_th8_m" == *'test.sh"'* ]]; then
+  pass "th8-m8: deadening the quoted-.sh arm leaves x\\ty.sh unflagged, x\\ty.test.sh flagged"
+else
+  fail "th8-m8: mutant output='${_th8_m}' (want quoted .test.sh only)"
 fi
 
 echo ""
@@ -3672,7 +3725,7 @@ fi
 # The floor embeds the live _TH_ROOTS census (~3 cases per tracked top-level
 # dir across th4/th4b/th4c): a top-level-dir REMOVAL shrinks the corpus
 # legitimately — recompute the literal rather than misdiagnosing truncation.
-MIN_CASES=226
+MIN_CASES=228
 if (( cases < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran — below the $MIN_CASES floor; a row block went missing" >&2
   exit 2

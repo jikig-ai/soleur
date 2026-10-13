@@ -760,9 +760,11 @@ root the corpus scan enumerates).
     Companion hardening in the same change: `--paths` elements normalize a leading `./` run to
     fixpoint at the parse arm and refuse unclean spellings (empty elements, absolute, `..` or
     `/.` or `//` segments, a trailing `/`, control bytes) with a named rc-2 error — a print-only
-    diagnostic that silently selects nothing is a lie; and the th6 census predicate now requires
-    a literal `glob:<root>/` head plus a bare `*<ext>` or `**<ext>` tail, so only an edge that
-    can actually match the corpus class certifies it. Note for readers of
+    diagnostic that silently selects nothing is a lie; and the th6 census predicate now certifies
+    a root only via the forms the mint arm can actually act on — a `<root>/` (or slash-less
+    `<root>`) dir member whose target exists on disk, or a `glob:<root>/` edge whose tail is a
+    bare `*<ext>` or `**<ext>` — so only an edge that can actually match the corpus class
+    certifies it. Note for readers of
     `scripts/audit-suite-reads.sh`: its `UNCOVERED_AWK` compares an edge by literal equality or
     `<dir>/` prefix only, so a read covered solely by a `glob:` member reports as uncovered —
     over-report, the safe direction; those rows are not oracle disagreements.

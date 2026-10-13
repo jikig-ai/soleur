@@ -310,21 +310,23 @@ while [[ "${1:-}" == --* ]]; do
       # Per-element normalize+reject (#10117). The comma-joined list stands in
       # for a diff-name blob downstream; an unclean element never matches a git
       # path line — `./x` silently selected nothing, which is a lie in a
-      # diagnostic. Strip a leading `./` run to fixpoint, then refuse (named
-      # error echoing the element + a valid example, rc 2) anything still not a
-      # clean repo-relative path. Rejected shapes: empty elements (a,,b / a
+      # diagnostic. The rejects run on the RAW element (named error echoing
+      # the element + a valid example, rc 2), then a leading `./` run is
+      # stripped to fixpoint — ordering is load-bearing: every shape the strip
+      # could leave behind (.., //, /., a trailing /) is already present
+      # pre-strip, so normalization can never mint a reject shape that escaped
+      # the case and no post-strip re-check is needed. Rejected shapes: empty
+      # elements (a,,b / a
       # trailing comma / --paths= — bare `.`/`./` and trailing-`/` elements are
       # dir refs, not file diff paths, and land in the last case arm),
       # absolute paths, `..` SEGMENTS (substring `..` is legal name content —
       # foo..bar.sh passes), `//` or `/.` segments/trails (a/./b; the
       # doubled-head ././x carries one), and control bytes (the ingestion point
-      # joins on commas and the edge matcher splits on TAB — such a byte mints
-      # fake diff lines, and git C-quotes every control byte anyway so the
-      # spelling can never match a real path line). The rejects run on the RAW
-      # element before the ./ strip: every shape the strip could leave behind
-      # (.., //, /., a trailing /) is already present pre-strip, so
-      # normalization can never mint a reject shape that escaped the case — no
-      # post-strip re-check is needed. A repeated --paths= is last-wins. Legal
+      # joins on commas and the edge matcher splits on TAB — a C0/DEL byte
+      # mints fake diff lines and is C-quoted by git anyway, so the spelling
+      # can never match a real path line; the C1 range is a deliberate
+      # over-reject margin, matched only under C1-aware locales).
+      # A repeated --paths= is last-wins. Legal
       # name bytes that simply cannot match (glob metachars, `~`, `\`, a
       # comma inside one filename) stay admitted — the reject set names the
       # lie classes, not every unmatchable spelling; a comma is the delimiter
@@ -338,7 +340,7 @@ while [[ "${1:-}" == --* ]]; do
         _pp_rest="${_pp_rest#*,}"
         _pp_orig="$_pp"
         _pp_why=""
-        # `..` is checked before `/.` — `a/../b` carries both and the traversal
+        # `..` is checked before `/.` — `a/../.` carries both and the traversal
         # is the reason worth naming.
         case "$_pp" in
           "")                  _pp_why="empty element" ;;
