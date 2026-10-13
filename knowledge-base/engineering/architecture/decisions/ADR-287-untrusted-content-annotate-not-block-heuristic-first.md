@@ -114,7 +114,7 @@ measured on bun; the first scorer revision needed 24 s at 16 KB and minutes at 2
 generalized against the NON-holdout misses and false positives only, but the holdout aggregate and the ids of its misses had been seen,
 so the 0.949 holdout figure is optimistic and is not a clean out-of-sample number. At n=39 its 95% lower bound is about 0.83, below the
 0.90 bar. (b) The corpus was authored by the scorer's author, and FPR has no holdout side at all: it is in-sample. Single-sentence
-near-miss benign text flags more readily than the 0.000 suggests (the review's probe flagged several ordinary sentences; the worst were
+near-miss benign text flags more readily than the 0.011 suggests (the review's probe flagged several ordinary sentences; the worst were
 tightened and added as fixtures). (c) Three attacks still evade (`h-atk-04`, `h-atk-14`, `atk-029`). (d) No LLM-judged or real-world
 traffic numbers exist. Any public claim must be scoped to "heuristic flagging on fetched web content", routed through the CLO agent, and
 wait for the prd soak.

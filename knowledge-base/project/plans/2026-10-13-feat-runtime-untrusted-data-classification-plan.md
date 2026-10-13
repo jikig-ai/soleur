@@ -255,7 +255,7 @@ reassurance that fetched content was checked when it was not.
 agent to exfiltrate workspace files or call a write tool with the user's connected credentials; telemetry that accidentally
 logged fetched content or email addresses.
 
-**Brand-survival threshold:** single-user incident
+- **Brand-survival threshold:** single-user incident
 
 Concrete artifact/vector pairs (added after review): `WebFetchOutput.result` (a model-processed summary) can drop or paraphrase an injection, or exceed the 256 KB scan window (the unscanned tail is annotated, never enveloped); the `untrusted-classify` log line carries a hashed workspace id, the conversation id and sizes (retained at WARN); a flag-resolution failure or Flagsmith outage silently leaves the scan OFF (liveness alert is deferred to #10195); subagent fetches and resumed transcripts are not covered; email, inbox and CRM keep static framing only (no scoring); a quoted payload on a page that reads as security writing can evade the heuristic.
 
