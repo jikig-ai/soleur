@@ -30,7 +30,7 @@ Do NOT touch `cloud-init-git-data.yml` or `git-data-bootstrap.sh` (sibling scope
 ## Phase 3: Suites green + floors
 
 - [x] 3.1 `bash apps/web-platform/infra/inngest-redis-luks.test.sh` GREEN; set the floor to the MEASURED count (was 64)
-- [ ] 3.2 (CI-only, sudo — will measure at integration) `sudo bash apps/web-platform/infra/inngest-redis-luks-loopback.test.sh` GREEN; set the floor to the MEASURED count (was 85, projected)
+- [x] 3.2 (CI-only, sudo — measured at integration) `sudo bash apps/web-platform/infra/inngest-redis-luks-loopback.test.sh` GREEN; set the floor to the MEASURED count (was 85, projected)
 - [x] 3.3 `bash apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh`, `cloud-init-inngest-provision-unit.test.sh`, `inngest-host.test.sh`, `inngest.test.sh`, `inngest-luks-cutover.test.sh`, `inngest-luks-sole-copy.test.sh`, `journald-config.test.sh` all GREEN
 - [x] 3.4 `bash apps/web-platform/infra/inngest-userdata-budget.sh --json`; record post-change headroom (pre-change stored 19,692 / headroom 13,076 of 32,768)
 
