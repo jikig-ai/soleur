@@ -14,6 +14,38 @@ brand_survival_threshold: none
 
 # fix: close out #10094 — slot-trigger + worktree-lease nightly legs verified green post-#10001
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-13 (soleur:deepen-plan, inline — no Task/Agent tool in
+this harness; review/research fan-outs were assessed and applied inline instead)
+**Sections enhanced:** Overview (evidence count), Research Insights (run list),
+Phase 1 (`.jobs[]` robustness), Non-Goals (current issue states)
+
+**Halt gates run (all pass or n/a):** 4.6 User-Brand Impact (present, `none`,
+diff touches no sensitive path); 4.7 Observability (pure-docs — no code-class
+files); 4.8 PAT sweep (0 hits); 4.9 UI wireframe (no UI surface); 4.10 Encryption
+Posture (no store/connection); 4.11 Guard Contract (deliverable has no guard —
+cited `lint-integration-env-gates.sh` is an existing mechanism, not a new one);
+4.12 Scope Check (1 unfenced section, 3 subsections, all asks mapped, justified
+`inferred` rows, `Recommendation:` present); 4.5 network-outage (no triggers);
+4.55 downtime (no downtime-inducing op); 4.4 precedent-diff (no pattern-bound
+prescriptions; no new scheduled job — Inngest check n/a).
+
+**Verified live this pass:** `5b2ccc1456` is an ancestor of `origin/main`
+(#10001 landed); all five post-#10001 runs (38152254226, 38163387518,
+38164703648, 38233564364, 38248356757) show both legs `success`; cited issue
+states re-verified — #10090 MERGED, #10096 OPEN, #10017 CLOSED, #7004 OPEN,
+#9855 CLOSED; `gh issue close --comment` flag confirmed via `--help`; mig 115
+files exist on `origin/main`; no AGENTS rule-ids cited; no PAT-shaped tokens.
+
+### Key Corrections Applied
+
+1. Green-run evidence widened 4 → 5 runs (38163387518 confirmed green this pass).
+2. `.jobs[0].steps[]` → `.jobs[].steps[]` in the verification commands (the
+   single-job shape is true today; the widened selector survives a second job).
+3. Non-Goals issue states corrected: #10017 is CLOSED (was listed among
+   remaining trackers by the 10-12 tracker comment; it has since resolved).
+
 ## Overview
 
 Issue #10094 tracks two red legs of the nightly `scheduled-integration-suites.yml`
@@ -23,7 +55,7 @@ the `slot-trigger` leg (`test/conversation-archive-release-slot.integration.test
 (`test/worktree-write-lease.integration.test.ts` AC2(c)/(e)/(f), `acquire(HOST_B)`
 returning `undefined`).
 
-Both legs have been green on every run since PR #10001 merged
+Both legs have been green on all five runs since PR #10001 merged
 (`5b2ccc1456`, 2026-10-11T15:08Z — five hours after the observed failure). The root
 cause was test-constant drift, not dev-substrate drift: migration 133 raised the
 slot/lease liveness thresholds 120 s → 240 s, but the two dormant env-gated suites
@@ -48,7 +80,7 @@ remaining work is evidence-based tracker closeout, not code.
   workflow `.github/workflows/scheduled-integration-suites.yml` (legs at :217 and :262).
 - **Premise partially stale:** the issue hypothesizes possible dev function-body
   drift ("read the applied function body on dev (`pg_proc.prosrc`) and diff").
-  Post-#10001 run evidence shows both legs green on four consecutive runs, so the
+  Post-#10001 run evidence shows both legs green on five consecutive runs, so the
   legs are healthy on the *applied* dev substrate; a `pg_proc` probe is retained as
   an optional corroborating step, not a blocking one.
 - Mechanism-vs-ADR corpus check: this plan proposes no mechanism (no guard, no
@@ -91,10 +123,11 @@ Restated from the issue's asks:
   raised both stale ages to 300 s (= 240 s + 60 s clock-skew margin, named
   constants) and updated comments/copy. Its own commit message documents the same
   diagnosis.
-- **Green-run evidence (queried via `gh api .../jobs` step conclusions):**
-  run 38152254226 (dispatch, 10-11T15:40Z), 38164703648 (dispatch, 10-11T18:39Z),
-  38233564364 (dispatch, 10-12T10:00Z), and 38248356757 (**schedule**, 10-12T12:19Z)
-  all show `Run WORKTREE_LEASE_INTEGRATION_TEST suites` = `success` and
+- **Green-run evidence (queried via `gh api .../jobs` step conclusions):** all
+  five post-#10001 runs — 38152254226 (dispatch, 10-11T15:40Z), 38163387518
+  (dispatch, 10-11T18:20Z), 38164703648 (dispatch, 10-11T18:39Z), 38233564364
+  (dispatch, 10-12T10:00Z), and 38248356757 (**schedule**, 10-12T12:19Z) — show
+  `Run WORKTREE_LEASE_INTEGRATION_TEST suites` = `success` and
   `Run SLOT_TRIGGER_INTEGRATION_TEST suites` = `success`.
 - **Remaining red legs are out of scope and tracked:** `SUPABASE_DEV_INTEGRATION`
   / `BYOK` (deleteUser-cascade class, fix landed via #10090 after the last checked
@@ -163,7 +196,7 @@ a gate).
    gh run list --workflow=scheduled-integration-suites.yml --limit 5 \
      --json databaseId,conclusion,createdAt,event,headSha
    gh api repos/jikig-ai/soleur/actions/runs/<latest-schedule-run>/jobs \
-     -q '.jobs[0].steps[] | select(.name | test("SLOT_TRIGGER|WORKTREE_LEASE")) | "\(.conclusion)\t\(.name)"'
+     -q '.jobs[].steps[] | select(.name | test("SLOT_TRIGGER|WORKTREE_LEASE")) | "\(.conclusion)\t\(.name)"'
    ```
 
    Both lines must read `success`. (Already true for schedule-run 38248356757;
@@ -220,8 +253,9 @@ None (pipeline planning artifacts only, which are not plan-file entries).
 - Do NOT change `STALE_SLOT_AGE_S` / `STALE_LEASE_AGE_S` — the literal constants
   are a deliberate fail-loud alarm designed in #10001.
 - Do NOT chase the remaining red legs: `SUPABASE_DEV_INTEGRATION`/`BYOK`
-  (deleteUser class → #9993/#10090), `MU1` → #9995, raw-deleteUser carriers →
-  #10096, tmp-leak → #10017, deferred → #7004.
+  (deleteUser class → #9993 umbrella; fix landed via #10090, MERGED 10-12T13:08Z),
+  `MU1` → #9995 (OPEN), raw-deleteUser carriers → #10096 (OPEN), tmp-leak →
+  #10017 (CLOSED), deferred reclaim → #7004 (OPEN).
 - No new CI automation — the umbrella-issue + whole-run auto-close contract is
   behaving as designed; per-leg issues are human-managed.
 
@@ -290,7 +324,7 @@ empty — no UI-surface path; tier NONE.)
 - [ ] AC1: The then-latest `schedule`-event run of `scheduled-integration-suites.yml`
   on `main` post-#10001 shows `Run WORKTREE_LEASE_INTEGRATION_TEST suites` =
   `success` AND `Run SLOT_TRIGGER_INTEGRATION_TEST suites` = `success`, verified
-  via `gh api repos/jikig-ai/soleur/actions/runs/<run>/jobs -q '.jobs[0].steps[]
+  via `gh api repos/jikig-ai/soleur/actions/runs/<run>/jobs -q '.jobs[].steps[]
   | select(.name | test("SLOT_TRIGGER|WORKTREE_LEASE")) | "\(.conclusion)\t\(.name)"'`.
   (Run 38248356757 already satisfies this; re-verified at work time.)
 - [ ] AC2: `gh issue view 10094 --json state` returns `CLOSED`, and the issue

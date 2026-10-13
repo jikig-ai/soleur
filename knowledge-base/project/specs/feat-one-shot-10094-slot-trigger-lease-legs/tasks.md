@@ -9,7 +9,7 @@ Issue: #10094 (closes) · fold-ins: #3373, #3221 · umbrella: #9993 (stays open)
   --json databaseId,conclusion,createdAt,event,headSha`; identify the latest
   `schedule`-event run post-#10001.
 - [ ] 1.2 Run
-  `gh api repos/jikig-ai/soleur/actions/runs/<run-id>/jobs -q '.jobs[0].steps[]
+  `gh api repos/jikig-ai/soleur/actions/runs/<run-id>/jobs -q '.jobs[].steps[]
   | select(.name | test("SLOT_TRIGGER|WORKTREE_LEASE")) | "\(.conclusion)\t\(.name)"'`;
   both lines must read `success`. (AC1)
 - [ ] 1.3 Optional corroboration (skip if no `doppler` dev access): run the
