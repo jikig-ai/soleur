@@ -482,8 +482,8 @@ wrote no marker (inferred from the code order, not read from a host); that nothi
 rests on the store flag being off (inherited from #10175, 2026-10-13).
 
 **Decision.** Waiting for an attachment is part of proving a layout. The bootstrap waits at the
-plaintext link for up to 300 s: 30 passes of `sleep 10`, counted and never read from the clock, a
-literal rather than a seam. The `luks_open` heredoc's device wait is 300 counted passes of
+plaintext link for 300 s: 30 passes of `sleep 10`, counted and never read from the clock (so 300 s is a
+lower bound; each pass's probes add to it), a literal rather than a seam. The `luks_open` heredoc's device wait is 300 counted passes of
 `sleep 1`, followed by one `udevadm settle` before the single-shot probes that gate `luksFormat`.
 The wait changes WHEN the device is resolved, never what is checked: after the bound the same named
 FATAL fires, the plaintext-empty verification is never skipped, and the device number is still

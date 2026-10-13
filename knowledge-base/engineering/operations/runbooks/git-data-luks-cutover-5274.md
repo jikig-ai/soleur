@@ -947,12 +947,12 @@ ADR-239's 2026-10-13 amendment; they are not repeated here.
   only a newer successful rotate carrying the `Rotate completed (d6 marker)` supersedes it.
 - No claim is made about the previous key's escrow, passphrase recovery or reopening.
 
-**The fix** (PR #10210): the bootstrap waits up to 300 s at the plaintext link and the `luks_open`
+**The fix** (PR #10210): the bootstrap waits 300 s (a lower bound on real time) at the plaintext link and the `luks_open`
 heredoc's device wait is 300 counted passes (ADR-239 amendment). After the bound the same named
 FATAL fires and the plaintext-empty verification is never skipped. The poll starts after
 `terraform apply` returns and apply blocks on both attachments, so a waiting boot adds only its
-post-attach tail (up to 56 s in rehearsal 38356246710; inferred from the sequencing, not measured on
-a waiting boot).
+post-attach tail (up to 56 s in rehearsal 38356246710, measured 2026-10-13 on a boot that did not wait;
+that a waiting boot costs no more is inferred from the sequencing).
 
 **Recovery order (forward only; each dispatch needs an explicit go-ahead that names the command).**
 A new server is unavoidable: `user_data` is ForceNew and runcmd is once-per-instance, so no existing
