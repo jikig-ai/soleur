@@ -42,7 +42,12 @@ Two related sequencing traps surfaced in one integration-CI follow-through sessi
 ## Key Insight
 
 An issue's symptom text is a claim about a SHA, not about `main` today — the
-failing run and the fix can coexist on the timeline. And "the script is attended"
+failing run and the fix can coexist on the timeline. Deliberate non-fix, recorded
+so it isn't re-litigated: the *class* (fixtures silently drifting behind
+migrations) needs no new guard — the legs going red when dev's function body
+drifted from the fixtures was the alarm working; #10001's named constants
+(`STALE_*_AGE_S`) pin the contract the suite asserts, and a future migration that
+changes it will red the leg again by design. And "the script is attended"
 is a property of the *harness*, not just the operator: the approval mechanism is
 a hook the surface either fires or doesn't, so surface capability belongs in the
 same breath as the operator's availability.
