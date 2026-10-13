@@ -200,7 +200,7 @@ a rotate job completed, not the key-escrow state. Never re-run a rotate run from
 reads the latest attempt, so a re-run hides the failed attempt from it (the failed attempt stays visible with
 `gh run view <id> --attempt 1`). A re-run that completes as a rotate stamps, but it re-executes the destructive
 apply; one refused at the plan gate reads as nothing having happened and lets an older stamp discharge D6.
-Dispatch a fresh rotate instead. (Two statements here are inferred from the run-record shape and have not been observed on a live run: that a re-run refused at the plan gate reads `skip`, and that an in-progress run which does not list the job yet is treated as in flight.) The gate
+Dispatch a fresh rotate instead. A rotate run that dies before its precondition step (checkout or credential setup) or is refused at that step never reached the apply, so it reads `skip` like a failed plain replace: the run record carries no dispatch inputs to tell them apart, and an older stamp stays valid because nothing was changed (a ruled trade-off, 2026-10-13: the gate blocks only on an attempt whose apply began). (Two statements here are inferred from the run-record shape and have not been observed on a live run: that a re-run refused at the plan gate reads `skip`, and that an in-progress run which does not list the job yet is treated as in flight.) The gate
 reads the 100 newest dispatch runs of the apply workflow (every target counts toward the 100), so a rotate
 older than that is not visible to it. Dispatch it off `main`:
 
