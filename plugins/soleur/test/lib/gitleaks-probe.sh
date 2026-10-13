@@ -21,6 +21,36 @@
 
 GITLEAKS_PIN_REMEDIATION="CI pins gitleaks 8.24.2 — install that version or pin it in your version manager."
 
+# Bounded external invocation (#7697). The wedged-holder incident was a
+# gitleaks/git child parked in anon_pipe_read while its parent held the
+# repo-wide test-all lock for 4.6 days — every external call the suites make
+# must carry an exec-boundary deadline. gl_run wraps timeout(1) around the
+# command, closes its stdin, and suppresses any credential prompt, so a wedge
+# returns rc=124 instead of parking a suite (and the gate lock) forever.
+# The timeout binary is resolved ONCE at source time; a host with neither
+# `timeout` nor `gtimeout` (stock macOS) emits one [note] and runs unbounded —
+# the file's documented degrade posture, never a hard dependency.
+_GL_TIMEOUT_CMD=()
+if command -v timeout >/dev/null 2>&1; then _GL_TIMEOUT_CMD=(timeout)
+elif command -v gtimeout >/dev/null 2>&1; then _GL_TIMEOUT_CMD=(gtimeout)
+else
+  echo "[note] gitleaks-probe: timeout/gtimeout absent — suite invocations run unbounded (#7697 degrade)" >&2
+fi
+
+# gl_run <bound_s> <cmd> [args...] — exit code is the command's; 124 means the
+# bound fired. stdin is /dev/null and GIT_TERMINAL_PROMPT=0 so nothing in the
+# chain can wait on a terminal or a pipe-read that will never be satisfied.
+gl_run() {
+  local bound="${1:-120}"
+  shift
+  [[ "$bound" =~ ^[0-9]+$ ]] || bound=120
+  if ((${#_GL_TIMEOUT_CMD[@]})); then
+    env GIT_TERMINAL_PROMPT=0 "${_GL_TIMEOUT_CMD[@]}" -k 5 "$bound" "$@" </dev/null
+  else
+    env GIT_TERMINAL_PROMPT=0 "$@" </dev/null
+  fi
+}
+
 # gl_probe -> sets HAVE_GITLEAKS (1|0) and GITLEAKS_REASON.
 gl_probe() {
   HAVE_GITLEAKS=1

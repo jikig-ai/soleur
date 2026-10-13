@@ -405,8 +405,13 @@ s = s[:i] + "\n" + calls + s[j:]
 
 s = sub_once(s, 'tc_acquire "test-all"', 'true "test-all"  # sandbox: lock neutered', 'tc_acquire call')
 s = re.sub(r'^tc_preamble\b.*$', 'true  # sandbox: preamble neutered', s, count=1, flags=re.M)
+# The pin is suite-controlled on purpose (#10209): an inherited
+# TC_SIBLING_RUN_COUNT must not reach a refusal this sandbox re-armed — the
+# count it carried describes the PARENT's measurement, which this runner
+# never made (its diff walk is index-missing, so every bare arm is already
+# degraded-full and eligible to refuse).
 s = sub_once(s, 'if [[ "${TC_SIBLING_RUN_COUNT:-0}" -gt 0',
-             'TC_SIBLING_RUN_COUNT_PID=$$\nif [[ "${TC_SIBLING_RUN_COUNT:-0}" -gt 0',
+             'TC_SIBLING_RUN_COUNT="${WD_SIBLING_RUNS:-0}"\nTC_SIBLING_RUN_COUNT_PID=$$\nif [[ "${TC_SIBLING_RUN_COUNT:-0}" -gt 0',
              'sibling refusal opener')
 
 def delete_span(hay, begin, end, what):
@@ -453,7 +458,7 @@ PY
 # class that reddens suites only under an exported TEST_GROUP/TEST_TIMING_LOG).
 # One env-scrub list, one runner — the security-relevant preamble the
 # inline-arm copies had already diverged on (review: env-leak class).
-ENV_SCRUB="-u TEST_GROUP -u TEST_TIMING_LOG -u CI -u GITHUB_EVENT_NAME -u SOLEUR_SCRATCH_SESSION_ROOT -u SOLEUR_SCRATCH_OWNER_PID -u SOLEUR_SCRATCH_BASE"
+ENV_SCRUB="-u TEST_GROUP -u TEST_TIMING_LOG -u CI -u GITHUB_EVENT_NAME -u SOLEUR_SCRATCH_SESSION_ROOT -u SOLEUR_SCRATCH_OWNER_PID -u SOLEUR_SCRATCH_BASE -u TC_SIBLING_RUN_COUNT -u TC_SIBLING_RUN_COUNT_PID -u WD_SIBLING_RUNS"
 
 # run_arm <name> <mutation> <inject> <env-pairs> [argv...]
 # env-pairs is ONE word-split string appended after the baked scrubs, so
@@ -639,6 +644,33 @@ else
   fail "C8 — bare-invocation path did not arm or emit (rc=$C8_RC)"; dump "$C8_OUT"
 fi
 
+# C10 — #10209 regression: an INHERITED sibling count must not refuse a bare
+# sandboxed run. The sandbox re-arms TC_SIBLING_RUN_COUNT_PID=$$ so the refusal
+# stays exercisable; before the pin, a parent's exported TC_SIBLING_RUN_COUNT
+# reached that re-armed refusal (the sandbox's diff walk is always
+# index-missing, so _aff_fallback arms the full-gate conjunct for every bare
+# arm) and C8 reddened whenever a real sibling gate was in flight.
+rm -rf "$TMP/durable"
+run_arm c10 none 1 "TC_SIBLING_RUN_COUNT=3" || true
+C10_OUT="$ARM_OUT"; C10_RC="$ARM_RC"
+if grep -q . < <(find "$TMP/durable" -name 'suite-timings.tsv' 2>/dev/null) \
+   && grep -qF 'WEIGHT_DRIFT wd-stub committed=5000 local=30000' <<<"$C10_OUT" \
+   && [[ "$C10_RC" == 0 ]]; then
+  pass "C10 — inherited TC_SIBLING_RUN_COUNT does not reach the re-armed refusal (#10209)"
+else
+  fail "C10 — an inherited sibling count refused the bare run (rc=$C10_RC)"; dump "$C10_OUT"
+fi
+
+# C11 — refusal control: a nonzero SUITE pin still produces rc=4, so the scrub
+# + pin changed inheritance, not the refusal itself (the #7553 contract).
+run_arm c11 none 1 "WD_SIBLING_RUNS=2" || true
+C11_OUT="$ARM_OUT"; C11_RC="$ARM_RC"
+if [[ "$C11_RC" == "4" ]] && grep -q 'refusing a full-gate run' <<<"$C11_OUT"; then
+  pass "C11 — an explicit WD_SIBLING_RUNS=2 pin still refuses (rc=4, refusal testable)"
+else
+  fail "C11 — the suite-pinned sibling count did not refuse (rc=$C11_RC)"; dump "$C11_OUT"
+fi
+
 # C9 — dual-emit at the WIRING level: stdout and stderr are captured to
 # separate files, and the drift line must land on both.
 rm -rf "$TMP/durable"
@@ -765,7 +797,7 @@ echo "test-all-weight-drift: $PASS passed, $FAIL failed"
 
 # Conservation + anti-vacuity floor (sibling-suite shape — a count assertion
 # cannot see a deleted body, so the floor counts assertion RESULTS).
-MIN_ASSERTIONS=45
+MIN_ASSERTIONS=47
 _total=$((PASS + FAIL))
 if (( _total < MIN_ASSERTIONS )); then
   echo "[FATAL] anti-vacuity floor: only $_total assertion(s) ran, expected >= $MIN_ASSERTIONS" >&2

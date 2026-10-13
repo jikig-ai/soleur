@@ -23,6 +23,14 @@
 # degrades to the pre-queue direct-acquire path. Every function is safe to call
 # under `set -euo pipefail`.
 #
+# The live-wedged-holder class (#7697) is handled by two instruments, both
+# still observe-only: the lock wait itself is exec-bounded in
+# session-state.sh (`timeout -k` around `flock -w`, because an inherited
+# blocked SIGALRM mask defeats the in-process expiry), and each heartbeat
+# reads the acquirer-minted $LOCK_DIR/<name>.holder marker so a wedged holder
+# shows a frozen holder_progress_age while a corpse reads holder_alive=0.
+# Neither path ever aborts or signals the holder.
+#
 # TEST SEAMS (all default to the real system; overridden only by the suite):
 #   TC_PROC_ROOT     procfs root                  (default /proc)
 #   TC_TMPDIR        the tmpfs under observation  (default ${TMPDIR:-/tmp})
@@ -966,6 +974,14 @@ _tc_ms_since() {
 # the heartbeat's own lifetime (queue wait + lock wait). When a ticket is held
 # the beat reports position=N, recomputed each beat from the ticket files —
 # advisory instrumentation, never a control input (the queue's own loop is).
+#
+# Holder observability (#7697): each beat also reads the marker the ACQUIRER
+# minted (<name>.holder beside the lock file), so a waiter can tell "holder is
+# progressing" (rising stamps) from "holder wedged" (frozen progress_epoch) or
+# "holder is a corpse" (holder_alive=0). Read-and-report only — the beat never
+# aborts on it and never signals the holder. holder=none means the holder went
+# through plain flock (or pre-marker code); holder=unreadable means the marker
+# existed but did not parse — neither is an error.
 _tc_wait_heartbeat() {
   local interval="${1:-60}" overrun_s="${2:-3600}" budget="${3:-0}" name="${4:-}"
   local qdir="${5:-}" serial="${6:-}"
@@ -998,8 +1014,28 @@ _tc_wait_heartbeat() {
     if [[ -n "$qdir" && -n "$serial" ]]; then
       pos=" position=$(_tc_queue_position "$qdir" "$serial" 2>/dev/null || echo '?')"
     fi
-    printf '[contention] BANNER %s: queued, not hung — %s waited=%ss of %ss%s. Run `bash scripts/test-all.sh --capacity` in another shell to see which worktrees are running.\n' \
-      "$token" "${name:-<unnamed>}" "$waited" "$budget" "$pos" >&2
+    # One marker read per beat, all failures collapsing to a label. `pid=` is
+    # the only field the beat trusts enough to name; everything else is
+    # holder=unreadable. holder_alive is kill -0 liveness only — never a kill.
+    local _hfield=""
+    if [[ -n "$name" && -n "${LOCK_DIR:-}" ]]; then
+      local _hf="${LOCK_DIR%/}/$name.holder" _hpid="" _hprog="" _halive=0 _hage="?"
+      if [[ -e "$_hf" ]]; then
+        _hpid="$(awk -F= '/^pid=/{print $2; exit}' "$_hf" 2>/dev/null || true)"
+        _hprog="$(awk -F= '/^progress_epoch=/{print $2; exit}' "$_hf" 2>/dev/null || true)"
+        if [[ "$_hpid" =~ ^[0-9]+$ ]]; then
+          kill -0 "$_hpid" 2>/dev/null && _halive=1
+          [[ "$_hprog" =~ ^[0-9]+$ ]] && _hage=$(( "${EPOCHSECONDS:-0}" - _hprog ))
+          _hfield=" holder_pid=$_hpid holder_alive=$_halive holder_progress_age=${_hage}s"
+        else
+          _hfield=" holder=unreadable"
+        fi
+      else
+        _hfield=" holder=none"
+      fi
+    fi
+    printf '[contention] BANNER %s: queued, not hung — %s waited=%ss of %ss%s%s. Run `bash scripts/test-all.sh --capacity` in another shell to see which worktrees are running.\n' \
+      "$token" "${name:-<unnamed>}" "$waited" "$budget" "$pos" "$_hfield" >&2
   done
 }
 

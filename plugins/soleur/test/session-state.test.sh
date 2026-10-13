@@ -860,6 +860,212 @@ else
 fi
 
 # ------------------------------------------------------------------------
+# T20-T23: the declared lock-wait bound must fire under an INHERITED signal
+# mask (#7697). `flock -w`'s own expiry is delivered to the flock process via
+# SIGALRM; a caller that inherited that signal as BLOCKED parks in
+# locks_lock_inode_wait past the bound indefinitely — the 4.6-day wedged
+# holder incident. Measured pre-fix on this box: `sigprocmask(SIG_BLOCK,
+# SIGALRM)` before exec leaves `flock -w 3` still waiting at 6 s, while the
+# SIG_IGN arm returns at 3 s and `timeout 4 flock -w 60` fires at 4 s. The
+# bound therefore lives at the EXEC boundary: `timeout -k` wraps the flock
+# call (SIGKILL needs no mask cooperation), rc=124 maps to the same
+# return-99 contended path, and absent timeout/gtimeout degrades to the bare
+# `flock -w` of before with a printed [note].
+# ------------------------------------------------------------------------
+
+MASKWRAP=""
+if command -v python3 >/dev/null 2>&1; then
+  MASKWRAP="$(mktemp -d)"
+  ROOTS+=("$MASKWRAP")
+  # Quoted heredoc — the python is a fixed fixture, never interpolated.
+  cat > "$MASKWRAP/maskwrap.py" <<'PYEOF'
+import os, signal, sys
+mode, script = sys.argv[1], sys.argv[2]
+if mode == "block":
+    signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGALRM})
+elif mode == "ignore":
+    signal.signal(signal.SIGALRM, signal.SIG_IGN)
+os.execvp("bash", ["bash", "-c", script])
+PYEOF
+fi
+
+echo "T20: a BLOCKED-SIGALRM waiter returns inside its declared bound (#7697)"
+ROOT=$(make_root); ROOTS+=("$ROOT")
+if [[ -z "$MASKWRAP" ]] || ! command -v timeout >/dev/null 2>&1; then
+  echo "  skip: python3 or timeout absent — the exec-boundary bound cannot be exercised"
+else
+  # A live holder holds the lock well past every bound asserted below.
+  bash -c "
+    export SOLEUR_SESSION_STATE_ROOT='$ROOT'
+    source '$HELPER'
+    acquire_lock t20 30
+    sleep 15
+    release_lock t20
+  " &
+  T20_HOLDER=$!
+  for _ in {1..200}; do
+    flock -w 0 -x "$ROOT/locks/t20.lock" -c true 2>/dev/null || break
+    sleep 0.05
+  done
+  T20_START=$(date +%s)
+  SOLEUR_LOCK_BOUND_SLACK_S=2 python3 "$MASKWRAP/maskwrap.py" block "
+    export SOLEUR_SESSION_STATE_ROOT='$ROOT'
+    source '$HELPER'
+    acquire_lock t20 2
+    echo acquire_rc=\$?
+  " > "$ROOT/t20.out" 2>&1
+  T20_ELAPSED=$(( $(date +%s) - T20_START ))
+  # The bound is timeout_s=2 + slack=2 + scheduling margin; a defeated bound
+  # waits until the holder releases (15 s), so <10 s distinguishes fired from
+  # hung. LOCK_BOUND_FORCED is NOT asserted here: GNU timeout unblocks the
+  # child's signal mask (measured: `timeout 6 flock -w 3` under a blocked
+  # SIGALRM returns rc=1 at 3 s), so the inner expiry itself fires and rc=124
+  # is reserved for a flock that cannot return at all — that path is
+  # fixtured separately in T20b below.
+  if (( T20_ELAPSED < 10 )) && grep -q 'acquire_rc=99' "$ROOT/t20.out"; then
+    pass "T20: blocked-SIGALRM waiter returns 99 in ${T20_ELAPSED}s inside the declared bound"
+  else
+    fail "T20: blocked-SIGALRM waiter: elapsed=${T20_ELAPSED}s out=$(tail -3 "$ROOT/t20.out")"
+  fi
+
+  # T20b: the rc=124 path — a flock that cannot return at all. A PATH-pinned
+  # flock stub that never exits makes the OUTER bound fire; the wrapper must
+  # map it to the contended rc=99 AND name it LOCK_BOUND_FORCED so the
+  # "the -w bound did not hold" event is never silent.
+  STUB_BIN="$ROOT/stub-bin"; mkdir -p "$STUB_BIN"
+  for t in bash date mkdir stat rm mv cat basename dirname grep head cut printf sleep ln mktemp git kill touch wc awk tr sh env seq tail timeout python3; do
+    src=$(command -v "$t" 2>/dev/null || true)
+    [[ -n "$src" ]] && ln -s "$src" "$STUB_BIN/$t"
+  done
+  printf '#!/usr/bin/env bash\nexec sleep 3600\n' > "$STUB_BIN/flock"
+  chmod +x "$STUB_BIN/flock"
+  T20B_START=$(date +%s)
+  PATH="$STUB_BIN" SOLEUR_LOCK_BOUND_SLACK_S=2 bash -c "
+    export SOLEUR_SESSION_STATE_ROOT='$ROOT'
+    source '$HELPER'
+    acquire_lock t20b 2
+    echo acquire_rc=\$?
+  " > "$ROOT/t20b.out" 2>&1
+  T20B_ELAPSED=$(( $(date +%s) - T20B_START ))
+  # timeout fires at 2+2; <10 leaves margin for the -k grace and scheduling.
+  if grep -q 'acquire_rc=99' "$ROOT/t20b.out" \
+     && grep -q 'LOCK_BOUND_FORCED' "$ROOT/t20b.out" \
+     && (( T20B_ELAPSED < 10 )); then
+    pass "T20b: a flock that cannot return hits the exec bound, rc=99, LOCK_BOUND_FORCED emitted (${T20B_ELAPSED}s)"
+  else
+    fail "T20b: forced-bound path missing or unbounded: elapsed=${T20B_ELAPSED}s out=$(tail -3 "$ROOT/t20b.out")"
+  fi
+
+  # Guard-1 row 3: the bound sits on the CHOKEPOINT, not on the acquire_lock
+  # entry point — with_lock must be covered by the same wrapper. Its own
+  # holder on a DISTINCT lock: reusing t20 would measure a free lock whenever
+  # the T20 holder has already released.
+  bash -c "
+    export SOLEUR_SESSION_STATE_ROOT='$ROOT'
+    source '$HELPER'
+    acquire_lock t21 30
+    sleep 15
+    release_lock t21
+  " &
+  T21_HOLDER=$!
+  for _ in {1..200}; do
+    flock -w 0 -x "$ROOT/locks/t21.lock" -c true 2>/dev/null || break
+    sleep 0.05
+  done
+  T21_START=$(date +%s)
+  SOLEUR_LOCK_BOUND_SLACK_S=2 python3 "$MASKWRAP/maskwrap.py" block "
+    export SOLEUR_SESSION_STATE_ROOT='$ROOT'
+    source '$HELPER'
+    with_lock t21 2 -- true
+    echo with_lock_rc=\$?
+  " > "$ROOT/t21.out" 2>&1
+  T21_ELAPSED=$(( $(date +%s) - T21_START ))
+  if (( T21_ELAPSED < 10 )) && grep -q 'with_lock_rc=99' "$ROOT/t21.out"; then
+    pass "T21: with_lock is bounded under the same blocked mask (${T21_ELAPSED}s)"
+  else
+    fail "T21: with_lock not bounded: elapsed=${T21_ELAPSED}s out=$(tail -3 "$ROOT/t21.out")"
+  fi
+  kill "$T20_HOLDER" "$T21_HOLDER" 2>/dev/null || true
+  wait "$T20_HOLDER" "$T21_HOLDER" 2>/dev/null || true
+fi
+
+echo "T22: an IGNORED-SIGALRM waiter still returns via flock's own expiry (control)"
+ROOT=$(make_root); ROOTS+=("$ROOT")
+if [[ -z "$MASKWRAP" ]]; then
+  echo "  skip: python3 absent"
+else
+  bash -c "
+    export SOLEUR_SESSION_STATE_ROOT='$ROOT'
+    source '$HELPER'
+    acquire_lock t22 30
+    sleep 15
+    release_lock t22
+  " &
+  T22_HOLDER=$!
+  for _ in {1..200}; do
+    flock -w 0 -x "$ROOT/locks/t22.lock" -c true 2>/dev/null || break
+    sleep 0.05
+  done
+  T22_START=$(date +%s)
+  SOLEUR_LOCK_BOUND_SLACK_S=2 python3 "$MASKWRAP/maskwrap.py" ignore "
+    export SOLEUR_SESSION_STATE_ROOT='$ROOT'
+    source '$HELPER'
+    acquire_lock t22 2
+    echo acquire_rc=\$?
+  " > "$ROOT/t22.out" 2>&1
+  T22_ELAPSED=$(( $(date +%s) - T22_START ))
+  # Guard-1 row 4 (must-PASS differing input): SIG_IGN is harmless — flock's
+  # OWN -w expiry fires at ~timeout_s, so the return is rc=99 WITHOUT the
+  # forced-bound line (which only the rc=124 path emits).
+  if grep -q 'acquire_rc=99' "$ROOT/t22.out" \
+     && (( T22_ELAPSED < 10 )) \
+     && ! grep -q 'LOCK_BOUND_FORCED' "$ROOT/t22.out"; then
+    pass "T22: SIG_IGN waiter returns 99 in ${T22_ELAPSED}s through the inner bound (no forced line)"
+  else
+    fail "T22: SIG_IGN arm regressed: elapsed=${T22_ELAPSED}s out=$(tail -3 "$ROOT/t22.out")"
+  fi
+  kill "$T22_HOLDER" 2>/dev/null || true
+  wait "$T22_HOLDER" 2>/dev/null || true
+fi
+
+echo "T23: a host without timeout/gtimeout degrades to the bare flock -w bound"
+ROOT=$(make_root); ROOTS+=("$ROOT")
+# T6's PATH-sandbox shape: every tool the lib's lock path touches, minus
+# timeout and gtimeout.
+SANDBOX_BIN2=$(mktemp -d); ROOTS+=("$SANDBOX_BIN2")
+for t in bash date mkdir stat rm mv cat basename dirname grep head cut printf sleep ln mktemp git kill touch wc awk tr sh env seq tail flock; do
+  src=$(command -v "$t" 2>/dev/null || true)
+  [[ -n "$src" ]] && ln -s "$src" "$SANDBOX_BIN2/$t"
+done
+bash -c "
+  export SOLEUR_SESSION_STATE_ROOT='$ROOT'
+  source '$HELPER'
+  acquire_lock t23 30
+  sleep 15
+  release_lock t23
+" &
+T23_HOLDER=$!
+for _ in {1..200}; do
+  flock -w 0 -x "$ROOT/locks/t23.lock" -c true 2>/dev/null || break
+  sleep 0.05
+done
+T23_START=$(date +%s)
+PATH="$SANDBOX_BIN2" bash -c "
+  export SOLEUR_SESSION_STATE_ROOT='$ROOT'
+  source '$HELPER'
+  acquire_lock t23 2
+  echo acquire_rc=\$?
+" > "$ROOT/t23.out" 2>&1
+T23_ELAPSED=$(( $(date +%s) - T23_START ))
+if grep -q 'acquire_rc=99' "$ROOT/t23.out" && (( T23_ELAPSED < 10 )); then
+  pass "T23: no-timeout host still bounds the wait at flock's own -w (${T23_ELAPSED}s)"
+else
+  fail "T23: degrade path did not return the contended rc: elapsed=${T23_ELAPSED}s out=$(tail -3 "$ROOT/t23.out")"
+fi
+kill "$T23_HOLDER" 2>/dev/null || true
+wait "$T23_HOLDER" 2>/dev/null || true
+
+# ------------------------------------------------------------------------
 echo
 echo "=== Results ==="
 echo "PASS: $PASS"

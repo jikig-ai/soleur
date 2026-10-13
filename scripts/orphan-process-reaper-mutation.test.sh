@@ -128,6 +128,44 @@ WORK="$(mktemp -d -t orphan-mut.XXXXXXXX)"
 cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT
 
+# --- Sibling-contention sampling for the ceiling verdict (#8163) ------------
+# The wall-clock ceiling at the end is only a honest assertion when the box
+# was actually uncontended. This battery ran 241 s against a 240 s ceiling
+# while three sibling full-gate runs shared the box — a red caused by the
+# environment, not the code under test. Sample the sibling-run count at
+# battery start and end through test-contention's fixtureable TC_PROC_ROOT
+# seam; an over-ceiling result with measured siblings downgrades to a
+# [note] — reported, never silently green — while a solo over-ceiling still
+# fails, and an absent lib falls back to the unconditional assertion.
+_TC_LIB="$REPO_ROOT/scripts/lib/test-contention.sh"
+if [[ -f "$_TC_LIB" ]]; then
+  # shellcheck source=scripts/lib/test-contention.sh
+  source "$_TC_LIB"
+fi
+
+# Prints the sibling-run count. rc=1 means the procfs walk itself was
+# unmeasurable (empty/absent TC_PROC_ROOT) — which the verdict treats as
+# CONTENDED, the fail-safe direction (a procfs we cannot read may hide a
+# sibling it would have found). An ABSENT lib is different: it returns a
+# measured 0 so the ceiling stays an unconditional assertion.
+_mut_sibling_count() {
+  declare -F tc_siblings >/dev/null 2>&1 || { printf '0\n'; return 0; }
+  local proc="${TC_PROC_ROOT:-/proc}"
+  [[ -d "$proc" ]] && compgen -G "$proc/[0-9]*" >/dev/null 2>&1 || return 1
+  local n
+  n=$(tc_siblings 2>/dev/null | wc -l | tr -d ' ')
+  [[ "$n" =~ ^[0-9]+$ ]] || n=0
+  printf '%s\n' "$n"
+}
+
+# <elapsed_ms> <ceiling_ms> <contended 0|1> -> ok|note|fail. A pure predicate
+# so the verdict arms at the end drive every row without a five-minute run.
+_mut_ceiling_verdict() {
+  if (( $1 <= $2 )); then printf 'ok\n'
+  elif (( $3 > 0 )); then printf 'note\n'
+  else printf 'fail\n'; fi
+}
+
 # Rows are independent — each operates on its own copy in its own temp dir — so
 # they are run concurrently. Serial cost is measured and quoted in the PR.
 PARALLEL="${ORPHAN_MUT_PARALLEL:-6}"
@@ -292,6 +330,10 @@ fi
 # --- 4. Run every row -----------------------------------------------------
 echo "--- rows ---"
 export ORIG SUITE
+# #8163: sibling count sampled BEFORE the row storm — the ceiling verdict at
+# the end needs the load the battery actually ran under.
+_mut_sib_start=0; _mut_sib_unmeasurable=0
+if _n=$(_mut_sibling_count); then _mut_sib_start="$_n"; else _mut_sib_unmeasurable=1; fi
 mut_start=$(date +%s%N)
 # `-P` bounded: rows are independent (own copy, own temp dir, own fixtures), and
 # a row's verdict is its suite's exit status, which concurrency does not change.
@@ -435,12 +477,28 @@ done
 MUT_CEILING_MS="${ORPHAN_MUT_CEILING_MS:-240000}"
 printf '\n[measurement] mutation rows: %d, wall-clock %dms at -P%s (ceiling: %dms)\n' \
   "$(wc -l < "$ROWS")" "$mut_elapsed" "$PARALLEL" "$MUT_CEILING_MS"
+# #8163: sample the sibling count again at the END so a run that started solo
+# and picked up siblings mid-window is not measured against the solo bar.
+# The ceiling itself is UNCHANGED — what changed is that an over-ceiling
+# number produced under measured contention is reported, not asserted.
+_mut_sib_end=0
+if _n=$(_mut_sibling_count); then _mut_sib_end="$_n"; else _mut_sib_unmeasurable=1; fi
+_mut_sib_max=$(( _mut_sib_start > _mut_sib_end ? _mut_sib_start : _mut_sib_end ))
+_mut_contended=0
+(( _mut_sib_max > 0 || _mut_sib_unmeasurable > 0 )) && _mut_contended=1
+_mut_verdict="$(_mut_ceiling_verdict "$mut_elapsed" "$MUT_CEILING_MS" "$_mut_contended")"
 cases=$((cases + 1))
-if (( mut_elapsed <= MUT_CEILING_MS )); then
-  pass "battery wall-clock ${mut_elapsed}ms is within the ${MUT_CEILING_MS}ms ceiling"
-else
-  fail "battery wall-clock ${mut_elapsed}ms EXCEEDS the ${MUT_CEILING_MS}ms ceiling — trim rows or move the battery to its own shard rather than raising this silently"
-fi
+case "$_mut_verdict" in
+  ok)
+    pass "battery wall-clock ${mut_elapsed}ms is within the ${MUT_CEILING_MS}ms ceiling" ;;
+  note)
+    printf '  [note] battery wall-clock %dms exceeded ceiling %dms under %d measured sibling full-gate run(s)%s — reported, not asserted (#8163)\n' \
+      "$mut_elapsed" "$MUT_CEILING_MS" "$_mut_sib_max" \
+      "$([[ "$_mut_sib_unmeasurable" == "1" ]] && echo ' (procfs unmeasurable — counted as contended)')" >&2
+    pass "battery wall-clock over ceiling under measured contention — reported only" ;;
+  *)
+    fail "battery wall-clock ${mut_elapsed}ms EXCEEDS the ${MUT_CEILING_MS}ms ceiling — trim rows or move the battery to its own shard rather than raising this silently" ;;
+esac
 
 # `red_rows` was accumulated and discarded — the battery's headline number had
 # no reader. Assert it against the rows that were actually expected to redden.
@@ -452,7 +510,51 @@ else
   fail "only $red_rows of $_expected_red rows reddened — the difference is unaccounted for"
 fi
 
-MIN_CASES=40
+# --- Self-test: the contention-aware ceiling verdict (#8163) ----------------
+# The verdict predicate and the TC_PROC_ROOT sibling read are driven here on
+# fixtures, because asserting them needs neither a real sibling nor a real
+# five-minute battery.
+_mut_verdict_arm() {  # <want> <elapsed_ms> <ceiling_ms> <contended>
+  local want="$1" got
+  got="$(_mut_ceiling_verdict "$2" "$3" "$4")"
+  cases=$((cases + 1))
+  if [[ "$got" == "$want" ]]; then
+    pass "ceiling verdict: elapsed=$2 ceiling=$3 contended=$4 -> $got"
+  else
+    fail "ceiling verdict wrong: elapsed=$2 ceiling=$3 contended=$4 -> got $got, want $want"
+  fi
+}
+_mut_verdict_arm ok    1000   240000 0
+_mut_verdict_arm ok    240000 240000 0
+_mut_verdict_arm note  999999 240000 1
+_mut_verdict_arm fail  999999 240000 0
+
+# A synthesized procfs carrying one test-all.sh-shaped process (the run shape
+# test-contention's tc_siblings scans for). Field 22 of stat is starttime;
+# the parenthesised comm keeps the space-tolerant parse honest.
+_FAKE_PROC="$WORK/fake-proc"; mkdir -p "$_FAKE_PROC/4242"
+printf '4242 (bash) S 1 4242 4242 0 -1 4194304 100 0 0 0 0 0 0 0 20 0 1 0 2000 1000000 100\n' \
+  > "$_FAKE_PROC/4242/stat"
+printf 'bash\0scripts/test-all.sh\0' > "$_FAKE_PROC/4242/cmdline"
+ln -sfn "$WORK/fake-elsewhere" "$_FAKE_PROC/4242/cwd"
+cases=$((cases + 1))
+_got="$(TC_PROC_ROOT="$_FAKE_PROC" _mut_sibling_count 2>/dev/null || echo unmeasurable)"
+if [[ "$_got" =~ ^[0-9]+$ ]] && (( _got >= 1 )); then
+  pass "sibling sampler counts a synthesized test-all.sh proc (count=$_got)"
+else
+  fail "sibling sampler did not count the fixture proc: $_got"
+fi
+# An empty/unreadable procfs is UNMEASURABLE — and the verdict treats that as
+# contended rather than asserting against a number nobody measured.
+cases=$((cases + 1))
+_EMPTY_PROC="$WORK/fake-proc-empty"; mkdir -p "$_EMPTY_PROC"
+if TC_PROC_ROOT="$_EMPTY_PROC" _mut_sibling_count >/dev/null 2>&1; then
+  fail "empty procfs returned a measured count — an over-ceiling battery would assert against nothing"
+else
+  pass "empty procfs reads unmeasurable (verdict counts it as contended)"
+fi
+
+MIN_CASES=46
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf '\n[FATAL] assertion floor: %d assertions ran, expected at least %d.\n' "$cases" "$MIN_CASES" >&2
   echo "=== orphan-process-reaper-mutation: $pass_n passed, $fails failed ($cases assertions) ==="
