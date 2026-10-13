@@ -573,6 +573,27 @@ if grep -qF 'INNGEST_LUKS_ATTACH_WAIT_S' "$CLOUD_INIT"; then no "T1.16l an INNGE
 _T116_INVOCATION='    doppler run --project soleur-inngest --config ${inngest_doppler_config} -- bash -s <<'"'"'LUKSEOF'"'"''
 if [ "$(grep -cxF "$_T116_INVOCATION" "$CLOUD_INIT")" -eq 1 ]; then ok "T1.16m the doppler run -- bash -s <<'LUKSEOF' invocation is byte-identical (no env -u strip)"; else no "T1.16m the doppler invocation drifted — something was inserted or the line moved"; fi
 
+# ═══ T1.16n-q — design-review hardening of the self-heal (PR #10228 design pass) ═══
+# T1.16n ATOMIC fstab install: a mid-write death on `cat tmp > /etc/fstab` truncates the file
+# and recreates the exact unhealable state this PR eliminates (inngest-luks-cutover.sh:536-539
+# documents the same defect). The install must be same-dir rename: chmod + mv -f, and no
+# redirect-to-/etc/fstab anywhere inside ensure_mount.
+if printf '%s\n' "$_EM" | grep -cF 'mv -f "$_em_tmp" /etc/fstab' >/dev/null && ! printf '%s\n' "$_EM" | grep -cE '> */etc/fstab' >/dev/null; then ok "T1.16n the fstab install is atomic (chmod + mv -f); no redirect-to-/etc/fstab survives"; else no "T1.16n the fstab install is not an atomic rename — a mid-write death truncates /etc/fstab"; fi
+# T1.16o SOURCE-CONGRUENT fast path: a bare mountpoint -q match no-ops a mount from the WRONG
+# source (a stale generated mnt-*.mount can hold one — the cutover FSM's envfile-before-fstab
+# desync window makes it reachable). The fast path must compare findmnt SOURCE through
+# readlink -f against $1, umount the wrong-source mount, and daemon-reload after the install
+# so the fstab generator re-reads the line THIS boot.
+if printf '%s\n' "$_EM" | grep -cF 'findmnt -no SOURCE' >/dev/null && printf '%s\n' "$_EM" | grep -cF 'umount "$2"' >/dev/null && printf '%s\n' "$_EM" | grep -cF 'systemctl daemon-reload' >/dev/null; then ok "T1.16o the fast path is source-congruent (findmnt+readlink -f), wrong-source mounts converge, and daemon-reload refreshes the generated unit"; else no "T1.16o the fast path is still source-blind, or daemon-reload is missing — a stale generated mount unit can loop the degrade"; fi
+# T1.16p the open_as noop path must verify backing BEFORE emitting reopen_noop: the noop feeds
+# ensure_mount, so a wrongly-backed mapper would be mounted + fstab'd silently.
+_OA="$(printf '%s\n' "$_G1_REOPEN" | awk '/^      open_as\(\) \{$/{f=1} f{print} f&&/^      \}$/{exit}')"
+if printf '%s\n' "$_OA" | grep -cF 'backing_is' >/dev/null && printf '%s\n' "$_OA" | grep -cF 'fail reopen_backing' >/dev/null && [ "$(printf '%s\n' "$_OA" | awk '/backing_is/{b=NR} /reopen_noop/{print NR-b<0?"bad":"ok"; exit}')" = "ok" ]; then ok "T1.16p the open_as noop path asserts backing_is before reopen_noop"; else no "T1.16p an already-open mapper is accepted without a backing-device check"; fi
+# T1.16q refusal strings name the TRUE bound: every 'after Ns' refusal sentence must read 300s —
+# a stale 30s misreports the bound the host actually enforced, and on a no-console host these
+# strings ARE the incident record.
+if [ "$(grep -c 'after 300s' "$CLOUD_INIT")" -ge 4 ] && ! grep -q 'after 30s\b' "$CLOUD_INIT"; then ok "T1.16q all wait-refusal sentences name the 300s bound (no stale 30s survivors)"; else no "T1.16q a wait-refusal sentence still claims the old 30s bound"; fi
+
 # ═══ FLOOR ══════════════════════════════════════════════════════════════════════
 # Raised 26 -> 51 by #6894, which added T1.8a2/c/d/e, T1.13, T1.14, G1.a-g and G4.a-f; 51 -> 56
 # when the cutover FSM became the pointer's writer and the dispatch its second reader (G4.g1-g3/h/i). Derived from
@@ -581,11 +602,11 @@ if [ "$(grep -cxF "$_T116_INVOCATION" "$CLOUD_INIT")" -eq 1 ]; then ok "T1.16m t
 # the floor stays 57 and is now exact (no slack). Its mutation (a second pointer reader appearing) is still killed by G4.b
 # (an unclassified site REDS) and G4.g2 (any dispatch-side pointer write fails).
 # #9939: T1.15a-e (reopen-unit ConditionPathExists= skip-vs-fail + mutation control) raised it 57 -> 62; review rounds added T1.15f set-parity (62 -> 63) then T1.15g reset-line coverage and set-identity (63 -> 64).
-# #10217: T1.6 expanded into T1.6a-e (per-body mechanism pin) and T1.16a-m (ensure_mount self-heal,
-# ordering pin, no-seam + byte-identical invocation pins) — MEASURED 81 on the integrated run.
+# #10217: T1.6 expanded into T1.6a-e (per-body mechanism pin) and T1.16a-q (ensure_mount self-heal,
+# ordering pin, no-seam + byte-identical invocation pins, then n-q design-review hardening)
 # Self-contained: bash builtins and this suite's own counters only. A floor that lives in a helper
 # is silenced by the same move that silences the arms it guards.
-if [ "$executed" -lt 81 ]; then
+if [ "$executed" -lt 85 ]; then
   fail=$((fail + 1))
   printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 81. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
 else

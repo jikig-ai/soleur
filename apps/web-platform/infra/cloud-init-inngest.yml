@@ -224,9 +224,24 @@ write_files:
         BLK_TYPE="$(/usr/sbin/blkid -p -o value -s TYPE "$1" 2>/dev/null)" || _blk_rc=$?
         { [ "$_blk_rc" -eq 0 ] || [ "$_blk_rc" -eq 2 ]; } || fail reopen_blkid "$_blk_rc" n/a "blkid could not read $1"
       }
+      # backing_is <mapper> <device> — the mapper's ONLY backing block device is <device>.
+      # Same sysfs slaves/ shape as the runcmd stage's same-named helper: authoritative,
+      # cache-free, ioctl-free.
+      backing_is() {
+        _dm="$(basename "$(readlink -f "$1")")" || _dm=""
+        _want="$(basename "$(readlink -f "$2")")" || _want=""
+        _got="$(ls "/sys/class/block/$_dm/slaves" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')" || _got=""
+        [ -n "$_want" ] && [ "$_got" = "$_want" ]
+      }
       # open_as <dev> <name> — open a device already measured crypto_LUKS under <name>.
       open_as() {
-        [ -e "/dev/mapper/$2" ] && { emit reopen_noop 0 crypto_LUKS "$2 already open"; return 0; }
+        if [ -e "/dev/mapper/$2" ]; then
+          # An already-open mapper is only a noop when it is backed by THIS arm's verified
+          # device — the noop path feeds ensure_mount, so a wrongly-backed mapper would
+          # otherwise be mounted + fstab'd silently (#10217 review).
+          backing_is "/dev/mapper/$2" "$1" || fail reopen_backing 1 n/a "mapper $2 is open but not backed by $1"
+          emit reopen_noop 0 crypto_LUKS "$2 already open"; return 0
+        fi
         [ -n "$${INNGEST_REDIS_LUKS_KEY:-}" ] || fail reopen_key_missing 1 crypto_LUKS "INNGEST_REDIS_LUKS_KEY empty"
         printf '%s' "$INNGEST_REDIS_LUKS_KEY" | cryptsetup luksOpen --key-file - "$1" "$2"
         emit reopen_ok 0 crypto_LUKS "$2"
@@ -234,20 +249,36 @@ write_files:
       # ensure_mount <source> <mountpoint> — complete the mount for the arm this run verified
       # (#10217). A mapper left open-but-unmounted by a first-boot race (the stage aborted before
       # its mount + fstab_set steps) was unhealable by construction: reopen opened only, no fstab
-      # line existed, and every later boot repeated the state. The mountpoint -q fast path makes a
-      # healthy boot a strict no-op — zero writes, zero extra emits. Otherwise write the fstab
-      # line with the stage's fstab_set semantics (replace the mountpoint's lines in place, then
-      # assert exactly one), mkdir the mountpoint, and mount BY MOUNTPOINT so the fstab line just
-      # written is the source of truth for source and options — never re-typed here.
+      # line existed, and every later boot repeated the state. The fast path requires the
+      # mountpoint to be mounted FROM $1 (source-congruent, checked through findmnt+readlink -f
+      # like the stage's mounted_from): a stale generated mnt-*.mount can hold a wrong-source
+      # mount — a mountpoint match alone is not convergence, so that state is umounted and
+      # converged here, never no-op'd (this unit is Before=local-fs.target; nothing holds it).
+      # Otherwise write the fstab line with the stage's fstab_set semantics (replace the
+      # mountpoint's lines, assert exactly one) installed ATOMICALLY via same-dir rename — a
+      # mid-write death must never leave /etc/fstab truncated (inngest-luks-cutover.sh
+      # documents the cat-redirect form as that defect) — then daemon-reload so the fstab
+      # generator re-reads the line THIS boot (a boot that began with no/stale /mnt/data line
+      # otherwise resolves RequiresMountsFor against the stale generated unit), mkdir the
+      # mountpoint, and mount BY MOUNTPOINT so the fstab line just written is the source of
+      # truth for source and options — never re-typed here.
       ensure_mount() {
-        mountpoint -q "$2" && return 0
+        if mountpoint -q "$2"; then
+          _em_src="$(findmnt -no SOURCE "$2" 2>/dev/null | head -1)"
+          if [ -n "$_em_src" ] && [ "$(readlink -f "$_em_src")" = "$(readlink -f "$1")" ]; then
+            return 0
+          fi
+          emit reopen_mount 0 n/a "$2 is mounted from ${_em_src:-unknown}, not $1 — converging to the verified source"
+          umount "$2" || fail reopen_mount 1 n/a "umount of the wrong-source mount at $2 failed"
+        fi
         _em_tmp="$(mktemp /etc/fstab.soleur.XXXXXX)" || fail reopen_fstab 1 n/a "mktemp /etc/fstab.soleur.XXXXXX failed"
         awk -v mp="$2" '$1 ~ /^#/ || $2 != mp' /etc/fstab > "$_em_tmp" || { rm -f "$_em_tmp"; fail reopen_fstab 1 n/a "rewriting /etc/fstab for $2 failed"; }
         printf '%s\n' "$1 $2 ext4 defaults,nofail 0 2" >> "$_em_tmp" || { rm -f "$_em_tmp"; fail reopen_fstab 1 n/a "writing the $2 fstab line failed"; }
-        cat "$_em_tmp" > /etc/fstab || { rm -f "$_em_tmp"; fail reopen_fstab 1 n/a "installing the rewritten /etc/fstab failed"; }
-        rm -f "$_em_tmp"
+        chmod 0644 "$_em_tmp" || { rm -f "$_em_tmp"; fail reopen_fstab 1 n/a "chmod on the rewritten fstab failed"; }
+        mv -f "$_em_tmp" /etc/fstab || { rm -f "$_em_tmp"; fail reopen_fstab 1 n/a "installing the rewritten /etc/fstab failed"; }
         _em_n="$(awk -v mp="$2" '$1 !~ /^#/ && $2 == mp' /etc/fstab | wc -l)" || _em_n=0
         [ "$_em_n" -eq 1 ] || fail reopen_fstab 1 n/a "fstab carries $_em_n lines for $2 after the rewrite — exactly one is required"
+        systemctl daemon-reload || fail reopen_fstab 1 n/a "daemon-reload after the fstab install failed"
         mkdir -p "$2" || fail reopen_mount 1 n/a "mkdir -p $2 failed"
         mount "$2" || fail reopen_mount 1 n/a "mount $2 failed"
         emit reopen_mount 0 n/a "$1 mounted at $2 via fstab"
@@ -261,7 +292,7 @@ write_files:
           *) fail reopen_pointer 1 n/a "the pointer names volume $POINTER, which is neither of this host's volumes" ;;
         esac
         CANON_DEV="$${BYID}$${POINTER}"
-        wait_dev "$CANON_DEV" || fail reopen_device_wait 1 n/a "the pointer names $CANON_DEV and it is absent after 30s"
+        wait_dev "$CANON_DEV" || fail reopen_device_wait 1 n/a "the pointer names $CANON_DEV and it is absent after 300s"
         luks_type "$CANON_DEV"
         [ "$BLK_TYPE" = crypto_LUKS ] || fail reopen_not_luks 1 "$${BLK_TYPE:-empty}" "the pointer names a device that is not crypto_LUKS"
         open_as "$CANON_DEV" inngest-redis
@@ -271,7 +302,7 @@ write_files:
 
       # PRE-CUTOVER. The plaintext-id volume is canonical; open it only if it is already LUKS (the
       # ADR-199 recut world). On an ext4 host there is nothing to open and nothing to decide.
-      wait_dev "$DEV" || fail reopen_device_wait 1 n/a "device absent after 30s"
+      wait_dev "$DEV" || fail reopen_device_wait 1 n/a "device absent after 300s"
       luks_type "$DEV"
       if [ "$BLK_TYPE" = crypto_LUKS ]; then
         open_as "$DEV" inngest-redis
@@ -1862,8 +1893,8 @@ runcmd:
       # the luksFormat arm. A volume that is merely slow to attach must not be read as blank.
       STAGE=device_wait
       wait_dev "$DEV" || true
-      [ -b "$DEV" ] || { echo "FATAL: $DEV is not a block device after 30s — refusing to proceed" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
-      [ "$(/usr/sbin/blockdev --getsize64 "$DEV" 2>/dev/null || echo 0)" -gt 0 ] || { echo "FATAL: $DEV reports zero size after 30s" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+      [ -b "$DEV" ] || { echo "FATAL: $DEV is not a block device after 300s — refusing to proceed" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+      [ "$(/usr/sbin/blockdev --getsize64 "$DEV" 2>/dev/null || echo 0)" -gt 0 ] || { echo "FATAL: $DEV reports zero size after 300s" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
 
       # blkid's OWN rc is checked: 0=signature found, 2=none found. Anything else is "could not
       # measure", which is NEVER "blank". A wrong format here is terminal — there is no header
