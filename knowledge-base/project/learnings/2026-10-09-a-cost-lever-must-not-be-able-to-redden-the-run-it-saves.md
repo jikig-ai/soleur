@@ -40,3 +40,14 @@ A lever allowed to fail in one direction needs that direction enforced at every 
 
 category: ci-workflow
 module: ci.yml push-dedupe, scripts/followthroughs/ci-push-dedupe-soak-9512.sh
+
+## Correction (2026-10-13, #9818)
+
+The Solution bullet above that says the activation and census markers are read "filtered to
+`author_association` OWNER/MEMBER/COLLABORATOR" prescribes the defect that made the S2 probe report a false
+"elided with no activation on record" every sweep since 2026-10-11: `author_association` is computed against the
+READING token, so a private org member reads as CONTRIBUTOR under the sweeper's `GITHUB_TOKEN` and the operator's
+marker was dropped. Do not copy that filter. Read the tracker through `trusted_verdict_comments`
+(`scripts/lib/trusted-verdict.sh`), which resolves the commenter's repository permission (admin/maintain/write);
+lint rule 5 in `scripts/lint-followthrough-varq-ban.sh` now rejects either spelling of the field. The original
+text is left as written, as a record.
