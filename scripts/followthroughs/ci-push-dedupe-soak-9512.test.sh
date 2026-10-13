@@ -90,12 +90,6 @@ case "$ep" in
       403) echo 'gh: Resource not accessible by integration (HTTP 403)' >&2; exit 1 ;;
       *)   printf '{"permission":"%s"}\n' "$p" | jq -r "$jqx"; exit 0 ;;
     esac ;;
-  repos/*/issues/*/comments\?per_page=100)   # the LEGACY association-based read (removed with the probe migration)
-    [ -f "$FX/fail-comments" ] && { echo "gh: HTTP 403 Resource not accessible" >&2; exit 1; }
-    (( paginate )) || refuse "$ep"   # past 100 comments only a paginated read sees a later marker
-    n="${ep#*issues/}"; n="${n%%/*}"
-    for f in "$FX/comments-$n.json" "$FX/comments-$n-2.json"; do [ -f "$f" ] && { if [ -n "$jqx" ]; then jq -r "$jqx" "$f"; else cat "$f"; fi; }; done
-    exit 0 ;;
   *) refuse "$ep" ;;
 esac
 [ -f "$f" ] || exit 1
@@ -117,15 +111,19 @@ chmod +x "$TMP/bin/gh"
 #   crlf: markers end in CRLF   badts: ACTIVATED without the Z   midact: ACTIVATED only mid-line or with trailing text
 #   marker=lookalike|foreign   a census URL on a lookalike or foreign host   page2: the DEACTIVATED marker is on page 2
 #   merged=<ISO>  the S2 PR merge time (default MERGED_ISO)
-#   privact: the activation comment is by `priv-op`, whose association reads CONTRIBUTOR (a private org member under the
-#   sweeper's token) but whose repository permission is admin   assocowner: the activation comment's association is OWNER but
-#   its author's permission is `read` (the decoy association must be ignored)   permfail: `priv-op`'s permission read is a 403
+#   EVERY comment carries an `authorAssociation` DECOY and a stable author login that maps to a row of perms.tsv (the fake
+#   permission endpoint): owner-op admin, member-op write, collab-op write, contrib-op read, none-op 404. The DEFAULT activation
+#   comment is by `priv-op`, whose association reads CONTRIBUTOR (a private org member under the sweeper's token) but whose
+#   repository permission is admin, so an association-consulting probe fails ~40 rows, not two.
+#   privact: names that default (the row r_privmember pins it)   assocowner: the activation comment's association is OWNER but its
+#   author's permission is `read` (the decoy must be ignored)   permfail: `priv-op`'s permission read is a 403
+#   collabact: the activation is by a COLLABORATOR-association author with `write`   noneact: by a NONE-association author with `maintain`
 #   regcomment: test-all.sh names the suite only in a comment/echo   nostatus: the ADR has no status line
 build_fx() {
   local fx="$1" ne="$2" nf="$3" es="$4" fs="$5"; shift 5
   assert_fixture_dir "$fx"; rm -rf "$fx"; mkdir -p "$fx"
   local actdays=12 noact=0 untrustedact=0 deact=0 unmatched=0 early=0 marker=yes pdred=0 unmerged=0 noissue=0 adr=adopting noreg=0 extra="" kv
-  local privact=0 assocowner=0 permfail=0 merged="$MERGED_ISO" pdbad=0 prefull=0 reactivate=0 twoact=0 twodeact=0 crlf=0 badts=0 midact=0 page2=0 regcomment=0 nostatus=0 cr=
+  local privact=0 assocowner=0 permfail=0 collabact=0 noneact=0 merged="$MERGED_ISO" pdbad=0 prefull=0 reactivate=0 twoact=0 twodeact=0 crlf=0 badts=0 midact=0 page2=0 regcomment=0 nostatus=0 cr=
   for kv in "$@"; do
     case "$kv" in
       actdays=*) actdays="${kv#*=}" ;; noact) noact=1 ;; untrustedact) untrustedact=1 ;; deact) deact=1 ;;
@@ -133,7 +131,7 @@ build_fx() {
       merged=*) merged="${kv#*=}" ;; pdbad=*) pdbad="${kv#*=}" ;; prefull=*) prefull="${kv#*=}" ;; reactivate) reactivate=1 ;; twoact) twoact=1 ;; twodeact) twodeact=1 ;;
       crlf) crlf=1 ;; badts) badts=1 ;; midact) midact=1 ;; page2) page2=1 ;; regcomment) regcomment=1 ;; nostatus) nostatus=1 ;;
       pdred) pdred=1 ;; unmerged) unmerged=1 ;; noissue) noissue=1 ;; adr=*) adr="${kv#*=}" ;; noreg) noreg=1 ;; extra=*) extra="${kv#*=}" ;;
-      privact) privact=1 ;; assocowner) assocowner=1 ;; permfail) permfail=1 ;;
+      privact) privact=1 ;; assocowner) assocowner=1 ;; permfail) permfail=1 ;; collabact) collabact=1 ;; noneact) noneact=1 ;;
       fail*) : > "$fx/fail-${kv#fail}" ;;
     esac
   done
@@ -203,13 +201,15 @@ build_fx() {
   printf '{"workflow_runs":[%s{"event":"merge_group","status":"in_progress","conclusion":null,"head_sha":"shaZZZ"}]}\n' "$mg2" > "$fx/mg-2.json"
   if (( noissue )); then printf '[]\n' > "$fx/issues.json"
   else printf '[{"number":4242,"body":"<!-- soleur:followthrough script=scripts/followthroughs/ci-push-dedupe-soak-9512.sh earliest=2026-10-10T00:00:00Z secrets=GH_TOKEN -->"},{"number":4243,"body":"unrelated"}]\n' > "$fx/issues.json"; fi
-  # the tracker's comments: [{body, author_association}]
+  # the tracker's comments (staging shape: [{body, author_association, login?}]; converted to the issue-view shape below)
   local cm='[{"body":"noted","author_association":"OWNER"}' cm2='['
   iso_at() { date -u -d "@$((act_epoch + $1))" +%Y-%m-%dT%H:%M:%SZ; }
   if (( ! noact )); then
-    local assoc=OWNER actl=""; (( untrustedact )) && assoc=NONE
-    (( privact || permfail )) && { assoc=CONTRIBUTOR; actl=',"login":"priv-op"'; }
-    (( assocowner )) && actl=',"login":"ownread-op"'
+    local assoc=CONTRIBUTOR actl=',"login":"priv-op"'
+    (( untrustedact )) && { assoc=NONE; actl=""; }
+    (( assocowner )) && { assoc=OWNER; actl=',"login":"ownread-op"'; }
+    (( collabact )) && { assoc=COLLABORATOR; actl=',"login":"collab-op"'; }
+    (( noneact )) && { assoc=NONE; actl=',"login":"maint-op"'; }
     if (( badts )); then cm="$cm,{\"body\":\"S2-ACTIVATED: ${act_iso%Z}\",\"author_association\":\"OWNER\"}"
     elif (( midact )); then cm="$cm,{\"body\":\"see S2-ACTIVATED: $act_iso\\nS2-ACTIVATED: $act_iso and then some\",\"author_association\":\"OWNER\"}"
     else cm="$cm,{\"body\":\"activated${cr}\\nS2-ACTIVATED: $act_iso${cr}\",\"author_association\":\"$assoc\"$actl}"; fi
@@ -233,26 +233,44 @@ build_fx() {
     placeholder) cm="$cm,{\"body\":\"S2-EXIT-CENSUS: <url>\",\"author_association\":\"OWNER\"}" ;;
   esac
   assert_fixture_dir "$fx"
-  printf '%s]\n' "$cm" > "$fx/comments-4242.json"
-  (( page2 )) && printf '%s]\n' "$cm2" > "$fx/comments-4242-2.json"
+  printf '%s]\n' "$cm" > "$fx/stage-4242.json"
+  (( page2 )) && printf '%s]\n' "$cm2" > "$fx/stage-4242-2.json"
   # the `gh issue view --json comments` shape (what the trusted-author lib reads): every comment gets a stable login that
   # maps to a permission row, while its association stays on the comment as a DECOY the probe must ignore
-  jq -n --argjson a "$(cat "$fx/comments-4242.json")" --argjson b "$( [ -f "$fx/comments-4242-2.json" ] && cat "$fx/comments-4242-2.json" || echo '[]')" --argjson t0 "$((act_epoch - 90000))" '
+  jq -n --argjson a "$(cat "$fx/stage-4242.json")" --argjson b "$( [ -f "$fx/stage-4242-2.json" ] && cat "$fx/stage-4242-2.json" || echo '[]')" --argjson t0 "$((act_epoch - 90000))" '
     {OWNER:"owner-op",MEMBER:"member-op",COLLABORATOR:"collab-op",CONTRIBUTOR:"contrib-op",NONE:"none-op"} as $m
     | {comments: ($a + $b | to_entries | map({author:{login:(.value.login // $m[.value.author_association])},
         authorAssociation:.value.author_association, createdAt:($t0 + .key * 60 | todate), body:.value.body}))}' > "$fx/gql-comments-4242.json"
   local pp=admin; (( permfail )) && pp=403
-  printf 'owner-op\tadmin\nmember-op\twrite\ncollab-op\twrite\ncontrib-op\tread\nnone-op\t404\npriv-op\t%s\nownread-op\tread\n' "$pp" > "$fx/perms.tsv"
+  printf 'owner-op\tadmin\nmember-op\twrite\ncollab-op\twrite\ncontrib-op\tread\nnone-op\t404\npriv-op\t%s\nownread-op\tread\nmaint-op\tmaintain\n' "$pp" > "$fx/perms.tsv"
 }
 
 # expect <label> <want-rc> <want-text> <fx> [env...]  — runs $PROBE_UNDER (default the live probe)
 PROBE_UNDER="$PROBE"
+CRASH_RE='syntax error|command not found|unbound variable|bad substitution|unexpected EOF'
+note_crash() { if grep -qE "$CRASH_RE" <<<"$1"; then : > "$TMP/crashed"; fi; }
 expect() {
   local label="$1" want="$2" text="$3" fx="$4"; shift 4
   local out rc
   out="$(env FX="$fx" PATH="$TMP/bin:$PATH" GH_TOKEN=x SOAK_NOW_EPOCH="$NOW_EPOCH" SOAK_ADR_FILE="$fx/ADR-276-fixture.md" SOAK_TEST_ALL="$fx/test-all.sh" "$@" bash "$PROBE_UNDER" 2>&1)"; rc=$?
+  note_crash "$out"
   if [ -s "$fx/refused.log" ]; then fail "$label: the fake gh REFUSED an argv (the row would pass or fail for the wrong reason): $(head -2 "$fx/refused.log" | tr '\n' '|')"; return; fi
   if [[ "$rc" == "$want" && "$out" == *"$text"* ]]; then pass "$label (rc=$rc)"; else fail "$label: want rc=$want containing '$text', got rc=$rc: $(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi
+}
+
+# mk_tree <name> [probe source] [nolink|stublib] -> prints the path of a copy of the probe inside a MIRRORED tree: the probe sources
+# the trust lib by a relative path, so a lone copy in $TMP would resolve nothing, the helper call would return 127, `|| fail_api` would
+# turn EVERY mutant "caught" and the verdict would prove nothing. scripts/lib is a symlink to the real lib (probe-only mutants; lib
+# mutants live in the lib suite); `nolink` leaves it out (a control), `stublib` puts a stub lib whose helper prints non-JSON.
+mk_tree() {
+  local d="$TMP/tree-$1"; rm -rf "$d"; mkdir -p "$d/scripts/followthroughs"
+  cp "${2:-$PROBE}" "$d/scripts/followthroughs/ci-push-dedupe-soak-9512.sh"
+  case "${3:-}" in
+    nolink) : ;;
+    stublib) mkdir -p "$d/scripts/lib"; printf 'trusted_verdict_comments() { printf "not json at all\n"; return 0; }\n' > "$d/scripts/lib/trusted-verdict.sh" ;;
+    *) ln -s "$REPO_ROOT/scripts/lib" "$d/scripts/lib" ;;
+  esac
+  printf '%s\n' "$d/scripts/followthroughs/ci-push-dedupe-soak-9512.sh"
 }
 
 # 25 runs: 10 elided at 510 s + 15 full at 2568 s => total 43620 s => exactly 29.08 min/run (the limit, a must-PASS)
@@ -280,6 +298,14 @@ r_unregistered(){ build_fx "$TMP/d13" 10 15 510 2568 noreg;         expect "FAIL
 r_stuck29()   { build_fx "$TMP/d14" 4 21 510 2568 actdays=29 merged=2026-09-20T00:00:00Z; expect "NOT YET: 29 days active with 4 elided runs (the deadline is 30)" 2 "4 elided" "$TMP/d14"; }
 r_stuck30()   { build_fx "$TMP/d15" 4 21 510 2568 actdays=30 merged=2026-09-20T00:00:00Z; expect "FAIL: 30 days active and the proof is not eliding" 1 "proof is not eliding" "$TMP/d15"; }
 r_privmember(){ build_fx "$TMP/g1" 10 15 510 2568 privact;          expect "PASS: an activation by a private-org-member admin (association CONTRIBUTOR) is read under the permission lookup" 0 "PASS" "$TMP/g1"; }
+r_assocowner(){ build_fx "$TMP/g2" 0 25 510 2568 assocowner;        expect "NOT YET: an activation by an OWNER-association author whose permission is read is ignored (the association is a decoy)" 2 "not activated" "$TMP/g2"; }
+r_permfail()  { build_fx "$TMP/g3" 10 15 510 2568 permfail;          expect "CANNOT ESTABLISH: a 403 on the activation author's permission read is never a pass and never 'untrusted'" 3 "CANNOT ESTABLISH" "$TMP/g3"; }
+r_badjq()     { build_fx "$TMP/g4" 10 15 510 2568
+  local keep="$PROBE_UNDER" t; t="$(mk_tree badjq "$PROBE_UNDER" stublib)"; PROBE_UNDER="$t"
+  expect "CANNOT ESTABLISH: helper output the projection cannot parse is never read as 'no marker'" 3 "(projection)" "$TMP/g4"
+  PROBE_UNDER="$keep"; }
+r_collabact() { build_fx "$TMP/g5" 10 15 510 2568 collabact;         expect "PASS: an activation by a COLLABORATOR-association author with write counts" 0 "PASS" "$TMP/g5"; }
+r_noneact_maint(){ build_fx "$TMP/g6" 10 15 510 2568 noneact;        expect "PASS: an activation by a NONE-association author holding maintain counts" 0 "PASS" "$TMP/g6"; }
 r_nonactive_deadline(){ build_fx "$TMP/d7" 0 25 510 2568 noact;     expect "FAIL: 30 days after the merge and nothing activated: activate, or revert" 1 "activate, or revert" "$TMP/d7" SOAK_NOW_EPOCH=$((NOW_EPOCH + 31 * 86400)); }
 r_deact()     { build_fx "$TMP/d16" 0 25 510 2568 deact;            expect "NOT YET: a later S2-DEACTIVATED ends the activation" 2 "not activated" "$TMP/d16"; }
 r_commentsfail(){ build_fx "$TMP/e-c" 10 15 510 2568 failcomments;  expect "CANNOT ESTABLISH: the tracker comments read fails (403)" 3 "CANNOT ESTABLISH" "$TMP/e-c"; }
@@ -316,7 +342,7 @@ ALL_ROWS=(r_pass r_zero r_unmatched1 r_unmatched3 r_over r_allmean r_nomarker r_
           r_adr_proposed r_unregistered r_stuck29 r_stuck30 r_nonactive_deadline r_deact r_commentsfail
           r_adr_idle r_adr_quoted r_adr_case r_adr_note r_adr_nostatus r_adr_missing r_testall_missing r_regcomment r_prefull
           r_reactivate r_twoact r_twodeact r_page2 r_idle_cap r_max_cap r_would r_collab r_contrib r_crlf r_badts r_midact
-          r_lookalike r_foreign r_pdbad6 r_pdbad5 r_pdbad_dark r_pdbad_few r_deadline_edge r_privmember)
+          r_lookalike r_foreign r_pdbad6 r_pdbad5 r_pdbad_dark r_pdbad_few r_deadline_edge r_privmember r_assocowner r_permfail r_badjq r_collabact r_noneact_maint)
 run_rows() { local r; for r in "$@"; do "$r"; done; }
 run_rows "${ALL_ROWS[@]}"
 
@@ -346,13 +372,25 @@ if grep -cF 'created=%3E2026-10-10T00:00:00Z' "$TMP/c1/requests.log" >/dev/null 
    && grep -cF '/jobs?per_page=100&filter=latest' "$TMP/c1/requests.log" >/dev/null \
    && grep -cF 'issues?labels=follow-through&state=open&per_page=100' "$TMP/c1/requests.log" >/dev/null; then pass "the queries carry their documented parameters (push window, merge_group bound, jobs filter, open tracker)"
 else fail "the queries lost their parameters: $(head -6 "$TMP/c1/requests.log" | tr '\n' '|')"; fi
+# the trust read: ONE `issue view` of the tracker, and one permission request per distinct human author (c1 has three: noted by the
+# owner, the activation by priv-op, the census by a member), each shaped repos/<repo>/collaborators/<login>/permission
+_n_iv="$(grep -cxF 'issue view 4242 --repo jikig-ai/soleur --json comments' "$TMP/c1/requests.log")"
+_n_pm="$(grep -cE '^repos/jikig-ai/soleur/collaborators/[a-z-]+/permission$' "$TMP/c1/requests.log")"
+_n_pu="$(grep -E '^repos/jikig-ai/soleur/collaborators/[a-z-]+/permission$' "$TMP/c1/requests.log" | sort -u | wc -l)"
+if [ "$_n_iv" = 1 ] && [ "$_n_pm" = 3 ] && [ "$_n_pu" = 3 ] && ! grep -q 'issues/4242/comments' "$TMP/c1/requests.log"; then
+  pass "the probe reads the tracker through ONE issue view and resolves each distinct author once (no REST comments read)"
+else fail "trust-read request shape: issue-view=$_n_iv permission=$_n_pm distinct=$_n_pu legacy=$(grep -c 'issues/4242/comments' "$TMP/c1/requests.log")"; fi
 
 # --- mutation rows: each mutated COPY of the probe must turn at least one named row red ----------------------------------
 MUT_RUN=0; MUT_CAUGHT=0
-mutant() { # <name> <old> <new> <row ids...>
+# mutant_probe <name> <old> <new> <row ids...>: build the mutated copy INSIDE a mirrored tree and run the rows against it. Sets
+# MUT_LANDED, MUT_CRASHED and (through core_rows_quiet) MUT_REDS. A bash-level error in the mutant's output means it CRASHED: every
+# row then reads red, which proves nothing about the guard that was removed.
+MUT_LANDED=1; MUT_CRASHED=0
+mutant_probe() {
   local name="$1" old="$2" new="$3"; shift 3
-  MUT_RUN=$((MUT_RUN + 1))
   local f="$TMP/mut-$name.sh"
+  MUT_LANDED=1; MUT_CRASHED=0; MUT_REDS=0; rm -f "$TMP/crashed"
   if ! python3 - "$PROBE" "$f" "$old" "$new" <<'PY'
 import sys
 src, dst, old, new = sys.argv[1:5]
@@ -361,12 +399,22 @@ if s.count(old) != 1:
     sys.stderr.write("anchor count %d for %r\n" % (s.count(old), old)); sys.exit(3)
 open(dst, "w").write(s.replace(old, new))
 PY
-  then fail "MUTANT $name: mutation did NOT land"; return; fi
-  cmp -s "$f" "$PROBE" && { fail "MUTANT $name: byte-identical to the probe"; return; }
+  then MUT_LANDED=0; return 0; fi
+  cmp -s "$f" "$PROBE" && { MUT_LANDED=0; return 0; }
   chmod +x "$f"
-  PROBE_UNDER="$f"; core_rows_quiet "$@"; PROBE_UNDER="$PROBE"
+  bash -n "$f" 2>/dev/null || MUT_CRASHED=1
+  PROBE_UNDER="$(mk_tree "m-$name" "$f")"; core_rows_quiet "$@"; PROBE_UNDER="$PROBE"
+  [ -f "$TMP/crashed" ] && MUT_CRASHED=1
+  return 0
+}
+mutant() { # <name> <old> <new> <row ids...>
+  local name="$1"
+  MUT_RUN=$((MUT_RUN + 1))
+  mutant_probe "$@"
+  if [ "$MUT_LANDED" -eq 0 ]; then fail "MUTANT $name: mutation did NOT land (or is byte-identical to the probe)"; return; fi
+  if [ "$MUT_CRASHED" -eq 1 ]; then fail "MUTANT $name: the mutant CRASHED (a bash error), which proves nothing"; return; fi
   if [ "$MUT_REDS" -gt 0 ]; then MUT_CAUGHT=$((MUT_CAUGHT + 1)); pass "MUTANT $name turned $MUT_REDS named row(s) red"
-  else fail "MUTANT $name: none of rows [$*] went red"; fi
+  else fail "MUTANT $name: none of rows [${*:4}] went red"; fi
 }
 core_rows_quiet() { # run the named rows against $PROBE_UNDER, counting reds without recording them as this suite's failures
   local p0=$passes f0=$fails a0=$asserted n0=${#FAILURES[@]}
@@ -383,7 +431,7 @@ mutant m-api-quiet    'fail_api() { echo "CANNOT ESTABLISH: GitHub API read fail
 mutant m-precedence   'if (( wrong > 0 )); then' 'if (( wrong > 0 && elided >= MIN_ELIDED )); then' r_precedence
 mutant m-no-marker    'if (( census_marked == 0 )); then' 'if false; then' r_nomarker r_untrusted_marker r_nonurl_marker
 mutant m-unmatched-ok 'covered="$(jq -r --arg sha "$sha" '"'"'map(select(. == $sha)) | length'"'"' <<<"$mg_json" 2>/dev/null)" || fail_api "voucher lookup"' 'covered=1' r_unmatched1
-mutant m-trusted      'IN("OWNER", "MEMBER", "COLLABORATOR")' 'IN("OWNER", "MEMBER", "COLLABORATOR", "NONE")' r_untrusted_act r_untrusted_marker
+mutant m-trusted      'trusted_json="$(trusted_verdict_comments "$tracker" "$REPO")" || fail_api "tracker $tracker comments (trusted-author resolution)"' 'trusted_json="$(trusted_verdict_comments "$tracker" "$REPO")"' r_commentsfail r_permfail
 mutant m-adr-status   '[ "$adr_status" = "proposed" ]' '[ "$adr_status" = "never" ]' r_adr_proposed
 mutant m-registered   'if (( suite_registered == 0 )); then' 'if false; then' r_unregistered
 mutant m-stuck-deadline 'if (( age_days >= DEADLINE_DAYS )); then' 'if false; then' r_stuck30
@@ -410,9 +458,13 @@ mutant m-idle-cap '(( active )) || cap="$IDLE_RUNS"' ':' r_idle_cap
 mutant m-max-cap 'MAX_RUNS=100 ' 'MAX_RUNS=30  ' r_max_cap
 mutant m-would-count '[[ "$proof_holds" =~ ^[0-9]+$ ]] && [ "$proof_holds" -gt 0 ] && would=$((would + 1))' ':' r_would
 mutant m-step-name 'select(.name == "Proof holds for this SHA" and' 'select(.name == "Proof holds" and' r_would
-mutant m-no-collab 'IN("OWNER", "MEMBER", "COLLABORATOR")' 'IN("OWNER", "MEMBER")' r_collab
-mutant m-contrib 'IN("OWNER", "MEMBER", "COLLABORATOR")' 'IN("OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR")' r_contrib
-mutant m-crlf 'trusted="$(printf '"'"'%s'"'"' "$trusted" | tr -d '"'"'\r'"'"')"' 'trusted="$(printf '"'"'%s'"'"' "$trusted")"' r_crlf
+mutant m-crlf '<<<"$trusted_json" | tr -d '"'"'\r'"'"')"' '<<<"$trusted_json")"' r_crlf
+# the trust-source mutants: the helper call is replaced by a raw `issue view` read through the same fake arm
+_HELPER='trusted_json="$(trusted_verdict_comments "$tracker" "$REPO")" || fail_api "tracker $tracker comments (trusted-author resolution)"'
+mutant m-legacy-assoc "$_HELPER" 'trusted_json="$(gh issue view "$tracker" --repo "$REPO" --json comments --jq '"'"'.comments[] | select(.authorAssociation | IN("OWNER", "MEMBER", "COLLABORATOR")) | {t: .createdAt, b: .body} | tojson'"'"')" || fail_api "tracker $tracker comments"' r_privmember r_assocowner
+mutant m-project-raw "$_HELPER" 'trusted_json="$(gh issue view "$tracker" --repo "$REPO" --json comments --jq '"'"'.comments[] | {t: .createdAt, b: .body} | tojson'"'"')" || fail_api "tracker $tracker comments"' r_assocowner r_untrusted_act r_untrusted_act_elided r_untrusted_marker r_contrib
+mutant m-empty-helper "$_HELPER" 'trusted_json=""' r_pass r_privmember r_seven r_collabact
+mutant m-no-projection-check ' || fail_api "tracker $tracker comments (projection)"' '' r_badjq
 mutant m-ts-loose 'T[0-9]{2}:[0-9]{2}:[0-9]{2}Z'"'"'' 'T[0-9:]+Z?'"'"'' r_badts
 mutant m-act-anchor-start 'grep -oE "^S2-ACTIVATED: $TS_RE\$"' 'grep -oE "S2-ACTIVATED: $TS_RE\$"' r_midact
 mutant m-act-anchor-end 'grep -oE "^S2-ACTIVATED: $TS_RE\$"' 'grep -oE "^S2-ACTIVATED: $TS_RE"' r_midact
@@ -425,14 +477,35 @@ mutant m-voucher-status '.status == "completed" and .conclusion == "success") | 
 mutant m-deadline-edge '(( NOW - merged_epoch > DEADLINE_DAYS * 86400 ))' '(( NOW - merged_epoch >= DEADLINE_DAYS * 86400 ))' r_deadline_edge
 mutant m-heavy-prefix 'test("^test-scripts( |$)")' 'test("^test-scripts")' r_pass
 mutant m-heavy-exact 'test("^test-scripts( |$)")' 'test("^test-scripts$")' r_pass
-if [ "$MUT_RUN" -eq "$MUT_CAUGHT" ] && [ "$MUT_RUN" -ge 50 ]; then pass "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught"; else fail "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught (every mutant must be caught; floor 50)"; fi
+# harness controls: the helper must be able to report a SURVIVOR and a CRASH, or its verdicts mean nothing
+CTRL_OK=0
+mutant_probe c-equivalent 'MAX_RUNS=100' 'MAX_RUNS=100;' r_pass
+if [ "$MUT_LANDED" -eq 1 ] && [ "$MUT_CRASHED" -eq 0 ] && [ "$MUT_REDS" -eq 0 ]; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: an equivalent mutant survives (no row red, no crash)"
+else fail "harness control: the equivalent mutant was not reported as a survivor (landed=$MUT_LANDED crashed=$MUT_CRASHED reds=$MUT_REDS)"; fi
+mutant_probe c-crash 'MAX_RUNS=100' 'MAX_RUNS=100; readonly X=(' r_pass
+if [ "$MUT_LANDED" -eq 1 ] && [ "$MUT_CRASHED" -eq 1 ]; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: a mutant that does not parse is flagged as crashed"
+else fail "harness control: the crashing mutant was not flagged (landed=$MUT_LANDED crashed=$MUT_CRASHED)"; fi
+# the stderr detector itself: a mutant that PARSES but fails at runtime must be flagged too
+mutant_probe c-crash-rt 'MAX_RUNS=100' 'MAX_RUNS=100; no_such_command_zz' r_pass
+if [ "$MUT_LANDED" -eq 1 ] && [ "$MUT_CRASHED" -eq 1 ] && bash -n "$TMP/mut-c-crash-rt.sh" 2>/dev/null; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: a mutant that parses but fails at runtime is flagged as crashed"
+else fail "harness control: the runtime-crashing mutant was not flagged (landed=$MUT_LANDED crashed=$MUT_CRASHED)"; fi
+# the mirrored tree itself: an IDENTITY copy must show zero reds over the full row set (else every mutant verdict is polluted), and a copy
+# whose lib symlink is REMOVED must red at least one row (else the tree is not what resolves the lib)
+PROBE_UNDER="$(mk_tree identity "$PROBE")"; core_rows_quiet "${ALL_ROWS[@]}"; PROBE_UNDER="$PROBE"
+if [ "$MUT_REDS" -eq 0 ]; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: an identity copy in the mirrored tree turns no row red"
+else fail "harness control: the identity copy turned $MUT_REDS row(s) red (the tree is broken)"; fi
+PROBE_UNDER="$(mk_tree nolink "$PROBE" nolink)"; core_rows_quiet "${ALL_ROWS[@]}"; PROBE_UNDER="$PROBE"
+if [ "$MUT_REDS" -gt 0 ]; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: a copy without the lib symlink turns $MUT_REDS row(s) red (the tree resolves the lib)"
+else fail "harness control: a copy without the lib symlink turned no row red"; fi
+if [ "$CTRL_OK" -ne 5 ]; then fail "harness controls: $CTRL_OK of 5 held"; fi
+if [ "$MUT_RUN" -eq "$MUT_CAUGHT" ] && [ "$MUT_RUN" -ge 52 ]; then pass "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught"; else fail "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught (every mutant must be caught; floor 52)"; fi
 
 # the request-shape mutants cannot reach a row's EXIT CODE (the fake gh answers any well-formed jobs path), so they are
 # pinned by the requests.log assertion above: drop each parameter from a copy and confirm the assertion text no longer holds
 _shape_bad=""
-for pair in "jobs?per_page=100&filter=latest|jobs?per_page=100" "state=open&per_page=100|state=all&per_page=100" "oldest_epoch - 86400|oldest_epoch + 864000" 'api --paginate "repos/$REPO/issues/$tracker/comments|api "repos/$REPO/issues/$tracker/comments'; do
+for pair in "jobs?per_page=100&filter=latest|jobs?per_page=100" "state=open&per_page=100|state=all&per_page=100" "oldest_epoch - 86400|oldest_epoch + 864000"; do
   old="${pair%%|*}"; new="${pair#*|}"
-  python3 - "$PROBE" "$TMP/shape.sh" "$old" "$new" <<'PY' || { _shape_bad="$_shape_bad nolanding($old)"; continue; }
+  python3 - "$PROBE" "$TMP/shape-src.sh" "$old" "$new" <<'PY' || { _shape_bad="$_shape_bad nolanding($old)"; continue; }
 import sys
 src, dst, old, new = sys.argv[1:5]
 s = open(src).read()
@@ -440,27 +513,27 @@ if s.count(old) != 1:
     sys.exit(3)
 open(dst, "w").write(s.replace(old, new))
 PY
-  chmod +x "$TMP/shape.sh"
+  chmod +x "$TMP/shape-src.sh"; shape_probe="$(mk_tree shape "$TMP/shape-src.sh")"
   build_fx "$TMP/shp" 10 15 510 2568
   # the shimmed gh rejects the mutated endpoint shapes (exit 64), so the probe cannot read: CANNOT ESTABLISH, never a pass
-  out="$(env FX="$TMP/shp" PATH="$TMP/bin:$PATH" GH_TOKEN=x SOAK_NOW_EPOCH="$NOW_EPOCH" SOAK_ADR_FILE="$TMP/shp/ADR-276-fixture.md" SOAK_TEST_ALL="$TMP/shp/test-all.sh" bash "$TMP/shape.sh" 2>&1)"; rc=$?
+  out="$(env FX="$TMP/shp" PATH="$TMP/bin:$PATH" GH_TOKEN=x SOAK_NOW_EPOCH="$NOW_EPOCH" SOAK_ADR_FILE="$TMP/shp/ADR-276-fixture.md" SOAK_TEST_ALL="$TMP/shp/test-all.sh" bash "$shape_probe" 2>&1)"; rc=$?
   case "$old" in
     oldest_epoch*) # the fake gh does no server-side filtering: the window bound shows only in the request it was sent
       grep -cF "event=merge_group&per_page=100&created=%3E$_bound" "$TMP/shp/requests.log" >/dev/null && _shape_bad="$_shape_bad window-unchanged($new)" ;;
     *) [ "$rc" != 0 ] || _shape_bad="$_shape_bad passes($new)" ;;
   esac
 done
-if [ -z "$_shape_bad" ]; then pass "request-shape mutants (jobs filter dropped, tracker state widened) are refused by the fake gh, never a pass"; else fail "request-shape mutants survived:$_shape_bad"; fi
+if [ -z "$_shape_bad" ]; then pass "request-shape mutants (jobs filter dropped, tracker state widened, merge_group window moved) are refused by the fake gh, never a pass"; else fail "request-shape mutants survived:$_shape_bad"; fi
 
 # harness row: a probe that always exits 0 must be refused by the named rows (the rows can fail)
 printf '#!/usr/bin/env bash\necho PASS\nexit 0\n' > "$TMP/always-pass.sh"; chmod +x "$TMP/always-pass.sh"
 PROBE_UNDER="$TMP/always-pass.sh"; core_rows_quiet "${ALL_ROWS[@]}"; PROBE_UNDER="$PROBE"
-if [ "$MUT_REDS" -ge 49 ]; then pass "HARNESS: an always-PASS probe turns $MUT_REDS rows red"; else fail "HARNESS: an always-PASS probe turned only $MUT_REDS rows red"; fi
+if [ "$MUT_REDS" -ge 52 ]; then pass "HARNESS: an always-PASS probe turns $MUT_REDS rows red"; else fail "HARNESS: an always-PASS probe turned only $MUT_REDS rows red"; fi
 
 printf 'ci-push-dedupe-soak-9512: %d passed, %d failed, %d assertion(s) executed\n' "$passes" "$fails" "$asserted"
 # DELIBERATELY NOT ROUTED THROUGH fail(): compares against a literal and exits directly.
 _total=$((passes + fails))
-_FLOOR=121
+_FLOOR=135
 if [ "$_total" -lt "$_FLOOR" ]; then
   printf '[FATAL] assertion floor: executed %d < %d\n' "$_total" "$_FLOOR" >&2
   exit 1

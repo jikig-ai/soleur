@@ -18,16 +18,21 @@
 #   than 20% of the sampled push runs (and at least 5 sampled) is a FAIL. The job is `continue-on-error`, so a
 #   failing job leaves a red check on a GREEN run and pages nobody: this is the detection path, up to one sweep
 #   (a day) late. A failed dedupe costs a full battery, never a skipped one, so safety is unaffected.
-#   (d) an `S2-EXIT-CENSUS: https://...` comment on the tracker from a repository owner, member or collaborator:
+#   (d) an `S2-EXIT-CENSUS: https://...` comment on the tracker from a repository admin, maintainer or writer:
 #       the sweeper closes the tracker itself on exit 0, so a pass without the exit census attached would close
 #       the stage without its evidence.
 # ACTIVATION is read from the tracker, not from the repository variable: the sweeper's GITHUB_TOKEN cannot read
 # Actions variables (the sibling watchdog-arm-soak-9237.sh documents the same 403), and a probe that depends on
 # that read would sit at CANNOT ESTABLISH forever. The activating agent comments `S2-ACTIVATED: <UTC ISO time>`
-# (the variable's updated_at) on the tracker; `S2-DEACTIVATED: <UTC ISO time>` ends it. Only comments by an
-# OWNER, MEMBER or COLLABORATOR count, so a drive-by commenter on a public repo can neither activate nor close.
-# Post each marker as a plain line under the operator's own identity: a marker posted by a bot (github-actions) has
-# no such association and is ignored (an activation nobody recorded then fails loud through the early-elision FAIL).
+# (the variable's updated_at) on the tracker; `S2-DEACTIVATED: <UTC ISO time>` ends it. Only comments by an author
+# whose repository permission is admin, maintain or write count, so a drive-by commenter on a public repo can neither
+# activate nor close. Trust is resolved at read time through scripts/lib/trusted-verdict.sh (the collaborator permission
+# endpoint, one request per distinct author), NOT from the comment's author_association: that field is computed against
+# the READING token's visibility, so under the sweeper's GITHUB_TOKEN an org member whose membership is private reads as
+# CONTRIBUTOR and their marker would be dropped (#6617, #8389). Fenced code blocks are stripped, so a marker quoted in a
+# fence never counts. Post each marker as a plain line under the operator's own identity: a marker posted by a bot
+# (github-actions) has no permission on the repository and is ignored (an activation nobody recorded then fails loud
+# through the early-elision FAIL).
 # The marker's own timestamp orders markers, not the comment's created_at.
 # With no activation on record, an elided run is a FAIL (an org-level variable, or a flip nobody recorded).
 # More than DEADLINE_DAYS (30) days after the S2 PR merged with no activation is exit 1: activate, or revert.
@@ -42,7 +47,7 @@
 #   0 = PASS    1 = FAIL (a wrong elision, a failing push-dedupe job, the mean over target, a deadline, or a
 #               deregistered proof suite)
 #   2 = NOT YET (not activated, too few elided runs or days, or the exit census marker is missing)
-#   3 = CANNOT ESTABLISH (gh/jq/GH_TOKEN missing, or a GitHub API read failed: the sweeper retries)
+#   3 = CANNOT ESTABLISH (gh/jq/GH_TOKEN missing, or a GitHub API read failed, including a permission lookup: the sweeper retries)
 #   78 = refused to run under xtrace while GH_TOKEN is set (#7797)
 #
 # RETIREMENT: when #9512's tracker closes, delete this file, its .test.sh, the run_suite line in scripts/test-all.sh,
@@ -76,10 +81,12 @@ ADR_FILE_OVERRIDE="${SOAK_ADR_FILE:-}"
 ADR_DIR="$HERE/../../knowledge-base/engineering/architecture/decisions"
 TEST_ALL="${SOAK_TEST_ALL:-$HERE/../test-all.sh}"
 
-for need in gh jq; do
+for need in gh jq base64 awk mktemp sort; do
   command -v "$need" >/dev/null 2>&1 || { echo "CANNOT ESTABLISH: $need is not installed"; exit 3; }
 done
 [ -n "${GH_TOKEN:-}" ] || { echo "CANNOT ESTABLISH: GH_TOKEN is not set (the tracker directive must declare secrets=GH_TOKEN)"; exit 3; }
+# shellcheck source=../lib/trusted-verdict.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/trusted-verdict.sh"
 
 NOW="${SOAK_NOW_EPOCH:-$(date -u +%s)}"
 [[ "$NOW" =~ ^[1-9][0-9]*$ ]] || { echo "CANNOT ESTABLISH: SOAK_NOW_EPOCH is not an epoch"; exit 3; }
@@ -97,10 +104,8 @@ issues="$(api "repos/$REPO/issues?labels=follow-through&state=open&per_page=100"
           --jq "[.[] | select((.body // \"\") | contains(\"script=$DIRECTIVE_SCRIPT\")) | .number]")" || fail_api "follow-through issues"
 tracker="$(jq -r '.[0] // empty' <<<"$issues" 2>/dev/null)" || fail_api "tracker lookup"
 [ -n "$tracker" ] || { echo "NOT YET: the tracker issue carrying the $DIRECTIVE_SCRIPT directive was not found among open follow-through issues"; exit 2; }
-trusted="$(api --paginate "repos/$REPO/issues/$tracker/comments?per_page=100" \
-           --jq '[.[] | select((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")) | (.body // "")] | join("\n")')" \
-  || fail_api "tracker $tracker comments"
-trusted="$(printf '%s' "$trusted" | tr -d '\r')"
+trusted_json="$(trusted_verdict_comments "$tracker" "$REPO")" || fail_api "tracker $tracker comments (trusted-author resolution)"
+trusted="$(jq -r '.b' <<<"$trusted_json" | tr -d '\r')" || fail_api "tracker $tracker comments (projection)"
 TS_RE='[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z'
 last_on="$(printf '%s\n' "$trusted" | grep -oE "^S2-ACTIVATED: $TS_RE\$" | sed 's/^S2-ACTIVATED: //' | sort | tail -n 1)"
 last_off="$(printf '%s\n' "$trusted" | grep -oE "^S2-DEACTIVATED: $TS_RE\$" | sed 's/^S2-DEACTIVATED: //' | sort | tail -n 1)"
@@ -234,7 +239,7 @@ fi
 
 # --- (d) the exit census marker, from a trusted author --------------------------------------------------------------------
 if (( census_marked == 0 )); then
-  echo "NOT YET: criteria (a)-(c) hold ($elided elided, $age_days days, mean $mean) but tracker #$tracker has no 'S2-EXIT-CENSUS: https://github.com/...' comment from an owner, member or collaborator; attach the exit census (plan PM-4)"
+  echo "NOT YET: criteria (a)-(c) hold ($elided elided, $age_days days, mean $mean) but tracker #$tracker has no 'S2-EXIT-CENSUS: https://github.com/...' comment from a repository admin, maintainer or writer; attach the exit census (plan PM-4)"
   exit 2
 fi
 echo "PASS: $elided elided push run(s) among the trailing $n sampled over $age_days days, each vouched by a green merge_group run, mean $mean job-min per push run (limit $MEAN_LIMIT_TEXT), exit census attached on #$tracker"
