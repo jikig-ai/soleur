@@ -22,3 +22,9 @@
 
 ### Components Invoked
 soleur:plan (manual from plugin-cache SKILL.md — no Skill tool in subagent), soleur:deepen-plan (manual sequential pass, sequential-fallback disclosure), soleur:engineering:cto (pending rulings recorded — no Agent tool in subagent)
+
+## Review-round decisions (2026-10-13, panel fixes)
+
+- Design-pass + panel findings folded inline: atomic fstab install in BOTH writers (`mv -f`), source-congruent fast path with stacked-mount refusal, `findmnt` pipefail guard, `backing_is` on the noop path, post-cutover-evidence refusal (`reopen_pointer_lost`), `head -1`→`tail -1` on every findmnt SOURCE read (incl. inngest-redis-bootstrap.sh guard), timeout-wrapped blockdev probe + post-settle re-probe, `/usr/bin/udevadm`, stale `30s` strings → `300s`.
+- Loopback floor moved to the CI-measured 118 (run 38425065480); SH5 wrong-source arm added; sleep/systemctl recorder liveness asserted.
+- Precedent attribution corrected: the mirrored shape is the sibling's `cloud-init-git-data.yml` heredoc wait, not `_gd_attach_wait`.

@@ -92,8 +92,9 @@ if grep -qF '[ -s /etc/default/inngest-luks ] ||' "$CLOUD_INIT"; then ok "T1.5 t
 # T1.6 The device-presence wait is the RULED counted bound (#10217, CTO rulings D1/D4/D7): a
 # LITERAL 300 in BOTH bodies — no env seam, no INNGEST_LUKS_ATTACH_WAIT_S tunable — counted
 # `sleep 1` passes that re-run the WHOLE `-b && size>0` predicate (never the clock), a probe once
-# immediately (bound 0 still probes exactly once), and exactly ONE `udevadm settle --timeout=10`
-# AFTER the loop — never per pass. blkid on an absent path returns rc 2, which the accept-0-or-2
+# immediately, a `/usr/bin/timeout -k 2 10` wrap on every blockdev call, exactly ONE
+# `udevadm settle --timeout=10` AFTER the loop — never per pass — and a post-settle re-probe so a
+# device landing inside the settle window still converges (review round, PR #10228). blkid on an absent path returns rc 2, which the accept-0-or-2
 # policy would otherwise route into the luksFormat arm — a volume merely slow to attach must never
 # be read as blank; ~80s attach latency is measured on this estate, so the bound moved 30 -> 300.
 # Tier 2 lowers this bound for its cases; this is the pin that keeps that a declared harness knob
@@ -127,6 +128,7 @@ _wd_bad() {
   [ "$(printf '%s\n' "$loop" | grep -cF 'blockdev --getsize64 "$1"')" -ge 1 ] || bad="${bad}predicate-not-re-run-in-loop "
   [ "$(printf '%s\n' "$loop" | grep -c 'udevadm')" -eq 0 ] || bad="${bad}settle-INSIDE-loop "
   [ "$(printf '%s\n' "$body" | grep -cE 'udevadm settle --timeout=10')" -eq 1 ] || bad="${bad}settle-count!=1 "
+  [ "$(printf '%s\n' "$body" | grep -cF 'timeout -k 2 10 /usr/sbin/blockdev')" -ge 3 ] || bad="${bad}probe-not-timeout-wrapped "
   dn="$(printf '%s\n' "$body" | grep -nE '^[[:space:]]*done[[:space:]]*$' | sed -n '1p' | cut -d: -f1)"
   sn="$(printf '%s\n' "$body" | grep -nE 'udevadm settle --timeout=10' | sed -n '1p' | cut -d: -f1)"
   { [ -z "$dn" ] || [ -z "$sn" ] || [ "$sn" -le "$dn" ]; } && bad="${bad}settle-not-AFTER-loop "
@@ -584,15 +586,48 @@ if printf '%s\n' "$_EM" | grep -cF 'mv -f "$_em_tmp" /etc/fstab' >/dev/null && !
 # desync window makes it reachable). The fast path must compare findmnt SOURCE through
 # readlink -f against $1, umount the wrong-source mount, and daemon-reload after the install
 # so the fstab generator re-reads the line THIS boot.
-if printf '%s\n' "$_EM" | grep -cF 'findmnt -no SOURCE' >/dev/null && printf '%s\n' "$_EM" | grep -cF 'umount "$2"' >/dev/null && printf '%s\n' "$_EM" | grep -cF 'systemctl daemon-reload' >/dev/null; then ok "T1.16o the fast path is source-congruent (findmnt+readlink -f), wrong-source mounts converge, and daemon-reload refreshes the generated unit"; else no "T1.16o the fast path is still source-blind, or daemon-reload is missing — a stale generated mount unit can loop the degrade"; fi
+if printf '%s\n' "$_EM" | grep -cF 'findmnt -no SOURCE' >/dev/null && printf '%s\n' "$_EM" | grep -cF 'readlink -f' >/dev/null && printf '%s\n' "$_EM" | grep -cF 'umount "$2"' >/dev/null && [ "$(printf '%s\n' "$_EM" | awk '/mv -f/{m=NR} /daemon-reload/{print (m && NR>m) ? "ok" : "bad"; exit}')" = "ok" ]; then ok "T1.16o the fast path is source-congruent (findmnt+readlink -f), wrong-source mounts converge, and daemon-reload runs AFTER the fstab install"; else no "T1.16o the fast path is still source-blind, or daemon-reload is missing/misordered — a stale generated mount unit can loop the degrade"; fi
 # T1.16p the open_as noop path must verify backing BEFORE emitting reopen_noop: the noop feeds
-# ensure_mount, so a wrongly-backed mapper would be mounted + fstab'd silently.
+# ensure_mount, so a wrongly-backed mapper would be mounted + fstab'd silently. The ordering
+# check asks whether backing_is was SEEN before the first reopen_noop — never compare NR against
+# a possibly-unset mark (b=0 makes every direction read green; PR #10228 panel).
 _OA="$(printf '%s\n' "$_G1_REOPEN" | awk '/^      open_as\(\) \{$/{f=1} f{print} f&&/^      \}$/{exit}')"
-if printf '%s\n' "$_OA" | grep -cF 'backing_is' >/dev/null && printf '%s\n' "$_OA" | grep -cF 'fail reopen_backing' >/dev/null && [ "$(printf '%s\n' "$_OA" | awk '/backing_is/{b=NR} /reopen_noop/{print NR-b<0?"bad":"ok"; exit}')" = "ok" ]; then ok "T1.16p the open_as noop path asserts backing_is before reopen_noop"; else no "T1.16p an already-open mapper is accepted without a backing-device check"; fi
+if printf '%s\n' "$_OA" | grep -cF 'backing_is' >/dev/null && printf '%s\n' "$_OA" | grep -cF 'fail reopen_backing' >/dev/null && [ "$(printf '%s\n' "$_OA" | awk '/backing_is/{b++} /reopen_noop/{print (b ? "ok" : "bad"); exit}')" = "ok" ]; then ok "T1.16p the open_as noop path asserts backing_is before reopen_noop"; else no "T1.16p an already-open mapper is accepted without a backing-device check"; fi
 # T1.16q refusal strings name the TRUE bound: every 'after Ns' refusal sentence must read 300s —
 # a stale 30s misreports the bound the host actually enforced, and on a no-console host these
 # strings ARE the incident record.
 if [ "$(grep -c 'after 300s' "$CLOUD_INIT")" -ge 4 ] && ! grep -q 'after 30s\b' "$CLOUD_INIT"; then ok "T1.16q all wait-refusal sentences name the 300s bound (no stale 30s survivors)"; else no "T1.16q a wait-refusal sentence still claims the old 30s bound"; fi
+
+# T1.16r STACKED-MOUNT refusal + guarded findmnt: ensure_mount must not `head -1` a findmnt
+# listing (the shadowed-bottom read inngest-luks-cutover.sh:313 documents), must guard the
+# substitution under pipefail (`|| _em_src=""`), and must REFUSE a multi-source mountpoint
+# rather than guess which layer the kernel serves.
+if printf '%s\n' "$_EM" | grep -cE 'findmnt.*head -1' >/dev/null; then
+  no "T1.16r ensure_mount still reads findmnt | head -1 — the shadowed-bottom read"
+elif printf '%s\n' "$_EM" | grep -cF '|| _em_src=""' >/dev/null && printf '%s\n' "$_EM" | grep -c 'stacked mount' >/dev/null && printf '%s\n' "$_EM" | grep -cF 'fail reopen_mount' >/dev/null; then
+  ok "T1.16r the fast path guards findmnt and refuses a stacked mountpoint (no shadowed read)"
+else
+  no "T1.16r the stacked-mount refusal or the findmnt pipefail guard is missing"
+fi
+# T1.16s POST-CUTOVER-EVIDENCE refusal on the ext4-skip arm: an empty pointer plus an already-open
+# canonical mapper or a mapper fstab line must fail reopen_pointer_lost rather than entrench the
+# plaintext backstop (data-integrity review, PR #10228).
+if printf '%s\n' "$_G1_REOPEN" | grep -cF 'reopen_pointer_lost' >/dev/null && printf '%s\n' "$_G1_REOPEN" | grep -cF '/dev/mapper/' >/dev/null && [ "$(printf '%s\n' "$_G1_REOPEN" | awk '/reopen_pointer_lost/{p++} /reopen_skip_plaintext/{print (p ? "ok" : "bad"); exit}')" = "ok" ]; then ok "T1.16s the ext4-skip arm refuses on post-cutover evidence before the plaintext skip"; else no "T1.16s a lost-pointer post-cutover host would regress to the plaintext volume"; fi
+# T1.16t the class-wide fix: NO `findmnt -no SOURCE | head -1` may survive in cloud-init's
+# host-side mount readers — stage mounted_from and the _sv_* checks read the kernel-served TOP
+# of a stack (tail -1), which the cutover script documents as the only correct read. The same
+# blind spot in inngest-redis-bootstrap.sh's guard is NOT pinnable here: that file ships via the
+# baked vinngest image (GuardA byte-identity), so its fix rides the image-redelivery work (#6780),
+# not this PR.
+if grep -qE 'findmnt -no SOURCE.*\| head -1' "$CLOUD_INIT"; then
+  no "T1.16t a findmnt | head -1 read survives in cloud-init — it reads the SHADOWED layer of a stacked mount"
+else
+  ok "T1.16t every cloud-init findmnt SOURCE read takes the kernel-served entry (tail -1 / single-line refuse)"
+fi
+# T1.16u BOTH fstab writers install atomically — same-dir mktemp + chmod + mv -f; the stage's
+# fstab_set had the same cat-truncate defect the cutover script documents.
+_FS="$(printf '%s\n' "$_G1_STAGE" | awk '/^    fstab_set\(\) \{$/{f=1} f{print} f&&/^    \}$/{exit}')"
+if printf '%s\n' "$_FS" | grep -cF 'mv -f "$_fs_tmp" /etc/fstab' >/dev/null && ! printf '%s\n' "$_FS" | grep -cE '> */etc/fstab' >/dev/null; then ok "T1.16u the stage's fstab_set installs atomically too (mv -f, no redirect-to-/etc/fstab)"; else no "T1.16u fstab_set still installs by redirect — a mid-write death truncates /etc/fstab"; fi
 
 # ═══ FLOOR ══════════════════════════════════════════════════════════════════════
 # Raised 26 -> 51 by #6894, which added T1.8a2/c/d/e, T1.13, T1.14, G1.a-g and G4.a-f; 51 -> 56
@@ -603,14 +638,14 @@ if [ "$(grep -c 'after 300s' "$CLOUD_INIT")" -ge 4 ] && ! grep -q 'after 30s\b' 
 # (an unclassified site REDS) and G4.g2 (any dispatch-side pointer write fails).
 # #9939: T1.15a-e (reopen-unit ConditionPathExists= skip-vs-fail + mutation control) raised it 57 -> 62; review rounds added T1.15f set-parity (62 -> 63) then T1.15g reset-line coverage and set-identity (63 -> 64).
 # #10217: T1.6 expanded into T1.6a-e (per-body mechanism pin) and T1.16a-q (ensure_mount self-heal,
-# ordering pin, no-seam + byte-identical invocation pins, then n-q design-review hardening)
+# ordering pin, no-seam + byte-identical invocation pins, then n-u review hardening) — MEASURED 89.
 # Self-contained: bash builtins and this suite's own counters only. A floor that lives in a helper
 # is silenced by the same move that silences the arms it guards.
-if [ "$executed" -lt 85 ]; then
+if [ "$executed" -lt 89 ]; then
   fail=$((fail + 1))
-  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 85. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
+  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 89. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
 else
-  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 85)\n' "$executed"
+  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 89)\n' "$executed"
 fi
 
 echo ""

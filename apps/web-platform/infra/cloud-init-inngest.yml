@@ -120,7 +120,9 @@ write_files:
   # than at the next reboot, when nothing is watching.
   #
   # IDEMPOTENT: if the mapper is already open (first boot, where runcmd just opened it) the open
-  # is a no-op, and the mount completion is a no-op whenever the mountpoint is already mounted.
+  # is a no-op, and the mount completion is a no-op whenever the mountpoint is already mounted
+  # FROM the arm-verified source — a wrong-source or stacked mount converges or refuses, it is
+  # never silently accepted.
   # It is NOT a substitute for the runcmd stage — that stage owns the format/mkfs
   # decision, which this unit must never make. If the device is not already crypto_LUKS, this
   # unit FAILS rather than formatting: a boot-time unit that can create a filesystem is a boot
@@ -204,19 +206,25 @@ write_files:
       # after the loop — never per pass. Mirrors the runcmd stage's same-named helper.
       wait_dev() {
         _i=0
-        if [ -b "$1" ] && [ "$(/usr/sbin/blockdev --getsize64 "$1" 2>/dev/null || echo 0)" -gt 0 ]; then
+        _wd_hit=0
+        if [ -b "$1" ] && [ "$(/usr/bin/timeout -k 2 10 /usr/sbin/blockdev --getsize64 "$1" 2>/dev/null || echo 0)" -gt 0 ]; then
           return 0
         fi
         emit reopen_device_wait 0 n/a "waiting up to 300s for $1 — the volume attachment is still in flight"
         while [ "$_i" -lt 300 ]; do
           sleep 1; _i=$((_i+1))
-          if [ -b "$1" ] && [ "$(/usr/sbin/blockdev --getsize64 "$1" 2>/dev/null || echo 0)" -gt 0 ]; then
-            emit reopen_device_wait 0 n/a "$1 appeared after $${_i}s of the 300s bound"
-            return 0
+          if [ -b "$1" ] && [ "$(/usr/bin/timeout -k 2 10 /usr/sbin/blockdev --getsize64 "$1" 2>/dev/null || echo 0)" -gt 0 ]; then
+            _wd_hit=1
+            break
           fi
         done
-        udevadm settle --timeout=10 >/dev/null 2>&1 || true
-        return 1
+        /usr/bin/udevadm settle --timeout=10 >/dev/null 2>&1 || true
+        if [ "$_wd_hit" -eq 0 ] && [ -b "$1" ] && [ "$(/usr/bin/timeout -k 2 10 /usr/sbin/blockdev --getsize64 "$1" 2>/dev/null || echo 0)" -gt 0 ]; then
+          _wd_hit=1
+        fi
+        [ "$_wd_hit" -eq 1 ] || return 1
+        emit reopen_device_wait 0 n/a "$1 appeared after $${_i}s of the 300s bound"
+        return 0
       }
       # luks_type <dev> — prints the device's TYPE; FAILS the unit on an unmeasurable probe.
       luks_type() {
@@ -264,7 +272,11 @@ write_files:
       # truth for source and options — never re-typed here.
       ensure_mount() {
         if mountpoint -q "$2"; then
-          _em_src="$(findmnt -no SOURCE "$2" 2>/dev/null | head -1)"
+          _em_src="$(findmnt -no SOURCE "$2" 2>/dev/null)" || _em_src=""
+          # A STACKED mountpoint is an anomaly on this host — findmnt lists it oldest-first and
+          # nothing here stacks /mnt/data. Refuse rather than read a shadowed layer (head -1
+          # reads the bottom; tail -1 the top — neither is the whole story on a stack).
+          [ "$(printf '%s\n' "$_em_src" | grep -c .)" -le 1 ] || fail reopen_mount 1 n/a "$2 carries a stacked mount — refusing to read a shadowed source"
           if [ -n "$_em_src" ] && [ "$(readlink -f "$_em_src")" = "$(readlink -f "$1")" ]; then
             return 0
           fi
@@ -310,6 +322,14 @@ write_files:
       elif [ "${inngest_expect_luks}" = "true" ]; then
         fail reopen_not_luks 1 "$${BLK_TYPE:-empty}" "expect_luks=true but the device is not crypto_LUKS"
       else
+        # POST-CUTOVER-EVIDENCE REFUSAL: if the envfile survived but lost its pointer line, a
+        # post-cutover host falls into this arm — and since #10217 that arm MOUNTS the plaintext
+        # backstop and writes its fstab line, entrenching the disclaimed store and forking new
+        # AOF writes onto it. An already-open canonical mapper or an uncommented mapper fstab
+        # line for /mnt/data is affirmative post-cutover evidence: refuse instead of regressing.
+        if [ -e /dev/mapper/inngest-redis ] || [ "$(awk '$1 !~ /^#/ && $2 == "/mnt/data" && $1 ~ /^\/dev\/mapper\//' /etc/fstab | grep -c .)" -gt 0 ]; then
+          fail reopen_pointer_lost 1 n/a "post-cutover evidence (open mapper or mapper fstab line) but an empty pointer — refusing to mount the plaintext volume"
+        fi
         emit reopen_skip_plaintext 0 "$${BLK_TYPE:-empty}" "pre-recut host; nothing to reopen"
         ensure_mount "$DEV" /mnt/data
       fi
@@ -1761,19 +1781,25 @@ runcmd:
     # is this body's mirror (its emit channel is `emit`); keep the two in step.
     wait_dev() {
       _i=0
-      if [ -b "$1" ] && [ "$(/usr/sbin/blockdev --getsize64 "$1" 2>/dev/null || echo 0)" -gt 0 ]; then
+      _wd_hit=0
+      if [ -b "$1" ] && [ "$(/usr/bin/timeout -k 2 10 /usr/sbin/blockdev --getsize64 "$1" 2>/dev/null || echo 0)" -gt 0 ]; then
         return 0
       fi
       luks_emit "$STAGE" 0 n/a "waiting up to 300s for $1 — the volume attachment is still in flight"
       while [ "$_i" -lt 300 ]; do
         sleep 1; _i=$((_i+1))
-        if [ -b "$1" ] && [ "$(/usr/sbin/blockdev --getsize64 "$1" 2>/dev/null || echo 0)" -gt 0 ]; then
-          luks_emit "$STAGE" 0 n/a "$1 appeared after $${_i}s of the 300s bound"
-          return 0
+        if [ -b "$1" ] && [ "$(/usr/bin/timeout -k 2 10 /usr/sbin/blockdev --getsize64 "$1" 2>/dev/null || echo 0)" -gt 0 ]; then
+          _wd_hit=1
+          break
         fi
       done
-      udevadm settle --timeout=10 >/dev/null 2>&1 || true
-      return 1
+      /usr/bin/udevadm settle --timeout=10 >/dev/null 2>&1 || true
+      if [ "$_wd_hit" -eq 0 ] && [ -b "$1" ] && [ "$(/usr/bin/timeout -k 2 10 /usr/sbin/blockdev --getsize64 "$1" 2>/dev/null || echo 0)" -gt 0 ]; then
+        _wd_hit=1
+      fi
+      [ "$_wd_hit" -eq 1 ] || return 1
+      luks_emit "$STAGE" 0 n/a "$1 appeared after $${_i}s of the 300s bound"
+      return 0
     }
     # fstab_set <mountpoint> <line> — REPLACE the mountpoint's line in place, then assert exactly
     # one. Every earlier writer was `grep -q … || append`, so a swapped store kept its old line and
@@ -1783,15 +1809,19 @@ runcmd:
       _fs_tmp="$(mktemp /etc/fstab.soleur.XXXXXX)"
       awk -v mp="$1" '$1 ~ /^#/ || $2 != mp' /etc/fstab > "$_fs_tmp"
       printf '%s\n' "$2" >> "$_fs_tmp"
-      cat "$_fs_tmp" > /etc/fstab
-      rm -f "$_fs_tmp"
+      # Atomic install: same-dir rename, never a truncate-in-place — a death or ENOSPC mid-write
+      # must not leave /etc/fstab truncated (inngest-luks-cutover.sh:536 documents that defect).
+      chmod 0644 "$_fs_tmp"
+      mv -f "$_fs_tmp" /etc/fstab
       _fs_n="$(awk -v mp="$1" '$1 !~ /^#/ && $2 == mp' /etc/fstab | wc -l)"
       [ "$_fs_n" -eq 1 ] || { echo "FATAL: fstab carries $_fs_n lines for $1 after the rewrite — exactly one is required" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
     }
     # mounted_from <mountpoint> <expected-source> — the mount's SOURCE resolves to the expected
     # device. Compared through readlink -f so a by-id alias and its /dev/sdX target agree.
     mounted_from() {
-      _src="$(findmnt -no SOURCE "$1" 2>/dev/null | head -1)" || _src=""
+      # tail -1, never head -1: on a stacked mountpoint findmnt lists oldest-first and the
+      # kernel serves the LAST entry (inngest-luks-cutover.sh documents the measurement).
+      _src="$(findmnt -no SOURCE "$1" 2>/dev/null | tail -1)" || _src=""
       [ -n "$_src" ] && [ "$(readlink -f "$_src")" = "$(readlink -f "$2")" ]
     }
     # backing_is <mapper> <device> — the mapper's ONLY backing block device is <device>. Read from
@@ -2062,11 +2092,11 @@ runcmd:
         # the two assertions above just made are shipped off-box, where the follow-through re-checks
         # them: the staging mount's resolved source, the mapper's sysfs backing, and the LIVE
         # mount's source (which must differ — the staging arm must disturb nothing).
-        _sv_src="$(findmnt -no SOURCE /mnt/data-luks 2>/dev/null | head -1)"
+        _sv_src="$(findmnt -no SOURCE /mnt/data-luks 2>/dev/null | tail -1)"
         _sv_dm="$(basename "$(readlink -f "$STAGING_MAPPER")" 2>/dev/null)"
         _sv_back="$(ls "/sys/class/block/$${_sv_dm}/slaves" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
         _sv_want="$(basename "$(readlink -f "$STAGING_DEV")" 2>/dev/null)"
-        _sv_live="$(findmnt -no SOURCE /mnt/data 2>/dev/null | head -1)"
+        _sv_live="$(findmnt -no SOURCE /mnt/data 2>/dev/null | tail -1)"
         luks_emit staging_verify 0 "$${STG_TYPE:-empty}" \
           "stg_src=$${_sv_src:-unreadable} stg_backing=$${_sv_back:-unreadable} stg_dev=$${_sv_want:-unreadable} stg_devid=$${LUKS_ID} live_src=$${_sv_live:-unreadable}"
       fi
