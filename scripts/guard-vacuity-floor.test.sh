@@ -947,7 +947,7 @@ PROMOTED_FILES='^(\.claude/hooks/hook-suite-dep-unresolved\.test\.sh|\.claude/ho
 # `plugins/soleur/skills/[^/]+/test/` (deferred scope) grew the shrink-only ledger 47 -> 48 and
 # reddened ARM 5c, so it is PROMOTED as a FILE, not deferred, and not by raising MAX_DEFERRED —
 # the same move as sibling `redact-pii-ghs-shape.test.sh`. Covered-bar grounds: the floor is
-# `(( PASS < 15 ))` with the literal on the `if` (the arithmetic-form the sweep recognizes),
+# `(( PASS < 16 ))` with the literal on the `if` (the arithmetic-form the sweep recognizes),
 # reported by `echo` + `exit 1` and never through the ok()/bad() pair it backstops (ADR-193);
 # an instrument self-test drives both counters once each and exits 2 before any arm if either
 # fails to move; and the floor runs only after the FAIL>0 gate, so a real failure is never

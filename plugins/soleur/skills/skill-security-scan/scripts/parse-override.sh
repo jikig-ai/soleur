@@ -93,12 +93,15 @@ for path in "${added[@]}"; do
   # `f:\tv` are spellings this gate does not recognize — they report missing
   # (deny-direction by design); the key arm's ` ` (not [[:space:]]) and the
   # block arm's leading-space requirement deny tab indentation, which YAML
-  # forbids. Deliberate asymmetry: presence resolves duplicate keys last-wins,
+  # forbids (CRLF is normalized first — `\r` is stripped before matching, so a
+  # CRLF-authored block map still reads as a key + indented block). Deliberate
+  # asymmetry: presence resolves duplicate keys last-wins,
   # but the value extractors below take the FIRST `^f:` match — a repeated key
   # reads stale downstream; single-dup shapes still fail closed (a trailing
   # empty dup is reported missing here), so the divergence is cosmetic.
   missing="$(printf '%s\n' "$fm" | awk -v fields="${required_fields[*]}" '
     BEGIN { n = split(fields, req, " ") }
+    { sub(/\r$/, "") }
     /^[A-Za-z_][A-Za-z0-9_-]*:( |$)/ {
       key = $0; sub(/:.*/, "", key)
       cur = key; seen[key] = 1

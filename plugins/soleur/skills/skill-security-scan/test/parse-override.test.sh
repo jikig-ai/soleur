@@ -514,14 +514,35 @@ else
   bad "stale sha not bucketed (rc=$PARSE_RC, out=$PARSE_OUT)"
 fi
 
+# --- Arm 10: tab-separated key REJECT ------------------------------------------
+# `findings_json:\t{…}` — a tab is forbidden as key separator AND indentation
+# in YAML. The key arm's ` ` (literal space, not [[:space:]]) and the block
+# arm's leading-space requirement deny it; an `[[:space:]]` regression would
+# silently re-accept a document no YAML parser can read (verification-pass P3).
+R="$REPOS/arm-tab"
+rel="$OVERRIDE_DIR/2026-10-13-tab-skill.md"
+rel_ok="$OVERRIDE_DIR/2026-10-13-ok-skill.md"
+mk_repo "$R"
+write_artifact "$R" "ok-skill" 'findings_json: {"code-execution": {"verdict": "REVIEW", "count": 2}}'
+write_artifact "$R" "tab-skill" $'findings_json:\t{"code-execution": {"verdict": "REVIEW", "count": 0}}'
+commit_all "$R" "add override artifacts"
+run_parse "$R"
+reason="$(reason_for "$rel")"
+if [[ "$PARSE_RC" -ne 0 ]] && in_bucket invalid_schema "$rel" && in_bucket matched "$rel_ok" \
+   && [[ "$reason" == *"missing fields"* && "$reason" == *"findings_json"* ]]; then
+  ok "tab-separated findings_json rejects (YAML forbids tab separators)"
+else
+  bad "tab-separated findings_json accepted (rc=$PARSE_RC, reason='$reason', out=$PARSE_OUT)"
+fi
+
 echo "=== parse-override: $PASS passed, $FAIL failed ==="
 # Real failures first — report them as failures, not as vacuity.
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi
 # Assertion floor: a run that executed fewer than every arm reads RED, never
 # vacuously green — the `(( PASS < N ))` counter-comparison shape is the one
 # guard-vacuity-floor.test.sh derives floors from.
-if (( PASS < 15 )); then
-  echo "VACUITY: only $PASS of 15 arms passed — refusing green" >&2
+if (( PASS < 16 )); then
+  echo "VACUITY: only $PASS of 16 arms passed — refusing green" >&2
   exit 1
 fi
 echo "OK: $PASS assertions"
