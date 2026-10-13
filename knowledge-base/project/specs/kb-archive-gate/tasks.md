@@ -113,10 +113,9 @@ Scope guard: this PR does NOT touch the existing backlog or any `*/archive/` pat
   Workflow-Gates entry (≤600 B body, why-single-line);
   `AGENTS.md`: add the index pointer. Re-run
   `python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.rules.md`.
-- [ ] 6.2 Deferral for the sibling `\s--\s` gap (`ship-unpushed-commits-
-  gate.sh`, `cla-signed-author-gate.sh`): run the
-  `wg-defer-only-after-inline-triage` triple test at ship — pass → file
-  the `type/chore` tracking issue; fail → durable in-place comments at
-  each sibling's trigger line.
+- [x] 6.2 Deferral for the sibling `\s--\s` gap (`ship-unpushed-commits-
+  gate.sh`, `cla-signed-author-gate.sh`): triple test passed — filed
+  #10199 (`type/chore`); the widened boundary + composition cases port
+  cleanly but belong to a distinct change.
 - [x] 6.3 AC pass: tick AC1–AC21 in the plan (self-application AC21 at
   ship: Phase 6.45 archives this spec dir + plan before arming).
