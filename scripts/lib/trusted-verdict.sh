@@ -21,36 +21,53 @@
 # permission and does not depend on membership visibility (measured 2026-09-19:
 # `admin` for the operator, `none` for `github-actions[bot]`, under the operator
 # token). One call per DISTINCT author (logins are case-insensitive on GitHub,
-# so the memo key is the lower-cased login), memoized WITHIN ONE VIEW INVOCATION
-# (`trusted_verdict_bodies` or `trusted_verdict_comments`). The shared core always runs
-# under command substitution (`$(...)`), so the memo dies with that subshell and does
-# not carry across view calls (measured; the upside is that a login-keyed, repo-unaware
-# table cannot leak a permission between repos). So a thread with many comments from
-# one author costs one request.
+# so the memo key is the lower-cased login). The memo lives for ONE view invocation
+# (`trusted_verdict_bodies` or `trusted_verdict_comments`): the shared core runs under
+# command substitution (`$(...)`), so its memo dies with that subshell and nothing carries
+# across view calls, which also means a login-keyed table that knows no repository cannot
+# leak a permission from one repository to another. A thread with many comments from one
+# author still costs one request.
 #
 # TWO VIEWS OF ONE CORE. `_trusted_verdict_core` is the only place a comment read
 # becomes trusted text; the public functions are projections of it:
-#   trusted_verdict_bodies    the trusted bodies, one per comment (`RESULT:` probes)
+#   trusted_verdict_bodies    the trusted bodies, one per comment (`RESULT:` probes, and any
+#                             probe that never reads the comment's time)
 #   trusted_verdict_comments  one compact JSON object `{t, b}` per trusted comment, `t`
-#                             the comment's `createdAt` (marker probes that order
-#                             markers by time, such as the S3 soak probe)
-# Both return 2 on any unreadable trust decision, with EMPTY stdout; the comments view
-# ALSO returns 2 on a trusted comment whose `createdAt` is missing or not ISO. The probes
-# map rc 2 to their own exit (the soak probes: 3 via `fail_api`; concierge: 2). Rule of
-# thumb: need the comment's created time -> the comments view, else the bodies view.
+#                             the comment's `createdAt` (probes that order markers by time,
+#                             such as the S3 soak probe)
+# Rule of thumb: need the comment's created time -> the comments view, else the bodies view.
+#
+# RC 2 (TRANSIENT) is the ONE list below, and it is the only copy: every other comment, runbook,
+# stub and probe label points here. rc 2 always leaves stdout EMPTY, and the probes map it to
+# their own exit (the soak probes exit 3 with a label that names the read; concierge exits 2).
+#   1. the comment read (`gh issue view`) failed;
+#   2. a permission read failed (anything but a 2xx or a 404, which means "not a user");
+#   3. a stage AFTER the trust decision failed: the row split lost a row, the base64 decode, a
+#      field extraction, a trusted body that holds a NUL byte, the fence strip, the record
+#      build, or the distinct-login count (stderr names the stage: `stage '<name>' failed`);
+#   4. the comments view ONLY: a trusted comment whose `createdAt` is missing or not ISO.
+# Every stage after the trust decision is all-or-nothing: each substitution is checked, and
+# two counts (rows collected vs rows in the input, distinct logins collected vs distinct logins
+# in the memo) catch what a status cannot see. Fenced blocks are stripped by CommonMark-style
+# rules (backtick/tilde fences, the length rule, the info-string rule); HTML comments and
+# `<pre>` blocks are NOT handled.
 #
 # SOURCED, never executed: no top-level `exit` (a sourced `exit` terminates the
 # SOURCING parent), no `set -e`. Callers keep their own exit semantics.
 #
 # Usage:
 #   source "$(dirname "${BASH_SOURCE[0]}")/../lib/trusted-verdict.sh"
-#   if ! bodies="$(trusted_verdict_bodies 5733)"; then exit 2; fi   # 2 = TRANSIENT
-#   if ! json="$(trusted_verdict_comments 9818)"; then exit 3; fi   # {t,b} per trusted comment
+#   if ! bodies="$(trusted_verdict_bodies 9512)"; then exit 3; fi    # 2 = rc 2 above; the caller picks its exit
+#   if ! json="$(trusted_verdict_comments 9728)"; then exit 3; fi    # {t,b} per trusted comment, where `t` is needed
 #
 # Convention: knowledge-base/engineering/operations/runbooks/followthrough-convention.md
 
 # Memo table: lower-cased login -> permission string. Declared once; `declare -gA` so it
 # survives being sourced from inside a function.
+# `unset` first: an inherited EXPORTED scalar of the same name would otherwise be converted by
+# `declare -gA` into an array whose key `0` holds its value, and a login `0` (it passes the
+# shape guard) would then read as pre-resolved.
+unset _TRUSTED_VERDICT_PERM 2>/dev/null
 if ! declare -gA _TRUSTED_VERDICT_PERM 2>/dev/null; then
   # REFUSE, never degrade. Without associative arrays (bash 3.2 — stock macOS
   # /bin/bash), `_TRUSTED_VERDICT_PERM[$login]=` creates an INDEXED array whose
@@ -131,7 +148,8 @@ _trusted_verdict_is_trusted_perm() {
 # _trusted_verdict_strip_fences   (stdin -> stdout)
 #   Drops fenced blocks so a quoted template cannot arm a probe. A CommonMark-style state
 #   machine, not a toggle on any fence-looking line: an opener is up to 3 leading spaces
-#   plus 3 or more of ONE fence character (backtick or tilde); a closer is the SAME
+#   plus 3 or more of ONE fence character (backtick or tilde; a backtick opener whose info
+#   string holds a backtick is inline code, not a fence); a closer is the SAME
 #   character, at least as long as the opener, with nothing but whitespace after it;
 #   4 or more leading spaces (or a tab) is indented code, not a fence. A fence still
 #   open at the end of the body strips to the end of the body. The naive toggle let a
@@ -147,6 +165,7 @@ _trusted_verdict_strip_fences() {
         t = substr(line, ind + 1)
         if (match(t, /^```+/) || match(t, /^~~~+/)) { tok = substr(t, 1, RLENGTH); ch = substr(tok, 1, 1); n = RLENGTH; rest = substr(t, RLENGTH + 1) }
       }
+      if (ch == "`" && index(rest, "`") > 0) n = 0
       if (!f) {
         if (n > 0) { f = 1; fch = ch; fn = n; next }
         print
@@ -154,6 +173,14 @@ _trusted_verdict_strip_fences() {
         f = 0
       }
     }'
+}
+
+# _trusted_verdict_stage_fail <stage> <issue>
+#   The ONE exit for a failed stage after the comment read: names the stage on stderr (the
+#   rows assert the stage name, so two guards that would both end in rc 2 stay distinguishable).
+#   The caller `return 2`s; this only speaks.
+_trusted_verdict_stage_fail() {
+  echo "trusted-verdict: stage '$1' failed on #$2. TRANSIENT, not a dropped comment." >&2
 }
 
 # _trusted_verdict_core <issue-number> <repo>
@@ -164,12 +191,21 @@ _trusted_verdict_strip_fences() {
 #   object `{t, b}` per trusted comment, API order: `t` = `createdAt` verbatim (empty
 #   when absent), `b` = the body with fenced blocks stripped.
 #   rc 0 = the read succeeded (empty stdout = no trusted comment)
-#   rc 2 = TRANSIENT: the comment read or a permission read failed; stdout is EMPTY
-#          (output is accumulated and printed once, so a failure never leaves a prefix)
+#   rc 2 = TRANSIENT, the causes are the header's rc 2 list; stdout is EMPTY (output is
+#          accumulated and printed once, so a failure never leaves a prefix)
 #   The core does NOT validate `t`: the bodies view does not use it. Call it inside
-#   `$(...)` — the memo lives for the one call, which is all a single read needs.
+#   `$(...)`: the memo lives for the one call, which is all a single read needs.
+#
+#   ALL-OR-NOTHING AFTER THE TRUST DECISION, enforced as an invariant and not stage by stage:
+#   every command substitution below is checked (`x="$(cmd)" || fail`, never `local x=$(cmd)`),
+#   and two CONSERVATION counts defeat the failures a status cannot see (a here-string that
+#   loses lines): the rows the split loop collected must equal the rows the input holds
+#   (counted a second way, from the newlines), and the distinct logins that ended up in the
+#   memo must equal the distinct logins collected.
 _trusted_verdict_core() {
-  local issue="$1" repo="$2" raw logins login perm rec out=""
+  local issue="$1" repo="$2" raw b64 login row author body created perm rec nul out="" i n_in n_resolved=0 stripped_nl
+  local -a rows=() order=() authors=()
+  local -A seen=()
   # `.author.login`, `.body` and `.createdAt`, as one base64 JSON array per comment. A
   # comment with no author cannot be attributed and is dropped by the first `select`, so
   # it can never carry a verdict. The second `select` drops a login that is not a
@@ -186,50 +222,75 @@ _trusted_verdict_core() {
   fi
   # base64 per comment: bodies are multi-line and contain tabs, newlines and
   # backticks, none of which survive a naive line-oriented split.
-  logins="$(printf '%s\n' "$raw" | while IFS= read -r b64; do
-      [[ -n "$b64" ]] || continue
-      printf '%s' "$b64" | base64 -d | jq -r '.[0]'
-    done | sort -u)"
-  while IFS= read -r login; do
-    [[ -n "$login" ]] || continue
+  # CONSERVATION 1: the split loop (a here-string) must collect exactly as many rows as the
+  # input holds. The expected count comes from the newlines, a different mechanism.
+  stripped_nl="${raw//$'\n'/}"
+  if [[ -n "$raw" ]]; then n_in=$(( ${#raw} - ${#stripped_nl} + 1 )); else n_in=0; fi
+  if [[ -n "$raw" ]]; then
+    while IFS= read -r b64; do
+      rows+=("$b64")
+    done <<<"$raw"
+  fi
+  if (( ${#rows[@]} != n_in )); then _trusted_verdict_stage_fail rowcount "$issue"; return 2; fi
+
+  # Pass 1: decode each row once and collect the DISTINCT authors (first-seen order).
+  for ((i = 0; i < ${#rows[@]}; i++)); do
+    { row="$(printf '%s' "${rows[i]}" | base64 -d)" && [[ -n "$row" ]]; } || { _trusted_verdict_stage_fail decode "$issue"; return 2; }
+    rows[i]="$row"
+    { author="$(printf '%s' "$row" | jq -r '.[0]')" && [[ -n "$author" ]]; } || { _trusted_verdict_stage_fail author "$issue"; return 2; }
+    authors[i]="$author"
+    if [[ -z "${seen[${author,,}]+x}" ]]; then seen[${author,,}]=1; order+=("$author"); fi
+  done
+
+  # Pass 2: resolve every distinct author BEFORE anything is emitted.
+  for login in ${order[@]+"${order[@]}"}; do
     # `>/dev/null`, NOT `perm="$(...)"` — see the note on the resolver above.
     if ! _trusted_verdict_permission "$login" "$repo" >/dev/null; then
       return 2
     fi
-  done <<<"$logins"
+  done
+  # CONSERVATION 2: every DISTINCT login collected must have its permission in the memo.
+  if (( ${#seen[@]} > 0 )); then
+    for login in "${!seen[@]}"; do
+      if [[ -n "${_TRUSTED_VERDICT_PERM[$login]:-}" ]]; then n_resolved=$((n_resolved + 1)); fi
+    done
+  fi
+  if (( n_resolved != ${#seen[@]} )); then _trusted_verdict_stage_fail logincount "$issue"; return 2; fi
 
-  while IFS= read -r b64; do
-    [[ -n "$b64" ]] || continue
-    local row author body created
-    row="$(printf '%s' "$b64" | base64 -d)"
-    author="$(printf '%s' "$row" | jq -r '.[0]')"
-    body="$(printf '%s' "$row" | jq -r '.[1]')"
-    created="$(printf '%s' "$row" | jq -r '.[2]')"
+  # Pass 3: the trusted rows.
+  for ((i = 0; i < ${#rows[@]}; i++)); do
+    author="${authors[i]}"
     perm="${_TRUSTED_VERDICT_PERM[${author,,}]:-}"
-    # An ABSENT memo entry is not a negative answer. Loop 1 above resolves exactly
-    # this author set and returns 2 on any failure, so this is unreachable today —
-    # which is precisely why it is worth pinning: `*) continue ;;` alone silently
-    # merged "resolved as untrusted" with "never resolved at all", the collapse
-    # this lib's own header forbids ("an unresolvable permission is not a negative
-    # answer"), at the one place the header did not assert it. A future edit that
-    # makes loop 1 partial — batching, caching, a per-author skip — would turn a
-    # silent drop back on, and a dropped verdict is invisible by construction.
+    # An ABSENT memo entry is not a negative answer. Pass 2 resolves exactly this author
+    # set and returns 2 on any failure, so this is unreachable today: which is precisely
+    # why it is worth pinning. `*) continue ;;` alone silently merged "resolved as
+    # untrusted" with "never resolved at all", the collapse this lib's own header forbids
+    # ("an unresolvable permission is not a negative answer"). A future edit that makes
+    # pass 2 partial (batching, caching, a per-author skip) would turn a silent drop back
+    # on, and a dropped verdict is invisible by construction.
     if [[ -z "$perm" ]]; then
       echo "trusted-verdict: no memoized permission for '${author}' — the resolver did not run for this author. TRANSIENT, not untrusted." >&2
       return 2
     fi
     _trusted_verdict_is_trusted_perm "$perm" || continue
-    body="$(printf '%s\n' "$body" | _trusted_verdict_strip_fences)"
-    # Every stage AFTER the trust decision is all-or-nothing. The body goes to jq on STDIN,
-    # never as an `--arg` (one argv string is capped near 128 KiB: a longer trusted body
-    # failed `Argument list too long`, the failure went unchecked and the comment vanished
-    # with rc 0, the same silent drop this lib exists to remove), and the status is checked.
+    # A NUL byte cannot cross a bash command substitution: `$(...)` drops it silently, which
+    # can JOIN `S2-ACTI<NUL>VATED` into a live marker. Refuse the trusted comment instead.
+    nul="$(printf '%s' "${rows[i]}" | jq -r '.[1:][] | explode | any(. == 0)')" || { _trusted_verdict_stage_fail nulcheck "$issue"; return 2; }
+    case "$nul" in *true*) _trusted_verdict_stage_fail nul "$issue"; return 2 ;; esac
+    # A lone CR is a line ending in CommonMark; normalise it to LF so the fence strip sees the
+    # same lines a renderer does (CRLF is left alone: the awk accepts a trailing CR).
+    body="$(printf '%s' "${rows[i]}" | jq -r '.[1] | gsub("\r(?!\n)"; "\n")')" || { _trusted_verdict_stage_fail body "$issue"; return 2; }
+    created="$(printf '%s' "${rows[i]}" | jq -r '.[2]')" || { _trusted_verdict_stage_fail created "$issue"; return 2; }
+    body="$(printf '%s\n' "$body" | _trusted_verdict_strip_fences)" || { _trusted_verdict_stage_fail strip "$issue"; return 2; }
+    # The body goes to jq on STDIN, never as an `--arg` (one argv string is capped near 128 KiB:
+    # a longer trusted body failed `Argument list too long`, the failure went unchecked and the
+    # comment vanished with rc 0, the same silent drop this lib exists to remove).
     if ! rec="$(printf '%s' "$body" | jq -Rsc --arg t "$created" '{t: $t, b: .}')" || [[ -z "$rec" ]]; then
-      echo "trusted-verdict: could not build the record for a trusted comment by '${author}' on #${issue}. TRANSIENT, not a dropped comment." >&2
+      _trusted_verdict_stage_fail record "$issue"
       return 2
     fi
     out="${out}${rec}"$'\n'
-  done <<<"$raw"
+  done
 
   printf '%s' "$out"
   return 0
@@ -240,13 +301,12 @@ _trusted_verdict_core() {
 #           fenced code blocks stripped so a quoted template cannot arm a probe.
 #   rc 0   = the read succeeded (an EMPTY result means "no trusted verdict yet",
 #            which is a legitimate answer)
-#   rc 2   = TRANSIENT: the comment read or a permission read failed. NOT evidence
-#            of absence.
+#   rc 2   = TRANSIENT, causes in the header's rc 2 list. NOT evidence of absence.
 trusted_verdict_bodies() {
   local issue="$1" repo="${2:-jikig-ai/soleur}" records
   records="$(_trusted_verdict_core "$issue" "$repo")" || return 2
   [[ -n "$records" ]] || return 0
-  jq -r '.b' <<<"$records" || return 2
+  printf '%s\n' "$records" | jq -r '.b' || return 2
   return 0
 }
 
@@ -254,15 +314,14 @@ trusted_verdict_bodies() {
 #   stdout: one compact JSON object per trusted comment, oldest-first: {"t": <createdAt>, "b": <body, fences stripped>}.
 #           Project with `jq -r '.b'` (the same text `trusted_verdict_bodies` returns) or sort on `.t`.
 #   rc 0   = the read succeeded (empty stdout = no trusted comment yet, a legitimate answer)
-#   rc 2   = TRANSIENT: the comment read or a permission read failed, OR a trusted comment's
-#            `createdAt` is missing or not `YYYY-MM-DDTHH:MM:SSZ` (a caller sorts `t`
-#            lexicographically and may hand it to `date -d`, which accepts natural
-#            language). Never a default timestamp. stdout is EMPTY on rc 2.
+#   rc 2   = TRANSIENT, causes in the header's rc 2 list; cause 4 is this view's own: `t` must be
+#            `YYYY-MM-DDTHH:MM:SSZ` (a caller sorts `t` lexicographically and may hand it to
+#            `date -d`, which accepts natural language), never a default timestamp.
 trusted_verdict_comments() {
   local issue="$1" repo="${2:-jikig-ai/soleur}" records
   records="$(_trusted_verdict_core "$issue" "$repo")" || return 2
   [[ -n "$records" ]] || return 0
-  if ! jq -e -s 'all(.[]; .t | test("\\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\\z"))' <<<"$records" >/dev/null 2>&1; then
+  if ! printf '%s\n' "$records" | jq -e -s 'all(.[]; .t | test("\\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\\z"))' >/dev/null 2>&1; then
     echo "trusted-verdict: a trusted comment on #${issue} has a missing or non-ISO createdAt. TRANSIENT, not a default timestamp." >&2
     return 2
   fi

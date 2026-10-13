@@ -95,13 +95,17 @@ chmod +x "$SB/bin/gh"
 # The library under test. A mutant row sets LIB_UNDER to a mutated COPY; every other row reads the real lib.
 LIB_UNDER=""
 REAL_JQ="$(command -v jq)" || { echo "jq is required" >&2; exit 2; }
+REAL_AWK="$(command -v awk)" || { echo "awk is required" >&2; exit 2; }
+REAL_B64="$(command -v base64)" || { echo "base64 is required" >&2; exit 2; }
+XENV=()      # extra KEY=VALUE pairs for the exported environment of the next run_case_raw
+INJECT=""    # shell text evaluated in the run AFTER the lib is sourced (a failure injected into a bash builtin or a lib function)
 # a bash-level error in the lib under test (a mutant that CRASHES reddens every row, which proves nothing about the guard it removed)
 CRASH_RE='syntax error|command not found|unbound variable|bad substitution|unexpected EOF'
 note_crash() { assert_fixture_dir "$SB"; if grep -qE "$CRASH_RE" "$SB/err.log" 2>/dev/null; then : > "$SB/crashed"; fi; }
 stub_env() { # <issue> <comments-json-file> <perms-file>   (resets the request and refusal logs)
   assert_fixture_dir "$SB"; : > "$SB/req.log"; : > "$SB/refused.log"
   STUB_ENV=(PATH="${STUB_BIN:-$SB/bin}:$PATH" STUB_COMMENTS="$2" STUB_PERMS="$3" STUB_EXPECT_ISSUE="$1" STUB_EXPECT_REPO="${REPO_EXP:-jikig-ai/soleur}"
-            STUB_LOG="$SB/req.log" STUB_REFUSED="$SB/refused.log")
+            STUB_LOG="$SB/req.log" STUB_REFUSED="$SB/refused.log" INJECT="${INJECT:-}" "${XENV[@]}")
 }
 
 # run_case <name> <issue> <comments-json-file> <perms-file>
@@ -142,6 +146,7 @@ run_case_raw() {
       set -uo pipefail
       # shellcheck disable=SC1090
       source "$1"
+      if [[ -n "${INJECT:-}" ]]; then eval "$INJECT"; fi
       "$2" "$3" ${6:+"$6"} >"$4"
       echo "$?" >"$5"
     ' _ "${LIB_UNDER:-$LIB}" "$view" "$issue" "$SB/raw.out" "$SB/raw.rc" "$repoarg" 2>"$SB/err.log"
@@ -314,7 +319,7 @@ JSON
 fi
 
 # =====================================================================================
-# THE TWO-VIEW MATRIX (rows M-H1 .. M-H11, M-NOSLICE and the review rows M-BIG .. M-NULLAUTH). Each row is a FUNCTION so a lib mutant (below) can
+# THE TWO-VIEW MATRIX (rows M-H1 .. M-H11, M-NOSLICE and the review rows M-BIG .. M-LOGINCOUNT). Each row is a FUNCTION so a lib mutant (below) can
 # re-run it against a mutated copy. Every negative assertion has a POSITIVE TWIN on the same
 # input that differs only in the stubbed permission (an over-trusting or under-trusting
 # mutant is then visible from both sides). Every comment carries a CONTRIBUTOR authorAssociation
@@ -476,6 +481,8 @@ h_big() { # M-BIG a trusted body past the ~128 KiB single-argv limit is kept who
   done
   (( ok )) && pass "M-BIG: a 200000-byte trusted body keeps its marker and its length in both views (the body never rides in argv)"
 }
+# rc2_stage <stage>: the last run_case_raw was rc 2 with EMPTY stdout, no stub miss, and stderr names that stage (two guards that both end in rc 2 stay distinguishable)
+rc2_stage() { (( RAW_MISS == 0 )) && [[ "$RAW_RC" == 2 && -z "$RAW_OUT" ]] && grep -q "stage '$1' failed" "$SB/err.log"; }
 h_recfail() { # M-RECFAIL a failing record build is rc 2 with EMPTY stdout in both views, never a silently dropped comment; the twin (jq healthy) succeeds
   assert_fixture_dir "$SB"
   mkdir -p "$SB/bin-jqfail"; cp "$SB/bin/gh" "$SB/bin-jqfail/gh"
@@ -488,7 +495,13 @@ h_recfail() { # M-RECFAIL a failing record build is rc 2 with EMPTY stdout in bo
     run_case_raw "$view" 9818 "$SB/h.json" "$SB/pm.tsv"
     if (( RAW_MISS != 0 )) || [[ "$RAW_RC" != 0 || -z "$RAW_OUT" ]]; then ok=0; fail "M-RECFAIL twin ($view): a healthy jq must succeed, got rc=$RAW_RC"; fi
   done
-  (( ok )) && pass "M-RECFAIL: a failing record build is rc 2 with no output in both views; the healthy-jq twin succeeds"
+  mkdir -p "$SB/bin-jqempty"; cp "$SB/bin/gh" "$SB/bin-jqempty/gh"   # a record build that EXITS 0 and prints nothing: the empty-record arm
+  printf '#!/usr/bin/env bash\ncase " $* " in *" -Rsc "*) exit 0 ;; esac\nexec %q "$@"\n' "$REAL_JQ" > "$SB/bin-jqempty/jq"; chmod +x "$SB/bin-jqempty/gh" "$SB/bin-jqempty/jq"
+  for view in trusted_verdict_comments trusted_verdict_bodies; do
+    STUB_BIN="$SB/bin-jqempty" run_case_raw "$view" 9818 "$SB/h.json" "$SB/pm.tsv"
+    if ! rc2_stage record; then ok=0; fail "M-RECFAIL empty record ($view): an rc-0 record build with no output must be rc 2 + empty stdout naming stage record, got rc=$RAW_RC out=[$RAW_OUT]"; fi
+  done
+  (( ok )) && pass "M-RECFAIL: a failing record build, and one that exits 0 with no output, is rc 2 with no output in both views; the healthy-jq twin succeeds"
 }
 FSM_OK=1
 fsm_case() { # <label> <body> <expected stripped body>   one trusted comment through the {t,b} view
@@ -513,15 +526,27 @@ h_fsm() { # M-FENCE the strip is a fence state machine: opener/closer character 
   fsm_case "an opener's info string is part of the opener" $'```bash\nM\n```\nafter' 'after'
   fsm_case "a marker after a properly closed fence counts" $'```\nx\n```\n'"$M" "$M"
   fsm_case "an unclosed fence strips to the end of the body" $'before\n```\n'"$M" 'before'
-  (( FSM_OK )) && pass "M-FENCE: 14 fence shapes (flat, tilde, 4-backtick wrapper, mixed characters, indentation, closer length, trailing text, unclosed) strip exactly as CommonMark fences do"
+  fsm_case "a CRLF closer closes the fence (the marker after it counts)" $'```\r\nM\r\n```\r\n'"$M" "$M"
+  fsm_case "a two-backtick line is not a fence" $'``\nM\n``\nafter' $'``\nM\n``\nafter'
+  fsm_case "a two-tilde line is not a fence" $'~~\nM\n~~\nafter' $'~~\nM\n~~\nafter'
+  fsm_case "a tab-indented backtick line is indented code, not a fence" $'\t```\nM\nafter' $'\t```\nM\nafter'
+  fsm_case "a backtick opener whose info string holds a backtick is inline code, not a fence (the marker after it is KEPT)" $'```x``` inline code\n'"$M"$'\nafter' $'```x``` inline code\n'"$M"$'\nafter'
+  fsm_case "a tilde opener may carry a backtick in its info string (still a fence)" $'~~~ a`b\nM\n~~~\nafter' 'after'
+  fsm_case "a lone CR is a line ending: a fence opened after it strips the marker inside it" $'text\r```\n'"$M"$'\n```' 'text'
+  fsm_case "CRLF line endings are left alone" $'one\r\ntwo' $'one\r\ntwo'
+  (( FSM_OK )) && pass "M-FENCE: 22 fence shapes (flat, tilde, 4-backtick wrapper, mixed characters, indentation, tab, closer length, CRLF closer, 2-char runs, trailing text, backtick info string, lone CR, unclosed) strip as CommonMark-style fences do; HTML comments and <pre> are not handled"
 }
-h_repo() { # M-REPO a non-default repository argument is used in BOTH the permission URL and the issue read; the default repo is never touched
+h_repo() { # M-REPO a non-default repository argument is used in BOTH the permission URL and the issue read, in BOTH views; the default repo is never touched
   mkc "$SB/h.json" priv-op "S2-ACTIVATED: $T2" "$T2"; mkp 'priv-op\tadmin\n'
-  REPO_EXP=other/repo run_case_raw trusted_verdict_comments 9818 "$SB/h.json" "$SB/pm.tsv" other/repo
-  local pos=0; if (( RAW_MISS == 0 )) && [[ "$RAW_RC" == 0 ]] && in_out "S2-ACTIVATED: $T2" && grep -qxF 'issue 9818' "$SB/req.log" && grep -qxF 'perm priv-op' "$SB/req.log"; then pos=1; fi
-  REPO_EXP=other/repo run_case_raw trusted_verdict_comments 9818 "$SB/h.json" "$SB/pm.tsv"
-  if (( pos )) && (( RAW_MISS == 1 )); then pass "M-REPO: repo other/repo is used for the issue read AND the permission URL; a call without it asks the DEFAULT repo and the stub refuses it"
-  else fail "M-REPO: other/repo call ok=$pos; default-repo twin miss=$RAW_MISS (want 1)"; fi
+  local view pos ok=1 got
+  for view in trusted_verdict_comments trusted_verdict_bodies; do
+    REPO_EXP=other/repo run_case_raw "$view" 9818 "$SB/h.json" "$SB/pm.tsv" other/repo
+    if [[ "$view" == trusted_verdict_comments ]]; then got="$(bodies_of "$RAW_OUT")"; else got="$RAW_OUT"; fi
+    pos=0; if (( RAW_MISS == 0 )) && [[ "$RAW_RC" == 0 ]] && [[ "$got" == "S2-ACTIVATED: $T2" ]] && grep -qxF 'issue 9818' "$SB/req.log" && grep -qxF 'perm priv-op' "$SB/req.log"; then pos=1; fi
+    REPO_EXP=other/repo run_case_raw "$view" 9818 "$SB/h.json" "$SB/pm.tsv"
+    if (( pos == 0 )) || (( RAW_MISS != 1 )); then ok=0; fail "M-REPO ($view): other/repo call ok=$pos; default-repo twin miss=$RAW_MISS (want 1)"; fi
+  done
+  (( ok )) && pass "M-REPO: in both views repo other/repo is used for the issue read AND the permission URL; a call without it asks the DEFAULT repo and the stub refuses it"
 }
 h_case() { # M-CASE logins are case-insensitive: Admin1 and admin1 are one user, one permission lookup, both comments kept
   mkc "$SB/h.json" Admin1 "one" "$T1" admin1 "two" "$T2"; mkp 'Admin1\tadmin\nadmin1\tadmin\n'
@@ -548,10 +573,96 @@ h_null_author() { # M-NULLAUTH a comment whose author is JSON null (a deleted ac
     pass "M-NULLAUTH: a comment with author null is dropped and the rest of the thread is read"
   else fail "M-NULLAUTH: rc=$RAW_RC miss=$RAW_MISS out=[$RAW_OUT]"; fi
 }
-LIB_ROWS=(h_h1 h_h2 h_h3 h_h4_parity h_h4_abs h_h5 h_h6 h_h7 h_h8 h_noslice h_h10 h_crlf h_h11 h_big h_recfail h_fsm h_repo h_case h_login_shape h_null_author)
+h_underscore() { # must-PASS: an underscore is a legal login character and the login resolves
+  mkc "$SB/h.json" a_b-op "S2-ACTIVATED: $T2" "$T2"; mkp 'a_b-op\tadmin\n'
+  run_case_raw trusted_verdict_comments 9818 "$SB/h.json" "$SB/pm.tsv"
+  if (( RAW_MISS == 0 )) && [[ "$RAW_RC" == 0 ]] && in_out "S2-ACTIVATED: $T2" && grep -qxF 'perm a_b-op' "$SB/req.log"; then
+    pass "must-PASS: a login with an underscore resolves and its comment is kept"
+  else fail "underscore login: rc=$RAW_RC miss=$RAW_MISS out=[$RAW_OUT]"; fi
+}
+h_inherit() { # M-INHERIT an EXPORTED scalar named like the memo must not become key 0: login 0 is looked up, not pre-trusted
+  local ok=1 perm
+  for perm in read admin; do
+    mkc "$SB/h.json" 0 "S2-ACTIVATED: $T2" "$T2"; mkp "0\\t$perm\\n"
+    XENV=(_TRUSTED_VERDICT_PERM=admin); run_case_raw trusted_verdict_comments 9818 "$SB/h.json" "$SB/pm.tsv"; XENV=()
+    if (( RAW_MISS != 0 )) || [[ "$RAW_RC" != 0 || "$(nreq perm)" != 1 ]]; then ok=0; fail "M-INHERIT (permission=$perm): rc=$RAW_RC requests=$(nreq perm) (want rc 0 and ONE request: login 0 must be looked up)"; fi
+    if [[ "$perm" == read ]] && in_out "S2-ACTIVATED: $T2"; then ok=0; fail "M-INHERIT: login 0 with permission=read was trusted through an inherited exported scalar"; fi
+    if [[ "$perm" == admin ]] && ! in_out "S2-ACTIVATED: $T2"; then ok=0; fail "M-INHERIT twin: login 0 with permission=admin must be kept"; fi
+  done
+  (( ok )) && pass "M-INHERIT: an exported _TRUSTED_VERDICT_PERM=admin does not pre-trust login 0 (one lookup; read dropped, admin kept)"
+}
+nul_fixture() { # <trusted-body-json-escape> : one trusted admin comment whose body is the given JSON string content, one untrusted comment with a NUL body
+  assert_fixture_dir "$SB"
+  printf '%s\n' '{"comments":[{"author":{"login":"ro-op"},"authorAssociation":"OWNER","body":"x\u0000y","createdAt":"'"$T1"'"},{"author":{"login":"priv-op"},"authorAssociation":"CONTRIBUTOR","body":"'"$1"'","createdAt":"'"$T2"'"}]}' > "$SB/h.json"
+  mkp 'ro-op\tread\npriv-op\tadmin\n'
+}
+h_nul() { # M-NUL a NUL byte in a TRUSTED body is rc 2 (bash would drop it and JOIN S2-ACTI<NUL>VATED into a live marker); in an untrusted body it is ignored
+  local view ok=1
+  nul_fixture 'S2-ACTI\u0000VATED: 2026-10-11T09:48:17Z'
+  for view in trusted_verdict_comments trusted_verdict_bodies; do
+    run_case_raw "$view" 9818 "$SB/h.json" "$SB/pm.tsv"
+    if ! rc2_stage nul; then ok=0; fail "M-NUL ($view): a NUL in a trusted body must be rc 2 + empty stdout naming stage nul, got rc=$RAW_RC out=[$RAW_OUT]"; fi
+  done
+  nul_fixture 'S2-ACTIVATED: 2026-10-11T09:48:17Z'
+  for view in trusted_verdict_comments trusted_verdict_bodies; do
+    run_case_raw "$view" 9818 "$SB/h.json" "$SB/pm.tsv"
+    if (( RAW_MISS != 0 )) || [[ "$RAW_RC" != 0 ]] || ! grep -qF "S2-ACTIVATED: $T2" <<<"$RAW_OUT"; then ok=0; fail "M-NUL twin ($view): the same comment without a NUL, and an untrusted NUL body beside it, must succeed, got rc=$RAW_RC out=[$RAW_OUT]"; fi
+  done
+  (( ok )) && pass "M-NUL: a NUL in a trusted body is rc 2 with empty stdout (stage nul) in both views; an untrusted NUL body and a NUL-free twin are fine"
+}
+mkfailtool() { # <dir> <tool> <script body>: a dir with the gh stub and ONE tool that fails in a chosen way
+  assert_fixture_dir "$SB"; mkdir -p "$1"; cp "$SB/bin/gh" "$1/gh"
+  printf '#!/usr/bin/env bash\n%s\n' "$3" > "$1/$2"; chmod +x "$1/gh" "$1/$2"
+}
+h_stagefail() { # M-STAGE each post-trust stage that fails is rc 2 + empty stdout + a message naming THAT stage, in both views; the healthy twin succeeds
+  local ok=1 view spec stage tool body
+  mkc "$SB/h.json" priv-op "S2-ACTIVATED: $T2" "$T2"; mkp 'priv-op\tadmin\n'
+  local -a specs=(
+    "strip|awk|case \" \$* \" in *\" -F\"*) exec $REAL_AWK \"\$@\" ;; esac; exit 2"
+    "decode|base64|exit 5"
+    "author|jq|case \"\$*\" in *\".[0]\"*) exit 5 ;; esac; exec $REAL_JQ \"\$@\""
+    "body|jq|case \"\$*\" in *\".[1]\"*) exit 5 ;; esac; exec $REAL_JQ \"\$@\""
+    "created|jq|case \"\$*\" in *\".[2]\"*) exit 5 ;; esac; exec $REAL_JQ \"\$@\""
+    "nulcheck|jq|case \"\$*\" in *\".[1:]\"*) exit 5 ;; esac; exec $REAL_JQ \"\$@\"")
+  for spec in "${specs[@]}"; do
+    stage="${spec%%|*}"; tool="${spec#*|}"; body="${tool#*|}"; tool="${tool%%|*}"
+    mkfailtool "$SB/bin-fail-$stage" "$tool" "$body"
+    for view in trusted_verdict_comments trusted_verdict_bodies; do
+      STUB_BIN="$SB/bin-fail-$stage" run_case_raw "$view" 9818 "$SB/h.json" "$SB/pm.tsv"
+      if ! rc2_stage "$stage"; then ok=0; fail "M-STAGE ($view, $stage): a failing $tool must be rc 2 + empty stdout naming stage $stage, got rc=$RAW_RC out=[$RAW_OUT] err=[$(head -c 200 "$SB/err.log")]"; fi
+    done
+  done
+  for view in trusted_verdict_comments trusted_verdict_bodies; do
+    run_case_raw "$view" 9818 "$SB/h.json" "$SB/pm.tsv"
+    if (( RAW_MISS != 0 )) || [[ "$RAW_RC" != 0 || -z "$RAW_OUT" ]]; then ok=0; fail "M-STAGE twin ($view): healthy tools must succeed, got rc=$RAW_RC"; fi
+  done
+  (( ok )) && pass "M-STAGE: a failing awk strip, base64 decode, and jq field extraction .[0] / .[1] / .[2] / the NUL probe each yield rc 2, empty stdout and a message naming that stage, in both views"
+}
+h_rowcount() { # M-ROWCOUNT a row-split loop that loses lines (a here-string failure, injected as a failing `read` after the first line) is rc 2, never a shorter thread
+  local view ok=1
+  mkc "$SB/h.json" priv-op "S2-ACTIVATED: $T1" "$T1" priv-op "two" "$T1" priv-op "S2-DEACTIVATED: $T2" "$T2"; mkp 'priv-op\tadmin\n'
+  for view in trusted_verdict_comments trusted_verdict_bodies; do
+    INJECT='_rn=0; read() { (( ++_rn > 1 )) && return 1; builtin read "$@"; }' run_case_raw "$view" 9818 "$SB/h.json" "$SB/pm.tsv"
+    if ! rc2_stage rowcount; then ok=0; fail "M-ROWCOUNT ($view): a read that fails after row 1 of 3 must be rc 2 + empty stdout naming stage rowcount, got rc=$RAW_RC out=[$RAW_OUT]"; fi
+    run_case_raw "$view" 9818 "$SB/h.json" "$SB/pm.tsv"
+    if (( RAW_MISS != 0 )) || [[ "$RAW_RC" != 0 || "$(grep -c . <<<"$RAW_OUT")" -lt 3 ]]; then ok=0; fail "M-ROWCOUNT twin ($view): the healthy read must return all 3 comments, got rc=$RAW_RC"; fi
+  done
+  (( ok )) && pass "M-ROWCOUNT: rows collected != rows in the input is rc 2 with empty stdout (stage rowcount), in both views; the healthy twin returns all three"
+}
+h_logincount() { # M-LOGINCOUNT a resolver that claims success but leaves nothing in the memo is rc 2 naming stage logincount (conservation of distinct logins)
+  local view ok=1
+  mkc "$SB/h.json" priv-op "S2-ACTIVATED: $T2" "$T2"; mkp 'priv-op\tadmin\n'
+  for view in trusted_verdict_comments trusted_verdict_bodies; do
+    INJECT='_trusted_verdict_permission() { return 0; }' run_case_raw "$view" 9818 "$SB/h.json" "$SB/pm.tsv"
+    if ! rc2_stage logincount; then ok=0; fail "M-LOGINCOUNT ($view): a resolver that memoizes nothing must be rc 2 + empty stdout naming stage logincount, got rc=$RAW_RC out=[$RAW_OUT] err=[$(head -c 200 "$SB/err.log")]"; fi
+  done
+  (( ok )) && pass "M-LOGINCOUNT: distinct logins resolved != distinct logins collected is rc 2 with empty stdout (stage logincount), in both views"
+}
+LIB_ROWS=(h_h1 h_h2 h_h3 h_h4_parity h_h4_abs h_h5 h_h6 h_h7 h_h8 h_noslice h_h10 h_crlf h_h11 h_big h_recfail h_fsm h_repo h_case h_login_shape h_null_author h_underscore h_inherit h_nul h_stagefail h_rowcount h_logincount)
 for _r in "${LIB_ROWS[@]}"; do "$_r"; done
 
 # --- harness integrity: a stub that answers `admin` to EVERYONE must redden the negative rows (the rows can fail) ----------
+assert_fixture_dir "$SB"
 mkdir -p "$SB/bin-admin"
 sed 's|^    perm="$(awk .*$|    perm=admin|' "$SB/bin/gh" > "$SB/bin-admin/gh"; chmod +x "$SB/bin-admin/gh"
 if cmp -s "$SB/bin/gh" "$SB/bin-admin/gh"; then fail "harness: the always-admin stub copy is identical to the real stub (the edit did not land)"
@@ -623,22 +734,24 @@ mutant_lib m-naive-toggle    "h_fsm h_h4_abs" "$FENCE_CALL" "| awk '/^[[:space:]
 RESOLVE='    if ! _trusted_verdict_permission "$login" "$repo" >/dev/null; then'
 mutant_lib m-resolver-subshell "h_h1 h_h8" "$RESOLVE" '    if ! _mut="$(_trusted_verdict_permission "$login" "$repo")"; then'
 mutant_lib m-partial-output  "h_h6" "$RESOLVE"$'\n      return 2' "$RESOLVE"$'\n      continue' \
+  '_trusted_verdict_stage_fail logincount "$issue"; return 2;' 'true;' \
   "    out=\"\${out}\${rec}\"\$${Q}\\n${Q}" \
   "    printf '%s\\n' \"\$body\"; out=\"\${out}\${rec}\"\$${Q}\\n${Q}"
 # EQUIVALENT single edits (measured: each survives every row above, so neither is a mutant on its own): turning the memo guard off alone, or `sort -u` into `cat` alone, each leave exactly one
 # request per distinct author because the OTHER one still deduplicates. Only the two together are a mutant.
 mutant_lib m-no-dedupe       "h_h8" '  if [[ -n "${_TRUSTED_VERDICT_PERM[$key]:-}" ]]; then' '  if false; then' \
-  '    done | sort -u)"' '    done | cat)"'
+  '    if [[ -z "${seen[${author,,}]+x}" ]]; then' '    if true; then'
 mutant_lib m-jq-slice-100     "h_noslice" '        .comments[]' '        .comments[0:100][]'
 mutant_lib m-t-empty         "h_h5" "${Q}{t: \$t, b: .}${Q}" "${Q}{t: \"\", b: .}${Q}"
-mutant_lib m-validate-in-core "h_h5" '    _trusted_verdict_is_trusted_perm "$perm" || continue' '    _trusted_verdict_is_trusted_perm "$perm" || continue
+CREATED_LINE='    created="$(printf '"'"'%s'"'"' "${rows[i]}" | jq -r '"'"'.[2]'"'"')" || { _trusted_verdict_stage_fail created "$issue"; return 2; }'
+mutant_lib m-validate-in-core "h_h5" "$CREATED_LINE" "$CREATED_LINE"'
     [[ "$created" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || return 2'
 mutant_lib m-second-read     "h_h10" '  records="$(_trusted_verdict_core "$issue" "$repo")" || return 2
   [[ -n "$records" ]] || return 0
-  if ! jq -e -s' '  records="$(_trusted_verdict_core "$issue" "$repo")" || return 2
+  if ! printf' '  records="$(_trusted_verdict_core "$issue" "$repo")" || return 2
   gh issue view "$issue" --repo "$repo" --json comments --jq ".comments[].body" >/dev/null 2>&1
   [[ -n "$records" ]] || return 0
-  if ! jq -e -s'
+  if ! printf'
 mutant_lib m-no-jq-flag      "h_h1" "                 --jq '.permission // empty' 2>\"\$errf\")\"; then" '                 2>"$errf")"; then'
 mutant_lib m-no-shape-guard  "h_h11" '        | select(.author.login | test("\\A[A-Za-z0-9][A-Za-z0-9_-]{0,38}\\z"))
 ' ''
@@ -654,6 +767,35 @@ mutant_lib m-shape-nl        "h_login_shape" '{0,38}\\z' '{0,38}$'
 mutant_lib m-shape-chars     "h_login_shape" '[A-Za-z0-9_-]{0,38}' '[A-Za-z0-9_.%-]{0,38}'
 mutant_lib m-shape-dash      "h_login_shape" '\\A[A-Za-z0-9][A-Za-z0-9_-]' '\\A[A-Za-z0-9-][A-Za-z0-9_-]'
 mutant_lib m-no-author-select "h_null_author" "$SEL"$'\n' ''
+mutant_lib m-rec-empty-arm   "h_recfail" ' || [[ -z "$rec" ]]; then' '; then'
+BODIES_CALL='  records="$(_trusted_verdict_core "$issue" "$repo")" || return 2
+  [[ -n "$records" ]] || return 0
+  printf'
+mutant_lib m-bodies-repo     "h_repo" "$BODIES_CALL" '  records="$(_trusted_verdict_core "$issue" "jikig-ai/soleur")" || return 2
+  [[ -n "$records" ]] || return 0
+  printf'
+COMMENTS_CALL='  records="$(_trusted_verdict_core "$issue" "$repo")" || return 2
+  [[ -n "$records" ]] || return 0
+  if ! printf'
+mutant_lib m-comments-repo   "h_repo" "$COMMENTS_CALL" '  records="$(_trusted_verdict_core "$issue" "jikig-ai/soleur")" || return 2
+  [[ -n "$records" ]] || return 0
+  if ! printf'
+mutant_lib m-shape-no-underscore "h_underscore" '[A-Za-z0-9_-]{0,38}' '[A-Za-z0-9-]{0,38}'
+mutant_lib m-inherit-unset   "h_inherit" 'unset _TRUSTED_VERDICT_PERM 2>/dev/null' ':'
+mutant_lib m-no-nul          "h_nul" 'case "$nul" in *true*) _trusted_verdict_stage_fail nul "$issue"; return 2 ;; esac' ':'
+mutant_lib m-no-lonecr       "h_fsm" ' | gsub("\r(?!\n)"; "\n")' ''
+mutant_lib m-no-rowcount     "h_rowcount" '_trusted_verdict_stage_fail rowcount "$issue"; return 2;' 'true;'
+mutant_lib m-no-logincount   "h_logincount" '_trusted_verdict_stage_fail logincount "$issue"; return 2;' 'true;'
+for _st in strip decode author body created nulcheck; do
+  mutant_lib "m-stage-$_st-unchecked" "h_stagefail" "_trusted_verdict_stage_fail $_st \"\$issue\"; return 2;" 'true;'
+done
+INFO_LINE='      if (ch == "`" && index(rest, "`") > 0) n = 0'
+mutant_lib m-fsm-no-info     "h_fsm" "$INFO_LINE"$'\n' ''
+mutant_lib m-fsm-info-tilde  "h_fsm" "$INFO_LINE" '      if (index(rest, "`") > 0) n = 0'
+mutant_lib m-fsm-crcloser    "h_fsm" 'rest ~ /^[ \t\r]*$/' 'rest ~ /^[ \t]*$/'
+mutant_lib m-fsm-2tick       "h_fsm" 'match(t, /^```+/)' 'match(t, /^``+/)'
+mutant_lib m-fsm-2tilde      "h_fsm" 'match(t, /^~~~+/)' 'match(t, /^~~+/)'
+mutant_lib m-fsm-tab         "h_fsm" 'match(line, /^ */)' 'match(line, /^[ \t]*/)'
 
 # --- harness controls: the mutant helper must be able to report a SURVIVOR, a CRASH, and a clean IDENTITY, or its verdicts mean nothing ----------
 CTRL_OK=0
@@ -669,6 +811,10 @@ mutant_lib_build c-crash-runtime "$PRED" '    admin|maintain|write) no_such_comm
 lib_rows_quiet "$MUT_FILE" h_h2 h_h3
 if (( MUT_LANDED == 1 && MUT_CRASHED == 1 )) && bash -n "$MUT_FILE" 2>/dev/null; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: a mutant that parses but fails at runtime is flagged as crashed"
 else fail "harness control: the runtime-crashing mutant was not flagged (landed=$MUT_LANDED crashed=$MUT_CRASHED)"; fi
+mutant_lib_build c-crash-unbound "$PRED" '    admin|maintain|write) : "$UNSET_ZZ_SENTINEL"; return 0 ;;'
+lib_rows_quiet "$MUT_FILE" h_h2 h_h3
+if (( MUT_LANDED == 1 && MUT_CRASHED == 1 )) && bash -n "$MUT_FILE" 2>/dev/null; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: a mutant that dies on an unbound variable is flagged as crashed (CRASH_RE keeps that alternative)"
+else fail "harness control: the unbound-variable mutant was not flagged (landed=$MUT_LANDED crashed=$MUT_CRASHED)"; fi
 assert_fixture_dir "$SB"
 cp "$LIB" "$SB/identity.sh"
 lib_rows_quiet "$SB/identity.sh" "${LIB_ROWS[@]}"
@@ -682,8 +828,8 @@ _inert_fails=$((FAIL - _f0)); _inert_caught=$((MUT_CAUGHT - _c0))
 PASS=$_p0; FAIL=$_f0; MUT_RUN=$_r0; MUT_CAUGHT=$_c0
 if (( _inert_fails == 1 && _inert_caught == 0 )) && grep -q 'SURVIVED' "$SB/inert.out"; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: an inert mutant is reported SURVIVED and makes the suite red"
 else fail "harness control: an inert mutant was not reported as a survivor (fails=$_inert_fails caught=$_inert_caught)"; fi
-if (( CTRL_OK != 5 )); then fail "harness controls: $CTRL_OK of 5 held"; fi
-if (( MUT_RUN == MUT_CAUGHT && MUT_RUN >= 27 )); then pass "LIB MUTANTS: $MUT_CAUGHT of $MUT_RUN caught"; else fail "LIB MUTANTS: $MUT_CAUGHT of $MUT_RUN caught (every mutant must be caught; floor 27)"; fi
+if (( CTRL_OK != 6 )); then fail "harness controls: $CTRL_OK of 6 held"; fi
+if (( MUT_RUN == MUT_CAUGHT && MUT_RUN >= 48 )); then pass "LIB MUTANTS: $MUT_CAUGHT of $MUT_RUN caught"; else fail "LIB MUTANTS: $MUT_CAUGHT of $MUT_RUN caught (every mutant must be caught; floor 48)"; fi
 
 echo ""
 echo "passed=$PASS failed=$FAIL"
@@ -713,7 +859,7 @@ echo "passed=$PASS failed=$FAIL"
 #    meta-guard cannot recognise is indistinguishable from a floor that crashed.
 SELFTEST_PASSES=1
 REAL=$(( PASS - SELFTEST_PASSES ))
-MIN_ASSERTIONS=66
+MIN_ASSERTIONS=94
 if [[ "$REAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity assertion floor: only %d real assertion(s) ran (PASS=%d minus %d self-test), expected >= %d.\n' \
     "$REAL" "$PASS" "$SELFTEST_PASSES" "$MIN_ASSERTIONS" >&2
