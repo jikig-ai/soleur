@@ -23,4 +23,5 @@ deliverable (the replay table, the mutation proof, the two consumers, no user_da
 
 ## Taste
 
-None.
+1. **Mutation-arm count.** The DHH and code-simplicity reviewers both recommended cutting arms killed by the same fixture or extraction path as a kept arm. Applied: R3 keeps INVERT, DELETE, WIDEN, must-PASS and NOLAND (5, was 8); R4 keeps baseline, DELETE, WEAKEN, COMMENT-OUT, RESOURCE-RENAME and must-PASS (6, was 7); total 11 new assertions, floor 123 to 134. A reviewer who prefers the wider matrix can restore the true-branch-only, narrow-prefix, comment-out (R3) and FLIP (R4) arms at about 4 assertions of cost.
+2. **The Kieran review did not complete** (the reviewer subagent stalled on a tool call and was abandoned after about 6 minutes). Its checklist was verified by the planner instead: line anchors, the R3 fixture set, the R4 awk predicate against the real `hcloud_server.registry` block (prototype GREEN on the real file, RED on each mutant), the 128/123 arithmetic, and EXIT-trap exit-status preservation (exit 1 stays 1, exit 3 stays 3).
