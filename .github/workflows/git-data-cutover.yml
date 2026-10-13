@@ -259,27 +259,37 @@ jobs:
           # Sentry: status 0 = enabled, 1 = disabled/snapshot
           [[ "$enabled" == "0" || "$enabled" == "enabled" ]] || \
             fail pin_fault_paging_absent "rule 1310055 reads status=$enabled — enable the pin-fault rule before flipping."
-          # d6_replace_stale: the latest git-data replace/rotate run must have applied
-          # successfully (the run record is the stamp) AND carry the rotate marker —
-          # the rotate-confirm step concludes `success` only on a git-data-host-rotate
-          # dispatch, which is the only arm that re-mints GIT_DATA_LUKS_KEY. A plain
-          # replace does not rotate the key, so it cannot discharge D6 on its own.
+          # d6_replace_stale (#10166): a run discharges D6 only when its git_data_host_replace
+          # job SUCCEEDED and the last-step marker `Rotate completed (d6 marker)` succeeded.
+          # That marker is skipped on a plain replace, on a plan-only rotate and after any
+          # failure, so only a real git-data-host-rotate run (the only arm that re-mints
+          # GIT_DATA_LUKS_KEY) can carry it. The old match on the `rotate confirm token`
+          # step is gone: that step is unconditional and concludes success with
+          # `rotate confirm: n/a` on EVERY target. The newest rotate ATTEMPT decides — a
+          # failed or cancelled newest rotate blocks, and an older success cannot mask it;
+          # a run that cannot be read or is still running stops the scan instead of being
+          # skipped. The decision logic is scripts/lib/git-data-rotate-stamp.sh (unit-tested
+          # offline); it is sourced from the dispatched ref's checkout, the same trust
+          # boundary as bearer-curl.sh, held by the main-restricted reviewer environment.
           # (displayTitle is the workflow name on dispatch runs — the target is only
-          # visible in the job/step list.)
+          # visible in the job/step list; the window is the 100 newest dispatch runs.)
+          source "${GITHUB_WORKSPACE:?}/scripts/lib/git-data-rotate-stamp.sh" || fail d6_run_unreadable "scripts/lib/git-data-rotate-stamp.sh could not be loaded from the dispatched ref's checkout — the d6 stamp could not be read."
+          ids="$(gh run list --workflow apply-web-platform-infra.yml --branch main \
+                   --event workflow_dispatch --limit 100 \
+                   --json databaseId,status --jq '.[] | [.databaseId,.status] | @tsv')" || \
+            fail d6_run_unreadable "gh run list failed (API or rate limit) — the d6 stamp could not be read; re-dispatch the flip."
+          # `|| true` is deliberate: the scan returns 1 for every non-stamp verdict. The case below,
+          # with its fail-closed `*)` arm (which also catches an empty capture), is the control.
+          d6="$(git_data_d6_scan <<<"$ids")" || true
           last_ok=""
-          while IFS=$'\t' read -r rid _created; do
-            jobs_json="$(gh run view "$rid" --json jobs 2>/dev/null)" || continue
-            job_ok="$(jq -r '[.jobs[] | select(.name | test("git-data-host-replace|git_data_host_replace"; "i")) | .conclusion] | .[0] // empty' <<<"$jobs_json")"
-            [[ "$job_ok" == "success" ]] || continue
-            rotate_ok="$(jq -r '[.jobs[] | .steps[] | select(.name | test("rotate confirm token"; "i")) | .conclusion] | .[0] // empty' <<<"$jobs_json")"
-            [[ "$rotate_ok" == "success" ]] || continue
-            last_ok="$rid"
-            break
-          done < <(gh run list --workflow apply-web-platform-infra.yml --branch main \
-                     --event workflow_dispatch --limit 40 \
-                     --json databaseId,createdAt --jq '.[] | [.databaseId,.createdAt] | @tsv' 2>/dev/null)
-          [[ -n "$last_ok" ]] || fail d6_replace_stale "no successful git-data-host-rotate run on record — dispatch apply_target=git-data-host-rotate (confirm=ROTATE-GIT-DATA) from main first."
-          echo "d6 rotate stamp: run $last_ok"
+          case "${d6%% *}" in
+            d6_stamped) last_ok="${d6#* }"; echo "d6 rotate stamp: run $last_ok" ;;
+            d6_last_rotate_failed) fail d6_last_rotate_failed "the newest rotate attempt (run ${d6#* }) did not complete, so host and key state are uncertain; an older success does not discharge D6 — read that run and the runbook, repair, and re-dispatch the rotate (a newer successful rotate supersedes it)." ;;
+            d6_rotate_in_flight) fail d6_rotate_in_flight "a git-data replace or rotate run (${d6#* }) is running, queued or waiting for approval — re-dispatch the flip once it completes (cancel a stale waiting run)." ;;
+            d6_run_unreadable) fail d6_run_unreadable "run state could not be read (${d6#* }) — re-dispatch the flip." ;;
+            d6_replace_stale) fail d6_replace_stale "no successful git-data-host-rotate run carrying the rotate marker among the 100 newest dispatch runs (runs that predate the marker cannot qualify) — dispatch apply_target=git-data-host-rotate (confirm=ROTATE-GIT-DATA) from main first." ;;
+            *) fail d6_run_unreadable "unrecognised d6 scan result '${d6//[^A-Za-z0-9_ ]/?}' — re-dispatch the flip." ;;
+          esac
           # deploy_in_flight: no web-1-swap member running/queued (a concurrent
           # env-rebaking deploy mid-flip would be an unattributed cutover).
           # --event workflow_run names the DEPLOY arm: each merge produces both a
