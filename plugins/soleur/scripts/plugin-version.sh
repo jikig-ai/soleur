@@ -176,9 +176,8 @@ read_manifest_version() {
 }
 
 # ---- local checkout (source=checkout): plain file reads, never git ---------------------
-# These and the manifest read are the only readers of repository bytes; each checks regular-file-ness
-# and a stat size before reading. Every read is gated on regular-file-ness
-# AND on a stat size first (a FIFO or device would hang an open; a sparse multi-GiB HEAD of
+# These and the manifest read are the only readers of repository bytes. Each checks regular-file-ness
+# AND a stat size before it reads (a FIFO or device would hang an open; a sparse multi-GiB HEAD of
 # NULs took 38 s through `read -n 512` alone), and nothing is executed, sourced or evaluated.
 CK_VAL=""
 
@@ -226,7 +225,8 @@ packed_ref_sha() { # commondir ref -> CK_VAL = sha for the exact ref in packed-r
   # A peel line (`^sha`) has one field, so it never matches; a first field starting with `#` is skipped;
   # a record over 1 KiB (a real entry is ~40 + a ref name <= ~500) is skipped before awk splits it, and
   # whatever the first match holds must still pass the 40-hex test below, so a corrupt line yields
-  # `unknown`, never a wrong commit. LC_ALL=C makes length() count bytes on every awk.
+  # `unknown` or a sha the repository's own bytes name, never invented bytes. LC_ALL=C makes length()
+  # count bytes on every awk.
   CK_VAL="$(SOLEUR_REF="$2" LC_ALL=C awk '
     length($0) < 1024 && $1 !~ /^#/ && $2 == ENVIRON["SOLEUR_REF"] { print $1; exit }' "$f" 2>/dev/null)"
   [[ "$CK_VAL" =~ $SHA40_RE ]]
