@@ -61,6 +61,35 @@ body:
       placeholder: "/soleur:work"
     validations:
       required: false
+  - type: dropdown
+    id: filter
+    attributes:
+      label: External output filter in use?
+      description: "If anything other than 'none', triage applies the `external-env` label — do not add it yourself."
+      options:
+        - none
+        - rtk
+        - headroom
+        - other
+        - "don't know"
+    validations:
+      required: false
+  - type: input
+    id: session-start-marker
+    attributes:
+      label: Session-start marker
+      description: "Paste the full `SOLEUR_EXT_FILTER` line from session start, including via= and measured_at= (Claude Code sessions only — Devin and other harnesses emit no marker by design, and that does not mean no filter)."
+      placeholder: "SOLEUR_EXT_FILTER tool=none"
+    validations:
+      required: false
+  - type: textarea
+    id: filtered-vs-verbatim
+    attributes:
+      label: Filtered vs verbatim comparison
+      description: "If a filter is involved: the command's output verbatim vs filtered. REDACT secrets and personal paths before pasting."
+      render: text
+    validations:
+      required: false
   - type: textarea
     id: logs
     attributes:

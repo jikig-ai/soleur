@@ -43,29 +43,29 @@ norm() { tr '"|,()' '     ' | tr -s ' ' '\n' | grep -vE '^\s*$' | sort | tr '\n'
 
 # 1. wrap_skip arm in destructive-command-guard.sh — the case item inside the rtk) arm
 got="$(sed -n '/^    rtk)  # grammar/,/^    nohup|-p)/p' "$GUARD" \
-  | grep -oE 'run\|err\|test\|proxy\|bypass\|summary' | head -1 | norm)"
+  | grep -oE 'run\|err\|test\|proxy\|bypass\|summary' | head -1 | norm || true)"
 assert_eq "$want" "$got" "wrap_skip rtk arm exec set matches canonical"
 
 # 2. header prose in destructive-command-guard.sh — the parenthesized set
-got="$(grep -oE '\(run\|err\|test\|proxy\|bypass\|summary' "$GUARD" | head -1 | norm)"
+got="$(grep -oE '\(run\|err\|test\|proxy\|bypass\|summary' "$GUARD" | head -1 | norm || true)"
 assert_eq "$want" "$got" "guard header prose exec set matches canonical"
 
 # 3. python oracle in the hook suite — the tuple inside unwrap()'s rtk arm
 got="$(sed -n '/elif name == "rtk":/,/return args\[i:\]/p' "$HOOKTEST" \
-  | grep -oE '\("run", "err", "test", "proxy", "bypass", "summary"\)' | head -1 | norm)"
+  | grep -oE '\("run", "err", "test", "proxy", "bypass", "summary"\)' | head -1 | norm || true)"
 assert_eq "$want" "$got" "python oracle exec set matches canonical (independent impl — extracted, not shared)"
 
 # 4. pkill-self-match-guard.sh stage_word — the exec-subcommand case item
-got="$(grep -oE 'run\|err\|test\|proxy\|bypass\|summary\) \(\(' "$PKILL" | head -1 | norm)"
+got="$(grep -oE 'run\|err\|test\|proxy\|bypass\|summary\) \(\(' "$PKILL" | head -1 | norm || true)"
 assert_eq "$want" "$got" "pkill stage_word exec set matches canonical"
 
 # 5. proc.sh wrapper walk — the exec-subcommand consumption case
-got="$(grep -oE 'run\|err\|test\|proxy\|bypass\|summary\)' "$PROC" | head -1 | norm)"
+got="$(grep -oE 'run\|err\|test\|proxy\|bypass\|summary\)' "$PROC" | head -1 | norm || true)"
 assert_eq "$want" "$got" "proc.sh walk exec set matches canonical"
 
 # 6. known-external-tools.md reproduces the canonical table — extract its exec-subcommand line
 if [[ -f "$DOC" ]]; then
-  got="$(grep -oE 'run\|err\|test\|proxy\|bypass\|summary' "$DOC" | head -1 | norm)"
+  got="$(grep -oE 'run\|err\|test\|proxy\|bypass\|summary' "$DOC" | head -1 | norm || true)"
   assert_eq "$want" "$got" "known-external-tools.md exec set matches canonical"
 else
   echo "NOTE: known-external-tools.md absent — doc parity skipped (lands in the docs phase)"
