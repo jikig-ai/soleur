@@ -34,7 +34,8 @@ def prepare_operational(repo, source, directory):
     root = 'scripts/codex-qualification/'
     paths = [root + name for name in ('candidate.py', 'prepare.py', 'role_profiles.py',
              'api_policy.py', 'namespace.py', 'local_tls.py', 'rehearsal.py', 'operational.py',
-             'retained_files.py', 'session_controller.py', 'controller_inputs.py')]
+             'retained_files.py', 'session_controller.py', 'controller_inputs.py',
+             'controller_adapters.py', 'test_controller_adapters.py')]
     paths += [root + 'scenarios/' + name for name in RACE_SCENARIOS]
     references = {}
     for entry in git(repo, 'ls-tree', '-z', source, '--', *paths).split(b'\0'):

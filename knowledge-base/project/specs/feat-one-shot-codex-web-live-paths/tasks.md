@@ -42,6 +42,7 @@ Plan: `knowledge-base/project/plans/2026-09-27-feat-codex-web-live-handler-wirin
     - [x] Prepare bounded session/race sequencing with exact backend identity and failure cleanup; verify only injected synthetic observations.
     - [x] Independently verify the preparation delta; retain all runtime observation and fresh approval blockers.
     - [x] Prepare source-bound profile/builder specifications, nonexecutable adapter requirements and retained ownership/quiescence consistency checks; actual Configs, adapters and observations remain pending.
+    - [x] Implement callable builder/namespace/session/retained adapters over injected transports after the October 13 scope expansion; synthetic verification passes. Concrete production wiring, independently reviewed transports/profiles and authenticated runtime evidence remain pending; see `controller-adapter-implementation-2026-10-13.md`.
 - [x] 4.2 Update `workspace-default-engine.pen` for the engine dropdown, owner confirmation and member history-transfer acknowledgment; native Pencil screenshot QA is complete for all four settings/confirmation frames. These are design captures, not rendered implementation screenshots.
 
 ## Phase 5: Synthetic qualification and disposition

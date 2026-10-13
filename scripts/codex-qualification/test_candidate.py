@@ -99,6 +99,66 @@ class Candidate(unittest.TestCase):
         self.assertIsNone(receipt['image_id'])
         self.assertEqual(set(receipt['operations'].values()), {0})
 
+    def assembled_auxiliary(self):
+        spec = candidate_spec(self.repo, self.source, self.destination)
+        assemble(self.repo, self.source, self.destination)
+        auxiliary = [
+            {'path': 'candidate-contract.json', 'content': prepare.canonical(
+                {**candidate.metadata(spec), 'export_manifest': spec['export_manifest']}) + b'\n',
+             'permissions': 0o644},
+            {'path': 'build-recipe.json', 'content': prepare.canonical(spec['build_recipe']) + b'\n',
+             'permissions': 0o644},
+            {'path': 'docker-config/config.json', 'content': b'{}\n', 'permissions': 0o600},
+        ]
+        descriptor = os.open(self.destination, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        self.addCleanup(os.close, descriptor)
+        return spec, auxiliary, descriptor
+
+    def test_assembled_auxiliary_inventory_requires_exact_metadata_bytes_modes_and_types(self):
+        spec, auxiliary, descriptor = self.assembled_auxiliary()
+        candidate.verify_exports(descriptor, spec['export_manifest'], auxiliary=auxiliary)
+        # Default verification continues to reject every extra leaf.
+        with self.assertRaises(Refused):
+            candidate.verify_exports(descriptor, spec['export_manifest'])
+        for row in auxiliary:
+            file = self.destination / row['path']
+            original = file.read_bytes()
+            file.write_bytes(original + b'changed')
+            with self.subTest(path=row['path']), self.assertRaises(Refused):
+                candidate.verify_exports(descriptor, spec['export_manifest'], auxiliary=auxiliary)
+            file.write_bytes(original)
+        config = self.destination / 'docker-config/config.json'
+        config.chmod(0o644)
+        with self.assertRaises(Refused):
+            candidate.verify_exports(descriptor, spec['export_manifest'], auxiliary=auxiliary)
+        config.chmod(0o600)
+        recipe = self.destination / 'build-recipe.json'
+        contents = recipe.read_bytes()
+        recipe.unlink()
+        recipe.symlink_to('candidate-contract.json')
+        with self.assertRaises(Refused):
+            candidate.verify_exports(descriptor, spec['export_manifest'], auxiliary=auxiliary)
+        recipe.unlink()
+        recipe.write_bytes(contents)
+        recipe.chmod(0o644)
+        extra = self.destination / 'unexpected.txt'
+        extra.write_bytes(b'synthetic extra')
+        with self.assertRaises(Refused):
+            candidate.verify_exports(descriptor, spec['export_manifest'], auxiliary=auxiliary)
+        extra.unlink()
+        candidate.verify_exports(descriptor, spec['export_manifest'], auxiliary=auxiliary)
+
+    def test_auxiliary_inventory_rejects_duplicates_collisions_and_unsupported_modes(self):
+        spec, auxiliary, descriptor = self.assembled_auxiliary()
+        for invalid in [auxiliary + [auxiliary[0]],
+                        [{**auxiliary[0], 'path': spec['export_manifest'][0]['path']}],
+                        [{**auxiliary[0], 'permissions': 0o777}],
+                        [{**auxiliary[0], 'permissions': True}],
+                        [{**auxiliary[0], 'path': '../escape'}],
+                        [{**auxiliary[0], 'content': 'text'}]]:
+            with self.subTest(invalid=repr(invalid)[:100]), self.assertRaises(Refused):
+                candidate.verify_exports(descriptor, spec['export_manifest'], auxiliary=invalid)
+
     def test_public_build_args_clean_environment_and_metadata_preview(self):
         spec = candidate_spec(self.repo, self.source, self.destination)
         config = prepare.synthetic_browser_config()

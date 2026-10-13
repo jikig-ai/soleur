@@ -18,3 +18,63 @@ The [interface contract](controller-adapter-interface.md) owns the implementatio
 - [ ] Refresh final-source pairing, file-only export and exact-head draft CI/description evidence.
 
 Keep draft/disarmed/default-off/customer-blocked. Actual Config/profile/transport review, authenticated observations, current-source full-production build and recovery, Web/routine qualification, CLO/full review and promotion remain incomplete. No production schema or writes are added; projected production WAL impact is zero.
+
+## Implementation and measured verification
+
+The lifecycle code and test workers failed on model capacity and usage limits
+before writing files. The coordinator retained the interface contract and
+completed both scopes sequentially. Reviewed-Coverage: sequential-fallback;
+this is not independent source review and does not discharge the full PR panel.
+
+RED refused the absent adapter module. The first implementation exposed missing
+project labels; correction preserved the existing Policy requirement. Two fixture
+errors were corrected without relaxing guards: a supposedly duplicate ID was
+different, and the synthetic hostname did not match the existing browser contract.
+Follow-up behavioral regressions reproduced five guard failures and one release-
+window error, then two ambiguous cleanup retries and an oversized race timeout.
+All were corrected before GREEN. Two guard-removal controls each yield one
+intended assertion failure and zero errors.
+
+The new adapter suite passes 37 unit tests. Candidate/export tests pass 12 cases,
+including two new auxiliary-inventory cases covering all three generated files,
+bytes, modes, symlink/type substitutions, collisions and additional leaves.
+The complete offline wrapper passed with inherited `PYTHONOPTIMIZE=1` and its
+own explicit `OFFLINE_RC=0` receipt. Test transports operate only on synthetic
+metadata, isolated Git fixtures, fresh scratch files and fake local sockets.
+No real Docker, build, database/SQL, provider, credential, browser-auth/account,
+deployment, flag, recovery or withdrawn-command operation ran.
+
+Ruled by CTO agent: extend export verification with a separate explicit auxiliary
+inventory, preserving its exact default behavior. Builder expectations come from
+the separately supplied candidate specification, never files being checked.
+Hard transport cancellation/timeouts and actual daemon/network/resource admission
+remain pending; post-call deadline validation cannot preempt a blocked callback.
+Likewise, filtered volume absence, supplied complete writer references and an
+unchanged exported root do not authenticate provenance, establish global absence,
+or lock context writers. Production wiring remains absent.
+
+**This is not legal review. Findings are heuristic. Consult `soleur:legal:clo` + `soleur:legal:legal-compliance-auditor` before merging.**
+
+Scoped advisory checks cover lawful basis, retention, erasure/FK/caller wiring,
+vendor transfer and special-category fields. This delta adds no production schema,
+SDK/vendor route, account access or customer-data collection. All data-producing
+tests use synthetic fixtures; collection results contain hashes, not retained
+bytes or profile environment values. Broader mode-specific findings remain open.
+
+SAST remains VOID; Ref #10082 and Ref #9791 require fresh state observations before
+asserting their current status. No latest-source C.9 or runtime clearance is claimed.
+Hosted authentication stays BLOCKED in both modes; the alternative API route stays
+PENDING. Sharing, retention/inheritance and configured regions remain unknown.
+
+## Session errors and prevention
+
+- Delegation failed on capacity/usage limits. The coordinator completed source
+  and tests sequentially; independent review is explicitly pending.
+- Broad inspection output was truncated and two guessed reference paths were
+  absent. Exact discovered paths and bounded reads replaced affected evidence;
+  no truncated output is counted as a verification receipt.
+- Workflow tally locks refused read-only Git metadata; exact escalated retries
+  returned measured gate results. Real shared operational writes remain held.
+- Offline fixture sockets and `/var/tmp` allocator guards refused the sandbox;
+  exact retries used their required approval path. Refusal is not a pass or a
+  runtime observation; every accepted result needs the explicit producer receipt.

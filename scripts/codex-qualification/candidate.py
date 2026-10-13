@@ -192,13 +192,28 @@ def leaf_inventory(task_fd):
     return result
 
 
-def verify_exports(task_fd, rows):
-    require(leaf_inventory(task_fd) == {row['path'] for row in rows}, 'Export file inventory differs from complete source mapping')
+def verify_exports(task_fd, rows, *, auxiliary=()):
+    """Verify an exact union; auxiliary bytes must come from reviewed inputs."""
+    require(isinstance(rows, (list, tuple)) and isinstance(auxiliary, (list, tuple)) and
+            len(auxiliary) <= 3, 'Bounded explicit export inventories required')
+    paths = [str(safe_relative(row['path'])) for row in rows]
+    extra_paths = []
+    for row in auxiliary:
+        require(isinstance(row, dict) and set(row) == {'path', 'content', 'permissions'} and
+                isinstance(row['content'], bytes) and len(row['content']) <= 16 * 1024**2 and
+                type(row['permissions']) is int and row['permissions'] in (0o600, 0o644),
+                'Explicit regular auxiliary bytes and permissions required')
+        extra_paths.append(str(safe_relative(row['path'])))
+    require(len(set(paths + extra_paths)) == len(paths) + len(extra_paths),
+            'Duplicate source or auxiliary path refused')
+    require(leaf_inventory(task_fd) == set(paths + extra_paths),
+            'Export file inventory differs from complete source mapping')
     for row in rows:
         path = safe_relative(row['path'])
         parent = open_directory(task_fd, path.parts[:-1])
         try:
             info = os.stat(path.name, dir_fd=parent, follow_symlinks=False)
+            require(row['mode'] in ('100644', '100755', '120000'), 'Unsupported source mode refused')
             if row['mode'] == '120000':
                 require(stat.S_ISLNK(info.st_mode), 'Exported source link became a different file type')
                 content = os.readlink(path.name, dir_fd=parent).encode()
@@ -207,8 +222,22 @@ def verify_exports(task_fd, rows):
                         (0o755 if row['mode'] == '100755' else 0o644), 'Exported source file type/mode differs')
                 descriptor = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
                 with os.fdopen(descriptor, 'rb') as stream:
-                    content = stream.read()
+                    require(info.st_size == row['bytes'], 'Exported source size differs')
+                    content = stream.read(row['bytes'] + 1)
             require(len(content) == row['bytes'] and sha(content) == row['sha256'], 'Exported bytes differ from committed source')
+        finally:
+            os.close(parent)
+    for row in auxiliary:
+        path = safe_relative(row['path'])
+        parent = open_directory(task_fd, path.parts[:-1])
+        try:
+            info = os.stat(path.name, dir_fd=parent, follow_symlinks=False)
+            require(stat.S_ISREG(info.st_mode) and stat.S_IMODE(info.st_mode) == row['permissions'] and
+                    info.st_size == len(row['content']), 'Auxiliary file type, mode or size differs')
+            descriptor = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
+            with os.fdopen(descriptor, 'rb') as stream:
+                require(stream.read(len(row['content']) + 1) == row['content'],
+                        'Auxiliary bytes differ from reviewed specification')
         finally:
             os.close(parent)
 

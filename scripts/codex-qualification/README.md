@@ -146,7 +146,38 @@ session and retained-file interfaces without constructing a transport. Retention
 checks join separate registered resource/root, owner/database and writer references
 to ordered quiescence windows covering complete before/after manifests. These
 supplied references establish consistency only; executable profiles, adapter
-implementations, ownership/quiescence verification, issuer authentication and
+runtime wiring, ownership/quiescence verification, issuer authentication and
 approval remain pending. Results contain fingerprints and pending status, with
 no returned executable profile recipes. See the
 [controller-input preparation record](../../knowledge-base/project/specs/feat-one-shot-codex-web-live-paths/controller-input-preparation-2026-10-13.md).
+
+`controller_adapters.py` adds callable builder, namespace, persistent-session and
+retained-file adapters after the operator expanded implementation scope. All
+transports are injected; no production transport, CLI or approval mechanism is
+provided. Constructors call no transport and copy reviewed inputs. Every request
+and response is checked around bounded callback deadlines. Matching references
+and fake responses establish consistency only; returned summaries retain false
+execution/profile/authentication/ownership/quiescence authority and pending
+issuer verification and independent review.
+
+The builder validates the export descriptor against the reviewed recipe directory
+and checks the exact source-plus-metadata leaf inventory, including the empty
+Docker config at mode `0600`, before one injected attempt. Namespace operations
+preserve `Policy` rewrites and successful-registration ownership, reobserve
+resources/configurations, reject duplicate IDs, and require running prerequisites.
+Session calls use only source-bound scenario bytes and existing identity-bound
+handles, with explicit lock observation before commit and a 30-second deadline.
+Retained collection owns only returned descriptors and matching quiescence leases;
+it reobserves root/writers, encloses collection in supplied observation windows,
+and compares full inventories for retention or scoped erasure. Cleanup is bounded,
+preserves the primary error and does not retry ambiguous deletes or session closes.
+
+Runtime admission remains absent. Filtered volume absence and supplied writer
+censuses do not prove global absence or completeness; concrete transports must
+obtain independently reviewable observations. Export identity checks do not lock
+context writers. Passing remaining timeouts and refusing late responses cannot
+preempt a blocking callback or enforce daemon/network/resource limits. Those
+controls, actual immutable Config observations/reobservations, authenticated
+provenance, concrete profile/transport review and fresh exact execution approval
+remain prerequisites. No build, SQL, login, provider or recovery operation ran.
+See the [implementation record](../../knowledge-base/project/specs/feat-one-shot-codex-web-live-paths/controller-adapter-implementation-2026-10-13.md).

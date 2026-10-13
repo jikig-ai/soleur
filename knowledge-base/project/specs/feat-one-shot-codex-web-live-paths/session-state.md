@@ -1497,3 +1497,30 @@
   file-only export and draft CI/description remain separately attributable.
   Actual executable profiles/adapters/observations, immutable image/auth
   receipts, fresh exact-command approval and all remaining AC stay pending.
+
+### Callable controller implementation — 2026-10-13
+
+- The operator authorized expanding source implementation. The preceding
+  source-only adapter restriction is superseded only for callable implementation
+  and synthetic tests; every operational, credential/provider/account/shared-write,
+  build/recovery/retry, deployment/flag/cohort and promotion hold persists.
+- [Implementation record](controller-adapter-implementation-2026-10-13.md)
+  owns the CTO ruling, four injected-transport adapters, exact export-plus-metadata
+  validation, identity-bound race sequencing and retained collection/release guards.
+  Production transport wiring and runtime admission remain absent. Config/profile/
+  transport review, authenticated provenance, context-writer isolation and hard
+  timeout/resource/network enforcement remain pending.
+- Delegated code/test workers failed on capacity and usage limits. The coordinator
+  completed both scopes sequentially. Reviewed-Coverage: sequential-fallback;
+  no independent review or full PR panel is claimed. New adapter tests pass 37
+  unit cases; candidate tests pass 12 cases including two new metadata controls.
+  The complete offline wrapper passed under inherited optimization with explicit
+  `OFFLINE_RC=0`. Fixture-relative/directory, guard-vacuity, temporary-file and
+  plan gates passed 63/71/23/120/41 assertions after exact sandbox retries where
+  required. Registration evidence requires its own successful enumerator receipt.
+- GitHub reobservation confirms SAST Ref #10082 OPEN and C.9 Ref #9791 OPEN;
+  SAST remains VOID and no latest-source C.9 clearance is claimed. Hosted auth
+  stays BLOCKED in both modes; alternative API route PENDING. Keep draft/disarmed/
+  default-off/customer-blocked. No operational build/recovery or withdrawn-command
+  action is authorized or executed. Independent review and final exact-head
+  pairing/export/CI receipts remain separately owed after committing this source.
