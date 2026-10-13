@@ -285,14 +285,19 @@ def covers(edge, p):
                     or "*" not in tail or tail.endswith("/")):
                 return True
             if os.path.isdir(p):
-                # A dir ref is covered iff p/head nest — the glob's reach intersects it.
-                # This is an optimistic approximation: declared globs scope by
-                # extension-class, and a dir ref under the head may carry file
-                # classes the tail declines. #9969 widened the carrier set (the
-                # *.test.sh pair now hold glob:knowledge-base/**.test.sh while
-                # charged reads under those dirs include .md/.yml); tightening
-                # the rule to tail-vs-charged-classes is tracked as a scope-out.
-                return p.startswith(head) or head.startswith(p.rstrip("/") + "/")
+                # A dir ref is covered iff EVERY tracked member beneath it
+                # matches the glob tail — path nesting alone certifies nothing
+                # (#10117). The nest approximation this replaced certified a
+                # dir whose charged file classes the tail declines (e.g. a
+                # knowledge-base read charged against **.sh while the suite
+                # reads .md/.yml beneath it). _TRACKED is the
+                # `git ls-files -- knowledge-base` materialization — the census
+                # domain is index-defined, so a dir with no tracked members
+                # declines rather than vacuously covering via all([]).
+                tracked(p)  # populate the memoized (files, dirs) pair
+                files, _ = _TRACKED
+                members = [f for f in files if f.startswith(p.rstrip("/") + "/")]
+                return bool(members) and all(fnmatch.fnmatchcase(f, g) for f in members)
             return fnmatch.fnmatchcase(p, g)
         if e.endswith("/"):
             return p.startswith(e) or (p + "/") == e
@@ -419,7 +424,7 @@ _nonlit=$(awk -F'\t' 'NF>=3{n++} END{print n+0}' "$BASELINE")
 if [[ -z "$_unclass" ]]; then
   pass "c1: every non-literal baseline row has a shape-valid 'false-positive: <reason>' classification (n=$_nonlit; shape-checked, not verified)"
 else
-  fail "c1: unclassified baseline row(s): $_unclass"
+  fail "c1: unclassified baseline row(s): $_unclass — classify each 'false-positive: <reason>' in scripts/test-affected-kb-consumers.baseline.txt, or give the read a covering edge and --write-baseline"
 fi
 
 # Row f0 (population floor for the form table): each form in the table sees at least one registration
@@ -696,9 +701,13 @@ else
 fi
 
 # k5: the ^glob: arm — a valid glob covers .sh under its head at any depth and no
-# other file; every malformed minted edge covers by construction (never narrows);
-# a dir ref under or equal to the head is covered via the nest clause. The kb
-# literal is COMPOSED — a bare token here would be charged to this suite as a read.
+# other file; every malformed minted edge covers by construction (never narrows).
+# A dir ref is covered only when EVERY tracked member beneath it matches the glob
+# tail (#10117 all-containment — the old nest clause certified a dir whose charged
+# classes the tail declines, e.g. knowledge-base under **.sh). knowledge-base/legal
+# is the all-.md member set; knowledge-base/project is mixed; docs/ exists on disk
+# but holds no tracked kb members (the empty-set decline). The kb literal is
+# COMPOSED — a bare token here would be charged to this suite as a read.
 cases=$((cases + 1))
 _k5=$(cd "$REPO_ROOT" && python3 - "$ORACLE" <<'COVPY'
 import sys, importlib.util
@@ -712,16 +721,105 @@ tests = [
     ("^glob:glob:a*/b", "anywhere/file"),           # malformed mint: always-cover
     ("^glob:glob:../x/*.sh", KB + "/x.sh"),         # ../-head verbatim: always-cover
     ("^glob:glob:x:y/*.sh", KB + "/x.sh"),          # charset verbatim: always-cover
-    ("^glob:" + KB + "/**.sh", KB),                 # dir ref equal to head → nest
-    ("^glob:" + KB + "/**.sh", KB + "/project"),    # dir ref under head → nest
+    ("^glob:" + KB + "/**.sh", KB),                 # dir ref = head; members mixed → decline
+    ("^glob:" + KB + "/**.sh", KB + "/project"),    # dir ref under head; mixed members → decline
+    ("^glob:" + KB + "/**.md", KB + "/legal"),      # dir ref, all members match — accept
+    ("^glob:" + KB + "/**.sh", KB + "/legal"),      # dir ref, members all .md — decline
+    ("^glob:" + KB + "/**.md", KB + "/project"),    # dir ref, mixed members — decline
+    ("^glob:" + KB + "/**.sh", "plugins/soleur"),   # non-kb dir ref — decline
+    ("^glob:" + KB + "/**.md", "docs"),             # dir with zero kb members — decline
+    ("^glob:" + KB + "/**.md", KB + "/legal/audits"),  # nested member depth via ** — accept
 ]
 print(" ".join("1" if o.covers(e, p) else "0" for e, p in tests))
 COVPY
 )
-if [[ "$_k5" == "1 1 0 0 1 1 1 1 1" ]]; then
-  pass "k5: ^glob: covers .sh at any depth, declines .md and out-of-head paths, always-covers malformed mints, and nests dir refs"
+if [[ "$_k5" == "1 1 0 0 1 1 1 0 0 1 0 0 0 0 1" ]]; then
+  pass "k5: ^glob: covers .sh at any depth, declines .md/out-of-head/mixed-or-memberless dir refs, always-covers malformed mints"
 else
-  fail "k5: got '${_k5}' (want 1 1 0 0 1 1 1 1 1)"
+  fail "k5: got '${_k5}' (want 1 1 0 0 1 1 1 0 0 1 0 0 0 0 1)"
+fi
+
+# k6 (Guard 3, #10117) — mutation dispatch over the dir-ref all-containment arm.
+#        Each row mutates ONE clause of a scratch copy and asserts the mutant's
+#        verdict flips where the real predicate's pins hold. A surviving mutant
+#        would mean the new cells bind nothing.
+
+# k6-m1: nest-clause revert — restore the pre-#10117 "dir ref covered iff p/head
+#        nest" verdict; it re-covers the mixed-member dir the new arm declines.
+cases=$((cases + 1))
+cp "$ORACLE" "$TESTROOT/oracle-k6m1.py"
+_k6m1_n=$(grep -c 'return bool(members) and all(fnmatch.fnmatchcase(f, g) for f in members)' "$TESTROOT/oracle-k6m1.py")
+sed -i 's|return bool(members) and all(fnmatch.fnmatchcase(f, g) for f in members)|return p.startswith(head) or head.startswith(p.rstrip("/") + "/")|' "$TESTROOT/oracle-k6m1.py"
+_k6m1=$(cd "$REPO_ROOT" && python3 - "$TESTROOT/oracle-k6m1.py" <<'COVPY'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("o", sys.argv[1]); o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
+KB = "knowledge" + "-base"
+print(" ".join("1" if o.covers(e, p) else "0" for e, p in [
+    ("^glob:" + KB + "/**.sh", KB + "/project"),     # nest mutant re-covers: 1
+    ("^glob:" + KB + "/**.sh", "plugins/soleur"),    # non-kb dir: stays 0
+]))
+COVPY
+)
+if [[ "$_k6m1_n" == "1" && "$_k6m1" == "1 0" ]]; then
+  pass "k6-m1: nest-clause revert re-covers the mixed dir (all-containment binds the decline)"
+else
+  fail "k6-m1: landed=$_k6m1_n mutant='${_k6m1}' (want landed=1 mutant='1 0')"
+fi
+
+# k6-m2: all()→any() — a dir whose SOME-but-not-all members match must stay
+#        uncovered; any() would certify it (second-member defect class).
+cases=$((cases + 1))
+cp "$ORACLE" "$TESTROOT/oracle-k6m2.py"
+_k6m2_n=$(grep -c 'return bool(members) and all(fnmatch.fnmatchcase(f, g) for f in members)' "$TESTROOT/oracle-k6m2.py")
+sed -i 's|return bool(members) and all(fnmatch.fnmatchcase(f, g) for f in members)|return bool(members) and any(fnmatch.fnmatchcase(f, g) for f in members)|' "$TESTROOT/oracle-k6m2.py"
+_k6m2=$(cd "$REPO_ROOT" && python3 - "$TESTROOT/oracle-k6m2.py" <<'COVPY'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("o", sys.argv[1]); o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
+KB = "knowledge" + "-base"
+print(" ".join("1" if o.covers(e, p) else "0" for e, p in [
+    ("^glob:" + KB + "/**.md", KB + "/project"),     # some .md, not all: any()=1
+    ("^glob:" + KB + "/**.sh", KB + "/legal"),       # zero .sh members: stays 0
+]))
+COVPY
+)
+if [[ "$_k6m2_n" == "1" && "$_k6m2" == "1 0" ]]; then
+  pass "k6-m2: the any() mutant certifies a some-match dir (all() is load-bearing)"
+else
+  fail "k6-m2: landed=$_k6m2_n mutant='${_k6m2}' (want landed=1 mutant='1 0')"
+fi
+
+# k6-m3: empty-member vacuous-true — dropping the `members` conjunct makes
+#        all([])=True cover a dir with zero tracked kb members (docs/ exists
+#        on disk, holds no kb-tracked files).
+cases=$((cases + 1))
+cp "$ORACLE" "$TESTROOT/oracle-k6m3.py"
+_k6m3_n=$(grep -c 'return bool(members) and all(fnmatch.fnmatchcase(f, g) for f in members)' "$TESTROOT/oracle-k6m3.py")
+sed -i 's|return bool(members) and all(fnmatch.fnmatchcase(f, g) for f in members)|return all(fnmatch.fnmatchcase(f, g) for f in members)|' "$TESTROOT/oracle-k6m3.py"
+_k6m3=$(cd "$REPO_ROOT" && python3 - "$TESTROOT/oracle-k6m3.py" <<'COVPY'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("o", sys.argv[1]); o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
+KB = "knowledge" + "-base"
+print(" ".join("1" if o.covers(e, p) else "0" for e, p in [
+    ("^glob:" + KB + "/**.md", "docs"),              # vacuous-all mutant: 1
+    ("^glob:" + KB + "/**.md", KB + "/legal"),       # populated dir: stays 1
+]))
+COVPY
+)
+if [[ "$_k6m3_n" == "1" && "$_k6m3" == "1 1" ]]; then
+  pass "k6-m3: dropping the empty-guard makes a memberless dir vacuously cover (the conjunct binds)"
+else
+  fail "k6-m3: landed=$_k6m3_n mutant='${_k6m3}' (want landed=1 mutant='1 1')"
+fi
+
+# k6-m4: harness guard — the stale expectation vector (the old nest verdicts at
+#        the dir positions) must NOT match what the oracle emits; if it did,
+#        the row would be green under the old rule and the vector would bind
+#        nothing.
+cases=$((cases + 1))
+if [[ "$_k5" != "1 1 0 0 1 1 1 1 1 1 0 0 0 0 1" ]]; then
+  pass "k6-m4: the stale nest-verdict expectation does not match (the vector binds the new rule)"
+else
+  fail "k6-m4: oracle still emits the stale nest-clause vector — k5's expectation is unbound"
 fi
 
 # u1: the c1 predicate (the SAME function) flags UNCLASSIFIED, empty, unprefixed and reason-less classifications, and accepts a
@@ -738,7 +836,7 @@ if (( PASS + FAIL != cases )); then
   echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
   exit 2
 fi
-MIN_CASES=22
+MIN_CASES=26
 if (( cases < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran — below the $MIN_CASES floor" >&2
   exit 2
