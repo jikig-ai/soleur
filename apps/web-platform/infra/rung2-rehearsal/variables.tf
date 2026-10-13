@@ -117,3 +117,14 @@ variable "rehearsal_phase" {
     error_message = "rehearsal_phase must be `seed` or `payload`."
   }
 }
+
+variable "rehearsal_attach_delay_s" {
+  description = "(#10196) Seconds the PAYLOAD-phase boot's plaintext volume attachment is held back after the server is created (the LUKS attachment waits half, rounded down), so the paid rehearsal exercises git-data-bootstrap.sh's bounded device wait. 0 (the default) is the old behaviour; the seed phase sleeps 0 whatever this is. Capped at 240 so the delay stays well inside the apply step bound."
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.rehearsal_attach_delay_s >= 0 && var.rehearsal_attach_delay_s <= 240
+    error_message = "rehearsal_attach_delay_s must be between 0 and 240 seconds."
+  }
+}

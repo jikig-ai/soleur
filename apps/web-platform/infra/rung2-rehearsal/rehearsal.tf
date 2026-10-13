@@ -262,16 +262,56 @@ resource "hcloud_server" "rehearsal" {
   }
 }
 
+# --- (#10196) The deliberate late attachment ----------------------------------------------
+# Real rotate run 38384137515 lost a race the rehearsals never could: Hetzner attached the volume
+# about 70 s after cloud-init needed it, while rehearsal attaches landed in 17-33 s. These two
+# resources hold each attachment back after the server exists, so the PAYLOAD boot sees its
+# volumes arrive late and the bootstrap's bounded wait has to run. The old code FATALs under this
+# delay, so a PASS implies the wait ran. LUKS waits half (floor), the plaintext volume the full
+# delay, which lands the LUKS device before the bootstrap starts and the plaintext one after.
+#
+# triggers_replace is the SERVER ID ONLY. The sleep length lives in `environment`: a value in
+# triggers would let a differing -var between plan and destroy replace the resource. A replaced
+# server makes the id unknown, so the sleep re-runs on every payload and replace-arm boot. No
+# `count`: the address would carry `[0]`, which plan-shape's create regex refuses. The seed phase
+# sleeps 0 (the seed host must boot as before). Not a prod address: `.rehearsal` scoped, and
+# plan-shape admits exactly these two replaces.
+resource "terraform_data" "rehearsal_attach_delay_luks" {
+  triggers_replace = hcloud_server.rehearsal.id
+
+  provisioner "local-exec" {
+    command = "sleep $REHEARSAL_ATTACH_DELAY_S"
+    environment = {
+      REHEARSAL_ATTACH_DELAY_S = tostring(var.rehearsal_phase == "payload" ? floor(var.rehearsal_attach_delay_s / 2) : 0)
+    }
+  }
+}
+
+resource "terraform_data" "rehearsal_attach_delay_pt" {
+  triggers_replace = hcloud_server.rehearsal.id
+
+  provisioner "local-exec" {
+    command = "sleep $REHEARSAL_ATTACH_DELAY_S"
+    environment = {
+      REHEARSAL_ATTACH_DELAY_S = tostring(var.rehearsal_phase == "payload" ? var.rehearsal_attach_delay_s : 0)
+    }
+  }
+}
+
 resource "hcloud_volume_attachment" "rehearsal" {
   volume_id = hcloud_volume.rehearsal.id
   server_id = hcloud_server.rehearsal.id
   automount = false
+
+  depends_on = [terraform_data.rehearsal_attach_delay_pt]
 }
 
 resource "hcloud_volume_attachment" "rehearsal_luks" {
   volume_id = hcloud_volume.rehearsal_luks.id
   server_id = hcloud_server.rehearsal.id
   automount = false
+
+  depends_on = [terraform_data.rehearsal_attach_delay_luks]
 }
 
 resource "hcloud_firewall_attachment" "rehearsal" {

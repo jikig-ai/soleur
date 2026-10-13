@@ -2586,6 +2586,108 @@ else
   fail "seed: something other than an fsync sits between the probe's rmdir and the power-off" "${_w9_tail:-<no region>}"
 fi
 
+# ── (#10196 D3) GUARD 4: THE REHEARSAL'S LATE ATTACHMENT IS PAYLOAD-ONLY AND DEFAULTS TO ZERO ──
+# rehearsal.tf holds two `terraform_data` delay resources and each hcloud_volume_attachment depends
+# on one, so the paid payload boot sees its volumes arrive late (LUKS about half the delay, the
+# plaintext volume the full delay) and the bootstrap's bounded wait has to run. The delay must be
+# unable to touch the seed boot (sleep 0 unless the phase is `payload`), unset means 0, and the
+# sleep length must stay out of `triggers_replace` (a `-var` that differs between the plan and a
+# later destroy would otherwise replace the resource). `_g4_verdict` reads comment-stripped HCL
+# and prints one tag per failed property; the rows below assert a category is absent from the
+# pristine code, then flip one property at a time and require that exact tag to appear (a check
+# that cannot fail is a comment).
+_g4_norm() { sed -E 's/^[[:space:]]+//; s/[[:space:]]+/ /g; /^$/d'; }
+_g4_block() { awk -v hdr="$1" 'index($0, hdr) == 1 {f=1} f{print} f&&/^}/{exit}' <<<"$2" | _g4_norm; }
+_g4_verdict() { # $1 = comment-stripped rehearsal-root HCL
+  local code="$1" bad="" sfx att blk expr
+  for sfx in luks pt; do
+    if [[ "$sfx" == luks ]]; then
+      expr='var.rehearsal_phase == "payload" ? floor(var.rehearsal_attach_delay_s / 2) : 0'
+      att='resource "hcloud_volume_attachment" "rehearsal_luks" {'
+    else
+      expr='var.rehearsal_phase == "payload" ? var.rehearsal_attach_delay_s : 0'
+      att='resource "hcloud_volume_attachment" "rehearsal" {'
+    fi
+    blk=$(_g4_block "resource \"terraform_data\" \"rehearsal_attach_delay_${sfx}\" {" "$code")
+    if [[ -z "$blk" ]]; then bad+=" structure-${sfx} triggers-${sfx} gate-${sfx}"; else
+      # no count/for_each: a `[0]` address would be refused by plan-shape's create regex
+      grep -qE '^(count|for_each) ' <<<"$blk" && bad+=" structure-${sfx}-meta"
+      grep -qxF 'provisioner "local-exec" {' <<<"$blk" || bad+=" structure-${sfx}-provisioner"
+      grep -qxF 'command = "sleep $REHEARSAL_ATTACH_DELAY_S"' <<<"$blk" || bad+=" structure-${sfx}-command"
+      [[ "$(grep -c '^triggers_replace' <<<"$blk")" == 1 && "$(grep '^triggers_replace' <<<"$blk")" == 'triggers_replace = hcloud_server.rehearsal.id' ]] || bad+=" triggers-${sfx}"
+      grep -qxF "REHEARSAL_ATTACH_DELAY_S = tostring(${expr})" <<<"$blk" || bad+=" gate-${sfx}"
+    fi
+    blk=$(_g4_block "$att" "$code")
+    grep -qxF "depends_on = [terraform_data.rehearsal_attach_delay_${sfx}]" <<<"$blk" || bad+=" depends-${sfx}"
+  done
+  blk=$(_g4_block 'variable "rehearsal_attach_delay_s" {' "$code")
+  grep -qxF 'type = number' <<<"$blk" || bad+=" variable-type"
+  grep -qxF 'default = 0' <<<"$blk" || bad+=" variable-default"
+  grep -qxF 'condition = var.rehearsal_attach_delay_s >= 0 && var.rehearsal_attach_delay_s <= 240' <<<"$blk" || bad+=" variable-range"
+  printf '%s' "$bad"
+}
+_g4_pristine=$(_g4_verdict "$(cat "$REH_CODE")")
+for _g4_cat in structure triggers gate depends variable; do
+  cases=$((cases + 1))
+  if ! grep -qE "(^| )${_g4_cat}-" <<<"$_g4_pristine"; then
+    pass "guard 4 (${_g4_cat}): the rehearsal root satisfies every ${_g4_cat} pin of the late-attachment delay"
+  else
+    fail "guard 4 (${_g4_cat}): the late-attachment delay is missing or malformed" "failed pins:${_g4_pristine}"
+  fi
+done
+# Mutants: one property each, and the landed edit must produce exactly the tag it targets.
+_g4_mut() { # <name> <expected-tag> <old> <new>
+  local out
+  out=$(python3 - "$REH_CODE" "$3" "$4" <<'G4PY'
+import sys
+s = open(sys.argv[1]).read()
+old, new = sys.argv[2], sys.argv[3]
+if s.count(old) < 1:
+    sys.exit(3)
+sys.stdout.write(s.replace(old, new, 1))
+G4PY
+  ) || { cases=$((cases + 1)); fail "guard 4 mutant '$1' did not land (anchor drifted)"; return; }
+  cases=$((cases + 1))
+  if grep -qE "(^| )$2( |$)" <<<"$(_g4_verdict "$out")"; then
+    pass "guard 4 mutant '$1' is caught (${2})"
+  else
+    fail "guard 4 mutant '$1' is NOT caught: the pin for ${2} is vacuous" "verdict:$(_g4_verdict "$out")"
+  fi
+}
+_g4_mut "phase gate removed" gate-pt \
+  'tostring(var.rehearsal_phase == "payload" ? var.rehearsal_attach_delay_s : 0)' 'tostring(var.rehearsal_attach_delay_s)'
+_g4_mut "variable default raised" variable-default 'default     = 0' 'default     = 30'
+_g4_mut "delay value in triggers_replace (luks)" triggers-luks \
+  'triggers_replace = hcloud_server.rehearsal.id' 'triggers_replace = [hcloud_server.rehearsal.id, var.rehearsal_attach_delay_s]'
+_g4_mut "delay value in triggers_replace (plaintext)" triggers-pt \
+  '"rehearsal_attach_delay_pt" {
+  triggers_replace = hcloud_server.rehearsal.id' '"rehearsal_attach_delay_pt" {
+  triggers_replace = [hcloud_server.rehearsal.id, var.rehearsal_attach_delay_s]'
+_g4_mut "plaintext attachment loses its depends_on" depends-pt \
+  'depends_on = [terraform_data.rehearsal_attach_delay_pt]' 'depends_on = []'
+# terraform_data is outside the hcloud_/doppler_ allowlist in arm 1, so its own scope check.
+_g4_td_bad=""
+while IFS= read -r _g4_a; do
+  [[ -z "$_g4_a" ]] && continue
+  case "$_g4_a" in rehearsal|rehearsal_*) ;; *) _g4_td_bad="${_g4_td_bad} ${_g4_a}" ;; esac
+done < <(grep -oE '^[[:space:]]*(resource|data)[[:space:]]+"terraform_data"[[:space:]]+"[a-z0-9_]+"' "$REH_CODE" | sed -E 's/.*" *"([a-z0-9_]+)"$/\1/')
+cases=$((cases + 1))
+if [[ -z "$_g4_td_bad" ]] && [[ "$(grep -cE '^resource "terraform_data" "rehearsal_' "$REH_CODE" || true)" -eq 2 ]]; then
+  pass "guard 4: the rehearsal root declares exactly two terraform_data resources, both rehearsal-scoped"
+else
+  fail "guard 4: terraform_data addresses are not exactly the two rehearsal-scoped delay resources" "unscoped:${_g4_td_bad:- none}"
+fi
+# The workflow sets the delay once, with no rationale prose (ADR-231 byte budget), inside the
+# variable's validated range.
+_g4_wf_n=$(grep -cE '^[[:space:]]*TF_VAR_rehearsal_attach_delay_s: "150"[[:space:]]*$' "$WF" || true)
+_g4_wf_all=$(grep -c 'TF_VAR_rehearsal_attach_delay_s' "$WF" || true)
+cases=$((cases + 1))
+if [[ "$_g4_wf_n" -eq 1 && "$_g4_wf_all" -eq 1 ]]; then
+  pass "guard 4: the workflow sets TF_VAR_rehearsal_attach_delay_s to 150 exactly once, in one line"
+else
+  fail "guard 4: expected exactly one TF_VAR_rehearsal_attach_delay_s: \"150\" line (matching=${_g4_wf_n}, any mention=${_g4_wf_all})"
+fi
+
 # (g) THE JOB BUDGET is the SUM OF EVERY STEP'S OWN BOUND (review W6), read from the parsed YAML.
 # The previous arm summed the poll DEADLINES plus the three apply timeouts and certified a ceiling
 # against that — while init, the three plans, the three shape steps and every curl ran unbounded,
@@ -2652,6 +2754,10 @@ fi
 # classification; +2 seed power-off poll (empty token, bounded requests); +1 seed plan-time pins;
 # +2 seed replay order (order, fsync-only tail); the budget arm 1 -> 2 (+1); +2 boot-#2 ack rows.
 # Measured: 129 ran.
+# RAISED 129 -> 141 (#10196 D3, Guard 4), ITEMISED: +5 category rows (structure, triggers, gate,
+# depends, variable) over the late-attachment delay; +5 mutant rows (gate removed, default raised,
+# delay in triggers_replace for each of the two resources, plaintext depends_on removed); +1 the
+# terraform_data scope row; +1 the workflow's single TF_VAR line. Measured: 141 ran.
 #
 # CONSERVATION AGAIN, HERE. The check above runs before the three-boot arms and the ack arm, so
 # a verdict discarded in any of them was invisible to it; this one covers every row in the file.
@@ -2660,13 +2766,13 @@ if [[ $((passes + fails)) -ne "$cases" ]]; then
     "$passes" "$fails" "$((passes + fails))" "$cases" >&2
   exit 1
 fi
-if [[ "$cases" -lt 129 ]]; then
-  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, floor is 129.\n' "$cases" >&2
+if [[ "$cases" -lt 141 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, floor is 141.\n' "$cases" >&2
   printf '  Arms were deleted, skipped, or the suite exited early.\n' >&2
   printf '\n=== git-data-rung2-rehearsal: %d passed, %d failed (%d cases) ===\n\n' "$passes" "$fails" "$cases"
   exit 1
 fi
-printf '  ok   anti-vacuity floor: %d assertions ran (floor 129)\n' "$cases"
+printf '  ok   anti-vacuity floor: %d assertions ran (floor 141)\n' "$cases"
 
 printf '\n=== git-data-rung2-rehearsal: %d passed, %d failed ===\n\n' "$passes" "$fails"
 # `exit $(( fails > 0 ))`, NOT a trailing `[[ "$fails" -eq 0 ]]`. A bare final test expression
