@@ -440,7 +440,7 @@ _nonlit=$(awk -F'\t' 'NF>=3{n++} END{print n+0}' "$BASELINE")
 if [[ -z "$_unclass" ]]; then
   pass "c1: every non-literal baseline row has a shape-valid 'false-positive: <reason>' classification (n=$_nonlit; shape-checked, not verified)"
 else
-  fail "c1: unclassified baseline row(s): $_unclass — classify each 'false-positive: <reason>' in scripts/test-affected-kb-consumers.baseline.txt, or give the read a covering edge and --write-baseline"
+  fail "c1: unclassified baseline row(s): $_unclass — classify each 'false-positive: <reason>' in the baseline file, or give the read a covering edge and --write-baseline"
 fi
 
 # Row f0 (population floor for the form table): each form in the table sees at least one registration
@@ -901,7 +901,7 @@ cases=$((cases + 1))
 cp "$ORACLE" "$TESTROOT/oracle-k6m6.py"
 _k6m6_n=$(grep -cF 'members = [f for f in _tracked()[0] if f.startswith(pre)]' "$TESTROOT/oracle-k6m6.py")
 sed -i 's|f.startswith(pre)|os.path.dirname(f) == p|' "$TESTROOT/oracle-k6m6.py"
-_k6m6=$(cd "$_k6m6_repo" && python3 - "$TESTROOT/oracle-k6m6.py" <<'COVPY'
+_k6m6=$( for _v in "${!GIT_@}"; do unset "$_v"; done; cd "$_k6m6_repo" && python3 - "$TESTROOT/oracle-k6m6.py" <<'COVPY'
 import sys, importlib.util
 spec = importlib.util.spec_from_file_location("o", sys.argv[1]); o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
 KB = "knowledge" + "-base"
@@ -926,7 +926,7 @@ cases=$((cases + 1))
 cp "$ORACLE" "$TESTROOT/oracle-k6m7.py"
 _k6m7_n=$(grep -cF 'if p in _tracked()[1] or os.path.isdir(p):' "$TESTROOT/oracle-k6m7.py")
 sed -i 's|if p in _tracked()\[1\] or os.path.isdir(p):|if os.path.isdir(p):|' "$TESTROOT/oracle-k6m7.py"
-_k6m7=$(cd "$_k6m6_repo" && python3 - "$TESTROOT/oracle-k6m7.py" <<'COVPY'
+_k6m7=$( for _v in "${!GIT_@}"; do unset "$_v"; done; cd "$_k6m6_repo" && python3 - "$TESTROOT/oracle-k6m7.py" <<'COVPY'
 import sys, importlib.util
 spec = importlib.util.spec_from_file_location("o", sys.argv[1]); o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
 KB = "knowledge" + "-base"
@@ -936,7 +936,7 @@ print(" ".join("1" if o.covers(e, p) else "0" for e, p in [
 ]))
 COVPY
 )
-_k6m7_real=$(cd "$_k6m6_repo" && python3 - "$ORACLE" <<'COVPY'
+_k6m7_real=$( for _v in "${!GIT_@}"; do unset "$_v"; done; cd "$_k6m6_repo" && python3 - "$ORACLE" <<'COVPY'
 import sys, importlib.util
 spec = importlib.util.spec_from_file_location("o", sys.argv[1]); o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
 KB = "knowledge" + "-base"
