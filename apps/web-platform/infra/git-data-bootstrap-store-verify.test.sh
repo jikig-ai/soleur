@@ -1389,7 +1389,8 @@ new_fixture aw1-late-2
 late_link 2
 run_unit "$UNIT"
 ok "$((RC != 0))" "AW1 a link that lands on the 2nd sleep proceeds (rc=$RC)" "$(cat "$FX/err")"
-ok "$([ "$(verdict_line)" = "$AW_ONTIME" ]; echo $?)" "AW1 the verdict equals the on-time run's" "late=$(verdict_line) ontime=$AW_ONTIME"
+_aw_late="$(verdict_line)"; _aw_same=1; [ "$_aw_late" != "$AW_ONTIME" ] || _aw_same=0
+ok "$_aw_same" "AW1 the verdict equals the on-time run's" "late=$_aw_late ontime=$AW_ONTIME"
 ok "$(( $(sleeps) != 2 ))" "AW1 exactly two sleeps ran (got $(sleeps))"
 ok "$(grep -q 'appeared after 20s' "$FX/err"; echo $?)" "AW1 the resolution was logged with the elapsed time" "$(cat "$FX/err")"
 ok "$(origin_calls_bad)" "AW1 every call naming the origin is allowlisted and ordered (Guard 1 row 7)" "$(grep -F -e "$FX/dev/vol" -e "$FX/dev/by-id" "$FX/calls.log")"
