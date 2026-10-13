@@ -222,6 +222,10 @@ add_leaf sh-seccomp-alert       'bash scripts/seccomp-unenforced-alert.test.sh' 
 add_leaf sh-sentry-issue        'bash scripts/sentry-issue.test.sh' sh
 add_leaf sh-content-publisher   'bash scripts/test-content-publisher.sh' sh
 add_leaf sh-watch-live-verify   'bash scripts/watch-live-verify-pass.test.sh' sh
+# (#7004) 12 mktemp sites under a growing four-arm EXIT trap; the begin+splice
+# adoption confines direct-run residue (the measured inngest-ci-*/inngest-arm-*
+# kill-residue classes) to an owned soleur-run.<pid>.* root.
+add_leaf sh-cloud-init-inngest  'bash apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh' sh
 add_leaf py-unittest            'python3 -m unittest tests.scripts.test_lint_rule_ids'
 add_leaf py-pytest-configure    'python3 -c "import tests.conftest as c; c.pytest_configure()"'
 VITEST_BIN="$REPO_ROOT/apps/web-platform/node_modules/.bin/vitest"
@@ -324,10 +328,16 @@ verdict "$([[ "$n_noop" == "0" ]] && echo 0 || echo 1)" "H3: a no-op runtime lea
 REAL_MKTEMP="$(command -v mktemp)"
 assert_fixture_dir "$BASE"
 mkdir -p "$BASE/shim"
-cat > "$BASE/shim/mktemp" <<'SHIMEOF'
+cat > "$BASE/shim/mktemp" <<SHIMEOF
 #!/bin/sh
-printf 'x\n' >> "$SOLEUR_SHIM_LOG"
-exec "$SOLEUR_REAL_MKTEMP" "$@"
+# The env-carried SOLEUR_SHIM_LOG/SOLEUR_REAL_MKTEMP are wiped when a leaf
+# sandboxes a child with \`env -i\` (cloud-init-inngest-bootstrap.test.sh's G4
+# runner does) while the shim stays on the inherited PATH — the old form then
+# ran \`exec ""\` and the LEAF failed 127, an instrument breaking the measured
+# system. The real mktemp path is baked in at creation; the count line is
+# skipped (never fails) when the log var is gone.
+[ -n "\${SOLEUR_SHIM_LOG:-}" ] && printf 'x\n' >> "\$SOLEUR_SHIM_LOG"
+exec "$REAL_MKTEMP" "\$@"
 SHIMEOF
 export SOLEUR_REAL_MKTEMP="$REAL_MKTEMP"
 chmod +x "$BASE/shim/mktemp"

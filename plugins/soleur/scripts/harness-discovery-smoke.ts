@@ -29,6 +29,16 @@ import { randomBytes } from "crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
+import { ensureScratchSession } from "../test/lib/scratch-session";
+
+// Bind a per-process scratch session root (#7004, ADR-250) BEFORE anything
+// allocates: this script runs via `bun <file>` (ci.yml), where the bunfig
+// [test].preload does NOT run, so this statement IS the adoption — scratchDir()
+// below then lands every harness-discovery-* home/repo under an owned
+// soleur-run.<pid>.* root the reapers can attribute when a run is SIGKILLed
+// (clean exits were already covered by SCRATCH[]/cleanupScratch()). A nested
+// run under a runner inherits the parent's root and never deletes it.
+ensureScratchSession();
 
 export const REPO_ROOT = resolve(import.meta.dir, "../../..");
 const PLUGIN_ROOT = resolve(REPO_ROOT, "plugins/soleur");
