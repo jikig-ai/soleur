@@ -109,9 +109,20 @@ check_verdict "R5 failed rotate (apply failure, job failure)" rotate_failed \
   "$(fx "$JOB" failure "$(steps "$PRE|success" "$APPLY|failure" "$MARK|skipped")")"
 check_verdict "R6 cancelled mid-apply" rotate_failed \
   "$(fx "$JOB" cancelled "$(steps "$PRE|success" "$APPLY|cancelled" "$MARK|skipped")")"
+# R5b — the shape of run 38140050880 (a real failed rotate recorded BEFORE PR #10155): its apply step carries
+# the old name, so it is ABSENT under the constants. Absence is name drift, not "nothing happened".
+LEGACY_APPLY="Terraform apply (git-data-host -replace) — both-volumes-preserved assert"
+check_verdict "R5b failed rotate recorded under the pre-#10155 apply step name" rotate_failed \
+  "$(fx "$JOB" failure "$(steps "$PRE|success" "$LEGACY_APPLY|failure" "$MARK|skipped")")"
+# R6b — cancelled or timed out while the apply step was running: the step is listed with no conclusion.
+check_verdict "R6b apply step listed with no conclusion (cancelled mid-flight)" rotate_failed \
+  "$(fx "$JOB" cancelled "$(steps "$PRE|success" "$APPLY|null" "$MARK|skipped")")"
 # R7 — refused at the precondition: nothing was mutated, so it must NOT block (the false-block guard).
 check_verdict "R7 refused at the precondition" skip \
   "$(fx "$JOB" failure "$(steps "$PRE|failure" "$APPLY|skipped" "$MARK|skipped")")"
+# R7b — a FAILED PLAIN replace (precondition skipped, apply ran and failed) is not a rotate attempt.
+check_verdict "R7b failed plain replace" skip \
+  "$(fx "$JOB" failure "$(steps "$PRE|skipped" "$APPLY|failure" "$MARK|skipped")")"
 # R8 — cancelled before the apply began.
 check_verdict "R8 cancelled during the plan step" skip \
   "$(fx "$JOB" cancelled "$(steps "$PRE|success" "$APPLY|skipped" "$MARK|skipped")")"
@@ -186,6 +197,8 @@ S3="$(run_scan $'301\tcompleted\n300\tcompleted')"
 grep -qxF '300' "$GH_CALLS" && fail "S3: the older stamped run 300 was consulted after an unreadable newest run" || pass "S3 the older run is NOT consulted after an unreadable newest run"
 put 302 ''   # an empty body is also unreadable
 check_scan "S3b empty body from gh" "d6_run_unreadable 302" 1 $'302\tcompleted\n300\tcompleted'
+put 303 'null'   # a body gh returned fine but the classifier cannot read: the `unreadable` token path
+check_scan "S3c malformed body reaches the classifier and stops the scan" "d6_run_unreadable 303" 1 $'303\tcompleted\n300\tcompleted'
 
 put 400 "$inflight_body"; put 399 "$stamped_body"
 check_scan "S4 newest in flight" "d6_rotate_in_flight 400" 1 $'400\tin_progress\n399\tcompleted'
@@ -193,6 +206,10 @@ check_scan "S4 newest in flight" "d6_rotate_in_flight 400" 1 $'400\tin_progress\
 put 500 '{"jobs":[]}'; put 499 "$stamped_body"
 check_scan "S5 queued run with no jobs" "d6_rotate_in_flight 500" 1 $'500\tqueued\n499\tcompleted'
 check_scan "S5b COMPLETED run with no jobs (startup failure) is skipped" "d6_stamped 499" 0 $'500\tcompleted\n499\tcompleted'
+put 510 "$(fx "${JOB}_other" null "$(steps)")"; put 509 "$stamped_body"
+check_scan "S5c in-progress run that lists other jobs but not ours" "d6_rotate_in_flight 510" 1 $'510\tin_progress\n509\tcompleted'
+put 520 "$plain_body"
+check_scan "S5d in-progress run whose job is present and settled does not block" "d6_stamped 509" 0 $'520\tin_progress\n509\tcompleted'
 
 put 600 "$plain_body"; put 599 "$plain_body"
 check_scan "S6 only plain replaces" "d6_replace_stale" 1 $'600\tcompleted\n599\tcompleted'
@@ -205,7 +222,11 @@ check_scan "S7 a rotate refused at the precondition does not block" "d6_stamped 
 put 800 "$plain_body"; put 799 "$plain_body"; put 798 "$stamped_body"; put 797 "$stamped_body"
 got="$(run_scan $'800\tcompleted\n799\tcompleted\n798\tcompleted\n797\tcompleted')"
 [[ "$got" == "d6_stamped 798|0" ]] && pass "S8 the newest stamp wins and the scan stops there" || fail "S8: got '$got'"
-[[ "$(cat "$GH_CALLS" | tr '\n' ' ')" == "800 799 798 " ]] && pass "S8 three runs consulted, in order, none after the stamp" || fail "S8: calls were '$(tr '\n' ' ' < "$GH_CALLS")'"
+[[ "$(tr '\n' ' ' < "$GH_CALLS")" == "800 799 798 " ]] && pass "S8 three runs consulted, in order, none after the stamp" || fail "S8: calls were '$(tr '\n' ' ' < "$GH_CALLS")'"
+
+# A non-numeric id is not a run id: it stops the scan and never reaches gh.
+got="$(run_scan $'abc\tcompleted\n300\tcompleted')"
+[[ "$got" == "d6_run_unreadable|1" && ! -s "$GH_CALLS" ]] && pass "S9 a non-numeric id stops the scan before gh is called" || fail "S9: got '$got', gh calls: $(tr '\n' ' ' < "$GH_CALLS")"
 
 [[ ! -s "$GH_REFUSED" ]] && pass "the gh function never refused an argv (the library only calls gh run view <id> --json jobs)" \
   || fail "the gh function refused: $(tr '\n' ';' < "$GH_REFUSED")"
@@ -248,7 +269,10 @@ mutate_and_expect_red "M3 a gh failure -> continue" \
   's/then echo "d6_run_unreadable \$rid"; return 1; fi/then continue; fi/' probe_scan "d6_run_unreadable 301" $'301\tcompleted\n300\tcompleted'
 # shellcheck disable=SC2016
 mutate_and_expect_red "M4 the unrecognised-token arm -> continue" \
-  's/^\( *\)\*) echo "d6_run_unreadable \$rid"; return 1 ;;/\1*) continue ;;/' probe_unrecognised "d6_run_unreadable 300"
+  's/^\( *\)unreadable|\*) echo "d6_run_unreadable \$rid"; return 1 ;;/\1unreadable|*) continue ;;/' probe_unrecognised "d6_run_unreadable 300"
+# shellcheck disable=SC2016
+mutate_and_expect_red "M5 the </dev/null on the gh call (what actually protects the id stream)" \
+  's/--json jobs <\/dev\/null 2>\/dev\/null/--json jobs 2>\/dev\/null/' probe_scan "d6_stamped 798" $'800\tcompleted\n799\tcompleted\n798\tcompleted\n797\tcompleted'
 
 # ---------------------------------------------------------------------------------------------------
 # Verdicts, with the floor in the form guard-vacuity-floor.test.sh can mutate.
@@ -259,7 +283,7 @@ printf '\ngit-data-rotate-stamp.test.sh: %d passed, %d failed\n' "$PASS" "$FAIL"
 # asserts PASS==1 at that point, which proves the literal.
 SELFTEST_PASSES=1
 REAL=$(( PASS - SELFTEST_PASSES ))
-MIN_ASSERTIONS=45
+MIN_ASSERTIONS=53
 if [[ "$REAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity assertion floor: only %d real assertion(s) ran (PASS=%d minus %d self-test), expected >= %d.\n' \
     "$REAL" "$PASS" "$SELFTEST_PASSES" "$MIN_ASSERTIONS" >&2

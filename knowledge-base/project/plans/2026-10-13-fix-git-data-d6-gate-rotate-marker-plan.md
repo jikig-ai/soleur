@@ -154,6 +154,13 @@ Cut List (mechanisms considered and removed):
 - **If this lands broken, the user experiences:** a cutover (`flip`) that proceeds without a proven key rotation, so the
   predecessor-host exposure window for their repositories is not closed; or, if it fails closed wrongly, a blocked flip
   that only delays the migration (an operator re-dispatch, no data effect).
+- **Artifacts and vectors (review amendment 2026-10-13):** user repository content on the LUKS-served store
+  and the retained plaintext predecessor volume (vector: a fail-open stamp lets the flip run without a proven
+  rotation); the LUKS passphrase lifecycle (vector: a failed newest rotate masked by an older success, or a
+  stamp surviving a later plain replace, which is an accepted residual: the stamp attests a rotate job
+  completed, not escrow state, and re-escrow #9949 is not claimed); the flip operator (vector: a sticky
+  `d6_last_rotate_failed` that only a newer successful rotate clears pushes towards a bypass, so no bypass
+  input exists and the runbook documents the exit).
 - **If this leaks, the user's data is exposed via:** no new surface. The change reads run state with the existing
   `actions: read` token, prints only step names, run ids and verdict tokens, and touches no credential, plan value or
   host. The exposure risk is the fail-open gate itself.
@@ -197,7 +204,7 @@ Guard Contract matrix (the lint requires >= 3 rows).
 liveness_signal:
   what: the flip precondition prints one verdict line per scan - d6 rotate stamp run <id>, or a fail with verdict=d6_*
   cadence: per git-data-cutover flip dispatch
-  alert_target: the dispatching operator via the failed run, and the existing notify-failure job (issue plus ops email)
+  alert_target: the dispatching operator via the failed run's annotations (the notify-failure job's issue and email carry the verdict words of its own steps, not the d6_* tokens)
   configured_in: .github/workflows/git-data-cutover.yml (flip_preconditions step) and scripts/lib/git-data-rotate-stamp.sh
 error_reporting:
   destination: GitHub Actions annotation ::error title=git-data-cutover preconditions::verdict=<token>
@@ -576,3 +583,16 @@ exempt because every pin runs on comment-stripped text (and a lib/workflow comme
 - The suite's `MIN_ASSERTIONS` must be set from the final measured run (`scripts/guard-vacuity-floor.test.sh` checks it mechanically); the repo-global
   ratchets (guard-vacuity ledger, discoverability counts) may move and are left to CI.
 - No operator step, no dispatch, no Doppler write anywhere in this plan; the rotate re-dispatch belongs to #10138.
+
+## Review Amendments (2026-10-13, 12-seat panel)
+
+- A failed rotate recorded under a drifted apply-step name, or with the apply step listed but never concluded,
+  now reads `rotate_failed` (an explicit `skipped` apply is the only skip): the pre-#10155 run 38140050880 shape.
+- A not-completed run that lists no `git_data_host_replace` job is `in flight`, not skipped; a non-numeric id never
+  reaches gh; the gate sanitises the run id it echoes and its remedies now name the commands and the exits.
+- Pins added: no job-level `name:`, no `continue-on-error` on any step of the job, no marker-named step or
+  same-named job elsewhere, the census gate-name regex mirrored, and the gate's d6 block is EXECUTED against a
+  modelled `gh` (case-arm bodies, `--event`/`--limit`/field order, post-scan reassignment).
+- Accepted residuals, recorded in the runbook: operator re-run of a rotate run overwrites its failed attempt's
+  record; the 100-run window counts every target; a deleted run record unmasks an older stamp; the stamp does not
+  attest escrow state. `--limit` was not raised (worst case is already 101 sequential calls).

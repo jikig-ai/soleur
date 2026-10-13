@@ -265,8 +265,9 @@ jobs:
           # failure, so only a real git-data-host-rotate run (the only arm that re-mints
           # GIT_DATA_LUKS_KEY) can carry it. The old match on the `rotate confirm token`
           # step is gone: that step is unconditional and concludes success with
-          # `rotate confirm: n/a` on EVERY target. The newest rotate ATTEMPT decides — a
-          # failed or cancelled newest rotate blocks, and an older success cannot mask it;
+          # `rotate confirm: n/a` on every non-rotate target. The newest rotate ATTEMPT decides — a
+          # failed or cancelled newest rotate (once its apply began) blocks, and an older success
+          # cannot mask it;
           # a run that cannot be read or is still running stops the scan instead of being
           # skipped. The decision logic is scripts/lib/git-data-rotate-stamp.sh (unit-tested
           # offline); it is sourced from the dispatched ref's checkout, the same trust
@@ -282,12 +283,15 @@ jobs:
           # with its fail-closed `*)` arm (which also catches an empty capture), is the control.
           d6="$(git_data_d6_scan <<<"$ids")" || true
           last_ok=""
+          # The run id the scan named, only ever a number (the lib echoes nothing else); "n/a" when it named none.
+          d6_run="${d6#* }"
+          [[ "$d6_run" != "$d6" && "$d6_run" =~ ^[0-9]+$ ]] || d6_run="n/a"
           case "${d6%% *}" in
-            d6_stamped) last_ok="${d6#* }"; echo "d6 rotate stamp: run $last_ok" ;;
-            d6_last_rotate_failed) fail d6_last_rotate_failed "the newest rotate attempt (run ${d6#* }) did not complete, so host and key state are uncertain; an older success does not discharge D6 — read that run and the runbook, repair, and re-dispatch the rotate (a newer successful rotate supersedes it)." ;;
-            d6_rotate_in_flight) fail d6_rotate_in_flight "a git-data replace or rotate run (${d6#* }) is running, queued or waiting for approval — re-dispatch the flip once it completes (cancel a stale waiting run)." ;;
-            d6_run_unreadable) fail d6_run_unreadable "run state could not be read (${d6#* }) — re-dispatch the flip." ;;
-            d6_replace_stale) fail d6_replace_stale "no successful git-data-host-rotate run carrying the rotate marker among the 100 newest dispatch runs (runs that predate the marker cannot qualify) — dispatch apply_target=git-data-host-rotate (confirm=ROTATE-GIT-DATA) from main first." ;;
+            d6_stamped) last_ok="$d6_run"; echo "d6 rotate stamp: run $last_ok" ;;
+            d6_last_rotate_failed) fail d6_last_rotate_failed "the newest rotate attempt (run ${d6_run}) did not complete after its apply began, so host and key state are uncertain; an older success does not discharge D6. Read it with 'gh run view ${d6_run} --log-failed' and the runbook, repair, and dispatch a fresh rotate: only a newer successful rotate supersedes it (re-running the failed run does not, and neither does a rotate refused at its precondition); the block also ends once the failed run leaves the 100-run window." ;;
+            d6_rotate_in_flight) fail d6_rotate_in_flight "a git-data replace or rotate run (${d6_run}) is running, queued or waiting for approval, so its target cannot be read yet — re-dispatch the flip once it completes; cancel a stale waiting run with 'gh run cancel ${d6_run}'." ;;
+            d6_run_unreadable) fail d6_run_unreadable "run state could not be read (run ${d6_run}) — run 'gh run view ${d6_run} --json jobs' to see why, then re-dispatch the flip." ;;
+            d6_replace_stale) fail d6_replace_stale "no successful git-data-host-rotate run carrying the rotate marker among the 100 newest dispatch runs. Runs that predate the marker cannot qualify, and a rotate older than the window is not visible, so re-dispatch it from main: gh workflow run apply-web-platform-infra.yml --ref main -f apply_target=git-data-host-rotate -f confirm=ROTATE-GIT-DATA -f reason='<why>' (a rotate is destructive: fresh host, re-minted key)." ;;
             *) fail d6_run_unreadable "unrecognised d6 scan result '${d6//[^A-Za-z0-9_ ]/?}' — re-dispatch the flip." ;;
           esac
           # deploy_in_flight: no web-1-swap member running/queued (a concurrent

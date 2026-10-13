@@ -4175,9 +4175,10 @@ jobs:
         # (#10166) Read by git-data-cutover.yml's d6_replace_stale gate through scripts/lib/git-data-rotate-stamp.sh.
         # LAST step, no always(), no continue-on-error: the implicit success() makes "marker success" mean
         # "every earlier step, including Dispatch summary's exit 1 backstops, succeeded". Skipped on a plain
-        # replace, on a plan-only rotate and after any failure. Its name carries neither "Validate" nor
-        # "confirm" (census G5 gate-name patterns); the comment sits INSIDE the step because extractStep cuts
-        # at the next `- name:`, so a comment above it would attach to Dispatch summary's block.
+        # replace, on a plan-only rotate and after any failure. Its name matches none of the census G5
+        # gate-name patterns (interlock, validate dispatch, verify required, preflight) and carries neither
+        # "Validate" nor "confirm" (the #10166 ruling); the comment sits INSIDE the step because extractStep
+        # cuts at the next `- name:`, so a comment above it would attach to Dispatch summary's block.
         if: inputs.apply_target == 'git-data-host-rotate' && inputs.plan_only != true
         run: echo "git-data-host-rotate completed - apply, boot poll, pin load and summary succeeded (the d6 marker)"
 

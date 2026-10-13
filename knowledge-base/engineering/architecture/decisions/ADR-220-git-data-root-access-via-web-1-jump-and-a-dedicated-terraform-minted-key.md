@@ -668,11 +668,14 @@ cannot discharge D6 because it re-mints no LUKS key.
 
 > **Corrected 2026-10-13 (#10166).** The sentence above named a "rotate-confirm marker step" that did not
 > discriminate: `Validate dispatch inputs (rotate confirm token)` is unconditional and concludes `success`
-> with `rotate confirm: n/a` on every target, so a plain replace or a plan-only rotate satisfied the gate.
-> The marker is now the last step of `git_data_host_replace`, `Rotate completed (d6 marker)`, skipped unless
-> the dispatch is a non-plan-only `git-data-host-rotate`; the gate reads it through
-> `scripts/lib/git-data-rotate-stamp.sh`, and a failed or unreadable newest rotate attempt blocks instead of
-> being skipped. Runs that predate the marker cannot qualify. No decision changes; the proof is the same one.
+> (printing `rotate confirm: n/a` on every non-rotate target), so a plain replace or a plan-only rotate
+> satisfied the gate. The marker is now the last step of `git_data_host_replace`,
+> `Rotate completed (d6 marker)`, skipped unless the dispatch is a non-plan-only `git-data-host-rotate`; the
+> gate reads it through `scripts/lib/git-data-rotate-stamp.sh`, and a failed or unreadable newest rotate
+> attempt (once its apply began) blocks instead of being skipped. Runs that predate the marker cannot
+> qualify. The stamp attests that a rotate job completed; it does not attest key-escrow state, and a later
+> plain replace does not invalidate it (a plain replace never re-mints the key). No decision changes; the
+> proof is the same one.
 
 ### 2026-09-27 (#8211 PR2): the store probes read the LUKS-served store
 
