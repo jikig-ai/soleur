@@ -3,7 +3,7 @@ title: Focused qualification boundary preparation review
 date: 2026-10-12
 pr: 9051
 source_sha: ca627f794f7a68cc4afcb685bef3f53d1eacc436
-status: focused-findings-fix-and-verification-pending
+status: seven-focused-findings-source-verified-operational-candidate-pending
 ---
 
 # Focused review scope
@@ -43,6 +43,35 @@ roles with no added capabilities or host networking; runtime observation is
 still owed. Dissent: no independent dissent collected.
 
 ## Disposition limits
+
+### Source verification — 2026-10-13
+
+At pushed `a42d5e94fb2acc7923fd6b4695f73f1925481952`, a fresh code-quality
+verifier independently closed all seven ledger rows within preparation source
+and synthetic-fixture scope, with no new concrete same-area finding. It ran
+37 tests across six modules, repeated both cleanup transition schedules against
+the old and corrected sources, and forced delayed fatal publication after
+backend EOF to verify the repaired stdin synchronization. Root's complete
+offline wrapper passed with inherited `PYTHONOPTIMIZE=1`; no assertion-erasure
+environment was accepted. Schema guardian independently verified the exact
+canonical runner identity and found no unresolved concrete finding in the
+prepared SQL source. No SQL was evaluated.
+
+Main through `41b8801ad8e8e19ec41cbb79c98e9a77f06620d9` and then
+`943ebacc2d1e7fc5f8e0f7fc7f47110447aff35a` was merged. The first resolution
+recomputed the three merged legal-document hashes and retained main's safe
+temporary-directory pattern alongside the existing CI-only-test procedure.
+The second retained the new control-intake evidence in main's historical
+rollout archive and repointed active references. Both merges leave the
+qualification components and canonical runner unchanged. Incoming runtime,
+plugin and schema inputs still require fresh source fingerprints; preceding
+previews remain historical. No incoming runtime/deployment/SQL command ran.
+
+Current-head CI identified `role_profiles.py` as an unpinned Supabase Management
+API caller solely because its environment ban names the access token. The
+existing dated non-caller mechanism records this pure policy file; the scanner
+still requires zero Management API sites for it. No real caller or host check
+is exempted. Full pushed-head CI and final-description guards remain separate.
 
 No Docker, image pull/build/retry, application/database startup, SQL execution,
 authentication, credentials/provider/account/shared write, deployment or

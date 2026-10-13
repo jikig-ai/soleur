@@ -97,3 +97,16 @@ No claim of a complete or independently reviewed rehearsal is made here.
 Hosted App Server authentication remains BLOCKED in both modes. A different
 API-funded route remains PENDING. Default-off, draft/disarmed, customer-content,
 credential, account/shared-write, deployment and cohort restrictions persist.
+
+`candidate.py --repo <worktree> --source-sha <full-HEAD-SHA> --directory <fresh-task-directory> --assemble`
+exports the exact committed full-production context and complete vendored plugin
+using no-follow descriptor-relative writes. It preserves the original Dockerfile
+and writes the controlled one separately. Every exported byte/mode/link and the
+file inventory are checked before a preparation receipt. `--preview` writes
+nothing and prints metadata only. Both modes bind the executing preparation
+source; existing or escaping destinations refuse. No Docker or builder command
+is executed. The saved recipe contains only public synthetic browser build
+values and proposes a clean HOME/Docker configuration. It remains explicitly
+unreviewed for builder/daemon, dependency network and resource admission, and
+grants no build/rehearsal authorization. It is an exported candidate context,
+not a built or authenticated production candidate.

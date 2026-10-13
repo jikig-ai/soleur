@@ -138,6 +138,7 @@ DENY=(
 # covering it and this guard reds. The allowlist buys "this file is not a caller", never
 # "this file is exempt".
 ALLOWLIST=(
+  'scripts/codex-qualification/role_profiles.py|2026-10-13|pure controller profile admission: SUPABASE_ACCESS_TOKEN is forbidden environment metadata only; no socket, HTTP client or Management API call'
   'scripts/codex-qualification/api_policy.py|2026-10-12|pure Docker request admission: SUPABASE_ACCESS_TOKEN occurs only in the environment denylist; opens no socket and makes no Management API call'
   'scripts/codex-qualification/test_ownership_exec.py|2026-10-12|synthetic negative exec-environment fixture: SUPABASE_ACCESS_TOKEN must be refused before forwarding; no socket or HTTP client'
   'scripts/codex-qualification/test_resource_ownership.py|2026-10-12|synthetic negative container-environment fixture: SUPABASE_ACCESS_TOKEN must be refused; pure policy calls only, no socket or HTTP client'
