@@ -149,10 +149,8 @@ DECLARATION_FILES = ("scripts/lib/test-affected-paths.sh", "scripts/lib/test-rel
 _TRACKED = None
 
 
-def tracked(p):
-    """A path counts as existing only when git TRACKS it (a file, or a directory with a tracked file
-    below it): the baseline must not depend on a generated, gitignored file such as
-    knowledge-base/INDEX.md that one checkout has and a fresh CI checkout does not."""
+def _tracked():
+    """Populate _TRACKED once and return the (files, dirs) pair."""
     global _TRACKED
     if _TRACKED is None:
         import subprocess
@@ -165,7 +163,14 @@ def tracked(p):
                 d = d.rsplit("/", 1)[0]
                 dirs.add(d)
         _TRACKED = (set(files), dirs)
-    files, dirs = _TRACKED
+    return _TRACKED
+
+
+def tracked(p):
+    """A path counts as existing only when git TRACKS it (a file, or a directory with a tracked file
+    below it): the baseline must not depend on a generated, gitignored file such as
+    knowledge-base/INDEX.md that one checkout has and a fresh CI checkout does not."""
+    files, dirs = _tracked()
     return p in files or p in dirs
 
 
@@ -286,17 +291,18 @@ def covers(edge, p):
                 return True
             if os.path.isdir(p):
                 # A dir ref is covered iff EVERY tracked member beneath it
-                # matches the glob tail — path nesting alone certifies nothing
-                # (#10117). The nest approximation this replaced certified a
-                # dir whose charged file classes the tail declines (e.g. a
-                # knowledge-base read charged against **.sh while the suite
-                # reads .md/.yml beneath it). _TRACKED is the
+                # matches the minted glob — path nesting alone certifies
+                # nothing (#10117). The nest approximation this replaced
+                # certified a dir whose charged file classes the tail declines
+                # (e.g. a knowledge-base read charged against **.sh while the
+                # suite reads .md/.yml beneath it). Members come from the
                 # `git ls-files -- knowledge-base` materialization — the census
                 # domain is index-defined, so a dir with no tracked members
-                # declines rather than vacuously covering via all([]).
-                tracked(p)  # populate the memoized (files, dirs) pair
-                files, _ = _TRACKED
-                members = [f for f in files if f.startswith(p.rstrip("/") + "/")]
+                # declines rather than vacuously covering via all([]) (the
+                # empty case is only reachable via direct covers() probes —
+                # scan()-emitted dir refs always have tracked members).
+                pre = p + "/"
+                members = [f for f in _tracked()[0] if f.startswith(pre)]
                 return bool(members) and all(fnmatch.fnmatchcase(f, g) for f in members)
             return fnmatch.fnmatchcase(p, g)
         if e.endswith("/"):
@@ -713,6 +719,12 @@ _k5=$(cd "$REPO_ROOT" && python3 - "$ORACLE" <<'COVPY'
 import sys, importlib.util
 spec = importlib.util.spec_from_file_location("o", sys.argv[1]); o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
 KB = "knowledge" + "-base"
+# Synthetic sibling dir injected into the index materialization: no
+# knowledge-base/legal-x/ exists in the tree, and without a member there the
+# boundary mutant (member prefix losing its trailing slash) is indistinguishable
+# — legal-x/evil.sh would leak into a legal/ dir ref only under that mutant.
+o._TRACKED = (o._tracked()[0] | {KB + "/legal-x/evil.sh"},
+              o._tracked()[1] | {KB + "/legal-x"})
 tests = [
     ("^glob:" + KB + "/**.sh", KB + "/x.sh"),
     ("^glob:" + KB + "/**.sh", KB + "/a/b/c.sh"),
@@ -729,14 +741,19 @@ tests = [
     ("^glob:" + KB + "/**.sh", "plugins/soleur"),   # non-kb dir ref — decline
     ("^glob:" + KB + "/**.md", "docs"),             # dir with zero kb members — decline
     ("^glob:" + KB + "/**.md", KB + "/legal/audits"),  # nested member depth via ** — accept
+    ("^glob:../x/*.sh", KB + "/x.sh"),              # ../-head → always-cover
+    ("^glob:" + KB + "/x", KB + "/x"),              # *-less tail → always-cover
+    ("^glob:" + KB + "/x*/", "anywhere/file"),      # /-ending tail → always-cover
+    ("^glob:foo*.sh", KB + "/legal"),               # non-/ head → always-cover
+    ("^glob:" + KB + "/**.md", KB + "/legal/art-22-assessments"),  # single-member dir → accept
 ]
 print(" ".join("1" if o.covers(e, p) else "0" for e, p in tests))
 COVPY
 )
-if [[ "$_k5" == "1 1 0 0 1 1 1 0 0 1 0 0 0 0 1" ]]; then
+if [[ "$_k5" == "1 1 0 0 1 1 1 0 0 1 0 0 0 0 1 1 1 1 1 1" ]]; then
   pass "k5: ^glob: covers .sh at any depth, declines .md/out-of-head/mixed-or-memberless dir refs, always-covers malformed mints"
 else
-  fail "k5: got '${_k5}' (want 1 1 0 0 1 1 1 0 0 1 0 0 0 0 1)"
+  fail "k5: got '${_k5}' (want 1 1 0 0 1 1 1 0 0 1 0 0 0 0 1 1 1 1 1 1)"
 fi
 
 # k6 (Guard 3, #10117) — mutation dispatch over the dir-ref all-containment arm.
@@ -748,7 +765,7 @@ fi
 #        nest" verdict; it re-covers the mixed-member dir the new arm declines.
 cases=$((cases + 1))
 cp "$ORACLE" "$TESTROOT/oracle-k6m1.py"
-_k6m1_n=$(grep -c 'return bool(members) and all(fnmatch.fnmatchcase(f, g) for f in members)' "$TESTROOT/oracle-k6m1.py")
+_k6m1_n=$(grep -cF 'return bool(members) and all(fnmatch.fnmatchcase(f, g) for f in members)' "$TESTROOT/oracle-k6m1.py")
 sed -i 's|return bool(members) and all(fnmatch.fnmatchcase(f, g) for f in members)|return p.startswith(head) or head.startswith(p.rstrip("/") + "/")|' "$TESTROOT/oracle-k6m1.py"
 _k6m1=$(cd "$REPO_ROOT" && python3 - "$TESTROOT/oracle-k6m1.py" <<'COVPY'
 import sys, importlib.util
@@ -770,7 +787,7 @@ fi
 #        uncovered; any() would certify it (second-member defect class).
 cases=$((cases + 1))
 cp "$ORACLE" "$TESTROOT/oracle-k6m2.py"
-_k6m2_n=$(grep -c 'return bool(members) and all(fnmatch.fnmatchcase(f, g) for f in members)' "$TESTROOT/oracle-k6m2.py")
+_k6m2_n=$(grep -cF 'return bool(members) and all(fnmatch.fnmatchcase(f, g) for f in members)' "$TESTROOT/oracle-k6m2.py")
 sed -i 's|return bool(members) and all(fnmatch.fnmatchcase(f, g) for f in members)|return bool(members) and any(fnmatch.fnmatchcase(f, g) for f in members)|' "$TESTROOT/oracle-k6m2.py"
 _k6m2=$(cd "$REPO_ROOT" && python3 - "$TESTROOT/oracle-k6m2.py" <<'COVPY'
 import sys, importlib.util
@@ -793,7 +810,7 @@ fi
 #        on disk, holds no kb-tracked files).
 cases=$((cases + 1))
 cp "$ORACLE" "$TESTROOT/oracle-k6m3.py"
-_k6m3_n=$(grep -c 'return bool(members) and all(fnmatch.fnmatchcase(f, g) for f in members)' "$TESTROOT/oracle-k6m3.py")
+_k6m3_n=$(grep -cF 'return bool(members) and all(fnmatch.fnmatchcase(f, g) for f in members)' "$TESTROOT/oracle-k6m3.py")
 sed -i 's|return bool(members) and all(fnmatch.fnmatchcase(f, g) for f in members)|return all(fnmatch.fnmatchcase(f, g) for f in members)|' "$TESTROOT/oracle-k6m3.py"
 _k6m3=$(cd "$REPO_ROOT" && python3 - "$TESTROOT/oracle-k6m3.py" <<'COVPY'
 import sys, importlib.util
@@ -811,15 +828,40 @@ else
   fail "k6-m3: landed=$_k6m3_n mutant='${_k6m3}' (want landed=1 mutant='1 1')"
 fi
 
-# k6-m4: harness guard — the stale expectation vector (the old nest verdicts at
-#        the dir positions) must NOT match what the oracle emits; if it did,
-#        the row would be green under the old rule and the vector would bind
-#        nothing.
+# k6-m4: harness guard — pin the emitted vector's SHAPE (20 binary cells) so a
+#        crashed or empty probe can't satisfy k5's exact-match comparison
+#        vacuously ("" would merely fail the ==, but a malformed vector passing
+#        this row would mean the probe machinery itself is lying).
 cases=$((cases + 1))
-if [[ "$_k5" != "1 1 0 0 1 1 1 1 1 1 0 0 0 0 1" ]]; then
-  pass "k6-m4: the stale nest-verdict expectation does not match (the vector binds the new rule)"
+if [[ "$_k5" =~ ^([01]\ ){19}[01]$ ]]; then
+  pass "k6-m4: the k5 vector emits 20 binary cells (a crashed probe cannot satisfy the shape)"
 else
-  fail "k6-m4: oracle still emits the stale nest-clause vector — k5's expectation is unbound"
+  fail "k6-m4: k5 vector '${_k5:0:60}' is not 20 0/1 cells — the comparison may be vacuous"
+fi
+
+# k6-m5: member-boundary mutant — dropping the trailing slash from the member
+#        prefix pulls a sibling dir's members (knowledge-base/legal-x/) into a
+#        legal/ dir ref. The synthetic member is injected because no legal-x/
+#        exists in the index; without it the mutant is indistinguishable.
+cases=$((cases + 1))
+cp "$ORACLE" "$TESTROOT/oracle-k6m5.py"
+_k6m5_n=$(grep -cF 'members = [f for f in _tracked()[0] if f.startswith(pre)]' "$TESTROOT/oracle-k6m5.py")
+sed -i 's|f.startswith(pre)|f.startswith(p)|' "$TESTROOT/oracle-k6m5.py"
+_k6m5=$(cd "$REPO_ROOT" && python3 - "$TESTROOT/oracle-k6m5.py" <<'COVPY'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("o", sys.argv[1]); o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
+KB = "knowledge" + "-base"
+o._TRACKED = (o._tracked()[0] | {KB + "/legal-x/evil.sh"}, o._tracked()[1] | {KB + "/legal-x"})
+print(" ".join("1" if o.covers(e, p) else "0" for e, p in [
+    ("^glob:" + KB + "/**.md", KB + "/legal"),        # boundary mutant leaks evil.sh → 0
+    ("^glob:" + KB + "/**.md", KB + "/legal/audits"), # deeper dir unaffected → stays 1
+]))
+COVPY
+)
+if [[ "$_k6m5_n" == "1" && "$_k6m5" == "0 1" ]]; then
+  pass "k6-m5: dropping the member-prefix slash leaks a sibling member (the boundary binds)"
+else
+  fail "k6-m5: landed=$_k6m5_n mutant='${_k6m5}' (want landed=1 mutant='0 1')"
 fi
 
 # u1: the c1 predicate (the SAME function) flags UNCLASSIFIED, empty, unprefixed and reason-less classifications, and accepts a
@@ -836,7 +878,7 @@ if (( PASS + FAIL != cases )); then
   echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
   exit 2
 fi
-MIN_CASES=26
+MIN_CASES=28
 if (( cases < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran — below the $MIN_CASES floor" >&2
   exit 2
