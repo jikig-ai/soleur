@@ -14,8 +14,8 @@ requires_cpo_signoff: false
 ## Enhancement Summary
 
 **Deepened on:** 2026-10-12. **Agents/probes used:** security-sentinel, architecture-strategist,
-spec-flow-analyzer (test-design-reviewer was launched but stalled with no report after ~40 minutes; its
-scope was covered by the plan-review panel plus the prototype's fixture pitfalls), a scratch prototype of the
+spec-flow-analyzer, test-design-reviewer (report arrived last; folded into "Test-design corrections" under
+Test Scenarios), a scratch prototype of the
 resolver with a 27-row fuzz harness run on the real bare layout, the real worktree layout and under
 `bash:3.2` (docker), live `claude plugin list --json` and headless `claude -p --include-hook-events`
 probes, and the mechanical halts (user-brand 4.6, observability 4.7, PAT 4.8, guard-contract 4.11,
@@ -587,8 +587,8 @@ session start of every project.)
   budget) for every row of the T2 silent-shapes table (garbage HEAD/refs, grammar census violations, FIFO
   HEAD, sparse-NUL HEAD, over-size files, anchor misses including a dotfiles ancestor `.git`, a vendored
   `proj/plugins/soleur` with its own `.git` but no `marketplace.json`, and a deployed root without `.git`).
-- [ ] Precedence: a manifest `version` beats the checkout; a 12-hex cache directory name beats the
-  checkout; the checkout beats `unknown`.
+- [ ] Precedence: a semver manifest `version` beats the checkout; a non-semver manifest `version` falls
+  through to the checkout; the checkout beats `unknown`.
 - [ ] Zero git execution: a PATH `git` that records and fails shows `ncalls git == 0` for `--installed`
   and `--cached-latest` on every checkout fixture including the malicious-`config` one, and exactly one
   call (`ls-remote`, cwd `/`, `GIT_DIR` unset, `GIT_CONFIG_GLOBAL=/dev/null`) for `--compare`; the
@@ -783,7 +783,7 @@ including the gated real-git rows. No `e2e`.
   for `--compare`; the single gated witness row runs real `git status` on the same fixture and requires
   the fsmonitor sentinel to appear (skipped with run-deficit credit when git or the config behaviour is
   unavailable), while the resolver run leaves it absent.
-- **T4 precedence and ordering**: manifest version over checkout; 12-hex dir over checkout; reorder row.
+- **T4 precedence and ordering**: semver manifest version over checkout; non-semver manifest version falls through to checkout; reorder row (the 12-hex-dir-over-checkout case cannot be constructed: see Test-design corrections).
 - **T5 relation/cache**: tag-sha equality, ahead/behind/identical/diverged/unparseable, cache file
   `latest-release.checkout`, an entry for another commit reads `missing` and (opt-in) triggers one refresh,
   silent when unset, two checkouts alternating in the one file, curl argv carries only sha + tag, stale
@@ -797,6 +797,64 @@ including the gated real-git rows. No `e2e`.
 - **T8 docs rows**: `version.md` checkout arm content and no-GitHub-pair (anchored extraction),
   `disable-model-invocation` retained, `help.md` arm present, README sentence, legal canonical == mirror
   new sentence (tolerating both Last-Updated punctuation forms), `legal-doc-shas.ts` pins match.
+
+### Test-design corrections (deepen, test-design-reviewer; score 6.9/10 before these)
+
+- **Existing row flips.** `plugin-version.test.sh` row "plugins/soleur is not a commit dir and is keyless"
+  (`run - "$XDG" --installed`, expects `source=unknown`) falls back to `$REPO_ROOT/plugins/soleur`, which
+  becomes an anchored layout: it would print the host's real HEAD. Move it onto a sandbox copy (`mkcopy`,
+  as the neighbouring rows do); Phase 0 states this row is EXPECTED to change. Keep an explicit repo-run
+  row only with an independently computed expected value (`git rev-parse HEAD`, skip when git is absent).
+- **Run-deficit accounting.** `skip_case` gets a third argument (runs skipped) and the RUNS check becomes
+  `RUNS + SKIP_RUN_DEFICIT != MIN_RUNS`, covering the EXISTING skip sites too (the 14 `nj` jq rows and the
+  2 hung-git rows already fail the exact check on a no-jq host: measured `204 != 218`). Each gated git block
+  declares its own `GB_CASES`/`GB_RUNS` constants asserted on the run path and reused on the skip path;
+  under `${CI:-}` a missing git is a FAIL, not a skip. The hook suite gets a separate `SKIP_BANNER_DEFICIT`
+  (a skipped silent row prints no banner). State per floor whether it is `!=` or `<`.
+- **Silent table = single-field deltas of ONE base fixture**, with the base asserted to print
+  `source=checkout` once per table; the dotfiles-ancestor row uses a fully valid ancestor `.git` (resolvable
+  HEAD, distinct sha) paired with the same `.git` at `<top>/plugins/soleur` printing checkout.
+- **Dropped:** the "12-hex dir beats checkout" row (an anchored root's basename is `soleur`, so it cannot be
+  constructed) and its AC clause. Replaced by the real edge: an anchored root with a non-semver manifest
+  `version` (`"latest"`) falls through to checkout, paired with the semver-manifest row that stays `manifest`.
+- **Per-site validators:** run {39, 41, 64 hex, uppercase WITH a-f letters via `tr a-f A-F` and a
+  lowercase twin, non-hex} against each of the three 40-hex sites (detached HEAD, loose ref, packed `$1`).
+- **Real-git fixtures:** a `core.bare=true` fixture makes `git status` die before `core.fsmonitor` fires, so
+  the witness uses a SEPARATE non-bare malicious fixture and is gated by an independent probe, not the
+  code under test. Copy reality: `# pack-refs with: peeled fully-peeled sorted ` (trailing space), absolute
+  `gitdir:` plus `\n`, `commondir` `../..`, reftable HEAD `ref: refs/heads/.invalid` with `refs/heads` a
+  regular file. T7 is one loop over FOUR real shapes with a unique sha per ref and HEAD != main: normal
+  clone (loose), bare-in-`.git` clone (packed), `git worktree add`, the same worktree after `git pack-refs
+  --all`.
+- **stderr:** `{ IFS= read -r -n 512 RS; } 2>/dev/null < "$f"` (redirect order: a bare `read < f 2>/dev/null`
+  leaked `Permission denied`, reproduced). The hook-level "empty stderr" assertion can never fail (`main
+  2>/dev/null`), so stderr is asserted in the resolver suite via `OUT == "source=unknown"` exactly (`run`
+  merges `2>&1`). Unreadable rows are root-proof (dangling symlink, symlink loop, directory as HEAD); the
+  `chmod 000` row is restored with an EUID skip that declares its deficit.
+- **Cap rows discriminate:** ref FIRST in an over-cap `packed-refs` -> unknown (a ref past the cap passes
+  under silent truncation); boundary pairs `packed-refs` exactly 4194304 bytes -> checkout, 4194305 ->
+  unknown; HEAD 511 chars -> checkout, 512 -> unknown; a multibyte-filler file over the cap in bytes but
+  under it in characters (size gate counts bytes via `stat`); a FIFO `packed-refs` row where the ref exists
+  only in `packed-refs` (second chokepoint). The FIFO bound is enforced by a background writer that opens
+  the FIFO after ~6 s (so a mutant unblocks), asserts elapsed < 4 s, kills the writer pid in the row and the
+  EXIT trap, with a comment stating why the wait exists (`timeout` is absent on stock macOS).
+- **Fixture values:** non-repeating shas (e.g. `0123456789abcdef...`), a unique sha per ref, decoys in
+  `packed-refs` (`refs/heads/main2`, `refs/remotes/origin/main`, `refs/heads/feat/x-1a2...` for the `.`
+  decoy, a duplicate entry whose first sha is invalid). NUL row: assert `unknown` OR `checkout` with the
+  spliced ref's sha, rc 0, zero git calls.
+- **Hook suite:** the restricted-PATH arm uses the packed-refs shape (the only one exercising `head`/`awk`
+  from COREBIN), asserts exact banner text, zero network-binary calls and one `--installed` call, and adds a
+  control that `awk`/`head` resolve inside COREBIN while `wc`/`readlink`/`od` do not plus a sibling COREBIN
+  lacking `awk` that stays silent. Whitelist rows: fake resolver `source=checkout` with 11-hex, 13-hex,
+  uppercase and empty commits, and `source=Checkout` / `source=checkout2`, all silent. Cache rows differ
+  from the positive row in `relation_for` only.
+- **Mutation battery scoping:** rows 1, 3, 4 are applied to the function's line range with a placement
+  assertion (a file-wide `s/-f/-e/` would hit `load_cache`'s `-f "$CACHE_FILE"` and report "survived" for the
+  wrong reason); the hang row runs under `run-isolated` with `timeout -k`; an instrument control (pristine
+  exits 0, only rc 1 counts as caught) precedes reading any row. Mutation 6's vacuity floor is the per-row
+  `source=checkout` assertions plus the `RUNS` equality.
+- Layer: both suites are `unit` under the path rule (`*.test.sh`, real subprocess exception); any new
+  `settle` row states its reason. Expected cost about +5 s on the plugin-version suite (measured 9.8 s here).
 
 Verification commands (Phase 5): `bash plugins/soleur/test/plugin-version.test.sh`,
 `bash plugins/soleur/test/version-banner-hook.test.sh`, `bun test plugins/soleur/test/harness-parity-tree.test.ts

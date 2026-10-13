@@ -13,7 +13,8 @@ Plan: `knowledge-base/project/plans/2026-10-12-fix-plugin-version-checkout-ident
 - 0.2 Add the T3 malicious-config fixture + recording-stub assertions, the single gated real-git witness row, the T4 precedence/reorder rows, the T5 relation/cache rows
 - 0.3 Add the T6 hook rows to `plugins/soleur/test/version-banner-hook.test.sh` (default zero-network arm under the restricted PATH, opt-in older warning, fail-open `fo_tree` with `source=checkout`, cwd in another repo)
 - 0.4 Add the two T7 real-git parity rows (bare-in-`.git` clone with packed refs; `git worktree add`), gated, with run-deficit credit
-- 0.5 Run both suites; record that only the new rows fail (floors untouched)
+- 0.5 Apply the Test-design corrections (plan, Test Scenarios): move the existing repo-run `unknown` row onto a sandbox copy, single-field-delta silent table over one base fixture, per-site validator rows, cap boundary pairs, FIFO writer bound, real-git four-shape loop, separate non-bare witness fixture, `skip_case` run-credit arg + `GB_CASES/GB_RUNS`, `SKIP_BANNER_DEFICIT`
+- 0.6 Run both suites; record that only the new rows fail (floors untouched)
 
 ## Phase 1 - resolver
 
