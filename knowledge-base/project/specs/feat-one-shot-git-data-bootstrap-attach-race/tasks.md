@@ -21,7 +21,7 @@ No task in this file dispatches a workflow, runs terraform apply, writes Doppler
 - [ ] 1.1 `git-data-bootstrap.sh`: add `_gd_attach_wait` above section 1 (`${VAR-300}`, `^[0-9]{1,4}$` with `10#`, `&&`-chain predicates, direct call, re-resolve `_pt_dev`; validate bound, probe-once at 0, `udevadm settle --timeout=5 || true`, `sleep 5`, count 10 per pass, log start/resolution, return 1 after the bound)
 - [ ] 1.2 Plaintext site: wait on `realpath -e` + block-special + `getsize64 > 0`; unchanged FATAL after the bound; verification untouched
 - [ ] 1.3 LUKS site (section 1): predicate re-runs the glob + `cryptsetup isLuks` scan each pass; keep the `luksOpen --key-file -` line byte-identical (B19d)
-- [ ] 1.4 `cloud-init-git-data.yml`: add `-u GIT_DATA_ATTACH_WAIT_S` to the bootstrap `env -u` list
+- [ ] 1.4 `cloud-init-git-data.yml`: add `-u GIT_DATA_ATTACH_WAIT_S` to the bootstrap `env -u` list, BEFORE `-u GIT_DATA_PLAINTEXT_DEV` (census C2 adjacency regex)
 - [ ] 1.5 `git-data-store-device-census.test.sh`: C2 row for the new seam and bump its floor; Guard 3 mutation rows
 - [ ] 1.6 Run the store-verify suite GREEN; set `MIN_ASSERTIONS` equal to the measured `passes + fails`
 

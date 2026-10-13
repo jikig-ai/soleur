@@ -11,6 +11,22 @@ brand_survival_threshold: aggregate pattern
 lane: cross-domain
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-13
+**Sections enhanced:** Research Insights (deepen pass), Downtime & Cutover (new), Sharp Edges
+**Passes used:** plan-time reviews already folded in (CTO D1-D5, code-simplicity, architecture); deepen-time mechanical gates 4.6-4.12 and 4.55 (all pass), citation verification (issues, ADRs, rule ids, files), precedent diff against `git-data-luks-reopen.sh`, adjacency check of the census C2 regex. No further research fan-out: the plan is a bounded edit to one script, one template, and one rehearsal root, already reviewed by three seats, and the repo's own suites are the authority.
+
+### Key Improvements
+
+1. Census C2 pins the bootstrap invocation's `env -u` list by an adjacency regex; the new `-u` must be inserted before `-u GIT_DATA_PLAINTEXT_DEV`, never between it and `GIT_DATA_PLAINTEXT_VOLUME_ID=` (Sharp Edges).
+2. The helper's seam validation follows the repo precedent spelling (`case ''|*[!0-9]*`, `_i=$((_i + 1))`) from `git-data-luks-reopen.sh`, with a length cap, instead of a new idiom.
+3. An explicit Downtime & Cutover section: the only offline-inducing operations are the post-merge replace/rotate, on a host that serves nothing today.
+
+### New Considerations Discovered
+
+- The by-id link wait must not weaken the existing identity pinning (`_pt_same` re-checks the device number before `--setro`, `dumpe2fs` and `dmsetup create`); the wait only decides WHEN `_pt_dev`/`_pt_mm` are resolved, never skips those re-checks.
+
 ## Overview
 
 The first-boot bootstrap script for the git-data host resolves its plaintext-volume device link exactly once and exits when the link is not yet there. The real rotate run 38384137515 (2026-10-13) lost the race: cloud-init reached the plaintext check about 70 s before Hetzner finished attaching the volume, and the host died at the named FATAL `plaintext_unverified reason=source`. This plan adds a bounded, fail-closed wait (default 300 s, an env seam for tests, `udevadm settle` on each pass) at the plaintext link and at the LUKS discovery, hardens the real first-boot LUKS wait in the cloud-init template, makes the rung-2 rehearsal harness reproduce a late attachment, and records the exact rehearsal evidence the changed payload needs before the rotate may be re-dispatched. Nothing here is dispatched or run against a host; each dispatch the plan names is gated on an explicit go-ahead that names the command.
@@ -48,6 +64,14 @@ Five prior boots attached both volumes in 17-33 s; the failing boot took 65 s an
 - Capture-script change: cut; a PASS under a deliberate late attach proves the wait ran (the old code FATALs under the same delay).
 - Non-destroying re-run of first boot on the existing server: cut; user_data is ForceNew and runcmd is once-per-instance (recovery section).
 - A seam inside the cloud-init heredoc: cut by ruling D2 (literal bound, no seam, no extra `env -u` strip).
+
+### Deepen-pass verification (2026-10-13)
+
+- **Gates:** 4.6 User-Brand Impact present, threshold `aggregate pattern`, sensitive path (`apps/web-platform/infra/`) with a non-`none` threshold: pass. 4.7 Observability: five fields present, `discoverability_test.command` is `bash scripts/git-data-rung2-gate-verdict.sh` (allowlisted verb, no ssh, measured 1.7 s against the 15 s cap), `expected_output` is the literals `RELEASED or HOLD`: pass. 4.8 PAT-shaped variables: none. 4.9 UI: no UI-surface file, skipped. 4.10 Encryption Posture: both at_rest entries carry non-empty `does_not_defend`; the plaintext-exception row has `tracking_issue` and `expires_on` (2026-11-12, within 90 days): pass. 4.11 `python3 scripts/lint-guard-contract.py` over the plan: 4 guard entries, exit 0; adequacy read: the Assembly of each guard names a chokepoint (the helper, the single heredoc loop, the single invocation line, the single address pair), not a snapshot of members. 4.12 Scope Check: one unfenced section, no `unmapped`, no empty justification. 4.55 Downtime: section added below.
+- **Citations resolved live:** #10138, #10207, #10210, #10175 OPEN; #10166 and #10137 CLOSED; #9949, #8571 and #6897 OPEN (read with `gh issue view`). ADR-115, ADR-149, ADR-152, ADR-193, ADR-231 and ADR-239 exist under `knowledge-base/engineering/architecture/decisions/`. Rule ids: `cq-write-failing-tests-before` is an active rule; `wg-architecture-decision-is-a-plan-deliverable` is in `scripts/migrated-rule-ids.txt` (migrated into plan Phase 2.10, still active). Every suite named in Acceptance Criteria exists at the cited path.
+- **Negative claims checked against code:** (a) "the extracted store-verify unit does not contain section 1": the unit begins at the `BEGIN store-verify unit` sentinel (line 362) and section 1 is lines 67-117, confirmed; (b) "B19d pins the `luksOpen --key-file -` spelling": `git-data-luks.test.sh` mutation sed targets `cryptsetup luksOpen --key-file - "$luks_dev"`, confirmed; (c) "no hash-bound file was forgotten": `git_data_rung2_bound_files` output (20 inputs) contains only `cloud-init-git-data.yml` and `git-data-bootstrap.sh` among the files this plan edits.
+- **Precedent diff (helper vs `git-data-luks-reopen.sh`):** the reopen script validates its wait with `case "$DEVICE_WAIT" in ''|*[!0-9]*) ... exit 2`, makes it `readonly`, and counts with `_i=$((_i + 1))` and a `die` after the bound. The new helper matches that shape (case validation, counter arithmetic, named refusal) and differs deliberately in two ways: it takes a predicate (two call sites) and charges 10 s per pass because it sleeps and settles. No precedent exists for a seam stripped by `env -u` inside a helper; the strip is the census C2 contract.
+- **Semantic-change test audit (full enumeration, not a sample):** `grep -rlE "scsi-0HC_Volume|GIT_DATA_PLAINTEXT_DEV|_pt_link"` over `apps/web-platform/infra/*.test.sh`, `tests/scripts/*.sh` and `scripts/*.test.sh` returns 27 files on 2026-10-13. Those about OTHER hosts or volumes (inngest, registry, workspaces, web-host, luks-monitor, zot, fresh-boot-parity, lint-encryption-posture, host-state and the replace/dark-gate suites) do not read git-data-bootstrap.sh. The git-data ones and their disposition: `git-data-bootstrap-store-verify.test.sh` (this plan's suite), `git-data-luks.test.sh` (B18/B19d, planned edits), `git-data-store-device-census.test.sh` (C2, planned edit), `git-data-plaintext-snapshot-loopback.test.sh` (drives the snapshot recipe on loopback devices, not the by-id resolution; re-run, no edit expected), `git-data-render-strip-parity.test.sh` and `git-data-rung2-rehearsal.test.sh` (render and harness pins; re-run, the latter gets planned rows), `git-data-luks-reopen.test.sh` (its own script, unchanged), `store-vs-data-mount-parity.test.sh` (scopes the reverse map to the `scsi-0HC_Volume_*` shape, unaffected). Each is in the Acceptance Criteria run list or is named here.
 
 **Institutional precedents used.** `git-data-luks-reopen.sh` (`GIT_DATA_REOPEN_DEVICE_WAIT`, validated integer, readonly); `cloud-init-inngest.yml` `soleur-inngest-nic-wait` (loop counter, never the clock, `waited_s`); the `#8211` guard conventions in `git-data-bootstrap-store-verify.test.sh` (sentinel extraction, landed-check, instrument self-test, floor equals count).
 
@@ -313,6 +337,14 @@ No C4 change. Checked against all three model files (`model.c4`, `views.c4`, `sp
 
 The amendment describes the target state and is written in this PR; its status line follows ADR-239's existing `adopting`/`accepted` handling and is not changed by this PR.
 
+## Downtime & Cutover
+
+- **Offline-inducing operations:** only the post-merge, separately authorized `git-data-host-replace` / `git-data-host-rotate` dispatches (this PR itself changes code and a throwaway rehearsal root). They destroy and recreate `hcloud_server.git_data`; the rotate also recreates the LUKS volume and passphrase.
+- **Surface affected:** git-data transport and Art. 17 erasures only. Measured by inheritance (2026-10-13, #10175 and the runbook's flag text): `GIT_DATA_STORE_ENABLED` is off and the store serves no user repository, so the live cost is a window in which every Delete Account is refused and logged (runbook "What a user sees while git-data is not serving").
+- **Zero-downtime evaluation:** blue-green is not available (one host, two volumes that attach to one server at a time, a fixed private address); `state mv` and expand-contract do not apply to a host whose payload changed (ForceNew). The default is therefore the existing replace route, run only while the flag is off, which is also why the fix must land and be rehearsed before the flip.
+- **Bounded window:** the rotate's recorded duration is at least 12 min 15 s of a failed boot (inherited from the runbook's table, run 35979304442); this plan's change adds no time to a healthy boot (wait overlaps the apply's own attach wait, see Boot-budget analysis).
+- **Residual downtime acceptance:** none requested here; each dispatch is gated on an explicit go-ahead naming the command. Per-stage verification and rollback: the poll's VERDICT, the `plan_only=true` dry run first, and the runbook's forward-only rule for a failed boot.
+
 ## Domain Review
 
 **Domains relevant:** Engineering
@@ -368,7 +400,7 @@ Legal: no new exposure from this change (inherited 2026-10-13: the plaintext vol
 - [ ] Late-link fixture: the link appears on the Nth `sleep` and the run proceeds to marker + all booleans, with `plaintext_volume=present plaintext_empty=yes` equal to the R1 on-time verdict.
 - [ ] Never-appears fixture: rc != 0, `FATAL: plaintext_unverified reason=source` with the unchanged sentence, no marker, FATAL emitted at stage=bootstrap, and no `blockdev --setro`, `dmsetup` or `mount` call.
 - [ ] `GIT_DATA_ATTACH_WAIT_S` of `abc`, `-5` and the empty string is refused (own FATAL, no probe); `0` probes once and, with the link present, proceeds.
-- [ ] `git-data-luks.test.sh` (B18 (i) literal 300 + mutation), `git-data-store-device-census.test.sh` (C2 strip row), `git-data-runcmd-rehearsal.test.sh`, `git-data-template-strip.test.sh`, `git-data-render-strip-parity.test.sh`, `git-data-rung2-rehearsal.test.sh`, `tests/scripts/test-git-data-rung2-plan-shape.sh`, `tests/scripts/test-git-data-birth-readiness-gate.sh`, `scripts/guard-vacuity-floor.test.sh` and `plugins/soleur/test/terraform-target-parity.test.ts` pass locally.
+- [ ] `git-data-luks.test.sh` (B18 (i) literal 300 + mutation), `git-data-store-device-census.test.sh` (C2 strip row), `git-data-runcmd-rehearsal.test.sh`, `git-data-template-strip.test.sh`, `git-data-render-strip-parity.test.sh`, `git-data-rung2-rehearsal.test.sh`, `store-vs-data-mount-parity.test.sh`, `git-data-luks-reopen.test.sh`, `git-data-plaintext-snapshot-loopback.test.sh` (root/loopback needed; run where available), `tests/scripts/test-git-data-rung2-plan-shape.sh`, `tests/scripts/test-git-data-birth-readiness-gate.sh`, `scripts/guard-vacuity-floor.test.sh` and `plugins/soleur/test/terraform-target-parity.test.ts` pass locally.
 - [ ] `diff <(git diff --name-only origin/main...HEAD) <(bash -c 'source tests/scripts/lib/git-data-birth-readiness-gate.sh; git_data_rung2_bound_files apps/web-platform/infra/cloud-init-git-data.yml')` shows exactly `cloud-init-git-data.yml` and `git-data-bootstrap.sh` among the hash-bound inputs touched (reviewed 2026-10-13: tests, `rehearsal.tf`, `plan-shape.sh` and the workflow are not bound).
 - [ ] `bash apps/web-platform/infra/git-data-userdata-budget.sh --json` still reports `stored` <= 32,768 and `plugins/soleur/test/cloud-init-user-data-size.test.ts` passes; the measured headroom is recorded in the PR (pre-change 2,656 B).
 - [ ] `terraform validate` and a plan-only check of `rung2-rehearsal` with the delay variable at 0 and at 150 pass; the seed-phase sleep is 0; `git-data-rung2-rehearsal.test.sh` (which pins every poll's step bound above its deadline and the job ceiling above the step sum) passes with the documented +150 s per payload-phase boot absorbed by the existing apply step bounds (15/25/15 min; measured payload applies took 33 s and 34 s on 2026-10-13).
@@ -441,3 +473,6 @@ State (inherited from the brief and the run log, 2026-10-13): new server 1700818
 - The extracted store-verify unit does not contain section 1; the helper must be defined above it and prepended to the harness prelude, or every runtime row sources a unit that calls an undefined function.
 - The workflow file is byte-budgeted (ADR-231): one `TF_VAR_` line, rationale in the runbook.
 - Evidence must be committed alone; a PR that also touches a bound file is HELD by provenance guard 4.
+- The census C2 row pins `-u GIT_DATA_PLAINTEXT_DEV GIT_DATA_PLAINTEXT_VOLUME_ID='${git_data_volume_id}' bash /usr/local/bin/git-data-bootstrap.sh` as an adjacency regex (`git-data-store-device-census.test.sh` ~line 263): add `-u GIT_DATA_ATTACH_WAIT_S` EARLIER in the list, never between `-u GIT_DATA_PLAINTEXT_DEV` and `GIT_DATA_PLAINTEXT_VOLUME_ID=`.
+- Seam validation spelling: copy the precedent from `git-data-luks-reopen.sh` (`case ... ''|*[!0-9]*)`), add a length cap, and do the arithmetic only after validation (a non-numeric operand under `set -e` aborts rather than being caught).
+- `_pt_same` re-checks the device number through link and node before `--setro`, `dumpe2fs` and `dmsetup create`; resolving `_pt_dev`/`_pt_mm` later (after the wait) must not remove or reorder those re-checks, and the suite's `>= 7` stat-read row must stay green.
