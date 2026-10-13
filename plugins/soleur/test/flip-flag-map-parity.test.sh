@@ -4,8 +4,12 @@
 # and again on #4671: a flag missing from flip.sh cannot be flipped by the operator tooling ("unknown flag").
 set -uo pipefail
 REPO_ROOT="$(git rev-parse --show-toplevel)"
-FLIP="$REPO_ROOT/plugins/soleur/skills/flag-set-role/scripts/flip.sh"
-SERVER="$REPO_ROOT/apps/web-platform/lib/feature-flags/server.ts"
+# Repo-relative argv literals (not $REPO_ROOT-built paths): the affected-set derive reads the
+# literals as edges, so a change to either file selects this suite without a runner-index edit.
+cd "$REPO_ROOT" || exit 1
+FLIP="plugins/soleur/skills/flag-set-role/scripts/flip.sh"
+SERVER="apps/web-platform/lib/feature-flags/server.ts"
+test -r plugins/soleur/skills/flag-set-role/scripts/flip.sh -a -r apps/web-platform/lib/feature-flags/server.ts || { echo "flip-flag-map-parity: FAIL — flip.sh or server.ts missing"; exit 1; }
 MIN_FLAGS=12
 
 flip_pairs="$(sed -n '/^declare -A FLAG_ENV_VARS=(/,/^)/p' "$FLIP" | sed -n 's/^[[:space:]]*\["\([^"]*\)"\]="\(FLAG_[A-Z0-9_]*\)".*$/\1=\2/p' | LC_ALL=C sort)"
