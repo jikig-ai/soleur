@@ -1,0 +1,19 @@
+# Decision Challenges — feat-one-shot-7697-10209-8163-contention-robustness
+
+Produced by `soleur:plan` running in a Task subagent (plan-only mandate). No
+Agent/Task tool was available in this context, so per the
+technical-ruling-delegation rule every technical ruling is recorded
+`pending - assumed: <default>` for adjudication by
+`soleur:engineering:cto` at review/ship time rather than silently locked.
+
+## Decision Classes
+
+| Item | Class | Ruling |
+|------|-------|--------|
+| #10209 C8 contract — exempt the sandbox vs assert-on-refusal (issue names both shapes and requires the suite-author's call) | technical | pending - assumed: exempt. `ENV_SCRUB` gains `-u TC_SIBLING_RUN_COUNT -u TC_SIBLING_RUN_COUNT_PID` and the `build_sandbox` re-arm pins the count from a suite-controlled var (the `SANDBOX_SIBLINGS` idiom at `test-all-affected.test.sh:194-195`). Rationale: C8's contract is the weight-drift arm; a refusal keyed on host state the sandbox never measured is a false antecedent, and ADR-196's discriminator ("is a refusal actionable at this call site?") answers no for a stub run. Asserting on the refusal branch would make the suite's verdict a function of host load — the host-dependent-verdict defect class of `2026-09-20`. |
+| #7697 bound mechanism — `timeout -k` outer bound vs `flock -n` deadline-poll loop | technical | pending - assumed: `timeout -k` wrapper in `_acquire_lock_impl`. Plan-time measurement: blocked-SIGALRM mask defeats `flock -w` (still waiting at 6 s on a 3 s bound) while `timeout 4` returned rc=124 under the same mask; `SIG_IGN` arm was harmless (returned at 3 s). Wrapper is the smaller diff and preserves instant release-wake; the poll loop is the documented fallback if `timeout` is ever absent (degrade arm keeps today's behaviour rather than hardening a new dep). |
+| #7697 holder-progress mechanism — `run_suite`-stamped marker vs heartbeat subshell touching a file | technical | pending - assumed: `run_suite`-stamped `$LOCK_DIR/<name>.holder` (pid, acquire epoch, progress epoch, last suite). Rationale: a subshell heartbeat measures holder *liveness*, not *progress* — a wedged `do_wait` holder's background subshell can keep ticking, reproducing the ambiguity the issue asks to remove; a suite-boundary stamp stalls exactly when the holder wedges. Report-only — no kill path (ADR-133's stale-holder-detection rejection honoured: that rejection covered the dead-pid case, and this adds no detection-and-action). |
+| #8163 remedy — contention-aware ceiling vs move-to-shard vs trim rows | technical | pending - assumed: contention-aware ceiling (`tc_siblings` sampled at battery start+end; over-ceiling under observed siblings → `[note]` not `[FAIL]`; uncontended over-ceiling still fails). Rationale: `SCRIPTS_SHARD` engages only under `TEST_GROUP=scripts|scripts-heavy` (test-all.sh:1151) and the measured failure was a local `TEST_GROUP=all` run — sharding cannot reach it; trimming rows cuts the mutation coverage the ceiling defends. |
+| ADR-133 addendum vs no record | technical | pending - assumed: addendum. The change extends a recorded decision's boundary (live-wedged-holder observability + signal-mask-independent bound) and `wg-architecture-decision-is-a-plan-deliverable` requires the record to ship with the change; `## Decision` text is untouched — no reversal. |
+| Brand-survival threshold `none` | taste | pending - assumed: `none`. The diff is confined to local test-runner machinery; the worst reachable harm is the status quo ante (a flaky suite). |
+| Domain-leader consults (CTO for devex), spec-flow analyzer, advisor-tier consult, plan-review panel — not spawned | technical | pending - assumed: proceed without; no Task/Agent tool exists in this subagent context. Inline assessments substituted and recorded; the pipeline's review stage is the next gate. |
