@@ -1041,7 +1041,7 @@ else
       # mutation batteries name the gate they mutate but their verdict is
       # scoped to the battery paths, and (#9307) a live scanner whose OBSERVED
       # reads an audit confined to the declared paths
-      # (knowledge-base/project/specs/feat-affected-parallel-test-gate/
+      # (knowledge-base/project/specs/archive/20261013-062704-feat-affected-parallel-test-gate/
       # always-on-audit.md) may leave the always-on set the same way. This
       # check does NOT verify that evidence; it only demands a declaration.
       # What this check refuses is a live-named

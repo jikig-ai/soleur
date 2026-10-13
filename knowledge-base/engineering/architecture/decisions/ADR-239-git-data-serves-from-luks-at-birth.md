@@ -402,7 +402,7 @@ Alternatives considered and rejected: purging the files in place by mounting the
 standalone dated purge (needs the same writable mount); extending the date without re-opening this ADR
 (storage limitation; the ledger records `expires_on` as deliberately not extended).
 
-Plan: `knowledge-base/project/plans/2026-10-09-fix-git-data-lock-no-subject-id-9066-plan.md`.
+Plan: `knowledge-base/project/plans/archive/20261013-062704-2026-10-09-fix-git-data-lock-no-subject-id-9066-plan.md`.
 
 ## Amendment 2026-10-09 — the gc timer is not a cutover precondition; the probe verifies first; the unwind marks the attempt (#9439)
 

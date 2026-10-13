@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2016,SC2015,SC2034,SC1091  # `A && B || C` is the row idiom; the row table is a QUOTED heredoc of shell text and the python oracle is single-quoted on purpose; a few globals are read by sourced-in-place helpers
-# Guard 1 of the W2 plan (knowledge-base/project/plans/2026-10-06-feat-plugin-destructive-command-guard-w2-plan.md):
+# Guard 1 of the W2 plan (knowledge-base/project/plans/archive/20261013-062704-2026-10-06-feat-plugin-destructive-command-guard-w2-plan.md):
 # the destructive-command PreToolUse hook (plugins/soleur/hooks/destructive-command-guard.sh, ADR-277).
 #
 # PROPERTY. A Bash tool call whose command, after lexing and wrapper unwrapping, runs a command in the

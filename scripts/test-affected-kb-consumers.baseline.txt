@@ -10,7 +10,7 @@
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/plans
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/specs
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/specs/archive
-.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/specs/feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh
 .claude/hooks/guardrails.test.sh	knowledge-base
 .claude/hooks/hook-input-contract.test.sh	knowledge-base/project
 .claude/hooks/iac-plan-write-guard.test.sh	knowledge-base/project/plans

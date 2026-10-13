@@ -553,7 +553,7 @@ has merged; until then both release jobs still hold the broad token and would re
 project and its `prd` environment, and no `doppler_secret`, `doppler_service_token`, data source,
 variable or output, for D3's reason: this root's state is readable by the Tier-A backend keys. The two
 values and the token are put there by an operator-run, re-runnable script
-(`knowledge-base/project/specs/feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh`), which is
+(`knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh`), which is
 the part Terraform cannot hold. The script is permanent for this feature: it is also the rotation tool
 (`--rotate-token`, and a re-run after an App key rotation), so it stays at that path. Census Guard 7
 enforces the container half (G7c: no stateful `doppler_*` resource on the project through any alias of
@@ -850,7 +850,7 @@ now that the second is the 2026-10-03 entry below.)*
   entry, and the 2026-10-03 entry below lists what it supersedes.)*
 - No other decision's status changes here.
 
-Plan: `knowledge-base/project/plans/2026-10-01-security-scoped-doppler-source-for-app-token-release-jobs-plan.md`.
+Plan: `knowledge-base/project/plans/archive/20261013-062704-2026-10-01-security-scoped-doppler-source-for-app-token-release-jobs-plan.md`.
 
 ### 2026-10-02 (#8211): `RESEND_API_KEY` is Tier A
 

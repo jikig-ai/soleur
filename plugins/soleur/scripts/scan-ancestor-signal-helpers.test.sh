@@ -4,7 +4,7 @@
 # shrink-only ratchet for shell test suites that contain a signal helper (an ancestor walk that
 # signals, a signal to the parent, an all-process signal; targeted group and name-pattern signals
 # are listed only). Guard 2 of the plan
-# knowledge-base/project/plans/2026-10-10-chore-pid-namespace-guard-for-signal-helper-mutants-plan.md
+# knowledge-base/project/plans/archive/20261013-062704-2026-10-10-chore-pid-namespace-guard-for-signal-helper-mutants-plan.md
 #
 # WHY NOTHING HERE SENDS A SIGNAL. The suite works on tracked DATA files (.txt, under
 # plugins/soleur/test/fixtures/ancestor-signal/) that are passed to the scanner as explicit PATHs, and on a
