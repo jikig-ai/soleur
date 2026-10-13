@@ -141,9 +141,14 @@ const log = createChildLogger("git-lock-marker-telemetry");
 // decision — the bug they exist to prevent was an INVISIBLE mutation, so the
 // marker is the observability contract, not an error.
 // MIRRORED-NOT-PAGED (#9597): SOLEUR_CREDENTIAL_REFUSED script=<name> reason=<token_shape|control_char>.
-// Emitted by the community skill scripts (discord-community.sh, discord-setup.sh, bsky-community.sh,
-// bsky-setup.sh) when a credential fails its shape guard BEFORE it reaches curl's stdin config
-// stream (a quote/newline could append a `url =` directive). The line is value-free by
+// Emitted by the six community skill scripts (discord-community.sh, discord-setup.sh,
+// bsky-community.sh, bsky-setup.sh, x-setup.sh, linkedin-setup.sh) when a credential fails its
+// shape guard BEFORE it reaches curl's stdin config stream (a quote/newline could append a
+// `url =` directive). The setup scripts' write-env refusals carry the shape
+// `var=<NAME> phase=write-env`. Every host-side emitter outside
+// plugins/soleur/skills/community/scripts (the registry host scripts, luks-monitor,
+// web-git-data-probe, the heartbeat probes, the inngest bootstrap, infra-config-verify) never
+// reaches this extractor: it only runs on agent Bash output. The line is value-free by
 // construction (script name and a fixed reason, never the credential). NOT paged: the refusal is
 // the safe outcome and a user-visible one. It is mirrored when a refusal is printed inside an
 // agent Bash call (the only place this extractor is wired: the PostToolUse hook in
