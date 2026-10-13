@@ -143,6 +143,6 @@ Unified comparison of Soleur portability across all analyzed agent platforms. Up
 - OpenHands: `knowledge-base/project/specs/archive/20261013-003106-openhands-portability/inventory.md`
 - OpenHands PoC: `knowledge-base/project/specs/archive/20261013-003106-openhands-portability/poc-results.md`
 - Gemini CLI PoC: `knowledge-base/project/specs/archive/20261013-003106-gemini-cli-portability/poc-results.md`
-- deepagents: `knowledge-base/project/specs/feat-deepagents-portability/inventory.md`
-- deepagents recommendation: `knowledge-base/project/specs/feat-deepagents-portability/recommendation.md`
-- deepagents critical unknowns: `knowledge-base/project/specs/feat-deepagents-portability/critical-unknowns.md`
+- deepagents: `knowledge-base/project/specs/archive/20261013-032858-feat-deepagents-portability/inventory.md`
+- deepagents recommendation: `knowledge-base/project/specs/archive/20261013-032858-feat-deepagents-portability/recommendation.md`
+- deepagents critical unknowns: `knowledge-base/project/specs/archive/20261013-032858-feat-deepagents-portability/critical-unknowns.md`

@@ -7,10 +7,10 @@ related_adrs: [ADR-038, ADR-023]
 related: [4558, 4559, 4543, 5437]
 related_plans:
   - knowledge-base/project/plans/archive/20261013-014038-2026-05-28-feat-workspace-repo-ownership-plan.md
-  - knowledge-base/project/plans/2026-06-16-feat-adr-044-workspace-owned-connection-plan.md
+  - knowledge-base/project/plans/archive/20261013-032858-2026-06-16-feat-adr-044-workspace-owned-connection-plan.md
 related_specs:
   - knowledge-base/project/specs/archive/20261013-014038-feat-workspace-repo-ownership/spec.md
-  - knowledge-base/project/specs/feat-adr-044-workspace-connection/spec.md
+  - knowledge-base/project/specs/archive/20261013-032858-feat-adr-044-workspace-connection/spec.md
 brand_survival_threshold: single-user incident
 ---
 

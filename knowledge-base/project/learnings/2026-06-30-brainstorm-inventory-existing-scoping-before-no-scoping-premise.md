@@ -61,8 +61,8 @@ category: workflow-patterns
 module: brainstorm, harness, hooks, agent-sdk
 
 ## Cross-References
-- Brainstorm: `knowledge-base/project/brainstorms/2026-06-30-harness-l3-phase-tool-scoping-brainstorm.md`
-- Spec: `knowledge-base/project/specs/feat-harness-l3-phase-tool-scoping/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/archive/20261013-032858-2026-06-30-harness-l3-phase-tool-scoping-brainstorm.md`
+- Spec: `knowledge-base/project/specs/archive/20261013-032858-feat-harness-l3-phase-tool-scoping/spec.md`
 - [GitHub #5768](https://github.com/jikig-ai/soleur/issues/5768) · PR #5769
 - Sibling harness gaps: #5765 (L1), #5766/#5767 (L5)
 - `2026-05-13-claude-agent-sdk-canusetool-not-invoked-for-unknown-mcp-tools.md` — the web silent-fail mode
