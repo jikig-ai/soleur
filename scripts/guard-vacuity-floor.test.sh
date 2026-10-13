@@ -1471,9 +1471,10 @@ fi
 # here-string's would-be opener so a leak is detectable, and the span terminates cleanly
 # before the real floor.
 hs_fx="$SUITE_TMP/here-string-fixture.sh"
-# The decoy heredoc opener is ASSEMBLED (`_hs_lt`), never literal: this file IS in the derived
-# population, so a bare `<<` token here would open a real blanked span over ARM 8c's own checks
-# and this suite's tail floor — self-hosting damage the arm exists to prevent elsewhere.
+# The decoy heredoc opener is ASSEMBLED (`_hs_lt`), never literal: a bare `<<` token here would
+# open a real span in the FIXTURE the moment it were written with the token inline — and keeps
+# this file consistent with the de-tokenization convention the same defect forced on the
+# loopback suite in #10228.
 _hs_lt='<'
 {
   printf '%s\n' '#!/usr/bin/env bash'
