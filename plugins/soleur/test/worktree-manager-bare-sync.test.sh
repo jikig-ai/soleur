@@ -117,7 +117,11 @@ for cand in en_US.utf8 en_US.UTF-8; do
   if LC_ALL="$cand" bash -c ':' 2>/dev/null && locale -a 2>/dev/null | grep -qix "$cand"; then LOC="$cand"; break; fi
 done
 if [[ -z "$LOC" ]]; then
-  echo "  SKIP: no en_US UTF-8 locale installed on this host"
+  if [[ -n "${CI:-}" ]]; then
+    FAIL=$((FAIL + 1)); echo "  FAIL: no en_US UTF-8 locale installed on this CI host: the comm regression row cannot run"
+  else
+    echo "  SKIP: no en_US UTF-8 locale installed on this host"
+  fi
 else
   SEED2="$TEST_DIR/seed2"
   git init -q -b main "$SEED2"
@@ -133,8 +137,8 @@ else
   # GNU comm only checks sort order once it has seen an UNPAIRED line, so the fixture
   # needs a tracked-deleted path that sorts FIRST in C order (leading dot) ahead of the
   # kept README.md/apps/a.md pair, whose relative order differs between C and en_US.
-  # `.zz-gone.md` sorts LAST in C order but between `apps/` and `README.md` under en_US, which is what
-  # makes GNU comm (without LC_ALL=C) emit the KEPT paths README.md and apps/a.md as deletions.
+  # `.zz-gone.md` sorts second in C order (after `.0-old.md`, before `README.md`) but LAST under en_US,
+  # which is what makes GNU comm (without LC_ALL=C) emit the KEPT paths README.md and apps/a.md as deletions.
   printf 'gone\n' > "$SEED2/.0-old.md"
   printf 'gone\n' > "$SEED2/old.md"
   printf 'gone\n' > "$SEED2/.zz-gone.md"

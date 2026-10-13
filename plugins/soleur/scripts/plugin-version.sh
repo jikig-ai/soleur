@@ -63,7 +63,7 @@ SHA40_RE='^[0-9a-f]{40}$'
 SHA12_RE='^[0-9a-f]{12}$'
 SMALL_MAX=512        # bytes: HEAD, loose refs, .git pointer files, commondir
 PACKED_MAX=4194304   # bytes: packed-refs (this repository's own is ~0.5 MB)
-MANIFEST_MAX=1048576 # bytes: plugin.json (the real one is ~1 KB)
+MANIFEST_MAX=65536   # bytes: plugin.json (the real one is ~1 KB; the no-jq awk scanner is superlinear, 100 KB cost seconds on mawk)
 TTL_S=86400
 # A failed compare is cached as fresh for only this long (the fetched stamp is backdated by
 # TTL_S - FAIL_FRESH_S), so one rate-limit response does not silence the notice for a day.
@@ -176,7 +176,8 @@ read_manifest_version() {
 }
 
 # ---- local checkout (source=checkout): plain file reads, never git ---------------------
-# These (and the manifest read, gated the same way) are the only readers of repository bytes. Every read is gated on regular-file-ness
+# These and the manifest read are the only readers of repository bytes; each checks regular-file-ness
+# and a stat size before reading. Every read is gated on regular-file-ness
 # AND on a stat size first (a FIFO or device would hang an open; a sparse multi-GiB HEAD of
 # NULs took 38 s through `read -n 512` alone), and nothing is executed, sourced or evaluated.
 CK_VAL=""
@@ -207,7 +208,7 @@ read_small() { # path -> CK_VAL = the file's single line (no newline); 1 when ab
 }
 
 valid_ref_name() { # refs/heads/<name> -> 0 when it is a plausible git branch ref, else 1 (deny-list, git check-ref-format style)
-  local r="$1" rest
+  local r="$1" rest LC_ALL=C   # the bracket classes below must mean the same thing in every locale
   case "$r" in refs/heads/?*) ;; *) return 1 ;; esac
   rest="${r#refs/heads/}"
   case "$rest" in
@@ -222,10 +223,12 @@ packed_ref_sha() { # commondir ref -> CK_VAL = sha for the exact ref in packed-r
   [[ -f "$f" && -r "$f" ]] || return 1
   n="$(file_size "$f")" || return 1
   (( n >= 1 && n <= PACKED_MAX )) || return 1
-  # A comment line (`# ...`) and a peel line (`^sha`) can never have the ref as $2, so no rule is
-  # needed for them; a record longer than any real entry is skipped before awk splits it.
-  CK_VAL="$(SOLEUR_REF="$2" awk '
-    length($0) < 512 && $2 == ENVIRON["SOLEUR_REF"] { print $1; exit }' "$f" 2>/dev/null)"
+  # A peel line (`^sha`) has one field, so it never matches; a first field starting with `#` is skipped;
+  # a record over 1 KiB (a real entry is ~40 + a ref name <= ~500) is skipped before awk splits it, and
+  # whatever the first match holds must still pass the 40-hex test below, so a corrupt line yields
+  # `unknown`, never a wrong commit. LC_ALL=C makes length() count bytes on every awk.
+  CK_VAL="$(SOLEUR_REF="$2" LC_ALL=C awk '
+    length($0) < 1024 && $1 !~ /^#/ && $2 == ENVIRON["SOLEUR_REF"] { print $1; exit }' "$f" 2>/dev/null)"
   [[ "$CK_VAL" =~ $SHA40_RE ]]
 }
 

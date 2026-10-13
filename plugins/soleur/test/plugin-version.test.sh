@@ -1021,7 +1021,7 @@ T="$(co_clone anchor-link "$SHA_M")"; ln -sfn "$T/plugins/soleur" "$CO/linkroot"
 run "$CO/linkroot" "$XDG" --installed
 check co-symlinked-root-reads-its-real-repo "checkout/${SHA_M:0:12}" "$(val source)/$(val commit)"
 # ...and never the repository that merely holds the link (an unrelated project with a symlink in it)
-H="$(co_clone symlink-host "$SHA_X")"; rm -rf "$H/plugins/soleur"; ln -s "$T/plugins/soleur" "$H/plugins/soleur"
+H="$(co_clone symlink-host "$SHA_X")"; assert_fixture_dir "$H/plugins/soleur"; rm -rf "$H/plugins/soleur"; ln -s "$T/plugins/soleur" "$H/plugins/soleur"
 run "$H/plugins/soleur" "$XDG" --installed
 check co-symlink-inside-another-repo-reads-the-target-not-the-host "checkout/${SHA_M:0:12}" "$(val source)/$(val commit)"
 # accepted residual, recorded as a row: a project that vendors plugins/soleur beside its own .git
@@ -1080,6 +1080,8 @@ deny_ref tilde 'a~b'; deny_ref caret 'a^b'; deny_ref colon 'a:b'; deny_ref qmark
 deny_ref bracket 'a[b'; deny_ref backslash 'a\b'; deny_ref at-brace 'a@{b'; deny_ref tab $'a\tb'
 deny_ref lock-suffix 'x.lock'; deny_ref trailing-dot 'x.'; deny_ref dot-component 'a/.b'; deny_ref at-alone '@'
 deny_ref double-slash 'a//b' 'a/b'
+deny_ref leading-dot '.x'; deny_ref leading-slash '/x' 'x'; deny_ref dot-dot-inside 'a..b'
+deny_ref lock-dir 'x.lock/y'; deny_ref control-char $'a\x01b'
 # `..` climbing out of refs/heads to a file that exists and holds a valid sha
 T="$(co_clone deny-dotdot-climb "$SHA_M")"; mkdir -p "$T/.git/refs/heads/a"; printf '%s\n' "$SHA_M" > "$T/.git/refs/secretfile"
 printf 'ref: refs/heads/a/../../secretfile\n' > "$T/.git/HEAD"; co_expect co-deny-ref-dotdot-climb "$T" unknown
@@ -1107,6 +1109,13 @@ UTF8LOC="$(locale -a 2>/dev/null | grep -i -m1 -E '^(en_US|C)\.utf-?8$' || true)
 if [[ -n "$UTF8LOC" ]]; then ENVS=("LC_ALL=$UTF8LOC"); co_expect co-nonascii-names-under-utf8-locale "$T" "$SHA_M"
 else skip_case co-nonascii-names-under-utf8-locale "no UTF-8 locale installed"; skip_case co-nonascii-names-under-utf8-locale-exact-output "no UTF-8 locale installed"
      skip_case co-nonascii-names-under-utf8-locale-rc-and-no-git "no UTF-8 locale installed"; SKIP_RUN_DEFICIT=$((SKIP_RUN_DEFICIT + 1)); fi
+# a non-ASCII SEPARATOR (U+2003) in a ref name resolves identically in every locale: git itself only
+# refuses ASCII space/control characters, and the deny-list classes are evaluated as bytes (LC_ALL=C)
+T="$(co_clone emspace "$SHA_M" $'a\xe2\x80\x83b')"
+ENVS=(LC_ALL=C); co_expect co-emspace-ref-resolves-under-C-locale "$T" "$SHA_M"
+if [[ -n "$UTF8LOC" ]]; then ENVS=("LC_ALL=$UTF8LOC"); co_expect co-emspace-ref-resolves-under-utf8-locale "$T" "$SHA_M"
+else skip_case co-emspace-ref-resolves-under-utf8-locale "no UTF-8 locale installed"; skip_case co-emspace-ref-resolves-under-utf8-locale-exact-output "no UTF-8 locale installed"
+     skip_case co-emspace-ref-resolves-under-utf8-locale-rc-and-no-git "no UTF-8 locale installed"; SKIP_RUN_DEFICIT=$((SKIP_RUN_DEFICIT + 1)); fi
 # boundary rows: "ref: refs/heads/" + a 495-char name + LF is exactly the 512-byte gate; one char more is over it
 mk_long_ref() { # name length -> clone whose HEAD names a ref of <length> chars after "ref: refs/heads/"
   local t n="$2" f c1 c2 c3 c4; t="$(co_clone "$1" "$SHA_M")"
@@ -1130,8 +1139,18 @@ X_TIMEOUT=10 co_expect co-silent-oversize-packed-refs "$T" unknown
 T="$(co_clone realsize "$SHA_M")"; rm -f "$T/.git/refs/heads/main"
 seq 1 15000 | awk -v s="$SHA_X" '{ printf "%s refs/heads/b%d\n", s, $1 }' > "$T/.git/packed-refs"; printf '%s refs/heads/main\n' "$SHA_M" >> "$T/.git/packed-refs"
 co_expect co-packed-refs-real-sized-accepts-the-last-entry "$T" "$SHA_M"
+# a packed record over 1 KiB that names the ref is skipped before awk splits it; the later normal one wins
+T="$(co_clone longrec "$SHA_M")"; rm -f "$T/.git/refs/heads/main"
+{ printf '%s refs/heads/main ' "$SHA_X"; head -c 1100 /dev/zero | tr '\0' y; printf '\n%s refs/heads/main\n' "$SHA_M"; } > "$T/.git/packed-refs"
+co_expect co-packed-overlong-record-is-skipped "$T" "$SHA_M"
+# a record whose first field starts with `#` is skipped even if its second field is the ref; the real entry after it wins
+T="$(co_clone hashrec "$SHA_M")"; rm -f "$T/.git/refs/heads/main"
+printf '#x refs/heads/main\n%s refs/heads/main\n' "$SHA_M" > "$T/.git/packed-refs"
+co_expect co-packed-hash-prefixed-record-is-skipped "$T" "$SHA_M"
 # an oversize or non-regular plugin.json is skipped before jq/awk could stall on it
-T="$(co_clone bigmanifest "$SHA_M")"; printf '\0' | dd of="$T/plugins/soleur/.claude-plugin/plugin.json" bs=1 seek=2097151 conv=notrunc 2>/dev/null
+# (it WOULD parse as version 9.9.9: only the size cap makes it a checkout instead of a manifest install)
+T="$(co_clone bigmanifest "$SHA_M")"
+{ printf '{"name":"soleur","version":"9.9.9","pad":"'; head -c 70000 /dev/zero | tr '\0' x; printf '"}\n'; } > "$T/plugins/soleur/.claude-plugin/plugin.json"
 X_TIMEOUT=10 co_expect co-oversize-manifest-is-skipped-not-parsed "$T" "$SHA_M"
 # a FIFO named HEAD would hang an open(2); [[ -f ]] refuses it before any open
 # (the row needs a timeout binary: without one a regression would hang the suite instead of reddening a row)
@@ -1159,9 +1178,10 @@ co_expect co-hostile-config-read-not-run "$T" "$SHA_M"
 check co-hostile-config-sentinel-absent 0 "$([[ -e "$SENT" ]] && echo 1 || echo 0)"
 # The checkout code names no git command at all (the stub shadows `git` by NAME, so an absolute-path or
 # `command -p` call would bypass it; this is the row that sees those). Comments are stripped first.
-CK_SRC="$(awk '/^# ---- local checkout/ {f=1} /^resolve_installed\(\)/ {f=0} f' "$SUT" | sed 's/[[:space:]]#.*$//; /^#/d')"
-check co-checkout-code-has-a-body 1 "$([[ "$CK_SRC" == *"resolve_checkout_commit()"* ]] && echo 1 || echo 0)"
-check co-checkout-code-names-no-git-command 0 "$(printf '%s\n' "$CK_SRC" | grep -cE '(^|[[:space:];&|(`])(/[^[:space:]]*/)?git[[:space:]]' || true)"
+# The region runs from the installed-identity header through resolve_installed and the manifest read.
+CK_SRC="$(awk '/^# ---- installed/ {f=1} /^print_installed\(\)/ {f=0} f' "$SUT" | sed 's/[[:space:]]#.*$//; /^[[:space:]]*#/d')"
+check co-checkout-code-has-a-body 1 "$([[ "$CK_SRC" == *"resolve_checkout_commit()"* && "$CK_SRC" == *"read_manifest_version()"* && "$CK_SRC" == *"resolve_installed()"* ]] && echo 1 || echo 0)"
+check co-checkout-code-names-no-git-command 0 "$(printf '%s\n' "$CK_SRC" | grep -cE "(^|[[:space:];&|(\`\"'\\\\])(/[^[:space:]]*/)?git([[:space:]\"']|$)" || true)"
 if [[ -n "$REAL_GIT" ]]; then
   # The witness: the SAME config text, in a repository real git understands, fires the hook...
   WT="$CO/witness"; assert_fixture_dir "$WT"; rm -rf "$WT"; mkdir -p "$WT"
@@ -1181,8 +1201,11 @@ else
   SKIP_RUN_DEFICIT=$((SKIP_RUN_DEFICIT + 1))
 fi
 # the user-facing prose names the label the hook prints (a dropped `source=checkout` arm must not go unnoticed)
+HOOK_LABEL="$(sed -n 's/.*label="commit \$commit \(([^)]*)\)".*/\1/p' "$REPO_ROOT/plugins/soleur/hooks/version-banner.sh" | head -1)"
+check co-hook-label-is-local-checkout "(local checkout)" "$HOOK_LABEL"
 for doc in commands/version.md commands/help.md README.md; do
-  check_has "co-label-in-$doc" "(local checkout)" "$(cat "$REPO_ROOT/plugins/soleur/$doc")"
+  # (version.md's template extends the label with the HEAD-not-files note, so match its opening)
+  check_has "co-label-in-$doc" "${HOOK_LABEL%)}" "$(cat "$REPO_ROOT/plugins/soleur/$doc")"
 done
 
 # --- parity with real git (gated): the resolver and `git rev-parse HEAD` agree on real layouts
@@ -1249,14 +1272,14 @@ if (( passes + fails != CASES )) || (( fails != ${#FAILURES[@]} )); then
     "$passes" "$fails" "$CASES" "${#FAILURES[@]}" >&2
   exit 1
 fi
-MIN_CASES=618
+MIN_CASES=641
 if (( CASES != MIN_CASES )); then
   printf 'FATAL: %d cases ran, expected exactly %d -- cases were added or deleted, or the suite aborted early\n' "$CASES" "$MIN_CASES" >&2
   exit 1
 fi
 # The subject must actually have run: a harness that asserts on empty output for every row
 # would still satisfy every "prints nothing" row.
-MIN_RUNS=310
+MIN_RUNS=319
 # Skipped rows (no jq, no timeout, no git, no mkfifo) did not drive the resolver, and skip_case
 # already counted them as cases, so the exact run count is credited by what they would have run.
 EXPECT_RUNS=$(( MIN_RUNS - SKIP_RUN_DEFICIT ))
