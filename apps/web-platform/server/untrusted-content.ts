@@ -462,11 +462,9 @@ function scoreText(raw: string, source: UntrustedSource): Classification {
     Array.from(run, (c) => String.fromCharCode((c.codePointAt(0) ?? 0xe0000) - 0xe0000)).join(""),
   );
   // NFKC can expand a character ~18x (U+FDFA), so the cap is re-applied AFTER it.
-  const normalized = decodedTags
-    .normalize("NFKC")
-    .replace(INVISIBLE, "")
-    .toLowerCase()
-    .slice(0, SCORE_MAX_CHARS);
+  const expanded = decodedTags.normalize("NFKC").replace(INVISIBLE, "").toLowerCase();
+  const normalizedTruncated = expanded.length > SCORE_MAX_CHARS;
+  const normalized = normalizedTruncated ? expanded.slice(0, SCORE_MAX_CHARS) : expanded;
   const discountable = isAboutInjection(normalized);
   const qi = buildQuoteIndex(normalized);
   const reasons = new Set<ReasonCode>();
@@ -511,7 +509,8 @@ function scoreText(raw: string, source: UntrustedSource): Classification {
     score: Math.round(score * 100) / 100,
     flagged,
     reasons: REASON_CODES.filter((c) => reasons.has(c)),
-    truncated,
+    // Also truncated when normalization EXPANDED the text past the cap: the tail was not scanned.
+    truncated: truncated || normalizedTruncated,
   };
 }
 
