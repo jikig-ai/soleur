@@ -1404,3 +1404,28 @@
   Earlier source pairings remain historical. The following evidence-only commit
   changes no prepared runtime or boundary input and still needs exact-head CI.
   No execution permission is renewed; all rollout/provider/account holds persist.
+
+### Reviewed preparation and offline export — 2026-10-13
+
+- [Current preparation record](safe-qualification-preparation-2026-10-13.md)
+  owns the 5,061-input / 188-migration source binding, actual 6,781-leaf file
+  export, independent source verification and remaining operational controls.
+  All seven focused findings are closed within their documented scope. The
+  candidate assembler has ten independently repeated fixtures and starts no
+  builder, daemon, application, database or authentication flow. No full PR
+  panel, SAST, C.9, image/auth qualification or promotion is claimed.
+- Main through `446afcb727394e3abf721e6aaa3edcb72616ec3a` is included. Hash/
+  instruction conflicts retained both obligations; main's rollout archival
+  retained the added account-control evidence and active references were
+  repaired. Fresh source pairing follows this evidence-only commit; exact-head
+  CI and final-description checks are owed separately.
+- The runnable operational candidate/rehearsal remains incomplete: builder/
+  resource/network admission, concrete role image configurations, namespace/
+  session controller, retained file-byte manifests and immutable image/auth
+  evidence are still required before fresh exact execution approval. Build
+  authorization stays consumed; the withdrawn command stays unavailable.
+  Draft/disarmed/default-off/customer-blocked, hosted auth BLOCKED in both
+  modes, API alternative PENDING, SAST VOID, Ref #10082 OPEN, Ref #9791 OPEN/
+  unverified and no current-source C.9 remain. All credential/provider/browser-
+  auth/account/shared-write/deployment/flag/cohort restrictions persist; sharing,
+  retention/inheritance and configured regions remain unknown.
