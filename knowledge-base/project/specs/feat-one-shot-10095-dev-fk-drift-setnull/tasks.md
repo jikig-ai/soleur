@@ -1,8 +1,7 @@
 # Tasks — feat-one-shot-10095-dev-fk-drift-setnull
 
 Plan: `knowledge-base/project/plans/2026-10-13-fix-dev-fk-drift-052-setnull-plan.md`
-Issue: #10095 (closes) · tracker: #9993 (stays open) · follow-up: WORM
-carve-out gap issue (new)
+Issue: #10095 (closes) · tracker: #9993 (stays open) · follow-up: #10229
 
 ## 0. Work-time re-verification (read-only) + honest-exit gates
 
