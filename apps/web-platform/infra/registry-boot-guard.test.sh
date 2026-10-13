@@ -384,6 +384,18 @@ assert "R1: var.registry_server_type default is cpx22 (#7309 repin)" \
 assert "R2: the default is not a cax* type, so local.registry_arch derives amd64" \
   "[ -n '$REGISTRY_DEFAULT' ] && case '$REGISTRY_DEFAULT' in cax*) false ;; *) true ;; esac"
 
+# HCL comment stripper for the Terraform pins below. Line comments (# and //) go first because they
+# are line-scoped (a glob like `infra/*` inside one must not open a block comment); then /* ... */
+# spans, including multi-line ones, which Terraform also treats as comments.
+_strip_hcl_comments() {
+  sed -E 's;(^|[[:space:]])//.*;;; s;#.*;;' "$1" | awk '{ line = $0; out = ""
+    while (1) {
+      if (inb) { i = index(line, "*/"); if (!i) { line = ""; break } line = substr(line, i + 2); inb = 0; continue }
+      i = index(line, "/*"); if (!i) break
+      out = out substr(line, 1, i - 1); line = substr(line, i + 2); inb = 1
+    }
+    print out line }'
+}
 # R3: the arch DERIVATION is oriented correctly — the assertion R2 cannot make.
 #
 # `local.registry_arch = startswith(var.registry_server_type, "cax") ? "arm64" : "amd64"` selects
@@ -399,17 +411,6 @@ assert "R2: the default is not a cax* type, so local.registry_arch derives amd64
 # measured FALSE — cax11/21/31/41 all start with "ca", so widening the prefix kept the suite
 # green. Cardinality is not discrimination. A synthesized type starting with "ca" that is NOT
 # Ampere is the single input that separates the two prefixes.
-# HCL comment stripper for the Terraform pins below: drops /* ... */ spans (including multi-line
-# ones, which Terraform also treats as comments), then // and # to end of line.
-_strip_hcl_comments() {
-  awk '{ line = $0; out = ""
-    while (1) {
-      if (inb) { i = index(line, "*/"); if (!i) { line = ""; break } line = substr(line, i + 2); inb = 0; continue }
-      i = index(line, "/*"); if (!i) break
-      out = out substr(line, 1, i - 1); line = substr(line, i + 2); inb = 1
-    }
-    print out line }' "$1" | sed -E 's;(^|[[:space:]])//.*;;; s;#.*;;'
-}
 p_registry_arch_derivation() {
   local expr pfx tval fval pair t exp got
   # Anchored on the ASSIGNMENT at line-start: that distinguishes a DECLARATION from a reference
@@ -491,7 +492,9 @@ _arm "R3 arm: hiding the declaration in a multi-line block comment goes RED" RED
 _arm "R3 arm: a SECOND declaration goes RED (the guard reads exactly one)" RED p_registry_arch_derivation \
   "$_R3_DECL a \\  registry_arch = \"arm64\""
 _arm "R3 arm: a reformatted EQUIVALENT declaration stays GREEN (not spelling-bound)" GREEN p_registry_arch_derivation \
-  "$_R3_DECL s/ \? \"arm64\" : \"amd64\"/?\"arm64\":\"amd64\" # reformatted/"
+  "$_R3_DECL s/ \? \"arm64\" : \"amd64\"/?\"arm64\":\"amd64\" \/\/ reformatted/"
+_arm "R3 arm: a trailing # comment containing a /* glob stays GREEN (line comments strip before block comments)" GREEN p_registry_arch_derivation \
+  "$_R3_DECL s/\$/ # see \/var\/*/"
 _arm "R3 arm: an edit that matches nothing reports NOLAND, not a false catch" NOLAND p_registry_arch_derivation \
   's/this-text-is-not-in-the-file/x/'
 
@@ -533,12 +536,20 @@ _arm "R4 arm: a reformatted EQUIVALENT condition stays GREEN (not spelling-bound
 # R5: the templatefile map hands the derived arch to the boot script. A hardcoded literal there
 # would render the wrong Doppler CLI build on the host while R3 and R4 stay green.
 p_registry_doppler_arch_wired() {
-  if [ "$(_strip_hcl_comments "$1" | grep -cE '^[[:space:]]*doppler_arch[[:space:]]*=[[:space:]]*local\.registry_arch[[:space:]]*$')" = 1 ]; then echo 1; else echo 0; fi
+  _strip_hcl_comments "$1" | awk '
+    /^resource "hcloud_server" "registry" \{/ { r = 1 }
+    r && /^[[:space:]]*doppler_arch[[:space:]]*=[[:space:]]*local\.registry_arch[[:space:]]*$/ { n++ }
+    r && /^\}/ { r = 0 }
+    END { print (n == 1 ? 1 : 0) }'
 }
 assert "R5: the templatefile map passes doppler_arch = local.registry_arch (baseline on the real file)" \
   "[ \"\$(p_registry_doppler_arch_wired '$SCRIPT_DIR/zot-registry.tf')\" = 1 ]"
 _arm "R5 arm: HARDCODING doppler_arch in the templatefile map goes RED" RED p_registry_doppler_arch_wired \
   '/^[[:space:]]*doppler_arch[[:space:]]*=/ s/local\.registry_arch/"arm64"/'
+_arm "R5 arm: a different local on the right-hand side goes RED (the line is anchored)" RED p_registry_doppler_arch_wired \
+  '/^[[:space:]]*doppler_arch[[:space:]]*=/ s/local\.registry_arch/local.registry_arch_other/'
+_arm "R5 arm: a DUPLICATED wiring line goes RED (exactly one inside the registry resource)" RED p_registry_doppler_arch_wired \
+  '/^[[:space:]]*doppler_arch[[:space:]]*=[[:space:]]*local\.registry_arch/ a \    doppler_arch   = local.registry_arch'
 
 echo ""
 # --- #7500: the two redact() copies, and the tier tag -------------------------------------
@@ -662,10 +673,10 @@ echo "=== registry-boot-guard.test.sh: ${PASS} passed, ${FAIL} failed ==="
 # and exit 0, and this suite is a REQUIRED check (infra-validation.yml). Deleting a whole block
 # is the same class. A FLOOR, not equality — a new assertion must never be a spurious failure.
 # Set to the full count at the time of writing; raise it in lockstep, never lower it to pass.
-# Set to the measured count: the suite runs 151 assertions, so slack here is exactly how many
+# Set to the measured count: the suite runs 154 assertions, so slack here is exactly how many
 # assertions can be deleted before this floor notices (a floor of 134 against 139 once left five
-# arms deletable at green). #7335 added 23 (the mutation arms, their instrument controls, R4 and R5).
-MIN_ASSERTIONS=151
+# arms deletable at green). #7335 added 26 (the mutation arms, their instrument controls, R4 and R5).
+MIN_ASSERTIONS=154
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   echo "FATAL: only $((PASS + FAIL)) assertions ran, expected >= ${MIN_ASSERTIONS}." >&2
   echo "       The suite was stranded, not clean — a green exit here would assert nothing." >&2
