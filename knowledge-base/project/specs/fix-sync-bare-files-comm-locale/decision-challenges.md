@@ -1,0 +1,15 @@
+# Decision challenges - fix-sync-bare-files-comm-locale
+
+## Decision Classes
+
+| Item | Class | Ruling |
+|---|---|---|
+| NUL-safe pipeline (`-z`) vs `-c core.quotePath=false` | technical | Ruled by CTO agent, 2026-10-12: `git -c core.quotePath=false` plus `LC_ALL=C` on sed/sort/comm, newline-delimited - macOS BSD `comm` has no `-z`; lines still starting with `"` are skipped and counted on stderr; embedded-newline paths are an accepted theoretical edge made fail-safe by the existence check and per-path guard |
+| Prune ceiling: what it counts, value, abort semantics | technical | Ruled by CTO agent, 2026-10-12: count the on-disk not-tracked list about to be removed (not the 3568-line candidate set); default 5000, override `SOLEUR_SYNC_PRUNE_MAX`; over it skip the prune only, loud WARN on stderr, return 0 so cleanup-merged completes - a candidate-set ceiling of ~2000 would abort every legitimate run |
+| Tracked-path invariant: set filter vs per-path guard; drop vs abort | technical | Ruled by CTO agent, 2026-10-12: per-path `git cat-file -e "HEAD:$rel"` right before removal (order-independent); any hit logs `ERROR: tracked path in prune set` and aborts the whole prune (remove nothing, return 0) - a set proven wrong cannot be trusted for its remaining members |
+| Test placement: extend existing suite vs new suite | technical | Ruled by CTO agent, 2026-10-12: extend `plugins/soleur/test/worktree-manager-bare-sync.test.sh` (already registered in `scripts/suite-shard-legs.tsv`), no new registration; locale arm under en_US.UTF-8 with counted SKIP when absent (FAIL under CI=true), raise the `print_results` floor |
+| Sibling fixes: per-file mutation tests vs one census | technical | Ruled by CTO agent, 2026-10-12: fix `scripts/plugin-delivery-canary.sh:653-654` and `apps/web-platform/infra/run-registered-suites.sh:1068` with `LC_ALL=C comm`; one census arm over tracked non-test `*.sh` rather than per-file mutation tests; behavioural mutation test only for `sync_bare_files` (data-loss surface) |
+| Brand-survival threshold `none` | taste | Chosen default: `none` (local developer tooling, no end-user surface, every removed file is re-materializable from HEAD); challengeable, see the plan's User-Brand Impact |
+| Plan-review (simplicity + critique): drop abort-all in favour of drop-and-log; drop the 5000 ceiling; drop the F7 census and Guard 2 | taste | Default kept (CTO-ruled forks 2, 3, 5; the ask itself requires "abort the prune ... if any tracked path is in it" and a ceiling). Challengeable at the PR; re-evaluate the census if it proves noisy |
+| Plan-review (mechanical, applied): F6 merged into F8, F1/F2 parametrized, F3/F4 folded into F1's second run, quoted-line skip branch removed | technical | Applied to the plan 2026-10-12 |
+| Plan-review (correctness, mechanical, applied): blob-type check instead of `cat-file -e`; stage exit-status checks via scratch dir; locale detection via captured `locale -a`; floor from the locale-absent minimum; F8 stub-called marker; relative `rmdir -p` | technical | Applied to the plan 2026-10-12 |
