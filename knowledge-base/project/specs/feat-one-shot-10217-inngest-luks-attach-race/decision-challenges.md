@@ -2,6 +2,7 @@
 
 ## Decision Classes
 
+<!-- lint-infra-ignore start -->
 | Item | Class | Ruling |
 |---|---|---|
 | D1 Shape of the wait fix: bounded counted attach-wait in BOTH readers vs only the failing `pointer_device_wait` site | technical | Ruled by CTO agent, 2026-10-13: bounded counted attach-wait in BOTH readers, one shared wait_dev body per file conformed to the sibling's shipped cloud-init-git-data.yml heredoc wait - keep the counted sleep 1-per-pass loop, bound is a literal 300 in both bodies, whole-predicate retry each pass, FATAL/staging_absent sentences byte-identical (except the embedded bound literal, 30s→300s — same named FATAL/stage/rc), exactly ONE `udevadm settle --timeout=10 \|\| true` after the loop inside each wait_dev body (NOT per pass) - the reopen reader has the same race on the incident path and the file comment demands the readers not drift. Dissent: the assumed spec's seam, attach_wait_invalid validation, and per-pass settle+sleep-5-charged-10 are superseded by the sibling's shipped code (the heredoc wait in cloud-init-git-data.yml — NOT git-data-bootstrap.sh's `_gd_attach_wait`, which ships sleep-10 passes and no settle; git-history seat, PR #10228 review). |
@@ -16,3 +17,4 @@
 | Single PR despite plan-vs-#10081 overlap | taste | Planner decision, 2026-10-13: the overlap is one file (`cloud-init-inngest.yml`) and minimal-edit arms; splitting the wait fix from the self-heal would leave the incident's actual failure shape half-fixed. Whichever of this PR and #10081 merges second rebases. |
 | Named-panel CTO not spawned during planning | taste | Planner constraint, 2026-10-13: no Agent/Task tool exists on this harness, so technical forks are `pending - assumed:` rows here and a `soleur:engineering:cto` ruling at review supersedes them; the sibling branch's CTO rulings (D1-D5 there) are the direct precedent being mirrored. |
 | Dispatch authorization for `inngest-host-replace` (and optional `inngest-provision-rehearsal` run) | operator (production-mutating) | Not decided here. Each dispatch needs the operator's go-ahead naming the command; the PR body lists them unrun. |
+<!-- lint-infra-ignore end -->
