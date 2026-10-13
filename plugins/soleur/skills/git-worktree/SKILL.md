@@ -212,6 +212,12 @@ tracked once and are absent from HEAD. The two together are what make the bare
 root equal HEAD exactly. It then re-applies execute bits for the scripts and
 hooks the plugin loader and SessionStart hooks exec.
 
+The prune is locale-independent (every stage runs under `LC_ALL=C`; a `comm` in the
+user's locale once deleted tracked files, including `.claude-plugin/marketplace.json`)
+and guarded per path: a candidate that `HEAD` still tracks aborts the whole prune with
+`ERROR: tracked path in prune set`, and a prune larger than `SOLEUR_SYNC_PRUNE_MAX`
+(default 5000) is skipped with a `WARN`. Both abort paths exit 0, so `cleanup-merged` completes.
+
 > **Corrected 2026-08-10 (#7409).** This section previously enumerated a
 > seven-entry list (`AGENTS.md`, `plugins/soleur/hooks/*`, `.claude/hooks/*.sh`,
 > `resolve-git-root.sh`, …) and told readers that "any file Claude Code executes

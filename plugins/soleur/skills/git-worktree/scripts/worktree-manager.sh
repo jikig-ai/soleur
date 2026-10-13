@@ -4488,18 +4488,71 @@ sync_bare_files() {
   # Prune stale tracked-deleted files: paths git EVER tracked (the history
   # discriminator -- NOT a raw disk scan) that are absent from HEAD but still on disk.
   # The history gate is the safety boundary: untracked runtime artifacts were never
-  # tracked, so they never enter the candidate set and are never removed. rmdir -p
-  # cleans directories emptied by the removal (stops at the first non-empty parent).
-  local stale_count=0 rel
-  while IFS= read -r rel; do
-    [[ -n "$rel" && -e "$GIT_ROOT/$rel" ]] || continue
-    if rm -f "$GIT_ROOT/$rel"; then
-      stale_count=$((stale_count + 1))
-      rmdir -p "$(dirname "$GIT_ROOT/$rel")" 2>/dev/null || true
+  # tracked, so they never enter the candidate set and are never removed.
+  #
+  # Locale: every stage of the candidate pipeline runs under LC_ALL=C. A comm in the
+  # user's locale over C-sorted inputs prints "not in sorted order" and returns a WRONG
+  # difference that included tracked files (it deleted .claude-plugin/marketplace.json,
+  # breaking the local plugin marketplace). core.quotePath=false keeps non-ASCII paths
+  # byte-exact; a git-quoted spelling (tab/newline/quote in the name) never exists on
+  # disk, so the on-disk check below discards it.
+  #
+  # Safety net, independent of sort order: each on-disk candidate is checked against the
+  # object database at HEAD right before removal. Any hit means the candidate set is
+  # wrong, so the WHOLE prune is abandoned (a set proven wrong cannot be trusted for its
+  # other members). A runaway prune is bounded by SOLEUR_SYNC_PRUNE_MAX (default 5000),
+  # counted on paths about to be removed, not on candidates (a healthy history already
+  # yields thousands of candidates). Every abort still returns 0 so cleanup-merged completes.
+  local stale_count=0 rel prune_dir prune_ok=1 tracked_hits=0
+  local prune_max="${SOLEUR_SYNC_PRUNE_MAX:-5000}"
+  local -a prune_list=()
+  if ! [[ "$prune_max" =~ ^[0-9]+$ ]]; then
+    printf '%bWARN: ignoring non-numeric SOLEUR_SYNC_PRUNE_MAX=%s, using 5000%b\n' "$YELLOW" "$prune_max" "$NC" >&2
+    prune_max=5000
+  fi
+  prune_dir=$(mktemp -d)
+  git -c core.quotePath=false log HEAD --pretty=format: --name-only --diff-filter=AMRC 2>/dev/null \
+    | LC_ALL=C sed '/^$/d' | LC_ALL=C sort -u > "$prune_dir/ever" || prune_ok=0
+  git -c core.quotePath=false ls-tree -r --name-only HEAD 2>/dev/null \
+    | LC_ALL=C sort -u > "$prune_dir/head" || prune_ok=0
+  if [[ "$prune_ok" -eq 1 && -s "$prune_dir/head" ]]; then
+    LC_ALL=C comm -23 "$prune_dir/ever" "$prune_dir/head" > "$prune_dir/cand" || prune_ok=0
+  else
+    prune_ok=0
+  fi
+  if [[ "$prune_ok" -ne 1 ]]; then
+    printf '%bWARN: prune skipped, could not compute the candidate set from git%b\n' "$YELLOW" "$NC" >&2
+  else
+    while IFS= read -r rel; do
+      [[ -n "$rel" ]] || continue
+      [[ -f "$GIT_ROOT/$rel" || -L "$GIT_ROOT/$rel" ]] || continue
+      # blob, not cat-file -e: -e also succeeds for a tree, and a path that is a
+      # directory at HEAD is not a tracked file.
+      if [[ "$(git cat-file -t "HEAD:$rel" 2>/dev/null)" == "blob" ]]; then
+        tracked_hits=$((tracked_hits + 1))
+        printf '%bERROR: tracked path in prune set: %s%b\n' "$RED" "$rel" "$NC" >&2
+        continue
+      fi
+      prune_list+=("$rel")
+    done < "$prune_dir/cand"
+    if [[ "$tracked_hits" -gt 0 ]]; then
+      printf '%bWARN: prune aborted, %s tracked path(s) were in the prune set (ordering bug); nothing removed%b\n' \
+        "$YELLOW" "$tracked_hits" "$NC" >&2
+    elif [[ "${#prune_list[@]}" -gt "$prune_max" ]]; then
+      printf '%bWARN: prune skipped, %s stale paths exceed SOLEUR_SYNC_PRUNE_MAX=%s; raise it to prune anyway%b\n' \
+        "$YELLOW" "${#prune_list[@]}" "$prune_max" "$NC" >&2
+    else
+      for rel in ${prune_list[@]+"${prune_list[@]}"}; do
+        if rm -f "$GIT_ROOT/$rel"; then
+          stale_count=$((stale_count + 1))
+          # rmdir -p cleans directories emptied by the removal; run RELATIVE to the root
+          # so the walk stops at the first non-empty parent and can never climb above it.
+          (cd "$GIT_ROOT" && rmdir -p "$(dirname "$rel")" 2>/dev/null) || true
+        fi
+      done
     fi
-  done < <(comm -23 \
-    <(git log HEAD --pretty=format: --name-only --diff-filter=AMRC 2>/dev/null | LC_ALL=C sort -u | sed '/^$/d') \
-    <(git ls-tree -r --name-only HEAD 2>/dev/null | LC_ALL=C sort -u))
+  fi
+  rm -rf "$prune_dir"
   if [[ "$stale_count" -gt 0 ]]; then
     echo -e "${YELLOW}Removed $stale_count stale tracked-deleted file(s) from bare root${NC}"
   fi
