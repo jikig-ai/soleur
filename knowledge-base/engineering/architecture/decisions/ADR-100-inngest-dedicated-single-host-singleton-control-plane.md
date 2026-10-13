@@ -1646,7 +1646,7 @@ hcloud firewall attached until the next full/drift apply reconciles server_ids".
 non-ForceNew) does NOT change, so it is DELIBERATELY absent from the allow-set". No actor ever did
 that reconcile: the drift check only plans, the per-merge apply never targeted the attachment, and no
 other workflow applies it. The gap was not new. The 2026-07-20 plan
-(`knowledge-base/project/plans/2026-07-20-feat-inngest-liveness-marker-discriminators-and-registry-probe-op-plan.md`,
+(`knowledge-base/project/plans/archive/20261013-041741-2026-07-20-feat-inngest-liveness-marker-discriminators-and-registry-probe-op-plan.md`,
 architecture P1-4) recorded that for this reconcile "no such automated path exists", and the gap was
 accepted anyway, on a premise that plan had just shown false. The Apply-path bullet itself stands. Its replace gate now also requires the
 replacement to be born bound to the firewall (`firewall_not_bound`).

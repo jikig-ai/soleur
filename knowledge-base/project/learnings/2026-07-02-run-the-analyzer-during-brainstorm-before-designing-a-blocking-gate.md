@@ -45,5 +45,5 @@ would have been satisfied on paper while the analyzer was, in fact, not gate-rea
    backlog.** Here #5882's auto-inferred backlog was already CLOSED/drained; the true
    prerequisite was the `public` false-positive fix.
 
-See: brainstorm `knowledge-base/project/brainstorms/2026-07-02-domain-model-register-gates-brainstorm.md`,
-spec `knowledge-base/project/specs/feat-domain-model-register-gates/spec.md`.
+See: brainstorm `knowledge-base/project/brainstorms/archive/20261013-041741-2026-07-02-domain-model-register-gates-brainstorm.md`,
+spec `knowledge-base/project/specs/archive/20261013-041741-feat-domain-model-register-gates/spec.md`.

@@ -1400,7 +1400,7 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   // #6122 (ADR-096) — the zot registry host + its volume/network/firewall/creds/heartbeat
   // ALL ride the operator's initial full (untargeted) `terraform apply` + drift detector,
   // exactly like the git-data host above (CTO ruling 2026-07-06,
-  // knowledge-base/project/specs/feat-registry-oidc-migration/apply-path-cto-ruling.md).
+  // knowledge-base/project/specs/archive/20261013-041741-feat-registry-oidc-migration/apply-path-cto-ruling.md).
   // The per-PR CI `-target` path bridges over SSH to the EXISTING web host; it cannot
   // provision a brand-new host, a new private network attach, or that host's firewall.
   // NONE are in the workflow `-target` list. `doppler_secret.*` here (incl the host-token copies

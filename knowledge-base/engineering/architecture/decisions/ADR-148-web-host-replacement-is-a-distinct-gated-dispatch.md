@@ -5,7 +5,7 @@
 - **Issue:** #6969 (`soleur-web-2` is dark and there is no mechanism to replace it). Related: #6416 (the birth-without-NIC incident the `host_creates` HALT exists for), #6393/#6400 (an out-of-stock recreate stranding the fleet), #6966 (the cx→cpx repin forced by stock), #6459 (web-2 as the cattle-host disposability proof).
 - **Extends:** ADR-145 (host birth is a guarded capability — this is the *replacement* sibling it explicitly deferred), ADR-143 (host lifecycle), ADR-128 (fresh-boot observability R1–R5).
 - **Constrained by:** #6931 (fresh-boot guest-side LUKS unlock — the real reason web-1 is refused; see §web-1 is refused). Related: ADR-119 (the workspaces-LUKS cutover), #6964 (tracker).
-- **Plan:** `knowledge-base/project/plans/2026-07-26-feat-web-host-replace-dispatch-target-plan.md`
+- **Plan:** `knowledge-base/project/plans/archive/20261013-041741-2026-07-26-feat-web-host-replace-dispatch-target-plan.md`
 
 ## Context
 
