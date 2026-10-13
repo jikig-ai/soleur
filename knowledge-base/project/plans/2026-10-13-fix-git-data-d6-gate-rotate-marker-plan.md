@@ -36,6 +36,32 @@ gate selecting it by exact name; and (plan-phase ruling, see `## CTO Rulings`) t
 newest rotate attempt. Issue #10138's rotate re-dispatch waits on this PR merging. Nothing is dispatched, applied,
 written to Doppler, wiped or destroyed by this work; the modified workflow is NOT dispatched after merge.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-13
+**Method:** plan-review panel (DHH, Kieran, code-simplicity, architecture, spec-flow) already applied; this pass ran the mechanical halts
+(4.6 user-brand, 4.7 observability, 4.11 guard contract via `scripts/lint-guard-contract.py`, 4.12 scope check), a prototype of the lib
+against fixtures, and read-only measurements of live run records. The full 40-agent fan-out was not run: the change is one gate plus its
+tests, the scope was ruled by the CTO and trimmed by five reviewers, and every remaining open question was answerable by measurement.
+
+### Key improvements
+1. The classifier and scan loop were prototyped (jq 1.8.2) against 22 classifier fixtures and 7 scan scenarios (plain replace, plan-only
+   rotate, legacy success, stamped, failed/cancelled rotate, refused-at-precondition, in-flight, queued-no-jobs, unreadable bodies,
+   decoy job, non-array `.jobs`, empty input): every verdict in the Phase 2 table behaves as specified, including `done 3<&0` plus
+   `gh ... </dev/null` keeping the id stream intact.
+2. Live read-only measurement (`gh run view --json jobs`, no logs) confirmed the discriminators: plain-replace run 37846545572 has
+   precondition `skipped`, apply `success`, confirm-token step `success`; rotate run 38140050880 has precondition `success`, apply
+   `failure`, job `failure`, confirm-token `success`. The job name and the precondition step name (with the em dash) match the lib
+   constants byte for byte (jq `--arg` equality against the real API output returned a hit).
+3. `## Scope Check` rewritten to the canonical schema (ask mapping with verbatim quotes, provenance with justified `inferred` rows, split
+   assessment) so the 4.12 halt passes.
+
+### New considerations discovered
+- The apply step's post-#10155 name (`... - post-apply backstop`) exists in no run yet (run 38140050880 still carries `... - both-volumes-preserved
+  assert`), so it cannot be verified against GitHub before the first post-merge rotate; the plan's stamped-first ordering (row 4) makes that harmless.
+- The `Dispatch summary` step reads `success` even inside a failed job (run 38140050880), which is why the marker's implicit `success()`
+  - not the summary's conclusion - is what proves the job succeeded.
+
 ## Premise Validation (Phase 0.6)
 
 - `gh issue view 10166`: OPEN, no closing PR; CTO ruling comment dated 2026-10-13 present. `gh pr view 10155`: MERGED
@@ -97,13 +123,19 @@ Cut List (mechanisms considered and removed):
 - `gh run view <id> --json jobs` exposes per-job `name`, `conclusion` and per-step `name`, `conclusion` (not step ids,
   not dispatch inputs). Step names with em dashes must match byte for byte, hence constants plus a parity pin.
 - Code-review overlap (Phase 1.7.5): none of the planned files is named in an open `code-review` issue.
+- Prototype notes (deepen): `first // null` on an empty array is `null` on jq 1.8.2 and 1.7 (CI ubuntu-24.04 ships 1.7.x); the classifier
+  must receive its JSON by here-string, never bare stdin, so the scan's id stream is never consumed; a `read -u 3` loop closed by
+  `done 3<&0` plus `gh run view ... </dev/null` keeps the ids intact.
+- Verified citations (live): #10166 OPEN, #10137 CLOSED (the rotate-arm assert fix), #10138 OPEN (the authorization item that waits on
+  this PR), PR #10155 MERGED 2026-10-12; `gh run list --workflow apply-web-platform-infra.yml --branch main --event workflow_dispatch
+  --limit 100` returns exactly 100 rows today, so the 40-run window is already exhausted on a busy history (the reason for 100).
 
 ## Research Reconciliation - Spec vs. Codebase
 
 | Claim | Reality | Plan response |
 |---|---|---|
 | Issue body: marker step "also fixes the plan-only case" | True for plan-only; but a failed rotate also reads marker `skipped`, same as a plain replace | The lib also classifies rotate attempts via the precondition + apply steps (Fork 1 ruling) |
-| CTO AC: "fails closed on a missing, skipped or empty result" | A legacy (pre-marker) successful rotate and a skipped marker are "not a stamp" but carry no uncertainty | Per-run verdict `unstamped_success` continues the scan; the overall result stays closed (`d6_replace_stale`) unless a stamp is found |
+| CTO AC: "fails closed on a missing, skipped or empty result" | A legacy (pre-marker) successful rotate and a skipped marker are "not a stamp" but carry no uncertainty | Per-run verdict `skip` continues the scan; the overall result stays closed (`d6_replace_stale`) unless a stamp is found |
 | Gate comment: confirm step "concludes success only on a rotate dispatch" | False: exits 0 `n/a` elsewhere | Comment rewritten (Phase 3) |
 | Brief: gate jq "in a sourced lib function" | The scan loop (stop rules) is also decision logic | Both the per-run classifier and the scan loop live in the lib; the workflow only maps verdicts to remedies |
 
@@ -128,23 +160,6 @@ Cut List (mechanisms considered and removed):
 - **Brand-survival threshold:** `single-user incident`
 - **Threshold decision (challengeable):** one user's repository content sitting on an unrotated store after the flip is
   a confidentiality breach, so the threshold cannot be lower; the CPO agent confirmed it (2026-10-13).
-
-## Scope Check
-
-| Ask item | Plan home | Provenance |
-|---|---|---|
-| Marker step, last step, exact `if:`, no always()/continue-on-error, name without Validate/confirm | Phase 1 | brief + CTO AC |
-| Gate selects marker by exact name, requires success, fails closed on missing/skipped/empty | Phases 2-3 | CTO AC |
-| Drop confirm-token name match; correct gate comment | Phase 3 | CTO AC |
-| Confirm-token step stays unconditional | Phase 1 (untouched) + parity pin | brief |
-| Offline jq fixtures: replace, plan-only rotate, missing marker rejected; real rotate accepted | Phase 2 | CTO AC |
-| Parity pins (marker `if:`, gate reads marker, gate not confirm step, confirm step unconditional) | Phase 5 | CTO AC |
-| At least one mutation row | Phases 2 and 5 | CTO AC |
-| Stop skipping a failed newest rotate | Phase 2 | issue extra-evidence + CTO plan-phase ruling (derived, not inferred) |
-| Fail closed on an unreadable run list / queued run with no jobs / wider window | Phases 2-3 | plan-review (spec-flow + architecture + Kieran), same fail-closed rationale as CTO rule 3 |
-| ADR-220 sentence correction; runbook verdict rows | Phase 4 | derived: doc statements this fix falsifies (minimal) |
-
-No split needed: one workflow-pair, one lib, its tests.
 
 ## Architecture Decision (ADR/C4)
 
@@ -201,8 +216,8 @@ logs:
   where: GitHub Actions job log of the flip_preconditions step
   retention: GitHub Actions default (90 days)
 discoverability_test:
-  command: bash -c 'source scripts/lib/git-data-rotate-stamp.sh; git_data_rotate_run_verdict "{}" || true'
-  expected_output: no_job
+  command: bash -c 'source scripts/lib/git-data-rotate-stamp.sh; git_data_rotate_run_verdict "{\"jobs\":[]}" || true'
+  expected_output: skip
 ```
 
 ## Open Code-Review Overlap
@@ -418,6 +433,46 @@ beyond that.
 - `scripts/lib/git-data-rotate-stamp.sh` - classifier, scan loop, constants (Phase 2).
 - `scripts/lib/git-data-rotate-stamp.test.sh` - fixtures, shim, scan rows, mutation battery, floor (Phase 2).
 
+## Scope Check
+
+### Ask Mapping
+
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "add a marker step as the last step of `git_data_host_replace` in .github/workflows/apply-web-platform-infra.yml with `if: inputs.apply_target == 'git-data-host-rotate' && inputs.plan_only != true` (no always(), no continue-on-error; name must not contain \"Validate\" or \"confirm\")" [brief] | Phase 1; Files to Edit entry 1 | mapped |
+| 2 | "make the d6_replace_stale gate in .github/workflows/git-data-cutover.yml select the marker by exact name, require success, fail closed on missing/skipped/empty" [brief] | Phases 2-3; Files to Edit entry 2; Files to Create entries 1-2 | mapped |
+| 3 | "drop the confirm-token step name match and correct the gate comment (lines ~263-265)" [brief] | Phase 3 | mapped |
+| 4 | "keep the confirm-token step unconditional (census G5c)" [brief] | Phase 1 (untouched), pin P-d | mapped |
+| 5 | "offline jq fixtures (replace, plan-only rotate, missing marker rejected; real rotate accepted)" [brief] | Phase 2 rows R1-R4 | mapped |
+| 6 | "parity-test pins (marker if: line, gate reads marker, gate no longer reads confirm-token step, confirm-token step still unconditional)" [brief] | Phase 5 pins P-a..P-g | mapped |
+| 7 | "at least one mutation row (e.g. dropping the plan_only conjunct) caught" [brief] | Phase 5 mutation rows; Phase 2 M1-M4 | mapped |
+| 8 | "The gate's step-selection jq should live in a sourced, unit-testable lib function exercised against fixture job JSON, with the workflow calling it (do not leave it inline)." [brief] | Phase 2 lib, Phase 3 call site | mapped |
+| 9 | "Parity pins must run on comment-stripped, line-anchored text." [brief] | Phase 5 preamble | mapped |
+| 10 | "no workflow dispatch, terraform apply, Doppler write, volume wipe or destroy; do not post-merge dispatch the modified workflow; skip the local affected gate and rely on CI" [brief] | Phase 0.2, Phase 6, AC8 | mapped |
+| 11 | "No ADR change unless the plan finds one is required" [brief] | `## Architecture Decision (ADR/C4)`; Phase 4 one-sentence ADR-220 correction (not a decision) | mapped |
+| 12 | "The reader must additionally stop skipping a failed newest rotate, or it still reads an older success." [issue #10166 comment] | Phase 2 scan loop, rows R5-R6, S2 | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| Files to Edit: `.github/workflows/apply-web-platform-infra.yml` (marker) | asks 1, 4 | asked |
+| Files to Edit: `.github/workflows/git-data-cutover.yml` (gate) | asks 2, 3 | asked |
+| Files to Edit: `plugins/soleur/test/terraform-target-parity.test.ts` | asks 6, 7, 9 | asked |
+| Files to Create: `scripts/lib/git-data-rotate-stamp.sh` and `.test.sh` | ask 8 | asked |
+| Scan loop and the five verdict tokens (stop rules) | ask 12 | asked |
+| Queued run with no jobs treated as in flight; unreadable `gh run list` stops the scan; window 40 -> 100 | - | inferred - justification: the original reader's `continue` on any unreadable or non-success run was the fail-open this PR closes; the same fail-closed rule must hold for a run list that cannot be read and a run whose target is unknowable, and a stamp pushed out of a 40-run window would send an already-rotated system back to a destructive rotate (plan-review: spec-flow, architecture, Kieran) |
+| Files to Edit: ADR-220 one-sentence correction | ask 11 | inferred - justification: the 2026-09-30 amendment states the gate reads "the rotate-confirm marker step", which this fix makes false; leaving it would make the recorded architecture lie about the gate |
+| Files to Edit: runbook verdict rows and sentences | - | inferred - justification: the failed-rotate block is sticky and the new verdicts carry operator exits that must be documented where the existing `d6_replace_stale` row lives |
+| Parity pin P-g (lib constants equal workflow step names) | ask 2 ("by exact name") | asked |
+
+### Split Assessment
+
+- Subsystems touched: 4 - `.github/workflows`, `scripts/lib`, `plugins/soleur/test`, `knowledge-base/engineering`
+- Planned files: 7 | Estimated changed lines: ~650 (about 70% test code)
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR - the 4-root threshold trips only because of doc and test roots; the marker, the gate and the lib are one inseparable fix (a marker without its reader, or a reader without its marker, leaves the gate either fail-open or permanently closed), and the two doc edits are one-line truth fixes.
+
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
@@ -457,7 +512,7 @@ can discharge `d6_replace_stale`, and a rotate attempt that did not complete new
 
 **Assembly.** The population this quantifies over is every route by which a run record could read as "rotated": (1) the
 marker step's own `if:` in `apply-web-platform-infra.yml` (the single place the target/plan_only decision is made);
-(2) the lib classifier `git_data_rotate_run_verdict` (one jq program, all ten table rows); (3) the lib scan loop
+(2) the lib classifier `git_data_rotate_run_verdict` (one jq program, all eight table rows); (3) the lib scan loop
 `git_data_d6_scan` (the stop rules - the chokepoint every run id flows through); (4) the single workflow call site in
 `git-data-cutover.yml` (`flip_preconditions`, the only reader of the stamp; a second reader would be a second source of
 truth) and its `case` fail-closed `*)` arm; (5) the four name constants shared by the lib and the apply workflow;
@@ -495,8 +550,8 @@ exempt because every pin runs on comment-stripped text (and a lib/workflow comme
 
 ## Test Scenarios
 
-- Given a plain replace run, when the gate classifies it, then `not_rotate_attempt` and the scan continues (never a stamp).
-- Given a plan-only rotate, then `not_rotate_attempt`; given a legacy rotate success without the marker, then `unstamped_success`.
+- Given a plain replace run, when the gate classifies it, then `skip` and the scan continues (never a stamp).
+- Given a plan-only rotate, then `skip`; given a legacy rotate success without the marker, then `skip` too (a stamp needs the marker).
 - Given a real rotate, then `stamped`, and `d6 rotate stamp: run <id>` is printed.
 - Given the newest rotate attempt failed and an older stamped rotate exists, then `d6_last_rotate_failed` for the newest.
 - Given `gh run view` fails for the newest run, then `d6_run_unreadable` and no older run is consulted.
@@ -506,7 +561,7 @@ exempt because every pin runs on comment-stripped text (and a lib/workflow comme
 - A plan whose `## User-Brand Impact` section is empty or placeholder fails `deepen-plan` Phase 4.6; this one is filled.
 - The apply step name uses an em dash; the constants and the parity pin must carry the exact byte sequence. The lib test file
   and the TS test must be saved as UTF-8; a mutation row flips one character of each constant.
-- Pre-#10155 runs name their apply step differently, so they read `not_rotate_attempt`. This is intentional and harmless: no
+- Pre-#10155 runs name their apply step differently, so a FAILED one reads `skip` (a legacy SUCCESS reads `skip` for lack of a marker). This is intentional and harmless: no
   stamp can predate the marker, so there is nothing for an unclassifiable older failure to mask. Do not "fix" it by adding
   the legacy name.
 - A queued run with no jobs yet cannot be attributed to a target, so the scan treats it as in flight (blocks, transiently)
