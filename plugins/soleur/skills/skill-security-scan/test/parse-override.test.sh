@@ -3,8 +3,9 @@
 # skill-security-scan/scripts/parse-override.sh (#10167).
 #
 # WHAT THIS GUARDS. Every required frontmatter key is gated on a presence
-# check. Before #10167 that check was `grep -qE "^${f}:[[:space:]]"` — a
-# non-empty value on the SAME line — which false-rejects the schema-permitted
+# check. Before #10167 that check was `grep -qE "^${f}:[[:space:]]"` — any
+# whitespace (even alone) after the colon, same line — which false-rejects the
+# schema-permitted
 # block-mapping spelling of findings_json (`findings_json:` + indented keys;
 # override-artifact-schema.json admits oneOf string|object, and
 # override-mechanism.md documents the inline-object form for artifacts that
@@ -50,20 +51,30 @@ MANIFEST="$SCRIPT_DIR/../references/rules/manifest.yaml"
 # opportunistic pattern this PR ships for cloud-init-inngest-bootstrap.test.sh
 # (eat your own cooking). Mirrors scripts/test-all.sh's adoption block: lib
 # absent → degrade to the pre-#7004 shape, never block the suite.
-_SCRATCH_LIB="$SCRIPT_DIR/../../../scripts/lib/scratch-root.sh"
-if [[ -f "$_SCRATCH_LIB" ]]; then
-  # shellcheck source=../../../../scripts/lib/scratch-root.sh
-  source "$_SCRATCH_LIB" || true
-fi
-if declare -F soleur_scratch_session_begin >/dev/null 2>&1; then
-  soleur_scratch_session_begin "${TMPDIR:-/tmp}" || true
-fi
+_SCRATCH_LIB="$SCRIPT_DIR/../../../../../scripts/lib/scratch-root.sh"
+# Load-bearing, NOT opportunistic: an absent file here means the path rotted
+# (a fix-round seat caught exactly that — a silently-degrading [[ -f ]] guard
+# left the adoption inert). This suite is never run from a partial sandbox.
+[[ -f "$_SCRATCH_LIB" ]] || { echo "FATAL: scratch-root.sh not found at $_SCRATCH_LIB" >&2; exit 2; }
+# shellcheck source=../../../../../scripts/lib/scratch-root.sh
+source "$_SCRATCH_LIB"
+declare -F soleur_scratch_session_begin >/dev/null 2>&1 || { echo "FATAL: scratch-root.sh sourced but begin missing" >&2; exit 2; }
+declare -F _soleur_scratch_cleanup >/dev/null 2>&1 || { echo "FATAL: scratch-root.sh sourced but cleanup missing" >&2; exit 2; }
+# No arg: derived base normalizes a PrivateTmp-style TMPDIR up to /tmp where
+# the reapers can enumerate (no private measured-base contract here).
+soleur_scratch_session_begin || true
 
 # Scratch root with its owning trap installed before ANY source or further
 # allocation — the trap is this file's only cleanup owner (ADR-129). Under a
-# bound session, SUITE_TMP already lands inside the owned root.
+# bound session, SUITE_TMP already lands inside the owned root; the splice
+# reclaims the (empty) root itself on clean exit.
 SUITE_TMP="$(mktemp -d -t parse-override.XXXXXXXX)"
-trap 'rm -rf "$SUITE_TMP"' EXIT
+trap 'rm -rf "$SUITE_TMP"; _soleur_scratch_cleanup || true' EXIT
+
+# The adoption above is load-bearing: fail loudly if the lib moved rather
+# than silently degrading to bare TMPDIR (the [[ -f ]] guard is for genuinely
+# absent deps like partial sandboxes, not for a rotten path).
+[[ -f "$_SCRATCH_LIB" ]] || { echo "FATAL: scratch-root.sh not found at $_SCRATCH_LIB — path rotted" >&2; exit 2; }
 
 # The shared fixture git environment — sweeps inherited GIT_* location vars,
 # pins a discovery ceiling, config hermeticity, and a synthesized identity.
@@ -475,16 +486,49 @@ else
   bad "empty-diff baseline broken (rc=$PARSE_RC, out=$PARSE_OUT)"
 fi
 
+# --- Arm 9: stale rule_pack_sha256 → stale_findings bucket ---------------------
+# The third bucket, unexercised until now: a wrong-but-well-formed sha must
+# land in stale_findings and fail closed (rc=1) while ok-skill still matches.
+R="$REPOS/arm-stale-sha"
+rel="$OVERRIDE_DIR/2026-10-13-stale-skill.md"
+rel_ok="$OVERRIDE_DIR/2026-10-13-ok-skill.md"
+mk_repo "$R"
+write_artifact "$R" "ok-skill" 'findings_json: {"code-execution": {"verdict": "REVIEW", "count": 2}}'
+# write_artifact seeds MANIFEST_SHA verbatim; emit this artifact by hand with a
+# bogus sha (64-hex, well-formed, deliberately not the live manifest's).
+mkdir -p "$R/$OVERRIDE_DIR"
+{
+  printf -- '---\n'
+  printf 'skill: stale-skill\n'
+  printf 'source: https://example.com/skills/stale-skill\n'
+  printf 'findings_json: {"code-execution": {"verdict": "REVIEW", "count": 0}}\n'
+  printf 'justification: operator accepted the residual risk after review\n'
+  printf 'approver: fixture@example.com\n'
+  printf 'scanner_version: 0.1.0\n'
+  printf 'rule_pack_sha256: %064d\n' 0
+  printf 'verdict: REVIEW\n'
+  printf 'timestamp: 2026-10-13T00:00:00Z\n'
+  printf -- '---\n\n'
+  printf '# Override: stale-skill\n\n## Findings\n%s/redacted.scan-meta.json\n\n## Justification\nReviewed and accepted.\n' "$OVERRIDE_DIR"
+} > "$R/$rel"
+commit_all "$R" "add override artifacts"
+run_parse "$R"
+if [[ "$PARSE_RC" -ne 0 ]] && in_bucket stale_findings "$rel" && in_bucket matched "$rel_ok" \
+   && ! in_bucket matched "$rel"; then
+  ok "stale rule_pack_sha256 lands in stale_findings and fails closed"
+else
+  bad "stale sha not bucketed (rc=$PARSE_RC, out=$PARSE_OUT)"
+fi
+
 echo "=== parse-override: $PASS passed, $FAIL failed ==="
+# Real failures first — report them as failures, not as vacuity.
+if [[ "$FAIL" -gt 0 ]]; then exit 1; fi
 # Assertion floor: a run that executed fewer than every arm reads RED, never
-# vacuously green (mirrors the scratch-residue suite's guard-recognized
-# `(( PASS < N ))` shape so the floor meta-guard sees this suite too).
-if (( PASS < 14 )); then
-  echo "VACUITY: only $PASS of 14 arms ran — refusing green" >&2
+# vacuously green — the `(( PASS < N ))` counter-comparison shape is the one
+# guard-vacuity-floor.test.sh derives floors from.
+if (( PASS < 15 )); then
+  echo "VACUITY: only $PASS of 15 arms passed — refusing green" >&2
   exit 1
 fi
-if [[ "$FAIL" -eq 0 ]]; then
-  echo "OK: $PASS assertions"
-  exit 0
-fi
-exit 1
+echo "OK: $PASS assertions"
+exit 0

@@ -87,11 +87,16 @@ for path in "${added[@]}"; do
   # satisfy presence nor close the block. A repeated key RECOMPUTES rather
   # than latching (YAML last-wins): `f: v` then `f:` reports missing. Scope:
   # presence, not type — `f: []`/`f: 5` count present and remain the schema
-  # validator's problem; quoted keys (`'f':`) and `f : v` are legal YAML this
-  # gate does not recognize — they report missing (deny-direction by design).
+  # validator's problem — this gate checks presence only; value type is
+  # unenforced for the three fields with no downstream check (findings_json,
+  # source, justification). Quoted keys (`'f':`), `f : v`, and tab-separated
+  # `f:\tv` are spellings this gate does not recognize — they report missing
+  # (deny-direction by design); the key arm's ` ` (not [[:space:]]) and the
+  # block arm's leading-space requirement deny tab indentation, which YAML
+  # forbids.
   missing="$(printf '%s\n' "$fm" | awk -v fields="${required_fields[*]}" '
     BEGIN { n = split(fields, req, " ") }
-    /^[A-Za-z_][A-Za-z0-9_-]*:([[:space:]]|$)/ {
+    /^[A-Za-z_][A-Za-z0-9_-]*:( |$)/ {
       key = $0; sub(/:.*/, "", key)
       cur = key; seen[key] = 1
       content[key] = 0
@@ -100,7 +105,7 @@ for path in "${added[@]}"; do
           rest !~ /^(null|Null|NULL|~)([[:space:]]|$)/) content[key] = 1
       next
     }
-    /^[[:space:]]+[^[:space:]#]/ {
+    /^ +[^[:space:]#]/ {
       if (cur != "") content[cur] = 1
       next
     }

@@ -9,7 +9,7 @@
 #
 # LEAVES. The directly-run suites measured leaking on main plus the leaves added since — TS suites
 # driven via `bun test`, shell suites and producer scripts run directly (one sources test-helpers.sh,
-# one adopts scratch-session mid-flight), a `python -m unittest` module, the pytest chokepoint hook
+# two adopt scratch-session mid-flight), a `python -m unittest` module, the pytest chokepoint hook
 # (pytest itself is not installed on every host, so the hook pytest calls is driven directly:
 # pytest_configure is the whole of the conftest chokepoint) and vitest leaves including a GENERATED
 # test that really mkdtemp's and leaks if the root is unbound. The `add_leaf` registry below is the
