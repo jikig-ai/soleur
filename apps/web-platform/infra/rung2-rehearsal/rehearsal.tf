@@ -264,9 +264,10 @@ resource "hcloud_server" "rehearsal" {
 
 # --- (#10138) The deliberate late attachment ----------------------------------------------
 # Real rotate run 38384137515 lost an attachment race the rehearsals never could (17-33 s here, 65 s
-# and 125 s there). These two resources hold each attachment back after the server exists so the
-# PAYLOAD boot has to wait: LUKS floor(delay/2) s (exercising the heredoc's wait), plaintext the full
-# delay (exercising the bootstrap's). triggers_replace is the server id ONLY, so a differing -var
+# and 125 s there, as Terraform recorded them). These two resources hold each attachment back after
+# the server exists so the PAYLOAD boot has to wait: LUKS floor(delay/2) s (the heredoc runs first
+# and must wait for it), plaintext the full delay, so the plaintext device is still absent when the
+# bootstrap checks it (exercising the bootstrap's wait). triggers_replace is the server id ONLY, so a differing -var
 # between plan and destroy cannot replace the resource; no `count` (plan-shape's create regex refuses
 # a `[0]` address); the seed phase sleeps 0. plan-shape admits exactly these two replaces.
 resource "terraform_data" "rehearsal_attach_delay_luks" {

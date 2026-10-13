@@ -65,10 +65,11 @@ assert_not_symlink() {
 }
 
 # (#10138) A volume ATTACHMENT can land after first boot has started: Hetzner attaches volumes as
-# separate actions once the server exists (run 38384137515, 2026-10-13: the plaintext volume
-# attached about 70 s after the check below). _gd_attach_wait <label> <predicate> re-runs the WHOLE
-# predicate every 10 s for up to 300 s (counted, never the clock; no settle, so counted time is real
-# time) and returns 1 after the bound, so the caller keeps its named FATAL. Call it directly, never
+# separate actions once the server exists (run 38384137515, 2026-10-13: Terraform recorded the
+# plaintext attachment completing about 70 s after the check below). _gd_attach_wait <label>
+# <predicate> re-runs the WHOLE predicate every 10 s for up to 300 s: counted, never the clock, and
+# each pass sleeps the 10 s it charges, so 300 s is a LOWER bound on real time (each pass's probes add
+# to it). It returns 1 after the bound, so the caller keeps its named FATAL. Call it directly, never
 # inside $( ): the predicate's assignments must reach the caller.
 # ---- BEGIN attach-wait helper ----
 readonly _AW_BOUND_S=300
@@ -448,14 +449,14 @@ if [ -n "$_pt_id" ]; then
   _pt_dev=""
   # (#10138) Wait for a late attachment. The predicate re-resolves the link every pass and hands the
   # node to the caller through _pt_dev; the FATAL below is the unchanged one, so a timeout can never
-  # read as "no plaintext volume". _pt_state names which check failed last; `timeout 10` keeps one
-  # blocked probe from outliving the counted bound.
+  # read as "no plaintext volume". _pt_state names which check failed last; `timeout -k 2 10` stops
+  # a blocked size probe from stalling a pass (it cannot bound a probe stuck in uninterruptible I/O).
   _pt_state=""
   _gd_pt_ready() {
     _pt_dev="$(realpath -e "$_pt_link" 2>/dev/null || true)"
     if [ -z "$_pt_dev" ]; then _pt_state="the link does not resolve"; return 1; fi
     if [ "$(stat -L -c %F "$_pt_dev" 2>/dev/null || true)" != "block special file" ]; then _pt_state="the node is not a block special file"; return 1; fi
-    if ! [ "$(timeout 10 blockdev --getsize64 "$_pt_dev" 2>/dev/null || echo 0)" -gt 0 ]; then _pt_state="the block device reports size 0"; return 1; fi
+    if ! [ "$(timeout -k 2 10 blockdev --getsize64 "$_pt_dev" 2>/dev/null || echo 0)" -gt 0 ]; then _pt_state="the block device reports size 0 or its size probe failed"; return 1; fi
     return 0
   }
   if ! _gd_attach_wait "plaintext volume $_pt_id" _gd_pt_ready; then

@@ -1166,7 +1166,7 @@ PRODUCER_JOIN=(
   'apps/web-platform/infra/cutover-inngest-workflow.test.sh | curl | exempt | text-only the hits are process substitutions; the one executed pipe (cutover-inngest.sh:557) is invisible to the join and its stub drains'
   'apps/web-platform/infra/fresh-boot-ready.test.sh | curl | exempt | text-only the derived site is only text-pinned; the executed pipe (soleur-host-bootstrap.sh:1062) runs without pipefail'
   'apps/web-platform/infra/fresh-boot-ready.test.sh | doppler | exempt | text-only the derived producer apps/cla-evidence/infra/bootstrap.sh matches by basename only; the suite says bootstrap.sh only in assertion messages about the host bootstrap script and never runs the cla-evidence script'
-  'apps/web-platform/infra/git-data-bootstrap-store-verify.test.sh | cryptsetup | exempt | text-only luksOpen pipe site git-data-bootstrap.sh:102 is outside the extracted store-verify unit; stub answers isLuks only'
+  'apps/web-platform/infra/git-data-bootstrap-store-verify.test.sh | cryptsetup | exempt | text-only luksOpen pipe site (the `cryptsetup luksOpen --key-file -` line in git-data-bootstrap.sh section 1) is outside the extracted store-verify unit; stub answers isLuks only'
   'apps/web-platform/infra/git-data-luks-reopen.test.sh | cryptsetup | exempt | arm-drain the luksOpen arm reads the key (cat to key_seen) before any exit; keyed on the subcommand, not the flag'
   'apps/web-platform/infra/git-data-root-key.test.sh | curl | drains | 1 | *'
   'apps/web-platform/infra/infra-config-apply.test.sh | sha256sum | exempt | text-only sha256sum is the pipe producer with a file operand at infra-config-apply.sh:489,512; no stdin is piped into it'

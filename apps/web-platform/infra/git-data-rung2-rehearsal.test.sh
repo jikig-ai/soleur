@@ -2609,7 +2609,9 @@ _la_verdict() { # $1 = comment-stripped rehearsal-root HCL
       [[ "$(grep -c '^triggers_replace' <<<"$blk")" == 1 && "$(grep '^triggers_replace' <<<"$blk")" == 'triggers_replace = hcloud_server.rehearsal.id' ]] || bad+=" triggers-${sfx}"
       # the payload-phase gate AND the stagger (LUKS gets half, rounded down; the plaintext volume the full delay)
       grep -qF 'var.rehearsal_phase == "payload"' <<<"$blk" || bad+=" gate-${sfx}"
-      if [[ "$sfx" == luks ]]; then grep -qF 'floor(var.rehearsal_attach_delay_s / 2)' <<<"$blk" || bad+=" gate-luks-stagger"
+      # the delay COMMAND must really sleep for the variable (a `sleep 0` makes the paid run vacuous)
+      grep -qxF 'command = "sleep $REHEARSAL_ATTACH_DELAY_S"' <<<"$blk" || bad+=" command-${sfx}"
+      if [[ "$sfx" == luks ]]; then grep -qxF 'REHEARSAL_ATTACH_DELAY_S = tostring(var.rehearsal_phase == "payload" ? floor(var.rehearsal_attach_delay_s / 2) : 0)' <<<"$blk" || bad+=" gate-luks-stagger"
       else { grep -qF 'var.rehearsal_attach_delay_s' <<<"$blk" && ! grep -qF 'floor(' <<<"$blk"; } || bad+=" gate-pt-stagger"; fi
     fi
     blk=$(_la_block "$att" "$code")
@@ -2617,10 +2619,14 @@ _la_verdict() { # $1 = comment-stripped rehearsal-root HCL
   done
   blk=$(_la_block 'variable "rehearsal_attach_delay_s" {' "$code")
   grep -qxF 'default = 0' <<<"$blk" || bad+=" variable-default"
+  # the cap is a PROPERTY, not a literal: it must stay below the heredoc's 300-pass wait, or a paid run
+  # would wait past the window and spend a rehearsal failing
+  local cap; cap=$(sed -nE 's/.*<= ([0-9]+).*/\1/p' <<<"$blk" | tail -1)
+  { [[ "$cap" =~ ^[0-9]+$ ]] && [[ "$cap" -lt 300 ]]; } || bad+=" variable-cap"
   printf '%s' "$bad"
 }
 _la_pristine=$(_la_verdict "$(cat "$REH_CODE")")
-for _la_cat in structure triggers gate depends variable; do
+for _la_cat in structure triggers gate command depends variable; do
   cases=$((cases + 1))
   if ! grep -qE "(^| )${_la_cat}-" <<<"$_la_pristine"; then
     pass "late-attach (${_la_cat}): the rehearsal root satisfies every ${_la_cat} pin of the late-attachment delay"
@@ -2650,6 +2656,9 @@ LAPY
 _la_mut "phase gate removed" gate-pt \
   'tostring(var.rehearsal_phase == "payload" ? var.rehearsal_attach_delay_s : 0)' 'tostring(var.rehearsal_attach_delay_s)'
 _la_mut "variable default raised" variable-default 'default     = 0' 'default     = 30'
+_la_mut "delay command no longer sleeps" command-luks 'command = "sleep $REHEARSAL_ATTACH_DELAY_S"' 'command = "sleep 0"'
+_la_mut "delay cap raised past the wait" variable-cap '<= 240' '<= 2400'
+_la_mut "seed boot given a LUKS delay" gate-luks-stagger 'floor(var.rehearsal_attach_delay_s / 2) : 0)' 'floor(var.rehearsal_attach_delay_s / 2) : 30)'
 _la_mut "delay value in triggers_replace" triggers-luks \
   'triggers_replace = hcloud_server.rehearsal.id' 'triggers_replace = [hcloud_server.rehearsal.id, var.rehearsal_attach_delay_s]'
 # terraform_data is outside the hcloud_/doppler_ allowlist in arm 1, so its own scope check.
@@ -2674,10 +2683,78 @@ else
   fail "late-attach: expected exactly one TF_VAR_rehearsal_attach_delay_s: \"150\" line (matching=${_la_wf_n}, any mention=${_la_wf_all})"
 fi
 
-# RAISED 129 -> 137 (#10138, late-attach guard), ITEMISED: +5 category rows (structure, triggers, gate,
-# depends, variable) over the late-attachment delay; +3 mutant rows (phase gate removed, default
-# raised, delay value in triggers_replace); +1 the terraform_data scope row; +1 the workflow's single
-# TF_VAR line. The floor is the measured total (137 ran), so slack is zero.
+
+# (g) THE JOB BUDGET is the SUM OF EVERY STEP'S OWN BOUND (review W6), read from the parsed YAML.
+# The previous arm summed the poll DEADLINES plus the three apply timeouts and certified a ceiling
+# against that — while init, the three plans, the three shape steps and every curl ran unbounded,
+# so "the ceiling is the sum of its bounds" was true only of the steps someone had bounded. Now:
+# every rehearse step carries `timeout-minutes`, the job ceiling is >= their sum, and every
+# deadline-bounded poll's step bound is STRICTLY above its deadline (an attempt may start just
+# before the deadline, and a step bound at the deadline kills the summary that follows the loop).
+_w6="$(python3 - "$WF" <<'W6PY'
+import re, sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+j = d["jobs"]["rehearse"]
+steps = j["steps"]
+unb = [s.get("id") or s.get("name") or s.get("uses") for s in steps
+       if not isinstance(s.get("timeout-minutes"), int) or s["timeout-minutes"] <= 0]
+total = sum(s["timeout-minutes"] for s in steps if isinstance(s.get("timeout-minutes"), int))
+polls = short = 0
+for s in steps:
+    for n in re.findall(r'deadline=\$\(\( SECONDS \+ ([0-9]+) \* 60 \)\)', str(s.get("run") or "")):
+        polls += 1
+        if not (isinstance(s.get("timeout-minutes"), int) and s["timeout-minutes"] > int(n)):
+            short += 1
+            print("SHORT=%s deadline %s min, step bound %r" % (s.get("id") or s.get("name"), n, s.get("timeout-minutes")))
+print("STEPS=%d UNBOUNDED=%d SUM=%d JOB=%s POLLS=%d SHORT=%d" % (len(steps), len(unb), total, j.get("timeout-minutes"), polls, short))
+for u in unb[:5]:
+    print("UNB=%s" % u)
+W6PY
+)"
+_w6_line=$(grep '^STEPS=' <<<"$_w6")
+_w6f() { tr ' ' '\n' <<<"$_w6_line" | sed -n "s/^$1=//p" | sed -n '1p'; }
+_w6_steps=$(_w6f STEPS); _w6_unb=$(_w6f UNBOUNDED); _w6_sum=$(_w6f SUM); _w6_job=$(_w6f JOB)
+_w6_polls=$(_w6f POLLS); _w6_short=$(_w6f SHORT)
+cases=$((cases + 1))
+if [[ "${_w6_steps:-0}" -ge 20 && "${_w6_unb:-1}" == 0 && "${_w6_job:-0}" =~ ^[0-9]+$ && "${_w6_sum:-0}" -ge 60 ]] \
+   && (( _w6_job >= _w6_sum )); then
+  pass "every one of the ${_w6_steps} rehearse steps carries timeout-minutes, and the job ceiling (${_w6_job}) >= their sum (${_w6_sum})"
+else
+  fail "the rehearse job's ceiling is not the sum of bounded steps (steps=${_w6_steps:-?} unbounded=${_w6_unb:-?} sum=${_w6_sum:-?} job=${_w6_job:-?})" \
+    "$(grep '^UNB=' <<<"$_w6" | head -3 | tr '\n' ' ')"
+fi
+cases=$((cases + 1))
+if [[ "${_w6_polls:-0}" -ge 4 && "${_w6_short:-1}" == 0 ]]; then
+  pass "each of the ${_w6_polls} deadline-bounded polls sits inside a step bound strictly above its deadline"
+else
+  fail "a deadline-bounded poll is not inside a step bound above its deadline (polls=${_w6_polls:-?} short=${_w6_short:-?})" \
+    "$(grep '^SHORT=' <<<"$_w6" | head -3 | tr '\n' ' ')"
+fi
+
+# RAISED 94 -> 100 (#8010), ITEMISED — arm (f2), the ack decision after the reset probe:
+#     1  the step body is extractable by `id: sentry_ack` and parses as bash (`bash -n` on the
+#        EXTRACTED snippet, never on the YAML — task 3.11)
+#     1  UNAVAILABLE  => exactly one ack line, and it is the run-id-pinned ACK REQUIRED one
+#     1  ...and no CR reaches $GITHUB_STEP_SUMMARY (the fixture plants one)
+#     1  CLEAN        => exactly one ack line, ACK NOT REQUIRED
+#     1  NOT_RUN      => exactly one ack line, naming it unrescuable by any acknowledgement
+#     1  no evidence file => still exactly one decision, never zero
+#   ----
+#     6   (measured against the as-written file: 94 + 6 = 100 = 100 passed, 0 failed)
+# RAISED 104 -> 116 (#5274), ITEMISED: the job-set pin changed in place (0); +3 teardown-job rows;
+# +9 three-boot rows (phase var, user_data shape, seed shape, seed hygiene, seed render, root
+# purity, plan-shape call sites, replace window, replace upload gate). The step-timeout cardinality
+# check lives inside the budget arm and is not its own case. Measured: 116 ran.
+# RAISED 116 -> 129 (#5274 review), ITEMISED: the teardown row changed in place (0); +4 Guard 3
+# coupling (live workflow + the three surviving mutants); +1 replace-probe wrapper/host
+# classification; +2 seed power-off poll (empty token, bounded requests); +1 seed plan-time pins;
+# +2 seed replay order (order, fsync-only tail); the budget arm 1 -> 2 (+1); +2 boot-#2 ack rows.
+# Measured: 129 ran.
+# RAISED 129 -> 143 (#10138, late-attach guard), ITEMISED: +6 category rows (structure, triggers, gate,
+# command, depends, variable) over the late-attachment delay; +6 mutant rows (phase gate removed, default
+# raised, delay command no longer sleeps, cap raised past the 300 s wait, seed boot given a LUKS delay,
+# delay value in triggers_replace); +1 the terraform_data scope row; +1 the workflow's single TF_VAR
+# line. The floor is the measured total (143 ran), so slack is zero.
 #
 # CONSERVATION AGAIN, HERE. The check above runs before the three-boot arms and the ack arm, so
 # a verdict discarded in any of them was invisible to it; this one covers every row in the file.
@@ -2686,13 +2763,13 @@ if [[ $((passes + fails)) -ne "$cases" ]]; then
     "$passes" "$fails" "$((passes + fails))" "$cases" >&2
   exit 1
 fi
-if [[ "$cases" -lt 137 ]]; then
-  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, floor is 137.\n' "$cases" >&2
+if [[ "$cases" -lt 143 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, floor is 143.\n' "$cases" >&2
   printf '  Arms were deleted, skipped, or the suite exited early.\n' >&2
   printf '\n=== git-data-rung2-rehearsal: %d passed, %d failed (%d cases) ===\n\n' "$passes" "$fails" "$cases"
   exit 1
 fi
-printf '  ok   anti-vacuity floor: %d assertions ran (floor 137)\n' "$cases"
+printf '  ok   anti-vacuity floor: %d assertions ran (floor 143)\n' "$cases"
 
 printf '\n=== git-data-rung2-rehearsal: %d passed, %d failed ===\n\n' "$passes" "$fails"
 # `exit $(( fails > 0 ))`, NOT a trailing `[[ "$fails" -eq 0 ]]`. A bare final test expression

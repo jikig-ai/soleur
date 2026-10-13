@@ -289,8 +289,8 @@ if [ "$(blockdev --getro "$M1_LOOP")" = 1 ]; then ok "M1 the origin is still ker
 
 # ═══ SUT TIER — the REAL extracted plaintext-count unit, on real loop devices ═══════
 # The unit is extracted by its inner sentinels (it spans the real _repo_count definition through
-# the end of the plaintext block, so arm C tests the real counter, not a copy). log() is copied out
-# of the script. Each arm runs the unit in a CHILD bash (the unit `exit`s and arms an EXIT trap);
+# the end of the plaintext block, so arm C tests the real counter, not a copy). log() and the attach-wait helper
+# are copied out of the script. Each arm runs the unit in a CHILD bash (the unit `exit`s and arms an EXIT trap);
 # the parent measures the origin's bytes, its sector counters, its read-only flag and the
 # transient-device leaks.
 PT_BEGIN='# ---- BEGIN plaintext-count unit ----'

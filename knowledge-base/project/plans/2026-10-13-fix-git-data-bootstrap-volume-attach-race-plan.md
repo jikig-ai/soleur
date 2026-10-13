@@ -25,13 +25,21 @@ design is smaller than the one this plan describes:
   through the pass on which the link lands.
 - **`udevadm settle`: dropped from the helper and from the heredoc loop; one settle follows the
   heredoc loop**, ahead of the single-shot probes that gate `luksFormat`. The helper charges 10 s
-  and sleeps 10 s, so counted time is real time.
-- **Added:** `timeout 10` on the plaintext size probe, and a log line naming the last measured state
-  before the unchanged FATAL.
+  and sleeps 10 s, so 300 s is a lower bound on real time (each pass's probes add to it).
+- **Added:** `timeout -k 2 10` on the size probes (the plaintext predicate and both heredoc size
+  probes), a refusal after the heredoc settle when the node is a block device that still reports size 0,
+  and a log line naming the last measured state before the unchanged FATAL.
 - **Tests pruned** to one row per distinct property, each mutation row asserting its own reason; the
-  heredoc loop is pinned in B18 (`sleep 1`, the counter, the exact bound, the post-loop settle).
-- Acceptance criteria and scenarios below that name the seam, the section-1 wait, `luks-discover`
-  or the in-loop settle describe the superseded design and are not part of what shipped.
+  heredoc loop is pinned in B18 AND run in B18r (stub sleep, blockdev, udevadm and timeout: the exact
+  sleep and settle counts, the size-0 refusal, five mutants). The rehearsal and plan-shape suites
+  kept the pins the CTO restored in the fix round (delay command, cap below 300, LUKS stagger,
+  four plan-shape refusal rows).
+- **Measured at the review head (2026-10-13):** `user_data` stored 30,732 B of 32,768 B (headroom
+  2,036 B; 2,656 B on `main`, so this PR spends 620 B). Five earlier boots in the Overview and
+  Context sections below means four (ADR-239 names them).
+- Everything below that names the seam, the section-1 wait, `luks-discover`, the in-loop settle, the
+  "Guard 4" label (now the late-attach guard), or a 5 s sleep with a 5 s settle describes the
+  superseded design and is not part of what shipped; ticked criteria for those items are superseded.
 
 ## Enhancement Summary
 
@@ -420,14 +428,14 @@ Legal: no new exposure from this change (inherited 2026-10-13: the plaintext vol
 
 ## Acceptance Criteria
 
-- [x] `git-data-bootstrap.sh` contains one `# ---- BEGIN attach-wait helper ----` / `# ---- END attach-wait helper ----` pair; the plaintext site and the LUKS site both call `_gd_attach_wait`; `bash -n` passes on the helper and on the whole script.
+- [x] (superseded by the review-round amendment) `git-data-bootstrap.sh` contains one `# ---- BEGIN attach-wait helper ----` / `# ---- END attach-wait helper ----` pair; the plaintext site and the LUKS site both call `_gd_attach_wait`; `bash -n` passes on the helper and on the whole script.
 - [x] The plaintext FATAL sentence and the `no LUKS-formatted volume found` sentence are byte-identical to `origin/main` (static row compares them).
 - [x] `bash apps/web-platform/infra/git-data-bootstrap-store-verify.test.sh` exits 0 with `MIN_ASSERTIONS` equal to `passes + fails` (the pre-change count is 412; the new rows add to it; record the measured final number in the PR).
 - [x] Every mutation row in Guard 1 has a landed-check, an instrument self-test, and drives the suite RED when applied; the `sleep`-stub never-appears fixture proves `sleep` was called at most ceil(bound/10) times.
 - [x] Late-link fixture: the link appears on the Nth `sleep` and the run proceeds to marker + all booleans, with `plaintext_volume=present plaintext_empty=yes` equal to the R1 on-time verdict.
 - [x] Never-appears fixture: rc != 0, `FATAL: plaintext_unverified reason=source` with the unchanged sentence, no marker, FATAL emitted at stage=bootstrap, and no `blockdev --setro`, `dmsetup` or `mount` call.
-- [x] `GIT_DATA_ATTACH_WAIT_S` of `abc`, `-5` and the empty string is refused (own FATAL, no probe); `0` probes once and, with the link present, proceeds.
-- [x] `git-data-luks.test.sh` (B18 (i) literal 300 + mutation), `git-data-store-device-census.test.sh` (C2 strip row), `git-data-runcmd-rehearsal.test.sh`, `git-data-template-strip.test.sh`, `git-data-render-strip-parity.test.sh`, `git-data-rung2-rehearsal.test.sh`, `store-vs-data-mount-parity.test.sh`, `git-data-luks-reopen.test.sh`, `git-data-plaintext-snapshot-loopback.test.sh` (root/loopback needed; run where available), `tests/scripts/test-git-data-rung2-plan-shape.sh`, `tests/scripts/test-git-data-birth-readiness-gate.sh`, `scripts/guard-vacuity-floor.test.sh` and `plugins/soleur/test/terraform-target-parity.test.ts` pass locally.
+- [x] (superseded by the review-round amendment) `GIT_DATA_ATTACH_WAIT_S` of `abc`, `-5` and the empty string is refused (own FATAL, no probe); `0` probes once and, with the link present, proceeds.
+- [x] (superseded by the review-round amendment) `git-data-luks.test.sh` (B18 (i) literal 300 + mutation), `git-data-store-device-census.test.sh` (C2 strip row), `git-data-runcmd-rehearsal.test.sh`, `git-data-template-strip.test.sh`, `git-data-render-strip-parity.test.sh`, `git-data-rung2-rehearsal.test.sh`, `store-vs-data-mount-parity.test.sh`, `git-data-luks-reopen.test.sh`, `git-data-plaintext-snapshot-loopback.test.sh` (root/loopback needed; run where available), `tests/scripts/test-git-data-rung2-plan-shape.sh`, `tests/scripts/test-git-data-birth-readiness-gate.sh`, `scripts/guard-vacuity-floor.test.sh` and `plugins/soleur/test/terraform-target-parity.test.ts` pass locally.
 - [x] `diff <(git diff --name-only origin/main...HEAD) <(bash -c 'source tests/scripts/lib/git-data-birth-readiness-gate.sh; git_data_rung2_bound_files apps/web-platform/infra/cloud-init-git-data.yml')` shows exactly `cloud-init-git-data.yml` and `git-data-bootstrap.sh` among the hash-bound inputs touched (reviewed 2026-10-13: tests, `rehearsal.tf`, `plan-shape.sh` and the workflow are not bound).
 - [x] `bash apps/web-platform/infra/git-data-userdata-budget.sh --json` still reports `stored` <= 32,768 and `plugins/soleur/test/cloud-init-user-data-size.test.ts` passes; the measured headroom is recorded in the PR (pre-change 2,656 B).
 - [x] `terraform validate` and a plan-only check of `rung2-rehearsal` with the delay variable at 0 and at 150 pass; the seed-phase sleep is 0; `git-data-rung2-rehearsal.test.sh` (which pins every poll's step bound above its deadline and the job ceiling above the step sum) passes with the documented +150 s per payload-phase boot absorbed by the existing apply step bounds (15/25/15 min; measured payload applies took 33 s and 34 s on 2026-10-13).

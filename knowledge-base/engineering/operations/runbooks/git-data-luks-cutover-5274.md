@@ -967,8 +967,11 @@ path re-runs first boot on 170081857.
    lands.
 4. If the sibling gate PR for the rotate precondition (#10207) merged as drafted, its
    `stale_boot_complete` refusal needs a `boot_complete` newer than the server's creation, and
-   170081857 never emitted one: run a plain replace first (`apply_target=git-data-host-replace`,
-   `plan_only=true` before the real one). Otherwise go to 5.
+   170081857 never emitted one (inferred, 2026-10-13: its bootstrap died at the FATAL before the
+   emit, and nothing was read from the host): run a plain replace first
+   (`apply_target=git-data-host-replace`, `plan_only=true` before the real one). Otherwise go to 5,
+   but only once the rotate's `served_repos` read for 170081857 is confirmed to be a measurement and
+   not a default (see "State left behind"): until then run step 4 anyway.
 5. The rotate: `apply_target=git-data-host-rotate -f confirm=ROTATE-GIT-DATA`, `plan_only=true`
    first, then the real run. It destroys LUKS volume 107125716 and re-mints the passphrase again.
 

@@ -512,7 +512,7 @@ esac
 STUB
 
   # sleep: never sleeps. It logs, counts its calls, and on the Nth call (late_after_sleep) lets the
-  # late attachment "land": the plaintext by-id link appears, or the LUKS node appears (luks_late).
+  # late attachment "land": the plaintext by-id link appears.
   mkstub sleep <<'STUB'
 printf 'sleep|%s\n' "$*" >> "$FXD/calls.log"
 [ "$*" = 10 ] || { printf 'sleep-stub: unexpected argv: %s\n' "$*" >&2; exit 64; }
@@ -524,7 +524,16 @@ STUB
   mkstub udevadm <<'STUB'
 printf 'udevadm|%s\n' "$*" >> "$FXD/calls.log"
 case "$*" in "settle --timeout="[0-9]*) : ;; *) printf 'udevadm-stub: unexpected argv: %s\n' "$*" >&2; exit 64 ;; esac
-[ ! -e "$FXD/settle_fail" ] || exit 1
+STUB
+
+  # timeout: logs to its OWN file (a calls.log line naming the origin would trip the origin allowlist),
+  # drops the -k grace and the duration, and execs the real command found on the stub PATH. It exists
+  # so a row can assert the size probe really runs under `timeout -k 2 10`, not merely that the text does.
+  mkstub timeout <<'STUB'
+printf '%s\n' "$*" >> "$FXD/timeout.log"
+[ "$1" != -k ] || shift 2
+shift
+exec "$@"
 STUB
 
   # The kernel log (DIAGNOSTIC only): a baseline on the first read, then the baseline plus klog_extra.
@@ -1393,6 +1402,8 @@ _aw_late="$(verdict_line)"; _aw_same=1; [ "$_aw_late" != "$AW_ONTIME" ] || _aw_s
 ok "$_aw_same" "AW1 the verdict equals the on-time run's" "late=$_aw_late ontime=$AW_ONTIME"
 ok "$(( $(sleeps) != 2 ))" "AW1 exactly two sleeps ran (got $(sleeps))"
 ok "$(grep -q 'appeared after 20s' "$FX/err"; echo $?)" "AW1 the resolution was logged with the elapsed time" "$(cat "$FX/err")"
+ok "$(err_has 'waiting up to 300s for plaintext volume')" "AW1 and a waiting run says so (positive control for the AW0 negative)" "$(cat "$FX/err")"
+ok "$(err_has 'sleep-stub: unexpected argv' | tr 01 10)" "AW1 and the sleep stub never refused an argv (every pass slept exactly 10 s)" "$(cat "$FX/err")"
 ok "$(origin_calls_bad)" "AW1 every call naming the origin is allowlisted and ordered (Guard 1 row 7)" "$(grep -F -e "$FX/dev/vol" -e "$FX/dev/by-id" "$FX/calls.log")"
 
 new_fixture aw1b-late-1
@@ -1427,6 +1438,7 @@ ok "$(( $(sleeps) != 30 ))" "AW2 the 300s bound costs exactly 30 sleeps (got $(s
 ok "$(( $(grep -c plaintext_volume= "$FX/out" || true) != 0 ))" "AW2 no verdict line was printed"
 ok "$(err_has 'did not appear within the 300s bound')" "AW2 the helper logged that it gave up, with the bound" "$(cat "$FX/err")"
 ok "$(err_has 'last state: the link does not resolve')" "AW2 and the caller logged the MEASURED state (the link never resolved)" "$(cat "$FX/err")"
+ok "$(err_has 'sleep-stub: unexpected argv' | tr 01 10)" "AW2 and the sleep stub never refused an argv (a pass that slept 5 s would be refused, not counted)" "$(cat "$FX/err")"
 
 new_fixture aw2b-zero-size
 : > "$FX/size_zero"
@@ -1438,7 +1450,8 @@ ok "$(( $(sleeps) != 30 ))" "AW2b the zero-size node was waited on for the whole
 
 # F. static pin: the size probe is bounded in time as well as in passes (the counting loop cannot see
 # one blocked probe).
-ok "$(grep -qF 'timeout 10 blockdev --getsize64 "$_pt_dev"' "$BS_BODY"; echo $?)" "AW6 the plaintext predicate's size probe runs under timeout 10"
+ok "$(grep -qF 'timeout -k 2 10 blockdev --getsize64 "$_pt_dev"' "$BS_BODY"; echo $?)" "AW6 the plaintext predicate's size probe is written under timeout -k 2 10"
+ok "$(grep -qxF -- "-k 2 10 blockdev --getsize64 $FX/dev/vol" "$FX/timeout.log" 2>/dev/null; echo $?)" "AW6 and RUNS under it: the size probe reached the timeout stub as -k 2 10 blockdev --getsize64 <node>" "$(cat "$FX/timeout.log" 2>/dev/null)"
 
 # G. mutation rows (Guard 1, #10138). Each: landed-check, instrument self-test (the pristine unit
 # gives the right verdict on the same fixture), then the flip, then the mutant's OWN reason so a
@@ -1526,11 +1539,12 @@ passes=$_can_p0; fails=$_can_f0; cases=$_can_c0
 # cannot see a call site that never reached a verdict. The two bindings sit DIRECTLY above the
 # `if` with no comment between: guard-vacuity-floor builds its mutant from the floor block plus
 # the contiguous simple assignments above it, and a comment breaks the run.
-# RAISED 412 -> 458 (#10138), ITEMISED: the attach-wait block is AW0, AW1/1b/1g/1h/1f (late link, the
-# 30th/31st-pass bracket, the harness control), AW2/2b (never appears, zero size: the named FATAL and
-# the measured state), AW6 (timeout pin) and mutation rows AM1/AM3/AM5/AM9, each asserting its OWN
-# reason; the floor is the measured total, so slack is zero.
-MIN_ASSERTIONS=458
+# RAISED 412 -> 462 (#10138), ITEMISED: the attach-wait block is AW0, AW1/1b/1g/1h/1f (late link, the
+# 30th/31st-pass bracket, the harness control, the positive 'waiting up to' and no-refused-argv
+# controls), AW2/2b (never appears, zero size: the named FATAL and the measured state), AW6 (the
+# size probe is written AND runs under `timeout -k 2 10`) and mutation rows AM1/AM3/AM5/AM9, each
+# asserting its OWN reason; the floor is the measured total, so slack is zero.
+MIN_ASSERTIONS=462
 total=$((passes + fails))
 if [ "$cases" -lt "$MIN_ASSERTIONS" ]; then
   printf 'FAIL: ran only %s assertion call sites (floor %s) — suite did not execute fully\n' "$cases" "$MIN_ASSERTIONS" >&2

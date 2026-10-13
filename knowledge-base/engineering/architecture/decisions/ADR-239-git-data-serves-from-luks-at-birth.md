@@ -469,8 +469,11 @@ Rule for the horizon: moving the ledger `expires_on` of `hcloud_volume.git_data`
 host).** Cloud-init first boot starts when the server is created; Hetzner attaches block volumes
 afterwards as separate actions. Terraform recorded the LUKS attachment finishing 65 s and the
 plaintext one 125 s after server create. Those are API-completion times, not the moment the guest
-first saw each device (`gitdata_runcmd_ok` fired at 10:36:51Z, before the 10:37:18Z LUKS completion),
-so they overstate guest-side latency. Sentry shows the bootstrap's plaintext check dying at
+first saw each device. The bootstrap ran at 10:37:11Z, and a FATAL in the `luks_open` heredoc aborts
+the concatenated runcmd script (read from the template, 2026-10-13), so by inference the heredoc had
+already found, formatted and opened the LUKS device 7 s before Terraform recorded that attachment
+finishing: the figures overstate guest-side latency, and this incident does not by itself show that
+the heredoc's 30 to 300 raise was needed (it is kept as insurance). Sentry shows the bootstrap's plaintext check dying at
 10:37:11Z, about 70 s before the plaintext attachment completed at 10:38:19Z: it resolved the by-id
 link once and exited at the named FATAL `plaintext_unverified reason=source`. Four earlier boots
 (runs 38140050880, 36118115758, and the seed and payload phases of 38356246710) attached both

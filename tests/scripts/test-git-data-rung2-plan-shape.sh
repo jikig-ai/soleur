@@ -182,6 +182,18 @@ want "W3d: additive refuses an importing resource_change" 1 "$TMP/w3d2.json" add
 plan "$TMP/dl-glob.json" "${HOSTONLY_OK[@]}" terraform_data.rehearsal_other:delete,create
 want "host-only refuses a replace of a terraform_data that is not one of the two delay addresses (no glob)" 1 "$TMP/dl-glob.json" host-only "" \
   "a replace of terraform_data.rehearsal_other is not admitted"
+plan "$TMP/dl-idx.json" "${HOSTONLY_OK[@]}" "terraform_data.rehearsal_attach_delay_luks[0]:delete,create"
+want "host-only refuses an indexed ([0]) replace of a delay address" 1 "$TMP/dl-idx.json" host-only "" \
+  "a replace of terraform_data.rehearsal_attach_delay_luks[0] is not admitted"
+plan "$TMP/dl-upd.json" "${HOSTONLY_OK[@]}" "$DELAY_PT:update"
+want "host-only refuses an in-place update of a delay resource (only a replace is admitted)" 1 "$TMP/dl-upd.json" host-only "" \
+  "an update of terraform_data.rehearsal_attach_delay_pt is not admitted"
+plan "$TMP/dl-del.json" "${HOSTONLY_OK[@]}" "$DELAY_PT:delete"
+want "host-only refuses a plain delete of a delay resource" 1 "$TMP/dl-del.json" host-only "" \
+  "terraform_data.rehearsal_attach_delay_pt delete is not admitted"
+plan "$TMP/dl-prod.json" "${HOSTONLY_OK[@]}" terraform_data.root_authorized_keys:delete,create
+want "host-only refuses a replace of a production terraform_data" 1 "$TMP/dl-prod.json" host-only "" \
+  "a replace of terraform_data.root_authorized_keys is not admitted"
 
 # ── script-level mutants (rows 6-8): each flips a verdict the pristine script gets right ──
 MUTS=0
@@ -249,10 +261,12 @@ fi
 # 25 -> 36 (review W3): +7 W3 fixtures (a, b, 3x c, 2x d) and +4 mutant rows. Measured: 36 ran.
 # (d)'s rows name the IMPORTS reason, so an import-free twin fixture would add nothing the reason
 # match does not already prove.
-# 36 -> 43 (#10138): +2 must-PASS delay plans (real-shape host-only, additive seed: the seed phase creates
-# both delay resources, so a refusing additive gate would break the paid run), +1 glob refusal row and +4
-# mutant rows (2 instruments + 2 mutants across rows 14 and 16). The floor is the measured total.
-MIN_CASES=43
+# 36 -> 47 (#10138): +2 must-PASS delay plans (real-shape host-only, additive seed: the seed phase creates
+# both delay resources, so a refusing additive gate would break the paid run), +5 refusal rows (glob,
+# indexed replace, in-place update, plain delete, production terraform_data: this gate decides what a
+# paid run may apply) and +4 mutant rows (2 instruments + 2 mutants across rows 14 and 16). The floor
+# is the measured total.
+MIN_CASES=47
 if (( cases < MIN_CASES )); then
   printf '[FATAL] anti-vacuity floor: only %s cases ran, floor is %s\n' "$cases" "$MIN_CASES" >&2
   exit 1

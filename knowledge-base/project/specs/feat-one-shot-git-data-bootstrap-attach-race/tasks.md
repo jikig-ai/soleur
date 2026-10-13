@@ -56,7 +56,7 @@ No task in this file dispatches a workflow, runs terraform apply, writes Doppler
 
 ## Review-round amendment (2026-10-13)
 
-Tasks 0.7, 1.1 (seam), 1.4, 1.5 and the section-1 / seam / in-loop-settle parts of 2.1, 2.2 and 3.x were
+Tasks 0.4-0.8 (bound 0, ceil(bound/10), invalid-bound rows, rows 1-10), 1.1 (seam, `settle --timeout=5`, `sleep 5`), 1.3 (the section-1 LUKS site), 1.4, 1.5, 3.4 (`[0]` rows beyond the kept refusals), 3.6 (the step-bound pins now sit in the restored job-budget arm) and the section-1 / seam / in-loop-settle parts of 2.1, 2.2 and 3.x were
 implemented and then superseded by the CTO's review-round ruling (see `decision-challenges.md`): the
 seam, the section-1 LUKS wait, the census change and the in-loop settles no longer exist; the heredoc
 keeps one post-loop settle. The plan's amendment banner lists the shipped design.
