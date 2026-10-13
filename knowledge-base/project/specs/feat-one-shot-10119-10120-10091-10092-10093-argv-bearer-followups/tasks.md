@@ -27,12 +27,13 @@ Plan: knowledge-base/project/plans/2026-10-13-fix-argv-bearer-followups-registry
 
 ### 5. #10093 markdown + stage S7
 
-- 5.1 Convert the six files (and flag-delete/flag-list only if a real recipe); shape case + `--config -` + one sentence on /proc/<pid>/cmdline.
+- 5.1 Convert seven files / ten curls (postmerge SKILL, sentry-error-count-delta GET and PUT, reproduce-bug, preflight, ship SKILL (record budget headroom), infra-security, deployment-verification-agent); reword the flag-delete/flag-list prose; shape case + `--config -` + one sentence on /proc/<pid>/cmdline.
 - 5.2 Add stage S7 with allowlist (api-security.md), ceiling, floor, mutation rows; re-pin EXPECTED_TESTS from the measured total.
 
 ### 6. Docs and gates
 
 - 6.1 ADR-280 follow-up paragraph (PR A).
+- 6.0 File the `deferred-scope-out` tracker for the lib upsert/reset lock (Post-MVP / Later).
 - 6.2 markdownlint, c4 parity, lint --changed; review, QA, ship (Closes #10091, #10092; Ref #10093, Ref #9757).
 
 ## PR B: registry template (#10119) and registry heartbeats (#10093 part) — stops at a ready PR
@@ -41,7 +42,8 @@ Plan: knowledge-base/project/plans/2026-10-13-fix-argv-bearer-followups-registry
 - 7.2 RED first: rendered-boot-block row, 127/6/1-through-pipe row, registry-heartbeat row, S6 converted-site rows.
 - 7.3 Convert _htp_verify, boot step (install -m 600), the two heartbeat curls; reword argv-naming comments; measure budget, pay any shortfall in the same file.
 - 7.4 Delete S6_ALLOW (ceiling 0), re-pin EXPECTED_TESTS, re-measure grep-q-pipe-guard; ADR-280 paragraph.
-- 7.5 PR body: first line replace warning, hand-over note (merge command, watch, read-only post-merge check, abort path), Closes #10119, Ref #10093, Ref #9757. Mark ready; DO NOT MERGE.
+- 7.5 PR body: first line replace warning, hand-over note (merge command, watch, read-only post-merge check, abort path), Ref #10119, Ref #10093, Ref #9757, Tracks #<follow-through>. Mark ready; DO NOT MERGE.
+- 7.6 File the follow-through tracker and ship `scripts/followthroughs/registry-htpasswd-stdin-10119.sh` + test (closes #10119 on PASS).
 
 ## PR C: inngest heartbeat (#10120) and probe scripts (#10093 last part) — stops at a ready PR
 
@@ -50,7 +52,8 @@ Plan: knowledge-base/project/plans/2026-10-13-fix-argv-bearer-followups-registry
 - 8.3 Convert web-zot-consumer-probe.sh, inngest-consumer-probe.sh, web-private-nic-guard.sh; repoint every stub/negative row to the recorded stdin line.
 - 8.4 Read-only live shape count of the three probe URLs (counts only).
 - 8.5 Delete S6H_ALLOW (ceiling 0), extend S6H_CONVERTED, mutation rows, re-pin EXPECTED_TESTS; re-measure grep-q-pipe-guard; ADR-280 paragraph.
-- 8.6 PR body: first line mint + re-delivery warning, GuardA window, B-before-C, verification commands, Closes #10120, Closes #10093, Ref #9757. Mark ready; DO NOT MERGE.
+- 8.6 PR body: first line mint + re-delivery warning, GuardA window, B-before-C, verification commands, Ref #10120, Ref #10093, Ref #9757, Tracks #<follow-through>. Mark ready; DO NOT MERGE.
+- 8.7 File the follow-through tracker and ship `scripts/followthroughs/inngest-heartbeat-stdin-10120.sh` + test (closes #10120, #10093 on PASS).
 
 ## Umbrella
 
