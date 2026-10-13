@@ -6,15 +6,26 @@
 # and tests. Never reports a version it did not read; always exits 0 (fail open).
 #
 # Modes (one required):
-#   --installed              source=manifest|commit|unknown|none, version=, commit=, marketplace=
+#   --installed              source=manifest|commit|checkout|unknown|none, version=, commit=, marketplace=
 #   --cached-latest          --installed keys + cache_dir= + the cached latest release; NO network
 #   --latest [--refresh]     latest release tag; uses a fresh cache unless --refresh
 #   --compare [--refresh]    --installed + --latest + relation=older|current|unknown
 #   --cmp A B                semver order of two X.Y.Z strings: older|same|newer
 #
 # Installed identity precedence: manifest top-level `.version` (X.Y.Z) -> basename of the
-# plugin root when it is a commit-hash cache dir -> unknown. A manifest with no `version`
+# plugin root when it is a commit-hash cache dir -> the HEAD commit of the local git checkout
+# the plugin is loaded from in place (source=checkout) -> unknown. A manifest with no `version`
 # key is the normal published shape (ADR-182 D1), so the commit hash is the usual answer.
+#
+# source=checkout: a local-Folder marketplace (or --plugin-dir) loads the plugin from
+# <top>/plugins/soleur, which has neither a manifest version nor a commit-hash directory name.
+# The identity is then <top>'s HEAD commit, read with PLAIN FILE READS ONLY (HEAD -> a loose
+# ref or packed-refs; a detached HEAD holds the sha). Git is never run against that repository:
+# its .git/config, hooks and attributes are untrusted project input. The lookup is anchored on
+# the layout (the root ends in /plugins/soleur, <top>/.git exists, plugin.json exists), never a
+# walk up to "the first .git", which would adopt a dotfiles repository above the project. Every
+# file is size-gated by stat BEFORE it is read, only a 40-hex first line is accepted, and only
+# its first 12 hex are ever printed.
 # The plugin root is CLAUDE_PLUGIN_ROOT, or, when that is unset (the Bash tool does not
 # always export it), the directory one level above this script's directory.
 #
@@ -22,7 +33,7 @@
 # against a fixed URL. The repo also publishes web-v*, vinngest-v*, telegram-v* and
 # zot-image-* tags; the strict regex excludes them and prereleases.
 #
-# Relation for a commit-hash install uses one unauthenticated GitHub compare API call
+# Relation for a commit-hash or local-checkout install uses one unauthenticated GitHub compare API call
 # (ls-remote maps tags to commits but cannot order an installed commit against them).
 # `diverged` or any failure is `unknown`, never "current". A relation answered from a
 # stale cache or after a failed lookup is reported as unknown, except `older`, which
@@ -36,7 +47,9 @@
 #
 # Cache: one file per install, ${XDG_CACHE_HOME:-~/.cache}/soleur/latest-release.<id>
 # (a relative XDG_CACHE_HOME is ignored, per the XDG spec). Treated as fresh for 24 h;
-# the file stays on disk until replaced or deleted.
+# the file stays on disk until replaced or deleted. A local checkout moves with every commit,
+# so all checkouts share the one file latest-release.checkout (it records which commit it
+# answers; another commit's entry reads as cache=missing and is simply replaced).
 #
 # Env: SOLEUR_FETCH_TIMEOUT (seconds per request, default 8, must be >= 1).
 set -uo pipefail
@@ -47,6 +60,9 @@ TAG_RE='^v[0-9]+\.[0-9]+\.[0-9]+$'
 SEMVER_RE='^[0-9]+\.[0-9]+\.[0-9]+$'
 DIR_RE='^[0-9a-f]{12}(-[0-9a-f]{8})?$'
 SHA40_RE='^[0-9a-f]{40}$'
+SHA12_RE='^[0-9a-f]{12}$'
+SMALL_MAX=512        # bytes: HEAD, loose refs, .git pointer files, commondir
+PACKED_MAX=4194304   # bytes: packed-refs (this repository's own is ~0.5 MB)
 TTL_S=86400
 # A failed compare is cached as fresh for only this long (the fetched stamp is backdated by
 # TTL_S - FAIL_FRESH_S), so one rate-limit response does not silence the notice for a day.
@@ -155,6 +171,98 @@ read_manifest_version() {
   printf '%s' "$v"
 }
 
+# ---- local checkout (source=checkout): plain file reads, never git ---------------------
+# These are the only readers of repository bytes. Every read is gated on regular-file-ness
+# AND on a stat size first (a FIFO or device would hang an open; a sparse multi-GiB HEAD of
+# NULs took 38 s through `read -n 512` alone), and nothing is executed, sourced or evaluated.
+CK_VAL=""
+
+file_size() { # path -> byte count on stdout; nothing when it cannot be measured
+  local n
+  n="$(stat -L -c %s -- "$1" 2>/dev/null || stat -L -f %z -- "$1" 2>/dev/null)" || return 1
+  [[ "$n" =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "$n"
+}
+
+read_small() { # path -> CK_VAL = the file's single line (no newline); 1 when absent, irregular, oversize or not exactly one line
+  local f="$1" n line="" rc=0 got
+  CK_VAL=""
+  [[ -f "$f" && -r "$f" ]] || return 1
+  n="$(file_size "$f")" || return 1
+  (( n >= 1 && n <= SMALL_MAX )) || return 1
+  { IFS= read -r -n "$SMALL_MAX" line < "$f"; } 2>/dev/null || rc=$?
+  # What was consumed must be exactly what the file holds. `read` silently drops NUL bytes and
+  # stops at the first newline, so a NUL-spliced or multi-line file consumes fewer bytes than
+  # its size and is refused instead of printing an identity from a string that is not its
+  # bytes. A multibyte name counts as fewer characters than bytes, so it is refused too.
+  got=${#line}
+  if (( rc == 0 && got < SMALL_MAX )); then got=$((got + 1)); fi   # the newline `read` consumed
+  (( got == n )) || return 1
+  CK_VAL="$line"
+}
+
+valid_ref_name() { # refs/heads/<name> -> 0 when it is a plausible git branch ref, else 1 (deny-list, git check-ref-format style)
+  local r="$1" rest
+  case "$r" in refs/heads/?*) ;; *) return 1 ;; esac
+  rest="${r#refs/heads/}"
+  case "$rest" in
+    *[[:cntrl:][:space:]~^:?*\[\\]*|*..*|*//*|*@\{*|/*|*/|.*|*/.*|*.|*.lock|*.lock/*|@) return 1 ;;
+  esac
+  return 0
+}
+
+packed_ref_sha() { # commondir ref -> CK_VAL = sha for the exact ref in packed-refs
+  local f="$1/packed-refs" n
+  CK_VAL=""
+  [[ -f "$f" && -r "$f" ]] || return 1
+  n="$(file_size "$f")" || return 1
+  (( n >= 1 && n <= PACKED_MAX )) || return 1
+  CK_VAL="$(SOLEUR_REF="$2" awk '
+    /^[#^]/ { next }
+    NF >= 2 && $2 == ENVIRON["SOLEUR_REF"] { print $1; exit }' "$f" 2>/dev/null)" || CK_VAL=""
+  [[ "$CK_VAL" =~ $SHA40_RE ]]
+}
+
+resolve_checkout_commit() { # absolute plugin root -> CK_VAL = 40-hex HEAD commit, else 1
+  local root="${1%/}" top gd="" common head ref line
+  CK_VAL=""
+  case "$root" in /*) ;; *) return 1 ;; esac
+  case "$root" in */plugins/soleur) ;; *) return 1 ;; esac
+  top="${root%/plugins/soleur}"
+  [[ -n "$top" ]] || return 1
+  [[ -f "$root/.claude-plugin/plugin.json" ]] || return 1
+  # <top>/.git is a directory (clone or bare layout) or a file `gitdir: <path>` (linked worktree).
+  if [[ -d "$top/.git" ]]; then
+    gd="$top/.git"
+  elif [[ -f "$top/.git" ]]; then
+    read_small "$top/.git" || return 1
+    case "$CK_VAL" in gitdir:\ ?*) gd="${CK_VAL#gitdir: }" ;; *) return 1 ;; esac
+    case "$gd" in /*) ;; *) gd="$top/$gd" ;; esac
+    [[ -d "$gd" ]] || return 1
+  else
+    return 1
+  fi
+  common="$gd"
+  if [[ -f "$gd/commondir" ]]; then
+    read_small "$gd/commondir" || return 1
+    case "$CK_VAL" in /*) common="$CK_VAL" ;; *) common="$gd/$CK_VAL" ;; esac
+    [[ -d "$common" ]] || return 1
+  fi
+  read_small "$gd/HEAD" || return 1
+  head="$CK_VAL"
+  if [[ "$head" =~ $SHA40_RE ]]; then CK_VAL="$head"; return 0; fi   # detached HEAD
+  case "$head" in "ref: "?*) ref="${head#ref: }" ;; *) return 1 ;; esac
+  valid_ref_name "$ref" || return 1
+  # A loose ref that exists must be valid; it never falls through to a stale packed entry.
+  if [[ -e "$common/$ref" || -L "$common/$ref" ]]; then
+    read_small "$common/$ref" || return 1
+    [[ "$CK_VAL" =~ $SHA40_RE ]] || return 1
+    return 0
+  fi
+  packed_ref_sha "$common" "$ref" || return 1
+  return 0
+}
+
 resolve_installed() {
   local root="${CLAUDE_PLUGIN_ROOT:-}" v base parent
   if [[ -z "$root" ]]; then
@@ -176,11 +284,19 @@ resolve_installed() {
     base="$(basename "$root")"
     if [[ "$base" =~ $DIR_RE ]]; then
       INST_SOURCE=commit INST_COMMIT="${base:0:12}" INST_ID="${base:0:12}"
+    elif resolve_checkout_commit "$root"; then
+      INST_SOURCE=checkout INST_COMMIT="${CK_VAL:0:12}" INST_ID="${CK_VAL:0:12}"
     else
       INST_SOURCE=unknown
     fi
   fi
-  [[ -n "$INST_ID" && -n "$CACHE_DIR" ]] && CACHE_FILE="$CACHE_DIR/latest-release.$INST_ID"
+  if [[ -n "$INST_ID" && -n "$CACHE_DIR" ]]; then
+    if [[ "$INST_SOURCE" == checkout ]]; then
+      CACHE_FILE="$CACHE_DIR/latest-release.checkout"   # one file for every commit of a moving checkout
+    else
+      CACHE_FILE="$CACHE_DIR/latest-release.$INST_ID"
+    fi
+  fi
   return 0
 }
 
@@ -213,6 +329,13 @@ load_cache() {
   done < "$CACHE_FILE" 2>/dev/null
   # A truncated write loses the trailing `complete=1`, so it reads as corrupt, never as a
   # fresh "unknown" that would silence the notice for a day.
+  # The one latest-release.checkout file answers a single commit at a time: an entry written for
+  # another commit is not corruption (and must not be reported as such), it is just not this
+  # commit's answer, so it reads as missing and the opt-in refresh replaces it.
+  if [[ "$INST_SOURCE" == checkout && "$complete" == 1 && "$rel_for" != "$INST_ID" && "$rel_for" =~ $SHA12_RE ]]; then
+    reset_cache_vars; CACHE_STATE=missing
+    return 0
+  fi
   if [[ "$complete" != 1 || "$rel_for" != "$INST_ID" || ! "$C_TAG" =~ $TAG_RE || ! "$C_FETCHED" =~ ^[1-9][0-9]{0,11}$ ]]; then
     reset_cache_vars; CACHE_STATE=corrupt
     return 0
@@ -296,9 +419,11 @@ compute_relation() { # needs INST_*, F_TAG, F_SHA
       REL="$(semver_cmp "$INST_VERSION" "${F_TAG#v}")"
       [[ "$REL" == older ]] || REL=current
       ;;
-    commit)
+    commit|checkout)
       # The tag's own commit is the installed one: nothing to compare.
       if [[ -n "$F_SHA" && "${F_SHA:0:12}" == "$INST_COMMIT" ]]; then REL=current; return 0; fi
+      # Re-validated at the sink: only 12 hex ever reaches the URL, whatever the source said.
+      [[ "$INST_COMMIT" =~ $SHA12_RE ]] || { REL_REASON=installed-unknown; return 0; }
       if ! command -v curl >/dev/null 2>&1; then REL_REASON=no-curl; return 0; fi
       local body status
       # page=2000 keeps the body ~20 KB instead of ~1.3 MB (the file list is paged); the
