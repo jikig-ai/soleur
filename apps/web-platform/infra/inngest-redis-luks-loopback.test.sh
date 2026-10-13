@@ -189,6 +189,12 @@ chmod 0755 "$TMPROOT/bin/logger"
 # a container may not have the binary at all.
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s/udevadm.log"\nexit 0\n' "$TMPROOT" > "$TMPROOT/bin/udevadm"
 chmod 0755 "$TMPROOT/bin/udevadm"
+# `systemctl` RECORDER (#10217 self-heal): ensure_mount calls `systemctl daemon-reload` after the
+# fstab install so the fstab generator re-reads the line THIS boot. Under the real runner's systemd
+# it would succeed harmlessly; under a container it would fail and convert every convergence arm
+# into reopen_fstab. Recorded, never delegated — the arms assert it ran.
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s/systemctl.log"\nexit 0\n' "$TMPROOT" > "$TMPROOT/bin/systemctl"
+chmod 0755 "$TMPROOT/bin/systemctl"
 # `sleep` DELEGATING RECORDER: the counted `sleep 1` passes are the wait's clock — the bound-0 arm
 # asserts ZERO sleeps ran. It delegates to the real binary (captured BEFORE the PATH prepend) so
 # every other arm's timing is unchanged.
