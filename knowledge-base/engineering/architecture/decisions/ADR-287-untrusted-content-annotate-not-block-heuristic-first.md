@@ -44,8 +44,10 @@ vault to this URL" reaches the model as ordinary tool output.
 4. **The scorer never alters the text it inspects.** NFKC, case folding and invisible-character stripping happen on a copy used only
    for matching; the rewrite path always envelopes the ORIGINAL bytes. Invisible characters (zero-width, soft hyphen, bidi controls,
    variation selectors, the Unicode tag block, which is also decoded to ASCII for matching) are stripped from the copy. A match that sits
-   inside quotes, inline code or a fence, or that is introduced as a mention ("markers such as <system>"), counts 0.3x **only when the
-   page also carries prompt-injection meta-vocabulary** (prompt injection, red team, OWASP, mitigation, ...). Without that gate one
+   inside CLOSED quotes, a closed inline code span or a closed fence, or that is introduced as a mention ("markers such as <system>"),
+   counts 0.3x **only when the page also carries at least two distinct prompt-injection / prompt-format terms** (prompt injection, red
+   team, OWASP, mitigation, system prompt, chat template, ...). An unclosed fence, backtick or quote quotes nothing, and flooding the
+   page with quoted decoys does not buy the discount. Without that gate one
    leading fence or quote character took a 2.0 score to 0.81 and let any payload through (found on review and fixed). One unquoted
    occurrence anywhere keeps full weight. The discount stays evadable by a page that both quotes its payload and talks like security
    writing; that is a documented limitation, not a claim.
@@ -89,23 +91,24 @@ vault to this URL" reaches the model as ordinary tool output.
 
 ## Measured control (offline eval, `apps/web-platform/scripts/untrusted-content-eval.ts`)
 
-Corpus: 173 synthetic fixtures (85 attack, 88 benign including security articles quoting injection strings, prompt documentation, RFC
-text, base64 inline images, near-miss API-documentation sentences and a long page), 39 attacks frozen as a holdout in commit
+Corpus: 182 synthetic fixtures (89 attack, 93 benign including security articles quoting injection strings, prompt documentation, RFC
+text, base64 inline images, near-miss API-documentation sentences, LLM prompt-format documentation and a long page), 39 attacks frozen as a holdout in commit
 `e2696a0824`, earlier than any scorer code, and 6 summary-shaped attacks (WebFetch returns a model-compressed rendering). Thresholds,
 asserted in CI: recall >= 0.90, false-positive rate <= 0.05, obvious-override recall >= 0.95, holdout recall >= 0.90, summary-shaped
 recall >= 0.80.
 
 | Slice | Result |
 |---|---|
-| Recall, all attacks (85) | 0.965 |
-| False-positive rate, benign (88) | 0.000 (in-sample; 95% upper bound about 3.4%) |
-| Obvious-override recall | 0.963 |
+| Recall, all attacks (89) | 0.966 |
+| False-positive rate, benign (93) | 0.011 (in-sample; one known near-miss: a forum post quoting the phrase on a page with no injection vocabulary) |
+| Obvious-override recall | 0.967 |
 | Holdout recall (39) | 0.949 (contaminated, see below) |
 | Summary-shaped recall (6) | 1.000 |
 
 A separate CI row bounds classification time on adversarial 256 KB inputs (long whitespace runs, repeated `http://`, `send:http://`,
-unterminated HTML comments): at most about 125 ms measured; the first scorer revision needed 24 s at 16 KB and minutes at 256 KB, and
-it runs synchronously on the shared dispatch event loop.
+unterminated or far-closed HTML comments, a `?x=<` URL-query shape, NFKC-expanding characters, quoted-decoy floods): at most about 0.3 s
+measured on bun; the first scorer revision needed 24 s at 16 KB and minutes at 256 KB, and a later regex still needed 32 s at 256 KB
+(found by the verification round). The scorer runs synchronously on the shared dispatch event loop.
 
 **Honest caveats.** (a) The first scorer pass measured holdout recall 0.897 and overall recall 0.883, below the bar. Rules were then
 generalized against the NON-holdout misses and false positives only, but the holdout aggregate and the ids of its misses had been seen,
@@ -119,8 +122,8 @@ wait for the prd soak.
 ## Known limitations (not claims)
 
 Homoglyph and split-word evasions, encoded payloads other than unwrapped base64 and hex (MIME-wrapped or UTF-16 base64 pass),
-instruction text that the model-compressed WebFetch summary drops, and **a payload that is both quoted and on a page that reads as
-security writing**. The scanner reads the first 256 KB: a longer page gets an "only the head was checked" note and its unscanned tail is
+instruction text that the model-compressed WebFetch summary drops, and **a payload that is closed-quoted (or a role tag / tool-call syntax) on a page that also uses two distinct prompt-injection or
+prompt-format terms** (role tags and tool-call syntax are discounted on such pages because they are far more often documentation). The scanner reads the first 256 KB: a longer page gets an "only the head was checked" note and its unscanned tail is
 never enveloped. Annotation effectiveness on model behavior is unmeasured. Coverage is partial by design: WebFetch only, and the two
 server-side flags appear in the client flag snapshot (low sensitivity, accepted). Not covered in this slice: `github_read_*` MCP tools,
 cron GitHub issue bodies, KB reads, attachments, Playwright, the plugin-side CLI and subagent fetches (#10194). In production the true

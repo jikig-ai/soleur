@@ -266,9 +266,11 @@ const SIGNALS: Signal[] = [
     re: new RegExp(`\\b${SEND_VERB}\\b[^.\\n]{0,80}\\b${WEAK_DATA_WORDS}[^\\n]{0,120}(?:https?|ftp)://`),
   },
   {
+    // `?` is excluded from the first run and the post-`=` filler cannot contain an alternative's
+    // starter, so each start position has one way to match (the earlier form was ~300x300x80).
     code: "exfil-url-pattern",
     weight: 1.0,
-    re: /(?:https?|ftp):\/\/[^\s)"']{0,300}\?[a-z_]{1,40}=[^\s&)"']{0,300}(?:\{\{|\[[A-Z_ ]{1,40}\]|<[^>\n]{1,80}>|SESSION|TOKEN|ENV_|SECRET|CONTEXT|FILES|CONVERSATION)/i,
+    re: /(?:https?|ftp):\/\/[^\s)"'?]{0,300}\?[a-z_]{1,40}=[^\s&)"'<[{]{0,150}(?:\{\{|\[[A-Z_ ]{1,40}\]|<[^>\n]{1,80}>|SESSION|TOKEN|ENV_|SECRET|CONTEXT|FILES|CONVERSATION)/i,
   },
   {
     code: "exfil-url-pattern",
@@ -328,62 +330,119 @@ function encodedBlobCarriesInstruction(text: string): boolean {
  * visibly ABOUT prompt injection: that is how security writing quotes an injection string to
  * teach about it. Without the second condition a single leading quote, backtick or unclosed
  * fence would let any payload drop below the flag threshold (measured on review: one fence
- * took a 2.0 score to 0.81). The meta-vocabulary requirement means evading now needs the page
- * to ALSO read as security writing; that is documented as a known limitation (ADR-287).
+ * took a 2.0 score to 0.81). The meta-vocabulary requirement (two distinct terms) means evading
+ * now needs the page to ALSO read as security writing; that is documented as a known limitation (ADR-287).
  */
 const QUOTED_DISCOUNT = 0.3;
 const META_VOCAB =
-  /prompt[- ]?injection|injection (?:attack|string|payload|attempt)|red[- ]?team|\bowasp\b|jailbreak|adversar|mitigat|\bdefen[cs]|heuristic|\bdetect(?:ion|ing|or)?\b|attackers?\b|\bresearchers?\b|security (?:article|blog|research|advisory)|llm (?:abuse|security|safety)/;
-
-function isQuotedContext(text: string, start: number): boolean {
-  const before = text.slice(Math.max(0, start - 3), start);
-  if (/["'`\u201c\u2018]\s*$/.test(before)) return true;
-  const head = text.slice(0, start);
-  const fences = head.match(/```/g);
-  if (fences && fences.length % 2 === 1) return true;
-  const ticks = head.slice(head.lastIndexOf("\n") + 1).match(/`/g);
-  return !!ticks && ticks.length % 2 === 1;
+  /prompt[- ]?injection|injection (?:attack|string|payload|attempt)|red[- ]?team|\bowasp\b|jailbreak|adversar|mitigat|\bdefen[cs]|heuristic|\bdetect(?:ion|ing|or)?\b|attackers?\b|\bresearchers?\b|security (?:article|blog|research|advisory)|llm (?:abuse|security|safety)|system prompt|chat template|function calling|tool[_ ]use|xml tags?|chatml|\[inst\]|special tokens?|role markers?|prompt format|api documentation/g;
+/** A page counts as "about injection / prompt formats" only with at least two DISTINCT meta terms. */
+function isAboutInjection(text: string): boolean {
+  const seen = new Set<string>();
+  for (const m of text.matchAll(META_VOCAB)) {
+    seen.add(m[0]);
+    if (seen.size >= 2) return true;
+  }
+  return false;
 }
 
-/** A tag/command named in running prose ("role markers such as <system>") is being discussed, not used. */
-function isMentioned(text: string, start: number): boolean {
-  return /(?:\bsuch\s+as|\bfor\s+example|\be\.g\.|\blike|\bcalled|\bnamed|\bmarkers?|\btags?|\btokens?|\bsyntax)\W[^\n]{0,40}$/.test(
-    text.slice(Math.max(0, start - 60), start),
-  );
+interface QuoteIndex {
+  fences: number[];
+}
+
+function buildQuoteIndex(text: string): QuoteIndex {
+  const fences: number[] = [];
+  for (let at = text.indexOf("```"); at !== -1; at = text.indexOf("```", at + 3)) fences.push(at);
+  return { fences };
+}
+
+/** Number of fences strictly before `pos` (binary search). */
+function fencesBefore(fences: number[], pos: number): number {
+  let lo = 0;
+  let hi = fences.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (fences[mid]! < pos) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+const CLOSERS: Record<string, string> = { '"': '"', "'": "'", "`": "`", "\u201c": "\u201d", "\u2018": "\u2019" };
+
+/**
+ * Quoted means CLOSED quoting around the match: inside a fenced block that is closed later, inside
+ * an inline code span closed on the same line, or directly after an opening quote whose closer
+ * follows within 600 chars on the same line. An unclosed fence/backtick/quote quotes nothing.
+ */
+function isQuotedContext(text: string, start: number, end: number, qi: QuoteIndex): boolean {
+  const nFences = fencesBefore(qi.fences, start);
+  if (nFences % 2 === 1 && nFences < qi.fences.length) return true;
+  const lineStart = text.lastIndexOf("\n", start - 1) + 1;
+  const ticksBefore = (text.slice(lineStart, start).match(/`/g) ?? []).length;
+  if (ticksBefore % 2 === 1) {
+    const nl = text.indexOf("\n", end);
+    const tick = text.indexOf("`", end);
+    if (tick !== -1 && (nl === -1 || tick < nl)) return true;
+  }
+  const before = text.slice(Math.max(0, start - 3), start).trimEnd();
+  const q = before.slice(-1);
+  const closer = CLOSERS[q];
+  if (closer) {
+    const nl = text.indexOf("\n", end);
+    const limit = Math.min(end + 600, nl === -1 ? text.length : nl);
+    const at = text.indexOf(closer, end);
+    if (at !== -1 && at < limit) return true;
+  }
+  return false;
 }
 
 /** Global-flag twin of each signal regex, built once (exec loops need `g`). */
 const GLOBAL_RES = SIGNALS.map((sig) => new RegExp(sig.re.source, sig.re.flags.includes("g") ? sig.re.flags : `${sig.re.flags}g`));
-const MAX_MATCHES_PER_SIGNAL = 8;
+const MAX_MATCHES_PER_SIGNAL = 20;
 
 /**
  * Best (highest) weight over up to MAX_MATCHES_PER_SIGNAL matches of one signal: one unquoted
- * occurrence anywhere on the page keeps full weight, however many quoted ones precede it.
+ * occurrence anywhere on the page keeps full weight, however many quoted ones precede it. If the
+ * cap is exhausted without a verdict the signal gets FULL weight (flooding a page with quoted
+ * decoys must not buy a discount).
  */
-function signalWeight(sig: Signal, g: RegExp, haystack: string, discountable: boolean): number {
+function signalWeight(sig: Signal, g: RegExp, haystack: string, discountable: boolean, qi: QuoteIndex): number {
   g.lastIndex = 0;
   let best = 0;
+  let exhausted = true;
   for (let n = 0; n < MAX_MATCHES_PER_SIGNAL; n++) {
     const m = g.exec(haystack);
-    if (!m) break;
+    if (!m) {
+      exhausted = false;
+      break;
+    }
     if (m[0].length === 0) g.lastIndex++;
     const discounted =
       discountable &&
-      (isQuotedContext(haystack, m.index) ||
-        ((sig.code === "role-spoof-tag" || sig.code === "tool-call-syntax") && isMentioned(haystack, m.index)));
+      (isQuotedContext(haystack, m.index, m.index + m[0].length, qi) ||
+        // Role tags and tool-call syntax on a page that is ABOUT prompt formats / injection are
+        // documentation far more often than attack ("ChatML marks roles with <|im_start|>"). The
+        // price is a documented evasion: such a payload on a page that also uses two meta terms.
+        sig.code === "role-spoof-tag" ||
+        sig.code === "tool-call-syntax");
     best = Math.max(best, discounted ? sig.weight * QUOTED_DISCOUNT : sig.weight);
-    if (best >= sig.weight) break; // cannot improve
+    if (best >= sig.weight) {
+      exhausted = false;
+      break; // cannot improve
+    }
   }
-  return best;
+  return exhausted ? sig.weight : best;
 }
 
-/** HTML comments addressed to an AI reader. Bounded indexOf walk (see the SIGNALS note). */
+/** HTML comments addressed to an AI reader. Linear: the `-->` search cursor only moves forward. */
 function hiddenCommentAddressedToAi(text: string): boolean {
   let from = 0;
+  let close = -2; // -2: not searched yet, -1: no further "-->" anywhere
   for (let n = 0; n < 2000; n++) {
     const open = text.indexOf("<!--", from);
     if (open === -1) return false;
-    const close = text.indexOf("-->", open + 4);
+    if (close === -2 || (close !== -1 && close < open + 4)) close = text.indexOf("-->", open + 4);
     if (close === -1) return false;
     if (close - open <= 800 && /\b(?:ai|assistant|agent|llm|model)\b/.test(text.slice(open + 4, close))) return true;
     from = open + 4;
@@ -396,17 +455,20 @@ function scoreText(raw: string, source: UntrustedSource): Classification {
   const head = truncated ? raw.slice(0, SCORE_MAX_CHARS) : raw;
   // Matching copy only. `head` (the caller's text) is never modified.
   const invisiblePresent = INVISIBLE_RUN.test(head);
-  let normalized = head.normalize("NFKC").replace(INVISIBLE, "").toLowerCase();
   // A payload written in the Unicode tag block is invisible to a reader and to the regexes
-  // unless decoded: append its ASCII reading to the matching copy.
-  const tagRuns = head.match(TAG_BLOCK);
-  if (tagRuns) {
-    const decoded = tagRuns
-      .map((r) => Array.from(r, (c) => String.fromCharCode((c.codePointAt(0) ?? 0xe0000) - 0xe0000)).join(""))
-      .join("\n");
-    normalized += `\n${decoded.toLowerCase()}`;
-  }
-  const discountable = META_VOCAB.test(normalized);
+  // unless decoded: map each tag char to its ASCII reading IN PLACE (so an invisible separator
+  // between two tagged runs cannot split a word), then strip the remaining invisibles.
+  const decodedTags = head.replace(TAG_BLOCK, (run) =>
+    Array.from(run, (c) => String.fromCharCode((c.codePointAt(0) ?? 0xe0000) - 0xe0000)).join(""),
+  );
+  // NFKC can expand a character ~18x (U+FDFA), so the cap is re-applied AFTER it.
+  const normalized = decodedTags
+    .normalize("NFKC")
+    .replace(INVISIBLE, "")
+    .toLowerCase()
+    .slice(0, SCORE_MAX_CHARS);
+  const discountable = isAboutInjection(normalized);
+  const qi = buildQuoteIndex(normalized);
   const reasons = new Set<ReasonCode>();
   const perCodeBest = new Map<ReasonCode, number>();
   const weights = new Map<ReasonCode, number[]>();
@@ -416,10 +478,12 @@ function scoreText(raw: string, source: UntrustedSource): Classification {
     weights.set(code, list);
   };
   if (invisiblePresent) push("hidden-text-or-zero-width", 0.8);
+  // A long tag-block run is a hidden payload by itself (flag emoji use 5-6 tag characters).
+  if (/[\u{e0020}-\u{e007e}]{12,}/u.test(head)) push("hidden-text-or-zero-width", 1.0);
   if (hiddenCommentAddressedToAi(normalized)) push("hidden-text-or-zero-width", 0.5);
   for (let k = 0; k < SIGNALS.length; k++) {
     const sig = SIGNALS[k]!;
-    const w = signalWeight(sig, GLOBAL_RES[k]!, normalized, discountable);
+    const w = signalWeight(sig, GLOBAL_RES[k]!, normalized, discountable, qi);
     if (w > 0) push(sig.code, w);
   }
   // Per reason code the weights of the TWO strongest matching signals add (capped at 1.0),
