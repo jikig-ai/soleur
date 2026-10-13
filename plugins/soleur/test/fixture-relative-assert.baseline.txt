@@ -368,7 +368,7 @@
 1	scripts/follow-through-closure-guard.test.sh
 25	scripts/followthroughs/anthropic-admin-key-6297.test.sh
 5	scripts/followthroughs/ccla-representative-icla-7922.test.sh
-20	scripts/followthroughs/ci-draft-light-soak-9728.test.sh
+22	scripts/followthroughs/ci-draft-light-soak-9728.test.sh
 2	scripts/followthroughs/ci-leg-balance-9232.test.sh
 2	scripts/followthroughs/concierge-strand-754ee124-5733.test.sh
 1	scripts/followthroughs/cwv-field-rum-9178.sh
@@ -393,7 +393,7 @@
 2	scripts/lib/scratch-root.sh
 3	scripts/lib/test-affected-derive-cache.sh
 4	scripts/lib/test-contention.sh
-18	scripts/lib/trusted-verdict.test.sh
+22	scripts/lib/trusted-verdict.test.sh
 1	scripts/lib/web2-luks-rows.sh
 8	scripts/lint-agents-compound-sync.test.sh
 1	scripts/lint-agents-enforcement-tags.test.sh
