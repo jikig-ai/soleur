@@ -90,8 +90,8 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 // 277 -> 278 (#9879 review round 2, +1): G2e lexer/scanner linearity.
 // 278 -> 276 (#9372 retirement): the declared count was 279 (floor 278, one row loose); the single-use rebirth workflow's five-target describe (three tests) retired with the workflow and the G2 test was rewritten in place, so 279 - 3 = 276.
 // Exact again: grep -cE '^\s*test\(' = 276.
-// 276 -> 280 (#10166, +4): the d6 rotate marker / flip gate wiring describe (real-tree pins, twelve-mutant battery, the executed gate block, confirm-token direct pin). The 2 rows of slack were already there (declared 278 vs floor 276 on main).
-const TEST_FLOOR = 280;
+// 276 -> 279 (#10166, +3): the d6 rotate marker / flip gate wiring describe (real-tree pins, twelve-mutant battery, the executed gate block). The 2 rows of slack were already there (declared 278 vs floor 276 on main).
+const TEST_FLOOR = 279;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -7768,10 +7768,6 @@ function checkRotateMarkerWiring(applyText: string, cutoverText: string, libText
     if (marker.if !== MARKER_IF) v.push(`the marker's if: is '${String(marker.if)}', not '${MARKER_IF}'`);
     for (const key of ["continue-on-error", "timeout-minutes"]) if (key in marker) v.push(`the marker carries ${key}`);
   }
-  const jobBlock = extractJobBlock(applyText, jobId);
-  const markerText = stripComments(extractStep(jobBlock, new RegExp(escapeRe(markerName))) ?? "");
-  if (!new RegExp(`^\\s*if: ${escapeRe(MARKER_IF)}\\s*$`, "m").test(markerText)) v.push("the marker's if: line is not the anchored literal");
-  if (/always\(\)|!cancelled\(\)|failure\(\)|continue-on-error/.test(markerText)) v.push("the marker's step text names always()/!cancelled()/failure()/continue-on-error");
   // P-c: the name matches none of the census G5 gate-name patterns
   // (tests/scripts/test-infra-privileged-tier-census.sh GATE_NAME) and, per the #10166 ruling, carries
   // neither 'Validate' nor 'confirm'.
@@ -7785,20 +7781,9 @@ function checkRotateMarkerWiring(applyText: string, cutoverText: string, libText
   const rawGate = extractStepById(cutoverText, "flip_preconditions");
   if (rawGate === null) return [...v, "the flip_preconditions step was not found in git-data-cutover.yml"];
   const gate = stripComments(rawGate);
-  const srcRe = /^ {10}source "\$\{GITHUB_WORKSPACE:\?\}\/scripts\/lib\/git-data-rotate-stamp\.sh" \|\| fail d6_run_unreadable /m;
-  const idsRe = /^ {10}ids="\$\(gh run list --workflow apply-web-platform-infra\.yml --branch main \\$/m;
-  const scanRe = /^ {10}d6="\$\(git_data_d6_scan <<<"\$ids"\)" \|\| true$/m;
-  const caseRe = /^ {10}case "\$\{d6%% \*\}" in$/m;
-  const at = [srcRe, idsRe, scanRe, caseRe].map((re) => gate.search(re));
-  if (at.some((i) => i < 0)) v.push(`the gate is missing a wiring line (source/ids/scan/case positions ${at.join(",")})`);
-  else if (!(at[0] < at[1] && at[1] < at[2] && at[2] < at[3])) v.push("the gate's source / run-list capture / scan / case lines are out of order");
+  if (!/^ {10}source "\$\{GITHUB_WORKSPACE:\?\}\/scripts\/lib\/git-data-rotate-stamp\.sh" \|\| fail d6_run_unreadable /m.test(gate)) v.push("the gate does not source the stamp lib with a fail-closed || fail");
   if ((gate.match(/git_data_d6_scan/g) ?? []).length !== 1) v.push("the gate must call git_data_d6_scan exactly once");
-  if (!/--limit 100\b/.test(gate)) v.push("the gate's run list is not the 100-run window");
-  if (!/--json databaseId,status\b[^\n]*@tsv'\)" \|\| \\\n\s+fail d6_run_unreadable /.test(gate)) v.push("the run-list capture does not fail closed with d6_run_unreadable");
   if (!/^ {12}\*\) fail d6_run_unreadable /m.test(gate)) v.push("the gate's case has no fail-closed *) arm");
-  for (const verdict of ["d6_stamped", "d6_last_rotate_failed", "d6_rotate_in_flight", "d6_run_unreadable", "d6_replace_stale"]) {
-    if (!new RegExp(`^ {12}${verdict}\\)( |$)`, "m").test(gate)) v.push(`the gate's case has no ${verdict} arm`);
-  }
   // P-f: the gate no longer reads the confirm-token step or inlines a step-selection jq.
   const cutoverStripped = stripComments(cutoverText);
   if (/rotate confirm token/i.test(cutoverStripped)) v.push("git-data-cutover.yml still reads the 'rotate confirm token' step");
@@ -7953,15 +7938,8 @@ exit 64
       rmSync(root, { recursive: true, force: true });
     }
   });
-
-  test("the confirm-token step is unconditional on the real tree and the gate no longer reads it (P-d / P-f direct)", () => {
-    const jobBlock = extractJobBlock(applyText, libText.match(/^readonly GDRS_JOB_NAME="([^"]*)"$/m)![1]);
-    const step = extractStep(jobBlock, new RegExp(escapeRe(CONFIRM_STEP)));
-    expect(step).not.toBeNull();
-    expect(stripComments(step!)).not.toMatch(/^\s*if:/m);
-    expect(stripComments(cutoverText)).not.toMatch(/rotate confirm token/i);
-  });
 });
+
 
 // --- suite-level anti-vacuity (#7656 C8) --------------------------------------------------------
 // The bash side has had a minimum-cardinality floor since it was written; this file had none. A

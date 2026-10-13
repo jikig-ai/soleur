@@ -259,21 +259,12 @@ jobs:
           # Sentry: status 0 = enabled, 1 = disabled/snapshot
           [[ "$enabled" == "0" || "$enabled" == "enabled" ]] || \
             fail pin_fault_paging_absent "rule 1310055 reads status=$enabled — enable the pin-fault rule before flipping."
-          # d6_replace_stale (#10166): a run discharges D6 only when its git_data_host_replace
-          # job SUCCEEDED and the last-step marker `Rotate completed (d6 marker)` succeeded.
-          # That marker is skipped on a plain replace, on a plan-only rotate and after any
-          # failure, so only a real git-data-host-rotate run (the only arm that re-mints
-          # GIT_DATA_LUKS_KEY) can carry it. The old match on the `rotate confirm token`
-          # step is gone: that step is unconditional and concludes success with
-          # `rotate confirm: n/a` on every non-rotate target. The newest rotate ATTEMPT decides — a
-          # failed or cancelled newest rotate (once its apply began) blocks, and an older success
-          # cannot mask it;
-          # a run that cannot be read or is still running stops the scan instead of being
-          # skipped. The decision logic is scripts/lib/git-data-rotate-stamp.sh (unit-tested
-          # offline); it is sourced from the dispatched ref's checkout, the same trust
-          # boundary as bearer-curl.sh, held by the main-restricted reviewer environment.
-          # (displayTitle is the workflow name on dispatch runs — the target is only
-          # visible in the job/step list; the window is the 100 newest dispatch runs.)
+          # d6_replace_stale (#10166): a run discharges D6 only when its git_data_host_replace job succeeded AND
+          # the last-step marker `Rotate completed (d6 marker)` succeeded (a plain replace, a plan-only rotate
+          # and any failure skip it); the newest rotate ATTEMPT decides, so a failed one blocks and an older
+          # success cannot mask it. Decision logic, trust boundary and why the old confirm-token match went:
+          # scripts/lib/git-data-rotate-stamp.sh (unit-tested offline). The scan covers the 100 newest dispatch
+          # runs (displayTitle is the workflow name on dispatch runs, so the target is only in the job/step list).
           source "${GITHUB_WORKSPACE:?}/scripts/lib/git-data-rotate-stamp.sh" || fail d6_run_unreadable "scripts/lib/git-data-rotate-stamp.sh could not be loaded from the dispatched ref's checkout — the d6 stamp could not be read."
           ids="$(gh run list --workflow apply-web-platform-infra.yml --branch main \
                    --event workflow_dispatch --limit 100 \
