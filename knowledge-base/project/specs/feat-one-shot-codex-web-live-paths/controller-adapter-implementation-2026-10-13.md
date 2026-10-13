@@ -106,3 +106,35 @@ forward migration bodies or production Dockerfile. Dependency locks/manifests,
 plugin and infrastructure sources do change, so current-source pairing/export
 must refresh after clean inclusion. Incoming operational snippets are read as
 source only; no incoming command is executed.
+
+## Focused integrity and test-design corrections
+
+At pushed `3a2b82f85f2b4fbbb1e46b137c7fb76725dffce0`, security independently
+closed S1/S2, repeated their original reproductions and passed 66 targeted cases.
+Integrity passed 92 cases but reproduced two P2 defects: historical running-state
+markers permitted a stopped dependency at start/collection (D1), and an ambiguous
+child delete permitted dependent parent-container deletion (D2). Fresh regressions
+failed before correction. Dependencies are now reobserved immediately before
+start; collected namespace roles must currently run; ambiguous or unverified
+child cleanup halts dependent deletion, including repeated cleanup calls.
+
+Test design scored the preceding source 7.9/10, Grade B, and classified all changed
+tests as unit tests. Its three P2 oracle gaps are corrected in source: the duplicate
+auxiliary case now stays within the cardinality limit and checks its exact refusal;
+the fake independently validates complete method/path/body expectations for every
+modeled role, mounts, DNS/sysctls, limits, labels and volume filters; stale source
+and caller/callback mutation cases now cover all four adapter boundaries. Selected
+negative tables match the intended refusal, separately from terminal retry refusal.
+Independent mutations remain UNVERIFIED-ALLOC-FAILED after the prescribed allocator
+refused its disk-backed roots. No fallback copy or live source mutation ran.
+
+Additional behavioral controls reproduced acceptance of wrong start/delete
+completion status and a nonempty lease-release response; corrections require exact
+successful receipts before progress. The current adapter suite passes 52 cases;
+candidate/export tests still contain 12 cases. All callback payloads are synthetic.
+These corrections require pushed-source reverification; none confers runtime
+or full-review clearance. Actual hard cancellation, context-writer locking,
+global volume absence and complete writer discovery remain pending.
+
+The inspected main pin merged cleanly after the exact ORIG_HEAD-lock sandbox retry.
+No merge conflict, operational action or incoming command execution occurred.

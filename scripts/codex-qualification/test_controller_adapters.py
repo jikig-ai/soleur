@@ -8,7 +8,7 @@ import shutil
 import traceback
 from unittest.mock import patch
 from dataclasses import replace
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlsplit, urlencode
 
 import candidate
 import controller_inputs as inputs
@@ -149,7 +149,7 @@ class BuilderTests(AdapterTests):
             shutil.copytree(self.root, other)
             descriptor = os.open(other, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             try:
-                with self.assertRaises(Refused):
+                with self.assertRaisesRegex(Refused, 'Export descriptor and recipe directory differ'):
                     self.adapter().build(descriptor)
                 self.assertEqual(self.transport.calls, [])
             finally:
@@ -157,17 +157,19 @@ class BuilderTests(AdapterTests):
 
     def test_bad_recipe_and_review_refuse_before_transport(self):
         self.spec['build_recipe']['replace_environment'] = False
-        with self.assertRaises(Refused):
+        with self.assertRaisesRegex(Refused, 'Exact replaced builder environment'):
             self.adapter()
         self.assertEqual(self.transport.calls, [])
 
     def test_backward_expired_and_nonfinite_clocks_block_transport(self):
-        for instant in (99, 2000, float('inf'), float('nan'), True):
+        for instant, reason in ((99, 'Finite monotonic clock'), (2000, 'Adapter deadline expired'),
+                                (float('inf'), 'Finite monotonic clock'),
+                                (float('nan'), 'Finite monotonic clock'), (True, 'Finite monotonic clock')):
             with self.subTest(instant=instant):
                 self.clock.now = 100
                 adapter = self.adapter()
                 self.clock.now = instant
-                with self.assertRaises(Refused):
+                with self.assertRaisesRegex(Refused, reason):
                     adapter.build(self.fd)
                 self.assertEqual(self.transport.calls, [])
 
@@ -193,11 +195,19 @@ class BuilderTests(AdapterTests):
                 original = copy.deepcopy(self.transport.response)
                 self.transport.response[field] = value
                 adapter = self.adapter()
-                with self.assertRaises(Refused):
+                reason = 'SHA-256 digest required' if field == 'log_sha256' else 'Successful bounded immutable-image'
+                with self.assertRaisesRegex(Refused, reason):
                     adapter.build(self.fd)
                 self.assertEqual(adapter.snapshot()['state'], 'failed')
                 self.pending(adapter.snapshot())
                 self.transport.response = original
+
+    def test_resealed_stale_adapter_source_refuses_with_no_transport(self):
+        self.contract['source_references']['scripts/codex-qualification/controller_adapters.py']['sha256'] = '0' * 64
+        seal(self.contract)
+        with self.assertRaisesRegex(Refused, 'Executing adapter component differs from source reference'):
+            self.adapter()
+        self.assertEqual(self.transport.calls, [])
 
     def test_transport_refusal_content_is_absent_from_error_snapshot_and_chain(self):
         sentinel = 'SYNTHETIC_RAW_TRANSPORT_CONTENT'
@@ -247,6 +257,29 @@ class NamespaceTests(AdapterTests):
                     'host': {key: {} if key in ('PortBindings', 'Sysctls') else []
                              for key in inputs.HOST_FIELDS}, 'aliases': [], 'exec': []}
                 self.profiles[name]['create']['Healthcheck'] = {'Test': ['NONE']}
+        self.profiles['supabase_db_fixture']['host']['Binds'] = ['supabase_db_fixture:/var/lib/postgresql/data:rw']
+        self.profiles['supabase_storage_fixture']['host']['Binds'] = ['supabase_storage_fixture:/var/lib/storage:rw']
+        for role in ('tls', 'resolver'):
+            self.profiles['codex9051-' + role + '-fixture']['host']['Sysctls'] = {
+                'net.ipv4.ip_unprivileged_port_start': '0'}
+        for name, profile in self.profiles.items():
+            if profile['role'] in ('renderer', 'browser'):
+                profile['host'].update(Binds=['/tmp/synthetic-adapter/tls:/qualification/tls:ro'],
+                                       Dns=['172.28.5.17'], DnsSearch=['.'], DnsOptions=['ndots:0'])
+        modeled_profiles = copy.deepcopy(self.profiles)
+        labels = {'com.supabase.cli.project': 'fixture', 'soleur.recovery.attempt': 'fixture'}
+        def expected_create(name):
+            profile = modeled_profiles[name]
+            role = profile['role']
+            memory = 1024**3 if role == 'db' else 2 * 1024**3 if role == 'renderer' else 512 * 1024**2
+            host = {**copy.deepcopy(profile['host']), 'ExtraHosts': [],
+                    'LogConfig': {'Type': 'json-file', 'Config': {'max-size': '10m', 'max-file': '1'}},
+                    'NetworkMode': self.network_id, 'Memory': memory, 'MemorySwap': memory,
+                    'CpuPeriod': 100000, 'CpuQuota': 200000 if role == 'renderer' else 100000,
+                    'PidsLimit': 256, 'RestartPolicy': {'Name': 'no'}, 'SecurityOpt': ['no-new-privileges:true']}
+            return {'Image': self.image, 'Labels': labels, **copy.deepcopy(profile['create']),
+                    'HostConfig': host, 'NetworkingConfig': {'EndpointsConfig': {self.network_id: {'Aliases': []}}}}
+        self.expected_create = expected_create
         class Transport:
             def __init__(inner):
                 inner.calls = []
@@ -267,18 +300,29 @@ class NamespaceTests(AdapterTests):
                 route = urlsplit(path).path
                 data = json.loads(payload) if payload else {}
                 if route.startswith('/images/'):
+                    self.assertEqual((method, path, payload), ('GET', '/images/' + self.image + '/json', b''))
                     inner.image_reads += 1
                     observed = copy.deepcopy(config)
                     if inner.changed_image and inner.image_reads > 1:
                         observed['User'] = 'root'
                     return 200, {'Id': self.image, 'Config': observed}
                 if route == '/networks/create':
+                    self.assertEqual((method, path), ('POST', '/networks/create'))
+                    self.assertEqual(data, {'Name': 'fixture-internal', 'Labels': labels, 'Driver': 'bridge',
+                        'Internal': True, 'EnableIPv6': False, 'CheckDuplicate': True,
+                        'Options': {'com.docker.network.bridge.host_binding_ipv4': '127.0.0.1'}})
                     return 201, {'Id': self.network_id, 'Warning': ''}
                 if route.startswith('/networks/') and method == 'GET':
+                    self.assertEqual((path, payload), ('/networks/' + self.network_id, b''))
                     return 200, copy.deepcopy(inner.network)
                 if route == '/volumes':
+                    query = urlencode({'filters': json.dumps({'label': ['soleur.recovery.attempt=fixture']})})
+                    self.assertEqual((method, path, payload), ('GET', '/volumes?' + query, b''))
                     return 200, {'Volumes': copy.deepcopy(list(inner.volumes.values())), 'Warnings': None}
                 if route == '/volumes/create':
+                    self.assertEqual((method, path), ('POST', '/volumes/create'))
+                    self.assertIn(data.get('Name'), ('supabase_db_fixture', 'supabase_storage_fixture'))
+                    self.assertEqual(data, {'Name': data['Name'], 'Labels': labels, 'Driver': 'local'})
                     receipt = {'Name': data['Name'], 'Driver': 'local', 'Scope': 'local', 'Options': None,
                         'Labels': data['Labels'], 'CreatedAt': 'synthetic-birth', 'Mountpoint': '/synthetic/' + data['Name']}
                     inner.volumes[data['Name']] = copy.deepcopy(receipt)
@@ -287,6 +331,8 @@ class NamespaceTests(AdapterTests):
                     if inner.ambiguous:
                         raise OSError('synthetic ambiguous create')
                     name = parse_qs(urlsplit(path).query)['name'][0]
+                    self.assertEqual((method, path), ('POST', '/containers/create?name=' + name))
+                    self.assertEqual(data, expected_create(name))
                     identifier = next(iter(inner.containers)) if inner.duplicate else format(len(inner.containers) + 1, '064x')
                     ip = '172.28.5.' + str(10 + len(inner.containers))
                     inner.containers[identifier] = {'Id': identifier, 'Name': '/' + name,
@@ -300,19 +346,34 @@ class NamespaceTests(AdapterTests):
                 if route.startswith('/containers/'):
                     identifier = route.split('/')[2]
                     if method == 'GET':
+                        self.assertEqual((path, payload), ('/containers/' + identifier + '/json', b''))
                         receipt = copy.deepcopy(inner.containers[identifier])
                         if inner.foreign:
                             receipt['Config']['Labels']['soleur.recovery.attempt'] = 'foreign'
                         return 200, receipt
                     if route.endswith('/start'):
+                        self.assertEqual((method, path, payload), ('POST', '/containers/' + identifier + '/start', b''))
                         inner.containers[identifier]['State']['Running'] = True
                         return 204, {}
                 if method == 'DELETE':
+                    self.assertEqual(payload, b'')
+                    if route.startswith('/containers/'):
+                        identifier = route.split('/')[2]
+                        self.assertEqual(path, '/containers/' + identifier + '?force=true')
+                        inner.containers.pop(identifier)
+                        inner.network['Containers'].pop(identifier)
+                    elif route.startswith('/volumes/'):
+                        name = route.removeprefix('/volumes/')
+                        self.assertEqual(path, '/volumes/' + name)
+                        inner.volumes.pop(name)
+                    else:
+                        self.assertEqual(path, '/networks/' + self.network_id)
                     return 204, {}
                 raise RuntimeError('Unexpected synthetic request: ' + method + ' ' + path)
         self.transport = Transport()
+        self.images = {self.image: self.image}
         self.adapter = adapters.NamespaceAdapter(self.contract, 'fixture', 'fixture-internal',
-            '/tmp/synthetic-adapter', {self.image: self.image}, self.profiles,
+            '/tmp/synthetic-adapter', self.images, self.profiles,
             reviewed_profiles=copy.deepcopy(self.profiles), transport=self.transport, clock=self.clock)
 
     def resources(self):
@@ -341,6 +402,20 @@ class NamespaceTests(AdapterTests):
         self.assertEqual(create['HostConfig']['SecurityOpt'], ['no-new-privileges:true'])
         self.assertEqual(create['HostConfig']['ExtraHosts'], [])
         self.assertTrue(any(call[1] == '/networks/' + self.network_id for call in self.transport.calls))
+        creates = [call for call in self.transport.calls if call[1].startswith('/containers/create')]
+        self.assertEqual(len(creates), 10)
+        for call in creates:
+            name = parse_qs(urlsplit(call[1]).query)['name'][0]
+            self.assertEqual((call[0], call[1]), ('POST', '/containers/create?name=' + name))
+            self.assertEqual(json.loads(call[2]), self.expected_create(name))
+
+    def test_migration_role_rewrite_has_complete_independent_expectation(self):
+        self.resources()
+        self.role('db')
+        self.role('migration')
+        import json
+        request = next(call for call in self.transport.calls if 'name=codex9051-job-' in call[1])
+        self.assertEqual(json.loads(request[2]), self.expected_create('codex9051-job-fixture-1'))
 
     def test_premature_role_refuses_before_transport(self):
         with self.assertRaises(Refused):
@@ -353,9 +428,95 @@ class NamespaceTests(AdapterTests):
             self.role(role)
         self.transport.containers[next(iter(self.transport.containers))]['State']['Running'] = False
         count = sum(call[1].startswith('/containers/create') for call in self.transport.calls)
-        with self.assertRaises(Refused):
+        with self.assertRaisesRegex(Refused, 'Started prerequisite no longer running'):
             self.adapter.create_role('supabase_kong_fixture')
         self.assertEqual(sum(call[1].startswith('/containers/create') for call in self.transport.calls), count)
+
+    def test_stopped_dependency_before_start_never_dispatches_start(self):
+        self.resources()
+        for role in ('db', 'auth', 'inbucket', 'rest', 'storage'):
+            self.role(role)
+        self.adapter.create_role('supabase_kong_fixture')
+        self.transport.containers[next(iter(self.transport.containers))]['State']['Running'] = False
+        starts = sum(call[1].endswith('/start') for call in self.transport.calls)
+        with self.assertRaisesRegex(Refused, 'Started prerequisite no longer running'):
+            self.adapter.start_role('supabase_kong_fixture')
+        self.assertEqual(sum(call[1].endswith('/start') for call in self.transport.calls), starts)
+
+    def test_namespace_collection_requires_current_running_roles(self):
+        self.resources()
+        for role in ('db', 'auth', 'inbucket', 'rest', 'storage', 'kong', 'tls', 'resolver'):
+            self.role(role)
+        for container in self.transport.containers.values():
+            if container['Name'] == '/supabase_kong_fixture':
+                container['State']['Running'] = False
+        with self.assertRaisesRegex(Refused, 'Collected namespace role no longer running'):
+            self.adapter.namespace()
+
+    def test_ambiguous_child_delete_blocks_every_dependent_parent_delete(self):
+        self.resources()
+        for role in ('db', 'auth', 'inbucket', 'rest', 'storage', 'kong', 'tls', 'resolver', 'renderer'):
+            self.role(role)
+        original = self.transport.request
+        deletes = []
+        def ambiguous_delete(method, path, payload, *, timeout):
+            if method == 'DELETE':
+                deletes.append(path)
+                raise OSError('synthetic ambiguous child delete')
+            return original(method, path, payload, timeout=timeout)
+        self.transport.request = ambiguous_delete
+        self.adapter.cleanup()
+        self.adapter.cleanup()
+        self.assertEqual(len(deletes), 1)
+        self.assertTrue(deletes[0].startswith('/containers/'))
+
+    def test_wrong_start_status_refuses_progress_even_when_fake_running(self):
+        self.resources()
+        self.adapter.create_role('supabase_db_fixture')
+        original = self.transport.request
+        def wrong_status(method, path, payload, *, timeout):
+            response = original(method, path, payload, timeout=timeout)
+            return (201, {}) if path.endswith('/start') else response
+        self.transport.request = wrong_status
+        with self.assertRaisesRegex(Refused, 'Exact successful start completion'):
+            self.adapter.start_role('supabase_db_fixture')
+
+    def test_wrong_delete_status_does_not_release_parent_cleanup(self):
+        self.resources()
+        self.role('db')
+        original = self.transport.request
+        deletes = []
+        def wrong_status(method, path, payload, *, timeout):
+            response = original(method, path, payload, timeout=timeout)
+            if method == 'DELETE':
+                deletes.append(path)
+                return 201, {}
+            return response
+        self.transport.request = wrong_status
+        result = self.adapter.cleanup()
+        self.assertEqual(result['state'], 'failed')
+        self.assertEqual(len(deletes), 1)
+
+    def test_caller_profile_image_and_returned_observation_mutation_are_isolated(self):
+        self.profiles['supabase_db_fixture']['create']['Env'].append('OPENAI_API_KEY=synthetic-unreviewed')
+        self.images[self.image] = 'sha256:' + 'f' * 64
+        original = self.transport.request
+        observed_images = []
+        def changing_previous_observation(method, path, payload, *, timeout):
+            if path.startswith('/images/') and observed_images:
+                observed_images[-1]['Config']['User'] = 'root'
+            result = original(method, path, payload, timeout=timeout)
+            if path.startswith('/images/'):
+                observed_images.append(result[1])
+            return result
+        self.transport.request = changing_previous_observation
+        self.resources()
+        self.role('db')
+        self.assertEqual(observed_images[0]['Config']['User'], 'root')
+        import json
+        request = next(call for call in self.transport.calls if call[1].startswith('/containers/create'))
+        self.assertEqual(json.loads(request[2])['Env'], [])
+        self.assertEqual(json.loads(request[2])['Image'], self.image)
 
     def test_foreign_network_member_refuses_before_volume_creation(self):
         self.adapter.create_network()
@@ -585,6 +746,23 @@ class SessionTests(AdapterTests):
             self.adapter.complete()
         self.assertFalse(any(call[0] == 'assertion' for call in self.transport.calls))
 
+    def test_caller_handle_map_and_callback_identity_mutation_are_isolated(self):
+        handles = {'holder': self.holder, 'waiter': self.waiter}
+        self.adapter = adapters.SessionAdapter(self.contract, 'fixture', 'fixture-db', self.binding,
+            handles, transport=self.transport, clock=self.clock)
+        handles['waiter'] = replace(self.waiter, backend_birth='caller mutation')
+        original = self.transport.start
+        def changing_argument(handle, sql, *, timeout):
+            receipt = copy.deepcopy(original(handle, sql, timeout=timeout))
+            object.__setattr__(handle, 'process_birth', 'callback mutation')
+            return receipt
+        self.transport.start = changing_argument
+        self.adapter.begin()
+        self.adapter.observe()
+        self.pending(self.adapter.complete())
+        self.assertEqual(self.holder.process_birth, 'process-h')
+        self.assertEqual(self.waiter.process_birth, 'process-w')
+
     def test_ambiguous_close_is_not_retried_on_repeated_cleanup(self):
         self.adapter.begin()
         closes = []
@@ -610,6 +788,7 @@ class RetainedTests(AdapterTests):
                          'pairing_sha256': self.contract['pairing_sha256'], 'resource_kind': 'storage',
                          'resource_id': 'b' * 64, 'root_device': info.st_dev, 'root_inode': info.st_ino}
         self.writers = [{'container_id': 'c' * 64, 'process_pid': 123, 'process_birth': 'writer-birth'}]
+        observed_writers = copy.deepcopy(self.writers)
         class Transport:
             def __init__(inner):
                 inner.calls = []
@@ -621,7 +800,7 @@ class RetainedTests(AdapterTests):
 
             def resource(inner, reference, *, timeout):
                 inner.calls.append('resource')
-                writers = copy.deepcopy(self.writers)
+                writers = copy.deepcopy(observed_writers)
                 if inner.changed and inner.calls.count('resource') > 1:
                     writers[0]['process_birth'] = 'changed'
                 return {'resource': copy.deepcopy(reference), 'owner_id': 'owner',
@@ -757,6 +936,30 @@ class RetainedTests(AdapterTests):
         (self.root / 'object').unlink()
         self.adapter.collect('after', [])
         self.pending(self.adapter.compare(erased_paths=('object',)))
+
+    def test_caller_resource_writers_and_callback_arguments_are_isolated(self):
+        self.resource['root_inode'] = -1
+        self.writers[0]['process_birth'] = 'caller mutation'
+        original = self.transport.quiesce
+        def changing_arguments(reference, writers, phase, *, timeout):
+            receipt = copy.deepcopy(original(reference, writers, phase, timeout=timeout))
+            reference['root_inode'] = -2
+            writers[0]['process_birth'] = 'callback mutation'
+            return receipt
+        self.transport.quiesce = changing_arguments
+        self.adapter.collect('before', ['object'])
+        self.adapter.collect('after', ['object'])
+        self.pending(self.adapter.compare())
+
+    def test_nonempty_quiescence_release_response_is_not_success(self):
+        original = self.transport.release
+        def failed_release(reference, writers, quiescence_id, *, timeout):
+            original(reference, writers, quiescence_id, timeout=timeout)
+            return {'error': 'synthetic release refusal'}
+        self.transport.release = failed_release
+        with self.assertRaisesRegex(Refused, 'Owned quiescence release failed'):
+            self.adapter.collect('before', ['object'])
+        self.assertEqual(self.adapter.snapshot()['state'], 'failed')
 
     def test_phase_order_refuses_before_transport_and_census_is_complete(self):
         with self.assertRaises(Refused):

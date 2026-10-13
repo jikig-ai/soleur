@@ -150,13 +150,14 @@ class Candidate(unittest.TestCase):
 
     def test_auxiliary_inventory_rejects_duplicates_collisions_and_unsupported_modes(self):
         spec, auxiliary, descriptor = self.assembled_auxiliary()
-        for invalid in [auxiliary + [auxiliary[0]],
-                        [{**auxiliary[0], 'path': spec['export_manifest'][0]['path']}],
-                        [{**auxiliary[0], 'permissions': 0o777}],
-                        [{**auxiliary[0], 'permissions': True}],
-                        [{**auxiliary[0], 'path': '../escape'}],
-                        [{**auxiliary[0], 'content': 'text'}]]:
-            with self.subTest(invalid=repr(invalid)[:100]), self.assertRaises(Refused):
+        for invalid, reason in [([auxiliary[0], auxiliary[0], auxiliary[2]], 'Duplicate source or auxiliary'),
+                        (auxiliary + [auxiliary[0]], 'Bounded explicit export inventories'),
+                        ([{**auxiliary[0], 'path': spec['export_manifest'][0]['path']}], 'Duplicate source or auxiliary'),
+                        ([{**auxiliary[0], 'permissions': 0o777}], 'Explicit regular auxiliary'),
+                        ([{**auxiliary[0], 'permissions': True}], 'Explicit regular auxiliary'),
+                        ([{**auxiliary[0], 'path': '../escape'}], 'Source path traversal'),
+                        ([{**auxiliary[0], 'content': 'text'}], 'Explicit regular auxiliary')]:
+            with self.subTest(invalid=repr(invalid)[:100]), self.assertRaisesRegex(Refused, reason):
                 candidate.verify_exports(descriptor, spec['export_manifest'], auxiliary=invalid)
 
     def test_public_build_args_clean_environment_and_metadata_preview(self):

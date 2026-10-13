@@ -244,6 +244,10 @@ class NamespaceAdapter(_Adapter):
         status, receipt = response
         bounded(receipt)
         require(200 <= status < 300, 'Injected Docker-shaped operation failed')
+        if method == 'GET':
+            require(status == 200, 'Exact successful inspection status required')
+        if method == 'DELETE':
+            require(status == 204 and receipt == {}, 'Exact successful deletion completion required')
         return status, receipt, body
 
     def _labels(self):
@@ -311,9 +315,9 @@ class NamespaceAdapter(_Adapter):
         self._reobserve_volumes()
         return self.snapshot()
 
-    def _prerequisites(self, name):
+    def _dependencies(self, name):
         profile = self._profiles.get(name)
-        require(profile is not None and name not in self._policy.creation_names, 'Reserved new role required')
+        require(profile is not None, 'Reserved role required')
         role = profile['role']
         require(self._policy.network_id is not None and
                 set(self._policy.volume_receipts) == self._policy.volume_names, 'Network and both volumes required')
@@ -337,7 +341,8 @@ class NamespaceAdapter(_Adapter):
 
     @step
     def create_role(self, name):
-        profile = self._prerequisites(name)
+        require(name not in self._policy.creation_names, 'Reserved new role required')
+        profile = self._dependencies(name)
         self._network_observation()
         self._reobserve_volumes()
         _, image, _ = self._request('GET', '/images/' + quote(profile['image'], safe=':') + '/json')
@@ -364,7 +369,9 @@ class NamespaceAdapter(_Adapter):
         self._network_observation()
         self._reobserve_volumes()
         self._inspect(name)
-        self._request('POST', '/containers/' + self._policy.own(name) + '/start')
+        self._dependencies(name)
+        status, receipt, _ = self._request('POST', '/containers/' + self._policy.own(name) + '/start')
+        require(status == 204 and receipt == {}, 'Exact successful start completion required')
         observed = self._inspect(name)
         require(observed.get('State', {}).get('Running') is True, 'Started container observation absent')
         self._started.add(name)
@@ -377,7 +384,8 @@ class NamespaceAdapter(_Adapter):
         require(expected <= self._started, 'Started Kong, TLS and resolver required')
         network = self._network_observation()
         for name in sorted(expected):
-            self._inspect(name)
+            require(self._inspect(name).get('State', {}).get('Running') is True,
+                    'Collected namespace role no longer running')
         recipe = namespace_recipe(self._policy, network, self._inspect('supabase_kong_' + self._attempt),
                                   self._contract['browser']['hostname'])
         return {**self.snapshot(), 'namespace_specification_sha256': sha(canonical(recipe))}
@@ -385,8 +393,10 @@ class NamespaceAdapter(_Adapter):
     def cleanup(self):
         # Never remove parent resources after an unverified/failed child cleanup.
         for name in reversed(self._created):
-            if name in self._deleted or ('container', name) in self._cleanup_attempts:
+            if name in self._deleted:
                 continue
+            if ('container', name) in self._cleanup_attempts:
+                break
             try:
                 self._remaining(True)
                 self._inspect(name, True)
@@ -397,6 +407,7 @@ class NamespaceAdapter(_Adapter):
                 self._deleted.add(name)
             except Exception:
                 self._cleanup_errors += 1
+                break
         if (len(self._deleted) == len(self._created) and not self._policy.pending and
                 not self._policy.volume_pending and not self._policy.network_pending):
             for name in tuple(self._policy.volume_receipts):
@@ -661,7 +672,9 @@ class RetainedAdapter(_Adapter):
                 except Refused:
                     pass
             try:
-                self._call('release', self._resource, self._writers, binding['quiescence_id'], cleanup=True)
+                released = self._call('release', self._resource, self._writers,
+                                      binding['quiescence_id'], cleanup=True)
+                require(released is None, 'Exact quiescence release completion required')
             except Exception:
                 self._cleanup_errors += 1
                 failure = failure or 'Owned quiescence release failed'
