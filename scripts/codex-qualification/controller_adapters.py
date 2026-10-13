@@ -21,7 +21,7 @@ from operational import BUDGET, digest, text_identity
 from prepare import Refused, canonical, require, sha
 import retained_files
 from session_controller import (CLEANUP_SECONDS, MAX_OBSERVATIONS, RaceController,
-                                SCENARIOS, ScenarioBinding, SessionIdentity)
+                                SCENARIOS, ScenarioBinding, SessionIdentity, _token)
 
 MAX_RESPONSE = 16 * 1024**2
 
@@ -37,6 +37,13 @@ def bounded(value):
     require(isinstance(value, dict) and len(canonical(value)) <= MAX_RESPONSE,
             'Bounded structured transport response required')
     return value
+
+
+def read_clock(clock, kind):
+    try:
+        return clock()
+    except Exception:
+        raise Refused('Injected ' + kind + ' clock failed') from None
 
 
 def step(method):
@@ -60,7 +67,7 @@ class _Adapter:
         require(reference.get('sha256') == sha(Path(__file__).read_bytes()),
                 'Executing adapter component differs from source reference')
         require(callable(clock), 'Injected monotonic clock required')
-        initial = clock()
+        initial = read_clock(clock, 'monotonic')
         require(finite(initial), 'Finite monotonic clock required')
         self._clock, self._last = clock, initial
         self._deadline = initial + BUDGET['work_seconds']
@@ -71,7 +78,7 @@ class _Adapter:
         self._cleanup_errors = 0
 
     def _tick(self):
-        instant = self._clock()
+        instant = read_clock(self._clock, 'monotonic')
         require(finite(instant) and instant >= self._last, 'Finite monotonic clock required')
         self._last = instant
         return instant
@@ -97,14 +104,22 @@ class _Adapter:
 
     def _call(self, operation, *args, cleanup=False, check_after=True):
         timeout = self._remaining(cleanup)
-        callback = getattr(self._transport, operation, None)
+        try:
+            callback = getattr(self._transport, operation, None)
+        except Exception:
+            raise Refused('Injected transport operation lookup failed') from None
         require(callable(callback), 'Required injected transport operation absent')
         self._calls[operation] = self._calls.get(operation, 0) + 1
         # A transport cannot mutate the adapter's reviewed recipe/references.
-        result = callback(*copy.deepcopy(args), timeout=timeout)
+        try:
+            result = copy.deepcopy(callback(*copy.deepcopy(args), timeout=timeout))
+        except Exception:
+            # Exception type is also callback-controlled: even a Refused message
+            # can carry raw content. Preserve only a fixed boundary failure.
+            raise Refused('Injected transport operation failed') from None
         if check_after:
             self._remaining(cleanup)
-        return copy.deepcopy(result)
+        return result
 
     def snapshot(self):
         return {'state': self._state, 'primary_failure': self._primary,
@@ -421,13 +436,16 @@ class SessionAdapter(_Adapter):
                 'Complete current-source scenario binding required')
         require(isinstance(handles, dict) and set(handles) == {'holder', 'waiter'} and
                 all(isinstance(handle, SessionIdentity) and handle.attempt == attempt and
-                    handle.database == database for handle in handles.values()), 'Exact registered existing handles required')
+                    handle.database == database and type(handle.backend_pid) is int and handle.backend_pid > 0 and
+                    type(handle.process_pid) is int and handle.process_pid > 0 and
+                    all(_token(value) for value in (handle.backend_birth, handle.process_birth, handle.session_id))
+                    for handle in handles.values()), 'Exact complete registered existing handles required')
         holder, waiter = handles['holder'], handles['waiter']
         require(holder.backend_pid != waiter.backend_pid and holder.process_pid != waiter.process_pid and
                 holder.session_id != waiter.session_id, 'Distinct registered existing sessions required')
         self._handles = copy.deepcopy(handles)
         self._binding = binding
-        self._race = RaceController(attempt, database, binding, clock)
+        self._race = RaceController(attempt, database, binding, lambda: read_clock(clock, 'monotonic'))
         self._touched, self._closed = [], set()
         self._cleanup_attempts = set()
 
@@ -552,7 +570,7 @@ class RetainedAdapter(_Adapter):
         self._last_wall = None
 
     def _epoch(self):
-        instant = self._wall()
+        instant = read_clock(self._wall, 'observation')
         require(type(instant) is int and instant >= 0 and
                 (self._last_wall is None or instant >= self._last_wall), 'Ordered integer epoch observation required')
         self._last_wall = instant
@@ -589,11 +607,17 @@ class RetainedAdapter(_Adapter):
                     inputs.writer_census(quiet['quiescent_writers']) == inputs.writer_census(self._writers),
                     'Quiescence time or complete writer identity differs')
             timeout = self._remaining()
-            callback = getattr(self._transport, 'open_root', None)
+            try:
+                callback = getattr(self._transport, 'open_root', None)
+            except Exception:
+                raise Refused('Injected root opener lookup failed') from None
             require(callable(callback), 'Injected registered root opener absent')
             self._calls['open_root'] = self._calls.get('open_root', 0) + 1
             # Take ownership before checking the clock, so a late returned fd closes.
-            opened = callback(copy.deepcopy(self._resource), timeout=timeout)
+            try:
+                opened = callback(copy.deepcopy(self._resource), timeout=timeout)
+            except Exception:
+                raise Refused('Injected root opener failed') from None
             require(type(opened) is int and opened >= 0, 'Transferred owned root descriptor required')
             descriptor = opened
             self._remaining()

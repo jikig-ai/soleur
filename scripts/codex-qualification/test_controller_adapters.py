@@ -5,6 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 import shutil
+import traceback
 from unittest.mock import patch
 from dataclasses import replace
 from urllib.parse import parse_qs, urlsplit
@@ -15,6 +16,8 @@ import operational
 import controller_adapters as adapters
 from prepare import Refused, browser_contract, canonical, sha
 from session_controller import SessionIdentity, SCENARIOS, bind_scenarios
+from api_policy import Refused as PolicyRefused
+from namespace import Refused as NamespaceRefused
 
 
 class Clock:
@@ -195,6 +198,36 @@ class BuilderTests(AdapterTests):
                 self.assertEqual(adapter.snapshot()['state'], 'failed')
                 self.pending(adapter.snapshot())
                 self.transport.response = original
+
+    def test_transport_refusal_content_is_absent_from_error_snapshot_and_chain(self):
+        sentinel = 'SYNTHETIC_RAW_TRANSPORT_CONTENT'
+        for exception_type in (Refused, PolicyRefused, NamespaceRefused):
+            with self.subTest(exception_type=exception_type):
+                adapter = self.adapter()
+                def refused_build(recipe, *, timeout):
+                    raise exception_type(sentinel)
+                self.transport.build = refused_build
+                try:
+                    adapter.build(self.fd)
+                except Refused as error:
+                    self.assertNotIn(sentinel, str(error))
+                    self.assertNotIn(sentinel, repr(adapter.snapshot()))
+                    self.assertNotIn(sentinel, ''.join(traceback.format_exception(error)))
+                else:
+                    self.fail('Transport failure was accepted')
+
+    def test_injected_clock_content_is_absent_from_constructor_error(self):
+        sentinel = 'SYNTHETIC_RAW_CLOCK_CONTENT'
+        def refused_clock():
+            raise Refused(sentinel)
+        try:
+            adapters.BuilderAdapter(self.contract, self.spec, self.observation,
+                reviewed=self.observation, transport=self.transport, clock=refused_clock)
+        except Refused as error:
+            self.assertNotIn(sentinel, str(error))
+            self.assertNotIn(sentinel, ''.join(traceback.format_exception(error)))
+        else:
+            self.fail('Clock failure was accepted')
 
 
 class NamespaceTests(AdapterTests):
@@ -500,6 +533,15 @@ class SessionTests(AdapterTests):
             self.adapter.begin()
         self.assertEqual([call[0] for call in self.transport.calls], ['identity'])
 
+    def test_both_complete_session_identities_are_validated_before_any_transport(self):
+        for field, value in [('backend_birth', ''), ('process_birth', ''), ('session_id', ''),
+                             ('backend_pid', 0), ('process_pid', True), ('backend_birth', '\u2028')]:
+            with self.subTest(field=field, value=value), self.assertRaises(Refused):
+                adapters.SessionAdapter(self.contract, 'fixture', 'fixture-db', self.binding,
+                    {'holder': self.holder, 'waiter': replace(self.waiter, **{field: value})},
+                    transport=self.transport, clock=self.clock)
+            self.assertEqual(self.transport.calls, [])
+
     def test_pending_observations_never_commit_and_are_bounded(self):
         self.adapter.begin()
         self.transport.blocked = False
@@ -681,6 +723,27 @@ class RetainedTests(AdapterTests):
         self.assertEqual(self.transport.calls.count('release'), 1)
         with self.assertRaises(OSError):
             os.fstat(self.transport.descriptors[0])
+
+    def test_open_root_and_observation_clock_refusals_cannot_leak_content(self):
+        sentinel = 'SYNTHETIC_RAW_RETAINED_CONTENT'
+        for target in ('open_root', 'observation_clock'):
+            with self.subTest(target=target):
+                self.setUp()
+                def refused_callback(*args, **kwargs):
+                    raise Refused(sentinel)
+                if target == 'open_root':
+                    self.transport.open_root = refused_callback
+                else:
+                    self.adapter._wall = refused_callback
+                try:
+                    self.adapter.collect('before', ['object'])
+                except Refused as error:
+                    self.assertNotIn(sentinel, str(error))
+                    self.assertNotIn(sentinel, repr(self.adapter.snapshot()))
+                    self.assertNotIn(sentinel, ''.join(traceback.format_exception(error)))
+                else:
+                    self.fail('Retained callback failure was accepted')
+                self.assertEqual(self.transport.calls.count('release'), 1)
 
     def test_changed_retained_bytes_and_scoped_erasure_are_discriminated(self):
         self.adapter.collect('before', ['object'])

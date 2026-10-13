@@ -78,3 +78,31 @@ PENDING. Sharing, retention/inheritance and configured regions remain unknown.
 - Offline fixture sockets and `/var/tmp` allocator guards refused the sandbox;
   exact retries used their required approval path. Refusal is not a pass or a
   runtime observation; every accepted result needs the explicit producer receipt.
+
+## Focused security findings and corrections
+
+Independent security review of pushed `8b3e142402bc8420cfe6353eee39617ae4d32653`
+repeated 62 synthetic targeted cases and reproduced two P2 source defects:
+
+| Finding | Reproduction | Correction |
+|---|---|---|
+| S1 callback exception content | A transport raised a guard-class exception containing a sentinel; outward error and primary-failure snapshot retained it | Sanitize all transport/root-opener and injected-clock failures at invocation boundaries, suppressing raw exception chains |
+| S2 incomplete preflight identity | An empty waiter backend birth was accepted until holder start had already occurred | Validate both complete immutable session identities before any transport operation |
+
+New regressions first reproduced these defects, including three guard-exception
+types, root-opening and observation-clock failures, and six malformed waiter
+fields. The corrected adapter suite passes 41 cases. Closure remains owed from
+pushed-source independent reverification. This focused seat is not the full PR
+panel, runtime review or SAST clearance.
+
+Registration census passed 679 covered / zero orphans after the exact enumerator
+retry. Initial derivative diagnostics from a failed sandboxed enumerator were
+not orphan findings. Whitespace, ShellCheck, shell syntax and explicit staged
+secret scanning passed. Hooks remain configured to `/dev/null`.
+
+Main advanced by eight commits to `a1bbbb641fddb9436f138f8e1858b157a6601136`.
+Inspection found no changes to the qualification components, application server,
+forward migration bodies or production Dockerfile. Dependency locks/manifests,
+plugin and infrastructure sources do change, so current-source pairing/export
+must refresh after clean inclusion. Incoming operational snippets are read as
+source only; no incoming command is executed.
