@@ -105,6 +105,10 @@ make_kb_branch() {
       echo "l" > "$work/knowledge-base/project/learnings/2026-10-12-note.md" ;;
     nonkb)
       echo "code" > "$work/code.sh" ;;
+    specflat)
+      echo "flat" > "$work/knowledge-base/project/specs/2026-10-12-loose-note.md" ;;
+    gitkeep)
+      echo "" > "$work/knowledge-base/project/specs/.gitkeep" ;;
     multi)
       echo "s" > "$work/knowledge-base/project/specs/$branch/session-state.md"
       echo "p" > "$work/knowledge-base/project/plans/2026-10-12-$branch-plan.md" ;;
@@ -208,7 +212,6 @@ run_hook() {
 t01_specdir_deny() {
   local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_kb_branch "$tmp" "feat-leak" specdir)
-  assert_fixture_dir "$work"
   assert_fixture_dir "$work"
   assert_fixture_has "T01 fixture" "$work/knowledge-base/project/specs/feat-leak/tasks.md"
   local payload out exit_code=0
@@ -1177,6 +1180,95 @@ t76_quoted_R_body_still_gates() {
   rm -rf "$tmp"
 }
 
+# --- advisor-pass residuals: quoted/IFS spellings + specs depth-1 ----------
+
+t77_quoted_subcommand_deny() {
+  # `gh pr 'merge'` — a whole-WORD quote after `pr` survives
+  # strip_command_bodies only as a blank, so the trigger misses while gh
+  # would execute it. The miss-arm detect denies the unparseable form.
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_kb_branch "$tmp" "feat-qsc" specdir)
+  assert_fixture_dir "$work"
+  local out exit_code=0
+  out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr 'merge' --squash")") || exit_code=$?
+  assert_deny "T77a gh pr 'merge'" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$incidents"
+  mkdir -p "$incidents"
+  out=$(run_hook "$incidents" "$(make_payload "$work" "gh 'pr' merge --squash")") || exit_code=$?
+  assert_deny "T77b gh 'pr' merge" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$tmp"
+}
+
+t78_ifs_split_deny() {
+  # `gh${IFS}pr${IFS}merge` and `gh pr${IFS}merge` — IFS-joined tokens
+  # carry no whitespace for the trigger and expand correctly for gh.
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_kb_branch "$tmp" "feat-ifs" specdir)
+  assert_fixture_dir "$work"
+  local out exit_code=0
+  out=$(run_hook "$incidents" "$(make_payload "$work" 'gh${IFS}pr${IFS}merge')") || exit_code=$?
+  assert_deny "T78a gh IFS-joined" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$incidents"
+  mkdir -p "$incidents"
+  out=$(run_hook "$incidents" "$(make_payload "$work" 'gh pr${IFS}merge')") || exit_code=$?
+  assert_deny "T78b pr IFS-joined" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$tmp"
+}
+
+t79_specflat_deny() {
+  # A depth-1 file committed flat at specs/<file>.md — unconventional but
+  # leaks just the same; only specs/.gitkeep stays exempt.
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_kb_branch "$tmp" "feat-flat" specflat)
+  assert_fixture_dir "$work"
+  assert_fixture_has "T79 fixture" "$work/knowledge-base/project/specs/2026-10-12-loose-note.md"
+  local out exit_code=0
+  out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge --squash --auto")") || exit_code=$?
+  assert_deny "T79 depth-1 specs/ file" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$tmp"
+}
+
+t80_gitkeep_pass() {
+  # specs/.gitkeep is the repo's own live flat file — exempt, not a leak.
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_kb_branch "$tmp" "feat-gk" gitkeep)
+  assert_fixture_dir "$work"
+  local out exit_code=0
+  out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr merge --squash --auto")") || exit_code=$?
+  assert_pass "T80 specs/.gitkeep exempt" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$tmp"
+}
+
+t81_quoted_string_pass() {
+  # `echo 'gh pr merge'` — a fully-quoted documentation string carries its
+  # quote BEFORE `gh`, not inside the subcommand tokens; the miss-arm
+  # detect must not deny prose. Regression guard for the detect's width.
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_kb_branch "$tmp" "feat-echo" specdir)
+  assert_fixture_dir "$work"
+  local out exit_code=0
+  out=$(run_hook "$incidents" "$(make_payload "$work" "echo 'gh pr merge --squash --auto'")") || exit_code=$?
+  assert_pass "T81a quoted prose string" "$incidents" "$out" "${exit_code:-0}"
+  # `gh pr view --jq '.title'` — non-merge call whose quotes sit AFTER the
+  # subcommand tokens; must stay exempt.
+  out=$(run_hook "$incidents" "$(make_payload "$work" "gh pr view 5 --jq '.title'")") || exit_code=$?
+  assert_pass "T81b gh pr view --jq" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$tmp"
+}
+
+t82_partial_word_quote_pass() {
+  # `gh pr m"erge"` — mid-word quoting slips the detect (documented
+  # residual, header list). Pinned as pass so a future tightening changes
+  # a test, not the corpus silently.
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_kb_branch "$tmp" "feat-pwq" specdir)
+  assert_fixture_dir "$work"
+  local out exit_code=0
+  out=$(run_hook "$incidents" "$(make_payload "$work" 'gh pr m"erge" --squash')") || exit_code=$?
+  assert_pass "T82 partial-word quote (documented residual)" "$incidents" "$out" "${exit_code:-0}"
+  rm -rf "$tmp"
+}
+
 # --- registration + parity (integration) -----------------------------------
 
 t40_settings_registration() {
@@ -1321,6 +1413,12 @@ t73_var_operand_deny
 t74_nonrepo_cd_numbered_deny
 t75_subshell_scoped_cd_deny
 t76_quoted_R_body_still_gates
+t77_quoted_subcommand_deny
+t78_ifs_split_deny
+t79_specflat_deny
+t80_gitkeep_pass
+t81_quoted_string_pass
+t82_partial_word_quote_pass
 
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
@@ -1328,10 +1426,10 @@ echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 # Anti-vacuity floor: exact case floor, enforced OUTSIDE the verdict
 # machinery (a neutered assert cannot disarm it — guard-vacuity-floor's
 # mutant contract). Threshold is hand-maintained with the case list:
-# 84 assertions across 74 case invocations — 74 case verdicts + 4
-# assert_fixture_has preconditions (T01/T02/T04/T20) + 6 second-verdict
-# arms (T01b/T09b/T15b/T18b/T35b/T48b).
-MIN_ASSERTIONS=84
+# 94 assertions across 80 case invocations — 80 case verdicts + 5
+# assert_fixture_has preconditions (T01/T02/T04/T20/T79) + 9 second-verdict
+# arms (T01b/T09b/T15b/T18b/T35b/T48b/T77b/T78b/T81b).
+MIN_ASSERTIONS=94
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] vacuity floor: only %d assertions ran (floor %d) — the suite did not execute\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   exit 1

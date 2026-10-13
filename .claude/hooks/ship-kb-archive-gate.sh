@@ -115,18 +115,53 @@ SCAN=$(strip_command_bodies "$CMD")
 # `gh` (/usr/bin/gh), `\gh` alias-skip, `case`-branch merges, tokens split
 # by line-continuation (`gh pr` + backslash-newline + `merge`), remote
 # executors (`ssh host gh pr merge`), launcher binaries beyond the
-# enumerated prefix list, and function CALL SITES (`f() { gh pr merge; }`
+# enumerated prefix list, partial-word quoting (`gh pr m"erge"` — a
+# whole-WORD quote after `gh`/`pr` denies via the miss-arm detect; a
+# mid-word quote slips), and function CALL SITES (`f() { gh pr merge; }`
 # — the body now fires and denies; only a definition's `f` invocation
 # slips, unprovable without executing the shell), UI merges, and the
 # Monitor matcher (the whole merge-gate family is unbound there) — none
 # fire; postmerge Phase 5.8 is the net. The census reads the head at
 # invoke time but `--auto` merges the queue-time head — a post-arm push
 # of live-path artifacts slips every gate in this family; Phase 5.8
-# catches the landed result.
+# catches the landed result. The census is always against
+# `merge-base(origin/main, head)`: a `gh pr merge <N>` whose PR targets
+# a stacked feature branch rather than main inherits the parent branch's
+# live-path rows into the deny — fail-closed (the hatch covers), because
+# this repo's pipeline never ships a non-main base.
 _MERGE_BOUNDARY='(^|&&|\|\||\||;|\(|`|\{|&|[[:space:]]--[[:space:]])'
 _MERGE_PREFIX='(([A-Za-z_][A-Za-z0-9_]*=[^[:space:]&#|;()]+|if|while|until|then|do|elif|else|!|time|command|builtin|exec|nohup)[[:space:]]+)*((sudo|env|timeout|nice|stdbuf|ionice|setsid|xargs|watch|flock|doas|pkexec)([[:space:]]+[^[:space:];&|()]+)*[[:space:]]+)?'
 _GH_GFLAGS='([[:space:]]+--?[A-Za-z0-9-]+(=[^[:space:]]+)?([[:space:]]+[^-[:space:]][^[:space:]]*)?)*'
+
+# _deny is defined BEFORE the trigger check below because the miss arm can
+# deny (quoted/IFS-split subcommand spellings the trigger cannot see).
+_deny() {
+  local reason="$1"
+  emit_incident "wg-kb-artifacts-archived-in-pr" deny \
+    "Archive KB artifacts into archive/ inside the" "$CMD"
+  jq -n --arg reason "$reason" '{
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: $reason
+    }
+  }'
+  exit 0
+}
+
 if ! grep -qE "${_MERGE_BOUNDARY}[[:space:]]*${_MERGE_PREFIX}gh${_GH_GFLAGS}[[:space:]]+pr[[:space:]]+merge([[:space:]]|$)" <<<"$SCAN"; then
+  # Quoted or IFS-joined subcommand spellings — `gh pr 'merge'`,
+  # `gh 'pr' merge`, `gh${IFS}pr${IFS}merge`, `gh pr${IFS}merge` —
+  # survive strip_command_bodies only as blanks, so the trigger can
+  # never see them while gh executes them fine. Deliberately narrow:
+  # the quote or $-expansion must sit INSIDE the `gh…pr` tokens — a
+  # fully-quoted `'gh pr merge'` documentation string has its quote
+  # BEFORE `gh`, and `gh pr view --jq '.x'` has none inside the
+  # subcommand tokens; both stay exempt. Partial-word quoting
+  # (`gh pr m"erge"`) is a documented residual (see header).
+  if grep -qE 'gh[[:space:]]*\$\{?IFS|gh[[:space:]]+pr[[:space:]]*\$|gh[[:space:]]+["'\''`][[:space:]]*pr|gh[[:space:]]+pr[[:space:]]+["'\''`]' <<<"$CMD"; then
+    _deny "unparseable gh pr merge spelling (quoted or \${IFS}-split subcommand tokens) — re-invoke unquoted so the KB-archive census can run. Escape hatch: SOLEUR_SKIP_KB_ARCHIVE_GATE=1 (audited)."
+  fi
   exit 0
 fi
 
@@ -373,22 +408,6 @@ if [[ "$_REPO_SAME" == "1" ]]; then
   _scan_args=$(_strip_repo_flags <<<"$_scan_args")
   _cmd_args=$(_strip_repo_flags <<<"$_cmd_args")
 fi
-
-# Deny helper: one JSON object on stdout, one incident row. Reason text is
-# assembled by the caller and passed as $1.
-_deny() {
-  local reason="$1"
-  emit_incident "wg-kb-artifacts-archived-in-pr" deny \
-    "Archive KB artifacts into archive/ inside the" "$CMD"
-  jq -n --arg reason "$reason" '{
-    hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      permissionDecision: "deny",
-      permissionDecisionReason: $reason
-    }
-  }'
-  exit 0
-}
 
 # Which head is being merged. Every REAL `gh pr merge` invocation is parsed
 # with the detector's own anchor, in BOTH $SCAN (quoted text blanked) and
@@ -729,8 +748,10 @@ while IFS= read -r -d '' _st; do
   [[ -n "$_path" ]] || continue
   case "$_path" in
     knowledge-base/project/specs/archive/*|knowledge-base/project/plans/archive/*|knowledge-base/project/brainstorms/archive/*) continue ;;
-    knowledge-base/project/specs/*/*) ;;
-    knowledge-base/project/plans/*|knowledge-base/project/brainstorms/*) ;;
+    # spec dirs are the convention, but a depth-1 file (specs/foo.md)
+    # leaks just the same — only the repo's .gitkeep stays exempt.
+    knowledge-base/project/specs/.gitkeep) continue ;;
+    knowledge-base/project/specs/*|knowledge-base/project/plans/*|knowledge-base/project/brainstorms/*) ;;
     *) continue ;;
   esac
   LEAKY+="${_st}"$'\t'"${_path}"$'\n'
