@@ -462,3 +462,26 @@ The 2026-10-09 amendment set 2026-10-22 as the target for destroying `hcloud_vol
 **Owner:** the operator, via #8211 and #6897. **Blocker chain:** the rotate-arm assert fix (#10137), then a fresh rotate dispatch that the operator authorises by naming the command, then #8209, #8609 and #8573, then a hash-bound wipe PR with its own rung-2 rehearsal, then the wipe itself, which the operator authorises by naming the command.
 
 Rule for the horizon: moving the ledger `expires_on` of `hcloud_volume.git_data` past 2026-11-12 requires a CLO re-ruling linked on #6897 first; a one-line date bump is not a renewal. This is a review-time rule: the lint treats `expires_on` as a clock only and does not enforce the cap.
+
+## Amendment 2026-10-13 — first boot may precede the volume attachments (#10138)
+
+**Context (measured, run 38384137515, 2026-10-13).** Cloud-init first boot starts when the server
+is created; Hetzner attaches block volumes afterwards as separate actions. The fresh host's
+bootstrap reached its plaintext-volume check about 70 s before that attachment finished (LUKS 65 s,
+plaintext 125 s after server create) and, resolving the by-id link once, died at the named FATAL
+`plaintext_unverified reason=source`. Nothing was served and no marker was written; the failure was
+fail-closed and cost a host build. Five earlier boots attached in 17-33 s, so the race was latent.
+
+**Decision.** Waiting for an attachment is part of proving a layout. The bootstrap waits under a
+counted bound (`GIT_DATA_ATTACH_WAIT_S`, default 300 s, an invalid value refused, never read from
+the clock) at the plaintext link and at the section-1 LUKS discovery, and the `luks_open`
+heredoc's device wait is 300 counted passes. The wait changes WHEN the device is resolved, never
+what is checked: after the bound the same named FATAL fires, the plaintext-empty verification is
+never skipped, and the device number is still pinned and re-checked before `--setro`. The seam is
+a test seam stripped from the production invocation (the census C2 contract). The rung-2
+rehearsal now delays both attachments on purpose so the required paid run exercises the wait.
+
+**Consequences.** The payload hash moves, so the committed rung-2 evidence is stale until a fresh
+rehearsal and an evidence-only PR land; the rotate's own interlock refuses until then. This
+amendment does not change the status line, the retention date or any legal wording, and makes no
+claim about key escrow. Recorded in the runbook entry of the same date.
