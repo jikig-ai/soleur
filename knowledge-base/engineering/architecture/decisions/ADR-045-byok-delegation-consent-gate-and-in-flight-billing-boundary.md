@@ -5,7 +5,7 @@ date: 2026-05-29
 related: [4625, 4232, 4508, 4290]
 related_adrs: [ADR-040, ADR-026]
 related_plans:
-  - knowledge-base/project/plans/2026-05-29-feat-byok-delegation-consent-enforcement-plan.md
+  - knowledge-base/project/plans/archive/20261013-014038-2026-05-29-feat-byok-delegation-consent-enforcement-plan.md
 brand_survival_threshold: single-user incident
 ---
 
@@ -109,6 +109,6 @@ NULLABLE for the anonymise-to-NULL path.
 
 ## References
 
-- Plan: `knowledge-base/project/plans/2026-05-29-feat-byok-delegation-consent-enforcement-plan.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-29-feat-byok-delegation-consent-enforcement-plan.md`
 - ADR-040 (resolver + grace + dual-end semantics), ADR-026 (gate token budget)
 - Migrations 083 (consent gate), 084 (withdrawal + per-turn re-gate)

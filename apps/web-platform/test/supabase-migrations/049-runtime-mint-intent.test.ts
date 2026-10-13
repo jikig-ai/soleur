@@ -32,7 +32,7 @@ import path from "node:path";
 //   6. REVOKE ALL from PUBLIC, anon, authenticated.
 //   7. cq-supabase-migration-no-concurrently: NO CREATE INDEX CONCURRENTLY.
 //
-// Plan: knowledge-base/project/plans/2026-05-18-refactor-runtime-jwt-asymmetric-signing-substrate-plan.md §Phase 4 amendment
+// Plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-18-refactor-runtime-jwt-asymmetric-signing-substrate-plan.md §Phase 4 amendment
 // ADR: knowledge-base/engineering/architecture/decisions/ADR-033-runtime-jwt-signing-substrate.md §0.7
 
 const MIGRATION_PATH = path.resolve(

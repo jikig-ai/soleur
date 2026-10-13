@@ -30,7 +30,7 @@
 #   CURL_BIN — mock `curl` binary path.
 #
 # Sister scripts: scripts/rule-prune.sh (demotion); scripts/rule-metrics-aggregate.sh.
-# Plan: knowledge-base/project/plans/2026-05-11-feat-compound-promotion-loop-plan.md.
+# Plan: knowledge-base/project/plans/archive/20260511-172959-2026-05-11-feat-compound-promotion-loop-plan.md.
 set -euo pipefail
 
 # (#7797) Refuse to run under shell tracing while a live credential is set: `set -x`

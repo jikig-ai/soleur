@@ -2,8 +2,8 @@
 title: "ADR-032 — GitHub branch-protection ruleset as IaC"
 status: accepted
 date: 2026-05-16
-plan: knowledge-base/project/plans/2026-05-16-feat-ci-required-ruleset-widening-via-terraform-plan.md
-spec: knowledge-base/project/specs/feat-one-shot-pr-3888-ruleset-required-checks-widening/tasks.md
+plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-16-feat-ci-required-ruleset-widening-via-terraform-plan.md
+spec: knowledge-base/project/specs/archive/20261013-014038-feat-one-shot-pr-3888-ruleset-required-checks-widening/tasks.md
 issue: 3888
 supersedes: none
 related:

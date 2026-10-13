@@ -61,8 +61,8 @@ When `Files to Edit` names ANY agent body in `plugins/*/agents/**/*.md`:
 
 ## Related
 
-- Source plan: `knowledge-base/project/plans/2026-05-15-feat-karpathy-check-extend-simplicity-reviewer-plan.md`
-- Source brainstorm: `knowledge-base/project/brainstorms/2026-05-15-karpathy-check-brainstorm.md`
+- Source plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-15-feat-karpathy-check-extend-simplicity-reviewer-plan.md`
+- Source brainstorm: `knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-15-karpathy-check-brainstorm.md`
 - Companion learning: `knowledge-base/project/learnings/2026-05-15-brainstorm-audit-vs-guidance-direction-reframe.md` (covers the audit-direction vs. guidance-direction split that surfaced this case)
 - Plan-review skill: `plugins/soleur/skills/plan-review/SKILL.md` (the panel that caught the gap)
 - Issue: #2727 (parent #2718)

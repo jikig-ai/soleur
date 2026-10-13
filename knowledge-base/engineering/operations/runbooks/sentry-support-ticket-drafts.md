@@ -12,7 +12,7 @@ ticket_2_t_plus_14d_expiry: 2026-05-31T19:19Z
 
 ## Purpose
 
-Two separate Sentry support tickets submitted via Sentry's Intercom support widget at `https://help.sentry.io/` per `knowledge-base/project/brainstorms/2026-05-16-sentry-residency-a2-branch-c-brainstorm.md` Decision #9. Submitted as **separate Intercom conversations** (not threaded) — the routing logic at Sentry differs for billing vs forensics, and threading them risks one decision dragging on the other.
+Two separate Sentry support tickets submitted via Sentry's Intercom support widget at `https://help.sentry.io/` per `knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-16-sentry-residency-a2-branch-c-brainstorm.md` Decision #9. Submitted as **separate Intercom conversations** (not threaded) — the routing logic at Sentry differs for billing vs forensics, and threading them risks one decision dragging on the other.
 
 Sentry's Intercom channel does NOT return a numeric ticket ID — the conversation ID lives server-side and async follow-up arrives via email at `jean.deruelle@jikigai.com`. The Intercom conversation thread itself IS the canonical ticket; this file records submission timestamp + AI Support Assistant response so the post-merge gate has a verifiable baseline.
 

@@ -59,7 +59,7 @@ The skill is user-brand-critical (`single-user incident` threshold). Redaction i
 
 ## Implementation Status
 
-Scaffold landed (Phase 0); full implementation in progress per `knowledge-base/project/plans/2026-05-15-feat-code-to-prd-skill-plan.md`. See `knowledge-base/project/specs/feat-code-to-prd-2726/tasks.md` for phase progress.
+Scaffold landed (Phase 0); full implementation in progress per `knowledge-base/project/plans/archive/20261013-014038-2026-05-15-feat-code-to-prd-skill-plan.md`. See `knowledge-base/project/specs/archive/20261013-014038-feat-code-to-prd-2726/tasks.md` for phase progress.
 
 ---
 

@@ -98,7 +98,7 @@ For both skills: when a Python helper module needs to be shared across the repo,
 
 ## Related Issues
 
-- Plan file: `knowledge-base/project/plans/2026-05-12-feat-tech-debt-ledger-lifecycle-plan.md` (Sharp Edges section, line ~316: "Import parse helpers from `scripts/backfill-frontmatter.py:115-189` via `sys.path` insert.")
+- Plan file: `knowledge-base/project/plans/archive/20261013-014038-2026-05-12-feat-tech-debt-ledger-lifecycle-plan.md` (Sharp Edges section, line ~316: "Import parse helpers from `scripts/backfill-frontmatter.py:115-189` via `sys.path` insert.")
 - Plan-precondition learning prior art: `knowledge-base/project/learnings/2026-05-10-handshake-schema-drift-and-stale-precondition-budgets.md`
 - Compound's `mutate_entry` body-MD5 assertion (review fix-inline, commit 51ba53dc) — addresses the surgical-mutation tradeoff above.
 - PR #3645: feat-tech-debt-ledger-lifecycle

@@ -2,9 +2,9 @@
 title: "ADR-031 — Sentry alert and cron monitor configuration as IaC"
 status: accepted
 date: 2026-05-15
-plan: knowledge-base/project/plans/2026-05-15-feat-sentry-monitors-alerts-adapt-plan.md
-spec: knowledge-base/project/specs/feat-sentry-monitors-alerts-adapt/spec.md
-brainstorm: knowledge-base/project/brainstorms/2026-05-15-sentry-monitors-alerts-adaptation-brainstorm.md
+plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-15-feat-sentry-monitors-alerts-adapt-plan.md
+spec: knowledge-base/project/specs/archive/20261013-014038-feat-sentry-monitors-alerts-adapt/spec.md
+brainstorm: knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-15-sentry-monitors-alerts-adaptation-brainstorm.md
 issue: 3814
 supersedes: none
 related:

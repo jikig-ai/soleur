@@ -6,7 +6,7 @@ tags: [best-practices, claude-code-hooks, 3789, empirical-probe + multi-agent-po
 module: claude-code-hooks
 brand_survival_threshold: single-user incident
 issue: 3789
-plan: knowledge-base/project/plans/2026-05-15-feat-deterministic-permissions-plan.md
+plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-15-feat-deterministic-permissions-plan.md
 pr: 3787
 ---
 
@@ -98,9 +98,9 @@ All 8 findings fit in fix-inline (≤30 lines, ≤2 files each). Zero scope-out 
 
 ## Related
 
-- Plan: `knowledge-base/project/plans/2026-05-15-feat-deterministic-permissions-plan.md`
-- Brainstorm: `knowledge-base/project/brainstorms/2026-05-15-cc-stack-tuning-brainstorm.md`
-- Spec: `knowledge-base/project/specs/feat-cc-stack-tuning/spec.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-15-feat-deterministic-permissions-plan.md`
+- Brainstorm: `knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-15-cc-stack-tuning-brainstorm.md`
+- Spec: `knowledge-base/project/specs/archive/20261013-014038-feat-cc-stack-tuning/spec.md`
 - Phase 0 artifacts:
   - `.claude/hooks/PERMISSION-DENIED-PAYLOAD-SHAPE.md` — F1 collapse evidence
   - `.claude/hooks/DEFER-DECISION-PAYLOAD-SHAPE.md` — DEFER_VALUE + hookEventName findings

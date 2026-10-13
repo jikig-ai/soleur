@@ -91,7 +91,7 @@ Errors and recoveries from the one-shot session that produced this PR. Each carr
 
 ## References
 
-- Plan: `knowledge-base/project/plans/2026-05-20-fix-apply-web-platform-infra-tf-autonomy-4150-plan.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-20-fix-apply-web-platform-infra-tf-autonomy-4150-plan.md`
 - Sibling pattern (Inngest IaC, same autonomy reasoning): `apps/web-platform/infra/inngest.tf`
 - Doppler service-token provider docs: <https://registry.terraform.io/providers/DopplerHQ/doppler/1.21.2/docs/resources/service_token>
 - App-installation auth on integrations/github: <https://registry.terraform.io/providers/integrations/github/6.12.1/docs#authenticating-via-github-app-installation>

@@ -4,7 +4,7 @@ date: 2026-05-19
 parent_issue: 3861
 related_issues: [3962, 3849]
 related_pr: 4044
-related_plan: knowledge-base/project/plans/2026-05-19-feat-sentry-residency-reframe-pr1-plan.md
+related_plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-19-feat-sentry-residency-reframe-pr1-plan.md
 gate: 3b
 status: superseded
 status_superseded_by: knowledge-base/legal/audits/2026-05-21-sentry-token-t3-resolution.md
@@ -519,9 +519,9 @@ Token rotation chain on the integration:
 
 ## References
 
-- Plan (now requires revision): [`knowledge-base/project/plans/2026-05-19-feat-sentry-residency-reframe-pr1-plan.md`](../../project/plans/2026-05-19-feat-sentry-residency-reframe-pr1-plan.md)
-- Brainstorm: [`knowledge-base/project/brainstorms/2026-05-19-sentry-residency-reframe-3861-brainstorm.md`](../../project/brainstorms/2026-05-19-sentry-residency-reframe-3861-brainstorm.md)
-- Spec: [`knowledge-base/project/specs/feat-sentry-residency-reframe-3861/spec.md`](../../project/specs/feat-sentry-residency-reframe-3861/spec.md)
+- Plan (now requires revision): [`knowledge-base/project/plans/archive/20261013-014038-2026-05-19-feat-sentry-residency-reframe-pr1-plan.md`](../../project/plans/2026-05-19-feat-sentry-residency-reframe-pr1-plan.md)
+- Brainstorm: [`knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-19-sentry-residency-reframe-3861-brainstorm.md`](../../project/brainstorms/2026-05-19-sentry-residency-reframe-3861-brainstorm.md)
+- Spec: [`knowledge-base/project/specs/archive/20261013-014038-feat-sentry-residency-reframe-3861/spec.md`](../../project/specs/feat-sentry-residency-reframe-3861/spec.md)
 - Token-scope learning (still applicable to the broader corrective work): [`knowledge-base/project/learnings/2026-05-19-sentry-401-is-not-unowned-verify-token-scope-first.md`](../../project/learnings/2026-05-19-sentry-401-is-not-unowned-verify-token-scope-first.md)
 - URL-routing learning: [`knowledge-base/project/learnings/2026-05-19-sentry-url-routing-three-orthogonal-dimensions.md`](../../project/learnings/2026-05-19-sentry-url-routing-three-orthogonal-dimensions.md)
 - AGENTS rules invoked: `hr-menu-option-ack-not-prod-write-auth` (Phase 1.3 ACK gate), `hr-never-paste-secrets-via-bang-prefix` (operator-only card-detail handling), `hr-exhaust-all-automated-options-before` (Playwright-driven mint vs operator handoff), `hr-mcp-tools-playwright-etc-resolve-paths` (screenshots resolved to bare-repo root then relocated to worktree).

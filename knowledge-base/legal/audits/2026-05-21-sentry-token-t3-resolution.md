@@ -4,7 +4,7 @@ date: 2026-05-21
 parent_issue: 3861
 related_issues: [3849, 3958, 3962]
 related_pr: 4209
-related_plan: knowledge-base/project/plans/2026-05-19-feat-sentry-residency-reframe-pr1-plan.md
+related_plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-19-feat-sentry-residency-reframe-pr1-plan.md
 supersedes_status: knowledge-base/legal/audits/2026-05-19-sentry-token-scope-probe-divergence.md
 gate: 3b
 status: resolved

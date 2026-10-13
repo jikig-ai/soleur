@@ -113,5 +113,5 @@ The operational/automation piece is shipped this cycle — NOT deferred (unlike
 
 - Runbook: `knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md` (H9 → "Self-healing (automated)")
 - Prior incident: `knowledge-base/project/learnings/bug-fixes/2026-05-27-sentry-cron-community-monitor-missed-checkin.md`
-- Plan: `knowledge-base/project/plans/2026-05-30-fix-inngest-cron-trigger-self-heal-watchdog-plan.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-30-fix-inngest-cron-trigger-self-heal-watchdog-plan.md`
 - Issue: #4650 · Sentry incidents 5032155, 5010688

@@ -6,7 +6,7 @@ tags: [skills, integration, mit-licensing, vendor-evaluation, brand-integrity, b
 synced_to: [brainstorm]
 component: brainstorm
 problem_type: integration_issue
-related_artifacts: [knowledge-base/project/brainstorms/2026-05-09-gdpr-gate-skill-brainstorm.md, knowledge-base/project/specs/feat-compliance-skills-eval/spec.md, https://github.com/jikig-ai/soleur/issues/3502, https://github.com/jikig-ai/soleur/pull/3501]
+related_artifacts: [knowledge-base/project/brainstorms/2026-05-09-gdpr-gate-skill-brainstorm.md, knowledge-base/project/specs/archive/20261013-014038-feat-compliance-skills-eval/spec.md, https://github.com/jikig-ai/soleur/issues/3502, https://github.com/jikig-ai/soleur/pull/3501]
 severity: medium
 ---
 
@@ -94,7 +94,7 @@ For Option B, the attribution cost is one `NOTICE` file + a one-line header per 
 ## Cross-References
 
 - Brainstorm doc that produced this learning: `knowledge-base/project/brainstorms/2026-05-09-gdpr-gate-skill-brainstorm.md`
-- Spec: `knowledge-base/project/specs/feat-compliance-skills-eval/spec.md`
+- Spec: `knowledge-base/project/specs/archive/20261013-014038-feat-compliance-skills-eval/spec.md`
 - Tracking issue: #3502
 - Draft PR: #3501
 - Related compliance posture: `knowledge-base/legal/compliance-posture.md`

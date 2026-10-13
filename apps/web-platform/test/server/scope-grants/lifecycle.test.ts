@@ -13,7 +13,7 @@
  *   7. anonymise_scope_grants bypasses the trigger via the GUC gate and
  *      zeros founder_id for every row owned by p_user_id.
  *
- * Plan: knowledge-base/project/plans/2026-05-18-feat-pr-g-cohort-onboarding-plan.md (TR4).
+ * Plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-18-feat-pr-g-cohort-onboarding-plan.md (TR4).
  *
  * Opt-in via TENANT_INTEGRATION_TEST=1. Requires `doppler run -p soleur -c dev`.
  *

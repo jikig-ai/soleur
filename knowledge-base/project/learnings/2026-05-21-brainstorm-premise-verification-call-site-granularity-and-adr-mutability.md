@@ -17,7 +17,7 @@ related_learnings:
 
 PR-I (issue #4078) was a "deferred from PR-H" follow-up brainstorm. Four moments of friction surfaced before approach selection — each one would have wasted a Phase 0.5 leader fan-out (3-5 min parallel agent compute) if missed at premise validation:
 
-1. The cited carry-forward artifact (`knowledge-base/project/brainstorms/2026-05-19-pr-h-trust-tier-external-classes-brainstorm.md`) returned **not found** when grepped from the bare-repo root at Phase 0's pre-worktree premise probe — but existed at the worktree clone's `origin/main` HEAD.
+1. The cited carry-forward artifact (`knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-19-pr-h-trust-tier-external-classes-brainstorm.md`) returned **not found** when grepped from the bare-repo root at Phase 0's pre-worktree premise probe — but existed at the worktree clone's `origin/main` HEAD.
 2. The issue body's `template_hash` references assumed per-template granularity. PR-H had shipped a placeholder `templateHashFor` at `apps/web-platform/app/api/dashboard/today/[id]/send/route.ts:70-80` computing `sha256(action_class:owning_domain:tier)` — collapsing all sends with the same (class, domain, tier) into one bucket. Without a real per-template registry, `template_authorizations` granularity would have collapsed to `scope_grants` granularity, weakening the GDPR Art. 7(3) "authorize THIS template" defense.
 3. The issue body's step 3(a) prescribed "flip `action_class_registry` default for that `template_hash`" — assuming a runtime-mutable registry. ADR-034 (landed in PR-H) fixed the action-class registry as **code-static** (verified `apps/web-platform/server/scope-grants/action-class-map.ts:23-45` is a literal-union). Step 3(a) was architecturally incompatible with main as it now stands.
 4. The operator's framing — "structural design only, bounds deferred" — collided with CLO's Art. 7(3) hard floor: `template_authorizations` rows with NULL bound columns (`max_sends`, `expires_at`, `soft_reconfirm_at`) are functionally identical to a blanket consent waiver, re-opening the finding CLO closed in PR-H.
@@ -70,6 +70,6 @@ The 4th pattern (deferral vs legal floor) is structurally different — it's a *
 
 - `knowledge-base/project/learnings/2026-05-19-bare-repo-grep-and-subagent-infra-claim-verification.md` — the prior learning that motivated this pattern for the in-session worktree case. PR-I extends it to the pre-worktree probe case.
 - `knowledge-base/project/learnings/2026-05-15-brainstorm-leader-research-sequencing-and-prior-art-cwd.md` — adjacent prior-art for worktree-vs-bare-root grep failure modes.
-- `knowledge-base/project/brainstorms/2026-05-21-pr-i-template-authorizations-brainstorm.md` — the brainstorm that surfaced these patterns.
-- `knowledge-base/project/brainstorms/2026-05-19-pr-h-trust-tier-external-classes-brainstorm.md` — the predecessor brainstorm; the cited carry-forward at issue.
+- `knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-21-pr-i-template-authorizations-brainstorm.md` — the brainstorm that surfaced these patterns.
+- `knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-19-pr-h-trust-tier-external-classes-brainstorm.md` — the predecessor brainstorm; the cited carry-forward at issue.
 - PR #4065 — PR-H implementation that introduced the placeholder `templateHashFor` and ADR-034 (code-static action-class registry).
