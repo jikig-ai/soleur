@@ -12,6 +12,8 @@ brand_survival_threshold: single-user incident
 
 # Spec: edge-declaration coverage residuals (#10117)
 
+<!-- archival of this spec dir is deferred until after plan/work/ship — it is the live input to the pending plan phase -->
+
 ## Problem Statement
 
 The PR #10088 review (fix for #9969 — `glob:` edges for whole-tree corpus suites) closed its probed
