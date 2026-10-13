@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2015  # `A && B || C` is the row idiom
 # Suite for scripts/verify-agent-security-slice1.sh, the discoverability probe the W2 plan's
-# Observability section names (knowledge-base/project/plans/2026-10-06-feat-plugin-destructive-command-guard-w2-plan.md).
+# Observability section names (knowledge-base/project/plans/archive/20261013-062704-2026-10-06-feat-plugin-destructive-command-guard-w2-plan.md).
 #
 # PROPERTY. The probe prints `slice1-security: ok` (exit 0) only when the plugin's destructive-command
 # guard is registered under a PreToolUse matcher that reads Bash AND, run from a temp HOME and cwd, answers

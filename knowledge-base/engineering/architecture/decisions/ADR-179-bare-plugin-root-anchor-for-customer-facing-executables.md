@@ -13,14 +13,14 @@ amended_by:
   - "#7453 (2026-09-24) — amendment items A18 (the skills deferral retired; payload markdown is a flat zero), A19 (the list/ls carve-out re-anchored) and A20 (the Read surface delivers its own root); see ## Amendment — 2026-09-24"
   - "#8308 (2026-09-19) — decision 11 (the dual-harness resolution ORDER for /soleur:go's three session gates) and amendment item A15 (${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT} rejected); see ## Amendment — 2026-09-19"
 related_plans:
-  - knowledge-base/project/plans/2026-08-11-fix-sync-plugin-root-anchoring-plan.md
+  - knowledge-base/project/plans/archive/20261013-051752-2026-08-11-fix-sync-plugin-root-anchoring-plan.md
   - knowledge-base/project/plans/archive/20260812-125433-2026-08-11-fix-sync-producer-freshness-probe-plan.md
-  - knowledge-base/project/plans/2026-08-12-fix-git-root-fallback-untrusted-anchor-plan.md
-  - knowledge-base/project/plans/2026-09-19-fix-go-session-gates-plugin-root-resolution-plan.md
+  - knowledge-base/project/plans/archive/20261013-051752-2026-08-12-fix-git-root-fallback-untrusted-anchor-plan.md
+  - knowledge-base/project/plans/archive/20261013-051752-2026-09-19-fix-go-session-gates-plugin-root-resolution-plan.md
 related_specs:
   - knowledge-base/project/specs/feat-one-shot-7442-sync-plugin-root-anchoring/tasks.md
   - knowledge-base/project/specs/archive/20260812-145032-feat-one-shot-7474-sync-producer-freshness-probe/tasks.md
-  - knowledge-base/project/specs/feat-one-shot-7450-git-root-anchor-untrusted/tasks.md
+  - knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7450-git-root-anchor-untrusted/tasks.md
 brand_survival_threshold: single-user incident
 ---
 
@@ -631,7 +631,7 @@ Items 1–5 above covered the gate subset. The review panel then scoped three fu
 surfaces, all of which failed for the same reason, and the binding decision was routed to
 the `soleur:engineering:cto` agent because both instruments this ADR sanctions were blocked
 on its own §R1. The ruling and its rejected alternatives are recorded at
-`knowledge-base/project/specs/feat-one-shot-7450-git-root-anchor-untrusted/cto-ruling-adr179-fork.md`.
+`knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7450-git-root-anchor-untrusted/cto-ruling-adr179-fork.md`.
 
 **6. §R5 enumerated by SYNTAX, not by STAKES — and that is why the highest-stakes site was
 missed.** §R5's five sites were found by grepping one anchor form. `trigger-cron/SKILL.md`

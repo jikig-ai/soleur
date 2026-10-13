@@ -73,4 +73,4 @@ For NEW migration patterns touching platform-managed tables, validate the smalle
 ## Reference
 
 - PR #4417 mig 068 v1 apply failure (run 26418490443, job 77768432523, 2026-05-25T20:33:12Z)
-- Prior class: operator-side R-9 spike at Phase 0 hit the same restriction via the Doppler pooler; documented in `knowledge-base/project/specs/feat-attachments-rls-bundle-pr2-4318/phase-0-worklog.md` §"Dev mig 068 apply blocked by `supabase_storage_admin` ownership". The Phase 0 finding correctly predicted this would fail in CI too; the prediction was lost in scope cuts between Phase 0 and ship.
+- Prior class: operator-side R-9 spike at Phase 0 hit the same restriction via the Doppler pooler; documented in `knowledge-base/project/specs/archive/20261013-014038-feat-attachments-rls-bundle-pr2-4318/phase-0-worklog.md` §"Dev mig 068 apply blocked by `supabase_storage_admin` ownership". The Phase 0 finding correctly predicted this would fail in CI too; the prediction was lost in scope cuts between Phase 0 and ship.

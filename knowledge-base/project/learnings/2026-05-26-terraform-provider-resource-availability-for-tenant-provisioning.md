@@ -12,7 +12,7 @@ tags:
   - multi-tenant
 issue: 3723
 related_issues: [3769, 3770, 3771, 3772]
-brainstorm: knowledge-base/project/brainstorms/2026-05-26-tenant-provisioning-skills-brainstorm.md
+brainstorm: knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-26-tenant-provisioning-skills-brainstorm.md
 adr: knowledge-base/engineering/architecture/decisions/ADR-030-multi-tenant-deploy-substrate.md
 status: published
 ---
@@ -60,8 +60,8 @@ Terraform Registry pages (`registry.terraform.io`) are JS-rendered SPAs — WebF
 
 - ADR-030: `knowledge-base/engineering/architecture/decisions/ADR-030-multi-tenant-deploy-substrate.md`
 - Tenant provisioning runbook: `knowledge-base/engineering/operations/runbooks/tenant-provisioning.md`
-- Brainstorm: `knowledge-base/project/brainstorms/2026-05-26-tenant-provisioning-skills-brainstorm.md`
-- Spec: `knowledge-base/project/specs/feat-tenant-provisioning-skills/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-26-tenant-provisioning-skills-brainstorm.md`
+- Spec: `knowledge-base/project/specs/archive/20261013-014038-feat-tenant-provisioning-skills/spec.md`
 - Hetzner TF provider: `hetznercloud/hcloud ~> 1.49` (no project-level resources)
 - Cloudflare TF provider: `cloudflare/cloudflare ~> 4.0` (`cloudflare_api_token` available)
 - Doppler TF provider: `DopplerHQ/doppler ~> 1.21` (project + config, no OIDC)

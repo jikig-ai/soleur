@@ -230,6 +230,11 @@ file executed from the bare root. The mirror is complete, but it is not
 automatic — on-disk files at a `core.bare=true` root are never updated by git
 itself, so a stale copy survives until this runs.
 
+If `sync-bare-files` fails with `checkout-index from HEAD failed`, check the bare root's `HEAD`: a
+PR merge that deleted the branch `HEAD` named leaves it dangling, and `git symbolic-ref HEAD
+refs/heads/main` at the root repairs it. The Claude Code and Devin SessionStart loader does this
+automatically (`.claude/hooks/README.md`, "Bare-root HEAD self-heal"); other harnesses do not.
+
 ## Workflow Examples
 
 ### Code Review with Worktree

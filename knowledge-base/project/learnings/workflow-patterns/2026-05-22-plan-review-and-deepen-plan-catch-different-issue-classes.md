@@ -10,7 +10,7 @@ related:
   - knowledge-base/project/learnings/workflow-patterns/2026-05-22-brainstorm-cto-must-grep-not-estimate-call-sites.md
   - knowledge-base/project/learnings/2026-05-15-brainstorm-leader-research-sequencing-and-prior-art-cwd.md
   - knowledge-base/project/learnings/2026-05-12-type-widening-cascades-and-write-boundary-sentinels.md
-  - knowledge-base/project/plans/2026-05-22-feat-byok-delegations-pr-a-plan.md
+  - knowledge-base/project/plans/archive/20261013-014038-2026-05-22-feat-byok-delegations-pr-a-plan.md
 ---
 
 # Plan-Review and Deepen-Plan Catch Categorically Different Issue Classes at Single-User-Incident Threshold
@@ -94,5 +94,5 @@ Two enforcement layers:
 - `2026-05-22-brainstorm-cto-must-grep-not-estimate-call-sites.md` — sibling workflow learning from the same byok-delegations brainstorm/plan cycle (CTO subagent prompt quality).
 - `2026-05-15-brainstorm-leader-research-sequencing-and-prior-art-cwd.md` — reconciliation rule between leader and research findings.
 - `2026-05-12-type-widening-cascades-and-write-boundary-sentinels.md` — write-boundary sentinel sweep as a separate enforcement layer.
-- Source plan: `knowledge-base/project/plans/2026-05-22-feat-byok-delegations-pr-a-plan.md` v1 → v2 → v3 progression.
-- Brainstorm: `knowledge-base/project/brainstorms/2026-05-22-byok-delegations-brainstorm.md`.
+- Source plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-22-feat-byok-delegations-pr-a-plan.md` v1 → v2 → v3 progression.
+- Brainstorm: `knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-22-byok-delegations-brainstorm.md`.

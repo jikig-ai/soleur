@@ -13,7 +13,7 @@ import path from "node:path";
 // The generic SECURITY DEFINER grant + search_path lint is enforced by
 // migration-rpc-grants.test.ts; this file pins the signal's specific shape.
 //
-// Plan: knowledge-base/project/plans/2026-06-02-fix-supabase-disk-io-recurrence-and-sentry-monitor-plan.md Phase 3.
+// Plan: knowledge-base/project/plans/archive/20261013-032858-2026-06-02-fix-supabase-disk-io-recurrence-and-sentry-monitor-plan.md Phase 3.
 
 const MIG_DIR = path.join(__dirname, "../../supabase/migrations");
 const stripComments = (sql: string) => sql.replace(/--[^\n]*/g, "");

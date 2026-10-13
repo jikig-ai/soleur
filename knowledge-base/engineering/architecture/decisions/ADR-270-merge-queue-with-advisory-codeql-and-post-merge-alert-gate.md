@@ -633,7 +633,7 @@ checks are green, under `strict_required_status_checks_policy = true`? Answer: y
   the enqueue) was `OPEN CLEAN` with auto-merge disarmed (n=1).
 - Five further PRs merged through the queue that day were enqueued with a single enqueue event while 1 to 14 `main`
   commits behind, 9 to 47 minutes after auto-merge was armed; method and table in
-  `knowledge-base/project/plans/2026-10-07-fix-ship-phase-7-merge-queue-aware-behind-sync-plan.md`.
+  `knowledge-base/project/plans/archive/20261013-062704-2026-10-07-fix-ship-phase-7-merge-queue-aware-behind-sync-plan.md`.
 - The plan records BEHIND showing only while a check was pending; that reading is why the idle count keys on
   pending REQUIRED checks and not on `mergeStateStatus`. Not measured: the last-green-to-enqueue latency over more
   than one sample. The 5-tick grace is a chosen margin, to be re-derived from that latency.

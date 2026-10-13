@@ -1,7 +1,7 @@
 /**
  * Phase 1 (#stuck-active fix) — result-branch finalization tests.
  *
- * Plan: knowledge-base/project/plans/2026-05-05-fix-cc-chat-stuck-conversation-blocks-concurrency-slot-plan.md
+ * Plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-05-fix-cc-chat-stuck-conversation-blocks-concurrency-slot-plan.md
  *
  * The agent-runner result-branch (around lines 1076-1144) has SIX
  * throw-eligible steps after `saveMessage` succeeds. Without a

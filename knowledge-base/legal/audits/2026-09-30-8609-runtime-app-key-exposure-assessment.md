@@ -9,7 +9,7 @@ disposition: "REACHABILITY-ONLY — an Art. 33 ASSESSMENT, NOT a presumed breach
 disposition_history: "SIGNED-OFF PROVISIONAL 2026-09-30 on five open evidentiary limbs (K0 App key inventory, K1 non-`main` run census, K2 Doppler access and config logs, K3 org audit log and current boundary state, K4 third-party installation token issuance). No limb has been run at the date of this record."
 signed_off_at: 2026-09-30
 signed_off_by: "CLO agent (attestation authority for the Soleur-as-tenant-zero v1 posture; operator retains an optional veto)"
-awareness_anchor: "2026-09-22 — the #8209 measurement session (`knowledge-base/project/plans/2026-09-22-feat-evict-privileged-terraform-credentials-plan.md`, §Measurements M1–M12), which established that `prd_terraform` is a branch config of `prd` and recorded this key's reachability as residual R1. #8609 was filed from it on 2026-09-23T13:27:39Z. The earlier date is taken, which is the conservative choice. No monitor surfaced this, and none could: every read is a legitimate read by a legitimate holder."
+awareness_anchor: "2026-09-22 — the #8209 measurement session (`knowledge-base/project/plans/archive/20261013-051752-2026-09-22-feat-evict-privileged-terraform-credentials-plan.md`, §Measurements M1–M12), which established that `prd_terraform` is a branch config of `prd` and recorded this key's reachability as residual R1. #8609 was filed from it on 2026-09-23T13:27:39Z. The earlier date is taken, which is the conservative choice. No monitor surfaced this, and none could: every read is a legitimate read by a legitimate holder."
 art_33_triggered: false
 art_34_triggered: false
 art_33_deadline: "not due — no Art. 33 duty arose on the facts established to date, so nothing fell due 72h from the awareness anchor. Re-opens with a FRESH 72h from awareness of any evidence of use surfaced by a limb below."
@@ -17,7 +17,7 @@ open_limbs: "five, all INCONCLUSIVE, none run: (K0) the soleur-ai App private-ke
 evidence_deadlines: "K0 BEFORE ANY soleur-ai App key row is deleted at GitHub: #8609 operator step R7 and #8209 operator step O13's App-key delete alike, because a delete destroys the row's added date. K1 BEFORE the 90-day Actions retention horizon (repository setting measured 2026-09-30: 90 days, which is also the maximum GitHub allows), and in any event at operator step R0b, before R1. The horizon is rolling: every day of delay loses a day at the far end of the census window. A closing K1 re-pull follows R6."
 tier_classification: "Tier 1 — an internal assessment record. No public document is edited, no right is narrowed, no processing is added. The mirror/SHA/heading gates are NOT engaged."
 semver: "No TC_VERSION bump."
-related_records: "`knowledge-base/legal/audits/2026-09-8209-prior-exposure-assessment.md` (sibling: the DISTINCT soleur-ai key in `prd_terraform`, and the other three `prd_terraform` credentials); plan `knowledge-base/project/plans/2026-09-30-security-evict-runtime-app-key-from-prd-reachability-plan.md`; operator decision DC-1 in `knowledge-base/project/specs/feat-one-shot-8609-evict-runtime-app-key-prd/decision-challenges.md`."
+related_records: "`knowledge-base/legal/audits/2026-09-8209-prior-exposure-assessment.md` (sibling: the DISTINCT soleur-ai key in `prd_terraform`, and the other three `prd_terraform` credentials); plan `knowledge-base/project/plans/archive/20261013-051752-2026-09-30-security-evict-runtime-app-key-from-prd-reachability-plan.md`; operator decision DC-1 in `knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-8609-evict-runtime-app-key-prd/decision-challenges.md`."
 ---
 
 # CLO assessment — #8609 prior exposure of the soleur-ai runtime App key in Doppler `soleur/prd`
@@ -246,7 +246,7 @@ surface actually queried.
 third-party installers is legally defensible, because K4 can never be measured and the repository
 is public. The CPO recommends sending one after PR-B. Whether to send it is a product and trust
 decision, recorded as DC-1 in
-`knowledge-base/project/specs/feat-one-shot-8609-evict-runtime-app-key-prd/decision-challenges.md`.
+`knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-8609-evict-runtime-app-key-prd/decision-challenges.md`.
 **Default if no decision is recorded: no notice is sent**, and this section is the record of that
 default. If a notice is sent:
 

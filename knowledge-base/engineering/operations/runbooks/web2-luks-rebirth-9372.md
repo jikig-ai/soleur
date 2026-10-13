@@ -201,4 +201,4 @@ In this checklist "the closing change" is the later change made after the rebirt
 ## References
 
 ADR-263 (addendum 2026-10-05), `.github/workflows/web2-luks-rebirth.yml`, `scripts/web2-rebirth.sh`, `tests/scripts/lib/web-host-rebirth-gate.sh`,
-[web-host-replace.md](./web-host-replace.md), [web-host-birth.md](./web-host-birth.md), `knowledge-base/project/plans/2026-10-05-feat-web2-luks-rebirth-workflow-plan.md`.
+[web-host-replace.md](./web-host-replace.md), [web-host-birth.md](./web-host-birth.md), `knowledge-base/project/plans/archive/20261013-062704-2026-10-05-feat-web2-luks-rebirth-workflow-plan.md`.

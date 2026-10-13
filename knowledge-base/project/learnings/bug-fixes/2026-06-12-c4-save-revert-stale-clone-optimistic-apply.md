@@ -78,7 +78,7 @@ on a confirmed 2xx, never on the error path.
 ## Session Errors
 
 1. **Spec-dir name vs branch name drift** — the plan subagent created
-   `knowledge-base/project/specs/feat-one-shot-c4-code-save-not-persisting/` (slug
+   `knowledge-base/project/specs/archive/20261013-032858-feat-one-shot-c4-code-save-not-persisting/` (slug
    `c4-code-save`) while the branch is `feat-one-shot-c4-save-not-persisting` (slug
    `c4-save`). **Recovery:** co-located `session-state.md` in the same dir as the
    subagent's `tasks.md` (where the work phase looks), not the exact-branch-name dir.

@@ -14,7 +14,7 @@ dashboard-pull (`hr-no-dashboard-eyeball-pull-data-yourself`). The date-stamped 
 alongside at `knowledge-base/project/kb-redundancy-metrics-<date>.json`.
 
 This metric is the **deterministic gate signal** for the deferred consolidation pass (#5292). See the
-authoritative decision rule in `knowledge-base/project/specs/feat-compound-consolidate/spec.md`
+authoritative decision rule in `knowledge-base/project/specs/archive/20261013-032858-feat-compound-consolidate/spec.md`
 §Re-Evaluation Criteria.
 
 ## Latest snapshot — 2026-06-14 (baseline)

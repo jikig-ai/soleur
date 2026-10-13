@@ -5,9 +5,9 @@ date: 2026-06-02
 related_adrs: [ADR-044, ADR-158]
 related: [4813, 4810, 4826, 5632]
 related_plans:
-  - knowledge-base/project/plans/2026-06-02-feat-single-nav-rail-drill-in-plan.md
+  - knowledge-base/project/plans/archive/20261013-032858-2026-06-02-feat-single-nav-rail-drill-in-plan.md
 related_specs:
-  - knowledge-base/project/specs/feat-single-nav-rail/spec.md
+  - knowledge-base/project/specs/archive/20261013-032858-feat-single-nav-rail/spec.md
 brand_survival_threshold: single-user incident
 principles: [AP-011]
 ---

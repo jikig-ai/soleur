@@ -75,4 +75,4 @@ evil && git push evil`) is denied even on allowlisted verbs.
   bypass it entirely — they need the Tier-2 network-egress firewall. The hook is an interim,
   parser-bounded control; the firewall is the durable boundary. See [[2026-06-08-fix-cron-sandbox-hook-primary-containment-plan]].
 
-See ADR-033 **I7** and `knowledge-base/project/specs/feat-one-shot-5000-5004-cron-sandbox-bwrap-fix/phase0-probe-results-AC0.md` for the full probe matrix.
+See ADR-033 **I7** and `knowledge-base/project/specs/archive/20261013-032858-feat-one-shot-5000-5004-cron-sandbox-bwrap-fix/phase0-probe-results-AC0.md` for the full probe matrix.

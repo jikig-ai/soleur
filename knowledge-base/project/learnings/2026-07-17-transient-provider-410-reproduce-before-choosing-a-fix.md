@@ -120,7 +120,7 @@ tripwire so the next deprecation self-reports on its first **200**.
 
 **Cross-references.**
 `knowledge-base/engineering/operations/post-mortems/sentry-issue-alert-410-transient-wedge-postmortem.md`
-(§ Supersession), `knowledge-base/project/plans/2026-07-17-fix-sentry-issue-alert-410-provider-bump-plan.md`
+(§ Supersession), `knowledge-base/project/plans/archive/20261013-041741-2026-07-17-fix-sentry-issue-alert-410-provider-bump-plan.md`
 (§ Supersession), `apps/web-platform/infra/sentry/versions.tf`, ADR-031 §Amendment 2026-08-19
 (#7590), and the successor learning
 `knowledge-base/project/learnings/integration-issues/2026-08-19-a-vendor-brownout-is-not-a-flake-and-the-header-said-so-all-along.md`.

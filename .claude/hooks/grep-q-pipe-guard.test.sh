@@ -1201,7 +1201,7 @@ eqv_sh="$(_eqv "$EQV_SH")"
 # the port drifting, and only a person who runs it will see one.
 PJ_DRAIN_WINDOW=4
 PJ_ALL="$(git ls-files)"
-PJ_TRIPLES=258   # recomputed from a green run: the number of distinct (test file, verb, producer file) triples
+PJ_TRIPLES=261   # recomputed from a green run: the number of distinct (test file, verb, producer file) triples
 PJ_VOCAB=' not-a-command text-only unverified helper-built-stub variable-named-verb pass-through deliberate-fault arm-drain fenced '
 PJ_FENCED_RE='^fenced[[:space:]]+#[0-9]+[[:space:]]+[^[:space:]]'   # the one word that carries a tracker link (pj_judge)
 PRODUCER_JOIN=(
@@ -1216,7 +1216,6 @@ PRODUCER_JOIN=(
   'apps/web-platform/infra/ci-deploy.test.sh | docker | drains | 2 | --password-stdin'
   'apps/web-platform/infra/ci-deploy.test.sh | doppler | exempt | unverified reach probe: suite did not finish green here (cap or host), no matching piped call seen (1 non-test producers) (reach T1; t1:rc124/300s; hits 0 (stdin-flag))'
   'apps/web-platform/infra/ci-deploy.test.sh | logger | exempt | arm-drain the logger mock of create_mock_logger (def 69) drains stdin first when no message operand follows the options (S7c edit, wire assert after the Layer 3 rollback case); the other four logger definitions are in-process function shadows of small extracted functions that no pipe feeds (reach: T1, hits 757)'
-  'apps/web-platform/infra/ci-deploy.test.sh | openssl | exempt | text-only derived sites scripts/cutover-inngest.sh:1372,1546 not executed here; fan_out no longer calls openssl'
   'apps/web-platform/infra/ci-deploy.test.sh | python3 | exempt | unverified reach probe: suite did not finish green here (cap or host), no matching piped call seen (3 non-test producers) (reach T1; t1:rc124/300s; hits 0)'
   'apps/web-platform/infra/ci-deploy.test.sh | rc | exempt | not-a-command rc is a variable written by printf > $d/rc, no stub exists'
   'apps/web-platform/infra/ci-deploy.test.sh | tr | exempt | deliberate-fault stub exits 3 on purpose; pipeline status is the second tr, decided by the stub, not by a write race'
@@ -1342,6 +1341,7 @@ PRODUCER_JOIN=(
   'scripts/watch-registration-narrowing-9564.test.sh | gh | exempt | arm-drain the issue comment arm reads stdin in both branches before exit; keyed on the subcommand'
   'tests/hooks/test_incidents.sh | jq | exempt | text-only reach probe: suite ran green and no piped call reached the stub (1 non-test producers) (reach T1; t1:rc0/1s; hits 0)'
   'tests/scripts/test-argv-bearer-sweep.sh | curl | exempt | arm-drain some-arms: 6 shims; 1523/3279 drain `cat > $D/$n.stdin` on `--config -` after the arg parse; 126/2484/3713 exit 99 on an unmodelled flag before any read; 3793 execs the real curl (reach T1; t1:rc124/301s; hits 455 (stdin-flag))'
+  'tests/scripts/test-argv-bearer-sweep.sh | docker | drains | 1 | *'
   'tests/scripts/test-argv-bearer-sweep.sh | doppler | exempt | unverified reach probe: suite did not finish green here (cap or host), no matching piped call seen (3 non-test producers) (reach T1; t1:rc124/301s; hits 0 (stdin-flag))'
   'tests/scripts/test-argv-bearer-sweep.sh | fatal | exempt | not-a-command a word in a case-pattern alternation (cloud-init-registry:1759), prose (reach T1; t1:rc124/301s; hits 0)'
   'tests/scripts/test-argv-bearer-sweep.sh | jq | exempt | pass-through shim records argv then execs the real jq on every path'

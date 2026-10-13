@@ -151,7 +151,7 @@ fi
 # reddened on its own first run -- `tests/` uses a `test-*.sh` convention this producer does
 # not match. Re-derive with:
 #   git ls-files '*.test.sh' | awk -F/ 'NF{print $1}' | LC_ALL=C sort -u
-EXPECTED_SUITE_ROOTS=".claude apps plugins scripts"
+EXPECTED_SUITE_ROOTS=".claude .github apps plugins scripts"
 actual_roots="$(awk -F/ 'NF{print $1}' "$WORK/tracked" | LC_ALL=C sort -u | tr '\n' ' ')"
 actual_roots="${actual_roots% }"
 # Non-vacuity: an empty derivation must never be compared as a legitimate set. (It was, on the
@@ -1041,7 +1041,7 @@ else
       # mutation batteries name the gate they mutate but their verdict is
       # scoped to the battery paths, and (#9307) a live scanner whose OBSERVED
       # reads an audit confined to the declared paths
-      # (knowledge-base/project/specs/feat-affected-parallel-test-gate/
+      # (knowledge-base/project/specs/archive/20261013-062704-feat-affected-parallel-test-gate/
       # always-on-audit.md) may leave the always-on set the same way. This
       # check does NOT verify that evidence; it only demands a declaration.
       # What this check refuses is a live-named

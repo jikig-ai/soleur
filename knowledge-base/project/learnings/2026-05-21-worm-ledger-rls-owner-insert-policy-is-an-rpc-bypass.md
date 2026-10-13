@@ -142,7 +142,7 @@ The same anti-pattern may exist on other tables that ship a SECURITY DEFINER wri
 ## References
 
 - PR #4213 (PR-I) — the implementation.
-- Plan v2: `knowledge-base/project/plans/2026-05-21-feat-pr-i-template-authorizations-plan.md`.
+- Plan v2: `knowledge-base/project/plans/archive/20261013-014038-2026-05-21-feat-pr-i-template-authorizations-plan.md`.
 - ADR-035: `knowledge-base/engineering/architecture/decisions/ADR-035-template-registry-code-static.md` (the "writes go through SECURITY DEFINER RPCs" invariant).
 - Sibling pattern (different writer architecture, owner-insert legitimately needed): `apps/web-platform/supabase/migrations/051_action_class_widening_and_action_sends.sql`.
 - Multi-agent review surfaced this: user-impact-reviewer FINDING 8 (codified in learning `2026-04-15-multi-agent-review-catches-bugs-tests-miss.md` patterns).

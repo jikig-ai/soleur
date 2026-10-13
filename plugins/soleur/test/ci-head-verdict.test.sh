@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2329,SC2015,SC2016,SC2034  # row functions are dispatched indirectly; A && B || why is the assertion idiom; jq programs are single-quoted on purpose; some fixture variables are read by sub-shell rows
 # Suite for plugins/soleur/scripts/ci-head-verdict.sh -- Guard 2 of the S3 plan (#9728,
-# knowledge-base/project/plans/2026-10-09-ci-s3-draft-pr-light-checks-plan.md): the one resolver every
+# knowledge-base/project/plans/archive/20261013-062704-2026-10-09-ci-s3-draft-pr-light-checks-plan.md): the one resolver every
 # reader of a PR head's CI state goes through (`verdict`, `wait-ready-run`, `ready-count`).
 #
 # THE SEAM. `gh` is a PATH stub that answers ONLY the requests the SUT is expected to make, keyed on the

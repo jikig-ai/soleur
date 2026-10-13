@@ -68,7 +68,7 @@ The apply takes ~10–15s: destroys, recreates, uploads 4 files via `file` provi
 
 ## What NOT to try
 
-The 2026-04-24 plan (`knowledge-base/project/plans/2026-04-24-fix-infra-drift-deploy-pipeline-fix-2873-2874-plan.md`, "Alternative Approaches Considered" section) derives each rejection against `server.tf` line-by-line. Two are worth surfacing here because they are the most tempting future-agent mistakes:
+The 2026-04-24 plan (`knowledge-base/project/plans/archive/20261013-003106-2026-04-24-fix-infra-drift-deploy-pipeline-fix-2873-2874-plan.md`, "Alternative Approaches Considered" section) derives each rejection against `server.tf` line-by-line. Two are worth surfacing here because they are the most tempting future-agent mistakes:
 
 - **CI auto-apply with `-auto-approve` on merge** — (a) Violates `hr-menu-option-ack-not-prod-write-auth`. (b) CI SSH keys are dummies per `2026-04-03-terraform-data-remote-exec-drift-encrypted-ssh-key.md` — the `remote-exec` provisioner would fail in CI regardless.
 - **Replace `triggers_replace` hash with `null` / no-op** — `terraform_data` requires a non-null `triggers_replace` for the replacement-forcing semantics; setting `null` silently no-ops and the `file` provisioners never run. Drift detection is suppressed but the script updates never reach the server.
@@ -85,7 +85,7 @@ Tracked in #2881 — not implemented in this PR. Implementation requires:
 2. Doppler + SSH credentials in the shipping environment (currently operator-local only; `remote` claude-code-action workflows can't run terraform with prod creds).
 3. A retry/resume path for when the operator can't schedule the apply immediately.
 
-**Resolved:** 2026-04-29 — `/ship` Phase 5.5 "Deploy Pipeline Fix Drift Gate" landed alongside the file+systemd verification contract from #3034. See plan `knowledge-base/project/plans/2026-04-29-fix-deploy-pipeline-fix-ship-gate-and-postapply-contract-plan.md`.
+**Resolved:** 2026-04-29 — `/ship` Phase 5.5 "Deploy Pipeline Fix Drift Gate" landed alongside the file+systemd verification contract from #3034. See plan `knowledge-base/project/plans/archive/20261013-003106-2026-04-29-fix-deploy-pipeline-fix-ship-gate-and-postapply-contract-plan.md`.
 
 ## Observed sub-states and invocation gotchas
 

@@ -21,7 +21,7 @@ the relation is stated here and carried in `related_adrs`). It narrows one row o
 is the first ADR to apply that table to a hook that ships to customers rather than to this repository's own sessions.
 
 The product owner (CPO) signed the **plan's** Decision Set (`## Final W2 Decision Set` in
-`knowledge-base/project/plans/2026-10-06-feat-plugin-destructive-command-guard-w2-plan.md`) before any implementation commit, on
+`knowledge-base/project/plans/archive/20261013-062704-2026-10-06-feat-plugin-destructive-command-guard-w2-plan.md`) before any implementation commit, on
 revision `3a60924ebd6ff3b3482b9e8972c0d9b890c4f92e` and section SHA-256
 `39593c04ced72bc4a7e6a768408cef4baaa6b22d52069b4836566bb00385d81a`, both recorded in the body of PR #9653; the four conditions the
 sign-off attached are listed with their satisfaction under "CPO conditions". **This record is not that signed text.** D1 (the `cd` rule
@@ -164,6 +164,9 @@ reference for the rule table; this section records the decisions and why.
   > Bash is not gated for these commands in the default mode" is no longer true for the recognised forms once #10054 landed (the ask did not fire in the first version of #9776; see ADR-284's C9 result): hosted `canUseTool` now asks,
   > through a must-ask lane, before a default-branch force-push or delete, `terraform|tofu destroy` and a `gh` ref or repository
   > delete. D8 itself stands (the plugin hook stays off in hosted sessions). The hosted `ask` path of THIS hook is still unmeasured.
+  >
+  > **Dated correction 2026-10-12 (#10054):** the marker above carries the authoring date of #9776. The lane merged on 2026-10-11 (#9977) and
+  > was inert until the fix (#10072) deployed on 2026-10-12 (deploy job finished 08:38:33Z), so "now asks" became true then, not on 2026-10-10.
 - **D9 — Harness scope.** Registered only in `plugins/soleur/hooks/hooks.json`; one `soleur-plugin` ledger row with disposition `skip`
   (Devin's `ask` is unmeasured and its envelopes carry no `.cwd`), no `.claude/settings.json` entry (the parity dry run showed none is
   demanded, and a second registration would double-prompt contributors). This repository's contributor sessions that load the plugin
@@ -466,7 +469,10 @@ Binding rulings: `knowledge-base/project/specs/archive/20261011-050138-feat-9776
 - **D8 stands.** The plugin hook stays off in hosted sessions (`AGENT_ENV_OVERRIDES` is unchanged). Enabling it is a later
   consolidation, conditional on a measured hosted `ask`.
 - **CPO3-R1 (P1): still OPEN** until the post-merge verification in ADR-284 has passed on dev and the 24 h and 7 d numbers are recorded
-  below (CPO4-R7). **Measured numbers: not yet recorded.**
+  below (CPO4-R7) [superseded 2026-10-12 (#10054): the dev-hosted verification cannot be run; the closing conditions are ADR-284's Flip checklist]. **Measured numbers: pending, soak open since 2026-10-12.** The first shipment of the lane (#9977) was inert (#10054), so
+  both windows were re-timed from the deploy of the fix (Web Platform Release run 38223902738, T0 2026-10-12T08:40Z): the 24 h window closes
+  2026-10-13T08:40Z and the 7 d window 2026-10-19T08:40Z. The final counts are recorded once, by the flip PR (ADR-284 "Flip checklist");
+  nothing is measured yet, and the readouts so far live in ADR-284's C9 block.
 - **CPO3-R2: opened by the CPO third pass; satisfied in part by #9792** (it added the exposure statement to the copy); **superseded by
   this PR's CLO-signed copy**, which removes "Until a stricter check ships ... without asking" and adds one hedged assurance
   (`knowledge-base/legal/audits/2026-10-counsel-review-9776-ask-gate.md`). Existing acknowledgements stay valid (a narrowing; CLO Q2).

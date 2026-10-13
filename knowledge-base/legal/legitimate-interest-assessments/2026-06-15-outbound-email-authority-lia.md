@@ -2,7 +2,7 @@
 title: "Legitimate Interest Assessment — Agent-callable human-approved outbound cold email for founder outreach"
 type: legitimate-interest-assessment
 date: 2026-06-15
-plan: knowledge-base/project/plans/2026-06-15-feat-agent-native-outbound-email-pilot-plan.md
+plan: knowledge-base/project/plans/archive/20261013-032858-2026-06-15-feat-agent-native-outbound-email-pilot-plan.md
 issue: 5325
 status: draft-requires-counsel-review
 controller: "Jikigai SARL (France; 25 rue de Ponthieu, 75008 Paris)"

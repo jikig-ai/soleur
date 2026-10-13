@@ -158,7 +158,7 @@ per-run assertion. So the invariant that is directly **tested** is "a ruleset
 ## Alternatives Considered
 
 See the **Alternative Approaches Considered** table in the plan
-`knowledge-base/project/plans/2026-07-22-feat-ruleset-entrypoint-preapply-gate-plan.md`
+`knowledge-base/project/plans/archive/20261013-041741-2026-07-22-feat-ruleset-entrypoint-preapply-gate-plan.md`
 (extend-the-destroy-guard, plan-shape-only, `index("create")`, enumerate-the-fail-codes,
 speculative-registry, recurring-cron, keep-as-prose). Not re-typed here per DHH thinness.
 

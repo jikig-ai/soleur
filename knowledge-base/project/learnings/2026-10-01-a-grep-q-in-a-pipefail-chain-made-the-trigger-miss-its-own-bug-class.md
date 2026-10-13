@@ -91,4 +91,4 @@ The fixes that generalize:
 - The `grep -q`-under-pipefail hazard is now documented twice (suite header +
   this learning); a corpus lint for the shape is worth filing if it recurs a
   third time.
-- See PR #9409 / plan `knowledge-base/project/plans/2026-10-01-chore-affected-ratchets-pre-push-lane-plan.md`.
+- See PR #9409 / plan `knowledge-base/project/plans/archive/20261013-062704-2026-10-01-chore-affected-ratchets-pre-push-lane-plan.md`.

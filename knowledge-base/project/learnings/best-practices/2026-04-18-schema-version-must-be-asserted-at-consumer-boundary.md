@@ -89,7 +89,7 @@ The common shape: **a mechanism is load-bearing only when the side that depends 
 
 ## Cross-References
 
-- Plan: `knowledge-base/project/plans/2026-04-18-refactor-drain-pr2213-review-backlog-plan.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-003106-2026-04-18-refactor-drain-pr2213-review-backlog-plan.md`
 - Related telemetry patterns learning: `knowledge-base/project/learnings/best-practices/2026-04-15-rule-utility-scoring-telemetry-patterns.md`
 - Related negative-space tests learning: `knowledge-base/project/learnings/best-practices/2026-04-15-negative-space-tests-must-follow-extracted-logic.md`
 - PR #2573 (this refactor), closes #2253 #2254 #2255 #2256 #2257 #2259 #2260 #2261 #2262 #2263
