@@ -2001,31 +2001,31 @@ Do not quote flag names -- write `--title` not `"--title"`.
 
 [skill-enforced: ship Phase 6.45 + hook ship-kb-archive-gate.sh]
 
-Both PR arms converge here BEFORE any `gh pr ready` / `gh pr merge` site: the exists-arm falls out of step 5 (Operator Holds); the create-arm lands here after `gh pr create`. The PreToolUse hook [`.claude/hooks/ship-kb-archive-gate.sh`](../../../../.claude/hooks/ship-kb-archive-gate.sh) backs the phase mechanically — it denies `gh pr merge` while the merge would land live (non-`archive/`) additions under `knowledge-base/project/{specs,plans,brainstorms}`. Canonical contract: rule `wg-kb-artifacts-archived-in-pr` in `AGENTS.rules.md`.
+Both PR arms converge here before any `gh pr ready`/`gh pr merge` site (exists-arm falls out of step 5; create-arm lands after `gh pr create`). The PreToolUse hook [ship-kb-archive-gate.sh](../../../../.claude/hooks/ship-kb-archive-gate.sh) backs it mechanically — denies `gh pr merge` when the head carries non-`archive/` rows under `knowledge-base/project/{specs,plans,brainstorms}` (rule `wg-kb-artifacts-archived-in-pr`, `AGENTS.rules.md`).
 
-Emit rule-application telemetry (records that the archival gate ran):
+Emit rule-application telemetry:
 
 ```bash
 echo 'SOLEUR_RULE_APPLIED rule=wg-kb-artifacts-archived-in-pr note=`soleur:ship` Phase 6.45 archives KB artifacts into the PR before any merge site'
 ```
 
-**KB artifact archival — the LAST step that may touch `knowledge-base/project/specs|plans|brainstorms` (closes the stranded-archive class measured on #7240 and #9768).** Every earlier live read is behind us: step 2.5 folded `decision-challenges.md` into the PR body and step 5 evaluated `## Operator Holds` in the plan file. Nothing downstream reads the live paths — Phase 7's only spec-dir write is the budget-cap marker, which `mkdir -p`s the path and appends (it is a local resume hint; an already-archived dir just yields an uncommitted file the worktree cleanup reaps). Run it now so the `git mv` lands in THIS PR and merge is terminal:
+**KB artifact archival — the LAST step that may touch `knowledge-base/project/specs|plans|brainstorms` (closes the stranded-archive class measured on #7240 and #9768).** Earlier live reads are behind us: step 2.5 folded `decision-challenges.md` into the PR body; step 5 evaluated `## Operator Holds`. Nothing downstream reads the live paths — Phase 7's only spec-dir write is the budget-cap marker, which `mkdir -p`s the path and appends (a resume hint; an already-archived dir leaves an uncommitted file cleanup reaps). Run it now so the `git mv` lands in THIS PR and merge is terminal:
 
 ```bash
 bash "${CLAUDE_PLUGIN_ROOT}/skills/archive-kb/scripts/archive-kb.sh"
 ```
 
-If it archives anything (`Archived N artifact(s)`), commit and push the move so it rides this PR — never a follow-up PR, never a post-merge orphan:
+If it archives anything (`Archived N artifact(s)`), commit and push the move so it rides this PR — never a follow-up:
 
 ```bash
 git add -A knowledge-base && git commit -m "chore(kb): archive <branch> artifacts at ship" && git push      && bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr ci_cycles
 ```
 
-— but check `git status` first: `git add -A knowledge-base` sweeps any dirty KB file into the archival commit; stage the moves deliberately if the tree carries unrelated edits.
+— but check `git status` first: `git add -A knowledge-base` sweeps dirty KB files into the commit; stage deliberately when the tree carries unrelated edits.
 
-Then sweep for stale references — archival without it strands every consumer in the same stroke: `grep -rn "specs/<branch>" --include='*.md' knowledge-base/ plugins/ apps/ | grep -v archive/` — repoint live-path hits or document them as intentionally live. One known residue: an `operator-bootstrap` `bootstrap.sh` is named by a follow-through issue's `auto_command:` at its LIVE path — post-archive that command 404s; record the archive path in the issue.
+Sweep for stale references — archival without it strands consumers: `grep -rn "specs/<branch>" --include='*.md' knowledge-base/ plugins/ apps/ | grep -v archive/` — repoint live-path hits or document them as intentionally live. One known residue: an `operator-bootstrap` `bootstrap.sh` is named by a follow-through issue's `auto_command:` at its LIVE path — post-archive that command 404s; record the archive path in the issue.
 
-A `WARNING: found a ... but NO ...` partial-discovery line means the union of the three axes (slug match + branch diff + untracked paths) found one class but nothing of the other — surface it verbatim and confirm there is genuinely no artifact of the missing class before continuing. `No artifacts found` is clean — proceed. **Do not archive earlier than this step** (steps 2.5 and 5 read the live paths) and do not skip it because compound was deferred — the deferral decision exists precisely because these reads are upstream of it; once they have run, the deferral's reason is discharged and in-PR archival is strictly better than stranding. A `soleur:ship` re-entry after this step must resolve the spec/plan from the `archive/` path — Phase 1's live-path globs no longer match, so read the archived files directly rather than treating them as absent.
+A `WARNING: found a ... but NO ...` partial-discovery line means the union of the three axes (slug match + branch diff + untracked paths) found one class but nothing of the other — surface it verbatim; confirm no artifact of the missing class exists. `No artifacts found` is clean — proceed. **Do not archive earlier than this step** (steps 2.5 and 5 read the live paths) and do not skip it because compound was deferred — once those reads have run, the deferral's reason is discharged; in-PR archival beats stranding. On `soleur:ship` re-entry after this step, resolve spec/plan from the `archive/` path — the live-path globs no longer match.
 
 ## Semver Label and Changelog
 
