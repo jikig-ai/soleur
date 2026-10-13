@@ -7,7 +7,7 @@
 # cloud-init but cloud-init.yml had no `ssh_authorized_keys` block AND
 # `hcloud_server.web.lifecycle.ignore_changes = [user_data, ssh_keys]`
 # means cloud-init never re-applies to the existing host. See plan
-# `knowledge-base/project/plans/archive/20261013-014038-2026-05-20-fix-ci-host-ssh-auth-deploy-pipeline-fix-plan.md`.
+# `knowledge-base/project/plans/2026-05-20-fix-ci-host-ssh-auth-deploy-pipeline-fix-plan.md`.
 #
 # This file generates the CI SSH keypair in Terraform, syncs the private
 # half to Doppler, and appends the public half to root's authorized_keys

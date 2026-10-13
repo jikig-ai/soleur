@@ -8,7 +8,7 @@ sidecar workflow and by Terraform itself.
 
 **Owner:** deruelle / <ops@jikigai.com>
 **Issue:** #3209
-**Plan:** `knowledge-base/project/plans/archive/20261013-014038-2026-05-04-feat-cla-legal-rigor-evidence-layer-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-05-04-feat-cla-legal-rigor-evidence-layer-plan.md`
 **Runbook:** `knowledge-base/engineering/operations/runbooks/cla-signature-evidence-retrieval.md`
 **Retention:** indefinite. The Lock Rule sets a 10-year **floor** (`maxAgeSeconds = 315360000`) from object creation — a minimum period during which an object cannot be deleted, not a ceiling. Nothing removes an object when that period expires (Art. 30 PA-7 §(f)).
 **Region:** `weur` (Western Europe, best-effort per Cloudflare R2 placement). This is a **location hint, not a jurisdiction** -- the bucket sits on Cloudflare's `default` (standard, non-EU-tier) jurisdiction, as the `…<account>_default_<bucket>` token resource-strings in `iam.tf` record. Do not cite it as a data-residency or transfer safeguard: custody by Cloudflare, Inc. (US) is a Chapter V transfer regardless (Art. 30 PA-7 §(e)).
