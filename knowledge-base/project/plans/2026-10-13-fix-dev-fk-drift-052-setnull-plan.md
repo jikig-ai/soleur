@@ -196,7 +196,7 @@ Timeline (all timestamps UTC, verified):
 
 | t | Event | Evidence |
 |---|-------|----------|
-| 2026-05-19 ~21:12 | PR #4066 branch pushes the `051→052` rename merge `418554243a` (21:11:51Z), minting blob `a14380522d` with `ON DELETE RESTRICT` (the RESTRICT body lived on the branch as `051_` since `7cad1fa525`, 17:20Z) | `git rev-parse acb4d37493~1:<file>` |
+| 2026-05-19 ~21:12 | PR #4066 branch pushes the `051→052` rename merge `418554243a` (21:11:51Z), minting blob `a14380522d` with `ON DELETE RESTRICT` (the RESTRICT body lived on the branch as `051_` since `7cad1fa525`, 15:20Z) | `git rev-parse acb4d37493~1:<file>` |
 | 21:13:16 | CI/apply path writes 052 to dev ledger; dev gets RESTRICT constraint | `_schema_migrations.applied_at` |
 | 21:26:47 | `acb4d37493` "fix(pr-h): change audit_github_token_use FK RESTRICT → SET NULL" | `git show acb4d37493` |
 | 21:41:09 | PR #4066 squash-merges as `5bc14c7f95`; main's blob `048013204a` is SET NULL from the start | `gh pr view 4066` + `git show` |
@@ -267,7 +267,7 @@ doppler run -p soleur -c dev -- bash -c '
   trap "bash scripts/dev-suite-mutex.sh release" EXIT
   db_url="${DATABASE_URL_POOLER/:6543\//:5432/}"
   psql "$db_url" --no-psqlrc -v ON_ERROR_STOP=1 \
-    -c "\copy (SELECT filename, content_sha, applied_at FROM public._schema_migrations ORDER BY filename) TO '\''"$BK"'\''/ledger.csv'"'"' csv header"
+    -c "\copy (SELECT filename, content_sha, applied_at FROM public._schema_migrations ORDER BY filename) TO '\''$BK/ledger.csv'\'' csv header"
   pg_dump "$db_url" --schema-only -n public -f "$BK/dev-public-schema.sql"
   psql "$db_url" --no-psqlrc -tAq \
     -c "select conname, confdeltype, pg_get_constraintdef(oid) from pg_constraint where conrelid = '"'"'public.audit_github_token_use'"'"'::regclass" \
@@ -278,9 +278,11 @@ doppler run -p soleur -c dev -- bash -c '
 
 (`export BK` is load-bearing — the inner `bash -c` runs `set -u`, and an
 un-exported `$BK` aborts the window as `BK: unbound variable`. The `\copy` line
-embeds the literal path via `'\''"$BK"'\''` — outer shell expands it, inner bash
-sees a single-quoted absolute path. At work time the literal timestamped path
-was inlined instead of `$BK`; the form above is the canonical replayable shape.)
+embeds the path via `'\''$BK/ledger.csv'\''`: the `'\''` pairs emit literal `'`
+bytes inside the inner `-c "…"` double-quoted arg, and the exported `$BK`
+expands in the inner bash — producing `TO '/tmp/…/ledger.csv'` for psql. At
+work time the literal timestamped path was inlined instead of `$BK`; the form
+above is the canonical replayable shape (stub-verified).)
 The mutex script runs from the repo root — `cd` into the worktree first.
 
 `acquire`/`release` are fail-open by design (banners, not exit codes); if the
