@@ -19,7 +19,7 @@ Plan: `knowledge-base/project/plans/2026-10-12-fix-plugin-version-checkout-ident
 ## Phase 1 - resolver
 
 - 1.1 `file_size` (`stat -c %s || stat -f %z`), `read_small` (`[[ -f && -r ]]`, size <= 512, `{ IFS= read -r -n 512; } 2>/dev/null || true`) and `packed_ref_sha` (size <= 4 MiB, awk with `ENVIRON`)
-- 1.2 `valid_ref_name` (deny-list via `case`, no arrays) and `resolve_checkout_commit` (anchor incl. existence of `marketplace.json` and `plugin.json`, parameter-expansion paths, `.git` file, `commondir`, loose-then-packed)
+- 1.2 `valid_ref_name` (deny-list via `case`, no arrays) and `resolve_checkout_commit` (anchor incl. existence of `plugin.json` ONLY (CTO override 2026-10-13: no `marketplace.json` check; NUL-spliced HEAD = byte-count vs stat-size mismatch = unknown, LC_ALL=C), parameter-expansion paths, `.git` file, `commondir`, loose-then-packed)
 - 1.3 Wire into `resolve_installed` after the 12-hex branch; `INST_ID` = sha12; cache file `latest-release.checkout`; `load_cache` maps another commit's checkout entry to `cache=missing`
 - 1.4 `compute_relation`: `commit|checkout` with a 12-hex re-validation before `curl`; update the header comments (incl. the cache paragraph)
 
@@ -50,3 +50,6 @@ Plan: `knowledge-base/project/plans/2026-10-12-fix-plugin-version-checkout-ident
 - 6.1 In the bare root: `git fetch --no-tags origin main:main`, then `worktree-manager.sh sync`
 - 6.2 `claude plugin marketplace update soleur && claude plugin update soleur@soleur`
 - 6.3 Record `H0`, run the headless `--include-hook-events` capture from `/tmp`, record `H1`; PASS = banner sha in `{H0,H1}` plus the literal `(local checkout)`; paste the three outputs; linked follow-up issue if no banner line
+
+
+CTO overrides 2026-10-13 (see plan, 'BINDING CTO overrides'): (1) anchor has no `marketplace.json` check; bare-in-`.git` fixture omits it; vendored row flips to checkout; (2) NUL-spliced HEAD pins `unknown` via byte-count vs `stat` size compare under `LC_ALL=C`.

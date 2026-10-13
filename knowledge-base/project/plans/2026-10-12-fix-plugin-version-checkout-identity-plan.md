@@ -54,6 +54,30 @@ scope check 4.12: all pass).
 - The "uppercase hex" fixture must contain a-f letters (`${S1^^}` of an all-digit sha is a no-op).
 - A mirror-vs-HEAD stamp is a real gap, tracked under Deferral tracking (different file and suites).
 
+### BINDING CTO overrides (2026-10-13, post-plan ruling; supersede any conflicting text below)
+
+Ruled by CTO agent, 2026-10-13 (batched ruling on the plan-author rows; full text in
+`knowledge-base/project/specs/fix-version-banner-inplace-install/decision-challenges.md`). Eight rows were
+confirmed unchanged; two were overturned and **win over every later line of this plan**:
+
+1. **Anchor drops the `<top>/.claude-plugin/marketplace.json` existence check (Item E).** The anchor is:
+   root is absolute, basename `soleur`, parent basename `plugins`, `<top>/.git` present (dir or file), and
+   `<root>/.claude-plugin/plugin.json` present as a file (existence only). On the maintainer's real bare
+   root `<top>/.claude-plugin/` is not mirrored, so the `marketplace.json` check would re-silence the
+   banner in the bug's own scenario. The vendored-project residual (a project vendoring `plugins/soleur`
+   beside its own `.git` and a `plugin.json`) is bounded (12 hex, opt-in only) and documented as accepted.
+   Test consequences: the bare-in-`.git` fixture OMITS `marketplace.json`; the "vendored, no
+   `marketplace.json`" row flips to expect `source=checkout` (documented-accepted); keep a dotfiles-ancestor
+   `.git` row (still unknown, no `plugin.json`/suffix anchor) and a no-`plugin.json` row (unknown). Mutation
+   row 4 is reworded to "drop the `plugin.json` existence test or replace the anchor with first-ancestor
+   `.git`".
+2. **A NUL-spliced HEAD resolves to `source=unknown` on every bash version (Item D).** After the `stat`
+   size gate, the resolver compares the bytes it consumed to the file's `stat` size (minus one optional
+   trailing LF) and any mismatch is `unknown`; do the length compare under `LC_ALL=C` (byte semantics;
+   multibyte names become `unknown`). The NUL row now PINS `unknown` (rc 0, empty stderr) and the "NUL row
+   must not pin the outcome" notes are void. If the extra row proves flaky across locales, the fallback is
+   documented-harmless (CTO dissent), but only on evidence.
+
 ## Overview
 
 The plugin-version resolver (`plugins/soleur/scripts/plugin-version.sh`, shared by the SessionStart
