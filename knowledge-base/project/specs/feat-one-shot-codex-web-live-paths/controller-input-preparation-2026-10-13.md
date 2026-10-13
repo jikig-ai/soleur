@@ -117,3 +117,30 @@ Main advanced with one documentation-only closeout commit,
 `b2d842729accb31d2c830379d7a87a8cdac95411`; its five paths are outside application,
 schema and qualification controller code. Source pairing and final export require
 refresh after inclusion. No incoming command or operational action is executed.
+
+# Pushed correction reverification
+
+All three focused seats reverified pushed
+`aece621a998b9967a9c2cda9b6a9e566cdb71104` and repeated all 74 targeted cases.
+Data integrity repeated its original contradictory-birth reproduction and
+observed the intended duplicate-PID refusal, closing its finding. Security
+reported no new concrete source finding or authority change. Test design closed
+all three oracle gaps and updated its score to 8.5/10, Grade B; independent
+mutations remain unverified under the recorded allocator refusal.
+
+The complete corrected offline wrapper passed with inherited
+`PYTHONOPTIMIZE=1` and explicit `OFFLINE_RC=0`. Main
+`b2d842729accb31d2c830379d7a87a8cdac95411` is included cleanly. This panel used
+three focused seats, not the full PR roster. Each finding is closed only within
+the source-preparation scope; runtime observations and full review remain owed.
+The following evidence-only commit requires its own final pairing, file-only
+export and exact-head draft CI/description checks; those receipts belong to the
+PR description and ignored local artifacts.
+
+Additional session errors: a grouped staging call refused its Git index lock,
+so the subsequent commit had no staged files and failed without changing HEAD.
+The exact staging retry, staged secret scan and commit then succeeded. Prevention:
+inspect each producer status before dependent Git writes; an empty staged scan
+is not a scan of unstaged changes. Push DNS refusal used the exact approved retry.
+Draft `test` red is attributable only after reading its exact-head executed log;
+the watch's settled red status by itself is not a full-suite verdict.

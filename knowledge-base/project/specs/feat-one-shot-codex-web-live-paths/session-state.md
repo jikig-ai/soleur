@@ -1485,3 +1485,15 @@
   The new module is part of the operational required-component census and its
   executing bytes must match the source reference. Final pairing/export and
   draft CI/description receipts will be recorded after the committed source.
+
+- Three focused seats independently reverified pushed
+  `aece621a998b9967a9c2cda9b6a9e566cdb71104` and repeated all 74 targeted cases.
+  The original contradictory writer-birth reproduction now refuses; all three
+  oracle gaps are closed. Test design scores 8.5/10, Grade B. The complete
+  corrected offline wrapper passed under inherited optimization with explicit
+  exit zero. Independent mutations remain unverified after allocator refusal.
+- Main `b2d842729accb31d2c830379d7a87a8cdac95411` is now included; it added five
+  unrelated documentation files only. Final evidence-only source pairing,
+  file-only export and draft CI/description remain separately attributable.
+  Actual executable profiles/adapters/observations, immutable image/auth
+  receipts, fresh exact-command approval and all remaining AC stay pending.
