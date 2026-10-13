@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # ext-filter-detect.sh — SessionStart (matcher: startup|resume|clear|compact) external
-# output-filter detector (#10230). Emits ONE JSON object per detected tool on stdout:
+# output-filter detector (#10230). Emits ONE JSON object on stdout — detected tools
+# become newline-joined marker lines inside it (single-document stdout; sibling hooks
+# all emit exactly one object):
 #   {"systemMessage": "SOLEUR_EXT_FILTER tool=<t> version=<v> posture=<p>
 #     via=path|settings-hook|proxy-env measured_at=<date|-> ref=known-external-tools"}
 # and `SOLEUR_EXT_FILTER tool=none` when nothing is detected — so "hook dead" is
@@ -61,22 +63,38 @@ json_escape() {
   printf '%s' "$s"
 }
 
-emit() { # <marker fields...> -> one systemMessage object
-  printf '{"systemMessage": "%s"}\n' "$(json_escape "SOLEUR_EXT_FILTER $*")"
+MARKERS=()
+emit() { # <marker fields...> -> append a marker line; flushed as ONE systemMessage object
+  # (every sibling SessionStart hook emits a single JSON document; N top-level objects
+  # risks first-object-only parsing dropping co-detection markers, or a plain-text
+  # fallback landing them in model context — one object, newline-joined markers)
+  MARKERS+=("SOLEUR_EXT_FILTER $*")
+}
+
+flush_markers() {
+  ((${#MARKERS[@]})) || return 0
+  local joined
+  joined="$(printf '%s\n' "${MARKERS[@]}")"
+  printf '{"systemMessage": "%s"}\n' "$(json_escape "$joined")"
 }
 
 # version_probe <tool> -> first token of `<tool> --version`, "unknown" on any failure.
 version_probe() {
   local out
-  out="$(timeout 3 "$1" --version 2>/dev/null | head -1 | awk '{print $NF}')"
-  [[ -n "$out" && "$out" =~ ^[0-9] ]] || out="$(timeout 3 "$1" --version 2>/dev/null | head -1 | awk '{print $2}')"
+  out="$(timeout 2 "$1" --version 2>/dev/null | head -1 | awk '{print $NF}')"
   if [[ "$out" =~ ^v?[0-9]+\.[0-9]+ ]]; then printf '%s' "${out#v}"; else printf 'unknown'; fi
 }
 
-# ver_le a b -> 0 iff version a <= version b (dotted numerics).
+# ver_le a b -> 0 iff version a <= version b (dotted numerics). Pure bash — `sort -V`
+# is GNU-only and its absence silently withholds a measured-incompatible warning.
 ver_le() {
   [[ "$1" =~ ^[0-9]+\.[0-9]+ ]] || return 1
-  [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -1)" == "$1" ]]
+  local a1 a2 a3 b1 b2 b3
+  IFS=. read -r a1 a2 a3 <<<"$1"; IFS=. read -r b1 b2 b3 <<<"$2"
+  a3="${a3%%[^0-9]*}"; b3="${b3%%[^0-9]*}"
+  (( 10#${a1:-0} != 10#${b1:-0} )) && { (( 10#${a1:-0} < 10#${b1:-0} )); return; }
+  (( 10#${a2:-0} != 10#${b2:-0} )) && { (( 10#${a2:-0} < 10#${b2:-0} )); return; }
+  (( 10#${a3:-0} <= 10#${b3:-0} ))
 }
 
 # settings_hit <tool> -> prints the tilde-collapsed settings file that wires <tool> into
@@ -87,7 +105,7 @@ settings_hit() {
            "${CWD_CLAUDE:-}/settings.json" "${CWD_CLAUDE:-}/settings.local.json"; do
     [[ -r "$f" ]] || continue
     if grep -l '"hooks"' "$f" >/dev/null 2>&1 && grep -l "$tool" "$f" >/dev/null 2>&1; then
-      printf '~%s' "${f#"$HOME"}"
+      case "$f" in "$HOME"/*) printf '~%s' "${f#"$HOME"}" ;; *) printf '%s' "$f" ;; esac
       return 0
     fi
   done
@@ -142,6 +160,7 @@ main() {
   done
 
   (( found )) || emit "tool=none"
+  flush_markers
   return 0
 }
 

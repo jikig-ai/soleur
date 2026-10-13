@@ -30,7 +30,13 @@ distinguishable from no filter:</p>
 <pre>SOLEUR_EXT_FILTER tool=&lt;t&gt; version=&lt;v&gt; posture=&lt;p&gt; via=&lt;detection&gt; measured_at=&lt;date|-&gt; ref=known-external-tools</pre>
 
 <p>The marker is a <strong>stable contract</strong>: field names, ordering, and the posture
-enum are frozen — bug reports and triage muscle memory parse it literally.
+enum are frozen — bug reports and triage muscle memory parse it literally. When several
+detectors fire, the markers are newline-joined inside <em>one</em>
+<code>systemMessage</code> object — never N separate objects (the harness's parse must stay
+single-document). <code>via=</code> is comma-joined evidence: <code>path</code> (PATH hit),
+<code>settings-hook</code> (wired into a settings file), <code>proxy-env</code>
+(non-default endpoint); a corroborated tool reads
+<code>via=path,settings-hook</code>.
 <code>systemMessage</code> is operator-facing and costs zero model tokens; severity
 escalation lives in this page, never in marker adjectives. Any <code>path=</code> field is
 tilde-collapsed (<code>~/.claude/settings.json</code>) — it never carries your absolute home

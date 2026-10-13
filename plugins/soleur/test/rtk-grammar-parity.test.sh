@@ -43,11 +43,11 @@ norm() { tr '"|,()' '     ' | tr -s ' ' '\n' | grep -vE '^\s*$' | sort | tr '\n'
 
 # 1. wrap_skip arm in destructive-command-guard.sh — the case item inside the rtk) arm
 got="$(sed -n '/^    rtk)  # grammar/,/^    nohup|-p)/p' "$GUARD" \
-  | grep -oE 'run\|err\|test\|proxy\|bypass\|summary' | head -1 | norm || true)"
+  | grep -oE 'run\|err\|test\|proxy\|bypass\|summary([^|a-zA-Z]|$)' | head -1 | norm || true)"
 assert_eq "$want" "$got" "wrap_skip rtk arm exec set matches canonical"
 
 # 2. header prose in destructive-command-guard.sh — the parenthesized set
-got="$(grep -oE '\(run\|err\|test\|proxy\|bypass\|summary' "$GUARD" | head -1 | norm || true)"
+got="$(grep -oE '\(run\|err\|test\|proxy\|bypass\|summary([^|a-zA-Z]|$)' "$GUARD" | head -1 | norm || true)"
 assert_eq "$want" "$got" "guard header prose exec set matches canonical"
 
 # 3. python oracle in the hook suite — the tuple inside unwrap()'s rtk arm

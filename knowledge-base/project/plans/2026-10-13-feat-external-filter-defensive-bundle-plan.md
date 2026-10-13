@@ -49,7 +49,7 @@ the model. Two defects exist for users regardless of our posture:
   `long_word_judged` + header prose), plus sibling unwrap tables
   (`pkill-self-match-guard.sh` PFX/`stage_word`, `proc.sh` `_PROC_WRAPPERS`).
   Verified RTK grammar (README, 2026-10-13): exec subcommands are
-  `run|err|test|proxy|summary` (positional argv — consume the word, unwrap
+  `run|err|test|proxy|bypass|summary` (positional argv — consume the word, unwrap
   the inner command); `rtk run -c '<script>'` / `rtk err --shell <name>
   '<script>'` carry shell-string payloads → `unparsed-wrapper` ask (mirrors
   `env -S`); `gain|session|discover|init|telemetry` are non-exec (no unwrap);
@@ -265,7 +265,7 @@ discoverability_test:
 ### Guard 1 — `rtk` unwrap parity in `destructive-command-guard.sh`
 
 **Property.** A command whose argv[0] chain contains `rtk` (optionally with
-leading options and/or an exec subcommand `run|err|test|proxy|summary`) is
+leading options and/or an exec subcommand `run|err|test|proxy|bypass|summary`) is
 judged on the inner command's verdict, identically to the unwrapped form;
 payload forms the guard cannot read (`-c`/`--command` strings, `--shell`
 scripts, joined-string payloads, unknown `-*` words after the exec word)
@@ -397,7 +397,7 @@ date so a screenshot carries the claim's vintage.
    += `rtk`; `long_word_judged` 526 += `rtk`. Arm semantics (verified 2026-10-13
    against RTK README + `src/main.rs`; re-verify per-subcommand `--help` at work
    time — Kieran/DHH both flagged README-vs-source drift):
-   - Exec subcommands `run|err|test|proxy|summary` (case-SENSITIVE match —
+   - Exec subcommands `run|err|test|proxy|bypass|summary` (case-SENSITIVE match —
      clap rejects `rtk RUN`): consume the word, then loop option-skip ↔
      non-option until a command word lands. Exec set is version-pinned in the
      header prose so a future RTK subcommand is a checklist edit (an unknown

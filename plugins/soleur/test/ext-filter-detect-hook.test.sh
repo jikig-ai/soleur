@@ -76,6 +76,24 @@ OUT="$(run ANTHROPIC_BASE_URL=http://localhost:4000)" \
   && check "generic local proxy emits the neutral arm" "$OUT" 'tool=proxy posture=unknown via=proxy-env'
 check_not "proxy arm never emits a vendor name" "$OUT" 'tool=headroom'
 
+# single-document stdout: co-detection joins markers inside ONE systemMessage object
+mk rtk 'rtk 0.12.3'
+OUT="$(run ANTHROPIC_BASE_URL=http://localhost:4000)"
+[[ "$(printf '%s' "$OUT" | grep -c '"systemMessage"')" == 1 ]] \
+  && pass "co-detection emits exactly one systemMessage object" \
+  || fail "co-detection emits exactly one systemMessage object (got: $OUT)"
+check "co-detection carries both markers" "$OUT" 'SOLEUR_EXT_FILTER tool=proxy'
+
+# project-level settings: corroborates, and path= is NEVER tilde-corrupted
+printf '{"hooks":{"PreToolUse":[{"command":"rtk hook rewrite"}]}}' > "$CWD_DIR/.claude/settings.json"
+printf '{"cwd":"%s"}' "$CWD_DIR" | env -i PATH="$BIN:/usr/bin:/bin" HOME="$HOME_DIR" \
+  CLAUDE_PLUGIN_ROOT="$REPO_ROOT/plugins/soleur" bash "$SUT" 2>/dev/null > "$SANDBOX/cwd.out" || true
+OUT="$(cat "$SANDBOX/cwd.out")"
+check "project-level settings corroborates" "$OUT" 'via=path,settings-hook'
+check "project path is emitted absolute, never tilde-corrupted" "$OUT" "path=$CWD_DIR/.claude/settings.json"
+check_not "project path never tilde-corrupted" "$OUT" 'path=~proj'
+rm -f "$CWD_DIR/.claude/settings.json" "$BIN/rtk"
+
 OUT="$(run SOLEUR_DISABLE_EXT_FILTER_DETECT=1)"; check "kill switch emits nothing" "$OUT" ''
 
 OUT="$(run --self-test)"; check "--self-test emits a marker" "$OUT" 'SOLEUR_EXT_FILTER'

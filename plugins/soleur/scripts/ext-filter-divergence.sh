@@ -13,9 +13,10 @@
 #     the "un-run instrument" class, learnings/2026-09-07).
 #   RTK: verbatim vs `rtk <cmd>` — skips ONLY when `command -v rtk` fails, reporting
 #     SKIPPED reason=rtk-absent with exit 0 (the measurement then stays unmeasured).
-#   GRAMMAR-DRIFT (non-fatal): on the rtk-present arm, scrape `rtk --help` for the canonical
-#     exec-subcommand set and warn when it disagrees with
-#     scripts/lib/ext-filter-grammar.tsv — upstream added a shape we don't unwrap.
+#   GRAMMAR-DRIFT (non-fatal): on the rtk-present arm, probe a known-candidate list for
+#     which subcommands `rtk <sub> --help` accepts, and warn when the canonical exec set
+#     in scripts/lib/ext-filter-grammar.tsv disagrees — a candidate list, not a parse of
+#     `rtk --help`, so a brand-new unknown subcommand name stays invisible to it.
 #
 # Pass condition (conjunctive — both required before `literal-clean` may be asserted):
 #   rtk-arm divergence == 0  AND  control-arm divergence > 0.
@@ -31,7 +32,8 @@
 # Usage: ext-filter-divergence.sh [--corpus <file>] [--report <file>]
 
 set -uo pipefail
-trap 'exit 0' EXIT   # never take down a caller; report SKIPPED/INSTRUMENT-DEFECT on stdout
+# NOTE: the cleanup trap below replaces a fail-open trap — post-mktemp faults report
+# non-zero (a crashed instrument is honest; INSTRUMENT-DEFECT needs its own exit).
 
 CORPUS="${CORPUS:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ext-filter-divergence-corpus.txt}"
 REPORT=""
