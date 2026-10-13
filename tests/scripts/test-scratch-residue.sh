@@ -225,8 +225,12 @@ add_leaf sh-content-publisher   'bash scripts/test-content-publisher.sh' sh
 add_leaf sh-watch-live-verify   'bash scripts/watch-live-verify-pass.test.sh' sh
 # (#7004) 12 mktemp sites under a growing four-arm EXIT trap; the begin+splice
 # adoption confines direct-run residue (the measured inngest-ci-*/inngest-arm-*
-# kill-residue classes) to an owned soleur-run.<pid>.* root.
-add_leaf sh-cloud-init-inngest  'bash apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh' sh
+# kill-residue classes) to an owned soleur-run.<pid>.* root. CI/GITHUB_ACTIONS
+# are scrubbed: under ambient CI vars the suite takes its CI-mode path and
+# HARD-FAILS on tag assertions that need a tags-fetched checkout (the shard's
+# clone lacks them) — residue is the leaf's probe, and the suite's own CI job
+# runs those assertions under the full fetch.
+add_leaf sh-cloud-init-inngest  'env -u CI -u GITHUB_ACTIONS bash apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh' sh
 add_leaf py-unittest            'python3 -m unittest tests.scripts.test_lint_rule_ids'
 add_leaf py-pytest-configure    'python3 -c "import tests.conftest as c; c.pytest_configure()"'
 VITEST_BIN="$REPO_ROOT/apps/web-platform/node_modules/.bin/vitest"
