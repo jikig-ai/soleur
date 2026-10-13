@@ -2946,7 +2946,12 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler soleur/prd_terraform). NO SUBSTITUTE: the property is the
   // per-host `egress_gw_probe result=ok` row (journald -> vector -> the Logs warehouse), which has no
   // unauthenticated read path; the host itself is no-SSH. Genuine.
-  const BASELINE_DECLARED_PROBES = 65;
+  // #10054 (2026-10-12): +1 (65 -> 66) for `2026-10-12-feat-accept-hosted-must-ask-lane-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the soak probe reads stored Better Stack rows through the ClickHouse HTTP connection credential (Doppler
+  // prd_terraform); the warehouse has no unauthenticated read path. NO SUBSTITUTE: the decode and isolation are pinned
+  // offline by the probe's own fixture suite, but that verifies code, not the stored stream. Genuine.
+  const BASELINE_DECLARED_PROBES = 66;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

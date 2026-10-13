@@ -58,4 +58,4 @@ Secondary: **point-of-use re-validation still applies even when the path came fr
 - `knowledge-base/project/learnings/security-issues/2026-04-11-service-role-idor-untrusted-ws-attachments.md` — service-role IDOR: re-validate at point of use.
 - `knowledge-base/project/learnings/2026-04-07-symlink-escape-recursive-directory-traversal.md` — symlink rejection at every read site.
 - `knowledge-base/project/learnings/ui-bugs/2026-04-10-kb-nav-tree-disappears-on-file-select.md` — same UI-branch-asymmetry class of bug.
-- `knowledge-base/project/plans/2026-04-10-feat-kb-document-sharing-plan.md` — original sharing design; notes `.md`-only was MVP scope.
+- `knowledge-base/project/plans/archive/20261013-003106-2026-04-10-feat-kb-document-sharing-plan.md` — original sharing design; notes `.md`-only was MVP scope.

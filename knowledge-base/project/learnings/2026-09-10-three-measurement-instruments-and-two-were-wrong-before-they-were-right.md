@@ -90,7 +90,7 @@ Two practices caught them, and both are cheap:
 
 Corollary, learned from the prior Headroom evaluation's own recorded error:
 **commit the reproduction scaffold.** It was committed here under
-`knowledge-base/project/specs/feat-serena-mcp-eval/measurement/`, *including the
+`knowledge-base/project/specs/archive/20261013-051752-feat-serena-mcp-eval/measurement/`, *including the
 known-broken v1*, because a future reader needs to see the failure mode, not just
 the corrected result.
 

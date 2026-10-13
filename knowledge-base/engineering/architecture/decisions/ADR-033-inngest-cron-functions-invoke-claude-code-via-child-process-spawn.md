@@ -19,7 +19,7 @@ The two execution models differ in posture:
 
 Without a deliberate choice, the next 11 migration PRs would each independently re-invent how to invoke the agent — guaranteeing drift on the failure-mode-prevention contract (idempotency, replay-safety, cost ceiling). The decision must be made BEFORE PR-1 (`scheduled-daily-triage` migration) lands code, so every subsequent migration cites a single accepted invariant set.
 
-Operator confirmed the decision 2026-05-18 during brainstorm Phase 1.2; recorded as K9 in `knowledge-base/project/brainstorms/2026-05-18-tr9-agent-loop-crons-inngest-migration-brainstorm.md`. CTO assessment (h) and CPO sign-off both accepted the spawn-child path.
+Operator confirmed the decision 2026-05-18 during brainstorm Phase 1.2; recorded as K9 in `knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-18-tr9-agent-loop-crons-inngest-migration-brainstorm.md`. CTO assessment (h) and CPO sign-off both accepted the spawn-child path.
 
 ## Considered Options
 

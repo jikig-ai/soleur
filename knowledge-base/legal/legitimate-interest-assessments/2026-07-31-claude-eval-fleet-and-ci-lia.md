@@ -2,7 +2,7 @@
 title: "Legitimate Interest Assessment — Anthropic-egressing Inngest function fleet, community observation and republication, and the Jikigai-keyed GitHub Actions CI surface"
 type: legitimate-interest-assessment
 date: 2026-07-31
-plan: knowledge-base/project/plans/2026-07-31-docs-art30-register-claude-eval-fleet-and-ci-surface-plan.md
+plan: knowledge-base/project/plans/archive/20261013-051752-2026-07-31-docs-art30-register-claude-eval-fleet-and-ci-surface-plan.md
 issue: 7100
 status: draft-requires-counsel-review
 controller: "Jikigai SARL (France; 25 rue de Ponthieu, 75008 Paris) is the controller. Anthropic PBC is an Art. 28 processor for every flow assessed here, because every flow runs under the Jikigai-controlled `ANTHROPIC_API_KEY` and not under an end-user BYOK key — this is NOT the BYOK independent-controller carve-out at Article 30 register §0."
@@ -324,7 +324,7 @@ rather than the raw message object — would materially reduce what reaches Anth
 preserving the operator's awareness of activity level and location. That measure does not
 exist today. It is a genuine Art. 25(1) data-protection-by-design gap and is tracked as
 deferred item **DEF-3** (#7124; input-side minimization for the community collectors; body drafted
-at `knowledge-base/project/specs/feat-one-shot-7100-art30-eval-fleet-register/deferred-issues.md`,
+at `knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7100-art30-eval-fleet-register/deferred-issues.md`,
 ).
 
 Necessity is nevertheless **satisfied for the collection-and-egress limb as scoped**, because
@@ -458,7 +458,7 @@ remediation" — and that is what PA-32 records.**
 **Conditions under which this conclusion would change.** The remediation set is small, and
 CLO's estimate for it is about a day. It is source work and is therefore outside this
 docs-only PR's scope; it is tracked as deferred item **DEF-0** (#7119; body drafted at
-`knowledge-base/project/specs/feat-one-shot-7100-art30-eval-fleet-register/deferred-issues.md`,
+`knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7100-art30-eval-fleet-register/deferred-issues.md`,
 ):
 
 | | Remediation | Effect on this conclusion |
@@ -590,7 +590,7 @@ counsel review #7086 found: a record claiming a compliance state the system does
 **Remediation is multi-channel, not one Privacy Policy section**, precisely because
 14(5)(b) fails for two of the three sub-populations. Tracked as deferred item **DEF-1 (#7120)**
 (body drafted at
-`knowledge-base/project/specs/feat-one-shot-7100-art30-eval-fleet-register/deferred-issues.md`,
+`knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7100-art30-eval-fleet-register/deferred-issues.md`,
 ): (a) a pinned notice or server-description line in the
 Discord guild; (b) a line in the repository's README / CONTRIBUTING / issue templates; (c) a
 Privacy Policy §4.15 following the §4.13/§4.14 pattern, mirrored to

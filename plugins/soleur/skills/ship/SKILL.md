@@ -1084,10 +1084,8 @@ The PR's diff will produce drift on `terraform_data.deploy_pipeline_fix` — by 
 ```bash
 if [[ -z "${CI:-}" && -z "${GITHUB_ACTIONS:-}" ]] && ssh-add -l >/dev/null 2>&1; then
   cd apps/web-platform/infra
-  # Only the bridge target here (NOT deploy_pipeline_fix): the in-session fallback
-  # exists to land a handler/helper/sudoers change immediately; the webhook push
-  # (deploy_pipeline_fix) is independently covered by the CI auto-apply and does not
-  # need the operator's SSH path. Do NOT widen this to a 2-target apply.
+  # Bridge target only (NOT deploy_pipeline_fix): this fallback lands a handler/helper/
+  # sudoers change now; the webhook push is covered by the CI auto-apply. Never widen it.
   doppler run -p soleur -c prd_terraform -- \
     terraform apply -target=terraform_data.infra_config_handler_bootstrap -input=true
   # The Terraform "yes" prompt is the load-bearing authorization
@@ -1095,13 +1093,13 @@ if [[ -z "${CI:-}" && -z "${GITHUB_ACTIONS:-}" ]] && ssh-add -l >/dev/null 2>&1;
 fi
 ```
 
-Verify with the no-host-login status hook (per `hr-no-ssh-fallback-in-runbooks` — `files_written == files_total` via `/hooks/infra-config-status`, NOT an SSH hash compare):
+Verify via the no-host-login status hook (`hr-no-ssh-fallback-in-runbooks`; `files_written == files_total` at `/hooks/infra-config-status`, never an SSH hash compare):
 
 ```bash
 WEBHOOK_SECRET=$(doppler secrets get WEBHOOK_DEPLOY_SECRET -p soleur -c prd_terraform --plain)
 CF_ACCESS_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID -p soleur -c prd_terraform --plain)
 CF_ACCESS_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET -p soleur -c prd_terraform --plain)
-HMAC=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+HMAC=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')
 curl -fsS -H "X-Signature-256: sha256=${HMAC}" \
   -H "CF-Access-Client-Id: ${CF_ACCESS_ID}" \
   -H "CF-Access-Client-Secret: ${CF_ACCESS_SECRET}" \
@@ -1459,7 +1457,7 @@ done
    # exemption's anchored match cannot see it — and the filing this rule
    # MANDATES would then be blocked by that gate with no exit but the
    # blanket override. Write the body to a file; do not inline it.
-   BODY_FILE="$(mktemp -t deferred-automation.XXXXXXXX.md)"
+   BODY_FILE="$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)")"
    # printf, not a heredoc: this snippet is indented inside a nested list, and
    # an indented terminator never closes a `<<EOF` (only `<<-EOF` strips, and
    # only TABS). Copy-pasting the heredoc form hangs the shell.
@@ -1473,6 +1471,7 @@ done
    } > "$BODY_FILE"
    gh issue create --label type/chore --label deferred-automation \
      --title "$TITLE" --body-file "$BODY_FILE"
+   rm -f "$BODY_FILE"
    ```
 
    The load-bearing part is the literal `deferred-automation` string in the
@@ -1518,7 +1517,7 @@ PLAN=$(grep -oE 'knowledge-base/project/(plans|specs)/[^[:space:])"`]+\.md' "$CO
 # Indent-tolerant (518 of 1905 plans indent a fence inside a list item) and
 # fail-closed on an unbalanced fence, matching the hook byte-for-byte.
 if [[ -n "$PLAN" && -f "$PLAN" ]]; then
-  _ps=$(mktemp)
+  _ps=$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)")
   if awk '/^[[:space:]]*```/ { f = !f; next } !f { print } END { if (f) exit 2 }' "$PLAN" > "$_ps" 2>/dev/null
   then cat "$_ps" >> "$COMBINED"
   else echo "SOAK-CORPUS-PLAN-UNSTRIPPED: unbalanced fence in $PLAN; appending unstripped" >&2; cat "$PLAN" >> "$COMBINED"
@@ -1704,7 +1703,7 @@ Before invoking `gh pr edit` or `gh pr create` below, scan the proposed PR title
 Write the proposed `PR_TITLE`, `PR_BODY`, and the branch commit messages (`git log origin/main..HEAD --format=%B`) to temp files, then run the shared scanner:
 
 ```bash
-TMP_TITLE=$(mktemp); TMP_BODY=$(mktemp); TMP_COMMITS=$(mktemp)
+_SCAN_DIR=$(mktemp -d -t soleur-run.$$.XXXXXXXX); TMP_TITLE=$_SCAN_DIR/t; TMP_BODY=$_SCAN_DIR/b; TMP_COMMITS=$_SCAN_DIR/c
 printf '%s\n' "$PR_TITLE" > "$TMP_TITLE"
 printf '%s\n' "$PR_BODY"  > "$TMP_BODY"
 git log origin/main..HEAD --format=%B > "$TMP_COMMITS"
@@ -1714,6 +1713,7 @@ git log origin/main..HEAD --format=%B > "$TMP_COMMITS"
 T_MATCHES=$(bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/auto-close-scan.sh" "$TMP_TITLE")
 B_MATCHES=$(bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/auto-close-scan.sh" "$TMP_BODY")
 C_MATCHES=$(bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/auto-close-scan.sh" "$TMP_COMMITS")
+rm -f "$TMP_TITLE" "$TMP_BODY" "$TMP_COMMITS"
 ```
 
 If `T_MATCHES` OR `B_MATCHES` OR `C_MATCHES` is non-empty:
@@ -1733,9 +1733,11 @@ The PR body of THIS Soleur PR will typically contain `Closes #N` lines that ARE 
 **Grok Build pre-push gate (mandatory before `git push`).** When the harness is Grok (`GROK_HOME` / `GROK_AGENT`), run from repo root and inspect exit code explicitly (do not pipe through `tail`):
 
 ```bash
-log=$(mktemp -t grok-pre-push-gate.XXXXXXXX.log)
+log=$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)")
 bash plugins/soleur/scripts/grok-pre-push-gate.sh > "$log" 2>&1; rc=$?; echo "EXIT=$rc LOG=$log"
 ```
+
+The log is scratch: `rm -f "$log"` on green; on red, read it for the diagnosis, then remove it (#10017).
 
 Abort Phase 6 if rc != 0. The gate mirrors reproducible CI: fast required jobs, [scripts/test-all.sh](../../../../scripts/test-all.sh) (the test check), web-platform build, and grok-fidelity. Claude Code: lefthook covers commit-time lint; Grok has no hook equivalent — run it here even if Phase 4 ran (this is the push-time recheck on the actual tree).
 <!-- grok-pre-push-gate:end -->
@@ -2267,6 +2269,14 @@ if [[ "$sync_ok" -eq 1 ]]; then
     sync_ok=0
   fi
 fi
+# ADR-276 S3 (#9728): the head-verdict resolver is read independent of sync_ok/SYNC_SNAP. A disabled BEHIND auto-sync (not in a
+# worktree, an old sync script) says nothing about the resolver; keying it on the snapshot made a ready PR's draft-run `test` row
+# read as a required failure there. Identity-verified root plus a readable script is the whole condition.
+VERDICT_OK=0
+if [[ -n "$SYNC_ROOT" && -r "$SYNC_ROOT/scripts/ci-head-verdict.sh" ]] \
+   && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "$SYNC_ROOT/.claude-plugin/plugin.json" 2>/dev/null; then
+  VERDICT_OK=1
+fi
 # Required-check names: fetched ONCE (rules change only by operator action).
 # Fail-open by design: an API failure leaves REQUIRED_CHECKS empty and the per-tick
 # scan a no-op; do NOT "harden" to fail-closed (breaks repos without branch
@@ -2317,7 +2327,7 @@ while true; do
       # ADR-276 S3: a ready PR's red `test` may be the DRAFT run's row; ask the resolver.
       vstate=""
       for n in "${failed_names[@]}"; do
-        [[ "$n" == test && -n "$SYNC_SNAP" && -r "$SYNC_ROOT/scripts/ci-head-verdict.sh" ]] || continue
+        [[ "$n" == test && "$VERDICT_OK" -eq 1 ]] || continue
         vout="$(bash "$SYNC_ROOT/scripts/ci-head-verdict.sh" verdict "$PR" 2>/dev/null)" || vout=""
         vline="$(grep -m1 '^SOLEUR_CI_HEAD_VERDICT ' <<<"$vout")" || vline=""
         vstate="${vline#*state=}"; vstate="${vstate%% *}"; break
@@ -2755,56 +2765,20 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
    4. Paste run-URL + byte count + verbatim URLs into the closing comment
    ```
 
-   For each item, write the issue body to a temp file (do NOT use heredocs in this step — write with `body=$(mktemp -t follow-through-body.XXXXXXXX.md); { echo "..."; } > "$body"`, then `echo "BODY=$body"` so the path survives into the later `--body-file` and precondition-gate calls — a separate Bash call does not inherit `$body`), then create the issue:
+   For each item, write the issue body to a temp file (do NOT use heredocs in this step — write with `body=$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)"); { echo "..."; } > "$body"`, then `echo "BODY=$body"` so the path survives into the later `--body-file` and `rm` calls — a separate Bash call does not inherit `$body`), then create the issue:
 
    ```bash
    gh issue create --title "follow-through: <ITEM_DESCRIPTION>" --label "follow-through" --milestone "<MILESTONE>" --body-file "$body"
+   rm -f "$body"
    ```
 
    Replace `<ITEM_DESCRIPTION>` with the text after the ⏳ emoji (trimmed). Replace `<MILESTONE>` with the value from the roadmap or "Post-MVP / Later".
 
    **Issue body template** (write to the temp file):
-
-   ````text
-   ## Follow-Through Item
-
-   <ITEM_DESCRIPTION>
-
-   <!-- When this item is about a migration, include either of:
-   **Migration file:** `NNN_full_stem.sql`
-   See "Migration filename anchor" rule above. -->
-
-   **Source PR:** #<PR_NUMBER>
-   **Created by:** soleur:ship Phase 7 Step 3.5
-   **Created:** <YYYY-MM-DD>
-
-   ## Verification
-
-   <!-- soleur:followthrough
-     script=scripts/followthroughs/<feature-name>-<ISSUE_NUM>.sh
-     earliest=<ISO-8601-UTC>
-     secrets=<comma-separated-secret-names-or-omit>
-   -->
-
-   **UNFENCED, COLUMN 0 — this is load-bearing, not formatting.** The sweeper deliberately
-   SKIPS fenced blocks (#4200 Gap 3: a fenced directive is an example, not an enrolment) and
-   anchors the opener at column 0. This template previously wrapped the directive in a
-   ```` ```html ```` fence, and every tracker created from it was enrolled in name only —
-   six of 56 open trackers were dead that way, the oldest silent since 2026-06, each with its
-   directive plainly visible in the issue body. The indentation above is this document's list
-   nesting; the `<!--` must start at column 0 in the ISSUE BODY. Two mechanical backstops now
-   agree with the sweeper: `.claude/hooks/follow-through-directive-gate.sh` denies a fenced
-   `gh issue create` and names the fence as the cause, and the sweeper comments on any open
-   tracker it finds in this state and reds the run.
-
-   Canonical convention: `knowledge-base/engineering/operations/runbooks/followthrough-convention.md`.
-   The directive is parsed daily by `.github/workflows/scheduled-followthrough-sweeper.yml`
-   via [scripts/sweep-followthroughs.sh](../../../../scripts/sweep-followthroughs.sh) — exit 0 PASS / exit 1 FAIL / other TRANSIENT.
-
-   ## Status
-
-   Awaiting verification. The follow-through sweeper will check this issue once `earliest` is reached.
-   ````
+   [followthrough-issue-body-template.md](./references/followthrough-issue-body-template.md)
+   — the fenced block inside IS the issue body; the `<!-- soleur:followthrough`
+   directive must land at column 0 in the issue body (the sweeper skips fenced
+   directives — enrollment-in-name-only was the #4200-Gap-3 failure shape).
 
    **Step 3.5.A — Generate the stub script.** For each item, scaffold a stub under
    [scripts/followthroughs/](../../../../scripts/followthroughs/) named

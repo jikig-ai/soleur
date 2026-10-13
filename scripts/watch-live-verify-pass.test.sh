@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -uo pipefail
+SUITE_TMP=$(mktemp -d)
+[[ "$SUITE_TMP" == /* ]] || { echo "FATAL: SUITE_TMP is not absolute: $SUITE_TMP" >&2; exit 2; }
+trap 'rm -rf "$SUITE_TMP"' EXIT
 
 # Tests for watch-live-verify-pass.sh — the deterministic daily watcher that
 # records the FIRST qualifying live-verify CI PASS on the flip-tracker issue
@@ -19,7 +22,7 @@ check() { TOTAL=$((TOTAL+1)); if [[ "$2" == "0" ]]; then PASS=$((PASS+1)); else 
 # appended to $MOCKD/comment_calls so the test can assert record-or-not.
 # Args: state_json comments_json runs_json jobs_json log_text
 run_sut() {
-  local mock_dir; mock_dir="$(mktemp -d)"
+  local mock_dir; mock_dir="$(mktemp -d -p "$SUITE_TMP")"
   printf '%s' "$1" > "$mock_dir/state"
   printf '%s' "$2" > "$mock_dir/comments"
   printf '%s' "$3" > "$mock_dir/runs"

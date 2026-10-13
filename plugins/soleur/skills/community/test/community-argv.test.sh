@@ -1596,7 +1596,7 @@ check "canary: post-tweet succeeds with a correct signature and no interpreter" 
 check "canary: the post-tweet signature is correct (independent recomputation)" x_sig_ok 1 POST
 
 # ===================================================================================
-echo "== write-env allow-list: bsky-setup.sh, discord-setup.sh, x-setup.sh =="
+echo "== write-env allow-list: bsky-setup.sh, discord-setup.sh, x-setup.sh, linkedin-setup.sh =="
 # Every value is validated BEFORE the first write; a refused value prints the marker plus one human
 # line naming only the VARIABLE, writes nothing, exits 1 and leaves any existing .env untouched. The
 # sentinel mechanism: after the run the .env is SOURCED in a clean shell; a value that survived
@@ -1757,6 +1757,21 @@ RUN_CWD="$GITWORK" run_sut - "" "X_API_KEY=$XS_K" "X_API_SECRET=$XS_S" "X_ACCESS
 check "x-setup write-env with X_ACCESS_TOKEN_SECRET missing: exit 1, the diagnostic names it on STDOUT, stderr empty, no marker" we_missing_stdout X_ACCESS_TOKEN_SECRET
 check "x-setup write-env with a credential missing: the existing .env is left byte-identical" cmp -s "$SANDBOX/env.before" "$GITWORK/.env"
 
+# --- linkedin-setup.sh -----------------------------------------------------------------------
+LI_WE_SEED=$'KEEP_ME=1\nLINKEDIN_CLIENT_ID=old\nLINKEDIN_CLIENT_SECRET=old\nLINKEDIN_ACCESS_TOKEN=old\nLINKEDIN_PERSON_URN=old\nOTHER=2'
+LI_WE_ID="synthetic-fixture-client-0001"; LI_WE_SECRET="aB3+/=:%xYz-Q.w_9ZkLmNoPq"; LI_WE_TOK="AQV-synthetic_token.0001+/="; LI_WE_URN="urn:li:person:SyNtH0001"
+WE_BASE=("LINKEDIN_CLIENT_ID=$LI_WE_ID" "LINKEDIN_CLIENT_SECRET=$LI_WE_SECRET" "LINKEDIN_ACCESS_TOKEN=$LI_WE_TOK" "LINKEDIN_PERSON_URN=$LI_WE_URN")
+LI_VARS=(LINKEDIN_CLIENT_ID LINKEDIN_CLIENT_SECRET LINKEDIN_ACCESS_TOKEN LINKEDIN_PERSON_URN)
+for var_ in "${LI_VARS[@]}"; do
+  for cls_ in "${WE_CLASSES[@]}"; do we_run_bad "linkedin-setup" "$LI_WE_SEED" "$LINKEDIN_SETUP" "$var_" "$cls_" write-env; done
+done
+printf '%s\n' "$LI_WE_SEED" > "$GITWORK/.env"; chmod 644 "$GITWORK/.env"
+RUN_CWD="$GITWORK" run_sut - "" "${WE_BASE[@]}" -- bash "$LINKEDIN_SETUP" write-env
+check "linkedin-setup write-env round trip: exit 0, no marker" bash -c '[[ "$1" -eq 0 && "$2" != *SOLEUR_CREDENTIAL_REFUSED* ]]' _ "$RC" "$ERR"
+check "linkedin-setup write-env round trip: .env is mode 600" we_mode_600
+check "linkedin-setup write-env round trip: sourcing .env yields all four values byte-for-byte (a secret holding + / = : %), once each, and the unrelated line survives" \
+  we_values_ok "LINKEDIN_CLIENT_ID=$LI_WE_ID" "LINKEDIN_CLIENT_SECRET=$LI_WE_SECRET" "LINKEDIN_ACCESS_TOKEN=$LI_WE_TOK" "LINKEDIN_PERSON_URN=$LI_WE_URN"
+
 # --- discord-setup.sh -------------------------------------------------------------------------
 DW_URL="https://discord.com/api/webhooks/123456789012345678/SYNTHwebhook-token_0001"
 DW_REL="https://discord.com/api/webhooks/223456789012345678/SYNTHreleases-token_0002"
@@ -1778,8 +1793,8 @@ check "write-env hostile rows: the distinct counter counts three copies of one c
 check "write-env hostile rows: the distinct counter counts one duplicate among four classes as 3" we_distinct_is 3 quote quote semi pipe
 check "write-env hostile rows: the required-name check discriminates (a list missing lparen is refused)" \
   not we_has_all_required cmdsub backtick nlassign dquote semi space tilde rparen backslash tab cr squote dollar
-check "write-env hostile rows: the inner counter saw every run (${#BS_VARS[@]} + ${#XS_VARS[@]} + ${#DS_VARS[@]} variables x ${#WE_CLASSES[@]} classes)" \
-  test "$WE_RUNS" -eq "$(( (${#BS_VARS[@]} + ${#XS_VARS[@]} + ${#DS_VARS[@]}) * ${#WE_CLASSES[@]} ))"
+check "write-env hostile rows: the inner counter saw every run (${#BS_VARS[@]} + ${#XS_VARS[@]} + ${#LI_VARS[@]} + ${#DS_VARS[@]} variables x ${#WE_CLASSES[@]} classes)" \
+  test "$WE_RUNS" -eq "$(( (${#BS_VARS[@]} + ${#XS_VARS[@]} + ${#LI_VARS[@]} + ${#DS_VARS[@]}) * ${#WE_CLASSES[@]} ))"
 printf '%s\n' "$DS_SEED" > "$GITWORK/.env"; chmod 644 "$GITWORK/.env"
 RUN_CWD="$GITWORK" run_sut - "" "${WE_BASE[@]}" -- bash "$DISCORD_SETUP" write-env "$GUILD"
 check "discord-setup write-env round trip (webhook URL from the environment): exit 0, no marker" \
@@ -1928,11 +1943,13 @@ for w_ in bsky-setup.sh discord-setup.sh x-setup.sh; do
   check "population: $w_ validates every value before the first temp-file, touch or write in cmd_write_env" \
     awk 'BEGIN{v=0;m=0} /^cmd_write_env\(\) \{/{f=1} f&&/_wenv_validate /&&!v{v=NR} f&&/mktemp|touch "\$env_file"|>> "\$env_file"/&&!m{m=NR} f&&/^}/{exit} END{exit !(v&&m&&v<m)}' "$HERE/$w_"
 done
-check "population: linkedin-setup.sh is the one DEFERRED writer (tracked follow-up) and carries no validator yet; move it to the validated list with its own rows when it gains one" \
-  test "$(file_count '_wenv_validate' "$HERE/linkedin-setup.sh")" -eq 0
+check "population: linkedin-setup.sh validates every value before the first temp-file, touch or write in cmd_write_env (no deferred writer is left)" \
+  awk 'BEGIN{v=0;m=0} /^cmd_write_env\(\) \{/{f=1} f&&/_wenv_validate /&&!v{v=NR} f&&/mktemp|touch "\$env_file"|>> "\$env_file"/&&!m{m=NR} f&&/^}/{exit} END{exit !(v&&m&&v<m)}' "$HERE/linkedin-setup.sh"
+check "population: linkedin-setup.sh names all four variables cmd_write_env writes in its _wenv_validate call" \
+  grep -qE '^  _wenv_validate LINKEDIN_CLIENT_ID LINKEDIN_CLIENT_SECRET LINKEDIN_ACCESS_TOKEN LINKEDIN_PERSON_URN$' "$HERE/linkedin-setup.sh"
 
-# --- the three _wenv blocks are one block ---------------------------------------------------------
-echo "== write-env allow-list: the three copies are byte-identical =="
+# --- the four _wenv blocks are one block ---------------------------------------------------------
+echo "== write-env allow-list: the four copies are byte-identical =="
 wenv_block() { # <file>: from `_wenv_class() {` through the closing brace of `_wenv_validate`
   awk '/^_wenv_class\(\) \{/{f=1} f{print} f&&/^_wenv_validate\(\) \{/{v=1} v&&/^}$/{exit}' "$1"
 }
@@ -1942,12 +1959,13 @@ wenv_sane() { # <block-file>: non-empty, whole, and long enough not to be a trun
   [[ -s "$1" ]] && [[ "$(wc -l < "$1")" -ge 25 ]] && grep -qxF '_wenv_validate() {' "$1" \
     && grep -qF '*[!A-Za-z0-9._:/@%+=,-]*) return 1 ;;' "$1" && grep -qF 'phase=write-env' "$1"
 }
-for w_ in bsky-setup.sh discord-setup.sh x-setup.sh; do
+for w_ in bsky-setup.sh discord-setup.sh x-setup.sh linkedin-setup.sh; do
   wenv_block "$HERE/$w_" > "$WBLK/$w_.blk"
   check "wenv drift: the $w_ _wenv block extracted whole (non-vacuous)" wenv_sane "$WBLK/$w_.blk"
 done
 check "wenv drift: discord-setup.sh's _wenv block is byte-identical to bsky-setup.sh's" cmp -s "$WBLK/bsky-setup.sh.blk" "$WBLK/discord-setup.sh.blk"
 check "wenv drift: x-setup.sh's _wenv block is byte-identical to bsky-setup.sh's" cmp -s "$WBLK/bsky-setup.sh.blk" "$WBLK/x-setup.sh.blk"
+check "wenv drift: linkedin-setup.sh's _wenv block is byte-identical to bsky-setup.sh's" cmp -s "$WBLK/bsky-setup.sh.blk" "$WBLK/linkedin-setup.sh.blk"
 # Mutation: one character widened in ONE copy turns the comparison RED (and the mutation landed).
 M="$(mut_make discord-setup.sh '[!A-Za-z0-9._:/@%+=,-]' '[!A-Za-z0-9._:/@%+=,*-]')"
 wenv_block "$M" > "$WBLK/discord-mut.blk"
@@ -2003,6 +2021,14 @@ check "mutant: x-setup with the validator call removed writes the hostile value 
 M="$(mut_make x-setup.sh '[!A-Za-z0-9._:/@%+=,-]' '[!A-Za-z0-9._:/@%+=,\|-]')"
 we_mutant_run "x" "$XS_SEED" "$M" X_API_KEY pipe write-env
 check "mutant: x-setup with the allow-list widened to a pipe lets 'VAR=x|y' through, so the written .env differs from its seed (RED on the pipe row)" we_mut_fired "$M"
+WE_BASE=("LINKEDIN_CLIENT_ID=$LI_WE_ID" "LINKEDIN_CLIENT_SECRET=$LI_WE_SECRET" "LINKEDIN_ACCESS_TOKEN=$LI_WE_TOK" "LINKEDIN_PERSON_URN=$LI_WE_URN")
+M="$(mut_make linkedin-setup.sh '_wenv_validate LINKEDIN_CLIENT_ID LINKEDIN_CLIENT_SECRET LINKEDIN_ACCESS_TOKEN LINKEDIN_PERSON_URN' ':')"
+we_mutant_run "linkedin" "$LI_WE_SEED" "$M" LINKEDIN_PERSON_URN backtick write-env
+check "mutant: linkedin-setup with the validator call removed writes the hostile value and the sentinel fires on source (RED on the hostile row)" we_mut_fired "$M"
+M="$(mut_make linkedin-setup.sh '_wenv_validate LINKEDIN_CLIENT_ID LINKEDIN_CLIENT_SECRET LINKEDIN_ACCESS_TOKEN LINKEDIN_PERSON_URN' '_wenv_validate LINKEDIN_CLIENT_ID LINKEDIN_CLIENT_SECRET LINKEDIN_ACCESS_TOKEN')"
+we_mutant_run "linkedin" "$LI_WE_SEED" "$M" LINKEDIN_PERSON_URN semi write-env
+check "mutant: linkedin-setup validating only three of the four values lets a hostile PERSON_URN through (RED on the position-4 row)" we_mut_fired "$M"
+WE_BASE=("X_API_KEY=$X_KEY" "X_API_SECRET=$X_SECRET" "X_ACCESS_TOKEN=$X_TOK" "X_ACCESS_TOKEN_SECRET=$X_TOKSECRET")
 M="$(mut_make x-setup.sh $' reason=%s var=%s phase=write-env\\n\' "$SOLEUR_TRANSPORT_SCRIPT" "$1" "$2" >&2' $' reason=%s\\n\' "$SOLEUR_TRANSPORT_SCRIPT" "$1" >&2')"
 check "mutant: x-setup whose stderr marker lost var= and phase= is RED on the refusal rows (still exit 1)" \
   we_mutant_refusal_red "$M" "$XS_SEED" X_API_SECRET backtick write-env
@@ -2207,15 +2233,28 @@ fi
 # it (or without docker) the row reports "not exercised" and still counts as one row.
 IMG_STATE="not exercised (needs docker and COMMUNITY_ARGV_DOCKER=1: the pinned image has no openssl, so the run installs ca-certificates, as the runner Dockerfile does)"
 IMG_OUT="" IMG_RC=0
+# The same opt-in switch also runs the oracle under a REAL bash 3.2 (the macOS /bin/bash build, #9757 lead h):
+# the host bash is whatever the developer has, and the pinned image above is 5.2, so without this nothing
+# in the repo executes hmac-sha1-b64.sh under 3.2. The official `bash:3.2` image is alpine with bash 3.2.57;
+# it ships no openssl, so the run adds the one package. Measured 2026-10-12: bash 3.2.57(1)-release,
+# cases=67 bad=0. A moving tag, deliberately not digest-pinned: it is an opt-in cross-check of the
+# language level, not the image the repo builds (that one is pinned above).
+BASH32_IMAGE="bash:3.2"
+B32_OUT="" B32_RC=0
 if [[ -n "${COMMUNITY_ARGV_DOCKER:-}" ]] && command -v docker >/dev/null 2>&1; then
   IMG_OUT="$(docker run --rm -v "$HERE/..:/skill:ro" "$PINNED_IMAGE" bash -c 'apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq --no-install-recommends ca-certificates >/dev/null 2>&1 && command -v openssl >/dev/null && bash /skill/test/community-argv.test.sh --oracle-only' 2>&1)"; IMG_RC=$?
   IMG_STATE="exercised"
+  B32_OUT="$(docker run --rm -v "$HERE/..:/skill:ro" "$BASH32_IMAGE" bash -c 'apk add --no-cache openssl >/dev/null 2>&1 && command -v openssl >/dev/null && bash /skill/test/community-argv.test.sh --oracle-only' 2>&1)"; B32_RC=$?
 fi
 if [[ "$IMG_STATE" == exercised ]]; then
   check "oracle inside the pinned node:22-slim image (the hosted bash 5.2): all 67 comparisons equal the reference" \
     bash -c '[[ "$1" -eq 0 && "$2" == *" cases=67 "* && "$2" == *" bad=0"* ]]' _ "$IMG_RC" "$IMG_OUT"
+  check "oracle under a real bash 3.2 (the bash:3.2 image): the run reports bash=3.2.x and all 67 comparisons equal the reference" \
+    bash -c '[[ "$1" -eq 0 && "$2" == *" bash=3.2."* && "$2" == *" cases=67 "* && "$2" == *" bad=0"* ]]' _ "$B32_RC" "$B32_OUT"
 else
-  echo "  note - oracle inside the pinned image: $IMG_STATE"
+  echo "  note - oracle inside the pinned image and under bash 3.2: $IMG_STATE"
+  check "oracle under a real bash 3.2: not exercised on this host, and the image is still the 3.2 line (a different tag would silently run another bash)" \
+    bash -c '[[ "$1" =~ ^bash:3\.2$ ]]' _ "$BASH32_IMAGE"
   check "oracle inside the pinned image: not exercised on this host, and the image reference is still digest-pinned (a floating tag would silently change the bash the oracle runs under)" \
     bash -c '[[ "$1" =~ ^node:22-slim@sha256:[0-9a-f]{64}$ ]]' _ "$PINNED_IMAGE"
 fi
@@ -2256,8 +2295,8 @@ echo "community-argv.test.sh: $PASS passed, $FAIL failed"
 # Exact count, in the pre-existing guard-invisible form: a lower-case `-lt` floor would make this
 # `plugins/soleur/skills/*/test/` suite floor-bearing, which grows the DEFERRED ledger in
 # scripts/guard-vacuity-floor.test.sh (47 -> 48) until the file is promoted there.
-if [[ "$((PASS + FAIL))" -ne 1227 ]]; then
-  printf 'ANTI-VACUITY FLOOR: ran %s assertions, expected exactly 1227\n' "$((PASS + FAIL))" >&2
+if [[ "$((PASS + FAIL))" -ne 1436 ]]; then
+  printf 'ANTI-VACUITY FLOOR: ran %s assertions, expected exactly 1436\n' "$((PASS + FAIL))" >&2
   exit 1
 fi
 [[ "$FAIL" -eq 0 ]]

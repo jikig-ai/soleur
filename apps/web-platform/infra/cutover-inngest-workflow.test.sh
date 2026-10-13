@@ -994,6 +994,9 @@ GEN_FN="$(mktemp)"; SCRATCH+=("$GEN_FN")
 for _gfn in _hcloud_created_epoch _inngest_server_created_epoch _current_instance_row_counts _generation_scoped_count; do
   awk -v f="$_gfn" '$0 == f "() {" {p=1} p {print} p && /^\}$/ {p=0}' "$BODY_SH" >> "$GEN_FN"
 done
+# _inngest_server_created_epoch judges its token with the one-line shape guard before it masks or sends it (#9757 lead (a)): the harness needs that
+# definition too, taken verbatim from the script like the functions above (an absent guard would read every token as unusable).
+grep -m1 '^_bearer_ok() {' "$BODY_SH" >> "$GEN_FN"
 FLV_OUT=""; FLV_RC=0
 # lv_emit <set> <NAME>... — print FIX_<NAME>_<set> for each NAME. An unknown set or name is logged
 # to the stub-miss ledger (asserted empty below) instead of printing nothing: an empty mode would
@@ -1812,10 +1815,49 @@ PROBE_ARMS_N=$(wc -l < "$PROBE_ARMS_FILE" | tr -d '[:space:]')
 # annotation argument is a real invocation (review of #8079 found `echo "… $(gh run list …)"`
 # scored 0 by the first regex). Single-sourced here; the mutation rows' code view uses the same.
 _ECHO_EMPTY_RE='s/(echo|printf)[[:space:]]+"([^"\\$`]|\\.|\$[^(`])*"/\1 "…"/g'
-_probe_arms_code_of() {  # $1 = arms file → stdout: comment-stripped, echo-args emptied, continuations joined
+_probe_arms_code_raw_of() {  # $1 = arms file → stdout: comment-stripped, echo-args emptied, continuations joined (NO allowance)
   grep -v '^[[:space:]]*#' "$1" \
     | sed -E "$_ECHO_EMPTY_RE" \
     | sed -e ':a' -e '/\\$/N; s/\\\n//; ta'
+}
+# GUARD 1 (#9757): the ONLY allowance in the tool census. The two probe arms sign their read-only GET with the CANONICAL env-prefix
+# HMAC line (the key rides python3's environment, never openssl's argv; `|| SIG=""` is the fail-safe tail every copy carries). The census
+# counts a `python3 ` token as a tool, so exactly TWO lines are permitted to leave the view: lines BYTE-EQUAL (after trimming leading
+# whitespace, nothing else) to the canonical assignment with and without that tail. Fixed-string whole-line comparison in awk, the forms
+# passed through the ENVIRONMENT (no -v backslash processing), NEVER an ERE built from the canonical text (its python body carries `.`, `(`,
+# `|` and `[`, and one unescaped `|` makes an anchor bind to one branch). An appended `; python3 ...` or `; curl ...`, a second tool on the
+# line or any byte of drift leaves the line in the view and the count moves. The filter also hides the line from the other predicates on the
+# same view (body flags, doppler, loops): harmless for fixed text. Both regex sites below and the M2.9 mutation helpers read through
+# `_probe_arms_code_of`, so the allowance is stated once and the two sites cannot drift apart. Independent anchors for the canonical TEXT
+# itself: the S2-A parity rows of tests/scripts/test-argv-bearer-sweep.sh (19 byte-identical copies, zero -hmac operands) and
+# bc_hmac_sha256_hex in scripts/lib/bearer-curl.sh.
+_PROBE_CANON_A="$(cat <<'PROBE_CANON_EOF'
+SIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')
+PROBE_CANON_EOF
+)"
+_PROBE_CANON_B="$_PROBE_CANON_A || SIG=\"\""
+_probe_allow_canon() {  # stdin → stdout: drop the lines that equal one of the two permitted forms after leading-whitespace trim
+  _PA="$_PROBE_CANON_A" _PB="$_PROBE_CANON_B" awk '{ l = $0; sub(/^[[:space:]]+/, "", l); if (l == ENVIRON["_PA"] || l == ENVIRON["_PB"]) next; print }'
+}
+_probe_arms_code_of() {  # $1 = arms file → stdout: the raw view minus the two permitted canonical HMAC lines (the census view)
+  _probe_arms_code_raw_of "$1" | _probe_allow_canon
+}
+# _probe_canon_per_arm_ok <script>: the arms-seen floor and the exactly-one-canonical-line-per-arm contract, read from the RAW view (the
+# allowance must not hide a second copy). Exactly TWO arm headers are seen (registry-probe, doublefire-probe) and each holds exactly one
+# permitted form. One function so the live row and every mutation row below judge with the same code.
+_probe_canon_per_arm_ok() {
+  local f seen n arm
+  f="$(mktemp)"; SCRATCH+=("$f")
+  awk '/^[[:space:]]+registry-probe\)$/,/^[[:space:]]+rearm\)$/' "$1" > "$f"
+  seen="$(grep -cE '^[[:space:]]+(registry-probe|doublefire-probe)\)$' "$f" || true)"
+  [[ "$seen" == 2 ]] || return 1
+  for arm in registry-probe doublefire-probe; do
+    n="$(awk -v arm="$arm" '$0 ~ "^[[:space:]]+" arm "\\)$" {f = 1; next} f && /^[[:space:]]+(registry-probe|doublefire-probe|rearm)\)$/ {f = 0} f' "$f" \
+      | grep -v '^[[:space:]]*#' | sed -E "$_ECHO_EMPTY_RE" | sed -e ':a' -e '/\\$/N; s/\\\n//; ta' \
+      | _PA="$_PROBE_CANON_A" _PB="$_PROBE_CANON_B" awk '{ l = $0; sub(/^[[:space:]]+/, "", l); if (l == ENVIRON["_PA"] || l == ENVIRON["_PB"]) n++ } END { print n + 0 }')" || n=0
+    [[ "$n" == 1 ]] || return 1
+  done
+  return 0
 }
 PROBE_ARMS_CODE="$(mktemp)"; SCRATCH+=("$PROBE_ARMS_CODE")
 _probe_arms_code_of "$PROBE_ARMS_FILE" > "$PROBE_ARMS_CODE"
@@ -1829,6 +1871,8 @@ assert "#6617 choice includes doublefire-probe" "grep -qE '^[[:space:]]+-[[:spac
 assert "#6617 registry-probe case arm exists" "grep -qE '^[[:space:]]+registry-probe\)' '$WF'"
 assert "#6617 doublefire-probe case arm exists" "grep -qE '^[[:space:]]+doublefire-probe\)' '$WF'"
 assert "#6617 probe-arm extraction is non-vacuous" "[[ '$PROBE_ARMS_N' -gt 20 ]]"
+assert "#9757 Guard 1: exactly two probe arms are seen and each holds exactly ONE canonical HMAC line (read from the raw view, before the allowance)" "_probe_canon_per_arm_ok '$BODY_SH'"
+assert "#9757 Guard 1: the allowance removes exactly the two canonical lines from the census view (raw view minus census view = 2 lines)" "[[ \$(( \$(_probe_arms_code_raw_of '$PROBE_ARMS_FILE' | wc -l) - \$(wc -l < '$PROBE_ARMS_CODE') )) == 2 ]]"
 
 # --- Read-only contract, expressed as EFFECTS not curl SPELLING (B-AC5) ---
 #
@@ -3057,7 +3101,7 @@ _strip() { sed -E 's/^[[:space:]]+//' | grep -v '^#' | grep -v '^$'; }
 _HEAD_200="$(awk '/^    else$/{f=1;next} f&&/^    fi$/{exit} f' "$PROBE_REGION_FILE" | _strip || true)"
 _PIN_200="$(cat <<'PIN200'
 if ! echo "$BODY" | jq -e 'type=="object" and has("registry_empty")' >/dev/null 2>&1; then
-echo "::error::registry-probe did not return a {registry_empty,function_count,function_ids} object"; echo "$BODY"; exit 1
+echo "::error::registry-probe did not return a {registry_empty,function_count,function_ids} object (first line of the response, bounded and scrubbed: $(_body_head "$BODY"))"; exit 1
 fi
 REG_EMPTY=$(echo "$BODY" | jq -r '.registry_empty')
 REG_COUNT=$(echo "$BODY" | jq -r '.function_count // 0')
@@ -3366,6 +3410,51 @@ check_rpg_tool_count() {
 }
 mutate_file "rpg gh invocation appended to an echo line (M2.9)" "$BODY_SH" "${_RPG_RANGE}"'s|^\(          echo "::error::registry-probe REFUSED (silent):.*\)"; exit 1 ;;$|\1"; gh workflow run cutover-inngest.yml -f op=inventory; exit 1 ;;|' check_rpg_tool_count
 mutate_file "rpg \$(gh …) nested inside an annotation string" "$BODY_SH" "${_RPG_RANGE}"'s|^\(          echo "::error::registry-probe REFUSED (silent):.*\)Do NOT SSH the host\."; exit 1 ;;$|\1Do NOT SSH the host. $(gh run list --limit 1)"; exit 1 ;;|' check_rpg_tool_count
+# ── GUARD 1 (#9757): the canonical-HMAC allowance, mutation-proved. The allowance (`_probe_allow_canon`, a final filter of the ONE code view
+# `_probe_arms_code_of`) deletes exactly two byte-exact line forms; everything else about the census is unchanged. Row ids follow the plan's matrix.
+# Row 1 — a second tool APPENDED to the canonical line's physical line (a python3 stage; a curl stage): the line no longer equals a
+# permitted form, so it stays in the view and the census count moves.
+_DF_RANGE='/^  doublefire-probe)$/,/^  rearm)$/'
+mutate_file "G1 row 1: python3 appended to the registry-probe canonical line" "$BODY_SH" "${_RPG_RANGE}"'s@^\(    SIG=\$(printf .*HMAC_KEY=.*\)$@\1; python3 -c "import os"@' check_rpg_tool_count
+mutate_file "G1 row 1: curl appended after the || SIG=\"\" tail of the doublefire-probe canonical line" "$BODY_SH" "${_DF_RANGE}"'s@^\(    SIG=\$(printf .*HMAC_KEY=.*|| SIG=""\)$@\1 ; curl -fsS http://example.invalid@' check_rpg_tool_count
+# Row 2 — a second, NON-canonical python3 line after the compliant canonical line (it REPLACES the arm's next line: mutate_file refuses a pure append).
+mutate_file "G1 row 2: a second non-canonical python3 line after the registry-probe canonical line" "$BODY_SH" "${_RPG_RANGE}"'s@^    rm -f /tmp/registry-probe-body$@    X=$(printf "" | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c "import os")@' check_rpg_tool_count
+# Row 3 — a second CANONICAL line in the same arm. The allowance would hide it from the census (both are deleted), so the exactly-one-per-arm
+# row is the ONLY thing that sees it (and the S2-A parity count 19 -> 20 is the second line of defence).
+mutate_file "G1 row 3: a second canonical line in the doublefire-probe arm" "$BODY_SH" "${_DF_RANGE}s@^    # Forward the window lower bound + optional functionIDs scope as URL query params\$@    ${_PROBE_CANON_B}@" _probe_canon_per_arm_ok
+# Row 4 — the arm anchor renamed: the code view is empty and the arms-seen floor (2) reds.
+mutate_file "G1 row 4: the registry-probe arm anchor renamed (arms seen floor 2)" "$BODY_SH" 's@^  registry-probe)$@  registry-probeX)@' _probe_canon_per_arm_ok
+# Row 5 — one arm reverted to the argv `openssl dgst -hmac` form: zero canonical lines in that arm. (The battery's S2-A parity row and its
+# zero -hmac operand row catch the same mutant from the other side; see tests/scripts/test-argv-bearer-sweep.sh.)
+mutate_file "G1 row 5: the doublefire-probe arm reverted to openssl dgst -hmac" "$BODY_SH" "${_DF_RANGE}"'s@^\(    SIG=\$(printf [^|]*| \)HMAC_KEY=.*$@\1openssl dgst -sha256 -hmac "$WEBHOOK_SECRET")@' _probe_canon_per_arm_ok
+# Row 3b — the allowance filter DELETED in a scratch copy of THIS function: the two canonical lines then read as two extra tools (census 4, not 2).
+_g1_fn="$(awk '/^_probe_arms_code_of\(\) \{/,/^\}$/' "${BASH_SOURCE[0]}")"
+_g1_fn_mut="$(sed -e 's/^_probe_arms_code_of()/_probe_arms_code_unfiltered_of()/' -e 's/ | _probe_allow_canon//' <<< "$_g1_fn")"
+_g1_fn_ctl="$(sed -e 's/^_probe_arms_code_of()/_probe_arms_code_control_of()/' <<< "$_g1_fn")"
+if [[ "$_g1_fn_mut" == "$_g1_fn" || "$_g1_fn_mut" == *_probe_allow_canon* || "$_g1_fn" != *_probe_allow_canon* ]]; then
+  assert "#9757 Guard 1 row 3b: the scratch copy of _probe_arms_code_of did not lose its allowance stage (the row would prove nothing)" "false"
+else
+  eval "$_g1_fn_mut"; eval "$_g1_fn_ctl"
+  _G1_TOOL_RE='(^|[^a-z-])(curl|wget|nc|ncat|socat|python3?|perl|gh|aws|doppler|hcloud)[[:space:]]'
+  _g1_ctl_n="$(grep -cE "$_G1_TOOL_RE" < <(_probe_arms_code_control_of "$PROBE_ARMS_FILE") || true)"
+  _g1_mut_n="$(grep -cE "$_G1_TOOL_RE" < <(_probe_arms_code_unfiltered_of "$PROBE_ARMS_FILE") || true)"
+  assert "#9757 Guard 1 row 3b: with the allowance stage deleted the canonical lines read as extra tools (census $_g1_mut_n, not 2) while the unmutated copy reads 2 (control $_g1_ctl_n)" "[[ '$_g1_ctl_n' == 2 && '$_g1_mut_n' != 2 && '$_g1_mut_n' == 4 ]]"
+fi
+# Row 6 — MUST-PASS: the contract permits any leading whitespace and the form without the `|| SIG=""` tail. A guard that only reds is
+# not a guard; the two permitted forms are each exercised once, on a different arm and indentation (4 spaces -> 8 spaces; 4 spaces -> a tab, tail dropped).
+check_g1_permitted() { check_rpg_tool_count "$1" && _probe_canon_per_arm_ok "$1"; }
+mutate_file_green() { # <label> <src> <sed expr> <check fn>: exactly one line changed, and the property STILL HOLDS on the mutated copy
+  local label="$1" src="$2" expr="$3" check_fn="$4" mutated changed
+  mutated="$(mktemp)"; SCRATCH+=("$mutated")
+  if ! sed "$expr" "$src" > "$mutated" 2>/dev/null; then assert "#9757 Guard 1 row 6 [$label]: the sed expression failed to parse" "false"; return; fi
+  if cmp -s "$mutated" "$src"; then assert "#9757 Guard 1 row 6 [$label]: the mutation matched NOTHING (the line drifted)" "false"; return; fi
+  changed="$(diff "$src" "$mutated" | grep -c '^<' || true)"
+  if [[ "$changed" != "1" ]]; then assert "#9757 Guard 1 row 6 [$label]: the mutation changed $changed lines, expected exactly 1" "false"; return; fi
+  if "$check_fn" "$mutated"; then assert "#9757 Guard 1 row 6 [$label]: a permitted variant of the canonical line stays GREEN" "true"
+  else assert "#9757 Guard 1 row 6 [$label]: a permitted variant of the canonical line went RED (the allowance is too narrow)" "false"; fi
+}
+mutate_file_green "registry-probe canonical line re-indented, tail kept" "$BODY_SH" "${_RPG_RANGE}"'s@^\(    \)\(SIG=\$(printf .*HMAC_KEY=.*|| SIG=""\)$@\1\1\2@' check_g1_permitted
+mutate_file_green "doublefire-probe canonical line tab-indented, tail dropped" "$BODY_SH" "${_DF_RANGE}"'s@^    \(SIG=\$(printf .*HMAC_KEY=.*\) || SIG=""$@\t\1@' check_g1_permitted
 # Row Q — S3: the HEARTBEAT leg's step operand reverted to 2.0. Property: the heartbeat
 # read-failure render reports 'registry-probe', never '2.0'.
 check_rpg_hb_step_operand() {
@@ -4663,7 +4752,10 @@ _DISPATCHED=$((PASS + FAIL))
 #   refusal, the empty-token refusal, the unreadable-prd refusal, the Doppler write failure and the rolled-back / no-terminal confirm
 #   arms (9 rows); the 'rolled-back' re-arm row now asserts the refusal (same count). The driver also runs under the real
 #   script's `set -euo pipefail` with INNGEST_HOST / LUKS_LIVENESS_SINCE defined.
-_EXACT_FLOOR=1090
+# 1090 -> 1101 (+11) at #9757 (argv-bearer sweep, held-back HMAC arms): Guard 1 of the canonical-HMAC allowance, measured on the tree: the
+#   exactly-one-canonical-line-per-arm row and the allowance-removes-exactly-two row (+2), the mutation matrix (rows 1 x2, 2, 3, 4, 5, +6) and the
+#   delete-the-filter row 3b (+1), and the two must-pass row 6 variants (+2).
+_EXACT_FLOOR=1101
 if [[ "$_DISPATCHED" -lt "$_EXACT_FLOOR" ]]; then
   printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is %d — an assertion was removed or skipped.\n' "$_DISPATCHED" "$_EXACT_FLOOR" >&2
   echo ""

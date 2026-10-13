@@ -51,7 +51,7 @@ The verified surface matrix (docs.devin.ai, 2026-09-14):
 | Plugin hooks (`hooks.json` at plugin root) | Absent — local sessions only; fail-open |
 | Repo-level hooks (`.devin/hooks.v1.json`, `.devin/config.json` hooks, `.claude/settings.json`) | Undocumented — the pivotal open question |
 
-Consequences for Soleur: 66 agent definitions and all hook-enforced gates (rules-corpus injection, credential guard, `guardrails.sh`, `<promise>DONE</promise>` stop-gate) vanish in cloud; skills + rules + MCP survive. The designed answer is "Soleur Cloud Mode" — honest degradation with detection, disclosure, and ack-gates — spec'd at `knowledge-base/project/specs/feat-devin-cloud-session-parity/spec.md` (issue #8159, PR #8155).
+Consequences for Soleur: 66 agent definitions and all hook-enforced gates (rules-corpus injection, credential guard, `guardrails.sh`, `<promise>DONE</promise>` stop-gate) vanish in cloud; skills + rules + MCP survive. The designed answer is "Soleur Cloud Mode" — honest degradation with detection, disclosure, and ack-gates — spec'd at `knowledge-base/project/specs/archive/20261013-051752-feat-devin-cloud-session-parity/spec.md` (issue #8159, PR #8155).
 
 ## Why This Works
 
@@ -82,6 +82,6 @@ Devin's plugin doc states cross-surface support up front ("Plugins work across D
 
 ## Related Issues
 
-- Spec: `knowledge-base/project/specs/feat-devin-cloud-session-parity/spec.md` (issue #8159)
+- Spec: `knowledge-base/project/specs/archive/20261013-051752-feat-devin-cloud-session-parity/spec.md` (issue #8159)
 - Deferred: #8160 (upstream subagent/hook support), #8161 (personal-data cloud sessions pending Cognition DPA), #8162 (full-parity posture)
-- Prior art: `knowledge-base/project/plans/2026-09-11-feat-devin-plugin-parity-plan.md` (CLI parity — shipped; cloud out of its scope)
+- Prior art: `knowledge-base/project/plans/archive/20261013-051752-2026-09-11-feat-devin-plugin-parity-plan.md` (CLI parity — shipped; cloud out of its scope)

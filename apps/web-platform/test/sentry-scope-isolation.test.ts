@@ -15,7 +15,7 @@ import { createHmac } from "node:crypto";
 // SDK's save-and-restore semantics.
 //
 // References:
-// - Plan: knowledge-base/project/plans/2026-05-13-feat-sentry-symmetric-userid-pseudonymisation-plan.md
+// - Plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-13-feat-sentry-symmetric-userid-pseudonymisation-plan.md
 // - ADR-029 (rename-at-boundary userId pseudonymisation)
 // - Sentry SDK v10 `withIsolationScope` docs (context7 `/getsentry/sentry-javascript`)
 

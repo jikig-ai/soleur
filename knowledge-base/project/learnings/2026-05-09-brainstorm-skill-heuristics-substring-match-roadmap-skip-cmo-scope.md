@@ -74,8 +74,8 @@ A pattern worth naming: **when an existing pointer pattern (used for one narrow 
 
 - Issue #3493 — token-efficiency catalog, parent of this brainstorm
 - Draft PR #3496 — change-class loader brainstorm + spec
-- Brainstorm document: `knowledge-base/project/brainstorms/2026-05-09-agents-md-change-class-loader-brainstorm.md`
-- Spec: `knowledge-base/project/specs/feat-agents-md-change-class-loader/spec.md`
+- Brainstorm document: `knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-09-agents-md-change-class-loader-brainstorm.md`
+- Spec: `knowledge-base/project/specs/archive/20261013-014038-feat-agents-md-change-class-loader/spec.md`
 - Related learning: `2026-04-23-agents-md-governance-measure-before-asserting.md` (measurement gate cited in spec TR5)
 - Related learning: `2026-04-21-agents-md-rule-retirement-deprecation-pattern.md` (pointer-pattern precedent generalized)
 - Related learning: `2026-02-25-lean-agents-md-gotchas-only.md` (ETH Zurich data on per-turn overhead)

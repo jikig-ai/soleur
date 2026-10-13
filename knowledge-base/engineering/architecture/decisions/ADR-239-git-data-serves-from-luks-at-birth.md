@@ -317,9 +317,9 @@ landed:
 
 ## References
 
-- Plan: `knowledge-base/project/plans/2026-09-22-feat-git-data-cutover-real-modes-plan.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-051752-2026-09-22-feat-git-data-cutover-real-modes-plan.md`
 - Decision challenges (DC-1, DC-2):
-  `knowledge-base/project/specs/feat-one-shot-8211-git-data-cutover-real-modes/decision-challenges.md`
+  `knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-8211-git-data-cutover-real-modes/decision-challenges.md`
 - Runbooks: `knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md`,
   `git-data-rung2-rehearsal.md`
 - Art. 30 register: `knowledge-base/legal/article-30-register.md` PA-36 (g)(1)-(2), PA-2 (g)(17)

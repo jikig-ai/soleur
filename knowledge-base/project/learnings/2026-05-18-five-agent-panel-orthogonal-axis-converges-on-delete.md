@@ -13,7 +13,7 @@ related_issues:
   - 3244
   - 3940
   - 3985
-related_plan: knowledge-base/project/plans/2026-05-18-feat-pr-1-migrate-scheduled-daily-triage-to-inngest-cron-tr9-plan.md
+related_plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-18-feat-pr-1-migrate-scheduled-daily-triage-to-inngest-cron-tr9-plan.md
 related_pr: '#3985 (draft)'
 ---
 
@@ -111,8 +111,8 @@ DHH, Kieran, Code-Simplicity, and Spec-Flow did NOT catch this — it requires (
 
 ## Related
 
-- **PR-1 plan (v2):** `knowledge-base/project/plans/2026-05-18-feat-pr-1-migrate-scheduled-daily-triage-to-inngest-cron-tr9-plan.md`
-- **Brainstorm:** `knowledge-base/project/brainstorms/2026-05-18-tr9-agent-loop-crons-inngest-migration-brainstorm.md`
+- **PR-1 plan (v2):** `knowledge-base/project/plans/archive/20261013-014038-2026-05-18-feat-pr-1-migrate-scheduled-daily-triage-to-inngest-cron-tr9-plan.md`
+- **Brainstorm:** `knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-18-tr9-agent-loop-crons-inngest-migration-brainstorm.md`
 - **ADR-033** (refined post-review at I3 + I4): `knowledge-base/engineering/architecture/decisions/ADR-033-inngest-cron-functions-invoke-claude-code-via-child-process-spawn.md`
 - **Issue:** #3948 (umbrella)
 - **Draft PR:** #3985

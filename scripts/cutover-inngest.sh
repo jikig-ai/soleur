@@ -62,6 +62,15 @@ BASE="https://deploy.soleur.ai/hooks"
 # existing `|| ...` / `if ...` failure path handles it exactly like a transport failure. `printf`
 # is the shell builtin (not an exec), so the token is on no argv at any point.
 _bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+# _mask_ok <value>: the shape check that precedes an `::add-mask::` line for a value that is NOT a bearer token (a DSN, a heartbeat URL, a channel key
+# legitimately carry `:`, `@`, `?`, `&`, so _bearer_ok would refuse them and leave them UNMASKED). `::add-mask::` is itself a workflow command and the
+# runner parses commands per LINE, so the only hazard is a value holding a control character (a newline or CR ends the directive and starts a forged
+# one). Empty and control-character values return 1: nothing is printed for them, so an empty read never prints a bare directive.
+_mask_ok() { local LC_ALL=C; case "${1:-}" in ''|*[[:cntrl:]]*) return 1 ;; esac; }
+# _body_head <body>: the FIRST line of a response body, every character outside printable ASCII replaced by `?`, cut at 160 characters. For the public run
+# log, where a raw body is an unbounded egress path (a host script's CombinedOutput can carry anything) and a body line starting with `::` could forge a
+# workflow command: callers embed the result MID-LINE in their own `::error::` text, never on a line of its own.
+_body_head() { local LC_ALL=C _h="${1%%$'\n'*}"; _h="${_h//[^ -~]/?}"; printf '%s' "${_h:0:160}"; }
 _bearer_curl() {
   local _tokvar="${1:-}"
   shift
@@ -544,6 +553,15 @@ _inngest_server_created_epoch() {
   fi
   if [[ -z "$tok" ]]; then
     echo "::warning::G3 generation anchor: doppler returned nothing for HCLOUD_TOKEN_READONLY or HCLOUD_TOKEN in prd_terraform (unset, a Doppler auth failure or a network failure — not distinguished), so the current $INNGEST_HOST server could not be identified. Nothing was written; re-dispatch once the token read works." >&2
+    printf '%s' '__UNREADABLE__'
+    return 0
+  fi
+  # Shape-check FIRST, mask second, then the feed (the backup arm's order): the token is judged ONCE, before it is masked, printed on the `-H @-` channel
+  # or sent. A refusal takes the empty-token arm's verdict class (one ::warning:: naming the variable, `__UNREADABLE__`, rc 0) and prints the marker
+  # the way the other arms do; nothing about the value reaches any stream.
+  if ! _bearer_ok "$tok"; then
+    echo "SOLEUR_CREDENTIAL_REFUSED script=cutover-inngest reason=token_shape" >&2
+    echo "::warning::G3 generation anchor: the $tokvar read from prd_terraform has an unusable shape (a quote, backslash, control character, space or other character no Hetzner token carries), so it was neither masked nor sent. Nothing was written; re-mint the token in Doppler and re-dispatch." >&2
     printf '%s' '__UNREADABLE__'
     return 0
   fi
@@ -1341,7 +1359,7 @@ case "$OP" in
       echo "::error::enumerate returned HTTP $CODE: ${CAUSE:-<empty body>}"; exit 1
     fi
     if ! echo "$BODY" | jq -e 'type == "array"' >/dev/null 2>&1; then
-      echo "::error::enumerate did not return a JSON array"; echo "$BODY"; exit 1
+      echo "::error::enumerate did not return a JSON array (first line of the response, bounded and scrubbed: $(_body_head "$BODY"))"; exit 1
     fi
     # P2-sec-a: surface counts + reminder_ids ONLY, never comment bodies.
     COUNT=$(echo "$BODY" | jq 'length')
@@ -1368,8 +1386,7 @@ case "$OP" in
     # Region start is BEFORE `SIG=` deliberately: the render driver sources this region
     # under `set -u`, and a region starting after `BODY=$(cat …)` would die on an unbound
     # `CODE`. Everything the gate branch reads is bound inside the region.
-    # D1 (argv-bearer S2 plan): this site keeps the openssl form until the infra suite's tool census is edited; that edit is tracked with S4/S5 (#9757).
-    SIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+    SIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
     rm -f /tmp/registry-probe-body
     CODE=$(_sig_curl SIG -s --max-time 30 -o /tmp/registry-probe-body -w '%{http_code}' \
       -X GET \
@@ -1508,7 +1525,7 @@ case "$OP" in
       esac
     else
       if ! echo "$BODY" | jq -e 'type=="object" and has("registry_empty")' >/dev/null 2>&1; then
-        echo "::error::registry-probe did not return a {registry_empty,function_count,function_ids} object"; echo "$BODY"; exit 1
+        echo "::error::registry-probe did not return a {registry_empty,function_count,function_ids} object (first line of the response, bounded and scrubbed: $(_body_head "$BODY"))"; exit 1
       fi
       REG_EMPTY=$(echo "$BODY" | jq -r '.registry_empty')
       REG_COUNT=$(echo "$BODY" | jq -r '.function_count // 0')
@@ -1542,8 +1559,7 @@ case "$OP" in
       echo "::error::doublefire-probe CRON_PERIOD invalid ('$CRON_PERIOD') — set CUTOVER_CRON_PERIOD_SECONDS to a positive integer ≤ the SHORTEST registered cron period (hour-aligned)."; exit 1
     fi
     echo "::warning::doublefire-probe CRON_PERIOD=${CRON_PERIOD}s is applied to ALL functions (P2-c). The verdict is SOUND ONLY IF every registered cron period ≥ ${CRON_PERIOD}s AND hour-aligned. If any cron fires faster, re-dispatch with CUTOVER_CRON_PERIOD_SECONDS set to the SHORTEST registered period before trusting the result."
-    # D1 (argv-bearer S2 plan): this site keeps the openssl form until the infra suite's tool census is edited; that edit is tracked with S4/S5 (#9757).
-    SIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+    SIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
     # Forward the window lower bound + optional functionIDs scope as URL query params
     # (HMAC is over the empty GET body, so params don't affect the sig).
     # #6178 — PER-ARM fallback. This is the PRE-cutover dark-host detector: it runs
@@ -1572,7 +1588,7 @@ case "$OP" in
       echo "::error::doublefire-probe returned HTTP $CODE: ${CAUSE:-<empty body>}"; exit 1
     fi
     if ! echo "$BODY" | jq -e '.runs | type == "array"' >/dev/null 2>&1; then
-      echo "::error::doublefire-probe did not return a {runs:[...]} object"; echo "$BODY"; exit 1
+      echo "::error::doublefire-probe did not return a {runs:[...]} object (first line of the response, bounded and scrubbed: $(_body_head "$BODY"))"; exit 1
     fi
     # #6178 — PAGE-OVERLAP DEDUPE. The probe cursor-paginates runs(orderBy: STARTED_AT ASC) and a
     # run can come back on two pages (cause unconfirmed). Measured 2026-09-15: every reported
@@ -1724,9 +1740,9 @@ case "$OP" in
       -H "Content-Type: application/json" \
       -d "$PAYLOAD" \
       "$BASE/inngest-rearm-reminders" || echo "000")
-    echo "re-arm response:"; cat /tmp/rearm-body 2>/dev/null || true; echo
+    echo "re-arm response (first line, bounded and scrubbed): $(_body_head "$(cat /tmp/rearm-body 2>/dev/null || true)")"
     if [[ "$CODE" != "200" ]]; then
-      echo "::error::re-arm returned HTTP $CODE (a non-200 includes the host script's loud abort — e.g. a 503 that is cutover-quiesce (INNGEST_CUTOVER_QUIESCE still set) OR backend-refused (the app's Inngest backend is not serving); the response above names which). The capture is retained."; exit 1
+      echo "::error::re-arm returned HTTP $CODE (a non-200 includes the host script's loud abort — e.g. a 503 that is cutover-quiesce (INNGEST_CUTOVER_QUIESCE still set) OR backend-refused (the app's Inngest backend is not serving); the first response line above names which). The capture is retained."; exit 1
     fi
     # ---- Partial-rearm reconciliation (P1-11): the host script's CombinedOutput
     # carries the canonical `inngest-rearm-reminders: re-armed=N failed=F held_back=H total=K`.
@@ -1759,12 +1775,12 @@ case "$OP" in
     if [[ "$RFAILED" -ne 0 ]]; then
       # Missing reminder_ids the host script named on each failure (ids only, no bodies).
       MISSING=$(printf '%s' "$RBODY" | sed -n 's/.*re-arm failed for reminder_id=\([^ )]*\).*/\1/p' | paste -sd, -)
-      echo "::error::re-arm PARTIAL (P1-11): Σcaptured(total)=$RTOTAL = rearmed=$REARMED + held_back=$RHELD + failed=$RFAILED — $RFAILED reminder(s) NOT re-armed. Missing reminder_id(s): [${MISSING:-<unparsed; see body above>}]. RETRY: the on-host capture is retained on any failure, so re-dispatch op=rearm to finish the residual set (the route recomputes dedup ids — no double-fire). Do NOT proceed to op=verify until failed=0."
+      echo "::error::re-arm PARTIAL (P1-11): Σcaptured(total)=$RTOTAL = rearmed=$REARMED + held_back=$RHELD + failed=$RFAILED — $RFAILED reminder(s) NOT re-armed. Missing reminder_id(s): [${MISSING:-<unparsed; read the inngest-rearm-reminders lines in Better Stack>}]. RETRY: the on-host capture is retained on any failure, so re-dispatch op=rearm to finish the residual set (the route recomputes dedup ids — no double-fire). Do NOT proceed to op=verify until failed=0."
       exit 1
     fi
     if [[ "$RHELD" -ne 0 ]]; then
       HELD_IDS=$(printf '%s\n' "$RBODY" | sed -n 's/^.*held back [0-9]\{1,\} reminder(s) due before the quiesce: \([^ ]*\).*$/\1/p' | tail -n1)
-      echo "::notice::re-arm held back $RHELD reminder(s) due before the quiesce (already fired on the web scheduler, not re-armed): [${HELD_IDS:-<unparsed; see body above>}]"
+      echo "::notice::re-arm held back $RHELD reminder(s) due before the quiesce (already fired on the web scheduler, not re-armed): [${HELD_IDS:-<unparsed; read the inngest-rearm-reminders lines in Better Stack>}]"
     fi
     echo "::notice::re-arm completed: rearmed=$REARMED held_back=$RHELD == Σcaptured(total)=$RTOTAL (failed=0; no partial-rearm delta, P1-11)"
     ;;
@@ -2465,11 +2481,13 @@ case "$OP" in
 
     # G2 — read the two SOURCE values read-through from prd_terraform (existing DOPPLER_TOKEN),
     # masking EACH on its OWN capture line (security F7 — never batch; a mid-sequence set -e
-    # exit must not leave an unmasked captured value in scope before its mask lands).
+    # exit must not leave an unmasked captured value in scope before its mask lands). Every mask
+    # line is shape-checked FIRST (_mask_ok: no control character, so a value cannot end the directive
+    # and start a forged one) and keeps `-n`, so an empty read never prints a bare `::add-mask::`.
     PG=$(doppler secrets get INNGEST_POSTGRES_URI --plain 2>/dev/null || true)
-    printf '::add-mask::%s\n' "$PG"
+    [[ -n "$PG" ]] && _mask_ok "$PG" && printf '::add-mask::%s\n' "$PG"
     HB=$(doppler secrets get INNGEST_HEARTBEAT_URL --plain 2>/dev/null || true)
-    printf '::add-mask::%s\n' "$HB"
+    [[ -n "$HB" ]] && _mask_ok "$HB" && printf '::add-mask::%s\n' "$HB"
     if [[ -z "$PG" || -z "$HB" ]]; then
       echo "::error::op=arm: a source value (INNGEST_POSTGRES_URI / INNGEST_HEARTBEAT_URL) is empty or unreadable from prd_terraform via DOPPLER_TOKEN. Refusing to arm (no value echoed)."; exit 1
     fi
@@ -2485,7 +2503,7 @@ case "$OP" in
     # after a rollback. Equality is now informational. All comparisons value-silent (only
     # booleans/tokens reach the log).
     PG_DARK=$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets get INNGEST_POSTGRES_URI -p soleur-inngest -c prd --plain 2>/dev/null || true)
-    printf '::add-mask::%s\n' "$PG_DARK"
+    [[ -n "$PG_DARK" ]] && _mask_ok "$PG_DARK" && printf '::add-mask::%s\n' "$PG_DARK"
     # FAIL-CLOSED on an empty/failed dark read (observability F1 / user-impact / DI): the
     # config is proven readable by G1, so an empty PG_DARK is anomalous — most plausibly a
     # token-scope or wrong-project fault. Refusing costs one dispatch; proceeding on an
@@ -2556,9 +2574,9 @@ case "$OP" in
     PARITY_FAIL=0
     for CK in INNGEST_EVENT_KEY INNGEST_SIGNING_KEY; do
       APP_CK=$(doppler secrets get "$CK" --plain 2>/dev/null || true)
-      printf '::add-mask::%s\n' "$APP_CK"
+      [[ -n "$APP_CK" ]] && _mask_ok "$APP_CK" && printf '::add-mask::%s\n' "$APP_CK"
       HOST_CK=$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets get "$CK" -p soleur-inngest -c prd --plain 2>/dev/null || true)
-      printf '::add-mask::%s\n' "$HOST_CK"
+      [[ -n "$HOST_CK" ]] && _mask_ok "$HOST_CK" && printf '::add-mask::%s\n' "$HOST_CK"
       if [[ -z "$APP_CK" || -z "$HOST_CK" ]]; then
         echo "::error::op=arm: G3.5 channel-key parity FAIL-CLOSED — $CK unreadable (app$([[ -n "$APP_CK" ]] && echo '=set' || echo '=empty') host$([[ -n "$HOST_CK" ]] && echo '=set' || echo '=empty')). Cannot prove app<->host channel parity; refusing to arm (no value echoed)."; PARITY_FAIL=1; continue
       fi
@@ -3118,10 +3136,17 @@ case "$OP" in
             # Credential headers ride curl's stdin config channel (--config -), never argv —
             # lint-shell-trace-credential-refusal's per-file baseline is shrink-only and this
             # call is a NEW site; /proc/<pid>/cmdline must not carry the secrets.
-            DISC_CODE=$(curl --disable --noproxy '*' -s --max-time 120 -o /tmp/verify-zero-run -w '%{http_code}' \
-              -X GET \
-              --config - \
-              "$DISC_URL" < <(printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' "$SIG" "$CF_ACCESS_CLIENT_ID" "$CF_ACCESS_CLIENT_SECRET") || echo "000")
+            # All three values are judged BEFORE the config is built: a quote or newline would end its `header = "..."` line and open a second config
+            # directive. A refusal is the advisory failure this probe already has (HTTP 000: one warning below, the verdict above STANDS), plus the marker.
+            if _bearer_ok "$SIG" && _bearer_ok "$CF_ACCESS_CLIENT_ID" && _bearer_ok "$CF_ACCESS_CLIENT_SECRET"; then
+              DISC_CODE=$(curl --disable --noproxy '*' -s --max-time 120 -o /tmp/verify-zero-run -w '%{http_code}' \
+                -X GET \
+                --config - \
+                "$DISC_URL" < <(printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' "$SIG" "$CF_ACCESS_CLIENT_ID" "$CF_ACCESS_CLIENT_SECRET") || echo "000")
+            else
+              echo "SOLEUR_CREDENTIAL_REFUSED script=cutover-inngest reason=token_shape" >&2
+              DISC_CODE="000"
+            fi
             DISC_BODY=$(cat /tmp/verify-zero-run 2>/dev/null || echo "")
             if [[ "$DISC_CODE" == "200" ]] && echo "$DISC_BODY" | jq -e '.runs | type == "array"' >/dev/null 2>&1; then
               DISC_N=$(echo "$DISC_BODY" | jq '.runs | length')

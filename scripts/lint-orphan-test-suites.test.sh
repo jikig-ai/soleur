@@ -784,7 +784,8 @@ assert_has "M20 — the unexplained entry is refused" "has no written reason"
 # always-match edges, so a bad DECLARED glob is a silent widening of every diff's selection.
 # =============================================================================================
 # Replace the N-th glob: member of declared array $2 in file $1 with glob:$4...$3 — anchored at
-# the array name, so the five `glob:knowledge-base/**.sh` siblings don't collide the anchor.
+# the array name, so the six `glob:knowledge-base/**.sh` siblings don't collide the anchor.
+# (Five carriers plus scripts/lib/repo-write-boundary.test.sh's array, added under #9969.)
 mutate_glob_entry() {
   python3 - "$1" "$2" "$3" "${4:-1}" <<'PY' || harness_die "glob-entry mutator did not land"
 import sys

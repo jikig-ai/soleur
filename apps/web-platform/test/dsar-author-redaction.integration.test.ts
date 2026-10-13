@@ -1,7 +1,7 @@
 /**
  * DSAR author-only message redaction (Art. 15(4)) — integration test.
  *
- * Plan: knowledge-base/project/plans/2026-05-22-feat-dsar-author-redaction-art-15-4-plan.md
+ * Plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-22-feat-dsar-author-redaction-art-15-4-plan.md
  * Issue: #4319, draft PR: #4351.
  *
  * Fixture: shared workspace W with members Alice + Bob + Charlie. Alice

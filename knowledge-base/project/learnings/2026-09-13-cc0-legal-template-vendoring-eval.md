@@ -2,7 +2,7 @@
 title: "Evaluating a CC0 legal-template library for vendoring: precedent-first convergence and the footnote-as-ad-unit"
 date: 2026-09-13
 category: workflow-patterns
-related-brainstorm: knowledge-base/project/brainstorms/2026-09-13-legal-templates-cc0-eval-brainstorm.md
+related-brainstorm: knowledge-base/project/brainstorms/archive/20261013-051752-2026-09-13-legal-templates-cc0-eval-brainstorm.md
 related-issues: ["#8122", "#3786"]
 ---
 

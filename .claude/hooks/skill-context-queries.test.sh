@@ -16,6 +16,9 @@
 #
 # Auto-discovered by scripts/test-all.sh (.claude/hooks/*.test.sh glob).
 set -uo pipefail
+SUITE_TMP=$(mktemp -d)
+[[ "$SUITE_TMP" == /* ]] || { echo "FATAL: SUITE_TMP is not absolute: $SUITE_TMP" >&2; exit 2; }
+trap 'rm -rf "$SUITE_TMP"' EXIT
 
 # Redirect incident telemetry into a per-suite sandbox BEFORE any case runs.
 # Applied to EVERY hook suite, not just ones whose hook is a sibling .sh:
@@ -37,7 +40,7 @@ fail() { printf 'FAIL: %s\n' "$1" >&2; fails=$((fails + 1)); }
 # ---------------------------------------------------------------------------
 # Build a throwaway git fixture repo with committed skills + kb artifacts.
 # ---------------------------------------------------------------------------
-FIX="$(mktemp -d)"
+FIX="$(mktemp -d -p "$SUITE_TMP")"
 : "${FIX:?fixture dir is empty; git -C <empty> would retarget this write}"
 mkdir -p "$FIX/plugins/soleur/skills" "$FIX/knowledge-base/marketing" "$FIX/knowledge-base/deep"
 

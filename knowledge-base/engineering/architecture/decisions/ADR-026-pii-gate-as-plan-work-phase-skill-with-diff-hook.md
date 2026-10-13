@@ -136,4 +136,4 @@ Reconciled the NFR Impacts table against the live `knowledge-base/engineering/ar
 - **Auditability/observability** added to the NFR Impacts narrative (between table and §Principle Alignment) as a non-NFR Consequences-class concern.
 - **AP-009 alignment rationale** extended to absorb the never-delete framing originally drafted as NFR-030.
 
-Plan: `knowledge-base/project/plans/2026-05-10-feat-gdpr-gate-skill-plan.md` §Research Reconciliation gaps #2/#3.
+Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-10-feat-gdpr-gate-skill-plan.md` §Research Reconciliation gaps #2/#3.

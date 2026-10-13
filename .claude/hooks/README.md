@@ -159,7 +159,7 @@ One command, no SSH, no dashboard. It proves both halves: the operator is told
 **later** (the aggregate counter).
 
 ```bash
-R=$(mktemp -d)
+R=$(mktemp -d -t soleur-run.$$.XXXXXXXX)  # signed root: reapable if the rm -rf is missed (#10017)
 cp AGENTS.md AGENTS.rules.md "$R/"          # the aggregator resolves rules from this root
 printf 'not-json' | INCIDENTS_REPO_ROOT="$R" bash .claude/hooks/guardrails.sh \
   | jq -r '.hookSpecificOutput.permissionDecision'          # -> "ask"
@@ -559,6 +559,57 @@ vector the `is-inside-work-tree` guard exists to block. The evidence gap on that
 path is accepted in exchange for the write guard; the FALLBACK stamp still
 carries a `loaded: N of M` count.
 The directory is gitignored.
+
+### Bare-root HEAD self-heal
+
+In this repo's layout the root has `core.bare=true` and every feature branch lives in a linked
+worktree. After a PR merges and its branch is deleted, the root's `.git/HEAD` can be left as
+`ref: refs/heads/<deleted-branch>`. git does not call that an error, but `git rev-parse HEAD` fails
+there, the `[session-context] branch:` line reads `HEAD`, and `worktree-manager.sh sync-bare-files`
+(`git read-tree HEAD`) cannot refresh the root's on-disk copies.
+
+`session-rules-loader.sh` repairs it by calling `bare-head-self-heal.sh` as a time-boxed child
+process (5 s, where `timeout` exists; stock macOS has none and runs it untimed) just before it reads the branch, so the branch line already reflects the repaired
+HEAD. The helper header lists the exact conditions. In short: `<dir>/.git` is a real directory whose
+config FILE says `core.bare=true` (read from the file, not from `--is-bare-repository`, which
+ADR-173 records as lying under a masked config), HEAD names a branch that does not EXIST, and
+`refs/heads/main` exists. The write runs with hooks and fsmonitor disabled. It costs no model
+tokens and always exits 0.
+
+- **Marker:** exactly one line, `SOLEUR_BARE_HEAD_HEALED from=<old-ref> to=refs/heads/main`,
+  appended as the LAST line of `additionalContext` (after the tmpfs alarm block, so lines 1-5 keep
+  their positions). A healthy session emits nothing, so absence is the healthy state. It is
+  informational: find it by grepping session transcripts for `SOLEUR_BARE_HEAD_HEALED`. No monitor
+  or telemetry allowlist consumes it.
+- **Never touched:** a HEAD that resolves (including a non-main branch), a ref that exists but
+  names a missing object (that is corruption, left for a human), a non-branch ref, a non-bare repo,
+  a linked worktree, a `.git` file that redirects elsewhere, a true-bare repo (a mirror or server
+  repo is not this layout), a detached HEAD, a repo with no `refs/heads/main`. A failed write
+  (`HEAD.lock` held, read-only filesystem) prints no marker, because a marker claims a repair that
+  happened.
+- **Unborn branches:** HEAD naming a branch that does not exist yet (for example `master`, about to
+  be pushed) is repointed to `main` when `main` exists. In this layout the root already holds
+  commits, and the marker discloses it.
+- **Scope of the trigger:** the heal runs when the session's cwd IS the bare root. A session
+  started inside a linked worktree never reaches the root's HEAD, so nothing is repaired until a
+  session starts at the root. The same loader is bound for Devin (`devin-dispositions.tsv`), so it
+  heals there too. Codex binds the loader from `.codex/config.toml` through
+  `git rev-parse --show-toplevel`, which fails at a bare root, so it never reaches the heal there;
+  Grok and Cursor sessions do not run this loader and get no heal.
+- **Fail-open:** the loader takes only the helper's first line and only if it starts with the
+  marker prefix, so a missing, failing, noisy or hung helper cannot inject anything or fail the
+  hook.
+- **Bootstrap order:** the bare root's copies of these files are a synced mirror, and the sync
+  itself needs a resolving HEAD. The first sync after this landed carries the loader and helper
+  to the root; if the root HEAD is already dangling at that moment, heal it once by hand
+  (`git symbolic-ref HEAD refs/heads/main`). From then on drift repairs itself.
+- **Side effect worth knowing:** with HEAD resolving again, `sync-bare-files` runs its forced
+  mirror and prune, which a dangling HEAD had been blocking. That is the point, and it also means
+  local drift in the root's legacy working tree is overwritten on the next sync.
+- **Follow-up trigger:** if the marker shows up repeatedly, something at the bare root keeps
+  moving `HEAD` (a root-level `git checkout`, `git branch -m`, or `gh pr merge --delete-branch`).
+  Only then is a guardrail blocking `git symbolic-ref HEAD` / `git branch -m` at the bare root
+  worth filing. It is deliberately not built now.
 
 ### Sharp Edges (SessionStart hook design)
 

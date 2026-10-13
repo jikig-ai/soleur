@@ -24,6 +24,7 @@ REH="${DIR}/git-data-runcmd-rehearsal.test.sh"
 CUT="${DIR}/git-data-cutover-access.test.sh"
 PUS="${DIR}/cloud-init-inngest-provision-unit.test.sh"
 SMP="${DIR}/sandbox-masked-proc-docker.test.sh"
+HTP="${DIR}/htpasswd-stdin.test.sh"
 
 passes=0; fails=0
 FAILURES=()
@@ -288,7 +289,7 @@ MNT_LIT='-v "$GD_APT_STATE:/work/apt"'
 # One TAB-separated spec per consumer: file, declared-unmounted sites, state variable the suite arms, mounted sites.
 # A new consumer is one line here PLUS its conversion; the totals below are derived from this list.
 TAB=$'\t'
-SPECS=("${OWN}${TAB}0${TAB}TMP${TAB}1" "${REH}${TAB}1${TAB}TMP${TAB}5" "${CUT}${TAB}0${TAB}T${TAB}1" "${PUS}${TAB}1${TAB}W${TAB}1" "${SMP}${TAB}2${TAB}WORK${TAB}1")
+SPECS=("${OWN}${TAB}0${TAB}TMP${TAB}1" "${REH}${TAB}1${TAB}TMP${TAB}5" "${CUT}${TAB}0${TAB}T${TAB}1" "${PUS}${TAB}1${TAB}W${TAB}1" "${SMP}${TAB}2${TAB}WORK${TAB}1" "${HTP}${TAB}4${TAB}TMP${TAB}1")
 # Suites that quote another script's docker/apt text as DATA (assertion strings), not as commands. Format: file TAB reason.
 EXEMPT=("cloud-init-inngest-bootstrap.test.sh${TAB}asserts on the rendered cloud-init text; its docker/apt strings are grep targets"
         "cron-egress-firewall.test.sh${TAB}asserts on the egress firewall script text; its docker exec/apt lines are grep targets")

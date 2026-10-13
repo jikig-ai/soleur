@@ -11,7 +11,7 @@ tags:
   - pr-3244
 related:
   - "#3244 (PR-B agent-runtime-platform)"
-  - knowledge-base/project/plans/2026-05-05-feat-soleur-server-side-agentic-runtime-plan.md
+  - knowledge-base/project/plans/archive/20261013-014038-2026-05-05-feat-soleur-server-side-agentic-runtime-plan.md
   - "Migration 033: migrate_api_key_to_v2"
   - "Migration 017: increment_conversation_cost"
   - learning 2026-04-22-scope-by-new-column-audit-every-query-not-just-the-helper

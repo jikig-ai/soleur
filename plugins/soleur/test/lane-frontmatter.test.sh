@@ -18,7 +18,7 @@ BRAINSTORM_SKILL="$REPO_ROOT/plugins/soleur/skills/brainstorm/SKILL.md"
 DOMAIN_CONFIG="$REPO_ROOT/plugins/soleur/skills/brainstorm/references/brainstorm-domain-config.md"
 PLAN_SKILL="$REPO_ROOT/plugins/soleur/skills/plan/SKILL.md"
 WORK_SKILL="$REPO_ROOT/plugins/soleur/skills/work/SKILL.md"
-AUDIT_SPEC="$REPO_ROOT/knowledge-base/project/specs/feat-claude-skills-audit/spec.md"
+AUDIT_SPEC="$REPO_ROOT/knowledge-base/project/specs/archive/20261013-003106-feat-claude-skills-audit/spec.md"
 
 echo "=== lane-frontmatter tests ==="
 echo ""

@@ -24,7 +24,7 @@
 #   `df --output=used` is not in the `SOLEUR_ZOT_DISK` marker and adding it is a cloud-init
 #   change, i.e. a host replace, which is blocked. So: A DELTA UNDER ~3 GB IS NOT
 #   DISTINGUISHABLE FROM ZERO.
-#   # MEASURED-BY: knowledge-base/project/specs/feat-one-shot-7278-registry-restart-lever/session-state.md §"Phase 0 — preconditions MEASURED" (task 0.4, A2)
+#   # MEASURED-BY: knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7278-registry-restart-lever/session-state.md §"Phase 0 — preconditions MEASURED" (task 0.4, A2)
 #
 #   `enumeration_complete=false` licenses NO conclusion at all. A prototype sweep run from a
 #   workstation on 2026-08-06 returned unique_blobs=266 / 15,867,729,779 bytes with 12 of 45

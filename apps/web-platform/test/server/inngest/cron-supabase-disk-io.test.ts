@@ -6,7 +6,7 @@
 // dedup-row ceiling must trip; an all-green baseline must not. The GitHub
 // issue handling and the heartbeat call are not re-tested here.
 //
-// Plan: knowledge-base/project/plans/2026-06-02-fix-supabase-disk-io-recurrence-and-sentry-monitor-plan.md Phase 3.
+// Plan: knowledge-base/project/plans/archive/20261013-032858-2026-06-02-fix-supabase-disk-io-recurrence-and-sentry-monitor-plan.md Phase 3.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

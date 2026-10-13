@@ -1133,7 +1133,7 @@ resource "logtail_exploration_alert" "ghcr_hostsfile_deny_lost" {
   }
 }
 
-# ── #9534: egress gateway — deny-class spike + probe silence ────────────────────
+# ── #9534: egress gateway — deny-class spike + probe silence + probe failure ────
 #
 # WHAT THEY DETECT. The gateway's sole security surface is its deny decisions
 # (Squid TCP_DENIED on the shared CIDR ACL + kernel `egress-gw-deny:` drops are
@@ -1143,14 +1143,24 @@ resource "logtail_exploration_alert" "ghcr_hostsfile_deny_lost" {
 # synthetic probe's one row per 5 min, so a sustained rate above that pages.
 #
 # The heartbeat alert is the absence detector: cron-egress-resolve emits one
-# `egress_gw_probe` line every 5 min under SYSLOG_IDENTIFIER=egress-gw-probe.
-# Silence means the resolver timer died, the gateway container is gone (the
-# probe skips with gw_absent — a row, not silence), or Vector stopped — none of
-# which may read as green. The deny SPIKE is deliberately NOT on the probe row
-# itself: a probe that only emits failures still pages via Sentry
-# (egress_gw_probe_fail op), and the deny spike counts SQUID decisions, which a
-# dead gateway cannot produce either — the two rules cover distinct failure
-# arms (no gateway at all vs a live gateway mis-ACL'd).
+# `egress_gw_probe` line every 5 min per host under SYSLOG_IDENTIFIER=egress-gw-probe.
+# Silence means the resolver timer died, the Vector pipeline stopped shipping
+# (measured 2026-10-12: a stale birth-frozen vector.toml dropped web-2's rows at
+# the Source-4 allowlist while the probe ran — journald had them, Better Stack
+# never saw them), or the host journal is dead — none of which may read as
+# green. The count is DISTINCT host_name over the whole window (ADR-218's
+# amendment): a source-multiplexed aggregate where one host's rows keep the
+# sum above threshold while the other host is dark is exactly the failure this
+# alert exists for, so it pages when the emitting-host count drops below the
+# fleet roster (length(var.web_hosts)).
+#
+# egress_gw_probe_fail is the verdict detector: result=fail rows (allow leg
+# refused, deny leg bypassed) are security-relevant on first sight, and
+# reason=gw_absent rows mean the probe's gateway check failed — the gateway
+# container missing is an incident, not noise. The deny SPIKE deliberately does
+# not key on the probe row: it counts SQUID decisions, which a dead gateway
+# cannot produce either — the rules cover distinct failure arms (no gateway at
+# all vs a live gateway mis-ACL'd vs a live gateway returning wrong verdicts).
 #
 # WHAT THEY DELIBERATELY DO NOT DETECT: allowed-traffic abuse/volume anomalies
 # (documented gap — CMO review; tracked in the spec's open questions), and
@@ -1169,12 +1179,31 @@ locals {
     GROUP BY time
   SQL
 
+  # Whole-window scalar (ADR-218's host-mask amendment): one value per window =
+  # how many DISTINCT hosts shipped a probe row in it. count(*) would let one
+  # healthy host's ~3 beats keep a 2-host fleet above a row threshold while the
+  # other host ships nothing. `host_name` is Vector's injected per-host field
+  # (`soleur-web-platform` / `soleur-web-2`).
   egress_gw_probe_silent_sql = <<-SQL
-    SELECT {{time}} AS time, count(*) AS value
+    SELECT toDateTime({{end_time}}) AS time, count(DISTINCT JSONExtractString(raw, 'host_name')) AS value
     FROM {{source}}
-    WHERE time BETWEEN {{start_time}} AND {{end_time}}
+    WHERE dt BETWEEN {{start_time}} AND {{end_time}}
       AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'egress-gw-probe'
-    GROUP BY time
+  SQL
+
+  # Verdict failures. `result=fail` covers allow-leg refused AND deny-bypassed;
+  # `reason=gw_absent` is the skip class where the gateway container is missing
+  # (the probe cannot run at all — same severity, different mechanism). Other
+  # skip reasons (budget, container_absent, no_gw_ip, token_dir_unwritable) are
+  # transient-host conditions the silent alert already owns; paging on them
+  # double-fires the same fault.
+  egress_gw_probe_fail_sql = <<-SQL
+    SELECT toDateTime({{end_time}}) AS time, count(*) AS value
+    FROM {{source}}
+    WHERE dt BETWEEN {{start_time}} AND {{end_time}}
+      AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'egress-gw-probe'
+      AND (position(JSONExtractString(raw, 'message'), 'result=fail') > 0
+        OR position(JSONExtractString(raw, 'message'), 'reason=gw_absent') > 0)
   SQL
 
   egress_gw_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md#egress-gateway-better-stack-alerts"
@@ -1261,11 +1290,13 @@ resource "logtail_exploration_alert" "egress_gw_probe_silent" {
   exploration_id = logtail_exploration.egress_gw_probe_silent.id
   name           = "soleur-egress-gw-probe-silent-prd"
 
-  # < 1 heartbeat row in 15 min (probe emits every 5 min when due). No rows ->
-  # the absence is the alert; treat_as_zero makes "no bucket" read as 0 beats.
+  # Fewer emitting HOSTS than the fleet roster in 15 min (each host's probe
+  # emits every 5 min when due). count(DISTINCT host_name) — a multiplexed row
+  # count would let web-1's beats mask a dead web-2 probe pipeline (the
+  # pre-amendment defect). treat_as_zero makes a fully-dark window read as 0.
   alert_type          = "threshold"
   operator            = "lower_than"
-  value               = 1
+  value               = length(var.web_hosts)
   check_period        = 300
   query_period        = 900
   confirmation_period = 0
@@ -1280,7 +1311,64 @@ resource "logtail_exploration_alert" "egress_gw_probe_silent" {
   sms            = false
   critical_alert = false
 
-  incident_cause = "No egress_gw_probe heartbeat from cron-egress-resolve for 15+ min — the resolver timer, the Vector pipeline, or the host journal is dead. The gateway's allow/deny verification is dark. Runbook: ${local.egress_gw_runbook_url}"
+  incident_cause = "Fewer than the expected ${length(var.web_hosts)} web hosts emitted an egress_gw_probe heartbeat in 15+ min — a resolver timer, Vector pipeline (stale Source-4 allowlist on one host is a measured failure mode), or host journal is dead. The gateway's allow/deny verification is dark on the silent host(s). Runbook: ${local.egress_gw_runbook_url}"
+  metadata = {
+    runbook = local.egress_gw_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}
+
+# A live probe returning WRONG verdicts (allow refused / deny bypassed) or
+# reporting its gateway missing: previously Sentry-only (op egress_gw_probe_fail),
+# which pages nobody. >0 rows in 15 min — a real failure recurs every 5 min while
+# broken; a single deny_bypassed row is already security-critical.
+resource "logtail_exploration" "egress_gw_probe_fail" {
+  name      = "soleur-egress-gw-probe-fail-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    sql_query       = replace(trimspace(local.egress_gw_probe_fail_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "egress_gw_probe_fail" {
+  exploration_id = logtail_exploration.egress_gw_probe_fail.id
+  name           = "soleur-egress-gw-probe-fail-prd"
+
+  alert_type          = "threshold"
+  operator            = "higher_than"
+  value               = 0
+  check_period        = 300
+  query_period        = 900
+  confirmation_period = 0
+  recovery_period     = 900
+  on_missing_data     = "treat_as_zero"
+
+  paused = false
+
+  email          = true
+  push           = false
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "The egress gateway CONNECT probe returned result=fail (allow leg refused, or deny leg BYPASSED — Squid accepted a denied destination) or reported reason=gw_absent (gateway container missing). Check the incident's host_name; a deny_bypassed row means the private-CIDR policy is not in force. Runbook: ${local.egress_gw_runbook_url}"
   metadata = {
     runbook = local.egress_gw_runbook_url
   }

@@ -794,6 +794,20 @@ STUB
   cat > "$d/bin/curl" <<'STUB'
 #!/usr/bin/env bash
 printf 'curl %s\n' "$*" >> "$CALLS"
+# The heartbeat URL is a path secret, so the SUT sends it on curl's stdin config (`--config -`), never
+# on argv (#9757). Read that config on EVERY such call and record its `url = "` line as `hbcfg <line>`,
+# once per attempt; a call whose config carries no such line FAILS (rc 97), so a stub that ignored
+# stdin, or a SUT that dropped the config, cannot pass as a healthy push.
+case " $* " in
+  *" --config - "*)
+    hb_line=""
+    while IFS= read -r l || [ -n "$l" ]; do
+      case "$l" in 'url = "'*) hb_line="$l"; break ;; esac
+    done
+    if [ -z "$hb_line" ]; then printf 'hbcfg-MISSING\n' >> "$CALLS"; exit 97; fi
+    printf 'hbcfg %s\n' "$hb_line" >> "$CALLS"
+    exit "${MON_HB_PUSH_RC:-0}" ;;
+esac
 outfile=""; wfmt=""; prev=""
 for a in "$@"; do
   [ "$prev" = "-o" ] && outfile="$a"
@@ -833,6 +847,12 @@ STUB
   cat > "$d/bin/logger" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$MARKER_LOG"
+STUB
+  # RECORDING no-op sleep: the only sleep in the SUT is the 2s gap between heartbeat attempts. Recording
+  # it makes "a refusal sleeps zero times" assertable and keeps the exhausted-push row from taking 4s.
+  cat > "$d/bin/sleep" <<'STUB'
+#!/usr/bin/env bash
+printf 'sleep %s\n' "$*" >> "$CALLS"
 STUB
   cat > "$d/bin/df" <<'STUB'
 #!/usr/bin/env bash

@@ -99,9 +99,9 @@ flake in CI and silently pass in prod when the model drifts.
 
 ## Related
 
-- Plan: `knowledge-base/project/plans/2026-04-18-test-cross-workspace-isolation-mu3-plan.md`
-- Spec: `knowledge-base/project/specs/feat-verify-workspace-isolation/spec.md`
-- Brainstorm: `knowledge-base/project/brainstorms/2026-04-18-verify-workspace-isolation-brainstorm.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-003106-2026-04-18-test-cross-workspace-isolation-mu3-plan.md`
+- Spec: `knowledge-base/project/specs/archive/20261013-003106-feat-verify-workspace-isolation/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/archive/20261013-003106-2026-04-18-verify-workspace-isolation-brainstorm.md`
 - Learning (four-tier defense model): `knowledge-base/project/learnings/2026-03-20-canuse-tool-sandbox-defense-in-depth.md`
 - PR: #2610
 - Issue: #1450

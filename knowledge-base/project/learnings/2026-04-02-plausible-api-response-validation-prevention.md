@@ -40,7 +40,7 @@ HTTP 200 does not guarantee JSON. Reverse proxies, WAF filters, and API gateways
 
 - `knowledge-base/project/learnings/integration-issues/2026-03-13-plausible-analytics-operationalization-pattern.md`
 - `knowledge-base/project/learnings/2026-03-13-plausible-goals-api-provisioning-hardening.md`
-- `knowledge-base/project/plans/2026-03-13-feat-weekly-analytics-improvements-plan.md`
+- `knowledge-base/project/plans/archive/20261012-213508-2026-03-13-feat-weekly-analytics-improvements-plan.md`
 - GitHub issue #1360 — Migrate Plausible Stats API from v1 to v2 (deferred)
 
 ## Tags

@@ -194,9 +194,9 @@ safeguard.
   #8162 (full-parity posture), #8172 (operator-gated probe — two arms landed),
   #8205 (the wider `.claude/settings.json` `"Bash"` matcher class — per-hook
   review, not a sweep).
-- Plan: `knowledge-base/project/plans/2026-09-14-feat-devin-cloud-session-parity-plan.md`;
-  spec: `knowledge-base/project/specs/feat-devin-cloud-session-parity/spec.md`;
-  probe record: `knowledge-base/project/specs/feat-devin-cloud-session-parity/cloud-probe.md`.
+- Plan: `knowledge-base/project/plans/archive/20261013-051752-2026-09-14-feat-devin-cloud-session-parity-plan.md`;
+  spec: `knowledge-base/project/specs/archive/20261013-051752-feat-devin-cloud-session-parity/spec.md`;
+  probe record: `knowledge-base/project/specs/archive/20261013-051752-feat-devin-cloud-session-parity/cloud-probe.md`.
 - ADR-089 (repo-root gitignored runtime state), ADR-093 (never write the plugin
   root), ADR-178/179 (plugin-shipped bash primitives, bare-root anchors),
   ADR-215 (per-file Claude hook parity is not implied — Codex precedent).

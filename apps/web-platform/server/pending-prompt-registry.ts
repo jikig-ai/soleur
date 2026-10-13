@@ -1,6 +1,6 @@
 // Pending-prompt registry for the `/soleur:go` runner.
 //
-// Plan: knowledge-base/project/plans/2026-04-23-feat-cc-route-via-soleur-go-plan.md
+// Plan: knowledge-base/project/plans/archive/20261013-003106-2026-04-23-feat-cc-route-via-soleur-go-plan.md
 // Stage 2 §"Pending-prompt registry" + HARD REQUIREMENT #4.
 //
 // When the soleur-go-runner forwards an interactive tool_use from the SDK

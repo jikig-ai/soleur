@@ -47,7 +47,7 @@ For issue-body PR shape: the recommendation is conditional on the surface decisi
 - category: brainstorm-mechanics
 - module: plugins/soleur/skills/brainstorm
 - related-issues: #3819, #3809
-- related-plans: knowledge-base/project/plans/2026-05-15-feat-goal-primitive-operator-escape-hatch-plan.md
+- related-plans: knowledge-base/project/plans/archive/20261013-014038-2026-05-15-feat-goal-primitive-operator-escape-hatch-plan.md
 
 ## Session Errors
 

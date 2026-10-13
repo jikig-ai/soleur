@@ -19,7 +19,7 @@ triggers:
 **Status:** active
 **Owner:** engineering / security, escalating to CLO
 **Promoted from:** the `GATE G-ESCALATE` blockquote in
-`knowledge-base/project/plans/2026-06-29-security-inngest-prd-enable-rls-lockdown-plan.md`
+`knowledge-base/project/plans/archive/20261013-032858-2026-06-29-security-inngest-prd-enable-rls-lockdown-plan.md`
 (§Escalation status at plan time). That plan ran the procedure once and the post-mortem called
 it reusable; it lived nowhere durable until now.
 

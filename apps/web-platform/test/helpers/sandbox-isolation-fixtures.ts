@@ -1,7 +1,7 @@
 /**
  * Fixture helpers for cross-workspace isolation tests (MU3, feat-verify-workspace-isolation).
  *
- * Pure node — no SDK imports. See `knowledge-base/project/specs/feat-verify-workspace-isolation/`
+ * Pure node — no SDK imports. See `knowledge-base/project/specs/archive/20261013-003106-feat-verify-workspace-isolation/`
  * (spec.md, sdk-probe-notes.md) for the Path C hybrid design and the captured bwrap argv
  * the `spawnBwrap` minimum-viable template derives from.
  */

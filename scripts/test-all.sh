@@ -1050,7 +1050,7 @@ fi
 #
 # See `.github/workflows/ci.yml` test-{webplat,bun,scripts,scripts-heavy} jobs + the
 # synthetic `test` aggregator. See plan
-# `knowledge-base/project/plans/2026-05-12-feat-ci-test-job-speedup-plan.md`.
+# `knowledge-base/project/plans/archive/20261013-014038-2026-05-12-feat-ci-test-job-speedup-plan.md`.
 TEST_GROUP="${TEST_GROUP:-${1:-all}}"
 case "$TEST_GROUP" in
   all|webplat|bun|scripts|scripts-heavy|infra|affected) ;;
