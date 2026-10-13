@@ -509,36 +509,36 @@ None — queried 89 open `code-review`-labeled issues (two-stage
 
 ## Acceptance Criteria
 
-- [ ] **AC1 — block-mapping accepted.** A skill-override artifact spelling
+- [x] **AC1 — block-mapping accepted.** A skill-override artifact spelling
   `findings_json` as an indented block mapping validates through
   `parse-override.sh` (no `missing fields` in `invalid_schema`); same for
   flow-style and path-string spellings.
-- [ ] **AC2 — rejection preserved.** An artifact with `findings_json` absent
+- [x] **AC2 — rejection preserved.** An artifact with `findings_json` absent
   entirely, declared-but-empty (`findings_json:` + next top-level key), or
   nested under another key still fails with `missing fields: findings_json`.
-- [ ] **AC3 — fixture suite exists and gates.** The new
+- [x] **AC3 — fixture suite exists and gates.** The new
   `test/parse-override.test.sh` carries arms AC1+AC2 plus a missing-`timestamp`
   second member and a `verdict: LOW-RISK` downstream arm; it is discovered by
   the `plugins/soleur/skills/*/test/*.test.sh` glob (proven by
   `bash scripts/test-all.sh --print-suite-globs` or equivalent enumeration).
-- [ ] **AC4 — #6752 closed with evidence.** Re-verification on this tree
+- [x] **AC4 — #6752 closed with evidence.** Re-verification on this tree
   reproduces the census's three already-clean dispositions; the PR body
   carries `Closes #6752` and the evidence trail;
   `git diff --quiet origin/main...HEAD -- scripts/learning-retrieval-bench.sh scripts/weekly-analytics.sh plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh .claude/hooks/lib/session-state.sh apps/web-platform/infra/workspaces-cutover.sh`
   is clean (merge-base diff — the moving-tip form reddens on sibling merges).
-- [ ] **AC5 — suite scratch is owned.** Directly running
+- [x] **AC5 — suite scratch is owned.** Directly running
   `bash apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh` under a
   private TMPDIR leaves zero un-owned top-level entries on a clean exit, and
   a SIGKILL mid-run leaves only an attributable `soleur-run.<pid>.*` root —
   pinned by the new residue leaf (delta + counting arms green).
-- [ ] **AC6 — smoke scratch is owned.** `harness-discovery-smoke.ts`
+- [x] **AC6 — smoke scratch is owned.** `harness-discovery-smoke.ts`
   `scratchDir` allocations land under an owned session root when the script
   runs directly (verify by inspection + `TMPDIR=<base> timeout -s KILL …`
   leaving only a marker-bearing root — executed at work time).
-- [ ] **AC7 — no ownership regression.** `tests/scripts/test-scratch-residue.sh`
+- [x] **AC7 — no ownership regression.** `tests/scripts/test-scratch-residue.sh`
   stays green including the new leaf; `python3 scripts/lint-trap-tempfile-ownership.py --census`
   unchanged (the adopted file was already trap-covered, not a class-b member).
-- [ ] **AC8 — bookkeeping landed.** Deferred-tail tracking issue filed and
+- [x] **AC8 — bookkeeping landed.** Deferred-tail tracking issue filed and
   linked from #7004; `deferred-scope-out` label removed from #7004; PR body
   carries `Closes #6752`, `Closes #10167`, `Refs #7004`, `Refs #8786` — and
   does NOT carry `Closes #7004`.
