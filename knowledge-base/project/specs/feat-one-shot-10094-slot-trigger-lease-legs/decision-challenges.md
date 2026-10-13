@@ -1,5 +1,12 @@
 # Decision Challenges — feat-one-shot-10094-slot-trigger-lease-legs
 
+Planning ran on a harness with no Agent/Task tool, so `pending - assumed`
+placeholders were written per the technical-ruling-delegation contract and then
+ruled by the parent pipeline: the technical row carries the batched
+`soleur:engineering:cto` consult's verdict verbatim (2026-10-13), and the two
+`operator (scope)` rows name the actions the operator authorised. All rows are
+ruled — none pending. `soleur:ship` renders this table into the PR body.
+
 ## Decision Classes
 
 | Item | Class | Ruling |

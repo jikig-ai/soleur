@@ -35,7 +35,9 @@ prescriptions; no new scheduled job — Inngest check n/a).
 (#10001 landed); all five post-#10001 runs (38152254226, 38163387518,
 38164703648, 38233564364, 38248356757) show both legs `success`; cited issue
 states re-verified — #10090 MERGED, #10096 OPEN, #10017 CLOSED, #7004 OPEN,
-#9855 CLOSED; `gh issue close --comment` flag confirmed via `--help`; mig 115
+#9855 CLOSED (pyramid-audit remediation — e2e marker backfill, demotions,
+dormant integration coverage; the arc this closeout belongs to); `gh issue
+close --comment` flag confirmed via `--help`; mig 115
 files exist on `origin/main`; no AGENTS rule-ids cited; no PAT-shaped tokens.
 
 ### Key Corrections Applied
@@ -211,7 +213,11 @@ a gate).
      'psql "${DATABASE_URL_POOLER:-$DATABASE_URL}" --no-psqlrc -tAq -c "select proname, position('"'"'240 seconds'"'"' in prosrc) > 0 as has_240s from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = '"'"'public'"'"' and proname in ('"'"'acquire_conversation_slot'"'"','"'"'acquire_worktree_lease'"'"')"'
    ```
 
-   Expected: two rows, both `has_240s = t`.
+   Expected: two rows, both `has_240s = t`. (The snippet runs under `-c dev`
+   while the nightly legs authenticate via `-c dev_scheduled` — verified at work
+   time that both Doppler configs resolve to the same database: identical
+   user `postgres.mlwiodleouzwniehynfz`, host
+   `aws-0-eu-west-1.pooler.supabase.com:6543`, db `postgres`.)
 3. **Honest-exit gate:** if any `schedule`-event run post-#10001 shows either leg
    red, do NOT close #10094 — post the run link + failing step on the issue and
    stop (the plan's premise is then stale; re-diagnosis needed).
