@@ -137,6 +137,8 @@ DENY=(
 # API calls (site count 0) — so if one of these ever grows a real call, the allowlist stops
 # covering it and this guard reds. The allowlist buys "this file is not a caller", never
 # "this file is exempt".
+# Entries are literal audit metadata; command/variable examples must not expand.
+# shellcheck disable=SC2016
 ALLOWLIST=(
   'scripts/codex-qualification/role_profiles.py|2026-10-13|pure controller profile admission: SUPABASE_ACCESS_TOKEN is forbidden environment metadata only; no socket, HTTP client or Management API call'
   'scripts/codex-qualification/api_policy.py|2026-10-12|pure Docker request admission: SUPABASE_ACCESS_TOKEN occurs only in the environment denylist; opens no socket and makes no Management API call'
