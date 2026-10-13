@@ -13,7 +13,7 @@ import path from "node:path";
 // dedicated dev project, hr-dev-prd-distinct-supabase-projects) — never the
 // shared dev pre-merge.
 //
-// Plan: knowledge-base/project/plans/2026-07-08-feat-beta-crm-ui-read-only-board-plan.md
+// Plan: knowledge-base/project/plans/archive/20261013-041741-2026-07-08-feat-beta-crm-ui-read-only-board-plan.md
 
 const MIGRATION = path.resolve(
   __dirname,

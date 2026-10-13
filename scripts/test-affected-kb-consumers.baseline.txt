@@ -186,7 +186,7 @@ scripts/lint-skill-body-budget	knowledge-base/engineering/operations/runbooks
 scripts/measure-plan-sharp-edges-turns	knowledge-base/project/plans
 scripts/pre-push-ratchet-lane	knowledge-base
 scripts/pre-push-ratchet-lane	knowledge-base/legal
-scripts/rules-loader-stamp-probe	knowledge-base/project/plans/2026-07-28-chore-collapse-agents-change-class-sidecars-plan.md
+scripts/rules-loader-stamp-probe	knowledge-base/project/plans/archive/20261013-041741-2026-07-28-chore-collapse-agents-change-class-sidecars-plan.md
 scripts/secret-scan-smoke-gate	knowledge-base
 scripts/secret-scan-smoke-gate	knowledge-base/engineering/operations
 scripts/skill-security-scan-step-body	knowledge-base/engineering/security/skill-overrides

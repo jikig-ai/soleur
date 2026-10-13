@@ -465,7 +465,7 @@ plaintext volume gives a rehearsed rollback that a snapshot never would.
 **Sequencing.** The doc corrections are **coupled** to live verification per the operator's decision
 (2026-07-17): all four — the three permanently-false clauses *and* the LUKS present-tense flip — land
 in a single PR **after** the cutover canary passes, never before. See
-`knowledge-base/project/specs/feat-one-shot-6588-luks-workspaces-volume/decision-challenges.md`.
+`knowledge-base/project/specs/archive/20261013-041741-feat-one-shot-6588-luks-workspaces-volume/decision-challenges.md`.
 
 ## Addendum (2026-07-18): the header-escrow implementation (#6649)
 

@@ -16,7 +16,7 @@ import path from "node:path";
 //       DATABASE_URL_POOLER on a DEDICATED dev Supabase project
 //       (hr-dev-prd-distinct-supabase-projects; NEVER the shared dev pre-merge).
 //
-// Plan: knowledge-base/project/plans/2026-07-07-feat-beta-conversation-capture-plan.md
+// Plan: knowledge-base/project/plans/archive/20261013-041741-2026-07-07-feat-beta-conversation-capture-plan.md
 // ADR:  knowledge-base/engineering/architecture/decisions/ADR-102-beta-crm-capture-store-per-tenant-owner-private-agent-native.md
 
 const MIGRATION = path.resolve(__dirname, "../../supabase/migrations/126_beta_crm.sql");
