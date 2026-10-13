@@ -17,6 +17,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB="$SCRIPT_DIR/trusted-verdict.sh"
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
+# canonical fixture-dir guard (the one ci-push-dedupe-soak-9512.test.sh carries): the rows added by the review call it before a write
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; a write under it would retarget %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 PASS=0; FAIL=0
 pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
@@ -85,9 +97,9 @@ LIB_UNDER=""
 REAL_JQ="$(command -v jq)" || { echo "jq is required" >&2; exit 2; }
 # a bash-level error in the lib under test (a mutant that CRASHES reddens every row, which proves nothing about the guard it removed)
 CRASH_RE='syntax error|command not found|unbound variable|bad substitution|unexpected EOF'
-note_crash() { if grep -qE "$CRASH_RE" "$SB/err.log" 2>/dev/null; then : > "$SB/crashed"; fi; }
+note_crash() { assert_fixture_dir "$SB"; if grep -qE "$CRASH_RE" "$SB/err.log" 2>/dev/null; then : > "$SB/crashed"; fi; }
 stub_env() { # <issue> <comments-json-file> <perms-file>   (resets the request and refusal logs)
-  : > "$SB/req.log"; : > "$SB/refused.log"
+  assert_fixture_dir "$SB"; : > "$SB/req.log"; : > "$SB/refused.log"
   STUB_ENV=(PATH="${STUB_BIN:-$SB/bin}:$PATH" STUB_COMMENTS="$2" STUB_PERMS="$3" STUB_EXPECT_ISSUE="$1" STUB_EXPECT_REPO="${REPO_EXP:-jikig-ai/soleur}"
             STUB_LOG="$SB/req.log" STUB_REFUSED="$SB/refused.log")
 }
@@ -302,7 +314,7 @@ JSON
 fi
 
 # =====================================================================================
-# THE TWO-VIEW MATRIX (rows M-H1 .. M-H11). Each row is a FUNCTION so a lib mutant (below) can
+# THE TWO-VIEW MATRIX (rows M-H1 .. M-H11, M-NOSLICE and the review rows M-BIG .. M-NULLAUTH). Each row is a FUNCTION so a lib mutant (below) can
 # re-run it against a mutated copy. Every negative assertion has a POSITIVE TWIN on the same
 # input that differs only in the stubbed permission (an over-trusting or under-trusting
 # mutant is then visible from both sides). Every comment carries a CONTRIBUTOR authorAssociation
@@ -316,9 +328,10 @@ mkc() { # <file> then <login> <body> <createdAt|-> triples; `-` omits createdAt;
         '{author:{login:$l},authorAssociation:$c,body:$b} + (if $t == "-" then {} else {createdAt:$t} end)')")
     shift 3
   done
+  assert_fixture_dir "$f"
   printf '{"comments":[%s]}\n' "$(IFS=,; printf '%s' "${a[*]}")" > "$f"
 }
-mkp() { printf "$1" > "$SB/pm.tsv"; }   # printf format with literal \t and \n
+mkp() { assert_fixture_dir "$SB"; printf "$1" > "$SB/pm.tsv"; }   # printf format with literal \t and \n
 bodies_of() { jq -r '.b' <<<"$1"; }
 # in_out <needle> -> 0 when the {t,b} stream in RAW_OUT carries a body line equal to needle
 in_out() { bodies_of "$RAW_OUT" | grep -qxF -- "$1"; }
@@ -414,14 +427,14 @@ h_h8() { # M-H8 the memo: two comments by one author cost one permission request
     pass "M-H8: one permission request per distinct author (3 comments by one author -> 1; two authors -> 2)"
   else fail "M-H8: requests n1=$n1 (want 1) n2=$n2 (want 2)"; fi
 }
-h_h9() { # M-H9 more than 100 comments are all returned (the DEACTIVATED marker past the first 100 is read)
+h_noslice() { # M-NOSLICE the lib's own jq does not slice a long comment list: 150 comments in, 150 out (gh's paging is measured 220/220 on #9777, never modelled by this stub)
   local i body c=()
   for ((i = 1; i <= 150; i++)); do body="n$i"; (( i == 130 )) && body="S2-DEACTIVATED: $T2"; c+=(many-op "$body" "$T1"); done
   mkc "$SB/h.json" "${c[@]}"; mkp 'many-op\tadmin\n'
   run_case_raw trusted_verdict_comments 9818 "$SB/h.json" "$SB/pm.tsv"
   if (( RAW_MISS == 0 )) && [[ "$RAW_RC" == 0 ]] && [[ "$(wc -l <<<"$RAW_OUT")" -eq 150 ]] && in_out "S2-DEACTIVATED: $T2"; then
-    pass "M-H9: 150 comments through the GraphQL shape are all returned, the marker at position 130 included"
-  else fail "M-H9: rc=$RAW_RC lines=$(wc -l <<<"$RAW_OUT")"; fi
+    pass "M-NOSLICE: a 150-comment list through the lib is returned whole, the marker at position 130 included (the lib does not slice; gh paging is not modelled here)"
+  else fail "M-NOSLICE: rc=$RAW_RC lines=$(wc -l <<<"$RAW_OUT")"; fi
 }
 h_h10() { # M-H10 exactly one `gh issue view` per view invocation
   mkc "$SB/h.json" priv-op "x" "$T1"; mkp 'priv-op\tadmin\n'
@@ -449,6 +462,7 @@ h_h11() { # M-H11 login-shape guard: a login that is not a GitHub login is untru
   else fail "M-H11: rc=$RAW_RC miss=$RAW_MISS requests=[$(tr '\n' ',' < "$SB/req.log")] out=[$RAW_OUT]"; fi
 }
 h_big() { # M-BIG a trusted body past the ~128 KiB single-argv limit is kept whole (marker included) by BOTH views, never dropped with rc 0
+  assert_fixture_dir "$SB"
   { printf 'S2-ACTIVATED: %s\n' "$T2"; head -c 200000 /dev/zero | tr '\0' 'x'; printf '\n'; } > "$SB/big.body"
   jq -nc --rawfile b "$SB/big.body" --arg t "$T2" '{comments:[{author:{login:"priv-op"},authorAssociation:"CONTRIBUTOR",body:$b,createdAt:$t}]}' > "$SB/h.json"
   mkp 'priv-op\tadmin\n'
@@ -463,6 +477,7 @@ h_big() { # M-BIG a trusted body past the ~128 KiB single-argv limit is kept who
   (( ok )) && pass "M-BIG: a 200000-byte trusted body keeps its marker and its length in both views (the body never rides in argv)"
 }
 h_recfail() { # M-RECFAIL a failing record build is rc 2 with EMPTY stdout in both views, never a silently dropped comment; the twin (jq healthy) succeeds
+  assert_fixture_dir "$SB"
   mkdir -p "$SB/bin-jqfail"; cp "$SB/bin/gh" "$SB/bin-jqfail/gh"
   printf '#!/usr/bin/env bash\ncase " $* " in *" -Rsc "*) exit 5 ;; esac\nexec %q "$@"\n' "$REAL_JQ" > "$SB/bin-jqfail/jq"; chmod +x "$SB/bin-jqfail/gh" "$SB/bin-jqfail/jq"
   mkc "$SB/h.json" priv-op "S2-ACTIVATED: $T2" "$T2"; mkp 'priv-op\tadmin\n'
@@ -525,6 +540,7 @@ h_login_shape() { # M-SHAPE login boundaries: 39 chars resolve; 40, a trailing n
   else fail "M-SHAPE: rc=$RAW_RC miss=$RAW_MISS perm-requests=$(nreq perm) (want 1) out-lines=$(bodies_of "$RAW_OUT" | grep -c .)"; fi
 }
 h_null_author() { # M-NULLAUTH a comment whose author is JSON null (a deleted account) is dropped, never fatal for the thread
+  assert_fixture_dir "$SB"
   printf '%s\n' '{"comments":[{"author":null,"authorAssociation":"OWNER","body":"RESULT: PASS","createdAt":"'"$T1"'"},{"author":{"login":"priv-op"},"authorAssociation":"CONTRIBUTOR","body":"keep","createdAt":"'"$T2"'"}]}' > "$SB/h.json"
   mkp 'priv-op\tadmin\n'
   run_case_raw trusted_verdict_comments 9818 "$SB/h.json" "$SB/pm.tsv"
@@ -532,7 +548,7 @@ h_null_author() { # M-NULLAUTH a comment whose author is JSON null (a deleted ac
     pass "M-NULLAUTH: a comment with author null is dropped and the rest of the thread is read"
   else fail "M-NULLAUTH: rc=$RAW_RC miss=$RAW_MISS out=[$RAW_OUT]"; fi
 }
-LIB_ROWS=(h_h1 h_h2 h_h3 h_h4_parity h_h4_abs h_h5 h_h6 h_h7 h_h8 h_h9 h_h10 h_crlf h_h11 h_big h_recfail h_fsm h_repo h_case h_login_shape h_null_author)
+LIB_ROWS=(h_h1 h_h2 h_h3 h_h4_parity h_h4_abs h_h5 h_h6 h_h7 h_h8 h_noslice h_h10 h_crlf h_h11 h_big h_recfail h_fsm h_repo h_case h_login_shape h_null_author)
 for _r in "${LIB_ROWS[@]}"; do "$_r"; done
 
 # --- harness integrity: a stub that answers `admin` to EVERYONE must redden the negative rows (the rows can fail) ----------
@@ -613,7 +629,7 @@ mutant_lib m-partial-output  "h_h6" "$RESOLVE"$'\n      return 2' "$RESOLVE"$'\n
 # request per distinct author because the OTHER one still deduplicates. Only the two together are a mutant.
 mutant_lib m-no-dedupe       "h_h8" '  if [[ -n "${_TRUSTED_VERDICT_PERM[$key]:-}" ]]; then' '  if false; then' \
   '    done | sort -u)"' '    done | cat)"'
-mutant_lib m-first-page      "h_h9" '        .comments[]' '        .comments[0:100][]'
+mutant_lib m-jq-slice-100     "h_noslice" '        .comments[]' '        .comments[0:100][]'
 mutant_lib m-t-empty         "h_h5" "${Q}{t: \$t, b: .}${Q}" "${Q}{t: \"\", b: .}${Q}"
 mutant_lib m-validate-in-core "h_h5" '    _trusted_verdict_is_trusted_perm "$perm" || continue' '    _trusted_verdict_is_trusted_perm "$perm" || continue
     [[ "$created" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || return 2'
@@ -653,12 +669,14 @@ mutant_lib_build c-crash-runtime "$PRED" '    admin|maintain|write) no_such_comm
 lib_rows_quiet "$MUT_FILE" h_h2 h_h3
 if (( MUT_LANDED == 1 && MUT_CRASHED == 1 )) && bash -n "$MUT_FILE" 2>/dev/null; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: a mutant that parses but fails at runtime is flagged as crashed"
 else fail "harness control: the runtime-crashing mutant was not flagged (landed=$MUT_LANDED crashed=$MUT_CRASHED)"; fi
+assert_fixture_dir "$SB"
 cp "$LIB" "$SB/identity.sh"
 lib_rows_quiet "$SB/identity.sh" "${LIB_ROWS[@]}"
 if (( MUT_REDS == 0 && MUT_CRASHED == 0 )); then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: an unmutated copy of the lib turns no row red over the full row set"
 else fail "harness control: the identity copy turned $MUT_REDS row(s) red (crashed=$MUT_CRASHED): the harness is polluted"; fi
 # the verdict itself: an inert mutant fed through mutant_lib must be REPORTED as a survivor and must make the suite red (counters restored after)
 _p0=$PASS; _f0=$FAIL; _r0=$MUT_RUN; _c0=$MUT_CAUGHT
+assert_fixture_dir "$SB"
 mutant_lib c-inert "h_h2 h_h3" "$PRED" '    admin|maintain|write) return 0; ;;' >"$SB/inert.out"
 _inert_fails=$((FAIL - _f0)); _inert_caught=$((MUT_CAUGHT - _c0))
 PASS=$_p0; FAIL=$_f0; MUT_RUN=$_r0; MUT_CAUGHT=$_c0

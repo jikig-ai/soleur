@@ -103,6 +103,13 @@
 #                  unless the cache dir is owned, non-symlink and was just created. The two test
 #                  suites added by the same PR carry NO baseline rows: every fixture write is under
 #                  a canonical `assert_fixture_dir`.
+#
+#   2026-10-13   #9818 row moves (source edits, not detector): ci-draft-light-soak-9728.test.sh 20->18 and
+#                  trusted-verdict.test.sh 18->18. The probe-trust change added fixture writes to both suites
+#                  (four rows each at first); they now run under the canonical `assert_fixture_dir` (the tracker-
+#                  comment staging block in the S3 suite, the helpers and the new rows in the lib suite), as the
+#                  S2 suite already did with zero rows. The guarded S3 block also covers two pre-existing staging
+#                  writes, hence 20->18 rather than 20->20.
 #   1439 -> 1440   #6894, ship-time advisor round: one more `$STATE_DIR` write in
 #                  inngest-luks-cutover.sh (the rollback-verified latch) — same root class as the
 #                  ten rows already itemised below; the row goes 10 -> 11 and nothing else moves.
@@ -368,7 +375,7 @@
 1	scripts/follow-through-closure-guard.test.sh
 25	scripts/followthroughs/anthropic-admin-key-6297.test.sh
 5	scripts/followthroughs/ccla-representative-icla-7922.test.sh
-22	scripts/followthroughs/ci-draft-light-soak-9728.test.sh
+18	scripts/followthroughs/ci-draft-light-soak-9728.test.sh
 2	scripts/followthroughs/ci-leg-balance-9232.test.sh
 2	scripts/followthroughs/concierge-strand-754ee124-5733.test.sh
 1	scripts/followthroughs/cwv-field-rum-9178.sh
@@ -393,7 +400,7 @@
 2	scripts/lib/scratch-root.sh
 3	scripts/lib/test-affected-derive-cache.sh
 4	scripts/lib/test-contention.sh
-22	scripts/lib/trusted-verdict.test.sh
+18	scripts/lib/trusted-verdict.test.sh
 1	scripts/lib/web2-luks-rows.sh
 8	scripts/lint-agents-compound-sync.test.sh
 1	scripts/lint-agents-enforcement-tags.test.sh
