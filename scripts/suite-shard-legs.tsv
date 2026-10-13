@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1177
-# generated-at=2026-10-13T14:36:23Z
+# generated-at=2026-10-13T22:51:47Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -141,6 +141,7 @@ plugins/soleur/skills/review/test/ensure-semgrep.test.sh	1
 plugins/soleur/skills/review/test/fix-round-seats.test.sh	2
 plugins/soleur/skills/skill-security-scan/test/argv-ceiling.test.sh	1
 plugins/soleur/skills/skill-security-scan/test/meta-dir-reap.test.sh	2
+plugins/soleur/skills/skill-security-scan/test/parse-override.test.sh	1
 plugins/soleur/skills/skill-security-scan/test/redact-pii-ghs-shape.test.sh	1
 plugins/soleur/test/_base-notice-frontmatter.test.sh	8
 plugins/soleur/test/admin-merge-ready-wiring.test.sh	4

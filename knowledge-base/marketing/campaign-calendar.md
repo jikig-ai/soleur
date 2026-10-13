@@ -1,16 +1,10 @@
 ---
-last_updated: 2026-10-05
+last_updated: 2026-10-12
 ---
 
 # Campaign Calendar
 
 Rolling view of content distributions. Auto-generated from `distribution-content/` frontmatter.
-
-## Upcoming
-
-| Title | Type | Publish Date | Channels | Status |
-|-------|------|-------------|----------|--------|
-| Your AI agents can no longer sneak unjustified issues onto your backlog | feature-launch | 2026-10-06 | x, bluesky | scheduled |
 
 ## Stale Draft — needs approval
 
@@ -20,7 +14,7 @@ Rolling view of content distributions. Auto-generated from `distribution-content
 
 | Title | Type | Age (days) | Channels | Status |
 |-------|------|-----------|----------|--------|
-| Show HN: Soleur — open-source agents that call APIs, not browsers | hn-show | 164 | | draft |
+| Show HN: Soleur — open-source agents that call APIs, not browsers | hn-show | 171 | | draft |
 
 ## Draft
 
@@ -47,6 +41,7 @@ Entries with a non-published, non-scheduled status (`stale`, `parked`).
 
 | Title | Type | Publish Date | Channels | Status |
 |-------|------|-------------|----------|--------|
+| Your AI agents can no longer sneak unjustified issues onto your backlog | feature-launch | 2026-10-06 | x, bluesky | published |
 | Background work now declares where it is allowed to run | feature-launch | 2026-10-01 | x, bluesky | published |
 | Start a new chat from the CRM board to enter a lead | feature-launch | 2026-09-28 | x, bluesky | published |
 | Your First Beta Testers Went Quiet. Now What? | pillar | 2026-09-27 | discord, x, bluesky, linkedin-company, linkedin-personal | published |

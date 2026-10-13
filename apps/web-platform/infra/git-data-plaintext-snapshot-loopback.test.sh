@@ -289,8 +289,8 @@ if [ "$(blockdev --getro "$M1_LOOP")" = 1 ]; then ok "M1 the origin is still ker
 
 # ═══ SUT TIER — the REAL extracted plaintext-count unit, on real loop devices ═══════
 # The unit is extracted by its inner sentinels (it spans the real _repo_count definition through
-# the end of the plaintext block, so arm C tests the real counter, not a copy). log() is copied out
-# of the script. Each arm runs the unit in a CHILD bash (the unit `exit`s and arms an EXIT trap);
+# the end of the plaintext block, so arm C tests the real counter, not a copy). log() and the attach-wait helper
+# are copied out of the script. Each arm runs the unit in a CHILD bash (the unit `exit`s and arms an EXIT trap);
 # the parent measures the origin's bytes, its sector counters, its read-only flag and the
 # transient-device leaks.
 PT_BEGIN='# ---- BEGIN plaintext-count unit ----'
@@ -300,12 +300,17 @@ awk -v b="$PT_BEGIN" -v e="$PT_END" '$0==b{f=1;next} $0==e{f=0} f' "$BOOTSTRAP" 
 _n=$(grep -c . "$PT_UNIT" || true)
 [ "$_n" -ge 60 ] || instrument "the plaintext-count unit extracted only $_n lines (sentinels moved or deleted)"
 bash -n "$PT_UNIT" || instrument "the extracted plaintext-count unit is not valid bash on its own"
+# (#10138) The unit calls _gd_attach_wait, which is defined ABOVE the unit in the bootstrap, so the
+# prelude must carry it too: without it every arm dies at `_gd_attach_wait: command not found` and
+# reports the source FATAL before it reaches the snapshot code.
 PT_PRELUDE="$TMPROOT/pt-prelude.sh"
 {
   printf 'GIT_DATA_EMIT=/nonexistent/git-data-emit\n'
   awk '/^log\(\) \{$/{f=1} f{print} f&&/^\}$/{exit}' "$BOOTSTRAP"
+  awk -v b='# ---- BEGIN attach-wait helper ----' -v e='# ---- END attach-wait helper ----' '$0==b{f=1;next} $0==e{f=0} f' "$BOOTSTRAP"
 } > "$PT_PRELUDE" || instrument "prelude write failed"
 grep -q '^log() {' "$PT_PRELUDE" || instrument "log() was not copied out of the bootstrap"
+grep -q '^_gd_attach_wait() {' "$PT_PRELUDE" || instrument "_gd_attach_wait was not copied out of the bootstrap (the unit calls it)"
 PT_TRAILER="$TMPROOT/pt-trailer.sh"
 printf 'printf "plaintext_journal=%%s\\n" "$_plaintext_journal"\nprintf "plaintext_volume=%%s\\n" "$_plaintext_volume"\nprintf "plaintext_count=%%s\\n" "${_pt_n:-}"\n' > "$PT_TRAILER" || instrument "trailer write failed"
 

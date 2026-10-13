@@ -160,8 +160,37 @@ assert "bootstrap block precedes web-platform start" "(( BOOTSTRAP_LINE < WEBPLA
 # --- AC4: extracted shell snippet is POSIX clean ---
 echo ""
 echo "--- AC4: extracted shell snippet POSIX-portable ---"
+
+# Session scratch root (#7004, ADR-250): bind one owned soleur-run.<pid>.* root
+# under the effective TMPDIR and export TMPDIR at it, so every mktemp below —
+# including strays the growing trap chain does not name — lands inside a root
+# the reapers (tmpfs-guard Reaper 3, session-start sweep) can attribute and
+# reclaim without name heuristics. Mirrors the scripts/test-all.sh adoption
+# block. Opportunistic: an absent lib (e.g. the mutation battery's sandbox,
+# which reproduces only infra/ + .github/) degrades to the pre-#7004 shape and
+# never blocks the suite; under run-registered-suites.sh the parent's exported
+# SOLEUR_SCRATCH_SESSION_ROOT makes begin a no-op. "${TMPDIR:-/tmp}" — not a
+# bare "$TMPDIR" — because `set -u` aborts on the unbound expansion even under
+# `|| true`, and /tmp is mktemp's own default when TMPDIR is unset. The
+# explicit base is load-bearing a second way: an explicit arg is honored
+# as-given (scratch-root.sh only normalizes /tmp-subdir bases it DERIVES), so
+# the residue suite's private measured TMPDIR ($BASE/d.<leaf>) stays private —
+# a no-arg or normalized call would lift the root to real /tmp and make that
+# leaf's delta arm measure the wrong directory.
+_SCRATCH_LIB="$SCRIPT_DIR/../../../scripts/lib/scratch-root.sh"
+if [[ -f "$_SCRATCH_LIB" ]]; then
+  # shellcheck source=scripts/lib/scratch-root.sh
+  source "$_SCRATCH_LIB" || true
+fi
+if declare -F soleur_scratch_session_begin >/dev/null 2>&1; then
+  soleur_scratch_session_begin "${TMPDIR:-/tmp}" || true
+fi
+# Defined unconditionally so every arm of the growing EXIT trap below can name
+# the cleanup (ADR-129: spliced into the existing chain, never a second trap).
+declare -F _soleur_scratch_cleanup >/dev/null 2>&1 || _soleur_scratch_cleanup() { :; }
+
 SNIPPET_FILE=$(mktemp -t inngest-runcmd-XXXXXX.sh)
-trap 'rm -f "$SNIPPET_FILE"' EXIT
+trap 'rm -f "$SNIPPET_FILE"; _soleur_scratch_cleanup || true' EXIT
 
 # Extract the runcmd block following the Inngest bootstrap comment.
 # The block ends at the next YAML sibling key (line starting with `  - |`
@@ -806,7 +835,9 @@ echo "--- Guard 1 (#7462): zot-primary bootstrap pull arm (dedicated host) ---"
 DED_CODE_FILE="$(mktemp -t inngest-ci-code-XXXXXX.yml)"
 DED_BLOCK_FILE="$(mktemp -t inngest-ci-block-XXXXXX.sh)"
 # The existing EXIT trap already removes SNIPPET_FILE; extend it rather than replace it.
-trap 'rm -f "$SNIPPET_FILE" "$DED_CODE_FILE" "$DED_BLOCK_FILE"' EXIT
+# `_soleur_scratch_cleanup` rides every arm of this growing chain — an arm left
+# unspliced would leak the whole session root on a mid-chain failure exit.
+trap 'rm -f "$SNIPPET_FILE" "$DED_CODE_FILE" "$DED_BLOCK_FILE"; _soleur_scratch_cleanup || true' EXIT
 sed -E 's/^[[:space:]]*#.*$//' "$INNGEST_CI_YML" > "$DED_CODE_FILE"
 
 # The bootstrap block, isolated. #8562 MOVED it out of runcmd into the write_files script that
@@ -1176,7 +1207,7 @@ echo "--- Guard 1b (#6500): per-arm Sentry stage emits (dedicated host) ---"
 G1B_BEFORE="$TOTAL"
 ARM_ZOT="$(mktemp -t inngest-arm-zot-XXXXXX)"
 ARM_FB="$(mktemp -t inngest-arm-fb-XXXXXX)"
-trap 'rm -f "$SNIPPET_FILE" "$DED_CODE_FILE" "$DED_BLOCK_FILE" "$ARM_ZOT" "$ARM_FB"' EXIT
+trap 'rm -f "$SNIPPET_FILE" "$DED_CODE_FILE" "$DED_BLOCK_FILE" "$ARM_ZOT" "$ARM_FB"; _soleur_scratch_cleanup || true' EXIT
 # DEPTH-AWARE (review P1-2/P2-3): the split happens only at nesting depth 0, and only depth-0
 # statements are emitted into an arm file, because a statement inside a nested block (`if false;
 # then … fi`, a `case`, a loop) is not an unconditional statement of the arm. A nested `else` must
@@ -1711,7 +1742,7 @@ if command -v terraform >/dev/null 2>&1; then
   NG1_DIR="$(mktemp -d -t nicg1-XXXXXX)"
   # Extends the Guard 1b trap rather than replacing it: a bare `rm -rf "$NG1_DIR"` here leaked
   # the five temp files above on every run wherever terraform is installed.
-  trap 'rm -f "$SNIPPET_FILE" "$DED_CODE_FILE" "$DED_BLOCK_FILE" "$ARM_ZOT" "$ARM_FB"; rm -rf "$NG1_DIR"' EXIT
+  trap 'rm -f "$SNIPPET_FILE" "$DED_CODE_FILE" "$DED_BLOCK_FILE" "$ARM_ZOT" "$ARM_FB"; rm -rf "$NG1_DIR"; _soleur_scratch_cleanup || true' EXIT
   NG1_RENDER="$NG1_DIR/rendered.yml"
   bash "$SCRIPT_DIR/inngest-userdata-budget.sh" "$NG1_RENDER" > "$NG1_DIR/budget.log" 2>&1 || true
   NG1_RENDER_BYTES=$(wc -c < "$NG1_RENDER" 2>/dev/null | tr -cd '0-9' || true)
