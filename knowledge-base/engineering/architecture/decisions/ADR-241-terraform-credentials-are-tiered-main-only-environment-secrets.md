@@ -553,7 +553,7 @@ has merged; until then both release jobs still hold the broad token and would re
 project and its `prd` environment, and no `doppler_secret`, `doppler_service_token`, data source,
 variable or output, for D3's reason: this root's state is readable by the Tier-A backend keys. The two
 values and the token are put there by an operator-run, re-runnable script
-(`knowledge-base/project/specs/feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh`), which is
+(`knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh`), which is
 the part Terraform cannot hold. The script is permanent for this feature: it is also the rotation tool
 (`--rotate-token`, and a re-run after an App key rotation), so it stays at that path. Census Guard 7
 enforces the container half (G7c: no stateful `doppler_*` resource on the project through any alias of
@@ -763,7 +763,7 @@ sequence in the runbook's §Runtime App key (#8609), which is the canonical copy
 - **Labels.** In this ADR, R1–R8 are residuals. The runbook's steps are written "R-step N"
   (R-step 7 is the GitHub key delete); an unqualified "R7" here always means the residual.
 
-Plan: `knowledge-base/project/plans/2026-09-30-security-evict-runtime-app-key-from-prd-reachability-plan.md`.
+Plan: `knowledge-base/project/plans/archive/20261013-051752-2026-09-30-security-evict-runtime-app-key-from-prd-reachability-plan.md`.
 
 ### 2026-09-30 (#9262): the inngest-release App-token consumers move to Tier B
 
@@ -850,7 +850,7 @@ now that the second is the 2026-10-03 entry below.)*
   entry, and the 2026-10-03 entry below lists what it supersedes.)*
 - No other decision's status changes here.
 
-Plan: `knowledge-base/project/plans/2026-10-01-security-scoped-doppler-source-for-app-token-release-jobs-plan.md`.
+Plan: `knowledge-base/project/plans/archive/20261013-062704-2026-10-01-security-scoped-doppler-source-for-app-token-release-jobs-plan.md`.
 
 ### 2026-10-02 (#8211): `RESEND_API_KEY` is Tier A
 
@@ -1065,7 +1065,7 @@ Nothing else flips. Measured read-only on 2026-10-12 (names and access levels on
 
 ## References
 
-- Plan: `knowledge-base/project/plans/2026-09-22-feat-evict-privileged-terraform-credentials-plan.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-051752-2026-09-22-feat-evict-privileged-terraform-credentials-plan.md`
   (Decision, Guard Contract, Operator Sequence, User-Brand Impact)
 - Runbook: `knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md`
 - Terraform: `apps/web-platform/infra/infra-privileged-environment.tf` (the Tier-B carriers and the

@@ -1,6 +1,6 @@
 // Storage-boundary ADT for the Command Center `/soleur:go` runner.
 //
-// Plan: knowledge-base/project/plans/2026-04-23-feat-cc-route-via-soleur-go-plan.md
+// Plan: knowledge-base/project/plans/archive/20261013-003106-2026-04-23-feat-cc-route-via-soleur-go-plan.md
 // (Stage 2). Migration 032 adds `active_workflow text NULL` with a CHECK
 // constraint enumerating the valid wire-format set:
 //

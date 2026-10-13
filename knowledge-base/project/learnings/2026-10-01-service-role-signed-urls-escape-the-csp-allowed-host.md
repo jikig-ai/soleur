@@ -79,7 +79,7 @@ route were already fixed in #5012/#5020).
   #2133; every consumer mocked it).
 - Live verification during planning: prod CSP header from `app.soleur.ai`
   vs. signed-URL host from `createSignedUploadUrl` — mismatch confirmed.
-- Plan: `knowledge-base/project/plans/2026-10-01-fix-concierge-attachment-upload-plan.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-062704-2026-10-01-fix-concierge-attachment-upload-plan.md`
 - CI failure that validated the sync-throw finding: `test-webplat (2/2)` on
   run 36838892076 — `Error: sentry down` escaped `xhr.onerror` as an unhandled
   error despite the promise rejecting.

@@ -275,7 +275,7 @@
 4	.claude/hooks/skill-invocation-logger.test.sh
 2	.github/scripts/test/test-mint-inngest-bootstrap-tag.sh
 1	.github/scripts/test/test-run-all-signal-propagation.sh
-3	knowledge-base/project/specs/feat-5863-tenant-fs-isolation/tenant-isolation-probe.sh
+3	knowledge-base/project/specs/archive/20261013-062704-feat-5863-tenant-fs-isolation/tenant-isolation-probe.sh
 2	plugins/soleur/hooks/lib/log-rotation.sh
 3	plugins/soleur/hooks/memory-backstop.sh
 1	plugins/soleur/hooks/operator-stage-approval.sh
@@ -317,6 +317,7 @@
 1	plugins/soleur/skills/provision-cloudflare/scripts/provision-cloudflare.sh
 1	plugins/soleur/skills/provision-doppler/scripts/provision-doppler.sh
 1	plugins/soleur/skills/provision-github/scripts/provision-github.sh
+1	plugins/soleur/skills/review/test/ensure-semgrep.test.sh
 3	plugins/soleur/skills/skill-security-scan/scripts/run-scan.sh
 1	plugins/soleur/skills/skill-security-scan/scripts/run-self-test.sh
 3	plugins/soleur/test/ci-head-verdict.test.sh

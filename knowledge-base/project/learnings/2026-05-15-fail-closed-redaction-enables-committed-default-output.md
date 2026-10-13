@@ -51,6 +51,6 @@ module: skill-design
 related:
   - knowledge-base/project/learnings/2026-02-16-inline-only-output-for-security-agents.md
   - knowledge-base/project/learnings/2026-02-21-private-document-generation-pattern.md
-  - knowledge-base/project/brainstorms/2026-05-15-code-to-prd-brainstorm.md
-  - knowledge-base/project/specs/feat-code-to-prd-2726/spec.md
+  - knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-15-code-to-prd-brainstorm.md
+  - knowledge-base/project/specs/archive/20261013-014038-feat-code-to-prd-2726/spec.md
 issue: 2726

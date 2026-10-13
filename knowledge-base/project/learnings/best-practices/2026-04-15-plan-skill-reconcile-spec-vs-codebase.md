@@ -54,7 +54,7 @@ The `repo-research-analyst` agent has been producing "gap callouts" for months; 
 2. **`git add <spec-dir>/` missed `wireframes/` subdirectory on first try.**
    The spec directory existed with only `spec.md` and `wireframes.pen`
    tracked; the `wireframes/` PNG subdirectory was created by `ux-design-lead`
-   and didn't auto-stage. **Recovery:** re-ran with `git add -f knowledge-base/project/specs/feat-kb-chat-sidebar/wireframes/`.
+   and didn't auto-stage. **Recovery:** re-ran with `git add -f knowledge-base/project/specs/archive/20261013-003106-feat-kb-chat-sidebar/wireframes/`.
    **Prevention:** after any agent that writes to the filesystem (Pencil
    exports, image generators), run `git status -uall <dir>` before the
    first `git add` to surface untracked files the parent-directory add
@@ -62,6 +62,6 @@ The `repo-research-analyst` agent has been producing "gap callouts" for months; 
 
 ## Related
 
-- Plan: `knowledge-base/project/plans/2026-04-15-feat-kb-chat-sidebar-plan.md` (see "Research Reconciliation — Spec vs. Codebase" table).
-- Brainstorm: `knowledge-base/project/brainstorms/2026-04-15-kb-chat-sidebar-brainstorm.md`.
-- Spec: `knowledge-base/project/specs/feat-kb-chat-sidebar/spec.md`.
+- Plan: `knowledge-base/project/plans/archive/20261013-003106-2026-04-15-feat-kb-chat-sidebar-plan.md` (see "Research Reconciliation — Spec vs. Codebase" table).
+- Brainstorm: `knowledge-base/project/brainstorms/archive/20261013-003106-2026-04-15-kb-chat-sidebar-brainstorm.md`.
+- Spec: `knowledge-base/project/specs/archive/20261013-003106-feat-kb-chat-sidebar/spec.md`.

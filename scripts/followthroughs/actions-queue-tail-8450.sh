@@ -14,7 +14,7 @@
 # contamination is fail-safe (it can delay a PASS, never fabricate one) but
 # means a PASS reads as "post-upgrade deploy latency", not strictly "runner
 # pool wait". Pinned empirically in
-# knowledge-base/project/specs/feat-8450-ci-concurrency/measurements.md.
+# knowledge-base/project/specs/archive/20261013-051752-feat-8450-ci-concurrency/measurements.md.
 #
 # Caveat recorded for the sweeper's auto-close comment: the GitHub API cannot
 # report how deep the org queue was at each sampled run's `created_at`, so a

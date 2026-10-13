@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # learning-retrieval-bench.sh — one-shot retrieval diagnostic for knowledge-base/project/learnings/
 #
-# Plan:       knowledge-base/project/plans/2026-05-19-feat-learnings-retrieval-bench-plan.md
-# Spec:       knowledge-base/project/specs/feat-learnings-retrieval-bench/spec.md
-# Brainstorm: knowledge-base/project/brainstorms/2026-05-19-learnings-retrieval-bench-brainstorm.md
+# Plan:       knowledge-base/project/plans/archive/20261013-014038-2026-05-19-feat-learnings-retrieval-bench-plan.md
+# Spec:       knowledge-base/project/specs/archive/20261013-014038-feat-learnings-retrieval-bench/spec.md
+# Brainstorm: knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-19-learnings-retrieval-bench-brainstorm.md
 # Precedent:  scripts/compound-promote.sh:124-200 (Anthropic curl + jq pattern, ADR-021)
 #
 # Schema versions for knowledge-base/project/learning-retrieval-metrics-<date>.json:
@@ -106,9 +106,9 @@ print_help() {
   cat <<'HELP'
 learning-retrieval-bench.sh — one-shot retrieval diagnostic for knowledge-base/project/learnings/
 
-Plan:       knowledge-base/project/plans/2026-05-19-feat-learnings-retrieval-bench-plan.md
-Spec:       knowledge-base/project/specs/feat-learnings-retrieval-bench/spec.md
-Brainstorm: knowledge-base/project/brainstorms/2026-05-19-learnings-retrieval-bench-brainstorm.md
+Plan:       knowledge-base/project/plans/archive/20261013-014038-2026-05-19-feat-learnings-retrieval-bench-plan.md
+Spec:       knowledge-base/project/specs/archive/20261013-014038-feat-learnings-retrieval-bench/spec.md
+Brainstorm: knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-19-learnings-retrieval-bench-brainstorm.md
 Precedent:  scripts/compound-promote.sh:124-200 (Anthropic curl + jq pattern, ADR-021)
 
 Usage:

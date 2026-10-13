@@ -38,7 +38,7 @@ Both CLO and COO domain leader agents asserted that GitHub issue #670 (vendor DP
 
 **DPA verification memo path not found on first attempt**
 
-- **Recovery:** Used glob search to find the correct path at `knowledge-base/project/specs/feat-vendor-ops-legal/dpa-verification-memo.md`
+- **Recovery:** Used glob search to find the correct path at `knowledge-base/project/specs/archive/20261012-213508-feat-vendor-ops-legal/dpa-verification-memo.md`
 - **Prevention:** The `project/` segment in the knowledge-base path hierarchy should not be assumed — always glob when uncertain
 
 **WebFetch failed to parse Supabase DPA PDF**

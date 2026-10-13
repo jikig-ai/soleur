@@ -180,7 +180,7 @@ When `tenant-integration` (or any CI gate that applies migrations to a shared sc
 
 - Issue: #4338
 - Failing CI run: `26280818623` (2026-05-22)
-- Plan: `knowledge-base/project/plans/2026-05-22-fix-tenant-integration-mig062-workspaces-schema-vs-ledger-drift-4338-plan.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-22-fix-tenant-integration-mig062-workspaces-schema-vs-ledger-drift-4338-plan.md`
 - Sibling/precedent learnings:
   - [`2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md`](./2026-05-21-dev-supabase-drift-from-unmerged-feature-branch-migrations.md) — #4241, the filename-vs-main drift class.
   - [`2026-05-21-postgrest-schema-cache-and-stale-plan-quoted-apply-state.md`](./2026-05-21-postgrest-schema-cache-and-stale-plan-quoted-apply-state.md) — PostgREST schema-cache reload (sibling concern; not the drift class here).

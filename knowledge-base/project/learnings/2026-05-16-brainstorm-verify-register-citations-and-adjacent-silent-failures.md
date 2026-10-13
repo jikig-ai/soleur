@@ -108,7 +108,7 @@ These additions compose with — do not replace — the existing premise-validat
   - `2026-05-15-brainstorm-enumerate-umbrella-child-prs-before-leader-spawn.md` (covers child-PR enumeration; this learning adds cross-umbrella PR-X collision detection)
 
 - This session's artifacts:
-  - Brainstorm: `knowledge-base/project/brainstorms/2026-05-16-pr-d-attachments-storage-tenant-rls-brainstorm.md`
-  - Spec: `knowledge-base/project/specs/feat-pr-d-attachments-storage-tenant-rls/spec.md`
+  - Brainstorm: `knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-16-pr-d-attachments-storage-tenant-rls-brainstorm.md`
+  - Spec: `knowledge-base/project/specs/archive/20261013-014038-feat-pr-d-attachments-storage-tenant-rls/spec.md`
   - Draft PR: #3883
   - PR-E tracking issue: #3887

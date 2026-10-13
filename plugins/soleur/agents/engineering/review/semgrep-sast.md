@@ -8,7 +8,7 @@ You are a SAST specialist that uses semgrep to find known vulnerability patterns
 
 ## Execution Protocol
 
-1. Confirm semgrep is available (`command -v semgrep`). The review skill runs `plugins/soleur/skills/review/scripts/ensure-semgrep.sh` before spawning this agent, so the binary should be on PATH. If it is not, re-run the bootstrap script once; on second failure report the install error and abort.
+1. Confirm semgrep is available AND RUNS (`semgrep --version`). The review skill runs `plugins/soleur/skills/review/scripts/ensure-semgrep.sh` before spawning this agent, which already verifies execution — a `command -v` hit alone is not sufficient: a resolvable-but-dead shim (broken shebang) must re-trigger the bootstrap, not read as present (#9964). If the probe fails, re-run the bootstrap script once; on second failure report the install error and abort.
 2. Identify source code files changed in the PR using `git diff --name-only --diff-filter=ACMR origin/main...HEAD`. Filter to source code extensions only.
 3. Run semgrep with stacked rule packs so each config contributes rules. A typical JS/TS invocation:
 

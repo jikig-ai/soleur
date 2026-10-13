@@ -21,7 +21,7 @@ the relation is stated here and carried in `related_adrs`). It narrows one row o
 is the first ADR to apply that table to a hook that ships to customers rather than to this repository's own sessions.
 
 The product owner (CPO) signed the **plan's** Decision Set (`## Final W2 Decision Set` in
-`knowledge-base/project/plans/2026-10-06-feat-plugin-destructive-command-guard-w2-plan.md`) before any implementation commit, on
+`knowledge-base/project/plans/archive/20261013-062704-2026-10-06-feat-plugin-destructive-command-guard-w2-plan.md`) before any implementation commit, on
 revision `3a60924ebd6ff3b3482b9e8972c0d9b890c4f92e` and section SHA-256
 `39593c04ced72bc4a7e6a768408cef4baaa6b22d52069b4836566bb00385d81a`, both recorded in the body of PR #9653; the four conditions the
 sign-off attached are listed with their satisfaction under "CPO conditions". **This record is not that signed text.** D1 (the `cd` rule

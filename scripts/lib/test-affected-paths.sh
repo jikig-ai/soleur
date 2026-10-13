@@ -252,7 +252,7 @@ ALWAYS_ON_SUITES=(
   # Each was demoted on one inotify run in PR 1; the committed recorder (verdict `disqualified`:
   # a file test/stat/ls/find operand it cannot resolve or a carried-disqualifier hit, or `uncovered`:
   # reads outside the cover) no longer supports the demotion. Always-on is the safe side of every
-  # verdict. Evidence per suite: knowledge-base/project/specs/feat-affected-parallel-test-gate/always-on-audit.md "Round 2".
+  # verdict. Evidence per suite: knowledge-base/project/specs/archive/20261013-062704-feat-affected-parallel-test-gate/always-on-audit.md "Round 2".
   "scripts/lint-agents-rule-budget-live"
   "scripts/lint-agents-rule-budget-unit"
   "scripts/lint-workflow-run-body-syntax"
@@ -544,7 +544,7 @@ AFFECTED_SCRIPTS_PRE_PUSH_RATCHET_LANE_PATHS=(
 # open-event recorder (no git-diff/ls-files dependence, no network, no clock, rc 0), and its
 # edge set is the cover of what it opened -- a directory whose listing mattered, otherwise
 # the exact files. The evidence per suite is in
-# knowledge-base/project/specs/feat-affected-parallel-test-gate/always-on-audit.md; a suite
+# knowledge-base/project/specs/archive/20261013-062704-feat-affected-parallel-test-gate/always-on-audit.md; a suite
 # is added here only with that evidence (the census linter does not check that), and the
 # dropped-consumer ratchet (scripts/test-affected-kb-consumers.test.sh) covers
 # knowledge-base/ reads ONLY. A demotion also moves the suite from a free always-on skip to a
@@ -596,7 +596,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_STAGE_APPROVAL_HOOK_TEST_SH_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_9321_STAGES_TEST_SH_PATHS=(
-  "knowledge-base/project/specs/feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh"
+  "knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh"
   "plugins/soleur/hooks/operator-stage-approval.sh"
   "plugins/soleur/scripts/lib/operator-script.sh"
   "plugins/soleur/test/lib/operator-stub-world.sh"
@@ -692,7 +692,7 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "knowledge-base/legal/recommended-tools.md"
   "knowledge-base/marketing/brand-guide.md"
   "knowledge-base/overview/vision.md"
-  "knowledge-base/project/specs/feat-one-shot-7586-7587-red-apply-no-channel-arm-deadline/"
+  "knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7586-7587-red-apply-no-channel-arm-deadline/"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 
@@ -716,7 +716,7 @@ AFFECTED_SCRIPTS_AUDIT_SUITE_READS_PATHS=(
 
 # ---------------------------------------------------------------------------
 # CLOSURE-LEAF RUNTIME READS (A5). Per-label arrays over the shared sets above; the recorder evidence is in
-# knowledge-base/project/specs/feat-affected-parallel-test-gate/always-on-audit.md "Round 3".
+# knowledge-base/project/specs/archive/20261013-062704-feat-affected-parallel-test-gate/always-on-audit.md "Round 3".
 # ---------------------------------------------------------------------------
 AFFECTED_PLUGINS_SOLEUR_TEST_WORKTREE_MANAGER_BARE_SYNC_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_RT_WORKTREE_MANAGER[@]}"
@@ -1034,7 +1034,7 @@ AFFECTED_TESTS_SCRIPTS_DESTROY_GUARD_COUNTER_GITHUB_PATHS=(
 AFFECTED_TESTS_SCRIPTS_DESTROY_GUARD_COUNTER_SENTRY_PATHS=(
   ".github/workflows/apply-sentry-infra.yml"
   "apps/web-platform/infra/sentry"
-  "knowledge-base/project/specs/fix-7650-sentry-alert-migration/"
+  "knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/"
   "scripts/lib/test-affected-paths.sh"
   "scripts/sentry-destroy-counts.sh"
   "tests/scripts/fixtures"
@@ -1163,7 +1163,7 @@ AFFECTED_TESTS_SCRIPTS_SENTRY_AC17_DERIVED_COUNTS_PATHS=(
 # tests/scripts/sentry-alert-drift-workflow — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_TESTS_SCRIPTS_SENTRY_ALERT_DRIFT_WORKFLOW_PATHS=(
-  "knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase2-live-workflows-capture-2026-09-04.json"
+  "knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/phase2-live-workflows-capture-2026-09-04.json"
   "scripts/alarm-issue-filing-guard.test.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/sentry-alert-live-fidelity.sh"
@@ -1533,7 +1533,7 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_CONSTRAINT_SCAFFOLD_TEST_PARITY_TEST_SH_PATHS=(
 # plugins/soleur/skills/git-worktree/test/create-from-origin-main.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_SKILLS_GIT_WORKTREE_TEST_CREATE_FROM_ORIGIN_MAIN_TEST_SH_PATHS=(
-  "knowledge-base/project/plans/2026-05-14-fix-worktree-create-from-origin-main-plan.md"
+  "knowledge-base/project/plans/archive/20261013-014038-2026-05-14-fix-worktree-create-from-origin-main-plan.md"
   "plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
   "plugins/soleur/skills/git-worktree/test/create-from-origin-main.test.sh"
   "scripts/lib/test-affected-paths.sh"
@@ -1566,7 +1566,7 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_GIT_WORKTREE_TEST_NO_REPO_FAIL_LOUD_TEST_SH_PATHS
 # plugins/soleur/skills/git-worktree/test/orphan-reaper-honest-count.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_SKILLS_GIT_WORKTREE_TEST_ORPHAN_REAPER_HONEST_COUNT_TEST_SH_PATHS=(
-  "knowledge-base/project/plans/2026-07-31-fix-honest-failure-reporting-hook-timeout-and-orphan-reaper-plan.md"
+  "knowledge-base/project/plans/archive/20261013-041741-2026-07-31-fix-honest-failure-reporting-hook-timeout-and-orphan-reaper-plan.md"
   "plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
   "plugins/soleur/skills/git-worktree/test/orphan-reaper-honest-count.test.sh"
   "scripts/lib/test-affected-paths.sh"
@@ -1575,7 +1575,7 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_GIT_WORKTREE_TEST_ORPHAN_REAPER_HONEST_COUNT_TEST
 # plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_SKILLS_GIT_WORKTREE_TEST_REAP_ARCHIVE_PERSISTENCE_TEST_SH_PATHS=(
-  "knowledge-base/project/plans/2026-09-28-fix-reaper-archive-tracked-kb-persistence-plan.md"
+  "knowledge-base/project/plans/archive/20261013-051752-2026-09-28-fix-reaper-archive-tracked-kb-persistence-plan.md"
   "plugins/soleur/scripts/lib/session-state.sh"
   "plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
   "plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh"
@@ -1585,7 +1585,7 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_GIT_WORKTREE_TEST_REAP_ARCHIVE_PERSISTENCE_TEST_S
 # plugins/soleur/skills/git-worktree/test/stale-lock-sweep.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_SKILLS_GIT_WORKTREE_TEST_STALE_LOCK_SWEEP_TEST_SH_PATHS=(
-  "knowledge-base/project/plans/2026-07-01-fix-stale-git-lock-sweep-worktree-plan.md"
+  "knowledge-base/project/plans/archive/20261013-041741-2026-07-01-fix-stale-git-lock-sweep-worktree-plan.md"
   "plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
   "plugins/soleur/skills/git-worktree/test/stale-lock-sweep.test.sh"
   "scripts/lib/test-affected-paths.sh"

@@ -77,4 +77,4 @@ Symptom location ≠ defect location.
 ## Tags
 category: workflow-patterns
 module: apps/web-platform (chat ws protocol); .claude/hooks (filing gate)
-related: knowledge-base/project/specs/feat-concierge-activity-trail/spec.md; issue #9515, #9516; spec feat-reasoning-chat-boxes (#5363)
+related: knowledge-base/project/specs/archive/20261013-062704-feat-concierge-activity-trail/spec.md; issue #9515, #9516; spec feat-reasoning-chat-boxes (#5363)

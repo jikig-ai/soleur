@@ -1,6 +1,6 @@
 // Cost-cap env-var reader for the cc-soleur-go runner.
 //
-// Plan: knowledge-base/project/plans/2026-04-23-feat-cc-route-via-soleur-go-plan.md
+// Plan: knowledge-base/project/plans/archive/20261013-003106-2026-04-23-feat-cc-route-via-soleur-go-plan.md
 // Stage 2.18. Recalibrated 2026-04-24 (RERUN §"Cost caps vs measured
 // reality"): $5 brainstorm / $2 work / $25 user-daily / $500 global-daily.
 // CFO gate at Stage 6.5.1 before merge.

@@ -1,6 +1,6 @@
 # Learning: a sudo-denial signature must name both flavors, and a one-form census is a sieve
 
-Issue: #10045 | PR: #10063 | spec: `knowledge-base/project/specs/feat-one-shot-10045-kdeny-least-priv/`
+Issue: #10045 | PR: #10063 | spec: `knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-10045-kdeny-least-priv/`
 
 ## Problem
 

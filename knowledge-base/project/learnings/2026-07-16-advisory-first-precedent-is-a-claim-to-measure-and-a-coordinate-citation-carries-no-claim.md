@@ -38,7 +38,7 @@ synced_to: [brainstorm]
 > verifies by hand.
 
 Source brainstorm (full decision record + domain assessments):
-`knowledge-base/project/brainstorms/2026-07-16-citation-rot-bare-token-gates-brainstorm.md`
+`knowledge-base/project/brainstorms/archive/20261013-041741-2026-07-16-citation-rot-bare-token-gates-brainstorm.md`
 
 ## Problem
 

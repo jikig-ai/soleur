@@ -5,7 +5,7 @@ date: 2026-05-22
 related: [4230, 4229, 4225, 4319, 4299]
 related_adrs: [ADR-038, ADR-026, ADR-023]
 related_plans:
-  - knowledge-base/project/plans/2026-05-22-feat-dsar-departed-member-coverage-plan.md
+  - knowledge-base/project/plans/archive/20261013-014038-2026-05-22-feat-dsar-departed-member-coverage-plan.md
 brand_survival_threshold: single-user incident
 ---
 
@@ -162,5 +162,5 @@ Two changes to `apps/web-platform/server/dsar-export.ts`:
 - ADR-038 — team-workspace substrate this builds on.
 - ADR-026 — gdpr-gate skill that audits this PR's diff.
 - Learnings: `2026-05-21-worm-ledger-rls-owner-insert-policy-is-an-rpc-bypass.md`, `2026-05-15-worm-trigger-blocks-pg-cron-retention-sweep.md`, `2026-05-18-worm-trigger-bypass-role-check-fails-under-postgrest-routing.md`, `2026-05-21-postgrest-schema-cache-and-stale-plan-quoted-apply-state.md`.
-- Plan: `knowledge-base/project/plans/2026-05-22-feat-dsar-departed-member-coverage-plan.md`.
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-22-feat-dsar-departed-member-coverage-plan.md`.
 - Issue #4230 (this work), umbrella #4229, parent ADR-038/PR #4225, follow-up #4319 (redaction split), related #4299 (sister-table ON DELETE RESTRICT).

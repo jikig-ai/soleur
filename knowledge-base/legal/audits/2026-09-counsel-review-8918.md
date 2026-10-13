@@ -27,7 +27,7 @@ attests:
   - "apps/web-platform/server/dsar-export-allowlist.ts — the `pending_checkout_sessions` entry in DSAR_TABLE_EXCLUSIONS (the lockstep trigger)"
 does_not_attest:
   - "supabase/migrations/144_pending_checkout_sessions.{sql,down.sql}, supabase/verify/144_pending_checkout_sessions.sql, app/api/checkout/route.ts, app/api/webhooks/stripe/route.ts, the new tests, and the concurrency-modal copy change (technical controls; counsel attests the records' statements about them, not their correctness)"
-  - "knowledge-base/project/plans/2026-09-28-fix-billing-checkout-server-idempotency-plan.md, the spec session-state/tasks files, and the row-identity learning (engineering records; the plan's disclosed_as pointer is relied upon only as evidence of intended disclosure surface for C2)"
+  - "knowledge-base/project/plans/archive/20261013-051752-2026-09-28-fix-billing-checkout-server-idempotency-plan.md, the spec session-state/tasks files, and the row-identity learning (engineering records; the plan's disclosed_as pointer is relied upon only as evidence of intended disclosure surface for C2)"
   - "apps/web-platform/.service-role-allowlist diff (operational record; consistent with the table's service-role-only posture)"
 art_33_triggered: false
 art_34_triggered: false
@@ -186,4 +186,4 @@ O1–O4 are non-blocking.
 - `grep -n 'pending_checkout_sessions' apps/web-platform/app/api/webhooks/stripe/route.ts` → deletes in the completed and expired arms (D4).
 - `grep -n 'STALE_NULL_MARKER_MS\|\.delete()' apps/web-platform/app/api/checkout/route.ts` → reclaim + release paths (D5).
 - `grep -n 'pending_checkout_sessions' knowledge-base/legal/article-30-register.md` → 0 pre-C2 (D18).
-- `grep -n 'disclosed_as.*article-30' knowledge-base/project/plans/2026-09-28-fix-billing-checkout-server-idempotency-plan.md` → the register-as-disclosure-surface pointer (D18).
+- `grep -n 'disclosed_as.*article-30' knowledge-base/project/plans/archive/20261013-051752-2026-09-28-fix-billing-checkout-server-idempotency-plan.md` → the register-as-disclosure-surface pointer (D18).

@@ -5,9 +5,9 @@ date: 2026-05-25
 related: [4379, 4124, 4378]
 related_adrs: [ADR-030, ADR-041, ADR-251]
 related_plans:
-  - knowledge-base/project/plans/2026-05-25-feat-anthropic-leader-loop-pr-b-plan.md
+  - knowledge-base/project/plans/archive/20261013-014038-2026-05-25-feat-anthropic-leader-loop-pr-b-plan.md
 related_specs:
-  - knowledge-base/project/specs/feat-4379-anthropic-leader-loop/spec.md
+  - knowledge-base/project/specs/archive/20261013-014038-feat-4379-anthropic-leader-loop/spec.md
 brand_survival_threshold: single-user incident
 ---
 
@@ -161,9 +161,9 @@ All Anthropic calls use `cache_control: { type: "ephemeral" }` markers on the sy
 
 ## References
 
-- Spec: `knowledge-base/project/specs/feat-4379-anthropic-leader-loop/spec.md`
-- Brainstorm: `knowledge-base/project/brainstorms/2026-05-25-pr-b-anthropic-leader-loop-brainstorm.md`
-- Plan: `knowledge-base/project/plans/2026-05-25-feat-anthropic-leader-loop-pr-b-plan.md`
+- Spec: `knowledge-base/project/specs/archive/20261013-014038-feat-4379-anthropic-leader-loop/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-25-pr-b-anthropic-leader-loop-brainstorm.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-25-feat-anthropic-leader-loop-pr-b-plan.md`
 - PR-A substrate (merged): #4378 (commit `7d5620a5`)
 - Reference Inngest impls: `apps/web-platform/server/inngest/functions/cfo-on-payment-failed.ts:198-217`, `github-on-event.ts:208`
 - BYOK lease: `apps/web-platform/server/byok-lease.ts:338`

@@ -55,8 +55,8 @@ All three corrections share the same parent class: I cited file:line evidence wi
 
 ## Cross-references
 
-- Plan: `knowledge-base/project/plans/2026-05-13-feat-cc-soleur-go-smoke-2939-pr-a-plan.md`
-- Spec: `knowledge-base/project/specs/feat-cc-soleur-go-smoke-2939/spec.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-13-feat-cc-soleur-go-smoke-2939-pr-a-plan.md`
+- Spec: `knowledge-base/project/specs/archive/20261013-014038-feat-cc-soleur-go-smoke-2939/spec.md`
 - Sibling learning (brainstorm layer): `knowledge-base/project/learnings/2026-05-13-brainstorm-grep-cited-flag-symbol-against-main-before-spawning-leaders.md`
 - Parent rule class: paraphrase-without-verification (canonical learning: `2026-04-22-ts-sql-normalizer-parity-when-shipping-backfill-migration.md`)
 - Kieran plan-review session that caught all 3 errors: PR #3743 plan-review pass, 2026-05-13

@@ -1,7 +1,7 @@
 /**
  * Phase 4 (#stuck-active fix) — self-healing cap_hit ledger-divergence recovery.
  *
- * Plan: knowledge-base/project/plans/2026-05-05-fix-cc-chat-stuck-conversation-blocks-concurrency-slot-plan.md
+ * Plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-05-fix-cc-chat-stuck-conversation-blocks-concurrency-slot-plan.md
  *
  * When `acquireSlot` returns `cap_hit` and the user's *visible* active
  * conversations (status in active/waiting_for_user, archived_at IS NULL)

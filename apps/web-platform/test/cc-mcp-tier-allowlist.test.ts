@@ -12,7 +12,7 @@
  *   `reportSilentFallback` (Candidate B per Kieran SDK-source read —
  *   canUseTool does NOT fire for unknown MCP tools).
  *
- * Plan: knowledge-base/project/plans/2026-05-13-feat-mcp-tier-classify-cc-soleur-go-phase-1-plan.md
+ * Plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-13-feat-mcp-tier-classify-cc-soleur-go-phase-1-plan.md
  */
 import { describe, test, expect } from "vitest";
 import {

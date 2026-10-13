@@ -34,7 +34,7 @@
 // so it is provably unreachable regardless of CRON_WORKSPACE_ROOT's value.
 // cron-workspace-gc.test.ts asserts a UUID dir is never swept (even when old).
 //
-// Plan: knowledge-base/project/plans/2026-06-03-fix-cron-workspace-gc-and-kb-reconcile-isolation-plan.md
+// Plan: knowledge-base/project/plans/archive/20261013-032858-2026-06-03-fix-cron-workspace-gc-and-kb-reconcile-isolation-plan.md
 
 import { statfs, readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";

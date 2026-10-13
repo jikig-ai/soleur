@@ -1050,7 +1050,7 @@ fi
 #
 # See `.github/workflows/ci.yml` test-{webplat,bun,scripts,scripts-heavy} jobs + the
 # synthetic `test` aggregator. See plan
-# `knowledge-base/project/plans/2026-05-12-feat-ci-test-job-speedup-plan.md`.
+# `knowledge-base/project/plans/archive/20261013-014038-2026-05-12-feat-ci-test-job-speedup-plan.md`.
 TEST_GROUP="${TEST_GROUP:-${1:-all}}"
 case "$TEST_GROUP" in
   all|webplat|bun|scripts|scripts-heavy|infra|affected) ;;
@@ -2538,7 +2538,7 @@ _aff_classify_runner_diff() {
 # infra check: over-matching a path that merely CONTAINS the string errs toward RUNNING the
 # suite, which is the safe direction. A `^`-marked entry (minted by `_affected_add_edge`) is
 # ANCHORED instead — see `_diff_edge_hit` above — and errs toward NOT running on a path that
-# only contains the word; knowledge-base/project/specs/feat-affected-parallel-test-gate/
+# only contains the word; knowledge-base/project/specs/archive/20261013-062704-feat-affected-parallel-test-gate/
 # edge-anchoring-corpus.md records the measurement behind that trade.
 #
 # `_diff_touches --pr-gated <paths...>` (ADR-262) is the one call-site opt-in for a self-test

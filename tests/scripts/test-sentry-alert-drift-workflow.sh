@@ -195,7 +195,7 @@ t_close_gated_on_clean_only() {
 # from the shipped files, neither is restated here.
 t_probe_marker_matches_what_the_step_greps() {
   local probe="$REPO_ROOT/scripts/sentry-alert-live-fidelity.sh"
-  local capture="$REPO_ROOT/knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase2-live-workflows-capture-2026-09-04.json"
+  local capture="$REPO_ROOT/knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/phase2-live-workflows-capture-2026-09-04.json"
   if [[ ! -f "$probe" || ! -f "$capture" ]]; then
     _report "W7 the probe emits the marker the step greps" fail "probe or capture missing"
     return

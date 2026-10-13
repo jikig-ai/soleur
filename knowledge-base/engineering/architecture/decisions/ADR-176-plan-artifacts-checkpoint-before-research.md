@@ -6,9 +6,9 @@ amends: [ADR-015]
 related_adrs: [ADR-015, ADR-026, ADR-032, ADR-083, ADR-089, ADR-112, ADR-121, ADR-126, ADR-132, ADR-151]
 related: [7418, 7420, 7421]
 related_plans:
-  - knowledge-base/project/plans/2026-08-10-chore-plan-skeleton-checkpoint-before-research-fanout-plan.md
+  - knowledge-base/project/plans/archive/20261013-051752-2026-08-10-chore-plan-skeleton-checkpoint-before-research-fanout-plan.md
 related_specs:
-  - knowledge-base/project/specs/feat-one-shot-7418-plan-skeleton-checkpoint/tasks.md
+  - knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7418-plan-skeleton-checkpoint/tasks.md
 brand_survival_threshold: aggregate pattern
 ---
 
