@@ -295,11 +295,11 @@
 1	plugins/soleur/skills/archive-kb/scripts/archive-kb.sh
 1	plugins/soleur/skills/archive-kb/test/archive-kb-partial-run.test.sh
 1	plugins/soleur/skills/code-to-prd/scripts/code-to-prd.sh
-2	plugins/soleur/skills/community/scripts/bsky-setup.sh
-4	plugins/soleur/skills/community/scripts/discord-setup.sh
+6	plugins/soleur/skills/community/scripts/bsky-setup.sh
+6	plugins/soleur/skills/community/scripts/discord-setup.sh
 1	plugins/soleur/skills/community/scripts/github-community.sh
-2	plugins/soleur/skills/community/scripts/linkedin-setup.sh
-2	plugins/soleur/skills/community/scripts/x-setup.sh
+6	plugins/soleur/skills/community/scripts/linkedin-setup.sh
+6	plugins/soleur/skills/community/scripts/x-setup.sh
 2	plugins/soleur/skills/community/test/github-community.test.sh
 7	plugins/soleur/skills/compound/scripts/token-efficiency-report.sh
 23	plugins/soleur/skills/compound/test/phase-16.test.sh

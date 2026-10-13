@@ -2008,7 +2008,7 @@ check "wenv_write drift: the widened copy's extraction is still whole (so the RE
 check "wenv_write drift: a copy widened in ONE place is RED against the others" not cmp -s "$WBLK/bsky-setup.sh.wblk" "$WBLK/x-wmut.blk"
 check "wenv_write drift: an empty extraction is not accepted as sane (the four-way compare cannot go trivially green)" not wenvw_sane /dev/null
 check "no flock: no executable line of the _wenv_write block names flock or opens a descriptor on the lock (one mkdir mechanism on every platform)" \
-  bash -c '! grep -v "^[[:space:]]*#" "$1" | grep -qE "flock|exec [{0-9]"' _ "$WBLK/bsky-setup.sh.wblk"
+  bash -c '! grep -qE "flock|exec [{0-9]" < <(grep -v "^[[:space:]]*#" "$1")' _ "$WBLK/bsky-setup.sh.wblk"
 
 echo "== write-env commit helper _wenv_write: behaviour =="
 WED="$SANDBOX/guard4"; mkdir -p "$WED/shim"

@@ -6909,25 +6909,29 @@ else row "S7 control: the unmutated scratch tree is not GREEN" fail "reasons='$S
 # --- mutation rows (the SAME scan over a scratch tree) ----------------------------------------
 # M1: a violating header re-added to a converted file.
 S7_M1="$(s7_fresh m1)"; S7_M1F="plugins/soleur/skills/reproduce-bug/SKILL.md"
+assert_fixture_dir "$S7_M1"
 printf '%s\n' '```bash' 'curl -s -H "Authorization: Bearer $TOK" "https://x.example/api"' '```' >> "$S7_M1/$S7_M1F"
 s7_judge "$S7_M1"
 if [[ "$S7_J_REASONS" == "argv:$S7_M1F" ]]; then row "S7 mutation 1: the argv bearer header re-added to a converted file is RED, by file identity and nothing else" ok
 else row "S7 mutation 1: a re-added argv header in a converted file is not caught" fail "reasons='$S7_J_REASONS'"; fi
 # M2: a compliant converted snippet in one file, then a violating one in a different file: only the second is named.
 S7_M2="$(s7_fresh m2)"
+assert_fixture_dir "$S7_M2"
 printf '%s\n' '```bash' "curl --disable --proto '=https' -m 30 -fsS --config - \"\$URL\" $S7_PRINTF" '```' >> "$S7_M2/plugins/soleur/skills/postmerge/SKILL.md"
 printf '%s\n' '```bash' 'curl -fsS -H "apikey: $K" "$URL"' '```' >> "$S7_M2/plugins/soleur/skills/preflight/SKILL.md"
 s7_judge "$S7_M2"
 if [[ "$S7_J_REASONS" == "argv:plugins/soleur/skills/preflight/SKILL.md" ]]; then row "S7 mutation 2: a compliant snippet then a violating one in another file is RED for the second file only (identity, not a count)" ok
 else row "S7 mutation 2: the second file's violation is not named, or the compliant snippet is flagged" fail "reasons='$S7_J_REASONS'"; fi
 # M3: the allowlist grows by one entry (a new file with a hit, allowlisted with its count): the ceiling is RED.
-S7_M3="$(s7_fresh m3)"; printf '%s\n' '`curl -H "Authorization: Bearer $T" "$U"`' > "$S7_M3/plugins/soleur/skills/zz-new.md"
+S7_M3="$(s7_fresh m3)"; assert_fixture_dir "$S7_M3"
+printf '%s\n' '`curl -H "Authorization: Bearer $T" "$U"`' > "$S7_M3/plugins/soleur/skills/zz-new.md"
 S7_ALLOW_SAVE=("${S7_ALLOW[@]}"); S7_ALLOW+=("plugins/soleur/skills/zz-new.md	1")
 s7_judge "$S7_M3"; S7_M3R="$S7_J_REASONS"; S7_ALLOW=("${S7_ALLOW_SAVE[@]}")
 if [[ "$S7_M3R" == "ceiling" ]]; then row "S7 mutation 3: the allowlist growing by one entry is RED on the ceiling (and the new entry's own hit is the only thing it hides)" ok
 else row "S7 mutation 3: the residual allowlist can grow silently" fail "reasons='$S7_M3R'"; fi
 # M3b: one more hit inside the allowlisted documentation file (the entry names a count, not a licence). M3c: an entry whose file carries no hit (stale).
-S7_M3B="$(s7_fresh m3b)"; printf '%s\n' 'curl -sS -H "Authorization: Bearer $T" "$U"' >> "$S7_M3B/$S7_APIDOC"
+S7_M3B="$(s7_fresh m3b)"; assert_fixture_dir "$S7_M3B"
+printf '%s\n' 'curl -sS -H "Authorization: Bearer $T" "$U"' >> "$S7_M3B/$S7_APIDOC"
 s7_judge "$S7_M3B"; S7_M3BR="$S7_J_REASONS"
 S7_M3C="$(s7_fresh m3c)"; S7_ALLOW_SAVE=("${S7_ALLOW[@]}"); S7_ALLOW=("plugins/soleur/skills/zz-gone.md	1")
 s7_judge "$S7_M3C"; S7_M3CR="$S7_J_REASONS"; S7_ALLOW=("${S7_ALLOW_SAVE[@]}")
