@@ -651,7 +651,7 @@ arm_reset
 # Degrade ONLY the runcmd reader's bound to a stale 30 in a fixture copy, then run the same
 # split-and-count the structural arm performs: reopen window keeps its 300, runcmd window reads
 # zero. A whole-file count would pass this — that is the defect T1.6 exists to catch.
-_MUTC="$(mktemp -d)/ci-mut.yml"; cp "$CLOUD_INIT" "$_MUTC"
+_MUTD="$(mktemp -d)"; _MUTC="$_MUTD/ci-mut.yml"; cp "$CLOUD_INIT" "$_MUTC"
 _msplit="$(grep -n "bash -s <<'LUKSEOF'" "$_MUTC" | sed -n '1p' | cut -d: -f1)"
 if [ -n "$_msplit" ]; then
   { head -n "$((_msplit - 1))" "$_MUTC"; tail -n +"$_msplit" "$_MUTC" | sed '0,/\[ "\$_i" -lt 300 \]/s//[ "$_i" -lt 30 ]/'; } > "$_MUTC.new"
