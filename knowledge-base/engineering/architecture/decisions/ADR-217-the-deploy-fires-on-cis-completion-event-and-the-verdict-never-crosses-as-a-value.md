@@ -55,7 +55,7 @@ measured.
 ADR-212's `Named residual` called the concurrency queue "the dominant term". It
 is not, across the population. Measured over 29 consecutive `main` push runs
 (2026-09-07T09:02:01Z → 2026-09-09T07:50:05Z; raw `jobs.tsv` committed at
-`knowledge-base/project/specs/feat-one-shot-7931-5806-ci-concurrency-and-workflow-run-deploy/measurement-jobs-2026-09-09.tsv`):
+`knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7931-5806-ci-concurrency-and-workflow-run-deploy/measurement-jobs-2026-09-09.tsv`):
 
 | cohort | n | first-job delay | queue term | start spread (needs-less jobs) |
 |---|---|---|---|---|

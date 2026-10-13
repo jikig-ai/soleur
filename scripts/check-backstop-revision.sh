@@ -11,7 +11,7 @@
 # so the fix merges on main while stale-checkout sessions keep running the old
 # protection. This gate makes a missing bump a required-check failure.
 #
-# Contract (knowledge-base/project/plans/2026-09-29-fix-backstop-hook-version-resolution-plan.md,
+# Contract (knowledge-base/project/plans/archive/20261013-051752-2026-09-29-fix-backstop-hook-version-resolution-plan.md,
 # Guard 1): when the merge-base diff touches the hook, the BACKSTOP_REVISION
 # value must STRICTLY INCREASE vs merge-base. A re-set to the same value fails
 # and so does a DECREASE — the resolver orders installed copies by `>`, so a

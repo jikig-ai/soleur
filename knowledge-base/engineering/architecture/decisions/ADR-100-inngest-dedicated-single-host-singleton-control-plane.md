@@ -1824,7 +1824,7 @@ halves, matching the zot-pin precedent (#7282):
 - Liveness probe for operators: `apps/web-platform/infra/inngest-cli-pin-probe.sh`
   prints `PINNED=`, `CAPTURE_DATE=`, `VERDICT=` in under a second, offline.
 
-### Phase-0 findings re-spiked against v1.45.1 (evidence: `knowledge-base/project/specs/feat-one-shot-7463-inngest-cli-pin-bump/phase0-respike-evidence.md`)
+### Phase-0 findings re-spiked against v1.45.1 (evidence: `knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7463-inngest-cli-pin-bump/phase0-respike-evidence.md`)
 
 | Finding | Verdict on v1.45.1 |
 |---|---|

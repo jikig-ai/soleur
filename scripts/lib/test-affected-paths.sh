@@ -692,7 +692,7 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "knowledge-base/legal/recommended-tools.md"
   "knowledge-base/marketing/brand-guide.md"
   "knowledge-base/overview/vision.md"
-  "knowledge-base/project/specs/feat-one-shot-7586-7587-red-apply-no-channel-arm-deadline/"
+  "knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7586-7587-red-apply-no-channel-arm-deadline/"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 
@@ -1034,7 +1034,7 @@ AFFECTED_TESTS_SCRIPTS_DESTROY_GUARD_COUNTER_GITHUB_PATHS=(
 AFFECTED_TESTS_SCRIPTS_DESTROY_GUARD_COUNTER_SENTRY_PATHS=(
   ".github/workflows/apply-sentry-infra.yml"
   "apps/web-platform/infra/sentry"
-  "knowledge-base/project/specs/fix-7650-sentry-alert-migration/"
+  "knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/"
   "scripts/lib/test-affected-paths.sh"
   "scripts/sentry-destroy-counts.sh"
   "tests/scripts/fixtures"
@@ -1163,7 +1163,7 @@ AFFECTED_TESTS_SCRIPTS_SENTRY_AC17_DERIVED_COUNTS_PATHS=(
 # tests/scripts/sentry-alert-drift-workflow — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_TESTS_SCRIPTS_SENTRY_ALERT_DRIFT_WORKFLOW_PATHS=(
-  "knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase2-live-workflows-capture-2026-09-04.json"
+  "knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/phase2-live-workflows-capture-2026-09-04.json"
   "scripts/alarm-issue-filing-guard.test.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/sentry-alert-live-fidelity.sh"
@@ -1575,7 +1575,7 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_GIT_WORKTREE_TEST_ORPHAN_REAPER_HONEST_COUNT_TEST
 # plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_SKILLS_GIT_WORKTREE_TEST_REAP_ARCHIVE_PERSISTENCE_TEST_SH_PATHS=(
-  "knowledge-base/project/plans/2026-09-28-fix-reaper-archive-tracked-kb-persistence-plan.md"
+  "knowledge-base/project/plans/archive/20261013-051752-2026-09-28-fix-reaper-archive-tracked-kb-persistence-plan.md"
   "plugins/soleur/scripts/lib/session-state.sh"
   "plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
   "plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh"

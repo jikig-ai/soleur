@@ -54,14 +54,14 @@ related:
   - knowledge-base/legal/audits/2026-09-counsel-review-7947.md
   - knowledge-base/legal/audits/2026-09-08-clo-attestation-7500-zot-last-err-redaction.md
   - knowledge-base/engineering/architecture/decisions/ADR-213-browser-snapshot-credential-guard-split.md
-  - knowledge-base/project/specs/feat-one-shot-7980-playwright-mcp-snapshot-redaction-proxy/phase-0-measurement.md
-  - knowledge-base/project/specs/feat-one-shot-7980-playwright-mcp-snapshot-redaction-proxy/plan-time-probe-record.md
+  - knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7980-playwright-mcp-snapshot-redaction-proxy/phase-0-measurement.md
+  - knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7980-playwright-mcp-snapshot-redaction-proxy/plan-time-probe-record.md
   - plugins/soleur/skills/agent-browser/scripts/playwright-mcp-redact-proxy.py
   - plugins/soleur/skills/agent-browser/scripts/redact-a11y-snapshot.py
   - plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh
   - plugins/soleur/skills/agent-browser/test/redact-a11y-snapshot.test.sh
-  - knowledge-base/project/specs/feat-one-shot-7980-playwright-mcp-snapshot-redaction-proxy/runs/suite-review-round.txt
-  - knowledge-base/project/specs/feat-one-shot-7980-playwright-mcp-snapshot-redaction-proxy/runs/suite-red-passthrough-review-round.txt
+  - knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7980-playwright-mcp-snapshot-redaction-proxy/runs/suite-review-round.txt
+  - knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7980-playwright-mcp-snapshot-redaction-proxy/runs/suite-red-passthrough-review-round.txt
   - apps/web-platform/test/server/inngest/cron-ux-audit.test.ts
   - .mcp.json
   - apps/web-platform/server/inngest/functions/cron-ux-audit.ts

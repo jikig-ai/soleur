@@ -21,7 +21,7 @@ attests:
   - "knowledge-base/legal/compliance-posture.md — the new IN-PROGRESS row 'Devin hook-matcher dead window' (#8205 / PR #8214)"
 does_not_attest:
   - "knowledge-base/engineering/architecture/decisions/ADR-213-*.md and ADR-223-*.md, plugins/soleur/devin/INSTRUCTIONS.md, .claude/hooks/README.md (engineering records; see O1)"
-  - "knowledge-base/project/specs/feat-settings-matcher-devin-audit/envelope-capture.md (evidence file, relied upon)"
+  - "knowledge-base/project/specs/archive/20261013-051752-feat-settings-matcher-devin-audit/envelope-capture.md (evidence file, relied upon)"
   - "The hook bodies, registries, ledger and parity test themselves (technical controls; counsel attests the register's statements about them, not their correctness)"
 art_33_triggered: false
 art_34_triggered: false
@@ -115,7 +115,7 @@ No other text change is required. O1–O4 are non-blocking.
 - `git show origin/main:plugins/soleur/hooks/browser-snapshot-credential-guard.sh | grep -n '"exec"'` → line 93, the `exec`-admitting gate already on main (C1).
 - `grep -n 'browser-snapshot' .claude/settings.json plugins/soleur/hooks/hooks.json .claude/hooks/devin-dispositions.tsv` → settings `Bash` registration, plugin `^(Bash|exec)$`, ledger rows 57/114 `covered-by-plugin` (D1, D3).
 - `grep -n 'HOOK_TOOL_KIND' .claude/hooks/lib/hook-input.sh` → exported at line 397 (D7).
-- `grep -rn 'UNVERIFIED\|UNMEASURED' knowledge-base/project/specs/feat-settings-matcher-devin-audit/envelope-capture.md` → §6 `ask`/`defer`/`~`/`Exec()`/PermissionRequest; confirm neither legal artifact claims them (F4).
+- `grep -rn 'UNVERIFIED\|UNMEASURED' knowledge-base/project/specs/archive/20261013-051752-feat-settings-matcher-devin-audit/envelope-capture.md` → §6 `ask`/`defer`/`~`/`Exec()`/PermissionRequest; confirm neither legal artifact claims them (F4).
 - `git diff origin/main...HEAD | grep -c 'DRAFT'` → 0.
 
 ## Lead application record

@@ -568,7 +568,7 @@ describe("handler source anchors", () => {
 const BOOTSTRAP_SOURCE = readFileSync(
   resolve(
     __dirname,
-    "../../../../../knowledge-base/project/specs/feat-linkedin-token-renewal/bootstrap.sh",
+    "../../../../../knowledge-base/project/specs/archive/20261013-051752-feat-linkedin-token-renewal/bootstrap.sh",
   ),
   "utf-8",
 );

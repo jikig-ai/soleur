@@ -104,7 +104,7 @@ after `plan.name == team` verifies (separate follow-up commit/PR, tracked below)
 
   $4/mo is ~1% of the dev-tools subtotal — no `finance/cost-model.md` refresh needed.
 - **A.2** Operator upgrade steps live in a durable artifact —
-  `knowledge-base/project/specs/feat-8450-ci-concurrency/operator-upgrade-steps.md` — carrying the
+  `knowledge-base/project/specs/archive/20261013-051752-feat-8450-ci-concurrency/operator-upgrade-steps.md` — carrying the
   FR4 steps verbatim (org Settings → Billing → upgrade to Team), the verification command
   (`gh api orgs/jikig-ai --jq .plan.name` → `team`), the ledger-flip instruction, and an
   `action-required` comment on #8450 pointing at it (steps live in the doc, not the comment —
@@ -118,7 +118,7 @@ after `plan.name == team` verifies (separate follow-up commit/PR, tracked below)
   `/work` retries the browser attempt if a runnable browser profile appears; otherwise the
   operator follows `operator-upgrade-steps.md`.
 - **A.3** Record the pre-change baseline into
-  `knowledge-base/project/specs/feat-8450-ci-concurrency/measurements.md`: fresh queued-age
+  `knowledge-base/project/specs/archive/20261013-051752-feat-8450-ci-concurrency/measurements.md`: fresh queued-age
   sample + deploy-arm (`web-platform-release.yml` + `migrate`) wait times measured as per-job
   `started_at − created_at` from `actions/runs`/`runs/<id>/jobs` (queued-status snapshots only
   see the currently-queued set), with timestamps and the sampling command — the before/after
@@ -278,8 +278,8 @@ flips only after its verdict is observed correct on this PR's own runs.
 - `scripts/ci-e2e-classify.sh` — shipped allowlist classifier the detector calls (C.1);
   Guard 1 tests this artifact, not a YAML mirror
 - `plugins/soleur/test/ci-e2e-skip-anchors.test.sh` — Guard 1 (C.1–C.3)
-- `knowledge-base/project/specs/feat-8450-ci-concurrency/measurements.md` — before/after record (A.3, D.2)
-- `knowledge-base/project/specs/feat-8450-ci-concurrency/operator-upgrade-steps.md` — FR4 steps + verification + ledger flip (A.2)
+- `knowledge-base/project/specs/archive/20261013-051752-feat-8450-ci-concurrency/measurements.md` — before/after record (A.3, D.2)
+- `knowledge-base/project/specs/archive/20261013-051752-feat-8450-ci-concurrency/operator-upgrade-steps.md` — FR4 steps + verification + ledger flip (A.2)
 
 ## Files to Edit
 

@@ -6,7 +6,7 @@ issue: 5914
 related_issues: [7226, 8629, 8572, 8211, 8209, 8442]
 pr: 9096
 parent_review: knowledge-base/legal/audits/2026-09-counsel-review-7226.md
-plan: knowledge-base/project/plans/2026-09-28-feat-git-data-delete-unpinned-fallback-arm-5914-plan.md
+plan: knowledge-base/project/plans/archive/20261013-051752-2026-09-28-feat-git-data-delete-unpinned-fallback-arm-5914-plan.md
 adr: knowledge-base/engineering/architecture/decisions/ADR-237-ssh-host-keys-are-pinned.md
 brand_survival_threshold: single-user incident
 status: SIGNED-OFF (CLO-agent-attested, Soleur-as-tenant-zero v1)

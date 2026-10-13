@@ -290,7 +290,7 @@ done < ci-win.tsv > jobs.tsv
 `sort -ru` is load-bearing: GitHub's pagination is not stable while new
 runs are being created, so a plain `sort -r` can carry the same run on
 two pages and inflate the population. The raw `jobs.tsv` is committed at
-`knowledge-base/project/specs/feat-one-shot-7931-5806-ci-concurrency-and-workflow-run-deploy/measurement-jobs-2026-09-09.tsv`.
+`knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7931-5806-ci-concurrency-and-workflow-run-deploy/measurement-jobs-2026-09-09.tsv`.
 
 ## Verification surfaces
 
