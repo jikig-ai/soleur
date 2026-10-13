@@ -38,3 +38,12 @@
 - Filed: #10213 (pre-existing pr-quality-guards concat bug); comment on #10012 (semgrep SIGSEGV under load)
 - Trailers: Reviewed-By-Soleur full 10/10 (9cdeaafc6e) + Reviewed-Fix-Round (11de2fa59a)
 - Suite state: parse-override.test.sh 16/16; guard-vacuity-floor 23/23; affected-shard skipped (7200s lock queue, pos 5 — targeted suites all green)
+
+## QA Phase — COMPLETE
+- Test Scenarios are Given/When/Then integration prose; every scenario maps to an executed arm:
+  block-map/flow/absent/empty/nested (arms 1-5, 4b-4g, 10), timestamp-second (arm 6), stale-sha (arm 9),
+  empty-diff (arm 8) — parse-override.test.sh 16/16 green
+- #6752 census re-verification: census=36 unchanged, three sites clean on-tree (git-history seat re-verified)
+- Residue leaf: 232/232 incl. sh-cloud-init-inngest delta+counting arms
+- SIGKILL probe executed manually (leaves are never killed by the suite): TMPDIR=<priv> + timeout -s KILL 4
+  → rc=137, residue = exactly one marker-bearing soleur-run.<pid>.* root with .soleur-owned — the #7004 contract
