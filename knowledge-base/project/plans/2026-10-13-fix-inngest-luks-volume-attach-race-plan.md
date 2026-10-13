@@ -163,7 +163,7 @@ None. Queried open `code-review` issues (200 limit) for each file in Files to Ed
 
 **If this lands broken, the user experiences:** scheduled agent work that never fires — the sole Inngest scheduler dark for the length of a host-replace cycle (the incident measured a ~40 min scheduler gap plus one wasted host cycle; armed future reminders are sole-copy state in the AOF, #9879).
 **If this leaks, the user's [data / workflow / money] is exposed via:** the opposite failure — the mount guard being bypassed would put the AOF on the ephemeral root disk while every artifact claims LUKS at rest; this plan does NOT relax the guard (it heals the mount so the guard passes honestly), and the Guard Contract mutation-tests the fail-closed wait.
-**Brand-survival threshold:** `aggregate pattern` (planner default, challengeable; recorded as taste in decision-challenges.md). Reason: the blast radius is fleet-wide scheduler availability (aggregate), not single-user data; the change is fail-closed by construction — a broken wait still ends in the same named FATAL and a broken self-heal leaves the unit `failed` and phoned home.
+- **Brand-survival threshold:** `aggregate pattern` (planner default, challengeable; recorded as taste in decision-challenges.md). Reason: the blast radius is fleet-wide scheduler availability (aggregate), not single-user data; the change is fail-closed by construction — a broken wait still ends in the same named FATAL and a broken self-heal leaves the unit `failed` and phoned home.
 
 ## Observability
 
