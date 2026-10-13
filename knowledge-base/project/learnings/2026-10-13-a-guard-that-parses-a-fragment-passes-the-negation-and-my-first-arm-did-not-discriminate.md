@@ -76,5 +76,6 @@ Two checks a green suite cannot give you:
    issue's headline claim on a sandbox before sizing the work.
 
 ## Tags
+
 category: test-failures
 module: apps/web-platform/infra
