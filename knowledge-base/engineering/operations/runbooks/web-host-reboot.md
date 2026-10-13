@@ -191,4 +191,4 @@ This workflow depends on `scripts/web2-rebirth-never-pooled.sh` and shares helpe
 
 ## References
 
-ADR-263 (addendum 2026-10-07), ADR-241 (credential tiers, dated section 2026-10-07), [web2-luks-rebirth-9372.md](./web2-luks-rebirth-9372.md), [web-host-replace.md](./web-host-replace.md), [infra-credential-tiers-8209.md](./infra-credential-tiers-8209.md), #8044 (two-party dispatch decision), `.github/workflows/web-host-reboot.yml`, `scripts/web-host-reboot.sh`, `scripts/web-host-reboot-evidence.sh`, `knowledge-base/project/plans/2026-10-07-feat-web-host-reboot-workflow-plan.md`.
+ADR-263 (addendum 2026-10-07), ADR-241 (credential tiers, dated section 2026-10-07), [web2-luks-rebirth-9372.md](./web2-luks-rebirth-9372.md), [web-host-replace.md](./web-host-replace.md), [infra-credential-tiers-8209.md](./infra-credential-tiers-8209.md), #8044 (two-party dispatch decision), `.github/workflows/web-host-reboot.yml`, `scripts/web-host-reboot.sh`, `scripts/web-host-reboot-evidence.sh`, `knowledge-base/project/plans/archive/20261013-062704-2026-10-07-feat-web-host-reboot-workflow-plan.md`.

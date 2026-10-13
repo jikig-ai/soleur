@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2015,SC2016,SC2030,SC2031  # `A && B || C` is the row idiom; perl/awk programs are single-quoted on purpose; the floor-zero rows deliberately override the floors in a subshell
-# Guard 2 of the W2 plan (knowledge-base/project/plans/2026-10-06-feat-plugin-destructive-command-guard-w2-plan.md):
+# Guard 2 of the W2 plan (knowledge-base/project/plans/archive/20261013-062704-2026-10-06-feat-plugin-destructive-command-guard-w2-plan.md):
 # the plugin's shell lexer and the repo's filing lexer share their lexer code, so a lexing fix in one
 # cannot silently leave the other behind.
 #

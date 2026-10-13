@@ -253,7 +253,7 @@ impossibility). For R1/R2/R3 the position is that future output is structurally 
 described is **narrowed** by a different mechanism (no redaction pass was built); whether that substitutes for R1-R4 is for
 counsel at #7119, and nothing here treats any of them as met. The register's lawful-basis conclusion is not touched. The digest
 drops Top Contributors, Community Interactions, stargazer usernames, quotes and free-text Trending prose (Decision Challenge in
-`knowledge-base/project/specs/feat-one-shot-7122-community-monitor-output-allowlist/decision-challenges.md`).
+`knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-7122-community-monitor-output-allowlist/decision-challenges.md`).
 
 ## Consequences
 

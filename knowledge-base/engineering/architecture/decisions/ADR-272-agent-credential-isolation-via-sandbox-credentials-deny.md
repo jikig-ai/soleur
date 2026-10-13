@@ -165,7 +165,7 @@ properties or different credentials:
   model; about 8 seconds locally. It needs `bwrap` and `socat` on PATH for the SDK's own startup check (CI installs both in the
   webplat job). If an SDK bump stops honouring `sandbox.credentials`, this reds; it is the only detector (see Status).
 - Mutation proof: two batteries against these guards (24 rows), each row confirmed to land, are recorded in
-  `knowledge-base/project/specs/feat-agent-security-three-layers/phase-0-measurements.md` §1.4.
+  `knowledge-base/project/specs/archive/20261013-062704-feat-agent-security-three-layers/phase-0-measurements.md` §1.4.
 - `scripts/verify-agent-security-slice1.sh` as the local discoverability probe.
 
 ## Note — 2026-10-08 (#9723): the `/proc` deny is now realized by the shim, not incidental

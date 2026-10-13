@@ -917,7 +917,7 @@ cleanup_test "$TEST_DIR"
 echo ""
 
 # === Pipeline Tally Capped Floor Tests (Guard 4, #9403) ===
-# Contract: knowledge-base/project/specs/feat-one-shot-9403-cost-tally/
+# Contract: knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-9403-cost-tally/
 # interface-contract.md §stop-hook.sh — if the branch's counter ledger carries
 # a non-empty `capped=<dim>`, the hook exits 0 WITHOUT emitting {"decision":
 # "block"} and prints SOLEUR_TALLY_CAPPED + a resume hint to stderr.

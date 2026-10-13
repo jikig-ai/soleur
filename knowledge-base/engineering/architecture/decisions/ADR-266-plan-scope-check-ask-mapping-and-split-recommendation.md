@@ -81,7 +81,7 @@ requirement does this mechanism satisfy?" has the verbatim ask list.
 Plans grow one always-on section (~30 lines of template); deepen-plan grows one
 halt. No new lint script, CI job, or hook — deliberately. The ADR-131 tension
 (moratorium vs. this halt) is recorded in
-`knowledge-base/project/specs/feat-one-shot-9398-plan-scope-check/decision-challenges.md`.
+`knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-9398-plan-scope-check/decision-challenges.md`.
 Split-threshold values are tunables to be adjusted on observed false positives.
 
 **Enforcement boundary, stated plainly:** the block is plan-emit-time (Phase 2.4)

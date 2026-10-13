@@ -54,7 +54,7 @@ PLUGIN_ROOT="$(cd "${SUITE_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${PLUGIN_ROOT}/../.." && pwd)"
 LIB="${PLUGIN_ROOT}/scripts/lib/operator-script.sh"
 TEMPLATE="${PLUGIN_ROOT}/skills/operator-bootstrap/template.sh"
-SCRIPT9321="${REPO_ROOT}/knowledge-base/project/specs/feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh"
+SCRIPT9321="${REPO_ROOT}/knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh"
 
 # The three finished generated scripts that still carry the v1 (typed yes) contract. The
 # list may only SHRINK; each entry must already be a v1 script at the merge base (checked
@@ -376,7 +376,7 @@ else
 fi
 FOUND="$(g1_discover "$REPO_ROOT")"
 V2_COUNT="$(grep -c . < <(for f in $FOUND; do sed -n '2p' "$REPO_ROOT/$f" | grep -cx >/dev/null '# SOLEUR-GENERATED-OPERATOR-SCRIPT v2' && echo "$f"; done) || true)"
-if [[ "$V2_COUNT" -ge 2 ]] && grep -qxF 'plugins/soleur/skills/operator-bootstrap/template.sh' <<<"$FOUND" && grep -qxF 'knowledge-base/project/specs/feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh' <<<"$FOUND"; then
+if [[ "$V2_COUNT" -ge 2 ]] && grep -qxF 'plugins/soleur/skills/operator-bootstrap/template.sh' <<<"$FOUND" && grep -qxF 'knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh' <<<"$FOUND"; then
   pass "the discovered v2 population holds the template and the re-cut 9321 script (${V2_COUNT} v2 script(s))"
 else
   fail "the discovered v2 population is missing the template or the 9321 script (found: $(tr '\n' ' ' <<<"$FOUND"))"

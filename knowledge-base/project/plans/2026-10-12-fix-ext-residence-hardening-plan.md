@@ -761,9 +761,9 @@ guard-derived values, FATAL on drift).
 - Issues: #10147, #10148 (this fix — `Closes #10147` and `Closes #10148` in the
   PR body); parent #9998 (closed via PR #10130); grandparents #7226 (Guard 2
   origin), #9151 (web-2 sibling), #9970 (normalization battery)
-- Plan: `knowledge-base/project/plans/2026-10-12-fix-provisioner-parity-ssh-residence-plan.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-062704-2026-10-12-fix-provisioner-parity-ssh-residence-plan.md`
   (the sibling mechanism this plan hardens)
-- Spec: `knowledge-base/project/specs/feat-one-shot-9998-ssh-residence/spec.md`
+- Spec: `knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-9998-ssh-residence/spec.md`
   + `decision-challenges.md` (the CTO rulings on textual-dial scope and
   reason-mandatory enforcement this plan extends)
 - ADRs: ADR-237 (host_key pinning), ADR-114 (connection hosts must not be
