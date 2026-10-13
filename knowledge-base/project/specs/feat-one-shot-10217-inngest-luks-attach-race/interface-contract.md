@@ -22,7 +22,7 @@ Two bodies, byte-identical shape, in `cloud-init-inngest.yml`:
 Ruled shape (D1/D4/D7):
 - Bound is a **literal `300`** in each body — NOT a `${VAR-…}` expansion. No `INNGEST_LUKS_ATTACH_WAIT_S` token anywhere in the file (no env seam, no `attach_wait_invalid`, no validation block).
 - Keep the existing counted `sleep 1`-per-pass loop shape (never the clock).
-- Probe once immediately (bound 0 still probes exactly once).
+- Probe once immediately (bound 0 still probes (immediate + post-settle rescue)).
 - Re-run the WHOLE predicate each pass: `-b <path> && blockdev --getsize64 <path> > 0` (the existing predicate — verify against the file; keep it verbatim).
 - On a miss emit one wait-start line; on resolution emit an appeared-after line — through each file's OWN existing emitter channel (`luks_emit`/`emit`), same style as today.
 - `return 1` after the bound; all six call sites keep their post-wait semantics byte-identically (canonical FATALs unchanged, `staging_absent` still tolerated non-fatal).

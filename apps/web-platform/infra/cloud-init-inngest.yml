@@ -200,8 +200,9 @@ write_files:
 
       # Bounded attach wait, same reason as the runcmd stage: blkid on an absent path returns 2,
       # and "not attached yet" must never be read as "no header". The bound is a literal 300
-      # counted sleep-1 passes (~80s attachment-in-flight measured, #10217), the WHOLE predicate
-      # is re-run each pass, a probe runs once immediately, one wait-start emit fires on the
+      # counted sleep-1 passes (~80s attachment-in-flight measured, #10217; the bound is counted
+      # passes — a hung probe is capped by its own 10s timeout, so wall time is bounded but not
+      # exactly 300s), the WHOLE predicate is re-run each pass, a probe runs once immediately, one wait-start emit fires on the
       # first miss and an appeared-after emit on resolution, and exactly ONE udevadm settle runs
       # after the loop — never per pass. Mirrors the runcmd stage's same-named helper.
       wait_dev() {
@@ -271,17 +272,33 @@ write_files:
       # mountpoint, and mount BY MOUNTPOINT so the fstab line just written is the source of
       # truth for source and options — never re-typed here.
       ensure_mount() {
+        _em_mount=1
         if mountpoint -q "$2"; then
-          _em_src="$(findmnt -no SOURCE "$2" 2>/dev/null)" || _em_src=""
-          # A STACKED mountpoint is an anomaly on this host — findmnt lists it oldest-first and
-          # nothing here stacks /mnt/data. Refuse rather than read a shadowed layer (head -1
-          # reads the bottom; tail -1 the top — neither is the whole story on a stack).
-          [ "$(printf '%s\n' "$_em_src" | grep -c .)" -le 1 ] || fail reopen_mount 1 n/a "$2 carries a stacked mount — refusing to read a shadowed source"
-          if [ -n "$_em_src" ] && [ "$(readlink -f "$_em_src")" = "$(readlink -f "$1")" ]; then
-            return 0
+          # Read the KERNEL-SERVED layer (tail -1; findmnt lists a stack oldest-first — head reads
+          # the shadowed entry, the defect inngest-luks-cutover.sh documents). Pop wrong top
+          # layers until the top reads congruent or nothing is left: a same-source stack is a
+          # benign generated-unit race artifact, and a wrong layer under a right top is harmless
+          # residue — but a WRONG TOP means the served store is wrong and must be converged.
+          _em_i=0
+          _em_src=""
+          while mountpoint -q "$2"; do
+            _em_src="$(findmnt -no SOURCE "$2" 2>/dev/null | tail -1)" || _em_src=""
+            [ -n "$_em_src" ] || break
+            _em_i=$((_em_i+1))
+            [ "$_em_i" -le 8 ] || fail reopen_mount 1 n/a "umount loop at $2 did not converge in 8 passes"
+            [ "$(readlink -f "$_em_src")" = "$(readlink -f "$1")" ] && break
+            emit reopen_mount 0 n/a "$2 is mounted from $${_em_src:-unknown}, not $1 — converging to the verified source"
+            umount "$2" || fail reopen_mount 1 n/a "umount of a wrong-source layer at $2 failed"
+          done
+          if mountpoint -q "$2" && [ -n "$_em_src" ]; then
+            # Top layer is congruent — converged for this boot, but only durable if fstab still
+            # anchors it (a death between the stage's mount and fstab_set, or a hand-edit, would
+            # leave it unanchored next boot). Heal the line; skip the mount.
+            if [ "$(awk -v mp="$2" '$1 !~ /^#/ && $2 == mp' /etc/fstab | grep -c .)" -eq 1 ]; then
+              return 0
+            fi
+            _em_mount=0
           fi
-          emit reopen_mount 0 n/a "$2 is mounted from $${_em_src:-unknown}, not $1 — converging to the verified source"
-          umount "$2" || fail reopen_mount 1 n/a "umount of the wrong-source mount at $2 failed"
         fi
         _em_tmp="$(mktemp /etc/fstab.soleur.XXXXXX)" || fail reopen_fstab 1 n/a "mktemp /etc/fstab.soleur.XXXXXX failed"
         awk -v mp="$2" '$1 ~ /^#/ || $2 != mp' /etc/fstab > "$_em_tmp" || { rm -f "$_em_tmp"; fail reopen_fstab 1 n/a "rewriting /etc/fstab for $2 failed"; }
@@ -291,9 +308,13 @@ write_files:
         _em_n="$(awk -v mp="$2" '$1 !~ /^#/ && $2 == mp' /etc/fstab | wc -l)" || _em_n=0
         [ "$_em_n" -eq 1 ] || fail reopen_fstab 1 n/a "fstab carries $_em_n lines for $2 after the rewrite — exactly one is required"
         systemctl daemon-reload || fail reopen_fstab 1 n/a "daemon-reload after the fstab install failed"
-        mkdir -p "$2" || fail reopen_mount 1 n/a "mkdir -p $2 failed"
-        mount "$2" || fail reopen_mount 1 n/a "mount $2 failed"
-        emit reopen_mount 0 n/a "$1 mounted at $2 via fstab"
+        if [ "$_em_mount" -eq 1 ]; then
+          mkdir -p "$2" || fail reopen_mount 1 n/a "mkdir -p $2 failed"
+          mount "$2" || fail reopen_mount 1 n/a "mount $2 failed"
+          emit reopen_mount 0 n/a "$1 mounted at $2 via fstab"
+        else
+          emit reopen_mount 0 n/a "$1 already mounted at $2 — fstab line healed"
+        fi
       }
 
       if [ -n "$POINTER" ]; then
@@ -327,8 +348,12 @@ write_files:
         # backstop and writes its fstab line, entrenching the disclaimed store and forking new
         # AOF writes onto it. An already-open canonical mapper or an uncommented mapper fstab
         # line for /mnt/data is affirmative post-cutover evidence: refuse instead of regressing.
-        if [ -e /dev/mapper/inngest-redis ] || [ "$(awk '$1 !~ /^#/ && $2 == "/mnt/data" && $1 ~ /^\/dev\/mapper\//' /etc/fstab | grep -c .)" -gt 0 ]; then
-          fail reopen_pointer_lost 1 n/a "post-cutover evidence (open mapper or mapper fstab line) but an empty pointer — refusing to mount the plaintext volume"
+        if [ -e /dev/mapper/inngest-redis ]; then
+          fail reopen_pointer_lost 1 n/a "canonical mapper is open but the pointer is empty — refusing to mount the plaintext volume"
+        fi
+        _pl_fstab="$(cat /etc/fstab)" || fail reopen_fstab 1 n/a "cannot read /etc/fstab to check post-cutover evidence — refusing to guess"
+        if [ "$(printf '%s\n' "$_pl_fstab" | awk '$1 !~ /^#/ && $2 == "/mnt/data" && $1 ~ /^\/dev\/mapper\//' | grep -c .)" -gt 0 ]; then
+          fail reopen_pointer_lost 1 n/a "a mapper fstab line for /mnt/data exists but the pointer is empty — refusing to mount the plaintext volume"
         fi
         emit reopen_skip_plaintext 0 "$${BLK_TYPE:-empty}" "pre-recut host; nothing to reopen"
         ensure_mount "$DEV" /mnt/data
@@ -1775,7 +1800,7 @@ runcmd:
     # One definition, so the 300s bound cannot drift between the readers that use it. Counted
     # sleep-1 passes, never the clock — a ~80s attachment-in-flight is the measured case (#10217,
     # the sibling git-data remedy's shipped shape). The WHOLE predicate is re-run each pass, a
-    # probe runs once immediately (bound 0 would still probe exactly once), one wait-start emit
+    # probe runs once immediately (bound 0 still probes: once immediately, once post-settle), one wait-start emit
     # fires on the first miss and an appeared-after emit on resolution, and exactly ONE udevadm
     # settle runs after the loop — never per pass. The same-named helper in inngest-luks-open.sh
     # is this body's mirror (its emit channel is `emit`); keep the two in step.
@@ -1806,13 +1831,13 @@ runcmd:
     # the old line won the next boot: a silent one-boot time bomb. Field-exact on $2, so
     # /mnt/data never matches /mnt/data-luks, and comment lines are left alone.
     fstab_set() {
-      _fs_tmp="$(mktemp /etc/fstab.soleur.XXXXXX)"
-      awk -v mp="$1" '$1 ~ /^#/ || $2 != mp' /etc/fstab > "$_fs_tmp"
-      printf '%s\n' "$2" >> "$_fs_tmp"
+      _fs_tmp="$(mktemp /etc/fstab.soleur.XXXXXX)" || { echo "FATAL: mktemp for the fstab rewrite failed" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+      awk -v mp="$1" '$1 ~ /^#/ || $2 != mp' /etc/fstab > "$_fs_tmp" || { rm -f "$_fs_tmp"; echo "FATAL: rewriting fstab for $1 failed" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+      printf '%s\n' "$2" >> "$_fs_tmp" || { rm -f "$_fs_tmp"; echo "FATAL: writing the $1 fstab line failed" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
       # Atomic install: same-dir rename, never a truncate-in-place — a death or ENOSPC mid-write
       # must not leave /etc/fstab truncated (inngest-luks-cutover.sh:536 documents that defect).
-      chmod 0644 "$_fs_tmp"
-      mv -f "$_fs_tmp" /etc/fstab
+      chmod 0644 "$_fs_tmp" || { rm -f "$_fs_tmp"; echo "FATAL: chmod on the rewritten fstab failed" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+      mv -f "$_fs_tmp" /etc/fstab || { rm -f "$_fs_tmp"; echo "FATAL: installing the rewritten fstab failed" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
       _fs_n="$(awk -v mp="$1" '$1 !~ /^#/ && $2 == mp' /etc/fstab | wc -l)"
       [ "$_fs_n" -eq 1 ] || { echo "FATAL: fstab carries $_fs_n lines for $1 after the rewrite — exactly one is required" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
     }
@@ -1924,7 +1949,7 @@ runcmd:
       STAGE=device_wait
       wait_dev "$DEV" || true
       [ -b "$DEV" ] || { echo "FATAL: $DEV is not a block device after 300s — refusing to proceed" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
-      [ "$(/usr/sbin/blockdev --getsize64 "$DEV" 2>/dev/null || echo 0)" -gt 0 ] || { echo "FATAL: $DEV reports zero size after 300s" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+      [ "$(/usr/bin/timeout -k 2 10 /usr/sbin/blockdev --getsize64 "$DEV" 2>/dev/null || echo 0)" -gt 0 ] || { echo "FATAL: $DEV reports zero size after 300s" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
 
       # blkid's OWN rc is checked: 0=signature found, 2=none found. Anything else is "could not
       # measure", which is NEVER "blank". A wrong format here is terminal — there is no header

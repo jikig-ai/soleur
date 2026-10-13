@@ -132,6 +132,8 @@ _wd_bad() {
   dn="$(printf '%s\n' "$body" | grep -nE '^[[:space:]]*done[[:space:]]*$' | sed -n '1p' | cut -d: -f1)"
   sn="$(printf '%s\n' "$body" | grep -nE 'udevadm settle --timeout=10' | sed -n '1p' | cut -d: -f1)"
   { [ -z "$dn" ] || [ -z "$sn" ] || [ "$sn" -le "$dn" ]; } && bad="${bad}settle-not-AFTER-loop "
+  # the post-settle re-probe must sit AFTER the settle line, not merely exist as a third probe
+  [ "$(printf '%s\n' "$body" | sed -n "${sn:-0},\$p" | grep -cF 'timeout -k 2 10 /usr/sbin/blockdev')" -ge 1 ] || bad="${bad}no-post-settle-reprobe "
   [ "$(printf '%s\n' "$body" | grep -c 'return 1')" -ge 1 ] || bad="${bad}no-return-1 "
   [ "$(printf '%s\n' "$body" | grep -cF 'blockdev --getsize64')" -ge 2 ] || bad="${bad}probe-not-once-plus-per-pass "
   printf '%s' "$bad"
@@ -598,21 +600,23 @@ if printf '%s\n' "$_OA" | grep -cF 'backing_is' >/dev/null && printf '%s\n' "$_O
 # strings ARE the incident record.
 if [ "$(grep -c 'after 300s' "$CLOUD_INIT")" -ge 4 ] && ! grep -q 'after 30s\b' "$CLOUD_INIT"; then ok "T1.16q all wait-refusal sentences name the 300s bound (no stale 30s survivors)"; else no "T1.16q a wait-refusal sentence still claims the old 30s bound"; fi
 
-# T1.16r STACKED-MOUNT refusal + guarded findmnt: ensure_mount must not `head -1` a findmnt
-# listing (the shadowed-bottom read inngest-luks-cutover.sh:313 documents), must guard the
-# substitution under pipefail (`|| _em_src=""`), and must REFUSE a multi-source mountpoint
-# rather than guess which layer the kernel serves.
+# T1.16r STACKED-MOUNT convergence + guarded findmnt: ensure_mount must not `head -1` a findmnt
+# listing (the shadowed-bottom read inngest-luks-cutover.sh documents), must guard the
+# substitution under pipefail (`|| _em_src=""`), must compare the KERNEL-SERVED layer (tail -1),
+# and must pop wrong layers with a bounded umount loop rather than guess which layer a stack
+# serves — the loop's `mountpoint -q` re-check is the convergence condition.
 if printf '%s\n' "$_EM" | grep -cE 'findmnt.*head -1' >/dev/null; then
   no "T1.16r ensure_mount still reads findmnt | head -1 — the shadowed-bottom read"
-elif printf '%s\n' "$_EM" | grep -cF '|| _em_src=""' >/dev/null && printf '%s\n' "$_EM" | grep -c 'stacked mount' >/dev/null && printf '%s\n' "$_EM" | grep -cF 'fail reopen_mount' >/dev/null; then
-  ok "T1.16r the fast path guards findmnt and refuses a stacked mountpoint (no shadowed read)"
+elif printf '%s\n' "$_EM" | grep -cF '|| _em_src=""' >/dev/null && printf '%s\n' "$_EM" | grep -cF 'tail -1' >/dev/null && printf '%s\n' "$_EM" | grep -cE 'while mountpoint -q' >/dev/null && printf '%s\n' "$_EM" | grep -cF '-le 8' >/dev/null && printf '%s\n' "$_EM" | grep -cF 'fail reopen_mount' >/dev/null; then
+  ok "T1.16r the fast path reads the kernel-served layer and pops wrong layers in a bounded loop"
 else
-  no "T1.16r the stacked-mount refusal or the findmnt pipefail guard is missing"
+  no "T1.16r the stacked-mount convergence loop or the findmnt pipefail guard is missing"
 fi
 # T1.16s POST-CUTOVER-EVIDENCE refusal on the ext4-skip arm: an empty pointer plus an already-open
 # canonical mapper or a mapper fstab line must fail reopen_pointer_lost rather than entrench the
-# plaintext backstop (data-integrity review, PR #10228).
-if printf '%s\n' "$_G1_REOPEN" | grep -cF 'reopen_pointer_lost' >/dev/null && printf '%s\n' "$_G1_REOPEN" | grep -cF '/dev/mapper/' >/dev/null && [ "$(printf '%s\n' "$_G1_REOPEN" | awk '/reopen_pointer_lost/{p++} /reopen_skip_plaintext/{print (p ? "ok" : "bad"); exit}')" = "ok" ]; then ok "T1.16s the ext4-skip arm refuses on post-cutover evidence before the plaintext skip"; else no "T1.16s a lost-pointer post-cutover host would regress to the plaintext volume"; fi
+# plaintext backstop (data-integrity review, PR #10228). BOTH disjuncts are pinned by their exact
+# literals — a bare '/dev/mapper/' grep is satisfied by unrelated sites (MAPPER=, backing_is).
+if printf '%s\n' "$_G1_REOPEN" | grep -cF 'reopen_pointer_lost' >/dev/null && printf '%s\n' "$_G1_REOPEN" | grep -cF '[ -e /dev/mapper/inngest-redis ]' >/dev/null && printf '%s\n' "$_G1_REOPEN" | grep -cF '$1 ~ /^\/dev\/mapper\//' >/dev/null && [ "$(printf '%s\n' "$_G1_REOPEN" | awk '/reopen_pointer_lost/{p++} /reopen_skip_plaintext/{print (p ? "ok" : "bad"); exit}')" = "ok" ]; then ok "T1.16s the ext4-skip arm refuses on post-cutover evidence before the plaintext skip"; else no "T1.16s a lost-pointer post-cutover host would regress to the plaintext volume"; fi
 # T1.16t the class-wide fix: NO `findmnt -no SOURCE | head -1` may survive in cloud-init's
 # host-side mount readers — stage mounted_from and the _sv_* checks read the kernel-served TOP
 # of a stack (tail -1), which the cutover script documents as the only correct read. The same
@@ -628,6 +632,9 @@ fi
 # fstab_set had the same cat-truncate defect the cutover script documents.
 _FS="$(printf '%s\n' "$_G1_STAGE" | awk '/^    fstab_set\(\) \{$/{f=1} f{print} f&&/^    \}$/{exit}')"
 if printf '%s\n' "$_FS" | grep -cF 'mv -f "$_fs_tmp" /etc/fstab' >/dev/null && ! printf '%s\n' "$_FS" | grep -cE '> */etc/fstab' >/dev/null; then ok "T1.16u the stage's fstab_set installs atomically too (mv -f, no redirect-to-/etc/fstab)"; else no "T1.16u fstab_set still installs by redirect — a mid-write death truncates /etc/fstab"; fi
+# T1.16v the congruent-mount fast path still heals a LOST fstab line: mounted-from-the-right-
+# source but unanchored is converged for this boot only. _em_mount gates the mount, not the write.
+if printf '%s\n' "$_EM" | grep -cF '_em_mount=0' >/dev/null && printf '%s\n' "$_EM" | grep -cF 'fstab line healed' >/dev/null && printf '%s\n' "$_EM" | grep -cF '"$_em_mount" -eq 1' >/dev/null; then ok "T1.16v a congruent-but-unanchored mount rewrites the fstab line without remounting"; else no "T1.16v the fstab-heal path is gone — a lost fstab line under a live mount stays lost"; fi
 
 # ═══ FLOOR ══════════════════════════════════════════════════════════════════════
 # Raised 26 -> 51 by #6894, which added T1.8a2/c/d/e, T1.13, T1.14, G1.a-g and G4.a-f; 51 -> 56
@@ -638,14 +645,14 @@ if printf '%s\n' "$_FS" | grep -cF 'mv -f "$_fs_tmp" /etc/fstab' >/dev/null && !
 # (an unclassified site REDS) and G4.g2 (any dispatch-side pointer write fails).
 # #9939: T1.15a-e (reopen-unit ConditionPathExists= skip-vs-fail + mutation control) raised it 57 -> 62; review rounds added T1.15f set-parity (62 -> 63) then T1.15g reset-line coverage and set-identity (63 -> 64).
 # #10217: T1.6 expanded into T1.6a-e (per-body mechanism pin) and T1.16a-q (ensure_mount self-heal,
-# ordering pin, no-seam + byte-identical invocation pins, then n-u review hardening) — MEASURED 89.
+# ordering pin, no-seam + byte-identical invocation pins, then n-u review hardening) — MEASURED 90.
 # Self-contained: bash builtins and this suite's own counters only. A floor that lives in a helper
 # is silenced by the same move that silences the arms it guards.
-if [ "$executed" -lt 89 ]; then
+if [ "$executed" -lt 90 ]; then
   fail=$((fail + 1))
-  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 89. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
+  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 90. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
 else
-  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 89)\n' "$executed"
+  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 90)\n' "$executed"
 fi
 
 echo ""

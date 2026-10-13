@@ -99,7 +99,7 @@ fi
 for b in losetup cryptsetup mkfs.ext4 mkswap mount umount findmnt mountpoint truncate; do
   command -v "$b" >/dev/null 2>&1 || unavailable "required binary '$b' not found on PATH"
 done
-for b in /usr/sbin/blkid /usr/sbin/blockdev; do
+for b in /usr/sbin/blkid /usr/sbin/blockdev /usr/bin/timeout; do
   [ -x "$b" ] || unavailable "required binary '$b' not found (the stage calls it by ABSOLUTE path)"
 done
 
@@ -157,6 +157,7 @@ render_stage() {
           -e "s|/run/inngest-luks-stage.log|${detail}|g" \
           -e "s|/usr/local/bin/inngest-boot-phone-home.sh|${phone}|g" \
           -e "s|\\[ \"\\\$_i\" -lt 300 \\]|[ \"\$_i\" -lt ${waitbound} ]|" \
+          -e 's|/usr/bin/udevadm|udevadm|g' \
     > "$out"   # operand guarded by assert_fixture_dir above (P1b, #7810)
   # EVERY substitution is asserted. A sed that matched nothing exits 0, so an un-rendered
   # placeholder would otherwise sail through and the case would measure the wrong device.
@@ -339,7 +340,21 @@ render_reopen() {
           -e "s|/mnt/data|${mnt}|g" \
           -e "s|/etc/fstab|${fstab}|g" \
           -e "s|\\[ \"\\\$_i\" -lt 300 \\]|[ \"\$_i\" -lt 2 ]|" \
+          -e 's|/usr/bin/udevadm|udevadm|g' \
     > "$out"   # operand guarded by assert_fixture_dir above (P1b, #7810)
+  # Same every-substitution-is-asserted discipline as render_stage: a sed that matched nothing
+  # exits 0, and a survivor either measures the real bound (delegating sleep) or calls the
+  # runner's real udevadm past the PATH stub.
+  local bad=""
+  grep -qF 'inngest_volume_id' "$out" && bad="${bad} volume_id"
+  grep -qF 'inngest_luks_volume_id' "$out" && bad="${bad} luks_volume_id"
+  grep -qF 'inngest_expect_luks' "$out" && bad="${bad} expect_luks"
+  grep -qF '$${' "$out" && bad="${bad} tf-escape"
+  grep -qF "BYID=${byid}/scsi-0HC_Volume_" "$out" || bad="${bad} byid-rebind"
+  grep -qF -- "-lt 2 ]" "$out" || bad="${bad} waitbound-rebind"
+  grep -qF '/usr/bin/udevadm' "$out" && bad="${bad} udevadm-still-absolute"
+  grep -qF '/etc/default/' "$out" && bad="${bad} etc-default-still-real"
+  [ -z "$bad" ] || unavailable "reopen render left unsubstituted tokens or missed a rebind:${bad}"
 }
 REOPEN="$TMPROOT/inngest-luks-open.sh"
 B2_BYID="$TMPROOT/b2-byid"; mkdir -p "$B2_BYID"
@@ -601,7 +616,7 @@ if [ "$(findmnt -no SOURCE "$ARM_MNT" 2>/dev/null)" = "/dev/mapper/inngest-redis
 if [ "$(backing_of inngest-redis)" = "$(basename "$L_S")" ]; then ok "W1 the canonical mapper is backed by the late-attaching volume"; else no "W1 canonical backing='$(backing_of inngest-redis)', not $(basename "$L_S")"; fi
 if grep -qF 'appeared after' "$ARM_LOG"; then ok "W1 the wait emitted its appeared-after line"; else no "W1 no appeared-after emit in the logger recorder"; fi
 # The settle is NOT PER PASS (CTO D1): a per-pass settle would record once per pass. The shipped
-# shape returns from inside the loop on success, so the contract-compliant count here is <= 1 —
+# shape breaks out of the loop and settles before reporting, so the contract-compliant count here is <= 1 —
 # W2 (which exhausts the bound) pins the == 1 direction.
 _w1_settle="$(grep -c 'settle' "$ARM_UDEVADM" 2>/dev/null || true)"
 if [ "$_w1_settle" -le 1 ]; then ok "W1 udevadm settle recorded ${_w1_settle}x across a multi-pass wait — NOT per pass"; else no "W1 udevadm settle ran ${_w1_settle}x — a per-pass settle is back"; fi
@@ -614,7 +629,7 @@ if grep -qF 'is not attached' "$ARM_DETAIL"; then ok "W2 the refusal names the m
 if [ ! -e /dev/mapper/inngest-redis ] && [ "$(fstab_count "$ARM_FSTAB" "$ARM_MNT")" -eq 0 ]; then ok "W2 nothing past the wait ran — no mapper opened, no fstab line written"; else no "W2 work happened past the failed wait (mapper or fstab line present)"; fi
 # Recorder liveness: this bounded wait MUST have slept — a dead sleep stub greens W3's
 # zero-sleeps arm while measuring nothing.
-if [ -s "$ARM_SLP" ] && [ "$(grep -c 'sleep' "$ARM_SLP" || true)" -ge 1 ]; then ok "W2 the counted wait actually slept (sleep recorder live: $(wc -l < "$ARM_SLP") entries)"; else no "W2 the sleep recorder stayed empty on a bound wait — the stub is dead and W3's zero-sleeps is vacuous"; fi
+if [ -s "$ARM_SLP" ] && [ "$(wc -l < "$ARM_SLP")" -ge 1 ]; then ok "W2 the counted wait actually slept (sleep recorder live: $(wc -l < "$ARM_SLP") entries)"; else no "W2 the sleep recorder stayed empty on a bound wait — the stub is dead and W3's zero-sleeps is vacuous"; fi
 _w2_settle="$(grep -c 'settle' "$ARM_UDEVADM" 2>/dev/null || true)"
 if [ "$_w2_settle" -eq 1 ]; then ok "W2 exactly ONE post-loop udevadm settle ran on the exhausted-bound path"; else no "W2 udevadm settle ran ${_w2_settle}x on a bound-exhausting wait — expected exactly one (post-loop, not per-pass)"; fi
 arm_reset
@@ -679,7 +694,11 @@ umount "$B3_MNT" "${B3_MNT}-luks" >/dev/null 2>&1
 arm_reset
 
 # ── BOOT2 pre-cutover: a reboot re-opens the staged volume under the staging name only ─────────
+# Reset the fstab fixture: the earlier BOOT2 arms leave a /dev/mapper line for $B3_MNT behind,
+# which is post-cutover EVIDENCE — the pointer_lost refusal would (correctly) fire on it. A true
+# pre-cutover host's fstab carries no mapper line for the canonical mountpoint.
 ln -sf "$L_S" "$B3_BYID/scsi-0HC_Volume_${LUKS_ID}"
+: > "$B3_FSTAB"
 R_RC=0
 INNGEST_REDIS_LUKS_KEY="$KEY" INNGEST_LUKS_ACTIVE_VOLUME_ID="" LIBMOUNT_FSTAB="$B3_FSTAB" bash "$TMPROOT/reopen-b3.sh" > "$TMPROOT/reopen-b3c.log" 2>&1 || R_RC=$?
 if [ "$R_RC" -eq 0 ] && [ "$(backing_of inngest-redis-staging)" = "$(basename "$L_S")" ] && [ ! -e /dev/mapper/inngest-redis ]; then ok "BOOT2-STG a pre-cutover reboot opens the staged volume under the staging name, and nothing canonical"; else no "BOOT2-STG rc=$R_RC staging backing='$(backing_of inngest-redis-staging)' canonical present=$([ -e /dev/mapper/inngest-redis ] && echo yes || echo no)"; sed -n '1,8p' "$TMPROOT/reopen-b3c.log" >&2; fi
@@ -756,6 +775,23 @@ INNGEST_REDIS_LUKS_KEY="$KEY" INNGEST_LUKS_ACTIVE_VOLUME_ID="" LIBMOUNT_FSTAB="$
 if [ "$R_RC" -eq 0 ] && [ "$(findmnt -no SOURCE "$SH_DIR/mnt" 2>/dev/null)" = "/dev/mapper/inngest-redis" ]; then ok "SH5 a wrong-source mount was umounted and converged to the verified mapper"; else no "SH5 rc=$R_RC source=$(findmnt -no SOURCE "$SH_DIR/mnt" 2>/dev/null || echo unmounted)"; sed -n '1,10p' "$SH_DIR/run5.log" >&2; fi
 if [ "$(fstab_count "$SH_FSTAB" "$SH_DIR/mnt")" -eq 1 ]; then ok "SH5 fstab still carries exactly one line after the convergence"; else no "SH5 fstab line count drifted"; fi
 if grep -qF 'daemon-reload' "$TMPROOT/systemctl.log"; then ok "SH5 daemon-reload ran after the fstab install (the systemctl recorder is live)"; else no "SH5 no daemon-reload recorded — the generated unit keeps the stale What="; fi
+umount "$SH_DIR/mnt" >/dev/null 2>&1
+cryptsetup close inngest-redis >/dev/null 2>&1
+
+# ── SH6: congruent mount but the fstab line was LOST — heal the anchor, skip the mount ────────
+# A death between the stage's mount and its fstab_set leaves /mnt/data correctly mounted but
+# unanchored — next boot would have nothing to mount against. ensure_mount must rewrite the line
+# WITHOUT touching the live mount.
+printf '%s' "$KEY" | cryptsetup luksOpen --key-file - "$L_RAW" inngest-redis >/dev/null 2>&1 || unavailable "could not re-open the mapper for SH6"
+mount /dev/mapper/inngest-redis "$SH_DIR/mnt" || unavailable "could not mount the mapper for SH6"
+awk -v mp="$SH_DIR/mnt" '$1 ~ /^#/ || $2 != mp' "$SH_FSTAB" > "$SH_FSTAB.tmp" && mv "$SH_FSTAB.tmp" "$SH_FSTAB"
+: > "$TMPROOT/logger.log"; : > "$TMPROOT/systemctl.log"
+R_RC=0
+INNGEST_REDIS_LUKS_KEY="$KEY" INNGEST_LUKS_ACTIVE_VOLUME_ID="" LIBMOUNT_FSTAB="$SH_FSTAB" bash "$SH_DIR/reopen.sh" > "$SH_DIR/run6.log" 2>&1 || R_RC=$?
+if [ "$R_RC" -eq 0 ] && mountpoint -q "$SH_DIR/mnt" && [ "$(findmnt -no SOURCE "$SH_DIR/mnt" 2>/dev/null)" = "/dev/mapper/inngest-redis" ]; then ok "SH6 the congruent mount stayed mounted through the heal"; else no "SH6 rc=$R_RC or the mount was lost"; fi
+if grep -qF 'fstab line healed' "$TMPROOT/logger.log"; then ok "SH6 the heal emitted reopen_mount with the anchor-heal detail"; else no "SH6 no anchor-heal emit"; fi
+if [ "$(fstab_count "$SH_FSTAB" "$SH_DIR/mnt")" -eq 1 ]; then ok "SH6 the lost fstab line was restored (exactly one)"; else no "SH6 fstab count after heal: $(fstab_count "$SH_FSTAB" "$SH_DIR/mnt")"; fi
+if grep -qF 'daemon-reload' "$TMPROOT/systemctl.log"; then ok "SH6 daemon-reload ran on the fstab heal"; else no "SH6 no daemon-reload recorded"; fi
 umount "$SH_DIR/mnt" >/dev/null 2>&1
 cryptsetup close inngest-redis >/dev/null 2>&1
 
