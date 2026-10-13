@@ -134,3 +134,39 @@ Main advanced by one evidence-only commit to
 `274fdd4a51` (rung-2 boot receipts in one infrastructure `.env` source file).
 The incoming change adds no application/schema/controller code or command
 execution. Inclusion and refreshed pairing will be recorded after the merge.
+
+## Reverification and current-source binding
+
+All three focused seats independently reverified pushed
+`eb7492d138c00ed92217d681f3ed613aa366b34d`, closed their findings and reported
+no new concrete issue in the scoped preparation delta. Each repeated all 52
+targeted cases. Data integrity repeated its original 1,025-entry allocation,
+root-mode mutation and missing-component probes: enumeration consumed exactly
+two entries before refusal, and both metadata/census mutations refused.
+Test design repeated its original guard mutants: false renderer authentication
+now causes one intended failure; profile admission causes five intended failures,
+with zero errors and pristine 13/13 controls. All 13 operational tests also pass
+under an ambient October 20 clock while the explicit expiry refusal remains.
+Updated test-design score is 8.8/10, Grade B; all three new suites remain unit
+tests. This panel used three focused seats, not the full PR review roster.
+
+Main `274fdd4a51c544ad6586fb011fec23b4c54d21da` merged cleanly into that SHA.
+Fresh preview binds 5,061 runtime/plugin inputs and 188 complete forward
+migrations. Runtime manifest is
+`fd963c3b8fd1c623eae9f1ce941c07a9fdb7aca3f24c8dbda0d4a88e0fb35b4a`;
+schema manifest remains
+`baeb4ee9428e8187d98743d6fe84dd84a20c98162a5440f140df9891edc9f172`.
+Preparation components are
+`724ffa14aacba48dc13433b0d8bc2ebbc58f2577ceca6987359d16a3461d7138`;
+source pairing is
+`606692030ce542f037003fd54085852ccfdad5eed878030537101d2dbd956068`.
+These identities belong to the reviewed SHA above. The final evidence-only
+commit requires its own source pairing and draft CI/description observations.
+
+Registration-only census passed 679 covered and zero orphans after the exact
+sandbox retry; the failed enumerator's derivative diagnostics were not orphan
+findings. Explicit staged secret scanning passed; automatic hooks remain
+unavailable at the configured hook path. No operational or legal gate is
+discharged by these source checks. Concrete role recipes/Config observations,
+builder/namespace/session adapters, actual retained-byte/quiescence/ownership
+observations and immutable built-image/authentication receipts remain pending.

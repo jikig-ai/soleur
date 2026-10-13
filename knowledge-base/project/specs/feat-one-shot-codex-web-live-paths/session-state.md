@@ -1436,3 +1436,36 @@
   schema and preparation components are unchanged. Final exact-source export,
   pairing and CI/description receipts belong to the PR description and local
   ignored evidence. No build, recovery, auth or operational approval occurred.
+
+### Safe operational-controller preparation — 2026-10-13
+
+- [Operational preparation record](operational-controller-preparation-2026-10-13.md)
+  owns the CTO direction, pure builder/role/namespace/evidence requirements,
+  descriptor-relative retained-byte collector and bounded injected-session race
+  state machine. No operational adapter or execute CLI was added; actual role
+  profiles, daemon/dependency/route/trust/ownership/quiescence observations and
+  immutable image/auth receipts remain pending.
+- Three focused independent seats found and reverified three implementation
+  gaps and two test-oracle gaps. All are closed at pushed
+  `eb7492d138c00ed92217d681f3ed613aa366b34d`; each repeated 52 unit tests,
+  original fault/mutation probes discriminate, and the complete offline wrapper
+  passed under inherited optimization. This is scoped source verification;
+  full PR panel, SAST and current-source C.9 remain incomplete.
+- Main `274fdd4a51c544ad6586fb011fec23b4c54d21da` is included; its sole incoming
+  path changed public infrastructure evidence only. Fresh preview still binds
+  5,061 production/plugin inputs and 188 forward migrations. The new record
+  owns reviewed-source hashes; final evidence-only head pairing, export,
+  exact-head draft CI and final-description guards remain separately attributable.
+- Local hooks are configured to `/dev/null`, so explicit checks own the evidence.
+  Registration census passed 679 covered / zero orphans after its sandbox retry;
+  false derivative diagnostics from a failed enumerator were not findings. No
+  real Docker/build/recovery/retry/SQL/browser login/credentials/provider/account/
+  shared write/deployment/flag action occurred or received renewed authorization.
+- Keep draft, auto-merge off, default-off and customer content blocked. Build
+  approval remains consumed and the withdrawn command unavailable/unexecuted.
+  Hosted auth BLOCKED in both modes; alternative API route PENDING. SAST VOID;
+  Ref #10082 OPEN; Ref #9791 OPEN/unverified; no latest-source C.9. All existing
+  credential/provider/browser-auth/account/shared-write/deployment/cohort holds
+  persist. Sharing, retention/inheritance and regions remain unknown. Remaining
+  AC: approved current-source/full-production recovery, authenticated screenshots,
+  eligible routine, permitted Web/CLO matrices, then full review/promotion.
