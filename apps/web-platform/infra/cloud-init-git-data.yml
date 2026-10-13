@@ -1149,9 +1149,13 @@ runcmd:
     # Stderr via SUBSTITUTION, never `2>>`: a failed redirect returns 1 WITHOUT running the
     # probe. `|| _rc=$?` not `; _rc=$?` — the naked form aborts under `set -euo pipefail`.
     # Absolute paths: this file already notes nothing pins a PATH. Enforced by B18.
+    # (#10138) The volume ATTACHMENT lands after first boot starts (run 38384137515: 65 s for this
+    # volume, 125 s for the plaintext one), so the wait is 300 counted passes (never the clock), with
+    # a settle on every 10th pass; absent after that, the isLuks rc=4 FATAL below still refuses.
     _i=0
-    while [ "$_i" -lt 30 ]; do
+    while [ "$_i" -lt 300 ]; do
       [ -b "$DEV" ] && [ "$(/usr/sbin/blockdev --getsize64 "$DEV" 2>/dev/null || echo 0)" -gt 0 ] && break
+      [ $((_i % 10)) -ne 9 ] || /usr/bin/udevadm settle --timeout=2 >/dev/null 2>&1 || true
       sleep 1; _i=$((_i+1))
     done
     _luks_created_now=0
@@ -1330,7 +1334,7 @@ runcmd:
     # (#5274) GIT_DATA_PLAINTEXT_VOLUME_ID is assigned AFTER the strip, as env's last assignment:
     # exported before `doppler run` it could be overridden by a prd_git_data key of that name, and
     # an empty one switches the whole plaintext count off (plaintext_volume=absent on a green boot).
-    doppler run --project soleur --config ${doppler_config_name} -- /usr/bin/env -u GIT_DATA_STORE_DEVICE -u GIT_DATA_STORE_VERIFIED -u GIT_DATA_MOUNT_ROOT -u GIT_DATA_REPO_ROOT -u GIT_DATA_ROOT -u GIT_DATA_EMIT -u GIT_DATA_REMOVE_BIN -u GIT_DATA_PLAINTEXT_DEV GIT_DATA_PLAINTEXT_VOLUME_ID='${git_data_volume_id}' bash /usr/local/bin/git-data-bootstrap.sh 2>>"$GIT_DATA_RUNCMD_DETAIL"
+    doppler run --project soleur --config ${doppler_config_name} -- /usr/bin/env -u GIT_DATA_STORE_DEVICE -u GIT_DATA_STORE_VERIFIED -u GIT_DATA_MOUNT_ROOT -u GIT_DATA_REPO_ROOT -u GIT_DATA_ROOT -u GIT_DATA_EMIT -u GIT_DATA_REMOVE_BIN -u GIT_DATA_ATTACH_WAIT_S -u GIT_DATA_PLAINTEXT_DEV GIT_DATA_PLAINTEXT_VOLUME_ID='${git_data_volume_id}' bash /usr/local/bin/git-data-bootstrap.sh 2>>"$GIT_DATA_RUNCMD_DETAIL"
 
   # (#6982, W4) Arm the maintenance timer. MUST-TOLERATE (Phase 0.4): a timer that fails to
   # enable is a degraded steady state, not a reason to abort a boot.

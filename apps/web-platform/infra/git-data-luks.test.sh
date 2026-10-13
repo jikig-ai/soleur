@@ -1305,7 +1305,11 @@ p_isluks_rc_branch() {
   if [ -z "$_waitln" ]; then echo 0; return; fi
   if ! grep -Eq '\[ -b "\$DEV" \]' <<<"$_waitln"; then echo 0; return; fi
   if ! grep -Eq -- '-gt[[:space:]]+0' <<<"$_waitln"; then echo 0; return; fi
-  if ! grep -Eq '_i"?[[:space:]]*-lt[[:space:]]*30' <<<"$slice"; then echo 0; return; fi
+  # (#10138) The literal is EXACTLY 300, with a boundary: a prefix match would also accept 3000 or
+  # 30000 (an effectively unbounded wait), and the original `-lt 30` would still match `-lt 300`.
+  if ! grep -Eq '_i"?[[:space:]]*-lt[[:space:]]*300([^0-9]|$)' <<<"$slice"; then echo 0; return; fi
+  # ...and the loop settles udev so a late-attached node's by-id link exists before the next probe.
+  if ! grep -Eq '/usr/bin/udevadm[[:space:]]+settle[[:space:]]+--timeout=[0-9]+' <<<"$slice"; then echo 0; return; fi
   echo 1
 }
 
@@ -1353,6 +1357,14 @@ assert_mutation "B18 isLuks-rc-branch (blankness proof removed)" p_isluks_rc_bra
 # zero-length device also returns isLuks rc=1.
 assert_mutation "B18 isLuks-rc-branch (wait reverts to -e presence)" p_isluks_rc_branch "$CLOUD_INIT" \
   's#\[ -b "\$DEV" \]#[ -e "$DEV" ]#'
+# (i, #10138) the literal moves in EITHER direction: back to the old 30 (the race returns) or to an
+# effectively unbounded 30000 (a hung boot instead of a reported one). Both must red.
+assert_mutation "B18 isLuks-rc-branch (wait literal back to 30)" p_isluks_rc_branch "$CLOUD_INIT" \
+  's#_i" -lt 300 \]#_i" -lt 30 ]#'
+assert_mutation "B18 isLuks-rc-branch (wait literal unbounded, 30000)" p_isluks_rc_branch "$CLOUD_INIT" \
+  's#_i" -lt 300 \]#_i" -lt 30000 ]#'
+assert_mutation "B18 isLuks-rc-branch (the udev settle removed from the wait)" p_isluks_rc_branch "$CLOUD_INIT" \
+  '/\/usr\/bin\/udevadm settle --timeout=2/d'
 # (h) INVERT the refusal rather than deleting it. This is the arm that matters: `==` refuses a
 # blank volume and formats the damaged-header populated store. A token-presence predicate stays
 # green on it; this one must not.
@@ -1534,9 +1546,12 @@ assert_mutation "B20 bootstrap-log-to-stderr (back to stdout)" p_bootstrap_log_s
 # A floor (`-lt`), never an equality: the count is developer-incremented, so `-eq` would
 # redden the suite on every legitimate new arm and teach the next author to edit the guard
 # instead of trusting it.
+# RAISED 133 -> 157 (#10138): the suite already measured 154 against the stale 133, so 21 assertions
+# were pure slack; this edit adds 3 B18 mutation arms (wait literal back to 30, unbounded 30000, the
+# udev settle removed) and the floor is set to the measured total, so slack is zero again.
 total=$((passes + fails))
-if [ "$total" -lt 133 ]; then
-  echo "FAIL: ran only ${total} assertions (<133) — suite did not execute fully" >&2
+if [ "$total" -lt 157 ]; then
+  echo "FAIL: ran only ${total} assertions (<157) — suite did not execute fully" >&2
   exit 1
 fi
 

@@ -243,6 +243,18 @@ else fail "C: git-data-gc.service ExecStart does not strip GIT_DATA_EMIT" "$_exe
 if grep -qE 'doppler run .*-- /usr/bin/env -u ' <<< "$_exec"; then pass "C: the env -u strip runs AFTER doppler run, so an injected seam is removed"
 else fail "C: env -u does not sit between doppler run and the gc script" "$_exec"; fi
 
+# boot_strip_gaps <template> — the C2 properties as ONE function, so the mutation rows below judge a
+# mutant through the same predicate the real template is judged through. Prints one gap per line.
+BOOT_SEAMS="GIT_DATA_STORE_DEVICE GIT_DATA_STORE_VERIFIED GIT_DATA_REMOVE_BIN GIT_DATA_ATTACH_WAIT_S GIT_DATA_PLAINTEXT_DEV"
+boot_strip_gaps() {
+  local t="$1" e v
+  e="$(grep -E 'doppler run .*git-data-bootstrap\.sh' "$t" | sed -n '1p')"
+  [ -n "$e" ] || { printf 'no-invocation\n'; return 0; }
+  for v in $BOOT_SEAMS; do grep -qF -- "-u $v" <<< "$e" || printf 'missing-%s\n' "$v"; done
+  grep -qE 'doppler run .*-- /usr/bin/env -u ' <<< "$e" || printf 'strip-not-after-doppler\n'
+  grep -qE -- "-u GIT_DATA_PLAINTEXT_DEV GIT_DATA_PLAINTEXT_VOLUME_ID='\\\$\\{git_data_volume_id\\}' bash /usr/local/bin/git-data-bootstrap\\.sh" <<< "$e" || printf 'volume-id-not-last\n'
+  return 0
+}
 # C2 — THE BOOTSTRAP IS THE OTHER DOPPLER CONSUMER, and it was the unstripped one. gc's unit
 # strips its seams; the bootstrap invocation in cloud-init did not, so a key added to
 # prd_git_data retargeted the marker (every erasure then refuses — an Art. 17 denial of
@@ -251,7 +263,7 @@ else fail "C: env -u does not sit between doppler run and the gc script" "$_exec
 _boot_exec="$(grep -E 'doppler run .*git-data-bootstrap\.sh' "$TEMPLATE" | sed -n '1p')"
 if [ -n "$_boot_exec" ]; then pass "C2: the bootstrap invocation is present in the template"
 else fail "C2: could not find the bootstrap's doppler invocation in $TEMPLATE"; fi
-for v in GIT_DATA_STORE_DEVICE GIT_DATA_STORE_VERIFIED GIT_DATA_REMOVE_BIN GIT_DATA_PLAINTEXT_DEV; do
+for v in GIT_DATA_STORE_DEVICE GIT_DATA_STORE_VERIFIED GIT_DATA_REMOVE_BIN GIT_DATA_ATTACH_WAIT_S GIT_DATA_PLAINTEXT_DEV; do
   if grep -qF -- "-u $v" <<< "$_boot_exec"; then pass "C2: the bootstrap invocation strips $v"
   else fail "C2: the bootstrap invocation does not strip $v" "$_boot_exec"; fi
 done
@@ -263,6 +275,9 @@ else fail "C2: env -u does not sit between doppler run and the bootstrap" "$_boo
 if grep -qE -- "-u GIT_DATA_PLAINTEXT_DEV GIT_DATA_PLAINTEXT_VOLUME_ID='\\\$\\{git_data_volume_id\\}' bash /usr/local/bin/git-data-bootstrap\\.sh" <<< "$_boot_exec"; then
   pass "C2: GIT_DATA_PLAINTEXT_VOLUME_ID is env's last assignment, after the strip and before bash"
 else fail "C2: GIT_DATA_PLAINTEXT_VOLUME_ID is not assigned after the strip" "$_boot_exec"; fi
+_bg="$(boot_strip_gaps "$TEMPLATE" | tr '\n' ' ')"
+if [ -z "${_bg// /}" ]; then pass "C2: boot_strip_gaps reports the real template clean (the predicate the mutation rows below use)"
+else fail "C2: boot_strip_gaps reports gaps on the real template: ${_bg% }"; fi
 n=$(grep -cE '^[[:space:]]*export GIT_DATA_PLAINTEXT_VOLUME_ID=' "$TEMPLATE" || true)
 if [ "$n" = 0 ]; then pass "C2: GIT_DATA_PLAINTEXT_VOLUME_ID is not exported before doppler run"
 else fail "C2: GIT_DATA_PLAINTEXT_VOLUME_ID is still exported before doppler run ($n)"; fi
@@ -556,10 +571,32 @@ _rc9=$(env -i PATH="$NOFM" GIT_DATA_REPO_ROOT="$T/row9" GIT_DATA_MOUNT_ROOT="$(s
 if [ "$_rc9" = "1" ] && grep -qF 'findmnt unavailable' "$_err9" && [ -e "$T/row9/ws-r9.git" ]; then pass "G row9: the real script fails CLOSED with findmnt off PATH, naming its own instrument"
 else fail "G row9: the real script did not fail closed on a findmnt-less PATH (rc=$_rc9)" "$(tail -c 200 "$_err9")"; fi
 
+# Row 10 (#10138) — the bootstrap's new test-only seam GIT_DATA_ATTACH_WAIT_S must stay stripped.
+# A Doppler key of that name would otherwise set the production wait bound.
+M10a="$MUT/row10a.yml"; sed 's| -u GIT_DATA_ATTACH_WAIT_S||' "$TEMPLATE" > "$M10a"
+_landed "G row10a (the new strip removed)" "$TEMPLATE" "$M10a" 2
+_red "G row10a (the new strip removed)" "$(boot_strip_gaps "$M10a" | tr '\n' ' ')" "missing-GIT_DATA_ATTACH_WAIT_S"
+M10b="$MUT/row10b.yml"; sed 's| -u GIT_DATA_ATTACH_WAIT_S| -u GIT_DATA_ATTACH_WAIT|' "$TEMPLATE" > "$M10b"
+_landed "G row10b (the new strip misspelled)" "$TEMPLATE" "$M10b" 2
+_red "G row10b (the new strip misspelled)" "$(boot_strip_gaps "$M10b" | tr '\n' ' ')" "missing-GIT_DATA_ATTACH_WAIT_S"
+# A second member after a compliant first: the new strip stays, an EXISTING one is dropped.
+M10c="$MUT/row10c.yml"; sed 's| -u GIT_DATA_PLAINTEXT_DEV | |' "$TEMPLATE" > "$M10c"
+_landed "G row10c (an existing strip dropped, the new one kept)" "$TEMPLATE" "$M10c" 2
+_red "G row10c (an existing strip dropped, the new one kept)" "$(boot_strip_gaps "$M10c" | tr '\n' ' ')" "missing-GIT_DATA_PLAINTEXT_DEV"
+# The invocation reshaped so the extraction finds nothing: the guard's own dispatch.
+M10d="$MUT/row10d.yml"; sed 's|git-data-bootstrap\.sh 2>>|git-data-boot.sh 2>>|; s|bash /usr/local/bin/git-data-bootstrap.sh|bash /usr/local/bin/git-data-boot.sh|' "$TEMPLATE" > "$M10d"
+_landed "G row10d (the invocation no longer names the bootstrap)" "$TEMPLATE" "$M10d" 2
+_red "G row10d (the invocation no longer names the bootstrap)" "$(boot_strip_gaps "$M10d" | tr '\n' ' ')" "no-invocation"
+# The strip placed before doppler run: stripped, then re-injected by doppler.
+M10e="$MUT/row10e.yml"
+perl -pe 's#doppler run (--project soleur --config \$\{doppler_config_name\}) -- /usr/bin/env ((?:-u \w+ )+)(GIT_DATA_PLAINTEXT_VOLUME_ID=)#/usr/bin/env $2doppler run $1 -- $3#' "$TEMPLATE" > "$M10e"
+_landed "G row10e (the strip moved ahead of doppler run)" "$TEMPLATE" "$M10e" 2
+_red "G row10e (the strip moved ahead of doppler run)" "$(boot_strip_gaps "$M10e" | tr '\n' ' ')" "strip-not-after-doppler"
+
 # ── FLOOR + LEDGER (ADR-193: reported with printf + exit, never through pass()/fail()) ─────
 # MUTANT_FLOOR = the Guard 1 matrix rows this suite drives as landed mutations: rows 1, 2, 3,
-# 4, 5, 6, 7a, 7b, 7c, 8, 9 = 11.
-MUTANT_FLOOR=11
+# 4, 5, 6, 7a, 7b, 7c, 8, 9 = 11, plus rows 10a-10e (#10138) = 16.
+MUTANT_FLOOR=16
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -575,7 +612,9 @@ fi
 # rows: slack in a floor is how many assertions can be deleted before the one guard that
 # detects truncation notices. Measured total: 83.
 # +2 (#5274): C2's post-strip GIT_DATA_PLAINTEXT_VOLUME_ID position and its no-export row.
-FLOOR=85
+# +12 (#10138): C2 gains the GIT_DATA_ATTACH_WAIT_S strip (1) and boot_strip_gaps clean on the real
+# template (1); G gains rows 10a-10e (landed + RED each = 10). Measured total: 97.
+FLOOR=97
 _ran=$((passes + fails))
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s — cases were deleted, skipped, or the suite exited early.\n' "$_ran" "$FLOOR" >&2
