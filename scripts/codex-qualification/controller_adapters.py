@@ -383,10 +383,12 @@ class NamespaceAdapter(_Adapter):
                     'codex9051-tls-' + self._attempt, 'codex9051-resolver-' + self._attempt}
         require(expected <= self._started, 'Started Kong, TLS and resolver required')
         network = self._network_observation()
+        observations = {}
         for name in sorted(expected):
-            require(self._inspect(name).get('State', {}).get('Running') is True,
+            observations[name] = self._inspect(name)
+            require(observations[name].get('State', {}).get('Running') is True,
                     'Collected namespace role no longer running')
-        recipe = namespace_recipe(self._policy, network, self._inspect('supabase_kong_' + self._attempt),
+        recipe = namespace_recipe(self._policy, network, observations['supabase_kong_' + self._attempt],
                                   self._contract['browser']['hostname'])
         return {**self.snapshot(), 'namespace_specification_sha256': sha(canonical(recipe))}
 

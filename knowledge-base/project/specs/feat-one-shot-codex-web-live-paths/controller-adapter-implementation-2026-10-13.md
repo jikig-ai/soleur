@@ -138,3 +138,25 @@ global volume absence and complete writer discovery remain pending.
 
 The inspected main pin merged cleanly after the exact ORIG_HEAD-lock sandbox retry.
 No merge conflict, operational action or incoming command execution occurred.
+
+## Addendum — 2026-10-13: guarded collection receipt
+
+At pushed `d4c10055a7131fca31b6e2d249257812d0deeb20`, integrity independently
+closed D2 and confirmed the original D1 start/collection reproductions now refuse.
+Security confirmed S1/S2 remain closed. Both seats identified one residual:
+namespace collection checked a Kong receipt, then fetched a second receipt for
+the recipe without applying the running-state check to it. The new regression
+first failed with two reads instead of one; collection now passes the checked
+receipt directly into the recipe. All 53 adapter cases pass with explicit
+`ADAPTER_RC=0`; independent closure on the next pushed source remains owed.
+
+Test design independently closed T1/T2/T3 at `d4c10055a7131fca31b6e2d249257812d0deeb20`,
+passed 77 targeted cases and scored 8.1/10, Grade B. Its independent mutation
+attempt remains UNVERIFIED-ALLOC-FAILED, separately from the built-in controls.
+These are focused source reviews, not the full PR panel or operational clearance.
+
+After compaction, two reads used the rollout directory instead of the live-paths
+directory and failed. Exact discovered paths replaced them before editing.
+Broad index reads were truncated; only bounded receipt reads count as evidence.
+Prevention: discover the named artifact within the feature directory before
+constructing its path, and inspect bounded sections with explicit producer status.

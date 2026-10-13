@@ -453,6 +453,23 @@ class NamespaceTests(AdapterTests):
         with self.assertRaisesRegex(Refused, 'Collected namespace role no longer running'):
             self.adapter.namespace()
 
+    def test_namespace_recipe_consumes_only_the_guarded_kong_observation(self):
+        self.resources()
+        for role in ('db', 'auth', 'inbucket', 'rest', 'storage', 'kong', 'tls', 'resolver'):
+            self.role(role)
+        original = self.transport.request
+        kong_reads = []
+        def changed_second_kong(method, path, payload, *, timeout):
+            response = original(method, path, payload, timeout=timeout)
+            if response[1].get('Name') == '/supabase_kong_fixture':
+                kong_reads.append(path)
+                if len(kong_reads) > 1:
+                    response[1]['State']['Running'] = False
+            return response
+        self.transport.request = changed_second_kong
+        self.pending(self.adapter.namespace())
+        self.assertEqual(len(kong_reads), 1)
+
     def test_ambiguous_child_delete_blocks_every_dependent_parent_delete(self):
         self.resources()
         for role in ('db', 'auth', 'inbucket', 'rest', 'storage', 'kong', 'tls', 'resolver', 'renderer'):
