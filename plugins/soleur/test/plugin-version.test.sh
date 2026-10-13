@@ -183,11 +183,14 @@ ENVS=()   # extra NAME=value pairs for the NEXT run only
 
 # run <root|-> <cache-dir|-> args... ; sets OUT and RC.
 #   `-` as root leaves CLAUDE_PLUGIN_ROOT unset; `-` as cache-dir leaves XDG_CACHE_HOME unset.
-#   Per-call knobs (set as prefix assignments): X_CWD X_PATH X_SUT X_HOME LSR STUB_*.
+#   Per-call knobs (set as prefix assignments): X_CWD X_PATH X_SUT X_HOME X_TIMEOUT LSR STUB_*.
 #   ENVS=(A=b ...) is consumed by the next run.
 run() {
   local root="$1" xdg="$2"; shift 2
-  local -a ex=() e=(env -u CLAUDE_PLUGIN_ROOT -u XDG_CACHE_HOME)
+  local -a ex=() tm=() e=(env -u CLAUDE_PLUGIN_ROOT -u XDG_CACHE_HOME)
+  # X_TIMEOUT=<s> bounds ONE run so a regression that blocks (a read on a FIFO, a scan of a
+  # multi-GiB file) turns that row red instead of hanging the whole suite.
+  if [[ -n "${X_TIMEOUT:-}" ]] && command -v timeout >/dev/null 2>&1; then tm=(timeout "$X_TIMEOUT"); fi
   if (( ${#ENVS[@]} )); then ex=("${ENVS[@]}"); fi
   ENVS=()
   [[ "$root" != - ]] && e+=("CLAUDE_PLUGIN_ROOT=$root")
@@ -197,7 +200,7 @@ run() {
     STUB_CALLS="$CALLS" STUB_GITLOG="$GITLOG" STUB_CURLARGS="$CURLARGS" \
     STUB_LSREMOTE="$LSR" STUB_COMPARE_BODY="$CMP" \
     STUB_GIT_RC="${STUB_GIT_RC:-0}" STUB_CURL_RC="${STUB_CURL_RC:-0}" STUB_GIT_SLEEP="${STUB_GIT_SLEEP:-}" \
-    ${ex[@]+"${ex[@]}"} "$REAL_BASH" "${X_SUT:-$SUT}" "$@" 2>&1)"
+    ${ex[@]+"${ex[@]}"} ${tm[@]+"${tm[@]}"} "$REAL_BASH" "${X_SUT:-$SUT}" "$@" 2>&1)"
   RC=$?
 }
 val() { printf '%s\n' "$OUT" | sed -n "s/^$1=//p" | head -1; }
@@ -1003,6 +1006,10 @@ mkdir -p "$DOT/home/.git/refs/heads" "$DOT/home/work/proj/plugins/soleur/.claude
 printf 'ref: refs/heads/main\n' > "$DOT/home/.git/HEAD"; printf '%s\n' "$SHA_X" > "$DOT/home/.git/refs/heads/main"
 printf '{"name":"soleur"}\n' > "$DOT/home/work/proj/plugins/soleur/.claude-plugin/plugin.json"
 run "$DOT/home/work/proj/plugins/soleur" "$XDG" --installed; check co-anchor-ancestor-repo-not-adopted "source=unknown" "$OUT"
+# a directory that is NOT <top>/plugins/soleur but holds its own .git and plugin.json (any other
+# plugin checkout passed to --plugin-dir) is not Soleur's identity: the suffix is the anchor
+T="$(co_clone anchor-foreign "$SHA_M")"; mkdir -p "$T/.claude-plugin"; printf '{"name":"soleur"}\n' > "$T/.claude-plugin/plugin.json"
+run "$T" "$XDG" --installed; check co-anchor-foreign-root-with-own-git "source=unknown" "$OUT"
 # a relative root is never anchored (the cwd decides what it means)
 T="$(co_clone anchor-rel "$SHA_M")"; X_CWD="$T" run "plugins/soleur" "$XDG" --installed
 check co-anchor-relative-root "source=unknown" "$OUT"
@@ -1076,15 +1083,17 @@ T="$(mk_long_ref long-ok 495)"; co_expect co-head-at-512-byte-gate "$T" "$SHA_M"
 T="$(mk_long_ref long-over 496)"; co_expect co-head-over-512-byte-gate "$T" unknown
 # a huge sparse HEAD must be refused by size BEFORE any read (read -n 512 alone took 38 s on 2 GiB of NULs)
 T="$(co_clone sparse "$SHA_M")"; rm -f "$T/.git/HEAD"; dd if=/dev/null of="$T/.git/HEAD" bs=1 seek=2147483648 2>/dev/null
-SECONDS=0; co_expect co-silent-sparse-2gib-head "$T" unknown; _el=$SECONDS
+SECONDS=0; X_TIMEOUT=10 co_expect co-silent-sparse-2gib-head "$T" unknown; _el=$SECONDS
 check co-sparse-2gib-head-bounded-under-3s 1 "$(( _el < 3 ? 1 : 0 ))"
-T="$(co_clone bigpacked "$SHA_M")"; rm -f "$T/.git/refs/heads/main"; dd if=/dev/null of="$T/.git/packed-refs" bs=1 seek=8388608 2>/dev/null
-SECONDS=0; co_expect co-silent-oversize-packed-refs "$T" unknown; _el=$SECONDS
+# the matching entry is the FIRST line, so without the size gate awk would find it and print a commit
+T="$(co_clone bigpacked "$SHA_M")"; rm -f "$T/.git/refs/heads/main"; printf '%s refs/heads/main\n' "$SHA_M" > "$T/.git/packed-refs"
+printf '\0' | dd of="$T/.git/packed-refs" bs=1 seek=8388607 conv=notrunc 2>/dev/null   # sparse hole: the file is now 8 MiB
+SECONDS=0; X_TIMEOUT=10 co_expect co-silent-oversize-packed-refs "$T" unknown; _el=$SECONDS
 check co-oversize-packed-refs-bounded-under-3s 1 "$(( _el < 3 ? 1 : 0 ))"
 # a FIFO named HEAD would hang an open(2); [[ -f ]] refuses it before any open
 if command -v mkfifo >/dev/null 2>&1; then
   T="$(co_clone fifo "$SHA_M")"; rm -f "$T/.git/HEAD"; mkfifo "$T/.git/HEAD"
-  SECONDS=0; co_expect co-silent-fifo-head "$T" unknown; _el=$SECONDS
+  SECONDS=0; X_TIMEOUT=10 co_expect co-silent-fifo-head "$T" unknown; _el=$SECONDS
   check co-fifo-head-returns-under-5s 1 "$(( _el < 5 ? 1 : 0 ))"
 else
   skip_case co-silent-fifo-head "no mkfifo"; skip_case co-silent-fifo-head-rc-and-no-git "no mkfifo"
@@ -1177,14 +1186,14 @@ if (( passes + fails != CASES )) || (( fails != ${#FAILURES[@]} )); then
     "$passes" "$fails" "$CASES" "${#FAILURES[@]}" >&2
   exit 1
 fi
-MIN_CASES=571
+MIN_CASES=572
 if (( CASES != MIN_CASES )); then
   printf 'FATAL: %d cases ran, expected exactly %d -- cases were added or deleted, or the suite aborted early\n' "$CASES" "$MIN_CASES" >&2
   exit 1
 fi
 # The subject must actually have run: a harness that asserts on empty output for every row
 # would still satisfy every "prints nothing" row.
-MIN_RUNS=291
+MIN_RUNS=292
 # Skipped rows (no jq, no timeout, no git, no mkfifo) did not drive the resolver, and skip_case
 # already counted them as cases, so the exact run count is credited by what they would have run.
 EXPECT_RUNS=$(( MIN_RUNS - SKIP_RUN_DEFICIT ))

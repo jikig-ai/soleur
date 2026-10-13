@@ -345,3 +345,11 @@ harmless-because-inert.
 
 The real rollback is `remove → re-add → reinstall` against the new marketplace — which Phase 2B
 makes cheap: re-adding costs ~39 KB rather than 181 MiB.
+
+## Addendum — 2026-10-13
+
+The commit SHA identity is now also read from a local git checkout's HEAD when the plugin is loaded in
+place (a local-folder marketplace or `--plugin-dir`), where there is neither a manifest `version` nor a
+commit-hash directory name: `plugin-version.sh` reports `source=checkout` and the 12-hex prefix, by plain
+file reads of `<top>/.git` only (never running git against it). Decision 1 (keyless manifests) is
+untouched; this adds a third way the same identity is observed, not a new identity.

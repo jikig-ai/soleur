@@ -26,7 +26,7 @@ else
 fi
 ```
 
-It prints `key=value` lines: `source=manifest` with `version=`, `source=commit` with `commit=` (a 12-character hash), or `source=unknown`/`source=none`. Use only what it prints. The manifest carries no `version` key by design (#7471), so never report a version read from it yourself and never guess one. This call is local and does no network lookup.
+It prints `key=value` lines: `source=manifest` with `version=`, `source=commit` with `commit=` (a 12-character hash), `source=checkout` with `commit=` (the HEAD commit of the local git checkout the plugin is loaded from in place), or `source=unknown`/`source=none`. Use only what it prints. The manifest carries no `version` key by design (#7471), so never report a version read from it yourself and never guess one. This call is local and does no network lookup.
 
 If `CLAUDE_PLUGIN_ROOT` is not set or the path does not exist, try reading from `plugins/soleur/.claude-plugin/plugin.json` (monorepo checkout) or `~/.claude/plugins/*/soleur/.claude-plugin/plugin.json` (legacy installed path).
 
@@ -71,7 +71,7 @@ Present one harness-appropriate overview. Replace placeholder counts with actual
 ```text
 Soleur - The Company-as-a-Service Platform
 
-[Version line: `Soleur <version>` when source=manifest, `Soleur commit <commit>` when source=commit.
+[Version line: `Soleur <version>` when source=manifest, `Soleur commit <commit>` when source=commit, `Soleur commit <commit> (local checkout)` when source=checkout.
  When source is unknown or none, print no version line; print only the hint
  "Version unknown (on Claude Code: run /soleur:version)".]
 

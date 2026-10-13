@@ -970,3 +970,12 @@ five fields, no `ssh`, allowlisted verb, literal `expected_output`), 4.8 (no PAT
 commit touches the resolver; every `knowledge-base/` path cited exists; no rule id is cited. Findings are
 folded into Decisions 1-9, the phases, the guard matrix and the test table; `tasks.md` and
 `decision-challenges.md` were updated in the same pass.
+
+## Work Phase Outcome (2026-10-13)
+
+- Phase 0.0 probe: the hook root is the folder copy; recorded in `measurements.md`.
+- Added to scope (mechanical, one line plus one regression row): `worktree-manager.sh sync-bare-files` ran `comm` without `LC_ALL=C`, which deleted tracked dotfiles from the bare root under en_US.UTF-8 and made the in-place plugin fail to load; Phase 6 depends on `sync`. Files: `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh`, `plugins/soleur/test/worktree-manager-bare-sync.test.sh`.
+- Legal "Last Updated" notes use October 13, 2026 (the edit date), not October 12.
+- Floors set exactly: plugin-version 572 cases / 292 runs; hook suite 235 cases / 113 runs / 92 banners.
+- Guard 1 mutation battery, run once on scratch copies: 20 mutants (M1b to M19 plus the hook variants), all killed except two equivalent ones recorded here. M1a (`-e` instead of `-f` in `read_small`): the size floor `n >= 1` also refuses a FIFO. M10h (the `corrupt` to `missing` mapping, seen by the hook suite only): the hook spawns a refresh in both states; the resolver suite kills it. Two initial survivors were fixture gaps and got rows: a root outside `/plugins/soleur` that owns a `.git` and `plugin.json`, and an 8 MiB `packed-refs` whose first line matches.
+- A `X_TIMEOUT` knob bounds the three rows that can block (FIFO HEAD, 2 GiB sparse HEAD, oversize packed-refs), so a regression reds the row instead of hanging the suite.

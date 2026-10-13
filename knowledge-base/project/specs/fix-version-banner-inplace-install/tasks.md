@@ -51,5 +51,4 @@ Plan: `knowledge-base/project/plans/2026-10-12-fix-plugin-version-checkout-ident
 - 6.2 `claude plugin marketplace update soleur && claude plugin update soleur@soleur`
 - 6.3 Record `H0`, run the headless `--include-hook-events` capture from `/tmp`, record `H1`; PASS = banner sha in `{H0,H1}` plus the literal `(local checkout)`; paste the three outputs; linked follow-up issue if no banner line
 
-
 CTO overrides 2026-10-13 (see plan, 'BINDING CTO overrides'): (1) anchor has no `marketplace.json` check; bare-in-`.git` fixture omits it; vendored row flips to checkout; (2) NUL-spliced HEAD pins `unknown` via byte-count vs `stat` size compare under `LC_ALL=C`.

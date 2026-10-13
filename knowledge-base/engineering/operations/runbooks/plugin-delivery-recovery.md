@@ -286,7 +286,7 @@ identity (`Soleur commit <sha12>`) with no network call.
 
 On Claude Code, `/soleur:version` (user-started; a model cannot trigger it) prints:
 
-- `Installed:` the commit hash (or a version, for an install whose manifest carries one), or `unknown` when the plugin root cannot be identified;
+- `Installed:` the commit hash (or a version, for an install whose manifest carries one), `commit <sha12> (local checkout)` for a plugin run in place from a local git checkout (its update steps are the local-folder arm of `/soleur:version`, not the GitHub pair), or `unknown` when the plugin root cannot be identified;
 - `Latest:` the newest release tag, with a reason line when it could not be read (offline, timeout, no `git`, no tags, unreadable cache); a cached value is labelled "(cached, may be out of date)";
 - `Status:` the comparison, and the update commands for the marketplace the install came from.
 
