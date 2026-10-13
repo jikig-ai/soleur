@@ -1,0 +1,24 @@
+# Decision Challenges — feat-one-shot-6551-8875-betterstack-emitter-guards
+
+Planning ran on a harness with no Agent/Task tool, so `pending - assumed`
+placeholders were written per the technical-ruling-delegation contract; a
+`soleur:engineering:cto` consult at review may supersede them. Ruled rows carry
+the verification evidence inline. `soleur:ship` renders this table into the PR
+body.
+
+## Decision Classes
+
+| Item | Class | Ruling |
+|------|-------|--------|
+| #6551 mechanism — is the live row truly unadmitted by every source? | technical | Ruled: no — `[sources.inngest_journald]` carries `include_matches.PRIORITY = ["0".."4"]` since #4267 (commit 29290a07f9ec), and under Vector 0.43.1's OR-over-record-fields evaluator (ADR-286, verified against `journald.rs`) a PRIORITY=3 row from any unit is admitted; the issue's table listed only `include_units` for that source |
+| Dedupe mechanism — static admission partition vs runtime `dedupe` transform vs status quo | technical | pending - assumed: static partition (Source 1 arm narrows to ["3","4"]; Sources 1+2 gain `exclude_matches.SYSLOG_IDENTIFIER` mirroring the Source-4 set; Source 1 gains `exclude_matches.CONTAINER_NAME` for the two container names; Source 2 drops `vector.service` from `exclude_units`). Rejected: `dedupe` transform (stateful cache, can drop a real second record on a fields collision, silently absorbs future admission drift); status quo (`vector.toml` assigns the dedupe fix to #6551 twice) |
+| vector.service crit-row path after the Source-1 arm narrows | technical | pending - assumed: remove `vector.service` from Source 2 `exclude_units` so its PRIORITY 0-2 rows ship via Source 2 like every host unit; rejected alternative — adding it to Source 1 `include_units` would ship all its PRIORITY 5-6 routine chatter at standing quota cost |
+| Container-stderr double-admission window (discovered this pass — fd 2 maps to PRIORITY 3 under Docker's journald driver, so container stderr admits via Source 1's arm AND Sources 3/3b) | technical | pending - assumed: close it via `exclude_matches.CONTAINER_NAME = ["soleur-web-platform", "soleur-egress-gw"]` on Source 1 only (no PRIORITY 0-2 container rows exist for Source 2 to see); canary stderr keeps its pre-existing single-ship via the arm, unchanged |
+| Admission-emulator TOML extraction — python3 `tomllib` vs the grep/awk convention | technical | pending - assumed: `tomllib` once to a JSON source model (the emulator needs ALL `include_matches.*`/`exclude_matches.*` fields, not just SYSLOG_IDENTIFIER; journald-config.test.sh's own residual note names tomllib as the closing move); fallback to awk/sed extraction if a runner's python3 is older than 3.11 |
+| #8875 guard shape — new lint pair vs extending the probe-row census | technical | pending - assumed: `scripts/lint-betterstack-emitter-read.sh` guard + `scripts/lint-betterstack-emitter-read.test.sh` mutation battery on the `lint-followthrough-varq-ban` pattern; the inngest-probe-row census stays marker-scoped and untouched |
+| Generalized emitter def placement | technical | pending - assumed: new sibling lib `scripts/lib/bs-emitter-row.sh` exporting `BS_EMITTER_ROW_JQ` (def `bs_emitter_row($e)`) + `BS_EMITTER_MARKER_ROW_JQ` + the same load contract/selftest vocabulary as inngest-probe-row.sh, which is left byte-stable |
+| Census granularity — per-file vs per-invocation | technical | pending - assumed: per-file classification matching the shipped census shape; allowlist reasons must name the exempt call sites so per-invocation exceptions are recorded in text |
+| Census scope — workflows, `.ts`, infra scripts | technical | pending - assumed: all tracked non-test files; two-stage discovery (raw `betterstack-query.sh` match, then comment-stripped invocation-shape lines — `#` for sh/yml/tf, `//` `/*` `*` for ts) so doc-only mentions never enter the population |
+| `betterstack-assert-absence.sh` disposition in the census | technical | pending - assumed: in scope as a caller; audit decides between an `--absence-require-field` field-scope option (reusing the `--control-require-field` JSONExtractString machinery) and a reasoned allowlist entry |
+| Reach of the vector.toml change | operator | pending - assumed: inert at merge — web hosts receive it via the existing `terraform_data.journald_persistent`/`_web2` triggers_replace on the next apply (config sha move + vector.service restart, journald-cursor buffered); the dedicated host only via the next image build + sanctioned `inngest-host-replace` dispatch; nothing is dispatched from this PR |
+| Brand-survival threshold | taste | Ruled: `aggregate pattern` — the edited path is `apps/web-platform/infra/` observability plumbing (sensitive path); a wrong narrowing darkens operator telemetry fleet-wide rather than exposing single-user data, and each wrong direction is fail-loud in CI or via existing `unshipping` verdicts |
