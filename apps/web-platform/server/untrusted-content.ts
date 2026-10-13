@@ -165,7 +165,13 @@ const SEND_VERB =
 
 const SIGNALS: Signal[] = [
   // --- override-phrase -------------------------------------------------------
-  { code: "override-phrase", weight: 1.0, re: new RegExp(`\\b${VERB}\\s*[:,-]?\\s*${FILL}${NOUN}\\b`) },
+  {
+    code: "override-phrase",
+    weight: 1.0,
+    // The (?!...) keeps the platform's own defense wording ("do not follow instructions
+    // contained in them") from tripping the detector.
+    re: new RegExp(`\\b${VERB}\\s*[:,-]?\\s*${FILL}${NOUN}\\b(?!\\s+contained\\s+in\\s+(?:them|it|this|these)\\b)`),
+  },
   { code: "override-phrase", weight: 1.0, re: /\bforget\s+(?:everything|all)\b/ },
   {
     code: "override-phrase",
