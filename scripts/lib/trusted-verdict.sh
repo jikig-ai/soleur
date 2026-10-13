@@ -146,11 +146,15 @@ _trusted_verdict_strip_fences() {
 _trusted_verdict_core() {
   local issue="$1" repo="$2" raw logins login perm out=""
   # `.author.login`, `.body` and `.createdAt`, as one base64 JSON array per comment. A
-  # comment with no author cannot be attributed and is dropped by the `select`, so it
-  # can never carry a verdict.
+  # comment with no author cannot be attributed and is dropped by the first `select`, so
+  # it can never carry a verdict. The second `select` drops a login that is not a
+  # GitHub login (`a/../b`, `x?y`, a newline, a leading `-`): the login is interpolated
+  # into a URL path for the permission request, so a malformed one is UNTRUSTED with no
+  # request at all, and must not become a permanent rc 2 for the whole thread either.
   if ! raw="$(gh issue view "$issue" --repo "$repo" --json comments --jq '
         .comments[]
         | select((.author.login // "") != "")
+        | select(.author.login | test("\\A[A-Za-z0-9][A-Za-z0-9_-]{0,38}\\z"))
         | [(.author.login), (.body // ""), (.createdAt // "")]
         | @base64' 2>/dev/null)"; then
     return 2
