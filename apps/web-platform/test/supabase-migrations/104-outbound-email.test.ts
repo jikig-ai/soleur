@@ -12,12 +12,12 @@ import path from "node:path";
 // File-parse test, not a live-DB test — pins the SQL contract. Live behaviour
 // (RLS owner-isolation, upsert idempotency, auth.uid() owner-pin) is verified
 // against dev-DB at apply time and recorded in
-// knowledge-base/project/specs/feat-agent-native-outbound-email/migration-checklist.md.
+// knowledge-base/project/specs/archive/20261013-032858-feat-agent-native-outbound-email/migration-checklist.md.
 // The generalised SECURITY DEFINER grant + search_path lint is in
 // test/migration-rpc-grants.test.ts; this file pins 104-specific invariants.
 // Mirrors 103-github-events-retention-7day.test.ts.
 //
-// Plan: knowledge-base/project/plans/2026-06-15-feat-agent-native-outbound-email-pilot-plan.md
+// Plan: knowledge-base/project/plans/archive/20261013-032858-2026-06-15-feat-agent-native-outbound-email-pilot-plan.md
 
 const MIG_DIR = path.join(__dirname, "../../supabase/migrations");
 const stripComments = (sql: string) => sql.replace(/--[^\n]*/g, "");

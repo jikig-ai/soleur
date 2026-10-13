@@ -30,7 +30,7 @@
 // no long-running subprocess (I3); deterministic step.run returns (I5); emits no
 // Inngest events (I6).
 //
-// Plan: knowledge-base/project/plans/2026-06-02-fix-supabase-disk-io-recurrence-and-sentry-monitor-plan.md Phase 3
+// Plan: knowledge-base/project/plans/archive/20261013-032858-2026-06-02-fix-supabase-disk-io-recurrence-and-sentry-monitor-plan.md Phase 3
 
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
