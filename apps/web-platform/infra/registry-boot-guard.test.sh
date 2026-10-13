@@ -421,7 +421,7 @@ p_registry_arch_derivation() {
   # The WHOLE declaration must be the one grammar the replay below understands: a negation, an
   # extra disjunct or a wrapper around startswith(...) would otherwise pass on its fragment. And
   # exactly one line-start declaration, so a decoy or second declaration cannot hide the real one.
-  printf '%s' "$expr" | grep -qE '^[[:space:]]*registry_arch[[:space:]]*=[[:space:]]*startswith\(var\.registry_server_type,[[:space:]]*"[a-z]+"\)[[:space:]]*\?[[:space:]]*"[a-z0-9]+"[[:space:]]*:[[:space:]]*"[a-z0-9]+"[[:space:]]*$' || { echo 0; return; }
+  grep -qE '^[[:space:]]*registry_arch[[:space:]]*=[[:space:]]*startswith\(var\.registry_server_type,[[:space:]]*"[a-z]+"\)[[:space:]]*\?[[:space:]]*"[a-z0-9]+"[[:space:]]*:[[:space:]]*"[a-z0-9]+"[[:space:]]*$' <<<"$expr" || { echo 0; return; }
   [ "$(_strip_hcl_comments "$1" | grep -cE '^[[:space:]]*registry_arch[[:space:]]*=')" = 1 ] || { echo 0; return; }
   pfx="$(printf '%s' "$expr" | grep -oE 'startswith\(var\.registry_server_type,[[:space:]]*"[a-z]+"\)' | grep -oE '"[a-z]+"' | tr -d '"')"
   tval="$(printf '%s' "$expr" | grep -oE '\?[[:space:]]*"[a-z0-9]+"' | grep -oE '"[a-z0-9]+"' | tr -d '"')"
