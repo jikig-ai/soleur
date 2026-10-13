@@ -46,14 +46,26 @@ MERGED_ISO="2026-10-10T00:00:00Z"
 mkdir -p "$TMP/bin"
 cat > "$TMP/bin/gh" <<'FAKE'
 #!/usr/bin/env bash
-[ "$1" = "api" ] || exit 64
+# every refusal is LOGGED before exit 64: the lib sends `gh issue view` stderr to /dev/null and maps any failure to rc 2,
+# so without the log a refused argv would surface as CANNOT ESTABLISH and an rc-3 row would pass for the wrong reason
+refuse() { printf 'REFUSED %s\n' "$*" >> "$FX/refused.log"; exit 64; }
+if [ "$1" = "issue" ]; then   # issue view <N> --repo <r> --json comments [--jq <expr>]  (argv-strict)
+  [ "$2" = "view" ] && [ "$4" = "--repo" ] && [ "$6" = "--json" ] && [ "$7" = "comments" ] || refuse "$@"
+  if [ $# -eq 9 ]; then [ "$8" = "--jq" ] || refuse "$@"; jqx="$9"; elif [ $# -eq 7 ]; then jqx=""; else refuse "$@"; fi
+  printf 'issue view %s --repo %s --json comments\n' "$3" "$5" >> "$FX/requests.log"
+  [ -f "$FX/fail-comments" ] && { echo "gh: HTTP 403 Resource not accessible" >&2; exit 1; }
+  f="$FX/gql-comments-$3.json"; [ -f "$f" ] || exit 1
+  if [ -n "$jqx" ]; then jq -r "$jqx" "$f"; else cat "$f"; fi
+  exit 0
+fi
+[ "$1" = "api" ] || refuse "$@"
 shift
 paginate=0; jqx=""; ep=""
 while (( $# )); do
   case "$1" in
     --paginate) paginate=1 ;;
     --jq) jqx="$2"; shift ;;
-    -*) exit 64 ;;
+    -*) refuse "api $*" ;;
     *) ep="$1" ;;
   esac
   shift
@@ -64,17 +76,27 @@ case "$ep" in
   repos/*/actions/workflows/ci.yml/runs?event=push*) [ -f "$FX/fail-push" ] && { echo "gh: HTTP 500" >&2; exit 1; }; f="$FX/push.json" ;;
   repos/*/actions/workflows/ci.yml/runs?event=merge_group*)
     [ -f "$FX/fail-mg" ] && { echo "gh: HTTP 500" >&2; exit 1; }
-    (( paginate )) || exit 64
+    (( paginate )) || refuse "$ep"
     cat "$FX"/mg-*.json; exit 0 ;;
   repos/*/actions/runs/*/jobs\?per_page=100\&filter=latest) [ -f "$FX/fail-jobs" ] && { echo "gh: HTTP 500" >&2; exit 1; }; r="${ep#*runs/}"; f="$FX/jobs-${r%%/*}.json" ;;
   repos/*/issues\?labels=follow-through\&state=open\&per_page=100) f="$FX/issues.json" ;;
-  repos/*/issues/*/comments\?per_page=100)
+  repos/*/collaborators/*/permission)   # the permission endpoint: perms.tsv is `login<TAB>perm|403|404`; stderr texts mirror the real gh
+    [ -n "$jqx" ] || refuse "$ep (no --jq)"
+    l="${ep#*collaborators/}"; l="${l%%/*}"
+    p="$(awk -F'\t' -v l="$l" '$1 == l { print $2; exit }' "$FX/perms.tsv")"
+    case "$p" in
+      "")  refuse "$ep (login not in perms.tsv)" ;;
+      404) echo 'gh: Not Found (HTTP 404)' >&2; exit 1 ;;
+      403) echo 'gh: Resource not accessible by integration (HTTP 403)' >&2; exit 1 ;;
+      *)   printf '{"permission":"%s"}\n' "$p" | jq -r "$jqx"; exit 0 ;;
+    esac ;;
+  repos/*/issues/*/comments\?per_page=100)   # the LEGACY association-based read (removed with the probe migration)
     [ -f "$FX/fail-comments" ] && { echo "gh: HTTP 403 Resource not accessible" >&2; exit 1; }
-    (( paginate )) || exit 64   # past 100 comments only a paginated read sees a later marker
+    (( paginate )) || refuse "$ep"   # past 100 comments only a paginated read sees a later marker
     n="${ep#*issues/}"; n="${n%%/*}"
     for f in "$FX/comments-$n.json" "$FX/comments-$n-2.json"; do [ -f "$f" ] && { if [ -n "$jqx" ]; then jq -r "$jqx" "$f"; else cat "$f"; fi; }; done
     exit 0 ;;
-  *) exit 64 ;;
+  *) refuse "$ep" ;;
 esac
 [ -f "$f" ] || exit 1
 if [ -n "$jqx" ]; then jq -r "$jqx" "$f"; else cat "$f"; fi
@@ -95,12 +117,15 @@ chmod +x "$TMP/bin/gh"
 #   crlf: markers end in CRLF   badts: ACTIVATED without the Z   midact: ACTIVATED only mid-line or with trailing text
 #   marker=lookalike|foreign   a census URL on a lookalike or foreign host   page2: the DEACTIVATED marker is on page 2
 #   merged=<ISO>  the S2 PR merge time (default MERGED_ISO)
+#   privact: the activation comment is by `priv-op`, whose association reads CONTRIBUTOR (a private org member under the
+#   sweeper's token) but whose repository permission is admin   assocowner: the activation comment's association is OWNER but
+#   its author's permission is `read` (the decoy association must be ignored)   permfail: `priv-op`'s permission read is a 403
 #   regcomment: test-all.sh names the suite only in a comment/echo   nostatus: the ADR has no status line
 build_fx() {
   local fx="$1" ne="$2" nf="$3" es="$4" fs="$5"; shift 5
   assert_fixture_dir "$fx"; rm -rf "$fx"; mkdir -p "$fx"
   local actdays=12 noact=0 untrustedact=0 deact=0 unmatched=0 early=0 marker=yes pdred=0 unmerged=0 noissue=0 adr=adopting noreg=0 extra="" kv
-  local merged="$MERGED_ISO" pdbad=0 prefull=0 reactivate=0 twoact=0 twodeact=0 crlf=0 badts=0 midact=0 page2=0 regcomment=0 nostatus=0 cr=
+  local privact=0 assocowner=0 permfail=0 merged="$MERGED_ISO" pdbad=0 prefull=0 reactivate=0 twoact=0 twodeact=0 crlf=0 badts=0 midact=0 page2=0 regcomment=0 nostatus=0 cr=
   for kv in "$@"; do
     case "$kv" in
       actdays=*) actdays="${kv#*=}" ;; noact) noact=1 ;; untrustedact) untrustedact=1 ;; deact) deact=1 ;;
@@ -108,6 +133,7 @@ build_fx() {
       merged=*) merged="${kv#*=}" ;; pdbad=*) pdbad="${kv#*=}" ;; prefull=*) prefull="${kv#*=}" ;; reactivate) reactivate=1 ;; twoact) twoact=1 ;; twodeact) twodeact=1 ;;
       crlf) crlf=1 ;; badts) badts=1 ;; midact) midact=1 ;; page2) page2=1 ;; regcomment) regcomment=1 ;; nostatus) nostatus=1 ;;
       pdred) pdred=1 ;; unmerged) unmerged=1 ;; noissue) noissue=1 ;; adr=*) adr="${kv#*=}" ;; noreg) noreg=1 ;; extra=*) extra="${kv#*=}" ;;
+      privact) privact=1 ;; assocowner) assocowner=1 ;; permfail) permfail=1 ;;
       fail*) : > "$fx/fail-${kv#fail}" ;;
     esac
   done
@@ -181,10 +207,12 @@ build_fx() {
   local cm='[{"body":"noted","author_association":"OWNER"}' cm2='['
   iso_at() { date -u -d "@$((act_epoch + $1))" +%Y-%m-%dT%H:%M:%SZ; }
   if (( ! noact )); then
-    local assoc=OWNER; (( untrustedact )) && assoc=NONE
+    local assoc=OWNER actl=""; (( untrustedact )) && assoc=NONE
+    (( privact || permfail )) && { assoc=CONTRIBUTOR; actl=',"login":"priv-op"'; }
+    (( assocowner )) && actl=',"login":"ownread-op"'
     if (( badts )); then cm="$cm,{\"body\":\"S2-ACTIVATED: ${act_iso%Z}\",\"author_association\":\"OWNER\"}"
     elif (( midact )); then cm="$cm,{\"body\":\"see S2-ACTIVATED: $act_iso\\nS2-ACTIVATED: $act_iso and then some\",\"author_association\":\"OWNER\"}"
-    else cm="$cm,{\"body\":\"activated${cr}\\nS2-ACTIVATED: $act_iso${cr}\",\"author_association\":\"$assoc\"}"; fi
+    else cm="$cm,{\"body\":\"activated${cr}\\nS2-ACTIVATED: $act_iso${cr}\",\"author_association\":\"$assoc\"$actl}"; fi
     (( twoact )) && cm="$cm,{\"body\":\"S2-ACTIVATED: $(iso_at -$((8 * 86400)))\",\"author_association\":\"OWNER\"}"
     (( reactivate )) && cm="$cm,{\"body\":\"S2-DEACTIVATED: $(iso_at -86400)\",\"author_association\":\"OWNER\"}"
     (( twodeact )) && cm="$cm,{\"body\":\"S2-DEACTIVATED: $(iso_at -86400)\",\"author_association\":\"OWNER\"}"
@@ -207,6 +235,14 @@ build_fx() {
   assert_fixture_dir "$fx"
   printf '%s]\n' "$cm" > "$fx/comments-4242.json"
   (( page2 )) && printf '%s]\n' "$cm2" > "$fx/comments-4242-2.json"
+  # the `gh issue view --json comments` shape (what the trusted-author lib reads): every comment gets a stable login that
+  # maps to a permission row, while its association stays on the comment as a DECOY the probe must ignore
+  jq -n --argjson a "$(cat "$fx/comments-4242.json")" --argjson b "$( [ -f "$fx/comments-4242-2.json" ] && cat "$fx/comments-4242-2.json" || echo '[]')" --argjson t0 "$((act_epoch - 90000))" '
+    {OWNER:"owner-op",MEMBER:"member-op",COLLABORATOR:"collab-op",CONTRIBUTOR:"contrib-op",NONE:"none-op"} as $m
+    | {comments: ($a + $b | to_entries | map({author:{login:(.value.login // $m[.value.author_association])},
+        authorAssociation:.value.author_association, createdAt:($t0 + .key * 60 | todate), body:.value.body}))}' > "$fx/gql-comments-4242.json"
+  local pp=admin; (( permfail )) && pp=403
+  printf 'owner-op\tadmin\nmember-op\twrite\ncollab-op\twrite\ncontrib-op\tread\nnone-op\t404\npriv-op\t%s\nownread-op\tread\n' "$pp" > "$fx/perms.tsv"
 }
 
 # expect <label> <want-rc> <want-text> <fx> [env...]  — runs $PROBE_UNDER (default the live probe)
@@ -215,6 +251,7 @@ expect() {
   local label="$1" want="$2" text="$3" fx="$4"; shift 4
   local out rc
   out="$(env FX="$fx" PATH="$TMP/bin:$PATH" GH_TOKEN=x SOAK_NOW_EPOCH="$NOW_EPOCH" SOAK_ADR_FILE="$fx/ADR-276-fixture.md" SOAK_TEST_ALL="$fx/test-all.sh" "$@" bash "$PROBE_UNDER" 2>&1)"; rc=$?
+  if [ -s "$fx/refused.log" ]; then fail "$label: the fake gh REFUSED an argv (the row would pass or fail for the wrong reason): $(head -2 "$fx/refused.log" | tr '\n' '|')"; return; fi
   if [[ "$rc" == "$want" && "$out" == *"$text"* ]]; then pass "$label (rc=$rc)"; else fail "$label: want rc=$want containing '$text', got rc=$rc: $(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi
 }
 
@@ -242,6 +279,7 @@ r_adr_proposed(){ build_fx "$TMP/d12" 10 15 510 2568 adr=proposed;  expect "FAIL
 r_unregistered(){ build_fx "$TMP/d13" 10 15 510 2568 noreg;         expect "FAIL: the proof suite is no longer registered in test-all.sh" 1 "no longer registered" "$TMP/d13"; }
 r_stuck29()   { build_fx "$TMP/d14" 4 21 510 2568 actdays=29 merged=2026-09-20T00:00:00Z; expect "NOT YET: 29 days active with 4 elided runs (the deadline is 30)" 2 "4 elided" "$TMP/d14"; }
 r_stuck30()   { build_fx "$TMP/d15" 4 21 510 2568 actdays=30 merged=2026-09-20T00:00:00Z; expect "FAIL: 30 days active and the proof is not eliding" 1 "proof is not eliding" "$TMP/d15"; }
+r_privmember(){ build_fx "$TMP/g1" 10 15 510 2568 privact;          expect "PASS: an activation by a private-org-member admin (association CONTRIBUTOR) is read under the permission lookup" 0 "PASS" "$TMP/g1"; }
 r_nonactive_deadline(){ build_fx "$TMP/d7" 0 25 510 2568 noact;     expect "FAIL: 30 days after the merge and nothing activated: activate, or revert" 1 "activate, or revert" "$TMP/d7" SOAK_NOW_EPOCH=$((NOW_EPOCH + 31 * 86400)); }
 r_deact()     { build_fx "$TMP/d16" 0 25 510 2568 deact;            expect "NOT YET: a later S2-DEACTIVATED ends the activation" 2 "not activated" "$TMP/d16"; }
 r_commentsfail(){ build_fx "$TMP/e-c" 10 15 510 2568 failcomments;  expect "CANNOT ESTABLISH: the tracker comments read fails (403)" 3 "CANNOT ESTABLISH" "$TMP/e-c"; }
@@ -278,7 +316,7 @@ ALL_ROWS=(r_pass r_zero r_unmatched1 r_unmatched3 r_over r_allmean r_nomarker r_
           r_adr_proposed r_unregistered r_stuck29 r_stuck30 r_nonactive_deadline r_deact r_commentsfail
           r_adr_idle r_adr_quoted r_adr_case r_adr_note r_adr_nostatus r_adr_missing r_testall_missing r_regcomment r_prefull
           r_reactivate r_twoact r_twodeact r_page2 r_idle_cap r_max_cap r_would r_collab r_contrib r_crlf r_badts r_midact
-          r_lookalike r_foreign r_pdbad6 r_pdbad5 r_pdbad_dark r_pdbad_few r_deadline_edge)
+          r_lookalike r_foreign r_pdbad6 r_pdbad5 r_pdbad_dark r_pdbad_few r_deadline_edge r_privmember)
 run_rows() { local r; for r in "$@"; do "$r"; done; }
 run_rows "${ALL_ROWS[@]}"
 

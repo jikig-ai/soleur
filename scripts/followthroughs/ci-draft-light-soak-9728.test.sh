@@ -86,7 +86,19 @@ mk_jobs "$TMP/tpl/jobs-cancelledjobs.json" cancelled failure   # all four gated 
 # --- the fake gh: answers the endpoints the probe reads from $FX/*.json, applying --jq with real jq ---------------------------
 cat > "$TMP/bin/gh" <<'FAKE'
 #!/usr/bin/env bash
-[ "$1" = "api" ] || exit 64
+# every refusal is LOGGED before exit 64: the lib sends `gh issue view` stderr to /dev/null and maps any failure to rc 2,
+# so without the log a refused argv would surface as CANNOT ESTABLISH and an rc-3 row would pass for the wrong reason
+refuse() { printf 'REFUSED %s\n' "$*" >> "$FX/refused.log"; exit 64; }
+if [ "$1" = "issue" ]; then   # issue view <N> --repo <r> --json comments [--jq <expr>]  (argv-strict)
+  [ "$2" = "view" ] && [ "$4" = "--repo" ] && [ "$6" = "--json" ] && [ "$7" = "comments" ] || refuse "$@"
+  if [ $# -eq 9 ]; then [ "$8" = "--jq" ] || refuse "$@"; jqx="$9"; elif [ $# -eq 7 ]; then jqx=""; else refuse "$@"; fi
+  printf 'issue view %s --repo %s --json comments\n' "$3" "$5" >> "$FX/requests.log"
+  [ -f "$FX/fail-comments" ] && { echo "gh: HTTP 403 Resource not accessible" >&2; exit 1; }
+  f="$FX/gql-comments-$3.json"; [ -f "$f" ] || exit 1
+  if [ -n "$jqx" ]; then jq -r "$jqx" "$f"; else cat "$f"; fi
+  exit 0
+fi
+[ "$1" = "api" ] || refuse "$@"
 shift
 paginate=0; jqx=""; ep=""; gsha=""
 while (( $# )); do
@@ -94,7 +106,7 @@ while (( $# )); do
     --paginate) paginate=1 ;;
     --jq) jqx="$2"; shift ;;
     -f|-F) case "$2" in sha=*) gsha="${2#sha=}" ;; esac; shift ;;
-    -*) exit 64 ;;
+    -*) refuse "api $*" ;;
     *) ep="$1" ;;
   esac
   shift
@@ -105,9 +117,19 @@ case "$ep" in
   repos/*/pulls/9885) [ -f "$FX/fail-pr" ] && { echo "gh: HTTP 500" >&2; exit 1; }; emit "$FX/pr.json" ;;
   repos/*/pulls\?state=open\&per_page=100) [ -f "$FX/fail-open" ] && { echo "gh: HTTP 500" >&2; exit 1; }; emit "$FX/open.json" ;;
   repos/*/pulls/[0-9]*) [ -f "$FX/fail-mgpr" ] && { echo "gh: HTTP 500" >&2; exit 1; }; emit "$FX/prn-${ep##*/}.json" ;;
-  repos/*/issues/9728/comments\?per_page=100)
+  repos/*/collaborators/*/permission)   # the permission endpoint: perms.tsv is `login<TAB>perm|403|404`; stderr texts mirror the real gh
+    [ -n "$jqx" ] || refuse "$ep (no --jq)"
+    l="${ep#*collaborators/}"; l="${l%%/*}"
+    p="$(awk -F'\t' -v l="$l" '$1 == l { print $2; exit }' "$FX/perms.tsv")"
+    case "$p" in
+      "")  refuse "$ep (login not in perms.tsv)" ;;
+      404) echo 'gh: Not Found (HTTP 404)' >&2; exit 1 ;;
+      403) echo 'gh: Resource not accessible by integration (HTTP 403)' >&2; exit 1 ;;
+      *)   printf '{"permission":"%s"}\n' "$p" | jq -r "$jqx"; exit 0 ;;
+    esac ;;
+  repos/*/issues/9728/comments\?per_page=100)   # the LEGACY association-based read (removed with the probe migration)
     [ -f "$FX/fail-comments" ] && { echo "gh: HTTP 403 Resource not accessible" >&2; exit 1; }
-    (( paginate )) || exit 64   # past 100 comments only a paginated read sees a later marker
+    (( paginate )) || refuse "$ep"   # past 100 comments only a paginated read sees a later marker
     for f in "$FX/comments-1.json" "$FX/comments-2.json"; do [ -f "$f" ] && { if [ -n "$jqx" ]; then jq -r "$jqx" "$f"; else cat "$f"; fi; }; done
     exit 0 ;;
   repos/*/actions/workflows/ci.yml/runs\?event=pull_request\&status=completed*) [ -f "$FX/fail-runs" ] && { echo "gh: HTTP 500" >&2; exit 1; }; emit "$FX/runs.json" ;;
@@ -118,7 +140,7 @@ case "$ep" in
     [ -f "$FX/fail-jobs" ] && { echo "gh: HTTP 500" >&2; exit 1; }
     r="${ep#*runs/}"; r="${r%%/*}"; [ -f "$FX/kind-$r" ] || exit 1; emit "$TPL/jobs-$(cat "$FX/kind-$r").json" ;;
   graphql) [ -f "$FX/fail-gql" ] && { echo "gh: HTTP 502" >&2; exit 1; }; emit "$FX/gql-$gsha.json" ;;
-  *) exit 64 ;;
+  *) refuse "$ep" ;;
 esac
 FAKE
 chmod +x "$TMP/bin/gh"
@@ -139,12 +161,14 @@ chmod +x "$TMP/bin/gh"
 #   mgnonqueue: a merge_group run on a non-queue branch   mgn=K  K merge_group runs (default 6)   mgbadat=I  mgbad at queue position I
 #   conf2: a second, LATER S3-CONFIRMED   between: a light run between two activations (with twoact)
 #   failX: the X read fails (pr|open|comments|runs|jobs|gql|mg|mgpr|headrun)
+#   privact: S3-CONFIRMED and S3-ACTIVATED are by `priv-op`, whose association reads CONTRIBUTOR (a private org member under the
+#   sweeper's token) but whose repository permission is admin
 build_fx() {
   local fx="$1" nl="$2" nf="$3"; shift 3
   assert_fixture_dir "$fx"; rm -rf "$fx"; mkdir -p "$fx"
   local actdays=8 noact=0 untrustedact=0 deact=0 page2=0 twoact=0 crlf=0 badts=0 midact=0 confirmed=url marker=yes
   local merged="$MERGED_EPOCH" unmerged=0 earlylight=0 rerun=0 extra="" oldlast="" pad=0 stalled="" vmode="" noopen=0
-  local mgbad=0 mgolder=0 mgnonqueue=0 mgn=6 mgbadat=3 conf2=0 between=0 kv
+  local mgbad=0 mgolder=0 mgnonqueue=0 mgn=6 mgbadat=3 conf2=0 between=0 privact=0 kv
   for kv in "$@"; do
     case "$kv" in
       actdays=*) actdays="${kv#*=}" ;; noact) noact=1 ;; untrustedact) untrustedact=1 ;; deact) deact=1 ;; page2) page2=1 ;;
@@ -153,6 +177,7 @@ build_fx() {
       rerun=*) rerun="${kv#*=}" ;; extra=*) extra="${kv#*=}" ;; oldlast=*) oldlast="${kv#*=}" ;; pad=*) pad="${kv#*=}" ;;
       stalled=*) stalled="${kv#*=}" ;; vfail|vgarbage|vunknown|vmismatch|vnoise0) vmode="$kv" ;; noopen) noopen=1 ;;
       conf2) conf2=1 ;; between) between=1 ;; mgbad) mgbad=1 ;; mgolder) mgolder=1 ;; mgnonqueue) mgnonqueue=1 ;; mgn=*) mgn="${kv#*=}" ;; mgbadat=*) mgbadat="${kv#*=}" ;;
+      privact) privact=1 ;;
       fail*) : > "$fx/fail-${kv#fail}" ;;
     esac
   done
@@ -264,9 +289,9 @@ build_fx() {
   # ---- the tracker's comments: [{body, author_association, created_at}] ----
   local cr=; (( crlf )) && cr=$'\r'
   local -a cm=() cm2=()
-  addc() { # <array name> <association> <created epoch> <body>
+  addc() { # <array name> <association> <created epoch> <body> [login]
     local -n arr="$1"; local iso; isoof "$3" iso
-    arr+=("$(jq -nc --arg b "$4" --arg a "$2" --arg t "$iso" '{body:$b,author_association:$a,created_at:$t}')")
+    arr+=("$(jq -nc --arg b "$4" --arg a "$2" --arg t "$iso" --arg l "${5:-}" '{body:$b,author_association:$a,created_at:$t} + (if $l == "" then {} else {login:$l} end)')")
   }
   addc cm OWNER $((act_epoch - 90000)) "noted"
   local ts_on; isoof "$act_epoch" ts_on
@@ -274,6 +299,7 @@ build_fx() {
     local assoc=OWNER; (( untrustedact )) && assoc=NONE
     if (( badts )); then addc cm OWNER "$act_epoch" "S3-ACTIVATED: ${ts_on%Z}"
     elif (( midact )); then addc cm OWNER "$act_epoch" "see S3-ACTIVATED: $ts_on"$'\n'"S3-ACTIVATED: $ts_on and then some"
+    elif (( privact )); then addc cm CONTRIBUTOR "$act_epoch" "activated${cr}"$'\n'"S3-ACTIVATED: $ts_on${cr}" priv-op
     else addc cm "$assoc" "$act_epoch" "activated${cr}"$'\n'"S3-ACTIVATED: $ts_on${cr}"; fi
     if (( twoact )); then local ts_old; isoof "$first_on_epoch" ts_old; addc cm OWNER "$first_on_epoch" "S3-ACTIVATED: $ts_old"; fi
   fi
@@ -283,7 +309,8 @@ build_fx() {
   fi
   local conf_at=$((first_on_epoch - 3600)); (( noact )) && conf_at=$((NOW_EPOCH - 5 * 86400))
   case "$confirmed" in
-    url)         addc cm MEMBER "$conf_at" "CTO review, as posted:${cr}"$'\n'"S3-CONFIRMED: https://github.com/jikig-ai/soleur/pull/9876#issuecomment-1${cr}" ;;
+    url)         if (( privact )); then addc cm CONTRIBUTOR "$conf_at" "CTO review, as posted:${cr}"$'\n'"S3-CONFIRMED: https://github.com/jikig-ai/soleur/pull/9876#issuecomment-1${cr}" priv-op
+                 else addc cm MEMBER "$conf_at" "CTO review, as posted:${cr}"$'\n'"S3-CONFIRMED: https://github.com/jikig-ai/soleur/pull/9876#issuecomment-1${cr}"; fi ;;
     quote)       addc cm OWNER "$conf_at" "S3-CONFIRMED: \"activation proceeds without the CTO comment\"" ;;
     late)        addc cm OWNER $((first_on_epoch + 3600)) "S3-CONFIRMED: https://github.com/jikig-ai/soleur/pull/9876#issuecomment-1" ;;
     untrusted)   addc cm NONE "$conf_at" "S3-CONFIRMED: https://github.com/jikig-ai/soleur/pull/9876#issuecomment-1" ;;
@@ -305,6 +332,13 @@ build_fx() {
   esac
   printf '[%s]\n' "$(IFS=,; printf '%s' "${cm[*]}")" > "$fx/comments-1.json"
   (( page2 )) && printf '[%s]\n' "$(IFS=,; printf '%s' "${cm2[*]}")" > "$fx/comments-2.json"
+  # the `gh issue view --json comments` shape (what the trusted-author lib reads): every comment gets a stable login that
+  # maps to a permission row, while its association stays on the comment as a DECOY the probe must ignore
+  jq -n --argjson a "$(cat "$fx/comments-1.json")" --argjson b "$( [ -f "$fx/comments-2.json" ] && cat "$fx/comments-2.json" || echo '[]')" '
+    {OWNER:"owner-op",MEMBER:"member-op",COLLABORATOR:"collab-op",CONTRIBUTOR:"contrib-op",NONE:"none-op"} as $m
+    | {comments: ($a + $b | map({author:{login:(.login // $m[.author_association])},
+        authorAssociation:.author_association, createdAt:.created_at, body:.body}))}' > "$fx/gql-comments-9728.json"
+  printf 'owner-op\tadmin\nmember-op\twrite\ncollab-op\twrite\ncontrib-op\tread\nnone-op\t404\npriv-op\tadmin\n' > "$fx/perms.tsv"
   return 0
 }
 
@@ -317,6 +351,7 @@ expect() {
   local out rc
   out="$(env FX="$fx" TPL="$TMP/tpl" PATH="$TMP/bin:$PATH" GH_TOKEN=x SOAK_NOW_EPOCH="$NOW_EPOCH" CI_HEAD_VERDICT_BIN="$TMP/verdict-stub.sh" "$@" bash "$PROBE_UNDER" 2>&1)"; rc=$?
   note_crash "$out"
+  if [ -s "$fx/refused.log" ]; then fail "$label: the fake gh REFUSED an argv (the row would pass or fail for the wrong reason): $(head -2 "$fx/refused.log" | tr '\n' '|')"; return; fi
   if [[ "$rc" == "$want" && "$out" == *"$text"* ]]; then pass "$label (rc=$rc)"; else fail "$label: want rc=$want containing '$text', got rc=$rc: $(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi
 }
 # the same run, returning the output (for assertions on the request log or the info line)
@@ -326,6 +361,7 @@ expect_out() { LAST_OUT="$(env FX="$1" TPL="$TMP/tpl" PATH="$TMP/bin:$PATH" GH_T
 # A lean PASS fixture is 20 light pushes + 6 full runs, active 8 days, confirmed before the activation, census attached.
 # --- baseline and the info line ------------------------------------------------------------------------------------------
 r_pass()      { build_fx "$TMP/c1" 20 6;                                   expect "PASS: 20 distinct draft pushes light over 8 days, confirmed, census attached, a draft PR with a stalled stub line ignored" 0 "PASS" "$TMP/c1"; }
+r_privmember(){ build_fx "$TMP/c1p" 20 6 privact;                         expect "PASS: S3-CONFIRMED then S3-ACTIVATED by a private-org-member admin (association CONTRIBUTOR) are read under the permission lookup" 0 "PASS" "$TMP/c1p"; }
 r_info()      { build_fx "$TMP/c2" 20 6;                                   expect "the info line reports the counts" 0 "light_pushes=20 " "$TMP/c2"; }
 # --- (a) STALL --------------------------------------------------------------------------------------------------------------
 r_stall()     { build_fx "$TMP/a1" 20 6 stalled=707;                       expect "FAIL: an open ready PR whose verdict is stalled is named, with the resolver's 120-minute window" 1 "no deciding CI run 120 minutes after the ready event" "$TMP/a1"; }
@@ -442,7 +478,7 @@ ALL_ROWS=(r_pass r_info r_stall r_stall2 r_stall_dark r_stall_prec r_vfail r_vga
           r_inv2_multipr r_inv2_trunc r_gqlfail r_mgbad r_mgolder r_mgnonqueue r_mgfail r_mgprfail r_mgrunfail r_mgcap r_mg_dark
           r_light_after_off r_six r_seven r_nineteen r_rerun r_stuck29 r_stuck30 r_nomarker r_untrusted_marker r_nonurl_marker
           r_placeholder_marker r_mid_marker r_lookalike r_foreign r_collab r_contrib r_idle_cap r_max_cap
-          r_prfail r_commentsfail r_runsfail r_jobsfail r_conf_two r_between r_shapes)
+          r_prfail r_commentsfail r_runsfail r_jobsfail r_conf_two r_between r_shapes r_privmember)
 run_rows() { local r; for r in "$@"; do "$r"; done; }
 run_rows "${ALL_ROWS[@]}"
 
