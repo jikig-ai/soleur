@@ -210,6 +210,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    `rc=$?` on its own line — `echo "$(basename $t) RC=$?"` prints `basename`'s status and reported this ratchet green
    while its log carried `FAIL` (#7968).
 6.7. **A new anti-vacuity floor ⇒ build to `guard-vacuity-floor.test.sh`'s shape and run it first** (see learning `2026-10-06-a-new-anti-vacuity-floor-joins-the-meta-guard…`).
+6.8. **A shim/fixture script written from a new `*.test.sh`: quoted heredoc; name sibling scripts by BASENAME.** `fixture-scan.py` reads `$VAR` inside a single-quoted `printf` on a redirect line (`root=never-bound`), and a full path literal makes `test-affected-kb-consumers.test.sh` hop into that script and charge your suite with its `knowledge-base/` reads. See `knowledge-base/project/learnings/2026-10-13-a-locale-pin-fix-needed-the-guard-around-the-prune-and-the-repos-own-ratchets.md`.
 
 **Design artifact checks:**
 
