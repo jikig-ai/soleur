@@ -537,6 +537,14 @@ folder, or a banner that stays silent exactly as today.
 may carry the 12-character hash of an unpublished local commit (no content, no branch name, no remote
 URL; nothing goes to Jikigai), disclosed by the clarification-only legal wording.
 
+**Accepted residuals (recorded after review, 2026-10-13):** (1) a plugin folder vendored inside another
+project's repository, with that repository's own `.git` and a `plugin.json`, shows that project's HEAD
+(12 hex; opt-in to send; the README and the ADR-182 addendum say so); a symlinked plugin root is no longer
+one of them (the root is resolved physically); (2) in the bare layout HEAD can be ahead of the mirrored
+files between a `fetch` and `sync`; (3) a `gitdir:` or `commondir` pointer can name another repository, and
+only 12 hex of a validated 40-hex first line can ever surface from it; (4) a hung network mount under a
+`gitdir:` target is bounded only by the hook's own 10 s timeout.
+
 **Brand-survival threshold:** aggregate pattern
 
 (Threshold decision, challengeable: a bad banner is a repeated-trust paper cut across in-place
@@ -718,14 +726,18 @@ error_reporting:
   fail_loud: both suites exit non-zero with the named FAILURES ledger; the hook exits 0 silently on any fault
 failure_modes:
   - mode: checkout identity reported for the wrong repository, or a hang/error at session start on hostile repo state
-    detection: layout-anchor negative rows, the FIFO/garbage table and the recording git stub in the two suites
+    detection: layer 7 `cli-stdout-artifact` for the user (the banner / `/soleur:version` stdout) plus, at development time, the layout-anchor negative rows, the FIFO/garbage table and the recording git stub in the two suites
     alert_route: red `test` check on the PR
+  - mode: an unreadable checkout (unborn branch, reftable or sha-256 repository, unusual layout) prints `source=unknown`, so the banner is silently absent
+    detection: layer 7 `cli-stdout-artifact`: `/soleur:version` prints `Installed:  unknown` plus the causes sentence and tells the user to compare `claude plugin list`; the banner stays silent by design (fail open, nothing to say). One token (`source=unknown`) is intentional: a reason key would add output surface for no user action
+    alert_route: none by design (no telemetry on the user's machine); the user-run `/soleur:version` is the channel
   - mode: the live banner does not render after merge
-    detection: Phase 6 headless run with hook events visible
+    detection: layer 7 `cli-stdout-artifact`: Phase 6 headless run with hook events visible
     alert_route: ship/postmerge records the output; a missing line becomes a follow-up issue
 logs:
   where: none persisted (stdout key=value lines; the latest-release.checkout cache file holds one tag string)
   retention: cache file stays until replaced or deleted
+  artifact_note: no committed artifact is paired with the stdout output, by design (the privacy policies promise no telemetry). On the hosted path the resolver resolves `/app/shared/plugins/soleur` and only takes the new arm if `/app/shared/.git` exists, which is a harmless `unknown` there.
 discoverability_test:
   command: bash plugins/soleur/scripts/plugin-version.sh --installed
   expected_output: source=
@@ -979,3 +991,18 @@ folded into Decisions 1-9, the phases, the guard matrix and the test table; `tas
 - Floors set exactly: plugin-version 572 cases / 292 runs; hook suite 235 cases / 113 runs / 92 banners.
 - Guard 1 mutation battery, run once on scratch copies: 20 mutants (M1b to M19 plus the hook variants), all killed except two equivalent ones recorded here. M1a (`-e` instead of `-f` in `read_small`): the size floor `n >= 1` also refuses a FIFO. M10h (the `corrupt` to `missing` mapping, seen by the hook suite only): the hook spawns a refresh in both states; the resolver suite kills it. Two initial survivors were fixture gaps and got rows: a root outside `/plugins/soleur` that owns a `.git` and `plugin.json`, and an 8 MiB `packed-refs` whose first line matches.
 - A `X_TIMEOUT` knob bounds the three rows that can block (FIFO HEAD, 2 GiB sparse HEAD, oversize packed-refs), so a regression reds the row instead of hanging the suite.
+
+## Review Outcome (2026-10-13)
+
+14 seats (12 panel + simplicity + coverage consult), 0 P1. Fixed inline: physical root resolution
+(symlink adopts the wrong repo), byte-counted `read_small` (locale), manifest read gated, a row per
+`valid_ref_name` arm, real-sized/oversize packed-refs rows, empty/absolute commondir and dangling-symlink
+rows, non-ASCII rows in three locales, a static no-git-command row, the hostile config resolved on a real
+repository, label parity rows, the update guidance rewritten (fetch fallback, user-addressed steps,
+`--plugin-dir` split), the unknown-source catch-all, the "cache unchanged" wording in the three legal
+notes (+ mirrors, SHA repin), the ADR-182 addendum, the C4 edge text, Observability and User-Brand
+residuals. Kept after review: the one-line `LC_ALL=C comm` fix (the update guidance depends on `sync`);
+sibling draft PR #10163 rewrites the same function and will need a rebase whichever lands second.
+Deferred, tracked at ship: the mirror-vs-HEAD stamp (Deferral tracking) and the other bare `comm` sites
+(`scripts/plugin-delivery-canary.sh`, `apps/web-platform/infra/run-registered-suites.sh`), which #10163
+already covers.

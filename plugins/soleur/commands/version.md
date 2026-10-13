@@ -36,7 +36,7 @@ Print the block below, filling it from the resolver output. Keep it compact, no 
 ```text
 Soleur plugin version
 
-Installed:  <version, or "commit <sha12>", or "commit <sha12> (local checkout)">  (source: <manifest | commit | checkout>)
+Installed:  <version, or "commit <sha12>", or "commit <sha12> (local checkout, HEAD commit, not uncommitted or unsynced files)">  (source: <manifest | commit | checkout>)
 Latest:     <latest, e.g. v3.4.5>   (or the WHY line from the rules below)
 Status:     <one status line from the rules below>
 
@@ -55,7 +55,7 @@ project settings file, and not in CI or ephemeral containers); remove it to turn
 
 - `source=manifest`: print `version`.
 - `source=commit`: print `commit <commit>` (the 12-character hash). Do not invent a version number for it.
-- `source=checkout`: print `commit <commit> (local checkout)` (the 12-character hash of the checkout's HEAD). Add one line: this is the checkout's HEAD commit, not its uncommitted or unsynced files, and it is re-checked on every new commit. Do not invent a version number for it.
+- `source=checkout`: print `commit <commit> (local checkout)` (the 12-character hash of the HEAD commit of the git checkout that contains the plugin folder, read from its files without running git) and put the note `HEAD commit, not uncommitted or unsynced files` on the Installed line. Do not invent a version number for it.
 - `source=unknown` or `source=none`: print `Installed:  unknown` and say the plugin root could not be identified (not running from an installed plugin, a recognizable cache directory, or a local git checkout whose HEAD could be read: an unborn branch, a reftable or sha-256 repository or an unusual layout reads as unknown). Compare with `claude plugin list`. Do not print a version.
 
 ### Latest line (explain WHY when missing)
@@ -84,11 +84,11 @@ Never say "up to date" when the relation is unknown or absent, and never infer a
 
 Choose by `source` first, then by the `marketplace` value:
 
-- `source=checkout` (in place from a local git checkout; use this arm whatever `marketplace` says, and never print the GitHub marketplace pair for it, which would replace the in-place install with a published copy). The marketplace is the local folder and is named `soleur`. Print these steps (do not run them). Not sure which kind of folder it is? Run `git -C <folder> rev-parse --is-bare-repository` (`<folder>` is the Source path in `claude plugin marketplace list`):
-  - `true` (bare layout, files mirrored on disk): in the repository root run `git fetch --no-tags origin main:main`, then `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh sync` (`sync` only mirrors the local `main` to disk; it does not fetch);
-  - `false` (normal clone): run `git pull` on `main`;
-  - then, for either: `claude plugin marketplace update soleur` and `claude plugin update soleur@soleur`;
-  - launched with `--plugin-dir <path>`: no marketplace command applies; update that folder as above and restart.
+- `source=checkout` (in place from a local git checkout; use this arm whatever `marketplace` says, and never print the GitHub marketplace pair for it, which would replace the in-place install with a published copy). **Print these steps for the user to run; never run any of them yourself** (no `git`, no `claude plugin`). The marketplace is the local folder and is named `soleur`. Tell the user how to tell the two layouts apart: `git -C <folder> rev-parse --is-bare-repository` prints `true` for a bare layout (`<folder>` is the Source path in `claude plugin marketplace list`).
+  1. Update the folder. Bare layout (`true`, files mirrored on disk): in the repository root run `git fetch --no-tags origin main:main`; if git refuses because `main` is checked out in a worktree, run `git fetch --no-tags origin main` then `git update-ref refs/heads/main origin/main` instead; then run `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh sync` (it mirrors the local `main` to disk and does not fetch). Normal clone (`false`): update the checked-out branch, for example `git pull`.
+  2. If the plugin was added as a local-folder marketplace (the usual case): `claude plugin marketplace update soleur` then `claude plugin update soleur@soleur`, then restart. If it was started with `--plugin-dir <path>`, skip this step (no marketplace command applies) and just restart.
+  The resolver cannot tell those two launch modes apart, so print both lines, each labelled.
+- Any other `source` value: treat it as `unknown` (print `Installed:  unknown`; never print an update command for it).
 - absent or `soleur-marketplace`:
   `claude plugin marketplace update soleur-marketplace` then `claude plugin update soleur@soleur-marketplace`
 - `soleur`:

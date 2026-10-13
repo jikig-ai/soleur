@@ -282,7 +282,8 @@ of these tokens. Rationale for the canary itself is ADR-182, Decision 6; this ta
 What identifies an install today is a **12-character commit hash**, not a semver. The published
 plugin manifest is keyless (no `version` key; ADR-182 Decision 1), so `claude plugin list` shows the
 commit and the plugin cache directory is named after it. The SessionStart banner shows the same
-identity (`Soleur commit <sha12>`) with no network call.
+identity (`Soleur commit <sha12>`, or `Soleur commit <sha12> (local checkout)` for a plugin run in place
+from a local git checkout) with no network call.
 
 On Claude Code, `/soleur:version` (user-started; a model cannot trigger it) prints:
 

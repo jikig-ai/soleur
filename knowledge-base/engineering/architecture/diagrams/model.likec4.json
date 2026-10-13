@@ -2017,7 +2017,7 @@
 "id": "ttq3vz"
 },
 "1cn6cfg": {
-"title": "Opt-in release lookup (SOLEUR_UPDATE_CHECK=1 at session start) and the explicit, user-started /soleur:version compare: git ls-remote --tags against github.com/jikig-ai/soleur and, for a commit-hash or local-checkout install only, one unauthenticated compare API request whose URL carries the installed commit hash. Git config isolated (no user config, no ssh, no credentials, https only), each request time-limited, retried at most once per 10 minutes while failing, result cached per install (all commits of a local checkout share one entry) and treated as fresh for 24 hours. Jikigai receives nothing; GitHub sees the user's IP address and user agent.",
+"title": "Opt-in release lookup (SOLEUR_UPDATE_CHECK=1 at session start) and the explicit, user-started /soleur:version compare: git ls-remote --tags against github.com/jikig-ai/soleur and, for a commit-hash or local-checkout install only, one unauthenticated compare API request whose URL carries the installed commit hash (for a local checkout, its current commit, possibly one never pushed). Git config isolated (no user config, no ssh, no credentials, https only), each request time-limited, retried at most once per 10 minutes while failing, result cached per install (all commits of a local checkout share one entry) and treated as fresh for 24 hours. Jikigai receives nothing; GitHub sees the user's IP address and user agent.",
 "technology": "HTTPS (git ls-remote, GitHub REST API)",
 "source": {
 "model": "platform.plugin"

@@ -72,7 +72,7 @@ Present one harness-appropriate overview. Replace placeholder counts with actual
 Soleur - The Company-as-a-Service Platform
 
 [Version line: `Soleur <version>` when source=manifest, `Soleur commit <commit>` when source=commit, `Soleur commit <commit> (local checkout)` when source=checkout.
- When source is unknown or none, print no version line; print only the hint
+ When source is unknown, none or any other value, print no version line; print only the hint
  "Version unknown (on Claude Code: run /soleur:version)".]
 
 COMMANDS:

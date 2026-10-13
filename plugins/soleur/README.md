@@ -473,8 +473,10 @@ marketplace install is identified by its 12-character commit hash (the published
 no `version` key by design), so today you see `Soleur commit <sha12>` rather than a semver; the
 banner shows `Soleur v<X.Y.Z>` only for an install whose manifest does carry a version. A plugin run in
 place from a local git checkout (a local-folder marketplace, or `--plugin-dir`) shows `Soleur commit
-<sha12> (local checkout)`: that is the checkout's HEAD commit, read from its files without running git,
-not its uncommitted or unsynced files; `/soleur:version` prints the update steps for it.
+<sha12> (local checkout)`: that is the HEAD commit of the git checkout that contains the plugin folder,
+read from its files without running git, not its uncommitted or unsynced files (a plugin folder vendored
+inside another project's repository shows that project's HEAD); `/soleur:version` prints the update steps
+for it.
 
 **Session-start banner (on by default, no network).** Every session start shows one line, `Soleur
 commit <sha12>` (or `Soleur v<X.Y.Z>`), read from the local install. It makes no network call.
