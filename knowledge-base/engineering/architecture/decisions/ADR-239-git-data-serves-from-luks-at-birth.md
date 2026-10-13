@@ -462,3 +462,23 @@ The 2026-10-09 amendment set 2026-10-22 as the target for destroying `hcloud_vol
 **Owner:** the operator, via #8211 and #6897. **Blocker chain:** the rotate-arm assert fix (#10137), then a fresh rotate dispatch that the operator authorises by naming the command, then #8209, #8609 and #8573, then a hash-bound wipe PR with its own rung-2 rehearsal, then the wipe itself, which the operator authorises by naming the command.
 
 Rule for the horizon: moving the ledger `expires_on` of `hcloud_volume.git_data` past 2026-11-12 requires a CLO re-ruling linked on #6897 first; a one-line date bump is not a renewal. This is a review-time rule: the lint treats `expires_on` as a clock only and does not enforce the cap.
+
+## Amendment 2026-10-13 — no workflow rotate after the first flip attempt (#10175)
+
+**Decision.** `git-data-host-rotate` is refused once any run of `git-data-cutover.yml` has executed the
+`Write GIT_DATA_STORE_ENABLED` step (any conclusion other than skipped, in any attempt). After a flip the LUKS volume
+may hold the only copy of the replicated repositories, and the rotate's emptiness check read a once-per-boot row that
+a flipped store never refreshes. The guard reads run records, not the flag and not the cutover stamp (the stamp
+survives a rollback, and rollback is flag-off only, so a rollback does not make the store clean). It needs no prd
+Doppler token in the apply workflow (alternative G above stands). It proves the history is complete by pinning two
+post-seam runs that must stay listed: run records expire after 90 days, so the guard fails closed once they expire
+until a PR re-baselines the pins. A second layer requires the newest `boot_complete` row to be newer than the current
+server's creation. Ruled by CTO agent, 2026-10-13 (CPO sign-off with conditions; CLO: no Art. 17/32 conflict while it
+guards only the automated rotate, with a key-compromise break-glass).
+
+**Consequences.** From the first flip there is no in-workflow route to rotate `GIT_DATA_LUKS_KEY`: a suspected
+key compromise is an owner-run break-glass (a reviewed PR that lifts the guard for one dispatch, owner and CLO
+reviewing), and the accepted Art. 17 residue (erased means unlinked) is re-evaluated by 2026-11-12 with the
+plaintext-volume outer retention. The exits are #8571 (copy mode) for a populated store and #10211 (a live
+"store measured empty" marker). The guard does not defend against a hostile owner, a flag set outside the workflow, or
+a re-run of a rotate run that predates it (the owner deletes those run records). Follow-ups: #10216.

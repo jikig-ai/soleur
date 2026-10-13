@@ -109,10 +109,13 @@ addrun() {
   for kv in "$@"; do printf '%s' "${kv#*:}" > "$FX/${id}.${kv%%:*}.json"; done
 }
 settotal() { printf '%s\n' "$1" > "$FX/total"; }
+# scan_nopins: the scan with NO pinned-run proof (most rows model arbitrary histories); the pin rows below drive the
+# real default (GDSD_PINNED_RUNS) by calling the scan with no argument.
+scan_nopins() { git_data_store_dirty_scan ""; }
 # check_scan: the production composition list | scan (the pipeline status is the scan's own).
 check_scan() { # LABEL EXPECTED-REGEX EXPECTED-RC
   local out rc=0
-  out="$(git_data_store_dirty_list | git_data_store_dirty_scan)" || rc=$?
+  out="$(git_data_store_dirty_list | scan_nopins)" || rc=$?
   if [[ "$out" =~ ^$2$ && "$rc" -eq "$3" ]]; then pass "$1 -> $out (rc $rc)"
   else fail "$1: got '$out' rc=$rc, expected /$2/ rc=$3"; fi
 }
@@ -128,21 +131,25 @@ if [[ "${1-}" == "--mutant-run" ]]; then
   # Child mode: the mutant was sourced above (MUTANT); report whether any scan row now differs.
   killed=0
   newfx; addrun 3 completed 1 "1:$(clean_body)"; addrun 2 completed 1 "1:$(dirty_body success)"; settotal 2
-  [[ "$(git_data_store_dirty_list | git_data_store_dirty_scan)" == "store_dirty 2" ]] || killed=1
+  [[ "$(git_data_store_dirty_list | scan_nopins)" == "store_dirty 2" ]] || killed=1
   newfx; : > "$FX/list.tsv"; settotal 3
-  [[ "$(git_data_store_dirty_list | git_data_store_dirty_scan)" == "scan_unreadable" ]] || killed=1
+  [[ "$(git_data_store_dirty_list | scan_nopins)" == "scan_unreadable" ]] || killed=1
   newfx; addrun 5 completed 2 "1:$(dirty_body success)" "2:$(clean_body)"; settotal 1
-  [[ "$(git_data_store_dirty_list | git_data_store_dirty_scan)" == "store_dirty 5" ]] || killed=1
+  [[ "$(git_data_store_dirty_list | scan_nopins)" == "store_dirty 5" ]] || killed=1
   newfx; addrun 6 completed 1 "1:$(dirty_body cancelled)"; settotal 1
-  [[ "$(git_data_store_dirty_list | git_data_store_dirty_scan)" == "store_dirty 6" ]] || killed=1
+  [[ "$(git_data_store_dirty_list | scan_nopins)" == "store_dirty 6" ]] || killed=1
   newfx; addrun 7 completed 1 "1:$(fx "$JOB" success "$(steps "$OTHER|success")")"; settotal 1
-  [[ "$(git_data_store_dirty_list | git_data_store_dirty_scan)" == "scan_unreadable 7" ]] || killed=1
+  [[ "$(git_data_store_dirty_list | scan_nopins)" == "scan_unreadable 7" ]] || killed=1
   newfx; addrun 8 completed 1 "1:$(fx "$JOB" cancelled "$(steps)")"; settotal 1
-  [[ "$(git_data_store_dirty_list | git_data_store_dirty_scan)" == "store_clean" ]] || killed=1
+  [[ "$(git_data_store_dirty_list | scan_nopins)" == "store_clean" ]] || killed=1
   newfx; addrun 9 in_progress 1 "1:$(clean_body)"; settotal 1
-  [[ "$(git_data_store_dirty_list | git_data_store_dirty_scan)" == "cutover_in_flight 9" ]] || killed=1
+  [[ "$(git_data_store_dirty_list | scan_nopins)" == "cutover_in_flight 9" ]] || killed=1
   newfx; addrun 10 completed 1 "1:$(clean_body)"; addrun 11 queued 2 "1:$(dirty_body success)"; settotal 2
-  [[ "$(git_data_store_dirty_list | git_data_store_dirty_scan)" == "store_dirty 11" ]] || killed=1
+  [[ "$(git_data_store_dirty_list | scan_nopins)" == "store_dirty 11" ]] || killed=1
+  newfx; addrun 12 completed 1 "1:$(clean_body)"; settotal 1
+  [[ "$(git_data_store_dirty_list | git_data_store_dirty_scan)" == "scan_unreadable pinned_run_missing" ]] || killed=1
+  newfx; addrun 13 completed 1 "1:$(fx "${JOB}_x" success "$(steps "$WRITE|success")")"; settotal 1
+  [[ "$(git_data_store_dirty_list | scan_nopins)" == "scan_unreadable 13" ]] || killed=1
   [[ "$killed" -eq 1 ]] && echo "MUTANT-KILLED" || echo "MUTANT-SURVIVED"
   exit 0
 fi
@@ -159,8 +166,11 @@ check_verdict "C6b write step ABSENT on a run that predates the seam (read-only-
 check_verdict "C7 empty-steps job cancelled while queued (must not deadlock)" clean "$(fx "$JOB" cancelled "$(steps)")"
 check_verdict "C7b empty-steps job skipped (approval rejected)" clean "$(fx "$JOB" skipped "$(steps)")"
 check_verdict "C7c empty-steps job with no conclusion (queued or waiting)" unreadable "$(fx "$JOB" null "$(steps)")"
-check_verdict "C8 no job named cutover (a decoy name)" clean "$(fx "${JOB}_decoy" success "$(steps "$WRITE|success")")"
-check_verdict "C8b case variant of the job name is not the job" clean "$(fx "$(tr '[:lower:]' '[:upper:]' <<<"$JOB")" success "$(steps "$WRITE|success")")"
+check_verdict "C8 no job named cutover (a decoy name) in a post-seam run: a rename, never clean" unreadable "$(fx "${JOB}_decoy" success "$(steps "$WRITE|success")")"
+check_verdict "C8b case variant of the job name is not the job (post-seam: unreadable)" unreadable "$(fx "$(tr '[:lower:]' '[:upper:]' <<<"$JOB")" success "$(steps "$WRITE|success")")"
+check_verdict "C8c a pre-seam run may list no cutover job at all: clean" clean "$(fx "${JOB}_decoy" success "$(steps "$WRITE|success")")" preseam
+check_verdict "C8d an empty jobs array in a post-seam run is unreadable" unreadable '{"jobs":[]}'
+check_verdict "C8e a caller-wrapper job name ('caller / cutover') is unreadable, not clean" unreadable "$(fx "caller / $JOB" success "$(steps "$WRITE|success")")"
 check_verdict "C9 write step name case variant is not the step" unreadable "$(fx "$JOB" success "$(steps "$(tr '[:lower:]' '[:upper:]' <<<"$WRITE")|success")")"
 check_verdict "C10 not JSON" unreadable "not json"
 check_verdict "C11 empty body" unreadable ""
@@ -176,6 +186,36 @@ newfx; addrun 101 completed 1 "1:$(clean_body)"; settotal 1
 check_scan "S1 one clean run" 'store_clean' 0
 newfx; settotal 0
 check_scan "S2 never-flipped history: zero runs and total_count 0" 'store_clean' 0
+# --- proof the history is complete: the pinned runs must still be listed, completed (default pins = GDSD_PINNED_RUNS)
+pinrun() { printf '%s\n' "$GDSD_PINNED_RUNS" | tr ' ' '\n' | sed -n "${1}p"; }
+P1ID="$(pinrun 1)"; P2ID="$(pinrun 2)"
+[[ "$P1ID" =~ ^[0-9]+$ && "$P2ID" =~ ^[0-9]+$ ]] || { printf '[FATAL] GDSD_PINNED_RUNS is not two run ids: %s\n' "$GDSD_PINNED_RUNS" >&2; exit 2; }
+check_scan_pins() { # LABEL EXPECTED-REGEX EXPECTED-RC   (default pins)
+  local out rc=0
+  out="$(git_data_store_dirty_list | git_data_store_dirty_scan)" || rc=$?
+  if [[ "$out" =~ ^$2$ && "$rc" -eq "$3" ]]; then pass "$1 -> $out (rc $rc)"
+  else fail "$1: got '$out' rc=$rc, expected /$2/ rc=$3"; fi
+}
+newfx; addrun "$P2ID" completed 1 "1:$(clean_body)"; addrun "$P1ID" completed 1 "1:$(clean_body)"; settotal 2
+check_scan_pins "K1 both pinned runs listed and completed, clean history" 'store_clean' 0
+newfx; addrun "$P2ID" completed 1 "1:$(clean_body)"; settotal 1
+check_scan_pins "K2 the older pinned run has EXPIRED (retention): the scan refuses instead of reading clean" 'scan_unreadable pinned_run_missing' 1
+newfx; settotal 0
+check_scan_pins "K3 an empty listing with total_count 0 is the expired-everything state: refuse" 'scan_unreadable pinned_run_missing' 1
+newfx; addrun "$P2ID" completed 1 "1:$(clean_body)"; addrun "$P1ID" in_progress 1 "1:$(clean_body)"; settotal 2
+check_scan_pins "K4 a pinned run that is not completed does not count as proof" 'scan_unreadable pinned_run_missing' 1
+newfx; addrun 999 completed 1 "1:$(clean_body)"; addrun "$P2ID" completed 1 "1:$(clean_body)"; addrun "$P1ID" completed 1 "1:$(clean_body)"; settotal 3
+check_scan_pins "K5 extra newer clean runs beside both pins stay clean" 'store_clean' 0
+newfx; addrun "$P2ID" completed 1 "1:$(clean_body)"; addrun "$P1ID" completed 1 "1:$(dirty_body success)"; settotal 2
+check_scan_pins "K6 a dirty pinned run is still dirty (the pin proves completeness, not cleanliness)" "store_dirty $P1ID" 1
+# K7: a clearly old oldest pin prints the age warning on stderr (a 2020 date keeps the row independent of today's date).
+newfx; CREATED=2020-01-01T00:00:00Z addrun "$P1ID" completed 1 "1:$(clean_body)"; CREATED=2020-01-01T00:00:00Z addrun "$P2ID" completed 1 "1:$(clean_body)"; settotal 2
+out="$(git_data_store_dirty_list | git_data_store_dirty_scan 2>&1 >/dev/null)"
+if [[ "$out" == *"::warning::"* ]]; then pass "K7 a 2020 pin triggers the age warning"; else fail "K7 no warning for a 2020 pin: '$out'"; fi
+out="$(git_data_store_dirty_list | git_data_store_dirty_scan 2>&1)"
+if [[ "$out" == *store_clean* && "$(printf '%s' "$out" | sed -n '$p')" == store_clean ]]; then pass "K8 the verdict stays ONE last line on stdout beside the warning"; else fail "K8 verdict line disturbed: '$out'"; fi
+newfx; addrun "$P2ID" completed 1 "1:$(clean_body)"; addrun "$P1ID" completed 1 "1:$(clean_body)"; settotal 2
+if [[ "$(git_data_store_dirty_list | git_data_store_dirty_scan "abc" 2>/dev/null)" == "scan_unreadable pinned_run_missing" ]]; then pass "K9 a malformed pin argument fails closed"; else fail "K9 a malformed pin was accepted"; fi
 newfx; addrun 103 completed 1 "1:$(clean_body)"; addrun 102 completed 1 "1:$(dirty_body success)"; settotal 2
 check_scan "S3 newest run clean, an OLDER run wrote (mutation 1: older dirty must not be masked)" 'store_dirty 102' 1
 newfx; addrun 203 completed 1 "1:$(clean_body)"; addrun 202 completed 1 "1:$(clean_body)"; addrun 201 completed 1 "1:$(dirty_body failure)"; settotal 3
@@ -260,7 +300,7 @@ if ! gh run list --workflow x >/dev/null 2>&1 && [[ -s "$GH_REFUSED" ]]; then pa
 if ! grep -vE '^api ' "$GH_CALLS" | grep -vE '^run list --workflow x$' | grep -q .; then pass "H3 only gh api was called"; else fail "H3 a non-api gh call was made"; fi
 # H4: the scan reads its stdin to the end and does not leave the list half-consumed for a caller.
 newfx; addrun 1301 completed 1 "1:$(clean_body)"; addrun 1300 completed 1 "1:$(clean_body)"; settotal 2
-out="$(git_data_store_dirty_list | git_data_store_dirty_scan)"
+out="$(git_data_store_dirty_list | scan_nopins)"
 if [[ "$out" == store_clean ]]; then pass "H4 two clean runs scanned"; else fail "H4 got '$out'"; fi
 # H5: GITHUB_REPOSITORY is validated (an injected value never reaches gh).
 if ( GITHUB_REPOSITORY='a/b;rm -rf x' git_data_store_dirty_list >/dev/null 2>&1 ); then fail "H5 a malformed GITHUB_REPOSITORY was accepted"; else pass "H5 a malformed GITHUB_REPOSITORY is refused"; fi
@@ -291,18 +331,24 @@ mutate "seam cutoff dropped (every run pre-seam)" 's/ && "\$created" < "\$GDSD_S
 mutate "cancelled write step reads as clean" 's/elif \(\$w.conclusion \/\/ ""\) == "skipped" then "clean"/elif ($w.conclusion \/\/ "") != "success" then "clean"/'
 mutate "in_progress run skipped"            's/in_progress\) echo "cutover_in_flight \$rid"; return 1 ;;/in_progress) continue ;;/'
 mutate "queued re-run attempts skipped"     's/last=\$\(\(attempt - 1\)\)/last=0/'
+mutate "pinned-run proof dropped"            's/\[\[ -n "\$pre" \]\] \|\| \{ echo "scan_unreadable pinned_run_missing"; return 1; \}/true/'
+mutate "a missing cutover job reads clean"   's/if \$j == null then \(if \$preseam then "clean" else "unreadable" end\)/if $j == null then "clean"/'
 mutate "empty-steps cancelled job unreadable" 's/then "clean" else "unreadable" end\)/then "unreadable" else "unreadable" end)/'
 
 # ---------------------------------------------------------------------------------------------------
 echo "== epilogue"
 if [[ -s "$GH_REFUSED" ]]; then fail "E1 gh shim refused an argv during the run: $(head -3 "$GH_REFUSED" | tr '\n' ';')"; else pass "E1 gh shim never refused"; fi
-# Row-count floor, reported with printf + exit (never through the helpers it backstops). The floor is the
-# number of assertions this file makes today; a deleted block cannot go unnoticed.
-FLOOR=68
-TOTAL=$(( PASS + FAIL ))
-printf '== %d passed, %d failed (%d assertions, floor %d)\n' "$PASS" "$FAIL" "$TOTAL" "$FLOOR"
-if [[ "$TOTAL" -lt "$FLOOR" ]]; then
-  printf '[FATAL] assertion floor not met: %d < %d (a block was deleted or the harness skipped rows)\n' "$TOTAL" "$FLOOR" >&2
+# Row-count floor, reported with printf + exit (never through the helpers it backstops).
+printf '== %d passed, %d failed\n' "$PASS" "$FAIL"
+# SELFTEST_PASSES is a literal ADJACENT to its use: scripts/guard-vacuity-floor.test.sh slices the floor block into
+# a mutant with every counter zeroed, and a subtrahend bound far away is unbound there. The self-test above asserts
+# PASS==1 at that point, which proves the literal.
+SELFTEST_PASSES=1
+REAL=$(( PASS - SELFTEST_PASSES ))
+MIN_ASSERTIONS=81
+if [[ "$REAL" -lt "$MIN_ASSERTIONS" ]]; then
+  printf '[FATAL] anti-vacuity assertion floor: only %d real assertion(s) ran (PASS=%d minus %d self-test), expected >= %d.\n' \
+    "$REAL" "$PASS" "$SELFTEST_PASSES" "$MIN_ASSERTIONS" >&2
   exit 1
 fi
 [[ "$FAIL" -eq 0 ]] || exit 1

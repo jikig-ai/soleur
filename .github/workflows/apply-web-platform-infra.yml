@@ -3718,7 +3718,8 @@ jobs:
     # (#10175) `actions: read` lets the rotate's "store never written" step read git-data-cutover.yml's run
     # records with the job's own GITHUB_TOKEN, so no prd Doppler token is needed (ADR-239 keeps one out of
     # this workflow). A job-level block REPLACES the workflow-level one, so `contents: read` is restated.
-    # Pinned by tests/scripts/test-infra-privileged-tier-census.sh; no other scope may be added here.
+    # Pinned by plugins/soleur/test/terraform-target-parity.test.ts (the store-never-written describe); no other
+    # scope may be added here.
     permissions:
       contents: read
       actions: read
@@ -3788,8 +3789,14 @@ jobs:
       # flag-off only; the data stays on LUKS). It reads neither the flag nor the cutover stamp. There is NO
       # bypass input and no continue-on-error on this step; an unreadable record refuses (fail closed).
       # The step runs BEFORE the existing precondition, the rung-2 interlock and every plan step.
+      # The scan also proves the history is COMPLETE (two pinned post-seam runs must still be listed: run records
+      # expire after 90 days, and the pins expire about 2026-12-29, after which this step refuses until the pins are
+      # re-baselined: runbook "Re-baselining the pinned runs", tracker #10216). The step is bounded to 10 minutes.
+      # A re-run of a rotate run that predates this step executes the OLD workflow, which has no guard: the owner
+      # deletes those three run records after merge (runbook; tracker #10216).
       - name: Rotate precondition — store never written (cutover run records)
         if: inputs.apply_target == 'git-data-host-rotate'
+        timeout-minutes: 10
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -3797,14 +3804,16 @@ jobs:
           set -uo pipefail
           # shellcheck source=scripts/lib/git-data-store-dirty-scan.sh
           source "${GITHUB_WORKSPACE}/scripts/lib/git-data-store-dirty-scan.sh" || { echo "::error::rotate precondition UNREADABLE — scripts/lib/git-data-store-dirty-scan.sh could not be loaded from the dispatched ref's checkout. Failing closed: nothing was planned or replaced."; exit 1; }
-          rc=0
-          verdict="$(git_data_store_dirty_list | git_data_store_dirty_scan)" || rc=$?
+          if verdict="$(git_data_store_dirty_list | git_data_store_dirty_scan)"; then rc=0; else rc=$?; fi
           echo "store-never-written verdict: ${verdict}"
           case "${verdict%% *}" in
-            store_clean) echo "rotate precondition ok: no run of git-data-cutover.yml has ever executed the flag-write step" ;;
-            store_dirty) echo "::error::rotate precondition REFUSED (store_dirty) — run ${verdict#* } of git-data-cutover.yml executed the flag-write step, so the LUKS store may hold the ONLY copy of replicated repositories and a rotate would destroy it. There is no bypass input. See the runbook section 'When a rotate is needed after the flip' (#10175, #8571)."; exit 1 ;;
+            store_clean)
+              # The token AND the scan's own status must agree: a clean word with a non-zero status is a broken scan.
+              [[ "$rc" -eq 0 ]] || { echo "::error::rotate precondition REFUSED (scan_unreadable) — the scan printed store_clean with status ${rc}. Failing closed."; exit 1; }
+              echo "rotate precondition ok: no run of git-data-cutover.yml has executed the flag-write step, and the history is proven complete" ;;
+            store_dirty) echo "::error::rotate precondition REFUSED (store_dirty) — run ${verdict#* } of git-data-cutover.yml executed the flag-write step, so the LUKS store may hold the ONLY copy of replicated repositories and a rotate would destroy it. There is no bypass input and no approval on infra-privileged lifts it. Do not re-dispatch. See the runbook section 'When a rotate is needed after the flip' (escalate on #10175 and #8571)."; exit 1 ;;
             cutover_in_flight) echo "::error::rotate precondition REFUSED (cutover_in_flight) — run ${verdict#* } of git-data-cutover.yml is still running. Re-dispatch after it finishes."; exit 1 ;;
-            *) echo "::error::rotate precondition REFUSED (scan_unreadable) — the cutover run records could not all be read (${verdict}). Failing closed: an unreadable history is not a clean one. Re-dispatch; if it repeats, see the runbook verdict table (#10175)."; exit 1 ;;
+            *) echo "::error::rotate precondition REFUSED (scan_unreadable) — the cutover run records could not all be read or the history could not be proven complete (${verdict}). Failing closed: an unreadable history is not a clean one. Re-dispatch at most once, then stop and see the runbook verdict table (pinned_run_missing means the pinned runs expired: 'Re-baselining the pinned runs'; tracker #10216)."; exit 1 ;;
           esac
 
       # (#8211 PR2 / ADR-220 D6) ROTATE PRECONDITION — the store must be measured EMPTY
@@ -3831,7 +3840,9 @@ jobs:
           latest="$(printf '%s' "$rows" | head -1)"
           if printf '%s' "$latest" | grep -cE '"served_repos":"0"' >/dev/null; then
             echo "rotate precondition ok: latest git-data boot emit reports served_repos=0"
-            # (#10175) FRESHNESS: that row is emitted once per boot, so it must belong to the CURRENT host. Read the
+            # (#10175) FRESHNESS: that row is emitted once per boot, so it must belong to the CURRENT host. (A row
+            # always carries served_repos=0 -- bootstrap exits before emitting on any non-zero count -- so this
+            # comparison, not the field, is the live check in this step.) Read the
             # newest boot_complete epoch and the single soleur-git-data server's creation time (Hetzner API, bearer
             # on curl's stdin config, never an argument) and require row > created, strictly. Any read that cannot
             # be made, and any server count other than one, refuses.
@@ -3844,8 +3855,7 @@ jobs:
             source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::rotate precondition UNREADABLE (boot_complete_unreadable) — scripts/lib/bearer-curl.sh could not be loaded. Failing closed."; exit 1; }
             srv="$(bc_curl apply-web-platform-infra 'Authorization:Bearer :HCLOUD_TOKEN' -- -sS --max-time 15 'https://api.hetzner.cloud/v1/servers?name=soleur-git-data' 2>/dev/null)" || srv=""
             created_epoch="$(git_data_server_created_epoch "$srv")" || created_epoch=""
-            fresh_rc=0
-            fresh="$(git_data_boot_complete_freshness "$drows" "$created_epoch")" || fresh_rc=$?
+            fresh="$(git_data_boot_complete_freshness "$drows" "$created_epoch")" || true
             case "$fresh" in
               fresh) echo "rotate precondition ok: the boot_complete row (epoch $(printf '%s' "$drows" | head -1 | jq -r '.epoch')) is newer than the current server's creation (epoch ${created_epoch})" ;;
               stale_boot_complete) echo "::error::rotate precondition REFUSED (stale_boot_complete) — the newest git-data boot_complete row is not newer than the current server's creation (epoch ${created_epoch}), so served_repos=0 describes a PREVIOUS host. Failing closed. Wait for the current host's boot_complete or investigate the emit path."; exit 1 ;;

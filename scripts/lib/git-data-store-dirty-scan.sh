@@ -13,13 +13,15 @@
 # rollback, so it decides nothing).
 #
 # API (no function calls exit or fail: they run inside $(...), and every failure is an explicit check):
-#   git_data_store_dirty_job_verdict <jobs-json>   prints ONE token, returns 0 iff `clean`:
+#   git_data_store_dirty_job_verdict <jobs-json> [preseam]   prints ONE token, returns 0 iff `clean`:
 #       clean | dirty | unreadable
 #   git_data_store_dirty_list                       prints "<run id><TAB><status><TAB><run_attempt><TAB><created_at>" for
 #       every run of the cutover workflow, newest first, and the expected total on the LAST line as
 #       "total<TAB><n>". Returns non-zero (printing nothing useful) when any page could not be read.
-#   git_data_store_dirty_scan                       reads git_data_store_dirty_list's output on stdin and
-#       prints ONE line: store_clean | store_dirty <id> | cutover_in_flight <id> | scan_unreadable [<id>].
+#   git_data_store_dirty_scan [PINS]                reads git_data_store_dirty_list's output on stdin and
+#       prints ONE line: store_clean | store_dirty <id> | cutover_in_flight <id> | scan_unreadable [<id>|pinned_run_missing].
+#       PINS is a space-separated run-id list that must all be listed as completed; omitted, it is
+#       GDSD_PINNED_RUNS (the workflow passes nothing, and a test pins that), and a test passes "" for none.
 #       Returns 0 iff store_clean. Every attempt of every run is read: `gh run view` lists only the latest
 #       attempt, and a re-run that skips the write step must not hide the first attempt's write.
 #
@@ -33,14 +35,31 @@ readonly GDSD_JOB_NAME="cutover"
 # PARSED workflow, so a fix of the YAML (quoting the name) reds a test instead of silently making every
 # recorded run's step "absent". Do not "correct" this to the full text without migrating that pin.
 readonly GDSD_WRITE_STEP="Write GIT_DATA_STORE_ENABLED (via the"
+# PROOF THAT THE HISTORY IS COMPLETE (review 2026-10-13, CTO F-A). Run records expire (this public repo keeps
+# them 90 days) and `total_count` shrinks with the rows, so the count cross-check alone cannot see an expired
+# flip. Two post-seam runs are pinned: both must still be listed as `completed`, or the scan refuses with
+# `scan_unreadable pinned_run_missing`. Retention deletes oldest first, so a listed pin means nothing newer has
+# expired, and runs from before the seam could not write the flag, so their expiry is harmless. The oldest pin
+# (36685251588, 2026-09-30) expires about 2026-12-29; after that the guard fails CLOSED until a PR moves the pins
+# to newer runs while the old pin is still listed (runbook: "Re-baselining the pinned runs", tracker #10216).
+# GitHub also strips a job's step list at about 170 days, but a run stops being listed at 90, so a step-less
+# record from an old run cannot be reached while retention stays at 90 (row 3 below; revisit if it is raised).
+readonly GDSD_PINNED_RUNS="36685251588 37823216637"
+# The pin-age warning threshold, days: the scan prints `::warning::` once the oldest pin is older than this.
+readonly GDSD_PIN_WARN_DAYS=60
+
 # The write step does not exist in runs created before the seam landed (the read-only-proof era, merged
 # 2026-09-30T02:18:17Z in the real-modes PR): such a run could not write the flag, so an ABSENT step there
-# is clean by construction, and an absent step in a LATER run is still a rename (unreadable).
+# is clean by construction, and an absent step in a LATER run is still a rename (unreadable). That claim is
+# verified against the recorded runs, not enforced by code (a pre-seam dry-run script could set the flag, and no
+# non-dry pre-seam run exists in the record).
 readonly GDSD_SEAM_ADDED_AT="2026-09-30T02:18:17Z"
 
 # Rows, evaluated in order (input by here-string, never bare stdin):
 #   1 not an object, or .jobs not an array                                    -> unreadable
-#   2 no job named exactly $job                                               -> clean (a mode that never starts it)
+#   2 no job named exactly $job                                               -> clean when $preseam, else unreadable
+#     (a post-seam run always lists the job, skipped or not; a missing one is a rename, a caller wrapper or a
+#     renamed job, never evidence that the store is clean)
 #   3 the job has no steps: concluded skipped/cancelled (never ran, approval
 #     rejected, cancelled while queued)                                       -> clean
 #   4 the job has no steps and any other conclusion (null: queued/waiting)    -> unreadable
@@ -53,7 +72,7 @@ _GDSD_JQ='
   if (type != "object") or ((.jobs | type) != "array") then "unreadable"
   else
     ([.jobs[] | select(type == "object" and .name == $job)] | .[0]) as $j
-    | if $j == null then "clean"
+    | if $j == null then (if $preseam then "clean" else "unreadable" end)
       else
         (($j.steps // []) | if type == "array" then . else [] end) as $steps
         | if ($steps | length) == 0 then
@@ -95,6 +114,7 @@ git_data_store_dirty_list() {
 }
 
 git_data_store_dirty_scan() {
+  local pins="${1-$GDSD_PINNED_RUNS}" pin oldest="" age_s line
   local rid status attempt created n last body tok rc expect="" seen=0 pre
   local -a lines=()
   while IFS=$'\t' read -r rid status attempt created; do
@@ -106,7 +126,24 @@ git_data_store_dirty_scan() {
   if ! [[ "$expect" =~ ^[0-9]+$ ]] || [[ "${#lines[@]}" -ne "$expect" ]]; then
     echo "scan_unreadable"; return 1
   fi
-  local line
+  # Proof the history is complete: every pinned run must still be listed, completed. An empty listing fails
+  # here too whenever a pin exists.
+  for pin in $pins; do
+    [[ "$pin" =~ ^[0-9]+$ ]] || { echo "scan_unreadable pinned_run_missing"; return 1; }
+    pre=""
+    for line in "${lines[@]}"; do
+      IFS=$'\t' read -r rid status attempt created <<<"$line"
+      if [[ "$rid" == "$pin" && "$status" == completed ]]; then pre="$created"; break; fi
+    done
+    [[ -n "$pre" ]] || { echo "scan_unreadable pinned_run_missing"; return 1; }
+    if [[ -z "$oldest" || "$pre" < "$oldest" ]]; then oldest="$pre"; fi
+  done
+  # Early warning, to the log (stderr, so it never joins the one-line verdict): the oldest pin nears expiry.
+  if [[ -n "$oldest" ]] && age_s="$(( $(date -u +%s) - $(date -u -d "$oldest" +%s 2>/dev/null || echo "$(date -u +%s)") ))"; then
+    if (( age_s > GDSD_PIN_WARN_DAYS * 86400 )); then
+      echo "::warning::the oldest pinned cutover run is $(( age_s / 86400 )) days old; run records expire at 90 days and the rotate guard then fails closed. Re-baseline the pins (runbook: Re-baselining the pinned runs, tracker #10216)." >&2
+    fi
+  fi
   for line in "${lines[@]}"; do
     IFS=$'\t' read -r rid status attempt created <<<"$line"
     if ! [[ "$rid" =~ ^[0-9]+$ && "$attempt" =~ ^[0-9]+$ && "$attempt" -ge 1 ]]; then echo "scan_unreadable"; return 1; fi
