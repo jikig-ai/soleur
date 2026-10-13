@@ -90,7 +90,7 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 // 277 -> 278 (#9879 review round 2, +1): G2e lexer/scanner linearity.
 // 278 -> 276 (#9372 retirement): the declared count was 279 (floor 278, one row loose); the single-use rebirth workflow's five-target describe (three tests) retired with the workflow and the G2 test was rewritten in place, so 279 - 3 = 276.
 // Exact again: grep -cE '^\s*test\(' = 276.
-// 276 -> 280 (#10166, +4): the d6 rotate marker / flip gate wiring describe (real-tree pins, eleven-mutant battery, the executed gate block, confirm-token direct pin). The 2 rows of slack were already there (declared 278 vs floor 276 on main).
+// 276 -> 280 (#10166, +4): the d6 rotate marker / flip gate wiring describe (real-tree pins, twelve-mutant battery, the executed gate block, confirm-token direct pin). The 2 rows of slack were already there (declared 278 vs floor 276 on main).
 const TEST_FLOOR = 280;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
@@ -7741,6 +7741,7 @@ function checkRotateMarkerWiring(applyText: string, cutoverText: string, libText
     steps = doc.jobs[jobId]?.steps ?? [];
     // The lib matches the job by its DISPLAY name, which is the job id only while the job has no `name:`.
     if ("name" in (doc.jobs[jobId] ?? {})) v.push(`job ${jobId} gained a name: key, so the lib's exact job-name match no longer sees it`);
+    if ("continue-on-error" in (doc.jobs[jobId] ?? {})) v.push(`job ${jobId} carries continue-on-error, so a failed job could still read green`);
     // The marker only means "the whole job succeeded" if no step can fail while the job stays green.
     for (const st of steps) if ("continue-on-error" in st) v.push(`step '${String(st.name)}' of ${jobId} carries continue-on-error, so a failed step could still reach the marker`);
     // No other job may carry the job's display name or a marker-named step (the lib reads `.jobs[]` by name).
@@ -7815,7 +7816,7 @@ describe("the d6 rotate marker and the flip gate that reads it (#10166)", () => 
     expect(checkRotateMarkerWiring(applyText, cutoverText, libText)).toEqual([]);
   });
 
-  test("eleven mutants of the wiring each make the check non-empty, for the right reason, and each mutation actually landed", () => {
+  test("twelve mutants of the wiring each make the check non-empty, for the right reason, and each mutation actually landed", () => {
     const markerRun = 'run: echo "git-data-host-rotate completed - apply, boot poll, pin load and summary succeeded (the d6 marker)"';
     const mutants: Array<{ label: string; want: RegExp; apply?: (s: string) => string; cutover?: (s: string) => string; lib?: (s: string) => string }> = [
       { label: "drop the plan_only conjunct", want: /the marker's if: is/, apply: (s) => s.replace(` && inputs.plan_only != true\n        ${markerRun}`, `\n        ${markerRun}`) },
@@ -7841,6 +7842,7 @@ describe("the d6 rotate marker and the flip gate that reads it (#10166)", () => 
           return at < 0 ? s : s.slice(0, at) + "      - name: Rotate completed (d6 marker)" + s.slice(at + "      - name: Dispatch summary".length);
         },
       },
+      { label: "add continue-on-error to the job", want: /job git_data_host_replace carries continue-on-error/, apply: (s) => s.replace("\n  git_data_host_replace:\n", "\n  git_data_host_replace:\n    continue-on-error: true\n") },
       {
         label: "name another job like the replace job",
         want: /is named 'git_data_host_replace'/,
@@ -7854,7 +7856,7 @@ describe("the d6 rotate marker and the flip gate that reads it (#10166)", () => 
       },
       { label: "change one character of the marker constant", want: /the last step of git_data_host_replace is|appears 0 times/, lib: (s) => s.replace('readonly GDRS_MARKER_STEP="Rotate completed (d6 marker)"', 'readonly GDRS_MARKER_STEP="Rotate completed (d6 markes)"') },
     ];
-    expect(mutants.length).toBe(11);
+    expect(mutants.length).toBe(12);
     for (const m of mutants) {
       const a = m.apply ? m.apply(applyText) : applyText;
       const c = m.cutover ? m.cutover(cutoverText) : cutoverText;
@@ -7907,15 +7909,17 @@ fi
 echo "gh stub refused: $*" >&2
 exit 64
 `;
-    type Case = { name: string; list: Array<[number | string, string]> | null; bodies: Record<number, string>; rc: number; verdict?: string; has?: string[]; mutate?: [string, string] };
+    type Case = { name: string; list: Array<[number | string, string]> | null; bodies: Record<number, string>; rc: number; verdict?: string; has?: string[]; hasNot?: string[]; mutate?: [string, string] };
     const cases: Case[] = [
       { name: "an older stamped run behind a newer plain replace discharges D6", list: [[2, "completed"], [1, "completed"]], bodies: { 2: plain, 1: stamped }, rc: 0, has: ["d6 rotate stamp: run 1", "LAST_OK=1"] },
       { name: "only plain replaces leaves D6 open", list: [[2, "completed"]], bodies: { 2: plain }, rc: 1, verdict: "d6_replace_stale", has: ["apply_target=git-data-host-rotate"] },
       { name: "an empty run list leaves D6 open", list: [], bodies: {}, rc: 1, verdict: "d6_replace_stale" },
-      { name: "a failed newest rotate blocks over an older stamp", list: [[3, "completed"], [1, "completed"]], bodies: { 3: failedRotate, 1: stamped }, rc: 1, verdict: "d6_last_rotate_failed", has: ["run 3"] },
-      { name: "an in-flight newest run blocks over an older stamp", list: [[3, "in_progress"], [1, "completed"]], bodies: { 3: inFlight, 1: stamped }, rc: 1, verdict: "d6_rotate_in_flight", has: ["(run 3)"] },
-      { name: "an unreadable newest run blocks over an older stamp", list: [[4, "completed"], [1, "completed"]], bodies: { 1: stamped }, rc: 1, verdict: "d6_run_unreadable", has: ["(run 4)"] },
-      { name: "a non-numeric id stops the scan and the gate names no run", list: [["abc", "completed"], [1, "completed"]], bodies: { 1: stamped }, rc: 1, verdict: "d6_run_unreadable", has: ["(run n/a)"] },
+      { name: "a failed newest rotate blocks over an older stamp", list: [[3, "completed"], [1, "completed"]], bodies: { 3: failedRotate, 1: stamped }, rc: 1, verdict: "d6_last_rotate_failed", has: ["run 3", "gh run view 3 --log-failed", "dispatch a FRESH rotate", "Do not re-run the failed run"] },
+      { name: "an in-flight newest run blocks over an older stamp", list: [[3, "in_progress"], [1, "completed"]], bodies: { 3: inFlight, 1: stamped }, rc: 1, verdict: "d6_rotate_in_flight", has: ["(run 3)", "Cancel it only if", "never cancel an in_progress run"] },
+      { name: "an unreadable newest run blocks over an older stamp", list: [[4, "completed"], [1, "completed"]], bodies: { 1: stamped }, rc: 1, verdict: "d6_run_unreadable", has: ["(run 4)", "gh run view 4 --json jobs"] },
+      { name: "a non-numeric id stops the scan and the gate names no run", list: [["abc", "completed"], [1, "completed"]], bodies: { 1: stamped }, rc: 1, verdict: "d6_run_unreadable", has: ["(run n/a)"], hasNot: ["gh run view"] },
+      // The bare-stamp guard is unreachable through the real lib (it always prints an id), so drive it by replacing the scan.
+      { name: "a stamp reported without a run id fails closed", list: [[1, "completed"]], bodies: { 1: stamped }, rc: 1, verdict: "d6_run_unreadable", has: ["without a run id"], mutate: ['"$(git_data_d6_scan <<<"$ids")"', '"$(echo d6_stamped)"'] },
       { name: "a failed run list blocks", list: null, bodies: {}, rc: 1, verdict: "d6_run_unreadable" },
       // Control: the stub is SELECTIVE. The same block with its --event selector changed is refused by the stub,
       // and the refusal flips the verdict (an accepting stub would have let the stamped fixture discharge D6).
@@ -7943,6 +7947,7 @@ exit 64
         expect(r.status, `${cs.name}: exit status (output: ${out.slice(0, 400)})`).toBe(cs.rc);
         if (cs.verdict) expect(out, `${cs.name}: verdict`).toContain(`verdict=${cs.verdict}`);
         for (const h of cs.has ?? []) expect(out, `${cs.name}: output`).toContain(h);
+        for (const h of cs.hasNot ?? []) expect(out, `${cs.name}: output must not contain`).not.toContain(h);
       }
     } finally {
       rmSync(root, { recursive: true, force: true });
