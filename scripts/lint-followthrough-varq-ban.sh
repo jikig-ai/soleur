@@ -155,8 +155,10 @@ done <<<"$rule2_hits"
 
 # RULE 4: a probe that lets a comment decide its exit code must take that comment's text from
 # scripts/lib/trusted-verdict.sh and nowhere else, which is what makes "the lib is the
-# chokepoint" a fact rather than an assertion: a probe cannot read comments itself and stay
-# green. (Rule 5 below bans the wrong filter's SPELLING; rule 4 owns the obligation.)
+# chokepoint" a fact rather than an assertion for the routes and markers listed below: a probe
+# that reads comments by one of those routes and branches on one of those markers cannot do so
+# itself and stay green. (Rule 5 below bans the wrong filter's SPELLING; rule 4 owns the
+# obligation.)
 #
 # WHY THE LIB. `authorAssociation` / `author_association` is computed against the READING
 # token's visibility, so under the sweeper's `GITHUB_TOKEN` an org member whose membership is
@@ -188,7 +190,9 @@ done <<<"$rule2_hits"
 # EXIT-CENSUS>` soak marker. The `S<n>-...` spelling is a CONVENTION the anchor encodes (the S2
 # and S3 soak probes of ADR-276 use it) and is brittle by nature: a future marker family named
 # otherwise is invisible to it, so a new family must be added to the anchor in the same change.
-# It was widened from `RESULT:` alone in #9818 because a marker probe that read `issues/N/comments`
+# COVERAGE LIMIT: a `READS_COMMENTS` route or a marker spelling outside the lists below is NOT
+# covered (deferred, tracked at DEFERRED-TRACKER-PLACEHOLDER; widening them flags probes that are
+# compliant by other means today). It was widened from `RESULT:` alone in #9818 because a marker probe that read `issues/N/comments`
 # directly with NO author filter has no `RESULT:` line and, since it filters on nothing, no
 # `author_association` spelling for rule 5 either -- it passed both rules.
 # A probe that filters inline on `authorAssociation` also reads comments, branches on a verdict
@@ -206,7 +210,8 @@ done <<<"$rule2_hits"
 #   (b) the verdict only had to be EXTRACTED, not matched adjacently. The old regex required
 #       PASS/FAIL to sit next to `RESULT:`, so `v=$(grep -oE '^RESULT: [A-Z]+' | awk '{print $2}')`
 #       then `[[ $v == PASS ]]` decided a tracker's fate and passed. The obligation is about
-#       reading a verdict at all, so the anchor is now `RESULT:` on an executable line.
+#       reading a verdict at all, so the anchor is now `RESULT:` or an `S<n>-` soak marker on an
+#       executable line.
 #       Over-detection is deliberate and cheap: the remedy is "call the lib", which every
 #       legitimate comment-reading probe already does.
 READS_COMMENTS='--json[[:space:]]+comments|--comments|\.comments\[\]|issues/[^[:space:]"]*/comments'
@@ -279,7 +284,8 @@ done <<<"$rule4_hits"
 #   - `.test.sh` files are exempt (a fixture legitimately carries the field as a decoy).
 #   - There is NO per-line opt-out: an escape hatch is what the next author reaches for.
 #   - KNOWN RESIDUAL: a runtime-built field name (`K=author_association; .[$K]`) or the hyphen
-#     spelling is out of this rule's reach; rule 4's positive obligation is the backstop.
+#     spelling is out of this rule's reach; rule 4 is only a PARTIAL backstop (a literal comments
+#     route and a literal `S<n>-` / `RESULT:` marker only).
 # Its counter is NOT a bare `find | wc -l` (that is byte-identical to rules 1 and 3, whose
 # MIN_PROBES `exit 2` fires first, so its own floor would be unreachable -- the failure rule 4's
 # header records). `scanned_rule5` counts the probes whose comment-stripped code the predicate
@@ -292,7 +298,6 @@ while IFS= read -r f; do
   [[ -n "$f" ]] || continue
   case "$f" in *.test.sh) continue ;; esac  # rule5-exempt
   code5="$(sed -E 's/^[[:space:]]*#.*$//' "$f")"  # rule5-strip
-  hits5=""
   hits5="$(grep -niE -- "$RULE5_RE" <<<"$code5" || true)"  # rule5-grep
   scanned_rule5=$((scanned_rule5 + 1))  # rule5-count
   while IFS= read -r hit; do
@@ -429,12 +434,14 @@ fi
 # and gets the default 10.
 MIN_PROBES="${VARQ_BAN_MIN_PROBES:-10}"
 # Rule 4's own floor, on its OWN measure: probes that consume issue comments by any route.
-# MEASURED on the post-migration tree 2026-09-20 -- five, being anthropic-admin-key-6297 and
-# inngest-watchdog-functions-query-6407 (direct reads, neither a verdict) plus
-# concierge-strand-754ee124-5733, cpx22-invoice-reconcile-7431 and
-# inngest-zot-client-authz-6500 (via the lib). Floored at 3 rather than 5 so retiring a tracker
-# does not red the tree, and it is a FLOOR, not an equality: a new comment-reading probe must
-# not have to edit this number.
+# MEASURED 2026-10-13 on the tree this change was written against: EIGHT (direct readers
+# anthropic-admin-key-6297 and inngest-watchdog-functions-query-6407, neither a verdict; the rest
+# via the lib, among them concierge-strand-754ee124-5733, cpx22-invoice-reconcile-7431,
+# inngest-zot-client-authz-6500 and the S2 and S3 soak probes). The floor is for VACUITY, not for
+# pinning the corpus: a broken READS_COMMENTS regex or walk drives the count to zero and the rule
+# would report clean over a corpus it cannot see, so it trips at 3 (well under the measured 8, so
+# retiring a tracker does not red the tree). It is a FLOOR, not an equality: a new comment-reading
+# probe must not have to edit this number.
 MIN_COMMENT_READERS="${VARQ_BAN_MIN_COMMENT_READERS:-3}"
 if [[ "$is_production_run" == "yes" ]] && (( scanned < MIN_PROBES )); then
   echo "ERROR: only $scanned non-test probe(s) scanned in $TARGET_DIR -- expected the full set; the glob or path is broken" >&2

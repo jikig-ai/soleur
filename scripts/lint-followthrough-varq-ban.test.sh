@@ -34,6 +34,11 @@
 #   R4-M3  DISPATCH: guard COPY with the rule-4 grep deleted         -> exit 0 on the M1 fixture
 #   R4-M4  guard COPY with rule 4's file count forced to 0           -> exit 2, diagnostic names rule 4
 #
+#   R2-H2  must-PASS non-canonical: the NEW name + a Better Stack  -> exit 0
+#          name + a comment about "the sweeper's Sentry secret"
+#   R2-H3  must-PASS: an EMPTY sandbox dir                         -> exit 0 (pins the sandbox floor exemption)
+#   R2-H4  must-PASS: the live tree, counts parsed                 -> rule 1's N >= 10, rule 2's count >= N
+#
 # RULE 5 (#9818) -- the author-association SPELLING ban, plus the two rule-4 widenings it rides with:
 #   R5-M1  a lib-sourcing probe that ALSO names `.author_association` on code  -> exit 1 at the TRUE line, `rule 5:`
 #   R5-M2  the camelCase `.authorAssociation` spelling                          -> exit 1, `rule 5:`
@@ -49,10 +54,12 @@
 #   R5-M12 DISPATCH: guard COPY with LIB_CALL reverted to the bodies view       -> the denominator row reads 0
 #   R5-H1  must-PASS non-canonical: a probe that calls only `trusted_verdict_comments` -> exit 0, `checked 1 comment-reading probe(s)`
 #   R5-H2  the live tree: zero rule-5 hits, and the walk examined at least the floor
-#   R2-H2  must-PASS non-canonical: the NEW name + a Better Stack  -> exit 0
-#          name + a comment about "the sweeper's Sentry secret"
-#   R2-H3  must-PASS: an EMPTY sandbox dir                         -> exit 0 (pins the sandbox floor exemption)
-#   R2-H4  must-PASS: the live tree, counts parsed                 -> rule 1's N >= 10, rule 2's count >= N
+#   R5-N1  one fixture per soak-marker arm of VERDICT_BRANCH (DEACTIVATED, CONFIRMED, EXIT-CENSUS): exit 1 `rule 4:`;
+#          the guard COPY with that arm dropped -> exit 0 (each arm is the mechanism for its own marker)
+#   R5-N2  `S12-ACTIVATED` (two digits): exit 1 `rule 4:`; the guard COPY with `S[0-9]+` -> `S[0-9]` -> exit 0
+#   R5-N3  must-NOT-trip: a bare `ACTIVATED:` line (no `S<n>-` prefix) -> exit 0; the guard COPY without the prefix
+#          requirement -> exit 1 (the prefix is what keeps unrelated words quiet)
+#   R5-N4  a rule-5 offender NESTED in a subdirectory -> exit 1 `rule 5:`; the guard COPY with the walk at -maxdepth 1 -> exit 0
 #
 # ADR-193 floor: `asserted` moves at the CALL SITE (check()), never inside pass()/fail(); the
 # conservation identity and MIN_ASSERTIONS are reported with printf + exit 1, never via fail().
@@ -840,7 +847,8 @@ run_guard "$d"
 
 # R5-M7 DISPATCH: deleting the rule-5 grep makes the M1 fixture pass -- that grep IS the mechanism.
 R5_GUARD="$SANDBOX/guard-no-rule5-grep.sh"
-sed '/# rule5-grep/d' "$GUARD" >"$R5_GUARD"
+# neutered, not deleted: the grep's own assignment is the only thing that sets hits5, so a deleted line would crash the guard under `set -u`, which proves nothing
+sed '/# rule5-grep$/s/hits5="$(.*)"  # rule5-grep$/hits5=""  # rule5-grep/' "$GUARD" >"$R5_GUARD"
 if diff -q "$GUARD" "$R5_GUARD" >/dev/null; then
   check 1 "" "R5-M7 DISPATCH: the rule5-grep marker is absent from the guard -- the mutation did not land and the row is vacuous"
 else
@@ -928,12 +936,86 @@ else
   grep -q 'checked 0 comment-reading probe(s)' <<<"$R5L_OUT"; check $? "R5-M12 DISPATCH: reverting LIB_CALL drops the migrated probe from the denominator (the widening is the mechanism)" "R5-M12 expected 'checked 0', got: $R5L_OUT"
 fi
 
+# --- R5-N1: one fixture per soak-marker arm of VERDICT_BRANCH. Each fixture branches on ONE marker name and nothing
+# else (no RESULT:, no ACTIVATED), so dropping that arm from a COPY of the guard is the only thing that lets it through.
+r5n_arm() { # <marker> <arm to drop>
+  local marker="$1" arm="$2" dd g o rc
+  dd=$(mkcase "r5_n1_$arm")
+  printf '%s\n' '#!/usr/bin/env bash' 'set -uo pipefail' \
+    "bodies=\$(gh api repos/o/r/issues/1/comments --jq '.[].body')" \
+    "grep -qE '^$marker: ' <<<\"\$bodies\" && exit 0" 'exit 1' >"$dd/probe-arm.sh"
+  run_guard "$dd"
+  (( GUARD_RC == 1 )) && grep -q 'probe-arm.sh:3: rule 4:' <<<"$GUARD_OUT"; check $? "R5-N1 an unfiltered $marker reader -> exit 1, a rule-4 citation at the comment-read line" "R5-N1 ($marker) expected exit 1 with a rule 4 citation, got $GUARD_RC: $GUARD_OUT"
+  g="$SANDBOX/guard-no-arm-$arm.sh"
+  sed "/^VERDICT_BRANCH=/s/|$arm//" "$GUARD" >"$g"
+  if diff -q "$GUARD" "$g" >/dev/null; then
+    check 1 "" "R5-N1 DISPATCH ($arm): the $arm arm is absent from VERDICT_BRANCH -- the mutation did not land and the row is vacuous"
+  else
+    o="$(bash "$g" "$dd" 2>&1)"; rc=$?
+    (( rc == 0 )); check $? "R5-N1 DISPATCH: dropping the $arm arm of VERDICT_BRANCH lets the $marker reader through (that arm is the mechanism)" "R5-N1 ($arm) expected exit 0 from the arm-less guard, got $rc: $o"
+  fi
+}
+r5n_arm S4-DEACTIVATED DEACTIVATED
+r5n_arm S4-CONFIRMED CONFIRMED
+r5n_arm S4-EXIT-CENSUS EXIT-CENSUS
+
+# --- R5-N2: the marker family number is ONE OR MORE digits (`S12-`), not one.
+d=$(mkcase r5_n2)
+printf '%s\n' '#!/usr/bin/env bash' 'set -uo pipefail' \
+  "bodies=\$(gh api repos/o/r/issues/1/comments --jq '.[].body')" \
+  "grep -qE '^S12-ACTIVATED: ' <<<\"\$bodies\" && exit 0" 'exit 1' >"$d/probe-two-digit.sh"
+run_guard "$d"
+(( GUARD_RC == 1 )) && grep -q 'probe-two-digit.sh:3: rule 4:' <<<"$GUARD_OUT"; check $? "R5-N2 an unfiltered S12-ACTIVATED reader -> exit 1 (rule 4)" "R5-N2 expected exit 1 with a rule 4 citation, got $GUARD_RC: $GUARD_OUT"
+R5N2_GUARD="$SANDBOX/guard-one-digit.sh"
+sed '/^VERDICT_BRANCH=/s/S\[0-9\]+-/S[0-9]-/' "$GUARD" >"$R5N2_GUARD"
+if diff -q "$GUARD" "$R5N2_GUARD" >/dev/null; then
+  check 1 "" "R5-N2 DISPATCH: the S[0-9]+ anchor is absent from VERDICT_BRANCH -- the mutation did not land and the row is vacuous"
+else
+  R5N2_OUT="$(bash "$R5N2_GUARD" "$d" 2>&1)"; R5N2_RC=$?
+  (( R5N2_RC == 0 )); check $? "R5-N2 DISPATCH: narrowing S[0-9]+ to S[0-9] lets the two-digit marker reader through" "R5-N2 expected exit 0 from the one-digit guard, got $R5N2_RC: $R5N2_OUT"
+fi
+
+# --- R5-N3 (must-NOT-trip): a bare `ACTIVATED:` line with no `S<n>-` prefix is not a soak marker. The same read, branching on a
+# word the repository uses for unrelated things, must stay quiet; the mutation that drops the prefix requirement must trip it.
+d=$(mkcase r5_n3)
+printf '%s\n' '#!/usr/bin/env bash' 'set -uo pipefail' \
+  "bodies=\$(gh api repos/o/r/issues/1/comments --jq '.[].body')" \
+  "grep -qE '^ACTIVATED: ' <<<\"\$bodies\" && exit 0" 'exit 1' >"$d/probe-bare-word.sh"
+run_guard "$d"
+(( GUARD_RC == 0 )); check $? "R5-N3 must-NOT-trip: a bare ACTIVATED: line (no S<n>- prefix) is not a soak marker" "R5-N3 expected exit 0, got $GUARD_RC: $GUARD_OUT"
+R5N3_GUARD="$SANDBOX/guard-no-prefix.sh"
+sed '/^VERDICT_BRANCH=/s/S\[0-9\]+-(ACTIVATED/(ACTIVATED/' "$GUARD" >"$R5N3_GUARD"
+if diff -q "$GUARD" "$R5N3_GUARD" >/dev/null; then
+  check 1 "" "R5-N3 DISPATCH: the S<n>- prefix is absent from VERDICT_BRANCH -- the mutation did not land and the row is vacuous"
+else
+  R5N3_OUT="$(bash "$R5N3_GUARD" "$d" 2>&1)"; R5N3_RC=$?
+  (( R5N3_RC == 1 )); check $? "R5-N3 DISPATCH: dropping the S<n>- prefix requirement makes the bare-word reader trip (the prefix is what keeps it quiet)" "R5-N3 expected exit 1 from the prefix-less guard, got $R5N3_RC: $R5N3_OUT"
+fi
+
+# --- R5-N4: rule 5's walk is RECURSIVE. An offender in a subdirectory of the probe dir is cited; a walk pinned to -maxdepth 1 misses it.
+d=$(mkcase r5_n4)
+mkdir -p "$d/nested/deeper"
+printf '%s\n' '#!/usr/bin/env bash' 'set -uo pipefail' \
+  "who=\$(gh api repos/o/r/issues/1 --jq '.author_association')" >"$d/nested/deeper/probe-nested-assoc.sh"
+run_guard "$d"
+(( GUARD_RC == 1 )) && grep -q 'probe-nested-assoc.sh:3: rule 5:' <<<"$GUARD_OUT"; check $? "R5-N4 a rule-5 offender two directories down -> exit 1 with a rule 5 citation" "R5-N4 expected exit 1 with a rule 5 citation, got $GUARD_RC: $GUARD_OUT"
+R5N4_GUARD="$SANDBOX/guard-rule5-flat.sh"
+sed '/# rule5-walk$/s/find "\$TARGET_DIR" -type f/find "$TARGET_DIR" -maxdepth 1 -type f/' "$GUARD" >"$R5N4_GUARD"
+if diff -q "$GUARD" "$R5N4_GUARD" >/dev/null; then
+  check 1 "" "R5-N4 DISPATCH: the rule5-walk find is absent -- the mutation did not land and the row is vacuous"
+else
+  R5N4_OUT="$(bash "$R5N4_GUARD" "$d" 2>&1)"; R5N4_RC=$?
+  (( R5N4_RC == 0 )); check $? "R5-N4 DISPATCH: a non-recursive rule-5 walk misses the nested offender (the recursion is the mechanism)" "R5-N4 expected exit 0 from the flat-walk guard, got $R5N4_RC: $R5N4_OUT"
+fi
+
 # R5-H2: the live tree. Zero rule-5 hits, and the walk examined at least the floor.
 R5_LIVE_OUT="$(bash "$GUARD" 2>&1)"; R5_LIVE_RC=$?
 (( R5_LIVE_RC == 0 )); check $? "R5-H2 the live tree is clean under rules 1-5" "R5-H2 live tree not clean (rc=$R5_LIVE_RC): $R5_LIVE_OUT"
 ! grep -q 'rule 5:' <<<"$R5_LIVE_OUT"; check $? "R5-H2 zero rule-5 citations on the live tree" "R5-H2 rule 5 fired on the live tree: $R5_LIVE_OUT"
 R5_N="$(sed -n 's/.*rule 5 (author-association ban) examined \([0-9][0-9]*\) probe.*/\1/p' <<<"$R5_LIVE_OUT")"
-[[ "$R5_N" =~ ^[0-9]+$ ]] && (( R5_N >= 100 )); check $? "R5-H2 rule 5's walk examined $R5_N probe(s) on the live tree (floor 100)" "R5-H2 rule 5 examined '$R5_N' probe(s), expected >= 100: $R5_LIVE_OUT"
+R5_FLOOR="$(sed -n 's/^MIN_RULE5_FILES="${VARQ_BAN_MIN_RULE5_FILES:-\([0-9][0-9]*\)}"$/\1/p' "$GUARD")"   # the lint's own floor, never a copy of its literal
+[[ "$R5_FLOOR" =~ ^[0-9]+$ ]]; check $? "R5-H2 the lint's rule-5 floor ($R5_FLOOR) is readable from the guard" "R5-H2 could not read MIN_RULE5_FILES from the guard"
+[[ "$R5_N" =~ ^[0-9]+$ && "$R5_FLOOR" =~ ^[0-9]+$ ]] && (( R5_N >= R5_FLOOR )); check $? "R5-H2 rule 5's walk examined $R5_N probe(s) on the live tree (the lint's floor: $R5_FLOOR)" "R5-H2 rule 5 examined '$R5_N' probe(s), expected >= $R5_FLOOR: $R5_LIVE_OUT"
 
 # --- Accounting (ADR-193). Emitted DIRECTLY, never through fail(): a conservation check routed
 # through the verdict helper it polices cannot report the fault that corrupted it. ---
@@ -967,7 +1049,7 @@ fi
 passes=$_p; fails=$_f; asserted=$_a
 if (( _n > 0 )); then FAILURES=("${_saved[@]}"); else FAILURES=(); fi
 
-MIN_ASSERTIONS=115
+MIN_ASSERTIONS=128
 if (( asserted < MIN_ASSERTIONS )); then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$asserted" "$MIN_ASSERTIONS" >&2
   exit 1
