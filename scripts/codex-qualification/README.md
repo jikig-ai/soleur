@@ -110,3 +110,28 @@ values and proposes a clean HOME/Docker configuration. It remains explicitly
 unreviewed for builder/daemon, dependency network and resource admission, and
 grants no build/rehearsal authorization. It is an exported candidate context,
 not a built or authenticated production candidate.
+
+`operational.py` prepares source-bound builder, role, namespace, retained-file,
+session and evidence requirements. Builder/daemon identities, dependency-route
+enforcement and concrete executable role profiles remain pending. Service names
+or fixture images cannot fill those slots. Supplied build/image/filesystem/
+namespace/auth JSON is checked for consistency and expiry, with issuer verification
+and runtime authority explicitly pending. No operational adapter or execute CLI
+is added.
+
+`retained_files.py` measures complete synthetic file and directory inventories
+from an already opened descriptor, binding root device/inode and rejecting links,
+special files, mount escapes, unstable reads and count/byte overruns. Comparison
+requires exact retained path/type/mode/size/digest entries or an exact erased-path
+set. The future adapter must establish registered root/resource ownership and
+writer quiescence; this helper cannot authenticate supplied bindings. Tests read
+only fresh synthetic scratch files and emit no content bytes.
+
+`session_controller.py` sequences injected holder/waiter observations by attempt,
+database, backend/process PIDs and birth identities. The exact blocking dependency
+precedes a single commit recipe, explicit commit observation, waiter zero exit
+and source-bound assertion. Failure/EOF/deadline prevents success and commit;
+rollback/close recipes expire permanently after five minutes. Recipes grant no
+execution authority and never reopen exec stdin. A persistent owned SQL adapter
+and real observations remain pending. See the
+[operational preparation record](../../knowledge-base/project/specs/feat-one-shot-codex-web-live-paths/operational-controller-preparation-2026-10-13.md).

@@ -37,6 +37,10 @@ Plan: `knowledge-base/project/plans/2026-09-27-feat-codex-web-live-handler-wirin
   - [x] Prepare exact-role policy and callable TLS/DNS components with synthetic adversarial tests.
   - [x] Prepare all-source scenario SQL and fix canonical fresh-ledger insertion without changing migration bodies/guards.
   - [ ] Finish actual operational role profiles, namespace/session orchestration and retained file-byte manifests; obtain independent source review and immutable image/auth observations before requesting fresh exact execution approval.
+    - [x] Prepare descriptor-relative retained-file collection and comparison, including exact scoped erasure and synthetic refusal fixtures. Root ownership and quiescence observations remain pending.
+    - [x] Prepare source-bound builder/role/namespace and evidence contracts without an execution adapter or invented image observations.
+    - [x] Prepare bounded session/race sequencing with exact backend identity and failure cleanup; verify only injected synthetic observations.
+    - [ ] Independently verify the preparation delta; retain all runtime observation and fresh approval blockers.
 - [x] 4.2 Update `workspace-default-engine.pen` for the engine dropdown, owner confirmation and member history-transfer acknowledgment; native Pencil screenshot QA is complete for all four settings/confirmation frames. These are design captures, not rendered implementation screenshots.
 
 ## Phase 5: Synthetic qualification and disposition
