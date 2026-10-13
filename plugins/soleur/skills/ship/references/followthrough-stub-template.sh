@@ -7,7 +7,10 @@
 # Exit semantics (enforced by scripts/sweep-followthroughs.sh):
 #   0 = PASS         (close-criteria met; sweeper closes the issue)
 #   1 = FAIL         (criteria not met; sweeper comments, leaves open)
-#   * = TRANSIENT    (network error, unexpected state; sweeper retries next sweep)
+#   2 = NOT YET      (rendered "NOT YET"; the issue stays open)
+#   3 = CANNOT ESTABLISH (rendered as such; the issue stays open: use it when a read the verdict depends on failed)
+#   5 = ACTION REQUIRED  (rendered as such; a human must act)
+#   * = TRANSIENT    (any other code: network error, unexpected state; sweeper retries next sweep)
 #
 # Required secrets: declare via the directive `secrets=` clause AND add to
 # .github/workflows/scheduled-followthrough-sweeper.yml env: block.
@@ -49,17 +52,18 @@ esac
 #   - GH probe:   gh run list --workflow <wf>.yml --status success --limit 1 --json conclusion | jq -e ... && exit 0 || exit 1
 #   - Operator-confirmed: source the trusted-verdict lib; NEVER read .comments[].body directly.
 #       source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/trusted-verdict.sh"
-#       bodies="$(trusted_verdict_bodies <N>)" || exit 2      # rc 2 = TRANSIENT, not "no verdict"
+#       bodies="$(trusted_verdict_bodies <N>)" || exit 3      # lib rc 2 = a failed trust read, never "no verdict": exit 3 (CANNOT ESTABLISH), NOT 2 (NOT YET)
 #       last="$(printf '%s\n' "$bodies" | grep -E '^RESULT: (PASS|FAIL)\b' | tail -1)"
 #       [[ "$last" =~ ^RESULT:\ PASS ]] && exit 0 || exit 1
 #     Which view: the bodies view is the default. A probe that needs the COMMENT'S created time (the
 #     S3 soak orders S3-CONFIRMED before S3-ACTIVATED by it) calls the comments view instead, which
 #     carries each trusted comment's createdAt as one JSON object {t,b} per comment (a marker probe
 #     that orders by the marker's own timestamp, like S2, needs only the bodies view above):
-#       recs="$(trusted_verdict_comments <N>)" || exit 3      # rc 2 = TRANSIENT, here exit 3 (CANNOT ESTABLISH)
+#       recs="$(trusted_verdict_comments <N>)" || exit 3      # lib rc 2 (its causes are the rc 2 list in the lib header): exit 3 (CANNOT ESTABLISH)
 #       trusted="$(jq -r '.b' <<<"$recs" | tr -d '\r')" || exit 3   # check the projection too
-#     Exit 2 above and exit 3 here are the same thing to the sweeper: the legend at the top makes every
-#     code other than 0 and 1 a retry. 3 is the soak probes' own spelling of CANNOT ESTABLISH.
+#     Both examples exit 3 on a failed trust read: the sweeper renders 3 as CANNOT ESTABLISH and 2 as
+#     NOT YET (scripts/sweep-followthroughs.sh, the rc -> word map), so exit 2 would tell the operator
+#     "wait" about a read that FAILED. Reserve 2 for "the evidence is not there yet".
 #
 #     The unfiltered `.comments[].body` form this line used to show is FORGEABLE: the repo is
 #     public with issues open, so one HTTP POST of `RESULT: PASS` from any authenticated user

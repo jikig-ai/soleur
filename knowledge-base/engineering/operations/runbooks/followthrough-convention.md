@@ -220,11 +220,12 @@ merge timestamp; its directive declares `secrets=GH_TOKEN`).
   `RESULT:` probe, or a marker probe that orders markers by the marker's own timestamp, like S2).
   The comments view returns one compact JSON object `{t,b}` per trusted comment (`t` = `createdAt`,
   `b` = the fence-stripped body): a probe that orders by comment time (S3's CONFIRMED-before-
-  ACTIVATED) reads `.t` and projects `.b` with `jq -r '.b'`. Both are views of one core, so trust,
-  memoization and fence stripping are identical, and both return rc 2 when a comment or permission
-  read fails; the comments view has ONE extra rc 2 cause: a trusted comment whose `createdAt` is
-  missing or not ISO. Map rc 2 to the probe's CANNOT ESTABLISH exit and check any projection too:
-  an empty projection after a jq failure erases every marker and reproduces the false FAIL.
+  ACTIVATED) reads `.t` and projects `.b` with `jq -r '.b'`. Both are views of one core. The causes of
+  rc 2 are the ONE list in the header of `scripts/lib/trusted-verdict.sh` (the comments view has one
+  cause of its own there); this runbook does not restate it. Map rc 2 to the probe's CANNOT ESTABLISH
+  exit, which is 3 (the sweeper renders 3 as CANNOT ESTABLISH and 2 as NOT YET, so an `exit 2` on a
+  failed read tells the operator to wait), and check any projection too: an empty projection after a
+  jq failure erases every marker and reproduces the false FAIL.
 
   **Paging.** `gh issue view --json comments` returns ALL pages of comments: measured 214 returned
   against 214 on the issue (`gh api` comment count) on #9777 at review time, and 220 against 220 on
@@ -236,17 +237,18 @@ merge timestamp; its directive declares `secrets=GH_TOKEN`).
   - Trust is resolved at READ time: a commenter demoted later stops counting retroactively (an old
     `ACTIVATED` can become live again if its `DEACTIVATED` author is demoted), and a user promoted
     later retroactively legitimizes their earlier markers.
-  - `write` is enough to close a tracker, which is broader than "owner/member/collaborator" in a
-    tracker's issue text; the set is `admin`/`maintain`/`write`.
   - `createdAt` is CREATION time, not edit time (`gh` exposes no `updatedAt`), so S3's
     CONFIRMED-before-ACTIVATED check guards operator mistakes, not tampering by a writer.
   - A seated bot must never relay raw issue text at line start (a relayed `S2-ACTIVATED:` line
     authored by a writer-level bot would count).
-  - Behavior changes #9818 made for the soak probes: fenced blocks are now stripped (a marker
-    inside a CommonMark-style fence counted before and is ignored now), a `read`/`triage`
-    collaborator no longer counts (they did under `COLLABORATOR`), and an org MEMBER whose only
-    access is the org base permission (`read`/`triage`) stopped counting too (they did under
-    `MEMBER`).
+  - WHO COUNTS changed once, in #9818, and the old and new sets are NOT nested. The trusted set is
+    now `admin`/`maintain`/`write` (a `write` author can therefore close a tracker even where a
+    tracker's issue text says "owner/member/collaborator"). GAINED: a private-org member who holds
+    one of those permissions (read as CONTRIBUTOR under the sweeper's token, dropped before). LOST:
+    an OWNER/MEMBER/COLLABORATOR association that carries only `read` or `triage` (a collaborator
+    invited with `read`, an org member whose only access is the org base permission), who counted
+    under the association. Also new: fenced blocks are stripped (a marker inside a
+    CommonMark-style fence counted before and is ignored now).
 
   The difference is load-bearing and was measured. While the rule banned the wrong MECHANISM, a
   live probe read `.comments[].body` with **no author filter at all** — strictly worse than what
