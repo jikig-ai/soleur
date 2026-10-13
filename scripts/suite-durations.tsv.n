@@ -361,7 +361,6 @@ scripts/inngest-cutover-flip-rollout-7761	8455	measured
 scripts/inngest-host-not-serving-7674	297	measured
 scripts/inngest-host-state	1982	measured
 scripts/inngest-liveness-classify	208	measured
-scripts/inngest-luks-property-8296	4112	measured
 scripts/inngest-probe-heartbeat-feeder	1194	floor
 scripts/inngest-provision-unit-8562	1061	measured
 scripts/inngest-restart-age-gate	75	measured
