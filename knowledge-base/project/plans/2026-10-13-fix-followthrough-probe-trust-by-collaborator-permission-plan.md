@@ -346,16 +346,16 @@ Three guards ship: the lib core/views, the probes' use of them, and the lint. Th
 
 ### Pre-merge (PR)
 
-- [ ] AC1 RED proof: Phase 0 rows `r_privmember` (S2 and S3) fail against the UNMODIFIED probes with the sweeper's own FAIL text and pass after Phases 2-3 (evidence pasted in the PR body).
-- [ ] AC2 `git grep -niE 'author_?association' -- 'scripts/followthroughs/*.sh' ':!scripts/followthroughs/*.test.sh' | grep -vE ':[0-9]+:[[:space:]]*#'` prints nothing (lint rule 5 enforces it; paste the lint's own clean line).
-- [ ] AC3 All of Phase 6.1 exit 0, every mutant caught, floors SET to the measured counts (baselines 13/89/121/162; mutant-count floors may drop only by the listed retirements, each paired with its replacement; every new row is a function in `ALL_ROWS`), and the three live-consumer suites (concierge, cpx22, inngest-zot) pass unchanged against the refactored lib (Phase 1.1 gate, separate commit).
-- [ ] AC4 Real-comment replay (Phase 6.2) prints `1`, `2`, `0` (with the greater-than-zero control) and the GraphQL/REST comment-count parity on #9777 matches (212 at plan time).
-- [ ] AC5 Fail-closed rows exist and are GREEN: permission 403/5xx -> `CANNOT ESTABLISH` rc 3 (S2 and S3), 404 drops that author only, last-author failure leaves no partial output.
-- [ ] AC6 `git diff --quiet origin/main...HEAD -- .github/workflows/ci.yml .github/workflows/scheduled-followthrough-sweeper.yml` exits 0 (merge-base form), and the diff contains no `gh variable`, `gh workflow run`, or marker-posting command.
+- [x] AC1 RED proof: Phase 0 rows `r_privmember` (S2 and S3) fail against the UNMODIFIED probes with the sweeper's own FAIL text and pass after Phases 2-3 (evidence pasted in the PR body).
+- [x] AC2 `git grep -niE 'author_?association' -- 'scripts/followthroughs/*.sh' ':!scripts/followthroughs/*.test.sh' | grep -vE ':[0-9]+:[[:space:]]*#'` prints nothing (lint rule 5 enforces it; paste the lint's own clean line).
+- [x] AC3 All of Phase 6.1 exit 0, every mutant caught, floors SET to the measured counts (baselines 13/89/121/162; mutant-count floors may drop only by the listed retirements, each paired with its replacement; every new row is a function in `ALL_ROWS`), and the three live-consumer suites (concierge, cpx22, inngest-zot) pass unchanged against the refactored lib (Phase 1.1 gate, separate commit).
+- [x] AC4 Real-comment replay (Phase 6.2) prints `1`, `2`, `0` (with the greater-than-zero control) and the GraphQL/REST comment-count parity on #9777 matches (212 at plan time).
+- [x] AC5 Fail-closed rows exist and are GREEN: permission 403/5xx -> `CANNOT ESTABLISH` rc 3 (S2 and S3), 404 drops that author only, last-author failure leaves no partial output.
+- [x] AC6 `git diff --quiet origin/main...HEAD -- .github/workflows/ci.yml .github/workflows/scheduled-followthrough-sweeper.yml` exits 0 (merge-base form), and the diff contains no `gh variable`, `gh workflow run`, or marker-posting command.
 - [ ] AC7 PR body: `Ref #9818` only; no `Closes|Fixes|Resolves`; no sentence citing ADR-270 as accepted canary evidence; no "canary closed" phrasing; no operator checklist (this PR has no operator step).
-- [ ] AC8 `python3 scripts/lint-guard-contract.py` and `python3 scripts/lint-infra-no-human-steps.py` pass over this plan; `fixture-relative-assert` and `test-affected-kb-consumers` ratchets run directly and pass; `shellcheck` clean on the edited scripts.
+- [x] AC8 `python3 scripts/lint-guard-contract.py` and `python3 scripts/lint-infra-no-human-steps.py` pass over this plan; `fixture-relative-assert` and `test-affected-kb-consumers` ratchets run directly and pass; `shellcheck` clean on the edited scripts.
 - [ ] AC9 Review by `@deruelle` requested as advisory (CODEOWNERS binds both probe files, but no ruleset enforces code-owner review and the owner authors the PR); the PR body says so.
-- [ ] AC9b Lint: `VERDICT_BRANCH` widening kills an unfiltered `S4-ACTIVATED` direct reader (R5-M10) and the live tree stays clean; rule-4 denominator row R5-H1 is hermetic.
+- [x] AC9b Lint: `VERDICT_BRANCH` widening kills an unfiltered `S4-ACTIVATED` direct reader (R5-M10) and the live tree stays clean; rule-4 denominator row R5-H1 is hermetic.
 
 ### Post-merge (verifiable by the next scheduled sweep; no operator step)
 
