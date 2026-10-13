@@ -111,8 +111,9 @@ matter: the presence check (#10167) counts `findings_json` present iff the
 following *indented* line does before the block ends — so both the inline
 `findings_json: {…}` form and the block mapping (`findings_json:` then
 indented `key: value` lines) are accepted, while `findings_json:` bare,
-whitespace-only, `null`/`~`, or `findings_json:{…}` (no separation space —
-YAML reads that as a scalar, not a mapping) still report missing. And the
+whitespace-only, `null`/`~`, a same-line comment (`findings_json: # …`,
+reads as null), or `findings_json:{…}` (no separation space — YAML reads that
+as a scalar, not a mapping) still report missing. And the
 source bytes must still be the redacted file.
 
 ## Multiple overrides per PR

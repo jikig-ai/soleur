@@ -47,14 +47,13 @@ PARSE="$SCRIPT_DIR/../scripts/parse-override.sh"
 MANIFEST="$SCRIPT_DIR/../references/rules/manifest.yaml"
 
 # Session scratch root (#7004, ADR-250): adopt the owned `soleur-run.<pid>.*`
-# root so a SIGKILL's residue is attributable to this suite — the same
-# opportunistic pattern this PR ships for cloud-init-inngest-bootstrap.test.sh
-# (eat your own cooking). Mirrors scripts/test-all.sh's adoption block: lib
-# absent → degrade to the pre-#7004 shape, never block the suite.
+# root so a SIGKILL's residue is attributable to this suite — the same pattern
+# this PR ships for cloud-init-inngest-bootstrap.test.sh (eat your own
+# cooking). Load-bearing, not opportunistic: a missing lib means the path
+# rotted (exit 2) — a silently-degrading [[ -f ]] guard is exactly how a
+# wrong-depth path shipped dead in the first fix round. An environmental
+# begin failure still degrades via `|| true` (never block the suite).
 _SCRATCH_LIB="$SCRIPT_DIR/../../../../../scripts/lib/scratch-root.sh"
-# Load-bearing, NOT opportunistic: an absent file here means the path rotted
-# (a fix-round seat caught exactly that — a silently-degrading [[ -f ]] guard
-# left the adoption inert). This suite is never run from a partial sandbox.
 [[ -f "$_SCRATCH_LIB" ]] || { echo "FATAL: scratch-root.sh not found at $_SCRATCH_LIB" >&2; exit 2; }
 # shellcheck source=../../../../../scripts/lib/scratch-root.sh
 source "$_SCRATCH_LIB"
@@ -70,11 +69,6 @@ soleur_scratch_session_begin || true
 # reclaims the (empty) root itself on clean exit.
 SUITE_TMP="$(mktemp -d -t parse-override.XXXXXXXX)"
 trap 'rm -rf "$SUITE_TMP"; _soleur_scratch_cleanup || true' EXIT
-
-# The adoption above is load-bearing: fail loudly if the lib moved rather
-# than silently degrading to bare TMPDIR (the [[ -f ]] guard is for genuinely
-# absent deps like partial sandboxes, not for a rotten path).
-[[ -f "$_SCRATCH_LIB" ]] || { echo "FATAL: scratch-root.sh not found at $_SCRATCH_LIB — path rotted" >&2; exit 2; }
 
 # The shared fixture git environment — sweeps inherited GIT_* location vars,
 # pins a discovery ceiling, config hermeticity, and a synthesized identity.
