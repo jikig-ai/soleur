@@ -1772,6 +1772,7 @@ L @@ wrapper: rtk summary --shell fish 'rm -rf ~' asks @@ ask @@ - @@ rtk summar
 L @@ wrapper: rtk err 'rm -rf ~' asks (a one-word string payload could be joined to sh -c upstream) @@ ask @@ - @@ rtk err 'rm -rf ~'
 L @@ wrapper: rtk run --ultra-compact rm -rf ~ asks (unknown post-subcommand option -> ask, never land on it) @@ ask @@ - @@ rtk run --ultra-compact rm -rf ~
 L @@ wrapper: rtk --badopt rm -rf ~ asks (unknown pre-subcommand option) @@ ask @@ - @@ rtk --badopt rm -rf ~
+L @@ wrapper: rtk err --bogus rm -rf ~ asks (unknown post-subcommand option without metachar payload) @@ ask @@ - @@ rtk err --bogus rm -rf ~
 L @@ case: RTK rm -rf ~ (a case-insensitive filesystem runs RTK as rtk) @@ deny @@ - @@ RTK rm -rf ~
 L @@ case: Rtk run rm -rf ~ @@ deny @@ - @@ Rtk run rm -rf ~
 # ---- more wrappers than the guard unwraps is an ask, never a silent allow
@@ -2003,6 +2004,7 @@ quote_row "quote: a git user WITH a password is still masked (https://git:s3cr3t
 quote_row "quote: another user name without a password is still masked (ssh://deploy-token@host)" 'git push --force ssh://deploy-token@example.invalid/o/r.git main' @R1@ 'git push --force ssh://<redacted>@example.invalid/o/r.git main'
 quote_row "quote: a credential flag does not mask the destructive operand (rm -rf --password /)" 'rm -rf --password /' - 'rm -rf --password /'
 quote_row "quote: a credential flag does not mask a home operand (rm -rf --token ~)" 'rm -rf --token ~' - 'rm -rf --token ~'
+quote_row "quote: rtk as a token value stays unmasked (a command word is not a credential)" 'terraform destroy --token rtk' - 'terraform destroy --token rtk'
 quote_row "quote: a credential flag does not mask the command word that follows (sudo --auth rm -rf /)" 'sudo --auth rm -rf /' - 'sudo --auth rm -rf /'
 quote_row "quote: a credential flag does not mask the remote or the branch (git push --force --auth origin main)" 'git push --force --auth origin main' @R1@ 'git push --force --auth origin main'
 quote_row "quote: a base64 secret that starts with a slash is still masked (--token /Q29uZmlkZW50aWFsVG9rZW4=)" 'terraform destroy --token /Q29uZmlkZW50aWFsVG9rZW4=' - 'terraform destroy --token <redacted>'
@@ -2137,6 +2139,7 @@ bound_row "bound: a 40000-component rm target then rm -rf ~ denies (the overlong
 bound_row "bound: rm -rf ~ then a 40000-component rm target denies, in under 5 s" deny - "rm -rf ~; rm -rf ${_PAD40K}"
 bound_row "bound: terraform destroy then a 40000-component rm target asks with the destroy rule id and the bound sentence, in under 5 s" ask - "terraform destroy; rm -rf ${_PAD40K}" "^${ASK_LEAD_RX}infra-destroy: .*Matched command: \[terraform destroy\].*too large to check in full"
 bound_row "bound: a 40000-component rm target alone asks with the bound reason and names the word limit, in under 5 s" ask - "rm -rf ${_PAD40K}" "^${ASK_LEAD_RX}bound: .*word longer than 4096"
+bound_row "bound: a 40000-component rm target behind rtk asks bound (rtk is in the judged-wrapper set)" ask - "rtk rm -rf ${_PAD40K}" "^${ASK_LEAD_RX}bound: .*word longer than 4096"
 bound_row "bound: a 60000-byte dash word on git push asks bound (a per-character loop over it is quadratic), in under 5 s" ask - "git push -${_W60K} origin feat \"x\"" "^${ASK_LEAD_RX}bound: .*word longer than 4096"
 bound_row "bound: a 96000-byte command word then rm -rf ~ denies, in under 5 s" deny - "rm${_W60K}${_W60K:0:36000} x; rm -rf ~"
 bound_row "bound: a relative rm target of 3000 bytes is judged normally (no decision)" none - "rm -rf ${_W3000}"
@@ -2891,7 +2894,7 @@ if [[ -n "$ROWSEL" ]]; then
   [[ "$FAIL_COUNT" -eq 0 ]]
   exit
 fi
-MIN_CASES=1272
+MIN_CASES=1275
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1

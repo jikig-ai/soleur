@@ -77,8 +77,9 @@
 # separated by an unquoted `|` (or `|&`; a newline right after the pipe is
 # allowed), and the pipeline ends at an unquoted `;` `&&` `||` `&` `)` or newline
 # (`2>&1`'s `&` is a redirect, not a terminator). Each stage's first word is
-# normalised — a leading `\`, a directory prefix, and `command`/`env`/`exec`/
-# `nice`/`time`/`timeout`/`nohup`/`stdbuf`/`sudo`/`VAR=x` prefixes are dropped —
+# normalised — a leading `\`, one pair of surrounding quotes, a directory prefix,
+# and `command`/`env`/`exec`/`nice`/`time`/`timeout`/`nohup`/`stdbuf`/`sudo`/`rtk`
+# (+ exec subcommand)/`VAR=x` prefixes are dropped —
 # and the walk continues while the word is grep/egrep/fgrep/rg or awk (gawk,
 # ugrep, ag …: nobody types them here; `rgrep` ignores stdin). Each matcher
 # stage's pattern is run against MODEL with the grep argv the parser built
@@ -340,14 +341,15 @@ stage_word() {
     w="${s%%[[:space:]]*}"; s="${s#"$w"}"
     [[ -z "$w" ]] && { WORD=""; WORD_REST=""; return; }
     w="${w#\\}"; w="${w##*/}"
+    [[ ( "$w" == "'"*"'" || "$w" == '"'*'"' ) && ${#w} -ge 2 ]] && w="${w:1:${#w}-2}"
     case "$w" in
-      command|env|exec|nice|time|timeout|nohup|setsid|stdbuf|ionice|sudo) pfx=1; continue ;;
+      command|env|exec|nice|time|timeout|nohup|setsid|stdbuf|ionice|sudo) pfx=1; rtk_prev=0; continue ;;
       # rtk (#10230): a wrapper on every shape — a word after it may be an
       # exec subcommand (`rtk run ps aux`), consumed as part of the prefix
       # rather than landed on as the matcher word.
       rtk) pfx=1; rtk_prev=1; continue ;;
       run|err|test|proxy|bypass|summary) (( rtk_prev )) && { rtk_prev=0; pfx=1; continue; } ;;
-      [A-Za-z_]*=*) pfx=1; continue ;;
+      [A-Za-z_]*=*) pfx=1; rtk_prev=0; continue ;;
       -*|[0-9]*) (( pfx )) && continue ;;
     esac
     WORD="$w"; WORD_REST="$s"; return

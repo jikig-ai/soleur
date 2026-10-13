@@ -19,7 +19,7 @@ set -uo pipefail
 
 HOOK="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/pkill-self-match-guard.sh"
 VERDICTS=()
-MIN_ASSERTIONS=134
+MIN_ASSERTIONS=139
 
 pass() { VERDICTS+=("PASS"); printf '  ok   %s\n' "$1"; }
 fail() { VERDICTS+=("FAIL"); printf '  FAIL %s\n' "$1"; }
@@ -235,6 +235,19 @@ run_case "D32r3 rtk -v run ps" 'rtk -v run ps aux | grep -c foo-daemon' deny
 run_case "D32r4 rtk err ps" 'rtk err ps aux | grep -c foo-daemon' deny
 run_case "D32r5 sudo rtk ps" 'sudo rtk ps aux | grep -c foo-daemon' deny
 run_case "D32r6 rtk bypass ps" 'rtk bypass ps aux | grep -c foo-daemon' deny
+# rtk before the MATCHER stage exercises stage_word's exec-subcommand consumption
+# (the PFX path above swallows `run` generically and can't see this arm at all):
+run_case "D32r7 rtk run before matcher" 'ps aux | rtk run grep -c foo-daemon' deny
+run_case "D32r8 rtk -v run before matcher" 'ps aux | rtk -v run grep -c foo-daemon' deny
+# `rtk nice run …`: nice is rtk's payload (not a consumed prefix), so `run` lands as
+# WORD — the exec'd argv0 is `run`, never a matcher. Stale rtk_prev would consume
+# `run` and over-deny on `grep`; the clear pins the correct allow.
+run_case "D32r9 stale rtk_prev cleared" 'ps aux | rtk nice run grep -c foo-daemon' allow
+run_case "D32r10 quoted rtk word" "ps aux | 'rtk' run grep -c foo-daemon" deny
+# allow direction through the rtk prefix: `ps … | grep -c <pat>` self-matches by
+# construction (the pattern lives in the wrapper argv), so the only allow path is
+# the empty-literal fail-open — same shape as A32.
+run_case "A43r rtk empty literal (fail-open)" "ps aux | rtk run grep -c ''" allow
 # Redirects and pipe spellings before the stage.
 run_case "D33 2>&1 before the pipe" 'ps -eo args 2>&1 | grep -c test-all.sh' deny
 run_case "D34 |& pipe" 'ps -eo args |& grep -c test-all.sh' deny

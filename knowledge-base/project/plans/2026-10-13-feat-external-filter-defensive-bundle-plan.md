@@ -383,7 +383,7 @@ date so a screenshot carries the claim's vintage.
 
 - `X @@ rtk rm -rf ~ @@ deny` / `X @@ rtk git push --force @@ ask` / `X @@ rtk run rm -rf ~ @@ deny` / `X @@ rtk -v run rm -rf ~ @@ deny` / `X @@ rtk proxy git push -f @@ ask` / `X @@ rtk git status @@ allow` rows in the guard suite.
 - Mutation: delete the `rtk` `wrap_skip` arm → suite reddens on the new rows (Guard 1 row 2).
-- ext-filter-detect suite: stub-PATH `rtk` fixture emits `tool=rtk`; corroborated `headroom` fixture emits `posture=measured-incompatible` only when version resolved AND ≤ the eval version (else `unmeasured`); bare-PATH-without-corroboration fixture emits `via=path posture=unmeasured`; generic `ANTHROPIC_BASE_URL=localhost` proxy fixture emits `tool=proxy posture=unknown` — never a named tool; clean fixture emits `SOLEUR_EXT_FILTER tool=none`; kill-switch suppresses; missing settings.json still exits 0.
+- ext-filter-detect suite: stub-PATH `rtk` fixture emits `tool=rtk`; corroborated `headroom` fixture emits `posture=measured-incompatible` only when version resolved AND ≤ the eval version (else `unmeasured`); bare-PATH-without-corroboration fixture emits `via=on-path posture=unmeasured`; generic `ANTHROPIC_BASE_URL=localhost` proxy fixture emits `tool=proxy posture=unknown` — never a named tool; clean fixture emits `SOLEUR_EXT_FILTER tool=none`; kill-switch suppresses; missing settings.json still exits 0.
 - Divergence harness: `bash scripts/ext-filter-divergence.sh` on a host with `rtk` present emits the per-class table; on a host without `rtk` it exits 0 with `SKIPPED reason=rtk-absent` (not a fail — the harness must not brick CI).
 - Docs: `eleventy` build passes with the new page; `rtk`/`headroom` command tokens in the doc each carry a verified-source annotation.
 
@@ -456,8 +456,8 @@ date so a screenshot carries the claim's vintage.
 7. `plugins/soleur/hooks/ext-filter-detect.sh` (new): detection arms per
    Guard 2 assembly; `systemMessage` envelope; marker shape is strictly
    `key=value` — `SOLEUR_EXT_FILTER tool=<t> version=<v> posture=<p>
-   via=path|settings-hook|proxy-env measured_at=<YYYY-MM-DD|->
-   ref=known-external-tools` (severity escalation lives in the doc, never in
+   via=on-path|settings-hook|proxy-env measured_at=<YYYY-MM-DD|->
+   ref=soleur.ai/known-external-tools` (severity escalation lives in the doc, never in
    marker adjectives — the marker is a per-session public claim); posture
    corroboration + `version=unknown` floor + proxy-neutral emit per Guard 2;
    three-tier constants (`unmeasured` default for rtk — flipped by Phase 3

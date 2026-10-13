@@ -4,7 +4,7 @@
 # become newline-joined marker lines inside it (single-document stdout; sibling hooks
 # all emit exactly one object):
 #   {"systemMessage": "SOLEUR_EXT_FILTER tool=<t> version=<v> posture=<p>
-#     via=path|settings-hook|proxy-env measured_at=<date|-> ref=known-external-tools"}
+#     via=on-path|settings-hook|proxy-env measured_at=<date|-> [path=<settings>] ref=soleur.ai/known-external-tools"}
 # and `SOLEUR_EXT_FILTER tool=none` when nothing is detected — so "hook dead" is
 # distinguishable from "no filter" (the same liveness argument compaction-state.sh
 # makes for SOLEUR_COMPACTION_SKIPPED). systemMessage costs zero model tokens; this is
@@ -78,7 +78,7 @@ flush_markers() {
   printf '{"systemMessage": "%s"}\n' "$(json_escape "$joined")"
 }
 
-# version_probe <tool> -> first token of `<tool> --version`, "unknown" on any failure.
+# version_probe <tool> -> last field of `<tool> --version`'s first line, "unknown" on any failure.
 version_probe() {
   local out
   out="$(timeout 2 "$1" --version 2>/dev/null | head -1 | awk '{print $NF}')"
@@ -98,14 +98,15 @@ ver_le() {
 }
 
 # settings_hit <tool> -> prints the tilde-collapsed settings file that wires <tool> into
-# Claude hooks (a PreToolUse/hook entry naming it), or nothing. HOME- and cwd-level files.
+# Claude hooks (a "command" entry naming it — a bare mention is not wiring), or nothing.
+# HOME- and cwd-level files; cwd arrives via CWD_CLAUDE dynamic scope.
 settings_hit() {
   local tool="$1" f
-  for f in "${HOME:-}/.claude/settings.json" "${HOME:-}/.claude/settings.local.json" \
-           "${CWD_CLAUDE:-}/settings.json" "${CWD_CLAUDE:-}/settings.local.json"; do
+  for f in ${HOME:+"$HOME/.claude/settings.json" "$HOME/.claude/settings.local.json"} \
+           ${CWD_CLAUDE:+"$CWD_CLAUDE/settings.json" "$CWD_CLAUDE/settings.local.json"}; do
     [[ -r "$f" ]] || continue
-    if grep -l '"hooks"' "$f" >/dev/null 2>&1 && grep -l "$tool" "$f" >/dev/null 2>&1; then
-      case "$f" in "$HOME"/*) printf '~%s' "${f#"$HOME"}" ;; *) printf '%s' "$f" ;; esac
+    if grep -l '"hooks"' "$f" >/dev/null 2>&1 && grep -lE '"command"[^,}]*'"$tool" "$f" >/dev/null 2>&1; then
+      case "$f" in "${HOME:-}"/*) printf '~%s' "${f#"$HOME"}" ;; *) printf '%s' "${f// /%20}" ;; esac
       return 0
     fi
   done
@@ -114,17 +115,20 @@ settings_hit() {
 
 CWD_CLAUDE=""
 main() {
-  [[ -n "${CLAUDE_PLUGIN_ROOT:-}" ]] || return 0
-  [[ -n "${CODEX_THREAD_ID:-}" || -n "${PLUGIN_ROOT:-}" ]] && return 0
-  if [[ "${1:-}" == "--self-test" ]]; then shift; fi
+  # --self-test bypasses the env gates: it exists for operator/agent discoverability
+  # ("run the hook, see the marker"), which is exactly when CLAUDE_PLUGIN_ROOT is absent.
+  local selftest=0
+  if [[ "${1:-}" == "--self-test" ]]; then selftest=1; shift; fi
+  (( selftest )) || [[ -n "${CLAUDE_PLUGIN_ROOT:-}" ]] || return 0
+  (( selftest )) || { [[ -n "${CODEX_THREAD_ID:-}" || -n "${PLUGIN_ROOT:-}" ]] && return 0; }
 
   # Bounded stdin read for the envelope's cwd (a hook that hangs at SessionStart is worse
   # than a crashed one — compaction-state.sh:123-129). Absent or malformed: no cwd arm.
-  local in=""
-  in="$(timeout 5 cat 2>/dev/null || true)"
+  local envelope=""
+  envelope="$(timeout 5 cat 2>/dev/null || true)"
   local cwd
-  cwd="$(printf '%s' "$in" | grep -o '"cwd"[^,}]*' | head -1 | cut -d'"' -f4)"
-  [[ -d "$cwd/.claude" ]] && CWD_CLAUDE="$cwd/.claude"
+  cwd="$(printf '%s' "$envelope" | grep -o '"cwd"[^,}]*' | head -1 | cut -d'"' -f4)"
+  [[ -n "$cwd" && -d "$cwd/.claude" ]] && CWD_CLAUDE="$cwd/.claude"
   trace "cwd=$cwd CWD_CLAUDE=$CWD_CLAUDE"
 
   local found=0 tool ver via posture m_at s_hit
@@ -133,12 +137,12 @@ main() {
   # named vendor claim — a LiteLLM/Helicone/corporate proxy is the user's own infra.
   case "${ANTHROPIC_BASE_URL:-}" in
     ""|https://api.anthropic.com|https://api.anthropic.com/) : ;;
-    *) emit "tool=proxy posture=unknown via=proxy-env measured_at=- ref=known-external-tools"; found=1 ;;
+    *) emit "tool=proxy posture=unknown via=proxy-env measured_at=- ref=soleur.ai/known-external-tools"; found=1 ;;
   esac
 
   for tool in rtk headroom; do
     via=""; s_hit=""
-    command -v "$tool" >/dev/null 2>&1 && via="path"
+    command -v "$tool" >/dev/null 2>&1 && via="on-path"
     s_hit="$(settings_hit "$tool")" && via="${via:+$via,}settings-hook"
     [[ -n "$via" ]] || continue
     found=1
@@ -153,13 +157,13 @@ main() {
         if [[ "$via" == *settings-hook* && "$ver" != unknown ]] && ver_le "$ver" "$HEADROOM_EVAL_VERSION"; then
           posture="$POSTURE_HEADROOM"; m_at="$HEADROOM_MEASURED_AT"
         else
-          posture="unmeasured"; m_at="$HEADROOM_MEASURED_AT"
+          posture="unmeasured"; m_at="-"
         fi ;;
     esac
-    emit "tool=$tool version=$ver posture=$posture via=$via measured_at=$m_at${s_hit:+ path=$s_hit} ref=known-external-tools"
+    emit "tool=$tool version=$ver posture=$posture via=$via measured_at=$m_at${s_hit:+ path=${s_hit// /%20}} ref=soleur.ai/known-external-tools"
   done
 
-  (( found )) || emit "tool=none"
+  (( found )) || emit "tool=none ref=soleur.ai/known-external-tools"
   flush_markers
   return 0
 }

@@ -1,6 +1,6 @@
 # Canonical external-filter wrapper grammar (#10230). ONE canonical copy — every unwrap site
 # (destructive-command-guard.sh wrap_skip arm + header prose, pkill-self-match-guard.sh
-# stage_word, proc.sh _PROC_WRAPPERS walk, the hook suite's python oracle, README sentence,
+# stage_word, proc.sh _PROC_WRAPPERS walk, the hook suite's python oracle,
 # known-external-tools.md table) restates or extracts from THIS list, and
 # plugins/soleur/test/rtk-grammar-parity.test.sh asserts set equality by extraction.
 # Verified 2026-10-13 against rtk-ai/rtk src/lib.rs + src/core/constants.rs on develop.
@@ -16,7 +16,7 @@ test	exec	argv+string-flag	--shell same as err
 proxy	exec	argv	deprecated alias of bypass; raw passthrough
 bypass	exec	argv	raw passthrough, no filtering
 summary	exec	argv+string-flag	--shell same as err
-# Global flags: -v/-vv/-vvv/--verbose (count, pre-subcommand), --skip-env (global = true,
-# legal before AND after the exec subcommand). Any other option word -> unparsed-wrapper ask.
+# Global flags: -v/-vv/-vvv/--verbose (count) and --skip-env — both clap global=true, legal
+# before AND after the exec subcommand. Any other option word -> unparsed-wrapper ask.
 # Everything else after `rtk` (git, gh, ls, rm, task names, ...) lands as the command word:
 # rtk's own filtered subcommands and the run_fallback raw exec both run it.

@@ -27,16 +27,19 @@ question becomes "Soleur defect or filter ate the evidence?" This page is the an
 tool — or <code>SOLEUR_EXT_FILTER tool=none</code> when nothing is found, so a dead hook is
 distinguishable from no filter:</p>
 
-<pre>SOLEUR_EXT_FILTER tool=&lt;t&gt; version=&lt;v&gt; posture=&lt;p&gt; via=&lt;detection&gt; measured_at=&lt;date|-&gt; ref=known-external-tools</pre>
+<pre>SOLEUR_EXT_FILTER tool=&lt;t&gt; version=&lt;v&gt; posture=&lt;p&gt; via=&lt;evidence&gt; measured_at=&lt;date|-&gt; [path=&lt;settings&gt;] ref=soleur.ai/known-external-tools
+
+abbreviated forms:  SOLEUR_EXT_FILTER tool=none ref=soleur.ai/known-external-tools
+                    SOLEUR_EXT_FILTER tool=proxy posture=unknown via=proxy-env measured_at=- ref=soleur.ai/known-external-tools</pre>
 
 <p>The marker is a <strong>stable contract</strong>: field names, ordering, and the posture
 enum are frozen — bug reports and triage muscle memory parse it literally. When several
 detectors fire, the markers are newline-joined inside <em>one</em>
 <code>systemMessage</code> object — never N separate objects (the harness's parse must stay
-single-document). <code>via=</code> is comma-joined evidence: <code>path</code> (PATH hit),
+single-document). <code>via=</code> is comma-joined evidence: <code>on-path</code> (PATH hit),
 <code>settings-hook</code> (wired into a settings file), <code>proxy-env</code>
 (non-default endpoint); a corroborated tool reads
-<code>via=path,settings-hook</code>.
+<code>via=on-path,settings-hook</code>.
 <code>systemMessage</code> is operator-facing and costs zero model tokens; severity
 escalation lives in this page, never in marker adjectives. Any <code>path=</code> field is
 tilde-collapsed (<code>~/.claude/settings.json</code>) — it never carries your absolute home
@@ -118,19 +121,27 @@ savings claims like "90%" are scoped to terminal-output tokens, not your bill.</
 <h2>Three-rung diagnosis</h2>
 
 <ol>
-<li><strong>Check the marker.</strong> Grep session output for <code>SOLEUR_EXT_FILTER</code>.
-   <code>tool=none</code> means no filter detected (Claude Code sessions only — a Devin or
-   other-harness session has no marker by design; there, check
+<li><strong>Check the marker.</strong> Scroll to the session-start system messages (or
+   grep the session log) for <code>SOLEUR_EXT_FILTER</code>. Agents: re-derive it with
+   <code>env -u CODEX_THREAD_ID -u PLUGIN_ROOT CLAUDE_PLUGIN_ROOT=1 \
+     bash &lt;plugin&gt;/hooks/ext-filter-detect.sh --self-test</code>.
+   <code>tool=none</code> means no filter detected — not "no filter exists" (a managed-settings
+   hook or a PATH the hook process can't see can still hide one). Claude Code sessions only —
+   a Devin or other-harness session has no marker by design; there, check
    <code>command -v rtk</code> and <code>~/.claude/settings.json</code> for hook entries
-   manually).</li>
-<li><strong>Reproduce with the filter off.</strong> RTK's disable is the
-   <code>mode = "disabled"</code> config setting or the <code>rtk run</code>/<code>rtk bypass</code>
-   passthrough forms — there is no <code>RTK_DISABLED</code> env var (it does not exist;
-   verified against RTK's docs 2026-10-13). Headroom's equivalent is removing its
-   plugin/proxy wiring.</li>
+   manually.</li>
+<li><strong>Reproduce with the filter off.</strong> RTK's disable is
+   <code>mode = "disabled"</code> in <code>~/.config/rtk/config.toml</code> (or remove its
+   hook entry from settings), and the per-command escape is the
+   <code>rtk run</code>/<code>rtk bypass</code> passthrough — there is no
+   <code>RTK_DISABLED</code> env var (it does not exist; verified against RTK's docs
+   2026-10-13). Headroom's equivalent is removing its plugin/proxy wiring.</li>
 <li><strong>Compare verbatim vs filtered.</strong> Run the command both ways and diff the
    evidence the gate needed. <code>plugins/soleur/scripts/ext-filter-divergence.sh</code>
-   automates exactly this over the committed corpus.</li>
+   automates exactly this over the committed corpus — verdicts
+   <code>LITERAL-CLEAN|UNMEASURED|DIVERGENT|INSTRUMENT-DEFECT</code> plus
+   <code>SKIPPED reason=rtk-absent</code> when rtk isn't installed (exit codes:
+   0 clean-or-skipped, 1 divergent, 3 usage/env, 4 instrument-defect).</li>
 </ol>
 
 <h2>Footguns</h2>
@@ -139,16 +150,18 @@ savings claims like "90%" are scoped to terminal-output tokens, not your bill.</
 <li><strong><code>rtk gain</code></strong> and <strong><code>rtk session</code></strong> show
   what rtk intercepted this session — the fastest way to prove a command was filtered.
   <code>rtk discover</code> lists commands it saw but did not filter.</li>
-<li><strong>Telemetry defaults</strong> (verified against each tool's README/docs,
-  2026-10-13): rtk collects anonymous usage stats — <code>rtk telemetry</code> manages it,
-  and config carries the opt-out; Headroom's beacon is off by default in current releases.
-  Both are third-party claims about their own practices — re-check after upgrades.</li>
+<li><strong>Telemetry defaults</strong> (verified against
+  <a href="https://github.com/rtk-ai/rtk#readme">RTK's README</a>, 2026-10-13): rtk's
+  telemetry is anonymous and <strong>off by default</strong> — opt-IN via
+  <code>rtk telemetry enable</code>, not opt-out. Headroom's beacon is likewise off by
+  default in current releases (their docs). Both are third-party claims about their own
+  practices — re-check after upgrades.</li>
 <li><strong>rtk's hook emits its own permission decisions</strong> on some integrations —
   Soleur's guard judges the original command text either way (the two hook chains
   compose, not replace).</li>
 <li><strong>Reporting bugs:</strong> when filing, paste the full marker line into the bug
-  report's marker field and apply the <code>external-env</code> label when the filter
-  dropdown is not <code>none</code>.</li>
+  report's marker field and answer the filter dropdown — <em>triage</em> applies the
+  <code>external-env</code> label when it isn't <code>none</code> (don't add it yourself).</li>
 </ul>
 
 </div>

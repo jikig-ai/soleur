@@ -47,15 +47,17 @@ run() { # [--self-test] [ENV=val ...] -- runs the SUT with an empty stdin envelo
 
 # --- marker semantics -------------------------------------------------------
 OUT="$(run)"; check "clean detection emits tool=none" "$OUT" 'SOLEUR_EXT_FILTER tool=none'
+check "tool=none carries the ref pointer" "$OUT" 'ref=soleur.ai/known-external-tools'
 
 mk rtk 'rtk 0.12.3'
 OUT="$(run)"; check "rtk PATH hit emits tool=rtk" "$OUT" 'tool=rtk'
-check "bare PATH rtk floors at unmeasured" "$OUT" 'tool=rtk version=0.12.3 posture=unmeasured via=path'
+check "bare PATH rtk floors at unmeasured" "$OUT" 'tool=rtk version=0.12.3 posture=unmeasured via=on-path'
 
 printf '{"hooks":{"PreToolUse":[{"command":"rtk hook rewrite"}]}}' > "$HOME_DIR/.claude/settings.json"
-OUT="$(run)"; check "settings-wired rtk gains settings-hook via" "$OUT" 'via=path,settings-hook'
+OUT="$(run)"; check "settings-wired rtk gains settings-hook via" "$OUT" 'via=on-path,settings-hook'
 check "settings path is tilde-collapsed, never an absolute home path" "$OUT" 'path=~/.claude/settings.json'
-check_not "settings-wired rtk still unmeasured pre-evidence" "$OUT" 'posture=literal-clean'
+check "settings-wired rtk still unmeasured pre-evidence" "$OUT" 'posture=unmeasured'
+check_not "settings-wired rtk never emits literal-clean pre-evidence" "$OUT" 'posture=literal-clean'
 
 mk headroom 'headroom-ai 0.30.0'
 printf '{"hooks":{"PreToolUse":[{"command":"headroom wrap"}]}}' > "$HOME_DIR/.claude/settings.local.json"
@@ -82,14 +84,15 @@ OUT="$(run ANTHROPIC_BASE_URL=http://localhost:4000)"
 [[ "$(printf '%s' "$OUT" | grep -c '"systemMessage"')" == 1 ]] \
   && pass "co-detection emits exactly one systemMessage object" \
   || fail "co-detection emits exactly one systemMessage object (got: $OUT)"
-check "co-detection carries both markers" "$OUT" 'SOLEUR_EXT_FILTER tool=proxy'
+check "co-detection carries the proxy marker" "$OUT" 'SOLEUR_EXT_FILTER tool=proxy'
+check "co-detection carries the rtk marker" "$OUT" 'SOLEUR_EXT_FILTER tool=rtk'
 
 # project-level settings: corroborates, and path= is NEVER tilde-corrupted
 printf '{"hooks":{"PreToolUse":[{"command":"rtk hook rewrite"}]}}' > "$CWD_DIR/.claude/settings.json"
 printf '{"cwd":"%s"}' "$CWD_DIR" | env -i PATH="$BIN:/usr/bin:/bin" HOME="$HOME_DIR" \
   CLAUDE_PLUGIN_ROOT="$REPO_ROOT/plugins/soleur" bash "$SUT" 2>/dev/null > "$SANDBOX/cwd.out" || true
 OUT="$(cat "$SANDBOX/cwd.out")"
-check "project-level settings corroborates" "$OUT" 'via=path,settings-hook'
+check "project-level settings corroborates" "$OUT" 'via=on-path,settings-hook'
 check "project path is emitted absolute, never tilde-corrupted" "$OUT" "path=$CWD_DIR/.claude/settings.json"
 check_not "project path never tilde-corrupted" "$OUT" 'path=~proj'
 rm -f "$CWD_DIR/.claude/settings.json" "$BIN/rtk"
@@ -106,5 +109,10 @@ check "the registration carries timeout 10" "$grp" '"timeout":10'
 check "the command is a quoted bash invocation" "$grp" 'bash \"${CLAUDE_PLUGIN_ROOT}/hooks/ext-filter-detect.sh\"'
 check "devin-dispositions.tsv carries a row" "$(cat "$DISPOSITIONS")" 'plugins/soleur/hooks/ext-filter-detect.sh'
 
+MIN_VERDICTS=27
+if (( passes + fails < MIN_VERDICTS )); then
+  printf 'FATAL: verdict floor breached: %d < %d — the suite lost assertions.\n' "$((passes + fails))" "$MIN_VERDICTS" >&2
+  fails=$((fails + 1))
+fi
 printf '\n=== %d verdicts, %d failed ===\n' "$((passes + fails))" "$fails"
 (( fails == 0 ))

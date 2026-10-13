@@ -663,11 +663,13 @@ tools; rtk command wrappers are unwrapped by the destructive-command guard, and 
 `SOLEUR_EXT_FILTER` session-start marker reports detected filters with an
 evidence-gated posture.
 
+`SOLEUR_DISABLE_EXT_FILTER_DETECT=1` turns the marker off.
+
 **Workaround:** follow the three-rung diagnosis — check the `SOLEUR_EXT_FILTER`
-marker, reproduce with the filter disabled (`mode = "disabled"` or `rtk run`
-passthrough; there is no `RTK_DISABLED` env var), then compare verbatim vs filtered
-output. Postures, footguns and the canonical grammar table:
-`/known-external-tools/`.
+marker, reproduce with the filter disabled (`mode = "disabled"` in
+`~/.config/rtk/config.toml`, or `rtk run` passthrough; there is no `RTK_DISABLED`
+env var), then compare verbatim vs filtered output. Postures, footguns and the
+canonical grammar table: [known-external-tools](https://soleur.ai/known-external-tools/)
 
 ## Version History
 

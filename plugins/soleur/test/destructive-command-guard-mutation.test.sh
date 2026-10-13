@@ -351,7 +351,7 @@ mut_M8()  {
 }
 
 # id | edited file (relative) | well-formedness kind | rows ERE | selected floor | detector ERE
-M_IDS="M1 M2 M3a M3b M4a M4b M5a M5b M6a M6b M7a M7b M8 M9a M9b M9c M9d M9e"
+M_IDS="M1 M2 M3a M3b M4a M4b M5a M5b M6a M6b M7a M7b M8 M9a M9b M9c M9d M9e M9f M9g M9h"
 # --- M9: rtk unwrap (#10230). Each mutant hits ONE site of the rtk mechanism; the rows that kill it are
 # the `wrapper: rtk`/`case: RTK` rows of destructive-command-guard-hook.test.sh.
 mut_M9a() { mut_replace "$1/$HK" 'nice|rtk|-p)  # `-p`: see wrap_skip' 'nice|-p)  # `-p`: see wrap_skip' 1; }
@@ -359,6 +359,9 @@ mut_M9b() { mut_replace "$1/$HK" 'rtk)  # grammar per the header prose' 'zzrtk) 
 mut_M9c() { mut_replace "$1/$HK" 'rtk) FN="rtk"' 'zzrtk) FN="rtk"' 1; }
 mut_M9d() { mut_replace "$1/$HK" $'                *) note 1 unparsed-wrapper; return 0 ;;' $'                *) break ;;' 1; }
 mut_M9e() { mut_replace "$1/$HK" '                  note 1 unparsed-wrapper; return 0 ;;' '                  : ;;' 1; }
+mut_M9f() { mut_replace "$1/$HK" '|nice|rtk|origin|main|master)' '|nice|origin|main|master)' 1; }
+mut_M9g() { mut_replace "$1/$HK" '|nice|rtk|-p) hit=0' '|nice|-p) hit=0' 1; }
+mut_M9h() { mut_replace "$1/$HK" $'          -v|-vv|-vvv|--verbose|--skip-env|--skip-env=*) j=$((j + 1)) ;;\n          *) note 1 unparsed-wrapper; return 0 ;;' $'          -v|-vv|-vvv|--verbose|--skip-env|--skip-env=*) j=$((j + 1)) ;;\n          *) break ;;' 1; }
 
 mdef() { # mdef <id> -> sets M_FILE M_KIND M_ROWS M_FLOOR M_DETECT
   case "$1" in
@@ -411,11 +414,20 @@ mdef() { # mdef <id> -> sets M_FILE M_KIND M_ROWS M_FLOOR M_DETECT
          M_ROWS='case: RTK|case: Rtk'
          M_DETECT='case: RTK|case: Rtk' ;;
     M9d) M_FILE="$HK"; M_KIND="sh"; M_FLOOR=8
-         M_ROWS='wrapper: rtk (run -c|run --command|run --shell|err --shell|test --shell|summary --shell|run --ultra-compact)'
-         M_DETECT='wrapper: rtk (run -c|run --command|run --shell|err --shell|test --shell|summary --shell|run --ultra-compact)' ;;
+         M_ROWS='wrapper: rtk (run -c|run --command|run --shell|err --shell|test --shell|summary --shell|run --ultra-compact|err --bogus)'
+         M_DETECT='wrapper: rtk (run -c|run --command|run --shell|err --shell|test --shell|summary --shell|run --ultra-compact|err --bogus)' ;;
     M9e) M_FILE="$HK"; M_KIND="sh"; M_FLOOR=1
          M_ROWS='wrapper: rtk err .rm -rf ~. asks'
          M_DETECT='wrapper: rtk err .rm -rf ~. asks' ;;
+    M9f) M_FILE="$HK"; M_KIND="sh"; M_FLOOR=1
+         M_ROWS='^quote:.*rtk'
+         M_DETECT='quote:.*rtk' ;;
+    M9g) M_FILE="$HK"; M_KIND="sh"; M_FLOOR=1
+         M_ROWS='^bound:.*rtk'
+         M_DETECT='bound:.*behind rtk' ;;
+    M9h) M_FILE="$HK"; M_KIND="sh"; M_FLOOR=1
+         M_ROWS='wrapper: rtk --badopt'
+         M_DETECT='wrapper: rtk --badopt' ;;
     *) harness_die "unknown mutant $1" ;;
   esac
 }
@@ -423,7 +435,7 @@ mdef() { # mdef <id> -> sets M_FILE M_KIND M_ROWS M_FLOOR M_DETECT
 # the union of every selection: the control runs it first
 UNION=""
 for _id in $M_IDS; do mdef "$_id"; UNION="${UNION:+$UNION|}($M_ROWS)"; done
-UNION_FLOOR=100
+UNION_FLOOR=102
 
 # current_timeout reads its two inputs (the first field of the load-average file, the core count): driven with fixtures, so a wrong field,
 # a wrong file or a constant is a red row, not a green one (only scaled_timeout's arithmetic was rowed before)
@@ -450,7 +462,7 @@ if [[ -z "${DCG_MUT_META_COPY:-}" ]]; then
     T9_OUT="$(env ${GIT_UNSET[@]+"${GIT_UNSET[@]}"} DCG_ALLOW_REDUCED=1 DCG_MUT_META_COPY=1 "DCG_LOADAVG_FILE=$GT/load30" DCG_CORES=8 "TMPDIR=$WORK/t9" "$BASH" "$1/plugins/soleur/test/destructive-command-guard-mutation.test.sh" 2>&1 </dev/null | strip_ansi)"; T9_RC=${PIPESTATUS[0]}
   }
   mkdir -p "$WORK/t9"
-  mk_t9_tree cut "case \"\${DCG_ROWS:-}\" in \"(\"*) printf 'cases=100 passes=100 fails=0\\nselected=100\\n'; exit 0 ;; esac; exit 124"
+  mk_t9_tree cut "case \"\${DCG_ROWS:-}\" in \"(\"*) printf 'cases=104 passes=104 fails=0\\nselected=104\\n'; exit 0 ;; esac; exit 124"
   t9_run "$T9_DIR"
   _ids_missing=""; for _id in $M_IDS; do grep -q "^\[UNRESOLVED\] $_id: " <<<"$T9_OUT" || _ids_missing+=" $_id"; done
   chk "unresolved: a hook suite that is cut off on every mutant makes the battery exit 3 (INCONCLUSIVE), not 0 and not 1 (rc=$T9_RC)" \

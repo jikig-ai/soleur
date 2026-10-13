@@ -30,6 +30,11 @@
 # Output: a markdown divergence report on stdout, intended to land at
 #   knowledge-base/project/specs/feat-fcc-token-optimizations/ext-filter-divergence-report.md
 # Usage: ext-filter-divergence.sh [--corpus <file>] [--report <file>]
+# Exit codes (the parse contract — grep the verdict PREFIX, exit 0 covers both measured
+# clean and skipped): 0 = LITERAL-CLEAN or UNMEASURED (incl. SKIPPED reason=rtk-absent);
+# 1 = DIVERGENT; 3 = usage/env error; 4 = INSTRUMENT-DEFECT. Verdict enum:
+# LITERAL-CLEAN | UNMEASURED | DIVERGENT | INSTRUMENT-DEFECT (uppercase verdict,
+# lowercase marker posture — the marker's `posture=` maps 1:1 modulo case).
 
 set -uo pipefail
 # NOTE: the cleanup trap below replaces a fail-open trap — post-mktemp faults report
@@ -41,7 +46,7 @@ while (( $# )); do
   case "$1" in
     --corpus) CORPUS="$2"; shift 2 ;;
     --report) REPORT="$2"; shift 2 ;;
-    *) shift ;;
+    *) echo "ext-filter-divergence: unknown flag: $1 (expected --corpus|--report)" >&2; exit 3 ;;
   esac
 done
 
@@ -69,7 +74,7 @@ extract_literals() { # <class ERE> <output file> -> sorted unique literal LINES 
 }
 
 divergence_count() { # <verbatim file> <filtered file> -> count of gate-literal lines lost + classes touched
-  local v="$1" f="$2" lost=0 cls
+  local v="$1" f="$2" lost=0 cls ere n entry
   for entry in "${LITERAL_CLASSES[@]}"; do
     cls="${entry%%:*}"; ere="${entry#*:}"
     comm -23 <(extract_literals "$ere" "$v") <(extract_literals "$ere" "$f") > "$WORK/lost.$$" 2>/dev/null || continue
@@ -83,27 +88,28 @@ divergence_count() { # <verbatim file> <filtered file> -> count of gate-literal 
   printf '%s' "$lost"
 }
 
-declare -A LOST_CLASSES=()
-run_arm() { # <name> <runner> -> sets ARM_LOST ARM_RUN
-  local name="$1" runner="$2" cmd i=0 lost_total=0
-  : > "$WORK/detail.$$"
+run_arm() { # <name> <runner> -> sets ARM_LOST ARM_RUN ARM_CLASSES; per-arm evidence files
+  # ($WORK/armrows.$name, detail.$name, classes.$name) — shared accumulators would erase
+  # the CONTROL arm's proof on an rtk-present host, the run whose evidence matters most.
+  local name="$1" runner="$2" cmd i=0 lost_total=0 n
+  : > "$WORK/detail.$name"; : > "$WORK/classes.$$"
   while IFS= read -r cmd; do
     [[ -z "${cmd// /}" || "$cmd" == \#* ]] && continue
     i=$((i + 1))
-    bash -c "$cmd" > "$WORK/verb.$$" 2>/dev/null || true
-    eval "$runner" > "$WORK/filt.$$" 2>/dev/null || true
+    timeout 15 bash -c "$cmd" > "$WORK/verb.$$" 2>/dev/null || true
+    ( eval "$runner" ) > "$WORK/filt.$$" 2>/dev/null || true
     n="$(divergence_count "$WORK/verb.$$" "$WORK/filt.$$")"
     lost_total=$((lost_total + n))
-    printf '    %s %02d lost=%d :: %s\n' "$name" "$i" "$n" "$cmd" >> "$WORK/armrows.$$"
+    printf '    %s %02d lost=%d :: %s\n' "$name" "$i" "$n" "$cmd" >> "$WORK/armrows.$name"
   done < "$CORPUS"
+  cp "$WORK/classes.$$" "$WORK/classes.$name"
   ARM_LOST="$lost_total"; ARM_RUN="$i"
-  ARM_CLASSES="$(sort -u "$WORK/classes.$$" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
+  ARM_CLASSES="$(sort -u "$WORK/classes.$name" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
 }
 
 emit() { printf '%s\n' "$*"; }
 
 # --- run ---------------------------------------------------------------------
-: > "$WORK/armrows.$$"; : > "$WORK/classes.$$"
 control_lost=0; control_run=0
 run_arm "CONTROL" 'bash -c "$cmd" | head -3'
 control_lost="$ARM_LOST"; control_run="$ARM_RUN"
@@ -111,7 +117,6 @@ CONTROL_CLASSES="$ARM_CLASSES"
 
 rtk_status=""; rtk_lost=0; rtk_run=0; grammar_note=""
 if command -v rtk >/dev/null 2>&1; then
-  : > "$WORK/armrows.$$"; : > "$WORK/classes.$$"
   run_arm "RTK" 'rtk $cmd'
   rtk_lost="$ARM_LOST"; rtk_run="$ARM_RUN"
   RTK_CLASSES="$ARM_CLASSES"
@@ -121,7 +126,7 @@ if command -v rtk >/dev/null 2>&1; then
   canon_set="$(awk -F'\t' '$0 !~ /^#/ && NF >= 3 && $2 == "exec" { print $1 }' "$CANON" 2>/dev/null | sort | tr '\n' ' ' | sed 's/ $//')"
   help_set=""
   for sub in run err test proxy bypass summary gain session discover init telemetry config env smart deps json pipe; do
-    rtk "$sub" --help >/dev/null 2>&1 && help_set="$help_set $sub"
+    timeout 5 rtk "$sub" --help >/dev/null 2>&1 && help_set="$help_set $sub"
   done
   if [[ -n "$canon_set" ]]; then
     drift="$(comm -23 <(printf '%s\n' $canon_set | sort) <(printf '%s\n' $help_set | sort) | tr '\n' ' ')"
@@ -137,7 +142,7 @@ verdict="INSTRUMENT-DEFECT"
 if (( control_lost == 0 )); then
   verdict="INSTRUMENT-DEFECT: control arm reported zero divergence (the instrument cannot see loss — no result is credible)"
 elif [[ "$rtk_status" == SKIPPED* ]]; then
-  verdict="UNMEASURED: rtk absent; control arm alive (lost=$control_lost) — posture stays unmeasured"
+  verdict="UNMEASURED: rtk absent; control arm alive (lost=$control_lost) — posture stays unmeasured. rtk arm: $rtk_status"
 elif (( rtk_lost == 0 )); then
   verdict="LITERAL-CLEAN: rtk-arm divergence zero on $rtk_run corpus commands (control lost=$control_lost — instrument alive)"
 else
@@ -148,7 +153,8 @@ fi
   emit "# ext-filter divergence report — $(date -u +%Y-%m-%dT%H:%M:%SZ)"
   emit ""
   emit "- host: $(uname -srm | cut -d' ' -f1-3)"
-  emit "- rtk: $(command -v rtk >/dev/null 2>&1 && rtk --version 2>/dev/null | head -1 || echo absent)"
+  rtk_v=""; command -v rtk >/dev/null 2>&1 && rtk_v="$(rtk --version 2>/dev/null | head -1)"
+  emit "- rtk: ${rtk_v:-absent}"
   emit "- corpus: $CORPUS ($control_run commands)"
   emit ""
   emit "## Verdict"
@@ -165,11 +171,14 @@ fi
   emit ""
   emit "## Per-command detail"
   emit ""
-  cat "$WORK/armrows.$$" 2>/dev/null
+  emit "### control"
+  cat "$WORK/armrows.CONTROL" 2>/dev/null
   emit ""
+  [[ "$rtk_status" == measured ]] && { emit "### rtk"; cat "$WORK/armrows.RTK" 2>/dev/null; emit ""; }
   emit "## Lost literals (control arm proves the detector sees each class)"
   emit ""
-  cat "$WORK/detail.$$" 2>/dev/null | sort -u | head -50
+  sort -u "$WORK/detail.CONTROL" 2>/dev/null | head -50
+  [[ "$rtk_status" == measured ]] && { emit ""; emit "## Lost literals (rtk arm — must be empty for literal-clean)"; emit ""; sort -u "$WORK/detail.RTK" 2>/dev/null | head -50; }
 } > "$WORK/report.md"
 
 if [[ -n "$REPORT" ]]; then cp "$WORK/report.md" "$REPORT"; fi

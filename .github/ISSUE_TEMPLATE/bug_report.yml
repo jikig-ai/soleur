@@ -79,7 +79,7 @@ body:
     attributes:
       label: Session-start marker
       description: "Paste the full `SOLEUR_EXT_FILTER` line from session start, including via= and measured_at= (Claude Code sessions only — Devin and other harnesses emit no marker by design, and that does not mean no filter)."
-      placeholder: "SOLEUR_EXT_FILTER tool=none"
+      placeholder: "SOLEUR_EXT_FILTER tool=rtk version=… posture=… via=… measured_at=… ref=…"
     validations:
       required: false
   - type: textarea

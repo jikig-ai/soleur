@@ -1172,7 +1172,7 @@ wrap_skip() {
         case "$a" in --) break ;; -v|-V|-[a-zA-Z]*[vV]*) return 0 ;; esac
       done ;;
     rtk)  # grammar per the header prose; an ask here is unparsed-wrapper, never a silent allow
-      while (( j < n )) && [[ "${t[$j]}" == -* ]]; do
+      while (( j < n )) && [[ "${t[$j]}" == -* && "${t[$j]}" != - ]]; do
         a="${t[$j]}"
         case "$a" in
           --) j=$((j + 1)); break ;;
@@ -1184,11 +1184,13 @@ wrap_skip() {
         case "${t[$j]}" in
           run|err|test|proxy|bypass|summary)
             j=$((j + 1))
-            while (( j < n )) && [[ "${t[$j]}" == -* ]]; do
+            while (( j < n )) && [[ "${t[$j]}" == -* && "${t[$j]}" != - ]]; do
               a="${t[$j]}"
               case "$a" in
                 --) j=$((j + 1)); break ;;
-                --skip-env|--skip-env=*) j=$((j + 1)) ;;
+                # globals are legal post-subcommand too (clap global=true, verified in
+                # lib.rs): -v/-vv/-vvv/--verbose + --skip-env
+                -v|-vv|-vvv|--verbose|--skip-env|--skip-env=*) j=$((j + 1)) ;;
                 *) note 1 unparsed-wrapper; return 0 ;;
               esac
             done
