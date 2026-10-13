@@ -20,12 +20,13 @@
 # `GET /repos/{owner}/{repo}/collaborators/{login}/permission` resolves EFFECTIVE
 # permission and does not depend on membership visibility (measured 2026-09-19:
 # `admin` for the operator, `none` for `github-actions[bot]`, under the operator
-# token). One call per DISTINCT author, memoized WITHIN ONE VIEW INVOCATION
-# (`trusted_verdict_bodies` or `trusted_verdict_comments`) — every consumer calls a view
-# under command substitution, so the memo dies with that subshell and does not carry
-# across calls (measured; the upside is that a login-keyed, repo-unaware table cannot
-# leak a permission between repos). So a thread with many comments from one author
-# costs one request.
+# token). One call per DISTINCT author (logins are case-insensitive on GitHub,
+# so the memo key is the lower-cased login), memoized WITHIN ONE VIEW INVOCATION
+# (`trusted_verdict_bodies` or `trusted_verdict_comments`). The shared core always runs
+# under command substitution (`$(...)`), so the memo dies with that subshell and does
+# not carry across view calls (measured; the upside is that a login-keyed, repo-unaware
+# table cannot leak a permission between repos). So a thread with many comments from
+# one author costs one request.
 #
 # TWO VIEWS OF ONE CORE. `_trusted_verdict_core` is the only place a comment read
 # becomes trusted text; the public functions are projections of it:
@@ -33,8 +34,10 @@
 #   trusted_verdict_comments  one compact JSON object `{t, b}` per trusted comment, `t`
 #                             the comment's `createdAt` (marker probes that order
 #                             markers by time, such as the S3 soak probe)
-# Both return 2 on any unreadable trust decision, with EMPTY stdout. The probes map
-# rc 2 to their own exit (the soak probes: 3 via `fail_api`; concierge: 2).
+# Both return 2 on any unreadable trust decision, with EMPTY stdout; the comments view
+# ALSO returns 2 on a trusted comment whose `createdAt` is missing or not ISO. The probes
+# map rc 2 to their own exit (the soak probes: 3 via `fail_api`; concierge: 2). Rule of
+# thumb: need the comment's created time -> the comments view, else the bodies view.
 #
 # SOURCED, never executed: no top-level `exit` (a sourced `exit` terminates the
 # SOURCING parent), no `set -e`. Callers keep their own exit semantics.
@@ -46,7 +49,7 @@
 #
 # Convention: knowledge-base/engineering/operations/runbooks/followthrough-convention.md
 
-# Memo table: login -> permission string. Declared once; `declare -gA` so it
+# Memo table: lower-cased login -> permission string. Declared once; `declare -gA` so it
 # survives being sourced from inside a function.
 if ! declare -gA _TRUSTED_VERDICT_PERM 2>/dev/null; then
   # REFUSE, never degrade. Without associative arrays (bash 3.2 — stock macOS
@@ -75,10 +78,11 @@ fi
 # passed, which is indistinguishable from the filter working. Use
 # `_trusted_verdict_permission "$l" "$r" >/dev/null` — a redirect, not a subshell.
 _trusted_verdict_permission() {
-  local login="$1" repo="${2:-jikig-ai/soleur}" perm
+  local login="$1" repo="${2:-jikig-ai/soleur}" perm key
   if [[ -z "$login" ]]; then return 2; fi
-  if [[ -n "${_TRUSTED_VERDICT_PERM[$login]:-}" ]]; then
-    printf '%s' "${_TRUSTED_VERDICT_PERM[$login]}"
+  key="${login,,}"   # GitHub logins are case-insensitive: `Admin1` and `admin1` are one user, one lookup
+  if [[ -n "${_TRUSTED_VERDICT_PERM[$key]:-}" ]]; then
+    printf '%s' "${_TRUSTED_VERDICT_PERM[$key]}"
     return 0
   fi
   # `gh api` exits non-zero on ANY non-2xx, so the error arm must separate two
@@ -109,7 +113,7 @@ _trusted_verdict_permission() {
   fi
   rm -f "$errf"
   if [[ -z "$perm" ]]; then return 2; fi
-  _TRUSTED_VERDICT_PERM[$login]="$perm"
+  _TRUSTED_VERDICT_PERM[$key]="$perm"
   printf '%s' "$perm"
   return 0
 }
@@ -125,16 +129,37 @@ _trusted_verdict_is_trusted_perm() {
 }
 
 # _trusted_verdict_strip_fences   (stdin -> stdout)
-#   Drops fenced blocks so a quoted template cannot arm a probe. Both fence spellings:
-#   CommonMark allows ``` and ~~~, and stripping only one left the other as a live
-#   channel for a quoted template to arm a probe.
+#   Drops fenced blocks so a quoted template cannot arm a probe. A CommonMark-style state
+#   machine, not a toggle on any fence-looking line: an opener is up to 3 leading spaces
+#   plus 3 or more of ONE fence character (backtick or tilde); a closer is the SAME
+#   character, at least as long as the opener, with nothing but whitespace after it;
+#   4 or more leading spaces (or a tab) is indented code, not a fence. A fence still
+#   open at the end of the body strips to the end of the body. The naive toggle let a
+#   4-backtick fence wrapping a 3-backtick line, or a backtick fence "closed" by a
+#   tilde line, expose a quoted marker as live.
 _trusted_verdict_strip_fences() {
-  awk '/^[[:space:]]*(```|~~~)/ { f = !f; next } !f { print }'
+  awk '
+    {
+      line = $0; ind = 0
+      if (match(line, /^ */)) ind = RLENGTH
+      tok = ""; ch = ""; n = 0; rest = ""
+      if (ind <= 3) {
+        t = substr(line, ind + 1)
+        if (match(t, /^```+/) || match(t, /^~~~+/)) { tok = substr(t, 1, RLENGTH); ch = substr(tok, 1, 1); n = RLENGTH; rest = substr(t, RLENGTH + 1) }
+      }
+      if (!f) {
+        if (n > 0) { f = 1; fch = ch; fn = n; next }
+        print
+      } else if (n > 0 && ch == fch && n >= fn && rest ~ /^[ \t\r]*$/) {
+        f = 0
+      }
+    }'
 }
 
 # _trusted_verdict_core <issue-number> <repo>
 #   THE chokepoint: the only place a comment read becomes trusted text. One
-#   `gh issue view --json comments` read (all pages), every distinct author resolved
+#   `gh issue view --json comments` read (gh returns every page of comments: measured
+#   220 of 220 on #9777, gh 2.102.0, 2026-10-13; no suite pins it), every distinct author resolved
 #   through `_trusted_verdict_permission` BEFORE anything is emitted, then one JSON
 #   object `{t, b}` per trusted comment, API order: `t` = `createdAt` verbatim (empty
 #   when absent), `b` = the body with fenced blocks stripped.
@@ -144,7 +169,7 @@ _trusted_verdict_strip_fences() {
 #   The core does NOT validate `t`: the bodies view does not use it. Call it inside
 #   `$(...)` — the memo lives for the one call, which is all a single read needs.
 _trusted_verdict_core() {
-  local issue="$1" repo="$2" raw logins login perm out=""
+  local issue="$1" repo="$2" raw logins login perm rec out=""
   # `.author.login`, `.body` and `.createdAt`, as one base64 JSON array per comment. A
   # comment with no author cannot be attributed and is dropped by the first `select`, so
   # it can never carry a verdict. The second `select` drops a login that is not a
@@ -180,7 +205,7 @@ _trusted_verdict_core() {
     author="$(printf '%s' "$row" | jq -r '.[0]')"
     body="$(printf '%s' "$row" | jq -r '.[1]')"
     created="$(printf '%s' "$row" | jq -r '.[2]')"
-    perm="${_TRUSTED_VERDICT_PERM[$author]:-}"
+    perm="${_TRUSTED_VERDICT_PERM[${author,,}]:-}"
     # An ABSENT memo entry is not a negative answer. Loop 1 above resolves exactly
     # this author set and returns 2 on any failure, so this is unreachable today —
     # which is precisely why it is worth pinning: `*) continue ;;` alone silently
@@ -195,7 +220,15 @@ _trusted_verdict_core() {
     fi
     _trusted_verdict_is_trusted_perm "$perm" || continue
     body="$(printf '%s\n' "$body" | _trusted_verdict_strip_fences)"
-    out="${out}$(jq -nc --arg t "$created" --arg b "$body" '{t: $t, b: $b}')"$'\n'
+    # Every stage AFTER the trust decision is all-or-nothing. The body goes to jq on STDIN,
+    # never as an `--arg` (one argv string is capped near 128 KiB: a longer trusted body
+    # failed `Argument list too long`, the failure went unchecked and the comment vanished
+    # with rc 0, the same silent drop this lib exists to remove), and the status is checked.
+    if ! rec="$(printf '%s' "$body" | jq -Rsc --arg t "$created" '{t: $t, b: .}')" || [[ -z "$rec" ]]; then
+      echo "trusted-verdict: could not build the record for a trusted comment by '${author}' on #${issue}. TRANSIENT, not a dropped comment." >&2
+      return 2
+    fi
+    out="${out}${rec}"$'\n'
   done <<<"$raw"
 
   printf '%s' "$out"
