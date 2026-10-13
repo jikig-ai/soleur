@@ -17,7 +17,8 @@
 #      gated jobs (test-webplat, test-scripts, test-scripts-heavy, shard-totality-mutations) were all skipped (the jobs
 #      API, never an annotation: the annotation could fail to emit and would blind the probe). A light run observed with
 #      no `S3-ACTIVATED` on record, created before the first one, or with no trusted `S3-CONFIRMED` comment posted
-#      BEFORE that activation, is a FAIL. Only comments by an OWNER, MEMBER or COLLABORATOR count.
+#      BEFORE that activation, is a FAIL. Only comments by an author whose repository permission is admin, maintain or
+#      write count (see ACTIVATION below).
 #  (d) LIVE INVARIANTS, every sweep: every observed light run has a FAILING `test` job (Option R: a draft aggregator
 #      is red by design), and no light run was created while its PR was a non-draft (the PR's state at the run's
 #      creation is rebuilt from its ReadyForReview and ConvertToDraft events, the run joined by head SHA and head
@@ -33,13 +34,17 @@
 #      sweeper closes the tracker itself on exit 0, so a pass without the census would close the stage without its
 #      evidence). 30 days after activation with fewer than 20 distinct light pushes is a FAIL: the lever is not lighting.
 # ACTIVATION is read from the tracker, not from the repository variable: the sweeper's GITHUB_TOKEN cannot read Actions
-# variables (the S2 probe, ci-push-dedupe-soak-9512.sh, documents the same). The activating agent posts, as plain lines
-# under the operator's own identity (a bot-posted marker has no OWNER/MEMBER/COLLABORATOR association and is ignored):
+# variables (the S2 probe, ci-push-dedupe-soak-9512.sh, documents the same). Trust is resolved at read time through
+# scripts/lib/trusted-verdict.sh (the collaborator permission endpoint, one request per distinct author), NOT from the
+# comment's author_association: that field is computed against the READING token's visibility, so under the sweeper's
+# GITHUB_TOKEN an org member whose membership is private reads as CONTRIBUTOR and their marker would be dropped (#6617,
+# #8389). Fenced code blocks are stripped, so a marker quoted in a fence never counts. The activating agent posts, as plain
+# lines under the operator's own identity (a bot-posted marker has no permission on the repository and is ignored):
 #   S3-CONFIRMED: <https://github.com/... comment url | "quoted operator statement">     BEFORE setting the variable
 #   S3-ACTIVATED: <UTC ISO time, the variable's updated_at>                              after setting it
 #   S3-DEACTIVATED: <UTC ISO time>                                                       after deleting it (stop rule)
 #   S3-EXIT-CENSUS: https://github.com/...                                               the exit census comment
-# The marker's own timestamp orders ACTIVATED against DEACTIVATED; the comment's created_at orders CONFIRMED against
+# The marker's own timestamp orders ACTIVATED against DEACTIVATED; the comment's createdAt orders CONFIRMED against
 # ACTIVATED. A light run created after a recorded deactivation is a FAIL (the variable removal did not take effect).
 #
 # SAMPLE (bounds API use, the sweeper token allows ~1000 requests/hour/repo shared by every probe): the newest MAX_RUNS
@@ -56,7 +61,7 @@
 #               or that ran on a non-draft PR, a merge_group entry behind a light head, the dark deadline, or a soak
 #               that never lit)
 #   2 = NOT YET (not merged, not activated, deactivated, too few days or light pushes, or the exit census is missing)
-#   3 = CANNOT ESTABLISH (gh/jq/timeout/GH_TOKEN/resolver missing, or a GitHub API read failed: the sweeper retries)
+#   3 = CANNOT ESTABLISH (gh/jq/timeout/GH_TOKEN/resolver missing, or a GitHub API read failed, including a permission lookup: the sweeper retries)
 #   78 = refused to run under xtrace while GH_TOKEN is set (#7797)
 #
 # RETIREMENT: when #9728's tracker closes, delete this file, its .test.sh, the run_suite line in scripts/test-all.sh,
@@ -89,11 +94,13 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # test seam (the sweeper runs this under env -i, so it is inert in production)
 VERDICT_CMD="${CI_HEAD_VERDICT_BIN:-$HERE/../../plugins/soleur/scripts/ci-head-verdict.sh}"
 
-for need in gh jq timeout; do
+for need in gh jq timeout base64 awk mktemp sort; do
   command -v "$need" >/dev/null 2>&1 || { echo "CANNOT ESTABLISH: $need is not installed"; exit 3; }
 done
 [ -n "${GH_TOKEN:-}" ] || { echo "CANNOT ESTABLISH: GH_TOKEN is not set (the tracker directive must declare secrets=GH_TOKEN)"; exit 3; }
 [ -r "$VERDICT_CMD" ] || { echo "CANNOT ESTABLISH: the verdict resolver $VERDICT_CMD is not readable"; exit 3; }
+# shellcheck source=../lib/trusted-verdict.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/trusted-verdict.sh"
 
 NOW="${SOAK_NOW_EPOCH:-$(date -u +%s)}"
 [[ "$NOW" =~ ^[1-9][0-9]*$ ]] || { echo "CANNOT ESTABLISH: SOAK_NOW_EPOCH is not an epoch"; exit 3; }
@@ -107,18 +114,17 @@ merged_at="$(api "repos/$REPO/pulls/$S3_PR" --jq '.merged_at // empty')" || fail
 merged_epoch="$(date -u -d "$merged_at" +%s 2>/dev/null)" || fail_api "merge time $merged_at"
 
 # --- the tracker: markers, trusted authors only (one JSON object per comment: its time and its body) --------------------------
-comments="$(api --paginate "repos/$REPO/issues/$TRACKER/comments?per_page=100" \
-            --jq '.[] | select((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")) | {t: (.created_at // ""), b: (.body // "")} | tojson')" \
-  || fail_api "tracker $TRACKER comments"
-trusted="$(jq -r '.b' <<<"$comments" 2>/dev/null | tr -d '\r')"
+comments="$(trusted_verdict_comments "$TRACKER" "$REPO")" || fail_api "tracker $TRACKER comments (trusted-author resolution)"
+trusted="$(jq -r '.b' <<<"$comments" 2>/dev/null | tr -d '\r')" || fail_api "tracker $TRACKER comments (projection)"
 TS_RE='[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z'
 first_on="$(printf '%s\n' "$trusted" | grep -oE "^S3-ACTIVATED: $TS_RE\$" | sed 's/^S3-ACTIVATED: //' | sort | head -n 1)"
 last_on="$(printf '%s\n' "$trusted" | grep -oE "^S3-ACTIVATED: $TS_RE\$" | sed 's/^S3-ACTIVATED: //' | sort | tail -n 1)"
 last_off="$(printf '%s\n' "$trusted" | grep -oE "^S3-DEACTIVATED: $TS_RE\$" | sed 's/^S3-DEACTIVATED: //' | sort | tail -n 1)"
 census_marked="$(printf '%s\n' "$trusted" | grep -cE '^S3-EXIT-CENSUS: https://github\.com/[^ ]+$')"
-# the earliest trusted S3-CONFIRMED comment (a github URL, or a quoted statement of at least 3 characters), by created_at
+# the earliest trusted S3-CONFIRMED comment (a github URL, or a quoted statement of at least 3 characters), by createdAt
 CONF_RE='^S3-CONFIRMED: (https://github\.com/[^ ]+|"[^"]{3,}")$'
-conf_iso="$(jq -r --arg re "$CONF_RE" 'select(.b | split("\n") | map(rtrimstr("\r")) | any(test($re))) | .t' <<<"$comments" 2>/dev/null | sort | head -n 1)"
+conf_iso="$(jq -r --arg re "$CONF_RE" 'select(.b | split("\n") | map(rtrimstr("\r")) | any(test($re))) | .t' <<<"$comments" 2>/dev/null | sort | head -n 1)" \
+  || fail_api "tracker $TRACKER comments (confirmation projection)"
 conf_epoch=""
 [ -n "$conf_iso" ] && { conf_epoch="$(date -u -d "$conf_iso" +%s 2>/dev/null)" || fail_api "confirmation time $conf_iso"; }
 has_on=0; active=0; deactivated=0; first_on_epoch=0; act_epoch=0; off_epoch=0
@@ -310,7 +316,7 @@ if (( light_pushes < MIN_PUSHES || age_days < MIN_DAYS )); then
   exit 2
 fi
 if (( census_marked == 0 )); then
-  echo "NOT YET: criteria hold ($light_pushes distinct light pushes, $age_days days, no stall, no light queue entry) but tracker #$TRACKER has no 'S3-EXIT-CENSUS: https://github.com/...' comment from an owner, member or collaborator; attach the exit census (before/after draft CI minutes per push)"
+  echo "NOT YET: criteria hold ($light_pushes distinct light pushes, $age_days days, no stall, no light queue entry) but tracker #$TRACKER has no 'S3-EXIT-CENSUS: https://github.com/...' comment from a repository admin, maintainer or writer; attach the exit census (before/after draft CI minutes per push)"
   exit 2
 fi
 echo "PASS: $light_pushes distinct draft push(es) observed light over $age_days days, every light run red, no stalled PR, no merge_group entry behind a light head, exit census attached on #$TRACKER"

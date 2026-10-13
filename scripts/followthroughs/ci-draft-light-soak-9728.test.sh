@@ -127,11 +127,6 @@ case "$ep" in
       403) echo 'gh: Resource not accessible by integration (HTTP 403)' >&2; exit 1 ;;
       *)   printf '{"permission":"%s"}\n' "$p" | jq -r "$jqx"; exit 0 ;;
     esac ;;
-  repos/*/issues/9728/comments\?per_page=100)   # the LEGACY association-based read (removed with the probe migration)
-    [ -f "$FX/fail-comments" ] && { echo "gh: HTTP 403 Resource not accessible" >&2; exit 1; }
-    (( paginate )) || refuse "$ep"   # past 100 comments only a paginated read sees a later marker
-    for f in "$FX/comments-1.json" "$FX/comments-2.json"; do [ -f "$f" ] && { if [ -n "$jqx" ]; then jq -r "$jqx" "$f"; else cat "$f"; fi; }; done
-    exit 0 ;;
   repos/*/actions/workflows/ci.yml/runs\?event=pull_request\&status=completed*) [ -f "$FX/fail-runs" ] && { echo "gh: HTTP 500" >&2; exit 1; }; emit "$FX/runs.json" ;;
   repos/*/actions/workflows/ci.yml/runs\?event=pull_request\&head_sha=*) [ -f "$FX/fail-headrun" ] && { echo "gh: HTTP 500" >&2; exit 1; }
     s="${ep#*head_sha=}"; emit "$FX/headrun-${s%%&*}.json" ;;
@@ -161,14 +156,18 @@ chmod +x "$TMP/bin/gh"
 #   mgnonqueue: a merge_group run on a non-queue branch   mgn=K  K merge_group runs (default 6)   mgbadat=I  mgbad at queue position I
 #   conf2: a second, LATER S3-CONFIRMED   between: a light run between two activations (with twoact)
 #   failX: the X read fails (pr|open|comments|runs|jobs|gql|mg|mgpr|headrun)
-#   privact: S3-CONFIRMED and S3-ACTIVATED are by `priv-op`, whose association reads CONTRIBUTOR (a private org member under the
-#   sweeper's token) but whose repository permission is admin
+#   EVERY comment carries an `authorAssociation` DECOY and a stable author login that maps to a row of perms.tsv (the fake
+#   permission endpoint): owner-op admin, member-op write, collab-op write, contrib-op read, none-op 404. The DEFAULT activation
+#   comment is by `priv-op`, whose association reads CONTRIBUTOR (a private org member under the sweeper's token) but whose
+#   repository permission is admin, so an association-consulting probe fails ~40 rows, not two.
+#   privact: ALSO the S3-CONFIRMED comment (and a `late` one) is by priv-op   assocowner: the activation's association is OWNER but its
+#   author's permission is `read` (the decoy must be ignored)   permfail: `priv-op`'s permission read is a 403
 build_fx() {
   local fx="$1" nl="$2" nf="$3"; shift 3
   assert_fixture_dir "$fx"; rm -rf "$fx"; mkdir -p "$fx"
   local actdays=8 noact=0 untrustedact=0 deact=0 page2=0 twoact=0 crlf=0 badts=0 midact=0 confirmed=url marker=yes
   local merged="$MERGED_EPOCH" unmerged=0 earlylight=0 rerun=0 extra="" oldlast="" pad=0 stalled="" vmode="" noopen=0
-  local mgbad=0 mgolder=0 mgnonqueue=0 mgn=6 mgbadat=3 conf2=0 between=0 privact=0 kv
+  local mgbad=0 mgolder=0 mgnonqueue=0 mgn=6 mgbadat=3 conf2=0 between=0 privact=0 assocowner=0 permfail=0 kv
   for kv in "$@"; do
     case "$kv" in
       actdays=*) actdays="${kv#*=}" ;; noact) noact=1 ;; untrustedact) untrustedact=1 ;; deact) deact=1 ;; page2) page2=1 ;;
@@ -177,7 +176,7 @@ build_fx() {
       rerun=*) rerun="${kv#*=}" ;; extra=*) extra="${kv#*=}" ;; oldlast=*) oldlast="${kv#*=}" ;; pad=*) pad="${kv#*=}" ;;
       stalled=*) stalled="${kv#*=}" ;; vfail|vgarbage|vunknown|vmismatch|vnoise0) vmode="$kv" ;; noopen) noopen=1 ;;
       conf2) conf2=1 ;; between) between=1 ;; mgbad) mgbad=1 ;; mgolder) mgolder=1 ;; mgnonqueue) mgnonqueue=1 ;; mgn=*) mgn="${kv#*=}" ;; mgbadat=*) mgbadat="${kv#*=}" ;;
-      privact) privact=1 ;;
+      privact) privact=1 ;; assocowner) assocowner=1 ;; permfail) permfail=1 ;;
       fail*) : > "$fx/fail-${kv#fail}" ;;
     esac
   done
@@ -296,11 +295,11 @@ build_fx() {
   addc cm OWNER $((act_epoch - 90000)) "noted"
   local ts_on; isoof "$act_epoch" ts_on
   if (( ! noact )); then
-    local assoc=OWNER; (( untrustedact )) && assoc=NONE
     if (( badts )); then addc cm OWNER "$act_epoch" "S3-ACTIVATED: ${ts_on%Z}"
     elif (( midact )); then addc cm OWNER "$act_epoch" "see S3-ACTIVATED: $ts_on"$'\n'"S3-ACTIVATED: $ts_on and then some"
-    elif (( privact )); then addc cm CONTRIBUTOR "$act_epoch" "activated${cr}"$'\n'"S3-ACTIVATED: $ts_on${cr}" priv-op
-    else addc cm "$assoc" "$act_epoch" "activated${cr}"$'\n'"S3-ACTIVATED: $ts_on${cr}"; fi
+    elif (( assocowner )); then addc cm OWNER "$act_epoch" "activated${cr}"$'\n'"S3-ACTIVATED: $ts_on${cr}" ownread-op
+    elif (( untrustedact )); then addc cm NONE "$act_epoch" "activated${cr}"$'\n'"S3-ACTIVATED: $ts_on${cr}"
+    else addc cm CONTRIBUTOR "$act_epoch" "activated${cr}"$'\n'"S3-ACTIVATED: $ts_on${cr}" priv-op; fi
     if (( twoact )); then local ts_old; isoof "$first_on_epoch" ts_old; addc cm OWNER "$first_on_epoch" "S3-ACTIVATED: $ts_old"; fi
   fi
   if (( deact )); then
@@ -312,7 +311,8 @@ build_fx() {
     url)         if (( privact )); then addc cm CONTRIBUTOR "$conf_at" "CTO review, as posted:${cr}"$'\n'"S3-CONFIRMED: https://github.com/jikig-ai/soleur/pull/9876#issuecomment-1${cr}" priv-op
                  else addc cm MEMBER "$conf_at" "CTO review, as posted:${cr}"$'\n'"S3-CONFIRMED: https://github.com/jikig-ai/soleur/pull/9876#issuecomment-1${cr}"; fi ;;
     quote)       addc cm OWNER "$conf_at" "S3-CONFIRMED: \"activation proceeds without the CTO comment\"" ;;
-    late)        addc cm OWNER $((first_on_epoch + 3600)) "S3-CONFIRMED: https://github.com/jikig-ai/soleur/pull/9876#issuecomment-1" ;;
+    late)        if (( privact )); then addc cm CONTRIBUTOR $((first_on_epoch + 3600)) "S3-CONFIRMED: https://github.com/jikig-ai/soleur/pull/9876#issuecomment-1" priv-op
+                 else addc cm OWNER $((first_on_epoch + 3600)) "S3-CONFIRMED: https://github.com/jikig-ai/soleur/pull/9876#issuecomment-1"; fi ;;
     untrusted)   addc cm NONE "$conf_at" "S3-CONFIRMED: https://github.com/jikig-ai/soleur/pull/9876#issuecomment-1" ;;
     placeholder) addc cm OWNER "$conf_at" "S3-CONFIRMED: <url or quoted statement>" ;;
     bare)        addc cm OWNER "$conf_at" "S3-CONFIRMED: ok" ;;
@@ -330,15 +330,16 @@ build_fx() {
     nonurl)      addc cm OWNER $((NOW_EPOCH - 3600)) "S3-EXIT-CENSUS: see-my-notes" ;;
     placeholder) addc cm OWNER $((NOW_EPOCH - 3600)) "S3-EXIT-CENSUS: <url>" ;;
   esac
-  printf '[%s]\n' "$(IFS=,; printf '%s' "${cm[*]}")" > "$fx/comments-1.json"
-  (( page2 )) && printf '[%s]\n' "$(IFS=,; printf '%s' "${cm2[*]}")" > "$fx/comments-2.json"
+  printf '[%s]\n' "$(IFS=,; printf '%s' "${cm[*]}")" > "$fx/stage-1.json"
+  (( page2 )) && printf '[%s]\n' "$(IFS=,; printf '%s' "${cm2[*]}")" > "$fx/stage-2.json"
   # the `gh issue view --json comments` shape (what the trusted-author lib reads): every comment gets a stable login that
   # maps to a permission row, while its association stays on the comment as a DECOY the probe must ignore
-  jq -n --argjson a "$(cat "$fx/comments-1.json")" --argjson b "$( [ -f "$fx/comments-2.json" ] && cat "$fx/comments-2.json" || echo '[]')" '
+  jq -n --argjson a "$(cat "$fx/stage-1.json")" --argjson b "$( [ -f "$fx/stage-2.json" ] && cat "$fx/stage-2.json" || echo '[]')" '
     {OWNER:"owner-op",MEMBER:"member-op",COLLABORATOR:"collab-op",CONTRIBUTOR:"contrib-op",NONE:"none-op"} as $m
     | {comments: ($a + $b | map({author:{login:(.login // $m[.author_association])},
         authorAssociation:.author_association, createdAt:.created_at, body:.body}))}' > "$fx/gql-comments-9728.json"
-  printf 'owner-op\tadmin\nmember-op\twrite\ncollab-op\twrite\ncontrib-op\tread\nnone-op\t404\npriv-op\tadmin\n' > "$fx/perms.tsv"
+  local pp=admin; (( permfail )) && pp=403
+  printf 'owner-op\tadmin\nmember-op\twrite\ncollab-op\twrite\ncontrib-op\tread\nnone-op\t404\npriv-op\t%s\nownread-op\tread\n' "$pp" > "$fx/perms.tsv"
   return 0
 }
 
@@ -358,10 +359,38 @@ expect() {
 LAST_OUT=""
 expect_out() { LAST_OUT="$(env FX="$1" TPL="$TMP/tpl" PATH="$TMP/bin:$PATH" GH_TOKEN=x SOAK_NOW_EPOCH="$NOW_EPOCH" CI_HEAD_VERDICT_BIN="$TMP/verdict-stub.sh" bash "$PROBE_UNDER" 2>&1)"; note_crash "$LAST_OUT"; }
 
+# mk_tree <name> [probe source] [nolink|stublib|stubconf] -> prints the path of a copy of the probe inside a MIRRORED tree: the probe sources
+# the trust lib by a relative path, so a lone copy in $TMP would resolve nothing, the helper call would return 127, `|| fail_api` would
+# turn EVERY mutant "caught" and the verdict would prove nothing. scripts/lib is a symlink to the real lib (probe-only mutants; lib
+# mutants live in the lib suite); `nolink` leaves it out (a control); `stublib` puts a stub lib whose helper prints non-JSON and
+# `stubconf` one whose helper prints JSON whose `.b` is not a string (parses for the body projection, not for the confirmation one).
+mk_tree() {
+  local d="$TMP/tree-$1"; rm -rf "$d"; mkdir -p "$d/scripts/followthroughs"
+  cp "${2:-$PROBE}" "$d/scripts/followthroughs/ci-draft-light-soak-9728.sh"
+  case "${3:-}" in
+    nolink) : ;;
+    stublib) mkdir -p "$d/scripts/lib"; printf 'trusted_verdict_comments() { printf "not json at all\n"; return 0; }\n' > "$d/scripts/lib/trusted-verdict.sh" ;;
+    stubconf) mkdir -p "$d/scripts/lib"; printf 'trusted_verdict_comments() { printf "{\\"t\\":\\"2026-10-01T00:00:00Z\\",\\"b\\":5}\\n"; return 0; }\n' > "$d/scripts/lib/trusted-verdict.sh" ;;
+    *) ln -s "$REPO_ROOT/scripts/lib" "$d/scripts/lib" ;;
+  esac
+  printf '%s\n' "$d/scripts/followthroughs/ci-draft-light-soak-9728.sh"
+}
+
 # A lean PASS fixture is 20 light pushes + 6 full runs, active 8 days, confirmed before the activation, census attached.
 # --- baseline and the info line ------------------------------------------------------------------------------------------
 r_pass()      { build_fx "$TMP/c1" 20 6;                                   expect "PASS: 20 distinct draft pushes light over 8 days, confirmed, census attached, a draft PR with a stalled stub line ignored" 0 "PASS" "$TMP/c1"; }
 r_privmember(){ build_fx "$TMP/c1p" 20 6 privact;                         expect "PASS: S3-CONFIRMED then S3-ACTIVATED by a private-org-member admin (association CONTRIBUTOR) are read under the permission lookup" 0 "PASS" "$TMP/c1p"; }
+r_late_conf_private(){ build_fx "$TMP/c1q" 20 6 confirmed=late privact;      expect "FAIL: S3-CONFIRMED by a private-org-member admin AFTER the activation still fails (ordering uses the preserved createdAt)" 1 "after the activation" "$TMP/c1q"; }
+r_assocowner(){ build_fx "$TMP/c1r" 3 6 assocowner;                          expect "FAIL: light runs while the only activation is by an OWNER-association author whose permission is read (the association is a decoy)" 1 "no activation on record" "$TMP/c1r"; }
+r_permfail()  { build_fx "$TMP/c1s" 20 6 permfail;                           expect "CANNOT ESTABLISH: a 403 on the activation author's permission read is never a pass and never 'untrusted'" 3 "CANNOT ESTABLISH" "$TMP/c1s"; }
+r_badjq()     { build_fx "$TMP/c1t" 20 6
+  local keep="$PROBE_UNDER" t; t="$(mk_tree badjq "$PROBE_UNDER" stublib)"; PROBE_UNDER="$t"
+  expect "CANNOT ESTABLISH: helper output the projection cannot parse is never read as 'no marker'" 3 "(projection)" "$TMP/c1t"
+  PROBE_UNDER="$keep"; }
+r_badconf()   { build_fx "$TMP/c1u" 20 6
+  local keep="$PROBE_UNDER" t; t="$(mk_tree badconf "$PROBE_UNDER" stubconf)"; PROBE_UNDER="$t"
+  expect "CANNOT ESTABLISH: a confirmation projection that fails is never read as 'no S3-CONFIRMED'" 3 "(confirmation projection)" "$TMP/c1u"
+  PROBE_UNDER="$keep"; }
 r_info()      { build_fx "$TMP/c2" 20 6;                                   expect "the info line reports the counts" 0 "light_pushes=20 " "$TMP/c2"; }
 # --- (a) STALL --------------------------------------------------------------------------------------------------------------
 r_stall()     { build_fx "$TMP/a1" 20 6 stalled=707;                       expect "FAIL: an open ready PR whose verdict is stalled is named, with the resolver's 120-minute window" 1 "no deciding CI run 120 minutes after the ready event" "$TMP/a1"; }
@@ -465,8 +494,12 @@ r_shapes() {
      && grep -cF "event=merge_group&status=completed&per_page=100&created=%3E$ai" "$TMP/z2/requests.log" >/dev/null \
      && grep -cF '/jobs?per_page=100&filter=latest' "$TMP/z2/requests.log" >/dev/null \
      && grep -cF 'event=pull_request&head_sha=H801&per_page=1' "$TMP/z2/requests.log" >/dev/null \
-     && [ "$(grep -c '^graphql ' "$TMP/z2/requests.log")" -eq 19 ]; then
-    pass "the queries carry their documented parameters (merge window, activation-anchored merge_group, jobs filter, head_sha lookup, one join per distinct head)"
+     && [ "$(grep -c '^graphql ' "$TMP/z2/requests.log")" -eq 19 ] \
+     && [ "$(grep -cxF 'issue view 9728 --repo jikig-ai/soleur --json comments' "$TMP/z2/requests.log")" -eq 1 ] \
+     && [ "$(grep -cE '^repos/jikig-ai/soleur/collaborators/[a-z-]+/permission$' "$TMP/z2/requests.log")" -eq 3 ] \
+     && [ "$(grep -E '^repos/jikig-ai/soleur/collaborators/[a-z-]+/permission$' "$TMP/z2/requests.log" | sort -u | wc -l)" -eq 3 ] \
+     && ! grep -q 'issues/9728/comments' "$TMP/z2/requests.log"; then
+    pass "the queries carry their documented parameters (merge window, activation-anchored merge_group, jobs filter, head_sha lookup, one join per distinct head, ONE tracker issue view and one permission request per distinct author)"
   else fail "the queries lost their parameters: $(head -8 "$TMP/z2/requests.log" | tr '\n' '|') graphql=$(grep -c '^graphql ' "$TMP/z2/requests.log")"; fi
 }
 
@@ -478,7 +511,8 @@ ALL_ROWS=(r_pass r_info r_stall r_stall2 r_stall_dark r_stall_prec r_vfail r_vga
           r_inv2_multipr r_inv2_trunc r_gqlfail r_mgbad r_mgolder r_mgnonqueue r_mgfail r_mgprfail r_mgrunfail r_mgcap r_mg_dark
           r_light_after_off r_six r_seven r_nineteen r_rerun r_stuck29 r_stuck30 r_nomarker r_untrusted_marker r_nonurl_marker
           r_placeholder_marker r_mid_marker r_lookalike r_foreign r_collab r_contrib r_idle_cap r_max_cap
-          r_prfail r_commentsfail r_runsfail r_jobsfail r_conf_two r_between r_shapes r_privmember)
+          r_prfail r_commentsfail r_runsfail r_jobsfail r_conf_two r_between r_shapes r_privmember
+          r_late_conf_private r_assocowner r_permfail r_badjq r_badconf)
 run_rows() { local r; for r in "$@"; do "$r"; done; }
 run_rows "${ALL_ROWS[@]}"
 
@@ -511,7 +545,7 @@ PY
   cmp -s "$f" "$PROBE" && { MUT_LANDED=0; return 0; }
   chmod +x "$f"
   bash -n "$f" 2>/dev/null || MUT_CRASHED=1
-  PROBE_UNDER="$f"; core_rows_quiet "$@"; PROBE_UNDER="$PROBE"
+  PROBE_UNDER="$(mk_tree "m-$name" "$f")"; core_rows_quiet "$@"; PROBE_UNDER="$PROBE"
   [ -f "$TMP/crashed" ] && MUT_CRASHED=1
   return 0
 }
@@ -546,9 +580,15 @@ mutant m-conf-order 'if [ "$conf_epoch" -gt "$first_on_epoch" ]; then' 'if false
 mutant m-conf-earliest '.t'"'"' <<<"$comments" 2>/dev/null | sort | head -n 1)"' '.t'"'"' <<<"$comments" 2>/dev/null | sort | tail -n 1)"' r_conf_two
 mutant m-conf-anchor "CONF_RE='^S3-CONFIRMED: " "CONF_RE='S3-CONFIRMED: " r_conf_mid
 mutant m-conf-any '(https://github\.com/[^ ]+|"[^"]{3,}")$'"'" '.+$'"'" r_conf_bare r_conf_placeholder
-mutant m-trusted 'IN("OWNER", "MEMBER", "COLLABORATOR")' 'IN("OWNER", "MEMBER", "COLLABORATOR", "NONE")' r_untrusted_act r_conf_untrusted r_untrusted_marker
-mutant m-no-collab 'IN("OWNER", "MEMBER", "COLLABORATOR")' 'IN("OWNER", "MEMBER")' r_collab
-mutant m-contrib 'IN("OWNER", "MEMBER", "COLLABORATOR")' 'IN("OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR")' r_contrib
+mutant m-trusted 'comments="$(trusted_verdict_comments "$TRACKER" "$REPO")" || fail_api "tracker $TRACKER comments (trusted-author resolution)"' 'comments="$(trusted_verdict_comments "$TRACKER" "$REPO")"' r_commentsfail r_permfail
+# the trust-source mutants: the helper call is replaced by a raw `issue view` read through the same fake arm
+_HELPER='comments="$(trusted_verdict_comments "$TRACKER" "$REPO")" || fail_api "tracker $TRACKER comments (trusted-author resolution)"'
+mutant m-legacy-assoc "$_HELPER" 'comments="$(gh issue view "$TRACKER" --repo "$REPO" --json comments --jq '"'"'.comments[] | select(.authorAssociation | IN("OWNER", "MEMBER", "COLLABORATOR")) | {t: .createdAt, b: .body} | tojson'"'"')" || fail_api "tracker $TRACKER comments"' r_privmember r_assocowner
+mutant m-project-raw "$_HELPER" 'comments="$(gh issue view "$TRACKER" --repo "$REPO" --json comments --jq '"'"'.comments[] | {t: .createdAt, b: .body} | tojson'"'"')" || fail_api "tracker $TRACKER comments"' r_assocowner r_untrusted_act r_light_untrusted r_conf_untrusted r_untrusted_marker r_contrib
+mutant m-empty-helper "$_HELPER" 'comments=""' r_pass r_privmember r_late_conf_private
+mutant m-no-projection-check ' || fail_api "tracker $TRACKER comments (projection)"' '' r_badjq
+mutant m-no-conf-check ' \
+  || fail_api "tracker $TRACKER comments (confirmation projection)"' '' r_badconf
 mutant m-early 'if (( ! has_on )) || [ "$created" -lt "$first_on_epoch" ]; then' 'if false; then' r_light_early
 mutant m-late 'elif (( deactivated )) && [ "$created" -gt "$off_epoch" ]; then' 'elif false; then' r_light_after_off
 mutant m-first-on 'S3-ACTIVATED: //'"'"' | sort | head -n 1)"' 'S3-ACTIVATED: //'"'"' | sort | tail -n 1)"' r_between
@@ -609,22 +649,30 @@ else fail "harness control: the crashing mutant was not flagged (landed=$MUT_LAN
 mutant_probe c-crash-rt 'MAX_RUNS=100' 'MAX_RUNS=100; no_such_command_zz' r_pass
 if [ "$MUT_LANDED" -eq 1 ] && [ "$MUT_CRASHED" -eq 1 ] && bash -n "$TMP/mut-c-crash-rt.sh" 2>/dev/null; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: a mutant that parses but fails at runtime is flagged as crashed"
 else fail "harness control: the runtime-crashing mutant was not flagged (landed=$MUT_LANDED crashed=$MUT_CRASHED)"; fi
-if [ "$CTRL_OK" -ne 3 ]; then fail "harness controls: $CTRL_OK of 3 held"; fi
+# the mirrored tree itself: an IDENTITY copy must show zero reds over the full row set (else every mutant verdict is polluted), and a copy
+# whose lib symlink is REMOVED must red at least one row (else the tree is not what resolves the lib)
+PROBE_UNDER="$(mk_tree identity "$PROBE")"; core_rows_quiet "${ALL_ROWS[@]}"; PROBE_UNDER="$PROBE"
+if [ "$MUT_REDS" -eq 0 ]; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: an identity copy in the mirrored tree turns no row red"
+else fail "harness control: the identity copy turned $MUT_REDS row(s) red (the tree is broken)"; fi
+PROBE_UNDER="$(mk_tree nolink "$PROBE" nolink)"; core_rows_quiet "${ALL_ROWS[@]}"; PROBE_UNDER="$PROBE"
+if [ "$MUT_REDS" -gt 0 ]; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: a copy without the lib symlink turns $MUT_REDS row(s) red (the tree resolves the lib)"
+else fail "harness control: a copy without the lib symlink turned no row red"; fi
+if [ "$CTRL_OK" -ne 5 ]; then fail "harness controls: $CTRL_OK of 5 held"; fi
 # the probe quotes the resolver's stall window: the two must not drift
 _rs="$(sed -n 's/^STALL_MINUTES=\([0-9]*\).*/\1/p' "$REPO_ROOT/plugins/soleur/scripts/ci-head-verdict.sh" | head -n 1)"
 _ps="$(sed -n 's/^STALL_MIN=\([0-9]*\).*/\1/p' "$PROBE" | head -n 1)"
 if [ -n "$_rs" ] && [ "$_rs" = "$_ps" ]; then pass "STALL_MIN in the probe ($_ps) equals STALL_MINUTES in the resolver ($_rs)"; else fail "STALL_MIN drift: probe '$_ps', resolver '$_rs'"; fi
-if [ "$MUT_RUN" -eq "$MUT_CAUGHT" ] && [ "$MUT_RUN" -ge 45 ]; then pass "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught"; else fail "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught (every mutant must be caught; floor 45)"; fi
+if [ "$MUT_RUN" -eq "$MUT_CAUGHT" ] && [ "$MUT_RUN" -ge 67 ]; then pass "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught"; else fail "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught (every mutant must be caught; floor 67)"; fi
 
 # harness row: a probe that always exits 0 must be refused by the named rows (the rows can fail)
 printf '#!/usr/bin/env bash\necho PASS\nexit 0\n' > "$TMP/always-pass.sh"; chmod +x "$TMP/always-pass.sh"
 PROBE_UNDER="$TMP/always-pass.sh"; core_rows_quiet "${ALL_ROWS[@]}"; PROBE_UNDER="$PROBE"
-if [ "$MUT_REDS" -ge 60 ]; then pass "HARNESS: an always-PASS probe turns $MUT_REDS rows red"; else fail "HARNESS: an always-PASS probe turned only $MUT_REDS rows red"; fi
+if [ "$MUT_REDS" -ge 76 ]; then pass "HARNESS: an always-PASS probe turns $MUT_REDS rows red"; else fail "HARNESS: an always-PASS probe turned only $MUT_REDS rows red"; fi
 
 printf 'ci-draft-light-soak-9728: %d passed, %d failed, %d assertion(s) executed\n' "$passes" "$fails" "$asserted"
 # DELIBERATELY NOT ROUTED THROUGH fail(): compares against a literal and exits directly.
 _total=$((passes + fails))
-_FLOOR=162
+_FLOOR=173
 if [ "$_total" -lt "$_FLOOR" ]; then
   printf '[FATAL] assertion floor: executed %d < %d\n' "$_total" "$_FLOOR" >&2
   exit 1
