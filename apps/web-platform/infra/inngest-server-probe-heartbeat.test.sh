@@ -11,8 +11,8 @@
 # recorded DP-10/#6210 discipline, with its URL provisioned in Doppler and BOTH resources riding
 # the per-merge -target= allow-list in apply-web-platform-infra.yml (the #8754 git_data_prd
 # precedent — terraform-target-parity.test.ts requires it), plus an honest
-# heartbeat-manifest.ts row (feeder.kind = "cron" evidencing the #9703 verifier workflow, plus
-# arming_pending while the heartbeat is still paused).
+# heartbeat-manifest.ts row (feeder.kind = "cron" evidencing the #9703 verifier workflow, and NO
+# arming_pending: dropped after the 2026-10-12 arm read-back, #9703).
 #
 # Every grep is anchored on a syntactic construct, never a bare token that also appears in a
 # comment (cq-assert-anchor-not-bare-token), and resource assertions bind to the extracted
@@ -164,7 +164,7 @@ else
 fi
 
 # (h) The heartbeat-manifest row is honest: discovered ⊆ manifest (ADR-117 parity) with a
-#     declared FED state (the #9703 verifier workflow) + tracked, still-pending arming.
+#     declared FED state (the #9703 verifier workflow), armed 2026-10-12: no arming_pending.
 mf_window="$(grep -A 30 'name: "inngest_server_probe"' "$MANIFEST" | head -30)"
 if has "$mf_window" 'name:[[:space:]]*"inngest_server_probe"'; then
   ok "heartbeat-manifest.ts carries an inngest_server_probe row (discovered⊆manifest parity)"
@@ -178,10 +178,12 @@ if has "$mf_window" 'kind:[[:space:]]*"cron"' \
 else
   no "the row must declare feeder kind \"cron\" with evidence.file .github/workflows/scheduled-inngest-probe-heartbeat.yml and evidence.pattern \"bash scripts/inngest-probe-heartbeat-feeder.sh\""
 fi
-if has "$mf_window" 'arming_pending:[[:space:]]*\{[[:space:]]*tracking_issue:[[:space:]]*[0-9]+'; then
-  ok "arming_pending carries a positive tracking_issue (deferred arming is tracked, not silent)"
+mf_row="$(awk '/^  \{[[:space:]]*$/{buf="";inrow=1} inrow{buf=buf $0 "\n"} inrow&&/^  \},?[[:space:]]*$/{if(buf ~ /name:[[:space:]]*"inngest_server_probe"/) printf "%s",buf; inrow=0}' "$MANIFEST")"
+mf_row_code="$(grep -vE '^[[:space:]]*//' <<<"$mf_row")"
+if has "$mf_row_code" 'feeder:' && ! has "$mf_row_code" 'arming_pending'; then
+  ok "the inngest_server_probe row carries no arming_pending (armed 2026-10-12, #9703; re-adding it hides a re-pause from the reconcile)"
 else
-  no "the row must carry an arming_pending block with a positive tracking_issue (wg-when-deferring-a-capability)"
+  no "the inngest_server_probe row must exist and must not carry arming_pending in code"
 fi
 
 # Anti-vacuity: exact assertion count — deleting a block must not leave the suite green.

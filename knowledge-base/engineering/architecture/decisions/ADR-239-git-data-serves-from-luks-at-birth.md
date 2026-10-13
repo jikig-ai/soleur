@@ -444,3 +444,21 @@ assumption: the probe `if:` reads the unfreeze step's `gc_timer_failed` output a
 runner behaviour and is checked by the first real dispatch, not by any offline suite.
 
 Plan: `knowledge-base/project/plans/archive/20261009-234236-2026-10-09-fix-git-data-cutover-residual-state-matrix-gaps-plan.md`.
+
+## Amendment 2026-10-12 — plaintext-volume retention end re-opened (#6897)
+
+The 2026-10-09 amendment set 2026-10-22 as the target for destroying `hcloud_volume.git_data` and said that if the date will pass with the volume present, this ADR is re-opened with the ledger exception and the CLO before 2026-10-23. This amendment is that re-opening. **The 2026-10-22 target will be missed.** The residue on the volume is understood to include erased-user identifiers (the lock residue is unmeasured, below), so holding the volume past the target is a storage-limitation (Art. 5(1)(e)) overrun against our own stated date once the date passes, and this amendment records it as one rather than as a schedule change.
+
+**New date: 2026-11-12, at the latest.** The ledger row `hcloud_volume.git_data` is renewed to that date (tracking #6897). The date is bound to the flip chain, not to a calendar: a second slip past it re-opens this ADR again and goes back to the CLO. It is not rolled quietly. The CLO's final re-ruling is due 2026-10-24; this amendment is provisional until then. No published legal wording changes in this PR (the hold on privacy-policy and DPD wording stays).
+
+**State as measured (Hetzner API read-only and Better Stack, 2026-10-12; none of it read from a host):**
+
+- **Wipe** — not done. Volume 106867358 is attached to server 169724272 next to the LUKS volume 107102614. The wipe body was deleted in #8189 and does not exist on main.
+- **Rotate** — `git-data-host-rotate` run 38140050880 (2026-10-11) applied: per its apply log it destroyed the previous LUKS store volume (106867359) and server (169437185), re-created the LUKS passphrase resource, and created server 169724272 with LUKS volume 107102614. The job concluded `failure`: the post-apply both-volumes-preserved assert reported `hcloud_volume.git_data_luks shows 1 delete/forget action(s)` on the replace the rotate arm intends. The cutover flip gate requires that job to have succeeded, so it cannot be satisfied while the assert stands. The fix is tracked at #10137 (separate PR); no re-dispatch is part of this amendment.
+- **Flip** — not done. `git_data_store=disabled` on every web container sampled (latest 2026-10-12); #8209, #8609 and #8573 are open.
+- **Served-store purge, gc cursor, id-bearing `.<workspace_id>.init.lock` residue since 2026-09-14, Hetzner snapshot retention** — unmeasured. Nothing is claimed about their absence or about copies of the volume.
+- **Serving path** — web-1's `luks-monitor` reported `/mnt/data` as LUKS-backed (`mount_source=/dev/mapper/workspaces`, `workspace_count=9`) at 2026-10-12T12:28Z; with the flag disabled, workspaces are served from that volume and not from the git-data host. This says nothing about web-2.
+
+**Owner:** the operator, via #8211 and #6897. **Blocker chain:** the rotate-arm assert fix (#10137), then a fresh rotate dispatch that the operator authorises by naming the command, then #8209, #8609 and #8573, then a hash-bound wipe PR with its own rung-2 rehearsal, then the wipe itself, which the operator authorises by naming the command.
+
+Rule for the horizon: moving the ledger `expires_on` of `hcloud_volume.git_data` past 2026-11-12 requires a CLO re-ruling linked on #6897 first; a one-line date bump is not a renewal. This is a review-time rule: the lint treats `expires_on` as a clock only and does not enforce the cap.

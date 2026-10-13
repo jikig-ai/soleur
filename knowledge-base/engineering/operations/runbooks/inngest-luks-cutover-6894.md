@@ -252,9 +252,9 @@ drained tick double-fires the cron. That procedure's `routine_runs` check tells 
      header's RETIREMENT line lists what to delete.
    - A silent probe pipeline reads as healthy to the wrong-volume alert (`treat_as_zero`). The
      property probe reports that as "CANNOT ESTABLISH". The dead-probe heartbeat resource landed in
-     cde96fb5e2 (#8516, closed), but its feeder is not wired or armed (#9703, open), so a silent probe
-     still reads as healthy to the alert today. Do not retire the property probe before #9703 is armed
-     (§5b, "Records the convergence PR must carry").
+     cde96fb5e2 (#8516, closed); its feeder is wired and the heartbeat was armed on 2026-10-12 (#9703, open
+     for the cleanup stage), so a silent probe now pages. Do not retire the property probe before that
+     cleanup stage (§5b, "Records the convergence PR must carry").
    - **After a sanctioned `op=luks-rollback`**, see §5a.
    - **Superseded 2026-10-09 (#8285 PR B), appended rather than edited:** the backstop was destroyed (§5b), so the
      bullets above about #8285 describe the state before that. The probe stays until the dead-probe feeder (#9703)
@@ -345,9 +345,8 @@ Expect `404`. The same token form reads `GET /v1/servers/169426216` (`.server.vo
   `soleur-inngest/prd` is the only opener the host reads; an independent copy of the passphrase exists in Terraform state
   (ADR-142 addendum 2026-10-08; protection is described in §5c and ADR-282 and takes
   effect on the merge of PR #9925 and its apply).
-- **Do not delete `scripts/followthroughs/inngest-luks-property-8296.sh` until the dead-probe heartbeat feeder (#9703) is
-  armed.** That script is the only reporter that says "CANNOT ESTABLISH" for a silent probe pipeline; the wrong-volume
-  alert reads a silent probe as healthy until the feeder is wired. Its deletion sites are the probe, its test, the
+- **Do not delete `scripts/followthroughs/inngest-luks-property-8296.sh` until #9703's cleanup stage.** The dead-probe
+  heartbeat feeder is wired and armed (2026-10-12); until that stage, this script is the reporter that says "CANNOT ESTABLISH" for a silent probe pipeline. Its deletion sites are the probe, its test, the
   `run_suite` line in `scripts/test-all.sh`, two `*.tsv` rows, the `test-affected-kb-consumers.baseline.txt` rows and the
   5a pointer; the list is posted on #9703 when #8285 is closed.
 - The dead on-host `rollback)` arm in `inngest-luks-cutover.sh`, its FSM comments and fixtures, and the dead

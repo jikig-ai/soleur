@@ -1885,9 +1885,104 @@ run_mutation "MB-L10" "MB-L10" "$V_SID" "$WC_LEDGER"
 run_mutation "MB-L11" "MB-L11" "$V_DUP" "$LEDGER_DUP"
 
 # ---------------------------------------------------------------------------
+# Redis client dependency without a redis.* ledger row (ADR-068 Phase 4a store):
+# the session Redis has no *.tf anchor, so the resource partition cannot see it.
+# ---------------------------------------------------------------------------
+REPO_RD_BAD="$TMPDIR_TEST/rd-bad"
+write_file "$REPO_RD_BAD/apps/web-platform/package.json" <<'EOF'
+{ "name": "fixture", "dependencies": { "ioredis": "5.4.1" } }
+EOF
+LEDGER_RD_BAD="$TMPDIR_TEST/rd-bad-ledger.json"
+write_file "$LEDGER_RD_BAD" <<'EOF'
+{
+  "schema_version": 1,
+  "store_classes": {},
+  "non_store_types": [],
+  "non_iac_stores": [],
+  "stores": [],
+  "connections": []
+}
+EOF
+REPO_RD_OTEL="$TMPDIR_TEST/rd-otel"
+write_file "$REPO_RD_OTEL/apps/web-platform/package.json" <<'EOF'
+{ "name": "fixture", "dependencies": { "@opentelemetry/instrumentation-ioredis": "0.40.0" } }
+EOF
+REPO_RD_OK="$TMPDIR_TEST/rd-ok"
+write_file "$REPO_RD_OK/apps/web-platform/package.json" <<'EOF'
+{ "name": "fixture", "dependencies": { "ioredis": "5.4.1" } }
+EOF
+LEDGER_RD_OK="$TMPDIR_TEST/rd-ok-ledger.json"
+write_file "$LEDGER_RD_OK" <<'EOF'
+{
+  "schema_version": 1,
+  "store_classes": {},
+  "non_store_types": [],
+  "non_iac_stores": ["redis.session_store"],
+  "stores": [
+    {
+      "store": "redis.session_store",
+      "kind": "provider-db",
+      "at_rest": {
+        "mechanism": "provider-managed:Fixture-SOC2-Type-II",
+        "evidence": "fixture trust center compliance page",
+        "attestation_url": "https://example.com/security",
+        "retrieved_on": "2026-06-01",
+        "defends_against": "a seized or decommissioned physical disk at the provider",
+        "does_not_defend": "a leaked credential or a misconfigured ACL",
+        "disclosed_as": "not-publicly-claimed",
+        "live_verification": "unavailable:no probe in this fixture"
+      }
+    }
+  ],
+  "connections": []
+}
+EOF
+run_case_reports "RD-1 redis client dependency, no redis.* row -> FAIL" 1 "Redis client dependency ioredis" \
+  --repo-sweep --repo-root "$REPO_RD_BAD" --ledger "$LEDGER_RD_BAD" --today "$TODAY"
+run_case_reports "RD-2 redis client dependency WITH a redis.* row -> PASS" 0 "encryption-posture:" \
+  --repo-sweep --repo-root "$REPO_RD_OK" --ledger "$LEDGER_RD_OK" --today "$TODAY"
+run_case_reports "RD-3 otel ioredis instrumentation is not a client -> PASS" 0 "encryption-posture:" \
+  --repo-sweep --repo-root "$REPO_RD_OTEL" --ledger "$LEDGER_RD_BAD" --today "$TODAY"
+run_mutation "MB-R1" "MB-R1" "$REPO_RD_BAD" "$LEDGER_RD_BAD"
+# Every member of the client set, in every dependency section, in any manifest; an alias of a
+# client; a malformed manifest. A `redis.*` row of any kind satisfies the check by design: it
+# asserts that SOME Redis is accounted for, not which one (the row names the store).
+rd_case() {  # <name> <expect-exit> <needle> <relative manifest path> <manifest body>
+  local name="$1" expect="$2" needle="$3" rel="$4" body="$5" repo
+  repo="$(mktemp -d "$TMPDIR_TEST/rd.XXXXXXXX")"
+  assert_fixture_dir "$repo"
+  mkdir -p "$(dirname "$repo/$rel")"
+  printf '%s\n' "$body" > "$repo/$rel"
+  run_case_reports "$name" "$expect" "$needle" \
+    --repo-sweep --repo-root "$repo" --ledger "$LEDGER_RD_BAD" --today "$TODAY"
+}
+for rd_pkg in redis ioredis iovalkey @redis/client @valkey/client @upstash/redis @keyv/redis connect-redis bullmq; do
+  rd_case "RD-4 client set member $rd_pkg -> FAIL" 1 "Redis client dependency $rd_pkg" \
+    apps/web-platform/package.json "{ \"dependencies\": { \"$rd_pkg\": \"1.0.0\" } }"
+done
+rd_case "RD-5 devDependencies-only client -> FAIL" 1 "Redis client dependency ioredis" \
+  apps/web-platform/package.json '{ "devDependencies": { "ioredis": "5.4.1" } }'
+rd_case "RD-5b optionalDependencies-only client -> FAIL" 1 "Redis client dependency ioredis" \
+  apps/web-platform/package.json '{ "optionalDependencies": { "ioredis": "5.4.1" } }'
+rd_case "RD-5c peerDependencies-only client -> FAIL" 1 "Redis client dependency ioredis" \
+  apps/web-platform/package.json '{ "peerDependencies": { "ioredis": "5.4.1" } }'
+rd_case "RD-6 npm: alias of a client -> FAIL" 1 "alias of ioredis" \
+  apps/web-platform/package.json '{ "dependencies": { "cache": "npm:ioredis@5.4.1" } }'
+rd_case "RD-6b npm: alias of a scoped client -> FAIL" 1 "alias of @upstash/redis" \
+  apps/web-platform/package.json '{ "dependencies": { "cache": "npm:@upstash/redis@1.0.0" } }'
+rd_case "RD-7 client in a different manifest than apps/web-platform -> FAIL" 1 "Redis client dependency ioredis" \
+  packages/session/package.json '{ "dependencies": { "ioredis": "5.4.1" } }'
+rd_case "RD-8 malformed package.json -> FAIL" 1 "not a valid JSON object" \
+  apps/web-platform/package.json '{bad'
+rd_case "RD-8b package.json that is a JSON array -> FAIL, no traceback" 1 "not a valid JSON object" \
+  apps/web-platform/package.json '[]'
+rd_case "RD-9 client under node_modules is skipped -> PASS" 0 "encryption-posture:" \
+  node_modules/somepkg/package.json '{ "dependencies": { "ioredis": "5.4.1" } }'
+
+# ---------------------------------------------------------------------------
 # Minimum-cardinality guard (an empty/short run must not GREEN).
 # ---------------------------------------------------------------------------
-MIN_CASES=117  # measured TOTAL at #9941 (47 at #6907 + the web-class cases); raise with every added case (slack is attack budget)
+MIN_CASES=139  # measured TOTAL (117 at #9941 + RD-1..9 and MB-R1 for the Redis client dependency check); raise with every added case (slack is attack budget)
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then

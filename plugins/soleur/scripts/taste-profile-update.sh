@@ -168,6 +168,9 @@ reviewed="$(fm_field last_reviewed "$profile")"
 cadence="$(fm_field review_cadence "$profile")"
 owner="$(fm_field owner "$profile")"
 
+# lint-trap-ownership: ok — allocates "${profile}.tmp.XXXXXX" BESIDE the target
+# file (never /tmp); mv'd into place on success, rm -f'd on render failure.
+# Residual is one sibling file per SIGKILL inside a two-statement window.
 tmp="$(mktemp "${profile}.tmp.XXXXXX")" || die "mktemp failed"
 if render_file "$tmp" "$reviewed" "$cadence" "$owner" "$today" "$new_json"; then
   mv -f "$tmp" "$profile"

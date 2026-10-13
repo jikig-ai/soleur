@@ -320,12 +320,13 @@ export const MANIFEST: ManifestEntry[] = [
     name: "inngest_server_probe",
     // #8516 — the dead-probe sibling of logtail_exploration_alert.inngest_luks_wrong_volume:
     // a pusher beats it only while a fresh host_role=dedicated inngest-server-probe row
-    // reaches the warehouse (hourly emission cadence; period 3600 + grace 1800). FED; ARMING PENDING
-    // on #9703: the repo-side verifier (scripts/inngest-probe-heartbeat-feeder.sh) runs from a
-    // clock-dispatched workflow and beats only on a fresh row, but the heartbeat is still born
-    // paused until the operator's separately authorized arming step; `arming_pending` below is the
-    // honest declaration of that window, and the nightly reconcile keeps `fed-but-paused` silent
-    // for it until the record PR removes it.
+    // reaches the warehouse (hourly emission cadence; period 3600 + grace 1800). FED and ARMED.
+    // No `arming_pending` (record PR for #9703). This row carried `arming_pending: { tracking_issue: 9703 }`
+    // while the monitor was paused-yet-fed. On 2026-10-12 the runbook arm block unpaused it; its read-back
+    // was `status=up paused=false`, and the feeder (scripts/inngest-probe-heartbeat-feeder.sh) then reported
+    // `verdict=beat` on runs 38264380002 (forced), 38265381453 and 38267189184 (clock-dispatched). That is a
+    // dated record: the live state is read from Better Stack, not from this file. `paused: true` below stays:
+    // it is the source `.tf` state (born paused).
     arming: "external-probe",
     paused: true,
     feeder: {
@@ -335,8 +336,7 @@ export const MANIFEST: ManifestEntry[] = [
         pattern: "bash scripts/inngest-probe-heartbeat-feeder.sh",
       },
     },
-    arming_pending: { tracking_issue: 9703 },
     exempt_reason:
-      "fed; arming pending on #9703 — the feeder is a repo-side verifier workflow, remediation never requires an inngest-host-replace, precisely because a host push cannot see Vector-allowlist or sink failures (#6780). Not dedicated-host-boot, so ADR-103's replace_target requirement correctly does not fire.",
+      "fed and armed (2026-10-12, #9703) — the feeder is a repo-side verifier workflow, remediation never requires an inngest-host-replace, precisely because a host push cannot see Vector-allowlist or sink failures (#6780). Not dedicated-host-boot, so ADR-103's replace_target requirement correctly does not fire.",
   },
 ];

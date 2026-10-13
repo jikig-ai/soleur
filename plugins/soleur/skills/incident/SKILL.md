@@ -286,10 +286,10 @@ The **identity preflight is defence-in-depth** — for surfaces where substituti
 Each halt emits a `SOLEUR_*` marker on stdout so a refusal is visible in telemetry rather than only to whoever was watching the terminal (`hr-observability-as-plan-quality-gate`; same pattern as `go.md`'s `SOLEUR_GIT_REPO_DIAG`). The operator guidance is **state-discriminating**: an empty root and a wrong root need different actions, and "re-run this skill" is not an action for either.
 
 ```bash
-DRAFT="$(mktemp)" || { echo "SOLEUR_INCIDENT_HALT reason=draft-alloc-failed"
+DRAFT="$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)")" || { echo "SOLEUR_INCIDENT_HALT reason=draft-alloc-failed"
                        echo "incident: cannot allocate a draft file — stopping before any post-mortem text exists." >&2
                        exit 2; }
-trap 'rm -f "$DRAFT"' EXIT INT TERM HUP
+trap 'rm -f "$DRAFT"; rmdir "$(dirname "$DRAFT")" 2>/dev/null' EXIT INT TERM HUP
 
 # Write the drafted post-mortem into "$DRAFT" here — in THIS fence, before the gate below.
 # Use a QUOTED heredoc delimiter (`<<'PIR_EOF'`), which is load-bearing twice over: production

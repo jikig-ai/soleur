@@ -195,6 +195,33 @@ add_leaf sh-test-helpers        'bash plugins/soleur/test/auto-close-scanner.tes
 # errors) used to leave a marker-only root per invocation; a mutation battery driving it thousands of times
 # left 2388 in /var/tmp. --enumerate-commands exits 0 through the enumerate path, not the full trap.
 add_leaf sh-test-all-enumerate  'bash scripts/test-all.sh --enumerate-commands' sh
+# (#10017) Class-b paydown suites — every one allocates only under an owned
+# SUITE_TMP root now, so the delta arm asserts the abort-path residual is gone
+# too, not just the happy path. scripts-shard-totality-mutations.sh is
+# deliberately NOT a leaf: it mutates tracked files in place.
+add_leaf sh-brand-hex           'bash .claude/hooks/brand-hex-commit-gate.test.sh' sh
+add_leaf sh-cla-signed-author   'bash .claude/hooks/cla-signed-author-gate.test.sh' sh
+add_leaf sh-context-reviewed    'bash .claude/hooks/context-reviewed-gate.test.sh' sh
+add_leaf sh-freeze-lock         'bash .claude/hooks/lib/freeze-lock.test.sh' sh
+add_leaf sh-pencil-collapse     'bash .claude/hooks/pencil-collapse-guard.test.sh' sh
+add_leaf sh-phase-surface-hint  'bash .claude/hooks/phase-surface-hint.test.sh' sh
+add_leaf sh-security-reminder   'bash .claude/hooks/security_reminder_hook.test.sh' sh
+add_leaf sh-ship-unpushed       'bash .claude/hooks/ship-unpushed-commits-gate.test.sh' sh
+add_leaf sh-skill-context-q     'bash .claude/hooks/skill-context-queries.test.sh' sh
+add_leaf sh-extract-block       'bash plugins/soleur/skills/eval-harness/test/extract-block.test.sh' sh
+add_leaf sh-pencil-adapter      'bash plugins/soleur/test/pencil-adapter-auth-hard-fail.test.sh' sh
+add_leaf sh-ralph-loop          'bash plugins/soleur/test/ralph-loop.test.sh' sh
+add_leaf sh-resolve-git-root    'bash plugins/soleur/test/resolve-git-root.test.sh' sh
+add_leaf sh-grok-gpu-bootstrap  'bash scripts/dogfood/grok-gpu-bootstrap.test.sh' sh
+add_leaf sh-domain-model-drift  'bash scripts/domain-model-drift.test.sh' sh
+add_leaf sh-tweet-eligibility   'bash scripts/lib/tweet-eligibility.test.sh' sh
+add_leaf sh-validate-tweet      'bash scripts/lib/validate-tweet-draft.test.sh' sh
+add_leaf sh-lint-rule-budget    'bash scripts/lint-agents-rule-budget.test.sh' sh
+add_leaf sh-review-reminder     'bash scripts/review-reminder-liveness.test.sh' sh
+add_leaf sh-seccomp-alert       'bash scripts/seccomp-unenforced-alert.test.sh' sh
+add_leaf sh-sentry-issue        'bash scripts/sentry-issue.test.sh' sh
+add_leaf sh-content-publisher   'bash scripts/test-content-publisher.sh' sh
+add_leaf sh-watch-live-verify   'bash scripts/watch-live-verify-pass.test.sh' sh
 add_leaf py-unittest            'python3 -m unittest tests.scripts.test_lint_rule_ids'
 add_leaf py-pytest-configure    'python3 -c "import tests.conftest as c; c.pytest_configure()"'
 VITEST_BIN="$REPO_ROOT/apps/web-platform/node_modules/.bin/vitest"

@@ -1189,9 +1189,9 @@ gh run list --workflow restart-inngest-server.yml --limit 5 --json databaseId,st
 `[ci/inngest-dedicated-host]`, and the no-live-scheduler alarm above covers a quiesced web unit with
 no healthy dedicated host. A dead dedicated scheduler is also paged by the ADR-117 Better Stack
 consumer heartbeat (`inngest_consumer`, Terraform name `soleur-inngest-consumer-prd`, fed from web-1
-against `10.0.1.40:8288`). It is `arming_pending` on #7462 in
-`plugins/soleur/lib/heartbeat-manifest.ts`, so read its live state before relying on it — `up` is
-armed, `paused` is not:
+against `10.0.1.40:8288`). Its row in `plugins/soleur/lib/heartbeat-manifest.ts` no longer carries
+`arming_pending` (observed `up` on 2026-09-15 per that row's comment; #7462 closed 2026-08-20), but
+read its live state before relying on it — `up` is armed, `paused` is not:
 
 ```bash
 curl -fsS -H "Authorization: Bearer $(doppler secrets get BETTERSTACK_API_TOKEN -p soleur -c prd_terraform --plain)" \
@@ -1535,9 +1535,11 @@ dispatch clock (ADR-248; the `schedule:` fallback alone delivers one run every 2
 5400 s budget), which runs `scripts/inngest-probe-heartbeat-feeder.sh`: it queries the Logs
 warehouse for the newest `host_role=dedicated` `SOLEUR_INNGEST_SERVER_PROBE` row and beats the heartbeat
 only when that row is at most 4500 s old and the heartbeat is **unpaused**. While the heartbeat is
-paused the verifier reports `verdict=fresh_heartbeat_paused` and sends nothing, so the feeder is **fed
-but not armed** until the arming command below has run. Nothing in the repo may say "armed" before
-that command's read-back exists.
+paused the verifier reports `verdict=fresh_heartbeat_paused` and sends nothing, so a paused heartbeat is
+**fed but not armed**. It was armed on 2026-10-12 through the command below: read-back
+`status=up paused=false`, and feeder runs 38264380002 (forced), 38265381453 and 38267189184
+(clock-dispatched) each reported `verdict=beat http=200`. That is a dated record: read the live state from
+Better Stack, not from this paragraph.
 
 **Reading the feeder (no SSH).** Each run prints one `inngest-probe-feeder: verdict=<v> ...` line. Once
 the warehouse has answered it carries `rows_total rows_probe rows_host rows_dedicated newest_dt lines
@@ -1677,7 +1679,8 @@ Read-back (READ), after `ARMED`: with `ARM_AT` as the instant the arm command pr
 since (`gh run list --workflow=scheduled-inngest-probe-heartbeat.yml --created ">=$ARM_AT" --json databaseId,createdAt`)
 and read each run's `verdict=` line as in P2. Expect `verdict=beat http=2xx` on the forced run, then a second
 `verdict=beat` on a LATER run (one slot later), and the P3 state `504655 up false 3600 1800`. Only then drop
-`arming_pending` from the manifest row in a record PR; that re-arms the nightly reconcile's `fed-but-paused`
+`arming_pending` from the manifest row in a record PR. The Stage 3a record PR (#10134, 2026-10-12) does this;
+from its merge it re-arms the nightly reconcile's `fed-but-paused`
 class (`SOLEUR_HEARTBEAT_RECONCILE_*`), which is the net if anything re-pauses the heartbeat (a paused heartbeat
 makes the feeder report `fresh_heartbeat_paused` with exit 0, so the feeder itself would not alert), and the
 reconcile is only meaningful after that record PR. If the command rolled back, read the newest completed run's
