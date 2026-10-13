@@ -18,8 +18,10 @@ carve-out gap issue (new)
 - [x] 0.5 Gate G4: if `content_sha` is non-NULL and matches neither
   `a14380522d48c1f56b03dcf3e940dd7ae82d082b` nor
   `048013204a426cf4a024d083a57b22367b436b7a` → STOP, re-triage, no writes.
-- [x] 0.6 Gate G5: if `pg_depend` shows dependents → reassess; STOP on any
-  unexpected dependent. Record the table rowcount in the evidence either way.
+- [x] 0.6 Gate G5: if `pg_depend` shows non-internal dependents (`deptype <>
+  'i'` — the 4 internal RI triggers the constraint owns are expected and
+  auto-cascade) → reassess; STOP on any unexpected dependent. Record the table
+  rowcount in the evidence either way.
 
 ## 1. Mutex + backups (single `doppler run` invocation)
 

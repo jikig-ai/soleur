@@ -88,10 +88,10 @@ and compare-and-set the `_schema_migrations.content_sha` ledger row to main's
     `a14380522d48c1f56b03dcf3e940dd7ae82d082b` (RESTRICT) — the body dev
     applied at 21:13Z, 13 min before the fix commit.
   - Blob-to-blob diff (applied → main) touches exactly: the `founder_id` FK
-    clause, the `anonymise_audit_github_token_use` comment text, the
-    `audit_github_token_use_no_mutate` comment text (stale on BOTH sides
-    post-087 — no migration re-commented), and an added `REVOKE ALL ON
-    FUNCTION … no_mutate()` (already subsumed live by 087's wider
+    clause, the `anonymise_audit_github_token_use` comment text, an added
+    `REVOKE ALL ON FUNCTION … no_mutate()` (the no_mutate comment text appears
+    only as unchanged context lines in that hunk — stale on BOTH sides
+    post-087, no migration re-commented) (already subsumed live by 087's wider
     `REVOKE … FROM PUBLIC, anon, authenticated, service_role`; dev proacl
     already matches). No objects exist only in the applied blob.
   - `git log --all -S audit_github_token_use_founder_id_fkey --
@@ -196,7 +196,7 @@ Timeline (all timestamps UTC, verified):
 
 | t | Event | Evidence |
 |---|-------|----------|
-| 2026-05-19 ~21:0x | PR #4066 branch pushes 052 with `ON DELETE RESTRICT` (blob `a14380522d`) | `git rev-parse acb4d37493~1:<file>` |
+| 2026-05-19 ~21:12 | PR #4066 branch pushes the `051→052` rename merge `418554243a` (21:11:51Z), minting blob `a14380522d` with `ON DELETE RESTRICT` (the RESTRICT body lived on the branch as `051_` since `7cad1fa525`, 17:20Z) | `git rev-parse acb4d37493~1:<file>` |
 | 21:13:16 | CI/apply path writes 052 to dev ledger; dev gets RESTRICT constraint | `_schema_migrations.applied_at` |
 | 21:26:47 | `acb4d37493` "fix(pr-h): change audit_github_token_use FK RESTRICT → SET NULL" | `git show acb4d37493` |
 | 21:41:09 | PR #4066 squash-merges as `5bc14c7f95`; main's blob `048013204a` is SET NULL from the start | `gh pr view 4066` + `git show` |
@@ -259,7 +259,7 @@ and thus different `DEV_SUITE_MUTEX_STATE_DIR`s — wrap acquire/release in ONE
 invocation (or set the var explicitly). We wrap:
 
 ```bash
-BK=/tmp/10095-dev-fk-drift-$(date -u +%Y%m%dT%H%M%SZ) && mkdir -p "$BK"
+BK=/tmp/10095-dev-fk-drift-$(date -u +%Y%m%dT%H%M%SZ) && mkdir -p "$BK" && export BK
 doppler run -p soleur -c dev -- bash -c '
   set -euo pipefail
   DEV_SUITE_MUTEX_IDENTITY="local-10095-reconcile" \
@@ -267,7 +267,7 @@ doppler run -p soleur -c dev -- bash -c '
   trap "bash scripts/dev-suite-mutex.sh release" EXIT
   db_url="${DATABASE_URL_POOLER/:6543\//:5432/}"
   psql "$db_url" --no-psqlrc -v ON_ERROR_STOP=1 \
-    -c "\copy (SELECT filename, content_sha, applied_at FROM public._schema_migrations ORDER BY filename) TO '"'"'$BK'"'"'/ledger.csv' csv header"
+    -c "\copy (SELECT filename, content_sha, applied_at FROM public._schema_migrations ORDER BY filename) TO '\''"$BK"'\''/ledger.csv'"'"' csv header"
   pg_dump "$db_url" --schema-only -n public -f "$BK/dev-public-schema.sql"
   psql "$db_url" --no-psqlrc -tAq \
     -c "select conname, confdeltype, pg_get_constraintdef(oid) from pg_constraint where conrelid = '"'"'public.audit_github_token_use'"'"'::regclass" \
@@ -275,6 +275,13 @@ doppler run -p soleur -c dev -- bash -c '
   …repair unit + post-verify from Phase 2/3…
 '
 ```
+
+(`export BK` is load-bearing — the inner `bash -c` runs `set -u`, and an
+un-exported `$BK` aborts the window as `BK: unbound variable`. The `\copy` line
+embeds the literal path via `'\''"$BK"'\''` — outer shell expands it, inner bash
+sees a single-quoted absolute path. At work time the literal timestamped path
+was inlined instead of `$BK`; the form above is the canonical replayable shape.)
+The mutex script runs from the repo root — `cd` into the worktree first.
 
 `acquire`/`release` are fail-open by design (banners, not exit codes); if the
 banner reads `CONTENDED_PROCEEDING` or `HOLDER_LOST`, note it in the evidence —
@@ -325,7 +332,7 @@ BEGIN
   IF n <> 1 THEN
     RAISE EXCEPTION 'ledger CAS on 052_multi_source_dedup.sql matched % rows (expected 1)', n;
   END IF;
-END
+END;
 $cas$;
 ```
 
@@ -346,17 +353,19 @@ psql "$db_url" --no-psqlrc --single-transaction -v ON_ERROR_STOP=1 -f "$BK/repai
 
 ### Phase 3 — Post-repair verification (read-only)
 
-Inside the same mutex window (before `release`):
+Inside the same mutex window (before `release`). The literal single-quotes in
+the SQL need `'\''` escaping inside the `bash -c '…'` wrapper (same idiom as
+Phase 1):
 
 ```bash
 psql "$db_url" --no-psqlrc -tAq \
   -c "select conname, confdeltype, pg_get_constraintdef(oid) from pg_constraint \
-        where conname = 'audit_github_token_use_founder_id_fkey';
+        where conname = '\''audit_github_token_use_founder_id_fkey'\'';
       select filename, content_sha from public._schema_migrations \
-        where filename = '052_multi_source_dedup.sql';
+        where filename = '\''052_multi_source_dedup.sql'\'';
       select substring(obj_description(p.oid) from 1 for 60) from pg_proc p \
         join pg_namespace n on n.oid=p.pronamespace \
-        where n.nspname='public' and p.proname='anonymise_audit_github_token_use'"
+        where n.nspname='\''public'\'' and p.proname='\''anonymise_audit_github_token_use'\''"
 ```
 
 Expected: `confdeltype=n` + `ON DELETE SET NULL`; `content_sha =
@@ -536,7 +545,8 @@ Create`/`Files to Edit` are empty — no UI surface; tier NONE.)
   (re-derives the class from migrations).
 - Verified dev census values at plan time (2026-10-13): confdeltype `r`;
   ledger row `052_multi_source_dedup.sql | NULL | 2026-05-19 21:13:16+00`;
-  table rowcount 0; dependents 0; founder_id nullable; WORM trigger `O` +
+  table rowcount 0; 0 non-internal dependents (4 internal RI triggers
+  auto-cascade); founder_id nullable; WORM trigger `O` +
   `app.worm_bypass` body, no founder_id carve-out; anonymise RPC proacl
   `{postgres,service_role}`.
 
@@ -552,8 +562,10 @@ Create`/`Files to Edit` are empty — no UI surface; tier NONE.)
   substitution convention).
 - Advisor consult (Phase 4.5) skipped: the repair is a prescribed-procedure
   replay (learning §Content drift class C) with verified evidence; the two
-  technical decision rows carry `pending - assumed` rulings for the
-  technical-ruling gate's batched CTO consult per the one-shot contract.
+  technical decision rows were ruled by the parent pipeline's batched CTO
+  consult (run_subagent, 2026-10-13): ROW A AMEND (absorbed — non-internal
+  dependent scoping + the public.users SHARE ROW EXCLUSIVE risk line), ROW B
+  CONFIRM.
 - Doppler config used: `-p soleur -c dev` (the same database the nightly legs
   authenticate against via `-c dev_scheduled` — the sibling pipeline verified
   both configs resolve to identical user/host/db).
