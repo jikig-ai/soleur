@@ -7,25 +7,25 @@ Do NOT touch `cloud-init-git-data.yml` or `git-data-bootstrap.sh` (sibling scope
 
 ## Phase 0: RED tests first
 
-- [ ] 0.1 `inngest-redis-luks.test.sh`: re-pin T1.6 to the new mechanism in BOTH `wait_dev` bodies (seam `INNGEST_LUKS_ATTACH_WAIT_S`, `${VAR-300}` default, counted `+10` per pass, `udevadm settle`, `attach_wait_invalid` validation) — expect RED
-- [ ] 0.2 `inngest-redis-luks.test.sh`: rows for the `env -u INNGEST_LUKS_ATTACH_WAIT_S` strip inside the `doppler run … --` invocation; update the three extraction anchors that pattern on `-- bash -s <<.LUKSEOF.`
+- [ ] 0.1 `inngest-redis-luks.test.sh`: re-pin T1.6 to the ruled mechanism in BOTH `wait_dev` bodies (literal `300` bound, `sleep 1` counted passes, one post-loop `udevadm settle --timeout=10 || true` — NOT per pass) — expect RED
+- [ ] 0.2 `inngest-redis-luks.test.sh`: absence pin — zero `INNGEST_LUKS_ATTACH_WAIT_S` tokens in `cloud-init-inngest.yml`; `doppler run … -- bash -s` invocation pinned byte-identical (no `env -u`); ordering pin asserting `After=systemd-remount-fs.service` on `inngest-luks-open.service`
 - [ ] 0.3 `inngest-redis-luks.test.sh`: rows for `ensure_mount` in the reopen (mountpoint check, fstab line write, fstab-driven `mount`, `reopen_mount` emit, `fail reopen_mount` on mount failure) and that the `open_as` noop path still reaches it
-- [ ] 0.4 `inngest-redis-luks-loopback.test.sh`: swap `render_stage`/`render_reopen`'s `-lt N` sed rebind for `INNGEST_LUKS_ATTACH_WAIT_S` in the run env; add `/mnt/data` + `/etc/fstab` rebinds to `render_reopen`; add the `udevadm` recorder stub next to `logger`
-- [ ] 0.5 `inngest-redis-luks-loopback.test.sh`: new arms — by-id link materialises mid-wait (verdict equals on-time, settle ran per retry); never-appears ends in the SAME named FATAL inside the seam bound; invalid seam (`abc`, `-5`, empty) hits `attach_wait_invalid` before the first probe; bound 0 probes once with zero sleeps
+- [ ] 0.4 `inngest-redis-luks-loopback.test.sh`: retarget `render_stage`/`render_reopen`'s `-lt 30` sed rebind to `-lt 300` (kept mechanism — the seam was dissolved, not replaced); add `/mnt/data` + `/etc/fstab` rebinds to `render_reopen`; add the `udevadm` recorder stub next to `logger`
+- [ ] 0.5 `inngest-redis-luks-loopback.test.sh`: new arms — by-id link materialises mid-wait (verdict equals on-time, exactly one post-loop settle in calls.log); never-appears ends in the SAME named FATAL inside the rebound bound; a one-reader-bound-drift arm fails T1.6; bound 0 probes once with zero sleeps
 - [ ] 0.6 `inngest-redis-luks-loopback.test.sh`: BOOT2 self-heal arms — reopen with mapper reopened but `/mnt/data` unmounted and no fstab line ends mounted + exactly one fstab line + `reopen_mount` emitted; already-open noop path still mounts; normal boot (line + mount present) costs zero writes
 - [ ] 0.7 Confirm every new/changed row is RED against the current template
 
 ## Phase 1: Bounded counted attach-wait in both readers
 
-- [ ] 1.1 `cloud-init-inngest.yml` runcmd `LUKSEOF` stage: rewrite `wait_dev()` to the counted bound (validate `^[0-9]{1,4}$` + `10#` BEFORE the first probe; probe-once at 0; `udevadm settle --timeout=5 || true` + `sleep 5` charged 10/pass, never the clock; emit wait-start and appeared-after lines; `return 1` after the bound); all call sites unchanged, FATAL sentences byte-identical
+- [ ] 1.1 `cloud-init-inngest.yml` runcmd `LUKSEOF` stage: rewrite `wait_dev()` to the counted bound as ruled — literal `300`, existing `sleep 1`-per-pass loop, probe-once at 0, whole-predicate re-probe each pass, emit wait-start and appeared-after lines, `return 1` after the bound, ONE `udevadm settle --timeout=10 || true` AFTER the loop (never the clock); all call sites unchanged, FATAL sentences byte-identical
 - [ ] 1.2 `cloud-init-inngest.yml` `inngest-luks-open.sh` payload: same `wait_dev()` rewrite (the file's own comment requires the two readers not drift); escaping rule: bare `$` everywhere, `$${` only where a brace follows
-- [ ] 1.3 `cloud-init-inngest.yml`: `doppler run … -- /usr/bin/env -u INNGEST_LUKS_ATTACH_WAIT_S bash -s <<'LUKSEOF'` (strip inside the invocation, covering both the Doppler channel and the shared-runcmd-shell `set -a` leak channel)
+- [ ] 1.3 `cloud-init-inngest.yml`: verify the `doppler run … -- bash -s <<'LUKSEOF'` invocation is byte-identical to `main` — no `env -u`, no `INNGEST_LUKS_ATTACH_WAIT_S` anywhere in the file (CTO D4: no seam)
 
 ## Phase 2: Self-heal — the reopen completes the mount
 
 - [ ] 2.1 `inngest-luks-open.sh`: add `ensure_mount <source> <mountpoint>` (`mountpoint -q` fast path → fstab_set-equivalent write of `<source> <mp> ext4 defaults,nofail 0 2` asserting exactly one → `mkdir -p` → `mount <mp>` fstab-driven → `emit reopen_mount`; fstab or mount failure `fail`s the unit)
 - [ ] 2.2 Call `ensure_mount` on every verified arm: pointer canonical `/mnt/data`, pre-cutover crypto_LUKS `/mnt/data`, pre-cutover ext4-skip `/mnt/data` (after the `reopen_skip_plaintext` emit), staging `/mnt/data-luks`; include the `open_as` noop path
-- [ ] 2.3 Update the script's contract comment and the unit `Description=` to "opens, then completes the mount for the arm it verified — never formats, never mkfs"
+- [ ] 2.3 Update the script's contract comment and the unit `Description=` to "opens, then completes the mount for the arm it verified — never formats, never mkfs"; add `After=systemd-remount-fs.service` to `inngest-luks-open.service` (CTO binding — fstab write/`mkdir -p` must not race a read-only root)
 
 ## Phase 3: Suites green + floors
 
