@@ -1352,6 +1352,15 @@ AFFECTED_PLUGINS_SOLEUR_TEST_FLAG_ORG_SCOPING_PR2_TEST_SH_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
+# plugins/soleur/test/flip-flag-map-parity.test.sh — greps flip.sh's FLAG_ENV_VARS and server.ts's RUNTIME_FLAGS as
+# text, so no derived import edge reaches either; declared from the two files it names.
+AFFECTED_PLUGINS_SOLEUR_TEST_FLIP_FLAG_MAP_PARITY_TEST_SH_PATHS=(
+  "apps/web-platform/lib/feature-flags/server.ts"
+  "plugins/soleur/skills/flag-set-role/scripts/flip.sh"
+  "plugins/soleur/test/flip-flag-map-parity.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # plugins/soleur/test/git-fixture-env-shell.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_TEST_GIT_FIXTURE_ENV_SHELL_TEST_SH_PATHS=(

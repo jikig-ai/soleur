@@ -290,10 +290,12 @@ const SIGNALS: Signal[] = [
 // Invisible / format characters stripped from the MATCHING copy only: zero-width space/joiners,
 // soft hyphen, bidi marks and overrides/isolates, invisible operators, variation selectors, BOM
 // and the Unicode "tag" block (U+E0000-E007F, which can carry a whole ASCII payload invisibly).
+// The combining characters (U+034F, U+FE00-FE0F) each sit in their own alternative: a combining
+// character inside a larger class trips no-misleading-character-class.
 const INVISIBLE =
-  /[\u00ad\u034f\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufe00-\ufe0f\ufeff]|[\u{e0000}-\u{e007f}]/gu;
+  /[\u00ad\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]|\u034f|[\ufe00-\ufe0f]|[\u{e0000}-\u{e007f}]/gu;
 const INVISIBLE_RUN =
-  /(?:[\u00ad\u034f\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufe00-\ufe0f\ufeff]|[\u{e0000}-\u{e007f}]){3,}/u;
+  /(?:[\u00ad\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]|\u034f|[\ufe00-\ufe0f]|[\u{e0000}-\u{e007f}]){3,}/u;
 const TAG_BLOCK = /[\u{e0020}-\u{e007e}]+/gu;
 
 /** Strings that make a decoded blob an instruction rather than an image or binary. */
