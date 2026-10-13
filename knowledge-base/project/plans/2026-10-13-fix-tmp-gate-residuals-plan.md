@@ -477,7 +477,9 @@ registered leaf.
 | 2 | "A count-shaped leak is reclaimed without any heuristic over a shared namespace — reclamation keys on ownership the producer declared" [issue #7004] | machinery already shipped (#8738); Phase 3 closes the producer-adoption residual | mapped |
 | 3 | "the operator has now authorized the reclamation scope, so treat the deferred work as in-scope" [brief] | Phase 3 (two measured producers) + Phase 4 (deferred-tail tracking issue) | mapped — the in-scope residual is bounded to measured producers; the unmeasured tail is deferred, rationale in decision-challenges |
 | 4 | "Make the presence check block-aware (e.g. `^${f}:` alone counts as present … or parse frontmatter once and check keys), and add a fixture covering the block-mapping form" [issue #10167] | Phase 1 (`parse-override.sh` awk pass + `test/parse-override.test.sh`) | mapped |
+<!-- lint-infra-ignore start -->
 | 5 | "the pre-existing backlog is bounded by `tmpfiles.d` + reboot and is explicitly out of scope" [issue #7004 amended AC2] | — | descoped — justification: operator-approved amendment; backlog drain is the #8786 operator step |
+<!-- lint-infra-ignore end -->
 | 6 | "A dry run against a real `/tmp` carrying the leak reclaims the leak and reports zero non-leak candidates" [issue #7004 AC2, as amended: "reclaims leaks of the declared shape"] | residue-leaf delta arm + Reaper 3 (already shipped) | mapped |
 
 ### Plan-Item Provenance
