@@ -35,7 +35,7 @@ lives in
   `git ls-files` and cannot see untracked files
 - no `producer | grep -q` in a policy hook (`grep-q-pipe-guard`)
 - `mktemp` needs an owning EXIT trap (`lint-trap-tempfile-ownership`)
-- `assert_fixture_dir` on same-function `git -C "$work"` fixture writes
+- `assert_fixture_dir` on same-function `git -C "${work}"` fixture writes
   (`fixture-dir-operand-assert`)
 - `fixture-relative-assert --write-baseline` in the same commit as a new
   fixture-relative test file
