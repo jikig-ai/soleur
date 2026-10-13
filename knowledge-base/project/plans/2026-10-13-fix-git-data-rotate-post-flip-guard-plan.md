@@ -1,0 +1,188 @@
+---
+title: "fix: git-data rotate precondition must see repos replicated after the flip (#10175)"
+type: fix
+date: 2026-10-13
+slug: git-data-rotate-post-flip-guard
+branch: feat-one-shot-10175-git-data-rotate-post-flip-guard
+issue: 10175
+closes: 10175
+lane: cross-domain
+requires_cpo_signoff: true
+---
+
+# fix: git-data rotate precondition must see repos replicated after the flip (#10175)
+
+Spec lacks valid lane: defaulted to cross-domain (fail-closed).
+
+## Overview
+
+The rotate precondition in the git-data replace job reads one boot-time row and so cannot tell a store that the flip has since populated. This plan adds a credential-free guard that refuses a rotate once any cutover run has attempted a flag write, adds a boot_complete freshness check as a second layer, amends the d6 failure text that steers the owner toward a rotate, and records the rule in the runbook. #9943 and #6975 are evaluated and left as scoped follow-ups.
+
+## Research Insights
+
+**Premise validation (Phase 0.6).** #10175 OPEN, #9943 OPEN, #6975 OPEN (read with `gh issue view`). The cited symbols exist on this branch: step `Rotate precondition — served store measured empty` (apply-web-platform-infra.yml, job `git_data_host_replace`), `git_data_served_empty_sql`/`git_data_served_empty_read` (scripts/lib/git-data-boot-signal-poll.sh), `scripts/lib/git-data-rotate-stamp.sh`. ADR corpus: ADR-239 Consequences records "keeps a prd token out of apply-web-platform-infra.yml" (a mechanism reading the Doppler flag in the replace job would reverse it); ADR-239 also fixes that rollback is flag-off only and data stays on LUKS. The issue's phrase "stamp older than the last recorded rollback" is contradicted by that: no rollback record exists (rollback does not clear GIT_DATA_LUKS_CUTOVER_AT, design-rollback-rehearsal.md F-D) and the store stays populated after a rollback.
+
+**Property list (Phase 0.6b).**
+1. A rotate cannot start once the LUKS store may have taken a write (flip or rollback attempted, even failed).
+2. A stale boot-time row (from before the current host) cannot satisfy the emptiness precondition.
+3. A failed refusal is loud and carries no bypass.
+4. The d6 gate's own failure text never steers the owner to a rotate in a state where it destroys data.
+5. The runbook states "never after the flip".
+
+**Cut list.** (a) Reading `GIT_DATA_STORE_ENABLED` / `GIT_DATA_LUKS_CUTOVER_AT` from Doppler prd: buys property 1 but needs a prd token ADR-239 keeps out; run records already buy it. (b) Embedding the CF tunnel bridge + root key in the apply job for a live emptiness proof: widens the infra-privileged credential census; deferred (F4). (c) Stamp-based logic: the stamp survives a rollback, so it decides nothing. (d) A bypass or "reset" input: none, by design.
+
+**Learnings applied.** Precedent for reading run records headlessly and failing closed on unreadable/in-flight: scripts/lib/git-data-rotate-stamp.sh (#10166/#10184). Step names are matched byte for byte by plugins/soleur/test/terraform-target-parity.test.ts, so the existing step `Rotate precondition — served store measured empty` keeps its exact name (it is the GDRS_PRECONDITION_STEP anchor).
+
+**web-2 facts (read-only, from the repo).** web-2 exists in prd Terraform: `var.web_hosts` default in apps/web-platform/infra/variables.tf has `web-2` (hel1, 10.0.1.11, cpx22), an out-of-band standby (serving weight 0, ADR-143). It reads git-data only through the app's replication path (same shared `GIT_DATA_SSH_HOST_KEY` pin from Doppler prd, loaded by redeploy) and `web-git-data-probe` against 10.0.1.20:22, pinging the single unsuffixed `GIT_DATA_HEARTBEAT_URL` (web-probe-envwrite.sh; server.tf `git_data_probe_install` is hardcoded to web-1, web-2 receives the probe by cloud-init). The cutover needs no per-host step, no heartbeat suffix and no web-2 host-key pin: git-data-cutover.sh and git-data-flag-precheck.sh never reference web-2 (WEB_HOSTS defaults to web-1 as the jump host; the flip's per-host `git_data_store=` readback is the only per-host check and already covers both). The host-key pin (`web-2-ssh-host-key.pub`, #9151) is web-2's own SSH pin for Terraform provisioners, unrelated to git-data. The one real gap is #6975: a healthy web-1 probe masks a dead web-2-to-git-data path.
+
+## Problem Statement
+
+After the first real `flip`, `git-data-host-rotate` passes its precondition (the newest `stage=boot_complete` row still says `served_repos=0`, emitted once per boot) and the plan gate accepts the exact `["delete","create"]` for `hcloud_volume.git_data_luks`; the plaintext volume is empty by construction, so the rotate destroys the only copy. `confirm=ROTATE-GIT-DATA` is a typo guard. The d6 failure text additionally tells the owner to dispatch that rotate. Latent today (flag never true); live at the first flip.
+
+## Proposed Solution
+
+Rulings in `knowledge-base/project/specs/feat-one-shot-10175-git-data-rotate-post-flip-guard/decision-challenges.md` (CTO, 2026-10-13).
+
+1. **New step, before the existing precondition: `Rotate precondition — store never written (cutover run records)`** (apply-web-platform-infra.yml, job `git_data_host_replace`, `if: inputs.apply_target == 'git-data-host-rotate'`). It sources a new library `scripts/lib/git-data-store-dirty-scan.sh` and refuses unless the verdict is `store_clean`. The job gets job-level `permissions: contents: read, actions: read` and the step binds `GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}` (only this step). No prd token.
+2. **Scan semantics** (`git_data_store_dirty_scan`, reads `<run id><TAB><status>` newest-first on stdin, like `git_data_d6_scan`): for each run of `git-data-cutover.yml` (ALL runs, full pagination via `gh api --paginate`, collected count cross-checked against `total_count`; an API error or a count mismatch is `scan_unreadable`), read the `cutover` job's step `Write GIT_DATA_STORE_ENABLED (via the #8573 seam)`: `skipped` or no `cutover` job started (mode proof/unfreeze/redeploy, `nothing_to_rollback`, resume arm B, confirm rejected) is clean for that run; ANY other conclusion (success, failure, cancelled, null/unknown on a listed step) is `store_dirty <id>`; an absent step on a job that ran is `scan_unreadable <id>` (rename drift fails closed); `status=in_progress` is `cutover_in_flight <id>`; queued/waiting/pending runs have executed nothing and are skipped (the shared `git-data-state` concurrency group means one cannot overlap this job). Verdict tokens: `store_clean | store_dirty <id> | cutover_in_flight <id> | scan_unreadable [<id>]`; returns 0 only for `store_clean`. The decision uses neither the stamp nor the flag value (F2).
+3. **Second layer: boot_complete freshness.** New sibling query `git_data_boot_complete_dt_sql` + `git_data_boot_complete_dt_read` in scripts/lib/git-data-boot-signal-poll.sh (same pins, `--only-secrets`, absolute-path refusals) returning the newest `boot_complete` epoch seconds; `git_data_served_empty_sql` is NOT changed. The job reads the current server's `created` from the Hetzner API (`GET /v1/servers?name=soleur-git-data`, `bc_curl` stdin-config form, `HCLOUD_TOKEN` already loader-exported) and the existing step additionally requires `boot_complete_epoch > created_epoch` (strict). Zero or more than one server, a missing/unparseable `created`, or a missing timestamp refuse. A stale row from before the current host reads `stale_boot_complete`.
+4. **d6 text (F7).** In git-data-cutover.yml step `flip_preconditions`, the `d6_replace_stale` message keeps the dispatch command only for a never-flipped store and otherwise says: do not dispatch a rotate after any flip or rollback attempt (it destroys the only copy); no bypass input; escalate. Pinned in the cutover workflow test that already matches the message.
+5. **Runbook (`git-data-luks-cutover-5274.md`).** D6 rotate section: a leading "Never dispatch the rotate after the flip, or after any flip/rollback attempt (including a rehearsal): the store may hold the only copy of replicated repositories; the guard refuses it and there is no bypass input"; a verdict table for the new refusals (`store_dirty`, `cutover_in_flight`, `scan_unreadable`, `stale_boot_complete`, `boot_complete_unreadable`); the existing `served_repos=0` paragraph corrected to say it is a once-per-boot reading and not a live proof; one sentence that the web-fed heartbeat is not a flip precondition (so #6975 does not block); the follow-up notes below.
+6. **Follow-ups filed, not built:** F4 (mode-unique "store measured empty" marker in git-data-cutover.yml, the later live proof and exit from dirty; blocked on #8571 for a populated store), #9943 (left open, merged design; flip precondition in a different workflow), #6975 (left open; Terraform fan-out). Each gets a GitHub issue or an existing-issue comment at work time with re-evaluation criteria and milestone from knowledge-base/product/roadmap.md.
+
+## Technical Considerations
+
+- **Residual risks, stated in the runbook:** run records deleted by hand, and a flag set outside the workflow, are invisible to the scan (the boot_complete freshness layer and the typed-token/approval gate remain). The guard is a floor for the accidental dispatch, not a defence against a hostile owner.
+- **Ordering:** both new refusals sit before the rung-2 interlock and the plan gate, so the destructive plan is never reached on a dirty store; they run under the `git-data-state` group already held by the job (TOCTOU with a flip is closed by the group).
+- **Credential census:** `actions: read` is job-level and pinned in tests/scripts/test-infra-privileged-tier-census.sh; no `secrets.*` beyond GITHUB_TOKEN is added; no step gains `if: plan_only` interplay (the new step is a gate step and stays unconditional on plan_only like the census G5c class).
+- **d6 interaction:** the new step is a separate name; `GDRS_PRECONDITION_STEP` stays intact. A rotate refused by the new step skips the precondition step, which the stamp library reads as `skip` (nothing mutated), unchanged semantics.
+- **NFR/ADR:** no new architectural decision (a refusal on an existing path; ADR-239's no-prd-token stance is preserved); no ADR or C4 change. No data model change.
+
+## Files to Edit
+
+- `.github/workflows/apply-web-platform-infra.yml` (job-level permissions; new step; freshness addition to the existing step)
+- `.github/workflows/git-data-cutover.yml` (d6_replace_stale message only)
+- `scripts/lib/git-data-boot-signal-poll.sh` (new dt sql/read functions; existing ones untouched)
+- `plugins/soleur/test/terraform-target-parity.test.ts` (pin the new step, permissions, order, no-bypass)
+- `tests/scripts/test-git-data-boot-signal-poll.sh` (new dt read rows)
+- `tests/scripts/test-infra-privileged-tier-census.sh` (pin job-level `actions: read` for this job)
+- the cutover workflow test that pins the d6 message (locate with `grep -rn d6_replace_stale tests apps/web-platform/infra plugins/soleur/test`)
+- `knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md`
+
+## Files to Create
+
+- `scripts/lib/git-data-store-dirty-scan.sh` (sourced library; no `exit`)
+- `scripts/lib/git-data-store-dirty-scan.test.sh` (synthesized jq fixtures, `gh` shim, mutation battery; register by presence per scripts/suite-shard-legs.tsv convention)
+
+## Open Code-Review Overlap
+
+To run at work time (`gh issue list --label code-review`); none identified during planning.
+
+## User-Brand Impact
+
+- **If this lands broken, the user experiences:** a rotate that either destroys their only replicated repository copy (guard fails open) or an unrunnable rotate that blocks the flip's required D6 step (guard fails closed on a clean store).
+- **If this leaks, the user's data is exposed via:** no new exposure vector: no new credential, no secret printed, run records read with a read-only token.
+- **Brand-survival threshold:** `single-user incident`
+- **Threshold decision (challengeable):** the failure destroys user repositories irrecoverably, so single-user incident rather than aggregate pattern. CPO sign-off required before `soleur:work`; `soleur:engineering:review:user-impact-reviewer` runs at review.
+
+## Guard Contract
+
+### Guard 1 — store-never-written scan
+
+**Property.** A `git-data-host-rotate` dispatch proceeds only if no run of git-data-cutover.yml has ever executed the flag-write step, and refuses on any run it cannot read.
+
+**Assembly.** Quantifies over every run of git-data-cutover.yml (full pagination, count cross-checked) and, per run, every job named `cutover` and the one step `Write GIT_DATA_STORE_ENABLED (via the #8573 seam)`; the single chokepoint is `git_data_store_dirty_scan` called by exactly one step of `git_data_host_replace`; flip and rollback both flow through that one step name in git-data-cutover.yml. A second call site, a second step name for the flag write, or a first-page-only read are the defects.
+
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|---|---|
+| 1 | Fixture: newest run clean, an older run with the write step `success` | RED (store_dirty names the older id) |
+| 2 | Empty stdin / zero runs listed but `total_count` > 0 (the guard's own dispatch checking nothing) | RED (scan_unreadable) |
+| 3 | A second dirty run after a compliant first (clean, clean, failure-conclusion write step) | RED |
+| 4 | Write step `cancelled` / null conclusion | RED (any non-skipped is dirty) |
+| 5 | Step renamed (absent) on a job that ran | RED (scan_unreadable) |
+| 6 | Library edited so the loop `return`s clean at the first clean run | RED via row 3 |
+| 7 | Workflow reorder: new step placed after the plan step | RED (parity test order pin) |
+
+Harness rows: a suite whose success is `fail == 0` with zero rows run must exit non-zero (row-count floor); must-PASS fixtures that are not the canonical (resume-arm-B run with write step `skipped`, a `mode=proof` run with the proof step but no write step, a never-flipped history of only proofs) must yield `store_clean`; the `gh` shim refuses any argv outside the expected two shapes and an epilogue row asserts it never refused. Anchor: the scanned step name is a string in two files; the parity test asserts the same literal appears in git-data-cutover.yml and the library, so a rename on one side reds a test rather than a flip.
+
+### Guard 2 — boot_complete freshness
+
+**Property.** A `boot_complete` row older than the current git-data server's creation cannot discharge the emptiness precondition.
+
+**Assembly.** The single comparison in the existing precondition step; inputs: `git_data_boot_complete_dt_read` (pinned git-data tables) and the Hetzner `created` of the one server named soleur-git-data.
+
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|---|---|
+| 1 | boot_complete epoch one second before `created` | RED |
+| 2 | boot_complete epoch equal to `created` (strictness) | RED |
+| 3 | Two servers returned by the API, second one stale | RED (refuse on count != 1) |
+| 4 | Empty read output (the guard's own dispatch) | RED (unreadable, fail closed) |
+
+Harness rows: must-PASS with epoch = created + 1 and with a different JSON key order in the API body.
+
+## Scope Check
+
+### Ask Mapping
+
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "refuse the rotate unless the flag GIT_DATA_STORE_ENABLED is not true, the GIT_DATA_LUKS_CUTOVER_AT stamp is absent (or older than the last recorded rollback), and the boot_complete row is newer than the current server's creation time" | Proposed Solution 1-3 (flag/stamp replaced by run-record evidence, F1/F2) | mapped |
+| 2 | "add a live emptiness proof through the cutover bridge if feasible" | Proposed Solution 6 (infeasible without widening the census; follow-up, F4) | descoped — justification: embedding bridge + root key in the infra-privileged job widens the credential census |
+| 3 | "update the runbook D6 rotate section (\"never after the flip\")" | Proposed Solution 5 | mapped |
+| 4 | "evaluate #9943 ... and #6975 ... include them only if they are flip preconditions or small and cohesive; otherwise leave a clearly scoped follow-up note" | Proposed Solution 6; decision-challenges F5/F6 | mapped |
+| 5 | "Also report ... web-2" | Research Insights (web-2 facts) | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| New run-record step + library | "refuse the rotate unless the flag GIT_DATA_STORE_ENABLED is not true" | asked |
+| boot_complete freshness | "the boot_complete row is newer than the current server's creation time" | asked |
+| d6 message amendment | "update the runbook D6 rotate section" (the d6 failure text is the same hazard, per design-wipe-body-pr.md) | inferred — justification: one-line message that otherwise tells the owner to dispatch the destructive rotate; CTO F7 |
+| Runbook verdict table | "update the runbook D6 rotate section" | asked |
+
+### Split Assessment
+
+- Subsystems touched: 3 — .github/workflows, scripts/lib (+tests), knowledge-base runbook
+- Planned files: 11 | Estimated changed lines: ~450 (library ~90, tests ~200, workflow ~60, runbook ~60)
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR
+
+## Acceptance Criteria
+
+- [ ] `git-data-host-rotate` is refused by a new step before the plan gate when any git-data-cutover.yml run has a non-skipped `Write GIT_DATA_STORE_ENABLED (via the #8573 seam)` step (scripts/lib/git-data-store-dirty-scan.sh; apply-web-platform-infra.yml step `Rotate precondition — store never written (cutover run records)`).
+- [ ] A scan that cannot read every run, finds a count mismatch, or hits a renamed step refuses; there is no bypass input and no `continue-on-error` on the step (parity test).
+- [ ] The existing `served_repos=0` step also requires boot_complete strictly newer than the single `soleur-git-data` server's `created`; `git_data_served_empty_sql` is byte-unchanged.
+- [ ] Job-level `permissions` is exactly `contents: read` + `actions: read` and the census test pins it; no new secret is bound.
+- [ ] The `d6_replace_stale` message no longer instructs a rotate for a flipped store and says no bypass, escalate; its test pin is updated.
+- [ ] Runbook D6 section carries "never after the flip", the verdict table, the corrected `served_repos=0` paragraph, the web-fed-heartbeat sentence and the follow-up notes; markdownlint passes.
+- [ ] Follow-up issues/notes exist for F4, #9943 and #6975 with re-evaluation criteria.
+- [ ] `git-data-store-dirty-scan.test.sh` runs the full mutation matrix, harness rows and a row-count floor green; existing `tests/scripts/test-git-data-boot-signal-poll.sh`, `git-data-rotate-stamp.test.sh`, terraform-target-parity and census suites stay green.
+- [ ] No workflow dispatched, no terraform apply, no production write (verify by the PR diff and run history).
+
+## Test Scenarios
+
+- Given only mode=proof runs and skipped write steps, when a rotate is dispatched, then `store_clean` (unit).
+- Given a flip run whose write step succeeded then a rollback, when a rotate is dispatched, then `store_dirty` (unit; regression for the issue's own "older than last rollback" wording).
+- Given a flip that failed after the write, then `store_dirty` (unit).
+- Given `gh api` failure or truncated pagination, then `scan_unreadable` and the step exits 1 (unit).
+- Given boot_complete older than the server `created`, then refusal (unit).
+- Given the workflow file, then the new step precedes the rung-2 interlock and plan step, binds only GH_TOKEN, and has no `continue-on-error` or input-driven bypass (integration, terraform-target-parity).
+- Verification (read-only, no dispatch): `bash scripts/lib/git-data-store-dirty-scan.test.sh` and `bash tests/scripts/test-git-data-boot-signal-poll.sh`.
+
+## Dependencies & Risks
+
+- Risk: GitHub API pagination or retention hides old runs (fail closed on count mismatch; residual for hand-deleted runs).
+- Risk: `HCLOUD_TOKEN` may be absent in this job under a legacy credential path (fails closed with a named message; verify at work time against .github/actions/infra-credentials).
+- Risk: the cutover workflow edit carries the no-admin-merge restriction; message-only change.
+- Dependency: none blocking; #8571 is the future exit for a populated store.
+
+## Sharp Edges
+
+- A plan whose `## User-Brand Impact` section is empty or placeholder fails deepen-plan Phase 4.6; this one is filled.
+- Do not rename `Rotate precondition — served store measured empty`; the stamp library and parity test match it byte for byte (em dash U+2014).
+- The scan must not key on the stamp or the flag value (F2): the stamp survives a rollback.
