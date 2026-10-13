@@ -28,7 +28,7 @@ class Operational(unittest.TestCase):
         self.component = self.repo / 'scripts/codex-qualification/operational.py'
         self.component.write_bytes(Path(operational.__file__).read_bytes())
         for name in ('role_profiles.py', 'api_policy.py', 'namespace.py', 'local_tls.py',
-                     'rehearsal.py', 'retained_files.py', 'session_controller.py'):
+                     'rehearsal.py', 'retained_files.py', 'session_controller.py', 'controller_inputs.py'):
             (self.component.parent / name).write_bytes((Path(__file__).parent / name).read_bytes())
         for name in ('40_race_holder.sql', '41_race_waiter.sql', '42_race_observe.sql', '43_race_assert.sql'):
             path = self.component.parent / 'scenarios' / name
@@ -206,7 +206,7 @@ class Operational(unittest.TestCase):
 
     def test_missing_required_component_refuses_complete_operational_contract(self):
         for name in ('role_profiles.py', 'api_policy.py', 'namespace.py', 'local_tls.py',
-                     'rehearsal.py', 'retained_files.py', 'session_controller.py'):
+                     'rehearsal.py', 'retained_files.py', 'session_controller.py', 'controller_inputs.py'):
             component = self.component.parent / name
             original = component.read_bytes()
             component.unlink()

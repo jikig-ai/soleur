@@ -1469,3 +1469,19 @@
   persist. Sharing, retention/inheritance and regions remain unknown. Remaining
   AC: approved current-source/full-production recovery, authenticated screenshots,
   eligible routine, permitted Web/CLO matrices, then full review/promotion.
+
+### Controller input specifications — 2026-10-13
+
+- [Controller input preparation](controller-input-preparation-2026-10-13.md)
+  owns the fresh CTO ruling and source-only profile/builder specifications,
+  adapter requirements and retained ownership/quiescence consistency checks.
+  Executable role Configs/profiles, operational adapters, runtime observations
+  and immutable image/auth receipts remain pending; no hold or approval changes.
+- The complete offline wrapper passed under inherited `PYTHONOPTIMIZE=1` with
+  explicit exit zero. Controller-input tests add 19 cases to the preceding 52
+  operational/retained/session cases. These are synthetic unit observations;
+  pushed-source focused review and exact-head CI remain separately owed.
+- Main remains included through `274fdd4a51c544ad6586fb011fec23b4c54d21da`.
+  The new module is part of the operational required-component census and its
+  executing bytes must match the source reference. Final pairing/export and
+  draft CI/description receipts will be recorded after the committed source.

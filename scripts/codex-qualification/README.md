@@ -135,3 +135,18 @@ rollback/close recipes expire permanently after five minutes. Recipes grant no
 execution authority and never reopen exec stdin. A persistent owned SQL adapter
 and real observations remain pending. See the
 [operational preparation record](../../knowledge-base/project/specs/feat-one-shot-codex-web-live-paths/operational-controller-preparation-2026-10-13.md).
+
+`controller_inputs.py` checks source-bound profile specifications against separate
+supplied review and complete image Config/reobservation references. All eleven
+roles use exact attempt reservations. Effective recipes must include all inherited
+environment keys and complete create/host fields. Builder specifications bind the
+candidate recipe, argv, replaced environment, exact dependency-route digest census
+and resource limits. Adapter requirements describe builder, namespace, persistent
+session and retained-file interfaces without constructing a transport. Retention
+checks join separate registered resource/root, owner/database and writer references
+to ordered quiescence windows covering complete before/after manifests. These
+supplied references establish consistency only; executable profiles, adapter
+implementations, ownership/quiescence verification, issuer authentication and
+approval remain pending. Results contain fingerprints and pending status, with
+no returned executable profile recipes. See the
+[controller-input preparation record](../../knowledge-base/project/specs/feat-one-shot-codex-web-live-paths/controller-input-preparation-2026-10-13.md).

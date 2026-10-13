@@ -41,6 +41,7 @@ Plan: `knowledge-base/project/plans/2026-09-27-feat-codex-web-live-handler-wirin
     - [x] Prepare source-bound builder/role/namespace and evidence contracts without an execution adapter or invented image observations.
     - [x] Prepare bounded session/race sequencing with exact backend identity and failure cleanup; verify only injected synthetic observations.
     - [x] Independently verify the preparation delta; retain all runtime observation and fresh approval blockers.
+    - [x] Prepare source-bound profile/builder specifications, nonexecutable adapter requirements and retained ownership/quiescence consistency checks; actual Configs, adapters and observations remain pending.
 - [x] 4.2 Update `workspace-default-engine.pen` for the engine dropdown, owner confirmation and member history-transfer acknowledgment; native Pencil screenshot QA is complete for all four settings/confirmation frames. These are design captures, not rendered implementation screenshots.
 
 ## Phase 5: Synthetic qualification and disposition

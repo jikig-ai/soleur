@@ -34,7 +34,7 @@ def prepare_operational(repo, source, directory):
     root = 'scripts/codex-qualification/'
     paths = [root + name for name in ('candidate.py', 'prepare.py', 'role_profiles.py',
              'api_policy.py', 'namespace.py', 'local_tls.py', 'rehearsal.py', 'operational.py',
-             'retained_files.py', 'session_controller.py')]
+             'retained_files.py', 'session_controller.py', 'controller_inputs.py')]
     paths += [root + 'scenarios/' + name for name in RACE_SCENARIOS]
     references = {}
     for entry in git(repo, 'ls-tree', '-z', source, '--', *paths).split(b'\0'):
@@ -172,14 +172,8 @@ def text_identity(value):
             all(32 <= ord(char) < 127 for char in value), 'Bounded nonempty observation identity required')
 
 
-def validate_evidence(contract, kind, receipt, *, now, expected_image=None, expected_namespace=None):
-    """Refuse inconsistent supplied evidence; never grant operational authority.
-
-    expected_image and expected_namespace are independent caller-supplied
-    observation references, not authenticated inputs. Exact matching of JSON is
-    deliberately insufficient for image/profile admission, login proof or an
-    approval. Those gates stay pending even for structurally valid receipts.
-    """
+def checked_contract(contract):
+    """Check pending contract consistency, without authenticating its source."""
     require(isinstance(contract, dict) and 'operational_sha256' in contract, 'Operational contract absent')
     content = {key: value for key, value in contract.items() if key != 'operational_sha256'}
     require(contract['operational_sha256'] == sha(canonical(content)) and
@@ -192,6 +186,17 @@ def validate_evidence(contract, kind, receipt, *, now, expected_image=None, expe
     require(all(isinstance(role, dict) and role.get('admissible') is False and
                 all(field in role and role[field] is None for field in ('image_id', 'image_config', 'recipe', 'profile'))
                 for role in roles.values()), 'Operational requirements cannot supply admitted role profiles')
+
+
+def validate_evidence(contract, kind, receipt, *, now, expected_image=None, expected_namespace=None):
+    """Refuse inconsistent supplied evidence; never grant operational authority.
+
+    expected_image and expected_namespace are independent caller-supplied
+    observation references, not authenticated inputs. Exact matching of JSON is
+    deliberately insufficient for image/profile admission, login proof or an
+    approval. Those gates stay pending even for structurally valid receipts.
+    """
+    checked_contract(contract)
     require(kind in KINDS, 'Unknown evidence kind')
     require(isinstance(receipt, dict) and set(receipt) == BASE_FIELDS, 'Complete exact evidence fields required')
     require(receipt['kind'] == kind and receipt['identity'] == contract['identity'] and
