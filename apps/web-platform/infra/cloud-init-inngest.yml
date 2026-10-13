@@ -268,7 +268,7 @@ write_files:
           if [ -n "$_em_src" ] && [ "$(readlink -f "$_em_src")" = "$(readlink -f "$1")" ]; then
             return 0
           fi
-          emit reopen_mount 0 n/a "$2 is mounted from ${_em_src:-unknown}, not $1 — converging to the verified source"
+          emit reopen_mount 0 n/a "$2 is mounted from $${_em_src:-unknown}, not $1 — converging to the verified source"
           umount "$2" || fail reopen_mount 1 n/a "umount of the wrong-source mount at $2 failed"
         fi
         _em_tmp="$(mktemp /etc/fstab.soleur.XXXXXX)" || fail reopen_fstab 1 n/a "mktemp /etc/fstab.soleur.XXXXXX failed"
