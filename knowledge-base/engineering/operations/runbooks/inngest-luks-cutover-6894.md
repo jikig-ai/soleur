@@ -611,3 +611,9 @@ and no `BASELINE_DECLARED_PROBES` bump were created.
 - ADR-199 — the empty-store world, where the destructive recut is lawful instead.
 - `knowledge-base/engineering/operations/runbooks/inngest-server.md` — the host itself.
 - `betterstack-log-query.md` — the standing alarms over this source, including the wrong-volume alert.
+
+## 2026-10-13 — `reopen_mount`: what a heal row means (#10217)
+
+Since this change, a boot where the LUKS stage lost the volume-attach race is no longer fatal-by-construction. The boot-reopen unit now completes the mount for the arm it verified: a `SOLEUR_INNGEST_LUKS_STAGE`/`inngest-luks-stage` journald row `reopen_mount` after `reopen_ok` (or after the already-open noop path) means the reopen wrote the `/mnt/data` (or `/mnt/data-luks`) fstab line and mounted it. A `reopen_fstab` or `reopen_mount` failure leaves the unit `failed` and fires the `inngest-luks-reopen-ARM-FAILED` phone-home — the Redis mount guard is still the last line.
+
+Incident that motivated it: iid 170091264 (first replace of the day) — `pointer_device_wait` FATAL at the 30 s bound while the attachment took ~80 s; reopen opened the mapper but could not mount; Redis refused (`not a mountpoint`); `bootstrap-done-DEGRADED`; `op=resume` G4 refused; healed only by a second replace (iid 170097260). Both readers now carry a counted 300 s bound and the reopen self-heals the mount, so a lost race converges on the same boot.

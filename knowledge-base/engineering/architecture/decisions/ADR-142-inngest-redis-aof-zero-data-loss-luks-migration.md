@@ -709,3 +709,16 @@ apply has landed the one in-place update on `hcloud_volume.inngest_redis_luks`, 
 
 **What this addendum does NOT change.** The decision, its encryption mechanism, the additive-cutover design, or any earlier
 amendment or addendum.
+
+## Addendum — 2026-10-13 (#10217): bounded attach-wait in both readers; the boot-reopen completes the mount
+
+Appended; nothing above is edited. Records the failure measured on production replace iid 170091264 and the two mechanism changes that answer it.
+
+**What happened.** First boot began before `hcloud_volume_attachment.inngest_redis_luks` had propagated (~80 s measured vs the ~30 s wait bound). `wait_dev`'s `pointer_device_wait` FATAL'd; the reopen unit later opened the mapper (`reopen_ok`) but its contract then was "opens ONLY; never mounts", so with no fstab line and no mount the host sat unhealable-degraded until a second full `inngest-host-replace` (iid 170097260).
+
+**Changes in force once this PR's template ships (via the next sanctioned `inngest-host-replace` — `user_data` is ForceNew, merge is inert):**
+
+- Both device readers — the `LUKSEOF` runcmd stage and `inngest-luks-open.sh` — wait under the same counted, fail-closed bound: literal `300` s, `sleep 1` counted passes, whole-predicate re-probe each pass, one post-loop `udevadm settle --timeout=10 || true`, unchanged refusal sentences. No env seam: the bound is not retunable from Doppler (CTO ruling D4, conforming to the shipped sibling shape).
+- The reopen contract is extended to "**opens, then completes the mount for the arm it verified — never formats, never mkfs**" (CTO ruling D8): `ensure_mount` writes the fstab line (`ext4 defaults,nofail 0 2`) and mounts it on every verified arm, including the already-open noop path — the incident's exact post-state. `inngest-luks-open.service` gains `After=systemd-remount-fs.service` so the fstab write cannot race a read-only root (CTO ruling D2).
+
+**What this addendum does NOT change.** The decision, its encryption mechanism, the additive-cutover design, or any earlier amendment or addendum. The pre-cutover/staging arms are unchanged in meaning; they get the same bound only because the two readers share one `wait_dev` body and the bound must not drift (D5).
