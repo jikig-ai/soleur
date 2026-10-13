@@ -212,11 +212,19 @@ tracked once and are absent from HEAD. The two together are what make the bare
 root equal HEAD exactly. It then re-applies execute bits for the scripts and
 hooks the plugin loader and SessionStart hooks exec.
 
-The prune is locale-independent (every stage runs under `LC_ALL=C`; a `comm` in the
-user's locale once deleted tracked files, including `.claude-plugin/marketplace.json`)
-and guarded per path: a candidate that `HEAD` still tracks aborts the whole prune with
-`ERROR: tracked path in prune set`, and a prune larger than `SOLEUR_SYNC_PRUNE_MAX`
-(default 5000) is skipped with a `WARN`. Both abort paths exit 0, so `cleanup-merged` completes.
+The prune is locale-independent (every `sed`/`sort`/`comm` stage runs under `LC_ALL=C`; a `comm`
+in the user's locale once deleted tracked files, including `.claude-plugin/marketplace.json`) and
+runs against the **bare root's** HEAD, pinned once, even when `sync` is started from a worktree on
+another branch. Each candidate is checked against that commit right before removal, and a path under
+a symlinked directory, a `..` path, and (when the root is the git dir) a name git owns are skipped.
+A candidate that HEAD still tracks aborts the **whole** prune with `ERROR: tracked path in prune set`
+(nothing is removed; the first 10 are listed). A prune larger than `SOLEUR_SYNC_PRUNE_MAX` (default
+5000, counted on paths about to be removed; a leading zero is read as decimal, an invalid value falls
+back to 5000 with a `WARN`, `0` skips every prune) is skipped with a `WARN`. There are three skip
+paths (tracked hit, ceiling, could not compute the candidate set), all exit 0 so `cleanup-merged`
+completes, and the last line then reads `Synced on-disk files from git HEAD (prune skipped ...)`.
+Nothing was deleted in that case; do not re-run, and report the `ERROR` path if one was printed.
+A deleted file whose name holds a tab, newline, quote or backslash is never pruned (git quotes it).
 
 > **Corrected 2026-08-10 (#7409).** This section previously enumerated a
 > seven-entry list (`AGENTS.md`, `plugins/soleur/hooks/*`, `.claude/hooks/*.sh`,
