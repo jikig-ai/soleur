@@ -78,7 +78,7 @@ must be replayed against a real render before committing.
 4. **`render_reopen` `/etc/default/` assert flagged a comment** — over-broad
    literal. **Prevention:** render the target once and grep before writing a
    survivor assert; distinguish "writes to X" from "mentions X in a comment".
-5. **CLA check failed on `devin@cognition.ai` commits** — this repo's CLA
+5. **CLA check failed on the default `devin` (cognition.ai) committer** — this repo's CLA
    allowlist contains the operator account (`deruelle`) and named bots, not
    `devin-ai-integration[bot]`; pipeline commits must carry the ambient
    signed identity. **Prevention:** match the repo's committer convention
