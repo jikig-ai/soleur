@@ -3,6 +3,8 @@ import copy
 import json
 from pathlib import Path
 import unittest
+from datetime import datetime, timezone
+from unittest.mock import patch
 
 import candidate
 import prepare
@@ -12,12 +14,22 @@ import operational
 
 class Operational(unittest.TestCase):
     def setUp(self):
+        class FixtureClock:
+            @classmethod
+            def now(cls, _zone):
+                return datetime(2026, 10, 13, tzinfo=timezone.utc)
+        self.clock_patch = patch('candidate.datetime', FixtureClock)
+        self.clock_patch.start()
+        self.addCleanup(self.clock_patch.stop)
         self.fixture = test_candidate.Candidate()
         self.fixture.setUp()
         self.repo = self.fixture.repo
         self.destination = self.fixture.destination
         self.component = self.repo / 'scripts/codex-qualification/operational.py'
         self.component.write_bytes(Path(operational.__file__).read_bytes())
+        for name in ('role_profiles.py', 'api_policy.py', 'namespace.py', 'local_tls.py',
+                     'rehearsal.py', 'retained_files.py', 'session_controller.py'):
+            (self.component.parent / name).write_bytes((Path(__file__).parent / name).read_bytes())
         for name in ('40_race_holder.sql', '41_race_waiter.sql', '42_race_observe.sql', '43_race_assert.sql'):
             path = self.component.parent / 'scenarios' / name
             path.parent.mkdir(exist_ok=True)
@@ -136,6 +148,7 @@ class Operational(unittest.TestCase):
                 self.assertEqual(result['independent_review'], 'pending')
                 self.assertFalse(result['execute_authorized'])
                 self.assertFalse(result['authentication_established'])
+                self.assertFalse(result['profile_admissible'])
         receipt = self.receipt('auth')
         receipt['execute_authorized'] = True
         with self.assertRaises(prepare.Refused):
@@ -184,11 +197,32 @@ class Operational(unittest.TestCase):
         for field, value in [('namespace_manifest_sha256', '0' * 64), ('task_ca_sha256', '0' * 64),
                              ('hostname', 'foreign.invalid'), ('anon_key_sha256', '0' * 64),
                              ('browser_contract_sha256', '0' * 64), ('mode', 'hosted'),
-                             ('provider_credentials', True), ('browser_authenticated', False)]:
+                             ('provider_credentials', True), ('browser_authenticated', False),
+                             ('renderer_authenticated', False)]:
             receipt = self.receipt('auth')
             receipt['facts'][field] = value
             with self.subTest(field=field), self.assertRaises(prepare.Refused):
                 self.validate('auth', receipt)
+
+    def test_missing_required_component_refuses_complete_operational_contract(self):
+        for name in ('role_profiles.py', 'api_policy.py', 'namespace.py', 'local_tls.py',
+                     'rehearsal.py', 'retained_files.py', 'session_controller.py'):
+            component = self.component.parent / name
+            original = component.read_bytes()
+            component.unlink()
+            self.fixture.commit()
+            with self.subTest(component=name), self.assertRaises(prepare.Refused):
+                operational.prepare_operational(self.repo, self.fixture.source, self.destination)
+            component.write_bytes(original)
+            self.fixture.commit()
+
+    def test_candidate_expiry_remains_enforced_with_explicit_fixture_clock(self):
+        class ExpiredClock:
+            @classmethod
+            def now(cls, _zone):
+                return datetime(2026, 10, 20, tzinfo=timezone.utc)
+        with patch('candidate.datetime', ExpiredClock), self.assertRaisesRegex(prepare.Refused, 'expired'):
+            operational.prepare_operational(self.repo, self.source, self.destination)
 
     def test_mutated_contract_or_forged_authority_refuses(self):
         self.contract['builder']['binary_sha256'] = '0' * 64

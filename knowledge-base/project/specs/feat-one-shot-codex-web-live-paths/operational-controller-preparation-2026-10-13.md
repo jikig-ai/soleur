@@ -97,3 +97,40 @@ Session maintenance that would reap other worktrees or restore shared files is
 excluded by the operator's shared-write hold. Read-only readiness and local
 session-class probes passed. No build, recovery, SQL, real Docker, credentials,
 provider, browser login, account mutation, deployment or flag operation ran.
+
+# Focused independent review and corrections
+
+At pushed `1742352dc2a3c142bdad6aa63fb3587cd7029252`, security, data integrity
+and test-design seats independently reviewed only the preparation delta. All
+47 targeted cases passed, but review found three implementation gaps and two
+test-oracle gaps. These are source findings, not runtime clearance.
+
+| Canonical finding | Reporting seat | Correction |
+|---|---|---|
+| Full directory allocation before entry-limit refusal | data integrity; security advisory | Streaming descriptor-relative enumeration stops after the limit plus one, on initial and verification scans |
+| Outer root mode not bound to traversal-start metadata | data integrity | Bind initial and final traversal fingerprints to the outer root observation |
+| Declared source-reference dependencies may be absent | security; data integrity | Require the complete declared component/scenario path set |
+| Renderer-authentication refusal lacks negative case | test design | Add the false-renderer observation case |
+| Profile-admission denial lacks output assertion | test design | Assert the separate profile-admission output stays false |
+
+Three retained-file regressions failed on the old implementation; seven
+missing-component cases also failed before their guard was added. Matching
+positive controls remain. The new operational fixture additionally freezes its
+synthetic candidate clock and tests October 20 expiry explicitly, preserving
+the production expiry refusal. Review found that inherited wall-clock dependency
+in the earlier candidate fixture; it does not establish actual expiration or
+runtime evidence at this session's date.
+
+The local Git hook path is `/dev/null`; no automatic hook coverage is assumed.
+The corrected complete wrapper passed with inherited `PYTHONOPTIMIZE=1`;
+new-unit totals are 52 tests (retained 14, sessions 25, operational 13).
+Fixture-directory operands passed 71 assertions. Neither intentional RED nor
+sandbox refusal was counted as passing evidence.
+Explicit checks and pushed draft CI own their measured results. Initial
+preparation CI 38386998963 settled with only the draft aggregate `test` red;
+later correction and final-description checks require their own exact heads.
+
+Main advanced by one evidence-only commit to
+`274fdd4a51` (rung-2 boot receipts in one infrastructure `.env` source file).
+The incoming change adds no application/schema/controller code or command
+execution. Inclusion and refreshed pairing will be recorded after the merge.

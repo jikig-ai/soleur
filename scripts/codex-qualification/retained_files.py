@@ -71,6 +71,15 @@ def read_regular(parent, name, info, remaining):
         os.close(descriptor)
 
 
+def bounded_names(descriptor, limit):
+    names = []
+    with os.scandir(descriptor) as iterator:
+        for entry in iterator:
+            require(len(names) < limit, 'Retained entry budget exceeded during enumeration')
+            names.append(entry.name)
+    return sorted(names)
+
+
 def snapshot(root_fd, binding, expected_paths, *, max_entries=MAX_ENTRIES, max_bytes=MAX_BYTES):
     """Collect complete inventory; binding validity never grants root admission."""
     checked_binding(binding)
@@ -85,12 +94,12 @@ def snapshot(root_fd, binding, expected_paths, *, max_entries=MAX_ENTRIES, max_b
             root.st_ino == binding['root_inode'], 'Retained root descriptor differs from binding')
     entries, total = [], 0
 
-    def visit(descriptor, prefix, depth):
+    def visit(descriptor, prefix, depth, expected_info):
         nonlocal total
         require(depth <= 32, 'Retained directory depth exceeded')
         initial = os.fstat(descriptor)
-        names = sorted(os.listdir(descriptor))
-        require(len(entries) + len(names) <= max_entries, 'Retained entry budget exceeded')
+        require(fingerprint(initial) == fingerprint(expected_info), 'Retained traversal root changed')
+        names = bounded_names(descriptor, max_entries - len(entries))
         for name in names:
             relative = path(prefix + name)
             require(relative in expected, 'Retained inventory differs from synthetic census')
@@ -103,7 +112,7 @@ def snapshot(root_fd, binding, expected_paths, *, max_entries=MAX_ENTRIES, max_b
                 child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
                 try:
                     require(fingerprint(os.fstat(child)) == fingerprint(info), 'Directory identity changed')
-                    visit(child, relative + '/', depth + 1)
+                    visit(child, relative + '/', depth + 1, info)
                 finally:
                     os.close(child)
             else:
@@ -114,11 +123,12 @@ def snapshot(root_fd, binding, expected_paths, *, max_entries=MAX_ENTRIES, max_b
             require(fingerprint(os.stat(name, dir_fd=descriptor, follow_symlinks=False)) == fingerprint(info),
                     'Retained entry replaced during collection')
             require(len(entries) <= max_entries, 'Retained entry budget exceeded')
-        require(names == sorted(os.listdir(descriptor)) and
+        require(names == bounded_names(descriptor, len(names)) and
                 fingerprint(os.fstat(descriptor)) == fingerprint(initial), 'Retained directory changed during collection')
 
     try:
-        visit(root_fd, '', 0)
+        visit(root_fd, '', 0, root)
+        require(fingerprint(os.fstat(root_fd)) == fingerprint(root), 'Retained root changed after collection')
     except OSError:
         raise Refused('Retained filesystem could not be measured') from None
     require({row['path'] for row in entries} == set(expected), 'Retained census has missing entries')

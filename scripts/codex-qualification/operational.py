@@ -43,6 +43,7 @@ def prepare_operational(repo, source, directory):
             mode, kind, blob = header.decode().split()
             require(kind == 'blob' and mode in ('100644', '100755'), 'Operational inputs must be committed regular files')
             references[name.decode()] = {'blob': blob, 'sha256': sha(git(repo, 'cat-file', 'blob', blob))}
+    require(set(references) == set(paths), 'Complete operational component and scenario census required')
     component = root + 'operational.py'
     require(component in references and references[component]['sha256'] == sha(Path(__file__).read_bytes()),
             'Executing operational component is not committed current source')

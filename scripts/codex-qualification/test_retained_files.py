@@ -140,6 +140,75 @@ class RetainedFiles(unittest.TestCase):
         with patch('retained_files.read_regular', side_effect=replace), self.assertRaises(Refused):
             self.snapshot()
 
+    def test_root_metadata_change_between_outer_and_traversal_reads_refuses(self):
+        original = retained_files.os.fstat
+        calls = 0
+        def change(descriptor):
+            nonlocal calls
+            value = original(descriptor)
+            if descriptor == self.fd:
+                calls += 1
+                if calls == 1:
+                    self.root.chmod(0o755)
+            return value
+        with patch('retained_files.os.fstat', side_effect=change), self.assertRaises(Refused):
+            self.snapshot()
+
+    def test_initial_enumeration_consumes_only_budget_plus_one(self):
+        for number in range(32):
+            (self.root / ('extra' + str(number))).write_bytes(b'')
+        original = retained_files.os.scandir
+        consumed = []
+        def counted(descriptor):
+            iterator = original(descriptor)
+            class BoundedProbe:
+                def __enter__(self):
+                    consumed.append(0)
+                    return self
+                def __exit__(self, *_):
+                    iterator.close()
+                def __iter__(self):
+                    return self
+                def __next__(self):
+                    value = next(iterator)
+                    consumed[-1] += 1
+                    return value
+            return BoundedProbe()
+        with patch('retained_files.os.scandir', side_effect=counted), self.assertRaises(Refused):
+            retained_files.snapshot(self.fd, self.binding, [], max_entries=1)
+        self.assertEqual(consumed, [2])
+
+    def test_verification_enumeration_is_also_bounded(self):
+        original = retained_files.os.scandir
+        root_scans, consumed = 0, []
+        def counted(descriptor):
+            nonlocal root_scans
+            is_root = os.fstat(descriptor).st_ino == self.binding['root_inode']
+            if is_root:
+                root_scans += 1
+                if root_scans == 2:
+                    for number in range(32):
+                        (self.root / ('added' + str(number))).write_bytes(b'')
+            iterator = original(descriptor)
+            class BoundedProbe:
+                def __enter__(self):
+                    self.index = len(consumed)
+                    consumed.append(0)
+                    return self
+                def __exit__(self, *_):
+                    iterator.close()
+                def __iter__(self):
+                    return self
+                def __next__(self):
+                    value = next(iterator)
+                    if is_root:
+                        consumed[self.index] += 1
+                    return value
+            return BoundedProbe()
+        with patch('retained_files.os.scandir', side_effect=counted), self.assertRaises(Refused):
+            self.snapshot()
+        self.assertEqual([value for value in consumed if value], [2, 3])
+
     def test_forged_hash_duplicate_inventory_and_binding_drift_refuse(self):
         before = self.snapshot()
         for mutate in (
