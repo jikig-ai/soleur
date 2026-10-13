@@ -159,7 +159,8 @@ def _tracked():
     global _TRACKED
     if _TRACKED is None:
         import subprocess
-        out = subprocess.run(["git", "ls-files", "-z", "--", "knowledge-base"], capture_output=True).stdout
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        out = subprocess.run(["git", "ls-files", "-z", "--", "knowledge-base"], capture_output=True, env=env).stdout
         files = [f for f in out.decode("utf-8", "replace").split("\0") if f]
         dirs = set()
         for f in files:
