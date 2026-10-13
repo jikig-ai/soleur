@@ -9,7 +9,7 @@ conclusion: "Full DPIA NOT required: opt-in consent gate, owner-gated, fail-clos
 related:
   [
     article-30-register,
-    "knowledge-base/project/specs/feat-open-web-egress/spec.md",
+    "knowledge-base/project/specs/archive/20261013-062704-feat-open-web-egress/spec.md",
     "knowledge-base/legal/compliance-posture.md",
   ]
 ---

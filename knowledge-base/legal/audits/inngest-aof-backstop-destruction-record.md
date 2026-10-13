@@ -216,7 +216,7 @@ Fill one row per production command (`detach`, `wipe`, each `teardown`, `destroy
 | `destroy` | recorded in the pipeline session; quote not in the repo | 32b2fe2abb (run 37958051426) | as for `detach` | none: no rehearsal path exists |
 
 "None: no rehearsal path exists" is the true entry for the wipe: building one was weighed and not done
-(see `knowledge-base/project/specs/feat-one-shot-8285-retire-inngest-plaintext-backstop/decision-challenges.md`,
+(see `knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-8285-retire-inngest-plaintext-backstop/decision-challenges.md`,
 2026-10-09). Replace it only if a rehearsal is actually run.
 
 ### Completion checklist for PR B, extended

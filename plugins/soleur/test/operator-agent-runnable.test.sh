@@ -54,21 +54,21 @@ PLUGIN_ROOT="$(cd "${SUITE_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${PLUGIN_ROOT}/../.." && pwd)"
 LIB="${PLUGIN_ROOT}/scripts/lib/operator-script.sh"
 TEMPLATE="${PLUGIN_ROOT}/skills/operator-bootstrap/template.sh"
-SCRIPT9321="${REPO_ROOT}/knowledge-base/project/specs/feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh"
+SCRIPT9321="${REPO_ROOT}/knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh"
 
-# The three finished generated scripts that still carry the v1 (typed yes) contract. The
-# list may only SHRINK; each entry must already be a v1 script at the merge base (checked
-# below). Follow-up: migrate them to the staged contract (tracked in the PR body).
-# The paths are spelled as SPEC-DIR names plus a shared prefix and suffix, not as three full path literals:
-# the battery's tag-authorship closure (scripts/battery-tag-authorship.test.sh) follows a path literal
-# into the file it names, and the finished legacy scripts run `git fetch origin main` (they are never
-# executed here; this guard only reads their header line). A guard that merely names a legacy script
-# must not drag its commands into the battery.
-LEGACY_V1_SPEC_DIRS=(
-  "feat-8450-ci-concurrency"
-  "feat-linkedin-token-renewal"
-  "feat-one-shot-8609-evict-runtime-app-key-prd"
-)
+# The finished generated scripts that still carry the v1 (typed yes) contract and remain
+# at live spec paths. The list may only SHRINK; each entry must already be a v1 script at
+# the merge base (checked below). All three former entries (feat-8450-ci-concurrency,
+# feat-linkedin-token-renewal, feat-one-shot-8609-evict-runtime-app-key-prd) moved under
+# specs/archive/ in the KB sweep, where the population check exempts them — the list is
+# empty until/unless a live v1 script appears, which is exactly what the guard flags.
+# The paths are spelled as SPEC-DIR names plus a shared prefix and suffix, not as full
+# path literals: the battery's tag-authorship closure (scripts/battery-tag-authorship.test.sh)
+# follows a path literal into the file it names, and the finished legacy scripts run
+# `git fetch origin main` (they are never executed here; this guard only reads their
+# header line). A guard that merely names a legacy script must not drag its commands
+# into the battery.
+LEGACY_V1_SPEC_DIRS=()
 LEGACY_V1=()
 for _d in "${LEGACY_V1_SPEC_DIRS[@]}"; do LEGACY_V1[${#LEGACY_V1[@]}]="knowledge-base/project/specs/${_d}/boot""strap.sh"; done
 unset _d
@@ -376,7 +376,7 @@ else
 fi
 FOUND="$(g1_discover "$REPO_ROOT")"
 V2_COUNT="$(grep -c . < <(for f in $FOUND; do sed -n '2p' "$REPO_ROOT/$f" | grep -cx >/dev/null '# SOLEUR-GENERATED-OPERATOR-SCRIPT v2' && echo "$f"; done) || true)"
-if [[ "$V2_COUNT" -ge 2 ]] && grep -qxF 'plugins/soleur/skills/operator-bootstrap/template.sh' <<<"$FOUND" && grep -qxF 'knowledge-base/project/specs/feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh' <<<"$FOUND"; then
+if [[ "$V2_COUNT" -ge 2 ]] && grep -qxF 'plugins/soleur/skills/operator-bootstrap/template.sh' <<<"$FOUND" && grep -qxF 'knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh' <<<"$FOUND"; then
   pass "the discovered v2 population holds the template and the re-cut 9321 script (${V2_COUNT} v2 script(s))"
 else
   fail "the discovered v2 population is missing the template or the 9321 script (found: $(tr '\n' ' ' <<<"$FOUND"))"

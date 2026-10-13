@@ -252,7 +252,7 @@ ALWAYS_ON_SUITES=(
   # Each was demoted on one inotify run in PR 1; the committed recorder (verdict `disqualified`:
   # a file test/stat/ls/find operand it cannot resolve or a carried-disqualifier hit, or `uncovered`:
   # reads outside the cover) no longer supports the demotion. Always-on is the safe side of every
-  # verdict. Evidence per suite: knowledge-base/project/specs/feat-affected-parallel-test-gate/always-on-audit.md "Round 2".
+  # verdict. Evidence per suite: knowledge-base/project/specs/archive/20261013-062704-feat-affected-parallel-test-gate/always-on-audit.md "Round 2".
   "scripts/lint-agents-rule-budget-live"
   "scripts/lint-agents-rule-budget-unit"
   "scripts/lint-workflow-run-body-syntax"
@@ -544,7 +544,7 @@ AFFECTED_SCRIPTS_PRE_PUSH_RATCHET_LANE_PATHS=(
 # open-event recorder (no git-diff/ls-files dependence, no network, no clock, rc 0), and its
 # edge set is the cover of what it opened -- a directory whose listing mattered, otherwise
 # the exact files. The evidence per suite is in
-# knowledge-base/project/specs/feat-affected-parallel-test-gate/always-on-audit.md; a suite
+# knowledge-base/project/specs/archive/20261013-062704-feat-affected-parallel-test-gate/always-on-audit.md; a suite
 # is added here only with that evidence (the census linter does not check that), and the
 # dropped-consumer ratchet (scripts/test-affected-kb-consumers.test.sh) covers
 # knowledge-base/ reads ONLY. A demotion also moves the suite from a free always-on skip to a
@@ -596,7 +596,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_STAGE_APPROVAL_HOOK_TEST_SH_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_OPERATOR_9321_STAGES_TEST_SH_PATHS=(
-  "knowledge-base/project/specs/feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh"
+  "knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh"
   "plugins/soleur/hooks/operator-stage-approval.sh"
   "plugins/soleur/scripts/lib/operator-script.sh"
   "plugins/soleur/test/lib/operator-stub-world.sh"
@@ -716,7 +716,7 @@ AFFECTED_SCRIPTS_AUDIT_SUITE_READS_PATHS=(
 
 # ---------------------------------------------------------------------------
 # CLOSURE-LEAF RUNTIME READS (A5). Per-label arrays over the shared sets above; the recorder evidence is in
-# knowledge-base/project/specs/feat-affected-parallel-test-gate/always-on-audit.md "Round 3".
+# knowledge-base/project/specs/archive/20261013-062704-feat-affected-parallel-test-gate/always-on-audit.md "Round 3".
 # ---------------------------------------------------------------------------
 AFFECTED_PLUGINS_SOLEUR_TEST_WORKTREE_MANAGER_BARE_SYNC_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_RT_WORKTREE_MANAGER[@]}"
