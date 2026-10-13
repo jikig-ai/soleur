@@ -50,9 +50,12 @@ Rulings in `knowledge-base/project/specs/feat-one-shot-10175-git-data-rotate-pos
 5. **Runbook (`git-data-luks-cutover-5274.md`).** D6 rotate section: a leading "Never dispatch the rotate after the flip, or after any flip/rollback attempt (including a rehearsal): the store may hold the only copy of replicated repositories; the guard refuses it and there is no bypass input"; a verdict table for the new refusals (`store_dirty`, `cutover_in_flight`, `scan_unreadable`, `stale_boot_complete`, `boot_complete_unreadable`); the existing `served_repos=0` paragraph corrected to say it is a once-per-boot reading and not a live proof; one sentence that the web-fed heartbeat is not a flip precondition (so #6975 does not block); the follow-up notes below.
 6. **Follow-ups filed, not built:** F4 (mode-unique "store measured empty" marker in git-data-cutover.yml, the later live proof and exit from dirty; blocked on #8571 for a populated store), #9943 (left open, merged design; flip precondition in a different workflow), #6975 (left open; Terraform fan-out). Each gets a GitHub issue or an existing-issue comment at work time with re-evaluation criteria and milestone from knowledge-base/product/roadmap.md.
 
+7. **Post-flip rotate need (CPO conditions 1-4, CLO).** The guard is a floor against the accidental dispatch, not a prohibition on ever rotating. The runbook gains a section "When a rotate is needed after the flip" that states: (a) the workflow offers no bypass input (CTO F7); (b) a suspected `GIT_DATA_LUKS_KEY` compromise (including Doppler secret exposure) is an owner-run break-glass, not a workflow dispatch: contain first (revoke secret access, detach the volume per the existing host-incident procedure), then the replicas are re-seeded from the web hosts (git-data is a replica; the runbook already records that it self-heals at each workspace's next session end by force-pushing every head and tag), then a reviewed PR that lifts the guard for one dispatch with the owner and CLO named as reviewers, then the rotate; containment within hours, re-encryption within days, Art. 33's 72 hours counted from awareness; (c) the ordinary Art. 17 residue (erased means unlinked, ADR-239) is accepted until #8571 lands, with a dated re-evaluation: the date is set by the owner at work time, with the CLO re-opened if it is missed (the ADR-239 2026-10-22 pattern); (d) "escalate" names its targets: issue #10175 for the guard and issue #8571 for copy mode, plus the owner. A PA-36 (g)(2) cross-reference ("rotation is deferred by the #10175 guard") is added to the ADR-239 amendment trail only (no legal document is edited); the compliance-posture entry for the residue window is a follow-up for the CLO, filed at work time.
+8. **Flip prerequisite (CPO condition 2).** F4 (the "store measured empty" marker) and #8571 get a milestone from knowledge-base/product/roadmap.md and a re-evaluation trigger: "the first real `mode=flip` is booked". The runbook's Preconditions-for-the-flip list gains one item: owner has recorded acceptance that no post-flip rotate route exists until #8571 or F4 lands, naming the break-glass above. The roadmap is not edited by this plan (fog goes to the roadmap workshop); the item lives in the runbook and the filed issues.
+
 ## Technical Considerations
 
-- **Residual risks, stated in the runbook:** run records deleted by hand, and a flag set outside the workflow, are invisible to the scan (the boot_complete freshness layer and the typed-token/approval gate remain). The guard is a floor for the accidental dispatch, not a defence against a hostile owner.
+- **Residual risks, stated in the runbook and recorded as accepted by the owner (CPO condition 5):** run records deleted by hand, and a flag set outside the workflow, are invisible to the scan (the boot_complete freshness layer and the typed-token/approval gate remain). The guard is a floor for the accidental dispatch, not a defence against a hostile owner.
 - **Ordering:** both new refusals sit before the rung-2 interlock and the plan gate, so the destructive plan is never reached on a dirty store; they run under the `git-data-state` group already held by the job (TOCTOU with a flip is closed by the group).
 - **Credential census:** `actions: read` is job-level and pinned in tests/scripts/test-infra-privileged-tier-census.sh; no `secrets.*` beyond GITHUB_TOKEN is added; no step gains `if: plan_only` interplay (the new step is a gate step and stays unconditional on plan_only like the census G5c class).
 - **d6 interaction:** the new step is a separate name; `GDRS_PRECONDITION_STEP` stays intact. A rotate refused by the new step skips the precondition step, which the stamp library reads as `skip` (nothing mutated), unchanged semantics.
@@ -84,6 +87,39 @@ To run at work time (`gh issue list --label code-review`); none identified durin
 - **If this leaks, the user's data is exposed via:** no new exposure vector: no new credential, no secret printed, run records read with a read-only token.
 - **Brand-survival threshold:** `single-user incident`
 - **Threshold decision (challengeable):** the failure destroys user repositories irrecoverably, so single-user incident rather than aggregate pattern. CPO sign-off required before `soleur:work`; `soleur:engineering:review:user-impact-reviewer` runs at review.
+
+## Observability
+
+```yaml
+liveness_signal:
+  what: the guard is a dispatch-time gate with no standing process; its signal is the refusal itself (an `::error` annotation naming the verdict token) on every rotate dispatch, plus the existing git-data host heartbeat soleur-git-data-host-prd (ADR-283) for the host
+  cadence: per rotate dispatch
+  alert_target: the dispatching operator via the failed run; no page (a refusal is the intended outcome)
+  configured_in: .github/workflows/apply-web-platform-infra.yml (step "Rotate precondition — store never written (cutover run records)")
+
+error_reporting:
+  destination: GitHub Actions run annotations (`::error::`) carrying a fixed verdict word; no secret, run ids and counts only
+  fail_loud: exit 1 with verdict store_dirty | cutover_in_flight | scan_unreadable | stale_boot_complete | boot_complete_unreadable
+
+failure_modes:
+  - mode: guard fails open (a flag-writing run is not counted: renamed step, deleted run records, a second workflow)
+    detection: parity test pins the step literal in both git-data-cutover.yml and the scan library; scan returns scan_unreadable on a count mismatch or an absent step on a job that ran
+    alert_route: CI red on the PR that renames the step
+  - mode: guard fails closed on a clean store (API or pagination error)
+    detection: scan_unreadable annotation with the failing run id
+    alert_route: operator re-dispatches; no bypass exists by design
+  - mode: stale boot_complete row accepted
+    detection: strict created-versus-row comparison, tested at equality and one second before
+    alert_route: stale_boot_complete refusal
+
+logs:
+  where: GitHub Actions run log of apply-web-platform-infra.yml
+  retention: GitHub default run-log retention (90 days); the verdict word is also readable from the run's job and step conclusions via the API
+
+discoverability_test:
+  command: grep -c "Rotate precondition — store never written (cutover run records)" .github/workflows/apply-web-platform-infra.yml
+  expected_output: "1"
+```
 
 ## Guard Contract
 
@@ -160,7 +196,9 @@ Harness rows: must-PASS with epoch = created + 1 and with a different JSON key o
 - [ ] Job-level `permissions` is exactly `contents: read` + `actions: read` and the census test pins it; no new secret is bound.
 - [ ] The `d6_replace_stale` message no longer instructs a rotate for a flipped store and says no bypass, escalate; its test pin is updated.
 - [ ] Runbook D6 section carries "never after the flip", the verdict table, the corrected `served_repos=0` paragraph, the web-fed-heartbeat sentence and the follow-up notes; markdownlint passes.
-- [ ] Follow-up issues/notes exist for F4, #9943 and #6975 with re-evaluation criteria.
+- [ ] Follow-up issues/notes exist for F4, #9943 and #6975 with re-evaluation criteria; F4/#8571 carry a milestone and a flip-booked trigger.
+- [ ] Runbook has the "When a rotate is needed after the flip" section (break-glass for key compromise, Art. 17 residue acceptance with a dated re-evaluation, named escalation targets) and the flip-precondition item.
+- [ ] A test pins that the census is unchanged except the job-level `actions: read` (no new secret bound to the job).
 - [ ] `git-data-store-dirty-scan.test.sh` runs the full mutation matrix, harness rows and a row-count floor green; existing `tests/scripts/test-git-data-boot-signal-poll.sh`, `git-data-rotate-stamp.test.sh`, terraform-target-parity and census suites stay green.
 - [ ] No workflow dispatched, no terraform apply, no production write (verify by the PR diff and run history).
 
