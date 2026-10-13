@@ -318,9 +318,13 @@ while [[ "${1:-}" == --* ]]; do
       # segments/trails (a/./b; the doubled-head ././x carries one), a trailing
       # `/` (a dir ref is not a diff path), and TAB/LF bytes (the ingestion
       # point joins on commas and the edge matcher splits on TAB — either byte
-      # mints fake diff lines). _affected_normpath is deliberately NOT called:
-      # it is defined ~2500 lines below this top-level parse loop, and it
-      # collapses a/../b where this arm rejects.
+      # mints fake diff lines). The rejects run on the RAW element before the
+      # ./ strip: every shape the strip could leave behind (.., //, /., a
+      # trailing /) is already present pre-strip, so normalization can never
+      # mint a reject shape that escaped the case — no post-strip re-check is
+      # needed. _affected_normpath is deliberately NOT called: it is defined
+      # ~2500 lines below this top-level parse loop, and it collapses a/../b
+      # where this arm rejects.
       _PRINT_PATHS=""
       _pp_rest="${1#--paths=},"
       while [[ -n "$_pp_rest" ]]; do
@@ -338,8 +342,6 @@ while [[ "${1:-}" == --* ]]; do
           .|*/)                _pp_why="not a file diff path" ;;
         esac
         while [[ "$_pp" == ./* ]]; do _pp="${_pp#./}"; done
-        [[ -z "$_pp" || "$_pp" == . || "$_pp" == ./* ]] \
-          && _pp_why="${_pp_why:-empty after ./ normalization}"
         if [[ -n "$_pp_why" ]]; then
           echo "ERROR: --paths element '${_pp_orig}' rejected (${_pp_why}); expected a comma-joined list of clean repo-relative paths, e.g. --paths=scripts/foo.sh,docs/a.md" >&2
           exit 2

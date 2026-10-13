@@ -752,9 +752,11 @@ actually enumerates).
     `git ls-files` (`.test.sh` and `.sh`-but-not-`.test.sh` as disjoint classes, with a
     producer-liveness floor and `_TH_REPO` fixture confinement) and REDs the first battery run
     carrying one — while the grammar extension is deferred to #10198 and activates only when a
-    live member exists. Until it lands, an author carrying such a file takes the interim
-    recourse: a literal edge or an ALWAYS_ON entry. The decision is *detect now, extend on
-    evidence* — the grammar grows for a member that exists, never for one that might.
+    live member exists. The row stays RED on existence alone: a literal edge or an ALWAYS_ON
+    entry covers the file's *selection* in the interim but does not clear it — the durable exits
+    are moving the file under a covered root or landing the #10198 extension (at which point the
+    row's expectation revisits what the new grammar expresses). The decision is *detect now,
+    extend on evidence* — the grammar grows for a member that exists, never for one that might.
     Companion hardening in the same change: `--paths` elements normalize a leading `./` run to
     fixpoint at the parse arm and refuse unclean spellings (empty elements, absolute, `..` or
     `/.` or `//` segments, a trailing `/`, TAB/LF bytes) with a named rc-2 error — a print-only

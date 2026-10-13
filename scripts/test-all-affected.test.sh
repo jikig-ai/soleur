@@ -3112,9 +3112,12 @@ _th_ls_files() {
 # corpus file is the grammar residual the th8 row detects loudly — see below.
 _TH_ROOTS=$(_th_ls_files | awk -F/ 'NF>1{print $1}' | LC_ALL=C sort -u)
 # The dir-less (single-component) complement of the root projection, classified
-# DISJOINTLY — a .test.sh member and a .sh-but-not-.test.sh member face the same
-# grammar residual but a monolithic \.sh$ filter would subsume .test.sh and
-# leave the th8-m4 extension-arm mutation nothing to observe.
+# DISJOINTLY — under a monolithic \.sh$ arm, deadening one extension inside a
+# th8-m4 mutant could not be told apart from the whole filter dying; the split
+# keeps the surviving y.sh flag as the discriminator. Arm 2's `NF<2` is arm 1's
+# condition spelled differently — a discoverability pin admits exactly one
+# single-field-count token file-wide, and arm 1 carries it (second occurrence
+# breaks the pin).
 _th_root_corpus() { # dir-less corpus members on stdin, one per line
   awk -F/ '
     NF==1 && /\.test\.sh$/              {print; next}
@@ -3355,7 +3358,9 @@ fi
 # exactly-once assert, so a glob char in the anchor cannot mis-match), source it
 # under a new name. A reimplemented mutant can drift from the shipped shape; an
 # extracted one cannot. rc 2 = the anchor did not land — a mutant that fails to
-# land reports the baseline and must not read as a pass.
+# land reports the baseline and must not read as a pass. Extraction stops at the
+# first column-0 `}` — a target function may not carry one (a heredoc or quoted
+# block closing at column 0 would truncate the extraction).
 _th_fn_mut() { # <fn> <mutant-name> <old> <new> — defines <mutant-name>; rc 2 = anchor absent/ambiguous
   local _out="$TESTROOT/mutfn-$cases.sh"
   SELF_FILE="$REPO_ROOT/scripts/test-all-affected.test.sh" \
@@ -3367,6 +3372,9 @@ m = re.search(r"(?ms)^" + re.escape(os.environ["MUTFN"]) + r"\(\).*?^}", src)
 if not m:
     sys.exit("function not found: " + os.environ["MUTFN"])
 fn = m.group(0).replace(os.environ["MUTFN"] + "()", os.environ["MUTNAME"] + "()", 1)
+# A self-referencing target would leave the mutant's interior calls bound to the
+# ORIGINAL — the row could read a false pass on unmutated code.
+assert (os.environ["MUTFN"] + "()") not in fn, "self-reference left in mutant"
 old, new = os.environ["MUTOLD"], os.environ["MUTNEW"]
 if fn.count(old) != 1:
     sys.exit("anchor not exactly-once: x%d" % fn.count(old))
@@ -3409,7 +3417,7 @@ _th6v_out=$(
 if [[ "${_th6v_out% }" == "1 1 1 0 0 0 0 0 0 0 0 0 1 1" ]]; then
   pass "th6v: decline literal/subset/subdir/head-side/wrong-ext/literal/near-ext/overlap; accept both bare tails, dir member, late-covering member"
 else
-  fail "th6v: got '${_th6v_out}' want '1 1 1 0 0 0 0 0 0 0 0 0 1 1 '"
+  fail "th6v: got '${_th6v_out}' want '1 1 1 0 0 0 0 0 0 0 0 0 1 1'"
 fi
 
 # th6m — mutation dispatch over the predicate (Guard 2): each row mutates ONE
@@ -3501,17 +3509,20 @@ _th8_fix_repo() { # <name> [root-file...]
 # th8 (FR3, #10117) — dir-less repo-root corpus detection. The `glob:` grammar
 #     needs a `<dir>/` head — a root-level x.test.sh/x.sh has none, so no
 #     declared edge can cover it and its diff would select no corpus suite: a
-#     silent hole. The grammar extension is DEFERRED to #10198 (ADR-242
-#     decision 27) and activates only when a live member exists; until then
-#     this row REDs the first battery run carrying one, and the interim
-#     recourse is a literal edge or ALWAYS_ON.
+#     silent hole. The row REDs on EXISTENCE (the grammar-extension trigger,
+#     deferred to #10198 — ADR-242 decision 27) and stays red while any dir-less
+#     corpus member exists; a literal edge or ALWAYS_ON covers the file's
+#     SELECTION but does not clear this row — the exits are moving the file
+#     under a covered root or landing #10198. Latency note (ADR-262): this suite
+#     is pr-gated, so a diff that adds only the dir-less file declines it — the
+#     row fires on the merge-SHA push run, same doctrine as th6.
 cases=$((cases + 1))
 _th8=$(_th8_eval)
 case "$_th8" in
   "") pass "th8: no dir-less repo-root corpus file exists" ;;
   EMPTY-ROOT-DERIVATION|TH8-PRODUCER-FAILED)
     fail "th8: producer floor fired (${_th8}) — a dead listing must not read as a clean complement" ;;
-  *)  fail "th8: dir-less repo-root corpus file(s) — unrepresentable in the glob: grammar; deferred extension #10198 (interim recourse: a literal edge or ALWAYS_ON): ${_th8//$'\n'/ }" ;;
+  *)  fail "th8: dir-less repo-root corpus file(s) — the glob: grammar has no head to mint and this row stays RED while any exist; exits: move the file under a covered root, or land the deferred grammar extension #10198 (a literal edge or ALWAYS_ON covers the file's selection but does not clear this row): ${_th8//$'\n'/ }" ;;
 esac
 
 # th8-m1: a fixture repo carrying a dir-less x.test.sh → the detector flags it
@@ -3594,6 +3605,9 @@ if (( PASS + FAIL != cases )); then
   echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
   exit 2
 fi
+# The floor embeds the live _TH_ROOTS census (~3 cases per tracked top-level
+# dir across th4/th4b/th4c): a top-level-dir REMOVAL shrinks the corpus
+# legitimately — recompute the literal rather than misdiagnosing truncation.
 MIN_CASES=221
 if (( cases < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran — below the $MIN_CASES floor; a row block went missing" >&2
