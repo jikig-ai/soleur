@@ -47,46 +47,54 @@ mkdir -p "$SB/bin" || { echo "mkdir failed" >&2; exit 2; }
 
 cat > "$SB/bin/gh" <<'STUB'
 #!/usr/bin/env bash
-# Refuses any invocation it was not built to answer. STUB_UNEXPECTED collects them.
+# Refuses any invocation it was not built to answer, and LOGS every refusal to
+# $STUB_REFUSED before exiting 64. The lib sends `gh issue view` stderr to /dev/null
+# and `gh api` stderr to a tmpfile, so without the log a refused argv is
+# indistinguishable from a transient failure and an rc-2 row would pass for the wrong
+# reason. $STUB_LOG records every request that WAS answered (`issue <n>` / `perm <login>`).
 set -uo pipefail
-note_unexpected() { printf 'STUB-UNEXPECTED: gh %s\n' "$*" >&2; exit 64; }
+refuse() { printf 'REFUSED %s\n' "$*" >> "$STUB_REFUSED"; printf 'STUB-UNEXPECTED: gh %s\n' "$*" >&2; exit 64; }
 case "${1:-}" in
   issue)
-    [[ "${2:-}" == "view" ]] || note_unexpected "$@"
-    [[ "${3:-}" == "$STUB_EXPECT_ISSUE" ]] || note_unexpected "$@"
-    printf '%s' "$*" | grep -c >/dev/null -- '--json comments' || note_unexpected "$@"
-    printf '%s' "$*" | grep -c >/dev/null -- "--repo $STUB_EXPECT_REPO" || note_unexpected "$@"
-    jq_expr=""
-    for a in "$@"; do if [[ "$prev_was_jq" == 1 ]]; then jq_expr="$a"; prev_was_jq=0; fi
-      if [[ "$a" == "--jq" ]]; then prev_was_jq=1; fi; done
-    [[ -n "$jq_expr" ]] || note_unexpected "$@"
-    jq -r "$jq_expr" < "$STUB_COMMENTS"
+    # exactly: issue view <n> --repo <repo> --json comments --jq <expr>
+    [[ $# -eq 9 && "${2:-}" == view && "${3:-}" == "$STUB_EXPECT_ISSUE" && "${4:-}" == --repo \
+       && "${5:-}" == "$STUB_EXPECT_REPO" && "${6:-}" == --json && "${7:-}" == comments \
+       && "${8:-}" == --jq && -n "${9:-}" ]] || refuse "$@"
+    printf 'issue %s\n' "$3" >> "$STUB_LOG"
+    jq -r "$9" < "$STUB_COMMENTS"
     ;;
   api)
+    # exactly: api repos/<repo>/collaborators/<login>/permission --jq <expr>  (a call with no --jq is refused)
     ep="${2:-}"
-    [[ "$ep" == repos/"$STUB_EXPECT_REPO"/collaborators/*/permission ]] || note_unexpected "$@"
+    [[ $# -eq 4 && "$ep" == repos/"$STUB_EXPECT_REPO"/collaborators/*/permission && "${3:-}" == --jq && -n "${4:-}" ]] || refuse "$@"
     login="${ep#repos/"$STUB_EXPECT_REPO"/collaborators/}"; login="${login%/permission}"
+    printf 'perm %s\n' "$login" >> "$STUB_LOG"
     perm="$(awk -F'\t' -v l="$login" '$1==l{print $2}' "$STUB_PERMS")"
     if [[ -z "$perm" ]]; then printf 'gh: no stub permission for %s\n' "$login" >&2; exit 1; fi
     if [[ "$perm" == "403" ]]; then printf 'gh: Resource not accessible by integration (HTTP 403)\n' >&2; exit 1; fi
     if [[ "$perm" == "404" ]]; then printf 'gh: %s is not a user (HTTP 404)\n' "$login" >&2; exit 1; fi
-    printf '%s\n' "$perm"
+    printf '{"permission":"%s"}\n' "$perm" | jq -r "$4"
     ;;
-  *) note_unexpected "$@" ;;
+  *) refuse "$@" ;;
 esac
 STUB
-sed -i '2i prev_was_jq=0' "$SB/bin/gh"
 chmod +x "$SB/bin/gh"
 
+# The library under test. A mutant row sets LIB_UNDER to a mutated COPY; every other row reads the real lib.
+LIB_UNDER=""
+stub_env() { # <issue> <comments-json-file> <perms-file>   (resets the request and refusal logs)
+  : > "$SB/req.log"; : > "$SB/refused.log"
+  STUB_ENV=(PATH="${STUB_BIN:-$SB/bin}:$PATH" STUB_COMMENTS="$2" STUB_PERMS="$3" STUB_EXPECT_ISSUE="$1" STUB_EXPECT_REPO="jikig-ai/soleur"
+            STUB_LOG="$SB/req.log" STUB_REFUSED="$SB/refused.log")
+}
+
 # run_case <name> <issue> <comments-json-file> <perms-file>
-#   echoes: "<rc>|<stdout>"
+#   echoes: "<rc>|<stdout>"   (stdout only when rc is 0: the historical contract of rows 1-9)
 run_case() {
   local issue="$1" cjson="$2" pfile="$3" out rc
+  stub_env "$issue" "$cjson" "$pfile"
   out="$(
-    PATH="$SB/bin:$PATH" \
-    STUB_COMMENTS="$cjson" STUB_PERMS="$pfile" \
-    STUB_EXPECT_ISSUE="$issue" STUB_EXPECT_REPO="jikig-ai/soleur" \
-    bash -c '
+    env "${STUB_ENV[@]}" bash -c '
       set -uo pipefail
       # shellcheck disable=SC1090
       source "$1"
@@ -96,14 +104,34 @@ run_case() {
       else
         exit 2
       fi
-    ' _ "$LIB" "$issue" 2>"$SB/err.log"
+    ' _ "${LIB_UNDER:-$LIB}" "$issue" 2>"$SB/err.log"
   )"; rc=$?
-  if grep -q 'STUB-UNEXPECTED' "$SB/err.log"; then
-    printf 'STUBMISS|%s' "$(head -1 "$SB/err.log")"
+  if grep -q 'STUB-UNEXPECTED' "$SB/err.log" || [[ -s "$SB/refused.log" ]]; then
+    printf 'STUBMISS|%s' "$(head -1 "$SB/refused.log")"
     return
   fi
   printf '%s|%s' "$rc" "$out"
 }
+
+# run_case_raw <view function> <issue> <comments-json-file> <perms-file>
+#   Records the view's rc and its stdout INDEPENDENTLY (run_case discards stdout on a
+#   nonzero rc, which would hide the "rc 2 must leave NO partial output" property).
+#   Sets RAW_RC, RAW_OUT, RAW_MISS (1 when the stub refused an argv).
+RAW_RC=""; RAW_OUT=""; RAW_MISS=0
+run_case_raw() {
+  local view="$1" issue="$2" cjson="$3" pfile="$4"
+  stub_env "$issue" "$cjson" "$pfile"
+  env "${STUB_ENV[@]}" bash -c '
+      set -uo pipefail
+      # shellcheck disable=SC1090
+      source "$1"
+      "$2" "$3" >"$4"
+      echo "$?" >"$5"
+    ' _ "${LIB_UNDER:-$LIB}" "$view" "$issue" "$SB/raw.out" "$SB/raw.rc" 2>"$SB/err.log"
+  RAW_RC="$(cat "$SB/raw.rc" 2>/dev/null || echo none)"; RAW_OUT="$(cat "$SB/raw.out" 2>/dev/null)"
+  RAW_MISS=0; if grep -q 'STUB-UNEXPECTED' "$SB/err.log" || [[ -s "$SB/refused.log" ]]; then RAW_MISS=1; fi
+}
+nreq() { grep -c "^$1 " "$SB/req.log" || true; }   # <issue|perm>: how many requests of that kind the stub answered
 
 mkcomments() { printf '%s\n' "$1" > "$SB/c.json"; echo "$SB/c.json"; }
 mkperms()    { printf '%s\n' "$1" > "$SB/p.tsv"; echo "$SB/p.tsv"; }
@@ -256,8 +284,9 @@ else
 {"comments":[{"author":{"login":"deruelle"},"body":"RESULT: PASS"}]}
 JSON
   printf 'deruelle\tadmin\n' > "$SB/perms-mut"
+  stub_env 5733 "$SB/one-verdict.json" "$SB/perms-mut"
   mout="$(
-    PATH="$SB/bin:$PATH" STUB_COMMENTS="$SB/one-verdict.json" STUB_PERMS="$SB/perms-mut"     STUB_EXPECT_ISSUE=5733 STUB_EXPECT_REPO="jikig-ai/soleur"     bash -c 'set -uo pipefail; source "$1"; trusted_verdict_bodies "$2" >/dev/null 2>&1; echo $?' _ "$MUT" 5733
+    env "${STUB_ENV[@]}" bash -c 'set -uo pipefail; source "$1"; trusted_verdict_bodies "$2" >/dev/null 2>&1; echo $?' _ "$MUT" 5733
   )"
   if [[ "$mout" == "2" ]]; then
     pass "row 9 MUTATION: an author with no memoized permission yields TRANSIENT (rc=2), not a silent drop"
@@ -265,6 +294,227 @@ JSON
     fail "row 9 MUTATION: expected rc=2 from the un-resolved author; got rc=$mout"
   fi
 fi
+
+# =====================================================================================
+# THE TWO-VIEW MATRIX (rows M-H1 .. M-H11). Each row is a FUNCTION so a lib mutant (below) can
+# re-run it against a mutated copy. Every negative assertion has a POSITIVE TWIN on the same
+# input that differs only in the stubbed permission (an over-trusting or under-trusting
+# mutant is then visible from both sides). Every comment carries a CONTRIBUTOR authorAssociation
+# DECOY (the private-member shape) so a lib that consulted the association would redden M-H1.
+# =====================================================================================
+T1="2026-10-11T09:43:23Z"; T2="2026-10-11T09:48:17Z"
+mkc() { # <file> then <login> <body> <createdAt|-> triples; `-` omits createdAt; ASSOC overrides the decoy association
+  local f="$1"; shift; local -a a=()
+  while (( $# )); do
+    a+=("$(jq -nc --arg l "$1" --arg b "$2" --arg t "$3" --arg c "${ASSOC:-CONTRIBUTOR}" \
+        '{author:{login:$l},authorAssociation:$c,body:$b} + (if $t == "-" then {} else {createdAt:$t} end)')")
+    shift 3
+  done
+  printf '{"comments":[%s]}\n' "$(IFS=,; printf '%s' "${a[*]}")" > "$f"
+}
+mkp() { printf "$1" > "$SB/pm.tsv"; }   # printf format with literal \t and \n
+bodies_of() { jq -r '.b' <<<"$1"; }
+# in_out <needle> -> 0 when the {t,b} stream in RAW_OUT carries a body line equal to needle
+in_out() { bodies_of "$RAW_OUT" | grep -qxF -- "$1"; }
+
+h_h1() { # M-H1 the repro: a CONTRIBUTOR-association admin author IS trusted
+  mkc "$SB/h.json" priv-op "S2-ACTIVATED: $T2" "$T2"; mkp 'priv-op\tadmin\n'
+  run_case_raw trusted_verdict_comments 9818 "$SB/h.json" "$SB/pm.tsv"
+  if (( RAW_MISS == 0 )) && [[ "$RAW_RC" == 0 ]] && in_out "S2-ACTIVATED: $T2"; then
+    pass "M-H1: a CONTRIBUTOR-association author with permission=admin is trusted in the {t,b} view"
+  else fail "M-H1: rc=$RAW_RC miss=$RAW_MISS out=[$RAW_OUT]"; fi
+}
+h_h2() { # M-H2 an OWNER-association author whose permission is `read` is NOT trusted; the twin differs only in the permission
+  ASSOC=OWNER mkc "$SB/h.json" ownread-op "S2-ACTIVATED: $T2" "$T2"
+  mkp 'ownread-op\tread\n'; run_case_raw trusted_verdict_comments 9818 "$SB/h.json" "$SB/pm.tsv"
+  local neg_ok=0; if (( RAW_MISS == 0 )) && [[ "$RAW_RC" == 0 ]] && ! in_out "S2-ACTIVATED: $T2"; then neg_ok=1; fi
+  mkp 'ownread-op\tadmin\n'; run_case_raw trusted_verdict_comments 9818 "$SB/h.json" "$SB/pm.tsv"
+  if (( neg_ok )) && (( RAW_MISS == 0 )) && in_out "S2-ACTIVATED: $T2"; then
+    pass "M-H2: OWNER association + permission=read is dropped, the same comment with permission=admin is kept"
+  else fail "M-H2: negative arm ok=$neg_ok; twin rc=$RAW_RC out=[$RAW_OUT]"; fi
+}
+h_h3() { # M-H3 admin/maintain/write trusted; triage is not
+  local perm ok=1 got want
+  for perm in admin maintain write triage; do
+    mkc "$SB/h.json" lvl-op "S2-ACTIVATED: $T2" "$T2"; mkp "lvl-op\\t$perm\\n"
+    run_case_raw trusted_verdict_comments 9818 "$SB/h.json" "$SB/pm.tsv"
+    got=0; (( RAW_MISS == 0 )) && [[ "$RAW_RC" == 0 ]] && in_out "S2-ACTIVATED: $T2" && got=1
+    want=1; [[ "$perm" == triage ]] && want=0
+    if (( RAW_MISS != 0 )) || [[ "$RAW_RC" != 0 ]] || (( got != want )); then ok=0; fail "M-H3: permission=$perm trusted=$got want=$want (rc=$RAW_RC miss=$RAW_MISS)"; fi
+  done
+  (( ok )) && pass "M-H3: admin, maintain and write are trusted; triage is not"
+}
+fence_fixture() { mkc "$SB/hf.json" priv-op $'intro\n```\nS2-ACTIVATED: 2026-10-11T00:00:00Z\n```\n~~~\nS2-EXIT-CENSUS: https://github.com/x/y\n~~~\nS2-DEACTIVATED: 2026-10-12T00:00:00Z' "$T1" priv-op $'plain\nS2-EXIT-CENSUS: https://github.com/a/b' "$T2"; mkp 'priv-op\tadmin\n'; }
+h_h4_parity() { # M-H4 parity: the bodies view equals the .b projection of the {t,b} view
+  fence_fixture
+  run_case_raw trusted_verdict_comments 9818 "$SB/hf.json" "$SB/pm.tsv"; local viewb; viewb="$(bodies_of "$RAW_OUT")"; local m1=$RAW_MISS
+  run_case_raw trusted_verdict_bodies 9818 "$SB/hf.json" "$SB/pm.tsv"
+  if (( m1 == 0 && RAW_MISS == 0 )) && [[ "$RAW_OUT" == "$viewb" && -n "$viewb" ]]; then
+    pass "M-H4: trusted_verdict_bodies equals the .b projection of trusted_verdict_comments on one fixture"
+  else fail "M-H4 parity: bodies=[$RAW_OUT] view=[$viewb]"; fi
+}
+h_h4_abs() { # M-H4 ABSOLUTE: a fenced marker (both spellings) is absent from the {t,b} output; the unfenced ones are present
+  fence_fixture
+  run_case_raw trusted_verdict_comments 9818 "$SB/hf.json" "$SB/pm.tsv"
+  if (( RAW_MISS == 0 )) && [[ "$RAW_RC" == 0 ]] && ! in_out 'S2-ACTIVATED: 2026-10-11T00:00:00Z' && ! bodies_of "$RAW_OUT" | grep -q 'x/y' \
+     && in_out 'S2-DEACTIVATED: 2026-10-12T00:00:00Z' && in_out 'S2-EXIT-CENSUS: https://github.com/a/b'; then
+    pass "M-H4: markers inside backtick and tilde fences are stripped from the {t,b} view, unfenced ones survive"
+  else fail "M-H4 absolute: rc=$RAW_RC out=[$RAW_OUT]"; fi
+}
+h_h5() { # M-H5 t is createdAt byte-for-byte; a missing or non-ISO createdAt is rc 2 with empty stdout in the {t,b} view only
+  mkp 'priv-op\tadmin\n'
+  mkc "$SB/h.json" priv-op "S2-ACTIVATED: $T2" "$T2"
+  run_case_raw trusted_verdict_comments 9818 "$SB/h.json" "$SB/pm.tsv"
+  local ok=1 t; t="$(jq -r '.t' <<<"$RAW_OUT")"
+  [[ "$RAW_RC" == 0 && "$t" == "$T2" ]] || { ok=0; fail "M-H5: t=[$t] want [$T2] (rc=$RAW_RC)"; }
+  local bad
+  for bad in yesterday "2026-10-11T09:48:17+02:00" "2026-10-11 09:48:17" "-"; do
+    mkc "$SB/h.json" priv-op "S2-ACTIVATED: $T2" "$bad"
+    run_case_raw trusted_verdict_comments 9818 "$SB/h.json" "$SB/pm.tsv"
+    if (( RAW_MISS != 0 )) || [[ "$RAW_RC" != 2 || -n "$RAW_OUT" ]]; then ok=0; fail "M-H5: createdAt=[$bad] must be rc 2 with empty stdout, got rc=$RAW_RC out=[$RAW_OUT]"; fi
+  done
+  mkc "$SB/h.json" priv-op "S2-ACTIVATED: $T2" "-"
+  run_case_raw trusted_verdict_bodies 9818 "$SB/h.json" "$SB/pm.tsv"
+  if (( RAW_MISS != 0 )) || [[ "$RAW_RC" != 0 || "$RAW_OUT" != "S2-ACTIVATED: $T2" ]]; then ok=0; fail "M-H5: the bodies view must not need createdAt (rc=$RAW_RC out=[$RAW_OUT])"; fi
+  (( ok )) && pass "M-H5: t is createdAt verbatim; missing/non-ISO createdAt is rc 2 with empty stdout in the {t,b} view; the bodies view does not need it"
+}
+h_h6() { # M-H6 a failing permission read on the LAST of several authors is rc 2 with EMPTY stdout, for both views; the twin succeeds
+  local view ok=1
+  for view in trusted_verdict_comments trusted_verdict_bodies; do
+    mkc "$SB/h.json" a-op "RESULT: PASS" "$T1" b-op "note" "$T1" c-op "RESULT: FAIL" "$T2"
+    mkp 'a-op\tadmin\nb-op\tadmin\nc-op\t403\n'
+    run_case_raw "$view" 5733 "$SB/h.json" "$SB/pm.tsv"
+    if (( RAW_MISS != 0 )) || [[ "$RAW_RC" != 2 || -n "$RAW_OUT" ]]; then ok=0; fail "M-H6 ($view): last author 403 must be rc 2 + empty stdout, got rc=$RAW_RC out=[$RAW_OUT]"; fi
+    mkp 'a-op\tadmin\nb-op\tadmin\nc-op\tadmin\n'
+    run_case_raw "$view" 5733 "$SB/h.json" "$SB/pm.tsv"
+    if (( RAW_MISS != 0 )) || [[ "$RAW_RC" != 0 || -z "$RAW_OUT" ]]; then ok=0; fail "M-H6 twin ($view): all-admin must succeed, got rc=$RAW_RC"; fi
+  done
+  (( ok )) && pass "M-H6: a permission failure on the last of several distinct authors yields rc 2 and NO partial output (both views); the all-admin twin succeeds"
+}
+h_h7() { # M-H7 a 404 drops that author only; a second trusted author after a compliant first still comes through
+  mkc "$SB/h.json" github-actions "RESULT: PASS" "$T1" first-op "first" "$T1" second-op "second" "$T2"
+  mkp 'github-actions\t404\nfirst-op\tadmin\nsecond-op\twrite\n'
+  run_case_raw trusted_verdict_comments 6617 "$SB/h.json" "$SB/pm.tsv"
+  if (( RAW_MISS == 0 )) && [[ "$RAW_RC" == 0 ]] && in_out first && in_out second && ! in_out 'RESULT: PASS'; then
+    pass "M-H7: a 404 drops only that author; two trusted authors after it both come through"
+  else fail "M-H7: rc=$RAW_RC out=[$RAW_OUT]"; fi
+}
+h_h8() { # M-H8 the memo: two comments by one author cost one permission request; two distinct authors cost two
+  mkc "$SB/h.json" same-op "one" "$T1" same-op "two" "$T1" same-op "three" "$T2"; mkp 'same-op\tadmin\n'
+  run_case_raw trusted_verdict_comments 9818 "$SB/h.json" "$SB/pm.tsv"; local n1; n1="$(nreq perm)"
+  mkc "$SB/h.json" same-op "one" "$T1" other-op "two" "$T1" same-op "three" "$T2"; mkp 'same-op\tadmin\nother-op\tadmin\n'
+  run_case_raw trusted_verdict_comments 9818 "$SB/h.json" "$SB/pm.tsv"; local n2; n2="$(nreq perm)"
+  if (( RAW_MISS == 0 )) && [[ "$n1" == 1 && "$n2" == 2 ]]; then
+    pass "M-H8: one permission request per distinct author (3 comments by one author -> 1; two authors -> 2)"
+  else fail "M-H8: requests n1=$n1 (want 1) n2=$n2 (want 2)"; fi
+}
+h_h9() { # M-H9 more than 100 comments are all returned (the DEACTIVATED marker past the first 100 is read)
+  local i body c=()
+  for ((i = 1; i <= 150; i++)); do body="n$i"; (( i == 130 )) && body="S2-DEACTIVATED: $T2"; c+=(many-op "$body" "$T1"); done
+  mkc "$SB/h.json" "${c[@]}"; mkp 'many-op\tadmin\n'
+  run_case_raw trusted_verdict_comments 9818 "$SB/h.json" "$SB/pm.tsv"
+  if (( RAW_MISS == 0 )) && [[ "$RAW_RC" == 0 ]] && [[ "$(wc -l <<<"$RAW_OUT")" -eq 150 ]] && in_out "S2-DEACTIVATED: $T2"; then
+    pass "M-H9: 150 comments through the GraphQL shape are all returned, the marker at position 130 included"
+  else fail "M-H9: rc=$RAW_RC lines=$(wc -l <<<"$RAW_OUT")"; fi
+}
+h_h10() { # M-H10 exactly one `gh issue view` per view invocation
+  mkc "$SB/h.json" priv-op "x" "$T1"; mkp 'priv-op\tadmin\n'
+  local view n ok=1
+  for view in trusted_verdict_comments trusted_verdict_bodies; do
+    run_case_raw "$view" 9818 "$SB/h.json" "$SB/pm.tsv"; n="$(nreq issue)"
+    if (( RAW_MISS != 0 )) || [[ "$n" != 1 ]]; then ok=0; fail "M-H10 ($view): $n issue-view request(s), want exactly 1 (miss=$RAW_MISS)"; fi
+  done
+  (( ok )) && pass "M-H10: each view issues exactly one comment read"
+}
+h_crlf() { # must-PASS non-canonical: digits and interior hyphens in the login, CRLF line endings in the body
+  mkc "$SB/h.json" a1-b2-op $'activated\r\nS2-ACTIVATED: '"$T2"$'\r' "$T2"; mkp 'a1-b2-op\twrite\n'
+  run_case_raw trusted_verdict_comments 9818 "$SB/h.json" "$SB/pm.tsv"
+  if (( RAW_MISS == 0 )) && [[ "$RAW_RC" == 0 ]] && bodies_of "$RAW_OUT" | tr -d '\r' | grep -qxF "S2-ACTIVATED: $T2"; then
+    pass "must-PASS: a login with digits and interior hyphens and a CRLF body is kept (the caller strips the CR)"
+  else fail "CRLF: rc=$RAW_RC out=[$RAW_OUT]"; fi
+}
+h_h11() { # M-H11 login-shape guard: a login that is not a GitHub login is untrusted with ZERO permission requests; only that author is dropped
+  mkc "$SB/h.json" "a/../b" "evil1" "$T1" "x?y" "evil2" "$T1" $'line1\nline2' "evil3" "$T1" "-lead" "evil4" "$T1" good-op "good" "$T2"
+  mkp 'a/../b\tadmin\nx?y\tadmin\nline1\tadmin\nline2\tadmin\n-lead\tadmin\ngood-op\tadmin\n'
+  run_case_raw trusted_verdict_comments 9818 "$SB/h.json" "$SB/pm.tsv"
+  if (( RAW_MISS == 0 )) && [[ "$RAW_RC" == 0 ]] && [[ "$(nreq perm)" == 1 ]] && grep -qxF 'perm good-op' "$SB/req.log" \
+     && in_out good && ! bodies_of "$RAW_OUT" | grep -q evil; then
+    pass "M-H11: malformed logins (path, query, newline, leading dash) make zero permission requests and drop only their own comments"
+  else fail "M-H11: rc=$RAW_RC miss=$RAW_MISS requests=[$(tr '\n' ',' < "$SB/req.log")] out=[$RAW_OUT]"; fi
+}
+LIB_ROWS=(h_h1 h_h2 h_h3 h_h4_parity h_h4_abs h_h5 h_h6 h_h7 h_h8 h_h9 h_h10 h_crlf h_h11)
+for _r in "${LIB_ROWS[@]}"; do "$_r"; done
+
+# --- harness integrity: a stub that answers `admin` to EVERYONE must redden the negative rows (the rows can fail) ----------
+mkdir -p "$SB/bin-admin"
+sed 's|^    perm="$(awk .*$|    perm=admin|' "$SB/bin/gh" > "$SB/bin-admin/gh"; chmod +x "$SB/bin-admin/gh"
+if cmp -s "$SB/bin/gh" "$SB/bin-admin/gh"; then fail "harness: the always-admin stub copy is identical to the real stub (the edit did not land)"
+else
+  _p0=$PASS; _f0=$FAIL
+  STUB_BIN="$SB/bin-admin"; for _r in h_h2 h_h3 h_h7; do "$_r" >/dev/null; done; unset STUB_BIN
+  _reds=$((FAIL - _f0)); PASS=$_p0; FAIL=$_f0
+  if (( _reds >= 3 )); then pass "harness: an always-admin permission stub turns the negative rows M-H2, M-H3 and M-H7 red ($_reds reds)"
+  else fail "harness: an always-admin stub turned only $_reds row(s) red (want >= 3)"; fi
+fi
+
+# --- lib mutants: each mutated COPY of the lib must redden at least one NAMED row ------------------------------------------
+MUT_RUN=0; MUT_CAUGHT=0
+mutant_lib() { # <name> <rows, space separated> <old1> <new1> [<old2> <new2> ...]   every anchor must occur exactly once
+  local name="$1" rows="$2"; shift 2
+  MUT_RUN=$((MUT_RUN + 1))
+  local f="$SB/mut-$name.sh" r reds=0 p0 f0
+  if ! python3 - "$LIB" "$f" "$@" <<'PY'
+import sys
+src, dst = sys.argv[1:3]
+pairs = sys.argv[3:]
+s = open(src).read()
+for i in range(0, len(pairs), 2):
+    old, new = pairs[i], pairs[i + 1]
+    if s.count(old) != 1:
+        sys.stderr.write("anchor count %d for %r\n" % (s.count(old), old)); sys.exit(3)
+    s = s.replace(old, new)
+open(dst, "w").write(s)
+PY
+  then fail "MUTANT $name: mutation did NOT land"; return; fi
+  cmp -s "$f" "$LIB" && { fail "MUTANT $name: byte-identical to the lib"; return; }
+  LIB_UNDER="$f"
+  for r in $rows; do p0=$PASS; f0=$FAIL; "$r" >/dev/null; reds=$((reds + FAIL - f0)); PASS=$p0; FAIL=$f0; done
+  LIB_UNDER=""
+  if (( reds > 0 )); then MUT_CAUGHT=$((MUT_CAUGHT + 1)); pass "MUTANT $name turned $reds assertion(s) red"
+  else fail "MUTANT $name: none of [$rows] went red"; fi
+}
+Q="'"
+PRED='    admin|maintain|write) return 0 ;;'
+mutant_lib m-triage-trusted  "h_h3" "$PRED" '    admin|maintain|write|triage) return 0 ;;'
+mutant_lib m-no-maintain     "h_h3" "$PRED" '    admin|write) return 0 ;;'
+mutant_lib m-no-write        "h_h3" "$PRED" '    admin|maintain) return 0 ;;'
+mutant_lib m-pred-always     "h_h2 h_h3 h_h7" "$PRED" '    *) return 0 ;;'
+SEL='        | select((.author.login // "") != "")'
+mutant_lib m-assoc-prefilter "h_h1" "$SEL" "$SEL"$'\n''        | select(.authorAssociation | IN("OWNER", "MEMBER", "COLLABORATOR"))'
+mutant_lib m-strip-empty     "h_h4_abs" "  awk '/^[[:space:]]*(\`\`\`|~~~)/ { f = !f; next } !f { print }'" '  cat'
+RESOLVE='    if ! _trusted_verdict_permission "$login" "$repo" >/dev/null; then'
+mutant_lib m-resolver-subshell "h_h1 h_h8" "$RESOLVE" '    if ! _mut="$(_trusted_verdict_permission "$login" "$repo")"; then'
+mutant_lib m-partial-output  "h_h6" "$RESOLVE"$'\n      return 2' "$RESOLVE"$'\n      continue' \
+  "    out=\"\${out}\$(jq -nc --arg t \"\$created\" --arg b \"\$body\" ${Q}{t: \$t, b: \$b}${Q})\"\$${Q}\\n${Q}" \
+  "    printf '%s\\n' \"\$body\"; out=\"\${out}\$(jq -nc --arg t \"\$created\" --arg b \"\$body\" ${Q}{t: \$t, b: \$b}${Q})\"\$${Q}\\n${Q}"
+# EQUIVALENT single edits (measured: each survives every row above, so neither is a mutant on its own): turning the memo guard off alone, or `sort -u` into `cat` alone, each leave exactly one
+# request per distinct author because the OTHER one still deduplicates. Only the two together are a mutant.
+mutant_lib m-no-dedupe       "h_h8" '  if [[ -n "${_TRUSTED_VERDICT_PERM[$login]:-}" ]]; then' '  if false; then' \
+  '    done | sort -u)"' '    done | cat)"'
+mutant_lib m-first-page      "h_h9" '        .comments[]' '        .comments[0:100][]'
+mutant_lib m-t-empty         "h_h5" "${Q}{t: \$t, b: \$b}${Q}" "${Q}{t: \"\", b: \$b}${Q}"
+mutant_lib m-validate-in-core "h_h5" '    _trusted_verdict_is_trusted_perm "$perm" || continue' '    _trusted_verdict_is_trusted_perm "$perm" || continue
+    [[ "$created" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || return 2'
+mutant_lib m-second-read     "h_h10" '  records="$(_trusted_verdict_core "$issue" "$repo")" || return 2
+  [[ -n "$records" ]] || return 0
+  if ! jq -e -s' '  records="$(_trusted_verdict_core "$issue" "$repo")" || return 2
+  gh issue view "$issue" --repo "$repo" --json comments --jq ".comments[].body" >/dev/null 2>&1
+  [[ -n "$records" ]] || return 0
+  if ! jq -e -s'
+mutant_lib m-no-jq-flag      "h_h1" "                 --jq '.permission // empty' 2>\"\$errf\")\"; then" '                 2>"$errf")"; then'
+mutant_lib m-no-shape-guard  "h_h11" '        | select(.author.login | test("\\A[A-Za-z0-9][A-Za-z0-9_-]{0,38}\\z"))
+' ''
+if (( MUT_RUN == MUT_CAUGHT && MUT_RUN >= 15 )); then pass "LIB MUTANTS: $MUT_CAUGHT of $MUT_RUN caught"; else fail "LIB MUTANTS: $MUT_CAUGHT of $MUT_RUN caught (every mutant must be caught; floor 15)"; fi
 
 echo ""
 echo "passed=$PASS failed=$FAIL"
@@ -294,7 +544,7 @@ echo "passed=$PASS failed=$FAIL"
 #    meta-guard cannot recognise is indistinguishable from a floor that crashed.
 SELFTEST_PASSES=1
 REAL=$(( PASS - SELFTEST_PASSES ))
-MIN_ASSERTIONS=12
+MIN_ASSERTIONS=42
 if [[ "$REAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity assertion floor: only %d real assertion(s) ran (PASS=%d minus %d self-test), expected >= %d.\n' \
     "$REAL" "$PASS" "$SELFTEST_PASSES" "$MIN_ASSERTIONS" >&2
