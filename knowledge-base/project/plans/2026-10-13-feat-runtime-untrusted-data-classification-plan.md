@@ -385,26 +385,26 @@ return `flagged:false` (the defense text must not trip its own detector).
 
 ### Functional Requirements
 
-- [ ] `server/untrusted-content.ts` exports `classify`, `envelope`, `UntrustedSource`, `createUntrustedContentHook`; `bun apps/web-platform/scripts/untrusted-content-eval.ts` runs and prints `EVAL PASS`.
-- [ ] WebFetch PostToolUse hook is registered iff `webEgress` and the classify flag are on, matcher exactly `WebFetch` (`agent-runner-query-options.ts`, PostToolUse list).
-- [ ] Hook returns `{}` for unflagged results, `additionalContext` (data-only warning + reason codes) for flagged results, and also an annotation noting uninspected content when `truncated`; `unscored` (error/unknown shape) returns `{}` by design and logs. Returns `updatedToolOutput` only when `untrusted-content-wrap` is on, classify is on AND Phase 0 confirmed it is honored; otherwise that branch and flag do not exist.
-- [ ] Email, inbox and CRM tools source their envelope from the shared module; existing tests pass unchanged (`test/server/email-triage-tools.test.ts:449` exact-text assertion).
-- [ ] Scorer and hook fail open: a thrown scorer, an unrecognized `tool_response` shape, or a > 256 KB payload never blocks or alters the turn and emits telemetry (`untrusted-content.ts` try/catch plus `reportSilentFallback`).
-- [ ] Telemetry contains no content, query string, matched substring or email address (test).
-- [ ] Two flags created through `soleur:flag-create`; prd default off.
+- [x] `server/untrusted-content.ts` exports `classify`, `envelope`, `UntrustedSource`, `createUntrustedContentHook`; `bun apps/web-platform/scripts/untrusted-content-eval.ts` runs and prints `EVAL PASS`.
+- [x] WebFetch PostToolUse hook is registered iff `webEgress` and the classify flag are on, matcher exactly `WebFetch` (`agent-runner-query-options.ts`, PostToolUse list).
+- [x] Hook returns `{}` for unflagged results, `additionalContext` (data-only warning + reason codes) for flagged results, and also an annotation noting uninspected content when `truncated`; `unscored` (error/unknown shape) returns `{}` by design and logs. Returns `updatedToolOutput` only when `untrusted-content-wrap` is on, classify is on AND Phase 0 confirmed it is honored; otherwise that branch and flag do not exist.
+- [x] Email, inbox and CRM tools source their envelope from the shared module; existing tests pass unchanged (`test/server/email-triage-tools.test.ts:449` exact-text assertion).
+- [x] Scorer and hook fail open: a thrown scorer, an unrecognized `tool_response` shape, or a > 256 KB payload never blocks or alters the turn and emits telemetry (`untrusted-content.ts` try/catch plus `reportSilentFallback`).
+- [x] Telemetry contains no content, query string, matched substring or email address (test).
+- [ ] Two flags created through `soleur:flag-create`; prd default off. (Code-wired, env mirror 0; Flagsmith feature creation is the operator's typed-yes step, `create.sh <flag> --flagsmith-only`, W4.)
 
 ### Non-Functional Requirements
 
-- [ ] Eval: corpus >= 150 fixtures (>= 75 attack incl. >= 35 frozen holdout, >= 75 benign incl. hard negatives); recall >= 0.90, FPR <= 0.05, obvious-override >= 0.95 on the full set AND the holdout reported separately; summary-shaped subset recall reported separately; known evasions documented in the ADR as limitations. All fixtures synthetic, no real secrets or addresses.
-- [ ] No public or marketing copy changed; no doc claims the platform "protects against prompt injection". Scoped wording only inside the ADR.
-- [ ] ADR-287 written with measured numbers, Alternatives Considered, and `status: adopting` for wrap.
-- [ ] Roadmap CP1 row text updated to "heuristic v1, LLM tier conditional" via `soleur:product-roadmap` (the plan does not edit roadmap.md).
-- [ ] Tracking issues filed and linked from #4671: ONE P1 "remaining surfaces" issue (cron GitHub issue bodies, `github_read_*` MCP tools, plugin-side CLI, KB reads, attachments) filed before merge; taint-based capability downgrade (blocked-by relation to #4672); LLM-tier classifier (conditional on eval); wrap-flag enable decision with the 7-day soak (follow-through enrollment, see Sharp Edges).
+- [x] Eval: corpus >= 150 fixtures (>= 75 attack incl. >= 35 frozen holdout, >= 75 benign incl. hard negatives); recall >= 0.90, FPR <= 0.05, obvious-override >= 0.95 on the full set AND the holdout reported separately; summary-shaped subset recall reported separately; known evasions documented in the ADR as limitations. All fixtures synthetic, no real secrets or addresses.
+- [x] No public or marketing copy changed; no doc claims the platform "protects against prompt injection". Scoped wording only inside the ADR.
+- [x] ADR-287 written with measured numbers, Alternatives Considered, and `status: adopting` for wrap.
+- [x] Roadmap CP1 row text updated to "heuristic v1, LLM tier conditional" via `soleur:product-roadmap` (the plan does not edit roadmap.md).
+- [x] Tracking issues filed and linked from #4671: ONE P1 "remaining surfaces" issue (cron GitHub issue bodies, `github_read_*` MCP tools, plugin-side CLI, KB reads, attachments) filed before merge; taint-based capability downgrade (blocked-by relation to #4672); LLM-tier classifier (conditional on eval); wrap-flag enable decision with the 7-day soak (follow-through enrollment, see Sharp Edges).
 
 ### Quality Gates
 
-- [ ] `cd apps/web-platform && npm install --ignore-scripts && npx vitest run test/untrusted-content.test.ts test/untrusted-content-eval.test.ts test/inbox-tools.test.ts test/crm-tools.test.ts test/server/email-triage-tools.test.ts test/untrusted-content-wiring.test.ts` green (`bun test` does not find these).
-- [ ] `npx tsc --noEmit` clean; `python3 scripts/lint-guard-contract.py` passes on this plan.
+- [x] `cd apps/web-platform && npm install --ignore-scripts && npx vitest run test/untrusted-content.test.ts test/untrusted-content-eval.test.ts test/inbox-tools.test.ts test/crm-tools.test.ts test/server/email-triage-tools.test.ts test/untrusted-content-wiring.test.ts` green (`bun test` does not find these).
+- [x] `npx tsc --noEmit` clean; `python3 scripts/lint-guard-contract.py` passes on this plan.
 - [ ] PR body says `Ref #4671`; PR #10192 remains draft; merge only on the operator's "go ahead".
 
 ## Test Scenarios
