@@ -126,8 +126,8 @@ fi
 # set, kept so this is a strict superset of the old glob), it is executable, or it starts `#!`.
 # A data file (a `.after` sidecar, a fixture, a `.txt`) is none of those and stays out, so a decoy
 # there cannot red rule 5. `*.test.sh` is EXCLUDED from the probe set although the sweeper would run
-# one too: MEASURED on the live tree, 4 of the test files carry the comment-association field as a
-# fixture decoy (rule 5) and 3 read comments and branch on markers because that is what they test
+# one too: MEASURED on the live tree, 2 of the test files carry the comment-association field on an executable line as a
+# fixture decoy (rule 5 examines executable lines only; 2 more carry it in a comment alone) and 3 read comments and branch on markers because that is what they test
 # (rule 4); including them reds the tree over fixtures, so they stay out (rule 2 still reads them) and
 # the count is reported in the summary. Residual: a tracker that names a `*.test.sh` as its probe
 # is not covered by rules 1/3/4/5 (listed under COVERAGE in the rule-4 section).
@@ -251,11 +251,15 @@ done <<<"$rule2_hits"
 #       executable line.
 #       Over-detection is deliberate and cheap: the remedy is "call the lib", which every
 #       legitimate comment-reading probe already does.
+# VERDICT_BRANCH quotes the same marker family as the lib's candidate regex (scripts/lib/trusted-verdict.sh,
+# `^(RESULT|S[0-9]+-[A-Z][A-Z0-9_-]*):`), kept in step textually. The trailing `:?` is optional and the grep is unanchored, so the
+# tail widening (`S3-PR9:`, `S2-EXIT_CENSUS:`) changes no detection here (a prefix of the marker already matched): it is a
+# no-op on purpose, pinned by a characterization row and not by a mutant.
 # One alternative per spelling; `--json[^|#]*comments` is a SINGLE alternative that also covers
 # `--json=comments` (a separate `--json=` alternative would be an equivalent mutant). `[^|#]*` stops
 # at a pipe or a comment so a `--json` on one command cannot pair with `comments` in the next.
 READS_COMMENTS='--json[^|#]*comments|--comments|gh[[:space:]]+issue[[:space:]]+view[^|#]*[[:space:]]-c([[:space:])]|$)|\.comments(\[\]| *\|)|issues/[^[:space:]"]*/(comments|timeline)|comments\(first:|in:comments'
-VERDICT_BRANCH='RESULT:|S[0-9]+-[A-Z][A-Z-]*:?'
+VERDICT_BRANCH='RESULT:|S[0-9]+-[A-Z][A-Z0-9_-]*:?'
 # The CALL, never the `source` line. Sourcing the lib and then reading `.comments[].body`
 # anyway satisfies a source-anchored pattern while leaving the decision exactly as
 # forgeable -- both endpoints pinned, the wire between them unpinned. Measured: the first

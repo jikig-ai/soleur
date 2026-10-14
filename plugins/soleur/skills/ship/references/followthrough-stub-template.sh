@@ -59,6 +59,9 @@ esac
 #       case "${last##*#}" in "0 0 0"|"0 1 0") : ;; *) echo "CANNOT ESTABLISH: marker read failed (RESULT)"; exit 3 ;; esac
 #       last="${last%#*}"; last="${last%$'\n'}"
 #       [[ "$last" =~ ^RESULT:\ PASS ]] && exit 0 || exit 1
+#     MARKER-FAMILY CONTRACT (the lib header is the single statement): a lib-routed probe's marker grep must match
+#     a line the lib's candidate regex also matches; a marker outside that family is dropped without an error
+#     (rc 0, empty result), so a probe cannot tell it from "nobody posted it".
 #     Which view: the bodies view is the default. A probe that needs the COMMENT'S created time (the
 #     S3 soak orders S3-CONFIRMED before S3-ACTIVATED by it) calls the comments view instead, which
 #     carries each trusted comment's createdAt as one JSON object {t,b} per comment (a marker probe

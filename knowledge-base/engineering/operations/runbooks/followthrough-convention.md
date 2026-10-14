@@ -259,7 +259,9 @@ merge timestamp; its directive declares `secrets=GH_TOKEN`).
     under the association. Also new: fenced blocks and HTML comments are stripped (a marker inside a
     CommonMark-style fence or a `<!-- -->` comment counted before and is ignored now), and an author
     is looked up only if some comment of theirs has a line starting `RESULT:` or `S<n>-<WORD>:`
-    (the lib header says what that buys: a drive-by commenter cannot wedge the tracker).
+    (a commenter who posts no such line is never looked up; anyone CAN post one and become a candidate,
+    and a candidate whose permission read errors with a non-404 still makes the lib rc 2. The lib
+    header is the single statement of this and of the marker-family contract for lib-routed probes).
 
   The difference is load-bearing and was measured. While the rule banned the wrong MECHANISM, a
   live probe read `.comments[].body` with **no author filter at all** — strictly worse than what

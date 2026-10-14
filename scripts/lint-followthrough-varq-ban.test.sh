@@ -69,6 +69,11 @@
 #   E2     (round 4) rules 1/3/4/5 walk the probe set: any depth, `.sh` name OR executable OR `#!` first line, `*.test.sh` out. One sandbox
 #          with a nested no-shebang `.sh`, a nested rule-3 offender, an extensionless executable, a non-executable shebang file, a data file
 #          decoy and a `.test.sh` decoy; one guard COPY per predicate clause / the walk depth / the test exclusion frees exactly its file
+#   E1b    (round 5) `gh issue view 1 -c` at END OF LINE trips rule 4 (the COPY without the `|$` branch frees it); must-NOT-trip: `--json title | jq .comments_count`
+#          (the pipe stops --json pairing with `comments`; the COPY with `--json[^#]*comments` trips it); CHARACTERIZATION: `S3-PR9:` and
+#          `S2-EXIT_CENSUS:` readers trip (the VERDICT_BRANCH tail widening is a textual no-op: no mutant exists)
+#   E2b    (round 5) must-NOT-trip: a non-executable data file whose first line is `# note: author_association` (not `#!`) is not walked; the COPY
+#          whose shebang clause is `'#'*` walks it and rule 5 fires
 #
 # ADR-193 floor: `asserted` moves at the CALL SITE (check()), never inside pass()/fail(); the
 # conservation identity and MIN_ASSERTIONS are reported with printf + exit 1, never via fail().
@@ -1055,6 +1060,7 @@ e1_add json-title 'bodies=$(gh issue view 1 --json title,comments | jq -r "$F")'
 e1_add json-eq    'bodies=$(gh issue view 1 --json=comments | jq -r "$F")'                                  'S4-GO'
 e1_add dash-c-par 'bodies=$(gh issue view 1 --repo o/r -c)'                                                 'S2-ARMED:'
 e1_add dash-c-sp  'bodies=$(gh issue view 1 -c | cat)'                                                      'S4-GO'
+e1_add dash-c-eol 'gh issue view 1 -c'                                                                      'S4-GO'
 e1_add dot-pipe   "bodies=\$(jq -r '.comments | map(.body) | .[]' \"\$F\")"                                 'S2-ARMED:'
 e1_add timeline   'bodies=$(gh api "repos/o/r/issues/1/timeline" --jq ".[].body")'                          'S4-GO'
 e1_add graphql    "bodies=\$(gh api graphql -f query='{repository(owner:\"o\",name:\"r\"){issue(number:1){comments(first:100){nodes{body}}}}}' --jq '.data')" 'S2-ARMED:'
@@ -1080,7 +1086,8 @@ e1_mutant() {
   done
 }
 e1_mutant json   '--json[^|#]*comments|' '--json[[:space:]]+comments|' json-body json-title json-eq
-e1_mutant dash-c '|gh[[:space:]]+issue[[:space:]]+view[^|#]*[[:space:]]-c([[:space:])]|$)' '' dash-c-par dash-c-sp
+e1_mutant dash-c '|gh[[:space:]]+issue[[:space:]]+view[^|#]*[[:space:]]-c([[:space:])]|$)' '' dash-c-par dash-c-sp dash-c-eol
+e1_mutant dash-c-eol '[[:space:])]|$)' '[[:space:])])' dash-c-eol
 e1_mutant dotpipe '\.comments(\[\]| *\|)' '\.comments\[\]' dot-pipe
 e1_mutant timeline '/(comments|timeline)' '/comments' timeline
 e1_mutant graphql '|comments\(first:' '' graphql
@@ -1116,6 +1123,29 @@ run_guard "$e1t_a"
 grep -q "checked $n_twins comment-reading probe(s)" <<<"$GUARD_OUT"; check $? "E1 twin (a): all $n_twins spellings are COUNTED in rule 4's denominator (the spelling is what puts a probe in it)" "E1 twin (a) denominator is not $n_twins: $GUARD_OUT"
 run_guard "$e1t_b"
 (( GUARD_RC == 0 )); check $? "E1 twin (b): a lib-routed probe that quotes each spelling only in a whole-line comment -> exit 0" "E1 twin (b) expected exit 0, got $GUARD_RC: $GUARD_OUT"
+# E1b (round 5), must-NOT-trip: the pipe stops `--json` pairing with `comments` in the NEXT command. The probe reads a count, not comments.
+d=$(mkcase e1_pipe)
+printf '%s\n' '#!/usr/bin/env bash' 'set -uo pipefail' 'n=$(gh issue view 1 --json title | jq .comments_count)' "grep -qE '^S4-GO' <<<\"\$n\" && exit 0" 'exit 1' >"$d/probe-pipe.sh"
+run_guard "$d"
+(( GUARD_RC == 0 )); check $? "E1b must-NOT-trip: '--json title | jq .comments_count' branching on a marker is clean -> exit 0" "E1b pipe twin expected exit 0, got $GUARD_RC: $GUARD_OUT"
+grep -q 'checked 0 comment-reading probe(s)' <<<"$GUARD_OUT"; check $? "E1b the piped --json is not a comment read (rule 4 denominator 0)" "E1b pipe twin was counted as a comment reader: $GUARD_OUT"
+e1p_g="$SANDBOX/guard-e1-pipe.sh"
+while IFS= read -r l; do [[ "$l" == READS_COMMENTS=* ]] && l="${l/'--json[^|#]*comments'/'--json[^#]*comments'}"; printf '%s\n' "$l"; done <"$GUARD" >"$e1p_g"
+if diff -q "$GUARD" "$e1p_g" >/dev/null; then
+  check 1 "" "E1b DISPATCH (pipe): the --json alternative text is absent -- the mutation did not land and the row is vacuous"
+else
+  e1p_o="$(bash "$e1p_g" "$d" 2>&1)"; e1p_rc=$?
+  (( e1p_rc == 1 )) && grep -q 'probe-pipe.sh:3: rule 4:' <<<"$e1p_o"
+  check $? "E1b DISPATCH (pipe): a --json class that admits a pipe pairs it with the next command's comments and trips the twin (the pipe in the class is the mechanism)" "E1b (pipe) mutant did not trip the twin (rc=$e1p_rc): $e1p_o"
+fi
+# E1b CHARACTERIZATION: the lib's candidate tail now admits digits and underscore (S3-PR9:, S2-EXIT_CENSUS:). The lint's `:?`-optional, unanchored VERDICT_BRANCH
+# already matched a prefix of those, so the widening is a textual no-op here and these rows hold before and after it (no mutant can exist).
+d=$(mkcase e1_family)
+printf '%s\n' '#!/usr/bin/env bash' "bodies=\$(gh api repos/o/r/issues/1/comments --jq '.[].body')" "grep -qE '^S3-PR9:' <<<\"\$bodies\" && exit 0" 'exit 1' >"$d/probe-pr9.sh"
+printf '%s\n' '#!/usr/bin/env bash' "bodies=\$(gh api repos/o/r/issues/1/comments --jq '.[].body')" "grep -qE '^S2-EXIT_CENSUS:' <<<\"\$bodies\" && exit 0" 'exit 1' >"$d/probe-census.sh"
+run_guard "$d"
+(( GUARD_RC == 1 )); check $? "E1b CHARACTERIZATION: unfiltered readers branching on S3-PR9: and S2-EXIT_CENSUS: -> exit 1" "E1b family expected exit 1, got $GUARD_RC: $GUARD_OUT"
+grep -q 'probe-pr9.sh:2: rule 4:' <<<"$GUARD_OUT" && grep -q 'probe-census.sh:2: rule 4:' <<<"$GUARD_OUT"; check $? "E1b CHARACTERIZATION: both are cited as rule-4 violations at the read line" "E1b family citations missing: $GUARD_OUT"
 # CHARACTERIZATION of what stays OUT (named in the guard's COVERAGE paragraph): a lower-case marker and a different marker family.
 d=$(mkcase e1_not_covered)
 printf '%s\n' '#!/usr/bin/env bash' "bodies=\$(gh api repos/o/r/issues/1/comments --jq '.[].body')" "grep -qE '^S2-armed:' <<<\"\$bodies\" && exit 0" 'exit 1' >"$d/probe-lower.sh"
@@ -1174,6 +1204,23 @@ e2_mutant no-name    '/# probe-pred-name$/s/.*/  :/'    'probe-nested-r1.sh'    
 e2_mutant flat       '/# probe-walk$/s/find "\$TARGET_DIR" -type f/find "$TARGET_DIR" -maxdepth 1 -type f/' 'probe-nested-r3.sh' freed
 e2_mutant tests-in   '/# probe-test-exclude$/s/.*/  :/'  'probe-decoy.test.sh'     cited
 
+# E2b (round 5), must-NOT-trip: a NON-executable data file whose first line is `# note: author_association` (a comment, not `#!`) is not a probe, even
+# though a later line carries the field on what would be an executable line. The shebang clause is `#!`, not `#`.
+d=$(mkcase e2_note)
+printf '%s\n' '# note: author_association' 'who=.author_association' >"$d/data-note.txt"
+run_guard "$d"
+(( GUARD_RC == 0 )); check $? "E2b must-NOT-trip: a non-executable data file starting '# note: author_association' is not walked -> exit 0" "E2b expected exit 0, got $GUARD_RC: $GUARD_OUT"
+grep -q '0 probe(s) scanned' <<<"$GUARD_OUT"; check $? "E2b the data file is not counted as a probe (0 scanned)" "E2b summary counts the data file: $GUARD_OUT"
+e2n_g="$SANDBOX/guard-e2-note.sh"
+sed "/# probe-pred-shebang\$/s/== '#!'/== '#'*/" "$GUARD" >"$e2n_g"
+if diff -q "$GUARD" "$e2n_g" >/dev/null; then
+  check 1 "" "E2b DISPATCH: the shebang clause text is absent -- the mutation did not land and the row is vacuous"
+else
+  e2n_o="$(bash "$e2n_g" "$d" 2>&1)"; e2n_rc=$?
+  (( e2n_rc == 1 )) && grep -q 'data-note.txt:2: rule 5:' <<<"$e2n_o"
+  check $? "E2b DISPATCH: a shebang clause of '#'* walks the comment-led data file and rule 5 fires (the '#!' clause is the mechanism)" "E2b mutant did not walk the data file (rc=$e2n_rc): $e2n_o"
+fi
+
 # R5-H2: the live tree. Zero rule-5 hits, and the walk examined at least the floor.
 R5_LIVE_OUT="$(bash "$GUARD" 2>&1)"; R5_LIVE_RC=$?
 (( R5_LIVE_RC == 0 )); check $? "R5-H2 the live tree is clean under rules 1-5" "R5-H2 live tree not clean (rc=$R5_LIVE_RC): $R5_LIVE_OUT"
@@ -1215,7 +1262,7 @@ fi
 passes=$_p; fails=$_f; asserted=$_a
 if (( _n > 0 )); then FAILURES=("${_saved[@]}"); else FAILURES=(); fi
 
-MIN_ASSERTIONS=179
+MIN_ASSERTIONS=191
 if (( asserted < MIN_ASSERTIONS )); then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$asserted" "$MIN_ASSERTIONS" >&2
   exit 1
