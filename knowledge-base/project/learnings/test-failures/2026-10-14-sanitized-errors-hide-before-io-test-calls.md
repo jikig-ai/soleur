@@ -93,6 +93,19 @@ make cleanup best-effort in each independent step, and pin file and directory
 close failures separately. Both new synthetic regressions pass in the expanded
 17-case image-observation suite.
 
+Test design found the first directory-close regression did not inspect whether
+the newly opened child descriptor was closed; reverting ownership assignment
+could leak that descriptor while every original assertion stayed green. Record
+all directory fds opened in the writer call and assert each is EBADF after the
+refusal, with test-finally cleanup. The file close control also covers both
+fsync failure and successful fsync followed by a released-descriptor close
+error.
+
+The secret-scan command used `exit "$rc" && ...`; `exit` correctly ended the
+shell before the commit steps. The staged scan itself passed and no commit was
+attempted by that command. Confirm staged state, then put the guarded follow-up
+commands on a separate tool call without a terminal `exit`.
+
 A grouped focused command invoked sibling-module unittest names from the
 worktree root and failed import before running those two suites. Re-run them
 from `scripts/codex-qualification`, their supported module context, and record

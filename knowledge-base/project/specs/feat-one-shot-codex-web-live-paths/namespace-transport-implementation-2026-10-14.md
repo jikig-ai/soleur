@@ -82,6 +82,10 @@ an `fsync` error followed by a close error retried a released descriptor and
 left the partial file. Descriptor ownership now transfers before close, and
 close/cleanup failures cannot interrupt inode-bound removal or leak raw errors.
 Two additional synthetic close-failure controls cover file and directory fds.
+Test design then showed the directory test did not observe the opened next fd;
+it now records every directory descriptor and proves all are closed after the
+injected traversal-close refusal, with defensive test cleanup. The file-close
+case also covers successful fsync followed by a released-descriptor close error.
 Seventeen synthetic observation tests and 23 transport tests pass; the fixes
 are unpushed and await
 exact-head independent reverification. Parent-swap regression uses only a

@@ -190,38 +190,49 @@ class ImageObservations(unittest.TestCase):
 
     def test_manifest_writer_close_errors_are_sanitized_and_cleanup_is_complete(self):
         value = observations.action_manifest(self.ids, PAIRING, OPERATIONAL)
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / 'manifest'
-            real_close = os.close
-            attempts = [0]
+        for fsync_fails in (True, False):
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / 'manifest'
+                real_close = os.close
+                attempts = [0]
 
-            def fsync_fails(fd):
-                raise OSError('SYNTHETIC_FSYNC_FAILURE')
+                def fail_fsync(fd):
+                    raise OSError('SYNTHETIC_FSYNC_FAILURE')
 
-            def close_releases_then_fails(fd):
-                if stat.S_ISREG(os.fstat(fd).st_mode) and attempts[0] == 0:
-                    attempts[0] += 1
-                    real_close(fd)
-                    raise OSError('SYNTHETIC_CLOSE_FAILURE')
-                return real_close(fd)
+                def close_releases_then_fails(fd):
+                    if stat.S_ISREG(os.fstat(fd).st_mode) and attempts[0] == 0:
+                        attempts[0] += 1
+                        real_close(fd)
+                        raise OSError('SYNTHETIC_CLOSE_FAILURE')
+                    return real_close(fd)
 
-            with patch.object(observations.os, 'fsync', side_effect=fsync_fails), \
-                    patch.object(observations.os, 'close', side_effect=close_releases_then_fails):
-                with self.assertRaisesRegex(Refused, 'File-only action manifest write failed') as caught:
-                    observations.write_action_manifest(path, value, pairing_sha256=PAIRING,
-                                                       operational_sha256=OPERATIONAL)
-            self.assertTrue(caught.exception.__suppress_context__)
-            self.assertNotIn('SYNTHETIC_', ''.join(__import__('traceback').format_exception(caught.exception)))
-            self.assertEqual(attempts[0], 1)
-            self.assertFalse(path.exists())
+                fsync_context = (patch.object(observations.os, 'fsync', side_effect=fail_fsync)
+                                 if fsync_fails else patch.object(observations.os, 'fsync', wraps=os.fsync))
+                with fsync_context, patch.object(observations.os, 'close', side_effect=close_releases_then_fails):
+                    with self.subTest(fsync_fails=fsync_fails), self.assertRaisesRegex(
+                            Refused, 'File-only action manifest write failed') as caught:
+                        observations.write_action_manifest(path, value, pairing_sha256=PAIRING,
+                                                           operational_sha256=OPERATIONAL)
+                self.assertTrue(caught.exception.__suppress_context__)
+                self.assertNotIn('SYNTHETIC_', ''.join(__import__('traceback').format_exception(caught.exception)))
+                self.assertEqual(attempts[0], 1)
+                self.assertFalse(path.exists())
 
     def test_manifest_writer_directory_close_failure_does_not_leak_next_descriptor(self):
         value = observations.action_manifest(self.ids, PAIRING, OPERATIONAL)
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'manifest'
             root = os.stat('/')
+            real_open = os.open
             real_close = os.close
             attempts = [0]
+            opened_directories = []
+
+            def record_open(file, flags, mode=0o777, *, dir_fd=None):
+                descriptor = real_open(file, flags, mode, dir_fd=dir_fd)
+                if flags & os.O_DIRECTORY:
+                    opened_directories.append(descriptor)
+                return descriptor
 
             def root_close_releases_then_fails(fd):
                 metadata = os.fstat(fd)
@@ -231,13 +242,25 @@ class ImageObservations(unittest.TestCase):
                     raise OSError('SYNTHETIC_DIRECTORY_CLOSE_FAILURE')
                 return real_close(fd)
 
-            with patch.object(observations.os, 'close', side_effect=root_close_releases_then_fails):
-                with self.assertRaisesRegex(Refused, 'File-only action manifest write failed') as caught:
-                    observations.write_action_manifest(path, value, pairing_sha256=PAIRING,
-                                                       operational_sha256=OPERATIONAL)
-            self.assertTrue(caught.exception.__suppress_context__)
-            self.assertEqual(attempts[0], 1)
-            self.assertFalse(path.exists())
+            try:
+                with patch.object(observations.os, 'open', side_effect=record_open), \
+                        patch.object(observations.os, 'close', side_effect=root_close_releases_then_fails):
+                    with self.assertRaisesRegex(Refused, 'File-only action manifest write failed') as caught:
+                        observations.write_action_manifest(path, value, pairing_sha256=PAIRING,
+                                                           operational_sha256=OPERATIONAL)
+                self.assertTrue(caught.exception.__suppress_context__)
+                self.assertEqual(attempts[0], 1)
+                self.assertFalse(path.exists())
+                for descriptor in opened_directories:
+                    with self.subTest(descriptor=descriptor), self.assertRaises(OSError):
+                        os.fstat(descriptor)
+            finally:
+                for descriptor in opened_directories:
+                    try:
+                        os.fstat(descriptor)
+                    except OSError:
+                        continue
+                    real_close(descriptor)
 
     def test_manifest_writer_pins_parent_and_refuses_parent_swap(self):
         value = observations.action_manifest(self.ids, PAIRING, OPERATIONAL)
