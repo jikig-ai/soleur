@@ -184,6 +184,11 @@ locals {
     inngest_private_ip     = "10.0.1.40"
     betterstack_logs_token = "STUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUB"
     sentry_dsn             = "https://STUBSTUBSTUBSTUBSTUBSTUBSTUBSTUB@o0000000000000000.ingest.us.sentry.io/0000000000000000000000000000000000000000000000000000000000000000000000"
+    # #6780 (ADR-135 amendment): the consumer's two baked payloads — measured against the
+    # REAL repo files, in the same file() text shape inngest-host.tf passes them (an
+    # "x"-run placeholder gzips ~1000:1 and would green an over-cap payload).
+    infra_config_install_text = file("${DIR}/infra-config-install.sh")
+    cosign_trusted_root_text  = file("${DIR}/cosign-trusted-root.json")
   }
 
   inngest_rationale_strip = ${STRIP_EXPR}

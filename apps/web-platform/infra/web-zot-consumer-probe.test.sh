@@ -546,11 +546,18 @@ pin_rows() {  # <file...> -> the repository path of every NAME*REF="$<var>/path[
          -e 's|.*docker pull "[$]*[$A-Za-z0-9_{}]*/\([^:@"]*\)[:@"].*|\1|p' "$@"
 }
 all_pins() { pin_rows "$@" | sort -u; }
-assert "T7 every registry-prefixed pin in both cloud-init files names the one bootstrap repository (a third pin fails here)" \
-  "[[ \"\$(all_pins '$CLOUD_INIT_WEB' '$CLOUD_INIT_INNGEST')\" == '$TF_BOOT' ]]"
-# The pin set is also counted: exactly the two ZIREF pins exist today (one per host class).
-assert "T7 exactly two registry-prefixed pins exist across both cloud-init files (one per host class)" \
-  "[[ \"\$(pin_rows '$CLOUD_INIT_WEB' '$CLOUD_INIT_INNGEST' | wc -l)\" -eq 2 ]]"
+# #6780 widened the registry-ref set: the refresh consumer's BREF
+# ("$${ZOT_EP}/$${BUNDLE_REPO}@sha256:<pointer>") is a third registry-prefixed
+# pin by design — the signed config-bundle channel pulls a SECOND repository
+# (jikig-ai/soleur-inngest-config via the BUNDLE_REPO var literal) that the
+# zot consumer probe deliberately does not cover. The contract is now: every
+# pin names the bootstrap repo OR the BUNDLE_REPO form, and the bootstrap
+# repo still gets exactly its two pins.
+assert "T7 every registry-prefixed pin in both cloud-init files names the bootstrap repository or the #6780 BUNDLE_REPO form (a fourth pin fails here)" \
+  "[[ -z \"\$(all_pins '$CLOUD_INIT_WEB' '$CLOUD_INIT_INNGEST' | grep -vxF 'jikig-ai/soleur-inngest-bootstrap' | grep -v 'BUNDLE_REPO')\" ]]"
+# The pin set is also counted: exactly the two ZIREF bootstrap pins exist today (one per host class).
+assert "T7 exactly two registry-prefixed BOOTSTRAP pins exist across both cloud-init files (one per host class)" \
+  "[[ \"\$(pin_rows '$CLOUD_INIT_WEB' '$CLOUD_INIT_INNGEST' | grep -cxF 'jikig-ai/soleur-inngest-bootstrap')\" -eq 2 ]]"
 ALLOWED_PATHS="$(sed -n '/^declare -A ALLOWED_IMAGES=(/,/^)/p' "$SCRIPT_DIR/ci-deploy.sh" | sed 's/^[[:space:]]*#.*//' | sed -n 's|.*="ghcr\.io/\([^"]*\)".*|\1|p' | LC_ALL=C sort)"
 # The web image's path as web-probe.tf derives it: the var.image_name default minus registry and tag.
 IMG_WEB="$(sed -n '/^variable "image_name"/,/^}/p' "$SCRIPT_DIR/variables.tf" | sed -n 's|^[[:space:]]*default[[:space:]]*=[[:space:]]*"ghcr\.io/\([^:@"]*\)[:@"].*|\1|p')"

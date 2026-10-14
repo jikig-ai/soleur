@@ -462,7 +462,14 @@ write_files:
       fi
       host="$(hostname 2>/dev/null)"
       ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
-      detail="$(printf '%s' "$detail" | sed -E 's#(://[^:@/]+:)[^@]+(@)#\1REDACTED\2#g; s#dp\.[a-z0-9]+\.[A-Za-z0-9_-]{10,}#REDACTED#g; s#[0-9a-f]{32,}#REDACTED#g; s#(signkey-[a-z]+-)[0-9a-f]*#\1REDACTED#g' 2>/dev/null)"
+      # #6780/CTO-D2 exemption: the generic [0-9a-f]{32,} backstop would eat the labeled
+      # `sha256=<64hex>` field the config-refresh consumer's APPLIED/NOOP/FLOOR markers
+      # carry — and the drift comparator greps THAT field. Protect the labeled form by
+      # upcasing it first (the hex-run pattern is lowercase-only, so an upcased digest
+      # survives it) and restoring lowercase last. ONLY `sha256=` + exactly 64 hex
+      # chars is exempted — the 32-hex-and-up backstop on unlabeled material is
+      # unchanged, so no credential class loses redaction.
+      detail="$(printf '%s' "$detail" | sed -E 's#sha256=[0-9a-f]{64}#\U&#g; s#(://[^:@/]+:)[^@]+(@)#\1REDACTED\2#g; s#dp\.[a-z0-9]+\.[A-Za-z0-9_-]{10,}#REDACTED#g; s#[0-9a-f]{32,}#REDACTED#g; s#(signkey-[a-z]+-)[0-9a-f]*#\1REDACTED#g; s#SHA256=[0-9A-F]{64}#\L&#g' 2>/dev/null)"
       payload="$(jq -nc --arg m SOLEUR_INNGEST_BOOT_STAGE --arg s "$stage" --arg d "$detail" --arg h "$host" --arg t "$ts" '{message:($m+" stage="+$s+" "+$d), marker:$m, stage:$s, detail:$d, host:$h, dt:$t, shipper:"cloud-init-phone-home"}' 2>/dev/null)"
       [ -n "$payload" ] || payload="{\"message\":\"SOLEUR_INNGEST_BOOT_STAGE stage=$stage\",\"marker\":\"SOLEUR_INNGEST_BOOT_STAGE\",\"stage\":\"$stage\",\"host\":\"$host\"}"
       # The bearer token reaches curl on STDIN as a config line (`-K -`), never on argv, where any
@@ -1598,6 +1605,500 @@ write_files:
     owner: root:root
     permissions: '0644'
 
+  # --- #6780 (ADR-135, amended 2026-10-13): the signed config-bundle consumer ------
+  # The host-side half of the pull channel ADR-135 specifies: a root oneshot, fired by
+  # a 60 s timer, that reads the promoted INNGEST_CONFIG_DIGEST pointer, pulls that
+  # digest from the private zot (the only registry read left on this host — #8036
+  # deleted the GHCR credential), proves the bundle by offline cosign verify-blob,
+  # and installs its members through infra-config-install's DEST_SPEC allowlist,
+  # advancing /var/lib/inngest-config/applied.version only after the last file lands.
+  #
+  # infra-config-install + cosign-trusted-root.json are delivered as templatefile
+  # vars — the repo files stay the single source; a second inline copy would drift
+  # silently (D12). The vars carry TEXT, not b64: `indent(6, file())` lands the repo
+  # bytes verbatim inside the `content: |` scalar, and the payload's own comment-line
+  # strip removes the installer's ~16 kB of rationale lines before gzip — the b64
+  # encodings were measured ~4.5 kB heavier stored and overflowed the 32 KiB cap
+  # (D12's ordered fallbacks: base64encode(file()) -> base64encode(replace(...)) both
+  # measured over; this is the documented escape).
+  - path: /usr/local/bin/infra-config-install
+    content: |
+      ${indent(6, infra_config_install_text)}
+    owner: root:root
+    permissions: '0755'
+
+  - path: /etc/soleur/cosign-trusted-root.json
+    content: |
+      ${indent(6, cosign_trusted_root_text)}
+    owner: root:root
+    permissions: '0644'
+
+  # The monotonic version ledger floor. Missing/empty/corrupt resolves to 0 with the
+  # distinguishable SOLEUR_INFRA_PULL_FLOOR row (D5) — never a silent parse-to-0.
+  - path: /var/lib/inngest-config/applied.version
+    content: |
+      0
+    owner: root:root
+    permissions: '0644'
+
+  - path: /usr/local/bin/inngest-config-refresh.sh
+    content: |
+      #!/usr/bin/env bash
+      # inngest-config-refresh.sh — the host-side CONSUMER of the ADR-135 pull-based signed
+      # config-refresh channel (#6780). Runs as root under inngest-config-refresh.service
+      # (oneshot), fired every 60 s by inngest-config-refresh.timer.
+      #
+      # THE POINT. The dedicated scheduler host is a deny-all-public box whose host-executed
+      # script surface previously changed only by rebirth. This service is the in-place
+      # channel: it reads the promoted digest pointer (INNGEST_CONFIG_DIGEST, injected by the
+      # unit's scoped `doppler run --only-secrets`), pulls that exact digest from the private
+      # zot (the ONLY registry read on this host — #8036 deleted the GHCR credential; ADR-135
+      # amended 2026-10-13), proves provenance by an OFFLINE cosign verify-blob against the
+      # baked trusted root + the build-inngest-config-bundle.yml@refs/heads/main identity
+      # regexp, then installs the manifest's members through infra-config-install (whose
+      # DEST_SPEC allowlist is the second gate) — atomically, with applied.version advancing
+      # only after the LAST file lands.
+      #
+      # EVERY TICK ENDS ONE OF THREE WAYS (fail-closed, never a silent state):
+      #   * throttled noop (empty pointer, or pointer == applied digest) — the liveness row;
+      #   * a NAMED SOLEUR_INFRA_PULL_VERIFY_FAIL (pull / signature / manifest / sha /
+      #     rollback-or-replay / install / version-write) — the unit fails, the next tick
+      #     re-drives the whole pull->verify->apply, applied.version never advanced;
+      #   * SOLEUR_INFRA_PULL_APPLIED version=<N> sha256=<digest> verify=ok.
+      #
+      # MARKER FIELD DISCIPLINE — the off-box drift comparator (inngest-config-drift.yml ->
+      # inngest-config-drift-compare.sh) parses `version=` and `sha256=` out of the marker
+      # text to decide OK/DIVERGED. So:
+      #   * APPLIED rows carry version=<N> sha256=<applied-digest> verify=ok;
+      #   * same-digest NOOP rows carry version=<N> sha256=<applied-digest> (the applied
+      #     digest IS the pointer here — the comparator reads OK, which is correct);
+      #   * FLOOR rows carry version=floor + the all-zeros sha256 sentinel (D5), which is
+      #     what lets the comparator's floor-only-stuck-delta arm fire at all;
+      #   * VERIFY_FAIL rows carry reason=, offered=<12-hex> and rejver= — deliberately
+      #     NEVER the sha256=/version= labels, because a rejected offer must not parse as
+      #     applied state. offered= is truncated to 12 hex because the phone-home redactor
+      #     scrubs unlabeled runs of 32+ hex anyway; a short prefix survives it and still
+      #     identifies the rejected bundle.
+      #
+      # FLOOR (HARD-9). /var/lib/inngest-config/applied.version is baked `0`; a missing,
+      # empty or non-integer file resolves to floor 0 and emits the distinguishable
+      # SOLEUR_INFRA_PULL_FLOOR row — throttled like the noop. Never a silent parse-to-0
+      # (the comparator would read an unmarked floor as applied version 0 and miss a torn
+      # ledger), never a hard fail (a fresh host must converge).
+      #
+      # STAGING LOCATION. `mktemp -d` under the STATE DIRECTORY, not /tmp: the unit runs
+      # PrivateTmp=true, and `docker run -v <path>` resolves the bind in the DAEMON's mount
+      # namespace — a path under the unit's private /tmp does not exist for the daemon.
+      #
+      # FIXTURE SEAMS (#7761 argv gate). The REFRESH_* env names are honoured ONLY when
+      # argv[1] is --fixture-seams; in production the gate unsets every one of them (an
+      # env-injected seam name is inert, never silently in command position) and emits
+      # SOLEUR_INFRA_PULL_SEAM_REFUSED. INNGEST_CONFIG_DIGEST is a REAL input, never a seam —
+      # the unit's --only-secrets list is its bound.
+
+      set -uo pipefail
+
+      # (#7797) refuse xtrace unconditionally — the check used to gate on
+      # ZOT_PULL_TOKEN being bound, but that var only exists after the env-file
+      # source far below, so the condition was always-false on the production
+      # path while the traced `docker login` leak stayed open. Every attempt
+      # pipes the token to a registry login and this journal is persistent
+      # (soleur-inngest-provision's shape — unconditional for the same reason).
+      case "$-" in *x*) printf '[FATAL] inngest-config-refresh refuses to run under xtrace: the pull pipes the zot token to a registry login and this journal is persistent (#7797)\n' >&2; exit 78 ;; esac
+
+      # --- SEAM GATE (#7761) -----------------------------------------------------------
+      # A `doppler run` child inherits whatever the config injects; a REFRESH_* name in the
+      # injected env would be a live exec seam without this gate. argv is NOT reachable from
+      # a Doppler config write, so the flag is the authority.
+      if [ "$${1:-}" != "--fixture-seams" ]; then
+        _seams_present=0
+        for _seam in \
+            REFRESH_BUNDLE_REPO REFRESH_COSIGN_IMAGE REFRESH_DOCKER_BIN \
+            REFRESH_IDENTITY_REGEXP REFRESH_INSTALL_CMD REFRESH_LOGGER_CMD \
+            REFRESH_NOOP_THROTTLE_S REFRESH_PHONE_HOME_CMD REFRESH_PULL_TIMEOUT_S \
+            REFRESH_STATE_DIR REFRESH_TRUSTED_ROOT REFRESH_VERIFY_TIMEOUT_S \
+            REFRESH_ZOT_ENV_FILE; do
+          if [ -n "$${!_seam+x}" ]; then _seams_present=$((_seams_present + 1)); fi
+          unset "$_seam"
+        done
+        if [ "$_seams_present" -gt 0 ]; then
+          # Defer the row until STATE_DIR exists (the throttle stamp lives there) —
+          # the emit below gates on the same fail-open 300 s window as NOOP.
+          SEAM_REFUSED_COUNT="$_seams_present"
+        fi
+        unset _seam _seams_present
+      fi
+
+      LOG_TAG="inngest-config-refresh"
+      DOCKER_BIN="$${REFRESH_DOCKER_BIN:-docker}"
+      INSTALL_CMD="$${REFRESH_INSTALL_CMD:-/usr/local/bin/infra-config-install}"
+      LOGGER_CMD="$${REFRESH_LOGGER_CMD:-logger}"
+      PHONE_HOME_CMD="$${REFRESH_PHONE_HOME_CMD:-/usr/local/bin/inngest-boot-phone-home.sh}"
+      STATE_DIR="$${REFRESH_STATE_DIR:-/var/lib/inngest-config}"
+      ZOT_ENV_FILE="$${REFRESH_ZOT_ENV_FILE:-/etc/default/soleur-zot-read}"
+      # The SAME pinned cosign image ci-deploy.sh uses (v3.1.1); the suite parity-pins it.
+      COSIGN_IMAGE="$${REFRESH_COSIGN_IMAGE:-gcr.io/projectsigstore/cosign@sha256:57c0e93a829ae213ab4273b5bd31bc24812043183040882d7cc215a12b5a6870}"
+      TRUSTED_ROOT="$${REFRESH_TRUSTED_ROOT:-/etc/soleur/cosign-trusted-root.json}"
+      BUNDLE_REPO="$${REFRESH_BUNDLE_REPO:-jikig-ai/soleur-inngest-config}"
+      # Provenance is pinned to the bundle producer's workflow on main — nothing else may sign.
+      IDENTITY_REGEXP="$${REFRESH_IDENTITY_REGEXP:-^https://github\\.com/jikig-ai/soleur/\\.github/workflows/build-inngest-config-bundle\\.yml@refs/heads/main$}"
+      OIDC_ISSUER="https://token.actions.githubusercontent.com"
+      NOOP_THROTTLE_S="$${REFRESH_NOOP_THROTTLE_S:-300}"
+      PULL_TIMEOUT_S="$${REFRESH_PULL_TIMEOUT_S:-180}"
+      VERIFY_TIMEOUT_S="$${REFRESH_VERIFY_TIMEOUT_S:-120}"
+      # The D5 sentinel: all-zeros sha256 so the comparator's floor arm can parse the row.
+      FLOOR_SHA="0000000000000000000000000000000000000000000000000000000000000000"
+      APPLIED_VERSION_FILE="$${STATE_DIR}/applied.version"
+      APPLIED_JSON="$${STATE_DIR}/applied.json"
+      NOOP_STAMP="$${STATE_DIR}/.noop-emitted"
+      SEAM_STAMP="$${STATE_DIR}/.seam-refused-emitted"
+      # A garbage interval must neither silently disable the throttle nor crash `set -u`
+      # arithmetic — fall CLOSED to the defaults (the same reading the flip records).
+      case "$NOOP_THROTTLE_S" in ''|*[!0-9]*) NOOP_THROTTLE_S=300 ;; esac
+      case "$PULL_TIMEOUT_S" in ''|*[!0-9]*) PULL_TIMEOUT_S=180 ;; esac
+      case "$VERIFY_TIMEOUT_S" in ''|*[!0-9]*) VERIFY_TIMEOUT_S=120 ;; esac
+
+      # emit — BOTH channels, and a dead channel never kills the emit (the whole point of
+      # phone-home is that it survives what kills journald, and vice versa):
+      #   1. `logger -t inngest-config-refresh` — the journald -> Vector Source 4 row. The
+      #      tag only routes off-box after a future image bake adds it to vector.toml; the
+      #      row is durable on-host TODAY (journalctl -t inngest-config-refresh).
+      #   2. inngest-boot-phone-home.sh — the direct Better Stack POST, the v1 LOAD-BEARING
+      #      channel (CTO D2): it works on the currently pinned image and carries the
+      #      marker inside the detail field the drift comparator greps.
+      emit() {
+        "$LOGGER_CMD" -t "$LOG_TAG" "$1 $2" 2>/dev/null || true
+        "$PHONE_HOME_CMD" config-refresh "$1 $2" 2>/dev/null || true
+      }
+
+      # emit_due <stamp> — the 300 s mtime-stamp throttle, mirrors inngest-cutover-flip.sh.
+      # Fails toward EMITTING, never silence: an absent/unreadable stamp or an unmeasurable
+      # clock answers "emit", so a broken stamp can only restore the noisy behaviour, never
+      # manufacture a silent reading for the liveness gate.
+      emit_due() {
+        local now mtime
+        now="$(date +%s 2>/dev/null || true)"
+        case "$now" in ''|*[!0-9]*) return 0 ;; esac
+        [ -f "$1" ] || return 0
+        mtime="$(stat -c %Y "$1" 2>/dev/null || true)"
+        case "$mtime" in ''|*[!0-9]*) return 0 ;; esac
+        [ $((now - mtime)) -ge "$NOOP_THROTTLE_S" ]
+      }
+      noop_emit_due() { emit_due "$NOOP_STAMP"; }
+
+      noop() {
+        noop_emit_due || return 0
+        emit "SOLEUR_INFRA_PULL_NOOP" "$1"
+        touch "$NOOP_STAMP" 2>/dev/null || true
+      }
+
+      floor_emit() {
+        noop_emit_due || return 0
+        emit "SOLEUR_INFRA_PULL_FLOOR" "version=floor sha256=$FLOOR_SHA"
+        touch "$NOOP_STAMP" 2>/dev/null || true
+      }
+
+      # write_state — /var/lib/inngest-config/applied.json. On SUCCESS this is the applied
+      # ledger; on FAILURE it records the attempt while applied_version/bundle_sha256 stay
+      # pinned to the previously applied state — so the same-digest noop check reads only
+      # what was actually applied and a failed apply re-drives next tick (HARD-5).
+      write_state() {
+        # $1 = verify_result token; $2 = attempted manifest VERSION; $3 = attempted digest.
+        # PROPAGATES the write rc: the success path refuses to emit APPLIED against an
+        # unrecorded apply (a swallowed ledger write leaves applied_sha stale while
+        # applied_version advanced — every later tick reads pointer != applied_sha and
+        # rejects rollback-or-replay forever while the comparator holds the stale APPLIED);
+        # verify_fail's attempt record stays best-effort at ITS call site.
+        # Every interpolated field is charset-gated to `"invalid"` rather than
+        # printf-interpolated raw — `verify_fail pointer-malformed` deliberately carries
+        # the REJECTED pointer in $3, and a quote-bearing value would otherwise smuggle a
+        # second "bundle_sha256" key that the anchored read-back never asked for.
+        _wsv="$1" _wsv2="$${2:-}" _wsv3="$${3:-}"
+        case "$_wsv" in ''|*[!a-z0-9:-]*) _wsv=invalid ;; esac
+        case "$_wsv2" in ''|*[!0-9]*) _wsv2=invalid ;; esac
+        case "$_wsv3" in ''|*[!0-9a-f]*) _wsv3=invalid ;; *) [ "$${#_wsv3}" -eq 64 ] || _wsv3=invalid ;; esac
+        printf '{"applied_version":%s,"bundle_sha256":"%s","applied_ts":"%s","verify_result":"%s","attempted_version":"%s","attempted_sha256":"%s"}\n' \
+          "$applied_version" "$applied_sha" \
+          "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" \
+          "$_wsv" "$_wsv2" "$_wsv3" > "$${APPLIED_JSON}.new" 2>/dev/null \
+          && mv -f "$${APPLIED_JSON}.new" "$APPLIED_JSON" 2>/dev/null
+      }
+
+      # verify_fail — the named-failure exit. Records the attempt in applied.json WITHOUT
+      # advancing the applied pair (best-effort — a dead state dir must not mask the emit),
+      # emits the marker under the same fail-open 300 s throttle as NOOP (a reason CHANGE
+      # always emits; a sustained identical failure re-emits once per window — ~288
+      # rows/day per sustained reason, not ~1,440), and exits 1 EVERY
+      # tick regardless — the oneshot failure + timer retry is the liveness signal, the row
+      # is the reason (the comparator DIVERGES if it is the last thing the host said).
+      VF_STAMP="$${STATE_DIR}/.verify-fail-emitted"
+      verify_fail() {
+        # $1 = reason token; $2 = manifest VERSION when known (rejver= — never `version=`,
+        # which the comparator would parse as applied state); $3 = extra detail. The emit
+        # is reason-change-or-300s-window (emit_due fails toward emitting, never silence).
+        write_state "verify-fail:$1" "$${2:-}" "$pointer" || true
+        if [ "$(cat "$VF_STAMP" 2>/dev/null || true)" != "$1" ] || emit_due "$VF_STAMP"; then
+          emit "SOLEUR_INFRA_PULL_VERIFY_FAIL" "reason=$1 offered=$${pointer:0:12} rejver=$${2:-none}$${3:+ $3}"
+          printf '%s' "$1" > "$VF_STAMP" 2>/dev/null || true
+        fi
+        exit 1
+      }
+
+      mkdir -p "$STATE_DIR" 2>/dev/null || true
+
+      # Deferred SEAM_REFUSED row (recorded at the gate, before STATE_DIR existed):
+      # throttled on the same fail-open 300 s window — a persisting seam env emits
+      # once per window, not ~1,440 rows/day. Bare logger, the registered shape.
+      if [ "$${SEAM_REFUSED_COUNT:-0}" -gt 0 ] && emit_due "$SEAM_STAMP"; then
+        logger -t inngest-config-refresh "SOLEUR_INFRA_PULL_SEAM_REFUSED count=$SEAM_REFUSED_COUNT detail=REFRESH_* seam names present without --fixture-seams argv; unset and ignored (#7761)" 2>/dev/null || true
+        touch "$SEAM_STAMP" 2>/dev/null || true
+      fi
+
+      # --- resolve applied state -------------------------------------------------------
+      applied_version_raw=""
+      if [ -f "$APPLIED_VERSION_FILE" ]; then
+        applied_version_raw="$(tr -d '[:space:]' < "$APPLIED_VERSION_FILE" 2>/dev/null || true)"
+      fi
+      applied_version=0
+      case "$applied_version_raw" in
+        ''|*[!0-9]*)
+          # Missing/empty/corrupt applied.version -> floor 0 + the distinguishable row.
+          floor_emit
+          ;;
+        *) applied_version="$applied_version_raw" ;;
+      esac
+      applied_sha=""
+      if [ -f "$APPLIED_JSON" ]; then
+        # Anchored on the document shape — bundle_sha256 is the SECOND field, so a
+        # smuggled later key can never win the read-back.
+        applied_sha="$(sed -n 's/^{"applied_version":[0-9]*,"bundle_sha256":"\([0-9a-f]\{64\}\)".*/\1/p' "$APPLIED_JSON" 2>/dev/null | head -1)"
+      fi
+
+      # --- resolve the promoted pointer -------------------------------------------------
+      # INNGEST_CONFIG_DIGEST is the Terraform-promoted digest (Doppler secret, scoped
+      # injected by the unit). Normalize: whitespace and an optional `sha256:` prefix.
+      pointer="$(printf '%s' "$${INNGEST_CONFIG_DIGEST:-}" | tr -d '[:space:]')"
+      pointer="$${pointer#sha256:}"
+      if [ -z "$pointer" ]; then
+        noop "reason=empty-pointer"
+        exit 0
+      fi
+      if ! grep -qE '^[0-9a-f]{64}$' <<<"$pointer"; then
+        verify_fail pointer-malformed
+      fi
+      if [ -n "$applied_sha" ] && [ "$pointer" = "$applied_sha" ]; then
+        noop "reason=same-digest version=$applied_version sha256=$applied_sha"
+        exit 0
+      fi
+
+      # --- zot pull (the ONLY registry read path on this host; ADR-135 amended 2026-10-13)
+      ZOT_REGISTRY_ENDPOINT=""
+      ZOT_PULL_USER=""
+      ZOT_PULL_TOKEN=""
+      if [ -r "$ZOT_ENV_FILE" ]; then . "$ZOT_ENV_FILE"; fi
+      ZOT_EP="$ZOT_REGISTRY_ENDPOINT"
+      [ -n "$ZOT_EP" ] || verify_fail pull-endpoint-absent
+      BREF="$${ZOT_EP}/$${BUNDLE_REPO}@sha256:$${pointer}"
+
+      # Staging lives under the STATE DIR — the docker daemon resolves -v binds in ITS mount
+      # namespace, so a PrivateTmp /tmp staging dir would not exist for it (see header).
+      # Sweep residue first: a SIGKILL'd tick leaks its stage dir and orphan .new files
+      # (the EXIT trap can't run under SIGKILL).
+      rm -rf "$${STATE_DIR}"/stage.* 2>/dev/null || true
+      rm -f "$${APPLIED_JSON}.new" "$${APPLIED_VERSION_FILE}.new" 2>/dev/null || true
+      STAGE="$(mktemp -d "$${STATE_DIR}/stage.XXXXXX" 2>/dev/null)" || verify_fail stage-init
+      trap 'rm -rf "$STAGE"' EXIT
+
+      # The pull token rides stdin, never argv (the same shape every sibling uses).
+      if [ -n "$ZOT_PULL_USER" ] && [ -n "$ZOT_PULL_TOKEN" ]; then
+        printf '%s' "$ZOT_PULL_TOKEN" | timeout 60 "$DOCKER_BIN" login "$ZOT_EP" \
+          -u "$ZOT_PULL_USER" --password-stdin >/dev/null 2>&1 || verify_fail pull-login
+      else
+        verify_fail pull-creds-absent
+      fi
+
+      # Bounded digest-pinned pull — the @sha256 pin, not TLS, is the integrity control on
+      # the private net; provenance is the cosign gate below.
+      timeout "$PULL_TIMEOUT_S" "$DOCKER_BIN" pull "$BREF" >/dev/null 2>&1 || verify_fail pull
+
+      "$DOCKER_BIN" rm -f inngest-config-extract >/dev/null 2>&1 || true
+      cid="$("$DOCKER_BIN" create --name inngest-config-extract "$BREF" 2>/dev/null)" || verify_fail extract
+      if ! "$DOCKER_BIN" cp "$${cid}:/bundle.tar.gz" "$STAGE/bundle.tar.gz" >/dev/null 2>&1; then
+        "$DOCKER_BIN" rm -f "$cid" >/dev/null 2>&1 || true
+        verify_fail extract
+      fi
+      "$DOCKER_BIN" rm -f "$cid" >/dev/null 2>&1 || true
+
+      mkdir -p "$STAGE/bundle"
+      # The bundle is UNAUTHENTICATED until verify-blob lands below, and root's tar
+      # parses it — bound the parse: size cap (a multi-GB artifact is a pre-auth
+      # disk-fill), regular-file/dir members only (no setuid/device/fifo/link
+      # members), and no carried ownership/mode bits (GNU tar defaults to
+      # --same-owner/--same-permissions as root).
+      _tgz_bytes="$(stat -c %s "$STAGE/bundle.tar.gz" 2>/dev/null || echo 0)"
+      case "$_tgz_bytes" in ''|*[!0-9]*) _tgz_bytes=0 ;; esac
+      [ "$_tgz_bytes" -gt 67108864 ] && verify_fail extract "" "member=oversized"
+      tar -tzvf "$STAGE/bundle.tar.gz" 2>/dev/null | awk '$1 !~ /^[-d]/ {found=1; exit} END{exit found?0:1}' \
+        && verify_fail extract "" "member=nonregular" || true
+      tar -xzf "$STAGE/bundle.tar.gz" -C "$STAGE/bundle" \
+        --no-same-owner --no-same-permissions 2>/dev/null || verify_fail extract
+      [ -f "$STAGE/bundle/manifest.txt" ] || verify_fail manifest-absent
+
+      # --- provenance: cosign verify-blob OFFLINE ---------------------------------------
+      # The .cert + .sig travel inside the bundle so nothing here touches Fulcio/Rekor; the
+      # trusted root is baked and mounted :ro. --network none: the verify needs no egress at
+      # all — the daemon-side implicit pull of the cosign image is unaffected by it.
+      if ! timeout "$VERIFY_TIMEOUT_S" "$DOCKER_BIN" run --rm --network none \
+          -v "$STAGE/bundle:/bundle:ro" \
+          -v "$TRUSTED_ROOT:/etc/cosign/trusted_root.json:ro" \
+          "$COSIGN_IMAGE" verify-blob \
+          --trusted-root /etc/cosign/trusted_root.json \
+          --certificate /bundle/manifest.txt.cert \
+          --signature /bundle/manifest.txt.sig \
+          --certificate-identity-regexp "$IDENTITY_REGEXP" \
+          --certificate-oidc-issuer "$OIDC_ISSUER" \
+          /bundle/manifest.txt >/dev/null 2>&1; then
+        verify_fail signature
+      fi
+
+      # VERSION is read ONLY from the signed manifest — never from an OCI tag or the pointer
+      # (HARD-2). A missing/malformed VERSION is a named fail, not a parse-to-0.
+      VERSION="$(sed -n 's/^VERSION=\([0-9][0-9]*\)[[:space:]]*$/\1/p' "$STAGE/bundle/manifest.txt" | head -1)"
+      case "$VERSION" in
+        ''|*[!0-9]*) verify_fail manifest-version ;;
+      esac
+      # Bounded to 15 digits — an absurd digit string must hit the named fail, not the
+      # arithmetic `-le` below (overflow reads as non-less-than = a rollback bypass).
+      [ "$${#VERSION}" -gt 15 ] && verify_fail manifest-version
+
+      # Monotonic gate: a version strictly below applied is a rollback-or-replay, loudly
+      # rejected — never a silent no-op (HARD-9; rejection is the signal). The
+      # same-version/different-digest arm is NOT a reject: under the producer's
+      # monotonic-VERSION invariant it is the torn-ledger signature — applied.version
+      # advanced while applied.json still pins the prior digest (a lost write_state,
+      # kill, or full disk) — or applied.json itself lost. The bundle is already
+      # signature- and per-member-sha verified and the promoted digest is the
+      # convergence authority, so repair by falling through to install + the dual
+      # ledger write; the emit below marks it REPAIRED, distinguishable from APPLIED.
+      _repairing=0
+      if [ "$VERSION" = "$applied_version" ] && [ "$pointer" != "$applied_sha" ]; then _repairing=1
+      elif [ "$VERSION" -le "$applied_version" ]; then verify_fail rollback-or-replay "$VERSION"; fi
+
+      # Member names must be bare basenames ending .sh (the refresh set is scripts-only,
+      # v1) — anything else would aim the install outside the DEST_SPEC allowlist or at a
+      # non-carrier path.
+      member_rows="$(grep -E '^[0-9a-f]{64}  [^[:space:]]+$' "$STAGE/bundle/manifest.txt" || true)"
+      [ -n "$member_rows" ] || verify_fail manifest-empty "$VERSION"
+      member_names="$(printf '%s\n' "$member_rows" | awk '{print $2}')"
+      # An empty name set must not ride the 0==0 equality below into an APPLIED
+      # with zero files installed (the installs-ALL-files contract is fail-closed).
+      [ -n "$member_names" ] || verify_fail manifest-empty "$VERSION"
+      total_members="$(printf '%s\n' "$member_names" | grep -c .)"
+      good_members="$(printf '%s\n' "$member_names" | grep -cE '^[A-Za-z0-9._-]+\.sh$' || true)"
+      if [ "$good_members" != "$total_members" ]; then
+        verify_fail manifest-member-name "$VERSION"
+      fi
+
+      # Per-file sha256 against the SIGNED manifest rows, in the extract dir.
+      sha_out="$(cd "$STAGE/bundle" && printf '%s\n' "$member_rows" | sha256sum -c - 2>&1)" \
+        && sha_rc=0 || sha_rc=$?
+      if [ "$sha_rc" -ne 0 ]; then
+        bad_member="$(printf '%s\n' "$sha_out" | sed -n 's/: FAILED.*//p' | head -1)"
+        verify_fail sha "$VERSION" "member=$${bad_member:-unknown}"
+      fi
+
+      # --- install: stage-all (above), then install-all through the allowlist ------------
+      # infra-config-install re-checks DEST_SPEC per member and lands each file via
+      # install-to-tmp + atomic same-dir rename (the #6178 install boundary). A mid-set
+      # failure leaves applied.version un-advanced; the next tick re-drives the whole set.
+      install_member=""
+      for _mname in $member_names; do
+        if ! "$INSTALL_CMD" "/usr/local/bin/$_mname" 755 root:root < "$STAGE/bundle/$_mname" \
+            2>/dev/null; then
+          install_member="$_mname"
+          break
+        fi
+      done
+      if [ -n "$install_member" ]; then
+        verify_fail install "$VERSION" "member=$install_member"
+      fi
+
+      # --- advance: version + ledger only after the LAST file landed ---------------------
+      printf '%s\n' "$VERSION" > "$${APPLIED_VERSION_FILE}.new" 2>/dev/null \
+        && mv -f "$${APPLIED_VERSION_FILE}.new" "$APPLIED_VERSION_FILE" 2>/dev/null \
+        || verify_fail version-write "$VERSION"
+      applied_version="$VERSION"
+      applied_sha="$pointer"
+      write_state ok "$VERSION" "$pointer" \
+        || verify_fail ledger-write "$VERSION"
+      # REPAIRED (not APPLIED) marks the torn-ledger self-heal — the next same-digest
+      # NOOP converges the comparator; the row is the audit trail.
+      _m=APPLIED; [ "$_repairing" -eq 1 ] && _m=REPAIRED
+      emit "SOLEUR_INFRA_PULL_$_m" "version=$VERSION sha256=$pointer verify=ok"
+      exit 0
+    owner: root:root
+    permissions: '0755'
+
+  - path: /etc/systemd/system/inngest-config-refresh.service
+    content: |
+      [Unit]
+      Description=Pull + verify + apply the signed inngest config bundle when the promoted digest moves (#6780, ADR-135)
+      After=network-online.target docker.service
+      Wants=network-online.target docker.service
+      ConditionPathExists=/etc/default/inngest-server
+
+      [Service]
+      Type=oneshot
+      # 420 > the worst-case tick (login 60 + PULL_TIMEOUT_S 180 + VERIFY_TIMEOUT_S 120):
+      # a TimeoutStartSec kill lands mid-gate with NO marker — the flip's own value.
+      TimeoutStartSec=420
+      Environment=HOME=/root
+      Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      EnvironmentFile=/etc/default/inngest-server
+      NoNewPrivileges=yes
+      ProtectSystem=strict
+      PrivateTmp=true
+      StateDirectory=inngest-config
+      # ProtectSystem=strict makes /etc/ /usr/ read-only at the mount-namespace
+      # level — the script's apply leg shells out to infra-config-install, whose
+      # mktemp lives inside /usr/local/bin (webhook.service precedent); without
+      # it here every promotion fails EROFS forever. `-` on /root/.docker: a
+      # non-existent ReadWritePaths entry fails mount-namespace setup, and the
+      # dir is created by the bootstrap's own `docker login` later in runcmd.
+      ReadWritePaths=-/root/.docker /usr/local/bin
+      SyslogIdentifier=inngest-config-refresh
+      # --only-secrets bounds doppler injection to the ONE pointer this consumer needs —
+      # an unbounded `doppler run` here would give a root ExecStart the whole isolated
+      # prd secret set. --no-exit-on-missing-only-secrets because INNGEST_CONFIG_DIGEST is
+      # count-gated in terraform: absent until first promotion, and a hard doppler error
+      # would read as a refresh failure rather than the correct empty-pointer NOOP.
+      # --config takes the templatefile var (${inngest_doppler_config}) — the same
+      # parameterization every sibling --config site on this path uses (#9175 census):
+      # the rehearsal render resolves it to soleur-inngest/rehearsal_<runid>, never a
+      # literal prd, and the census regexes in inngest.test.sh accept only that form.
+      ExecStart=/usr/bin/doppler run --project soleur-inngest --config ${inngest_doppler_config} --only-secrets INNGEST_CONFIG_DIGEST --no-exit-on-missing-only-secrets -- /usr/local/bin/inngest-config-refresh.sh
+
+      [Install]
+      WantedBy=multi-user.target
+    owner: root:root
+    permissions: '0644'
+
+  - path: /etc/systemd/system/inngest-config-refresh.timer
+    content: |
+      [Unit]
+      Description=Fire inngest-config-refresh.service every 60 s (#6780, ADR-135)
+      ConditionPathExists=/etc/default/inngest-server
+
+      [Timer]
+      OnBootSec=60s
+      OnUnitActiveSec=60s
+      Persistent=true
+
+      [Install]
+      WantedBy=timers.target
+    owner: root:root
+    permissions: '0644'
+
 runcmd:
   # --- #6178 boot observability: EARLIEST marker (Doppler-INDEPENDENT) -------------------
   # First instruction. Stage the baked Better Stack token and phone home immediately. If this
@@ -2366,6 +2867,24 @@ runcmd:
       /usr/local/bin/inngest-boot-phone-home.sh inngest-probe-cred-ABSENT "redis_keys will report __UNREADABLE__" || true
     fi
     unset _rp
+
+  # --- #6780 (ADR-135, 2026-10-13 amendment): ARM the config-refresh consumer ------------
+  # Placed AFTER /etc/default/inngest-server exists (the ~20 lines above): the timer's
+  # ConditionPathExists is evaluated at ACTIVATION, so arming it earlier would leave it
+  # unarmed for the boot's whole life (the same measured systemd behaviour the provision
+  # timer comment records). `enable --now` is correct here — the refresh timer's whole
+  # purpose is a steady 60 s cadence; an immediate first fire on this boot is the
+  # intended behaviour, not a double-trigger (OnBootSec counts from boot, and this host
+  # is already past it).
+  # daemon-reload first: the consumer's units were written by write_files and the last
+  # reload systemd saw was the luks-open block far above.
+  - systemctl daemon-reload
+  - systemctl enable --now inngest-config-refresh.timer
+  - |
+    set +e
+    if ! systemctl is-enabled --quiet inngest-config-refresh.timer; then
+      /usr/local/bin/inngest-boot-phone-home.sh refresh-timer-enable-FAILED "timer=$(systemctl is-enabled inngest-config-refresh.timer 2>&1)" || true
+    fi
 
   # --- #8562: ARM the provision unit. The last runcmd items, and all runcmd still does for it ---
   # Placed directly after the last prerequisite the unit needs and only runcmd writes

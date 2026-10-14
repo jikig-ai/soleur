@@ -134,6 +134,22 @@ _sig_curl() {
 INNGEST_HOST="${INNGEST_HOST:-soleur-inngest}"
 INNGEST_HOST_NAME="${INNGEST_HOST_NAME:-soleur-inngest-prd}"
 
+# #6940 item 3 — the optional page-size knob, normalized ONCE here and spliced into every
+# doublefire-probe URL below as ${DF_PAGE_QS}. CUTOVER_PAGE_SIZE comes from the workflow's
+# `page_size` dispatch input; empty/absent = the probe's own default (100). A non-integer
+# or out-of-range value is DROPPED with a named ::error:: — never spliced — because a
+# malformed query param would read as a webhook/hook failure instead of the caller bug it
+# is. The on-host probe re-validates the same bound (1..1000) before it reaches
+# --argjson first (fail-closed FATAL) — this side is advisory, that side is the gate.
+DF_PAGE_QS=""
+if [[ -n "${CUTOVER_PAGE_SIZE:-}" ]]; then
+  if [[ "$CUTOVER_PAGE_SIZE" =~ ^[0-9]+$ ]] && (( 10#$CUTOVER_PAGE_SIZE >= 1 && 10#$CUTOVER_PAGE_SIZE <= 1000 )); then
+    DF_PAGE_QS="&page_size=${CUTOVER_PAGE_SIZE}"
+  else
+    echo "::error::CUTOVER_PAGE_SIZE='${CUTOVER_PAGE_SIZE}' is not an integer in 1..1000 — the page_size parameter is DROPPED (the probe's default page size applies)"
+  fi
+fi
+
 # THE SHARED flip-FSM READER (#7674). One reader, two callers: confirm_flip_state (below) and
 # _flip_liveness_count (G3.7's H signal), and — since #8054 — op=execute 2.0's two reads.
 # Extracted rather than duplicated so the transport, credential config and query shape cannot
@@ -1233,8 +1249,9 @@ missed_tick_report() {
   local RUNBOOK="knowledge-base/engineering/operations/runbooks/inngest-server.md § Bounded-outage note"
 
   if [[ "$1" != "true" ]]; then
-    # OFF (the default): the window is echoed but never parsed, so a malformed CUTOVER_WINDOW_*
-    # cannot redden a run whose verdict above was clean.
+    # OFF (the default): the window is echoed but never parsed, so a malformed
+    # CUTOVER_WINDOW_FROM or CUTOVER_WINDOW_UNTIL cannot redden a run whose
+    # verdict above was clean.
     echo "::notice::missed-tick candidates NOT EMITTED (default, #6939). A per-bucket list cannot tell a tick that was due from one that was never due, and re-firing a never-due tick double-fires that cron. Gap window as configured: [$SHOW_FROM, $SHOW_UNTIL]. A tick skipped in the gap is the accepted ADR-100 residual. Recover one ONLY via $RUNBOOK. Unverified per-bucket candidates: re-dispatch op=verify with missed_tick_candidates=true. Proper fix: #6940."
     return 0
   fi
@@ -1576,7 +1593,7 @@ case "$OP" in
     fi
     DF_FNIDS="${CUTOVER_DOUBLEFIRE_FUNCTION_IDS:-}"
     # OPEN-TOPPED (no `until`) — same invariant as the op=verify arm.
-    DF_URL="$BASE/inngest-doublefire-probe?from=${DF_FROM}&function_ids=${DF_FNIDS}"
+    DF_URL="$BASE/inngest-doublefire-probe?from=${DF_FROM}&function_ids=${DF_FNIDS}${DF_PAGE_QS}"
     echo "::notice::doublefire-probe: scanning from=${DF_FROM} anchor_source=${DF_ANCHOR_SOURCE} function_ids=[${DF_FNIDS:-<all>}]"
     rm -f /tmp/doublefire-probe-body
     CODE=$(_sig_curl SIG -s --max-time 120 -o /tmp/doublefire-probe-body -w '%{http_code}' \
@@ -2324,6 +2341,13 @@ case "$OP" in
     # cover the web host.
     GSIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || GSIG=""
     QUIESCE_PROBES="${CUTOVER_QUIESCE_PROBES:-3}"
+    # #6940 item 2 — now a mapped repo var (was deferred). A malformed count must not reach
+    # `seq`: an empty loop would read as "UNREADABLE" — a real fail-closed outcome but a
+    # misattributed cause. Fail LOUD (named ::error::) and fall back to the default.
+    if ! [[ "$QUIESCE_PROBES" =~ ^[0-9]+$ ]] || (( QUIESCE_PROBES < 1 || QUIESCE_PROBES > 20 )); then
+      echo "::error::CUTOVER_QUIESCE_PROBES='${QUIESCE_PROBES}' is not an integer in 1..20 — using the default 3"
+      QUIESCE_PROBES=3
+    fi
     STILL_RUNNING=0
     UNKNOWN_COUNT=0
     serving=false
@@ -3001,7 +3025,7 @@ case "$OP" in
     # double-fire) lies AFTER CUTOVER_WINDOW_UNTIL, as does every op=rollback-initiated
     # interval. Bounding the top reads like a symmetric tidy-up and would cut out the
     # highest-risk region. Do not "tidy" it.
-    DF_URL="$BASE/inngest-doublefire-probe?from=${DF_FROM}&function_ids=${DF_FNIDS}"
+    DF_URL="$BASE/inngest-doublefire-probe?from=${DF_FROM}&function_ids=${DF_FNIDS}${DF_PAGE_QS}"
     echo "::notice::2.6 doublefire-probe: scanning from=${DF_FROM} anchor_source=${DF_ANCHOR_SOURCE} function_ids=[${DF_FNIDS:-<all>}]"
     # #6258 bounded TRANSPORT retry (Finding 11): wraps ONLY the doublefire transport curl.
     # The 120s outer budget > the probe's 90s in-script deadline + 8s per-page floor (SUM bound).
@@ -3130,7 +3154,7 @@ case "$OP" in
           DISC_LOOKBACK="${CUTOVER_DISCOVERY_LOOKBACK_S:-15897600}"
           if [[ "$DISC_LOOKBACK" =~ ^[1-9][0-9]*$ ]]; then
             DISC_FROM=$(date -u -d "@$(( $(date -u +%s) - DISC_LOOKBACK ))" +%Y-%m-%dT%H:%M:%SZ)
-            DISC_URL="$BASE/inngest-doublefire-probe?from=${DISC_FROM}&function_ids=${ZERO_RUN_IDS}"
+            DISC_URL="$BASE/inngest-doublefire-probe?from=${DISC_FROM}&function_ids=${ZERO_RUN_IDS}${DF_PAGE_QS}"
             echo "::notice::2.6 zero-run discovery: re-probing registry cron function(s) with zero runs in the verify window over a ${DISC_LOOKBACK}s (~2x max cron period) lookback — function_ids=[$ZERO_RUN_IDS]"
             rm -f /tmp/verify-zero-run
             # Credential headers ride curl's stdin config channel (--config -), never argv —
