@@ -35,7 +35,7 @@
 # of those infra batteries' scorers from `| grep -qF --` to `| grep -cF --`, which PATTERN does not
 # see, so both passes also run PATTERN_PIPED_SCORER — otherwise a revert to that spelling passes.
 # This is a LINE search: a scorer with no `--`, a long first flag, a `command`/`\grep` wrapper or a
-# pipe split across lines is not seen (the derived sweep below widens the spellings; see its limits). What pins the WIRE is
+# pipe split across lines is not seen (the derived sweep below widens the spellings and joins a pipe that ends a line; see its limits). What pins the WIRE is
 # apps/web-platform/infra/lib/mutation-scorer-consumers.test.sh, which requires every battery that
 # sources the lib to actually reach it.
 # #7376 (the tracker for these flakes; the fix PR is #9525) added three infra/plugin suites whose
@@ -57,11 +57,12 @@
 # non-draining-stub rows in that suite hold it. The runtime SIGPIPE control for this class lives in
 # tests/scripts/test-sentry-full-root-apply.sh (T4: `yes | grep -q y`, the `type -t grep` shim guard).
 # THE DERIVED SWEEP (#9217, #6601, #7005) replaced "the rest of scripts/ and plugins/ is out of scope". scan_sweep
-# derives its own population: every non-ignored file with a covered extension (.sh .bash .bats .yml .yaml .tf
-# .template .js; knowledge-base/ and this file excluded), asserted ZERO outside SWEEP_DEFERRALS. A new file under a
-# new directory is in the population without any edit. STATED LIMITS (measured 2026-10-05; re-measure before quoting): an
-# extensionless script with a shebang (5 tracked, 0 hits), fenced code in .md files that an agent executes (29 lines, mostly in
-# plugins/soleur/skills/*/SKILL.md), 2 lines in .ts, the 13 hits in 5 scripts under knowledge-base/, and this file.
+# derives its own population: every non-ignored file with a covered extension (SWEEP_EXTS: sh bash bats yml yaml tf template js ts tsx mjs cjs py; this
+# file and every knowledge-base archive/ directory excluded), asserted ZERO outside SWEEP_DEFERRALS, plus two multi-line passes (a pipe that ends a
+# line, joined to the next code line; the code lines of a markdown fence that holds pipefail). A new file under a new directory is in the population
+# without any edit. STATED LIMITS (Item F state, measured 2026-10-15; re-measure before quoting): an extensionless script with a shebang (6 tracked,
+# 0 hits), fenced code in .md files whose fence holds no pipefail (18 lines in 6 SKILL.md files, 0 of them in a pipefail fence), the 14 hits in 6
+# scripts under knowledge-base archive/ directories (frozen records, never run), and this file.
 # The named FILES_* passes below stay as they are: they pin the SUITES whose incidents made this class, and carry the
 # affected-paths wiring. The sweep is a line search, so a name in a comment is handled by the comment filter and the
 # per-line marker, never by widening a glob. To take a deferred subtree to zero: convert it and delete its row.
@@ -120,22 +121,23 @@ PATTERN_AWK_EXIT='(^|[^|])\|&?[[:space:]]*awk[^|]*[^[:alnum:]_]exit([^[:alnum:]_
 # against SIGPIPE in general — `-c` reads all its input. Bare `| grep -c` is deliberately NOT
 # matched: it is the safe counting form this file's header recommends.
 PATTERN_PIPED_SCORER='(^|[^|])\|&?[[:space:]]*grep([[:space:]]+-[A-Za-z]+)*[[:space:]]+--([[:space:]]|$)'
-# WHAT PATTERN_V2 CLOSES (the sweep only; the named passes keep PATTERN): the wrappers command|builtin|exec|env|nice|
-# stdbuf -x|timeout N and VAR=x (6 real sites when measured, all `LC_ALL=C grep -q`), `\grep`, an absolute path, egrep and
-# fgrep, a reader inside { } (4) or ( ), long flags, and an argument-taking flag before the early-exit flag
-# (`grep -e P -q`, `grep -A 1 -q P`; 0 real sites, so --regexp is not added).
-# WHAT A LINE REGEX CANNOT CLOSE, with the count measured on 2026-10-05 over the swept population (code lines,
-# comments dropped, this file excluded; the command is `git grep --no-index --exclude-standard -anE <regex>` over the same
-# pathspec as scan_sweep). Re-measure before quoting a figure; counts rot.
-#   | head -N          1561 lines, 1022 of them `head -1`. Dangerous only where the site is a bare pipeline under set -e and
-#                      the producer writes more than a few KB; harmless on a short single-write producer. A count ratchet
-#                      would churn on every legitimate site and buy no property, so this is a review item, not a gate.
-#   | awk '... exit'     59 single-line stages (PATTERN_AWK_EXIT sees them in the named passes); a multi-line awk program is not seen
-#   | read                3 lines;  | sed ...q   0 lines
-#   a pipe split across lines   0 today (the one that existed was converted by hand)
-#   a reader reached through a variable ("$GREP" -q), a wrapper with its own flags (env -i, nice -n 10, timeout -s KILL 5,
-#   /usr/bin/env grep, sudo, xargs), a pipe into a function that wraps grep, and a procsub-out reader (cmd > >(grep -q ...)):
-#   0 sites each today. Known false positive: a quoted -e pattern containing a space and the text -q (0 repo hits).
+# WHAT PATTERN_V2 CLOSES (the sweep only; the named passes keep PATTERN): the part comments at its definition list every spelling. Item F (#9217) widened it
+# past the S6 set to wrappers with their own flags (sudo, doas, time, nohup, setsid, xargs, env -i PATH=x, timeout -s KILL 5), zgrep rg ag ugrep pcregrep, an
+# `sh -c` reader, one bare operand between flags (`grep P -q`), `-5q`, abbreviated long options (--qui, --max=1) and a variable whose name carries grep. None had a
+# live site when measured: the widening adds 0 hits over the swept population (33 equal 33), so it is protection for the next site, not a conversion.
+# WHAT A LINE REGEX STILL CANNOT CLOSE (Item F state, measured 2026-10-15 over the swept population: code lines, comments dropped, this file excluded; the
+# commands are in evidence.md of the Item F spec dir, archived at ship). Counts rot: re-measure before quoting one.
+#   | head -N          754 lines (575 of them `head -1`) in 306 files. A reader that exits after N lines is dangerous only where the site is a bare pipeline
+#                      under set -e and the producer writes more than a few KB. No static property separates the harmful from the harmless (the chain
+#                      `x | head -1 | grep -q p` is matched by its grep half); a count ratchet would churn on every legitimate site and buy no property.
+#                      A review item, tracked with the awk exit below as one conversion wave.
+#   | awk '... exit'   41 single-line stages and 13 multi-line programs. PATTERN_AWK_EXIT sees the single-line form in the named passes only; a multi-line
+#                      program needs a program-extent parser, and most are value-extraction captures.
+#   | read             3 lines, none a real reader;  | sed ...q   1 line
+#   a reader behind a function (25 candidate functions, 0 call sites) or behind a variable whose name does not carry grep (709 stages, none with an early flag).
+#   a procsub-out reader (cmd > >(grep -q ...)), a stack of two wrappers longer than the bounded run (wrap-5-tokens), and a quoted -q inside a pattern (the
+#   stated false positives `grep -c p -eq` and `xargs echo grep -q p`, pinned as fp cases).
+#   the marker (ALLOW_MARKER): an in-string match still matches; SWEEP_MARKER_PIN pins every marked line per file, so a new one is a visible edit.
 # THE PRODUCER SIDE of the pipe (a stub that never reads the stdin a `printf |` feeds it, so the writer takes the signal) is
 # invisible to any line search: it needs a join from each production pipe to the owning suite's stub. S7b (#9217) adds that join
 # (the block headed THE PRODUCER SIDE near the end of this file): it derives every (test file, verb) pair, requires a PRODUCER_JOIN row
@@ -210,8 +212,9 @@ hits="$(git grep -nE "$PATTERN" -- '.claude/hooks/*.sh' '.claude/hooks/lib/*.sh'
 #      at all. A test that demonstrates a bug must be allowed to contain it. The marker is
 #      per-LINE and must be typed out, so it cannot be applied by accident or by a glob.
 # A TRAILING comment on the line (whitespace before the `#`, and the words followed by whitespace or end of line, so a trailing reason in parentheses after them is accepted), so a
-# `; echo "# sigpipe-demo: intentional"` tail does not exempt the line. KNOWN HOLE (Item F, measured in the S4 review): a string that
-# contains the words followed by a space (`"a # sigpipe-demo: intentional b"`) still matches, and the marker is not capped per file.
+# `; echo "# sigpipe-demo: intentional"` tail does not exempt the line. STATED LIMIT (Item F): a string that
+# contains the words followed by a space (`"a # sigpipe-demo: intentional b"`) still matches; the compensating control is SWEEP_MARKER_PIN, which pins every
+# marked line outside knowledge-base per file, so a new marker is a visible one-line edit with its reason in the PR body.
 ALLOW_MARKER='[[:space:]]#[[:space:]]*sigpipe-demo:[[:space:]]*intentional([[:space:]]|$)'
 # The comment filter every scan shares, PER LANGUAGE (Item F): `path:NN:<spaces>#...` is a comment in a shell, YAML, Terraform, template, Python or
 # markdown-fence line, and `//`, `/*` and a leading `*` are comments in the JS family (js ts tsx mjs cjs). A `#` line in a .ts file is code (a private
@@ -424,8 +427,8 @@ fi
 # also need an edit of scripts/lib/test-affected-paths.sh (which arms the full battery on every push).
 # This pass derives its population instead: every non-ignored file with a covered extension, scanned with
 # PATTERN_V2, asserted ZERO outside the deferral table. A file added next month under a new directory is in
-# the population without any edit. Limits, stated plainly: a LINE search (a shape split across lines is not
-# seen), coverage by EXTENSION (an extensionless script with a shebang is not swept), and `git grep` reads
+# the population without any edit. Limits, stated plainly: a LINE search plus two multi-line passes (the
+# header lists what none of them see), coverage by EXTENSION (an extensionless script with a shebang is not swept), and `git grep` reads
 # the working tree, so run this suite from the checkout you edited.
 #
 # Flags, and why each is there (measured on this tree): --no-index lets the probe plant files that are not
@@ -2877,13 +2880,24 @@ wire_gate=$(grep -cE '^if \(\( \$\{#sweep_probe_fail\[@\]\} == 0 \)\); then[[:sp
 wire_exit=$(grep -cE '^exit "\$FAIL"[[:space:]]*$' <<<"$_code" || true)
 wire_else=$(grep -B1 -E '[e]cho "FAIL: the derived sweep.s own probe is broken' <<<"$_code" | grep -cE '^  FAIL=1[[:space:]]*$' || true)
 wire_exit1=$(grep -A2 -E '[e]cho "FAIL: the derived sweep.s own probe is broken' <<<"$_code" | grep -cE '^  exit 1([[:space:]]|$)' || true)
+# The reader pattern has ONE home (Item F): a single column-0 assignment of PATTERN_V2, read by the sweep (and so by both linearisers' output), and
+# neither linearising pass names a pattern at all. A private copy, or the old PATTERN, in a pass would read a V2-only spelling as clean; the must-report
+# cases above that use a V2-only spelling (split-sudo, md-env-i) are what see a narrower copy at run time, and this row names the structure.
+ps_n=$(grep -c '^PATTERN_V2=' <<<"$_code" || true)
+ps_sweep="$(declare -f scan_sweep)"
+ps_lin="$(declare -f scan_split scan_md)"
+ps_reads=no; [[ "$ps_sweep" == *PATTERN_V2* ]] && ps_reads=yes
+ps_old=no; [[ "$ps_sweep" == *'"$PATTERN"'* ]] && ps_old=yes
+ps_priv=no; [[ "$ps_lin" == *PATTERN* ]] && ps_priv=yes
+[[ "$ps_n" == 1 && "$ps_reads" == yes && "$ps_old" == no && "$ps_priv" == no ]] \
+  || sweep_probe_fail+=("pattern-single-source: PATTERN_V2 is assigned ${ps_n:-<err>} times at column 0 (want 1), scan_sweep reads it: $ps_reads (want yes), scan_sweep names the old PATTERN: $ps_old (want no), a linearising pass names a pattern: $ps_priv (want no)")
 
 # A probe check that is DELETED cannot fail, so the number of checks is pinned: every check above ends in
 # `|| sweep_probe_fail+=(...)` (or `&& ...` for a negative control), so the count of NON-COMMENT lines carrying that tail is the count
 # of checks (the pin's own line included); comment lines are excluded, so rewording a comment can neither hide a deletion nor trip the pin,
 # and the append is counted only where an `||` or `&&` operator immediately precedes it, so a bare tail with no operator cannot stand in for
 # a deleted check (a decoy that fabricates a whole `|| sweep_probe_fail+=(` line is an edit of the probe itself, which review reads).
-SWEEP_PROBE_CHECKS=54
+SWEEP_PROBE_CHECKS=71
 probe_checks=$(grep -cE '(\|\||&&)[[:space:]]+sweep_probe_fail\+=\(' <<<"$_code" || true)
 [[ "$probe_checks" == "$SWEEP_PROBE_CHECKS" ]] \
   || sweep_probe_fail+=("probe-count: this probe carries ${probe_checks:-<err>} checks, pinned at $SWEEP_PROBE_CHECKS — a deleted check cannot fail, so restore it or, if you ADDED one, raise SWEEP_PROBE_CHECKS")
