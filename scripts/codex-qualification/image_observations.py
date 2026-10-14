@@ -56,12 +56,14 @@ def action_manifest(image_ids, pairing_sha256, operational_sha256):
             'issuer_verification': 'pending', 'independent_review': 'pending'}
 
 
-def write_action_manifest(path, manifest):
+def write_action_manifest(path, manifest, *, pairing_sha256, operational_sha256):
     """Create one new private manifest file; never execute its listed requests."""
     require(isinstance(path, Path) and path.is_absolute() and '..' not in path.parts,
             'Explicit absolute manifest path required')
     require(path.parent.is_dir() and path.parent == path.parent.resolve(strict=True),
             'Manifest parent must be an existing direct path')
+    _digest(pairing_sha256)
+    _digest(operational_sha256)
     require(type(manifest) is dict and set(manifest) == {
         'version', 'pairing_sha256', 'operational_sha256', 'actions',
         'execute_authorized', 'profile_admissible', 'issuer_verification',
@@ -74,14 +76,26 @@ def write_action_manifest(path, manifest):
     expected = action_manifest(
         {role: image for action in manifest.get('actions', [])
          for role in action.get('roles', []) for image in (action.get('image_id'),)},
-        manifest.get('pairing_sha256'), manifest.get('operational_sha256'))
+        pairing_sha256, operational_sha256)
     require(manifest == expected and len(canonical(manifest)) <= MANIFEST_LIMIT,
             'Exact bounded GET-only action manifest required')
     payload = canonical(manifest) + b'\n'
     descriptor = None
+    parent_descriptor = None
     created = None
     try:
-        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        parent_descriptor = os.open('/', directory_flags)
+        for component in path.parent.parts[1:]:
+            next_descriptor = os.open(component, directory_flags, dir_fd=parent_descriptor)
+            os.close(parent_descriptor)
+            parent_descriptor = next_descriptor
+        parent_stat = os.fstat(parent_descriptor)
+        named_parent = os.stat(path.parent, follow_symlinks=False)
+        require((parent_stat.st_dev, parent_stat.st_ino) ==
+                (named_parent.st_dev, named_parent.st_ino), 'Manifest parent changed during open')
+        descriptor = os.open(path.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                             0o600, dir_fd=parent_descriptor)
         opened = os.fstat(descriptor)
         created = (opened.st_dev, opened.st_ino)
         view = memoryview(payload)
@@ -90,21 +104,26 @@ def write_action_manifest(path, manifest):
             require(type(written) is int and written > 0, 'Manifest write made no progress')
             view = view[written:]
         os.fsync(descriptor)
+        named_parent = os.stat(path.parent, follow_symlinks=False)
+        require((parent_stat.st_dev, parent_stat.st_ino) ==
+                (named_parent.st_dev, named_parent.st_ino), 'Manifest parent changed during write')
     except Exception:
         if descriptor is not None:
             os.close(descriptor)
             descriptor = None
         if created is not None:
             try:
-                current = os.stat(path, follow_symlinks=False)
+                current = os.stat(path.name, dir_fd=parent_descriptor, follow_symlinks=False)
                 if (current.st_dev, current.st_ino) == created:
-                    path.unlink()
+                    os.unlink(path.name, dir_fd=parent_descriptor)
             except OSError:
                 pass
         raise Refused('File-only action manifest write failed') from None
     finally:
         if descriptor is not None:
             os.close(descriptor)
+        if parent_descriptor is not None:
+            os.close(parent_descriptor)
     return hashlib.sha256(payload).hexdigest()
 
 
@@ -125,8 +144,13 @@ class ImageObservationCollector:
         self._contract = copy.deepcopy(contract)
         self._actions = action_manifest(self._image_ids, contract['pairing_sha256'],
                                         contract['operational_sha256'])['actions']
-        require(callable(getattr(transport, 'request', None)), 'Explicit read transport required')
+        try:
+            request = getattr(transport, 'request', None)
+        except Exception:
+            raise Refused('Explicit read transport required') from None
+        require(callable(request), 'Explicit read transport required')
         self._transport = transport
+        self._request = request
         self._clock = clock
         self._last = self._tick()
         self._attempted = False
@@ -162,7 +186,7 @@ class ImageObservationCollector:
         for action in self._actions:
             remaining = self._remaining(deadline)
             try:
-                receipt = self._transport.request('GET', action['path'], b'', timeout=remaining)
+                receipt = self._request('GET', action['path'], b'', timeout=remaining)
             except Exception:
                 raise Refused('Image Config observation request failed') from None
             self._remaining(deadline)

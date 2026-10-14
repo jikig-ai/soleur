@@ -71,6 +71,21 @@ redirect raw bytes privately and sanitize before emitting metadata. Failed or
 empty reads are not evidence. These refusals and source synchronization renewed
 no runtime permission and did not clear any hold.
 
+The image-observation focused review reproduced parent-path redirection between
+validation and `open`, and a raw exception from a transport `request` property.
+The writer now walks and pins every parent component with no-follow directory
+descriptors, creates/cleans the leaf relative to that descriptor, and checks
+the named parent identity after writing. Manifest hashes are checked against
+caller-supplied expected values. Synthetic tests pin parent-swap refusal,
+partial/zero-write and fsync cleanup, malformed content, late/backward/nonfinite
+deadlines, no retry after failed collection, and fixed error messages without
+private exception text. The first red test run also exposed a missing test
+import, invalid fixture-message expectations and an exhausted mock clock; these
+were setup defects, not evidence. A repository search named two nonexistent
+paths and returned errors; `rg --files` located the actual README, session-state
+and learning records. Use discovered paths and give each mock sequence enough
+ticks to reach the intended refusal boundary.
+
 The resumed image-observation test was first invoked from the repository root,
 where its sibling-module import was unavailable; run it from
 `scripts/codex-qualification`, as the wrapper does. A follow-up edit reused the

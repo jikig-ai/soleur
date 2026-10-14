@@ -197,8 +197,10 @@ Synthetic peers and deterministic mocks supply the test evidence only.
 immutable role image IDs. It deduplicates exact `GET /images/<id>/json` requests,
 checks complete bounded inherited Configs, shares one shrinking deadline, and
 keeps profile admission, issuer verification, ownership and execution false.
-Its exclusive mode-0600 manifest writer creates only the exact GET request list;
-it never runs those requests. No real image was observed. Builder, SQL-session
+Its exclusive mode-0600 manifest writer checks caller-supplied pairing and
+operational hashes, pins the parent directory through no-follow descriptors,
+and creates only the exact GET request list; it never runs those requests. No
+real image was observed. Builder, SQL-session
 and retained-resource transports, actual image Configs/profiles, independent
 review and fresh exact-action approval remain pending. See the
 [transport record](../../knowledge-base/project/specs/feat-one-shot-codex-web-live-paths/namespace-transport-implementation-2026-10-14.md).

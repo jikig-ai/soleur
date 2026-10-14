@@ -69,6 +69,19 @@ an observed behavior verdict.
 
 # Focused review and oracle corrections
 
+At pushed `d5394149a7fe2fe7a69ebbce5bfa89b913186363`, independent integrity
+reproduced a parent-directory rename/symlink race that redirected manifest
+creation, and a raising transport property escaped fixed error handling. Test
+design also found missing tampered-manifest, write-cleanup, deadline-expiry,
+backward-clock and exception-sanitization oracles (9 tests passed at baseline).
+The local follow-up pins parent traversal and leaf operations to a no-follow
+directory descriptor, checks the named parent after fsync, binds manifest
+contents to separately supplied expected hashes, and sanitizes/captures the
+transport request callable. Fifteen synthetic observation tests and 23
+transport tests pass after these changes; the fixes are unpushed and await
+exact-head independent reverification. Parent-swap regression uses only a
+temporary directory. No operational endpoint was contacted.
+
 Three independent seats reviewed pushed
 `9c24ddc76c0caa9fbcb55bdce1d4c7740123ea69`. Security and protocol integrity
 reported no blocking source finding; each repeated 17 tests with an explicit
@@ -194,12 +207,13 @@ repeated through the same collector.
 The file-only manifest binds pairing and operational hashes and enumerates the
 exact GET paths, empty-body payload markers, role mappings and approval
 requirement. It contains no endpoint or image Config. Its exclusive writer
-creates one mode-0600 file and refuses overwrite/symlink targets. It does not
-execute the manifest. Nine synthetic image-observation cases and 23 namespace
-transport cases pass (32 focused cases). Operational/adapter tests pass 66
-cases, and the registered complete offline wrapper passes with
-`IMAGE_OFFLINE_RC=0`. Current-source census/export and pushed-source independent
-review remain pending.
+checks independently supplied expected hashes, pins parent traversal and leaf
+operations to a no-follow directory descriptor, cleans partial files, and
+refuses overwrite/symlink targets. It does not execute the manifest. Fifteen
+synthetic image-observation cases and 23 namespace transport cases pass (38
+focused cases). Operational/adapter tests pass 66 cases, and the registered
+complete offline wrapper passes with `IMAGE_REVIEW_OFFLINE_RC=0`. Current-source
+census/export and pushed-source independent review remain pending.
 
 No real image Config, endpoint, profile or observation was read. Supplied image
 IDs and structural responses are not authenticated inventory. Builder, session

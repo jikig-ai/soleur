@@ -1622,3 +1622,21 @@
   deployment, flags or cohort operations. Build authorization is consumed;
   never run the withdrawn command. All prior holds, legal/SAST/C.9 dispositions
   and customer block remain unchanged.
+
+### Image observation review corrections — 2026-10-14
+
+- Independent security/integrity review at `d5394149a7fe2fe7a69ebbce5bfa89b913186363`
+  reproduced a manifest parent-swap write redirection and unsanitized transport
+  property lookup exception. Independent test-design review requested stronger
+  negative oracles for manifest tampering/write cleanup, deadline failures and
+  exception sanitization. The source patch pins parent traversal/leaf writes to
+  a no-follow directory descriptor, binds writer input to expected hashes,
+  sanitizes and captures the request callable, and adds synthetic regressions.
+- Current local focused result: image observations 15/15 and namespace
+  transports 23/23. The current changes are unpushed and require review at the
+  exact pushed head, then full offline/census/preparation/export and CI refresh.
+  No Docker/build, SQL, real endpoint, credential/provider, browser/account,
+  shared operational write, recovery, retry, deployment, flag or cohort action
+  occurred. Draft/disarmed/default-off/customer-blocked and all existing holds
+  remain. Build authorization is consumed; the withdrawn command remains
+  forbidden.
