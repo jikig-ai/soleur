@@ -147,3 +147,34 @@ watch started. Resumption verified a clean worktree, exact remote head and no
 existing monitor process before arming the bounded watch. The new unrestricted
 sandbox profile changes no task authorization. Every runtime, credential,
 provider/account, shared-write and promotion hold persists.
+
+# Subsequent main synchronization
+
+Evidence head `d7feb8528f5a6d915ada775e1b3a7d1b7fc008ad` completed its
+bounded draft watch at 82 pass / twelve skipped / only required `test` red.
+The executed aggregate job log confirms `DRAFT_LIGHT=true`, all three heavy
+legs skipped, and `draft: full battery owed at ready` with exit 1. Exact-head
+tenant integration and infra validation passed; the final-description quality
+guard run passed. No full battery or runtime qualification is established.
+The final source pairing and file-only export passed, with matching receipt/
+preview fields, 6,785 leaves plus three metadata leaves and zero operational
+counts. These measurements are historical after subsequent main inclusion.
+
+Main advanced by two commits through
+`8578cb32cc90380c8f25bed8e533a6e4dba24823`, merged cleanly using that exact
+inspected SHA. The delta archives an unrelated spec and changes infrastructure
+logging and test tooling. Qualification components/wrapper, application server
+and forward migration bytes are identical to the preceding independently
+reviewed source. No incoming operational command ran. Static synthesized Vector
+admission passed 42 cases and the emitter-read mutation battery passed 34 checks,
+including its live source census. Final source pairing/export and draft watches
+must cover the merged head separately; no execution approval changes.
+
+Attempting the completed aggregate's log through `gh run view` while its workflow
+was still active was refused. The completed-job API provided the log, but its
+terminal-escape guard first refused output; the exact allowed retry wrote raw
+bytes privately and stripped ANSI before selected metadata was printed. Neither
+refusal counted as log evidence. An initial attempt to read newly incoming test
+files before merging found them absent locally; the merged exact-source files
+were read before their static verification. Discovery alone proves no local
+checkout file exists. Every existing hold persists.

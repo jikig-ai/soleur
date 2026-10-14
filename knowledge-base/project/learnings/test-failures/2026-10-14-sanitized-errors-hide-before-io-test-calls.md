@@ -55,3 +55,18 @@ already requires discriminating negative controls; no new global rule is needed.
 No real daemon, build, SQL, credential, provider, browser or account action was
 performed. Operational authorization and all existing holds remain separate
 from synthetic transport evidence.
+
+# Addendum: final source synchronization
+
+A moving remote ref introduced a later commit than the initially inspected
+pair, so the actual `MERGE_HEAD` was checked before resolving generated legal
+hashes from combined document bytes. Later synchronization merged the inspected
+immutable SHA directly. Incoming files not yet merged were absent in the local
+worktree; use `git show <inspected-ref>:<path>` before inclusion. Two incoming
+evidence-comment trailing spaces were removed without changing data fields.
+
+A completed aggregate job's log was unavailable through `gh run view` while its
+workflow was active. Its job-log API required an explicit escape-output flag;
+redirect raw bytes privately and sanitize before emitting metadata. Failed or
+empty reads are not evidence. These refusals and source synchronization renewed
+no runtime permission and did not clear any hold.

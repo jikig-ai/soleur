@@ -1587,3 +1587,11 @@
   owns them. The final evidence-only commit needs fresh pairing/export and
   exact-head/description receipts. No full panel, SAST/C.9, profile, recovery,
   screenshot, Web/CLO or promotion clearance is implied.
+
+- Evidence head `d7feb8528f` settled with only intended draft aggregate red,
+  successful tenant/infra/final-description runs, and matching file-only export
+  receipts. Main then advanced through `8578cb32cc90380c8f25bed8e533a6e4dba24823`;
+  the inspected exact SHA is included cleanly. Qualification/server/schema bytes
+  are unchanged; incoming static Vector/emitter checks pass 42/34 cases. Their
+  inclusion changes complete runtime fingerprints and requires fresh final-head
+  pairing/export/watches. All source/runtime/legal/approval holds above remain.
