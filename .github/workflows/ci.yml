@@ -1090,6 +1090,11 @@ jobs:
           build-args: |
             NEXT_PUBLIC_SUPABASE_URL=https://placeholder.supabase.co
             NEXT_PUBLIC_SUPABASE_ANON_KEY=placeholder
+          # The builder stage mounts sentry_auth_token and refuses a missing or empty
+          # file (#7389). Same secret the release build passes. It is not a build-arg,
+          # so it is not recorded in provenance. The cli-tools step below stays secret-free.
+          secrets: |
+            sentry_auth_token=${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
 
       # Resolves the release image's two global CLI installs against the live npm registry on
       # every pull request and every merge_group run (no path gate: a path-skipped required

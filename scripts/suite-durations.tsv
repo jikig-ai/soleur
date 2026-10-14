@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=38090871167,38088705648,38086978176,38085840669,38055372785
 # default-weight-ms=1180
-# generated-at=2026-10-14T11:19:17Z
+# generated-at=2026-10-14T16:13:47Z
 # generator=regenerate-shard-manifest.py v3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
 .claude/hooks/background-poll-prefer-monitor.test.sh	777	measured
@@ -404,6 +404,8 @@ scripts/lint-agents-rule-budget-live	37	measured
 scripts/lint-agents-rule-budget-unit	415	measured
 scripts/lint-anthropic-content-position	356	measured
 scripts/lint-anthropic-content-position-live	222	measured
+scripts/lint-buildarg-secret-channels	1180	floor
+scripts/lint-buildarg-secret-channels-live	1180	floor
 scripts/lint-credential-path-literals	2180	measured
 scripts/lint-diagnosis-claims	1660	measured
 scripts/lint-doppler-description-length-live	84	measured

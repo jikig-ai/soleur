@@ -6010,10 +6010,19 @@ jobs:
       # fails closed on that (the idiom's rationale in apply-deploy-pipeline-fix.yml).
       #
       # It reads BETTER STACK, not Sentry, and that is forced rather than chosen: the
-      # boot-completion emit goes to both, but scripts/sentry-issue.sh needs
-      # SENTRY_ISSUE_RO_TOKEN (its own header records that SENTRY_IAC_AUTH_TOKEN 403s on
-      # event:read), while the Better Stack query credentials resolve through the
-      # DOPPLER_TOKEN this job already holds.
+      # boot-completion emit goes to both, but scripts/sentry-issue.sh is wired to
+      # SENTRY_ISSUE_RO_TOKEN, while the Better Stack query credentials resolve
+      # through the DOPPLER_TOKEN this job already holds.
+      #
+      # (#7389) An earlier comment claimed SENTRY_IAC_AUTH_TOKEN "403s on
+      # event:read". That was false twice over: sentry-issue.sh's header names
+      # SENTRY_API_TOKEN/SENTRY_AUTH_TOKEN, not the IAC token, and a live probe on
+      # 2026-08-10 showed SENTRY_IAC_AUTH_TOKEN DOES carry event:read
+      # (GET /organizations/jikigai-eu/issues/ -> 200; introspected scopes include
+      # event:read). Its actual 403s are on members/ and audit-logs/, which need
+      # member:read and org:admin. Better Stack stays the source for this job
+      # because those query credentials are already in Doppler here, not because
+      # the IAC token lacks event:read.
       - name: Poll for the git-data boot-completion signal
         id: poll
         if: ${{ !cancelled() && (steps.apply.outcome == 'success' || steps.apply.outcome == 'failure') }}

@@ -3795,7 +3795,8 @@ _aff_runner_banner() {
 # reserved for a suite TERMINATED mid-coverage.
 # #9763: 38 heavy/stale labels withdrawn to edge-selection; the floor pins count-5.
 # #8875: +1 always-on (emitter census is repo-global by construction); re-pinned at 114-5.
-_MIN_ALWAYS_ON_DECLARED=109
+# #7389: +1 always-on (the build-arg secret sweep walks the whole tree); re-pinned at 115-5.
+_MIN_ALWAYS_ON_DECLARED=110
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate
@@ -5113,6 +5114,12 @@ if want_scripts; then
   run_suite "tests/scripts/supabase-logs-query" bash tests/scripts/test-supabase-logs-query.sh
 
   run_suite "scripts/lint-credential-path-literals" bash scripts/lint-credential-path-literals.test.sh
+  # #7389: a credential reaching a PUBLISHED build channel (Docker build-arg -> SLSA
+  # provenance attestation, credential-shaped ARG/ENV/LABEL, `--build-arg` in a script).
+  # The unit suite includes a live sweep of the real tree, so the -live leg below is the
+  # same gate the release job runs pre-build.
+  run_suite "scripts/lint-buildarg-secret-channels" bash scripts/lint-buildarg-secret-channels.test.sh
+  run_suite "scripts/lint-buildarg-secret-channels-live" python3 scripts/lint-buildarg-secret-channels.py
   # #7136: a `run:` step reading a variable declared only on ANOTHER step. Part B of this
   # suite EXECUTES the shipped release-failure email body under both deploy branches — the
   # alert path that had never once delivered, because `set -u` killed it before the curl.

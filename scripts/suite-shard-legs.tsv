@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1180
-# generated-at=2026-10-14T11:19:17Z
+# generated-at=2026-10-14T16:13:47Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -407,6 +407,8 @@ scripts/lint-agents-rule-budget-live	6
 scripts/lint-agents-rule-budget-unit	6
 scripts/lint-anthropic-content-position	7
 scripts/lint-anthropic-content-position-live	4
+scripts/lint-buildarg-secret-channels	1
+scripts/lint-buildarg-secret-channels-live	1
 scripts/lint-credential-path-literals	4
 scripts/lint-diagnosis-claims	3
 scripts/lint-doppler-description-length-live	7
