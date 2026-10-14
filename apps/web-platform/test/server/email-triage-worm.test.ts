@@ -43,7 +43,10 @@ import {
 import { randomBytes, randomUUID } from "node:crypto";
 
 import { mintFounderJwt } from "@/lib/supabase/tenant";
-import { tearDownTenantUser } from "@/test/helpers/tenant-isolation-teardown";
+import {
+  tearDownTenantUser,
+  tearDownTenantUsers,
+} from "@/test/helpers/tenant-isolation-teardown";
 
 const INTEGRATION_ENABLED = process.env.TENANT_INTEGRATION_TEST === "1";
 
@@ -183,11 +186,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       // deleting the auth users. WORM rows themselves stay (append-only by
       // design; only the purge RPC can remove old rows). Fail-loud per
       // #10096 — a swallowed teardown error is a silent user leak.
-      for (const u of [userA, userB]) {
-        if (!u.id) continue;
-        assertSynthetic(u.email);
-        await tearDownTenantUser(service, u);
-      }
+      await tearDownTenantUsers(service, [userA, userB]);
     }, 60_000);
 
     test("(a) stub INSERT happy path — one-time-set columns are SQL NULL", async () => {

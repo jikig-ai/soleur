@@ -29,7 +29,10 @@
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { randomBytes } from "crypto";
-import { tearDownTenantUser } from "./helpers/tenant-isolation-teardown";
+import {
+  tearDownTenantUser,
+  tearDownTenantUsers,
+} from "./helpers/tenant-isolation-teardown";
 
 const INTEGRATION_ENABLED = process.env.SUPABASE_DEV_INTEGRATION === "1";
 
@@ -96,13 +99,7 @@ describe.skipIf(!INTEGRATION_ENABLED)("beta-CRM behavioral (dev)", () => {
   }, 60_000);
 
   afterAll(async () => {
-    for (const u of [userA, userB]) {
-      if (!u.id) continue;
-      assertSynthetic(u.email);
-      // FK-reverse helper: trigger-created workspace_members rows are
-      // ON DELETE RESTRICT, so a raw deleteUser 500s (#9994).
-      await tearDownTenantUser(service, u);
-    }
+    await tearDownTenantUsers(service, [userA, userB]);
   }, 60_000);
 
   test("AC7 — write→read round-trip incl. crm_note_list lens filter", async () => {
