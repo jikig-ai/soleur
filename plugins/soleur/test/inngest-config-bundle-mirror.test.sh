@@ -2,19 +2,22 @@
 # Guard for the zot mirror step of .github/workflows/build-inngest-config-bundle.yml (#7243).
 #
 # The defect (#6416 class): the mirror step was gated on `steps.zot_bridge.outcome == 'success'`,
-# so a soft-failed Cloudflare-tunnel bridge SKIPPED the step and the run stayed green with no
-# output, no annotation and no summary line. A bridge failing on every dispatch was
-# indistinguishable from one that works.
+# so a soft-failed Cloudflare-tunnel bridge SKIPPED the step and the mirror step itself produced no
+# warning, summary line or output. A bridge failing on every dispatch was indistinguishable from
+# one that works.
 #
 # The fix: the step runs whenever the image build succeeded, receives the bridge result as the
 # BRIDGE_OUTCOME env var and degrades loudly (outputs + ::warning:: + summary line, exit 0)
-# when the bridge did not succeed or the crane install / copy fails. The step keeps
-# continue-on-error: GHCR is authoritative and this workflow has no mirror-only mode.
+# when the bridge did not succeed or the crane download / checksum / extract / copy fails. The
+# step keeps continue-on-error: this workflow has no mirror-only mode and no host reads the zot
+# copy yet (interim contract, see the comment above the step).
 #
 # This suite parses the workflow as YAML (structural leg), extracts the REAL `run:` body by step
-# name and executes it under `bash -eo pipefail` with PATH stubs (behavioural leg), then proves
-# the guard itself is not vacuous by running the same evaluator over mutated copies of the
-# workflow (mutation battery). Run via: bash plugins/soleur/test/inngest-config-bundle-mirror.test.sh
+# name and executes it under `bash -eo pipefail` with argv-validating PATH stubs (behavioural
+# leg; the body sets its own options, so the runner's default `bash -e` makes no difference),
+# then proves the guard itself is not vacuous by running the same evaluator over mutated copies
+# of the workflow (mutation battery). Each mutant must fail the check it is named for, not just
+# any check. Run via: bash plugins/soleur/test/inngest-config-bundle-mirror.test.sh
 
 set -uo pipefail
 
@@ -33,10 +36,20 @@ pass() {
   PASS=$((PASS + 1))
 }
 
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
 SCRATCH_PARENT="${TMPDIR:-/var/tmp}"
 TMP=$(mktemp -d "$SCRATCH_PARENT/soleur-bundle-mirror.XXXXXXXX") || { echo "FATAL: mktemp failed" >&2; exit 2; }
+assert_fixture_dir "$TMP"
 trap 'rm -rf "$TMP"' EXIT INT TERM HUP
-[[ -d "$TMP" ]] || { echo "FATAL: scratch dir missing" >&2; exit 2; }
 
 # Instrument self-test: both verdict helpers must move their own counter, or every later
 # line below would be reporting through a helper that never records anything.
@@ -47,10 +60,10 @@ if [[ "$_st" != "11" ]]; then
 fi
 
 [[ -f "$WF" ]] || { echo "FATAL: workflow not found at $WF" >&2; exit 2; }
-python3 -c 'import yaml' 2>/dev/null || { echo "FATAL: python3 pyyaml unavailable" >&2; exit 2; }
+python3 -I -c 'import yaml' 2>/dev/null || { echo "FATAL: python3 pyyaml unavailable (isolated mode)" >&2; exit 2; }
 
 # ---------------------------------------------------------------------------
-# Structural leg + body extraction (python, TSV verdicts: OK|BAD <tab> name).
+# Structural leg + body extraction (python; verdict lines: OK|BAD <tab> label).
 # ---------------------------------------------------------------------------
 cat > "$TMP/struct.py" <<'PY'
 import re
@@ -60,65 +73,88 @@ import yaml
 
 wf, name, body_out = sys.argv[1:4]
 doc = yaml.safe_load(open(wf))
-steps = []
-job_ifs = []
-for jname, job in doc["jobs"].items():
-    if "if" in job:
-        job_ifs.append(str(job["if"]))
-    steps.extend(job.get("steps", []))
+jobs = doc["jobs"]
+LEAK = re.compile(r"steps\s*(\.|\[\s*['\"])\s*zot_bridge", re.I)
+GATE = "steps.docker_build.outcome == 'success'"
+BRIDGE_USES = "./.github/actions/cf-tunnel-registry-bridge"
 
 
 def v(ok, n):
     print(("OK" if ok else "BAD") + "\t" + n)
 
 
-GATE = "steps.docker_build.outcome == 'success'"
-hits = [i for i, s in enumerate(steps) if s.get("name") == name]
+hits = []
+for jn, job in jobs.items():
+    for i, s in enumerate(job.get("steps", [])):
+        if s.get("name") == name:
+            hits.append((jn, i))
 v(len(hits) == 1, "the mirror step is found exactly once by name (%d steps extracted)" % len(hits))
 if len(hits) != 1:
     open(body_out, "w").write("")
     sys.exit(0)
-mi = hits[0]
+jn, mi = hits[0]
+steps = jobs[jn]["steps"]
 mirror = steps[mi]
 v(mirror.get("id") == "zot_mirror", "the mirror step carries id zot_mirror")
 mif = mirror.get("if")
 v(mif is None or str(mif).strip() == GATE, "the mirror step gate is absent or exactly the docker_build success test")
-leaks = [s.get("name", "?") for s in steps if "steps.zot_bridge" in str(s.get("if", ""))]
-leaks += ["<job if>" for j in job_ifs if "steps.zot_bridge" in j]
-v(not leaks, "no step-level or job-level if: reads steps.zot_bridge (%s)" % ",".join(leaks))
-bridges = [s for s in steps if str(s.get("uses", "")).startswith("./.github/actions/cf-tunnel-registry-bridge")]
+leaks = [s.get("name", "?") for j in jobs.values() for s in j.get("steps", []) if LEAK.search(str(s.get("if", "")))]
+leaks += ["<job if>" for j in jobs.values() if LEAK.search(str(j.get("if", "")))]
+v(not leaks, "no step-level or job-level if: reads steps.zot_bridge in any spelling (%s)" % ",".join(leaks))
+bridges = [s for s in steps if str(s.get("uses", "")).lower().startswith(BRIDGE_USES)]
 v(len(bridges) >= 1 and all(b.get("continue-on-error") is True for b in bridges),
   "every bridge-action step is continue-on-error: true (an implicit success() would skip the mirror)")
-v(mirror.get("continue-on-error") is True, "the mirror step is continue-on-error: true (GHCR is authoritative)")
+v(mirror.get("continue-on-error") is True, "the mirror step is continue-on-error: true")
 v(str((mirror.get("env") or {}).get("BRIDGE_OUTCOME", "")).strip() == "${{ steps.zot_bridge.outcome }}",
   "BRIDGE_OUTCOME is wired from the bridge step outcome, never conclusion")
+di = [i for i, s in enumerate(steps) if s.get("id") == "docker_build"]
 bi = [i for i, s in enumerate(steps) if s.get("id") == "zot_bridge"]
-v(len(bi) == 1 and bi[0] < mi, "the mirror step comes after the bridge step")
+v(len(di) == 1 and len(bi) == 1 and di[0] < bi[0] < mi,
+  "docker_build and the bridge share the mirror's job, in the order docker_build, bridge, mirror")
+between = steps[di[0] + 1:mi] if di and di[0] < mi else []
+v(all(s.get("continue-on-error") is True for s in between),
+  "every step between docker_build and the mirror is continue-on-error: true")
+v(mirror.get("shell") in (None, "bash"), "the mirror step shell is absent or bash")
 body = mirror.get("run", "")
 v(len(re.findall(r"^\s*degraded\(\)\s*\{", body, re.M)) == 1, "degraded() is defined exactly once")
 open(body_out, "w").write(body)
 PY
 
 # ---------------------------------------------------------------------------
-# Deterministic stubs. Knobs are env vars; every call is logged to $STUB_LOG, never stdout.
+# Deterministic stubs. They VALIDATE argv (exit 64 + a REFUSE log line on a contract violation,
+# which every arm asserts is absent) and log every call to $STUB_LOG, never stdout.
 # ---------------------------------------------------------------------------
 STUBS="$TMP/bin"
 mkdir -p "$STUBS"
 cat > "$STUBS/curl" <<'STUB'
 #!/usr/bin/env bash
 echo "curl $*" >> "$STUB_LOG"
+if [[ "$#" -ne 4 || "$1" != "-fsSL" || "$2" != "-o" || "$3" != "$RUNNER_TEMP"/* \
+  || "$4" != "https://github.com/google/go-containerregistry/releases/download/"* ]]; then
+  echo "REFUSE curl $*" >> "$STUB_LOG"
+  exit 64
+fi
 exit "${STUB_CURL_RC:-0}"
 STUB
 cat > "$STUBS/sha256sum" <<'STUB'
 #!/usr/bin/env bash
-# Read stdin first: a stub that exits unread lets the upstream echo take SIGPIPE under pipefail.
-[ -t 0 ] || cat > /dev/null
-echo "sha256sum $*" >> "$STUB_LOG"
+line=""
+[ -t 0 ] || line=$(cat)
+echo "sha256sum $* <<< $line" >> "$STUB_LOG"
+if [[ "$#" -ne 2 || "$1" != "-c" || "$2" != "-" || ! "$line" =~ ^[0-9a-f]{64}\ \ "$RUNNER_TEMP"/crane\.tgz$ ]]; then
+  echo "REFUSE sha256sum $*" >> "$STUB_LOG"
+  exit 64
+fi
 exit "${STUB_SHA_RC:-0}"
 STUB
 cat > "$STUBS/sudo" <<'STUB'
 #!/usr/bin/env bash
 echo "sudo $*" >> "$STUB_LOG"
+if [[ "$#" -ne 6 || "$1" != "tar" || "$2" != "-xzf" || "$3" != "$RUNNER_TEMP/crane.tgz" \
+  || "$4" != "-C" || "$5" != "/usr/local/bin" || "$6" != "crane" ]]; then
+  echo "REFUSE sudo $*" >> "$STUB_LOG"
+  exit 64
+fi
 exit "${STUB_SUDO_RC:-0}"
 STUB
 cat > "$STUBS/sleep" <<'STUB'
@@ -128,28 +164,41 @@ STUB
 cat > "$STUBS/crane" <<'STUB'
 #!/usr/bin/env bash
 echo "crane $*" >> "$STUB_LOG"
-if [[ "${1:-}" == "copy" ]]; then
-  n=0
-  [[ -f "$STUB_COPY_COUNT" ]] && n=$(cat "$STUB_COPY_COUNT")
-  n=$((n + 1))
-  echo "$n" > "$STUB_COPY_COUNT"
-  [[ "$n" -le "${STUB_CRANE_COPY_FAIL_N:-0}" ]] && exit 1
+if [[ "${1:-}" != "copy" || "$#" -ne 3 ]]; then
+  echo "REFUSE crane $*" >> "$STUB_LOG"
+  exit 64
 fi
+n=0
+[[ -f "$STUB_COPY_COUNT" ]] && n=$(cat "$STUB_COPY_COUNT")
+n=$((n + 1))
+echo "$n" > "$STUB_COPY_COUNT"
+[[ "$n" -le "${STUB_CRANE_COPY_FAIL_N:-0}" ]] && exit "${STUB_CRANE_COPY_RC:-1}"
 exit 0
 STUB
 chmod +x "$STUBS"/*
 
 REAL_PATH="$PATH"
+# Hermeticity: every external the body calls must resolve inside the stub directory, or a
+# stub-path mistake would run a real download or a real sudo.
+for _c in curl sha256sum sudo crane sleep; do
+  _r=$(PATH="$STUBS:$REAL_PATH" command -v "$_c" 2>/dev/null) || _r=""
+  if [[ "$_r" != "$STUBS/$_c" ]]; then
+    printf 'FATAL: %s does not resolve to the stub (got %s)\n' "$_c" "${_r:-nothing}" >&2
+    exit 2
+  fi
+done
 EXPECT_SRC="ghcr.io/jikig-ai/soleur-inngest-config:v7"
 EXPECT_DST="127.0.0.1:5000/jikig-ai/soleur-inngest-config:v7"
 
 # run_arm <dir> <bridge-outcome|__unset__> [NAME=value knobs...]
 # Executes the extracted body exactly as the runner does (bash -eo pipefail), SOURCED so a
 # trailing sentinel proves whether degraded() left the shell (exit) or merely the function (return).
+# RUNNER_TEMP points at the arm directory so the body's temp-file path is hermetic.
 run_arm() {
   local d="$1" bridge="$2"
   shift 2
   mkdir -p "$d"
+  assert_fixture_dir "$d"
   : > "$d/gho"
   : > "$d/sum"
   : > "$d/log"
@@ -160,101 +209,141 @@ run_arm() {
   (
     env "${benv[@]}" "$@" IMAGE="ghcr.io/jikig-ai/soleur-inngest-config" VERSION="7" DIGEST="sha256:abc123" \
       GITHUB_OUTPUT="$d/gho" GITHUB_STEP_SUMMARY="$d/sum" STUB_LOG="$d/log" STUB_COPY_COUNT="$d/copycount" \
-      PATH="$STUBS:$REAL_PATH" \
+      RUNNER_TEMP="$d" PATH="$STUBS:$REAL_PATH" \
       bash --noprofile --norc -eo pipefail -c 'source "$1"; echo SENTINEL_REACHED' _ "$BODY_FILE" > "$d/stdout" 2>&1
   ) || rc=$?
   echo "$rc" > "$d/rc"
 }
 
-# count <fixed-string> <file> -> occurrences of whole lines equal to the string
-count_eq() {
+# Counting helpers. They print a number and never fail, so a missing file reads as 0.
+count_eq() { # whole lines equal to the string
   local n
   n=$(grep -cxF -- "$1" "$2" 2>/dev/null) || true
   echo "${n:-0}"
 }
-# count_has <fixed-string> <file> -> lines containing the string
-count_has() {
+count_has() { # lines containing the string
   local n
   n=$(grep -cF -- "$1" "$2" 2>/dev/null) || true
   echo "${n:-0}"
+}
+count_pfx() { # lines STARTING with the string (a mid-line occurrence is not a workflow command)
+  awk -v p="$1" 'index($0, p) == 1 { n++ } END { print n + 0 }' "$2" 2>/dev/null || echo 0
 }
 copies() {
   if [[ -f "$1/copycount" ]]; then cat "$1/copycount"; else echo 0; fi
 }
 
-# evaluate <workflow-file> <out-dir> <step-name> -> writes <out-dir>/verdicts (OK|BAD <tab> name)
+# The ONE decision every caller uses: how many verdict lines are not OK. An empty or missing
+# verdict file counts as bad, so an evaluate() that did nothing can never read as clean.
+bad_count() {
+  local n
+  [[ -s "$1" ]] || { echo 1; return; }
+  n=$(grep -vc '^OK' "$1" 2>/dev/null) || true
+  echo "${n:-0}"
+}
+# bad_has <verdicts-file> <label-substring> -> 0 if some BAD line carries the label
+bad_has() {
+  local bads
+  bads=$(grep '^BAD' "$1" 2>/dev/null) || true
+  [[ "$bads" == *"$2"* ]]
+}
+
+VF=""
+BODY_FILE=""
+chk() {
+  assert_fixture_dir "$VF"
+  if [[ "$1" == "1" ]]; then printf 'OK\t%s\n' "$2" >> "$VF"; else printf 'BAD\t%s\n' "$2" >> "$VF"; fi
+}
+# Reads a finished degrade arm and asserts the whole signal contract.
+degraded_ok() { # <dir> <label> <reason> <rc> <expected-crane-copies> <expected-stub-calls: any|none>
+  local a="$1" l="$2" r="$3" rc="$4" n="$5" calls="$6" ok=1
+  local head="::warning::zot mirror degraded for $EXPECT_DST (reason=$r rc=$rc "
+  [[ "$(cat "$a/rc")" == "0" ]] || ok=0
+  [[ "$(count_eq "mirror_status=degraded" "$a/gho")" == "1" ]] || ok=0
+  [[ "$(count_eq "mirror_reason=$r" "$a/gho")" == "1" ]] || ok=0
+  [[ "$(count_eq "mirror_status=ok" "$a/gho")" == "0" ]] || ok=0
+  [[ "$(count_pfx "$head" "$a/stdout")" == "1" ]] || ok=0
+  [[ "$(count_pfx "::warning::" "$a/stdout")" == "1" ]] || ok=0
+  [[ "$(count_pfx "- zot mirror degraded (reason=$r rc=$rc)" "$a/sum")" == "1" ]] || ok=0
+  [[ "$(count_eq "SENTINEL_REACHED" "$a/stdout")" == "0" ]] || ok=0
+  [[ "$(copies "$a")" == "$n" ]] || ok=0
+  [[ "$(count_has "REFUSE" "$a/log")" == "0" ]] || ok=0
+  if [[ "$calls" == "none" ]]; then [[ ! -s "$a/log" ]] || ok=0; fi
+  chk "$ok" "$l: exit 0, one anchored warning and summary line, reason=$r rc=$rc, $n crane copies, no stub refused, shell left via exit"
+}
+
+# evaluate <workflow-file> <out-dir> <step-name> [struct] -> writes <out-dir>/verdicts
+# The optional 4th argument stops after the structural leg (mutants that only edit structure).
 evaluate() {
-  local wf="$1" out="$2" name="$3"
+  local wf="$1" out="$2" name="$3" mode="${4:-full}"
   mkdir -p "$out"
-  local vf="$out/verdicts"
-  : > "$vf"
-  python3 -I "$TMP/struct.py" "$wf" "$name" "$out/body.sh" >> "$vf" 2>"$out/struct.err"
-  local chk_rc=$?
-  [[ "$chk_rc" -eq 0 ]] || printf 'BAD\tstructural leg crashed (rc=%s)\n' "$chk_rc" >> "$vf"
-  if [[ ! -s "$out/body.sh" ]]; then
-    printf 'BAD\tno step body extracted, behavioural leg cannot run\n' >> "$vf"
-    return 0
-  fi
-  if ! bash -n "$out/body.sh" 2>/dev/null; then
-    printf 'BAD\tthe extracted body is not valid bash\n' >> "$vf"
-    return 0
-  fi
-  local d="$out/arm"
+  VF="$out/verdicts"
   BODY_FILE="$out/body.sh"
-  chk() { if [[ "$1" == "1" ]]; then printf 'OK\t%s\n' "$2" >> "$vf"; else printf 'BAD\t%s\n' "$2" >> "$vf"; fi; }
-  # Reads a finished arm and asserts the degrade signal contract for <reason>.
-  degraded_ok() { # <dir> <label> <reason> <expected-crane-copies>
-    local a="$1" l="$2" r="$3" n="$4" ok=1
-    [[ "$(cat "$a/rc")" == "0" ]] || ok=0
-    [[ "$(count_eq "mirror_status=degraded" "$a/gho")" == "1" ]] || ok=0
-    [[ "$(count_eq "mirror_reason=$r" "$a/gho")" == "1" ]] || ok=0
-    [[ "$(count_eq "mirror_status=ok" "$a/gho")" == "0" ]] || ok=0
-    [[ "$(count_has "::warning::zot mirror degraded" "$a/stdout")" == "1" ]] || ok=0
-    [[ "$(count_has "zot mirror degraded" "$a/sum")" == "1" ]] || ok=0
-    [[ "$(count_eq "SENTINEL_REACHED" "$a/stdout")" == "0" ]] || ok=0
-    [[ "$(copies "$a")" == "$n" ]] || ok=0
-    chk "$ok" "$l: exit 0, one degraded output, reason=$r, one warning, one summary line, $n crane copies, shell left via exit"
-  }
+  assert_fixture_dir "$VF"
+  : > "$VF"
+  local rc=0
+  python3 -I "$TMP/struct.py" "$wf" "$name" "$BODY_FILE" >> "$VF" 2> "$out/struct.err" || rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    printf 'BAD\tstructural leg crashed (rc=%s): %s\n' "$rc" "$(head -c 300 "$out/struct.err")" >> "$VF"
+    return 0
+  fi
+  [[ "$mode" == "struct" ]] && return 0
+  if [[ ! -s "$BODY_FILE" ]]; then
+    printf 'BAD\tno step body extracted, behavioural leg cannot run\n' >> "$VF"
+    return 0
+  fi
+  if ! bash -n "$BODY_FILE" 2>/dev/null; then
+    printf 'BAD\tthe extracted body is not valid bash\n' >> "$VF"
+    return 0
+  fi
+  local d="$out/arm" ok
 
   run_arm "$d/ok" success
-  local ok=1
+  ok=1
   [[ "$(cat "$d/ok/rc")" == "0" ]] || ok=0
   [[ "$(count_eq "mirror_status=ok" "$d/ok/gho")" == "1" ]] || ok=0
+  [[ "$(count_has "mirror_status=degraded" "$d/ok/gho")" == "0" ]] || ok=0
+  [[ "$(count_has "mirror_reason" "$d/ok/gho")" == "0" ]] || ok=0
+  [[ ! -s "$d/ok/sum" ]] || ok=0
   [[ "$(count_has "::warning::" "$d/ok/stdout")" == "0" ]] || ok=0
   [[ "$(copies "$d/ok")" == "1" ]] || ok=0
   [[ "$(count_eq "crane copy $EXPECT_SRC $EXPECT_DST" "$d/ok/log")" == "1" ]] || ok=0
-  chk "$ok" "bridge success: mirror_status=ok, no warning, one crane copy of the expected source and destination"
+  [[ "$(count_has "REFUSE" "$d/ok/log")" == "0" ]] || ok=0
+  chk "$ok" "bridge success: only mirror_status=ok, no warning or summary line, one crane copy of the expected source and destination, no stub refused"
 
   run_arm "$d/failure" failure
-  degraded_ok "$d/failure" "bridge failure" bridge_down 0
+  degraded_ok "$d/failure" "bridge failure" bridge_down n/a 0 none
   local b
-  for b in skipped "" cancelled __unset__; do
-    run_arm "$d/b-${b:-empty}" "$b"
-    degraded_ok "$d/b-${b:-empty}" "bridge '${b:-empty}'" bridge_down 0
+  for b in skipped __unset__; do
+    run_arm "$d/b-$b" "$b"
+    degraded_ok "$d/b-$b" "bridge '$b'" bridge_down n/a 0 none
   done
 
-  run_arm "$d/copyfail" success STUB_CRANE_COPY_FAIL_N=99
-  degraded_ok "$d/copyfail" "crane copy failing every time" copy 3
+  run_arm "$d/copyfail" success STUB_CRANE_COPY_FAIL_N=99 STUB_CRANE_COPY_RC=42
+  degraded_ok "$d/copyfail" "crane copy failing every time" copy 42 3 any
 
   run_arm "$d/copyflaky" success STUB_CRANE_COPY_FAIL_N=2
   ok=1
   [[ "$(cat "$d/copyflaky/rc")" == "0" ]] || ok=0
   [[ "$(count_eq "mirror_status=ok" "$d/copyflaky/gho")" == "1" ]] || ok=0
+  [[ "$(count_has "mirror_reason" "$d/copyflaky/gho")" == "0" ]] || ok=0
+  [[ ! -s "$d/copyflaky/sum" ]] || ok=0
   [[ "$(count_has "::warning::" "$d/copyflaky/stdout")" == "0" ]] || ok=0
   [[ "$(copies "$d/copyflaky")" == "3" ]] || ok=0
-  chk "$ok" "crane copy failing twice then succeeding: mirror_status=ok after 3 attempts, no warning"
+  chk "$ok" "crane copy failing twice then succeeding: mirror_status=ok after 3 attempts, no warning or summary line"
 
-  run_arm "$d/shabad" success STUB_SHA_RC=1
-  degraded_ok "$d/shabad" "checksum mismatch" crane_install 0
-  ok=1
-  [[ "$(count_has "sudo " "$d/shabad/log")" == "0" ]] || ok=0
-  chk "$ok" "checksum mismatch: nothing is extracted (sudo never invoked)"
+  run_arm "$d/shabad" success STUB_SHA_RC=3
+  degraded_ok "$d/shabad" "checksum mismatch" crane_checksum 3 0 any
+  chk "$([[ "$(count_has "sudo " "$d/shabad/log")" == "0" ]] && echo 1 || echo 0)" \
+    "checksum mismatch: nothing is extracted (sudo never invoked)"
 
   run_arm "$d/curlbad" success STUB_CURL_RC=22
-  degraded_ok "$d/curlbad" "crane download failing" crane_install 0
+  degraded_ok "$d/curlbad" "crane download failing" crane_download 22 0 any
+  chk "$([[ "$(count_has "sha256sum" "$d/curlbad/log")" == "0" ]] && echo 1 || echo 0)" \
+    "crane download failing: no checksum is attempted on a missing archive"
 
-  run_arm "$d/tarbad" success STUB_SUDO_RC=1
-  degraded_ok "$d/tarbad" "crane extract failing" crane_install 0
+  run_arm "$d/tarbad" success STUB_SUDO_RC=5
+  degraded_ok "$d/tarbad" "crane extract failing" crane_extract 5 0 any
 }
 
 # ---------------------------------------------------------------------------
@@ -269,6 +358,7 @@ s = open(src).read()
 MIRROR = "      - name: Mirror bundle GHCR->zot (crane, digest-preserving)\n"
 BRIDGE = "      - name: Bridge to zot registry (CF Tunnel)\n"
 TEARDOWN = "      - name: Tear down cloudflared registry bridge\n"
+BRANCH = re.compile(r'          if \[\[ "\$\{BRIDGE_OUTCOME:-\}" != "success" \]\]; then\n[^\n]*\n          fi\n')
 
 
 def must_sub(pattern, repl, text, flags=re.S):
@@ -278,27 +368,57 @@ def must_sub(pattern, repl, text, flags=re.S):
     return out
 
 
+def insert_before(marker, extra, text):
+    if text.count(marker) != 1:
+        sys.exit(3)
+    return text.replace(marker, extra + marker)
+
+
 if name == "regate-on-bridge":
     s = must_sub(r"(id: zot_mirror\n\s+if: ).*?\n", r"\1steps.zot_bridge.outcome == 'success'\n", s)
 elif name == "bridge-loses-continue-on-error":
     s = must_sub(r"(id: zot_bridge\n\s+if: [^\n]*\n)\s+continue-on-error: true\n", r"\1", s)
 elif name == "second-gated-step":
-    extra = ("      - name: Late mirror note\n        if: steps.zot_bridge.outcome == 'success'\n"
-             "        run: echo noted\n\n")
-    s = must_sub(re.escape(TEARDOWN), lambda m: extra + TEARDOWN, s)
+    s = insert_before(TEARDOWN, "      - name: Late mirror note\n        if: steps.zot_bridge.outcome == 'success'\n        run: echo noted\n\n", s)
+elif name == "second-gated-step-bracket":
+    s = insert_before(TEARDOWN, "      - name: Late mirror note\n        if: steps['Zot_Bridge'].outcome == 'success'\n        run: echo noted\n\n", s)
 elif name == "env-uses-conclusion":
     s = must_sub(r"(BRIDGE_OUTCOME: \$\{\{ steps\.zot_bridge\.)outcome", r"\1conclusion", s)
-elif name == "delete-bridge-branch":
-    s = must_sub(r"\n\s*if \[\[ \"\$\{BRIDGE_OUTCOME:-\}\" != \"success\" \]\]; then\n[^\n]*\n\s*fi\n", "\n", s)
-elif name == "degraded-returns":
-    s = must_sub(r"(degraded\(\) \{.*?)exit 0", r"\1return 0", s)
 elif name == "mirror-before-bridge":
     i_b, i_m, i_t = s.index(BRIDGE), s.index(MIRROR), s.index(TEARDOWN)
     s = s[:i_b] + s[i_m:i_t] + s[i_b:i_m] + s[i_t:]
 elif name == "rename-step":
     s = must_sub(re.escape("- name: Mirror bundle GHCR->zot (crane"), "- name: Mirror bundle GHCR to zot (crane", s)
+elif name == "hard-step-between":
+    s = insert_before(MIRROR, "      - name: Late hard step\n        run: echo hard\n\n", s)
+elif name == "rename-docker-build-id":
+    s = must_sub(r"id: docker_build\n", "id: build\n", s)
+elif name == "shell-sh":
+    s = must_sub(r"(id: zot_mirror\n)", r"\1        shell: sh\n", s)
+elif name == "delete-bridge-branch":
+    s = must_sub(BRANCH.pattern, "", s, 0)
+elif name == "degraded-returns":
+    s = must_sub(r"(degraded\(\) \{.*?)exit 0", r"\1return 0", s)
+elif name == "degraded-exit-1":
+    s = must_sub(r"(degraded\(\) \{.*?)exit 0", r"\1exit 1", s)
 elif name == "drop-copy-route":
     s = must_sub(r"(retry crane copy [^\n]*?) \|\| degraded copy [^\n]*\n", r"\1\n", s)
+elif name == "rc-lost":
+    s = must_sub(r'degraded copy "\$\?"', "degraded copy 0", s)
+elif name == "install-before-branch":
+    m = BRANCH.search(s)
+    if not m:
+        sys.exit(3)
+    s = s.replace(m.group(0), "", 1)
+    s = insert_before("          # crane copy of a tag is expected", m.group(0), s)
+elif name == "ok-publishes-degraded":
+    s = must_sub(r'(echo "mirror_status=ok" >> "\$GITHUB_OUTPUT"\n)', r'\1          echo "mirror_status=degraded" >> "$GITHUB_OUTPUT"\n', s)
+elif name == "checksum-flag-dropped":
+    s = must_sub(r"\| sha256sum -c -", "| sha256sum -", s)
+elif name == "curl-flag-dropped":
+    s = must_sub(r"curl -fsSL -o", "curl -sSL -o", s)
+elif name == "extract-dir-moved":
+    s = must_sub(r"-C /usr/local/bin crane", "-C /tmp crane", s)
 elif name == "variant-no-if":
     s = must_sub(r"(id: zot_mirror\n)\s+if: [^\n]*\n", r"\1", s)
 elif name == "variant-reworded":
@@ -312,26 +432,65 @@ open(dst, "w").write(s)
 PY
 
 # ---------------------------------------------------------------------------
+# Self-test of the decisions every verdict goes through: they must be able to say no.
+# ---------------------------------------------------------------------------
+echo "T0: the verdict decisions can say no"
+printf 'OK\tx\n' > "$TMP/v-ok"
+printf 'OK\tx\nBAD\tthe y check\n' > "$TMP/v-bad"
+: > "$TMP/v-empty"
+[[ "$(bad_count "$TMP/v-ok")" == "0" ]] && pass "bad_count: an all-OK file is clean" || fail "bad_count: an all-OK file read as bad"
+[[ "$(bad_count "$TMP/v-bad")" == "1" ]] && pass "bad_count: one BAD line counts" || fail "bad_count: a BAD line was not counted"
+[[ "$(bad_count "$TMP/v-empty")" != "0" ]] && pass "bad_count: an empty verdict file is bad, never clean" || fail "bad_count: an empty verdict file read as clean"
+if bad_has "$TMP/v-bad" "the y check"; then pass "bad_has: finds the named BAD label"; else fail "bad_has: missed a present label"; fi
+if bad_has "$TMP/v-bad" "no such label"; then fail "bad_has: matched an absent label"; else pass "bad_has: rejects an absent label"; fi
+
+# ---------------------------------------------------------------------------
 # Canonical evaluation
 # ---------------------------------------------------------------------------
 echo "T1: canonical workflow passes every structural and behavioural check"
 evaluate "$WF" "$TMP/canon" "$STEP_NAME"
 CANON_RED=0
+if [[ "$(bad_count "$TMP/canon/verdicts")" != "0" ]]; then CANON_RED=1; fi
 while IFS=$'\t' read -r verdict label; do
-  if [[ "$verdict" == "OK" ]]; then pass "$label"; else fail "$label"; CANON_RED=1; fi
+  if [[ "$verdict" == "OK" ]]; then pass "$label"; else fail "$label"; fi
 done < "$TMP/canon/verdicts"
 
 # ---------------------------------------------------------------------------
 # Mutation battery. Every mutation is asserted to CHANGE the workflow before the evaluator
 # runs (a pattern that stopped matching would otherwise become a silent no-op that scores as
-# "the guard held"), then the SAME evaluator must report at least one BAD check.
+# "the guard held"), then the SAME evaluator must report a BAD check carrying the label the
+# mutation is named for (a mutant that merely breaks the YAML scores nothing).
+# row: <name>|<struct|full>|<expected BAD label substring>
 # ---------------------------------------------------------------------------
-echo "T2: mutation battery (each mutant must differ from canonical and turn the evaluator RED)"
+echo "T2: mutation battery (each mutant must differ from canonical and fail the check it is named for)"
 if [[ "$CANON_RED" -ne 0 ]]; then
   echo "  battery skipped: the canonical workflow is itself RED, so mutant verdicts would be meaningless"
 else
-  for m in regate-on-bridge bridge-loses-continue-on-error second-gated-step env-uses-conclusion \
-    delete-bridge-branch degraded-returns mirror-before-bridge rename-step drop-copy-route; do
+  ROWS=(
+    "regate-on-bridge|struct|mirror step gate"
+    "regate-on-bridge|struct|reads steps.zot_bridge"
+    "bridge-loses-continue-on-error|struct|bridge-action step"
+    "second-gated-step|struct|reads steps.zot_bridge"
+    "second-gated-step-bracket|struct|reads steps.zot_bridge"
+    "env-uses-conclusion|struct|BRIDGE_OUTCOME is wired"
+    "mirror-before-bridge|struct|share the mirror's job"
+    "rename-step|struct|found exactly once"
+    "hard-step-between|struct|between docker_build"
+    "rename-docker-build-id|struct|share the mirror's job"
+    "shell-sh|struct|shell is absent or bash"
+    "delete-bridge-branch|full|bridge failure"
+    "degraded-returns|full|bridge failure"
+    "degraded-exit-1|full|bridge failure"
+    "drop-copy-route|full|crane copy failing every time"
+    "rc-lost|full|crane copy failing every time"
+    "install-before-branch|full|bridge failure"
+    "ok-publishes-degraded|full|bridge success"
+    "checksum-flag-dropped|full|bridge success"
+    "curl-flag-dropped|full|bridge success"
+    "extract-dir-moved|full|bridge success"
+  )
+  for row in "${ROWS[@]}"; do
+    IFS='|' read -r m kind expect <<< "$row"
     mwf="$TMP/mut-$m.yml"
     mrc=0
     python3 -I "$TMP/mutate.py" "$m" "$WF" "$mwf" 2>/dev/null || mrc=$?
@@ -343,19 +502,19 @@ else
       fail "mutation $m produced a copy identical to canonical"
       continue
     fi
-    evaluate "$mwf" "$TMP/mut-$m.out" "$STEP_NAME"
-    bad=$(grep -c '^BAD' "$TMP/mut-$m.out/verdicts") || true
-    if [[ "${bad:-0}" -gt 0 ]]; then
-      pass "mutation $m is caught ($bad failing checks)"
+    mode=full
+    [[ "$kind" == "struct" ]] && mode=struct
+    evaluate "$mwf" "$TMP/mut-$m.out" "$STEP_NAME" "$mode"
+    if bad_has "$TMP/mut-$m.out/verdicts" "$expect"; then
+      pass "mutation $m fails the check named '$expect'"
     else
-      fail "mutation $m SURVIVED: the evaluator stayed green on a broken workflow"
+      fail "mutation $m SURVIVED the check named '$expect' (bad lines: $(bad_count "$TMP/mut-$m.out/verdicts"))"
     fi
   done
 
   # Harness row: a wrong step name must fail on the empty extraction, never pass with zero arms.
   evaluate "$WF" "$TMP/wrongname.out" "No such step name"
-  bad=$(grep -c '^BAD' "$TMP/wrongname.out/verdicts") || true
-  if [[ "${bad:-0}" -gt 0 ]]; then
+  if bad_has "$TMP/wrongname.out/verdicts" "found exactly once"; then
     pass "a wrong extractor step name reds the evaluator instead of passing with zero arms"
   else
     fail "a wrong extractor step name left the evaluator GREEN (the guard dispatches nothing)"
@@ -371,11 +530,10 @@ else
       continue
     fi
     evaluate "$mwf" "$TMP/mut-$m.out" "$STEP_NAME"
-    bad=$(grep -c '^BAD' "$TMP/mut-$m.out/verdicts") || true
-    if [[ "${bad:-0}" -eq 0 ]]; then
+    if [[ "$(bad_count "$TMP/mut-$m.out/verdicts")" == "0" ]]; then
       pass "non-canonical variant $m still passes (the guard accepts every contract-legal shape)"
     else
-      fail "non-canonical variant $m was REJECTED ($bad failing checks)"
+      fail "non-canonical variant $m was REJECTED ($(bad_count "$TMP/mut-$m.out/verdicts") failing checks)"
     fi
   done
 fi
@@ -383,7 +541,7 @@ fi
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # ANTI-VACUITY FLOOR. Equal to the green-run count: raise it in the same edit that adds a case. It sits
 # directly above its `if` so guard-vacuity-floor can slice it.
-MIN_ASSERTIONS=33
+MIN_ASSERTIONS=51
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
   echo "FATAL: only $((PASS + FAIL)) assertions ran (floor $MIN_ASSERTIONS); the suite did not execute what it claims to." >&2
   exit 1

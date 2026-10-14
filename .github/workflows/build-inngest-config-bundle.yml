@@ -129,11 +129,14 @@ jobs:
           cloudflared-sha256: "0095e46fdc88855d801c4d304cb1f5dd4bd656116c47ab94c2ad0ae7cda1c7ec"
 
       # This step is NOT gated on the bridge. Gating it on `steps.zot_bridge.outcome == 'success'`
-      # made a soft-failed bridge SKIP the step, so the run stayed green with no output, no
-      # annotation and no summary line (the #6416 class). The bridge result arrives as
-      # BRIDGE_OUTCOME and the script degrades loudly instead. A separate emitter step cannot
-      # replace this branch: step outputs are namespaced by step id. The bridge keeps its own
-      # continue-on-error, since an `if:` without a status function gets an implicit success().
+      # made a soft-failed bridge SKIP the step, so the mirror step itself produced no warning,
+      # summary line or output (the #6416 class). The bridge result arrives as BRIDGE_OUTCOME and the
+      # script degrades loudly instead; one branch keeps the warning, the summary line and the
+      # outputs together. mirror_status / mirror_reason have no reader in this workflow today.
+      # The bridge keeps its own continue-on-error, since an `if:` without a status function gets an
+      # implicit success(). INTERIM CONTRACT: the host-side consumer of this bundle is not live yet
+      # (HARD-11), so a missing zot copy cannot hurt a host and exit 0 is right. When that consumer
+      # reads zot only (ADR-096 amendments), this step must stop being soft, as in reusable-release.yml.
       # Guard: plugins/soleur/test/inngest-config-bundle-mirror.test.sh.
       - name: Mirror bundle GHCR->zot (crane, digest-preserving)
         id: zot_mirror
@@ -149,26 +152,32 @@ jobs:
             local reason="$1" rc="$2" detail="${3:-}"
             echo "mirror_status=degraded" >> "$GITHUB_OUTPUT"
             echo "mirror_reason=${reason}" >> "$GITHUB_OUTPUT"
-            echo "::warning::zot mirror degraded for ${ZOT_DST} (reason=${reason} rc=${rc} ${detail}). GHCR is authoritative and the bundle is published; the zot copy is absent and no automated backfill exists."
+            echo "::warning::zot mirror degraded for ${ZOT_DST} (reason=${reason} rc=${rc} ${detail}). The GHCR bundle publish is unaffected; this run did not confirm a zot copy, and no automated backfill exists."
             echo "- zot mirror degraded (reason=${reason} rc=${rc}); the GHCR bundle is published" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           }
           if [[ "${BRIDGE_OUTCOME:-}" != "success" ]]; then
             degraded bridge_down n/a "zot_bridge outcome=${BRIDGE_OUTCOME:-unset}; the copy was not attempted"
           fi
-          retry() { local n=0; until "$@"; do n=$((n + 1)); [[ $n -ge 3 ]] && return 1; sleep $((n * 3)); done; }
+          # retry keeps crane's last exit status, so the degrade line reports a measured rc.
+          retry() { local n=0 rc=0; until "$@"; do rc=$?; n=$((n + 1)); [[ $n -ge 3 ]] && return "$rc"; sleep $((n * 3)); done; }
           # Install crane (SHA-pinned; supply-chain discipline, matches reusable-release.yml).
           CRANE_VERSION="v0.20.2"
           CRANE_SHA256="c14340087103ba9dadf61d45acd20675490fd0ccbd56ac7901fc1b502137f44b"
-          # && chain inside the group: errexit is suppressed for a command group on the left of ||.
-          { curl -fsSL -o /tmp/crane.tgz \
+          CRANE_TGZ="${RUNNER_TEMP:-/tmp}/crane.tgz"
+          # One simple command per stage, each routed with || degraded: a checksum mismatch (a
+          # supply-chain signal) gets its own reason instead of reading as a network blip, and
+          # sha256sum's stderr stays unredirected so the mismatch is in the step log.
+          curl -fsSL -o "$CRANE_TGZ" \
             "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz" \
-            && echo "${CRANE_SHA256}  /tmp/crane.tgz" | sha256sum -c - \
-            && sudo tar -xzf /tmp/crane.tgz -C /usr/local/bin crane \
-            && rm -f /tmp/crane.tgz; } || degraded crane_install "$?" "crane fetch, checksum or extract failed on the runner"
-          # crane copy preserves the digest → the same @sha256 the pointer names resolves on both
-          # registries. GHCR is authoritative for the v1 GHCR-direct host pull (D-ZOT); the zot
-          # copy is a dark-safe convenience, so this step is continue-on-error.
+            || degraded crane_download "$?" "crane fetch failed on the runner"
+          echo "${CRANE_SHA256}  ${CRANE_TGZ}" | sha256sum -c - \
+            || { rc=$?; rm -f "$CRANE_TGZ"; degraded crane_checksum "$rc" "crane checksum mismatch or sha256sum failure; the archive was not extracted"; }
+          sudo tar -xzf "$CRANE_TGZ" -C /usr/local/bin crane \
+            || degraded crane_extract "$?" "crane extract failed on the runner"
+          rm -f "$CRANE_TGZ"
+          # crane copy of a tag is expected to keep the digest, so the pointer's @sha256 would resolve on
+          # both registries; this step does not verify that (DIGEST is plumbed but unused today).
           retry crane copy "${IMAGE}:v${VERSION}" "${ZOT_DST}" || degraded copy "$?" "crane copy failed after 3 attempts"
           echo "mirror_status=ok" >> "$GITHUB_OUTPUT"
 
@@ -177,6 +186,7 @@ jobs:
         run: |
           set +e
           docker logout 127.0.0.1:5000 >/dev/null 2>&1 || true
+          [[ -f /tmp/cloudflared-registry.log ]] && tail -n 200 /tmp/cloudflared-registry.log || true
           if [[ -n "${REGISTRY_BRIDGE_PID:-}" ]]; then kill "$REGISTRY_BRIDGE_PID" >/dev/null 2>&1 || true; fi
 
       - name: Emit published digest for promotion (HARD-6)
