@@ -614,9 +614,33 @@ describe("Technical-ruling delegation wiring", () => {
     const start = oneShot.indexOf("TECHNICAL RULINGS (inline copy");
     expect(start, "one-shot lost its inline technical-rulings copy").toBeGreaterThan(-1);
     const copy = oneShot.slice(start, start + 1400);
-    for (const token of ["soleur:engineering:cto", "Ruled by CTO agent", "surface it"]) {
+    for (const token of ["soleur:engineering:cto", "Ruled by CTO agent", "surface it", "OPEN DECISION"]) {
       expect(copy.includes(token), `one-shot inline copy lost "${token}"`).toBe(true);
     }
+  });
+
+  test("a brief's own wording is the CTO trigger: the reference, the go Sharp Edge and the shim say so", () => {
+    // Whitespace-normalized content anchors, not line numbers: a re-wrap must not break the pin. Every slice is bounded and a
+    // missing anchor fails with its own message (indexOf -1 would otherwise slice from the last character).
+    const flat = (rel: string) => read(rel).replace(/\s+/g, " ");
+    const between = (text: string, from: string, to: string | null) => {
+      const i = text.indexOf(from);
+      expect(i, `anchor not found: ${from}`).toBeGreaterThan(-1);
+      const j = to === null ? text.length : text.indexOf(to, i + from.length);
+      expect(j, `end anchor not found: ${to}`).toBeGreaterThan(i);
+      return text.slice(i, j);
+    };
+    const ref = flat(REF_REL);
+    const override = between(ref, "## 5. Override clause", "## 6.");
+    expect(override.includes("OPEN DECISION"), "reference section 5 lost the OPEN DECISION trigger").toBe(true);
+    expect(override.includes('"ask the operator once, then act"'), "reference section 5 lost the quoted incident wording").toBe(true);
+    const scope = between(ref, "- **scope**", "- **priority / schedule**");
+    expect(scope.includes("the routing of an already-identified gap") && scope.includes("is technical and goes to the CTO"), "reference section 1 lost the scope-routing classification or its polarity").toBe(true);
+    expect(scope.includes("assigning work to a named person stays the operator's"), "reference section 1 lost the assignment carve-out").toBe(true);
+    const edge = between(flat("commands/go.md"), "A technical ruling is never the operator's to make", "**Why:**");
+    expect(edge.includes("OPEN DECISION"), "the first go Sharp Edge lost the OPEN DECISION trigger").toBe(true);
+    const shim = flat("skills/go/SKILL.md");
+    expect(shim.includes("OPEN DECISION") && shim.includes("never a reason to ask") && shim.includes("technical-ruling-delegation.md"), "the go shim lost the trigger sentence, its polarity or its link").toBe(true);
   });
 });
 

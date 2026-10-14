@@ -600,3 +600,50 @@ than `TC_RUNTIME_CEILING_S`, inside the same `.alloc` hold. Locked tickets are
 never swept, so `max+1` numbering cannot regress below a live ticket, and a
 dead waiter's unlocked file is the only thing removed — the same kernel-release
 argument the AC5b arm measures for the main lock, applied one level down.
+
+## Addendum — 2026-10-14 (#7697): the lock wait is exec-bounded, and the holder is observable
+
+The 2026-09-23 addendum carried #7697 as OPEN with the masked-SIGALRM
+hypothesis unproven. It is now measured and closed:
+
+| Fixture | Result |
+|---|---|
+| `flock -w 3` on a held lock, `SIGALRM` inherited **blocked** (`sigprocmask(SIG_BLOCK)` before exec) | still waiting at 6 s — the waiter's unbounded park (the 4.6-day *hold* was the holder's `anon_pipe_read` wedge; this row is what made the *wait* indefinite) |
+| same under `SIG_IGN` disposition | returns at 3 s — only the *blocked mask* defeats `-w`, ignore is harmless |
+| `timeout 4 flock -w 60`, blocked mask | rc=124 at 4 s — the exec boundary does not depend on the child's mask |
+| `timeout 6 flock -w 3`, blocked mask | rc=1 at **3 s** — recent GNU `timeout` (~coreutils 9.5+) unblocks the child's mask, so the inner expiry fires again anyway |
+
+The wait in `_acquire_lock_impl` is now wrapped in
+`timeout -k <grace> <timeout_s+slack>` (`gtimeout` ladder; a host with neither
+falls back to bare `flock -w` and prints a `[note]`). The two bounds compose:
+timeout's child-side mask reset restores `-w`'s own expiry (the common case,
+rc=1 → the existing `return 99` contended path), and the outer bound covers a
+`flock` that cannot return at all (rc=124 → same contended path, plus a
+`LOCK_BOUND_FORCED` line so the event is never silent). The acquire-once race —
+flock landing the lock as timeout fires — is benign because the existing
+failure path closes the fd, and flock's lock attaches to the shared open file
+description, so a child-side acquisition persists on the parent's fd exactly
+as before.
+
+**The holder is now legible.** Acquire mints `$LOCK_DIR/<name>.holder`
+(`pid`, `ppid`, `acquired_epoch`, `progress_epoch`); `test-all.sh`'s
+`run_suite` stamps `progress_epoch`, `last_suite`, `suites_done` once per
+suite boundary; `release_lock` removes the marker (the runner additionally
+releases via its EXIT trap since it never releases explicitly). Each
+`LOCK_WAIT_HEARTBEAT` beat reads the marker and reports
+`holder_pid`/`holder_alive`/`holder_progress_age` — a wedged holder shows a
+frozen `progress_epoch`, a corpse reads `holder_alive=0`, a plain-flock
+holder reads `holder=none`, a torn marker `holder=unreadable`. Read-and-report
+only: the beat never aborts on a marker and never signals the holder — the
+reported "queued behind a corpse" state is actionable by an operator, not by
+the waiter.
+
+**Decision 3 stands unchanged.** `flock` expiry still proceeds contended, the
+queue still releases in ticket order, and nothing in this addendum aborts a
+run or kills a holder. The `--capacity` banner and admission semantics are
+untouched. The addendum's 2026-09-23 caveat — "a waiter parked 4.6 days in
+`locks_lock_inode_wait`" — is now unreachable on hosts with `timeout`/`gtimeout`:
+a live-wedged holder bounds the wait at `timeout_s + slack` and the heartbeat
+names the holder state for whoever comes looking. On the no-timeout fallback
+the bound remains only `flock -w` and the blocked-mask defeat stays reachable —
+the `[note]` emitted there names that residual risk.
