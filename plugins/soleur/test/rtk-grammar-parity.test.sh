@@ -81,10 +81,10 @@ if [[ -f "$DOC" ]]; then
   want_glob="$(awk -F'\t' '$0 !~ /^#/ && NF >= 3 && $2 == "flag-global" { print $1 }' "$CANON" | sort | tr '\n' ' ' | sed 's/ $//')"
   # Dash tokens must START at a word edge — `(^|[[:space:]])` prefix — or
   # `unparsed-wrapper`/`end-of-options` hyphen fragments leak into the set.
-  got_glob="$(grep -E "^globals:" "$DOC" | tr ',/()' ' ' | grep -oE '(^|[[:space:]])-{1,2}[A-Za-z-]+|(^|[[:space:]])--([[:space:]]|$)' | tr -d ' ' | sort -u | tr '\n' ' ' | sed 's/ $//')"
+  got_glob="$(grep -E "^globals:" "$DOC" | tr ',/()' ' ' | grep -oE '(^|[[:space:]])-{1,2}[A-Za-z-]+|(^|[[:space:]])--([[:space:]]|$)' | tr -d ' ' | sort -u | tr '\n' ' ' | sed 's/ $//' || true)"
   assert_eq "$want_glob" "$got_glob" "known-external-tools.md globals line matches canonical flag-global rows"
   want_str="$(awk -F'\t' '$0 !~ /^#/ && NF >= 3 && $2 == "flag-string" { print $1 }' "$CANON" | sort | tr '\n' ' ' | sed 's/ $//')"
-  got_str="$(grep -E "^string payloads:" "$DOC" | tr '|' ' ' | grep -oE '(^|[[:space:]])-{1,2}[A-Za-z-]+' | tr -d ' ' | sort -u | tr '\n' ' ' | sed 's/ $//')"
+  got_str="$(grep -E "^string payloads:" "$DOC" | tr '|' ' ' | grep -oE '(^|[[:space:]])-{1,2}[A-Za-z-]+' | tr -d ' ' | sort -u | tr '\n' ' ' | sed 's/ $//' || true)"
   assert_eq "$want_str" "$got_str" "known-external-tools.md string-payloads line matches canonical flag-string rows"
 else
   echo "NOTE: known-external-tools.md absent — doc parity skipped (lands in the docs phase)"
@@ -100,7 +100,7 @@ if [[ -f "$WBLIB" ]]; then
   # delimiters both edges, same discipline as arms 1-6.
   members="$(grep -E "^SOLEUR_RTK_RE=" "$WBLIB" | head -1 \
     | sed -E "s/^SOLEUR_RTK_RE='rtk\(\[\[:space:\]\]\+\(//; s/\)\)\*'.*$//" \
-    | tr '|' '\n' | grep -vE '^\s*$')"
+    | tr '|' '\n' | grep -vE '^\s*$' || true)"
   [[ -n "$members" ]] || { echo "FATAL: SOLEUR_RTK_RE extraction yielded no members"; exit 3; }
   # bare-word members are exec subcommands; dash-members are global flags
   # (value-shape suffixes like (=[^[:space:]]+)? normalize to the bare flag).
@@ -119,8 +119,8 @@ if [[ -f "$WBLIB" ]]; then
 
   # Partition completeness: every member must land in exactly one asserted set —
   # a member matching neither ^[a-z]+$ (exec) nor ^- (flag) would drift untested.
-  frag_all="$(grep -vE '^\s*$' <<<"$members" | sed 's/(=.*//' | sort | tr '\n' ' ' | sed 's/ $//')"
-  frag_union="$(printf '%s\n%s\n' "$frag_exec" "$frag_glob" | tr ' ' '\n' | grep -v '^$' | sort | tr '\n' ' ' | sed 's/ $//')"
+  frag_all="$(grep -vE '^\s*$' <<<"$members" | sed 's/(=.*//' | sort | tr '\n' ' ' | sed 's/ $//' || true)"
+  frag_union="$(printf '%s\n%s\n' "$frag_exec" "$frag_glob" | tr ' ' '\n' | grep -v '^$' | sort | tr '\n' ' ' | sed 's/ $//' || true)"
   assert_eq "$frag_all" "$frag_union" "fragment member partition is complete (exec ∪ globals == all members)"
 
   # flag-string flags (-c/--command/--shell) are the exclusion pin: the boundary

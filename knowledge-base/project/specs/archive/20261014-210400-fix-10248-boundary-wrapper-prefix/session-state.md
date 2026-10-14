@@ -60,3 +60,9 @@
 - Census hygiene: line-shifted exemptions re-pinned (incidents.sh:305-321, guardrails.sh:231/705).
 - Suite state: boundary-prefix 54/54 (36/24/12), parity 18/18, kb-archive 97/97, guardrails 364/364, incidents helper 9/9, operator-step 26/26, runbook 26/26, pmr-parity 17/17.
 - Open: full test-all scripts battery still queued behind sibling worktrees; tasks 4.1 pending its result.
+
+## Battery + Ship Phase
+- test-all.sh scripts battery finished: 601/614. All 8 fails triaged; 4 real (all fixed): capture-exit-live S1 on parity member-split greps, tempfile-ownership rule(c) mktemp, env-adoption ceiling (git_fixture_env added), kb-consumers baseline (3 one-hop argv-code rows). 4 contention (green isolated): weight-drift, orphan-reaper x2 — the 8th was a self-test EXPECTED row.
+- Advisory lint-bot-statuses CI fail was the tempfile rule(c) — fixed before it even landed.
+- tasks.md 4.1 ticked. KB artifacts archived in-PR per wg-kb-artifacts-archived-in-pr.
+- Merge remains operator-owned: PR marked ready pending CPO/operator call; no auto-merge armed.

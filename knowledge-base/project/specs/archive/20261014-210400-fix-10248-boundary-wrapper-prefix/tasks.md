@@ -54,7 +54,7 @@ Draft PR: #10288.
 
 ## Phase 4 — Verify + docs
 
-- [ ] 4.1 Full `.claude/hooks` suite + `scripts/test-all.sh` (scripts group) green; parity suite green
+- [x] 4.1 Full `.claude/hooks` suite + `scripts/test-all.sh` (scripts group) green; parity suite green
       with new arms.
 - [x] 4.2 `#10248` disclosure comments in the three base-planted files updated to past tense; same
       callout style at newly-fixed sites.

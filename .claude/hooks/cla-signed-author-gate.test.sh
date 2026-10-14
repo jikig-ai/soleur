@@ -118,7 +118,7 @@ t1() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_branch
 
 # T1b: rtk-prefixed merge reaches the gate identically (#10248)
 t1b() { local t; t=$(mktemp -d -p "$SUITE_TMP"); read -r work inc < <(make_branch "$t" feat-rtk "$UNSIGNED")
-  out=$(run_hook "$inc" "$(make_payload "$work" 'rtk gh pr merge 123 --squash --auto')"); rc=$?
+  local rc=0; out=$(run_hook "$inc" "$(make_payload "$work" 'rtk gh pr merge 123 --squash --auto')") || rc=$?
   assert_deny "T1b unsigned author + rtk gh pr merge denies (#10248)" "$inc" "$out" "$rc"; rm -rf "$t"; }
 
 # T2: all-signed commits + gh pr merge → PASS
