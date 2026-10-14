@@ -128,3 +128,9 @@ referenced a local from another method. Both were corrected before the passing
 32-case run. CI also recorded a dev anonymization RPC HTTP 502 during tenant
 fixture teardown and an infra cutover shell-suite failure; no live retry was
 issued, and the latter artifact omitted its named suite transcript.
+
+The bounded PR-check monitor was intentionally stopped at exit 130 after it
+reported BEHIND, because CI-only polling must stop until the branch is synced.
+This is a cancelled watch, not a CI failure. The exact `origin/main` SHA was
+fetched and the canonical sync script merged/pushed it; the replacement watch
+must bind to the new head.

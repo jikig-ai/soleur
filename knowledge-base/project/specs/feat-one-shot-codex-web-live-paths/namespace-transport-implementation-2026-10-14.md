@@ -231,3 +231,23 @@ writer/quiescence evidence, authenticated provenance, independent profile review
 and a fresh exact-action approval remain outstanding. Build authorization is
 consumed; the withdrawn command remains unavailable. Every existing hold
 persists.
+
+## Final focused review and current-source sync
+
+At pushed `c11477cb66dd75da9f77966b60bcfda6a726b08a`, test design verified all
+17 observation tests, including every directory descriptor closed after an
+injected traversal-close failure and file-close errors after both failed and
+successful `fsync`; no finding remains, score 8.4/10 Grade B. Integrity's final
+pass confirmed its earlier source findings remain closed and independently
+mutation-checked the ownership ordering. Production source is unchanged through
+`9677f964a3f7b9dcfeb456a1040585636663cd23`, which also records a reporting-only
+learning correction.
+
+GitHub reported BEHIND after main moved to `e461325f84d996888d35f0764bdda76367598bc6`
+(#10283, Inngest bootstrap pin update). The canonical sync script merged and
+pushed this exact main as `d48e50624fe9e15eb7341fa2e81b1813c1858b00`; only the two
+cloud-init pin lines changed. The branch is current again; final-source offline
+checks, source pairing/export and checks are refreshing. The last exact-head PR
+check watch was interrupted to stop polling after BEHIND, with no source change
+or CI rerun. PR remains open, draft and disarmed. No full runtime qualification,
+SAST/C.9, live tenant retry, build, recovery or promotion is claimed.

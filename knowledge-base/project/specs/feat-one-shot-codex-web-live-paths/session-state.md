@@ -1643,3 +1643,25 @@
   occurred. Draft/disarmed/default-off/customer-blocked and all existing holds
   remain. Build authorization is consumed; the withdrawn command remains
   forbidden.
+
+### Final observation review and main resync — 2026-10-14
+
+- Test-design re-reviewed pushed `c11477cb66dd75da9f77966b60bcfda6a726b08a`:
+  17/17 synthetic tests pass, all prior oracle findings are closed and no new
+  finding remains (8.4/10, Grade B). Its descriptor test now observes each fd
+  opened during traversal and confirms cleanup after an injected close fault.
+  Integrity confirmed its source findings remain closed at that head; code is
+  unchanged through documentation-only `9677f964a3f7b9dcfeb456a1040585636663cd23`.
+- A bounded read-only PR check watch observed BEHIND. Current main advanced to
+  `e461325f84d996888d35f0764bdda76367598bc6` (#10283). The canonical ship sync
+  script merged and pushed it as `d48e50624fe9e15eb7341fa2e81b1813c1858b00`;
+  only two Inngest bootstrap pin lines changed. The previous monitor was
+  interrupted to stop polling after the BEHIND reading; exit 130 records that
+  intentional cancellation, not a CI verdict.
+- The registered offline wrapper passed after this sync with
+  `POST_BEHIND_OFFLINE_RC=0`; final-source pairing/export and hosted checks are
+  refreshing. PR #9051 is still open, draft, auto-merge off and customer-blocked.
+  Source review does not authorize real image observations, build, Docker/SQL,
+  provider/credential/browser/account operations, recovery/retry, deployment,
+  flags/cohort changes or any other existing hold. Build authorization is
+  consumed; the withdrawn command remains unavailable.
