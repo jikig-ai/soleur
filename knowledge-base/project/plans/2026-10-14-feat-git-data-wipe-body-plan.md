@@ -15,6 +15,28 @@ requires_cpo_signoff: true
 
 # feat: build the git-data wipe body (`mode=wipe` / `wipe_finish` / `wipe_check`)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-14
+**Sections enhanced:** Reconciliation, Research Insights, Implementation Phases (rewritten after review), Guard Contract (8 guards), Observability, Acceptance Criteria.
+**Evidence used:** six-seat plan-review panel (DHH, Kieran, code-simplicity, architecture-strategist, spec-flow-analyzer, CTO devex), two CTO ruling batches (25 rows), CLO and CPO assessments, a learnings sweep, a repo reconciliation sweep, and live read-only measurements (Hetzner API, Better Stack).
+
+### Key improvements
+1. The design's S3 re-entry arm had dead ends (detach unconfirmed, volume already absent, no store-serving proof, 24 h bound); replaced by a typed `origin_run`, Hetzner action-history evidence and an absent-volume branch.
+2. Token containment tightened: every post-loader step is `exec env -i`, the false-assurance blanking step is gone, the Doppler CLI install in the job is pinned and the job has no remote `uses:`.
+3. The emptiness signal was decided from a measurement (`plaintext_journal=dirty`), reports counts only, and the two rulings that touch it (CTO and CLO) are reconciled explicitly.
+4. A read-only `wipe_check` mode lets the owner exercise W1-W7 under real credentials before naming a destructive command.
+
+### New considerations discovered
+- The design's ids are already stale: a sibling apply replaced the git-data host on 2026-10-14 (new server and LUKS volume ids); nothing may be a constant.
+- The retired `wipe` job of `workspaces-luks-cutover.yml` (git history) is a direct precedent for the API sequence and also shows the `assert_apply_paused_idle` alternative for the wedge.
+- Draft PR #10185 shares the argv-bearer sweep floor literals (merge-conflict hot spot, recorded in Risks).
+
+### Deepen-plan verification (2026-10-14)
+- Gates 4.6 (user-brand impact), 4.7 (observability: `expected_output` is a single literal, command offline and fast), 4.8 (no PAT-shaped variable), 4.9 (no UI surface), 4.10 (encryption posture), 4.11 (`lint-guard-contract.py`: 8 guards green) and 4.12 (one unfenced Scope Check, no block marker) pass.
+- Every `#N` cited was resolved live (`gh issue view` / `gh pr view`); every cited rule id exists in `AGENTS.md`.
+- Live read-only check of the Hetzner action-history shape `wipe_finish` relies on: `GET /volumes/<plaintext id>/actions` returns objects with keys `command`, `finished`, `id`, `progress`, `resources`, `started`, `status`; `command` values seen are `attach_volume`, `create_volume`, `detach_volume`; every status seen is `success` (22 actions). The detach POST (201) and DELETE (204) shapes stay pinned from the retired job and are first exercised live by the destructive run's fail-closed reads.
+
 ## Overview
 
 Issue #10138 is the owner decision issue for DL-2: ending the retention of the plaintext rollback copy
@@ -150,7 +172,7 @@ CPO sign-off (Phase 2.6, 2026-10-14): granted with conditions, all written into 
 | 6 | "Settle the design's open items V-4, V-8, V-9, V-13/N-19, V-14" [brief] | `decision-challenges.md` rows; Phases 3-4 | mapped |
 | 7 | "N-19/V-13 needs a MEASUREMENT of Better Stack archive retention first ... record the measured value and the command" [brief] | Research Insights, Measurement | mapped |
 | 8 | "Run the collision probe before planning ... and again after planning" [brief] | Research Insights (probe 1), Phase 8 (probe 2) | mapped |
-| 9 | "where it names a live read, plan it as a read-only step of the workflow, never a constant" [brief] | Phase 2 helper verbs `identity`/`finish_identity`/`reread`/`readback`; Phase 0 re-read | mapped |
+| 9 | "where it names a live read, plan it as a read-only step of the workflow, never a constant" [brief] | Phase 2 helper verbs `identity --expect attached|detached`/`state`/`actions`/`readback`; Phase 0 re-read | mapped |
 | 10 | "bake them into the plan's test/lint list" (the repo gotchas) [brief] | Test and Lint Gate List | mapped |
 
 ### Plan-Item Provenance
@@ -231,7 +253,7 @@ Files: `apps/web-platform/infra/git-data-flag-precheck.sh`, `.../git-data-flag-p
 Files: `apps/web-platform/infra/git-data-wipe.sh`, `apps/web-platform/infra/git-data-wipe.test.sh`.
 
 - 2.1 `git-data-wipe.sh` sources `scripts/lib/bearer-curl.sh` (`if ! source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh"; then ... exit 1; fi`, the errexit-capture lint form), refuses under xtrace with the prologue `scripts/lint-shell-trace-credential-refusal.py` Rules A/B require, never discards `bc_curl` stderr, reads the token only by NAME (`bc_curl NAME 'Authorization:Bearer :HCLOUD_TOKEN_READONLY' -- ...`). It reads the token from its STDIN (one line, `IFS= read -r`), never argv and never inherited env; the caller hands it over by here-string to a `bash -c` child under `env -i` (CTO 12b).
-- 2.2 Verbs (each fail-closed, bounded by `--max-time`, shape-validated by anchored regex, fixed verdict word, exit 5): `phases` (prints the closed vocabulary `detach_attempted detached delete_attempted delete_sent deleted`; the discoverability probe), `state` (read-only: prints whether the plaintext volume is attached, detached or absent and whether the LUKS volume is attached; what the `WIPE_STATE_UNKNOWN` email points the owner at, run first in `wipe_check`), `identity --expect attached|detached` (ONE verb replacing the design's `identity`/`finish_identity`/`reread` variants, review fix: R1-R6 per design 3.1: exactly one server named `soleur-git-data`; exactly one volume named `soleur-git-data-store` whose `.id` equals the typed `volume_id`; exactly one `soleur-git-data-luks-store` with a DIFFERENT id attached to the R1 server; `.protection.delete == false`; `.labels.app == "soleur-web-platform"` and equal `.location.name`; with `attached` the plaintext volume's `.server` equals the R1 server (`wipe_not_attached_to_current_host`), with `detached` its `.server` is null; when `.server == null` and `--expect attached` it fails `wipe_volume_already_detached`; classifies `volume_state` `attached|detached|absent` into `$GITHUB_OUTPUT`; the record-writing and the re-read modes differ only by a flag), `actions` (`GET /volumes/<id>/actions`: the newest relevant action is `detach_volume` `success` started at or after the origin run's W9a start with no later `attach_volume`; a running action refuses `wipe_detach_in_flight`; prints the count and latest command word for `wipe_check`), `detach` (runs `record_check` with the W7 constant immediately before the POST, POST expect 201, poll the SAME action every 2 s for at most 30 attempts, never re-POST; any end state other than `success` is `wipe_detach_not_confirmed`), `delete` (DELETE expect 204), `readback` (W12: `GET /volumes/<id>` is 404 AND the name list is empty AND the LUKS volume lists exactly one and attached; 404 with the name still listed is `wipe_readback_name_still_listed`), and `record_check` (existence, mode 0600, epoch; `wipe_assertion_stale`).
+- 2.2 Verbs (each fail-closed, bounded by `--max-time`, shape-validated by anchored regex, fixed verdict word, exit 5): `phases` (prints the closed vocabulary one word per line: `detach_attempted`, `detached`, `delete_attempted`, `delete_sent`, `deleted`; the discoverability probe, whose `expected_output` is the single literal `delete_attempted`), `state` (read-only: prints whether the plaintext volume is attached, detached or absent and whether the LUKS volume is attached; what the `WIPE_STATE_UNKNOWN` email points the owner at, run first in `wipe_check`), `identity --expect attached|detached` (ONE verb replacing the design's `identity`/`finish_identity`/`reread` variants, review fix: R1-R6 per design 3.1: exactly one server named `soleur-git-data`; exactly one volume named `soleur-git-data-store` whose `.id` equals the typed `volume_id`; exactly one `soleur-git-data-luks-store` with a DIFFERENT id attached to the R1 server; `.protection.delete == false`; `.labels.app == "soleur-web-platform"` and equal `.location.name`; with `attached` the plaintext volume's `.server` equals the R1 server (`wipe_not_attached_to_current_host`), with `detached` its `.server` is null; when `.server == null` and `--expect attached` it fails `wipe_volume_already_detached`; classifies `volume_state` `attached|detached|absent` into `$GITHUB_OUTPUT`; the record-writing and the re-read modes differ only by a flag), `actions` (`GET /volumes/<id>/actions`: the newest relevant action is `detach_volume` `success` started at or after the origin run's W9a start with no later `attach_volume`; a running action refuses `wipe_detach_in_flight`; prints the count and latest command word for `wipe_check`), `detach` (runs `record_check` with the W7 constant immediately before the POST, POST expect 201, poll the SAME action every 2 s for at most 30 attempts, never re-POST; any end state other than `success` is `wipe_detach_not_confirmed`), `delete` (DELETE expect 204), `readback` (W12: `GET /volumes/<id>` is 404 AND the name list is empty AND the LUKS volume lists exactly one and attached; 404 with the name still listed is `wipe_readback_name_still_listed`), and `record_check` (existence, mode 0600, epoch; `wipe_assertion_stale`).
 - 2.3 Verdict record under `$RUNNER_TEMP` (server id, both volume ids, `created`, an epoch; the binding triple and per-run random are dropped, CTO E), written with the canonical `assert_fixture_dir` operand guard (`plugins/soleur/test/fixture-relative-assert.test.sh` must stay green), mode 0600, never containing a token. Epochs: the W7 epoch is stamped by W7; the W10b epoch by the re-read step (CTO D). No value is ever printed except digits and fixed words.
 - 2.4 Test (`git-data-wipe.test.sh`): PATH-shim `curl` state machine (attached -> detaching -> detached -> deleted/404), synthesized ids/tokens only (`cq-test-fixtures-synthesized-only`). Rows: every verdict word in design 3.1/3.4 driven by empty, multi-line, off-shape, duplicate and error stub output; token absent; `HCLOUD_TOKEN_READONLY` absent never falls back to `HCLOUD_TOKEN`; typed id equals the LUKS id; typed id equals a volume attached to another server; two volumes for the name; a detached volume under `--expect attached`; the poll never reaching `success` in 30 attempts; the detach NOT re-sent; DELETE 404 with a present name; the absent-volume `readback`-only path; no token in any recorded argv; no stderr discard on the `bc_curl` calls (the helper joins the S4 population, so `S4_POP_FLOOR` and `S4_SCALLS_FLOOR` rise in Phase 5).
 
@@ -452,7 +474,7 @@ Run targeted, in this order, after each phase; CI is the gate.
 
 **Property.** The delete target is the volume the API returns for the name `soleur-git-data-store`, equal to the typed digits, attached to the one `soleur-git-data` server (or detached for `wipe_finish`), distinct from the LUKS volume, undeleteable-protection off, and the host's by-id device for that id is not the mapper's backing device.
 
-**Assembly.** Helper verbs `identity`, `finish_identity`, `reread`, `readback`; host checks H3-H5; the typed-id shape check; the stub contract.
+**Assembly.** Helper verbs `identity --expect attached|detached` (used by W4, the `wipe_finish` front and W10b), `state`, `actions`, `readback`; host checks H3-H5; the typed-id shape check; the stub contract.
 
 **Mutation matrix:**
 
@@ -647,7 +669,7 @@ logs:
   retention:       the repository log retention setting (90 days configured; run records are listed longer, runbook "Re-baselining the pinned runs")
 discoverability_test:
   command:         bash apps/web-platform/infra/git-data-wipe.sh phases
-  expected_output: detach_attempted detached delete_attempted delete_sent deleted
+  expected_output: delete_attempted
 ```
 
 ## Acceptance Criteria
@@ -656,7 +678,7 @@ discoverability_test:
 
 - [ ] `.github/workflows/git-data-cutover.yml` has a `wipe` job serving exactly `mode` in `wipe|wipe_finish|wipe_check`, the `cutover` job is skipped for those three (full `if:` strings pinned), `volume_id` is a new input valid only for them (`.github/workflows/git-data-cutover.yml` inputs and `wipe_confirm`; census `WF-jobs`, `G7/AC9`, `WF-inputs-refs`).
 - [ ] W3 refuses unless the flag is exactly `true`, the stamp is present and parseable, and at least `WIPE_SOAK_FLOOR_SECONDS=604800` have elapsed, plus the interim stamp-newer-than-last-rollback guard (`apps/web-platform/infra/git-data-flag-precheck.sh`, `scripts/lib/git-data-wipe-runs.sh`; Guard 6).
-- [ ] The helper's `identity`/`finish_identity`/`reread`/`detach`/`delete`/`readback` verbs enforce R1-R6, the 30-attempt poll, 204/404 handling and the LUKS presence proof; the typed id must equal the API id and differ from the LUKS id (`apps/web-platform/infra/git-data-wipe.sh`; Guard 5).
+- [ ] The helper's `identity --expect`/`state`/`actions`/`detach`/`delete`/`readback` verbs enforce R1-R6, the 30-attempt poll, 204/404 handling and the LUKS presence proof; the typed id must equal the API id and differ from the LUKS id (`apps/web-platform/infra/git-data-wipe.sh`; Guard 5).
 - [ ] The host verb asserts H1-H10 in ONE session (explicit pinned `gd_capture` timeout) and produces the layout-independent listing as per-type counts only from a read-only dm snapshot (not in `wipe_check`, which prints `UNVERIFIED: layout listing not exercised`); no name and no digest leaves the host; the loopback test passed on the CI runner image (`apps/web-platform/infra/git-data-cutover.sh` `MODE=wipe_assert`, `apps/web-platform/infra/git-data-wipe-assert.sh`; Guard 8).
 - [ ] The Tier-B loader is used once, with only the Tier-B input, after W7b and before W9a; `source == 'tier_b'` is asserted before the `detach_attempted` marker; the first statement of every post-loader step is `exec env -i <allow-list>` with stdin credential handoff; the Doppler install is pinned and the job has no remote `uses:`; there is no W11b (`.github/workflows/git-data-cutover.yml` steps `wipe_doppler_install`, `wipe_loader`, `wipe_detach_gate`, `wipe_teardown`; Guard 1).
 - [ ] Markers `detach_attempted`, `detached`, `delete_attempted`, `delete_sent`, `deleted` are written before/at the calls named in Phase 4.3 and mapped to the seven notify words; no wipe word carries the unfreeze remedy (`.github/workflows/git-data-cutover.yml` `notify-failure`; Guard 3).
