@@ -57,7 +57,8 @@ all four archive destinations AND the Phase 1 frontmatter retarget.
   → `knowledge-base/project/brainstorms/archive/${TS}-2026-10-13-edge-coverage-residuals-brainstorm.md`
 - [ ] 3.2 `git show …:knowledge-base/project/plans/2026-10-13-fix-edge-declaration-coverage-residuals-plan.md`
   → `knowledge-base/project/plans/archive/${TS}-2026-10-13-fix-edge-declaration-coverage-residuals-plan.md`
-- [ ] 3.3 `git show …:knowledge-base/project/specs/feat-10117-edge-coverage-residuals/{spec.md,tasks.md}`
+- [ ] 3.3 `mkdir -p knowledge-base/project/specs/archive/${TS}-feat-10117-edge-coverage-residuals`,
+  then `git show …:knowledge-base/project/specs/feat-10117-edge-coverage-residuals/{spec.md,tasks.md}`
   → `knowledge-base/project/specs/archive/${TS}-feat-10117-edge-coverage-residuals/{spec.md,tasks.md}`
 
 ## Phase 4 — Verification
@@ -67,8 +68,8 @@ all four archive destinations AND the Phase 1 frontmatter retarget.
   only on the `related_artifacts` line.
 - [ ] 4.2 Anchor probes: the risk-tier bullet sits between the `#6760` and
   PID-namespace bullets; `tail -1 plugins/soleur/skills/work/SKILL.md` is the
-  mutation-vacuity bullet; the sibling-worktree paragraph is byte-identical to
-  `origin/main`.
+  mutation-vacuity bullet; `git diff origin/main...HEAD -- plugins/soleur/skills/work/SKILL.md`
+  (three-dot, merge-base-scoped) shows ONLY the appended bullet.
 - [ ] 4.3 `bun test plugins/soleur/test/review-tier-parity.test.ts` green; run
   whichever suite the affected-diff selector picks for `work/SKILL.md`
   (expected `plugins/soleur/test/components.test.ts`).

@@ -12,6 +12,23 @@ brand_survival_threshold: none
 
 # docs: salvage learnings and planning trail from orphaned feat-10117 draft PR
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-14
+**Sections enhanced:** 3 (Acceptance Criteria, Test Scenarios, Implementation Phases)
+**Research agents used:** none — mechanical docs salvage; all verification executed inline (no Task tool in this harness). Every gate of `deepen-plan` §§4.5–4.12 was evaluated and passes (see below).
+
+### Key Improvements
+
+1. AC3 + its Test Scenario now diff `origin/main...HEAD` (three-dot, merge-base-scoped) so a sibling merge moving main cannot false-red the "only the appended bullet" assertion (sharp-edge #8616 class).
+2. A case-sensitive anchor in the sibling-worktree probe was corrected to the paragraph's actual capitalization (`Sibling-worktree`), and the probe was executed against the live file (count = 1) — plan probes are run, not just cited (#9303 class).
+3. Phase 3 gained the `mkdir -p` for the new `specs/archive/${TS}-feat-10117-edge-coverage-residuals/` directory (brainstorms/plans archive dirs already exist).
+
+### New Considerations Discovered
+
+- `deepen-plan` §4.7's pure-docs exemption excludes `.md` files under `plugins/*/skills/` — the two edited skill docs therefore DO require the `## Observability` block (present; all 5 fields validated: allowlisted `git` verb, no shell-active bytes, literal `expected_output`, <15 s).
+- The branch's complete delta vs merge-base `943ebacc` is exactly the brief's copy list — nothing else is salvageable; the remaining diff hunks are main-side drift.
+
 ## Overview
 
 The `feat-10117-edge-coverage-residuals` draft PR (#10190, OPEN/draft, updatedAt
@@ -201,6 +218,10 @@ main-side drift, not salvageable content.
 - `knowledge-base/project/specs/feat-10117-edge-coverage-residuals/tasks.md`
   → `knowledge-base/project/specs/archive/${TS}-feat-10117-edge-coverage-residuals/tasks.md`
 
+`mkdir -p knowledge-base/project/specs/archive/${TS}-feat-10117-edge-coverage-residuals`
+before the two spec writes — the archive specs dir is a new directory
+(`brainstorms/archive/` and `plans/archive/` already exist).
+
 ### Phase 4 — Verification
 
 - `bun test plugins/soleur/test/review-tier-parity.test.ts` (parity-pins the
@@ -285,7 +306,7 @@ closed 2026-10-14). Squash merge after green. Post-merge, in order:
 
 - [ ] AC1: All five learnings exist at their live paths and are byte-identical to `git show feat-10117-edge-coverage-residuals:<path>` — EXCEPT the fold-in-hazards file, which differs only in its `related_artifacts` frontmatter line now pointing at `knowledge-base/project/plans/archive/<TS>-2026-10-13-fix-edge-declaration-coverage-residuals-plan.md` (the same `<TS>` Phase 3 uses).
 - [ ] AC2: `risk-tier-and-fix-rounds.md` contains the bash-incremental-reads bullet exactly once, positioned immediately between the `#6760` seat bullet and the PID-namespace bullet; `bun test plugins/soleur/test/review-tier-parity.test.ts` is green.
-- [ ] AC3: `plugins/soleur/skills/work/SKILL.md`'s last line is the mutation-vacuity bullet citing `2026-10-14-a-mutation-row-is-vacuous-until-a-fixture-distinguishes-the-mutant.md`; the `6.8` bullet and the test-harness-sharp-edges pointer bullet are still present (not ported away); the sibling-worktree-contention paragraph is byte-identical to `origin/main`'s.
+- [ ] AC3: `plugins/soleur/skills/work/SKILL.md`'s last line is the mutation-vacuity bullet citing `2026-10-14-a-mutation-row-is-vacuous-until-a-fixture-distinguishes-the-mutant.md`; the `6.8` bullet and the test-harness-sharp-edges pointer bullet are still present (not ported away); `git diff origin/main...HEAD -- plugins/soleur/skills/work/SKILL.md` (merge-base-scoped three-dot, so a sibling merge moving main cannot false-red it) shows ONLY the appended bullet — the sibling-worktree-contention paragraph untouched.
 - [ ] AC4: Four archive files exist at the `${TS}-`-prefixed paths (basename-retention form), all sharing one timestamp, byte-identical to `git show feat-10117-edge-coverage-residuals:<path>`.
 - [ ] AC5: PR is draft-first with `## Changelog` (semver:patch), `Ref`-only citation of the 10117 arc; no `Closes`/`Fixes` token naming a closed issue.
 - [ ] AC6: Post-merge — PR #10190 carries the naming comment and is closed unmerged; remote branch `feat-10117-edge-coverage-residuals` and worktree `.worktrees/feat-10117-edge-coverage-residuals` are deleted only after merge lands and only after the no-live-activity check (updatedAt/author unchanged, `status --porcelain` empty) passes.
@@ -314,7 +335,7 @@ superset, so the Product/UX gate does not fire.
 
 - **Verification (integration):** `for p in <five learnings>; do diff <(git show feat-10117-edge-coverage-residuals:"$p") "$p"; done` — four files diff empty; the fold-in-hazards file diffs ONLY on its `related_artifacts` line.
 - **Verification (integration):** `grep -n 'bash reads a running script incrementally' plugins/soleur/skills/review/references/risk-tier-and-fix-rounds.md` returns exactly one hit, with the `#6760` bullet immediately before and the PID-namespace bullet immediately after (`sed -n '$((N-1)),$((N+1))p'` shows the three-bullet order).
-- **Verification (integration):** `tail -1 plugins/soleur/skills/work/SKILL.md` is the mutation-vacuity bullet; `grep -c 'sibling-worktree contention produces a FALSE RED' plugins/soleur/skills/work/SKILL.md` stays `1` (main's paragraph untouched); `diff <(git show origin/main:plugins/soleur/skills/work/SKILL.md) <(git show HEAD:plugins/soleur/skills/work/SKILL.md)` shows ONLY the appended line.
+- **Verification (integration):** `tail -1 plugins/soleur/skills/work/SKILL.md` is the mutation-vacuity bullet; `grep -c 'Sibling-worktree contention produces a FALSE RED' plugins/soleur/skills/work/SKILL.md` stays `1` (main's paragraph untouched); `git diff origin/main...HEAD -- plugins/soleur/skills/work/SKILL.md` shows ONLY the appended line.
 - **Verification (integration):** `ls knowledge-base/project/{plans,brainstorms}/archive/*2026-10-13* knowledge-base/project/specs/archive/*feat-10117*` resolves the four landed artifacts with one shared `<TS>` prefix; each diffs empty against `git show feat-10117-edge-coverage-residuals:<path>`.
 - **Test (unit/integration):** `bun test plugins/soleur/test/review-tier-parity.test.ts` green; the affected-diff-selected suite covering `work/SKILL.md` green; full affected battery green at ship.
 
