@@ -328,6 +328,7 @@ scripts/ci-deploy-sentry-post-fail-6475	6
 scripts/ci-draft-light	7
 scripts/ci-draft-push-census	3
 scripts/ci-leg-balance-9232	8
+scripts/ci-pr-selection	1
 scripts/ci-push-dedupe	5
 scripts/classify-workflow-transitions	5
 scripts/compound-promote	6

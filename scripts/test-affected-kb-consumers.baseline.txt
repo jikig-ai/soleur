@@ -116,6 +116,13 @@ scripts/battery-tag-authorship	knowledge-base/engineering/architecture/decisions
 scripts/betterstack-emitter-read	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 scripts/betterstack-emitter-read	knowledge-base/engineering/operations/runbooks/inngest-server.md
 scripts/ci-draft-light	knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md
+scripts/ci-pr-selection	knowledge-base
+scripts/ci-pr-selection	knowledge-base/engineering/architecture/diagrams
+scripts/ci-pr-selection	knowledge-base/project
+scripts/ci-pr-selection	knowledge-base/project/learnings
+scripts/ci-pr-selection	knowledge-base/project/specs
+scripts/ci-pr-selection	knowledge-base/project/specs/archive
+scripts/ci-pr-selection	knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh
 scripts/ci-push-dedupe	knowledge-base
 scripts/ci-push-dedupe	knowledge-base/project/specs
 scripts/compound-promote	knowledge-base
