@@ -64,10 +64,10 @@ set -f
 # founder, with no `|` in them. Replace the two examples.
 #
 # SOLEUR-STAGE preflight|read|Nothing changes: this only checks tools, GitHub and Doppler access, and the current dev_scheduled credential fingerprints.|None needed.
-# SOLEUR-STAGE create-app|write|Opens a page that registers the private GitHub App "Soleur CI Fixture" on jikig-ai (contents:read and metadata:read only, no webhook); you click Create GitHub App, then Generate a private key, and keep the downloaded .pem file.|Delete the App at https://github.com/organizations/jikig-ai/settings/apps/soleur-ci-fixture (the .pem it gave you stops working when you do).
-# SOLEUR-STAGE record-key|read|Nothing changes at a vendor: this only locates the downloaded .pem, checks it is a private key, and records its path and fingerprint in a gitignored .env beside this script.|Delete the recorded lines with --reset FIXTURE_PEM_PATH and --reset FIXTURE_PEM_FP.
+# SOLEUR-STAGE create-app|write|Opens a page that registers the private GitHub App "Soleur CI Fixture" on jikig-ai (contents:read and metadata:read only, no webhook); you click Create GitHub App, then the one-time code in the redirect URL is exchanged for the App and its private key, which you keep as a 0600 .pem file on tmpfs.|Delete the App at https://github.com/organizations/jikig-ai/settings/apps/soleur-ci-fixture (the .pem it gave you stops working when you do).
+# SOLEUR-STAGE record-key|read|Nothing changes at a vendor: this only locates the .pem, checks it is a private key, and records its path and fingerprint in a gitignored .env beside this script.|Delete the recorded lines with --reset FIXTURE_PEM_PATH and --reset FIXTURE_PEM_FP.
 # SOLEUR-STAGE install-app|write|Opens the Soleur CI Fixture install page; you select Only select repositories > jikig-ai/mu1-fixture and click Install.|On the App page choose Uninstall (or re-run Install to widen it later); the App itself is untouched.
-# SOLEUR-STAGE write-doppler|write|Writes GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY and MU1_FIXTURE_INSTALLATION_ID in the soleur/dev_scheduled Doppler config, then deletes the downloaded .pem file after a read-back proves the write.|In the Doppler dashboard restore each name to its previous value (the private key's old value is a dead key that no longer mints).
+# SOLEUR-STAGE write-doppler|write|Writes GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY and MU1_FIXTURE_INSTALLATION_ID in the soleur/dev_scheduled Doppler config, then deletes the .pem file after a read-back proves the write.|In the Doppler dashboard restore each name to its previous value (the private key's old value is a dead key that no longer mints).
 # SOLEUR-STAGE verify|read|Nothing changes: this runs the live mint probe against GitHub under the new dev_scheduled values and prints verdicts only.|None needed.
 
 # `--list` is a STATIC read of the table above: no library, no credentials, no
@@ -400,7 +400,7 @@ plan_create_app() {
   fi
   if [[ -n "$(env_get APP_CREATE_ATTEMPTED)" ]]; then
     soleur_op_precondition_failed create-app record-key \
-      "A previous run already opened the registration page. If the App exists, run stage record-key with SOLEUR_BOOTSTRAP_PEM_PATH set to the downloaded .pem; if the click never landed, run: bash ${SCRIPT_PATH} --reset APP_CREATE_ATTEMPTED"
+      "A previous run already opened the registration page. If the App exists, run stage record-key with SOLEUR_BOOTSTRAP_PEM_PATH set to its .pem; if the click never landed or the code was never exchanged, run: bash ${SCRIPT_PATH} --reset APP_CREATE_ATTEMPTED"
   fi
   [[ -f "$MANIFEST_PAGE" ]] \
     || soleur_op_precondition_failed create-app preflight "the manifest launcher page ${MANIFEST_PAGE} is missing"
@@ -563,7 +563,8 @@ read_verify() {
   # git, not a fixed ../ count: this script moves one level deeper when its spec dir is archived.
   # Inherited GIT_* variables would redirect `git -C`, so every git call below runs without them.
   local probe=scripts/probe-github-app-mint.sh
-  local -a nogit=(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git)
+  local -a nogit=(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR
+    -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES git)
   local repo_root; repo_root="$("${nogit[@]}" -C "$SCRIPT_DIR" rev-parse --show-toplevel)" \
     || { soleur_op_red "  cannot resolve the repo root from ${SCRIPT_DIR}"; return 1; }
   # The probe runs under `doppler run` with live credentials: refuse a root whose probe is not a
@@ -571,7 +572,8 @@ read_verify() {
   # edited probe, would otherwise run under the dev_scheduled credentials).
   if [[ -L "${repo_root}/${probe}" ]] \
     || ! "${nogit[@]}" -C "$repo_root" ls-files --error-unmatch "$probe" >/dev/null 2>&1 \
-    || ! "${nogit[@]}" -C "$repo_root" diff --quiet HEAD -- "$probe"; then
+    || [[ "$("${nogit[@]}" -C "$repo_root" hash-object -- "$probe" 2>/dev/null)" \
+          != "$("${nogit[@]}" -C "$repo_root" rev-parse "HEAD:${probe}" 2>/dev/null)" ]]; then
     soleur_op_red "  ${repo_root} does not hold ${probe} as a tracked, unmodified file — wrong repo root"
     return 1
   fi

@@ -14,6 +14,7 @@ import path from "node:path";
 //      promises it is harmless on leak: contents:read + metadata:read, no events, not public.
 //      The top-level key set is closed, so a new capability (oauth, setup_url, callbacks,
 //      webhook) cannot be added without this test being edited on purpose.
+//      (setup_url, callback_urls, hook_attributes, request_oauth_on_install, ...).
 const MANIFEST = JSON.parse(
   readFileSync(
     path.resolve(__dirname, "../infra/github-ci-fixture-app-manifest.json"),
