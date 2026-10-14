@@ -231,7 +231,7 @@ call site learns why, and this ledger shows the cumulative position — the same
 an ORPHAN and reddens; the check is a bijection in both directions, because a one-directional check
 is where offenders go to be forgotten.
 
-**Ceiling governance, and its single home.** The exemption ledger's ceiling is **12**. That number
+**Ceiling governance, and its single home.** The exemption ledger's ceiling is **13**. That number
 is the one AUTHORITY; the guard asserts its own constant equals this line, so the two cannot drift.
 Raising it is an edit to this ADR AND to the two `LEDGER_CEILING=12` sed patterns in
 `scripts/battery-tag-authorship-mutations.test.sh` (rows R7/R8), which would otherwise stop

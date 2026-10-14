@@ -361,6 +361,7 @@
 2	scripts/actions-queue-health.test.sh
 1	scripts/audit-bot-codeql-coverage.sh
 1	scripts/audit-dev-scheduled-shapes.sh
+1	scripts/battery-tag-authorship.test.sh
 1	scripts/capture-web-2-host-key.sh
 1	scripts/check-backstop-revision.sh
 6	scripts/check-backstop-revision.test.sh
