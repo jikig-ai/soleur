@@ -129,17 +129,14 @@ resource "github_repository_ruleset" "marketplace_pr_required" {
     bypass_mode = "always" # NOT `pull_request` — see the measured table above.
   }
 
-  # The soleur-ai App, so `github_repository_file.marketplace_manifest` below can
-  # write through this ruleset in the unattended apply. This is NOT a hole: the
-  # App's write is the REVIEWED path, because its content originates in this
-  # monorepo behind CI, required checks and CODEOWNERS. Today that same App can
-  # push this repo with no review at all, so the ruleset is strictly a narrowing.
-  #
-  # 3261325 is the APP id. The INSTALLATION id is 122213433 and appears twice in
-  # apply-github-infra.yml; passing it here silently matches no actor, and the
-  # symptom is a confusing 404-shaped failure rather than a permission error.
+  # The soleur-infra App (5118911; installation 166065653). The actor slot
+  # takes the APP id, not the installation id; passing 166065653 here matches
+  # no actor. This is the identity the apply authenticates as, so
+  # `github_repository_file.marketplace_manifest` can write through the ruleset.
+  # The write is the reviewed path: the content originates in this monorepo
+  # behind CI, CODEOWNERS, and marketplace-manifest-guard.
   bypass_actors {
-    actor_id    = 3261325
+    actor_id    = 5118911
     actor_type  = "Integration"
     bypass_mode = "always"
   }
