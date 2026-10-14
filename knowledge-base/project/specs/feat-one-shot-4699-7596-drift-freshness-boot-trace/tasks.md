@@ -28,7 +28,7 @@ TEST-AUTHORING RULE (detector): no bare `<<`/`<<<` token outside a real heredoc 
 
 ## Phase 3: Suites green + floors
 
-- [x] 3.1 `bash .github/scripts/test/test-vinngest-digest-freshness.sh` GREEN; `bash .github/scripts/test/run-all.sh` GREEN (MIN_SUITES=14 floor is a floor, not a count — no edit expected)
+- [x] 3.1 `bash .github/scripts/test/test-vinngest-digest-freshness.sh` GREEN; `bash .github/scripts/test/run-all.sh` GREEN (MIN_SUITES raised 14→15 in the review fix-round per the pattern seat — the floor must track the suite count, not just stay satisfied)
 - [x] 3.2 `bash apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh`, `journald-config.test.sh`, `cloud-init-inngest-provision-unit.test.sh`, `inngest-boot-emitter.test.sh`, `fresh-boot-parity.test.sh`, `vector-pii-scrub.test.sh` (under `apps/web-platform/test/infra/`) all GREEN at measured floors
 - [x] 3.3 `bash plugins/soleur/test/c4-count-parity.test.sh` GREEN (no C4 change expected — no new actor/system/container)
 - [x] 3.4 No carrier edit: `git diff --name-only origin/main...HEAD` contains neither `vector.toml` nor `cloud-init-inngest.yml` payload lines — GuardA must stay green, advisory drift NOT expected on this PR
