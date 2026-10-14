@@ -8,6 +8,15 @@ type: chore
 lane: single-domain
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-15. **Method:** plan-time measurement (J0, J0b, J0c below), a CTO ruling on every fork, a two-seat plan-review panel (simplicity, test-design) with its outcomes recorded as `decision-challenges.md` rows 17 to 20, the deepen-plan mechanical halts (user-brand, observability, PAT, UI, encryption, Guard Contract lint, Scope Check) and live verification of every cited issue, PR, label, rule id and ADR. The all-agent fan-out was not run: every mechanism had already been read against the real guard and its fixtures by the two review seats and by the prototypes, and the remaining agents (Rails, UI, infra) have no surface here.
+
+- Measured, not asserted: the widened reader pattern adds 0 hits over the 1,858-file population (33 equal 33) and passes a 64-line fixture table; the same text matches 38 of 38 bad and 0 of 26 good lines under `git grep -E` as well as `grep -E` (dialect check).
+- Prototyped: both linearising passes (`j0-split.awk`, `j0-fence.awk`) reproduce every state row of Guard 2 under gawk default, `--posix` and `--traditional` (`j0-linearisers-check.sh`); mawk, busybox and original-awk are not installed on this host, so CI's awk stays the only reading of those (stated).
+- Found by review and fixed in the plan: the sweep reads its own spec dir once item 9 lands (fixtures moved to a data file), `SWEEP_EXTS` built both the pathspec and its witness (a literal count and a typed expected list added), the residual fixture lives in `residual-v2.sh` (not `good-v2.sh`), and the marker pin's population now equals the swept files.
+- Verified live: #9217, #7376, #6601, #7797, #9482, #10322, #10081 open; labels `semver:patch` and `app:web-platform` exist; `cq-write-failing-tests-before` is an active rule; ADR-119 exists; the one cited ADR is not an alternative the plan rejects.
+
 ## Overview
 
 Item F of the grep -q pipe-guard series (tracker #9217; also #7376, #6601, #7797, #9482). `.claude/hooks/grep-q-pipe-guard.test.sh` finds `producer | grep -q` by a LINE regex (`PATTERN_V2`) over about 1,860 files, asserted zero outside a deferral table. Item F is what that search cannot see. The brief names nine blind spots; each either gets a detection row plus a mutation-pinned test, or is recorded as NOT fixed with its reason in the PR body and on #9217. The guard's own header names a tenth under Item F (the unbounded `# sigpipe-demo: intentional` marker); it is the last, cuttable arm.
@@ -38,6 +47,8 @@ Dispositions (rulings in `decision-challenges.md`, rows 1 to 13; measurements in
 **Cut list.** A derived function-reader set (CTO: an unsound shell parser for 0 call sites); a multi-line awk detector (program-extent parser, 13 sites); a `head -N` ratchet (churns, buys no property); file-exact deferral rows for the 18 fenced lines (documents harmless snippets); converting the SKILL.md fences (fenced files, body budget); a second `PATTERN_V3` (leaves V2 dead); a shell lexer (S7c cut it).
 
 **Plan-time measurements (commands in the spec dir).** `python3 -I j0-measure.py` classifies the reader stage of every logical line (1,858 swept files); `bash j0-pattern-prototype.sh` runs the shipped and the widened pattern over the same population: shipped 33 hits, widened 33 hits, 0 only in the widened set, and a 60-line fixture table passes. Two rows of the first tool are its own false positives (one `-hmac`, one quoted `-q` inside a pattern) and are not sites. The unbounded operand run adds 24 hits (quoted test strings), a quote-aware run adds 5, one operand adds 0, which is why the design is one operand. Fences: `18` fenced and `12` inline lines match outside knowledge-base, 0 of the 18 sit in a fence that mentions pipefail. Marker: 25 lines in 12 files outside knowledge-base and the guard file. Guard wall time 18.6 s at load 7.
+
+**Deepen additions (J0c).** `j0-split.awk` and `j0-fence.awk` are the two linearisers as POSIX awk; `bash j0-linearisers-check.sh` builds the Guard 2 state rows with `printf` and runs them through each awk present plus the shared widened pattern: split reports exactly the three joins that must report (past a comment line, past a blank line, a `|&` end) and none of `||`, a block-scalar indicator, a lone bar line or EOF; the fence pass reports the pipefail fences (backtick, tilde, indented, a longer fence that a shorter backtick run does not close, unclosed at EOF, pipefail after the hit) and not the fence without pipefail or the prose line. A lone bar line is read as a block-scalar indicator (stated limit).
 
 **Learnings applied.**
 - `2026-10-12-a-guard-parsed-under-one-awk-...`: the guard derived zero pairs under mawk after a gawk-only awk construct. The two new awk passes use POSIX awk only (no `\b`, `gensub`, 3-argument `match`, no `awk -v` regex with backslashes) and the guard is run under every second awk interpreter that exists, with `( trap '' PIPE; ... )` and `env -i`.
@@ -95,7 +106,7 @@ Phase 6 (ship). Merge `origin/main`, re-run the guard, recompute pins, then lint
 
 ## Files to Create
 
-- `knowledge-base/project/specs/feat-one-shot-grep-q-pipe-guard-item-f-blind-spots/{tasks.md,evidence.md,session-state.md,mutation-battery.sh}` (`decision-challenges.md`, `j0-measure.py`, `j0-pattern-prototype.sh`, `j0-pattern-fixtures.txt` and the two `j0-plan-time-*.txt` outputs already exist there; every script here is sweep-clean, see Self-sweep)
+- `knowledge-base/project/specs/feat-one-shot-grep-q-pipe-guard-item-f-blind-spots/{tasks.md,evidence.md,session-state.md,mutation-battery.sh}` (`decision-challenges.md`, `j0-measure.py`, `j0-pattern-prototype.sh`, `j0-pattern-fixtures.txt`, `j0-split.awk`, `j0-fence.awk`, `j0-linearisers-check.sh` and the two `j0-plan-time-*.txt` outputs already exist there; every script here is sweep-clean, see Self-sweep)
 - `knowledge-base/project/learnings/test-failures/2026-10-14-<slug>.md` only if a non-obvious finding occurs
 
 ## Files to Delete
@@ -200,6 +211,39 @@ Anchor. Both passes read 0 hits on the real tree today, so a wiring break is not
 | H7 | Must-PASS non-canonical: a tracked `knowledge-base/project/specs/archive/x/y.sh` with a hit; a `.ts` file whose only match is a `//` comment line | both unreported |
 
 Anchor. The marker pin and the extension list sit in the file they protect (consistency, not integrity). What must also move for a weakening to pass: the real tree's 0 undeferred hits, the 25-line marker block (a visible diff line per marker), and `SWEEP_FLOOR` against the measured file count.
+
+## Observability
+
+The deliverable is a drift guard that runs in the CI test group; the plan's edit list touches no path of the plan Phase 2.9 trigger set (`apps/*/server`, `apps/*/src`, `apps/*/infra`, `plugins/*/scripts`), so this block is declared for completeness under deepen-plan 4.7 and is deliberately small. The guard itself takes 18.6 s at load 7, above preflight Check 10's 15 s cap, so it is not declared as the probe (a suite is the right command to TEST the guard and the wrong one to DISCOVER its signal).
+
+```yaml
+liveness_signal:
+  what: the guard prints PASS: grep-q-sweep-probe-pass (and its other PASS lines) on every PR and merge_group run of the test group
+  cadence: per PR and per merge_group run
+  alert_target: the required test check turns red on the PR, which blocks merge and ejects a queue entry
+  configured_in: .claude/hooks/grep-q-pipe-guard.test.sh (the passes), registered by the hooks suite glob of the repo's test runner
+error_reporting:
+  destination: CI job log of the test check (repo-hygiene guard, no error-tracker surface)
+  fail_loud: a FAIL line naming the case, the row or the recomputed pin, exit 1; an empty listing, a population below its floor, or a pattern that does not compile prints UNRESOLVED and exits 3
+failure_modes:
+  - mode: a new early-exit pipe lands in a swept file in a spelling the pattern names
+    detection: the sweep prints the path and line under "outside the deferral table"
+    alert_route: required test check red on the PR
+  - mode: a pattern part, a pass, an extension or the marker pin is narrowed or neutered
+    detection: the case, witness or control that names it prints its name (Guard Contract matrices)
+    alert_route: required test check red on the PR
+  - mode: the converted stub changes the unit test's behaviour
+    detection: the vitest file at base and head, equal assertion counts (AC-5)
+    alert_route: the web-platform test check on the PR
+logs:
+  where: CI job logs of the test check; locally the stdout of the guard
+  retention: GitHub Actions log retention
+discoverability_test:
+  command: git grep -c grep-q-sweep-probe-pass -- .claude/hooks
+  expected_output: grep-q-pipe-guard.test.sh:1
+```
+
+The probe checks that the guard still declares its signal line (a static, sub-second read); whether CI ran the guard is read on the PR's test check.
 
 ## Alternative Approaches Considered
 
