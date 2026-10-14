@@ -124,6 +124,8 @@ One stage per step. For each, write down five things before writing any code:
 Copy [`template.sh`](./template.sh) to the location in §Where, keep everything above the `STAGES`
 banner, and replace the example stages. Rules:
 
+- **Repo-relative paths.** Never compute the repo root as a fixed `../` count from `SCRIPT_DIR`: the
+  script moves one directory deeper when `archive-kb` archives its spec directory (see §Where).
 - **Stage lines.** Declare each stage once, in the table near the top of the script, as a comment
   line of the form `# SOLEUR-STAGE name|class|impact|rollback` (class is `read` or `write`). One plain
   sentence each for impact and rollback, no `|` inside them. `--list`, the dispatcher and the approval

@@ -408,19 +408,22 @@ plan_create_app() {
   soleur_op_plan_op generate-private-key "${ORG}/${APP_SLUG}"
 }
 
+# The printed command lines carry literal $ and <code> on purpose (SC2016).
+# shellcheck disable=SC2016
 apply_create_app() {
   mark_changed "the registration page was opened; the App may have been created"
   soleur_op_env_upsert "$ENV_FILE" APP_CREATE_ATTEMPTED "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   printf '  A page will POST the manifest and open GitHub'"'"'s prefilled registration form.\n'
-  printf '  1. Click "Create GitHub App". GitHub then redirects to the App settings page with a\n'
-  printf '     one-time ?code= in the URL (single-use, ~1h, not used by this flow: do not share it).\n'
-  printf '  2. On the new App page click "Generate a private key" — a .pem downloads.\n'
-  printf '     An agent driving a browser may instead POST that code to\n'
-  printf '     https://api.github.com/app-manifests/<code>/conversions (it creates the App and returns the\n'
-  printf '     key in the response): write the pem to a 0600 file under $XDG_RUNTIME_DIR, never print it.\n'
-  printf '  3. Give the agent the .pem path (or move it under $XDG_RUNTIME_DIR first).\n'
+  printf '  1. Click "Create GitHub App". GitHub redirects to the App settings page (a 404 until step 2)\n'
+  printf '     with a one-time ?code= in the URL (single-use, ~1h): do not share it.\n'
+  printf '  2. The App only exists once that code is exchanged (measured on #10058): POST\n'
+  printf '     https://api.github.com/app-manifests/<code>/conversions returns its credentials, including\n'
+  printf '     client_secret and webhook_secret. Keep the response off stdout: umask 077, write it to a file\n'
+  printf '     under $XDG_RUNTIME_DIR, extract only .pem with jq into a 0600 file, then shred the response.\n'
+  printf '  3. Give the agent the .pem path (record-key accepts any file on tmpfs).\n'
   printf '  A browser that blocks file:// can serve a COPY of the page (never this directory: it holds .env):\n'
-  printf '    d=$(mktemp -d) && cp %s "$d" && python3 -m http.server --bind 127.0.0.1 -d "$d"\n' "$MANIFEST_PAGE"
+  printf '    d=$(mktemp -d) && cp "%s" "$d" && python3 -m http.server --bind 127.0.0.1 -d "$d"\n' "$MANIFEST_PAGE"
+  printf '  then open http://127.0.0.1:8000/app-manifest-post.html\n'
   soleur_op_open_url "file://${MANIFEST_PAGE}"
 }
 
@@ -558,12 +561,20 @@ read_verify() {
     return 1
   fi
   # git, not a fixed ../ count: this script moves one level deeper when its spec dir is archived.
-  local repo_root; repo_root="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)" \
+  # Inherited GIT_* variables would redirect `git -C`, so every git call below runs without them.
+  local probe=scripts/probe-github-app-mint.sh
+  local -a nogit=(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git)
+  local repo_root; repo_root="$("${nogit[@]}" -C "$SCRIPT_DIR" rev-parse --show-toplevel)" \
     || { soleur_op_red "  cannot resolve the repo root from ${SCRIPT_DIR}"; return 1; }
-  # The probe runs under `doppler run` with live credentials: refuse a root that does not TRACK it
-  # (a copy of this script sitting inside an unrelated repo would otherwise run that repo's file).
-  git -C "$repo_root" ls-files --error-unmatch scripts/probe-github-app-mint.sh >/dev/null 2>&1 \
-    || { soleur_op_red "  ${repo_root} does not track scripts/probe-github-app-mint.sh — wrong repo root"; return 1; }
+  # The probe runs under `doppler run` with live credentials: refuse a root whose probe is not a
+  # tracked, unmodified, non-symlink file (a copy of this script inside an unrelated repo, or an
+  # edited probe, would otherwise run under the dev_scheduled credentials).
+  if [[ -L "${repo_root}/${probe}" ]] \
+    || ! "${nogit[@]}" -C "$repo_root" ls-files --error-unmatch "$probe" >/dev/null 2>&1 \
+    || ! "${nogit[@]}" -C "$repo_root" diff --quiet HEAD -- "$probe"; then
+    soleur_op_red "  ${repo_root} does not hold ${probe} as a tracked, unmodified file — wrong repo root"
+    return 1
+  fi
   local out rc=0
   out="$(cd "$repo_root" && doppler run -p "$DOPPLER_PROJECT" -c "$DOPPLER_CONFIG" -- \
     bash scripts/probe-github-app-mint.sh 2>&1)" || rc=$?
