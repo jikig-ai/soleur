@@ -11,6 +11,7 @@
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/brainstorms
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/brainstorms/archive
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/plans
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/plans/archive
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/specs
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/specs/archive
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json
@@ -227,9 +228,11 @@ tests/hooks/drop-sentinel-parity	knowledge-base/engineering/operations/skill-fre
 tests/hooks/drop-sentinel-parity	knowledge-base/project
 tests/hooks/emissions	knowledge-base/engineering/operations/runbooks
 tests/scripts/betterstack-query-archive	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
+tests/scripts/git-data-birth-readiness-gate	knowledge-base
 tests/scripts/git-data-birth-readiness-gate	knowledge-base/engineering/operations/runbooks/git-data-birth.md
 tests/scripts/git-data-birth-readiness-gate	knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md
 tests/scripts/git-data-birth-readiness-gate	knowledge-base/project/specs
+tests/scripts/git-data-birth-readiness-gate	knowledge-base/project/specs/archive
 tests/scripts/git-data-root-token-census	knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md
 tests/scripts/git-data-rung2-evidence-capture	knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md
 tests/scripts/git-data-rung2-evidence-capture	knowledge-base/project/learnings
