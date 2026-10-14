@@ -1476,6 +1476,14 @@ AFFECTED_PLUGINS_SOLEUR_TEST_REUSABLE_RELEASE_ZOT_MIRROR_RETRY_TEST_SH_PATHS=(
   "scripts/zot-mirror-diagnosis.test.sh"
 )
 
+# plugins/soleur/test/inngest-config-bundle-mirror.test.sh — executes the mirror step body extracted from the bundle
+# workflow, so a workflow-only diff must select it; derived edges cannot reach a YAML subject.
+AFFECTED_PLUGINS_SOLEUR_TEST_INNGEST_CONFIG_BUNDLE_MIRROR_TEST_SH_PATHS=(
+  ".github/workflows/build-inngest-config-bundle.yml"
+  "plugins/soleur/test/inngest-config-bundle-mirror.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # plugins/soleur/test/unkept-promise-hook.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_TEST_UNKEPT_PROMISE_HOOK_TEST_SH_PATHS=(
