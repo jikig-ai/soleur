@@ -206,8 +206,9 @@ merge timestamp; its directive declares `secrets=GH_TOKEN`).
 
   `scripts/lint-followthrough-varq-ban.sh` rule 4 enforces the POSITIVE OBLIGATION: a probe
   under `scripts/followthroughs/` that reads issue comments AND branches on a `RESULT:` verdict or
-  an `S<n>-ACTIVATED|DEACTIVATED|CONFIRMED|EXIT-CENSUS` soak marker must route that decision
-  through the lib. Rule 5 (#9818) is the complementary SPELLING ban: no non-test probe may name
+  an `S<n>-<WORD>` soak marker must route that decision through the lib. Which comment-read
+  spellings, marker spellings and files it covers, and what it does NOT, is one paragraph: the
+  COVERAGE paragraph in the rule-4 section of that script (this runbook does not restate it). Rule 5 (#9818) is the complementary SPELLING ban: no non-test probe may name
   `author_association` or `authorAssociation` (either spelling, any case) on an executable line
   (whole-line comments are stripped, a trailing `# why` mention fires, no per-line opt-out). Rule 5
   bans the spelling; rule 4 owns the obligation. Rule 4 alone stayed green over the S2 and S3 soak
@@ -216,10 +217,11 @@ merge timestamp; its directive declares `secrets=GH_TOKEN`).
   measurement: `knowledge-base/project/learnings/2026-10-13-a-lint-anchored-on-the-verdict-word-stayed-green-over-the-marker-probes-that-had-the-same-defect.md`.
 
   **Which view.** Need the comment's created time -> `trusted_verdict_comments <issue>`; otherwise
-  `trusted_verdict_bodies <issue>`. The bodies view returns the trusted, fence-stripped bodies (a
+  `trusted_verdict_bodies <issue>`. The bodies view returns the trusted bodies, stripped of fenced
+  blocks and HTML comments, of authors who have a marker line at all (a
   `RESULT:` probe, or a marker probe that orders markers by the marker's own timestamp, like S2).
   The comments view returns one compact JSON object `{t,b}` per trusted comment (`t` = `createdAt`,
-  `b` = the fence-stripped body): a probe that orders by comment time (S3's CONFIRMED-before-
+  `b` = the stripped body): a probe that orders by comment time (S3's CONFIRMED-before-
   ACTIVATED) reads `.t` and projects `.b` with `jq -r '.b'`. Both are views of one core. The causes of
   rc 2 are the ONE list in the header of `scripts/lib/trusted-verdict.sh` (the comments view has one
   cause of its own there); this runbook does not restate it. Map rc 2 to the probe's CANNOT ESTABLISH
@@ -254,8 +256,10 @@ merge timestamp; its directive declares `secrets=GH_TOKEN`).
     one of those permissions (read as CONTRIBUTOR under the sweeper's token, dropped before). LOST:
     an OWNER/MEMBER/COLLABORATOR association that carries only `read` or `triage` (a collaborator
     invited with `read`, an org member whose only access is the org base permission), who counted
-    under the association. Also new: fenced blocks are stripped (a marker inside a
-    CommonMark-style fence counted before and is ignored now).
+    under the association. Also new: fenced blocks and HTML comments are stripped (a marker inside a
+    CommonMark-style fence or a `<!-- -->` comment counted before and is ignored now), and an author
+    is looked up only if some comment of theirs has a line starting `RESULT:` or `S<n>-<WORD>:`
+    (the lib header says what that buys: a drive-by commenter cannot wedge the tracker).
 
   The difference is load-bearing and was measured. While the rule banned the wrong MECHANISM, a
   live probe read `.comments[].body` with **no author filter at all** — strictly worse than what
