@@ -48,7 +48,7 @@ Snapshot of the open findings GitHub Code Quality reports for `jikig-ai/soleur` 
 
 ## Files by rule (first page, de-duplicated)
 
-Class key: P = product code (`apps/web-platform`), S = plugin script that ships to users, R = repo script or hook, T = test or fixture, A = archived spec scratch.
+Class key: P = product code (`apps/web-platform` app, server and components), S = plugin script that ships to users, R = repo script or hook (including `apps/web-platform/infra` and `apps/web-platform/scripts`), T = test, fixture or test support, A = archived spec scratch.
 
 ### js/unused-local-variable (60 findings; 21 files seen)
 
@@ -63,9 +63,9 @@ Class key: P = product code (`apps/web-platform`), S = plugin script that ships 
 
 ### py/empty-except (20 findings; 9 files seen)
 
-- S (5): `plugins/soleur/scripts/scan-ancestor-signal-helpers.py`, `plugins/soleur/skills/preflight/scripts/founder-check.py`, `plugins/soleur/skills/agent-browser/scripts/playwright-mcp-redact-proxy.py`, `.claude/hooks/security_reminder_hook.py`, `plugins/soleur/skills/resolve-debt/scripts/resolve-debt.py`
-- R (2): `tests/conftest.py`, `scripts/lint-rule-ids.py`
-- T (2): `plugins/soleur/skills/agent-browser/test/fixtures/proxy-session-driver.py`, `plugins/soleur/skills/agent-browser/test/fixtures/capture-playwright-mcp-fixtures.py`
+- S (4): `plugins/soleur/scripts/scan-ancestor-signal-helpers.py`, `plugins/soleur/skills/preflight/scripts/founder-check.py`, `plugins/soleur/skills/agent-browser/scripts/playwright-mcp-redact-proxy.py`, `plugins/soleur/skills/resolve-debt/scripts/resolve-debt.py`
+- R (2): `.claude/hooks/security_reminder_hook.py`, `scripts/lint-rule-ids.py`
+- T (3): `tests/conftest.py`, `plugins/soleur/skills/agent-browser/test/fixtures/proxy-session-driver.py`, `plugins/soleur/skills/agent-browser/test/fixtures/capture-playwright-mcp-fixtures.py`
 
 ### js/trivial-conditional (8 findings; 7 files seen)
 
@@ -123,11 +123,11 @@ Class key: P = product code (`apps/web-platform`), S = plugin script that ships 
 
 ## Reading
 
-- Most of the volume is tests, fixtures, archived spec scratch and repo scripts. The "Poor" Reliability score is driven mainly by `py/file-not-closed` (all outside product code) and `py/empty-except`.
-- Two groups matter beyond the score: the empty `except` and `BaseException` handlers in plugin scripts that ship to users (including the redaction proxy and the security reminder hook), and the two incompatible-type comparisons in account deletion and data export.
-- These are lint-class findings. A deterministic linter in the `work` and `review` gates (ruff for Python, eslint `no-unused-vars` for JS/TS) with a ratcheting baseline catches them without CodeQL's runner cost. That work is tracked in #10331.
+- Most of the volume is tests, fixtures, archived spec scratch and repo scripts. The "Poor" Reliability score is driven mainly by `py/file-not-closed` (every sampled location is outside product code) and `py/empty-except`.
+- Two groups matter beyond the score: the empty `except` and `BaseException` handlers in plugin scripts that ship to users and in repo hooks, and the two incompatible-type comparisons in account deletion and data export.
+- Most are lint-class findings; the incompatible-type comparisons are untriaged and may be real logic bugs. Only the per-rule totals are complete, so per-file ratcheting needs a full re-export. A deterministic linter in the `work` and `review` gates (ruff for Python, eslint `no-unused-vars` for JS/TS) with a ratcheting baseline catches them without CodeQL's runner cost. That work is tracked in #10331.
 
 ## Cost context (not part of the baseline)
 
 - Enabling Code Quality bills $10 per active committer per month plus AI credits and Action minutes (GitHub's confirm dialog, 2026-10-14).
-- Runner cost measured by `scripts/ci-demand-census.sh` over 2026-10-14 10:00-12:00Z: the `dynamic/github-code-quality/codeql` job was 141.1 of 3,234.6 job-min (4.4%).
+- Runner cost measured by `scripts/ci-demand-census.sh` over 2026-10-14 10:00-12:00Z (the job was already running then, before the re-enable above): the `dynamic/github-code-quality/codeql` job was 141.1 of 3,234.6 job-min (4.4%).
