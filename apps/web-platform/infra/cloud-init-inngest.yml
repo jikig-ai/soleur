@@ -1805,22 +1805,47 @@ write_files:
       # what was actually applied and a failed apply re-drives next tick (HARD-5).
       write_state() {
         # $1 = verify_result token; $2 = attempted manifest VERSION; $3 = attempted digest.
+        # PROPAGATES the write rc: the success path refuses to emit APPLIED against an
+        # unrecorded apply (a swallowed ledger write leaves applied_sha stale while
+        # applied_version advanced — every later tick reads pointer != applied_sha and
+        # rejects rollback-or-replay forever while the comparator holds the stale APPLIED);
+        # verify_fail's attempt record stays best-effort at ITS call site.
         printf '{"applied_version":%s,"bundle_sha256":"%s","applied_ts":"%s","verify_result":"%s","attempted_version":"%s","attempted_sha256":"%s"}\n' \
           "$applied_version" "$applied_sha" \
           "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" \
           "$1" "$${2:-}" "$${3:-}" > "$${APPLIED_JSON}.new" 2>/dev/null \
-          && mv -f "$${APPLIED_JSON}.new" "$APPLIED_JSON" 2>/dev/null || true
+          && mv -f "$${APPLIED_JSON}.new" "$APPLIED_JSON" 2>/dev/null
       }
 
-      # verify_fail — the named-failure exit. Emits the marker on both channels, records the
-      # attempt in applied.json WITHOUT advancing the applied pair, and exits 1 so the
-      # oneshot reports failed (the timer re-fires in 60 s; the comparator DIVERGES if it
-      # is the last thing the host said).
+      # verify_fail — the named-failure exit. Records the attempt in applied.json WITHOUT
+      # advancing the applied pair (best-effort — a dead state dir must not mask the emit),
+      # emits the marker under the same fail-open 300 s throttle as NOOP (a reason CHANGE
+      # always emits; a sustained identical failure re-emits once per window — the plan's
+      # transitions-only shape at ~288 rows/day worst case, not ~1,440), and exits 1 EVERY
+      # tick regardless — the oneshot failure + timer retry is the liveness signal, the row
+      # is the reason (the comparator DIVERGES if it is the last thing the host said).
+      VF_STAMP="$${STATE_DIR}/.verify-fail-emitted"
+      verify_fail_emit_due() {
+        # $1 = reason token. Fails toward EMITTING: absent/unreadable stamp, an
+        # unmeasurable clock, or a reason change all answer "emit" (noop_emit_due's
+        # posture — a broken stamp restores noisy, never manufactures silent).
+        local _vf_now _vf_mtime _vf_prev
+        _vf_prev="$(cat "$VF_STAMP" 2>/dev/null || true)"
+        [ "$_vf_prev" != "$1" ] && return 0
+        _vf_now="$(date +%s 2>/dev/null || true)"
+        case "$_vf_now" in ''|*[!0-9]*) return 0 ;; esac
+        _vf_mtime="$(stat -c %Y "$VF_STAMP" 2>/dev/null || true)"
+        case "$_vf_mtime" in ''|*[!0-9]*) return 0 ;; esac
+        [ $((_vf_now - _vf_mtime)) -ge "$NOOP_THROTTLE_S" ]
+      }
       verify_fail() {
         # $1 = reason token; $2 = manifest VERSION when known (rejver= — never `version=`,
         # which the comparator would parse as applied state); $3 = extra detail.
-        write_state "verify-fail:$1" "$${2:-}" "$pointer"
-        emit "SOLEUR_INFRA_PULL_VERIFY_FAIL" "reason=$1 offered=$${pointer:0:12} rejver=$${2:-none}$${3:+ $3}"
+        write_state "verify-fail:$1" "$${2:-}" "$pointer" || true
+        if verify_fail_emit_due "$1"; then
+          emit "SOLEUR_INFRA_PULL_VERIFY_FAIL" "reason=$1 offered=$${pointer:0:12} rejver=$${2:-none}$${3:+ $3}"
+          printf '%s' "$1" > "$VF_STAMP" 2>/dev/null || true
+        fi
         exit 1
       }
 
@@ -1971,7 +1996,8 @@ write_files:
         || verify_fail version-write "$VERSION"
       applied_version="$VERSION"
       applied_sha="$pointer"
-      write_state ok "$VERSION" "$pointer"
+      write_state ok "$VERSION" "$pointer" \
+        || verify_fail ledger-write "$VERSION"
       emit "SOLEUR_INFRA_PULL_APPLIED" "version=$VERSION sha256=$pointer verify=ok"
       exit 0
     owner: root:root
@@ -1995,7 +2021,13 @@ write_files:
       ProtectSystem=strict
       PrivateTmp=true
       StateDirectory=inngest-config
-      ReadWritePaths=/root/.docker
+      # ProtectSystem=strict makes /etc/ /usr/ read-only at the mount-namespace
+      # level — the script's apply leg shells out to infra-config-install, whose
+      # mktemp lives inside /usr/local/bin (webhook.service precedent); without
+      # it here every promotion fails EROFS forever. `-` on /root/.docker: a
+      # non-existent ReadWritePaths entry fails mount-namespace setup, and the
+      # dir is created by the bootstrap's own `docker login` later in runcmd.
+      ReadWritePaths=-/root/.docker /usr/local/bin
       SyslogIdentifier=inngest-config-refresh
       # --only-secrets bounds doppler injection to the ONE pointer this consumer needs —
       # an unbounded `doppler run` here would give a root ExecStart the whole isolated

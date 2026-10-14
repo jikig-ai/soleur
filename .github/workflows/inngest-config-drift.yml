@@ -69,11 +69,19 @@ jobs:
           QUERY_ERR=""
           if raw="$(doppler run -p soleur -c prd_terraform -- \
                      bash scripts/betterstack-query.sh --since 24h --grep 'SOLEUR_INFRA_PULL_' --limit 20 2>"$RUNNER_TEMP/bsq.err")"; then
+            # Scope to the PROD host BEFORE the tail -1: rehearsal hosts render the same
+            # refresh timer and emit NOOP rows into this source, so a source-wide pick
+            # can end on rehearsal state and report DIVERGED no-applied-marker while
+            # prod is converged. `soleur-inngest` is a PREFIX of
+            # `soleur-inngest-rehearsal-*`, so the match is exact-equality on the
+            # decoded record — `_HOSTNAME` for journald rows (post-bake path),
+            # `host` for the phone-home POST path (v1 channel).
+            _prod_rows="$(printf '%s\n' "$raw" | jq -r 'select(((.raw | fromjson? // {}) | (._HOSTNAME // .host // "")) == "soleur-inngest") | .raw')"
             # State rows only — the latest APPLIED/NOOP/FLOOR line is what the comparator reads.
             # VERIFY_FAIL and friends carry no sha256=<digest> field, so even if one slipped
             # through the comparator parses no applied state (fail-closed).
-            MARKER="$(printf '%s\n' "$raw" | grep -E 'SOLEUR_INFRA_PULL_(APPLIED|NOOP|FLOOR)' | tail -1 || true)"
-            LATEST_ANY="$(printf '%s\n' "$raw" | grep -F 'SOLEUR_INFRA_PULL_' | tail -1 || true)"
+            MARKER="$(printf '%s\n' "$_prod_rows" | grep -E 'SOLEUR_INFRA_PULL_(APPLIED|NOOP|FLOOR)' | tail -1 || true)"
+            LATEST_ANY="$(printf '%s\n' "$_prod_rows" | grep -F 'SOLEUR_INFRA_PULL_' | tail -1 || true)"
           else
             QUERY_OK=0
             QUERY_ERR="$(tail -3 "$RUNNER_TEMP/bsq.err" 2>/dev/null || true)"

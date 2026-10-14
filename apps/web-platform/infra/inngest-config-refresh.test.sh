@@ -101,6 +101,15 @@ grep -qF -- '--no-exit-on-missing-only-secrets' <<<"$SVC" \
 only_n="$(printf '%s' "$SVC" | grep -oE -- '--only-secrets[ =][A-Z_]+' | wc -l)"
 [ "$only_n" -eq 1 ] && pass || fail "S2: --only-secrets count=$only_n (want 1)"
 
+# S2b: under ProtectSystem=strict the unit must ReadWritePaths every writable
+# surface the script touches — /usr/local/bin is the infra-config-install mktemp
+# dest (EROFS forever otherwise; webhook.service precedent), and /root/.docker
+# must be dash-prefixed (a non-existent entry fails mount-namespace setup).
+grep -qE 'ReadWritePaths=.*[[:space:]]/usr/local/bin([[:space:]]|$)' <<<"$SVC" \
+  && pass || fail "S2b: ReadWritePaths missing /usr/local/bin (install dest is EROFS under ProtectSystem=strict)"
+grep -qE 'ReadWritePaths=.*-/root/\.docker([[:space:]]|$)' <<<"$SVC" \
+  && pass || fail "S2b: /root/.docker must be dash-prefixed in ReadWritePaths"
+
 # S3: timer shape — 60 s cadence, enabled on timers.target, persistent.
 for pin in 'OnBootSec=' 'OnUnitActiveSec=60s' 'Persistent=true' 'WantedBy=timers.target'; do
   grep -qF "$pin" <<<"$TMR" && pass || fail "S3: timer missing $pin"
