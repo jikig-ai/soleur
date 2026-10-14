@@ -108,9 +108,12 @@ _acquire_lock_impl() {
   [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]] || return 99
 
   local lock_file="$LOCK_DIR/$name.lock"
-  # A non-regular lock path (fifo, dir, dangling link) blocks in open(2)
-  # BEFORE the bounded flock below is ever exec'd — the exec boundary cannot
-  # cover a wait that precedes it.
+  # A non-regular lock path (fifo, dir) blocks in open(2) BEFORE the bounded
+  # flock below is ever exec'd — the exec boundary cannot cover a wait that
+  # precedes it. A symlink is refused outright: dangling, `exec {fd}>>` would
+  # create the linked-to path; resolved, the named lock would alias a foreign
+  # inode — both plantable on the cross-user /tmp orphan-fallback LOCK_DIR.
+  [[ -L "$lock_file" ]] && return 99
   [[ -e "$lock_file" && ! -f "$lock_file" ]] && return 99
   local fd
   exec {fd}>>"$lock_file" || return 99
@@ -219,10 +222,12 @@ release_lock() {
 # lock this shell does not hold would fabricate holder identity, so it is a
 # silent no-op. All failures are silent too: the marker is advisory.
 stamp_lock_holder() {
-  local name="${1:-}"
+  # Guard BEFORE shift: a zero-arg call must be a silent no-op (the marker is
+  # advisory), and a bare `shift` with no args aborts a `set -e` caller.
+  [[ -n "${1:-}" ]] || return 0
+  local name="$1"
   shift
   _session_state_disabled && return 0
-  [[ -n "$name" ]] || return 0
   [[ -n "${_SESSION_LOCK_FDS[$name]:-}" ]] || return 0
   [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]] || return 0
   local hf="$LOCK_DIR/$name.holder"

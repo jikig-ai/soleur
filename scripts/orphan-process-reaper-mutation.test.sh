@@ -157,6 +157,9 @@ _mut_sibling_count() {
   local proc="${TC_PROC_ROOT:-/proc}"
   [[ -d "$proc" && -r "$proc" ]] || return 1
   local n
+  # Dedupe by worktree dir (field 2 = cwd). Collapses shared-`<unreadable>`
+  # cwds and tab-bearing names into one — the reported N may understate the
+  # true run count, but the verdict only reads `>0` and fails that direction.
   n=$(tc_siblings 2>/dev/null | cut -f2 | sort -u | wc -l | tr -d ' ')
   [[ "$n" =~ ^[0-9]+$ ]] || n=0
   printf '%s\n' "$n"
@@ -570,10 +573,13 @@ fi
 # pin the conjunct so a dropped `||` term turns an unmeasurable read into a
 # solo assertion again.
 cases=$((cases + 1))
-if grep -q '_mut_sib_unmeasurable > 0' "$REPO_ROOT/scripts/orphan-process-reaper-mutation.test.sh"; then
+# Anchor the WHOLE disjunctive expression — a substring pin survives a
+# `||`→`&&` mutation that would silence the unmeasurable read again.
+if grep -qF '(( _mut_sib_max > 0 || _mut_sib_unmeasurable > 0 ))' \
+     "$REPO_ROOT/scripts/orphan-process-reaper-mutation.test.sh"; then
   pass "unmeasurable-procfs feeds the contended conjunct (fail-safe direction pinned)"
 else
-  fail "unmeasurable-procfs conjunct missing — the unmeasurable read no longer reaches the verdict"
+  fail "unmeasurable-procfs conjunct missing or weakened — the unmeasurable read no longer reaches the verdict"
 fi
 
 MIN_CASES=48

@@ -1026,8 +1026,9 @@ _tc_wait_heartbeat() {
     # One marker read per beat, all failures collapsing to a label. `pid=` is
     # the only field the beat trusts enough to name; everything else is
     # holder=unreadable. holder_alive is kill -0 liveness only — never a kill.
+    # The name reaches a filesystem path here — same charset as the mint.
     local _hfield=""
-    if [[ -n "$name" && -n "${LOCK_DIR:-}" ]]; then
+    if [[ -n "$name" && "$name" =~ ^[A-Za-z0-9._-]+$ && -n "${LOCK_DIR:-}" ]]; then
       local _hf="${LOCK_DIR%/}/$name.holder" _hpid="" _hprog="" _halive=0 _hage="?"
       if [[ -e "$_hf" ]]; then
         _hpid="$(awk -F= '/^pid=/{print $2; exit}' "$_hf" 2>/dev/null || true)"
@@ -1036,7 +1037,11 @@ _tc_wait_heartbeat() {
           kill -0 "$_hpid" 2>/dev/null && _halive=1
           # A non-positive epoch (bash<5 holder stamped 0, or a zeroed
           # marker) is not a timestamp — report `?` rather than a bogus age.
-          [[ "$_hprog" =~ ^[1-9][0-9]*$ ]] && _hage=$(( "${EPOCHSECONDS:-0}" - _hprog ))
+          # Same for a bash<5 WAITER: EPOCHSECONDS is absent, so the
+          # subtraction would print a bogus negative age. Digit-capped so a
+          # tampered marker can't reach unbounded arithmetic.
+          [[ "$_hprog" =~ ^[1-9][0-9]{0,18}$ && "${EPOCHSECONDS:-0}" -gt 0 ]] \
+            && _hage=$(( EPOCHSECONDS - _hprog ))
           _hfield=" holder_pid=$_hpid holder_alive=$_halive holder_progress_age=${_hage}s"
         else
           _hfield=" holder=unreadable"
