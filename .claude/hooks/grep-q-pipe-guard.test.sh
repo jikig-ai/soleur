@@ -146,19 +146,31 @@ PATTERN_PIPED_SCORER='(^|[^|])\|&?[[:space:]]*grep([[:space:]]+-[A-Za-z]+)*[[:sp
 # this header does not claim the series is finished.
 
 # PATTERN_V2 is the widened reader pattern the DERIVED SWEEP (scan_sweep, below) uses. The four named
-# passes above keep PATTERN, so none of them can turn red on a spelling they never carried. Five parts so
-# each can be mutated on its own (the harness rows in the sweep section name them):
+# passes above keep PATTERN, so none of them can turn red on a spelling they never carried. Five parts plus an `sh -c` alternative, so
+# each can be mutated on its own (the case table in the sweep probe names one case per part and per member):
 #   LEAD   a single bar (or |&), then optionally a brace or paren group opener
-#   WRAP   command|builtin|exec|env|nice|stdbuf -x|timeout N, or VAR=x, any number, no flags of their own
-#   BIN    grep, egrep, fgrep, \grep or an absolute path ending in one of them
-#   ARG    flags, long flags, and the argument-taking -e/-f/-A/-B/-C/-m with its operand
-#   EARLY  the early-exit flag: -q/-m in a cluster, --quiet, --silent, --max-count
+#   WRAP   command|builtin|exec|env|nice|stdbuf|timeout|sudo|doas|time|nohup|setsid|xargs|ionice, each with up to four word tokens of its
+#          own flags and operands, or VAR=x, any number; a fifth token is the stated residual (wrap-5-tokens)
+#   BIN    grep, egrep, fgrep, zgrep, zegrep, rg, ag, ugrep, pcregrep, `\grep` or an absolute path ending in one of them, or a variable
+#          whose NAME carries grep (`"$GREP"`, `${GREP_BIN}`, `${GREP:-grep}`); any other variable is not read (709 stages, none with an early flag)
+#   ARG    flags, long flags, and the argument-taking -e/-f/-A/-B/-C/-m/-d/-D with its operand, then AT MOST ONE bare operand, then more
+#          flags (GNU grep permutes: `grep P -q`). The operand is one shell word, quote-aware (TOK): a wider run of tokens read quoted test
+#          strings as code (measured: +24 lines, +5 once quote-aware), one operand adds 0
+#   EARLY  the early-exit flag: -q/-m in a cluster (digits allowed, `-5q`), --quiet --silent --max-count in any unambiguous abbreviation
+#          (--qui, --sil, --max=1, --max-c=1), and a terminator so the flag is a whole word
+#   SHC    the reader inside `sh -c '...'` / `bash -lc "..."`: its own alternative, because the quote hides the grep from the grammar above
+# What stays unread, stated: a stack of two wrappers longer than the bounded run, a process-substitution reader (`cmd > >(grep -q p)`), a
+# reader reached through a function, and a quoted -q inside a pattern (the stated false positive). They are pinned in the sweep probe.
 SWEEP_LEAD='(^|[^|])\|&?[[:space:]]*(\{[[:space:]]+|\([[:space:]]*)?'
-SWEEP_WRAP='((command|builtin|exec|env|nice|stdbuf[[:space:]]+-[a-zA-Z]+|timeout[[:space:]]+[0-9a-z.]+)[[:space:]]+|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*'
-SWEEP_BIN='(\\|/[^[:space:]]*/)?(e|f)?grep'
-SWEEP_ARG='([[:space:]]+(-[A-Za-z0-9]+|--[a-z-]+(=[^[:space:]]+)?|-[efABCm][[:space:]]+[^[:space:]]+))*'
-SWEEP_EARLY='[[:space:]]+(-[A-Za-z]*[qm][A-Za-z0-9]*|--quiet|--silent|--max-count)'
-PATTERN_V2="${SWEEP_LEAD}${SWEEP_WRAP}${SWEEP_BIN}${SWEEP_ARG}${SWEEP_EARLY}"
+SWEEP_TOK='('"'"'[^'"'"']*'"'"'|"[^"]*"|[^[:space:]'"'"'"|;&)}]+)+'
+SWEEP_WRAPW='(command|builtin|exec|env|nice|stdbuf|timeout|sudo|doas|time|nohup|setsid|xargs|ionice)'
+SWEEP_WRAP="(${SWEEP_WRAPW}([[:space:]]+${SWEEP_TOK}){0,4}[[:space:]]+|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*"
+SWEEP_BIN='((\\|/[^[:space:]]*/)?(e|f|z|ze)?grep|(\\|/[^[:space:]]*/)?(rg|ag|ugrep|pcregrep)|"?\$\{?[A-Za-z_]*[Gg][Rr][Ee][Pp][A-Za-z_]*(:-[^}]*)?\}?"?)'
+SWEEP_FLAG='([[:space:]]+(-[A-Za-z0-9]+|--[a-z-]+(=[^[:space:]]+)?|-[efABCmdD][[:space:]]+[^[:space:]]+))*'
+SWEEP_ARG="${SWEEP_FLAG}([[:space:]]+${SWEEP_TOK})?${SWEEP_FLAG}"
+SWEEP_EARLY='[[:space:]]+(-[A-Za-z0-9]*[qm][A-Za-z0-9]*|--(q[a-z]*|si[a-z]*|max(-c[a-z]*)?)(=[^[:space:]]*)?)([[:space:]]|$|[;&)}|])'
+SWEEP_SHC='(^|[^|])\|&?[[:space:]]*(ba|da)?sh[[:space:]]+(-[a-z]+[[:space:]]+)*-[a-z]*c[[:space:]]+['"'"'"]([^'"'"'"]*[^[:alnum:]_/.-])?(e|f)?grep([[:space:]]+(-[A-Za-z0-9]+|--[a-z-]+(=[^[:space:]]+)?))*[[:space:]]+(-[A-Za-z0-9]*[qm][A-Za-z0-9]*|--quiet|--silent|--max-count)'
+PATTERN_V2="${SWEEP_LEAD}${SWEEP_WRAP}${SWEEP_BIN}${SWEEP_ARG}${SWEEP_EARLY}|${SWEEP_SHC}"
 
 # A PATTERN that does not compile must not read as "no hits": every grep below
 # folds exit 2 into exit 1 (`|| true`, `! grep`), so it would pass all three
@@ -803,6 +815,9 @@ x | grep --color=never -q p
 x | grep -A1 -q p
 x | timeout 5s grep -q p
 x | FOO= grep -q p
+x | env -i grep -q p
+x | sudo grep -q p
+x | grep p -q
 EOF
 cat > "$probe/good-v2.sh" <<'EOF'
 grep -q p <<<"$x"
@@ -820,7 +835,7 @@ x | grep -cE p >/dev/null
 x | grep -cvx p >/dev/null
 x | grep -cwF -- "$E" >/dev/null
 EOF
-V2_BAD_LINES=29; V2_GOOD_LINES=14   # pinned literals: deleting a fixture line cannot lower both sides
+V2_BAD_LINES=32; V2_GOOD_LINES=14   # pinned literals: deleting a fixture line cannot lower both sides
 v2_bad_lines=$(wc -l < "$probe/bad-v2.sh")
 v2_good_lines=$(wc -l < "$probe/good-v2.sh")
 v2_bad_hits=$(grep -cE -- "$PATTERN_V2" "$probe/bad-v2.sh" || true)
@@ -1308,16 +1323,18 @@ sd_hits=$(grep -c '^knowledge-base/project/specs/[^:]*:[0-9]*:' <<<"${SWEEP_LAST
 # What a line regex deliberately does NOT match (documented residuals) and the one known false positive, pinned as literal counts so a
 # widening or a regression shows up as a changed number and a header edit rather than as silent drift.
 cat > "$probe/residual-v2.sh" <<'EOF'
-x | env -i grep -q p
-x | sudo grep -q p
-x | grep p -q
+x | head -1
+x | awk '/p/ { exit }'
+x | sed 1q
+x | read y
 EOF
 cat > "$probe/fp-v2.sh" <<'EOF'
-x | grep -e "a -q b" file
+x | grep -c p -eq
+x | xargs echo grep -q p
 EOF
 res_hits=$(grep -cE -- "$PATTERN_V2" "$probe/residual-v2.sh" || true)
 fp_hits=$(grep -cE -- "$PATTERN_V2" "$probe/fp-v2.sh" || true)
-[[ "$res_hits" == 0 && "$fp_hits" == 1 ]] || sweep_probe_fail+=("residual-v2: documented residuals matched ${res_hits:-<err>} (want 0), the documented false positive matched ${fp_hits:-<err>} (want 1)")
+[[ "$res_hits" == 0 && "$fp_hits" == 2 ]] || sweep_probe_fail+=("residual-v2: documented residuals (head, awk exit, sed q, read) matched ${res_hits:-<err>} (want 0), the two documented false positives (grep -c p -eq, xargs echo grep) matched ${fp_hits:-<err>} (want 2)")
 
 # Test-shaped canaries. The root canaries (SWEEP_CANARIES) are satisfied by ANY swept file under a root, so an ignore glob or a pathspec
 # exclusion that hides only the test files (`*.test.sh`) leaves a root canary green while the sweep stops reading exactly the files this
