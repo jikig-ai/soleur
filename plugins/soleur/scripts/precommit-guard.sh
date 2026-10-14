@@ -46,6 +46,8 @@ done
 # `-C`/`cd` paths containing spaces, `git -c <cfg> commit` side effects beyond
 # detection, and commits created without `git commit` (merge/pull/cherry-pick/
 # rebase/continue) are out of this guard's declared scope — commit-on-main ONLY.
+# #10248: `rtk git commit` still bypasses — the launcher alternation gains prefix
+# tolerance via the boundary-anchor follow-up's shared fragment, not a per-site edit.
 COMMIT_RE='^[[:space:]]*([A-Za-z_][A-Za-z_0-9]*=[^[:space:]]+[[:space:]]+)*((sudo|command|nice|env|xargs)[[:space:]]+)?([A-Za-z_][A-Za-z_0-9]*=[^[:space:]]+[[:space:]]+)*git([[:space:]]+(-C[[:space:]]+[^[:space:]]+|-c[[:space:]]+[^[:space:]]+|--git-dir=[^[:space:]]+|--git-dir[[:space:]]+[^[:space:]]+|-[A-Za-z]))*[[:space:]]+commit([[:space:]]|$)'
 
 last_cd=""

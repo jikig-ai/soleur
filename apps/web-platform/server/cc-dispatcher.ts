@@ -199,6 +199,7 @@ import {
   resolveC4Eligible,
   resolveC4FlagEnabled,
 } from "./resolve-c4-eligible";
+import { resolveUntrustedContentFlags } from "./resolve-untrusted-content-flags";
 import { parseConnectedRepo } from "./github-repo-parse";
 import { createProtectedBranchResolver } from "./resolve-protected-branches";
 import { emitDebugEvent } from "./debug-event";
@@ -3040,6 +3041,13 @@ export const realSdkQueryFactory: QueryFactory = async (
       }
     }
 
+    // #4671 / ADR-287 — resolve the WebFetch injection-scan flags ONLY for sessions that
+    // actually have web egress (WebFetch is otherwise disallowed), with the dispatch
+    // user's real identity. Fail-open to OFF; a flag flip reaches the NEXT query only.
+    const untrustedContentFlags = webEgress
+      ? await resolveUntrustedContentFlags(args.userId)
+      : { classify: false, wrap: false };
+
     return sdkQuery({
       prompt: args.prompt,
       options: buildAgentQueryOptions({
@@ -3073,6 +3081,15 @@ export const realSdkQueryFactory: QueryFactory = async (
         // the entitlement+spawn-verified condition (fail-closed: undefined
         // when the grant is off or the spawn degraded).
         webEgress,
+        // #4671 / ADR-287 — heuristic injection scan of WebFetch results; only
+        // meaningful (and only installed) when `webEgress` is present. Resolved with
+        // the session's real identity above; fail-open to OFF.
+        enableUntrustedContentClassify: untrustedContentFlags.classify,
+        enableUntrustedContentWrap: untrustedContentFlags.wrap,
+        untrustedContentTelemetry: {
+          workspaceId: activeWorkspaceId,
+          sessionId: args.conversationId,
+        },
         // readCcMcpAllowlist() (Phase 1: {}) plus the flag-gated, single-tool
         // soleur_platform server (edit_c4_diagram) merged in above.
         mcpServers: c4McpServers,

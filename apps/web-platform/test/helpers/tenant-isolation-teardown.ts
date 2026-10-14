@@ -15,8 +15,10 @@ import { withGoTrueRetry } from "./gotrue-retry";
  * suite's prefix is a one-line, review-visible edit; the `[a-f0-9]{16}`
  * suffix pin is load-bearing — a permissive `<prefix>.*@` shape lets a
  * fixture's leftovers match (the PR #2597 permissive-regex incident class).
- * mu1.integration.test.ts uses a different domain (@soleur-test.invalid)
- * and is deliberately NOT listed — its teardown is #9995's scope.
+ * `mu1-integration-` was added when mu1.integration.test.ts converged onto
+ * this helper for #9995 — it previously used a different domain
+ * (@soleur-test.invalid); the infra/mu1-cleanup-guard.mjs sweep still
+ * matches that legacy shape for already-leaked users.
  *
  * `workspace-backfill-parity-` was added for #10096's drain of
  * workspace-backfill-trigger-parity.test.ts — the lone drain file whose
@@ -31,6 +33,7 @@ export const SYNTHETIC_PREFIXES = [
   "dsar-cross-tenant-",
   "workspace-fixture-",
   "workspace-backfill-parity-",
+  "mu1-integration-",
 ] as const;
 
 const escapeRegExp = (s: string): string =>
@@ -241,6 +244,64 @@ export async function tearDownTenantUser(
   if (error && !/not found/i.test(error.message)) {
     throw new Error(
       `tearDownTenantUser: deleteUser(${user.email}) failed: ${error.message}`,
+    );
+  }
+}
+
+/**
+ * Plural teardown — #10249. A sequential `for (const u of users) await
+ * tearDownTenantUser(service, u)` loop abandons every user after the first
+ * failure: the suite reds correctly, but the remaining users leak silently
+ * inside the investigation of the first failure — a bounded re-introduction
+ * of the class #9994/#10096 closed. This variant attempts EVERY user and
+ * then throws one aggregated error, keeping the failure fail-loud without
+ * abandoning the rest of the batch.
+ *
+ * Stays sequential deliberately: the per-user anonymise sequence is ~22
+ * RPCs under withGoTrueRetry, so parallelising would multiply the GoTrue
+ * rate-limit burst it exists to absorb.
+ *
+ * `opts.tolerate` is the escape hatch for a KNOWN-undeletable residue
+ * shape (see `hasUndeletableActionSendsAnchor` / #10254): it runs per
+ * failed user and suppresses only a failure it confirms — every other
+ * failure still aggregates and throws.
+ */
+export async function tearDownTenantUsers(
+  service: SupabaseClient,
+  users: ReadonlyArray<{ id: string | undefined; email: string }>,
+  opts: {
+    tolerate?: (
+      error: unknown,
+      user: { id: string | undefined; email: string },
+    ) => boolean | Promise<boolean>;
+  } = {},
+): Promise<void> {
+  const failures: string[] = [];
+  for (const user of users) {
+    try {
+      await tearDownTenantUser(service, user);
+    } catch (err) {
+      if (opts.tolerate && (await opts.tolerate(err, user))) {
+        console.warn(
+          `tearDownTenantUsers: tolerated teardown failure for ` +
+            `${user.email}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        continue;
+      }
+      failures.push(
+        `${user.email}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      console.error(
+        `tearDownTenantUsers: teardown failed for ${user.email} — ` +
+          `continuing so remaining users are still torn down`,
+      );
+    }
+  }
+  if (failures.length > 0) {
+    throw new Error(
+      `tearDownTenantUsers: ${failures.length} of ${users.length} ` +
+        `teardown(s) failed — synthetic user(s) may have leaked:\n  ` +
+        failures.join("\n  "),
     );
   }
 }
