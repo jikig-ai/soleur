@@ -11,6 +11,23 @@ type: fix
 
 # fix: build-inngest-config-bundle mirror emitter must run when the zot bridge fails
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-14
+**Sections enhanced:** 3 (Research Insights, Risks and Precedent Diff, Verification Evidence)
+**Method:** proportionate to a ~50-line workflow fix. The plan-review panel (DHH, Kieran, code-simplicity) and two CTO rulings had already run, so the deepen pass ran every mandatory halt gate plus a live shell-semantics prototype, and did not re-fan-out the full agent roster (cost control; no new risk surface would be reached by it).
+
+### Key Improvements
+
+1. Mandatory gates 4.6 (User-Brand Impact), 4.7 (Observability), 4.8 (PAT-shape), 4.11 (Guard Contract via `scripts/lint-guard-contract.py`) and 4.12 (Scope Check) all pass; 4.9 (UI), 4.10 (encryption), 4.5 (network) and 4.55 (downtime) do not trigger.
+2. The load-bearing shell semantics of the proposed step body were executed, not reasoned (see Verification Evidence).
+3. A precedent diff against the two sibling `zot_mirror` steps is recorded.
+
+### New Considerations Discovered
+
+- Errexit is suppressed for the whole command group on the left of `||`, so the install group must be `&&`-chained; a `;`-separated group would swallow a failed `curl`. Measured below.
+- The first-draft suite placement under `apps/web-platform/infra/` would have fired a production infra apply and a release on merge; resolved by CTO ruling R2.
+
 ## Overview
 
 `.github/workflows/build-inngest-config-bundle.yml` gates its GHCR-to-zot copy step on the bridge
@@ -230,6 +247,51 @@ Paste the pass lines into the PR body:
 Deferral tracking: file ONE GitHub issue listing the cut hardening items (digest parity check with a `digest_unset` guard, ERR-trap backstop, `zot mirror` row on the digest summary step, automated zot backfill of the bundle). What: none exist for `soleur-inngest-config`. Why deferred: GHCR is authoritative and the workflow has never run. Re-evaluate when the ADR-135 pull channel resolves the bundle through zot or the workflow gains a mirror-only mode. Milestone from `knowledge-base/product/roadmap.md`.
 
 PR body: first line "Merging this alone does not mutate production" with the trigger-path evidence; `Ref #7243`; a `## Changelog` section; the pre-fix RED evidence; the plan cited by its archived path once archived. Rebase onto `origin/main`, never merge main; once armed in the merge queue push no syncs. Known flake: `scripts/test-all-orphan-log-retention` C.9 can dequeue the PR: read the failing step, re-arm ONCE; a second dequeue means stop and report the run URL. Run `compound` before `ship`. From a detached `origin/main` worktree run `bash plugins/soleur/scripts/deploy-arm.sh find --wait <full-sha>` then `served <full-sha>` (wrap in Monitor or re-run if it exceeds the tool timeout) and record the verdicts. Process census and kill go through `plugins/soleur/scripts/lib/proc.sh`; use `/usr/bin/grep -a`; use `$SECONDS`, not `/usr/bin/time`. After merge, tick the #7243 checkbox in epic #10205 and re-read the epic body to verify it.
+
+## Risks and Precedent Diff (Phase 4.4)
+
+Pattern-bound behaviour: the bridge-outcome branch plus `degraded()` emitter. Two sibling precedents exist in the repo.
+
+| Aspect | `reusable-release.yml` `zot_mirror` | `build-inngest-bootstrap-image.yml` `zot_mirror` | This plan (`build-inngest-config-bundle.yml`) |
+|---|---|---|---|
+| Step gate | `if: steps.docker_build.outcome == 'success'` | none (implicit `success()`) | `if: steps.docker_build.outcome == 'success'` (issue's proposal; symmetry only) |
+| Bridge test | `== 'failure'` (bridge can be `skipped` there) | `!= "success"` | `!= "success"` (bridge cannot be `skipped` under the same gate; wider test is fail-safe) |
+| `continue-on-error` on mirror | removed (release-blocking, ADR-096 amended) | none; `degraded()` exits 1 under `mirror_only` | kept: GHCR is authoritative and there is no mirror-only mode |
+| `degraded()` exit | non-zero (blocks the release) | 0 on build path, 1 under `mirror_only` | 0 always |
+| Unrouted-failure backstop | n/a | ERR trap to `degraded unrouted` | none (cut, CTO R1); every fallible command is `\|\| degraded`-routed instead |
+| Remediation text | release-specific | `mirror_only` backfill command | none; states that no automated backfill exists |
+
+Risks and mitigations:
+
+- Risk: a future edit re-gates the step on the bridge. Mitigation: structural leg plus mutation rows 1 and 3.
+- Risk: the bridge loses `continue-on-error`, so `success()` flips false and the mirror is skipped again. Mitigation: asserted structurally (mutation row 2).
+- Risk: a `set -u` abort inside the body (for example an unset `IMAGE`) bypasses `degraded()`. Mitigation: `continue-on-error: true` keeps the run green and the step shows red in the log; the inputs are set by the job-level `env:` and `inputs.version`, so this is not reachable on a normal dispatch.
+- Risk: the suite is not selected for a workflow-only diff. Mitigation: Phase 3.3 dry run and the `AFFECTED_*` declaration.
+
+## Verification Evidence (Phase 4 gates, run live)
+
+```text
+4.6  User-Brand Impact heading count: 1 (threshold none, scope-out line present)
+4.7  five required observability field keys: 1 each; no "ssh " in any command
+4.8  PAT-shape sweep: none
+4.11 python3 scripts/lint-guard-contract.py <plan>: scanned 1 plan file(s), 1 with a Guard Contract, 1 guard entry (rc=0)
+4.12 unfenced "## Scope Check" count: 1; "Recommendation:" present; no unmapped row, no BLOCKED marker
+Probe pre-change: grep -cF mirror_status=degraded .github/workflows/build-inngest-config-bundle.yml -> 0 (must print 1 after the change)
+Issue/PR states: #7243 OPEN, #10205 OPEN, #10257 OPEN (draft), #8800 OPEN, #6416 CLOSED, #7242 CLOSED
+ADR files present: ADR-096, ADR-135, ADR-166
+```
+
+Prototype of the proposed body skeleton (`bash -eo pipefail`, stubs as env knobs), results:
+
+```text
+bridge success, all ok      -> mirror_status=ok            rc=0
+bridge failure              -> DEGRADED reason=bridge_down rc=0
+bridge unset (env -u)       -> DEGRADED reason=bridge_down rc=0
+sha256sum stub fails        -> DEGRADED reason=crane_install rc=0
+tar stub fails              -> DEGRADED reason=crane_install rc=0
+crane copy fails 3x         -> DEGRADED reason=copy        rc=0
+sha stub that ignores stdin, 5 runs -> mirror_status=ok every time (SIGPIPE not reproduced; the suite's stub still reads stdin to rule it out)
+```
 
 ## Guard Contract
 
