@@ -1077,7 +1077,7 @@ The PR's diff will produce drift on `terraform_data.deploy_pipeline_fix` — by 
 
 **Auto-apply on merge.** The [`apply-deploy-pipeline-fix.yml`](../../../../.github/workflows/apply-deploy-pipeline-fix.yml) workflow auto-fires on push to `main` when any trigger file changes. It runs the targeted `terraform apply` from Doppler `prd_terraform`, verifies the post-apply `files_written == files_total` invariant, and auto-closes any open `infra: drift detected in web-platform` issue. **Zero operator action required** post-merge — the PR review is the human authorization. Kill switch: include `[skip-deploy-fix-apply]` in any commit message on the PR to suppress the apply for that merge.
 
-**Both resources auto-apply (#4829).** The workflow's `-target=` set now lists BOTH `terraform_data.deploy_pipeline_fix` (HTTPS webhook push) AND `terraform_data.infra_config_handler_bootstrap` (the root-SSH bridge that delivers the handler + the `infra-config-install` escalation helper + the sudoers grant). The runner reaches the SSH bridge over the existing Cloudflare Tunnel SSH route — it installs `cloudflared`, opens a `cloudflared access tcp` localhost forward authenticated by the CF Access `ci_ssh` service token, and adds an `iptables -t nat OUTPUT REDIRECT` rule so terraform's Go SSH client transparently reaches sshd. The firewall `admin_ips` allowlist is unchanged (the tunnel is the access path, not an IP grant). A handler/helper/sudoers change therefore lands on prod with **zero operator `terraform apply`** — eliminating the manual step that left #4827 dormant. **One-time precondition:** the live host must already trust the current CI key (`terraform_data.root_authorized_keys`, applied on the operator's most recent full `terraform apply`); a first-apply `Permission denied (publickey)` means the key is not on-host, not a bridge defect (the CI path cannot self-apply `root_authorized_keys` — same firewall reason).
+**Both resources auto-apply (#4829).** The workflow's `-target=` set now lists BOTH `terraform_data.deploy_pipeline_fix` (HTTPS webhook push) AND `terraform_data.infra_config_handler_bootstrap` (the root-SSH bridge that delivers the handler + the `infra-config-install` escalation helper + the sudoers grant). The runner reaches the SSH bridge over the existing Cloudflare Tunnel SSH route — it opens a `cloudflared access tcp` localhost forward authenticated by the CF Access `ci_ssh` service token. The firewall `admin_ips` allowlist is unchanged (the tunnel is the access path, not an IP grant). A handler/helper/sudoers change therefore lands on prod with **zero operator `terraform apply`** — eliminating the manual step that left #4827 dormant. **One-time precondition:** the live host must already trust the current CI key (`terraform_data.root_authorized_keys`, applied on the operator's most recent full `terraform apply`); a first-apply `Permission denied (publickey)` means the key is not on-host, not a bridge defect (the CI path cannot self-apply `root_authorized_keys` — same firewall reason).
 
 **In-session apply (operator-machine fallback, #4829).** When `soleur:ship` runs on the operator's own machine rather than CI — detect via `[[ -z "${CI:-}" && -z "${GITHUB_ACTIONS:-}" ]]` AND `ssh-add -l` listing a key — the agent CAN apply the bridge in-session over the operator's direct SSH (their IP is in `admin_ips`, their ssh-agent key is in root's `authorized_keys`) instead of deferring to the CI auto-apply. This is the rare fallback (transient CI failure, or shipping a handler change you want live immediately); the CI auto-apply above is the default. Run:
 
@@ -1100,10 +1100,11 @@ WEBHOOK_SECRET=$(doppler secrets get WEBHOOK_DEPLOY_SECRET -p soleur -c prd_terr
 CF_ACCESS_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID -p soleur -c prd_terraform --plain)
 CF_ACCESS_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET -p soleur -c prd_terraform --plain)
 HMAC=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')
-curl -fsS -H "X-Signature-256: sha256=${HMAC}" \
-  -H "CF-Access-Client-Id: ${CF_ACCESS_ID}" \
-  -H "CF-Access-Client-Secret: ${CF_ACCESS_SECRET}" \
+# argv shows in /proc/<pid>/cmdline: the headers ride curl's stdin config. Bash only; `bash -x` would print them.
+(LC_ALL=C; for v in "$HMAC" "$CF_ACCESS_ID" "$CF_ACCESS_SECRET"; do case "$v" in ''|*[!A-Za-z0-9._~+/=-]*) exit 1;; esac; done) || { echo "HMAC, CF_ACCESS_ID or CF_ACCESS_SECRET unset or not [A-Za-z0-9._~+/=-] (refused, not sent)" >&2; exit 1; }
+curl --disable --proto '=https' -m 30 -fsS --config - \
   "https://deploy.$(doppler secrets get APP_DOMAIN_BASE -p soleur -c prd_terraform --plain)/hooks/infra-config-status" \
+  < <(printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' "$HMAC" "$CF_ACCESS_ID" "$CF_ACCESS_SECRET") \
   | jq -e '.exit_code == 0 and .files_failed == 0 and .files_written == .files_total'
 ```
 
@@ -2935,8 +2936,8 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
    ```bash
    SUPABASE_URL=$(doppler secrets get NEXT_PUBLIC_SUPABASE_URL -p soleur -c prd --plain)
    SUPABASE_KEY=$(doppler secrets get SUPABASE_SERVICE_ROLE_KEY -p soleur -c prd --plain)
-   # argv shows in /proc/<pid>/cmdline: the key rides curl's stdin config. Bash only, never under `bash -x`.
-   (LC_ALL=C; case "$SUPABASE_KEY" in ''|*[!A-Za-z0-9._~+/=-]*) exit 1;; esac) || { echo "token refused" >&2; exit 1; }
+   # argv shows in /proc/<pid>/cmdline: the key rides curl's stdin config. Bash only; `bash -x` would print the key.
+   (LC_ALL=C; case "$SUPABASE_KEY" in ''|*[!A-Za-z0-9._~+/=-]*) exit 1;; esac) || { echo "SUPABASE_KEY unset or not [A-Za-z0-9._~+/=-] (refused, not sent)" >&2; exit 1; }
    curl --disable --proto '=https' -m 30 -sS --config - "$SUPABASE_URL/rest/v1/<table>?select=<new_column>&limit=1" \
      < <(printf 'header = "apikey: %s"\nheader = "Authorization: Bearer %s"\n' "$SUPABASE_KEY" "$SUPABASE_KEY")
    ```

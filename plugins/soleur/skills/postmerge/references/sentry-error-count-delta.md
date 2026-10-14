@@ -48,9 +48,9 @@ if [[ -z "$SENTRY_READ_TOKEN" ]]; then
 elif [[ ! "$ISSUE_ID" =~ ^[A-Za-z0-9_-]+$ ]]; then
   echo "WARNING: issue id '$ISSUE_ID' is not a bare token. Sentry error-count delta: SKIPPED."
 elif ! (LC_ALL=C; case "$SENTRY_READ_TOKEN" in *[!A-Za-z0-9._~+/=-]*) exit 1;; esac); then
-  echo "WARNING: Sentry read token refused (unexpected characters). Sentry error-count delta: SKIPPED."
+  echo "WARNING: SENTRY_READ_TOKEN (SENTRY_ISSUE_RO_TOKEN or SENTRY_ISSUE_RW_TOKEN) not [A-Za-z0-9._~+/=-] (refused, not sent). Sentry error-count delta: SKIPPED."
 else
-  # argv shows in /proc/<pid>/cmdline, so the token rides curl's stdin config. Bash only, never under `bash -x`.
+  # argv shows in /proc/<pid>/cmdline, so the token rides curl's stdin config. Bash only; `bash -x` would print the token.
   # Query the issue; capture curl's rc — a failed GET is SKIPPED, not STILL-FIRING.
   get_rc=0
   ISSUE_JSON=$(curl --disable --proto '=https' -m 30 -fsS --config - \
@@ -109,11 +109,15 @@ Interpretation (all outcomes are **WARN-only — never a merge blocker**):
 # this state-mutating PUT). Body is discarded (-o /dev/null) — it returns the
 # full issue object, which can carry production event data; only the HTTP code
 # is load-bearing.
-# The write token passes the same character class (else the PUT is skipped) and rides curl's stdin
-# config, as in the GET: argv shows in /proc/<pid>/cmdline. Bash only, never under `bash -x`.
-if [[ -n "$SENTRY_RW_TOKEN" && "$ISSUE_STOPPED" == "true" && "$ISSUE_STATUS" != "resolved" \
-      && "$ISSUE_ID" =~ ^[A-Za-z0-9_-]+$ ]] \
-   && (LC_ALL=C; case "$SENTRY_RW_TOKEN" in *[!A-Za-z0-9._~+/=-]*) exit 1;; esac); then
+# The write token rides curl's stdin config, as in the GET: argv shows in /proc/<pid>/cmdline. Bash only;
+# `bash -x` would print the token. A malformed token WARNS and skips the PUT (never sent anywhere).
+RW_OK=false
+if [[ -n "$SENTRY_RW_TOKEN" ]]; then
+  if (LC_ALL=C; case "$SENTRY_RW_TOKEN" in *[!A-Za-z0-9._~+/=-]*) exit 1;; esac); then RW_OK=true
+  else echo "WARNING: SENTRY_RW_TOKEN (SENTRY_ISSUE_RW_TOKEN) not [A-Za-z0-9._~+/=-] (refused, not sent). Sentry auto-resolve: SKIPPED."; fi
+fi
+if [[ "$RW_OK" == "true" && "$ISSUE_STOPPED" == "true" && "$ISSUE_STATUS" != "resolved" \
+      && "$ISSUE_ID" =~ ^[A-Za-z0-9_-]+$ ]]; then
   RESOLVE_HTTP=$(curl --disable --proto '=https' -m 30 -sS -o /dev/null -w '%{http_code}' -X PUT \
     --config - -H "Content-Type: application/json" \
     -d '{"status":"resolved"}' \
@@ -128,6 +132,6 @@ if [[ -n "$SENTRY_RW_TOKEN" && "$ISSUE_STOPPED" == "true" && "$ISSUE_STATUS" != 
 fi
 ```
 
-The PUT reuses the SAME `API_HOST`/`SENTRY_ORG` resolution as the GET above (Phase 3.5's, from Doppler `prd`). On any non-200 (403 under-scoped, transient) it emits a WARN and continues — **never blocks**. Report vocabulary for this phase is `$SENTRY_DELTA`: `AUTO-RESOLVED` (write succeeded) / `STOPPED` (stopped firing; no write token, already resolved, or the PUT returned non-200) / `STILL-FIRING` / `SKIPPED`.
+The PUT reuses the SAME `API_HOST`/`SENTRY_ORG` resolution as the GET above (Phase 3.5's, from Doppler `prd`). On any non-200 (403 under-scoped, transient) it emits a WARN and continues — **never blocks**. Report vocabulary for this phase is `$SENTRY_DELTA`: `AUTO-RESOLVED` (write succeeded) / `STOPPED` (stopped firing; no usable write token, already resolved, or the PUT returned non-200) / `STILL-FIRING` / `SKIPPED`.
 
 **Why WARN-only, not a blocker:** a true pre/post delta needs the original error to actually re-fire in the brief post-merge window. Low-frequency bugs (daily-cron failures, rare-path exceptions) legitimately show zero events for hours after a correct fix, so a hard gate here would produce noisy false negatives that erode trust in the pipeline. The signal is a prompt to *look*, not a verdict. For high-frequency errors a continued-firing signal is strong evidence the fix missed; consider a `/loop` re-check 15–30 min out before marking the linked issue resolved.

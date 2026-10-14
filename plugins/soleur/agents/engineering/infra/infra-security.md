@@ -55,8 +55,8 @@ ZONE_ID="5af02a2f394e9ba6e0ea23c381a26b67"
 ACCT_ID="4d5ba6f096b2686fbdd404167dd4e125"
 
 # argv shows in /proc/<pid>/cmdline, so the token rides curl's stdin config on every call below.
-# Bash only, never under `bash -x`.
-(LC_ALL=C; case "$TOKEN" in ''|*[!A-Za-z0-9._~+/=-]*) exit 1;; esac) || { echo "token refused" >&2; exit 1; }
+# Bash only; `bash -x` would print the token.
+(LC_ALL=C; case "$TOKEN" in ''|*[!A-Za-z0-9._~+/=-]*) exit 1;; esac) || { echo "TOKEN (CF_API_TOKEN_AUDIT) unset or not [A-Za-z0-9._~+/=-] (refused, not sent)" >&2; exit 1; }
 cf() { curl --disable --proto '=https' -m 30 -sS --config - "$@" < <(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN"); }
 
 # Zone Settings (SSL mode, security level, browser integrity, bot fight mode)

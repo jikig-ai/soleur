@@ -162,12 +162,16 @@ SENTRY_TOKEN=$(doppler secrets get SENTRY_AUTH_TOKEN -p soleur -c prd --plain 2>
 SENTRY_ORG=$(doppler secrets get SENTRY_ORG -p soleur -c prd --plain 2>/dev/null || echo "jikigai")
 API_HOST="${SENTRY_ORG}.sentry.io"
 
-# argv shows in /proc/<pid>/cmdline, so the token rides curl's stdin config. Bash only, never under `bash -x`.
-(LC_ALL=C; case "$SENTRY_TOKEN" in ''|*[!A-Za-z0-9._~+/=-]*) exit 1;; esac) || { echo "token refused" >&2; exit 1; }
-curl --disable --proto '=https' -m 30 -fsS --config - \
-  "https://${API_HOST}/api/0/organizations/${SENTRY_ORG}/monitors/?per_page=100" \
-  < <(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_TOKEN") \
-  | jq '[.[] | {slug: .slug, status: .status}] | map(select(.status != "ok" and .status != "active"))'
+# argv shows in /proc/<pid>/cmdline, so the token rides curl's stdin config. Bash only; `bash -x` would print the token.
+# Advisory phase: a missing or malformed token SKIPS (exit 0), it never fails the run.
+if ! (LC_ALL=C; case "$SENTRY_TOKEN" in ''|*[!A-Za-z0-9._~+/=-]*) exit 1;; esac); then
+  echo "WARNING: SENTRY_TOKEN (Doppler prd SENTRY_AUTH_TOKEN or SENTRY_API_TOKEN) unset or not [A-Za-z0-9._~+/=-] (refused, not sent). Sentry cron monitor health: SKIPPED."
+else
+  curl --disable --proto '=https' -m 30 -fsS --config - \
+    "https://${API_HOST}/api/0/organizations/${SENTRY_ORG}/monitors/?per_page=100" \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_TOKEN") \
+    | jq '[.[] | {slug: .slug, status: .status}] | map(select(.status != "ok" and .status != "active"))'
+fi
 ```
 
 - If all monitors report `ok` or `active`: "Sentry cron monitors: all healthy"
@@ -596,5 +600,5 @@ per-prerequisite behaviour (skip / warn / poll).
 
 - **A deploy-arm database step failing on an auth/connect timeout is a production database signal, not an isolated flake: read readiness before rerunning.** `/health` returns HTTP 200 `status: ok` whatever the database state (only `.supabase` flips to `error`), the Management API project `status` can read `ACTIVE_HEALTHY` while Postgres is down, and a rerun's `migrate` can go green through the pooler. Read `curl -sS <prod>/health | jq -r .supabase` and `GET /v1/projects/<ref>/health?services=db&services=auth&services=rest&services=pooler` first — the latter carries the account-level admin PAT, so call it the way [supabase-logs-query.sh](../../../../scripts/supabase-logs-query.sh) does (header on stdin via `--header @-`, `--disable --noproxy '*'`, under `doppler run`), never with the token in argv. **Why:** 2026-09-15 — prd Postgres was unreachable 89 min; a rerun looped on health verification and `/health` was read directly only ~16 min later (post-mortem `prd-supabase-database-unreachable-2026-09-15-postmortem.md`).
 - For production debugging use Sentry API (`SENTRY_API_TOKEN` in Doppler `prd`), Better Stack, or `/health` — never SSH for logs. SSH is for infra provisioning only. (ex-`cq-for-production-debugging-use`) To read a Sentry issue/event by id inline, use `doppler run -p soleur -c prd -- scripts/sentry-issue.sh <id>` (runbook `knowledge-base/engineering/operations/runbooks/sentry-issue-read.md`); for host/app logs use [betterstack-query.sh](../../../../scripts/betterstack-query.sh) (runbook `betterstack-log-query.md`).
-- For deploy webhook debugging, fetch `WEBHOOK_DEPLOY_SECRET`/`CF_ACCESS_CLIENT_ID`/`CF_ACCESS_CLIENT_SECRET` from Doppler `prd_terraform` (not `prd`). GET `https://deploy.soleur.ai/hooks/deploy-status` with CF Access headers + HMAC-sha256 over empty body. Full runbook: [deploy-status-debugging.md](./references/deploy-status-debugging.md). (ex-`cq-deploy-webhook-observability-debug`)
+- For deploy webhook debugging, fetch `WEBHOOK_DEPLOY_SECRET`/`CF_ACCESS_CLIENT_ID`/`CF_ACCESS_CLIENT_SECRET` from Doppler `prd_terraform` (not `prd`). GET `https://deploy.soleur.ai/hooks/deploy-status` with CF Access headers + HMAC-sha256 over empty body, all on curl's stdin config. Full runbook: [deploy-status-debugging.md](./references/deploy-status-debugging.md). (ex-`cq-deploy-webhook-observability-debug`)
 - Doppler env values on prd are baked into the container at start via `--env-file` (cloud-init.yml). Flipping a flag in Doppler does NOT affect the running container — POST-X gates that depend on a freshly-flipped flag must redeploy the current image tag (POST to `/hooks/deploy`) between the flip and the verification smoke. Full context: [2026-05-19-doppler-env-hot-reload-limitation.md](../../../../knowledge-base/project/learnings/2026-05-19-doppler-env-hot-reload-limitation.md).

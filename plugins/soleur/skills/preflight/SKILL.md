@@ -186,28 +186,30 @@ grep -iE 'ADD COLUMN|CREATE TABLE' <migration_file>
 
 Parse the output to extract `<table> <column>` pairs. The project uses `ALTER TABLE public.<table> ADD COLUMN IF NOT EXISTS <column> <type>` patterns.
 
-**Step 1.3: Get Supabase credentials from Doppler.**
+**Step 1.3: Check the Supabase credentials exist in Doppler (presence only).**
 
-Run these as two separate Bash calls (no command substitution):
+Run these as two separate Bash calls. They print nothing secret: the values are fetched again, inside the one Bash call of Step 1.4, because the Bash tool keeps no shell state between calls.
 
 ```bash
-doppler secrets get NEXT_PUBLIC_SUPABASE_URL -p soleur -c prd --plain
+doppler secrets get NEXT_PUBLIC_SUPABASE_URL -p soleur -c prd --plain >/dev/null && echo "NEXT_PUBLIC_SUPABASE_URL present"
 ```
 
 ```bash
-doppler secrets get SUPABASE_SERVICE_ROLE_KEY -p soleur -c prd --plain
+doppler secrets get SUPABASE_SERVICE_ROLE_KEY -p soleur -c prd --plain >/dev/null && echo "SUPABASE_SERVICE_ROLE_KEY present"
 ```
 
 If either credential is missing, return **SKIP** with note: "Supabase credentials not available in Doppler prd config."
 
 **Step 1.4: Verify each column via Supabase REST API.**
 
-For each table/column pair extracted in Step 1.2, issue a read-only GET request:
+For each table/column pair extracted in Step 1.2, issue a read-only GET request. Run the whole block as ONE Bash call (it fetches its own credentials; nothing carries over from Step 1.3):
 
 ```bash
-# argv shows in /proc/<pid>/cmdline, so the key rides curl's stdin config. Bash only, never under `bash -x`.
-(LC_ALL=C; case "$SERVICE_ROLE_KEY" in ''|*[!A-Za-z0-9._~+/=-]*) exit 1;; esac) || { echo "token refused" >&2; exit 1; }
-curl --disable --proto '=https' -m 30 -fsS --config - "<SUPABASE_URL>/rest/v1/<table>?select=<column>&limit=1" \
+SUPABASE_URL="$(doppler secrets get NEXT_PUBLIC_SUPABASE_URL -p soleur -c prd --plain)"
+SERVICE_ROLE_KEY="$(doppler secrets get SUPABASE_SERVICE_ROLE_KEY -p soleur -c prd --plain)"
+# argv shows in /proc/<pid>/cmdline, so the key rides curl's stdin config. Bash only; `bash -x` would print the key.
+(LC_ALL=C; case "$SERVICE_ROLE_KEY" in ''|*[!A-Za-z0-9._~+/=-]*) exit 1;; esac) || { echo "SERVICE_ROLE_KEY unset or not [A-Za-z0-9._~+/=-] (refused, not sent)" >&2; exit 1; }
+curl --disable --proto '=https' -m 30 -fsS --config - "${SUPABASE_URL}/rest/v1/<table>?select=<column>&limit=1" \
   < <(printf 'header = "apikey: %s"\nheader = "Authorization: Bearer %s"\n' "$SERVICE_ROLE_KEY" "$SERVICE_ROLE_KEY")
 ```
 
