@@ -152,3 +152,10 @@ session was no longer available when queried for an exit receipt. Re-run the
 bounded suite with explicit `rc=0; command || rc=$?` capture and a final status
 line; use only that second run's explicit `POST_MAIN_7243_OFFLINE_RC=0` as the
 success evidence.
+
+The exact-head export verifier initially pinned input/export counts from the
+preceding source and refused after main added a test inside an exported root.
+Assembly completed, but the refusal was correct: one new runtime input has both
+runtime and vendored copies. Regenerate expected values from the preparation
+receipt, assert source-to-vendor relationships and total metadata counts, then
+compare preview and receipt. Do not carry forward stale source counts.

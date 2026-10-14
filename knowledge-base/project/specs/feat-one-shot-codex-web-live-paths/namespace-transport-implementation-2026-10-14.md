@@ -284,3 +284,14 @@ The complete registered offline qualification wrapper passed afterward with
 invocation did not yield an explicit exit receipt, so it was repeated in a
 bounded capture and the successful zero status was recorded. A fresh exact-head
 source pairing/export, PR description and check watch are still required.
+
+## Source inventory change from latest main
+
+The #10269 main sync adds a new Soleur test under a source root included by the
+file exporter. Exact preview/assembly at `110d2d43da3f2894dce9228f808f5c8527fac663`
+bound 5,084 runtime inputs, 1,729 vendored plugin inputs, 6,815 source leaves
+and 6,818 total files with three generated metadata leaves. An initial verifier
+still expected the prior inventory and refused; dynamic revalidation confirmed
+the new file in both mappings, exact preview/receipt agreement, zero operations
+and false execution authority. The next documentation commit invalidates this
+pairing, so the final exact-head export is still required.

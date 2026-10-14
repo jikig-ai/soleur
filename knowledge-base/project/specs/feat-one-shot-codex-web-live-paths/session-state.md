@@ -1715,3 +1715,17 @@
 - PR checks for the new head need a fresh watch. A final documentation record,
   source pairing/export and PR description also remain due. Draft, disarmed,
   default-off, customer-blocked and every authorization/operational hold persist.
+
+### Latest main input inventory and export — 2026-10-14
+
+- The merged main change adds `plugins/soleur/test/inngest-config-bundle-mirror.test.sh`
+  under a source root that the candidate exporter includes and vendors. Exact
+  preview/assembly at docs head `110d2d43da3f2894dce9228f808f5c8527fac663`
+  therefore binds 5,084 runtime inputs, 1,729 vendor inputs and 6,815 export
+  leaves (6,818 including three generated metadata files). The first verifier
+  incorrectly expected the previous head's counts and refused; the refreshed
+  dynamic checks proved the new source mapping appears in both export paths,
+  preview equals receipt, operations remain zero and execute authority is false.
+- That successful export is historical after this documentation update. Refresh
+  exact-source pairing/export and PR description after the resulting commit;
+  keep the draft check watch on the pushed head. All existing holds persist.
