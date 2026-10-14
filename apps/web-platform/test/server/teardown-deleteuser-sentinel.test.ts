@@ -15,9 +15,10 @@
  * Property enforced: every `test/**` file whose comment-stripped source
  * matches a deleteUser call-shape is either CANONICAL (the parity-guarded
  * helper), MANUAL_TEARDOWN_ALLOWLIST (reviewed per-file, per-call-count
- * pinned), or KNOWN_LEGACY_CARRIERS (the #10096 drain set — it can only
- * shrink; every entry names its tracked drain). A carrier appearing
- * ANYWHERE else — a new suite, a new subdirectory, an evading call form —
+ * pinned), or KNOWN_LEGACY_CARRIERS (the standing drain mechanism —
+ * emptied by #10096; a future reviewed deferral may re-add entries, which
+ * can then only shrink). A carrier appearing ANYWHERE else — a new suite,
+ * a new subdirectory, an evading call form —
  * is RED. The census is recursive over `.ts`/`.tsx`/`.mts`/`.cts` under
  * `test/` (symlinked files AND directories followed): `test/rls-fuzz/` and
  * any future `test/<subdir>/` cannot silently grow the defect.
@@ -55,44 +56,29 @@ const CANONICAL_HELPERS = new Set([
  * working today. Migration to the helper is allowed future cleanup, not
  * required by this guard.
  *
- * mu1.integration.test.ts is allowlisted provisionally: it uses a
- * different synthetic domain (@soleur-test.invalid) outside the helper's
- * prefix allowlist. Its raw deleteUser hits the same RESTRICT class once
- * its #9995 credential blocker clears — revisit with that issue's owner.
+ * mu1.integration.test.ts was allowlisted provisionally (#9995) for its
+ * divergent @soleur-test.invalid domain; it has since converged onto
+ * tearDownTenantUser (mu1-integration- is now a SYNTHETIC_PREFIXES entry)
+ * and is no longer a carrier.
  */
 const MANUAL_TEARDOWN_ALLOWLIST = new Set([
   "test/concurrency-acquire-slot-workspace-id.integration.test.ts",
   "test/conversation-archive-release-slot.integration.test.ts",
   "test/workspace-binding-restart-survival.integration.test.ts",
   "test/worktree-write-lease.integration.test.ts",
-  "test/mu1.integration.test.ts", // #9995 revisit — different synthetic domain
 ]);
 
 /**
- * Drain list for #10096 — `test/server/**` (and nested `scope-grants/`)
- * carries the same raw-deleteUser class silently (many in the worst
- * `.catch(() => {})` variant). Enumerating them here turns the deferral
- * into a ratchet: no NEW carrier can appear anywhere under `test/`
- * without tripping this guard, and each drained file must be removed
- * from this list in the same commit (stale-entry check below).
+ * Drain list — EMPTY since #10096 drained all 15 `test/server/**` (and
+ * nested `scope-grants/`) carriers through `tearDownTenantUser`. Kept as
+ * the standing mechanism for any future reviewed deferral: enumerating a
+ * carrier here turns the deferral into a ratchet — no NEW carrier can
+ * appear anywhere under `test/` without tripping this guard, and each
+ * drained file must be removed from this list in the same commit
+ * (stale-entry check below). Entries may only be added as an explicit,
+ * issue-tracked deferral; the set can then only shrink.
  */
-const KNOWN_LEGACY_CARRIERS = new Set([
-  "test/server/action-sends-worm.test.ts",
-  "test/server/attachment-pipeline.tenant-isolation.test.ts",
-  "test/server/cc-dispatcher.tenant-isolation.test.ts",
-  "test/server/conversations-tools.tenant-isolation.test.ts",
-  "test/server/current-repo-url.tenant-isolation.test.ts",
-  "test/server/email-triage-worm.test.ts",
-  "test/server/kb-document-resolver.tenant-isolation.test.ts",
-  "test/server/kb-route-helpers.tenant-isolation.test.ts",
-  "test/server/lookup-conversation-for-path.tenant-isolation.test.ts",
-  "test/server/scope-grants/lifecycle.test.ts",
-  "test/server/template-authorizations-worm.test.ts",
-  "test/server/tenant-jwt-deny.tenant-isolation.test.ts",
-  "test/server/workspace-backfill-trigger-parity.test.ts",
-  "test/server/workspace-member-revocation.tenant-isolation.test.ts",
-  "test/server/ws-handler.tenant-isolation.test.ts",
-]);
+const KNOWN_LEGACY_CARRIERS = new Set<string>([]);
 
 /**
  * Exact carrier-form call counts per enumerated file — the union of every
@@ -105,22 +91,6 @@ const EXPECTED_CALL_COUNTS: Readonly<Record<string, number>> = {
   "test/conversation-archive-release-slot.integration.test.ts": 1,
   "test/workspace-binding-restart-survival.integration.test.ts": 1,
   "test/worktree-write-lease.integration.test.ts": 1,
-  "test/mu1.integration.test.ts": 1,
-  "test/server/action-sends-worm.test.ts": 2,
-  "test/server/attachment-pipeline.tenant-isolation.test.ts": 1,
-  "test/server/cc-dispatcher.tenant-isolation.test.ts": 1,
-  "test/server/conversations-tools.tenant-isolation.test.ts": 1,
-  "test/server/current-repo-url.tenant-isolation.test.ts": 1,
-  "test/server/email-triage-worm.test.ts": 2,
-  "test/server/kb-document-resolver.tenant-isolation.test.ts": 1,
-  "test/server/kb-route-helpers.tenant-isolation.test.ts": 1,
-  "test/server/lookup-conversation-for-path.tenant-isolation.test.ts": 1,
-  "test/server/scope-grants/lifecycle.test.ts": 1,
-  "test/server/template-authorizations-worm.test.ts": 1,
-  "test/server/tenant-jwt-deny.tenant-isolation.test.ts": 2,
-  "test/server/workspace-backfill-trigger-parity.test.ts": 1,
-  "test/server/workspace-member-revocation.tenant-isolation.test.ts": 1,
-  "test/server/ws-handler.tenant-isolation.test.ts": 1,
 };
 
 /**
@@ -211,8 +181,9 @@ describe("teardown deleteUser sentinel (recurrence guard, #9994)", () => {
         `teardown helper and the reviewed sets — route teardown through ` +
         `test/helpers/tenant-isolation-teardown.ts (tearDownTenantUser). ` +
         `If a manual-FK-reverse path is genuinely required, add a reviewed ` +
-        `entry to MANUAL_TEARDOWN_ALLOWLIST; test/server/** carriers are ` +
-        `tracked for drain by #10096:\n  ${offenders.join("\n  ")}`,
+        `entry to MANUAL_TEARDOWN_ALLOWLIST; a legacy drain belongs in ` +
+        `KNOWN_LEGACY_CARRIERS only as an issue-tracked deferral ` +
+        `(the #10096 set is drained):\n  ${offenders.join("\n  ")}`,
     ).toEqual([]);
   });
 
@@ -221,8 +192,8 @@ describe("teardown deleteUser sentinel (recurrence guard, #9994)", () => {
     expect(
       stale,
       `enumerated files that no longer carry a deleteUser call — drop ` +
-        `the entry so the sets stay a precise audit (legacy drains belong ` +
-        `in #10096's commit):\n  ${stale.join("\n  ")}`,
+        `the entry so the sets stay a precise audit (drained entries ` +
+        `leave the sets in the same commit as the migration):\n  ${stale.join("\n  ")}`,
     ).toEqual([]);
   });
 

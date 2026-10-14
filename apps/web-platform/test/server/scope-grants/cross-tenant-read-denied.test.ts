@@ -43,7 +43,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 
 import { mintFounderJwt } from "@/lib/supabase/tenant";
 import { isGranted } from "@/server/scope-grants/is-granted";
-import { tearDownTenantUser } from "@/test/helpers/tenant-isolation-teardown";
+import { tearDownTenantUsers } from "@/test/helpers/tenant-isolation-teardown";
 
 const INTEGRATION_ENABLED = process.env.TENANT_INTEGRATION_TEST === "1";
 
@@ -148,11 +148,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       // founder_id is now SET NULL on user delete (mig 065 Part 2). The
       // helper runs the full FK-reverse anonymise sequence including
       // scope_grants, then auth-delete cascades cleanly.
-      for (const user of [userA, userB]) {
-        if (!user.id) continue;
-        assertSynthetic(user.email);
-        await tearDownTenantUser(service, user);
-      }
+      await tearDownTenantUsers(service, [userA, userB]);
     });
 
     test("A reads own scope_grants via tenant client — 1 row", async () => {

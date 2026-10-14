@@ -24,7 +24,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { randomBytes } from "crypto";
-import { tearDownTenantUser } from "./helpers/tenant-isolation-teardown";
+import { tearDownTenantUsers } from "./helpers/tenant-isolation-teardown";
 
 const INTEGRATION_ENABLED = process.env.SUPABASE_DEV_INTEGRATION === "1";
 
@@ -149,15 +149,12 @@ describe.skipIf(!INTEGRATION_ENABLED)(
     }, 60_000);
 
     afterAll(async () => {
-      for (const u of [userA, userB]) {
-        if (!u.id) continue;
-        assertSynthetic(u.email);
-        // FK-reverse helper, fail-loud by design (#9994): the previous
-        // best-effort swallow returned {error} unchecked and silently
-        // leaked the synthetic user — dev carries ~87k NULL-owner org rows
-        // of this cruft class.
-        await tearDownTenantUser(service, u);
-      }
+      // FK-reverse helper, fail-loud by design (#9994): the previous
+      // best-effort swallow returned {error} unchecked and silently
+      // leaked the synthetic user — dev carries ~87k NULL-owner org rows
+      // of this cruft class. Plural helper per #10249: a first-user
+      // teardown failure must not abandon the second user.
+      await tearDownTenantUsers(service, [userA, userB]);
     }, 60_000);
 
     test(

@@ -30,6 +30,7 @@ import {
   _resetTenantCache,
 } from "@/lib/supabase/tenant";
 import { registerSharedMintCache } from "@/test/helpers/mint-once";
+import { tearDownTenantUsers } from "@/test/helpers/tenant-isolation-teardown";
 
 const INTEGRATION_ENABLED = process.env.TENANT_INTEGRATION_TEST === "1";
 
@@ -178,12 +179,8 @@ describe.skipIf(!INTEGRATION_ENABLED)(
           .remove([victimPath])
           .catch(() => {});
       }
-      for (const user of [userA, userB]) {
-        if (!user.id) continue;
-        assertSynthetic(user.email);
-        await service.auth.admin.deleteUser(user.id).catch(() => {});
-      }
-    }, 30_000);
+      await tearDownTenantUsers(service, [userA, userB]);
+    }, 60_000);
 
     // ──────────────────────────────────────────────────────────────────
     // FR1 — cross-tenant Storage SELECT deny (the brand-survival vector
@@ -269,7 +266,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
           size_bytes: 1,
         });
       expect(error).toBeNull();
-      // Cleanup the positive-control row so afterAll's auth.admin.deleteUser
+      // Cleanup the positive-control row so afterAll's tearDownTenantUser sweep
       // cascade has a clean target set. PostgrestBuilder is a thenable but
       // not a Promise, so it has no `.catch` — await first, then ignore.
       try {

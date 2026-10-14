@@ -273,9 +273,11 @@ resource "logtail_exploration_alert" "inngest_luks_wrong_volume" {
   # wrong-volume rows while the store sitting on a non-encrypted device goes unpaged (the plaintext
   # volume hcloud_volume.inngest_redis this once named was destroyed 2026-10-09, #8285).
   # The dead-probe sibling that carries the absence-of-signal case is
-  # betteruptime_heartbeat.inngest_server_probe (uptime-alerts.tf), born paused pending its
-  # feeder (tracked there, #9703); scripts/followthroughs/inngest-luks-property-8296.sh reports the
-  # same silence as a daily CANNOT ESTABLISH on that tracker in the interim.
+  # betteruptime_heartbeat.inngest_server_probe (uptime-alerts.tf), armed and fed by
+  # scheduled-inngest-probe-heartbeat.yml (#9703; arm record: runbook inngest-server.md section
+  # "Arming the probe heartbeat (#9703)"; live state is read from Better Stack, not from this file).
+  # The daily follow-through probe that once reported the same silence was retired 2026-10-12
+  # (#9703 Stage 3b).
   alert_type          = "threshold"
   operator            = "higher_than"
   value               = 0
@@ -491,7 +493,7 @@ locals {
   # (1) Field-isolated rather than `raw LIKE '%…524%'`: GitHub webhook payloads (issue and PR
   # bodies) reach this source, and this very incident's issues quote the literal. No PRIORITY
   # filter — the live lines are PRIORITY 6. They ship even though vector.toml's inngest_journald
-  # source lists `include_matches.PRIORITY = 0..4`: OBSERVED (18 rows, 2026-09-16..23), the source's
+  # source listed `include_matches.PRIORITY = 0..4` at OBSERVATION time (18 rows, 2026-09-16..23 — PRIORITY 3 in bounds then and now; the #10255 partition narrowed the arm to {3,4}): the source's
   # `include_units` admits the unit independently of the PRIORITY match (Vector appears to OR the
   # two; the same mechanism is the suspect in #6551). That behaviour is load-bearing for this alert
   # and is pinned by vector-pii-scrub.test.sh; scripts/probe-inngest-524-count.sh prints unit_rows

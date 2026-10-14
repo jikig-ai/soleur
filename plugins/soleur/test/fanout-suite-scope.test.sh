@@ -152,7 +152,7 @@ run_arm() {
   # lib-less "degraded" arm would silently measure the plain-full refusal — same rc=4, no
   # 'affected selection' marker. The suite's contract is local-mode machinery; the arms
   # must see the local default in both environments.
-  ARM_OUT=$(cd "$REPO_ROOT" && env SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= CI= \
+  ARM_OUT=$(cd "$REPO_ROOT" && env -u TEST_GROUP -u MODE -u SCRIPTS_SHARD -u SOLEUR_TEST_FORCE_ALL SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= CI= \
             TEST_TIMING_LOG="$TMP/arm-timing-$label.tsv" \
             TC_PROC_ROOT="$SOLO_PROC_F" \
             "$@" timeout 120 bash "${ARM_SANDBOX:-$SANDBOX}" ${ARM_ARGV:-} 2>&1)
@@ -430,7 +430,7 @@ if ! build_sandbox "$NOLIB_SANDBOX"; then
 else
   rm -f "$TMP/nolib/lib/test-contention.sh"
   export SANDBOX_RECORD="$TMP/record-inherited.txt"; : > "$SANDBOX_RECORD"
-  INH_OUT=$(cd "$REPO_ROOT" && env SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= \
+  INH_OUT=$(cd "$REPO_ROOT" && env -u TEST_GROUP -u MODE -u SCRIPTS_SHARD -u SOLEUR_TEST_FORCE_ALL SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= \
             TEST_TIMING_LOG="$TMP/arm-timing-inherited.tsv" \
             TC_PROC_ROOT="$SOLO_PROC_F" TC_SIBLING_RUN_COUNT=9 \
             timeout 120 bash "$NOLIB_SANDBOX" 2>&1)
@@ -474,7 +474,7 @@ else
   # real measurement before the refusal is reached, so a run_arm form passes under the mutation
   # and proves nothing.
   export SANDBOX_RECORD="$TMP/record-foreign.txt"; : > "$SANDBOX_RECORD"
-  FGN_OUT=$(cd "$REPO_ROOT" && env SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= \
+  FGN_OUT=$(cd "$REPO_ROOT" && env -u TEST_GROUP -u MODE -u SCRIPTS_SHARD -u SOLEUR_TEST_FORCE_ALL SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= \
             TEST_TIMING_LOG="$TMP/arm-timing-foreign.tsv" \
             TC_PROC_ROOT="$SOLO_PROC_F" TC_SIBLING_RUN_COUNT=9 TC_SIBLING_RUN_COUNT_PID=1 \
             timeout 120 bash "$NOLIB_SANDBOX" 2>&1)

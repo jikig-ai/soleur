@@ -648,10 +648,11 @@ evaluate_completeness() { # <ref-list-file> <delivered-list-file> <out: kept-lis
   fi
 
   # SET comparison, both directions. `comm` needs both inputs sorted; both come
-  # from LC_ALL=C sorts above.
+  # from LC_ALL=C sorts above, so comm is pinned to the same locale (a comm in the
+  # operator's locale reads them as unsorted and returns a wrong difference).
   local missing extra
-  missing="$(comm -23 "$ref_kept" "$del_kept" || true)"
-  extra="$(comm -13 "$ref_kept" "$del_kept" || true)"
+  missing="$(LC_ALL=C comm -23 "$ref_kept" "$del_kept" || true)"
+  extra="$(LC_ALL=C comm -13 "$ref_kept" "$del_kept" || true)"
 
   local missing_n=0 extra_n=0
   [[ -n "$missing" ]] && missing_n="$(printf '%s\n' "$missing" | grep -c . || true)"

@@ -90,6 +90,9 @@ if [ "${2:-}" = set ]; then
   # secrets set NAME -p P -c C — value on stdin (the only supported form here; the caller
   # must never pass a value on argv). SHIM_SET_ERR forces a classified failure;
   # SHIM_WRITE_STORE redirects the store so the write lands where the case expects.
+  # The value is read FIRST (#9217): the caller pipes it in under pipefail, so an arm that exits on the
+  # missing token or a classified failure before reading would let the writer take SIGPIPE. Not a terminal only.
+  value=""; [ -t 0 ] || value="$(timeout 2 cat)"
   name="${3:-}"; shift 3
   proj=""; cfg=""
   while [ $# -gt 0 ]; do
@@ -104,7 +107,6 @@ if [ "${2:-}" = set ]; then
     auth)    echo "Doppler Error: Invalid Auth token STDERR-CANARY-3b" >&2; exit 1 ;;
     network) echo "Doppler Error: dial tcp: i/o timeout STDERR-CANARY-3b" >&2; exit 3 ;;
   esac
-  read -r value
   d="$DOPPLER_STORE/$proj/$cfg"
   [ -d "$d" ] || { echo "Doppler Error: Could not find requested config '$cfg'" >&2; exit 1; }
   printf '%s' "$value" > "$d/$name"

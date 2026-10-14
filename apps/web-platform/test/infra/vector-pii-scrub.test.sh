@@ -532,16 +532,16 @@ EXPECTED_TAGS=$(printf '%s\n%s\n' "$EXPECTED_TAGS" "$SYSTEMD_UNIT_IDENTIFIERS" |
 # `logger -t` call site that must NOT join the Source 4 include_matches.SYSLOG_IDENTIFIER
 # allowlist, because their rows already ship through Source 1's include_matches.PRIORITY
 # arm: under Vector's OR-over-record-fields contains_match (journald.rs @ v0.43.1), EVERY
-# row at PRIORITY <= 4 from ANY unit is admitted by inngest_journald. Same documented-
+# row at PRIORITY {3,4} from ANY unit is admitted by inngest_journald (PRIORITY 0-2 moved to Source 2 under the #6551 partition). Same documented-
 # reason discipline as SYSLOG_TAG_EXCLUSIONS below — the census is the chokepoint, so a
 # derived tag must either sit in the Source 4 allowlist OR carry a registered exemption;
 # a tag with NEITHER disposition is exactly the drift AC3's tag-set equality catches.
-# PREMISE DISCIPLINE: an exemption asserts the emit rides the PRIORITY<=4 arm — so every
-# entry's emitter must carry a `-p <0..4>` (or SyslogIdentifier+priority) pin elsewhere
+# PREMISE DISCIPLINE: an exemption asserts the emit rides the PRIORITY {3,4} arm — so every
+# entry's emitter must carry a `-p <3|4>` (or SyslogIdentifier+priority) pin elsewhere
 # (today: journald-config.test.sh's `-p err` arm for the systemd control). Exempting a
 # default-priority (notice=6) emitter would register a tag that ships nowhere.
 declare -A PRIORITY_ARM_EXEMPTIONS=(
-  [systemd]="SOLEUR_SYSTEMD_JOURNALD_CONTROL (#9963): the positive control proving the SYSLOG_IDENTIFIER=systemd delivery path. It MUST ride Source 1's PRIORITY<=4 admission arm — the arm real PID-1 'Failed to start' rows take — which is why it is emitted at -p err (PRIORITY 3) and why adding 'systemd' to Source 4 is the named trap: an exact-tag entry would also ship every PID-1 PRIORITY-6 Started/Stopped line, the quota blow the vector.toml Source 4 header documents."
+  [systemd]="SOLEUR_SYSTEMD_JOURNALD_CONTROL (#9963): the positive control proving the SYSLOG_IDENTIFIER=systemd delivery path. It MUST ride Source 1's PRIORITY {3,4} admission arm — the arm real PID-1 'Failed to start' rows take — which is why it is emitted at -p err (PRIORITY 3) and why adding 'systemd' to Source 4 is the named trap: an exact-tag entry would also ship every PID-1 PRIORITY-6 Started/Stopped line, the quota blow the vector.toml Source 4 header documents."
 )
 # DERIVED_TAGS keeps the pre-exemption census for the stale-exemption arm below: an
 # exemption that no emitter still produces is a dead registry entry — a future tag
@@ -731,7 +731,7 @@ if [[ -z "$SRC2_BLOCK" ]]; then
   fail "Source 2 drift (#7898): [sources.system_journald] block not found in vector.toml"
 elif ! grep -qE '^include_matches\.PRIORITY = \["0", "1", "2"\]$' <<<"$SRC2_BLOCK"; then
   fail "Source 2 drift (#7898): include_matches.PRIORITY is no longer exactly [\"0\", \"1\", \"2\"] — the host-script crit rows (logger -p user.crit = PRIORITY 2) would stop shipping"
-elif ! grep -qE '^exclude_units = \["inngest-server\.service", "vector\.service"\]$' <<<"$SRC2_BLOCK"; then
+elif ! grep -qE '^exclude_units = \["inngest-server\.service"\]$' <<<"$SRC2_BLOCK"; then
   fail "Source 2 drift (#7898): exclude_units widened/changed — a monitor unit added here would lose its off-box refusal path"
 elif ! grep -qE '^inputs = \[.*"system_journald".*\]' "$VECTOR_TOML"; then
   fail "Source 2 drift (#7898): system_journald is no longer an input of the pii_scrub chain"
@@ -739,28 +739,31 @@ else
   pass "Source 2 (system_journald) admits PRIORITY 0-2 from any unit (two exclusions) and feeds the scrub chain — the #7898 crit-row sink holds"
 fi
 
-# #9963: Source 1 (inngest_journald) is the admission arm the SYSLOG_IDENTIFIER=systemd
-# positive-control row rides. Under OR-over-record-fields contains_match, `include_units`
-# merges into include_matches._SYSTEMD_UNIT, so this source admits
-# `_SYSTEMD_UNIT=inngest-server.service` (ANY priority) OR `PRIORITY ∈ {0..4}` (ANY unit,
-# ANY identifier). Two facts are load-bearing and pinned here, scoped to the
-# [sources.inngest_journald] block so a same-named key elsewhere cannot satisfy them:
-#   - the PRIORITY set: narrow it below "3" and the PRIORITY-3 control row (and every real
-#     systemd 'Failed to start' row) silently leaves the arm → consumers go unshipping;
+# #9963 + #6551 partition: Source 1 (inngest_journald) is the admission arm the
+# SYSLOG_IDENTIFIER=systemd positive-control row rides. Under OR-over-record-fields
+# contains_match, `include_units` merges into include_matches._SYSTEMD_UNIT, so this
+# source admits `_SYSTEMD_UNIT=inngest-server.service` (ANY priority) OR
+# `PRIORITY ∈ {3,4}` minus the exclude_matches sets (the #6551 static partition:
+# untagged PRIORITY 0-2 rows belong to Source 2 alone; S4 tags and container stderr
+# belong to their own arms — double-admission windows closed). Two facts are
+# load-bearing and pinned here, scoped to the [sources.inngest_journald] block so a
+# same-named key elsewhere cannot satisfy them:
+#   - the PRIORITY set: dropping "3" would lose the PRIORITY-3 control row (and every
+#     real systemd 'Failed to start' row) → consumers go unshipping;
 #   - the pii_scrub input: dropping the source from the redaction chain would ship
 #     un-scrubbed host rows, the privacy regression the AC4 boundary guard names.
 SRC1_BLOCK="$(awk '/^\[sources\.inngest_journald\]/{f=1; next} f && /^\[/{exit} f' "$VECTOR_TOML")"
 CASES=$((CASES + 1))
 if [[ -z "$SRC1_BLOCK" ]]; then
   fail "Source 1 drift (#9963): [sources.inngest_journald] block not found in vector.toml"
-elif ! printf '%s\n' "$SRC1_BLOCK" | grep -cE '^include_matches\.PRIORITY = \["0", "1", "2", "3", "4"\]$' >/dev/null; then
-  fail "Source 1 drift (#9963): include_matches.PRIORITY is no longer exactly [\"0\", \"1\", \"2\", \"3\", \"4\"] — the PRIORITY-3 systemd control row (and real 'Failed to start' rows) leaves the admission arm and silently stops shipping"
+elif ! printf '%s\n' "$SRC1_BLOCK" | grep -cE '^include_matches\.PRIORITY = \["3", "4"\]$' >/dev/null; then
+  fail "Source 1 drift (#9963 + #6551 partition): include_matches.PRIORITY is no longer exactly [\"3\", \"4\"] — the PRIORITY-3 systemd control row (and real 'Failed to start' rows) leaves the admission arm and silently stops shipping; PRIORITY 0-2 moved to Source 2 under the partition (untagged rows)"
 elif ! printf '%s\n' "$SRC1_BLOCK" | grep -cE '^include_units = \["inngest-server\.service"\]$' >/dev/null; then
   fail "Source 1 drift (#9963): include_units changed — the unit's own rows at every priority stop shipping"
 elif [ "$(awk '/^\[transforms\.pii_scrub/{f=1; next} f && /^\[/{exit} f && /^inputs = /{print; exit}' "$VECTOR_TOML" | grep -c '"inngest_journald"')" = "0" ]; then
   fail "Source 1 drift (#9963): inngest_journald is no longer an input of the pii_scrub chain (checked against the pii_scrub* transform block's own inputs line, not any inputs line)"
 else
-  pass "Source 1 (inngest_journald) admits inngest-server.service OR PRIORITY 0-4 from any unit and feeds the scrub chain — the #9963 control-row arm holds"
+  pass "Source 1 (inngest_journald) admits inngest-server.service OR PRIORITY {3,4} from any unit and feeds the scrub chain — the #9963+#6551 control-row arm holds"
 fi
 
 echo

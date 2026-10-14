@@ -54,6 +54,7 @@ claude-settings	.claude/hooks/ship-operator-step-gate.sh	PreToolUse	Bash	bind	de
 claude-settings	.claude/hooks/ship-runbook-ssh-gate.sh	PreToolUse	Bash	bind	devin-tool=exec	EC§5; .cwd absent → *_PROJECT_DIR fallback
 claude-settings	.claude/hooks/ship-soak-followthrough-gate.sh	PreToolUse	Bash	bind	devin-tool=exec	EC§5; .cwd absent → *_PROJECT_DIR fallback
 claude-settings	.claude/hooks/ship-unpushed-commits-gate.sh	PreToolUse	Bash	bind	devin-tool=exec	EC§5; .cwd absent → *_PROJECT_DIR fallback
+claude-settings	.claude/hooks/ship-kb-archive-gate.sh	PreToolUse	Bash	bind	devin-tool=exec	EC§5; .cwd absent → *_PROJECT_DIR fallback
 claude-settings	plugins/soleur/hooks/browser-snapshot-credential-guard.sh	PreToolUse	Bash	covered-by-plugin	hooks.json binds ^(Bash|exec)$ (#8155 merged)	runtime trace 2026-09-17 (AC12/AC13): deny+allow arms PASS on Devin local exec — EC§9; body gate normalized to kind
 #
 # --- .claude/settings.json — PreToolUse AskUserQuestion ----------------------
