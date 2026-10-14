@@ -24,8 +24,8 @@ if [[ "$n_flip" -lt "$MIN_FLAGS" || "$n_server" -lt "$MIN_FLAGS" ]]; then
   exit 1
 fi
 
-only_flip="$(comm -23 <(printf '%s\n' "$flip_pairs") <(printf '%s\n' "$server_pairs"))"
-only_server="$(comm -13 <(printf '%s\n' "$flip_pairs") <(printf '%s\n' "$server_pairs"))"
+only_flip="$(LC_ALL=C comm -23 <(printf '%s\n' "$flip_pairs") <(printf '%s\n' "$server_pairs"))"
+only_server="$(LC_ALL=C comm -13 <(printf '%s\n' "$flip_pairs") <(printf '%s\n' "$server_pairs"))"
 if [[ -n "$only_flip$only_server" ]]; then
   printf 'flip-flag-map-parity: FAIL — flip.sh FLAG_ENV_VARS and server.ts RUNTIME_FLAGS disagree\n'
   [[ -n "$only_flip" ]] && printf '  only in flip.sh:\n%s\n' "$only_flip"
