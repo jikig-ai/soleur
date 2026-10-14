@@ -324,7 +324,8 @@ else fail "H1 gh shim refused: $(head -3 "$GH_REFUSED" | tr '\n' ';')"; fi
 if ! gh run list --workflow x >/dev/null 2>&1 && [[ -s "$GH_REFUSED" ]]; then pass "H2 gh shim refuses an unexpected argv"; else fail "H2 gh shim is a catch-all"; fi
 : > "$GH_REFUSED"
 # H3: the library never calls a gh subcommand other than `api`.
-if ! grep -vE '^api ' "$GH_CALLS" | grep -vE '^run list --workflow x$' | grep -q .; then pass "H3 only gh api was called"; else fail "H3 a non-api gh call was made"; fi
+non_api_calls="$(grep -vE '^api ' "$GH_CALLS" | grep -vE '^run list --workflow x$' || true)"
+if [[ -z "$non_api_calls" ]]; then pass "H3 only gh api was called"; else fail "H3 a non-api gh call was made"; fi
 # H4: the scan reads its stdin to the end and does not leave the list half-consumed for a caller.
 newfx; addrun 1301 completed 1 "1:$(clean_body)"; addrun 1300 completed 1 "1:$(clean_body)"; settotal 2
 out="$(git_data_store_dirty_list | scan_nopins)"

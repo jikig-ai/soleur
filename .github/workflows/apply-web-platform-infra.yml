@@ -3805,7 +3805,7 @@ jobs:
         run: |
           set -uo pipefail
           # shellcheck source=scripts/lib/git-data-store-dirty-scan.sh
-          source "${GITHUB_WORKSPACE}/scripts/lib/git-data-store-dirty-scan.sh" || { echo "::error::rotate precondition UNREADABLE — scripts/lib/git-data-store-dirty-scan.sh could not be loaded from the dispatched ref's checkout. Failing closed: nothing was planned or replaced."; exit 1; }
+          if ! source "${GITHUB_WORKSPACE}/scripts/lib/git-data-store-dirty-scan.sh"; then echo "::error::rotate precondition UNREADABLE — scripts/lib/git-data-store-dirty-scan.sh could not be loaded from the dispatched ref's checkout. Failing closed: nothing was planned or replaced."; exit 1; fi
           if verdict="$(git_data_store_dirty_list | git_data_store_dirty_scan)"; then rc=0; else rc=$?; fi
           echo "store-never-written verdict: ${verdict}"
           case "${verdict%% *}" in
@@ -3855,7 +3855,7 @@ jobs:
             fi
             printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
             source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::rotate precondition UNREADABLE (boot_complete_unreadable) — scripts/lib/bearer-curl.sh could not be loaded. Failing closed."; exit 1; }
-            srv="$(bc_curl apply-web-platform-infra 'Authorization:Bearer :HCLOUD_TOKEN' -- -sS --max-time 15 'https://api.hetzner.cloud/v1/servers?name=soleur-git-data' 2>/dev/null)" || srv=""
+            srv="$(bc_curl apply-web-platform-infra 'Authorization:Bearer :HCLOUD_TOKEN' -- -sS --max-time 15 'https://api.hetzner.cloud/v1/servers?name=soleur-git-data')" || srv=""
             created_epoch="$(git_data_server_created_epoch "$srv")" || created_epoch=""
             fresh="$(git_data_boot_complete_freshness "$drows" "$created_epoch")" || true
             case "$fresh" in
