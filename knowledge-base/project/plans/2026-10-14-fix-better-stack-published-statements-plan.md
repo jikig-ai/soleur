@@ -14,6 +14,24 @@ lane: cross-domain
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-14
+**Sections enhanced:** Implementation Phases, Dependencies & Risks, Observability
+**Research agents used:** soleur-legal-clo (ruling applied); plan-review panel dhh, kieran, code-simplicity, devex CTO, and spec-flow; deepen batch of the 23 engineering review, research, and design agents, each of which returned an empty findings list on 2026-10-14.
+
+### Key Improvements
+
+1. Phase 1 success now fails if span 3 swallows or doubles the DPD semicolon, and if either privacy copy loses the Sentry sentence or the older #7529 sentence.
+2. Phase 2 success hashes the full September 7 line and fails when the appended sentence is on the next line, including when all six files break at the same place.
+3. `## Observability` names the existing corpus probe as the local signal, because `legal-doc-shas.ts` sits under `apps/web-platform/lib/legal/` and the pure-docs skip does not apply.
+
+### New Considerations Discovered
+
+- `CORPUS-OK` does not prove the appended sentence stayed on the September 7 line. The note hash is a separate check.
+- Precedent for this edit is the 2026-09-07 six-file identical note plus the SHA refresh of the canonicals that note touches. No new scheduled job, lock, or SQL function.
+- Deepen gates 4.5, 4.55, 4.8, 4.9, 4.10, and 4.11 did not fire. 4.6, 4.7, and 4.12 are satisfied by the sections in this file. 4.45 found no `NEVER` / `MUST NOT` / `does not reach` / `cannot leak` / `is not exposed` claim to verify. The 23-agent deepen batch added no further edit. `tasks.md` already carries the span-3 join, the one-line note hash, and the corpus probe, so this pass did not change it.
+
 ## Overview
 
 Issue #7851 asked to stop the published privacy policy and data-protection disclosure from describing a Better Stack processor agreement the controller does not hold. Two of the three statements named in that issue are already gone from the canonical copies and the Eleventy mirrors: the corpus no longer says the log stream flowed under processor-DPA terms, and it no longer cites a paid-tier retention default. What remains is the claim that Standard Contractual Clauses are incorporated into the Better Stack data-processing agreement, next to an instrument the Vendor DPA Status row records as not executed. Signing of that instrument stays an open action on #7529.
@@ -195,6 +213,34 @@ None.
 
 A plan whose `## User-Brand Impact` section is empty, contains only placeholder text, or omits the threshold will fail `deepen-plan` Phase 4.6.
 
+## Observability
+
+`apps/web-platform/lib/legal/legal-doc-shas.ts` is production code under `apps/`, so the pure-docs skip does not apply. This change adds no runtime service. The signal is the existing corpus probe, which prints a line Check 10 can match. The SHA script exits 0 with no stdout on success, so it is a failure detector and not the discoverability command.
+
+```yaml
+liveness_signal:
+  what: "CORPUS-OK line from scripts/probe-legal-corpus-truth.sh"
+  cadence: per-run
+  alert_target: "CI failure of the corpus probe and of apps/web-platform/scripts/check-tc-document-sha.sh"
+  configured_in: scripts/probe-legal-corpus-truth.sh
+error_reporting:
+  destination: "stdout of the corpus probe and stderr of the legal-doc SHA script; this change adds no Sentry event"
+  fail_loud: "the probe exits non-zero, or check-tc-document-sha.sh prints ::error:: and exits 1"
+failure_modes:
+  - mode: "a LEGAL_DOC_SHAS key does not match sha256sum of an edited canonical"
+    detection: "apps/web-platform/scripts/check-tc-document-sha.sh prints ::error:: and exits 1"
+    alert_route: "workflow run log of the CI job that runs that script"
+  - mode: "the September 7 note gains a newline and the stripper stops before the appended sentence"
+    detection: "scripts/probe-legal-corpus-truth.sh exits non-zero, and the six-line hash check fails when the sentence leaves the prefix line"
+    alert_route: "workflow run log of the CI job that runs the probe"
+logs:
+  where: "stdout of scripts/probe-legal-corpus-truth.sh"
+  retention: "CI log retention for the job that runs the probe; this change adds no log store"
+discoverability_test:
+  command: bash scripts/probe-legal-corpus-truth.sh
+  expected_output: CORPUS-OK
+```
+
 ## Scope Check
 
 ### Ask Mapping
@@ -301,6 +347,8 @@ No browser scenario. The pages are committed markdown, and the gates above read 
 - #7851 is the only issue this pull request closes.
 
 ## Dependencies & Risks
+
+Precedent: the 2026-09-07 six-file identical note extension, the line that already starts `**Corrected September 7, 2026 (#7786 / #6474).**`, plus the `LEGAL_DOC_SHAS` refresh of every canonical whose bytes change. This plan uses that shape. It does not introduce a SQL function, an atomic-write sequence, a lock, a connection pool, a circuit breaker, or a scheduled job, so there is no Inngest-cron versus GitHub-Actions choice to make.
 
 - The CLO strings repeat #7529 inside a bullet that already points at #7529. That repetition is required by "keep the existing signing pointer" plus the new parenthetical. Do not delete the older pointer to make the prose tighter.
 - Span 3's new text has no terminal semicolon. The existing semicolon after the old substring must remain, or the following Vendor DPA Status clause detaches.
