@@ -1149,11 +1149,18 @@ runcmd:
     # Stderr via SUBSTITUTION, never `2>>`: a failed redirect returns 1 WITHOUT running the
     # probe. `|| _rc=$?` not `; _rc=$?` — the naked form aborts under `set -euo pipefail`.
     # Absolute paths: this file already notes nothing pins a PATH. Enforced by B18.
+    # (#10138) The volume ATTACHMENT lands after first boot starts (run 38384137515: 65 s for this
+    # volume, as Terraform recorded it), so the wait is 300 counted passes of `sleep 1`; absent after
+    # that, the isLuks rc=4 FATAL below still refuses. One settle follows the loop, then a refusal if
+    # the node exists but still reports size 0: the probes below read the node once and gate
+    # luksFormat, so they must not race udev's attach event or run on a half-attached node.
     _i=0
-    while [ "$_i" -lt 30 ]; do
-      [ -b "$DEV" ] && [ "$(/usr/sbin/blockdev --getsize64 "$DEV" 2>/dev/null || echo 0)" -gt 0 ] && break
+    while [ "$_i" -lt 300 ]; do
+      [ -b "$DEV" ] && [ "$(/usr/bin/timeout -k 2 10 /usr/sbin/blockdev --getsize64 "$DEV" 2>/dev/null || echo 0)" -gt 0 ] && break
       sleep 1; _i=$((_i+1))
     done
+    /usr/bin/udevadm settle --timeout=10 >/dev/null 2>&1 || true
+    { [ ! -b "$DEV" ] || [ "$(/usr/bin/timeout -k 2 10 /usr/sbin/blockdev --getsize64 "$DEV" 2>/dev/null || echo 0)" -gt 0 ]; } || { echo "[git-data-luks] FATAL: $DEV is a block device of size 0 after the wait — refusing to probe or format a volume that has not finished attaching" | tee -a "$GIT_DATA_LUKS_DETAIL"; exit 1; }
     _luks_created_now=0
     _isluks_rc=0
     _isluks_err="$(cryptsetup isLuks "$DEV" 2>&1)" || _isluks_rc=$?
@@ -1238,7 +1245,7 @@ runcmd:
   # WHOLE restart ladder (up to 5x300 + 4x60 s), and a blocking `enable --now` would hold
   # cloud-final for all of it. The arm's verdict is "did it ENABLE"; whether it CONVERGED is
   # git-data-bootstrap.sh's measurement, bounded there at 420 s, which is the single bound on
-  # the boot path.
+  # reopen convergence (the attach waits are separate, earlier bounds: #10138).
   - |
     STAGE=gitdata_luks_reopen_arm
     ( : > "$GIT_DATA_RUNCMD_DETAIL" ) 2>/dev/null || true

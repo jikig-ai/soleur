@@ -262,16 +262,50 @@ resource "hcloud_server" "rehearsal" {
   }
 }
 
+# --- (#10138) The deliberate late attachment ----------------------------------------------
+# Real rotate run 38384137515 lost an attachment race the rehearsals never could (17-33 s here, 65 s
+# and 125 s there, as Terraform recorded them). These two resources hold each attachment back after
+# the server exists so the PAYLOAD boot has to wait: LUKS floor(delay/2) s (the heredoc runs first
+# and must wait for it), plaintext the full delay, so the plaintext device is still absent when the
+# bootstrap checks it (exercising the bootstrap's wait). triggers_replace is the server id ONLY, so a differing -var
+# between plan and destroy cannot replace the resource; no `count` (plan-shape's create regex refuses
+# a `[0]` address); the seed phase sleeps 0. plan-shape admits exactly these two replaces.
+resource "terraform_data" "rehearsal_attach_delay_luks" {
+  triggers_replace = hcloud_server.rehearsal.id
+
+  provisioner "local-exec" {
+    command = "sleep $REHEARSAL_ATTACH_DELAY_S"
+    environment = {
+      REHEARSAL_ATTACH_DELAY_S = tostring(var.rehearsal_phase == "payload" ? floor(var.rehearsal_attach_delay_s / 2) : 0)
+    }
+  }
+}
+
+resource "terraform_data" "rehearsal_attach_delay_pt" {
+  triggers_replace = hcloud_server.rehearsal.id
+
+  provisioner "local-exec" {
+    command = "sleep $REHEARSAL_ATTACH_DELAY_S"
+    environment = {
+      REHEARSAL_ATTACH_DELAY_S = tostring(var.rehearsal_phase == "payload" ? var.rehearsal_attach_delay_s : 0)
+    }
+  }
+}
+
 resource "hcloud_volume_attachment" "rehearsal" {
   volume_id = hcloud_volume.rehearsal.id
   server_id = hcloud_server.rehearsal.id
   automount = false
+
+  depends_on = [terraform_data.rehearsal_attach_delay_pt]
 }
 
 resource "hcloud_volume_attachment" "rehearsal_luks" {
   volume_id = hcloud_volume.rehearsal_luks.id
   server_id = hcloud_server.rehearsal.id
   automount = false
+
+  depends_on = [terraform_data.rehearsal_attach_delay_luks]
 }
 
 resource "hcloud_firewall_attachment" "rehearsal" {

@@ -1027,6 +1027,60 @@ G3 marker, querying `op:git-data-bare-repo-erasure` (pre-FATAL refusals may have
 **2026-10-24**. Record the count and the Sentry issue ids on #5914, never the ids themselves (host-key step 5.1). If G3 has not reached GO well before then,
 escalate to the CLO rather than rushing G3.
 
+### 2026-10-13: the real rotate's first boot lost the volume-attachment race (#10138)
+
+Recorded, not edited into the steps above. `git-data-host-rotate` run 38384137515 applied (7 added,
+3 changed, 7 destroyed; measured, apply log, 2026-10-13), and the fresh host's bootstrap then died at
+10:37:11Z with `FATAL: plaintext_unverified reason=source — /dev/disk/by-id/scsi-0HC_Volume_106867358
+does not resolve to a block device`; the boot poll ended `VERDICT=silent` after its 20 reads
+(measured, same log). The attachment timings, and why they overstate guest-side latency, are in
+ADR-239's 2026-10-13 amendment; they are not repeated here.
+
+**State left behind.**
+
+- Server 170081857 and LUKS volume 107125716 were created (measured, apply log, 2026-10-13; a
+  snapshot, not a current-state read). The old server and old LUKS volume were destroyed (same).
+- The rotate's own precondition read `served_repos=0` before it destroyed anything (measured, its
+  step log, 2026-10-13). Nothing was read from 170081857 or volume 107125716.
+- That 107125716 holds no user repository is **inferred** (the bootstrap exits before any repository
+  is created and the store flag is off), 2026-10-13. Whether the rotate's `served_repos=0`
+  precondition can read a host that never emitted `boot_complete` is **unverified**: check that
+  before the rotate, because it either wedges (see step 4) or reads 0 without having measured.
+- The d6 gate reads `d6_last_rotate_failed 38384137515` (measured, the gate's own scan, 2026-10-13);
+  only a newer successful rotate carrying the `Rotate completed (d6 marker)` supersedes it.
+- No claim is made about the previous key's escrow, passphrase recovery or reopening.
+
+**The fix** (PR #10210): the bootstrap waits 300 s (a lower bound on real time) at the plaintext link and the `luks_open`
+heredoc's device wait is 300 counted passes (ADR-239 amendment). After the bound the same named
+FATAL fires and the plaintext-empty verification is never skipped. The poll starts after
+`terraform apply` returns and apply blocks on both attachments, so a waiting boot adds only its
+post-attach tail (up to 56 s in rehearsal 38356246710, measured 2026-10-13 on a boot that did not wait;
+that a waiting boot costs no more is inferred from the sequencing).
+
+**Recovery order (forward only; each dispatch needs an explicit go-ahead that names the command).**
+A new server is unavoidable: `user_data` is ForceNew and runcmd is once-per-instance, so no existing
+path re-runs first boot on 170081857.
+
+1. Merge the fix PR. Editing `git-data-bootstrap.sh` and `cloud-init-git-data.yml` moves the rung-2
+   payload hash, so the rotate's interlock refuses until new evidence exists.
+2. Rehearsal: `gh workflow run git-data-rung2-rehearsal.yml --ref main -f confirm=REHEARSE-GIT-DATA
+   -f dry_run=false` (paid; it now delays both attachments on purpose, see the rehearsal runbook).
+3. The evidence-only PR (see that runbook's "After a PASS"); its description states the delay the
+   run actually applied, read from the run log. Hold every merge that touches a bound file until it
+   lands.
+4. If the sibling gate PR for the rotate precondition (#10207) merged as drafted, its
+   `stale_boot_complete` refusal needs a `boot_complete` newer than the server's creation, and
+   170081857 never emitted one (inferred, 2026-10-13: its bootstrap died at the FATAL before the
+   emit, and nothing was read from the host): run a plain replace first
+   (`apply_target=git-data-host-replace`, `plan_only=true` before the real one). Otherwise go to 5,
+   but only once the rotate's `served_repos` read for 170081857 is confirmed to be a measurement and
+   not a default (see "State left behind"): until then run step 4 anyway.
+5. The rotate: `apply_target=git-data-host-rotate -f confirm=ROTATE-GIT-DATA`, `plan_only=true`
+   first, then the real run. It destroys LUKS volume 107125716 and re-mints the passphrase again.
+
+A plain replace outside step 4 buys no gate benefit. The schedule coupling is tracked on #10138: if
+this sequence slips past about 2026-11-05, tell the CLO.
+
 ## Verdict map
 
 | Where you are | What the run reads | What to do |

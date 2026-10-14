@@ -284,7 +284,16 @@ const GROK_DOGFOOD_GZIP_FLOOR = 500;
 // 14,372 B headroom under the 32,768 B cap (inngest-userdata-budget.sh, the CI gate). This is the
 // early-warning bracket, not the cap: it keeps ~1.6 KB of warning margin, the same margin the
 // 18_000 bracket left over the pre-#8562 16,400 B, and matches REGISTRY_GZIP_BUDGET.
-const INNGEST_GZIP_BUDGET = 20_000;
+// #10217 (2026-10-13): +2,500 B modest re-baseline (20,000 -> 22,500). Modeled ~19.9 KB -> 21,132
+// (+~1.3 KB) for the attach-race fix's irreducibly-inline code: the reopen script's new
+// ensure_mount (atomic fstab install + kernel-served-layer pop loop + named fail classes),
+// wait_dev's timeout-wrapped probes and post-settle re-probe in BOTH readers, the
+// reopen_pointer_lost evidence refusal, and the backing_is noop check. The mechanism itself, not
+// prose — the reopened script ships in user_data because it exists to heal a first-boot-aborted
+// host, so nothing it contains can come from the store it mounts. 22,500 keeps ~1.4 KB warning
+// margin over the model and stays ~10.2 KB below HETZNER_CAP; byte-authoritative terraform
+// measures 21,520 B stored (inngest-userdata-budget.sh, the CI gate).
+const INNGEST_GZIP_BUDGET = 22_500;
 const INNGEST_GZIP_FLOOR = 4_000;
 
 const IMAGE_NAME = "ghcr.io/jikig-ai/soleur-web-platform:latest";

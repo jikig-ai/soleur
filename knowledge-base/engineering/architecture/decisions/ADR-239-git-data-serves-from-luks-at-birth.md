@@ -484,3 +484,41 @@ reviewing), and the accepted Art. 17 residue (erased means unlinked) is re-evalu
 plaintext-volume outer retention. The exits are #8571 (copy mode) for a populated store and #10211 (a live
 "store measured empty" marker). The guard does not defend against a hostile owner, a flag set outside the workflow, or
 a re-run of a rotate run that predates it (the owner deletes those run records). Follow-ups: #10216.
+
+## Amendment 2026-10-13 — first boot may precede the volume attachments (#10138)
+
+**Context (measured 2026-10-13: the apply log of run 38384137515 and Sentry; nothing was read from a
+host).** Cloud-init first boot starts when the server is created; Hetzner attaches block volumes
+afterwards as separate actions. Terraform recorded the LUKS attachment finishing 65 s and the
+plaintext one 125 s after server create. Those are API-completion times, not the moment the guest
+first saw each device. The bootstrap ran at 10:37:11Z, and a FATAL in the `luks_open` heredoc aborts
+the concatenated runcmd script (read from the template, 2026-10-13), so by inference the heredoc had
+already found, formatted and opened the LUKS device 7 s before Terraform recorded that attachment
+finishing: the figures overstate guest-side latency, and this incident does not by itself show that
+the heredoc's 30 to 300 raise was needed (it is kept as insurance). Sentry shows the bootstrap's plaintext check dying at
+10:37:11Z, about 70 s before the plaintext attachment completed at 10:38:19Z: it resolved the by-id
+link once and exited at the named FATAL `plaintext_unverified reason=source`. Four earlier boots
+(runs 38140050880, 36118115758, and the seed and payload phases of 38356246710) attached both
+volumes in 17-33 s as Terraform recorded them, so the race was latent. The boot was fail-closed and
+wrote no marker (inferred from the code order, not read from a host); that nothing was served
+rests on the store flag being off (inherited from #10175, 2026-10-13).
+
+**Decision.** Waiting for an attachment is part of proving a layout. The bootstrap waits at the
+plaintext link for 300 s: 30 passes of `sleep 10`, counted and never read from the clock (so 300 s is a
+lower bound; each pass's probes add to it), a literal rather than a seam. The `luks_open` heredoc's device wait is 300 counted passes of
+`sleep 1`, followed by one `udevadm settle` before the single-shot probes that gate `luksFormat`.
+The wait changes WHEN the device is resolved, never what is checked: after the bound the same named
+FATAL fires, the plaintext-empty verification is never skipped, and the device number is still
+pinned and re-checked before `--setro`. A FATAL inside the heredoc aborts the concatenated runcmd
+script, so the bootstrap never runs after it (read from the template, 2026-10-13). The bootstrap's
+own LUKS discovery is unchanged: it runs only when the store is not yet mounted, which the heredoc
+has already ensured on a first boot. The rung-2 rehearsal now delays both attachments on purpose
+(LUKS by floor(delay/2) s, plaintext by the full delay; the workflow sets 150), so the paid run
+exercises the heredoc wait and the bootstrap wait. One rehearsal at 150 s does not prove the 300 s
+bound, and that a PASS implies the wait ran is an inference: no `boot_complete` field records it.
+
+**Consequences.** The payload hash moves, so the committed rung-2 evidence is stale until a fresh
+rehearsal and an evidence-only PR land, and the rotate's own interlock refuses until then. This
+amendment does not change the status line, the retention date or any legal wording, and makes no
+claim about key escrow. The recovery order and the half-rotated host are in the runbook entry of
+the same date.

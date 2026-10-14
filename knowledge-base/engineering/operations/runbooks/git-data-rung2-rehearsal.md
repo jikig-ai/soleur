@@ -358,6 +358,25 @@ code PR, never a re-run):
 Every future rehearsal pays for the seed and replace boots; re-evaluate when #8571's wipe empties the
 plaintext volume id (that PR amends the `present`+`dirty` PASS rule in its own rehearsal).
 
+## The deliberate late attachment (#10138)
+
+The rehearsal root attaches both volumes after the server exists, like production, but real
+attachments took 17-33 s there while the failing production boot saw 65 s and 125 s (as Terraform
+recorded them, ADR-239's 2026-10-13 amendment). So a run could pass without a slow attachment ever
+being exercised. `rehearsal_attach_delay_s` (default 0, 0-240) adds two `terraform_data` delay
+resources: in the payload phase the LUKS attachment lands after floor(delay/2) s and the plaintext
+attachment after the full delay; the seed phase always sleeps 0. The workflow sets 150.
+
+What a PASS now means (an inference, not a measurement; no `boot_complete` field records the wait):
+the payload boot ran with both attachments late and still emitted `boot_complete` with every
+terminal boolean `yes`. The pre-fix bootstrap FATALs under the same delay, so a PASS implies the
+wait ran. One rehearsal at 150 s does not prove the 300 s bound. **The evidence PR's description
+states the delay the run applied, read from the run log, not from the workflow file at HEAD**: the
+evidence file does not record it, and neither `rehearsal.tf` nor the workflow is hash-bound. If the
+paid run fails at the plan-shape step on the two delay addresses, that costs one of the two
+rehearsals allowed per payload hash; `tests/scripts/test-git-data-rung2-plan-shape.sh` carries
+fixtures for exactly those two replaces and nothing wider.
+
 ## Changing the payload: the two-PR sequence
 
 The evidence is hash-bound to the payload and Guard 4 refuses a commit that touches both, and
