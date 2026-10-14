@@ -39,9 +39,10 @@
 # budget, active, groups. `sel_s` is the stage-2 wall time and a LOWER BOUND when `sel_censored=1` (the stage-2 budget or a
 # per-call timeout was hit); the first dark runs on a cold runner are expected to be censored, so they do NOT measure cold wall
 # time. `groups` is webplat:TOK,bun:TOK,scripts-heavy:TOK (`-` when stage 2 did not finish). Reason `affected_degraded`
-# replaces `affected` when any group token is timeout|bad_rc|parse|missing_row|no_records, so a degraded enumerate never reads
-# as the benign `affected would_skip=none`. Reasons `signalled` (HUP/INT/TERM) and `lever_error` (an internal abort or an
-# unbound variable) are the two trap exits; both still exit 0 with only the defaults written.
+# replaces `affected` when any group token is timeout|bad_rc|parse|missing_row|no_records|empty, so a degraded enumerate never
+# reads as the benign `affected would_skip=none`. `affected_degraded` is TELEMETRY ONLY: healthy groups still arm when a sibling
+# group is degraded (per-group evaluation), a decision to revisit before the lock is removed (ADR-276 S4 amendment). Reasons
+# `signalled` (HUP/INT/TERM) and `lever_error` (an internal abort) are the two trap exits: both exit 0 with only the defaults.
 #
 # TWO STAGES (the cost shape, decision-challenges.md): STAGE 1 is a pure-bash positive allowlist over
 # `git diff -z --raw --no-renames --no-abbrev HEAD^1 HEAD` (records `:oldmode newmode oldsha newsha STATUS` NUL `path` NUL).
@@ -59,8 +60,10 @@
 # Nothing else runs in stage 1, so a code PR pays no pre-pass. STAGE 2 runs only for a doc-only diff, in dark mode too:
 #   env -u CI -u SOLEUR_TEST_FORCE_ALL -u GITHUB_OUTPUT ... bash test-all.sh --print-selection --paths=<list>
 #   env -u CI -u SOLEUR_TEST_FORCE_ALL -u GITHUB_OUTPUT ... bash test-all.sh --enumerate-commands --paths=<list> <group>
-# (the selector child also loses GITHUB_STEP_SUMMARY, GITHUB_ENV, GITHUB_PATH and GITHUB_STATE: it can never write to the
-# step's output files, so it cannot forge the final block or arm a skip from inside a SIGTERM window.)
+# (the selector child also loses GITHUB_STEP_SUMMARY, GITHUB_ENV, GITHUB_PATH and GITHUB_STATE. That denies it the INHERITED
+# variables only: a same-user child could still discover the path some other way. The real boundary is that stage 2 runs only
+# for a doc-only diff and the final output block is written LAST, after the child has exited, so nothing a child appended can
+# outlive it: the last value per key wins.)
 # A group joins the would-skip set only if its enumerate stream is non-empty, every runnable record is an
 # AFFECTED_SELECTED row with sel=0 (and not always_on) or a SUITE_COMMAND_DECLINED record whose label is a known
 # `--pr-gated` decline (ADR-262; every other decline is unreachable under CI, ADR-181, so the leg would still run),
@@ -132,6 +135,9 @@ on_exit() {
     if [ "$sig" = 1 ]; then reason=signalled; else reason=lever_error; fi
     emit_notice
   fi
+  # The scratch dir goes on EVERY exit path (normal, early return, abort, HUP/INT/TERM). SIGKILL cannot be trapped; RUNNER_TEMP
+  # is per-job there.
+  [ -z "$work" ] || rm -rf "$work"  # GUARD:G2-SCRATCH-CLEANUP
   exit 0
 }
 # shellcheck disable=SC2329  # invoked through the HUP/INT/TERM trap below
@@ -172,8 +178,10 @@ is_trigger_path() {
   return 1
 }
 
-# The positive allowlist: knowledge-base/**/*.md or a root-level *.md. The file NAME must END in `.md` (with a non-empty stem
-# at the root and under knowledge-base/), and a root-level file has no `/` in it.
+# The positive allowlist: knowledge-base/**/*.md or a root-level *.md. The path must END in `.md` and have at least one
+# character before that suffix: `knowledge-base/?*.md` demands a non-empty REMAINDER after the prefix, not a non-empty file stem,
+# so a hidden file named `.md` in a subdirectory (`knowledge-base/a/.md`) IS accepted (the predicate is deliberate and
+# unchanged); a root-level `.md` alone is not. A root-level file has no `/` in it.
 is_doc_path() {
   case "$1" in
     knowledge-base/?*.md) return 0 ;;
@@ -356,6 +364,7 @@ run() {
   timeout -k 5 "$budget" env -u CI -u SOLEUR_TEST_FORCE_ALL -u GITHUB_OUTPUT -u GITHUB_STEP_SUMMARY -u GITHUB_ENV -u GITHUB_PATH -u GITHUB_STATE bash "$test_all" --print-selection "--paths=$paths" < /dev/null > "$sel_file" 2> "$work/selection.err"  # GUARD:G2-9-CI-UNSET
   rc=$?
   sel_s=$((SECONDS - t0))
+  # 124 is `timeout`'s own; 137 is the `-k` SIGKILL (and also an OOM kill, recorded here as a timeout: fail closed either way)
   if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then sel_censored=1; reason=selector_timeout; return 0; fi
   [ "$rc" -eq 0 ] || return 0
   parse_selection "$sel_file" || { reason=selector_unparsed; return 0; }
@@ -381,8 +390,10 @@ run() {
       else tok="$(eval_group "$enum_file")"
       fi
     fi
+    # An empty or unknown token (the evaluation subshell aborted) is `empty`: degraded, and the notice grammar stays intact.
+    case "$tok" in skip|selected|always_on|plain_decline|timeout|bad_rc|parse|missing_row|no_records) ;; *) tok=empty ;; esac  # GUARD:G2-11-EMPTY-TOK
     if [ "$g" = webplat ] && [ "$diagrams" = 1 ] && [ "$tok" = skip ]; then tok=diagrams; fi  # GUARD:G2-15-DIAGRAMS
-    case "$tok" in timeout) sel_censored=1; degraded=1 ;; bad_rc|parse|missing_row|no_records) degraded=1 ;; esac
+    case "$tok" in timeout) sel_censored=1; degraded=1 ;; bad_rc|parse|missing_row|no_records|empty) degraded=1 ;; esac
     groups_summary="${groups_summary:+$groups_summary }$leg=$tok"
     groups_n="${groups_n:+$groups_n,}$g:$tok"
     if [ "$tok" = skip ]; then list="${list:+$list,}$leg"; fi
@@ -413,6 +424,9 @@ if [ "$active" != true ] || ! [[ "$skip_legs" =~ ^(test-webplat|test-bun|test-sc
 fi
 
 # ---- (8) ONE final block, skip_legs LAST ----------------------------------------------------------------------------
+# A signal between this printf and `finished=1` would make the notice say active=false (signalled) while the file says true.
+# Ignore the three signals across the two statements (never restored: nothing after this point needs them).
+trap '' HUP INT TERM  # GUARD:G2-12-SIGNAL-WINDOW
 printf 'head_sha=%s\nbase_sha=%s\nactive=%s\nskip_legs=%s\n' "$head_sha" "$base_sha" "$active" "$skip_legs" >> "$OUT"  # GUARD:G2-12-FINAL-BLOCK
 
 # ---- (9) the annotation and the summary -----------------------------------------------------------------------------
@@ -420,5 +434,4 @@ finished=1
 emit_notice
 printf 'pr-selection: switch=%s locked=%s reason=%s would_skip=%s active=%s sel_s=%s sel_censored=%s budget=%s groups=%s\n' \
   "$sw" "$locked" "$reason" "$would_skip" "$active" "$sel_s" "$sel_censored" "$budget" "$groups" >> "$SUMMARY"
-[ -z "$work" ] || rm -rf "$work"
-exit 0
+exit 0  # on_exit removes the scratch dir

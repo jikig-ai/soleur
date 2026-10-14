@@ -599,11 +599,16 @@ tol_exact "G1-16 one tolerated skip" "$BODY" test-bun $OK $S $OK "All legs green
 tol_exact "G1-16b all three tolerated" "$BODY" "$ALL3" $S $S $S "All legs green or $TOL_MSG tolerated (test-webplat,test-bun,test-scripts-heavy); skip_legs=$ALL3"
 tol_exact "G1-16c two tolerated, list in another order (legs print in entries order, skip_legs verbatim)" "$BODY" "test-scripts-heavy,test-webplat" $S $OK $S "All legs green or $TOL_MSG tolerated (test-webplat,test-scripts-heavy); skip_legs=test-scripts-heavy,test-webplat"
 tol_exact "G1-16d a leg listed but ran: the all-six sentence is byte-identical" "$BODY" test-bun $OK $OK $OK "$SIX_LINE"
-# G1-17 the re-run remedy: on attempt > 1 a non-tolerated skip, with a skip decision to be cached (SKIP_LEGS non-empty), names the remedy
+# G1-17 the re-run remedy: on attempt > 1 a skipped leg that the cached skip decision NAMES (delimited match against SKIP_LEGS, the same
+# one the tolerance uses) names the remedy. A leg skipped for any other reason (draft-light, push-dedupe, an upstream need) keeps the plain
+# SKIPPED line: telling its reader "the pr-selection skip decision is cached" would misdiagnose an unrelated red.
 for _at in 2 3 ""; do
   tol "G1-17 listed skip on ATTEMPT='$_at' names the re-run remedy" "$BODY" pull_request test-bun true true "$_at" $OK $S $OK $OK $OK $OK 1 "test-bun: SKIPPED — $REM_TXT" "$TOL_MSG"
 done
-tol "G1-17b an unlisted skip on attempt 2 names the remedy too" "$BODY" pull_request test-bun true true 2 $S $OK $OK $OK $OK $OK 1 "test-webplat: SKIPPED — $REM_TXT" ""
+tol "G1-17b attempt 2, skip_legs set, an UNNAMED shard skipped (another cause): the plain line, no remedy" "$BODY" pull_request test-bun true true 2 $S $OK $OK $OK $OK $OK 1 "test-webplat: SKIPPED — the leg did not run" "cached from attempt 1"
+tol "G1-17b2 attempt 2, a NAMED shard that is not the first in the list names the remedy" "$BODY" pull_request "test-bun,test-webplat" true true 2 $S $OK $OK $OK $OK $OK 1 "test-webplat: SKIPPED — $REM_TXT" ""
+tol "G1-17h attempt 2, test-scripts skipped, only test-scripts-heavy named: no remedy (delimited, not a prefix match)" "$BODY" pull_request test-scripts-heavy true true 2 $OK $OK $S $OK $OK $OK 1 "test-scripts: SKIPPED — the leg did not run" "cached from attempt 1"
+tol "G1-17i attempt 2, one named and one unnamed shard skipped: the remedy is per shard" "$BODY" pull_request test-bun true true 2 $S $S $OK $OK $OK $OK 1 "test-bun: SKIPPED — $REM_TXT" "test-webplat: SKIPPED — $REM_TXT"
 tol "G1-17c the generic SKIPPED line is kept beside the remedy" "$BODY" pull_request test-bun true true 2 $OK $S $OK $OK $OK $OK 1 "test-bun: SKIPPED — the leg did not run" ""
 tol "G1-17d attempt 1, listed skip made non-tolerated by ACTIVE=false: no remedy" "$BODY" pull_request test-bun false true 1 $OK $S $OK $OK $OK $OK 1 "test-bun: SKIPPED" "cached from attempt 1"
 tol "G1-17e attempt 1, unlisted skip: no remedy" "$BODY" pull_request test-bun true true 1 $S $OK $OK $OK $OK $OK 1 "test-webplat: SKIPPED" "cached from attempt 1"
@@ -634,6 +639,8 @@ SIB = ("          skipped)\n"
        "              concluded_siblings=$((concluded_siblings + 1))\n"
        "            fi\n"
        "            ;;\n")
+REMNAMED = '",$SKIP_LEGS," == *",$shard,"*'
+REMGATE = '"$ATTEMPT" != "1" && ' + REMNAMED
 TOLMSG = 'echo "$shard: PR-AFFECTED-SKIP — skipped by pr-selection (active, attempt 1, head bound); not a failure" >&2\n    continue'
 if op == "remove-tolerance":
     sub('if [[ "$tolerated" == *",$shard,"* ]]; then', 'if false; then')
@@ -664,13 +671,17 @@ elif op == "skip-re-no-caret":
 elif op == "skip-re-no-dollar":
     sub(")*$'", ")*'")
 elif op == "remedy-removed":
-    sub('if [[ "$ATTEMPT" != "1" && -n "$SKIP_LEGS" ]]; then', 'if false; then')
+    sub('if [[ ' + REMGATE + ' ]]; then', 'if false; then')
 elif op == "remedy-at-attempt-1":
-    sub('"$ATTEMPT" != "1" && -n "$SKIP_LEGS"', '-n "$SKIP_LEGS"')
+    sub(REMGATE, REMNAMED)
 elif op == "remedy-without-skip-legs":
-    sub('"$ATTEMPT" != "1" && -n "$SKIP_LEGS"', '"$ATTEMPT" != "1"')
+    sub(REMGATE, '"$ATTEMPT" != "1"')
+elif op == "remedy-any-shard":
+    sub(REMGATE, '"$ATTEMPT" != "1" && -n "$SKIP_LEGS"')
+elif op == "remedy-substring":
+    sub(REMGATE, '"$ATTEMPT" != "1" && ",$SKIP_LEGS," == *"$shard"*')
 elif op == "remedy-inverted":
-    sub('"$ATTEMPT" != "1" && -n "$SKIP_LEGS"', '"$ATTEMPT" == "1" && -n "$SKIP_LEGS"')
+    sub(REMGATE, '"$ATTEMPT" == "1" && ' + REMNAMED)
 elif op == "final-trailing-comma":
     sub('tol_list="${tol_list%,}"', 'tol_list="${tol_list}"')
 elif op == "final-leading-comma":
@@ -713,6 +724,8 @@ mutate_tol() {  # $1=label $2=op ; the Guard 1 rows over the mutant: at least on
     tol "p17" "$m" pull_request test-bun true true 2 $OK $S $OK $OK $OK $OK 1 "test-bun: SKIPPED — $REM_TXT" "$TOL_MSG"
     tol "p18" "$m" pull_request test-bun false true 1 $OK $S $OK $OK $OK $OK 1 "test-bun: SKIPPED" "cached from attempt 1"
     tol "p19" "$m" pull_request "" "" "" 2 $S $OK $OK $OK $OK $OK 1 "test-webplat: SKIPPED" "cached from attempt 1"
+    tol "p19b" "$m" pull_request test-bun true true 2 $S $OK $OK $OK $OK $OK 1 "test-webplat: SKIPPED — the leg did not run" "cached from attempt 1"
+    tol "p19c" "$m" pull_request test-scripts-heavy true true 2 $OK $OK $S $OK $OK $OK 1 "test-scripts: SKIPPED — the leg did not run" "cached from attempt 1"
     tol_exact "p20" "$m" test-bun $OK $S $OK "All legs green or $TOL_MSG tolerated (test-bun); skip_legs=test-bun"
     tol_exact "p21" "$m" "test-scripts-heavy,test-webplat" $S $OK $S "All legs green or $TOL_MSG tolerated (test-webplat,test-scripts-heavy); skip_legs=test-scripts-heavy,test-webplat"
     tol_exact "p22" "$m" test-bun $OK $OK $OK "$SIX_LINE"
@@ -746,6 +759,8 @@ mutate_tol "G1-H1o the re-run remedy is removed" remedy-removed
 mutate_tol "G1-H1p the re-run remedy also fires on attempt 1" remedy-at-attempt-1
 mutate_tol "G1-H1q the re-run remedy fires with no skip decision (empty skip_legs)" remedy-without-skip-legs
 mutate_tol "G1-H1r the re-run remedy is inverted (fires on attempt 1 only)" remedy-inverted
+mutate_tol "G1-H1r2 the re-run remedy fires for any shard when skip_legs is non-empty (the pre-fix gate)" remedy-any-shard
+mutate_tol "G1-H1r3 the re-run remedy matches the shard by substring, not delimited" remedy-substring
 mutate_tol "G1-H1s the final line keeps its trailing comma" final-trailing-comma
 mutate_tol "G1-H1t the final line keeps its leading comma" final-leading-comma
 mutate_tol "G1-H1u the final line drops the skip_legs suffix" final-no-skip-legs
@@ -980,19 +995,19 @@ fi
 # +  3 event/value cardinality (E1 merge_group, E1 workflow_dispatch, E3 out-of-enum)                                  = 34
 # + 27 the draft arm (ADR-276 S3, #9728): D1, D1b, D2 (3); D3 and D4 over 3 events (6); D5 over 9 values plus D5b (10); D6, D6b (2);
 #      the 5 arm mutants D7, D7b-D7e (5); D8 structure (1)                                                            = 61
-# + 70 Guard 1 executed rows (ADR-276 S4, #9729 PR B): 52 from the plan's G1-0..G1-15 matrix (G1-0 3, G1-1/5 2, G1-2 3, G1-3 9, G1-7b 7,
-#      G1-9 6, G1-4 family 8, G1-7/7c 2, G1-12 2, G1-13 2, G1-14 1, G1-8 6, G1-15 1) + 18 added by the review: G1-16 exact final line (4),
-#      G1-17 re-run remedy (9), G1-18 foreign-first lists (5)
-# + 22 tolerance mutants G1-H1a..v (one row per mutant verdict)                                                          = 153
-# +  7 wiring: W1, W2, W5, W6, W7, W3, W4                                                                                = 160
-MIN_ROWS=160
+# + 73 Guard 1 executed rows (ADR-276 S4, #9729 PR B): 52 from the plan's G1-0..G1-15 matrix (G1-0 3, G1-1/5 2, G1-2 3, G1-3 9, G1-7b 7,
+#      G1-9 6, G1-4 family 8, G1-7/7c 2, G1-12 2, G1-13 2, G1-14 1, G1-8 6, G1-15 1) + 21 added by the review: G1-16 exact final line (4),
+#      G1-17 re-run remedy (12: 17 x3, 17b, 17b2, 17c-17g, 17h, 17i), G1-18 foreign-first lists (5)
+# + 24 tolerance mutants G1-H1a..v plus H1r2, H1r3 (one row per mutant verdict)                                            = 158
+# +  7 wiring: W1, W2, W5, W6, W7, W3, W4                                                                                = 165
+MIN_ROWS=165
 if [ "$TOTAL" -lt "$MIN_ROWS" ]; then
   printf 'FAIL: assertion floor — %d rows executed, at least %d required. Rows were removed or a loop stopped early.\n' \
     "$TOTAL" "$MIN_ROWS" >&2
   exit 1
 fi
-# 4 mutate() + 5 mutate_arm() + 22 mutate_tol() = 31, the measured count.
-MIN_MUTANTS=31
+# 4 mutate() + 5 mutate_arm() + 24 mutate_tol() = 33, the measured count.
+MIN_MUTANTS=33
 if [ "$MUT_TOTAL" -lt "$MIN_MUTANTS" ]; then
   printf 'FAIL: mutation floor — %d mutants executed, at least %d required.\n' \
     "$MUT_TOTAL" "$MIN_MUTANTS" >&2

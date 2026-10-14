@@ -102,9 +102,10 @@ pr_term() { printf "%s%s,'))" "$PR_TERM_PRE" "$1"; }
 # (#9728), which adds the DRAFT_LIGHT env and the draft arm to the aggregator body (scripts/ci-draft-light.test.sh executes them), and again at
 # ADR-276 S4 (#9729, PR B), which adds the SKIP_LEGS/ACTIVE/HEAD_SHA_OK/ATTEMPT env and the PR-AFFECTED-SKIP tolerance (the aggregator-diagnosis
 # suite executes them), and a third time for the review fixes: the re-run remedy line in the `skipped)` arm and the final line's tolerated list
-# with its `skip_legs=` suffix (the same suite executes both). The sha256 is of the job minus `needs` and `if`, so a comment edit elsewhere in
+# with its `skip_legs=` suffix (the same suite executes both), and a fourth time when the remedy line was narrowed to a shard NAMED in
+# SKIP_LEGS (the delimited match the tolerance uses). The sha256 is of the job minus `needs` and `if`, so a comment edit elsewhere in
 # ci.yml does not move it but ANY edit to this job's steps, env or timeout does.
-AGG_DIGEST="f66e83be33636b52043d131c98ac01243841bd81bd9fbfaf35cc7820928173f4"
+AGG_DIGEST="461f40243a0399f27826d0abe6e12db5c129b4a51809dd22b6e1db0714223394"
 # The jobs that are deliberately NOT gated (cheap guards that keep the push run's conclusion `success` when the heavy
 # jobs are skipped). A NEW job must be classified: add it to GATED_PINNED (heavy) or here (cheap), never neither.
 UNGATED_PINNED="adr-ordinals credential-path-guard critical-css-gate detect-changes draft-light encryption-posture grok-fidelity harness-discovery lint-bot-statuses lint-webplat lockfile-sync marketplace-manifest-guard plugin-root-propagation-gate pr-selection rule-body-lint sandbox-canary-capture-gate service-role-allowlist-gate tc-document-sha-guard"
@@ -260,6 +261,13 @@ if mode == "prsel":
     job = jobs.get("pr-selection")
     if job is None:
         print("P-JOB-MISSING"); sys.exit(0)
+    # CLOSED KEY SETS. Every key is accounted for, so a key nobody pinned (`environment:` changes what `vars.CI_PR_AFFECTED` resolves to;
+    # `container:`, `services:`, `strategy:`, `concurrency:`, `defaults:`, `env:`) cannot be added to the job or to either step unseen.
+    if set(job) != {"if", "runs-on", "timeout-minutes", "continue-on-error", "permissions", "outputs", "steps"}: tags.append("P-JOBKEYS")
+    top = d if isinstance(d, dict) else {}
+    # no workflow-level env or defaults either: both reach every job, pr-selection included (a run-wide working-directory, a switch)
+    if "env" in top: tags.append("P-TOPENV")
+    if "defaults" in top: tags.append("P-TOPDEFAULTS")
     if job.get("if") != "github.event_name == 'pull_request'": tags.append("P-JOBIF")
     if job.get("continue-on-error") is not True: tags.append("P-JOBCOE")
     if job.get("runs-on") != "ubuntu-latest": tags.append("P-RUNSON")
@@ -271,6 +279,9 @@ if mode == "prsel":
     steps = job.get("steps") or []
     if len(steps) != 2: tags.append("P-STEPS"); print(" ".join(tags)); sys.exit(0)
     co, sel = steps
+    if not isinstance(co, dict) or not isinstance(sel, dict): tags.append("P-STEPS"); print(" ".join(tags)); sys.exit(0)
+    if set(co) != {"uses", "with"}: tags.append("P-COKEYS")
+    if set(sel) != {"name", "id", "shell", "continue-on-error", "timeout-minutes", "env", "run"}: tags.append("P-SELKEYS")
     if not re.fullmatch(r"actions/checkout@[0-9a-f]{40}", str(co.get("uses", ""))): tags.append("P-CHECKOUT")  # a full-length lowercase-hex commit pin, never a tag or branch
     w = co.get("with")
     # EXACTLY {fetch-depth: 0, persist-credentials: false}: an extra key (`ref:`, `repository:`, `token:`) would change what the selector reads.
@@ -303,6 +314,37 @@ if mode == "prsel":
         blk.append(ln)
     if sum(1 for ln in blk if ln == "    timeout-minutes: 3") != 1: tags.append("P-TIMEOUT-LINE")
     if any(re.match(r"^    needs:", ln) for ln in blk): tags.append("P-NEEDS-LINE")
+    print(" ".join(tags)); sys.exit(0)
+
+if mode == "prcensus":
+    # Every reference to the pr-selection job's outputs (or result) in the PARSED workflow, by location. YAML comments are gone after the
+    # parse; strings inside a `run:` body are counted (conservative). The design allows exactly: each of the three gated jobs' top-level
+    # `if:` (4 references: active, head_sha twice, skip_legs) and the aggregator's three env entries (SKIP_LEGS 1, ACTIVE 1, HEAD_SHA_OK 2).
+    # A step-level `if:`, a matrix `exclude`, a job `env:` or any other consumer inside a gated job could skip individual steps while the job
+    # still concludes `success`, a reduced run the aggregator would never see as a `skipped` leg.
+    d, jobs = load()
+    pat = re.compile(r"needs\.pr-selection\b|needs\[\s*['\"]pr-selection['\"]\s*\]")
+    found = {}
+    def walk(node, loc):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                walk(v, loc + (str(k),))
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                nm = v.get("name") if isinstance(v, dict) and isinstance(v.get("name"), str) else None
+                walk(v, loc + ("[%s]" % (nm if nm is not None else i),))
+        else:
+            n = len(pat.findall(str(node)))
+            if n: found[".".join(loc)] = found.get(".".join(loc), 0) + n
+    walk(d.get("jobs") or {}, ())
+    want = {"%s.if" % n: 4 for n in PRGATED}
+    want.update({"test.steps.[Aggregate shard results].env.SKIP_LEGS": 1, "test.steps.[Aggregate shard results].env.ACTIVE": 1,
+                 "test.steps.[Aggregate shard results].env.HEAD_SHA_OK": 2})
+    tags = []
+    if found != want:
+        for k in sorted(set(found) | set(want)):
+            if found.get(k, 0) != want.get(k, 0): tags.append("C-REF:%s:%d" % (k, found.get(k, 0)))
+    if sum(found.values()) != 16: tags.append("C-TOTAL:%d" % sum(found.values()))
     print(" ".join(tags)); sys.exit(0)
 
 if mode == "legparity":
@@ -691,6 +733,7 @@ live_check() { # <label> <mode>
 live_check WRAPPER wrapper
 live_check "GATED" gated
 live_check "PR-SELECTION JOB" prsel
+live_check "PR-SELECTION OUTPUT CENSUS" prcensus
 live_check "LEG PARITY" legparity
 live_check "TRUTH TABLE" truth
 live_check AGGREGATOR agg
@@ -987,6 +1030,86 @@ mutate_yml y-prsel-defaults "    permissions:
       contents: read
     outputs:
       head_sha:" prsel P-DEFAULTS
+# the closed key sets: a key nobody pinned, on the job or on either step, is a tag. `environment:` is the load-bearing one (an
+# environment-scoped variable overrides the repository one, so SWITCH would no longer be the value the env pin reads).
+PRSEL_HDR="  pr-selection:
+    if: github.event_name == 'pull_request'
+    continue-on-error: true"
+mutate_yml y-prsel-key-environment "$PRSEL_HDR" "  pr-selection:
+    environment: preview
+    if: github.event_name == 'pull_request'
+    continue-on-error: true" prsel P-JOBKEYS
+mutate_yml y-prsel-key-container "$PRSEL_HDR" "  pr-selection:
+    container: ubuntu:22.04
+    if: github.event_name == 'pull_request'
+    continue-on-error: true" prsel P-JOBKEYS
+mutate_yml y-prsel-key-strategy "$PRSEL_HDR" "  pr-selection:
+    strategy:
+      fail-fast: false
+    if: github.event_name == 'pull_request'
+    continue-on-error: true" prsel P-JOBKEYS
+mutate_yml y-prsel-key-services "$PRSEL_HDR" "  pr-selection:
+    services:
+      redis:
+        image: redis
+    if: github.event_name == 'pull_request'
+    continue-on-error: true" prsel P-JOBKEYS
+mutate_yml y-prsel-key-concurrency "$PRSEL_HDR" "  pr-selection:
+    concurrency: pr-selection
+    if: github.event_name == 'pull_request'
+    continue-on-error: true" prsel P-JOBKEYS
+CO_HDR="      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # The pull_request checkout is the MERGE ref"
+mutate_yml y-prsel-checkout-if "$CO_HDR" "      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        if: always()
+        with:
+          # The pull_request checkout is the MERGE ref" prsel P-COKEYS
+mutate_yml y-prsel-checkout-env "$CO_HDR" "      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        env:
+          GIT_DIR: /tmp/x
+        with:
+          # The pull_request checkout is the MERGE ref" prsel P-COKEYS
+mutate_yml y-prsel-step-with "        id: select
+        shell: bash" "        id: select
+        with:
+          x: y
+        shell: bash" prsel P-SELKEYS
+# `fetch-depth: 0` is checked by TYPE too (`0 == False` in Python), and `persist-credentials` by identity
+mutate_yml y-prsel-fetch-false "          fetch-depth: 0
+          persist-credentials: false" "          fetch-depth: false
+          persist-credentials: false" prsel P-FETCH
+mutate_yml y-prsel-fetch-string "          fetch-depth: 0
+          persist-credentials: false" "          fetch-depth: \"0\"
+          persist-credentials: false" prsel P-FETCH
+mutate_yml y-prsel-persist-zero "          fetch-depth: 0
+          persist-credentials: false" "          fetch-depth: 0
+          persist-credentials: 0" prsel P-FETCH
+# no workflow-level env or defaults: both reach every job, pr-selection included
+mutate_yml y-top-env "
+jobs:
+" "
+env:
+  PR_SELECTION_TEST_ALL: '1'
+jobs:
+" prsel P-TOPENV
+mutate_yml y-top-defaults "
+jobs:
+" "
+defaults:
+  run:
+    working-directory: scripts
+jobs:
+" prsel P-TOPDEFAULTS
+# the census of references to the pr-selection outputs: one more consumer, anywhere, is a tag
+mutate_yml y-census-step-if "        if: strategy.job-index == 0
+" "        if: strategy.job-index == 0 && needs.pr-selection.outputs.active != 'true'
+" prcensus C-REF:test-webplat.steps
+mutate_yml y-census-matrix-exclude "        shard: [\"1/2\", \"2/2\"]
+" "        shard: [\"1/2\", \"2/2\"]
+        exclude:
+          - shard: \${{ needs.pr-selection.outputs.skip_legs }}
+" prcensus C-REF:test-webplat.strategy
 # the ungated-required-job escape: any job other than the three PR-gated ones and `test` that needs pr-selection
 mutate_yml y-prneeds-extra "  lockfile-sync:
     # 15m — measured max 1.4m" "  lockfile-sync:
@@ -1015,6 +1138,7 @@ mutate_drv() { # <name> <old> <new> <expected-tag-prefix>
 mutate_drv y-leg-driver-for-drops-bun "for g in webplat bun scripts-heavy; do" "for g in webplat scripts-heavy; do" L-SET:driver-for
 mutate_drv y-leg-driver-for-adds-scripts "for g in webplat bun scripts-heavy; do" "for g in webplat bun scripts scripts-heavy; do" L-SET:driver-for
 mutate_drv y-leg-driver-regex-drops-heavy "=~ ^(test-webplat|test-bun|test-scripts-heavy)(," "=~ ^(test-webplat|test-bun)(," L-SET:driver-re
+mutate_drv y-leg-driver-regex-second-group-drops-heavy ")(,(test-webplat|test-bun|test-scripts-heavy))*\$" ")(,(test-webplat|test-bun))*\$" L-SET:driver-re
 
 # the release budget: a 10-minute bound on the job lengthens the longest declared needs: path (3 minutes does not), proven by
 # executing the release workflow's own function on the mutant
@@ -1121,8 +1245,8 @@ fi
 # ── Mutant accounting and measured counts ────────────────────────────────────
 if [ "$MUT_RUN" -eq "$MUT_CAUGHT" ]; then pass
 else fail "MUTANTS: $MUT_CAUGHT of $MUT_RUN caught (every mutant must be caught)"; fi
-if [ "$MUT_RUN" -ge 78 ] && [ "$EQUIV_RUN" -eq 2 ] && [ "$EQUIV_OK" -eq 2 ]; then pass
-else fail "MUTANT FLOOR: $MUT_RUN mutants and controls ran (floor 78), $EQUIV_OK of $EQUIV_RUN equivalent mutants confirmed (want 2 of 2)"; fi
+if [ "$MUT_RUN" -ge 94 ] && [ "$EQUIV_RUN" -eq 2 ] && [ "$EQUIV_OK" -eq 2 ]; then pass
+else fail "MUTANT FLOOR: $MUT_RUN mutants and controls ran (floor 94), $EQUIV_OK of $EQUIV_RUN equivalent mutants confirmed (want 2 of 2)"; fi
 
 # ── Assertion floor ──────────────────────────────────────────────────────────
 # DELIBERATELY NOT ROUTED THROUGH fail(): a floor that increments the counter it guards shares a
@@ -1131,7 +1255,7 @@ else fail "MUTANT FLOOR: $MUT_RUN mutants and controls ran (floor 78), $EQUIV_OK
 # KEEP THESE TWO ASSIGNMENTS CONTIGUOUS (no comment between them or before the `if`):
 # scripts/guard-vacuity-floor.test.sh binds a floor's variables by walking BACKWARD from the `if`.
 _total=$((passes + fails))
-_FLOOR=173
+_FLOOR=190
 if [ "$_total" -lt "$_FLOOR" ]; then
   printf 'FAIL: assertion floor: %d assertion(s) ran, floor is %d — the harness lost coverage rather than passing it\n' \
     "$_total" "$_FLOOR" >&2

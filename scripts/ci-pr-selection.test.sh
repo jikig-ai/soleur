@@ -31,6 +31,12 @@
 # Mutants whose ONLY red checks are reason labels are marked EQUIVALENT-LABEL in the battery below (verified with
 # PRSEL_PROBE_VERBOSE=all, which names every check a mutant turned red).
 #
+# THE FINAL-BLOCK SIGNAL WINDOW (a signal between the final output printf and `finished=1`) cannot be driven deterministically
+# from a harness (it needs a signal delivered while one builtin printf is in flight; any FIFO or SIGSTOP scheme is a timing
+# race on a loaded box). It is therefore pinned two ways: EVERY driven run asserts the notice `active` equals the output-file
+# `active` (the symptom), and row_signal_window asserts the SOURCE ORDER (signals ignored, then the block, then `finished=1`).
+# The mutant that removes the signal-ignore is killed by that static order check ONLY, not behaviourally.
+#
 # THE ACTIVATION LOCK IS TESTED BOTH WAYS: with the lock line present and SWITCH=on, active is false and skip_legs is
 # empty (G2-13); a copy with the lock line removed and SWITCH=on on a doc-only fixture yields active=true for EXACTLY `on`.
 #
@@ -68,14 +74,15 @@ SANDBOX=$(mktemp -d "$TMPDIR/ci-pr-selection-test.XXXXXXXX") || {
   printf 'FAIL: could not create sandbox (mktemp -d failed)\n' >&2; exit 2; }
 # A harness that fails to SET UP must abort: a half-built sandbox yields a confident wrong verdict about the SUT.
 trap 'rm -rf "$SANDBOX"' EXIT
-assert_fixture_dir() {  # every directory this suite writes into must be absolute (an empty or relative one would write into the cwd)
+# Canonical body (plugins/soleur/test/test-helpers.sh), byte-equal by plugins/soleur/test/fixture-dir-operand-assert.test.sh: every directory this suite writes into must be absolute.
+assert_fixture_dir() {
   case "${1-}" in
-    "") printf 'FATAL: fixture dir is EMPTY\n' >&2; exit 2 ;;
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
     */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
     /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
     /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
     /*) : ;;
-    *) printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
   esac
 }
 
@@ -147,6 +154,16 @@ for _t in bash git timeout mktemp wc tr env rm; do
 done
 unset _t
 echo "  restricted PATH: bash, git and coreutils only (no node, bun, python, jq, awk, sed, grep, perl, gh)"
+
+# A second PATH whose `git diff` prints the REAL listing and then exits 1 (every other git subcommand is the real git).
+BIN_GITFAIL="$SANDBOX/bin-gitfail"
+mkdir -p "$BIN_GITFAIL"
+for _t in "$BIN"/*; do [ "${_t##*/}" = git ] || ln -s "$(readlink "$_t")" "$BIN_GITFAIL/${_t##*/}"; done
+_realgit=$(readlink "$BIN/git")
+_realbash=$(readlink "$BIN/bash")
+printf '#!%s\nif [ "${1:-}" = diff ]; then %s "$@"; exit 1; fi\nexec %s "$@"\n' "$_realbash" "$_realgit" "$_realgit" > "$BIN_GITFAIL/git"
+chmod +x "$BIN_GITFAIL/git"
+unset _t _realgit _realbash
 
 # ── Fixture git environment (hermetic config, discovery ceiling, synthesized identity) ──
 FX="$SANDBOX/fx"
@@ -257,7 +274,7 @@ mkdir -p "$FX_BASE"
 fx_new() {  # $1=name
   cp -a "$FX_BASE" "$FX/$1" && git -C "$FX/$1" checkout -q -b pr
 }
-fx_op() {  # $1=name $2=op(M|A|D|R|T) $3=path [$4=path2]
+fx_op() {  # $1=name $2=op(M|A|D|R|T|L|G|X: L=symlink, G=gitlink, X=exec-bit) $3=path [$4=path2]
   local d="$FX/$1"
   case "$2" in
     M) printf 'edit %s\n' "$RANDOM" >> "$d/$3"; git -C "$d" add -- "$3" ;;
@@ -345,6 +362,8 @@ fx_done ndbare
 fx_case nasc0; fx_op nasc0 A $'knowledge-base/zzleak-ls\xe2\x80\xa8x.md'; fx_done nasc0
 fx_case nasc1; fx_op nasc1 A $'knowledge-base/zzleak-c1\xc2\x85x.md'; fx_done nasc1
 fx_case nasc2; fx_op nasc2 A $'knowledge-base/zzleak-\xc3\xa9.md'; fx_done nasc2
+# an INVALID UTF-8 byte (0xff) in a doc path: only the driver's own LC_ALL=C pin keeps it an odd path under a UTF-8 caller locale
+fx_case nbad; fx_op nbad A $'knowledge-base/zzleak-\xffx.md'; fx_done nbad
 # an ADVANCED base: main gains a non-doc commit AFTER the branch point; the PR itself is doc-only
 fx_case adv; fx_op adv M "$KB_A"
 git -C "$FX/adv" commit -q -m pr && git -C "$FX/adv" checkout -q main \
@@ -390,6 +409,8 @@ unset _long _long2
 for _i in "${!TRIGGERS[@]}"; do fx_case "trg$_i"; fx_op "trg$_i" M "${TRIGGERS[$_i]}"; fx_done "trg$_i"; done
 for _i in "${!SOURCED[@]}"; do fx_case "src$_i"; fx_op "src$_i" M "${SOURCED[$_i]}"; fx_done "src$_i"; done
 unset _i
+# the workflow file plus an allowed doc in one PR (a mixed diff must stay full on the trigger entry alone)
+fx_case trgdoc; fx_op trgdoc M ".github/workflows/ci.yml"; fx_op trgdoc M "$KB_A"; fx_done trgdoc
 # shape fixtures
 fx_case nm; fx_op nm M "$KB_A"
 git -C "$FX/nm" commit -q -m pr && git -C "$FX/nm" checkout -q main && git -C "$FX/nm" merge -q --ff-only pr > /dev/null 2>&1
@@ -424,6 +445,8 @@ for a in "$@"; do
   esac
 done
 printf '%s\n' "$line" >> "$d/log"
+# which scratch dir (under the RUNNER_TEMP the driver was given) exists right now: lets a row prove its cleanup check is not vacuous
+if [ -n "${RUNNER_TEMP:-}" ]; then for w in "$RUNNER_TEMP"/pr-selection.*; do [ ! -d "$w" ] || printf '%s\n' "$w" >> "$d/work.$n"; done; fi
 # a hostile child: try to forge the step's output file (only possible if the driver let it inherit GITHUB_OUTPUT)
 [ -z "${STUB_WRITE_OUT:-}" ] || [ -z "${GITHUB_OUTPUT:-}" ] || printf 'active=true\nskip_legs=test-bun\n' >> "$GITHUB_OUTPUT"
 [ "${STUB_HANG_AT:-0}" = "$n" ] && exec sleep 8
@@ -650,6 +673,9 @@ drive() {  # $1=fixture $2=driver-file; remaining args: KEY=VALUE overrides (lat
   check_match "run$RUN_N($name) head_sha grammar" "$O_HEAD" '^([0-9a-f]{40})?$'
   check_match "run$RUN_N($name) base_sha grammar" "$O_BASE" '^([0-9a-f]{40})?$'
   check_match "run$RUN_N($name) active grammar" "$O_ACTIVE" '^(true|false)$'
+  if [ "$EXPECT_KILLED" != 1 ]; then
+    check_eq "run$RUN_N($name) the notice active equals the output-file active" "$N_ACTIVE" "$O_ACTIVE"
+  fi
   check_match "run$RUN_N($name) skip_legs grammar" "$O_SKIP" '^([a-z-]+(,[a-z-]+)*)?$'
   if [ "$O_ACTIVE" = true ]; then
     check_true "run$RUN_N($name) active=true carries a non-empty skip list" "$([ -n "$O_SKIP" ]; echo $?)"
@@ -736,6 +762,14 @@ row_diff_error() {  # G2-1: `git diff` fails with an otherwise valid shape (a mi
   local d="$1"
   drive broken "$d"
   expect_full "G2-1 git diff fails" diff_error 0
+  # a git that PRINTS the real listing and then exits 1: only the exit status can stop the driver (the listing is valid doc-only)
+  local gl grc
+  gl=$(cd "$FX/k1" && PATH="$BIN_GITFAIL" git diff -z --raw --no-renames --no-abbrev HEAD^1 HEAD | wc -c); grc=$(cd "$FX/k1" && PATH="$BIN_GITFAIL" git diff > /dev/null 2>&1; echo $?)
+  check_true "G2-1 precondition: the failing git prints a non-empty listing ($gl bytes)" "$([ "$gl" -gt 0 ]; echo $?)"
+  check_eq "G2-1 precondition: the failing git exits 1" "$grc" "1"
+  drive k1 "$d" "PATH=$BIN_GITFAIL"
+  expect_full "G2-1 git diff prints a valid listing then exits 1: the selector is never called" diff_error 0
+  check_eq "G2-1 git diff exit 1 with a listing: nothing would be skipped" "$N_WOULD" "none"
 }
 row_trigger_core() {  # G2-2: every trigger-list entry
   local d="$1" i
@@ -1063,6 +1097,14 @@ row_nonascii() {  # a byte outside printable ASCII (U+2028, a C1 control, a UTF-
     drive "$f" "$d"
     expect_full "NON-ASCII path ($f)" odd_path 0
   done
+  drive nbad "$d"
+  expect_full "NON-ASCII an invalid UTF-8 byte (0xff) in a path" odd_path 0
+  # the caller's locale must not matter: the driver pins LC_ALL=C. In C.UTF-8 the same regex does NOT match the invalid byte.
+  local pre
+  pre=$(LC_ALL=C.UTF-8 bash -c 'if [[ "$1" =~ [^\ -~] ]]; then echo match; else echo nomatch; fi' _ $'knowledge-base/zzleak-\xffx.md' 2> /dev/null)
+  check_eq "NON-ASCII precondition: in a UTF-8 locale the stage-1 regex alone misses the 0xff byte" "$pre" "nomatch"
+  drive nbad "$d" "LC_ALL=C.UTF-8"
+  expect_full "NON-ASCII an invalid UTF-8 byte (0xff) under a UTF-8 caller locale (LC_ALL pinned to C)" odd_path 0
 }
 row_advanced_base() {  # main moved on after the branch point: the diff is HEAD^1..HEAD (the PR's OWN paths), not HEAD^1..HEAD^2
   local d="$1"
@@ -1120,6 +1162,54 @@ row_trigger_active() {  # against the UNLOCKED driver with the switch ON: a trig
     check_eq "TRIGGER-ACTIVE '${TRIGGERS[$i]}' with SWITCH=on, unlocked: active" "$O_ACTIVE" "false"
     check_eq "TRIGGER-ACTIVE '${TRIGGERS[$i]}' with SWITCH=on, unlocked: skip_legs" "$O_SKIP" ""
   done
+  drive trgdoc "$d" "SWITCH=on"
+  check_eq "TRIGGER-ACTIVE ci.yml plus an allowed doc with SWITCH=on, unlocked: stays full by the trigger" "$N_REASON" "trigger"
+  check_eq "TRIGGER-ACTIVE ci.yml plus an allowed doc with SWITCH=on, unlocked: active" "$O_ACTIVE" "false"
+  check_eq "TRIGGER-ACTIVE ci.yml plus an allowed doc with SWITCH=on, unlocked: stage 2 never ran" "$STUB_CALLS" "0"
+}
+row_empty_tok() {  # an aborted group evaluation (empty token) is degraded, tokened `empty`, and keeps the notice well-formed
+  local d="$1" m="$SANDBOX/emptytok.$RUN_N.sh"
+  sed 's|^  local line rest label n=0 i found any_sel any_always$|&\n  : "${zz_unbound_eval}"|' "$d" > "$m"
+  if cmp -s "$m" "$d"; then record "empty-token injection landed" 0 "the injected unbound expansion did not land"; return; fi
+  EXPECT_STDERR=1
+  drive k1 "$m" "SWITCH=on"
+  EXPECT_STDERR=0
+  check_eq "EMPTY-TOK the driver still exits 0" "$RC" "0"
+  check_eq "EMPTY-TOK the notice is well-formed (groups grammar intact)" "$NOTICE_OK" "1"
+  check_eq "EMPTY-TOK every aborted group is the token 'empty'" "$N_GROUPS" "webplat:empty,bun:empty,scripts-heavy:empty"
+  check_eq "EMPTY-TOK reason is affected_degraded" "$N_REASON" "affected_degraded"
+  check_eq "EMPTY-TOK nothing would be skipped" "$N_WOULD" "none"
+  check_eq "EMPTY-TOK active stays false" "$O_ACTIVE" "false"
+}
+row_scratch() {  # the scratch dir under RUNNER_TEMP is removed on every exit path, signals included
+  local d="$1" rt w
+  rt="$SANDBOX/rt-clean.$RUN_N"; mkdir -p "$rt"
+  drive k1 "$d" "RUNNER_TEMP=$rt"
+  w=""; [ ! -s "$O/stub/work.1" ] || w=$(head -n 1 "$O/stub/work.1")
+  check_true "SCRATCH normal run: the stub saw the scratch dir while it ran (not vacuous)" "$([ -n "$w" ]; echo $?)"
+  check_eq "SCRATCH normal run: no scratch dir left" "$(ls -A "$rt" | wc -l)" "0"
+  drive code "$d" "RUNNER_TEMP=$rt"
+  check_eq "SCRATCH an early full return (non_doc): no scratch dir left" "$(ls -A "$rt" | wc -l)" "0"
+  drive broken "$d" "RUNNER_TEMP=$rt"
+  check_eq "SCRATCH a git diff failure: no scratch dir left" "$(ls -A "$rt" | wc -l)" "0"
+  drive k1 "$d" "RUNNER_TEMP=$rt" "SWITCH=on" "STUB_TERM_AT=2"
+  w=""; [ ! -s "$O/stub/work.2" ] || w=$(head -n 1 "$O/stub/work.2")
+  check_true "SCRATCH SIGTERM run: the stub saw the scratch dir while it ran (not vacuous)" "$([ -n "$w" ]; echo $?)"
+  check_eq "SCRATCH SIGTERM run: reason" "$N_REASON" "signalled"
+  check_eq "SCRATCH SIGTERM run: no scratch dir left" "$(ls -A "$rt" | wc -l)" "0"
+}
+row_signal_window() {  # source order: signals ignored, THEN the final block, THEN finished=1 (a behavioural drive is not feasible)
+  local d="$1" line ln=0 t=0 pf=0 fin=0
+  while IFS= read -r line; do
+    ln=$((ln + 1))
+    case "$line" in
+      "trap '' HUP INT TERM"*) t=$ln ;;
+      *"# GUARD:G2-12-FINAL-BLOCK") pf=$ln ;;
+      "finished=1") fin=$ln ;;
+    esac
+  done < "$d"
+  check_true "SIGWINDOW signals are ignored before the final block (trap line $t, block line $pf)" "$([ "$t" -gt 0 ] && [ "$pf" -gt "$t" ]; echo $?)"
+  check_true "SIGWINDOW finished=1 comes after the final block (block line $pf, finished line $fin)" "$([ "$pf" -gt 0 ] && [ "$fin" -gt "$pf" ]; echo $?)"
 }
 
 # Rows that run against the PRISTINE (locked) driver, and rows that need the lock-neutralized copy.
@@ -1128,7 +1218,7 @@ PRISTINE_ROWS=(row_not_pr row_shape_ok row_shape_count row_shape_githubsha row_s
                row_odd_comma row_status row_docs_outside row_docs_inside row_fork row_maxfiles row_bigpaths row_empty
                row_ci_leak row_selector_unknowns row_selector_timeout row_groups row_real_shape row_must_pass
                row_modes row_allowlist row_nonascii row_advanced_base row_selection_shapes row_argv_cap row_leak row_budget
-               row_hang_first row_child_env row_lever_error)
+               row_hang_first row_child_env row_lever_error row_empty_tok row_scratch row_signal_window)
 UNLOCKED_ROWS=(row_switch row_diagrams row_defaults_first row_term row_trigger_active)
 
 # ── CONTROL: the unmutated driver must be GREEN before any mutant is read ────
@@ -1220,7 +1310,7 @@ drop_return() { printf 's@[[:space:]]*|| return 0[[:space:]]*# GUARD:%s$@  # MUT
 mutate "G2-1 parent count not checked"            "$PRISTINE" "$(kill_guard G2-1-TWO-PARENTS)"             row_shape_count
 mutate "G2-1 HEAD == GITHUB_SHA not checked"      "$PRISTINE" "$(kill_guard G2-1-HEAD-IS-GITHUB-SHA)"      row_shape_githubsha
 mutate "G2-1 HEAD^2 == PR head not checked"       "$PRISTINE" "$(kill_guard G2-1-PARENT2-IS-PR-HEAD)"      row_shape_prhead
-mutate "G2-1 git diff failure ignored"            "$PRISTINE" "$(drop_return G2-1-DIFF-RC)"                row_diff_error   # EQUIVALENT-LABEL (verified, PRSEL_PROBE_VERBOSE=all: only reason labels turn red): an empty listing is still full (empty_diff)
+mutate "G2-1 git diff failure ignored"            "$PRISTINE" "$(drop_return G2-1-DIFF-RC)"                row_diff_error   # BEHAVIOURAL kill: a git that prints the listing and exits 1 reaches stage 2 (selector called) once the exit status is ignored
 mutate "G2-1 only a pull_request run selects"     "$PRISTINE" "$(kill_guard G2-NOT-PR)"                    row_not_pr
 # G2-2
 mutate "G2-2 trigger list neutered"               "$PRISTINE" "$(kill_guard G2-2-TRIGGER)"                 row_trigger_core row_trigger_sourced   # EQUIVALENT-LABEL (verified, PRSEL_PROBE_VERBOSE=all: only reason labels turn red): the trigger paths are outside the allowlist, so non_doc is still full
@@ -1228,6 +1318,8 @@ mutate "G2-2 scripts/lib/** prefix dropped"       "$PRISTINE" '/^    scripts\/li
 mutate "G2-2 heavy manifest dropped from the list" "$PRISTINE" '/^    scripts\/suite-shard-legs-heavy.tsv) return 0 ;;$/d' row_trigger_core   # EQUIVALENT-LABEL (verified, PRSEL_PROBE_VERBOSE=all: only reason labels turn red): same
 mutate "G2-2 scripts/test-all.sh dropped from the list" "$PRISTINE" '/^    scripts\/test-all.sh) return 0 ;;$/d' row_trigger_core   # EQUIVALENT-LABEL (verified, PRSEL_PROBE_VERBOSE=all: only reason labels turn red): same
 mutate "G2-2 ci.yml dropped from the list"        "$PRISTINE" '/^    \.github\/workflows\/ci.yml) return 0 ;;$/d' row_trigger_core   # EQUIVALENT-LABEL (verified, PRSEL_PROBE_VERBOSE=all: only reason labels turn red): same
+# the ci.yml entry alone, with the allowlist widened to .github/workflows/*: a BEHAVIOURAL kill (the workflow file arms a skip)
+mutate "G2-2 ci.yml dropped from the list AND .github/workflows/* allowlisted" "$UNLOCKED" '/^    \.github\/workflows\/ci.yml) return 0 ;;$/d'$'\n''s|^    knowledge-base/?\*\.md) return 0 ;;$|    .github/workflows/*) return 0 ;;\n&|' row_trigger_active
 # G2-5 / G2-13 (against the lock-neutralized copy so the switch is what decides)
 mutate "G2-5 switch lowercased and trimmed"       "$UNLOCKED" 's|^\[ -z "\${SWITCH:-}" \] \|\| sw=invalid$|SWITCH="${SWITCH:-}"; SWITCH="${SWITCH//[[:space:]]/}"; SWITCH="${SWITCH,,}"\n&|' row_switch
 mutate "G2-5 switch matched by prefix"            "$UNLOCKED" 's|^\[ "\${SWITCH:-}" = on \] && sw=on  # GUARD:G2-5-SWITCH-EXACT$|[[ "${SWITCH:-}" == on* ]] \&\& sw=on|' row_switch
@@ -1272,6 +1364,8 @@ mutate "G2-11 an always_on class row is accepted"  "$PRISTINE" "$(kill_guard G2-
 mutate "G2-11 a selected (sel=1) row is accepted"  "$PRISTINE" "$(kill_guard G2-11-SELECTED)"               row_groups row_real_shape
 mutate "G2-11 an empty stream is accepted"         "$PRISTINE" "$(kill_guard G2-11-NO-RECORDS)"            row_groups
 mutate "G2-11 a decline needs no pr-gated label"   "$PRISTINE" 's|^    "scripts/test-all-affected") return 0 ;;$|    *) return 0 ;;|' row_groups row_real_shape
+mutate "G2-11 an empty or unknown group token is kept as is" "$PRISTINE" "$(kill_guard G2-11-EMPTY-TOK)"       row_empty_tok
+mutate "G2-11 an empty group token is not degraded" "$PRISTINE" 's#bad_rc|parse|missing_row|no_records|empty) degraded=1#bad_rc|parse|missing_row|no_records) degraded=1#' row_empty_tok   # EQUIVALENT-LABEL (the reason IS the signal)
 # G2-14
 mutate "G2-14 control characters accepted in a path" "$PRISTINE" "$(kill_guard G2-14-CNTRL)"               row_odd_cntrl
 mutate "G2-14 '::' accepted in a path"            "$PRISTINE" "$(kill_guard G2-14-COLONS)"                 row_odd_colons
@@ -1304,6 +1398,14 @@ mutate "G2-15 the 500-file cap is not enforced"   "$PRISTINE" "$(kill_guard G2-1
 mutate "G2-15 the cap is 501"                     "$PRISTINE" 's|\[ "\$files" -le 500 \]|[ "$files" -le 501 ]|' row_maxfiles
 mutate "G2-15 an empty diff is not full by its own reason" "$PRISTINE" "$(kill_guard G2-15-EMPTY-DIFF)"    row_empty   # EQUIVALENT-LABEL (verified, PRSEL_PROBE_VERBOSE=all: only reason labels turn red): an empty listing falls to malformed_diff, still full
 
+# the final-block signal window (static order check only: not drivable deterministically) and the locale pin (behavioural)
+mutate "G2-12 signals are not ignored across the final block and finished=1" "$PRISTINE" "/GUARD:G2-12-SIGNAL-WINDOW\$/d" row_signal_window
+mutate "NON-ASCII the LC_ALL=C pin is removed (a UTF-8 caller locale accepts an invalid byte)" "$PRISTINE" '/^export LC_ALL=C$/d' row_nonascii
+RMRF='rm -rf'  # the removal command spelled inside a sed script is TEXT for the mutant, not a removal by this suite
+# the scratch dir
+mutate "SCRATCH the scratch dir is never removed" "$PRISTINE" "$(kill_guard G2-SCRATCH-CLEANUP)" row_scratch
+mutate "SCRATCH the scratch dir is removed on the normal path only (not on a signal)" "$PRISTINE" "$(kill_guard G2-SCRATCH-CLEANUP)"$'\n''s#^exit 0  \# on_exit removes the scratch dir$#[ -z "$work" ] || '"$RMRF"' "$work"\nexit 0#' row_scratch
+
 # budget sanitation and the remaining-budget path
 mutate "BUDGET a leading zero is read as octal" "$PRISTINE" 's|^budget=\$((10#\$budget))$|budget=$((budget + 0))|' row_budget
 mutate "BUDGET the 6-digit cap is removed" "$PRISTINE" '/^\[ "\${#budget}" -le 6 \] || budget=120$/d' row_budget
@@ -1334,7 +1436,7 @@ fi
 # through pass()/fail() is silenced by the same edit that silences everything else. DERIVED FROM A MEASURED GREEN RUN, not
 # guessed: a floor above the real count is a broken instrument that reds a correct tree, a floor below it is slack in
 # which an undispatched row can hide. Re-derive after adding a row:  bash scripts/ci-pr-selection.test.sh | tail -1
-# MEASURED green run (2026-10-14): 2765 rows = BASE_ROWS + ROWS_PER_SOURCED_FILE * 7 sourced files, with 84 mutant
+# MEASURED green run (2026-10-14): 3090 rows = BASE_ROWS + ROWS_PER_SOURCED_FILE * 7 sourced files, with 91 mutant
 # verdicts counted among them. ROWS_PER_SOURCED_FILE is MEASURED, not estimated: running this suite on a copy of the repo whose
 # scripts/test-all.sh has ONE fewer `source` line moved the total by exactly 18 rows (one `drive` of the file's trigger
 # fixture with its 12 invariants, the 5 expect_full checks, and the 1 "sourced file is under scripts/lib/" row). BASE_ROWS is
@@ -1342,14 +1444,14 @@ fi
 # fixed part still does. Re-derive BASE_ROWS after adding or removing a row:
 #   bash scripts/ci-pr-selection.test.sh | tail -1     then   BASE_ROWS = total - ROWS_PER_SOURCED_FILE * sourced_count
 ROWS_PER_SOURCED_FILE=18
-BASE_ROWS=2639
+BASE_ROWS=2964
 MIN_ROWS=$((BASE_ROWS + ROWS_PER_SOURCED_FILE * ${#SOURCED[@]}))
 if [ "$TOTAL" -lt "$MIN_ROWS" ]; then
   printf 'FAIL: assertion floor: %d rows executed, at least %d required. Rows were removed or a loop stopped early.\n' \
     "$TOTAL" "$MIN_ROWS" >&2
   exit 1
 fi
-MIN_MUTANTS=84
+MIN_MUTANTS=91
 if [ "$MUT_TOTAL" -lt "$MIN_MUTANTS" ]; then
   printf 'FAIL: mutation floor: %d mutants executed, at least %d required.\n' "$MUT_TOTAL" "$MIN_MUTANTS" >&2
   exit 1

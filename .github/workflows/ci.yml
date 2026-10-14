@@ -2076,9 +2076,10 @@ jobs:
                 ;;
               skipped)
                 echo "$shard: SKIPPED — the leg did not run" >&2
-                # A re-run (attempt > 1) reuses attempt 1's cached pr-selection outputs, and a non-tolerated skip then reds the check
-                # with no other hint. Name the remedy only when a skip decision exists to be cached (SKIP_LEGS non-empty).
-                if [[ "$ATTEMPT" != "1" && -n "$SKIP_LEGS" ]]; then
+                # A re-run (attempt > 1) reuses attempt 1's cached pr-selection outputs, and a skipped leg that the cached decision
+                # NAMED then reds the check with no other hint. Name the remedy only for such a leg (the delimited match the tolerance
+                # uses): a leg skipped for another reason (draft-light, push-dedupe, an upstream need) keeps the plain line above.
+                if [[ "$ATTEMPT" != "1" && ",$SKIP_LEGS," == *",$shard,"* ]]; then
                   echo "$shard: SKIPPED — the pr-selection skip decision is cached from attempt 1; use \"Re-run all jobs\" (or push) to get a full run" >&2
                 fi
                 ;;
