@@ -15,7 +15,7 @@
 package_update: true
 packages:
   - docker.io # runs the zot container (RUN-only host, no build → docker.io suffices, not docker-ce)
-  - apache2-utils # htpasswd -Bbn (bcrypt) — build the zot htpasswd on-host from Doppler tokens
+  - apache2-utils # htpasswd -Bin (bcrypt) — build the zot htpasswd on-host from Doppler tokens
   - curl
   - jq # parse `doppler secrets --only-names --json` for the boot-time isolation self-check (runcmd)
   - e2fsprogs # resize2fs — grow the ext4 fs to fill the 60 GB volume (#6240/#6247). The packages: stage
@@ -289,7 +289,7 @@ write_files:
       USE=$(df --output=pcent /var/lib/zot 2>/dev/null | tail -1 | tr -dc '0-9')
       PING_RC=0
       if [ -n "$USE" ] && [ "$USE" -lt 85 ]; then
-        curl -fsS -m 10 "${disk_heartbeat_url}" >/dev/null 2>&1 || PING_RC=$?
+        curl --disable --noproxy '*' -g -fsS -m 10 --config - >/dev/null 2>&1 < <(printf 'url = "%s"\n' '${disk_heartbeat_url}') || PING_RC=$?
       fi
       # (2) Structured self-report → Better Stack Logs (SOLEUR_ZOT_DISK).
       PCENT="$${USE:-}"; [ -n "$PCENT" ] || PCENT=-1
@@ -607,7 +607,7 @@ write_files:
       # Comparing Doppler to Doppler proves nothing (both copies derive from the same
       # random_password and agree BY CONSTRUCTION even when both have drifted from the host); the
       # only comparison with evidentiary value is host-htpasswd vs the CURRENT token, which is
-      # exactly this. `htpasswd -vb` verifies a password against the file and emits only a fixed
+      # exactly this. `htpasswd -vi` verifies a password against the file and emits only a fixed
       # status line ("Password for user X correct." / "password verification failed") — the token
       # is NEVER printed; verified on ubuntu:24.04 (the shipped host image): exit 0 = match,
       # exit 3 = mismatch. Output is discarded regardless; a BOOLEAN is all that crosses the
@@ -634,7 +634,7 @@ write_files:
       # cloud-init edit renamed the htpasswd user (rc=6) — sending the operator to rotate a
       # credential that was never stale, which is the inverse of this probe's job.
       _htp_verify() {
-        htpasswd -vb /etc/zot/htpasswd "$1" "$2" >/dev/null 2>&1
+        printf '%s' "$2" | htpasswd -vi /etc/zot/htpasswd "$1" >/dev/null 2>&1
         case "$?" in
           0) printf 'true' ;;
           3) printf 'false' ;;
@@ -1091,7 +1091,7 @@ write_files:
       PING=none
       case "$${HTTP_CODE:-000}" in
         200|401)
-          if curl -fsS -m 10 -o /dev/null "${liveness_heartbeat_url}"; then PING=ok; else PING=fail; fi
+          if curl --disable --noproxy '*' -g -fsS -m 10 -o /dev/null --config - < <(printf 'url = "%s"\n' '${liveness_heartbeat_url}'); then PING=ok; else PING=fail; fi
           ;;
       esac
       # (3) (#7270) Record WHY, off-box, without a new token or egress. Before this the feeder was
@@ -2554,10 +2554,10 @@ runcmd:
     fi
     [ -n "$ZOT_PULL_TOKEN" ] || { echo "[zot] FATAL: ZOT_PULL_TOKEN empty — refusing to build htpasswd"; exit 1; }
     [ -n "$ZOT_PUSH_TOKEN" ] || { echo "[zot] FATAL: ZOT_PUSH_TOKEN empty — refusing to build htpasswd"; exit 1; }
-    mkdir -p /etc/zot
-    htpasswd -Bbn '${zot_pull_user}' "$ZOT_PULL_TOKEN"  > /etc/zot/htpasswd
-    htpasswd -Bbn '${zot_push_user}' "$ZOT_PUSH_TOKEN" >> /etc/zot/htpasswd
-    chmod 600 /etc/zot/htpasswd
+    install -d -m 755 /etc/zot
+    install -m 600 /dev/null /etc/zot/htpasswd
+    printf '%s' "$ZOT_PULL_TOKEN" | htpasswd -Bin '${zot_pull_user}'  > /etc/zot/htpasswd
+    printf '%s' "$ZOT_PUSH_TOKEN" | htpasswd -Bin '${zot_push_user}' >> /etc/zot/htpasswd
     for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
     # (#8714 5.3b-iii) zot runs ONLY by the image ID zot-image-fetch.sh verified (asset sha256 == T,
     # ID == upstream C or D). No ID file, or one that is not a bare sha256 ID: refuse, never fall

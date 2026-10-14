@@ -146,7 +146,7 @@ cat > "$BIN/curl" <<'EOS'
 #   -w  : ONLY with `-w '%{http_code}'` does curl print the status code. A stub that prints the
 #         code unconditionally hands the feeder a value real curl would never have given it.
 #   -m  : without it, a hung zot hangs the unit (STUB_HANG models this; see T5).
-target=""; has_m=0; has_f=0; has_w_code=0; prev=""
+target=""; has_m=0; has_f=0; has_w_code=0; prev=""; has_cfg=0
 for a in "$@"; do
   case "$a" in
     http://*|https://*) target="$a" ;;
@@ -154,8 +154,17 @@ for a in "$@"; do
     '%{http_code}')     has_w_code=1 ;;
   esac
   [[ "$prev" == "-m" ]] && has_m=1
+  [[ "$prev" == "--config" && "$a" == "-" ]] && has_cfg=1
   prev="$a"
 done
+# (#10119/#10093) The ping URL's path is the secret, so the feeder hands it over on curl's stdin config
+# (`--config -`, a `url = "..."` line), never on argv. Every argv is recorded to $STUB_ARGV so a row can assert
+# the heartbeat URL is NOT in it; the stdin URL is the target. A `--config -` with no url line leaves the target empty.
+printf '%s\n' "$*" >> "$STUB_ARGV"
+if [[ "$has_cfg" == "1" ]]; then
+  cfg_url="$(sed -n 's/^url = "\(.*\)"$/\1/p')"
+  [[ -n "$cfg_url" ]] && target="$cfg_url"
+fi
 printf '%s\n' "$target" >> "$STUB_PROBES"
 respond() {
   local code="$1"
@@ -206,6 +215,8 @@ run_feeder() {
   local private_code="$1" loopback_code="$2"
   STUB_EMIT="$TMP/emit.$$.$RANDOM"
   STUB_PROBES="$TMP/probes.$$.$RANDOM"
+  STUB_ARGV="$TMP/argv.$$.$RANDOM"
+  : > "$STUB_ARGV"
   : > "$STUB_EMIT"
   STUB_ORDER="$TMP/order.$$.$RANDOM"
   : > "$STUB_ORDER"
@@ -214,6 +225,7 @@ run_feeder() {
     PATH="$BIN:/usr/bin:/bin" \
     STUB_EMIT="$STUB_EMIT" \
     STUB_PROBES="$STUB_PROBES" \
+    STUB_ARGV="$STUB_ARGV" \
     STUB_PRIVATE_CODE="$private_code" \
     STUB_LOCALHOST_CODE="$loopback_code" \
     STUB_HANG="${STUB_HANG:-0}" \
@@ -231,6 +243,8 @@ echo "--- T1: zot answers 401 (auth-gated — the production shape) => ping emit
 run_feeder 401 401
 assert "T1 emits a heartbeat ping on 401" "[[ -s '$STUB_EMIT' ]]"
 assert "T1 probed the private IP" "grep -q '$TEST_IP:5000' '$STUB_PROBES'"
+assert "T1 the heartbeat URL reached curl on its stdin config and NOT on argv (#10119)" \
+  "grep -q 'heartbeat' '$STUB_EMIT' && ! grep -q 'heartbeat' '$STUB_ARGV' && grep -qE -- '--disable.*--config -' '$STUB_ARGV'"
 
 echo ""
 echo "--- T1b: zot answers 200 => ping emitted"

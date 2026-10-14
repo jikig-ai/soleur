@@ -37,7 +37,7 @@ TS_TEST="$REPO_ROOT/plugins/soleur/test/cloud-init-user-data-size.test.ts"
 # EQUALITY, not a floor. A `checks < N` floor cannot distinguish "all arms passed" from "one
 # arm's failure was swallowed" whenever a green run emits exactly N+1 — which is how the first
 # revision shipped (floor 8, green run 9). Adding an arm must move this constant.
-EXPECTED_CHECKS=28  # 22 + three #8714 5.3b-iii zot-mirror arms (landed + exit each)
+EXPECTED_CHECKS=30  # 22 + three #8714 5.3b-iii zot-mirror arms (landed + exit each) + two heartbeat-URL shape rows (#10093)
 
 fails=0
 checks=0
@@ -285,6 +285,31 @@ run_arm "zot-mirror block reading a local outside the block" \
   "sed -i -E 's|(zot_manifest_digest[[:space:]]*=[[:space:]]*regex\\(.*)local\\.zot_image_amd64\\)|\\1local.zot_image)|' zot-registry.tf" \
   2 \
   "grep -qE 'zot_manifest_digest[[:space:]]*=.*local\\.zot_image\\)' zot-registry.tf"
+
+# --- (#10093/#10119) the two heartbeat URLs reach curl as a quoted literal inside a stdin `url = "%s"` config -----
+# The registry host's two heartbeat curls take their URL from `printf 'url = "%s"\n' '<url>'`, a single-quoted
+# Terraform-interpolated literal, because the URL's path is the secret and argv is readable by every local user.
+# There is NO runtime shape guard (the value is a provider-generated literal and the gzip budget is scarce), so the
+# contract is held HERE, at render time: each rendered literal must be a plain https URL with none of the characters
+# (a quote, a backslash, a double quote, a newline) that would break the quoting or inject a config directive.
+rend_dir="$(mktemp -d -p "$TMPDIR" reg-rendered.XXXXXXXX)"
+"$SCRIPT" "$rend_dir/rendered.yml" >/dev/null 2>&1
+hb_urls="$(grep -oE "printf 'url = \"%s\"\\\\n' '[^']*'" "$rend_dir/rendered.yml" 2>/dev/null | sed -E "s/^.*%s\"\\\\n' '//; s/'\$//")"
+hb_n="$(printf '%s\n' "$hb_urls" | grep -c . || true)"
+hb_bad="$(printf '%s\n' "$hb_urls" | grep -vE '^https://[A-Za-z0-9._~:/?&=%+-]+$' | grep -c . || true)"
+if [ "$hb_n" -eq 2 ] && [ "$hb_bad" -eq 0 ]; then
+  pass "both rendered heartbeat URLs ($hb_n) are plain https literals safe inside a single-quoted stdin config line"
+else
+  fail "rendered heartbeat URLs are shape-safe" "found $hb_n literal(s) (expected 2), $hb_bad outside ^https://[A-Za-z0-9._~:/?&=%+-]+\$"
+fi
+# The shape check is only a gate if it can say no: a URL with a quote, a backslash or a newline must NOT match.
+hb_ctl=0
+for hostile in "https://h/x'y" 'https://h/x"y' 'https://h/x\y' "$(printf 'https://h/x\ny')" 'http://h/x'; do
+  [[ "$hostile" =~ ^https://[A-Za-z0-9._~:/?\&=%+-]+$ ]] && hb_ctl=$((hb_ctl + 1))
+done
+if [ "$hb_ctl" -eq 0 ]; then pass "the heartbeat URL shape check rejects a quote, a double quote, a backslash, a newline and plain http"
+else fail "the heartbeat URL shape check rejects hostile values" "$hb_ctl hostile value(s) matched"; fi
+rm -rf "$rend_dir"
 
 # --- non-vacuity ------------------------------------------------------------------------
 if [ "$checks" -ne "$EXPECTED_CHECKS" ]; then

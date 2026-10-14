@@ -1201,7 +1201,7 @@ eqv_sh="$(_eqv "$EQV_SH")"
 # the port drifting, and only a person who runs it will see one.
 PJ_DRAIN_WINDOW=4
 PJ_ALL="$(git ls-files)"
-PJ_TRIPLES=263   # recomputed from a green run: the number of distinct (test file, verb, producer file) triples
+PJ_TRIPLES=267   # recomputed from a green run: the number of distinct (test file, verb, producer file) triples
 PJ_VOCAB=' not-a-command text-only unverified helper-built-stub variable-named-verb pass-through deliberate-fault arm-drain fenced '
 PJ_FENCED_RE='^fenced[[:space:]]+#[0-9]+[[:space:]]+[^[:space:]]'   # the one word that carries a tracker link (pj_judge)
 PRODUCER_JOIN=(
@@ -1254,6 +1254,7 @@ PRODUCER_JOIN=(
   'apps/web-platform/infra/luks-monitor.test.sh | cryptsetup | drains | 2 | --key-file -'
   'apps/web-platform/infra/luks-monitor.test.sh | curl | exempt | text-only no producer pipes into curl in luks-monitor.sh or workspaces-luks-emit.sh'
   'apps/web-platform/infra/luks-monitor.test.sh | died | exempt | not-a-command a shell function of workspaces-luks-harness; the producer site is prose in a printf message (reach T1; t1:rc0/16s; hits 0)'
+  'apps/web-platform/infra/registry-boot-guard.test.sh | htpasswd | drains | 1 | *'
   'apps/web-platform/infra/registry-luks-escrow.test.sh | cryptsetup | drains | 1 | --key-file -'
   'apps/web-platform/infra/resend-inbound-bootstrap.test.sh | doppler | exempt | text-only step 4 pipe (resend-inbound-bootstrap.sh:252) is unreachable: the curl shim returns an empty domain list so step 1 exits first'
   'apps/web-platform/infra/scripts/sigpipe-triage-feasibility.test.sh | grep | exempt | arm-drain the shims drain on purpose and only when reading stdin (the suite negative arms depend on it)'
@@ -1282,8 +1283,10 @@ PRODUCER_JOIN=(
   'apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh | jq | exempt | text-only the stub is on PATH only for the web2_marker g3 sandbox, whose judge reads file operands, never a pipe'
   'apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh | ssh | exempt | variable-named-verb workflow calls ${WEB_HOST_SSH}, bound to the sshstub stand-in; arms drain for luks-monitor.sh and tar xzf'
   'apps/web-platform/infra/zot-disk-heartbeat-redaction.test.sh | cryptsetup | exempt | text-only the heartbeat only runs `cryptsetup status`; luksOpen pipes (cloud-init-registry.yml:1968,2085,2446) are outside the rendered heartbeat'
+  'apps/web-platform/infra/zot-disk-heartbeat-redaction.test.sh | htpasswd | drains | 1 | *'
   'apps/web-platform/infra/zot-disk-heartbeat-redaction.test.sh | jq | exempt | deliberate-fault never: def 560 `exit 127` first statement (jq absent stub, NOJQ farm) (reach T1; t1:rc0/50s; hits 4)'
   'apps/web-platform/infra/zot-image-fetch.test.sh | cryptsetup | exempt | unverified the host-tool farm of the heartbeat block writes `exit 1` as the whole stub for six verbs in one same-line loop (def 411), and a second cryptsetup stub (def 212) answers `status` only and exits 64 otherwise; the suite renders only the heartbeat, which runs cryptsetup status and luksUUID reads, and no luksOpen pipe is run (S7c same-line loop arm) (reach: not probed, read by hand)'
+  'apps/web-platform/infra/zot-image-fetch.test.sh | htpasswd | exempt | text-only the six verbs are stubbed `exit 1` in the heartbeat fixture, but the probe is guarded by `[ -f /etc/zot/htpasswd ]` (an absolute host path no fixture creates), so no piped call reaches the stub'
   'apps/web-platform/scripts/lib/in-image-copy-src.test.sh | tar | exempt | arm-drain all-arms-keyed: def 187 `-xf)` arm `cat >/dev/null` at opener+5 inside the argv loop, before any exit; `-cf)` arm prints and exits (producer side) (reach T2; t2:rc0/1s; hits 4)'
   'apps/web-platform/scripts/postgrest-reload-schema.test.sh | curl | exempt | arm-drain all-arms-unconditional: def 41 drains `cat > $CURL_STDIN_FILE` at opener+13 before any exit (outside the finder window) (reach T1; t1:rc0/1s; hits 19 (stdin-flag))'
   'apps/web-platform/scripts/run-migrations-schema-probe.test.sh | psql | exempt | arm-drain all-arms-keyed: defs 89 and 230 `if [[ -z $sql ]]; then cat >/dev/null; exit 0; fi` after the arg parse, before any other exit (reach T2; t2:rc0/2s; hits 7)'
@@ -1345,6 +1348,7 @@ PRODUCER_JOIN=(
   'tests/scripts/test-argv-bearer-sweep.sh | docker | drains | 1 | *'
   'tests/scripts/test-argv-bearer-sweep.sh | doppler | exempt | unverified reach probe: suite did not finish green here (cap or host), no matching piped call seen (3 non-test producers) (reach T1; t1:rc124/301s; hits 0 (stdin-flag))'
   'tests/scripts/test-argv-bearer-sweep.sh | fatal | exempt | not-a-command a word in a case-pattern alternation (cloud-init-registry:1759), prose (reach T1; t1:rc124/301s; hits 0)'
+  'tests/scripts/test-argv-bearer-sweep.sh | htpasswd | exempt | text-only every htpasswd word is registry-template site text or mutation text; the executable arm stubs docker, never htpasswd, so no piped call reaches an htpasswd stub'
   'tests/scripts/test-argv-bearer-sweep.sh | jq | exempt | pass-through shim records argv then execs the real jq on every path'
   'tests/scripts/test-argv-bearer-sweep.sh | python3 | exempt | deliberate-fault never: defs 2973/2974/2975/3235 exit 1 / print a non-digest / fail only `-I` (fault stubs for the HMAC rows) (reach T1; t1:rc124/301s; hits 13)'
   'tests/scripts/test-destroy-guard-counter-web-platform.sh | doppler | exempt | text-only reach probe: suite ran green and no piped call reached the stub (1 non-test producers) (reach T1; t1:rc0/41s; hits 0 (stdin-flag))'

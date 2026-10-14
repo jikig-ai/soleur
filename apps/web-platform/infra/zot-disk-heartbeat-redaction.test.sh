@@ -165,8 +165,9 @@ printf '%s\n' "$body" >> "${HB_POSTED:-/dev/null}"
 exit 0
 EOF
 
-# htpasswd: the rotation-divergence probe. exit 0 = "password correct" on every check.
-printf '#!/usr/bin/env bash\nexit 0\n' > "$BIN/htpasswd"
+# htpasswd: the rotation-divergence probe. exit 0 = "password correct" on every check. It DRAINS stdin first: the probe now feeds the password through a
+# pipe (`printf '%s' "$2" | htpasswd -vi ...`, #10119), and a stub that exits unread would hand the producer a SIGPIPE.
+printf '#!/usr/bin/env bash\n[ -t 0 ] || timeout 2 cat >/dev/null\nexit 0\n' > "$BIN/htpasswd"
 # df: pcent well under the 85%% ping gate, and a plausible size.
 cat > "$BIN/df" <<'EOF'
 #!/usr/bin/env bash
