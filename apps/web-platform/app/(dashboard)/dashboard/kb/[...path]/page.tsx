@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo, useRef, use, useContext } from "react";
 import dynamic from "next/dynamic";
-import Link from "next/link";
+import { NavLink } from "@/components/ui/nav-link";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import { parseLikeC4Embed } from "@/lib/c4-embed";
 import { safeDecode } from "@/components/kb/kb-breadcrumb";
@@ -20,7 +20,7 @@ import { useOptionalFeatureFlag } from "@/components/feature-flags/provider";
 import { C4_VISUALIZER_FLAG } from "@/lib/c4-constants";
 import type { ContentResult } from "@/server/kb-reader";
 import { useNavResume } from "@/hooks/use-nav-resume";
-import { useRouter } from "next/navigation";
+import { usePendingRouter } from "@/hooks/use-pending-router";
 
 // Full-screen LikeC4 workspace (diagram ‖ Concierge/Code). Browser-only
 // (@likec4/diagram is canvas-based) so it loads client-side after mount.
@@ -41,7 +41,7 @@ export default function KbContentPage({
   const { path: pathSegments } = use(params);
   const joinedPath = pathSegments.join("/");
   const { clearKbPath } = useNavResume();
-  const router = useRouter();
+  const router = usePendingRouter();
   const extension = getKbExtension(joinedPath);
   const isMarkdown = isMarkdownKbPath(joinedPath);
   const c4Enabled = useOptionalFeatureFlag(C4_VISUALIZER_FLAG);
@@ -147,12 +147,12 @@ export default function KbContentPage({
           <p className="mb-2 text-sm text-soleur-text-secondary">
             File not found. This file may have been renamed or removed.
           </p>
-          <Link
+          <NavLink
             href="/dashboard/kb"
             className="text-sm text-soleur-accent-gold-fg underline hover:text-soleur-accent-gold-text"
           >
             Back to file tree
-          </Link>
+          </NavLink>
         </div>
       </div>
     );

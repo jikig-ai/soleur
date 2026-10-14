@@ -56,6 +56,18 @@ export function createSandboxHook(workspacePath: string): HookCallback {
       }
     }
 
+    // Bash: NO permission decision from this hook (#10054). A hook `allow` resolves the
+    // permission before `canUseTool` is consulted (SDK 0.3.284 with its bundled CLI 2.1.284, measured by
+    // the real-SDK C9 probe under scripts/), which silently disabled every Bash gate in
+    // `createCanUseTool` (safe-Bash allowlist, must-ask lane, batch cache, autonomous
+    // toggle). The deny above stays; the allow/ask verdict belongs to `canUseTool`.
+    // `continue: true` is the SDK's documented "no decision" hook output (verified on the live CLI by the probe). The explicit
+    // allow below stays for the other tools: their behaviour is deliberately unchanged here.
+    if (toolName === "Bash") {
+      logPermissionDecision("sandbox-hook", toolName, "defer");
+      return { continue: true };
+    }
+
     // Explicit PreToolUse allow. SDK v0.2.80 rejected bare `{}` with
     // ZodError: invalid_union. Hook schema differs from canUseTool —
     // no updatedInput field here.

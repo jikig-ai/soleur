@@ -1,0 +1,2 @@
+# fixture data, never executed: ps with the uppercase PPID header; one P
+P=$(ps -o PPID= -p $$); kill -9 $P

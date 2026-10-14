@@ -1,0 +1,17 @@
+# Decision Challenges — feat-one-shot-10095-dev-fk-drift-setnull
+
+Planning ran on a harness with no Agent/Task tool, so `pending - assumed`
+placeholders were written for the two `technical` rows per the
+technical-ruling-delegation contract; the parent pipeline's batched CTO consult
+ruled them (AMEND absorbed + CONFIRM, 2026-10-13), and the `operator (scope)`
+row records the already-authorized-scope determination with its evidence. All
+rows are ruled — none pending. `soleur:ship` renders this table into the PR
+body.
+
+## Decision Classes
+
+| Item | Class | Ruling |
+|------|-------|--------|
+| Dev DB write (DROP/ADD FK constraint + ledger CAS UPDATE + comment replay on shared dev-Supabase, under the dev-suite mutex) — already-authorized issue scope, or does it need an explicit operator ack row? | operator (scope) | Authorized by issue scope (assumed at plan time, confirmed in-line): #10095 itself prescribes the write — "Apply the §Content-drift repair on dev (re-create the FK with `ON DELETE SET NULL` to match main)". Dev is a synthetic-only project distinct from prd per `hr-dev-prd-distinct-supabase-projects`, which the learning explicitly distinguishes from the prd-write ack class of `hr-menu-option-ack-not-prod-write-auth`; no prd credential is resolved anywhere in the plan. Direct precedent: #9994's 2026-10-12 closeout executed the identical write class on dev (dsar_export_jobs/dsar_export_audit_pii reconcile — "operator-approved, mutex + ledger backup + single transaction"). |
+| Exact repair SQL shape — class C targeted unit: `ALTER TABLE public.audit_github_token_use DROP CONSTRAINT audit_github_token_use_founder_id_fkey` + `ADD CONSTRAINT … FOREIGN KEY (founder_id) REFERENCES public.users(id) ON DELETE SET NULL`, the `anonymise_audit_github_token_use` comment replay, and the ledger CAS DO-block, applied via session-mode URL with `--single-transaction -v ON_ERROR_STOP=1 -f` | technical | Ruled by CTO agent, 2026-10-13: AMEND — SQL shape confirmed (drop + validated re-add — correctly not NOT VALID on a 0-row table; comment replay byte-identical to 052's final definition at migrations/052_multi_source_dedup.sql:203-212; --single-transaction on the :5432 session-mode URL per learning takeaway 5). Corrections absorbed into the plan: the constraint has 4 pg_depend dependents, all deptype='i' internal RI triggers the constraint itself owns (auto-cascade on DROP) — G5's census wording now scopes to non-internal dependents; the re-ADD briefly takes SHARE ROW EXCLUSIVE on hot table public.users for RI trigger create/drop — named in the risk line, covered by lock_timeout=30s. Re-run posture fail-closed: on re-run the CAS matches 0 rows → RAISE → full rollback. |
+| Ledger `content_sha` rewrite — needed? (verify-first: the 052 row's sha is NULL, a pre-054 row by design) | technical | Ruled by CTO agent, 2026-10-13: CONFIRM — live-verified `content_sha IS NULL` on the 052 row (applied 2026-05-19 21:13:16Z, pre-054 by design); `048013204a426cf4a024d083a57b22367b436b7a` confirmed as main's blob via both `git hash-object` and `git ls-tree origin/main`. `IS NULL` is the correct specialization of the procedure's `IS NOT DISTINCT FROM` CAS for a NULL applied value — a concurrent populate between Phase 0 and the write matches 0 rows → ROW_COUNT<>1 → RAISE → full rollback (also covers the missing-row case). Truthful post-ROW-A, and lifts the row out of the probe's NULL-skip blind spot (`dev-migration-drift-probe/action.yml:197`) that hid the drift for ~5 months. |

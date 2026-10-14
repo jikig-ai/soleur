@@ -16,15 +16,18 @@ const SKILL_DIR = resolve(REPO_ROOT, "plugins/soleur/skills/model-launch-review"
 const SKILL_MD = resolve(SKILL_DIR, "SKILL.md");
 const AUDIT_SH = resolve(SKILL_DIR, "scripts/audit-models.sh");
 
-// Current model landscape (2026-09). The auditor flags anything NOT in this set
+// Current model landscape (2026-10). The auditor flags anything NOT in this set
 // that lives in a config-class path. Source of truth: claude-api skill table +
 // https://platform.claude.com/docs/en/about-claude/models/overview.md.
-// `claude-fable-5` moved OUT of this set at the Fable 5.1 launch — it is now a
-// source id (still served, but superseded in-tier by `claude-fable-5-1`).
+// `claude-fable-5` moved OUT of this set at the Fable 5.1 launch,
+// `claude-opus-5` at the Opus 5.5 launch (2026-09-22), and `claude-sonnet-5`
+// at the Sonnet 5.5 launch (2026-09-28) — all are now source ids
+// (still served, but superseded in-tier by `claude-fable-5-1` / `claude-opus-5-5` /
+// `claude-sonnet-5-5`).
 const CURRENT_IDS = [
-  "claude-opus-5",
-  "claude-sonnet-5",
-  "claude-haiku-4-5-20251001",
+  "claude-opus-5-5",
+  "claude-sonnet-5-5",
+  "claude-haiku-5-5",
   "claude-fable-5-1",
 ];
 
@@ -178,7 +181,9 @@ describe("model-launch-review auto-fix safety (AC5, AC6)", () => {
       join(root, "apps/web-platform/server/inngest/functions/cron-fake-audit.ts"),
       "utf8",
     );
-    expect(config).toContain("claude-opus-5");
+    // Quoted: a bare `claude-opus-5` would pass by prefix against `claude-opus-5-5`
+    // AND against an un-migrated `claude-opus-5`.
+    expect(config).toContain('"claude-opus-5-5"');
     expect(config).not.toContain("claude-opus-4-7");
     // excluded classes untouched
     const fixture = readFileSync(
@@ -213,7 +218,7 @@ describe("model-launch-review auto-fix safety (AC5, AC6)", () => {
 });
 
 describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
-  test("--fix maps a stale Sonnet id to claude-sonnet-5", () => {
+  test("--fix maps a stale Sonnet id to claude-sonnet-5-5", () => {
     const root = makeFixtureRoot("claude-sonnet-4-6");
     expect(run([], root).stdout).toContain("claude-sonnet-4-6");
     expect(run(["--fix"], root).status).toBe(0);
@@ -221,7 +226,7 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
       join(root, "apps/web-platform/server/inngest/functions/cron-fake-audit.ts"),
       "utf8",
     );
-    expect(config).toContain("claude-sonnet-5");
+    expect(config).toContain("claude-sonnet-5-5");
     expect(config).not.toContain("claude-sonnet-4-6");
     rmSync(root, { recursive: true, force: true });
   });
@@ -250,6 +255,31 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  test("every superseded id is still a source pair mapping to its OWN tier's current id", () => {
+    // The table-driven tests quantify over the pairs that EXIST, so deleting a
+    // pair leaves them green. Pin the superseded set explicitly (grow it at each
+    // launch): a removed pair means real stale ids stop being auto-fixed.
+    const SUPERSEDED: Record<string, string> = {
+      "claude-opus-5": "claude-opus-5-5",
+      "claude-opus-4-8": "claude-opus-5-5",
+      "claude-opus-4-7": "claude-opus-5-5",
+      "claude-opus-4-6": "claude-opus-5-5",
+      "claude-sonnet-5": "claude-sonnet-5-5",
+      "claude-sonnet-4-6": "claude-sonnet-5-5",
+      "claude-sonnet-4-5": "claude-sonnet-5-5",
+      "claude-fable-5": "claude-fable-5-1",
+      // Haiku 5.5 (2026-10-08): BOTH spellings. The id boundary means the undated
+      // pair does not match the dated id, so one pair alone leaves the other stale.
+      "claude-haiku-4-5-20251001": "claude-haiku-5-5",
+      "claude-haiku-4-5": "claude-haiku-5-5",
+    };
+    const table = new Map(parseAutofixPairs());
+    for (const [from, to] of Object.entries(SUPERSEDED)) {
+      expect(table.get(from), `superseded '${from}' must map to '${to}'`).toBe(to);
+      expect(CURRENT_IDS).toContain(to);
+    }
+  });
+
   test("AUTOFIX_PAIRS is single-hop and every target is a current id", () => {
     const pairs = parseAutofixPairs();
     const sources = new Set(pairs.map(([from]) => from));
@@ -273,7 +303,12 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
     const sandbox = mkdtempSync(join(tmpdir(), "mlr-chain-"));
     const copy = join(sandbox, "audit-models.sh");
     const src = readFileSync(AUDIT_SH, "utf8").replace(
-      '"claude-opus-4-7=claude-opus-5"',
+      '"claude-opus-4-7=claude-opus-5-5"',
+      '"claude-opus-4-7=claude-opus-4-8"',
+    );
+    // Landing check: a replace() whose needle drifted (a retargeted pair) is a
+    // silent no-op, and the unmutated table then exits 0 — not the guard failing.
+    expect(src, "chained pair must have been injected").toContain(
       '"claude-opus-4-7=claude-opus-4-8"',
     );
     writeFileSync(copy, src);
@@ -396,7 +431,7 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
     expect(run(["--detect"], root).status, "EOL id must be seen").toBe(10);
     expect(run(["--fix"], root).status).toBe(0);
     expect(readFileSync(join(dir, "cron.env"), "utf8")).toBe(
-      `MODEL=claude-opus-5`,
+      `MODEL=claude-opus-5-5`,
     );
     expect(run(["--detect"], root).status).toBe(0);
 
@@ -409,7 +444,7 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
     // protecting. Three independent mutations of the sed — dropping the
     // boundary, dropping the backreference, and skewing the boundary charset
     // away from selection's — each left the suite 17/17 green while corrupting
-    // real source (`claude-opus-4-7-20260101` -> `claude-opus-5-20260101`,
+    // real source (`claude-opus-4-7-20260101` -> `claude-opus-5-5-20260101`,
     // `claude-fable-5-1` -> `claude-fable-5-1-1`, and an eaten closing quote
     // that makes the file stop parsing). One fixture reds all three.
     const root = mkdtempSync(join(tmpdir(), "mlr-sed-anchor-"));
@@ -428,7 +463,7 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
     // model and must not be silently re-pointed; the current fable id must not
     // grow a second `-1`; the quoting must survive intact.
     expect(readFileSync(file, "utf8")).toBe(
-      `export const STALE = "claude-opus-5";\n` +
+      `export const STALE = "claude-opus-5-5";\n` +
         `export const DATED = "claude-opus-4-7-20260101";\n` +
         `export const CURRENT = "claude-fable-5-1";\n`,
     );
@@ -482,7 +517,7 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
       );
       writeFileSync(
         join(wp, "server/inngest/leader-prompts/constants.ts"),
-        `export const SONNET_MODEL = "claude-sonnet-5" as const;\n`,
+        `export const SONNET_MODEL = "claude-sonnet-5-5" as const;\n`,
       );
       if (installed !== null) {
         const pkg = join(
@@ -494,7 +529,7 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
           join(pkg, "package.json"),
           JSON.stringify({ version: installed }),
         );
-        // The bundle: carries opus-5 but NOT sonnet-5, so the tier loop must
+        // The bundle: carries opus-5 but NOT sonnet-5-5, so the tier loop must
         // report one ok and one DRIFT — proving the loop ran at all.
         writeFileSync(join(pkg, "cli.blob"), `\0claude-opus-5\0filler\n`);
       }
@@ -506,8 +541,8 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
     const sameOut = run([], same).stdout;
     expect(sameOut).toContain("(matches the package.json pin)");
     expect(sameOut).toContain("ok      claude-opus-5");
-    // Anchored presence probe: sonnet-5 is genuinely absent from this bundle.
-    expect(sameOut).toContain("DRIFT   claude-sonnet-5");
+    // Anchored presence probe: sonnet-5-5 is genuinely absent from this bundle.
+    expect(sameOut).toContain("DRIFT   claude-sonnet-5-5");
     rmSync(same, { recursive: true, force: true });
 
     // (b) skew -> must NOT claim a match, and must say which is which.
@@ -548,7 +583,7 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
     );
     writeFileSync(
       join(wp, "server/inngest/leader-prompts/constants.ts"),
-      `export const X = "claude-haiku-4-5-20251001" as const;\n`,
+      `export const X = "claude-haiku-5-5" as const;\n`,
     );
     const pkg = join(wp, "node_modules/@anthropic-ai/claude-code-linux-x64");
     mkdirSync(pkg, { recursive: true });
@@ -556,7 +591,7 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
     // Only the DATED opus id and the dated haiku id are in the bundle.
     writeFileSync(
       join(pkg, "cli.blob"),
-      `\0claude-opus-5-20260101\0claude-haiku-4-5-20251001\0\n`,
+      `\0claude-opus-5-20260101\0claude-haiku-5-5\0\n`,
     );
 
     // A SIBLING package under the same @anthropic-ai scope that DOES carry the
@@ -574,8 +609,40 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
     expect(out).toContain("DRIFT   claude-opus-5");
     // Non-vacuity: an exact match in the same bundle still reports ok, so this
     // is anchoring rather than a probe that has stopped matching anything.
-    expect(out).toContain("ok      claude-haiku-4-5-20251001");
+    expect(out).toContain("ok      claude-haiku-5-5");
 
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("[2b] presence probe is left-anchored — a Bedrock-form token does not vouch for the id", () => {
+    // #8603: the CI twin (claude-cli-pin-knows-models.test.ts) rejects an id
+    // that appears only inside `us.anthropic.<id>`; the hand-run probe must
+    // agree, or the two report opposite answers for the same bundle.
+    const root = mkdtempSync(join(tmpdir(), "mlr-2b-left-"));
+    const wp = join(root, "apps/web-platform");
+    mkdirSync(join(wp, "server/inngest/leader-prompts"), { recursive: true });
+    writeFileSync(
+      join(wp, "package.json"),
+      JSON.stringify({ dependencies: { "@anthropic-ai/claude-code": "9.9.9" } }),
+    );
+    writeFileSync(
+      join(wp, "server/inngest/model-tiers.ts"),
+      `export const AUDIT_MODEL = "claude-opus-5" as const;\n`,
+    );
+    writeFileSync(
+      join(wp, "server/inngest/leader-prompts/constants.ts"),
+      `export const X = "claude-haiku-5-5" as const;\n`,
+    );
+    const pkg = join(wp, "node_modules/@anthropic-ai/claude-code-linux-x64");
+    mkdirSync(pkg, { recursive: true });
+    writeFileSync(join(pkg, "package.json"), JSON.stringify({ version: "9.9.9" }));
+    writeFileSync(
+      join(pkg, "cli.blob"),
+      `"us.anthropic.claude-opus-5"\0"claude-haiku-5-5"\n`,
+    );
+    const out = run([], root).stdout;
+    expect(out).toContain("DRIFT   claude-opus-5");
+    expect(out).toContain("ok      claude-haiku-5-5");
     rmSync(root, { recursive: true, force: true });
   });
 
@@ -620,9 +687,238 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
     writeFileSync(join(dir, "cron-a.ts"), `export const M = "claude-opus-4-7";\n`);
     writeFileSync(join(dir, "cron-b.ts"), `export const M = "claude-sonnet-4-6";\n`);
     expect(run(["--fix"], root).status).toBe(0);
-    // Per-tier map: opus → opus-5, sonnet → sonnet-5 (not a single global target).
-    expect(readFileSync(join(dir, "cron-a.ts"), "utf8")).toContain("claude-opus-5");
-    expect(readFileSync(join(dir, "cron-b.ts"), "utf8")).toContain("claude-sonnet-5");
+    // Per-tier map: opus → opus-5-5, sonnet → sonnet-5-5 (not a single global target).
+    expect(readFileSync(join(dir, "cron-a.ts"), "utf8")).toBe(`export const M = "claude-opus-5-5";\n`);
+    expect(readFileSync(join(dir, "cron-b.ts"), "utf8")).toBe(`export const M = "claude-sonnet-5-5";\n`);
     rmSync(root, { recursive: true, force: true });
+  });
+});
+
+// --- Haiku 5.5 launch (2026-10-08) ------------------------------------------------
+// Guard 1 of the plan's Guard Contract: --detect exits 10 if and only if a config-class
+// file OUTSIDE the documented SDK-path carve-out carries a superseded Haiku id in either
+// spelling, and --fix rewrites exactly the files --detect selected. Fixtures here are
+// LITERAL ids (not read from the pair table) so deleting a pair cannot delete its own
+// fixture and leave the row green.
+describe("model-launch-review Haiku 5.5 launch", () => {
+  const SDK_CARVEOUT_PATHS = [
+    "apps/web-platform/scripts/sandbox-canary.mjs",
+    "apps/web-platform/scripts/plugin-root-sandbox-propagation-probe.mjs",
+  ];
+
+  function rootWith(files: Record<string, string>): string {
+    const root = mkdtempSync(join(tmpdir(), "mlr-haiku55-"));
+    for (const [rel, body] of Object.entries(files)) {
+      mkdirSync(join(root, rel, ".."), { recursive: true });
+      writeFileSync(join(root, rel), body);
+    }
+    return root;
+  }
+
+  test("the pair table has a literal floor (a table-driven test over zero pairs passes vacuously)", () => {
+    // 8 pairs before Haiku 5.5, +2 (dated and undated Haiku 4.5) = 10.
+    expect(parseAutofixPairs().length).toBeGreaterThanOrEqual(10);
+  });
+
+  test("the DATED Haiku 4.5 id is detected and rewritten to claude-haiku-5-5", () => {
+    const root = rootWith({
+      "apps/web-platform/server/inngest/leader-prompts/constants.ts":
+        'export const H = "claude-haiku-4-5-20251001" as const;\n',
+    });
+    const det = run(["--detect"], root);
+    expect(det.status).toBe(10);
+    expect(det.stdout).toContain("constants.ts");
+    expect(run(["--fix"], root).status).toBe(0);
+    expect(
+      readFileSync(join(root, "apps/web-platform/server/inngest/leader-prompts/constants.ts"), "utf8"),
+    ).toBe('export const H = "claude-haiku-5-5" as const;\n');
+    expect(run(["--detect"], root).status).toBe(0);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("the UNDATED Haiku 4.5 id is detected and rewritten too (the id boundary keeps it a separate pair)", () => {
+    const root = rootWith({
+      "apps/web-platform/server/x/undated.ts": 'export const H = "claude-haiku-4-5";\n',
+    });
+    expect(run(["--detect"], root).status).toBe(10);
+    expect(run(["--fix"], root).status).toBe(0);
+    expect(readFileSync(join(root, "apps/web-platform/server/x/undated.ts"), "utf8")).toBe(
+      'export const H = "claude-haiku-5-5";\n',
+    );
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("must-PASS: a config file on claude-haiku-5-5, or carrying only a longer lookalike token, is clean", () => {
+    const root = rootWith({
+      "apps/web-platform/server/x/current.ts": 'export const H = "claude-haiku-5-5";\n',
+      // A longer token is NOT the stale id; the boundary must not match inside it.
+      "apps/web-platform/server/x/lookalike.ts":
+        'export const H = "claude-haiku-4-5-20251001-x";\nexport const J = "claude-haiku-5-5";\n',
+    });
+    const det = run(["--detect"], root);
+    expect(det.status).toBe(0);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("the SDK-path carve-out: the two named scripts are neither detected nor rewritten", () => {
+    const body = 'const MODEL = "claude-haiku-4-5";\n';
+    const files: Record<string, string> = {};
+    for (const rel of SDK_CARVEOUT_PATHS) files[rel] = body;
+    // Non-vacuity: a real, non-carved stale file alongside, so a clean result for the
+    // carve-out cannot come from the auditor finding nothing anywhere.
+    files["apps/web-platform/server/x/real.ts"] = 'export const H = "claude-haiku-4-5";\n';
+    const root = rootWith(files);
+
+    const det = run(["--detect"], root);
+    expect(det.status).toBe(10);
+    expect(det.stdout).toContain("real.ts");
+    for (const rel of SDK_CARVEOUT_PATHS) expect(det.stdout).not.toContain(rel);
+
+    expect(run(["--fix"], root).status).toBe(0);
+    for (const rel of SDK_CARVEOUT_PATHS) {
+      expect(readFileSync(join(root, rel), "utf8"), `${rel} must be byte-identical`).toBe(body);
+    }
+    expect(readFileSync(join(root, "apps/web-platform/server/x/real.ts"), "utf8")).toContain(
+      "claude-haiku-5-5",
+    );
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("the carve-out is exactly the two named paths: a SECOND stale script in the same directory is still detected", () => {
+    // Mutation 2 of the contract: widening the carve-out to apps/web-platform/scripts/
+    // would swallow this file. It sits AFTER the compliant carved members.
+    const files: Record<string, string> = {};
+    for (const rel of SDK_CARVEOUT_PATHS) files[rel] = 'const MODEL = "claude-haiku-4-5";\n';
+    files["apps/web-platform/scripts/some-other-script.mjs"] = 'const MODEL = "claude-haiku-4-5";\n';
+    const root = rootWith(files);
+    const det = run(["--detect"], root);
+    expect(det.status).toBe(10);
+    expect(det.stdout).toContain("some-other-script.mjs");
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("a root whose NAME contains regex metacharacters still exempts the carved file and still flags a stale sibling", () => {
+    // The carve-out regex embeds $ROOT; an unescaped `+ ( ) [ ]` would turn the exemption into
+    // a pattern that no longer matches the carved path (a false stale hit) or matches too much.
+    const base = mkdtempSync(join(tmpdir(), "mlr-meta-"));
+    const root = join(base, "a+b(1)[x]");
+    mkdirSync(join(root, "apps/web-platform/scripts"), { recursive: true });
+    mkdirSync(join(root, "apps/web-platform/server/x"), { recursive: true });
+    writeFileSync(join(root, "apps/web-platform/scripts/sandbox-canary.mjs"), 'const M = "claude-haiku-4-5";\n');
+    expect(run(["--detect"], root).status, "carved file exempt under a metachar root").toBe(0);
+    writeFileSync(join(root, "apps/web-platform/server/x/real.ts"), 'const M = "claude-haiku-4-5";\n');
+    const det = run(["--detect"], root);
+    expect(det.status).toBe(10);
+    expect(det.stdout).toContain("real.ts");
+    expect(det.stdout).not.toContain("sandbox-canary.mjs");
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  test("a root containing a NEWLINE is refused (exit 64): it would split the exemption pattern and fail open", () => {
+    const base = mkdtempSync(join(tmpdir(), "mlr-nl-"));
+    const root = join(base, "a\nb");
+    mkdirSync(join(root, "apps/web-platform/server/x"), { recursive: true });
+    writeFileSync(join(root, "apps/web-platform/server/x/real.ts"), 'const M = "claude-haiku-4-5";\n');
+    const r = run(["--detect"], root);
+    expect(r.status).toBe(64);
+    expect(r.stdout).not.toContain("model-drift: none");
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  test("the carve-out is ANCHORED: a nested copy, a suffixed name and a near-miss spelling are still detected", () => {
+    const stale = 'const MODEL = "claude-haiku-4-5";\n';
+    const root = rootWith({
+      // left anchor: the same relative path under another prefix is NOT the carved file
+      "vendor/apps/web-platform/scripts/sandbox-canary.mjs": stale,
+      // right anchor: a longer filename is not the carved file
+      "apps/web-platform/scripts/sandbox-canary.mjs.bak": stale,
+      // dot escaping: 'x' is not '.'
+      "apps/web-platform/scripts/sandbox-canaryxmjs": stale,
+      "apps/web-platform/scripts/plugin-root-sandbox-propagation-probe.mjs": stale,
+    });
+    const det = run(["--detect"], root);
+    expect(det.status).toBe(10);
+    expect(det.stdout).toContain("vendor/apps/web-platform/scripts/sandbox-canary.mjs");
+    expect(det.stdout).toContain("sandbox-canary.mjs.bak");
+    expect(det.stdout).toContain("sandbox-canaryxmjs");
+    // and the genuinely carved file is still not listed
+    expect(det.stdout).not.toMatch(/(^|\s)apps\/web-platform\/scripts\/plugin-root-sandbox-propagation-probe\.mjs/m);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("the carve-out exempts the two files from EVERY stale id, not only Haiku (documented scope)", () => {
+    // The exemption is per FILE, by design: these scripts run on the SDK-bundled CLI. This
+    // pins that scope so widening or narrowing it is a deliberate change rather than drift.
+    const root = rootWith({
+      "apps/web-platform/scripts/sandbox-canary.mjs": 'const A = "claude-sonnet-4-5"; const B = "claude-fable-5";\n',
+    });
+    expect(run(["--detect"], root).status).toBe(0);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("the carve-out list in the script equals the two paths by VALUE (the test enumerates it, not the script)", () => {
+    const src = readFileSync(AUDIT_SH, "utf8");
+    const block = src.match(/SDK_PATH_CARVEOUT=\(([\s\S]*?)\)/);
+    expect(block, "SDK_PATH_CARVEOUT array not found in audit-models.sh").not.toBeNull();
+    const listed = [...block![1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+    expect(listed.sort()).toEqual([...SDK_CARVEOUT_PATHS].sort());
+  });
+
+  // claude-agent-sdk 0.3.284 (the pin) bundles a CLI that does not know claude-haiku-5-5;
+  // 0.3.293 is the first SDK release whose bundle carries it (verified 2026-10-08 by
+  // unpacking the platform packages 0.3.284..0.3.293: absent through 0.3.292).
+  function sdkKnowsHaiku55(pin: string): boolean {
+    expect(pin, "SDK pin must be an exact version").toMatch(/^\d+\.\d+\.\d+$/);
+    const [maj, min, pat] = pin.split(".").map(Number);
+    return maj > 0 || min > 3 || (min === 3 && pat >= 293);
+  }
+
+  test("the pin predicate: false below 0.3.293, true from it (both branches are exercised, not just today's)", () => {
+    expect(sdkKnowsHaiku55("0.3.284")).toBe(false);
+    expect(sdkKnowsHaiku55("0.3.292")).toBe(false);
+    expect(sdkKnowsHaiku55("0.2.999")).toBe(false);
+    expect(sdkKnowsHaiku55("0.3.293")).toBe(true);
+    expect(sdkKnowsHaiku55("0.3.1000")).toBe(true);
+    expect(sdkKnowsHaiku55("0.4.0")).toBe(true);
+    expect(sdkKnowsHaiku55("1.0.0")).toBe(true);
+    expect(() => sdkKnowsHaiku55("^0.3.284")).toThrow();
+  });
+
+  const pkgSdkPin = (): string =>
+    JSON.parse(readFileSync(resolve(REPO_ROOT, "apps/web-platform/package.json"), "utf8")).dependencies[
+      "@anthropic-ai/claude-agent-sdk"
+    ];
+
+  test("the carve-out is self-expiring: it must be deleted once the Agent SDK pin knows claude-haiku-5-5", () => {
+    const pin = pkgSdkPin();
+    expect(
+      sdkKnowsHaiku55(pin),
+      `@anthropic-ai/claude-agent-sdk is pinned at ${pin}, which bundles a CLI that knows ` +
+        "claude-haiku-5-5: delete SDK_PATH_CARVEOUT in audit-models.sh, swap " +
+        "sandbox-canary.mjs, plugin-root-sandbox-propagation-probe.mjs AND " +
+        "apps/web-platform/test/sandbox-credential-deny-runtime.test.ts to claude-haiku-5-5, " +
+        "and delete this test and the carve-out tests (#8643).",
+    ).toBe(false);
+  });
+
+  test("the THIRD SDK-path file (a test, so outside the audit) is on Haiku 4.5 exactly while the SDK pin cannot resolve 5.5", () => {
+    // sandbox-credential-deny-runtime.test.ts drives the real Agent SDK query(). It sits under
+    // /test/, which the audit excludes, so only this assertion can notice that it should move.
+    const src = readFileSync(
+      resolve(REPO_ROOT, "apps/web-platform/test/sandbox-credential-deny-runtime.test.ts"),
+      "utf8",
+    );
+    const onOld = /model:\s*"claude-haiku-4-5-20251001"/.test(src);
+    const onNew = /model:\s*"claude-haiku-5-5"/.test(src);
+    expect(onOld !== onNew, "exactly one Haiku id must be configured in that file").toBe(true);
+    expect(onOld, "on 4.5 iff the pinned SDK bundle does not know 5.5").toBe(!sdkKnowsHaiku55(pkgSdkPin()));
+  });
+
+  test("anti-vacuity: an unreadable --root fails the scan, it never reports a clean 'none'", () => {
+    const r = spawnSync("bash", [AUDIT_SH, "--root", "/nonexistent-mlr-root-xyz", "--detect"], {
+      encoding: "utf8",
+    });
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).not.toContain("model-drift: none");
   });
 });

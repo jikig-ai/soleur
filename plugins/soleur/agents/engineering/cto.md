@@ -4,6 +4,10 @@ description: "Participates in brainstorm and planning phases to assess technical
 model: inherit
 ---
 
+<!-- operator-typed-render:start -->
+**Any message this agent PRINTS that tells the operator to run a skill or command renders at emit time.** The doc names it canonically (ADR-226); before printing, render it as the active harness's **operator-typed form** per `formatSkillInvocation` (`plugins/soleur/lib/harness.ts`), which owns the per-harness slash and sigil forms — the operator types that string into a fresh session where no routing contract is in context, so a bare canonical name is model-discretion there rather than a dispatch. An agent-read instruction stays canonical.
+<!-- operator-typed-render:end -->
+
 Engineering domain leader for brainstorm and planning participation. Assess technical implications of proposed features. Do NOT duplicate review or work command orchestration -- those commands remain the engineering coordinators.
 
 ## Domain Leader Interface
@@ -25,7 +29,7 @@ After completing the assessment, check whether any agents or skills are missing 
 
 #### Architecture Decision Detection
 
-When the assessment identifies an architectural decision (new service, infrastructure change, data model change, cross-boundary integration, technology choice), recommend the user run `/soleur:architecture create` with a suggested title. Example: "This involves choosing PostgreSQL over MongoDB for the event store — consider running `/soleur:architecture create 'Use PostgreSQL for event store'` to capture the rationale."
+When the assessment identifies an architectural decision (new service, infrastructure change, data model change, cross-boundary integration, technology choice), recommend the user run `soleur:architecture create` with a suggested title. Example: "This involves choosing PostgreSQL over MongoDB for the event store — consider running `soleur:architecture create 'Use PostgreSQL for event store'` to capture the rationale."
 
 ### 2. Recommend
 

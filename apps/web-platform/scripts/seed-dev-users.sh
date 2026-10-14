@@ -22,6 +22,15 @@
 
 set -euo pipefail
 
+case "$-" in
+  *x*)
+    if [ -n "${SUPABASE_SERVICE_ROLE_KEY:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 # --- Pre-flight ----------------------------------------------------------
 
 if [[ "${DOPPLER_CONFIG:-}" != "dev" ]]; then
@@ -84,14 +93,34 @@ echo "::notice::Pre-flight OK (DOPPLER_CONFIG=dev, ref=$ref matches URL)"
 
 # --- Per-slot seeding ----------------------------------------------------
 
-header_auth="Authorization: Bearer $SRK"
-header_api="apikey: $SRK"
 header_json="Content-Type: application/json"
+
+# Destination pin: the service-role bearer now travels to $SB_URL, which is env-derived,
+# so an override could redirect it to a host the operator did not intend. This script is
+# dev-only (DOPPLER_CONFIG=dev above), so refuse anything but the live dev project host;
+# the prd project (api.soleur.ai) is a distinct Supabase project and is NOT accepted here.
+case "$SB_URL" in
+  https://mlwiodleouzwniehynfz.supabase.co) ;;
+  *) echo "::error::Refusing to seed: NEXT_PUBLIC_SUPABASE_URL is not the dev Supabase project host"; exit 1 ;;
+esac
+
+# One wrapper owns the transport flags, the token-shape guard and both credential headers,
+# so the service-role key travels on curl's stdin config channel and never on its argument
+# list (/proc/<pid>/cmdline, ps, a traced parent). A newline in the key would inject a curl
+# config directive and an empty one would send the request unauthenticated, so it is refused
+# before curl runs; the value is never echoed. The non-secret Content-Type stays on argv.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+sb_curl() {
+  _bearer_ok "${SRK:-}" || { echo "sb_curl: SUPABASE_SERVICE_ROLE_KEY unusable" >&2; return 2; }
+  curl --disable --noproxy '*' "$@" --config - \
+    < <(printf 'header = "Authorization: Bearer %s"\nheader = "apikey: %s"\n' "$SRK" "$SRK")
+}
+_bearer_ok "$SRK" || { echo "::error::SUPABASE_SERVICE_ROLE_KEY has an unusable shape; refusing to seed"; exit 1; }
 
 # TC_VERSION must match `lib/legal/tc-version.ts`. If that file's literal
 # changes, bump this string too — middleware redirects to /accept-terms
 # when the user's tc_accepted_version doesn't match the literal.
-TC_VERSION="2.5.0"
+TC_VERSION="2.6.0"
 
 # Look up an existing user by email via the admin endpoint's per-email
 # filter (avoids the >100-users pagination bug in the previous shape that
@@ -99,8 +128,7 @@ TC_VERSION="2.5.0"
 # page ≥2 — review-finding data-integrity #1).
 find_user_by_email() {
   local email="$1"
-  curl -sf "$SB_URL/auth/v1/admin/users?email=$(jq -rn --arg v "$email" '$v|@uri')&per_page=1" \
-    -H "$header_auth" -H "$header_api" \
+  sb_curl -sf "$SB_URL/auth/v1/admin/users?email=$(jq -rn --arg v "$email" '$v|@uri')&per_page=1" \
     | jq -r --arg e "$email" '(.users // []) | map(select(.email == $e)) | .[0].id // ""'
 }
 
@@ -118,8 +146,8 @@ for slot in 1 2 3; do
 
   if [[ -z "$user_id" ]]; then
     echo "Creating $email..."
-    create_response=$(curl -sf "$SB_URL/auth/v1/admin/users" \
-      -X POST -H "$header_auth" -H "$header_api" -H "$header_json" \
+    create_response=$(sb_curl -sf "$SB_URL/auth/v1/admin/users" \
+      -X POST -H "$header_json" \
       -d "$(jq -nc --arg email "$email" --arg password "$password" \
         '{email: $email, password: $password, email_confirm: true}')")
     user_id=$(printf '%s' "$create_response" | jq -r '.id // ""')
@@ -130,8 +158,8 @@ for slot in 1 2 3; do
     echo "  Created: $user_id"
   else
     echo "Refreshing password for $email ($user_id)..."
-    curl -sf "$SB_URL/auth/v1/admin/users/$user_id" \
-      -X PUT -H "$header_auth" -H "$header_api" -H "$header_json" \
+    sb_curl -sf "$SB_URL/auth/v1/admin/users/$user_id" \
+      -X PUT -H "$header_json" \
       -d "$(jq -nc --arg password "$password" '{password: $password, email_confirm: true}')" \
       > /dev/null
     echo "  Updated."
@@ -142,8 +170,8 @@ for slot in 1 2 3; do
   # (review-finding data-integrity #2). PATCH is idempotent — repeated
   # runs reset the row to the canonical QA-ready state.
   echo "  Provisioning public.users row..."
-  curl -sf "$SB_URL/rest/v1/users?id=eq.$user_id" \
-    -X PATCH -H "$header_auth" -H "$header_api" -H "$header_json" \
+  sb_curl -sf "$SB_URL/rest/v1/users?id=eq.$user_id" \
+    -X PATCH -H "$header_json" \
     -H "Prefer: return=minimal" \
     -d "$(jq -nc \
       --arg tc "$TC_VERSION" \
@@ -154,12 +182,11 @@ for slot in 1 2 3; do
 
   # Ensure a dummy anthropic api_keys row exists so the dashboard's
   # has-key gate passes. Idempotent: only insert if no row matches.
-  existing_key=$(curl -sf "$SB_URL/rest/v1/api_keys?user_id=eq.$user_id&provider=eq.anthropic&select=id" \
-    -H "$header_auth" -H "$header_api" \
+  existing_key=$(sb_curl -sf "$SB_URL/rest/v1/api_keys?user_id=eq.$user_id&provider=eq.anthropic&select=id" \
     | jq -r '.[0].id // ""')
   if [[ -z "$existing_key" ]]; then
-    curl -sf "$SB_URL/rest/v1/api_keys" \
-      -X POST -H "$header_auth" -H "$header_api" -H "$header_json" \
+    sb_curl -sf "$SB_URL/rest/v1/api_keys" \
+      -X POST -H "$header_json" \
       -H "Prefer: return=minimal" \
       -d "$(jq -nc --arg uid "$user_id" \
         '{user_id: $uid, provider: "anthropic", encrypted_key: "dev-dummy-not-real", is_valid: true}')" \

@@ -50,10 +50,13 @@ SECRET_VALUE="$(python3 -c "import json,sys; sys.stdout.write(json.loads(open('$
 printf '%s' "$SECRET_VALUE" \
   | doppler secrets set X_API_SECRET --silent --no-interactive -p soleur -c prd >/dev/null 2>&1
 
-# (2) GitHub Actions repo secret — `gh secret set --body -` reads from stdin
-#     and does NOT echo the value (safer than --body "$VALUE" which exposes
-#     the value in process argv visible to `ps aux`).
-printf '%s' "$SECRET_VALUE" | gh secret set X_API_SECRET --body -
+# (2) GitHub Actions repo secret — the value on STDIN with NO body flag: `gh secret set`
+#     reads standard input only when `--body` is omitted, and `--body -` stores the
+#     literal one-character string `-` (measured 2026-09-11 with `--no-store`: a 30-byte
+#     stdin under `--body -` yields a 68-char ciphertext = 1-byte plaintext; omitting the
+#     flag yields 104 chars = 30 bytes; #7946). Stdin also keeps the value out of process
+#     argv, which `--body "$VALUE"` would expose to `ps aux`.
+printf '%s' "$SECRET_VALUE" | gh secret set X_API_SECRET
 
 # (3) Live verification — sources Doppler prd to validate the just-written
 #     value against the X API. validate-credentials returns HTTP 2xx +

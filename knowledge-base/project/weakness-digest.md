@@ -3,41 +3,25 @@
 _Read-only recurring-failure signal from learnings added in the last 7d (#6037).
 Triage clusters into `/compound`; this file never edits the harness._
 
-Learnings in window: 21
+Learnings in window: 174
 
 ## Recurring failure patterns
 
 _Clusters of learnings sharing >= 2 tags, ranked by size (>= 3 members)._
 
-### guards + mutation-testing — 8 learnings
-- 2026-08-27-i-committed-the-defect-class-i-was-closing-eleven-times.md
-- 2026-09-02-every-guard-i-wrote-was-satisfiable-by-a-guard-that-asserts-nothing.md
-- 2026-09-03-every-check-i-shipped-was-narrower-than-the-name-it-carried.md
-- 2026-09-03-every-p1-was-in-the-verification-not-the-fix.md
-- 2026-09-03-four-ways-i-destroyed-evidence-in-the-pr-that-exists-to-preserve-it.md
-- 2026-09-03-my-guard-blocked-the-recovery-and-missed-the-hazard.md
-- 2026-09-04-every-defect-the-panel-found-was-in-my-verification-not-my-fix.md
-- 2026-09-04-three-review-rounds-each-found-defects-in-the-last-rounds-fixes.md
+### bwrap + sandbox — 4 learnings
+- 2026-10-08-file-tool-tier-outside-bwrap-isolation-boundary-is-the-cli-process.md
+- 2026-10-09-mount-source-indirection-is-the-wraps-own-attack-surface.md
+- bwrap-args-payload-outer-resume-proc-mask-20261009.md
+- bwrap-masked-proc-drop-not-cover-shim-20261011.md
 
-### guards + mutation-testing + review — 4 learnings
-- 2026-09-03-every-check-i-shipped-was-narrower-than-the-name-it-carried.md
-- 2026-09-03-every-p1-was-in-the-verification-not-the-fix.md
-- 2026-09-04-every-defect-the-panel-found-was-in-my-verification-not-my-fix.md
-- 2026-09-04-three-review-rounds-each-found-defects-in-the-last-rounds-fixes.md
+### sandbox + tenant-isolation — 3 learnings
+- 2026-10-08-file-tool-tier-outside-bwrap-isolation-boundary-is-the-cli-process.md
+- 2026-10-09-mount-source-indirection-is-the-wraps-own-attack-surface.md
+- deny-then-restore-vendored-builder-argv-ordering-20261007.md
 
-### mutation-testing + vacuity — 4 learnings
-- 2026-08-27-i-committed-the-defect-class-i-was-closing-eleven-times.md
-- 2026-09-03-my-guard-blocked-the-recovery-and-missed-the-hazard.md
-- 2026-09-03-the-deviation-ledger-was-an-hour-of-my-own-test-fixtures.md
-- 2026-09-04-every-defect-the-panel-found-was-in-my-verification-not-my-fix.md
-
-### anti-vacuity + mutation-testing — 3 learnings
-- 2026-09-03-every-p1-was-in-the-verification-not-the-fix.md
-- 2026-09-04-three-review-rounds-each-found-defects-in-the-last-rounds-fixes.md
-- 2026-09-03-the-hardening-i-added-disarmed-the-guard-over-the-flushall.md
-
-### guards + vacuity — 3 learnings
-- 2026-08-27-i-committed-the-defect-class-i-was-closing-eleven-times.md
-- 2026-09-03-my-guard-blocked-the-recovery-and-missed-the-hazard.md
-- 2026-09-04-every-defect-the-panel-found-was-in-my-verification-not-my-fix.md
+### mutation-testing + review — 3 learnings
+- 2026-10-06-an-evidence-gate-read-paths-no-stored-row-had-because-its-fixtures-were-aggregates.md
+- 2026-10-11-a-control-that-fails-early-proves-nothing-about-the-checks-after-it.md
+- merge-queue-ejections-two-causes-and-fix-pr-guard-survivors-20261005.md
 

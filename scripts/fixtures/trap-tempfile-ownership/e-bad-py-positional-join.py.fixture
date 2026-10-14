@@ -1,0 +1,11 @@
+import os
+import shutil
+import tempfile
+
+
+def build():
+    work = tempfile.mkdtemp("", "demo-", os.path.join("/var/tmp", "a"))
+    try:
+        return work
+    finally:
+        shutil.rmtree(work)

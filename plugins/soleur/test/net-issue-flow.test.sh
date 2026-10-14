@@ -425,8 +425,17 @@ for _f in number body createdAt state; do
   fi
 done
 cases=$((cases + 1))
-if [[ "$issue_call" != *"deferred-scope-out"* ]]; then pass "FILED query is not label-filtered (label covers ~8%)"
-else fail "FILED query must not filter by deferred-scope-out; got: $issue_call"; fi
+# Anchored on the MECHANISM (`--label` / `-label:`), not on one label NAME.
+# Grepping for `deferred-scope-out` pinned the 2026-07 instance and would have
+# passed silently on a future `--label meta/machinery` or
+# `--search '-label:meta/machinery'` -- the exact change ADR-216 says must never
+# happen. If the FILED query ever becomes label-filtered, machinery filings stop
+# counting toward NET, every machinery-only PR passes net-positive, and the
+# ledger grows under no gate while visible on no surface: the accountability
+# hole ADR-216 rejected the separate-repo option to avoid, reintroduced.
+if [[ "$issue_call" != *"--label"* && "$issue_call" != *"-label:"* ]]; then
+  pass "FILED query is not label-filtered by ANY label (ADR-216 accountability boundary)"
+else fail "FILED query must not filter by any label; got: $issue_call"; fi
 
 # ---------------------------------------------------------------------------
 # Case 9: createdAt filter is applied client-side on the FULL ISO timestamp.
@@ -506,19 +515,36 @@ fi
 
 # Case 14: the emitted rule_id must be exempt in the aggregator, or the first
 # real event hard-fails the metrics run (exit 5) via the orphan gate.
+#
+# Rewritten for #7853. These used to grep for two hand-maintained exemption stanzas
+# (`startswith("net-issue-flow")`, `startswith("cost-of-filing-")`). Those stanzas are gone: the
+# orphan gate now asks whether an id CLAIMS corpus membership by carrying a section prefix, so these
+# ids are exempt structurally rather than by enumeration. Grepping for a deleted stanza would test
+# the mechanism instead of the property, and would have to be rewritten again at the next refactor.
+#
+# The property is tested against the aggregator's OWN regex, extracted from it rather than restated
+# here. That keeps this a genuine cross-file parity check: if the aggregator ever widens its
+# predicate to capture these ids, this reds, which is exactly the failure the original cases
+# existed to prevent.
 AGG="$REPO_ROOT/scripts/rule-metrics-aggregate.sh"
 cases=$((cases + 1))
-if [[ -r "$AGG" ]] && grep -qF 'startswith("net-issue-flow")' "$AGG"; then
-  pass "net-issue-flow rule_id is exempted in rule-metrics-aggregate.sh"
+PREFIX_RE="$(grep -oE 'test\("\^\(hr\|wg\|cq\|rf\|pdr\|cm\)-"\)' "$AGG" 2>/dev/null | head -1)"
+if [[ -n "$PREFIX_RE" ]]; then
+  pass "aggregator carries the section-prefix orphan predicate"
 else
-  fail "net-issue-flow rule_id would be an orphan -> aggregator exit 5"
+  fail "aggregator has NO section-prefix predicate -- the structural exemption below is unfounded"
 fi
-cases=$((cases + 1))
-if [[ -r "$AGG" ]] && grep -qF 'startswith("cost-of-filing-")' "$AGG"; then
-  pass "cost-of-filing-* rule_ids are exempted in rule-metrics-aggregate.sh"
-else
-  fail "cost-of-filing-* would be orphans -> aggregator exit 5"
-fi
+# Derive the bracketed alternation from the extracted predicate so the shell test uses the same
+# prefixes the aggregator does, rather than a second copy that can drift.
+PREFIX_ALT="$(printf '%s' "$PREFIX_RE" | sed -E 's/^test\("\^\(//; s/\)-"\)$//')"
+for rid in "net-issue-flow" "cost-of-filing-inline-cheaper"; do
+  cases=$((cases + 1))
+  if [[ -n "$PREFIX_ALT" ]] && [[ "$rid" =~ ^($PREFIX_ALT)- ]]; then
+    fail "$rid carries a section prefix -> the aggregator would treat it as an orphan (exit 5)"
+  else
+    pass "$rid carries no section prefix -> structurally exempt from the orphan gate"
+  fi
+done
 
 # ===========================================================================
 # Cases 15+ — the mandated-filing exemption.

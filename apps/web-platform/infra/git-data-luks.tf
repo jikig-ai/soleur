@@ -1,12 +1,14 @@
 # Epic #5274 Phase 3, Sub-PR 3.D / ADR-068 — the FRESH LUKS-at-rest git-data volume.
 #
-# The cutover TARGET for git-data-cutover.sh. That script (already committed)
-# rsyncs the live bare repos from the Phase-2 PLAINTEXT volume (hcloud_volume.git_data,
-# mounted /mnt/git-data == OLD_ROOT) onto THIS fresh volume (mounted
-# /mnt/git-data-luks == FRESH_ROOT) under a write-freeze, then flips the
-# GIT_DATA_STORE_ENABLED flag. Both volumes are attached to the SAME git-data host
-# and mounted SIMULTANEOUSLY during the cutover (additive, non-destructive — the
-# plaintext source is the rollback backstop until the DL-2 wipe).
+# The LUKS cutover TARGET. The cutover body that copied the bare repos from the Phase-2
+# PLAINTEXT volume (hcloud_volume.git_data, mounted /mnt/git-data) onto THIS fresh volume
+# (mounted /mnt/git-data-luks) under a write-freeze and then flipped GIT_DATA_STORE_ENABLED
+# was removed from git-data-cutover.sh by #8189, because it called host mechanisms that do
+# not exist; it is being rebuilt in #8211. Until then git-data-cutover.sh is a read-only
+# proof (access gate, the store probes and the fence probe) that moves no data. The design it rebuilds:
+# both volumes attached to the SAME git-data host and mounted SIMULTANEOUSLY during the
+# cutover (additive, non-destructive — the plaintext source is the rollback backstop until
+# the DL-2 wipe).
 #
 # SHARP EDGE — encryption-at-rest is GUEST-SIDE LUKS, NOT an hcloud_volume attribute.
 # There is no hcloud "encrypted" flag; the hcloud_volume below is a PLAIN block
@@ -26,8 +28,10 @@
 # Rotation (leak response) is NOT a re-key of an existing LUKS header — it is a full
 # volume cutover: `terraform apply -replace=random_password.git_data_luks` mints a
 # new passphrase, then a fresh -replace of the git-data host re-luksFormats the (then
-# empty) fresh volume and re-runs git-data-cutover.sh from the plaintext source. NO
-# ignore_changes — rotation is operator-explicit via -replace.
+# empty) fresh volume and re-runs the real cutover from the plaintext source. That cutover
+# is being rebuilt in #8211; git-data-cutover.sh is a read-only proof until then, so no
+# rotation can complete before #8211 lands. NO ignore_changes — rotation is
+# operator-explicit via -replace.
 resource "random_password" "git_data_luks" {
   length  = 40
   special = false
@@ -147,11 +151,13 @@ resource "doppler_secret" "git_data_betterstack_logs_token" {
 # of the full-prd `var.doppler_token` so a git-data-host compromise reads only this
 # config — restoring the "separate blast radii" property git-data.tf already advertises.
 #
-# CARDINALITY (#6982): this config now holds TWO secrets — GIT_DATA_LUKS_KEY and
-# BETTERSTACK_LOGS_TOKEN (the ingest token added above). It was one until #6982. The
-# blast-radius argument is unchanged in kind: an ingest token is write-only against a
-# log source (git-data's OWN since #7772, not the shared one) and cannot read anything back, so a compromise still yields no
-# service-role, GIT_REMOVE or PROXY_TLS material. `.key` is Computed/write-once (same handling as
+# CARDINALITY (#6982, #9438): this config now holds THREE secrets — GIT_DATA_LUKS_KEY,
+# BETTERSTACK_LOGS_TOKEN (the ingest token added above) and GIT_DATA_HOST_HEARTBEAT_URL (the host's
+# own liveness heartbeat, doppler_secret.git_data_host_heartbeat_url_prd in git-data.tf). It was
+# one until #6982. The blast-radius argument is unchanged in kind: an ingest token is write-only
+# against a log source (git-data's OWN since #7772, not the shared one) and cannot read anything
+# back, and the heartbeat URL can only forge an "alive" ping for one monitor, so a compromise still
+# yields no service-role, GIT_REMOVE or PROXY_TLS material. `.key` is Computed/write-once (same handling as
 # doppler_service_token.write / .kb_drift); rotate via
 # `terraform apply -replace=doppler_service_token.git_data`.
 resource "doppler_service_token" "git_data" {

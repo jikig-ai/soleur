@@ -4,6 +4,7 @@ seoTitle: "AI Tools for Solo Founders 2026: The Best AI Agents, IDEs, and Platfo
 date: 2026-06-15
 description: "A ranked guide to the best AI tools for solo founders in 2026 — the agents, IDEs, and platforms worth running, and the organization layer that raises the ceiling on what one person can build."
 ogImage: "blog/og-best-ai-tools-for-solo-founders-2026.png"
+pillar: agentic-solo-founder
 tags:
   - solo-founder
   - solopreneur

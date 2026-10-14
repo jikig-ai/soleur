@@ -33,7 +33,7 @@ import { SYNTHETIC_CHECK_NAMES } from "@/server/inngest/functions/_cron-safe-com
 // =============================================================================
 
 describe("PII regex parity (AC8)", () => {
-  it("TS regex source matches the bash PII_REGEX at scripts/compound-promote.sh:75", () => {
+  it("TS regex source matches the bash PII_REGEX in scripts/compound-promote.sh", () => {
     const repoRoot = join(__dirname, "..", "..", "..", "..", "..");
     const script = readFileSync(
       join(repoRoot, "scripts", "compound-promote.sh"),
@@ -77,8 +77,8 @@ describe("PII regex parity (AC8)", () => {
 // =============================================================================
 
 describe("Anthropic body constants (AC9)", () => {
-  it("model is claude-sonnet-5", () => {
-    expect(ANTHROPIC_MODEL).toBe("claude-sonnet-5");
+  it("model is claude-sonnet-5-5", () => {
+    expect(ANTHROPIC_MODEL).toBe("claude-sonnet-5-5");
   });
 
   it("max_tokens is 16384", () => {

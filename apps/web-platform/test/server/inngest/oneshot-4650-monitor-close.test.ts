@@ -79,7 +79,6 @@ const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 // Registry entry helpers — a planned cron has a cron trigger; an UNPLANNED one
 // has the slug but no cron trigger; a MISSING one is absent from the array.
 const TARGET_SLUGS = [
-  "cron-gh-pages-cert-state",
   "cron-community-monitor",
   "cron-inngest-cron-watchdog",
 ];
@@ -153,7 +152,7 @@ describe("oneshot-4650-monitor-close", () => {
     expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("all 3 OK + issue open → closes #4650", async () => {
+  it("all OK + issue open → closes #4650", async () => {
     fetchRegistrySpy.mockResolvedValue(allHealthyRegistry());
     setIssueState("open");
     const res = await oneshot4650MonitorCloseHandler({
@@ -168,7 +167,6 @@ describe("oneshot-4650-monitor-close", () => {
 
   it("partial registry (1 MISSING) + open → leave open, reportSilentFallback, NO close", async () => {
     fetchRegistrySpy.mockResolvedValue([
-      planned("cron-gh-pages-cert-state"),
       planned("cron-community-monitor"),
       // cron-inngest-cron-watchdog MISSING
     ]);
@@ -180,6 +178,21 @@ describe("oneshot-4650-monitor-close", () => {
     });
     expect(res).toEqual({ ok: false, reason: "not-all-healthy" });
     expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
+    expect(patched()).toBe(false);
+  });
+
+  it("partial registry (FIRST target MISSING, last planned) + open → leave open, NO close", async () => {
+    fetchRegistrySpy.mockResolvedValue([
+      // cron-community-monitor MISSING
+      planned("cron-inngest-cron-watchdog"),
+    ]);
+    setIssueState("open");
+    const res = await oneshot4650MonitorCloseHandler({
+      event: event({ date_override: "2026-05-31" }),
+      step: makeStep(),
+      logger,
+    });
+    expect(res).toEqual({ ok: false, reason: "not-all-healthy" });
     expect(patched()).toBe(false);
   });
 
@@ -210,7 +223,6 @@ describe("oneshot-4650-monitor-close", () => {
 
   it("already-closed but a cron UNPLANNED → reportSilentFallback(already-closed-unhealthy)", async () => {
     fetchRegistrySpy.mockResolvedValue([
-      planned("cron-gh-pages-cert-state"),
       planned("cron-community-monitor"),
       unplanned("cron-inngest-cron-watchdog"),
     ]);

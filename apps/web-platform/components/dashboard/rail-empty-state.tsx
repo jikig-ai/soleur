@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { NavLink } from "@/components/ui/nav-link";
 
 // RQ5 / AC6: a drilled section's rail must NEVER be blank. When a section has
 // no items yet (no conversations, no KB docs), show a labeled empty state with
@@ -23,12 +23,12 @@ export function RailEmptyState({
       className="flex flex-col gap-2 px-3 py-4 text-sm text-soleur-text-muted"
     >
       <span>{message}</span>
-      <Link
+      <NavLink
         href={ctaHref}
         className="font-medium text-soleur-accent-gold-fg hover:underline"
       >
         {ctaLabel} →
-      </Link>
+      </NavLink>
     </div>
   );
 }

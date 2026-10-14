@@ -4,7 +4,9 @@
 # THREE SUBJECTS, one suite, because they share one failure mode — a gate that LOOKS present
 # and does nothing:
 #   1. .github/workflows/registry-zot-inventory.yml          — the #6425 self-trigger guard
-#   2. .github/workflows/registry-zot-inventory-dispatch.yml — the label + Bot authority boundary
+#   2. the lever's AUTOMATIC producer (#7377) — scheduled-zot-restart-loop.yml dispatches it on a
+#      new non-OOM tracker, and NO workflow waits on a label route to it (the label route it
+#      replaced could never fire: a label applied with GITHUB_TOKEN starts no workflow run)
 #   3. .github/actions/cf-tunnel-registry-bridge/action.yml  — the fail-closed skip-docker-login gate
 # plus the CI wiring in .github/workflows/infra-validation.yml that makes this file run at all.
 #
@@ -32,7 +34,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
 WF="$REPO_ROOT/.github/workflows/registry-zot-inventory.yml"
-DISPATCH_WF="$REPO_ROOT/.github/workflows/registry-zot-inventory-dispatch.yml"
+DISPATCH_WF="$REPO_ROOT/.github/workflows/registry-zot-inventory-dispatch.yml"   # deleted by #7377
+ALARM_WF="$REPO_ROOT/.github/workflows/scheduled-zot-restart-loop.yml"
+WORKFLOWS_DIR="$REPO_ROOT/.github/workflows"
 BRIDGE="$REPO_ROOT/.github/actions/cf-tunnel-registry-bridge/action.yml"
 INFRA_WF="$REPO_ROOT/.github/workflows/infra-validation.yml"
 
@@ -53,11 +57,12 @@ assert() {
 echo "=== registry-zot-inventory guard tests (#7278) ==="
 
 assert "inventory workflow exists" "[[ -f '$WF' ]]"
-assert "dispatch workflow exists" "[[ -f '$DISPATCH_WF' ]]"
+assert "the label-dispatch workflow is GONE (#7377: it had no producer and could not have one)" "[[ ! -e '$DISPATCH_WF' ]]"
+assert "restart-loop alarm workflow exists" "[[ -f '$ALARM_WF' ]]"
 assert "cf-tunnel-registry-bridge composite exists" "[[ -f '$BRIDGE' ]]"
 assert "infra-validation workflow exists" "[[ -f '$INFRA_WF' ]]"
 
-for f in "$WF" "$DISPATCH_WF" "$BRIDGE" "$INFRA_WF"; do
+for f in "$WF" "$ALARM_WF" "$BRIDGE" "$INFRA_WF"; do
   assert "YAML parses (pyyaml): ${f#"$REPO_ROOT/"}" \
     "python3 -c 'import yaml; yaml.safe_load(open(\"$f\"))'"
 done
@@ -189,30 +194,6 @@ def comments_on_7339():
     import re as _re
     return bool(_re.search(r"(?m)^\s*gh issue comment 7339\b", blob))
 
-def dispatch_guard_two_clause():
-    # A label alone is NOT an authority boundary — applying one needs only Triage.
-    if not jobs:
-        return False
-    for j in jobs.values():
-        cond = " ".join(str(j.get("if", "")).split())
-        # The OPERAND, not just the clause shape. Testing only for
-        # `github.event.label.name ==` pinned that a label is compared and never WHICH label,
-        # so retargeting the route to a common label (`== 'bug'`) passed 52/52 — and any
-        # Bot-authored issue carrying that label would then dial the production registry.
-        if "github.event.label.name == 'registry-zot-inventory'" not in cond:
-            return False
-        if "github.event.issue.user.type == 'Bot'" not in cond:
-            return False
-        # PRESENCE OF BOTH CLAUSES IS NOT CONJUNCTION. Rewriting the condition as
-        #     (github.event.label.name == '…' || github.event.issue.user.type == 'Bot')
-        # keeps both strings present and passed this assertion 52/52 — while making
-        # a Triage-level label application sufficient to dial production, which is
-        # exactly what the Bot clause exists to prevent. Require `&&` and forbid
-        # any `||`; the guard is a conjunction or it is not a boundary.
-        if "&&" not in cond or "||" in cond:
-            return False
-    return True
-
 checks = {
     "push": "push" in on,
     "dispatch": "workflow_dispatch" in on,
@@ -236,7 +217,6 @@ checks = {
     "forwards_cause": bridge_forwards("token-cause"),
     "teardown_always": has_teardown_always(),
     "comments_7339": comments_on_7339(),
-    "dispatch_guard_two_clause": dispatch_guard_two_clause(),
 }
 print("yes" if checks[sys.argv[2]] else "no")
 PY
@@ -261,7 +241,7 @@ assert "the job set is exactly {inventory} (a new job must be added to the guard
 echo ""
 echo "--- 3.1 / 3.1a: dispatch surface, permissions, serialisation, pinning ---"
 
-assert "the only dispatch input is a single-value choice {inventory}" \
+assert "the action dispatch input is a single-value choice {inventory} (tracker, #7377, is a validated number)" \
   "[[ \$(probe_wf '$WF' single_choice_input) == 'yes' ]]"
 assert "actions/checkout is SHA-pinned (40-hex), not tag-pinned" \
   "[[ \$(probe_wf '$WF' checkout_pinned) == 'yes' ]]"
@@ -293,12 +273,127 @@ assert "an if: always() teardown copied from the composite's documented contract
   "[[ \$(probe_wf '$WF' teardown_always) == 'yes' ]]"
 
 echo ""
-echo "--- 3.4: the dispatch route's authority boundary needs BOTH clauses ---"
+echo "--- 3.4 (#7377): no label route to the lever anywhere; the alarm is its automatic producer ---"
 
-assert "dispatch workflow guards on the controlled label AND issue.user.type == 'Bot'" \
-  "[[ \$(probe_wf '$DISPATCH_WF' dispatch_guard_two_clause) == 'yes' ]]"
-assert "dispatch workflow carries its own registration push trigger" \
-  "[[ \$(probe_wf '$DISPATCH_WF' push) == 'yes' ]]"
+# Scans EVERY workflow file, not the deleted filename: the class is "a listener nothing can
+# fire", and it could be re-added under any name. Prints the offender list (empty = clean) on
+# line 1 and the scanned-file count on line 2, so the caller can floor the count — an empty
+# glob would otherwise report "no offenders" over nothing.
+probe_label_routes() {
+  python3 - "$1" <<'PY2'
+import glob, os, sys, yaml
+offenders, scanned = [], 0
+for path in sorted(glob.glob(os.path.join(sys.argv[1], "*.yml")) + glob.glob(os.path.join(sys.argv[1], "*.yaml"))):
+    scanned += 1
+    wf = yaml.safe_load(open(path)) or {}
+    on = wf.get("on", wf.get(True)) or {}
+    if isinstance(on, str):
+        on = {on: None}
+    elif isinstance(on, list):
+        on = {k: None for k in on}
+    # ANY `labeled` trigger (issues, pull_request, pull_request_target, …), in map or list form.
+    # A bare `on: [issues]` fires on every issue activity type, labeled included.
+    labeled = False
+    for ev, cfg in on.items():
+        types = (cfg or {}).get("types") if isinstance(cfg, dict) else None
+        if (types and "labeled" in types) or (ev == "issues" and not types):
+            labeled = True
+    if not labeled:
+        continue
+    # The listener can key the label anywhere in a job — job `if:`, step `if:`, a `contains()`
+    # expression, or a `run:` block — so search the whole serialised jobs map, not one field.
+    for name, job in (wf.get("jobs") or {}).items():
+        if "zot-inventory" in yaml.safe_dump(job or {}):
+            offenders.append(os.path.basename(path) + ":" + name)
+print(",".join(offenders))
+print(scanned)
+PY2
+}
+
+# The alarm's dispatch, asserted on the PARSED step body with comment lines removed — a
+# commented-out `# gh workflow run …` must not satisfy it.
+probe_alarm() {
+  python3 - "$1" "$2" <<'PY2'
+import re, sys, yaml
+wf = yaml.safe_load(open(sys.argv[1])) or {}
+perms = wf.get("permissions") or {}
+jobs = wf.get("jobs") or {}
+dj = jobs.get("dispatch-inventory") or {}
+steps = [s for j in jobs.values() for s in (j.get("steps") or [])]
+fire = [s for s in steps if s.get("name") == "Dispatch the read-only store inventory (new non-OOM tracker)"]
+body = "\n".join(l for l in str(fire[0].get("run", "")).splitlines()
+                 if not l.lstrip().startswith("#")) if fire else ""
+checks = {
+    # actions: write is held ONLY by the dispatch job (it can dispatch ANY workflow_dispatch
+    # workflow), never at workflow scope where the checkout + telemetry-parsing job gets it too.
+    "actions_write": (dj.get("permissions") or {}).get("actions") == "write"
+        and perms.get("actions") is None
+        and not any((j.get("permissions") or {}).get("actions") for k, j in jobs.items() if k != "dispatch-inventory"),
+    "dispatch_line": bool(re.search(r"(?m)^\s*if gh workflow run registry-zot-inventory\.yml\b.*--ref main\b.*-f action=inventory\b", body)),
+}
+print("yes" if checks[sys.argv[2]] else "no")
+PY2
+}
+
+LABEL_SCAN="$(probe_label_routes "$WORKFLOWS_DIR")"
+LABEL_OFFENDERS="$(sed -n 1p <<<"$LABEL_SCAN")"
+LABEL_SCANNED="$(sed -n 2p <<<"$LABEL_SCAN")"
+assert "the label-route scan read a real workflow set (>= 50 files, else 'no offenders' is vacuous)" \
+  "[[ '${LABEL_SCANNED:-0}' -ge 50 ]]"
+assert "no workflow listens on issues for the registry-zot-inventory label (offenders: '${LABEL_OFFENDERS}')" \
+  "[[ -z '${LABEL_OFFENDERS}' ]]"
+
+# MUTATION: re-add a label listener under a DIFFERENT filename; the scan must name it.
+mkdir -p "$TMP/wf-mutant"
+cp "$WORKFLOWS_DIR"/*.yml "$TMP/wf-mutant/"
+cat > "$TMP/wf-mutant/renamed-inventory-label-route.yml" <<'YML'
+name: renamed label route
+on:
+  issues:
+    types: [labeled]
+jobs:
+  go:
+    if: github.event.label.name == 'registry-zot-inventory' && github.event.issue.user.type == 'Bot'
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh workflow run registry-zot-inventory.yml
+YML
+MUT_SCAN="$(probe_label_routes "$TMP/wf-mutant")"
+assert "MUTATION: a label listener re-added under another filename is caught" \
+  "[[ '$(sed -n 1p <<<"$MUT_SCAN")' == 'renamed-inventory-label-route.yml:go' ]]"
+# must-PASS: a label route for a DIFFERENT label is not this defect (the Inngest watchdog's
+# inngest-desync-restart route has a real App-token producer).
+# More listener shapes the scan must catch, each added alone beside the real workflow set.
+for shape in step_if contains_expr run_text prt; do
+  rm -rf "$TMP/wf-shape"; mkdir -p "$TMP/wf-shape"; cp "$WORKFLOWS_DIR"/*.yml "$TMP/wf-shape/"
+  case "$shape" in
+    step_if) printf '%s\n' 'on:' '  issues:' '    types: [labeled]' 'jobs:' '  go:' '    runs-on: ubuntu-latest' '    steps:' "      - if: github.event.label.name == 'registry-zot-inventory'" '        run: echo hi' ;;
+    contains_expr) printf '%s\n' 'on:' '  issues:' '    types: [labeled]' 'jobs:' '  go:' "    if: contains(github.event.label.name, 'zot-inventory')" '    runs-on: ubuntu-latest' '    steps:' '      - run: echo hi' ;;
+    run_text) printf '%s\n' 'on:' '  issues:' '    types: [labeled]' 'jobs:' '  go:' '    runs-on: ubuntu-latest' '    steps:' '      - run: gh workflow run registry-zot-inventory.yml' ;;
+    prt) printf '%s\n' 'on:' '  pull_request_target:' '    types: [labeled]' 'jobs:' '  go:' "    if: github.event.label.name == 'registry-zot-inventory'" '    runs-on: ubuntu-latest' '    steps:' '      - run: echo hi' ;;
+  esac > "$TMP/wf-shape/shape-$shape.yml"
+  SHAPE_SCAN="$(probe_label_routes "$TMP/wf-shape")"
+  assert "MUTATION: a '$shape' label listener is caught" \
+    "[[ '$(sed -n 1p <<<"$SHAPE_SCAN")' == shape-$shape.yml:go ]]"
+done
+
+assert "must-PASS: the inngest-desync-restart label route is not flagged" \
+  "[[ -f '$WORKFLOWS_DIR/inngest-watchdog-restart-dispatch.yml' && '${LABEL_OFFENDERS}' != *inngest-watchdog* ]]"
+
+assert "actions: write is held ONLY by the dispatch-inventory job (never at workflow scope)" \
+  "[[ \$(probe_alarm '$ALARM_WF' actions_write) == 'yes' ]]"
+assert "the dispatch step carries a live (non-comment) 'gh workflow run registry-zot-inventory.yml --ref main -f action=inventory'" \
+  "[[ \$(probe_alarm '$ALARM_WF' dispatch_line) == 'yes' ]]"
+# MUTATION: comment the dispatch out; the probe must go red.
+python3 - "$ALARM_WF" "$TMP/alarm-no-dispatch.yml" <<'PY2'
+import sys
+s = open(sys.argv[1]).read()
+old = "if gh workflow run registry-zot-inventory.yml"
+assert s.count(old) == 1
+open(sys.argv[2], "w").write(s.replace(old, "# if gh workflow run registry-zot-inventory.yml"))
+PY2
+assert "MUTATION: a commented-out dispatch is rejected" \
+  "[[ \$(probe_alarm '$TMP/alarm-no-dispatch.yml' dispatch_line) == 'no' ]]"
 
 echo ""
 echo "--- 5.1b: BOTH \`on:\` key spellings are exercised, so neither .get arm is dead code ---"
@@ -522,20 +617,28 @@ wf = yaml.safe_load(open(sys.argv[1])) or {}
 on = wf.get("on", wf.get(True)) or {}
 jobs = wf.get("jobs") or {}
 job = jobs.get("deploy-script-tests") or {}
-runs = [str(s.get("run", "")) for s in (job.get("steps") or [])]
+steps = (job.get("steps") or [])
+runs = [str(s.get("run", "")) for s in steps]
+# The shard env must sit ON the runner step — a sibling-step env would satisfy
+# a job-wide scan while the runner leg executes unsharded (the gate's own arm).
+runner_steps = [s for s in steps
+    if str(s.get("run", "")).strip() == "bash apps/web-platform/infra/run-registered-suites.sh"]
 pr_paths = list((on.get("pull_request") or {}).get("paths") or [])
-
-GUARD_SUITE = "apps/web-platform/infra/registry-zot-inventory-workflow-guard.test.sh"
 
 checks = {
     "job_exists": bool(job),
-    # The literal single-line `run: bash <path>` form is load-bearing beyond registration here:
-    # apps/web-platform/infra/run-registered-suites.sh DERIVES its execute set from this job's
-    # steps with a literal single-line match, so an inline env prefix or a `run: |` block
-    # silently de-registers the suite from the local runner while it still LOOKS registered.
-    "suite_registered": any(r.strip() == f"bash {GUARD_SUITE}" for r in runs),
+    # Since #8736 the registration under test is the CONNECTION, not a per-suite
+    # step: presence under apps/web-platform/infra/ IS registration (the runner
+    # glob-derives it), so this suite runs iff the matrix legs invoke the runner
+    # with the shard wiring. Asserting a literal `run: bash <this file>` step
+    # would assert a shape the contract deliberately removed.
+    "suite_registered": len(runner_steps) == 1
+        and "SOLEUR_INFRA_SHARD" in str(runner_steps[0].get("env", {}) or {}),
     "inventory_wf_path": ".github/workflows/registry-zot-inventory.yml" in pr_paths,
-    "dispatch_wf_path": ".github/workflows/registry-zot-inventory-dispatch.yml" in pr_paths,
+    # #7377: the deleted label route must not linger as a path filter, and the alarm that now
+    # dispatches the lever must trip this suite when edited.
+    "dispatch_wf_path_gone": ".github/workflows/registry-zot-inventory-dispatch.yml" not in pr_paths,
+    "alarm_wf_path": ".github/workflows/scheduled-zot-restart-loop.yml" in pr_paths,
     "bridge_action_path": ".github/actions/cf-tunnel-registry-bridge/action.yml" in pr_paths,
 }
 print("yes" if checks[sys.argv[2]] else "no")
@@ -544,12 +647,14 @@ PY
 
 assert "infra-validation.yml still has a deploy-script-tests job" \
   "[[ \$(probe_infra job_exists) == 'yes' ]]"
-assert "this suite is registered as a literal single-line \`run: bash <path>\` step" \
+assert "this suite's runner is invoked (with shard wiring) in deploy-script-tests" \
   "[[ \$(probe_infra suite_registered) == 'yes' ]]"
 assert "registry-zot-inventory.yml is in that workflow's pull_request.paths" \
   "[[ \$(probe_infra inventory_wf_path) == 'yes' ]]"
-assert "registry-zot-inventory-dispatch.yml is in that workflow's pull_request.paths" \
-  "[[ \$(probe_infra dispatch_wf_path) == 'yes' ]]"
+assert "the deleted registry-zot-inventory-dispatch.yml is no longer a path filter" \
+  "[[ \$(probe_infra dispatch_wf_path_gone) == 'yes' ]]"
+assert "scheduled-zot-restart-loop.yml (the lever's producer) is in that workflow's pull_request.paths" \
+  "[[ \$(probe_infra alarm_wf_path) == 'yes' ]]"
 assert "cf-tunnel-registry-bridge/action.yml is in that workflow's pull_request.paths" \
   "[[ \$(probe_infra bridge_action_path) == 'yes' ]]"
 
@@ -593,7 +698,7 @@ echo "=== Results: $PASS/$((PASS + FAIL)) passed ==="
 #
 # A FLOOR, never an equality: `-eq` would turn every legitimately-added assertion into a
 # spurious failure. Raise it in lockstep when assertions are added.
-MIN_ASSERTIONS=52
+MIN_ASSERTIONS=63  # 52 before #7377 (label-route asserts swapped for the no-label-route + alarm-producer set)
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
   echo "FAIL: only $((PASS + FAIL)) assertions ran, below the floor of ${MIN_ASSERTIONS}."
   echo "      The suite was truncated or its assert calls were removed. Nothing below this"

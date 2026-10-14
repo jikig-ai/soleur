@@ -10,7 +10,7 @@
 #   1 = FAIL       (≥1 error-level event found; sweeper comments, leaves open)
 #   * = TRANSIENT  (Sentry API unreachable, auth failure; retry next sweep)
 #
-# Required env: SENTRY_AUTH_TOKEN
+# Required env: SENTRY_ACTIONS_RO_TOKEN
 #
 # Close criteria (from #4246 / PR #4226 AC10):
 #   - Query Sentry for the 24h window before now()
@@ -27,15 +27,18 @@ set -uo pipefail
 # without blocking a debugging session.
 case "$-" in
   *x*)
-    if [ -n "${SENTRY_AUTH_TOKEN:+x}" ]; then
-      printf '[FATAL] refusing to run under xtrace with a live credential set (SENTRY_AUTH_TOKEN). Unset it to trace safely (see #7797).
+    if [ -n "${SENTRY_ACTIONS_RO_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to run under xtrace with a live credential set (SENTRY_ACTIONS_RO_TOKEN). Unset it to trace safely (see #7797).
 ' >&2
       exit 78
     fi
     ;;
 esac
 
-if [[ -z "${SENTRY_AUTH_TOKEN:-}" ]]; then echo "TRANSIENT: SENTRY_AUTH_TOKEN not set" >&2; exit 2; fi
+# Token-shape guard (empty, or any char outside the allowlist, e.g. a newline that would inject a
+# curl config directive on the stdin channel below). Never echoes the value.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+if ! _bearer_ok "${SENTRY_ACTIONS_RO_TOKEN:-}"; then echo "TRANSIENT: SENTRY_ACTIONS_RO_TOKEN unusable" >&2; exit 2; fi
 
 ORG="jikigai-eu"
 API="https://sentry.io/api/0"
@@ -47,12 +50,15 @@ QUERY='feature:"workspace-reconcile-push" level:error'
 # Encode the query for the URL
 QUERY_ENC=$(printf '%s' "$QUERY" | jq -sRr @uri)
 
-URL="${API}/organizations/${ORG}/events/?query=${QUERY_ENC}&statsPeriod=24h&per_page=10"
+# `field=` is REQUIRED by the org events endpoint (HTTP 400 "No columns selected" without it,
+# measured 2026-09-11); the parse below reads .title and .id, which these columns carry.
+URL="${API}/organizations/${ORG}/events/?query=${QUERY_ENC}&statsPeriod=24h&per_page=10&field=title&field=timestamp"
 
-RESP=$(curl -sS -w '\nHTTP_STATUS:%{http_code}' \
-  -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
+# The bearer rides curl's stdin config channel, never its argument list.
+RESP=$(curl --disable --noproxy '*' -sS -w '\nHTTP_STATUS:%{http_code}' \
   -H "Accept: application/json" \
-  "$URL")
+  --config - "$URL" \
+  < <(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_ACTIONS_RO_TOKEN"))
 
 HTTP_STATUS=$(printf '%s' "$RESP" | sed -n 's/^HTTP_STATUS://p' | tr -d '[:space:]')
 BODY=$(printf '%s' "$RESP" | sed '$d')

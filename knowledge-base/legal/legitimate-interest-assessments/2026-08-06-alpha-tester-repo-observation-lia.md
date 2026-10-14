@@ -2,7 +2,7 @@
 title: "Legitimate Interest Assessment — alpha-tester repository observation and operator-assisted-run dogfooding"
 type: legitimate-interest-assessment
 date: 2026-08-06
-plan: knowledge-base/project/plans/2026-08-06-legal-alpha-tester-terms-and-processor-posture-plan.md
+plan: knowledge-base/project/plans/archive/20261013-051752-2026-08-06-legal-alpha-tester-terms-and-processor-posture-plan.md
 determination: knowledge-base/legal/audits/2026-08-06-alpha-tester-controller-processor-determination.md
 issue: 7331
 status: draft-requires-counsel-review
@@ -14,7 +14,7 @@ related:
   - knowledge-base/legal/article-30-register.md
   - knowledge-base/legal/article-30-2-register.md
   - knowledge-base/legal/legitimate-interest-assessments/2026-07-07-beta-crm-lia.md
-  - knowledge-base/project/specs/feat-one-shot-7331-alpha-tester-terms-dpa/session-scope-reconstruction.md
+  - knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7331-alpha-tester-terms-dpa/session-scope-reconstruction.md
 ---
 
 # Legitimate Interest Assessment — alpha-tester repository observation

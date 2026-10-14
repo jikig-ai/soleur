@@ -103,7 +103,7 @@ const child = spawn(claudeBin, [...flags, prompt], opts);
 ## References
 
 - ADR-033 §I4 (amended in this PR): `claude` binary installed via `apps/web-platform/package.json` dep, NOT cloud-init.
-- Plan: `knowledge-base/project/plans/2026-05-18-feat-pr-1-migrate-scheduled-daily-triage-to-inngest-cron-tr9-plan.md`.
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-18-feat-pr-1-migrate-scheduled-daily-triage-to-inngest-cron-tr9-plan.md`.
 - Implementation commit: `6777f663`.
 - Review-fix commit: `ff3311d6`.
 - Related learning: `2026-05-10-handshake-schema-drift-and-stale-precondition-budgets.md` — plan-quoted numbers are preconditions class.

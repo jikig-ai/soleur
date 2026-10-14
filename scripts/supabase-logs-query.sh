@@ -426,14 +426,14 @@ run_query() {
     fail_now TRANSIENT_5XX       "The '${label}' query never received an HTTP response (curl reported 000: DNS, TLS, connection or the 60s timeout). This is a NETWORK failure, not an answer about the logs and not a bad ref — nothing about coverage can be concluded from it. Retry the identical invocation; if it persists, check egress from this host before touching the query."
   fi
 
-  if [[ "$code" =~ ^5 ]] || printf '%s' "$body" | grep -qF 'Backend error!'; then
+  if [[ "$code" =~ ^5 ]] || grep -qF 'Backend error!' <<<"$body"; then
     local half_start half_start_iso raw2 code2 body2
     half_start=$(( e_epoch - (e_epoch - s_epoch) / 2 ))
     half_start_iso="$(to_iso "$half_start")"
     assert_iso_bounds "${label} (half-width re-issue)" "$half_start_iso" "$e_iso"
     raw2="$(api_logs "$sql" "$half_start_iso" "$e_iso")"
     code2="$(http_code "$raw2")"; body2="$(http_body "$raw2")"
-    if [[ "$code2" == "200" ]] && ! printf '%s' "$body2" | grep -qF 'Backend error!'; then
+    if [[ "$code2" == "200" ]] && ! grep -qF 'Backend error!' <<<"$body2"; then
       V_MONO="half-width retry of '${label}' CLEARED — the failure is window-size, not transient"
       fail_now WINDOW_SIZE_FAILURE \
         "The '${label}' query failed at ${WIDTH_SEC}s wide and SUCCEEDED at half that width, so this is a width failure, not a transient one — retrying the same request will keep failing. Re-run over halves: --since ${START_ISO} --until ${half_start_iso}, then --since ${half_start_iso} --until ${END_ISO}."

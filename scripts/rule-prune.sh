@@ -52,7 +52,57 @@ done
 ROOT="${RULE_METRICS_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 METRICS="$ROOT/knowledge-base/project/rule-metrics.json"
 
-[[ -f "$METRICS" ]] || { echo "ERROR: $METRICS not found — run scripts/rule-metrics-aggregate.sh first." >&2; exit 2; }
+# ── BUILD THE METRICS FILE BEFORE READING IT (#8377 / ADR-235) ─────────────────────────────
+# rule-metrics.json is no longer committed. ADR-091 keeps the raw incident data local and
+# gitignored, so the aggregate was only ever a snapshot of whichever worktree last ran the
+# aggregator and committed it -- which is also why it conflicted on nearly every merge. It is
+# now an untracked cache, which means the honest default state on a fresh clone is ABSENT.
+#
+# Exiting 2 with "run the aggregator first" would make that the operator's problem for a file
+# this script knows how to build. Build it.
+#
+# SKIPPED WHEN RULE_METRICS_ROOT IS SET, and that conjunct is load-bearing: tests and CI point
+# that variable at a fixture they have already written, and regenerating over it would replace
+# the fixture with a scan of the real machine.
+if [[ -z "${RULE_METRICS_ROOT:-}" && -f "$SCRIPT_DIR/rule-metrics-aggregate.sh" ]]; then
+  # Owning trap at the allocation site (ADR-129): without it nothing removes the tempfile
+  # if the script dies between here and cleanup. Single owning trap, cleared after use.
+  _agg_log="$(mktemp)"
+  trap 'rm -f "$_agg_log"' EXIT INT TERM
+  _agg_rc=0
+  bash "$SCRIPT_DIR/rule-metrics-aggregate.sh" >"$_agg_log" 2>&1 || _agg_rc=$?
+  if [[ "$_agg_rc" -ne 0 ]]; then
+    # REMOVE A PARTIAL WRITE. An aggregator that dies mid-write leaves truncated JSON, and the
+    # schema check below would then report it as a CORRUPT metrics file -- sending the operator
+    # to inspect data when the fault is in the producer. Delete it so the cause is the only
+    # thing reported.
+    rm -f "$METRICS"
+    echo "ERROR: aggregator failed (rc=$_agg_rc); rule-metrics.json not built." >&2
+    sed 's/^/  /' "$_agg_log" >&2
+    rm -f "$_agg_log"
+    exit 2
+  fi
+  rm -f "$_agg_log"
+fi
+
+# The remedy must not name the step that just ran and declined. The aggregator above exits 0
+# WITHOUT writing when the incident corpus has zero rule-carrying rows -- the normal state of
+# any fresh clone, since .claude/.rule-incidents* is gitignored. Telling the operator to "run
+# the aggregator first" there sends them to the thing that just no-opped (#8384 review).
+# EXIT 3 IS "NOT APPLICABLE", NOT "FAILED", and the distinction is the whole point.
+# This is the NORMAL state of any checkout without a local incident log -- which is every
+# fresh clone, including the one cron-rule-prune makes. Exiting 2 there makes an automated
+# caller either page every quarter (if it branches on rc) or report health while having
+# pruned nothing (if it does not). Neither is true. A distinct code lets the caller say
+# "not applicable" without conflating it with a real failure.
+[[ -f "$METRICS" ]] || {
+  echo "NOT-APPLICABLE: $METRICS not found and the aggregator produced none." >&2
+  echo "  This is the expected state on a checkout with no local incident log:" >&2
+  echo "  $ROOT/.claude/.rule-incidents.jsonl is gitignored (ADR-091), and the aggregate has" >&2
+  echo "  been an untracked cache since ADR-235 — so there is nothing to prune here." >&2
+  echo "  Rule metrics are produced on the machine where the incidents were recorded." >&2
+  exit 3
+}
 
 # Schema contract: make SCHEMA_VERSION load-bearing at the consumer
 # boundary. If the aggregator ever bumps to schema 2 with a different
@@ -191,7 +241,7 @@ if [[ "$PROPOSE_RETIREMENT" == "1" ]]; then
   # Emit sentinels for the workflow to consume. Both lines are tr -d'd
   # defensively even though sanitized_prefix already stripped CR/LF.
   pr_title="feat(rule-prune): propose retirement of $appended rules ($hook_enforced hook/skill-enforced)"
-  pr_body="Quarterly rule-prune retirement proposal: $appended rules with fire_count=0 over >=${WEEKS} weeks. Per-rule rationale in the diff. $hook_enforced flagged hook-/skill-enforced — review them carefully. Spec: knowledge-base/project/specs/feat-harness-eval-stale-rules/spec.md."
+  pr_body="Quarterly rule-prune SHORTLIST, not retirement evidence: $appended rules recorded no enforcement event (warn/deny/bypass/applied) over >=${WEEKS} weeks. An obeyed rule emits nothing, so this list nominates the best-obeyed rules first (#8030). Merge a row only with an editorial reason to retire THAT rule; otherwise drop the row or close this PR. $hook_enforced flagged hook-/skill-enforced. Spec: knowledge-base/project/specs/feat-harness-eval-stale-rules/spec.md."
   printf '::rule-prune-pr-title::%s\n' "$(printf '%s' "$pr_title" | tr -d '\n\r')"
   printf '::rule-prune-pr-body::%s\n'  "$(printf '%s' "$pr_body"  | tr -d '\n\r')"
 

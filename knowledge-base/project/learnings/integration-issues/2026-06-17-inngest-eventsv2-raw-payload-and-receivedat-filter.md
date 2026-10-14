@@ -9,7 +9,7 @@ The #5450 cutover runbook's reminder-enumeration query selected `id name receive
 
 ## Solution
 
-Before writing the enumeration script, ran inngest **v1.19.4** (the exact prod pin) locally in Docker and introspected the `/v0/gql` schema. Pinned the verified shape in `knowledge-base/project/specs/feat-one-shot-inngest-cutover-no-ssh-5450/inngest-graphql-schema.md` and built the script against it:
+Before writing the enumeration script, ran inngest **v1.19.4** (the exact prod pin) locally in Docker and introspected the `/v0/gql` schema. Pinned the verified shape in `knowledge-base/project/specs/archive/20261013-032858-feat-one-shot-inngest-cutover-no-ssh-5450/inngest-graphql-schema.md` and built the script against it:
 
 - **Payload is `raw: String!`** — a JSON-string envelope (`{"data":{...},"id":...,"ts":...}`) that MUST be `JSON.parse`'d. There is NO `data`/`payload` field on `EventV2`. Producer payload = `JSON.parse(node.raw).data`; future fire epoch-ms = `.ts`.
 - **`from`/`until` bound `receivedAt` (ingest time), NOT `occurredAt`/fire-time.** A future reminder cannot be selected server-side by fire-time. Strategy: fetch a WIDE receivedAt window (`from: 1970-01-01`) then **client-side filter** `raw.ts > now`.

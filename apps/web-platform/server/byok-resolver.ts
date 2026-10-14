@@ -169,7 +169,7 @@ export async function resolveKeyOwnerThenLease<T>(
   }
 
   const orgId = await resolveOrgIdForWorkspace(workspaceId);
-  const identity: Identity = { userId: callerUserId, role: "prd", orgId };
+  const identity: Identity = { userId: callerUserId, role: "prd", orgId, email: null, subscriptionStatus: null };
   if (!(await isByokDelegationsEnabled(orgId, identity))) {
     return runWithByokLease(
       { workspaceContextUserId, keyOwnerUserId: callerUserId },
@@ -360,7 +360,7 @@ async function resolveByokDelegationContext(
 ): Promise<{ workspaceId: string; flagEnabled: boolean }> {
   const workspaceId = await resolveCurrentWorkspaceId(callerUserId, supabase);
   const orgId = await resolveOrgIdForWorkspace(workspaceId);
-  const identity: Identity = { userId: callerUserId, role: "prd", orgId };
+  const identity: Identity = { userId: callerUserId, role: "prd", orgId, email: null, subscriptionStatus: null };
   const flagEnabled = await isByokDelegationsEnabled(orgId, identity);
   return { workspaceId, flagEnabled };
 }

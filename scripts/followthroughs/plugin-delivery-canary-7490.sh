@@ -26,7 +26,12 @@ set -uo pipefail
 
 WORKFLOW="scheduled-marketplace-drift.yml"
 REPO="${GH_REPO:-jikig-ai/soleur}"
-REPORTS="knowledge-base/project/specs/feat-one-shot-7489-7490-marketplace-retire-delivery-followups/upstream-reports.md"
+# The record moved to specs/archive/ in PR #7505 -- the SAME PR that shipped this probe -- so
+# this literal pointed at nothing from the day it was written, and step 4 below returned FAIL
+# on every run while the canary itself was green. Rule 3 of scripts/lint-followthrough-varq-ban.sh
+# now checks every repo-relative literal in this directory against `git ls-files`, so a future
+# move that forgets this line reddens the PR that moved it.
+REPORTS="knowledge-base/project/specs/archive/20260813-114111-feat-one-shot-7489-7490-marketplace-retire-delivery-followups/upstream-reports.md"
 
 command -v gh >/dev/null 2>&1 || { echo "TRANSIENT: gh unavailable" >&2; exit 2; }
 command -v jq >/dev/null 2>&1 || { echo "TRANSIENT: jq unavailable" >&2; exit 2; }
@@ -61,7 +66,10 @@ conclusion="$(jq -r '.conclusion' <<<"$completed")"
 # travels as DATA rather than as a failed step — so a run can conclude `success`
 # while the canary reported a mismatch. Asking the job directly is the only read
 # that answers the question this criterion actually poses.
-jobs="$(gh api "repos/${REPO}/actions/runs/${run_id}/jobs" --jq '.jobs' 2>/dev/null)"
+# --paginate | jq -s: the default page is 30 jobs, and a `canary` job on page 2
+# would report a false "canary is not wired" FAIL (#9245 sweep).
+jobs="$(gh api --paginate "repos/${REPO}/actions/runs/${run_id}/jobs?per_page=100" 2>/dev/null \
+  | jq -s '[.[].jobs[]]')"
 api_rc=$?
 if [[ "$api_rc" -ne 0 || -z "$jobs" ]]; then
   echo "TRANSIENT: could not read jobs for run ${run_id} (gh exited ${api_rc})" >&2

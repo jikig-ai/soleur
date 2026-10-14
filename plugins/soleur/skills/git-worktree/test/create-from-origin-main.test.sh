@@ -2,7 +2,7 @@
 # 2026-05-14 reproducer: worktree-manager.sh create must succeed when a
 # sibling worktree holds main checked out (issue #3741).
 #
-# Plan: knowledge-base/project/plans/2026-05-14-fix-worktree-create-from-origin-main-plan.md
+# Plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-14-fix-worktree-create-from-origin-main-plan.md
 #
 # Run via:  bash plugins/soleur/skills/git-worktree/test/create-from-origin-main.test.sh
 
@@ -44,7 +44,7 @@ rm -rf "$SEED"
 
 LOCAL="$TMP/local.git"
 git init --bare -b main "$LOCAL" >/dev/null
-( cd "$LOCAL" && git remote add origin "$UPSTREAM" && git fetch origin main:main >/dev/null 2>&1 )
+( cd "$LOCAL" && git remote add origin "$UPSTREAM" && git fetch --no-tags origin main:main >/dev/null 2>&1 )
 
 # Advance upstream so origin/main is ahead of local main
 SEED2="$TMP/seed2"

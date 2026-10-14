@@ -10,6 +10,8 @@
 
 ## Context
 
+> **Status note, 2026-09-23 (ADR-245, #8306).** The `.openhands/` mirror this describes was RETIRED and deleted from the tree. Nothing below is withdrawn — the reasoning stands as recorded, and it is the reason the re-entry criterion in ADR-245 requires a generator rather than another hand port. Read every present-tense claim about that mirror as historical.
+
 ADR-157 fixed the `.claude` harness's posture: a PreToolUse hook that cannot
 fully parse its input **asks**. It never continues silently and it never denies.
 
@@ -119,7 +121,7 @@ before failing open; `separator` is marked inapplicable rather than decided.
 **Recoverability is an ASSUMPTION here, not an established fact.** Three rows
 above say a deny is "recoverable in-band" because the reason string returns to
 the agent. This repo does not establish that:
-`knowledge-base/project/specs/openhands-portability/critical-unknowns.md`
+`knowledge-base/project/specs/archive/20261013-003106-openhands-portability/critical-unknowns.md`
 still carries *"Verification needed: … Confirm PreToolUse blocking with JSON
 output injects `additionalContext` into agent prompt."* The decision is sound
 either way — a deny with an unread reason is still strictly better than the

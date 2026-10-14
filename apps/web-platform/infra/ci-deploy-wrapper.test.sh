@@ -68,7 +68,7 @@ fi
 # kill semantic, divergent exit-code contract. `gnu-coreutils` package
 # provides /usr/bin/gnutimeout for those environments.
 pick_timeout() {
-  if timeout --version 2>&1 | head -1 | grep -qi uutils; then
+  if timeout --version 2>&1 | sed -n '1p' | grep -ci uutils >/dev/null; then
     if command -v gnutimeout >/dev/null 2>&1; then
       echo gnutimeout
     else
@@ -153,8 +153,8 @@ rc=$?
 set -e
 
 if [[ "$rc" -eq 0 ]] \
-  && printf '%s\n' "$output" | grep -qF "MARKER=hello" \
-  && printf '%s\n' "$output" | grep -qF "SSH_ORIGINAL_COMMAND=deploy web-platform x v1"; then
+  && printf '%s\n' "$output" | grep -cF "MARKER=hello" >/dev/null \
+  && printf '%s\n' "$output" | grep -cF "SSH_ORIGINAL_COMMAND=deploy web-platform x v1" >/dev/null; then
   PASS=$((PASS + 1))
   echo "  PASS: env vars propagate through exec timeout (MARKER + SSH_ORIGINAL_COMMAND)"
 else
@@ -188,7 +188,7 @@ output=$("$mock_dir/success-wrapper.sh" 2>&1)
 rc=$?
 set -e
 
-if [[ "$rc" -eq 0 ]] && printf '%s\n' "$output" | grep -qF "deploy ok"; then
+if [[ "$rc" -eq 0 ]] && printf '%s\n' "$output" | grep -cF "deploy ok" >/dev/null; then
   PASS=$((PASS + 1))
   echo "  PASS: wrapper exits 0 and forwards child stdout on success path"
 else

@@ -22,6 +22,16 @@ import {
   drainCcQueriesForShutdown,
   startCcIdleReaper,
 } from "./cc-dispatcher";
+// feat-open-web-egress (#9534) — the orphan-forwarder reaper runs at BOOT,
+// not lazily on first dispatch (getSoleurGoRunner): a dispatcher restart
+// leaves the previous generation's forwarders reparented to init with live
+// token files — waiting for the first dispatch leaves a window where dead
+// sessions' credentials still authenticate at the gateway.
+// GATED on SOLEUR_EGRESS_REAPER=1: only the dir-owning app container sets it.
+// A second container sharing the host dir (the deploy canary, ci-deploy.sh)
+// runs this same server — its /proc cannot see the prod forwarders, so an
+// ungated sweep would mass-revoke the prod dispatcher's live tokens.
+import { reapOrphanEgressForwarders } from "./egress-forwarder";
 import { handleConversationMessages } from "./api-messages";
 import { releaseAllHeldLeases } from "./worktree-write-lease";
 import { createChildLogger } from "./logger";
@@ -29,15 +39,23 @@ import { installCrashHandlers } from "./crash-handlers";
 import { verifyPluginMountOnce } from "./plugin-mount-check";
 import { assertSingleReplicaInvariant } from "./single-replica-assertion";
 import { emitTeamWorkspaceInviteBootBreadcrumb } from "./team-workspace-boot";
+import { logGitDataHostKeyPinAtStartup } from "./git-data-replication";
+import { startSupabaseEdgeWarmer } from "./supabase-edge-warmer";
 import {
   buildHealthResponse,
   buildInternalMetricsResponse,
+  writeHealthResponse,
 } from "./health";
 import {
   handleReadyzRequest,
   verifyWorkspacesMountOnce,
 } from "./readiness";
 import { isLoopbackHost } from "./loopback";
+import { verifyC4RenderSandboxOnce } from "./c4-render";
+import { verifyAgentSandboxHardening } from "./agent-runner-sandbox-config";
+import { verifyOuterWrapInterpose } from "./agent-runner-query-options";
+import { verifyOuterWrapRealizedIsolation } from "./agent-outer-wrap";
+import { startWatchdogDispatchClock } from "./watchdog-dispatch-clock";
 // NOTE: do NOT statically import "@/server/inngest/client" here — it throws at
 // module-load when INNGEST_SIGNING_KEY is unset (client.ts), which would crash
 // the server at startup in environments without Inngest configured (e2e CI,
@@ -73,18 +91,25 @@ app.prepare().then(() => {
   // at boot instead of only when a live request hits an empty /workspaces.
   verifyWorkspacesMountOnce();
   emitTeamWorkspaceInviteBootBreadcrumb();
+  // #7226 — one warn-level line (git_data_pin=present fp=SHA256:… | absent | invalid):
+  // the positive evidence that this release loaded the git-data host-key pin. Never throws.
+  logGitDataHostKeyPinAtStartup();
+  // #8978 — hold the Supabase edge (undici/TLS pool + PostgREST compute)
+  // warm between requests; Phase-0 spans measured 20–38 s cold-upstream
+  // stalls on per-request PostgREST/auth legs. Failure-tolerant, unref'd.
+  // Deliberately NOT captured for the shutdown stop-list: unref'd + a
+  // fire-and-forget 10 s-bounded tick can never block exit (unlike the
+  // reaper/clock timers that ARE stopped below).
+  startSupabaseEdgeWarmer();
 
   const server = createServer(async (req, res) => {
     const parsedUrl = parse(req.url!, true);
 
     // Health check for deployment
     if (parsedUrl.pathname === "/health") {
-      // Always return 200 for load balancer probes.
-      // CI deploy verification (web-platform-release.yml) reads the response body
-      // to gate on version match and supabase connectivity.
-      const health = await buildHealthResponse();
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify(health));
+      // Status, headers and serialization live in writeHealthResponse (always
+      // 200; the body is the paging and deploy-gate contract, see health.ts).
+      writeHealthResponse(res, await buildHealthResponse());
       return;
     }
 
@@ -174,6 +199,14 @@ app.prepare().then(() => {
   // .unref() already prevents shutdown blocking (see startCcIdleReaper).
   const ccIdleReaperTimer = startCcIdleReaper();
 
+  // #8495 / ADR-248 — the watchdog dispatch clock: fires workflow_dispatch for
+  // the external Inngest watchdog (every 15 min) and the zot restart-loop alarm
+  // (hourly), because GitHub Actions `schedule:` drops most of their ticks. Not
+  // an Inngest function on purpose (it watches Inngest). Arms only on a deployed
+  // host (NODE_ENV=production + SOLEUR_HOST_ID); the interval is unref'd, and
+  // every tick is fenced so it can never take this process down.
+  const watchdogClock = startWatchdogDispatchClock();
+
   // Self-arm the one-time #4650 monitor-close oneshot (#4654). boot == deploy
   // (web-platform-release.yml restarts the container on every apps/web-platform/**
   // merge), so this re-fires each deploy; the stable event `id` dedups within
@@ -250,6 +283,12 @@ app.prepare().then(() => {
   }
 
   server.listen(port, () => {
+    // #9534 — reap orphaned forwarder processes + their gateway tokens before
+    // serving dispatches (best-effort, never throws). Only on the owning
+    // dispatcher — see the import comment.
+    if (process.env.SOLEUR_EGRESS_REAPER === "1") {
+      reapOrphanEgressForwarders();
+    }
     log.info({ port, env: dev ? "development" : "production" }, "Server ready");
     log.info({
       sentryConfigured: !!process.env.SENTRY_DSN,
@@ -265,6 +304,66 @@ app.prepare().then(() => {
         `Server startup v${process.env.BUILD_VERSION || "dev"}`,
         { level: "info", tags: { event_type: "server-startup" } },
       );
+    }
+
+    // #8696: prove the C4 render sandbox works in THIS container (real seccomp +
+    // AppArmor) with one real fixture render. After listen and never awaited:
+    // it spawns and takes ~4 s, and a throw must not reject app.prepare().
+    // Report-only; it never gates a deploy (ADR-050 amendment).
+    if (!dev) {
+      void Promise.resolve()
+        .then(verifyC4RenderSandboxOnce)
+        .catch((err) =>
+          reportSilentFallback(null, {
+            feature: "c4-rerender",
+            op: "sandbox-selfprobe",
+            message: "c4 render sandbox self-probe threw",
+            extra: { err: String(err) },
+          }),
+        );
+      // #8752: the Agent SDK sandbox's hardening pair (bwrap PATH shim +
+      // committed nested-userns filter artifact) is measured once here —
+      // report-only like the C4 probe; it never gates a deploy.
+      void Promise.resolve()
+        .then(verifyAgentSandboxHardening)
+        .catch((err) =>
+          reportSilentFallback(null, {
+            feature: "agent-sandbox",
+            op: "sandbox-hardening-selfprobe",
+            message: "agent sandbox hardening self-probe threw",
+            extra: { err: String(err) },
+          }),
+        );
+      // #5863: the outer-wrap interpose is installed ONLY when the rollout
+      // flag is on — a flag-on-but-unwired build would silently run the CLI
+      // unwrapped (the file-tool tier exposed). Same report-only fork.
+      void Promise.resolve()
+        .then(verifyOuterWrapInterpose)
+        .catch((err) =>
+          reportSilentFallback(null, {
+            feature: "agent-sandbox",
+            op: "outer-wrap-selfprobe",
+            message: "agent sandbox outer-wrap self-probe threw",
+            extra: { err: String(err) },
+          }),
+        );
+      // #5863 T3.2 (opt-in): AGENT_OUTER_WRAP_BOOT_PROBE=1 runs the realized
+      // mountns + shared payload once at boot inside the PROD container —
+      // the file-cap posture measured where sessions will actually run.
+      // NOTE: the probe is synchronous (spawnSync, 30s bound) — the resolved-
+      // promise hop does not off-thread it, so flag-on stalls the event loop
+      // up to ~30s once at boot. Opt-in-only by design; acceptable for a
+      // bounded diagnostic, never enabled in the default rollout.
+      void Promise.resolve()
+        .then(() => verifyOuterWrapRealizedIsolation())
+        .catch((err) =>
+          reportSilentFallback(null, {
+            feature: "agent-sandbox",
+            op: "outer-wrap-realized-probe",
+            message: "agent sandbox outer-wrap realized probe threw",
+            extra: { err: String(err) },
+          }),
+        );
     }
   });
 
@@ -290,6 +389,9 @@ app.prepare().then(() => {
     clearInterval(stuckActiveReaperTimer);
     // #5371 — stop the cc idle reaper before draining for the same reason.
     clearInterval(ccIdleReaperTimer);
+    // #8495 — stop the watchdog dispatch clock (synchronous; an in-flight tick is
+    // bounded at 90 s and the other web host covers its slot).
+    watchdogClock.stop();
 
     // Abort all active agent sessions first — stops API credit consumption
     // and triggers the catch block which updates conversation status to "failed".

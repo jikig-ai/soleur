@@ -58,7 +58,7 @@ export function parseBuildServerScript(): BuildServerScriptConfig {
   // mis-parsed script string.
   if (!externals.includes("pdfjs-dist")) {
     throw new Error(
-      "build:server is missing --external:pdfjs-dist — see knowledge-base/project/plans/2026-05-07-fix-pdfjs-dommatrix-bundled-server-plan.md",
+      "build:server is missing --external:pdfjs-dist — see knowledge-base/project/plans/archive/20261013-014038-2026-05-07-fix-pdfjs-dommatrix-bundled-server-plan.md",
     );
   }
 

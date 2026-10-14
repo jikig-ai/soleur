@@ -35,7 +35,7 @@ trap 'rm -rf "$tmproot"' EXIT
 # --- Structural: the secret reaches gh via stdin (a pipe), never via --body on argv ---
 if grep -qE '\|[[:space:]]*gh secret set' "$PROVISION"; then ok; else
   bad "secret must be piped into 'gh secret set' (stdin), found no '| gh secret set'"; fi
-if grep -E 'gh secret set' "$PROVISION" | grep -qE -- '--body'; then
+if grep -E 'gh secret set' "$PROVISION" | grep -cE >/dev/null -- '--body'; then
   bad "'gh secret set' must NOT use --body (argv secret leak)"; else ok; fi
 
 # --- Behavioral harness: a mock PATH that captures gh argv + stdin ---
@@ -44,11 +44,10 @@ make_mockbin() {  # <mockdir> <doppler-output>
   mkdir -p "$dir"
   cat > "$dir/gh" <<EOF
 #!/usr/bin/env bash
-# Capture argv and (for 'secret set') stdin, so the test can prove no argv leak.
+# Capture argv and (for 'secret set') stdin, so the test can prove no argv leak. The stdin read is the FIRST statement: a stub that
+# exits unread makes the producer's printf take SIGPIPE under pipefail (#9217).
+case " \$* " in *" secret set "*) [ -t 0 ] || timeout 2 cat > "${dir}/gh.stdin" ;; esac
 printf '%s\n' "\$*" >> "${dir}/gh.argv"
-if [[ "\$1" == "secret" && "\$2" == "set" ]]; then
-  cat > "${dir}/gh.stdin"
-fi
 exit 0
 EOF
   cat > "$dir/doppler" <<EOF

@@ -1,0 +1,1852 @@
+{
+  "version": "2.18",
+  "children": [
+    {
+      "type": "frame",
+      "id": "YWdqr",
+      "x": 0,
+      "y": 0,
+      "name": "Fanout Section - Desktop 1440",
+      "clip": true,
+      "width": 1440,
+      "fill": "$bg",
+      "layout": "vertical",
+      "gap": 48,
+      "padding": [
+        96,
+        120
+      ],
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "frame",
+          "id": "tBXaW",
+          "name": "Section Header",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 16,
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "u36ri9",
+              "name": "Section Label",
+              "fill": "$accent",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "HOW A BRIEF FANS OUT",
+              "lineHeight": 1.5,
+              "textAlign": "center",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "600",
+              "letterSpacing": 3
+            },
+            {
+              "type": "text",
+              "id": "BHSK6",
+              "name": "H2 Title",
+              "fill": "#FFFFFF",
+              "textGrowth": "fixed-width",
+              "width": 800,
+              "content": "One brief reaches every department. You keep the final say.",
+              "lineHeight": 1.15,
+              "textAlign": "center",
+              "fontFamily": "Cormorant Garamond",
+              "fontSize": 42,
+              "fontWeight": "500"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "AJH1Y",
+          "name": "Figure",
+          "width": "fill_container",
+          "fill": "$bg2",
+          "stroke": "$border",
+          "strokeWidth": 1,
+          "layout": "vertical",
+          "gap": 28,
+          "padding": 32,
+          "children": [
+            {
+              "type": "frame",
+              "id": "EQt0x",
+              "name": "Fan-out Body",
+              "width": "fill_container",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "Rye6S",
+                  "name": "Brief Card",
+                  "width": 320,
+                  "fill": "$surface",
+                  "stroke": "$accent",
+                  "strokeWidth": 1,
+                  "layout": "vertical",
+                  "gap": 12,
+                  "padding": 24,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "p4WZnA",
+                      "name": "Brief Eyebrow",
+                      "fill": "$accent",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "FOUNDER BRIEF",
+                      "lineHeight": 1.5,
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "600",
+                      "letterSpacing": 2
+                    },
+                    {
+                      "type": "text",
+                      "id": "tIVkr",
+                      "name": "Brief Text",
+                      "fill": "#FFFFFF",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Fernlight is adding shared reminders. Launch it to current customers as a paid add-on.",
+                      "lineHeight": 1.45,
+                      "fontFamily": "Inter",
+                      "fontSize": 19,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "rectangle",
+                  "id": "bbkzx",
+                  "name": "Connector Line",
+                  "fill": "$borderStrong",
+                  "width": 40,
+                  "height": 1
+                },
+                {
+                  "type": "frame",
+                  "id": "yjR1y",
+                  "name": "Department List",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "u90RD",
+                      "name": "Row Legal",
+                      "width": "fill_container",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "njIp3",
+                          "name": "Spine Cell",
+                          "width": 40,
+                          "height": "fill_container",
+                          "layout": "vertical",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "Vdaem",
+                              "name": "Spine Top",
+                              "width": "fill_container",
+                              "height": "fill_container",
+                              "stroke": "$borderStrong",
+                              "strokeWidth": {
+                                "bottom": 1
+                              }
+                            },
+                            {
+                              "type": "frame",
+                              "id": "upw5F",
+                              "name": "Spine Bottom",
+                              "width": "fill_container",
+                              "height": "fill_container",
+                              "stroke": "$borderStrong",
+                              "strokeWidth": {
+                                "left": 1
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "luYvI",
+                          "name": "Row Gap Wrap",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "padding": [
+                            6,
+                            0
+                          ],
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "DpSQX",
+                              "name": "Department Legal",
+                              "width": "fill_container",
+                              "fill": "$surface",
+                              "stroke": "$border",
+                              "strokeWidth": 1,
+                              "gap": 24,
+                              "padding": [
+                                18,
+                                24
+                              ],
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "sBqvG",
+                                  "name": "Department Name",
+                                  "fill": "#FFFFFF",
+                                  "textGrowth": "fixed-width",
+                                  "width": 120,
+                                  "content": "Legal",
+                                  "fontFamily": "Inter",
+                                  "fontSize": 18,
+                                  "fontWeight": "600"
+                                },
+                                {
+                                  "type": "frame",
+                                  "id": "sLZHV",
+                                  "name": "Status Holder",
+                                  "width": 150,
+                                  "children": [
+                                    {
+                                      "type": "frame",
+                                      "id": "zCSpB",
+                                      "name": "Status Done",
+                                      "fill": "#00000000",
+                                      "stroke": "$borderStrong",
+                                      "strokeWidth": 1,
+                                      "padding": [
+                                        6,
+                                        12
+                                      ],
+                                      "children": [
+                                        {
+                                          "type": "text",
+                                          "id": "PL39t",
+                                          "name": "Status word",
+                                          "fill": "#FFFFFF",
+                                          "content": "Done",
+                                          "fontFamily": "Inter",
+                                          "fontSize": 13,
+                                          "fontWeight": "600",
+                                          "letterSpacing": 0.3
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "naHFE",
+                                  "name": "Status Line",
+                                  "fill": "#FFFFFF",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "Terms and privacy notice updated for shared reminders.",
+                                  "lineHeight": 1.5,
+                                  "fontFamily": "Inter",
+                                  "fontSize": 15,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "vj4v1",
+                      "name": "Row Marketing",
+                      "width": "fill_container",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "ZxvNW",
+                          "name": "Spine Cell",
+                          "width": 40,
+                          "height": "fill_container",
+                          "layout": "vertical",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "RujPd",
+                              "name": "Spine Top",
+                              "width": "fill_container",
+                              "height": "fill_container",
+                              "stroke": "$borderStrong",
+                              "strokeWidth": {
+                                "bottom": 1,
+                                "left": 1
+                              }
+                            },
+                            {
+                              "type": "frame",
+                              "id": "rOrfQ",
+                              "name": "Spine Bottom",
+                              "width": "fill_container",
+                              "height": "fill_container",
+                              "stroke": "$borderStrong",
+                              "strokeWidth": {
+                                "left": 1
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "TJzS8",
+                          "name": "Row Gap Wrap",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "padding": [
+                            6,
+                            0
+                          ],
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "VIa7s",
+                              "name": "Department Marketing",
+                              "width": "fill_container",
+                              "fill": "$surface",
+                              "stroke": "$border",
+                              "strokeWidth": 1,
+                              "gap": 24,
+                              "padding": [
+                                18,
+                                24
+                              ],
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "gh9Os",
+                                  "name": "Department Name",
+                                  "fill": "#FFFFFF",
+                                  "textGrowth": "fixed-width",
+                                  "width": 120,
+                                  "content": "Marketing",
+                                  "fontFamily": "Inter",
+                                  "fontSize": 18,
+                                  "fontWeight": "600"
+                                },
+                                {
+                                  "type": "frame",
+                                  "id": "vf4Bt",
+                                  "name": "Status Holder",
+                                  "width": 150,
+                                  "children": [
+                                    {
+                                      "type": "frame",
+                                      "id": "USCNT",
+                                      "name": "Status Done",
+                                      "fill": "#00000000",
+                                      "stroke": "$borderStrong",
+                                      "strokeWidth": 1,
+                                      "padding": [
+                                        6,
+                                        12
+                                      ],
+                                      "children": [
+                                        {
+                                          "type": "text",
+                                          "id": "t0LFf",
+                                          "name": "Status word",
+                                          "fill": "#FFFFFF",
+                                          "content": "Done",
+                                          "fontFamily": "Inter",
+                                          "fontSize": 13,
+                                          "fontWeight": "600",
+                                          "letterSpacing": 0.3
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "VaWaY",
+                                  "name": "Status Line",
+                                  "fill": "#FFFFFF",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "Launch post and customer email drafted.",
+                                  "lineHeight": 1.5,
+                                  "fontFamily": "Inter",
+                                  "fontSize": 15,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "fAgL4",
+                      "name": "Row Finance",
+                      "width": "fill_container",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "L38rrC",
+                          "name": "Spine Cell",
+                          "width": 40,
+                          "height": "fill_container",
+                          "layout": "vertical",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "uFXuM",
+                              "name": "Spine Top",
+                              "width": "fill_container",
+                              "height": "fill_container",
+                              "stroke": "$borderStrong",
+                              "strokeWidth": {
+                                "bottom": 1,
+                                "left": 1
+                              }
+                            },
+                            {
+                              "type": "frame",
+                              "id": "uXiDm",
+                              "name": "Spine Bottom",
+                              "width": "fill_container",
+                              "height": "fill_container",
+                              "stroke": "$borderStrong",
+                              "strokeWidth": {
+                                "left": 1
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "rEJNe",
+                          "name": "Row Gap Wrap",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "padding": [
+                            6,
+                            0
+                          ],
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "rXr0v",
+                              "name": "Department Finance",
+                              "width": "fill_container",
+                              "fill": "$surface",
+                              "stroke": "$border",
+                              "strokeWidth": 1,
+                              "gap": 24,
+                              "padding": [
+                                18,
+                                24
+                              ],
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "wfaRe",
+                                  "name": "Department Name",
+                                  "fill": "#FFFFFF",
+                                  "textGrowth": "fixed-width",
+                                  "width": 120,
+                                  "content": "Finance",
+                                  "fontFamily": "Inter",
+                                  "fontSize": 18,
+                                  "fontWeight": "600"
+                                },
+                                {
+                                  "type": "frame",
+                                  "id": "LSnZi",
+                                  "name": "Status Holder",
+                                  "width": 150,
+                                  "children": [
+                                    {
+                                      "type": "frame",
+                                      "id": "IEdvt",
+                                      "name": "Status Stopped",
+                                      "fill": "#FFFFFF",
+                                      "stroke": "#FFFFFF",
+                                      "strokeWidth": 1,
+                                      "padding": [
+                                        6,
+                                        12
+                                      ],
+                                      "children": [
+                                        {
+                                          "type": "text",
+                                          "id": "IjfSE",
+                                          "name": "Status word",
+                                          "fill": "#0A0A0A",
+                                          "content": "Stopped",
+                                          "fontFamily": "Inter",
+                                          "fontSize": 13,
+                                          "fontWeight": "600",
+                                          "letterSpacing": 0.3
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "ZSFWB",
+                                  "name": "Status Line",
+                                  "fill": "#FFFFFF",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "Add-on price held back. The margin check did not pass. You decide what happens next.",
+                                  "lineHeight": 1.5,
+                                  "fontFamily": "Inter",
+                                  "fontSize": 15,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "SzTXy",
+                      "name": "Row Engineering",
+                      "width": "fill_container",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "nSpA5",
+                          "name": "Spine Cell",
+                          "width": 40,
+                          "height": "fill_container",
+                          "layout": "vertical",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "h4QnIq",
+                              "name": "Spine Top",
+                              "width": "fill_container",
+                              "height": "fill_container",
+                              "stroke": "$borderStrong",
+                              "strokeWidth": {
+                                "bottom": 1,
+                                "left": 1
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "qLEmW",
+                          "name": "Row Gap Wrap",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "padding": [
+                            6,
+                            0
+                          ],
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "Kv3NV",
+                              "name": "Department Engineering",
+                              "width": "fill_container",
+                              "fill": "$surface",
+                              "stroke": "$border",
+                              "strokeWidth": 1,
+                              "gap": 24,
+                              "padding": [
+                                18,
+                                24
+                              ],
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "DMjp3",
+                                  "name": "Department Name",
+                                  "fill": "#FFFFFF",
+                                  "textGrowth": "fixed-width",
+                                  "width": 120,
+                                  "content": "Engineering",
+                                  "fontFamily": "Inter",
+                                  "fontSize": 18,
+                                  "fontWeight": "600"
+                                },
+                                {
+                                  "type": "frame",
+                                  "id": "vhsbZ",
+                                  "name": "Status Holder",
+                                  "width": 150,
+                                  "children": [
+                                    {
+                                      "type": "frame",
+                                      "id": "D4VwiG",
+                                      "name": "Status Waiting on you",
+                                      "fill": "#00000000",
+                                      "stroke": "$accent",
+                                      "strokeWidth": 1,
+                                      "padding": [
+                                        6,
+                                        12
+                                      ],
+                                      "children": [
+                                        {
+                                          "type": "text",
+                                          "id": "HjiDW",
+                                          "name": "Status word",
+                                          "fill": "$accent",
+                                          "content": "Waiting on you",
+                                          "fontFamily": "Inter",
+                                          "fontSize": 13,
+                                          "fontWeight": "600",
+                                          "letterSpacing": 0.3
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "HU8ak",
+                                  "name": "Status Line",
+                                  "fill": "#FFFFFF",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "Needs your answer: switch reminders on by default for existing accounts, or let each customer opt in?",
+                                  "lineHeight": 1.5,
+                                  "fontFamily": "Inter",
+                                  "fontSize": 15,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "yHsUq",
+              "name": "Figcaption",
+              "width": "fill_container",
+              "stroke": "$border",
+              "strokeWidth": {
+                "top": 1
+              },
+              "layout": "vertical",
+              "gap": 4,
+              "padding": [
+                16,
+                0,
+                0,
+                0
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "UKj4U",
+                  "name": "Caption Line 1",
+                  "fill": "$muted",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Illustrative example with sample data. Not a live run or a customer result.",
+                  "lineHeight": 1.5,
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "mGxr6",
+                  "name": "Caption Line 2",
+                  "fill": "$muted",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Soleur pauses for your approval; it does not guarantee any check will pass.",
+                  "lineHeight": 1.5,
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "WeCPM",
+          "name": "Departments Link",
+          "fill": "$accent",
+          "content": "See every department below",
+          "fontFamily": "Inter",
+          "fontSize": 16,
+          "fontWeight": "500"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "RD4Tc",
+      "x": 1560,
+      "y": 0,
+      "name": "Fanout Section - Mobile 390",
+      "clip": true,
+      "width": 390,
+      "fill": "$bg",
+      "layout": "vertical",
+      "gap": 32,
+      "padding": [
+        56,
+        20
+      ],
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "frame",
+          "id": "O8MfXR",
+          "name": "Section Header",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 16,
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "tWg2l",
+              "name": "Section Label",
+              "fill": "$accent",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "HOW A BRIEF FANS OUT",
+              "lineHeight": 1.5,
+              "textAlign": "center",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "600",
+              "letterSpacing": 3
+            },
+            {
+              "type": "text",
+              "id": "v5cD4",
+              "name": "H2 Title",
+              "fill": "#FFFFFF",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "One brief reaches every department. You keep the final say.",
+              "lineHeight": 1.15,
+              "textAlign": "center",
+              "fontFamily": "Cormorant Garamond",
+              "fontSize": 32,
+              "fontWeight": "500"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "GM7Ty",
+          "name": "Figure",
+          "width": "fill_container",
+          "fill": "$bg2",
+          "stroke": "$border",
+          "strokeWidth": 1,
+          "layout": "vertical",
+          "gap": 24,
+          "padding": 20,
+          "children": [
+            {
+              "type": "frame",
+              "id": "F0VgGP",
+              "name": "Fan-out Body",
+              "width": "fill_container",
+              "layout": "vertical",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "FAbxf",
+                  "name": "Brief Card",
+                  "width": "fill_container",
+                  "fill": "$surface",
+                  "stroke": "$accent",
+                  "strokeWidth": 1,
+                  "layout": "vertical",
+                  "gap": 12,
+                  "padding": 20,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "l6oES",
+                      "name": "Brief Eyebrow",
+                      "fill": "$accent",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "FOUNDER BRIEF",
+                      "lineHeight": 1.5,
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "600",
+                      "letterSpacing": 2
+                    },
+                    {
+                      "type": "text",
+                      "id": "ElX0F",
+                      "name": "Brief Text",
+                      "fill": "#FFFFFF",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Fernlight is adding shared reminders. Launch it to current customers as a paid add-on.",
+                      "lineHeight": 1.45,
+                      "fontFamily": "Inter",
+                      "fontSize": 17,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "PJzlO",
+                  "name": "Connector",
+                  "width": "fill_container",
+                  "children": [
+                    {
+                      "type": "rectangle",
+                      "id": "u3taMY",
+                      "name": "Connector Line",
+                      "fill": "$borderStrong",
+                      "width": 1,
+                      "height": 24
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "uhRvc",
+                  "name": "Department List",
+                  "width": "fill_container",
+                  "stroke": "$borderStrong",
+                  "strokeWidth": {
+                    "left": 1
+                  },
+                  "layout": "vertical",
+                  "gap": 12,
+                  "padding": [
+                    0,
+                    0,
+                    0,
+                    16
+                  ],
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "QbF05",
+                      "name": "Department Legal",
+                      "width": "fill_container",
+                      "fill": "$surface",
+                      "stroke": "$border",
+                      "strokeWidth": 1,
+                      "layout": "vertical",
+                      "gap": 12,
+                      "padding": 20,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "sB6At",
+                          "name": "Name and Status",
+                          "width": "fill_container",
+                          "gap": 12,
+                          "justifyContent": "space_between",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "cpSdC",
+                              "name": "Department Name",
+                              "fill": "#FFFFFF",
+                              "content": "Legal",
+                              "fontFamily": "Inter",
+                              "fontSize": 18,
+                              "fontWeight": "600"
+                            },
+                            {
+                              "type": "frame",
+                              "id": "LZJqr",
+                              "name": "Status Done",
+                              "fill": "#00000000",
+                              "stroke": "$borderStrong",
+                              "strokeWidth": 1,
+                              "padding": [
+                                6,
+                                12
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "eBu9s",
+                                  "name": "Status word",
+                                  "fill": "#FFFFFF",
+                                  "content": "Done",
+                                  "fontFamily": "Inter",
+                                  "fontSize": 13,
+                                  "fontWeight": "600",
+                                  "letterSpacing": 0.3
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "VxYJC",
+                          "name": "Status Line",
+                          "fill": "#FFFFFF",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Terms and privacy notice updated for shared reminders.",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 15,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "Y8zq1E",
+                      "name": "Department Marketing",
+                      "width": "fill_container",
+                      "fill": "$surface",
+                      "stroke": "$border",
+                      "strokeWidth": 1,
+                      "layout": "vertical",
+                      "gap": 12,
+                      "padding": 20,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "Q5h9IC",
+                          "name": "Name and Status",
+                          "width": "fill_container",
+                          "gap": 12,
+                          "justifyContent": "space_between",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "oSz8Q",
+                              "name": "Department Name",
+                              "fill": "#FFFFFF",
+                              "content": "Marketing",
+                              "fontFamily": "Inter",
+                              "fontSize": 18,
+                              "fontWeight": "600"
+                            },
+                            {
+                              "type": "frame",
+                              "id": "eYdgC",
+                              "name": "Status Done",
+                              "fill": "#00000000",
+                              "stroke": "$borderStrong",
+                              "strokeWidth": 1,
+                              "padding": [
+                                6,
+                                12
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "W5cyNL",
+                                  "name": "Status word",
+                                  "fill": "#FFFFFF",
+                                  "content": "Done",
+                                  "fontFamily": "Inter",
+                                  "fontSize": 13,
+                                  "fontWeight": "600",
+                                  "letterSpacing": 0.3
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "pgHmi",
+                          "name": "Status Line",
+                          "fill": "#FFFFFF",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Launch post and customer email drafted.",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 15,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "MEVxe",
+                      "name": "Department Finance",
+                      "width": "fill_container",
+                      "fill": "$surface",
+                      "stroke": "$border",
+                      "strokeWidth": 1,
+                      "layout": "vertical",
+                      "gap": 12,
+                      "padding": 20,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "X8Gdky",
+                          "name": "Name and Status",
+                          "width": "fill_container",
+                          "gap": 12,
+                          "justifyContent": "space_between",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "WHDEP",
+                              "name": "Department Name",
+                              "fill": "#FFFFFF",
+                              "content": "Finance",
+                              "fontFamily": "Inter",
+                              "fontSize": 18,
+                              "fontWeight": "600"
+                            },
+                            {
+                              "type": "frame",
+                              "id": "l5avOi",
+                              "name": "Status Stopped",
+                              "fill": "#FFFFFF",
+                              "stroke": "#FFFFFF",
+                              "strokeWidth": 1,
+                              "padding": [
+                                6,
+                                12
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "CkgqY",
+                                  "name": "Status word",
+                                  "fill": "#0A0A0A",
+                                  "content": "Stopped",
+                                  "fontFamily": "Inter",
+                                  "fontSize": 13,
+                                  "fontWeight": "600",
+                                  "letterSpacing": 0.3
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "fjFrP",
+                          "name": "Status Line",
+                          "fill": "#FFFFFF",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Add-on price held back. The margin check did not pass. You decide what happens next.",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 15,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "BOKjQ",
+                      "name": "Department Engineering",
+                      "width": "fill_container",
+                      "fill": "$surface",
+                      "stroke": "$border",
+                      "strokeWidth": 1,
+                      "layout": "vertical",
+                      "gap": 12,
+                      "padding": 20,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "Xmwwx",
+                          "name": "Name and Status",
+                          "width": "fill_container",
+                          "gap": 12,
+                          "justifyContent": "space_between",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "xQYaP",
+                              "name": "Department Name",
+                              "fill": "#FFFFFF",
+                              "content": "Engineering",
+                              "fontFamily": "Inter",
+                              "fontSize": 18,
+                              "fontWeight": "600"
+                            },
+                            {
+                              "type": "frame",
+                              "id": "SvZy2",
+                              "name": "Status Waiting on you",
+                              "fill": "#00000000",
+                              "stroke": "$accent",
+                              "strokeWidth": 1,
+                              "padding": [
+                                6,
+                                12
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "Y5HuDZ",
+                                  "name": "Status word",
+                                  "fill": "$accent",
+                                  "content": "Waiting on you",
+                                  "fontFamily": "Inter",
+                                  "fontSize": 13,
+                                  "fontWeight": "600",
+                                  "letterSpacing": 0.3
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "s83fl",
+                          "name": "Status Line",
+                          "fill": "#FFFFFF",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Needs your answer: switch reminders on by default for existing accounts, or let each customer opt in?",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 15,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "viKT2",
+              "name": "Figcaption",
+              "width": "fill_container",
+              "stroke": "$border",
+              "strokeWidth": {
+                "top": 1
+              },
+              "layout": "vertical",
+              "gap": 4,
+              "padding": [
+                16,
+                0,
+                0,
+                0
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "KouLF",
+                  "name": "Caption Line 1",
+                  "fill": "$muted",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Illustrative example with sample data. Not a live run or a customer result.",
+                  "lineHeight": 1.5,
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "oXIfM",
+                  "name": "Caption Line 2",
+                  "fill": "$muted",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Soleur pauses for your approval; it does not guarantee any check will pass.",
+                  "lineHeight": 1.5,
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "a0xas",
+          "name": "Departments Link",
+          "fill": "$accent",
+          "content": "See every department below",
+          "fontFamily": "Inter",
+          "fontSize": 16,
+          "fontWeight": "500"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "r72A11",
+      "x": 2080,
+      "y": 0,
+      "name": "Fanout Section - Mobile 320 (wrap check)",
+      "clip": true,
+      "width": 320,
+      "fill": "$bg",
+      "layout": "vertical",
+      "gap": 32,
+      "padding": [
+        56,
+        16
+      ],
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "frame",
+          "id": "v0jqf",
+          "name": "Section Header",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 16,
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "f6CS9",
+              "name": "Section Label",
+              "fill": "$accent",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "HOW A BRIEF FANS OUT",
+              "lineHeight": 1.5,
+              "textAlign": "center",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "600",
+              "letterSpacing": 3
+            },
+            {
+              "type": "text",
+              "id": "a6pVyX",
+              "name": "H2 Title",
+              "fill": "#FFFFFF",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "One brief reaches every department. You keep the final say.",
+              "lineHeight": 1.15,
+              "textAlign": "center",
+              "fontFamily": "Cormorant Garamond",
+              "fontSize": 28,
+              "fontWeight": "500"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "niUIS",
+          "name": "Figure",
+          "width": "fill_container",
+          "fill": "$bg2",
+          "stroke": "$border",
+          "strokeWidth": 1,
+          "layout": "vertical",
+          "gap": 24,
+          "padding": 16,
+          "children": [
+            {
+              "type": "frame",
+              "id": "f6ZREt",
+              "name": "Fan-out Body",
+              "width": "fill_container",
+              "layout": "vertical",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "Trpzo",
+                  "name": "Brief Card",
+                  "width": "fill_container",
+                  "fill": "$surface",
+                  "stroke": "$accent",
+                  "strokeWidth": 1,
+                  "layout": "vertical",
+                  "gap": 12,
+                  "padding": 20,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "f6Yjh",
+                      "name": "Brief Eyebrow",
+                      "fill": "$accent",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "FOUNDER BRIEF",
+                      "lineHeight": 1.5,
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "600",
+                      "letterSpacing": 2
+                    },
+                    {
+                      "type": "text",
+                      "id": "x4yPp",
+                      "name": "Brief Text",
+                      "fill": "#FFFFFF",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Fernlight is adding shared reminders. Launch it to current customers as a paid add-on.",
+                      "lineHeight": 1.45,
+                      "fontFamily": "Inter",
+                      "fontSize": 17,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "VYWET",
+                  "name": "Connector",
+                  "width": "fill_container",
+                  "children": [
+                    {
+                      "type": "rectangle",
+                      "id": "cXTab",
+                      "name": "Connector Line",
+                      "fill": "$borderStrong",
+                      "width": 1,
+                      "height": 24
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "T6v0p",
+                  "name": "Department List",
+                  "width": "fill_container",
+                  "stroke": "$borderStrong",
+                  "strokeWidth": {
+                    "left": 1
+                  },
+                  "layout": "vertical",
+                  "gap": 12,
+                  "padding": [
+                    0,
+                    0,
+                    0,
+                    16
+                  ],
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "qqFEU",
+                      "name": "Department Legal",
+                      "width": "fill_container",
+                      "fill": "$surface",
+                      "stroke": "$border",
+                      "strokeWidth": 1,
+                      "layout": "vertical",
+                      "gap": 12,
+                      "padding": 16,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "k3qHrx",
+                          "name": "Name and Status",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 8,
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "R8edUb",
+                              "name": "Department Name",
+                              "fill": "#FFFFFF",
+                              "content": "Legal",
+                              "fontFamily": "Inter",
+                              "fontSize": 18,
+                              "fontWeight": "600"
+                            },
+                            {
+                              "type": "frame",
+                              "id": "oUoEG",
+                              "name": "Status Done",
+                              "fill": "#00000000",
+                              "stroke": "$borderStrong",
+                              "strokeWidth": 1,
+                              "padding": [
+                                6,
+                                12
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "aat3M",
+                                  "name": "Status word",
+                                  "fill": "#FFFFFF",
+                                  "content": "Done",
+                                  "fontFamily": "Inter",
+                                  "fontSize": 13,
+                                  "fontWeight": "600",
+                                  "letterSpacing": 0.3
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "Wxna0",
+                          "name": "Status Line",
+                          "fill": "#FFFFFF",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Terms and privacy notice updated for shared reminders.",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 15,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "rtwAr",
+                      "name": "Department Marketing",
+                      "width": "fill_container",
+                      "fill": "$surface",
+                      "stroke": "$border",
+                      "strokeWidth": 1,
+                      "layout": "vertical",
+                      "gap": 12,
+                      "padding": 16,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "GUHTk",
+                          "name": "Name and Status",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 8,
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "lJWhl",
+                              "name": "Department Name",
+                              "fill": "#FFFFFF",
+                              "content": "Marketing",
+                              "fontFamily": "Inter",
+                              "fontSize": 18,
+                              "fontWeight": "600"
+                            },
+                            {
+                              "type": "frame",
+                              "id": "e2onk0",
+                              "name": "Status Done",
+                              "fill": "#00000000",
+                              "stroke": "$borderStrong",
+                              "strokeWidth": 1,
+                              "padding": [
+                                6,
+                                12
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "f6F6Y",
+                                  "name": "Status word",
+                                  "fill": "#FFFFFF",
+                                  "content": "Done",
+                                  "fontFamily": "Inter",
+                                  "fontSize": 13,
+                                  "fontWeight": "600",
+                                  "letterSpacing": 0.3
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "FDasC",
+                          "name": "Status Line",
+                          "fill": "#FFFFFF",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Launch post and customer email drafted.",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 15,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "Xndx3",
+                      "name": "Department Finance",
+                      "width": "fill_container",
+                      "fill": "$surface",
+                      "stroke": "$border",
+                      "strokeWidth": 1,
+                      "layout": "vertical",
+                      "gap": 12,
+                      "padding": 16,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "pK8Fc",
+                          "name": "Name and Status",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 8,
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "qvOdm",
+                              "name": "Department Name",
+                              "fill": "#FFFFFF",
+                              "content": "Finance",
+                              "fontFamily": "Inter",
+                              "fontSize": 18,
+                              "fontWeight": "600"
+                            },
+                            {
+                              "type": "frame",
+                              "id": "TJmpH",
+                              "name": "Status Stopped",
+                              "fill": "#FFFFFF",
+                              "stroke": "#FFFFFF",
+                              "strokeWidth": 1,
+                              "padding": [
+                                6,
+                                12
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "b8bZT9",
+                                  "name": "Status word",
+                                  "fill": "#0A0A0A",
+                                  "content": "Stopped",
+                                  "fontFamily": "Inter",
+                                  "fontSize": 13,
+                                  "fontWeight": "600",
+                                  "letterSpacing": 0.3
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "a2bcH",
+                          "name": "Status Line",
+                          "fill": "#FFFFFF",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Add-on price held back. The margin check did not pass. You decide what happens next.",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 15,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "pKc5n",
+                      "name": "Department Engineering",
+                      "width": "fill_container",
+                      "fill": "$surface",
+                      "stroke": "$border",
+                      "strokeWidth": 1,
+                      "layout": "vertical",
+                      "gap": 12,
+                      "padding": 16,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "i3GEf8",
+                          "name": "Name and Status",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 8,
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "P5vOk",
+                              "name": "Department Name",
+                              "fill": "#FFFFFF",
+                              "content": "Engineering",
+                              "fontFamily": "Inter",
+                              "fontSize": 18,
+                              "fontWeight": "600"
+                            },
+                            {
+                              "type": "frame",
+                              "id": "SJkoI",
+                              "name": "Status Waiting on you",
+                              "fill": "#00000000",
+                              "stroke": "$accent",
+                              "strokeWidth": 1,
+                              "padding": [
+                                6,
+                                12
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "eSDMj",
+                                  "name": "Status word",
+                                  "fill": "$accent",
+                                  "content": "Waiting on you",
+                                  "fontFamily": "Inter",
+                                  "fontSize": 13,
+                                  "fontWeight": "600",
+                                  "letterSpacing": 0.3
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "WGtmV",
+                          "name": "Status Line",
+                          "fill": "#FFFFFF",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Needs your answer: switch reminders on by default for existing accounts, or let each customer opt in?",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 15,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "FQuZJ",
+              "name": "Figcaption",
+              "width": "fill_container",
+              "stroke": "$border",
+              "strokeWidth": {
+                "top": 1
+              },
+              "layout": "vertical",
+              "gap": 4,
+              "padding": [
+                16,
+                0,
+                0,
+                0
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "GqopC",
+                  "name": "Caption Line 1",
+                  "fill": "$muted",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Illustrative example with sample data. Not a live run or a customer result.",
+                  "lineHeight": 1.5,
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "YZMmV",
+                  "name": "Caption Line 2",
+                  "fill": "$muted",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Soleur pauses for your approval; it does not guarantee any check will pass.",
+                  "lineHeight": 1.5,
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "o18z6J",
+          "name": "Departments Link",
+          "fill": "$accent",
+          "content": "See every department below",
+          "fontFamily": "Inter",
+          "fontSize": 16,
+          "fontWeight": "500"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "GZkbL",
+      "x": 0,
+      "y": 1034,
+      "name": "Implementation Notes",
+      "width": 1200,
+      "fill": "$bg2",
+      "stroke": "$border",
+      "strokeWidth": 1,
+      "layout": "vertical",
+      "gap": 14,
+      "padding": 32,
+      "children": [
+        {
+          "type": "text",
+          "id": "cYuwa",
+          "name": "Notes Title",
+          "fill": "$accent",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Implementation notes (not part of the section)",
+          "lineHeight": 1.5,
+          "fontFamily": "Inter",
+          "fontSize": 16,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "th4eA",
+          "name": "Note 1",
+          "fill": "#FFFFFF",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Placement: below the positioning section, above the quote and attribution block. One H2 for the section; the section label above it follows the existing section-label pattern.",
+          "lineHeight": 1.5,
+          "fontFamily": "Inter",
+          "fontSize": 14,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "rZRwu",
+          "name": "Note 2",
+          "fill": "#FFFFFF",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Semantics: figure containing the brief, a list of four department rows, and a figcaption with the two disclosure lines. The H2 names the figure. The link under the figure is a plain anchor to the department cards (needs an id on that section). No button or CTA in the section.",
+          "lineHeight": 1.5,
+          "fontFamily": "Inter",
+          "fontSize": 14,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "TB9Rw",
+          "name": "Note 3",
+          "fill": "#FFFFFF",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Status is text in every row: Done, Stopped, Waiting on you. The chip fill and border only reinforce it: Stopped is a solid light chip, Waiting on you is gold outlined, Done is grey outlined.",
+          "lineHeight": 1.5,
+          "fontFamily": "Inter",
+          "fontSize": 14,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "W5fIDW",
+          "name": "Note 4",
+          "fill": "#FFFFFF",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Contrast on the dark ground: white on #141414 about 18:1; secondary #848484 on #0E0E0E about 5.2:1 and on #141414 about 4.9:1; gold #C9A962 on #141414 about 8:1. Do not use tertiary #737373 for captions here (below 4.5:1).",
+          "lineHeight": 1.5,
+          "fontFamily": "Inter",
+          "fontSize": 14,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "y2xW3a",
+          "name": "Note 5",
+          "fill": "#FFFFFF",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Responsive: desktop 1440 uses a brief card, a connector and three-column rows. At 390 the rows stack, each with name and chip on one line and the status line wrapping below. At 320 the chip drops under the department name and the Engineering line (the longest) wraps to four lines with no horizontal overflow.",
+          "lineHeight": 1.5,
+          "fontFamily": "Inter",
+          "fontSize": 14,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "m7ul13",
+          "name": "Note 6",
+          "fill": "#FFFFFF",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Tokens: radius 0, #0A0A0A page, #0E0E0E figure, #141414 cards, #2A2A2A borders, gold #C9A962, Cormorant Garamond for the H2, Inter for the rest. No numbers, durations or counts in the section.",
+          "lineHeight": 1.5,
+          "fontFamily": "Inter",
+          "fontSize": 14,
+          "fontWeight": "normal"
+        }
+      ]
+    }
+  ],
+  "variables": {
+    "bg": {
+      "type": "color",
+      "value": "#0A0A0A"
+    },
+    "bg2": {
+      "type": "color",
+      "value": "#0E0E0E"
+    },
+    "surface": {
+      "type": "color",
+      "value": "#141414"
+    },
+    "border": {
+      "type": "color",
+      "value": "#2A2A2A"
+    },
+    "borderStrong": {
+      "type": "color",
+      "value": "#3A3A3A"
+    },
+    "accent": {
+      "type": "color",
+      "value": "#C9A962"
+    },
+    "muted": {
+      "type": "color",
+      "value": "#848484"
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "name": "soleur",
+  "interface": { "displayName": "Soleur" },
+  "plugins": [
+    {
+      "name": "soleur",
+      "source": { "source": "local", "path": "./plugins/soleur" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Productivity"
+    }
+  ]
+}

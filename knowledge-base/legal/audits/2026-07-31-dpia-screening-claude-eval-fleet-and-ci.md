@@ -3,7 +3,7 @@ title: "DPIA screening memo — Anthropic-egressing Inngest function fleet, comm
 type: dpia-screening-memo
 date: 2026-07-31
 issue: 7100
-plan: knowledge-base/project/plans/2026-07-31-docs-art30-register-claude-eval-fleet-and-ci-surface-plan.md
+plan: knowledge-base/project/plans/archive/20261013-051752-2026-07-31-docs-art30-register-claude-eval-fleet-and-ci-surface-plan.md
 status: draft-requires-counsel-review
 processing_activity: "Article 30 register Processing Activity 31 (Anthropic-egressing Inngest function fleet), Processing Activity 32 (community observation and republication) and Processing Activity 33 (Jikigai-keyed Anthropic API surface in GitHub Actions CI)"
 conclusion: "SPLIT. PA-31 and PA-33: full DPIA NOT required — two and one WP248 criteria engaged respectively, no public-output limb, named accepted residuals and pinned re-screening triggers are the proportionate Art. 24/25 record. PA-32 (community observation and republication): a full DPIA IS required under Art. 35(1) — six WP248 rev.01 criteria are engaged, and Art. 35(1) requires the assessment PRIOR TO the processing, so it is overdue by approximately five months. The memo records that remediation R1-R4 collapses four of the six criteria at once and may therefore be the better path than assessing a limb that should not exist in its current form."
@@ -128,7 +128,7 @@ assessment is **overdue by approximately five months**, and the public-issue-com
 continues to run. This is recorded as a compliance finding, not as a plan.
 
 The full DPIA is tracked as deferred item **DEF-5** (#7121; body drafted at
-`knowledge-base/project/specs/feat-one-shot-7100-art30-eval-fleet-register/deferred-issues.md`;
+`knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7100-art30-eval-fleet-register/deferred-issues.md`;
 #7121). PA-32 §(g) records **DPIA status: FULL DPIA REQUIRED — and overdue**, with the
 ~2026-02-19 date and the DEF-5 scoping in the sentences that follow it. **[2026-07-31
 CORRECTION (#7100), applied at review: the preceding sentence previously presented a
@@ -195,6 +195,47 @@ on a public surface under Jikigai's bot identity. *Accepted only as an interim p
 because it overlaps R4 and is separately tracked as deferred item **DEF-7** (#7122). *Re-screening
 trigger:* first observed injected content reaching a published artefact — or immediately, if
 counsel assesses the absence of a human gate as unacceptable at any volume.
+
+> **Superseded in part 2026-10-06 (#7122) - residuals (a) and (b); append-only, nothing above is retracted.**
+> The text above is the record of the position on 2026-07-31 and stays as written.
+>
+> - **Residual (a)**: "no closed output allowlist ... on the digest path" no longer holds for
+>   `cron-community-monitor`. From the merge of #7122 its digest and tracking issue are rendered by the
+>   handler from a closed-schema draft (bounded integers and closed enum members, no free-text field;
+>   ADR-273), so unsolicited Art. 9 text cannot be carried into that publication. Unchanged: Art. 9
+>   content still reaches Anthropic with no PII scrub on the input (#7124), a disclosure already in a
+>   published digest is still un-erasable (residual (c)), and `cron-daily-triage` has no output
+>   allowlist (#9606).
+> - **Residual (b)**: for `cron-community-monitor` the injection-to-public-publication finding is
+>   **narrowed**, not eliminated. Attacker-chosen free text can no longer reach the digest or the issue.
+>   Still open for that cron: there is no human gate (auto-merge), an injection can choose in-set enum
+>   members and in-range counts (numeric truth is not verified), and the schema is not free of
+>   personal-data risk because counts can single a person out. Open in full for `cron-daily-triage`
+>   (a PA-32 member that comments publicly, with no hook), tracked at #9606. R4's objective is met for
+>   the community digest by a different mechanism; whether that substitutes for R4 is for counsel at
+>   #7119. The finding stays recorded as an interim posture for the fleet as a whole. The conclusion of
+>   this memo (full DPIA required for PA-32, overdue, #7121) is unchanged.
+
+> **Further correction 2026-10-06 (#7122, review) - residuals (a) and (b); append-only.** Corrections to the
+> 2026-10-06 note above, which stays as written.
+>
+> - **Residual (a)**: "unsolicited Art. 9 text cannot be carried into that publication" is scoped to the
+>   **published artefacts**. For `cron-community-monitor` alone the agent's redacted final message (up to 16 KiB) is
+>   memoised in the `claude-eval` step output (Inngest run state, not a published surface) before it is validated, so a
+>   non-conforming message could hold such text there without being republished.
+> - **Residual (b)**: the agent holds **no GitHub write credential** during its run, and nothing wider is claimed: the
+>   Discord, Bluesky, X and LinkedIn credentials for the read collectors, several of them posting credentials, remain in
+>   the spawn environment (ADR-273 residual (g)). Review found a P1 on this very finding: trailing arguments of allowlisted
+>   router verbs reached `python3 -c` source and bash arithmetic evaluation, so the agent could execute code with that
+>   environment; a strict argument grammar plus script-side operand validation now closes the code-execution leg (a
+>   grammar-conforming query token can still reach `hn.algolia.com`; ADR-273 residual (e)) and the allowlist is fourteen
+>   verbs, not sixteen. The counts caveat is wider than the note says: Discord `members` and `messages` for a private guild
+>   and `github.newStargazers` can single a person out as well, and with the period fixed at one day the published series
+>   is a daily time series. The phrase "R4's objective is met for the community digest by a different mechanism" is
+>   withdrawn: the exposure R4 described is **narrowed** for future output, and whether that substitutes for R4 is for
+>   counsel at #7119. This PR closes issue #7122; `cron-daily-triage` stays OPEN under #9606.
+
+> **Further correction 2026-10-06 (#7122, review round 2); append-only.** the allowlist is **thirteen exact-literal** commands with no agent-chosen argument other than a numeric Discord channel id, so the statement that a grammar-conforming query token can still reach `hn.algolia.com` is withdrawn (the HN query word is a pinned literal; ADR-273 residual (e)). "Fixed at one day" and "daily time series" are withdrawn as stated: the collection windows differ by platform (GitHub 1 day; Hacker News mentions 7 days; Discord the latest 50 messages per channel; X, Bluesky and LinkedIn totals as of collection), so the published series is a daily series of mixed-window values.**
 
 **(c) The already-published corpus cannot be erased.** 80 digests, 45 with the commenter
 table, 65 naming stargazers, on a public repository with two forks, with zero deletions ever.
@@ -290,6 +331,23 @@ for the affected activity.
    LLM-agent publication of third-party content.
 9. Quarterly review alongside the Article 30 register cadence.
 
+> **Superseded in part 2026-10-06 (#7122) - triggers 1 and 4; append-only.** Trigger 1 ("R1-R4
+> landing") has **not fired as written**: R1-R4 have not landed as specified. #7122 is a different
+> mechanism that narrows what future output of `cron-community-monitor` can contain; whether it
+> counts as the trigger-1 event, and whether the criteria tally falls from six, is for counsel at
+> #7119, and until then the full-DPIA conclusion for PA-32 stands. Trigger 4 ("a new write path to a
+> public surface") is **not fired** by #7122: it removes agent write paths, and the handler publishes
+> only the same two surfaces as before (the committed digest and the tracking issue). Trigger 4
+> **would** fire on a new free-text field in the publication schema or an additional published
+> surface; those are also named re-evaluation triggers in
+> `knowledge-base/legal/audits/2026-10-clo-attestation-7122.md`.
+
+> **Further correction 2026-10-06 (#7122, review) - triggers 1 and 4; append-only.** Trigger 4 would also fire on
+> any new allowlisted router verb, or any script that interpolates an argument, for a cron whose agent ingests
+> third-party content: review found that trailing arguments of allowlisted verbs are a code-execution and egress path
+> unless the argument grammar and the scripts' operand validation hold. Trigger 1's "has not fired as written" stands, and
+> "narrowed" (not "met") is the word for what #7122 does to the R4 exposure.
+
 ---
 
 > **DRAFT — This document was generated by AI and requires professional legal review before use. It does not constitute legal advice.**
@@ -309,3 +367,44 @@ for the affected activity.
 > premise of a completed assessment destroys the evidence of what was actually considered, which
 > is the one thing an assessment exists to preserve. The conclusion is unchanged: the safeguard
 > that carried the balancing survives, under a different mechanism than the one it named.
+
+> **Correction 2026-09-25 (#8754):** The last sentence of the first paragraph of the 2026-09-03
+> addendum above ("The ingest ports are additionally scoped to the web hosts' private addresses by
+> a zero-rule deny-all cloud firewall plus host-local nftables.") is inaccurate as a statement of
+> what was in force, and stays in place as the record of what was believed. The zero-rule deny-all
+> cloud firewall (`hcloud_firewall.inngest`, Hetzner firewall 11269127) was declared but not
+> attached to the dedicated Inngest host for three measured intervals: 2026-07-09 to 2026-07-31
+> (about 21.5 days), 2026-08-12 to 2026-09-09 (about 27.4 days), and 2026-09-09 to at least
+> 2026-09-25. The last interval includes the host in service on that date (Hetzner server
+> 167310350, created 2026-09-24), which the Hetzner API showed on 2026-09-25 with no firewall and
+> the firewall applied to no server. During these intervals the ingest ports `:8288`/`:8289` were
+> limited to the web hosts only by the host-local nftables chain. That chain filters only those two
+> ports, and it was measured in force on the live host on 2026-09-25. SSH (TCP 22, key-only
+> authentication) was reachable from the internet, which the firewall was meant to prevent. For the
+> second and third intervals the host's SSH log was shipped off-host and records no successful
+> login, only rejected attempts; for the first interval no SSH log survives. The safeguard this
+> assessment relied on, Inngest's software gating of `/v1/*` to loopback-origin requests, does not
+> depend on the cloud firewall and is unaffected. The conclusion above is unchanged. A change
+> tracked in #8754 binds the firewall when the host is created. It takes effect for hosts created
+> after that change merges, so the host in service gains the firewall only at its next
+> replacement. Until a post-replacement measurement confirms the binding, read the cloud-firewall
+> layer as absent. The breach assessment is recorded at
+> `knowledge-base/legal/audits/2026-09-25-8754-inngest-cloud-firewall-determination.md`.
+>
+> Two precisions to this correction, added 2026-09-25 before merge. The nftables statement describes
+> the chain as provisioned on every host; its load was measured on the live host only, and on the
+> destroyed hosts it cannot now be measured. The SSH-log statement covers the third interval only up
+> to the 2026-09-25 read; the rest of that interval is read when the firewall is measured restored.
+
+> **Restored 2026-09-27 (#8754):** The post-replacement measurement named in the correction above
+> has passed. `inngest-host-replace` run 36327637204 created the new dedicated Inngest host (Hetzner
+> server 167651172, created 2026-09-27 14:56:48 UTC) with the firewall applied at creation, and
+> deleted server 167310350. Measured through the Hetzner API at about 15:02 UTC, the new server lists
+> firewall 11269127 with status `applied`, and the firewall's `applied_to` lists server 167651172.
+> The cloud-firewall layer is in force from the new host's creation, and the third interval ends at
+> about 2026-09-27 14:56 UTC. The rest of that interval's SSH log was read afterwards (Better Stack,
+> 2026-09-25 00:00 UTC to 2026-09-27 15:10 UTC). It records no successful SSH login and no opened
+> session on the host. Five rows from the host contain the phrase `Accepted publickey`; they come
+> from its Inngest event log, not from sshd. The conclusion above is unchanged. The details are in
+> the 2026-09-27 addendum of
+> `knowledge-base/legal/audits/2026-09-25-8754-inngest-cloud-firewall-determination.md`.

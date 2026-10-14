@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
+import { Button } from "@/components/ui/button";
 import type {
   InteractivePromptPayload,
   InteractivePromptResponsePayload,
@@ -217,7 +218,8 @@ function AskUserCard({
               </label>
             ))}
           </div>
-          <button
+          <Button
+            variant="gold"
             type="button"
             disabled={disabled}
             onClick={() =>
@@ -226,7 +228,7 @@ function AskUserCard({
             className="mt-3 rounded-md bg-amber-600 px-3 py-1 text-sm text-soleur-text-on-accent disabled:opacity-50"
           >
             Submit
-          </button>
+          </Button>
         </div>
       </CardShell>
     );
@@ -239,7 +241,8 @@ function AskUserCard({
         <p className="mb-2 text-sm text-soleur-text-primary">{payload.question}</p>
         <div className="flex flex-wrap gap-2">
           {payload.options.map((opt) => (
-            <button
+            <Button
+              variant="outlined"
               key={opt}
               type="button"
               disabled={disabled}
@@ -247,7 +250,7 @@ function AskUserCard({
               className="rounded-full border border-soleur-border-default px-3 py-1 text-xs text-soleur-text-primary hover:border-amber-500 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {opt}
-            </button>
+            </Button>
           ))}
         </div>
       </div>
@@ -284,22 +287,24 @@ function PlanPreviewCard({
           {text}
         </pre>
         <div className="flex gap-2">
-          <button
+          <Button
+            variant="gold"
             type="button"
             disabled={disabled}
             onClick={() => onRespond({ kind: "plan_preview", response: "accept" })}
             className="rounded-md bg-amber-600 px-3 py-1 text-sm text-soleur-text-on-accent disabled:opacity-50"
           >
             Accept
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="outlined"
             type="button"
             disabled={disabled}
             onClick={() => onRespond({ kind: "plan_preview", response: "iterate" })}
             className="rounded-md border border-soleur-border-default px-3 py-1 text-sm text-soleur-text-primary disabled:opacity-50"
           >
             Iterate
-          </button>
+          </Button>
         </div>
       </div>
     </CardShell>
@@ -338,14 +343,15 @@ function DiffCard({
           <span className="text-emerald-400">+{payload.additions}</span>{" "}
           <span className="text-red-400">-{payload.deletions}</span>
         </p>
-        <button
+        <Button
+          variant="outlined"
           type="button"
           disabled={disabled}
           onClick={() => onRespond({ kind: "diff", response: "ack" })}
           className="rounded-md border border-soleur-border-default px-3 py-1 text-sm text-soleur-text-primary disabled:opacity-50"
         >
           Acknowledge
-        </button>
+        </Button>
       </div>
     </CardShell>
   );
@@ -388,22 +394,24 @@ function BashApprovalCard({
         <p className="mb-3 text-xs text-soleur-text-muted">cwd: {payload.cwd}</p>
         {payload.gated ? (
           <div className="flex gap-2">
-            <button
+            <Button
+              variant="gold"
               type="button"
               disabled={disabled}
               onClick={() => onRespond({ kind: "bash_approval", response: "approve" })}
               className="rounded-md bg-amber-600 px-3 py-1 text-sm text-soleur-text-on-accent disabled:opacity-50"
             >
               Approve
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="danger"
               type="button"
               disabled={disabled}
               onClick={() => onRespond({ kind: "bash_approval", response: "deny" })}
               className="rounded-md border border-red-600/60 px-3 py-1 text-sm text-red-400 disabled:opacity-50"
             >
               Deny
-            </button>
+            </Button>
           </div>
         ) : null}
       </div>
@@ -450,14 +458,15 @@ function TodoWriteCard({
             </li>
           ))}
         </ul>
-        <button
+        <Button
+          variant="outlined"
           type="button"
           disabled={disabled}
           onClick={() => onRespond({ kind: "todo_write", response: "ack" })}
           className="rounded-md border border-soleur-border-default px-3 py-1 text-sm text-soleur-text-primary disabled:opacity-50"
         >
           Acknowledge
-        </button>
+        </Button>
       </div>
     </CardShell>
   );
@@ -500,14 +509,15 @@ function NotebookEditCard({
             </span>
           ))}
         </div>
-        <button
+        <Button
+          variant="outlined"
           type="button"
           disabled={disabled}
           onClick={() => onRespond({ kind: "notebook_edit", response: "ack" })}
           className="rounded-md border border-soleur-border-default px-3 py-1 text-sm text-soleur-text-primary disabled:opacity-50"
         >
           Acknowledge
-        </button>
+        </Button>
       </div>
     </CardShell>
   );

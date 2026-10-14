@@ -28,7 +28,7 @@ on:
         type: string
         default: ""
       bump_type:
-        description: "Override bump type (empty = use PR labels)"
+        description: "Override bump type (empty = use PR labels; a retry with a different bump orphans the prior draft)"
         type: string
         default: ""
       force_run:
@@ -90,14 +90,20 @@ jobs:
     # worst run ever observed here and 88x the plugin caller's worst.
     #
     # WHY NOT LOWER. The drift checker's threshold bounds this pipeline's declared critical
-    # path, which is NOT a serial sum -- `release` and `await-ci` have no `needs:` and run in
-    # PARALLEL, so the path is:
-    #     max(release, await-ci) + (migrate + verify-migrations + deploy)
-    # Naming the jobs rather than their total is deliberate: a literal would silently stale
-    # the moment any one of them changes. `await-ci` already contributes 60 to that max, so
-    # every value <= 60 yields an identical bound -- 60 is the LARGEST ceiling that leaves
-    # DRIFT_SUSTAINED_THRESHOLD_MIN untouched, and anything lower discards free headroom.
-    # The first minute above 60 would force the threshold up.
+    # path, which is NOT a serial sum. Since #5806 (ADR-217) the parallel arms live in DIFFERENT
+    # WORKFLOWS: this `release` job runs on web-platform-release.yml's push arm while CI runs in
+    # ci.yml, both started by the same push, and the deploy chain fires on CI's completion. So
+    # the path is:
+    #     max(ci_declared_path, release) + resolve-target + migrate + verify-migrations + deploy
+    # (one formula at every site since #8149; `resolve-target` is additive, run serially after
+    # whichever of CI and release finishes last). Naming the jobs rather than their total is
+    # deliberate: a literal would silently stale the moment any one of them changes. The CI
+    # term WAS `await-ci` (deleted by #5806) and is now CI's own declared longest needs:
+    # path, the dominant max() member on today's tree. So `release` is dominated: every value
+    # at or below the CI term yields an identical bound. 60 is kept because it is 2.5x the
+    # worst run observed here and raising it buys nothing; past the CI term it becomes the
+    # max() member and B9 reds unless the threshold moves with it (the 5 m slack in the
+    # constant covers rounding, not a release ceiling raise).
     #
     # WHAT THIS ACTUALLY BUYS. Its main value is not tidier arithmetic. This workflow declares
     # a workflow-level `concurrency: release-${{ inputs.component }}` with
@@ -112,7 +118,7 @@ jobs:
     #
     # COUPLED (#7160): scripts/prod-version-drift-check.test.sh assertion B9 reads this value
     # via jobs.release.uses and fails if the declared critical path exceeds the threshold.
-    # Deleting this line raises the computed path to 495 and reds B9 by name.
+    # Deleting this line reads as the GitHub 360 default and reds B9 by name.
     timeout-minutes: 60
     permissions:
       contents: write
@@ -251,11 +257,11 @@ jobs:
             exit 0
           fi
 
-          if echo "$PR_LABELS" | grep -q "semver:major"; then
+          if echo "$PR_LABELS" | grep -c "semver:major" >/dev/null; then
             printf 'type=%s\n' "major" >> "$GITHUB_OUTPUT"
-          elif echo "$PR_LABELS" | grep -q "semver:minor"; then
+          elif echo "$PR_LABELS" | grep -c "semver:minor" >/dev/null; then
             printf 'type=%s\n' "minor" >> "$GITHUB_OUTPUT"
-          elif echo "$PR_LABELS" | grep -q "semver:patch"; then
+          elif echo "$PR_LABELS" | grep -c "semver:patch" >/dev/null; then
             printf 'type=%s\n' "patch" >> "$GITHUB_OUTPUT"
           else
             echo "::warning::No semver label found on PR, defaulting to patch"
@@ -278,14 +284,19 @@ jobs:
 
           # Glob is fnmatch-style (cheap pre-filter); anchored regex enforces
           # strict ${TAG_PREFIX}X.Y.Z shape so collisions like `vinngest-v1.0.0`
-          # under the bare `v` prefix are rejected (#4082). `grep -m1` over
-          # `head -1` avoids SIGPIPE if the corpus ever exceeds the kernel pipe
-          # buffer. `|| [ $? -eq 1 ]` lets the existing empty-fallback below
-          # fire on no-match (grep exit 1, bootstrap of a new prefix) WITHOUT
-          # masking grep exit 2 (regex syntax error — would surface a latent
-          # escaping bug instead of silently falling back to 0.0.0).
-          LATEST_TAG=$(git tag --list "${TAG_PREFIX}*" --sort=-version:refname \
-            | { grep -m1 -E "^${TAG_PREFIX_RE}[0-9]+\.[0-9]+\.[0-9]+$" || [ $? -eq 1 ]; })
+          # under the bare `v` prefix are rejected (#4082). The tag list is read
+          # into a variable first and grep reads that value, so no producer sits
+          # on the other end of a pipe that `grep -m1` closes early (the producer
+          # is the side that takes SIGPIPE, not grep). A failing `git tag` aborts
+          # the step (errexit) rather than falling through to the 0.0.0 bootstrap
+          # arm below, which would compute a regressed version. (The old pipeline
+          # aborted or masked it depending on the step's pipefail default.)
+          # `|| [ $? -eq 1 ]` lets the existing empty-fallback below fire on
+          # no-match (grep exit 1, bootstrap of a new prefix) WITHOUT masking
+          # grep exit 2 (regex syntax error — would surface a latent escaping
+          # bug instead of silently falling back to 0.0.0).
+          tags=$(git tag --list "${TAG_PREFIX}*" --sort=-version:refname)
+          LATEST_TAG=$(grep -m1 -E "^${TAG_PREFIX_RE}[0-9]+\.[0-9]+\.[0-9]+$" <<<"$tags" || [ $? -eq 1 ])
 
           if [ -z "$LATEST_TAG" ]; then
             CURRENT="0.0.0"
@@ -329,6 +340,9 @@ jobs:
           # The OLD bare `gh release view` check treated a draft as "done" and
           # skipped re-creation on every later run, freezing BUILD_VERSION.
           # Refs #4902 (stuck-draft deadlock).
+          # When a PR is resolved and its changelog is non-blank, the draft's notes are
+          # overwritten at publish from the current run's PR (see the Finalise step), so a
+          # same-tag republish describes the latest merge (#7079).
           REL_JSON=$(mktemp)
           if gh release view "$TAG" --json isDraft >"$REL_JSON" 2>/dev/null; then
             IS_DRAFT=$(jq -r '.isDraft' "$REL_JSON")
@@ -464,12 +478,29 @@ jobs:
             exit 0
           fi
           set +e
+          # Teed, not just echoed: the branch below must READ the script's own
+          # stderr to tell a refusal from a Sentry fault, and nothing captured it
+          # before. script_rc comes from PIPESTATUS[0] -- `$?` after a pipe is
+          # `tee`'s status, which is 0 whatever the script did.
+          audit_log="${RUNNER_TEMP}/sentry-audit.log"
           AUDIT_OUT_DIR="${RUNNER_TEMP}/sentry-audit" \
-            bash apps/web-platform/scripts/sentry-monitors-audit.sh
-          script_rc=$?
+            bash apps/web-platform/scripts/sentry-monitors-audit.sh 2>&1 | tee "$audit_log"
+          script_rc=${PIPESTATUS[0]}
           set -e
           if [[ "$script_rc" -ne 0 ]]; then
+            # A refusal (exit 2, #7997) never reaches the non-array diagnostic the
+            # message below describes, so it would name a cause that did not occur.
+            # Discriminate on the exit code AND a #7997-specific anchor. A bare
+            # `grep 'refusing'` matches TEN strings in that script, including the
+            # residency-mismatch abort at "refusing to emit audit artifact" --
+            # which also exits 2. Matching it would tell the operator to reconcile
+            # a host pairing during a RESIDENCY incident (the #3861 class), which
+            # is worse than saying nothing.
+            if [[ "$script_rc" -eq 2 ]] && grep -qE '^ERROR: refusing (org|destination host|curl-binary) ' "$audit_log" 2>/dev/null; then
+              echo "::warning::Sentry migration audit script REFUSED to run (exit ${script_rc}) — no Article 30 evidence uploaded for this release. This is a destination/credential-pairing refusal, not a Sentry fault: SENTRY_API_HOST is not a member of the candidate set for SENTRY_ORG, the org slug is not an RFC 1035 label, or CURL_BIN was overridden. The script's own stderr names which. Reconcile the SENTRY_ORG / SENTRY_API_HOST pairing per ADR-031 §Authentication."
+            else
             echo "::warning::Sentry migration audit script exited ${script_rc} — no Article 30 evidence uploaded for this release. The script's own stderr names the cause: since #7590 a non-array payload prints http_status, api_host, url, which fetch, any x-sentry-deprecation-date / x-sentry-replacement-endpoint, and a verdict distinguishing 'retries exhausted, RE-RUN' from '410, MIGRATE'. Read that block first. SENTRY_API_HOST has no default and must be the org-subdomain (NOT de.sentry.io, which is ingest-only). If the token is rejected past the probe, rotate per ADR-031 §Authentication."
+            fi
             exit 0
           fi
           report=$(ls "${RUNNER_TEMP}/sentry-audit"/sentry-migration-audit-*.md 2>/dev/null | head -1 || true)
@@ -725,6 +756,15 @@ jobs:
           # plugins/soleur (e.g. -> /etc/passwd) would land its target's
           # CONTENT in the build context and be baked into the image.
           cp -a --no-dereference plugins/soleur "$DEST"
+          # The plugin-root .mcp.json (#8156) is the Claude-Code-plugin
+          # registration surface only: the hosted agent-runner loads this
+          # vendored tree via plugins:[{type:"local"}] on a prod image with
+          # no python3 and no @playwright/mcp@0.0.78 — vendoring the file
+          # registers a guaranteed-failed playwright server on every hosted
+          # session. The plugin's manifest mcpServers (plugin.json) are
+          # unaffected. Pinned by the Guard-3 row in
+          # plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh.
+          rm -f "$DEST/.mcp.json"
           # Reject any symlink whose resolved target escapes the vendor tree.
           # readlink -f resolves transitively; the resolved absolute path is
           # compared against the absolute DEST. Symlinks that stay inside
@@ -1179,9 +1219,9 @@ jobs:
 
           # Preserve the FULL org namespace (jikig-ai/…). The pull side
           # (ci-deploy.sh: zot_ref="${ZOT_REGISTRY_URL}/${IMAGE#ghcr.io/}") and
-          # zot-entry-gate.sh both address `jikig-ai/soleur-web-platform`. `basename` dropped
-          # the org, pushing to an orphan `soleur-web-platform` repo nothing reads → the gate
-          # MISSED and every pull fell back to GHCR (#6122 namespace fix).
+          # web-zot-consumer-probe.sh both address `jikig-ai/soleur-web-platform`. `basename` dropped
+          # the org, pushing to an orphan `soleur-web-platform` repo nothing reads → the zot
+          # lookup MISSED and every pull fell back to GHCR (#6122 namespace fix).
           #
           # (#6416) Computed HERE, before the bridge branch below, so the degraded message
           # can name the real image. Shell state does not cross steps, so this cannot be
@@ -1379,9 +1419,9 @@ jobs:
           # present-but-unsigned — DISTINCT from a copy miss: post-cutover the host would
           # pull the present zot copy (bypassing the atomic GHCR fallback) and then
           # HARD-BLOCK on signature verify (ci-deploy.sh verify_image_signature → enforce
-          # fail). Pre-cutover (soak) ZOT_ACTIVE=0 so this is latent, and the
-          # zot-entry-gate/soak-gate catch a missing/unsigned copy before the flip. The
-          # remediation MUST re-sign, not just re-copy — hence the distinct $2 detail.
+          # fail). Pre-cutover (soak) ZOT_ACTIVE=0 made this latent. `degraded` here is where a
+          # present-but-unsigned zot copy is caught. The remediation MUST re-sign, not just
+          # re-copy — hence the distinct $2 detail.
           # MEASURED-BY: $? from `retry cosign sign`, passed to `degraded` as its first
           # argument. "The image IS in zot at the correct digest" is measured by the copy
           # steps above; the Sigstore/Fulcio attribution is explicitly hedged ("this is the
@@ -1475,6 +1515,19 @@ jobs:
       # orphaned-draft path skips the audit-upload step above (gated on
       # create_release.released), which is correct: we only flip draft->published
       # here, never upload to a published (immutable) release.
+      # Notes on the self-heal path (#7079): the orphaned draft still carries the FIRST
+      # attempt's changelog (the create step is skipped for it), so on that path this step
+      # overwrites the draft's notes with this run's regenerated changelog in the SAME call
+      # that publishes it (atomic). It is gated on a resolved PR and non-blank content; on
+      # the no-PR paths (workflow_dispatch, give_up) the draft's existing notes are kept
+      # rather than replaced by the fallback text. Known limit: when a LATER, different merge
+      # recomputes the same tag, the Release page describes only that latest merge (the
+      # release contains both merges' code); the Slack announcement may differ on the no-PR
+      # paths, where it still carries the fallback text. The orphaned run never reached the
+      # release-announcement steps (only the failure-gated FAILED/BLOCKED notices, which carry
+      # no changelog, can have fired), so the earlier merge's changelog was never announced; it
+      # is regenerable from that merge's PR body (found via git history) when that run resolved
+      # a PR and the body had a `## Changelog` section.
       - name: Finalise release (publish draft)
         if: >-
           steps.check_changed.outputs.changed == 'true' &&
@@ -1483,9 +1536,24 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
+          RELEASE_NOTES_FILE: ${{ steps.tmpfiles.outputs.release_notes }}
+          DRAFT_EXISTS: ${{ steps.idempotency.outputs.draft_exists }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
         run: |
-          gh release edit "$TAG" --draft=false
-          echo "Published release $TAG"
+          # One call: the regenerated notes and the publish are atomic. Only on the self-heal
+          # path, and only with a real PR-derived changelog (a resolved PR number AND non-blank
+          # notes). With a resolved PR the changelog step always writes a non-blank file (its
+          # `- $PR_TITLE` fallback); the blank test is defence in depth against that changing.
+          if [ "$DRAFT_EXISTS" = "true" ] && [ -n "$PR_NUMBER" ] && grep -q '[^[:space:]]' "$RELEASE_NOTES_FILE"; then
+            gh release edit "$TAG" --notes-file "$RELEASE_NOTES_FILE" --draft=false
+            echo "Published release $TAG (notes_regenerated=true, from this run's PR #$PR_NUMBER)"
+          else
+            if [ "$DRAFT_EXISTS" = "true" ]; then
+              echo "::warning::Orphaned draft $TAG published with its EXISTING notes: this run resolved no PR (workflow_dispatch / give_up) or had no usable changelog (blank or unreadable); PR_NUMBER=${PR_NUMBER:-<empty>}."
+            fi
+            gh release edit "$TAG" --draft=false
+            echo "Published release $TAG"
+          fi
 
       # Notify on a self-heal too (#4902): an orphaned draft means the prior run
       # died BEFORE this step, so the re-publish is the FIRST successful release
@@ -1559,18 +1627,13 @@ jobs:
           # #6274: surface a degraded zot mirror on the release message. Empty on the
           # happy path. Read as OUTPUT, never `outcome`.
           #
-          # CORRECTED 2026-07-30: the original reason given here — "the step always
-          # exits 0, so outcome is always 'success'" — is no longer true. `degraded()`
-          # now exits 1 and `continue-on-error` is gone, so on a mirror failure the
-          # step's outcome IS 'failure' and this Slack step does not run at all (it
-          # carries a plain-expression `if:`, hence an implicit `success()`). Reading
-          # the OUTPUT is still correct, for a different reason: the output is set on
-          # every path including the override, whereas `outcome` now conflates
-          # "mirror degraded" with "the whole release is blocked".
-          #
-          # This comment existed in two places; the sibling copy was deleted when the
-          # gate became blocking and this one was missed, leaving a stale reason
-          # attached to a still-correct instruction.
+          # CORRECTED 2026-10-09 (#7256): this step is deliberately the PUBLISHED-release
+          # announcer and keeps its plain-expression `if:` (implicit `success()`), so on a
+          # blocked release it does not run BY DESIGN — the blocked case is announced by
+          # the failure-gated sibling `Post to Slack (release BLOCKED)` below. Reading the
+          # OUTPUT stays correct: it is set on every path including the operator override,
+          # whereas `outcome` conflates "mirror degraded" with "the release is blocked"
+          # (`degraded()` exits 1 and `continue-on-error` is gone; 2026-07-30 correction).
           #
           # #6416: this used to also be empty when the mirror step was SKIPPED because the
           # bridge failed — which meant the one case most worth reporting was the one case
@@ -1622,14 +1685,11 @@ jobs:
 
           # #6274: append a loud line when the zot mirror step reported a failure.
           #
-          # This branch now means something NARROWER than it used to, and the old wording
-          # (that the release was fine because GHCR remained primary) is retired with it.
-          # A failed mirror normally fails the release job, and this Slack step carries no
-          # status function — so its implicit success() means it does not run at all on a
-          # blocked release. Do NOT read the absence of this line as "the mirror was fine":
-          # the reachable path here is an operator override, i.e. a release that PUBLISHED
-          # with an image zot is not confirmed to hold. That is worth shouting about
-          # precisely because everything else about the message looks normal.
+          # A failed mirror fails the job and this step then does not run; the sibling
+          # `Post to Slack (release BLOCKED)` announces that case (#7256). The only
+          # reachable path through this branch is the operator override: a release that
+          # PUBLISHED with an image zot is not confirmed to hold. Do NOT read the absence
+          # of this line as "the mirror was fine".
           if [ "${MIRROR_STATUS:-}" = "degraded" ]; then
             MESSAGE=$(printf '%s\n\n%s' "$MESSAGE" \
               "⚠️ Published WITHOUT a verified zot mirror (operator override). zot is the only registry production can pull from, so this deploy is expected to fail image_pull_failed until the image is backfilled.")
@@ -1654,3 +1714,185 @@ jobs:
           else
             echo "::warning::Slack notification failed (HTTP $HTTP_CODE)"
           fi
+
+      # A blocked release has to reach Slack too (#7256, #6278 chose Slack as the push
+      # channel for mirror problems).
+      #
+      # WHY A SIBLING and not an edit of `Post to Slack (release)` above: that step is the
+      # PUBLISHED-release announcer. Giving it `!cancelled() &&` would run it on a blocked
+      # release and post "released!" for a draft that was never published, and it would
+      # touch the hot path of every release. This step is its mirror image: it fires only
+      # when the job FAILED, with the same release-in-flight predicate, so a failure
+      # BEFORE any draft exists stays email-only from this workflow. `!cancelled()` keeps
+      # it off a cancelled run (and removes the ambiguity of `failure()` meaning "any
+      # previous step failed" on a run cancelled after an earlier failure); a job-level
+      # timeout is expected to stay silent too (unchanged; not verified here).
+      # `Email notification (release FAILED)` above is the independent second channel.
+      #
+      # A web-platform PUSH release is also announced by web-platform-release.yml
+      # `notify-gated` ("deploy GATED") to this same channel. That duplicate is
+      # deliberate: this step fires earlier (from the failing run itself), carries the
+      # mirror reason `notify-gated` lacks, and is the only Slack signal for plugin and
+      # workflow_dispatch runs. Do not "deduplicate" by deleting one of them.
+      #
+      # The message states only what the job MEASURED (ADR-166): the GitHub release was
+      # not published; GHCR tags and the image are pushed BEFORE the mirror gate, so it
+      # must not say "nothing was published". Registry lines are omitted when both values
+      # are empty (a plugin release builds no image).
+      - name: Post to Slack (release BLOCKED)
+        if: >-
+          !cancelled() && failure() &&
+          steps.check_changed.outputs.changed == 'true' &&
+          (steps.create_release.outputs.released == 'true' ||
+           steps.idempotency.outputs.draft_exists == 'true')
+        continue-on-error: true
+        env:
+          SLACK_RELEASES_WEBHOOK_URL: ${{ secrets.SLACK_RELEASES_WEBHOOK_URL }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.next }}
+          COMPONENT_DISPLAY: ${{ inputs.component_display }}
+          MIRROR_REASON: ${{ steps.zot_mirror.outputs.mirror_reason }}
+          TOKEN_VERDICT: ${{ steps.token_preflight.outputs.verdict }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          WEBHOOK="${SLACK_RELEASES_WEBHOOK_URL:-}"
+          if [ -z "$WEBHOOK" ]; then
+            echo "::warning::No Slack webhook URL configured, skipping blocked-release notification"
+            exit 0
+          fi
+          echo "::add-mask::$WEBHOOK"
+
+          # mirror_reason is a free-form shell argument to degraded(); entity-escape it
+          # (and the verdict) so no author-typed <!channel> or <url|label> reaches Slack.
+          # sed, not ${v//&/&amp;}: bash >= 5.2 expands `&` in a pattern-substitution
+          # replacement to the matched text (patsub_replacement), older bash does not.
+          esc() {
+            printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+          }
+          REASON="$(esc "${MIRROR_REASON:-}")"
+          VERDICT="$(esc "${TOKEN_VERDICT:-}")"
+
+          # Slack mrkdwn bold is *single asterisk* (not **double**)
+          MESSAGE=$(printf '*%s v%s release BLOCKED — the GitHub release was NOT published*\n\nThe release job failed, so %s was not published (the draft is kept).' \
+            "$COMPONENT_DISPLAY" "$VERSION" "$TAG")
+
+          if [ -n "$REASON" ] || [ -n "$VERDICT" ]; then
+            MESSAGE=$(printf "%s\n\nzot mirror stage: \`%s\`; registry-push token verdict: \`%s\`" \
+              "$MESSAGE" "${REASON:-n/a (failed before or outside the mirror step)}" "${VERDICT:-unmeasured}")
+          fi
+
+          MESSAGE=$(printf '%s\n\nRe-run failed jobs on this run to retry with the same version; a fresh "Run workflow" dispatch recomputes it.\n\nRun: %s' \
+            "$MESSAGE" "$RUN_URL")
+
+          PAYLOAD=$(jq -n \
+            --arg text "$MESSAGE" \
+            '{text: $text, unfurl_links: false}')
+
+          # `|| HTTP_CODE=000` (not `|| echo 000`: curl's -w already printed 000, which
+          # would double it) keeps a transport failure on the ::warning path -- without
+          # it `bash -e` kills the step before the warning is emitted.
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST \
+            --proto '=https' \
+            --max-time 15 \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$WEBHOOK") || HTTP_CODE=000
+
+          if [[ "$HTTP_CODE" =~ ^2 ]]; then
+            echo "Slack notification sent (HTTP $HTTP_CODE)"
+          else
+            echo "::warning::Slack notification failed (HTTP $HTTP_CODE)"
+          fi
+
+      # ─────────────────────────────────────────────────────────────────────
+      # CARRY THIS JOB'S OUTPUT VALUES ACROSS THE RUN BOUNDARY (#5806, ADR-217).
+      #
+      # WHY THIS EXISTS. web-platform-release.yml's deploy chain moved onto a
+      # `workflow_run: completed` arm, which is a DIFFERENT RUN from the one
+      # this job executes in. The `needs` context does not cross that boundary,
+      # and the REST jobs API exposes a job's `conclusion` but NOT its
+      # `outputs` — verified: the job object's key set contains no `outputs`
+      # key at all. So the consumer can recover this job's VERDICT from the API
+      # and needs a carrier for its VALUES. This artifact is that carrier.
+      #
+      # VALUES ONLY — NEVER THE VERDICT. The consumer MUST take
+      # `release.result` from the jobs API and MUST NOT substitute this
+      # artifact's `mirror_verified` for it. Those two fields are not
+      # interchangeable and the difference is a live fail-open: `docker_pushed`
+      # is written ten steps before the zot mirror-gate assertion, so a release
+      # BLOCKED by that gate still reports `docker_pushed: true` (deploy.if's
+      # own FR-A5 comment records this), and `mirror_verified` is documented at
+      # FR-A9 as "DELIBERATELY NOT a blocking conjunct … legibility after the
+      # fact". Gating on either would deploy an unmirrored image to prod.
+      # web-platform-release.yml's `resolve-target` carries a mutation row for
+      # exactly this substitution.
+      #
+      # ALLOWLISTED, NEVER A $GITHUB_OUTPUT DUMP. Every field is named here on
+      # purpose: dumping the step-output namespace would let a future step's
+      # output carry a secret into an artifact, and an allowlist makes that
+      # unrepresentable rather than merely unlikely.
+      #
+      # `if: always()` IS LOAD-BEARING IN BOTH DIRECTIONS, and removing it as
+      # "dead code" is a real hazard:
+      #   * it captures the `check_changed` NO-OP case (released=false,
+      #     version="") as a POSITIVE signal, so the consumer asserts a clean
+      #     skip instead of inferring one from an absence;
+      #   * it captures the mirror-gate-BLOCKED case, where this job's
+      #     conclusion is `failure` and the values still describe what happened.
+      # Without it, a docs-only push flips from a green skip to a loud
+      # fail-closed on the consumer side.
+      #
+      # ADDITIVE AND UNCONDITIONAL FOR EVERY CALLER. reusable-release.yml has a
+      # second consumer — version-bump-and-release.yml, component `plugin` —
+      # which has no deploy chain. It gains one artifact per release run that
+      # nothing downloads. No `workflow_call` input is added, so no caller needs
+      # an edit.
+      - name: Publish release outputs for cross-run consumers
+        if: always()
+        env:
+          COMPONENT: ${{ inputs.component }}
+          VERSION: ${{ steps.version.outputs.next }}
+          TAG: ${{ steps.version.outputs.tag }}
+          RELEASED: ${{ steps.create_release.outputs.released == 'true' || steps.idempotency.outputs.draft_exists == 'true' }}
+          DOCKER_PUSHED: ${{ steps.docker_pushed.outputs.pushed || 'false' }}
+          MIRROR_VERIFIED: ${{ steps.zot_mirror.outputs.mirror_verified || 'false' }}
+        run: |
+          # Values are read from the SAME step outputs the job's `outputs:`
+          # block reads, so what lands here is identical to what `needs`
+          # delivers in-run — not a weaker restatement of it.
+          mkdir -p "${RUNNER_TEMP}/release-outputs"
+          jq -n \
+            --argjson schema 1 \
+            --arg component "$COMPONENT" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg head_sha "$GITHUB_SHA" \
+            --arg version "$VERSION" \
+            --arg tag "$TAG" \
+            --arg released "$RELEASED" \
+            --arg docker_pushed "$DOCKER_PUSHED" \
+            --arg mirror_verified "$MIRROR_VERIFIED" \
+            '{schema: $schema, component: $component, run_id: $run_id,
+              head_sha: $head_sha, version: $version, tag: $tag,
+              released: $released, docker_pushed: $docker_pushed,
+              mirror_verified: $mirror_verified}' \
+            > "${RUNNER_TEMP}/release-outputs/release-outputs.json"
+          echo "release outputs carried:"
+          cat "${RUNNER_TEMP}/release-outputs/release-outputs.json"
+
+      - name: Upload release outputs artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-outputs-${{ inputs.component }}
+          path: ${{ runner.temp }}/release-outputs/release-outputs.json
+          # A RE-RUN of this job uploads the same artifact name into the same run.
+          # Without this, v4 returns 409 Conflict and the step fails — so the one
+          # recovery action an operator takes on a flaky release (re-run the job)
+          # would break the very artifact the deploy arm fail-closes on.
+          overwrite: true
+          # `error` not `warn`: the consumer fails closed when the artifact is
+          # absent, so a silent non-upload here would turn every deploy into a
+          # fail-closed with no explanation on the producing side.
+          if-no-files-found: error
+          retention-days: 14

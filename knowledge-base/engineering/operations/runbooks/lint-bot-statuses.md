@@ -22,7 +22,7 @@ Read this runbook when:
 
 **Is:** a pre-merge gate that prevents bot PRs from being created in a state that would deadlock auto-merge. Specifically:
 
-1. [`scripts/lint-bot-synthetic-statuses.sh`](../../../../scripts/lint-bot-synthetic-statuses.sh) rejects `[skip ci]` markers in any `.github/workflows/*.yml` (excluding `skill-security-scan-pr-trailer.yml`) that calls `gh pr create`. `[skip ci]` suppresses the `test` Check Run, and a missing required check blocks auto-merge forever.
+1. [`scripts/lint-bot-synthetic-statuses.sh`](../../../../scripts/lint-bot-synthetic-statuses.sh) rejects `[skip ci]` markers in any `.github/workflows/*.yml` (excluding `pr-quality-guards.yml`) that calls `gh pr create`. `[skip ci]` suppresses the `test` Check Run, and a missing required check blocks auto-merge forever.
 2. [`scripts/lint-bot-synthetic-completeness.sh`](../../../../scripts/lint-bot-synthetic-completeness.sh) verifies every bot workflow whose shell `run:` block calls `gh pr create` AND posts synthetic check-runs inline (`gh api .../check-runs`) covers every entry in [`scripts/required-checks.txt`](../../../../scripts/required-checks.txt). Bot PRs authored by `GITHUB_TOKEN` do NOT trigger CI (GitHub's anti-loop guard), so without synthetic postings the required-check rules on the `CI Required` ruleset (#14145388) never go green. Composite-action consumers (workflows using [`.github/actions/bot-pr-with-synthetic-checks`](../../../../.github/actions/bot-pr-with-synthetic-checks/action.yml)) are intentionally exempt — coverage is provided by the action itself.
 
 **Is not:**
@@ -35,14 +35,14 @@ Read this runbook when:
 
 ### `lint-bot-synthetic-statuses.sh`
 
-Walks every `.github/workflows/*.yml` (excluding `skill-security-scan-pr-trailer.yml`) and greps for `gh pr create`. If present and the file also contains the literal `[skip ci]` substring, the lint fails. Otherwise prints `ok: <file>`. Exit 0 on clean, 1 on any failure. Scope is filename-agnostic since #3548 — `monthly-*`, `release-*`, `pr-*`, and any other bot workflow is in scope.
+Walks every `.github/workflows/*.yml` (excluding `pr-quality-guards.yml`) and greps for `gh pr create`. If present and the file also contains the literal `[skip ci]` substring, the lint fails. Otherwise prints `ok: <file>`. Exit 0 on clean, 1 on any failure. Scope is filename-agnostic since #3548 — `monthly-*`, `release-*`, `pr-*`, and any other bot workflow is in scope.
 
 ### `lint-bot-synthetic-completeness.sh`
 
-Walks every `.github/workflows/*.yml` (excluding `skill-security-scan-pr-trailer.yml`) and applies a two-part content-based predicate. A workflow is in scope iff:
+Walks every `.github/workflows/*.yml` (excluding `pr-quality-guards.yml`) and applies a two-part content-based predicate. A workflow is in scope iff:
 
-1. **`gh pr create` appears inside a shell `run:` block** (the `has_shell_pr_create` helper walks YAML indentation). `prompt:` blocks of `claude-code-action` steps print a `skip:` line — `app/claude` triggers real CI, so synthetics are unnecessary. YAML-level `#` comments (e.g., `pr-auto-close-scanner.yml`) also print `skip:`.
-2. **`gh api .../check-runs` appears inside a shell `run:` block** (the `has_inline_check_runs_post` helper, same YAML walker). Composite-action consumers (workflows using `bot-pr-with-synthetic-checks`) do not match this predicate and are silently skipped — coverage is provided by the action itself. Bare-substring `check-runs` mentions in header comments (e.g., `rule-metrics-aggregate.yml` line 4: "synthetic check-runs satisfy") do NOT trip the lint.
+1. **`gh pr create` appears inside a shell `run:` block** (the `has_shell_pr_create` helper walks YAML indentation). `prompt:` blocks of `claude-code-action` steps print a `skip:` line — `app/claude` triggers real CI, so synthetics are unnecessary. YAML-level `#` comments (e.g., `pr-quality-guards.yml`) also print `skip:`.
+2. **`gh api .../check-runs` appears inside a shell `run:` block** (the `has_inline_check_runs_post` helper, same YAML walker). Composite-action consumers (workflows using `bot-pr-with-synthetic-checks`) do not match this predicate and are silently skipped — coverage is provided by the action itself. Bare-substring `check-runs` mentions in header comments — prose that merely names the mechanism, such as "synthetic check-runs satisfy ..." — do NOT trip the lint, because both `gh api` and `check-runs` must appear on the same line. The workflow that motivated this carve-out (`rule-metrics-aggregate.yml`) was deleted by #8377, so there is currently no workflow exhibiting the shape; the carve-out stays because the class recurs.
 
 For each in-scope workflow:
 
@@ -62,7 +62,7 @@ skill-security-scan PR gate
 cla-check
 ```
 
-**`CodeQL` is intentionally absent.** The `CI Required` ruleset pins `CodeQL` to `integration_id: 57789` (`github-advanced-security`). A synthetic check-run posted by `github-actions[bot]` (`integration_id: 15368`) with `name=CodeQL` would NOT satisfy the ruleset — the GHAS integration_id is the load-bearing match condition. CodeQL default setup runs on every PR (including bot PRs) and concludes `neutral`, which satisfies the required check per GitHub Docs. See [`codeql-bot-coverage.md`](codeql-bot-coverage.md) for the empirical audit + the load-bearing comment block in [`scripts/required-checks.txt`](../../../../scripts/required-checks.txt) for the rationale.
+**`CodeQL` is intentionally absent.** CodeQL is advisory and no longer a required status check on the `CI Required` ruleset: it cannot report on `merge_group` in any setup mode (github/codeql-action#1537), so the required `CodeQL` row was removed when the merge queue was adopted (#9454). It was previously pinned to `integration_id: 57789` (`github-advanced-security`), and a synthetic check-run posted by `github-actions[bot]` (`integration_id: 15368`) with `name=CodeQL` would never have satisfied that pin, which is why it was never synthesized. CodeQL default setup still runs on every pull request (including bot PRs); a bot PR whose scan never ran is a coverage gap, not a blocked merge, and `codeql-main-alert-gate.yml` turns the pushed commit's alerts into an issue after the merge. See [`codeql-bot-coverage.md`](codeql-bot-coverage.md) for the empirical audit + the load-bearing comment block in [`scripts/required-checks.txt`](../../../../scripts/required-checks.txt) for the rationale.
 
 **Adding a new required check requires THREE edits in one PR:**
 
@@ -103,17 +103,37 @@ Verify locally before pushing: `bash scripts/lint-bot-synthetic-completeness.sh`
 
 ### Adding a new bot workflow
 
-Prefer the composite action. Create `.github/workflows/<feature>.yml` (any filename except `skill-security-scan-pr-trailer.yml`) with:
+Prefer the composite action. Since #9454 it needs a `soleur-infra` App token for the PR itself, so the workflow follows the shape of `weakness-miner.yml` (ADR-285): a job with no secrets produces the content, and a second job on the main-only `infra-privileged` environment mints the token and calls the composite. Create `.github/workflows/<feature>.yml` (any filename except `pr-quality-guards.yml`); the content job (no environment, no secret) uploads one file as an artifact, and the credential job (`needs:` it, `if: github.ref == 'refs/heads/main'`, `environment: infra-privileged`, permissions `contents: read` + `checks: write`) has exactly these steps, every third-party action pinned to a 40-hex SHA:
 
 ```yaml
+- uses: actions/checkout@<sha>
+  with:
+    ref: main
+    persist-credentials: false
+- uses: actions/download-artifact@<sha>
+  with:
+    name: <artifact>
+    path: knowledge-base/<dir>
+- uses: DopplerHQ/cli-action@<sha>
+- id: app
+  uses: ./.github/actions/mint-infra-app-token
+  with:
+    doppler-token: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}
+    installation-id: "166065653"
+    permissions: '{"contents":"write","pull_requests":"write"}'
+    repositories: soleur
 - uses: ./.github/actions/bot-pr-with-synthetic-checks
   with:
-    branch: ci/<feature>-<date>
-    title: "<feature>: <date>"
-    body: "..."
+    add-paths: <one allowlisted path>
+    branch-prefix: ci/<feature>-
+    commit-message: "<feature>: weekly"
+    pr-title-prefix: "<feature>: weekly"
+    pr-body: "<single line>"
+    pr-token: ${{ steps.app.outputs.token }}
+    gh-token: ${{ github.token }}
 ```
 
-The composite action handles synthetic posting for ALL required checks automatically. No `lint-bot-statuses` action required.
+The composite action handles synthetic posting for ALL required checks automatically. No `lint-bot-statuses` action required. `tests/scripts/test-weakness-miner.sh` (`t_workflow_pr_identity`) evaluates every caller of the composite and goes red on a missing or workflow-token `pr-token`; a new caller also needs a dated edit to census row G7f in `tests/scripts/test-infra-privileged-tier-census.sh`.
 
 If you need inline synthetic posting (e.g., a bot workflow that has additional state-machine logic), follow the pattern in [`scheduled-content-publisher.yml`](../../../../.github/workflows/scheduled-content-publisher.yml) or [`scheduled-disk-io-24h-recheck.yml`](../../../../.github/workflows/scheduled-disk-io-24h-recheck.yml). Verify locally before pushing.
 

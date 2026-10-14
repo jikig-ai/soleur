@@ -231,9 +231,9 @@ changed and there was no version bump to trigger an update. Measured on the auth
 machine: the install carries **64
 skills against 96 in the repo**, with mtime **2026-05-10** — three months and 32 skills
 stale — while its `.in_use` marker is stamped today. It has been actively used and has
-received nothing. Users who never run `claude plugin marketplace update soleur &&
-claude plugin update soleur` do not receive this fix, and no acceptance criterion can
-cover that. This is a real limit on the change, stated rather than assumed away.
+received nothing. Users who never run `claude plugin marketplace update soleur-marketplace &&
+claude plugin update soleur@soleur-marketplace` do not receive this fix, and no acceptance
+criterion can cover that. This is a real limit on the change, stated rather than assumed away.
 
 ## Alternatives considered
 

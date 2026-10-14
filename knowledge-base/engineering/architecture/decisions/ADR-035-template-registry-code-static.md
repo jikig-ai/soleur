@@ -5,7 +5,7 @@ date: 2026-05-21
 related: [4078]
 related_adrs: [ADR-034-action-class-registry-static-literals-and-enum-absence, ADR-033-per-tenant-scope-grants]
 related_plans:
-  - knowledge-base/project/plans/2026-05-21-feat-pr-i-template-authorizations-plan.md
+  - knowledge-base/project/plans/archive/20261013-014038-2026-05-21-feat-pr-i-template-authorizations-plan.md
 brand_survival_threshold: single-user incident
 ---
 
@@ -71,8 +71,8 @@ This is NOT runtime-mintable. A new template that did not pass code review canno
 
 ## Cross-references
 
-- Plan: `knowledge-base/project/plans/2026-05-21-feat-pr-i-template-authorizations-plan.md`
-- Spec: `knowledge-base/project/specs/feat-pr-i-template-authorizations-4078/spec.md`
+- Plan: `knowledge-base/project/plans/archive/20261013-014038-2026-05-21-feat-pr-i-template-authorizations-plan.md`
+- Spec: `knowledge-base/project/specs/archive/20261013-014038-feat-pr-i-template-authorizations-4078/spec.md`
 - Article 30 register: Processing Activity 18 (`knowledge-base/legal/article-30-register.md`)
 - DPD §2.3(t): `docs/legal/data-protection-disclosure.md`
 - Privacy Policy §8.3 extension: `docs/legal/privacy-policy.md`

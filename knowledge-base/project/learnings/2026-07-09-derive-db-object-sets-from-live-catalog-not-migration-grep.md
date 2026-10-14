@@ -60,4 +60,4 @@ which are test *errors*, not passes.
 ## Tags
 category: workflow-patterns
 module: plan / postgres-rls-testing
-related: knowledge-base/project/plans/2026-07-09-feat-rls-authz-fuzz-harness-plan.md, #6256
+related: knowledge-base/project/plans/archive/20261013-041741-2026-07-09-feat-rls-authz-fuzz-harness-plan.md, #6256

@@ -4,6 +4,9 @@
 # (create-when-absent, comment-when-present) + a Sentry op:seccomp-remediation-failed
 # event, and the FAIL-OPEN contract (a telemetry failure never aborts the caller).
 set -uo pipefail
+SUITE_TMP=$(mktemp -d)
+[[ "$SUITE_TMP" == /* ]] || { echo "FATAL: SUITE_TMP is not absolute: $SUITE_TMP" >&2; exit 2; }
+trap 'rm -rf "$SUITE_TMP"' EXIT
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT="$HERE/seccomp-unenforced-alert.sh"
@@ -46,7 +49,7 @@ run_alert() {
 }
 
 # --- (1) no open issue + Sentry creds present → CREATE issue + Sentry POST ---
-T=$(mktemp -d)
+T=$(mktemp -d -p "$SUITE_TMP")
 export MOCK_GH_FILE="$T/gh.txt"; : > "$MOCK_GH_FILE"
 export MOCK_CURL_FILE="$T/curl.txt"; : > "$MOCK_CURL_FILE"
 export SENTRY_INGEST_DOMAIN="sentry.example" SENTRY_PROJECT_ID="42" SENTRY_PUBLIC_KEY="pk"
@@ -68,7 +71,7 @@ unset SENTRY_INGEST_DOMAIN SENTRY_PROJECT_ID SENTRY_PUBLIC_KEY MOCK_EXISTING_ISS
 rm -rf "$T"
 
 # --- (2) an open issue exists → COMMENT, never CREATE (dedupe) ---
-T=$(mktemp -d)
+T=$(mktemp -d -p "$SUITE_TMP")
 export MOCK_GH_FILE="$T/gh.txt"; : > "$MOCK_GH_FILE"
 export MOCK_CURL_FILE="$T/curl.txt"; : > "$MOCK_CURL_FILE"
 export MOCK_EXISTING_ISSUE="777"
@@ -85,7 +88,7 @@ unset MOCK_EXISTING_ISSUE
 rm -rf "$T"
 
 # --- (3) Sentry creds absent → NO curl POST, but the GitHub issue still files (fail-open, independent surfaces) ---
-T=$(mktemp -d)
+T=$(mktemp -d -p "$SUITE_TMP")
 export MOCK_GH_FILE="$T/gh.txt"; : > "$MOCK_GH_FILE"
 export MOCK_CURL_FILE="$T/curl.txt"; : > "$MOCK_CURL_FILE"
 unset SENTRY_INGEST_DOMAIN SENTRY_PROJECT_ID SENTRY_PUBLIC_KEY MOCK_EXISTING_ISSUE
@@ -101,7 +104,7 @@ fi
 rm -rf "$T"
 
 # --- (4) gh write fails under set -e → the function STILL returns 0 (fail-open never masks the caller's exit 1) ---
-T=$(mktemp -d)
+T=$(mktemp -d -p "$SUITE_TMP")
 export MOCK_GH_FILE="$T/gh.txt"; : > "$MOCK_GH_FILE"
 export MOCK_CURL_FILE="$T/curl.txt"; : > "$MOCK_CURL_FILE"
 export MOCK_GH_WRITE_FAIL=1

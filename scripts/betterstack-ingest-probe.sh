@@ -52,10 +52,13 @@ TIMEOUT="${BETTERSTACK_INGEST_PROBE_TIMEOUT:-20}"
 
 emit() { printf 'SOLEUR_BETTERSTACK_INGEST_PROBE verdict=%s http=%s detail=%s\n' "$1" "$2" "$3"; }
 
-if [[ -z "${BETTERSTACK_LOGS_TOKEN:-}" ]]; then
-  # An unset credential is NOT a refusal. Reporting it as one would name a vendor-side cause
-  # this run did not measure (AP-021 / ADR-166).
-  emit "INGEST_PROBE_UNCONFIGURED" "-" "BETTERSTACK_LOGS_TOKEN is not set in this environment; the probe made no request and can say nothing about the vendor"
+# Token-shape guard (empty, or any char outside the allowlist, e.g. a newline that would inject a
+# curl config directive on the stdin channel below). Never echoes the value.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+if ! _bearer_ok "${BETTERSTACK_LOGS_TOKEN:-}"; then
+  # An unset or unusable credential is NOT a refusal. Reporting it as one would name a vendor-side
+  # cause this run did not measure (AP-021 / ADR-166).
+  emit "INGEST_PROBE_UNCONFIGURED" "-" "BETTERSTACK_LOGS_TOKEN is not set or unusable in this environment; the probe made no request and can say nothing about the vendor"
   exit 2
 fi
 
@@ -111,12 +114,14 @@ esac
 #
 # The empty batch is the whole point — see the header. Keep it literal so the test's source
 # grep can pin it.
+#
+# The bearer rides curl's stdin config channel, never its argument list.
 rc=0
 http="$(curl --disable --noproxy '*' -sS -m "$TIMEOUT" --proto '=https' -o /dev/null -w '%{http_code}' \
-  -H "Authorization: Bearer ${BETTERSTACK_LOGS_TOKEN}" \
   -H 'Content-Type: application/json' \
-  "$BETTERSTACK_INGEST_URL" \
-  --data-raw '[]')" || rc=$?
+  --config - "$BETTERSTACK_INGEST_URL" \
+  --data-raw '[]' \
+  < <(printf 'header = "Authorization: Bearer %s"\n' "$BETTERSTACK_LOGS_TOKEN"))" || rc=$?
 
 if [[ "$rc" -ne 0 ]]; then
   emit "INGEST_UNREACHABLE" "-" "curl exited ${rc} before an HTTP status was observed — this run learned nothing about whether writes are accepted"

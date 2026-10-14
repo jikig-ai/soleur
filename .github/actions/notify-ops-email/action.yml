@@ -12,10 +12,16 @@ inputs:
     description: 'Resend API key (from secrets.RESEND_API_KEY)'
     required: true
 
+outputs:
+  sent:
+    description: "'true' when Resend accepted the email (HTTP 2xx), 'false' otherwise. A non-2xx still only warns, so a caller that must not lose the email reads this."
+    value: ${{ steps.send.outputs.sent }}
+
 runs:
   using: 'composite'
   steps:
     - name: Send email via Resend
+      id: send
       shell: bash
       env:
         RESEND_API_KEY: ${{ inputs.resend-api-key }}
@@ -24,6 +30,15 @@ runs:
       run: |
         if [[ -z "${RESEND_API_KEY:-}" ]]; then
           echo "::error::RESEND_API_KEY not set — email notification cannot be sent"
+          echo "sent=false" >> "$GITHUB_OUTPUT"
+          exit 1
+        fi
+
+        # The credential reaches curl on its stdin config through the shared library, sourced from the job's
+        # own checkout (ADR-280). A missing library is a hard failure: there is no argv fallback.
+        if [[ -z "${GITHUB_WORKSPACE:-}" ]] || ! source "${GITHUB_WORKSPACE}/scripts/lib/bearer-curl.sh"; then
+          echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout — email notification cannot be sent safely"
+          echo "sent=false" >> "$GITHUB_OUTPUT"
           exit 1
         fi
 
@@ -33,18 +48,29 @@ runs:
           --arg html "$EMAIL_BODY" \
           '{from: $from, to: ["ops@jikigai.com"], subject: $subject, html: $html}')
 
+        # A key outside the token alphabet is refused before any request is made. The caller contract
+        # (exit 0, sent=false) is kept, but the refusal is an ::error:: annotation, not a vendor 401.
+        if ! bc_ok_var RESEND_API_KEY; then
+          bc_refuse notify-ops-email RESEND_API_KEY || true
+          echo "::error::RESEND_API_KEY failed the token-shape guard — email notification not sent"
+          echo "sent=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
         # --max-time + `|| echo 000`: a hanging or unreachable Resend endpoint
         # must neither stall the job until its timeout nor (under bash -e)
         # kill the step before the ::warning below is emitted.
-        HTTP_CODE=$(curl -s -o "${RUNNER_TEMP}/resend-response.txt" -w "%{http_code}" \
+        HTTP_CODE=$(bc_curl notify-ops-email 'Authorization:Bearer :RESEND_API_KEY' -- \
+          -s -o "${RUNNER_TEMP}/resend-response.txt" -w "%{http_code}" \
           -X POST "https://api.resend.com/emails" \
           --max-time 15 \
-          -H "Authorization: Bearer ${RESEND_API_KEY}" \
           -H "Content-Type: application/json" \
           -d "$PAYLOAD" || echo "000")
 
         if [[ "$HTTP_CODE" =~ ^2 ]]; then
           echo "Email notification sent to ops@jikigai.com (HTTP ${HTTP_CODE})"
+          echo "sent=true" >> "$GITHUB_OUTPUT"
         else
+          echo "sent=false" >> "$GITHUB_OUTPUT"
           echo "::warning::Email notification failed (HTTP ${HTTP_CODE}). Check Resend dashboard for details."
         fi

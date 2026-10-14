@@ -483,13 +483,13 @@ describe("idle timeout", () => {
     //   can be archived too; see migration 036 trigger),
     // - names the dashboard remediation surface explicitly,
     // - sets expectation that the server will auto-reclaim a stuck row within
-    //   the reaper window (~3 min = 60 s tick + 120 s threshold).
+    //   the reaper window (~10 min ≈ 240 s staleness + up to one 300 s reaper poll).
     const { NON_TRANSIENT_CLOSE_CODES } = await import("../lib/ws-client");
     const entry = NON_TRANSIENT_CLOSE_CODES[WS_CLOSE_CODES.CONCURRENCY_CAP];
     expect(entry).toBeDefined();
     expect(entry.reason.startsWith("You've reached")).toBe(true);
     expect(entry.reason.toLowerCase()).toContain("dashboard");
-    expect(entry.reason.toLowerCase()).toContain("3 minutes");
+    expect(entry.reason.toLowerCase()).toContain("10 minutes");
     // The misleading verbatim phrase ("Archive a completed conversation
     // to free a slot") implied the user MUST archive a completed row —
     // false, since active rows release the slot too via migration 036.

@@ -14,7 +14,8 @@
 # (hr-fresh-host-provisioning-reachable-from-terraform-apply).
 #
 # REPROVISION-PATH (ADR-103, #6242): git-data resources are OPERATOR_APPLIED_EXCLUSIONS
-# (never touched per-PR), and the per-PR path bridges over SSH to the EXISTING web host so
+# (never touched per-PR; the web-host-fed heartbeat pair below is the exception since #8754),
+# and the per-PR path bridges over SSH to the EXISTING web host so
 # it cannot reprovision this host at all. A sanctioned dispatch-only `git-data-host-replace`
 # `workflow_dispatch` path now exists (apply-web-platform-infra.yml, mirroring
 # registry-host-replace / ADR-100 inngest-host-replace) to re-run this host's cloud-init
@@ -29,11 +30,11 @@
 # --- In-band transport keypair (ED25519) ------------------------------------
 # DEDICATED key — NOT reused from tls_private_key.ci_ssh. Mirrors the ci-ssh-key.tf
 # shape (tls_private_key.ci_ssh + the trimspace() local + doppler_secret). The
-# public half goes onto the git-data host (cloud-init authorized_keys, git-shell
-# forced-command); the private half goes to Doppler for git-auth.ts to consume.
+# public half goes onto the git-data host (cloud-init authorized_keys, transport-
+# wrapper forced command); the private half goes to Doppler for git-auth.ts to consume.
 #
 # Intentionally a single throwaway shared key (the Phase-2 floor: one web host,
-# git-shell-scoped). Phase 3's per-workspace_id mTLS (ADR-068 §6) REPLACES it; it
+# scoped by its forced command). Phase 3's per-workspace_id mTLS (ADR-068 §6) REPLACES it; it
 # is NOT a cluster-wide mount credential, so the Phase-3 swap is additive-then-
 # remove (the Phase-3 plan must plan its removal).
 resource "tls_private_key" "git_transport" {
@@ -44,10 +45,11 @@ resource "tls_private_key" "git_transport" {
 # A SECOND, dedicated key — SEPARATE from tls_private_key.git_transport (ADR-068
 # amendment 2026-07-01 "PR B bare-repo provisioning"). Its cloud-init forced
 # command is the FIXED `git-data-provision.sh` (idempotent `git init --bare`),
-# NEVER git-shell. Provisioning authority and ref-write authority are separate
+# never a shell. Provisioning authority and ref-write authority are separate
 # credentials with separate blast radii (ADR-068 §6): a leaked transport key
 # cannot fabricate repos, and a leaked provision key cannot write refs. Same OS
-# `git` user (per-key command= overrides the login shell). Same throwaway-shape as
+# `git` user (sshd runs each key's command= BY the login shell as `<shell> -c`; the
+# confinement is the forced-command map, not the shell — #8043). Same throwaway-shape as
 # git_transport; Phase 3's per-workspace_id mTLS replaces both.
 resource "tls_private_key" "git_provision" {
   algorithm = "ED25519"
@@ -56,14 +58,41 @@ resource "tls_private_key" "git_provision" {
 # --- In-band REMOVE keypair (ED25519) ---------------------------------------
 # A THIRD, dedicated key — SEPARATE from git_transport AND git_provision (#5274
 # Phase 3, ADR-068 GDPR Art. 17 / CLO DL-1). Its cloud-init forced command is the
-# FIXED `git-data-remove.sh` (idempotent `rm -rf <id>.git`), NEVER git-shell.
+# FIXED `git-data-remove.sh` (idempotent `rm -rf <id>.git`), never a shell.
 # Provisioning, ref-write, and ERASURE authority are three separate credentials
 # with separate blast radii (ADR-068 §6): a leaked transport/provision key cannot
 # delete repos, and a leaked remove key cannot write refs. Same OS `git` user
-# (per-key command= overrides the login shell). Same throwaway-shape as the
+# (command= run BY the login shell; the map is the confinement — #8043). Same throwaway-shape as the
 # siblings; Phase 3's per-workspace_id posture replaces all three.
 resource "tls_private_key" "git_remove" {
   algorithm = "ED25519"
+}
+
+# --- The git-data SSH HOST key (ED25519) — #7226 / #5914, ADR-237 -------------
+# NOT an authorization key like the three above: this is the key the HOST presents, so every
+# client (the app's git-data transport, the cutover workflow) can verify it is talking to
+# git-data and not to something standing in for it. Minted here, installed by cloud-config
+# `ssh_keys:` (module input below), proven at boot (the sshd_config stage fails the boot unless
+# sshd serves exactly this key), and published as doppler_secret.git_data_ssh_host_key.
+#
+# ROTATES WITH THE HOST: the git-data-host-replace job -replace's it and re-targets the secret,
+# the birth job targets both, and NO per-PR -target reaches either (Guard 4) — a routine apply
+# must never publish a pin the live host does not carry.
+#
+# EXPOSURE (ADR-237 residual, #8209): the private half sits in this root's state twice (here and
+# inside hcloud_server.git_data.user_data), and the Hetzner metadata endpoint serves user_data on
+# the host. A reader of either copy WITH a network position can impersonate git-data.
+resource "tls_private_key" "git_data_host_ssh" {
+  algorithm = "ED25519"
+}
+
+# (#7226) The pin's SHA256 fingerprint (public; the provider marks it non-sensitive). The birth
+# and replace jobs print it to their run summary after apply so the operator can compare it
+# against the app's `git_data_pin=present fp=` startup line once the inline pin_load step's
+# same-version redeploy lands (#8211 PR2 — the git-data-pin-redeploy.yml follower is retired).
+output "git_data_ssh_host_key_fingerprint" {
+  description = "SHA256 fingerprint of the git-data SSH host key (the GIT_DATA_SSH_HOST_KEY pin)."
+  value       = tls_private_key.git_data_host_ssh.public_key_fingerprint_sha256
 }
 
 locals {
@@ -309,6 +338,33 @@ resource "doppler_secret" "git_data_ssh_host" {
   visibility = "masked"
 }
 
+# --- The git-data SSH host-key PIN → Doppler prd (#7226 / #5914, ADR-237) ---------------
+#
+# GIT_DATA_SSH_HOST_KEY is what the app's git-data transport (resolveGitDataHostKeyPin) and the
+# cutover workflow (git-data-flag-precheck.sh) verify git-data against. Same shape as
+# doppler_secret.git_data_ssh_host above, with two deliberate differences:
+#
+#   visibility = "unmasked" — it is a PUBLIC key; masking it would only hide the value an
+#     operator compares against the fingerprint the birth/replace apply run and the startup
+#     line print.
+#   depends_on = [hcloud_server.git_data] — the pin is written only AFTER the host that carries
+#     the key exists, so a replace that fails before the server is created publishes nothing
+#     and the app keeps the pin of the host that is still running (plan R7). Unlike the
+#     ADDRESS secret above, co-landing with the server is exactly the property wanted here.
+#
+# NO ignore_changes: Terraform owns the value, and it MUST move on every replace. The
+# apply job's pin_load step (#8211 PR2 — the git-data-pin-redeploy.yml follower is retired)
+# then redeploys the RUNNING image via /hooks/deploy, so the app re-reads prd and loads it.
+resource "doppler_secret" "git_data_ssh_host_key" {
+  project    = "soleur"
+  config     = "prd"
+  name       = "GIT_DATA_SSH_HOST_KEY"
+  value      = trimspace(tls_private_key.git_data_host_ssh.public_key_openssh)
+  visibility = "unmasked"
+
+  depends_on = [hcloud_server.git_data]
+}
+
 # --- The git-data host -------------------------------------------------------
 # (#7025, R7) THE RENDER MOVED TO ./modules/git-data-userdata.
 #
@@ -340,6 +396,18 @@ module "git_data_userdata" {
   git_transport_pubkey   = local.git_transport_pubkey
   git_provision_pubkey   = local.git_provision_pubkey
   git_remove_pubkey      = local.git_remove_pubkey
+  # (#7226) The HOST key. private_key_openssh, never private_key_pem (PKCS#8 for ED25519).
+  host_ssh_ed25519_private_key = tls_private_key.git_data_host_ssh.private_key_openssh
+  host_ssh_ed25519_public_key  = trimspace(tls_private_key.git_data_host_ssh.public_key_openssh)
+}
+
+# (#8189, ADR-220) The git-data root key, minted in its OWN root (git-data-root-key/) so the
+# private half never enters this root's state or logs. Only the public key's Hetzner id is
+# read here, by label. An empty match resolves to [] (inert); the create gates refuse a host
+# create unless it resolved to exactly the key whose SHA256 fingerprint is committed in
+# git-data-root-key.fingerprint (tests/scripts/lib/git-data-root-key-arm-gate.sh).
+data "hcloud_ssh_keys" "git_data_root" {
+  with_selector = "soleur-role=git-data-root"
 }
 
 resource "hcloud_server" "git_data" {
@@ -352,7 +420,9 @@ resource "hcloud_server" "git_data" {
   location    = var.location
   image       = "ubuntu-24.04"
   keep_disk   = true
-  ssh_keys    = [hcloud_ssh_key.default.id]
+  # Default key plus the root key (#8189). hcloud_ssh_keys ids are numbers; ssh_keys is
+  # list(string). Create-time only — ignore_changes below keeps the live host inert.
+  ssh_keys = concat([hcloud_ssh_key.default.id], [for k in data.hcloud_ssh_keys.git_data_root.ssh_keys : tostring(k.id)])
 
   # P0 — public IPv4/IPv6 for EGRESS only (apt + GitHub during cloud-init). A
   # no-public-IP host has NO internet (no NAT gateway exists in this account), so
@@ -442,7 +512,7 @@ resource "hcloud_server" "git_data" {
   # AND NOTHING WOULD REPORT IT. The Doppler install runcmd has no `set -e`, and the LUKS
   # block's `set -euo pipefail` is line 1 of the heredoc that `doppler run` EXECUTES — so
   # if the binary is missing or wrong-arch it never runs at all. The boot "succeeds" with
-  # /mnt/git-data-luks unmounted: at-rest encryption absent while every artifact claims it
+  # /mnt/git-data unmounted: at-rest encryption absent while every artifact claims it
   # is present. `runcmd` is once-per-instance so no reboot repairs it, and ADR-115
   # excludes git-data from the reboot primitive anyway — the host must be REPLACED.
   #
@@ -476,9 +546,13 @@ resource "hcloud_volume" "git_data" {
   }
 }
 
+# (#8211) automount = false, matching rung2-rehearsal/rehearsal.tf and the provider default (so
+# the plan shows no change). Since #8211 nothing mounts this plaintext volume after boot: the
+# bootstrap only mounts it read-only, briefly, to prove it holds no repository.
 resource "hcloud_volume_attachment" "git_data" {
   volume_id = hcloud_volume.git_data.id
   server_id = hcloud_server.git_data.id
+  automount = false
 }
 
 # --- Deny-all PUBLIC ingress firewall ----------------------------------------
@@ -502,16 +576,20 @@ resource "hcloud_firewall_attachment" "git_data" {
   server_ids  = [hcloud_server.git_data.id]
 }
 
-# --- Liveness (PUSH heartbeat) -----------------------------------------------
+# --- Liveness (PUSH heartbeats) ----------------------------------------------
 # Better Stack cannot PULL a deny-all-public-ingress host, so liveness is a PUSH
-# heartbeat: a web-host cron probes git-data over the private net (git ls-remote /
-# ssh) and pings this heartbeat URL on success; absence-of-ping alerts. Shape
-# mirrors betteruptime_heartbeat.inngest_prd (inngest.tf:268-298).
+# heartbeat: absence-of-ping alerts. TWO monitors, deliberately separate (a shared URL would let
+# either feeder's beat mask the other's silence):
+#   * git_data_prd (below): a web-host cron probes git-data over the private net and pings on a
+#     reachable run. It proves only that SOME web host can open a TCP connection to the port.
+#   * git_data_host_prd (further below, #9438): the git-data HOST pings it itself, only when its
+#     own checks pass (git-data-liveness.sh). It proves host and store health.
+# Shape mirrors resource "betteruptime_heartbeat" "inngest_prd" (inngest.tf).
 #
-# paused = true initially (same rationale as inngest_prd): until the web-host
-# probe cron is wired + deployed, the gap between apply (Better Stack starts
-# expecting a ping within `grace`) and the first ping would fire a false alert.
-# Unpause via the Better Stack UI (or flip in a follow-up) once the probe ships.
+# paused = true at birth (same rationale as inngest_prd): the gap between apply
+# (Better Stack starts expecting a ping within `grace`) and the first ping would
+# fire a false alert. The unpause is the per-merge apply's arm step
+# (arm-heartbeats.sh --arm), which arms only after a measured beat (ADR-117).
 resource "betteruptime_heartbeat" "git_data_prd" {
   name   = "soleur-git-data-prd"
   period = 60
@@ -526,38 +604,103 @@ resource "betteruptime_heartbeat" "git_data_prd" {
   push      = false
   team_wait = 0
   # Literal name of the only team in this Better Stack workplace (case-sensitive
-  # provider lookup) — see inngest.tf:277-281.
+  # provider lookup) — see betteruptime_heartbeat.inngest_prd in inngest.tf.
   team_name  = "Your team"
   policy_id  = var.betterstack_paid_tier ? betteruptime_policy.inngest[0].id : null
   paused     = true
   sort_index = 0
 
   lifecycle {
-    # Operator unpause via UI MUST NOT be reverted by subsequent applies (mirrors
+    # The arm gate's live unpause (or an operator's) MUST NOT be reverted by subsequent applies (mirrors
     # betteruptime_heartbeat.inngest_prd).
     ignore_changes = [paused]
   }
 }
 
-# Heartbeat URL → Doppler prd, so the (follow-up) web-host probe cron can read it
-# via the server's existing `doppler secrets download` flow. Mirrors
-# doppler_secret.inngest_heartbeat_url_prd (inngest.tf:323-329).
+# Heartbeat URL → Doppler prd, where the web-host probe reads it. Mirrors
+# doppler_secret.inngest_heartbeat_url_prd (inngest.tf).
 #
-# TODO(#5274 PR C / follow-up): the web-host probe cron itself (git ls-remote over
-# the private net to 10.0.1.20, then curl GIT_DATA_HEARTBEAT_URL on success) needs
-# ci-deploy wiring (a systemd timer like inngest-heartbeat.timer). This resource +
-# the URL secret are the IaC deliverable here; the probe script is the follow-up.
+# The feeder has shipped (#5274 PR C / #6548, PR #6654): web-git-data-probe.timer on every web
+# host (web-1 via terraform_data.git_data_probe_install in server.tf, web-2 via cloud-init), dereferences
+# GIT_DATA_HEARTBEAT_URL through a per-run `doppler run` and pings on every reachable run.
+# heartbeat-manifest.ts carries this row as a fed `timer` (the reconciliation the former TODO here
+# forced when the probe shipped). See ADR-117.
 #
-# This TODO is honest — unlike its registry counterpart, which claimed the probe had shipped and
-# left the monitor inert for 9 days (#6537). It is now ENFORCED rather than merely accurate:
-# heartbeat-manifest.ts declares this row `feeder: {kind:"none", url_secret:"GIT_DATA_HEARTBEAT_URL"}`
-# and the parity guard asserts that secret still has zero dereferencing consumers — so the day PR C
-# ships the probe, CI goes red and forces the row (and the arming decision) to be reconciled.
-# See ADR-117. Live-absence of this heartbeat is tracked separately in #6548.
+# (#8754) Both this secret and the heartbeat above ride the per-merge `-target` list of
+# apply-web-platform-infra.yml. They used to be operator-applied exclusions whose route, a
+# full-root apply outside CI, no longer exists, so neither was ever created. The merge apply's
+# arm step (arm-heartbeats.sh --arm) measures a real beat before unpausing. When none lands it
+# rolls back to paused AND fails the arm step (rc=1), so an unfed monitor turns every merge apply
+# red until a beat lands (ADR-149 amendment). Every web host pings this one URL, so a beat proves
+# only that SOME web host reaches git-data over the private net. The git-data BIRTH route still
+# refuses both (GIT_DATA_BIRTH_REFUSED in terraform-target-parity.test.ts).
 resource "doppler_secret" "git_data_heartbeat_url_prd" {
   project    = "soleur"
   config     = "prd"
   name       = "GIT_DATA_HEARTBEAT_URL"
   value      = betteruptime_heartbeat.git_data_prd.url
+  visibility = "masked"
+}
+
+# --- Liveness, host-originated (#9438) ----------------------------------------
+# The git-data HOST's own feeder (git-data-liveness.timer, delivered by git-data-userdata and armed
+# by cloud-init-git-data.yml) pings this heartbeat every 60 s, ONLY when the loopback sshd answers,
+# the store is mounted from the LUKS mapper, bytes and inodes are under threshold, and neither the
+# LUKS reopen nor the nftables unit has failed. Its absence is the page; the feeder also says why
+# through git-data-emit (stage liveness, level info). Flip precondition: see the cutover runbook.
+#
+# Born paused, exactly like git_data_prd and for the same reason, and NOT armed by the per-merge
+# arm step: the feeder reaches the host only through the owner-authorized replace, so an arm line
+# here would unpause, wait out the deadline, roll back and return rc=1 on every merge until then.
+# Arming is a separate, measured, owner-authorized step (ADR-117, ADR-283); heartbeat-manifest.ts
+# carries the row with arming_pending so the nightly fed-but-paused alarm does not fire meanwhile.
+#
+# grace 300 against a 60 s feeder tick: the page lands about six minutes after the last good beat,
+# which absorbs a vendor blip and a few dropped ticks without paging. It does NOT absorb the reopen
+# unit's `failed` latch (about 17 minutes after a transient failure, up to about 1h15 after an
+# exhausted ladder): while that unit reads failed the feeder withholds on purpose, so the page is
+# real for that whole time.
+resource "betteruptime_heartbeat" "git_data_host_prd" {
+  name      = "soleur-git-data-host-prd"
+  period    = 60
+  grace     = 300
+  call      = false
+  sms       = false
+  email     = true
+  push      = false
+  team_wait = 0
+  # Literal name of the only team in this Better Stack workplace (case-sensitive provider lookup).
+  team_name  = "Your team"
+  policy_id  = var.betterstack_paid_tier ? betteruptime_policy.inngest[0].id : null
+  paused     = true
+  sort_index = 0
+
+  lifecycle {
+    # The arm gate's live unpause MUST NOT be reverted by subsequent applies.
+    ignore_changes = [paused]
+  }
+}
+
+# The URL the host reads at runtime from the git-data scoped Doppler config. `project` and `config`
+# are LITERALS on purpose: a reference to doppler_config.git_data_prd would pull that excluded
+# resource into the per-merge -target closure, and if it were ever absent from state the plan would
+# try to create it and Doppler would answer 400 "Name is already in use" on every merge. With
+# literals an absent config makes THIS write fail loudly instead. The config name sits in a local
+# (still a plain string, no resource address) because the token-drift inventory test treats every
+# `config = "<name>"` attribute as a config the drift scan must reach, and `prd_git_data` is not in
+# that inventory today (adding it means minting a drift read token, which is the owner's credential
+# change, not this PR's). The URL is not in user_data, so
+# the rung-2 rehearsal render carries no production monitor and a rehearsal host (whose scratch
+# config lacks this secret by construction) cannot ping it. It rides the per-merge -target list
+# beside git_data_prd and is refused by the git-data birth route (GIT_DATA_BIRTH_REFUSED).
+locals {
+  git_data_liveness_doppler_cfg = "prd_git_data"
+}
+
+resource "doppler_secret" "git_data_host_heartbeat_url_prd" {
+  project    = "soleur"
+  config     = local.git_data_liveness_doppler_cfg
+  name       = "GIT_DATA_HOST_HEARTBEAT_URL"
+  value      = betteruptime_heartbeat.git_data_host_prd.url
   visibility = "masked"
 }

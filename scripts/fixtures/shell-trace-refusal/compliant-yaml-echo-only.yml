@@ -1,0 +1,13 @@
+# MUST PASS (rc 0). Every header below is PRINTED TEXT or a comment: curl is never in
+# command position, so none of it is an executed curl command.
+name: fixture-echo-only
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: runbook text
+        run: |
+          echo "Retry with: curl -H 'Authorization: Bearer $FIXTURE_TOKEN' $SINK_URL"
+          printf '%s\n' "curl -H \"CF-Access-Client-Id: $FIXTURE_TOKEN\" $SINK_URL"
+          # curl -H "Authorization: Bearer ${FIXTURE_TOKEN}" "$SINK_URL"

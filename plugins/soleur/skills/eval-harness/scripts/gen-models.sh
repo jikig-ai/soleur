@@ -4,7 +4,7 @@
 # The model IDs live in ONE place — the TypeScript registry under
 # apps/web-platform/server/inngest/. promptfoo YAML cannot import TS, so this
 # generator reads the IDs VERBATIM from the registry and emits a provider list
-# the promptfooconfig.*.yaml files reference via `providers: file://models.generated.json`.
+# the promptfooconfig-*.yaml files reference via `providers: file://models.generated.json`.
 # No model literal is ever hardcoded in a config-class file, which also keeps the
 # model-launch-review auto-fixer from rewriting a stale literal here.
 set -euo pipefail

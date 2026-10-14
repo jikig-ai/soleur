@@ -1,6 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Refuse to run under xtrace (#7797): -x prints a command after expansion, so a credential would be
+# printed the moment it is used. `${VAR:+x}` tests non-emptiness without expanding the value; every
+# credential this file binds is covered. Tracing stays available with them unset.
+case "$-" in
+  *x*)
+    if [ -n "${APPLE_CLIENT_SECRET:+x}${AZURE_CLIENT_SECRET:+x}${CA_CLIENT_SECRET:+x}${GITHUB_CLIENT_SECRET:+x}${GOOGLE_CLIENT_SECRET:+x}${RESEND_API_KEY:+x}${SUPABASE_ACCESS_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 # Configure Supabase Auth: Site URL, redirect URLs, SMTP via Resend, and branded email template.
 #
 # Required environment variables:
@@ -11,6 +23,44 @@ set -euo pipefail
 SUPABASE_ACCESS_TOKEN="${SUPABASE_ACCESS_TOKEN:?Missing SUPABASE_ACCESS_TOKEN}"
 PROJECT_REF="${PROJECT_REF:?Missing PROJECT_REF}"
 RESEND_API_KEY="${RESEND_API_KEY:?Missing RESEND_API_KEY}"
+
+# Destination pin: the Management API bearer travels to .../projects/$PROJECT_REF/..., and
+# PROJECT_REF is env-derived, so an override must not steer the account-level token at a project the
+# operator did not intend. Refuse anything but the two live Supabase projects (prd and dev are
+# distinct projects, hr-dev-prd-distinct-supabase-projects; this script is run against both).
+case "$PROJECT_REF" in
+  ifsccnjhymdmidffkzhl|mlwiodleouzwniehynfz) ;;
+  *) echo "ERROR: refusing PROJECT_REF (expected the live prd or dev Supabase project ref)" >&2; exit 1 ;;
+esac
+
+# One wrapper owns the transport flags, the token-shape guard and the bearer header, so the
+# account-level token travels on curl's stdin config channel and never on its argument list
+# (/proc/<pid>/cmdline, ps, a traced parent). A newline in the token would inject a curl config
+# directive and an empty one would send the request unauthenticated, so it is refused before curl
+# runs; the value is never echoed. Supabase access tokens (sbp_ + hex) are inside the allowlist.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+if ! _bearer_ok "$SUPABASE_ACCESS_TOKEN"; then
+  echo "ERROR: SUPABASE_ACCESS_TOKEN has an unexpected shape" >&2
+  exit 1
+fi
+mgmt_curl() {
+  _bearer_ok "${SUPABASE_ACCESS_TOKEN:-}" || { echo "mgmt_curl: SUPABASE_ACCESS_TOKEN unusable" >&2; return 1; }
+  curl --disable --noproxy '*' "$@" --config - \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "$SUPABASE_ACCESS_TOKEN")
+}
+
+# The PATCH bodies carry RESEND_API_KEY and the OAuth client secrets, and stdin is already taken by the
+# bearer config above, so the body travels in a 0600 file (`--data-binary @file`, which keeps CR/LF
+# unlike `-d @file`) and never on curl's argument list. One owning EXIT trap removes it on every exit
+# path (success, a failed PATCH under set -e, INT/TERM); each call also truncates it as soon as curl
+# has returned so a secret does not outlive the request that needed it. The secret values reach jq
+# through its ENVIRONMENT (`$ENV.X`), not `--arg`, because jq's own argv is world-readable too.
+BODY_FILE=""
+_cleanup_body_file() { [[ -n "${BODY_FILE:-}" ]] && rm -f -- "$BODY_FILE"; return 0; }
+trap _cleanup_body_file EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+BODY_FILE=$(mktemp -t configure-auth-body.XXXXXXXX) || { echo "ERROR: could not create a private body file" >&2; exit 1; }
 
 if ! command -v jq &>/dev/null; then
   echo "ERROR: jq is required but not installed" >&2
@@ -36,14 +86,9 @@ CONFIRMATION_TEMPLATE=$(cat "$CONFIRMATION_TEMPLATE_FILE")
 
 echo "Configuring Supabase Auth for project $PROJECT_REF..."
 
-RESPONSE=$(curl -s --connect-timeout 10 --max-time 30 -w "\n%{http_code}" -X PATCH \
-  "https://api.supabase.com/v1/projects/$PROJECT_REF/config/auth" \
-  -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d "$(jq -n \
+CA_SMTP_PASS="$RESEND_API_KEY" jq -n \
     --arg template "$MAGIC_LINK_TEMPLATE" \
     --arg confirmation "$CONFIRMATION_TEMPLATE" \
-    --arg smtp_pass "$RESEND_API_KEY" \
     '{
       "site_url": "https://app.soleur.ai",
       "uri_allow_list": "http://localhost:3000/**,https://app.soleur.ai/**",
@@ -72,14 +117,19 @@ RESPONSE=$(curl -s --connect-timeout 10 --max-time 30 -w "\n%{http_code}" -X PAT
       "smtp_host": "smtp.resend.com",
       "smtp_port": "465",
       "smtp_user": "resend",
-      "smtp_pass": $smtp_pass,
+      "smtp_pass": $ENV.CA_SMTP_PASS,
       "smtp_sender_name": "Soleur",
       "mailer_subjects_magic_link": "Your Soleur verification code",
       "mailer_templates_magic_link_content": $template,
       "mailer_subjects_confirmation": "Confirm your Soleur account",
       "mailer_templates_confirmation_content": $confirmation
-    }'
-  )")
+    }' > "$BODY_FILE"
+
+RESPONSE=$(mgmt_curl -s --connect-timeout 10 --max-time 30 -w "\n%{http_code}" -X PATCH \
+  "https://api.supabase.com/v1/projects/$PROJECT_REF/config/auth" \
+  -H "Content-Type: application/json" \
+  --data-binary @"$BODY_FILE")
+: > "$BODY_FILE"
 
 HTTP_CODE=$(echo "$RESPONSE" | tail -1)
 BODY=$(echo "$RESPONSE" | sed '$d')
@@ -106,28 +156,28 @@ configure_provider() {
   local client_id="$2"
   local client_secret="$3"
   local extra_json="${4:-}"
+  # `${extra_json:-{}}` parses as `${extra_json:-{}` + a literal `}`, so a SET value gained a trailing
+  # `}` (invalid JSON; the Azure call died under set -e). Default explicitly instead.
+  [[ -n "$extra_json" ]] || extra_json='{}'
 
   echo "Enabling $provider_name OAuth provider..."
 
-  local payload
-  payload=$(jq -n \
+  CA_CLIENT_SECRET="$client_secret" jq -n \
     --arg prov "$provider_name" \
     --arg id "$client_id" \
-    --arg secret "$client_secret" \
-    --argjson extra "${extra_json:-{}}" \
+    --argjson extra "$extra_json" \
     '{
       ("external_" + $prov + "_enabled"): true,
       ("external_" + $prov + "_client_id"): $id,
-      ("external_" + $prov + "_secret"): $secret
-    } + $extra'
-  )
+      ("external_" + $prov + "_secret"): $ENV.CA_CLIENT_SECRET
+    } + $extra' > "$BODY_FILE"
 
   local resp
-  resp=$(curl -s --connect-timeout 10 --max-time 30 -w "\n%{http_code}" -X PATCH \
+  resp=$(mgmt_curl -s --connect-timeout 10 --max-time 30 -w "\n%{http_code}" -X PATCH \
     "https://api.supabase.com/v1/projects/$PROJECT_REF/config/auth" \
-    -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
     -H "Content-Type: application/json" \
-    -d "$payload")
+    --data-binary @"$BODY_FILE")
+  : > "$BODY_FILE"
 
   local code
   code=$(echo "$resp" | tail -1)

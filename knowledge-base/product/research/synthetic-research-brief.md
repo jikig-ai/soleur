@@ -6,7 +6,7 @@ owner: CPO
 depends_on:
   - knowledge-base/product/business-validation.md
   - knowledge-base/marketing/validation-outreach-template.md
-  - knowledge-base/project/specs/feat-product-strategy/interview-guide.md
+  - knowledge-base/project/specs/archive/20261012-213508-feat-product-strategy/interview-guide.md
   - knowledge-base/product/pricing-strategy.md
 ---
 

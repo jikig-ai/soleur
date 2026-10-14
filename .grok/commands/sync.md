@@ -1,0 +1,1 @@
+../../plugins/soleur/commands/sync.md

@@ -1,6 +1,6 @@
 // Pending-prompt registry for the `/soleur:go` runner.
 //
-// Plan: knowledge-base/project/plans/2026-04-23-feat-cc-route-via-soleur-go-plan.md
+// Plan: knowledge-base/project/plans/archive/20261013-003106-2026-04-23-feat-cc-route-via-soleur-go-plan.md
 // Stage 2 §"Pending-prompt registry" + HARD REQUIREMENT #4.
 //
 // When the soleur-go-runner forwards an interactive tool_use from the SDK
@@ -87,6 +87,16 @@ export function makePendingPromptKey(
 
 const DEFAULT_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_PER_CONVERSATION_CAP = 50;
+
+/**
+ * feat-cc-cap-raise-resume (#9565) — sentinel prefix for runner-emitted
+ * cost-cap prompts. Their `toolUseId` is never a real SDK `tool_use` id
+ * (no tool_use exists at result-time cap breach), so
+ * `handleInteractivePromptResponse` MUST branch on this prefix BEFORE
+ * delivering a `tool_result` — feeding one into the SDK stream would
+ * corrupt it.
+ */
+export const COST_CAP_TOOL_USE_ID_PREFIX = "cost-cap:";
 
 export class PendingPromptRegistry {
   private readonly records = new Map<string, PendingPromptRecord>();

@@ -64,6 +64,7 @@ function Dropdown({
     <div ref={ref} className="relative">
       <button
         type="button"
+        data-button-exempt="dropdown popover trigger — composite children (label + active-count badge + rotating chevron) with conditional active-state tint that variant base colors would flatten"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
         className={`flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${

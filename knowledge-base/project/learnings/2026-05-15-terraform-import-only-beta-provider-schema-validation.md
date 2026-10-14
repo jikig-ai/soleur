@@ -5,7 +5,7 @@ category: integration-issues
 tags: [terraform, sentry, jianyuan-sentry-provider, beta-provider, import-only-resources, lifecycle-ignore-changes, plan-vs-reality-drift]
 module: terraform-iac
 related_learnings: [2026-05-10-handshake-schema-drift-and-stale-precondition-budgets.md, 2026-05-12-type-widening-cascades-and-write-boundary-sentinels.md]
-related_plan: knowledge-base/project/plans/2026-05-15-feat-sentry-monitors-alerts-adapt-plan.md
+related_plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-15-feat-sentry-monitors-alerts-adapt-plan.md
 related_pr: 3811
 ---
 

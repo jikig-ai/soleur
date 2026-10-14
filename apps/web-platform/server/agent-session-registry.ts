@@ -174,6 +174,56 @@ export function forEachSessionForConversation(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Cross-lineage live-loop predicate (#9270 review P1)
+// ---------------------------------------------------------------------------
+//
+// `activeSessions` is the LEGACY lineage only — the cc/soleur-go lineage
+// holds its live `Query` objects in `SoleurGoRunner.activeQueries`, owned by
+// cc-dispatcher's module-scope `_runner` singleton. A predicate that checks
+// only `activeSessions` structurally cannot see a live cc turn.
+//
+// The stuck-active reaper's `find_stuck_active_conversations` RPC matches
+// `status='active'` rows whose slot row is MISSING (`s.id IS NULL`) or whose
+// heartbeat is stale — a candidate set computed in SQL, blind to in-process
+// liveness. Resume/follow-up turns never re-acquire a slot
+// (`acquireSlot` runs on `start_session` only; `touchSlot` is UPDATE-only),
+// so a resumed conversation's live turn is slotless BY DESIGN and the
+// `s.id IS NULL` arm would reap it mid-run. This shared predicate is the
+// no-false-reap discriminator: "no heartbeat" is only reaping evidence when
+// no in-process loop owns the row either.
+const liveLoopProbes = new Set<(conversationId: string) => boolean>();
+
+/** Register an additional lineage probe (idempotent — Set-deduped).
+ *  cc-dispatcher calls this at module load with `hasActiveCcQuery`; a probe
+ *  is a pure read (`false` when its runner does not exist yet), so
+ *  registration order vs. runner creation is irrelevant. */
+export function registerLiveLoopProbe(
+  probe: (conversationId: string) => boolean,
+): void {
+  liveLoopProbes.add(probe);
+}
+
+/** True when ANY in-process agent loop owns the conversation — legacy
+ *  `activeSessions` entries plus every registered external probe (cc).
+ *  Consumers: the stuck-active reaper's candidate filter and ws-handler's
+ *  dead-socket reap — both must never tear down a running turn. */
+export function hasLiveAgentLoop(
+  userId: string,
+  conversationId: string,
+): boolean {
+  let found = false;
+  forEachSessionForConversation(userId, conversationId, () => {
+    found = true;
+    return true;
+  });
+  if (found) return true;
+  for (const probe of liveLoopProbes) {
+    if (probe(conversationId)) return true;
+  }
+  return false;
+}
+
 /**
  * Abort a running agent session.
  *

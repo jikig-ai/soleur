@@ -7,9 +7,15 @@
 #   contributors [days]        - Active contributors in period
 #   discussions [days]         - Recent discussions (if enabled)
 #   repo-stats [days]          - Stars, forks, watchers, new stargazers
+#                                (new_stargazers_count is null when the token cannot list
+#                                 stargazers: a read-only token gets 403; see stargazers_unavailable)
 #   fetch-interactions [days]  - External user comments on issues/PRs
 #
 # Prerequisites: gh CLI authenticated
+# Environment:
+#   SOLEUR_COLLECTOR_COMPACT=1  - print ONE line of compact JSON per command holding only
+#                                 the fields the community-monitor prompt reads (#9678).
+#                                 Unset, or any other value, leaves the output unchanged.
 # Output: JSON to stdout
 # Errors: Messages to stderr, exit 1
 
@@ -19,6 +25,13 @@ set -euo pipefail
 # binding both sides to one constant keeps the truncation detector from
 # silently retiring if a URL changes.
 readonly PER_PAGE=100
+
+# Compact mode (#9678): the spawned agent has no file tools, so output past the Bash
+# tool's inline limit (30,000 characters) is unreadable. Caps are deterministic;
+# `count` fields stay exact, titles are the newest COMPACT_MAX_ITEMS per list.
+readonly COMPACT_MAX_ITEMS=40
+readonly COMPACT_TITLE_MAX=60
+readonly COMPACT_BUDGET_BYTES=6000
 
 # --- Validation ---
 
@@ -67,7 +80,7 @@ detect_repo() {
 date_n_days_ago() {
   local days="${1:-7}"
   if ! [[ "$days" =~ ^[0-9]+$ ]]; then
-    echo "Error: days must be a positive integer, got '${days}'" >&2
+    echo "Error: days must be a positive integer." >&2
     exit 1
   fi
   date -u -d "${days} days ago" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || \
@@ -76,7 +89,7 @@ date_n_days_ago() {
 
 check_rate_limit() {
   local response="$1"
-  if echo "$response" | jq -e '.message // empty' 2>/dev/null | grep -qi "rate limit"; then
+  if grep -qi "rate limit" < <(jq -e '.message // empty' 2>/dev/null <<<"$response"); then
     _CAUSE="rate-limit"
     echo "Error: GitHub API rate limit exceeded." >&2
     echo "" >&2
@@ -100,6 +113,8 @@ _TMPFILES=()
 _COMMAND=""
 _CAUSE=""
 _CAP_WARN=""
+_COMPACT_CAUSE=""
+_COMPACT_OFF=0
 
 # Appends one JSONL record per dispatch -- success AND failure -- to a path the
 # caller supplies. This is the only failure channel that does not terminate in
@@ -124,6 +139,10 @@ _on_exit() {
   if ((${#_TMPFILES[@]} > 0)); then
     rm -f "${_TMPFILES[@]}"
   fi
+  # A failure after the compact projection was armed, with no earlier cause, is the projection.
+  if ((rc != 0)) && [[ -z "$_CAUSE" ]]; then _CAUSE="$_COMPACT_CAUSE"; fi
+  # Inside the cron (status dir set) but the handler flag did not reach us: say so in-surface.
+  if [[ "$_COMPACT_OFF" -eq 1 && ( -z "$_CAP_WARN" || "$_CAP_WARN" == truncated_at_per_page ) ]]; then _CAP_WARN="compact_off"; fi
   _record_status "${_COMMAND:-unknown}" "$rc" "$_CAUSE"
 }
 
@@ -150,6 +169,31 @@ check_array_response() { # $1=file  $2=what
     echo "Error: Failed to fetch ${2} (non-array response)" >&2
     exit 1
   fi
+}
+
+# True when the handler asked for compact output. A non-empty value other than 1 prints
+# one fixed line (never the raw value) and leaves output unchanged.
+compact_on() {
+  [[ "${SOLEUR_COLLECTOR_COMPACT:-}" == "1" ]] && return 0
+  if [[ -n "${SOLEUR_COLLECTOR_COMPACT:-}" ]]; then
+    echo "compact mode ignored: SOLEUR_COLLECTOR_COMPACT must be 1" >&2
+  fi
+  return 1
+}
+
+# Prints a compact result. Called in the parent scope (never through a pipe), so the
+# warn it may set reaches the EXIT trap's sidecar record.
+emit_compact() { # $1=compact JSON
+  local bytes
+  bytes=$(printf '%s' "$1" | wc -c)
+  # Lowest priority: a truncation warn means counts may be undercounted, and
+  # stargazers_unavailable is acted on by the handler; both outrank a size note.
+  if ((bytes > COMPACT_BUDGET_BYTES)) && [[ -z "$_CAP_WARN" ]]; then
+    _CAP_WARN="compact_over_budget"
+  fi
+  # The projection succeeded: a later failure is not a projection failure.
+  _COMPACT_CAUSE=""
+  printf '%s\n' "$1"
 }
 
 _json_len() { # $1=file
@@ -228,6 +272,24 @@ cmd_activity() {
   # dereference shape. Leaving `length` applied to the wrapper while fixing only
   # the projection is the silent failure: it emits count 1 alongside a full
   # items array, at exit 0.
+  if compact_on; then
+    _COMPACT_CAUSE="compact-projection-failed"
+    local out
+    out=$(jq -nc \
+      --slurpfile issues "$issues_f" \
+      --slurpfile prs "$prs_f" \
+      --arg since "$since" \
+      --argjson max "$COMPACT_MAX_ITEMS" \
+      --argjson tmax "$COMPACT_TITLE_MAX" \
+      'def titles: sort_by(.updated_at) | reverse | .[:$max] | map((.title // "" | tostring | gsub("[[:cntrl:]\\p{Cf}\u2028\u2029]"; " "))[:$tmax]);
+      ($issues | add // [] | map(select(.pull_request == null))) as $iss
+      | ($prs | add // [] | map(select(.updated_at >= $since))) as $pr
+      | {issues: {count: ($iss | length), titles: ($iss | titles)},
+         pull_requests: {count: ($pr | length), titles: ($pr | titles)}}')
+    emit_compact "$out"
+    return 0
+  fi
+
   jq -n \
     --slurpfile issues "$issues_f" \
     --slurpfile prs "$prs_f" \
@@ -276,6 +338,17 @@ cmd_contributors() {
   printf '%s' "$commits" >"$commits_f"
   check_array_response "$commits_f" commits
   check_cap "$(_json_len "$commits_f")" commits
+
+  # Compact mode reads only the commit total: the issues fetch below would add a call (and a
+  # failure surface) for a field the compact line never carries.
+  if compact_on; then
+    _COMPACT_CAUSE="compact-projection-failed"
+    local out
+    out=$(jq -nc --slurpfile commits "$commits_f" \
+      '{commit_total: ([($commits | add // [])[] | .author.login // .commit.author.name | select(. != null)] | length)}')
+    emit_compact "$out"
+    return 0
+  fi
 
   # Get contributors from recent issues/PRs
   local issues
@@ -344,7 +417,11 @@ cmd_discussions() {
   local result
   result=$(gh api graphql -f query="$query" -f owner="$owner" -f repo="$repo_name" 2>&1) || {
     # Discussions not enabled -- return empty
-    if echo "$result" | grep -qi "not found\|not accessible\|discussions are not enabled"; then
+    if grep -qi "not found\|not accessible\|discussions are not enabled" <<<"$result"; then
+      if compact_on; then
+        emit_compact '{"titles":[]}'
+        return 0
+      fi
       echo '{"discussions": [], "note": "Discussions not enabled for this repository"}'
       return 0
     fi
@@ -352,6 +429,20 @@ cmd_discussions() {
     exit 1
   }
   check_rate_limit "$result"
+
+  if compact_on; then
+    _COMPACT_CAUSE="compact-projection-failed"
+    local out
+    out=$(jq -c --arg since "$since" \
+      --argjson max "$COMPACT_MAX_ITEMS" \
+      --argjson tmax "$COMPACT_TITLE_MAX" \
+      '{titles: [.data.repository.discussions.nodes
+                 | map(select(.updatedAt >= $since))
+                 | sort_by(.updatedAt) | reverse | .[:$max][]
+                 | (.title // "" | tostring | gsub("[[:cntrl:]\\p{Cf}\u2028\u2029]"; " "))[:$tmax]]}' <<<"$result")
+    emit_compact "$out"
+    return 0
+  fi
 
   # Filter to recent discussions and format
   echo "$result" | jq --arg since "$since" '{
@@ -411,15 +502,56 @@ cmd_repo_stats() {
   star_err=$(mktemp)
   _TMPFILES+=("$star_err")
 
+  # A READ-scoped installation token cannot list stargazers: GitHub answers 403
+  # "Resource not accessible by integration" unless the token carries contents:write
+  # (measured 2026-10-06 against REST and GraphQL; no read-level permission unlocks
+  # it). The cron spawns this script with a read-only token on purpose, so that
+  # response is the token's known limit and not a collector fault: the count is
+  # reported as null (unavailable) while everything else in repo-stats stays valid.
+  # Any other failure is still a hard failure.
+  local star_unavailable=0
   if ! gh api "repos/${repo}/stargazers?per_page=${PER_PAGE}" \
     -H "Accept: application/vnd.github.star+json" \
     --paginate >"$star_f" 2>"$star_err"; then
-    _CAUSE="stargazers-fetch-failed"
-    echo "GITHUB_COLLECTOR_CAUSE=stargazers: $(head -c 200 "$star_err" | tr '\n' ' ')" >&2
-    echo "Error: Failed to fetch stargazers" >&2
-    exit 1
+    # Both conjuncts: the message alone also appears behind other statuses, and a bare 403
+    # is also what a rate limit or SSO block prints. gh prints
+    # `gh: Resource not accessible by integration (HTTP 403)` on stderr (measured).
+    if grep -qi 'Resource not accessible by integration' "$star_err" && grep -q 'HTTP 403' "$star_err"; then
+      star_unavailable=1
+      # Recorded in the sidecar so the HANDLER knows without trusting the model: it forces
+      # the github row to partial/auth while this warn is present (cron-community-monitor.ts).
+      _CAP_WARN="stargazers_unavailable"
+      echo '[]' >"$star_f"
+      echo "WARN: stargazers are not readable with this token; new_stargazers_count is null" >&2
+    else
+      _CAUSE="stargazers-fetch-failed"
+      echo "GITHUB_COLLECTOR_CAUSE=stargazers: $(head -c 200 "$star_err" | tr '\n' ' ')" >&2
+      echo "Error: Failed to fetch stargazers" >&2
+      exit 1
+    fi
   fi
   check_array_response "$star_f" stargazers
+
+  if compact_on; then
+    _COMPACT_CAUSE="compact-projection-failed"
+    local out
+    out=$(jq -nc \
+      --argjson repo_data "$repo_data" \
+      --slurpfile stargazers "$star_f" \
+      --arg since "$since" \
+      --argjson unavailable "$star_unavailable" \
+      'def num: if type == "number" then . else error("compact: numeric field missing") end;
+      (($stargazers | add // []) | map(select(.starred_at >= $since)) | length) as $new
+      | {
+        stargazers_count: ($repo_data.stargazers_count | num),
+        forks_count: ($repo_data.forks_count | num),
+        subscribers_count: ($repo_data.subscribers_count | num),
+        new_stargazers_count: (if $unavailable == 1 then null else $new end),
+        stargazers_unavailable: ($unavailable == 1)
+      }')
+    emit_compact "$out"
+    return 0
+  fi
 
   # Combine and filter
   jq -n \
@@ -428,6 +560,7 @@ cmd_repo_stats() {
     --arg since "$since" \
     --arg repo "$repo" \
     --argjson days "$days" \
+    --argjson unavailable "$star_unavailable" \
     '($stargazers | add // []) as $sg
     | ([$sg[] | select(.starred_at >= $since) | {login: .user.login, starred_at}]) as $new
     | {
@@ -437,8 +570,9 @@ cmd_repo_stats() {
       forks_count: $repo_data.forks_count,
       watchers_count: $repo_data.watchers_count,
       subscribers_count: $repo_data.subscribers_count,
-      new_stargazers: $new,
-      new_stargazers_count: ($new | length),
+      new_stargazers: (if $unavailable == 1 then null else $new end),
+      new_stargazers_count: (if $unavailable == 1 then null else ($new | length) end),
+      stargazers_unavailable: ($unavailable == 1),
       period_days: $days
     }'
 }
@@ -475,6 +609,26 @@ cmd_fetch_interactions() {
     exit 1
   fi
   check_array_response "$tmpfile" issue-comments
+
+  if compact_on; then
+    _COMPACT_CAUSE="compact-projection-failed"
+    local out
+    # Counts computed here so no login or comment text reaches the model.
+    out=$(jq -nc --slurpfile comments "$tmpfile" \
+      '[($comments | add // [])[]
+        | select(
+            (.author_association == "NONE" or
+             .author_association == "CONTRIBUTOR" or
+             .author_association == "FIRST_TIMER" or
+             .author_association == "FIRST_TIME_CONTRIBUTOR") and
+            (.user.type != "Bot") and
+            (.user.login | test("\\[bot\\]$") | not)
+          )] as $i
+      | {external_contributors: ([$i[] | .user.login] | unique | length),
+         interactions_count: ($i | length)}')
+    emit_compact "$out"
+    return 0
+  fi
 
   # Filter to external users only, exclude bots
   jq -n --slurpfile comments "$tmpfile" --arg since "$since" --arg repo "$repo" \
@@ -527,6 +681,11 @@ main() {
   # how every failure branch below terminates.
   _COMMAND="$command"
   trap _on_exit EXIT
+
+  # Inside the cron (status dir set) the handler is expected to have set the flag.
+  if [[ -n "${SOLEUR_COLLECTOR_STATUS_DIR:-}" && "${SOLEUR_COLLECTOR_COMPACT:-}" != "1" ]]; then
+    _COMPACT_OFF=1
+  fi
 
   validate_gh
 

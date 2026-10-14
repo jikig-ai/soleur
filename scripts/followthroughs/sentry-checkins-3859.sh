@@ -8,7 +8,7 @@
 #   1 = FAIL (criteria not met → sweeper leaves open, comments)
 #   * = TRANSIENT (e.g. network error → sweeper leaves open, retries next day)
 #
-# Required env: SENTRY_AUTH_TOKEN
+# Required env: SENTRY_ACTIONS_RO_TOKEN
 #
 # Close criteria (from #3859 body):
 #   - Every slug returns 200 on the checkins API
@@ -25,17 +25,21 @@ set -uo pipefail
 # without blocking a debugging session.
 case "$-" in
   *x*)
-    if [ -n "${SENTRY_AUTH_TOKEN:+x}" ]; then
-      printf '[FATAL] refusing to run under xtrace with a live credential set (SENTRY_AUTH_TOKEN). Unset it to trace safely (see #7797).
+    if [ -n "${SENTRY_ACTIONS_RO_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to run under xtrace with a live credential set (SENTRY_ACTIONS_RO_TOKEN). Unset it to trace safely (see #7797).
 ' >&2
       exit 78
     fi
     ;;
 esac
 
-if [[ -z "${SENTRY_AUTH_TOKEN:-}" ]]; then echo "TRANSIENT: SENTRY_AUTH_TOKEN not set" >&2; exit 2; fi
+# Token-shape guard: a newline in the token would inject a curl config directive on the stdin
+# channel below, and an empty one would send the request headerless. Never echoes the value.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+if ! _bearer_ok "${SENTRY_ACTIONS_RO_TOKEN:-}"; then echo "TRANSIENT: SENTRY_ACTIONS_RO_TOKEN unusable" >&2; exit 2; fi
 
-ORG="jikigai"
+# `jikigai-eu`: the legacy `jikigai` org was cancelled vendor-side and 403s for every credential.
+ORG="jikigai-eu"
 API="https://sentry.io/api/0"
 SLUGS=(
   scheduled-terraform-drift
@@ -54,10 +58,10 @@ errors=0
 
 for slug in "${SLUGS[@]}"; do
   total_count=$((total_count + 1))
-  http_code=$(curl -sS -o /tmp/ck.json -w '%{http_code}' \
-    --max-time 30 \
-    -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
-    "${API}/organizations/${ORG}/monitors/${slug}/checkins/?limit=5" || echo "000")
+  http_code=$(curl --disable --noproxy '*' -sS -o /tmp/ck.json -w '%{http_code}' \
+    --max-time 30 --config - \
+    "${API}/organizations/${ORG}/monitors/${slug}/checkins/?limit=5" \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_ACTIONS_RO_TOKEN") || echo "000")
 
   if [[ "$http_code" != "200" ]]; then
     echo "FAIL: ${slug} — HTTP ${http_code}"

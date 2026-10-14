@@ -1,11 +1,13 @@
 "use client";
 
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
-import { useRouter } from "next/navigation";
+import { usePendingRouter } from "@/hooks/use-pending-router";
+import { Button } from "@/components/ui/button";
 import useSWR from "swr";
 import { createClient } from "@/lib/supabase/client";
 import { swrKeys, jsonFetcher } from "@/lib/swr-config";
 import { isRevocationBounce } from "@/lib/auth/revocation-bounce";
+import { reportSilentFallback } from "@/lib/client-observability";
 import { useConversations } from "@/hooks/use-conversations";
 import type { ArchiveFilter } from "@/hooks/use-conversations";
 import { useOnboarding } from "@/hooks/use-onboarding";
@@ -14,6 +16,10 @@ import { ErrorCard } from "@/components/ui/error-card";
 import { STATUS_LABELS } from "@/lib/types";
 import { FOUNDATION_MIN_CONTENT_BYTES } from "@/lib/kb-constants";
 import { validateFiles } from "@/lib/validate-files";
+import {
+  ATTACHMENT_ACCEPT,
+  attachmentTileLabel,
+} from "@/lib/attachment-constants";
 import { setPendingFiles } from "@/lib/pending-attachments";
 import type { ConversationStatus } from "@/lib/types";
 import type { DomainLeaderId } from "@/server/domain-leaders";
@@ -59,13 +65,10 @@ interface PathStat {
 // ADR-067: the dashboard derives foundation-card completion only from a KNOWN
 // set of KB paths, so it fetches /api/dashboard/foundation-status (a targeted
 // stat) instead of the whole-KB-tree walk (/api/kb/tree buildTree()) that used
-// to gate first paint. It caches under its OWN key (NOT swrKeys.kbTree(), whose
-// richer payload + distinct error mapping would cross-contaminate this
-// consumer). Per-route instant warm render still holds.
-const DASHBOARD_FOUNDATION_STATUS_KEY = [
-  "/api/dashboard/foundation-status",
-  "dashboard",
-] as const;
+// to gate first paint. It caches under swrKeys.dashboardFoundationStatus()
+// (NOT swrKeys.kbTree(), whose richer payload + distinct error mapping would
+// cross-contaminate this consumer). Per-route instant warm render still holds.
+const DASHBOARD_FOUNDATION_STATUS_KEY = swrKeys.dashboardFoundationStatus();
 
 // Carries the dashboard's foundation-status error states through SWR's single
 // error channel (503 → "provisioning", everything else → "error"; 401 →
@@ -106,7 +109,7 @@ const DOMAIN_OPTIONS: { value: string; label: string }[] = [
 ];
 
 export default function DashboardPage() {
-  const router = useRouter();
+  const router = usePendingRouter();
   const {
     completeOnboarding,
     runtimeExplainerDismissed,
@@ -141,8 +144,10 @@ export default function DashboardPage() {
   // ---------------------------------------------------------------------------
 
   // ADR-067: cache the foundation status so returning to the dashboard renders
-  // instantly. The skeleton gates on `foundationData === undefined && !err`
-  // (GAP F) — a warm remount keeps it defined, so the skeleton never re-shows.
+  // instantly. A warm remount keeps `foundationData` defined, so the render
+  // branches below take their resolved shapes immediately (GAP F) — the fetch
+  // no longer gates the page at all (#5654); it only feeds foundation-card
+  // checkmarks and the vision-existence predicates.
   // This is a targeted stat of ~10 known paths, not a whole-tree walk, so it
   // resolves far faster than the old /api/kb/tree buildTree() consumer.
   const fetchFoundationStatus = useCallback(async (): Promise<{
@@ -161,10 +166,21 @@ export default function DashboardPage() {
     if (res.status === 503) throw new DashFoundationError("provisioning");
     // 404 = no workspace / not connected — fall through to Command Center.
     if (res.status === 404) return { paths: {} };
-    if (!res.ok) throw new DashFoundationError("error");
+    if (!res.ok) {
+      // A non-503 failure renders no dedicated surface (the page falls
+      // through to the inbox shell — accepted per the ungating work), so
+      // without this mirror a sustained foundation-status outage is
+      // operator-invisible: blank UI, no error state, no signal.
+      reportSilentFallback(new DashFoundationError("error"), {
+        feature: "dashboard",
+        op: "foundation-status",
+        extra: { status: res.status },
+      });
+      throw new DashFoundationError("error");
+    }
     const data = await res.json();
     return { paths: (data?.paths as Record<string, PathStat>) ?? {} };
-  }, [router]);
+  }, []);
 
   const { data: foundationData, error: foundationErr } = useSWR(
     DASHBOARD_FOUNDATION_STATUS_KEY,
@@ -173,8 +189,6 @@ export default function DashboardPage() {
   // 401 (kind "redirect") holds the skeleton through the /login navigation.
   const isRedirecting401 =
     foundationErr instanceof DashFoundationError && foundationErr.kind === "redirect";
-  const kbLoading =
-    foundationData === undefined && (foundationErr === undefined || isRedirecting401);
   const kbError: "provisioning" | "error" | null =
     foundationErr instanceof DashFoundationError
       ? foundationErr.kind === "redirect"
@@ -245,17 +259,19 @@ export default function DashboardPage() {
     noActiveRepo ? swrKeys.dashboardOrphanCount() : null,
     async (): Promise<number> => {
       const supabase = createClient();
-      const { data: auth } = await supabase.auth.getUser();
-      if (!auth.user) return 0;
+      // getSession() is the local cookie read — getUser() was a remote RTT
+      // for an id-only read (Phase 5 pattern; authorization stays RLS-side).
+      const { data: sessionData } = await supabase.auth.getSession();
+      const sessionUserId = sessionData?.session?.user?.id;
+      if (!sessionUserId) return 0;
       const { count } = await supabase
         .from("conversations")
         .select("id", { count: "exact", head: true })
-        .eq("user_id", auth.user.id)
+        .eq("user_id", sessionUserId)
         .not("repo_url", "is", null);
       return count ?? 0;
     },
   );
-  const repoDisconnected = noActiveRepo;
   const orphanedCount = orphanCount ?? 0;
 
   const visionExists = foundationPaths["overview/vision.md"]?.exists ?? false;
@@ -279,15 +295,25 @@ export default function DashboardPage() {
   // ---------------------------------------------------------------------------
 
   const [firstRunAttachments, setFirstRunAttachments] = useState<FirstRunAttachment[]>([]);
+  // feat-ui-action-feedback: the exempt send submit had no re-entry guard —
+  // a second Enter before the soft nav commits re-fires completeOnboarding +
+  // the vision POST. Ref (sync) + state (visual disable).
+  const [sendSubmitting, setSendSubmitting] = useState(false);
+  const sendSubmittingRef = useRef(false);
   const [attachError, setAttachError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragOver, setIsDragOver] = useState(false);
 
   const validateAndAddFiles = useCallback(
     (files: FileList | File[]) => {
+      // Once the message is submitted the staged set has been handed to the
+      // chat page (setPendingFiles); a file added after that would be dropped.
+      if (sendSubmittingRef.current) return;
       const { valid, error } = validateFiles(files, firstRunAttachments.length);
 
-      if (error) setAttachError(error);
+      // The rejection message must survive a mixed batch: clearing it whenever
+      // any file was valid hid the reason the other file(s) were dropped.
+      setAttachError(error ?? null);
       if (valid.length > 0) {
         setFirstRunAttachments((prev) => [
           ...prev,
@@ -297,7 +323,6 @@ export default function DashboardPage() {
             preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined,
           })),
         ]);
-        setAttachError(null);
       }
     },
     [firstRunAttachments.length],
@@ -361,13 +386,16 @@ export default function DashboardPage() {
   const handleFirstRunSend = useCallback(
     (e: React.FormEvent<HTMLFormElement>) => {
       e.preventDefault();
+      if (sendSubmittingRef.current) return;
       const form = e.currentTarget;
       const input = form.elements.namedItem("idea") as HTMLInputElement;
       const message = input?.value?.trim();
       if (!message && firstRunAttachments.length === 0) return;
+      sendSubmittingRef.current = true;
+      setSendSubmitting(true);
       completeOnboarding();
 
-      // Store pending files for the chat page to upload after conversation creation
+      // Store pending files for the chat page to upload before its single first send
       if (firstRunAttachments.length > 0) {
         setPendingFiles(firstRunAttachments.map((a) => a.file));
         // Revoke preview URLs — the files are now in the singleton
@@ -387,6 +415,8 @@ export default function DashboardPage() {
 
       const params = new URLSearchParams();
       if (message) params.set("msg", message);
+      // First-run marker: the chat page consumes staged files only with fr=1.
+      if (firstRunAttachments.length > 0) params.set("fr", "1");
       router.push(`/dashboard/chat/new?${params.toString()}`);
     },
     [router, completeOnboarding, firstRunAttachments],
@@ -395,10 +425,15 @@ export default function DashboardPage() {
   const hasActiveFilter = statusFilter !== null || domainFilter !== null || archiveFilter !== "active";
 
   // ---------------------------------------------------------------------------
-  // Loading skeleton (shown while foundation status loads)
+  // Redirect-hold skeleton (foundation fetch bounced to /login)
   // ---------------------------------------------------------------------------
 
-  if (kbLoading) {
+  // Only the revocation-bounce hold keeps a whole-page skeleton — it exists to
+  // hold paint during the /login navigation. A merely-PENDING foundation
+  // fetch no longer gates the page (#5654): it falls through to the inbox
+  // structure below, and the first-run / command-center branches carry their
+  // own `foundationData !== undefined` guards so neither can flash early.
+  if (isRedirecting401) {
     return (
       <div className="mx-auto flex min-h-[calc(100dvh-4rem)] max-w-3xl flex-col items-center justify-center px-4 py-10">
         <div className="mb-6 h-12 w-12 animate-pulse rounded-lg bg-amber-600/50" />
@@ -434,7 +469,23 @@ export default function DashboardPage() {
   // a mobile top-bar indicator is out of scope here — it needs its own
   // wireframe). A statutory clock is thus no longer hidden by the
   // conversation-less first-run screen on desktop, and is one tap away on mobile.
-  if (!kbError && !visionExists && conversations.length === 0 && !hasActiveFilter) {
+  //
+  // Gating (Phase 4, #5654): `foundationData !== undefined` — vision existence
+  // must be CONFIRMED, not defaulted-false while the fetch is pending (an
+  // existing user with a vision must never flash this screen); `!loading` —
+  // conversations must be resolved so a user WITH conversations never sees the
+  // first-run form while the list is in flight. The 2026-04-10 learning removed
+  // `!loading` here because mocked CI hangs stranded a Command-Center
+  // assertion — this re-add is deliberately narrow: a hung conversation fetch
+  // now yields the inbox section skeletons, not the wrong screen.
+  if (
+    foundationData !== undefined &&
+    !loading &&
+    !kbError &&
+    !visionExists &&
+    conversations.length === 0 &&
+    !hasActiveFilter
+  ) {
     return (
       <div className="mx-auto flex min-h-[calc(100dvh-4rem)] max-w-3xl flex-col items-center justify-center px-4 py-10">
         <p className="mb-3 text-xs font-medium tracking-widest text-soleur-accent-gold-fg">
@@ -446,7 +497,7 @@ export default function DashboardPage() {
         <p className="mb-10 max-w-md text-center text-sm text-soleur-text-secondary">
           Describe your startup idea and your AI organization will get to work.
         </p>
-        {repoDisconnected && orphanedCount > 0 && (
+        {noActiveRepo && orphanedCount > 0 && (
           <p
             data-testid="disconnected-orphans-hint"
             className="mb-6 max-w-md text-center text-xs text-soleur-text-muted"
@@ -474,6 +525,7 @@ export default function DashboardPage() {
               {firstRunAttachments.map((att) => (
                 <div
                   key={att.id}
+                  title={att.file.name}
                   className="flex items-center gap-1.5 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-2 px-2 py-1.5"
                 >
                   {att.preview ? (
@@ -482,22 +534,32 @@ export default function DashboardPage() {
                       alt=""
                       className="h-8 w-8 rounded object-cover"
                     />
+                  ) : att.file.type.startsWith("text/") ? (
+                    // Text-only label for md/txt (intake canonicalizes file.type,
+                    // so this is the extension of the resolved type).
+                    <span
+                      data-testid="first-run-attachment-label"
+                      className="flex h-8 w-8 items-center justify-center rounded bg-soleur-bg-surface-2 text-xs text-soleur-text-secondary"
+                    >
+                      {attachmentTileLabel(att.file.type)}
+                    </span>
                   ) : (
                     <svg className="h-4 w-4 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
                     </svg>
                   )}
                   <span className="max-w-[120px] truncate text-xs text-soleur-text-secondary">{att.file.name}</span>
-                  <button
+                  <Button
+                    variant="ghost"
                     type="button"
                     onClick={() => removeFirstRunAttachment(att.id)}
-                    className="ml-1 text-soleur-text-muted hover:text-soleur-text-primary"
+                    className="ml-1 h-6 w-6 hover:text-soleur-text-primary"
                     aria-label={`Remove ${att.file.name}`}
                   >
                     <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
                     </svg>
-                  </button>
+                  </Button>
                 </div>
               ))}
             </div>
@@ -505,7 +567,7 @@ export default function DashboardPage() {
 
           {/* Error message */}
           {attachError && (
-            <p className="mb-2 text-xs text-red-400">{attachError}</p>
+            <p role="alert" className="mb-2 text-xs text-red-400">{attachError}</p>
           )}
 
           {/* Unified input box: the paperclip + send controls live *inside* one
@@ -514,20 +576,21 @@ export default function DashboardPage() {
               dashboard landing prompt matches the chat and KB surfaces. */}
           <div className="flex items-end gap-1.5 rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1 px-2 py-1.5 transition-shadow focus-within:border-soleur-text-secondary">
             {/* Paperclip / attach button */}
-            <button
+            <Button
+              variant="ghost"
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="flex h-[36px] w-[36px] shrink-0 items-center justify-center rounded-lg text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
+              className="h-[36px] w-[36px] shrink-0 hover:text-soleur-text-primary"
               aria-label="Attach files"
             >
               <svg className="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="m18.375 12.739-7.693 7.693a4.5 4.5 0 0 1-6.364-6.364l10.94-10.94A3 3 0 1 1 19.5 7.372L8.552 18.32m.009-.01-.01.01m5.699-9.941-7.81 7.81a1.5 1.5 0 0 0 2.112 2.13" />
               </svg>
-            </button>
+            </Button>
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/png,image/jpeg,image/gif,image/webp,application/pdf"
+              accept={ATTACHMENT_ACCEPT}
               multiple
               className="hidden"
               onChange={(e) => {
@@ -555,7 +618,10 @@ export default function DashboardPage() {
             </div>
             <button
               type="submit"
-              className="flex h-[36px] w-[36px] shrink-0 items-center justify-center rounded-lg bg-amber-600 text-soleur-text-on-accent transition-colors hover:bg-amber-500"
+              data-button-exempt="flat amber-600 send affordance inside the composite attach/input/send box — fill is not a Button variant"
+              disabled={sendSubmitting}
+              aria-busy={sendSubmitting}
+              className="flex h-[36px] w-[36px] shrink-0 items-center justify-center rounded-lg bg-amber-600 text-soleur-text-on-accent transition-colors hover:bg-amber-500 disabled:opacity-60"
               aria-label="Send message"
             >
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -575,7 +641,10 @@ export default function DashboardPage() {
   // placeholder or suggested prompts depending on foundation status.
   // ---------------------------------------------------------------------------
 
-  if (conversations.length === 0 && !hasActiveFilter) {
+  // `foundationData !== undefined && !loading` — "No conversations yet" must
+  // not flash while the foundation fetch or the conversation list is still in
+  // flight; pending state falls through to the inbox shell below.
+  if (foundationData !== undefined && !loading && conversations.length === 0 && !hasActiveFilter) {
     return (
       <div className={`mx-auto flex min-h-[calc(100dvh-4rem)] max-w-3xl flex-col items-center px-4 py-10 ${visionExists && !allTasksComplete ? "pt-10" : "justify-center"}`}>
         {/* Foundation + operational cards (hidden when all complete) */}
@@ -600,14 +669,15 @@ export default function DashboardPage() {
           Start a conversation to put your agents to work.
         </p>
 
-        <button
+        <Button
+          variant="gold"
           type="button"
           onClick={() => router.push("/dashboard/chat/new")}
           data-tour-id="action:new-conversation"
-          className="mb-10 rounded-lg bg-gradient-to-r from-soleur-accent-gradient-start to-soleur-accent-gradient-end px-6 py-3 text-sm font-semibold text-soleur-text-on-accent transition-opacity hover:opacity-90"
+          className="mb-10 font-semibold"
         >
           New conversation
-        </button>
+        </Button>
 
         <LeaderStrip onLeaderClick={handleLeaderClick} getIconPath={getIconPath} />
       </div>
@@ -615,7 +685,10 @@ export default function DashboardPage() {
   }
 
   // ---------------------------------------------------------------------------
-  // Command Center — inbox (conversations exist)
+  // Command Center — inbox (conversations exist, OR still loading, OR
+  // foundation fetch pending). A foundation-error cold load (non-503:
+  // foundationData stays undefined forever, zero conversations) also lands on
+  // this inbox shell — accepted behavior per the Phase-4 render contract.
   // ---------------------------------------------------------------------------
 
   return (
@@ -658,12 +731,43 @@ export default function DashboardPage() {
         />
       )}
 
+      {/* Foundation-status pending: reserve FoundationSection's slot with a
+          fixed-height shimmer so its pop-in cannot shift the conversation
+          list (no-layout-shift invariant). Only while conversations are
+          already present (a resolved list with rows); a pending/errored
+          foundation fetch or an empty list renders no reservation.
+          Heights mirror FoundationSection's structure, measured from its
+          classnames — FOUNDATIONS heading (text-xs ≈16px + mb-2), the
+          description line (text-sm ≈20px + mb-4), and FoundationCards'
+          grid-cols-2 gap-3 md:grid-cols-4 cells (p-4 + h-5 avatar + text
+          rows ≈ 120px each, allCards-count cells — while pending every
+          card reads not-done so the worst-case grid is reserved). */}
+      {foundationData === undefined && !foundationErr && conversations.length > 0 && (
+        <div
+          data-testid="foundation-section-shimmer"
+          aria-hidden="true"
+          className="mb-6 animate-pulse"
+        >
+          <div className="mb-2 h-4 w-28 rounded bg-soleur-bg-surface-2" />
+          <div className="mb-4 h-5 w-72 max-w-full rounded bg-soleur-bg-surface-2" />
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            {allCards.map((card) => (
+              <div
+                key={card.id}
+                className="h-[120px] rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/50"
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Filter bar */}
       <div className="mb-4 flex flex-wrap items-center gap-2">
         {/* Archive toggle */}
         <div className="flex rounded-lg border border-soleur-border-default overflow-hidden">
           <button
             type="button"
+            data-button-exempt="archive-filter segmented toggle pair — per-option active treatment inside one shared bordered control"
             onClick={() => setArchiveFilter("active")}
             className={`min-h-[44px] px-3 py-2 text-sm font-medium transition-colors ${
               archiveFilter === "active"
@@ -675,6 +779,7 @@ export default function DashboardPage() {
           </button>
           <button
             type="button"
+            data-button-exempt="archive-filter segmented toggle pair — per-option active treatment inside one shared bordered control"
             onClick={() => setArchiveFilter("archived")}
             className={`min-h-[44px] px-3 py-2 text-sm font-medium transition-colors ${
               archiveFilter === "archived"
@@ -720,14 +825,15 @@ export default function DashboardPage() {
 
         <div className="flex-1" />
 
-        <button
+        <Button
+          variant="gold"
           type="button"
           onClick={() => router.push("/dashboard/chat/new")}
           data-tour-id="action:new-conversation"
-          className="min-h-[44px] rounded-lg bg-gradient-to-r from-soleur-accent-gradient-start to-soleur-accent-gradient-end px-4 py-2 text-sm font-semibold text-soleur-text-on-accent transition-opacity hover:opacity-90"
+          className="min-h-[44px] font-semibold"
         >
           + New conversation
-        </button>
+        </Button>
       </div>
 
       {/* Loading state */}
@@ -766,13 +872,14 @@ export default function DashboardPage() {
           <p className="mb-4 text-sm text-soleur-text-secondary">
             No conversations match your filters.
           </p>
-          <button
+          <Button
+            variant="outlined"
             type="button"
             onClick={clearFilters}
-            className="rounded-lg border border-soleur-border-default px-4 py-2 text-sm text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2"
+            className="text-soleur-text-secondary"
           >
             Clear filters
-          </button>
+          </Button>
         </div>
       )}
 
@@ -802,17 +909,18 @@ function LeaderStrip({ onLeaderClick, getIconPath }: { onLeaderClick: (leaderId:
       </p>
       <div className="flex flex-wrap justify-center gap-3">
         {ROUTABLE_DOMAIN_LEADERS.map((leader) => (
-          <button
+          <Button
             key={leader.id}
+            variant="ghost"
             type="button"
             onClick={() => onLeaderClick(leader.id)}
-            className="group flex items-center gap-1.5 rounded-lg px-2 py-1 transition-colors hover:bg-soleur-bg-surface-2/50"
+            className="group gap-1.5 hover:bg-soleur-bg-surface-2/50"
           >
             <LeaderAvatar leaderId={leader.id} size="sm" customIconPath={getIconPath(leader.id as DomainLeaderId)} />
             <span className="text-xs text-soleur-text-muted group-hover:text-soleur-text-secondary">
               {leader.name}
             </span>
-          </button>
+          </Button>
         ))}
       </div>
     </div>

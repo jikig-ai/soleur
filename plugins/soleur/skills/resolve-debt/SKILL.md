@@ -3,11 +3,15 @@ name: resolve-debt
 description: "This skill should be used when triaging or closing open entries in the technical-debt ledger. Lists open debt, walks the operator through closing one with a linked GitHub issue."
 ---
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 # Resolve Tech-Debt Ledger Entries
 
-Operator-facing surface for the `knowledge-base/project/learnings/technical-debt/` ledger. The ledger is populated reactively by `/soleur:compound`; this skill is the read + close half of the loop.
+Operator-facing surface for the `knowledge-base/project/learnings/technical-debt/` ledger. The ledger is populated reactively by `soleur:compound`; this skill is the read + close half of the loop.
 
-Complement: [/soleur:harvest-debt](../harvest-debt/SKILL.md) surfaces inline `SOLEUR-DEBT:` markers in source code (the deferrals that have not yet been promoted into this ledger). harvest surfaces; compound promotes; this skill closes.
+Complement: [soleur:harvest-debt](../harvest-debt/SKILL.md) surfaces inline `SOLEUR-DEBT:` markers in source code (the deferrals that have not yet been promoted into this ledger). harvest surfaces; compound promotes; this skill closes.
 
 Four modes:
 
@@ -58,7 +62,7 @@ Prints a usage block enumerating the three modes; exit 0.
 
 ## Frontmatter Contract
 
-- `status`: required, enum `open | resolved | wont-fix`. Default `open` for new entries (set by `/soleur:compound`'s `resolution-template.md`).
+- `status`: required, enum `open | resolved | wont-fix`. Default `open` for new entries (set by `soleur:compound`'s `resolution-template.md`).
 - `linked_issue`: required when `status: resolved`; optional when `status: wont-fix`; forbidden when `status: open`. Stored as a YAML integer, no `#` prefix.
 
 Why `status` instead of "absence-of-`linked_issue`": `wont-fix` is the load-bearing discriminator of record. Without `status`, there is no way to express "we know about this debt and have decided not to fix it." Future schema simplification must preserve `status` for this reason.

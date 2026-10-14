@@ -138,7 +138,7 @@ verdict "$rc" "the rollback declares no cloudflare_record.pages_apex (the addres
 # has nothing to do with.
 rc=1
 awk '/^resource "cloudflare_record" "github_pages"/,/^}/' "$SBX/rollback.tf" \
-  | grep -qE '^  type    = "A"$' && rc=0
+  | grep -cE '^  type    = "A"$' >/dev/null && rc=0
 verdict "$rc" "the apex record itself returns to type A"
 
 rc=1; grep -qF 'content = "jikig-ai.github.io"' "$SBX/rollback.tf" && rc=0

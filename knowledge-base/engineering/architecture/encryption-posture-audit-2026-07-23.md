@@ -91,7 +91,7 @@ The machine-readable ledger was **already correct** and needed no change —
 `scripts/encryption-posture-ledger.json` carries `hcloud_volume.registry` with
 `at_rest.mechanism: "luks"`, so Layer A has been enforcing the accurate posture. Only this
 prose row lagged. Note the ledger still records
-`live_verification: unavailable:no zot-host at-rest posture probe yet` — the recut is
+`live_verification: unavailable:no zot-host at-rest posture probe yet` *[Superseded 2026-09-21 by PR #8423: the row reads `available`.]* — the recut is
 evidenced by the apply run, not by a standing posture probe, so the host-dimension
 limitation described in the method note above still applies to this row.
 
@@ -105,3 +105,7 @@ Parent claim-unlock gate: **#6893**. Children: **#6894** (inngest_redis, P2), **
 (registry, P3), **#6896** (R2 provider-managed attestations, P3 — SOC 2 Type II named) / **#6911** (non-R2 provider attestations, P3), **#6897** (superseded plaintext
 volumes + zot HTTP link + session-store posture + legal reconcile, P3). All `Ref #6588`, never
 `Closes`. The audit PR remediates none of them.
+
+### `redis.session_store` — designed, not provisioned (2026-10-12)
+
+The ledger row `redis.session_store` (a plaintext exception, "at-rest posture unconfirmed from code alone") described a store that does not exist. Measured 2026-10-12: the Hetzner Cloud API (read-only token) lists exactly 5 servers and 6 volumes, none a session Redis; `apps/web-platform/package.json` and the lockfile carry no Redis client (only `@opentelemetry/instrumentation-ioredis`, which is instrumentation); `server/stream-replay-buffer.ts` is an in-memory per-process ring buffer. ADR-068 places the session Redis in Phase 4a (post-GA, unbuilt), and `model.c4` `sessionStore` is a design element. The row and its `non_iac_stores` catalog entry were removed together. The Phase 4a PR must add a ledger row when it provisions the store; ADR-068 records that obligation. The dated snapshot row above is left as measured on 2026-07-23.

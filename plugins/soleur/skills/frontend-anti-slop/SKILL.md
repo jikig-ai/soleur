@@ -4,6 +4,10 @@ description: This skill should be used when auditing React/Next.js source for Ha
 version: 1.0.0
 ---
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 # frontend-anti-slop
 
 A deterministic source-static audit for React/Next.js components that flags AI-default visual and microinteraction patterns adapted from [Nutlope/hallmark](https://github.com/Nutlope/hallmark) (MIT). v1 ships 18 Tier 1 ripgrep gates over `apps/web-platform/{app,components}/**/*.{tsx,jsx,css}`, `apps/web-platform/server/**/*.{ts,tsx}`, and the Eleventy docs site. v1.5 (post-calibration) adds a Tier 2 LLM-judgment reviewer agent for the ~12 gates regex cannot resolve.
@@ -13,7 +17,7 @@ A deterministic source-static audit for React/Next.js components that flags AI-d
 ## When this skill fires
 
 - Invoked by `soleur:review` when a PR touches `apps/web-platform/(app|components)/.*\.(tsx|jsx|css)$`. See `plugins/soleur/skills/review/SKILL.md § Anti-slop Scanner Hook`.
-- Manual: `/soleur:frontend-anti-slop --paths <files-or-dirs> [--dry-run|--json] [--rule <ID>]`.
+- Manual: `soleur:frontend-anti-slop --paths <files-or-dirs> [--dry-run|--json] [--rule <ID>]`.
 
 The scanner is **non-blocking by design** — exit code is 0 regardless of finding count. v1 ships in calibration mode: findings surface in PR review output for operator review, no auto-filing to GitHub issues. Calibration unlocks v1.5 (auto-file + Tier 2 agent) at ≤ 10% FP rate over ≥ 20 findings ≥ 2 weeks.
 

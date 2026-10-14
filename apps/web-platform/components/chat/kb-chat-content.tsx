@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
 import { ChatSurface } from "@/components/chat/chat-surface";
 import { useKbChat } from "@/components/kb/kb-chat-context";
 import { useKbChatQuoteBridge } from "@/components/kb/kb-chat-quote-bridge";
@@ -187,7 +188,8 @@ export function KbChatContent({
               {filename}
             </span>
           </div>
-          <button
+          <Button
+            variant="ghost"
             type="button"
             aria-label="Close panel"
             onClick={onClose}
@@ -197,7 +199,7 @@ export function KbChatContent({
               <line x1="18" y1="6" x2="6" y2="18" />
               <line x1="6" y1="6" x2="18" y2="18" />
             </svg>
-          </button>
+          </Button>
         </header>
       )}
       {resumedBanner && (

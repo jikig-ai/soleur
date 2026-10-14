@@ -19,7 +19,8 @@
 # this exists to reject: a host that emits nothing at all would auto-PASS. Absence is used here
 # only to DOWNGRADE a positive, never to grant one.
 #
-# WHY BOTH FIELDS. `server_active=active` alone means systemd considers the unit running; the
+# WHY ALL THREE FIELDS (#8015 added the third). `server_active=active` alone means systemd
+# considers the unit running; the
 # #7674 diagnosis is that the unit can be stopped outright while the host is otherwise healthy,
 # and a future variant is a unit that runs but binds nothing. `http_code=200` is the loopback
 # proof that it SERVES. Measured 2026-08-25 the host reported `server_active=inactive
@@ -68,10 +69,23 @@
 # comments daily. Failures are routed explicitly instead.
 set -uo pipefail
 
+# #7797: refuse to run under xtrace while a live warehouse credential is bound. `set -x` echoes
+# every expansion, so a traced run of this probe would print BETTERSTACK_QUERY_PASSWORD into the
+# sweeper's log — and the sweeper posts probe output back onto the tracker issue, which is public.
+# exit 78 is the "configuration refused" status, distinct from this contract's PASS(0)/FAIL(1)/
+# TRANSIENT(2), so a refusal can never be misread as a verdict about the host.
+case "$-" in
+  *x*)
+    if [ -n "${BETTERSTACK_QUERY_PASSWORD:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 QUERY="${INNGEST_SERVING_QUERY_BIN:-$REPO_ROOT/scripts/betterstack-query.sh}"
 
-MARKER="SOLEUR_INNGEST_SERVER_PROBE"
 # TWO identity fields, both required (#7674 review / #6616 — "host_name telemetry is lying": a
 # web host has been observed self-labelling with the sed-rendered `soleur-inngest-prd` literal).
 # `host` is Vector's auto-derived OS hostname = the Hetzner server name, which a stale literal
@@ -83,6 +97,30 @@ INNGEST_HOST="${INNGEST_SERVING_HOST:-soleur-inngest}"
 HOST_NAME="${INNGEST_SERVING_HOST_NAME:-soleur-inngest-prd}"
 WINDOW="${INNGEST_SERVING_WINDOW:-24h}"
 LIMIT="${INNGEST_SERVING_LIMIT:-500}"
+
+# --- the ONE probe-row predicate (#8846) -------------------------------------------------------
+# A marker SUBSTRING is not a probe row. The inngest server's own event log ships from THIS host
+# under SYSLOG_IDENTIFIER=doppler and quotes the marker whenever an issue/PR/comment about the
+# probe is webhooked in — so a substring match read an issue body quoting a serving line as the
+# host serving, PASSED, cleared apply-workflow G18 and closed the tracker on a dark host. The
+# predicate (emitter + anchored marker) lives in scripts/lib/inngest-probe-row.sh; this file does
+# not restate it. An unloadable selector is its OWN reason: never channel_dark (that blames the
+# host) and never PASS.
+# THE LOAD CONTRACT (PR #8873 review). The three names are UNSET before the source: an inherited
+# INNGEST_PROBE_ROW_JQ (the infra-credentials action exports every Doppler key into $GITHUB_ENV)
+# must never survive a source that failed or defined nothing. The selftest after the source proves
+# the def that actually loaded rejects the event-log shapes, so a lib that defines nothing, or a
+# permissive def, is selector_unavailable. The source's stderr stays visible: a missing file and a
+# syntax error in the lib are told apart by bash's own diagnostic.
+unset INNGEST_PROBE_ROW_JQ INNGEST_PROBE_EMITTER INNGEST_PROBE_MARKER
+_ipr_lib="${INNGEST_PROBE_ROW_LIB:-$REPO_ROOT/scripts/lib/inngest-probe-row.sh}"
+# shellcheck source=scripts/lib/inngest-probe-row.sh
+if ! source "$_ipr_lib" || ! declare -F inngest_probe_row_selftest >/dev/null || ! inngest_probe_row_selftest; then
+  echo "TRANSIENT: reason=selector_unavailable lib=${_ipr_lib} — the probe-row predicate did not load" >&2
+  echo "           or failed its selftest. Nothing about the host was measured: this is a broken" >&2
+  echo "           checkout or lib, not a host outage and not 'not serving yet'." >&2
+  exit 2
+fi
 
 # --- credentials: absent is TRANSIENT, and must say so in its own words ------------------------
 missing=""
@@ -99,7 +137,7 @@ if [[ -n "$missing" ]]; then
 fi
 
 # --- one query -------------------------------------------------------------------------------
-rows="$("$QUERY" --since "$WINDOW" --grep "$MARKER" --limit "$LIMIT" 2>/dev/null)"
+rows="$("$QUERY" --since "$WINDOW" --grep "$INNGEST_PROBE_MARKER" --limit "$LIMIT" 2>/dev/null)"
 qrc=$?
 if [[ "$qrc" -ne 0 ]]; then
   echo "TRANSIENT: reason=query_failed rc=${qrc} — the ClickHouse read path did not answer." >&2
@@ -113,15 +151,28 @@ fi
 # malformed line aborts the whole invocation and every valid row after it is lost — which would
 # surface as reason=channel_dark ("the host emits nothing") on a window that in fact contained a
 # clean PASS. A warehouse read is exactly where a truncated line shows up.
+# `inngest_probe_row` runs on the decoded row (it reads SYSLOG_IDENTIFIER and .message), AFTER the
+# host pair: the predicate says nothing about which host a row came from.
 mine="$(printf '%s\n' "$rows" \
   | jq -R -r --arg h "$INNGEST_HOST" --arg hn "$HOST_NAME" \
-       'fromjson? | .raw? | fromjson?
+       "$INNGEST_PROBE_ROW_JQ"'
+        fromjson? | .raw? | fromjson?
+        | select(type == "object")
         | select(.host == $h and .host_name == $hn)
-        | .message? // empty' 2>/dev/null \
-  | grep -F "$MARKER")"
+        | select(inngest_probe_row)
+        | .message' 2>/dev/null)"
+jrc=$?
+# jq's exit code is read, not piped away: a def that no longer compiles yields ZERO rows, which
+# would otherwise read as channel_dark ("the host emits nothing").
+if [[ "$jrc" -ne 0 ]]; then
+  echo "TRANSIENT: reason=selector_failed jq_rc=${jrc} — the row selector did not run." >&2
+  echo "           Nothing about the host was measured. Check scripts/lib/inngest-probe-row.sh" >&2
+  echo "           (bash scripts/lib/inngest-probe-row.sh --selftest)." >&2
+  exit 2
+fi
 
 if [[ -z "$mine" ]]; then
-  echo "TRANSIENT: reason=channel_dark host=${INNGEST_HOST}/${HOST_NAME} window=${WINDOW} — zero ${MARKER} rows." >&2
+  echo "TRANSIENT: reason=channel_dark host=${INNGEST_HOST}/${HOST_NAME} window=${WINDOW} — zero ${INNGEST_PROBE_MARKER} rows." >&2
   echo "           The host is not reporting, so its serving state is UNKNOWN — not 'healthy'." >&2
   echo "           Check inngest-server-probe.timer and the Vector shipper before reading this" >&2
   echo "           as progress. The */15 dedicated-host arm on scheduled-inngest-health.yml" >&2
@@ -132,14 +183,24 @@ fi
 # --- the POSITIVE discriminator ----------------------------------------------------------------
 # Both fields must hold in the SAME row: a window containing an old active row and a recent
 # inactive one must not be assembled into a PASS out of two different moments.
-serving="$(printf '%s\n' "$mine" | grep -F 'server_active=active' | grep -cF 'http_code=200')"
+# THE THIRD CONJUNCT (#8015). server_active=active plus http_code=200 says the unit runs and the
+# listener answers -- it says NOTHING about whether the host owns any work. A diagnostic boot
+# satisfies both and serves nothing, so this probe granted PASS to exactly the state #7674 exists
+# to detect. registry_fns separates serving from listening.
+#
+# THE TOKEN BOUNDARY IS LOAD-BEARING: a bare `registry_fns=[1-9][0-9]*` also matches
+# `registry_fns=1abc`, so the trailing ( |$) is what makes this a number rather than a prefix.
+#
+# `0` is an accepting value for the FIELD but not for this conjunct: it is a measurement (a
+# server that answers and owns nothing), which is precisely the reading that must NOT pass.
+serving="$(printf '%s\n' "$mine" | grep -F 'server_active=active' | grep -F 'http_code=200' | grep -cE 'registry_fns=[1-9][0-9]*( |$)')"
 case "$serving" in
   ''|*[!0-9]*) serving=0 ;;
 esac
 
 if [[ "$serving" -gt 0 ]]; then
-  echo "PASS: ${HOST_NAME} served within ${WINDOW} — ${serving} ${MARKER} row(s) carrying BOTH"
-  echo "      server_active=active and http_code=200. #7674 step 4 exit criterion met."
+  echo "PASS: ${HOST_NAME} served within ${WINDOW} — ${serving} ${INNGEST_PROBE_MARKER} row(s) carrying ALL THREE"
+  echo "      server_active=active, http_code=200 and a NON-ZERO registry_fns. #7674 step 4 met."
   exit 0
 fi
 
@@ -150,8 +211,21 @@ last="$(printf '%s\n' "$mine" | tail -1)"
 active="$(printf '%s' "$last" | grep -oE 'server_active=[^ ]+' | head -1)"
 code="$(printf '%s' "$last" | grep -oE 'http_code=[^ ]+' | head -1)"
 flag="$(printf '%s' "$last" | grep -oE 'cutover_flag=[^ ]+' | head -1)"
+# Report the OBSERVED registry count, so a not_serving verdict names which of the three conjuncts
+# failed instead of leaving the reader to guess between "down" and "up but owning nothing".
+regfns="$(printf '%s' "$last" | grep -oE 'registry_fns=[^ ]+' | head -1)"
 
-echo "TRANSIENT: reason=not_serving host=${INNGEST_HOST}/${HOST_NAME} ${active:-server_active=?} ${code:-http_code=?} ${flag:-cutover_flag=?}" >&2
+echo "TRANSIENT: reason=not_serving host=${INNGEST_HOST}/${HOST_NAME} ${active:-server_active=?} ${code:-http_code=?} ${regfns:-registry_fns=?} ${flag:-cutover_flag=?}" >&2
+case "$regfns" in
+  registry_fns=0)
+    echo "           registry_fns=0 is a MEASUREMENT, not a gap: the host answers and owns NOTHING," >&2
+    echo "           which is the diagnostic-boot signature. Before #8015 this row PASSED." >&2 ;;
+  registry_fns=__UNREADABLE__)
+    echo "           registry_fns is unreadable, so the registry question was not answered at all." >&2 ;;
+  "")
+    echo "           NO registry_fns field: the host predates probe_schema=8 (#8015), so this" >&2
+    echo "           conjunct cannot be evaluated and the probe correctly refuses to PASS." >&2 ;;
+esac
 case "$flag" in
   *rollback|*rolled-back)
     echo "           The flag EXPLAINS the stop: the flip FSM's rollback arm stopped the unit and" >&2

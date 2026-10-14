@@ -1,22 +1,23 @@
-import * as Sentry from "@sentry/nextjs";
 import type { AttachmentRef } from "@/lib/types";
 import { uploadWithProgress } from "@/lib/upload-with-progress";
+import { reportSilentFallback } from "@/lib/client-observability";
+import { sanitizeAttachmentFilename } from "@/lib/attachment-constants";
 
 export interface UploadPendingFilesOptions {
   /** Invoked as each file progresses. `fileIndex` is the original 0-based
    *  position in the input array so callers can map progress back to UI. */
   onProgress?: (fileIndex: number, percent: number) => void;
+  /** Cancels the batch: checked before each file, and aborts the in-flight
+   *  presign fetch / storage PUT. Refs already uploaded are still returned. */
+  signal?: AbortSignal;
+  /** Invoked with each ref as soon as its file finishes, so a caller that stops
+   *  waiting (deadline) can salvage the files that already made it. */
+  onUploaded?: (ref: AttachmentRef) => void;
 }
 
-/**
- * Truncate + strip control characters from a user-controlled filename so it
- * is safe to pass to `console.warn` / Sentry payloads. The browser File API
- * accepts arbitrary strings; an attacker-chosen filename can carry log-injection
- * characters (`\r\n`, ANSI escapes) or be unbounded in size.
- */
-function sanitizeFilenameForLog(name: string): string {
-  return String(name).slice(0, 256).replace(/[\x00-\x1f\x7f]/g, "?");
-}
+// Filenames reaching console.warn / Sentry payloads go through
+// `sanitizeAttachmentFilename` (lib/attachment-constants.ts) — it strips
+// control chars, path separators, bidi controls and zero-width chars.
 
 /**
  * Re-wrap an error with a sanitized message for telemetry. `uploadWithProgress`
@@ -42,6 +43,10 @@ function sanitizeErrorForLog(err: unknown, stage: "presign" | "storage"): Error 
  * inline error display, `activeXhrs` for cancellation) that this helper does
  * not expose. Any change to the presign request shape must be applied in both
  * places.
+ *
+ * Presign error codes are an HTTP vocabulary; `attachmentErrorCopy`
+ * (`lib/attachment-error-copy.ts`) is the human-copy mapping for them and is
+ * the one to reuse if this helper ever surfaces failures to the user (#9316).
  */
 export async function uploadPendingFiles(
   files: File[],
@@ -50,9 +55,12 @@ export async function uploadPendingFiles(
 ): Promise<AttachmentRef[]> {
   const uploaded: AttachmentRef[] = [];
 
+  const signal = opts?.signal;
+
   for (let i = 0; i < files.length; i++) {
+    if (signal?.aborted) break;
     const file = files[i];
-    const safeFilename = sanitizeFilenameForLog(file.name);
+    const safeFilename = sanitizeAttachmentFilename(file.name);
     try {
       const presignRes = await fetch("/api/attachments/presign", {
         method: "POST",
@@ -63,6 +71,7 @@ export async function uploadPendingFiles(
           sizeBytes: file.size,
           conversationId,
         }),
+        signal,
       });
 
       if (!presignRes.ok) {
@@ -73,7 +82,13 @@ export async function uploadPendingFiles(
           err: sanitized,
           filename: safeFilename,
         });
-        Sentry.captureException(sanitized, { extra: { filename: safeFilename } });
+        // Tagged emit: feature:attachments keeps this leg visible on the same
+        // triage key as the server route's presign/presign-lookup reports.
+        reportSilentFallback(sanitized, {
+          feature: "attachments",
+          op: "presign-client",
+          extra: { filename: safeFilename },
+        });
         continue;
       }
 
@@ -82,21 +97,33 @@ export async function uploadPendingFiles(
         storagePath: string;
       };
 
-      const { promise } = uploadWithProgress(
+      if (signal?.aborted) break;
+
+      const { promise, xhr } = uploadWithProgress(
         uploadUrl,
         file,
         file.type,
         (percent) => opts?.onProgress?.(i, percent),
       );
-      await promise;
+      const abortXhr = () => xhr.abort();
+      signal?.addEventListener("abort", abortXhr, { once: true });
+      try {
+        await promise;
+      } finally {
+        signal?.removeEventListener("abort", abortXhr);
+      }
 
-      uploaded.push({
+      const ref: AttachmentRef = {
         storagePath,
         filename: file.name,
         contentType: file.type,
         sizeBytes: file.size,
-      });
+      };
+      uploaded.push(ref);
+      opts?.onUploaded?.(ref);
     } catch (err) {
+      // A cancelled batch is not a failure: stop quietly (no Sentry noise).
+      if (signal?.aborted) break;
       // Sanitize: `uploadWithProgress` can reject with a message containing
       // the signed storage URL, which would leak into Sentry.
       const sanitized = sanitizeErrorForLog(err, "storage");
@@ -104,7 +131,17 @@ export async function uploadPendingFiles(
         err: sanitized,
         filename: safeFilename,
       });
-      Sentry.captureException(sanitized, { extra: { filename: safeFilename } });
+      // The transport chokepoint (upload-with-progress.ts `fail()`) already
+      // reports PUT failures with xhr.status under feature:attachments /
+      // op:storage-put — skip re-capture for those and emit only for legs the
+      // chokepoint never saw (e.g. a presign-res.json() parse throw).
+      if (!(err instanceof Error && (err as { reportedToSentry?: boolean }).reportedToSentry)) {
+        reportSilentFallback(sanitized, {
+          feature: "attachments",
+          op: "storage-put-caller",
+          extra: { filename: safeFilename },
+        });
+      }
     }
   }
 

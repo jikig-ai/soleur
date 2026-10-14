@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# (#7797) Refuse to run under shell tracing. UNCONDITIONAL: the scoped deploy token is read
+# from `terraform output` at runtime, BELOW this point, so a conditional arm would test an
+# empty variable at guard time and then trace the acquisition itself. Stdout, because agent
+# runtimes surface stdout and swallow stderr.
+case "$-" in
+  *x*)
+    printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n'
+    exit 78
+    ;;
+esac
+
 SLUG=""
 CF_ZONE_ID=""
 CF_ACCOUNT_ID=""
@@ -74,7 +85,7 @@ command -v terraform >/dev/null 2>&1 || { echo "Error: 'terraform' not found." >
 
 DPA_FILE="knowledge-base/legal/tenant-dpa-register.md"
 [[ -f "$DPA_FILE" ]] || { echo "DPA register not found at $DPA_FILE. Run from Soleur monorepo root." >&2; exit 3; }
-awk -F'|' -v slug="$SLUG" '/^\|/ { gsub(/^ +| +$/, "", $2); if ($2 == slug && $8 ~ /^ *(dpa-signed|provisioning-in-progress) *$/) found=1 } END { exit !found }' "$DPA_FILE" \
+awk -F'|' -v slug="$SLUG" '/^\|/ { gsub(/^ +| +$/, "", $2); if ($2 == slug) found = ($8 ~ /^ *(dpa-signed|provisioning-in-progress) *$/) } END { exit !found }' "$DPA_FILE" \
   || { echo "No active DPA row for '$SLUG'. Sign DPA (Step 0) first." >&2; exit 3; }
 
 # --- Idempotency check ---
@@ -177,15 +188,16 @@ if $DRY_RUN; then
   echo "--- Smoke-test (run after TF apply) ---"
   echo "cd ${PROVISIONING_DIR} && terraform output -raw cf_deploy_token | ("
   echo "  read -r TOKEN"
-  echo "  curl -sS -H \"Authorization: Bearer \$TOKEN\" \\"
-  echo "    https://api.cloudflare.com/client/v4/user/tokens/verify | jq .result.status"
+  echo "  curl --disable --noproxy '*' -sS --config - \\"
+  echo "    https://api.cloudflare.com/client/v4/user/tokens/verify \\"
+  echo "    < <(printf 'header = \"Authorization: Bearer %s\"\\n' \"\$TOKEN\") | jq .result.status"
   echo ")"
   echo ""
   echo "--- Teardown ---"
   echo "  cd ${PROVISIONING_DIR} && terraform destroy"
   echo "  rm -rf ${PROVISIONING_DIR}/cloudflare.tf"
   echo ""
-  echo "Next step: soleur:provision-hetzner ${SLUG}"
+  echo "Next step: type /soleur:provision-doppler ${SLUG} <org> <repo> yourself (user-invoked; Soleur cannot run it, ADR-236)"
   exit 0
 fi
 
@@ -219,11 +231,22 @@ read -p "TF apply complete? Type 'yes': " ACK
 echo ""
 echo "--- Smoke-test: verifying scoped token ---"
 
+# Token-shape guard (never echoes the value): the token is written into curl's stdin config
+# below, so a quote or newline in it would inject a config directive. An unusable token
+# makes zero curl calls and aborts the run non-zero, never a green smoke-test.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+
 VERIFY_RESULT=$(
   cd "$PROVISIONING_DIR" && terraform output -raw cf_deploy_token | (
-    read -r TOKEN
-    curl -sS -H "Authorization: Bearer $TOKEN" \
-      https://api.cloudflare.com/client/v4/user/tokens/verify
+    read -r TOKEN || true
+    if ! _bearer_ok "$TOKEN"; then
+      echo "Error: the deploy token from terraform output is missing or has an unexpected shape; not sent." >&2
+      exit 1
+    fi
+    # The bearer rides curl's stdin config channel, never its argument list.
+    curl --disable --noproxy '*' -sS --config - \
+      https://api.cloudflare.com/client/v4/user/tokens/verify \
+      < <(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN")
   )
 )
 
@@ -238,4 +261,4 @@ else
 fi
 
 echo ""
-echo "Next step: soleur:provision-hetzner ${SLUG}"
+echo "Next step: type /soleur:provision-doppler ${SLUG} <org> <repo> yourself (user-invoked; Soleur cannot run it, ADR-236)"

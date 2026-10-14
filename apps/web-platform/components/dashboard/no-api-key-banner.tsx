@@ -10,8 +10,9 @@
 // Copy branches on `pendingDelegation`: a grant-holder is told to ACCEPT the
 // grant (one click) rather than to buy a separate Anthropic account.
 
-import { useEffect, useState } from "react";
-import Link from "next/link";
+import useSWR from "swr";
+import { NavLink } from "@/components/ui/nav-link";
+import { swrKeys } from "@/lib/swr-config";
 import { reportSilentFallback } from "@/lib/client-observability";
 
 interface EffectiveStatus {
@@ -20,48 +21,51 @@ interface EffectiveStatus {
   isSharedWorkspaceMember: boolean;
 }
 
-export function NoApiKeyBanner() {
-  const [status, setStatus] = useState<EffectiveStatus | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch("/api/byok/effective-status");
-        if (!res.ok) {
-          // Server-error path is a real silent fallback (a persistent 500 hides
-          // the banner from every keyless user) — mirror it, then degrade.
-          reportSilentFallback(null, {
-            feature: "no-api-key-banner",
-            op: "effective-status-non-ok",
-            extra: { status: res.status },
-          });
-          return;
-        }
-        const data = (await res.json()) as Partial<EffectiveStatus>;
-        // Only act on a well-formed response — a malformed payload must leave
-        // the banner hidden, never render a half-populated state.
-        if (typeof data?.hasEffectiveKey !== "boolean") return;
-        if (!cancelled) {
-          setStatus({
-            hasEffectiveKey: data.hasEffectiveKey,
-            pendingDelegation: data.pendingDelegation === true,
-            isSharedWorkspaceMember: data.isSharedWorkspaceMember === true,
-          });
-        }
-      } catch (err) {
-        // Safe degradation: leave the banner hidden rather than render a
-        // broken state. Mirror to Sentry so a persistent failure is visible.
-        reportSilentFallback(err, {
-          feature: "no-api-key-banner",
-          op: "effective-status-fetch",
-        });
-      }
-    })();
-    return () => {
-      cancelled = true;
+// #9178 mount-fetch contract — the fetcher reports both failure shapes to
+// Sentry (the mirrors are preserved verbatim from the raw-fetch version), then
+// THROWS so SWR routes to `error` and `data` stays undefined: the banner hides
+// rather than rendering a half-populated/broken state.
+async function fetchEffectiveStatus(): Promise<EffectiveStatus> {
+  try {
+    const res = await fetch("/api/byok/effective-status");
+    if (!res.ok) {
+      // Server-error path is a real silent fallback (a persistent 500 hides
+      // the banner from every keyless user) — mirror it, then degrade.
+      reportSilentFallback(null, {
+        feature: "no-api-key-banner",
+        op: "effective-status-non-ok",
+        extra: { status: res.status },
+      });
+      throw new Error(`effective-status ${res.status}`);
+    }
+    const data = (await res.json()) as Partial<EffectiveStatus>;
+    // Only act on a well-formed response — a malformed payload must leave the
+    // banner hidden, never render a half-populated state.
+    if (typeof data?.hasEffectiveKey !== "boolean") {
+      throw new Error("effective-status malformed payload");
+    }
+    return {
+      hasEffectiveKey: data.hasEffectiveKey,
+      pendingDelegation: data.pendingDelegation === true,
+      isSharedWorkspaceMember: data.isSharedWorkspaceMember === true,
     };
-  }, []);
+  } catch (err) {
+    if (!(err instanceof Error && err.message.startsWith("effective-status"))) {
+      // Network/parse throw — mirror so a persistent failure is visible.
+      reportSilentFallback(err, {
+        feature: "no-api-key-banner",
+        op: "effective-status-fetch",
+      });
+    }
+    throw err;
+  }
+}
+
+export function NoApiKeyBanner() {
+  const { data: status } = useSWR<EffectiveStatus>(
+    swrKeys.byokEffectiveStatus(),
+    fetchEffectiveStatus,
+  );
 
   // Hidden for users with a usable key (own valid key OR accepted delegation),
   // and while the status is still loading.
@@ -109,12 +113,12 @@ export function NoApiKeyBanner() {
           </p>
           <p className="text-xs text-soleur-text-secondary">{body}</p>
         </div>
-        <Link
+        <NavLink
           href={ctaHref}
           className="shrink-0 rounded-lg bg-soleur-accent-gold-fill px-3 py-1.5 text-xs font-medium text-soleur-text-on-accent hover:opacity-90"
         >
           {ctaLabel}
-        </Link>
+        </NavLink>
       </div>
     </div>
   );

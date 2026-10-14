@@ -114,8 +114,8 @@ Compose the new JSON list, write to a 0600 temp file, pipe via stdin, `shred -u`
 
 ```bash
 umask 077
-tmp="$(mktemp -t admin-ips.XXXXXX)"
-trap 'shred -u "$tmp" 2>/dev/null || rm -f "$tmp"' EXIT
+tmp="$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)" admin-ips.XXXXXX)"
+trap 'shred -u "$tmp" 2>/dev/null || rm -f "$tmp"; rmdir "$(dirname "$tmp")" 2>/dev/null' EXIT
 
 # Write the new list to the temp file:
 printf '%s\n' "$new_list_json" > "$tmp"
@@ -170,7 +170,7 @@ Per HashiCorp guidance, `-target` is for rare/recovery cases, not habitual use.
 
 Ask: `Did you run terraform apply? [yes / no / skip]`.
 
-- `yes`: exit 0. Suggest running `/soleur:admin-ip-refresh --verify` in a follow-up session to confirm the firewall rule matches.
+- `yes`: exit 0. Suggest running `soleur:admin-ip-refresh --verify` in a follow-up session to confirm the firewall rule matches.
 - `no`: print a reminder that Doppler and firewall are now out of sync; the scheduled drift check (tracked separately) will catch it within 24 hours.
 - `skip`: exit 0 without reminder. Recorded as a session gap.
 

@@ -1,9 +1,9 @@
 import {
-  ALLOWED_ATTACHMENT_TYPES,
   MAX_AGENT_READABLE_PDF_SIZE,
   MAX_ATTACHMENT_SIZE,
   MAX_ATTACHMENTS_PER_MESSAGE,
   isPdfAttachment,
+  resolveAttachmentContentType,
 } from "@/lib/attachment-constants";
 
 const PDF_LIMIT_MB = Math.round(MAX_AGENT_READABLE_PDF_SIZE / 1024 / 1024);
@@ -13,7 +13,15 @@ const ATTACHMENT_LIMIT_MB = Math.round(MAX_ATTACHMENT_SIZE / 1024 / 1024);
  * Validate files against attachment constraints (type, size, count).
  * Shared between the Command Center first-run form and ChatInput.
  *
- * Returns valid files and an optional error message for the first rejected file.
+ * Returns valid files and an optional error message: the single message when one
+ * file was rejected, or an aggregate naming every skipped file.
+ *
+ * Intake is the one place the browser-reported `file.type` is interpreted:
+ * browsers report `.md` as "", `text/markdown`, `application/octet-stream` and
+ * more, so each file is resolved once by (filename, reported type) and, when
+ * the canonical type differs, returned as a copy carrying it. Every downstream
+ * `file.type` read (presign body, Storage PUT header, AttachmentRef) is then
+ * already canonical.
  */
 export function validateFiles(
   files: FileList | File[],
@@ -21,32 +29,57 @@ export function validateFiles(
 ): { valid: File[]; error?: string } {
   const fileArray = Array.from(files);
   const valid: File[] = [];
-  let error: string | undefined;
+  const errors: string[] = [];
 
   for (const file of fileArray) {
     if (currentCount + valid.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
-      error = `Maximum ${MAX_ATTACHMENTS_PER_MESSAGE} files per message.`;
+      errors.push(`Maximum ${MAX_ATTACHMENTS_PER_MESSAGE} files per message.`);
       break;
     }
-    if (!ALLOWED_ATTACHMENT_TYPES.has(file.type)) {
-      error = `"${file.name}" is not a supported file type.`;
+    const resolved = resolveAttachmentContentType({
+      contentType: file.type,
+      filename: file.name,
+    });
+    if (!resolved) {
+      errors.push(`"${file.name}" is not a supported file type.`);
+      continue;
+    }
+    if (file.size === 0) {
+      errors.push(`"${file.name}" is empty.`);
       continue;
     }
     // Closes #3332: PDFs are bounded by Anthropic's request-size ceiling
     // (32 MB encoded) — base64 inflation pushes the raw cap to ~24 MB.
     if (
-      isPdfAttachment({ contentType: file.type, filename: file.name }) &&
+      isPdfAttachment({ contentType: resolved, filename: file.name }) &&
       file.size > MAX_AGENT_READABLE_PDF_SIZE
     ) {
-      error = `"${file.name}" exceeds the ${PDF_LIMIT_MB} MB PDF size limit (Anthropic API request-size ceiling after base64 encoding).`;
+      errors.push(
+        `"${file.name}" exceeds the ${PDF_LIMIT_MB} MB PDF size limit (Anthropic API request-size ceiling after base64 encoding).`,
+      );
       continue;
     }
     if (file.size > MAX_ATTACHMENT_SIZE) {
-      error = `"${file.name}" exceeds the ${ATTACHMENT_LIMIT_MB} MB size limit.`;
+      errors.push(`"${file.name}" exceeds the ${ATTACHMENT_LIMIT_MB} MB size limit.`);
       continue;
     }
-    valid.push(file);
+    valid.push(
+      file.type === resolved
+        ? file
+        : new File([file], file.name, {
+            type: resolved,
+            lastModified: file.lastModified,
+          }),
+    );
   }
 
+  // One rejection keeps its own message; several are aggregated so the user
+  // sees every skipped file, not just the last one.
+  const error =
+    errors.length === 0
+      ? undefined
+      : errors.length === 1
+        ? errors[0]
+        : `${errors.length} files skipped: ${errors.join(" ")}`;
   return { valid, error };
 }

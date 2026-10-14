@@ -16,7 +16,9 @@
 #     terminal `aborted` — never a silent exit, never a false `done` (#5934 class);
 #   * done/rolled-back/aborted/unset are idempotent no-ops;
 #   * the timer is NEVER disabled by the script (P0-1);
-#   * EVERY branch emits a `logger -t inngest-cutover-flip` line (P0-2).
+#   * EVERY branch emits a `logger -t inngest-cutover-flip` line (P0-2) — except the
+#     terminal noop-* arms, which throttle to once per CUTOVER_NOOP_THROTTLE_S (#7696)
+#     to stay under the G3.7 15-minute liveness window without flooding it.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -88,7 +90,14 @@ trap cleanup_all EXIT
 # and therefore silent either way. Clear it around every case so one case's fallback write cannot
 # bleed into a later case's assertions. Guarded: on a runner /var/lock is root-owned and the write
 # never lands at all, which is fine — this must never be the reason a case fails.
-clean_host_state_slot() { rm -f /var/lock/inngest-cutover-flip.state 2>/dev/null || true; }
+# (#7696) The noop-throttle stamp sits at ${STATE_FILE}.noop-emitted — the SAME host-default path
+# plus suffix — and must be cleared here too: on a runner where /var/lock IS writable, a refusal
+# case's noop emit leaves a fresh stamp that would suppress the NEXT case's authorised emit
+# (measured in CI: canary-absent, then the floor misses the two assertions the suppression ate).
+clean_host_state_slot() {
+  rm -f /var/lock/inngest-cutover-flip.state 2>/dev/null || true
+  rm -f /var/lock/inngest-cutover-flip.state.noop-emitted 2>/dev/null || true
+}
 
 setup_case() {
   clean_host_state_slot
@@ -311,6 +320,37 @@ assert_contains "refuse marker emitted (refuse-rearm-after-done)" "$(cat "$LOGTR
 assert_logger "logger line emitted (refuse branch)"
 teardown_case
 
+# --- Test 4e: reflush (#7777) — the AUTHORIZED second flush. Evidence rides the flag value as
+#     `reflush,run=<id>,by=<actor>`; the arm appends the cleared_at authorization record to the
+#     latch ledger FIRST, then takes the SAME ordered forward path as `armed`. ---
+echo "TEST: #7777 reflush,run=,by= => clear appended then the full armed ordering, exit 0"
+setup_case
+rc=$(run_flip 'reflush,run=42000001,by=octocat' CUTOVER_REDIS_DBSIZE=0 CUTOVER_BOOT_ID=boot-fixture)
+order=$(trace_csv)
+assert_eq "exit 0 on authorized reflush" "0" "$rc"
+assert_eq "reflush takes the armed ordering after the clear" \
+  "flag:flipping,stop,flushall,flag:flushed,start,flag:done,owner@done" "$order"
+assert_contains "the cleared_at authorization was appended" "$(cat "$LATCH")" "cleared_at="
+assert_contains "the clear carries run+by+boot_id evidence" "$(cat "$LATCH")" "run=42000001 by=octocat boot_id=boot-fixture"
+assert_contains "the NEWEST record is the fresh flushed_at" "$(tail -n 1 "$LATCH")" "flushed_at="
+assert_contains "latch-cleared marker emitted" "$(cat "$LOGTRACE")" "latch-cleared"
+teardown_case
+
+# --- Test 4f: bare reflush (#7777) — NO evidence, NO clear, NO flush, loud refusal. The clear
+#     is not a reset switch: authorization evidence is mandatory and its absence refuses. ---
+echo "TEST: #7777 bare reflush => refuse (no clear/flush), flag:aborted, marker, exit 1"
+setup_case
+rc=$(run_flip 'reflush' CUTOVER_REDIS_DBSIZE=0)
+order=$(trace_csv)
+assert_eq "exit 1 on evidence-less reflush" "1" "$rc"
+assert_absent "NO FLUSHALL on evidence-less reflush" "$order" "flushall"
+assert_absent "NO stop on evidence-less reflush" "$order" "stop"
+assert_absent "NO start on evidence-less reflush" "$order" "start"
+assert_contains "flag transitioned to aborted" "$order" "flag:aborted"
+assert_absent "NO clear record was appended" "$([[ -e "$LATCH" ]] && cat "$LATCH" || true)" "cleared_at="
+assert_contains "refuse marker emitted (reflush-evidence-invalid)" "$(cat "$LOGTRACE")" "reflush-evidence-invalid"
+teardown_case
+
 # --- Test 4c: telemetry-blind give-up guard (#5934) — an unhandled stop/start/flag_set
 #     failure must EMIT a marker AND land the flag in terminal `aborted` (never a silent
 #     non-zero exit, never a stuck `flipping`/false `done`). Uses a failing seam per case;
@@ -391,6 +431,60 @@ for state in "done" rolled-back aborted ""; do
   assert_logger "logger line emitted (no-op '$label')"
   teardown_case
 done
+
+# --- Test 5z (#7696): the terminal noop heartbeat is THROTTLED, transitions are not ---
+# The defect: emit_state called logger unconditionally on EVERY arm, so a terminal host
+# shipped ~2,040 rows/day of noop-* rows. The fix keeps the noop heartbeat under the G3.7
+# 15-minute liveness window (H) — it must stay AUDIBLE, just slower — while transitions
+# remain unconditional. The stamp derives from the INNGEST_CUTOVER_STATE seam so a fresh
+# $WORK per case means a fresh stamp.
+echo "TEST: #7696 noop-* logger rows throttle to once per CUTOVER_NOOP_THROTTLE_S"
+setup_case
+rc=$(run_flip "" CUTOVER_NOOP_THROTTLE_S=3600)
+assert_eq "exit 0 on the first noop-unset fire" "0" "$rc"
+assert_eq "the first noop-unset emits one logger row" \
+  "1" "$(wc -l < "$LOGTRACE" | tr -d ' ')"
+assert_eq "the throttle stamp was recorded" \
+  "yes" "$([[ -f "${STATE}.noop-emitted" ]] && echo yes || echo no)"
+# A second fire inside the window emits NOTHING to the logger — but the state SLOT write
+# is unconditional: delete it first so the suppressed fire proves it still lands.
+rm -f "$STATE"
+rc=$(run_flip "" CUTOVER_NOOP_THROTTLE_S=3600)
+assert_eq "exit 0 on the in-window second fire" "0" "$rc"
+assert_eq "the in-window noop emits NO second logger row" \
+  "1" "$(wc -l < "$LOGTRACE" | tr -d ' ')"
+assert_eq "the state slot was still written on the suppressed fire" \
+  "noop-unset" "$(jq -r '.reason' "$STATE" 2>/dev/null || echo MISSING)"
+# A NON-noop arm is never throttled: the rolled-back transition lands on a fresh stamp.
+rc=$(run_flip rollback)
+assert_eq "exit 0 on rollback while the noop stamp is fresh" "0" "$rc"
+assert_contains "the transition row reached the logger unthrottled" \
+  "$(cat "$LOGTRACE")" '"reason":"rolled-back"'
+# A STALE stamp re-opens the window — the heartbeat must resume (never stay silent).
+touch -d '1 hour ago' "${STATE}.noop-emitted" 2>/dev/null || touch -d '@1' "${STATE}.noop-emitted"
+rc=$(run_flip "" CUTOVER_NOOP_THROTTLE_S=300)
+assert_eq "exit 0 on the aged-stamp fire" "0" "$rc"
+assert_eq "the heartbeat re-emits once the window has passed" \
+  "2" "$(grep -c 'noop-unset' "$LOGTRACE" || true)"
+teardown_case
+
+echo "TEST: #7696 the throttle seam is honoured — interval 0 emits every fire"
+setup_case
+rc=$(run_flip "" CUTOVER_NOOP_THROTTLE_S=0)
+assert_eq "exit 0 (interval 0, first fire)" "0" "$rc"
+rc=$(run_flip "" CUTOVER_NOOP_THROTTLE_S=0)
+assert_eq "interval 0 emits on every fire" \
+  "2" "$(wc -l < "$LOGTRACE" | tr -d ' ')"
+teardown_case
+
+echo "TEST: #7696 non-numeric interval falls back to the 300s default (fail-safe)"
+setup_case
+rc=$(run_flip "" CUTOVER_NOOP_THROTTLE_S=banana)
+assert_eq "exit 0 (non-numeric interval, first fire)" "0" "$rc"
+rc=$(run_flip "" CUTOVER_NOOP_THROTTLE_S=banana)
+assert_eq "non-numeric interval still throttles (default applies)" \
+  "1" "$(wc -l < "$LOGTRACE" | tr -d ' ')"
+teardown_case
 
 # --- Test 6: the script NEVER disables the flip timer (P0-1, static guard) ---
 echo "TEST: script never disables inngest-cutover-flip.timer (P0-1)"
@@ -509,14 +603,24 @@ teardown_case
 # a third copy, so it is pinned byte-identical here AND in inngest-consumer-probe.test.sh.
 echo "TEST: #7228 the inlined GQL query matches inngest-registry-probe.sh byte-for-byte"
 REGISTRY_PROBE_SH="$SCRIPT_DIR/inngest-registry-probe.sh"
-fsm_q=$(grep -oE "^readonly FUNCTIONS_GQL_QUERY=.*" "$TARGET" | head -1 || true)
-probe_q=$(grep -oE "^readonly FUNCTIONS_GQL_QUERY=.*" "$REGISTRY_PROBE_SH" | head -1 || true)
-if [[ -z "$fsm_q" || -z "$probe_q" ]]; then
-  fail "could not extract FUNCTIONS_GQL_QUERY from both files (fsm='$fsm_q' probe='$probe_q') — the drift pin is vacuous"
+# THREE copies now, not two (#8015). inngest-bootstrap.sh gained one when the probe started
+# reporting registry_fns, and it is placed at COLUMN ZERO inside its heredoc precisely so this
+# `^readonly` anchor can see it. Pinning only two while a comment in the third claimed all three
+# were pinned is worse than no pin: registry_fns feeds the #7674 discriminator, which gates the
+# irreversible recut, so a drifted bootstrap copy would measure a DIFFERENT question than the
+# cutover FSM's done-gate, silently, with both suites green.
+BOOTSTRAP_GQL_SH="$SCRIPT_DIR/inngest-bootstrap.sh"
+fsm_q=$(grep -oE "^readonly FUNCTIONS_GQL_QUERY=.*" "$TARGET" | sed -n '1p' || true)
+probe_q=$(grep -oE "^readonly FUNCTIONS_GQL_QUERY=.*" "$REGISTRY_PROBE_SH" | sed -n '1p' || true)
+boot_q=$(grep -oE "^readonly FUNCTIONS_GQL_QUERY=.*" "$BOOTSTRAP_GQL_SH" | sed -n '1p' || true)
+if [[ -z "$fsm_q" || -z "$probe_q" || -z "$boot_q" ]]; then
+  fail "could not extract FUNCTIONS_GQL_QUERY from all three files (fsm='$fsm_q' probe='$probe_q' bootstrap='$boot_q') — the drift pin is vacuous"
 elif [[ "$fsm_q" != "$probe_q" ]]; then
   fail "GQL query DRIFT: FSM has [$fsm_q] but inngest-registry-probe.sh has [$probe_q]"
+elif [[ "$fsm_q" != "$boot_q" ]]; then
+  fail "GQL query DRIFT: FSM has [$fsm_q] but inngest-bootstrap.sh has [$boot_q]"
 else
-  pass "inlined GQL query is byte-identical to inngest-registry-probe.sh's"
+  pass "inlined GQL query is byte-identical across all THREE copies (FSM, registry probe, bootstrap)"
 fi
 
 # --- #7228: the verify window must DOMINATE the server's poll interval ----------------------
@@ -618,7 +722,7 @@ echo "TEST: #7228 the verify window fits under the unit's TimeoutStartSec"
 WINDOW_DEFAULT=$(grep -oE '^CUTOVER_VERIFY_WINDOW_S="\$\{CUTOVER_VERIFY_WINDOW_S:-[0-9]+\}"' "$TARGET" \
   | grep -oE '[0-9]+' | tail -1 || true)
 FLIP_UNIT="$SCRIPT_DIR/inngest-cutover-flip.service"
-UNIT_TIMEOUT=$(grep -oE '^TimeoutStartSec=[0-9]+' "$FLIP_UNIT" | grep -oE '[0-9]+' | head -1 || true)
+UNIT_TIMEOUT=$(grep -oE '^TimeoutStartSec=[0-9]+' "$FLIP_UNIT" | grep -oE '[0-9]+' | sed -n '1p' || true)
 if [[ -z "$UNIT_TIMEOUT" ]]; then
   fail "inngest-cutover-flip.service declares no TimeoutStartSec — the oneshot inherits the 90s default and will be killed mid-verify"
 elif [[ -z "$WINDOW_DEFAULT" ]]; then
@@ -631,7 +735,7 @@ fi
 
 echo "TEST: #7228 the verify window dominates inngest-server's --poll-interval"
 BOOTSTRAP_SH="$SCRIPT_DIR/inngest-bootstrap.sh"
-POLL_INTERVAL=$(grep -oE -- '--poll-interval [0-9]+' "$BOOTSTRAP_SH" | grep -oE '[0-9]+' | sort -u | head -1 || true)
+POLL_INTERVAL=$(grep -oE -- '--poll-interval [0-9]+' "$BOOTSTRAP_SH" | grep -oE '[0-9]+' | sort -u | sed -n '1p' || true)
 if [[ -z "$WINDOW_DEFAULT" || -z "$POLL_INTERVAL" ]]; then
   fail "could not extract both operands by shape (window='$WINDOW_DEFAULT' poll='$POLL_INTERVAL') — the pin is vacuous"
 elif [[ "$(grep -cE -- '--poll-interval [0-9]+' "$BOOTSTRAP_SH")" -eq 0 ]]; then
@@ -650,9 +754,9 @@ fi
 # already pinned for CUTOVER_VERIFY_WINDOW_S one line below it; the reasoning was not carried up.
 echo "TEST: #7228 the production probe URLs target the port the server actually binds"
 BOOTSTRAP_FOR_URL="$SCRIPT_DIR/inngest-bootstrap.sh"
-H_URL=$(grep -oE '^CUTOVER_HEALTH_URL="\$\{CUTOVER_HEALTH_URL:-[^}]+\}"' "$TARGET" | sed -E 's/.*:-([^}]+)\}"/\1/' | head -1 || true)
-G_URL=$(grep -oE '^CUTOVER_GQL_URL="\$\{CUTOVER_GQL_URL:-[^}]+\}"' "$TARGET" | sed -E 's/.*:-([^}]+)\}"/\1/' | head -1 || true)
-BIND_PORT=$(grep -oE -- '--port [0-9]+' "$BOOTSTRAP_FOR_URL" | grep -oE '[0-9]+' | sort -u | head -1 || true)
+H_URL=$(grep -oE '^CUTOVER_HEALTH_URL="\$\{CUTOVER_HEALTH_URL:-[^}]+\}"' "$TARGET" | sed -E 's/.*:-([^}]+)\}"/\1/' | sed -n '1p' || true)
+G_URL=$(grep -oE '^CUTOVER_GQL_URL="\$\{CUTOVER_GQL_URL:-[^}]+\}"' "$TARGET" | sed -E 's/.*:-([^}]+)\}"/\1/' | sed -n '1p' || true)
+BIND_PORT=$(grep -oE -- '--port [0-9]+' "$BOOTSTRAP_FOR_URL" | grep -oE '[0-9]+' | sort -u | sed -n '1p' || true)
 if [[ -z "$H_URL" || -z "$G_URL" || -z "$BIND_PORT" ]]; then
   fail "could not extract both probe URLs and the bound port by shape (health='$H_URL' gql='$G_URL' port='$BIND_PORT') — this pin is vacuous"
 elif [[ "$H_URL" != "http://127.0.0.1:$BIND_PORT/health" ]]; then
@@ -801,7 +905,7 @@ UNGOVERNED=""
 while IFS= read -r v; do
   [[ -n "$v" ]] || continue
   case "$v" in CUTOVER_*|INNGEST_CUTOVER_*) continue ;; esac
-  if ! printf '%s\n' "$ASSIGNED_VARS" | grep -qxF "$v"; then
+  if ! printf '%s\n' "$ASSIGNED_VARS" | grep -cxF "$v" >/dev/null; then
     UNGOVERNED="$UNGOVERNED $v"
   fi
 done <<< "$CMD_POS_VARS"
@@ -813,13 +917,13 @@ echo "TEST: #7761 the gate's POSITION, its predicate, and its pre-trap-window sa
 # the STATE_FILE assignment (the FIRST seam read). Specified against STATE_FILE and not "after
 # read_flag": read_flag is only a DEFINITION and its seam is not evaluated until run_flip, so a gate
 # moved below it would still precede every deferred read and would stay green.
-SERVER_UNIT_LN="$(grep -nE '^readonly SERVER_UNIT=' "$FLIP_SRC" | head -1 | cut -d: -f1 || true)"
-STATE_FILE_LN="$(grep -nE '^STATE_FILE=' "$FLIP_SRC" | head -1 | cut -d: -f1 || true)"
+SERVER_UNIT_LN="$(grep -nE '^readonly SERVER_UNIT=' "$FLIP_SRC" | sed -n '1p' | cut -d: -f1 || true)"
+STATE_FILE_LN="$(grep -nE '^STATE_FILE=' "$FLIP_SRC" | sed -n '1p' | cut -d: -f1 || true)"
 # Anchored on the PREDICATE CONSTRUCT, not the bare flag name: a body-grep sees comments too, and
 # the script's own header documents this flag in prose. A bare-token anchor would resolve to that
 # header line — above `readonly SERVER_UNIT` — and fail a correctly-placed gate
 # (cq-assert-anchor-not-bare-token).
-GATE_LN="$(grep -nE '\$\{1:-\}.*--fixture-seams' "$FLIP_SRC" | head -1 | cut -d: -f1 || true)"
+GATE_LN="$(grep -nE '\$\{1:-\}.*--fixture-seams' "$FLIP_SRC" | sed -n '1p' | cut -d: -f1 || true)"
 if [[ -n "$GATE_LN" && -n "$SERVER_UNIT_LN" && -n "$STATE_FILE_LN" \
       && "$GATE_LN" -gt "$SERVER_UNIT_LN" && "$GATE_LN" -lt "$STATE_FILE_LN" ]]; then
   pass "the gate sits between readonly SERVER_UNIT ($SERVER_UNIT_LN) and STATE_FILE ($STATE_FILE_LN), at $GATE_LN"
@@ -830,7 +934,7 @@ fi
 # exactly the writer this gate exists to exclude, and — if it were named CUTOVER_* — would put the
 # gate's own input inside the tripwire's derivation prefix, reddening it on its first green run.
 assert_contains "the gate's predicate reads positional argv, not the environment" \
-  "$(flip_src_nocomments | grep -F -- '--fixture-seams' | head -1 || true)" '${1:-}'
+  "$(flip_src_nocomments | grep -F -- '--fixture-seams' | sed -n '1p' || true)" '${1:-}'
 # The gate runs ~550 lines BEFORE `trap on_unexpected_exit ERR` is installed, so under
 # `set -Eeuo pipefail` any stray non-zero there is a SILENT death: no marker, no transition — the
 # one failure shape this FSM exists never to have. Pin the two constructs that would cause it.
@@ -998,6 +1102,10 @@ assert_contains "the unit sets SyslogIdentifier (else journald tags it 'doppler'
 UNIT_EXEC="$(sed -n '/^ExecStart=/,/[^\\]$/p' "$UNIT_SRC" | sed 's/\\$//' | tr -d '\n')"
 assert_absent "the SHIPPED unit does not pass --fixture-seams (that would disable the gate)" \
   "$UNIT_EXEC" "--fixture-seams"
+# #9175: the script's real Doppler write path resolves the config name from DOPPLER_CONFIG
+# (env-defaulted to prd) — never a literal name — so the rehearsal host's scratch config reaches it.
+assert_contains "flag_set's doppler write is --config \"\${DOPPLER_CONFIG:-prd}\" (#9175)" \
+  "$(sed -n '/doppler secrets set INNGEST_CUTOVER_FLIP/,/[^\\]$/p' "$TARGET" | tr -d '\n')" '--config "${DOPPLER_CONFIG:-prd}"'
 
 # --- #7761 REVIEW ROUND 2: what the sandboxing block can still break at runtime ---------------
 #
@@ -1073,7 +1181,7 @@ UNIT_ENV="$(grep -E '^Environment=' "$UNIT_SRC" || true)"
 _env_seam_hits=0
 while IFS= read -r _s; do
   [[ -n "$_s" ]] || continue
-  if printf '%s\n' "$UNIT_ENV" | grep -qE "^Environment=${_s}="; then
+  if printf '%s\n' "$UNIT_ENV" | grep -cE "^Environment=${_s}=" >/dev/null; then
     _env_seam_hits=$((_env_seam_hits + 1))
     echo "    unit sets gated seam: ${_s}"
   fi
@@ -1095,7 +1203,7 @@ unset _s _env_seam_hits
 # that is unmeasured here and is not claimed.
 echo "TEST: #7761 the pinned Doppler CLI supports the flags the unit passes"
 CI_INNGEST="$SCRIPT_DIR/cloud-init-inngest.yml"
-PINNED_DOPPLER="$(grep -oE 'DOPPLER_VERSION="[0-9]+\.[0-9]+\.[0-9]+"' "$CI_INNGEST" 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)"
+PINNED_DOPPLER="$(grep -oE 'DOPPLER_VERSION="[0-9]+\.[0-9]+\.[0-9]+"' "$CI_INNGEST" 2>/dev/null | sed -n '1p' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)"
 DOPPLER_FLOOR="3.75.3"
 if [[ -n "$PINNED_DOPPLER" ]]; then
   pass "cloud-init-inngest.yml pins a Doppler CLI version (${PINNED_DOPPLER})"
@@ -1103,7 +1211,7 @@ else
   fail "could not read DOPPLER_VERSION out of cloud-init-inngest.yml — the coupling is unasserted"
 fi
 if [[ -n "$PINNED_DOPPLER" ]] \
-   && [[ "$(printf '%s\n%s\n' "$DOPPLER_FLOOR" "$PINNED_DOPPLER" | sort -V | head -1)" == "$DOPPLER_FLOOR" ]]; then
+   && [[ "$(printf '%s\n%s\n' "$DOPPLER_FLOOR" "$PINNED_DOPPLER" | sort -V | sed -n '1p')" == "$DOPPLER_FLOOR" ]]; then
   pass "pinned Doppler ${PINNED_DOPPLER} >= ${DOPPLER_FLOOR}, the version --only-secrets was measured on"
 else
   fail "pinned Doppler ${PINNED_DOPPLER:-<none>} is below ${DOPPLER_FLOOR} — the unit's --only-secrets bound may not parse"
@@ -1122,6 +1230,34 @@ else
   fail "is_real_mount has ${IRM_STATS} dereferencing stat calls, expected 2"
 fi
 
+# --- #8054: the heartbeat is a CONSUMED CONTRACT, pinned on the producer side ------------------
+# scripts/cutover-inngest.sh op=execute 2.0 (E13 of inngest_execute_registry_gate in
+# tests/scripts/lib/inngest-host-dark-gate.sh) reads the newest same-boot `inngest-cutover-flip`
+# row's `.message.flag` as the freshness bridge that lets a <=90-min-old dark probe row clear the
+# cutover pre-flight. That consumer depends on THREE producer facts this suite now pins, so an
+# edit to emit_state cannot silently disarm the P0 cutover's own gate: (a) the JSON carries a
+# `flag` key; (b) every terminal arm (`done`/`rolled-back`/`aborted`) still emits a heartbeat on
+# each tick (the noop-* reasons the S-block above already exercises); (c) the line is logged under
+# the `inngest-cutover-flip` tag Vector allowlists. This file does NOT edit the FSM — it is baked
+# into the host image — it only asserts what the FSM already emits.
+EMIT_JQ_KEYS="$(awk '/^emit_state\(\) \{$/,/^}$/' "$TARGET" | grep -oE "'\{[^']*\}'" | sed -n '1p' | tr -d "'{}" | tr ',' '\n' | sed -E 's/:.*$//; s/[[:space:]]//g' | sort | tr '\n' ' ' || true)"
+if [[ "$EMIT_JQ_KEYS" == *" flag "* || "$EMIT_JQ_KEYS" == "flag "* ]]; then
+  pass "#8054 emit_state's jq program emits a top-level \`flag\` key (consumed by op=execute 2.0 E13); keys: ${EMIT_JQ_KEYS}"
+else
+  fail "#8054 emit_state's jq program no longer emits \`flag\` — op=execute 2.0's E13 would refuse every dispatch as flag_unreadable; keys: ${EMIT_JQ_KEYS}"
+fi
+if awk '/^emit_state\(\) \{$/,/^}$/' "$TARGET" | grep -cE 'logger}" -t "\$LOG_TAG" "\$json"' >/dev/null \
+   && grep -qE '^readonly LOG_TAG="inngest-cutover-flip"$' "$TARGET"; then
+  pass "#8054 emit_state logs under LOG_TAG, and LOG_TAG is the literal inngest-cutover-flip (the tag vector.toml allowlists and 2.0 greps)"
+else
+  fail "#8054 emit_state no longer logs under LOG_TAG=inngest-cutover-flip — 2.0's heartbeat read would return zero rows (fsm_silent)"
+fi
+if grep -qE '^[[:space:]]*"inngest-cutover-flip",?[[:space:]]*(#.*)?$' "$SCRIPT_DIR/vector.toml"; then
+  pass "#8054 vector.toml still allowlists the inngest-cutover-flip tag"
+else
+  fail "#8054 vector.toml no longer allowlists inngest-cutover-flip — the heartbeat never reaches the warehouse"
+fi
+
 # --- S8: an assertion-count FLOOR ----------------------------------------------------------
 # Every suite here gates only on FAIL. Deleting a whole test block drops the PASS count and
 # still exits 0, so "all assertions passed" and "fewer assertions ran" are the same signal.
@@ -1133,7 +1269,13 @@ fi
 # per target), Environment=/seam disjointness (1 extractor floor + 1), the pinned-Doppler-CLI
 # coupling (2), and the is_real_mount dereference (1). Derived from a green run, never guessed;
 # raise in lockstep when adding tests.
-MIN_ASSERTIONS=147
+# 147 -> 150: +3 for the #8054 producer-side heartbeat contract (flag key, tag literal, Vector
+# allowlist) that op=execute 2.0 consumes.
+# 150 -> 163: +13 for the #7777 reflush arm — the authorized-clear ordering case (4e, 6
+# assertions) and the evidence-less refusal case (4f, 7 assertions).
+# 163 -> 177: +14 for the #7696 noop-throttle block — the cadence case (10), the
+# interval-0 seam case (2), and the non-numeric-interval fallback case (2).
+MIN_ASSERTIONS=177
 if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
   # printf + exit, NOT fail() (ADR-193): routing the floor through the counter it exists to
   # protect means one edit disarms both. See the instrument self-test at the top.

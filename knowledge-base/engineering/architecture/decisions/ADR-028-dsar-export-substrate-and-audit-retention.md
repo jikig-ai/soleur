@@ -2,8 +2,8 @@
 title: "ADR-028 — DSAR export substrate, audit retention, worker credential, and runtime"
 status: accepted
 date: 2026-05-12
-plan: knowledge-base/project/plans/2026-05-12-feat-dsar-art15-export-endpoint-plan.md
-spec: knowledge-base/project/specs/feat-dsar-art15-export-endpoint/spec.md
+plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-12-feat-dsar-art15-export-endpoint-plan.md
+spec: knowledge-base/project/specs/archive/20261013-014038-feat-dsar-art15-export-endpoint/spec.md
 issue: 3637
 supersedes: none
 related: [ADR-023-supabase-environment-isolation, ADR-021-kb-binary-serving-pattern]

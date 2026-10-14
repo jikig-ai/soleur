@@ -1,6 +1,6 @@
 # Cloudflare zone-level bot-management settings for soleur.ai.
 #
-# Codifies three settings that live outside the standard WAF phase
+# Codifies the zone bot-management settings that live outside the standard WAF phase
 # pipeline — cloudflare_ruleset skip actions in http_request_firewall_*
 # phases cannot bypass them:
 #
@@ -33,6 +33,17 @@
 #       Mirrors the current dashboard state (JS Detections: On). No
 #       change; declared so drift is visible.
 #
+#   - sbfm_definitely_automated = "allow", sbfm_verified_bots = "allow"
+#
+#       Mirror the live Super Bot Fight Mode state (#8754). The zone is on the
+#       Pro plan (measured plan.legacy_id = "pro"), where SBFM is live and
+#       dashboard-settable, and the API returns "allow" for both. Omitting them
+#       made every merge apply print this resource as "updated in-place" and
+#       re-PUT it, and the next refresh read "allow" back: a perpetual diff in
+#       every drift report since at least #7316. Declared rather than put under
+#       ignore_changes so a dashboard toggle to "block", which would re-block
+#       the AI crawlers bot-allowlist.tf admits, is drift the plan shows.
+#
 # The resource uses a narrow CF_API_TOKEN_BOT_MANAGEMENT token scoped to
 # Bot Management:Edit on soleur.ai only. See main.tf provider alias
 # "bot_management" and the variable in variables.tf.
@@ -43,4 +54,7 @@ resource "cloudflare_bot_management" "soleur_ai" {
   ai_bots_protection = "disabled"
   fight_mode         = false
   enable_js          = true
+
+  sbfm_definitely_automated = "allow"
+  sbfm_verified_bots        = "allow"
 }

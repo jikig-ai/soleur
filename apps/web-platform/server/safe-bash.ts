@@ -51,6 +51,8 @@
 // full C0 range (`\x00-\x1f`) plus DEL (`\x7f`) is rejected to seal
 // log-injection / null-byte truncation surfaces — `\n` (`\x0a`) and
 // `\r` (`\x0d`) fall inside that range and are therefore double-covered.
+import { SOLEUR_PLUGIN_PATH_DEFAULT } from "./plugin-path";
+
 const SHELL_METACHAR_DENYLIST = /[;&|`<>$\\\x00-\x1f\x7f\u2028\u2029]/;
 // Path-traversal denylist (#3252). Matches `..` only as a parent-dir segment
 // — preceded by start-of-string, slash, or whitespace AND followed by
@@ -86,6 +88,24 @@ const ECHO_TOKEN = String.raw`(?:"[^"\\]*"|'[^'\\]*'|[\w./~+:=@-]+)`;
 // SHELL_METACHAR_DENYLIST still rejects `|`/`$`/backtick/`<`/`>` before any
 // pattern runs, so a comma is the only extra char this admits over PATH_TOKEN.
 const GH_ARG = String.raw`[\w./~+:=@,-]+`;
+
+// git branch — READ-ONLY forms only (#9555). A bare positional arg CREATES a
+// branch; -d/-D delete, -m/-M rename, -c/-C copy, -u/--set-upstream-to and
+// --unset-upstream write config, -f/--force overwrites, --edit-description
+// writes. -q/--quiet is EXCLUDED from the flag set: `git branch -q <name>`
+// still creates silently (a one-keystroke repair of a refused write —
+// cf. learning 2026-09-24-every-refusal-i-added-…). All such forms fall
+// through to the review-gate. Positional args require a list-FORCING flag
+// in the leading flag run — verified against git 2.55 (PR #9570 review):
+// ONLY --list, --show-current, --contains/--no-contains, --merged/
+// --no-merged, --points-at switch the command to list mode, and -a/-r fatal
+// on a branch-name arg. The display modifiers (-v/--verbose, --sort=,
+// --format=, --color, --column, --ignore-case, --abbrev) do NOT force list
+// mode — `git branch -v <name>` CREATES. A positional arg must not start
+// with `-` (a branch name can't), so a write flag cannot launder in as a
+// pattern arg; `*` is outside PATH_TOKEN so only literal prefixes pass.
+const GIT_BRANCH_LIST_FORCE = String.raw`(?:--list|--show-current|--all|--remotes|--contains|--no-contains|--merged|--no-merged|--points-at|-(?=[arv]*[ar])[arv]+)`;
+const GIT_BRANCH_READ_FLAG = String.raw`(?:${GIT_BRANCH_LIST_FORCE}|-[v]+|--verbose|--sort=${PATH_TOKEN}|--format=${PATH_TOKEN}|--abbrev(?:=\d+)?|--column|--no-column|--color(?:=${PATH_TOKEN})?|--no-color|--ignore-case)`;
 
 export const SAFE_BASH_PATTERNS: readonly RegExp[] = [
   // No-arg / fixed-form commands
@@ -126,7 +146,11 @@ export const SAFE_BASH_PATTERNS: readonly RegExp[] = [
   new RegExp(String.raw`^git\s+log(?:\s+${PATH_TOKEN})*\s*$`),
   new RegExp(String.raw`^git\s+diff(?:\s+${PATH_TOKEN})*\s*$`),
   new RegExp(String.raw`^git\s+show(?:\s+${PATH_TOKEN})*\s*$`),
-  new RegExp(String.raw`^git\s+branch(?:\s+${PATH_TOKEN})*\s*$`),
+  // Arm 1: bare `git branch` or flag-only forms (incl. --show-current, -v).
+  new RegExp(String.raw`^git\s+branch(?:\s+${GIT_BRANCH_READ_FLAG})*\s*$`),
+  // Arm 2: the leading flag run must contain ≥1 list-FORCING flag before any
+  // positional arg (the lookahead), then flags and non-dash args mix freely.
+  new RegExp(String.raw`^git\s+branch(?=\s+(?:${GIT_BRANCH_READ_FLAG}\s+)*?${GIT_BRANCH_LIST_FORCE}(?=\s|$))\s+${GIT_BRANCH_READ_FLAG}(?:\s+(?:${GIT_BRANCH_READ_FLAG}|(?!-)${PATH_TOKEN}))*\s*$`),
   new RegExp(String.raw`^git\s+rev-parse(?:\s+${PATH_TOKEN})*\s*$`),
   // git config --get only (no --set, no --unset, no --add)
   new RegExp(String.raw`^git\s+config\s+--get(?:\s+[\w.-]+)?\s*$`),
@@ -145,27 +169,20 @@ export const SAFE_BASH_PATTERNS: readonly RegExp[] = [
   // auto-approve is NO LONGER a bare `(?:\./)?plugins/soleur/…` regex here. On the
   // Concierge SERVER surface, a CWD-relative `./plugins/soleur/…` resolves to the
   // connected repo's UNTRUSTED committed copy, so auto-approving it ran untrusted
-  // code. It now lives in EXACT_LITERAL_SAFE_COMMANDS below as the deployed
-  // `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}` form (server → /app deployed copy;
-  // CLI → local checkout), matched by exact string equality (no `$`-denylist
-  // relaxation). See isSafeSingleSegment stage 0.
+  // code. It now lives in EXACT_LITERAL_SAFE_COMMANDS below as the loader-substituted
+  // deployed form (ADR-179 A19, #7453), matched by exact string equality (no
+  // denylist relaxation). See isSafeSingleSegment stage 1d.
 ];
 
-// Exact-literal safe-command carve-out (Slice B, #6121). A CLOSED set of KNOWN
-// fixed command literals that legitimately contain `${CLAUDE_PLUGIN_ROOT:-./plugins/
-// soleur}` — a bash DEFAULT-VALUE expansion (`:-`), NOT command substitution
-// (`$(…)`) — and would otherwise be rejected by SHELL_METACHAR_DENYLIST at stage 1.
-// Matched by EXACT string equality on the trimmed (redirect-stripped) segment, so
-// there is ZERO arg-variation / injection surface: only these precise strings pass,
-// and their runtime expansion is trusted on BOTH surfaces (server → the platform-
-// deployed `/app/shared/plugins/soleur`; CLI → the local `./plugins/soleur`
-// checkout). This does NOT loosen the general `$`/`{`/`}` denylist for any other
-// command — `${FOO}` / `$(…)` / a `..`-traversal / a different script path all
-// still fall through to the denylist (verified in safe-bash.test.ts). Only
-// read-only verbs (`list`/`ls`) are included; write verbs (create/cleanup-merged/
-// draft-pr) stay gated (they run via the autonomous/sandbox path, never here).
-const WORKTREE_MANAGER_DEPLOYED_FORM =
-  "bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh";
+// Exact-literal safe-command carve-out (Slice B, #6121; re-anchored by #7453 — rationale in
+// ADR-179 A19). A CLOSED set of the `worktree-manager.sh list|ls` literals the git-worktree
+// skill emits, as the SDK loader delivers them: the token substituted with the deployed root
+// (`--plugin-dir`; A10 measured the substitution on the CLI, and the SDK uses the same flag).
+// Matched by EXACT string equality on the redirect-stripped segment after every denylist
+// has run (stage 1d) — zero arg variation, and no denylist is relaxed. An unsubstituted token, or a SOLEUR_PLUGIN_PATH repoint, misses and
+// falls back to an approval prompt (fail-safe). The root is the constant, not getPluginPath(),
+// so the admitted set cannot depend on the environment at import time. Write verbs stay gated.
+const WORKTREE_MANAGER_DEPLOYED_FORM = `bash "${SOLEUR_PLUGIN_PATH_DEFAULT}/skills/git-worktree/scripts/worktree-manager.sh"`;
 export const EXACT_LITERAL_SAFE_COMMANDS: ReadonlySet<string> = new Set([
   `${WORKTREE_MANAGER_DEPLOYED_FORM} list`,
   `${WORKTREE_MANAGER_DEPLOYED_FORM} ls`,
@@ -219,7 +236,7 @@ export const SAFE_BASH_NEAR_MISS_PREFIX = new RegExp(
 // the denylist runs so the suffix's own `>`/`&` don't trip SHELL_METACHAR_
 // DENYLIST. File-path redirects (`>`, `>>`, `<`, `>&`) are NOT recognized and
 // remain denied because they survive the strip and hit the denylist.
-const TRAILING_SAFE_REDIRECT = /\s+(?:2>\/dev\/null|2>&1)\s*$/;
+export const TRAILING_SAFE_REDIRECT = /\s+(?:2>\/dev\/null|2>&1)\s*$/;
 
 // git/gh write-to-file flag denylist (review PR #4868). `git diff|log|show
 // --output=<file>` writes diff content to an arbitrary path — an
@@ -242,15 +259,6 @@ function isSafeSingleSegment(segment: string): boolean {
   // Strip a single recognized trailing stderr redirect (AC10). Anything else
   // containing `>`/`<`/`&` survives to the denylist below.
   const candidate = segment.replace(TRAILING_SAFE_REDIRECT, "");
-  // Stage 0: exact-literal carve-out (Slice B, #6121). A CLOSED set of known
-  // fixed command literals that legitimately carry `${CLAUDE_PLUGIN_ROOT:-…}` (a
-  // default-value expansion, not `$(…)`). Matched by EXACT equality on the
-  // trimmed segment BEFORE the `$`/`{`/`}` denylist, so these — and ONLY these
-  // precise strings — are admitted; any arg variation, injection tail, or
-  // different var/path falls through to the intact denylist below. `&&`-chains
-  // are still decomposed by isBashCommandSafe, so a `<literal> && evil` segment 2
-  // is independently denied. See EXACT_LITERAL_SAFE_COMMANDS.
-  if (EXACT_LITERAL_SAFE_COMMANDS.has(candidate.trim())) return true;
   // Stage 1: raw-string metacharacter denylist. Run BEFORE trim so
   // leading/trailing newlines (for example) are caught.
   if (SHELL_METACHAR_DENYLIST.test(candidate)) return false;
@@ -261,6 +269,13 @@ function isSafeSingleSegment(segment: string): boolean {
   // Stage 1c: reject the `--output=<file>` write flag before the allowlist
   // (review PR #4868) so a read verb cannot write/truncate an arbitrary path.
   if (FILE_WRITE_FLAG_DENYLIST.test(candidate)) return false;
+  // Stage 1d: exact-literal carve-out (Slice B, #6121; ADR-179 A19). A CLOSED set of
+  // fixed literals no SAFE_BASH_PATTERNS entry matches (a quoted absolute script path).
+  // It runs AFTER every denylist, so the carve-out bypasses none of them, and trims only
+  // ASCII space/tab — String.trim() also strips \f, NBSP and U+FEFF, which bash does not
+  // treat as separators, so `<literal>\u00a0` would reach the script as a different argv.
+  // Any arg variation or different path falls through to the allowlist and fails.
+  if (EXACT_LITERAL_SAFE_COMMANDS.has(candidate.replace(/^[ \t]+|[ \t]+$/g, ""))) return true;
   const trimmed = candidate.trim();
   if (trimmed.length === 0) return false;
   // Stage 2: leading-token allowlist match against trimmed segment.

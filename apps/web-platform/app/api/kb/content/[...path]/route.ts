@@ -1,6 +1,6 @@
 import path from "node:path";
 import { NextResponse } from "next/server";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/server";
 import { resolveActiveWorkspaceKbRoot } from "@/server/workspace-resolver";
 import logger from "@/server/logger";
 import {
@@ -16,24 +16,22 @@ import {
   BinaryOpenError,
 } from "@/server/kb-binary-response";
 import { serveKbFile, serveBinary } from "@/server/kb-serve";
+import { verifiedUserId } from "@/server/request-auth";
 
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ path: string[] }> },
 ) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const userId = await verifiedUserId(request);
 
-  if (!user) {
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const serviceClient = createServiceClient();
   // ADR-044 (#4543): resolve the ACTIVE workspace's KB root, not the caller's
   // own `users` row (which for an invited member is their empty solo row → 404).
-  const access = await resolveActiveWorkspaceKbRoot(user.id, serviceClient);
+  const access = await resolveActiveWorkspaceKbRoot(userId, serviceClient);
   if (!access.ok) {
     return access.status === 404
       ? NextResponse.json({ error: "Workspace not found" }, { status: 404 })
@@ -90,19 +88,16 @@ export async function HEAD(
   request: Request,
   { params }: { params: Promise<{ path: string[] }> },
 ) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const userId = await verifiedUserId(request);
 
-  if (!user) {
+  if (!userId) {
     return new Response(null, { status: 401 });
   }
 
   const serviceClient = createServiceClient();
   // ADR-044 (#4543): active-workspace KB root (member-aware), not the caller's
   // own `users` row.
-  const access = await resolveActiveWorkspaceKbRoot(user.id, serviceClient);
+  const access = await resolveActiveWorkspaceKbRoot(userId, serviceClient);
   if (!access.ok) {
     return new Response(null, { status: access.status });
   }

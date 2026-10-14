@@ -3,6 +3,10 @@ name: feature-video
 description: "This skill should be used to record video walkthroughs of features for PR descriptions. Captures browser interactions via agent-browser CLI; optional GIF/MP4 via ffmpeg and upload via rclone."
 ---
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 # Feature Video Walkthrough
 
 <command_purpose>Record a video walkthrough demonstrating a feature, upload it, and add it to the PR description.</command_purpose>
@@ -34,13 +38,13 @@ This skill creates professional video walkthroughs of features for PR documentat
 Run [check_deps.sh](./scripts/check_deps.sh) before proceeding. When invoked from a pipeline (e.g., one-shot), pass `--auto` to skip interactive prompts and install missing tools automatically:
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/feature-video/scripts/check_deps.sh
+bash "${CLAUDE_PLUGIN_ROOT}/skills/feature-video/scripts/check_deps.sh"
 ```
 
 For pipeline/automated use:
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/feature-video/scripts/check_deps.sh --auto
+bash "${CLAUDE_PLUGIN_ROOT}/skills/feature-video/scripts/check_deps.sh" --auto
 ```
 
 If the script exits non-zero, agent-browser is missing and recording cannot proceed. Stop and inform the user.
@@ -185,8 +189,26 @@ agent-browser screenshot tmp/screenshots/01-start.png
 
 **Step 2: Perform navigation/interactions**
 
+### Preflight: verify the plugin install before any snapshot
+
+The redactor is reached through `${CLAUDE_PLUGIN_ROOT}`. An ambient value pointing at a
+directory that is not a Soleur install would resolve to a path that does not exist — or, worse,
+to one an attacker chose. Verify plugin IDENTITY and halt if it does not hold (ADR-179 decision 2);
+a `test -f` on the script alone is a shape check and was measured bypassable.
+
 ```bash
-agent-browser snapshot -i  # Get refs
+[ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ] \
+  && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" \
+  || { echo "SOLEUR_SNAPSHOT_HALT reason=plugin-root-unverified root=[${CLAUDE_PLUGIN_ROOT}]" >&2
+       echo "  Cannot locate the snapshot redactor, so no accessibility snapshot may be taken here." >&2
+       echo "  Root EMPTY: no Soleur plugin is loaded in this session. Install it and start a NEW session." >&2
+       echo "  Root set but wrong: a repo checkout is not an install. Run 'claude plugin update soleur@soleur-marketplace' (or the id 'claude plugin list' prints, if you added the repository directly), then RESTART Claude Code." >&2
+       echo "  Nothing has been captured yet, so nothing has leaked." >&2
+       exit 2; }
+```
+
+```bash
+agent-browser snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"  # Get refs
 agent-browser click @e1    # Click navigation element
 agent-browser wait 1000
 agent-browser screenshot tmp/screenshots/02-navigate.png
@@ -195,7 +217,7 @@ agent-browser screenshot tmp/screenshots/02-navigate.png
 **Step 3: Demonstrate feature**
 
 ```bash
-agent-browser snapshot -i  # Get refs for feature elements
+agent-browser snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"  # Get refs for feature elements
 agent-browser click @e2    # Click feature element
 agent-browser wait 1000
 agent-browser screenshot tmp/screenshots/03-feature.png
@@ -370,16 +392,16 @@ Present completion summary:
 
 ```bash
 # Record video for current branch's PR
-/feature-video
+soleur:feature-video
 
 # Record video for specific PR
-/feature-video 847
+soleur:feature-video 847
 
 # Record with custom base URL
-/feature-video 847 http://localhost:5000
+soleur:feature-video 847 http://localhost:5000
 
 # Record for staging environment
-/feature-video current https://staging.example.com
+soleur:feature-video current https://staging.example.com
 ```
 
 ## Tips

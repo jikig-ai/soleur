@@ -43,6 +43,7 @@ import {
 import { randomBytes, randomUUID } from "node:crypto";
 
 import { mintFounderJwt } from "@/lib/supabase/tenant";
+import { tearDownTenantUser } from "@/test/helpers/tenant-isolation-teardown";
 
 const INTEGRATION_ENABLED = process.env.TENANT_INTEGRATION_TEST === "1";
 
@@ -177,26 +178,17 @@ describe.skipIf(!INTEGRATION_ENABLED)(
     });
 
     afterAll(async () => {
-      // user_id has ON DELETE RESTRICT — anonymise (NULLs the FK) before
+      // user_id has ON DELETE RESTRICT — the helper's anonymise-first
+      // sequence covers anonymise_email_triage_items (NULLs the FK) before
       // deleting the auth users. WORM rows themselves stay (append-only by
-      // design; only the purge RPC can remove old rows).
+      // design; only the purge RPC can remove old rows). Fail-loud per
+      // #10096 — a swallowed teardown error is a silent user leak.
       for (const u of [userA, userB]) {
         if (!u.id) continue;
         assertSynthetic(u.email);
-        try {
-          await service.rpc("anonymise_email_triage_items", {
-            p_user_id: u.id,
-          });
-        } catch {
-          /* tolerate teardown failures */
-        }
-        try {
-          await service.auth.admin.deleteUser(u.id);
-        } catch {
-          /* tolerate teardown failures */
-        }
+        await tearDownTenantUser(service, u);
       }
-    });
+    }, 60_000);
 
     test("(a) stub INSERT happy path — one-time-set columns are SQL NULL", async () => {
       const stub = await insertStub(service, userA.id);
@@ -575,12 +567,10 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       expect(reidentErr).not.toBeNull();
       expect(reidentErr!.code).toBe("P0001");
 
-      try {
-        await service.auth.admin.deleteUser(u.id);
-      } catch {
-        /* tolerate teardown failure */
-      }
-    });
+      // Fail-loud per #10096 — a swallowed teardown error is a silent
+      // user leak.
+      await tearDownTenantUser(service, u);
+    }, 30_000);
 
     test("(i) behavioral RLS deny: type-valid cross-tenant SELECT → 0 rows + owner positive control", async () => {
       const stub = await insertStub(service, userA.id);
@@ -657,7 +647,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         expect(row!.status).toBe("acknowledged");
       } finally {
         // Best-effort teardown (this is the last case; afterAll's user-delete
-        // also cascades the membership). Ignore WORM/remove-RPC restrictions.
+        // also anonymise-cleans the membership under worm_bypass). Ignore WORM/remove-RPC restrictions.
         await service
           .from("workspace_members")
           .delete()

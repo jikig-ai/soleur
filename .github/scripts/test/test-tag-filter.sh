@@ -69,10 +69,10 @@ run_pipeline() {
   # Stdout: winner of the canonical filter pipeline (or empty on no-match).
   local prefix="$1" corpus="$2" prefix_re
   prefix_re=$(escape_prefix_re "$prefix")
-  printf '%s\n' "$corpus" \
-    | grep -E "^${prefix}" \
-    | sort -V -r \
-    | { grep -m1 -E "^${prefix_re}[0-9]+\.[0-9]+\.[0-9]+$" || [ $? -eq 1 ]; }
+  # Mirrors reusable-release.yml: the sorted tag list is read into a variable and the early-exit
+  # grep reads that value (here-string), so no producer sits on the other end of a pipe grep -m1 closes.
+  tags=$(printf '%s\n' "$corpus" | grep -E "^${prefix}" | sort -V -r || true)
+  grep -m1 -E "^${prefix_re}[0-9]+\.[0-9]+\.[0-9]+$" <<<"$tags" || [ $? -eq 1 ]
 }
 
 assert_eq() {
@@ -105,8 +105,8 @@ assert_eq "ac7-empty-fallback" "" "$(run_pipeline 'v' "$EMPTY_CORPUS")"
 # exit non-zero.
 if bash --noprofile --norc -eo pipefail -c '
     set -eo pipefail
-    LATEST=$(printf "vinngest-v1.0.0\n" | sort -V -r \
-      | { grep -m1 -E "^v[0-9]+\.[0-9]+\.[0-9]+$" || [ $? -eq 1 ]; })
+    tags=$(printf "vinngest-v1.0.0\n" | sort -V -r)
+    LATEST=$(grep -m1 -E "^v[0-9]+\.[0-9]+\.[0-9]+$" <<<"$tags" || [ $? -eq 1 ])
     [ -z "$LATEST" ]
 '; then
   echo "PASS [ac7-pipefail-safe]: empty match does not abort under -eo pipefail"
@@ -134,8 +134,8 @@ assert_eq "ac-metachar-prefix-escape-rejects" "a.b-1.0.0" "$(run_pipeline 'a.b-'
 # the same regex rejects it. This locks in the security property: the
 # escape is what stops a tag like `aXb-1.0.0` from being accepted as a
 # valid `a.b-` release.
-UNESCAPED_RESULT=$(printf 'aXb-1.0.0\n' | sort -V -r \
-  | { grep -m1 -E "^a.b-[0-9]+\.[0-9]+\.[0-9]+$" || [ $? -eq 1 ]; })
+unescaped_tags=$(printf 'aXb-1.0.0\n' | sort -V -r)
+UNESCAPED_RESULT=$(grep -m1 -E "^a.b-[0-9]+\.[0-9]+\.[0-9]+$" <<<"$unescaped_tags" || [ $? -eq 1 ])
 if [[ "$UNESCAPED_RESULT" == "aXb-1.0.0" ]]; then
   echo "PASS [ac-metachar-unescaped-would-overmatch]: unescaped regex accepts attacker tag (escape is load-bearing)"
   PASS=$((PASS + 1))

@@ -413,14 +413,16 @@ for endpoint in cloudflare_record.github_pages cloudflare_record.pages_apex; do
 done
 
 # The own-dispatch row. A guard nobody runs is a guard that passes by never
-# running. Anchored on the `run:` INVOCATION over a comment-stripped view — a
-# bare substring search is satisfied by a comment naming the file, which is
-# precisely the failure this file's own strip_comments header describes, and it
-# was the one input never being stripped. AC65 asked for the invocation anchor.
+# running. Since #8736 presence under apps/web-platform/infra/ IS registration —
+# the deploy-script-tests matrix legs glob-derive and run this file — so the
+# thing to pin is the CONNECTION: the runner invocation. Anchored on the `run:`
+# line over a comment-stripped view — a bare substring search is satisfied by a
+# comment naming the file, which is precisely the failure this file's own
+# strip_comments header describes. AC65 asked for the invocation anchor.
 rc=1
-grep -qE '^[[:space:]]*run:.*apex-single-node-replace\.test\.sh([[:space:]]|$)' \
+grep -qE '^[[:space:]]*run: bash apps/web-platform/infra/run-registered-suites\.sh[[:space:]]*$' \
   <(strip_comments "$VALIDATION_WF") && rc=0
-verdict "$rc" "this guard is dispatched by a run: step in infra-validation.yml (a comment naming it does not satisfy this)"
+verdict "$rc" "this guard's runner is dispatched by a run: step in infra-validation.yml (a comment naming it does not satisfy this)"
 
 # ---------------------------------------------------------------------------------------
 # STAGE-DEPENDENT CASES — three in each stage, so the floor stays an EXACT cardinality

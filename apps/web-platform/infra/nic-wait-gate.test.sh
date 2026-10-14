@@ -302,8 +302,8 @@ assert "call site carries NO 'exit 1'"    "[[ '$NIC_CALL' != *'exit 1'* ]]"
 # AC5, which is the established single home for this gate's render assertions.
 echo ""
 echo "--- AC1: soleur-wait-nic precedes cloudflared service install ---"
-NIC_LINE=$( { grep -nE '^[[:space:]]*-[[:space:]]+soleur-wait-nic ' "$CI" | head -1 | cut -d: -f1; } || true)
-INSTALL_LINE=$( { grep -nF -- 'cloudflared service install' "$CI" | head -1 | cut -d: -f1; } || true)
+NIC_LINE=$( { grep -nE '^[[:space:]]*-[[:space:]]+soleur-wait-nic ' "$CI" | sed -n '1p' | cut -d: -f1; } || true)
+INSTALL_LINE=$( { grep -nF -- 'cloudflared service install' "$CI" | sed -n '1p' | cut -d: -f1; } || true)
 assert "both the NIC wait and the cloudflared install are present" \
   "[[ -n '$NIC_LINE' && -n '$INSTALL_LINE' ]]"
 assert "NIC wait ($NIC_LINE) precedes cloudflared service install ($INSTALL_LINE)" \

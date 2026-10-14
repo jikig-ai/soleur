@@ -1,0 +1,4 @@
+def test_scratch(tmp_path_factory):
+    # A runner-managed tmp dir: pytest owns and reaps it, so it is not an allocation.
+    work = tmp_path_factory.mktemp("demo")
+    assert work.is_dir()

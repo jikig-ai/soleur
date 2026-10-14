@@ -61,7 +61,8 @@ ACTION_YML="$REPO_ROOT/.github/actions/bot-pr-with-synthetic-checks/action.yml"
 SECRET_SCAN_YML="$REPO_ROOT/.github/workflows/secret-scan.yml"
 CI_YML="$REPO_ROOT/.github/workflows/ci.yml"
 # 4th gitleaks install site (#7307). main-health-monitor.yml runs TEST_GROUP=all,
-# so it needs the same gitleaks three suites hard-ABORT without; an unregistered
+# so it needs the same gitleaks the gitleaks suites FAIL without under CI=true (#8266:
+# they skip per arm and any skip fails under CI); an unregistered
 # copy drifts silently and makes the monitor scan with a different gitleaks than CI.
 MHM_YML="$REPO_ROOT/.github/workflows/main-health-monitor.yml"
 CLA_CANONICAL="$REPO_ROOT/scripts/ci-cla-required-ruleset-canonical-required-status-checks.json"
@@ -259,6 +260,17 @@ extract_sha() {
   grep -oE 'GITLEAKS_SHA256["]?[[:space:]]*[:=][[:space:]]*"?[0-9a-f]{64}' "$1" \
     | grep -oE '[0-9a-f]{64}' | head -1
 }
+# IN-FILE duplicates are a parity surface too. `test-scripts-heavy` clones the
+# gitleaks env block inside ci.yml, so the same pin now lives twice in one file —
+# and the `head -1` extractors above would never see the second copy diverge.
+extract_versions_all() {
+  grep -oE 'GITLEAKS_VERSION["]?[[:space:]]*[:=][[:space:]]*"?[0-9]+\.[0-9]+\.[0-9]+' "$1" \
+    | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | sort -u
+}
+extract_shas_all() {
+  grep -oE 'GITLEAKS_SHA256["]?[[:space:]]*[:=][[:space:]]*"?[0-9a-f]{64}' "$1" \
+    | grep -oE '[0-9a-f]{64}' | sort -u
+}
 
 for f in "$SECRET_SCAN_YML" "$CI_YML" "$ACTION_YML" "$MHM_YML"; do
   assert_file_exists "$f" "pin site exists: ${f##*/}"
@@ -283,6 +295,41 @@ assert_eq "$ss_s" "$ci_s" "(5d) secret-scan.yml SHA256 == ci.yml SHA256"
 assert_eq "$ss_s" "$ac_s" "(5e) secret-scan.yml SHA256 == action SHA256"
 assert_eq "$ss_v" "$mhm_v" "(5f) secret-scan.yml version == main-health-monitor version"
 assert_eq "$ss_s" "$mhm_s" "(5g) secret-scan.yml SHA256 == main-health-monitor SHA256"
+
+# (5g2/5g3) Every in-file declaration of the pin must agree — a file that says
+# the same thing twice must say it ONCE. ci.yml now carries the gitleaks env in
+# both test-scripts jobs; a bump that edits only the first copy stays green
+# under 5b-5g while the heavy leg runs a different binary.
+for f in "$SECRET_SCAN_YML" "$CI_YML" "$ACTION_YML" "$MHM_YML"; do
+  _nv="$(extract_versions_all "$f" | grep -c . || true)"
+  _ns="$(extract_shas_all "$f" | grep -c . || true)"
+  assert_eq "1" "$_nv" "(5g2) ${f##*/} declares exactly one distinct gitleaks version"
+  assert_eq "1" "$_ns" "(5g3) ${f##*/} declares exactly one distinct gitleaks SHA256"
+done
+
+# (5h/5i) The OPERATOR-FACING remediation strings carry the same version. These are
+# a 5th and 6th declaration site the four-workflow comparison above cannot see: both
+# GL_REMEDIATION literals tell a developer which gitleaks to install, and on a bump
+# they go stale silently while 5a-5g stay green. The suites that assert "8.24.2" are
+# no backstop — they would red, and the cheapest fix is to bump the TEST literal,
+# leaving the remediation pointing at a version CI no longer uses.
+extract_remediation_version() {
+  grep -oE 'GL_REMEDIATION="[^"]*gitleaks [0-9]+\.[0-9]+\.[0-9]+' "$1" \
+    | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1
+}
+HOOK_SCAN="$REPO_ROOT/.claude/hooks/git-commit-secret-scan.sh"
+PRD_SCAN="$REPO_ROOT/plugins/soleur/skills/code-to-prd/scripts/code-to-prd.sh"
+hook_rv=$(extract_remediation_version "$HOOK_SCAN")
+prd_rv=$(extract_remediation_version "$PRD_SCAN")
+if [[ -n "$hook_rv" && -n "$prd_rv" ]]; then
+  echo "  PASS: (5h) both GL_REMEDIATION strings declare a gitleaks version"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: (5h) a GL_REMEDIATION version is missing or unparseable — hook=[$hook_rv] prd=[$prd_rv]"
+  FAIL=$((FAIL + 1))
+fi
+assert_eq "$ss_v" "$hook_rv" "(5i) secret-scan.yml version == git-commit-secret-scan.sh remediation"
+assert_eq "$ss_v" "$prd_rv"  "(5j) secret-scan.yml version == code-to-prd.sh remediation"
 echo ""
 
 # --- Test 6: parser logic-parity across all three copies --------------------
@@ -312,7 +359,7 @@ for f in "${PARSER_FILES[@]}"; do
   # must not return in CODE. Filter full-line comments first — every parser file
   # (and this test) documents the old form in prose, which a bare grep would
   # false-match (the grep-over-own-comments trap).
-  if grep -vE '^[[:space:]]*#' "$f" | grep -qE '\$\{(line|rcline)%%#'; then
+  if grep -vE '^[[:space:]]*#' "$f" | grep -cE >/dev/null '\$\{(line|rcline)%%#'; then
     echo "  FAIL: (6) $base contains a truncating inline #-strip in code — re-introduces #6049"
     FAIL=$((FAIL + 1))
   else
@@ -382,8 +429,10 @@ preflight_line=$(grep -nE '^[[:space:]]*if ! python3 scripts/lint-credential-pat
 # `git push` rather than the far-downstream check-run POST catches a reorder that
 # pushes the bot branch BEFORE scanning it (test-design review of PR #6883). The
 # check-run POST anchor is retained below as an independent, weaker upper bound.
-sideeffect_line=$(grep -nE '^[[:space:]]*git push ' "$ACTION_YML" | head -1 | cut -d: -f1 || true)
-postrun_line=$(grep -nE '^[[:space:]]*gh api "repos/\$\{REPO\}/check-runs"' "$ACTION_YML" | head -1 | cut -d: -f1 || true)
+# Since #9454 (ADR-285) the push is `git_remote push ...` (the App token as a per-command header) and
+# the check-run POST is `gh_gate api ...` (the workflow token); the bare spellings stay accepted.
+sideeffect_line=$(grep -nE '^[[:space:]]*(git push |git_remote push )' "$ACTION_YML" | head -1 | cut -d: -f1 || true)
+postrun_line=$(grep -nE '^[[:space:]]*(gh|gh_gate) api "repos/\$\{REPO\}/check-runs"' "$ACTION_YML" | head -1 | cut -d: -f1 || true)
 
 if [[ -n "$preflight_line" ]]; then
   echo "  PASS: (8a) action.yml runs lint-credential-path-literals.py over \"\${PATHS[@]}\" (line $preflight_line)"

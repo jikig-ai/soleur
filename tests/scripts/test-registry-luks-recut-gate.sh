@@ -127,8 +127,8 @@ canonical_recut "$TMP/canonical.json"
 check "canonical recut PASS" 0 "registry_luks_recut_gate: PASS" "$TMP/canonical.json"
 
 # --- THE case that proves this issue's purpose --------------------------------------------
-# registry-host-replace PRESERVES the volume. Against a still-plaintext volume that boots
-# cloud-init into the blkid `*)` FATAL arm and DARKS the registry. The gate must ABORT.
+# registry-host-replace PRESERVES the volume, so it is a host replace, not a recut (against a
+# non-LUKS volume it boots cloud-init into the blkid `*)` FATAL arm). The gate must ABORT.
 # NOTE the attachment/NIC shape: this fixture must be a FAITHFUL registry-host-replace plan,
 # because the cross-gate divergence block below asserts the host-replace gate PASSES it. In a
 # real host replace the SERVER is replaced, which forces its volume-attachment and private NIC
@@ -214,6 +214,15 @@ check "before.id as JSON string vs numeric input PASS (tostring)" 0 "volume_id_m
 # --- The lib fail-closes on its OWN argument (D9) ---------------------------------------------
 check "empty \$expected ABORT (fail-closed on own arg)" 1 "expected_registry_store_volume_id" "$TMP/canonical.json" ""
 check "non-numeric \$expected ABORT (fail-closed on own arg)" 1 "expected_registry_store_volume_id" "$TMP/canonical.json" "not-a-number"
+# The ABORT line prints a command a human copy-pastes: it must carry the token on curl's STDIN
+# (--config - fed by a printf process substitution), never as a `-H "Authorization: Bearer ..."` argv.
+check "non-numeric \$expected ABORT prints the stdin-config read command" 1 "curl --disable --noproxy '*' -s --config - 'https://api.hetzner.cloud/v1/volumes?name=soleur-registry-store' < <(printf 'header = \"Authorization: Bearer %s\"\\n' \"\$HCLOUD_TOKEN\")" "$TMP/canonical.json" "not-a-number"
+_abort_out="$(registry_luks_recut_gate "$TMP/canonical.json" "not-a-number" 2>&1 || true)"
+if [[ "$_abort_out" == *'-H \"Authorization'* || "$_abort_out" == *'-H "Authorization'* ]]; then
+  fail "the printed read command must not put the bearer on argv (-H Authorization)" "n/a" "$_abort_out"
+else
+  pass "the printed read command carries no -H Authorization argv form"
+fi
 
 # --- Named-live addresses: the logs secret and the LUKS key ------------------------------------
 plan "$TMP/logs-del.json" \

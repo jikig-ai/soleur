@@ -7,7 +7,11 @@ import { basename as pathBasename } from "path";
 import { KeyInvalidError, WS_CLOSE_CODES, type PlanTier, type WSMessage, type Conversation, type WSErrorCode } from "@/lib/types";
 import { ByokDelegationError } from "@/server/byok-resolver";
 import type { ConversationContext } from "@/lib/types";
-import { validateConversationContext } from "./context-validation";
+import {
+  crmLeadModePath,
+  isCrmLeadModePath,
+  validateConversationContext,
+} from "./context-validation";
 import { createServiceClient } from "@/lib/supabase/service";
 import {
   getFreshTenantClient,
@@ -18,6 +22,8 @@ import { getCurrentRepoUrl } from "@/server/current-repo-url";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import { TC_VERSION } from "@/lib/legal/tc-version";
 import { MAX_SELECTION_LENGTH } from "./review-gate";
+import { AgentEnginePersistenceRepository, type PersistenceClient } from "./agent-engine-persistence";
+import { assertLegacyConversationEngineBinding, assertLegacyEngineBinding } from "./agent-engine-route-guard";
 
 // Agent runner stubs -- will be implemented in server/agent-runner.ts
 import {
@@ -31,6 +37,8 @@ import { WS_CAPABILITIES } from "@/lib/ws-capabilities";
 import { reportSilentFallback, warnSilentFallback } from "./observability";
 import * as Sentry from "@sentry/nextjs";
 import { sanitizeErrorForClient } from "./error-sanitizer";
+import { ERR_ATTACHMENT_NOT_FOUND } from "./error-messages";
+import { validateAttachmentRef } from "./attachment-pipeline";
 import { createChildLogger } from "./logger";
 import {
   connectionThrottle,
@@ -47,7 +55,7 @@ import {
   getActiveTurnConversation,
   setActiveTurnConversation,
   clearActiveTurnConversation,
-  forEachSessionForConversation,
+  hasLiveAgentLoop,
 } from "./agent-session-registry";
 import {
   streamReplayBuffer,
@@ -346,6 +354,12 @@ export interface ClientSession {
    *  guard. `null` means "no persisted session_id"; `undefined` means
    *  "cache cold". */
   sessionId?: string | null;
+  /** feat-cc-cap-raise-resume (#9565) — cached
+   *  `conversations.cc_cost_cap_usd` override for the active
+   *  conversation. Seeded on chat-case cache miss from the SELECT and
+   *  refreshed by `persistCostCapOverride` on raise. `null` means "no
+   *  override"; `undefined` means "cache cold". */
+  costCapUsd?: number | null;
 }
 
 /** Active connections keyed by Supabase user ID. Registered in session-registry
@@ -409,6 +423,9 @@ export function abortActiveSession(userId: string, session: ClientSession): void
   session.contextPath = undefined;
   // Same for the session_id cache (#3266).
   session.sessionId = undefined;
+  // Same for the cost-cap override cache (#9565) — a raise on the prior
+  // conversation must not bleed into the next one.
+  session.costCapUsd = undefined;
 
   // Fire-and-forget — orphan cleanup catches failures on restart.
   // The wrapper enforces the R8 composite-key invariant; errors mirror to
@@ -462,15 +479,10 @@ export function abortActiveSession(userId: string, session: ClientSession): void
  * (knowledge-base/engineering/architecture/decisions): reap on agent-loop
  * liveness, not socket focus.
  */
-function hasLiveAgentLoop(userId: string, conversationId: string): boolean {
-  if (hasActiveCcQuery(conversationId)) return true;
-  let found = false;
-  forEachSessionForConversation(userId, conversationId, () => {
-    found = true;
-    return true; // stop at the first match
-  });
-  return found;
-}
+// The predicate itself is imported from the shared registry
+// (agent-session-registry.hasLiveAgentLoop) — the stuck-active reaper
+// consults the same cross-lineage check so a slotless-but-live turn is
+// never reaped from either path.
 
 export async function tryLedgerDivergenceRecovery(
   userId: string,
@@ -530,7 +542,7 @@ export async function tryLedgerDivergenceRecovery(
     // helper's processing — e.g.
     // a tab supersession that clears the old WS's `pingInterval` so no
     // refresh fires while the helper runs. Catching it here (vs waiting
-    // up to 60 s for the agent-runner reaper) flips the conv row to
+    // up to 300 s for the agent-runner reaper) flips the conv row to
     // `failed` synchronously so the dashboard "Active conversations" rail
     // truths up, and surfaces the divergence to Sentry.
     //
@@ -546,7 +558,7 @@ export async function tryLedgerDivergenceRecovery(
     //      surfaces boundary-race reaps as Sentry events.
     //   2. Synchronous status flip: the lazy sweep deletes the slot but does
     //      NOT update the `conversations` row — the dashboard "Executing" state
-    //      stays stuck until the async reaper (≤60 s). This branch flips it to
+    //      stays stuck until the async reaper (one 300 s tick). This branch flips it to
     //      `failed` immediately.
     //   3. Defense-in-depth: if the RPC's lazy sweep is ever refactored away,
     //      this branch becomes the primary stale-slot reaper without any code
@@ -1022,6 +1034,7 @@ async function createConversation(
     status: "active" as Conversation["status"],
     last_active: new Date().toISOString(),
     context_path: contextPath ?? null,
+    engine_binding_state: "pending",
     ...(activeWorkflow !== undefined ? { active_workflow: activeWorkflow } : {}),
   });
 
@@ -1036,7 +1049,7 @@ async function createConversation(
       // visibility-sweep-audit: owner-scoped — 23505 fallback resolves user's own duplicate
       const { data: existing, error: lookupErr } = await tenant
         .from("conversations")
-        .select("id, active_workflow, context_path")
+        .select("id, active_workflow, context_path, engine_binding_state")
         .eq("user_id", userId)
         .eq("repo_url", repoUrl)
         .eq("context_path", contextPath)
@@ -1113,10 +1126,32 @@ async function createConversation(
           "23505 fallback: context_path diverged; first-writer-wins — second-tab path silently discarded",
         );
       }
+      await assertLegacyConversationEngineBinding(
+        new AgentEnginePersistenceRepository(tenant as unknown as PersistenceClient),
+        existingRow.id,
+      );
       return existingRow.id;
     }
     throw new Error(`Failed to create conversation: ${error.message}`);
   }
+
+  // Bind the provider before any first-turn dispatch can occur. The repository
+  // resolves the workspace default inside the trusted RPC; this path never
+  // accepts an engine id from the websocket payload.
+  const persistedBinding = await new AgentEnginePersistenceRepository(tenant as unknown as PersistenceClient).bind({
+    workspaceId: wsId,
+    executionKind: "conversation",
+    conversationId: id,
+    createdBy: userId,
+  });
+  // The legacy runner is the only handler currently wired for conversations.
+  // Refuse a future non-Claude default here rather than silently sending that
+  // turn to Claude while Codex qualification/runtime wiring is incomplete.
+  assertLegacyEngineBinding(
+    persistedBinding && typeof persistedBinding === "object" && "binding" in persistedBinding
+      ? (persistedBinding as { binding: unknown }).binding
+      : persistedBinding,
+  );
 
   return id;
 }
@@ -1215,6 +1250,13 @@ export async function dispatchSoleurGoForConversation(
   context?: ConversationContext,
   attachments?: import("@/lib/types").AttachmentRef[],
   sessionId?: string | null,
+  /**
+   * feat-cc-cap-raise-resume (#9565) — cached
+   * `conversations.cc_cost_cap_usd` override from the caller's session
+   * cache. Seeded into the runner's ActiveQuery; takes precedence over
+   * the env-derived workflow/default cap.
+   */
+  costCapUsd?: number | null,
 ): Promise<void> {
   // feat-stream-since-disconnect (#5273) — turn boundary for the cc-soleur-go
   // path. The legacy fan-out wires resetTurn in `sendUserMessage`, but cc
@@ -1295,13 +1337,43 @@ export async function dispatchSoleurGoForConversation(
     ReturnType<typeof resolveConciergeDocumentContext>
   > = {};
   const warmCcQuery = hasActiveCcQuery(conversationId);
-  if (context?.path && !warmCcQuery) {
+  // crm-lead is a mode flag. A client path (or the stamped sentinel) is not
+  // a KB document — do not resolve it.
+  const crmLeadTurn = context?.type === "crm-lead" || isCrmLeadModePath(context?.path);
+  if (context?.path && !warmCcQuery && !crmLeadTurn) {
     documentArgs = await resolveConciergeDocumentContext({
       userId,
       contextPath: context.path,
       providedContent: context.content ?? null,
     });
   }
+
+  // feat-cc-cap-raise-resume (#9565) — write a raise tier back to
+  // `conversations.cc_cost_cap_usd` and refresh the in-process cache so
+  // the next turn reads it without a DB round-trip (same pattern as
+  // `onSessionIdPersisted` below).
+  const persistCostCapOverride = async (usd: number) => {
+    const { ok, error } = await updateConversationFor(
+      userId,
+      conversationId,
+      { cc_cost_cap_usd: usd },
+      {
+        feature: "ws-handler",
+        op: "persist-cost-cap-override",
+        extra: { usd },
+        expectMatch: false,
+      },
+    );
+    if (!ok) {
+      throw new Error(
+        `cc_cost_cap_usd update failed: ${error?.message ?? "unknown"}`,
+      );
+    }
+    const liveSession = sessions.get(userId);
+    if (liveSession && liveSession.conversationId === conversationId) {
+      liveSession.costCapUsd = usd;
+    }
+  };
 
   // 2026-05-06 Bug A1 fix — resolve workspacePath up-front when an
   // artifact directive is going to be built. `fetchUserWorkspacePath`
@@ -1315,7 +1387,7 @@ export async function dispatchSoleurGoForConversation(
   // directive builder gracefully falls back to the relative path, which the
   // Bug A2 sandbox fix tolerates for in-workspace files.
   let workspacePath: string | undefined;
-  if (context?.path && !warmCcQuery) {
+  if (context?.path && !warmCcQuery && !crmLeadTurn) {
     try {
       workspacePath = await fetchUserWorkspacePath(userId);
     } catch {
@@ -1325,9 +1397,10 @@ export async function dispatchSoleurGoForConversation(
   }
 
   // #3287 Phase 1 diagnostic — see helper JSDoc.
+  // A crm-lead path is intentionally unresolved; do not report that as a skip.
   emitConciergeDocumentResolutionBreadcrumb({
     conversationId,
-    contextPath: context?.path ?? null,
+    contextPath: crmLeadTurn ? null : (context?.path ?? null),
     hasActiveCcQuery: warmCcQuery,
     documentArgs,
     routingKind: routing.kind,
@@ -1362,7 +1435,12 @@ export async function dispatchSoleurGoForConversation(
     // validated context.type; appends ROUTINE_AUTHORING_DIRECTIVE in
     // buildSoleurGoSystemPrompt. Document context (path/content) is unused
     // for this mode (it carries no path).
+    // feat-cc-cap-raise-resume — persisted per-conversation cap override
+    // + the write-back sink used by the raise flow.
+    costCapOverrideUsd: costCapUsd ?? null,
+    persistCostCapOverride,
     routineAuthoring: context?.type === "routine-authoring",
+    crmLead: context?.type === "crm-lead",
     // feat-wire-concierge-support-chat (ADR-113) — resolve the persona from the
     // validated chat context. `"support"` (the in-app support chat) runs the
     // Concierge read-only with the repo-lifecycle gates bypassed and skills scoped
@@ -1645,7 +1723,13 @@ async function handleResumeStream(
     // already carry `seq`). The client dedups any `seq <= lastRenderedSeq`.
     // Live frames then resume from the still-running agent.
     for (const frame of frames) {
-      sendToClient(userId, frame);
+      // debug_event re-emits are marked `replayed` so the client's watchdog
+      // heartbeat ignores them — a buffered tool_use is stale liveness
+      // evidence, not a live one (lib/chat-state-machine.ts `debug_event`).
+      sendToClient(
+        userId,
+        frame.type === "debug_event" ? { ...frame, replayed: true } : frame,
+      );
     }
   } catch (err) {
     Sentry.captureException(err);
@@ -1654,6 +1738,29 @@ async function handleResumeStream(
       "resume_stream error",
     );
     fallback(msg.conversationId);
+  }
+}
+
+/**
+ * Rejoin replay for the debug-mode panel: re-emit a conversation's buffered
+ * `debug_event` frames when the client binds to it via a full session resume
+ * (`resume_session` / context_path resume) — the leave-and-return remount
+ * path that never sends `resume_stream`. Each frame is cloned with
+ * `replayed: true` so the client's watchdog heartbeat ignores it
+ * (lib/chat-state-machine.ts `debug_event` case). The frames were already
+ * delivered to this user's socket once — re-sending within the same
+ * ownership boundary introduces no new exposure, and nothing is persisted.
+ * An absent/evicted ring is a silent no-op (the panel simply starts empty).
+ */
+function replayBufferedDebugEvents(
+  userId: string,
+  conversationId: string,
+): void {
+  const { frames } = streamReplayBuffer.replayFrom(conversationId, -1);
+  for (const frame of frames) {
+    if (frame.type === "debug_event") {
+      sendToClient(userId, { ...frame, replayed: true });
+    }
   }
 }
 
@@ -1820,6 +1927,10 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
 
           if (!lookupErr && existing) {
             const row = existing as { id: string; last_active: string };
+            await assertLegacyConversationEngineBinding(
+              new AgentEnginePersistenceRepository(tenantResume as unknown as PersistenceClient),
+              row.id,
+            );
             const { count: messageCount, error: countErr } = await tenantResume
               .from("messages")
               .select("id", { count: "exact", head: true })
@@ -1835,6 +1946,11 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
               resumedFromTimestamp: row.last_active,
               messageCount: countErr ? 0 : (messageCount ?? 0),
             });
+
+            // feat-debug-mode-stream — repopulate the debug panel on this
+            // leave-and-return rebind (buffered frames only; no-op when the
+            // ring is gone).
+            replayBufferedDebugEvents(userId, row.id);
 
             log.info({ userId, conversationId: row.id }, "start_session resumed by context_path");
             break;
@@ -2049,6 +2165,11 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           return;
         }
 
+        await assertLegacyConversationEngineBinding(
+          new AgentEnginePersistenceRepository(tenantResumeConv as unknown as PersistenceClient),
+          msg.conversationId,
+        );
+
         // FR1 (#5240) — re-align the agent cwd resolver with the
         // conversation's own workspace on resume. `resolveCurrentWorkspaceId`
         // reads `user_session_state.current_workspace_id` (falling back to the
@@ -2183,19 +2304,25 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
 
         session.conversationId = msg.conversationId;
         // Resuming a different conversation — invalidate the routing,
-        // KB context, and session_id caches so the first chat-turn
-        // re-reads `active_workflow`, `context_path`, and `session_id`.
-        // The three caches share the same lifecycle invariant: invalidate
-        // together.
+        // KB context, session_id, and cost-cap (#9565) caches so the
+        // first chat-turn re-reads `active_workflow`, `context_path`,
+        // `session_id`, and `cc_cost_cap_usd`. The four caches share
+        // the same lifecycle invariant: invalidate together.
         session.routing = undefined;
         session.contextPath = undefined;
         session.sessionId = undefined;
+        session.costCapUsd = undefined;
         resetIdleTimer(userId, session);
         sendToClient(userId, {
           type: "session_started",
           conversationId: msg.conversationId,
           capabilities: WS_CAPABILITIES,
         });
+
+        // feat-debug-mode-stream — repopulate the debug panel on this
+        // leave-and-return rebind: emit the conversation's buffered debug
+        // frames (marked `replayed`; no-op when the ring is gone).
+        replayBufferedDebugEvents(userId, msg.conversationId);
       } catch (err) {
         Sentry.captureException(err);
         log.error({ userId, err }, "resume_session error");
@@ -2242,6 +2369,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         session.routing = undefined;
         session.contextPath = undefined;
         session.sessionId = undefined;
+        session.costCapUsd = undefined;
         void releaseSlot(userId, convId);
         sendToClient(userId, { type: "session_ended", reason: "closed" });
       } catch (err) {
@@ -2293,12 +2421,28 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
       // Materialize pending conversation on first real message
       if (!session.conversationId && session.pending) {
         const stripped = userContent.replace(/@\w+\s*/g, "").trim();
-        if (!stripped) {
+        // `attachments: []` is truthy: test the length, never `!msg.attachments`.
+        if (!stripped && (msg.attachments?.length ?? 0) === 0) {
           sendToClient(userId, {
             type: "error",
             message: "Please include a message along with the @-mention.",
           });
           return;
+        }
+        // First message with ANY attachments (#9297): validate every ref BEFORE
+        // createConversation, text or not. A forged/stale ref (e.g. uploaded
+        // under a pending id a reconnect has since re-minted) must not create
+        // the conversation row or the user message before the attachment
+        // pipeline rejects it.
+        if ((msg.attachments?.length ?? 0) > 0) {
+          try {
+            for (const a of msg.attachments ?? []) {
+              validateAttachmentRef(a, userId, session.pending.id);
+            }
+          } catch (refErr) {
+            sendToClient(userId, { type: "error", message: sanitizeErrorForClient(refErr) });
+            return;
+          }
         }
 
         try {
@@ -2317,26 +2461,58 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             : undefined;
           // createConversation handles unique-violation on (user_id, context_path)
           // by resolving to the existing row (two-tab race).
+          // crm-lead stamps `crm-lead/<id>.mode` on the row and the session
+          // cache. A cache hit treats null as defined (`!== undefined`) and
+          // never re-reads the column, so null here would drop the mode.
+          const insertedContextPath =
+            pendingContext?.type === "crm-lead"
+              ? crmLeadModePath(pendingId)
+              : pendingContextPath;
           const resolvedId = await createConversation(
             userId,
             pendingLeader,
             pendingId,
-            pendingContextPath,
+            insertedContextPath,
             initialActiveWorkflow,
             // feat-wire-concierge-support-chat — a support-context session
             // materializes a repo-less kind='support' conversation (never throws
             // on a missing repo; the repo-less support user is exactly who needs help).
+            // crm-lead stays command_center (rail + DSAR filter on that kind).
             pendingContext?.type === "support" ? "support" : "command_center",
           );
+          // Two-tab context_path fallback: the row id differs from the pending
+          // id the client uploaded under, so the pipeline prefix check would
+          // fail closed AFTER the user message row was appended to the other
+          // tab's conversation. Fail closed here instead: countable, and no
+          // empty user message. Session state is left untouched (still pending).
+          if (resolvedId !== pendingId && (msg.attachments?.length ?? 0) > 0) {
+            reportSilentFallback(null, {
+              feature: "attachments",
+              op: "attachments-pending-id-diverged",
+              message: "first-message attachments uploaded under a pending id that diverged from the resolved conversation id",
+              extra: { userId, pendingId, resolvedId, attachmentCount: msg.attachments?.length },
+            });
+            sendToClient(userId, {
+              type: "error",
+              message: sanitizeErrorForClient(new Error(ERR_ATTACHMENT_NOT_FOUND)),
+            });
+            return;
+          }
           session.conversationId = resolvedId;
           session.pending = undefined;
           // Seed the routing cache so chat-case on subsequent turns
           // can skip the DB lookup (performance P1-A).
           session.routing = pendingRouting;
-          // Seed the KB context path so chat-case follow-up turns can
-          // rebuild a synthetic ConversationContext for the soleur-go
-          // path (otherwise turn 2+ loses document context).
-          session.contextPath = pendingContextPath ?? null;
+          // Seed the context path so chat-case follow-up turns can rebuild
+          // ConversationContext. For crm-lead this is the mode sentinel,
+          // not a KB path and not null.
+          session.contextPath = insertedContextPath ?? null;
+          // feat-cc-cap-raise-resume — the materialized row cannot carry
+          // an override yet (createConversation inserts NULL; the
+          // (user_id, context_path) pre-existing-row race could carry one,
+          // in which case a `null` seed is the safe direction: the next
+          // turn's cache-miss SELECT re-reads the real value).
+          session.costCapUsd = null;
 
           log.info(
             {
@@ -2363,6 +2539,9 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
               pendingRouting,
               pendingContext,
               msg.attachments,
+              null,
+              // feat-cc-cap-raise-resume — first-turn: no cap override
+              // can exist yet (row was just inserted).
               null,
             );
             break;
@@ -2413,6 +2592,12 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
       }
 
       try {
+        const tenantEngineBinding = await tenantFor(userId, "handleMessage.chat.engine-binding");
+        if (!tenantEngineBinding) throw new Error("conversation engine binding auth probe failed");
+        await assertLegacyConversationEngineBinding(
+          new AgentEnginePersistenceRepository(tenantEngineBinding as unknown as PersistenceClient),
+          session.conversationId!,
+        );
         // Stage 2.12 — route each turn via `parseConversationRouting`.
         // Legacy rows (NULL) flow through the existing agent-runner;
         // sentinel + workflow values dispatch to the soleur-go runner.
@@ -2452,7 +2637,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           // visibility-sweep-audit: owner-scoped via RLS (no explicit user_id filter but tenant JWT scopes to auth.uid())
           const { data: row, error: routeErr } = await tenantRoute
             .from("conversations")
-            .select("active_workflow, session_id, context_path")
+            .select("active_workflow, session_id, context_path, cc_cost_cap_usd")
             .eq("id", convId)
             .single();
           if (routeErr) {
@@ -2469,6 +2654,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             active_workflow?: string | null;
             session_id?: string | null;
             context_path?: string | null;
+            cc_cost_cap_usd?: number | null;
           } | null;
           routing = typedRow
             ? parseConversationRouting({
@@ -2479,6 +2665,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           session.routing = routing;
           session.contextPath = typedRow?.context_path ?? null;
           session.sessionId = typedRow?.session_id ?? null;
+          session.costCapUsd = typedRow?.cc_cost_cap_usd ?? null;
         }
 
         if (routing.kind !== "legacy") {
@@ -2487,9 +2674,14 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           // injecting the open document. Without this, only the first
           // turn would see the document context (chat-case path serves
           // turn 2+).
-          const chatContext: ConversationContext | undefined = session.contextPath
-            ? { path: session.contextPath, type: "kb-viewer" }
-            : undefined;
+          // Mode sentinel before kb-viewer. A crm-lead path is not a document.
+          const chatContext: ConversationContext | undefined = isCrmLeadModePath(
+            session.contextPath,
+          )
+            ? { type: "crm-lead" }
+            : session.contextPath
+              ? { path: session.contextPath, type: "kb-viewer" }
+              : undefined;
           await dispatchSoleurGoForConversation(
             userId,
             convId,
@@ -2498,6 +2690,9 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             chatContext,
             msg.attachments,
             session.sessionId ?? null,
+            // feat-cc-cap-raise-resume — cached per-conversation cap
+            // override from the routing SELECT above.
+            session.costCapUsd ?? null,
           );
           break;
         }
@@ -2763,6 +2958,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     case "usage_update":
     case "fanout_truncated":
     case "context_reset":
+    case "c4_diagram_saved": // #8739 — Concierge diagram-save notice (server→client only)
     case "upgrade_pending":
     case "interactive_prompt":
     case "subagent_spawn":
@@ -2775,7 +2971,10 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     // server→client only (emitted from cc-dispatcher onToolResult).
     case "reasoning_narration":
     case "turn_summary":
-    // feat-stream-since-disconnect (#5273) — server→client only.
+    case "task_completed":
+    // feat-stream-since-disconnect (#5273) — server→client only (likewise
+    // task_completed — feat-session-completion-inline, emitted from the shared
+    // notifyTaskCompleted seam).
     case "stream_replay": {
       sendToClient(userId, {
         type: "error",

@@ -14,10 +14,26 @@ const mockSelectSingle = vi.fn().mockResolvedValue({
 let mockUserRepoUrl: string | null = "https://github.com/acme/repo";
 
 const { mockRpc } = vi.hoisted(() => ({
-  mockRpc: vi.fn().mockResolvedValue({
-    data: [{ status: "ok", active_count: 1, effective_cap: 2 }],
-    error: null,
-  }),
+  mockRpc: vi.fn((name: string, args?: Record<string, unknown>) => Promise.resolve(
+    name === "bind_agent_engine_run"
+      ? {
+          data: {
+            binding: {
+              workspaceId: String(args?.p_workspace_id ?? "ws-mock-workspace-1"),
+              execution: { kind: "conversation", conversationId: String(args?.p_conversation_id ?? "conv-1") },
+              engineId: "claude-code",
+              authMode: "managed",
+              adapterVersion: "claude-code-v1",
+              boundAt: new Date().toISOString(),
+            },
+          },
+          error: null,
+        }
+      : {
+          data: [{ status: "ok", active_count: 1, effective_cap: 2 }],
+          error: null,
+        },
+  )),
 }));
 
 // Pin TC_VERSION so the mock row's tc_accepted_version stays in lockstep

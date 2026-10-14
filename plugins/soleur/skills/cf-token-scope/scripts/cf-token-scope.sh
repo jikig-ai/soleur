@@ -33,6 +33,32 @@
 
 set -euo pipefail
 
+# (#7797) Refuse to run under shell tracing. UNCONDITIONAL — deliberately NOT
+# gated on a non-emptiness test of the credential variable, because
+# CF_API_TOKEN_RULESETS is acquired by `doppler secrets get` BELOW this point, so a
+# conditional arm would test an empty variable at guard time, open, and then trace
+# the acquisition itself.
+#
+# STREAM CONTRACT: this script's stdout is a DATA channel — SKILL.md's probe-set
+# contract documents `PASS: …` verdict lines a consumer reads. So the refusal is
+# emitted as a `FAIL:` verdict in this module's own vocabulary: it cannot be
+# mistaken for a PASS row, which a bare `[FATAL] …` line could be if the consumer
+# only greps for verdicts. Stdout, not stderr, because agent runtimes surface
+# stdout and swallow stderr (constitution.md > Code Style).
+case "$-" in
+  *x*)
+    printf 'FAIL: refusing to run under xtrace — this script handles a live credential and -x would print it (see #7797). No probe was issued.\n'
+    exit 78
+    ;;
+esac
+
+# (#7873) `--disable` closes ~/.curlrc and `--noproxy '*'` closes the proxy vars,
+# but neither touches the env that subverts TLS ITSELF. SSLKEYLOGFILE writes the
+# session keys and the CA vars substitute the trust store, so a CURL_CA_BUNDLE
+# MITM of the Cloudflare token works with every other guard fully intact.
+unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
+      HOSTALIASES LOCALDOMAIN RES_OPTIONS
+
 DOPPLER_PROJECT="soleur"
 DOPPLER_CONFIG="prd_terraform"
 TOKEN_SECRET="CF_API_TOKEN_RULESETS"
@@ -100,10 +126,13 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   printf '%s\n' "ACCT=\$(doppler secrets get $ACCT_SECRET -p $DOPPLER_PROJECT -c $DOPPLER_CONFIG --plain)"
   # The token is passed from a private fd (never argv) — mirror that here so a
   # copy-pasted recipe does not leak the token to ps / /proc (security #6892).
+  # The recipes also carry `--disable` literally first (it aborts ~/.curlrc
+  # parsing, and later is too late) and `--noproxy '*'`, so a copy-pasted probe
+  # teaches the confined form rather than the one this change removes (#7873).
   for p in "${ZONE_PHASES[@]}" ${TARGET:+"$TARGET"}; do
-    printf '%s\n' "curl -sS --max-time 15 -H @<(printf 'Authorization: Bearer %s' \"\$TOK\") $API/zones/\$ZONE/rulesets/phases/$p/entrypoint"
+    printf '%s\n' "curl --disable --noproxy '*' -sS --max-time 15 -H @<(printf 'Authorization: Bearer %s' \"\$TOK\") $API/zones/\$ZONE/rulesets/phases/$p/entrypoint"
   done
-  printf '%s\n' "curl -sS --max-time 15 -H @<(printf 'Authorization: Bearer %s' \"\$TOK\") $API/accounts/\$ACCT/rulesets"
+  printf '%s\n' "curl --disable --noproxy '*' -sS --max-time 15 -H @<(printf 'Authorization: Bearer %s' \"\$TOK\") $API/accounts/\$ACCT/rulesets"
   exit 0
 fi
 
@@ -150,7 +179,7 @@ ZONE_CONTROL_OK=0
 check() {
   local url="$1" scheme="$2" trust404="${3:-0}" resp code body want_type
   want_type="object"; [[ "$scheme" == "account" ]] && want_type="array"
-  resp="$(curl -sS --max-time 15 -w '\n%{http_code}' \
+  resp="$(curl --disable --noproxy '*' -sS --max-time 15 -w '\n%{http_code}' \
     -H @<(printf 'Authorization: Bearer %s' "$TOK") "$url" 2>/dev/null || true)"
   if [[ "$resp" != *$'\n'* ]]; then VERDICT="empty (no response)"; return 1; fi
   code="${resp##*$'\n'}"

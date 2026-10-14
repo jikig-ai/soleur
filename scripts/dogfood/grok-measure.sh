@@ -139,10 +139,16 @@ if [[ "$YOLO" -eq 1 ]]; then
 fi
 
 raw="$(mktemp)"
+trap 'rm -f "$raw"' EXIT
+# stderr goes beside $raw — a fixed /tmp name would collide with concurrent
+# runs and leave residue outside the owning trap (#10017). Allocated AFTER
+# the first trap arms so a failure here still reaps $raw.
+raw_err="$(mktemp)"
+trap 'rm -f "$raw" "$raw_err"' EXIT
 stamp_start_ms=$(($(date +%s%N) / 1000000))
 
 set +e
-"${cmd[@]}" 2>/tmp/grok-measure.err | while IFS= read -r line; do
+"${cmd[@]}" 2>"$raw_err" | while IFS= read -r line; do
   [[ -z "$line" ]] && continue
   now_ms=$(($(date +%s%N) / 1000000))
   rel=$((now_ms - stamp_start_ms))

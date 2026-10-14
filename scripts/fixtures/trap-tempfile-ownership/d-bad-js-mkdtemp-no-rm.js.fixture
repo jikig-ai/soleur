@@ -1,0 +1,7 @@
+const { mkdtempSync } = require("node:fs");
+const { tmpdir } = require("node:os");
+const { join } = require("node:path");
+
+module.exports = function scratch() {
+  return mkdtempSync(join(tmpdir(), "demo-"));
+};

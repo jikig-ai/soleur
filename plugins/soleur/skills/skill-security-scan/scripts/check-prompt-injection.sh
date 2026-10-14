@@ -46,7 +46,7 @@ for spec in "${fm_rules[@]}"; do
     snippet="${rest:0:200}"
     snippet="${snippet//$'\t'/ }"
     # Apply allowlist downgrade
-    if echo "$rest" | grep -qiE "$soleur_allowlist_re"; then
+    if grep -qiE "$soleur_allowlist_re" <<<"$rest"; then
       continue
     fi
     findings_lines+="$rule_id"$'\t'"$severity"$'\t'"$line"$'\t'"$snippet"$'\n'
@@ -66,7 +66,7 @@ for spec in "${body_rules[@]}"; do
     [ -z "$line" ] && continue
     snippet="${rest:0:200}"
     snippet="${snippet//$'\t'/ }"
-    if echo "$rest" | grep -qiE "$soleur_allowlist_re"; then
+    if grep -qiE "$soleur_allowlist_re" <<<"$rest"; then
       continue
     fi
     # Proximity gate: require either you-must phrasing OR base64 nearby.
@@ -74,7 +74,7 @@ for spec in "${body_rules[@]}"; do
     start=$((line - 3 < 1 ? 1 : line - 3))
     end=$((line + 3))
     window="$(sed -n "${start},${end}p" "$tmp.body" 2>/dev/null || true)"
-    if echo "$window" | grep -qiE -- "$body_proximity_re"; then
+    if grep -qiE -- "$body_proximity_re" <<<"$window"; then
       findings_lines+="$rule_id"$'\t'"$severity"$'\t'"$line"$'\t'"$snippet"$'\n'
     fi
   done < <(grep -niE -- "$regex" "$tmp.body" 2>/dev/null || true)

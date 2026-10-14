@@ -5,7 +5,7 @@
 # write with EEXIST forever). Age-guarded sweep: aged config locks removed,
 # fresh and future-dated locks preserved; index/HEAD locks out of scope.
 #
-# Plan: knowledge-base/project/plans/2026-07-01-fix-stale-git-lock-sweep-worktree-plan.md
+# Plan: knowledge-base/project/plans/archive/20261013-041741-2026-07-01-fix-stale-git-lock-sweep-worktree-plan.md
 #
 # Run via:  bash plugins/soleur/skills/git-worktree/test/stale-lock-sweep.test.sh
 
@@ -58,7 +58,7 @@ rm -rf "$SEED"
 
 LOCAL="$TMP/local.git"
 git init --bare -b main "$LOCAL" >/dev/null
-( cd "$LOCAL" && git remote add origin "$UPSTREAM" && git fetch origin main:main >/dev/null 2>&1 )
+( cd "$LOCAL" && git remote add origin "$UPSTREAM" && git fetch --no-tags origin main:main >/dev/null 2>&1 )
 
 # For a bare repo, `ensure_bare_config` resolves git_dir == GIT_ROOT (the bare
 # dir itself), so the config locks live directly under $LOCAL.

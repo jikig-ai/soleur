@@ -3,6 +3,10 @@ name: archive-kb
 description: "This skill should be used when archiving completed knowledge-base artifacts (brainstorms, plans, specs) to their archive/ subdirectories with timestamp prefixes and git history preservation."
 ---
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 # Archive Knowledge-Base Artifacts
 
 Archive brainstorms, plans, and spec directories for a completed feature branch.
@@ -10,31 +14,48 @@ The script generates timestamps internally and uses `git mv` to preserve history
 
 > **Superseded in part (ADR-174, #7399).** Archival's only real benefit was removing
 > rows from `knowledge-base/INDEX.md`, and that is now done at index-generation time:
-> inside a spec directory only `spec.md` and `tasks.md` are indexed. Do **not** build a
-> gate that forces archival before merge — a spec directory is live working state until
-> `ship` Phase 6 reads `decision-challenges.md` from it (ADR-084 §5), and one such gate
-> has already been built and reverted for that reason.
+> inside a spec directory only `spec.md` and `tasks.md` are indexed. A spec directory
+> is live working state until `ship` Phase 6 step 2.5 reads `decision-challenges.md`
+> from it (ADR-084 §5) — an earlier gate that forced archival before merge was built
+> and reverted for that ordering reason. The constraint was ordering, not gating:
+> ship `## Phase 6.45: KB Artifact Archival` runs after the last live-path reads, and
+> the `ship-kb-archive-gate.sh` hook denies only a merge that would land live paths.
 >
-> This script is unchanged and still works for brainstorms. Retiring its spec/plan
-> discovery paths is tracked by **#7400**; until then it is neither enforced nor removed.
-> Known discovery gaps: `derive_slug()` strips a `fix-` prefix and then probes
-> `specs/feat-${slug}`, so `fix-*` spec dirs are unreachable; plans are matched by a
-> `*<slug>*` glob, so a topic-named plan is missed and the run still reports success.
+> Retiring its spec/plan discovery paths is tracked by **#7400**. Discovery is now
+> three axes: the slug match (below) UNIONED with the branch diff — files added or
+> modified on the branch under `knowledge-base/project/{plans,brainstorms,specs}`
+> are this feature's artifacts by commit provenance, so a topic-named plan
+> (`2026-10-08-...-plan.md` never matches the slug glob) and a non-`feat-*` spec
+> dir are both found — UNIONED with untracked `??` paths under the same roots
+> (the only class the branch diff can never see; an uncommitted spec dir
+> collapses to `specs/<dir>` and a lone root-level file does not fire).
+> The partial-run WARNING stays: it fires when exactly one
+> class is found and the other is silent.
+>
+> **ship integration:** `ship` Phase 6.45 (KB Artifact Archival) invokes this
+> script after its last live-artifact reads (decision-challenges render, `##
+> Operator Holds`) and the `git mv` rides the feature PR — archival is part of
+> ship, not a follow-up. The `ship-kb-archive-gate.sh` PreToolUse hook denies a
+> `gh pr merge` while live additions remain under the three KB roots.
+>
+> Measured (kb-archive-gate, 2026-10-12): `--dry-run` on the feature worktree
+> lists `plans/2026-10-12-feat-kb-archive-gate-plan.md` and `specs/kb-archive-gate`
+> — and nothing under `learnings/`, which is never archived.
 
 ## Usage
 
 Run the archive script from the repository root. It derives the feature slug
 from the current branch name automatically:
 
-    bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/archive-kb/scripts/archive-kb.sh
+    bash "${CLAUDE_PLUGIN_ROOT}/skills/archive-kb/scripts/archive-kb.sh"
 
 To preview what would be archived without making changes:
 
-    bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/archive-kb/scripts/archive-kb.sh --dry-run
+    bash "${CLAUDE_PLUGIN_ROOT}/skills/archive-kb/scripts/archive-kb.sh" --dry-run
 
 To archive a specific slug (override branch detection):
 
-    bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/archive-kb/scripts/archive-kb.sh my-feature-slug
+    bash "${CLAUDE_PLUGIN_ROOT}/skills/archive-kb/scripts/archive-kb.sh" my-feature-slug
 
 ## What It Archives
 

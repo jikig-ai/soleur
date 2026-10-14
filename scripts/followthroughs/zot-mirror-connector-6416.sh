@@ -59,6 +59,23 @@
 
 set -uo pipefail
 
+# XTRACE REFUSAL (#7797). This script binds a live GH_TOKEN, and `set -x` prints
+# every expansion — including the token — to stdout, which on a runner means into
+# a log that outlives the job. Refusing is the only reliable mitigation: masking
+# is best-effort and xtrace expands before any masking hook sees the line.
+#
+# Conditional on the credential actually being bound, deliberately: with no token
+# in the environment there is nothing to leak, and a developer tracing the run
+# selection logic should not be blocked for no benefit.
+case "$-" in
+  *x*)
+    if [ -n "${GH_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 # Fail-safe env check. Deliberately NOT `: "${VAR:?msg}"` — under a non-interactive
 # shell that word-expansion aborts with status 1, which this contract reads as FAIL
 # ("criteria not met") when the truth is "the probe could not run". An unprovisioned
@@ -75,7 +92,19 @@ JOB_NAME="release / release"
 NEED=5
 SCAN=25
 
-RUNS=$(gh api "repos/${GH_REPO}/actions/workflows/${WORKFLOW}/runs?branch=main&per_page=${SCAN}" \
+# `event=push` IS LOAD-BEARING, NOT A NARROWING CONVENIENCE (#5806, ADR-217).
+# web-platform-release.yml is split across two triggers and produces TWO runs per
+# merge: a push-arm run that actually builds and crane-copies (the `release` job),
+# and a workflow_run-arm run carrying the deploy chain where `release` is SKIPPED.
+# The jobs API still returns a row named "release / release" on that second arm, so
+# an unfiltered scan resolves a `job_id`, finds ZERO steps under it, and both the
+# build and mirror extractions come back "absent" — which this probe correctly
+# refuses to interpret and reports as `TRANSIENT: ... probably renamed`. That is a
+# probe that can never PASS, against a mirror that is working. Same pin, same
+# reason, as `resolve-target`'s `?event=push&head_sha=` jobs-API query in
+# web-platform-release.yml. It also halves the scan window's waste: SCAN=25 now
+# means 25 runs that could have built something.
+RUNS=$(gh api "repos/${GH_REPO}/actions/workflows/${WORKFLOW}/runs?branch=main&event=push&per_page=${SCAN}" \
   --jq '.workflow_runs[] | select(.status == "completed") | "\(.id) \(.created_at)"' 2>/dev/null)
 
 if [[ -z "$RUNS" ]]; then
@@ -90,12 +119,12 @@ while read -r run_id created_at; do
   [[ -n "${run_id:-}" ]] || continue
   [[ "$ok" -lt "$NEED" ]] || break
 
-  # NOTE: `gh api --jq` takes a filter only — it does NOT accept jq's `--arg`, so the
-  # job name is interpolated into the filter rather than bound. (An `--arg` here
-  # silently yields nothing, which this probe's fail-safe would report as TRANSIENT
-  # forever — a probe that can never PASS is as useless as one that always does.)
-  job_id=$(gh api "repos/${GH_REPO}/actions/runs/${run_id}/jobs" \
-    --jq ".jobs[] | select(.name == \"${JOB_NAME}\") | .id" 2>/dev/null | head -1)
+  # --paginate | jq -s, never --jq under --paginate: gh applies --jq PER PAGE, and a
+  # first-page-only read would silently under-sample — a `release / release` job on
+  # page 2 reads as "absent" and inflates skipped_runs (#9245 sweep). jq's --arg
+  # binds the name (gh --jq cannot take --arg at all).
+  job_id=$(gh api --paginate "repos/${GH_REPO}/actions/runs/${run_id}/jobs?per_page=100" 2>/dev/null \
+    | jq -rs --arg jn "$JOB_NAME" '[.[].jobs[] | select(.name == $jn) | .id] | .[0] // empty')
   if [[ -z "${job_id:-}" ]]; then
     skipped_runs=$((skipped_runs + 1))
     continue

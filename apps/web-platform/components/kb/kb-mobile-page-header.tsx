@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { NavLink } from "@/components/ui/nav-link";
 import { BackArrowIcon } from "@/components/dashboard/nav-icons";
 
 /**
@@ -34,13 +34,13 @@ export function KbMobilePageHeader({
       }`}
     >
       {showBack && (
-        <Link
+        <NavLink
           href="/dashboard"
           aria-label="Back to menu"
           className="flex min-h-11 min-w-11 items-center text-soleur-text-secondary hover:text-soleur-text-primary"
         >
           <BackArrowIcon className="h-5 w-5" />
-        </Link>
+        </NavLink>
       )}
       {/* The band's mobile section title is suppressed for KB, so this is the
           single "Knowledge Base" title on mobile (#4915 P2-4). */}

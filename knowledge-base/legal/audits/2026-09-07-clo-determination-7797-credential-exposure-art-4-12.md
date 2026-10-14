@@ -6,15 +6,15 @@ issue: 7797
 pr: 7891
 attestation-authority: clo
 status: SIGNED-OFF (CLO-agent-attested, Soleur-as-tenant-zero v1)
-disposition: PROVISIONAL — no Art. 33 duty, no Art. 34 duty. The evidentiary limb was RUN 2026-09-08: integrity CLEAN, confidentiality INCONCLUSIVE. See the 2026-09-08 addendum.
-disposition_history: "SIGNED-OFF PROVISIONAL 2026-09-07 on one open evidentiary limb -> limb RUN 2026-09-08 (#7797): integrity CLEAN, confidentiality INCONCLUSIVE, one instrument found not to exist -> still PROVISIONAL, verdict unchanged, sign-off stands as determined and signed. Annotation only; see the 2026-09-08 addendum."
+disposition: FINAL — no Art. 33 duty, no Art. 34 duty. Integrity/write limb CLEAN (2026-09-08). Read limb closed INCONCLUSIVE-BY-DECISION 2026-09-14 — the controller declined the last instrument (vendor support, issue 7945). NOT a CLEAN and NOT exhaustion. See the 2026-09-14 addendum.
+disposition_history: "SIGNED-OFF PROVISIONAL 2026-09-07 on one open evidentiary limb -> limb RUN 2026-09-08 (#7797): integrity CLEAN, confidentiality INCONCLUSIVE, one instrument found not to exist -> still PROVISIONAL, verdict unchanged, sign-off stands as determined and signed. Annotation only; see the 2026-09-08 addendum. -> read limb closed INCONCLUSIVE-BY-DECISION 2026-09-14 (#7945): operator DECLINED vendor escalation (the CLO had recommended sending; the prepared request is retained un-sent in the 2026-09-14 addendum); disposition FINAL, verdict unchanged, re-opener recorded."
 signed_off_at: 2026-09-07
 signed_off_by: "CLO agent (attestation authority for the Soleur-as-tenant-zero v1 posture; operator retains an optional veto)"
 awareness_anchor: "2026-09-03T15:33:16Z"
 art_33_triggered: false
 art_34_triggered: false
-art_33_deadline: "not due — 72h from the awareness anchor computes to 2026-09-06T15:33:16Z, but no Art. 33 duty arose, so nothing fell due at that instant. A BREACH finding on the open limb starts a FRESH 72h from awareness of that finding."
-open_limbs: "RUN 2026-09-08. Org audit log pulled: integrity/write limb CLEAN. The token last-used timestamp DOES NOT EXIST as an instrument (no such field on any Sentry surface for personal tokens), so the confidentiality/read limb is INCONCLUSIVE and cannot be closed by that route. Only vendor support remains."
+art_33_deadline: "not due — 72h from the awareness anchor computes to 2026-09-06T15:33:16Z, but no Art. 33 duty arose, so nothing fell due at that instant. No open limb since 2026-09-14; re-opens on any later evidence of use, with a FRESH 72h from awareness of that evidence (see the 2026-09-14 addendum §Re-opener)."
+open_limbs: "none — integrity/write limb CLEAN 2026-09-08 (org audit log, full-window coverage, single known actor); confidentiality/read limb closed INCONCLUSIVE-BY-DECISION 2026-09-14 (vendor support declined by the controller, #7945). Re-opener: any later evidence of use of token 6680231 starts a FRESH 72h from awareness of that evidence, with vendor escalation as the first step."
 tier_classification: "Tier 1 — an internal determination record. No public document is edited, no right is narrowed, no processing added. The mirror/SHA/heading gates are NOT engaged."
 semver: "No TC_VERSION bump."
 ---
@@ -182,6 +182,12 @@ softer CLEAN.
 - External counsel re-review is reserved for these triggers, not for routine
   review. All output here is draft material.
 
+> **Superseded 2026-09-14 (#7945):** this list has only BREACH and CLEAN
+> branches. The outcome that occurred was neither — INCONCLUSIVE, with the last
+> instrument then *declined* by the controller. The two branches that cover it
+> are stated in the 2026-09-14 addendum, §Two outcomes added to §Re-evaluation
+> triggers, and the disposition is FINAL on the by-decision branch.
+
 ## Addendum — 2026-09-08 (#7797): the open limb, run
 
 Append-only. The body above stands as the determination made on 2026-09-07 on the
@@ -261,6 +267,11 @@ likelihood limb no longer rests on an assertion about writes — the audit log
 answers that — but the read limb rests on the absence of an instrument rather
 than on evidence of no access.
 
+> **Superseded 2026-09-14 (#7945):** "**does not** drop 'provisional'" held
+> while vendor support remained an instrument still to be run. On 2026-09-14
+> the controller declined it; nothing remains to run, and the disposition is
+> FINAL — see the 2026-09-14 addendum, §Why the disposition drops "provisional".
+
 ### Severity refinement
 
 The Type and Capability rows above state the token carried "org read **and
@@ -278,8 +289,280 @@ and its trigger condition ("if (1)–(2) come back thin") is met. It is tracked 
 prompts anyone to take. Precedent for the ask is the 2026-05-16 determination,
 where Sentry confirmed in writing which principal performed audit-log actions.
 
+> **Superseded 2026-09-14 (#7945):** the route was not taken. The operator
+> declined vendor escalation on 2026-09-14; the limb closed
+> INCONCLUSIVE-BY-DECISION and the record no longer sits PROVISIONAL — it is
+> FINAL on that branch. See the 2026-09-14 addendum.
+
 ### Remediation
 
 The leaked token (id `6680231`) was revoked 2026-09-08T10:34Z and replaced. Full
 detail in the post-mortem's 2026-09-08 addendum — deliberately not restated here,
 per this corpus's single-source rule.
+
+## Addendum — 2026-09-14 (#7945): the read limb, closed by decision
+
+Append-only. The body and the 2026-09-08 addendum stand as written. This
+section records a **controller decision**, not a measurement, and it changes
+the disposition from PROVISIONAL to FINAL on that basis alone. Frontmatter was
+updated in place, per the convention the 2026-09-08 addendum already applied.
+
+### What was decided, and by whom
+
+On 2026-09-14 the operator, exercising the veto the v1 attestation posture
+reserves to him, decided **not** to escalate the read limb to Sentry support.
+The CLO's recommendation was to send: the request was fully prepared (below),
+the channel identified, and both outcomes pre-decided. The operator declined.
+The instrument was not tried; no contact of any kind was made with the vendor.
+The operator's selection is recorded verbatim, outside agent-authored prose, at
+<https://github.com/jikig-ai/soleur/issues/7945#issuecomment-5661536361>; that
+comment is the provenance trace for the veto.
+
+This is recorded as a decision with its reasons, rather than folded into the
+verdict as if it were evidence, because the two are not the same claim and the
+difference is what a supervisory authority would ask about first.
+
+### The reasons recorded for the decision
+
+1. **Order inversion.** §The open limb and the post-mortem's action row both
+   ordered vendor escalation *before* revocation. The token was revoked
+   2026-09-08T10:34Z first. What the vendor can still attribute for a revoked
+   personal token is uncertain, and the 2026-09-08 addendum already recorded
+   that the inversion "may have reduced what the vendor can still answer".
+2. **Retention.** The window is eleven days old at the date of decision. Whether
+   request-level logs for it are still held vendor-side is unknown to the
+   controller; the corpus records no Sentry retention figure for API request
+   logs, and none was asked for.
+3. **The write limb is CLEAN as measured on the event classes the org audit
+   log records.** The 2026-09-08 pull shows a single known actor across 96
+   entries with no pagination gap, and the classes it actually evidenced are
+   `detector.edit/add`, `monitor.add`, `uptime_monitor.edit` and
+   `rule.create/edit`. Member, integration and project lifecycle changes are
+   org audit-log event classes and none appeared. Two write classes the admin
+   scope set reached are **outside that instrument**: personal-token mint and
+   revoke, which the corpus already records the org audit log does not capture
+   (`knowledge-base/legal/audits/2026-05-19-sentry-token-scope-probe-divergence.md`:
+   "The Organization Audit Log does NOT record Personal Token mint or revoke
+   operations"), and issue-level `event:admin` writes (`/issues/<id>/`
+   update/delete), which are not org audit-log event classes. Neither was
+   verified against a vendor page for this addendum, for the same reason the
+   ToS clause below was not: no vendor page was fetched. The CLEAN is therefore
+   scoped to what the audit log records, not to every write the scope set
+   allowed.
+4. **The channel.** The credential was rendered into the operator's own
+   session output and, through it, into the Anthropic agent context — a
+   DPA-covered processor, as §Limb 2 above records. It was not committed, not
+   posted, not emitted in CI. There is no evidence it reached any recipient
+   other than the operator's session and that DPA-covered agent context, and
+   the ~3-minute detection is on record.
+
+### What this verdict is, and is not
+
+- It is **INCONCLUSIVE-BY-DECISION**: the read limb was not measured, and the
+  controller has decided it will not be.
+- It is **NOT a CLEAN.** No instrument returned a negative about reads. Recording
+  it as clean would be the defect
+  `knowledge-base/engineering/operations/runbooks/breach-access-log-investigation.md`
+  §Step 4 exists to forbid ("never silently conclude 'no breach' from a partial
+  pull").
+- It is **NOT exhaustion.** Processor assistance under GDPR Art. 28(3)(f) — the
+  instrument the 2026-05-16 determination used — was available and was not
+  used. This is a *weaker* ground than the one the CLO had prepared for the
+  "vendor declines or cannot answer" outcome, where the negative would have
+  rested on every available instrument having been run. The record says so
+  plainly: the determination is final on a thinner record than the CLEAN path,
+  or the exhaustion path, would have produced.
+
+### Why no Art. 33(1) duty arises on this record
+
+Art. 33(1) runs from the controller "becoming aware" of a *personal data
+breach*, and Art. 4(12) requires the security breach to have "led to"
+unauthorised access or disclosure. EDPB Guidelines 9/2022 (carrying forward
+WP250) set the awareness standard: a controller is aware when it "has a
+reasonable degree of certainty that a security incident has occurred that has
+led to personal data being compromised."
+
+On this record the controller does not have that degree of certainty. Limb 1
+is conceded; limb 2 is not established; no evidence of any access to the data
+behind the credential exists; and the Art. 33(1) risk assessment recorded in
+the alternative stands, sharpened by the CLEAN write limb. Declining an
+instrument does not manufacture awareness.
+
+Nor does it license wilful blindness, and the distinction is drawn here rather
+than left implicit. A controller who declines an available instrument *in order
+not to know* could not rely on the awareness standard. That is not this record:
+the decision was made on the four reasons above, each of which goes to whether
+the instrument would answer, and the re-opener below commits the controller to
+using that instrument first the moment any new signal appears. The Art. 32
+"reasonable steps" question is therefore answered honestly as *not fully
+taken*, with the reasons, rather than answered as *taken*.
+
+Art. 34 is unchanged and is not inherited from this reasoning; it was assessed
+on its own facts above and nothing here alters them.
+
+### Why the disposition drops "provisional"
+
+"Provisional" in this record has meant one thing throughout: held open behind a
+named instrument still to be run. The 2026-09-08 addendum kept it precisely
+because vendor support "has not been tried". After 2026-09-14 no instrument
+remains that the controller will run. A disposition that cannot change on any
+planned step is not provisional; carrying the label would misstate the state
+to the breach register, whose 2026-09-03 row carries the same disposition in
+free text and was amended in-cell on 2026-09-14 to match. The disposition is therefore **FINAL — no Art. 33 duty, no Art. 34
+duty; read limb closed INCONCLUSIVE-BY-DECISION 2026-09-14**, with the
+thinness of the ground named in the same sentence.
+
+### Re-opener
+
+Any later evidence of use of token id `6680231` in the window
+2026-09-03T15:30Z → 2026-09-08T10:34Z — a processor notification under the
+Sentry DPA, a Sentry-side finding, data behind the credential surfacing
+elsewhere, or a data-subject request revealing it — re-opens this limb on the
+BREACH path:
+
+- a **fresh 72h** Art. 33(1) clock runs from awareness of *that* evidence, not
+  retroactively from the 2026-09-03 anchor;
+- **vendor escalation becomes the first step**, using the request retained
+  below, with the awareness anchor taken from the timestamp of the vendor's
+  written reply (the `Date:` header / message time, not the time it is read —
+  the convention at
+  `knowledge-base/engineering/operations/runbooks/sentry-support-ticket-drafts.md`
+  step 0, "If results exist with a `Date:` header ≤ …");
+- Art. 33 and Art. 34 are re-run on the actual reads, and external privacy
+  counsel is engaged per
+  `knowledge-base/legal/recommended-tools.md#breach-notice-triage`. That is the
+  trigger at which the v1 CLO-agent attestation stops being sufficient.
+
+### Two outcomes added to §Re-evaluation triggers
+
+The 2026-09-08 addendum recorded that §Re-evaluation triggers "has no branch
+for the outcome that occurred". Append-only forbids editing that list, so the
+missing branches are stated here, and this addendum is where a reader of that
+section is sent:
+
+- The investigation returns INCONCLUSIVE and the controller **declines** the
+  remaining instrument → FINAL with the limb closed INCONCLUSIVE-BY-DECISION;
+  the re-opener above applies. *(This is the branch taken.)*
+- The investigation returns INCONCLUSIVE and the remaining instrument is **run
+  and cannot answer** → FINAL with the limb closed INCONCLUSIVE-EXHAUSTED on
+  Art. 32 reasonable-steps grounds; the same re-opener applies. *(Not taken.)*
+
+### The un-sent instrument, retained
+
+Retained so that a re-opener does not re-derive it. **Not sent.** It discloses
+nothing the public record does not already carry; the disclosure check is
+summarised after it.
+
+One correction to #7945's framing, recorded here because a future sender needs
+the right exclusion: the issue asks to exclude reads "not originating from our
+own Terraform IaC proxy user". That principal (`iac-terraform-prd-814bdd`, the
+audit-log actor) authenticates with its own Internal Integration token
+(`SENTRY_IAC_AUTH_TOKEN`, a GitHub repository secret — see
+`.github/workflows/apply-sentry-infra.yml`; the sweeper at the pre-#8075 state
+bound the same secret) and never as token `6680231`. It is the write-limb
+actor, not a user of the leaked token. The controller's own uses of `6680231`
+in the window were **operator-workstation** calls (the 2026-09-03
+`cutover-verify.sh` run itself, the 2026-09-07 liveness probe, any other
+`doppler run -c prd_terraform` workstation script). The exclusion is by origin,
+and the request is worded that way.
+
+That workstation-only exclusion is **measured, not inferred.** The other
+in-window reader of the personal value was
+`apps/web-platform/infra/scripts/fresh-host-boot-trail.sh` (`doppler secrets
+get SENTRY_AUTH_TOKEN --plain -p soleur -c prd_terraform`, at the pre-#8075
+state), which runs only inside the `web_host_create` and `web_host_replace`
+jobs of `.github/workflows/apply-web-platform-infra.yml`. Measured 2026-09-14:
+`gh run list --workflow apply-web-platform-infra.yml --created
+2026-09-03..2026-09-08` returns 23 runs, 14 of them inside the window, all
+`push` events; `gh run view <id> --json jobs` on each of the 14 shows
+`web_host_create` and `web_host_replace` **skipped** in every one. The only
+non-skipped host job in the range is `inngest_host_replace` in run
+`34268072999` at 2026-09-08T19:17:17Z — after revocation, and not a job that
+runs the boot trail. No CI consumer used the personal token in the window.
+
+The request asks from **15:00:00Z**, thirty minutes before the 15:30Z the
+outcome block and the re-opener carry, because the exposure start is recorded
+everywhere as "~15:30Z" and the only precise anchor is the 15:33:16Z awareness
+timestamp; a request window is widened, never narrowed, around an approximate
+start.
+
+**Channel identified (not opened):** Sentry Team plan (am3) → the Intercom
+support messenger at `sentry.io/support/`, from the logged-in session of the
+org owner account (the account that owned the personal token), email-OTP
+verified; the channel the 2026-05-17 tickets used. Ask for the reply by email
+as well so a `Date:` header anchors any awareness timestamp, per
+`knowledge-base/engineering/operations/runbooks/sentry-support-ticket-drafts.md`
+step 0. Adopt the May T+14d timeout from the submission timestamp.
+
+```text
+Subject: Request for API request attribution for a revoked personal auth token (org jikigai-eu, token id 6680231)
+
+Hello Sentry support,
+
+I am the owner of the Sentry organization `jikigai-eu` (org id 4511404939345920, EU region). I am writing in my capacity as the data controller for that organization, and I am asking for your assistance with a security assessment under the assistance provisions of the Sentry Data Processing Addendum (GDPR Art. 28(3)(f)).
+
+What happened
+
+On 2026-09-03 at approximately 15:30 UTC, a personal auth token on my user account was inadvertently exposed in debugging output within our own operator-controlled session and the AI-assisted tooling that session runs under, whose provider processes it for us under a data processing agreement. We have no evidence that it reached any other recipient. The token was revoked on 2026-09-08 at 10:34 UTC and replaced.
+
+The token:
+- Name: terraform-apply-sentry-iac-prd
+- Token id: 6680231 (last four characters 1f49)
+- Created: 2026-05-18T09:52:33Z
+- Revoked: 2026-09-08T10:34Z (via the account token API under my logged-in session; HTTP 204)
+- Scopes at revocation included org:admin, project:admin, team:admin and event:admin.
+
+What we have already checked
+
+We pulled the organization audit log for jikigai-eu covering 2026-09-03T15:18Z through 2026-09-07T17:59Z (the full page returned; the oldest row precedes the exposure). Every entry is attributable to our own Internal Integration, iac-terraform-prd. We are therefore satisfied that no unexpected write or configuration change occurred. However, the audit log does not record read requests, and none of the personal-token surfaces available to us (the token list, the token edit view, GET /api/0/api-tokens/) expose any last-used or request data, so we cannot assess read access from our side.
+
+What we are asking
+
+For the window 2026-09-03T15:00:00Z to 2026-09-08T10:34:00Z, can you tell us from Sentry's request logs whether any API requests were authenticated with token id 6680231, and if so, for each request (or in aggregate): timestamp, source IP address, request path and user-agent?
+
+Our only legitimate uses of this token during that window were a small number of manual API calls from our operator's workstation. If it helps, we can supply that workstation's egress IP address privately so that you can confirm whether any request came from a different origin.
+
+What form of answer resolves this for us
+
+Either of the following would close our assessment:
+
+(a) a list or count of requests authenticated with that token in the window, with source IPs (or a statement that every request came from a single origin, which we can then match); or
+
+(b) a written statement that Sentry cannot attribute API requests for a revoked personal token, or does not retain request-level logs for that window, so that we can record the question as closed with your answer.
+
+Because this feeds a documented GDPR Art. 33 assessment, we would be grateful for the answer in writing, in this thread or by email to jean.deruelle@jikigai.com, so that we can rely on it in our records.
+
+Thank you for your help.
+
+Jean Deruelle
+Owner, jikigai-eu (Jikigai SARL)
+```
+
+**Disclosure check.** Discloses to the processor: org slug and id and the owner
+email (already held); token name, id, last-four, creation date and scopes
+(Sentry's own records; no value, length or digest); the exposure date, its
+nature ("debugging output within our own operator-controlled session and the
+AI-assisted tooling that session runs under … under a data processing
+agreement") and the revocation date — conceding only Art. 4(12) limb 1, which this determination
+already concedes and which the public repository already records; the
+audit-log coverage window and the Internal Integration name; and that an
+Art. 33 assessment is in progress. Does **not** disclose: the token value, the
+transcript channel, the Better Stack half, internal issue numbers or file
+paths, the workstation IP (offered separately), any data-subject data, or the
+replacement token id. An earlier draft of the request read "local debugging
+output on our own operator-controlled systems … no evidence that it left that
+environment", which omitted the agent-context recipient §Limb 2 records; that
+narrowing was a deliberate minimisation of a third party's name, but it stated
+a stronger claim than the record supports, and it is withdrawn in favour of the
+wording above, which names the recipient class without naming the vendor.
+
+**Lawfulness of asking, for the record.** The request is the controller
+exercising the processor's assistance obligation (Art. 28(3)(f), Art. 32–36).
+The only personal data it transmits is the operator's own account email. The
+Sentry DPA places a Security-Incident notification duty on Sentry toward the
+customer, not the reverse; whether Sentry's Terms of Service also carry the
+customary "promptly notify us of any unauthorised use of your account" clause
+was **not verified** (no vendor page was fetched under the no-outbound
+constraint) and should be checked against `sentry.io/terms` before any future
+send. If present, sending would discharge it; declining to send leaves it where
+it is, which is recorded here rather than elided.

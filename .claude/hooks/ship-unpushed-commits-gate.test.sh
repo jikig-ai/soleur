@@ -8,6 +8,9 @@
 # off the operator's real .claude/.rule-incidents.jsonl.
 
 set -euo pipefail
+SUITE_TMP=$(mktemp -d)
+[[ "$SUITE_TMP" == /* ]] || { echo "FATAL: SUITE_TMP is not absolute: $SUITE_TMP" >&2; exit 2; }
+trap 'rm -rf "$SUITE_TMP"' EXIT
 
 # Redirect incident telemetry into a per-suite sandbox BEFORE any case runs.
 # Inline per-call `INCIDENTS_REPO_ROOT=… bash "$HOOK"` is what leaked here:
@@ -52,8 +55,8 @@ PASS=0
 FAIL=0
 TOTAL=0
 
-command -v jq >/dev/null 2>&1 || { echo "SKIP: jq missing"; exit 0; }
-command -v git >/dev/null 2>&1 || { echo "SKIP: git missing"; exit 0; }
+command -v jq >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; exit 3; }
+command -v git >/dev/null 2>&1 || { echo "UNRESOLVED: git missing — this suite asserted nothing; install git"; exit 3; }
 
 init_git_repo() {
   local dir="$1"
@@ -148,7 +151,7 @@ run_hook() {
 
 # --- T1: unpushed commits → DENY -----------------------------------------
 t1_unpushed_commits_deny() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-unpushed")
   assert_fixture_dir "$work"
   # Add a local commit AFTER the initial push; do not push.
@@ -166,7 +169,7 @@ t1_unpushed_commits_deny() {
 
 # --- T2: clean state → PASS ----------------------------------------------
 t2_clean_state_pass() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-clean")
   assert_fixture_dir "$work"
   # No local commits ahead of origin/<branch>.
@@ -181,7 +184,7 @@ t2_clean_state_pass() {
 
 # --- T3: on main → PASS (fail-open) --------------------------------------
 t3_on_main_pass() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   local work="$tmp/work" incidents="$tmp/incidents"
   mkdir -p "$work" "$incidents"
   init_git_repo "$work"
@@ -198,7 +201,7 @@ t3_on_main_pass() {
 
 # --- T4: detached HEAD → PASS (fail-open) --------------------------------
 t4_detached_head_pass() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   local work="$tmp/work" incidents="$tmp/incidents"
   mkdir -p "$work" "$incidents"
   init_git_repo "$work"
@@ -223,7 +226,7 @@ t4_detached_head_pass() {
 
 # --- T5: no upstream tracking → PASS (fail-open) -------------------------
 t5_no_upstream_pass() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   local work="$tmp/work" incidents="$tmp/incidents"
   mkdir -p "$work" "$incidents"
   init_git_repo "$work"
@@ -241,7 +244,7 @@ t5_no_upstream_pass() {
 
 # --- T6: non-merge command → PASS (no-op early exit) ---------------------
 t6_non_merge_command_pass() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-status")
   assert_fixture_dir "$work"
   echo "x" > "$work/x.txt"
@@ -258,7 +261,7 @@ t6_non_merge_command_pass() {
 
 # --- T7: chained command form → DENY -------------------------------------
 t7_chained_command_deny() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-chained")
   assert_fixture_dir "$work"
   echo "fix" > "$work/fix.txt"
@@ -275,7 +278,7 @@ t7_chained_command_deny() {
 
 # --- T8: substring false-positive in echo string → PASS ------------------
 t8_substring_false_positive_pass() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-echoes")
   assert_fixture_dir "$work"
   echo "fix" > "$work/fix.txt"
@@ -296,7 +299,7 @@ t8_substring_false_positive_pass() {
 # exists to prevent (stale tracking ref → rev-list = 0 → unpushed merge).
 # The deny prompts the operator to fetch manually.
 t9_fetch_failure_deny() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-no-net")
   assert_fixture_dir "$work"
   echo "fix" > "$work/fix.txt"
@@ -324,15 +327,18 @@ t9_fetch_failure_deny() {
 }
 
 # --- T10: settings.json structural validity (integration) ----------------
-# Skips if settings.json does not yet reference the hook (Phase B not done).
+# settings.json and the hook's registration are repo-owned: their absence is a
+# defect in the tree, so it FAILs rather than skips (#8616 taxonomy).
 t10_settings_json_valid() {
   local settings="$REPO_ROOT/.claude/settings.json"
   if [[ ! -f "$settings" ]]; then
-    echo "SKIP: T10 settings.json not found"
+    echo "FAIL: T10 settings.json not found"
+    FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
     return
   fi
   if ! grep -q "ship-unpushed-commits-gate.sh" "$settings"; then
-    echo "SKIP: T10 hook not yet wired in settings.json (Phase B pending)"
+    echo "FAIL: T10 ship-unpushed-commits-gate.sh is not registered in settings.json"
+    FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
     return
   fi
   if jq . "$settings" > /dev/null 2>&1; then
@@ -350,11 +356,13 @@ t10_settings_json_valid() {
 t11_hook_ordering() {
   local settings="$REPO_ROOT/.claude/settings.json"
   if [[ ! -f "$settings" ]]; then
-    echo "SKIP: T11 settings.json not found"
+    echo "FAIL: T11 settings.json not found"
+    FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
     return
   fi
   if ! grep -q "ship-unpushed-commits-gate.sh" "$settings"; then
-    echo "SKIP: T11 hook not yet wired in settings.json (Phase B pending)"
+    echo "FAIL: T11 ship-unpushed-commits-gate.sh is not registered in settings.json"
+    FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
     return
   fi
   # Extract Bash-matcher hook commands in document order.
@@ -371,11 +379,33 @@ t11_hook_ordering() {
     FAIL=$((FAIL + 1))
   fi
   TOTAL=$((TOTAL + 1))
+
+  # Same ordering obligation in the Devin registry (#8205): the ^exec$ block
+  # mirrors the settings Bash set and must keep the same sequence. Absence of
+  # the registration is a FAIL, not a skip — T2 in devin-matcher-parity covers
+  # presence, but inside this suite a silent skip would read as green.
+  local devin_cfg="$REPO_ROOT/.devin/config.json"
+  if [[ ! -f "$devin_cfg" ]] || ! grep -q "ship-unpushed-commits-gate.sh" "$devin_cfg"; then
+    echo "FAIL: T11b ship-unpushed-commits-gate.sh missing from .devin/config.json"
+    FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
+  else
+    order=$(jq -r '.hooks.PreToolUse[] | select(.matcher == "^exec$") | .hooks[].command' "$devin_cfg" 2>/dev/null)
+    rebase_line=$(printf '%s\n' "$order" | grep -n "pre-merge-rebase.sh" | head -1 | cut -d: -f1)
+    ship_line=$(printf '%s\n' "$order" | grep -n "ship-unpushed-commits-gate.sh" | head -1 | cut -d: -f1)
+    if [[ -n "$rebase_line" && -n "$ship_line" && "$ship_line" -gt "$rebase_line" ]]; then
+      echo "PASS: T11b .devin hook ordering (ship-unpushed-commits-gate after pre-merge-rebase)"
+      PASS=$((PASS + 1))
+    else
+      echo "FAIL: T11b .devin hook ordering rebase=$rebase_line ship=$ship_line"
+      FAIL=$((FAIL + 1))
+    fi
+    TOTAL=$((TOTAL + 1))
+  fi
 }
 
 # --- T12: emit_incident prefix length ≤50 chars --------------------------
 t12_emit_incident_prefix_length() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-prefix")
   assert_fixture_dir "$work"
   echo "fix" > "$work/fix.txt"
@@ -406,7 +436,7 @@ t12_emit_incident_prefix_length() {
 
 # --- T13: emit_incident INCIDENTS_REPO_ROOT redirect ---------------------
 t13_incidents_redirect() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-redirect")
   assert_fixture_dir "$work"
   echo "fix" > "$work/fix.txt"
@@ -429,7 +459,7 @@ t13_incidents_redirect() {
 
 # --- T14: stdout JSON not corrupted by git progress (R5) -----------------
 t14_stdout_json_clean() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-clean-stdout")
   assert_fixture_dir "$work"
   echo "fix" > "$work/fix.txt"
@@ -457,7 +487,7 @@ t14_stdout_json_clean() {
 # command), but the trigger phrase lives only inside the -m message body, which
 # the strip blanks before detection.
 t15_commit_body_fp_pass() {
-  local tmp; tmp=$(mktemp -d)
+  local tmp; tmp=$(mktemp -d -p "$SUITE_TMP")
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-fp")
   assert_fixture_dir "$work"
   echo "fix" > "$work/fix.txt"

@@ -9,12 +9,47 @@
 # a schedule and opens a direct-merge PR on drift, after which the existing
 # terraform_data.cron_egress_firewall apply path re-provisions the firewall.
 #
+# GHCR carve (#9275): GitHub's dedicated Packages frontends (/meta `.packages`,
+# which serve ghcr.io and docker.pkg.github.com) sit INSIDE the .git ranges, so
+# they are subtracted from the allow list (bash + jq only; the Inngest cron runs
+# this inside the app container, no python). A "hole" is a `.packages` IPv4 entry
+# that is not an exact .git/.web/.api member and whose prefix is /28 or longer
+# (a /28../32 range, in practice /32 and /31 frontends); each hole that overlaps
+# the allow list is "effective" and is recorded as one header line in the output
+# file, exactly:
+#   # Excluded (GitHub Packages frontends): <cidr>
+# The loader ignores comments. Three consumers parse that header, each with its
+# own regex dialect: the resolver's sampler (a BRE sed that tolerates zero spaces
+# after the colon), the post-apply assertion (an ERE with exactly one space) and
+# cron-egress-firewall.test.sh (a python re). They must stay in step with this
+# printf; the Excluded-header rows of gen-github-egress-cidr.test.sh and
+# cron-egress-firewall.test.sh pin the shape.
+# Exact-member protection is deliberately a union: an entry /meta lists as the
+# same range in ANY of .git/.web/.api is never carved, even though .web is not an
+# allow source (a .web-only /32 that .packages also lists stays admitted; the
+# runtime probe is the control for that residual).
+# /meta is untrusted input: holes shorter than /28 or with leading-zero octets are
+# skipped with a WARN; more than 512 raw .packages IPv4 entries, more than 64
+# effective holes or more than 2048 output lines die; a DNS-sanity guard refuses to
+# write when github.com / api.github.com currently resolves inside a hole; and a
+# file with NO effective hole dies (`ghcr-carve-no-effective-holes`) rather than
+# land an uncarved allow list. A die freezes the daily refresh: the stale carved
+# file keeps serving and the cron's error heartbeat reports it.
+#
 # Usage:
 #   gen-github-egress-cidr.sh            # fetch live /meta, write the file (no-op if unchanged)
 #   gen-github-egress-cidr.sh --check    # exit 0 if committed file == fresh gen, 1 on drift
 #   META_JSON_FILE=fixture.json gen-...  # read /meta from a file (test/offline)
 #   OUT=/path/to/file gen-...            # override the output path (tests)
 set -euo pipefail
+# sort/comm ordering must not depend on the caller's locale (the cron's minimal
+# env differs from a developer shell; a mismatch is a perpetual drift PR).
+export LC_ALL=C
+
+MAX_HOLES=64     # effective holes above this: unexpected /meta shape -> die
+MAX_OUT=2048     # emitted prefixes above this: unexpected shape -> die
+MAX_PKG=512      # raw .packages IPv4 entries above this: die BEFORE the O(P x A) overlap loop (real /meta: ~30)
+MIN_HOLE_PFX=28  # holes shorter than /28 are skipped (a /8 hole would delete the ranges github.com lives in)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT="${OUT:-$SCRIPT_DIR/../cron-egress-allowlist-cidr.txt}"
@@ -25,10 +60,13 @@ MODE="write"
 
 log() { echo "[gen-github-egress-cidr] $*" >&2; }
 die() { log "ERROR: $*"; exit 1; }
+warn() { log "WARN: $*"; }
 
-# Strict IPv4-CIDR validator — byte-identical to the loader's is_valid_ipv4_cidr
-# (cron-egress-nftables.sh:70-80, #5268/#5242). Reused verbatim so a line this
-# generator emits can never be one the loader later die()s on (or vice-versa).
+# Strict IPv4-CIDR validator — equivalent to the loader's is_valid_ipv4_cidr in
+# cron-egress-nftables.sh (#5268/#5242), not a shared copy: the regex literal and the
+# range-check arithmetic are pinned identical by the "validator parity with the
+# loader" rows of gen-github-egress-cidr.test.sh, so a line this generator emits can
+# never be one the loader later die()s on (or vice-versa).
 is_valid_ipv4_cidr() {
   local cidr="$1" prefix o1 o2 o3 o4
   [[ "$cidr" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})/([0-9]{1,2})$ ]] || return 1
@@ -54,6 +92,13 @@ fi
 # loud rather than silently produce an empty extraction.
 echo "$meta_json" | jq -e 'has("git") and has("api")' >/dev/null 2>&1 \
   || die "/meta missing .git/.api keys (truncated body or schema change)"
+# .packages drives the carve: absent / not an array of strings -> refuse to write a
+# file that silently stops carving. .web is optional ((.web // []) below), so it is
+# only shape-checked when present.
+echo "$meta_json" | jq -e '(.packages|type)=="array" and all(.packages[]; type=="string")' >/dev/null 2>&1 \
+  || die "/meta .packages missing or not an array of strings (schema change; refusing to write a file that silently stops carving)"
+echo "$meta_json" | jq -e '((.web // [])|type)=="array"' >/dev/null 2>&1 \
+  || die "/meta .web is present but not an array (schema change)"
 
 # 2. EXTRACT — verbatim filter (matches the file header + the runbook recipe;
 #    select(test(":")|not) drops the IPv6 entries). AC2 pins this string.
@@ -61,15 +106,146 @@ mapfile -t cidrs < <(echo "$meta_json" | jq -r '(.git+.api)[]|select(test(":")|n
 
 # 3. GUARD non-empty (a truncated /meta or an IPv6-only response must not blank the file).
 [[ "${#cidrs[@]}" -gt 0 ]] || die "empty extraction (truncated /meta or IPv6-only) — refusing to blank the file"
+[[ "${#cidrs[@]}" -le "$MAX_OUT" ]] || die "extraction has ${#cidrs[@]} ranges (> $MAX_OUT; unexpected /meta shape)"
 
 # 4. VALIDATE every line + reject over-broad prefixes. Both this validator and
 #    the loader's are SHAPE validators that accept a structurally-valid 0.0.0.0/0;
 #    the prefix-floor (>= /8) is the breadth defense the one allow-all vector needs.
-for cidr in "${cidrs[@]}"; do
-  is_valid_ipv4_cidr "$cidr" || die "invalid CIDR from /meta: '$cidr' (reject-whole-file; refusing to write a partial)"
-  prefix="${cidr##*/}"
-  (( prefix >= 8 )) || die "over-broad CIDR from /meta: '$cidr' (prefix < /8 — allow-all egress vector)"
+validate_allow() {
+  local cidr prefix
+  for cidr in "$@"; do
+    is_valid_ipv4_cidr "$cidr" || die "invalid CIDR from /meta: '$cidr' (reject-whole-file; refusing to write a partial)"
+    prefix="${cidr##*/}"
+    (( prefix >= 8 )) || die "over-broad CIDR from /meta: '$cidr' (prefix < /8 — allow-all egress vector)"
+  done
+}
+validate_allow "${cidrs[@]}"
+
+# 5. CARVE the GitHub Packages frontends (#9275). Integer math only; every octet
+#    and prefix goes through 10# so a leading zero can never read as octal.
+CP_LO=0; CP_HI=0; CP_PFX=0
+cidr_parse() { # $1 validated a.b.c.d/p -> CP_LO/CP_HI (aligned network bounds), CP_PFX
+  local ip="${1%/*}" o1 o2 o3 o4 size
+  IFS=. read -r o1 o2 o3 o4 <<< "$ip"
+  CP_PFX=$(( 10#${1##*/} ))
+  size=$(( 1 << (32 - CP_PFX) ))
+  CP_LO=$(( ((10#$o1 << 24) | (10#$o2 << 16) | (10#$o3 << 8) | 10#$o4) & ~(size - 1) & 0xFFFFFFFF ))
+  CP_HI=$(( CP_LO + size - 1 ))
+}
+INT_IP=""
+int_to_ip() { INT_IP="$(( ($1 >> 24) & 255 )).$(( ($1 >> 16) & 255 )).$(( ($1 >> 8) & 255 )).$(( $1 & 255 ))"; }
+
+# Pure address-exclude of ONE hole from ONE allow prefix; appends the surviving
+# prefixes to NEXT. Disjoint -> kept verbatim; hole covers the prefix -> dropped;
+# hole strictly inside -> halve the prefix toward the hole, keeping the sibling
+# half at each level (the CIDR remainder).
+HOLE_LO=(); HOLE_HI=(); HOLE_PFX=(); NEXT=()
+carve_one() { # $1 allow cidr, $2 hole index
+  local h_lo="${HOLE_LO[$2]}" h_hi="${HOLE_HI[$2]}" h_pfx="${HOLE_PFX[$2]}" a_lo a_hi cur_lo pfx half
+  cidr_parse "$1"; a_lo=$CP_LO; a_hi=$CP_HI; pfx=$CP_PFX
+  if (( a_hi < h_lo || h_hi < a_lo )); then NEXT+=("$1"); return 0; fi
+  if (( h_lo <= a_lo && a_hi <= h_hi )); then return 0; fi
+  cur_lo=$a_lo
+  while (( pfx < h_pfx )); do
+    pfx=$(( pfx + 1 )); half=$(( 1 << (32 - pfx) ))
+    if (( h_lo < cur_lo + half )); then
+      int_to_ip $(( cur_lo + half )); NEXT+=("$INT_IP/$pfx")
+    else
+      int_to_ip "$cur_lo"; NEXT+=("$INT_IP/$pfx"); cur_lo=$(( cur_lo + half ))
+    fi
+  done
+}
+
+exclude_holes() { # carves every HOLE_* entry out of the cidrs array
+  local i c
+  for (( i = 0; i < ${#HOLE_LO[@]}; i++ )); do
+    NEXT=()
+    for c in ${cidrs[@]+"${cidrs[@]}"}; do carve_one "$c" "$i"; done
+    cidrs=(${NEXT[@]+"${NEXT[@]}"})
+    [[ "${#cidrs[@]}" -le "$MAX_OUT" ]] || die "carve produced ${#cidrs[@]} ranges (> $MAX_OUT; unexpected /meta shape)"
+  done
+}
+
+# holes = .packages IPv4 minus EXACT .git/.web/.api members (an entry /meta lists
+# as the same range for git/api, the 20.217.135.1/32 shape, is never carved).
+mapfile -t pkg_holes < <(comm -23 \
+  <(echo "$meta_json" | jq -r '.packages[]|select(test(":")|not)' | sort -u) \
+  <(echo "$meta_json" | jq -r '(.git+(.web // [])+.api)[]|select(test(":")|not)' | sort -u))
+pkg_v4_n="$(echo "$meta_json" | jq -r '[.packages[]|select(test(":")|not)]|length')"
+[[ "$pkg_v4_n" -gt 0 ]] || die "/meta .packages has no IPv4 entries (schema change; refusing to write a file that silently stops carving)"
+# Bound the O(P x A) overlap loop below: a hostile /meta with thousands of .packages
+# entries would otherwise burn minutes of bash (the real list is ~30 entries).
+[[ "$pkg_v4_n" -le "$MAX_PKG" ]] || die "/meta .packages has $pkg_v4_n IPv4 entries (> $MAX_PKG; unexpected /meta shape)"
+
+A_LO=(); A_HI=()
+for cidr in "${cidrs[@]}"; do cidr_parse "$cidr"; A_LO+=("$CP_LO"); A_HI+=("$CP_HI"); done
+
+eff_lines=""   # canonical effective holes, one per line (sorted, unique below)
+for hole in ${pkg_holes[@]+"${pkg_holes[@]}"}; do
+  # a leading-zero octet/prefix is ambiguous (inet_aton reads octal): never apply it
+  if [[ "$hole" =~ (^|[./])0[0-9] ]]; then
+    warn "skipping non-canonical Packages entry '$hole' (leading-zero octet or prefix)"; continue
+  fi
+  is_valid_ipv4_cidr "$hole" || die "invalid CIDR in /meta .packages: '$hole' (reject-whole-file; refusing to write a partial)"
+  cidr_parse "$hole"
+  if (( CP_PFX < MIN_HOLE_PFX )); then
+    warn "skipping Packages entry '$hole' (prefix shorter than /$MIN_HOLE_PFX; would delete allow ranges)"; continue
+  fi
+  overlaps=0
+  for (( i = 0; i < ${#A_LO[@]}; i++ )); do
+    if (( ! (A_HI[i] < CP_LO || CP_HI < A_LO[i]) )); then overlaps=1; break; fi
+  done
+  (( overlaps )) || continue   # outside every allow prefix: nothing to carve
+  int_to_ip "$CP_LO"; eff_lines+="$INT_IP/$CP_PFX"$'\n'
 done
+eff_holes=()
+if [[ -n "$eff_lines" ]]; then mapfile -t eff_holes < <(printf '%s' "$eff_lines" | sort -u); fi
+[[ "${#eff_holes[@]}" -le "$MAX_HOLES" ]] || die "${#eff_holes[@]} effective Packages holes (> $MAX_HOLES; unexpected /meta shape)"
+
+for hole in ${eff_holes[@]+"${eff_holes[@]}"}; do
+  cidr_parse "$hole"; HOLE_LO+=("$CP_LO"); HOLE_HI+=("$CP_HI"); HOLE_PFX+=("$CP_PFX")
+done
+
+# A file with NO effective hole would be an UNCARVED allow list: the post-apply
+# assertion then fails every apply, and an unreviewed daily direct-merge cron PR
+# could silently drop the whole carve. Die instead: the refresh freezes, the stale
+# carved file keeps serving, and the cron's error heartbeat reports it.
+[[ "${#eff_holes[@]}" -gt 0 ]] || die "ghcr-carve-no-effective-holes: no .packages entry is an effective hole (all outside the allow list, exact .git/.web/.api members, shorter than /$MIN_HOLE_PFX or skipped); refusing to write an uncarved allow list (stale file keeps serving)"
+
+# DNS sanity: if github.com / api.github.com currently resolves INSIDE a hole the
+# carve would cut GitHub itself. Only a lookup that SUCCEEDS and lands in a hole
+# dies; a failed or absent lookup only warns (guard degrades; the probe covers it).
+if command -v getent >/dev/null; then
+  for name in github.com api.github.com; do
+    ans=""
+    if command -v timeout >/dev/null; then
+      ans="$(timeout 10 getent ahostsv4 "$name" 2>/dev/null)" || ans=""
+    else
+      ans="$(getent ahostsv4 "$name" 2>/dev/null)" || ans=""
+    fi
+    if [[ -z "$ans" ]]; then
+      warn "DNS-sanity lookup of $name failed or returned nothing (guard skipped for this name)"; continue
+    fi
+    while read -r ip _; do
+      is_valid_ipv4_cidr "$ip/32" || continue
+      cidr_parse "$ip/32"
+      for (( i = 0; i < ${#HOLE_LO[@]}; i++ )); do
+        if (( CP_LO >= HOLE_LO[i] && CP_LO <= HOLE_HI[i] )); then
+          die "ghcr-carve-would-cut-github: $name resolves to $ip inside an excluded Packages hole (refusing to write; stale file keeps serving)"
+        fi
+      done
+    done <<< "$ans"
+  done
+else
+  warn "getent not found: DNS-sanity guard skipped (the runtime probe is the control)"
+fi
+exclude_holes
+[[ "${#cidrs[@]}" -gt 0 ]] || die "carve left no ranges — refusing to blank the file"
+
+# Re-validate EVERY emitted prefix (loader parity + the >= /8 floor), dedupe, cap.
+mapfile -t cidrs < <(printf '%s\n' "${cidrs[@]}" | sort -u)
+[[ "${#cidrs[@]}" -le "$MAX_OUT" ]] || die "output has ${#cidrs[@]} ranges (> $MAX_OUT; unexpected /meta shape)"
+validate_allow "${cidrs[@]}"
 
 count="${#cidrs[@]}"
 
@@ -96,9 +272,18 @@ emit_file() {
 #   curl -fsS --max-time 30 https://api.github.com/meta \\
 #     | jq -r '(.git+.api)[]|select(test(":")|not)' | sort -u
 #
-# Snapshot: api.github.com/meta \`.git\` + \`.api\`, $count IPv4 ranges.
-# Generated: $d
+# Carve (#9275): the GitHub Packages frontends (/meta \`.packages\`: ghcr.io and
+# docker.pkg.github.com) are subtracted from that union at /32 granularity, except
+# exact .git/.web/.api members. Each subtracted frontend range is listed below as
+# one 'Excluded' header line (no allow range is hand-narrowed; see the generator).
+#
+# Snapshot: api.github.com/meta \`.git\` + \`.api\` minus the Packages frontends, $count IPv4 ranges.
 EOF
+  local h
+  for h in ${eff_holes[@]+"${eff_holes[@]}"}; do
+    printf '# Excluded (GitHub Packages frontends): %s\n' "$h"
+  done
+  printf '# Generated: %s\n' "$d"
   printf '%s\n' "${cidrs[@]}"
 }
 

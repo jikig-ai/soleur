@@ -223,9 +223,12 @@
 # The ruleset ID is hardcoded while the zone is a variable. That coupling is
 # deliberate — the ID is valid only for this zone — and it fails CLOSED: a
 # repointed `cf_zone_id`, or an entrypoint recreated in the dashboard, makes the
-# import read fail rather than clobber. Note the blast radius, though: import
-# targets are validated BEFORE `-target` pruning, so that failure aborts the
-# whole ~70-target apply, not just this resource.
+# import read fail rather than clobber. Note the blast radius, though, measured
+# on Terraform 1.10.5 (2026-09-15, #7884): a plan whose `-target` set excludes
+# this import's `to` address skips the import silently, while an untargeted plan
+# or one that targets the address aborts on the failed read. The per-merge apply
+# targets cloudflare_ruleset.seo_config_settings and the scheduled drift plan is
+# untargeted, so both would abort for the whole root, not just this resource.
 import {
   for_each = var.adopt_seo_config_entrypoint ? toset(["adopt"]) : toset([])
   provider = cloudflare.rulesets

@@ -22,6 +22,21 @@ command -v jq >/dev/null || { red "FAIL: jq not on PATH"; exit 1; }
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# Fixture credentials are synthesized at run time (never a contiguous literal): a 32-char id and a
+# 64-char secret that are DISTINCT, neither containing the other, neither one repeated character
+# (the old all-zero literals made the 64-zero secret contain the 32-zero id, so an argv-absence
+# row could pass or fail by accident). Nothing here prints a value.
+rand_hex() { od -An -N"$(( $1 / 2 ))" -tx1 /dev/urandom | tr -d ' \n'; }
+while :; do
+  ID="$(rand_hex 32)"; SECRET="$(rand_hex 64)"
+  [[ "${#ID}" -eq 32 && "${#SECRET}" -eq 64 ]] || continue
+  [[ "$SECRET" != *"$ID"* && "$ID" != *"$SECRET"* ]] || continue
+  [[ -n "${ID//${ID:0:1}/}" && -n "${SECRET//${SECRET:0:1}/}" ]] || continue
+  break
+done
 
 # Stub curl: emit the next HTTP code from $work/codes.txt and consume it.
 # Also append the request URL to $work/urls.txt so tests can assert key
@@ -34,6 +49,14 @@ mk_curl_stub() {
   cat > "$work/curl" <<EOF
 #!/usr/bin/env bash
 codes_file="$codes"
+# Record every call: argv, and stdin (drained UNCONDITIONALLY). The stub exits 99 when stdin
+# carries no user-config line, so a run that drops the credential channel cannot be served a
+# scripted code (a stub that never reads stdin certifies nothing about the credential path).
+{ printf 'CALL\n'; printf '%s\n' "\$@"; } >> "$work/argv.log"
+stdin=\$(cat; printf x); stdin=\${stdin%x}
+printf '%s' "\$stdin" >> "$work/stdin.log"
+[[ "\$stdin" == *'user = "'* ]] || { echo "stub: stdin carries no user line" >&2; exit 99; }
+[[ "\${STUB_FAIL:-0}" != 1 ]] || { printf '000\\n'; exit 7; }
 read -r code < "\$codes_file"
 sed -i '1d' "\$codes_file"
 # Parse \`-o <file>\` and copy the body fixture there if present.
@@ -57,18 +80,19 @@ EOF
 
 run_sut() {
   local payload="$1"
-  : > "$work/urls.txt"
+  : > "$work/urls.txt"; : > "$work/argv.log"; : > "$work/stdin.log"
   # 32-char access key + 64-char secret to satisfy the r2-conditional-put.sh
   # credential-shape preflight (catches Doppler-still-holds-bearer-token regressions).
   PATH="$work:$PATH" \
-  R2_CLA_EVIDENCE_ACCESS_KEY_ID=00000000000000000000000000000000 \
-  R2_CLA_EVIDENCE_SECRET=0000000000000000000000000000000000000000000000000000000000000000 \
+  R2_CLA_EVIDENCE_ACCESS_KEY_ID="$ID" \
+  R2_CLA_EVIDENCE_SECRET="$SECRET" \
   R2_CLA_EVIDENCE_BUCKET=soleur-cla-evidence \
   R2_CLA_EVIDENCE_ENDPOINT=https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com \
-    bash "$SUT" "$payload"
+    bash "$SUT" "$payload" </dev/null
 }
 
 fail=0
+wire_rows=0
 
 # Common code-fixture for happy-path assertions.
 prime_200() {
@@ -239,10 +263,10 @@ prime_200
 out=$(
   PATH="$work:$PATH" \
   R2_CLA_EVIDENCE_ACCESS_KEY_ID=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA \
-  R2_CLA_EVIDENCE_SECRET=0000000000000000000000000000000000000000000000000000000000000000 \
+  R2_CLA_EVIDENCE_SECRET="$SECRET" \
   R2_CLA_EVIDENCE_BUCKET=soleur-cla-evidence \
   R2_CLA_EVIDENCE_ENDPOINT=https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com \
-    bash "$SUT" "$payload" 2>&1
+    bash "$SUT" "$payload" </dev/null 2>&1
 ) && rc=0 || rc=$?
 if [[ "$rc" -ne 0 ]] && grep -q 'length=53, expected 32' <<<"$out" && grep -q 'bootstrap.sh' <<<"$out"; then
   green "PASS: Bypass.h 53-char bearer token → preflight fast-fail with bootstrap.sh instruction"
@@ -271,11 +295,11 @@ fi
 prime_200
 out=$(
   PATH="$work:$PATH" \
-  R2_CLA_EVIDENCE_ACCESS_KEY_ID=00000000000000000000000000000000 \
-  R2_CLA_EVIDENCE_SECRET=0000000000000000000000000000000000000000000000000000000000000000 \
+  R2_CLA_EVIDENCE_ACCESS_KEY_ID="$ID" \
+  R2_CLA_EVIDENCE_SECRET="$SECRET" \
   R2_CLA_EVIDENCE_BUCKET=soleur-cla-evidence \
   R2_CLA_EVIDENCE_ENDPOINT=https://evil.example.com \
-    bash "$SUT" "$payload" 2>&1
+    bash "$SUT" "$payload" </dev/null 2>&1
 ) && rc=0 || rc=$?
 if [[ "$rc" -eq 64 ]] && grep -qE '::error::.*canonical R2 hostname' <<<"$out"; then
   green "PASS: Bypass.i tampered endpoint → exit 64 (endpoint pin wired into upload path)"
@@ -283,6 +307,41 @@ else
   red "FAIL: Bypass.i expected exit 64 + canonical-hostname error; got rc=$rc"
   red "$out"
   fail=1
+fi
+
+# Bypass.a2: wire contract. After a 200 run the recorded argv holds NEITHER credential value, the
+# recorded stdin is the `user = "<id>:<secret>"` config line once per call, and at least one call
+# was recorded (an empty log is RED, so a stub that records nothing cannot pass).
+prime_200
+run_sut "$payload" >/dev/null 2>&1 && rc=0 || rc=$?
+calls=$(grep -c '^CALL$' "$work/argv.log" || true)
+stdin_lines=$(grep -cxF "user = \"$ID:$SECRET\"" "$work/stdin.log" || true)
+if [[ "$rc" -eq 0 && "$calls" -ge 1 && "$stdin_lines" -eq "$calls" ]] \
+   && ! grep -qF -e "$ID" -e "$SECRET" "$work/argv.log"; then
+  green "PASS: Bypass.a2 pair absent from every recorded argv; stdin carries the user line (calls=$calls)"
+  wire_rows=$((wire_rows + 1))
+else
+  red "FAIL: Bypass.a2 rc=$rc calls=$calls stdin_user_lines=$stdin_lines (argv must hold neither value)"
+  fail=1
+fi
+
+# Bypass.a3: a curl that FAILS (exit 7, no output) is a failure: exit 2 with status=000, no success line.
+prime_200
+out=$(STUB_FAIL=1 run_sut "$payload" 2>&1) && rc=0 || rc=$?
+if [[ "$rc" -eq 2 && "$(grep -c 'unexpected status=000' <<<"$out" || true)" -ge 1 ]] && ! grep -q '^ok status=' <<<"$out"; then
+  green "PASS: Bypass.a3 a failing curl → exit 2, status=000, no success line"
+  wire_rows=$((wire_rows + 1))
+else
+  red "FAIL: Bypass.a3 rc=$rc (expected 2 with unexpected status=000 and no ok line)"
+  fail=1
+fi
+
+# Anti-vacuity floor for the wire rows above (Bypass.a2, a3): deleting them leaves the rest of this suite
+# green. Literal adjacent to the if.
+MIN_WIRE_ROWS=2
+if [[ "$wire_rows" -lt "$MIN_WIRE_ROWS" ]]; then
+  printf 'FATAL: anti-vacuity floor — %s wire rows passed, expected at least %s\n' "$wire_rows" "$MIN_WIRE_ROWS" >&2
+  exit 1
 fi
 
 if [[ "$fail" -eq 0 ]]; then

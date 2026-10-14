@@ -7,6 +7,11 @@ Wants=network-online.target
 # ephemeral ROOT disk — silently reproducing the exact data-loss trap this
 # migration fixes. This pins the unit to the persistent /mnt/data mount.
 RequiresMountsFor=/mnt/data
+# DELIBERATELY UNCONDITIONED (#9962): the sibling units gained ConditionPathExists=
+# skip-vs-fail on the same env file, but this unit stays loud — a missing
+# /etc/default/inngest-server on the data-bearing Redis unit is a designed-loud
+# mount-class failure, not benign ordering noise. Do not add a condition here
+# without a written rationale.
 
 [Service]
 Type=simple
@@ -37,7 +42,7 @@ ExecStartPre=/usr/local/bin/inngest-redis-mount-guard.sh
 # $INNGEST_REDIS_PASSWORD (NOT its value) appears in `ps`/journal — same
 # defense as inngest-server.service. Shipped as a FILE (not a TF inline heredoc)
 # because the doppler-wrapped nested single-quotes do not survive templating.
-ExecStart=/usr/bin/doppler run --config prd -- /usr/bin/bash -c '/usr/bin/redis-server /mnt/data/redis/inngest-redis.conf --requirepass "$INNGEST_REDIS_PASSWORD"'
+ExecStart=/usr/bin/doppler run --config ${DOPPLER_CONFIG} -- /usr/bin/bash -c '/usr/bin/redis-server /mnt/data/redis/inngest-redis.conf --requirepass "$INNGEST_REDIS_PASSWORD"'
 Restart=on-failure
 RestartSec=5
 # Sized for the modest queue/run-state; bound so a runaway cannot starve the

@@ -6,7 +6,7 @@
 1. references/recommended-structure.md
 2. references/skill-structure.md
 3. references/core-principles.md
-4. references/use-xml-tags.md
+4. references/authoring-levers.md
 </required_reading>
 
 <process>
@@ -113,36 +113,35 @@ mkdir -p ~/.claude/skills/{skill-name}/scripts    # for reusable code
 
 **Simple skill:** Write complete skill file with:
 
-- YAML frontmatter (name, description)
-- `<objective>`
-- `<quick_start>`
-- Content sections with pure XML
-- `<success_criteria>`
+- YAML frontmatter (name, description; add `disable-model-invocation: true` only if the invocation test in `references/authoring-levers.md` says human-only)
+- `# <Skill Name>` title with what the skill does
+- `## Quick start`
+- Content sections as markdown headings (XML tags only as optional wrappers inside a section)
+- `## Success criteria`
 
 **Complex skill:** Write router with:
 
 - YAML frontmatter
-- `<essential_principles>` (inline, unavoidable)
-- `<intake>` (question to ask user)
-- `<routing>` (maps answers to workflows)
-- `<reference_index>` and `<workflows_index>`
+- `## Essential principles` (inline, unavoidable)
+- `## Intake` (question to ask user)
+- `## Routing` (maps answers to workflows)
+- `## References` and `## Workflows` indexes
 
 ## Step 6: Write Workflows (if complex)
 
 For each workflow:
 
-```xml
-<required_reading>
+```markdown
+# Workflow: {Workflow Name}
+
+## Required reading
 Which references to load for this workflow
-</required_reading>
 
-<process>
+## Process
 Step-by-step procedure
-</process>
 
-<success_criteria>
+## Success criteria
 How to know this workflow is done
-</success_criteria>
 ```
 
 ## Step 7: Write References (if needed)
@@ -160,11 +159,11 @@ Check:
 - [ ] YAML frontmatter valid
 - [ ] Name matches directory (lowercase-with-hyphens)
 - [ ] Description says what it does AND when to use it (third person)
-- [ ] No markdown headings (#) in body - use XML tags
-- [ ] Required tags present: objective, quick_start, success_criteria
+- [ ] Body structured with markdown headings (XML tags only as optional wrappers inside a section)
+- [ ] Required sections present: title + purpose, quick start, success criteria
 - [ ] All referenced files exist
 - [ ] SKILL.md under 500 lines
-- [ ] XML tags properly closed
+- [ ] Any XML wrappers closed
 
 ## Step 9: Create Slash Command
 

@@ -25,9 +25,162 @@
 
 set -euo pipefail
 
-LINKEDIN_OAUTH="https://www.linkedin.com/oauth/v2"
-LINKEDIN_API="https://api.linkedin.com"
+# (#7797) Xtrace refusal -- the FIRST thing after `set …`, so nothing above it is
+# traced. This script ships to installed Soleur CLIs: the terminal it runs in
+# belongs to the founder, and `bash -x` would print their live LinkedIn
+# credentials. UNCONDITIONAL, and that is measured rather than inherited:
+# `cmd_verify` does `set -a; source "$env_file"; set +a`, loading the founder's
+# .env at RUNTIME, AFTER this prologue. A conditional hatch keyed on whether the
+# credential is already set would therefore be empty at guard time and open, and
+# `source` under xtrace echoes EVERY assignment in the file -- so the leak would
+# be the whole .env, not one token. (Written without the literal parameter
+# expansion on purpose: a bare-token grep for it cannot tell this comment from
+# real code, and the 4-vs-11 arm split is asserted by exactly such a grep.)
+# Refusal goes to STDOUT, not stderr: agent runtimes surface stdout and swallow
+# stderr (constitution.md > Code Style > Always), and a swallowed security refusal
+# leaves the user with a bare `exit 78` and no text at all.
+case "$-" in
+  *x*)
+    printf 'Refusing to run under `bash -x`: this script loads LINKEDIN_CLIENT_ID, LINKEDIN_CLIENT_SECRET, LINKEDIN_ACCESS_TOKEN from your .env at runtime, and tracing would print them to your terminal. Unsetting them first does not help -- the .env is the source. Re-run without `bash -x`.\n'
+    exit 78
+    ;;
+esac
+
+# (#7873) `--disable` closes ~/.curlrc and `--noproxy '*'` closes the proxy
+# variables, but NEITHER touches the trust store or the TLS session-key log. On an
+# installed CLI the environment belongs to someone who is not us, so
+# a substituted `CURL_CA_BUNDLE` is a clean MITM of the founder's platform
+# token with every other guard fully intact, and `SSLKEYLOGFILE` is passive
+# decryption with no MITM at all. Matches the line in scripts/betterstack-query.sh.
+unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
+      HOSTALIASES LOCALDOMAIN RES_OPTIONS
+
+# --- Transport-confinement diagnostics (#7873) --------------------------------
+# Every credentialed `curl` below carries `--disable --noproxy '*'` and discards
+# curl's own stderr (which can carry the URL). A failed request then has four
+# competing causes the founder cannot tell apart: the xtrace refusal, the proxy
+# this script deliberately bypassed, a ~/.curlrc that `--disable` dropped, or an
+# ordinary network failure. So each failure emits ONE structured marker carrying
+# all four discriminators, beside a human line that names the bypass instead of
+# blaming the founder's connectivity.
+SOLEUR_TRANSPORT_SCRIPT="linkedin-setup.sh"
+SOLEUR_TRANSPORT_PLATFORM="LinkedIn"
+
+# The request helpers below run inside `$(...)`, where fd 1 is the capture pipe.
+# Save the script's real stdout so the marker reaches the founder's terminal (and
+# the always-on PostToolUse Bash extractor) instead of being swallowed into a
+# variable. The marker is on stdout BY DESIGN -- the call sites' `2>/dev/null` is
+# what keeps curl's URL-carrying stderr out of the transcript, and it must not be
+# able to suppress the diagnostic too.
+exec 3>&1
+
+# Which proxy variables are non-empty, or `none`.
+proxy_env_names() {
+  local names="" n
+  for n in HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy; do
+    if [[ -n "${!n-}" ]]; then
+      names="${names},${n}"
+    fi
+  done
+  if [[ -z "$names" ]]; then
+    printf 'none'
+  else
+    printf '%s' "${names#,}"
+  fi
+}
+
+# True when a proxy this script deliberately bypasses is configured. NO_PROXY
+# alone is not one -- it only ever narrows proxying, so it cannot be the cause.
+proxy_bypassed() {
+  [[ -n "${HTTP_PROXY:-}${HTTPS_PROXY:-}${ALL_PROXY:-}${http_proxy:-}${https_proxy:-}${all_proxy:-}" ]]
+}
+
+# One line, eight fields, on the saved stdout.
+#
+# Two fields were literals in the first cut and are now MEASURED (#7898 review):
+# `noproxy_applied` was the constant "true", which ASSERTS the property instead of
+# observing it -- dropping --noproxy from a call site left the diagnostic still
+# claiming it was applied. It now reports whether a proxy was actually configured
+# for this request to bypass, which is the fact a reader needs. `refusal` was the
+# constant "none" at every call site, so the cause it exists to discriminate could
+# never appear; it now carries `env-rebind-refused` and `xtrace-credential-bound`.
+#
+# `tls_env_cleared` is new. The prologue unsets CURL_CA_BUNDLE/SSL_CERT_FILE et al,
+# which is correct against an attacker and BREAKS a founder whose corporate CA
+# arrives that way -- curl then exits 60 and, without this field, the event is
+# indistinguishable from an ordinary network failure.
+emit_transport_diag() {
+  local curl_exit="$1" refusal="$2" surface="installed-cli" curlrc="false" noproxy="false"
+  # The hosted sandbox always sets this (agent-env.ts > AGENT_ENV_OVERRIDES); an
+  # installed CLI does not. A label on the event, not a gate on behaviour.
+  if [[ -n "${CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:-}" ]]; then
+    surface="in-sandbox"
+  fi
+  if [[ -f "${HOME:-}/.curlrc" ]]; then
+    curlrc="true"
+  fi
+  if proxy_bypassed; then
+    noproxy="true"
+  fi
+  printf 'SOLEUR_TRANSPORT_DIAG surface=%s script=%s curl_exit=%s refusal=%s proxy_env=%s curlrc_present=%s noproxy_applied=%s tls_env_cleared=%s\n' \
+    "$surface" "$SOLEUR_TRANSPORT_SCRIPT" "$curl_exit" "$refusal" \
+    "$(proxy_env_names)" "$curlrc" "$noproxy" "true" >&3
+}
+
+# Replaces the bare "Check your network connection and try again." on a
+# credentialed-curl failure. With a proxy set, that line blames the founder for a
+# bypass this script chose.
+report_transport_failure() {
+  local curl_exit="${1:-unknown}"
+  local detail="${2:-Failed to connect to the ${SOLEUR_TRANSPORT_PLATFORM} API.}"
+  emit_transport_diag "$curl_exit" "none"
+  echo "Error: ${detail}" >&2
+  # Ordered by how specific the evidence is. Each arm names something THIS script
+  # did, so the founder is never told to go debug their own network for a choice
+  # made here. The bare "check your connection" line is the LAST resort, not the
+  # default -- it was the default in the first cut, which meant a founder whose
+  # corporate CA or curlrc we had just discarded was blamed for it (#7898 review).
+  if [[ "$curl_exit" == "60" || "$curl_exit" == "35" || "$curl_exit" == "77" ]]; then
+    # 60 peer-certificate, 35 TLS handshake, 77 CA-bundle unreadable.
+    echo "This looks like a TLS trust failure. This script deliberately clears CURL_CA_BUNDLE, SSL_CERT_FILE, SSL_CERT_DIR and SSLKEYLOGFILE before the request, because those variables can redirect or expose a request carrying your ${SOLEUR_TRANSPORT_PLATFORM} credential." >&2
+    echo "If your machine needs a corporate CA to reach ${SOLEUR_TRANSPORT_PLATFORM}, that is not currently supported -- please open an issue at https://github.com/jikig-ai/soleur/issues." >&2
+  elif proxy_bypassed; then
+    echo "This request deliberately bypasses your proxy ($(proxy_env_names)), because a proxy can redirect a request carrying your ${SOLEUR_TRANSPORT_PLATFORM} token." >&2
+    echo "If you need Soleur to reach ${SOLEUR_TRANSPORT_PLATFORM} through your proxy, that is not currently supported -- please open an issue at https://github.com/jikig-ai/soleur/issues." >&2
+  elif [[ -f "${HOME:-}/.curlrc" ]]; then
+    echo "You have a ~/.curlrc, and this request deliberately ignores it (--disable), because a curlrc can redirect a request carrying your ${SOLEUR_TRANSPORT_PLATFORM} token. If it configures a proxy or a CA bundle you need, that is why this failed." >&2
+    echo "That is not currently supported -- please open an issue at https://github.com/jikig-ai/soleur/issues." >&2
+  else
+    echo "Check your network connection and try again." >&2
+  fi
+}
+
+# readonly (#7898 review): `cmd_verify` and friends run `set -a; source "$env_file"; set +a`
+# BELOW this line, so a plain assignment here is rebindable by the repo's .env --
+# which retargets the credentialed request while every transport flag stays intact.
+# That is the "--disable and --noproxy are intact and irrelevant" shape this change
+# exists to close, one layer up. readonly makes the destination non-rebindable.
+readonly LINKEDIN_OAUTH="https://www.linkedin.com/oauth/v2"
+readonly LINKEDIN_API="https://api.linkedin.com"
 LINKEDIN_DEFAULT_REDIRECT_URI="https://localhost:8080/callback"
+
+# (#7843) The access token is parsed out of an API reply, so it is RESPONSE-DERIVED:
+# untrusted bytes. It rides curl's STDIN config channel (`--config -`), never its
+# argument list (readable by every local user in /proc/<pid>/cmdline). That channel is
+# line-oriented, so a token holding a quote and a newline could append a `url = "..."`
+# directive and make curl issue a second request. This guard refuses anything outside the
+# token alphabet BEFORE the value is formatted into the stream, and never echoes it.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+
+# (#9597) The OAuth client secret and the access token being introspected are form
+# fields, not bearers, so `_bearer_ok`'s alphabet does not fit them. They still must
+# not ride curl's argument list, so they go on the stdin config channel as
+# `data-urlencode = "name=value"` lines. A config string is one line with `\` and `"`
+# as its only escapes, so a value holding a control character (CR/LF would end the
+# directive and let the next bytes act as a new one), a quote or a backslash is refused
+# BEFORE it is formatted into the stream; `_cfg_q` still escapes what reaches it.
+_cfg_ok() { local LC_ALL=C; case "${1:-}" in ''|*[[:cntrl:]]*|*'"'*|*'\'*) return 1 ;; esac; }
+_cfg_q() { local v="${1-}"; v=${v//\\/\\\\}; v=${v//\"/\\\"}; printf '%s' "$v"; }
 
 # --- Dependency checks ---
 
@@ -93,14 +246,20 @@ cmd_validate_credentials() {
 
   local response http_code body
   # Token introspection uses client credentials as POST body params (not Bearer)
-  if ! response=$(curl -s -w "\n%{http_code}" \
+  if ! _cfg_ok "$LINKEDIN_CLIENT_SECRET" || ! _cfg_ok "$LINKEDIN_ACCESS_TOKEN"; then
+    echo "Error: LinkedIn client secret or access token has an unexpected shape; refusing to send it." >&2
+    exit 1
+  fi
+  local __curl_rc=0
+  # The secret and the token ride curl's stdin config channel, never its argument list.
+  response=$(curl --disable --noproxy '*' -s -w "\n%{http_code}" --config - \
     -X POST \
     --data-urlencode "client_id=${LINKEDIN_CLIENT_ID}" \
-    --data-urlencode "client_secret=${LINKEDIN_CLIENT_SECRET}" \
-    --data-urlencode "token=${LINKEDIN_ACCESS_TOKEN}" \
-    "${LINKEDIN_OAUTH}/introspectToken" 2>/dev/null); then
-    echo "Error: Failed to connect to LinkedIn OAuth API." >&2
-    echo "Check your network connection and try again." >&2
+    "${LINKEDIN_OAUTH}/introspectToken" 2>/dev/null \
+    < <(printf 'data-urlencode = "client_secret=%s"\ndata-urlencode = "token=%s"\n' \
+      "$(_cfg_q "$LINKEDIN_CLIENT_SECRET")" "$(_cfg_q "$LINKEDIN_ACCESS_TOKEN")")) || __curl_rc=$?
+  if (( __curl_rc != 0 )); then
+    report_transport_failure "$__curl_rc" "Failed to connect to LinkedIn OAuth API."
     exit 1
   fi
 
@@ -179,7 +338,7 @@ cmd_generate_token() {
   # rotated in and the Phase-6 test post hit this). The app must have the
   # Community Management API product approved for LinkedIn to grant it.
   local scopes="openid%20profile%20w_member_social%20w_organization_social"
-  local auth_url="${LINKEDIN_OAUTH}/authorization?response_type=code&client_id=${LINKEDIN_CLIENT_ID}&redirect_uri=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${redirect_uri}', safe=''))" 2>/dev/null || echo "${redirect_uri}")&scope=${scopes}"
+  local auth_url="${LINKEDIN_OAUTH}/authorization?response_type=code&client_id=${LINKEDIN_CLIENT_ID}&redirect_uri=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "${redirect_uri}" 2>/dev/null || echo "${redirect_uri}")&scope=${scopes}"
 
   echo "=== LinkedIn OAuth Token Generation ===" >&2
   echo "" >&2
@@ -213,15 +372,22 @@ cmd_generate_token() {
   echo "Exchanging authorization code for access token..." >&2
 
   local response http_code body
-  if ! response=$(curl -s -w "\n%{http_code}" \
+  if ! _cfg_ok "$LINKEDIN_CLIENT_SECRET"; then
+    echo "Error: LINKEDIN_CLIENT_SECRET has an unexpected shape; refusing to send it." >&2
+    exit 1
+  fi
+  local __curl_rc=0
+  # The client secret rides curl's stdin config channel, never its argument list.
+  response=$(curl --disable --noproxy '*' -s -w "\n%{http_code}" --config - \
     -X POST \
     --data-urlencode "grant_type=authorization_code" \
     --data-urlencode "code=${auth_code}" \
     --data-urlencode "client_id=${LINKEDIN_CLIENT_ID}" \
-    --data-urlencode "client_secret=${LINKEDIN_CLIENT_SECRET}" \
     --data-urlencode "redirect_uri=${redirect_uri}" \
-    "${LINKEDIN_OAUTH}/accessToken" 2>/dev/null); then
-    echo "Error: Failed to connect to LinkedIn OAuth API." >&2
+    "${LINKEDIN_OAUTH}/accessToken" 2>/dev/null \
+    < <(printf 'data-urlencode = "client_secret=%s"\n' "$(_cfg_q "$LINKEDIN_CLIENT_SECRET")")) || __curl_rc=$?
+  if (( __curl_rc != 0 )); then
+    report_transport_failure "$__curl_rc" "Failed to connect to LinkedIn OAuth API."
     exit 1
   fi
 
@@ -243,13 +409,21 @@ cmd_generate_token() {
     exit 1
   fi
 
+  if ! _bearer_ok "$access_token"; then
+    echo "Error: access_token in the response has an unexpected shape; refusing to use it." >&2
+    exit 1
+  fi
+
   # Resolve person URN
   echo "Resolving person URN..." >&2
   local userinfo_response userinfo_code userinfo_body
-  if ! userinfo_response=$(curl -s -w "\n%{http_code}" \
-    -H "Authorization: Bearer ${access_token}" \
-    "${LINKEDIN_API}/v2/userinfo" 2>/dev/null); then
-    echo "Error: Failed to resolve person URN." >&2
+  local __curl_rc=0
+  # The bearer rides curl's stdin config channel, never its argument list.
+  userinfo_response=$(curl --disable --noproxy '*' -s -w "\n%{http_code}" --config - \
+    "${LINKEDIN_API}/v2/userinfo" 2>/dev/null \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "$access_token")) || __curl_rc=$?
+  if (( __curl_rc != 0 )); then
+    report_transport_failure "$__curl_rc" "Failed to resolve person URN."
     exit 1
   fi
 
@@ -283,6 +457,45 @@ cmd_generate_token() {
   echo "Run 'linkedin-setup.sh verify' to confirm." >&2
 }
 
+# (#9597) write-env value allow-list. `.env` values are written UNQUOTED and later SOURCED
+# (`verify`, the community scripts), so a value holding a command substitution, a backtick, a
+# quote, a semicolon, a space or a newline would execute or split on the next source, and a leading
+# tilde would silently change a stored credential (tilde expansion on source). Validation is an
+# allow-list, fail-closed, and runs for EVERY value BEFORE the first write: a refused value prints
+# the value-free marker plus ONE human line naming only the VARIABLE, writes nothing, exits 1 and
+# leaves any existing .env untouched. A value outside the list that is legitimate is added to .env
+# by hand. The glob runs under LC_ALL=C and is not grep, which is line-oriented and lets a
+# multi-line value through.
+_wenv_class() { # <value>: 0 allowed, 1 outside the allow-list or empty, 2 holds a control character
+  local LC_ALL=C
+  case "${1-}" in
+    '') return 1 ;;
+    *[[:cntrl:]]*) return 2 ;;
+    *[!A-Za-z0-9._:/@%+=,-]*) return 1 ;;
+  esac
+  return 0
+}
+_wenv_refuse() { # <reason> <VARIABLE>
+  printf 'SOLEUR_CREDENTIAL_REFUSED script=%s reason=%s var=%s phase=write-env\n' "$SOLEUR_TRANSPORT_SCRIPT" "$1" "$2" >&2
+  echo "Error: ${2} holds a character this script does not write to .env (allowed: letters, digits and . _ : / @ % + = , -), so nothing was written and your existing .env is unchanged. The value is not shown. If the value is legitimate, add it to .env by hand."
+  exit 1
+}
+# _wenv_validate <VARIABLE>...: every NON-EMPTY named variable passes the allow-list. The required
+# variables are checked non-empty by the caller before this runs; an empty optional one is skipped.
+_wenv_validate() {
+  local _wn _wrc
+  for _wn in "$@"; do
+    [[ -n "${!_wn:-}" ]] || continue
+    _wrc=0
+    _wenv_class "${!_wn}" || _wrc=$?
+    case "$_wrc" in
+      0) ;;
+      2) _wenv_refuse control_char "$_wn" ;;
+      *) _wenv_refuse token_shape "$_wn" ;;
+    esac
+  done
+}
+
 cmd_write_env() {
   local repo_root
   repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
@@ -300,12 +513,22 @@ cmd_write_env() {
     exit 1
   fi
 
+  # Every value is checked BEFORE the first write (see the allow-list above).
+  _wenv_validate LINKEDIN_CLIENT_ID LINKEDIN_CLIENT_SECRET LINKEDIN_ACCESS_TOKEN LINKEDIN_PERSON_URN
+
   # Remove existing LINKEDIN_ vars if .env exists
   if [[ -f "$env_file" ]]; then
     local tmp
     tmp=$(mktemp) || { echo "Error: Failed to create temp file." >&2; exit 1; }
+    # Owning trap (ADR-129): mv consumes $tmp on success, so the rm is a no-op
+    # on that path — it covers every early return between alloc and mv. The
+    # handler self-disarms first: a RETURN trap is not function-scoped, so a
+    # live copy would re-fire on every later function return in this shell.
+    trap 'trap - RETURN; rm -f "$tmp"' RETURN
     grep -v '^LINKEDIN_' "$env_file" > "$tmp" || true
-    mv "$tmp" "$env_file"
+    # A `set -e` exit on mv failure would skip the RETURN trap — the alloc
+    # loses its only cleanup, so rm it inline on that path too.
+    mv "$tmp" "$env_file" || { rc=$?; rm -f "$tmp"; exit "$rc"; }
   fi
 
   # Set restrictive permissions BEFORE writing secrets
@@ -335,8 +558,18 @@ cmd_verify() {
 
   # shellcheck disable=SC1090
   set -a
-  source "$env_file"
+  # The API base above is `readonly` (#7898 review), so if this .env tries to
+  # rebind it `source` returns non-zero. Do NOT let `set -e` abort here: that
+  # would be a silent death on the credential-loading path. Capture the status,
+  # report it, and continue -- the credentials in the same file still load, and
+  # the pinned destination keeps its legitimate value.
+  _env_rc=0
+  source "$env_file" || _env_rc=$?
   set +a
+  if (( _env_rc != 0 )); then
+    printf 'Note: at least one assignment in %s was refused. A pinned request destination cannot be overridden from .env -- your credentials loaded normally and the request still goes to the real API.\n' "$env_file"
+    emit_transport_diag "none" "env-rebind-refused"
+  fi
 
   cmd_validate_credentials
 }

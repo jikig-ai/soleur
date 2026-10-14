@@ -22,7 +22,7 @@ PASS=0
 FAIL=0
 TOTAL=0
 
-command -v jq >/dev/null 2>&1 || { echo "SKIP: jq missing"; exit 0; }
+command -v jq >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; exit 3; }
 
 assert_decision() {
   local label="$1" want="$2" payload="$3"
@@ -265,7 +265,7 @@ TOTAL=$((TOTAL + 1))
 t6_big="$(mk_big_body 128 MATCHME)"
 t6_fails=0
 for _ in $(seq 1 20); do
-  ( set -o pipefail; echo "$t6_big" | grep -q MATCHME ) || t6_fails=$((t6_fails + 1))
+  ( set -o pipefail; echo "$t6_big" | grep -q MATCHME ) || t6_fails=$((t6_fails + 1))  # sigpipe-demo: intentional (T6 asserts the pipe form races)
 done
 t6_safe_fails=0
 for _ in $(seq 1 20); do
@@ -323,6 +323,14 @@ assert_decision "T4c MultiEdit violation + ack in a sibling edit allows" "allow"
         {old_string: "a", new_string: $a},
         {old_string: "b", new_string: $n}
       ]}}')"
+
+# Devin wire names reach the gate via the kind map (#8205): `write` behaves
+# as Write, `edit` as Edit.
+assert_decision "T5 Devin write carrying a violation denies" "deny" \
+  "$(mk_payload "$PLAN_PATH" "$VIOLATION" "write")"
+assert_decision "T5b Devin edit carrying a violation denies" "deny" \
+  "$(jq -nc --arg p "$PLAN_PATH" --arg n "$VIOLATION" \
+     '{tool_name: "edit", tool_input: {file_path: $p, old_string: "x", new_string: $n}}')"
 
 echo
 echo "Total: $TOTAL  Pass: $PASS  Fail: $FAIL"

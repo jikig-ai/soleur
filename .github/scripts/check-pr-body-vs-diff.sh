@@ -62,8 +62,8 @@ orphans=()
 while IFS= read -r path; do
   [[ -z "$path" ]] && continue
   cited_count=$((cited_count + 1))
-  if echo "$diff_paths" | grep -Fxq "$path" \
-     || echo "$diff_paths" | grep -Fq "/$path"; then
+  if echo "$diff_paths" | grep -Fxc "$path" >/dev/null \
+     || echo "$diff_paths" | grep -Fc "/$path" >/dev/null; then
     matched_count=$((matched_count + 1))
   else
     orphans+=("$path")

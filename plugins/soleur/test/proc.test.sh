@@ -33,6 +33,34 @@ HELPER="$SCRIPT_DIR/../scripts/lib/proc.sh"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 CONTENTION_LIB="$REPO_ROOT/scripts/lib/test-contention.sh"
 
+# Guard 3 (#7833) tripwire adoption, added at review. This suite does NOT control the tripwire, so
+# it had no reason to abstain -- and measured, under an inherited git-location environment its
+# T-NEST fixture below breached the caller (HEAD moved, a branch and a dangling worktree appeared
+# in the caller's .git) while this file reported 61/61 pass, rc=0. The T9 precondition made T9
+# honest and left T-NEST exposed. Refusal is the correct behaviour for a suite started under a
+# hostile environment; test-all.sh:851 classifies rc 97 as [TRIPWIRE], not a failing assertion.
+# test-helpers.sh runs `set -euo pipefail`, so the `+e` below is REQUIRED to preserve this suite's
+# deliberate no-errexit contract -- delete the source line and the `+e` becomes wrong.
+# Owning trap installed BEFORE the helper is sourced: test-helpers.sh composes its
+# incident-sandbox cleanup over an existing EXIT trap, whereas a trap installed
+# afterwards replaces it and leaks the sandbox on every run (#8339 review).
+ROOTS=()
+SPAWNED=()
+cleanup() {
+  local p r
+  for p in ${SPAWNED[@]+"${SPAWNED[@]}"}; do
+    kill -KILL "$p" 2>/dev/null || true
+  done
+  for r in ${ROOTS[@]+"${ROOTS[@]}"}; do
+    rm -rf "$r" 2>/dev/null || true
+  done
+}
+trap cleanup EXIT
+# shellcheck source=plugins/soleur/test/test-helpers.sh
+source "$SCRIPT_DIR/test-helpers.sh" || { echo "FATAL: missing test-helpers.sh" >&2; exit 2; }
+
+set +e -uo pipefail
+
 PASS=0
 FAIL=0
 pass() { PASS=$((PASS + 1)); echo "  pass: $1"; }
@@ -60,18 +88,6 @@ _harness_selfcheck() {
   FAIL="$f0"
 }
 
-ROOTS=()
-SPAWNED=()
-cleanup() {
-  local p r
-  for p in ${SPAWNED[@]+"${SPAWNED[@]}"}; do
-    kill -KILL "$p" 2>/dev/null || true
-  done
-  for r in ${ROOTS[@]+"${ROOTS[@]}"}; do
-    rm -rf "$r" 2>/dev/null || true
-  done
-}
-trap cleanup EXIT
 
 if [[ ! -f "$HELPER" ]]; then
   echo "ERROR: $HELPER does not exist" >&2
@@ -231,7 +247,7 @@ counts_of_linked() { run_linked "$1" kill_mine test-all.sh 2>/dev/null | _signat
 counts_esc() {
   local o
   o=$(run_fake "$1" list_runs test-all.sh 2>/dev/null)
-  if printf '%s' "$o" | LC_ALL=C grep -q $'\033'; then
+  if printf '%s' "$o" | LC_ALL=C grep -c >/dev/null $'\033'; then
     printf 'RAW-CONTROL-BYTE-PRESENT'
   else
     printf '%s' "$BASELINE_COUNTS"
@@ -311,7 +327,7 @@ fi
 # The sanitizer must be a CLASS, not a hand-picked list: \n \t \r were covered
 # from the start and ESC was not, and an ESC in a printed path can erase the
 # line above it in the operator's terminal.
-if printf '%s' "$out" | LC_ALL=C grep -q $'\033'; then
+if printf '%s' "$out" | LC_ALL=C grep -c >/dev/null $'\033'; then
   fail "T-ESC-B: a raw ESC byte reached the output"
 else
   pass "T-ESC-B: no raw control bytes in the output (sanitizer is a class, not a list)"
@@ -365,7 +381,7 @@ else
   fail "T-baseline: expected '$BASELINE_COUNTS', got '$got'"
 fi
 if run_fake "$HELPER" kill_mine no-such-pattern-xyz 2>/dev/null \
-   | grep -qE '^killed=0 would_signal=0 failed=0 refused=0 late_refused=0 skipped_same_pgroup=0 scanned=17 mode=dry-run$'; then
+   | grep -cE >/dev/null '^killed=0 would_signal=0 failed=0 refused=0 late_refused=0 skipped_same_pgroup=0 scanned=17 mode=dry-run$'; then
   pass "T-D6: counter line printed even when nothing matched"
 else
   fail "T-D6: counter line missing/wrong on a zero-match run"
@@ -380,8 +396,48 @@ else
 fi
 
 # --- T9: no ownership boundary => fail loudly, signal nothing ---------------
+# PRECONDITION (#7822 vacuity repair). T9 asserts rc9 != 0 and no `killed=[1-9]`.
+# Both halves are satisfied by ANY failure -- $HELPER missing, a syntax error, or
+# `git` absent from PATH -- so without this the case is green while proving
+# nothing about "outside a git repo". Under an inherited GIT_DIR it is worse than
+# vacuous: the fixture dir RESOLVES as a repository and the case inverts.
+#
+# Three-part, or the precondition inherits the defect it fixes: a bare "the probe
+# must fail here" is satisfied by a missing `git`, a missing directory and a
+# permission error alike. So the same probe must SUCCEED in a known repository,
+# FAIL in the fixture, and the failure must NAME the condition. Run under the
+# SAME `env -u` prefix as the subject, so precondition and subject see one
+# environment -- the existing scrub names only GIT_DIR and GIT_WORK_TREE of the
+# nine, and asserting the OUTCOME is what makes the case honest rather than
+# enumerating the causes.
+assert_not_a_repo() { # <dir> <known-repo>
+  local dir="$1" known="$2" out rc
+  out=$(cd "$known" && LC_ALL=C env -u PROC_SH_WORKTREE -u GIT_DIR -u GIT_WORK_TREE \
+    git rev-parse --absolute-git-dir 2>&1); rc=$?
+  if [[ $rc -eq 0 ]]; then
+    pass "T9-pre/control: the probe SUCCEEDS in a known repository"
+  else
+    fail "T9-pre/control: probe failed in a known repo ($known) rc=$rc: $out"
+  fi
+  out=$(cd "$dir" && LC_ALL=C env -u PROC_SH_WORKTREE -u GIT_DIR -u GIT_WORK_TREE \
+    git rev-parse --absolute-git-dir 2>&1); rc=$?
+  if [[ $rc -ne 0 ]]; then
+    pass "T9-pre: the probe FAILS in the fixture directory"
+  else
+    fail "T9-pre: fixture dir resolved as a repository (rc=0, git-dir=$out)"
+  fi
+  # LC_ALL=C above is load-bearing: git ships translations, so without it this greps for an
+  # English string the host may never emit.
+  if grep -qi 'not a git repository' <<<"$out"; then
+    pass "T9-pre: the failure NAMES 'not a git repository'"
+  else
+    fail "T9-pre: failure text did not name the condition: $out"
+  fi
+}
+
 NOGIT="$(mktemp -d -t proc-nogit.XXXXXXXX)" || exit 2
 ROOTS+=("$NOGIT")
+assert_not_a_repo "$NOGIT" "$REPO_ROOT"
 out9=$(cd "$NOGIT" && env -u PROC_SH_WORKTREE -u GIT_DIR -u GIT_WORK_TREE \
   PROC_SH_ROOT="$FAKE_PROC" PROC_SH_SELF_PID="$SELF_PID" \
   bash "$HELPER" kill_mine test-all.sh 2>&1); rc9=$?
@@ -706,7 +762,7 @@ fi
 # Set to the FULL current count from a green run, and ratcheted up by hand when
 # arms are added. Any slack between the floor and the real count is budget for
 # a future edit to delete assertions unnoticed, so there is none.
-MIN_ASSERTIONS=58
+MIN_ASSERTIONS=61
 TOTAL=$((PASS + FAIL))
 echo
 echo "  Total: $TOTAL  pass: $PASS  FAIL: $FAIL"

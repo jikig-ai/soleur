@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
@@ -12,16 +13,32 @@ import {
   argvSecretRejection,
   assessCaptureOutcome,
   buildBwrapInvocation,
+  BWRAP_BIND_SRC_OPTS,
+  BWRAP_ONE_ARG_PATH,
+  CANARY_BRIDGE_SPAWN_PLACEHOLDER,
+  CANARY_C4_STAGING_PLACEHOLDER,
   CANARY_EMPTY_PLACEHOLDER,
   CANARY_WS_PLACEHOLDER,
+  classifyOuterWrapReplayVerdict,
+  hasUnsubstitutedPlaceholder,
+  isDeterministicConstPath,
+  classifyFdCensusProbe,
+  classifyProcMaskProbe,
+  classifyForkProbe,
   classifyReplayVerdict,
+  classifyUsernsDenyProbe,
   computeCanaryPaths,
+  countFdValuedOptions,
+  FD_CENSUS_BASELINE,
   normalizeCapturedArgv,
+  outerWrapChdirTarget,
   parseShimSetupArgv,
   selectSandboxSetupArgv,
-  sortDenyPaths,
   substituteCanonicalArgv,
+  substituteOuterRoot,
+  runHardeningProbes,
   validateFixture,
+  validateOuterWrapFixture,
 } from "../scripts/sandbox-canary.mjs";
 
 const MJS_PATH = fileURLToPath(
@@ -52,6 +69,31 @@ describe("classifyReplayVerdict — exit-code classification (false-rollback pre
       spawnErrorCode: "ENOENT",
     });
     expect(v.verdict).toBe("canary_infra_error");
+  });
+
+  it("bwrap-shim: marker (exit 65) ⇒ sandbox_broken bwrap_shim_refused — our shim's refusal is deterministic breakage, not infra flake", () => {
+    // Without this row a deleted branch degrades every shim refusal to
+    // bwrap_exit_65 → canary_infra_error → a fleet-wide spawn outage pages
+    // nobody.
+    expect(
+      classifyReplayVerdict({
+        bwrapExitCode: 65,
+        bwrapStderr: "bwrap-shim: seccomp artifact not readable: /app/infra/bwrap-userns-clone3-deny.bpf",
+      }),
+    ).toMatchObject({ verdict: "sandbox_broken", reason: "bwrap_shim_refused" });
+    // #10032 (agent-native W2): the refusal's `detail` carries the first
+    // bwrap-shim: line so deploy-state/Sentry can tell the ~10 refusal
+    // classes apart — a flat reason is a no-SSH blind spot.
+    expect(
+      classifyReplayVerdict({
+        bwrapExitCode: 65,
+        bwrapStderr:
+          "bwrap-shim: command-side /proc/self/fd/9 resolves to a deleted path — no viable re-home rung\nbwrap-shim: second line ignored",
+      }),
+    ).toMatchObject({
+      detail:
+        "bwrap-shim: command-side /proc/self/fd/9 resolves to a deleted path — no viable re-home rung",
+    });
   });
 
   it("ambiguous non-zero bwrap exit (no EPERM signature) ⇒ canary_infra_error, not sandbox_broken", () => {
@@ -139,15 +181,6 @@ describe("buildBwrapInvocation — replays SETUP argv + '-- true' only", () => {
   });
 });
 
-describe("sortDenyPaths — capture determinism (byte-stable fixture)", () => {
-  it("returns a deterministically sorted copy (readdir order is not stable)", () => {
-    const input = ["/workspaces/z", "/workspaces/a", "/proc"];
-    expect(sortDenyPaths(input)).toEqual(["/proc", "/workspaces/a", "/workspaces/z"]);
-    // does not mutate input
-    expect(input).toEqual(["/workspaces/z", "/workspaces/a", "/proc"]);
-  });
-});
-
 // ---------------------------------------------------------------------------
 // PR3 (#5913 / ADR-079 deferral B) — CAPTURE-side pure logic (LLM-free).
 // The model turn only decides WHETHER the SDK builds+spawns bwrap; these pure
@@ -195,8 +228,9 @@ describe("computeCanaryPaths — pure, IO-free, deterministic zero-sibling path 
     expect(a).toEqual(b);
     expect(a.root).toBe("/fixed/base/soleur-sandbox-canary");
     expect(a.ownWorkspacePath.startsWith(a.root + "/")).toBe(true);
-    // The own workspace is the ONLY entry under root (zero siblings) so
-    // enumerateSiblingDenyPaths returns just ["/proc"].
+    // The own workspace is the ONLY entry under root (zero siblings) so the
+    // captured restore set is deterministic — under the constant parent deny
+    // (#5862) the covering `--tmpfs <root>` is a fixed literal either way.
     expect(a.prepDirs).toContain(a.ownWorkspacePath);
   });
 
@@ -506,5 +540,822 @@ describe("source contract — imports the SDK config, does not re-specify option
     // The setup argv must come from the captured fixture, never a literal in
     // the script. Guard against a re-introduced hand-rolled `--unshare-*` list.
     expect(src).not.toMatch(/const\s+\w*[Aa]rgv\w*\s*=\s*\[\s*["']--unshare/);
+  });
+});
+
+// #8623 — the C4 re-render staging root is a server-private denyRead entry;
+// ADR-079 amendment "server-private deny roots are placeholdered".
+describe("C4 staging root placeholder (#8623)", () => {
+  const WS = "/tmp/soleur-sandbox-canary/00000000-0000-4000-8000-0000000000ca";
+  const C4 = "/tmp/soleur-canary-c4-AbC123";
+  const RAW = ["--ro-bind", "/", "/", "--bind", WS, WS, "--tmpfs", "/proc", "--tmpfs", C4];
+
+  it("maps the staging root (and subpaths) to ${CANARY_C4_STAGING} and adds it to prepDirs", () => {
+    const { bwrapSetupArgv, prepDirs } = normalizeCapturedArgv([...RAW, "--tmpfs", `${C4}/sub`], {
+      wsRoot: WS,
+      c4StagingRoot: C4,
+    });
+    expect(bwrapSetupArgv).toContain(CANARY_C4_STAGING_PLACEHOLDER);
+    expect(bwrapSetupArgv).toContain(`${CANARY_C4_STAGING_PLACEHOLDER}/sub`);
+    expect(bwrapSetupArgv.some((t: string) => t.includes(C4))).toBe(false);
+    expect(prepDirs).toContain(CANARY_C4_STAGING_PLACEHOLDER);
+  });
+
+  it("refuses to project a literal capture-host HOME path into the fixture", () => {
+    for (const bad of ["/root/.cache/soleur-c4-render", "/home/soleur/.cache/soleur-c4-render"]) {
+      expect(() =>
+        normalizeCapturedArgv(["--ro-bind", "/", "/", "--tmpfs", bad], { wsRoot: WS }),
+      ).toThrow(/host_path/);
+    }
+  });
+
+  it("substitutes all three placeholders, and flags any that survive", () => {
+    const argv = [CANARY_WS_PLACEHOLDER, CANARY_EMPTY_PLACEHOLDER, `${CANARY_C4_STAGING_PLACEHOLDER}/x`];
+    const out = substituteCanonicalArgv(argv, { ws: "/w", empty: "/e", c4Staging: "/c" });
+    expect(out).toEqual(["/w", "/e", "/c/x"]);
+    expect(hasUnsubstitutedPlaceholder(out)).toBe(false);
+    expect(hasUnsubstitutedPlaceholder(substituteCanonicalArgv(argv, { ws: "/w", empty: "/e" }))).toBe(true);
+    expect(hasUnsubstitutedPlaceholder(["${CANARY_FUTURE}"])).toBe(true);
+  });
+
+  it("the COMMITTED fixture carries the staging-root deny exactly once, placeholdered, with no host paths", () => {
+    const fx = JSON.parse(
+      readFileSync(fileURLToPath(new URL("../infra/sandbox-canary-argv.json", import.meta.url)), "utf8"),
+    ) as { bwrapSetupArgv: string[]; prepDirs: string[] };
+    const argv = fx.bwrapSetupArgv;
+    expect(argv.some((t) => /^\/(root|home)(\/|$)/.test(t))).toBe(false);
+    const tmpfsC4 = argv.filter((t, i) => t === CANARY_C4_STAGING_PLACEHOLDER && argv[i - 1] === "--tmpfs");
+    expect(tmpfsC4).toHaveLength(1);
+    const known = [CANARY_WS_PLACEHOLDER, CANARY_EMPTY_PLACEHOLDER, CANARY_C4_STAGING_PLACEHOLDER, CANARY_BRIDGE_SPAWN_PLACEHOLDER];
+    for (const t of [...argv, ...fx.prepDirs]) {
+      for (const m of t.match(/\$\{CANARY_[A-Z0-9_]*\}/g) ?? []) expect(known).toContain(m);
+    }
+    expect(fx.prepDirs).toContain(CANARY_C4_STAGING_PLACEHOLDER);
+  });
+});
+
+// #9614/#9618 — the SDK-internal bridge-spawn dir is HOME-derived
+// (`join(homedir(), ".claude", "bridge-spawn")` in the bundled CLI, no env
+// override); ADR-079 2026-10-06 amendment: SDK-internal HOME-derived dirs are
+// placeholdered via a capture-computed root.
+describe("bridge-spawn placeholder (#9614/#9618)", () => {
+  const WS = "/tmp/soleur-sandbox-canary/00000000-0000-4000-8000-0000000000ca";
+  const BSP = "/root/.claude/bridge-spawn";
+  const RAW = ["--ro-bind", "/", "/", "--bind", WS, WS, "--tmpfs", "/proc", "--tmpfs", BSP];
+
+  it("maps the bridge-spawn root (and subpaths) to ${CANARY_BRIDGE_SPAWN} and adds it to prepDirs", () => {
+    const { bwrapSetupArgv, prepDirs } = normalizeCapturedArgv([...RAW, "--tmpfs", `${BSP}/sub`], {
+      wsRoot: WS,
+      bridgeSpawnRoot: BSP,
+    });
+    expect(bwrapSetupArgv).toContain(CANARY_BRIDGE_SPAWN_PLACEHOLDER);
+    expect(bwrapSetupArgv).toContain(`${CANARY_BRIDGE_SPAWN_PLACEHOLDER}/sub`);
+    expect(bwrapSetupArgv.some((t: string) => t.includes(BSP))).toBe(false);
+    expect(prepDirs).toContain(CANARY_BRIDGE_SPAWN_PLACEHOLDER);
+  });
+
+  it("does NOT add the placeholder to prepDirs when the argv never references it", () => {
+    const { prepDirs } = normalizeCapturedArgv(
+      ["--ro-bind", "/", "/", "--bind", WS, WS, "--tmpfs", "/proc"],
+      { wsRoot: WS, bridgeSpawnRoot: BSP },
+    );
+    expect(prepDirs).not.toContain(CANARY_BRIDGE_SPAWN_PLACEHOLDER);
+  });
+
+  it("still throws host_path on the bridge-spawn token when bridgeSpawnRoot is NOT supplied (fail-loud)", () => {
+    expect(() => normalizeCapturedArgv(RAW, { wsRoot: WS })).toThrow(/host_path/);
+  });
+
+  it("still throws host_path on other HOME paths when bridgeSpawnRoot IS supplied", () => {
+    for (const bad of ["/root/.ssh", `${BSP}-evil`, `${BSP}x`]) {
+      expect(
+        () =>
+          normalizeCapturedArgv(["--ro-bind", "/", "/", "--bind", WS, WS, "--tmpfs", bad], {
+            wsRoot: WS,
+            bridgeSpawnRoot: BSP,
+          }),
+        `expected host_path throw for '${bad}'`,
+      ).toThrow(/host_path/);
+    }
+  });
+
+  it("rejects `..` segments inside mapped subpaths (traversal would reach mkdir outside the roots)", () => {
+    expect(() =>
+      normalizeCapturedArgv(["--ro-bind", "/", "/", "--bind", WS, WS, "--tmpfs", `${WS}/../escape`], {
+        wsRoot: WS,
+      }),
+    ).toThrow(/traversal/);
+    expect(() =>
+      normalizeCapturedArgv(["--ro-bind", "/", "/", "--bind", WS, WS, "--tmpfs", `${BSP}/../escape`], {
+        wsRoot: WS,
+        bridgeSpawnRoot: BSP,
+      }),
+    ).toThrow(/traversal/);
+  });
+
+  it("preps placeholder-subpath bind sources and literal tmpfs targets (replay precondition)", () => {
+    const { prepDirs } = normalizeCapturedArgv(
+      [
+        "--ro-bind", "/", "/",
+        "--bind", WS, WS,
+        "--ro-bind", `${WS}/.claude`, `${WS}/.claude`,
+        "--ro-bind", "/dev/null", `${WS}/.claude/settings.json`,
+        "--tmpfs", "/tmp/claude-0/bash-edit-diff",
+        "--tmpfs", "/proc",
+      ],
+      { wsRoot: WS, bridgeSpawnRoot: BSP },
+    );
+    expect(prepDirs).toContain(`${CANARY_WS_PLACEHOLDER}/.claude`);
+    expect(prepDirs).toContain("/tmp/claude-0/bash-edit-diff");
+    // File-mount dsts are auto-created by bwrap — never pre-created as dirs.
+    expect(prepDirs).not.toContain(`${CANARY_WS_PLACEHOLDER}/.claude/settings.json`);
+    // Image-guaranteed consts are exempt.
+    expect(prepDirs).not.toContain("/proc");
+  });
+
+  it("preps placeholder-subpath MOUNT targets exactly (mount order makes prefix coverage unsound)", () => {
+    const { prepDirs } = normalizeCapturedArgv(
+      ["--ro-bind", "/", "/", "--tmpfs", `${WS}/probe`, "--bind", WS, WS],
+      { wsRoot: WS },
+    );
+    expect(prepDirs).toContain(`${CANARY_WS_PLACEHOLDER}/probe`);
+  });
+
+  it("does NOT prep symlink targets or file/file-data sources (not real source dirs)", () => {
+    const { prepDirs } = normalizeCapturedArgv(
+      ["--ro-bind", "/", "/", "--bind", WS, WS, "--symlink", `${WS}/tgt`, `${WS}/lnk`],
+      { wsRoot: WS },
+    );
+    expect(prepDirs).not.toContain(`${CANARY_WS_PLACEHOLDER}/tgt`);
+    expect(prepDirs).not.toContain(`${CANARY_WS_PLACEHOLDER}/lnk`);
+  });
+
+  it("substitutes ${CANARY_BRIDGE_SPAWN} at replay, and flags it when unsubstituted", () => {
+    const argv = [CANARY_WS_PLACEHOLDER, `${CANARY_BRIDGE_SPAWN_PLACEHOLDER}/x`];
+    const out = substituteCanonicalArgv(argv, { ws: "/w", empty: "/e", bridgeSpawn: "/b" });
+    expect(out).toEqual(["/w", "/b/x"]);
+    expect(hasUnsubstitutedPlaceholder(out)).toBe(false);
+    expect(
+      hasUnsubstitutedPlaceholder(substituteCanonicalArgv(argv, { ws: "/w", empty: "/e" })),
+    ).toBe(true);
+  });
+
+  it("the COMMITTED fixture carries the bridge-spawn tmpfs exactly once, placeholdered", () => {
+    const fx = JSON.parse(
+      readFileSync(fileURLToPath(new URL("../infra/sandbox-canary-argv.json", import.meta.url)), "utf8"),
+    ) as { bwrapSetupArgv: string[]; prepDirs: string[] };
+    const argv = fx.bwrapSetupArgv;
+    const tmpfsBsp = argv.filter((t, i) => t === CANARY_BRIDGE_SPAWN_PLACEHOLDER && argv[i - 1] === "--tmpfs");
+    expect(tmpfsBsp).toHaveLength(1);
+    expect(fx.prepDirs).toContain(CANARY_BRIDGE_SPAWN_PLACEHOLDER);
+  });
+
+  // The hole that let a non-replayable fixture ship: every dir the real bwrap
+  // spawn needs must resolve EXACTLY in prepDirs — a placeholder-root prefix
+  // is not sufficient for subpath targets, because bwrap applies mounts in
+  // argv order and a target under a not-yet-bound parent fails like a missing
+  // source. Pinned structurally so a future SDK argv shape cannot
+  // reintroduce it silently. Opt vocab + const predicate are imported from
+  // the implementation — a parser addition updates this test automatically.
+  it("the COMMITTED fixture preps every bind-source subpath and mount target", () => {
+    const fx = JSON.parse(
+      readFileSync(fileURLToPath(new URL("../infra/sandbox-canary-argv.json", import.meta.url)), "utf8"),
+    ) as { bwrapSetupArgv: string[]; prepDirs: string[] };
+    const argv = fx.bwrapSetupArgv;
+    const prepped = new Set(fx.prepDirs);
+    for (let i = 0; i < argv.length; i++) {
+      const t = argv[i];
+      const next = argv[i + 1];
+      if (BWRAP_ONE_ARG_PATH.has(t) && typeof next === "string" && !isDeterministicConstPath(next)) {
+        expect(prepped.has(next), `mount target ${t} ${next} not in prepDirs`).toBe(true);
+      }
+      // Any bind option whose SOURCE is a placeholder subpath must be prepped
+      // (bwrap never creates sources).
+      if (
+        BWRAP_BIND_SRC_OPTS.has(t) &&
+        typeof next === "string" &&
+        /\$\{CANARY_[A-Z0-9_]*\}\//.test(next)
+      ) {
+        expect(prepped.has(next), `bind source ${next} not in prepDirs`).toBe(true);
+      }
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #5862 — deny-before-restore ordering pin on the COMMITTED fixture (the
+// ADR-075 exit criterion). The tenant isolation property is positional: the
+// covering `--tmpfs` on the workspaces root must land BEFORE the vendored
+// builder's rw `--bind` restore of the own workspace. A future SDK drift that
+// re-inverts the ordering (deny last, or deny with no restore) strands or
+// exposes the workspace — this pin turns both into a red suite pre-merge.
+// ---------------------------------------------------------------------------
+
+const CANARY_ROOT_REAL = computeCanaryPaths().root; // "/tmp/soleur-sandbox-canary"
+const WS_REAL = computeCanaryPaths().ownWorkspacePath;
+
+/** Substitute the fixture's placeholders with the canonical capture paths so
+ * covering-class membership is decidable on real paths. */
+function substituteFixtureArgv(argv: string[]): string[] {
+  return substituteCanonicalArgv(argv, {
+    ws: WS_REAL,
+    empty: "/replay/empty",
+    c4Staging: "/replay/c4-staging",
+    bridgeSpawn: "/replay/bridge-spawn",
+  });
+}
+
+// Mount ops whose DESTINATION can cover/shadow wsDst. Deliberately wider than
+// `--tmpfs`: a post-restore `--bind`/`--ro-bind`/`--dev-bind*`/`--overlay*` on
+// an ancestor re-exposes or re-read-only-mounts the whole tree — the pin must
+// see them, not just the deny it was written for.
+const MOUNT_DST_OPTS = new Set([
+  "--tmpfs",
+  "--remount-ro", // 1-arg: dst is argv[i+1]
+]);
+const MOUNT_DST2_OPTS = new Set([
+  // 2-arg bind family: dst is argv[i+2]
+  "--bind",
+  "--bind-try",
+  "--dev-bind",
+  "--dev-bind-try",
+  "--ro-bind",
+  "--ro-bind-try",
+  "--overlay",
+  "--tmp-overlay",
+  "--ro-overlay",
+  "--bind-data",
+  "--ro-bind-data",
+]);
+
+/** Path `t` covers `wsDst` when it equals it or is a strict ancestor.
+ * Trailing slashes normalized; "/" covers everything. */
+const pathCovers = (t: unknown, wsDst: string): t is string =>
+  typeof t === "string" &&
+  (t === "/" || wsDst === t || wsDst.startsWith(`${t.replace(/\/+$/, "")}/`));
+
+/** Strict ancestor only — a tmpfs AT wsDst masks the workspace but no
+ * siblings, so it does not satisfy the tenant-isolation clause. */
+const pathStrictlyCovers = (t: unknown, wsDst: string): t is string =>
+  typeof t === "string" &&
+  t !== wsDst &&
+  (t === "/" || wsDst.startsWith(`${t.replace(/\/+$/, "")}/`));
+
+/**
+ * The ordering invariant, as a violations list (empty = holds):
+ *  1. DENY EXISTS — at least one `--tmpfs` whose target strictly contains
+ *     `wsDst` (the parent-root mask; an exact-ws tmpfs masks the workspace
+ *     but hides zero siblings).
+ *  2. RESTORE IS FINAL (RW) — the committed fixture is the NON-readOnly
+ *     shape, so the LAST mount op covering `wsDst` must be the rw
+ *     `--bind wsDst wsDst`. A covering tmpfs/bind landing after it either
+ *     strands the workspace (mask / ro re-bind — the #5848 shape) or
+ *     re-exposes every sibling (ancestor re-bind). A hypothetical readOnly
+ *     fixture would pin `--ro-bind wsDst wsDst` final instead — same
+ *     invariant, different token.
+ *  3. DENY PRECEDES RESTORE — at least one strict-covering `--tmpfs` sits
+ *     before that final rw ws bind.
+ */
+function denyBeforeRestoreViolations(argv: string[], wsDst: string): string[] {
+  const coveringTmpfs: number[] = [];
+  const coveringOps: { i: number; tok: string }[] = [];
+  const wsRwBindIdx: number[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const tok = argv[i];
+    if (tok === "--tmpfs" && pathStrictlyCovers(argv[i + 1], wsDst)) {
+      coveringTmpfs.push(i);
+    }
+    if (MOUNT_DST_OPTS.has(tok) && pathCovers(argv[i + 1], wsDst)) {
+      coveringOps.push({ i, tok });
+    } else if (MOUNT_DST2_OPTS.has(tok) && pathCovers(argv[i + 2], wsDst)) {
+      coveringOps.push({ i, tok });
+    }
+    if (tok === "--bind" && argv[i + 1] === wsDst && argv[i + 2] === wsDst) {
+      wsRwBindIdx.push(i);
+    }
+  }
+  const violations: string[] = [];
+  if (coveringTmpfs.length === 0) {
+    violations.push("no strict-ancestor --tmpfs covers the workspace — tenant deny absent");
+  }
+  const lastWsBind = wsRwBindIdx[wsRwBindIdx.length - 1];
+  if (lastWsBind === undefined) {
+    violations.push(`no rw --bind restore of ${wsDst}`);
+  } else {
+    for (const { i, tok } of coveringOps) {
+      if (i > lastWsBind) {
+        violations.push(
+          `covering ${tok} ${argv[i + 1]} (argv[${i}]) lands after the final ws bind at argv[${lastWsBind}] — masks or re-exposes the tree`,
+        );
+      }
+    }
+  }
+  if (lastWsBind !== undefined && !coveringTmpfs.some((i) => i < lastWsBind)) {
+    violations.push("no covering --tmpfs precedes the final ws bind — deny never lands");
+  }
+  return violations;
+}
+
+describe("committed-fixture deny-before-restore ordering pin (#5862)", () => {
+  const fx = JSON.parse(
+    readFileSync(fileURLToPath(new URL("../infra/sandbox-canary-argv.json", import.meta.url)), "utf8"),
+  ) as { bwrapSetupArgv: string[]; prepDirs: string[] };
+
+  it("every covering --tmpfs precedes an rw --bind restore of the workspace", () => {
+    const argv = substituteFixtureArgv(fx.bwrapSetupArgv);
+    expect(denyBeforeRestoreViolations(argv, WS_REAL)).toEqual([]);
+  });
+
+  it("the covering deny root is prepped (literal capture root lands in prepDirs)", () => {
+    expect(fx.prepDirs).toContain(CANARY_ROOT_REAL);
+  });
+
+  // Guard Contract mutation matrix — the pin must drive RED on each broken
+  // ordering and PASS the one legal variant. Rows run against a canonical
+  // synthetic argv (covering tmpfs + post-deny restore), so the matrix is
+  // meaningful even before the fixture is re-captured.
+  const CANON: string[] = [
+    "--ro-bind", "/", "/",
+    "--bind", WS_REAL, WS_REAL,
+    "--tmpfs", CANARY_ROOT_REAL,
+    "--tmpfs", "/proc",
+    "--bind", WS_REAL, WS_REAL, // the vendor deny-wipe restore
+    "--dev", "/dev",
+  ];
+  const withoutPair = (a: string[], opt: string, arg: string): string[] => {
+    // Remove the first (opt, arg) pair matching BOTH tokens.
+    const out = [...a];
+    for (let j = 0; j < out.length - 1; j++) {
+      if (out[j] === opt && out[j + 1] === arg) {
+        out.splice(j, 2);
+        return out;
+      }
+    }
+    throw new Error(`mutator setup: (${opt}, ${arg}) not found`);
+  };
+
+  const ROWS: {
+    name: string;
+    mutate: (a: string[]) => string[];
+    /** Expected violation class regex when the row must go RED. */
+    expectViolation?: RegExp;
+  }[] = [
+    {
+      // deny lands after the write restore → shadows it.
+      name: "covering --tmpfs moved after the last ws bind",
+      mutate: (a) => [...withoutPair(a, "--tmpfs", CANARY_ROOT_REAL), "--tmpfs", CANARY_ROOT_REAL],
+      expectViolation: /lands after the final ws bind/,
+    },
+    {
+      // deny present, post-deny restore missing.
+      name: "post-deny ws restore binds deleted",
+      mutate: (a) => {
+        const cut = a.indexOf("--tmpfs");
+        const out: string[] = [];
+        for (let i = 0; i < a.length; i++) {
+          if (i > cut && a[i] === "--bind" && a[i + 1] === WS_REAL && a[i + 2] === WS_REAL) {
+            i += 2;
+            continue;
+          }
+          out.push(a[i]);
+        }
+        return out;
+      },
+      expectViolation: /lands after the final ws bind/,
+    },
+    {
+      // no covering deny at all — must fail, not vacuously pass.
+      name: "no covering --tmpfs (vacuity guard)",
+      mutate: (a) => withoutPair(a, "--tmpfs", CANARY_ROOT_REAL),
+      expectViolation: /no strict-ancestor --tmpfs/,
+    },
+    {
+      // a SECOND covering deny after the last restore — every covering
+      // deny is quantified, not just the first.
+      name: "second covering --tmpfs appended after the last ws bind",
+      mutate: (a) => [...a, "--tmpfs", "/tmp"],
+      expectViolation: /lands after the final ws bind/,
+    },
+    {
+      // ro-bind re-mount of ws AFTER the rw restore — last-writer-wins makes
+      // the workspace read-only (the #5848 regression shape via a different
+      // mechanism). The final covering op must be the rw bind.
+      name: "post-restore --ro-bind ws ws shadows the rw restore",
+      mutate: (a) => [...a, "--ro-bind", WS_REAL, WS_REAL],
+      expectViolation: /lands after the final ws bind/,
+    },
+    {
+      // sibling-prefix path that is NOT an ancestor — "/tmp/x-evil" must not
+      // satisfy coverage of "/tmp/x/<ws>".
+      name: "prefix-sibling --tmpfs (/tmp/soleur-sandbox-canary-evil) does not count as covering",
+      mutate: (a) => [...withoutPair(a, "--tmpfs", CANARY_ROOT_REAL), "--tmpfs", `${CANARY_ROOT_REAL}-evil`],
+      expectViolation: /no strict-ancestor --tmpfs/,
+    },
+    {
+      // covering BIND (not tmpfs) after the last ws bind — re-exposes the
+      // whole parent ro/rw. The pin must see non-tmpfs covering ops.
+      name: "post-restore --bind of the parent root re-exposes siblings",
+      mutate: (a) => [...a, "--bind", CANARY_ROOT_REAL, CANARY_ROOT_REAL],
+      expectViolation: /lands after the final ws bind/,
+    },
+    {
+      // remount-ro flips the restored workspace read-only post-restore.
+      name: "--remount-ro on the workspace root after the restore",
+      mutate: (a) => [...a, "--remount-ro", CANARY_ROOT_REAL],
+      expectViolation: /lands after the final ws bind/,
+    },
+    {
+      // an unrelated non-covering deny after the restore is legal —
+      // proves the pin does not reject every post-restore tmpfs.
+      name: "non-covering --tmpfs after the last ws bind",
+      mutate: (a) => [...a, "--tmpfs", "/var/spool/other-deny"],
+      expectViolation: undefined,
+    },
+    {
+      // exact-ws tmpfs + restore: masks the workspace but no siblings —
+      // the deny-presence clause requires a STRICT ancestor.
+      name: "--tmpfs at wsDst itself (covers own only, hides no siblings)",
+      mutate: (a) => [...withoutPair(a, "--tmpfs", CANARY_ROOT_REAL), "--tmpfs", WS_REAL],
+      expectViolation: /no strict-ancestor --tmpfs/,
+    },
+  ];
+
+  for (const row of ROWS) {
+    it(`mutation: ${row.name} → ${row.expectViolation ? "RED" : "PASS"}`, () => {
+      const mutated = row.mutate([...CANON]);
+      const violations = denyBeforeRestoreViolations(mutated, WS_REAL);
+      if (row.expectViolation) {
+        expect(
+          violations.some((v) => row.expectViolation!.test(v)),
+          `expected a ${row.expectViolation} violation on: ${JSON.stringify(mutated)}; got ${JSON.stringify(violations)}`,
+        ).toBe(true);
+      } else {
+        expect(violations).toEqual([]);
+      }
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// #8752 — derived hardening probes: verdict contract. Probe failures are
+// `sandbox_broken` (they signal a deployed-hardening regression → the soak
+// resets and the Sentry page fires); infra-shape failures stay
+// `canary_infra_error` (hold the soak — never a false rollback).
+// ---------------------------------------------------------------------------
+describe("classifyUsernsDenyProbe — nested-userns deny must EPERM", () => {
+  it("unshare -U exits 0 inside ⇒ sandbox_broken userns_filter_bypass (filter never installed)", () => {
+    expect(classifyUsernsDenyProbe({ status: 0 })).toMatchObject({
+      verdict: "sandbox_broken",
+      reason: "userns_filter_bypass",
+      probe: "nested_userns_deny",
+    });
+  });
+
+  it("EPERM signature ⇒ null (the filter denied it)", () => {
+    expect(
+      classifyUsernsDenyProbe({ status: 1, stderr: "unshare: unshare failed: Operation not permitted" }),
+    ).toBeNull();
+  });
+
+  it("non-zero WITHOUT the EPERM signature ⇒ canary_infra_error (expected-fail inversion guard)", () => {
+    // A bwrap setup failure or a missing unshare binary cannot prove the
+    // filter denied anything — infra, not a hardening pass.
+    expect(classifyUsernsDenyProbe({ status: 1, stderr: "bwrap: execvp /usr/bin/unshare: No such file" })).toMatchObject({
+      verdict: "canary_infra_error",
+      reason: "userns_probe_exit_1",
+    });
+  });
+
+  it("spawn error ⇒ canary_infra_error", () => {
+    expect(classifyUsernsDenyProbe({ status: null, errorCode: "ENOENT" })).toMatchObject({
+      verdict: "canary_infra_error",
+      reason: "userns_probe_spawn_enoent",
+    });
+  });
+});
+
+describe("classifyForkProbe — the over-broad control (fork survives)", () => {
+  it("forked child exits 0 ⇒ null", () => {
+    expect(classifyForkProbe({ status: 0 })).toBeNull();
+  });
+
+  it("forked child fails ⇒ sandbox_broken userns_filter_overbroad", () => {
+    // `unshare -m` cannot be this control: the payload runs capability-free
+    // (bwrap zeroes the capset before exec), so nested CLONE_NEWNS needs a
+    // CAP_SYS_ADMIN it doesn't hold — EPERM on every kernel.
+    expect(classifyForkProbe({ status: 1 })).toMatchObject({
+      verdict: "sandbox_broken",
+      reason: "userns_filter_overbroad",
+      probe: "fork_survives",
+    });
+  });
+
+  it("signal-kill / setup-side failure ⇒ canary_infra_error, never a false over-broad page", () => {
+    // status null = killed (the 15s spawn timeout or a container OOM of the
+    // payload sh) — infra, not a filter regression.
+    expect(classifyForkProbe({ status: null })).toMatchObject({
+      verdict: "canary_infra_error",
+      reason: "fork_probe_exit_null",
+    });
+    // A `bwrap:` setup line means the sandbox never built — infra.
+    expect(classifyForkProbe({ status: 1, stderr: "bwrap: Can't create file at /tmp/x" })).toMatchObject({
+      verdict: "canary_infra_error",
+      reason: "fork_probe_exit_1",
+    });
+  });
+
+  it("spawn error ⇒ canary_infra_error", () => {
+    expect(classifyForkProbe({ status: null, errorCode: "EACCES" })).toMatchObject({
+      verdict: "canary_infra_error",
+      reason: "fork_probe_spawn_eacces",
+    });
+  });
+});
+
+describe("classifyFdCensusProbe — in-sandbox fd count stays within the limit", () => {
+  it("the fdLimit baseline is pinned against the committed fixture (3 stdio + fd-valued opts)", () => {
+    // A `4 +` drift would widen the leak tolerance by exactly 1 — silently
+    // absorbing the deliberate `leakFd` probe's +1. Derive the limit the same
+    // way runHardeningProbes does and assert the probe trips on the fixture's
+    // own shape.
+    const fixture = JSON.parse(
+      readFileSync(
+        fileURLToPath(new URL("../infra/sandbox-canary-argv.json", import.meta.url)),
+        "utf8",
+      ),
+    );
+    // Pin the IMPL baseline constant — not a re-derived literal — so a 3→4
+    // drift in sandbox-canary.mjs surfaces here.
+    const fdLimit = FD_CENSUS_BASELINE + countFdValuedOptions(fixture.bwrapSetupArgv);
+    expect(FD_CENSUS_BASELINE).toBe(3);
+    expect(
+      classifyFdCensusProbe(
+        { status: 0, stdout: String(fdLimit + 1) },
+        fdLimit,
+      ),
+    ).toMatchObject({ verdict: "sandbox_broken", reason: "fd_hygiene_bypass" });
+  });
+
+  it("count ≤ limit ⇒ null", () => {
+    expect(classifyFdCensusProbe({ status: 0, stdout: "4\n" }, 4)).toBeNull();
+    expect(classifyFdCensusProbe({ status: 0, stdout: "3" }, 4)).toBeNull();
+  });
+
+  it("count > limit ⇒ sandbox_broken fd_hygiene_bypass", () => {
+    expect(classifyFdCensusProbe({ status: 0, stdout: "9\n" }, 4)).toMatchObject({
+      verdict: "sandbox_broken",
+      reason: "fd_hygiene_bypass",
+      probe: "fd_census",
+    });
+  });
+
+  it("unparseable/non-zero census ⇒ canary_infra_error, never a false bypass", () => {
+    expect(classifyFdCensusProbe({ status: 0, stdout: "not-a-number" }, 4)).toMatchObject({
+      verdict: "canary_infra_error",
+      reason: "fd_census_unparseable",
+    });
+    expect(classifyFdCensusProbe({ status: 2, stdout: "" }, 4)).toMatchObject({
+      verdict: "canary_infra_error",
+      reason: "fd_census_exit_2",
+    });
+  });
+
+  it("a count below 3 is vacuous, not clean — stdio 0-2 always exist", () => {
+    // The procfs-free enumerator (#9723: a masked /proc has no /proc/self/fd
+    // to ls) still reports ≥3 for stdio — anything lower means the output was
+    // never produced by the enumerator, an infra error not a pass (a green
+    // that measured nothing is indistinguishable from health).
+    for (const stdout of ["", "0", "1", "2"]) {
+      expect(classifyFdCensusProbe({ status: 0, stdout }, 4)).toMatchObject({
+        verdict: "canary_infra_error",
+        reason: "fd_census_unparseable",
+      });
+    }
+  });
+});
+
+describe("classifyProcMaskProbe — the /proc mask is realized in-sandbox (#10032)", () => {
+  it("status 0 (no /proc/<pid> entries — the empty tmpfs shape) ⇒ null", () => {
+    expect(classifyProcMaskProbe({ status: 0, stderr: "" })).toBeNull();
+  });
+
+  it("clean non-zero payload exit ⇒ sandbox_broken proc_mask_defeated (any real procfs visible)", () => {
+    expect(classifyProcMaskProbe({ status: 1, stderr: "" })).toMatchObject({
+      verdict: "sandbox_broken",
+      reason: "proc_mask_defeated",
+      probe: "proc_mask",
+    });
+  });
+
+  it("spawn/setup-side failure ⇒ canary_infra_error, never a mask verdict", () => {
+    expect(classifyProcMaskProbe({ status: null, errorCode: "ENOENT" })).toMatchObject({
+      verdict: "canary_infra_error",
+      reason: "proc_mask_spawn_enoent",
+    });
+    expect(classifyProcMaskProbe({ status: null })).toMatchObject({
+      verdict: "canary_infra_error",
+      reason: "proc_mask_exit_null",
+    });
+    expect(classifyProcMaskProbe({ status: 1, stderr: "bwrap: Can't create file" })).toMatchObject({
+      verdict: "canary_infra_error",
+      reason: "proc_mask_exit_1",
+    });
+  });
+});
+
+// #10032 — AC3: the re-spec'd proc_mask probe must stay DRIVABLE RED. These
+// arms run REAL bwrap (PATH resolves the host binary — no shim): restoring
+// the vendored tail bind mounts host procfs and the probe reports
+// `proc_mask_defeated`; the legitimate tmpfs mask passes. If a future edit
+// makes the probe tautological (asserts nothing) both arms stay green and
+// this file fails the mutation the probe exists to catch.
+const BWRAP_OK =
+  process.platform === "linux" &&
+  spawnSync(
+    "bwrap",
+    ["--unshare-user", "--unshare-pid", "--ro-bind", "/", "/", "--", "true"],
+    { stdio: "ignore", timeout: 15_000 },
+  ).status === 0;
+
+describe.skipIf(!BWRAP_OK)("proc_mask live drive (real bwrap, no shim) — #10032", () => {
+  it("MUTATION: a restored tail `--bind /proc /proc` defeats the mask — proc_mask_defeated", () => {
+    const verdict = runHardeningProbes([
+      "--unshare-user", "--unshare-pid", "--ro-bind", "/", "/",
+      "--tmpfs", "/proc",
+      "--bind", "/proc", "/proc", // the #9723 defect shape, restored
+    ]);
+    expect(verdict).toMatchObject({
+      verdict: "sandbox_broken",
+      reason: "proc_mask_defeated",
+      probe: "proc_mask",
+    });
+  });
+
+  it("a restored `--proc /proc` fresh procfs is ALSO a defeat — any real procfs", () => {
+    const verdict = runHardeningProbes([
+      "--unshare-user", "--unshare-pid", "--ro-bind", "/", "/",
+      "--proc", "/proc",
+    ]);
+    expect(verdict).toMatchObject({
+      verdict: "sandbox_broken",
+      reason: "proc_mask_defeated",
+      probe: "proc_mask",
+    });
+  });
+
+  it("LEGITIMATE: the empty-tmpfs mask passes — the #10032 realized shape", () => {
+    // Assert at probe granularity, not null-on-the-suite: later hardening
+    // probes (userns_deny) depend on host posture this test does not control
+    // — what AC3 pins is that proc_mask does NOT fire on the legit shape.
+    const verdict = runHardeningProbes([
+      "--unshare-user", "--unshare-pid", "--ro-bind", "/", "/",
+      "--tmpfs", "/proc",
+    ]);
+    expect(verdict?.probe ?? null, `proc_mask must not fire on the tmpfs mask: ${JSON.stringify(verdict)}`).not.toBe("proc_mask");
+  });
+});
+
+describe("countFdValuedOptions — census slack for argv-referenced fds", () => {
+  it("the committed fixture argv carries no fd-valued options → limit stays at baseline", () => {
+    const fx = JSON.parse(
+      readFileSync(fileURLToPath(new URL("../infra/sandbox-canary-argv.json", import.meta.url)), "utf8"),
+    ) as { bwrapSetupArgv: string[] };
+    expect(countFdValuedOptions(fx.bwrapSetupArgv)).toBe(0);
+  });
+
+  it("counts every fd-valued option in the shim's preserve vocabulary (bwrap(1) — all 16)", () => {
+    expect(
+      countFdValuedOptions([
+        "--args", "3", "--seccomp", "4", "--add-seccomp-fd", "5",
+        "--sync-fd", "6", "--info-fd", "7", "--json-status-fd", "8",
+        "--block-fd", "9", "--userns-block-fd", "10",
+        "--userns", "11", "--userns2", "12", "--pidns", "13",
+        "--file", "14", "--bind-data", "15", "--ro-bind-data", "16",
+        "--bind-fd", "17", "--ro-bind-fd", "18",
+      ]),
+    ).toBe(16);
+    expect(countFdValuedOptions(["--unshare-user", "--ro-bind", "/", "/"])).toBe(0);
+  });
+});
+
+// --- Outer-wrap arm (#5863 T3.1) --------------------------------------------
+// The --replay-outer path: fixture validation, {{ROOT}} substitution, and the
+// three-way verdict (mountns EPERM vs realized-isolation violation vs infra).
+
+describe("validateOuterWrapFixture — outer-bwrap-v1 contract", () => {
+  const valid = {
+    schema: "outer-bwrap-v1",
+    status: "generated",
+    prepDirs: ["{{ROOT}}/workspaces/ws-aaaa"],
+    prepFiles: ["{{ROOT}}/home/soleur/.claude/.credentials.json"],
+    bwrapSetupArgv: ["--die-with-parent", "--ro-bind", "/usr", "/usr", "--chdir", "{{ROOT}}/workspaces/ws-aaaa", "--"],
+  };
+
+  it("accepts the committed fixture shape", () => {
+    expect(validateOuterWrapFixture(valid)).toBe(valid);
+  });
+
+  it("rejects a non-outer schema (the inner canonical fixture is a different arm)", () => {
+    expect(() => validateOuterWrapFixture({ ...valid, schema: "canonical-bwrap-v1" })).toThrow(/schema/);
+  });
+
+  it("rejects a missing '--' terminator (the payload follows it)", () => {
+    expect(() =>
+      validateOuterWrapFixture({ ...valid, bwrapSetupArgv: ["--die-with-parent"] }),
+    ).toThrow(/--/);
+  });
+
+  it("rejects non-array prep manifests", () => {
+    expect(() =>
+      validateOuterWrapFixture({ ...valid, prepFiles: "{{ROOT}}/x" }),
+    ).toThrow(/prepFiles/);
+  });
+});
+
+describe("substituteOuterRoot + outerWrapChdirTarget", () => {
+  it("substitutes every {{ROOT}} occurrence", () => {
+    expect(
+      substituteOuterRoot(["--bind", "{{ROOT}}/w/x", "{{ROOT}}/w/x", "--"], "/r"),
+    ).toEqual(["--bind", "/r/w/x", "/r/w/x", "--"]);
+  });
+
+  it("finds the --chdir target; undefined when absent", () => {
+    expect(outerWrapChdirTarget(["--chdir", "/r/w", "--"])).toBe("/r/w");
+    expect(outerWrapChdirTarget(["--bind", "/a", "/a", "--"])).toBeUndefined();
+  });
+});
+
+describe("classifyOuterWrapReplayVerdict — three-way discrimination", () => {
+  it("exit 0 + isolation_ok + elevation=privileged ⇒ pass", () => {
+    expect(
+      classifyOuterWrapReplayVerdict({
+        bwrapExitCode: 0,
+        bwrapStdout: "elevation=privileged\nisolation_ok\n",
+      }),
+    ).toEqual({ verdict: "pass", reason: "ok" });
+  });
+
+  it("exit 0 + isolation_ok + elevation=userns ⇒ sandbox_broken wrong_elevation_userns (a green on the wrong mechanism is not a pass)", () => {
+    expect(
+      classifyOuterWrapReplayVerdict({
+        bwrapExitCode: 0,
+        bwrapStdout: "elevation=userns\nisolation_ok\n",
+      }),
+    ).toEqual({ verdict: "sandbox_broken", reason: "wrong_elevation_userns" });
+  });
+
+  it("exit 0 + isolation_ok WITHOUT an elevation marker ⇒ sandbox_broken wrong_elevation_unreported (a drifted payload cannot green)", () => {
+    expect(
+      classifyOuterWrapReplayVerdict({ bwrapExitCode: 0, bwrapStdout: "isolation_ok\n" }),
+    ).toEqual({ verdict: "sandbox_broken", reason: "wrong_elevation_unreported" });
+  });
+
+  it("bwrap-shim refusal marker ⇒ sandbox_broken bwrap_shim_refused", () => {
+    expect(
+      classifyOuterWrapReplayVerdict({
+        bwrapExitCode: 65,
+        bwrapStderr: "bwrap-shim: refusing CLONE_NEWUSER argv",
+      }),
+    ).toEqual({
+      verdict: "sandbox_broken",
+      reason: "bwrap_shim_refused",
+      detail: "bwrap-shim: refusing CLONE_NEWUSER argv",
+    });
+  });
+
+  it("payload FAIL markers ⇒ sandbox_broken isolation_probe_failed (a realized violation, never infra)", () => {
+    expect(
+      classifyOuterWrapReplayVerdict({
+        bwrapExitCode: 1,
+        bwrapStdout: "FAIL: sibling /r/workspaces/ws-bbbb exists inside the wrap\nisolation_fail\n",
+      }),
+    ).toEqual({ verdict: "sandbox_broken", reason: "isolation_probe_failed" });
+  });
+
+  it('bwrap stderr "Operation not permitted" ⇒ sandbox_broken (file-cap posture regressed)', () => {
+    expect(
+      classifyOuterWrapReplayVerdict({
+        bwrapExitCode: 1,
+        bwrapStderr: "bwrap: Can't mount /usr: Operation not permitted",
+      }),
+    ).toEqual({ verdict: "sandbox_broken", reason: "bwrap_operation_not_permitted" });
+  });
+
+  it("spawn ENOENT ⇒ canary_infra_error (do NOT roll back)", () => {
+    expect(
+      classifyOuterWrapReplayVerdict({ spawnErrorCode: "ENOENT" }),
+    ).toEqual({ verdict: "canary_infra_error", reason: "bwrap_spawn_enoent" });
+  });
+
+  it("exit 0 without the probe verdict ⇒ canary_infra_error probe_output_missing (a vacuous green is not a pass)", () => {
+    expect(
+      classifyOuterWrapReplayVerdict({ bwrapExitCode: 0, bwrapStdout: "" }),
+    ).toEqual({ verdict: "canary_infra_error", reason: "probe_output_missing" });
+  });
+
+  it("unattributed non-zero ⇒ canary_infra_error, not sandbox_broken", () => {
+    expect(
+      classifyOuterWrapReplayVerdict({ bwrapExitCode: 2, bwrapStderr: "something odd" }),
+    ).toEqual({ verdict: "canary_infra_error", reason: "bwrap_exit_2" });
   });
 });

@@ -1,5 +1,5 @@
 <overview>
-This reference documents common patterns for skill authoring, including templates, examples, terminology consistency, and anti-patterns. All patterns use pure XML structure.
+This reference documents common patterns for skill authoring, including templates, examples, terminology consistency, and anti-patterns. Skill bodies are structured with markdown headings; the XML tags shown inside examples are optional wrappers around one block within a section.
 </overview>
 
 <template_pattern>
@@ -10,8 +10,9 @@ Provide templates for output format. Match the level of strictness to your needs
 <strict_requirements>
 Use when output format must be exact and consistent:
 
-```xml
-<report_structure>
+```markdown
+## Report Structure
+
 ALWAYS use this exact template structure:
 
 ```markdown
@@ -30,8 +31,6 @@ ALWAYS use this exact template structure:
 2. Specific actionable recommendation
 ```
 
-</report_structure>
-
 ```
 
 **When to use**: Compliance reports, standardized formats, automated processing
@@ -40,8 +39,9 @@ ALWAYS use this exact template structure:
 <flexible_guidance>
 Use when Claude should adapt the format based on context:
 
-```xml
-<report_structure>
+```markdown
+## Report Structure
+
 Here is a sensible default format, but use your best judgment:
 
 ```markdown
@@ -58,7 +58,6 @@ Here is a sensible default format, but use your best judgment:
 ```
 
 Adjust sections as needed for the specific analysis type.
-</report_structure>
 
 ```
 
@@ -72,17 +71,20 @@ For skills where output quality depends on seeing examples, provide input/output
 </description>
 
 <commit_messages_example>
-```xml
-<objective>
-Generate commit messages following conventional commit format.
-</objective>
+```markdown
+## Objective
 
-<commit_message_format>
+Generate commit messages following conventional commit format.
+
+## Commit Message Format
+
 Generate commit messages following these examples:
 
 <example number="1">
 <input>Added user authentication with JWT tokens</input>
-<output>
+
+### Output
+
 ```
 
 feat(auth): implement JWT-based authentication
@@ -133,16 +135,17 @@ Consistent usage:
 - Always "field" (not mixing with "box", "element", "control")
 - Always "extract" (not mixing with "pull", "get", "retrieve")
 
-```xml
-<objective>
-Extract data from API endpoints using field mappings.
-</objective>
+```markdown
+## Objective
 
-<quick_start>
+Extract data from API endpoints using field mappings.
+
+## Quick Start
+
 1. Identify the API endpoint
 2. Map response fields to your schema
 3. Extract field values
-</quick_start>
+
 ```
 
 </good_example>
@@ -150,16 +153,17 @@ Extract data from API endpoints using field mappings.
 <bad_example>
 Inconsistent usage creates confusion:
 
-```xml
-<objective>
-Pull data from API routes using element mappings.
-</objective>
+```markdown
+## Objective
 
-<quick_start>
+Pull data from API routes using element mappings.
+
+## Quick Start
+
 1. Identify the URL
 2. Map response boxes to your schema
 3. Retrieve control values
-</quick_start>
+
 ```
 
 Claude must now interpret: Are "API routes" and "URLs" the same? Are "fields", "boxes", "elements", and "controls" the same?
@@ -167,7 +171,7 @@ Claude must now interpret: Are "API routes" and "URLs" the same? Are "fields", "
 
 <implementation>
 1. Choose terminology early in skill development
-2. Document key terms in `<objective>` or `<context>`
+2. Document key terms in the skill's opening section
 3. Use find/replace to enforce consistency
 4. Review reference files for consistent usage
 </implementation>
@@ -181,8 +185,9 @@ Provide a default approach with an escape hatch for special cases, not a list of
 <good_example>
 Clear default with escape hatch:
 
-```xml
-<quick_start>
+```markdown
+## Quick Start
+
 Use pdfplumber for text extraction:
 
 ```python
@@ -192,7 +197,6 @@ with pdfplumber.open("file.pdf") as pdf:
 ```
 
 For scanned PDFs requiring OCR, use pdf2image with pytesseract instead.
-</quick_start>
 
 ```
 </good_example>
@@ -200,8 +204,9 @@ For scanned PDFs requiring OCR, use pdf2image with pytesseract instead.
 <bad_example>
 Too many options creates decision paralysis:
 
-```xml
-<quick_start>
+```markdown
+## Quick Start
+
 You can use any of these libraries:
 
 - **pypdf**: Good for basic extraction
@@ -212,7 +217,7 @@ You can use any of these libraries:
 - **tabula-py**: Table-focused
 
 Choose based on your needs.
-</quick_start>
+
 ```
 
 Claude must now research and compare all options before starting. This wastes tokens and time.
@@ -231,11 +236,30 @@ Claude must now research and compare all options before starting. This wastes to
 Common mistakes to avoid when authoring skills.
 </description>
 
-<pitfall name="markdown_headings_in_body">
-❌ **BAD**: Using markdown headings in skill body:
+<pitfall name="tag_only_body">
+❌ **BAD**: A tag-only body with no headings, where top-level tags stand in for sections:
+
+```markdown
+## Objective
+
+PDF processing with text extraction, form filling, and merging capabilities.
+
+## Quick Start
+
+Extract text with pdfplumber...
+
+## Advanced Features
+
+Form filling requires additional setup...
+
+```
+
+✅ **GOOD**: Markdown headings structure the body:
 
 ```markdown
 # PDF Processing
+
+PDF processing with text extraction, form filling, and merging capabilities.
 
 ## Quick start
 Extract text with pdfplumber...
@@ -244,23 +268,7 @@ Extract text with pdfplumber...
 Form filling requires additional setup...
 ```
 
-✅ **GOOD**: Using pure XML structure:
-
-```xml
-<objective>
-PDF processing with text extraction, form filling, and merging capabilities.
-</objective>
-
-<quick_start>
-Extract text with pdfplumber...
-</quick_start>
-
-<advanced_features>
-Form filling requires additional setup...
-</advanced_features>
-```
-
-**Why it matters**: XML provides semantic meaning, reliable parsing, and token efficiency.
+**Why it matters**: Markdown headings structure a skill body; XML tags are optional semantic wrappers inside a section and never replace headings. Every shipped Soleur `SKILL.md` (102/102 measured) uses `#` headings, so a tag-only body is the odd one out for both readers and tooling.
 </pitfall>
 
 <pitfall name="vague_descriptions">
@@ -310,16 +318,18 @@ description: Processes Excel files and generates reports. Use when analyzing spr
 
 <pitfall name="too_many_options">
 ❌ **BAD**:
-```xml
-<quick_start>
+```markdown
+## Quick Start
+
 You can use pypdf, or pdfplumber, or PyMuPDF, or pdf2image, or pdfminer, or tabula-py...
-</quick_start>
+
 ```
 
 ✅ **GOOD**:
 
-```xml
-<quick_start>
+```markdown
+## Quick Start
+
 Use pdfplumber for text extraction:
 
 ```python
@@ -327,7 +337,6 @@ import pdfplumber
 ```
 
 For scanned PDFs requiring OCR, use pdf2image with pytesseract instead.
-</quick_start>
 
 ```
 
@@ -356,18 +365,20 @@ SKILL.md → examples.md
 
 <pitfall name="windows_paths">
 ❌ **BAD**:
-```xml
-<reference_guides>
+```markdown
+## Reference Guides
+
 See scripts\validate.py for validation
-</reference_guides>
+
 ```
 
 ✅ **GOOD**:
 
-```xml
-<reference_guides>
+```markdown
+## Reference Guides
+
 See scripts/validate.py for validation
-</reference_guides>
+
 ```
 
 **Why it matters**: Always use forward slashes for cross-platform compatibility.
@@ -378,20 +389,22 @@ See scripts/validate.py for validation
 
 ❌ **BAD** - These execute during skill load:
 
-```xml
-<examples>
+```markdown
+## Examples
+
 Load current status with: !`git status`
 Review dependencies in: @package.json
-</examples>
+
 ```
 
 ✅ **GOOD** - Add space to prevent execution:
 
-```xml
-<examples>
+```markdown
+## Examples
+
 Load current status with: ! `git status` (remove space before backtick in actual usage)
 Review dependencies in: @ package.json (remove space after @ in actual usage)
-</examples>
+
 ```
 
 **When this applies**:
@@ -403,37 +416,34 @@ Review dependencies in: @ package.json (remove space after @ in actual usage)
 **Why it matters**: Without the space, these execute during skill load, causing errors or unwanted file reads.
 </pitfall>
 
-<pitfall name="missing_required_tags">
-❌ **BAD**: Missing required tags:
-```xml
-<quick_start>
+<pitfall name="missing_required_sections">
+❌ **BAD**: Missing required sections:
+```markdown
+## Quick start
 Use this tool for processing...
-</quick_start>
 ```
 
-✅ **GOOD**: All required tags present:
+✅ **GOOD**: All required sections present:
 
-```xml
-<objective>
+```markdown
+# Data Processing
+
 Process data files with validation and transformation.
-</objective>
 
-<quick_start>
+## Quick start
 Use this tool for processing...
-</quick_start>
 
-<success_criteria>
+## Success criteria
 - Input file successfully processed
 - Output file validates without errors
 - Transformation applied correctly
-</success_criteria>
 ```
 
-**Why it matters**: Every skill must have `<objective>`, `<quick_start>`, and `<success_criteria>` (or `<when_successful>`).
+**Why it matters**: Every skill needs a `#` title with its purpose, a `## Quick start` (or first phase), and a completion criterion.
 </pitfall>
 
-<pitfall name="hybrid_xml_markdown">
-❌ **BAD**: Mixing XML tags with markdown headings:
+<pitfall name="tags_replacing_some_headings">
+❌ **BAD**: A top-level tag standing in for one section while the rest use headings:
 ```markdown
 <objective>
 PDF processing capabilities
@@ -443,51 +453,49 @@ PDF processing capabilities
 
 Extract text with pdfplumber...
 
-## Advanced features
-
-Form filling...
-
 ```
 
-✅ **GOOD**: Pure XML throughout:
-```xml
-<objective>
-PDF processing capabilities
-</objective>
+✅ **GOOD**: Every section is a heading; a tag, if used, wraps one block inside a section:
+```markdown
+# PDF Processing
 
-<quick_start>
+PDF processing capabilities.
+
+## Quick start
+
 Extract text with pdfplumber...
-</quick_start>
 
-<advanced_features>
-Form filling...
-</advanced_features>
+<example>
+pdfplumber.open("file.pdf").pages[0].extract_text()
+</example>
 ```
 
-**Why it matters**: Consistency in structure. Either use pure XML or pure markdown (prefer XML).
+**Why it matters**: Headings carry the structure. A wrapper bounds a block the model must treat as one unit; it is never a section of its own.
 </pitfall>
 
 <pitfall name="unclosed_xml_tags">
 ❌ **BAD**: Forgetting to close XML tags:
-```xml
-<objective>
+```markdown
+## Objective
+
 Process PDF files
 
-<quick_start>
+### Quick Start
+
 Use pdfplumber...
-</quick_start>
 
 ```
 
 ✅ **GOOD**: Properly closed tags:
-```xml
-<objective>
-Process PDF files
-</objective>
+```markdown
+## Objective
 
-<quick_start>
+Process PDF files
+
+## Quick Start
+
 Use pdfplumber...
-</quick_start>
+
 ```
 
 **Why it matters**: Unclosed tags break XML parsing and create ambiguous boundaries.
@@ -500,23 +508,23 @@ Keep SKILL.md concise by linking to detailed reference files. Claude loads refer
 </description>
 
 <implementation>
-```xml
-<objective>
+```markdown
+## Objective
+
 Manage Facebook Ads campaigns, ad sets, and ads via the Marketing API.
-</objective>
 
-<quick_start>
-<basic_operations>
+## Quick Start
+
+### Basic Operations
+
 See [basic-operations.md](basic-operations.md) for campaign creation and management.
-</basic_operations>
-</quick_start>
 
-<advanced_features>
+## Advanced Features
+
 **Custom audiences**: See [audiences.md](audiences.md)
 **Conversion tracking**: See [conversions.md](conversions.md)
 **Budget optimization**: See [budgets.md](budgets.md)
 **API reference**: See [api-reference.md](api-reference.md)
-</advanced_features>
 
 ```
 
@@ -534,8 +542,9 @@ For skills with validation steps, make validation scripts verbose and specific.
 </description>
 
 <implementation>
-```xml
-<validation>
+```markdown
+## Validation
+
 After making changes, validate immediately:
 
 ```bash
@@ -549,7 +558,6 @@ If validation fails, fix errors before continuing. Validation errors include:
 - **Missing required field**: "Required field 'customer_name' is missing"
 
 Only proceed when validation passes with zero errors.
-</validation>
 
 ```
 
@@ -566,8 +574,9 @@ For complex multi-step workflows, provide a checklist Claude can copy and track 
 </description>
 
 <implementation>
-```xml
-<workflow>
+```markdown
+## Workflow
+
 Copy this checklist and check off items as you complete them:
 
 ```

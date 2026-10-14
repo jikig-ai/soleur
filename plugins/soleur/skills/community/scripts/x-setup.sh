@@ -18,17 +18,209 @@
 #
 # Exit codes:
 #   0 - Success
-#   1 - General error
+#   1 - General error, including missing credentials and a write-env value outside the .env
+#       allow-list. The two are told apart by the stderr marker, which ONLY the allow-list refusal
+#       emits: `SOLEUR_CREDENTIAL_REFUSED ... var=<NAME> phase=write-env` (value-free). Exit 1 with
+#       that marker is the allow-list; exit 1 without it is a missing credential.
 #
 # Output: JSON or plain text to stdout
-# Errors: Messages to stderr, exit 1
+# Errors: Messages to stderr, exit 1. The exception is `write-env`, which has no stdout payload and
+#         whose human text is therefore all on STDOUT (agent runtimes surface stdout and swallow
+#         stderr): the missing-credentials diagnostic, the allow-list line, and the "Wrote N
+#         variables" confirmation. Only the allow-list marker stays on stderr.
 
 set -euo pipefail
 
+# (#7797) Xtrace refusal -- the FIRST thing after `set …`, so nothing above it is
+# traced. This script ships to installed Soleur CLIs: the terminal it runs in
+# belongs to the founder, and `bash -x` would print their live X
+# credentials. UNCONDITIONAL, and that is measured rather than inherited:
+# `cmd_verify` does `set -a; source "$env_file"; set +a`, loading the founder's
+# .env at RUNTIME, AFTER this prologue. A conditional hatch keyed on whether the
+# credential is already set would therefore be empty at guard time and open, and
+# `source` under xtrace echoes EVERY assignment in the file -- so the leak would
+# be the whole .env, not one token. (Written without the literal parameter
+# expansion on purpose: a bare-token grep for it cannot tell this comment from
+# real code, and the 4-vs-11 arm split is asserted by exactly such a grep.)
+# Refusal goes to STDOUT, not stderr: agent runtimes surface stdout and swallow
+# stderr (constitution.md > Code Style > Always), and a swallowed security refusal
+# leaves the user with a bare `exit 78` and no text at all.
+case "$-" in
+  *x*)
+    printf 'Refusing to run under `bash -x`: this script loads X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET from your .env at runtime, and tracing would print them to your terminal. Unsetting them first does not help -- the .env is the source. Re-run without `bash -x`.\n'
+    exit 78
+    ;;
+esac
+
+# (#7873) `--disable` closes ~/.curlrc and `--noproxy '*'` closes the proxy
+# variables, but NEITHER touches the trust store or the TLS session-key log. On an
+# installed CLI the environment belongs to someone who is not us, so
+# a substituted `CURL_CA_BUNDLE` is a clean MITM of the founder's platform
+# token with every other guard fully intact, and `SSLKEYLOGFILE` is passive
+# decryption with no MITM at all. Matches the line in scripts/betterstack-query.sh.
+unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
+      HOSTALIASES LOCALDOMAIN RES_OPTIONS
+
+# --- Transport-confinement diagnostics (#7873) --------------------------------
+# Every credentialed `curl` below carries `--disable --noproxy '*'` and discards
+# curl's own stderr (which can carry the URL). A failed request then has four
+# competing causes the founder cannot tell apart: the xtrace refusal, the proxy
+# this script deliberately bypassed, a ~/.curlrc that `--disable` dropped, or an
+# ordinary network failure. So each failure emits ONE structured marker carrying
+# all four discriminators, beside a human line that names the bypass instead of
+# blaming the founder's connectivity.
+SOLEUR_TRANSPORT_SCRIPT="x-setup.sh"
+SOLEUR_TRANSPORT_PLATFORM="X"
+
+# The request helpers below run inside `$(...)`, where fd 1 is the capture pipe.
+# Save the script's real stdout so the marker reaches the founder's terminal (and
+# the always-on PostToolUse Bash extractor) instead of being swallowed into a
+# variable. The marker is on stdout BY DESIGN -- the call sites' `2>/dev/null` is
+# what keeps curl's URL-carrying stderr out of the transcript, and it must not be
+# able to suppress the diagnostic too.
+exec 3>&1
+
+# Which proxy variables are non-empty, or `none`.
+proxy_env_names() {
+  local names="" n
+  for n in HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy; do
+    if [[ -n "${!n-}" ]]; then
+      names="${names},${n}"
+    fi
+  done
+  if [[ -z "$names" ]]; then
+    printf 'none'
+  else
+    printf '%s' "${names#,}"
+  fi
+}
+
+# True when a proxy this script deliberately bypasses is configured. NO_PROXY
+# alone is not one -- it only ever narrows proxying, so it cannot be the cause.
+proxy_bypassed() {
+  [[ -n "${HTTP_PROXY:-}${HTTPS_PROXY:-}${ALL_PROXY:-}${http_proxy:-}${https_proxy:-}${all_proxy:-}" ]]
+}
+
+# One line, eight fields, on the saved stdout.
+#
+# Two fields were literals in the first cut and are now MEASURED (#7898 review):
+# `noproxy_applied` was the constant "true", which ASSERTS the property instead of
+# observing it -- dropping --noproxy from a call site left the diagnostic still
+# claiming it was applied. It now reports whether a proxy was actually configured
+# for this request to bypass, which is the fact a reader needs. `refusal` was the
+# constant "none" at every call site, so the cause it exists to discriminate could
+# never appear; it now carries `env-rebind-refused` and `xtrace-credential-bound`.
+#
+# `tls_env_cleared` is new. The prologue unsets CURL_CA_BUNDLE/SSL_CERT_FILE et al,
+# which is correct against an attacker and BREAKS a founder whose corporate CA
+# arrives that way -- curl then exits 60 and, without this field, the event is
+# indistinguishable from an ordinary network failure.
+emit_transport_diag() {
+  local curl_exit="$1" refusal="$2" surface="installed-cli" curlrc="false" noproxy="false"
+  # The hosted sandbox always sets this (agent-env.ts > AGENT_ENV_OVERRIDES); an
+  # installed CLI does not. A label on the event, not a gate on behaviour.
+  if [[ -n "${CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:-}" ]]; then
+    surface="in-sandbox"
+  fi
+  if [[ -f "${HOME:-}/.curlrc" ]]; then
+    curlrc="true"
+  fi
+  if proxy_bypassed; then
+    noproxy="true"
+  fi
+  printf 'SOLEUR_TRANSPORT_DIAG surface=%s script=%s curl_exit=%s refusal=%s proxy_env=%s curlrc_present=%s noproxy_applied=%s tls_env_cleared=%s\n' \
+    "$surface" "$SOLEUR_TRANSPORT_SCRIPT" "$curl_exit" "$refusal" \
+    "$(proxy_env_names)" "$curlrc" "$noproxy" "true" >&3
+}
+
+# Replaces the bare "Check your network connection and try again." on a
+# credentialed-curl failure. With a proxy set, that line blames the founder for a
+# bypass this script chose.
+report_transport_failure() {
+  local curl_exit="${1:-unknown}"
+  local detail="${2:-Failed to connect to the ${SOLEUR_TRANSPORT_PLATFORM} API.}"
+  emit_transport_diag "$curl_exit" "none"
+  echo "Error: ${detail}" >&2
+  # Ordered by how specific the evidence is. Each arm names something THIS script
+  # did, so the founder is never told to go debug their own network for a choice
+  # made here. The bare "check your connection" line is the LAST resort, not the
+  # default -- it was the default in the first cut, which meant a founder whose
+  # corporate CA or curlrc we had just discarded was blamed for it (#7898 review).
+  if [[ "$curl_exit" == "60" || "$curl_exit" == "35" || "$curl_exit" == "77" ]]; then
+    # 60 peer-certificate, 35 TLS handshake, 77 CA-bundle unreadable.
+    echo "This looks like a TLS trust failure. This script deliberately clears CURL_CA_BUNDLE, SSL_CERT_FILE, SSL_CERT_DIR and SSLKEYLOGFILE before the request, because those variables can redirect or expose a request carrying your ${SOLEUR_TRANSPORT_PLATFORM} credential." >&2
+    echo "If your machine needs a corporate CA to reach ${SOLEUR_TRANSPORT_PLATFORM}, that is not currently supported -- please open an issue at https://github.com/jikig-ai/soleur/issues." >&2
+  elif proxy_bypassed; then
+    echo "This request deliberately bypasses your proxy ($(proxy_env_names)), because a proxy can redirect a request carrying your ${SOLEUR_TRANSPORT_PLATFORM} token." >&2
+    echo "If you need Soleur to reach ${SOLEUR_TRANSPORT_PLATFORM} through your proxy, that is not currently supported -- please open an issue at https://github.com/jikig-ai/soleur/issues." >&2
+  elif [[ -f "${HOME:-}/.curlrc" ]]; then
+    echo "You have a ~/.curlrc, and this request deliberately ignores it (--disable), because a curlrc can redirect a request carrying your ${SOLEUR_TRANSPORT_PLATFORM} token. If it configures a proxy or a CA bundle you need, that is why this failed." >&2
+    echo "That is not currently supported -- please open an issue at https://github.com/jikig-ai/soleur/issues." >&2
+  else
+    echo "Check your network connection and try again." >&2
+  fi
+}
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../../../scripts/resolve-git-root.sh"
+# (#9597) OAuth 1.0a request signing (HMAC-SHA1) without the key on any process's argument list.
+# A function of this name inherited from the environment (an exported bash function) is dropped
+# first, so it cannot stand in for the library's when the library loads without defining it
+# (truncated or emptied); the check after the load refuses to run at all in that case. Only an
+# inherited function NAMED hmac_sha1_b64 is closed here: the key stays readable by any other
+# exported function, the same exposure as the exported secret variables.
+unset -f hmac_sha1_b64 2>/dev/null || true
+source "$SCRIPT_DIR/lib/hmac-sha1-b64.sh"
+if ! declare -F hmac_sha1_b64 >/dev/null; then
+  echo "Error: the OAuth signing helper did not define hmac_sha1_b64; refusing to run." >&2
+  exit 1
+fi
 
-X_API="https://api.x.com"
+# readonly (#7898 review): `cmd_verify` and friends run `set -a; source "$env_file"; set +a`
+# BELOW this line, so a plain assignment here is rebindable by the repo's .env --
+# which retargets the credentialed request while every transport flag stays intact.
+# That is the "--disable and --noproxy are intact and irrelevant" shape this change
+# exists to close, one layer up. readonly makes the destination non-rebindable.
+readonly X_API="https://api.x.com"
+
+# (#9597) write-env value allow-list. `.env` values are written UNQUOTED and later SOURCED
+# (`verify`, the community scripts), so a value holding a command substitution, a backtick, a
+# quote, a semicolon, a space or a newline would execute or split on the next source, and a leading
+# tilde would silently change a stored credential (tilde expansion on source). Validation is an
+# allow-list, fail-closed, and runs for EVERY value BEFORE the first write: a refused value prints
+# the value-free marker plus ONE human line naming only the VARIABLE, writes nothing, exits 1 and
+# leaves any existing .env untouched. A value outside the list that is legitimate is added to .env
+# by hand. The glob runs under LC_ALL=C and is not grep, which is line-oriented and lets a
+# multi-line value through.
+_wenv_class() { # <value>: 0 allowed, 1 outside the allow-list or empty, 2 holds a control character
+  local LC_ALL=C
+  case "${1-}" in
+    '') return 1 ;;
+    *[[:cntrl:]]*) return 2 ;;
+    *[!A-Za-z0-9._:/@%+=,-]*) return 1 ;;
+  esac
+  return 0
+}
+_wenv_refuse() { # <reason> <VARIABLE>
+  printf 'SOLEUR_CREDENTIAL_REFUSED script=%s reason=%s var=%s phase=write-env\n' "$SOLEUR_TRANSPORT_SCRIPT" "$1" "$2" >&2
+  echo "Error: ${2} holds a character this script does not write to .env (allowed: letters, digits and . _ : / @ % + = , -), so nothing was written and your existing .env is unchanged. The value is not shown. If the value is legitimate, add it to .env by hand."
+  exit 1
+}
+# _wenv_validate <VARIABLE>...: every NON-EMPTY named variable passes the allow-list. The required
+# variables are checked non-empty by the caller before this runs; an empty optional one is skipped.
+_wenv_validate() {
+  local _wn _wrc
+  for _wn in "$@"; do
+    [[ -n "${!_wn:-}" ]] || continue
+    _wrc=0
+    _wenv_class "${!_wn}" || _wrc=$?
+    case "$_wrc" in
+      0) ;;
+      2) _wenv_refuse control_char "$_wn" ;;
+      *) _wenv_refuse token_shape "$_wn" ;;
+    esac
+  done
+}
 
 # --- Dependency checks ---
 
@@ -73,15 +265,29 @@ require_credentials() {
     echo "  1. Go to https://developer.x.com/en/portal/dashboard" >&2
     echo "  2. Create or select a project and app" >&2
     echo "  3. Generate API Key, API Secret, Access Token, and Access Token Secret" >&2
-    echo "  4. Export them as environment variables" >&2
+    echo "  4. Export them as environment variables, without typing a value into the command (its text is kept in the transcript and the shell history): in a terminal, read -rs X_API_KEY; export X_API_KEY, and the same for each of the other three" >&2
     exit 1
   fi
 }
 
+# (#9597) The OAuth 1.0a Authorization header carries the signature and the access
+# token, so it rides curl's stdin config channel (`--config -`), never its argument
+# list (readable by every local user in /proc/<pid>/cmdline). The channel is
+# line-oriented: a CR/LF or other control character in the header would end the
+# `header = "..."` directive and let the following bytes act as a new one, so a header
+# holding one is refused BEFORE it is formatted into the stream. The header's own
+# quotes (`oauth_token="..."`) are legitimate and are escaped by `_cfg_q`. The consumer
+# secret and token secret never reach curl at all: they only key the HMAC in oauth_sign.
+_hdr_ok() { local LC_ALL=C; case "${1:-}" in ''|*[[:cntrl:]]*) return 1 ;; esac; }
+_cfg_q() { local v="${1-}"; v=${v//\\/\\\\}; v=${v//\"/\\\"}; printf '%s' "$v"; }
+
 # --- OAuth 1.0a signing ---
 
-# URL-encode a string per RFC 3986
+# URL-encode a string per RFC 3986 (RFC 5849 3.6 for OAuth). Byte-wise: under LC_ALL=C each byte
+# is one character, so a multi-byte UTF-8 character encodes as its bytes (%C3%A9), not as a
+# code point (the `printf '%02X' "'é"` form gives E9 in a UTF-8 locale, which is not the encoding).
 urlencode() {
+  local LC_ALL=C
   local string="$1"
   local encoded=""
   local i c o
@@ -143,12 +349,19 @@ oauth_sign() {
   # Build signature base string
   local base_string="${method}&$(urlencode "$url")&$(urlencode "$param_string")"
 
-  # Build signing key
+  # Build signing key (read BY NAME inside the HMAC function below)
+  # shellcheck disable=SC2034
   local signing_key="$(urlencode "${X_API_SECRET}")&$(urlencode "${X_ACCESS_TOKEN_SECRET}")"
 
-  # Generate HMAC-SHA1 signature
+  # Generate HMAC-SHA1 signature (#9597). The signing key is handed to the function by NAME and
+  # lives only in bash builtins and pipes: it is on no process's argument list. A failed
+  # computation yields no signature and the request is never sent unsigned.
   local signature
-  signature=$(printf '%s' "$base_string" | openssl dgst -sha1 -hmac "$signing_key" -binary | base64)
+  signature=$(printf '%s' "$base_string" | hmac_sha1_b64 signing_key) || signature=""
+  if [[ -z "$signature" ]]; then
+    echo "Error: could not compute the OAuth signature; refusing to send an unsigned request." >&2
+    return 1
+  fi
 
   # Build Authorization header
   local auth_header="OAuth "
@@ -174,11 +387,17 @@ cmd_validate_credentials() {
 
   local response http_code body
   # Suppress stderr to prevent credential leakage
-  if ! response=$(curl -s -w "\n%{http_code}" \
-    -H "Authorization: ${auth_header}" \
-    "${url}" 2>/dev/null); then
-    echo "Error: Failed to connect to X API." >&2
-    echo "Check your network connection and try again." >&2
+  if ! _hdr_ok "$auth_header"; then
+    echo "Error: the OAuth Authorization header has an unexpected shape; refusing to send it." >&2
+    exit 1
+  fi
+  local __curl_rc=0
+  # The signed header rides curl's stdin config channel, never its argument list.
+  response=$(curl --disable --noproxy '*' -s -w "\n%{http_code}" --config - \
+    "${url}" 2>/dev/null \
+    < <(printf 'header = "Authorization: %s"\n' "$(_cfg_q "$auth_header")")) || __curl_rc=$?
+  if (( __curl_rc != 0 )); then
+    report_transport_failure "$__curl_rc" "Failed to connect to X API."
     exit 1
   fi
 
@@ -232,7 +451,11 @@ cmd_validate_credentials() {
 }
 
 cmd_write_env() {
-  require_credentials
+  # write-env has no stdout payload, so its missing-credentials diagnostic goes to STDOUT too
+  # (require_credentials writes it to stderr, shared with the other commands; exit 1 either way).
+  require_credentials 2>&1
+  # Every value is checked BEFORE the first write (see the allow-list above).
+  _wenv_validate X_API_KEY X_API_SECRET X_ACCESS_TOKEN X_ACCESS_TOKEN_SECRET
 
   local repo_root="$GIT_ROOT"
   local env_file="${repo_root}/.env"
@@ -241,11 +464,18 @@ cmd_write_env() {
   if [[ -f "$env_file" ]]; then
     local tmp
     tmp=$(mktemp) || { echo "Error: Failed to create temp file." >&2; exit 1; }
+    # Owning trap (ADR-129): mv consumes $tmp on success, so the rm is a no-op
+    # on that path — it covers every early return between alloc and mv. The
+    # handler self-disarms first: a RETURN trap is not function-scoped, so a
+    # live copy would re-fire on every later function return in this shell.
+    trap 'trap - RETURN; rm -f "$tmp"' RETURN
     { grep -v '^X_API_KEY=' "$env_file" | \
       grep -v '^X_API_SECRET=' | \
       grep -v '^X_ACCESS_TOKEN=' | \
       grep -v '^X_ACCESS_TOKEN_SECRET='; } > "$tmp" || true
-    mv "$tmp" "$env_file"
+    # A `set -e` exit on mv failure would skip the RETURN trap — the alloc
+    # loses its only cleanup, so rm it inline on that path too.
+    mv "$tmp" "$env_file" || { rc=$?; rm -f "$tmp"; exit "$rc"; }
   fi
 
   # Set restrictive permissions BEFORE writing secrets
@@ -260,7 +490,7 @@ cmd_write_env() {
     echo "X_ACCESS_TOKEN_SECRET=${X_ACCESS_TOKEN_SECRET}"
   } >> "$env_file"
 
-  echo "Wrote 4 variables to ${env_file} (permissions: 600)" >&2
+  echo "Wrote 4 variables to ${env_file} (permissions: 600)"
 }
 
 cmd_verify() {
@@ -275,8 +505,18 @@ cmd_verify() {
 
   # shellcheck disable=SC1090
   set -a
-  source "$env_file"
+  # The API base above is `readonly` (#7898 review), so if this .env tries to
+  # rebind it `source` returns non-zero. Do NOT let `set -e` abort here: that
+  # would be a silent death on the credential-loading path. Capture the status,
+  # report it, and continue -- the credentials in the same file still load, and
+  # the pinned destination keeps its legitimate value.
+  _env_rc=0
+  source "$env_file" || _env_rc=$?
   set +a
+  if (( _env_rc != 0 )); then
+    printf 'Note: at least one assignment in %s was refused. A pinned request destination cannot be overridden from .env -- your credentials loaded normally and the request still goes to the real API.\n' "$env_file"
+    emit_transport_diag "none" "env-rebind-refused"
+  fi
 
   local missing=()
   [[ -z "${X_API_KEY:-}" ]] && missing+=("X_API_KEY")

@@ -1,0 +1,12 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+// Defining the real writer's NAME locally does not write a marker either.
+function writeScratchMarker(_d: string): void {}
+
+export function scratch(): string {
+  const d = mkdtempSync(join(tmpdir(), "demo-"));
+  writeScratchMarker(d);
+  return d;
+}

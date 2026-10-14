@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import * as Sentry from "@sentry/nextjs";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/server";
 import { APP_URL_FALLBACK, reportSilentFallback } from "@/server/observability";
+import { verifiedUserId } from "@/server/request-auth";
 import { hashUserIdValue } from "@/server/userid-pseudonymize";
 import logger from "@/server/logger";
 
@@ -136,10 +137,9 @@ export async function GET(request: Request) {
   }
 
   // --- Get authenticated user ---
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const userId = await verifiedUserId(request);
 
-  if (!user) {
+  if (!userId) {
     logger.warn("GitHub resolve callback: no authenticated user (session expired?)");
     return redirectWithDeletedCookie(ERROR_REDIRECT, request);
   }
@@ -149,22 +149,22 @@ export async function GET(request: Request) {
   const { error: updateError } = await serviceClient
     .from("users")
     .update({ github_username: githubUsername })
-    .eq("id", user.id);
+    .eq("id", userId);
 
   if (updateError) {
     Sentry.withIsolationScope(() => {
-      Sentry.getCurrentScope().setUser({ id: hashUserIdValue(user.id) });
+      Sentry.getCurrentScope().setUser({ id: hashUserIdValue(userId) });
       reportSilentFallback(updateError, {
         feature: "github-resolve",
         op: "store-username",
         message: "GitHub resolve callback: failed to store github_username",
-        extra: { userId: user.id },
+        extra: { userId },
       });
     });
     return redirectWithDeletedCookie(ERROR_REDIRECT, request);
   }
 
-  logger.info({ userId: user.id, githubUsername }, "GitHub identity resolved and stored");
+  logger.info({ userId, githubUsername }, "GitHub identity resolved and stored");
 
   return redirectWithDeletedCookie(REDIRECT_BASE, request);
 }

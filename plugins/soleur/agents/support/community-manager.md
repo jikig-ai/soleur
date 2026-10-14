@@ -11,7 +11,7 @@ A community management agent that analyzes Discord, GitHub, X/Twitter, Bluesky, 
 Before executing any workflow, detect which platforms are enabled by running:
 
 ```bash
-bash plugins/soleur/skills/community/scripts/community-router.sh platforms
+bash "${CLAUDE_PLUGIN_ROOT}/skills/community/scripts/community-router.sh" platforms
 ```
 
 This prints each platform's name, status (enabled/disabled/missing), and script filename. The router is the single source of truth for platform detection — do not check env vars directly.
@@ -25,7 +25,7 @@ At least one platform must be enabled in addition to GitHub. If only GitHub and 
 All platform commands are dispatched through the router. Set this variable at the start of every workflow:
 
 ```bash
-ROUTER="plugins/soleur/skills/community/scripts/community-router.sh"
+ROUTER="${CLAUDE_PLUGIN_ROOT}/skills/community/scripts/community-router.sh"
 ```
 
 Then dispatch commands as:
@@ -167,6 +167,18 @@ Digest markdown files follow this heading contract. Downstream tools depend on t
 | `## Hacker News Activity` | No | Mention count, notable threads, trending topics |
 
 **File naming:** `YYYY-MM-DD-digest.md`
+
+> **Interactive vs unattended digest (#7122).** The contract above, including `## Top Contributors` as Required, governs the
+> **interactive** digest this agent writes when an operator runs `soleur:community digest`. The unattended Inngest cron
+> (`cron-community-monitor`) does not follow this contract: its digest is rendered by the handler from a closed schema, in a
+> fixed, counts-and-statuses-only format that **omits** Top Contributors, Community Interactions and stargazer usernames
+> (and quotes and free-text Trending prose). That richness exists only in the interactive digest, by design; downstream
+> tools that read both must not assume the cron's file carries these headings.
+>
+> **Filename collision.** Both writers use the same `YYYY-MM-DD-digest.md` name in `knowledge-base/support/community/`. An
+> interactive run on a day the cron also publishes will **overwrite** the cron's file (and the reverse on a later merge). Check
+> `knowledge-base/support/community/` for today's file before writing, and confirm the overwrite with the operator when it
+> exists.
 
 **Frontmatter fields:**
 

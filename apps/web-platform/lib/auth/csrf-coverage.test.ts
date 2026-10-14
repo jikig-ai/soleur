@@ -34,6 +34,13 @@ const EXEMPT_ROUTES = new Set([
   // no browser session, so origin-validation CSRF does not apply — the secret is
   // the trust boundary. Same class as trigger-cron / kb-drift-ingest above.
   "app/api/internal/schedule-reminder/route.ts",
+  // #8880 — cohort-tag write route is an internal operator/agent route
+  // authenticated via the same fail-closed Bearer shared secret as
+  // trigger-cron / schedule-reminder (INNGEST_MANUAL_TRIGGER_SECRET,
+  // length-guarded timingSafeEqual). No cookies / no browser session, so
+  // origin-validation CSRF does not apply — the secret is the trust boundary.
+  // Same class as the internal routes above.
+  "app/api/internal/cohort/route.ts",
   // #5103 — Resend Inbound email webhook uses svix signature verification
   // (resend.webhooks.verify → standardwebhooks constant-time HMAC + ±5-min
   // timestamp tolerance), not cookies. Called by Resend's servers (no browser

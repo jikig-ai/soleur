@@ -70,7 +70,7 @@ PHASE_A_BODY="Child of epic #$EPIC_NUM.
 ## Deliverables
 
 - [ ] Fix \`.grok/config.toml\` — project config supports \`[plugins]\`, \`[mcp_servers]\`, \`[permission]\` only (no \`permission_mode\`, no \`[compat.claude]\` per #6314 review)
-- [ ] CONTRIBUTING.md — Grok section with \`grok --trust\`, command naming (\`/go\` not \`/soleur:go\`)
+- [ ] CONTRIBUTING.md — Grok section with \`grok inspect\` + \`grok\` (no invented \`--trust\`), command naming (\`/go\` not \`/soleur:go\`)
 - [ ] \`plugins/soleur/commands/help.md\` — harness-aware command listing
 - [ ] \`knowledge-base/engineering/grok-onboarding.md\` — contributor brief
 

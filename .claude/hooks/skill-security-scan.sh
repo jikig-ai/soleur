@@ -9,7 +9,7 @@
 #
 # Belt-and-suspenders only. The load-bearing block lives in:
 #   1. PreToolUse hook on Write (.claude/hooks/skill-security-scan-write.sh)
-#   2. CI pre-merge required check (.github/workflows/skill-security-scan-pr-trailer.yml)
+#   2. CI pre-merge required check (job `skill-security-scan` in .github/workflows/pr-quality-guards.yml, folded #8902)
 #   3. CI post-merge audit (.github/workflows/skill-security-scan-postmerge.yml)
 #
 # Per AGENTS.md `hr-the-host-terminal-is-warp` and lefthook conventions, this

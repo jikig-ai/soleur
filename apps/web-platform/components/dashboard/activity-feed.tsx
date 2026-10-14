@@ -1,6 +1,7 @@
 "use client";
 
 import { useWorkspaceActivity, type ActivityEvent } from "@/hooks/use-workspace-activity";
+import { Button } from "@/components/ui/button";
 import { relativeTime } from "@/lib/relative-time";
 
 const EVENT_LABELS: Record<string, string> = {
@@ -64,13 +65,16 @@ export function ActivityFeed() {
         <EventRow key={event.id} event={event} />
       ))}
       {hasMore && (
-        <button
+        <Button
+          variant="ghost"
+          type="button"
           onClick={loadMore}
-          disabled={loading}
-          className="w-full py-3 text-center text-sm text-soleur-text-secondary hover:text-soleur-text-primary"
+          loading={loading}
+          loadingLabel="Loading"
+          className="w-full hover:text-soleur-text-primary"
         >
-          {loading ? "Loading..." : "Load more"}
-        </button>
+          Load more
+        </Button>
       )}
     </div>
   );

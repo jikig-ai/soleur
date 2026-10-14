@@ -12,11 +12,12 @@ import { resolve, join, relative } from "path";
  * (auth-signout-burst, auth-exchange-code-burst, auth-callback-no-code-burst)
  * are now Terraform-managed as `sentry_alert` in
  * apps/web-platform/infra/sentry/issue-alerts.tf, with their real tag filters
- * declared there. The fourth, auth-per-user-loop, is still defined by
- * apps/web-platform/scripts/configure-sentry-alerts.sh because the pinned
- * provider cannot express `event_unique_user_frequency_count` as a trigger
- * (upstream jianyuan/terraform-provider-sentry issue 950). Either way the tag
- * contract this guard enforces is unchanged.
+ * declared there. The fourth, auth-per-user-loop, is a frozen `sentry_alert`
+ * since #8451 (its trigger, `event_unique_user_frequency_count`, is unmodelable
+ * at the pinned provider — upstream jianyuan/terraform-provider-sentry issue
+ * 950 — so the block carries it by type under `ignore_changes = all`; the old
+ * configure-sentry-alerts.sh writer targets an API Sentry has removed). Either
+ * way the tag contract this guard enforces is unchanged.
  *
  * Pattern: apps/web-platform/lib/auth/csrf-coverage.test.ts (no glob dep,
  * fs.readdirSync + fs.statSync recursive walk).

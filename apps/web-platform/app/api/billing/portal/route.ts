@@ -3,24 +3,23 @@ import { createClient } from "@/lib/supabase/server";
 import { getStripe } from "@/lib/stripe";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { APP_URL_FALLBACK, reportSilentFallback } from "@/server/observability";
+import { verifiedUserId } from "@/server/request-auth";
 
 export async function POST(request: Request) {
   const { valid, origin } = validateOrigin(request);
   if (!valid) return rejectCsrf("api/billing/portal", origin);
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const userId = await verifiedUserId(request);
 
-  if (!user) {
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const { data: userData } = await supabase
     .from("users")
     .select("stripe_customer_id")
-    .eq("id", user.id)
+    .eq("id", userId)
     .single();
 
   if (!userData?.stripe_customer_id) {
@@ -33,7 +32,7 @@ export async function POST(request: Request) {
       feature: "billing",
       op: "portal-session",
       message: `NEXT_PUBLIC_APP_URL unset; billing portal return_url fallback to ${APP_URL_FALLBACK}`,
-      extra: { userId: user.id },
+      extra: { userId },
     });
   }
   const appOrigin = appUrl ?? APP_URL_FALLBACK;

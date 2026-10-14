@@ -204,11 +204,9 @@ async function tearDownFixture(
   if (!fixture) return;
   // message_attachments + messages + conversations cascade-delete with
   // their parents; the workspace helper unwinds membership/org/users.
-  try {
-    await tearDownSharedWorkspace(service, fixture.workspace);
-  } catch {
-    // best-effort
-  }
+  // Fail-loud (the helper tolerates the not-found idempotent path) — a
+  // swallowed teardown error is exactly the silent-leak class of #9994.
+  await tearDownSharedWorkspace(service, fixture.workspace);
 }
 
 describe.skipIf(!INTEGRATION_ENABLED)(
@@ -234,7 +232,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       afterAll(async () => {
         if (!service || !fixture) return;
         await tearDownFixture(service, fixture);
-      }, 30_000);
+      }, 60_000); // ~48 sequential calls for a 2-member fixture
 
       test("deleteAccount(bob) succeeds + cascade nulls his shared-conv attachment-message user_id, leaves Alice's owner message untouched", async () => {
         if (!fixture) throw new Error("fixture build failed");
@@ -306,13 +304,15 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       afterAll(async () => {
         if (!service || !fixture) return;
         // Bob still has an auth row in this branch (removeWorkspaceMember
-        // does NOT delete auth.users). Tear it down explicitly.
-        try {
-          const bob = fixture.workspace.members[1];
-          await tearDownTenantUser(service, { id: bob.userId, email: bob.email });
-        } catch {}
+        // does NOT delete auth.users). Tear it down explicitly — fail-loud
+        // (the helper tolerates the not-found idempotent path).
+        const bob = fixture.workspace.members[1];
+        await tearDownTenantUser(service, {
+          id: bob.userId,
+          email: bob.email,
+        });
         await tearDownFixture(service, fixture);
-      }, 30_000);
+      }, 60_000); // ~72 sequential calls under the anonymise-first helper
 
       test("remove_workspace_member(W, bob) atomically nulls bob's shared-conv attachment-message user_id BEFORE the membership DELETE", async () => {
         if (!fixture) throw new Error("fixture build failed");

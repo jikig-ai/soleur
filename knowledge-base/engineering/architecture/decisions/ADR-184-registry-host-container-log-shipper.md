@@ -74,6 +74,15 @@ isolation guard never trips.
 
 ### 3. A direct host POST bypasses VRL redaction, so the shipper owns its own sanitizer
 
+**[SCOPE MARKER added 2026-09-08 (#7500).** "The shipper" is literal. The sibling
+`SOLEUR_ZOT_DISK` reporter POSTs to the same Better Stack source from a *different* host script
+and was never covered by this sanitizer or by `redact()`. Read every redaction claim in this
+section as scoped to `zot-log-shipper.sh`; the gap is closed by
+[ADR-211](ADR-211-zot-last-err-redaction-at-the-producer-and-the-sink.md). Placed here, at the
+claim, rather than only in the amendment at the end of this ADR — a reader arriving mid-file via
+a cross-reference (the modal arrival for a redaction question) never reaches a remote
+amendment.**]**
+
 This is ADR-172 §1's reasoning applied to a host-side emitter. Two DIFFERENT jobs, deliberately
 named apart because conflating them is how dead rules get restored later believing they were safety:
 
@@ -241,6 +250,12 @@ escalates instead of reporting TRANSIENT forever.
 > fired, so the rider had no vehicle left. Delivery came from a dedicated replace instead; see
 > *Amendment 2026-08-12* at the end of this ADR. The 90-day horizon never elapsed.]**
 
+**Scope pointer (added 2026-09-08, #7500).** The sanitizer and `redact()` described in this
+ADR are the **shipper's**. They were never on the sibling `SOLEUR_ZOT_DISK` reporter's path,
+which POSTs to the same warehouse source from a different host script. That gap is closed by
+[ADR-211](ADR-211-zot-last-err-redaction-at-the-producer-and-the-sink.md); read any statement
+here about redaction as scoped to `zot-log-shipper.sh`.
+
 ## Alternatives Considered
 
 | Alternative | Verdict | Reason |
@@ -248,6 +263,7 @@ escalates instead of reporting TRANSIENT forever.
 | **Install a Vector agent** (the issue's literal framing) | **Rejected** | §2 — the shared config deletes the top-level `message` key that IS zerolog's log text. Supporting: quota, boot-time download on the sole pull path, lockstep, `user_data` budget. The pepper argument is retracted as false. |
 | A trimmed registry-specific Vector config | **Rejected** | Dodges the `message` deletion but keeps the boot-time download on the sole pull path and adds a second config to hold in lockstep |
 | Widen the reporter's `zot_last_err` field | **Rejected** | Stays a 5-minute sampler — the defect itself. A wider field raises the lower bound without producing a count |
+| REDACT the reporter's `zot_last_err` field | **Deferred to [ADR-211](ADR-211-zot-last-err-redaction-at-the-producer-and-the-sink.md)** | A different question from the row above, and not one this ADR asked. This ADR decided how the SHIPPER carries logs; whether the sibling `SOLEUR_ZOT_DISK` reporter redacts its diagnostic sample was raised by the counsel review on PR #7444 and settled in ADR-211 (#7500) |
 | Ship from CI, extending ADR-172's inventory lever | **Rejected** | CI reaches only the read-only `/v2/` surface; container logs are unreachable from a runner |
 | Grant `delete` / edit `/etc/zot/config.json` | **Rejected, out of scope** | The write-surface deadlock ADR-172 §3 declines to pretend around |
 | **A `Restart=always` streaming daemon** (this change's first implementation) | **Rejected** | Buys seconds-latency no consumer of this channel can spend — the disk reporter is 5-min, the liveness feeder 60s against a 90s deadline, the probe reads warehouse windows of 12+ min — and pays with the host's first always-on unit on the fleet's sole image-pull path, a host with no in-place execution path and an OOM restart-loop history (#6288). The trade is not latency-vs-complexity but latency-vs-**reversibility**: every daemon failure mode is repairable only by an operator-authorized destructive replace. Measured, not hypothesised — one wrong `ExecStart` path (`/usr/bin/doppler`, which this template never creates) made it a permanent 5s restart loop shipping nothing, and the local `systemd-analyze verify` gate passed it because it resolved against the runner's filesystem. Under cron that same defect is one failed tick per five minutes. The `MemoryMax`/`CPUQuota`/`IOWeight` containment offered in exchange was independently disproven: `IOWeight` is a no-op without BFQ and sits on the wrong cgroup, `RuntimeMaxUse=64M` **raises** the volatile ceiling it was meant to lower, and every cap magnitude survives mutation |
@@ -440,3 +456,84 @@ pressure. Recorded because it is that counter's first real reading, not because 
 An earlier draft called this "comfortably clear of the floor of 7", which compares two unrelated
 counters: `FLOOR_ROWS` is a MINIMUM for `n_envelope` and the probe never applies it to `n_drop`.
 The meaningful comparison for a drop count is the shipper's per-tick rate cap, not the floor.
+
+## Amendment 2026-10 — one-pass, newest-boot grading (#8278)
+
+**The defect.** The probe's exit-1 arm graded credential-shaped leaks over an unscoped 30-minute
+window, while its delivery evidence came from a *separate* `SOLEUR_ZOT_LOG_BOOT` marker query over
+`--since 72h`. A window straddling a host replace mixed two host generations: delivery proven on
+the newest boot, a leak graded on rows the dead boot emitted — a public FAIL (or a close) resting
+on evidence about a host that no longer exists. Same defect class as #7960, which PR #8272 fixed
+on the sibling channel by reading proof and grade from one boot-scoped pass; ADR-211's decision is
+applied here to this channel, so no new ADR was written.
+
+**The shape now.** One bounded span feeds every verdict-keyed value. Both channels
+(`SOLEUR_ZOT_LOG`, `SOLEUR_ZOT_DISK`) decode to `(dt, tag, message)` TSVs — `dt` is the boundary
+key because it is ingest-assigned, the one field the producer cannot set — merge, sort ascending,
+and feed ONE awk pass. The pass derives `NEWEST_BOOT` from the newest **host-scoped stamped** row
+(control rows read on the trusted head before ` zot_last_err=`; `SOLEUR_ZOT_LOG_BOOT` markers via <!-- markdownlint-disable-line MD038 -->
+their own `host=`; `SOLEUR_ZOT_LOG_DROPPED` rows carry `boot_id` but no `host=`, so they
+corroborate and count on a boot already derived but can never select one), takes `B0` as the
+earliest stamped dt on that boot — an in-window marker tightens it to ~provision time — and emits
+one summary line: boot scope, delivery fields, every count, and the leak grade over envelope rows
+at `dt >= B0` only. Any `grep`/`tail` read of the raw sets outside the pass is the defect the
+probe's Guard Contract forbids. The separate `boot_marker(1)` / `--since 72h` delivery arm is
+retired; in-window markers arrive through the same `SOLEUR_ZOT_LOG` result set and now tighten the
+boundary rather than stand as independent proof.
+
+**Exit 3, CANNOT ESTABLISH.** Three fail-loud states were added and none may collapse into an
+exit-2 wait or a false verdict: no usable `boot_id` on any host-scoped stamped row (the boot
+cannot be derived); a missing or non-integer pass summary (a probe defect, never a vacuous
+zero-count); and credential-shaped envelope rows *outside* the gradable span (`ungraded…rows=N`,
+named — unattributed evidence is neither FAIL nor PASS). The row-count floor is computed over the
+bounded span `min(WINDOW_MIN, B0→newest-dt minutes)`, removing the systematic false
+`below_expected_floor` every replace used to post for ~30 minutes. Residual, recorded not hidden:
+boundary precision is ±5 min (heartbeat cadence), so a row in the (replace, first-heartbeat) gap
+without an in-window marker is conservatively ungraded rather than mis-graded.
+
+**Why this landed now.** #8278 was labelled `blocked` with a "re-evaluate when the script is
+re-enrolled" clause, and three dated triage re-checks (the issue's own comment thread) confirmed the defect latent
+under deferral. The operator elected to fix it ahead of re-enrollment — which is the ordering the
+issue itself prescribes ("must land in the same PR as, or before, any PR that adds a directive"),
+since a probe enrolled while unscoped would grade the next real straddle over mixed generations.
+
+**Review-round hardening (PR #9607 panel).** The ten-seat review found the classification
+predicate triplicated — and already drifted: boot selection and boundary derivation admitted any
+control-channel row, while counting required the offset-0 `SOLEUR_ZOT_DISK ` anchor. A row that <!-- markdownlint-disable-line MD038 -->
+merely *mentions* the marker (the control grep is a substring LIKE) could therefore pick the
+evidence base. The rewrite hoists classification into the main awk rule (`Rcls`/`Risctl`/`Rhost`/
+`Rboot`), so selection, bounding, and counting read one computed classification. The same round
+added: a producer-freshness gate (`producer_silent`, two missed */5 ticks — residue must never
+satisfy the floor), a total jq decode filter (a malformed-JSON-shape row can never halt the
+stream), a keyed `k=v` summary in place of a 21-field positional read, per-occurrence
+`Authorization:` scanning (a decoy mask can no longer cancel a real value on the same row), a
+substance check on the Doppler-shape run (dot padding cannot post a public FAIL), value clamping
+on producer fields echoed to the public comment, and an `n_other` bucket so unclassifiable grep
+hits are counted rather than invisible.
+
+## Amendment 2026-10-10 — the upload error line is classified on `func`, through the upload sub-quota (#9373)
+
+Append-only; the sections above are unchanged. Three statements above stop being literally true and
+are corrected here rather than edited in place.
+
+- **A consumer must anchor on the parsed `message` field** (Consequences, the "shipped payload is
+  not JSON" bullet) remains the rule for the gc classes and the crash classes. It does not hold for the PatchBlobUpload
+  error line: zot's real line carries `message:unexpected error, removing .uploads/ files` and names
+  the handler only in the parsed top-level `func`. The earlier `PatchBlobUpload*` message-prefix arm
+  (07cf8ebcb0, #7444) matched zero real rows, so the line was rate-capped while the suite stayed
+  green over a dead arm. `is_cap_exempt` now takes the parsed `func` as a second argument and
+  classifies on the suffix `(*RouteHandler).PatchBlobUpload`. `func` is set by zot on every line, so
+  the arm matches its VALUE; request-derived bytes are JSON-escaped into string fields and journald
+  fragments do not parse, so they cannot spell a top-level `func` (T21 S6, S7, S9).
+- **"The four classes are cap-exempt against their own 17-per-tick ceiling"** and **"the four
+  measured evidence classes cap-exempt"** (both Consequences) are now:
+  the gc classes, the crash classes and the boot config dump use the shared 17-slot lane; the
+  func-keyed upload error line is admitted through the 8-slot upload sub-quota (#7555) that already
+  existed inside that lane, via a tri-state return (0 shared lane, 2 upload sub-quota, 1 ordinary).
+  Message arms are tested first, so a crash-class message logged from inside the upload handler
+  keeps the shared lane (T21 S10).
+- **Cost, recorded because it was not before:** a failed upload emits two rows (the error line and
+  the paired HTTP 5xx row) and both draw from the same 8 slots, so about 4 failed uploads in a tick
+  exhaust the sub-quota; the overflow is accounted as `reason=exempt_cap`, never silent, and the
+  #7556 probe reads any non-`rate_cap` drop as TRANSIENT, never PASS (T21 S3b pins the sharing). The
+  caps were deliberately not retuned: each retune is another cloud-init edit and another host replace.

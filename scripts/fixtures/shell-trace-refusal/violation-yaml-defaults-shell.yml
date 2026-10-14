@@ -1,0 +1,16 @@
+# Rule E must fire ONCE. The job's `defaults.run.shell` is bash and the step names none.
+name: fixture-defaults-shell
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: compliant first
+        run: |
+          curl --disable --noproxy '*' -sS --config - "$SINK_URL" < <(printf 'header = "Authorization: Bearer %s"\n' "$FIXTURE_TOKEN")
+      - name: offending step under a bash default
+        run: |
+          curl --disable --noproxy '*' -sS -H "Authorization: Bearer ${FIXTURE_TOKEN}" "$SINK_URL"

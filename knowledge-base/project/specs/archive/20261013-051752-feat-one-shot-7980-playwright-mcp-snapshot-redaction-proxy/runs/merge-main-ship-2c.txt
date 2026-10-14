@@ -1,0 +1,246 @@
+╭──────────────────────────────────────╮
+│ 🥊 lefthook v2.1.6  hook: pre-commit │
+╰──────────────────────────────────────╯
+│  rust-format (skip) no matching staged files
+│  rust-lint-fix (skip) no matching staged files
+│  rust-lint-check (skip) no matching staged files
+┃  gitleaks-staged ❯ 
+
+[90m10:27AM[0m [32mINF[0m [1m1 commits scanned.[0m
+[90m10:27AM[0m [32mINF[0m [1mscanned ~1864458 bytes (1.86 MB) in 274ms[0m
+[90m10:27AM[0m [32mINF[0m [1mno leaks found[0m
+
+┃  lint-fixture-content ❯ 
+
+
+┃  markdown-lint ❯ 
+
+markdown-lint: 23 file(s) clean.
+
+┃  agents-compound-sync ❯ 
+
+lint-agents-compound-sync: OK (rule-threshold=115, warn=44000, reject=46000, per-rule-cap=600, 13 sites)
+
+┃  rule-id-lint ❯ 
+
+
+┃  lint-infra-no-human-steps ❯ 
+
+OK: no human-run infra steps in 15 scanned file(s)
+
+┃  migrated-rule-id-lint ❯ 
+
+lint-migrated-rule-ids: OK (7 rows checked, 7 banners matched)
+
+┃  rule-budget-lint ❯ 
+
+[OK] B_ALWAYS=42640
+
+┃  web-platform-typecheck ❯ 
+
+npm notice run soleur-web-platform@0.0.1 npx
+npm notice run 'tsc' --noEmit
+
+┃  conversations-update-callsites ❯ 
+
+OK: no direct conversation updates outside the wrapper.
+
+│  scheduled-show-full-output-lint (skip) no files for inspection
+┃  agents-enforcement-tag-lint ❯ 
+
+OK: 13 hook + 24 skill tag(s) resolved via 25 anchor check(s)
+
+┃  client-pii-grep ❯ 
+
+
+│  bun-test (skip) by condition
+┃  vendor-pin-integrity ❯ 
+
+
+│  gdpr-gate-advisory (skip) no files for inspection
+┃  vendor-pin-integrity-legal-generate ❯ 
+
+
+┃  plugin-component-test ❯ 
+
+bun test v1.3.11 (af24e281)
+npm notice run npx
+npm notice run 'eleventy' --output=/tmp/seo-aeo-drift-8osFrZ
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/feed.xml from ./plugins/soleur/docs/eleventy-plugin-feed-soleur-blog-atom.njk (virtual)
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/llms.txt from ./plugins/soleur/docs/llms.txt.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/pages/agents.html from ./plugins/soleur/docs/page-redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/sitemap.xml from ./plugins/soleur/docs/sitemap.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/articles/index.html from ./plugins/soleur/docs/pages/articles.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/2026-03-16-soleur-vs-anthropic-cowork/index.html from ./plugins/soleur/docs/blog/redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/pages/skills.html from ./plugins/soleur/docs/page-redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/2026-03-17-soleur-vs-notion-custom-agents/index.html from ./plugins/soleur/docs/blog/redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/pages/vision.html from ./plugins/soleur/docs/page-redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/2026-03-19-soleur-vs-cursor/index.html from ./plugins/soleur/docs/blog/redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/pages/community.html from ./plugins/soleur/docs/page-redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/2026-03-24-ai-agents-for-solo-founders/index.html from ./plugins/soleur/docs/blog/redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/pages/getting-started.html from ./plugins/soleur/docs/page-redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/2026-03-24-vibe-coding-vs-agentic-engineering/index.html from ./plugins/soleur/docs/blog/redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/pages/legal.html from ./plugins/soleur/docs/page-redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/2026-03-26-soleur-vs-polsia/index.html from ./plugins/soleur/docs/blog/redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/pages/pricing.html from ./plugins/soleur/docs/page-redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/2026-03-29-credential-helper-isolation-sandboxed-environments/index.html from ./plugins/soleur/docs/blog/redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/pages/changelog.html from ./plugins/soleur/docs/page-redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/2026-03-29-your-ai-team-works-from-your-actual-codebase/index.html from ./plugins/soleur/docs/blog/redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/pages/legal/privacy-policy.html from ./plugins/soleur/docs/page-redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/2026-03-31-soleur-vs-paperclip/index.html from ./plugins/soleur/docs/blog/redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/pages/legal/terms-and-conditions.html from ./plugins/soleur/docs/page-redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/2026-04-21-one-person-billion-dollar-company/index.html from ./plugins/soleur/docs/blog/redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/pages/legal/terms-of-service.html from ./plugins/soleur/docs/page-redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/2026-04-21-soleur-vs-devin/index.html from ./plugins/soleur/docs/blog/redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/pages/legal/cookie-policy.html from ./plugins/soleur/docs/page-redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/2026-04-22-billion-dollar-solo-founder-stack/index.html from ./plugins/soleur/docs/blog/redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/pages/legal/gdpr-policy.html from ./plugins/soleur/docs/page-redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/2026-04-23-agents-that-use-apis-not-browsers/index.html from ./plugins/soleur/docs/blog/redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/pages/legal/acceptable-use-policy.html from ./plugins/soleur/docs/page-redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/2026-04-23-knowledge-compounding-in-ai-development/index.html from ./plugins/soleur/docs/blog/redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/pages/legal/data-protection-disclosure.html from ./plugins/soleur/docs/page-redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/2026-04-30-best-claude-code-plugins-2026/index.html from ./plugins/soleur/docs/blog/redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/pages/legal/individual-cla.html from ./plugins/soleur/docs/page-redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/2026-05-05-soleur-vs-tanka/index.html from ./plugins/soleur/docs/blog/redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/pages/legal/corporate-cla.html from ./plugins/soleur/docs/page-redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/2026-05-07-soleur-vs-crewai/index.html from ./plugins/soleur/docs/blog/redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/pages/legal/disclaimer.html from ./plugins/soleur/docs/page-redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/2026-05-12-company-as-a-service-platform/index.html from ./plugins/soleur/docs/blog/redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/what-is-company-as-a-service/index.html from ./plugins/soleur/docs/page-redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/2026-05-14-how-to-run-every-department-with-ai-agents/index.html from ./plugins/soleur/docs/blog/redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/2026-05-15-skill-libraries-vs-workflow-plugins/index.html from ./plugins/soleur/docs/blog/redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/2026-06-01-claude-code-plugin-vs-skill-vs-mcp/index.html from ./plugins/soleur/docs/blog/redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/2026-06-12-loop-engineering-for-your-whole-company/index.html from ./plugins/soleur/docs/blog/redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/2026-06-15-best-ai-tools-for-solo-founders-2026/index.html from ./plugins/soleur/docs/blog/redirects.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/index.html from ./plugins/soleur/docs/index.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/about/index.html from ./plugins/soleur/docs/pages/about.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/agents/index.html from ./plugins/soleur/docs/pages/agents.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/compare/soleur-vs-cursor/index.html from ./plugins/soleur/docs/pages/compare-soleur-vs-cursor.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/compare/soleur-vs-devin/index.html from ./plugins/soleur/docs/pages/compare-soleur-vs-devin.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/getting-started/index.html from ./plugins/soleur/docs/pages/getting-started.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/pricing/index.html from ./plugins/soleur/docs/pages/pricing.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/skills/index.html from ./plugins/soleur/docs/pages/skills.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/vision/index.html from ./plugins/soleur/docs/pages/vision.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/goal-primitive/index.html from ./plugins/soleur/docs/pages/goal-primitive.md (njk)
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/legal/acceptable-use-policy/index.html from ./plugins/soleur/docs/pages/legal/acceptable-use-policy.md (njk)
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/legal/cookie-policy/index.html from ./plugins/soleur/docs/pages/legal/cookie-policy.md (njk)
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/legal/corporate-cla/index.html from ./plugins/soleur/docs/pages/legal/corporate-cla.md (njk)
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/legal/data-protection-disclosure/index.html from ./plugins/soleur/docs/pages/legal/data-protection-disclosure.md (njk)
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/legal/disclaimer/index.html from ./plugins/soleur/docs/pages/legal/disclaimer.md (njk)
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/legal/gdpr-policy/index.html from ./plugins/soleur/docs/pages/legal/gdpr-policy.md (njk)
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/legal/individual-cla/index.html from ./plugins/soleur/docs/pages/legal/individual-cla.md (njk)
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/legal/privacy-policy/index.html from ./plugins/soleur/docs/pages/legal/privacy-policy.md (njk)
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/legal/terms-and-conditions/index.html from ./plugins/soleur/docs/pages/legal/terms-and-conditions.md (njk)
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/404.html from ./plugins/soleur/docs/404.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/agentic-engineering/index.html from ./plugins/soleur/docs/pages/agentic-engineering.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/ai-agents-for-solo-founders/index.html from ./plugins/soleur/docs/pages/ai-agents-for-solo-founders.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/ai-cmo/index.html from ./plugins/soleur/docs/pages/ai-cmo.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/ai-cto/index.html from ./plugins/soleur/docs/pages/ai-cto.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/index.html from ./plugins/soleur/docs/pages/blog.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/changelog/index.html from ./plugins/soleur/docs/pages/changelog.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/claude-code-plugins/index.html from ./plugins/soleur/docs/pages/claude-code-plugins.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/community/index.html from ./plugins/soleur/docs/pages/community.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/company-as-a-service/index.html from ./plugins/soleur/docs/pages/company-as-a-service.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/glossary/index.html from ./plugins/soleur/docs/pages/glossary.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/legal/index.html from ./plugins/soleur/docs/pages/legal.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/solo-founder-ai-stack/index.html from ./plugins/soleur/docs/pages/solo-founder-ai-stack.njk
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/soleur-vs-anthropic-cowork/index.html from ./plugins/soleur/docs/blog/2026-03-16-soleur-vs-anthropic-cowork.md (njk)
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/soleur-vs-notion-custom-agents/index.html from ./plugins/soleur/docs/blog/2026-03-17-soleur-vs-notion-custom-agents.md (njk)
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/soleur-vs-cursor/index.html from ./plugins/soleur/docs/blog/2026-03-19-soleur-vs-cursor.md (njk)
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/ai-agents-for-solo-founders/index.html from ./plugins/soleur/docs/blog/2026-03-24-ai-agents-for-solo-founders.md (njk)
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/vibe-coding-vs-agentic-engineering/index.html from ./plugins/soleur/docs/blog/2026-03-24-vibe-coding-vs-agentic-engineering.md (njk)
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/soleur-vs-polsia/index.html from ./plugins/soleur/docs/blog/2026-03-26-soleur-vs-polsia.md (njk)
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/credential-helper-isolation-sandboxed-environments/index.html from ./plugins/soleur/docs/blog/2026-03-29-credential-helper-isolation-sandboxed-environments.md (njk)
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/your-ai-team-works-from-your-actual-codebase/index.html from ./plugins/soleur/docs/blog/2026-03-29-your-ai-team-works-from-your-actual-codebase.md (njk)
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/soleur-vs-paperclip/index.html from ./plugins/soleur/docs/blog/2026-03-31-soleur-vs-paperclip.md (njk)
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/one-person-billion-dollar-company/index.html from ./plugins/soleur/docs/blog/2026-04-21-one-person-billion-dollar-company.md (njk)
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/soleur-vs-devin/index.html from ./plugins/soleur/docs/blog/2026-04-21-soleur-vs-devin.md (njk)
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/billion-dollar-solo-founder-stack/index.html from ./plugins/soleur/docs/blog/2026-04-22-billion-dollar-solo-founder-stack.md (njk)
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/agents-that-use-apis-not-browsers/index.html from ./plugins/soleur/docs/blog/2026-04-23-agents-that-use-apis-not-browsers.md (njk)
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/knowledge-compounding-in-ai-development/index.html from ./plugins/soleur/docs/blog/2026-04-23-knowledge-compounding-in-ai-development.md (njk)
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/best-claude-code-plugins-2026/index.html from ./plugins/soleur/docs/blog/2026-04-30-best-claude-code-plugins-2026.md (njk)
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/soleur-vs-tanka/index.html from ./plugins/soleur/docs/blog/2026-05-05-soleur-vs-tanka.md (njk)
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/soleur-vs-crewai/index.html from ./plugins/soleur/docs/blog/2026-05-07-soleur-vs-crewai.md (njk)
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/company-as-a-service-platform/index.html from ./plugins/soleur/docs/blog/2026-05-12-company-as-a-service-platform.md (njk)
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/how-to-run-every-department-with-ai-agents/index.html from ./plugins/soleur/docs/blog/2026-05-14-how-to-run-every-department-with-ai-agents.md (njk)
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/skill-libraries-vs-workflow-plugins/index.html from ./plugins/soleur/docs/blog/2026-05-15-skill-libraries-vs-workflow-plugins.md (njk)
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/claude-code-plugin-vs-skill-vs-mcp/index.html from ./plugins/soleur/docs/blog/2026-06-01-claude-code-plugin-vs-skill-vs-mcp.md (njk)
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/loop-engineering-for-your-whole-company/index.html from ./plugins/soleur/docs/blog/2026-06-12-loop-engineering-for-your-whole-company.md (njk)
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/best-ai-tools-for-solo-founders-2026/index.html from ./plugins/soleur/docs/blog/2026-06-15-best-ai-tools-for-solo-founders-2026.md (njk)
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/case-study-brand-guide-creation/index.html from ./plugins/soleur/docs/blog/case-study-brand-guide-creation.md (njk)
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/case-study-business-validation/index.html from ./plugins/soleur/docs/blog/case-study-business-validation.md (njk)
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/case-study-competitive-intelligence/index.html from ./plugins/soleur/docs/blog/case-study-competitive-intelligence.md (njk)
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/case-study-legal-document-generation/index.html from ./plugins/soleur/docs/blog/case-study-legal-document-generation.md (njk)
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/case-study-operations-management/index.html from ./plugins/soleur/docs/blog/case-study-operations-management.md (njk)
+[11ty] Writing /tmp/seo-aeo-drift-8osFrZ/blog/why-most-agentic-tools-plateau/index.html from ./plugins/soleur/docs/blog/why-most-agentic-tools-plateau.md (njk)
+[11ty] Copied 44 Wrote 107 files in 0.47 seconds (v3.1.5)
+
+plugins/soleur/test/community-stats-data.test.ts:
+[communityStats.js] Discord invite API failed, continuing without Discord stats: discord down
+
+plugins/soleur/test/plugin-version-fallback.test.ts:
+[github.js] GitHub API failed, using fallback: network down
+[github.js] GitHub API failed, using fallback: GitHub API 503
+
+plugins/soleur/test/github-stats-data.test.ts:
+[githubStats.js] GitHub API failed, using fallback: network down
+
+plugins/soleur/test/agent-originality.test.ts:
+[agent-originality] 41.66% similar: agent-finder <-> functional-discovery  (>= WARN)
+
+plugins/soleur/test/bot-fixture-exports.test.ts:
+[signin] wrote storageState to /tmp/bot-signin-test-NSPYRC/storage-state.json (cookie sb-testref-auth-token for app.example.com)
+
+plugins/soleur/test/harness-model-map.test.ts:
+resolveModelTier: unmapped harness unknown, passing inherit for tier standard
+
+plugins/soleur/test/ux-audit/bot-fixture.test.ts:
+[bot-fixture.test] skipping integration suite — missing env: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, UX_AUDIT_BOT_EMAIL, UX_AUDIT_BOT_PASSWORD, NEXT_PUBLIC_SUPABASE_ANON_KEY
+
+ 2738 pass
+ 9 skip
+ 1 todo
+ 0 fail
+ 7751 expect() calls
+Ran 2748 tests across 74 files. [64.21s]
+
+┃  skill-security-scan-advisory ❯ 
+
+skill-security-scan-advisory: REVIEW on plugins/soleur/skills/plan/SKILL.md
+
+│  terraform-fmt (skip) no files for inspection
+│  kb-structure-guard (skip) no matching staged files
+┃  c4-model-regenerate ❯ 
+
+Regenerated /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-7980-playwright-mcp-snapshot-redaction-proxy/knowledge-base/engineering/architecture/diagrams/model.likec4.json (74 elements, 150 relations, 76 views)
+NOTE: .c4 model changed but c4-model.md was not staged — review its ## Notes prose for staleness (advisory; commit not blocked).
+
+┃  generate-kb-index ❯ 
+
+Generated /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-7980-playwright-mcp-snapshot-redaction-proxy/knowledge-base/INDEX.md (6560 files indexed)
+Generated /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-7980-playwright-mcp-snapshot-redaction-proxy/knowledge-base/kb-tags.txt (4297 tags) and /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-7980-playwright-mcp-snapshot-redaction-proxy/knowledge-base/kb-categories.txt (79 categories)
+
+│  distribution-content-liquid-guard (skip) no files for inspection
+                                      
+  ────────────────────────────────────
+summary: (done in 87.78 seconds)      
+✔️ gitleaks-staged (0.51 seconds)
+✔️ lint-fixture-content (0.04 seconds)
+✔️ markdown-lint (1.53 seconds)
+✔️ agents-compound-sync (0.17 seconds)
+✔️ rule-id-lint (0.05 seconds)
+✔️ lint-infra-no-human-steps (0.10 seconds)
+✔️ migrated-rule-id-lint (1.80 seconds)
+✔️ rule-budget-lint (0.03 seconds)
+✔️ web-platform-typecheck (8.81 seconds)
+✔️ conversations-update-callsites (0.05 seconds)
+✔️ agents-enforcement-tag-lint (0.07 seconds)
+✔️ client-pii-grep (0.01 seconds)
+✔️ vendor-pin-integrity (0.05 seconds)
+✔️ vendor-pin-integrity-legal-generate (0.08 seconds)
+✔️ plugin-component-test (64.24 seconds)
+✔️ skill-security-scan-advisory (3.88 seconds)
+✔️ c4-model-regenerate (2.85 seconds)
+✔️ generate-kb-index (3.42 seconds)
+Recorded resolution for 'knowledge-base/engineering/architecture/diagrams/model.likec4.json'.
+RC=0

@@ -38,23 +38,28 @@ RUN npm run build:server
 # Compile next.config.ts to .mjs so the runner stage doesn't need TypeScript
 RUN ./node_modules/.bin/esbuild next.config.ts --bundle --format=esm --platform=node --external:@sentry/nextjs --outfile=next.config.mjs
 
-# Stage 3: Production image with only runtime artifacts
-FROM node:22-slim@sha256:4f77a690f2f8946ab16fe1e791a3ac0667ae1c3575c3e4d0d4589e9ed5bfaf3d AS runner
+# Stage 3: Global CLI tools (the three `npm install -g` layers the runner needs).
+# A stage of their own, FROM the pinned base image (never from `builder`, whose build ARGs
+# declare SENTRY_AUTH_TOKEN), so that CI can build exactly this stage on every pull request
+# (`web-platform-build`, about a minute, npm registry only) instead of a full runner build
+# that also needs apt, the rolling cli.github.com repo and the Playwright CDN. `runner` is
+# FROM this stage, so the move alone changes no layer; editing an install line re-keys that layer and
+# everything after it once. Tested for structure in test/c4-likec4-version-pin.test.ts.
+FROM node:22-slim@sha256:4f77a690f2f8946ab16fe1e791a3ac0667ae1c3575c3e4d0d4589e9ed5bfaf3d AS cli-tools
 
-# CACHE-ORDERING INVARIANT (gha layer cache, reusable-release.yml cache-to=type=gha):
-# the heavy runner-stage installs below (claude-code, likec4, apt, gh, playwright)
-# MUST stay ABOVE the `ENV BUILD_VERSION`/`ENV BUILD_SHA` block — BUILD_SHA changes
-# every commit and busts every layer beneath it. Keeping these installs above it
-# is what makes them cache hits across releases. Do NOT move an `ENV BUILD_*` (or
-# any per-commit-volatile line) above this point. (Recovering `npm ci --omit=dev`,
-# which sits below BUILD_SHA, is tracked as #5055.)
 # Install Claude Code CLI (needed by Agent SDK)
 # KEEP IN SYNC with the `@anthropic-ai/claude-code` pin in package.json: the
 # CLI carries a bundled per-model table, and a model ID absent from it silently
 # falls back to half the max_tokens (measured 64000 → 32000 on #6934), so a
-# stale pin here degrades every cron that passes --model. This was skewed at
-# 2.1.79 vs package.json's 2.1.197 until #6934.
-RUN npm install -g @anthropic-ai/claude-code@2.1.219
+# stale pin degrades whichever cron resolves this copy. This was skewed at
+# 2.1.79 vs package.json's 2.1.197 until #6934. The crons spawn the package.json
+# copy (/app/node_modules/.bin/claude, installed by `npm ci` below); this global
+# install is the fallback path. Since #8603
+# test/server/inngest/claude-cli-pin-knows-models.test.ts enforces that the two
+# pins agree and that the installed bundle knows every tier model id.
+# No `--before` on this line: the tree is the package plus its exact-pinned platform
+# packages and nothing floating, asserted offline in claude-cli-pin-knows-models.test.ts.
+RUN npm install -g @anthropic-ai/claude-code@2.1.293
 
 # LikeC4 CLI for runtime diagram re-render after a Code-tab Save (#4964).
 # Global install (NOT a package.json dep) — same pattern as the line above —
@@ -64,9 +69,48 @@ RUN npm install -g @anthropic-ai/claude-code@2.1.219
 # vite/esbuild/bundle-require never enter prod deps.
 # Pinned to 1.50.0 to MATCH the client renderer @likec4/core/@likec4/diagram@1.50.0
 # (package.json) so `export json` emits the exact schema LikeC4Model.create reads.
-# Lays out via bundled graphviz-wasm — no native `dot` binary needed (verified
-# 2026-06-05: `likec4@1.50.0 export json` exits 0 with no dot on PATH, ~0.8s).
-RUN npm install -g likec4@1.50.0
+# Lays out via bundled graphviz-wasm. server/c4-render.ts passes `--no-use-dot`:
+# inside a container likec4 otherwise defaults to the native `dot` binary, which
+# this image does not have, and exports a model with ZERO views (exit 0, ~1 s).
+# With wasm layout an 82-view model takes 4-7 s at 2 CPUs (#8696, measured
+# 2026-09-24). The child runs inside bubblewrap (installed below), launched by
+# /usr/bin/bash -> choom -> nice -> bwrap -> prlimit -> sh, all from the base
+# image (bash, util-linux, coreutils, dash); in production each must resolve
+# under /usr or the render refuses to run.
+# `--before` bounds the dependency tree to what was published before that date (the pair with the
+# version, #9300; recency only, the registry is still trusted at install time). The date must equal
+# LIKEC4_BEFORE in plugins/soleur/scripts/render-c4-model.sh; see BUMPING LIKEC4 there. The install
+# must be exactly the pinned form on one logical line: c4-likec4-version-pin.test.ts anchors it.
+# `--ignore-scripts`: the only install script that runs on linux in the tree is esbuild's postinstall
+# (fsevents has one too but is darwin-only), and esbuild runs from its @esbuild/<platform> optional
+# dependency without it. Every CI and monitor site carries the
+# same flag, so the tree and install mode the tests validate are the tree and install mode shipped.
+# Do NOT add it to the claude-code line above: its postinstall places the native binary, and without
+# it the CLI reports "claude native binary not installed".
+RUN npm install -g likec4@1.50.0 --before=2026-09-28 --ignore-scripts
+
+# vitest for the deploy-time cross-workspace isolation canary probe (#2640).
+# ci-deploy.sh `docker exec`s `vitest run --config test/vitest.canary.config.ts`
+# inside the canary container before the prod swap; the host has no node and the
+# canary image is the only place the real artifact's sandbox can be exercised.
+# Global install (NOT a package.json devDep copy) — same pattern as likec4 above.
+# KEEP IN SYNC with the lockfile's node_modules/vitest version: the pin is
+# asserted by test/dockerfile-vitest-version-pin.test.ts so the canary runs the
+# vitest the suite was authored against. `--before` bounds the floating
+# transitive tree to the day after vitest 4.1.11's publish date (2026-08-18);
+# `--ignore-scripts` matches the likec4 install mode.
+RUN npm install -g vitest@4.1.11 --before=2026-08-19 --ignore-scripts
+
+# Stage 4: Production image with only runtime artifacts
+FROM cli-tools AS runner
+
+# CACHE-ORDERING INVARIANT (gha layer cache, reusable-release.yml cache-to=type=gha):
+# the heavy installs (claude-code and likec4 in the `cli-tools` ancestor above, then
+# apt, gh and playwright below) MUST stay ABOVE the `ENV BUILD_VERSION`/`ENV BUILD_SHA`
+# block — BUILD_SHA changes every commit and busts every layer beneath it. Keeping
+# these installs above it is what makes them cache hits across releases. Do NOT move
+# an `ENV BUILD_*` (or any per-commit-volatile line) above this point. (Recovering
+# `npm ci --omit=dev`, which sits below BUILD_SHA, is tracked as #5055.)
 
 # Install git (workspace provisioning) + bubblewrap/socat (Agent SDK sandbox)
 # ca-certificates: required for git HTTPS clone — node:22-slim omits it (#1645)
@@ -85,9 +129,24 @@ RUN npm install -g likec4@1.50.0
 # GHA runner (jq preinstalled) into this image without porting the dependency,
 # so every scheduled post failed with "jq is required but not installed" and
 # routed to a per-post fallback issue (e.g. #4858). Do NOT remove jq.
+# `openssh-client` is load-bearing for git-data (#5914): git-auth.ts spawns `ssh`
+# directly (sshWithPrivateKeyAuth) and via GIT_SSH_COMMAND (gitWithPrivateKeyAuth).
+# git only *Recommends* it, so --no-install-recommends silently drops it and every
+# Art. 17 git-data erasure reads ENOENT. Guarded by test/dockerfile-runner-ssh-client.test.ts
+# and the `git_data_ssh_client=` startup line. Do NOT remove openssh-client.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates git bubblewrap socat qpdf jq \
+    ca-certificates git bubblewrap socat qpdf jq openssh-client libcap2-bin \
     && rm -rf /var/lib/apt/lists/*
+
+# #5863 arm F — the mountns-only outer session wrap deliberately carries ZERO
+# --unshare-* flags: the vendored inner sandbox unconditionally unshares
+# user+pid+net and cannot nest under an outer userns (measured 2026-10-08;
+# see knowledge-base/project/plans/archive/20261013-062704-2026-10-08-feat-tenant-fs-isolation-plan.md
+# Phase 0). NOTE: the file-cap elevation arm was reverted — released bwrap
+# (0.8–0.12) DIES on `real_uid != 0 && has_caps()`; upstream has no file-cap
+# support, so a cap'd /usr/bin/bwrap is poison to every bwrap call in the
+# container (v0.333.1 canary_sandbox_failed). Elevation arm is a follow-up
+# decision (setuid is the only non-userns path upstream supports).
 
 # GitHub CLI (needed by cron-follow-through-monitor gh label/issue commands
 # and event-ship-merge gh pr checkout). Not in default Debian repos.
@@ -148,8 +207,12 @@ ARG BUILD_VERSION=dev
 ENV BUILD_VERSION=$BUILD_VERSION
 
 # Git commit SHA injected at build time for /health endpoint verification.
-# Asserted post-deploy by web-platform-release.yml against ${{ github.sha }}
-# to catch bad-tag → bad-image associations (#3409).
+# Asserted post-deploy by web-platform-release.yml against
+# ${{ needs.resolve-target.outputs.head_sha }} to catch bad-tag → bad-image
+# associations (#3409). It was `${{ github.sha }}` until the deploy chain moved
+# onto the workflow_run arm (#5806, ADR-217), where `github.sha` is the default
+# branch head rather than the SHA CI verified — `resolve-target` carries the
+# authoritative one.
 ARG BUILD_SHA=dev
 ENV BUILD_SHA=$BUILD_SHA
 
@@ -182,7 +245,59 @@ COPY --from=builder /app/dist/server ./dist/server
 # bwrap) with no runtime TypeScript/SDK dependency. The fixture is version-
 # consistent with this image's SDK because both are baked at build time.
 COPY --from=builder /app/scripts/sandbox-canary.mjs ./scripts/sandbox-canary.mjs
+# GitHub App key acceptance probe (#8609): ci-deploy.sh `docker exec`s it in the canary before the
+# swap and the boot path in the booted container. Standalone node:crypto + fetch, like the canary.
+COPY --from=builder /app/scripts/github-app-key-probe.mjs ./scripts/github-app-key-probe.mjs
 COPY --from=builder /app/infra/sandbox-canary-argv.json ./infra/sandbox-canary-argv.json
+
+# Per-dispatch egress forwarder (#9534, fix #9952): spawnEgressForwarder()
+# resolves server/egress-forwarder.ts › forwarderPath() to
+# process.cwd()/infra/egress-forwarder.mjs — cwd is /app here. The
+# /opt/soleur/host-scripts/ copy below serves cloud-init extraction only;
+# without this line an entitled session's spawn hits ENOENT and degrades to
+# zero egress (fail-closed, silent).
+COPY --from=builder /app/infra/egress-forwarder.mjs ./infra/egress-forwarder.mjs
+
+# Cross-workspace isolation canary payload (#2640). Three exact files — the
+# deterministic direct-bwrap tier of test/sandbox-isolation.test.ts runs inside
+# the canary via `docker exec … vitest run` (SOLEUR_ISOLATION_TIERS=direct keeps
+# the live-API query tier out of the deploy path). `vitest.canary.config.ts` is
+# a minimal standalone config because the repo vitest.config.ts loads files
+# that stay pruned from the image. Each is re-included from the `test/` prune by
+# an exact-path .dockerignore bang — no `!test/` directory bang (it cascades).
+COPY --from=builder /app/test/sandbox-isolation.test.ts ./test/sandbox-isolation.test.ts
+COPY --from=builder /app/test/helpers/sandbox-isolation-fixtures.ts ./test/helpers/sandbox-isolation-fixtures.ts
+COPY --from=builder /app/test/vitest.canary.config.ts ./test/vitest.canary.config.ts
+
+# The vitest config bundler (`configLoader: bundle`, the default) writes its
+# intermediate .mjs to the nearest node_modules/.vite-temp before importing it
+# (fallback: the config's own dir — /app/test, root-owned, EACCES). The
+# deploy-time probe `docker exec`s vitest as USER soleur with /app and
+# /app/test root-owned, and /app/package.json is type:module so the ESM
+# temp-write path is taken — without a baked soleur-writable .vite-temp the
+# probe dies at "failed to load config" before collecting a single test
+# (v0.335.5 prod verdict, #9860). Must come after `npm ci --omit=dev`, which
+# recreates node_modules/ wholesale.
+RUN install -d -o 1001 -g 1001 -m 0755 /app/node_modules/.vite-temp
+
+# #5863 outer-wrap canary arm: the self-authored outer mount-table fixture
+# (pinned to buildOuterWrapArgv output by the Guard-2 test) plus the shared
+# isolation payload --replay-outer pipes into `bash -s` inside the wrap.
+COPY --from=builder /app/infra/agent-outer-wrap-argv.json ./infra/agent-outer-wrap-argv.json
+COPY --from=builder /app/scripts/tenant-isolation-inner-probe.sh ./scripts/tenant-isolation-inner-probe.sh
+
+# Shared nested-userns seccomp filter + bwrap PATH shim (#8752). The Agent SDK
+# resolves `bwrap` via PATH and owns its argv (fd-passing contract is set in
+# stone in the vendored binary), so the shim at /usr/local/bin — which precedes
+# /usr/bin in the Debian default PATH — wraps every SDK spawn: it closes
+# inherited fds not referenced by the argv, injects the committed filter via
+# --add-seccomp-fd, then execs the real /usr/bin/bwrap. The C4 render path
+# spawns /usr/bin/bwrap by absolute path (bypassing the shim) and opens this
+# same artifact itself on fd 9. SOLEUR_BWRAP_SECCOMP_BPF (consumed by both
+# wrappers) defaults to the /app/infra path baked here; overriding it to a
+# stale/wrong artifact is a deliberate escape hatch for diagnosis only.
+COPY --from=builder /app/infra/bwrap-userns-clone3-deny.bpf ./infra/bwrap-userns-clone3-deny.bpf
+COPY --from=builder --chmod=0755 /app/infra/bwrap-shim/bwrap /usr/local/bin/bwrap
 
 # Config file (compiled from .ts to .mjs to avoid TypeScript dep at runtime)
 COPY --from=builder /app/next.config.mjs ./next.config.mjs
@@ -227,6 +342,11 @@ COPY --from=builder \
   /app/infra/cron-egress-resolve.timer \
   /app/infra/cron-egress-alarm@.service \
   /app/infra/cron-egress-postapply-assert.sh \
+  /app/infra/egress-gateway-squid.conf \
+  /app/infra/egress-auth-helper.sh \
+  /app/infra/egress-deny-cidrs.txt \
+  /app/infra/egress-gateway-bootstrap.sh \
+  /app/infra/egress-forwarder.mjs \
   /app/infra/cron-egress-enforce-probe.sh \
   /app/infra/hooks.json.tmpl \
   /app/infra/journald-soleur.conf \
@@ -254,8 +374,29 @@ COPY --from=builder \
   /app/infra/inngest-consumer-probe.service \
   /app/infra/inngest-consumer-probe.timer \
   /app/infra/inngest-registry-probe.sh \
+  /app/infra/workspaces-luks-provision.sh \
+  /app/infra/workspaces-luks-reopen.sh \
+  /app/infra/workspaces-luks-reopen.service \
+  /app/infra/workspaces-luks-reopen.timer \
+  /app/infra/workspaces-luks-reopen-failure.service \
+  /app/infra/workspaces-luks-emit.sh \
+  /app/infra/luks-monitor.sh \
+  /app/infra/luks-monitor.service \
+  /app/infra/luks-monitor.timer \
   /opt/soleur/host-scripts/
 RUN chown -R 1001:1001 /opt/soleur
+
+# File-cap audit, AFTER every install layer. Fail-closed: ANY file-cap'd
+# binary aborts the build. Two reasons it stays with the setcap reverted:
+#   1. released bwrap refuses to run when it carries file caps (see the
+#      comment above), so a stray cap grant on bwrap — from a base-image or a
+#      transitive package — would silently break every sandbox invocation;
+#   2. with SYS_ADMIN out of the bounding set a cap'd binary is inert today,
+#      but it becomes an escalation carrier the moment any elevation arm
+#      lands — keep the invariant "zero file-cap'd binaries" instead.
+RUN set -e; \
+    all="$(getcap -r /)"; \
+    [ -z "$all" ] || { echo "FATAL: unexpected file-cap binaries: $all" >&2; exit 1; }
 
 # Non-root user (UID 1001 avoids collision with node:22-slim's built-in node user at UID 1000)
 RUN useradd --no-log-init --uid 1001 -m soleur \

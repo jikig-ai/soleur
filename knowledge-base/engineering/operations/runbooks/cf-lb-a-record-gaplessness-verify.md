@@ -345,7 +345,7 @@ excluded from current burn until then.
 
 - **Design:** ADR-068 §(b) Amendment (2026-07-03, #5887 blue-green ingress) —
   `knowledge-base/engineering/architecture/decisions/ADR-068-multi-host-workspaces-shared-git-data-lease-coordinator.md`
-- **Plan:** `knowledge-base/project/plans/2026-07-03-feat-multi-host-blue-green-ingress-prereqs-plan.md`
+- **Plan:** `knowledge-base/project/plans/archive/20261013-041741-2026-07-03-feat-multi-host-blue-green-ingress-prereqs-plan.md`
 - **Deep-readiness prerequisite (C1):** #5966
 - **Expense ledger:** `knowledge-base/operations/expenses.md` (Cloudflare Load Balancing row)
 - **Related cutover runbooks:** `git-data-luks-cutover-5274.md` (§ Multi-host DNS rewire),

@@ -24,7 +24,7 @@ permalink: legal/cookie-policy/
 
 This Cookie Policy explains how Jikigai ("we," "us," or "our"), operator of Soleur, uses cookies and similar tracking technologies on our documentation website at [soleur.ai](https://soleur.ai), our web platform at [app.soleur.ai](https://app.soleur.ai), and in connection with our Company-as-a-Service platform (the "Service"). This policy is designed to comply with the EU General Data Protection Regulation (GDPR), the ePrivacy Directive, and applicable US privacy laws.
 
-Soleur is a Claude Code plugin providing a full-stack AI organization — specialist agents, skills, and a compounding knowledge base — designed for solo founders and technical builders.
+Soleur is a locally installed plugin for supported AI coding CLIs (including Claude Code, Grok Build, Codex, and Devin CLI) providing a full-stack AI organization — specialist agents, skills, and a compounding knowledge base — designed for solo founders and technical builders.
 
 ## 2. What Are Cookies?
 
@@ -36,7 +36,7 @@ Similar technologies include web beacons, pixels, local storage, and other track
 
 ### 3.1 The Soleur Plugin
 
-The Soleur plugin itself **does not use cookies**. It operates as a Claude Code plugin within your local development environment and does not set, read, or transmit cookies of any kind.
+The Soleur plugin itself **does not use cookies**. It operates as a locally installed plugin for supported AI coding CLIs within your local development environment and does not set, read, or transmit cookies of any kind.
 
 ### 3.2 The Documentation Website (soleur.ai)
 

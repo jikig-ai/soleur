@@ -33,4 +33,4 @@ None detected. Workflow ran clean end-to-end (readiness gate → worktree + draf
 ## Tags
 category: workflow-patterns
 module: brainstorm / security-tooling-evaluation
-related: knowledge-base/project/brainstorms/2026-07-09-t3mp3st-security-eval-brainstorm.md, #6256, #6257
+related: knowledge-base/project/brainstorms/archive/20261013-041741-2026-07-09-t3mp3st-security-eval-brainstorm.md, #6256, #6257

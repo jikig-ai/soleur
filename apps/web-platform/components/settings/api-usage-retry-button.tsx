@@ -1,16 +1,18 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import { Button } from "@/components/ui/button";
 
 export function ApiUsageRetryButton() {
   const router = useRouter();
   return (
-    <button
+    <Button
+      variant="outlined"
       type="button"
       onClick={() => router.refresh()}
-      className="inline-flex items-center rounded-md border border-soleur-border-default bg-soleur-bg-surface-1 px-3 py-1.5 text-sm font-medium text-soleur-text-secondary shadow-sm hover:bg-soleur-bg-surface-2 focus:outline-none focus:ring-2 focus:ring-soleur-border-emphasized focus:ring-offset-2"
+      className="rounded-md text-soleur-text-secondary shadow-sm focus:outline-none focus:ring-2 focus:ring-soleur-border-emphasized focus:ring-offset-2"
     >
       Retry
-    </button>
+    </Button>
   );
 }

@@ -160,9 +160,10 @@ printf '#!/usr/bin/env bash\nsleep 0.05\n'                 > "$FIXTURES/slow.sh"
 # below drive the real apps/web-platform/infra/run-registered-suites.sh, unmodified, through
 # the real run_suite. A sandbox copy of the runner would test the copy.
 #
-# The infra runner derives its suite list from a workflow file, so a fixture needs a workflow
-# and a directory of its own — INFRA_WF and SOLEUR_INFRA_DIR are that runner's documented test
-# seams. TWO dirs, because one workflow registers everything in its own.
+# The infra runner derives its suite list by filesystem glob over SOLEUR_INFRA_DIR
+# (presence is registration), so a fixture needs only a directory of its own —
+# SOLEUR_INFRA_DIR is that runner's documented test seam. An absolute fixture dir
+# outside the repo takes the runner's `find` arm, so no git index is consulted.
 #
 # The inner suite exits 137 DELIBERATELY rather than calling `kill -KILL $$`. Measured: at that
 # position the two are indistinguishable at every chokepoint (the dispatch shim captures `rc=$?`
@@ -175,11 +176,8 @@ mk_infra_fixture() {  # mk_infra_fixture <dir> <inner-exit-code> <wrapper-name>
   mkdir -p "$dir"
   printf '#!/usr/bin/env bash\nexit %s\n' "$code" > "$dir/aaa-fixture.test.sh"
   chmod +x "$dir/aaa-fixture.test.sh"
-  { echo "jobs:"; echo "  deploy-script-tests:"; echo "    steps:"
-    echo "      - run: bash $dir/aaa-fixture.test.sh"
-  } > "$dir/wf.yml"
-  printf '#!/usr/bin/env bash\nexec env INFRA_WF=%q SOLEUR_INFRA_DIR=%q bash %q\n' \
-    "$dir/wf.yml" "$dir" "$INFRA_RUNNER" > "$FIXTURES/$wrapper"
+  printf '#!/usr/bin/env bash\nexec env SOLEUR_INFRA_DIR=%q bash %q\n' \
+    "$dir" "$INFRA_RUNNER" > "$FIXTURES/$wrapper"
   chmod +x "$FIXTURES/$wrapper"
 }
 mk_infra_fixture "$TMP/infra-killed" 137 infra-killed.sh
@@ -308,7 +306,7 @@ run_arm() {
   # the first BEFORE any registration, so an inherited value makes every arm measure a refusal
   # rather than the classifier — and a fan-out agent is exactly the environment that sets it.
   ARM_OUT=$(cd "$REPO_ROOT" && env SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= \
-            TEST_TIMING_LOG="$timing" TEST_GROUP=all timeout 120 bash "$sb" 2>&1)
+            TEST_TIMING_LOG="${timing:-/dev/null}" TEST_GROUP=all timeout 120 bash "$sb" 2>&1)
   ARM_RC=$?
   return 0
 }
@@ -465,7 +463,7 @@ else
 fi
 
 # --- A3: clean run is byte-identical to main ------------------------------------------------
-run_arm clean none || true
+run_arm clean none /dev/null || true
 A3_OUT="$ARM_OUT"; A3_RC="$ARM_RC"
 if [[ "$A3_RC" == "0" ]]; then
   pass "a clean run still exits 0"
@@ -491,7 +489,7 @@ if git -C "$REPO_ROOT" show origin/main:scripts/test-all.sh > "$MAIN_TARGET" 2>/
   pass "origin/main:scripts/test-all.sh resolved for the byte-shape baseline"
   sb_main="$TMP/runner-clean-mainbaseline.sh"
   if TARGET="$MAIN_TARGET" build_sandbox "$sb_main" clean none >/dev/null; then
-    MAIN_OUT=$(cd "$REPO_ROOT" && TEST_GROUP=all timeout 120 bash "$sb_main" 2>&1) || true
+    MAIN_OUT=$(cd "$REPO_ROOT" && TEST_TIMING_LOG=/dev/null TEST_GROUP=all timeout 120 bash "$sb_main" 2>&1) || true
     tail_of() { sed -n '/^=== [0-9]*\/[0-9]* suites passed ===$/,$p' <<<"$1"; }
     main_tail=$(tail_of "$MAIN_OUT")
     new_tail=$(tail_of "$A3_OUT")

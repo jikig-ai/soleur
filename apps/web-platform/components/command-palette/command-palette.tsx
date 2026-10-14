@@ -15,6 +15,7 @@
 import { Command } from "cmdk";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useShortcuts, buildCommands, type Command as Cmd } from "./use-shortcuts";
+import { Button } from "@/components/ui/button";
 import { reportSilentFallback } from "@/lib/client-observability";
 
 // Mirrors the routines route payload (routines-surface.tsx). Only the fields the
@@ -587,21 +588,26 @@ function ConfirmRunModal({
           the audit ledger under your operator identity.
         </p>
         <div className="mt-4 flex justify-end gap-2">
-          <button
+          <Button
+            variant="outlined"
             onClick={onCancel}
             className="rounded border border-soleur-border-default px-3 py-1.5 text-xs text-soleur-text-secondary hover:bg-soleur-bg-surface-2"
           >
             Cancel
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="gold"
+            modal
             ref={confirmRef}
             onClick={onConfirm}
             disabled={busy}
+            loading={busy}
+            loadingLabel="Running"
             data-testid="cmd-confirm-run"
             className="rounded bg-amber-500 px-3 py-1.5 text-xs font-medium text-black hover:bg-amber-400 disabled:opacity-50"
           >
-            {busy ? "Running…" : "▷ Run now"}
-          </button>
+            ▷ Run now
+          </Button>
         </div>
       </div>
     </div>

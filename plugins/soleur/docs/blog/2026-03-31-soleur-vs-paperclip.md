@@ -5,6 +5,7 @@ date: 2026-03-31
 updated: 2026-07-20
 description: "Soleur (source-available, BSL 1.1) vs. Paperclip (open-source, MIT): two AI company platforms from opposite directions. One provides infrastructure, the other provides intelligence."
 ogImage: "blog/og-soleur-vs-paperclip.png"
+pillar: soleur-comparisons
 tags:
   - comparison
   - paperclip

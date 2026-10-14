@@ -65,9 +65,22 @@ STUB
 # calls, then `[]`. That is what lets P3's WAIT arm be tested for real — a stub with a single
 # fixed answer can only prove "refuses immediately" or "never refuses", never "waited, then
 # proceeded once the push drained", which is the behaviour the modal delivery path depends on.
+# (#8714 5.3b-iii) `gh api repos/<repo>/releases/tags/<tag>` is P6's read. The stub answers ONLY the
+# exact path the SUT must ask for (STUB_API_PATH) and REFUSES (exit 64, logged to $STUB_API_REFUSALS)
+# anything else, so a P6 that queried the wrong tag cannot read the right fixture.
 mk_runs() {
   cat > "$TMP/gh.sh" <<'STUB'
 #!/usr/bin/env bash
+if [[ "${1:-}" == "api" ]]; then
+  if [[ "$#" -ne 2 || "$2" != "$STUB_API_PATH" ]]; then
+    printf 'stub: unexpected gh api call: %s\n' "$*" | tee -a "$STUB_API_REFUSALS" >&2; exit 64
+  fi
+  if [[ -n "${STUB_API_RC:-}" && "${STUB_API_RC}" != "0" ]]; then
+    printf '%s\n' "${STUB_API_ERR:-gh: Server Error (HTTP 502)}" >&2; exit "${STUB_API_RC}"
+  fi
+  printf '%s' "$STUB_API_JSON"; exit 0
+fi
+[[ "${1:-} ${2:-}" == "run list" ]] || { printf 'stub: unexpected gh call: %s\n' "$*" | tee -a "$STUB_API_REFUSALS" >&2; exit 64; }
 if [[ -n "${STUB_RUNS_RC:-}" && "${STUB_RUNS_RC}" != "0" ]]; then exit "${STUB_RUNS_RC}"; fi
 if [[ -n "${STUB_RUNS_DRAIN_AFTER:-}" ]]; then
   cnt=0
@@ -81,6 +94,22 @@ STUB
   chmod +x "$TMP/gh.sh"
 }
 mk_query; mk_runs
+
+# P6's default fixture: the asset the REAL zot-registry.tf names, published with its pinned T, as the
+# SECOND entry (a must-pass: P6 selects by name, not by position). Derived via --print-asset.
+ASSET_INFO="$(bash "$SUT" --print-asset 2>/dev/null)" || { echo "  FATAL: --print-asset failed on the real zot-registry.tf"; exit 2; }
+_ai() { printf '%s\n' "$ASSET_INFO" | sed -n "s/^$1=//p"; }
+P6_REPO="$(_ai repo)"; P6_TAG="$(_ai tag)"; P6_ASSET="$(_ai asset)"; P6_T="$(_ai sha256)"
+[[ -n "$P6_REPO" && -n "$P6_TAG" && -n "$P6_ASSET" && "$P6_T" =~ ^[0-9a-f]{64}$ ]] || { echo "  FATAL: --print-asset output incomplete: $ASSET_INFO"; exit 2; }
+p6_json() {  # $1 = digest of the named asset ("" = no such asset), $2 = state
+  local named=""
+  [[ -n "$1" ]] && named=",{\"name\":\"$P6_ASSET\",\"state\":\"${2:-uploaded}\",\"digest\":\"$1\"}"
+  printf '{"tag_name":"%s","draft":false,"assets":[{"name":"README.txt","state":"uploaded","digest":"sha256:%s"}%s]}' \
+    "$P6_TAG" "$(printf '0%.0s' {1..64})" "$named"
+}
+export STUB_API_PATH="repos/$P6_REPO/releases/tags/$P6_TAG"
+export STUB_API_JSON; STUB_API_JSON="$(p6_json "sha256:$P6_T")"
+export STUB_API_REFUSALS="$TMP/api-refusals.log"; : > "$STUB_API_REFUSALS"
 
 run_sut() {
   # `env -u GITHUB_ACTIONS` IS LOAD-BEARING, not hygiene. The SUT refuses every command seam when
@@ -297,6 +326,109 @@ else
   fail "P5 refused (or dropped its counts) on a healthy channel: rc=$RC: $(head -1 "$TMP/out")"
 fi
 
+# --- P6: the boot-image asset the replaced host will fetch must exist and match the pin ----------
+# (#8714 5.3b-iii) The host refuses to start zot unless the asset's sha256 is the pinned T, so a
+# replace onto an absent or altered asset darks the sole pull path. Each row changes ONE input.
+run_sut STUB_LOCAL_CACHE_ROWS="" STUB_RUNS_JSON="[]" > "$TMP/out"
+if [[ "$RC" -eq 0 ]] && grep -q "boot_asset=$P6_TAG/$P6_ASSET" "$TMP/out" && grep -q 'NOTE: P6' "$TMP/out"; then
+  pass "P6 must-pass: the pinned asset published with digest == T (not the first asset listed) is CLEAR"
+else
+  fail "P6 refused a correctly published asset: rc=$RC: $(head -2 "$TMP/out" | tr '\n' ' ')"
+fi
+run_sut STUB_API_RC=1 STUB_API_ERR="gh: Not Found (HTTP 404)" STUB_RUNS_JSON="[]" > "$TMP/out"
+if [[ "$RC" -ne 0 ]] && grep -q 'predicate=P6' "$TMP/out" && grep -q 'not published' "$TMP/err"; then
+  pass "P6 synthesized red: an UNPUBLISHED release (404) REFUSES the replace, and says how to publish"
+else
+  fail "P6: a missing release did not refuse as P6: rc=$RC: $(head -1 "$TMP/out")"
+fi
+run_sut STUB_API_RC=1 STUB_API_ERR="gh: Server Error (HTTP 502)" STUB_RUNS_JSON="[]" > "$TMP/out"
+if [[ "$RC" -ne 0 ]] && grep -q 'predicate=P6' "$TMP/out" && grep -qi 'failed read is not a present asset' "$TMP/err"; then
+  pass "P6 fail-closed (M1): an API ERROR refuses rather than reading as present"
+else
+  fail "P6: an API error fell through: rc=$RC: $(head -1 "$TMP/out")"
+fi
+run_sut STUB_API_JSON="$(p6_json "sha256:$(printf 'e%.0s' {1..64})")" STUB_RUNS_JSON="[]" > "$TMP/out"
+if [[ "$RC" -ne 0 ]] && grep -q 'predicate=P6' "$TMP/out" && grep -q 'pins sha256' "$TMP/err"; then
+  pass "P6 synthesized red (M3): an asset whose digest != T REFUSES (presence alone is not enough)"
+else
+  fail "P6: a digest mismatch did not refuse: rc=$RC: $(head -1 "$TMP/out")"
+fi
+run_sut STUB_API_JSON="$(p6_json "")" STUB_RUNS_JSON="[]" > "$TMP/out"
+if [[ "$RC" -ne 0 ]] && grep -q 'predicate=P6' "$TMP/out" && grep -q 'no uploaded' "$TMP/err"; then
+  pass "P6 synthesized red: a published release WITHOUT the asset REFUSES"
+else
+  fail "P6: a release missing the asset did not refuse: rc=$RC: $(head -1 "$TMP/out")"
+fi
+run_sut STUB_API_JSON="$(p6_json "sha256:$P6_T" starter)" STUB_RUNS_JSON="[]" > "$TMP/out"
+if [[ "$RC" -ne 0 ]] && grep -q 'predicate=P6' "$TMP/out"; then
+  pass "P6 synthesized red: an asset still in state=starter (not uploaded) REFUSES"
+else
+  fail "P6: a not-yet-uploaded asset was accepted: rc=$RC: $(head -1 "$TMP/out")"
+fi
+run_sut STUB_API_JSON='not json' STUB_RUNS_JSON="[]" > "$TMP/out"
+if [[ "$RC" -ne 0 ]] && grep -q 'predicate=P6' "$TMP/out"; then
+  pass "P6 fail-closed: an unparseable API response REFUSES"
+else
+  fail "P6: unparseable JSON was accepted: rc=$RC: $(head -1 "$TMP/out")"
+fi
+# M2: T comes from the .tf, never a copy. A .tf whose T moved (a bump pinned before its asset was
+# published) must refuse even though the stub still serves the OLD digest for the same tag.
+sed "s/$P6_T/$(printf 'a%.0s' {1..64})/" "$ROOT/apps/web-platform/infra/zot-registry.tf" > "$TMP/zot-registry.moved-T.tf"
+grep -q "$(printf 'a%.0s' {1..64})" "$TMP/zot-registry.moved-T.tf" || { echo "  FATAL: the moved-T mutation did not land"; exit 2; }
+run_sut REGISTRY_PREFLIGHT_TF="$TMP/zot-registry.moved-T.tf" STUB_RUNS_JSON="[]" > "$TMP/out"
+if [[ "$RC" -ne 0 ]] && grep -q 'predicate=P6' "$TMP/out"; then
+  pass "P6 synthesized red (M2): the .tf's T changed while the asset kept the old digest -> REFUSES"
+else
+  fail "P6 compared against something other than the .tf's T: rc=$RC: $(head -1 "$TMP/out")"
+fi
+sed '/zot_mirror_asset_sha256_amd64[[:space:]]*=/d' "$ROOT/apps/web-platform/infra/zot-registry.tf" > "$TMP/zot-registry.no-T.tf"
+run_sut REGISTRY_PREFLIGHT_TF="$TMP/zot-registry.no-T.tf" STUB_RUNS_JSON="[]" > "$TMP/out"
+if [[ "$RC" -ne 0 ]] && grep -q 'predicate=P6' "$TMP/out"; then
+  pass "P6 fail-closed: a .tf with no pinned T REFUSES rather than skipping the check"
+else
+  fail "P6: an unreadable pin did not refuse: rc=$RC: $(head -1 "$TMP/out")"
+fi
+# P6 is NOT skipped on the manual arm (M4-adjacent: it must stay gating on every route).
+run_sut STUB_API_RC=1 STUB_API_ERR="gh: Not Found (HTTP 404)" STUB_RUNS_JSON="[]" -- --manual > "$TMP/out"
+if [[ "$RC" -ne 0 ]] && grep -q 'predicate=P6' "$TMP/out"; then
+  pass "P6 still gates a --manual re-fire (a manual replace onto a missing asset darks the host too)"
+else
+  fail "P6 was bypassed by --manual: rc=$RC"
+fi
+# P6 refuses BEFORE P3's drain wait: a missing asset must not hold the job for 35 minutes first.
+WANT_WAIT_SECS=30 WANT_POLL_SECS=1 \
+  run_sut STUB_API_RC=1 STUB_API_ERR="gh: Not Found (HTTP 404)" STUB_RUNS_JSON='[{"status":"queued"}]' > "$TMP/out"
+if [[ "$RC" -ne 0 ]] && grep -q 'predicate=P6' "$TMP/out" && ! grep -q 'waiting for the push to drain' "$TMP/out"; then
+  pass "P6 refuses before P3 waits"
+else
+  fail "P6 ran after (or not instead of) P3's wait: rc=$RC: $(head -2 "$TMP/out" | tr '\n' ' ')"
+fi
+run_sut STUB_API_JSON="$(printf '{"assets":[{"name":"%s","state":"uploaded","digest":"sha256:%s"},{"name":"%s","state":"uploaded","digest":"sha256:%s"}]}' "$P6_ASSET" "$P6_T" "$P6_ASSET" "$P6_T")" STUB_RUNS_JSON="[]" > "$TMP/out"
+if [[ "$RC" -ne 0 ]] && grep -q 'predicate=P6' "$TMP/out" && grep -q 'ambiguous' "$TMP/err"; then
+  pass "P6 synthesized red: two uploaded assets with the asset's name (even both == T) REFUSE as ambiguous"
+else
+  fail "P6 accepted an ambiguous asset list: rc=$RC: $(head -1 "$TMP/out")"
+fi
+# --check-asset: P6 ALONE, for the routes that create a registry host without this dispatcher
+# (apply-web-platform-infra.yml registry_host_replace / luks_recut / region_migrate) and rule-audit.
+run_sut STUB_LOCAL_CACHE_ROWS="$(printf 'pull registry=local-cache image=web\n')" STUB_RUNS_JSON='[{"status":"in_progress"}]' -- --check-asset > "$TMP/out"
+if [[ "$RC" -eq 0 ]] && grep -qx "verdict=CLEAR predicate=P6 boot_asset=$P6_TAG/$P6_ASSET" "$TMP/out" && ! grep -q 'local_cache_hits' "$TMP/out"; then
+  pass "--check-asset runs P6 only: CLEAR on a published asset even with P1/P3 conditions that would refuse a replace"
+else
+  fail "--check-asset did not run P6 alone: rc=$RC: $(head -2 "$TMP/out" | tr '\n' ' ')"
+fi
+run_sut STUB_API_RC=1 STUB_API_ERR="gh: Not Found (HTTP 404)" -- --check-asset > "$TMP/out"
+if [[ "$RC" -ne 0 ]] && grep -q 'predicate=P6' "$TMP/out" && grep -q 'immutable releases' "$TMP/err"; then
+  pass "--check-asset refuses a missing asset, and says a vanished release cannot be re-created under its tag"
+else
+  fail "--check-asset passed a missing asset: rc=$RC: $(head -1 "$TMP/out")"
+fi
+if [[ ! -s "$STUB_API_REFUSALS" ]]; then
+  pass "P6 asked the gh stub only for repos/$P6_REPO/releases/tags/$P6_TAG (no refused call)"
+else
+  fail "the SUT made a gh call the stub refused: $(head -3 "$STUB_API_REFUSALS" | tr '\n' ' ')"
+fi
+
 # --- the seam guard: a seam set on the production path must REFUSE, not manufacture CLEAR ------
 SEAM_OUT="$(env GITHUB_ACTIONS=true REGISTRY_PREFLIGHT_QUERY_CMD=/bin/true \
   REGISTRY_PREFLIGHT_RUNS_CMD=/bin/true bash "$SUT" 2>"$TMP/seamerr")"; SEAM_RC=$?
@@ -310,7 +442,7 @@ fi
 # manufacture a CLEAR verdict rather than an error. Measured: with the three real writers
 # mid-push, retargeting ZOT_WRITERS at an idle workflow turned REFUSED/P3 into CLEAR. One arm per
 # seam, because a loop over a list is satisfied by any single member being present.
-for _dseam in REGISTRY_PREFLIGHT_ZOT_WRITERS REGISTRY_PREFLIGHT_P5_CONTROL REGISTRY_PREFLIGHT_P5_CHANNEL; do
+for _dseam in REGISTRY_PREFLIGHT_ZOT_WRITERS REGISTRY_PREFLIGHT_P5_CONTROL REGISTRY_PREFLIGHT_P5_CHANNEL REGISTRY_PREFLIGHT_TF; do
   DS_OUT="$(env GITHUB_ACTIONS=true "$_dseam=x" bash "$SUT" 2>/dev/null)"; DS_RC=$?
   if [[ "$DS_RC" -ne 0 ]] && grep -q 'predicate=SEAM' <<<"$DS_OUT"; then
     pass "seam guard: $_dseam is refused on the production path"
@@ -356,8 +488,9 @@ if [[ "$PASS" -ne $((_cp + 1)) || "$FAIL" -ne $((_cf + 1)) ]]; then
 fi
 FAIL=$((FAIL - 1))
 TOTAL=$((PASS+FAIL))
-if [[ "$TOTAL" -lt 26 ]]; then
-  echo "  FATAL: anti-vacuity: ran $TOTAL assertions, expected >= 26. Fix the dispatch, do not lower the floor." >&2
+# 30 assertions ran before #8714 5.3b-iii (floor was 26); +15 P6/--check-asset rows and +1 seam-guard arm = 46.
+if [[ "$TOTAL" -lt 46 ]]; then
+  echo "  FATAL: anti-vacuity: ran $TOTAL assertions, expected >= 46. Fix the dispatch, do not lower the floor." >&2
   exit 2
 fi
 

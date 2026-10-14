@@ -20,14 +20,6 @@ import { UNTITLED_FALLBACK } from "@/lib/workspace-name";
 
 const USER_ID = "u1";
 
-function makeSupabase() {
-  return {
-    auth: {
-      getUser: async () => ({ data: { user: { id: USER_ID } }, error: null }),
-    },
-  };
-}
-
 // org-1 has a real name, org-2 has a NULL name (pre-091 / unreachable post-091).
 function makeService() {
   return {
@@ -94,7 +86,7 @@ describe("resolveOrgMemberships — AC7 name fallback", () => {
 
   it("passes a real org name through verbatim", async () => {
     const summaries = await resolveOrgMemberships(
-      makeSupabase() as never,
+      USER_ID,
       makeService() as never,
     );
     const org1 = summaries.find((s) => s.organizationId === "org-1");
@@ -104,7 +96,7 @@ describe("resolveOrgMemberships — AC7 name fallback", () => {
 
   it("substitutes UNTITLED_FALLBACK only when the stored name is NULL", async () => {
     const summaries = await resolveOrgMemberships(
-      makeSupabase() as never,
+      USER_ID,
       makeService() as never,
     );
     const org2 = summaries.find((s) => s.organizationId === "org-2");
@@ -115,7 +107,7 @@ describe("resolveOrgMemberships — AC7 name fallback", () => {
   // NO storage import (the stable proxy route mints lazily on cache-miss).
   it("exposes hasLogo=true when logo_path is set, false when NULL", async () => {
     const summaries = await resolveOrgMemberships(
-      makeSupabase() as never,
+      USER_ID,
       makeService() as never,
     );
     expect(summaries.find((s) => s.workspaceId === "ws-1")?.hasLogo).toBe(true);

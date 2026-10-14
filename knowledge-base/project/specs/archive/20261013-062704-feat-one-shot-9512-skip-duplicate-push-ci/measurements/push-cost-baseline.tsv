@@ -1,0 +1,42 @@
+# push-cost-baseline.tsv: the ci.yml census over the parent plan window, push-event rows only. Produced 2026-10-09 by: bash scripts/ci-demand-census.sh --start 2026-10-07T13:04:00Z --end 2026-10-07T19:04:00Z --workflow ci.yml --summary
+# Derived from these rows (recomputed here, not copied): 7 push runs, 1017.9 job-minutes = 145.41 per run; the 8 gated stems (test-scripts, test-scripts-heavy, test-webplat, shard-totality-mutations, e2e, web-platform-build, test-bun, test) = 960.0 (94.3 percent); everything else = 58.0 = 8.29 per run.
+# Target (ADR-276 Decision 3(e)): mean push CI cost over ALL push runs at most 20 percent of 145.41 = 29.08 job-minutes per run. Elided run ~ 8.29 + 0.5 attestation allowance = 8.79; the target holds while the non-elided share f is at most (29.08-8.79)/(145.41-8.79) = 14.9 percent.
+REPO=jikig-ai/soleur
+WINDOW_START=2026-10-07T13:04:00Z
+WINDOW_END=2026-10-07T19:04:00Z
+WORKFLOW_FILTER=ci.yml
+TOTAL_JOB_MINUTES=6033.2
+TOTAL_JOB_SECONDS=361993
+RUNS_COMPLETED=54
+RUNS_NOT_COMPLETED=0
+RUNS_RERUN=1
+RUNS_NOJOBS=3
+JOBS_COUNTED=1567
+JOBS_SKIPPED=50
+JOBS_RUNNERLESS=218
+JOBS_UNTIMED=0
+BY_WORKFLOW	ci.yml	push	7	237	1017.9
+STEM	ci.yml	push	adr-ordinals	7	0	0	7	2.0	0.28
+STEM	ci.yml	push	credential-path-guard	7	0	0	7	2.9	0.41
+STEM	ci.yml	push	critical-css-gate	7	0	0	7	7.3	1.04
+STEM	ci.yml	push	detect-changes	7	0	0	7	2.6	0.37
+STEM	ci.yml	push	e2e	7	0	0	7	29.4	4.20
+STEM	ci.yml	push	encryption-posture	7	0	0	7	2.1	0.30
+STEM	ci.yml	push	grok-fidelity	7	0	0	7	3.0	0.43
+STEM	ci.yml	push	harness-discovery	7	0	0	7	3.3	0.48
+STEM	ci.yml	push	lint-bot-statuses	7	0	0	7	7.7	1.10
+STEM	ci.yml	push	lint-webplat	7	0	0	7	11.9	1.70
+STEM	ci.yml	push	lockfile-sync	7	0	0	7	5.4	0.77
+STEM	ci.yml	push	marketplace-manifest-guard	7	0	0	7	2.2	0.32
+STEM	ci.yml	push	plugin-root-propagation-gate	0	7	0	0	0.0	0.00
+STEM	ci.yml	push	rule-body-lint	7	0	0	7	2.7	0.39
+STEM	ci.yml	push	sandbox-canary-capture-gate	0	7	0	0	0.0	0.00
+STEM	ci.yml	push	service-role-allowlist-gate	7	0	0	7	2.1	0.30
+STEM	ci.yml	push	shard-totality-mutations	7	0	0	21	65.4	9.34
+STEM	ci.yml	push	tc-document-sha-guard	7	0	0	7	2.8	0.40
+STEM	ci.yml	push	test	6	0	0	6	0.4	0.06
+STEM	ci.yml	push	test-bun	7	0	0	7	15.3	2.18
+STEM	ci.yml	push	test-scripts	7	0	0	56	632.0	90.28
+STEM	ci.yml	push	test-scripts-heavy	7	0	0	21	117.5	16.78
+STEM	ci.yml	push	test-webplat	7	0	0	14	81.2	11.60
+STEM	ci.yml	push	web-platform-build	7	0	0	7	18.8	2.68

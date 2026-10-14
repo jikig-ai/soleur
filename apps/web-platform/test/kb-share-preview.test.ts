@@ -89,6 +89,19 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  // The metadata-reader mocks never drain the stream maybeFirstPagePreview
+  // opens, so its FileHandle would be closed by the garbage collector: a
+  // DEP0137 warning on Node 22, a hard error on Node 26 (#8261). Close each
+  // stream handed to them explicitly. mock.calls survives the per-test
+  // mockResolvedValue overrides and is reset by clearAllMocks in beforeEach.
+  for (const reader of [
+    metadataMocks.readPdfMetadata,
+    metadataMocks.readImageMetadata,
+  ]) {
+    for (const [stream] of reader.mock.calls) {
+      (stream as { destroy: () => void }).destroy();
+    }
+  }
   delete process.env.WORKSPACES_ROOT;
   fs.rmSync(tmpWorkspace, { recursive: true, force: true });
 });

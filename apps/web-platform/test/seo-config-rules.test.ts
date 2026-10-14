@@ -1,6 +1,13 @@
 import { describe, test, expect } from "vitest";
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
+import {
+  escapeRegExp,
+  extractResourceBody,
+  extractRuleBlocks,
+  quotedAttr,
+  stripHclComments,
+} from "./lib/terraform-hcl-blocks";
 
 // Source-text regression guard for the host-scoped Email Obfuscation
 // Configuration Rule.
@@ -86,151 +93,12 @@ const OUT_OF_SCOPE_HOSTS = [
   "api.soleur.ai",
 ];
 
-/**
- * Strip HCL comments — `#` and `//` line comments AND `/* *\/` block comments —
- * while respecting double-quoted strings.
- *
- * Block-comment handling is load-bearing for the EXTRACTION helpers below, not
- * for the assertions. `extractResourceBody` and `extractRuleBlocks` brace-count
- * over raw text, so a commented-out `rules { }` block would otherwise be
- * indistinguishable from a live one: review demonstrated a mutant that wraps
- * the real rule in a block comment and adds a live wider rule beside it, which
- * passed the whole suite because the extractor bound to the dead block. An
- * unbalanced brace inside a block comment breaks brace-counting in the other
- * direction, failing the suite for no reason.
- *
- * Note this is NOT what isolates the scope assertions from the .tf file's own
- * rationale comment (which names every out-of-scope host to explain why they
- * are excluded) — that isolation comes from `quotedAttr`, which reads the
- * expression's quoted attribute value, somewhere a comment cannot appear.
- */
-function stripHclComments(src: string): string {
-  let out = "";
-  let inString = false;
-  for (let i = 0; i < src.length; i++) {
-    const ch = src[i];
-    if (inString) {
-      out += ch;
-      if (ch === "\\") {
-        // Preserve the escaped character verbatim; it cannot close the string.
-        if (i + 1 < src.length) {
-          out += src[i + 1];
-          i++;
-        }
-      } else if (ch === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (ch === '"') {
-      inString = true;
-      out += ch;
-      continue;
-    }
-    if (ch === "/" && src[i + 1] === "*") {
-      // Block comment: skip to the closing delimiter, preserving newlines so
-      // line structure is unchanged.
-      i += 2;
-      while (i < src.length && !(src[i] === "*" && src[i + 1] === "/")) {
-        if (src[i] === "\n") out += "\n";
-        i++;
-      }
-      i++; // land on the '/' of the closer; loop's i++ steps past it
-      continue;
-    }
-    if (ch === "#" || (ch === "/" && src[i + 1] === "/")) {
-      while (i < src.length && src[i] !== "\n") i++;
-      out += "\n";
-      continue;
-    }
-    out += ch;
-  }
-  return out;
-}
-
-/**
- * Extract the body of a `resource "cloudflare_ruleset" "<name>" { ... }` block
- * by brace-counting. Throws if absent so a deleted-resource regression fails
- * loudly rather than passing on an empty string.
- */
-function extractResourceBody(src: string, name: string): string {
-  const marker = `resource "cloudflare_ruleset" "${name}"`;
-  const start = src.indexOf(marker);
-  if (start === -1) {
-    throw new Error(
-      `resource "cloudflare_ruleset" "${name}" not found in ${TF_PATH}`,
-    );
-  }
-  const openBrace = src.indexOf("{", start);
-  if (openBrace === -1) {
-    throw new Error(`opening brace for resource "${name}" not found`);
-  }
-  let depth = 0;
-  for (let i = openBrace; i < src.length; i++) {
-    const ch = src[i];
-    if (ch === "{") depth++;
-    else if (ch === "}") {
-      depth--;
-      if (depth === 0) return src.slice(openBrace + 1, i);
-    }
-  }
-  throw new Error(`unbalanced braces in resource "${name}"`);
-}
-
-/**
- * Return EVERY `rules { ... }` block body within a resource body, brace-counted
- * so nested `action_parameters { ... }` is captured in full. Anchors on
- * `rules\s*\{` (the block opener) rather than the bare word "rules", which also
- * appears in `provider = cloudflare.rulesets`.
- */
-function extractRuleBlocks(resourceBody: string): string[] {
-  const opener = /\brules\s*\{/g;
-  const blocks: string[] = [];
-  let m: RegExpExecArray | null;
-  while ((m = opener.exec(resourceBody)) !== null) {
-    const openBrace = resourceBody.indexOf("{", m.index);
-    let depth = 0;
-    let end = -1;
-    for (let i = openBrace; i < resourceBody.length; i++) {
-      const ch = resourceBody[i];
-      if (ch === "{") depth++;
-      else if (ch === "}") {
-        depth--;
-        if (depth === 0) {
-          end = i;
-          break;
-        }
-      }
-    }
-    if (end === -1) break;
-    blocks.push(resourceBody.slice(openBrace + 1, end));
-    opener.lastIndex = end + 1;
-  }
-  return blocks;
-}
-
-/**
- * Read a quoted attribute value (`name = "..."`), decoding HCL's backslash
- * escapes so a Cloudflare filter expression such as
- * `"(http.host in {\"soleur.ai\"})"` is compared in its logical form.
- */
-function quotedAttr(block: string, name: string): string | null {
-  const re = new RegExp(`\\b${escapeRegExp(name)}\\s*=\\s*"((?:[^"\\\\]|\\\\.)*)"`);
-  const m = re.exec(block);
-  if (!m) return null;
-  return m[1].replace(/\\(.)/g, "$1");
-}
-
-/**
- * Escape every regex metacharacter so an interpolated literal matches itself.
- * Escaping only `.` leaves `\` unescaped, which lets the input alter the
- * pattern's meaning rather than being matched verbatim (CodeQL
- * js/incomplete-sanitization).
- */
-function escapeRegExp(literal: string): string {
-  return literal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
+// Comment-stripping (`stripHclComments`), decoded attribute reads
+// (`quotedAttr`), and literal escaping (`escapeRegExp`) now live in
+// ./lib/terraform-hcl-blocks — the lifted copies (#8364 review). The
+// block-comment arm is load-bearing for the extraction helpers: brace
+// counting cannot see comments, and a `/* rules { … } */`-wrapped rule
+// otherwise still counts toward the pin.
 /** Every rules block in the ruleset, comment-stripped. */
 function allRuleBlocks(): string[] {
   const tf = stripHclComments(readFileSync(TF_PATH, "utf-8"));

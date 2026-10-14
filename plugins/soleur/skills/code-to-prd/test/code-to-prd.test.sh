@@ -97,61 +97,130 @@ assert_file_absent() {
 }
 
 # ---------------------------------------------------------------------------
+# Tool availability (#8266). The baseline and every arm that reaches the real
+# Layer-3 scan need a RUNNABLE gitleaks. A resolvable-but-unrunnable binary (an
+# unpinned mise shim) used to fail the baseline and report it as a code-to-prd
+# failure; those arms now SKIP locally, naming the cause, and the suite FAILS
+# under CI=true, where the runner must provide gitleaks (ADR-188). The probe
+# mirrors the script's: timeout -> gtimeout -> bare.
+# ---------------------------------------------------------------------------
+# shellcheck source=../../../../test/lib/gitleaks-probe.sh
+source "$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../../../test/lib" && pwd -P)/gitleaks-probe.sh"
+gl_probe
+
+# A PATH that contains every executable on the current PATH EXCEPT gitleaks,
+# timeout and gtimeout, plus a gitleaks STUB of the given mode. Dropping PATH
+# entries cannot remove a tool that lives in /usr/bin beside everything else,
+# so this links tools individually. $1 = unrunnable | scan-error | findings | clean
+mk_stub_path() {
+  local mode="$1" d dir f name
+  d="$(mktemp -d "${TMP_DIR}/stubpath.XXXXXX")"
+  local IFS=:
+  for dir in ${PATH}; do
+    [[ -d "${dir}" ]] || continue
+    for f in "${dir}"/*; do
+      name="${f##*/}"
+      case "${name}" in gitleaks|timeout|gtimeout) continue ;; esac
+      [[ -x "${f}" && ! -d "${f}" && ! -e "${d}/${name}" ]] && ln -s "${f}" "${d}/${name}"
+    done
+  done
+  # Stub bodies are quoted heredocs: they are DATA written into the stub, and the
+  # redirect inside the findings stub is the stub's own, not a fixture write.
+  case "${mode}" in
+    unrunnable)
+      cat > "${d}/gitleaks" <<'STUB'
+#!/bin/sh
+echo "mise ERROR No version is set for shim: gitleaks" >&2
+exit 1
+STUB
+      ;;
+    scan-error)
+      cat > "${d}/gitleaks" <<'STUB'
+#!/bin/sh
+[ "$1" = version ] && { echo 8.24.2; exit 0; }
+echo "gitleaks: fatal: could not read source" >&2
+exit 1
+STUB
+      ;;
+    findings)
+      cat > "${d}/gitleaks" <<'STUB'
+#!/bin/sh
+[ "$1" = version ] && { echo 8.24.2; exit 0; }
+rp=""; while [ $# -gt 0 ]; do [ "$1" = --report-path ] && rp="$2"; shift; done
+printf '%s' '[{"RuleID":"stripe-access-token","File":"prd.md","StartLine":3}]' > "$rp"
+exit 1
+STUB
+      ;;
+    clean)
+      cat > "${d}/gitleaks" <<'STUB'
+#!/bin/sh
+[ "$1" = version ] && { echo 8.24.2; exit 0; }
+exit 0
+STUB
+      ;;
+  esac
+  chmod +x "${d}/gitleaks"
+  printf '%s\n' "${d}"
+}
+
+# ---------------------------------------------------------------------------
 # Generate a clean PRD from the fixture (positive baseline for tests 1-9)
 # ---------------------------------------------------------------------------
-BASELINE_PRD="${TMP_DIR}/baseline-prd.md"
-log="${TMP_DIR}/baseline.log"
-bash "${CODE_TO_PRD}" "${FIXTURE}" "${BASELINE_PRD}" >"${log}" 2>&1
-baseline_rc=$?
-assert_exit "Baseline: code-to-prd against fixture exits 0" 0 "${baseline_rc}"
+if _needs_gl "baseline + T1-T9"; then
+  BASELINE_PRD="${TMP_DIR}/baseline-prd.md"
+  log="${TMP_DIR}/baseline.log"
+  bash "${CODE_TO_PRD}" "${FIXTURE}" "${BASELINE_PRD}" >"${log}" 2>&1
+  baseline_rc=$?
+  assert_exit "Baseline: code-to-prd against fixture exits 0" 0 "${baseline_rc}"
 
-if [[ ! -f "${BASELINE_PRD}" ]]; then
-  echo "FATAL: baseline PRD was not written; remaining tests skipped."
-  echo "  See ${log}"
-  cat "${log}" >&2
-  echo "---"
-  echo "PASS=${PASS} FAIL=${FAIL}"
-  exit 1
+  if [[ ! -f "${BASELINE_PRD}" ]]; then
+    echo "FATAL: baseline PRD was not written; remaining tests skipped."
+    echo "  See ${log}"
+    cat "${log}" >&2
+    echo "---"
+    echo "PASS=${PASS} FAIL=${FAIL}"
+    exit 1
+  fi
+
+  # Test 1 — all 3 fixture routes captured
+  assert_grep_fixed "T1.a: route '/' present"      '`/`'        "${BASELINE_PRD}"
+  assert_grep_fixed "T1.b: route '/about' present" '`/about`'   "${BASELINE_PRD}"
+  assert_grep_fixed "T1.c: route '/api/health' present" '`/api/health`' "${BASELINE_PRD}"
+
+  # Test 2 — GET method captured for api/health/route.ts (FR3)
+  assert_grep "T2: GET method captured for api/health" '\| `/api/health` \| `app/api/health/route\.ts` \| GET \|' "${BASELINE_PRD}"
+
+  # Test 3 — sentinel-clean: zero redaction-class matches in the PRD
+  sentinel_out="${TMP_DIR}/sentinel.out"
+  bash "${REDACT_SENTINEL}" "${BASELINE_PRD}" >"${sentinel_out}" 2>&1
+  assert_exit "T3: redact-sentinel exits 0 on baseline PRD (AC2)" 0 $?
+
+  # Test 4 — no env-var VALUE appears (we don't have .env.example yet — once
+  # Phase 9b lands, this becomes load-bearing; for now we assert the marker
+  # 'FIXTUREDONOTUSE' is absent, which is true under any flow).
+  assert_no_grep "T4: env-var VALUE 'FIXTUREDONOTUSE' absent (FR5)" "FIXTUREDONOTUSE" "${BASELINE_PRD}"
+
+  # Test 5 — Coverage Caveats: non-empty + 4 subsections
+  assert_grep_fixed "T5.a: '## Coverage Caveats' header present" '## Coverage Caveats' "${BASELINE_PRD}"
+  assert_grep_fixed "T5.b: 'Frameworks not scanned' subsection" '### Frameworks not scanned' "${BASELINE_PRD}"
+  assert_grep_fixed "T5.c: 'Extraction techniques used' subsection" '### Extraction techniques used' "${BASELINE_PRD}"
+  assert_grep_fixed "T5.d: 'Excluded by path filter' subsection" '### Excluded by path filter' "${BASELINE_PRD}"
+  assert_grep_fixed "T5.e: 'GDPR Art. 9 special-category disclaimer' subsection" '### GDPR Art. 9 special-category disclaimer' "${BASELINE_PRD}"
+
+  # Test 6 — both banners present (verbatim signature markers)
+  assert_grep_fixed "T6.a: due-diligence banner sentinel present" 'BANNER:DUE-DILIGENCE' "${BASELINE_PRD}"
+  assert_grep_fixed "T6.b: PII/confidentiality banner sentinel present" 'BANNER:PII-CONFIDENTIALITY' "${BASELINE_PRD}"
+
+  # Test 7 — How to Read This PRD subsection (FR7.1)
+  assert_grep_fixed "T7: '### How to Read This PRD' subsection present (FR7.1)" '### How to Read This PRD' "${BASELINE_PRD}"
+
+  # Test 8 — Gap Analysis section present (populated or SKIPPED)
+  assert_grep_fixed "T8.a: '## Gap Analysis' header present" '## Gap Analysis' "${BASELINE_PRD}"
+  assert_grep "T8.b: SKIPPED-or-populated body present" 'SKIPPED \(spec-flow-analyzer unavailable at|^# Gap Analysis' "${BASELINE_PRD}"
+
+  # Test 9 — MIT attribution footer
+  assert_grep_fixed "T9: MIT attribution footer present" 'alirezarezvani/claude-skills' "${BASELINE_PRD}"
 fi
-
-# Test 1 — all 3 fixture routes captured
-assert_grep_fixed "T1.a: route '/' present"      '`/`'        "${BASELINE_PRD}"
-assert_grep_fixed "T1.b: route '/about' present" '`/about`'   "${BASELINE_PRD}"
-assert_grep_fixed "T1.c: route '/api/health' present" '`/api/health`' "${BASELINE_PRD}"
-
-# Test 2 — GET method captured for api/health/route.ts (FR3)
-assert_grep "T2: GET method captured for api/health" '\| `/api/health` \| `app/api/health/route\.ts` \| GET \|' "${BASELINE_PRD}"
-
-# Test 3 — sentinel-clean: zero redaction-class matches in the PRD
-sentinel_out="${TMP_DIR}/sentinel.out"
-bash "${REDACT_SENTINEL}" "${BASELINE_PRD}" >"${sentinel_out}" 2>&1
-assert_exit "T3: redact-sentinel exits 0 on baseline PRD (AC2)" 0 $?
-
-# Test 4 — no env-var VALUE appears (we don't have .env.example yet — once
-# Phase 9b lands, this becomes load-bearing; for now we assert the marker
-# 'FIXTUREDONOTUSE' is absent, which is true under any flow).
-assert_no_grep "T4: env-var VALUE 'FIXTUREDONOTUSE' absent (FR5)" "FIXTUREDONOTUSE" "${BASELINE_PRD}"
-
-# Test 5 — Coverage Caveats: non-empty + 4 subsections
-assert_grep_fixed "T5.a: '## Coverage Caveats' header present" '## Coverage Caveats' "${BASELINE_PRD}"
-assert_grep_fixed "T5.b: 'Frameworks not scanned' subsection" '### Frameworks not scanned' "${BASELINE_PRD}"
-assert_grep_fixed "T5.c: 'Extraction techniques used' subsection" '### Extraction techniques used' "${BASELINE_PRD}"
-assert_grep_fixed "T5.d: 'Excluded by path filter' subsection" '### Excluded by path filter' "${BASELINE_PRD}"
-assert_grep_fixed "T5.e: 'GDPR Art. 9 special-category disclaimer' subsection" '### GDPR Art. 9 special-category disclaimer' "${BASELINE_PRD}"
-
-# Test 6 — both banners present (verbatim signature markers)
-assert_grep_fixed "T6.a: due-diligence banner sentinel present" 'BANNER:DUE-DILIGENCE' "${BASELINE_PRD}"
-assert_grep_fixed "T6.b: PII/confidentiality banner sentinel present" 'BANNER:PII-CONFIDENTIALITY' "${BASELINE_PRD}"
-
-# Test 7 — How to Read This PRD subsection (FR7.1)
-assert_grep_fixed "T7: '### How to Read This PRD' subsection present (FR7.1)" '### How to Read This PRD' "${BASELINE_PRD}"
-
-# Test 8 — Gap Analysis section present (populated or SKIPPED)
-assert_grep_fixed "T8.a: '## Gap Analysis' header present" '## Gap Analysis' "${BASELINE_PRD}"
-assert_grep "T8.b: SKIPPED-or-populated body present" 'SKIPPED \(spec-flow-analyzer unavailable at|^# Gap Analysis' "${BASELINE_PRD}"
-
-# Test 9 — MIT attribution footer
-assert_grep_fixed "T9: MIT attribution footer present" 'alirezarezvani/claude-skills' "${BASELINE_PRD}"
 
 # ---------------------------------------------------------------------------
 # Synthetic Stripe-shape tokens — assembled at runtime to dodge gitleaks
@@ -189,22 +258,24 @@ EOF
 git init -q "${TAMPERED}"
 git -C "${TAMPERED}" add -A
 git -C "${TAMPERED}" -c user.email=t@t -c user.name=t commit -q -m fixture --no-verify >/dev/null 2>&1 || true
-T10_OUT="${TMP_DIR}/t10-prd.md"
-t10_log="${TMP_DIR}/t10.log"
-bash "${CODE_TO_PRD}" "${TAMPERED}" "${T10_OUT}" >"${t10_log}" 2>&1
-t10_rc=$?
-assert_exit "T10: Layer 2 halts write when secret present (AC4)" 1 "${t10_rc}"
-assert_file_absent "T10: no PRD on disk after Layer 2 abort" "${T10_OUT}"
+if _needs_gl "T10/T11 (Layer 2 halt, Layer 3 catch)"; then
+  T10_OUT="${TMP_DIR}/t10-prd.md"
+  t10_log="${TMP_DIR}/t10.log"
+  bash "${CODE_TO_PRD}" "${TAMPERED}" "${T10_OUT}" >"${t10_log}" 2>&1
+  t10_rc=$?
+  assert_exit "T10: Layer 2 halts write when secret present (AC4)" 1 "${t10_rc}"
+  assert_file_absent "T10: no PRD on disk after Layer 2 abort" "${T10_OUT}"
 
-# ---------------------------------------------------------------------------
-# Test 11 — Layer 3 catches what Layer 2 missed (RED test via env bypass).
-# ---------------------------------------------------------------------------
-T11_OUT="${TMP_DIR}/t11-prd.md"
-t11_log="${TMP_DIR}/t11.log"
-CODE_TO_PRD_SKIP_LAYER_2=1 bash "${CODE_TO_PRD}" "${TAMPERED}" "${T11_OUT}" >"${t11_log}" 2>&1
-t11_rc=$?
-assert_exit "T11: Layer 3 catches Layer-2-bypass and exits 1 (AC5)" 1 "${t11_rc}"
-assert_file_absent "T11: Layer 3 deletes the leaked PRD" "${T11_OUT}"
+  # ---------------------------------------------------------------------------
+  # Test 11 — Layer 3 catches what Layer 2 missed (RED test via env bypass).
+  # ---------------------------------------------------------------------------
+  T11_OUT="${TMP_DIR}/t11-prd.md"
+  t11_log="${TMP_DIR}/t11.log"
+  CODE_TO_PRD_SKIP_LAYER_2=1 bash "${CODE_TO_PRD}" "${TAMPERED}" "${T11_OUT}" >"${t11_log}" 2>&1
+  t11_rc=$?
+  assert_exit "T11: Layer 3 catches Layer-2-bypass and exits 1 (AC5)" 1 "${t11_rc}"
+  assert_file_absent "T11: Layer 3 deletes the leaked PRD" "${T11_OUT}"
+fi
 
 # ---------------------------------------------------------------------------
 # AC3 — sentinel regex matches the planned fixture token (loud guard against
@@ -234,39 +305,142 @@ assert_grep_fixed "AC6: error message mentions gitleaks" "gitleaks not found" "$
 # ---------------------------------------------------------------------------
 # AC8 — missing-package.json preflight abort.
 # ---------------------------------------------------------------------------
-ac8_target="${TMP_DIR}/empty-dir"
-mkdir -p "${ac8_target}"
-ac8_log="${TMP_DIR}/ac8.log"
-bash "${CODE_TO_PRD}" "${ac8_target}" "${TMP_DIR}/ac8-prd.md" >"${ac8_log}" 2>&1
-ac8_rc=$?
-assert_exit "AC8: missing-package.json preflight aborts with exit 2" 2 "${ac8_rc}"
-assert_grep_fixed "AC8: error message includes the literal target path" "${ac8_target}" "${ac8_log}"
+# The gitleaks preflight runs BEFORE the package.json check, so this arm needs
+# a runnable gitleaks to reach the check it names.
+if _needs_gl "AC8 missing package.json"; then
+  ac8_target="${TMP_DIR}/empty-dir"
+  mkdir -p "${ac8_target}"
+  ac8_log="${TMP_DIR}/ac8.log"
+  bash "${CODE_TO_PRD}" "${ac8_target}" "${TMP_DIR}/ac8-prd.md" >"${ac8_log}" 2>&1
+  ac8_rc=$?
+  assert_exit "AC8: missing-package.json preflight aborts with exit 2" 2 "${ac8_rc}"
+  assert_grep_fixed "AC8: error message includes the literal target path" "${ac8_target}" "${ac8_log}"
+fi
 
 # ---------------------------------------------------------------------------
 # AC9 — symlink rejection (FR2.1).
 # Plant a symlink inside a copy of the fixture pointing at a sibling sensitive
 # file; confirm the linked content does NOT enter the PRD.
 # ---------------------------------------------------------------------------
-ac9_target="${TMP_DIR}/sym-fixture"
-cp -a "${FIXTURE}" "${ac9_target}"
-ac9_sensitive="${TMP_DIR}/sensitive.txt"
-printf 'CANARY_VALUE_SHOULD_NOT_APPEAR_IN_PRD\n' >"${ac9_sensitive}"
-ln -s "${ac9_sensitive}" "${ac9_target}/leaked-link.txt"
-# `-C` for the same reason as the tampered fixture above: an unguarded `cd`
-# into a directory `cp -a` may not have created would redirect `git add -A` at
-# the real repository.
-git init -q "${ac9_target}"
-git -C "${ac9_target}" add -A
-git -C "${ac9_target}" -c user.email=t@t -c user.name=t commit -q -m sym --no-verify >/dev/null 2>&1 || true
-ac9_out="${TMP_DIR}/ac9-prd.md"
-bash "${CODE_TO_PRD}" "${ac9_target}" "${ac9_out}" >"${TMP_DIR}/ac9.log" 2>&1
-assert_no_grep "AC9: symlink target content NOT in PRD" "CANARY_VALUE_SHOULD_NOT_APPEAR_IN_PRD" "${ac9_out}"
+if _needs_gl "AC9 symlink rejection"; then
+  ac9_target="${TMP_DIR}/sym-fixture"
+  cp -a "${FIXTURE}" "${ac9_target}"
+  ac9_sensitive="${TMP_DIR}/sensitive.txt"
+  printf 'CANARY_VALUE_SHOULD_NOT_APPEAR_IN_PRD\n' >"${ac9_sensitive}"
+  ln -s "${ac9_sensitive}" "${ac9_target}/leaked-link.txt"
+  # `-C` for the same reason as the tampered fixture above: an unguarded `cd`
+  # into a directory `cp -a` may not have created would redirect `git add -A` at
+  # the real repository.
+  git init -q "${ac9_target}"
+  git -C "${ac9_target}" add -A
+  git -C "${ac9_target}" -c user.email=t@t -c user.name=t commit -q -m sym --no-verify >/dev/null 2>&1 || true
+  ac9_out="${TMP_DIR}/ac9-prd.md"
+  bash "${CODE_TO_PRD}" "${ac9_target}" "${ac9_out}" >"${TMP_DIR}/ac9.log" 2>&1
+  assert_no_grep "AC9: symlink target content NOT in PRD" "CANARY_VALUE_SHOULD_NOT_APPEAR_IN_PRD" "${ac9_out}"
+fi
+
+# ---------------------------------------------------------------------------
+# AC5 (#8266) — a tool that cannot run is never reported as a verdict about the
+# PRD. Stub gitleaks on a PATH without timeout/gtimeout; no real gitleaks needed.
+# ---------------------------------------------------------------------------
+PREV_BODY="previous PRD — must survive a failed or positive scan"
+stub_case() {  # $1 = label, $2 = stub mode; sets SC_RC, SC_LOG, SC_OUT
+  local out_dir; out_dir="$(mktemp -d "${TMP_DIR}/stubcase.XXXXXX")"
+  SC_OUT="${out_dir}/prd.md"
+  SC_LOG="${out_dir}/run.log"
+  printf '%s\n' "${PREV_BODY}" > "${SC_OUT}"
+  local sp; sp="$(mk_stub_path "$2")"
+  PATH="${sp}" bash "${CODE_TO_PRD}" "${FIXTURE}" "${SC_OUT}" >"${SC_LOG}" 2>&1
+  SC_RC=$?
+}
+prev_preserved() {  # $1 = label
+  if [[ -f "${SC_OUT}" && "$(cat "${SC_OUT}")" == "${PREV_BODY}" ]]; then
+    echo "PASS: $1"; PASS=$((PASS + 1))
+  else
+    echo "FAIL: $1 (previous PRD at the output path was modified or removed)"; FAIL=$((FAIL + 1))
+  fi
+}
+no_dangling_report_path() {  # $1 = label
+  # Asserts the LIVE contract, not a retired one. This used to extract a path from
+  # a `  Report at: ` line and pass when it was absent OR existed — but this PR
+  # deleted that line from the script, so the extraction was permanently empty and
+  # the `-z` branch made the row unconditionally green. It had never once evaluated
+  # its predicate. Now: require the script to SAY the report is not kept (a positive
+  # anchor that a future re-add of an operator-facing path would break), and require
+  # no path-shaped `Report at:` line to come back.
+  local rp; rp="$(sed -n 's/^[[:space:]]*Report at: //p' "${SC_LOG}")"
+  if [[ -n "${rp}" ]]; then
+    echo "FAIL: $1 (a 'Report at:' path reappeared: ${rp}; GITLEAKS_OUT is removed by the EXIT trap, so any printed path dangles)"; FAIL=$((FAIL + 1))
+  elif ! grep -qF 'not kept on disk' "${SC_LOG}"; then
+    echo "FAIL: $1 (the scan log no longer states the report is not kept on disk — the anchor this row pins is gone)"; FAIL=$((FAIL + 1))
+  else
+    echo "PASS: $1"; PASS=$((PASS + 1))
+  fi
+}
+
+stub_case "AC5a" unrunnable
+assert_exit "AC5a: unrunnable gitleaks aborts at preflight with exit 2" 2 "${SC_RC}"
+assert_grep_fixed "AC5a: message says the tool cannot run" "not runnable" "${SC_LOG}"
+assert_grep_fixed "AC5a: message names the CI pin" "8.24.2" "${SC_LOG}"
+assert_no_grep "AC5a: never claims the PRD contained secrets" "found secrets" "${SC_LOG}"
+prev_preserved "AC5a: previous PRD untouched"
+
+stub_case "AC5b" scan-error
+assert_exit "AC5b: scan that errors without a report exits 2" 2 "${SC_RC}"
+assert_grep_fixed "AC5b: message says the scan did not complete" "did not complete" "${SC_LOG}"
+assert_no_grep "AC5b: never claims the PRD contained secrets" "found secrets" "${SC_LOG}"
+prev_preserved "AC5b: previous PRD untouched (new PRD withheld, not written)"
+
+stub_case "AC5c" findings
+assert_exit "AC5c: a real finding exits 1" 1 "${SC_RC}"
+assert_grep_fixed "AC5c: finding count reported" "1 finding" "${SC_LOG}"
+prev_preserved "AC5c: previous PRD untouched (new PRD withheld, not written)"
+no_dangling_report_path "AC5c: no printed report path that does not exist"
+
+stub_case "AC5d" clean
+assert_exit "AC5d: a working gitleaks on a host without timeout still scans and writes" 0 "${SC_RC}"
+assert_grep_fixed "AC5d: new PRD written" "## Coverage Caveats" "${SC_OUT}"
 
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
+# CI fail-on-skip contract, asserted against the epilogue's REAL BYTES. That
+# contract is the only thing stopping the skipped arms from reading as green on a
+# runner without gitleaks, and nothing asserted it — a refactor of the tail would
+# drop it silently and the shard would stay green. Extracted between the markers
+# and driven through a three-row truth table, so a mutation to the SHIPPED code
+# (not a copy) reds.
+_t_ci_contract() {
+  local body rc
+  body=$(awk '/^# >>> ci-contract-epilogue$/{f=1;next} /^# <<< ci-contract-epilogue$/{f=0} f' "${BASH_SOURCE[0]}")
+  if [[ -z "${body//[[:space:]]/}" ]]; then
+    echo "FAIL: CI fail-on-skip contract — epilogue markers matched nothing — the extraction is broken, not the contract"; FAIL=$((FAIL + 1))
+    return
+  fi
+  rc=0; ( set +e; eval 'SKIPPED_ARMS=(x); CI=true; PASS=1; FAIL=0'"
+$body" ) >/dev/null 2>&1 || rc=$?
+  if [[ "$rc" != 1 ]]; then echo "FAIL: CI fail-on-skip contract — CI=true with skips did not exit 1"; FAIL=$((FAIL + 1)); return; fi
+  rc=0; ( set +e; eval 'SKIPPED_ARMS=(x); unset CI; PASS=1; FAIL=0'"
+$body" ) >/dev/null 2>&1 || rc=$?
+  if [[ "$rc" == 1 ]]; then echo "FAIL: CI fail-on-skip contract — a local skip (no CI) exited 1"; FAIL=$((FAIL + 1)); return; fi
+  rc=0; ( set +e; eval 'SKIPPED_ARMS=(); CI=true; PASS=1; FAIL=0'"
+$body" ) >/dev/null 2>&1 || rc=$?
+  if [[ "$rc" == 1 ]]; then echo "FAIL: CI fail-on-skip contract — CI=true with no skips exited 1"; FAIL=$((FAIL + 1)); return; fi
+  echo "PASS: CI fail-on-skip contract (3-row truth table on the real epilogue)"; PASS=$((PASS + 1))
+}
+_t_ci_contract
+
+# >>> ci-contract-epilogue
 echo "---"
-echo "PASS=${PASS} FAIL=${FAIL}"
+echo "PASS=${PASS} FAIL=${FAIL} SKIPPED_ARMS=${#SKIPPED_ARMS[@]}"
+if (( ${#SKIPPED_ARMS[@]} > 0 )); then
+  printf '  skipped: %s\n' "${SKIPPED_ARMS[@]}"
+  if [[ "${CI:-}" == "true" ]]; then
+    echo "CI=true: ${#SKIPPED_ARMS[@]} arm(s) could not run because gitleaks is not runnable on this runner — a FAILURE, not a skip (the runner must provide gitleaks 8.24.2)." >&2
+    exit 1
+  fi
+fi
+# <<< ci-contract-epilogue
 if (( FAIL > 0 )); then
   exit 1
 fi

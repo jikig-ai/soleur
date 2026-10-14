@@ -23,6 +23,7 @@ const MEMBER: TeamMembershipRow = {
 describe("TeamMembershipList", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("renders rows for each member with email + role badge", () => {
@@ -159,6 +160,72 @@ describe("TeamMembershipList", () => {
     // The OWNER row is non-self for this Member; without the gate it would
     // render a kebab. With the gate, no row exposes one.
     expect(screen.queryByLabelText(/row actions/i)).not.toBeInTheDocument();
+  });
+
+  it("confirm-cancel releases pending — the Remove button is retryable after cancel", async () => {
+    // Regression pin for the resolution-inferred latch bug: window.confirm →
+    // false resolves the asyncFn WITHOUT latch() — the button must release,
+    // not stay latched/disabled.
+    const confirmMock = vi.fn().mockReturnValue(false);
+    const alertMock = vi.fn();
+    vi.stubGlobal("confirm", confirmMock);
+    vi.stubGlobal("alert", alertMock);
+    render(
+      <TeamMembershipList
+        members={[OWNER, MEMBER]}
+        currentUserId="user-owner"
+        workspaceId="ws-1"
+        isOwner={true}
+        byokDelegationsEnabled={false}
+        organizationName="Test Org"
+      />,
+    );
+    const kebab = screen.getByLabelText(/row actions/i);
+    fireEvent.click(kebab);
+    const removeItem = screen.getByText(/remove member/i);
+    fireEvent.click(removeItem);
+    // The confirm resolved false → menu closed and pending released. Reopen
+    // the kebab: the Remove button must be enabled again (not latched dead).
+    await vi.waitFor(() => {
+      expect(screen.queryByText(/remove member/i)).not.toBeInTheDocument();
+    });
+    fireEvent.click(kebab);
+    const btn = await screen.findByRole("button", { name: /remove member/i });
+    expect(btn).not.toBeDisabled();
+  });
+
+  it("!res.ok releases pending with a visible alert", async () => {
+    const alertMock = vi.fn();
+    vi.stubGlobal("confirm", vi.fn().mockReturnValue(true));
+    vi.stubGlobal("alert", alertMock);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        json: () => Promise.resolve({}),
+      }),
+    );
+    render(
+      <TeamMembershipList
+        members={[OWNER, MEMBER]}
+        currentUserId="user-owner"
+        workspaceId="ws-1"
+        isOwner={true}
+        byokDelegationsEnabled={false}
+        organizationName="Test Org"
+      />,
+    );
+    const kebab = screen.getByLabelText(/row actions/i);
+    fireEvent.click(kebab);
+    fireEvent.click(screen.getByText(/remove member/i));
+    await vi.waitFor(() => {
+      expect(alertMock).toHaveBeenCalled();
+    });
+    // Menu closed on submit — reopen: pending released, button retryable.
+    fireEvent.click(kebab);
+    const btn = screen.getByRole("button", { name: /remove member/i });
+    expect(btn).not.toBeDisabled();
   });
 
   // Attempting to open any kebab a Member can reach must surface no owner-only

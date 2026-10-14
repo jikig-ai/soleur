@@ -16,7 +16,7 @@ import { hashUserId } from "@/server/observability";
  *   ~50 in `server/**` via `createChildLogger` — pino inherits parent
  *   `formatters.log` per `pino/lib/proto.js:102,142`). The plan-time
  *   inventory captured 11; the corrected baseline is recorded in
- *   `knowledge-base/project/specs/feat-pino-userid-redaction-3698/tasks.md` §5.7.2.
+ *   `knowledge-base/project/specs/archive/20261013-014038-feat-pino-userid-redaction-3698/tasks.md` §5.7.2.
  *   Widening to nested requires a test fixture flip and ADR update.
  * - Null/undefined values resolve to the `"pepper_unset_null"` sentinel —
  *   mirrors `observability.ts:hashExtraUserId` (L48-55) so the empty-string

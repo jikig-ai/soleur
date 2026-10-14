@@ -13,6 +13,15 @@
 # `ignore_changes = [environment]` only, not the wide list that previously made
 # this script their sole executable definition.
 #
+# > **Superseded 2026-09-21 (#8451): this script can no longer write anything.**
+# > It upserts through `projects/{org}/{proj}/rules/`, and Sentry REMOVED that
+# > API (a persistent `410 {"detail":"This API no longer exists."}`). The rule
+# > it defined is now the frozen `sentry_alert.auth_per_user_loop` in
+# > issue-alerts.tf; its live content is pinned against the committed capture by
+# > scripts/sentry-alert-live-fidelity.sh, and a content change goes through
+# > #7985's native conversion. Do not run this script. It is retired with #7985.
+# > The paragraphs below are the pre-#8451 record and are left as written.
+#
 # WHY THIS SCRIPT STILL EXISTS. `auth-per-user-loop` uses
 # `event_unique_user_frequency_count`, which the pinned provider (0.15.7)
 # does not offer under `trigger_conditions` — verified against the provider
@@ -72,6 +81,37 @@ esac
 : "${SENTRY_ORG:?SENTRY_ORG must be set}"
 : "${SENTRY_PROJECT:?SENTRY_PROJECT must be set}"
 
+# Destination pins: the bearer now travels to https://<host>/api/0/.../<org>/<project>/, and
+# all three URL parts are env-derived, so an override could redirect the credential to a
+# host the operator did not intend. Refuse anything but the live org/project/hosts
+# (infra/sentry/variables.tf defaults; `jikigai` is the pre-DE slug the sibling audit also accepts).
+case "$SENTRY_ORG" in
+  jikigai|jikigai-eu) ;;
+  *) echo "ERROR: refusing org (expected jikigai-eu)" >&2; exit 2 ;;
+esac
+case "$SENTRY_PROJECT" in
+  web-platform|soleur-web-platform) ;;
+  *) echo "ERROR: refusing project (expected web-platform)" >&2; exit 2 ;;
+esac
+# The escape-hatch value is the host the repo secret SENTRY_API_HOST carries: the ORG-SUBDOMAIN
+# (reusable-release.yml documents `jikigai-eu.sentry.io`), or one of Sentry's region hosts.
+case "${SENTRY_API_HOST:-}" in
+  ''|sentry.io|us.sentry.io|de.sentry.io|eu.sentry.io|jikigai-eu.sentry.io|jikigai.sentry.io) ;;
+  *) echo "ERROR: refusing SENTRY_API_HOST (expected the org subdomain or a sentry.io region host)" >&2; exit 2 ;;
+esac
+
+# One wrapper owns the transport flags, the token-shape guard and the bearer header, so
+# the credential travels on curl's stdin config channel and never on its argument list
+# (/proc/<pid>/cmdline, ps, a traced parent). A newline in the token would inject a curl
+# config directive and an empty one would send the request headerless, so it is refused
+# before curl runs; the value is never echoed.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+sentry_curl() {
+  _bearer_ok "${SENTRY_AUTH_TOKEN:-}" || { echo "sentry_curl: SENTRY_AUTH_TOKEN unusable" >&2; return 2; }
+  curl --disable --noproxy '*' "$@" --config - \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_AUTH_TOKEN")
+}
+
 # --- Region detection (skipped if SENTRY_API_HOST is set) -----------------
 # Sentry has US (sentry.io) and EU (de.sentry.io) ingest clusters; the API
 # hostname follows the same split. Probe /users/me/ on each candidate and
@@ -82,8 +122,8 @@ esac
 api_host="${SENTRY_API_HOST:-}"
 if [[ -z "$api_host" ]]; then
   for candidate in de.sentry.io sentry.io; do
-    http=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' \
-      -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
+    case "$candidate" in de.sentry.io|sentry.io) ;; *) continue ;; esac
+    http=$(sentry_curl -s --max-time 10 -o /dev/null -w '%{http_code}' \
       "https://${candidate}/api/0/users/me/")
     if [[ "$http" == "200" ]]; then
       api_host="$candidate"
@@ -95,6 +135,10 @@ if [[ -z "$api_host" ]]; then
   echo "ERROR: Sentry token not valid against either US or EU ingest (set SENTRY_API_HOST to bypass)" >&2
   exit 1
 fi
+case "$api_host" in
+  sentry.io|us.sentry.io|de.sentry.io|eu.sentry.io|jikigai-eu.sentry.io|jikigai.sentry.io) ;;
+  *) echo "ERROR: refusing api host" >&2; exit 2 ;;
+esac
 echo "[info] Using Sentry API host: ${api_host}"
 
 # --- Action target resolution -------------------------------------------
@@ -102,8 +146,7 @@ echo "[info] Using Sentry API host: ${api_host}"
 # prefer Team (resolves to all team members + their notification preferences).
 # Fall back to IssueOwners + ActiveMembers if no ops/engineering team exists.
 team_id=""
-teams_json=$(curl -s --max-time 10 \
-  -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
+teams_json=$(sentry_curl -s --max-time 10 \
   "https://${api_host}/api/0/organizations/${SENTRY_ORG}/teams/")
 if jq -e . <<<"$teams_json" >/dev/null 2>&1; then
   team_id=$(jq -r '[.[] | select(.slug == "ops" or .slug == "engineering")] | .[0].id // empty' <<<"$teams_json")
@@ -133,8 +176,7 @@ upsert_rule() {
   # picked .[0].id we would update one copy and leave the other(s) drifted
   # — paging on stale config with no signal. Fail-closed when count > 1.
   local rules_json match_count match_ids existing
-  rules_json=$(curl -s --max-time 10 \
-    -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
+  rules_json=$(sentry_curl -s --max-time 10 \
     "https://${api_host}/api/0/projects/${SENTRY_ORG}/${SENTRY_PROJECT}/rules/")
   if ! jq -e . <<<"$rules_json" >/dev/null 2>&1; then
     echo "ERROR: GET /rules/ returned non-JSON for '${name}' lookup" >&2
@@ -165,8 +207,7 @@ upsert_rule() {
 
   local http
   if [[ -n "$existing" ]]; then
-    http=$(curl -s --max-time 10 -X PUT \
-      -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
+    http=$(sentry_curl -s --max-time 10 -X PUT \
       -H "Content-Type: application/json" \
       -o "$resp_file" -w '%{http_code}' \
       "https://${api_host}/api/0/projects/${SENTRY_ORG}/${SENTRY_PROJECT}/rules/${existing}/" \
@@ -178,8 +219,7 @@ upsert_rule() {
     fi
     echo "[ok] Updated rule '${name}' (id=${existing})"
   else
-    http=$(curl -s --max-time 10 -X POST \
-      -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
+    http=$(sentry_curl -s --max-time 10 -X POST \
       -H "Content-Type: application/json" \
       -o "$resp_file" -w '%{http_code}' \
       "https://${api_host}/api/0/projects/${SENTRY_ORG}/${SENTRY_PROJECT}/rules/" \

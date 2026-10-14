@@ -15,7 +15,7 @@ import { createHmac } from "node:crypto";
 // SDK's save-and-restore semantics.
 //
 // References:
-// - Plan: knowledge-base/project/plans/2026-05-13-feat-sentry-symmetric-userid-pseudonymisation-plan.md
+// - Plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-13-feat-sentry-symmetric-userid-pseudonymisation-plan.md
 // - ADR-029 (rename-at-boundary userId pseudonymisation)
 // - Sentry SDK v10 `withIsolationScope` docs (context7 `/getsentry/sentry-javascript`)
 
@@ -104,6 +104,9 @@ vi.mock("@sentry/nextjs", () => {
       return sentryUserStore.run(cell, fn);
     }),
     getCurrentScope: vi.fn(getCurrentScope),
+    // request-auth's absent-header fallback mirrors a breadcrumb — mock it so
+    // verifiedUserId() can run under this isolation harness.
+    addBreadcrumb: vi.fn(),
   };
 });
 

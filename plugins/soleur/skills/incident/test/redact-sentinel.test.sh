@@ -288,14 +288,21 @@ assert_exit "Test 12b: UNMAPPED homoglyph is a version-controlled known gap (exi
 
 # ---------------------------------------------------------------------------
 # AC6 — no literal invisibles committed anywhere in the two touched skills.
+# Exclusion: skills/legal-generate/references/templates/ is upstream-vendored
+# corpus whose bytes are pinned to upstream blobs in the skill NOTICE — the
+# blob pin is a strictly stronger integrity control than this grep (any local
+# edit, invisibles included, fails vendor-pin-integrity), and verbatim byte
+# fidelity is what keeps drift detection meaningful.
 # ---------------------------------------------------------------------------
 if grep -rlP '[\x{200b}\x{200c}\x{200d}\x{2060}\x{feff}\x{202a}-\x{202e}\x{2028}\x{2029}\x{00ad}\x{fffd}]' \
      "${REPO_ROOT}/plugins/soleur/skills/incident" \
-     "${REPO_ROOT}/plugins/soleur/skills/legal-generate" 2>/dev/null | grep -q .; then
+     "${REPO_ROOT}/plugins/soleur/skills/legal-generate" 2>/dev/null \
+     | grep -v '/skills/legal-generate/references/templates/' | grep -c >/dev/null .; then
   echo "FAIL: AC6: literal invisibles committed (must be chr()/escapes only)"
   grep -rlP '[\x{200b}\x{200c}\x{200d}\x{2060}\x{feff}\x{202a}-\x{202e}\x{2028}\x{2029}\x{00ad}\x{fffd}]' \
      "${REPO_ROOT}/plugins/soleur/skills/incident" \
-     "${REPO_ROOT}/plugins/soleur/skills/legal-generate" 2>/dev/null
+     "${REPO_ROOT}/plugins/soleur/skills/legal-generate" 2>/dev/null \
+     | grep -v '/skills/legal-generate/references/templates/'
   FAIL=$((FAIL + 1))
 else
   echo "PASS: AC6: no literal invisibles committed in incident/legal-generate skills"
@@ -879,7 +886,20 @@ elif ! grep -Fq 'skills secret-gate subset (#7450)' "${T20_GUARD}"; then
   echo "FAIL: Test 20: Guard 1 no longer contains the #7450 skills secret-gate describe block — deleting it is exactly what its own in-file floor cannot detect"
   FAIL=$((FAIL + 1))
 else
-  t20_declared=$(sed -n 's/^[[:space:]]*expect(assertions)\.toBe(\([0-9]\+\));[[:space:]]*$/\1/p' "${T20_GUARD}" | tail -1)
+  # SCOPED to the #7450 describe, not `| tail -1` over the whole file.
+  #
+  # The old form took the LAST `expect(assertions).toBe(N)` anywhere in the guard as a proxy
+  # for "Guard 1's floor". That is correct only while #7450 is the final block in the file.
+  # PR #8570 appended a third describe (the #7453 skills-ratchet axis, floor 8) AFTER it, so
+  # `tail -1` silently started reading the new block's floor and this test failed claiming the
+  # #7450 floor had been "lowered" to 8 — naming a cause that had not happened, on a file whose
+  # #7450 block was untouched. A positional proxy for a named thing breaks the moment the
+  # corpus grows, which is the exact class this suite exists to catch elsewhere.
+  #
+  # Range ends at the next line beginning `describe(`; sed searches the end pattern from the
+  # line AFTER the start, so the opening describe cannot close its own range. `head -1` takes
+  # the block's own floor.
+  t20_declared=$(sed -n '/^describe(.*#7450/,/^describe(/{ s/^[[:space:]]*expect(assertions)\.toBe(\([0-9]\+\));[[:space:]]*$/\1/p }' "${T20_GUARD}" | head -1)
   if [[ "${t20_declared}" != "${T20_FLOOR}" ]]; then
     echo "FAIL: Test 20: Guard 1's #7450 assertion floor is '${t20_declared:-<none>}', expected ${T20_FLOOR} — a floor lowered in the same commit that removes assertions is the failure mode this pins"
     FAIL=$((FAIL + 1))
@@ -1066,7 +1086,7 @@ while IFS= read -r t22_spec; do
             armed = 0
           }
         }')"
-      if printf '%s' "${t22_seg}" | grep -qE '>&[[:space:]]*"?2"?|[0-9]+>&' \
+      if printf '%s' "${t22_seg}" | grep -cE >/dev/null '>&[[:space:]]*"?2"?|[0-9]+>&' \
          || [[ -n "${t22_arm_redir}" ]]; then
         t22_on_stderr="${t22_on_stderr} ${t22_file##*/skills/}:${t22_reason}"
       fi
@@ -1176,11 +1196,11 @@ t24_strip_comments() {
 
 # Keyed on the ACT of obtaining or presenting a credential. `read -[a-z]*s` (not `read -s`)
 # because the real sites write `read -rs`; that exact miss cost a false-clean during the ruling.
-t24_acq_re='doppler secrets (get|download)|op read |vault kv get|gh auth token|read -[a-z]*s |Authorization: *Bearer|-H .Authorization|process\.env\.[A-Z_]*(TOKEN|_KEY|SECRET|PASSWORD)|env\("[A-Z_]*(TOKEN|_KEY|SECRET|PASSWORD)'
+t24_acq_re='doppler secrets (get|download)|op read |vault kv get|gh auth token|read -[a-z]*s |Authorization: *[A-Za-z]|-H .Authorization|process\.env\.[A-Z_]*(TOKEN|_KEY|SECRET|PASSWORD)|env\("[A-Z_]*(TOKEN|_KEY|SECRET|PASSWORD)'
 
 t24_acquirers=()
 while IFS= read -r t24_f; do
-  t24_strip_comments "${t24_f}" | grep -qE "${t24_acq_re}" \
+  t24_strip_comments "${t24_f}" | grep -cE >/dev/null "${t24_acq_re}" \
     && t24_acquirers+=("${t24_f#"${REPO_ROOT}"/plugins/soleur/}")
 done < <(find "${REPO_ROOT}/plugins/soleur" -path '*/scripts/*' -type f \
            \( -name '*.sh' -o -name '*.py' -o -name '*.ts' -o -name '*.mjs' -o -name '*.cjs' \) \
@@ -1192,7 +1212,7 @@ done < <(find "${REPO_ROOT}/plugins/soleur" -path '*/scripts/*' -type f \
 # These three are pinned because each is a DISTINCT acquisition mechanism; a predicate that
 # stops seeing any one of them has stopped doing its job whatever its total.
 #   trigger.sh                — secrets-manager read (`doppler secrets get … -c prd --plain`)
-#   discord-setup.sh          — ambient bot token (`DISCORD_BOT_TOKEN`)
+#   discord-setup.sh          — presents a bot token (`Authorization: Bot` on curl's stdin config)
 #   provision-hetzner.sh      — silent interactive prompt (`read -rs`)
 # `community-router.sh` is deliberately NOT pinned: under an acquisition predicate it correctly
 # drops out, because its only credential mention is inside a routing-table string.
@@ -1211,7 +1231,7 @@ for t24_req in "${t24_required[@]}"; do
 done
 
 if [[ -n "${t24_missing_required}" ]]; then
-  echo "FAIL: Test 24: credential-acquisition discovery no longer sees:${t24_missing_required} — each is a DISTINCT acquisition mechanism (secrets-manager read / ambient bot token / silent prompt), so the predicate is broken and the zero-violation verdict below would be vacuous. Population is ${#t24_acquirers[@]}."
+  echo "FAIL: Test 24: credential-acquisition discovery no longer sees:${t24_missing_required} — each is a DISTINCT acquisition mechanism (secrets-manager read / presented bot token / silent prompt), so the predicate is broken and the zero-violation verdict below would be vacuous. Population is ${#t24_acquirers[@]}."
   FAIL=$((FAIL + 1))
 else
   t24_violations=""
@@ -1232,8 +1252,8 @@ else
       # A path inside a COMMENT is documentation, not an invocation — `audit-flag-flip.sh`
       # lists its four consumers in a comment block, which is a manifest, not a call.
       case "${t24_file}" in
-        *.sh|*.py)        printf '%s' "${t24_line}" | grep -qE '^[[:space:]]*#' && continue ;;
-        *.ts|*.mjs|*.cjs) printf '%s' "${t24_line}" | grep -qE '^[[:space:]]*(//|\*)' && continue ;;
+        *.sh|*.py)        printf '%s' "${t24_line}" | grep -cE >/dev/null '^[[:space:]]*#' && continue ;;
+        *.ts|*.mjs|*.cjs) printf '%s' "${t24_line}" | grep -cE >/dev/null '^[[:space:]]*(//|\*)' && continue ;;
       esac
 
       # EXECUTION context only. The invariant is about reachability FOR EXECUTION, so a path
@@ -1244,11 +1264,11 @@ else
       t24_is_exec=0
       # (1) an explicit verb, or a prose "Run <path>" instruction
       printf '%s' "${t24_line}" \
-        | grep -qE "(^|[[:space:];&|(])(bash|sh|bun|node|python3|python|exec|source|\.)[[:space:]]+[^[:space:]]*${t24_rel_re}|[Rr]un[[:space:]]+[^[:space:]]*${t24_rel_re}" \
+        | grep -cE >/dev/null "(^|[[:space:];&|(])(bash|sh|bun|node|python3|python|exec|source|\.)[[:space:]]+[^[:space:]]*${t24_rel_re}|[Rr]un[[:space:]]+[^[:space:]]*${t24_rel_re}" \
         && t24_is_exec=1
       # (2) a BARE quoted-path invocation — `"${CLAUDE_PLUGIN_ROOT}/…/trigger.sh" --list`
       # relies on the file's exec bit and carries no verb at all.
-      printf '%s' "${t24_line}" | grep -qE "^[[:space:]]*\"?[^[:space:]]*${t24_rel_re}\"?[[:space:]]" \
+      printf '%s' "${t24_line}" | grep -cE >/dev/null "^[[:space:]]*\"?[^[:space:]]*${t24_rel_re}\"?[[:space:]]" \
         && t24_is_exec=1
       # (3) ASSIGN-THEN-INVOKE. `TRIGGER="…/trigger.sh"` then `bash "$TRIGGER"` on another
       # line is THE dominant shape in this corpus — it is why Guard 1 needs G2 at all ("the
@@ -1278,8 +1298,16 @@ else
       # whoever hits that next):
       #   ${CLAUDE_PLUGIN_ROOT}/…      loader-substituted at delivery (ADR-179 decision 1)
       #   $SCRIPT_DIR / $BASH_SOURCE   layout-invariant per ADR-178, likewise not CWD-derived
-      printf '%s' "${t24_line}" | grep -qE '\$\{CLAUDE_PLUGIN_ROOT\}/' && continue
-      printf '%s' "${t24_line}" | grep -qE '\$\{?(SCRIPT_DIR|BASH_SOURCE)' && continue
+      printf '%s' "${t24_line}" | grep -cE >/dev/null '\$\{CLAUDE_PLUGIN_ROOT\}/' && continue
+      # The operator-terminal handoff shape of ADR-249 (#8486): a skill tells the agent to PRINT
+      # `cd <WORKTREE> && bash <WORKTREE>/…` with <WORKTREE> replaced by the absolute worktree path,
+      # for the operator to run in their own terminal. Like ${CLAUDE_PLUGIN_ROOT} (substituted
+      # absolute by the loader), the placeholder is substituted absolute by the agent, and the `cd`
+      # into the same absolute root means no working directory chooses the script. Anchored on the
+      # WHOLE shape at line start, not on the token, so a bare `bash <WORKTREE>/…` elsewhere still
+      # counts. ${CLAUDE_PLUGIN_ROOT} cannot serve here: it is unset in the operator's terminal.
+      printf '%s' "${t24_line}" | grep -cE >/dev/null '^[[:space:]]*cd <WORKTREE> && bash <WORKTREE>/' && continue
+      printf '%s' "${t24_line}" | grep -cE >/dev/null '\$\{?(SCRIPT_DIR|BASH_SOURCE)' && continue
 
       t24_violations="${t24_violations}
     ${t24_file#"${REPO_ROOT}"/}:${t24_lno}"

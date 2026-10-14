@@ -1,0 +1,4 @@
+{"total_count":2,"check_runs":[
+{"id":9005,"name":"CodeQL","status":"completed","conclusion":"success","app":{"slug":"github-advanced-security"}},
+{"id":9006,"name":"Analyze (python)","status":"completed","conclusion":"success","app":{"slug":"synthetic-other-app"}}
+]}

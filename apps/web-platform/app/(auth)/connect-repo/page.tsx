@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 
 import { safeReturnTo } from "@/lib/safe-return-to";
+import { usePendingAction } from "@/hooks/use-pending-action";
 import type { Repo, SetupStep } from "@/components/connect-repo/types";
 import type { ProjectHealthSnapshot } from "@/server/project-scanner";
 import { ChooseState } from "@/components/connect-repo/choose-state";
@@ -479,6 +480,17 @@ export default function ConnectRepoPage() {
     return "/dashboard";
   }
 
+  // feat-ui-action-feedback: every user-triggered hard nav on this funnel
+  // (external GitHub OAuth installs AND terminal /dashboard hops) routes
+  // through one latched pending episode — feedback during the nav gap and a
+  // synchronous double-fire guard. `navPending` is drilled to the state
+  // screens' CTAs.
+  const hardNav = usePendingAction(async (url: string) => {
+    hardNav.latch();
+    window.location.assign(url);
+  });
+  const navPending = hardNav.pending;
+
   function handleSkip() {
     let returnPath = consumeReturnTo();
     if (returnPath === "/dashboard") {
@@ -487,7 +499,7 @@ export default function ConnectRepoPage() {
     }
     // GAP E (ADR-067 staleTimes): terminal entry into /dashboard (or a
     // safeReturnTo-sanitized invite target) — hard-nav to wipe the Router Cache.
-    window.location.assign(returnPath);
+    hardNav.run(returnPath);
   }
 
   async function handleCreateSubmit(name: string, isPrivate: boolean) {
@@ -571,7 +583,7 @@ export default function ConnectRepoPage() {
     } catch {
       // sessionStorage unavailable
     }
-    window.location.href = `https://github.com/apps/${appSlug}/installations/new`;
+    hardNav.run(`https://github.com/apps/${appSlug}/installations/new`);
   }
 
   function handleGitHubRedirectBack() {
@@ -588,7 +600,7 @@ export default function ConnectRepoPage() {
   }
 
   function handleUpdateAccess() {
-    window.location.href = `https://github.com/apps/${appSlug}/installations/new`;
+    hardNav.run(`https://github.com/apps/${appSlug}/installations/new`);
   }
 
   function handleRetry() {
@@ -599,7 +611,7 @@ export default function ConnectRepoPage() {
   }
 
   function handleResume() {
-    window.location.href = `https://github.com/apps/${appSlug}/installations/new`;
+    hardNav.run(`https://github.com/apps/${appSlug}/installations/new`);
   }
 
   function handleStartOver() {
@@ -615,12 +627,12 @@ export default function ConnectRepoPage() {
       sessionStorage.removeItem("soleur_create_flow");
     } catch { /* sessionStorage unavailable */ }
     // GAP E (ADR-067 staleTimes): terminal entry into /dashboard — hard-nav.
-    window.location.assign(consumeReturnTo());
+    hardNav.run(consumeReturnTo());
   }
 
   function handleViewKb() {
     // GAP E (ADR-067 staleTimes): terminal entry into /dashboard/kb — hard-nav.
-    window.location.assign("/dashboard/kb");
+    hardNav.run("/dashboard/kb");
   }
 
   // ---------------------------------------------------------------------------
@@ -640,6 +652,7 @@ export default function ConnectRepoPage() {
               onCreateNew={handleCreateNew}
               onConnectExisting={handleConnectExisting}
               onSkip={handleSkip}
+              navPending={navPending}
             />
           </>
         )}
@@ -653,14 +666,14 @@ export default function ConnectRepoPage() {
           <GitHubRedirectState
             onContinue={handleGitHubRedirectContinue}
             onBack={handleGitHubRedirectBack}
+            navPending={navPending}
           />
         )}
         {state === "github_resolve" && (
           <GitHubResolveState
-            onContinue={() => {
-              window.location.href = "/api/auth/github-resolve";
-            }}
+            onContinue={() => hardNav.run("/api/auth/github-resolve")}
             onBack={() => setState("choose")}
+            navPending={navPending}
           />
         )}
         {state === "select_project" && (
@@ -677,6 +690,7 @@ export default function ConnectRepoPage() {
             onUpdateAccess={handleUpdateAccess}
             onBack={() => setState("choose")}
             onRefresh={refreshRepos}
+            navPending={navPending}
           />
         )}
         {state === "setting_up" && <SettingUpState steps={setupSteps} />}
@@ -685,6 +699,7 @@ export default function ConnectRepoPage() {
             repoName={connectedRepoName}
             onContinue={handleOpenDashboard}
             onViewKb={handleViewKb}
+            navPending={navPending}
             healthSnapshot={healthSnapshot}
             syncConversationId={syncConversationId}
           />
@@ -701,6 +716,7 @@ export default function ConnectRepoPage() {
           <InterruptedState
             onResume={handleResume}
             onStartOver={handleStartOver}
+            navPending={navPending}
           />
         )}
       </div>

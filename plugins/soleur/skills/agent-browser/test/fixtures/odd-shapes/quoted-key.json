@@ -1,0 +1,10 @@
+{
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "### Page\n- Page URL: http://127.0.0.1:1/\n### Snapshot\n```yaml\n- generic [ref=e1]:\n  - 'textbox \"API Key #1\" [ref=e2]': ZZQP-SENTINEL-7980\n  - 'textbox \"Notes #2\" [ref=e3]': ZZQP-BENIGN-7980\n```"
+      }
+    ]
+  }
+}

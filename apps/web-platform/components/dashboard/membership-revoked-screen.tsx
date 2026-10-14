@@ -49,7 +49,10 @@ export function MembershipRevokedScreen() {
           Sign out and back in to access your other workspaces, or close this
           tab.
         </p>
+        {/* data-nav-exempt: sign-out boundary (ADR-067) — hard nav wipes the
+            Router Cache so no revoked-workspace shell can persist. */}
         <a
+          data-nav-exempt="sign-out boundary — hard nav wipes Router Cache (ADR-067)"
           href="/login?signout=1"
           className="inline-block rounded-md bg-soleur-accent-gold-fg px-4 py-2 text-sm font-medium text-soleur-bg-surface-1 hover:opacity-90"
         >

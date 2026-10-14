@@ -9,6 +9,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { reportSilentFallback } from "@/server/observability";
+import { verifiedUserId } from "@/server/request-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -24,10 +25,8 @@ export async function POST(
   if (!valid) return rejectCsrf("api/dashboard/today/[id]/edit", origin);
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+  const userId = await verifiedUserId(req);
+  if (!userId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
@@ -53,7 +52,7 @@ export async function POST(
     .from("messages")
     .update({ draft_preview: draftPreview })
     .eq("id", messageId)
-    .eq("user_id", user.id)
+    .eq("user_id", userId)
     .eq("status", "draft")
     .select("id, draft_preview")
     .maybeSingle();
@@ -63,7 +62,7 @@ export async function POST(
       feature: "dashboard-edit",
       op: "messages-update",
       message: "Failed to update draft_preview",
-      extra: { userId: user.id, messageId },
+      extra: { userId, messageId },
     });
     return NextResponse.json({ error: "internal_error" }, { status: 500 });
   }

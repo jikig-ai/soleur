@@ -56,6 +56,18 @@ could-not-measure collapse survives. Three rules follow:
 
 - **Never take a verdict from a partial artifact.** A backgrounded command has a
   completion notification precisely so you do not have to infer from a tail.
+
+  > **Superseded 2026-09-09 (#7957) — the second sentence above is false.** The bullet
+  > is left exactly as written; only that sentence is superseded, and it is retained
+  > because it is the claim #7912 measured. A background task's exit code is that of the
+  > LAST command the shell EXECUTED, so a trailing convenience line becomes the verdict:
+  > measured three times in one session, the notification reported `exit code 0` while the log's
+  > own `COMMIT_RC` recorded `git commit` returning 1, because the string ended in a
+  > `git log`. A fourth run killed mid-`tsc` by the memory reaper also notified
+  > `completed` — could-not-measure rendered as measured-good, which is the parent class
+  > this file is about. Write the real code yourself (`echo "RC=$?" >> log`) and read
+  > that. The notification is authoritative for LIVENESS (has it exited?), never for
+  > VERDICT (did it succeed?).
 - **Never pipe a command whose exit code is the result.** `cmd | tail` discards the
   status *and* the evidence. Redirect to a file and read `$?`.
 - **Make "the loop ran" observable.** Print the count. `0 failures` and `0 executions`
@@ -105,6 +117,14 @@ reds 2 tests; making it unconditional reds 24.
    commit in the same worktree.** Recovery: killed the duplicate subtree, verified no
    `index.lock`, HEAD unmoved. **Prevention:** wait for the completion notification; a
    mid-stream hook line is not the verdict.
+
+   > **Superseded 2026-09-09 (#7957) — this Prevention is the claim that failed.** The
+   > item is left exactly as written. "Wait for the completion notification" is not a
+   > remedy for a VERDICT misread: the notification's exit code is that of the last
+   > command the shell executed, and a reaped run notifies `completed` regardless. Under
+   > #7912 this rule was followed and produced three false greens. Correct remedy: write
+   > `echo "RC=$?" >> log` immediately after the command whose status matters and read
+   > that. The notification settles LIVENESS only.
 2. **`git commit … | tail -25` swallowed the exit code and the only copy of a 52-minute
    failure.** Recovery: re-ran the battery. **Prevention:** never pipe a command whose
    exit status is the result; redirect and read `$?`.

@@ -94,6 +94,13 @@ via the existing `apply-deploy-pipeline-fix.yml` auto-apply (HTTPS
 - Acute: `curl -s https://app.soleur.ai/health | jq .version` → `0.213.6` (past the frozen `0.213.2`).
 - Structural: `ci-deploy.test.sh` 137/137 (7 new #6400 cases incl. login-ok/pull-deny→recovered, fail-open, relogin-fail→no-retry).
 - Soak (post-deploy): `scripts/followthroughs/deploy-ghcr-pull-recovery-6400.sh` — zero `op:image-pull auth_denied` error events over 3 days (enrolled on #6400).
+  - **Retired 2026-09-23 (#8036 item 1c).** That probe soaked the auth-recovery machinery this
+    incident produced, and 1c deleted it: the host-side GHCR read path — the prelude
+    `docker login ghcr.io`, the Doppler re-fetch/relogin helper and the pull helper's
+    auth-denied leg — is gone, so the probe would have been soaking code that no longer exists.
+    Its body is the base for `scripts/followthroughs/ghcr-read-retired-8036.sh`, which grades
+    the retirement itself. The path this incident describes is now structurally impossible on
+    the host side rather than merely recovered-from. The narrative above is left as written.
 
 ## Root Cause(s) — 5-Whys
 

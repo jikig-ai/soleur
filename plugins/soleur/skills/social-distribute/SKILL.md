@@ -3,6 +3,10 @@ name: social-distribute
 description: "This skill should be used when distributing a blog article across social platforms (Discord, X/Twitter, IndieHackers, Reddit, Hacker News, LinkedIn). Writes a persistent content file for automated publishing."
 ---
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 # Social Distribute
 
 Generate platform-specific content variants from a blog article and write them to a persistent content file for the automated publishing pipeline. Discord can optionally be posted immediately via webhook after approval. The content file feeds into the directory-driven cron pipeline (`content-publisher.sh`) for scheduled publishing.
@@ -28,17 +32,17 @@ Check if `knowledge-base/marketing/brand-guide.md` exists.
 
 **If missing:**
 > No brand guide found. Run the brand architect agent first to establish brand identity:
-> `Use the brand-architect agent to define our brand.`
+> `Use the soleur:marketing:brand-architect agent to define our brand.`
 
 Stop execution.
 
 ### 2. Blog Post Path (hard)
 
-The skill expects a blog post path as an argument (e.g., `/soleur:social-distribute plugins/soleur/docs/blog/my-article.md`).
+The skill expects a blog post path as an argument (e.g., `soleur:social-distribute plugins/soleur/docs/blog/my-article.md`).
 
 **If no path provided or file does not exist:**
 > Provide a path to a blog post markdown file:
-> `/soleur:social-distribute <path-to-blog-post.md>`
+> `soleur:social-distribute <path-to-blog-post.md>`
 
 Stop execution.
 
@@ -123,6 +127,7 @@ Read the brand guide sections that inform content generation:
 3. Read `## Channel Notes > ### X/Twitter` -- apply X/Twitter-specific guidelines
 4. Read `## Channel Notes > ### LinkedIn Personal` -- apply LinkedIn personal profile guidelines
 5. Read `## Channel Notes > ### LinkedIn Company Page` -- apply LinkedIn company page guidelines
+6. Read `## Channel Notes > ### Blog` and `### Hacker News` -- apply any rule they set for distributing a blog post (for example, not submitting it to Hacker News as-is)
 
 If a channel notes section is missing for a platform, generate content using only the `## Voice` section.
 
@@ -169,6 +174,8 @@ Using the blog post content, stats values, article URL, and brand guide as conte
 - Reddit detects and punishes self-promotion -- frame as sharing knowledge
 
 #### 5.5 Hacker News Submission
+
+If the brand guide's `### Blog` or `### Hacker News` note says not to submit blog posts to Hacker News as-is, write the section as a one-line note instead: point to the post's technical write-up if the post links one, otherwise say HN is skipped for this post.
 
 - Title maximum 80 characters
 - No marketing language, no ALL CAPS, no exclamation marks
@@ -465,6 +472,7 @@ Next steps:
 
 - All Discord posting requires explicit user approval before sending -- no auto-send
 - Character limits are enforced during generation, not as a post-hoc check (2000 for Discord, 280 per tweet for X/Twitter, 80 for HN title, 300 for Bluesky, 1300 optimal / 3000 max for LinkedIn Personal and LinkedIn Company Page)
+- Variants are NEW prose, not a copy of checked prose: every factual sentence in a channel that posts automatically (Discord, X, Bluesky, both LinkedIn pages) must be checked against the fact-checked post, and hook compression drifts toward cause-and-effect and "the whole X" claims the post avoided. Run `soleur:marketing:fact-checker` on the distribution file, or diff each variant's factual sentences against the post. Compute every `-- NNN chars` label and the Bluesky length from the final text (Bluesky's 300 includes the URL); never hand-count. **Why:** #8548 — LinkedIn and tweet variants turned two side-by-side defects into a causal claim the checked post had avoided; review rated it High.
 - Discord uses the plain `content` field, not rich embeds
 - JSON-escape all Discord content before inserting into the webhook payload
 - When posting via webhook, always include `username`, `avatar_url`, and `allowed_mentions: {parse: []}` fields

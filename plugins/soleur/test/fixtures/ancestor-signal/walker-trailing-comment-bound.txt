@@ -1,0 +1,6 @@
+# fixture data, never executed: the bound token only in a trailing comment; must read bounded=no
+p=$1; top=""   # [ "$p" != "$SOLEUR_TEST_SUITE_PID" ] || break
+while [ -r "/proc/$p/cmdline" ]; do
+  top=$p; p=$(awk '{print $4}' "/proc/$p/stat")
+done
+[ -n "$top" ] && kill -TERM "$top"

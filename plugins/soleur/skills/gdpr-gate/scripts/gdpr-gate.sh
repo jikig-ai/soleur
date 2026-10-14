@@ -115,17 +115,15 @@ fi
 # cron binding is unavailable AND last-verified is parseable — when both are
 # 999 the existing 30d/90d banners cover the case.
 #
-# ⚠️ THE CRON HALF OF THIS BINDING IS INERT TODAY (#7255). `cron_days_stale`
-# resolves to 999 on EVERY call: the probe queries
-# `scheduled-content-vendor-drift.yml`, and that workflow no longer exists —
-# the job moved to an Inngest cron with no GitHub Actions run to list. So the
-# MIN below is always MIN(notice, 999) == notice, and the anti-backdating
-# property this comment describes is NOT currently in force. The direction is
-# fail-safe (the operator-attested-mode banner fires rather than a false
-# freshness claim), which is exactly why it went unnoticed. Not fixed here —
-# an Inngest-aware liveness source is a different change in a different
-# subsystem. The comment is corrected rather than left asserting a defense
-# that is not running.
+# The cron half of this binding was inert from the Inngest migration until
+# #7255 fixed the probe: `cron_days_stale` then resolved to 999 on every call
+# because the query targeted a deleted GHA workflow, and the MIN below was
+# always MIN(notice, 999) == notice — the fail-safe direction, which is why
+# it went unnoticed. The probe now reads the check's own GitHub artifact
+# (the `ci/vendor-attest-*` PR the cron writes each run — see the DATA SOURCE
+# comment in `notice-frontmatter.sh` `cmd_cron_run_stale`), so the
+# anti-backdating property described above is in force again whenever a
+# token is present.
 # SIBLING of this script, so it needs no root at all: `$BASH_SOURCE`-relative is
 # layout-invariant (ADR-178) and leaves NO operand for a checked-out tree to shadow —
 # strictly better here than any root-anchored form, including CLAUDE_PROJECT_DIR.

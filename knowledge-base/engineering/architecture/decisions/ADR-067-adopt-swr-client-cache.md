@@ -255,3 +255,61 @@ Cache is in-memory in the existing `dashboard` React container leaf, no external
 actor / vendor / data-store / access-relationship changes. Caching changes fetch
 *timing*; the boundary-wipe invariant keeps per-principal isolation identical. No
 `.c4` edit.
+
+## Amendment (2026-09-28): The mount-fetch contract — mount-path GETs route through `swrKeys`
+
+**Status:** Accepted. **Issue:** #9178 (`feat-one-shot-9178-fcp-redux-cwv`).
+**Threshold:** `single-user incident` (inherited — this amendment governs *which*
+channel mount-path reads use; the cache's scope/invalidation invariant is
+unchanged and is what makes the contract safe to state as a rule).
+
+### Context
+
+The original decision adopted SWR but did not forbid the parallel channel it was
+meant to replace. Post-#9034 measurement (#8985 re-evaluation, 2026-09-28) found
+the dashboard mount still firing ~15–18 `/api/*` fetches per navigation with
+same-mount duplicates (`workspace/active-repo` ×3–4, `foundation-status` ×3,
+`today` ×2, `inbox` ×2, `list-memberships` ×2, `byok/effective-status` ×2). The
+cause is structural, not incidental: `hooks/use-active-repo.ts` kept its own
+module-level `inFlight` latch and raw `fetch`, while sibling consumers read
+`swrKeys.workspaceActiveRepo()` — two parallel channels for one endpoint. A
+raw-fetch consumer's poll cannot join an SWR flight, and a per-hook latch is
+blind both to the SWR channel and to sequential mounts after it clears, so only
+SWR's per-key coalescing + `dedupingInterval` collapse duplicates *across*
+consumers.
+
+### Decision
+
+**Every mount-time `/api/*` GET in the dashboard shell routes through `useSWR`
+with a `swrKeys.*` tuple.** A raw `fetch()` GET on the mount path is the defect
+class — enforced by the census guard
+`apps/web-platform/test/dashboard-mount-fetch-dedup.test.tsx`, whose protected
+population is the shell's mount-rendered module set (the three entry modules
+plus every component/hook directory the shell mounts each navigation,
+enumerated in the guard's header — a static approximation; runtime duplicates
+the probe's `requests[]` census is the dynamic backstop). New mount-path reads
+add a `swrKeys` entry; they do not add a `fetch`.
+
+**`usePostFcp` + `null`-key gating is the sanctioned deferral mechanism.**
+`hooks/use-post-fcp.ts` flips after the first paint opportunity
+(`requestIdleCallback` bounded by `{timeout}` so a saturated main thread
+cannot starve the gate; `requestAnimationFrame → setTimeout` fallback on
+rIC-less engines — neither arm observes a real FCP entry; the contract is
+"after first render + one paint opportunity"). Non-critical SWR consumers
+pass a `null` key until then, so no fetch contends with first paint.
+Above-the-fold keys stay ungated.
+
+### Consequences
+
+- The FR4 scope invariant (clear-on-sign-out/switch) now provably covers every
+  mount-path read, because they all share the one cache `clearSwrCache` evicts —
+  the amendment *strengthens* the load-bearing safeguard this ADR exists around.
+- Same-mount duplicate GETs collapse to zero on a warm `/dashboard` navigation
+  (probe `duplicates` table is the observable; designed poll repeats report on
+  the `expectedRepeats` channel so a regressed fan-out stays observable).
+- The contract extends to non-`/api/*` transports where the same fan-out
+  exists: `swrKeys.onboardingState()` keys the PostgREST users-row read
+  shared by `dashboard/page.tsx` + `tour-provider.tsx` (sentinel key, no URL
+  shape — a raw second transport was the reviewed `#9180` gap).
+- Deferral changes fetch *timing*, never cache scope; a gated key that fires
+  post-paint still lands in the same per-key entry under the same clear rules.

@@ -5,11 +5,15 @@
 // (Addendum item 5), and a quiet "Live" marker (Addendum item 4 — green dot +
 // green text, NO fill) for active seeded cards.
 
+import { memo } from "react";
 import { isLive, type WorkstreamIssue } from "@/lib/workstream";
 import { AssigneeChip, CreatorChip, UserAvatar } from "./assignee-chip";
 import { PriorityPill } from "./priority-pill";
 
-export function IssueCard({
+// memoized: the progressive SSE feed commits up to ~23 cache updates per load
+// and each commit builds a new issues ARRAY but only new objects for streamed
+// ids — unchanged cards keep their reference and skip the re-render.
+export const IssueCard = memo(function IssueCard({
   issue,
   onOpen,
 }: {
@@ -21,6 +25,7 @@ export function IssueCard({
   return (
     <button
       type="button"
+      data-button-exempt="composite kanban card — block-level content (id, title, pills, chips, avatars); Button base inline-flex/padding conflicts with block w-full text-left card layout"
       onClick={() => onOpen(issue.id)}
       className="block w-full rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 p-3 text-left transition-colors hover:border-soleur-text-muted hover:bg-soleur-bg-surface-2/40"
     >
@@ -51,4 +56,4 @@ export function IssueCard({
       </div>
     </button>
   );
-}
+});

@@ -65,7 +65,7 @@ All five errors were self-recovered via clear command output. Per `wg-every-sess
 
 - AGENTS.md `hr-weigh-every-decision-against-target-user-impact` — the rule that fired user-impact-reviewer at review time.
 - `plugins/soleur/skills/review/SKILL.md` — section 1 conditional agents #15 (user-impact-reviewer trigger).
-- `knowledge-base/project/plans/2026-05-03-feat-schedule-one-time-runs-plan.md` — Five Defenses table (D5 added during review).
+- `knowledge-base/project/plans/archive/20261013-014038-2026-05-03-feat-schedule-one-time-runs-plan.md` — Five Defenses table (D5 added during review).
 - `plugins/soleur/skills/schedule/SKILL.md` — Step 0c capture + Step 3b pre-flight checks #6 and #7.
 - `knowledge-base/project/learnings/2026-04-15-multi-agent-review-catches-bugs-tests-miss.md` — generalized pattern catalogue.
 - `knowledge-base/project/learnings/2026-04-24-multi-agent-review-catches-feature-wiring-bugs.md` — adjacent precedent.

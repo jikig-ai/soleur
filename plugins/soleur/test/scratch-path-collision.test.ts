@@ -93,12 +93,6 @@ const ALLOWLIST: readonly Waiver[] = [
     reason:
       "Test-fixture template: an illustrative WORKING DIRECTORY inside a synthesized prompt that mirrors the one-shot subagent shape. Input data under test, not a prescribed scratch path.",
   },
-  {
-    file: "skills/plan/SKILL.md",
-    text: "/tmp/.doppler",
-    reason:
-      "Incident prose (#6536): names doppler's own real cache dir as the diagnosed root cause (the heartbeat unit lacked PrivateTmp=true). Documents a system path, does not prescribe writing scratch there.",
-  },
   // The agent-browser CLI uses a fixed /tmp/agent-browser/ cache dir of its own; these two
   // sites are the documented command to CLEAR that stale cache, not a scratch path this
   // guidance invents. The path is the tool's, unfixable from a SKILL.md.
@@ -171,7 +165,7 @@ describe("scratch-path-collision (#6486)", () => {
           `read or clobber each other's artifacts:\n` +
           offenders.map((o) => `  ${o}`).join("\n") +
           `\n\nCapture a unique path and echo it so it stays findable:\n` +
-          `  log=$(mktemp -t <name>.XXXXXXXX.log); <cmd> > "$log" 2>&1; rc=$?; echo "EXIT=$rc LOG=$log"\n` +
+          `  log=$(mktemp -p "$(mktemp -d -t soleur-run.$$.XXXXXXXX)"); <cmd> > "$log" 2>&1; rc=$?; echo "EXIT=$rc LOG=$log"\n` +
           `Use "$(git rev-parse --absolute-git-dir)" instead when a LATER, separate Bash call\n` +
           `must find the artifact by name AND no concurrent agent shares this worktree.\n` +
           `Fix READS too — a reader left on the old path consumes a sibling's file.\n` +

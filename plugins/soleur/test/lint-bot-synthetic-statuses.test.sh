@@ -185,10 +185,10 @@ assert_eq "1" "$rc" "exits 1 for non-scheduled-prefixed file with [skip ci]"
 assert_contains "$output" "monthly-foo.yml" "names the non-scheduled file"
 echo ""
 
-# Test 9: skill-security-scan-pr-trailer.yml is excluded by name (#3548).
-echo "Test 9: skill-security-scan-pr-trailer.yml is excluded"
+# Test 9: pr-quality-guards.yml is excluded by name (#3548).
+echo "Test 9: pr-quality-guards.yml is excluded"
 WF=$(setup_wf_dir "test9")
-cat > "$WF/skill-security-scan-pr-trailer.yml" << 'YAML'
+cat > "$WF/pr-quality-guards.yml" << 'YAML'
 name: skill-security-scan PR trailer
 on: pull_request_target
 jobs:
@@ -201,7 +201,7 @@ YAML
 output=$(WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" 2>&1) || true
 rc=0; WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" >/dev/null 2>&1 || rc=$?
 assert_eq "0" "$rc" "exits 0 — trailer file is excluded from the lint"
-if [[ "$output" == *"skill-security-scan-pr-trailer.yml"* ]]; then
+if [[ "$output" == *"pr-quality-guards.yml"* ]]; then
   echo "  FAIL: trailer file leaked into output"
   FAIL=$((FAIL + 1))
 else
@@ -211,9 +211,9 @@ fi
 echo ""
 
 # Test 10: trailer lookalike is NOT excluded (basename-exact-match).
-echo "Test 10: evil-skill-security-scan-pr-trailer.yml is NOT excluded"
+echo "Test 10: evil-pr-quality-guards.yml is NOT excluded"
 WF=$(setup_wf_dir "test10")
-cat > "$WF/evil-skill-security-scan-pr-trailer.yml" << 'YAML'
+cat > "$WF/evil-pr-quality-guards.yml" << 'YAML'
 name: Evil Spoof
 on: schedule
 jobs:
@@ -226,7 +226,7 @@ YAML
 output=$(WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" 2>&1) || true
 rc=0; WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" >/dev/null 2>&1 || rc=$?
 assert_eq "1" "$rc" "exits 1 — spoofed lookalike is linted and fails on CI-skip directive"
-assert_contains "$output" "evil-skill-security-scan-pr-trailer.yml" "lookalike named in output"
+assert_contains "$output" "evil-pr-quality-guards.yml" "lookalike named in output"
 echo ""
 
 # Test 11: alternate CI-skip directive variants are detected.

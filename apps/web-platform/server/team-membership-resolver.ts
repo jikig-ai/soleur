@@ -2,6 +2,7 @@ import { isTeamWorkspaceInviteEnabled, isByokDelegationsEnabled, type Identity }
 import { resolveCurrentOrganizationId, resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
 import { userHasEffectiveByokKey } from "@/server/byok-resolver";
 import { reportSilentFallback } from "@/server/observability";
+import { boundedAuthGetUser } from "@/server/request-auth";
 
 // Server-only resolver for the /dashboard/settings/team membership page.
 // Factored out of the page component so AC-A's flag-OFF → notFound() behavior
@@ -82,8 +83,8 @@ export async function resolveTeamMembershipPageData(
   supabase: AuthClient,
   service: ServiceClient,
 ): Promise<TeamMembershipPageResult> {
-  const userResp = await supabase.auth.getUser();
-  const user = userResp.data?.user;
+  const userData = await boundedAuthGetUser(supabase);
+  const user = userData?.user;
   if (!user) return { ok: false, reason: "not-found" };
 
   const orgId = await resolveCurrentOrganizationId(user.id, service);
@@ -98,7 +99,7 @@ export async function resolveTeamMembershipPageData(
   }).select("name").eq("id", orgId).single();
   const organizationName: string | null = orgNameResp.data?.name ?? null;
 
-  const identity: Identity = { userId: user.id, role: "prd", orgId };
+  const identity: Identity = { userId: user.id, role: "prd", orgId, email: null, subscriptionStatus: null };
   if (!(await isTeamWorkspaceInviteEnabled(orgId, identity))) {
     return { ok: false, reason: "not-found" };
   }

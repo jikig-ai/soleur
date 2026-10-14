@@ -22,7 +22,7 @@
 // — a JS `try…finally` is WRONG here because step.sleep suspends via a
 // control-flow throw that would run `finally` prematurely at the first
 // suspension. That reasoning is unchanged by the added sleeps: there is still no
-// `finally`. There is no in-repo `onFailure` precedent; the config key is
+// `finally`. There was no in-repo `onFailure` precedent when this was written; the config key is
 // verified against pinned inngest 3.54.2.
 // The read-only preflight lives in its OWN preceding step so the atomic mutating
 // step holds an HTTP connection only for the toggle→settle→reset window (the
@@ -1342,7 +1342,7 @@ export async function runReissueSteps(
 
 // =============================================================================
 // Live-IO dep construction (Octokit + Cloudflare fetch), mirroring
-// cf-cache-purge.ts (Bearer + AbortController) + cron-gh-pages-cert-state.ts.
+// cf-cache-purge.ts (Bearer + AbortController).
 // =============================================================================
 
 async function cfFetch(

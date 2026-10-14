@@ -15,7 +15,7 @@ import {
 // call returns whatever shape the test stages.
 //
 // References:
-// - Plan: knowledge-base/project/plans/2026-05-25-feat-jti-revoke-rls-3930-3932-plan.md §Phase 3.1
+// - Plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-25-feat-jti-revoke-rls-3930-3932-plan.md §Phase 3.1
 // - Integration coverage in test/server/tenant-jwt-rls-deny.tenant-isolation.test.ts
 
 const mockMirror = vi.fn();

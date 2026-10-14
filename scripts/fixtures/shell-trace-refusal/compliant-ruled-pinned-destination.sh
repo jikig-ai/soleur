@@ -20,4 +20,4 @@ if [ "$SINK_URL" != "https://pinned.example/ingest" ]; then
   printf 'refusing an unpinned destination\n' >&2
   exit 2
 fi
-curl --disable --noproxy '*' -sS -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" "$SINK_URL" || true
+curl --disable --noproxy '*' -sS --config - "$SINK_URL" < <(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_AUTH_TOKEN") || true

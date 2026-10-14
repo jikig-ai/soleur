@@ -8,8 +8,9 @@
 # Exit 1 = an unpaired member on either side, or nothing to pair at all.
 #
 # ── THE FAILURE THIS EXISTS FOR ────────────────────────────────────────────
-# The adoption is 27 `removed { from = sentry_issue_alert.<n>  lifecycle
-# { destroy = false } }` blocks paired with 27 `import { to = sentry_alert.<n> }`
+# The adoption is N `removed { from = sentry_issue_alert.<n>  lifecycle
+# { destroy = false } }` blocks paired with N `import { to = sentry_alert.<n> }`
+# (27 in #7650 Phase 2; 1 in Phase 3.4 for `git_data_boot_warning`)
 # blocks. Delete ONE `import{}` and every per-address check still passes: the
 # remaining 26 pairs are individually well-formed, the 27th `removed{}` is
 # well-formed, and the orphaned `sentry_alert` block is well-formed. Nothing is
@@ -141,5 +142,5 @@ if [[ -n "$only_import" ]]; then
   echo "::error::IMPORTED BUT NOT FORGOTTEN — these addresses are adopted while the old address stays in state, so the same live rule is managed twice:" >&2
   sed 's/^/::error::  sentry_alert./' <<<"$only_import" >&2
 fi
-echo "::error::Restore the missing removed{}/import{} block. Each of the 27 rules needs BOTH: the removed{} drops the sentry_issue_alert address out of state without touching Sentry, and the import{} adopts the same live rule at its sentry_alert address. One without the other either orphans a live paging rule or plans a create that collides with it." >&2
+echo "::error::Restore the missing removed{}/import{} block. Each adopted rule needs BOTH: the removed{} drops the sentry_issue_alert address out of state without touching Sentry, and the import{} adopts the same live rule at its sentry_alert address. One without the other either orphans a live paging rule or plans a create that collides with it." >&2
 exit 1

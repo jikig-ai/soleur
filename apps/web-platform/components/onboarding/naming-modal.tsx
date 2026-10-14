@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { ROUTABLE_DOMAIN_LEADERS } from "@/server/domain-leaders";
 import { LeaderAvatar } from "@/components/leader-avatar";
+import { Button } from "@/components/ui/button";
+import { usePendingAction } from "@/hooks/use-pending-action";
 
 interface NamingOnboardingModalProps {
   onSave: (leaderId: string, name: string) => Promise<void>;
@@ -21,11 +23,15 @@ export function NamingOnboardingModal({
     setNames((prev) => ({ ...prev, [leaderId]: value }));
   }
 
-  async function handleSave() {
+  // feat-ui-action-feedback: Save persists names (N async writes) — runs
+  // through usePendingAction so the click gets the pending contract and a
+  // rejection terminates into the role="alert" surface below (was: an
+  // unhandled rejection with the button simply re-clickable).
+  const saveAction = usePendingAction(async () => {
     const entries = Object.entries(names).filter(([, v]) => v.trim() !== "");
     await Promise.all(entries.map(([id, name]) => onSave(id, name.trim())));
     onComplete();
-  }
+  });
 
   return (
     <div className="flex min-h-[100dvh] items-center justify-center bg-soleur-bg-base px-4">
@@ -60,19 +66,30 @@ export function NamingOnboardingModal({
           ))}
         </div>
 
+        {saveAction.error ? (
+          <p role="alert" className="mt-6 text-center text-sm text-red-400">
+            {saveAction.error.message}
+          </p>
+        ) : null}
         <div className="mt-8 flex items-center justify-center gap-6">
-          <button
+          <Button
+            variant="ghost"
+            type="button"
             onClick={onSkip}
-            className="text-sm text-soleur-text-secondary transition-colors hover:text-soleur-text-primary"
+            className="hover:text-soleur-text-primary"
           >
             Skip for now
-          </button>
-          <button
-            onClick={handleSave}
-            className="rounded-lg bg-soleur-accent-gold-fill px-6 py-2.5 text-sm font-semibold text-soleur-text-on-accent transition-colors hover:bg-soleur-accent-gold-text"
+          </Button>
+          <Button
+            variant="gold"
+            type="button"
+            onClick={saveAction.run}
+            loading={saveAction.pending}
+            loadingLabel="Saving"
+            className="font-semibold"
           >
             Save Names
-          </button>
+          </Button>
         </div>
       </div>
     </div>

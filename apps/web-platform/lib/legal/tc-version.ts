@@ -11,7 +11,7 @@
  * Bump-policy rubric (material / clarifying / cosmetic) lives at
  * knowledge-base/legal/tc-version-bump-policy.md (CLO-signed).
  */
-export const TC_VERSION = "2.5.0";
+export const TC_VERSION = "2.6.0";
 
 /**
  * SHA-256 of `docs/legal/terms-and-conditions.md` at the time of the
@@ -32,7 +32,7 @@ export const TC_VERSION = "2.5.0";
  *      `TC_VERSION` was also bumped.
  */
 export const TC_DOCUMENT_SHA =
-  "33f21d2a989c100b9bb1b689755cb773ead5753b1a26a882a712dbf9bb2ebc27";
+  "1f452cdbd5d4df2e50d46d71d2cfaf832a1d4d1ddfce0577176e0cb5e43694c2";
 
 /**
  * Bump-metadata for the current `TC_VERSION`. Consumed by the Art. 13(3)
@@ -47,7 +47,7 @@ export const TC_DOCUMENT_SHA =
  *   - `fullTermsUrl`: canonical public URL for the full T&C.
  */
 export const TC_BUMP_METADATA = {
-  lastUpdated: "August 11, 2026",
-  substantiveChange: "Clearer statements of who controls your data, who we send your conversations to, and which document wins if two disagree",
+  lastUpdated: "October 8, 2026",
+  substantiveChange: "Autonomous command execution can force-push over a connected repository's default branch or run infrastructure teardown without asking, and your work is no longer described as backed up in git",
   fullTermsUrl: "https://soleur.ai/pages/legal/terms-and-conditions.html",
 } as const;

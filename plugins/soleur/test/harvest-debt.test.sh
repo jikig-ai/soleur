@@ -9,9 +9,15 @@
 # this test file is NOT itself a marker site — a real harvest run over the repo
 # must not self-report these fixtures. Same idiom as digest-scrub.test.sh's
 # push-protection split.
-set -uo pipefail
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Guard 3 (#7833) tripwire adoption (#7849 exit condition). test-helpers.sh runs
+# `set -euo pipefail`, so the `+e` below is REQUIRED to preserve this suite's
+# deliberate no-errexit contract -- delete the source line and the `+e` becomes wrong.
+# shellcheck source=plugins/soleur/test/test-helpers.sh
+source "$SCRIPT_DIR/test-helpers.sh" || { echo "FATAL: could not source $SCRIPT_DIR/test-helpers.sh" >&2; exit 2; }
+
+set +e -uo pipefail
+
 HARVEST="${SCRIPT_DIR}/../skills/harvest-debt/scripts/harvest-debt.sh"
 MARK="SOLEUR-DEB""T:" # concatenated: no contiguous marker literal in this source
 

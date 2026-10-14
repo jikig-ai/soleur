@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Button } from "@/components/ui/button";
 import { InviteMemberModal } from "@/components/settings/invite-member-modal";
 
 // Small client wrapper that pairs the "+ Invite member" trigger with the
@@ -25,13 +26,14 @@ export function InviteMemberAction({
   if (!isOwner) return null;
   return (
     <>
-      <button
+      <Button
+        variant="gold"
         type="button"
         onClick={() => setOpen(true)}
-        className="rounded-md bg-soleur-accent-gold-fg px-4 py-2 text-sm font-medium text-soleur-bg-surface-1 hover:opacity-90"
+        className="rounded-md"
       >
         + Invite member
-      </button>
+      </Button>
       <InviteMemberModal
         open={open}
         workspaceId={workspaceId}

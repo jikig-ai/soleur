@@ -3,6 +3,7 @@
 import type { ReactElement } from "react";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import { LeaderAvatar } from "@/components/leader-avatar";
+import { NavLink } from "@/components/ui/nav-link";
 
 export interface FoundationCard {
   id: string;
@@ -43,7 +44,7 @@ export function FoundationCards({
       {completed.length > 0 && (
         <div data-testid="completed-chips" className="mb-3 flex flex-wrap gap-2">
           {completed.map((card) => (
-            <a
+            <NavLink
               key={card.id}
               href={`/dashboard/kb/${card.kbPath}`}
               className="inline-flex items-center gap-1.5 rounded-lg border border-soleur-border-default/50 bg-soleur-bg-surface-1/30 px-3 py-1.5 text-sm text-soleur-text-secondary transition-colors hover:border-soleur-border-default hover:text-soleur-text-secondary"
@@ -52,7 +53,7 @@ export function FoundationCards({
                 <path d="M20 6 9 17l-5-5" />
               </svg>
               {card.title}
-            </a>
+            </NavLink>
           ))}
         </div>
       )}
@@ -65,6 +66,7 @@ export function FoundationCards({
               key={card.id}
               type="button"
               onClick={() => onIncompleteClick(card.promptText)}
+              data-button-exempt="composite card button — avatar + title + prompt column layout; the Button inline-flex/justify-center label-row chrome cannot express it"
               className="flex flex-col gap-2 rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/50 p-4 text-left transition-colors hover:border-soleur-border-default"
             >
               <LeaderAvatar

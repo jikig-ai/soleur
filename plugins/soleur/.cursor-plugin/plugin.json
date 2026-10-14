@@ -1,0 +1,7 @@
+{
+  "name": "soleur",
+  "skills": "./cursor/skills",
+  "agents": "./cursor/agents",
+  "commands": "./cursor/commands",
+  "hooks": "./cursor/hooks-empty.json"
+}

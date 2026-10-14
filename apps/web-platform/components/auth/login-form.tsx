@@ -1,7 +1,10 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useSearchParams, useRouter } from "next/navigation";
+import { useSearchParams } from "next/navigation";
+import { usePendingRouter } from "@/hooks/use-pending-router";
+import { Button } from "@/components/ui/button";
+import { NavLink } from "@/components/ui/nav-link";
 import { OAuthButtons } from "@/components/auth/oauth-buttons";
 import { OtpCodeStep } from "@/components/auth/OtpCodeStep";
 import { safeReturnTo } from "@/lib/safe-return-to";
@@ -13,11 +16,10 @@ import {
   isNoAccountError,
   SIGNUP_REASON_NO_ACCOUNT,
 } from "@/lib/auth/error-messages";
-import Link from "next/link";
 
 export function LoginForm() {
   const searchParams = useSearchParams();
-  const router = useRouter();
+  const router = usePendingRouter();
   // Validated same-origin relative path to land on after sign-in (e.g.
   // /invite/<token> from the workspace invite flow); null when absent or
   // rejected, in which case we fall back to /dashboard.
@@ -155,17 +157,18 @@ export function LoginForm() {
 
           {error && <p role="alert" className="text-sm text-red-400">{error}</p>}
 
-          <button
+          <Button
+            variant="gold"
             type="submit"
             disabled={loading || cooldownActive}
-            className="w-full rounded-lg bg-soleur-accent-gold-fill px-4 py-3 text-sm font-medium text-soleur-text-on-accent hover:opacity-90 disabled:opacity-50"
+            loading={loading}
+            loadingLabel="Sending"
+            className="w-full"
           >
             {cooldownActive
               ? `You can request a new code in ${cooldownSeconds}s`
-              : loading
-                ? "Sending..."
-                : "Send sign-in code"}
-          </button>
+              : "Send sign-in code"}
+          </Button>
         </form>
 
         <div className="relative flex items-center gap-4">
@@ -178,9 +181,9 @@ export function LoginForm() {
 
         <p className="text-center text-sm text-soleur-text-muted">
           Don&apos;t have an account?{" "}
-          <Link href="/signup" className="text-soleur-text-primary hover:underline">
+          <NavLink href="/signup" className="text-soleur-text-primary hover:underline">
             Sign up
-          </Link>
+          </NavLink>
         </p>
       </div>
     </main>

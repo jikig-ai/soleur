@@ -64,10 +64,43 @@ set -uo pipefail
 PATHSPEC=(apps/web-platform/ plugins/soleur/ ':(exclude)plugins/soleur/docs/' ':(exclude)plugins/soleur/test/')
 
 # The longest LEGITIMATE commit-to-deployed latency, from the release pipeline's own declared
-# ceilings along its critical path. That path is NOT a serial sum: `release` and `await-ci`
-# declare no `needs:` and run in PARALLEL, so it is
-#     max(release 60, await-ci 72) + migrate 30 + verify-migrations 15 + deploy 90 = 207.
-# A principled bound rather than a guess, and ~4x every observed run.
+# ceilings along its critical path. That path is NOT a serial sum, and since #5806 the parallel
+# arms are in DIFFERENT WORKFLOWS: `release` runs on the push arm of web-platform-release.yml
+# while CI runs in ci.yml, both started by the same push. The deploy arm fires on CI's
+# completion event and queues behind the push-arm release run on a shared concurrency group
+# (ADR-217 D3(b)), so it waits on whichever of the two finishes last, and THEN runs
+# `resolve-target` serially before the rest of the chain. One formula, stated at every site
+# (this header, B9 in scripts/prod-version-drift-check.test.sh, the CI_BUDGET_MIN step and the
+# `resolve-target`/`deploy` job comments in web-platform-release.yml, the COUPLED note in
+# reusable-release.yml):
+#     max(ci_declared_path, release) + resolve-target + migrate + verify-migrations + deploy
+# Every term is read from the tree by B9: `ci_declared_path` is ci.yml's longest `needs:` path
+# (`test-scripts` + `test` today), `release` is the callee ceiling in reusable-release.yml
+# (jobs.release.uses), and the four others are job ceilings in web-platform-release.yml. A
+# principled bound rather than a guess, and ~4-6x every observed run.
+#
+# `await-ci` USED to supply the CI term (at 72) by polling for CI inside this workflow. It
+# was deleted by #5806 — see ADR-217. The term that replaced it is CI's own DECLARED path,
+# read out of ci.yml by B9 rather than restated here, so it moves when a CI ceiling moves.
+#
+# 207 -> 225 (2026-09-14, ADR-217 D4 addendum, #8149). B9 previously computed
+# max(release, resolve-target) + migrate + verify-migrations + deploy = 195 and left the CI term
+# out because including it read 265 against 207 — a green on a quantity the suite knew was
+# short. Option (a): the CI term enters B9 under the formula above; `resolve-target` drops
+# 60 -> 15 on measurement (12-14 s on the last nine workflow_run-arm runs; its 60 was sized "=
+# the release ceiling" only because it sat inside a max() the formula voids); the declared
+# path is 220 and this constant is 220 + 5. The constant moves IN THE SAME COMMIT as B9's
+# formula and the workflow's CI_BUDGET_MIN partition: B9 asserts threshold >= path and the
+# workflow asserts CI_DECLARED_PATH <= CI_BUDGET_MIN, so a split would red one side in
+# between. The 5 m slack covers rounding of the declared terms ONLY; it is not a bound on
+# runner-queue wait or on concurrency-group serialisation — reusable-release.yml's
+# `release-<component>` (release N+1 queues behind release N and the deploy arm inherits that
+# wait) and the deploy arm's own `migrate-web-platform`, `verify-migrations-web-platform` and
+# `web-1-swap` groups (the last serialises the 90 m `deploy` term) — those stay empirical,
+# per SCOPE below.
+# The cost is 18 minutes of worst-case drift-alert latency, inside this probe's own measured
+# 61-243 minute delivery interval. Not harvested to exactly 220: that re-creates the #7902
+# trap one layer out. Confirmed by a green B9, never by re-deriving the arithmetic here.
 #
 # 195 -> 207 (#7902). `await-ci`'s timeout-minutes moved 60 -> 72 when its in-bash CEILING_S was
 # raised 3000 -> 3600 to clear a measured time-to-`test` p100 of 57.4 min. This constant moves
@@ -76,7 +109,8 @@ PATHSPEC=(apps/web-platform/ plugins/soleur/ ':(exclude)plugins/soleur/docs/' ':
 # in one commit is what keeps B9 from ever being red; a two-commit split would red it in between.
 # The cost is 12 minutes of drift-alert latency, which sits inside this probe's own measured
 # 61-243 minute delivery interval.
-# (verify-doppler-secrets, 10 min, also runs in parallel and is dominated.)
+# (verify-doppler-secrets runs in parallel with resolve-target -> migrate -> verify-migrations
+# and is dominated by that chain; B9d asserts the dominance, so the formula stays exact.)
 #
 # SCOPE (#7160): those ceilings bound EXECUTION only. This constant is compared against an age
 # measured from the oldest undeployed commit's committer epoch, and runner queue wait,
@@ -91,7 +125,7 @@ PATHSPEC=(apps/web-platform/ plugins/soleur/ ':(exclude)plugins/soleur/docs/' ':
 # suite: the threshold can never silently become smaller than legitimate latency. A DELETED
 # ceiling now reads as the GitHub 360-minute default rather than as zero, so removing one fails
 # the suite too instead of silently lowering the computed bound.
-DRIFT_SUSTAINED_THRESHOLD_MIN=207
+DRIFT_SUSTAINED_THRESHOLD_MIN=225
 
 PROD_HEALTH_URL="${PROD_HEALTH_URL:-https://app.soleur.ai/health}"
 

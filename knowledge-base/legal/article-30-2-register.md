@@ -9,7 +9,7 @@ related:
   - knowledge-base/legal/article-30-register.md
   - knowledge-base/legal/audits/2026-08-06-alpha-tester-controller-processor-determination.md
   - knowledge-base/legal/data-processing-agreements/anthropic.md
-  - knowledge-base/project/specs/feat-one-shot-7331-alpha-tester-terms-dpa/session-scope-reconstruction.md
+  - knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7331-alpha-tester-terms-dpa/session-scope-reconstruction.md
 ---
 
 # Article 30(2) Register — Jikigai SARL as processor

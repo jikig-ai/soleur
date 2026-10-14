@@ -8,7 +8,7 @@ scope: /blog/billion-dollar-solo-founder-stack/ (rendered HTML at _site/blog/bil
 tooling: Read + python3 JSON-LD parse against built HTML
 depends_on:
   - knowledge-base/marketing/audits/soleur-ai/2026-04-21-aeo-audit.md
-  - knowledge-base/project/plans/2026-04-22-chore-aeo-rubric-reconcile-plan.md
+  - knowledge-base/project/plans/archive/20261013-003106-2026-04-22-chore-aeo-rubric-reconcile-plan.md
   - knowledge-base/marketing/brand-guide.md
 ---
 

@@ -1,0 +1,6 @@
+[
+{"number":101,"created_at":"2026-01-02T03:04:05Z","state":"open","dismissed_by":null,
+ "rule":{"id":"js/sql-injection","severity":"error","security_severity_level":"critical","description":"Synthetic SQL injection rule"},
+ "tool":{"name":"CodeQL"},
+ "most_recent_instance":{"ref":"refs/heads/main","message":{"text":"Synthetic message"},"location":{"path":"src/synthetic/a.ts","start_line":7}}}
+]

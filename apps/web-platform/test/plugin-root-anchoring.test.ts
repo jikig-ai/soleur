@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { readdirSync, readFileSync, existsSync, statSync, realpathSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync, existsSync, statSync, realpathSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 
 /**
@@ -17,13 +18,17 @@ import { resolve } from "node:path";
  *      on the review path the git root IS the reviewed party's tree.
  *
  * Canonical form: bare `${CLAUDE_PLUGIN_ROOT}/<payload-relative-path>`, QUOTED.
+ * Dual-harness alias (go.md session-start only): `ROOT="${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"`
+ * then `"${ROOT}/<payload-relative-path>"`. The assignment must precede the
+ * invocation in the same fence, and must not put a CWD default on CLAUDE_PLUGIN_ROOT.
  * Rejected: `${CLAUDE_PLUGIN_ROOT:-…}` and `${CLAUDE_PLUGIN_ROOT:?…}`. Neither is
  * the literal token, so neither is substituted; the `:-` form then expands to a
  * customer-controlled relative path (the reported bug). Measured 2026-08-12
  * (#7450): the loader substitutes the bare token at DELIVERY time — `go.md` ships
  * `${CLAUDE_PLUGIN_ROOT}` and arrives carrying the absolute installed root while
  * the shell environment has no such variable — which is why the exact-literal
- * requirement is a fact rather than an inference.
+ * requirement is a fact rather than an inference. `${ROOT}` is assigned in-fence
+ * from that substituted token (Claude) or from GROK_PLUGIN_ROOT (Grok).
  *
  * WHY THE SKILLS AXIS NEEDS ITS OWN EXTRACTOR. The command surface invokes
  * producers directly (`bash "${CLAUDE_PLUGIN_ROOT}/scripts/x.sh"`), so a
@@ -40,15 +45,17 @@ import { resolve } from "node:path";
  * targets — `[redact-sentinel.sh](../incident/scripts/redact-sentinel.sh)`, of
  * which there are several — from being read as execution paths.
  *
+ *   3. The WHOLE payload's markdown (#7453, ADR-179 A18/A20) — the fourth describe at
+ *      the bottom of this file: no default arm, git-root code root, root assignment or
+ *      `..` escape anywhere in tracked `plugins/soleur/ ** /*.md`, and the Read-surface
+ *      docs deliver their own root. Zero-tolerance, no allowlist. It has its own index.
+ *
  * DELIBERATELY OUT OF SCOPE — stated rather than implied:
- *   - The NON-gate `plugins/soleur/skills/ ** ` sites (~105 `${CLAUDE_PLUGIN_ROOT:-…}`
- *     occurrences plus some bare-CWD-relative `bash plugins/soleur/scripts/…`)
- *     remain deferred to #7453. Only the gate subset is enforced here.
- *   - `preflight/SKILL.md` carries two UNCONDITIONAL `$(git rev-parse --show-toplevel)`
- *     anchors (`parse-form-a.awk`, `probe-verb-gate.sh`). Same threat shape,
- *     arguably worse, but not secret-emission gates — routed to #7453 with a
- *     severity flag (#7450 DC-1). Their falsified rationale comment was corrected.
- *   - Shipped `.sh`/`.ts` under `plugins/soleur/ ** /scripts/` are not scanned.
+ *   - The CWD-relative runner operands (ratchet forms b/c/d/e) are RATCHETED (no growth)
+ *     by the third axis; their migration is #6222. CWD-relative `Read plugins/soleur/…`
+ *     instructions are #8729.
+ *   - Shipped `.sh`/`.ts` under `plugins/soleur/ ** /scripts/` are not scanned: the
+ *     variable is a real runtime variable there, and A17's BASH_SOURCE rule governs them.
  *   - `redact-sentinel.test.sh` pins the corpus-wide negative instead; it is a
  *     `.test.sh`, so it is outside this file's SKILL.md axis by construction.
  *   - Remaining follow-ups: #7452.
@@ -78,6 +85,80 @@ const SENTINEL_LITERAL =
 const PREFLIGHT_ANCHOR = '"${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json"';
 
 const ANCHOR_PREFIX = "${CLAUDE_PLUGIN_ROOT}/";
+/**
+ * `${ROOT}/…` alias, valid only when the same fence first assigns ROOT from the loader
+ * token (go.md's shared resolver, ADR-179 decision 11).
+ *
+ * This used to read "dual-harness alias" and pin `ROOT="${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"`
+ * — i.e. it documented #8308's defect as the sanctioned form. Measured on both harnesses
+ * (#7450 phase-1-measurement.md §Arm 5, 2026-09-19): the loader substitutes ONLY the exact
+ * braced literal `${CLAUDE_PLUGIN_ROOT}`, so the `:-` wrapper reached bash verbatim and
+ * expanded empty in a session with neither variable set — which is what made all three
+ * `/soleur:go` session gates take their degraded branch with CI green over them — Steps 0.0
+ * and 0 for 7 days, Step 0.5 for 3 (it did not exist until #8159 on 2026-09-16, so "all
+ * three, for a week" overstates the third).
+ */
+const ROOT_ANCHOR_PREFIX = "${ROOT}/";
+const ROOT_ASSIGN_LITERAL = 'ROOT="${CLAUDE_PLUGIN_ROOT}"; SRC=plugin-root-token';
+const ROOT_PREFLIGHT_ANCHOR = '"${ROOT}/.claude-plugin/plugin.json"';
+
+/**
+ * P1b's predicate, shared by the live scan and its own positive-control fixtures so the
+ * control cannot drift from what the scan runs.
+ *
+ * The unbraced arm is a PLAIN token match, not the `/\$CLAUDE_PLUGIN_ROOT(?!\})/` a draft
+ * proposed. `${CLAUDE_PLUGIN_ROOT}` does not contain the substring `$CLAUDE_PLUGIN_ROOT`
+ * (the character after the `$` is `{`), so there is nothing to except; and a `(?!\})`
+ * lookahead would have excluded `${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}` — the exact form
+ * this guard exists to ban — leaving it vacuous on its own defect.
+ */
+function readsRootUnsafely(src: string): boolean {
+  return (
+    // ANY modifier on the braced token, not an enumeration of the two spellings anyone
+    // thought of. Measured bypasses of the `:-`/`:?` pair: `${CLAUDE_PLUGIN_ROOT-default}`
+    // (colon-less, the #7442 CWD-default class) and `${CLAUDE_PLUGIN_ROOT:=default}` both
+    // passed. A character-class exception cannot be evaded by reaching for another sigil.
+    /\$\{CLAUDE_PLUGIN_ROOT[^}]/.test(src) ||
+    /\$CLAUDE_PLUGIN_ROOT\b/.test(src) ||
+    // Reading the root WITHOUT naming the token defeats loader substitution entirely.
+    /(?:printenv|\$\{!)[^\n]*CLAUDE_PLUGIN_ROOT/.test(src) ||
+    /CLAUDE_PLUGIN_ROOT[^\n]*\$\{!/.test(src)
+  );
+}
+
+/**
+ * P1b's SCAN, extracted so its control can drive the same code path the live assertion uses.
+ *
+ * Measured before this existed: replacing the inline scan body with `const violations:
+ * string[] = []` left the suite at 27/27 — P1b-control green, P5 still exactly 17 — while a
+ * real prose-level violation sat in go.md. The control proved the PREDICATE and nothing
+ * proved the SCAN was wired to it. Same shape as the bash deciders in
+ * plugins/soleur/test/go-session-gates.test.sh block L2, one language over.
+ */
+function scanForUnsafeRootReads(
+  sources: ReadonlyArray<{ readonly name: string; readonly src: string }>,
+): string[] {
+  return sources.filter((f) => readsRootUnsafely(f.src)).map((f) => f.name);
+}
+
+/**
+ * P1b's OWN fixtures. Deliberately not `ANCHOR_FIXTURES`: that array's consumers (G6/G6b)
+ * are gate-script scanners in the skills describe, and G6b asserts its tag union by SET
+ * EQUALITY — adding a row here would red an unrelated block.
+ */
+const P1B_FIXTURES: ReadonlyArray<{ readonly src: string; readonly mustFlag: boolean }> = [
+  { src: 'ROOT="${GROK_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"', mustFlag: true },
+  { src: 'bash "$CLAUDE_PLUGIN_ROOT/scripts/x.sh"', mustFlag: true },
+  { src: 'ROOT="${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"', mustFlag: true },
+  { src: 'ROOT="${CLAUDE_PLUGIN_ROOT:?set it}"', mustFlag: true },
+  // Measured bypasses of the original `:-`/`:?` pair, added with the fix that closes them.
+  { src: 'ROOT="${CLAUDE_PLUGIN_ROOT-./plugins/soleur}"', mustFlag: true },
+  { src: 'ROOT="${CLAUDE_PLUGIN_ROOT:=./plugins/soleur}"', mustFlag: true },
+  { src: 'ROOT="$(printenv CLAUDE_PLUGIN_ROOT)"', mustFlag: true },
+  { src: 'ROOT="${CLAUDE_PLUGIN_ROOT}"; SRC=plugin-root-token', mustFlag: false },
+  { src: 'bash "${CLAUDE_PLUGIN_ROOT}/scripts/x.sh"', mustFlag: false },
+  { src: 'if [ -n "${GROK_PLUGIN_ROOT:-}" ]; then ROOT="$GROK_PLUGIN_ROOT"; fi', mustFlag: false },
+];
 
 /**
  * Used by P7 only. P6 (presence-guard parity) deliberately spans the WHOLE command
@@ -258,15 +339,44 @@ function parse(
   return { invocations, fences, fencesBalanced, hasBashFence };
 }
 
+/** Payload-relative path after a recognized plugin-root prefix, or null. */
+function pluginRel(operand: string): string | null {
+  const bare = unquote(operand);
+  if (bare.startsWith(ANCHOR_PREFIX)) return bare.slice(ANCHOR_PREFIX.length);
+  if (bare.startsWith(ROOT_ANCHOR_PREFIX)) return bare.slice(ROOT_ANCHOR_PREFIX.length);
+  return null;
+}
+
 /** True when the operand escapes the payload via `..` after normalization. */
 function escapesPayload(operand: string): boolean {
-  const rel = unquote(operand).slice(ANCHOR_PREFIX.length);
+  const rel = pluginRel(operand);
+  if (rel === null) return true;
   const abs = resolve(PAYLOAD_ROOT, rel);
   return !abs.startsWith(PAYLOAD_ROOT + "/");
 }
 
 function isAnchored(operand: string): boolean {
-  return unquote(operand).startsWith(ANCHOR_PREFIX);
+  return pluginRel(operand) !== null;
+}
+
+/**
+ * `${ROOT}/…` is only an anchor when the same fence first assigns ROOT from the
+ * loader-substituted `${CLAUDE_PLUGIN_ROOT}` token, then GROK_PLUGIN_ROOT, with no CWD
+ * default (ADR-179 decision 11). A bare `${ROOT}` with no assignment is the #7442
+ * CWD-relative hazard again.
+ *
+ * This comment described the OPPOSITE order until #8308 — the #8061 arm order, which is
+ * the form A15 rejects. It was the last place in the repo asserting it as current.
+ */
+function isSafelyAnchored(inv: Invocation, fences: Fence[]): boolean {
+  const bare = unquote(inv.operand);
+  if (bare.startsWith(ANCHOR_PREFIX)) return true;
+  if (!bare.startsWith(ROOT_ANCHOR_PREFIX)) return false;
+  if (inv.fenceIdx === -1) return false;
+  const fence = fences[inv.fenceIdx];
+  const rel = inv.lineIdx - (fence.startIdx + 1);
+  const assignIdx = fence.body.findIndex((l) => l.includes(ROOT_ASSIGN_LITERAL));
+  return assignIdx !== -1 && assignIdx < rel;
 }
 
 /**
@@ -343,7 +453,7 @@ describe("plugin-root anchoring — customer-facing command surface", () => {
     const violations: string[] = [];
     for (const p of parsed) {
       for (const inv of p.invocations) {
-        if (isAnchored(inv.operand)) continue;
+        if (isSafelyAnchored(inv, p.fences)) continue;
         if (monorepoGatedArea(inv, p.fences)) continue;
         violations.push(`${inv.file.replace(REPO_ROOT + "/", "")}: ${inv.line}`);
       }
@@ -351,23 +461,19 @@ describe("plugin-root anchoring — customer-facing command surface", () => {
     check(violations).toEqual([]);
   });
 
-  it("P1b: no :- or :? default on CLAUDE_PLUGIN_ROOT in the command surface", () => {
-    const violations = files
-      .filter((f) => {
-        const src = readFileSync(f, "utf8");
-        return src.includes("${CLAUDE_PLUGIN_ROOT:-") || src.includes("${CLAUDE_PLUGIN_ROOT:?");
-      })
-      .map((f) => f.replace(REPO_ROOT + "/", ""));
-    check(violations).toEqual([]);
-  });
+  // P1b (the command surface reads the root only through the exact token) moved to the
+  // whole-payload describe's W1 in #7453: `commands/**` is inside that population and W1 runs
+  // the same `readsRootUnsafely`, with its own fixture and dispatch controls.
 
   it("P1c: every anchored operand is quoted", () => {
     // An unquoted expansion word-splits on an install path containing a space
     // (measured: `/mnt/c/Users/First Last/…`), and the split prefix is what gets
     // executed. The preflight cannot see this — it passes, then the run breaks.
-    const unquoted = allInvocations
-      .filter((inv) => isAnchored(inv.operand) && !/^["']/.test(inv.operand))
-      .map((inv) => `${inv.file.replace(REPO_ROOT + "/", "")}: ${inv.line}`);
+    const unquoted = parsed.flatMap((p) =>
+      p.invocations
+        .filter((inv) => isSafelyAnchored(inv, p.fences) && !/^["']/.test(inv.operand))
+        .map((inv) => `${inv.file.replace(REPO_ROOT + "/", "")}: ${inv.line}`),
+    );
     check(unquoted).toEqual([]);
   });
 
@@ -375,7 +481,8 @@ describe("plugin-root anchoring — customer-facing command surface", () => {
     const bad: string[] = [];
     for (const inv of allInvocations) {
       if (!isAnchored(inv.operand)) continue;
-      const rel = unquote(inv.operand).slice(ANCHOR_PREFIX.length);
+      const rel = pluginRel(inv.operand);
+      if (rel === null) continue;
       // Containment first: `resolve()` normalizes `..` straight through the
       // payload boundary, so a `${CLAUDE_PLUGIN_ROOT}/../../x` operand would
       // otherwise land on a real repo-root file and be certified resident.
@@ -407,15 +514,20 @@ describe("plugin-root anchoring — customer-facing command surface", () => {
     // whole preflight block is deletable with the suite green.
     const missing: string[] = [];
     for (const p of parsed) {
-      const anchored = p.invocations.filter((inv) => isAnchored(inv.operand));
+      const anchored = p.invocations.filter((inv) => isSafelyAnchored(inv, p.fences));
       if (anchored.length === 0) continue;
       const src = readFileSync(p.file, "utf8");
-      if (!src.includes(PREFLIGHT_ANCHOR)) {
+      const hasClaudePreflight = src.includes(PREFLIGHT_ANCHOR);
+      const hasRootPreflight = src.includes(ROOT_ASSIGN_LITERAL) && src.includes(ROOT_PREFLIGHT_ANCHOR);
+      if (!hasClaudePreflight && !hasRootPreflight) {
         missing.push(p.file.replace(REPO_ROOT + "/", ""));
         continue;
       }
       // Ordering: the preflight must precede the first anchored invocation.
-      const preflightIdx = src.split("\n").findIndex((l) => l.includes(PREFLIGHT_ANCHOR));
+      const lines = src.split("\n");
+      const preflightIdx = lines.findIndex(
+        (l) => l.includes(PREFLIGHT_ANCHOR) || l.includes(ROOT_PREFLIGHT_ANCHOR),
+      );
       const firstAnchored = Math.min(...anchored.map((inv) => inv.lineIdx));
       if (!(preflightIdx < firstAnchored)) {
         missing.push(`${p.file.replace(REPO_ROOT + "/", "")} (preflight below first producer)`);
@@ -441,7 +553,7 @@ describe("plugin-root anchoring — customer-facing command surface", () => {
         // Fence bodies only: Phase 0 prose quotes ADR-179's worked examples as
         // inline spans. Those are documentation, not invocations, and demanding
         // guards on them makes the shortest fix "delete the ADR prose".
-        if (inv.fenceIdx === -1 || !isAnchored(inv.operand)) continue;
+        if (inv.fenceIdx === -1 || !isSafelyAnchored(inv, p.fences)) continue;
         checked += 1;
         const fence = p.fences[inv.fenceIdx];
         // The guard must PRECEDE the invocation it guards, not merely share a fence
@@ -488,7 +600,7 @@ describe("plugin-root anchoring — customer-facing command surface", () => {
     const producers = (p?.invocations ?? []).filter(
       (inv) => inv.fenceIdx !== -1 && isAnchored(inv.operand),
     );
-    const relOf = (inv: Invocation) => unquote(inv.operand).slice(ANCHOR_PREFIX.length);
+    const relOf = (inv: Invocation) => pluginRel(inv.operand) ?? unquote(inv.operand);
     const rels = new Set(producers.map(relOf));
 
     // Non-vacuity BEFORE comparing: `∅` equals `∅`.
@@ -608,9 +720,11 @@ describe("plugin-root anchoring — customer-facing command surface", () => {
     if (!p) violations.push("go.md is absent from the parsed command surface");
 
     for (const { producer, marker } of REQUIRED) {
-      const inv = (p?.invocations ?? []).find(
-        (i) => i.fenceIdx !== -1 && unquote(i.operand) === `${ANCHOR_PREFIX}${producer}`,
-      );
+      const inv = (p?.invocations ?? []).find((i) => {
+        if (i.fenceIdx === -1) return false;
+        const bare = unquote(i.operand);
+        return bare === `${ANCHOR_PREFIX}${producer}` || bare === `${ROOT_ANCHOR_PREFIX}${producer}`;
+      });
       if (!inv) {
         violations.push(
           `GO.MD INVOCATION MISSING: ${producer} — this assertion pins its guard; if the ` +
@@ -636,7 +750,13 @@ describe("plugin-root anchoring — customer-facing command surface", () => {
     //
     // Counts DECIDED assertions (see `check`), not `it` blocks: a per-block counter is
     // satisfied by a block whose body was gutted.
-    expect(assertions).toBe(14);
+    //
+    // 18 -> 13: #7453 moved P1b (1) and P1b-control (4) into the whole-payload W1/W1-control.
+    // 14 -> 18: P1b-control adds four decided checks (three predicate, one driving the SCAN). (16 was measured against a RED tree
+    // where P1 short-circuited before its own check; the number a failing run reports is not
+    // the number a green run reports, which is the trap in reading an exact-equality floor
+    // off a red baseline.) Raising this is PART of adding the control, not an afterthought.
+    expect(assertions).toBe(13);
   });
 });
 
@@ -668,8 +788,16 @@ const GATE_SCRIPT_EXTRAS: ReadonlySet<string> = new Set(["token-efficiency-repor
  * but it IS outside the guard's population, so nothing asserts it stays that way".
  * Being in the population means the day one of them acquires a SKILL.md reference, the
  * anchoring rule applies to it without anyone remembering to widen this file.
+ *
+ * WIDENED again by #7980: `playwright-mcp-redact-proxy.py` is the stdio relay that
+ * rewrites Playwright-MCP tool results through `redact-a11y-snapshot.py` in flight.
+ * Its basename does not match `redact-*`, and choosing a non-matching name to stay
+ * out of this population was an evasion the architecture review caught — the proxy
+ * IS a gate script (it decides what reaches the transcript), so it is admitted by
+ * name and `agent-browser/SKILL.md`'s `.mcp.json` shape must reference it through
+ * the bare anchor like every other gate.
  */
-const GATE_SCRIPT_RE = /^(?:redact-.+\.(?:sh|py)|digest-scrub\.sh)$/;
+const GATE_SCRIPT_RE = /^(?:redact-.+\.(?:sh|py)|digest-scrub\.sh|playwright-mcp-redact-proxy\.py)$/;
 
 /**
  * The gate references this corpus is expected to contain, as an IDENTITY SET.
@@ -683,14 +811,23 @@ const GATE_SCRIPT_RE = /^(?:redact-.+\.(?:sh|py)|digest-scrub\.sh)$/;
  *
  * Sorted `<repo-relative SKILL.md> -> <basename>` with duplicates retained, so a
  * second reference from the same file is also a diff. Derived with:
- *   git grep -noE '\$\{CLAUDE_PLUGIN_ROOT\}/[A-Za-z0-9._/-]*(redact-[A-Za-z0-9._-]*\.(sh|py)|digest-scrub\.sh|token-efficiency-report\.sh)' \
+ *   git grep -noE '\$\{CLAUDE_PLUGIN_ROOT\}/[A-Za-z0-9._/-]*(redact-[A-Za-z0-9._-]*\.(sh|py)|digest-scrub\.sh|playwright-mcp-redact-proxy\.py|token-efficiency-report\.sh)' \
  *     -- 'plugins/soleur/skills/ * /SKILL.md'    (spaced: a literal glob would close this comment)
  */
 const EXPECTED_GATE_REFS: readonly string[] = [
+  "plugins/soleur/skills/agent-browser/SKILL.md -> playwright-mcp-redact-proxy.py",
+  "plugins/soleur/skills/agent-browser/SKILL.md -> redact-a11y-snapshot.py",
+  "plugins/soleur/skills/cf-token-scope/SKILL.md -> redact-a11y-snapshot.py",
   "plugins/soleur/skills/compound/SKILL.md -> token-efficiency-report.sh",
+  "plugins/soleur/skills/feature-video/SKILL.md -> redact-a11y-snapshot.py",
   "plugins/soleur/skills/incident/SKILL.md -> redact-sentinel.sh",
   "plugins/soleur/skills/legal-generate/SKILL.md -> redact-sentinel.sh",
   "plugins/soleur/skills/linear-fetch/SKILL.md -> redact-linear-urls.sh",
+  "plugins/soleur/skills/qa/SKILL.md -> redact-a11y-snapshot.py",
+  "plugins/soleur/skills/questionnaire-generate/SKILL.md -> redact-sentinel.sh",
+  "plugins/soleur/skills/reproduce-bug/SKILL.md -> redact-a11y-snapshot.py",
+  "plugins/soleur/skills/reproduce-bug/SKILL.md -> redact-sentinel.sh",
+  "plugins/soleur/skills/test-browser/SKILL.md -> redact-a11y-snapshot.py",
 ];
 
 /**
@@ -705,9 +842,16 @@ const EXPECTED_GATE_REFS: readonly string[] = [
  * the other direction.
  */
 const SECRET_GATE_SKILLS: readonly string[] = [
+  "plugins/soleur/skills/agent-browser/SKILL.md",
+  "plugins/soleur/skills/cf-token-scope/SKILL.md",
+  "plugins/soleur/skills/feature-video/SKILL.md",
   "plugins/soleur/skills/incident/SKILL.md",
   "plugins/soleur/skills/legal-generate/SKILL.md",
   "plugins/soleur/skills/linear-fetch/SKILL.md",
+  "plugins/soleur/skills/qa/SKILL.md",
+  "plugins/soleur/skills/questionnaire-generate/SKILL.md",
+  "plugins/soleur/skills/reproduce-bug/SKILL.md",
+  "plugins/soleur/skills/test-browser/SKILL.md",
 ];
 
 function escapeRe(s: string): string {
@@ -1197,5 +1341,714 @@ describe("plugin-root anchoring — skills secret-gate subset (#7450)", () => {
     // `plugins/soleur/skills/incident/test/redact-sentinel.test.sh` Test 20, which
     // runs in a DIFFERENT test-all shard (`want_scripts` vs `want_webplat`).
     expect(assertions).toBe(18);
+  });
+});
+
+/* ========================================================================== *
+ * THIRD AXIS — the ratchet over ALL skill docs (#8570; re-scoped by #7453).
+ *
+ * The two axes above are ZERO-TOLERANCE and scoped: the customer-facing command
+ * surface, and the skills SECRET-GATE subset. Both stay exactly as they are. This
+ * axis is a RATCHET over the rest: every CWD-controllable executed anchor in
+ * `plugins/soleur/skills/ ** /*.md` is pinned by (path, normalized text) with a
+ * multiplicity count, so the existing debt cannot GROW. Form (a) — a default arm on
+ * the token — left this ratchet in #7453: it was migrated to zero and is now a flat
+ * zero in the fourth axis, where admitting one means editing reviewed code rather than
+ * regenerating a baseline row. What remains here (forms b-e) is #6222's migration.
+ *
+ * WHY ITS OWN ENUMERATOR. `skillFiles()` is a readdir/realpath walk that collects
+ * only files named SKILL.md. Widening it would do two wrong things at once: it
+ * would also widen the secret-gate axis this comment just said is unchanged
+ * (breaking its `EXPECTED_GATE_REFS` identity pin, 13 rows, adopted in #7450 A10
+ * precisely to replace a `>= 4` floor), and it walks DISK rather than the index,
+ * so untracked `.md` under `skills/` would enter the ratchet — the same hazard
+ * that got Guard 1's readdir cross-check cut. `skillDocFiles()` below reads
+ * `git ls-files`, and `R0` pins that the two populations cannot silently diverge.
+ * ========================================================================== */
+
+const RATCHET_BASELINE = resolve(__dirname, "fixtures/plugin-root-skills-ratchet.tsv");
+
+/**
+ * Corpus floors — MEASURED 2026-09-23 by an independent reimplementation of the
+ * extractor (same fence/inline logic, written separately and compared): 238 tracked
+ * docs, 231 code-context occurrences, 137 distinct (path, text) rows.
+ *
+ * Those numbers are POST-WIDENING. The first cut of this axis measured 186/101 and
+ * missed 36 real anchors, because its RUNNER list omitted `python` (no `3`), `npx`,
+ * `bunx` and `tsx`; it required an unquoted, unflagged operand; it hardcoded
+ * `scripts/` as the only script directory; it required a colon in `${VAR:-…}`; and
+ * it had no direct-exec branch at all. `python scripts/…` alone occurred ~20 times
+ * in code context with zero baseline rows — i.e. the gate was demonstrably, not
+ * theoretically, narrower than the property it names.
+ *
+ * The floors sit below the measured values with a narrowing budget, not a safety
+ * margin. #7453 lowered RATCHET_MIN_ROWS 120 -> 85 when form (a) left the axis: its
+ * 38 rows (99 occurrences) were migrated, leaving 93 rows (measured 2026-09-24).
+ *
+ * They exist for the authoring case specifically: a broken extractor at authoring time
+ * yields an EMPTY baseline, a green suite, and an R3 dispatch row that can never fire —
+ * so the floors are what stop this axis from shipping vacuous. Lower them only when a
+ * migration genuinely DELETES sites (#6222's job now), never to admit new ones.
+ */
+const RATCHET_MIN_FILES = 220;
+const RATCHET_MIN_ROWS = 85;
+
+/** Every tracked markdown doc under the skills tree — the INDEX, never the disk. */
+function skillDocFiles(): string[] {
+  return execFileSync("git", ["ls-files", "--full-name", "--", ":(glob)plugins/soleur/skills/**/*.md"], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+    maxBuffer: 32 * 1024 * 1024,
+  })
+    .split("\n")
+    .filter((l) => l.length > 0)
+    .sort();
+}
+
+interface RatchetSite {
+  /** repo-relative */
+  file: string;
+  /** the matched anchor, whitespace-collapsed — NEVER a line number (#7453 keys on content) */
+  text: string;
+  form: "b" | "c" | "d" | "e";
+}
+
+// Aligned with this file's own command-axis `RUNNERS` (see the top of the file).
+// The ratchet previously carried a SHORTER list, so `python` (no `3`), `npx`,
+// `bunx`, `tsx` and friends walked past it — and `python scripts/…` is not
+// hypothetical: it occurs ~20 times in code context today with ZERO baseline
+// rows. Two axes of one file disagreeing about what "a runner" means is how a
+// gate ends up narrower than the property it shares with its sibling.
+const RUNNER = String.raw`(?:bash|sh|zsh|bun|bunx|node|npx|tsx|deno|python3?|uv|ruby|perl|exec|source|\.)`;
+// Flags and quotes between the runner and its operand. `bash -eu "scripts/x.sh"`
+// is the same hazard as `bash scripts/x.sh`; both previously matched nothing.
+const GAP = String.raw`(?:\s+-[A-Za-z-]+)*\s+['"]?`;
+
+/**
+ * The CWD-controllable forms. Each is a SEPARATE regex branch, which is why the
+ * mutation matrix drives one row per form rather than one row for "a new site":
+ * form (d) shares no code path with form (b).
+ *
+ * DELIBERATELY OUT OF SCOPE: a bare `Read plugins/soleur/…` instruction is also
+ * CWD-relative for the agent that follows it (~128 occurrences, measured 2026-09-24).
+ * It is a READ, not an execution, so it cannot run a planted script — the property
+ * this axis ratchets. That class is #8729.
+ */
+const RATCHET_FORMS: readonly { form: RatchetSite["form"]; re: RegExp }[] = [
+  // (a) — a default arm on the token — LEFT this ratchet in #7453. It is a flat zero
+  //     in the whole-payload axis (Guard 1) instead: a baseline row can be regenerated,
+  //     a predicate can only be edited in reviewed code.
+  // (b) an unanchored repo-relative path in RUNNER position.
+  { form: "b", re: new RegExp(String.raw`\b${RUNNER}${GAP}plugins/soleur/[A-Za-z0-9._/-]+`, "g") },
+  // (c) the same with a leading `./`.
+  { form: "c", re: new RegExp(String.raw`\b${RUNNER}${GAP}\./plugins/soleur/[A-Za-z0-9._/-]+`, "g") },
+  // (d) a runner-position script operand with no variable prefix. Not just
+  //     `scripts/` — `skills/x/scripts/y.sh`, `lib/`, `hooks/`, `bin/` and `tools/`
+  //     resolve against the CWD identically.
+  {
+    form: "d",
+    re: new RegExp(
+      String.raw`\b${RUNNER}${GAP}\.{0,2}/?(?:scripts|skills|lib|hooks|bin|tools)/[A-Za-z0-9._/-]+`,
+      "g",
+    ),
+  },
+  // (e) DIRECT execution with no runner word at all. The command axis carries a
+  //     `DIRECT_EXEC_RE` for exactly this, "measured to defeat the runner-only
+  //     form while executing a planted decoy" — the ratchet had no such branch,
+  //     so `./scripts/x.sh` at line start was invisible to every form above.
+  {
+    form: "e",
+    re: /(?:^|[;&|(]\s*)\.{0,2}\/(?:scripts|plugins\/soleur|skills|lib|hooks|bin|tools)\/[A-Za-z0-9._/-]+/gm,
+  },
+];
+
+/** Code context only — fence bodies and inline spans, mirroring `gateRefsIn`. */
+function ratchetSitesIn(rel: string, src: string): RatchetSite[] {
+  const lines = src.split("\n");
+  const { fences } = parse(rel, src);
+  const inFence = (i: number) => fences.some((f) => i > f.startIdx && i < f.endIdx);
+  const out: RatchetSite[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const segments = inFence(i) ? [lines[i]] : [...lines[i].matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+    for (const seg of segments) {
+      for (const { form, re } of RATCHET_FORMS) {
+        for (const m of seg.matchAll(re)) {
+          out.push({ file: rel, text: m[0].replace(/\s+/g, " ").trim(), form });
+        }
+      }
+    }
+  }
+  return out;
+}
+
+/** `Map<"path\ttext", count>` — the shape the baseline file serializes. */
+function tallySites(sites: readonly RatchetSite[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const s of sites) {
+    const key = `${s.file}\t${s.text}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/**
+ * The staleness comparator. Hoisted so R3 (the assertion) and R4 (the
+ * both-directions drive) are ONE implementation with two inputs.
+ */
+function staleRows(b: Map<string, number>, l: Map<string, number>): [string, number][] {
+  return [...b.entries()].filter(([key, n]) => (l.get(key) ?? 0) !== n);
+}
+
+function readBaseline(): Map<string, number> {
+  const out = new Map<string, number>();
+  if (!existsSync(RATCHET_BASELINE)) return out;
+  for (const line of readFileSync(RATCHET_BASELINE, "utf8").split("\n")) {
+    if (!line || line.startsWith("#")) continue;
+    const [count, file, text] = line.split("\t");
+    out.set(`${file}\t${text}`, Number(count));
+  }
+  return out;
+}
+
+function serializeBaseline(counts: Map<string, number>): string {
+  const rows = [...counts.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([key, n]) => `${n}\t${key}`);
+  return `${RATCHET_HEADER}\n${rows.join("\n")}\n`;
+}
+
+const RATCHET_HEADER = [
+  "# plugin-root-skills-ratchet.tsv — CWD-relative runner debt, pinned so it cannot GROW.",
+  "#",
+  "# count<TAB>repo-relative-path<TAB>normalized-matched-text",
+  "#",
+  "# Keyed on CONTENT, never on a line number, so an edit ABOVE a site does not",
+  "# invalidate the row. DO NOT add rows to make a red run pass: a new row is a new",
+  "# CWD-controllable anchor, which is the thing this file exists to stop. Fix the",
+  "# anchor instead — `${CLAUDE_PLUGIN_ROOT}/…`, no default. The migration of the",
+  "# rows already here is tracked in #6222 (Read-instruction class: #8729).",
+  "#",
+  "# Regenerate (only after DELETING sites, never to admit new ones):",
+  "#   SOLEUR_WRITE_RATCHET_BASELINE=plugin-root-skills-ratchet npx vitest run test/plugin-root-anchoring.test.ts",
+  "# The writer refuses to write below the corpus floors, so a broken extractor",
+  "# cannot silently install an empty baseline that every later run then satisfies.",
+].join("\n");
+
+describe("plugin-root anchoring — skills ratchet (#8570, forms b-e; #6222)", () => {
+  const files = skillDocFiles();
+  const sites = files.flatMap((f) => ratchetSitesIn(f, readFileSync(resolve(REPO_ROOT, f), "utf8")));
+  const live = tallySites(sites);
+
+  let assertions = 0;
+  const check = <T>(actual: T) => {
+    assertions += 1;
+    return expect(actual);
+  };
+
+  // GUARDED WRITER. A writer is safer than no writer: the reason to fear one is
+  // self-certification, and the floors below are what remove it. Copied in shape
+  // from plugins/soleur/test/fixture-relative-assert.test.sh, which refuses to
+  // rewrite its baseline from a failed or truncated scan.
+  // The precedent this block copies (`fixture-relative-assert.test.sh`) gates on
+  // ARGV, and argv is the better shape for the stated reason: it reaches exactly
+  // one process, while an exported variable is inherited by every child and
+  // `test-all.sh` spawns suites as children. Measured: vitest does NOT forward
+  // `-- <flag>` into a worker's `process.argv`, so argv is not available here.
+  //
+  // So the env var stays, with the two conjuncts that recover most of the
+  // property: it must name THIS baseline (a blanket `=1` does nothing), and it
+  // refuses under CI, where a regeneration is never legitimate — a writer that
+  // can rewrite its own expectation inside the gate is the self-certification
+  // the floors below exist to prevent.
+  const WRITE_TOKEN = "plugin-root-skills-ratchet";
+  if (process.env.SOLEUR_WRITE_RATCHET_BASELINE === WRITE_TOKEN && !process.env.CI) {
+    if (files.length < RATCHET_MIN_FILES || live.size < RATCHET_MIN_ROWS) {
+      throw new Error(
+        `FATAL: scan looks wrong (files=${files.length}, rows=${live.size}); baseline NOT rewritten`,
+      );
+    }
+    process.stderr.write(
+      `\n[ratchet] REWRITING ${RATCHET_BASELINE} from the live tree ` +
+        `(${files.length} files, ${live.size} rows). This is a regeneration, not a test run.\n\n`,
+    );
+    writeFileSync(RATCHET_BASELINE, serializeBaseline(live));
+  }
+
+  const baseline = readBaseline();
+
+  it("R0: the ratchet population is the tracked index, and a superset of the secret-gate axis", () => {
+    // Corpus floor, separate from the site count: a scan that collapses to a handful
+    // of files satisfies any row-count check that descends with it.
+    check(files.length).toBeGreaterThanOrEqual(RATCHET_MIN_FILES);
+    // The two enumerators cannot silently diverge. `skillFiles()` returns absolute
+    // paths; this axis is keyed repo-relative.
+    const docSet = new Set(files);
+    const missing = skillFiles()
+      .map((f) => f.replace(REPO_ROOT + "/", ""))
+      .filter((f) => !docSet.has(f));
+    check(missing).toEqual([]);
+  });
+
+  it("R1: the committed baseline is non-empty and above its corpus floor", () => {
+    // Without this, a broken extractor at AUTHORING time yields an empty baseline,
+    // a green suite, and an R3 dispatch row that can never fire — the vacuity this
+    // whole axis would otherwise ship with.
+    check(baseline.size).toBeGreaterThanOrEqual(RATCHET_MIN_ROWS);
+  });
+
+  it("R2: no site is new, and no site gained occurrences", () => {
+    const grown: string[] = [];
+    for (const [key, n] of live) {
+      const was = baseline.get(key);
+      if (was === undefined) {
+        const [file, text] = key.split("\t");
+        grown.push(
+          `${file}: NEW CWD-controllable anchor \`${text}\` — rewrite it as ` +
+            `"\${CLAUDE_PLUGIN_ROOT}/…" (no default). Do NOT add a baseline row; the ` +
+            `migration of the existing rows is tracked in #6222.`,
+        );
+      } else if (n > was) {
+        const [file, text] = key.split("\t");
+        grown.push(`${file}: \`${text}\` occurs ${n} times, baseline pins ${was}`);
+      }
+    }
+    check(grown).toEqual([]);
+  });
+
+  it("R3: no baseline row is stale (all listed at once)", () => {
+    const stale = staleRows(baseline, live).map(
+      ([key, n]) => `${key.replaceAll("\t", ": ")} (baseline ${n}, live ${live.get(key) ?? 0})`,
+    );
+    check(stale).toEqual([]);
+  });
+
+  it("R4: the comparator is driven in BOTH directions", () => {
+    // An always-RED comparator and a working one are indistinguishable from R2/R3
+    // passing on the real tree. Drive a deliberately drifted baseline through the
+    // same comparison and require it to FAIL, then require the real one to pass.
+    // Drives R3's OWN comparator, not a copy of it. The previous form
+    // re-implemented the filter inline, so mutating R3's comparator (e.g. to
+    // `.filter(() => false)`) left R3 green AND R4 green — the both-directions
+    // arm protected nothing, which is the precedent's own documented defeat
+    // (fixture-relative-assert.test.sh row H5).
+    const drifted = new Map(baseline);
+    const firstKey = [...drifted.keys()].sort()[0];
+    drifted.set(firstKey, (drifted.get(firstKey) ?? 0) + 1);
+    check(staleRows(drifted, live).length).toBeGreaterThan(0);
+    check(staleRows(baseline, live)).toEqual([]);
+  });
+
+  it("R5: every form MEASURED to occur is represented in the live corpus", () => {
+    // Per-form representation, not one union count: each form is a separate regex
+    // branch, so a branch that stopped matching leaves the total high while its own
+    // class goes silently unguarded.
+    //
+    // Form (c) — `bash ./plugins/soleur/…` — is ANTICIPATED, not measured: it has ZERO
+    // live occurrences (measured 2026-09-23 post-widening: a 98, b 23, c 0, d 87,
+    // e 23; form (a) then left this axis in #7453 — see RATCHET_FORMS). It stays in the matcher because it is the same hazard one `./` over, and
+    // requiring it to be REPRESENTED would red the gate on a tree that simply does not
+    // contain it. What guards it is R2: a first (c) site is a row absent from the
+    // baseline, which is a RED with the paste-ready rewrite in the message.
+    // Distinguishing the two is the point — "this form cannot occur" and "this form is
+    // unguarded" are different claims, and only the second is a defect.
+    const byForm = new Map<string, number>();
+    for (const s of sites) byForm.set(s.form, (byForm.get(s.form) ?? 0) + 1);
+    check([...(["b", "d", "e"] as const)].filter((f) => (byForm.get(f) ?? 0) === 0)).toEqual([]);
+  });
+
+  it("R6: the suite ran every assertion (anti-vacuity floor)", () => {
+    // Absolute and hand-ratcheted, same contract as G7 and the command surface's
+    // floor. Raised in the SAME edit that adds an assertion, never in a later pass.
+    expect(assertions).toBe(8);
+  });
+});
+
+/* ========================================================================== *
+ * #7453 — the WHOLE payload's markdown reads the plugin root through the exact
+ * loader token, and a Read-surface doc delivers the root itself (ADR-179 A18/A20).
+ *
+ * INDEX — guard → property → ADR-179 section → how to fix:
+ *   Guard 1 (W1/W1-control) → no default arm, no unbraced/`env`/`printenv` read, no
+ *     root assignment → A18 → write `"${CLAUDE_PLUGIN_ROOT}/<payload-relative path>"`;
+ *     in prose, say "the `:-` default arm", never spell the form.
+ *   Guard 2 (W2/W2-control) → no `<dynamic>/plugins/soleur/…` prefix and no `..` after
+ *     the token → A18 → drop the git-root / double prefix; the token IS `plugins/soleur`.
+ *   Guard 3 → retired: its property (every token path exists) became the one-time plan
+ *     check AC3b.
+ *   Guard 4 (W4a/W4b) → a non-SKILL.md doc carrying the token is Read, not delivered, so
+ *     it carries the root-delivery notice and is pointed to only through the loader token
+ *     → A20.
+ *   Guard 6 (W6) → an `agents/**` body never EXECUTES a CWD-relative `plugins/soleur/…`
+ *     script (runner or assignment form) → A20 "Unclassified surface" → use the token.
+ *
+ * POPULATION. `git ls-files` over `plugins/soleur/ ** /*.md` from the repo root: the
+ * INDEX, never the disk, so an untracked file cannot join and a tracked one cannot slip
+ * out. It includes ~200 `plugins/soleur/test/ ** /*.md` fixtures and `docs/` — accepted:
+ * payload markdown must not SPELL the rejected forms even in prose. The floor
+ * (`PAYLOAD_DOC_FLOOR`) is a literal, not a second enumeration (that would be circular).
+ * Shipped `.sh`/`.ts`/`.py` are OUT of the property by design: the variable is a real
+ * runtime variable there and A17's BASH_SOURCE rule governs them. Non-`*.md` text under
+ * `skills/` (`eval-harness/prompts/*.txt`, seven `*.template` references) carries no token
+ * today and is OUTSIDE Guard 4's population — a token added there is not checked.
+ *
+ * No regex in this block is built from data (the #8686 CodeQL finding class): every
+ * pattern is a module-level literal, and data meets a pattern only via `includes`.
+ * ========================================================================== */
+
+/** Measured 575 tracked files on 2026-09-24. A disk walk of `skills/` alone is ~240. */
+const PAYLOAD_DOC_FLOOR = 575;
+
+const READ_SURFACE_NOTICE_HEAD = "**Plugin root in this file:**";
+const READ_SURFACE_CLOSED_RULE = "The root is ONLY the prefix of the path you read this file from";
+const TOKEN_SLASH = "${CLAUDE_PLUGIN_ROOT}/";
+
+/** Measured 5 Read-surface docs on 2026-09-24 (ADR-179 A20). */
+const READ_SURFACE_FLOOR = 5;
+
+function payloadDocFiles(): string[] {
+  return execFileSync("git", ["ls-files", "--full-name", "--", ":(glob)plugins/soleur/**/*.md"], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  })
+    .split("\n")
+    .filter((l) => l.length > 0)
+    .sort();
+}
+
+/**
+ * Guard 1 (ii): SETTING the root, or defaulting any variable into the payload.
+ *   - a `CLAUDE_PLUGIN_ROOT=` assignment other than a `<…>` placeholder echo;
+ *   - a default arm of ANY variable pointing at `plugins/soleur` (typo'd names, `${R:-…}`);
+ *   - reading the root out of `env` without naming the token.
+ */
+function plantsRootUnsafely(src: string): boolean {
+  return (
+    // The placeholder exception is a lowercase-word `<…>` only: `=<(true)/x` is a
+    // process substitution, not a placeholder.
+    /\bCLAUDE_PLUGIN_ROOT=(?!<[a-z ]+>)/.test(src) ||
+    /\b(?:printf\s+-v\s+|read\s+(?:-[A-Za-z]+\s+)*)CLAUDE_PLUGIN_ROOT\b/.test(src) ||
+    /\$\{[A-Za-z_]\w*:?[-=?+][^}]*plugins\/soleur/.test(src) ||
+    // `[^\n|]*` pins the FIRST pipe after `env`: same accepted strings, and no cubic
+    // backtracking on a long `env | env | …` line (measured 2.7 s at 6 KB before).
+    /\benv\b[^\n|]*\|[^\n]*CLAUDE_PLUGIN_ROOT/.test(src)
+  );
+}
+
+/**
+ * Guard 2: a dynamic prefix INTO the payload, or an escape OUT of it.
+ *   2a `$(…)/`, `${…}/`, `$VAR/` then `plugins/soleur` (quotes, `//`, `/./` tolerated) —
+ *      Pattern C, the double prefix, `$PWD` indirection.
+ *   2b the backtick `git rev-parse --show-toplevel`/plugins/soleur form. A generic
+ *      backtick prefix in 2a false-flagged `/plugins/soleur/NOTICE` code spans.
+ *   2c a `..` segment anywhere after the token.
+ */
+const DYNAMIC_PREFIX_RES: readonly RegExp[] = [
+  /(\)|\}|\$[A-Za-z_]\w*)["']*\/+(?:\.\/+)*plugins\/soleur\b/,
+  /show-toplevel[)`"']*\/+(?:\.\/+)*plugins\/soleur\b/,
+  /\$\{CLAUDE_PLUGIN_ROOT\}["']*\/[^\s"'`]*\.\.(\/|"|'|\s|$)/,
+];
+
+function composesDynamicPrefix(src: string): boolean {
+  return DYNAMIC_PREFIX_RES.some((re) => re.test(src));
+}
+
+/** One population-parameterised scan, so every control drives the live code path. */
+function scanPayloadDocs(
+  sources: ReadonlyArray<{ readonly name: string; readonly src: string }>,
+  predicate: (src: string) => boolean,
+): string[] {
+  return sources.filter((f) => predicate(f.src)).map((f) => f.name);
+}
+
+const PLANT_FIXTURES: ReadonlyArray<{ readonly src: string; readonly mustFlag: boolean }> = [
+  { src: "export CLAUDE_PLUGIN_ROOT=./plugins/soleur", mustFlag: true },
+  { src: 'export CLAUDE_PLUGIN_ROOT="$PWD/plugins/soleur"', mustFlag: true },
+  { src: 'CLAUDE_PLUGIN_ROOT="$(git rev-parse --show-toplevel)/plugins/soleur" bash x.sh', mustFlag: true },
+  { src: '[ -n "$X" ] || CLAUDE_PLUGIN_ROOT=plugins/soleur', mustFlag: true },
+  { src: 'bash "${SOLEUR_ROOT:-./plugins/soleur}/scripts/x.sh"', mustFlag: true },
+  { src: 'R="${R-plugins/soleur}"', mustFlag: true },
+  { src: "ROOT=$(env | grep CLAUDE_PLUGIN_ROOT | cut -d= -f2)", mustFlag: true },
+  { src: 'ROOT="${CLAUDE_PLUGIN_ROOT}"; SRC=plugin-root-token', mustFlag: false },
+  // The retired #7453 draft's absolute sentinel is now a plain assignment like any other.
+  { src: 'export CLAUDE_PLUGIN_ROOT="/__REPLACE_WITH_SOLEUR_PLUGIN_ROOT__"', mustFlag: true },
+  { src: "export CLAUDE_PLUGIN_ROOT=<the installed soleur plugin root>", mustFlag: false },
+  { src: 'bash "${CLAUDE_PLUGIN_ROOT}/scripts/x.sh"', mustFlag: false },
+  { src: "printf -v CLAUDE_PLUGIN_ROOT %s /x", mustFlag: true },
+  { src: "read -r CLAUDE_PLUGIN_ROOT <<< /x", mustFlag: true },
+  { src: "export CLAUDE_PLUGIN_ROOT=<(true)/x", mustFlag: true },
+  { src: "export CLAUDE_PLUGIN_ROOT=<root>", mustFlag: false },
+  { src: "read the value of CLAUDE_PLUGIN_ROOT from the path", mustFlag: false },
+];
+
+/**
+ * Guard 3b: an UNQUOTED token as a runner operand word-splits on a space in the install
+ * path. Built from the module-level RUNNER literal, never from data.
+ */
+const UNQUOTED_TOKEN_OPERAND = new RegExp(
+  String.raw`(?:^|[\s(;|&\`])` + RUNNER + String.raw`(?:\s+-[A-Za-z-]+)*\s+\$\{CLAUDE_PLUGIN_ROOT\}/`,
+);
+const UNQUOTED_FIXTURES: ReadonlyArray<{ readonly src: string; readonly mustFlag: boolean }> = [
+  { src: "bash ${CLAUDE_PLUGIN_ROOT}/skills/deploy/scripts/deploy.sh", mustFlag: true },
+  { src: "  python3 -u ${CLAUDE_PLUGIN_ROOT}/x.py", mustFlag: true },
+  { src: "x && . ${CLAUDE_PLUGIN_ROOT}/lib.sh", mustFlag: true },
+  { src: 'bash "${CLAUDE_PLUGIN_ROOT}/skills/deploy/scripts/deploy.sh"', mustFlag: false },
+  { src: 'echo "Run: bash \\"${CLAUDE_PLUGIN_ROOT}/x.sh\\""', mustFlag: false },
+];
+
+/**
+ * Guard 6: an `agents/**` body EXECUTING a CWD-relative `plugins/soleur/…` script — runner
+ * form or an assignment of the path. Prose naming a path (no runner) is not an execution.
+ */
+const AGENT_CWD_EXEC = new RegExp(
+  String.raw`(?:(?:^|[\s(;|&\`])` + RUNNER + GAP + String.raw`|=["']?)(?:\./)?plugins/soleur/[^\s"'\`]+\.(?:sh|py|mjs|cjs|js|ts|awk)`,
+);
+const AGENT_EXEC_FIXTURES: ReadonlyArray<{ readonly src: string; readonly mustFlag: boolean }> = [
+  { src: 'echo "$content" | bash plugins/soleur/skills/skill-security-scan/scripts/run-scan.sh', mustFlag: true },
+  { src: 'ROUTER="plugins/soleur/skills/community/scripts/community-router.sh"', mustFlag: true },
+  { src: "python3 ./plugins/soleur/skills/agent-browser/scripts/redact-a11y-snapshot.py", mustFlag: true },
+  { src: 'bash "${CLAUDE_PLUGIN_ROOT}/skills/skill-security-scan/scripts/run-scan.sh"', mustFlag: false },
+  { src: "The review skill runs `plugins/soleur/skills/review/scripts/ensure-semgrep.sh` first.", mustFlag: false },
+];
+
+const DYNPREFIX_FIXTURES: ReadonlyArray<{ readonly src: string; readonly mustFlag: boolean }> = [
+  {
+    src: 'FORM_A_AWK="$(git rev-parse --show-toplevel)/plugins/soleur/skills/preflight/scripts/parse-form-a.awk"',
+    mustFlag: true,
+  },
+  { src: 'bash "${CLAUDE_PLUGIN_ROOT}/plugins/soleur/scripts/x.sh"', mustFlag: true },
+  { src: "bash \"$PWD\"'/plugins/soleur/skills/x.sh'", mustFlag: true },
+  { src: 'bash "${PWD}//plugins/soleur/x.sh"', mustFlag: true },
+  { src: 'bash "$(pwd)/./plugins/soleur/x.sh"', mustFlag: true },
+  { src: "bash `git rev-parse --show-toplevel`/plugins/soleur/x.sh", mustFlag: true },
+  { src: 'bash "${CLAUDE_PLUGIN_ROOT}/skills/../../scripts/x.sh"', mustFlag: true },
+  { src: 'bash "${CLAUDE_PLUGIN_ROOT}/./../evil.sh"', mustFlag: true },
+  { src: 'cat "${CLAUDE_PLUGIN_ROOT}/.."', mustFlag: true },
+  { src: "Read plugins/soleur/skills/x/SKILL.md", mustFlag: false },
+  { src: "`/plugins/soleur/skills/gdpr-gate/NOTICE`", mustFlag: false },
+  { src: 'bash "${CLAUDE_PLUGIN_ROOT}/skills/x/scripts/y.sh"', mustFlag: false },
+  { src: 'bash "${CLAUDE_PLUGIN_ROOT}/skills/x/scripts/y..sh"', mustFlag: false },
+];
+
+function fixtureMisses(
+  fixtures: ReadonlyArray<{ readonly src: string; readonly mustFlag: boolean }>,
+  predicate: (src: string) => boolean,
+): string[] {
+  return fixtures
+    .filter((fx) => predicate(fx.src) !== fx.mustFlag)
+    .map((fx) => `${fx.mustFlag ? "MISSED" : "FALSE-POSITIVE"}: ${fx.src}`);
+}
+
+/** A non-SKILL.md markdown doc under `skills/` whose text carries the token plus a path. */
+function isReadSurfaceDoc(name: string, src: string): boolean {
+  return (
+    name.startsWith("plugins/soleur/skills/") &&
+    (name.split("/").pop() ?? "") !== "SKILL.md" &&
+    src.includes(TOKEN_SLASH)
+  );
+}
+
+/**
+ * Guard 4(b): lines pointing at a Read-surface doc by a CWD-relative repo path or by a
+ * relative markdown link. Matching is `includes`/`endsWith` over literal data — never a
+ * pattern built from a doc name.
+ */
+function readSurfacePointerViolations(
+  sources: ReadonlyArray<{ readonly name: string; readonly src: string }>,
+  docs: readonly string[],
+): string[] {
+  const out: string[] = [];
+  for (const { name, src } of sources) {
+    src.split("\n").forEach((line, i) => {
+      // URLs are not repository paths.
+      const local = line.replace(/[a-z][a-z0-9+.-]*:\/\/\S+/g, "");
+      // Relative links only: `./x`, `../x` or a bare `references/x`. A link starting with
+      // `$` (the loader token), `/`, `#` or a URL scheme is not relative.
+      const targets = [...line.matchAll(/\]\(((?:\.{1,2}\/)?(?![a-z][a-z0-9+.-]*:)[A-Za-z0-9_.][^)\s]*)\)/g)].map(
+        (m) => m[1].split("#")[0] ?? "",
+      );
+      for (const doc of docs) {
+        const base = doc.split("/").pop() ?? doc;
+        // Any `…/<base>` left once the loader-token spelling of this doc is removed is a
+        // partial repo path (`references/x.md`, `skills/review/references/x.md`).
+        const tokenForm = TOKEN_SLASH + doc.slice("plugins/soleur/".length);
+        // A doc naming its own path (its notice) is not a pointer.
+        const cwdRelative =
+          name !== doc && (local.includes(doc) || local.split(tokenForm).join("").includes(`/${base}`));
+        const relLink = targets.some((t) => t === base || t.endsWith(`/${base}`));
+        if (cwdRelative || relLink) out.push(`${name}:${i + 1} → ${doc}`);
+      }
+    });
+  }
+  return out;
+}
+
+describe("plugin-root anchoring — whole payload markdown (#7453, ADR-179 A18/A20)", () => {
+  const names = payloadDocFiles();
+  const sources = names.map((name) => ({ name, src: readFileSync(resolve(REPO_ROOT, name), "utf8") }));
+  const SYNTHETIC = { name: "plugins/soleur/__synthetic__/planted.md", src: "" };
+
+  let assertions = 0;
+  const check = <T>(actual: T) => {
+    assertions += 1;
+    return expect(actual);
+  };
+
+  it("W0: the population is the tracked payload markdown, above its literal floor", () => {
+    // Fix hint: a drop below the floor means the enumerator broke (measured 575 on 2026-09-24).
+    check(names.length).toBeGreaterThanOrEqual(PAYLOAD_DOC_FLOOR);
+    // Membership: a pathspec that drops `:(glob)` or a subtree loses these first.
+    check(["plugins/soleur/README.md", "plugins/soleur/commands/go.md", "plugins/soleur/agents/legal/clo.md"].filter((n) => !names.includes(n))).toEqual([]);
+  });
+
+  it("W1: no payload doc reads the plugin root through anything but the exact token (Guard 1 i)", () => {
+    check(
+      scanForUnsafeRootReads(sources).map(
+        (n) => `${n} — write "\${CLAUDE_PLUGIN_ROOT}/<payload-relative path>"; in prose say "the \`:-\` default arm", never spell the form`,
+      ),
+    ).toEqual([]);
+  });
+
+  it("W1b: no payload doc sets the root or defaults a variable into the payload (Guard 1 ii)", () => {
+    check(
+      scanPayloadDocs(sources, plantsRootUnsafely).map(
+        (n) => `${n} — never assign CLAUDE_PLUGIN_ROOT (except a \`<…>\` placeholder, ADR-179 A20) or default any variable to plugins/soleur`,
+      ),
+    ).toEqual([]);
+  });
+
+  it("W1-control: both Guard 1 predicates discriminate, and the live scans are wired to them", () => {
+    check(fixtureMisses(P1B_FIXTURES, readsRootUnsafely)).toEqual([]);
+    check(fixtureMisses(PLANT_FIXTURES, plantsRootUnsafely)).toEqual([]);
+    check(PLANT_FIXTURES.filter((fx) => fx.mustFlag).length).toBeGreaterThanOrEqual(7);
+    // Row floors: deleting a fixture row (e.g. the #8061 form) must red, not silently pass.
+    check(P1B_FIXTURES.filter((fx) => fx.mustFlag).length).toBeGreaterThanOrEqual(7);
+    check(P1B_FIXTURES.filter((fx) => !fx.mustFlag).length).toBeGreaterThanOrEqual(2);
+    // Negative dispatch: a clean planted source is NOT reported by either live scan.
+    const clean = { ...SYNTHETIC, src: 'bash "${CLAUDE_PLUGIN_ROOT}/skills/x/scripts/x.sh"' };
+    check(scanForUnsafeRootReads([clean])).toEqual([]);
+    check(scanPayloadDocs([clean], plantsRootUnsafely)).toEqual([]);
+    // Dispatch: the SAME wrappers over the REAL population plus one planted source must
+    // return exactly the planted name — a wrapper returning [] or ignoring its input reds.
+    check(
+      scanForUnsafeRootReads([
+        ...sources,
+        { ...SYNTHETIC, src: 'bash "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/x.sh"' },
+      ]).filter((n) => n === SYNTHETIC.name),
+    ).toEqual([SYNTHETIC.name]);
+    check(
+      scanPayloadDocs([...sources, { ...SYNTHETIC, src: "export CLAUDE_PLUGIN_ROOT=./plugins/soleur" }], plantsRootUnsafely).filter(
+        (n) => n === SYNTHETIC.name,
+      ),
+    ).toEqual([SYNTHETIC.name]);
+  });
+
+  it("W2: no payload doc composes a dynamic prefix into, or a `..` escape out of, the payload (Guard 2)", () => {
+    check(
+      scanPayloadDocs(sources, composesDynamicPrefix).map(
+        (n) => `${n} — the token already IS plugins/soleur: drop the git-root / double prefix, and never '..' out of it`,
+      ),
+    ).toEqual([]);
+  });
+
+  it("W2-control: the Guard 2 predicate discriminates, and the live scan is wired to it", () => {
+    check(fixtureMisses(DYNPREFIX_FIXTURES, composesDynamicPrefix)).toEqual([]);
+    check(DYNPREFIX_FIXTURES.length).toBeGreaterThanOrEqual(10);
+    check(
+      scanPayloadDocs(
+        [...sources, { ...SYNTHETIC, src: 'X="$(git rev-parse --show-toplevel)/plugins/soleur/x"' }],
+        composesDynamicPrefix,
+      ).filter((n) => n === SYNTHETIC.name),
+    ).toEqual([SYNTHETIC.name]);
+  });
+
+  it("W3: no payload doc passes the token UNQUOTED to a runner (Guard 3b)", () => {
+    check(
+      scanPayloadDocs(sources, (src) => UNQUOTED_TOKEN_OPERAND.test(src)).map(
+        (n) => `${n} — quote it: bash "\${CLAUDE_PLUGIN_ROOT}/<path>"`,
+      ),
+    ).toEqual([]);
+  });
+
+  it("W3-control: the Guard 3b predicate discriminates, and the live scan is wired to it", () => {
+    check(fixtureMisses(UNQUOTED_FIXTURES, (src) => UNQUOTED_TOKEN_OPERAND.test(src))).toEqual([]);
+    check(
+      scanPayloadDocs([...sources, { ...SYNTHETIC, src: "bash ${CLAUDE_PLUGIN_ROOT}/x.sh" }], (src) =>
+        UNQUOTED_TOKEN_OPERAND.test(src),
+      ).filter((n) => n === SYNTHETIC.name),
+    ).toEqual([SYNTHETIC.name]);
+  });
+
+  const agentSources = sources.filter((s) => s.name.startsWith("plugins/soleur/agents/"));
+
+  it("W6: no agent body executes a CWD-relative plugins/soleur script (Guard 6)", () => {
+    check(agentSources.length).toBeGreaterThanOrEqual(60);
+    check(
+      scanPayloadDocs(agentSources, (src) => AGENT_CWD_EXEC.test(src)).map(
+        (n) => `${n} — run it as "\${CLAUDE_PLUGIN_ROOT}/<payload-relative path>" (ADR-179 A20)`,
+      ),
+    ).toEqual([]);
+  });
+
+  it("W6-control: the Guard 6 predicate discriminates, and the live scan is wired to it", () => {
+    check(fixtureMisses(AGENT_EXEC_FIXTURES, (src) => AGENT_CWD_EXEC.test(src))).toEqual([]);
+    const planted = { name: "plugins/soleur/agents/__synthetic__.md", src: "bash plugins/soleur/scripts/x.sh" };
+    check(
+      scanPayloadDocs([...agentSources, planted], (src) => AGENT_CWD_EXEC.test(src)).filter((n) => n === planted.name),
+    ).toEqual([planted.name]);
+  });
+
+  const readSurface = sources.filter((s) => isReadSurfaceDoc(s.name, s.src));
+
+  it("W4d: the Read-surface population is live and above its floor", () => {
+    // Fix hint: a drop means the qualifying predicate broke. A NEW doc joins by carrying the
+    // token and must then pass W4a/W4b on its own (ADR-179 A20).
+    check(readSurface.length).toBeGreaterThanOrEqual(READ_SURFACE_FLOOR);
+    // Dispatch: the same predicate over the real population plus one planted doc.
+    const planted = { name: "plugins/soleur/skills/__synthetic__/references/r.md", src: `bash "${TOKEN_SLASH}x.sh"` };
+    check([...sources, planted].filter((s) => isReadSurfaceDoc(s.name, s.src)).map((s) => s.name)).toContain(planted.name);
+  });
+
+  it("W4a: every Read-surface doc carries the root-delivery notice and the closed rule", () => {
+    check(
+      readSurface
+        .filter((s) => !s.src.includes(READ_SURFACE_NOTICE_HEAD) || !s.src.includes(READ_SURFACE_CLOSED_RULE))
+        .map((s) => s.name),
+    ).toEqual([]);
+  });
+
+  it("W4b: no payload doc points at a Read-surface doc CWD-relatively", () => {
+    // Fix hint: point through the loader token, `${CLAUDE_PLUGIN_ROOT}/skills/<s>/references/<f>.md`.
+    check(readSurfacePointerViolations(sources, readSurface.map((s) => s.name))).toEqual([]);
+  });
+
+  it("W4-control: the Guard 4 helpers discriminate", () => {
+    check(isReadSurfaceDoc("plugins/soleur/skills/x/references/likec4-reference.md", "${CLAUDE_PLUGIN_ROOT}")).toBe(false);
+    check(isReadSurfaceDoc("plugins/soleur/skills/x/SKILL.md", `bash "${TOKEN_SLASH}x.sh"`)).toBe(false);
+    check(isReadSurfaceDoc("plugins/soleur/skills/x/references/r.md", `bash "${TOKEN_SLASH}x.sh"`)).toBe(true);
+    const doc = "plugins/soleur/skills/ship/references/settle-then-admin-merge.md";
+    check(
+      readSurfacePointerViolations(
+        [
+          { name: "a.md", src: "Read `plugins/soleur/skills/ship/references/settle-then-admin-merge.md` now" },
+          { name: "b.md", src: "see [it](../ship/references/settle-then-admin-merge.md#step-2)" },
+          { name: "c.md", src: "see [it](./references/settle-then-admin-merge.md)" },
+          { name: "d.md", src: "see [it](references/settle-then-admin-merge.md)" },
+          { name: "e.md", src: "Read `skills/ship/references/settle-then-admin-merge.md` now" },
+          { name: "ok2.md", src: "see [it](https://example.com/settle-then-admin-merge.md)" },
+          {
+            name: "ok.md",
+            src: "see [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md)",
+          },
+        ],
+        [doc],
+      ).map((v) => v.split(":")[0]),
+    ).toEqual(["a.md", "b.md", "c.md", "d.md", "e.md"]);
+  });
+
+  it("W5: the suite ran every assertion (anti-vacuity floor)", () => {
+    // Absolute and hand-ratcheted, same contract as P5/G7/R6. Raised in the SAME edit
+    // that adds an assertion.
+    expect(assertions).toBe(32);
   });
 });

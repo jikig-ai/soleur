@@ -108,6 +108,100 @@ run_real "127.0.0.1:1"
 assert "real connect to a closed port => unreachable => NO ping" "[[ '$PINGED' == no ]]"
 assert "real connect to a closed port => fail-soft exit 0" "[[ '$EC' -eq 0 ]]"
 
+# --- TRANSPORT (#9757): the heartbeat URL reaches curl on its stdin config, never on argv --------
+# The seam above returns BEFORE the transport line, so nothing above ever executed it. This harness runs
+# with the ping seam UNSET, a PATH curl stub and SOLEUR_GIT_DATA_PROBE_REACH_OVERRIDE=reachable. The stub
+# records argv (`argv <words>`) and, for every `--config -` call, the stdin config's `url = "` line
+# (`cfg <line>`); a call whose stdin carries no such line FAILS (rc 97, recorded as `cfg-MISSING`), so a
+# SUT that dropped the config, or a stub that ignored stdin, cannot pass as a healthy ping. The first
+# attempt can be made to fail (STUB_FAIL_FIRST=1) so the SECOND attempt must read its OWN fresh stdin: a
+# process substitution is consumed once, and a shared one would hand attempt 2 an EOF (cfg-MISSING).
+echo "--- transport: stdin config, per-attempt, shape guard (#9757) ---"
+STUBDIR="$TMP/stub"; mkdir -p "$STUBDIR"
+cat > "$STUBDIR/curl" <<'STUB'
+#!/usr/bin/env bash
+printf 'argv %s\n' "$*" >> "$CURL_LOG"
+n=$(( $(cat "$CURL_LOG.n" 2>/dev/null || echo 0) + 1 )); printf '%s' "$n" > "$CURL_LOG.n"
+case " $* " in
+  *" --config - "*)
+    line=""
+    while IFS= read -r l || [ -n "$l" ]; do case "$l" in 'url = "'*) line="$l"; break ;; esac; done
+    if [ -z "$line" ]; then printf 'cfg-MISSING\n' >> "$CURL_LOG"; exit 97; fi
+    printf 'cfg %s\n' "$line" >> "$CURL_LOG" ;;
+  *) printf 'cfg-MISSING\n' >> "$CURL_LOG"; exit 97 ;;
+esac
+if [ "${STUB_FAIL_FIRST:-}" = 1 ] && [ "$n" -eq 1 ]; then exit 7; fi
+exit "${STUB_RC:-0}"
+STUB
+chmod +x "$STUBDIR/curl"
+
+run_transport() {  # <url value> [extra env assignment...]
+  local url="$1" ec=0; shift
+  CURL_LOG="$(mktemp "$TMP/curl.XXXXXX")"; : > "$CURL_LOG"; rm -f "$CURL_LOG.n"
+  TOUT="$TMP/tout.$RANDOM"
+  env "$@" PATH="$STUBDIR:$PATH" CURL_LOG="$CURL_LOG" \
+    SOLEUR_GIT_DATA_PROBE_REACH_OVERRIDE=reachable "GIT_DATA_HEARTBEAT_URL=$url" \
+    bash "$SUT" >"$TOUT" 2>&1 || ec=$?
+  TEC=$ec; TOUTTXT="$(cat "$TOUT")"
+  N_ARGV="$(grep -c '^argv ' "$CURL_LOG" || true)"
+  N_CFG="$(grep -c '^cfg url = "' "$CURL_LOG" || true)"
+  N_MISSING="$(grep -c '^cfg-MISSING' "$CURL_LOG" || true)"
+  N_MARK="$(grep -c 'SOLEUR_CREDENTIAL_REFUSED' "$TOUT" || true)"
+}
+GOOD='https://uptime.betterstack.test/api/v1/heartbeat/synthetic-token'
+
+run_transport "$GOOD"
+assert "healthy ping: exactly one curl call, exit 0" "[[ '$N_ARGV' -eq 1 && '$TEC' -eq 0 ]]"
+assert "healthy ping: the stdin config carried the url line" "[[ '$N_CFG' -eq 1 && '$N_MISSING' -eq 0 ]]"
+assert "healthy ping: the URL is NOT on curl's argv" "! grep -q '^argv .*betterstack' '$CURL_LOG'"
+assert "healthy ping: argv is exactly the --disable --noproxy * -gfsS -m 10 -o /dev/null --config - form" \
+  "grep -qxF 'argv --disable --noproxy * -gfsS -m 10 -o /dev/null --config -' '$CURL_LOG'"
+assert "healthy ping: the recorded url line is the stored URL" "grep -qxF 'cfg url = \"$GOOD\"' '$CURL_LOG'"
+assert "healthy ping: no marker, no WARN" "[[ '$N_MARK' -eq 0 ]] && ! grep -q WARN <<<\"\$TOUTTXT\""
+
+# both attempts: the first fails, the second must read its OWN fresh stdin and succeed
+run_transport "$GOOD" STUB_FAIL_FIRST=1
+assert "retry: two curl calls, each with its own recorded url line (the second did not read EOF)" \
+  "[[ '$N_ARGV' -eq 2 && '$N_CFG' -eq 2 && '$N_MISSING' -eq 0 ]]"
+assert "retry: the second attempt succeeded, so no FAILED warning and exit 0" \
+  "[[ '$TEC' -eq 0 ]] && ! grep -q 'ping FAILED' <<<\"\$TOUTTXT\""
+run_transport "$GOOD" STUB_RC=7
+assert "both attempts fail: two curl calls, one FAILED warning, still fail-soft exit 0" \
+  "[[ '$N_ARGV' -eq 2 && '$N_CFG' -eq 2 && '$TEC' -eq 0 ]] && grep -q 'ping FAILED' <<<\"\$TOUTTXT\""
+
+# SHAPE GUARD: zero requests and exactly one value-free marker, on every hostile or malformed value
+hostile_row() {  # <label> <value> <reason>
+  run_transport "$2"
+  assert "guard refuses $1: zero curl calls, exactly one marker, exit 0 (fail-soft)" \
+    "[[ '$N_ARGV' -eq 0 && '$N_MARK' -eq 1 && '$TEC' -eq 0 ]]"
+  assert "guard refuses $1: marker names reason=$3 and the variable, not the value" \
+    "grep -q 'SOLEUR_CREDENTIAL_REFUSED script=web-git-data-probe reason=$3 var=GIT_DATA_HEARTBEAT_URL\$' <<<\"\$TOUTTXT\" && ! grep -q 'betterstack' <<<\"\$TOUTTXT\""
+}
+hostile_row 'an embedded double quote' "${GOOD}\"" token_shape
+hostile_row 'a quote then an injected directive (newline)' "${GOOD}
+proxy = \"http://203.0.113.1:3128\"" control_char
+hostile_row 'a trailing newline' "${GOOD}
+" control_char
+hostile_row 'a backslash' "${GOOD}\\x" token_shape
+hostile_row 'an embedded space' "${GOOD} x" token_shape
+hostile_row 'a hash' "${GOOD}#x" token_shape
+hostile_row 'userinfo (@)' "https://u@uptime.betterstack.test/x" token_shape
+hostile_row 'a scheme other than https' "http://uptime.betterstack.test/x" token_shape
+hostile_row 'no scheme' "uptime.betterstack.test/x" token_shape
+hostile_row 'a bare scheme (empty rest)' "https://" token_shape
+hostile_row 'a whitespace-only value' " " token_shape
+# unset URL is the pre-existing WARN arm (not a refusal): zero requests, no marker
+run_transport ""
+assert "empty URL: the existing WARN arm (zero curl calls, no marker, exit 0)" \
+  "[[ '$N_ARGV' -eq 0 && '$N_MARK' -eq 0 && '$TEC' -eq 0 ]] && grep -q 'unset' <<<\"\$TOUTTXT\""
+# must-PASS: a different well-formed token with every allowed punctuation class
+run_transport 'https://uptime.betterstack.test/api/v1/heartbeat/A.b_c~d:9?x=1&y=%2B+z-Q'
+assert "a well-formed URL with a different token pings once, on stdin only" \
+  "[[ '$N_ARGV' -eq 1 && '$N_CFG' -eq 1 && '$N_MARK' -eq 0 ]] && ! grep -q '^argv .*A.b_c' '$CURL_LOG'"
+# the seam still routes before the transport and still receives the (unguarded) argument
+run_seam reachable
+assert "seam still routes before the transport (ping log written, no curl needed)" "[[ '$PINGED' == yes && '$EC' -eq 0 ]]"
+
 # --- static drift-guard: doppler-auth unit-start contract (#6548 unit-start fix) ----------
 # The unit runs `doppler run` as ROOT. Without Environment=HOME=/root the doppler CLI's
 # os.UserHomeDir() init dies "$HOME is not defined" BEFORE it exec's the probe; without a
@@ -120,13 +214,13 @@ SERVER_TF="$SCRIPT_DIR/server.tf"
 assert "git-data .service sets Environment=HOME=/root (else doppler: \$HOME is not defined)" \
   "grep -qE '^Environment=HOME=/root\$' '$SVC'"
 assert "git-data .service does NOT source webhook-deploy (deploy-owned; imports /tmp/.doppler)" \
-  "! grep -vE '^[[:space:]]*#' '$SVC' | grep -q 'webhook-deploy'"
+  "! grep -vE '^[[:space:]]*#' '$SVC' | grep -c 'webhook-deploy' >/dev/null"
 assert "git-data .service does NOT set DOPPLER_CONFIG_DIR (root doppler uses /root/.doppler)" \
-  "! grep -vE '^[[:space:]]*#' '$SVC' | grep -q 'DOPPLER_CONFIG_DIR'"
+  "! grep -vE '^[[:space:]]*#' '$SVC' | grep -c 'DOPPLER_CONFIG_DIR' >/dev/null"
 assert "git-data .service does NOT reference /tmp/.doppler (#6536 clash surface)" \
-  "! grep -vE '^[[:space:]]*#' '$SVC' | grep -q '/tmp/.doppler'"
+  "! grep -vE '^[[:space:]]*#' '$SVC' | grep -c '/tmp/.doppler' >/dev/null"
 assert "git-data .service is root-run (no User=deploy without PrivateTmp=true)" \
-  "! grep -qE '^User=deploy' '$SVC' || grep -qE '^PrivateTmp=true' '$SVC'"
+  "! grep -qE '^User=deploy' '$SVC' || grep -cE '^PrivateTmp=true' >/dev/null '$SVC'"
 # Anchor on the token VALUE wiring (web_probes.key), not just the literal (test-design review).
 assert "server.tf git_data_probe_install writes DOPPLER_TOKEN=<web_probes.key> into /etc/default/web-git-data-probe" \
   "grep -qE 'DOPPLER_TOKEN=%s.*web_probes\\.key.*/etc/default/web-git-data-probe' '$SERVER_TF'"

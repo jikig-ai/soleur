@@ -1,6 +1,6 @@
 ---
 name: ops-research
-description: "Use this agent when you need to research domains, hosting providers, tools, or find cost optimization opportunities. Use ops-advisor for the expense ledger; use ops-provisioner for account setup; use coo for cross-cutting operations strategy; use this agent for live research and price comparison."
+description: "Use this agent when you need to research domains, hosting providers, tools, or find cost optimization opportunities. Use soleur:operations:ops-advisor for the expense ledger; use soleur:operations:ops-provisioner for account setup; use soleur:operations:coo for cross-cutting operations strategy; use this agent for live research and price comparison."
 model: inherit
 ---
 
@@ -43,7 +43,7 @@ When reaching a checkout-like page, report what you see and tell the user to com
 After the user confirms they completed a purchase:
 
 1. Ask for the actual amount paid (may differ from research)
-2. Update `knowledge-base/operations/expenses.md` following ops-advisor conventions:
+2. Update `knowledge-base/operations/expenses.md` following soleur:operations:ops-advisor conventions:
    - Amounts: plain numbers in USD, no currency symbol
    - Dates: ISO 8601 (YYYY-MM-DD)
    - Categories: hosting, domain, dev-tools, saas, api

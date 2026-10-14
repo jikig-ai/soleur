@@ -285,7 +285,24 @@ for jn, j in (d.get("jobs") or {}).items():
         if "doppler " not in body:
             continue
         seen += 1
-        if "DOPPLER_TOKEN" not in env and "--token" not in body:
+        # THREE supplying forms, not two. `DOPPLER_TOKEN` as an env KEY and `--token` in argv
+        # were the original two; a body-level `DOPPLER_TOKEN=...` assignment prefixed onto the
+        # command is the third, and it is the SAFEST of them — `--token "$X"` puts the secret
+        # in argv, readable from /proc by any other process on the runner for the life of the
+        # call, whereas the assignment form keeps it in the environment. The row must not push
+        # authors toward the argv form to satisfy it (#8252).
+        #
+        # Anchored on the ASSIGNMENT (`DOPPLER_TOKEN=`), never on the bare name: the defect this
+        # row exists for is a step that DECLARES `DOPPLER_TOKEN_PRD` in env, references it
+        # nowhere, and calls doppler bare. That step has the bare name in env and no `=` form in
+        # the body, so it still fails here. A comment merely mentioning the variable also does
+        # not satisfy it.
+        supplies = (
+            "DOPPLER_TOKEN" in env
+            or "--token" in body
+            or "DOPPLER_TOKEN=" in body
+        )
+        if not supplies:
             bad.append(f"{jn}::{st.get('name')}")
 # SEEN is printed so a zero-offender result can be distinguished from a scan that inspected
 # nothing -- a non-vacuity control on the row's own population.

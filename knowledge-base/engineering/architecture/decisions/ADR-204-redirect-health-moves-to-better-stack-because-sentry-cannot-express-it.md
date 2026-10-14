@@ -4,6 +4,7 @@ status: accepted
 date: 2026-09-07
 tags: [observability, uptime-monitoring, sentry, better-stack, terraform, redirects, single-vendor]
 related_adrs: [ADR-194, ADR-175]
+amended_by: [ADR-222]
 related_runbooks:
   - knowledge-base/engineering/operations/runbooks/www-redirect-alarm.md
 ---
@@ -184,6 +185,15 @@ Separately, the Better Stack workspace holds an **unmanaged** fourth monitor
 because the free-tier quota was measured live rather than counted from `.tf`
 blocks. Tracked on [#7884](https://github.com/jikig-ai/soleur/issues/7884).
 
+> **Resolved 2026-09-15 (#7884, PR #8216):** the paragraph above is kept as
+> written on 2026-09-07. Monitor 4226366 is now declared as
+> `betteruptime_monitor.app_health` in `uptime-alerts.tf`. The first per-merge apply
+> after PR #8216 adopts it through a gated `import {}` block and converts it from a
+> `status` to a `keyword` monitor that pages when `/health` stops reporting
+> `"supabase":"connected"`. The twice-daily reconcile now reports any live monitor
+> or heartbeat that no declaration accounts for. See
+> [ADR-222](./ADR-222-better-stack-database-readiness-pager-and-live-inventory.md).
+
 ## Consequences
 
 - The www 301 has a working alarm for the first time since the assertion landed.
@@ -203,3 +213,37 @@ blocks. Tracked on [#7884](https://github.com/jikig-ai/soleur/issues/7884).
   every `SENTRY_*` secret were used only by the removed steps.
 - Better Stack usage goes to 4 monitors of 10 on the free tier. No recurring cost:
   the monitor is ungated and policy-less, riding the existing email path.
+
+  > **Superseded 2026-09-15 (#7884):** "4 monitors of 10" above is an asserted
+  > cap. Measured live on 2026-09-15 the workspace held 4 monitors + 9 heartbeats
+  > = 13 objects, which contradicts a single shared pool of ten. No cap is asserted any more: the reconcile prints
+  > `SOLEUR_HEARTBEAT_RECONCILE_INVENTORY monitors=<n> heartbeats=<n> total=<n>`
+  > every run ([ADR-222](./ADR-222-better-stack-database-readiness-pager-and-live-inventory.md)).
+
+## Amendment 2026-09-20 ([#8364](https://github.com/jikig-ai/soleur/issues/8364)): sampled deep-URL 301 probes
+
+Three further `expected_status_code = [301]` monitors landed in
+`uptime-alerts.tf` — `seo_redirect_zone_ruleset` (`/pages/agents.html`),
+`seo_redirect_bulk_item` (`/pages/legal/privacy-policy.html`) and
+`seo_redirect_blog_pair` (`/blog/2026-03-16-soleur-vs-anthropic-cowork/`) — one
+probe per independent edge-redirect mechanism (a `seo_page_redirects` zone rule,
+an explicit `cloudflare_list.legal_redirects` item, and a generated
+`blog_redirect_pairs` expansion item).
+
+The capability grounds are unchanged and unchanged in kind: Sentry's checker
+still cannot express the assertion, so Better Stack's
+`follow_redirects = false` remains the only knob in the stack that can see the
+pre-redirect hop. This is a widening of *what* the capability watches, not of
+the principle — and it is **sampled** coverage, not exhaustive: three probes is
+the smallest set that separates the three failure mechanisms. Per-URL runtime
+monitoring of the full redirect set stays rejected (free-tier object quota is
+unresolved, and source completeness is the declaration-time guards' job, not
+the monitors').
+
+Two consequences for the residual gap above. First, these probes satisfy the
+detection precondition [#7883](https://github.com/jikig-ai/soleur/issues/7883)
+was gated on: a Cloudflare-side redirect change that reaches production
+un-applied now pages on the sampled URLs. Second, #7883 itself stays **open** —
+`expected_status_code` still cannot assert the `Location` *target*, so "301s,
+but to the wrong place" remains runtime-undetected on every URL, sampled or
+not.

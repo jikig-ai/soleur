@@ -88,7 +88,7 @@ For each identified reference topic:
 
 1. Create `references/{reference-name}.md`
 2. Move relevant content from original skill
-3. Structure with semantic XML tags
+3. Structure with markdown headings; XML wrappers optional, inside a section
 
 ## Step 7: Rewrite SKILL.md as Router
 
@@ -100,11 +100,14 @@ name: {skill-name}
 description: {existing description}
 ---
 
-<essential_principles>
-[Extracted principles - inline, cannot be skipped]
-</essential_principles>
+# {Skill Name}
 
-<intake>
+## Essential principles
+
+[Extracted principles - inline, cannot be skipped]
+
+## Intake
+
 **Ask the user:**
 
 What would you like to do?
@@ -113,25 +116,24 @@ What would you like to do?
 ...
 
 **Wait for response before proceeding.**
-</intake>
 
-<routing>
+## Routing
+
 | Response | Workflow |
 |----------|----------|
 | 1, "keywords" | `workflows/workflow-a.md` |
 | 2, "keywords" | `workflows/workflow-b.md` |
-</routing>
 
-<reference_index>
+## References
+
 [List all references by category]
-</reference_index>
 
-<workflows_index>
+## Workflows
+
 | Workflow | Purpose |
 |----------|---------|
 | workflow-a.md | [What it does] |
 | workflow-b.md | [What it does] |
-</workflows_index>
 ```
 
 ## Step 8: Verify Nothing Was Lost

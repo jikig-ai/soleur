@@ -75,7 +75,9 @@ import {
 // are provided via the context object — no global mocks required.
 // ---------------------------------------------------------------------------
 
-function assertAllow(result: PermissionResult): Extract<PermissionResult, { behavior: "allow" }> {
+function assertAllow(result: PermissionResult | null): Extract<PermissionResult, { behavior: "allow" }> {
+  expect(result).not.toBeNull();
+  if (result === null) throw new Error("unreachable");
   expect(result.behavior).toBe("allow");
   if (result.behavior !== "allow") throw new Error("unreachable");
   // SDK v0.2.80 required updatedInput on allow — keep the invariant pinned.
@@ -83,7 +85,9 @@ function assertAllow(result: PermissionResult): Extract<PermissionResult, { beha
   return result;
 }
 
-function assertDeny(result: PermissionResult): Extract<PermissionResult, { behavior: "deny" }> {
+function assertDeny(result: PermissionResult | null): Extract<PermissionResult, { behavior: "deny" }> {
+  expect(result).not.toBeNull();
+  if (result === null) throw new Error("unreachable");
   expect(result.behavior).toBe("deny");
   if (result.behavior !== "deny") throw new Error("unreachable");
   expect(typeof result.message).toBe("string");
@@ -118,7 +122,7 @@ function buildContext(overrides: Partial<CanUseToolContext> = {}): CanUseToolCon
 }
 
 function sdkOptions() {
-  return { signal: new AbortController().signal, toolUseID: "tu-1" };
+  return { signal: new AbortController().signal, toolUseID: "tu-1", requestId: "req-1" };
 }
 
 describe("createCanUseTool — allow branches (#2335)", () => {

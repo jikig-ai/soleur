@@ -82,7 +82,7 @@ fi
 # on an accident of wording in sections this check does not own. `Cross-Cutting Technical &
 # Organisational Measures` spells the phrase out and happens not to match the abbreviation.
 # Both arms are pinned in scripts/check-pa-22.test.sh.
-if ! awk '/^## Processing Activity 22/{inblk=1; next} inblk && /^## /{exit} inblk' "$REG" | grep -q "TOMs"; then
+if ! grep -q "TOMs" < <(awk '/^## Processing Activity 22/{inblk=1; next} inblk && /^## /{exit} inblk' "$REG"); then
   echo "PA-22 missing (g) TOMs section inside the PA-22 block" >&2
   exit 1
 fi

@@ -108,7 +108,7 @@
 #
 # Attribute names verified against the provider docs at v0.15.5, not from the
 # migration plan's prose (which had the frequency mapping wrong — see the Phase 0
-# evidence under knowledge-base/project/specs/fix-7650-sentry-alert-migration/).
+# evidence under knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/).
 #
 # FIVE surfaces, and the middle one is easy to miss:
 #   trigger_conditions[]         — Attributes List

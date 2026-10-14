@@ -105,4 +105,4 @@ re-examined when the product requirement for Y changes.
 - Issue #2332 — workflow feedback tracking (session errors → skill/hook fixes)
 - Learning `2026-04-07-promise-all-parallel-fs-io-patterns.md` — per-callback RegExp pattern
 - Learning `2026-04-07-symlink-escape-recursive-directory-traversal.md` — enumeration guard
-- Spec `knowledge-base/project/specs/feat-kb-rag-evaluation/spec.md` — deferred binary text extraction
+- Spec `knowledge-base/project/specs/archive/20261013-003106-feat-kb-rag-evaluation/spec.md` — deferred binary text extraction

@@ -73,7 +73,7 @@ When replacing a zone-wide CF setting with a path-aware ruleset, the **exception
 
 - `knowledge-base/project/learnings/2026-04-15-multi-agent-review-catches-bugs-tests-miss.md` — this is a fresh instance of the same defect class (locally-correct rule, cross-boundary coverage gap).
 - `knowledge-base/project/learnings/2026-05-11-multi-agent-review-catches-cross-artifact-contract-drift.md` — same shape (one agent reads file A in isolation, can't catch contradiction with file B).
-- `knowledge-base/project/plans/2026-05-18-fix-soleur-ai-apex-cf-iac-plan.md` — the plan whose scope was overturned and AC1-AC6 narrowed in deepen.
+- `knowledge-base/project/plans/archive/20261013-014038-2026-05-18-fix-soleur-ai-apex-cf-iac-plan.md` — the plan whose scope was overturned and AC1-AC6 narrowed in deepen.
 - Commit `5fe23e47` — the production fix.
 - Commit `e8197f35` — review-fix commit (this defect was caught here).
 - `hr-all-infrastructure-provisioning-servers` — the rule that motivated codifying `always_use_https = "off"` in IaC instead of leaving it as a dashboard step.

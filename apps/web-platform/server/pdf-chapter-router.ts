@@ -43,7 +43,7 @@ import { reportSilentFallback } from "./observability";
 import type { ChapterIndex } from "./pdf-text-extract";
 import { sanitizePromptIdentifier } from "./soleur-go-runner";
 
-const ROUTING_MODEL = "claude-sonnet-5";
+const ROUTING_MODEL = "claude-sonnet-5-5";
 const AMBIGUOUS_SENTINEL = "AMBIGUOUS";
 /**
  * Levenshtein-distance ratio threshold for the title-fuzzy-match
@@ -157,6 +157,14 @@ export async function selectChapter(
       options: {
         model: ROUTING_MODEL,
         systemPrompt,
+        // This call passes no `env` or `sandbox`, so the CLI inherits the server
+        // environment (W1, ADR-272). A single-request routing turn needs no tool:
+        // `tools: []` disables every built-in (SDK Options.tools; `allowedTools: []`
+        // alone only means "nothing auto-approved"), and `settingSources: []`
+        // keeps user/project settings, hooks and settings-declared MCP servers
+        // out of it, as in the production factory (`agent-runner-query-options`).
+        tools: [],
+        settingSources: [],
         allowedTools: [],
         maxTurns: 1,
       },

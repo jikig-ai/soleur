@@ -175,3 +175,51 @@ describe("## Observability schema parity across the 4 surfaces", () => {
     expect(rule, "AGENTS.rules.md rule must state the WITHOUT SSH invariant").toContain("WITHOUT SSH");
   });
 });
+
+// Check 10's 15-second cap is a RESTATED value: the runtime of record is the
+// `timeout Ns` line in preflight/SKILL.md, and four authoring-gate surfaces
+// restate it so a plan author can size a probe before shipping. Nothing pinned
+// them together — change the cap and the four keep saying "15-second", green and
+// stale, sizing probes against a cap that no longer exists. That is the
+// "a guard that RESTATES the value it guards goes stale silently and fails GREEN"
+// class (review/SKILL.md), which is the class #8412's learning is about; leaving
+// it unpinned inside that PR would have been the third instance in one branch.
+//
+// Each surface must (a) mention the cap at least once — so deleting the mention
+// reds rather than passing vacuously — and (b) state the SAME number the runtime
+// enforces. #8413 tracks mechanizing the two reject conditions themselves.
+const PREFLIGHT = "plugins/soleur/skills/preflight/SKILL.md";
+const CAP_RESTATERS = [
+  PLAN_SKILL,
+  DEEPEN,
+  "plugins/soleur/skills/deepen-plan/workflows/deepen-plan.workflow.js",
+  "plugins/soleur/agents/engineering/review/observability-coverage-reviewer.md",
+] as const;
+
+describe("preflight Check 10 cap parity — runtime vs the surfaces that restate it", () => {
+  const runtime = read(PREFLIGHT).match(/\btimeout[\s]+(\d+)s\b/);
+
+  test("preflight/SKILL.md declares the cap as a `timeout Ns` exec (the runtime of record)", () => {
+    expect(runtime, `${PREFLIGHT} must carry a literal \`timeout <N>s\` line`).not.toBeNull();
+  });
+
+  for (const surface of CAP_RESTATERS) {
+    test(`${surface} restates the cap, and states the runtime's number`, () => {
+      const cap = runtime![1];
+      const src = read(surface);
+      // Both spellings the surfaces use: "15-second cap" and "15s cap"/"15 seconds".
+      const mentions = [...src.matchAll(/(\d+)\s*(?:-second|s\b|\s+seconds?)\s*cap/gi)];
+      expect(
+        mentions.length,
+        `${surface} must restate Check 10's cap at least once (found none) — ` +
+          "if this surface intentionally stopped mentioning it, drop it from CAP_RESTATERS",
+      ).toBeGreaterThan(0);
+      for (const m of mentions) {
+        expect(
+          m[1],
+          `${surface} states a ${m[1]}-second cap; ${PREFLIGHT} enforces ${cap}s`,
+        ).toBe(cap);
+      }
+    });
+  }
+});

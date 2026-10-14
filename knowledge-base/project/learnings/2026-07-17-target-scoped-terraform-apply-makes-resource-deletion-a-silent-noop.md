@@ -238,7 +238,7 @@ telemetry and weakens a real signal. And describe trigger phrases rather than re
 ## Related
 
 - Issue: #6589 (this work) · Deferred: #6590 (deep prune / ADR-031 amendment), #6591 (monitor-value telemetry)
-- Brainstorm: `knowledge-base/project/brainstorms/2026-07-17-sentry-monitor-spend-brainstorm.md`
+- Brainstorm: `knowledge-base/project/brainstorms/archive/20261013-041741-2026-07-17-sentry-monitor-spend-brainstorm.md`
 - Prior art: `knowledge-base/project/learnings/2026-05-15-sentry-iac-billing-and-quirks.md` (§Gotcha 3 — per-seat billing)
 - Precedent incident: #3958 (7/8 monitors disabled at PAYG exhaustion)
 - Governing ADR: `ADR-031-sentry-as-iac.md` (monitor-per-cron, deliberate)

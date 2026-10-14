@@ -57,19 +57,41 @@ export function isExcludedFromContext(relPath: string, lines: string[]): boolean
   return excluded;
 }
 
-/** Relative import specifiers (`./x`, `../x`) declared by a source file. */
+/**
+ * Relative specifiers (`./x`, `../x`) a source file makes the bundler resolve:
+ * `import`/`export … from`, and `new URL("<rel>", import.meta.url)` — the
+ * bundler's static asset-reference syntax, which it resolves exactly like an
+ * import. The second form is what broke release 34773058045 (#8074 → #8136):
+ * the cron containment hook referenced the `.claude/hooks/lib/` taxonomy four levels up
+ * that way, the hook joined the server bundle, and `next build` failed in the
+ * Docker context while every full-checkout build passed.
+ */
 function relativeImports(file: string): string[] {
-  const src = fs.readFileSync(file, "utf8");
+  // Full-line `//` comments are dropped so a commented-out reference is not a
+  // finding; the `import`/`export` regex is line-anchored and immune already,
+  // the `new URL` one is not.
+  const src = fs.readFileSync(file, "utf8").replace(/^[ \t]*\/\/[^\n]*/gm, "");
   const out: string[] = [];
-  const re = /^\s*(?:import|export)[^'"]*?from\s+["'](\.[^"']+)["']/gm;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(src)) !== null) out.push(m[1]);
+  const res = [
+    /^\s*(?:import|export)[^'"]*?from\s+["'](\.[^"']+)["']/gm,
+    /new\s+URL\s*\(\s*["'`](\.[^"'`]+)["'`]\s*,\s*import\.meta\.url/g,
+  ];
+  for (const re of res) {
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(src)) !== null) out.push(m[1]);
+  }
   return out;
 }
 
+/** Source extensions the bundle compiles: TS and the plain-ESM `.mjs` hook. */
+const SOURCE_EXT = /\.(m?ts|tsx|mjs)$/;
+
 function resolveToRepoRelative(configFile: string, spec: string): string | null {
   const base = path.resolve(APP_ROOT, path.dirname(configFile), spec);
-  for (const cand of [base, `${base}.ts`, `${base}.tsx`, path.join(base, "index.ts")]) {
+  for (const cand of [
+    base, `${base}.ts`, `${base}.tsx`, `${base}.mts`, `${base}.mjs`,
+    path.join(base, "index.ts"), path.join(base, "index.mjs"),
+  ]) {
     if (fs.existsSync(cand) && fs.statSync(cand).isFile()) {
       return path.relative(APP_ROOT, cand);
     }
@@ -154,7 +176,7 @@ function buildIncludedRoots(lines: string[]): { dirs: string[]; rootFiles: strin
     if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
     if (entry.isDirectory()) {
       if (!isExcludedFromContext(`${entry.name}/`, lines)) dirs.push(entry.name);
-    } else if (/\.tsx?$/.test(entry.name) && !isExcludedFromContext(entry.name, lines)) {
+    } else if (SOURCE_EXT.test(entry.name) && !isExcludedFromContext(entry.name, lines)) {
       rootFiles.push(entry.name);
     }
   }
@@ -169,7 +191,7 @@ function walkTs(dir: string, acc: string[] = []): string[] {
     if (entry.isDirectory()) {
       if (entry.name === "node_modules" || entry.name === ".next") continue;
       walkTs(rel, acc);
-    } else if (/\.tsx?$/.test(entry.name)) {
+    } else if (SOURCE_EXT.test(entry.name)) {
       acc.push(rel);
     }
   }
@@ -256,7 +278,7 @@ describe("docker build context: build-included sources do not import excluded on
       if (!fs.existsSync(abs)) return 0;
       return (fs.readdirSync(abs, { recursive: true }) as string[]).filter(
         (p) =>
-          /\.tsx?$/.test(p) &&
+          SOURCE_EXT.test(p) &&
           !p.split(path.sep).includes("node_modules") &&
           !p.split(path.sep).includes(".next"),
       ).length;
@@ -318,7 +340,11 @@ describe("docker build context: build-included sources do not import excluded on
           ? resolveAlias(spec)
           : resolveToRepoRelative(file, spec);
         if (target === null) continue; // unresolvable here; tsc owns that error
-        if (isExcludedFromContext(target, lines)) {
+        // Above the build context: `.dockerignore` cannot even name it, so
+        // isExcludedFromContext() is structurally false — check the climb.
+        if (target.startsWith("..")) {
+          offenders.push(`${file} references "${spec}" -> ${target}, ABOVE the build context (apps/web-platform)`);
+        } else if (isExcludedFromContext(target, lines)) {
           offenders.push(`${file} imports "${spec}" -> ${target}, excluded by .dockerignore`);
         }
       }
@@ -328,7 +354,7 @@ describe("docker build context: build-included sources do not import excluded on
       offenders.length
         ? `\n${offenders.join(
             "\n",
-          )}\n\nThis compiles locally and in CI but FAILS the production image build.\nEither add a "!<path>" re-include to apps/web-platform/.dockerignore\n(see !test/helpers/mock-supabase.ts, !test/repo-wide-suites.ts and\n!scripts/sandbox-canary.mjs), or move the imported file out of the\nexcluded directory.\n`
+          )}\n\nThis compiles locally and in CI but FAILS the production image build.\nEither add a "!<path>" re-include to apps/web-platform/.dockerignore\n(see !test/helpers/mock-supabase.ts, !test/repo-wide-suites.ts and\n!scripts/sandbox-canary.mjs), or move the imported file out of the\nexcluded directory. A path ABOVE apps/web-platform can never be re-included:\nmove the file into the app, or (for a runtime-only read the bundle never\nperforms) join the path at call time with path.resolve() instead of the\nbundler-visible new URL(…, import.meta.url) form (#8136).\n`
         : undefined,
     ).toEqual([]);
   });

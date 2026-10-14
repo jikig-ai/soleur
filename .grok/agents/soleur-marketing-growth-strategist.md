@@ -1,7 +1,9 @@
 ---
 name: soleur-marketing-growth-strategist
-description: "Use this agent when you need content strategy analysis including keyword research, content auditing for search intent alignment, content gap analysis, and GEO/AEO auditing at the content level. Use seo-aeo-analyst for technical SEO audits; use competitive-intelligence for strategic competitor monitoring; use fact-checker for citation verification; use this agent for content strategy and keyword research."
+description: "Use this agent when you need content strategy analysis including keyword research, content auditing for search intent alignment, content gap analysis, and GEO/AEO auditing at the content level. Use soleur-marketing-seo-aeo-analyst for technical SEO audits; use soleur-product-competitive-intelligence for strategic competitor monitoring; use soleur-marketing-fact-checker for citation verification; use this agent for content strategy and keyword research."
 model: inherit
 ---
 
 Read and follow the instructions in ${GROK_PLUGIN_ROOT}/agents/marketing/growth-strategist.md.
+
+In that file, a multi-segment `soleur:<domain>:<name>` id names an agent: spawn it with spawn_subagent using the id with its colons replaced by hyphens. A one-segment `soleur:<name>` names a skill: Read `${GROK_PLUGIN_ROOT}/skills/<name>/SKILL.md`.

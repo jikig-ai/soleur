@@ -92,8 +92,8 @@ The deeper issue: memory pointers capture *artifacts* (file paths, commit SHAs) 
 
 ## Files referenced
 
-- `knowledge-base/project/plans/2026-05-21-feat-flagsmith-adoption-plan.md` (v1, marked SUPERSEDED)
-- `knowledge-base/project/plans/2026-05-22-feat-flagsmith-adoption-plan-v2.md` (v2, shipped)
+- `knowledge-base/project/plans/archive/20261013-014038-2026-05-21-feat-flagsmith-adoption-plan.md` (v1, marked SUPERSEDED)
+- `knowledge-base/project/plans/archive/20261013-014038-2026-05-22-feat-flagsmith-adoption-plan-v2.md` (v2, shipped)
 - `knowledge-base/engineering/architecture/decisions/ADR-038-feature-flags-flagsmith.md`
 - `apps/web-platform/lib/feature-flags/server.ts` (identity-aware resolution)
 - `apps/web-platform/supabase/migrations/054_users_role_column.sql`

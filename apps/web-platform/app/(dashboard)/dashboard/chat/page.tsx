@@ -17,11 +17,11 @@
  */
 
 import { useEffect, useRef } from "react";
-import { useRouter } from "next/navigation";
+import { usePendingRouter } from "@/hooks/use-pending-router";
 import { useNavResume } from "@/hooks/use-nav-resume";
 
 export default function ChatIndexPage() {
-  const router = useRouter();
+  const router = usePendingRouter();
   const { workspaceId, readChatId, clearChatId } = useNavResume();
   const replacedRef = useRef(false);
 

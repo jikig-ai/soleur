@@ -67,7 +67,7 @@ describe("RenameWorkspaceAction", () => {
     });
   });
 
-  it("rejects empty/whitespace name without calling the API", () => {
+  it("rejects empty/whitespace name without calling the API", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
@@ -80,7 +80,11 @@ describe("RenameWorkspaceAction", () => {
     fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
 
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(screen.getByRole("alert")).toBeInTheDocument();
+    // The validation error now lands through the usePendingAction transition —
+    // assert on the settled state, not the same-tick DOM.
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toBeInTheDocument();
+    });
   });
 
   it("surfaces an error when the API call fails", async () => {

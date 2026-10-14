@@ -61,6 +61,8 @@ FAIL=0
 TOTAL=0
 
 die() { printf 'HARNESS ABORT: %s\n' "$*" >&2; exit 2; }
+# shellcheck source=apps/web-platform/infra/lib/mutation-scorer.sh
+source "$SCRIPT_DIR/lib/mutation-scorer.sh" || die "could not source mutation-scorer.sh"
 
 WORK="$(mktemp -d -t wac-mutation-XXXXXX)" || die "mktemp -d failed"
 trap 'rm -rf "$WORK"' EXIT
@@ -376,43 +378,60 @@ def _sub(rel, old, new, why):
     wr(rel, t.replace(old, new, 1))
 
 
+def _sub_monitor(name, old, new, why):
+    """Substitute INSIDE one betteruptime_monitor block of uptime-alerts.tf.
+
+    Anchors here are block-scoped, not file-scoped: since #8364 the file carries
+    three seo_redirect_* probes that clone soleur_www_redirect's attribute set
+    VERBATIM, so file-level anchors like `confirmation_period = 1200` or
+    `expected_status_codes = [301]` are no longer unique — a plain _sub would
+    HARNESS ABORT on its own count==1 assert rather than test anything.
+    """
+    t = rd(UPTIME)
+    s, e = res_span(t, "betteruptime_monitor", name)
+    body = t[s:e]
+    assert body.count(old) == 1, \
+        "betteruptime_monitor.%s: %s (found %d in block)" % (name, why, body.count(old))
+    wr(UPTIME, t[:s] + body.replace(old, new, 1) + t[e:])
+
+
 # W2: repoint the probe at the apex. no-follow + [301] against a URL that serves 200 —
 #     #7798 verbatim, an alarm that cannot pass.
 def w_url():
-    _sub(UPTIME, '\n  url                = "https://www.soleur.ai/"',
+    _sub_monitor("soleur_www_redirect", '\n  url                = "https://www.soleur.ai/"',
                  '\n  url                = "https://soleur.ai/"', "www url anchor")
 
 
 # W3: `status` is 2xx-only. The status-code list goes inert and the monitor reports GREEN
 #     exactly when www serves the site instead of redirecting. FAILS OPEN.
 def w_type():
-    _sub(UPTIME, 'monitor_type       = "expected_status_code"',
+    _sub_monitor("soleur_www_redirect", 'monitor_type       = "expected_status_code"',
                  'monitor_type       = "status"', "monitor_type anchor")
 
 
 # W7: the #7798 STATE in one token — declared, applied, checking nothing.
 def w_paused():
-    _sub(UPTIME, '\n  verify_ssl = true\n  paused     = false\n}\n\n# Conditional escalation policy',
-                 '\n  verify_ssl = true\n  paused     = true\n}\n\n# Conditional escalation policy', "paused anchor")
+    _sub_monitor("soleur_www_redirect", '\n  verify_ssl = true\n  paused     = false\n}',
+                 '\n  verify_ssl = true\n  paused     = true\n}', "paused anchor")
 
 
 # W8: free tier => policy_id null => email is the ONLY channel. Disarm it and an incident
 #     opens that nobody is told about.
 def w_armed():
-    _sub(UPTIME, '\n  email = true\n  call  = false\n  sms   = false\n  push  = false\n\n  team_name = "Your team"\n\n  # Follows the file convention',
-                 '\n  email = false\n  call  = false\n  sms   = false\n  push  = false\n\n  team_name = "Your team"\n\n  # Follows the file convention', "channel block anchor")
+    _sub_monitor("soleur_www_redirect", '\n  email = true\n  call  = false\n  sms   = false\n  push  = false\n\n  team_name = "Your team"',
+                 '\n  email = false\n  call  = false\n  sms   = false\n  push  = false\n\n  team_name = "Your team"', "channel block anchor")
 
 
 # W9: dns.tf's Camp B acceptance is re-grounded on this exact bound and says not to widen
 #     it without revisiting the ruling. Nothing enforced that before this case.
 def w_conf():
-    _sub(UPTIME, "  confirmation_period = 1200", "  confirmation_period = 86400", "confirmation_period anchor")
+    _sub_monitor("soleur_www_redirect", "  confirmation_period = 1200", "  confirmation_period = 86400", "confirmation_period anchor")
 
 
 # W10: `for_each = {}` is the same defect as `count = 0`, other keyword. The file's own
 #      betteruptime_policy is count-gated on that flag, so it is the idiomatic next edit.
 def w_foreach():
-    _sub(UPTIME, "  monitor_type       = \"expected_status_code\"",
+    _sub_monitor("soleur_www_redirect", "  monitor_type       = \"expected_status_code\"",
                  "  for_each = var.betterstack_paid_tier ? toset([\"x\"]) : toset([])\n  monitor_type       = \"expected_status_code\"", "for_each insert anchor")
 
 
@@ -421,10 +440,10 @@ def w_foreach():
 #      regex missed exactly this, and the row is what caught it.
 def w_ignore():
     # Anchored on the block-TERMINAL text: `verify_ssl = true / paused = false / }` ends
-    # all three monitors in this file, so the short form is not unique and `_sub`'s
-    # count==1 assert (correctly) refuses it.
-    _sub(UPTIME, "\n  verify_ssl = true\n  paused     = false\n}\n\n# Conditional escalation policy",
-                 "\n  verify_ssl = true\n  paused     = false\n\n  lifecycle { ignore_changes = [follow_redirects] }\n}\n\n# Conditional escalation policy",
+    # every monitor in this file, so the short form is not unique inside the block either —
+    # the trailing `}` is what makes it terminal (and _sub_monitor scopes it to the block).
+    _sub_monitor("soleur_www_redirect", "\n  verify_ssl = true\n  paused     = false\n}",
+                 "\n  verify_ssl = true\n  paused     = false\n\n  lifecycle { ignore_changes = [follow_redirects] }\n}",
                  "lifecycle insert anchor")
 
 
@@ -452,9 +471,9 @@ def w_pause_reworded():
 # other Guard 1 row is must-trip; without this one nothing catches the guard becoming too
 # aggressive on this file.
 def g_uptime_fmt():
-    _sub(UPTIME, "  expected_status_codes = [301]",
+    _sub_monitor("soleur_www_redirect", "  expected_status_codes = [301]",
                  "  expected_status_codes = [\n    301,\n  ]", "status codes anchor")
-    _sub(UPTIME, "  follow_redirects = false", "  follow_redirects   =    false", "follow_redirects anchor")
+    _sub_monitor("soleur_www_redirect", "  follow_redirects = false", "  follow_redirects   =    false", "follow_redirects anchor")
 
 
 ROWS = {
@@ -488,7 +507,7 @@ BASE_RC="$(run_guard "$SANDBOX" "$BASE_LOG")"
 if [[ "$BASE_RC" != "0" ]]; then
   printf 'HARNESS ABORT: the guard is not green on an UNMUTATED sandbox (rc=%s).\n' "$BASE_RC" >&2
   printf 'Every mutation row below would report RED for a reason that is not its mutation.\n' >&2
-  grep -E '^  FAIL|^\[FATAL\]' "$BASE_LOG" >&2 | head -20
+  grep -E '^  FAIL|^\[FATAL\]' "$BASE_LOG" | head -20 >&2
   exit 2
 fi
 printf '=== www-apex-canonicalizer mutation battery (#7640) ===\n'
@@ -536,11 +555,10 @@ case_row() {
     printf '            (b) the mutant is EQUIVALENT — prove no verdict changes, and say so here.\n'
     return
   fi
-  # `grep -qF -- "$expect"`: the END-OF-OPTIONS marker is load-bearing, not decoration. Two
-  # of the rows below expect a case naming `--branch` / `--project-name`, and without `--`
-  # grep parses the expectation as an option, exits 2, and the row reports MISROUTED against
-  # a guard that named its case correctly. Measured on the first run of this file.
-  if ! grep -E '^  FAIL|^\[FATAL\]' "$log" | grep -qF -- "$expect"; then
+  # Two of the rows below expect a case naming `--branch` / `--project-name`. The scorer hands
+  # the needle to a quoted bash match, never to grep, so an option-shaped expectation is literal
+  # (a grep without `--` once parsed it as an option, exited 2 and scored MISROUTED).
+  if ! mutation_scorer_failed_on "$log" '^  FAIL|^\[FATAL\]' "$expect"; then
     FAIL=$((FAIL + 1))
     printf '  MISROUTED: %-9s the guard went RED, but NOT on the case this row targets.\n' "$id"
     printf '             expected a failure naming: %s\n' "$expect"

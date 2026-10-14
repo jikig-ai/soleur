@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import Link from "next/link";
+import { NavLink } from "@/components/ui/nav-link";
 import type { SearchResult, SearchMatch } from "@/server/kb-reader";
 import { MAX_KB_QUERY_LENGTH } from "@/lib/kb-search-limits";
 
@@ -159,7 +159,7 @@ function SearchResultCard({ result }: { result: SearchResult }) {
   const snippets = result.matches.slice(0, 3);
 
   return (
-    <Link
+    <NavLink
       href={`/dashboard/kb/${result.path}`}
       className="block rounded-lg border border-soleur-border-default p-3 transition-colors hover:border-soleur-border-emphasized hover:bg-soleur-bg-surface-1/50"
     >
@@ -175,7 +175,7 @@ function SearchResultCard({ result }: { result: SearchResult }) {
           <SnippetLine key={i} match={match} kind={result.kind} />
         ))}
       </div>
-    </Link>
+    </NavLink>
   );
 }
 

@@ -18,7 +18,7 @@ Many agent implementations isolate the agent:
 ├─────────────────┤     ├─────────────────┤
 │ Documents/      │     │ agent_output/   │
 │ user_files/     │  ←→ │ temp_files/     │
-│ settings.json   │sync │ cache/          │
+│ settings.json   │ sync│ cache/          │
 └─────────────────┘     └─────────────────┘
 ```
 
