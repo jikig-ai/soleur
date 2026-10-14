@@ -538,7 +538,25 @@ h_fsm() { # M-FENCE the strip is a fence state machine: opener/closer character 
   fsm_case "a lone CR is a line ending: a fence opened after it strips the marker inside it" $'text\r```\n'"$M"$'\n```' 'text'
   fsm_case "several lone CRs in one body are each a line ending (a global substitution, not the first CR only)" $'a\rb\r```\n'"$M"$'\n```' $'a\nb'
   fsm_case "CRLF line endings are left alone" $'one\r\ntwo' $'one\r\ntwo'
-  (( FSM_OK )) && pass "M-FENCE: 23 fence shapes (flat, tilde, 4-backtick wrapper, mixed characters, indentation, tab, closer length, CRLF closer, 2-char runs, trailing text, backtick info string, lone CR, unclosed) strip as CommonMark-style fences do; HTML comments and <pre> are not handled"
+  (( FSM_OK )) && pass "M-FENCE: 23 fence shapes (flat, tilde, 4-backtick wrapper, mixed characters, indentation, tab, closer length, CRLF closer, 2-char runs, trailing text, backtick info string, lone CR, unclosed) strip as CommonMark-style fences do (HTML comments have their own row, M-HTML; <pre> is not handled)"
+}
+h_html() { # M-HTML HTML comments: invisible when rendered, live to a grep, so a marker inside one is not counted; fence and comment rules do not mix
+  FSM_OK=1; local M="S2-ACTIVATED: $T2"
+  fsm_case "a marker inside a one-line HTML comment is not counted" $'before\n<!-- '"$M"$' -->\nafter' $'before\nafter'
+  fsm_case "a marker inside a multi-line HTML comment is not counted" $'before\n<!--\n'"$M"$'\n-->\nafter' $'before\nafter'
+  fsm_case "a marker after the closing --> on the same line IS counted" "<!-- note -->$M" "$M"
+  fsm_case "a marker before an opener on the same line IS counted" "$M<!-- tail -->" "$M"
+  fsm_case "text between two comments on one line is kept, joined" 'a<!-- x -->b<!-- y -->c' 'abc'
+  fsm_case "an unclosed <!-- strips to the end of the body (fewer markers, never a hidden one counted)" $'before\n<!--\n'"$M" 'before'
+  fsm_case "an unclosed <!-- mid-line strips the rest of that line and every line after" $'before <!-- x\n'"$M" 'before '
+  fsm_case "inside a fenced block <!-- is just text: it opens no comment (the marker after the fence counts)" $'```\n<!--\n```\n'"$M" "$M"
+  fsm_case "inside an HTML comment a fence-looking line opens no fence (the marker after the comment counts)" $'<!--\n```\n-->\n'"$M" "$M"
+  fsm_case "text after the closing --> on the closing line is kept" $'<!--\nhidden\n-->'"$M" "$M"
+  fsm_case "a --> with no opener is plain text" 'x --> y' 'x --> y'
+  fsm_case "a comment after a closed fence is still stripped" $'```\nx\n```\n<!-- '"$M"$' -->\nafter' 'after'
+  fsm_case "a blank line is preserved (only a line a comment consumed whole is dropped)" $'a\n\nb' $'a\n\nb'
+  fsm_case "CRLF: a marker inside a multi-line comment is hidden, the marker after it counts" $'<!--\r\nhidden\r\n-->\r\n'"$M" $'\r\n'"$M"
+  (( FSM_OK )) && pass "M-HTML: 14 HTML-comment shapes (one-line, multi-line, text around the closer, two per line, unclosed, comment opener inside a fence, fence inside a comment, blank line, CRLF) strip as a renderer hides them"
 }
 h_repo() { # M-REPO a non-default repository argument is used in BOTH the permission URL and the issue read, in BOTH views; the default repo is never touched
   mkc "$SB/h.json" priv-op "S2-ACTIVATED: $T2" "$T2"; mkp 'priv-op\tadmin\n'
@@ -722,7 +740,7 @@ h_readonly() { # M-READONLY a readonly memo name is refused with a TRUTHFUL mess
   if [[ "$twin" != "sourced-rc=0" ]]; then ok=0; fail "M-READONLY twin: the same source without a readonly name must be silent and rc 0, got [$twin]"; fi
   (( ok )) && pass "M-READONLY: a readonly _TRUSTED_VERDICT_PERM is refused (rc 2) with a message that says readonly, not 'no associative arrays'; the clean twin sources silently"
 }
-LIB_ROWS=(h_h1 h_h2 h_h3 h_h4_parity h_h4_abs h_h5 h_h6 h_h7 h_h8 h_noslice h_h10 h_crlf h_h11 h_big h_recfail h_fsm h_repo h_case h_login_shape h_null_author h_underscore h_inherit h_nul h_stagefail h_rowcount h_logincount h_empty h_bodyproj h_rowextra h_stageempty h_readonly)
+LIB_ROWS=(h_h1 h_h2 h_h3 h_h4_parity h_h4_abs h_h5 h_h6 h_h7 h_h8 h_noslice h_h10 h_crlf h_h11 h_big h_recfail h_fsm h_html h_repo h_case h_login_shape h_null_author h_underscore h_inherit h_nul h_stagefail h_rowcount h_logincount h_empty h_bodyproj h_rowextra h_stageempty h_readonly)
 for _r in "${LIB_ROWS[@]}"; do "$_r"; done
 
 # --- harness integrity: a stub that answers `admin` to EVERYONE must redden the negative rows (the rows can fail) ----------
@@ -792,8 +810,8 @@ mutant_lib m-no-write        "h_h3" "$PRED" '    admin|maintain) return 0 ;;'
 mutant_lib m-pred-always     "h_h2 h_h3 h_h7" "$PRED" '    *) return 0 ;;'
 SEL='        | select((.author.login // "") != "")'
 mutant_lib m-assoc-prefilter "h_h1" "$SEL" "$SEL"$'\n''        | select(.authorAssociation | IN("OWNER", "MEMBER", "COLLABORATOR"))'
-FENCE_CALL='| _trusted_verdict_strip_fences)"'
-mutant_lib m-strip-empty     "h_h4_abs h_fsm" "$FENCE_CALL" '| cat)"'
+FENCE_CALL='| _trusted_verdict_strip_hidden)"'
+mutant_lib m-strip-empty     "h_h4_abs h_fsm h_html" "$FENCE_CALL" '| cat)"'
 mutant_lib m-naive-toggle    "h_fsm h_h4_abs" "$FENCE_CALL" "| awk '/^[[:space:]]*(\`\`\`|~~~)/ { f = !f; next } !f { print }')\""
 RESOLVE='    if ! _trusted_verdict_permission "$login" "$repo" >/dev/null; then'
 mutant_lib m-resolver-subshell "h_h1 h_h8" "$RESOLVE" '    if ! _mut="$(_trusted_verdict_permission "$login" "$repo")"; then'
@@ -870,6 +888,14 @@ mutant_lib m-fsm-crcloser    "h_fsm" 'rest ~ /^[ \t\r]*$/' 'rest ~ /^[ \t]*$/'
 mutant_lib m-fsm-2tick       "h_fsm" 'match(t, /^```+/)' 'match(t, /^``+/)'
 mutant_lib m-fsm-2tilde      "h_fsm" 'match(t, /^~~~+/)' 'match(t, /^~~+/)'
 mutant_lib m-fsm-tab         "h_fsm" 'match(line, /^ */)' 'match(line, /^[ \t]*/)'
+mutant_lib m-html-off          "h_html" '      out = scrub(line)' '      out = line'
+mutant_lib m-html-line-only    "h_html" '        if (q == 0) { c = 1; return out }' '        if (q == 0) { return out }'
+mutant_lib m-html-unclosed-literal "h_html" '        if (q == 0) { c = 1; return out }' '        if (q == 0) { return out "<!--" s }'
+mutant_lib m-html-drop-after   "h_html" '      return out s' '      return out'
+mutant_lib m-html-in-fence     "h_html" '        if (n > 0 && ch == fch && n >= fn && rest ~ /^[ \t\r]*$/) f = 0' '        scrub(line); if (n > 0 && ch == fch && n >= fn && rest ~ /^[ \t\r]*$/) f = 0'
+mutant_lib m-html-fence-in-comment "h_html" '      if (c) {' '      if (c && n == 0) {'
+mutant_lib m-html-drop-closing-rest "h_html" '        out = scrub(substr(line, p + 3))' '        out = ""'
+mutant_lib m-html-keep-empty   "h_html" '      if (out == "" && line != "") next' '      '
 
 # --- harness controls: the mutant helper must be able to report a SURVIVOR, a CRASH, and a clean IDENTITY, or its verdicts mean nothing ----------
 CTRL_OK=0
@@ -925,7 +951,7 @@ lib_rows_quiet "$MUT_FILE" h_h2 h_h3
 if (( MUT_LANDED == 1 && MUT_CRASHED == 1 )) && bash -n "$MUT_FILE" 2>/dev/null; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: a mutant whose runtime eval dies on a syntax error is flagged as crashed (CRASH_RE keeps that alternative)"
 else fail "harness control: the runtime syntax-error mutant was not flagged (landed=$MUT_LANDED crashed=$MUT_CRASHED)"; fi
 if (( CTRL_OK != 11 )); then fail "harness controls: $CTRL_OK of 11 held"; fi
-if (( MUT_RUN == MUT_CAUGHT && MUT_RUN >= 56 )); then pass "LIB MUTANTS: $MUT_CAUGHT of $MUT_RUN caught"; else fail "LIB MUTANTS: $MUT_CAUGHT of $MUT_RUN caught (every mutant must be caught; floor 56)"; fi
+if (( MUT_RUN == MUT_CAUGHT && MUT_RUN >= 64 )); then pass "LIB MUTANTS: $MUT_CAUGHT of $MUT_RUN caught"; else fail "LIB MUTANTS: $MUT_CAUGHT of $MUT_RUN caught (every mutant must be caught; floor 64)"; fi
 
 echo ""
 echo "passed=$PASS failed=$FAIL"
@@ -955,7 +981,7 @@ echo "passed=$PASS failed=$FAIL"
 #    meta-guard cannot recognise is indistinguishable from a floor that crashed.
 SELFTEST_PASSES=1
 REAL=$(( PASS - SELFTEST_PASSES ))
-MIN_ASSERTIONS=112
+MIN_ASSERTIONS=121
 if [[ "$REAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity assertion floor: only %d real assertion(s) ran (PASS=%d minus %d self-test), expected >= %d.\n' \
     "$REAL" "$PASS" "$SELFTEST_PASSES" "$MIN_ASSERTIONS" >&2

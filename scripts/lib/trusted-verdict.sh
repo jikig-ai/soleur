@@ -59,8 +59,9 @@
 # rewrites control characters in its JSON output (U+0000 arrives as the two characters `^@`),
 # so a NUL cannot reach this lib in production; the suite drives it synthetically (its fake
 # `gh` runs the system jq). Fenced blocks are stripped by CommonMark-style
-# rules (backtick/tilde fences, the length rule, the info-string rule); HTML comments and
-# `<pre>` blocks are NOT handled.
+# rules (backtick/tilde fences, the length rule, the info-string rule) and HTML comments
+# (`<!-- -->`, one-line or multi-line; an unclosed one strips to the end of the body) in the same
+# pass; `<pre>` blocks are NOT handled. The details are on `_trusted_verdict_strip_hidden`.
 #
 # SOURCED, never executed: no top-level `exit` (a sourced `exit` terminates the
 # SOURCING parent), no `set -e`. Callers keep their own exit semantics.
@@ -159,18 +160,37 @@ _trusted_verdict_is_trusted_perm() {
   esac
 }
 
-# _trusted_verdict_strip_fences   (stdin -> stdout)
-#   Drops fenced blocks so a quoted template cannot arm a probe. A CommonMark-style state
-#   machine, not a toggle on any fence-looking line: an opener is up to 3 leading spaces
-#   plus 3 or more of ONE fence character (backtick or tilde; a backtick opener whose info
-#   string holds a backtick is inline code, not a fence); a closer is the SAME
-#   character, at least as long as the opener, with nothing but whitespace after it;
-#   4 or more leading spaces (or a tab) is indented code, not a fence. A fence still
-#   open at the end of the body strips to the end of the body. The naive toggle let a
-#   4-backtick fence wrapping a 3-backtick line, or a backtick fence "closed" by a
-#   tilde line, expose a quoted marker as live.
-_trusted_verdict_strip_fences() {
+# _trusted_verdict_strip_hidden   (stdin -> stdout)
+#   Drops what a reader never sees as a marker, so a quoted template or a hidden note cannot arm a
+#   probe. Two things, one awk pass, one status (the caller checks it: stage `strip`).
+#   FENCES: a CommonMark-style state machine, not a toggle on any fence-looking line: an opener is
+#   up to 3 leading spaces plus 3 or more of ONE fence character (backtick or tilde; a backtick
+#   opener whose info string holds a backtick is inline code, not a fence); a closer is the SAME
+#   character, at least as long as the opener, with nothing but whitespace after it; 4 or more
+#   leading spaces (or a tab) is indented code, not a fence. A fence still open at the end of the
+#   body strips to the end of the body. The naive toggle let a 4-backtick fence wrapping a
+#   3-backtick line, or a backtick fence "closed" by a tilde line, expose a quoted marker as live.
+#   HTML COMMENTS: `<!-- ... -->`, one-line or spanning lines, is invisible when rendered but live to
+#   a grep, so it is removed; the text before the opener and after the closer on the same line is
+#   kept and joined (what a renderer shows). An UNCLOSED `<!--` strips to the end of the body: the
+#   fail-safe direction is FEWER markers, never a hidden one counted (the cost: an unclosed `<!--`
+#   quoted in inline code hides every marker after it). The two do not mix up: inside a fence a
+#   `<!--` is fence content and opens nothing; inside a comment a fence-looking line is comment
+#   content and opens nothing (fence rules win in a fence, comment rules win in a comment).
+#   `<pre>` blocks are NOT handled. A line the comment consumed whole is dropped, not left blank.
+_trusted_verdict_strip_hidden() {
   awk '
+    function scrub(s,   out, p, q) {
+      out = ""
+      while ((p = index(s, "<!--")) > 0) {
+        out = out substr(s, 1, p - 1)
+        s = substr(s, p + 4)
+        q = index(s, "-->")
+        if (q == 0) { c = 1; return out }
+        s = substr(s, q + 3)
+      }
+      return out s
+    }
     {
       line = $0; ind = 0
       if (match(line, /^ */)) ind = RLENGTH
@@ -180,12 +200,22 @@ _trusted_verdict_strip_fences() {
         if (match(t, /^```+/) || match(t, /^~~~+/)) { tok = substr(t, 1, RLENGTH); ch = substr(tok, 1, 1); n = RLENGTH; rest = substr(t, RLENGTH + 1) }
       }
       if (ch == "`" && index(rest, "`") > 0) n = 0
-      if (!f) {
-        if (n > 0) { f = 1; fch = ch; fn = n; next }
-        print
-      } else if (n > 0 && ch == fch && n >= fn && rest ~ /^[ \t\r]*$/) {
-        f = 0
+      if (c) {
+        p = index(line, "-->")
+        if (p == 0) next
+        c = 0
+        out = scrub(substr(line, p + 3))
+        if (out != "") print out
+        next
       }
+      if (f) {
+        if (n > 0 && ch == fch && n >= fn && rest ~ /^[ \t\r]*$/) f = 0
+        next
+      }
+      if (n > 0) { f = 1; fch = ch; fn = n; next }
+      out = scrub(line)
+      if (out == "" && line != "") next
+      print out
     }'
 }
 
@@ -204,7 +234,7 @@ _trusted_verdict_stage_fail() {
 #   220 of 220 on #9777, gh 2.102.0, 2026-10-13; no suite pins it), every distinct author resolved
 #   through `_trusted_verdict_permission` BEFORE anything is emitted, then one JSON
 #   object `{t, b}` per trusted comment, API order: `t` = `createdAt` verbatim (empty
-#   when absent), `b` = the body with fenced blocks stripped.
+#   when absent), `b` = the body with fenced blocks and HTML comments stripped.
 #   rc 0 = the read succeeded (empty stdout = no trusted comment)
 #   rc 2 = TRANSIENT, the causes are the header's rc 2 list; stdout is EMPTY (output is
 #          accumulated and printed once, so a failure never leaves a prefix)
@@ -298,7 +328,7 @@ _trusted_verdict_core() {
     # lone CRs (measured 34 s for 65k of them on jq 1.8.2).
     body="$(printf '%s' "${rows[i]}" | jq -r '.[1] | if contains("\r") then gsub("\r(?!\n)"; "\n") else . end')" || { _trusted_verdict_stage_fail body "$issue"; return 2; }
     created="$(printf '%s' "${rows[i]}" | jq -r '.[2]')" || { _trusted_verdict_stage_fail created "$issue"; return 2; }
-    body="$(printf '%s\n' "$body" | _trusted_verdict_strip_fences)" || { _trusted_verdict_stage_fail strip "$issue"; return 2; }
+    body="$(printf '%s\n' "$body" | _trusted_verdict_strip_hidden)" || { _trusted_verdict_stage_fail strip "$issue"; return 2; }
     # The body goes to jq on STDIN, never as an `--arg` (one argv string is capped near 128 KiB:
     # a longer trusted body failed `Argument list too long`, the failure went unchecked and the
     # comment vanished with rc 0, the same silent drop this lib exists to remove).
@@ -315,7 +345,7 @@ _trusted_verdict_core() {
 
 # trusted_verdict_bodies <issue-number> [repo]
 #   stdout: the bodies of comments whose author is trusted, oldest-first, with
-#           fenced code blocks stripped so a quoted template cannot arm a probe.
+#           fenced code blocks and HTML comments stripped so a quoted or hidden marker cannot arm a probe.
 #   rc 0   = the read succeeded (an EMPTY result means "no trusted verdict yet",
 #            which is a legitimate answer)
 #   rc 2   = TRANSIENT, causes in the header's rc 2 list. NOT evidence of absence.
