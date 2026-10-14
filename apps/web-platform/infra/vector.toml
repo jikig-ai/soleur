@@ -299,6 +299,18 @@ include_matches.SYSLOG_IDENTIFIER = [
   # reboot), because without a positive control a healthy host and a host whose unit never ran
   # are the same observation — the ADR-117 shape this PR exists to close.
   "inngest-bs-token-restage",
+  # #6780 (ADR-135 amendment): the config-bundle consumer's refresh oneshot
+  # (inngest-config-refresh.service → inngest-config-refresh.sh, SyslogIdentifier=
+  # inngest-config-refresh). Every SOLEUR_INFRA_PULL_* marker — APPLIED, the
+  # verify/pull/install failure classes, FLOOR, the throttled NOOP — is emitted via
+  # `logger -t inngest-config-refresh`, i.e. PRIORITY-5/6 journald rows this source is
+  # the ONLY shipper for. Without this entry the entire refresh channel's off-box
+  # evidence is silently dropped and inngest-config-drift would read the whole consumer
+  # as absent (the dead-probe-shape the dedicated host cannot afford). The same tag also
+  # ships the unit's raw stderr so a fault-classification line reaches Better Stack.
+  # Bounded: refresh runs every 60 s but NOOP/FLOOR rows are throttle-stamped, so a
+  # healthy host emits ~1 row/5 min and a rejecting host one failure row per timer fire.
+  "inngest-config-refresh",
   # #6536: inngest-heartbeat.service exited non-zero every 60s for 3 days (3,724 fires) and
   # the stderr proving why never left the host — the unit set no SyslogIdentifier=, so systemd
   # tagged it with the ExecStart basename (`doppler`), which matches no source here. The

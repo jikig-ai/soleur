@@ -147,8 +147,11 @@ jobs:
           REPO="${IMAGE#ghcr.io/}"
           ZOT="127.0.0.1:5000/${REPO}"
           # crane copy preserves the digest → the same @sha256 the pointer names resolves on both
-          # registries. GHCR is authoritative for the v1 GHCR-direct host pull (D-ZOT); the zot
-          # copy is a dark-safe convenience, so this step is continue-on-error.
+          # registries. The HOST pull is zot-direct (#8036 deleted the dedicated host's GHCR
+          # credential; zot is the only registry read left on it — ADR-135, 2026-10-13
+          # amendment); GHCR stays authoritative for CI-side verification and audit. The
+          # bridge and this copy are continue-on-error only because the consumer is not yet
+          # wired to production (first promotion is a deferred operator apply).
           retry crane copy "${IMAGE}:v${VERSION}" "${ZOT}:v${VERSION}"
 
       - name: Tear down cloudflared registry bridge

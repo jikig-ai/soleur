@@ -2399,8 +2399,12 @@ DOPPLER_CFG_SITES="$(for _f in "$CLOUD_INIT_INNGEST" "$BOOTSTRAP_SH" \
   done)"
 DCFG_N="$(printf '%s\n' "$DOPPLER_CFG_SITES" | grep -c . || true)"
 DCFG_BAD="$(printf '%s\n' "$DOPPLER_CFG_SITES" | grep -vE -- '--config (\$\{inngest_doppler_config\}|@@DOPPLER_CONFIG@@|"?\$?\{?DOPPLER_CONFIG[^ ]*"?)' || true)"
-assert "inngest boot-path --config census is exactly 19 sites (unlisted site -> RED, #9175)" \
-  "[[ '$DCFG_N' == '19' ]]"
+# 19 -> 20: #6780 added one site — the config-refresh unit's ExecStart `doppler run
+# --project soleur-inngest --config ${inngest_doppler_config}` (the templatefile-var form,
+# the same shape every sibling site carries so the rehearsal render swaps prd ->
+# rehearsal_<runid>).
+assert "inngest boot-path --config census is exactly 20 sites (unlisted site -> RED, #9175)" \
+  "[[ '$DCFG_N' == '20' ]]"
 assert "every boot-path --config site resolves through a parameterization (no literal config name, #9175)" \
   "[[ -z \"\$DCFG_BAD\" ]]"
 

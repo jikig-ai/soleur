@@ -96,6 +96,11 @@
       { "source": "payload", "name": "git_lock_chardevice_sweep_sh_b64", "envname": "GIT_LOCK_CHARDEVICE_SWEEP_SH_B64", "base64decode": true },
       { "source": "payload", "name": "inngest_registry_probe_sh_b64", "envname": "INNGEST_REGISTRY_PROBE_SH_B64", "base64decode": true },
       { "source": "payload", "name": "inngest_doublefire_probe_sh_b64", "envname": "INNGEST_DOUBLEFIRE_PROBE_SH_B64", "base64decode": true },
+      { "source": "payload", "name": "inngest_redis_bootstrap_sh_b64", "envname": "INNGEST_REDIS_BOOTSTRAP_SH_B64", "base64decode": true },
+      { "source": "payload", "name": "inngest_cutover_flip_sh_b64", "envname": "INNGEST_CUTOVER_FLIP_SH_B64", "base64decode": true },
+      { "source": "payload", "name": "inngest_server_flip_guard_sh_b64", "envname": "INNGEST_SERVER_FLIP_GUARD_SH_B64", "base64decode": true },
+      { "source": "payload", "name": "cat_inngest_cutover_state_sh_b64", "envname": "CAT_INNGEST_CUTOVER_STATE_SH_B64", "base64decode": true },
+      { "source": "payload", "name": "inngest_luks_cutover_sh_b64", "envname": "INNGEST_LUKS_CUTOVER_SH_B64", "base64decode": true },
       { "source": "payload", "name": "soleur_doppler_token_b64", "envname": "SOLEUR_DOPPLER_TOKEN_B64", "base64decode": true },
       { "source": "payload", "name": "vector_doppler_token_conf_b64", "envname": "VECTOR_DOPPLER_TOKEN_CONF_B64", "base64decode": true },
       { "source": "payload", "name": "inngest_heartbeat_doppler_token_conf_b64", "envname": "INNGEST_HEARTBEAT_DOPPLER_TOKEN_CONF_B64", "base64decode": true },
@@ -306,7 +311,8 @@
     "trigger-rule-mismatch-http-response-code": 403,
     "pass-environment-to-command": [
       { "source": "url", "name": "from", "envname": "INNGEST_DOUBLEFIRE_FROM" },
-      { "source": "url", "name": "function_ids", "envname": "INNGEST_DOUBLEFIRE_FUNCTION_IDS" }
+      { "source": "url", "name": "function_ids", "envname": "INNGEST_DOUBLEFIRE_FUNCTION_IDS" },
+      { "source": "url", "name": "page_size", "envname": "INNGEST_GQL_PAGE_SIZE" }
     ],
     "trigger-rule": {
       "match": {

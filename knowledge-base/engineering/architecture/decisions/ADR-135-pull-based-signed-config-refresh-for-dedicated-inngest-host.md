@@ -206,3 +206,53 @@ at apply). Reference `knowledge-base/operations/expenses.md` — no line moves.
 - **AP-016 (GHCR read credential): Aligned** — the host pulls the config bundle GHCR-direct by
   digest on the same baked read credential it already uses for the bootstrap image (no new
   isolated-Doppler secret in v1).
+
+## Amendment — 2026-10-13 (#6780 host-side consumer lands)
+
+**Status change: producer-complete → channel complete.** The host-side consumer this ADR
+specified — deferred through the #6178 cutover — is now baked into `cloud-init-inngest.yml`
+(`inngest-config-refresh.sh`, `inngest-config-refresh.{service,timer}`,
+`/etc/soleur/cosign-trusted-root.json`, `/var/lib/inngest-config/applied.version`). It reaches
+`soleur-inngest` on the next sanctioned `inngest-host-replace`; first promotion remains a
+deferred operator apply (#9060). Three reality corrections against the original decision text:
+
+1. **Host pull is ZOT-DIRECT, not GHCR-direct.** The v1 text chose GHCR-direct because it
+   needed no `ZOT_*` credential on the host. #8036 item 1d inverted the credential set: the
+   dedicated host's GHCR read bake was deleted and `/etc/default/soleur-zot-read` (the
+   zot pull credential the bootstrap image pull already uses) is now the ONLY registry read
+   left on the box. The consumer therefore pulls
+   `$ZOT_EP/jikig-ai/soleur-inngest-config@sha256:<pointer>` over the private net, sourced
+   from that same env file. The security properties the decision actually depends on are
+   unchanged: integrity stays digest-pinned, provenance stays offline `cosign verify-blob`
+   against the baked trusted root, and the GHCR-first/zot-mirror publish step already
+   guarantees digest parity (crane copy preserves the digest). The `continue-on-error` on the
+   zot mirror step stays because the consumer is not yet production-wired; first promotion
+   requires the mirror to have run. **Consequence reversal:** GHCR is now the CI/audit copy;
+   zot is the host-authoritative copy — the inverse of the v1 framing.
+2. **Marker channel authority.** The named off-box rows are the `SOLEUR_INFRA_PULL_*`
+   family (`APPLIED`, `VERIFY_FAIL`, `FLOOR`, `NOOP`, plus the seam-refusal row). The
+   marker emitter of record is `inngest-boot-phone-home.sh` (the pre-existing
+   Better-Stack-over-HTTPS POST path), extended so `sha256=<64hex>`-labeled digests survive
+   its hex redactor; journald → Vector Source 4 (`inngest-config-refresh` tag) is the
+   durable on-host channel and ships the same rows off-box. The drift executor greps the
+   whole `SOLEUR_INFRA_PULL_` family and feeds only STATE rows (APPLIED/NOOP/FLOOR) to the
+   comparator — failure rows carry `reason=`/`offered=`/`rejver=` deliberately never
+   `version=`/`sha256=` labels so a rejected offer can never parse as applied state.
+3. **Refresh-set v1 membership is the five dedicated-host carriers** (`inngest-redis-bootstrap.sh`,
+   `inngest-cutover-flip.sh`, `inngest-server-flip-guard.sh`, `cat-inngest-cutover-state.sh`,
+   `inngest-luks-cutover.sh`), scripts-only — correcting the seeded web-host list, which was a
+   producer-contract placeholder (those eight are not dedicated-host dests). `DEST_SPEC` +
+   `FILE_MAP` + the push payload widened in lockstep; on web hosts the five are inert dead
+   files. Units/`vector.toml` stay out of v1 (unit swaps need daemon-reload/restart semantics
+   the channel deliberately lacks).
+4. **Payload delivery is `indent(6, file())` text-embed, not b64.** D12's ordered fallbacks —
+   `base64encode(file())` then `base64encode(replace(file(), strip, ""))` — were measured
+   ~4.5 kB heavier stored and overflowed the 32 KiB user_data cap (the b64 alphabet defeats
+   the outer gzip). The template instead lands the two repo files verbatim inside
+   `content: |` scalars via templatefile `indent(6, …)` (the established git-data idiom):
+   single-source `file()` reads, byte-identical to the repo bytes modulo the payload's own
+   comment-line strip. Byte-authoritative measure at commit: 31,868 B stored / 900 B
+   headroom (inngest-userdata-budget.sh).
+
+Deferred operators unchanged: no host replace, no first promotion, no drift-executor secret
+wiring, no monitor wiring in this PR.

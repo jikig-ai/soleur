@@ -1304,6 +1304,18 @@ flow — the image build does NOT auto-deploy**. None of these steps use SSH
 (`hr-no-ssh-fallback-in-runbooks`). Full context + gotchas:
 `knowledge-base/project/learnings/workflow-patterns/2026-06-18-inngest-bootstrap-release-tag-then-dispatch-deploy.md`.
 
+> **Refresh-channel cross-ref (#6780, ADR-135).** For the five dedicated-host
+> carriers in `apps/web-platform/infra/inngest-config-refresh-set.txt`
+> (`inngest-redis-bootstrap.sh`, `inngest-cutover-flip.sh`,
+> `inngest-server-flip-guard.sh`, `cat-inngest-cutover-state.sh`,
+> `inngest-luks-cutover.sh`), an image bake + host replace is no longer the only
+> delivery path: once the signed config-refresh channel is live (host rebuilt
+> with this cloud-init + a promoted `INNGEST_CONFIG_DIGEST`), bundle promotion
+> delivers them in place — see
+> [inngest-config-refresh.md](inngest-config-refresh.md). Anything ELSE that
+> rides the image (bootstrap.sh, vector.toml, the cli pin) still needs this
+> 4-step flow.
+
 1. **The tag is minted automatically (#4326, ADR-232 §8).** When a push to `main` changes an
    image input (a `cp`-staged carrier, one of the four baked pins in `inngest.tf` /
    `vector.tf`, or the Dockerfile heredoc), `mint-inngest-bootstrap-tag.yml` cuts the next

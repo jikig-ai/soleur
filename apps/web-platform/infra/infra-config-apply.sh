@@ -232,6 +232,17 @@ FILE_MAP=(
   "GIT_LOCK_CHARDEVICE_SWEEP_SH_B64|/usr/local/bin/git-lock-chardevice-sweep.sh|755|root:root"
   "INNGEST_REGISTRY_PROBE_SH_B64|/usr/local/bin/inngest-registry-probe.sh|755|root:root"
   "INNGEST_DOUBLEFIRE_PROBE_SH_B64|/usr/local/bin/inngest-doublefire-probe.sh|755|root:root"
+  # #6780 — the five dedicated-host carriers, the ADR-135 refresh-set members (D3). These
+  # are the dedicated host's OWN scripts; their real channel is the signed bundle pull,
+  # and this webhook row keeps the push path consistent (a FILE_MAP row without a
+  # payload field would fail every web-host apply on missing_env). On web hosts they are
+  # inert dead files at /usr/local/bin. Lockstep: DEST_SPEC + push-infra-config.sh
+  # payload + deploy_pipeline_fix TRIGGER_FILES.
+  "INNGEST_REDIS_BOOTSTRAP_SH_B64|/usr/local/bin/inngest-redis-bootstrap.sh|755|root:root"
+  "INNGEST_CUTOVER_FLIP_SH_B64|/usr/local/bin/inngest-cutover-flip.sh|755|root:root"
+  "INNGEST_SERVER_FLIP_GUARD_SH_B64|/usr/local/bin/inngest-server-flip-guard.sh|755|root:root"
+  "CAT_INNGEST_CUTOVER_STATE_SH_B64|/usr/local/bin/cat-inngest-cutover-state.sh|755|root:root"
+  "INNGEST_LUKS_CUTOVER_SH_B64|/usr/local/bin/inngest-luks-cutover.sh|755|root:root"
   # #7095 — 640 root:deploy, DELIBERATELY different from the existing
   # /etc/default/webhook-deploy (600 deploy:deploy). webhook.service runs as User=deploy and
   # vector.service reads the same file, so the credential needs GROUP read; root ownership

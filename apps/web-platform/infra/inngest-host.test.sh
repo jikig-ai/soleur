@@ -607,7 +607,15 @@ grep -qE 'exits? 2' "$HOST_TF" \
 #       (b) the pull is digest-pinned. This is the substantive control the false comment stood
 #           in for: `@sha256:` names immutable bytes, so a mutable tag cannot be re-pointed at
 #           a different root-executed payload between the build and a host replace.
-if grep -qE 'cosign[- ]verif' "$CLOUD_INIT" && ! grep -qE '^[[:space:]]*cosign verify[[:space:]]' "$CLOUD_INIT"; then
+#     #6780 update: a REAL cosign verification now exists on this host — the config-refresh
+#     consumer runs `verify-blob` inside the pinned cosign image (`"$COSIGN_IMAGE"
+#     verify-blob --trusted-root …` in the baked refresh script). The guard's semantic is
+#     unchanged — no verification may be CLAIMED unless one is executed — but the permitted
+#     execution forms now include the image-wrapped verify-blob, so the prose and the
+#     mechanism stay one edit apart rather than re-creating the false-comment defect class.
+if grep -qE 'cosign[- ]verif' "$CLOUD_INIT" \
+  && ! grep -qE '^[[:space:]]*cosign verify[[:space:]]' "$CLOUD_INIT" \
+  && ! grep -qE 'COSIGN[A-Z_]*}?"?[[:space:]]+verify-blob[[:space:]]' "$CLOUD_INIT"; then
   fail "cloud-init-inngest.yml claims a cosign verification but executes none (CF-2 — the claim was false for months)"
 else
   pass
@@ -625,6 +633,41 @@ grep -qE 'NO SIGNATURE VERIFICATION ON THIS PATH' "$CLOUD_INIT" \
 # cloud-init-inngest-bootstrap.test.sh armed, and docker resolves by the digest regardless.
 grep -qE '^[[:space:]]*IREF=ghcr\.io/jikig-ai/soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}$' "$CLOUD_INIT" \
   && pass || fail "IREF must be digest-pinned (repo:vX.Y.Z@sha256:<64-hex>) — CF-2: a mutable tag gates a root-executed payload on nothing but GHCR TLS"
+
+# 12. (#6780, ADR-135 2026-10-13 amendment) The config-refresh consumer bake — structural pins.
+#     The behavioral/fixture coverage lives in inngest-config-refresh.test.sh (the rendered
+#     payload's own suite); here we pin the TEMPLATE-level shape this file is answerable for:
+#       a) the four consumer write_files entries exist exactly once with the right modes and
+#          root ownership (the script and units are root-owned; the version seed is 0644);
+#       b) the two heavy payloads are templatefile-driven file() embeds, NOT inline copies —
+#          `${indent(6, <var>)}` under `content: |`, so the repo file stays the single source
+#          (an inlined installer/root would silently diverge);
+#       c) the runcmd arms the timer AFTER the /etc/default/inngest-server write (the unit's
+#          ConditionPathExists is that file — enabling early would fire a permanently-skipping
+#          timer boot);
+#       d) the consumer's engine paths are NOT reachable through the refresh-set allowlist
+#          (HARD-1 — a signed bundle must not be able to replace the verifier itself).
+for _p in /usr/local/bin/infra-config-install \
+          /usr/local/bin/inngest-config-refresh.sh \
+          /etc/systemd/system/inngest-config-refresh.service \
+          /etc/systemd/system/inngest-config-refresh.timer \
+          /etc/soleur/cosign-trusted-root.json \
+          /var/lib/inngest-config/applied.version; do
+  [ "$(grep -cF "  - path: $_p" "$CLOUD_INIT")" -eq 1 ] \
+    && pass || fail "#6780: exactly one write_files entry for $_p"
+done
+grep -A3 -F '  - path: /usr/local/bin/infra-config-install' "$CLOUD_INIT" | grep -qF '${indent(6, infra_config_install_text)}' \
+  && pass || fail "#6780: infra-config-install must embed via \${indent(6, infra_config_install_text)} (single-source, D12)"
+grep -A3 -F '  - path: /etc/soleur/cosign-trusted-root.json' "$CLOUD_INIT" | grep -qF '${indent(6, cosign_trusted_root_text)}' \
+  && pass || fail "#6780: cosign-trusted-root.json must embed via \${indent(6, cosign_trusted_root_text)} (single-source, D12)"
+_cr_arm="$(grep -n 'enable --now inngest-config-refresh.timer' "$CLOUD_INIT" | head -1 | cut -d: -f1)"
+_cr_env="$(grep -n '> /etc/default/inngest-server' "$CLOUD_INIT" | head -1 | cut -d: -f1)"
+{ [ -n "$_cr_arm" ] && [ -n "$_cr_env" ] && [ "$_cr_arm" -gt "$_cr_env" ]; } \
+  && pass || fail "#6780: the refresh timer must be armed AFTER /etc/default/inngest-server is written"
+for _eng in 'inngest-config-refresh' 'infra-config-install' 'cosign-trusted-root' 'applied.version'; do
+  ! grep -vE '^[[:space:]]*#' "$DIR/inngest-config-refresh-set.txt" | grep -q "$_eng" \
+    && pass || fail "#6780 HARD-1: engine path $_eng appears in inngest-config-refresh-set.txt"
+done
 
 # --- (#6178) Flip-asset staging PARITY: cloud-init must docker-cp every flip asset that
 #     inngest-bootstrap.sh installs from /tmp. The bug this guards: the OCI image baked the

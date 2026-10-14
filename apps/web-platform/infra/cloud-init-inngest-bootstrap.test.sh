@@ -471,6 +471,25 @@ DISTINCT_PINS=$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$CL
 assert "both soleur-inngest-bootstrap pin refs (IREF + ZIREF) present and share one tag (found $PIN_REF_COUNT refs, $DISTINCT_PINS distinct)" \
   "(( PIN_REF_COUNT == 2 && DISTINCT_PINS == 1 ))"
 
+# --- AC6c (#6780): CROSS-FILE pin consistency — AC6b's sibling binds to cloud-init.yml's
+#     two refs only; the dedicated host's second ref pair (cloud-init-inngest.yml IREF +
+#     ZIREF) was unguarded for agreement. A partial bump across the two files (web bumped,
+#     dedicated left stale — or the reverse) red-lines nothing until this guard: count all
+#     full `vX.Y.Z@sha256:<64hex>` refs across BOTH files — 4 expected (one IREF + one ZIREF
+#     each) — and require ONE distinct tag+digest. Tag-only distinct would miss a same-tag
+#     digest mismatch, so the tag@digest pair is compared whole.
+echo ""
+echo "--- AC6c: cross-file pin-consistency (all 4 bootstrap tag@digest refs across both cloud-init files agree) ---"
+AC6C_REFS="$( { grep -ohE 'jikig-ai/soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}' \
+    "$CLOUD_INIT" "$SCRIPT_DIR/cloud-init-inngest.yml" || true; } | sort -u)"
+AC6C_TOTAL="$( { grep -oE 'jikig-ai/soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}' \
+    "$CLOUD_INIT" "$SCRIPT_DIR/cloud-init-inngest.yml" || true; } | wc -l)"
+AC6C_DISTINCT="$(printf '%s\n' "$AC6C_REFS" | grep -c . || true)"
+assert "AC6c: all four tag+digest pin sites present (IREF+ZIREF in each cloud-init; found $AC6C_TOTAL)" \
+  "(( AC6C_TOTAL == 4 ))"
+assert "AC6c: one distinct tag@digest across both files (partial bump -> distinct 2; found $AC6C_DISTINCT)" \
+  "(( AC6C_DISTINCT == 1 ))"
+
 # --- AC7: web_colocate_inngest gate (#6178) — structural smoke ---
 # The "Bootstrap Inngest server on first boot" runcmd item is wrapped in a col-0
 # templatefile `%{ if web_colocate_inngest ~}` / `%{ endif ~}` directive pair so a
@@ -2281,8 +2300,9 @@ COND_ASSERTIONS=$(( COND_ASSERTIONS + TOTAL - _COND_BEFORE ))
 # rows are terraform-gated and counted in COND_ASSERTIONS, like the rendered NIC-G1 rows).
 # #9082: 153 -> 163, re-measured from a green run (Guard A2 added 10 unconditional rows).
 # #10045: 163 -> 173 (the KDENY_KERNEL_STREAM argv-lockstep block added 10 unconditional rows in AC5).
+# #6780: 173 -> 175 (the AC6c cross-file pin-consistency block added 2 unconditional rows).
 UNCONDITIONAL_ASSERTIONS=$(( TOTAL - COND_ASSERTIONS ))
-BOOTSTRAP_MIN_ASSERTIONS=173
+BOOTSTRAP_MIN_ASSERTIONS=175
 if [[ "$UNCONDITIONAL_ASSERTIONS" -lt "$BOOTSTRAP_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s unconditional assertions ran (%s total, %s from tool-gated blocks), expected >= %s — a block was skipped or emptied.\n' \
     "$UNCONDITIONAL_ASSERTIONS" "$TOTAL" "$COND_ASSERTIONS" "$BOOTSTRAP_MIN_ASSERTIONS" >&2

@@ -1192,7 +1192,7 @@ ins_after("trap on_exit EXIT", ["cleanup() { docker rm -f soleur-inngest-bootstr
 row G2-r8 RED "TA T2: exits 0" '
 a = one("on_exit() {"); del_line("set +e", after=a); save()'
 row G2-r9 RED "G2: the EXIT trap is installed before the first fallible command" '
-del_line("trap on_exit EXIT"); f = one("ZOT_EP=\"$ZOT_REGISTRY_ENDPOINT\""); ins_after("set -e", ["trap on_exit EXIT"], after=f); save()'
+del_line("trap on_exit EXIT"); f = one("ZOT_EP=\"$ZOT_REGISTRY_ENDPOINT\"", after=one("- path: /usr/local/bin/soleur-inngest-provision")); ins_after("set -e", ["trap on_exit EXIT"], after=f); save()'
 row G2-r10 RED "TA T4: the cutover-FSM quiesce" '
 ls = lines(); a = one(Q_OPEN); b = one(Q_CLOSE); e = one("fi", after=b)
 blk = ls[a:e + 1]; del ls[a:e + 1]; put(ls)
@@ -1234,11 +1234,11 @@ row G4-r3 RED "G4: no doppler call clears or strips its environment" '
 d = [k for k, l in enumerate(lines()) if l.strip().startswith("DIAG_BOOT=")]; assert len(d) == 1
 ls = lines(); ls[d[0] + 1:d[0] + 1] = [ind(d[0]) + "DIAG2=\"$(env -i doppler secrets get INNGEST_DIAGNOSTIC_BOOT --plain 2>/dev/null || true)\""]; put(ls); save()'
 row G4-r4 RED "G4: HOME=/root reaches the unit environment" '
-del_line("Environment=HOME=/root"); raw_rep("printf \x27HOME=/root\\nDOPPLER_TOKEN=", "printf \x27DOPPLER_TOKEN="); save()'
+del_line("Environment=HOME=/root", after=one("- path: /etc/systemd/system/soleur-inngest-provision.service")); raw_rep("printf \x27HOME=/root\\nDOPPLER_TOKEN=", "printf \x27DOPPLER_TOKEN="); save()'
 row G4-r5 RED "G4: the bootstrap env list passes the literal" '
 rep_line("\"DOPPLER_PROJECT=soleur-inngest\" \"DOPPLER_CONFIG=prd\" \\", "\"DOPPLER_PROJECT=soleur\" \"DOPPLER_CONFIG=prd\" \\"); save()'
 row G4-r6 PASS - '
-ins_after("Environment=HOME=/root", ["Environment=DOPPLER_ENABLE_VERSION_CHECK=false"]); save()'
+ins_after("Environment=HOME=/root", ["Environment=DOPPLER_ENABLE_VERSION_CHECK=false"], after=one("- path: /etc/systemd/system/soleur-inngest-provision.service")); save()'
 
 # ---- G5 --------------------------------------------------------------------------------------
 row G5-r1 RED "G5: the NIC wait precedes every item that can start the unit" '
@@ -1280,7 +1280,7 @@ rep_line("RestartSec=120", "RestartSec=2min"); save()'
 
 # ---- G7 --------------------------------------------------------------------------------------
 row G7-r1 RED "no 'parameter not set' in stderr" '
-ins_before("ZOT_REGISTRY_ENDPOINT=\"\"", ["echo \"$ZOT_EP\" >/dev/null"]); save()'
+ins_before("ZOT_REGISTRY_ENDPOINT=\"\"", ["echo \"$ZOT_EP\" >/dev/null"], after=one("- path: /usr/local/bin/soleur-inngest-provision")); save()'
 row G7-r2 RED "G7 dispatch: -u is in effect" '' nou
 row G7-r3 RED "no 'parameter not set' in stderr" '
 f = one(ISO_PASSED); e = one("fi", after=f)

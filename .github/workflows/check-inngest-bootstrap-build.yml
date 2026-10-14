@@ -1,0 +1,41 @@
+name: check-inngest-bootstrap-build
+
+# #8781 — the pre-merge CANDIDATE build lane (option a). #8747 made the publish workflow
+# refuse any vinngest-v* tag minted off main, which removed the only pre-merge image build
+# path: a broken baked carrier now reaches merge green and fails FIRST at tag-publish time.
+# This lane runs `docker build` — never push — on PRs that touch the baked carriers or the
+# pins, so the build defect is a PR check failure, not a release-day surprise.
+#
+# DELIBERATELY NOT inside build-inngest-bootstrap-image.yml: that file's header invariant is
+# "Triggered ONLY by workflow_dispatch" and its entire security commentary (concurrency,
+# environment gates, id-token) assumes it. A pull_request trigger there would fork the
+# security contract the comments document.
+#
+# NO PUBLICATION IS POSSIBLE HERE: permissions are contents:read, there is no login step,
+# no packages:write, no id-token, no environment. The script tags a local-only name; the
+# parity guard (test-check-inngest-bootstrap-build.sh) pins every forbidden token absent.
+
+on:
+  pull_request:
+    paths:
+      # Every carrier the Dockerfile COPYs (the cp staging list in
+      # check-inngest-bootstrap-build.sh) + the two pin files it greps + this lane's own
+      # definition. Kept in parity with the carrier set by the guard suite — a carrier
+      # added to the build without a covering glob reds it.
+      - 'apps/web-platform/infra/inngest*'
+      - 'apps/web-platform/infra/vector.*'
+      - 'apps/web-platform/infra/cat-inngest-*'
+      - '.github/workflows/check-inngest-bootstrap-build.yml'
+      - '.github/scripts/check-inngest-bootstrap-build.sh'
+      - '.github/scripts/test/test-check-inngest-bootstrap-build.sh'
+
+permissions:
+  contents: read
+
+jobs:
+  build-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Candidate build (no push)
+        run: bash .github/scripts/check-inngest-bootstrap-build.sh
