@@ -31,6 +31,20 @@ The review of the fix found the lib's own post-trust text pipeline had the silen
 
 The fix for the above wrote the claim "every stage after the trust decision is all-or-nothing" into the lib header and enforced it for ONE stage (the record build, rc 2). Round two found the fence strip, the base64 decode, the three field extractions and both here-string loops unchecked, a NUL byte in a trusted body silently joined across a command substitution (`S2-ACTI<NUL>VATED` became a live marker), and a lone CR hiding a fence from the strip. Each could blank or alter a trusted body with rc 0. The lesson is about the form of the invariant: a per-stage list in prose is only as complete as its author's memory of the stages, and it rots when a stage is added. State it as a CONSERVATION check the code enforces for every stage at once (rows collected equals rows in the input, counted a second way; distinct logins in the memo equals distinct logins collected) plus a checked status on every command substitution, and give each guard a failure-injection row that asserts rc 2, empty stdout AND the stage's own message, so a second guard cannot mask the first, and a mutant that removes that guard alone.
 
+## Rounds 4 and 5: a filter placed in front of a check is a second check, and its predicate must be a superset
+
+Narrowing the permission lookup to authors with a marker line (so a drive-by commenter's failed read cannot wedge the tracker) put a candidate regex in front of the trust check. The regex is now the actual gate for what the probes can ever see: a marker it does not match is dropped with rc 0 and empty stdout, never rc 2. Review found it narrower than the family the probes grep (`S3-PR9:`, `S2-EXIT_CENSUS:`), and the HTML-comment strip closed `<!--` only after four characters, so `<!-->` hid a visible deny marker. Both fail toward a false PASS only for a deny-type marker, which is why a mutation battery full of PASS-type fixtures did not see them.
+
+**Prevention:** when a change adds a pre-filter to a trust or verdict check, state the superset contract once (the filter must match every line the downstream grep matches), write a fixture per marker family member including the awkward spellings, and mutate the filter narrower. Prose claims that a failure class "cannot" happen get the same treatment: the runbook said a drive-by commenter cannot wedge the tracker, and anyone can post a marker line.
+
+## Session Errors
+
+- Two scope-out drafts listed readers as unfiltered that filter on the bot login (`watchdog-arm-soak-9237.sh`, `anthropic-admin-key-6297.sh`), and filed under `cross-cutting-refactor` where the criterion was `pre-existing-unrelated`. The CONCUR gate caught both before filing. **Prevention:** read each cited line before listing it as a defect; the CONCUR re-run is the control and it worked.
+- A lint header sentence in PR-touched code said `inngest-watchdog-functions-query-6407.sh` cannot let a comment decide a tracker's fate; its `exit 1` reopens a closed tracker. **Prevention:** a negative universal claim in prose gets a falsifying command before it ships.
+- The lib suite hit the 580 s tool cap (rc 124) while two soak suites ran concurrently; solo it passed. **Prevention:** run heavy suites one at a time, in the background, and read the RC line.
+- Two Stop-hook blocks on closing sentences that named a future action, and PreToolUse blocks on a process-grep with the full-command-line flag and on a trailing stash listing. One-offs; the hooks worked as designed.
+- The round-3 fix agent died on a weekly usage limit mid-run. **Prevention:** commit each unit before starting the next (already in the briefs); reconcile with git log and git status.
+
 ## Tags
 category: workflow-issues
 module: followthroughs, scripts/lib/trusted-verdict.sh, scripts/lint-followthrough-varq-ban.sh
