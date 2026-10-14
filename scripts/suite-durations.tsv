@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=38090871167,38088705648,38086978176,38085840669,38055372785
 # default-weight-ms=1180
-# generated-at=2026-10-14T11:19:17Z
+# generated-at=2026-10-14T14:51:03Z
 # generator=regenerate-shard-manifest.py v3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
 .claude/hooks/background-poll-prefer-monitor.test.sh	777	measured
@@ -200,6 +200,7 @@ plugins/soleur/test/hook-git-env-receipt.test.sh	222	measured
 plugins/soleur/test/hook-input-classification-mutation.test.sh	66094	measured
 plugins/soleur/test/hosted-ship-shallow-merge-base.test.sh	112	measured
 plugins/soleur/test/infra-validation-detect.test.sh	53	measured
+plugins/soleur/test/inngest-config-bundle-mirror.test.sh	1180	floor
 plugins/soleur/test/issue-flow-measure.test.sh	87	measured
 plugins/soleur/test/kb-caches-untracked.test.sh	45	measured
 plugins/soleur/test/kb-search-lockstep.test.sh	9	measured
