@@ -163,6 +163,7 @@ rm -f /tmp/bp-failsoft.$$
 # scripts/lib/ the fragment's home instead of .claude/hooks/lib/.
 GUARD="$SCRIPTS_DIR/precommit-guard.sh"
 PG_TMP="$(mktemp -d)"; assert_fixture_dir "$PG_TMP"
+trap 'rm -rf "$PG_TMP"' EXIT
 git -C "$PG_TMP" init -q -b main && git -C "$PG_TMP" commit -q --allow-empty -m init
 
 _rc=0; bash "$GUARD" --cwd "$PG_TMP" 'rtk git commit' >/dev/null 2>&1 || _rc=$?
