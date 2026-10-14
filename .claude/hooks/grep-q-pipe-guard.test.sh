@@ -426,6 +426,12 @@ SWEEP_PATHSPEC=(
 # One swept file under each of these must exist, or the derivation is reading the wrong tree.
 SWEEP_CANARIES=('scripts/' 'plugins/soleur/' 'apps/web-platform/scripts/' 'apps/cla-evidence/' 'tests/' 'plugins/soleur/scripts/' 'plugins/soleur/skills/' 'apps/web-platform/infra/' 'apps/web-platform/test/')
 SWEEP_FLOOR=1400   # measured 1,646 swept files on 2026-10-05 (1,405 without every non-.sh file); a truncated population reads UNRESOLVED, never "no hits"
+SWEEP_FLOOR_MIN=3500   # a literal beside the floor: the floor can only move with a visible edit of THIS number (floor-lower-bound below)
+# The extension list, one array. Item F builds the pathspec AND the extension witness from it, so a dropped entry would drop out of both; the
+# literal count and the separately typed list below are what see a drop (ext-count, ext-expected).
+SWEEP_EXTS=(sh bash bats yml yaml tf template js ts tsx mjs cjs py)
+SWEEP_EXT_COUNT=13
+SWEEP_EXT_EXPECTED='sh bash bats yml yaml tf template js ts tsx mjs cjs py'
 SWEEP_CANARY_COUNT=9   # pinned beside SWEEP_CANARIES: the probe compares against this literal, not against the array's own length
 # To add a canary root: the array and SWEEP_CANARY_COUNT here, then one violating file for it in the sweep probe's sweeproot (a spelling
 # PATTERN_V2 matches), the sw_roots alternation, and one compliant file in okroot. The hit and population checks compare against
@@ -582,6 +588,7 @@ sweep_main() {
   local root="$1" floor="$2" scan n
   SWEEP_FAIL=0
   scan="$(scan_sweep "$root")"
+  SWEEP_LAST_SCAN="$scan"   # the spec-dir-zero row reads the real run's scan; set here, never by the probe's scratch roots reading it back
   if grep -q '^UNRESOLVED:' <<<"$scan"; then
     grep '^UNRESOLVED:' <<<"$scan"
     return 3
@@ -828,6 +835,106 @@ v2_git_good=$(git -C "$probe" grep --no-index -nE -e "$PATTERN_V2" -- good-v2.sh
 [[ "$v2_git_bad" == "$V2_BAD_LINES" && "$v2_git_good" == 0 ]] \
   || sweep_probe_fail+=("v2-git-dialect: git grep matched ${v2_git_bad:-<error>}/$V2_BAD_LINES bad and ${v2_git_good:-<error>} good (want all and 0)")
 
+# ---- Item F, Guard 1 (#9217): the reader grammar as a table of NAMED cases. One line per case: <kind> <name> <text>.
+#   bad  must match          good must NOT match
+#   res  a stated residual: must NOT match, pinned so widening it is a visible edit of this table
+#   fp   a stated false positive: matches by design, pinned
+# A mutation of one pattern part reds the case that names it ("wrap-sudo"), not a count. The table is the second member of every part of
+# PATTERN_V2; the live-tree equality (0 undeferred hits on the real tree) and the committed prototype output are the other two.
+read -r -d '' V2_CASES <<'EOF' || true
+bad wrap-sudo x | sudo grep -q p
+bad wrap-sudo-u x | sudo -u root grep -q p
+bad wrap-doas x | doas grep -q p
+bad wrap-env-i x | env -i grep -q p
+bad wrap-env-i-path x | env -i PATH=/bin grep -q p
+bad wrap-nice-n x | nice -n 10 grep -q p
+bad wrap-timeout-s x | timeout -s KILL 5 grep -q p
+bad wrap-time x | time grep -q p
+bad wrap-xargs x | xargs grep -q p
+bad wrap-xargs-n1 x | xargs -n1 grep -q p
+bad wrap-command-p x | command -p grep -q p
+bad wrap-nohup x | nohup grep -q p
+bad wrap-setsid x | setsid grep -q p
+bad wrap-stdbuf x | stdbuf -oL -eL grep -q p
+bad wrap-4-tokens x | sudo -u root -g wheel grep -q p
+bad bin-zgrep x | zgrep -q p
+bad bin-rg x | rg -q p
+bad bin-rg-long x | rg --quiet p
+bad bin-ag x | ag -q p
+bad bin-ugrep x | ugrep -q p
+bad bin-pcregrep x | pcregrep -q p
+bad var-dq x | "$GREP" -q p
+bad var-brace x | ${GREP_BIN} -qE p
+bad var-bare x | $GREP --quiet p
+bad var-default x | ${GREP:-grep} -q p
+bad arg-after-operand x | grep p -q
+bad arg-E-operand x | grep -E p -q
+bad arg-two-e x | grep -e a -e b -q
+bad arg-d-skip x | grep -d skip -q p
+bad arg-context x | grep --context 3 -q p
+bad arg-context-eq x | grep --context=3 -q p
+bad early-5q x | grep -5q p
+bad early-qui x | grep --qui p
+bad early-sil x | grep --sil p
+bad early-max x | grep --max=1 p
+bad early-max-c x | grep --max-c=1 p
+bad early-m-sep x | grep -m 1 p
+bad shc-single x | sh -c 'grep -q p'
+bad shc-lc x | bash -lc "grep -qE p"
+bad head-chain x | head -1 | grep -q p
+bad head-chain-n x | head -n 1 | grep -qE p
+good quoted-context-pipe check "a | grep -c foo bar" baz -eq 1
+good var-hook x | "$HOOK" -q p
+good var-hmac x | "$CMD" -hmac key
+good rg-sort x | rg --sort path p
+good rg-max-depth x | rg --max-depth 2 p
+good rg-smart-case x | rg --smart-case p
+good shc-count x | sh -c 'grep -c p'
+good shc-echo x | sh -c 'echo ok'
+good wrap-sudo-tee x | sudo tee /etc/f
+good wrap-time-cat x | time cat
+good wrap-command-v x | command -v grep
+good wrap-xargs-echo-foo x | xargs echo foo
+good grep-cF-quoted x | grep -cF 'a -q b' >/dev/null
+good grep-c-then-q x | grep -c p; foo -q
+good grep-c-and-q x | grep -c p && foo -q
+good tr-then-grep x | tr a b; grep p f -q
+good or-herestring x || grep -q p <<<"$x"
+good no-pipe grep p -q <<<"$x"
+good head-only x | head -1
+good awk-exit x | awk '{print; exit}'
+good grep-oE x | grep -oE p
+good grep-l x | grep -l p
+good sub-count $(x | grep -c p) -eq 1
+res wrap-5-tokens x | sudo -u root -g wheel -E grep -q p
+fp fp-eq x | grep -c p -eq
+fp fp-xargs-echo x | xargs echo grep -q p
+EOF
+V2_CASE_COUNT=67
+v2_case_misses() { # <pattern> -> one "[kind name]" per case the pattern disagrees with, "[INSTRUMENT name rc=N]" when grep itself failed
+  local pat="$1" line kind rest name text r out=""
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    kind="${line%% *}"; rest="${line#* }"; name="${rest%% *}"; text="${rest#* }"
+    r=0; grep -E -- "$pat" <<<"$text" >/dev/null 2>&1 || r=$?
+    if (( r > 1 )); then out+="[INSTRUMENT $name rc=$r]"; continue; fi
+    case "$kind:$r" in
+      bad:0|good:1|res:1|fp:0) ;;
+      *) out+="[$kind $name]" ;;
+    esac
+  done <<<"$V2_CASES"
+  printf '%s' "$out"
+}
+v2_case_n=$(grep -c . <<<"$V2_CASES" || true)
+v2_case_bad="$(v2_case_misses "$PATTERN_V2")"
+[[ "$v2_case_n" == "$V2_CASE_COUNT" && -z "$v2_case_bad" ]] \
+  || sweep_probe_fail+=("v2-cases: ran ${v2_case_n:-<err>}/$V2_CASE_COUNT cases, PATTERN_V2 disagreed on: ${v2_case_bad:-none} (a [bad ..] case is a spelling the pattern no longer reads; a [good ..] or [res ..] case is one it now over-reads; an [fp ..] case stopped matching)")
+# The loop must be able to fail: the same table against a pattern with the wrapper part removed has to miss the wrapper cases.
+PATTERN_V2_NOWRAP="${SWEEP_LEAD}${SWEEP_BIN}${SWEEP_ARG}${SWEEP_EARLY}"
+v2_case_neg="$(v2_case_misses "$PATTERN_V2_NOWRAP")"
+[[ "$v2_case_neg" == *"[bad wrap-sudo]"* && "$v2_case_neg" == *"[bad wrap-env-i-path]"* ]] \
+  || sweep_probe_fail+=("v2-cases-negative: the case loop reported [${v2_case_neg:0:120}] against a pattern with the wrapper part removed (want the wrapper cases named, so the loop can see a miss)")
+
 # The sweep itself, on a scratch root with one file under EACH canary root: a bad line, plus a comment line, a marked
 # line and the `a || grep` shape that must NOT be reported. Each root uses a different spelling and at least one is V2-only (a command/egrep/LC_ALL=C prefix),
 # so the sweep is proved to run PATTERN_V2 and not PATTERN. A gitignored directory must stay unscanned.
@@ -1059,6 +1166,145 @@ fold_d=$( FAIL=0; unset SWEEP_N; sweep_fold 0 >/dev/null; echo "$FAIL" ) || true
 [[ "$(tail -n 1 "${BASH_SOURCE[0]}")" == 'exit "$FAIL"' && "$(grep -c '^FAIL=0$' "${BASH_SOURCE[0]}")" == 1 ]] \
   || sweep_probe_fail+=("exit-fold: the last line of this file is not exit \"\$FAIL\", or FAIL is reset to 0 more than once")
 
+# ---- Item F, Guards 2 and 3 (#9217): the multi-line passes, the widened population and the bypass pin.
+# One scratch root carries a file per CASE (the case name is in the file name), laid over the compliant canary layout so the population is not
+# UNRESOLVED. A must-report case names the line the pass has to report (the bar's line, not the next line's); a must-not case names the file.
+# The fixtures are written with printf from words, in this file only: the spec dir and the repository are swept, so no fixture lives anywhere else.
+ml="$probe/mlroot"; mkdir -p "$ml" && cp -R "$okroot/." "$ml/"
+_ml_put() { local f="$ml/$1"; shift; mkdir -p "$(dirname "$f")"; printf '%s\n' "$@" > "$f"; }
+_ml_put scripts/ml-split-sudo.sh          'x |' '  sudo grep -q p f'
+_ml_put scripts/ml-split-line-number.sh   'a' 'b' 'x |' '  grep -q p f'
+_ml_put scripts/ml-split-second-site.sh   'x |' '  sudo grep -q p f' 'y' 'z |&' '  grep -qE p f'
+_ml_put scripts/ml-split-comment-next.sh  'x |' '# note' '  sudo grep -q p f'
+_ml_put scripts/ml-split-blank-next.sh    'x |' '' '  sudo grep -q p f'
+_ml_put scripts/ml-split-pipe-amp.sh      'x |&' '  sudo grep -q p f'
+_ml_put scripts/ml-split-or-or.sh         'x ||' '  sudo grep -q p f'
+_ml_put scripts/ml-split-block-scalar.yml 'run: |' '  sudo grep -q p "$f"'
+_ml_put scripts/ml-split-eof.sh           'echo a' 'x |'
+_ml_put scripts/ml-split-lone-bar.yml     'run:' '  |' '  sudo grep -q p "$f"'
+_ml_put docs/ml-md-env-i.md               'prose' '```bash' 'set -o pipefail' 'x | env -i grep -q p' '```'
+_ml_put docs/ml-md-pipefail-after-hit.md  '```sh' 'x | sudo grep -q p' 'set -euo pipefail' '```'
+_ml_put docs/ml-md-tilde.md               '~~~' 'set -o pipefail' 'x | sudo grep -q p' '~~~'
+_ml_put docs/ml-md-indented.md            '- item' '  ```sh' '  set -o pipefail' '  x | sudo grep -q p' '  ```'
+_ml_put docs/ml-md-long-fence.md          '````' 'set -o pipefail' 'x | sudo grep -q p' '```' 'w | sudo grep -q p' '````' 'q | sudo grep -q p'
+_ml_put docs/ml-md-tilde-mismatch.md      '~~~' 'set -o pipefail' '```' 'x | sudo grep -q p' '~~~'
+_ml_put docs/ml-md-unclosed-fence.md      '```bash' 'set -o pipefail' 'x | sudo grep -q p'
+printf '%s\r\n' '```bash' 'set -o pipefail' 'x | sudo grep -q p' '```' > "$ml/docs/ml-md-crlf.md"
+_ml_put docs/ml-md-pipefail-other-fence.md '```bash' 'x | sudo grep -q p' '```' '```bash' 'set -o pipefail' '```'
+_ml_put docs/ml-md-no-pipefail.md         '```bash' 'x | sudo grep -q p' '```'
+_ml_put docs/ml-md-prose.md               'x | sudo grep -q p' '```bash' 'set -o pipefail' '```'
+_ml_put docs/ml-md-comment-line.md        '```bash' 'set -o pipefail' '# x | sudo grep -q p' '```'
+_ml_put docs/ml-md-grep-c.md              '```bash' 'set -o pipefail' 'x | grep -c p' '```'
+ml_out="$(scan_sweep "$ml")"
+ml_miss=""; ml_over=""
+_ml_want() { local name="$1" path="$2" ln="$3" kind="${4:-}"; grep -q -- "^$path:$ln:" <<<"$ml_out" || ml_miss+=" $name${kind:+/}$kind"; }
+_ml_not()  { local name="$1" path="$2"; if grep -q -- "^$path:" <<<"$ml_out"; then ml_over+=" $name"; fi; }
+_ml_want split-sudo         scripts/ml-split-sudo.sh 1
+_ml_want split-line-number  scripts/ml-split-line-number.sh 3
+_ml_want split-second-site  scripts/ml-split-second-site.sh 1 first
+_ml_want split-second-site  scripts/ml-split-second-site.sh 4 second
+_ml_want split-comment-next scripts/ml-split-comment-next.sh 1
+_ml_want split-blank-next   scripts/ml-split-blank-next.sh 1
+_ml_want split-pipe-amp     scripts/ml-split-pipe-amp.sh 1
+_ml_not  split-or-or        scripts/ml-split-or-or.sh
+_ml_not  split-block-scalar scripts/ml-split-block-scalar.yml
+_ml_not  split-eof          scripts/ml-split-eof.sh
+_ml_not  split-lone-bar     scripts/ml-split-lone-bar.yml
+_ml_want md-env-i               docs/ml-md-env-i.md 4
+_ml_want md-pipefail-after-hit  docs/ml-md-pipefail-after-hit.md 2
+_ml_want md-tilde               docs/ml-md-tilde.md 3
+_ml_want md-indented            docs/ml-md-indented.md 4
+_ml_want md-long-fence          docs/ml-md-long-fence.md 3 inside
+_ml_want md-long-fence          docs/ml-md-long-fence.md 5 after-short-fence
+_ml_want md-tilde-mismatch      docs/ml-md-tilde-mismatch.md 4
+_ml_want md-unclosed-fence      docs/ml-md-unclosed-fence.md 3
+_ml_want md-crlf                docs/ml-md-crlf.md 3
+_ml_not  md-long-fence-after    docs/ml-md-long-fence.md:7
+_ml_not  md-pipefail-other-fence docs/ml-md-pipefail-other-fence.md
+_ml_not  md-no-pipefail         docs/ml-md-no-pipefail.md
+_ml_not  md-prose               docs/ml-md-prose.md
+_ml_not  md-comment-line        docs/ml-md-comment-line.md
+_ml_not  md-grep-c              docs/ml-md-grep-c.md
+ml_split_miss=""; ml_md_miss=""; ml_split_over=""; ml_md_over=""
+for _w in $ml_miss; do case "$_w" in split-*) ml_split_miss+=" $_w" ;; *) ml_md_miss+=" $_w" ;; esac; done
+for _w in $ml_over; do case "$_w" in split-*) ml_split_over+=" $_w" ;; *) ml_md_over+=" $_w" ;; esac; done
+[[ -z "$ml_split_miss" ]] || sweep_probe_fail+=("split-must-report: the sweep did not report the bar's line for:$ml_split_miss (a pipe that ends a line is read together with the next code line; the reported line is the bar's)")
+[[ -z "$ml_split_over" ]] || sweep_probe_fail+=("split-must-not: the sweep reported a join it must not make:$ml_split_over (a logical OR, a YAML block-scalar indicator, a bar with nothing after it)")
+[[ -z "$ml_md_miss" ]] || sweep_probe_fail+=("md-must-report: the sweep did not report a fenced early-exit pipe in:$ml_md_miss (a fence that holds pipefail is code the executing shell reads under it)")
+[[ -z "$ml_md_over" ]] || sweep_probe_fail+=("md-must-not: the sweep reported a line it must not:$ml_md_over (prose, a comment line, a fence without pipefail, pipefail in a different fence, a reader that drains)")
+ml_split_n=$(grep -c '^scripts/ml-split-' <<<"$ml_out" || true)
+ml_md_n=$(grep -c '^docs/ml-md-' <<<"$ml_out" || true)
+[[ "$ml_split_n" -gt 0 && "$ml_md_n" -gt 0 ]] \
+  || sweep_probe_fail+=("sweep-wiring-multiline: scan_sweep reported ${ml_split_n:-<err>} split-pass lines and ${ml_md_n:-<err>} markdown-pass lines on a root built to produce both (want both above 0: the passes are not wired into the sweep)")
+
+# Guard 3: one planted violation per extension, read through the same scan_sweep, so the pathspec and the extension list cannot disagree unseen.
+ew="$probe/extroot"; mkdir -p "$ew" && cp -R "$okroot/." "$ew/"
+for _e in ${SWEEP_EXTS[@]+"${SWEEP_EXTS[@]}"}; do printf '%s\n' 'echo "$x" | grep -q p' > "$ew/scripts/witness-$_e.$_e"; done
+ew_out="$(scan_sweep "$ew")"
+ew_swept=$(sed -n '1s/^SWEPT: \([0-9]*\) files$/\1/p' <<<"$ew_out")
+ew_miss=""
+for _e in ${SWEEP_EXTS[@]+"${SWEEP_EXTS[@]}"}; do
+  grep -q -- "^scripts/witness-$_e\\.$_e:" <<<"$ew_out" || ew_miss+=" $_e"
+done
+[[ "${#SWEEP_EXTS[@]}" -gt 0 && "${ew_swept:-0}" == $(( SWEEP_CANARY_COUNT + ${#SWEEP_EXTS[@]} )) && -z "$ew_miss" ]] \
+  || sweep_probe_fail+=("ext-witness: the sweep read ${ew_swept:-<err>} files of a root holding $SWEEP_CANARY_COUNT canaries and ${#SWEEP_EXTS[@]} planted extension files and did not report a planted violation of:${ew_miss:- none} (an extension missing from the pathspec is a file type nobody reads; read 0 files means the list is empty)")
+[[ "${#SWEEP_EXTS[@]}" == "$SWEEP_EXT_COUNT" ]] \
+  || sweep_probe_fail+=("ext-count: SWEEP_EXTS holds ${#SWEEP_EXTS[@]} extensions, pinned at $SWEEP_EXT_COUNT — a dropped extension drops out of the pathspec and the witness together; if you changed the list on purpose, edit SWEEP_EXT_COUNT and SWEEP_EXT_EXPECTED in the same commit")
+[[ "${SWEEP_EXTS[*]}" == "$SWEEP_EXT_EXPECTED" ]] \
+  || sweep_probe_fail+=("ext-expected: SWEEP_EXTS is [${SWEEP_EXTS[*]}], the separately typed list is [$SWEEP_EXT_EXPECTED]")
+(( SWEEP_FLOOR >= SWEEP_FLOOR_MIN )) \
+  || sweep_probe_fail+=("floor-lower-bound: SWEEP_FLOOR is $SWEEP_FLOOR, below the literal SWEEP_FLOOR_MIN of $SWEEP_FLOOR_MIN — a floor far under the population stops guarding truncation; raise it, and lower the literal only in a reviewed edit")
+fl_rc=0; fl_out="$( ( SWEEP_DEFERRALS=(); sweep_main "$okroot" "$SWEEP_FLOOR" ) 2>&1 )" || fl_rc=$?
+[[ "$fl_rc" == 1 && "$fl_out" == *"below the floor"* ]] \
+  || sweep_probe_fail+=("floor-truncated: a $SWEEP_CANARY_COUNT-file population under the real floor gave rc ${fl_rc:-<err>} and [${fl_out:0:80}] (want rc 1 and a below the floor message)")
+
+# The knowledge-base exclusion is path-segment exact: an archive/ directory at any depth is out, a directory that merely contains the word is not.
+kb="$probe/kbroot"; mkdir -p "$kb" && cp -R "$okroot/." "$kb/"
+_kb_put() { mkdir -p "$(dirname "$kb/$1")"; printf '%s\n' 'echo "$x" | grep -q p' > "$kb/$1"; }
+_kb_put knowledge-base/project/specs/feat-x/bootstrap.sh
+_kb_put knowledge-base/project/specs/archive/20260101-x/y.sh
+_kb_put knowledge-base/x/archived-notes/y.sh
+_kb_put knowledge-base/a/b/archive/c.sh
+kb_out="$(scan_sweep "$kb")"
+kb_miss=""; kb_over=""
+grep -q -- '^knowledge-base/project/specs/feat-x/bootstrap\.sh:' <<<"$kb_out" || kb_miss+=" kb-witness"
+grep -q -- '^knowledge-base/x/archived-notes/y\.sh:' <<<"$kb_out" || kb_miss+=" kb-archive-lookalike"
+grep -q -- '^knowledge-base/project/specs/archive/' <<<"$kb_out" && kb_over+=" kb-archive-must-not"
+grep -q -- '^knowledge-base/a/b/archive/' <<<"$kb_out" && kb_over+=" kb-archive-nested-must-not"
+[[ -z "$kb_miss" && -z "$kb_over" ]] \
+  || sweep_probe_fail+=("kb-population: the sweep did not read:${kb_miss:- none}; it read an archived record it must not:${kb_over:- none} (knowledge-base code files outside an archive/ directory are read; a name that only contains archive is not an archive)")
+
+# The comment filter is per language: a JS-family comment is not a shell comment and a shell case arm is not a JS comment.
+cm="$probe/cmroot"; mkdir -p "$cm" && cp -R "$okroot/." "$cm/"
+_cm_put() { mkdir -p "$(dirname "$cm/$1")"; printf '%s\n' "$2" > "$cm/$1"; }
+_cm_put scripts/cm-ts-slash-comment.ts '// echo "$x" | grep -q p'
+_cm_put scripts/cm-ts-jsdoc-star.ts ' * echo "$x" | grep -q p'
+_cm_put scripts/cm-ts-block-comment.ts '/* echo "$x" | grep -q p */'
+_cm_put scripts/cm-py-hash-comment.py '# echo "$x" | grep -q p'
+_cm_put scripts/cm-ts-hash-line.ts '# echo "$x" | grep -q p'
+_cm_put scripts/cm-py-slash-line.py '// echo "$x" | grep -q p'
+_cm_put scripts/cm-sh-case-arm.sh '  *) echo "$x" | grep -q p ;;'
+cm_out="$(scan_sweep "$cm")"
+cm_miss=""; cm_over=""
+for _c in ts-hash-line.ts py-slash-line.py sh-case-arm.sh; do grep -q -- "^scripts/cm-$_c:" <<<"$cm_out" || cm_miss+=" ${_c%.*}"; done
+for _c in ts-slash-comment.ts ts-jsdoc-star.ts ts-block-comment.ts py-hash-comment.py; do if grep -q -- "^scripts/cm-$_c:" <<<"$cm_out"; then cm_over+=" ${_c%.*}"; fi; done
+[[ -z "$cm_miss" && -z "$cm_over" ]] \
+  || sweep_probe_fail+=("comment-filter: code lines the filter dropped:${cm_miss:- none}; comment lines it kept:${cm_over:- none} (a # line is code in a .ts file, a // line is code in a .py file, a * case arm is code in a .sh file)")
+
+# The marker pin: every marked line outside knowledge-base (the guard excluded) is pinned per file. The derivation goes through sweep_git_grep, so its
+# population is exactly the swept files. A new marker needs the reason in the PR body and one line here.
+SWEEP_MARKER_PIN=$'.claude/hooks/iac-plan-write-guard.test.sh:1\napps/web-platform/infra/cron-egress-self-heal.test.sh:3\napps/web-platform/infra/registry-luks-launch-gate.test.sh:1\napps/web-platform/infra/registry-luks.test.sh:2\napps/web-platform/infra/scripts/sigpipe-triage-feasibility.sh:3\napps/web-platform/infra/supabase-advisor/scan-workflow-mutation.test.sh:4\napps/web-platform/infra/workspaces-luks-freeze.test.sh:2\napps/web-platform/infra/workspaces-luks-verify-root-mtime.test.sh:1\napps/web-platform/test/infra/ghcr-blocked-alert.test.sh:1\nplugins/soleur/test/worktree-manager-porcelain-sigpipe.test.sh:1\ntests/scripts/test-git-data-birth-readiness-gate.sh:4\ntests/scripts/test-sentry-full-root-apply.sh:2'
+mp_rc=0; mp_raw="$(sweep_git_grep . -cE -e "$ALLOW_MARKER")" || mp_rc=$?
+mp_now="$(LC_ALL=C sort <<<"$mp_raw")"
+[[ "$mp_rc" -le 1 && "$mp_now" == "$SWEEP_MARKER_PIN" ]] \
+  || sweep_probe_fail+=("marker-pin: the marked lines outside knowledge-base are [${mp_now//$'\n'/ }] (git grep rc ${mp_rc:-<err>}), the pinned block is [${SWEEP_MARKER_PIN//$'\n'/ }] — a new marker needs its reason in the PR body and one line in SWEEP_MARKER_PIN; the recomputed block is the first list")
+
+# Self-sweep (G3-10): the real run read the repository, including this change's own spec dir; a fixture or a reader shape written as text in a script
+# there would be a hit. Zero undeferred hits under the specs tree, by name, so the failure says where the shape came from.
+sd_hits=$(grep -c '^knowledge-base/project/specs/[^:]*:[0-9]*:' <<<"${SWEEP_LAST_SCAN:-}" || true)
+[[ "${sd_hits:-<err>}" == 0 ]] \
+  || sweep_probe_fail+=("spec-dir-zero: the real sweep reported ${sd_hits:-<err>} lines under knowledge-base/project/specs/ — keep fixtures in .txt data files and build mutants with printf, never as literal reader shapes in a script there")
+
 # What a line regex deliberately does NOT match (documented residuals) and the one known false positive, pinned as literal counts so a
 # widening or a regression shows up as a changed number and a header edit rather than as silent drift.
 cat > "$probe/residual-v2.sh" <<'EOF'
@@ -1079,8 +1325,8 @@ fp_hits=$(grep -cE -- "$PATTERN_V2" "$probe/fp-v2.sh" || true)
 # files below covers every ignore rule, and these cover a pathspec exclusion) is named here and must appear in the sweep's own population (the same
 # listing scan_sweep derives, through the same sweep_git_grep, over the real tree). Pick long-lived suites of load-bearing components; if one is
 # renamed, edit this list, never the sweep. They are NOT added to SWEEP_CANARIES: that loop also runs on every scratch-root fixture above.
-SWEEP_TEST_CANARIES=('.claude/hooks/guardrails.test.sh' 'plugins/soleur/test/deploy-arm.test.sh' 'plugins/soleur/scripts/emit-decision.test.sh' 'plugins/soleur/skills/community/test/community-argv.test.sh' 'apps/web-platform/infra/ci-deploy.test.sh' 'apps/web-platform/scripts/anthropic-key-distinctness.test.sh' 'apps/web-platform/test/infra/betterstack-send-failed-alert.test.sh' 'apps/cla-evidence/scripts/inspect.test.sh' 'scripts/actions-queue-health.test.sh')
-SWEEP_TEST_CANARY_COUNT=9   # pinned beside the array: a canary deleted from the array alone must not pass
+SWEEP_TEST_CANARIES=('.claude/hooks/guardrails.test.sh' 'plugins/soleur/test/deploy-arm.test.sh' 'plugins/soleur/scripts/emit-decision.test.sh' 'plugins/soleur/skills/community/test/community-argv.test.sh' 'apps/web-platform/infra/ci-deploy.test.sh' 'apps/web-platform/scripts/anthropic-key-distinctness.test.sh' 'apps/web-platform/test/infra/betterstack-send-failed-alert.test.sh' 'apps/cla-evidence/scripts/inspect.test.sh' 'scripts/actions-queue-health.test.sh' 'apps/web-platform/test/scripts/run-migrations-unmerged-gate.test.ts')
+SWEEP_TEST_CANARY_COUNT=10   # pinned beside the array: a canary deleted from the array alone must not pass
 tc_rc=0
 tc_files="$(sweep_git_grep . -al -e '')" || tc_rc=$?
 if (( tc_rc > 1 )); then
