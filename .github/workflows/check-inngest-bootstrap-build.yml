@@ -32,10 +32,22 @@ on:
 permissions:
   contents: read
 
+# Superseded head SHAs cancel per ref (the rls-authz-fuzz shape): the build is a
+# few minutes of hosted-runner time and a stale-SHA green is worth nothing.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-check:
     runs-on: ubuntu-latest
+    # Above a cold `docker build` + the release-tarball download, so a hung leg
+    # fails as a JOB rather than burning the runner.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # The script only runs `git rev-parse`; nothing authenticates through git.
+          persist-credentials: false
       - name: Candidate build (no push)
         run: bash .github/scripts/check-inngest-bootstrap-build.sh

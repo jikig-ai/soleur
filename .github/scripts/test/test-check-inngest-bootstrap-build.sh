@@ -33,8 +33,18 @@ for f in "$CHECK_WF" "$CHECK_SH" "$BUILD_WF"; do
 done
 
 passes=0; fails=0
-ok()  { passes=$((passes + 1)); echo "  ok   $1"; }
-bad() { fails=$((fails + 1)); echo "  FAIL $1"; }
+ok() { passes=$((passes + 1)); echo "  ok   $1"; }
+no() { fails=$((fails + 1)); echo "  FAIL $1"; }
+
+# anti-vacuity floor = the green run's exact count (17 on 2026-10-14); raise when
+# adding rows, never lower it silently (the #7068 discipline the sibling suites carry).
+MIN_ASSERTIONS=17
+
+python3 -c 'import yaml' 2>/dev/null || pip3 install --quiet pyyaml 2>/dev/null || true
+if ! python3 -c 'import yaml' 2>/dev/null; then
+  printf 'FATAL: python3 with PyYAML is required for the P4 permissions / P5 paths rows\n'
+  exit 2
+fi
 
 # ── extraction (python; shared by every property) ───────────────────────────────────────
 PY=/tmp/$$.extract.py
@@ -92,7 +102,7 @@ CP_AUTH="$(python3 "$PY" cp "$BUILD_WF")"
 if [[ "$CP_CHECK" == "$CP_AUTH" ]]; then
   ok "P1: cp carrier sets identical ($(printf '%s\n' "$CP_CHECK" | grep -c .) carriers)"
 else
-  bad "P1: carrier drift"; comm -3 <(printf '%s\n' "$CP_CHECK") <(printf '%s\n' "$CP_AUTH") | sed 's/^/      /' >&2
+  no "P1: carrier drift"; comm -3 <(printf '%s\n' "$CP_CHECK") <(printf '%s\n' "$CP_AUTH") | sed 's/^/      /' >&2
 fi
 
 # ── P2: Dockerfile parity ───────────────────────────────────────────────────────────────
@@ -102,7 +112,7 @@ DF_AUTH="$(python3 "$PY" df "$BUILD_WF")"
 if [[ "$DF_CHECK" == "$DF_AUTH" ]]; then
   ok "P2: Dockerfile bodies identical ($(printf '%s\n' "$DF_CHECK" | grep -c .) lines)"
 else
-  bad "P2: Dockerfile body drift"; diff <(printf '%s\n' "$DF_AUTH") <(printf '%s\n' "$DF_CHECK") | sed 's/^/      /' | head -20 >&2
+  no "P2: Dockerfile body drift"; diff <(printf '%s\n' "$DF_AUTH") <(printf '%s\n' "$DF_CHECK") | sed 's/^/      /' | head -20 >&2
 fi
 
 # ── P3: sha256-verify parity ────────────────────────────────────────────────────────────
@@ -112,7 +122,7 @@ SHA_AUTH="$(python3 "$PY" sha "$BUILD_WF")"
 if [[ "$SHA_CHECK" == "$SHA_AUTH" ]]; then
   ok "P3: sha256 download+verify block identical"
 else
-  bad "P3: sha256-verify block drift"; printf '      AUTH: %s\n      CHECK: %s\n' "$SHA_AUTH" "$SHA_CHECK" >&2
+  no "P3: sha256-verify block drift"; printf '      AUTH: %s\n      CHECK: %s\n' "$SHA_AUTH" "$SHA_CHECK" >&2
 fi
 
 # ── P3b: pin-grep parity ────────────────────────────────────────────────────────────────
@@ -121,7 +131,7 @@ PIN_AUTH="$(python3 "$PY" pins "$BUILD_WF")"
 if [[ "$PIN_CHECK" == "$PIN_AUTH" ]]; then
   ok "P3b: tf pin greps identical ($(printf '%s\n' "$PIN_CHECK" | grep -c .) sites)"
 else
-  bad "P3b: pin grep drift"; diff <(printf '%s\n' "$PIN_AUTH") <(printf '%s\n' "$PIN_CHECK") | sed 's/^/      /' | head -20 >&2
+  no "P3b: pin grep drift"; diff <(printf '%s\n' "$PIN_AUTH") <(printf '%s\n' "$PIN_CHECK") | sed 's/^/      /' | head -20 >&2
 fi
 
 # ── P4: no-publish ──────────────────────────────────────────────────────────────────────
@@ -132,7 +142,7 @@ CHECK_WF_CODE="$(grep -vE '^[[:space:]]*#' "$CHECK_WF" || true)"
 CHECK_SH_CODE="$(grep -vE '^[[:space:]]*#' "$CHECK_SH" || true)"
 for tok in 'docker push' 'cosign' 'crane' 'id-token' 'packages:' 'environment:' 'docker login' 'login-action'; do
   if printf '%s' "$CHECK_WF_CODE" | grep -qF "$tok" || printf '%s' "$CHECK_SH_CODE" | grep -qF "$tok"; then
-    bad "P4: forbidden token '$tok' present in a code line of the check lane"
+    no "P4: forbidden token '$tok' present in a code line of the check lane"
   else
     ok "P4: no '$tok' token in code"
   fi
@@ -142,7 +152,7 @@ DOCKER_SUBS="$(printf '%s\n' "$CHECK_SH_CODE" | grep -oE '\bdocker [a-z-]+' | so
 if [[ "$DOCKER_SUBS" == "docker build" ]]; then
   ok "P4: the script's only docker subcommand is 'build'"
 else
-  bad "P4: unexpected docker subcommand(s): $DOCKER_SUBS"
+  no "P4: unexpected docker subcommand(s): $DOCKER_SUBS"
 fi
 # permissions: contents: read, and nothing more.
 perm_line="$(python3 - "$CHECK_WF" <<'PYEOF'
@@ -151,7 +161,7 @@ doc = yaml.safe_load(open(sys.argv[1]))
 print("PERMS_OK" if doc.get("permissions") == {"contents": "read"} else "PERMS_BAD")
 PYEOF
 )"
-[[ "$perm_line" == "PERMS_OK" ]] && ok "P4: permissions == contents:read only" || bad "P4: permissions not contents:read-only"
+[[ "$perm_line" == "PERMS_OK" ]] && ok "P4: permissions == contents:read only" || no "P4: permissions not contents:read-only"
 
 # ── P5: paths cover every cp carrier ────────────────────────────────────────────────────
 PATHS="$(python3 - "$CHECK_WF" <<'PYEOF'
@@ -169,15 +179,21 @@ while IFS= read -r src; do
   while IFS= read -r g; do
     case "$src" in $g) hit=1 ;; esac
   done <<< "$PATHS"
-  [ "$hit" -eq 1 ] || { uncovered=1; bad "P5: carrier $src is not covered by on.pull_request.paths"; }
+  [ "$hit" -eq 1 ] || { uncovered=1; no "P5: carrier $src is not covered by on.pull_request.paths"; }
 done <<< "$CP_CHECK"
 [ "$uncovered" -eq 0 ] && ok "P5: every cp carrier is covered by the paths filter"
 # and the lane's own definition files are covered (a lane edit must re-run the lane).
 for req in '.github/workflows/check-inngest-bootstrap-build.yml' '.github/scripts/check-inngest-bootstrap-build.sh'; do
   printf '%s\n' "$PATHS" | grep -qxF "$req" \
     && ok "P5: paths filter lists $req" \
-    || bad "P5: paths filter does not list $req (lane edits would not re-run the lane)"
+    || no "P5: paths filter does not list $req (lane edits would not re-run the lane)"
 done
 
-echo "test-check-inngest-bootstrap-build.sh: ${passes} passed, ${fails} failed"
+TOTAL=$((passes + fails))
+if [ "$TOTAL" -lt "$MIN_ASSERTIONS" ]; then
+  printf 'FAIL [anti-vacuity]: only %s assertions ran (floor %s) — a green run here would be vacuous\n' "$TOTAL" "$MIN_ASSERTIONS"
+  exit 1
+fi
+
+echo "test-check-inngest-bootstrap-build.sh: ${passes} passed, ${fails} failed (floor $MIN_ASSERTIONS)"
 [ "$fails" -eq 0 ] || exit 1
