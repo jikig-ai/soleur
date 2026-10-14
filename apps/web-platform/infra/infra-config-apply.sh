@@ -16,6 +16,12 @@
 # path (operator IP is in admin_ips). All subsequent applies use webhook.
 set -euo pipefail
 
+# #7797 — this script carries credential payloads (the *_B64 token-file rows of
+# FILE_MAP); under `bash -x` every write would trace the blob to journald.
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it\n' >&2; exit 78 ;;
+esac
+
 readonly LOG_TAG="infra-config-apply"
 
 # --- No-SSH fatal-error channel (#7220) -----------------------------------------------------
