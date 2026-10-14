@@ -39,7 +39,7 @@ import { mintFounderJwt } from "@/lib/supabase/tenant";
 import { isTemplateAuthorized } from "@/server/templates/is-template-authorized";
 import {
   hasUndeletableActionSendsAnchor,
-  tearDownTenantUser,
+  tearDownTenantUsers,
 } from "@/test/helpers/tenant-isolation-teardown";
 
 const INTEGRATION_ENABLED = process.env.TENANT_INTEGRATION_TEST === "1";
@@ -181,19 +181,13 @@ describe.skipIf(!INTEGRATION_ENABLED)(
     // leak. 60_000: ~24 sequential round-trips × 2 users under
     // withGoTrueRetry.
     afterAll(async () => {
-      for (const u of [userA, userB]) {
-        if (!u.id) continue;
-        assertSynthetic(u.email);
-        try {
-          await tearDownTenantUser(service, u);
-        } catch (err) {
+      await tearDownTenantUsers(service, [userA, userB], {
+        tolerate: async (_err, u) =>
           // #10254: a user who ever had an action_sends row is undeletable
           // (anonymised WORM row anchors its message). Tolerate ONLY that
           // verified defect — any other teardown failure stays loud.
-          if (!(await hasUndeletableActionSendsAnchor(service, u.id)))
-            throw err;
-        }
-      }
+          !!u.id && (await hasUndeletableActionSendsAnchor(service, u.id)),
+      });
     }, 60_000);
 
     // --- Carve-out (#4709) seed helpers ---------------------------------
