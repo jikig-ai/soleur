@@ -447,12 +447,13 @@ if grep -cF 'created=%3E2026-10-10T00:00:00Z' "$TMP/c1/requests.log" >/dev/null 
    && grep -cF '/jobs?per_page=100&filter=latest' "$TMP/c1/requests.log" >/dev/null \
    && grep -cF 'issues?labels=follow-through&state=open&per_page=100' "$TMP/c1/requests.log" >/dev/null; then pass "the queries carry their documented parameters (push window, merge_group bound, jobs filter, open tracker)"
 else fail "the queries lost their parameters: $(head -6 "$TMP/c1/requests.log" | tr '\n' '|')"; fi
-# the trust read: ONE `issue view` of the tracker, and one permission request per distinct human author (c1 has three: noted by the
-# owner, the activation by priv-op, the census by a member), each shaped repos/<repo>/collaborators/<login>/permission
+# the trust read: ONE `issue view` of the tracker, and one permission request per distinct CANDIDATE author (c1 has three authors but the
+# owner's "noted" has no marker line, so the lib never looks it up: the activation by priv-op and the census by a member are the two),
+# each shaped repos/<repo>/collaborators/<login>/permission
 _n_iv="$(grep -cxF 'issue view 4242 --repo jikig-ai/soleur --json comments' "$TMP/c1/requests.log")"
 _n_pm="$(grep -cE '^repos/jikig-ai/soleur/collaborators/[a-z-]+/permission$' "$TMP/c1/requests.log")"
 _n_pu="$(grep -E '^repos/jikig-ai/soleur/collaborators/[a-z-]+/permission$' "$TMP/c1/requests.log" | sort -u | wc -l)"
-if [ "$_n_iv" = 1 ] && [ "$_n_pm" = 3 ] && [ "$_n_pu" = 3 ] && ! grep -q 'issues/4242/comments' "$TMP/c1/requests.log"; then
+if [ "$_n_iv" = 1 ] && [ "$_n_pm" = 2 ] && [ "$_n_pu" = 2 ] && ! grep -q 'issues/4242/comments' "$TMP/c1/requests.log"; then
   pass "the probe reads the tracker through ONE issue view and resolves each distinct author once (no REST comments read)"
 else fail "trust-read request shape: issue-view=$_n_iv permission=$_n_pm distinct=$_n_pu legacy=$(grep -c 'issues/4242/comments' "$TMP/c1/requests.log")"; fi
 

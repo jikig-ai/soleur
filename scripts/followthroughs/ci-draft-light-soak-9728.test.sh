@@ -319,7 +319,7 @@ build_fx() {
     untrusted)   addc cm NONE "$conf_at" "S3-CONFIRMED: https://github.com/jikig-ai/soleur/pull/9876#issuecomment-1" ;;
     placeholder) addc cm OWNER "$conf_at" "S3-CONFIRMED: <url or quoted statement>" ;;
     bare)        addc cm OWNER "$conf_at" "S3-CONFIRMED: ok" ;;
-    mid)         addc cm OWNER "$conf_at" "I will post S3-CONFIRMED: https://github.com/jikig-ai/soleur/pull/9876" ;;
+    mid)         addc cm OWNER "$conf_at" "I will post S3-CONFIRMED: https://github.com/jikig-ai/soleur/pull/9876"$'\nS3-NOTE: draft' ;;   # the second line makes the comment a lib CANDIDATE (the lib drops a comment with no line-start marker before the probe sees it), so the probe's own ^ anchor stays the thing under test
   esac
   (( conf2 )) && addc cm OWNER $((first_on_epoch + 7200)) "S3-CONFIRMED: https://github.com/jikig-ai/soleur/pull/9876#issuecomment-9"
   case "$marker" in
@@ -328,7 +328,7 @@ build_fx() {
     foreign)     addc cm OWNER $((NOW_EPOCH - 3600)) "S3-EXIT-CENSUS: https://example.com/x/y" ;;
     contrib)     addc cm CONTRIBUTOR $((NOW_EPOCH - 3600)) "S3-EXIT-CENSUS: https://github.com/x/y" ;;
     collab)      addc cm COLLABORATOR $((NOW_EPOCH - 3600)) "S3-EXIT-CENSUS: https://github.com/x/y" ;;
-    mid)         addc cm OWNER $((NOW_EPOCH - 3600)) "we will post an S3-EXIT-CENSUS: https://github.com/x/y" ;;
+    mid)         addc cm OWNER $((NOW_EPOCH - 3600)) "we will post an S3-EXIT-CENSUS: https://github.com/x/y"$'\nS3-NOTE: draft' ;;   # candidate line: see the confirmed=mid fixture
     untrusted)   addc cm NONE $((NOW_EPOCH - 3600)) "S3-EXIT-CENSUS: https://github.com/x/y" ;;
     nonurl)      addc cm OWNER $((NOW_EPOCH - 3600)) "S3-EXIT-CENSUS: see-my-notes" ;;
     placeholder) addc cm OWNER $((NOW_EPOCH - 3600)) "S3-EXIT-CENSUS: <url>" ;;
@@ -579,8 +579,8 @@ r_shapes() {
      && grep -cF 'event=pull_request&head_sha=H801&per_page=1' "$TMP/z2/requests.log" >/dev/null \
      && [ "$(grep -c '^graphql ' "$TMP/z2/requests.log")" -eq 19 ] \
      && [ "$(grep -cxF 'issue view 9728 --repo jikig-ai/soleur --json comments' "$TMP/z2/requests.log")" -eq 1 ] \
-     && [ "$(grep -cE '^repos/jikig-ai/soleur/collaborators/[a-z-]+/permission$' "$TMP/z2/requests.log")" -eq 3 ] \
-     && [ "$(grep -E '^repos/jikig-ai/soleur/collaborators/[a-z-]+/permission$' "$TMP/z2/requests.log" | sort -u | wc -l)" -eq 3 ] \
+     && [ "$(grep -cE '^repos/jikig-ai/soleur/collaborators/[a-z-]+/permission$' "$TMP/z2/requests.log")" -eq 2 ] \
+     && [ "$(grep -E '^repos/jikig-ai/soleur/collaborators/[a-z-]+/permission$' "$TMP/z2/requests.log" | sort -u | wc -l)" -eq 2 ] \
      && ! grep -q 'issues/9728/comments' "$TMP/z2/requests.log"; then
     pass "the queries carry their documented parameters (merge window, activation-anchored merge_group, jobs filter, head_sha lookup, one join per distinct head, ONE tracker issue view and one permission request per distinct author)"
   else fail "the queries lost their parameters: $(head -8 "$TMP/z2/requests.log" | tr '\n' '|') graphql=$(grep -c '^graphql ' "$TMP/z2/requests.log")"; fi
