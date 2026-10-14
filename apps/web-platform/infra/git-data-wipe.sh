@@ -468,6 +468,11 @@ do_actions() {
   jget '.actions | must(type=="array") | must(all(.[]; type=="object" and (.id|uint) and (.command|type=="string") and (.status|type=="string"))) | length' || refuse wipe_actions_unreadable reason=shape
   [[ "$JV" =~ ^[0-9]{1,6}$ ]] || refuse wipe_actions_unreadable reason=shape
   count="$JV"
+  # A page that is not the whole history can hide an attach on the next page. The answer is truncated when the
+  # pagination block names a next page or counts more entries than this page holds; a body with no pagination
+  # block at all is read as complete (the API always sends one, and the fixtures that omit it test other shapes).
+  jget '.meta.pagination as $p | if ($p | type) == "object" and (($p.next_page // null) != null or (($p.total_entries | type) == "number" and $p.total_entries > ($n | tonumber))) then "more" else "whole" end' --arg n "$count" || refuse wipe_actions_unreadable reason=shape
+  [[ "$JV" == whole ]] || refuse wipe_actions_unreadable reason=truncated
   jget '.actions | sort_by(-.id) | (.[0].command // "none") | if . == "none" or . == "attach_volume" or . == "detach_volume" or . == "create_volume" or . == "resize_volume" or . == "change_protection" then . else "other" end' || refuse wipe_actions_unreadable reason=shape
   latest="$JV"
   gho actions_count "$count"

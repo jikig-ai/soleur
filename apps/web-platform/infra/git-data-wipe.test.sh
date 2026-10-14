@@ -641,6 +641,12 @@ reset_world; printf '{"actions":{"id":1}}' > "$CUR/actions.json"; run_helper "$R
 refused wipe_actions_unreadable && pass "G14 actions is not an array: wipe_actions_unreadable" || fail "G14"
 reset_world; printf '{"actions":[{"id":"x","command":"detach_volume","status":"success"}]}' > "$CUR/actions.json"; run_helper "$RO_TOK" actions --volume-id $PT
 refused wipe_actions_unreadable && pass "G15 an action with a string id is unreadable" || fail "G15"
+reset_world; printf '{"actions":[{"id":9,"command":"detach_volume","status":"success","started":"2026-10-14T10:00:00Z"}],"meta":{"pagination":{"page":1,"per_page":50,"next_page":2,"total_entries":120}}}' > "$CUR/actions.json"; run_helper "$RO_TOK" actions --volume-id $PT --since "$A0"
+refused wipe_actions_unreadable && pass "G14b a history with a next page is truncated: refused (an attach on page 2 stays hidden otherwise)" || fail "G14b"
+reset_world; printf '{"actions":[{"id":9,"command":"detach_volume","status":"success","started":"2026-10-14T10:00:00Z"}],"meta":{"pagination":{"page":1,"per_page":50,"next_page":null,"total_entries":51}}}' > "$CUR/actions.json"; run_helper "$RO_TOK" actions --volume-id $PT
+refused wipe_actions_unreadable && pass "G14c total_entries above the page's count is truncated even with next_page null" || fail "G14c"
+reset_world; printf '{"actions":[{"id":9,"command":"detach_volume","status":"success","started":"2026-10-14T10:00:00Z"}],"meta":{"pagination":{"page":1,"per_page":50,"next_page":null,"total_entries":1}}}' > "$CUR/actions.json"; run_helper "$RO_TOK" actions --volume-id $PT
+[[ "$RC" == 0 ]] && pass "G14d a whole one-page history (next_page null, total_entries equals the count) is read normally" || fail "G14d rc=$RC"
 reset_world; fault GET '/actions' 500 '-'; run_helper "$RO_TOK" actions --volume-id $PT
 refused wipe_actions_unreadable && pass "G16 the history read fails: wipe_actions_unreadable" || fail "G16"
 reset_world; printf '' > "$CUR/actions.json"; run_helper "$RO_TOK" actions --volume-id $PT
@@ -950,5 +956,5 @@ if [ "$fails" -gt 0 ]; then
   printf 'FAILED:\n'; printf '  - %s\n' "${FAILURES[@]}"
   exit 1
 fi
-[ "$passes" -ge 294 ] || { printf 'FAIL: only %d rows executed (floor 294)\n' "$passes"; exit 1; }
+[ "$passes" -ge 297 ] || { printf 'FAIL: only %d rows executed (floor 297)\n' "$passes"; exit 1; }
 exit 0
