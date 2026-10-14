@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1000
-# generated-at=2026-10-12T08:43:17Z
+# generated-at=2026-10-14T19:10:03Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --group infra --incremental --write   # suite added/removed; --group infra --runs 5 --write rebalances
 # runner: apps/web-platform/infra/run-registered-suites.sh manifest/hashing assignment (untabled labels hash-fallback)
@@ -36,6 +36,7 @@ apps/web-platform/infra/cron-egress-nftables.test.sh	4
 apps/web-platform/infra/cron-egress-self-heal.test.sh	1
 apps/web-platform/infra/cutover-inngest-workflow.test.sh	3
 apps/web-platform/infra/disk-monitor.test.sh	3
+apps/web-platform/infra/docker-run-tuple.test.sh	3
 apps/web-platform/infra/doppler-download-error-channel.test.sh	2
 apps/web-platform/infra/doppler-injection-bound.test.sh	4
 apps/web-platform/infra/egress-gateway.test.sh	2
@@ -63,7 +64,10 @@ apps/web-platform/infra/git-data-rung2-rehearsal.test.sh	4
 apps/web-platform/infra/git-data-store-device-census.test.sh	1
 apps/web-platform/infra/git-data-template-strip.test.sh	2
 apps/web-platform/infra/git-data-transport-wrapper.test.sh	3
+apps/web-platform/infra/git-data-wipe-assert.test.sh	3
+apps/web-platform/infra/git-data-wipe.test.sh	3
 apps/web-platform/infra/git-lock-chardevice-sweep.test.sh	4
+apps/web-platform/infra/htpasswd-stdin.test.sh	2
 apps/web-platform/infra/infra-config-apply.test.sh	3
 apps/web-platform/infra/infra-config-gate.test.sh	2
 apps/web-platform/infra/infra-config-handler-bootstrap.test.sh	1

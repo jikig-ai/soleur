@@ -298,6 +298,11 @@ ALWAYS_ON_SUITES=(
   # the runner's own wiring (default arm, epilogue emit), a runner-SUT property
   # suite like its sibling above.
   "scripts/test-all-weight-drift"
+  # #10138: the git-data wipe wedge test censuses EVERY tracked workflow (git ls-files .github/workflows) for the
+  # ones that run `terraform plan|apply` in the web-platform root, so a workflow added or edited anywhere can open the
+  # wedge. Its edge array below also declares the workflow directory; both are listed so the suite selects on any
+  # workflow diff and on a registration-only runner diff alike.
+  "tests/scripts/git-data-wipe-wedge"
   # --- #9763 withdrawn-to-edge-selection (committed weight >10s): these run on CI legs,
   # merge_group, push and --full like every registered suite, and locally only when their
   # subject paths change (edge-selected like any non-always-on suite, ADR-262 shape). The
@@ -894,6 +899,17 @@ AFFECTED_TESTS_SCRIPTS_GIT_DATA_RUNG2_EVIDENCE_CAPTURE_PATHS=(
   "scripts/compound-promote.test.sh"
   "scripts/lib/test-affected-paths.sh"
   "tests/scripts/test-git-data-rung2-evidence-capture.sh"
+)
+
+# tests/scripts/git-data-wipe-wedge — derived edges could not reach its subject; the population is DERIVED at run time
+# (git ls-files .github/workflows filtered to the workflows that plan or apply the web-platform root, plus the root's HCL
+# for the -target dependency closure and the gate libraries those workflows source).
+AFFECTED_TESTS_SCRIPTS_GIT_DATA_WIPE_WEDGE_PATHS=(
+  ".github/workflows/"
+  "glob:apps/web-platform/infra/*.tf"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/lib/"
+  "tests/scripts/test-git-data-wipe-wedge.sh"
 )
 
 # tests/scripts/eu-location-allowset-parity — derived edges could not reach its subject; declared from the

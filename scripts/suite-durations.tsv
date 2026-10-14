@@ -385,6 +385,7 @@ scripts/learning-retrieval-bench	922	measured
 scripts/lib/bearer-curl.test.sh	3576	measured
 scripts/lib/frontmatter-strip.test.sh	197	measured
 scripts/lib/git-data-rotate-stamp.test.sh	1177	floor
+scripts/lib/git-data-wipe-runs.test.sh	1180	floor
 scripts/lib/incidents-roots.test.sh	177	measured
 scripts/lib/inngest-probe-row.test.sh	11441	measured
 scripts/lib/legal-base-ref.test.sh	324	measured
@@ -558,6 +559,7 @@ tests/scripts/git-data-root-key-arm	5960	measured
 tests/scripts/git-data-root-token-census	22452	measured
 tests/scripts/git-data-rung2-evidence-capture	14744	measured
 tests/scripts/git-data-rung2-plan-shape	884	measured
+tests/scripts/git-data-wipe-wedge	1180	floor
 tests/scripts/host-image-coherence-preflight	47	measured
 tests/scripts/infra-privileged-tier-census	16830	measured
 tests/scripts/inngest-host-dark-gate	16167	measured
