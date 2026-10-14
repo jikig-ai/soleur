@@ -451,7 +451,7 @@
     "tls": "https (Supabase REST) / TLS 1.2+",
     "cert_verification": "on",
     "does_not_defend": "a leaked anon/service key; TLS protects the channel, not the credential",
-    "disclosed_as": "docs/legal/data-protection-disclosure.md:TLS for data in transit"
+    "disclosed_as": "not-publicly-claimed"
    }
   },
   {
