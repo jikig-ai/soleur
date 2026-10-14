@@ -551,7 +551,7 @@ h_html() { # M-HTML HTML comments: invisible when rendered, live to a grep, so a
   fsm_case "a marker before an opener on the same line IS counted" "$M<!-- tail -->" "$M"
   fsm_case "text between two comments on one line is kept, joined" 'a<!-- x -->b<!-- y -->c' 'abc'
   fsm_case "an unclosed <!-- strips to the end of the body (fewer markers, never a hidden one counted)" $'before\n<!--\n'"$M" 'before'
-  fsm_case "an unclosed <!-- mid-line strips the rest of that line and every line after" $'before <!-- x\n'"$M" 'before '
+  fsm_case "an unclosed <!-- mid-line strips the rest of that line and every line after (the space before the comment is trimmed: a renderer shows none)" $'before <!-- x\n'"$M" 'before'
   fsm_case "inside a fenced block <!-- is just text: it opens no comment (the marker after the fence counts)" $'```\n<!--\n```\n'"$M" "$M"
   fsm_case "inside an HTML comment a fence-looking line opens no fence (the marker after the comment counts)" $'<!--\n```\n-->\n'"$M" "$M"
   fsm_case "text after the closing --> on the closing line is kept" $'<!--\nhidden\n-->'"$M" "$M"
@@ -559,7 +559,20 @@ h_html() { # M-HTML HTML comments: invisible when rendered, live to a grep, so a
   fsm_case "a comment after a closed fence is still stripped" $'```\nx\n```\n<!-- '"$M"$' -->\nafter' 'after'
   fsm_case "a blank line is preserved (only a line a comment consumed whole is dropped)" $'a\n\nb' $'a\n\nb'
   fsm_case "CRLF: a marker inside a multi-line comment is hidden, the marker after it counts" $'<!--\r\nhidden\r\n-->\r\n'"$M" $'\r\n'"$M"
-  (( FSM_OK )) && pass "M-HTML: 14 HTML-comment shapes (one-line, multi-line, text around the closer, two per line, unclosed, comment opener inside a fence, fence inside a comment, blank line, CRLF) strip as a renderer hides them"
+  # F1 (round 5): HTML5/cmark close `<!-->` and `<!--->` on the opener's own line (the `-->` overlaps the opener)
+  fsm_case "<!--> is a complete comment: the FAIL verdict on the next line is KEPT" $'<!-->\nRESULT: FAIL' 'RESULT: FAIL'
+  fsm_case "<!---> is a complete comment: the FAIL verdict on the next line is KEPT" $'<!--->\nRESULT: FAIL' 'RESULT: FAIL'
+  fsm_case "<!----> is unchanged (the marker after it is KEPT)" $'<!---->\n'"$M" "$M"
+  fsm_case "an ordinary <!-- x --> is unchanged (the marker after it is KEPT, the one inside is not)" $'<!-- x -->\n'"$M"$'\n<!-- '"$M"$' -->\nafter' $'S2-ACTIVATED: '"$T2"$'\nafter'
+  # F2 (round 5): a marker line with a trailing HTML comment is right-trimmed (a probe anchors with `$`), only when a comment was removed from that line
+  fsm_case "a marker line with a trailing HTML comment has no trailing space (the \$-anchored deactivation probe still matches)" "S2-DEACTIVATED: $T2 <!-- why -->" "S2-DEACTIVATED: $T2"
+  fsm_case "a marker line with a trailing HTML comment and tabs is right-trimmed" "S2-DEACTIVATED: $T2"$' \t<!-- why -->' "S2-DEACTIVATED: $T2"
+  fsm_case "CRLF: the trailing comment's leading space is trimmed and the CR is kept" "S2-DEACTIVATED: $T2 <!-- why -->"$'\r\nafter' "S2-DEACTIVATED: $T2"$'\r\nafter'
+  fsm_case "a line with NO comment keeps its trailing whitespace byte-for-byte" "$M"$' \t \nafter' "$M"$' \t \nafter'
+  fsm_case "a marker after the closing --> on the closing line is trimmed too (a comment was removed from that line)" $'<!--\nhidden\n-->'"S2-DEACTIVATED: $T2  " "S2-DEACTIVATED: $T2"
+  # F7d (round 5): the rest of a closing line is scrubbed again, so a second opener on it hides what follows
+  fsm_case "a second comment opened on the closing line hides the marker inside it" $'<!--\nx\n--> <!--\n'"$M"$'\n-->\nafter' 'after'
+  (( FSM_OK )) && pass "M-HTML: 24 HTML-comment shapes (one-line, multi-line, text around the closer, two per line, unclosed, comment opener inside a fence, fence inside a comment, blank line, CRLF, the <!--> and <!---> openers, trailing-comment right-trim, a second opener on a closing line) strip as a renderer hides them"
 }
 h_e4() { # M-E4 permission lookups only for authors whose (fence/HTML-stripped) text carries a marker line; every other comment is dropped without a request
   local view ok=1 M="S2-ACTIVATED: $T2"
@@ -591,6 +604,19 @@ h_e4() { # M-E4 permission lookups only for authors whose (fence/HTML-stripped) 
     fi
   done
   (( ok )) && pass "M-E4: only authors with a marker line (after the fence/HTML strip) are looked up; a non-marker drive-by whose read would 502 costs zero requests and does not wedge; a marker author whose read 502s is still rc 2; a resolved trusted author keeps every comment"
+}
+h_cand() { # M-CAND the candidate regex covers the whole marker family: a trusted author's S3-PR9: / S2-EXIT_CENSUS: / S3-EXIT-CENSUS: / S3-CONFIRMED: line comes through (a marker outside the family is dropped without an error: the CONTRACT in the lib header)
+  local ok=1 line
+  for line in "S3-PR9: $T2" "S2-EXIT_CENSUS: 3" "S3-EXIT-CENSUS: 0" "S3-CONFIRMED: $T2" "S2-ACTIVATED: $T2"; do
+    mkc "$SB/h.json" priv-op "$line" "$T2"; mkp 'priv-op\tadmin\n'
+    run_case_raw trusted_verdict_comments 9818 "$SB/h.json" "$SB/pm.tsv"
+    if (( RAW_MISS != 0 )) || [[ "$RAW_RC" != 0 ]] || ! in_out "$line"; then ok=0; fail "M-CAND: a trusted author's '$line' must come through, got rc=$RAW_RC out=[$RAW_OUT]"; fi
+  done
+  # twin: the same family member from a non-trusted author is looked up (it is a candidate) and dropped
+  mkc "$SB/h.json" lowly-op "S3-PR9: $T2" "$T2"; mkp 'lowly-op\tread\n'
+  run_case_raw trusted_verdict_comments 9818 "$SB/h.json" "$SB/pm.tsv"
+  if (( RAW_MISS != 0 )) || [[ "$RAW_RC" != 0 ]] || in_out "S3-PR9: $T2" || [[ "$(nreq perm)" != 1 ]]; then ok=0; fail "M-CAND twin: a read-permission author's S3-PR9: is a candidate (one lookup) and is dropped, got rc=$RAW_RC perm-requests=$(nreq perm) out=[$RAW_OUT]"; fi
+  (( ok )) && pass "M-CAND: S3-PR9:, S2-EXIT_CENSUS:, S3-EXIT-CENSUS:, S3-CONFIRMED: and S2-ACTIVATED: from a trusted author come through the candidate check (digits, underscore and hyphen in the tail); the read-permission twin is looked up and dropped"
 }
 h_repo() { # M-REPO a non-default repository argument is used in BOTH the permission URL and the issue read, in BOTH views; the default repo is never touched
   mkc "$SB/h.json" priv-op "S2-ACTIVATED: $T2" "$T2"; mkp 'priv-op\tadmin\n'
@@ -775,7 +801,7 @@ h_readonly() { # M-READONLY a readonly memo name is refused with a TRUTHFUL mess
   if [[ "$twin" != "sourced-rc=0" ]]; then ok=0; fail "M-READONLY twin: the same source without a readonly name must be silent and rc 0, got [$twin]"; fi
   (( ok )) && pass "M-READONLY: a readonly _TRUSTED_VERDICT_PERM is refused (rc 2) with a message that says readonly, not 'no associative arrays'; the clean twin sources silently"
 }
-LIB_ROWS=(h_h1 h_h2 h_h3 h_h4_parity h_h4_abs h_h5 h_h6 h_h7 h_h8 h_noslice h_h10 h_crlf h_h11 h_big h_recfail h_fsm h_html h_e4 h_repo h_case h_login_shape h_null_author h_underscore h_inherit h_nul h_stagefail h_rowcount h_logincount h_empty h_bodyproj h_rowextra h_stageempty h_readonly)
+LIB_ROWS=(h_h1 h_h2 h_h3 h_h4_parity h_h4_abs h_h5 h_h6 h_h7 h_h8 h_noslice h_h10 h_crlf h_h11 h_big h_recfail h_fsm h_html h_e4 h_cand h_repo h_case h_login_shape h_null_author h_underscore h_inherit h_nul h_stagefail h_rowcount h_logincount h_empty h_bodyproj h_rowextra h_stageempty h_readonly)
 for _r in "${LIB_ROWS[@]}"; do "$_r"; done
 
 # --- harness integrity: a stub that answers `admin` to EVERYONE must redden the negative rows (the rows can fail) ----------
@@ -923,20 +949,31 @@ mutant_lib m-fsm-crcloser    "h_fsm" 'rest ~ /^[ \t\r]*$/' 'rest ~ /^[ \t]*$/'
 mutant_lib m-fsm-2tick       "h_fsm" 'match(t, /^```+/)' 'match(t, /^``+/)'
 mutant_lib m-fsm-2tilde      "h_fsm" 'match(t, /^~~~+/)' 'match(t, /^~~+/)'
 mutant_lib m-fsm-tab         "h_fsm" 'match(line, /^ */)' 'match(line, /^[ \t]*/)'
-mutant_lib m-html-off          "h_html" '      out = scrub(line)' '      out = line'
+mutant_lib m-html-off          "h_html" '      out = strip_line(line, 0)' '      out = line'
 mutant_lib m-html-line-only    "h_html" '        if (q == 0) { c = 1; return out }' '        if (q == 0) { return out }'
 mutant_lib m-html-unclosed-literal "h_html" '        if (q == 0) { c = 1; return out }' '        if (q == 0) { return out "<!--" s }'
 mutant_lib m-html-drop-after   "h_html" '      return out s' '      return out'
 mutant_lib m-html-in-fence     "h_html" '        if (n > 0 && ch == fch && n >= fn && rest ~ /^[ \t\r]*$/) f = 0' '        scrub(line); if (n > 0 && ch == fch && n >= fn && rest ~ /^[ \t\r]*$/) f = 0'
 mutant_lib m-html-fence-in-comment "h_html" '      if (c) {' '      if (c && n == 0) {'
-mutant_lib m-html-drop-closing-rest "h_html" '        out = scrub(substr(line, p + 3))' '        out = ""'
+mutant_lib m-html-drop-closing-rest "h_html" '        out = strip_line(substr(line, p + 3), 1)' '        out = ""'
 mutant_lib m-html-keep-empty   "h_html" '      if (out == "" && line != "") next' '      '
 CAND_LINE='    if (( cand_rc == 0 )) && [[ -z "${seen[${author,,}]+x}" ]]; then seen[${author,,}]=1; order+=("$author"); fi'
 mutant_lib m-e4-resolve-all    "h_e4" "$CAND_LINE" '    if [[ -z "${seen[${author,,}]+x}" ]]; then seen[${author,,}]=1; order+=("$author"); fi'
 mutant_lib m-e4-no-pass3-gate  "h_e4" '    [[ -n "${seen[${author,,}]+x}" ]] || continue
 ' ''
-mutant_lib m-e4-result-only    "h_e4" "'^(RESULT|S[0-9]+-[A-Z][A-Z-]*):'" "'^RESULT:'"
-mutant_lib m-e4-marker-only    "h_e4" "'^(RESULT|S[0-9]+-[A-Z][A-Z-]*):'" "'^S[0-9]+-[A-Z][A-Z-]*:'"
+mutant_lib m-e4-result-only    "h_e4" "'^(RESULT|S[0-9]+-[A-Z][A-Z0-9_-]*):'" "'^RESULT:'"
+mutant_lib m-e4-marker-only    "h_e4" "'^(RESULT|S[0-9]+-[A-Z][A-Z0-9_-]*):'" "'^S[0-9]+-[A-Z][A-Z0-9_-]*:'"
+# round 5: the closer search starts inside the opener (F1), the trim-after-removal (F2), the closing-line re-scrub (F7d), the candidate tail (F4, F7e)
+mutant_lib m-html-open-plus4     "h_html" '        s = substr(s, p + 2)' '        s = substr(s, p + 4)'
+mutant_lib m-html-no-rtrim       "h_html" '      if (rm) out = rtrim(out)' '      if (0) out = rtrim(out)'
+mutant_lib m-html-rtrim-always   "h_html" '      if (rm) out = rtrim(out)' '      out = rtrim(out)'
+mutant_lib m-html-closing-no-trim "h_html" '      rm = trim' '      rm = 0'
+mutant_lib m-html-rtrim-no-cr    "h_html" '      if (s ~ /\r$/) {' '      if (0) {'
+mutant_lib m-html-closing-no-rescrub "h_html" '        out = strip_line(substr(line, p + 3), 1)' '        out = substr(line, p + 3)'
+CAND_RE="'^(RESULT|S[0-9]+-[A-Z][A-Z0-9_-]*):'"
+mutant_lib m-cand-tail-narrow    "h_cand" "$CAND_RE" "'^(RESULT|S[0-9]+-[A-Z][A-Z-]*):'"
+mutant_lib m-cand-tail-alpha     "h_cand" "$CAND_RE" "'^(RESULT|S[0-9]+-[A-Z][A-Z]*):'"
+mutant_lib m-cand-tail-no-hyphen "h_cand" "$CAND_RE" "'^(RESULT|S[0-9]+-[A-Z][A-Z0-9_]*):'"
 
 # --- harness controls: the mutant helper must be able to report a SURVIVOR, a CRASH, and a clean IDENTITY, or its verdicts mean nothing ----------
 CTRL_OK=0
@@ -992,7 +1029,7 @@ lib_rows_quiet "$MUT_FILE" h_h2 h_h3
 if (( MUT_LANDED == 1 && MUT_CRASHED == 1 )) && bash -n "$MUT_FILE" 2>/dev/null; then CTRL_OK=$((CTRL_OK + 1)); pass "harness control: a mutant whose runtime eval dies on a syntax error is flagged as crashed (CRASH_RE keeps that alternative)"
 else fail "harness control: the runtime syntax-error mutant was not flagged (landed=$MUT_LANDED crashed=$MUT_CRASHED)"; fi
 if (( CTRL_OK != 11 )); then fail "harness controls: $CTRL_OK of 11 held"; fi
-if (( MUT_RUN == MUT_CAUGHT && MUT_RUN >= 69 )); then pass "LIB MUTANTS: $MUT_CAUGHT of $MUT_RUN caught"; else fail "LIB MUTANTS: $MUT_CAUGHT of $MUT_RUN caught (every mutant must be caught; floor 69)"; fi
+if (( MUT_RUN == MUT_CAUGHT && MUT_RUN >= 78 )); then pass "LIB MUTANTS: $MUT_CAUGHT of $MUT_RUN caught"; else fail "LIB MUTANTS: $MUT_CAUGHT of $MUT_RUN caught (every mutant must be caught; floor 78)"; fi
 
 echo ""
 echo "passed=$PASS failed=$FAIL"
@@ -1022,7 +1059,7 @@ echo "passed=$PASS failed=$FAIL"
 #    meta-guard cannot recognise is indistinguishable from a floor that crashed.
 SELFTEST_PASSES=1
 REAL=$(( PASS - SELFTEST_PASSES ))
-MIN_ASSERTIONS=127
+MIN_ASSERTIONS=137
 if [[ "$REAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity assertion floor: only %d real assertion(s) ran (PASS=%d minus %d self-test), expected >= %d.\n' \
     "$REAL" "$PASS" "$SELFTEST_PASSES" "$MIN_ASSERTIONS" >&2

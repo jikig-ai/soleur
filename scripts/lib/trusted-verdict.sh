@@ -22,11 +22,17 @@
 # `admin` for the operator, `none` for `github-actions[bot]`, under the operator
 # token). One call per DISTINCT author (logins are case-insensitive on GitHub,
 # so the memo key is the lower-cased login), and ONLY for authors with a candidate comment: at
-# least one line that, after the fence/HTML strip, starts `RESULT:` or `S<n>-<UPPERCASE-WORD>:`
+# least one line that, after the fence/HTML strip, matches `^(RESULT|S[0-9]+-[A-Z][A-Z0-9_-]*):`
 # (a superset of every consumer's own marker pattern). Every other author is dropped with no
-# request, so a drive-by commenter whose permission read fails cannot wedge the tracker (rc 2); an
-# author who IS a candidate and whose read fails still is rc 2. This decides WHICH authors are
-# resolved and never what a resolved trusted author contributes: all of their comments come through.
+# request. A drive-by commenter who posts NO marker line is never looked up, so a failing permission
+# read for them cannot make rc 2; anyone CAN post a marker-shaped line and become a candidate, and a
+# candidate whose read fails (any non-404 error) still is rc 2: this narrows who is looked up, it does
+# not make the tracker unwedgeable. It decides WHICH authors are resolved and never what a resolved
+# trusted author contributes: all of their comments come through.
+# CONTRACT (single-sourced here; the stub template points at it): a lib-routed probe's marker grep must
+# match a line the candidate regex above also matches; a marker outside that family (lower case,
+# `watchdog:restart`, a tail character outside `[A-Z0-9_-]`) is dropped without an error, rc 0 and an
+# empty result, not as a failed read.
 # The memo lives for ONE view invocation
 # (`trusted_verdict_bodies` or `trusted_verdict_comments`): the shared core runs under
 # command substitution (`$(...)`), so its memo dies with that subshell and nothing carries
@@ -67,7 +73,9 @@
 # `gh` runs the system jq). Fenced blocks are stripped by CommonMark-style
 # rules (backtick/tilde fences, the length rule, the info-string rule) and HTML comments
 # (`<!-- -->`, one-line or multi-line; an unclosed one strips to the end of the body) in the same
-# pass; `<pre>` blocks are NOT handled. The details are on `_trusted_verdict_strip_hidden`.
+# pass; every other construct a renderer hides but a grep counts (`<pre>`, `<?...?>`, `<!DOCTYPE`, `<![CDATA[`,
+# `<script>`, `<style>`, `<textarea>`) is NOT handled, so a marker line inside one IS counted. The details are on
+# `_trusted_verdict_strip_hidden`.
 #
 # SOURCED, never executed: no top-level `exit` (a sourced `exit` terminates the
 # SOURCING parent), no `set -e`. Callers keep their own exit semantics.
@@ -182,20 +190,39 @@ _trusted_verdict_is_trusted_perm() {
 #   fail-safe direction is FEWER markers, never a hidden one counted (the cost: an unclosed `<!--`
 #   quoted in inline code hides every marker after it). The two do not mix up: inside a fence a
 #   `<!--` is fence content and opens nothing; inside a comment a fence-looking line is comment
-#   content and opens nothing (fence rules win in a fence, comment rules win in a comment).
-#   `<pre>` blocks are NOT handled. A line the comment consumed whole is dropped, not left blank.
+#   content and opens nothing (fence rules win in a fence, comment rules win in a comment). The closer is
+#   searched from INSIDE the opener (HTML5/cmark: `<!-->` and `<!--->` are complete comments, their `-->`
+#   overlaps the opener); the rest of a closing line is scrubbed again (a second opener on it hides what
+#   follows). A line the comment consumed whole is dropped, not left blank. A line from which a comment was
+#   removed is right-trimmed of spaces and tabs (a renderer shows none, and a probe anchors `$` on the marker
+#   line: `S2-DEACTIVATED: <ts> <!-- why -->` must read `S2-DEACTIVATED: <ts>`); a CR before the line end is
+#   kept. A line with no comment keeps its trailing whitespace byte-for-byte. The constructs NOT handled
+#   are listed once, in the header above.
 _trusted_verdict_strip_hidden() {
   awk '
+    function rtrim(s,   cr) {
+      cr = ""
+      if (s ~ /\r$/) { cr = "\r"; s = substr(s, 1, length(s) - 1) }
+      sub(/[ \t]+$/, "", s)
+      return s cr
+    }
     function scrub(s,   out, p, q) {
       out = ""
       while ((p = index(s, "<!--")) > 0) {
+        rm = 1
         out = out substr(s, 1, p - 1)
-        s = substr(s, p + 4)
+        s = substr(s, p + 2)
         q = index(s, "-->")
         if (q == 0) { c = 1; return out }
         s = substr(s, q + 3)
       }
       return out s
+    }
+    function strip_line(s, trim,   out) {
+      rm = trim
+      out = scrub(s)
+      if (rm) out = rtrim(out)
+      return out
     }
     {
       line = $0; ind = 0
@@ -210,7 +237,7 @@ _trusted_verdict_strip_hidden() {
         p = index(line, "-->")
         if (p == 0) next
         c = 0
-        out = scrub(substr(line, p + 3))
+        out = strip_line(substr(line, p + 3), 1)
         if (out != "") print out
         next
       }
@@ -219,7 +246,7 @@ _trusted_verdict_strip_hidden() {
         next
       }
       if (n > 0) { f = 1; fch = ch; fn = n; next }
-      out = scrub(line)
+      out = strip_line(line, 0)
       if (out == "" && line != "") next
       print out
     }'
@@ -302,7 +329,7 @@ _trusted_verdict_core() {
     body="$(printf '%s\n' "$body" | _trusted_verdict_strip_hidden)" || { _trusted_verdict_stage_fail strip "$issue"; return 2; }
     bodies[i]="$body"
     # grep rc 0 = a marker line, 1 = none, anything else = the grep itself failed (never read as "none")
-    grep -aqE '^(RESULT|S[0-9]+-[A-Z][A-Z-]*):' <<<"$body"; cand_rc=$?
+    grep -aqE '^(RESULT|S[0-9]+-[A-Z][A-Z0-9_-]*):' <<<"$body"; cand_rc=$?
     if (( cand_rc > 1 )); then _trusted_verdict_stage_fail candidate "$issue"; return 2; fi
     if (( cand_rc == 0 )) && [[ -z "${seen[${author,,}]+x}" ]]; then seen[${author,,}]=1; order+=("$author"); fi
   done
@@ -378,7 +405,7 @@ trusted_verdict_bodies() {
 }
 
 # trusted_verdict_comments <issue-number> [repo]
-#   stdout: one compact JSON object per trusted comment, oldest-first: {"t": <createdAt>, "b": <body, fences stripped>}.
+#   stdout: one compact JSON object per trusted comment, oldest-first: {"t": <createdAt>, "b": <body, fences and HTML comments stripped>}.
 #           Project with `jq -r '.b'` (the same text `trusted_verdict_bodies` returns) or sort on `.t`.
 #   rc 0   = the read succeeded (empty stdout = no trusted comment yet, a legitimate answer)
 #   rc 2   = TRANSIENT, causes in the header's rc 2 list; cause 4 is this view's own: `t` must be
