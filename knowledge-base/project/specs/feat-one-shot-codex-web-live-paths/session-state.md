@@ -1683,3 +1683,19 @@
   replacement documentation commit, pairing/export, description and check
   watch must bind to the new final head. All authorization and operational holds
   persist, including consumed build approval and the withdrawn command.
+
+### Exact-head draft CI settled — 2026-10-14
+
+- At `159676abfa03ab98034e54c46602e5dfcae3cb27`, required checks settled at
+  82 pass, 12 skipped and one red aggregate `test`. The aggregate log reports
+  `DRAFT_LIGHT=true`, skips `test-webplat`, `test-scripts` and
+  `test-scripts-heavy`, and says `draft: full battery owed at ready`. The head
+  verdict is `never-ready`; this is the designed draft red and does not clear
+  the full battery gate.
+- Tenant integration and all four deploy-script shards completed successfully.
+  There are no other failing or pending checks. The monitor returned its settled
+  non-pass result; no automatic or manual ready/merge action followed. The PR
+  remains draft, auto-merge off and blocked.
+- A newer docs-only commit and exact-source pairing/export/PR-body refresh are
+  still required after this record. All operation and authorization holds
+  remain in force.

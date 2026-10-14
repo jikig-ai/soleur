@@ -262,3 +262,14 @@ migration or operational bytes changed. The prior file-only export and PR body
 are now historical. Fresh exact-head pairing/export, PR description and a new
 bounded check watch remain pending. PR stays draft and disarmed; all holds
 persist.
+
+## Draft CI result at the prior exact head
+
+The watch for `159676abfa03ab98034e54c46602e5dfcae3cb27` settled at 82 passing,
+12 skipped and one red aggregate `test`. Its completed log records
+`DRAFT_LIGHT=true`, all three heavy test legs skipped and `draft: full battery
+owed at ready`. The separate head resolver says `never-ready`; this is the
+intended draft gate, not full-suite evidence. Tenant integration and all four
+deploy-script shards passed. The newer documentation record requires fresh
+head-bound pairing/export, PR description and CI watch. No ready or merge action
+was taken.

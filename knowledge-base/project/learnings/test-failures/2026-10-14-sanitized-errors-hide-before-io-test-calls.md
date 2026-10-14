@@ -139,3 +139,10 @@ The first follow-up sync invocation guessed `scripts/lib/sync-pr-behind.sh`, a
 path that does not exist in this checkout. It made no changes. `rg --files`
 located the canonical script at `plugins/soleur/scripts/sync-pr-behind.sh`; use
 discovery before copying a path from another workflow layout.
+
+A cleanup command that ended with `rm -f` was refused by command policy before
+execution. The bounded log read was repeated using Python `TemporaryFile`, which
+cleans up when its context closes. Keep local evidence handling self-cleaning
+without a shell deletion command. Two documentation patch attempts also failed
+because their context did not match the on-disk line wraps; no files changed.
+Re-read exact tails and apply one file at a time when patch context fails.
