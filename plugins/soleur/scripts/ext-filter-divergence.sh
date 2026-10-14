@@ -28,7 +28,7 @@
 # head -3 control can actually diverge.
 #
 # Output: a markdown divergence report on stdout, intended to land at
-#   knowledge-base/project/specs/feat-fcc-token-optimizations/ext-filter-divergence-report.md
+#   knowledge-base/project/specs/archive/20261014-150346-feat-fcc-token-optimizations/ext-filter-divergence-report.md
 # Usage: ext-filter-divergence.sh [--corpus <file>] [--report <file>]
 # Exit codes (the parse contract — grep the verdict PREFIX, exit 0 covers both measured
 # clean and skipped): 0 = LITERAL-CLEAN or UNMEASURED (incl. SKIPPED reason=rtk-absent);
