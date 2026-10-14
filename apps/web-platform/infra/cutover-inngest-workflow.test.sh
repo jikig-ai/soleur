@@ -7,8 +7,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-WF_YAML="$REPO_ROOT/.github/workflows/cutover-inngest.yml"
-BODY_SH="$REPO_ROOT/scripts/cutover-inngest.sh"
+# WF_YAML/BODY_SH are env-OVERRIDABLE (#6940 completeness-guard demonstration): the guard
+# below must be shown to FAIL against a stale pair, which requires pointing it at fixture
+# files without editing the suite.
+WF_YAML="${WF_YAML:-$REPO_ROOT/.github/workflows/cutover-inngest.yml}"
+BODY_SH="${BODY_SH:-$REPO_ROOT/scripts/cutover-inngest.sh}"
 
 PASS=0
 FAIL=0
@@ -292,11 +295,26 @@ WEBHOOK_SURFACES=("$INFRA_DIR/server.tf" "$INFRA_DIR/hooks.json.tmpl" "$INFRA_DI
 FLIP_TRIO=(inngest-cutover-flip.sh inngest-cutover-flip.service inngest-cutover-flip.timer cat-inngest-cutover-state.sh inngest-server-flip-guard.sh)
 PROBES=(inngest-registry-probe.sh inngest-doublefire-probe.sh)
 assert "disjointness: >=1 OCI surface + >=1 webhook surface (min-cardinality)" "[[ '${#OCI_SURFACES[@]}' -ge 1 && '${#WEBHOOK_SURFACES[@]}' -ge 1 ]]"
-# (a) flip trio + guard PRESENT on the OCI surface union, ABSENT from every webhook surface.
+# (a) flip trio + guard PRESENT on the OCI surface union. ABSENT from every webhook
+# surface — EXCEPT refresh-set members (#6780): the signed config-bundle channel installs
+# through infra-config-install.sh's DEST_SPEC, and DEST_SPEC↔FILE_MAP↔push-payload↔
+# triggers_replace run in lockstep, so a refresh-set member is legitimately present on all
+# four webhook surfaces even though its real delivery channel is the host's pull. The
+# exemption is DERIVED from inngest-config-refresh-set.txt — a non-member flip asset on a
+# webhook surface is still the topology error this guard exists to catch.
+REFRESH_SET_BN="$(grep -vE '^[[:space:]]*(#|$)' "$INFRA_DIR/inngest-config-refresh-set.txt" | xargs -r -n1 basename | sort -u || true)"
 for asset in "${FLIP_TRIO[@]}"; do
   assert "flip asset '$asset' present on an OCI/cloud-init surface" "grep -qF '$asset' ${OCI_SURFACES[*]}"
   for wfs in "${WEBHOOK_SURFACES[@]}"; do
-    assert "flip asset '$asset' ABSENT from webhook surface $(basename "$wfs")" "! grep -qF '$asset' '$wfs'"
+    if [[ "$wfs" == */hooks.json.tmpl ]]; then
+      # the hook REGISTRY is exempt from the lockstep — a flip asset must never be a hook
+      # entry (it is a payload file, never an endpoint).
+      assert "flip asset '$asset' ABSENT from webhook surface $(basename "$wfs")" "! grep -qF '$asset' '$wfs'"
+    elif grep -qxF "$asset" <<<"$REFRESH_SET_BN"; then
+      assert "flip asset '$asset' PRESENT on webhook surface $(basename "$wfs") (#6780 refresh-set member — DEST_SPEC/FILE_MAP/payload lockstep)" "grep -qF '$asset' '$wfs'"
+    else
+      assert "flip asset '$asset' ABSENT from webhook surface $(basename "$wfs")" "! grep -qF '$asset' '$wfs'"
+    fi
   done
 done
 # (b) the two probes PRESENT on the webhook surface union, ABSENT from every OCI surface.
@@ -387,6 +405,105 @@ assert "#6919 workflow wires the optional functionIDs cost lever (CUTOVER_DOUBLE
 # them. Assert the mapping exists so the anchor branch cannot silently go dead again.
 assert "#6919 workflow maps CUTOVER_WINDOW_UNTIL into the step env (doublefire anchor not dead)" "grep -qE 'CUTOVER_WINDOW_UNTIL:\s*\\\$\{\{ vars.CUTOVER_WINDOW_UNTIL \}\}' '$WF'"
 assert "#6919 workflow maps CUTOVER_WINDOW_FROM into the step env (missed-tick auto-enum not dead)" "grep -qE 'CUTOVER_WINDOW_FROM:\s*\\\$\{\{ vars.CUTOVER_WINDOW_FROM \}\}' '$WF'"
+
+# ═══ #6940 — CUTOVER_* env COMPLETENESS GUARD + item-3 page_size plumbing pins ═══════════
+#
+# Completeness (item 2): GitHub does not export repo vars to a step unless the env: map
+# NAMES them — a CUTOVER_* knob the script reads but the workflow never maps is silently
+# dead config (the CUTOVER_CRON_PERIOD_SECONDS defect was exactly this). Guard: every
+# $CUTOVER_<NAME> dereference in the script body must resolve to EITHER a step-env mapping
+# in the workflow OR a named DEFERRED entry below (issue ref + reason) — never unaccounted.
+# The anchored grep is load-bearing: an UNANCHORED `CUTOVER_` sweep false-matches the
+# Doppler secret names INNGEST_CUTOVER_FLIP / INNGEST_CUTOVER_QUIESCE, which are written
+# by `doppler secrets set` and must NEVER become env knobs. The deferral table is the
+# honest answer to "script reads it, workflow must not map it yet" (AC-V4 not green).
+DEFERRED_CUTOVER_VARS=(
+  "CUTOVER_REGISTRY_BASELINE|#6940 item 2 — AC-V4 not green (DOUBLE-FIRE 2026-09-19); mapping arms a dormant exit 1 upstream of 2.6"
+)
+# The derivations are factored helpers so the guard AND the demonstration arms
+# below run THE SAME regexes — mutating one (e.g. dropping the lookbehind) reds
+# an arm, not just this prose. `_cw_deref_names` is the issue's specified form
+# verbatim: the lookbehind is what keeps the Doppler secret names
+# INNGEST_CUTOVER_FLIP / INNGEST_CUTOVER_QUIESCE out of the derived set, while
+# the bare-name shape still catches non-`$` uses (export/declare/`doppler
+# secrets` prose) that a `$`-anchored derivation would miss. A bare-name
+# mention in a comment derives too — reword the comment, never filter the set.
+_cw_deref_names() { grep -oP '(?<![A-Za-z0-9_])CUTOVER_[A-Z_]+' "$1" | sort -u; }
+_cw_mapped_names() { grep -oE '^[[:space:]]+CUTOVER_[A-Z_]+:' "$1" | tr -d ' :' | sort -u; }
+{
+  _cw_derefs="$(_cw_deref_names "$BODY_SH")"
+  _cw_mapped="$(_cw_mapped_names "$WF_YAML")"
+  _cw_deferred="$(printf '%s\n' "${DEFERRED_CUTOVER_VARS[@]}" | cut -d'|' -f1 | sort -u)"
+  _cw_accounted="$(printf '%s\n%s\n' "$_cw_mapped" "$_cw_deferred" | sort -u | grep -v '^$' || true)"
+  assert "#6940 guard non-vacuous: the script dereferences >=10 CUTOVER_ names" "[[ \"\$(printf '%s\n' \"\$_cw_derefs\" | grep -c .)\" -ge 10 ]]"
+  _cw_unmapped="$(LC_ALL=C comm -23 <(printf '%s\n' "$_cw_derefs") <(printf '%s\n' "$_cw_accounted"))"
+  assert "#6940 completeness: every \$CUTOVER_* deref in cutover-inngest.sh is step-env mapped or on the named DEFERRED list" "[[ -z \"\$_cw_unmapped\" ]]"
+  # Every deferred row must carry an issue ref + a reason (a bare name is not a deferral,
+  # it is a gap with decoration).
+  _cw_defer_bad="$(printf '%s\n' "${DEFERRED_CUTOVER_VARS[@]}" | grep -vcE '\|#[0-9]+ .+[a-z]' || true)"
+  assert "#6940 deferred table: every entry carries issue ref + reason" "[[ \"\$_cw_defer_bad\" -eq 0 ]]"
+  # A deferred name that quietly became mapped is a deferred-table lie (the guard would
+  # pass on the mapping while the AC-V4 precondition was never re-checked). The DEFERRED
+  # row is REMOVED when the mapping lands — pin that the table only holds still-unmapped
+  # names.
+  _cw_defer_mapped="$(LC_ALL=C comm -12 <(printf '%s\n' "$_cw_deferred") <(printf '%s\n' "$_cw_mapped"))"
+  assert "#6940 deferred table: no DEFERRED name is simultaneously mapped (drop the row when it lands)" "[[ -z \"\$_cw_defer_mapped\" ]]"
+  # AC-V4 precondition stays pinned: the baseline must remain unmapped while the gate is red.
+  assert "#6940 CUTOVER_REGISTRY_BASELINE stays UNMAPPED (AC-V4 not green — dormant exit 1 stays dormant)" "! grep -qE '^[[:space:]]+CUTOVER_REGISTRY_BASELINE:' '$WF_YAML'"
+  # The two new mappings this item shipped.
+  assert "#6940 item 2: CUTOVER_QUIESCE_PROBES mapped from vars (quiesce-probe count is no longer dead config)" "grep -qE 'CUTOVER_QUIESCE_PROBES:\s*\\\$\{\{ vars.CUTOVER_QUIESCE_PROBES \}\}' '$WF_YAML'"
+  assert "#6940 item 3: CUTOVER_PAGE_SIZE mapped from the page_size dispatch input" "grep -qE 'CUTOVER_PAGE_SIZE:\s*\\\$\{\{ inputs.page_size \}\}' '$WF_YAML'"
+  assert "#6940 item 3: the workflow declares an OPTIONAL page_size input (default empty)" "grep -qE '^\s+page_size:' '$WF_YAML' && grep -qE 'default:\s*\"\"' < <(grep -A4 -E '^\s+page_size:' '$WF_YAML')"
+  # Item 3 plumbing, the script side: normalized once (DF_PAGE_QS), spliced into all three
+  # doublefire URL sites, invalid values dropped never spliced.
+  assert "#6940 the script normalizes page_size once (DF_PAGE_QS, 1..1000, drop-on-invalid)" "grep -qF 'DF_PAGE_QS=\"&page_size=\${CUTOVER_PAGE_SIZE}\"' '$BODY_SH' && grep -qF '10#\$CUTOVER_PAGE_SIZE >= 1 && 10#\$CUTOVER_PAGE_SIZE <= 1000' '$BODY_SH'"
+  assert "#6940 all three doublefire URLs carry the page_size splice" "[[ \"\$(grep -cE 'inngest-doublefire-probe\\?from=\\\$\{[A-Z_]+\}&function_ids=\\\$\{[A-Z_]+\}\\\$\{DF_PAGE_QS\}' '$BODY_SH')\" -eq 3 ]]"
+  # Item 3 plumbing, the host side: hooks.json.tmpl passes ?page_size= through to the
+  # INNGEST_GQL_PAGE_SIZE env the probe reads, and the probe fail-closes non-1..1000.
+  assert "#6940 hooks.json.tmpl passes ?page_size → INNGEST_GQL_PAGE_SIZE on the doublefire hook" "grep -qF '\"name\": \"page_size\", \"envname\": \"INNGEST_GQL_PAGE_SIZE\"' '$REPO_ROOT/apps/web-platform/infra/hooks.json.tmpl'"
+  assert "#6940 the probe validates INNGEST_GQL_PAGE_SIZE 1..1000 before --argjson first" "grep -qF 'INNGEST_GQL_PAGE_SIZE is not a positive integer' '$REPO_ROOT/apps/web-platform/infra/inngest-doublefire-probe.sh' && grep -qF 'out of range 1..1000' '$REPO_ROOT/apps/web-platform/infra/inngest-doublefire-probe.sh'"
+}
+
+# ── Guard demonstration arms — a guard that cannot be shown to fail is decoration
+# (the vacuity class). Each synthesized fixture below runs the SAME _cw_*
+# derivations the guard runs, so each arm is also the mutation probe for one
+# Guard-2 matrix row:
+#   (a) a STALE WORKFLOW — the real YAML minus the QUIESCE_PROBES env line —
+#       leaves that name unmapped. This is the issue's "fails against a stale
+#       main" demonstration, reproduced in-suite; the WF_YAML/BODY_SH env
+#       overrides (header comment) let the same check run against any external
+#       stale pair.
+#   (b) a PHANTOM KNOB — a fixture script carrying one extra unmapped deref —
+#       is listed by the diff (mutation row 1: new unaccounted knob).
+#   (c) the DOPPLER NAMES — INNGEST_CUTOVER_FLIP / INNGEST_CUTOVER_QUIESCE in
+#       BOTH `doppler secrets`-bare and $-deref forms — must derive NOTHING
+#       (mutation row 2: unanchor the lookbehind and CUTOVER_FLIP /
+#       CUTOVER_QUIESCE appear in the derived set, reddening this arm).
+FIX_CW_STALE_WF="$(mktemp)"; SCRATCH+=("$FIX_CW_STALE_WF")
+grep -vE '^[[:space:]]+CUTOVER_QUIESCE_PROBES:' "$WF_YAML" > "$FIX_CW_STALE_WF"
+assert "#6940 demo non-vacuous: the stale-workflow fixture really dropped the CUTOVER_QUIESCE_PROBES env line" "! grep -qE '^[[:space:]]+CUTOVER_QUIESCE_PROBES:' '$FIX_CW_STALE_WF' && grep -qE '^[[:space:]]+CUTOVER_QUIESCE_PROBES:' '$WF_YAML'"
+_cw_stale_acct="$(printf '%s\n%s\n' "$(_cw_mapped_names "$FIX_CW_STALE_WF")" "$_cw_deferred" | sort -u | grep -v '^$' || true)"
+_cw_stale_missing="$(LC_ALL=C comm -23 <(_cw_deref_names "$BODY_SH") <(printf '%s\n' "$_cw_stale_acct"))"
+assert "#6940 demo (a): against the stale fixture the guard's diff lists CUTOVER_QUIESCE_PROBES unmapped" "grep -qxF 'CUTOVER_QUIESCE_PROBES' <<<\"\$_cw_stale_missing\""
+
+FIX_CW_PHANTOM_SH="$(mktemp)"; SCRATCH+=("$FIX_CW_PHANTOM_SH")
+cat "$BODY_SH" > "$FIX_CW_PHANTOM_SH"
+printf '%s\n' '' '# fixture-injected unmapped deref (mutation row 1)' 'echo "${CUTOVER_NEVER_MAPPED_KNOB:-}"' >> "$FIX_CW_PHANTOM_SH"
+_cw_phantom_missing="$(LC_ALL=C comm -23 <(_cw_deref_names "$FIX_CW_PHANTOM_SH") <(printf '%s\n' "$_cw_accounted"))"
+assert "#6940 demo (b): a new unmapped \$CUTOVER_ deref in the script body is caught (CUTOVER_NEVER_MAPPED_KNOB listed)" "grep -qxF 'CUTOVER_NEVER_MAPPED_KNOB' <<<\"\$_cw_phantom_missing\""
+
+FIX_CW_DOPPLER_SH="$(mktemp)"; SCRATCH+=("$FIX_CW_DOPPLER_SH")
+{
+  printf '%s\n' '# synthesized fixture — the Doppler secret names that must never be demanded'
+  printf '%s\n' 'doppler secrets set INNGEST_CUTOVER_FLIP armed'
+  printf '%s\n' 'doppler secrets get INNGEST_CUTOVER_QUIESCE -p soleur-inngest -c prd --plain'
+  printf '%s\n' 'echo "flag=${INNGEST_CUTOVER_FLIP:-unset}"'
+  printf '%s\n' 'echo "hosts=${CUTOVER_HOSTS}"'
+} > "$FIX_CW_DOPPLER_SH"
+_cw_doppler_set="$(_cw_deref_names "$FIX_CW_DOPPLER_SH")"
+assert "#6940 demo (c): the anchored derivation never demands an INNGEST_CUTOVER_*-derived name (lookbehind load-bearing)" "! grep -qE 'CUTOVER_(FLIP|QUIESCE)|INNGEST' <<<\"\$_cw_doppler_set\""
+assert "#6940 demo (c) non-vacuous: a real \$CUTOVER_ deref in the same fixture still derives" "grep -qxF 'CUTOVER_HOSTS' <<<\"\$_cw_doppler_set\""
+
 # INVARIANT (#6178 — RESTATED; this assertion used to require the opposite).
 #
 # It read: "doublefire_from is >= 200 days ... the TIME window is NEVER narrowed", pinned by
@@ -4333,7 +4450,7 @@ assert "#6940 a missing .functions field degrades to a named ::warning:: skip" "
 # AC-V4 precondition.
 assert "#6940 workflow maps CUTOVER_DISCOVERY_LOOKBACK_S into the step env" "grep -qE 'CUTOVER_DISCOVERY_LOOKBACK_S:[[:space:]]*\\\$\{\{ vars.CUTOVER_DISCOVERY_LOOKBACK_S \}\}' '$WF_YAML'"
 assert "#6940 item 2 deferred: CUTOVER_REGISTRY_BASELINE is NOT an env entry" "! grep -qE '^[[:space:]]+CUTOVER_REGISTRY_BASELINE:' '$WF_YAML'"
-assert "#6940 item 2 deferred: CUTOVER_QUIESCE_PROBES is NOT an env entry" "! grep -qE '^[[:space:]]+CUTOVER_QUIESCE_PROBES:' '$WF_YAML'"
+assert "#6940 item 2 mapped (was deferred 2026-10-07, mapped 2026-10-13): CUTOVER_QUIESCE_PROBES IS an env entry — it arms nothing dormant, unlike the baseline" "grep -qE '^[[:space:]]+CUTOVER_QUIESCE_PROBES:' '$WF_YAML'"
 assert "#6940 the deferral comment names the AC-V4 precondition" "grep -qF 'AC-V4' '$WF_YAML'"
 
 # Behavioural cases against the EXTRACTED helper (column 0 of $BODY_SH).
@@ -4755,7 +4872,18 @@ _DISPATCHED=$((PASS + FAIL))
 # 1090 -> 1101 (+11) at #9757 (argv-bearer sweep, held-back HMAC arms): Guard 1 of the canonical-HMAC allowance, measured on the tree: the
 #   exactly-one-canonical-line-per-arm row and the allowance-removes-exactly-two row (+2), the mutation matrix (rows 1 x2, 2, 3, 4, 5, +6) and the
 #   delete-the-filter row 3b (+1), and the two must-pass row 6 variants (+2).
-_EXACT_FLOOR=1101
+# 1101 -> 1113 (+12) at #6940: the CUTOVER_* env completeness guard (deref-set derivation,
+#   mapped-vs-DEFERRED accounting, deferred-table shape + no-mapped-duplication rows, baseline
+#   stays unmapped) and the item-3 page_size plumbing pins (QUIESCE_PROBES/PAGE_SIZE env maps,
+#   the optional input, DF_PAGE_QS normalization, the three-site splice, hooks pass-env, probe
+#   1..1000 validation).
+# 1113 -> 1118 (+5) at #6940 guard hardening: the derivation switched to the issue's anchored
+#   lookbehind form verbatim (factored into _cw_deref_names/_cw_mapped_names so fixture arms run
+#   the same regexes) plus the demonstration arms — stale-workflow fixture (a dropped mapping is
+#   listed unmapped; the 'fails against stale main' proof) + its non-vacuity row, phantom-knob
+#   fixture (a new unmapped deref is caught), the Doppler-name fixture arm and its non-vacuity
+#   row (INNGEST_CUTOVER_* never demanded; a real $CUTOVER_ deref still derives).
+_EXACT_FLOOR=1118
 if [[ "$_DISPATCHED" -lt "$_EXACT_FLOOR" ]]; then
   printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is %d — an assertion was removed or skipped.\n' "$_DISPATCHED" "$_EXACT_FLOOR" >&2
   echo ""

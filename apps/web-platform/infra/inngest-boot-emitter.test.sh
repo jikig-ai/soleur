@@ -236,7 +236,7 @@ else
   # `sentry_dsn` (#6500) is short, alphanumeric and non-hex on purpose: it must pass the emitter's
   # DSN shape check, and the redaction pattern backstop must NOT be able to catch its key, so the
   # Guard 4 cases prove the explicit enumeration rather than the backstop.
-  RENDER_EXPR="$(printf 'templatefile("%s", { inngest_volume_id="v", inngest_luks_volume_id="v2", inngest_expect_luks="false", doppler_token="d", inngest_doppler_config="prd", sdk_url="https://sdk", inngest_cli_arch="amd64", inngest_cli_sha256="s", vector_sha256="vs", doppler_arch="amd64", doppler_sha256="ds", web_host_private_ips="10.0.1.10", inngest_private_ip="10.0.1.40", betterstack_logs_token="BS_TOKEN_SENTINEL_7228", zot_registry_endpoint="10.0.1.30:5000", zot_pull_user="zu", zot_pull_token="zt", sentry_dsn="https://pubKEYx7@o1.ingest.invalid/42" })' "$CLOUD_INIT")"
+  RENDER_EXPR="$(printf 'templatefile("%s", { inngest_volume_id="v", inngest_luks_volume_id="v2", inngest_expect_luks="false", doppler_token="d", inngest_doppler_config="prd", sdk_url="https://sdk", inngest_cli_arch="amd64", inngest_cli_sha256="s", vector_sha256="vs", doppler_arch="amd64", doppler_sha256="ds", web_host_private_ips="10.0.1.10", inngest_private_ip="10.0.1.40", betterstack_logs_token="BS_TOKEN_SENTINEL_7228", zot_registry_endpoint="10.0.1.30:5000", zot_pull_user="zu", zot_pull_token="zt", sentry_dsn="https://pubKEYx7@o1.ingest.invalid/42", infra_config_install_text="fixture-installer-body", cosign_trusted_root_text="{}" })' "$CLOUD_INIT")"
   printf '%s\n' "$RENDER_EXPR" | terraform -chdir="$RENDER_DIR" console > "$RENDERED" 2>"$WORK/render.err"
 
   # KEY-SET PARITY WITH THE REAL CALL SITE (#7695). The map above is hand-kept, and the comment
@@ -279,16 +279,18 @@ else
     "[[ \$(printf '%s\\n' \"$TF_KEYS\" | grep -c .) -ge 17 ]]"
   # ...and an OVER-extraction bound, the direction the floor above is blind to. A range whose end
   # anchor stops matching runs to EOF and harvests unrelated assignments; that is not a missing
-  # key and should not be reported as one. 17 is the call site's actual key count, so this is
-  # exact in both directions when paired with the floor. 17 is the count as of #8036 1d.
+  # key and should not be reported as one. The bound is the call site's actual key count, so this
+  # is exact in both directions when paired with the floor.
 # (16 -> 17: #6894 added
   # `inngest_luks_volume_id`, the additive volume's id the two-device resolver needs, and this
   # suite's map was not updated in the same commit — so the over-read guard fired on a real key.)
   # 17 -> 18: #9175 threads `inngest_doppler_config` (the Doppler config name, parameterized for
   # the provision-rehearsal root) — the floor above stays 17 because that is the minimum the
   # non-vacuity contract was written against; the over-read bound tracks the real count exactly.
+  # 18 -> 20: #6780 threads `infra_config_install_text` + `cosign_trusted_root_text` (the two
+  # file()-sourced config-refresh payloads the consumer needs baked — installer + trusted root).
   assert "AC5 key-set parity: the extraction stopped at the map's closing brace (over-read guard)" \
-    "[[ \$(printf '%s\\n' \"$TF_KEYS\" | grep -c .) -le 18 ]]"
+    "[[ \$(printf '%s\\n' \"$TF_KEYS\" | grep -c .) -le 20 ]]"
   MISSING="$(comm -23 <(printf '%s\n' "$TF_KEYS") <(printf '%s\n' "$MAP_KEYS") | tr '\n' ' ')"
   EXTRA="$(comm -13 <(printf '%s\n' "$TF_KEYS") <(printf '%s\n' "$MAP_KEYS") | tr '\n' ' ')"
   assert "AC5 key-set parity: this suite's render map matches inngest-host.tf (missing:${MISSING:-none} extra:${EXTRA:-none})" \

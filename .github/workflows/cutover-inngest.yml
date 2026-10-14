@@ -62,6 +62,11 @@ on:
         required: false
         type: boolean
         default: false
+      page_size:
+        description: "#6940 item 3 — OPTIONAL GraphQL page size for the doublefire probe (integer 1..1000; empty = probe default 100). The deferred page-size measurement dispatch knob: widen it only to measure pagination behaviour, not for routine verify."
+        required: false
+        type: string
+        default: ""
   # push trigger scoped to this file forces GitHub to register the workflow in
   # the Actions UI (workflow_dispatch-only workflows can take 30+ min to appear).
   push:
@@ -221,17 +226,28 @@ jobs:
           # (cron-legal-audit, `0 11 1 1,4,7,10 *`). OPTIONAL repo var; empty ⇒
           # the script default.
           CUTOVER_DISCOVERY_LOOKBACK_S: ${{ vars.CUTOVER_DISCOVERY_LOOKBACK_S }}
-          # #6940 item 2 — DEFERRED 2026-10-07: CUTOVER_REGISTRY_BASELINE and
-          # CUTOVER_QUIESCE_PROBES are intentionally NOT mapped here. The script
-          # reads them (the P3-c registry-fullness precondition and the
-          # quiesce-probe loop), and mapping the baseline ACTIVATES a dormant
-          # `exit 1` upstream of the 2.6 doublefire check — so per ADR-146
-          # §Deferred 3 the mapping lands ONLY after AC-V4 (a green
+          # #6940 item 2 — CUTOVER_QUIESCE_PROBES mapped 2026-10-13: the optional
+          # repo var overrides the quiesce-probe loop's retry count (script default
+          # 3). Unlike CUTOVER_REGISTRY_BASELINE it arms nothing dormant — the loop
+          # always runs, a var only widens it — so it carries no AC-V4 precondition.
+          CUTOVER_QUIESCE_PROBES: ${{ vars.CUTOVER_QUIESCE_PROBES }}
+          # #6940 item 3 — the optional page-size dispatch input, forwarded to the
+          # on-host probe as the page_size URL query param (hooks.json.tmpl
+          # pass-environment → INNGEST_GQL_PAGE_SIZE). Empty ⇒ probe default.
+          # The script validates 1..1000 and DROPS a bad value with a named
+          # ::error:: rather than emitting a malformed URL.
+          CUTOVER_PAGE_SIZE: ${{ inputs.page_size }}
+          # #6940 item 2 — still DEFERRED (was deferred 2026-10-07):
+          # CUTOVER_REGISTRY_BASELINE is intentionally NOT mapped here. The script
+          # reads it (the P3-c registry-fullness precondition), and mapping it
+          # ACTIVATES a dormant `exit 1` upstream of the 2.6 doublefire check — so
+          # per ADR-146 §Deferred 3 the mapping lands ONLY after AC-V4 (a green
           # exactly-once verify) is proven. Latest op=verify runs: DOUBLE-FIRE
           # detected (35415585389, 2026-09-19) and VERIFIED (QUALIFIED) on
-          # 2026-09-15 — AC-V4 is NOT green. When it lands, add the env
-          # completeness guard anchored `(?<![A-Za-z0-9_])CUTOVER_[A-Z_]+`
-          # (unanchored grep matches the Doppler secret names
+          # 2026-09-15 — AC-V4 is NOT green. The env completeness guard shipped with
+          # this PR (cutover-inngest-workflow.test.sh, anchored
+          # `(?<![A-Za-z0-9_])CUTOVER_[A-Z_]+`) holds it on a named DEFERRED table —
+          # unanchored grep would match the Doppler secret names
           # INNGEST_CUTOVER_FLIP/INNGEST_CUTOVER_QUIESCE, which must never be
-          # mapped).
+          # mapped.
         run: bash "${GITHUB_WORKSPACE}/scripts/cutover-inngest.sh"

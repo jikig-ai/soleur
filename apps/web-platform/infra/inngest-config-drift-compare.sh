@@ -2,9 +2,10 @@
 #
 # inngest-config-drift-compare.sh — the off-box drift comparator core for the ADR-135
 # config-refresh channel (#6780, HARD-8 / AC19). Single-shot verdict: given the promoted
-# INNGEST_CONFIG_DIGEST pointer and the LATEST off-box `SOLEUR_INFRA_PULL_APPLIED` marker
-# (queried from Better Stack by the inngest-config-drift.yml executor), decide whether
-# the host's applied digest matches the promoted pointer.
+# INNGEST_CONFIG_DIGEST pointer and the LATEST STATE ROW of the `SOLEUR_INFRA_PULL_` marker
+# family (queried from Better Stack by the inngest-config-drift.yml executor — APPLIED /
+# NOOP / FLOOR rows carry applied state; VERIFY_FAIL and friends are failure rows and must
+# never parse as state), decide whether the host's applied digest matches the promoted pointer.
 #
 # This is the tested, hermetic CORE; the GHA executor wires Better Stack + the Doppler pointer to
 # it and applies the N-consecutive-windows tolerance before alarming. No network, no LLM here.
@@ -14,10 +15,13 @@
 #
 #   --pointer : the promoted INNGEST_CONFIG_DIGEST (with or without a leading "sha256:"). EMPTY
 #               pre-cutover / pre-promotion (the pointer TF applies at the #6178 cutover).
-#   --marker  : the latest SOLEUR_INFRA_PULL_APPLIED marker line, e.g.
-#               'SOLEUR_INFRA_PULL_APPLIED version=7 sha256=<digest> verify=ok'
-#               The boot-floor marker carries `version=floor` (distinguishable — HARD-8). EMPTY
-#               when no marker exists in the query window.
+#   --marker  : the latest SOLEUR_INFRA_PULL_ STATE row, e.g.
+#               'SOLEUR_INFRA_PULL_APPLIED version=7 sha256=<digest> verify=ok' or
+#               'SOLEUR_INFRA_PULL_NOOP reason=same-digest version=7 sha256=<digest>'.
+#               The floor marker is a DISTINCT marker name — 'SOLEUR_INFRA_PULL_FLOOR
+#               version=floor sha256=<64 zeros>' — carrying `version=floor` and the all-zeros
+#               sha256 sentinel so the floor-only-stuck-delta arm can fire (HARD-8). EMPTY
+#               when no state row exists in the query window.
 #
 # VERDICTS (printed to stdout as `<VERDICT> <detail>`):
 #   PENDING   (exit 0) — no pointer promoted yet: channel not live / nothing to compare (HARD-11).
