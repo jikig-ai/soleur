@@ -439,6 +439,8 @@ SWEEP_EXT_COUNT=13
 SWEEP_EXT_EXPECTED='sh bash bats yml yaml tf template js ts tsx mjs cjs py'
 SWEEP_PATHSPEC=()
 for _e in "${SWEEP_EXTS[@]}"; do SWEEP_PATHSPEC+=(":(glob)**/*.$_e"); done
+# Markdown outside knowledge-base is read by scan_md only (fenced code that an agent executes), never line by line: prose names the shape.
+SWEEP_MD_PATHSPEC=(':(glob)**/*.md' ':(exclude)knowledge-base')
 SWEEP_PATHSPEC+=(
   # Item F (item 9): knowledge-base code files are read, archived records are not. The exclusion is path-segment exact: an archive/ directory at
   # any depth, never a name that merely contains the word. `.md` under knowledge-base stays unread because the extension list has no md.
@@ -513,12 +515,82 @@ SWEEP_DEFERRALS=(
 # $( ), where an exit would only leave the subshell).
 # The one place the sweep's flags and pathspec live: scan_sweep's listing, scan_sweep's scan and the test-canary check below all call it, so an
 # exclusion or an ignore handling edit moves all three together and cannot hide a file from the scan while the canary still sees it.
-sweep_git_grep() { # <root> <git grep options...>
+sweep_git_grep() { # <root> [--md] <git grep options...>
   local root="$1"; shift
-  git -c core.excludesFile=/dev/null -C "$root" grep --no-index --exclude-standard "$@" -- "${SWEEP_PATHSPEC[@]}"
+  if [[ "${1:-}" == --md ]]; then   # the markdown listing (scan_md) reads the same flags over its own pathspec
+    shift
+    git -c core.excludesFile=/dev/null -C "$root" grep --no-index --exclude-standard "$@" -- "${SWEEP_MD_PATHSPEC[@]}"
+  else
+    git -c core.excludesFile=/dev/null -C "$root" grep --no-index --exclude-standard "$@" -- "${SWEEP_PATHSPEC[@]}"
+  fi
+}
+# Two LINEARISERS (Item F): awk programs that turn what a line search cannot see into `path:NN:text` lines, which scan_sweep then runs through the
+# same widened PATTERN_V2 and the same comment filter as every other line (no regex travels through awk -v: backslash processing differs between
+# gawk and mawk, and the pattern has exactly one home). POSIX awk only (no gensub, no \b, no 3-argument match).
+#   split  a line that ends in a single bar (not `||`, not a YAML block-scalar indicator, not a comment) is joined to the next code line
+#          (comment and blank lines in between are skipped) as `path:<bar's line>: | <next line, left-trimmed>`
+#   fence  the code lines of a markdown fence, but only a fence whose own text holds the token pipefail (checked at close; an unclosed fence closes at
+#          EOF); a fence is opened by 3+ backticks or tildes, indented or not, and closed by the SAME character, at least as many, nothing after
+SWEEP_SPLIT_AWK='
+  FNR == 1 { pend = 0 }
+  {
+    line = $0; sub(/\r$/, "", line)
+    if (pend) {
+      if (line ~ /^[ \t]*#/ || line ~ /^[ \t]*$/) { next }
+      t = line; sub(/^[ \t]+/, "", t)
+      print FILENAME ":" pn ": | " t
+      pend = 0
+    }
+    if (line ~ /[^|][ \t]*\|[ \t]*$/ || line ~ /^[ \t]*\|[ \t]*$/ || line ~ /\|&[ \t]*$/) {
+      if (line ~ /\|\|[ \t]*$/) next
+      if (line ~ /:[ \t]*[|>][-+]?[ \t]*$/ || line ~ /^[ \t]*-?[ \t]*[|>][-+]?[ \t]*$/) next
+      if (line ~ /^[ \t]*#/) next
+      pend = 1; pn = FNR
+    }
+  }
+'
+SWEEP_FENCE_AWK='
+  function close_fence(   i) {
+    if (hasPf) for (i = 1; i <= n; i++) print FILENAME ":" ln[i] ":" tx[i]
+    inf = 0; n = 0; hasPf = 0
+  }
+  FNR == 1 { if (inf) close_fence(); inf = 0; n = 0; hasPf = 0 }
+  {
+    line = $0; sub(/\r$/, "", line)
+    if (match(line, /^[ \t]*(```+|~~~+)/)) {
+      s = substr(line, RSTART, RLENGTH); gsub(/[ \t]/, "", s)
+      ch = substr(s, 1, 1); len = length(s)
+      if (!inf) { inf = 1; fch = ch; flen = len; n = 0; hasPf = 0; next }
+      rest = substr(line, RSTART + RLENGTH)
+      if (ch == fch && len >= flen && rest ~ /^[ \t]*$/) { close_fence(); next }
+    }
+    if (inf) { n++; ln[n] = FNR; tx[n] = line; if (line ~ /pipefail/) hasPf = 1 }
+  }
+  END { if (inf) close_fence() }
+'
+# scan_split <root> -> the joined candidate lines, or an UNRESOLVED line (never a silent empty result).
+scan_split() {
+  local root="$1" list rc=0 l
+  local -a files=()
+  list="$(sweep_git_grep "$root" -alE -e '(^|[^|])\|&?[[:space:]]*$')" || rc=$?
+  if (( rc > 1 )); then echo "UNRESOLVED: scan_split could not list the files that end a line in a pipe in $root (git grep rc=$rc) — nothing was scanned"; return 0; fi
+  while IFS= read -r l; do [[ -n "$l" ]] && files+=("$l"); done <<<"$list"
+  (( ${#files[@]} > 0 )) || return 0
+  ( cd "$root" && LC_ALL=C awk "$SWEEP_SPLIT_AWK" "${files[@]}" ) || echo "UNRESOLVED: scan_split's awk failed in $root — nothing was scanned"
+}
+# scan_md <root> -> `MDSWEPT: <n> files` (the markdown files that mention pipefail), then the code lines of their pipefail fences, or an UNRESOLVED line.
+scan_md() {
+  local root="$1" list rc=0 l
+  local -a files=()
+  list="$(sweep_git_grep "$root" --md -al -e pipefail)" || rc=$?
+  if (( rc > 1 )); then echo "MDSWEPT: 0 files"; echo "UNRESOLVED: scan_md could not list the markdown files that mention pipefail in $root (git grep rc=$rc) — nothing was scanned"; return 0; fi
+  while IFS= read -r l; do [[ -n "$l" ]] && files+=("$l"); done <<<"$list"
+  echo "MDSWEPT: ${#files[@]} files"
+  (( ${#files[@]} > 0 )) || return 0
+  ( cd "$root" && LC_ALL=C awk "$SWEEP_FENCE_AWK" "${files[@]}" ) || echo "UNRESOLVED: scan_md's awk failed in $root — nothing was scanned"
 }
 scan_sweep() {
-  local root="$1" out rc=0 files nfiles c
+  local root="$1" out rc=0 files nfiles c extra cand mdn
   files="$(sweep_git_grep "$root" -al -e '')" || rc=$?
   if (( rc > 1 )); then
     echo "SWEPT: 0 files"
@@ -536,7 +608,12 @@ scan_sweep() {
     echo "UNRESOLVED: scan_sweep could not read its input in $root (git grep rc=$rc) — nothing was scanned"
     return 0
   fi
-  printf '%s\n' "$out" | _strip_comments --marker | grep . || true
+  extra="$( { scan_split "$root"; scan_md "$root"; } )"
+  mdn="$(sed -n 's/^MDSWEPT: \([0-9]*\) files$/\1/p' <<<"$extra")"
+  echo "MDSWEPT: ${mdn:-0} files"
+  if grep -q '^UNRESOLVED:' <<<"$extra"; then grep '^UNRESOLVED:' <<<"$extra"; return 0; fi
+  cand="$(grep -E -- "$PATTERN_V2" <<<"$extra" || true)"
+  { printf '%s\n' "$out"; printf '%s\n' "$cand"; } | _strip_comments --marker | grep . || true
 }
 
 # sweep_verdict <scan output> -> prints the PASS/FAIL lines and DEFERRED lines, sets SWEEP_FAIL=1 on failure.
@@ -556,7 +633,7 @@ sweep_verdict() {
     fi
   done
   while IFS= read -r line; do
-    [[ -n "$line" && "$line" != SWEPT:* ]] || continue
+    [[ -n "$line" && "$line" != SWEPT:* && "$line" != MDSWEPT:* ]] || continue
     path="${line%%:*}"
     owner=-1
     if [[ "$pinned" != *" $path "* ]]; then
@@ -598,17 +675,22 @@ sweep_verdict() {
   fi
 }
 
-# sweep_main <root> <floor> -> prints the verdict lines; rc 0 clean, 1 a violation, 3 unresolved. The caller folds the rc into
+# sweep_main <root> <floor> [md floor] -> prints the verdict lines; rc 0 clean, 1 a violation, 3 unresolved. The caller folds the rc into
 # FAIL / exit 3, and the probe drives this same function on scratch roots, so the whole chain is exercised, not only its parts.
 # NOTE: callers run this as `sweep_main ... || rc=$?`, which suspends `set -e` inside it; every fallible command in the chain is
 # therefore guarded by hand, so do not rely on errexit when you add one.
 sweep_main() {
-  local root="$1" floor="$2" scan n
+  local root="$1" floor="$2" mdfloor="${3:-0}" scan n mdn
   SWEEP_FAIL=0
   scan="$(scan_sweep "$root")"
   SWEEP_LAST_SCAN="$scan"   # the spec-dir-zero row reads the real run's scan; set here, never by the probe's scratch roots reading it back
   if grep -q '^UNRESOLVED:' <<<"$scan"; then
     grep '^UNRESOLVED:' <<<"$scan"
+    return 3
+  fi
+  mdn="$(sed -n 's/^MDSWEPT: \([0-9]*\) files$/\1/p' <<<"$scan")"
+  if [[ ! "${mdn:-}" =~ ^[0-9]+$ ]] || (( mdn < mdfloor )); then
+    echo "UNRESOLVED: the markdown listing read ${mdn:-<no count>} files that mention pipefail, below MD_FLOOR $mdfloor — the fence pass would assert nothing"
     return 3
   fi
   n="$(sed -n '1s/^SWEPT: \([0-9]*\) files$/\1/p' <<<"$scan")"
@@ -635,7 +717,8 @@ sweep_fold() {
 }
 sweep_rc=0
 unset SWEEP_N   # an ambient value must not satisfy the evidence that the sweep ran (sweep_fold and the return-wiring block read it)
-sweep_main . "$SWEEP_FLOOR" || sweep_rc=$?
+MD_FLOOR=18   # measured 21 markdown files outside knowledge-base that mention pipefail on 2026-10-15; a truncated listing reads UNRESOLVED
+sweep_main . "$SWEEP_FLOOR" "$MD_FLOOR" || sweep_rc=$?
 sweep_fold "$sweep_rc"
 
 # Non-vacuity: the pattern must actually match the shape it forbids. Without
@@ -1361,7 +1444,7 @@ for _c in "${SWEEP_TEST_CANARIES[@]}"; do
   grep -qxF -- "$_c" <<<"$tc_files" || tc_missing+="$_c "
 done
 # A TRACKED file the ignore rules hide is a file the sweep (`--no-index --exclude-standard`) never reads, whichever file it is: list them directly.
-tc_hidden="$(git -c core.excludesFile=/dev/null ls-files -ci --exclude-standard -- "${SWEEP_PATHSPEC[@]}")" || tc_hidden="<ls-files failed>"
+tc_hidden="$(git -c core.excludesFile=/dev/null ls-files -ci --exclude-standard -- "${SWEEP_PATHSPEC[@]}" "${SWEEP_MD_PATHSPEC[@]}")" || tc_hidden="<ls-files failed>"
 [[ -z "$tc_missing" && -z "$tc_hidden" && "${#SWEEP_TEST_CANARIES[@]}" == "$SWEEP_TEST_CANARY_COUNT" ]] \
   || sweep_probe_fail+=("test-canaries: the sweep no longer reads [${tc_missing:-none}], tracked swept files hidden by an ignore rule: [${tc_hidden//$'\n'/ }], or SWEEP_TEST_CANARIES holds ${#SWEEP_TEST_CANARIES[@]} entries, pinned at $SWEEP_TEST_CANARY_COUNT. This protects the sweep's reach over test files: an ignore entry or a pathspec exclusion would otherwise pass every root canary. Fix: if a canary file moved or was renamed, update SWEEP_TEST_CANARIES and SWEEP_TEST_CANARY_COUNT together (not the sweep); if a file is hidden or missing from the population, remove the .gitignore entry or SWEEP_PATHSPEC exclusion that hides it")
 
@@ -2744,11 +2827,11 @@ pj_fl_eq="$( ( pj_floor ctl 5 5 'a count' ) 2>&1 )" && pj_fl_eq_rc=0 || pj_fl_eq
 # here: the guard cannot defend its own control flow beyond these text pins, and a diff that edits it is reviewed.
 _self="$(cd -P "$REPO_ROOT/.claude/hooks" && pwd -P)/grep-q-pipe-guard.test.sh"   # absolute: the script has cd'd to the repo root, a relative ${BASH_SOURCE[0]} would not resolve
 _code=$(grep -vE '^[[:space:]]*#' "$_self" || true)
-wire_a=$(grep -cE '^sweep_main \. "\$SWEEP_FLOOR" \|\| sweep_rc=\$\?[[:space:]]*$' <<<"$_code" || true)
+wire_a=$(grep -cE '^sweep_main \. "\$SWEEP_FLOOR" "\$MD_FLOOR" \|\| sweep_rc=\$\?[[:space:]]*$' <<<"$_code" || true)
 wire_b=$(grep -cE '^sweep_fold "\$sweep_rc"[[:space:]]*$' <<<"$_code" || true)
-wire_adj=$(grep -A1 -E '^sweep_main \. "\$SWEEP_FLOOR" \|\| sweep_rc=\$\?[[:space:]]*$' <<<"$_code" | grep -cE '^sweep_fold "\$sweep_rc"[[:space:]]*$' || true)
+wire_adj=$(grep -A1 -E '^sweep_main \. "\$SWEEP_FLOOR" "\$MD_FLOOR" \|\| sweep_rc=\$\?[[:space:]]*$' <<<"$_code" | grep -cE '^sweep_fold "\$sweep_rc"[[:space:]]*$' || true)
 [[ "$wire_a" == 1 && "$wire_b" == 1 && "$wire_adj" == 1 ]] \
-  || sweep_probe_fail+=("return-wiring: unindented capture ${wire_a:-<err>}, fold ${wire_b:-<err>}, capture immediately followed by the fold ${wire_adj:-<err>} (want exactly 1 each). This protects the path by which the sweep verdict reaches this suite's exit status. Expected, at column 0 and once each: 'sweep_main . \"\$SWEEP_FLOOR\" || sweep_rc=\$?' directly followed by 'sweep_fold \"\$sweep_rc\"'. Fix: restore the statement; if it moved legitimately, update this pin, not the sweep")
+  || sweep_probe_fail+=("return-wiring: unindented capture ${wire_a:-<err>}, fold ${wire_b:-<err>}, capture immediately followed by the fold ${wire_adj:-<err>} (want exactly 1 each). This protects the path by which the sweep verdict reaches this suite's exit status. Expected, at column 0 and once each: 'sweep_main . \"\$SWEEP_FLOOR\" \"\$MD_FLOOR\" || sweep_rc=\$?' directly followed by 'sweep_fold \"\$sweep_rc\"'. Fix: restore the statement; if it moved legitimately, update this pin, not the sweep")
 # The verdict gate and the final exit are pinned the same way, but they report DIRECTLY (FAIL and exit 1 below, just ahead of the gate): a failure
 # appended to sweep_probe_fail is read by that very gate, so a gate edited to always pass would silence its own pin.
 # The producer-join verdict sinks: the judge, the row checks and the triple pin each print their FAIL lines into a variable that ONE column-0 statement merges into
