@@ -46,9 +46,11 @@ readonly GDSD_WRITE_STEP="Write GIT_DATA_STORE_ENABLED (via the"
 # A SECOND, measured horizon: GitHub strips a job's step list at about 170 days (a 174-day-old run is listed with no
 # steps). A step-less job of a run created after the seam reads unreadable (row 3 below), so the oldest pin
 # (36685251588, created 2026-09-30) turns the guard CLOSED at about 2027-03-18 even if no run is deleted. Pre-seam
-# runs with no steps read clean (they could not write the flag). Either way the exit is a PR that moves the pins to
-# newer runs while the old pin is still listed and the scan prints store_clean (runbook: "Re-baselining the pinned
-# runs", tracker #10216, which carries a 2026-12-01 calendar item, well inside both horizons).
+# runs with no steps read clean (they could not write the flag). NOTE the scan reads EVERY listed run, so moving the
+# pins is not enough by itself once ANY post-seam run (not only a pin) has lost its step list: that run reads
+# `scan_unreadable <id>` until its record is deleted or the owner attests it (runbook: "Re-baselining the pinned runs";
+# the policy for stripped post-seam records is tracked in #10216, which carries a 2026-12-01 calendar item, well inside
+# both horizons).
 readonly GDSD_PINNED_RUNS="36685251588 37823216637"
 # The pin-age warning threshold, days: the scan prints `::warning::` once the oldest pin is older than this.
 readonly GDSD_PIN_WARN_DAYS=120
@@ -121,6 +123,8 @@ git_data_store_dirty_list() {
 
 git_data_store_dirty_scan() {
   local pins="${1:-$GDSD_PINNED_RUNS}" pin oldest="" age_s line
+  # A blank or whitespace-only argument is the same as none: it must never reach an empty pin list.
+  [[ -n "${pins//[[:space:]]/}" ]] || pins="$GDSD_PINNED_RUNS"
   [[ "${1-}" == --no-pins ]] && pins=""
   local rid status attempt created n last body tok rc expect="" seen=0 pre
   local -a lines=()
@@ -148,7 +152,7 @@ git_data_store_dirty_scan() {
   # Early warning, to the log (stderr, so it never joins the one-line verdict): the oldest pin nears expiry.
   if [[ -n "$oldest" ]] && age_s="$(( $(date -u +%s) - $(date -u -d "$oldest" +%s 2>/dev/null || echo "$(date -u +%s)") ))"; then
     if (( age_s > GDSD_PIN_WARN_DAYS * 86400 )); then
-      echo "::warning::the oldest pinned cutover run is $(( age_s / 86400 )) days old; run records expire at 90 days and the rotate guard then fails closed. Re-baseline the pins (runbook: Re-baselining the pinned runs, tracker #10216)." >&2
+      echo "::warning::the oldest pinned cutover run is $(( age_s / 86400 )) days old; run records can be deleted and step lists are stripped at about 170 days, and the rotate guard then fails closed. Re-baseline the pins (runbook: Re-baselining the pinned runs, tracker #10216)." >&2
     fi
   fi
   for line in "${lines[@]}"; do

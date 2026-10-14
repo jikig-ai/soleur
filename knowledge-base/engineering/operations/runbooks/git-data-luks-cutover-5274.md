@@ -240,7 +240,7 @@ the first layer is the run-record step above. Both steps run before the rung-2 i
 |---|---|---|
 | `store_dirty` (names a run id) | That run of `git-data-cutover.yml` executed the flag-write step (any attempt, any conclusion). The store may hold the only copy of replicated repositories. | Do not rotate. Read [When a rotate is needed after the flip](#when-a-rotate-is-needed-after-the-flip-10175). There is no bypass input. |
 | `cutover_in_flight` (names a run id) | A cutover run is still running. | Re-dispatch after it finishes. |
-| `scan_unreadable` | A run record could not be read: an API error, a page or count mismatch, an unknown run status, no job named `cutover` or no flag-write step in a run created after the seam landed (a rename), or `scan_unreadable pinned_run_missing`: a pinned run has expired from the run list, so the history cannot be proven complete. | Fail closed: an unreadable history is not a clean one. Re-dispatch at most once and then stop. For `pinned_run_missing`, see [Re-baselining the pinned runs](#re-baselining-the-pinned-runs-10175). Otherwise compare the step name constant in `scripts/lib/git-data-store-dirty-scan.sh` with `git-data-cutover.yml` (the parity test pins them). The name GitHub records is the YAML-parsed one, truncated at the first space-then-hash (`Write GIT_DATA_STORE_ENABLED (via the`). |
+| `scan_unreadable` | A run record could not be read: an API error, a page or count mismatch, an unknown run status, no job named `cutover` or no flag-write step in a run created after the seam landed (a rename), or `scan_unreadable pinned_run_missing`: a pinned run is no longer listed as completed, so the history cannot be proven complete. A named run id (`scan_unreadable <id>`) with no job steps is an old post-seam run whose step list was stripped (see the re-baseline section). | Fail closed: an unreadable history is not a clean one. Re-dispatch at most once and then stop. For `pinned_run_missing`, see [Re-baselining the pinned runs](#re-baselining-the-pinned-runs-10175). Otherwise compare the step name constant in `scripts/lib/git-data-store-dirty-scan.sh` with `git-data-cutover.yml` (the parity test pins them). The name GitHub records is the YAML-parsed one, truncated at the first space-then-hash (`Write GIT_DATA_STORE_ENABLED (via the`). |
 | `stale_boot_complete` | The newest `boot_complete` row is not newer than the current server's creation, so `served_repos=0` describes a previous host. | Wait for the current host's `boot_complete`, or investigate the emit path. |
 | `boot_complete_unreadable` | The `boot_complete` time or the server's creation time could not be read (exactly one server named `soleur-git-data` is required; `HCLOUD_TOKEN` must be loaded). | Fail closed; re-dispatch once the read path is verified. |
 
@@ -277,6 +277,11 @@ proven complete from run records: the only exits are an owner attestation PR (ow
 pins and states, with evidence (the Doppler `GIT_DATA_STORE_ENABLED` value is not `true`, and no `git_data_store=`
 readback of `enabled` in Better Stack since the last pin), that no flip happened in the gap; or the live emptiness
 proof (#10211). After a flip the scan is dirty for good, so the pins can no longer be moved.
+
+Moving the pins is not enough by itself once any other post-seam run record has lost its step list (about 170 days
+after it was created): the scan reads every listed run, so that run reads `scan_unreadable <id>` until its record is
+deleted or the owner attests it in the same PR. Plan the re-baseline PR to cover that too; the standing policy for
+stripped post-seam records (an age-aware verdict plus the attestation) is tracked in #10216.
 
 **Owner action after the #10175 PR merges:** a "Re-run failed jobs" on a rotate run that predates the guard executes
 the OLD workflow, which has no guard. Delete those run records so nothing can be re-run:

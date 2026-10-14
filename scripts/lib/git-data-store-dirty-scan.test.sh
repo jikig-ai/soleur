@@ -158,6 +158,7 @@ if [[ "${1-}" == "--mutant-run" ]]; then
   [[ "$(git_data_store_dirty_list | git_data_store_dirty_scan 2>&1 >/dev/null)" == *"::warning::"* ]] || killed=1
   newfx; settotal 0
   [[ "$(git_data_store_dirty_list | git_data_store_dirty_scan "" 2>/dev/null)" == "scan_unreadable pinned_run_missing" ]] || killed=1
+  [[ "$(git_data_store_dirty_list | git_data_store_dirty_scan "  " 2>/dev/null)" == "scan_unreadable pinned_run_missing" ]] || killed=1
   newfx; CREATED=2026-09-20T00:00:00Z addrun 15 completed 1 "1:$(fx "$JOB" failure "$(steps)")"; settotal 1
   [[ "$(git_data_store_dirty_list | scan_nopins)" == "store_clean" ]] || killed=1
   newfx; addrun 13 completed 1 "1:$(fx "${JOB}_x" success "$(steps "$WRITE|success")")"; settotal 1
@@ -237,6 +238,7 @@ newfx; addrun "$P2ID" completed 1 "1:$(clean_body)"; addrun "$P1ID" completed 1 
 if [[ "$(git_data_store_dirty_list | git_data_store_dirty_scan "abc" 2>/dev/null)" == "scan_unreadable pinned_run_missing" ]]; then pass "K9 a malformed pin argument fails closed"; else fail "K9 a malformed pin was accepted"; fi
 newfx; settotal 0
 if [[ "$(git_data_store_dirty_list | git_data_store_dirty_scan "" 2>/dev/null)" == "scan_unreadable pinned_run_missing" ]]; then pass "K10 an EMPTY pin argument does not disable the proof (empty history stays refused)"; else fail "K10 an empty argument turned the proof off"; fi
+if [[ "$(git_data_store_dirty_list | git_data_store_dirty_scan "  " 2>/dev/null)" == "scan_unreadable pinned_run_missing" ]]; then pass "K10b a whitespace-only pin argument does not disable the proof either"; else fail "K10b a blank argument turned the proof off"; fi
 newfx; addrun "9${P1ID}" completed 1 "1:$(clean_body)"; addrun "$P2ID" completed 1 "1:$(clean_body)"; settotal 2
 check_scan_pins "K11 a run whose id merely ENDS with a pinned id is not the pin (no substring match)" 'scan_unreadable pinned_run_missing' 1
 newfx; addrun "$P1ID" completed 1 "1:$(clean_body)"; settotal 1
@@ -361,7 +363,11 @@ mutate "a missing cutover job reads clean"   's/if \$j == null then \(if \$prese
 mutate "pin matching by substring"          's/\[\[ "\$rid" == "\$pin" && "\$status" == completed \]\]/[[ "$rid" == *"$pin" \&\& "$status" == completed ]]/'
 mutate "only the first pin is checked"       's/for pin in \$pins; do/for pin in ${pins%% *}; do/'
 mutate "the age warning keys on the newest pin" 's/"\$pre" < "\$oldest"/"$oldest" < "$pre"/'
-mutate "an empty pin argument disables the proof" 's/local pins="\$\{1:-\$GDSD_PINNED_RUNS\}"/local pins="${1-$GDSD_PINNED_RUNS}"/'
+# Two layers keep an empty or blank argument from disabling the proof (`:-` and the whitespace normalisation), so a
+# single removal is EQUIVALENT for an empty string; the whitespace-only fixture kills the normalisation removal and the
+# combined mutant kills the pair.
+mutate "the blank-argument normalisation is removed" 's/^  \[\[ -n "\$\{pins\/\/\[\[:space:\]\]\/\}" \]\] \|\| pins="\$GDSD_PINNED_RUNS"$/  :/'
+mutate "both empty-argument guards are removed" 's/local pins="\$\{1:-\$GDSD_PINNED_RUNS\}"/local pins="${1-$GDSD_PINNED_RUNS}"/;s/^  \[\[ -n "\$\{pins\/\/\[\[:space:\]\]\/\}" \]\] \|\| pins="\$GDSD_PINNED_RUNS"$/  :/'
 mutate "the list projection drops run_attempt" 's/\[\.id, \.status, \.run_attempt, \.created_at\]/[.id, .status, .created_at, .created_at]/'
 mutate "pre-seam step-less job stays unreadable" 's/\(if \$preseam or \(/(if false or (/'
 mutate "empty-steps cancelled job unreadable" 's/then "clean" else "unreadable" end\)/then "unreadable" else "unreadable" end)/'
@@ -376,7 +382,7 @@ printf '== %d passed, %d failed\n' "$PASS" "$FAIL"
 # PASS==1 at that point, which proves the literal.
 SELFTEST_PASSES=1
 REAL=$(( PASS - SELFTEST_PASSES ))
-MIN_ASSERTIONS=93
+MIN_ASSERTIONS=95
 if [[ "$REAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity assertion floor: only %d real assertion(s) ran (PASS=%d minus %d self-test), expected >= %d.\n' \
     "$REAL" "$PASS" "$SELFTEST_PASSES" "$MIN_ASSERTIONS" >&2
