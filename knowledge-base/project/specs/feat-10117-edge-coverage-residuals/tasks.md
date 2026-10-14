@@ -5,7 +5,7 @@ pr: "#10190 (docs) + #10237 (PR-A hardening) + #10242 (PR-B containment)"
 branch: feat-10117-edge-coverage-residuals
 plan: knowledge-base/project/plans/2026-10-13-fix-edge-declaration-coverage-residuals-plan.md
 spec: knowledge-base/project/specs/feat-10117-edge-coverage-residuals/spec.md
-status: in-review
+status: done
 ---
 
 # Tasks: Edge-declaration coverage residuals (#10117)
